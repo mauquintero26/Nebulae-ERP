@@ -294,12 +294,18 @@ export function propagacionRecotizacion(data, pedido, cotNumero, usuario) {
 /** B3.1 r1 (B): la nota del modal cuando el pedido ya no tiene el total de la COT (productos cancelados). */
 export const NOTA_PEDIDO_OTRO_TOTAL = 'El pedido tiene otro total que la cotización: su total nuevo lo calcula el '
   + 'servidor al actualizarlo.';
+/** B3.1 r2 (punto 3): la nota del modal cuando el pedido ya está pagado (saldo $0): el crédito lo calcula el servidor. */
+export const NOTA_PEDIDO_PAGADO = 'El pedido ya está pagado: el crédito a favor, si lo hay, lo calcula el servidor con '
+  + 'los pagos registrados.';
 
 /**
  * B3.1 r1 (B): lo que muestra el modal «Actualizar Pedido de Venta» (PropagarPvenConfirm). `antes` es el total ACTUAL
  * del pedido. Si ya difiere del total actual de la COT (`totalCot`, al peso; la misma señal de notaAnticipoPorLinea), el
  * servidor recalculará el total sin lo cancelado: sin `nuevo` (null) ni crédito, y con NOTA_PEDIDO_OTRO_TOTAL. Si no,
  * como antes: `nuevo` = el total de la re-cotización y el crédito de creditoPorRecotizacion.
+ * B3.1 r2 (punto 3): si no difiere pero el pedido ya está pagado (saldo $0 al peso y total > 0), total − saldo es solo
+ * una cota de lo pagado (el saldo se topa en $0): `nuevo` sí, pero crédito 0 (sin aviso ámbar) y NOTA_PEDIDO_PAGADO;
+ * el monto exacto lo trae el aviso de después de guardar (credito_a_favor_cop del servidor).
  * @param {any} pedido
  * @param {unknown} totalCot
  * @param {unknown} totalNuevo
@@ -309,6 +315,9 @@ export function resumenPropagacionPedido(pedido, totalCot, totalNuevo) {
   const antes = redondearPeso(pedido?.total_cop);
   const { pagado, credito } = creditoPorRecotizacion(pedido, totalNuevo);
   if (antes !== redondearPeso(totalCot)) return { antes, nuevo: null, pagado, credito: 0, nota: NOTA_PEDIDO_OTRO_TOTAL };
+  if (antes > 0 && redondearPeso(pedido?.saldo_cop) === 0) {
+    return { antes, nuevo: redondearPeso(totalNuevo), pagado, credito: 0, nota: NOTA_PEDIDO_PAGADO };
+  }
   return { antes, nuevo: redondearPeso(totalNuevo), pagado, credito, nota: null };
 }
 
@@ -331,33 +340,42 @@ export function avisoPedidoConCancelados(pedido, cot) {
 
 /** B3.1 r1 (C): el comienzo del aviso cuando el PATCH del pedido falla después de guardar la COT. */
 export const PEDIDO_NO_ACTUALIZADO = 'La cotización se guardó, pero el pedido no se actualizó';
+/** B3.1 r2 (punto 5): el aviso completo cuando no se sabe cómo quedó el pedido (sin respuesta, o sin propagación). */
+export const PEDIDO_NO_ACTUALIZADO_RECARGA = `${PEDIDO_NO_ACTUALIZADO}: recarga la página y revisa el pedido.`;
 
 /**
  * B3.1 r1 (C): el aviso de cotizacion/[id] después de propagar la re-cotización (el PATCH del pedido va en su propio
  * try: la COT ya se guardó). `pedido` y `cot` son las RESPUESTAS de los dos PATCH; `error`, el del PATCH del pedido.
  * - Un error con respuesta del servidor (con status, p. ej. el 409 de los productos cancelados): tono 'error' y
  *   'La cotización se guardó, pero el pedido no se actualizó: <texto del servidor>' (textoDeError).
- * - Un error sin status (la red se cortó; el pedido pudo cambiar): 'La cotización se guardó, pero el pedido no se
- *   actualizó: recarga la página y revisa el pedido.'
- * - Sin error: avisoPedidoConCancelados como tono 'info', o null.
- * Con `pedidoId`, el aviso lleva la acción 'Ver pedido' al detalle del pedido.
+ * - Un error sin status (la red se cortó; el pedido pudo cambiar): PEDIDO_NO_ACTUALIZADO_RECARGA.
+ * - Sin error: avisoPedidoConCancelados como tono 'info'. B3.1 r2 (punto 3): con credito_a_favor_cop > 0 en la
+ *   respuesta del pedido (lo calcula el servidor con el libro de pagos), el aviso es info aunque los totales coincidan:
+ *   '<nota de cancelados> Crédito a favor del cliente: $X.' o, sin nota, 'Crédito a favor del cliente: $X.'. Si no
+ *   hay ninguno de los dos, null.
+ * Con `pedidoId`, el aviso lleva la acción 'Ver pedido' al detalle del pedido; r2 (punto 4): con `volverA` (la ruta de
+ * la COT), el detalle recibe return_to, como las tarjetas COT→PVEN.
  * @param {any} pedido
  * @param {any} cot
  * @param {any} error
  * @param {number | string} [pedidoId]
+ * @param {string} [volverA]
  * @returns {{tono: 'error' | 'info', texto: string, accion?: {texto: string, href: string}} | null}
  */
-export function avisoTrasPropagar(pedido, cot, error, pedidoId) {
-  const accion = pedidoId === undefined || pedidoId === null || pedidoId === ''
-    ? null : { texto: 'Ver pedido', href: `/dashboard/ventas/venta/${pedidoId}` };
+export function avisoTrasPropagar(pedido, cot, error, pedidoId, volverA) {
+  const destino = `/dashboard/ventas/venta/${pedidoId}${volverA ? `?return_to=${encodeURIComponent(volverA)}` : ''}`;
+  const accion = pedidoId === undefined || pedidoId === null || pedidoId === '' ? null : { texto: 'Ver pedido', href: destino };
   /** @param {{tono: 'error' | 'info', texto: string}} aviso */
   const conAccion = (aviso) => (accion ? { ...aviso, accion } : aviso);
   if (error !== null && error !== undefined) {
     const status = error?.status;
     return conAccion({ tono: 'error', texto: status === undefined || status === null
-      ? `${PEDIDO_NO_ACTUALIZADO}: recarga la página y revisa el pedido.` : textoDeError(error, PEDIDO_NO_ACTUALIZADO) });
+      ? PEDIDO_NO_ACTUALIZADO_RECARGA : textoDeError(error, PEDIDO_NO_ACTUALIZADO) });
   }
-  const texto = avisoPedidoConCancelados(pedido, cot);
+  const nota = avisoPedidoConCancelados(pedido, cot);
+  const credito = esObjeto(pedido) ? redondearPeso(pedido.credito_a_favor_cop) : 0;
+  const frase = credito > 0 ? `Crédito a favor del cliente: ${formatoPesos(credito)}.` : null;
+  const texto = nota && frase ? `${nota} ${frase}` : nota || frase;
   return texto ? conAccion({ tono: 'info', texto }) : null;
 }
 

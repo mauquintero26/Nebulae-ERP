@@ -4484,16 +4484,21 @@ def _liberar_lo_apartado_del_pedido(db: Session, v: SaleOrder, autor: Optional[s
 _FRASE_CREDITO = re.compile(r"\s*Crédito a favor del cliente: \$\d[\d.]*\.")
 
 
-def _motivo_con_credito(motivo, diferencia):
+def _credito_a_favor(neto_pagado, total) -> int:
+    """B3.1 r2 (punto 3): el credito a favor del cliente tras la propagacion, en pesos enteros: max(0, lo pagado segun
+    el libro (el neto de _cabecera_desde_el_libro_de_pagos) - el total que quedo). La misma cifra de la frase del
+    motivo y del campo credito_a_favor_cop de la respuesta."""
+    return int(max(Decimal("0"), redondear_peso(Decimal(str(neto_pagado or 0)) - Decimal(str(total or 0)))))
+
+
+def _motivo_con_credito(motivo, credito):
     """B3.1 r1 (B): el motivo de la propagacion de la re-cotizacion con la frase del credito a favor que calcula el
-    servidor. `diferencia` = lo pagado segun el libro (el neto de _cabecera_desde_el_libro_de_pagos) - el total que
-    quedo; credito = max(0, diferencia), al peso. Primero se quita la frase de credito que ya traiga el motivo (un
+    servidor (`credito`, de _credito_a_favor). Primero se quita la frase de credito que ya traiga el motivo (un
     navegador con el codigo viejo en cache): nunca queda dos veces. Con credito > 0 se agrega
     ' Crédito a favor del cliente: $X.' (pesos(), el mismo formato de formatoPesos). Un motivo que no es texto o esta
     vacio se devuelve tal cual (_registrar_cambios usa entonces el titulo automatico)."""
     if not isinstance(motivo, str) or not motivo.strip():
         return motivo
-    credito = max(Decimal("0"), redondear_peso(diferencia))
     limpio = _FRASE_CREDITO.sub("", motivo)
     return f"{limpio} Crédito a favor del cliente: {pesos(credito)}." if credito > 0 else limpio
 
@@ -4549,9 +4554,11 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
     _redondear_montos_del_body(body, ("subtotal_cop", "total_cop", "saldo_cop", "anticipo_cop"))
     # IVA (B3 T4): la propagacion de la re-cotizacion manda el IVA total como iva_cop (en el pedido, tax_cop), al peso.
     iva_nuevo = _monto_en_pesos(body["iva_cop"], "iva_cop") if body.get("iva_cop") is not None else None
-    if iva_nuevo is not None:
+    if iva_nuevo is not None and not (trae_productos and hay_cancelados):
         # Ronda r1 (dinero 5): entre $0 y el total del pedido (el del body si lo trae, ya en pesos enteros), antes de
-        # tocar nada.
+        # tocar nada. B3.1 r2 (punto 2): con cancelados y productos no aplica: la rama B3.1 reemplaza ese IVA por el
+        # que calcula el servidor (sin total_cop se validaba contra el total ACTUAL y daba 422 con un IVA que se
+        # descartaba).
         total_ref = body["total_cop"] if body.get("total_cop") is not None else redondear_peso(v.total_cop)
         if iva_nuevo < 0 or iva_nuevo > total_ref:
             raise HTTPException(422, "El IVA debe estar entre $0 y el total del pedido.")
@@ -4594,10 +4601,13 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
     if recalcula_desde_el_libro:
         from app.api.v1.erp_ventas_fase4 import _cabecera_desde_el_libro_de_pagos
         neto_pagado = _cabecera_desde_el_libro_de_pagos(v, db)
+    credito_a_favor = None
     if trae_productos and neto_pagado is not None and "motivo" in body:
         # B3.1 r1 (B): la frase del credito a favor la escribe el servidor, con lo pagado del libro y el total que quedo
-        # (con cancelados, ese total ya no es el de la COT, y el saldo topado en $0 escondia lo pagado de mas).
-        body["motivo"] = _motivo_con_credito(body["motivo"], neto_pagado - Decimal(str(v.total_cop or 0)))
+        # (con cancelados, ese total ya no es el de la COT, y el saldo topado en $0 escondia lo pagado de mas). r2
+        # (punto 3): la misma cifra va en la respuesta de esta propagacion (credito_a_favor_cop, abajo).
+        credito_a_favor = _credito_a_favor(neto_pagado, v.total_cop)
+        body["motivo"] = _motivo_con_credito(body["motivo"], credito_a_favor)
     autor = body.get("updated_by") or getattr(user, "email", None)
     if recotizacion is not None and recotizacion["canceladas"]:
         # B3.1: en el mismo commit, cuantos productos cancelados se respetaron.
@@ -4658,7 +4668,11 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
              f"Fecha de entrega modificada: {fecha_vieja.strftime('%d/%m/%Y')} -> "
              f"{v.fecha_entrega_estimada.strftime('%d/%m/%Y')} ({signo}{diff_dias} día{'s' if abs(diff_dias)!=1 else ''})",
              user_name=body.get("updated_by"))
-    return {"status": "success", "data": _ven_dict(v)}
+    datos = _ven_dict(v)
+    if credito_a_favor is not None:
+        # B3.1 r2 (punto 3): solo en la respuesta de una propagacion (no en _ven_dict): el aviso de la COT lo muestra.
+        datos["credito_a_favor_cop"] = credito_a_favor
+    return {"status": "success", "data": datos}
 
 
 @router.post("/pedidos/{ven_id}/crear-pxp")

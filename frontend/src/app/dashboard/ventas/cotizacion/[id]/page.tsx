@@ -22,7 +22,7 @@ import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
 import { situacionPedidoCotizacion } from '@/lib/listas-ventas';
 import {
   resumenAnticipoCotizacion, formatoPct, propagacionRecotizacion, puedeGestionarCotizacion, notaAnticipoPorLinea,
-  avisoTrasPropagar,
+  avisoTrasPropagar, PEDIDO_NO_ACTUALIZADO_RECARGA,
 } from '@/lib/dinero-ventas';
 import { comoUTC, notaReiniciaAtraso } from '@/lib/hub-ventas';
 import { waUrl, abrirWhatsApp } from '@/lib/whatsapp';
@@ -475,11 +475,12 @@ function CotizacionDetalleContent() {
           } catch (e) {
             errPedido = e;
           }
-          const aviso = avisoTrasPropagar(rp?.data, r?.data, errPedido, pvenVigente.id);
+          if (errPedido) console.error(errPedido);
+          const aviso = avisoTrasPropagar(rp?.data, r?.data, errPedido, pvenVigente.id, currentPath);
           if (aviso) avisar(aviso.texto, { tono: aviso.tono, accion: aviso.accion });
         } else {
           // r2: el texto exacto del controlador (re-cotizar sin cambiar un precio no propagaría nada).
-          avisar('La cotización se guardó, pero el pedido no se actualizó: recarga la página y revisa el pedido.', { tono: 'error' });
+          avisar(PEDIDO_NO_ACTUALIZADO_RECARGA, { tono: 'error' });
         }
       }
       setShowCalc(false);

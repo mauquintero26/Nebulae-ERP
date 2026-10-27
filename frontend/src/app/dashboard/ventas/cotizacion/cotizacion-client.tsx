@@ -501,7 +501,8 @@ export function PropagarPvenConfirm({ pven, totalAnterior, totalNuevo, onConfirm
         reflejan allí automáticamente.
       </p>
       <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center justify-center gap-3 text-sm">
-        <span className={nuevo === null ? 'font-black text-slate-700' : 'text-slate-400 line-through'}>{fCOP(antes)}</span>
+        {nuevo === null && <span className="text-slate-500">Total actual del pedido:</span>}
+        <span className={nuevo === null ? 'font-semibold text-slate-700' : 'text-slate-400 line-through'}>{fCOP(antes)}</span>
         {nuevo !== null && <><ArrowRight size={14} className="text-slate-400"/><span className="font-black text-indigo-700">{fCOP(nuevo)}</span></>}
       </div>
       {nota && <p className="text-xs text-slate-600 text-center">{nota}</p>}

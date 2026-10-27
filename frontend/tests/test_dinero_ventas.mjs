@@ -18,6 +18,7 @@ import {
   etiquetaEstadoPxp, pxpsDelPedido, pedidoAdmitePxp, textoChipPxp, propagacionRecotizacion, creditoPorRecotizacion,
   saldoAFavorAlCancelar, puedeGestionarCotizacion, notaAnticipoPorLinea, anticipoDeCalculadora,
   avisoPedidoConCancelados, avisoTrasPropagar, PEDIDO_NO_ACTUALIZADO, resumenPropagacionPedido,
+  PEDIDO_NO_ACTUALIZADO_RECARGA,
 } from '../src/lib/dinero-ventas.js';
 import { errorDeRespuesta } from '../src/lib/avisos.js';
 import { pctAnticipoDeModalidad } from '../src/lib/etiquetas-solicitud.js';
@@ -383,9 +384,12 @@ console.log('--- A3 TEST 12: la re-cotizacion manda precios al pedido, nunca sal
   // B3 T17 r1: sin la respuesta del servidor no hay propagación (nunca lo calculado en el navegador): null.
   for (const sin of [null, undefined, 'x', 3]) assert.equal(propagacionRecotizacion(sin, pedido, 'COT-1', 'x'), null, String(sin));
   // B3 T17 r2: el aviso de ese caso (cotizacion/[id]) no manda a re-cotizar (sin cambiar un precio no se propaga nada).
+  // B3.1 r2 (punto 5): el texto exacto vive en la lib (PEDIDO_NO_ACTUALIZADO_RECARGA) y la página lo usa sin copiarlo.
   const detalle = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/[id]/page.tsx', import.meta.url), 'utf8');
-  assert.ok(detalle.includes("'La cotización se guardó, pero el pedido no se actualizó: recarga la página y revisa el pedido.'"),
-    'el texto exacto del aviso sin data');
+  assert.equal(PEDIDO_NO_ACTUALIZADO_RECARGA,
+    'La cotización se guardó, pero el pedido no se actualizó: recarga la página y revisa el pedido.');
+  assert.match(detalle, /avisar\(PEDIDO_NO_ACTUALIZADO_RECARGA, \{ tono: 'error' \}\)/, 'el aviso sin data usa la constante');
+  assert.ok(!detalle.includes('recarga la página y revisa el pedido'), 'sin el texto copiado en la página');
   assert.ok(!/re-cotiza de nuevo/i.test(detalle), 'sin «re-cotiza de nuevo»');
 }
 
@@ -555,34 +559,51 @@ console.log('--- B3.1 TEST: el pedido conserva sus productos cancelados al re-co
 console.log('--- B3.1 r1 (C) TEST: el aviso después de propagar al pedido (el PATCH del pedido en su propio try) ---');
 {
   const cot = { total_cop: 299600 };
-  const VER = { texto: 'Ver pedido', href: '/dashboard/ventas/venta/7' };
+  // B3.1 r2 (punto 4): «Ver pedido» vuelve a la COT con return_to, como las tarjetas COT→PVEN.
+  const VOLVER = '/dashboard/ventas/cotizacion/3';
+  const VER = { texto: 'Ver pedido', href: '/dashboard/ventas/venta/7?return_to=%2Fdashboard%2Fventas%2Fcotizacion%2F3' };
   assert.equal(PEDIDO_NO_ACTUALIZADO, 'La cotización se guardó, pero el pedido no se actualizó');
   // El 409 del servidor (con status): la COT sí se guardó y el aviso lo dice, con el texto del servidor.
   const conflicto = errorDeRespuesta(409, { detail: 'El pedido tiene productos cancelados que no coinciden con la '
     + 'cotización nueva: en la cotización, deja cada uno con su cantidad original o con la que sigue vigente en el '
     + 'pedido.' });
-  assert.deepEqual(avisoTrasPropagar(undefined, cot, conflicto, 7), { tono: 'error', accion: VER,
+  assert.deepEqual(avisoTrasPropagar(undefined, cot, conflicto, 7, VOLVER), { tono: 'error', accion: VER,
     texto: 'La cotización se guardó, pero el pedido no se actualizó: El pedido tiene productos cancelados que no '
       + 'coinciden con la cotización nueva: en la cotización, deja cada uno con su cantidad original o con la que '
       + 'sigue vigente en el pedido.' });
-  // Sin respuesta (la red se cortó): no se afirma que el pedido no cambió; se pide revisarlo.
-  assert.deepEqual(avisoTrasPropagar(undefined, cot, new TypeError('Failed to fetch'), 7), { tono: 'error', accion: VER,
-    texto: 'La cotización se guardó, pero el pedido no se actualizó: recarga la página y revisa el pedido.' });
-  // Sin error: con otro total, el aviso de los cancelados (info); con el mismo total, nada.
-  assert.deepEqual(avisoTrasPropagar({ total_cop: 261800 }, cot, null, 7), { tono: 'info', accion: VER,
+  // Sin respuesta (la red se cortó): no se afirma que el pedido no cambió; se pide revisarlo (r2: la constante).
+  assert.deepEqual(avisoTrasPropagar(undefined, cot, new TypeError('Failed to fetch'), 7, VOLVER),
+    { tono: 'error', accion: VER, texto: PEDIDO_NO_ACTUALIZADO_RECARGA });
+  // Sin error: con otro total, el aviso de los cancelados (info); con el mismo total y sin crédito, nada.
+  assert.deepEqual(avisoTrasPropagar({ total_cop: 261800 }, cot, null, 7, VOLVER), { tono: 'info', accion: VER,
     texto: 'El pedido conserva sus productos cancelados: su total quedó en $261.800.' });
-  assert.equal(avisoTrasPropagar({ total_cop: 299600 }, cot, null, 7), null);
-  // Sin el id del pedido, sin acción.
+  assert.equal(avisoTrasPropagar({ total_cop: 299600 }, cot, null, 7, VOLVER), null);
+  assert.equal(avisoTrasPropagar({ total_cop: 299600, credito_a_favor_cop: 0 }, cot, null, 7, VOLVER), null);
+  // B3.1 r2 (punto 3): el crédito que calculó el servidor (credito_a_favor_cop de la respuesta del pedido).
+  assert.deepEqual(avisoTrasPropagar({ total_cop: 261800, credito_a_favor_cop: 40000 }, cot, null, 7, VOLVER),
+    { tono: 'info', accion: VER, texto: 'El pedido conserva sus productos cancelados: su total quedó en $261.800. '
+      + 'Crédito a favor del cliente: $40.000.' });
+  assert.deepEqual(avisoTrasPropagar({ total_cop: 299600, credito_a_favor_cop: 10000.4 }, cot, null, 7, VOLVER),
+    { tono: 'info', accion: VER, texto: 'Crédito a favor del cliente: $10.000.' }, 'el mismo total: solo el crédito');
+  // Sin volverA el href queda como antes; sin el id del pedido, sin acción.
+  assert.deepEqual(avisoTrasPropagar({ total_cop: 261800 }, cot, null, 7), { tono: 'info',
+    accion: { texto: 'Ver pedido', href: '/dashboard/ventas/venta/7' },
+    texto: 'El pedido conserva sus productos cancelados: su total quedó en $261.800.' });
   assert.deepEqual(avisoTrasPropagar({ total_cop: 261800 }, cot, null), { tono: 'info',
     texto: 'El pedido conserva sus productos cancelados: su total quedó en $261.800.' });
-  // El cableado en cotizacion/[id] (R15): el PATCH del pedido tiene su propio try, el error queda en errPedido y el
-  // aviso recibe primero la respuesta del pedido y después la de la COT.
+  // El cableado en cotizacion/[id] (R15): el PATCH del pedido tiene su propio try, el error queda en errPedido (y en
+  // la consola, r2 punto 5) y el aviso recibe primero la respuesta del pedido, después la de la COT, y la misma ruta
+  // de vuelta que las tarjetas COT→PVEN (currentPath).
   const pagina = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/[id]/page.tsx', import.meta.url), 'utf8');
   assert.match(pagina, /try \{\s*rp = await apiFetch\(`\/ventas\/pedidos\/\$\{pvenVigente\.id\}`/,
     'el PATCH del pedido va en su propio try');
   assert.match(pagina, /\} catch \((\w+)\) \{\s*errPedido = \1;\s*\}/, 'el error del pedido no cae en el de la COT');
-  assert.match(pagina, /avisoTrasPropagar\(rp\?\.data, r\?\.data, errPedido, pvenVigente\.id\)/,
-    'primero el pedido y después la COT');
+  assert.match(pagina, /if \(errPedido\) console\.error\(errPedido\);\s*const aviso = avisoTrasPropagar\(/,
+    'el error queda en la consola antes de avisar');
+  assert.match(pagina, /avisoTrasPropagar\(rp\?\.data, r\?\.data, errPedido, pvenVigente\.id, currentPath\)/,
+    'primero el pedido, después la COT, y la ruta de vuelta');
+  assert.match(pagina, /venta\/\$\{pvenVigente\.id\}\?return_to=\$\{encodeURIComponent\(currentPath\)\}/,
+    'la misma variable de ruta que la tarjeta COT→PVEN');
   assert.ok(!pagina.includes('avisoPedidoConCancelados('), 'el aviso de r0 ya va dentro de avisoTrasPropagar');
 }
 
@@ -599,9 +620,26 @@ console.log('--- B3.1 r1 (B) TEST: el modal «Actualizar Pedido de Venta» con e
   assert.deepEqual(resumenPropagacionPedido(pedido, 1200000, 600000), { antes: 1000000, nuevo: null, pagado: 700000,
     credito: 0, nota: 'El pedido tiene otro total que la cotización: su total nuevo lo calcula el servidor al '
       + 'actualizarlo.' });
+  // B3.1 r2 (punto 3): el pedido ya está pagado (saldo $0 al peso): total − saldo es solo una cota de lo pagado. El
+  // total nuevo sí se muestra, pero el crédito no se calcula aquí (0, sin aviso ámbar): lo calcula el servidor.
+  const NOTA_PAGADO = 'El pedido ya está pagado: el crédito a favor, si lo hay, lo calcula el servidor con los pagos '
+    + 'registrados.';
+  const pagado = { total_cop: 1000000, saldo_cop: 0 };
+  assert.deepEqual(resumenPropagacionPedido(pagado, 1000000, 600000),
+    { antes: 1000000, nuevo: 600000, pagado: 1000000, credito: 0, nota: NOTA_PAGADO });
+  assert.deepEqual(resumenPropagacionPedido({ ...pagado, saldo_cop: '0.40' }, 1000000, 1500000),
+    { antes: 1000000, nuevo: 1500000, pagado: 1000000, credito: 0, nota: NOTA_PAGADO }, 'saldo 0 al peso');
+  // Sin total (pedido en $0) no es «pagado»: como antes. Si ya difiere de la COT, manda la nota de cancelados.
+  assert.deepEqual(resumenPropagacionPedido({ total_cop: 0, saldo_cop: 0 }, 0, 5000),
+    { antes: 0, nuevo: 5000, pagado: 0, credito: 0, nota: null });
+  assert.equal(resumenPropagacionPedido(pagado, 1200000, 600000).nota,
+    'El pedido tiene otro total que la cotización: su total nuevo lo calcula el servidor al actualizarlo.');
   const modal = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/cotizacion-client.tsx', import.meta.url),
     'utf8');
   assert.match(modal, /resumenPropagacionPedido\(pven, totalAnterior, totalNuevo\)/, 'el modal usa la decisión de lib');
+  // r2: sin total nuevo, la caja dice qué cifra es («Total actual del pedido:») y la cifra va en font-semibold.
+  assert.match(modal, /Total actual del pedido:/, 'la etiqueta de la cifra sin total nuevo');
+  assert.ok(!/nuevo === null \? 'font-black/.test(modal), 'sin font-black cuando no hay total nuevo');
 }
 
 console.log('OK test_dinero_ventas.mjs');

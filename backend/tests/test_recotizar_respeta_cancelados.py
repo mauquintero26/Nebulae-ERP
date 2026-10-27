@@ -205,6 +205,7 @@ def test_cancelado_del_todo_no_vuelve_al_pedido(app_client, db, admin_token):
     assert renglon.extra_data["productos"] == [{"line_id": cinta.id, "producto": "Cinta", "cantidad_cancelada": "3"}]
     # r1 B: sin credito (pagado $50.000 < total $261.800) el titulo es el motivo tal cual, sin frase de credito.
     assert _logs(db, so, "UPDATED")[-1].description == _motivo(cot.numero)
+    assert r["credito_a_favor_cop"] == 0  # r2 (punto 3)
 
 
 # ─── 2: cancelacion parcial ────────────────────────────────────────────────────────
@@ -386,6 +387,54 @@ def test_cot_sin_iva_por_producto_con_cancelados_es_409(app_client, db, admin_to
     assert v.commits == 0 and _foto(db, so) == foto
 
 
+def test_iva_del_body_no_se_valida_si_lo_reemplaza_el_servidor(app_client, db, admin_token):
+    """r2 (punto 2): A $10.000 y B $1.000.000, los dos al 19%; B cancelada. Un body con productos e iva_cop $191.900
+    (el de la COT completa) y SIN total_cop: el servidor reemplaza el IVA, asi que el rango contra el total ACTUAL
+    ($11.900) no aplica. 200 con IVA $1.900, no 422."""
+    cot, so = _pedido(app_client, db, admin_token, [_linea("A", 1, 10000, "19"), _linea("B", 1, 1000000, "19")])
+    _, b = _lineas(db, so)
+    _cancelar(app_client, admin_token, so.id, b.id)
+    data = _recotizar(app_client, admin_token, cot.id, [_linea("A", 1, 10000, "19"), _linea("B", 1, 1000000, "19")])
+    assert data["iva_cop"] == 191900
+    resp = _propagar(app_client, admin_token, so.id, data, cot.numero, total_cop=None, subtotal_cop=None)
+    assert resp.status_code == 200, resp.text
+    r = resp.json()["data"]
+    assert (r["iva_cop"], r["total_cop"], [p["product_name"] for p in r["productos"]]) == (1900, 11900, ["A"])
+
+
+def test_clave_duplicada_solo_en_las_lineas_es_409(app_client, db, admin_token, contador_sql):
+    """r2 (punto 1a): el guardia de la clave repetida ENTRE LAS LINEAS, solo. El pedido tiene Rodillo, una Cinta
+    cancelada del todo y otra Cinta viva; la COT trae Rodillo y UNA sola Cinta con qty 3. No se sabe de cual Cinta es:
+    409 con el texto exacto, 0 commits, la foto igual y ningun renglon."""
+    cot, so = _pedido(app_client, db, admin_token, _dos_productos() + [_linea("Cinta", 3, 10000, "5")])
+    _, cinta_cancelada, _ = _lineas(db, so)
+    _cancelar(app_client, admin_token, so.id, cinta_cancelada.id)
+    data = _recotizar(app_client, admin_token, cot.id, _dos_productos(rodillo=110000))
+    foto = _foto(db, so)
+    renglones = len(_logs(db, so))
+    with contador_sql.ventana() as v:
+        resp = _propagar(app_client, admin_token, so.id, data, cot.numero)
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == MENSAJE_409
+    assert v.commits == 0 and _foto(db, so) == foto and len(_logs(db, so)) == renglones
+
+
+def test_sin_cancelaciones_y_json_sin_tarifas_no_sincroniza(app_client, db, admin_token):
+    """r2 (punto 1c), el ruling A: sin cancelaciones y con un JSON sin tarifas (calcular_totales_cotizacion no lo
+    acepta), ninguna linea se sincroniza y todo queda como hoy: el JSON y los totales del body."""
+    cot, so = _pedido(app_client, db, admin_token, _dos_productos())
+    sin_iva = [{"product_name": "Rodillo", "qty": 2, "unit_price_cop": 110000, "total_cop": 220000},
+               {"product_name": "Cinta", "qty": 3, "unit_price_cop": 12000, "total_cop": 36000}]
+    resp = _propagar(app_client, admin_token, so.id, {
+        "productos": sin_iva, "subtotal_cop": 256000, "iva_cop": 0, "descuento_pct": 0, "total_cop": 256000},
+        cot.numero)
+    assert resp.status_code == 200, resp.text
+    r = resp.json()["data"]
+    assert r["productos"] == sin_iva and (r["subtotal_cop"], r["iva_cop"], r["total_cop"]) == (256000, 0, 256000)
+    assert _precios(db, so) == [(100000, 0, 19), (10000, 0, 5)]
+    assert _logs(db, so, ACCION) == []
+
+
 # ─── 7: r1 B, el credito a favor lo escribe el servidor ────────────────────────────
 
 def _dos_exentos(a=100000, b=200000):
@@ -407,6 +456,28 @@ def test_credito_a_favor_lo_calcula_el_servidor(app_client, db, admin_token):
     assert (resp.json()["data"]["total_cop"], resp.json()["data"]["saldo_cop"]) == (70000, 0)
     assert _logs(db, so, "UPDATED")[-1].description == (
         f"{_motivo(cot.numero)} Crédito a favor del cliente: $10.000.")
+    # r2 (punto 3): la respuesta de la propagacion trae el mismo credito que la frase; el detalle del pedido, no.
+    assert resp.json()["data"]["credito_a_favor_cop"] == 10000
+    assert "credito_a_favor_cop" not in _detalle(app_client, admin_token, so.id)
+
+
+def test_credito_sale_del_libro_y_no_de_total_menos_saldo(app_client, db, admin_token):
+    """r2 (punto 1b): Mueble $50.000 y Repisa $200.000 (exentos); el cliente pago $80.000 y se cancela la Repisa: el
+    total queda en $50.000 y el saldo, topado en $0 (total - saldo = $50.000, menos que lo pagado). Al re-cotizar el
+    Mueble a $40.000 el credito es $40.000, lo pagado del libro; con total - saldo habria dado $10.000."""
+    cot, so = _pedido(app_client, db, admin_token, _dos_exentos(a=50000))
+    _, repisa = _lineas(db, so)
+    _pagar(app_client, admin_token, so.id, 80000)
+    _cancelar(app_client, admin_token, so.id, repisa.id)
+    db.expire_all()
+    db.refresh(so)
+    assert (so.total_cop, so.saldo_cop) == (50000, 0)
+    data = _recotizar(app_client, admin_token, cot.id, _dos_exentos(a=40000))
+    resp = _propagar(app_client, admin_token, so.id, data, cot.numero)
+    assert resp.status_code == 200, resp.text
+    assert (resp.json()["data"]["total_cop"], resp.json()["data"]["saldo_cop"]) == (40000, 0)
+    assert _logs(db, so, "UPDATED")[-1].description.endswith(" Crédito a favor del cliente: $40.000.")
+    assert resp.json()["data"]["credito_a_favor_cop"] == 40000
 
 
 def test_credito_a_favor_sin_cancelados_y_frase_vieja(app_client, db, admin_token):
@@ -422,13 +493,15 @@ def test_credito_a_favor_sin_cancelados_y_frase_vieja(app_client, db, admin_toke
     titulo = _logs(db, so, "UPDATED")[-1].description
     assert titulo == f"{_motivo(cot.numero)} Crédito a favor del cliente: $10.000.", titulo
     assert titulo.count("Crédito a favor del cliente") == 1
-    # Sin credito (el total vuelve por encima de lo pagado): la frase vieja se quita.
+    assert resp.json()["data"]["credito_a_favor_cop"] == 10000
+    # Sin credito (el total vuelve por encima de lo pagado): la frase vieja se quita y el credito vale 0.
     data = _recotizar(app_client, admin_token, cot.id, _dos_exentos(a=60000, b=40000))
     resp = _propagar(app_client, admin_token, so.id, data, cot.numero,
                      motivo=f"{_motivo(cot.numero)} Crédito a favor del cliente: $10.000.")
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["saldo_cop"] == 20000
     assert _logs(db, so, "UPDATED")[-1].description == _motivo(cot.numero)
+    assert resp.json()["data"]["credito_a_favor_cop"] == 0
 
 
 # ─── 8: IVA discriminado con descuento ─────────────────────────────────────────────
