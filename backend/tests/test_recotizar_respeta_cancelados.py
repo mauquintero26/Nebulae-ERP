@@ -3,12 +3,17 @@
 Decision del usuario (2026-10-26), «Respetar lo cancelado»: el pedido toma los precios nuevos, pero los productos
 cancelados siguen cancelados y su valor no vuelve al total. El servidor recalcula el total, el IVA y el saldo.
 
-- PATCH /ventas/pedidos/{id} con productos y total_cop (la propagacion de la re-cotizacion, lib/dinero-ventas.js
-  propagacionRecotizacion) en un pedido con lineas canceladas: la cantidad cancelada de cada linea se vuelve a aplicar
-  sobre el JSON nuevo con iva.cancelar_cantidad; la cabecera sale de ese JSON (no del body) y el saldo del libro de
-  pagos. Las lineas con unidades vigentes toman el precio, el descuento y la tarifa nuevos (sus cantidades no cambian).
-- Si una linea cancelada no se puede emparejar con seguridad con el JSON nuevo: 409 con el texto exacto, sin cambios.
-- Sin cancelaciones, como hoy (los totales del body), con una sola lectura de las lineas.
+- PATCH /ventas/pedidos/{id} con productos (la propagacion de la re-cotizacion, lib/dinero-ventas.js
+  propagacionRecotizacion) en un pedido con lineas canceladas, traiga o no total_cop (r1 E): la cantidad cancelada de
+  cada linea se vuelve a aplicar sobre el JSON nuevo con iva.cancelar_cantidad, salvo que la COT ya la refleje (qty =
+  la vigente) o que la linea cancelada del todo ya no este en la COT (r1 D); la cabecera sale de ese JSON (no del
+  body) y el saldo, del libro de pagos.
+- Las lineas emparejadas con unidades vigentes toman el precio, el descuento y la tarifa nuevos, haya cancelaciones o
+  no (r1 A); sus cantidades no cambian. Sin cancelaciones el JSON y los totales del body quedan como hoy.
+- Si una linea cancelada no se puede emparejar con seguridad: 409 con el texto exacto, sin cambios. Con cancelados y
+  una COT sin IVA por producto: otro 409 (r1 E).
+- r1 B: la frase «Crédito a favor del cliente: $X.» del motivo la escribe el servidor, con lo pagado del libro.
+- r1 F: una COT reordenada no le impide a una cancelacion posterior ajustar el JSON.
 
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_recotizar_respeta_cancelados
 """
@@ -16,8 +21,10 @@ import datetime
 import uuid
 from decimal import Decimal
 
-MENSAJE_409 = ("El pedido tiene productos cancelados que no coinciden con la cotización nueva: revísalo en el pedido "
-               "antes de re-cotizar.")
+MENSAJE_409 = ("El pedido tiene productos cancelados que no coinciden con la cotización nueva: en la cotización, deja "
+               "cada uno con su cantidad original o con la que sigue vigente en el pedido.")
+MENSAJE_409_SIN_IVA = ("El pedido tiene productos cancelados y la cotización no discrimina el IVA de cada producto: el "
+                       "pedido no se puede recalcular.")
 ACCION = "CANCELADOS_RESPETADOS"
 
 
@@ -32,6 +39,11 @@ def _linea(nombre, qty, precio, tarifa):
 
 def _dos_productos(rodillo=100000, cinta=10000, qty_rodillo=2, qty_cinta=3):
     return [_linea("Rodillo", qty_rodillo, rodillo, "19"), _linea("Cinta", qty_cinta, cinta, "5")]
+
+
+def _ejemplo(rodillo=206769, pintura=117000, cinta=13200):
+    """El recorrido del Bloque 1: Rodillo 6 (19%), Pintura 4 (19%) y Cinta 10 (5%)."""
+    return [_linea("Rodillo", 6, rodillo, "19"), _linea("Pintura", 4, pintura, "19"), _linea("Cinta", 10, cinta, "5")]
 
 
 def _recotizar(app_client, token, cot_id, productos, descuento=0):
@@ -73,6 +85,10 @@ def _lineas(db, so):
     return db.query(SaleOrderLineErp).filter(SaleOrderLineErp.so_id == so.id).order_by(SaleOrderLineErp.id).all()
 
 
+def _precios(db, so):
+    return [(l.unit_price_cop, l.descuento_pct, l.tax_pct) for l in _lineas(db, so)]
+
+
 def _cancelar(app_client, token, so_id, linea_id, cantidad=None):
     body = {"motivo": "El cliente ya no la necesita"}
     if cantidad is not None:
@@ -89,14 +105,23 @@ def _pagar(app_client, token, so_id, monto):
     assert resp.status_code in (200, 201), resp.text
 
 
-def _propagar(app_client, token, so_id, data, cot_numero="COT-B31"):
-    """El cuerpo de propagacionRecotizacion (lib/dinero-ventas.js) con la RESPUESTA del PATCH de la COT."""
-    return app_client.patch(f"/api/v1/ventas/pedidos/{so_id}", json={
-        "productos": data["productos"], "subtotal_cop": data["subtotal_cop"], "iva_cop": data["iva_cop"],
-        "descuento_pct": data["descuento_pct"], "total_cop": data["total_cop"],
-        "motivo": f"Precios actualizados por re-cotización de {cot_numero} (anticipo y pagos existentes no se "
-                  "modificaron).",
-        "updated_by": "t"}, headers=auth(token))
+def _motivo(cot_numero):
+    """El motivo que manda propagacionRecotizacion desde r1 B (sin la frase del crédito: la pone el servidor)."""
+    return f"Precios actualizados por re-cotización de {cot_numero} (anticipo y pagos existentes no se modificaron)."
+
+
+def _propagar(app_client, token, so_id, data, cot_numero="COT-B31", motivo=None, **cambios):
+    """El cuerpo de propagacionRecotizacion (lib/dinero-ventas.js) con la RESPUESTA del PATCH de la COT. `cambios`
+    agrega o quita llaves (None = la quita), para los cuerpos que llegan por la API directa."""
+    body = {"productos": data["productos"], "subtotal_cop": data["subtotal_cop"], "iva_cop": data["iva_cop"],
+            "descuento_pct": data["descuento_pct"], "total_cop": data["total_cop"],
+            "motivo": motivo if motivo is not None else _motivo(cot_numero), "updated_by": "t"}
+    for llave, valor in cambios.items():
+        if valor is None:
+            body.pop(llave, None)
+        else:
+            body[llave] = valor
+    return app_client.patch(f"/api/v1/ventas/pedidos/{so_id}", json=body, headers=auth(token))
 
 
 def _detalle(app_client, token, so_id):
@@ -127,6 +152,14 @@ def _foto(db, so):
 
 def _filas(d):
     return [(f["tarifa"], f["base_cop"], f["iva_cop"]) for f in d["iva_por_tarifa"]]
+
+
+def _cuadra(d):
+    """El desglose del pedido cuadra al peso: subtotal - descuento + IVA = total y el resumen por tarifa suma."""
+    assert d["subtotal_cop"] - d["descuento_cop"] + d["iva_cop"] == d["total_cop"], d
+    assert d["iva_discriminado"] is True, d
+    assert sum(f["iva_cop"] for f in d["iva_por_tarifa"]) == d["iva_cop"], d
+    assert sum(f["base_cop"] for f in d["iva_por_tarifa"]) == d["total_cop"] - d["iva_cop"], d
 
 
 # ─── 1: un producto cancelado del todo ─────────────────────────────────────────────
@@ -170,18 +203,21 @@ def test_cancelado_del_todo_no_vuelve_al_pedido(app_client, db, admin_token):
     assert renglon.entity_type == "VEN"
     assert renglon.description == "La re-cotización respetó los productos cancelados del pedido: 3 unidades de Cinta."
     assert renglon.extra_data["productos"] == [{"line_id": cinta.id, "producto": "Cinta", "cantidad_cancelada": "3"}]
+    # r1 B: sin credito (pagado $50.000 < total $261.800) el titulo es el motivo tal cual, sin frase de credito.
+    assert _logs(db, so, "UPDATED")[-1].description == _motivo(cot.numero)
 
 
 # ─── 2: cancelacion parcial ────────────────────────────────────────────────────────
 
 def test_cancelacion_parcial_queda_con_la_cantidad_vigente(app_client, db, admin_token):
     """Rodillo 5 x $100.000; se cancelan 2. Al re-cotizar a $120.000 quedan 3 Rodillos al precio nuevo (la COT sigue
-    con 5): 3 x $120.000 = $360.000 + IVA $68.400, mas la Cinta sin cambios ($30.000 + $1.500)."""
+    con 5): 3 x $120.000 = $360.000 + IVA $68.400. r1 G: la Cinta tambien cambia de precio ($11.000) y su linea, que no
+    tiene cancelaciones, lo toma: $33.000 + IVA $1.650."""
     cot, so = _pedido(app_client, db, admin_token, _dos_productos(qty_rodillo=5))
     rodillo, _ = _lineas(db, so)
     _cancelar(app_client, admin_token, so.id, rodillo.id, 2)
-    data = _recotizar(app_client, admin_token, cot.id, _dos_productos(rodillo=120000, qty_rodillo=5))
-    assert data["total_cop"] == 745500  # la COT con los 5 Rodillos
+    data = _recotizar(app_client, admin_token, cot.id, _dos_productos(rodillo=120000, cinta=11000, qty_rodillo=5))
+    assert data["total_cop"] == 748650  # la COT con los 5 Rodillos
 
     resp = _propagar(app_client, admin_token, so.id, data, cot.numero)
     assert resp.status_code == 200, resp.text
@@ -189,21 +225,23 @@ def test_cancelacion_parcial_queda_con_la_cantidad_vigente(app_client, db, admin
     assert r["productos"][0] == {**data["productos"][0], "qty": 3, "total_cop": 360000, "descuento_cop": 0,
                                  "base_iva_cop": 360000, "iva_cop": 68400, "total_con_iva_cop": 428400}
     assert r["productos"][1] == data["productos"][1]
-    assert (r["subtotal_cop"], r["iva_cop"], r["total_cop"], r["saldo_cop"]) == (390000, 69900, 459900, 459900)
+    assert (r["subtotal_cop"], r["iva_cop"], r["total_cop"], r["saldo_cop"]) == (393000, 70050, 463050, 463050)
     rodillo, cinta = _lineas(db, so)
     assert (rodillo.quantity, rodillo.quantity_cancelled, rodillo.unit_price_cop) == (5, 2, 120000)
-    assert rodillo.estado != "CANCELADA" and cinta.unit_price_cop == 10000
+    assert rodillo.estado != "CANCELADA"
+    assert (cinta.quantity, cinta.quantity_cancelled, cinta.unit_price_cop, cinta.tax_pct) == (3, 0, 11000, 5)
     [renglon] = _logs(db, so, ACCION)
     assert renglon.description == "La re-cotización respetó los productos cancelados del pedido: 2 unidades de Rodillo."
 
 
-# ─── 3: sin cancelaciones, como hoy ────────────────────────────────────────────────
+# ─── 3 y 4: sin cancelaciones (r1 A) ───────────────────────────────────────────────
 
 def test_sin_cancelaciones_queda_como_hoy(app_client, db, admin_token, contador_sql):
-    """Sin lineas canceladas el pedido guarda el JSON y los totales del body, como antes de B3.1; las lineas no se
-    tocan y el PATCH solo lee las lineas una vez (ninguna escritura sobre ellas)."""
+    """Sin lineas canceladas el pedido guarda el JSON y los totales del body, como antes de B3.1. r1 A: las lineas
+    emparejadas SI toman el precio, el descuento y la tarifa nuevos (el punto 4 del brief habla del dinero). El PATCH
+    lee las lineas una sola vez; lo demas sobre ellas son los UPDATE de las que cambian."""
     cot, so = _pedido(app_client, db, admin_token, _dos_productos())
-    antes = [(l.unit_price_cop, l.descuento_pct, l.tax_pct) for l in _lineas(db, so)]
+    assert _precios(db, so) == [(100000, 0, 19), (10000, 0, 5)]
     data = _recotizar(app_client, admin_token, cot.id, _dos_productos(rodillo=110000, cinta=12000))
     with contador_sql.ventana() as v:
         resp = _propagar(app_client, admin_token, so.id, data, cot.numero)
@@ -211,27 +249,58 @@ def test_sin_cancelaciones_queda_como_hoy(app_client, db, admin_token, contador_
     r = resp.json()["data"]
     assert r["productos"] == data["productos"]
     assert (r["subtotal_cop"], r["iva_cop"], r["total_cop"], r["saldo_cop"]) == (256000, 43600, 299600, 299600)
-    assert [(l.unit_price_cop, l.descuento_pct, l.tax_pct) for l in _lineas(db, so)] == antes
+    assert _precios(db, so) == [(110000, 0, 19), (12000, 0, 5)]
+    assert [(l.quantity, l.quantity_cancelled) for l in _lineas(db, so)] == [(2, 0), (3, 0)]
     assert _logs(db, so, ACCION) == []
-    sobre_lineas = [s for s in v.sentencias if "sale_order_lines_erp" in s]
-    assert len(sobre_lineas) <= 1, sobre_lineas
-    assert all(s.lstrip().upper().startswith("SELECT") for s in sobre_lineas), sobre_lineas
+    sobre_lineas = [s.lstrip().upper() for s in v.sentencias if "sale_order_lines_erp" in s]
+    assert len([s for s in sobre_lineas if s.startswith("SELECT")]) == 1, sobre_lineas
+    assert all(s.startswith(("SELECT", "UPDATE")) for s in sobre_lineas), sobre_lineas
 
 
-# ─── 4: una linea cancelada que no se puede emparejar ──────────────────────────────
+def test_recotizar_sin_cancelaciones_y_despues_cancelar(app_client, db, admin_token):
+    """r1 A, el escenario de la revision: se re-cotiza sin cancelaciones (Rodillo $110.000, Cinta $12.000) y DESPUES
+    se cancela la Cinta. La cancelacion empareja con el JSON (_indice_en_productos): la Cinta sale del JSON y el total
+    queda con los precios nuevos, $261.800 (antes del arreglo, el respaldo daba $238.000 con los precios viejos)."""
+    cot, so = _pedido(app_client, db, admin_token, _dos_productos())
+    data = _recotizar(app_client, admin_token, cot.id, _dos_productos(rodillo=110000, cinta=12000))
+    assert _propagar(app_client, admin_token, so.id, data, cot.numero).status_code == 200
+    _, cinta = _lineas(db, so)
+    assert _cancelar(app_client, admin_token, so.id, cinta.id)["sale_order_total_cop"] == 261800
+    d = _detalle(app_client, admin_token, so.id)
+    assert d["productos"] == [data["productos"][0]]
+    assert (d["subtotal_cop"], d["iva_cop"], d["total_cop"]) == (220000, 41800, 261800)
+    _cuadra(d)
+    # El camino de _indice_en_productos: la Actividad guarda la linea del JSON que salio.
+    [renglon] = _logs(db, so, "LINEA_CANCELADA")
+    assert renglon.extra_data["linea_retirada"] == data["productos"][1]
+
+
+# ─── 5: una linea cancelada que no se puede emparejar (r1 D) ───────────────────────
 
 def test_cancelado_sin_pareja_es_409_sin_cambios(app_client, db, admin_token, contador_sql):
-    """La Cinta (cancelada del todo) ya no esta en la COT, viene dos veces o con otra cantidad: no se sabe con
-    seguridad que hacer con ella. 409 con el texto exacto, sin commits, sin cambios y sin renglon."""
-    casos = {
-        "ya no la trae": [_linea("Rodillo", 2, 110000, "19")],
-        "la trae dos veces": _dos_productos(rodillo=110000) + [_linea("Cinta", 3, 10000, "5")],
-        "otra cantidad": _dos_productos(rodillo=110000, qty_cinta=4),
-    }
-    for caso, productos in casos.items():
-        cot, so = _pedido(app_client, db, admin_token, _dos_productos())
-        _, cinta = _lineas(db, so)
-        _cancelar(app_client, admin_token, so.id, cinta.id)
+    """Lo que no se sabe con seguridad: 409 con el texto exacto, sin commits, sin cambios y sin renglon.
+    - La Cinta cancelada del todo (V = 0) viene dos veces en la COT, o con mas unidades que la linea.
+    - El Rodillo con 5 y 2 cancelados (V = 3): la COT ya no lo trae, o lo trae con 4 (entre V y Q) o con 2 (bajo V).
+    - La clave duplicada en las lineas: la COT original traia dos Cintas iguales y se cancelo una."""
+    cinta, rodillo, dos_cintas = "cinta", "rodillo", "dos_cintas"
+    originales = {cinta: _dos_productos(), rodillo: _dos_productos(qty_rodillo=5),
+                  dos_cintas: _dos_productos() + [_linea("Cinta", 3, 10000, "5")]}
+    casos = [
+        ("la trae dos veces", cinta, _dos_productos(rodillo=110000) + [_linea("Cinta", 3, 10000, "5")]),
+        ("mas que la linea", cinta, _dos_productos(rodillo=110000, qty_cinta=4)),
+        ("ausente con vigentes", rodillo, [_linea("Cinta", 3, 12000, "5")]),
+        ("entre la vigente y la original", rodillo, _dos_productos(rodillo=120000, qty_rodillo=4)),
+        ("por debajo de la vigente", rodillo, _dos_productos(rodillo=120000, qty_rodillo=2)),
+        ("clave duplicada en las lineas", dos_cintas, _dos_productos(rodillo=110000) + [_linea("Cinta", 3, 10000,
+                                                                                               "5")]),
+    ]
+    for caso, origen, productos in casos:
+        cot, so = _pedido(app_client, db, admin_token, originales[origen])
+        lineas = _lineas(db, so)
+        if origen == rodillo:
+            _cancelar(app_client, admin_token, so.id, lineas[0].id, 2)
+        else:
+            _cancelar(app_client, admin_token, so.id, lineas[1].id)
         data = _recotizar(app_client, admin_token, cot.id, productos)
         foto = _foto(db, so)
         renglones = len(_logs(db, so))
@@ -244,7 +313,125 @@ def test_cancelado_sin_pareja_es_409_sin_cambios(app_client, db, admin_token, co
         assert len(_logs(db, so)) == renglones, caso
 
 
-# ─── 5: IVA discriminado con descuento ─────────────────────────────────────────────
+def test_cancelado_del_todo_que_ya_no_esta_en_la_cot(app_client, db, admin_token):
+    """r1 D: la Cinta cancelada del todo (V = 0) y el asesor la quita de la COT: ya no cuenta, asi que se acepta. El
+    pedido queda con el Rodillo al precio nuevo y el renglon nombra igual la Cinta."""
+    cot, so = _pedido(app_client, db, admin_token, _dos_productos())
+    _, cinta = _lineas(db, so)
+    _cancelar(app_client, admin_token, so.id, cinta.id)
+    data = _recotizar(app_client, admin_token, cot.id, [_linea("Rodillo", 2, 110000, "19")])
+    resp = _propagar(app_client, admin_token, so.id, data, cot.numero)
+    assert resp.status_code == 200, resp.text
+    r = resp.json()["data"]
+    assert r["productos"] == data["productos"]
+    assert (r["subtotal_cop"], r["iva_cop"], r["total_cop"]) == (220000, 41800, 261800)
+    rodillo, cinta = _lineas(db, so)
+    assert rodillo.unit_price_cop == 110000 and (cinta.estado, cinta.unit_price_cop) == ("CANCELADA", 10000)
+    [renglon] = _logs(db, so, ACCION)
+    assert renglon.description == "La re-cotización respetó los productos cancelados del pedido: 3 unidades de Cinta."
+
+
+def test_la_cot_ya_refleja_la_cancelacion(app_client, db, admin_token):
+    """r1 D: Rodillo 5 con 2 cancelados (V = 3) y la COT ya trae 3 Rodillos a $120.000: la COT refleja la cancelacion y
+    el pedido queda con esos 3, sin volver a cancelar (no 1). La linea sigue con 5 y 2 canceladas, al precio nuevo."""
+    cot, so = _pedido(app_client, db, admin_token, _dos_productos(qty_rodillo=5))
+    rodillo, _ = _lineas(db, so)
+    _cancelar(app_client, admin_token, so.id, rodillo.id, 2)
+    data = _recotizar(app_client, admin_token, cot.id, _dos_productos(rodillo=120000, qty_rodillo=3))
+    resp = _propagar(app_client, admin_token, so.id, data, cot.numero)
+    assert resp.status_code == 200, resp.text
+    r = resp.json()["data"]
+    assert r["productos"] == data["productos"] and r["productos"][0]["qty"] == 3
+    assert (r["subtotal_cop"], r["iva_cop"], r["total_cop"]) == (390000, 69900, 459900)
+    rodillo, _ = _lineas(db, so)
+    assert (rodillo.quantity, rodillo.quantity_cancelled, rodillo.unit_price_cop) == (5, 2, 120000)
+    [renglon] = _logs(db, so, ACCION)
+    assert renglon.description == "La re-cotización respetó los productos cancelados del pedido: 2 unidades de Rodillo."
+
+
+# ─── 6: r1 E, el disparador y la COT sin IVA por producto ──────────────────────────
+
+def test_productos_sin_total_con_cancelados_tambien_recalcula(app_client, db, admin_token):
+    """r1 E (a): un PATCH con productos y SIN total_cop a un pedido con cancelados tambien entra: el total lo calcula
+    el servidor y el saldo y el anticipo salen del libro (los del body se ignoran)."""
+    cot, so = _pedido(app_client, db, admin_token, _dos_productos())
+    _, cinta = _lineas(db, so)
+    _pagar(app_client, admin_token, so.id, 50000)
+    _cancelar(app_client, admin_token, so.id, cinta.id)
+    data = _recotizar(app_client, admin_token, cot.id, _dos_productos(rodillo=110000, cinta=12000))
+    resp = _propagar(app_client, admin_token, so.id, data, cot.numero, total_cop=None, subtotal_cop=None,
+                     iva_cop=None, saldo_cop=1, anticipo_cop=1)
+    assert resp.status_code == 200, resp.text
+    r = resp.json()["data"]
+    assert [p["product_name"] for p in r["productos"]] == ["Rodillo"]
+    assert (r["subtotal_cop"], r["iva_cop"], r["total_cop"], r["saldo_cop"], r["anticipo_cop"]) == (
+        220000, 41800, 261800, 211800, 50000)
+
+
+def test_cot_sin_iva_por_producto_con_cancelados_es_409(app_client, db, admin_token, contador_sql):
+    """r1 E (c): con cancelados y un JSON sin la tarifa de IVA de cada producto, cancelar_cantidad no se puede aplicar:
+    409 con su texto propio, sin cambios."""
+    cot, so = _pedido(app_client, db, admin_token, _dos_productos())
+    _, cinta = _lineas(db, so)
+    _cancelar(app_client, admin_token, so.id, cinta.id)
+    sin_iva = [{"product_name": "Rodillo", "qty": 2, "unit_price_cop": 110000, "total_cop": 220000},
+               {"product_name": "Cinta", "qty": 3, "unit_price_cop": 12000, "total_cop": 36000}]
+    foto = _foto(db, so)
+    with contador_sql.ventana() as v:
+        resp = _propagar(app_client, admin_token, so.id, {
+            "productos": sin_iva, "subtotal_cop": 256000, "iva_cop": 0, "descuento_pct": 0, "total_cop": 256000},
+            cot.numero)
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == MENSAJE_409_SIN_IVA
+    assert v.commits == 0 and _foto(db, so) == foto
+
+
+# ─── 7: r1 B, el credito a favor lo escribe el servidor ────────────────────────────
+
+def _dos_exentos(a=100000, b=200000):
+    return [_linea("Mueble", 1, a, "EXENTO"), _linea("Repisa", 1, b, "EXENTO")]
+
+
+def test_credito_a_favor_lo_calcula_el_servidor(app_client, db, admin_token):
+    """El escenario de la revision: Mueble $100.000 y Repisa $200.000 (exentos), el cliente pago $80.000, se cancela
+    la Repisa y se re-cotiza el Mueble a $70.000 (la COT queda en $260.000). El pedido queda en $70.000 con saldo $0 y
+    el credito real es $10.000: el titulo del renglon lo dice, con lo pagado del libro."""
+    cot, so = _pedido(app_client, db, admin_token, _dos_exentos())
+    _, repisa = _lineas(db, so)
+    _pagar(app_client, admin_token, so.id, 80000)
+    _cancelar(app_client, admin_token, so.id, repisa.id)
+    data = _recotizar(app_client, admin_token, cot.id, _dos_exentos(a=70000, b=190000))
+    assert data["total_cop"] == 260000
+    resp = _propagar(app_client, admin_token, so.id, data, cot.numero)
+    assert resp.status_code == 200, resp.text
+    assert (resp.json()["data"]["total_cop"], resp.json()["data"]["saldo_cop"]) == (70000, 0)
+    assert _logs(db, so, "UPDATED")[-1].description == (
+        f"{_motivo(cot.numero)} Crédito a favor del cliente: $10.000.")
+
+
+def test_credito_a_favor_sin_cancelados_y_frase_vieja(app_client, db, admin_token):
+    """Sin cancelados la frase sale con el formato de hoy. Un navegador con el codigo viejo manda su propia frase: queda
+    una sola, la del servidor. Sin credito, una frase vieja se quita y no queda ninguna."""
+    cot, so = _pedido(app_client, db, admin_token, _dos_exentos())
+    _pagar(app_client, admin_token, so.id, 80000)
+    data = _recotizar(app_client, admin_token, cot.id, _dos_exentos(a=30000, b=40000))
+    resp = _propagar(app_client, admin_token, so.id, data, cot.numero,
+                     motivo=f"{_motivo(cot.numero)} Crédito a favor del cliente: $1.234.")
+    assert resp.status_code == 200, resp.text
+    assert (resp.json()["data"]["total_cop"], resp.json()["data"]["saldo_cop"]) == (70000, 0)
+    titulo = _logs(db, so, "UPDATED")[-1].description
+    assert titulo == f"{_motivo(cot.numero)} Crédito a favor del cliente: $10.000.", titulo
+    assert titulo.count("Crédito a favor del cliente") == 1
+    # Sin credito (el total vuelve por encima de lo pagado): la frase vieja se quita.
+    data = _recotizar(app_client, admin_token, cot.id, _dos_exentos(a=60000, b=40000))
+    resp = _propagar(app_client, admin_token, so.id, data, cot.numero,
+                     motivo=f"{_motivo(cot.numero)} Crédito a favor del cliente: $10.000.")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["saldo_cop"] == 20000
+    assert _logs(db, so, "UPDATED")[-1].description == _motivo(cot.numero)
+
+
+# ─── 8: IVA discriminado con descuento ─────────────────────────────────────────────
 
 def test_iva_discriminado_el_desglose_cuadra(app_client, db, admin_token):
     """El recorrido del Bloque 1 con 10% de descuento: se cancela la Cinta del todo y 2 de los 6 Rodillos, y se
@@ -252,13 +439,12 @@ def test_iva_discriminado_el_desglose_cuadra(app_client, db, admin_token):
     4 Pinturas: subtotal $1.300.440 - descuento $130.044 + IVA $222.375 = total $1.392.771, al peso, y el desglose por
     tarifa cuadra. Despues se puede seguir cancelando con el IVA discriminado (las lineas tienen el precio nuevo)."""
     from app.core.iva import calcular_totales_cotizacion, cancelar_cantidad
-    ejemplo = [_linea("Rodillo", 6, 206769, "19"), _linea("Pintura", 4, 117000, "19"), _linea("Cinta", 10, 13200, "5")]
-    cot, so = _pedido(app_client, db, admin_token, ejemplo, descuento=10)
+    cot, so = _pedido(app_client, db, admin_token, _ejemplo(), descuento=10)
     assert (so.subtotal_cop, so.tax_cop, so.total_cop) == (1840614, 298113, 1954666)
     rodillo, pintura, cinta = _lineas(db, so)
     _cancelar(app_client, admin_token, so.id, cinta.id)
     _cancelar(app_client, admin_token, so.id, rodillo.id, 2)
-    nuevos = [_linea("Rodillo", 6, 207333, "19"), _linea("Pintura", 4, 117777, "19"), _linea("Cinta", 10, 13457, "5")]
+    nuevos = _ejemplo(207333, 117777, 13457)
     data = _recotizar(app_client, admin_token, cot.id, nuevos, descuento=10)
     assert data["total_cop"] == 1964047
 
@@ -266,10 +452,8 @@ def test_iva_discriminado_el_desglose_cuadra(app_client, db, admin_token):
     assert resp.status_code == 200, resp.text
     d = _detalle(app_client, admin_token, so.id)
     assert (d["subtotal_cop"], d["descuento_cop"], d["iva_cop"], d["total_cop"]) == (1300440, 130044, 222375, 1392771)
-    assert d["subtotal_cop"] - d["descuento_cop"] + d["iva_cop"] == d["total_cop"]
-    assert d["iva_discriminado"] is True and _filas(d) == [("19", 1170396, 222375)]
-    assert sum(f["iva_cop"] for f in d["iva_por_tarifa"]) == d["iva_cop"]
-    assert sum(f["base_cop"] for f in d["iva_por_tarifa"]) == d["total_cop"] - d["iva_cop"]
+    _cuadra(d)
+    assert _filas(d) == [("19", 1170396, 222375)]
     # Las mismas piezas puras que la cancelacion: el JSON es el de la COT con las cancelaciones aplicadas.
     esperado, _ = cancelar_cantidad(cancelar_cantidad(calcular_totales_cotizacion(nuevos, 10)["lineas"], 2, 10)[0],
                                     0, 2)
@@ -284,6 +468,72 @@ def test_iva_discriminado_el_desglose_cuadra(app_client, db, admin_token):
     # Las lineas emparejan con el JSON nuevo: cancelar 1 Pintura sigue con el IVA discriminado y el desglose cuadra.
     _cancelar(app_client, admin_token, so.id, pintura.id, 1)
     d = _detalle(app_client, admin_token, so.id)
-    assert d["iva_discriminado"] is True and [p["qty"] for p in d["productos"]] == [4, 3]
-    assert sum(f["iva_cop"] for f in d["iva_por_tarifa"]) == d["iva_cop"]
-    assert d["subtotal_cop"] - d["descuento_cop"] + d["iva_cop"] == d["total_cop"]
+    assert [p["qty"] for p in d["productos"]] == [4, 3]
+    _cuadra(d)
+
+
+# ─── 9: r1 F, la COT reordenada ────────────────────────────────────────────────────
+
+def test_la_cot_reordenada_y_despues_cancelar(app_client, db, admin_token):
+    """El pedido es Rodillo, Pintura y Cinta (cancelada del todo); la COT se re-cotiza en otro orden (Cinta, Pintura,
+    Rodillo). Despues se cancela 1 Pintura: las lineas vivas, en orden de id, ya no coinciden una a una con el JSON,
+    pero el segundo emparejamiento por clave (unica en los dos lados y con todo coincidiendo) ajusta el JSON."""
+    from app.core.iva import calcular_totales_cotizacion, cancelar_cantidad
+    cot, so = _pedido(app_client, db, admin_token, _ejemplo(), descuento=10)
+    _, pintura, cinta = _lineas(db, so)
+    _cancelar(app_client, admin_token, so.id, cinta.id)
+    rodillo_n, pintura_n, cinta_n = _ejemplo(207333, 117777, 13457)
+    reordenados = [cinta_n, pintura_n, rodillo_n]
+    data = _recotizar(app_client, admin_token, cot.id, reordenados, descuento=10)
+    resp = _propagar(app_client, admin_token, so.id, data, cot.numero)
+    assert resp.status_code == 200, resp.text
+    esperado, _ = cancelar_cantidad(calcular_totales_cotizacion(reordenados, 10)["lineas"], 0, 10)
+    assert [p["product_name"] for p in resp.json()["data"]["productos"]] == ["Pintura", "Rodillo"]
+    assert resp.json()["data"]["productos"] == esperado
+    _cancelar(app_client, admin_token, so.id, pintura.id, 1)
+    d = _detalle(app_client, admin_token, so.id)
+    assert [(p["product_name"], p["qty"]) for p in d["productos"]] == [("Pintura", 3), ("Rodillo", 6)]
+    assert d["productos"][1] == esperado[1]  # el Rodillo no se toca
+    _cuadra(d)
+
+
+# ─── 10: r1 G, bordes ──────────────────────────────────────────────────────────────
+
+def test_entrega_parcial_previa(app_client, db, admin_token):
+    """Rodillo 5 con 2 entregados y los otros 3 cancelados (la linea queda CANCELADA, pero con 2 vendidos). Al re-cotizar
+    a $120.000 el JSON queda con 2 Rodillos al precio nuevo ($240.000 + IVA $45.600) y la Cinta igual: total $317.100,
+    y la cabecera cuadra al peso."""
+    from app.models.fase1b import SaleOrderLineErp
+    cot, so = _pedido(app_client, db, admin_token, _dos_productos(qty_rodillo=5))
+    rodillo, _ = _lineas(db, so)
+    db.get(SaleOrderLineErp, rodillo.id).quantity_delivered = Decimal(2)
+    db.commit()
+    _cancelar(app_client, admin_token, so.id, rodillo.id, 3)
+    assert _lineas(db, so)[0].estado == "CANCELADA"
+    data = _recotizar(app_client, admin_token, cot.id, _dos_productos(rodillo=120000, qty_rodillo=5))
+    resp = _propagar(app_client, admin_token, so.id, data, cot.numero)
+    assert resp.status_code == 200, resp.text
+    r = resp.json()["data"]
+    assert r["productos"][0] == {**data["productos"][0], "qty": 2, "total_cop": 240000, "descuento_cop": 0,
+                                 "base_iva_cop": 240000, "iva_cop": 45600, "total_con_iva_cop": 285600}
+    assert (r["subtotal_cop"], r["iva_cop"], r["total_cop"]) == (270000, 47100, 317100)
+    _cuadra(r)
+    rodillo, _ = _lineas(db, so)
+    assert (rodillo.quantity, rodillo.quantity_delivered, rodillo.quantity_cancelled) == (5, 2, 3)
+    assert (rodillo.unit_price_cop, rodillo.estado) == (120000, "CANCELADA")
+
+
+def test_linea_vigente_sin_pareja_conserva_su_precio(app_client, db, admin_token):
+    """Rodillo, Pintura y Cinta (la Cinta cancelada del todo); la COT renombra la Pintura («Pintura blanca»): esa linea
+    no tiene pareja y conserva su precio; el Rodillo, que si la tiene, toma el nuevo."""
+    cot, so = _pedido(app_client, db, admin_token, _ejemplo())
+    _, _, cinta = _lineas(db, so)
+    _cancelar(app_client, admin_token, so.id, cinta.id)
+    nuevos = [_linea("Rodillo", 6, 207333, "19"), _linea("Pintura blanca", 4, 117777, "19"),
+              _linea("Cinta", 10, 13457, "5")]
+    data = _recotizar(app_client, admin_token, cot.id, nuevos)
+    resp = _propagar(app_client, admin_token, so.id, data, cot.numero)
+    assert resp.status_code == 200, resp.text
+    assert [p["product_name"] for p in resp.json()["data"]["productos"]] == ["Rodillo", "Pintura blanca"]
+    rodillo, pintura, _ = _lineas(db, so)
+    assert (rodillo.unit_price_cop, pintura.unit_price_cop) == (207333, 117000)

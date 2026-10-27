@@ -30,7 +30,7 @@ import type { EnvioWhatsAppCanal } from './estado-envio-whatsapp';
 import {
   METODOS_PAGO_ANTICIPO, formatoPct, porcentajeDePesos, hoyLocal, origenAnticipo, cuentaVerificacion,
   evaluarVerificacion, verificacionParaEnviar, validarAjusteAnticipo, resumenAnticipoCotizacion, montoDesdeTexto,
-  creditoPorRecotizacion, anticipoDeCalculadora,
+  resumenPropagacionPedido, anticipoDeCalculadora,
 } from '@/lib/dinero-ventas';
 import {
   diasAlerta, pedidoVigente, soloPedidosCancelados, ultimoPedidoCancelado, pestanaCotizacion, situacionPedidoCotizacion,
@@ -486,7 +486,8 @@ export function DeleteConfirm({ cot, onConfirm, onCancel }: { cot: any; onConfir
 
 export function PropagarPvenConfirm({ pven, totalAnterior, totalNuevo, onConfirm, onCancel, saving }: { pven: any; totalAnterior: number; totalNuevo: number; onConfirm: () => void; onCancel: () => void; saving: boolean }) {
   // A3: lo pagado es total - saldo del pedido (no solo el anticipo); el servidor deja el saldo en $0, no negativo.
-  const { pagado: yaPagado, credito: creditoAFavor } = creditoPorRecotizacion(pven, totalNuevo);
+  // B3.1 r1 (B): «antes» es el total del pedido; si ya difiere del de la COT, una nota en vez del total nuevo y del crédito.
+  const { antes, nuevo, pagado: yaPagado, credito: creditoAFavor, nota } = resumenPropagacionPedido(pven, totalAnterior, totalNuevo);
   return (
     <Modal title="Actualizar Pedido de Venta" icon={RotateCcw} color="indigo" maxWidth="md" onClose={onCancel}
       footer={(
@@ -500,10 +501,10 @@ export function PropagarPvenConfirm({ pven, totalAnterior, totalNuevo, onConfirm
         reflejan allí automáticamente.
       </p>
       <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center justify-center gap-3 text-sm">
-        <span className="text-slate-400 line-through">{fCOP(totalAnterior)}</span>
-        <ArrowRight size={14} className="text-slate-400"/>
-        <span className="font-black text-indigo-700">{fCOP(totalNuevo)}</span>
+        <span className={nuevo === null ? 'font-black text-slate-700' : 'text-slate-400 line-through'}>{fCOP(antes)}</span>
+        {nuevo !== null && <><ArrowRight size={14} className="text-slate-400"/><span className="font-black text-indigo-700">{fCOP(nuevo)}</span></>}
       </div>
+      {nota && <p className="text-xs text-slate-600 text-center">{nota}</p>}
       {creditoAFavor > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
           <p className="font-bold mb-1">⚠ El cliente ya pagó {fCOP(yaPagado)}, más que el nuevo total.</p>

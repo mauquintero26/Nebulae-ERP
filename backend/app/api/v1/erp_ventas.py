@@ -4480,6 +4480,24 @@ def _liberar_lo_apartado_del_pedido(db: Session, v: SaleOrder, autor: Optional[s
     descartar_items_lista_de_pedido(db, v)
 
 
+# B3.1 r1 (B): la frase del credito a favor en el motivo de la propagacion (la que ponia el navegador, con pesos()).
+_FRASE_CREDITO = re.compile(r"\s*Crédito a favor del cliente: \$\d[\d.]*\.")
+
+
+def _motivo_con_credito(motivo, diferencia):
+    """B3.1 r1 (B): el motivo de la propagacion de la re-cotizacion con la frase del credito a favor que calcula el
+    servidor. `diferencia` = lo pagado segun el libro (el neto de _cabecera_desde_el_libro_de_pagos) - el total que
+    quedo; credito = max(0, diferencia), al peso. Primero se quita la frase de credito que ya traiga el motivo (un
+    navegador con el codigo viejo en cache): nunca queda dos veces. Con credito > 0 se agrega
+    ' Crédito a favor del cliente: $X.' (pesos(), el mismo formato de formatoPesos). Un motivo que no es texto o esta
+    vacio se devuelve tal cual (_registrar_cambios usa entonces el titulo automatico)."""
+    if not isinstance(motivo, str) or not motivo.strip():
+        return motivo
+    credito = max(Decimal("0"), redondear_peso(diferencia))
+    limpio = _FRASE_CREDITO.sub("", motivo)
+    return f"{limpio} Crédito a favor del cliente: {pesos(credito)}." if credito > 0 else limpio
+
+
 @router.patch("/pedidos/{ven_id}")
 def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
@@ -4509,10 +4527,20 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
                "customer_phone","customer_email","customer_address","trm_rate",
                "subtotal_cop","descuento_pct","total_cop","anticipo_cop","saldo_cop",
                "cancellation_reason","cancellation_authorized_by","cancelled_at"]
+    # B3.1 (hueco 8a): con productos (la propagacion de la re-cotizacion) se leen las lineas del pedido UNA vez, antes de
+    # escribir nada: deciden si hay productos cancelados que respetar y cuales toman los precios nuevos.
+    trae_productos = body.get("productos") is not None
+    lineas_del_pedido = []
+    if trae_productos:
+        lineas_del_pedido = (db.query(SaleOrderLineErp).filter(SaleOrderLineErp.so_id == v.id)
+                             .order_by(SaleOrderLineErp.id).all())
+    hay_cancelados = any(l.quantity_cancelled > 0 for l in lineas_del_pedido)
     # A3 (revision final): con un total nuevo (la re-cotizacion de la COT), el saldo y el anticipo salen del libro
     # de pagos del pedido, no de cuentas del navegador: los del body se ignoran. Un body con solo saldo_cop (el
     # "Registrar cobro" de Entregas) sigue como antes (hueco anterior a la rama, anotado).
-    recalcula_desde_el_libro = body.get("total_cop") is not None
+    # B3.1 r1 (E a): productos a un pedido con cancelados tambien, traiga o no total_cop (el total lo calcula el
+    # servidor). Un total_cop sin productos a un pedido con cancelados queda PARQUEADO (ningun llamador lo manda).
+    recalcula_desde_el_libro = body.get("total_cop") is not None or hay_cancelados
     if recalcula_desde_el_libro:
         body.pop("saldo_cop", None)
         body.pop("anticipo_cop", None)
@@ -4527,24 +4555,24 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
         total_ref = body["total_cop"] if body.get("total_cop") is not None else redondear_peso(v.total_cop)
         if iva_nuevo < 0 or iva_nuevo > total_ref:
             raise HTTPException(422, "El IVA debe estar entre $0 y el total del pedido.")
-    # B3.1 (hueco 8a, «Respetar lo cancelado»): la propagacion de la re-cotizacion (productos y total_cop) a un pedido
-    # con lineas canceladas no le devuelve lo cancelado. El JSON, el subtotal, el IVA y el total salen de
-    # recotizacion_con_cancelados (las reglas de core/iva; los del body no se usan) y el saldo, del libro (abajo). Sin
-    # cancelaciones todo sigue como hoy, con una sola lectura de las lineas. Antes de escribir nada: si una linea
-    # cancelada no se puede emparejar con seguridad, 409 sin cambios.
-    lineas_del_pedido, con_cancelados = [], None
-    if recalcula_desde_el_libro and body.get("productos") is not None:
-        from app.api.v1.erp_ventas_fase4 import MENSAJE_CANCELADOS_NO_COINCIDEN, recotizacion_con_cancelados
-        lineas_del_pedido = (db.query(SaleOrderLineErp).filter(SaleOrderLineErp.so_id == v.id)
-                             .order_by(SaleOrderLineErp.id).all())
+    # B3.1 (hueco 8a, «Respetar lo cancelado»): la propagacion de la re-cotizacion a un pedido con lineas canceladas no
+    # le devuelve lo cancelado. El JSON, el subtotal, el IVA y el total salen de recotizacion_del_pedido (las reglas de
+    # core/iva; los del body no se usan) y el saldo, del libro (abajo). Antes de escribir nada: si una linea cancelada
+    # no se puede emparejar con seguridad, 409 sin cambios. Sin cancelaciones el JSON y los totales del body quedan como
+    # hoy (r1 A: las lineas emparejadas igual toman los precios nuevos, abajo) y nunca hay 409.
+    recotizacion = None
+    if trae_productos:
+        from app.api.v1.erp_ventas_fase4 import ConflictoRecotizacion, recotizacion_del_pedido
         descuento = body.get("descuento_pct") if "descuento_pct" in body else v.descuento_pct
         try:
-            con_cancelados = recotizacion_con_cancelados(lineas_del_pedido, body["productos"], descuento)
-        except ValueError:
-            raise HTTPException(409, MENSAJE_CANCELADOS_NO_COINCIDEN)
-        if con_cancelados is not None:
-            totales = con_cancelados["totales"]
-            body["productos"] = con_cancelados["productos"]  # lista nueva de dicts nuevos (dirty-check del JSON)
+            recotizacion = recotizacion_del_pedido(lineas_del_pedido, body["productos"], descuento)
+        except ConflictoRecotizacion as e:
+            raise HTTPException(409, str(e)) from None
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+        if recotizacion["productos"] is not None:
+            totales = recotizacion["totales"]
+            body["productos"] = recotizacion["productos"]  # lista nueva de dicts nuevos (dirty-check del JSON)
             body["subtotal_cop"] = Decimal(totales["subtotal_cop"])
             body["total_cop"] = Decimal(totales["total_cop"])
             iva_nuevo = Decimal(totales["iva_cop"])
@@ -4554,27 +4582,33 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
             setattr(v, k, body[k])
     if iva_nuevo is not None:
         v.tax_cop = iva_nuevo
-    if con_cancelados is not None:
-        # Las lineas con unidades vigentes toman el precio, el descuento y la tarifa nuevos (sus cantidades no cambian):
-        # asi una cancelacion posterior sigue emparejando con el JSON (_indice_en_productos) y su respaldo
-        # (totales_lineas_pedido) cuenta con los precios nuevos. Las canceladas del todo conservan los suyos.
+    if recotizacion is not None:
+        # Las lineas emparejadas con unidades vigentes toman el precio, el descuento y la tarifa nuevos (sus cantidades no
+        # cambian), haya o no cancelaciones (r1 A): asi una cancelacion posterior sigue emparejando con el JSON
+        # (_indice_en_productos) y su respaldo (totales_lineas_pedido) cuenta con los precios nuevos. Las canceladas del
+        # todo y las que no tienen pareja conservan los suyos.
         for linea in lineas_del_pedido:
-            if linea.id in con_cancelados["precios"]:
-                linea.unit_price_cop, linea.descuento_pct, linea.tax_pct = con_cancelados["precios"][linea.id]
+            if linea.id in recotizacion["precios"]:
+                linea.unit_price_cop, linea.descuento_pct, linea.tax_pct = recotizacion["precios"][linea.id]
+    neto_pagado = None
     if recalcula_desde_el_libro:
         from app.api.v1.erp_ventas_fase4 import _cabecera_desde_el_libro_de_pagos
-        _cabecera_desde_el_libro_de_pagos(v, db)
+        neto_pagado = _cabecera_desde_el_libro_de_pagos(v, db)
+    if trae_productos and neto_pagado is not None and "motivo" in body:
+        # B3.1 r1 (B): la frase del credito a favor la escribe el servidor, con lo pagado del libro y el total que quedo
+        # (con cancelados, ese total ya no es el de la COT, y el saldo topado en $0 escondia lo pagado de mas).
+        body["motivo"] = _motivo_con_credito(body["motivo"], neto_pagado - Decimal(str(v.total_cop or 0)))
     autor = body.get("updated_by") or getattr(user, "email", None)
-    if con_cancelados is not None:
+    if recotizacion is not None and recotizacion["canceladas"]:
         # B3.1: en el mismo commit, cuantos productos cancelados se respetaron.
         respetados = [f"{unidades(l.quantity_cancelled)} de {l.description or 'Producto'}"
-                      for l in con_cancelados["canceladas"]]
+                      for l in recotizacion["canceladas"]]
         lista = respetados[0] if len(respetados) == 1 else f"{', '.join(respetados[:-1])} y {respetados[-1]}"
         _log(db, "VEN", v.id, v.numero, "CANCELADOS_RESPETADOS",
              f"La re-cotización respetó los productos cancelados del pedido: {lista}.", user_name=autor,
              extra_data={"productos": [{"line_id": l.id, "producto": l.description or "Producto",
                                         "cantidad_cancelada": format(l.quantity_cancelled.normalize(), "f")}
-                                       for l in con_cancelados["canceladas"]]},
+                                       for l in recotizacion["canceladas"]]},
              commit=False, usuario=user)
     ya_despachado = False
     if body.get("estado") == "ENTREGADO" and old_estado != "ENTREGADO":

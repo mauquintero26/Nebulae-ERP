@@ -22,7 +22,7 @@ import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
 import { situacionPedidoCotizacion } from '@/lib/listas-ventas';
 import {
   resumenAnticipoCotizacion, formatoPct, propagacionRecotizacion, puedeGestionarCotizacion, notaAnticipoPorLinea,
-  avisoPedidoConCancelados,
+  avisoTrasPropagar,
 } from '@/lib/dinero-ventas';
 import { comoUTC, notaReiniciaAtraso } from '@/lib/hub-ventas';
 import { waUrl, abrirWhatsApp } from '@/lib/whatsapp';
@@ -462,14 +462,21 @@ function CotizacionDetalleContent() {
         // El PATCH del pedido ya registra su propio renglon de Actividad (con el detalle de lo que
         // cambio); "motivo" le pone el titulo, en vez de un segundo POST /actividad que duplicaria el evento.
         // B3 T17 (IVA punto 11): con la RESPUESTA del PATCH (lo que guardó el servidor, con su IVA), no con lo calculado
-        // en el navegador: productos, subtotal, IVA, descuento y total, y el crédito se mide con ese total. r1: sin esa
+        // en el navegador: productos, subtotal, IVA, descuento y total (el crédito lo escribe el servidor). r1: sin esa
         // respuesta no se propaga nada (null): se avisa, y la recarga de abajo muestra cómo quedó.
         const cuerpoPedido = propagacionRecotizacion(r?.data, pvenVigente, cotizacion?.numero, currentUser);
         if (cuerpoPedido) {
-          const rp = await apiFetch(`/ventas/pedidos/${pvenVigente.id}`, { method: 'PATCH', body: JSON.stringify(cuerpoPedido) });
-          // B3.1 (hueco 8a): con productos cancelados el servidor recalculó el total del pedido (no los devuelve).
-          const avisoCancelados = avisoPedidoConCancelados(rp?.data, r?.data);
-          if (avisoCancelados) avisar(avisoCancelados, { tono: 'info' });
+          // B3.1 r1 (C): el PATCH del pedido va en su propio try (la COT ya se guardó): su error se avisa y se sigue por
+          // el camino de éxito, sin volver a guardar la COT. Con productos cancelados, el aviso dice el total nuevo.
+          let rp: any = null;
+          let errPedido: unknown = null;
+          try {
+            rp = await apiFetch(`/ventas/pedidos/${pvenVigente.id}`, { method: 'PATCH', body: JSON.stringify(cuerpoPedido) });
+          } catch (e) {
+            errPedido = e;
+          }
+          const aviso = avisoTrasPropagar(rp?.data, r?.data, errPedido, pvenVigente.id);
+          if (aviso) avisar(aviso.texto, { tono: aviso.tono, accion: aviso.accion });
         } else {
           // r2: el texto exacto del controlador (re-cotizar sin cambiar un precio no propagaría nada).
           avisar('La cotización se guardó, pero el pedido no se actualizó: recarga la página y revisa el pedido.', { tono: 'error' });
