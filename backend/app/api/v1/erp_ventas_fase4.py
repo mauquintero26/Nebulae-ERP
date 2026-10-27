@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status, 
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func, text, and_, or_
 from typing import Optional, List, Dict, Any
+from collections import Counter
 from decimal import Decimal
 import datetime
 import hashlib
@@ -44,7 +45,8 @@ from app.core.ventas_dinero import (
     METODO_PAGO_SALDO_A_FAVOR, ESTADO_PAGO_TRASLADADO, anular_pxps_de_pedido, unidades,
 )
 from app.core.iva import (
-    cancelar_cantidad, lineas_con_tarifa, pct_tarifa_iva, sku_id_entero, totales_lineas_pedido,
+    calcular_totales_cotizacion, cancelar_cantidad, lineas_con_tarifa, pct_tarifa_iva, sku_id_entero,
+    totales_lineas_pedido,
 )
 from app.core.textos_actividad import RESOLUCIONES_DEVOLUCION, etiqueta_estado, pago_registrado
 from app.api.dependencies import (
@@ -1496,6 +1498,72 @@ def _indice_en_productos(so: SaleOrder, lineas: list, linea: SaleOrderLineErp) -
     if not all(_linea_coincide_con_json(l, p) for l, p in zip(vivas, productos)):
         return None
     return next((i for i, l in enumerate(vivas) if l.id == linea.id), None)
+
+
+# B3.1 (hueco 8a): el 409 de update_pedido cuando la re-cotizacion no se puede reconciliar con lo cancelado.
+MENSAJE_CANCELADOS_NO_COINCIDEN = ("El pedido tiene productos cancelados que no coinciden con la cotización nueva: "
+                                   "revísalo en el pedido antes de re-cotizar.")
+
+
+def _clave_de_producto(p) -> tuple:
+    """(nombre, sku_id) de una linea del JSON productos: el nombre con la regla de la conversion (rama JSON) y de
+    _linea_coincide_con_json; el SKU con sku_id_entero."""
+    return (p.get("description") or p.get("product_name") or "Producto", sku_id_entero(p.get("sku_id")))
+
+
+def recotizacion_con_cancelados(lineas: list, productos, descuento_pct) -> Optional[dict]:
+    """B3.1 (hueco 8a, decision del usuario «Respetar lo cancelado»): lo que queda del pedido cuando su COT se
+    re-cotiza y el pedido ya cancelo productos. `lineas`: las SaleOrderLineErp del pedido, en orden de id; `productos` y
+    `descuento_pct`: los de la re-cotizacion (el JSON COMPLETO de la COT, con lo cancelado). Pura: no consulta la base.
+
+    - Sin lineas con quantity_cancelled > 0: None (nada cambia; update_pedido sigue como hoy).
+    - Si no, el JSON se recalcula con iva.calcular_totales_cotizacion (las reglas en pesos enteros del bloque: no se usan
+      los montos que trae) y a cada linea cancelada se le vuelve a aplicar su quantity_cancelled con
+      iva.cancelar_cantidad, como en cancel_sale_order_line: la cancelada del todo sale del JSON y la parcial queda con
+      quantity - quantity_cancelled (lo entregado sigue vendido). Devuelve {productos, totales, precios, canceladas}: el
+      JSON ajustado, sus totales (los de cancelar_cantidad), {line_id: (unit_price_cop, descuento_pct, tax_pct)} de las
+      lineas con unidades vigentes que tienen pareja (los mismos valores que les pone la conversion) y las canceladas.
+    - Se empareja sin adivinar: una linea va con la linea del JSON de su mismo nombre y SKU solo si esa clave es unica
+      entre las lineas del pedido Y entre las del JSON. Una linea cancelada exige pareja y que la COT traiga la misma
+      cantidad que la linea (quantity). Si no (la COT ya no trae el producto, lo trae dos veces o con otra cantidad, o su
+      JSON no tiene el IVA discriminado), ValueError(MENSAJE_CANCELADOS_NO_COINCIDEN) y update_pedido responde 409 sin
+      cambiar nada. Una linea vigente sin pareja conserva sus precios (como hoy)."""
+    canceladas = [l for l in lineas if l.quantity_cancelled > 0]
+    if not canceladas:
+        return None
+    try:
+        calculadas = calcular_totales_cotizacion(productos, descuento_pct)["lineas"]
+    except ValueError:
+        raise ValueError(MENSAJE_CANCELADOS_NO_COINCIDEN) from None
+    claves = [_clave_de_producto(p) for p in calculadas]
+    en_json = Counter(claves)
+    en_lineas = Counter((l.description, l.sku_id) for l in lineas)
+    parejas = {}
+    for l in lineas:
+        clave = (l.description, l.sku_id)
+        if en_lineas[clave] == 1 and en_json[clave] == 1:
+            parejas[l.id] = claves.index(clave)
+    for l in canceladas:
+        i = parejas.get(l.id)
+        if i is None or Decimal(str(calculadas[i]["qty"])) != l.quantity:
+            raise ValueError(MENSAJE_CANCELADOS_NO_COINCIDEN)
+    # De atras hacia adelante: sacar una linea del JSON no corre los indices de las que faltan.
+    ajustados, totales = calculadas, None
+    try:
+        for l in sorted(canceladas, key=lambda l: parejas[l.id], reverse=True):
+            ajustados, totales = cancelar_cantidad(ajustados, parejas[l.id], l.quantity_cancelled)
+    except ValueError:
+        raise ValueError(MENSAJE_CANCELADOS_NO_COINCIDEN) from None
+    descuento_global = Decimal(str(descuento_pct or 0))
+    precios = {}
+    for l in lineas:
+        i = parejas.get(l.id)
+        if i is not None and l.quantity - l.quantity_cancelled > 0:
+            p = calculadas[i]
+            precios[l.id] = (Decimal(p["unit_price_cop"]), _descuento_pct_de_linea(p.get("descuento_pct"),
+                                                                                   descuento_global),
+                             _tax_pct_de_linea(p))
+    return {"productos": ajustados, "totales": totales, "precios": precios, "canceladas": canceladas}
 
 
 @router.post("/pedidos/{so_id}/lineas/{line_id}/cancelar")

@@ -4527,16 +4527,55 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
         total_ref = body["total_cop"] if body.get("total_cop") is not None else redondear_peso(v.total_cop)
         if iva_nuevo < 0 or iva_nuevo > total_ref:
             raise HTTPException(422, "El IVA debe estar entre $0 y el total del pedido.")
+    # B3.1 (hueco 8a, «Respetar lo cancelado»): la propagacion de la re-cotizacion (productos y total_cop) a un pedido
+    # con lineas canceladas no le devuelve lo cancelado. El JSON, el subtotal, el IVA y el total salen de
+    # recotizacion_con_cancelados (las reglas de core/iva; los del body no se usan) y el saldo, del libro (abajo). Sin
+    # cancelaciones todo sigue como hoy, con una sola lectura de las lineas. Antes de escribir nada: si una linea
+    # cancelada no se puede emparejar con seguridad, 409 sin cambios.
+    lineas_del_pedido, con_cancelados = [], None
+    if recalcula_desde_el_libro and body.get("productos") is not None:
+        from app.api.v1.erp_ventas_fase4 import MENSAJE_CANCELADOS_NO_COINCIDEN, recotizacion_con_cancelados
+        lineas_del_pedido = (db.query(SaleOrderLineErp).filter(SaleOrderLineErp.so_id == v.id)
+                             .order_by(SaleOrderLineErp.id).all())
+        descuento = body.get("descuento_pct") if "descuento_pct" in body else v.descuento_pct
+        try:
+            con_cancelados = recotizacion_con_cancelados(lineas_del_pedido, body["productos"], descuento)
+        except ValueError:
+            raise HTTPException(409, MENSAJE_CANCELADOS_NO_COINCIDEN)
+        if con_cancelados is not None:
+            totales = con_cancelados["totales"]
+            body["productos"] = con_cancelados["productos"]  # lista nueva de dicts nuevos (dirty-check del JSON)
+            body["subtotal_cop"] = Decimal(totales["subtotal_cop"])
+            body["total_cop"] = Decimal(totales["total_cop"])
+            iva_nuevo = Decimal(totales["iva_cop"])
     cliente_antes = _identidad_del_cliente(v)
     for k in allowed:
         if k in body:
             setattr(v, k, body[k])
     if iva_nuevo is not None:
         v.tax_cop = iva_nuevo
+    if con_cancelados is not None:
+        # Las lineas con unidades vigentes toman el precio, el descuento y la tarifa nuevos (sus cantidades no cambian):
+        # asi una cancelacion posterior sigue emparejando con el JSON (_indice_en_productos) y su respaldo
+        # (totales_lineas_pedido) cuenta con los precios nuevos. Las canceladas del todo conservan los suyos.
+        for linea in lineas_del_pedido:
+            if linea.id in con_cancelados["precios"]:
+                linea.unit_price_cop, linea.descuento_pct, linea.tax_pct = con_cancelados["precios"][linea.id]
     if recalcula_desde_el_libro:
         from app.api.v1.erp_ventas_fase4 import _cabecera_desde_el_libro_de_pagos
         _cabecera_desde_el_libro_de_pagos(v, db)
     autor = body.get("updated_by") or getattr(user, "email", None)
+    if con_cancelados is not None:
+        # B3.1: en el mismo commit, cuantos productos cancelados se respetaron.
+        respetados = [f"{unidades(l.quantity_cancelled)} de {l.description or 'Producto'}"
+                      for l in con_cancelados["canceladas"]]
+        lista = respetados[0] if len(respetados) == 1 else f"{', '.join(respetados[:-1])} y {respetados[-1]}"
+        _log(db, "VEN", v.id, v.numero, "CANCELADOS_RESPETADOS",
+             f"La re-cotización respetó los productos cancelados del pedido: {lista}.", user_name=autor,
+             extra_data={"productos": [{"line_id": l.id, "producto": l.description or "Producto",
+                                        "cantidad_cancelada": format(l.quantity_cancelled.normalize(), "f")}
+                                       for l in con_cancelados["canceladas"]]},
+             commit=False, usuario=user)
     ya_despachado = False
     if body.get("estado") == "ENTREGADO" and old_estado != "ENTREGADO":
         # N2: si este pedido ya desconto su inventario (un despacho anterior y despues lo 'revivieron'), marcarlo

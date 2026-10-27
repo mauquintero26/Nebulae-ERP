@@ -291,6 +291,23 @@ export function propagacionRecotizacion(data, pedido, cotNumero, usuario) {
 }
 
 /**
+ * B3.1 (hueco 8a, «Respetar lo cancelado»): el aviso de la COT después de propagar la re-cotización a su pedido. Si el
+ * pedido tenía productos cancelados, el servidor no se los devuelve y recalcula su total: la RESPUESTA del PATCH del
+ * pedido (`pedido`) trae otro total que la del PATCH de la COT (`cot`), al peso. Entonces 'El pedido conserva sus
+ * productos cancelados: su total quedó en $X.'; con el mismo total, o sin alguna de las dos respuestas o su total, null.
+ * @param {any} pedido
+ * @param {any} cot
+ * @returns {string | null}
+ */
+export function avisoPedidoConCancelados(pedido, cot) {
+  const sinTotal = (d) => !esObjeto(d) || d.total_cop === null || d.total_cop === undefined;
+  if (sinTotal(pedido) || sinTotal(cot)) return null;
+  const total = redondearPeso(pedido.total_cop);
+  if (total === redondearPeso(cot.total_cop)) return null;
+  return `El pedido conserva sus productos cancelados: su total quedó en ${formatoPesos(total)}.`;
+}
+
+/**
  * B4: 'Ajustar anticipo' (PATCH /ventas/cotizaciones/{id}) y 'Crear Pedido de Venta' (POST
  * /ventas/cotizaciones/{id}/confirmar) solo para los roles que el servidor acepta: ADMIN y ASESOR, tambien con los
  * nombres legacy Admin y Vendedor (normalize_role de backend/app/api/dependencies.py). Revision final B3 (F2, M12): es

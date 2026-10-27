@@ -17,6 +17,7 @@ import {
   etiquetaTipoPago, etiquetaMetodoPago, etiquetaEstadoPago, describirPago,
   etiquetaEstadoPxp, pxpsDelPedido, pedidoAdmitePxp, textoChipPxp, propagacionRecotizacion, creditoPorRecotizacion,
   saldoAFavorAlCancelar, puedeGestionarCotizacion, notaAnticipoPorLinea, anticipoDeCalculadora,
+  avisoPedidoConCancelados,
 } from '../src/lib/dinero-ventas.js';
 import { pctAnticipoDeModalidad } from '../src/lib/etiquetas-solicitud.js';
 
@@ -527,6 +528,25 @@ console.log('--- U19+U21 / C10 (B2-T9A, ruling 2) TEST 16: nota del anticipo por
   // Totales con decimales viejos se comparan al peso.
   assert.deepEqual(notaAnticipoPorLinea({ ...cot, total_cop: '1840614.00', pedidos_venta: [{ ...pven, total_cop: 1840613.6 }] }),
     { cuadra: true, texto: SUMA });
+}
+
+console.log('--- B3.1 TEST: el pedido conserva sus productos cancelados al re-cotizar (hueco 8a) ---');
+{
+  // La RESPUESTA del PATCH del pedido trae el total que recalculó el servidor; la de la COT, el de la re-cotización.
+  const cot = { total_cop: 299600, iva_cop: 43600 };
+  assert.equal(avisoPedidoConCancelados({ total_cop: 261800 }, cot),
+    'El pedido conserva sus productos cancelados: su total quedó en $261.800.');
+  assert.equal(avisoPedidoConCancelados({ total_cop: 299600 }, cot), null, 'el mismo total: no había cancelados');
+  assert.equal(avisoPedidoConCancelados({ total_cop: '299600.00' }, { total_cop: 299599.6 }), null, 'al peso');
+  assert.equal(avisoPedidoConCancelados({ total_cop: 261800.4 }, cot),
+    'El pedido conserva sus productos cancelados: su total quedó en $261.800.');
+  // Sin alguna de las dos respuestas, o sin su total, no se afirma nada.
+  assert.equal(avisoPedidoConCancelados(null, cot), null);
+  assert.equal(avisoPedidoConCancelados(undefined, cot), null);
+  assert.equal(avisoPedidoConCancelados({ total_cop: 261800 }, null), null);
+  assert.equal(avisoPedidoConCancelados({}, cot), null, 'sin total del pedido');
+  assert.equal(avisoPedidoConCancelados({ total_cop: 261800 }, {}), null, 'sin total de la COT');
+  assert.equal(avisoPedidoConCancelados({ total_cop: null }, cot), null);
 }
 
 console.log('OK test_dinero_ventas.mjs');

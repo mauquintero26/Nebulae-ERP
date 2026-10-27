@@ -22,6 +22,7 @@ import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
 import { situacionPedidoCotizacion } from '@/lib/listas-ventas';
 import {
   resumenAnticipoCotizacion, formatoPct, propagacionRecotizacion, puedeGestionarCotizacion, notaAnticipoPorLinea,
+  avisoPedidoConCancelados,
 } from '@/lib/dinero-ventas';
 import { comoUTC, notaReiniciaAtraso } from '@/lib/hub-ventas';
 import { waUrl, abrirWhatsApp } from '@/lib/whatsapp';
@@ -465,7 +466,10 @@ function CotizacionDetalleContent() {
         // respuesta no se propaga nada (null): se avisa, y la recarga de abajo muestra cómo quedó.
         const cuerpoPedido = propagacionRecotizacion(r?.data, pvenVigente, cotizacion?.numero, currentUser);
         if (cuerpoPedido) {
-          await apiFetch(`/ventas/pedidos/${pvenVigente.id}`, { method: 'PATCH', body: JSON.stringify(cuerpoPedido) });
+          const rp = await apiFetch(`/ventas/pedidos/${pvenVigente.id}`, { method: 'PATCH', body: JSON.stringify(cuerpoPedido) });
+          // B3.1 (hueco 8a): con productos cancelados el servidor recalculó el total del pedido (no los devuelve).
+          const avisoCancelados = avisoPedidoConCancelados(rp?.data, r?.data);
+          if (avisoCancelados) avisar(avisoCancelados, { tono: 'info' });
         } else {
           // r2: el texto exacto del controlador (re-cotizar sin cambiar un precio no propagaría nada).
           avisar('La cotización se guardó, pero el pedido no se actualizó: recarga la página y revisa el pedido.', { tono: 'error' });
