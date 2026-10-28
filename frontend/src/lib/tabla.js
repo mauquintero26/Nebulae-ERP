@@ -47,7 +47,10 @@ export const VERSION_PREFS = 1;
 export const ANCHO_MIN = 64;
 export const ANCHO_MAX = 640;
 export const ANCHO_POR_DEFECTO = 160;
-/** Los modos de una pantalla con tabla (el valor de ConmutadorVista). Inmutable. */
+/**
+ * Los modos de una pantalla con tabla (el valor de ConmutadorVista). Inmutable.
+ * @type {ReadonlyArray<ModoTabla>}
+ */
 export const MODOS_TABLA = congelar(['lista', 'kanban']);
 
 // ─── columnas ───────────────────────────────────────────────────────────────────

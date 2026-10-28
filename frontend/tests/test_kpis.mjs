@@ -17,6 +17,7 @@ import {
   acentoDesdeClase, CATALOGO_KPI, etiquetaKpi, ICONOS_KPI,
 } from '../src/lib/kpis.js';
 import { formatoPct } from '../src/lib/dinero-ventas.js';
+import { PERIODOS } from '../src/lib/analisis.js';
 
 const MENOS = '−';
 
@@ -50,8 +51,9 @@ console.log('--- TEST 3: variacionPct ---');
   assert.deepEqual(variacionPct(-50, -100), { tipo: 'pct', pct: 50 }, 'se divide por el valor absoluto');
   assert.deepEqual(variacionPct(100, 100), { tipo: 'pct', pct: 0 });
   assert.ok(!Object.is(variacionPct(1000, 1000.0001).pct, -0), 'sin −0');
-  assert.deepEqual(variacionPct(5, 0), { tipo: 'nuevo' });
-  assert.deepEqual(variacionPct(-5, 0), { tipo: 'nuevo' }, 'RP27: anterior 0 y actual distinto de 0');
+  // r1 (punto 3): «Nuevo» lleva el signo del valor actual; la dirección sale SOLO de aquí.
+  assert.deepEqual(variacionPct(5, 0), { tipo: 'nuevo', signo: 1 });
+  assert.deepEqual(variacionPct(-5, 0), { tipo: 'nuevo', signo: -1 }, 'RP27: anterior 0 y actual distinto de 0');
   assert.deepEqual(variacionPct(0, 0), { tipo: 'igual' });
   assert.equal(variacionPct('x', 1), null);
   assert.equal(variacionPct(1, null), null);
@@ -73,7 +75,14 @@ console.log('--- TEST 4: textoVariacion (R7, RP27) ---');
   assert.equal(textoVariacion(null), '—');
   assert.equal(direccionVariacion({ tipo: 'pct', pct: 3 }), 'sube');
   assert.equal(direccionVariacion({ tipo: 'pct', pct: -3 }), 'baja');
-  assert.equal(direccionVariacion({ tipo: 'nuevo' }), 'sube');
+  assert.equal(direccionVariacion({ tipo: 'nuevo', signo: 1 }), 'sube');
+  assert.equal(direccionVariacion({ tipo: 'nuevo', signo: -1 }), 'baja');
+  // El caso unificado (el mismo de test_analisis.mjs): −5 contra 0 con mejor 'sube'.
+  const nuevoNegativo = variacionPct(-5, 0);
+  assert.deepEqual(
+    [textoVariacion(nuevoNegativo), direccionVariacion(nuevoNegativo), tonoVariacion(nuevoNegativo, mejorDesde('sube'))],
+    ['Nuevo', 'baja', 'mal'],
+  );
   assert.equal(direccionVariacion({ tipo: 'igual' }), null);
   assert.equal(direccionVariacion(null), null);
 }
@@ -87,7 +96,8 @@ console.log('--- TEST 5: tonoVariacion y mejorDesde (un solo vocabulario: bien, 
   assert.equal(tonoVariacion(baja, false), 'bien');
   assert.equal(tonoVariacion(baja, true), 'mal');
   assert.equal(tonoVariacion(sube, null), 'neutro', 'con null siempre neutro');
-  assert.equal(tonoVariacion({ tipo: 'nuevo' }, true), 'bien');
+  assert.equal(tonoVariacion(variacionPct(5, 0), true), 'bien');
+  assert.equal(tonoVariacion(variacionPct(-5, 0), true), 'mal');
   assert.equal(tonoVariacion({ tipo: 'igual' }, true), 'neutro');
   assert.equal(tonoVariacion(null, true), 'neutro');
   assert.equal(mejorDesde('sube'), true);
@@ -224,6 +234,14 @@ console.log('--- TEST 10: CATALOGO_KPI, etiquetaKpi e ICONOS_KPI ---');
   assert.equal(etiquetaKpi('ticket_promedio', 'mes'), 'Ticket promedio (este mes)');
   assert.equal(etiquetaKpi('cot_conversion'), 'Cotizaciones que terminan en pedido (30 días)');
   assert.equal(etiquetaKpi('comprado_periodo', '90 días'), 'Comprado (90 días)', 'un texto propio de período se usa tal cual');
+  // r1 (punto 4c): una clave de período de Análisis usa su texto de PERIODOS, nunca la clave cruda.
+  assert.equal(etiquetaKpi('vendido_periodo', '90d'), 'Vendido (90 días)');
+  assert.equal(etiquetaKpi('vendido_periodo', '12m'), 'Vendido (12 meses)');
+  for (const p of PERIODOS) {
+    const esperado = ['7d', '30d', 'mes'].includes(p.clave) ? null : `Vendido (${p.etiqueta})`;
+    if (esperado) assert.equal(etiquetaKpi('vendido_periodo', p.clave), esperado, p.clave);
+    assert.ok(!etiquetaKpi('vendido_periodo', p.clave).includes(`(${p.clave})`), `${p.clave}: no sale la clave cruda`);
+  }
   assert.equal(etiquetaKpi('prov_moneda'), 'Moneda');
   assert.equal(etiquetaKpi('cli_cot_abiertas'), 'Cotizaciones abiertas');
   assert.throws(() => etiquetaKpi('no_existe'), /no_existe/);

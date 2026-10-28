@@ -23,34 +23,44 @@ import { diaColombia } from './fechas-colombia.js';
 import { formatoPesos } from './pesos.js';
 import {
   variacionPct, textoVariacion, direccionVariacion, tonoDeDireccion, mejorDesde, formatoValorKpi, formatoEntero,
-  formatoDecimal,
+  formatoDecimal, ETIQUETAS_PERIODO,
 } from './kpis.js';
 
 /**
  * @typedef {'7d' | '30d' | '90d' | 'mes' | '12m' | 'personalizado'} ClavePeriodo
  * @typedef {{clave: ClavePeriodo, desde?: string, hasta?: string}} PeriodoAnalisis
+ * @typedef {'hub' | 'sc' | 'cot' | 'pven'} ClaveFoco
  * @typedef {{texto: string, tono: 'bien' | 'mal' | 'neutro', flecha: 'sube' | 'baja' | null, lector: string}} InfoVariacion
  * @typedef {'pesos' | 'entero' | 'numero' | 'porcentaje' | 'dias' | 'unidades' | 'texto'} FormatoAnalisis
  */
 
 // ─── períodos, tops y focos ─────────────────────────────────────────────────────
 
-/** Los períodos del selector, con las etiquetas de core/periodos.py (ETIQUETAS). Inmutable. */
-export const PERIODOS = congelar([
-  { clave: '7d', etiqueta: '7 días' },
-  { clave: '30d', etiqueta: '30 días' },
-  { clave: '90d', etiqueta: '90 días' },
-  { clave: 'mes', etiqueta: 'Este mes' },
-  { clave: '12m', etiqueta: '12 meses' },
-  { clave: 'personalizado', etiqueta: 'Personalizado' },
-]);
+/**
+ * Los períodos del selector, en su orden, con los textos de ETIQUETAS_PERIODO de lib/kpis.js (los de ETIQUETAS de
+ * core/periodos.py; una sola tabla: etiquetaKpi usa la misma). Inmutable.
+ * @type {ReadonlyArray<Readonly<{clave: ClavePeriodo, etiqueta: string}>>}
+ */
+export const PERIODOS = congelar(
+  /** @type {ClavePeriodo[]} */ (['7d', '30d', '90d', 'mes', '12m', 'personalizado'])
+    .map((clave) => ({ clave, etiqueta: ETIQUETAS_PERIODO[clave] })),
+);
 const CLAVES_PERIODO = PERIODOS.map((p) => p.clave);
 
-/** periodo_comparacion = «Últimos 30 días contra los 30 anteriores». Inmutable. */
+/**
+ * periodo_comparacion = «Últimos 30 días contra los 30 anteriores». Inmutable.
+ * @type {Readonly<PeriodoAnalisis>}
+ */
 export const PERIODO_POR_DEFECTO = congelar({ clave: '30d' });
-/** Los tamaños del ranking (validar_top del servidor). Inmutable. */
+/**
+ * Los tamaños del ranking (validar_top del servidor). Inmutable.
+ * @type {ReadonlyArray<5 | 10 | 25>}
+ */
 export const TOPS = congelar([5, 10, 25]);
-/** El foco del Análisis del Hub de Ventas (R13; se recuerda en analisis:ventas). Inmutable. */
+/**
+ * El foco del Análisis del Hub de Ventas (R13; se recuerda en analisis:ventas). Inmutable.
+ * @type {ReadonlyArray<Readonly<{clave: ClaveFoco, etiqueta: string}>>}
+ */
 export const FOCOS_VENTAS = congelar([
   { clave: 'hub', etiqueta: 'Todo' },
   { clave: 'sc', etiqueta: 'Solicitudes' },
@@ -167,8 +177,9 @@ const SIN_VARIACION = (lector) => ({ texto: '—', tono: /** @type {const} */ ('
  * La variación de un indicador del contrato, con la regla única de RP27 (la misma de la tarjeta):
  *  - es_foto -> 'Hoy'; anterior null -> '—'; anterior 0 y actual 0 -> 'Sin cambio'; anterior 0 y actual distinto de
  *    0 -> 'Nuevo'; si no, '+12,5 %' o '−3 %' (y 'Sin cambio' si da 0).
- *  - tono 'bien' | 'mal' | 'neutro' según `mejor` ('sube': subir es bueno; 'baja': bajar es bueno; 'neutro': siempre
- *    neutro); flecha 'sube' | 'baja' | null.
+ *  - flecha 'sube' | 'baja' | null y tono 'bien' | 'mal' | 'neutro' según `mejor` ('sube': subir es bueno; 'baja':
+ *    bajar es bueno; 'neutro': siempre neutro), con direccionVariacion y tonoDeDireccion de lib/kpis.js: la misma
+ *    regla de la tarjeta, también para 'Nuevo' (su dirección es el signo del valor actual).
  *  - lector: el texto para lectores de pantalla ('Sube 12,5 % frente al período anterior'); `frente` cambia el final.
  * Calcula con variacionPct(valor, anterior): no lee variacion_pct, cuyo None no distingue 'Nuevo' de «sin
  * comparación».
@@ -182,7 +193,7 @@ export function infoVariacion(kpi, { frente = 'frente al período anterior' } = 
   if (k.anterior === null || k.anterior === undefined) return SIN_VARIACION('Sin comparación con el período anterior');
   const v = variacionPct(k.valor, k.anterior);
   if (!v) return SIN_VARIACION('Sin comparación con el período anterior');
-  const flecha = v.tipo === 'nuevo' ? (Number(k.valor) < 0 ? 'baja' : 'sube') : direccionVariacion(v);
+  const flecha = direccionVariacion(v);
   const tono = tonoDeDireccion(flecha, mejorDesde(k.mejor));
   const texto = textoVariacion(v);
   let lector;

@@ -12,7 +12,8 @@
 
 import assert from 'node:assert/strict';
 import {
-  AMBITOS, CLAVE_VALIDA, LIMITE_BYTES, RETARDO_MS, claveValida, claveInterna, tamanoEnBytes, crearPreferencias,
+  AMBITOS, CLAVE_VALIDA, LIMITE_BYTES, RETARDO_MS, MAXIMO_NIVELES, claveValida, claveInterna, tamanoEnBytes, pasaDeNiveles,
+  crearPreferencias,
 } from '../src/lib/preferencias.js';
 import { validarPeriodo, PERIODO_POR_DEFECTO } from '../src/lib/analisis.js';
 
@@ -441,4 +442,143 @@ console.log('--- TEST 15 (de analisis.js): analisis:<modulo> (período, top y fo
   assert.equal(conFalla.escribir('analisis:ventas', { periodo: { clave: '7d' }, top: 25 }), true);
 }
 
-console.log('✓ lib/preferencias.js: ámbitos, ráfagas, usuarios, memoria, 8 KB, precarga, reintentos y escribirParte.');
+// ─── r1 ─────────────────────────────────────────────────────────────────────────
+
+/** Un servidor cuyo GET y cuyos PUT se contestan a mano: resolver(valor) o rechazar(error). */
+function servidorAMano() {
+  const gets = [];
+  const puts = [];
+  return {
+    gets,
+    puts,
+    leer(prefijo) {
+      return new Promise((resolver, rechazar) => gets.push({ prefijo, resolver, rechazar }));
+    },
+    guardar(clave, valor) {
+      return new Promise((resolver, rechazar) => puts.push({ clave, valor, resolver, rechazar }));
+    },
+  };
+}
+
+console.log('--- TEST 16 (r1, punto 1): la precarga no pisa un valor que ya salió en un PUT ---');
+{
+  // (A) El PUT de {a:2} sale y responde bien; DESPUÉS llega el GET con el {a:1} viejo del servidor.
+  const servidor = servidorAMano();
+  const almacen = almacenFalso();
+  const reloj = relojFalso();
+  const p = crearPreferencias({ usuarioId: 7, almacen, servidor, temporizador: reloj });
+  const precarga = p.precargar('');
+  await tic();
+  assert.equal(servidor.gets.length, 1);
+  p.escribir('tabla:x', { a: 2 });
+  reloj.avanzar(800);
+  await tic();
+  assert.equal(servidor.puts.length, 1);
+  servidor.puts[0].resolver({ status: 'success' });
+  await tic();
+  servidor.gets[0].resolver({ status: 'success', data: { 'tabla:x': { a: 1 }, 'tabla:y': { b: 1 } } });
+  await precarga;
+  assert.deepEqual(p.leer('tabla:x'), { a: 2 }, '(A) en memoria queda lo que escribió el usuario');
+  assert.equal(almacen.datos.get('pref:7:tabla:x'), '{"a":2}', '(A) y en el almacén');
+  assert.deepEqual(p.leer('tabla:y'), { b: 1 }, 'lo que no se tocó sí llega del servidor');
+  assert.deepEqual(servidor.puts.map((x) => x.valor), [{ a: 2 }], '(A) ningún PUT con {a:1}');
+}
+{
+  // (B) El PUT de {a:2} falla por la red DESPUÉS de que llegó el GET con {a:1}; el siguiente cambio lo reintenta.
+  const servidor = servidorAMano();
+  const almacen = almacenFalso();
+  const reloj = relojFalso();
+  const p = crearPreferencias({ usuarioId: 7, almacen, servidor, temporizador: reloj });
+  const precarga = p.precargar('');
+  await tic();
+  p.escribir('tabla:x', { a: 2 });
+  reloj.avanzar(800);
+  await tic();
+  assert.equal(servidor.puts.length, 1, 'el PUT está en camino');
+  servidor.gets[0].resolver({ status: 'success', data: { 'tabla:x': { a: 1 } } });
+  await precarga;
+  assert.deepEqual(p.leer('tabla:x'), { a: 2 }, '(B) el GET no pisa un PUT en camino');
+  await conAvisos(async () => {
+    servidor.puts[0].rechazar(new TypeError('Failed to fetch'));
+    await tic();
+    await tic();
+    p.escribir('vista:x', 'kanban'); // el siguiente cambio
+    reloj.avanzar(800);
+    await tic();
+    await tic();
+  });
+  const dex = servidor.puts.filter((x) => x.clave === 'tabla:x');
+  assert.deepEqual(dex.map((x) => x.valor), [{ a: 2 }, { a: 2 }], '(B) el reintento sube {a:2}, nunca {a:1}');
+  assert.deepEqual(p.leer('tabla:x'), { a: 2 }, '(B) en memoria');
+  assert.equal(almacen.datos.get('pref:7:tabla:x'), '{"a":2}', '(B) y en el almacén');
+  for (const put of servidor.puts) put.resolver({ status: 'success' });
+  await tic();
+}
+
+console.log('--- TEST 17 (r1, punto 4a): más de 32 niveles anidados se rechaza, como en el servidor ---');
+{
+  const anidado = (n) => { let v = 1; for (let i = 0; i < n; i += 1) v = i % 2 ? { x: v } : [v]; return v; };
+  assert.equal(MAXIMO_NIVELES, 32);
+  assert.equal(pasaDeNiveles(1), false, 'un escalar tiene 0 niveles');
+  assert.equal(pasaDeNiveles([1]), false);
+  assert.equal(pasaDeNiveles(anidado(32)), false, '32 niveles pasan');
+  assert.equal(pasaDeNiveles(anidado(33)), true, '33 no');
+  assert.equal(pasaDeNiveles(anidado(5000)), true, 'miles de niveles: recorrido iterativo, sin desbordar la pila');
+  const servidor = servidorFalso();
+  const almacen = almacenFalso();
+  const reloj = relojFalso();
+  const p = crearPreferencias({ usuarioId: 7, almacen, servidor, temporizador: reloj });
+  const avisos = await conAvisos(async () => {
+    assert.equal(p.escribir('tabla:ok', anidado(32)), true);
+    assert.equal(p.escribir('tabla:hondo', anidado(33)), false);
+    assert.equal(p.escribirParte('tabla:parte', { anchos: anidado(32) }), false, 'con la parte, el objeto suma un nivel');
+    reloj.avanzar(800);
+    await tic();
+  });
+  assert.ok(!almacen.datos.has('pref:7:tabla:hondo') && !almacen.datos.has('pref:7:tabla:parte'), 'no toca el almacén');
+  assert.deepEqual(servidor.puts.map((x) => x.clave), ['tabla:ok'], 'ni hace PUT');
+  assert.ok(avisos.some((a) => a.includes('demasiados niveles anidados (máximo 32)')), avisos.join(' | '));
+}
+
+console.log('--- TEST 18 (r1, punto 4b): cerrar() descarta lo pendiente y deja la instancia muda ---');
+{
+  const servidor = servidorFalso();
+  const almacen = almacenFalso();
+  const reloj = relojFalso();
+  const p = crearPreferencias({ usuarioId: 7, almacen, servidor, temporizador: reloj });
+  p.escribir('tabla:x', { tamano: 50 });
+  p.cerrar();
+  reloj.avanzar(800);
+  await tic();
+  assert.equal(servidor.puts.length, 0, 'escribir, cerrar y avanzar 800 ms: ningún PUT');
+  assert.equal(reloj.pendientes(), 0, 'el temporizador se canceló');
+  assert.equal(p.escribir('tabla:z', 1), false, 'después de cerrar, escribir devuelve false');
+  assert.equal(p.escribirParte('tabla:z', { a: 1 }), false);
+  assert.ok(!almacen.datos.has('pref:7:tabla:z'), 'y no hace nada');
+  assert.equal(await p.precargar(''), false, 'ni trae nada del servidor');
+  await p.vaciar();
+  reloj.avanzar(800);
+  await tic();
+  assert.deepEqual([servidor.puts.length, servidor.gets.length], [0, 0]);
+  // Un PUT que ya estaba en camino y falla después de cerrar no se reintenta (iría con la sesión de otro usuario).
+  const aMano = servidorAMano();
+  const reloj2 = relojFalso();
+  const q = crearPreferencias({ usuarioId: 7, almacen: almacenFalso(), servidor: aMano, temporizador: reloj2 });
+  q.escribir('tabla:x', { a: 1 });
+  reloj2.avanzar(800);
+  await tic();
+  assert.equal(aMano.puts.length, 1);
+  q.cerrar();
+  await conAvisos(async () => {
+    aMano.puts[0].rechazar(new TypeError('Failed to fetch'));
+    await tic();
+    await tic();
+    q.escribir('tabla:y', 2);
+    reloj2.avanzar(800);
+    await q.vaciar();
+    await tic();
+  });
+  assert.equal(aMano.puts.length, 1, 'ningún reintento después de cerrar');
+}
+
+console.log('✓ lib/preferencias.js: ámbitos, ráfagas, usuarios, memoria, 8 KB, precarga, reintentos, escribirParte, niveles y cerrar.');

@@ -9,9 +9,12 @@
  *    formatoCompacto en las tarjetas (montos_grandes = «Completo; la letra se achica para que quepa»).
  *  - Porcentaje '45,2 %' (coma decimal, a lo sumo 1 decimal y un espacio antes de %). formatoPct de
  *    lib/dinero-ventas.js ('12,5%', anticipos y Resumen Financiero) es otro formato y NO cambia (RP75).
- *  - Variación (RP27, la misma regla de variacion_pct del servidor, core/analisis.py): '+12,5 %', '−8 %' (con el menos
- *    tipográfico), 'Nuevo' (el anterior es 0 y el actual no) o 'Sin cambio'. Un solo vocabulario de tono: 'bien',
- *    'mal' o 'neutro'. El «mejor» del servidor ('sube' | 'baja' | 'neutro') pasa a mejorSiSube con mejorDesde().
+ *  - Variación (RP27): '+12,5 %', '−8 %' (con el menos tipográfico), 'Nuevo' (el anterior es 0 y el actual no) o
+ *    'Sin cambio'. Mismo cálculo que variacion_pct del servidor; el redondeo de la mitad puede diferir en 0,1 (JS
+ *    redondea la mitad hacia arriba, Python al par). La pantalla siempre usa este cálculo, no el del servidor (RP27).
+ *    La dirección de 'Nuevo' sale del signo del valor actual, y solo aquí (direccionVariacion; analisis.js la usa).
+ *    Un solo vocabulario de tono: 'bien', 'mal' o 'neutro'. El «mejor» del servidor ('sube' | 'baja' | 'neutro')
+ *    pasa a mejorSiSube con mejorDesde().
  *  - 'entero' (el formato del contrato de Análisis) es sinónimo de 'numero' (RP27).
  *  - formatoEntero agrupa a mano, como formatoPesos (RP75): con algunas ICU 'es' toLocaleString no agrupa los números
  *    de 4 cifras.
@@ -28,7 +31,7 @@ import { formatoPesos } from './pesos.js';
  * @typedef {'pesos' | 'numero' | 'porcentaje' | 'texto'} FormatoKpi
  * @typedef {'cargando' | 'actualizando' | 'error' | 'listo'} EstadoKpi
  * @typedef {'bien' | 'mal' | 'neutro'} TonoVariacion
- * @typedef {{tipo: 'pct', pct: number} | {tipo: 'nuevo'} | {tipo: 'igual'}} Variacion
+ * @typedef {{tipo: 'pct', pct: number} | {tipo: 'nuevo', signo: 1 | -1} | {tipo: 'igual'}} Variacion
  * @typedef {'amber' | 'rose' | 'orange' | 'indigo' | 'purple' | 'emerald' | 'blue' | 'teal' | 'red' | 'slate'} ColorKpi
  * @typedef {{etiqueta: string, formato: FormatoKpi, icono: string, color: ColorKpi, mejorSiSube: boolean | null}} DefinicionKpi
  */
@@ -46,6 +49,15 @@ export const TEXTO_PERIODO = congelar({
   '30d': { etiqueta: '30 días', comparado: 'vs 30 días antes' },
   '7d': { etiqueta: '7 días', comparado: 'vs 7 días antes' },
   mes: { etiqueta: 'este mes', comparado: 'vs mes pasado' },
+});
+
+/**
+ * El texto de cada clave de período de Análisis (las ETIQUETAS de core/periodos.py). Es la tabla ÚNICA: PERIODOS de
+ * lib/analisis.js se arma con ella, y etiquetaKpi la usa para las claves que no están en TEXTO_PERIODO. Inmutable.
+ * @type {Readonly<Record<'7d' | '30d' | '90d' | 'mes' | '12m' | 'personalizado', string>>}
+ */
+export const ETIQUETAS_PERIODO = congelar({
+  '7d': '7 días', '30d': '30 días', '90d': '90 días', mes: 'Este mes', '12m': '12 meses', personalizado: 'Personalizado',
 });
 
 /**
@@ -127,11 +139,15 @@ export function estadoKpi({ loading = false, yaCargo = false, error = null } = {
 // ─── variación (RP27) ───────────────────────────────────────────────────────────
 
 /**
- * La variación de `actual` contra `anterior` (la regla de variacion_pct del servidor):
+ * La variación de `actual` contra `anterior`. Mismo cálculo que variacion_pct del servidor; el redondeo de la mitad
+ * puede diferir en 0,1 (JS redondea la mitad hacia arriba, Python al par). La pantalla siempre usa este cálculo, no
+ * el del servidor (RP27).
  *  - null si alguno no es un número finito (sin comparación);
  *  - {tipo: 'igual'} si los dos son 0;
- *  - {tipo: 'nuevo'} si el anterior es 0 y el actual no (RP27: distinto de 0);
- *  - si no, {tipo: 'pct', pct} con pct = (actual − anterior) / |anterior| × 100, redondeado a 1 decimal (sin −0).
+ *  - {tipo: 'nuevo', signo} si el anterior es 0 y el actual no (RP27: distinto de 0); signo 1 o −1 es el del valor
+ *    actual, del que sale la dirección (direccionVariacion);
+ *  - si no, {tipo: 'pct', pct} con pct = (actual − anterior) / |anterior| × 100, redondeado a 1 decimal con la mitad
+ *    hacia arriba (Math.round; sin −0).
  * @param {unknown} actual
  * @param {unknown} anterior
  * @returns {Variacion | null}
@@ -140,11 +156,10 @@ export function variacionPct(actual, anterior) {
   const a = numeroFinito(actual);
   const b = numeroFinito(anterior);
   if (a === null || b === null) return null;
-  if (b === 0) return a === 0 ? { tipo: 'igual' } : { tipo: 'nuevo' };
+  if (b === 0) return a === 0 ? { tipo: 'igual' } : { tipo: 'nuevo', signo: a < 0 ? -1 : 1 };
   const crudo = ((a - b) / Math.abs(b)) * 100;
-  const d = decimas(crudo);
-  const pct = d === 0 ? 0 : (crudo < 0 ? -d : d) / 10;
-  return { tipo: 'pct', pct };
+  const pct = Math.round(Number((crudo * 10).toPrecision(12))) / 10;
+  return { tipo: 'pct', pct: pct === 0 ? 0 : pct };
 }
 
 /**
@@ -162,13 +177,14 @@ export function textoVariacion(v) {
 }
 
 /**
- * Hacia dónde va la variación: 'sube' (también 'Nuevo'), 'baja' o null (sin cambio o sin variación).
+ * Hacia dónde va la variación: 'sube', 'baja' o null (sin cambio o sin variación). 'Nuevo' va según su signo (el del
+ * valor actual; sin signo, 'sube'). Es la ÚNICA regla de dirección: la usan la tarjeta y lib/analisis.js.
  * @param {Variacion | null | undefined} v
  * @returns {'sube' | 'baja' | null}
  */
 export function direccionVariacion(v) {
   if (!v) return null;
-  if (v.tipo === 'nuevo') return 'sube';
+  if (v.tipo === 'nuevo') return /** @type {any} */ (v).signo === -1 ? 'baja' : 'sube';
   if (v.tipo === 'pct' && Number.isFinite(v.pct) && v.pct !== 0) return v.pct > 0 ? 'sube' : 'baja';
   return null;
 }
@@ -305,10 +321,9 @@ const k = (etiqueta, formato, icono, color, mejorSiSube = true) => ({ etiqueta, 
 /**
  * id -> {etiqueta, formato, icono (nombre de lucide-react), color, mejorSiSube}. La ÚNICA fuente de nombres de los
  * indicadores: '{periodo}' lo reemplaza etiquetaKpi. Por defecto subir es mejor; los de mejorSiSube = null llevan su
- * % en gris. Inmutable.
- * @type {Readonly<Record<string, Readonly<DefinicionKpi>>>}
+ * % en gris. Inmutable. Sus claves son IdKpi: TypeScript no acepta un id mal escrito.
  */
-export const CATALOGO_KPI = congelar({
+const CATALOGO = {
   // Ventas
   sc_activas: k('Solicitudes activas', 'numero', 'FileText', 'indigo'),
   sc_confirmadas: k('Solicitudes confirmadas', 'numero', 'CheckCircle2', 'emerald'),
@@ -386,21 +401,30 @@ export const CATALOGO_KPI = congelar({
   web_ventas_mes: k('Ventas web del mes', 'pesos', 'BarChart3', 'indigo'),
   carritos_abandonados: k('Carritos abandonados', 'numero', 'AlertCircle', 'rose', false),
   productos_publicados: k('Productos publicados', 'numero', 'Package', 'emerald'),
-});
+};
+
+/** @typedef {keyof typeof CATALOGO} IdKpi */
+
+/** @type {Readonly<Record<IdKpi, Readonly<DefinicionKpi>>>} */
+export const CATALOGO_KPI = congelar(CATALOGO);
 
 /**
- * La etiqueta del indicador `id` con '{periodo}' reemplazado: un período de TEXTO_PERIODO ('30d' -> '30 días', 'mes'
- * -> 'este mes') o, si no es uno de ellos, el texto que llega tal cual ('90 días'). Por defecto, PERIODO_KPI.
+ * La etiqueta del indicador `id` con '{periodo}' reemplazado:
+ *  - una clave de TEXTO_PERIODO usa su etiqueta ('30d' -> '30 días', 'mes' -> 'este mes');
+ *  - otra clave de período de Análisis usa su texto de ETIQUETAS_PERIODO, el de PERIODOS ('90d' -> '90 días',
+ *    '12m' -> '12 meses'): nunca sale la clave cruda;
+ *  - cualquier otro texto se usa tal cual ('90 días'). Por defecto, PERIODO_KPI.
  * Un id que no está en CATALOGO_KPI es un error de programación (lanza Error).
- * @param {string} id
+ * @param {IdKpi} id
  * @param {string} [periodo]
  * @returns {string}
  */
 export function etiquetaKpi(id, periodo = PERIODO_KPI) {
   const definicion = Object.prototype.hasOwnProperty.call(CATALOGO_KPI, id) ? CATALOGO_KPI[id] : null;
   if (!definicion) throw new Error(`Indicador desconocido: ${String(id)}`);
-  const conocido = Object.prototype.hasOwnProperty.call(TEXTO_PERIODO, periodo)
-    ? TEXTO_PERIODO[/** @type {'30d' | '7d' | 'mes'} */ (periodo)].etiqueta : null;
+  const tiene = (tabla, clave) => typeof clave === 'string' && Object.prototype.hasOwnProperty.call(tabla, clave);
+  const conocido = tiene(TEXTO_PERIODO, periodo) ? TEXTO_PERIODO[/** @type {'30d' | '7d' | 'mes'} */ (periodo)].etiqueta
+    : tiene(ETIQUETAS_PERIODO, periodo) ? ETIQUETAS_PERIODO[/** @type {keyof typeof ETIQUETAS_PERIODO} */ (periodo)] : null;
   const texto = conocido ?? (typeof periodo === 'string' && periodo.trim() ? periodo.trim() : TEXTO_PERIODO[PERIODO_KPI].etiqueta);
   return definicion.etiqueta.replace('{periodo}', texto);
 }

@@ -11,15 +11,19 @@
  *  - La clave interna del almacén es 'pref:{usuarioId}:{clave}': dos usuarios del mismo equipo no se pisan. Sin un
  *    usuario válido (null, 0, NaN…) trabaja solo en memoria y no hace PUT ni GET.
  *  - claveValida usa la MISMA expresión del servidor (RP24); el tamaño se mide en bytes UTF-8 como el servidor
- *    (new TextEncoder().encode(JSON.stringify(valor)).length > 8192 se rechaza sin PUT).
+ *    (new TextEncoder().encode(JSON.stringify(valor)).length > 8192 se rechaza sin PUT), y más de 32 niveles
+ *    anidados también se rechaza (pasaDeNiveles, el pasa_de_niveles del servidor).
  *  - Lee primero lo que hay en el almacén (o en memoria si el almacén falta o lanza, como en modo privado);
- *    precargar('') hace UN solo GET por sesión y llena el caché (un valor pendiente de enviar no lo pisa).
+ *    precargar('') hace UN solo GET por sesión y llena el caché. El GET nunca pisa una clave que esta instancia
+ *    escribió (las «tocadas»), ni mientras su PUT está en camino ni después: si el GET llega tarde, gana lo local.
  *  - escribir guarda de inmediato en local y agrupa los PUT: uno por clave, 800 ms después del último cambio. Si un
  *    PUT falla por la red o con un 5xx, el valor queda local y se reintenta en el siguiente cambio (de cualquier
  *    clave); con un 401, un 422 u otro 4xx no se reintenta y queda un console.warn (RP24). Los envíos van uno detrás
  *    de otro: dos PUT de la misma clave no se cruzan.
  *  - escribirParte(clave, parcial) guarda {...leer(clave), ...parcial} (RP26): el tamaño (useEstadoTabla) y los
  *    anchos (usePreferenciasTabla) se escriben por separado en tabla:<id> y conviven.
+ *  - cerrar() deja la instancia muda: cancela el temporizador y descarta lo pendiente sin PUT (al cambiar de usuario,
+ *    T4A la cierra: un PUT pendiente saldría con la sesión del usuario nuevo y escribiría en la cuenta del otro).
  * El servidor inyectado es {leer(prefijo) -> Promise<{status, data: {clave: valor}} | {clave: valor}>,
  * guardar(clave, valor) -> Promise}; un error lleva .status (apiFetch) o no lleva (la red).
  */
@@ -37,6 +41,7 @@ import { congelar } from './estados-pedido.js';
  *   escribirParte: (clave: string, parcial: Record<string, unknown>) => boolean,
  *   precargar: (prefijo?: string) => Promise<boolean>,
  *   vaciar: () => Promise<void>,
+ *   cerrar: () => void,
  *   listo: Promise<void>,
  *   estaLista: () => boolean,
  * }} Preferencias
@@ -50,6 +55,30 @@ export const CLAVE_VALIDA = /^(tabla|vista|kanban|flujo|analisis):[a-z0-9._-]{1,
 export const LIMITE_BYTES = 8192;
 /** Cuánto espera una ráfaga de escrituras antes de mandar el PUT. */
 export const RETARDO_MS = 800;
+/** Los niveles anidados que acepta el servidor (MAXIMO_NIVELES de backend/app/api/v1/preferencias.py). */
+export const MAXIMO_NIVELES = 32;
+
+/**
+ * true si `valor` tiene más de `maximo` arreglos u objetos uno dentro de otro (un escalar tiene 0; [1] y {a: 1}, 1),
+ * como pasa_de_niveles del servidor. Recorrido iterativo con una pila, sin recursión: miles de niveles (o un valor
+ * circular) no desbordan la pila.
+ * @param {unknown} valor
+ * @param {number} [maximo]
+ * @returns {boolean}
+ */
+export function pasaDeNiveles(valor, maximo = MAXIMO_NIVELES) {
+  const contenedor = (v) => v !== null && typeof v === 'object';
+  /** @type {[any, number][]} */
+  const pila = contenedor(valor) ? [[valor, 1]] : [];
+  while (pila.length) {
+    const [actual, nivel] = /** @type {[any, number]} */ (pila.pop());
+    if (nivel > maximo) return true;
+    for (const hijo of Array.isArray(actual) ? actual : Object.values(actual)) {
+      if (contenedor(hijo)) pila.push([hijo, nivel + 1]);
+    }
+  }
+  return false;
+}
 
 /**
  * true si `clave` cumple la expresión del servidor ('tabla:ventas.hub'). En JS el '$' sin la bandera m solo calza al
@@ -129,8 +158,14 @@ export function crearPreferencias({
 
   /** clave -> texto JSON (lo último que se sabe). */
   const memoria = new Map();
-  /** Claves con un cambio local que el servidor todavía no tiene. */
+  /** Claves con un cambio local que el servidor todavía no tiene (su PUT no ha salido o falló por la red). */
   const pendientes = new Set();
+  /**
+   * Claves que esta instancia escribió desde que se creó: el GET de una precarga nunca las pisa, estén pendientes,
+   * con su PUT en camino o ya confirmadas (lo local es más nuevo que lo que traiga un GET de esta misma sesión).
+   */
+  const tocadas = new Set();
+  let cerrada = false;
   /** prefijo -> Promise<boolean> de su precarga (una por sesión). */
   const precargas = new Map();
   /** @type {any} */
@@ -180,7 +215,7 @@ export function crearPreferencias({
   }
 
   async function enviarPendientes() {
-    if (!remoto || !pendientes.size) return;
+    if (!remoto || cerrada || !pendientes.size) return;
     const lote = [...pendientes].map((clave) => [clave, memoria.get(clave)]);
     pendientes.clear();
     await Promise.all(lote.map(async ([clave, texto]) => {
@@ -188,7 +223,10 @@ export function crearPreferencias({
         await remoto.guardar(clave, JSON.parse(/** @type {string} */ (texto)));
       } catch (error) {
         const e = /** @type {any} */ (error);
-        if (esReintentable(error)) {
+        if (cerrada) {
+          // Cerrada (cambió el usuario): no se reintenta; saldría con la sesión de otro.
+          avisar(`No se pudo guardar ${clave} en el servidor y la sesión ya se cerró: no se reintenta.`);
+        } else if (esReintentable(error)) {
           // Queda local y sale con el siguiente cambio (si mientras tanto hubo otro, ya está pendiente).
           pendientes.add(clave);
           avisar(`No se pudo guardar ${clave} en el servidor; se reintenta en el siguiente cambio.`, e?.status ?? e?.message ?? '');
@@ -215,16 +253,22 @@ export function crearPreferencias({
 
   /**
    * Guarda `valor` en `clave`: de inmediato en local y, con servidor, en un PUT agrupado (RETARDO_MS después del
-   * último cambio). Devuelve false, sin lanzar y con un console.warn, si la clave no vale, si el valor no se puede
-   * serializar o si pasa de LIMITE_BYTES en bytes UTF-8 (no hay PUT). Escribir lo mismo que ya está y no está
+   * último cambio). Devuelve false, sin lanzar y con un console.warn, si la clave no vale, si el valor tiene más de
+   * MAXIMO_NIVELES niveles anidados, si no se puede serializar o si pasa de LIMITE_BYTES en bytes UTF-8 (no toca el
+   * almacén ni hay PUT). Después de cerrar() devuelve false y no hace nada. Escribir lo mismo que ya está y no está
    * pendiente no manda nada.
    * @param {string} clave
    * @param {unknown} valor
    * @returns {boolean}
    */
   function escribir(clave, valor) {
+    if (cerrada) return false;
     if (!claveValida(clave)) {
       avisar(`Clave de preferencia no válida: ${String(clave)}`);
+      return false;
+    }
+    if (pasaDeNiveles(valor)) {
+      avisar(`El valor de ${clave} tiene demasiados niveles anidados (máximo ${MAXIMO_NIVELES}): no se guarda.`);
       return false;
     }
     const texto = aJson(valor);
@@ -239,6 +283,7 @@ export function crearPreferencias({
     if (leerTexto(clave) === texto && !pendientes.has(clave)) return true;
     guardarLocal(clave, texto);
     if (remoto) {
+      tocadas.add(clave);
       pendientes.add(clave);
       programar();
     }
@@ -261,21 +306,27 @@ export function crearPreferencias({
   /**
    * Trae del servidor las preferencias que empiezan por `prefijo` ('' = todas) con UN GET por sesión: si ya se
    * precargó ese prefijo o uno que lo cubre (''), devuelve la misma promesa. Lo que llega pasa al caché y al almacén,
-   * salvo las claves con un cambio local pendiente y las que no cumplen la expresión. Resuelve true si cargó y false
-   * si falló (sigue con lo local, y una precarga posterior lo vuelve a intentar); nunca rechaza. La primera que
-   * termina deja `listo` resuelto. Sin servidor (o sin usuario), resuelve true de inmediato.
+   * salvo las claves que esta instancia escribió (pendientes, con su PUT en camino o ya confirmadas: si el GET llega
+   * tarde, gana lo local) y las que no cumplen la expresión. Resuelve true si cargó y false si falló (sigue con lo
+   * local, y una precarga posterior lo vuelve a intentar); nunca rechaza. La primera que termina deja `listo`
+   * resuelto. Sin servidor (o sin usuario), resuelve true de inmediato; después de cerrar(), false sin GET.
+   * Límite conocido: lo pendiente no sobrevive a una recarga de la página. El valor queda en el almacén, pero la
+   * precarga de la sesión siguiente lo pisa con el del servidor si el PUT nunca llegó.
    * @param {string} [prefijo]
    * @returns {Promise<boolean>}
    */
   function precargar(prefijo = '') {
+    if (cerrada) return Promise.resolve(false);
     if (!remoto) return Promise.resolve(true);
     const p = typeof prefijo === 'string' ? prefijo : '';
     for (const [hecho, promesa] of precargas) if (p.startsWith(hecho)) return promesa;
     const promesa = Promise.resolve()
       .then(() => remoto.leer(p))
       .then((respuesta) => {
+        if (cerrada) return false;
         for (const [clave, valor] of Object.entries(mapaDeRespuesta(respuesta))) {
-          if (!claveValida(clave) || !clave.startsWith(p) || pendientes.has(clave)) continue;
+          // Toda clave pendiente está también en tocadas: basta con mirar tocadas.
+          if (!claveValida(clave) || !clave.startsWith(p) || tocadas.has(clave)) continue;
           const texto = aJson(valor);
           if (texto !== null) guardarLocal(clave, texto);
         }
@@ -306,6 +357,20 @@ export function crearPreferencias({
     return enviar();
   }
 
+  /**
+   * Deja la instancia muda (al cambiar de usuario): cancela el temporizador y descarta lo pendiente sin PUT. Desde
+   * aquí escribir y escribirParte devuelven false y no hacen nada, precargar resuelve false sin GET, y un PUT que ya
+   * estaba en camino y falla no se reintenta. leer sigue leyendo lo de este usuario.
+   */
+  function cerrar() {
+    cerrada = true;
+    if (temporizadorId !== null) {
+      temporizador.clearTimeout(temporizadorId);
+      temporizadorId = null;
+    }
+    pendientes.clear();
+  }
+
   return {
     usuarioId: usuario,
     leer,
@@ -313,6 +378,7 @@ export function crearPreferencias({
     escribirParte,
     precargar,
     vaciar,
+    cerrar,
     listo,
     estaLista: () => lista,
   };

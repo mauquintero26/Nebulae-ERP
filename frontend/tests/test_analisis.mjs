@@ -14,6 +14,7 @@ import {
   consultaAnalisis, infoVariacion, formatearValor, pesosCorto, etiquetaFecha, PALETA, GRIS_OTROS, COLOR_ANTERIOR, POSITIVO,
   NEGATIVO, colorSegmento, HEX_CLASE_TAILWIND, hexDeClaseTailwind, enlaceDocumento, normalizarAnalisis, resumenAccesible,
 } from '../src/lib/analisis.js';
+import { variacionPct, direccionVariacion, tonoVariacion, mejorDesde } from '../src/lib/kpis.js';
 
 const MENOS = '−';
 const HOY = '2026-10-28';
@@ -100,7 +101,16 @@ console.log('--- TEST 4: infoVariacion (RP27: {valor, anterior, mejor, es_foto},
     'anterior 0 y actual 0');
   assert.deepEqual(iv({ valor: 5, anterior: 0, mejor: 'sube' }), { texto: 'Nuevo', tono: 'bien', flecha: 'sube' }, 'anterior 0 y actual 5');
   assert.deepEqual(iv({ valor: 5, anterior: 0, mejor: 'baja' }).tono, 'mal');
-  assert.deepEqual(iv({ valor: -5, anterior: 0, mejor: 'sube' }), { texto: 'Nuevo', tono: 'mal', flecha: 'baja' });
+  assert.deepEqual(iv({ valor: -5, anterior: 0, mejor: 'sube' }), { texto: 'Nuevo', tono: 'mal', flecha: 'baja' },
+    'el caso unificado (el mismo de test_kpis.mjs)');
+  // r1 (punto 3): una sola regla de dirección y de tono: la tarjeta (lib/kpis.js) y Análisis dan lo mismo.
+  for (const kpi of [{ valor: -5, anterior: 0, mejor: 'sube' }, { valor: 5, anterior: 0, mejor: 'baja' },
+    { valor: 112.5, anterior: 100, mejor: 'sube' }, { valor: 97, anterior: 100, mejor: 'baja' }, { valor: 0, anterior: 0, mejor: 'sube' },
+    { valor: -5, anterior: 0, mejor: 'neutro' }]) {
+    const v = variacionPct(kpi.valor, kpi.anterior);
+    const r = infoVariacion(kpi);
+    assert.deepEqual([r.flecha, r.tono], [direccionVariacion(v), tonoVariacion(v, mejorDesde(kpi.mejor))], JSON.stringify(kpi));
+  }
   assert.deepEqual(iv({ valor: 5, anterior: null, mejor: 'sube' }), { texto: '—', tono: 'neutro', flecha: null }, 'anterior null');
   assert.deepEqual(iv({ valor: null, anterior: 100, mejor: 'sube' }), { texto: '—', tono: 'neutro', flecha: null });
   assert.deepEqual(iv({ valor: 5, anterior: 3, mejor: 'sube', es_foto: true }), { texto: 'Hoy', tono: 'neutro', flecha: null });
