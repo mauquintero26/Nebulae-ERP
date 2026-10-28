@@ -105,7 +105,7 @@ def test_etiqueta_estado_respaldo_para_estados_fuera_del_mapa():
     # Un estado nuevo que aun no esta en el mapa sale legible, nunca el codigo crudo.
     assert etiqueta_estado('VEN', 'PENDIENTE_ALGO') == 'Pendiente algo'
     assert etiqueta_estado('SC', 'EN_REVISION_TECNICA') == 'En revision tecnica'
-    # Entidades que el mapa no cubre (PEC, PXP...) usan solo el respaldo.
+    # Entidades sin mapa (PXP...) usan solo el respaldo.
     assert etiqueta_estado('PEC', 'BORRADOR') == 'Borrador'
     assert etiqueta_estado('PXP', 'PENDIENTE') == 'Pendiente'
 

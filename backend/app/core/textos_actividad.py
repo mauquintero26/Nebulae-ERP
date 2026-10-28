@@ -77,6 +77,28 @@ ETIQUETAS_ESTADO = {
     "ENTREGA": {
         "EN_TRANSITO": "En tránsito",
     },
+    # B4 T1C (R9, C10, RP67): el Pedido de Compra. Fuente unica de sus nombres; las etapas, grupos y transiciones viven en
+    # app/core/estados_compras.py (ESTADOS_PEC son exactamente estas claves). RECIBIDO lo pone el fin del seguimiento
+    # sin recepcion (la mercancia llego a bodega); RECIBIDA y PARCIALMENTE_RECIBIDA, la recepcion confirmada.
+    "PEC": {
+        "BORRADOR": "Borrador",
+        "EMITIDO": "Emitido",
+        "ENVIADO": "Enviado al proveedor",
+        "EN_TRANSITO": "En tránsito",
+        "PENDIENTE_ENTREGA": "Pendiente de entrega",
+        "RECIBIDO": "Llegó a bodega",
+        "PARCIALMENTE_RECIBIDA": "Recibido en parte",
+        "RECIBIDA": "Recibido",
+        "COMPLETADO": "Completado",
+        "CANCELADO": "Cancelado",
+    },
+    # B4 T1C (R9): la recepcion de mercancia (GoodsReceipt.estado); sus grupos, en estados_compras.GRUPOS_RECEPCION.
+    "ENINV": {
+        "BORRADOR": "Por contar",
+        "COMPLETADA": "Recibida",
+        "COMPLETADA_LOGISTICA": "Solo registro logístico",
+        "CANCELADA": "Cancelada",
+    },
 }
 
 # T11 calidad (B1, ronda 1): como empieza el renglon de un pago en la Actividad del pedido, con el genero de su
@@ -137,11 +159,11 @@ _ALIAS_ENTIDAD = {"PVEN": "VEN"}
 
 
 def etiqueta_estado(entidad, estado) -> str:
-    """Nombre legible de un estado. entidad: 'SC', 'COT', 'VEN' (o 'PVEN'), 'PXP', 'PEC'...
+    """Nombre legible de un estado. entidad: 'SC', 'COT', 'VEN' (o 'PVEN'), 'PEC', 'ENINV', 'PXP'...
 
     - Vacio, en blanco o None -> ''.
     - Si el codigo esta en ETIQUETAS_ESTADO[entidad] -> su etiqueta (con tildes).
-    - Si no (estado nuevo, entidad sin mapa como PXP o PEC) -> respaldo: el codigo con '_' como espacio, en
+    - Si no (estado nuevo, entidad sin mapa como PXP) -> respaldo: el codigo con '_' como espacio, en
       minusculas y con la primera letra en mayuscula ('PENDIENTE_ALGO' -> 'Pendiente algo', PXP 'PAGADO' ->
       'Pagado'). Nunca sale el codigo crudo, aunque el respaldo no puede poner tildes: un estado que las
       necesite ('EN_TRANSITO') debe estar en el mapa.
