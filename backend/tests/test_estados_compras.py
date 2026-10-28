@@ -49,7 +49,7 @@ def test_grupos_activos_vigentes_y_vencibles():
 def test_vistas_de_las_listas():
     from app.core.estados_compras import VISTAS_PEC
     esperado = {
-        "todos": set(ESTADOS_R9),
+        "todos": set(ESTADOS_R9) - {"CANCELADO"},     # R9: «Todos (vigentes)»; los cancelados solo en «cancelados»
         "vigentes": set(ESTADOS_R9) - {"CANCELADO"},
         "activos": _estados("emitido", "en_transito", "en_bodega"),
         "borradores": {"BORRADOR"},
@@ -65,6 +65,16 @@ def test_vistas_de_las_listas():
     assert set(VISTAS_PEC) == set(esperado)
     for vista, estados in esperado.items():
         assert set(VISTAS_PEC[vista]) == estados, vista
+    assert VISTAS_PEC["todos"] == VISTAS_PEC["vigentes"]
+
+
+def test_la_vista_todos_trae_los_vigentes_y_el_desconocido():
+    """r1: «todos» son los vigentes (R9), con la regla del estado desconocido (cuenta como emitido)."""
+    from app.core.estados_compras import VISTAS_PEC, en_estados_pec
+    assert en_estados_pec("CANCELADO", VISTAS_PEC["todos"]) is False
+    assert en_estados_pec("CANCELADO", VISTAS_PEC["cancelados"]) is True
+    for estado in ("CONFIRMADA", "BORRADOR", "RECIBIDA", "EN_TRANSITO"):
+        assert en_estados_pec(estado, VISTAS_PEC["todos"]) is True, estado
 
 
 def test_en_estados_pec_cuenta_el_desconocido_como_emitido():

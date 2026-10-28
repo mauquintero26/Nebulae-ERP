@@ -7,8 +7,9 @@ frontend es SOLO lib/hub-ventas.js (clasificar, columnaHub, esNoResuelto y esAtr
 cuentan reciben la sesion y solo LEEN.
 
 La tabla de clasificar (RP2), en este orden:
-  1. Soporte (tipo_solicitud 'Soporte Tecnico' o estado 'N/A_SOPORTE') -> None: fuera del semaforo comercial, del flujo,
-     de las tarjetas y del Hub (R8), igual que get_alertas. La pastilla roja global (AlertasBadge) puede bajar.
+  1. Soporte, solo en una SC (tipo_solicitud 'Soporte Tecnico' o estado 'N/A_SOPORTE') -> None: fuera del semaforo
+     comercial, del flujo, de las tarjetas y del Hub (R8), igual que get_alertas. La pastilla roja global (AlertasBadge)
+     puede bajar. En una COT o un pedido no aplica (igual en Python y en SQL).
   2. CERRADO: SC CANCELADA, COT RECHAZADA, VEN en ESTADOS_VEN_CERRADOS.
   3. SC con documentos activos (sc_con_cot_activa: una COT activa o un pedido vigente, D16) -> ACCION_TOMADA.
   4. SC CONFIRMADA sin documentos activos -> NO_RESUELTO; ATRASADO solo con confirmacion_vigente y el plazo pasado.
@@ -68,6 +69,7 @@ ESTADOS_CERRADOS = MappingProxyType({
 # Los estados conocidos de cada tipo (textos_actividad.ETIQUETAS_ESTADO) que clasificar deja en ACCION_TOMADA:
 # CONFIRMADA solo con su documento siguiente (reglas 3 y 5); el resto por la regla 8 (los heredados de la SC; los del
 # pedido fuera de ESTADOS_NO_RESOLUCION y de los cerrados, como alertas_resumen).
+# No es espejo del arreglo plano de hub-ventas.js; la vista acciones_tomadas sale de RANGO in (2, 3)
 ESTADOS_ACCION_TOMADA = MappingProxyType({
     "SC": ("CONFIRMADA", "COTIZADA", "EN_ESPERA_CONFIRMACION", "RECHAZADA", "VENCIDA"),
     "COT": ("CONFIRMADA",),
@@ -90,7 +92,8 @@ _CLAVES_DIAS_ALERTA = (("SC", "alerta_sc_dias"), ("COT", "alerta_cot_dias"), ("V
 
 # B3 T6 (RP12.2): copia con nombre publico de _ESTADOS_CON_CAMBIOS_VIGENTES (erp_ventas.py). La marca de cambios del
 # cliente cuenta mientras el documento sigue en manos del asesor: la SC en Asignada o Nueva y la COT en Borrador. T6A hace
-# que erp_ventas la importe (y apunta _cambios_cliente_vigentes a esta constante antes de borrar la suya, C3).
+# que erp_ventas la importe (y apunta _cambios_cliente_vigentes a esta constante antes de borrar la suya, cruce C3 de la
+# verificación).
 ESTADOS_CON_CAMBIOS_VIGENTES = MappingProxyType({"SC": ("ASIGNADA", "BORRADOR"), "COT": ("BORRADOR",)})
 
 
@@ -185,10 +188,11 @@ def clasificar(tipo, estado, horas_sin_mov, dias_alerta, *, sc_con_cot_activa=Fa
     - sc_con_cot_activa: la SC tiene documentos activos (COT activa o pedido vigente, D16).
     - cot_con_pedido_vigente: la COT tiene un pedido que no esta CANCELADO.
     - confirmacion_vigente: la del dict de la fila (SC: CONFIRMADA con gate1_confirmed_at; COT: gate2_confirmed_at).
-    - es_soporte: la SC es de Soporte Tecnico (el estado N/A_SOPORTE tambien lo dice).
+    - es_soporte: la SC es de Soporte Tecnico (el estado N/A_SOPORTE tambien lo dice). Solo cuenta en una SC, como el
+      CASE de expresiones: en una COT o un pedido la bandera y ese estado no cambian nada.
     """
     tipo = _tipo(tipo)
-    if es_soporte or estado == ESTADO_SOPORTE:
+    if tipo == "SC" and (es_soporte or estado == ESTADO_SOPORTE):
         return None
     if estado in ESTADOS_CERRADOS[tipo]:
         return "CERRADO"
@@ -243,7 +247,10 @@ def expresiones(tipo, modelo, dias, ahora=None) -> dict:
     - sc_con_cot_activa: en la SC, sc_con_documentos_activos (D16); en COT y VEN, false.
     - cot_con_pedido_vigente: en la COT, pven_vigente_de_cot; en SC y VEN, false.
     `dias` es el dict de leer_dias_alerta (o el numero de dias del tipo); `ahora` es UTC sin zona (por defecto,
-    ahora_utc())."""
+    ahora_utc()).
+
+    Coinciden fila a fila mientras updated_at no sea NULL: contar_atrasados copia alertas_resumen (solo updated_at) y
+    expresiones usa coalesce(updated_at, created_at)."""
     tipo = _tipo(tipo)
     ahora = ahora if ahora is not None else ahora_utc()
     movimiento = func.coalesce(modelo.updated_at, modelo.created_at)
@@ -345,7 +352,10 @@ def contar_atrasados(db: Session, dias, ahora=None) -> dict:
     Igual que alertas_resumen: los 8 ESTADOS_NO_RESOLUCION, solo updated_at y el '<' estricto; una SC con documentos
     activos no cuenta (la alerta la lleva su COT o su pedido); una SC CONFIRMADA con gate1 y una COT CONFIRMADA con gate2
     y sin pedido vigente cuentan con los mismos dias. Diferencias permitidas: sin las SC de Soporte (R8), y
-    sc_confirmadas_sin_accion con sc_sin_documentos_activos (D16) en vez de «sin COT activa»."""
+    sc_confirmadas_sin_accion con sc_sin_documentos_activos (D16) en vez de «sin COT activa».
+
+    Coinciden fila a fila mientras updated_at no sea NULL: contar_atrasados copia alertas_resumen (solo updated_at) y
+    expresiones usa coalesce(updated_at, created_at)."""
     ahora = ahora if ahora is not None else ahora_utc()
 
     def limite(tipo):
@@ -483,7 +493,9 @@ def f_sc_activa(sc=CustomerRequest):
 
 
 def f_sc_espera_cot(sc=CustomerRequest):
-    """esperaCotizacion (H32): CONFIRMADA y sin una COT con su sc_id que no este RECHAZADA."""
+    """esperaCotizacion (H32): CONFIRMADA y sin una COT con su sc_id que no este RECHAZADA.
+
+    Espejo literal de esperaCotizacion (RP3): solo mira COT; D16 no aplica a esta pestaña."""
     return and_(sc.estado == "CONFIRMADA", ~cot_activa_de_sc(sc))
 
 

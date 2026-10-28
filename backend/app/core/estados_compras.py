@@ -11,8 +11,9 @@ Pedido de compra (PEC):
   cancelado). etapa_pec(estado): un estado desconocido (los heredados del modulo de logistica, como CONFIRMADA o ENVIADA)
   cuenta como 'emitido'.
 - GRUPOS_PEC: activos (emitido + en_transito + en_bodega), vigentes (todo menos cancelado) y vencibles (emitido +
-  en_transito). VISTAS_PEC: las vistas de las listas (T12). en_estados_pec y cond_estados_pec dicen si un estado esta en
-  uno de esos conjuntos con la misma regla del desconocido (si el conjunto trae EMITIDO, el desconocido entra).
+  en_transito). VISTAS_PEC: las vistas de las listas (T12; 'todos' = los vigentes, R9). en_estados_pec y cond_estados_pec
+  dicen si un estado esta en uno de esos conjuntos con la misma regla del desconocido (si el conjunto trae EMITIDO, el
+  desconocido entra).
 - es_vencido(estado, fecha_entrega_estimada, hoy) y cond_vencido (RP40): emitido o en transito con el dia de entrega
   tal como se guarda (fecha.date(), sin pasarla a Colombia) anterior a hoy en Colombia (hoy_colombia), sin tolerancia.
 - ESTADOS_PEC_MANUALES, TRANSICIONES_PEC_PATCH, ESTADOS_POR_FLUJO y destinos_pec_permitidos: lo que se cambia a mano (la
@@ -59,9 +60,10 @@ GRUPOS_PEC = MappingProxyType({
     "vencibles": _estados_de("emitido", "en_transito"),
 })
 
-# Las vistas de las listas de Compras (pestañas, tablero y parametro `vista`, T12).
+# Las vistas de las listas de Compras (pestañas, tablero y parametro `vista`, T12). R9: «Todos (vigentes)»: 'todos' es
+# todo menos cancelado (con la regla del desconocido, que cuenta como emitido); los cancelados salen solo en 'cancelados'.
 VISTAS_PEC = MappingProxyType({
-    "todos": ESTADOS_PEC,
+    "todos": GRUPOS_PEC["vigentes"],
     "vigentes": GRUPOS_PEC["vigentes"],
     "activos": GRUPOS_PEC["activos"],
     "borradores": _estados_de("borrador"),

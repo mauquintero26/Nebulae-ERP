@@ -16,7 +16,8 @@ Las reglas (las mismas fuentes y filtros que _calculate_sku_availability de erp_
   esa referencia (5 si no se ha definido)»);
 - estado_stock: 'agotado' (disponible 0), 'bajo_minimo' (0 < disponible ≤ minimo) o 'abastecido' (disponible > minimo);
 - valorizacion = fisico × cost_price (NULL sin costo: la pantalla muestra '—' y un aviso; valor_inventario = «Con el
-  costo de compra de cada referencia»);
+  costo de compra de cada referencia»); un costo 0 o negativo cuenta como sin costo (quick-create guarda 0): su
+  valorizacion es NULL, entra en skus_sin_costo y no suma a valor_inventario_cop;
 - los TOTALES (resumen_existencias) excluyen las referencias cuya publicacion tiene rastrear_inventario = false.
 
 Exporta: MINIMO_POR_DEFECTO, ESTADOS_STOCK, estado_stock, consulta_existencias, resumen_existencias y disponibilidad_sku.
@@ -137,6 +138,8 @@ def consulta_existencias(db: Session, por="sku", warehouse_id=None, categoria_id
                   .outerjoin(Warehouse, Warehouse.id == pares.c.warehouse_id))
     minimo = func.coalesce(ProductWebListing.alerta_stock_minimo, MINIMO_POR_DEFECTO)
     estado = case((disponible <= 0, ESTADOS_STOCK[0]), (disponible <= minimo, ESTADOS_STOCK[1]), else_=ESTADOS_STOCK[2])
+    # r1: un costo 0 o negativo cuenta como sin costo (quick-create guarda 0): valorizacion NULL ('—').
+    valorizacion = case((ProductSKU.cost_price > 0, fisico * ProductSKU.cost_price), else_=null())
     consulta = (origen
                 .outerjoin(Product, Product.id == ProductSKU.product_id)
                 .outerjoin(Category, Category.id == Product.category_id)
@@ -148,7 +151,7 @@ def consulta_existencias(db: Session, por="sku", warehouse_id=None, categoria_id
                     fisico.label("fisico"), reservado.label("reservado"), disponible.label("disponible"),
                     cuarentena.label("cuarentena"), func.coalesce(transito.c.en_transito, _CERO).label("en_transito"),
                     ProductSKU.sale_price.label("precio"), ProductSKU.cost_price.label("costo"),
-                    (fisico * ProductSKU.cost_price).label("valorizacion"), minimo.label("minimo"),
+                    valorizacion.label("valorizacion"), minimo.label("minimo"),
                     estado.label("estado_stock"), warehouse,
                     func.coalesce(ProductWebListing.rastrear_inventario, true()).label("rastrear_inventario")))
     if categoria_id is not None:
@@ -164,7 +167,8 @@ def resumen_existencias(db: Session, warehouse_id=None, *, ahora=None) -> dict:
     """Los totales de las existencias por SKU (consulta_existencias por='sku', en UNA consulta), sin las referencias con
     rastrear_inventario = false:
     {skus_total, unidades_fisicas, unidades_reservadas, unidades_disponibles, unidades_en_transito (una vez por SKU),
-     valor_inventario_cop (Σ fisico × costo en pesos enteros), skus_sin_costo, skus_agotados, skus_bajo_minimo,
+     valor_inventario_cop (Σ fisico × costo en pesos enteros, solo las que tienen costo), skus_sin_costo (costo NULL o
+     ≤ 0: un costo 0 o negativo cuenta como sin costo (quick-create guarda 0)), skus_agotados, skus_bajo_minimo,
      skus_abastecidos, disponibilidad_pct (disponibles / fisicas × 100 con 1 decimal; None sin fisicas)}.
     Las unidades van en Decimal (como disponibilidad_sku); los conteos y el valor, en int. Con warehouse_id solo cuentan
     las existencias de esa bodega (el transito no tiene bodega: es el de cada SKU)."""
@@ -177,7 +181,7 @@ def resumen_existencias(db: Session, warehouse_id=None, *, ahora=None) -> dict:
     fila = db.execute(
         select(func.count(c.sku_id), func.coalesce(func.sum(c.fisico), 0), func.coalesce(func.sum(c.reservado), 0),
                func.coalesce(func.sum(c.disponible), 0), func.coalesce(func.sum(c.en_transito), 0),
-               func.coalesce(func.sum(c.valorizacion), 0), contar(c.costo.is_(None)),
+               func.coalesce(func.sum(c.valorizacion), 0), contar(or_(c.costo.is_(None), c.costo <= 0)),
                contar(c.estado_stock == ESTADOS_STOCK[0]), contar(c.estado_stock == ESTADOS_STOCK[1]),
                contar(c.estado_stock == ESTADOS_STOCK[2]))
         .where(c.rastrear_inventario.is_(True))).one()

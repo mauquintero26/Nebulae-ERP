@@ -136,6 +136,10 @@ def test_clasificar_matriz():
         ("SC", "CANCELADA", 100, {"sc_con_cot_activa": True}, "CERRADO"),                       # regla 2 antes de 3
         ("SC", "BORRADOR", 100, {"es_soporte": True}, None),                                    # regla 1
         ("SC", "N/A_SOPORTE", 100, {}, None),
+        ("COT", "BORRADOR", 100, {"es_soporte": True}, "ATRASADO"),       # r1: Soporte solo en SC (como el SQL)
+        ("COT", "N/A_SOPORTE", 100, {}, "ACCION_TOMADA"),
+        ("VEN", "EN_PROCESO", 200, {"es_soporte": True}, "ATRASADO"),
+        ("VEN", "N/A_SOPORTE", 200, {"es_soporte": True}, "ACCION_TOMADA"),
         ("SC", "COTIZADA", 100, {}, "ACCION_TOMADA"),             # heredado: regla 8
         ("COT", "BORRADOR", cot_lim, {}, "NO_RESUELTO"),
         ("COT", "BORRADOR", cot_lim + m, {}, "ATRASADO"),
@@ -322,7 +326,9 @@ def test_expresiones_dan_el_mismo_rango_que_clasificar(db):
         f.pven("DEVUELTO_TOTAL", d(10)).id: 3,
         f.pven("EN_TRANSITO", d(10)).id: 0,
         f.pven("PENDIENTE_ANTICIPO", d(10)).id: 2,
+        f.pven("N/A_SOPORTE", d(10)).id: 2,          # r1: Soporte solo en SC; en un pedido es un estado mas (regla 8)
     }
+    esperado_cot[f.cot("N/A_SOPORTE", d(10)).id] = 2   # r1: igual en una COT
     nombre_de_rango = {v: k for k, v in rv.RANGO.items()}
     for tipo, modelo, esperado in (("SC", CustomerRequest, esperado_sc), ("COT", SalesQuotation, esperado_cot),
                                    ("VEN", SaleOrder, esperado_ven)):
@@ -338,11 +344,14 @@ def test_expresiones_dan_el_mismo_rango_que_clasificar(db):
             horas = rv.horas_desde_movimiento(doc.updated_at, doc.created_at, ahora)
             confirmacion = (doc.estado == "CONFIRMADA" and doc.gate1_confirmed_at is not None) if tipo == "SC" \
                 else (doc.gate2_confirmed_at is not None if tipo == "COT" else False)
-            es_soporte = tipo == "SC" and (doc.tipo_solicitud == "Soporte Tecnico" or doc.estado == "N/A_SOPORTE")
-            r = rv.clasificar(tipo, doc.estado, horas, DIAS, sc_con_cot_activa=bool(fila.sc_con_cot_activa),
-                              cot_con_pedido_vigente=bool(fila.cot_con_pedido_vigente),
-                              confirmacion_vigente=confirmacion, es_soporte=es_soporte)
-            assert r == nombre_de_rango.get(fila.rango), (tipo, doc.numero, doc.estado, r, fila.rango)
+            # r1: en COT y VEN la bandera de Soporte no cambia nada (el SQL no la mira): se prueban los dos valores.
+            banderas = [doc.tipo_solicitud == "Soporte Tecnico" or doc.estado == "N/A_SOPORTE"] if tipo == "SC" \
+                else [False, True]
+            for es_soporte in banderas:
+                r = rv.clasificar(tipo, doc.estado, horas, DIAS, sc_con_cot_activa=bool(fila.sc_con_cot_activa),
+                                  cot_con_pedido_vigente=bool(fila.cot_con_pedido_vigente),
+                                  confirmacion_vigente=confirmacion, es_soporte=es_soporte)
+                assert r == nombre_de_rango.get(fila.rango), (tipo, doc.numero, doc.estado, es_soporte, r, fila.rango)
             assert fila.dias_sin_mov == int(horas // 24), (doc.numero, fila.dias_sin_mov, horas)
             assert fila.dias_creado == int(rv.horas_desde_movimiento(None, doc.created_at, ahora) // 24)
             assert fila.columna == rv.columna_hub(tipo, doc.estado, bool(fila.sc_con_cot_activa)), doc.numero
@@ -442,9 +451,9 @@ def test_contar_atrasados_es_la_copia_fiel_de_alertas_resumen(app_client, db, ad
     assert api_despues - api_antes == sum(delta.values()) + 2   # + la de Soporte + la de D16
 
     soporte, d16 = _solo_cuenta_alertas(db, dias, ahora)
-    print(f"  toda la base: alertas_resumen={api_despues}, contar_atrasados={sum(despues.values())} {despues}, "
-          f"solo en alertas: Soporte={soporte}, D16={d16}")
-    assert api_despues - sum(despues.values()) == soporte + d16
+    assert api_despues - sum(despues.values()) == soporte + d16, (
+        f"toda la base: alertas_resumen={api_despues}, contar_atrasados={sum(despues.values())} {despues}, "
+        f"solo en alertas: Soporte={soporte}, D16={d16}")
 
 
 def test_contar_atrasados_frontera_estricta(db):

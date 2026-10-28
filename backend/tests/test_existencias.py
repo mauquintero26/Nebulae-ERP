@@ -36,8 +36,11 @@ def _guardar(db, objeto):
 def _escenario(db, product, warehouse):
     """2 bodegas; SKU-A (costo 10) con niveles en las dos, una reserva ACTIVE, una vencida, una liberada, una cuarentena
     ACTIVO (y otra liberada), un PEC EN_TRANSITO con una linea de 6 pedidas y 2 recibidas (y lineas en PEC que no son de
-    la etapa activos) y saldos por dueno; SKU-B (costo 3, minimo 8 en su publicacion); SKU-C (sin costo, en 0) y SKU-D
-    (publicacion con rastrear_inventario = false)."""
+    la etapa activos) y saldos por dueno; SKU-B (costo 3, minimo 8 en su publicacion); SKU-C (sin costo, en 0); SKU-D
+    (publicacion con rastrear_inventario = false) y SKU-E (costo 0, como lo guarda quick-create, con 4 fisicas).
+    Transito (R9: etapa activos = emitido + en transito + en bodega; un estado desconocido cuenta como emitido; R10: Σ
+    pedidas − recibidas por SKU): A = 4; B = 2 (PARCIALMENTE_RECIBIDA, en bodega) + 3 (CONFIRMADA, heredado) + 0 (una
+    linea ya recibida del todo) = 5; C = 2 + 2 (dos lineas de un PEC EMITIDO, se suman) = 4; E = 2 (RECIBIDO, en bodega)."""
     from app.core.fechas import ahora_utc
     ahora = ahora_utc()
     s = uuid.uuid4().hex[:8].upper()
@@ -47,7 +50,8 @@ def _escenario(db, product, warehouse):
     b = _guardar(db, ProductSKU(product_id=product.id, sku=f"T1C-B-{s}", cost_price=3, sale_price=5))
     c = _guardar(db, ProductSKU(product_id=product.id, sku=f"T1C-C-{s}", cost_price=None, sale_price=9))
     d = _guardar(db, ProductSKU(product_id=product.id, sku=f"T1C-D-{s}", cost_price=1, sale_price=2))
-    for sku, bodega, cantidad in ((a, w1, 10), (a, w2, 3), (b, w1, 2), (c, w1, 0), (d, w1, 7)):
+    e = _guardar(db, ProductSKU(product_id=product.id, sku=f"T1C-E-{s}", cost_price=0, sale_price=4))
+    for sku, bodega, cantidad in ((a, w1, 10), (a, w2, 3), (b, w1, 2), (c, w1, 0), (d, w1, 7), (e, w1, 4)):
         _guardar(db, InventoryLevel(sku_id=sku.id, warehouse_id=bodega.id, quantity=cantidad))
     _guardar(db, InventoryReservation(sku_id=a.id, warehouse_id=w1.id, quantity_reserved=4, status="ACTIVE",
                                       expires_at=ahora + timedelta(days=3)))
@@ -57,17 +61,30 @@ def _escenario(db, product, warehouse):
     _guardar(db, InventoryQuarantine(sku_id=a.id, warehouse_id=w2.id, quantity=1, reason="Dañado", status="ACTIVO"))
     _guardar(db, InventoryQuarantine(sku_id=a.id, warehouse_id=w2.id, quantity=2, reason="Revisado",
                                      status="LIBERADO"))                                # no cuenta
-    for i, (estado, pedidas, recibidas) in enumerate((("EN_TRANSITO", 6, 2), ("CANCELADO", 5, 0), ("RECIBIDA", 3, 1),
-                                                       ("BORRADOR", 2, 0))):
+    pecs = (
+        ("EN_TRANSITO", [(a, 6, 2), (b, 2, 2)]),             # A +4; la de B ya llego completa: 0
+        ("CANCELADO", [(a, 5, 0)]),                          # cancelado: no cuenta
+        ("RECIBIDA", [(a, 3, 1)]),                           # recibido: no cuenta
+        ("BORRADOR", [(a, 2, 0)]),                           # borrador: no cuenta
+        ("PARCIALMENTE_RECIBIDA", [(b, 5, 3)]),              # en bodega: B +2
+        ("CONFIRMADA", [(b, 4, 1)]),                         # heredado = emitido: B +3
+        ("EMITIDO", [(c, 2, 0), (c, 3, 1)]),                 # dos lineas del mismo SKU: C +4
+        ("RECIBIDO", [(e, 2, 0)]),                           # llego a bodega (en bodega): E +2
+    )
+    for i, (estado, lineas) in enumerate(pecs):
         pec = _guardar(db, PurchaseOrderFull(numero=f"PEC-EX{s}{i}", supplier_name="T1C", warehouse_id=w1.id,
                                              estado=estado))
-        _guardar(db, PurchaseOrderLine(pec_id=pec.id, sku_id=a.id, quantity_ordered=pedidas,
-                                       quantity_received=recibidas))
+        for sku, pedidas, recibidas in lineas:
+            _guardar(db, PurchaseOrderLine(pec_id=pec.id, sku_id=sku.id, quantity_ordered=pedidas,
+                                           quantity_received=recibidas))
     _guardar(db, ProductWebListing(sku_id=b.id, alerta_stock_minimo=8))
     _guardar(db, ProductWebListing(sku_id=d.id, rastrear_inventario=False))
     _guardar(db, InventoryOwnerBalance(sku_id=a.id, warehouse_id=w1.id, owner="NEBULAE", quantity=6))
     _guardar(db, InventoryOwnerBalance(sku_id=a.id, warehouse_id=w1.id, owner="MAU", quantity=4))
-    return {"w1": w1, "w2": w2, "a": a, "b": b, "c": c, "d": d}
+    return {"w1": w1, "w2": w2, "a": a, "b": b, "c": c, "d": d, "e": e}
+
+
+TRANSITO = {"a": 4, "b": 5, "c": 4, "d": 0, "e": 2}
 
 
 def _filas(db, select_):
@@ -93,52 +110,58 @@ def test_cada_fila_por_bodega_es_la_de_calculate_sku_availability(db, product, w
     from app.api.v1.erp_inventario import _calculate_sku_availability
     from app.core.existencias import consulta_existencias
     e = _escenario(db, product, warehouse)
-    mios = {e[k].id: k for k in ("a", "b", "c", "d")}
+    mios = {e[k].id: k for k in ("a", "b", "c", "d", "e")}
     filas = [f for f in _filas(db, consulta_existencias(db, por="bodega")) if f["sku_id"] in mios]
     assert list(filas[0])[:len(COLUMNAS)] == COLUMNAS
     pares = {(mios[f["sku_id"]], f["bodega"]): f for f in filas}
     w1, w2 = e["w1"].name, e["w2"].name
-    assert set(pares) == {("a", w1), ("a", w2), ("b", w1), ("c", w1), ("d", w1)}
+    assert set(pares) == {("a", w1), ("a", w2), ("b", w1), ("c", w1), ("d", w1), ("e", w1)}
     for f in filas:
         hoy = _calculate_sku_availability(db, f["sku_id"], f["warehouse_id"])
         assert f["fisico"] == hoy["stock_vendible_fisico"], f
         assert f["reservado"] == hoy["stock_reservado"], f
         assert f["disponible"] == hoy["stock_disponible"], f
         assert f["cuarentena"] == hoy["stock_cuarentena"], f
-    a1, a2, b1, c1 = pares[("a", w1)], pares[("a", w2)], pares[("b", w1)], pares[("c", w1)]
+    a1, a2, b1, c1, e1 = pares[("a", w1)], pares[("a", w2)], pares[("b", w1)], pares[("c", w1)], pares[("e", w1)]
     assert (a1["fisico"], a1["reservado"], a1["disponible"], a1["cuarentena"]) == (10, 4, 6, 0)
     assert (a2["fisico"], a2["reservado"], a2["disponible"], a2["cuarentena"]) == (3, 0, 3, 1)
     # RP50: con por=bodega, cada fila trae el transito del SKU (el mismo numero en cada bodega).
-    assert a1["en_transito"] == 4 and a2["en_transito"] == 4 and b1["en_transito"] == 0
+    for (k, bodega), f in pares.items():
+        assert f["en_transito"] == TRANSITO[k], (k, bodega, f["en_transito"])
     # Minimo: 5 sin publicacion; el de la publicacion si existe. Estado de stock por bodega.
     assert (a1["minimo"], a2["minimo"], b1["minimo"]) == (5, 5, 8)
-    assert (a1["estado_stock"], a2["estado_stock"], b1["estado_stock"], c1["estado_stock"]) == \
-        ("abastecido", "bajo_minimo", "bajo_minimo", "agotado")
-    # Valorizacion = fisico × costo; sin costo, None ('—' en la pantalla).
-    assert (a1["valorizacion"], a2["valorizacion"], b1["valorizacion"], c1["valorizacion"]) == (100, 30, 6, None)
-    assert (a1["precio"], a1["costo"], c1["costo"]) == (20, 10, None)
+    assert (a1["estado_stock"], a2["estado_stock"], b1["estado_stock"], c1["estado_stock"], e1["estado_stock"]) == \
+        ("abastecido", "bajo_minimo", "bajo_minimo", "agotado", "bajo_minimo")
+    # Valorizacion = fisico × costo; sin costo (NULL, o 0 como lo guarda quick-create), None ('—' en la pantalla).
+    assert (a1["valorizacion"], a2["valorizacion"], b1["valorizacion"], c1["valorizacion"], e1["valorizacion"]) == \
+        (100, 30, 6, None, None)
+    assert (a1["precio"], a1["costo"], c1["costo"], e1["costo"]) == (20, 10, None, 0)
     assert a1["producto"] == product.name and a1["sku"] == e["a"].sku and a1["categoria"]
 
 
 def test_por_sku_suma_las_bodegas_y_cuenta_el_transito_una_vez(db, product, warehouse):
     from app.core.existencias import consulta_existencias
     e = _escenario(db, product, warehouse)
-    mios = {e[k].id: k for k in ("a", "b", "c", "d")}
+    mios = {e[k].id: k for k in ("a", "b", "c", "d", "e")}
     filas = {mios[f["sku_id"]]: f for f in _filas(db, consulta_existencias(db)) if f["sku_id"] in mios}
-    assert set(filas) == {"a", "b", "c", "d"}   # una fila por SKU
-    a, b, c = filas["a"], filas["b"], filas["c"]
+    assert set(filas) == {"a", "b", "c", "d", "e"}   # una fila por SKU
+    a, b, c, e_ = filas["a"], filas["b"], filas["c"], filas["e"]
+    for k, f in filas.items():
+        assert f["en_transito"] == TRANSITO[k], (k, f["en_transito"])
     assert a["bodega"] is None
     assert (a["fisico"], a["reservado"], a["disponible"], a["cuarentena"], a["en_transito"]) == (13, 4, 9, 1, 4)
     assert (a["valorizacion"], a["minimo"], a["estado_stock"]) == (130, 5, "abastecido")
     assert (b["fisico"], b["disponible"], b["minimo"], b["estado_stock"], b["valorizacion"]) == \
         (2, 2, 8, "bajo_minimo", 6)
     assert (c["fisico"], c["disponible"], c["estado_stock"], c["valorizacion"]) == (0, 0, "agotado", None)
+    assert (e_["fisico"], e_["disponible"], e_["estado_stock"], e_["costo"], e_["valorizacion"]) == \
+        (4, 4, "bajo_minimo", 0, None)
 
 
 def test_filtros_de_consulta_existencias(db, product, warehouse):
     from app.core.existencias import consulta_existencias
     e = _escenario(db, product, warehouse)
-    mios = {e[k].id for k in ("a", "b", "c", "d")}
+    mios = {e[k].id for k in ("a", "b", "c", "d", "e")}
     en_w2 = [f for f in _filas(db, consulta_existencias(db, por="bodega", warehouse_id=e["w2"].id))]
     assert {f["sku_id"] for f in en_w2} & mios == {e["a"].id}
     assert all(f["bodega"] == e["w2"].name for f in en_w2)
@@ -163,15 +186,36 @@ def test_resumen_existencias_con_diferencias_antes_y_despues(db, product, wareho
     _escenario(db, product, warehouse)
     despues = resumen_existencias(db)
     delta = {k: despues[k] - antes[k] for k in claves - {"disponibilidad_pct"}}
-    # SKU-D (rastrear_inventario = false) no suma; el transito de SKU-A cuenta una sola vez (4, no 8).
-    assert delta == {"skus_total": 3, "unidades_fisicas": 15, "unidades_reservadas": 4, "unidades_disponibles": 11,
-                     "unidades_en_transito": 4, "valor_inventario_cop": 136, "skus_sin_costo": 1, "skus_agotados": 1,
-                     "skus_bajo_minimo": 1, "skus_abastecidos": 1}
+    # SKU-D (rastrear_inventario = false) no suma; el transito de SKU-A cuenta una sola vez (4, no 8): 4 + 5 + 4 + 2.
+    # SKU-C (sin costo) y SKU-E (costo 0) son los dos «sin costo» y no suman al valor (100 + 30 de A y 6 de B).
+    assert delta == {"skus_total": 4, "unidades_fisicas": 19, "unidades_reservadas": 4, "unidades_disponibles": 15,
+                     "unidades_en_transito": 15, "valor_inventario_cop": 136, "skus_sin_costo": 2, "skus_agotados": 1,
+                     "skus_bajo_minimo": 2, "skus_abastecidos": 1}
     assert isinstance(despues["valor_inventario_cop"], int)
     assert all(isinstance(despues[k], Decimal) for k in ("unidades_fisicas", "unidades_reservadas",
                                                           "unidades_disponibles", "unidades_en_transito"))
     fisicas, disponibles = float(despues["unidades_fisicas"]), float(despues["unidades_disponibles"])
     assert despues["disponibilidad_pct"] == (round(disponibles / fisicas * 100, 1) if fisicas else None)
+
+
+def test_costo_cero_o_negativo_cuenta_como_sin_costo(db, product, warehouse):
+    """r1 (Important): /crm/products/quick-create guarda cost_price = 0 cuando falta. Un costo 0 o negativo es «sin
+    costo»: sube skus_sin_costo, su valorizacion es None ('—') y no suma al valor del inventario."""
+    from app.core.existencias import consulta_existencias, resumen_existencias
+    antes = resumen_existencias(db)
+    s = uuid.uuid4().hex[:8].upper()
+    cero = _guardar(db, ProductSKU(product_id=product.id, sku=f"T1C-0-{s}", cost_price=0, sale_price=7))
+    negativo = _guardar(db, ProductSKU(product_id=product.id, sku=f"T1C-N-{s}", cost_price=-2, sale_price=7))
+    for sku in (cero, negativo):
+        _guardar(db, InventoryLevel(sku_id=sku.id, warehouse_id=warehouse.id, quantity=6))
+    despues = resumen_existencias(db)
+    assert despues["skus_sin_costo"] - antes["skus_sin_costo"] == 2
+    assert despues["valor_inventario_cop"] == antes["valor_inventario_cop"]
+    assert despues["unidades_fisicas"] - antes["unidades_fisicas"] == 12
+    ids = {cero.id, negativo.id}
+    for por in ("sku", "bodega"):
+        filas = [f for f in _filas(db, consulta_existencias(db, por=por)) if f["sku_id"] in ids]
+        assert len(filas) == 2 and all(f["valorizacion"] is None and f["fisico"] == 6 for f in filas), (por, filas)
 
 
 def test_resumen_existencias_por_bodega(db, product, warehouse):
@@ -188,7 +232,8 @@ def test_disponibilidad_sku_trae_las_nueve_claves_de_calculate_sku_availability(
     from app.api.v1.erp_inventario import _calculate_sku_availability
     from app.core.existencias import disponibilidad_sku
     e = _escenario(db, product, warehouse)
-    casos = [(e["a"], e["w1"]), (e["a"], e["w2"]), (e["b"], e["w1"]), (e["b"], e["w2"]), (e["c"], e["w1"])]
+    casos = [(e["a"], e["w1"]), (e["a"], e["w2"]), (e["b"], e["w1"]), (e["b"], e["w2"]), (e["c"], e["w1"]),
+             (e["e"], e["w1"])]
     for sku, bodega in casos:
         nuevo = disponibilidad_sku(db, sku.id, bodega.id)
         hoy = _calculate_sku_availability(db, sku.id, bodega.id)
@@ -200,8 +245,9 @@ def test_disponibilidad_sku_trae_las_nueve_claves_de_calculate_sku_availability(
     assert (a1["stock_vendible_fisico"], a1["stock_reservado"], a1["stock_disponible"]) == (10, 4, 6)
     assert (a1["balance_nebulae"], a1["balance_mau"]) == (6, 4)
     assert disponibilidad_sku(db, e["a"].id, e["w2"].id)["stock_total_bajo_custodia"] == 4
-    # Transito con la regla de R9 (etapas activas: el PEC EN_TRANSITO, no el cancelado, el recibido ni el borrador).
-    # _calculate_sku_availability todavia da 0 aqui (sus estados no son los del PEC); se alinea en T13 (RP50).
-    assert a1["stock_en_transito"] == 4
+    # Transito con la regla de R9 (etapa activos: emitido, en transito y en bodega, con el desconocido como emitido; no el
+    # cancelado, el recibido ni el borrador). _calculate_sku_availability todavia filtra otra lista de estados (la de hoy:
+    # CONFIRMADA, ENVIADA, PARCIALMENTE_ENVIADA y PARCIALMENTE_RECIBIDA); se alinea en T13 (RP50).
+    for k in ("a", "b", "c", "e"):
+        assert disponibilidad_sku(db, e[k].id, e["w1"].id)["stock_en_transito"] == TRANSITO[k], k
     assert disponibilidad_sku(db, e["a"].id, e["w2"].id)["stock_en_transito"] == 4
-    assert disponibilidad_sku(db, e["b"].id, e["w1"].id)["stock_en_transito"] == 0
