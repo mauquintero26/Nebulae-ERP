@@ -14,6 +14,11 @@
  *    RP73), de la que lib/crm-etapas.js (T3C) deriva COLOR_HEX y BG_HEX.
  *  - enlaceDocumento: la ruta de cada documento (VEN = PVEN, RP74), con return_to opcional (D22).
  *  - normalizarAnalisis completa las claves que falten con null o [] y nunca rellena cifras.
+ *  - T5B, lo que pintan las piezas de components/analisis: el color del módulo y de las series (colorDeAcento,
+ *    conAlfa, coloresSeries), los ejes y las barras (etiquetaEje, valoresConSigno, recortarEtiqueta, altoGraficoBarras),
+ *    «Sin datos en este período» (bloqueSinDatos), el resumen de cada gráfico (resumenAccesible), el ranking
+ *    (proporcionesRanking), los movimientos (MAX_MOVIMIENTOS, montoMovimiento, iconoMovimiento), el total de la dona
+ *    (tamanoCentroDona) y la grilla de container queries (GRILLA_ANALISIS).
  * No lee ni escribe el almacenamiento (R4): el período, el top y el foco se guardan en analisis:<modulo> con
  * lib/preferencias.js (PanelAnalisis, T5C).
  */
@@ -32,6 +37,32 @@ import {
  * @typedef {'hub' | 'sc' | 'cot' | 'pven'} ClaveFoco
  * @typedef {{texto: string, tono: 'bien' | 'mal' | 'neutro', flecha: 'sube' | 'baja' | null, lector: string}} InfoVariacion
  * @typedef {'pesos' | 'entero' | 'numero' | 'porcentaje' | 'dias' | 'unidades' | 'texto'} FormatoAnalisis
+ */
+
+/**
+ * Los bloques del contrato como los leen las piezas de components/analisis (T5B), después de normalizarAnalisis.
+ * @typedef {'dia' | 'semana' | 'mes'} Granularidad
+ * @typedef {'sube' | 'baja' | 'neutro'} MejorAnalisis
+ * @typedef {{clave?: string | null, etiqueta?: string | null, valores: ReadonlyArray<number | string | null>, es_anterior?: boolean}} SerieLinea
+ * @typedef {{titulo?: string | null, formato?: FormatoAnalisis | null, fechas: ReadonlyArray<string>, series: ReadonlyArray<SerieLinea>,
+ *   total?: number | null, total_anterior?: number | null, variacion_pct?: number | null}} LineaAnalisis
+ * @typedef {{clave: string, etiqueta?: string | null, valor: number | string | null, pct?: number | null, color?: string | null}} SegmentoDona
+ * @typedef {{clave?: string | null, titulo?: string | null, formato?: FormatoAnalisis | null, total?: number | null,
+ *   segmentos: ReadonlyArray<SegmentoDona>}} DonaAnalisis
+ * @typedef {'positivo' | 'negativo' | 'neutro'} TonoSerie
+ * @typedef {{clave?: string | null, etiqueta?: string | null, valores: ReadonlyArray<number | string | null>, tono?: TonoSerie | null,
+ *   color?: string | null}} SerieBarras
+ * @typedef {{titulo?: string | null, formato?: FormatoAnalisis | null, eje?: 'fechas' | 'categorias' | null,
+ *   etiquetas: ReadonlyArray<string>, series: ReadonlyArray<SerieBarras>, apiladas?: boolean | null}} BarrasAnalisis
+ * @typedef {{tipo?: string | null, numero?: string | null, titulo?: string | null, detalle?: string | null,
+ *   fecha?: string | null, monto?: number | string | null, formato?: FormatoAnalisis | null, signo?: '+' | '-' | null,
+ *   estado_etiqueta?: string | null, doc_tipo?: string | null, doc_id?: number | string | null}} FilaMovimiento
+ * @typedef {{titulo?: string | null, filas: ReadonlyArray<FilaMovimiento>}} MovimientosAnalisis
+ * @typedef {{posicion?: number | null, nombre?: string | null, detalle?: string | null, valor?: number | string | null,
+ *   cantidad?: number | null, pct?: number | null}} FilaRanking
+ * @typedef {{titulo?: string | null, columna?: string | null, formato?: FormatoAnalisis | null,
+ *   filas: ReadonlyArray<FilaRanking>}} RankingAnalisis
+ * @typedef {(bloque: 'dona' | 'ranking' | 'barras', clave: string, etiqueta: string) => string} Etiquetar
  */
 
 // ─── períodos, tops y focos ─────────────────────────────────────────────────────
@@ -242,6 +273,72 @@ export function pesosCorto(v) {
   return `${signo}$${formatoDecimal(a / 1e3)} mil`;
 }
 
+/** El número de `v` si es finito (también un número en texto, como un Decimal del API), o null. */
+function numero(v) {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/**
+ * La marca del eje de valores de un gráfico: pesosCorto para 'pesos' ('$4,9 M'), '45 %' para 'porcentaje' y, para los
+ * demás formatos, el número con a lo sumo 1 decimal y los miles con punto ('1.234', '2,5'; sin la unidad).
+ * @param {unknown} valor
+ * @param {FormatoAnalisis | null | undefined} formato
+ * @returns {string}
+ */
+export function etiquetaEje(valor, formato) {
+  if (formato === 'pesos') return pesosCorto(valor);
+  const texto = formatoDecimal(valor);
+  return formato === 'porcentaje' && texto !== '—' ? `${texto} %` : texto;
+}
+
+/**
+ * Los valores de una serie de barras como se dibujan: con tono 'negativo', hacia abajo (−|v|, como el flujo de caja de
+ * la referencia; 0 sigue en 0); con otro tono, tal cual. Lo que no es un número queda en null (un hueco, no un 0).
+ * @param {{tono?: unknown, valores?: unknown} | null | undefined} serie
+ * @returns {Array<number | null>}
+ */
+export function valoresConSigno(serie) {
+  const s = esObjeto(serie) ? /** @type {any} */ (serie) : {};
+  const negativo = s.tono === 'negativo';
+  return lista(s.valores).map((v) => {
+    const n = numero(v);
+    if (n === null) return null;
+    return negativo && n !== 0 ? -Math.abs(n) : n;
+  });
+}
+
+/**
+ * Una etiqueta de categoría recortada para el eje ('Distribuidora Nac…'): a lo sumo `maximo` caracteres contando el
+ * '…', sin espacios al final. El tooltip y la tabla para lectores de pantalla llevan la completa.
+ * @param {unknown} texto
+ * @param {number} [maximo]
+ * @returns {string}
+ */
+export function recortarEtiqueta(texto, maximo = 18) {
+  const limpio = texto === null || texto === undefined ? '' : String(texto).trim();
+  const letras = Array.from(limpio);
+  if (letras.length <= maximo) return limpio;
+  return `${letras.slice(0, Math.max(1, maximo - 1)).join('').trimEnd()}…`;
+}
+
+/**
+ * El alto en px del gráfico de barras: 256 con el eje de fechas (barras verticales, como la línea); con 'categorias'
+ * (barras horizontales), 32 px por categoría más 48, entre 160 y 480.
+ * @param {unknown} eje
+ * @param {number} n
+ * @returns {number}
+ */
+export function altoGraficoBarras(eje, n) {
+  if (eje !== 'categorias') return 256;
+  const cuantas = Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
+  return Math.min(480, Math.max(160, cuantas * 32 + 48));
+}
+
 const MESES_CORTOS = congelar(['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sept', 'oct', 'nov', 'dic']);
 
 /**
@@ -278,7 +375,9 @@ export const NEGATIVO = '#e11d48';
  * La ÚNICA tabla de clases de Tailwind a hex (RP73): las 12 de COLOR_HEX de crm/page.tsx más 'bg-red-500' (la etapa
  * «Perdido»), y sus fondos -50 (BG_HEX) más 'bg-red-50'. Los hex son los de hoy en el CRM (por ejemplo
  * 'bg-emerald-50': '#f0fdf4'), para que no cambie de color al adoptarla. lib/crm-etapas.js (T3C) deriva de aquí
- * COLOR_HEX y BG_HEX. Inmutable.
+ * COLOR_HEX y BG_HEX (las -500 y las -50). T5B agrega las -600 de los 9 AccentColor de components/ui/colors.ts (el
+ * color del módulo en los gráficos, colorDeAcento): una línea de 2 px necesita 3:1 sobre el blanco y las -500 de
+ * amber, emerald, teal y orange no llegan. Inmutable.
  * @type {Readonly<Record<string, string>>}
  */
 export const HEX_CLASE_TAILWIND = congelar({
@@ -292,6 +391,9 @@ export const HEX_CLASE_TAILWIND = congelar({
   'bg-purple-50': '#faf5ff', 'bg-slate-50': '#f8fafc', 'bg-green-50': '#f0fdf4',
   'bg-teal-50': '#f0fdfa', 'bg-orange-50': '#fff7ed', 'bg-pink-50': '#fdf2f8',
   'bg-red-50': '#fef2f2',
+  'bg-amber-600': '#d97706', 'bg-rose-600': '#e11d48', 'bg-orange-600': '#ea580c',
+  'bg-indigo-600': '#4f46e5', 'bg-purple-600': '#9333ea', 'bg-emerald-600': '#059669',
+  'bg-blue-600': '#2563eb', 'bg-teal-600': '#0d9488', 'bg-red-600': '#dc2626',
 });
 
 /**
@@ -319,6 +421,57 @@ export function colorSegmento(i, seg) {
   if (clave === '_otros' || clave.startsWith('_sin') || /^Sin\s/.test(etiqueta)) return GRIS_OTROS;
   const n = Number.isInteger(i) ? i : 0;
   return PALETA[((n % PALETA.length) + PALETA.length) % PALETA.length];
+}
+
+/**
+ * El color del módulo (un AccentColor de components/ui/colors.ts: 'indigo', 'amber'…) como hex, para Chart.js: el -600
+ * de HEX_CLASE_TAILWIND (el de ACCENTS.buttonBg). Sin acento o con uno desconocido, PALETA[0] (el índigo de Ventas).
+ * @param {unknown} acento
+ * @returns {string}
+ */
+export function colorDeAcento(acento) {
+  const clase = typeof acento === 'string' ? `bg-${acento.trim()}-600` : '';
+  return tiene(HEX_CLASE_TAILWIND, clase) ? HEX_CLASE_TAILWIND[clase] : PALETA[0];
+}
+
+/**
+ * Un '#rrggbb' (o '#rgb') como 'rgba(r, g, b, alfa)', con alfa entre 0 y 1 (el degradado del área de la línea). Lo que
+ * no es un hex sale tal cual.
+ * @param {unknown} hex
+ * @param {number} alfa
+ * @returns {string}
+ */
+export function conAlfa(hex, alfa) {
+  const texto = typeof hex === 'string' ? hex.trim() : '';
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(texto);
+  if (!m) return /** @type {string} */ (hex);
+  const cifras = m[1].length === 3 ? [...m[1]].map((c) => c + c) : [m[1].slice(0, 2), m[1].slice(2, 4), m[1].slice(4, 6)];
+  const [r, g, b] = cifras.map((c) => parseInt(c, 16));
+  const a = Math.min(1, Math.max(0, Number.isFinite(alfa) ? alfa : 1));
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
+/**
+ * El color de cada serie de la línea o de las barras, en su orden: la del período anterior (es_anterior) en
+ * COLOR_ANTERIOR; tono 'positivo' en POSITIVO y 'negativo' en NEGATIVO; la primera principal en `colorModulo`
+ * (colorDeAcento; por defecto PALETA[0]) y las demás con colorSegmento (su color propio o la PALETA en orden). Un color
+ * propio (serie.color) gana en cualquier principal.
+ * @param {ReadonlyArray<{es_anterior?: unknown, tono?: unknown, clave?: unknown, etiqueta?: unknown, color?: unknown} | null> | null | undefined} series
+ * @param {string} [colorModulo]
+ * @returns {string[]}
+ */
+export function coloresSeries(series, colorModulo = PALETA[0]) {
+  let principal = 0;
+  return lista(series).map((s) => {
+    const serie = esObjeto(s) ? s : {};
+    if (serie.es_anterior === true) return COLOR_ANTERIOR;
+    if (serie.tono === 'positivo') return POSITIVO;
+    if (serie.tono === 'negativo') return NEGATIVO;
+    const k = principal;
+    principal += 1;
+    const propio = typeof serie.color === 'string' && serie.color.trim() !== '';
+    return k === 0 && !propio ? colorModulo : colorSegmento(k, serie);
+  });
 }
 
 // ─── enlaces ────────────────────────────────────────────────────────────────────
@@ -351,6 +504,111 @@ export function enlaceDocumento(tipo, id, { returnTo = null } = {}) {
   if (!ruta || !returnTo) return ruta;
   return `${ruta}${ruta.includes('?') ? '&' : '?'}return_to=${encodeURIComponent(returnTo)}`;
 }
+
+// ─── las piezas de la pestaña (T5B: components/analisis) ────────────────────────
+
+/** Las filas que muestra ListaMovimientos, como mucho (ANALISIS-base punto 2). */
+export const MAX_MOVIMIENTOS = 8;
+
+/**
+ * El ícono (un nombre de lucide-react) de un movimiento por su tipo: SC, COT, PVEN o VEN, PAGO, PEC, ENINV, GASTO,
+ * DEVOLUCION, ENTRADA, SALIDA, AJUSTE, TRASLADO, KARDEX y LEAD. ListaMovimientos traduce cada nombre a su componente
+ * (test_analisis.mjs comprueba que su mapa tenga exactamente estos y que existan en el lucide-react instalado). Un tipo
+ * nuevo se agrega aquí. Inmutable.
+ * @type {Readonly<Record<string, string>>}
+ */
+export const ICONOS_MOVIMIENTO = congelar({
+  SC: 'ClipboardList', COT: 'FileText', PVEN: 'ShoppingBag', VEN: 'ShoppingBag', PAGO: 'Wallet', PEC: 'ShoppingCart',
+  ENINV: 'PackageCheck', GASTO: 'Receipt', DEVOLUCION: 'Undo2', ENTRADA: 'PackagePlus', SALIDA: 'PackageMinus',
+  AJUSTE: 'SlidersHorizontal', TRASLADO: 'ArrowLeftRight', KARDEX: 'Package', LEAD: 'Users',
+});
+/** El ícono de un movimiento cuyo tipo no está en ICONOS_MOVIMIENTO. */
+export const ICONO_MOVIMIENTO_POR_DEFECTO = 'Circle';
+
+/** 'Devolución ' -> 'DEVOLUCION' (sin tildes ni espacios, en mayúsculas). */
+const claveTipo = (v) => (typeof v === 'string' ? v.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase() : '');
+
+/**
+ * El nombre del ícono de un movimiento: el de su tipo (fila.tipo) y, si no está, el de su documento (fila.doc_tipo), sin
+ * importar mayúsculas ni tildes; si ninguno está en ICONOS_MOVIMIENTO, ICONO_MOVIMIENTO_POR_DEFECTO.
+ * @param {{tipo?: unknown, doc_tipo?: unknown} | null | undefined} fila
+ * @returns {string}
+ */
+export function iconoMovimiento(fila) {
+  for (const valor of [fila?.tipo, fila?.doc_tipo]) {
+    const clave = claveTipo(valor);
+    if (tiene(ICONOS_MOVIMIENTO, clave)) return ICONOS_MOVIMIENTO[clave];
+  }
+  return ICONO_MOVIMIENTO_POR_DEFECTO;
+}
+
+/**
+ * El monto de un movimiento como se ve, con su tono (el contrato manda monto, formato y signo '+' | '-' | null):
+ *  - signo '+': '+$1.500.000' y 'positivo'; signo '-': '-$1.500.000' (el menos de formatoPesos) y 'negativo'; el monto
+ *    se toma por su tamaño, así que no sale un doble signo;
+ *  - sin signo: formatearValor tal cual y 'neutro'. Formato por defecto: 'pesos'.
+ *  - sin monto (null o lo que no es número): '—' y 'neutro'; nunca inventa un monto.
+ * @param {{monto?: unknown, formato?: FormatoAnalisis | null, signo?: unknown} | null | undefined} fila
+ * @returns {{texto: string, tono: 'positivo' | 'negativo' | 'neutro'}}
+ */
+export function montoMovimiento(fila) {
+  const n = numero(fila?.monto);
+  if (n === null) return { texto: '—', tono: 'neutro' };
+  const formato = fila?.formato || 'pesos';
+  if (fila?.signo === '+') return { texto: `+${formatearValor(Math.abs(n), formato)}`, tono: 'positivo' };
+  if (fila?.signo === '-') return { texto: formatearValor(n === 0 ? 0 : -Math.abs(n), formato), tono: 'negativo' };
+  return { texto: formatearValor(n, formato), tono: 'neutro' };
+}
+
+/**
+ * El ancho (0 a 100, con 1 decimal) de la barra proporcional de cada fila del ranking: su valor contra el mayor, por su
+ * tamaño. Si todo es 0 (o no es número), todas en 0.
+ * @param {ReadonlyArray<{valor?: unknown} | null> | null | undefined} filas
+ * @returns {number[]}
+ */
+export function proporcionesRanking(filas) {
+  const tamanos = lista(filas).map((f) => Math.abs(numero(f?.valor) ?? 0));
+  const mayor = Math.max(0, ...tamanos);
+  return tamanos.map((t) => (mayor > 0 ? Math.round((t / mayor) * 1000) / 10 : 0));
+}
+
+/**
+ * El tamaño de letra del total en el hueco de la dona, que va en UNA línea: 'text-xl' hasta 8 caracteres, 'text-lg'
+ * hasta 10 ('$4.927.538'), 'text-sm' hasta 12 ('$123.456.789') y 'text-xs' desde 13 ('$98.765.432.109'). Medido en
+ * Chromium con el CSS real: el hueco de la dona de 176 px mide unos 120 px y '$123.456.789' en text-base ya no cabía
+ * (clases literales de Tailwind).
+ * @param {unknown} texto
+ * @returns {'text-xl' | 'text-lg' | 'text-sm' | 'text-xs'}
+ */
+export function tamanoCentroDona(texto) {
+  const n = String(texto ?? '').length;
+  if (n <= 8) return 'text-xl';
+  if (n <= 10) return 'text-lg';
+  if (n <= 12) return 'text-sm';
+  return 'text-xs';
+}
+
+/**
+ * La grilla de la pestaña Análisis (ANALISIS-base punto 3), con container queries de Tailwind v4: la raíz del panel es
+ * @container y las filas miden su ancho, no el de la pantalla. Clases LITERALES (el compilador las ve en este archivo).
+ * La usan EsqueletoAnalisis (T5B) y PanelAnalisis (T5C), para que el esqueleto y el panel coincidan.
+ *  - Fila 1 (KPIs): la de FranjaKpis, clasesFranja(n) de lib/kpis.js (R12), en su propio @container.
+ *  - Fila 2: la línea a todo el ancho hasta @5xl y desde ahí 6/12, con la dona (3/12) y los movimientos (3/12); entre
+ *    @2xl y @5xl, la dona y los movimientos lado a lado debajo de la línea.
+ *  - Fila 3: el ranking (5/12) y las barras (7/12) lado a lado desde @5xl.
+ * Cada celda lleva min-w-0: un <canvas> no ensancha su columna. Inmutable.
+ */
+export const GRILLA_ANALISIS = congelar({
+  raiz: '@container',
+  filas: 'flex flex-col gap-4',
+  fila2: 'grid grid-cols-1 gap-4 @2xl:grid-cols-2 @5xl:grid-cols-12',
+  linea: 'min-w-0 @2xl:col-span-2 @5xl:col-span-6',
+  dona: 'min-w-0 @5xl:col-span-3',
+  movimientos: 'min-w-0 @5xl:col-span-3',
+  fila3: 'grid grid-cols-1 gap-4 @5xl:grid-cols-12',
+  ranking: 'min-w-0 @5xl:col-span-5',
+  barras: 'min-w-0 @5xl:col-span-7',
+});
 
 // ─── el contrato (core/analisis.py) ─────────────────────────────────────────────
 
@@ -414,17 +672,71 @@ export function normalizarAnalisis(resp) {
   };
 }
 
+/** Un valor que cuenta como dato: un número finito distinto de 0 (un negativo también). */
+const esDato = (v) => {
+  const n = numero(v);
+  return n !== null && n !== 0;
+};
+
 /**
- * El resumen de un gráfico de línea para lectores de pantalla: 'Ventas en el tiempo: total $4.927.538, subió 12,5 %
- * frente al período anterior' (o 'bajó', 'sin cambio', 'nuevo (antes era 0)'); sin total_anterior, solo el total. `frente` cambia
- * el final. Sin línea, ''.
- * @param {{titulo?: string, formato?: FormatoAnalisis, total?: unknown, total_anterior?: unknown} | null | undefined} linea
+ * Si un bloque del contrato no tiene datos en el período, y la pieza dice 'Sin datos en este período' en vez de
+ * dibujarse (la dona y las barras no se dibujan vacías):
+ *  - 'linea': sin fechas, o ninguna serie del período (las que no son es_anterior) tiene un dato (el anterior solo no
+ *    alcanza: el período está vacío);
+ *  - 'dona': ningún segmento tiene un dato; 'barras': sin etiquetas o ninguna serie tiene un dato;
+ *  - 'movimientos' y 'ranking': sin filas (una fila en 0 sigue siendo una fila).
+ * Un bloque que no es un objeto (null: el módulo no lo tiene) también da true. Un tipo desconocido es un error de
+ * programación (lanza Error).
+ * @param {'linea' | 'dona' | 'barras' | 'movimientos' | 'ranking'} tipo
+ * @param {unknown} bloque
+ * @returns {boolean}
+ */
+export function bloqueSinDatos(tipo, bloque) {
+  if (!['linea', 'dona', 'barras', 'movimientos', 'ranking'].includes(tipo)) {
+    throw new Error(`Bloque de Análisis desconocido: ${String(tipo)}`);
+  }
+  if (!esObjeto(bloque)) return true;
+  const b = /** @type {any} */ (bloque);
+  const conDato = (series) => lista(series).some((s) => esObjeto(s) && lista(s.valores).some(esDato));
+  if (tipo === 'linea') return !lista(b.fechas).length || !conDato(lista(b.series).filter((s) => !(esObjeto(s) && s.es_anterior === true)));
+  if (tipo === 'dona') return !lista(b.segmentos).some((s) => esObjeto(s) && esDato(s.valor));
+  if (tipo === 'barras') return !lista(b.etiquetas).length || !conDato(b.series);
+  return !lista(b.filas).length;
+}
+
+/** La suma de los valores numéricos de una serie (los que no son número no cuentan). */
+const sumaSerie = (s) => lista(s?.valores).reduce((total, v) => total + (numero(v) ?? 0), 0);
+
+/**
+ * El resumen de un gráfico para lectores de pantalla (el aria-label de su <canvas role="img">, T5B). Lee la forma del
+ * bloque del contrato:
+ *  - una dona (trae segmentos): 'Ventas por canal: total $1.000.000. Tienda web 60 %, Otros 40 %', o
+ *    'Ventas por canal: sin datos en este período';
+ *  - unas barras (traen etiquetas): 'Entradas y salidas: Entradas, total 7 u.; Salidas, total 2 u.' (la suma de cada
+ *    serie, como la manda el servidor), o '…: sin datos en este período';
+ *  - una línea (lo demás): 'Ventas en el tiempo: total $4.927.538, subió 12,5 % frente al período anterior' (o 'bajó',
+ *    'sin cambio', 'nuevo (antes era 0)'); sin total_anterior, solo el total. `frente` cambia el final.
+ * Sin bloque, ''.
+ * @param {{titulo?: string | null, formato?: FormatoAnalisis | null, total?: unknown, total_anterior?: unknown, segmentos?: unknown, etiquetas?: unknown, series?: unknown} | null | undefined} linea
  * @param {{frente?: string}} [opciones]
  * @returns {string}
  */
 export function resumenAccesible(linea, { frente = 'frente al período anterior' } = {}) {
   if (!esObjeto(linea)) return '';
   const l = /** @type {any} */ (linea);
+  if (Array.isArray(l.segmentos)) {
+    const titulo = l.titulo || 'Distribución';
+    if (bloqueSinDatos('dona', l)) return `${titulo}: sin datos en este período`;
+    const partes = l.segmentos.filter(esObjeto).map((s) => `${s.etiqueta ?? s.clave ?? ''} ${formatearValor(s.pct, 'porcentaje')}`);
+    return `${titulo}: total ${formatearValor(l.total, l.formato || 'entero')}. ${partes.join(', ')}`;
+  }
+  if (Array.isArray(l.etiquetas)) {
+    const titulo = l.titulo || 'Barras';
+    if (bloqueSinDatos('barras', l)) return `${titulo}: sin datos en este período`;
+    const partes = lista(l.series).filter(esObjeto)
+      .map((s) => `${s.etiqueta || 'Serie'}, total ${formatearValor(sumaSerie(s), l.formato || 'entero')}`);
+    return `${titulo}: ${partes.join('; ')}`;
+  }
   const base = `${l.titulo || 'Serie'}: total ${formatearValor(l.total, l.formato || 'entero')}`;
   const v = variacionPct(l.total, l.total_anterior);
   if (!v) return base;

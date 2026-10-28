@@ -9,6 +9,9 @@
  * 2) R2: ningún archivo de src/app contiene '/ventas/ai-chat' (el endpoint no existe; los asistentes quedan «En
  *    construcción»), salvo la lista blanca temporal: ventas/page.tsx hasta T7 y compras/pedidos/page.tsx hasta T15
  *    (src/app_mocks_backup no está dentro de src/app y tampoco se revisa).
+ * 3) T5B: dentro de components/analisis, solo registro.ts (chart.js y el único ChartJS.register) y GraficoLinea,
+ *    GraficoDona y GraficoBarras (react-chartjs-2 y los tipos de chart.js, con registrarGraficos() al cargarse) importan
+ *    los gráficos; las piezas de T5C (PanelAnalisis y las demás) usan esos componentes.
  * Cada tarea que deja de necesitar una entrada temporal la BORRA de su lista en el mismo commit (una por línea). Una
  * entrada que ya no se usa no hace fallar la prueba: se lista al final para que se borre.
  * Detecta import … from '…', import '…', import('…') y require('…'); un comentario que escriba esa forma también cuenta
@@ -123,6 +126,30 @@ console.log('--- R13: chart.js y react-chartjs-2 solo en components/analisis ---
   assert.deepEqual(fuera, [], `importa gráficos fuera de ${CARPETA_GRAFICOS} (usa los componentes de Análisis):\n  ${fuera.join('\n  ')}`);
   const sinUso = PERMITIDOS_GRAFICOS.filter((p) => !usados.has(p));
   console.log(`  ${todos.length} archivos revisados` + (sinUso.length ? `; lista blanca sin uso (bórrala): ${sinUso.join(', ')}` : ''));
+}
+
+console.log('--- T5B: dentro de components/analisis, solo registro.ts y los tres gráficos importan chart.js ---');
+{
+  // PanelAnalisis, useAnalisis, FilaKpis y lo demás de T5C usan estas piezas, no Chart.js directo; y ChartJS.register
+  // vive solo en registro.ts (una sola vez por página).
+  const carpeta = join(RAIZ, CARPETA_GRAFICOS);
+  const IMPORTAN = ['registro.ts', 'GraficoLinea.tsx', 'GraficoDona.tsx', 'GraficoBarras.tsx'];
+  assert.ok(existsSync(carpeta), `falta ${CARPETA_GRAFICOS}`);
+  const todos = archivos(carpeta).map((ruta) => ({ ruta, nombre: rel(ruta).slice(CARPETA_GRAFICOS.length), texto: readFileSync(ruta, 'utf8') }));
+  for (const nombre of IMPORTAN) assert.ok(todos.some((a) => a.nombre === nombre), `falta ${CARPETA_GRAFICOS}${nombre}`);
+  const otros = todos.filter((a) => !IMPORTAN.includes(a.nombre) && importsDeGraficos(a.texto).length).map((a) => a.nombre);
+  assert.deepEqual(otros, [], `importan chart.js o react-chartjs-2 sin ser un gráfico: ${otros.join(', ')}`);
+  const registran = todos.filter((a) => /\.register\(/.test(a.texto)).map((a) => a.nombre);
+  assert.deepEqual(registran, ['registro.ts'], 'ChartJS.register solo en registro.ts');
+  const registro = todos.find((a) => a.nombre === 'registro.ts');
+  assert.deepEqual(importsDeGraficos(registro.texto).map((h) => h.modulo), ['chart.js'], 'registro.ts no pinta: solo chart.js');
+  for (const nombre of IMPORTAN.slice(1)) {
+    const { texto } = todos.find((a) => a.nombre === nombre);
+    assert.deepEqual([...new Set(importsDeGraficos(texto).map((h) => h.modulo))].sort(), ['chart.js', 'react-chartjs-2'], `${nombre}: el componente y sus tipos`);
+    assert.match(texto, /^import type \{[^}]*\} from 'chart\.js';$/m, `${nombre}: de chart.js solo tipos (lo registra registro.ts)`);
+    assert.match(texto, /^registrarGraficos\(\);$/m, `${nombre}: llama a registrarGraficos() al cargarse`);
+  }
+  console.log(`  ${todos.length} archivos en ${CARPETA_GRAFICOS}; importan gráficos: ${IMPORTAN.join(', ')}`);
 }
 
 console.log("--- R2: '/ventas/ai-chat' no aparece en src/app ---");
