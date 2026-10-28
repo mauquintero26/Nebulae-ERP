@@ -49,7 +49,7 @@ def test_grupos_activos_vigentes_y_vencibles():
 def test_vistas_de_las_listas():
     from app.core.estados_compras import VISTAS_PEC
     esperado = {
-        "todos": set(ESTADOS_R9) - {"CANCELADO"},     # R9: «Todos (vigentes)»; los cancelados solo en «cancelados»
+        "todos": set(ESTADOS_R9) - {"CANCELADO"},     # R9: «Todos (vigentes)»; entre las pestañas de lista, cancelados solo en «cancelados»
         "vigentes": set(ESTADOS_R9) - {"CANCELADO"},
         "activos": _estados("emitido", "en_transito", "en_bodega"),
         "borradores": {"BORRADOR"},

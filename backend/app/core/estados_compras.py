@@ -61,7 +61,8 @@ GRUPOS_PEC = MappingProxyType({
 })
 
 # Las vistas de las listas de Compras (pestañas, tablero y parametro `vista`, T12). R9: «Todos (vigentes)»: 'todos' es
-# todo menos cancelado (con la regla del desconocido, que cuenta como emitido); los cancelados salen solo en 'cancelados'.
+# todo menos cancelado (con la regla del desconocido, que cuenta como emitido). Entre las pestañas de lista (R9), los
+# cancelados salen solo en 'cancelados'; acciones_tomadas los sigue trayendo (acción tomada + cerrados, brief).
 VISTAS_PEC = MappingProxyType({
     "todos": GRUPOS_PEC["vigentes"],
     "vigentes": GRUPOS_PEC["vigentes"],

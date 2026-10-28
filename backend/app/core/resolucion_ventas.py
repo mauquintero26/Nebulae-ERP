@@ -92,8 +92,8 @@ _CLAVES_DIAS_ALERTA = (("SC", "alerta_sc_dias"), ("COT", "alerta_cot_dias"), ("V
 
 # B3 T6 (RP12.2): copia con nombre publico de _ESTADOS_CON_CAMBIOS_VIGENTES (erp_ventas.py). La marca de cambios del
 # cliente cuenta mientras el documento sigue en manos del asesor: la SC en Asignada o Nueva y la COT en Borrador. T6A hace
-# que erp_ventas la importe (y apunta _cambios_cliente_vigentes a esta constante antes de borrar la suya, cruce C3 de la
-# verificación).
+# que erp_ventas la importe (y apunta _cambios_cliente_vigentes a esta constante antes de borrar la suya,
+# cruce C3 de la verificación).
 ESTADOS_CON_CAMBIOS_VIGENTES = MappingProxyType({"SC": ("ASIGNADA", "BORRADOR"), "COT": ("BORRADOR",)})
 
 
