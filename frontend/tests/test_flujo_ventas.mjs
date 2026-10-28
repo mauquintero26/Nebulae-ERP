@@ -440,9 +440,12 @@ console.log('--- TEST 21 (T5A; RP4, RP74): CadenaDocumentos — etiquetas única
   assert.match(c, /if \(!pasos\.length\) return null;/);
 }
 
-console.log('--- TEST 22 (T5A r1; M2): cadenaVentas compacta — solo el número, salvo las cajas caídas, que conservan su palabra ---');
+console.log('--- TEST 22 (T5A r1 y r2; M2 y M5): cadenaVentas compacta — solo el número; las caídas, su palabra aparte ---');
 {
-  const ver = (doc, tipo, op = {}) => cadenaVentas(doc, tipo, { compacta: true, ...op }).map((p) => [p.clave, p.estado, p.sublabel]);
+  // r2 (M5): en compacta, el sublabel es SOLO el número y la palabra de la caja caída va en etiquetaEstado (PasosFlujo
+  // la pinta en su propio span, sin truncate: lo que se recorta es el número).
+  const ver = (doc, tipo, op = {}) => cadenaVentas(doc, tipo, { compacta: true, ...op })
+    .map((p) => (p.etiquetaEstado === undefined ? [p.clave, p.estado, p.sublabel] : [p.clave, p.estado, p.sublabel, p.etiquetaEstado]));
   // Lo vigente: solo el número (sin estado en palabras ni « (+1 rechazada)»); lo que falta conserva su texto.
   const sc = {
     id: 1, numero: 'SC-1', estado: 'ASIGNADA', pedidos_venta: [],
@@ -451,24 +454,29 @@ console.log('--- TEST 22 (T5A r1; M2): cadenaVentas compacta — solo el número
   assert.deepEqual(ver(sc, 'SC'), [['SC', 'hecho', 'SC-1'], ['COT', 'actual', 'COT-11'], ['PVEN', 'pendiente', 'Sin pedido todavía']]);
   // Una cotización rechazada sin reemplazo conserva «Rechazada».
   const rechazada = { id: 1, numero: 'SC-1', estado: 'COTIZADA', cotizaciones: [{ id: 10, numero: 'COT-10', estado: 'RECHAZADA' }] };
-  assert.deepEqual(ver(rechazada, 'SC')[1], ['COT', 'cancelado', `COT-10 · ${infoEstadoCotizacion('RECHAZADA').label}`]);
+  assert.deepEqual(ver(rechazada, 'SC')[1], ['COT', 'cancelado', 'COT-10', infoEstadoCotizacion('RECHAZADA').label]);
   // Un pedido cancelado conserva «Cancelado» (y la cotización vuelve a ser la actual, H46).
   const cot = {
     id: 11, numero: 'COT-11', estado: 'CONFIRMADA', sc_id: 1, sc_numero: 'SC-1',
     pedidos_venta: [{ id: 52, numero: 'PVEN-52', estado: 'CANCELADO' }],
   };
   assert.deepEqual(ver(cot, 'COT'), [['SC', 'hecho', 'SC-1'], ['COT', 'actual', 'COT-11'],
-    ['PVEN', 'cancelado', `PVEN-52 · ${infoEstadoPedido('CANCELADO').label}`]]);
+    ['PVEN', 'cancelado', 'PVEN-52', infoEstadoPedido('CANCELADO').label]]);
   // La caja propia caída también (una SC cancelada); la Compra del pedido va con su número.
   assert.deepEqual(ver({ id: 1, numero: 'SC-1', estado: 'CANCELADA' }, 'SC')[0],
-    ['SC', 'cancelado', `SC-1 · ${infoEstadoSolicitud('CANCELADA').label}`]);
+    ['SC', 'cancelado', 'SC-1', infoEstadoSolicitud('CANCELADA').label]);
+  // Una caída sin número: solo la palabra (sin sublabel).
+  assert.deepEqual(ver({ id: 1, estado: 'CANCELADA' }, 'SC')[0], ['SC', 'cancelado', undefined, infoEstadoSolicitud('CANCELADA').label]);
   const pven = { id: 52, numero: 'PVEN-52', estado: 'EN_PROCESO', cot_id: 11, cot_numero: 'COT-11', pec_id: 9, pec_numero: 'PEC-9' };
   assert.deepEqual(ver(pven, 'VEN'), [['SC', 'neutro', 'Cotización directa'], ['COT', 'hecho', 'COT-11'], ['PVEN', 'actual', 'PVEN-52'],
     ['PEC', 'neutro', 'PEC-9']]);
   // Las etiquetas que se inyectan siguen valiendo en las caídas; sin compacta, nada cambia.
-  assert.deepEqual(ver(rechazada, 'SC', { etiquetas: { cot: () => 'Rechazada X' } })[1][2], 'COT-10 · Rechazada X');
+  assert.deepEqual(ver(rechazada, 'SC', { etiquetas: { cot: () => 'Rechazada X' } })[1], ['COT', 'cancelado', 'COT-10', 'Rechazada X']);
   assert.deepEqual(cadenaVentas(sc, 'SC', { compacta: false }), cadenaVentas(sc, 'SC'));
   assert.equal(cadenaVentas(sc, 'SC')[1].sublabel, 'COT-11 · Esperando confirmación del cliente (+1 rechazada)');
+  // Sin compacta no hay etiquetaEstado: la palabra sigue dentro del sublabel, como en r0.
+  assert.equal(cadenaVentas(rechazada, 'SC')[1].sublabel, `COT-10 · ${infoEstadoCotizacion('RECHAZADA').label}`);
+  assert.ok(cadenaVentas(rechazada, 'SC').every((p) => !('etiquetaEstado' in p)));
 }
 
 console.log('\nOK: test_flujo_ventas.mjs');

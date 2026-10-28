@@ -8,8 +8,8 @@ import {
 import { Contador } from '@/components/ui/Contador';
 import type { EstadoKpi } from '@/lib/kpis';
 import {
-  chipAtraso, conectorHecho, estadoNumeroFranja, hayEnlaces, indicePasoActual, textoAntiguedad, textoDetalle,
-  textoEstadoPaso, tituloPaso, tituloPunto,
+  avisosVisibles, chipAtraso, conectorHecho, estadoNumeroFranja, hayEnlaces, indicePasoActual, textoAntiguedad,
+  textoDetalle, textoEstadoPaso, tituloPaso, tituloPunto,
 } from '@/lib/flujo';
 import type { ClaveIcono, EstadoPaso, OrientacionFlujo, PasoVista, TonoAviso, TonoPaso, VarianteFlujo } from './tipos';
 
@@ -153,8 +153,15 @@ const CAJA_PASTILLA = 'relative flex items-center gap-1.5 rounded-full border px
 /** Lo que solo se ve en la caja (no en la pastilla). */
 const SOLO_CAJA = 'hidden @2xl/flujo:block';
 
-/** r1 (M11): un paso que recibe el foco se desplaza para verse entero (la fila de pastillas se desplaza por dentro). */
-const alEnfocar = (e: FocusEvent<HTMLElement>) => e.currentTarget.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+/**
+ * r1 (M11): un paso que recibe el foco se desplaza para verse entero (la fila de pastillas se desplaza por dentro).
+ * r2 (M7): solo si el foco viene del teclado (:focus-visible). Con un clic o un toque, Chrome enfoca en el pointerdown:
+ * desplazar ahí corría la pastilla bajo el puntero y el clic se perdía.
+ */
+const alEnfocar = (e: FocusEvent<HTMLElement>) => {
+  const el = e.currentTarget;
+  if (el.matches(':focus-visible')) el.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+};
 
 function ChipAvisoInterno({ texto, tono, pequeno }: { texto: string; tono: TonoAviso; pequeno?: boolean }) {
   return (
@@ -182,13 +189,40 @@ export function ChipAviso({ texto, tono, onClick }: { texto: string; tono: TonoA
   );
 }
 
-/** Los avisos de un paso: cada chip en una línea, dentro del ancho de su caja. `display` trae el display (y sus variantes). */
-function AvisosDelPaso({ avisos, pequeno, display }: { avisos: PasoVista['avisos']; pequeno?: boolean; display: string }) {
-  const lista = (avisos ?? []).filter((a) => a && typeof a.texto === 'string' && a.texto.trim());
+/**
+ * Los avisos de un paso (avisosVisibles: con estadoConteos 'error' ninguno, r2 M1): cada chip en una línea, dentro del
+ * ancho de su caja. `clases` trae el display (y sus variantes) y el ancho: en la caja de la franja, `w-0 min-w-full`
+ * (r2: los chips no aportan al ancho intrínseco de la caja, así el truncate recorta y las 5 cajas caben).
+ */
+function AvisosDelPaso({ avisos, pequeno, estadoConteos, clases }: {
+  avisos: PasoVista['avisos'];
+  pequeno?: boolean;
+  estadoConteos?: EstadoKpi;
+  clases: string;
+}) {
+  const lista = avisosVisibles(avisos, { estadoConteos });
   if (!lista.length) return null;
   return (
-    <span className={`w-full min-w-0 flex-wrap gap-1 ${display}`}>
+    <span className={`flex-wrap gap-1 ${clases}`}>
       {lista.map((a, i) => <ChipAvisoInterno key={`${a.texto}-${i}`} texto={a.texto} tono={a.tono} pequeno={pequeno} />)}
+    </span>
+  );
+}
+
+/**
+ * La línea del sublabel de la barra: el número (u otro texto), que se recorta si no cabe, y la palabra de una caja
+ * caída (etiquetaEstado, la cadena compacta; r2 M5) en su propio span, sin truncate.
+ */
+function LineaSublabel({ paso, vertical }: { paso: PasoVista; vertical: boolean }) {
+  return (
+    <span className={`flex min-w-0 max-w-full items-baseline gap-1 text-[10px] text-slate-500 ${vertical ? '' : 'justify-center'}`}>
+      {paso.sublabel ? <span title={paso.sublabel} className="min-w-0 truncate">{paso.sublabel}</span> : null}
+      {paso.etiquetaEstado ? (
+        <span className="shrink-0 whitespace-nowrap font-semibold text-rose-700">
+          {paso.sublabel ? <span aria-hidden="true" className="mr-1 font-normal text-slate-400">·</span> : null}
+          {paso.etiquetaEstado}
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -356,7 +390,7 @@ function PasosBanner({
                   </span>
                 ) : null}
                 {detalle && !compacto ? <span className={`${SOLO_CAJA} text-[11px] text-slate-600`}>{detalle}</span> : null}
-                {!compacto ? <AvisosDelPaso avisos={paso.avisos} display="hidden @2xl/flujo:flex" /> : null}
+                {!compacto ? <AvisosDelPaso avisos={paso.avisos} estadoConteos={estadoConteos} clases="hidden w-0 min-w-full @2xl/flujo:flex" /> : null}
                 {antiguedad && !compacto ? <span className={`${SOLO_CAJA} text-[11px] text-slate-600`}>{antiguedad}</span> : null}
                 {paso.esEste ? (
                   <span className="inline-flex shrink-0 items-center rounded-full bg-indigo-600 px-1.5 py-px text-[10px] font-bold text-white">
@@ -423,17 +457,18 @@ function PasosBarra({
                 {lector ? <span className="sr-only">{`${lector}: `}</span> : null}
                 <span title={tituloPaso(paso)} className={`max-w-full truncate text-[11px] font-bold ${LABEL_BARRA[estado]}`}>{paso.label}</span>
                 {/* Por debajo de @md el sublabel y los avisos no se ven (quedan en el title del label), pero el lector de
-                    pantalla los lee. En compacto el sublabel (solo el número) siempre se ve (r1, M7). */}
-                {paso.sublabel ? (compacto ? (
-                  <span title={paso.sublabel} className="block max-w-full truncate text-[10px] text-slate-500">{paso.sublabel}</span>
+                    pantalla los lee. En compacto el sublabel (solo el número) siempre se ve (r1, M7), y la palabra de la
+                    caja caída va aparte, sin recortarse (r2, M5). */}
+                {paso.sublabel || paso.etiquetaEstado ? (compacto ? (
+                  <LineaSublabel paso={paso} vertical={vertical} />
                 ) : (
                   <span className="sr-only @md/flujo:not-sr-only @md/flujo:block @md/flujo:max-w-full">
-                    <span title={paso.sublabel} className="block max-w-full truncate text-[10px] text-slate-500">{paso.sublabel}</span>
+                    <LineaSublabel paso={paso} vertical={vertical} />
                   </span>
                 )) : null}
                 {paso.avisos?.length ? (
                   <span className="sr-only @md/flujo:not-sr-only @md/flujo:block @md/flujo:max-w-full">
-                    <AvisosDelPaso avisos={paso.avisos} pequeno display={`mt-0.5 flex ${vertical ? '' : 'justify-center'}`} />
+                    <AvisosDelPaso avisos={paso.avisos} pequeno clases={`mt-0.5 flex w-full min-w-0 ${vertical ? '' : 'justify-center'}`} />
                   </span>
                 ) : null}
                 {paso.esEste ? <span className="text-[10px] font-bold text-indigo-600">Estás aquí</span> : null}

@@ -598,6 +598,25 @@ console.log('--- TEST 19 (T5A r1; M12, M13): el usuario del token y las vueltas 
   assert.deepEqual(F.estadoResumen(viejo, { clave: 'k', ruta: RUTA, repeticion: 1 }), { datos: DA, cargando: true, error: null });
 }
 
+console.log('--- TEST 20 (T5A r2; M1 y M5): avisosVisibles y la palabra de la caja caída aparte (etiquetaEstado) ---');
+{
+  const AV = [{ texto: '2 con cambios pedidos', tono: 'ambar' }, { texto: '  ', tono: 'gris' }, null,
+    { texto: '1 sin respuesta al recordatorio', tono: 'rojo' }, { tono: 'rojo' }];
+  // Los avisos que se pintan: los que traen texto (uno en blanco no).
+  assert.deepEqual(F.avisosVisibles(AV), [AV[0], AV[3]]);
+  assert.deepEqual(F.avisosVisibles(AV, { estadoConteos: 'cargando' }), [AV[0], AV[3]], 'al recargar siguen');
+  // r2 (M1): con error tampoco se pintan, igual que el chip de atraso: son números del mismo resumen.
+  assert.deepEqual(F.avisosVisibles(AV, { estadoConteos: 'error' }), []);
+  assert.deepEqual(F.avisosVisibles(AV, { estadoConteos: F.estadoDeFranja({ cargando: true, huboError: true }).estadoConteos }), [],
+    'tampoco mientras se reintenta');
+  for (const nada of [null, undefined, 'x', {}]) assert.deepEqual(F.avisosVisibles(/** @type {any} */ (nada)), []);
+  // r2 (M5): el title de la barra suma la palabra de la caja caída, que la cadena compacta pinta aparte.
+  assert.equal(F.tituloPaso({ clave: 'PVEN', label: 'Pedido de venta', estado: 'cancelado', sublabel: 'PVEN-1', etiquetaEstado: 'Cancelado' }),
+    'Pedido de venta: PVEN-1 · Cancelado');
+  assert.equal(F.tituloPaso({ clave: 'PVEN', label: 'Pedido de venta', estado: 'cancelado', etiquetaEstado: 'Cancelado' }), 'Pedido de venta: Cancelado');
+  assert.equal(F.tituloPaso({ clave: 'PVEN', label: 'Pedido de venta', estado: 'cancelado', sublabel: 'PVEN-1', etiquetaEstado: '  ' }), 'Pedido de venta: PVEN-1');
+}
+
 console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuente de components/flujo (sin DOM en node) ---');
 {
   const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
@@ -663,7 +682,12 @@ console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuent
   assert.match(pasos, /gris: 'border-slate-200 bg-slate-100 text-slate-600',/);
   assert.match(pasos, /const CHIP = 'inline-block min-w-0 max-w-full truncate whitespace-nowrap rounded-full border align-middle font-semibold';/);
   assert.equal((pasos.match(/title=\{texto\}/g) ?? []).length, 2, 'el chip y el chip-botón llevan el texto completo en su title');
-  assert.match(pasos, /<span className=\{`w-full min-w-0 flex-wrap gap-1 \$\{display\}`\}>/, 'los chips no salen de la caja');
+  // r2 (Important, regresión de r1): en la caja, los avisos no aportan al ancho intrínseco (w-0 min-w-full): así el
+  // truncate recorta de verdad y las 5 cajas caben a 1024 px. Y r2 (M1): con error no se pintan (avisosVisibles).
+  assert.match(pasos, /<span className=\{`flex-wrap gap-1 \$\{clases\}`\}>/);
+  assert.match(pasos, /const lista = avisosVisibles\(avisos, \{ estadoConteos \}\);/);
+  assert.match(pasos, /<AvisosDelPaso avisos=\{paso\.avisos\} estadoConteos=\{estadoConteos\} clases="hidden w-0 min-w-full @2xl\/flujo:flex" \/>/);
+  assert.match(pasos, /<AvisosDelPaso avisos=\{paso\.avisos\} pequeno clases=\{`mt-0\.5 flex w-full min-w-0 /, 'en la barra, del ancho de su paso');
   // r1 (C1, M10): el foco es un outline, distinto del anillo de la selección.
   // El color va también en reposo: transition-colors anima outline-color, y sin él el outline aparecería negro y se
   // iría volviendo índigo.
@@ -690,7 +714,8 @@ console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuent
   assert.match(pasos, /<div aria-current=\{actual\} className=\{className\}>/);
   assert.match(pasos, /onClick=\{\(\) => onSeleccionar\(paso\.clave\)\}/);
   // r1 (M11): al recibir el foco, el paso se desplaza para verse entero.
-  assert.match(pasos, /const alEnfocar = \(e: FocusEvent<HTMLElement>\) => e\.currentTarget\.scrollIntoView\(\{ inline: 'nearest', block: 'nearest' \}\);/);
+  // r2 (M7): solo si el foco viene del teclado (:focus-visible); con un clic o un toque, desplazar se comía el clic.
+  assert.match(pasos, /const alEnfocar = \(e: FocusEvent<HTMLElement>\) => \{\s*const el = e\.currentTarget;\s*if \(el\.matches\(':focus-visible'\)\) el\.scrollIntoView\(\{ inline: 'nearest', block: 'nearest' \}\);\s*\};/);
   assert.equal((pasos.match(/onFocus=\{alEnfocar\}/g) ?? []).length, 2, 'el enlace y el botón');
   // aria-current: 'page' en la franja, 'step' en la barra y en los puntos.
   assert.match(pasos, /actual=\{i === marcado \? 'page' : undefined\}/);
@@ -718,7 +743,7 @@ console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuent
   // La barra: 28 px (22 px compacta), ✓ y X de lucide, label 11 px y sublabel 10 px recortado.
   for (const clase of ["'h-[22px] w-[22px] text-[10px]'", "'h-7 w-7 text-xs'", 'border-emerald-500 bg-emerald-500 text-white',
     'border-indigo-600 bg-indigo-600 text-white ring-4 ring-indigo-100', 'border-rose-500 bg-rose-500 text-white',
-    'text-[11px] font-bold', 'truncate text-[10px] text-slate-500', 'sr-only @md/flujo:not-sr-only', 'h-0.5 min-w-3 flex-1']) {
+    'text-[11px] font-bold', 'gap-1 text-[10px] text-slate-500', 'sr-only @md/flujo:not-sr-only', 'h-0.5 min-w-3 flex-1']) {
     assert.ok(pasos.includes(clase), `barra: ${clase}`);
   }
   // r1 (M8): en la tabla CIRCULO, el número del pendiente en slate-500 (4,76:1 sobre blanco) y el del neutro, sobre
@@ -733,10 +758,15 @@ console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuent
   assert.match(pasos, /\$\{i < ultimo \? 'flex-auto' : 'flex-initial'\}/);
   // r1 (M9): el title no repite el nombre del paso: va en el label (el tooltip del paso) y en el sublabel recortado.
   assert.match(pasos, /<span title=\{tituloPaso\(paso\)\} className=\{`max-w-full truncate text-\[11px\] font-bold/);
-  assert.equal((pasos.match(/title=\{paso\.sublabel\}/g) ?? []).length, 2, 'el sublabel recortado lleva su tooltip');
+  assert.equal((pasos.match(/title=\{paso\.sublabel\}/g) ?? []).length, 1, 'el sublabel recortado lleva su tooltip');
   assert.ok(!/title=\{title\}|title\?: string/.test(pasos), 'el elemento del paso ya no lleva title');
-  // r1 (M7): en compacto el sublabel (solo el número) siempre se ve.
-  assert.match(pasos, /\{paso\.sublabel \? \(compacto \? \(\s*<span title=\{paso\.sublabel\} className="block max-w-full truncate text-\[10px\] text-slate-500">/);
+  // r1 (M7): en compacto el sublabel (solo el número) siempre se ve. r2 (M5): la palabra de la caja caída va en su
+  // propio span, sin truncate; lo que se recorta es el número.
+  assert.match(pasos, /\{paso\.sublabel \|\| paso\.etiquetaEstado \? \(compacto \? \(\s*<LineaSublabel paso=\{paso\} vertical=\{vertical\} \/>/);
+  assert.match(pasos, /\{paso\.sublabel \? <span title=\{paso\.sublabel\} className="min-w-0 truncate">\{paso\.sublabel\}<\/span> : null\}/);
+  assert.match(pasos, /\{paso\.etiquetaEstado \? \(\s*<span className="shrink-0 whitespace-nowrap font-semibold text-rose-700">[\s\S]*?\{paso\.etiquetaEstado\}\s*<\/span>\s*\) : null\}/,
+    'la palabra se pinta y no se recorta');
+  assert.equal((pasos.match(/<LineaSublabel paso=\{paso\} vertical=\{vertical\} \/>/g) ?? []).length, 2, 'en compacto y en la barra normal');
   // r1 (M3): emerald solo de hecho a hecho o actual, en la barra (horizontal y vertical) y en los puntos.
   assert.equal((pasos.match(/conectorHecho\(pasos, i\) \? 'bg-emerald-500' : 'bg-slate-200'/g) ?? []).length, 3);
   assert.ok(!/estado === 'hecho' \? 'bg-emerald-500'/.test(pasos), 'sin el conector de r0');
@@ -774,12 +804,25 @@ console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuent
   // r1 (M5): la línea de error sigue mientras se reintenta; el botón no se deshabilita (conserva el foco).
   assert.match(banner, /\{f\.conError \? \(\s*<div role="alert"/);
   assert.match(banner, /aria-disabled=\{f\.reintentando \|\| undefined\}/);
-  assert.match(banner, /if \(f\.reintentando\) return;\s*focoPendiente\.current = true;\s*onReintentar\(\);/);
   assert.match(banner, /\{f\.reintentando \? 'Reintentando…' : 'Reintentar'\}/);
   assert.ok(!/(?<![-\w])disabled=\{/.test(banner), 'aria-disabled, no disabled');
-  assert.match(banner, /useEffect\(\(\) => \{\s*if \(f\.conError \|\| !focoPendiente\.current\) return;\s*focoPendiente\.current = false;\s*const activo = document\.activeElement;\s*if \(!activo \|\| activo === document\.body\) tituloRef\.current\?\.focus\(\);\s*\}, \[f\.conError\]\);/,
-    'al salir bien, el foco no cae al body: va al encabezado');
-  assert.equal((banner.match(/useEffect\(/g) ?? []).length, 1, 'un solo efecto (el del foco)');
+  // r2 (M2 y M6): focoPendiente solo si el botón tenía el foco en el clic; se limpia al terminar el reintento (bien o
+  // mal), con un pointerdown o si el foco va a otra parte; al salir bien, el h2 solo si el foco quedó en el body, y
+  // con preventScroll (el main no salta).
+  assert.match(banner, /if \(f\.reintentando\) return;\s*focoPendiente\.current = document\.activeElement === e\.currentTarget;\s*onReintentar\(\);/);
+  assert.match(banner, /ref=\{reintentarRef\}/);
+  assert.ok(!/onBlur/.test(banner), 'sin la guarda de relatedTarget de r1');
+  assert.match(banner, /useEffect\(\(\) => \{\s*const termino = reintentandoAntes\.current && !f\.reintentando;\s*reintentandoAntes\.current = f\.reintentando;\s*if \(!termino\) return;\s*const devolver = focoPendiente\.current && !f\.conError;\s*focoPendiente\.current = false;\s*const activo = document\.activeElement;\s*if \(devolver && \(!activo \|\| activo === document\.body\)\) tituloRef\.current\?\.focus\(\{ preventScroll: true \}\);\s*\}, \[f\.reintentando, f\.conError\]\);/,
+    'al terminar el reintento se limpia; al salir bien, el h2 sin desplazar');
+  assert.match(banner, /useEffect\(\(\) => \{\s*if \(!f\.conError\) return undefined;\s*const soltar = \(\) => \{\s*focoPendiente\.current = false;\s*\};\s*const alEnfocarOtro = \(e: FocusEvent\) => \{\s*if \(e\.target !== reintentarRef\.current\) soltar\(\);\s*\};\s*document\.addEventListener\('pointerdown', soltar, true\);\s*document\.addEventListener\('focusin', alEnfocarOtro, true\);\s*return \(\) => \{\s*document\.removeEventListener\('pointerdown', soltar, true\);\s*document\.removeEventListener\('focusin', alEnfocarOtro, true\);\s*\};\s*\}, \[f\.conError\]\);/,
+    'un pointerdown o el foco en otro control sueltan el foco pendiente');
+  assert.equal((banner.match(/useEffect\(/g) ?? []).length, 2, 'dos efectos: el fin del reintento y los oyentes');
+  assert.ok(!/\.focus\(\)/.test(banner), 'ningún focus() sin preventScroll');
+  // r2 (M3): el ejemplo del JSDoc separa Ventas (no_resueltos o undefined) y Compras (sin noResueltos); ninguno da null.
+  const jsdoc = fuentes['BannerFlujo.tsx'];
+  assert.ok(jsdoc.includes('noResueltos: flujo.datos?.semaforo?.no_resueltos,'), 'Ventas');
+  assert.ok(/Compras[^\n]*\n[\s\S]*?sin noResueltos/.test(jsdoc), 'Compras, sin noResueltos');
+  assert.ok(!jsdoc.includes('flujo.datos ? flujo.datos.semaforo?.no_resueltos : null'), 'sin el ejemplo de r1 que daba null mientras carga');
   for (const texto of ['¿Cómo funciona?', 'No se pudieron cargar los números del flujo.', 'Reintentar', 'role="group"']) {
     assert.ok(banner.includes(texto), `BannerFlujo: ${texto}`);
   }

@@ -290,8 +290,9 @@ const CAJAS = congelar([
  *  - rutaActual: la pantalla actual; los enlaces llevan ?return_to= con ella (el que leen los detalles con
  *    returnToSeguro). Sin ella, el enlace va sin return_to.
  *  - compacta (T5A r1, M2; el panel rápido): el sublabel es solo el número del documento, sin su estado en palabras ni
- *    ' (+1 rechazada)', SALVO en las cajas caídas ('cancelado': Rechazada, Cancelada o Cancelado), que conservan su
- *    etiqueta. Lo que falta o no aplica conserva su texto. Estados, esEste y enlaces no cambian.
+ *    ' (+1 rechazada)'. Las cajas caídas ('cancelado': Rechazada, Cancelada o Cancelado) conservan su palabra, en
+ *    etiquetaEstado (r2, M5: aparte, para que PasosFlujo recorte el número y no la palabra). Lo que falta o no aplica
+ *    conserva su texto. Estados, esEste y enlaces no cambian.
  * Cada caja: label; sublabel '{numero} · {etiqueta}' (solo el número si el estado no viene); href al detalle
  * (enlaceDocumento de analisis.js), salvo la del propio documento, que va sin href y con esEste. Estado:
  *  - la caja más avanzada que existe y no está cancelada, entre Solicitud, Cotización y Pedido: 'actual'; las
@@ -331,13 +332,12 @@ export function cadenaVentas(doc, tipo, { etiquetas = {}, rutaActual = null, com
       return vista;
     }
     const { id, numero, estado } = caja.doc;
-    // compacta (r1, M2): la etiqueta solo en una caja caída.
-    const conEtiqueta = !compacta || (c.clave !== 'PEC' && caido(c));
-    const partes = [conValor(numero) ? String(numero) : null,
-      conEtiqueta && c.etiqueta && conValor(estado)
-        ? etiquetaDe(etiquetas?.[c.etiqueta] ?? ETIQUETAS_POR_DEFECTO[c.etiqueta], estado)
-        : null]
-      .filter(Boolean);
+    const etiqueta = c.etiqueta && conValor(estado)
+      ? etiquetaDe(etiquetas?.[c.etiqueta] ?? ETIQUETAS_POR_DEFECTO[c.etiqueta], estado)
+      : null;
+    // compacta (r1 M2 y r2 M5): solo el número; la palabra de una caja caída va aparte, en etiquetaEstado.
+    if (compacta && etiqueta && c.clave !== 'PEC' && caido(c)) vista.etiquetaEstado = etiqueta;
+    const partes = [conValor(numero) ? String(numero) : null, compacta ? null : etiqueta].filter(Boolean);
     let sublabel = partes.join(' · ');
     if (caja.caidos > 0 && !compacta) {
       const [uno, varios] = REEMPLAZOS[c.clave];

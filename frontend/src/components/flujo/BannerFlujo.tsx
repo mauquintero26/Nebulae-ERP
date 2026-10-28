@@ -30,20 +30,25 @@ import type { AccionAjustar, AvisoFranja, PartesFranja, PasoVista, SemaforoFranj
  *  - Error (ruling de r1 sobre M1): «—» en TODA la franja (las cajas, los botones del semáforo y el semáforo), sin chips
  *    de atraso, y una línea rose 'No se pudieron cargar los números del flujo.' con 'Reintentar'. r1 (M5): mientras se
  *    reintenta, la línea sigue montada y el botón dice 'Reintentando…' (aria-disabled: conserva el foco); cuando sale
- *    bien, vuelven los números y, si el foco quedó en el body, pasa al h2 de la franja.
+ *    bien, vuelven los números. r2 (M2 y M6): el foco pasa al h2 (con preventScroll: el main no salta) solo si el
+ *    botón tenía el foco al tocarlo, el usuario no lo llevó a otra parte (un pointerdown o el foco en otro control lo
+ *    sueltan) y quedó en el body; al terminar el reintento, bien o mal, se olvida.
  *  - El modo compacto se recuerda EN TU USUARIO (R4, RP33): usePreferencia(`flujo:${idPreferencia}`) de components/ui
  *    (D38), que lo lee después de montar (el primer render es siempre la franja completa: sin diferencias de
  *    hidratación) y no escribe antes de tenerlo listo (D35). Sin almacenamiento, la franja abre completa.
  *  - partes: solo 'todo' (R1: la rama 'semaforo' | 'diagrama' del diseño no se implementa).
- * Uso para T7 (Ventas) y T14 (Compras), con flujo = useResumenFlujo(ruta, recarga) (r1, M15b: cuando un conteo no viene
- * se pasa `undefined`, no `null`; null es «todavía carga» y pinta la barra gris):
- *    semaforo={{
- *      atrasados: flujo.datos?.semaforo?.atrasados ?? null,
- *      // Ventas manda no_resueltos: null mientras carga. Compras no lo manda: undefined (no se pinta el botón).
- *      noResueltos: flujo.datos ? flujo.datos.semaforo?.no_resueltos : null,
- *      filtro, onFiltrar,
- *    }}
- *    cargando={flujo.cargando} error={flujo.error} onReintentar={flujo.recargar}
+ * Uso con flujo = useResumenFlujo(ruta, recarga) (r1, M15b: cuando un conteo no viene se pasa `undefined`, no `null`;
+ * null es «todavía carga» y pinta la barra gris). r2 (M3): un ejemplo por pantalla; ninguno da null mientras carga.
+ *  - T7, Ventas (/ventas/flujo manda no_resueltos; mientras carga es undefined y el botón aparece con los datos):
+ *      semaforo={{
+ *        atrasados: flujo.datos?.semaforo?.atrasados ?? null,
+ *        noResueltos: flujo.datos?.semaforo?.no_resueltos,
+ *        filtro, onFiltrar,
+ *      }}
+ *  - T14, Compras (/compras/flujo no manda no_resueltos):
+ *      semaforo={{ atrasados: flujo.datos?.semaforo?.atrasados ?? null, filtro, onFiltrar }}
+ *      // sin noResueltos: siempre undefined, nunca se pinta «No resueltos».
+ *  - En las dos: cargando={flujo.cargando} error={flujo.error} onReintentar={flujo.recargar}
  * Sin variantes de modo oscuro ni diálogos nativos del navegador (avisos en la misma franja); textos en español con
  * tildes.
  */
@@ -92,8 +97,11 @@ export function BannerFlujo({
   const [verAyuda, setVerAyuda] = useState(false);
   const idTitulo = useId();
   const tituloRef = useRef<HTMLHeadingElement>(null);
-  // r1 (M5): el usuario tocó Reintentar; si al salir bien el foco quedó en el body, pasa al h2.
+  const reintentarRef = useRef<HTMLButtonElement>(null);
+  // r1 (M5) y r2 (M2 y M6): Reintentar tenía el foco cuando se tocó; si al salir bien el foco quedó en el body (React
+  // quitó el botón), pasa al h2. Se suelta con un pointerdown, con el foco en otro control o al terminar el reintento.
   const focoPendiente = useRef(false);
+  const reintentandoAntes = useRef(false);
 
   // r1 (M1 y M5): useResumenFlujo no trae el error mientras vuelve a cargar; la franja recuerda que lo hubo (ajuste del
   // estado durante el render, como useEstadoKpi) para seguir en «—» y con la línea de error hasta que la carga sale bien.
@@ -105,11 +113,34 @@ export function BannerFlujo({
   const opciones = opcionesSemaforo(semaforo);
   const IconoSemaforo = ICONO_SEMAFORO[resumen.tono];
 
+  // r2 (M2 y M6): al terminar el reintento (bien o mal) el foco pendiente se olvida; si salió bien y el foco quedó en el
+  // body, va al h2 sin desplazar la página.
   useEffect(() => {
-    if (f.conError || !focoPendiente.current) return;
+    const termino = reintentandoAntes.current && !f.reintentando;
+    reintentandoAntes.current = f.reintentando;
+    if (!termino) return;
+    const devolver = focoPendiente.current && !f.conError;
     focoPendiente.current = false;
     const activo = document.activeElement;
-    if (!activo || activo === document.body) tituloRef.current?.focus();
+    if (devolver && (!activo || activo === document.body)) tituloRef.current?.focus({ preventScroll: true });
+  }, [f.reintentando, f.conError]);
+
+  // r2 (M2): mientras se ve la línea de error, un pointerdown en cualquier parte o el foco en otro control sueltan el
+  // foco pendiente (un clic en texto no enfocable deja el foco en el body sin relatedTarget).
+  useEffect(() => {
+    if (!f.conError) return undefined;
+    const soltar = () => {
+      focoPendiente.current = false;
+    };
+    const alEnfocarOtro = (e: FocusEvent) => {
+      if (e.target !== reintentarRef.current) soltar();
+    };
+    document.addEventListener('pointerdown', soltar, true);
+    document.addEventListener('focusin', alEnfocarOtro, true);
+    return () => {
+      document.removeEventListener('pointerdown', soltar, true);
+      document.removeEventListener('focusin', alEnfocarOtro, true);
+    };
   }, [f.conError]);
 
   return (
@@ -170,16 +201,13 @@ export function BannerFlujo({
           <span>No se pudieron cargar los números del flujo.</span>
           {onReintentar ? (
             <button
+              ref={reintentarRef}
               type="button"
               aria-disabled={f.reintentando || undefined}
-              onClick={() => {
+              onClick={(e) => {
                 if (f.reintentando) return;
-                focoPendiente.current = true;
+                focoPendiente.current = document.activeElement === e.currentTarget;
                 onReintentar();
-              }}
-              onBlur={(e) => {
-                // Si el usuario se fue a otro control, ya no hay foco que devolver.
-                if (e.relatedTarget) focoPendiente.current = false;
               }}
               className={`inline-flex items-center gap-1 rounded-md border border-rose-200 bg-white px-2 py-0.5 text-rose-700 hover:bg-rose-50 aria-disabled:cursor-wait aria-disabled:opacity-80 ${FOCO}`}
             >

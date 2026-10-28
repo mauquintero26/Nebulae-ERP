@@ -44,11 +44,12 @@ export { congelar };
  *   total?: number | null, atrasados?: number | null, masAntiguoDias?: number | null,
  *   detalle?: ReadonlyArray<DetallePaso> | null, avisos?: ReadonlyArray<AvisoPaso> | null,
  *   estado: EstadoPaso, esEste?: boolean, seleccionado?: boolean, href?: string, ruta?: string, ayuda?: string,
- *   tono?: TonoPaso, icono?: ClaveIcono,
+ *   tono?: TonoPaso, icono?: ClaveIcono, etiquetaEstado?: string,
  * }} PasoVista
  *   Un paso tal como se pinta. `ruta` es la de la definición (PASOS_FLUJO_VENTAS, PASOS_FLUJO_COMPRAS): la pantalla decide
  *   si la caja es un enlace (`href`) o un botón que filtra (onSeleccionar); las librerías solo ponen `href` en
- *   cadenaVentas.
+ *   cadenaVentas. `etiquetaEstado` (T5A r2, M5): la palabra de una caja caída en la cadena compacta ('Cancelado',
+ *   'Rechazada'), aparte del sublabel (que ahí es solo el número) para que PasosFlujo no la recorte.
  * @typedef {{
  *   clave?: string, key?: string, label: string, sufijo?: string, sublabel?: string, ayuda?: string, tono?: TonoPaso,
  *   icono?: ClaveIcono, ruta?: string,
@@ -336,14 +337,18 @@ const textosDeAvisos = (avisos) => (Array.isArray(avisos) ? avisos : [])
   .map((a) => (esMapa(a) && typeof a.texto === 'string' ? a.texto.trim() : ''))
   .filter(Boolean);
 
+/** Un texto recortado, o '' si no es un texto. */
+const textoLimpio = (v) => (typeof v === 'string' ? v.trim() : '');
+
 /**
- * El title de un paso de la barra: el label y, si los hay, el sublabel y los avisos ('Cotización: COT-20260485 ·
- * Pendiente'). Por debajo de @md la barra oculta los sublabels: quedan aquí.
+ * El title de un paso de la barra: el label y, si los hay, el sublabel, la palabra de la caja caída (etiquetaEstado,
+ * r2) y los avisos ('Cotización: COT-20260485 · Pendiente'). Por debajo de @md la barra oculta los sublabels: quedan
+ * aquí.
  * @param {PasoVista} paso
  * @returns {string}
  */
 export function tituloPaso(paso) {
-  const resto = [typeof paso?.sublabel === 'string' ? paso.sublabel.trim() : '', ...textosDeAvisos(paso?.avisos)].filter(Boolean);
+  const resto = [textoLimpio(paso?.sublabel), textoLimpio(paso?.etiquetaEstado), ...textosDeAvisos(paso?.avisos)].filter(Boolean);
   const label = String(paso?.label ?? '');
   return resto.length ? `${label}: ${resto.join(' · ')}` : label;
 }
@@ -455,6 +460,18 @@ export function chipAtraso(atrasados, { estadoConteos } = {}) {
   if (estadoConteos === 'error') return null;
   const largo = textoAtraso(atrasados);
   return largo ? { largo, corto: formatoEntero(cantidadPositiva(atrasados)) } : null;
+}
+
+/**
+ * Los avisos de un paso que se pintan: los que traen un texto (uno en blanco no). r2 (M1): con estadoConteos 'error',
+ * ninguno, igual que chipAtraso: los de RP12 son números del mismo resumen. Lo que no es un arreglo da [].
+ * @param {ReadonlyArray<AvisoPaso | null | undefined> | null | undefined} avisos
+ * @param {{estadoConteos?: EstadoKpi}} [opciones]
+ * @returns {AvisoPaso[]}
+ */
+export function avisosVisibles(avisos, { estadoConteos } = {}) {
+  if (estadoConteos === 'error' || !Array.isArray(avisos)) return [];
+  return avisos.filter((a) => esMapa(a) && textoLimpio(a.texto) !== '');
 }
 
 /**
