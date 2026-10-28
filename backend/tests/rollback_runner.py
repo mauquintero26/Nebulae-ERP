@@ -27,8 +27,11 @@ Fixtures que resuelve (ademas de las que defina el propio modulo de tests, que t
 Las fixtures generadoras (yield) entregan el valor del yield y su teardown corre despues de la prueba,
 en orden inverso, ANTES de cerrar la sesion y revertir la transaccion.
 
-Fuera de una prueba (antes de la primera, entre pruebas y despues de la ultima) SessionLocal es un centinela que lanza
-RuntimeError('SessionLocal fuera de una prueba del runner'); el real no se repone (B4 T1B r1). Si al terminar una prueba
+SessionLocal se desvia en app.db.database, erp_inventario, erp_ventas_fase4 y, si lo capturo al importarse con
+`from app.db.database import SessionLocal`, en el propio modulo de pruebas (erp_compras lo importa dentro de cada funcion
+y recibe el de app.db.database): dentro de cada prueba es la sesion de su transaccion y fuera de una prueba (antes de la
+primera, entre pruebas y despues de la ultima) es un centinela que lanza RuntimeError('SessionLocal fuera de una prueba
+del runner'); el real no se repone (B4 T1B r1 y r2). Si al terminar una prueba
 quedan hilos vivos que nacieron en ella, la prueba es FAIL («[hilos vivos al terminar la prueba]»), la conexion se
 descarta y la corrida aborta. Si no se puede revertir la transaccion, la prueba es FAIL («[revertir la transaccion de la
 prueba]») y la conexion se descarta: Postgres revierte lo que estuviera abierto.
@@ -494,10 +497,17 @@ if os.environ.get("PARCHE"):  # prueba "roja": codigo que anula la regla bajo pr
     exec(os.environ["PARCHE"])
 
 mod = importlib.import_module(sys.argv[1])
+# B4 T1B r2: un modulo de pruebas que hace `from app.db.database import SessionLocal` al importarse
+# (test_fase4_hardening.py:46, test_fase4_final_hardening.py:76) se quedo con el real. Si ese nombre es el mismo objeto
+# que dbmod.SessionLocal (todavia el real: el centinela se instala abajo), el modulo se desvia igual que los demas:
+# dentro de cada prueba vale Sesion y fuera, el centinela. Sus funciones y sus hilos lo leen como global al llamarlo.
+if getattr(mod, "SessionLocal", None) is dbmod.SessionLocal:
+    MODULOS_CON_SESSIONLOCAL += (mod,)
 _bloquear_servicios_externos()  # B3 T8 r2: por si el modulo de pruebas recargo el .env al importarse
 client = TestClient(app, raise_server_exceptions=False)
-# B4 T1B r1: desde aqui, fuera de una prueba, SessionLocal es el centinela (despues de importar el modulo de pruebas:
-# los que hacen `from app.db.database import SessionLocal` al importarse se quedan con el que habia, como antes).
+# B4 T1B r1 y r2: desde aqui, fuera de una prueba, el atributo SessionLocal de cada modulo de MODULOS_CON_SESSIONLOCAL
+# que lo tenga (app.db.database, erp_inventario, erp_ventas_fase4 y, si lo capturo al importarse, el modulo de pruebas)
+# es el centinela. erp_compras no lo tiene: lo importa de app.db.database dentro de cada funcion y recibe ese.
 _desviar_sessionlocal(CENTINELA_SESSIONLOCAL)
 print(f"[rollback_runner] codigo: {BACKEND}  base: {_nombre_base}", flush=True)
 antes = maximos()
