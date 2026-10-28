@@ -371,12 +371,19 @@ export function crearPreferencias({
     return escribir(clave, { ...(esObjetoPlano(actual) ? actual : {}), ...parte });
   }
 
-  /** T4A r1: con una precarga buena, las partes en espera se escriben sobre lo guardado (lo que trajo el servidor). */
+  /**
+   * T4A r1: con una precarga buena, las partes en espera se escriben sobre lo guardado (lo que trajo el servidor).
+   * T4A r2: si la mezcla no cabe (pasa de 8 KB o de 32 niveles; escribir ya dejó su console.warn), la parte sigue en
+   * memoria, con su aviso, y no se descarta en silencio.
+   */
   function escribirPartesEnEspera() {
     for (const [clave, espera] of [...partesEnEspera]) {
       partesEnEspera.delete(clave);
       const guardado = leerGuardado(clave, undefined);
-      escribir(clave, { ...(esObjetoPlano(guardado) ? guardado : {}), ...espera });
+      if (!escribir(clave, { ...(esObjetoPlano(guardado) ? guardado : {}), ...espera })) {
+        partesEnEspera.set(clave, espera);
+        avisar(`La parte de ${clave} no cabe con lo que trajo el servidor: queda solo en memoria.`);
+      }
     }
   }
 
@@ -625,10 +632,14 @@ export function vincularPreferencia({ obtener, clave, porDefecto, alCambiar, val
 
   function guardar(entrada) {
     if (suelto) return;
+    // T4A r2: la instancia se toma ANTES de obtener(). Si el usuario cambió sin que el hook se enterara, obtener() crea
+    // la instancia nueva y avisa a los oyentes; el de usePreferencia (revisarUsuario) puede enlazarla antes de que
+    // guardar compare. Comparando con la previa, lo que esta pantalla armó con los datos del otro usuario se descarta
+    // igual: no va a la cuenta del nuevo.
+    const previa = instancia;
     const actual = obtener();
-    if (actual !== instancia) {
-      // El usuario cambió sin que el hook se enterara: lo de esta pantalla no va a la cuenta del otro.
-      enlazar(actual);
+    if (actual !== previa) {
+      if (instancia !== actual) enlazar(actual);
       return;
     }
     const nuevo = typeof entrada === 'function' ? entrada(estado.valor) : entrada;

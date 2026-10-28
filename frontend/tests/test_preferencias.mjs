@@ -1188,4 +1188,83 @@ console.log('--- TEST 26 (T4A r1, punto 2): con la precarga fallida, una parte n
   assert.equal(w.leer('tabla:x'), undefined, 'lo que esperaba ya no se ve');
 }
 
-console.log('✓ lib/preferencias.js: ámbitos, ráfagas, usuarios, memoria, 8 KB, precarga, reintentos, escribirParte, niveles, cerrar, instancia por usuario, vínculo de los hooks, usuario del token y precarga fallida.');
+console.log('--- TEST 27 (T4A r2, punto 1): guardar tras un cambio de sesión que el hook no vio, con el oyente de usePreferencia ---');
+{
+  // La reentrada de la revisión (sec-4a-r1/reentrada_guardar.mjs): obtener() dentro de guardar crea la instancia de B y
+  // avisa al oyente (usePreferencia.ts registra gestor.alCambiar(() => v.revisarUsuario())), que enlaza la nueva antes
+  // de que guardar compare. Lo armado con los datos de A no debe quedar en B.
+  const ls = new Map([['token', jwt(7)], ['user_id', '7']]);
+  const almacen = { getItem: (k) => (ls.has(k) ? ls.get(k) : null), setItem: (k, v) => { ls.set(k, String(v)); } };
+  const cuentas = { 7: { 'tabla:x': { anchos: { a: 'AAA' } } }, 8: { 'tabla:x': { anchos: { b: 'BBB' } } } };
+  const puts = [];
+  const pedir = async (ruta, opciones = {}) => {
+    const sub = subDe(ls.get('token') ?? null);
+    if ((opciones.method ?? 'GET') === 'GET') return { status: 'success', data: structuredClone(cuentas[sub]) };
+    puts.push({ sub, ruta, valor: JSON.parse(opciones.body).valor });
+    cuentas[sub][decodeURIComponent(ruta.split('/').pop())] = JSON.parse(opciones.body).valor;
+    return { status: 'success', data: {} };
+  };
+  const reloj = relojFalso();
+  const gestor = crearPreferenciasDeSesion({
+    leerToken: () => ls.get('token') ?? null, leerUserId: () => ls.get('user_id') ?? null, leerAlmacen: () => almacen, pedir,
+    temporizador: reloj,
+  });
+  const v = vincularPreferencia({ obtener: gestor.obtener, clave: 'tabla:x', porDefecto: {}, parte: true, alCambiar: () => {} });
+  const quitar = gestor.alCambiar(() => v.revisarUsuario()); // como usePreferencia.ts
+  for (let i = 0; i < 4; i += 1) await tic();
+  const mostrado = v.estado().valor;
+  assert.deepEqual(mostrado.anchos, { a: 'AAA' }, 'la pantalla muestra lo de A');
+  // La sesión pasa de 7 a 8 sin eventos (esta pestaña no llamó a obtener() en medio).
+  ls.set('token', jwt(8));
+  ls.set('user_id', '8');
+  // La pantalla arma la parte con lo que muestra (no con la forma funcional).
+  v.guardar({ anchos: { ...mostrado.anchos, nueva: 120 } });
+  assert.equal(gestor.obtener().usuarioId, 8);
+  assert.equal(v.estado().listo, false, 'el vínculo pasó a la instancia de B y espera su precarga');
+  for (let i = 0; i < 4; i += 1) await tic();
+  reloj.avanzar(800);
+  for (let i = 0; i < 4; i += 1) await tic();
+  quitar();
+  assert.deepEqual(puts, [], 'no sale ningún PUT');
+  assert.ok(!String(ls.get('pref:8:tabla:x') ?? '').includes('AAA'), `nada de A en pref:8: ${ls.get('pref:8:tabla:x')}`);
+  assert.deepEqual(cuentas[8], { 'tabla:x': { anchos: { b: 'BBB' } } }, 'la cuenta de B no se tocó');
+  assert.deepEqual(v.estado(), { valor: { anchos: { b: 'BBB' } }, listo: true }, 'la pantalla pasa a mostrar lo de B');
+  // Ya enlazado a B, el siguiente guardar sí escribe (en la cuenta de B).
+  v.guardar({ tamano: 50 });
+  reloj.avanzar(800);
+  for (let i = 0; i < 4; i += 1) await tic();
+  assert.deepEqual(puts.map((x) => [x.sub, x.valor]), [[8, { anchos: { b: 'BBB' }, tamano: 50 }]]);
+}
+
+console.log('--- TEST 28 (T4A r2, punto 2): una parte en espera que no cabe con lo del servidor queda en memoria ---');
+{
+  let fallarGet = true;
+  const puts = [];
+  const servidor = {
+    async leer() {
+      if (fallarGet) throw new TypeError('Failed to fetch');
+      return { status: 'success', data: { 'tabla:x': { anchos: 'y'.repeat(5000) } } };
+    },
+    async guardar(clave, valor) { puts.push({ clave, valor }); return {}; },
+  };
+  const almacen = almacenFalso();
+  const reloj = relojFalso();
+  const p = crearPreferencias({ usuarioId: 7, almacen, servidor, temporizador: reloj });
+  const avisos = await conAvisos(async () => {
+    await p.precargar('');
+    fallarGet = false;
+    // Sola cabe (unos 5 KB); con los 5 KB del servidor pasa de 8 KB.
+    assert.equal(p.escribirParte('tabla:x', { nota: 'x'.repeat(5000) }), true);
+    for (let i = 0; i < 4; i += 1) await tic();
+    reloj.avanzar(800);
+    for (let i = 0; i < 4; i += 1) await tic();
+  });
+  assert.deepEqual(puts, [], 'no sube: pasaría de 8 KB');
+  const visto = p.leer('tabla:x');
+  assert.equal(visto.nota?.length, 5000, 'la parte sigue en memoria, no se descarta en silencio');
+  assert.equal(visto.anchos.length, 5000, 'encima de lo que trajo el servidor');
+  assert.ok(avisos.some((t) => t.includes('tabla:x') && t.includes('queda solo en memoria')), avisos.join(' | '));
+  assert.ok(!String(almacen.datos.get('pref:7:tabla:x')).includes('xxxxx'), 'ni pasa al almacén');
+}
+
+console.log('✓ lib/preferencias.js: ámbitos, ráfagas, usuarios, memoria, 8 KB, precarga, reintentos, escribirParte, niveles, cerrar, instancia por usuario, vínculo de los hooks, usuario del token, precarga fallida y guardar tras un cambio de sesión.');
