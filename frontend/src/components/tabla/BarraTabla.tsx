@@ -46,7 +46,10 @@ import type { ColumnaAjustes } from './MenuAjustes';
  *  - «Pantalla completa» (Maximize2), si la pantalla pasa `pantallaCompleta` (el resultado de usePantallaCompleta, que
  *    pone la clase de la tarjeta, la capa de atrás y el Esc). El botón cambia su texto (una sola señal; r1, 6i).
  *  - 'N resultados' (textoResultados) con `total` y `estadoTotal` (r1, 6a; estadoDelTotal con lo de useListado): con
- *    error, '—'; mientras recarga, el número atenuado; sin total, la barra gris de Contador.
+ *    error, '—'; mientras recarga, el número atenuado; sin total, la barra gris de Contador. r2, punto 6: si viene
+ *    `total`, `estadoTotal` es obligatorio (un tipo unión).
+ *  - r2, punto 4: si el panel de FiltroEstados se cierra porque quedó vacío, el foco va a la búsqueda, o a la pestaña
+ *    activa si no hay búsqueda (alQuedarVacio).
  */
 
 export type { OpcionesEstados } from '@/lib/tabla';
@@ -60,7 +63,7 @@ export type PestanaTabla = {
   alerta?: boolean;
 };
 
-export type PropsBarraTabla = {
+type PropsBaseBarraTabla = {
   /** El estado de useEstadoTabla. */
   estado: EstadoTabla;
   /** El despachar de useEstadoTabla. */
@@ -85,12 +88,15 @@ export type PropsBarraTabla = {
   kanbanDisponible?: boolean;
   /** El resultado de usePantallaCompleta (o lo que tenga completa y alternar); sin él, no hay botón. */
   pantallaCompleta?: Pick<PantallaCompleta, 'completa' | 'alternar'>;
-  /** 'N resultados'; null mientras carga; sin la prop, no se pinta. */
-  total?: number | null;
-  /** El estado de ese número (estadoDelTotal de lib/tabla.js con lo de useListado). */
-  estadoTotal?: EstadoKpi;
   color?: AccentColor;
 };
+
+/**
+ * 'N resultados': sin `total` no se pinta; con `total` (null mientras carga) va también `estadoTotal`, el estado de ese
+ * número (estadoDelTotal de lib/tabla.js con lo de useListado), obligatorio (r2, punto 6).
+ */
+export type PropsBarraTabla = PropsBaseBarraTabla
+  & ({ total?: undefined; estadoTotal?: never } | { total: number | null; estadoTotal: EstadoKpi });
 
 const PASTILLA_ACTIVA = 'bg-white/25 text-white';
 const PASTILLA_ALERTA = 'bg-rose-100 text-rose-700';
@@ -242,6 +248,7 @@ export function BarraTabla({
           opciones={opciones}
           seleccion={estado.estados}
           etiquetas={etiquetasDeEstados(opcionesEstados, (pestanas ?? []).map((p) => p.id))}
+          alQuedarVacio={() => (entrada.current ?? botonesPestana.current.get(estado.vista ?? ''))?.focus()}
           onCambiar={(estados) => onEstado({ tipo: 'estados', valor: estados })}
           etiqueta={etiquetaEstados}
         />

@@ -175,7 +175,7 @@ export const TABLE = {
   titulo:           'flex min-w-0 flex-1 items-center gap-1 rounded text-left outline-none focus-visible:ring-2 focus-visible:ring-indigo-300',
   tituloOrdenable:  'cursor-pointer hover:text-slate-800',
   flechaOrden:      'shrink-0 text-indigo-600',
-  asa:              'absolute right-0 top-0 z-10 h-full w-2 cursor-col-resize touch-none before:absolute before:inset-y-0 before:left-0 before:right-0 pointer-coarse:before:-left-2 pointer-coarse:before:-right-2 after:absolute after:bottom-2 after:right-0 after:top-2 after:w-px after:bg-slate-200 hover:after:w-0.5 hover:after:bg-blue-500',
+  asa:              'absolute right-0 top-0 z-10 h-full w-2 cursor-col-resize touch-none before:absolute before:inset-y-0 before:left-0 before:right-0 pointer-coarse:before:-left-4 after:absolute after:bottom-2 after:right-0 after:top-2 after:w-px after:bg-slate-200 hover:after:w-0.5 hover:after:bg-blue-500',
   // Filas: el fondo va en la fila (las fijas lo heredan con bg-inherit).
   fila:             'group transition-colors',
   filaFondo:        'bg-white',

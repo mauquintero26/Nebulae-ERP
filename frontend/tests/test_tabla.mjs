@@ -25,7 +25,7 @@ import {
   vistaCuerpo, filasConGrupos, paginaCorregida, alternarSeleccion, estadoSeleccionPagina, alternarSeleccionPagina,
   firmaSeleccion, RETARDO_BUSQUEDA_MS, crearBusquedaConRetardo, sincronizarBusqueda, textoResultados, opcionesDeVista,
   accionPestana, alternarEstado, puedeDesplazar, estadoDeConteo,
-  anchoAlSoltar, limitesDelAsa, estadoDelTotal, recortarBordes, etiquetasDeEstados, opcionesConMarcados, posicionPanel, saleConEsc,
+  anchoAlSoltar, limitesDelAsa, UMBRAL_ASA, superaUmbralAsa, estadoDelTotal, recortarBordes, etiquetasDeEstados, opcionesConMarcados, posicionPanel, saleConEsc,
 } from '../src/lib/tabla.js';
 
 const ids = (filas) => filas.map((f) => f.id);
@@ -1667,8 +1667,8 @@ console.log('--- TEST 33 (T4D r1, punto 3): anchoAlSoltar — la columna flexibl
   // Una columna que no es flexible guarda lo que se soltó.
   assert.equal(anchoAlSoltar({ base: 140, pintado: 140, px: 210 }), 210);
   assert.equal(anchoAlSoltar({ base: 140, pintado: 140, px: 90 }), 90);
-  // La flexible al ensanchar: su base más lo que se estiró (sin lo que sobra de la tarjeta).
-  assert.equal(anchoAlSoltar({ base: 200, pintado: 1084, px: 1134, flexible: true }), 250);
+  // r2, punto 2: la flexible al ensanchar guarda lo que se ve (la tabla pasa del ancho disponible), dentro de su máximo.
+  assert.equal(anchoAlSoltar({ base: 200, pintado: 1084, px: 1134, flexible: true, anchoMax: 1200 }), 1134);
   // La flexible al angostar mientras llena el espacio: nunca más que su base.
   assert.equal(anchoAlSoltar({ base: 200, pintado: 1084, px: 900, flexible: true }), 200);
   assert.equal(anchoAlSoltar({ base: 200, pintado: 1084, px: 150, flexible: true }), 150);
@@ -1680,15 +1680,30 @@ console.log('--- TEST 33 (T4D r1, punto 3): anchoAlSoltar — la columna flexibl
   assert.equal(anchoAlSoltar({ base: 200, pintado: 1084, px: 2000, flexible: true, anchoMax: 500 }), 500);
   assert.equal(anchoAlSoltar({ base: 120, pintado: 120, px: 80, anchoMin: 100 }), 100);
   assert.equal(anchoAlSoltar({ base: 140, pintado: 140, px: Number.NaN }), null, 'sin un número no se guarda');
-  // Mientras se arrastra el asa: la flexible pintada más ancha que su máximo no salta a 640 al primer movimiento, y se
-  // puede ensanchar hasta que su base llegue al máximo; las demás, entre su mínimo y su máximo.
-  assert.deepEqual(limitesDelAsa({ base: 200, pintado: 1084, flexible: true }), { min: ANCHO_MIN, max: 1524 });
+  // r2, punto 1: el asa tiene un umbral de 3 px; por debajo no es un gesto (un doble clic con temblor) y no se guarda.
+  assert.equal(UMBRAL_ASA, 3);
+  for (const dx of [0, 0.67, 1, -2, 3, -3, Number.NaN]) assert.equal(superaUmbralAsa(dx), false, String(dx));
+  for (const dx of [3.5, -4, 50]) assert.equal(superaUmbralAsa(dx), true, String(dx));
+  assert.equal(anchoAlSoltar({ base: 140, pintado: 140, px: 141 }), null, '1 px de temblor no guarda');
+  assert.equal(anchoAlSoltar({ base: 140, pintado: 140, px: 143 }), null, '3 px tampoco');
+  assert.equal(anchoAlSoltar({ base: 140, pintado: 140, px: 137 }), null);
+  assert.equal(anchoAlSoltar({ base: 140, pintado: 140, px: 144 }), 144);
+  assert.equal(anchoAlSoltar({ base: 140, pintado: 140, px: 136 }), 136);
+  // Mientras se arrastra el asa (r2): la flexible no salta al empezar (se pinta más ancha que su máximo) y nunca se ve
+  // un ancho que no se pueda guardar: su tope es el mayor entre su máximo y lo que se pinta; las demás, su mínimo y su
+  // máximo.
+  assert.deepEqual(limitesDelAsa({ base: 200, pintado: 1084, flexible: true }), { min: ANCHO_MIN, max: 1084 });
+  assert.deepEqual(limitesDelAsa({ base: 200, pintado: 1084, flexible: true, anchoMax: 1200 }), { min: ANCHO_MIN, max: 1200 });
   assert.deepEqual(limitesDelAsa({ base: 200, pintado: 200, flexible: true }), { min: ANCHO_MIN, max: ANCHO_MAX });
   assert.deepEqual(limitesDelAsa({ base: 140, pintado: 140 }), { min: ANCHO_MIN, max: ANCHO_MAX });
   assert.deepEqual(limitesDelAsa({ base: 120, pintado: 120, anchoMin: 100, anchoMax: 50 }), { min: 100, max: 100 });
-  assert.deepEqual(limitesDelAsa({ base: 200, pintado: 900, flexible: true, anchoMax: 300 }), { min: ANCHO_MIN, max: 1000 });
-  const { max } = limitesDelAsa({ base: 200, pintado: 1084, flexible: true });
-  assert.equal(anchoAlSoltar({ base: 200, pintado: 1084, px: max, flexible: true }), ANCHO_MAX, 'el tope deja la base en su máximo');
+  assert.deepEqual(limitesDelAsa({ base: 200, pintado: 900, flexible: true, anchoMax: 300 }), { min: ANCHO_MIN, max: 900 });
+  // Estirar 50 px desde 1084 guarda 1084 + 50, o el tope si se pasa (y al soltar no salta: es lo que se veía).
+  const { max } = limitesDelAsa({ base: 200, pintado: 1084, flexible: true, anchoMax: 1200 });
+  assert.equal(anchoAlSoltar({ base: 200, pintado: 1084, px: Math.min(max, 1084 + 500), flexible: true, anchoMax: 1200 }), 1200, 'el tope');
+  const sinMargen = limitesDelAsa({ base: 200, pintado: 1084, flexible: true });
+  assert.equal(anchoAlSoltar({ base: 200, pintado: 1084, px: Math.min(sinMargen.max, 1134), flexible: true }), null,
+    'con el máximo por defecto (640) la flexible que llena 1084 no se puede ensanchar: no se guarda nada');
 }
 
 console.log('--- TEST 34 (T4D r1, 6a y 6f): estado de «N resultados» y la línea azul con la tabla corrida de lado ---');
@@ -1717,6 +1732,11 @@ console.log('--- TEST 34 (T4D r1, 6a y 6f): estado de «N resultados» y la lín
   // Sin fijas, los mismos bordes; acepta rectángulos.
   assert.deepEqual(recortarBordes([{ left: 0, right: 50 }, { left: 50, right: 90 }], [null, null]), [[0, 50], [50, 90]]);
   assert.deepEqual(recortarBordes([], []), []);
+  // r2, punto 5: con la casilla de selección (sticky, 40 px), lo que quedó debajo de ella tampoco cuenta.
+  assert.deepEqual(recortarBordes([[100, 200], [200, 300]], [null, null], { inicio: 140 }), [[140, 200], [200, 300]]);
+  assert.deepEqual(recortarBordes([[40, 120], [60, 200]], ['izquierda', null], { inicio: 40 }), [[40, 120], [120, 200]],
+    'gana el borde de la fija si está más a la derecha');
+  assert.deepEqual(recortarBordes([[0, 50], [50, 90]], [null, null], {}), [[0, 50], [50, 90]]);
 }
 
 console.log('--- TEST 35 (T4D r1, punto 5 y 6k): estados filtrados que la pestaña no tiene y paneles que no se salen ---');
@@ -1817,8 +1837,9 @@ console.log('--- TEST 37 (T4D r1): los cables de la ronda r1 en el fuente (gesto
   assert.equal((t.match(/if \(\(ev\.buttons & 1\) === 0\) \{/g) ?? []).length, 2, 'mover y estirar miran el botón');
   // 6g: mover no es táctil; el asa táctil tiene 24 px.
   assert.match(t, /e\.pointerType === 'touch'/);
-  assert.ok(clase('asa').includes('pointer-coarse:before:-left-2') && clase('asa').includes('pointer-coarse:before:-right-2')
-    && clase('asa').includes('after:w-px'), 'zona táctil de 24 px y la línea visible');
+  assert.ok(clase('asa').includes('pointer-coarse:before:-left-4') && clase('asa').includes('before:right-0')
+    && !clase('asa').includes('-right-2') && clase('asa').includes('after:w-px'),
+    'r2: la zona táctil de 24 px queda dentro de su propio th (16 px hacia la izquierda) y la línea visible');
 
   // 2. El doble clic mide el ancho propio del contenido: un inline-block que se encoge (y trunca con su máximo).
   assert.match(t, /<span data-celda=\{v\} className=\{TABLE\.contenido\}>\{contenido\}<\/span>/);
@@ -1855,7 +1876,7 @@ console.log('--- TEST 37 (T4D r1): los cables de la ronda r1 en el fuente (gesto
   assert.ok(lib.includes('úsalo también en tarjetas y cajas del flujo'), 'accionPestana, documentado para T7+');
 
   // 6a: 'N resultados' con estadoTotal (estadoDelTotal, documentado con useListado).
-  assert.match(barra, /estadoTotal\?: EstadoKpi;/);
+  assert.match(barra, /\{ total: number \| null; estadoTotal: EstadoKpi \}/, 'r2: obligatorio con total (TEST 38)');
   assert.ok(lib.includes('estadoTotal={estadoDelTotal({total: listado.total, cargando: listado.cargandoInicial,'));
   // 6b: al montar con una selección, se limpia una vez (vuelta desde el Kanban).
   assert.match(t, /const firmaVista = useRef<string \| null>\(null\);/);
@@ -1870,7 +1891,7 @@ console.log('--- TEST 37 (T4D r1): los cables de la ronda r1 en el fuente (gesto
   assert.match(barra, /const teclaPestanas = [\s\S]*?botonesPestana\.current\.get\(siguiente\)\?\.focus\(\);/);
   assert.ok(!/const teclaPestanas = [^;]*;[\s\S]*?elegirPestana\(siguiente\)/.test(barra), 'las flechas no activan');
   // 6f: los títulos se recortan a la zona libre entre las fijas.
-  assert.match(t, /recortarBordes\(rects, enOrden\.map\(\(v\) => lados\[v\]\)\)/);
+  assert.match(t, /recortarBordes\(rects, enOrden\.map\(\(v\) => lados\[v\]\), \{ inicio \}\)/);
   // 6h: tonos de fila opacos y el JSDoc de claseFila.
   for (const [clave, tono] of [['filaAlerta', 'rose'], ['filaAviso', 'amber'], ['filaInfo', 'sky'], ['filaApagada', 'slate']]) {
     assert.equal(clase(clave), `bg-${tono}-50 hover:bg-${tono}-100`, clave);
@@ -1902,9 +1923,53 @@ console.log('--- TEST 37 (T4D r1): los cables de la ronda r1 en el fuente (gesto
   assert.ok(t.includes('disabled={recargando || (seleccionable ? !seleccionable(fila) : false)}'), 'las de las filas');
 }
 
+console.log('--- TEST 38 (T4D r2): umbral del asa, la flexible guarda lo que se ve, zona táctil, filtro que se cierra y menores ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = (texto) => texto.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const tabla = leer('components/tabla/TablaEstandar.tsx');
+  const t = codigo(tabla);
+  const barra = codigo(leer('components/tabla/BarraTabla.tsx'));
+  const barraFuente = leer('components/tabla/BarraTabla.tsx');
+  const filtro = codigo(leer('components/tabla/FiltroEstados.tsx'));
+
+  // 1. El asa: por debajo de UMBRAL_ASA no es un gesto (no marca movido, no bloquea el doble clic ni cambia el ancho);
+  //    al pasarlo, el ancho sigue al puntero desde el punto inicial.
+  const moverAsa = /const alMover = \(ev: PointerEvent\) => \{([\s\S]*?)\n {4}\};/.exec(t)?.[1] ?? '';
+  assert.match(moverAsa, /if \(!movido\) \{\s*if \(!superaUmbralAsa\(ev\.clientX - x0\)\) return;\s*movido = true;\s*sinClic\.current = clave;\s*\}/,
+    'el umbral antes de marcar movido y bloquear el doble clic');
+  assert.match(moverAsa, /ancho = limitarAncho\(ancho0 \+ ev\.clientX - x0, min, max\);\s*pintar\(ancho\);/, 'desde el punto inicial, sin salto');
+  assert.ok(moverAsa.indexOf('superaUmbralAsa(') < moverAsa.indexOf('pintar(ancho)'), 'sin cambiar el ancho por debajo del umbral');
+
+  // 3. El texto de la zona táctil.
+  assert.ok(tabla.includes('24 px con el dedo, dentro de su propia columna'));
+
+  // 4. FiltroEstados: los oyentes dependen de la lista visible; se cierra al vaciarse y el foco va al destino de BarraTabla.
+  assert.match(filtro, /const visible = abierto && lista\.length > 0;/);
+  assert.equal(filtro.split('}, [visible]);').length - 1, 2, 'los dos efectos (ubicar y enfocar; Esc y clic afuera) dependen de visible');
+  assert.ok(!filtro.includes('}, [abierto]);'), 'ninguno depende ya de abierto');
+  assert.match(filtro, /if \(abierto && !lista\.length\) setAbierto\(false\);/, 'se cierra cuando la lista queda vacía');
+  assert.match(filtro, /\{visible && \(/, 'el panel se pinta con visible');
+  assert.match(filtro, /alQuedarVacio\?\.\(\);/, 'el foco va al destino estable');
+  assert.match(barra, /alQuedarVacio=\{\(\) => \(entrada\.current \?\? botonesPestana\.current\.get\(estado\.vista \?\? ''\)\)\?\.focus\(\)\}/,
+    'la búsqueda, o la pestaña activa si no hay búsqueda');
+
+  // 5. La línea azul tampoco pasa sobre la casilla de selección.
+  assert.match(t, /const inicio = r\.left \+ anchoSeleccion;/);
+  assert.match(t, /x: Math\.min\(Math\.max\(borde, inicio\), r\.right\)/);
+
+  // 6. estadoTotal es obligatorio si viene total.
+  assert.ok(barraFuente.includes('& ({ total?: undefined; estadoTotal?: never } | { total: number | null; estadoTotal: EstadoKpi });'));
+
+  // 7. El JSDoc del cuerpo memoizado, en celda y en claseFila.
+  const memo = 'solo puede depender de la fila y de lo que esté en las dependencias del useMemo de columnas (o de la identidad de claseFila); el cuerpo está memoizado';
+  assert.equal(tabla.split(memo).length - 1, 2, 'en ColumnaTabla.celda y en claseFila');
+}
+
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');
 console.log('✓ T4C: sesión, estado armado, partes de columnas, URL de la lista, carga vigente, estado de la lista y modo cliente.');
 console.log('✓ T4C r1: orden rechazado, estados en la sesión, escrituras del usuario del render, esperar y vueltas.');
 console.log('✓ T4C r2: sin filas de otra cuenta, vuelta al orden condicional y atendida, tope de espera y cables vigilados.');
 console.log('✓ T4D: umbral, ancho al contenido, ajustar al ancho, geometría, destino, orden, cuerpo, grupos, selección, barra y el fuente de los componentes.');
 console.log('✓ T4D r1: anchoAlSoltar, estado del total, títulos recortados, filtros a la vista, paneles, Esc de la pantalla completa y los cables de r1.');
+console.log('✓ T4D r2: umbral del asa, la flexible guarda lo que se ve, zona táctil, filtro que se cierra, casilla en el recorte, total obligatorio y JSDoc del memo.');

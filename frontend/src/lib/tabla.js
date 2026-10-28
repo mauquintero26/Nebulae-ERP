@@ -1769,36 +1769,51 @@ export function puedeDesplazar(orden, fijas, id, paso) {
 
 // ─── T4D r1: gestos sin clics fantasma, columna flexible, pantalla completa y filtros a la vista ──────────────────
 
+/** T4D r2, punto 1: lo que hay que mover el asa (en px, a lo largo) para que sea estirar; menos es un clic. */
+export const UMBRAL_ASA = 3;
+
 /**
- * El ancho que se guarda al soltar el asa (TablaEstandar, T4D r1, punto 3): `base` es el ancho de las preferencias (sin
- * lo que sobra de la tarjeta), `pintado` el que se veía al empezar y `px` el del puntero al soltar.
- *  - si el puntero no se movió (px === pintado), null: no se guarda (un clic, o el primero de un doble clic);
+ * true si el asa ya se movió MÁS de UMBRAL_ASA px a lo largo desde donde se presionó: desde ahí es estirar. Por debajo
+ * (el temblor de un doble clic, también un paso de 0,67 px con la escala de Windows al 150 %) no es un gesto.
+ * @param {number} dx
+ * @returns {boolean}
+ */
+export function superaUmbralAsa(dx) {
+  return typeof dx === 'number' && Number.isFinite(dx) && Math.abs(dx) > UMBRAL_ASA;
+}
+
+/**
+ * El ancho que se guarda al soltar el asa (TablaEstandar, T4D r1, punto 3, y r2, puntos 1 y 2): `base` es el ancho de
+ * las preferencias (sin lo que sobra de la tarjeta), `pintado` el que se veía al empezar y `px` el del puntero al soltar.
+ *  - si el puntero no pasó el umbral (superaUmbralAsa: un clic, o un doble clic con temblor), null: no se guarda;
  *  - una columna que no es flexible guarda px;
- *  - la flexible, al ensanchar, guarda base + (px − pintado): lo que se estiró, sin el espacio que sobra (que en otro
- *    equipo no existe); al angostar mientras llena el espacio, min(base, px);
- *  - siempre entre anchoMin y anchoMax (64 y 640 si la columna no los dice). Un px que no es número da null.
+ *  - la flexible, al ensanchar, guarda px, lo que se ve (r2: ensanchar la columna que llena significa que la tabla pase
+ *    del ancho disponible); al angostar mientras llena el espacio, min(base, px) (ese espacio tiene que ir a algún lado);
+ *  - siempre entre anchoMin y anchoMax (64 y 640 si la columna no los dice); con limitesDelAsa, el asa nunca muestra un
+ *    ancho que aquí se recorte, así que al soltar no salta. Un px que no es número da null.
  * @param {{base: number, pintado: number, px: number, flexible?: boolean, anchoMin?: number, anchoMax?: number}} entrada
  * @returns {number | null}
  */
 export function anchoAlSoltar({ base, pintado, px, flexible = false, anchoMin, anchoMax }) {
-  if (typeof px !== 'number' || !Number.isFinite(px) || px === pintado) return null;
+  if (typeof px !== 'number' || !Number.isFinite(px) || !superaUmbralAsa(px - pintado)) return null;
   const { min, max } = limitesDe({ anchoMin, anchoMax });
-  let ancho = px;
-  if (flexible) ancho = px > pintado ? base + (px - pintado) : Math.min(base, px);
+  const ancho = flexible && px < pintado ? Math.min(base, px) : px;
   return limitarAncho(ancho, min, max);
 }
 
 /**
- * Entre qué anchos se mueve el asa mientras se arrastra (TablaEstandar, T4D r1): el mínimo y el máximo de la columna;
- * en la flexible que llena espacio, el tope es pintado + (máximo − base), para que no salte al máximo al primer
- * movimiento (se pinta más ancha que él) y se pueda ensanchar hasta que su base (anchoAlSoltar) llegue al máximo.
+ * Entre qué anchos se mueve el asa mientras se arrastra (TablaEstandar, T4D r1 y r2): el mínimo y el máximo de la
+ * columna; en la flexible que llena espacio, el tope es el mayor entre su máximo y lo que se pinta. Así no salta al
+ * primer movimiento (se pinta más ancha que su máximo) y nunca se ve un ancho que anchoAlSoltar (y las preferencias,
+ * que recortan a anchoMax) no puedan guardar: al soltar no salta. Si el máximo es menor que lo que se pinta, no se
+ * puede ensanchar más (solo angostar).
  * @param {{base: number, pintado: number, flexible?: boolean, anchoMin?: number, anchoMax?: number}} entrada
  * @returns {{min: number, max: number}}
  */
 export function limitesDelAsa({ base, pintado, flexible = false, anchoMin, anchoMax }) {
   const { min, max } = limitesDe({ anchoMin, anchoMax });
   if (!flexible || !(pintado > base)) return { min, max };
-  return { min, max: Math.max(max, pintado + (max - base)) };
+  return { min, max: Math.max(max, pintado) };
 }
 
 /**
@@ -1822,13 +1837,16 @@ export function estadoDelTotal({ total, cargando = false, recargando = false, er
  * `lados` va en el mismo orden que `bordes` ('izquierda', 'derecha' o nada). La zona va del borde derecho de la última
  * fija de la izquierda al borde izquierdo de la primera de la derecha; las fijas quedan como están. Devuelve [inicio,
  * fin] por título (acepta pares o rectángulos {left, right}).
+ * T4D r2, punto 5: `limites.inicio` es un borde izquierdo más (el de la caja más la casilla de selección, que también es
+ * sticky): gana el que esté más a la derecha.
  * @param {ReadonlyArray<[number, number] | {left: number, right: number}>} bordes
  * @param {ReadonlyArray<LadoFijo | null | undefined>} lados
+ * @param {{inicio?: number}} [limites]
  * @returns {Array<[number, number]>}
  */
-export function recortarBordes(bordes, lados) {
+export function recortarBordes(bordes, lados, limites = {}) {
   const pares = (bordes ?? []).map((b) => (Array.isArray(b) ? [b[0], b[1]] : [b.left, b.right]));
-  let inicio = -Infinity;
+  let inicio = typeof limites?.inicio === 'number' && Number.isFinite(limites.inicio) ? limites.inicio : -Infinity;
   let fin = Infinity;
   pares.forEach(([l, r], i) => {
     if (lados?.[i] === 'izquierda') inicio = Math.max(inicio, r);

@@ -13,7 +13,7 @@ import {
   ANCHO_SELECCION, RELLENO_CELDA, alternarOrden, alternarSeleccion, alternarSeleccionPagina, anchoAlContenido,
   anchoAlSoltar, bordeDeHueco, campoOrden, destinoArrastre, direccionOrden, estadoSeleccionPagina, fijasDe,
   filasConGrupos, firmaSeleccion, geometriaTabla, indiceDestino, limitarAncho, limitesDelAsa, paginaCorregida,
-  reconciliarColumnas, recortarBordes, superaUmbralColumna, vistaCuerpo,
+  reconciliarColumnas, recortarBordes, superaUmbralAsa, superaUmbralColumna, vistaCuerpo,
 } from '@/lib/tabla';
 import type { ClaveFila, DefinicionColumna, EstadoTabla, LadoFijo, RenglonTabla, VistaCuerpo } from '@/lib/tabla';
 import type { DespacharTabla } from './useEstadoTabla';
@@ -57,12 +57,14 @@ import { Paginacion } from './Paginacion';
  *  - clic en el título: ordena (alternarOrden: ascendente, descendente y el por defecto), con aria-sort y la flecha;
  *  - presionar y arrastrar MÁS de 5 px (superaUmbralColumna) con el mouse o el lápiz (r1, 6g: no con el dedo; en
  *    táctil quedan las flechas de «Ajustar tabla»): mueve la columna, con una copia del título y una línea azul de
- *    destino (los títulos recortados a la zona libre entre las fijas, recortarBordes; indiceDestino, destinoArrastre y
- *    bordeDeHueco), sin cruzar las fijas; cerca de los bordes la tabla se desplaza sola. setPointerCapture después del
+ *    destino (los títulos recortados a la zona libre entre las fijas y la casilla de selección, recortarBordes;
+ *    indiceDestino, destinoArrastre y bordeDeHueco), sin cruzar las fijas; cerca de los bordes la tabla se desplaza sola. setPointerCapture después del
  *    umbral;
- *  - el asa de 8 px del borde derecho (24 px con el dedo): estira o angosta (entre su mínimo y su máximo); durante el
- *    arrastre el ancho va al <col> por ref, sin volver a pintar las filas, y se guarda al soltar (D38) con
- *    anchoAlSoltar: sin moverse no se guarda, y la flexible guarda su base sin el espacio que sobra (r1, punto 3);
+ *  - el asa de 8 px del borde derecho (24 px con el dedo, dentro de su propia columna; r2): estira o angosta (entre
+ *    su mínimo y su máximo) cuando el puntero pasa UMBRAL_ASA (3 px; r2: un doble clic con temblor no es estirar);
+ *    durante el arrastre el ancho va al <col> por ref, sin volver a pintar las filas, y se guarda al soltar (D38) con
+ *    anchoAlSoltar: sin pasar el umbral no se guarda; la flexible, al ensanchar, guarda lo que se ve, y al angostar
+ *    mientras llena, su base (r2, punto 2; limitesDelAsa: nunca se ve un ancho que no se pueda guardar);
  *  - doble clic en el asa: ajusta al texto que se ve (anchoAlContenido, máximo 480 px), medido con el ancho propio del
  *    contenido (un inline-block que se encoge; r1, punto 2), así que también angosta.
  *  Los gestos se escuchan en document, en captura, con su pointerId: pointerup termina (si el nodo con la captura ya no
@@ -89,7 +91,10 @@ export type AlineacionColumna = 'izquierda' | 'centro' | 'derecha';
 export type ColumnaTabla<T> = DefinicionColumna & {
   /** El título del encabezado (también en «Ajustar tabla» y en la copia que se arrastra). */
   titulo: string;
-  /** Lo que va en la celda. Un texto o un número va también en el title (se lee completo al pasar el mouse). */
+  /**
+   * Lo que va en la celda. Un texto o un número va también en el title (se lee completo al pasar el mouse).
+   * r2 (6j): solo puede depender de la fila y de lo que esté en las dependencias del useMemo de columnas (o de la identidad de claseFila); el cuerpo está memoizado.
+   */
   celda: (fila: T) => ReactNode;
   alinear?: AlineacionColumna;
   /** true ordena por el id; un texto es el campo de orden del servidor (por ejemplo 'total_cop'). */
@@ -120,7 +125,7 @@ type PropsComunes<T> = {
   onFila?: (fila: T) => void;
   /**
    * Las clases de la fila: usa un tono opaco de TABLE (filaAlerta, filaAviso, filaInfo, filaApagada); un tono translúcido (/NN) deja ver lo que pasa debajo de las columnas fijas.
-   * Reemplaza el blanco y el hover de siempre (los tonos de TABLE traen el suyo).
+   * Reemplaza el blanco y el hover de siempre (los tonos de TABLE traen el suyo). Como celda (r2, 6j): solo puede depender de la fila y de lo que esté en las dependencias del useMemo de columnas (o de la identidad de claseFila); el cuerpo está memoizado.
    */
   claseFila?: (fila: T) => string | null | undefined;
   /** El grupo de la fila: un separador al empezar cada tramo (filasConGrupos). */
@@ -517,11 +522,14 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
         terminarGesto(true);
         return;
       }
-      ancho = limitarAncho(ancho0 + ev.clientX - x0, min, max);
-      if (!movido && ancho !== ancho0) {
+      // r2, punto 1: por debajo de UMBRAL_ASA no es estirar (el temblor de un doble clic): ni movido, ni bloqueo del
+      // doble clic, ni ancho en vivo. Al pasarlo, el ancho sigue al puntero desde el punto inicial (sin salto).
+      if (!movido) {
+        if (!superaUmbralAsa(ev.clientX - x0)) return;
         movido = true;
         sinClic.current = clave;
       }
+      ancho = limitarAncho(ancho0 + ev.clientX - x0, min, max);
       pintar(ancho);
       ev.preventDefault();
     };
@@ -622,12 +630,14 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
         if (!r) return;
         rects.push(r);
       }
-      // r1, 6f: con la tabla corrida de lado, lo que quedó debajo de una fija no cuenta.
-      const bordes = recortarBordes(rects, enOrden.map((v) => lados[v]));
+      // r1, 6f, y r2, punto 5: con la tabla corrida de lado, lo que quedó debajo de una fija o de la casilla de
+      // selección (sticky) no cuenta, y la línea azul tampoco se pinta encima de ellas.
+      const r = c.getBoundingClientRect();
+      const inicio = r.left + anchoSeleccion;
+      const bordes = recortarBordes(rects, enOrden.map((v) => lados[v]), { inicio });
       destino = destinoArrastre(enOrden, lados, col.id, indiceDestino(bordes, puntero.x));
       const borde = destino.cambia && destino.hueco !== null ? bordeDeHueco(bordes, destino.hueco) : null;
-      const r = c.getBoundingClientRect();
-      const linea = borde === null ? null : { x: Math.min(Math.max(borde, r.left), r.right), top: r.top, alto: c.clientHeight };
+      const linea = borde === null ? null : { x: Math.min(Math.max(borde, inicio), r.right), top: r.top, alto: c.clientHeight };
       setMoviendo((previo) => (!previo || mismaLinea(previo.linea, linea) ? previo : { ...previo, linea }));
     };
     // Cerca de los bordes la tabla se desplaza sola (como el tablero); si el título sale del DOM, se cancela.

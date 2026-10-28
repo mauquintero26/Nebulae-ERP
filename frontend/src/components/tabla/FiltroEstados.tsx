@@ -19,12 +19,16 @@ import type { OpcionEstado } from '@/lib/tabla';
  *  - El panel se cierra con Esc (sin que llegue a la pantalla completa; el foco vuelve al botón) o con un clic afuera,
  *    y no se sale de la ventana (posicionPanel; máximo el ancho de la pantalla menos 2rem). 'Limpiar' devuelve el foco
  *    al botón (se deshabilita).
+ *  - r2, punto 4: el panel se ve solo con algo en la lista (`visible`), y sus oyentes (Esc y clic afuera) dependen de
+ *    eso. Si la lista queda vacía (una pestaña sin opciones y 'Limpiar' o desmarcar el último), se cierra, el
+ *    componente no pinta nada y el foco, que se quedaría en el body, va al destino estable que le da la barra
+ *    (`alQuedarVacio`: la búsqueda, o la pestaña activa). Ningún oyente queda vivo para tragarse el próximo Esc.
  */
 
 export type { OpcionEstado } from '@/lib/tabla';
 
 export function FiltroEstados({
-  opciones, seleccion, onCambiar, etiqueta = 'Estado', etiquetas,
+  opciones, seleccion, onCambiar, etiqueta = 'Estado', etiquetas, alQuedarVacio,
 }: {
   opciones: ReadonlyArray<OpcionEstado>;
   seleccion: ReadonlyArray<string>;
@@ -33,6 +37,8 @@ export function FiltroEstados({
   etiqueta?: string;
   /** Las etiquetas legibles que se conocen ({valor: etiqueta}), para un estado filtrado que la pestaña no tiene. */
   etiquetas?: Readonly<Record<string, string>>;
+  /** r2: adónde va el foco cuando el panel se cierra porque la lista quedó vacía (el botón ya no se pinta). */
+  alQuedarVacio?: () => void;
 }) {
   const [abierto, setAbierto] = useState(false);
   const caja = useRef<HTMLDivElement>(null);
@@ -40,18 +46,29 @@ export function FiltroEstados({
   const panel = useRef<HTMLDivElement>(null);
   const idPanel = useId();
   const lista = opcionesConMarcados(opciones, seleccion, etiquetas);
+  const visible = abierto && lista.length > 0;
+  // La lista quedó vacía con el panel abierto: se cierra (si vuelve a llenarse, no reaparece abierto).
+  if (abierto && !lista.length) setAbierto(false);
+  // Si se cerró así, con el panel abierto, y el foco quedó en el body (el botón ya no está), va al destino de la barra.
+  const estabaVisible = useRef(false);
+  useEffect(() => {
+    const antes = estabaVisible.current;
+    estabaVisible.current = visible;
+    const sinFoco = document.activeElement === null || document.activeElement === document.body;
+    if (antes && !visible && !lista.length && sinFoco) alQuedarVacio?.();
+  }, [visible, lista.length, alQuedarVacio]);
 
   // Al abrir: el panel se ubica dentro de la ventana (antes de pintarse) y el foco va a la primera casilla.
   useLayoutEffect(() => {
     const b = boton.current;
     const p = panel.current;
-    if (!abierto || !b || !p) return;
+    if (!visible || !b || !p) return;
     p.style.left = `${posicionPanel({ boton: b.getBoundingClientRect(), ancho: p.offsetWidth, ventana: window.innerWidth, alinear: 'izquierda' })}px`;
     p.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus({ preventScroll: true });
-  }, [abierto]);
+  }, [visible]);
 
   useEffect(() => {
-    if (!abierto) return undefined;
+    if (!visible) return undefined;
     const alPresionar = (e: PointerEvent) => {
       if (!(e.target instanceof Node && caja.current?.contains(e.target))) setAbierto(false);
     };
@@ -68,7 +85,7 @@ export function FiltroEstados({
       document.removeEventListener('pointerdown', alPresionar, true);
       document.removeEventListener('keydown', alTeclear, true);
     };
-  }, [abierto]);
+  }, [visible]);
 
   if (!lista.length) return null;
 
@@ -93,7 +110,7 @@ export function FiltroEstados({
         )}
         <ChevronDown size={12} aria-hidden="true" />
       </button>
-      {abierto && (
+      {visible && (
         <div
           ref={panel}
           id={idPanel}
