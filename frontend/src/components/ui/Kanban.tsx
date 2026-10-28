@@ -6,11 +6,11 @@ import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { ArrowRightLeft, ChevronsRightLeft, ExternalLink, Loader2, Lock, RotateCw } from 'lucide-react';
 import {
-  TEXTO_SOLO_VER, aplicarPagina, alternarPlegada, altoTablero, asegurarColumna, columnaBajoPunto, consultaColumna,
-  crearTurnos, definirColumnas, deshacerMovimiento, estadoColumna, estadoDestino, firmaConsulta, mapaDestinos,
-  moverTarjeta, opcionesMoverA, paginaDeRespuesta, plegadasValidas, quedanEnServidor, reemplazarTarjeta,
-  reglaSegunManejadores, resolverPlegadas, resolverSoltar, superaUmbral, tableroCliente, textoMovimiento,
-  textoTotalColumna, velocidadAutodesplazamiento,
+  TEXTO_SOLO_VER, aplicarPagina, alternarPlegada, altoEnContenedor, asegurarColumna, columnaBajoPunto, columnaOcupada,
+  columnasPorLanzar, consultaColumna, crearTurnos, definirColumnas, deshacerMovimiento, esDesplazable, estadoColumna,
+  estadoDestino, firmaConsulta, mapaDestinos, moverTarjeta, opcionesMoverA, paginaDeRespuesta, plegadasValidas,
+  quedanEnServidor, reemplazarTarjeta, reglaSegunManejadores, resolverPlegadas, resolverSoltar, siguienteAnuncio,
+  superaUmbral, tableroCliente, textoMovimiento, textoTotalColumna, velocidadAutodesplazamiento,
 } from '@/lib/kanban';
 import type { ColumnaKanban, ConsultaColumna, DatosColumna, Destino, ReglaSoltar, ResultadoSoltar } from '@/lib/kanban';
 import { formatoPesos } from '@/lib/pesos';
@@ -210,6 +210,8 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
   const turnos = useRef<ReturnType<typeof crearTurnos> | null>(null);
   const ultimasDeps = useRef<string | null>(null);
   const contador = useRef(0);
+  /** Los movimientos que esperan al servidor (T4B r1): su «Ver más» queda quieto. */
+  const enCurso = useRef(new Map<number, { origen: string; destino: string }>());
 
   const actualizar = useCallback((cambio: (t: TableroInterno) => TableroInterno) => {
     const nuevo = cambio(tableroRef.current);
@@ -265,12 +267,10 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
     }
     const lanzar = () => {
       ultimasDeps.current = claveDeps;
-      for (const c of actuales.current.columnas) {
-        const d = actuales.current.deseadas[c.clave];
-        if (!d || lanzadas.current[c.clave] === d.firma) continue;
-        lanzadas.current[c.clave] = d.firma;
-        pedir(c, d.consulta, d.firma, false);
-      }
+      const { deseadas: vigentes } = actuales.current;
+      const { lista, lanzadas: nuevas } = columnasPorLanzar(actuales.current.columnas, vigentes, lanzadas.current);
+      lanzadas.current = nuevas;
+      for (const c of lista) pedir(c, vigentes[c.clave].consulta, vigentes[c.clave].firma, false);
     };
     if (esperaMs > 0 && ultimasDeps.current !== null && ultimasDeps.current !== claveDeps) {
       const espera = window.setTimeout(lanzar, esperaMs);
@@ -285,6 +285,11 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
     const vivos = controles.current;
     return () => {
       for (const control of Object.values(vivos)) control.abort();
+      // T4B r1: StrictMode (en desarrollo) desmonta y vuelve a montar. Lo que se acaba de abortar tiene que relanzarse
+      // al montar otra vez, así que la guarda de lo lanzado y las últimas dependencias se olvidan con las consultas;
+      // si no, el efecto ve las mismas firmas, no relanza y el tablero queda cargando para siempre.
+      lanzadas.current = {};
+      ultimasDeps.current = null;
     };
   }, []);
 
@@ -307,6 +312,8 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
       });
       return;
     }
+    // T4B r1: con un movimiento pendiente hacia o desde la columna, el offset contaría la tarjeta optimista.
+    if (columnaOcupada(enCurso.current.values(), clave)) return;
     const columna = ahora.columnas.find((c) => c.clave === clave);
     const datos = tableroRef.current[clave];
     const deseada = ahora.deseadas[clave];
@@ -325,29 +332,38 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
   ): MovimientoOptimista<T> => {
     const idDeUsado = idDeTarjeta ?? actuales.current.idDe;
     const id = idDeUsado(item);
+    const n = ++contador.current;
+    enCurso.current.set(n, { origen, destino });
+    const terminar = () => enCurso.current.delete(n);
     if (actuales.current.modo === 'cliente') {
-      const n = ++contador.current;
       const base = actuales.current.items;
       setMovimientos((lista) => [...lista.filter((m) => m.base === base), { n, base, id, origen, destino, cambios, idDe: idDeUsado }]);
       return {
         confirmar: (documento) => {
+          terminar();
           if (!documento || typeof documento !== 'object') return;
           setMovimientos((lista) => lista.map((m) => (m.n === n ? { ...m, servidor: documento } : m)));
         },
-        deshacer: () => setMovimientos((lista) => lista.filter((m) => m.n !== n)),
+        deshacer: () => {
+          terminar();
+          setMovimientos((lista) => lista.filter((m) => m.n !== n));
+        },
       };
     }
     const antes = tableroRef.current;
-    if (!antes[origen] || !antes[destino]) return { confirmar: () => {}, deshacer: () => {} };
+    if (!antes[origen] || !antes[destino]) return { confirmar: terminar, deshacer: terminar };
     const { tablero: movido, deshacer } = moverTarjeta(antes, id, origen, destino, cambios, { idDe: idDeUsado });
     actualizar(() => movido as TableroInterno);
     const original = { ...(item as Record<string, unknown>) };
     return {
+      // T4B r1: la respuesta se mezcla sobre la fila (reemplazarTarjeta), sin perder lo que el PATCH no devuelve.
       confirmar: (documento) => {
+        terminar();
         if (!documento || typeof documento !== 'object') return;
         actualizar((t) => (t[destino] ? reemplazarTarjeta(t, destino, id, documento, { idDe: idDeUsado }) as TableroInterno : t));
       },
       deshacer: () => {
+        terminar();
         actualizar((t) => deshacerMovimiento(t, movido, deshacer, { id, origen, destino, original, idDe: idDeUsado }) as TableroInterno);
       },
     };
@@ -519,7 +535,7 @@ export function TarjetaKanban({
             <span className="min-w-0 truncate font-bold text-slate-800">{numero}</span>
           )}
           {esperando && (
-            <Loader2 size={12} className="shrink-0 animate-spin text-slate-400" aria-label="Guardando el cambio" />
+            <Loader2 size={12} className="shrink-0 animate-spin text-slate-500" aria-label="Guardando el cambio" />
           )}
         </div>
         {menu && menu.length > 0 && <MenuFila items={menu} etiqueta={`Acciones de ${numero}`} />}
@@ -572,7 +588,7 @@ export function TarjetaKanban({
           {typeof monto === 'number' && Number.isFinite(monto) && (
             <p className="truncate font-bold tabular-nums text-slate-800">{formatoPesos(monto)}</p>
           )}
-          {tiempo && <p className="truncate text-[11px] text-slate-400">{tiempo}</p>}
+          {tiempo && <p className="truncate text-[11px] text-slate-500">{tiempo}</p>}
         </div>
         {estado && <InsigniaEstado estado={estado} />}
       </div>
@@ -651,6 +667,23 @@ type Arrastre<T> = {
   ancho: number;
 };
 
+/** Un movimiento de una tarjeta que espera al servidor (T4B r1: su «Ver más» queda quieto). */
+type Pendiente = { origen: string; destino: string };
+
+/** A dónde va el foco después del render (T4B r1): la tarjeta en su columna, su encabezado o el botón de plegar/abrir. */
+type FocoPendiente = { columna: string; tarjeta?: string; boton?: 'abrir' | 'plegar'; n: number };
+
+/** Lo que se espera a que aparezca el destino del foco, en ms. */
+const ESPERA_FOCO = 2000;
+
+/** El contenedor desplazable más cercano hacia arriba (en el dashboard, el <main>), o null si es la ventana. */
+function contenedorDesplazable(el: HTMLElement): HTMLElement | null {
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    if (esDesplazable(window.getComputedStyle(p).overflowY)) return p;
+  }
+  return null;
+}
+
 type Seguimiento<T> = {
   item: T;
   clave: string;
@@ -684,10 +717,15 @@ export function TableroKanban<T = unknown>({
 
   const [arrastre, setArrastre] = useState<Arrastre<T> | null>(null);
   const [sobre, setSobre] = useState<string | null>(null);
-  const [esperando, setEsperando] = useState<ReadonlySet<string>>(() => new Set());
+  const [esperando, setEsperando] = useState<ReadonlyMap<string, Pendiente>>(() => new Map());
   const [anuncio, setAnuncio] = useState('');
 
+  const envoltura = useRef<HTMLDivElement>(null);
   const contenedor = useRef<HTMLDivElement>(null);
+  // El pedido de foco es estado (lo piden manejadores que también llegan a MenuFila); el efecto lo atiende una vez.
+  const [focoPendiente, setFocoPendiente] = useState<FocoPendiente | null>(null);
+  const focoAtendido = useRef(0);
+  const focoDesde = useRef<{ n: number; t: number } | null>(null);
   const clon = useRef<HTMLDivElement>(null);
   const secciones = useRef(new Map<string, HTMLElement>());
   const cuerpos = useRef(new Map<string, HTMLElement>());
@@ -708,22 +746,84 @@ export function TableroKanban<T = unknown>({
     setSobre(null);
   }, []);
 
-  // El alto libre de la ventana (mínimo 420 px), en el DOM directamente: sin un render por cada cambio de tamaño.
+  // El alto libre (mínimo 420 px) dentro del contenedor desplazable más cercano (el <main> del dashboard), puesto en el
+  // DOM directamente: sin un render por cada cambio de tamaño. T4B r1: el top se mide desde el principio del contenido
+  // de ese contenedor, así que con el <main> ya desplazado el alto no se infla.
+  const ajustarAlto = useCallback(() => {
+    const caja = contenedor.current;
+    if (!caja) return;
+    const desplazable = contenedorDesplazable(caja);
+    const arriba = caja.getBoundingClientRect().top;
+    const alto = desplazable
+      ? altoEnContenedor({
+        altoVisible: desplazable.clientHeight,
+        arriba,
+        arribaContenedor: desplazable.getBoundingClientRect().top,
+        desplazado: desplazable.scrollTop,
+      })
+      : altoEnContenedor({ altoVisible: window.innerHeight, arriba, desplazado: window.scrollY });
+    caja.style.height = `${alto}px`;
+  }, []);
+
   useLayoutEffect(() => {
     const caja = contenedor.current;
     if (!caja) return undefined;
-    const ajustar = () => {
-      caja.style.height = `${altoTablero(window.innerHeight, caja.getBoundingClientRect().top)}px`;
+    let cuadro = 0;
+    // En el cuadro siguiente: cambiar el alto dentro del aviso del observador lo volvería a disparar en el mismo ciclo.
+    const programar = () => {
+      window.cancelAnimationFrame(cuadro);
+      cuadro = window.requestAnimationFrame(ajustarAlto);
     };
-    ajustar();
-    window.addEventListener('resize', ajustar);
-    const observador = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(ajustar);
-    observador?.observe(document.body);
+    ajustarAlto();
+    window.addEventListener('resize', programar);
+    const observador = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(programar);
+    if (observador) {
+      const desplazable = contenedorDesplazable(caja);
+      if (desplazable) {
+        observador.observe(desplazable);
+        // Lo que está arriba del tablero (la franja de indicadores, el banner del flujo) cambia el alto de la página.
+        for (const hijo of Array.from(desplazable.children)) observador.observe(hijo);
+      }
+      if (envoltura.current) observador.observe(envoltura.current);
+    }
     return () => {
-      window.removeEventListener('resize', ajustar);
+      window.removeEventListener('resize', programar);
       observador?.disconnect();
+      window.cancelAnimationFrame(cuadro);
     };
-  }, []);
+  }, [ajustarAlto]);
+
+  // El aviso y el banner de solo para ver corren el tablero hacia abajo o hacia arriba.
+  useLayoutEffect(() => {
+    ajustarAlto();
+  }, [aviso, soloVer, ajustarAlto]);
+
+  // T4B r1: después de «Mover a…» el foco va a la tarjeta en su columna nueva (o al encabezado de la columna si ahí no
+  // se ve) y, al plegar o abrir, al botón que la abre o la pliega. Se intenta después de cada render hasta que aparece,
+  // por ESPERA_FOCO ms, sin setState (focoAtendido marca el pedido ya resuelto) y sin quitarle el foco a algo de fuera
+  // del tablero.
+  useEffect(() => {
+    const f = focoPendiente;
+    if (!f || focoAtendido.current === f.n) return;
+    if (focoDesde.current?.n !== f.n) focoDesde.current = { n: f.n, t: Date.now() };
+    const activo = document.activeElement;
+    if (Date.now() - focoDesde.current.t > ESPERA_FOCO || (activo && activo !== document.body && !envoltura.current?.contains(activo))) {
+      focoAtendido.current = f.n;
+      return;
+    }
+    const seccion = secciones.current.get(f.columna);
+    if (!seccion) return;
+    let objetivo: HTMLElement | null = null;
+    if (f.boton) {
+      objetivo = seccion.querySelector<HTMLElement>(`[data-plegar="${f.boton}"]`);
+    } else {
+      objetivo = Array.from(seccion.querySelectorAll<HTMLElement>('[data-tarjeta]')).find((el) => el.dataset.tarjeta === f.tarjeta) ?? null;
+      objetivo ??= seccion.querySelector<HTMLElement>('[data-encabezado]');
+    }
+    if (!objetivo) return;
+    focoAtendido.current = f.n;
+    objetivo.focus();
+  });
 
   // Mientras se arrastra: autodesplazamiento cuadro a cuadro (horizontal en el tablero y vertical en la columna bajo el
   // puntero), la columna de encima y Escape para cancelar.
@@ -770,22 +870,27 @@ export function TableroKanban<T = unknown>({
   const tituloDe = (clave: string) => columnas.find((c) => c.clave === clave)?.titulo ?? clave;
   const datosDe = (item: T): DatosTarjetaKanban => tarjetaDe?.(item) ?? { numero: String(idTarjeta(item) ?? ''), titulo: '' };
   const nombreDe = (item: T) => datosDe(item).numero;
-  const marcarEsperando = (clave: string, si: boolean) => {
+  const marcarEsperando = (clave: string, pendiente: Pendiente | null) => {
     setEsperando((previo) => {
-      const nuevo = new Set(previo);
-      if (si) nuevo.add(clave);
+      const nuevo = new Map(previo);
+      if (pendiente) nuevo.set(clave, pendiente);
       else nuevo.delete(clave);
       return nuevo;
     });
   };
+  /** La región aria-live; un texto igual al anterior se vuelve a anunciar (T4B r1). */
+  const anunciar = (texto: string) => setAnuncio((anterior) => siguienteAnuncio(anterior, texto));
+  const enfocarDespues = (foco: Omit<FocoPendiente, 'n'>) => {
+    setFocoPendiente((previo) => ({ ...foco, n: (previo?.n ?? 0) + 1 }));
+  };
 
-  /** Lo mismo al soltar con el puntero y al elegir «Mover a …» en el menú. */
-  const soltar = async (item: T, origen: string, destino: string) => {
+  /** Lo mismo al soltar con el puntero y al elegir «Mover a …» en el menú (desdeMenu: el foco sigue a la tarjeta). */
+  const soltar = async (item: T, origen: string, destino: string, desdeMenu = false) => {
     const resultado = resolverSoltar(item, origen, destino, reglaEfectiva, opcionesSoltar);
     if (resultado.tipo === 'ninguno') return;
     if (resultado.tipo === 'bloqueado') {
       avisar(resultado.motivo, { tono: 'error', accion: resultado.enlace });
-      setAnuncio(resultado.motivo);
+      anunciar(resultado.motivo);
       return;
     }
     if (resultado.tipo === 'accion') {
@@ -796,18 +901,21 @@ export function TableroKanban<T = unknown>({
     const clave = String(idTarjeta(item));
     if (esperando.has(clave)) return;
     const movimiento = tablero.moverOptimista(item, origen, destino, { estado: resultado.estado }, idTarjeta);
-    marcarEsperando(clave, true);
+    marcarEsperando(clave, { origen, destino });
+    if (desdeMenu) enfocarDespues({ columna: destino, tarjeta: clave });
     try {
       const documento = await onCambio(item, resultado);
       movimiento.confirmar(documento);
-      setAnuncio(textoMovimiento(nombreDe(item), tituloDe(destino)));
+      anunciar(textoMovimiento(nombreDe(item), tituloDe(destino)));
       tablero.recargar([origen, destino]);
     } catch (err) {
       movimiento.deshacer();
+      tablero.recargar([origen, destino]);
+      if (desdeMenu) enfocarDespues({ columna: origen, tarjeta: clave });
       avisarError(err);
-      setAnuncio(textoDeError(err));
+      anunciar(textoDeError(err));
     } finally {
-      marcarEsperando(clave, false);
+      marcarEsperando(clave, null);
     }
   };
 
@@ -889,6 +997,18 @@ export function TableroKanban<T = unknown>({
     cancelarArrastre();
   };
 
+  // T4B r1: si la tarjeta pierde la captura en pleno arrastre (p. ej. una recarga la quitó), se cancela como con Escape.
+  // Al soltar, la captura se pierde después de pointerup, cuando el seguimiento ya es null.
+  const alPerderCaptura = (e: React.PointerEvent<HTMLElement>) => {
+    const s = seguimiento.current;
+    if (s && s.iniciado && e.pointerId === s.pointerId) cancelarArrastre();
+  };
+
+  const plegarColumna = (clave: string, plegada: boolean) => {
+    enfocarDespues({ columna: clave, boton: plegada ? 'abrir' : 'plegar' });
+    tablero.plegar(clave, plegada);
+  };
+
   // ── piezas ──
   const menuDe = (item: T, origen: string, pendiente: boolean): ItemMenuFila[] => {
     const lista: ItemMenuFila[] = [{ etiqueta: 'Abrir', icono: ExternalLink, onClick: () => onAbrir(item) }];
@@ -899,7 +1019,7 @@ export function TableroKanban<T = unknown>({
           etiqueta: `Mover a ${opcion.titulo}`,
           icono: ArrowRightLeft,
           onClick: () => {
-            void soltar(item, origen, opcion.clave);
+            void soltar(item, origen, opcion.clave, true);
           },
           deshabilitado: !opcion.permitido || pendiente,
           titulo: opcion.motivo ?? (pendiente ? 'Espera a que termine el cambio anterior.' : undefined),
@@ -927,12 +1047,15 @@ export function TableroKanban<T = unknown>({
       <div
         key={clave}
         role="listitem"
+        tabIndex={-1}
+        data-tarjeta={clave}
         aria-busy={pendiente || undefined}
         onPointerDown={(e) => alPresionar(e, item, origen)}
         onPointerMove={alMover}
         onPointerUp={alLevantar}
         onPointerCancel={alCancelarPuntero}
-        className={`select-none touch-auto sm:touch-pan-y ${movible ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${arrastrando ? 'opacity-40' : ''} ${pendiente ? 'opacity-70' : ''}`}
+        onLostPointerCapture={alPerderCaptura}
+        className={`select-none touch-auto rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 sm:touch-pan-y ${movible ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${arrastrando ? 'opacity-40' : ''} ${pendiente ? 'opacity-70' : ''}`}
       >
         {contenidoTarjeta(
           item,
@@ -986,7 +1109,9 @@ export function TableroKanban<T = unknown>({
         >
           <button
             type="button"
-            onClick={() => tablero.plegar(c.clave, false)}
+            onClick={() => plegarColumna(c.clave, false)}
+            data-plegar="abrir"
+            data-encabezado
             aria-expanded={false}
             title={motivo ?? `Abrir la columna ${c.titulo}`}
             className="flex h-full w-full flex-col items-center gap-2 rounded-2xl px-1 py-3 text-xs font-bold text-slate-600 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
@@ -1005,6 +1130,7 @@ export function TableroKanban<T = unknown>({
       ? <span className="tabular-nums">{textoTotalColumna(d.items.length, d.total)}</span>
       : <Contador valor={estado === 'actualizando' ? d.total : null} estado={estado} />;
     const sinTarjetas = !d || d.items.length === 0;
+    const ocupada = columnaOcupada(esperando.values(), c.clave);
 
     return (
       <section
@@ -1016,14 +1142,22 @@ export function TableroKanban<T = unknown>({
         <header className="shrink-0 border-b border-slate-200 px-3 pb-2 pt-3">
           <div className="flex items-center gap-2">
             <span aria-hidden="true" className={`h-2.5 w-2.5 shrink-0 rounded-full ${tono.punto}`} />
-            <h3 className="min-w-0 flex-1 truncate text-sm font-bold text-slate-800" title={c.ayuda ?? c.titulo}>{c.titulo}</h3>
+            <h3
+              tabIndex={-1}
+              data-encabezado
+              className="min-w-0 flex-1 truncate rounded text-sm font-bold text-slate-800 outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
+              title={c.ayuda ?? c.titulo}
+            >
+              {c.titulo}
+            </h3>
             <span className="shrink-0 text-xs font-bold text-slate-500">{contador}</span>
             <button
               type="button"
-              onClick={() => tablero.plegar(c.clave, true)}
+              onClick={() => plegarColumna(c.clave, true)}
+              data-plegar="plegar"
               aria-label={`Plegar la columna ${c.titulo}`}
               title={`Plegar la columna ${c.titulo}`}
-              className="shrink-0 rounded-md p-1 text-slate-400 hover:bg-white hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+              className="shrink-0 rounded-md p-1 text-slate-500 hover:bg-white hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
             >
               <ChevronsRightLeft size={14} aria-hidden="true" />
             </button>
@@ -1055,13 +1189,16 @@ export function TableroKanban<T = unknown>({
           {d?.cargando && sinTarjetas ? esqueleto : null}
           {d ? d.items.map((item) => pintarTarjeta(item, c.clave)) : null}
           {estado === 'listo' && sinTarjetas && (
-            <p className="px-2 py-6 text-center text-xs text-slate-400">{vacio}</p>
+            <p className="px-2 py-6 text-center text-xs text-slate-500">{vacio}</p>
           )}
           {d?.hayMas && (
             <button
               type="button"
-              onClick={() => tablero.verMas(c.clave)}
-              disabled={d.cargandoMas || d.cargando}
+              onClick={() => {
+                if (!ocupada) tablero.verMas(c.clave);
+              }}
+              disabled={d.cargandoMas || d.cargando || ocupada}
+              title={ocupada ? 'Espera a que termine el cambio de una tarjeta de esta columna.' : undefined}
               className={`flex w-full items-center justify-center gap-1 rounded-xl border border-dashed border-slate-300 py-2 text-xs font-bold hover:bg-white disabled:opacity-60 ${ACCENTS[color].text}`}
             >
               {d.cargandoMas && <Loader2 size={12} aria-hidden="true" className="animate-spin" />}
@@ -1082,7 +1219,7 @@ export function TableroKanban<T = unknown>({
     : null;
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-2">
+    <div ref={envoltura} className="flex w-full min-w-0 flex-col gap-2">
       {aviso && (
         <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">{aviso}</div>
       )}

@@ -478,7 +478,8 @@ console.log('--- TEST 13 (T4B): components/ui/Kanban.tsx sobre el fuente (sin DO
   for (const n of ['definirColumnas', 'consultaColumna', 'firmaConsulta', 'crearTurnos', 'paginaDeRespuesta', 'aplicarPagina',
     'tableroCliente', 'resolverPlegadas', 'alternarPlegada', 'resolverSoltar', 'mapaDestinos', 'moverTarjeta',
     'deshacerMovimiento', 'reemplazarTarjeta', 'reglaSegunManejadores', 'opcionesMoverA', 'estadoDestino', 'columnaBajoPunto',
-    'velocidadAutodesplazamiento', 'superaUmbral', 'estadoColumna', 'textoTotalColumna', 'textoMovimiento', 'altoTablero',
+    'velocidadAutodesplazamiento', 'superaUmbral', 'estadoColumna', 'textoTotalColumna', 'textoMovimiento',
+    'altoEnContenedor' /* r1 (punto 5): altoTablero medido contra el contenedor desplazable */,
     'asegurarColumna', 'quedanEnServidor']) {
     assert.match(fuente, new RegExp(`\\b${n}\\(`), `usa ${n}`);
   }
@@ -510,5 +511,152 @@ console.log('--- TEST 13 (T4B): components/ui/Kanban.tsx sobre el fuente (sin DO
   assert.ok(!/\bdark:/.test(fuente), 'sin dark:');
 }
 
+console.log('--- TEST 14 (T4B r1): ninguna tarjeta perdida, «Ver más» sin saltos, StrictMode, alto, anuncio y confirmar ---');
+{
+  for (const n of ['columnaOcupada', 'columnasPorLanzar', 'siguienteAnuncio', 'esDesplazable', 'altoEnContenedor']) {
+    assert.ok(n in kanban, `lib/kanban.js exporta ${n}`);
+  }
+  const columnas = definirColumnas(COLS);
+  const donde = (t, id) => Object.entries(t).flatMap(([k, c]) => c.items.filter((x) => x.id === id).map(() => k));
+  const base = (cols) => {
+    let t = estadoTableroInicial(columnas);
+    for (const [k, ids] of Object.entries(cols)) t = aplicarPagina(t, k, { items: ids.map((id) => ({ id, col: k })), total: ids.length });
+    return t;
+  };
+  const deshacerB = (actual, mov, origen, destino) => kanban.deshacerMovimiento(actual, mov.tablero, mov.deshacer,
+    { id: 'B', origen, destino, original: { id: 'B', col: origen } });
+
+  // a) S2: el destino se reemplazó en medio (se abrió una plegada, o llegó otra recarga) y después falla: la tarjeta
+  //    vuelve al origen una sola vez, con el total correcto.
+  {
+    const t = base({ nuevo: ['B', 'x2'], curso: ['y1', 'y2'], hecho: [] });
+    const mov = moverTarjeta(t, 'B', 'nuevo', 'curso', { estado: 'EN_CURSO' });
+    const recargado = aplicarPagina(mov.tablero, 'curso', { items: [{ id: 'y1' }, { id: 'y2' }], total: 2 });
+    const r = deshacerB(recargado, mov, 'nuevo', 'curso');
+    assert.deepEqual(donde(r, 'B'), ['nuevo'], 'B vuelve al origen');
+    assert.deepEqual(r.nuevo.items[0], { id: 'B', col: 'nuevo' }, 'con sus datos de antes');
+    assert.deepEqual([r.nuevo.total, r.curso.total], [2, 2]);
+    assert.deepEqual(r.curso.items.map((x) => x.id), ['y1', 'y2'], 'lo que llegó al destino se conserva');
+  }
+  // b) S4: el origen se recargó en medio, ya con la tarjeta, y después falla: está una sola vez y el total del origen no
+  //    se toca dos veces.
+  {
+    const t = base({ nuevo: ['B', 'x2'], curso: ['y1', 'y2'], hecho: [] });
+    const mov = moverTarjeta(t, 'B', 'nuevo', 'curso', { estado: 'EN_CURSO' });
+    const conOrigen = aplicarPagina(mov.tablero, 'nuevo', { items: [{ id: 'B', col: 'nuevo' }, { id: 'x2' }], total: 2 });
+    assert.deepEqual(donde(conOrigen, 'B'), ['nuevo', 'curso'], 'mientras espera, la recarga la trae al origen');
+    const r = deshacerB(conOrigen, mov, 'nuevo', 'curso');
+    assert.deepEqual(donde(r, 'B'), ['nuevo'], 'una sola vez');
+    assert.deepEqual([r.nuevo.total, r.curso.total], [2, 2]);
+    assert.equal(r.nuevo, conOrigen.nuevo, 'el origen recargado queda tal cual');
+    // Origen y destino recargados: ya está bien, nada cambia.
+    const ambos = aplicarPagina(conOrigen, 'curso', { items: [{ id: 'y1' }, { id: 'y2' }], total: 2 });
+    assert.equal(deshacerB(ambos, mov, 'nuevo', 'curso'), ambos);
+  }
+  // c) S1: dos tarjetas seguidas hacia la misma columna; la recarga del primer éxito llega mientras la segunda espera, y
+  //    la segunda falla.
+  {
+    let t = base({ nuevo: ['A', 'x2'], curso: ['y1'], hecho: ['B', 'z2'] });
+    const movA = moverTarjeta(t, 'A', 'nuevo', 'curso', { estado: 'EN_CURSO' });
+    t = kanban.reemplazarTarjeta(movA.tablero, 'curso', 'A', { id: 'A', col: 'curso' }); // éxito de A; recargar en camino
+    const movB = moverTarjeta(t, 'B', 'hecho', 'curso', { estado: 'EN_CURSO' });
+    let llegada = aplicarPagina(movB.tablero, 'nuevo', { items: [{ id: 'x2' }], total: 1 });
+    llegada = aplicarPagina(llegada, 'curso', { items: [{ id: 'A', col: 'curso' }, { id: 'y1' }], total: 2 }); // sin B
+    const r = deshacerB(llegada, movB, 'hecho', 'curso');
+    assert.deepEqual(donde(r, 'B'), ['hecho'], 'B no se pierde');
+    assert.deepEqual(donde(r, 'A'), ['curso'], 'A sigue donde la dejó el servidor');
+    assert.deepEqual([r.nuevo.total, r.curso.total, r.hecho.total], [1, 2, 2], 'los totales son los del servidor');
+  }
+
+  // d) Punto 3: mientras un movimiento hacia o desde una columna espera, su «Ver más» queda quieto (el offset contaría la
+  //    tarjeta optimista y el servidor saltaría un id).
+  const pendientes = new Map([['B', { origen: 'nuevo', destino: 'curso' }]]);
+  assert.equal(kanban.columnaOcupada(pendientes.values(), 'curso'), true, 'hacia ella');
+  assert.equal(kanban.columnaOcupada(pendientes.values(), 'nuevo'), true, 'desde ella');
+  assert.equal(kanban.columnaOcupada(pendientes.values(), 'hecho'), false);
+  assert.equal(kanban.columnaOcupada([], 'curso'), false);
+  assert.equal(kanban.columnaOcupada(null, 'curso'), false);
+
+  // e) Punto 4: qué columnas se lanzan. La guarda evita repetir una consulta; el desmontaje (también el de StrictMode)
+  //    la limpia y al montar otra vez se relanza todo.
+  const deseadas = { nuevo: { firma: 'f1' }, curso: { firma: 'f2' }, hecho: { firma: 'f3' } };
+  const primera = kanban.columnasPorLanzar(columnas, deseadas, {});
+  assert.deepEqual(primera.lista.map((c) => c.clave), ['nuevo', 'curso', 'hecho'], 'montar lanza todas');
+  assert.deepEqual(primera.lanzadas, { nuevo: 'f1', curso: 'f2', hecho: 'f3' });
+  assert.deepEqual(kanban.columnasPorLanzar(columnas, deseadas, primera.lanzadas).lista, [], 'sin cambios no repite');
+  const guarda = { ...primera.lanzadas };
+  kanban.columnasPorLanzar(columnas, { ...deseadas, curso: { firma: 'otra' } }, primera.lanzadas);
+  assert.deepEqual(primera.lanzadas, guarda, 'no muta la guarda que recibe');
+  assert.deepEqual(kanban.columnasPorLanzar(columnas, { ...deseadas, curso: { firma: 'otra' } }, primera.lanzadas).lista.map((c) => c.clave), ['curso']);
+  // Montar → abortar en el desmontaje (la guarda vuelve a {}) → montar: se relanza todo.
+  assert.deepEqual(kanban.columnasPorLanzar(columnas, deseadas, {}).lista.map((c) => c.clave), ['nuevo', 'curso', 'hecho']);
+  assert.deepEqual(kanban.columnasPorLanzar(columnas, { nuevo: { firma: 'f1' } }, {}).lista.map((c) => c.clave), ['nuevo'],
+    'una columna sin consulta vigente no se lanza');
+
+  // f) Punto 7: un anuncio igual al anterior se vuelve a decir (alterna un espacio invisible).
+  const a1 = kanban.siguienteAnuncio('', 'PVEN-1 movido a Facturado');
+  assert.equal(a1, 'PVEN-1 movido a Facturado');
+  const a2 = kanban.siguienteAnuncio(a1, 'PVEN-1 movido a Facturado');
+  assert.notEqual(a2, a1, 'el mismo texto cambia para que aria-live lo lea otra vez');
+  assert.equal(a2.replace(/​/g, ''), a1);
+  const a3 = kanban.siguienteAnuncio(a2, 'PVEN-1 movido a Facturado');
+  assert.notEqual(a3, a2);
+  assert.equal(kanban.siguienteAnuncio(a2, 'Otro'), 'Otro');
+
+  // g) Punto 5: el alto se calcula contra el contenedor desplazable (el <main> del dashboard), sin inflarse si ya está
+  //    desplazado.
+  for (const v of ['auto', 'scroll', 'overlay']) assert.equal(kanban.esDesplazable(v), true, v);
+  for (const v of ['visible', 'hidden', 'clip', '', undefined]) assert.equal(kanban.esDesplazable(v), false, String(v));
+  assert.equal(kanban.altoEnContenedor({ altoVisible: 900, arriba: 200 }), 684, 'como altoTablero sin desplazar');
+  assert.equal(kanban.altoEnContenedor({ altoVisible: 900, arriba: 50, desplazado: 150 }), 684, 'desplazado 150: el mismo alto');
+  assert.equal(kanban.altoEnContenedor({ altoVisible: 836, arriba: 264, arribaContenedor: 64 }), 620, 'el top es el del contenedor');
+  assert.equal(kanban.altoEnContenedor({ altoVisible: 500, arriba: 300 }), 420, 'mínimo 420');
+
+  // h) Punto 7: confirmar mezcla la respuesta del servidor sobre la fila (el PATCH no trae todos los campos).
+  {
+    const idHub = (x) => `${x.tipo}|${x.id}`;
+    const t = { nuevo: { items: [], total: 0, cargando: false, error: null },
+      curso: { items: [{ id: 5, tipo: 'COT', numero: 'COT-5', cliente: 'Ana', estado: 'BORRADOR' }], total: 1, cargando: false, error: null } };
+    const r = kanban.reemplazarTarjeta(t, 'curso', 'COT|5', { id: 5, estado: 'ENVIADA' }, { idDe: idHub });
+    assert.deepEqual(r.curso.items[0], { id: 5, tipo: 'COT', numero: 'COT-5', cliente: 'Ana', estado: 'ENVIADA' });
+    assert.equal(idHub(r.curso.items[0]), 'COT|5', 'la tarjeta conserva su id');
+  }
+
+  // i) Kanban.tsx sobre el fuente (sin DOM en node).
+  const fuente = readFileSync(new URL('../src/components/ui/Kanban.tsx', import.meta.url), 'utf8');
+  // Punto 2: el servidor manda también cuando falla.
+  assert.match(fuente, /catch \(err\) \{\s*movimiento\.deshacer\(\);\s*tablero\.recargar\(\[origen, destino\]\);/);
+  // Punto 3: «Ver más» quieto con un movimiento pendiente (en el botón y en el hook).
+  assert.match(fuente, /const ocupada = columnaOcupada\(esperando\.values\(\), c\.clave\);/);
+  assert.match(fuente, /disabled=\{d\.cargandoMas \|\| d\.cargando \|\| ocupada\}/);
+  assert.match(fuente, /if \(columnaOcupada\(enCurso\.current\.values\(\), clave\)\) return;/);
+  // Punto 4: el desmontaje aborta y limpia la guarda (StrictMode monta, desmonta y vuelve a montar).
+  assert.match(fuente,
+    /for \(const control of Object\.values\(vivos\)\) control\.abort\(\);[\s\S]{0,500}?lanzadas\.current = \{\};\s*ultimasDeps\.current = null;/);
+  assert.match(fuente, /columnasPorLanzar\(/);
+  // Punto 5: el alto se recalcula con el aviso y el banner, y con el contenedor desplazable y el propio tablero.
+  assert.match(fuente, /useLayoutEffect\(\(\) => \{\s*ajustarAlto\(\);\s*\}, \[aviso, soloVer, ajustarAlto\]\);/);
+  assert.match(fuente, /observador\.observe\(desplazable\);/);
+  assert.match(fuente, /observador\.observe\(envoltura\.current\);/);
+  assert.match(fuente, /esDesplazable\(/);
+  assert.match(fuente, /altoEnContenedor\(/);
+  // Punto 6: el foco va a la tarjeta en su columna nueva (o al encabezado) y queda en el botón de plegar o abrir.
+  assert.match(fuente, /data-tarjeta=\{clave\}/);
+  assert.match(fuente, /tabIndex=\{-1\}/);
+  assert.match(fuente, /data-encabezado/);
+  assert.match(fuente, /data-plegar="abrir"/);
+  assert.match(fuente, /data-plegar="plegar"/);
+  assert.match(fuente, /setFocoPendiente\(\(previo\) => \(\{ \.\.\.foco, n: \(previo\?\.n \?\? 0\) \+ 1 \}\)\)/);
+  assert.match(fuente, /void soltar\(item, origen, opcion\.clave, true\);/, '«Mover a…» pide que el foco siga a la tarjeta');
+  assert.match(fuente, /if \(desdeMenu\) enfocarDespues\(\{ columna: destino, tarjeta: clave \}\);/);
+  assert.match(fuente, /enfocarDespues\(\{ columna: clave, boton: plegada \? 'abrir' : 'plegar' \}\);/);
+  assert.match(fuente, /objetivo \?\?= seccion\.querySelector<HTMLElement>\('\[data-encabezado\]'\);/, 'si no se ve, el encabezado');
+  // Punto 7: perder la captura cancela; el anuncio se repite; contraste.
+  assert.match(fuente, /onLostPointerCapture=\{alPerderCaptura\}/);
+  assert.match(fuente, /siguienteAnuncio\(/);
+  assert.ok(!fuente.includes('text-slate-400'), 'el tiempo, el vacío y el ícono de plegar en text-slate-500');
+}
+
 console.log('✓ lib/kanban.js: columnas, reparto, orden, páginas, movimiento, reglas, destinos, arrastre y motivo.');
 console.log('✓ T4B: modo servidor y cliente, plegadas, turnos, deshacer, «Mover a…» y Kanban.tsx.');
+console.log('✓ T4B r1: deshacer sin perder tarjetas, «Ver más» quieto, StrictMode, alto, foco y anuncio.');

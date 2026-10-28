@@ -16,7 +16,8 @@ import { posicionMenu } from '@/lib/tabla';
  *  - Ni el botón ni el menú dejan pasar el clic o el puntero a la fila o a la tarjeta de debajo (los eventos de un
  *    portal suben por el árbol de React): abrir el menú no abre el documento ni empieza un arrastre.
  *  - Ítems {etiqueta, icono, onClick, peligro, oculto}; además deshabilitado (se ve y no hace nada) y titulo (el
- *    porqué, al pasar el mouse). Sin ítems visibles no pinta nada.
+ *    porqué, al pasar el mouse; en un ítem deshabilitado también una segunda línea visible, T4B r1). Sin ítems visibles
+ *    no pinta nada.
  */
 
 export type ItemMenuFila = {
@@ -183,12 +184,18 @@ export function MenuFila({
                 aria-disabled={item.deshabilitado || undefined}
                 title={item.titulo}
                 onClick={() => elegir(item)}
-                className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold outline-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 ${
+                className={`group flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold outline-none aria-disabled:cursor-not-allowed ${
                   item.peligro ? 'text-rose-600 hover:bg-rose-50 focus:bg-rose-50' : 'text-slate-700 hover:bg-slate-50 focus:bg-slate-100'
                 }`}
               >
-                {Icono && <Icono size={14} className="shrink-0" />}
-                <span className="truncate">{item.etiqueta}</span>
+                {Icono && <Icono size={14} className="mt-[3px] shrink-0 group-aria-disabled:opacity-50" />}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate group-aria-disabled:opacity-50">{item.etiqueta}</span>
+                  {/* T4B r1: el porqué de un ítem deshabilitado se lee (teclado y celular no tienen title). */}
+                  {item.deshabilitado && item.titulo && (
+                    <span className="mt-0.5 block whitespace-normal break-words text-[11px] text-slate-500 font-normal leading-snug">{item.titulo}</span>
+                  )}
+                </span>
               </button>
             );
           })}

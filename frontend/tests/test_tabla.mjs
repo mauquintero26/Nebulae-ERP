@@ -404,6 +404,15 @@ console.log('--- TEST 15 (T4A): esModoTabla (useVistaGuardada) y posicionMenu (M
   const fuente = readFileSync(new URL('../src/components/ui/MenuFila.tsx', import.meta.url), 'utf8');
   assert.ok(fuente.includes("scrollIntoView({ block: 'nearest' })"), 'MenuFila trae el ítem a la vista');
   assert.ok(!/(destino|querySelector<HTMLElement>\(ITEM\)\?)\.focus\(/.test(fuente), 'ningún ítem se enfoca sin traerlo a la vista (pasa por enfocar)');
+  // T4B r1 (punto 1): en un ítem deshabilitado, el porqué (titulo) es una segunda línea visible, sin truncar (teclado y
+  // celular, donde no hay title); en uno habilitado sigue siendo solo el title.
+  assert.match(fuente, /\{item\.deshabilitado && item\.titulo && \(/, 'el motivo se pinta solo en un ítem deshabilitado');
+  const linea = /<span className="([^"]*text-\[11px\] text-slate-500[^"]*)">\{item\.titulo\}<\/span>/.exec(fuente);
+  assert.ok(linea, 'la segunda línea: text-[11px] text-slate-500 con el titulo');
+  assert.ok(!linea[1].includes('truncate') && linea[1].includes('whitespace-normal'), 'sin truncar');
+  assert.ok(fuente.includes('title={item.titulo}'), 'el title se conserva');
+  assert.ok(!/[\s"`]aria-disabled:opacity-50/.test(fuente) && /group-aria-disabled:opacity-50/.test(fuente),
+    'lo apagado es el ícono y la etiqueta, no el motivo (que se lee completo)');
 }
 
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');

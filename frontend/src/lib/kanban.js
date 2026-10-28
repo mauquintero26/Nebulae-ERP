@@ -589,8 +589,10 @@ export function asegurarColumna(tablero, clave) {
 }
 
 /**
- * Un tablero nuevo con `item` (el documento que devolvió el servidor) en el lugar de la tarjeta `id` de la columna
- * `clave`. Si la tarjeta ya no está ahí, o `item` no es un objeto, devuelve el mismo tablero (queda la optimista).
+ * Un tablero nuevo con `item` (el documento que devolvió el servidor) mezclado sobre la tarjeta `id` de la columna
+ * `clave`, en su lugar: {...la fila, ...item} (T4B r1: el PATCH no trae todos los campos de la fila, y la tarjeta no
+ * pierde su tipo, su número ni su cliente). Si la tarjeta ya no está ahí, o `item` no es un objeto, devuelve el mismo
+ * tablero (queda la optimista).
  * @param {Tablero} tablero
  * @param {string} clave
  * @param {unknown} id
@@ -602,14 +604,21 @@ export function reemplazarTarjeta(tablero, clave, id, item, { idDe = idPorDefect
   const columna = exigirColumna(tablero, clave);
   const i = columna.items.findIndex((x) => idDe(x) === id);
   if (i < 0 || !item || typeof item !== 'object') return tablero;
-  return { ...tablero, [clave]: { ...columna, items: columna.items.map((x, j) => (j === i ? item : x)) } };
+  return { ...tablero, [clave]: { ...columna, items: columna.items.map((x, j) => (j === i ? { ...x, ...item } : x)) } };
 }
 
 /**
- * Deshace un movimiento optimista que el servidor rechazó (KANBAN-base d): si el tablero sigue siendo el que dejó
- * moverTarjeta (`movido`), exactamente el anterior (deshacer()); si en medio llegó otra carga, la tarjeta vuelve de
- * `destino` a `origen` con sus datos de antes (`original`) y lo demás que llegó se conserva. Si una de las dos columnas
- * ya no está, devuelve el tablero actual.
+ * Deshace un movimiento optimista que el servidor rechazó (KANBAN-base d; T4B r1: ninguna tarjeta se pierde ni se
+ * duplica):
+ *  - si el tablero sigue siendo el que dejó moverTarjeta (`movido`), exactamente el anterior (deshacer());
+ *  - si en medio llegó otra carga:
+ *     · la tarjeta sigue en el destino y no en el origen: vuelve al origen con sus datos de antes (`original`);
+ *     · ya está en el origen (lo trajo una recarga): solo se quita del destino si sigue ahí (su total baja 1), y el
+ *       total del origen, que ya es el del servidor, no se toca;
+ *     · no está en ninguna de las dos (una recarga reemplazó el destino): `original` vuelve de primera al origen, con
+ *       su total + 1.
+ *    Lo demás que llegó se conserva. Después la pantalla recarga las dos columnas: el servidor manda.
+ * Si una de las dos columnas ya no está, devuelve el tablero actual.
  * @param {Tablero} actual
  * @param {Tablero} movido
  * @param {() => Tablero} deshacer
@@ -619,7 +628,94 @@ export function reemplazarTarjeta(tablero, clave, id, item, { idDe = idPorDefect
 export function deshacerMovimiento(actual, movido, deshacer, { id, origen, destino, original, idDe = idPorDefecto }) {
   if (actual === movido) return deshacer();
   if (!actual || !tiene(actual, origen) || !tiene(actual, destino)) return actual;
-  return moverTarjeta(actual, id, destino, origen, original ?? {}, { idDe }).tablero;
+  const desde = actual[origen];
+  const hacia = actual[destino];
+  const enOrigen = desde.items.some((x) => idDe(x) === id);
+  const enDestino = hacia.items.some((x) => idDe(x) === id);
+  if (enOrigen) {
+    if (!enDestino) return actual;
+    const total = typeof hacia.total === 'number' ? Math.max(0, hacia.total - 1) : hacia.total;
+    return { ...actual, [destino]: { ...hacia, items: hacia.items.filter((x) => idDe(x) !== id), total } };
+  }
+  if (enDestino) return moverTarjeta(actual, id, destino, origen, original ?? {}, { idDe }).tablero;
+  const total = typeof desde.total === 'number' ? desde.total + 1 : desde.total;
+  return { ...actual, [origen]: { ...desde, items: [{ ...(original ?? {}) }, ...desde.items], total } };
+}
+
+/**
+ * true si algún movimiento que espera al servidor sale de la columna `clave` o va hacia ella (T4B r1): su «Ver más»
+ * queda quieto, porque el offset contaría la tarjeta optimista y el servidor saltaría un id.
+ * @param {Iterable<{origen: string, destino: string}> | null | undefined} movimientos
+ * @param {string} clave
+ * @returns {boolean}
+ */
+export function columnaOcupada(movimientos, clave) {
+  for (const m of movimientos ?? []) {
+    if (m?.origen === clave || m?.destino === clave) return true;
+  }
+  return false;
+}
+
+/**
+ * Las columnas cuya consulta vigente todavía no se lanzó, y la guarda nueva (T4B r1). `lanzadas` es {[clave]: firma}
+ * de lo ya lanzado; no se muta. El desmontaje (también el que simula StrictMode) aborta y limpia la guarda ({}): al
+ * montar otra vez, todo se relanza.
+ * @param {ReadonlyArray<ColumnaKanban>} columnas
+ * @param {Record<string, {firma: string}> | null | undefined} deseadas
+ * @param {Record<string, string> | null | undefined} lanzadas
+ * @returns {{lista: ColumnaKanban[], lanzadas: Record<string, string>}}
+ */
+export function columnasPorLanzar(columnas, deseadas, lanzadas) {
+  /** @type {Record<string, string>} */
+  const nuevas = { ...(lanzadas ?? {}) };
+  /** @type {ColumnaKanban[]} */
+  const lista = [];
+  for (const c of columnas ?? []) {
+    const d = deseadas?.[c.clave];
+    if (!d || nuevas[c.clave] === d.firma) continue;
+    nuevas[c.clave] = d.firma;
+    lista.push(c);
+  }
+  return { lista, lanzadas: nuevas };
+}
+
+/** Un espacio de ancho cero: cambia el texto sin cambiar lo que se lee. */
+const INVISIBLE = '​';
+
+/**
+ * El próximo texto de la región aria-live (T4B r1): si es igual al anterior, alterna un espacio invisible al final para
+ * que el lector de pantalla lo vuelva a decir.
+ * @param {string} anterior
+ * @param {string} texto
+ * @returns {string}
+ */
+export function siguienteAnuncio(anterior, texto) {
+  const previo = String(anterior ?? '');
+  if (previo.replace(/​$/, '') !== texto) return texto;
+  return previo.endsWith(INVISIBLE) ? texto : `${texto}${INVISIBLE}`;
+}
+
+/**
+ * true si un overflow-y (de getComputedStyle) hace desplazable al elemento: 'auto', 'scroll' u 'overlay' (T4B r1: el
+ * alto del tablero se mide contra el contenedor desplazable más cercano, el <main> del dashboard).
+ * @param {unknown} overflowY
+ * @returns {boolean}
+ */
+export function esDesplazable(overflowY) {
+  return overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay';
+}
+
+/**
+ * El alto del tablero dentro de su contenedor desplazable (T4B r1): altoTablero con el alto visible del contenedor y el
+ * top de la caja medido desde el principio del contenido del contenedor (arriba − arribaContenedor + desplazado), no
+ * desde la ventana: si el contenedor ya está desplazado, el alto no se infla. Sin contenedor, la ventana
+ * (arribaContenedor 0 y desplazado = scrollY).
+ * @param {{altoVisible: number, arriba: number, arribaContenedor?: number, desplazado?: number}} medidas
+ * @param {{minimo?: number, margen?: number}} [opciones]
+ * @returns {number}
+ */
+export function altoEnContenedor({ altoVisible, arriba, arribaContenedor = 0, desplazado = 0 }, opciones = {}) {
+  return altoTablero(altoVisible, arriba - arribaContenedor + desplazado, opciones);
 }
 
 /**
