@@ -1659,7 +1659,7 @@ console.log('--- TEST 32 (T4D): el fuente de los componentes de vista de compone
   assert.match(leer('components/AlertasBadge.tsx'), /import \{ KPI_COLOR_MAP \} from '@\/lib\/design-system';/, 'AlertasBadge sigue igual');
 }
 
-console.log('--- TEST 33 (T4D r1, punto 3): anchoAlSoltar — la columna flexible no guarda el espacio que sobra ---');
+console.log('--- TEST 33 (T4D r1 y r2): anchoAlSoltar y limitesDelAsa ---');
 {
   // Sin moverse no se guarda nada (un clic, o el primero de un doble clic).
   assert.equal(anchoAlSoltar({ base: 200, pintado: 1084, px: 1084, flexible: true }), null);
@@ -1704,6 +1704,15 @@ console.log('--- TEST 33 (T4D r1, punto 3): anchoAlSoltar — la columna flexibl
   const sinMargen = limitesDelAsa({ base: 200, pintado: 1084, flexible: true });
   assert.equal(anchoAlSoltar({ base: 200, pintado: 1084, px: Math.min(sinMargen.max, 1134), flexible: true }), null,
     'con el máximo por defecto (640) la flexible que llena 1084 no se puede ensanchar: no se guarda nada');
+  // Revisión de r2 (controlador): si hubo gesto lo decide el puntero (dx), no el ancho ya recortado a [min, max]. Una
+  // columna a 1-3 px de su límite sí guarda; un ancho que no cambió no se guarda (la flexible en su tope, sin inflarse).
+  assert.equal(anchoAlSoltar({ base: 66, pintado: 66, px: 64, dx: -100 }), 64, 'a 2 px del mínimo, angostada 100 px');
+  assert.equal(anchoAlSoltar({ base: 638, pintado: 638, px: 640, dx: 200 }), 640, 'a 2 px del máximo, ensanchada 200 px');
+  assert.equal(anchoAlSoltar({ base: 140, pintado: 140, px: 141, dx: 1 }), null, 'el temblor sigue sin guardar');
+  assert.equal(anchoAlSoltar({ base: 140, pintado: 140, px: 142, dx: 2 }), null, '+20 y de vuelta a +2: no guarda');
+  assert.equal(anchoAlSoltar({ base: 640, pintado: 640, px: 640, dx: 200 }), null, 'en su máximo: nada que guardar');
+  assert.equal(anchoAlSoltar({ base: 200, pintado: 1084, px: 1084, dx: 200, flexible: true }), null,
+    'la flexible en su tope no guarda lo que sobra');
 }
 
 console.log('--- TEST 34 (T4D r1, 6a y 6f): estado de «N resultados» y la línea azul con la tabla corrida de lado ---');
@@ -1827,8 +1836,8 @@ console.log('--- TEST 37 (T4D r1): los cables de la ronda r1 en el fuente (gesto
   assert.match(t, /const liberarClic = \(clave: string\) => \{\s*window\.setTimeout\(\(\) => \{\s*if \(sinClic\.current === clave\) sinClic\.current = null;/);
   assert.match(t, /if \(ev\.key !== 'Escape' \|\| !iniciado\) return;\s*ev\.preventDefault\(\);\s*ev\.stopPropagation\(\);\s*terminarGesto\(false\);/,
     'Esc al mover termina sin pointerup (el clic espera al de después)');
-  assert.match(t, /if \(ev\.key !== 'Escape'\) return;\s*ev\.preventDefault\(\);\s*ev\.stopPropagation\(\);\s*terminarGesto\(false\);/,
-    'Esc al estirar, igual');
+  assert.match(t, /if \(ev\.key !== 'Escape' \|\| !movido\) return;\s*ev\.preventDefault\(\);\s*ev\.stopPropagation\(\);\s*terminarGesto\(false\);/,
+    'Esc al estirar, igual (revisión de r2: solo con el gesto ya empezado)');
   assert.equal(t.split("terminarGesto(ev.type === 'pointercancel');").length - 1, 2, 'la captura perdida, sin pointerup; pointercancel, con él');
   assert.match(t, /preferencias\.guardarAncho\(col\.id, px\);\s*terminarGesto\(true\);/, 'soltar el asa');
   assert.match(t, /const elegido = iniciado && el\.isConnected \? destino : null;\s*terminarGesto\(true\);/, 'soltar el título');
@@ -1964,6 +1973,17 @@ console.log('--- TEST 38 (T4D r2): umbral del asa, la flexible guarda lo que se 
   // 7. El JSDoc del cuerpo memoizado, en celda y en claseFila.
   const memo = 'solo puede depender de la fila y de lo que esté en las dependencias del useMemo de columnas (o de la identidad de claseFila); el cuerpo está memoizado';
   assert.equal(tabla.split(memo).length - 1, 2, 'en ColumnaTabla.celda y en claseFila');
+
+  // Revisión de r2 (controlador):
+  // - al soltar el asa, el umbral se mide con el puntero (dx), no con el ancho ya recortado;
+  // - el Esc del asa solo se consume con un gesto ya empezado (como el del título);
+  // - FiltroEstados devuelve el foco a una casilla si se cayó al body con el panel abierto;
+  // - el JSDoc de flexible avisa del tope.
+  const soltarAsa = /const alSoltar = \(ev: PointerEvent\) => \{([\s\S]*?)\n {4}\};/.exec(t)?.[1] ?? '';
+  assert.match(soltarAsa, /anchoMin: col\.anchoMin, anchoMax: col\.anchoMax, dx: ev\.clientX - x0,/);
+  assert.match(t, /if \(ev\.key !== 'Escape' \|\| !movido\) return;/);
+  assert.match(filtro, /if \(activo !== null && activo !== document\.body\) return;\s*panel\.current\?\.querySelector<HTMLInputElement>\('input:not\(:disabled\)'\)\?\.focus\(\{ preventScroll: true \}\);\s*\}, \[visible, lista\.length\]\);/);
+  assert.match(tabla, /Con el asa no pasa de su\s*(\*\s*)?anchoMax \(640 por defecto\): si ya llena más que eso, solo se angosta/);
 }
 
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');

@@ -1791,11 +1791,15 @@ export function superaUmbralAsa(dx) {
  *    del ancho disponible); al angostar mientras llena el espacio, min(base, px) (ese espacio tiene que ir a algún lado);
  *  - siempre entre anchoMin y anchoMax (64 y 640 si la columna no los dice); con limitesDelAsa, el asa nunca muestra un
  *    ancho que aquí se recorte, así que al soltar no salta. Un px que no es número da null.
- * @param {{base: number, pintado: number, px: number, flexible?: boolean, anchoMin?: number, anchoMax?: number}} entrada
+ * Revisión de r2: `dx` es lo que se movió el puntero; con él, el umbral se mide igual que al arrastrar (no sobre el
+ * ancho ya recortado, que a 1-3 px de un límite se tragaba un estiramiento real). Sin `dx`, se usa px − pintado. Un
+ * ancho igual al que se veía no se guarda (la flexible en su tope no guarda lo que sobra).
+ * @param {{base: number, pintado: number, px: number, flexible?: boolean, anchoMin?: number, anchoMax?: number, dx?: number}} entrada
  * @returns {number | null}
  */
-export function anchoAlSoltar({ base, pintado, px, flexible = false, anchoMin, anchoMax }) {
-  if (typeof px !== 'number' || !Number.isFinite(px) || !superaUmbralAsa(px - pintado)) return null;
+export function anchoAlSoltar({ base, pintado, px, flexible = false, anchoMin, anchoMax, dx }) {
+  if (typeof px !== 'number' || !Number.isFinite(px) || px === pintado) return null;
+  if (!superaUmbralAsa(dx ?? px - pintado)) return null;
   const { min, max } = limitesDe({ anchoMin, anchoMax });
   const ancho = flexible && px < pintado ? Math.min(base, px) : px;
   return limitarAncho(ancho, min, max);

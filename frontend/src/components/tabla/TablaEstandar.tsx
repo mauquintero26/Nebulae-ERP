@@ -101,7 +101,11 @@ export type ColumnaTabla<T> = DefinicionColumna & {
   ordenable?: boolean | string;
   /** El valor de orden en el modo 'cliente' (accesoresDeOrden, para useListadoCliente). */
   valorOrden?: (fila: T) => unknown;
-  /** Toma el espacio que sobra de la tarjeta, sin bajar de su ancho (medido con ResizeObserver). */
+  /**
+   * Toma el espacio que sobra de la tarjeta, sin bajar de su ancho (medido con ResizeObserver). Con el asa no pasa de su
+   * anchoMax (640 por defecto): si ya llena más que eso, solo se angosta. Dale un anchoMax mayor si la pantalla quiere
+   * que se pueda ensanchar en pantallas anchas.
+   */
   flexible?: boolean;
   /** El title de la celda cuando no es el texto que se pinta. */
   titleCelda?: (fila: T) => string | null | undefined;
@@ -536,11 +540,11 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
     const alSoltar = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return;
       const conectado = el.isConnected;
-      // Se guarda al soltar (D38), solo si el asa sigue en el DOM y el puntero se movió (anchoAlSoltar; la flexible,
-      // sin el espacio que sobra).
+      // Se guarda al soltar (D38), solo si el asa sigue en el DOM y el puntero pasó UMBRAL_ASA (anchoAlSoltar, que lo
+      // mide con dx; la flexible, al ensanchar, guarda lo que se ve; al angostar mientras llena, su base).
       const px = anchoAlSoltar({
         base, pintado: ancho0, px: ancho, flexible: Boolean(col.flexible),
-        anchoMin: col.anchoMin, anchoMax: col.anchoMax,
+        anchoMin: col.anchoMin, anchoMax: col.anchoMax, dx: ev.clientX - x0,
       });
       if (conectado && px !== null) preferencias.guardarAncho(col.id, px);
       terminarGesto(true);
@@ -550,7 +554,8 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
       terminarGesto(ev.type === 'pointercancel');
     };
     const alTeclear = (ev: KeyboardEvent) => {
-      if (ev.key !== 'Escape') return;
+      // Por debajo de UMBRAL_ASA todavía no es un gesto: el Esc sigue su camino (como en el título).
+      if (ev.key !== 'Escape' || !movido) return;
       ev.preventDefault();
       ev.stopPropagation();
       terminarGesto(false);

@@ -67,6 +67,15 @@ export function FiltroEstados({
     p.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus({ preventScroll: true });
   }, [visible]);
 
+  // Revisión de r2: al desmarcar un estado que la pestaña no tiene, su fila desaparece y el foco caería al body con el
+  // panel abierto; vuelve a la primera casilla habilitada.
+  useLayoutEffect(() => {
+    if (!visible) return;
+    const activo = document.activeElement;
+    if (activo !== null && activo !== document.body) return;
+    panel.current?.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus({ preventScroll: true });
+  }, [visible, lista.length]);
+
   useEffect(() => {
     if (!visible) return undefined;
     const alPresionar = (e: PointerEvent) => {
