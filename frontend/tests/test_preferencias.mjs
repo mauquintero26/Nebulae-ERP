@@ -17,7 +17,9 @@ import {
   usuarioDelToken, usuarioDeSesion, servidorDeUsuario, crearPreferenciasDeSesion,
 } from '../src/lib/preferencias.js';
 import { validarPeriodo, PERIODO_POR_DEFECTO } from '../src/lib/analisis.js';
-import { actualizadorColumnas, reconciliarColumnas } from '../src/lib/tabla.js';
+import {
+  actualizadorColumnas, reconciliarColumnas, guardarCambioColumnas, escriturasDeAccion, estadoTablaInicial, reducirEstadoTabla,
+} from '../src/lib/tabla.js';
 
 // Las MISMAS tres claves inválidas de backend/tests/test_preferencias_usuario.py (CLAVES_INVALIDAS, RP24).
 const CLAVES_INVALIDAS = ['pantalla:ventas', 'tabla:Ventas', 'tabla:' + 'a'.repeat(81)];
@@ -1351,6 +1353,162 @@ console.log('--- TEST 29 (T4C, RP26, D35 y D38): el tamaño (useEstadoTabla) y l
   assert.deepEqual(p8.leer('tabla:x'), del8, 'lo del usuario 8 queda intacto');
   assert.deepEqual(s8.puts, []);
   assert.equal(almacen.datos.get('pref:7:tabla:x'), undefined);
+}
+
+console.log('--- TEST 30 (T4C r1, punto 3): un gesto sobre la pantalla de 7 no llega a la cuenta 8 (escenarios A, B, D y F del revisor) ---');
+// Los dos usuarios del revisor (scratchpad sim4c/sim.mjs): 7 con su pantalla lista y, en otra pestaña, el token pasa a 8.
+const DEF_30 = [
+  { id: 'num', ancho: 120, clave: true, fija: 'izquierda' },
+  { id: 'cli', ancho: 200 }, { id: 'est', ancho: 140 }, { id: 'monto', ancho: 120, ocultaPorDefecto: true },
+];
+const DEL7_30 = { version: 1, orden: ['num', 'cli', 'est', 'monto'], anchos: { cli: 400 }, ocultas: [], tamano: 50 };
+const DEL8_30 = { version: 1, orden: ['num', 'est', 'cli', 'monto'], anchos: { cli: 222, est: 333, monto: 111 }, ocultas: ['monto'], tamano: 25 };
+
+async function dosUsuarios({ conTablaYVista = false } = {}) {
+  let usuario = 7;
+  const reloj = relojFalso();
+  const almacen = almacenFalso();
+  const srv = { 7: servidorAMano(), 8: servidorAMano() };
+  const gestor = crearPreferenciasPorUsuario({
+    leerUsuario: () => usuario,
+    crear: (u) => crearPreferencias({ usuarioId: u, almacen, servidor: srv[u], temporizador: reloj }),
+  });
+  const SIN_GUARDAR = {};
+  const cols = vincularPreferencia({ obtener: gestor.obtener, clave: 'tabla:x', porDefecto: SIN_GUARDAR, parte: true, alCambiar: () => {} });
+  const vinculos = [cols];
+  let vista = null;
+  let tam = null;
+  if (conTablaYVista) {
+    vista = vincularPreferencia({ obtener: gestor.obtener, clave: 'vista:x', porDefecto: 'lista', alCambiar: () => {} });
+    tam = vincularPreferencia({ obtener: gestor.obtener, clave: 'tabla:x', porDefecto: { tamano: 25 }, parte: true, alCambiar: () => {} });
+    vinculos.push(vista, tam);
+  }
+  // El oyente de usePreferencia: cuando obtener() nota el cambio, cada vínculo pasa a la instancia nueva.
+  gestor.alCambiar(() => { for (const v of vinculos) v.revisarUsuario(); });
+  await tic();
+  srv[7].gets[0].resolver({ status: 'success', data: { 'tabla:x': DEL7_30, 'vista:x': 'lista' } });
+  await tic();
+  await tic();
+  // La foto del render de 7 (lo que tiene actuales.current del hook).
+  const foto = { guardado: cols.estado().valor, listo: cols.estado().listo, usuario: 7 };
+  return {
+    srv, reloj, cols, vista, tam, foto, SIN_GUARDAR,
+    cambiarA8: ({ aviso }) => {
+      usuario = 8;
+      if (aviso) for (const v of vinculos) v.revisarUsuario();
+    },
+    usuarioDelToken: () => usuario,
+    async terminar() {
+      await tic();
+      const g8 = srv[8].gets[0];
+      if (g8) g8.resolver({ status: 'success', data: { 'tabla:x': DEL8_30, 'vista:x': 'lista' } });
+      for (let i = 0; i < 3; i += 1) await tic();
+      reloj.avanzar(800);
+      await tic();
+    },
+  };
+}
+// La librería sola (lo que hace aplicar sin mirar el usuario): la pieza vacía no publica, así que el valor del
+// vínculo sigue siendo el por defecto hasta listo y ninguna llamada arma una pieza sobre él.
+async function soloLibreria({ aviso, llamadas }) {
+  const u = await dosUsuarios();
+  u.cambiarA8({ aviso });
+  for (let i = 0; i < llamadas; i += 1) {
+    u.cols.guardar(actualizadorColumnas(DEF_30, { tipo: 'anchos', anchos: { cli: 500 + 20 * i } }, u.SIN_GUARDAR));
+  }
+  await u.terminar();
+  return u;
+}
+{
+  const a = await soloLibreria({ aviso: true, llamadas: 1 });
+  assert.deepEqual(a.srv[8].puts, [], 'A: con aviso, 1 llamada');
+  const b = await soloLibreria({ aviso: true, llamadas: 2 });
+  assert.deepEqual(b.srv[8].puts, [], 'B: con aviso, 2 llamadas');
+  const d = await soloLibreria({ aviso: false, llamadas: 3 });
+  assert.deepEqual(d.srv[8].puts, [], 'D: sin aviso, 3 llamadas');
+  for (const u of [a, b, d]) assert.deepEqual(u.srv[7].puts, [], 'nada sale tampoco a la cuenta 7');
+}
+{
+  // La regla de la librería: con parte, una pieza vacía no publica ni se acumula (antes y después de listo).
+  const servidor = servidorAMano();
+  const reloj = relojFalso();
+  const p = crearPreferencias({ usuarioId: 7, almacen: almacenFalso(), servidor, temporizador: reloj });
+  const precarga = p.precargar('');
+  const porDefecto = { tamano: 25 };
+  let publicaciones = 0;
+  const v = vincularPreferencia({ obtener: () => p, clave: 'tabla:x', porDefecto, parte: true, alCambiar: () => { publicaciones += 1; } });
+  for (const vacia of [{}, () => ({}), null, () => null]) v.guardar(/** @type {any} */ (vacia));
+  assert.equal(publicaciones, 0);
+  assert.equal(v.estado().valor, porDefecto, 'el MISMO objeto por defecto hasta listo');
+  await tic();
+  servidor.gets[0].resolver({ status: 'success', data: { 'tabla:x': { anchos: { cli: 300 } } } });
+  await precarga;
+  await tic();
+  assert.equal(publicaciones, 1, 'solo el de listo');
+  v.guardar({});
+  reloj.avanzar(800);
+  await tic();
+  assert.deepEqual([publicaciones, servidor.puts.length], [1, 0]);
+}
+{
+  // Con la guarda del hook (guardarCambioColumnas): cada escritura va con el usuario con que se pintó la pantalla.
+  for (const [nombre, aviso, llamadas] of [['A', true, 1], ['B', true, 2], ['D', false, 3]]) {
+    const u = await dosUsuarios();
+    u.cambiarA8({ aviso });
+    const retornos = [];
+    for (let i = 0; i < llamadas; i += 1) {
+      retornos.push(guardarCambioColumnas(u.cols.guardar, {
+        definicion: DEF_30, cambio: { tipo: 'anchos', anchos: { cli: 500 + 20 * i } }, sinGuardar: u.SIN_GUARDAR,
+        listo: u.foto.listo, usuarioRender: u.foto.usuario, usuarioToken: u.usuarioDelToken(),
+      }));
+    }
+    await u.terminar();
+    assert.deepEqual(retornos, Array(llamadas).fill(false), `${nombre}: no escribe`);
+    assert.deepEqual(u.srv[8].puts, [], `${nombre}: nada a la cuenta 8`);
+  }
+  // F: una acción de useEstadoTabla (tamaño y modo) hecha sobre la pantalla de 7 después de enlazar: no se guarda.
+  const f = await dosUsuarios({ conTablaYVista: true });
+  f.cambiarA8({ aviso: true });
+  const actual = estadoTablaInicial({ vista: 'todos', tamano: 50 });
+  const siguiente = reducirEstadoTabla(reducirEstadoTabla(actual, { tipo: 'modo', valor: 'kanban' }), { tipo: 'tamano', valor: 25 });
+  const escrituras = escriturasDeAccion(actual, siguiente, { usuarioRender: 7, usuarioToken: f.usuarioDelToken() });
+  assert.equal(escrituras, null);
+  await f.terminar();
+  assert.deepEqual(f.srv[8].puts, [], 'F: ni el tamaño ni el modo van a la cuenta 8');
+  // Lo mismo con el usuario de siempre sí escribe (el control).
+  const g = await dosUsuarios({ conTablaYVista: true });
+  const mias = escriturasDeAccion(actual, siguiente, { usuarioRender: 7, usuarioToken: 7 });
+  assert.deepEqual([mias?.modo, mias?.tamano], ['kanban', 25]);
+  g.vista.guardar(mias.modo);
+  g.tam.guardar({ tamano: mias.tamano });
+  g.reloj.avanzar(800);
+  await tic();
+  assert.deepEqual(g.srv[7].puts.map((x) => x.clave).sort(), ['tabla:x', 'vista:x']);
+}
+
+console.log('--- TEST 31 (T4C r1, punto 6a): dos cambios seguidos en el mismo manejador parten de lo último del vínculo ---');
+{
+  const DEF = [{ id: 'num', ancho: 120, clave: true }, { id: 'cli', ancho: 200 }, { id: 'est', ancho: 140 }];
+  const SIN_GUARDAR = {};
+  const reloj = relojFalso();
+  const p = crearPreferencias({ usuarioId: 7, almacen: almacenFalso(), temporizador: reloj });
+  const cols = vincularPreferencia({ obtener: () => p, clave: 'tabla:x', porDefecto: SIN_GUARDAR, parte: true, alCambiar: () => {} });
+  await tic();
+  const aplicar = (cambio) => guardarCambioColumnas(cols.guardar, {
+    definicion: DEF, cambio, sinGuardar: SIN_GUARDAR, listo: true, usuarioRender: 7, usuarioToken: 7,
+  });
+  // ocultar y volver a mostrar 'cli' antes de otro render: no queda oculta.
+  assert.deepEqual([aplicar({ tipo: 'ocultar', id: 'cli', oculta: true }), aplicar({ tipo: 'ocultar', id: 'cli', oculta: false })], [true, true]);
+  assert.deepEqual(reconciliarColumnas(DEF, p.leer('tabla:x')).ocultas, []);
+  // 300 y luego 200 (su ancho por defecto): queda en 200.
+  assert.deepEqual([aplicar({ tipo: 'anchos', anchos: { cli: 300 } }), aplicar({ tipo: 'anchos', anchos: { cli: 200 } })], [true, true]);
+  assert.equal(reconciliarColumnas(DEF, p.leer('tabla:x')).anchos.cli, 200);
+  // Un cambio que no cambia nada devuelve false y no escribe; antes de listo, tampoco.
+  assert.equal(aplicar({ tipo: 'ocultar', id: 'num' }), false);
+  assert.equal(guardarCambioColumnas(cols.guardar, {
+    definicion: DEF, cambio: { tipo: 'ocultar', id: 'cli' }, sinGuardar: SIN_GUARDAR, listo: false, usuarioRender: 7, usuarioToken: 7,
+  }), false);
+  assert.deepEqual(reconciliarColumnas(DEF, p.leer('tabla:x')).ocultas, []);
 }
 
 console.log('✓ lib/preferencias.js: ámbitos, ráfagas, usuarios, memoria, 8 KB, precarga, reintentos, escribirParte, niveles, cerrar, instancia por usuario, vínculo de los hooks, usuario del token, precarga fallida y guardar tras un cambio de sesión.');

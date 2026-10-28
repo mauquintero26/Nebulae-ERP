@@ -1,37 +1,43 @@
 'use client';
 
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { getToken } from '@/lib/api';
-import { usuarioDelToken } from '@/lib/preferencias';
 import {
-  armarEstadoTabla, cambiosEstadoTabla, claveSesionTabla, esModoTabla, estadoTablaInicial, leerSesionTabla,
-  reducirEstadoTabla, textoSesionTabla,
+  armarEstadoTabla, claveSesionTabla, esModoTabla, escriturasDeAccion, estadoTablaInicial, reducirEstadoTabla,
+  sesionVigente,
 } from '@/lib/tabla';
 import type { AccionTabla, EstadoTabla, ModoTabla, SesionTabla } from '@/lib/tabla';
 import { usePreferencia, usePreferenciaParte } from '@/components/ui/usePreferencia';
+import { usuarioDeLaSesion } from './usuarioDeLaSesion';
 
 /**
- * El estado ÚNICO de una pantalla con tabla estándar (Bloque 4, T4C; TABLA-base punto 3, R4, R5, C2, C3, RP26 y D39):
- * {vista (la pestaña), modo, semaforo, paso, estados, q, orden, pagina, tamano}. Las tarjetas pulsables, las cajas del
- * flujo, los botones del semáforo, las pestañas, la búsqueda y el filtro de estados despachan acciones al reductor
+ * El estado ÚNICO de una pantalla con tabla estándar (Bloque 4, T4C y r1; TABLA-base punto 3, R4, R5, C2, C3, RP26 y
+ * D39): {vista (la pestaña), modo, semaforo, paso, estados, q, orden, pagina, tamano}. Las tarjetas pulsables, las cajas
+ * del flujo, los botones del semáforo, las pestañas, la búsqueda y el filtro de estados despachan acciones al reductor
  * (reducirEstadoTabla de lib/tabla.js): todo cambio que no sea de página vuelve a la página 1. La tabla y el tablero
  * leen este mismo estado y lo mandan al servidor (useListado y el `cargar` de useTableroKanban).
  *
- * Cada campo vive en UN lugar (cambiosEstadoTabla dice qué se escribe después de cada acción):
- *  - La pestaña, la página, la búsqueda, el orden, el semáforo y el paso son de la SESIÓN: van a sessionStorage
- *    'tabla-sesion:{id}' para volver a lo mismo al regresar de un documento (R4, C2). Se leen con useSyncExternalStore
- *    (en el servidor no hay sesión: sin desajuste de hidratación) y solo se escriben cuando el usuario cambia algo.
- *    Van con el usuario del token: la sesión de otra cuenta en la misma pestaña no se restaura.
+ * Cada campo vive en UN lugar (escriturasDeAccion dice qué se escribe después de cada acción):
+ *  - La pestaña, la página, la búsqueda, el orden, el semáforo, el paso y el filtro de estados son de la SESIÓN: van a
+ *    sessionStorage 'tabla-sesion:{id}' para volver a lo mismo al regresar de un documento (R4, C2; r1, punto 2: la
+ *    página N solo tiene sentido con el filtro con que se llegó a ella). Lo guardado se lee con useSyncExternalStore
+ *    (en el servidor no hay sesión: sin desajuste de hidratación) y solo se escribe cuando el usuario cambia algo.
  *  - El modo ('lista' | 'kanban') es del usuario: vista:<id> con usePreferencia. Este hook es el ÚNICO escritor de
  *    vista:<id> (RP26): la pantalla le pasa modo={estado.modo} a ConmutadorVista, su onCambiar despacha
  *    {tipo: 'modo', valor} y no usa el hook de vista guardada de ConmutadorVista.tsx (sería un segundo escritor). La
  *    primera vez vale inicial.modo (el CRM, 'kanban').
  *  - El tamaño (25 | 50) es del usuario y se comparte con el tablero (porColumna = estado.tamano): la pieza {tamano}
  *    de tabla:<id> con usePreferenciaParte (escribirParte, RP26), al lado de las columnas de usePreferenciasTabla.
- *  - El filtro de estados es de la pantalla mientras está abierta (no se guarda).
+ * El usuario (r1, puntos 3 y 4): todo va con el usuario del token con que se pintó la pantalla. Lo que se cambió en
+ * este montaje vale solo para ese usuario (sesionVigente): si el token pasa a otra cuenta (otra pestaña), la pantalla
+ * vuelve a leer la sesión con el usuario nuevo (la de la cuenta anterior da {}) y arranca de `inicial`. La sesión se
+ * firma con el usuario del render, y una acción despachada cuando el token ya es de otro (antes de que la pantalla lo
+ * vea) no se guarda en ningún lado: ni la sesión, ni el modo, ni el tamaño.
+ *
  * Las preferencias se leen después del montaje y nada se escribe antes de listo (D35 y D38: usePreferencia y
- * usePreferenciaParte ya lo resuelven). Mientras tanto el estado usa inicial.modo e inicial.tamano; el tercer valor,
- * `listo`, dice que ya se leyeron (la pantalla puede pintar el esqueleto de la vista hasta entonces).
+ * usePreferenciaParte ya lo resuelven). Mientras tanto el estado usa inicial.modo e inicial.tamano. El tercer valor,
+ * `listo`, dice que ya se leyeron. r1, punto 5: para no pedir la lista con el tamaño por defecto y abortarla al llegar
+ * el guardado, la pantalla pasa useListado({…, esperar: !listo}) (la tabla se ve cargando, no vacía). El tablero (D39)
+ * espera igual: no carga hasta listo.
  *
  * D39: si la pantalla tiene tablero, useTableroKanban recibe pantalla = este mismo id, porColumna = estado.tamano,
  * activo = estado.modo === 'kanban' y dependencias = dependenciasTablero(estado) (lib/tabla.js).
@@ -76,18 +82,10 @@ function escribirSesion(id: string, texto: string): void {
 const sinSuscripcion = () => () => {};
 const sinSesionEnElServidor = () => null;
 
-function usuarioDeLaSesion(): number | null {
-  try {
-    return usuarioDelToken(getToken());
-  } catch {
-    return null;
-  }
-}
-
 const esObjetoPlano = (v: unknown) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 type ParteTamano = { tamano?: unknown };
-type Local = { id: string; sesion: SesionTabla | null; estados: string[] };
+type Local = { id: string; usuario: number | null; sesion: SesionTabla };
 
 /**
  * [estado, despachar, listo] de la pantalla `id` (el mismo id de usePreferenciasTabla y de useTableroKanban). Ver
@@ -99,17 +97,16 @@ export function useEstadoTabla(
 ): [EstadoTabla, DespacharTabla, boolean] {
   const [inicialFijo] = useState(() => estadoTablaInicial(inicial));
 
-  // La sesión guardada (al montar) y lo que el usuario cambió desde entonces (una sola actualización por acción).
+  // La sesión guardada (al montar) y lo que el usuario cambió desde entonces (una sola actualización por acción), que
+  // vale solo para esta pantalla y este usuario.
   const instantanea = useCallback(() => leerSesion(id), [id]);
   const textoGuardado = useSyncExternalStore(sinSuscripcion, instantanea, sinSesionEnElServidor);
-  const [local, setLocal] = useState<Local>(() => ({ id, sesion: null, estados: inicialFijo.estados }));
-  const vigente = local.id === id ? local : null;
+  const [local, setLocal] = useState<Local | null>(null);
   const usuario = usuarioDeLaSesion();
   const sesion = useMemo(
-    () => vigente?.sesion ?? leerSesionTabla(textoGuardado, usuario),
-    [vigente, textoGuardado, usuario],
+    () => sesionVigente(local, { id, usuario, texto: textoGuardado }),
+    [local, id, usuario, textoGuardado],
   );
-  const estados = vigente ? vigente.estados : inicialFijo.estados;
 
   // Las preferencias del usuario (R4): el modo en vista:<id> y la pieza del tamaño en tabla:<id>.
   const [modo, guardarModo, modoListo] = usePreferencia<ModoTabla>(`vista:${id}`, inicialFijo.modo, { validar: esModoTabla });
@@ -119,26 +116,34 @@ export function useEstadoTabla(
   });
 
   const estado = useMemo(
-    () => armarEstadoTabla(inicialFijo, { sesion, estados, modo, tamano: tabla.tamano }),
-    [inicialFijo, sesion, estados, modo, tabla.tamano],
+    () => armarEstadoTabla(inicialFijo, { sesion, modo, tamano: tabla.tamano }),
+    [inicialFijo, sesion, modo, tabla.tamano],
   );
 
-  // Lo último que se pintó; despachar lo adelanta, así que dos acciones seguidas no se pisan.
+  // Lo último que se pintó y con qué usuario; despachar adelanta el estado, así que dos acciones seguidas no se pisan.
   const ultimo = useRef(estado);
+  const usuarioDelRender = useRef(usuario);
   useLayoutEffect(() => {
     ultimo.current = estado;
-  }, [estado]);
+    usuarioDelRender.current = usuario;
+  }, [estado, usuario]);
 
   const despachar = useCallback((accion: AccionTabla) => {
     const actual = ultimo.current;
     const siguiente = reducirEstadoTabla(actual, accion);
     if (siguiente === actual) return;
+    const escrituras = escriturasDeAccion(actual, siguiente, {
+      usuarioRender: usuarioDelRender.current, usuarioToken: usuarioDeLaSesion(),
+    });
+    // El token ya es de otra cuenta: la acción se hizo sobre la pantalla de la anterior y no se guarda en ningún lado.
+    if (!escrituras) return;
     ultimo.current = siguiente;
-    const cambios = cambiosEstadoTabla(actual, siguiente);
-    if (cambios.sesion || cambios.estados) setLocal({ id, sesion: siguiente, estados: siguiente.estados });
-    if (cambios.sesion) escribirSesion(id, textoSesionTabla(siguiente, usuarioDeLaSesion()));
-    if (cambios.modo) guardarModo(siguiente.modo);
-    if (cambios.tamano) guardarTabla({ tamano: siguiente.tamano });
+    if (escrituras.sesion !== null) {
+      setLocal({ id, usuario: usuarioDelRender.current, sesion: siguiente });
+      escribirSesion(id, escrituras.sesion);
+    }
+    if (escrituras.modo !== null) guardarModo(escrituras.modo);
+    if (escrituras.tamano !== null) guardarTabla({ tamano: escrituras.tamano });
   }, [id, guardarModo, guardarTabla]);
 
   return [estado, despachar, modoListo && tablaListo];

@@ -1,12 +1,13 @@
 'use client';
 
 import { useCallback, useLayoutEffect, useMemo, useRef } from 'react';
-import { actualizadorColumnas, fijasDe, parteDeColumnas, reconciliarColumnas } from '@/lib/tabla';
+import { fijasDe, guardarCambioColumnas, reconciliarColumnas } from '@/lib/tabla';
 import type { CambioColumnas, DefinicionColumna, LadoFijo } from '@/lib/tabla';
 import { usePreferenciaParte } from '@/components/ui/usePreferencia';
+import { usuarioDeLaSesion } from './usuarioDeLaSesion';
 
 /**
- * Las columnas de una tabla como las dejó el usuario (Bloque 4, T4C; TABLA-base punto 3, R4, C2, RP26, D35 y D38): el
+ * Las columnas de una tabla como las dejó el usuario (Bloque 4, T4C y r1; TABLA-base punto 3, R4, C2, RP26, D35 y D38): el
  * orden, los anchos y las columnas ocultas de tabla:<id>, reconciliados con la definición de hoy (reconciliarColumnas
  * de lib/tabla.js: un id que ya no existe se descarta, una columna nueva entra junto a su vecina, una clave nunca se
  * oculta, cada ancho queda entre su mínimo y su máximo y otra versión vuelve a lo por defecto).
@@ -14,10 +15,16 @@ import { usePreferenciaParte } from '@/components/ui/usePreferencia';
  * Escribe con usePreferenciaParte (T4A), al lado del tamaño de useEstadoTabla en la misma clave (RP26), y SOLO la pieza
  * que cambió (parteDeColumnas, D38): los anchos con {anchos}, el orden con {orden} y las ocultas con {ocultas}, más lo
  * mínimo para que se lean como las ve el usuario (ver parteDeColumnas). La pieza se calcula con lo último del vínculo
- * (actualizadorColumnas), no con lo del render.
+ * (actualizadorColumnas), no con lo del render: dos operaciones seguidas en el mismo manejador se suman bien.
  *  - Nada se escribe antes de `listo` (D35): hasta entonces la tabla se ve con su forma por defecto y cada operación
- *    devuelve false. Si el usuario de la sesión cambió y el hook no lo vio, el primer guardado se descarta (D38: es a
- *    propósito) y también devuelve false.
+ *    devuelve false.
+ *  - r1, punto 3: cada operación va con el usuario del token con que se pintó la pantalla (guardarCambioColumnas). Si el
+ *    token ya es de otra cuenta, no escribe y devuelve false: el gesto se hizo sobre la pantalla de la anterior. Si el
+ *    usuario cambió y el hook no lo vio, el primer guardado se descarta (D38: es a propósito) y también devuelve false.
+ *  - Regla (r1, 6d), porque dos instancias con el mismo id no se ven entre sí y una pieza de una pisaría la de la otra:
+ *    un solo usePreferenciasTabla por id en cada pantalla; la tabla y el menú de ajustes reciben su resultado por props.
+ *  - Límite conocido (r1, 6e): si la precarga falló y luego el servidor vuelve, una pieza compuesta ({orden, ocultas}, o
+ *    el mapa de anchos) se arma sobre {} y reemplaza esa pieza guardada (ver parteDeColumnas).
  *  - guardarAncho va al SOLTAR el borde (pointerup) o con el doble clic que ajusta al contenido; nunca en cada
  *    movimiento: durante el arrastre el ancho va al <col> por ref (T4D). guardarAnchos guarda varios a la vez
  *    ('Ajustar al ancho de la pantalla').
@@ -54,8 +61,10 @@ export type PreferenciasTabla = {
 
 type ColumnasGuardadas = Record<string, unknown>;
 
-// El valor por defecto del vínculo. Es SIEMPRE este mismo objeto: actualizadorColumnas lo reconoce (solo se ve antes
-// de listo o recién cambiado el usuario) y no arma ninguna pieza sobre él.
+// El valor por defecto del vínculo, que es este mismo objeto mientras no esté listo (al montar, o desde que el vínculo
+// pasa a la instancia de otro usuario y hasta su listo): actualizadorColumnas lo reconoce y no arma piezas sobre él. Como
+// una pieza vacía no publica (vincularPreferencia, T4C r1), la identidad se conserva con cualquier número de llamadas.
+// No reemplaza la guarda del usuario del render (guardarCambioColumnas).
 const SIN_GUARDAR: ColumnasGuardadas = {};
 const esObjetoPlano = (v: unknown) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
@@ -71,24 +80,19 @@ export function usePreferenciasTabla(id: string, columnas: ReadonlyArray<Definic
   );
   const fijas = useMemo(() => fijasDe(columnas), [columnas]);
 
-  // Lo último que se pintó, para los manejadores (se lee fuera del render).
-  const actuales = useRef({ columnas, guardado, listo });
+  // Lo último que se pintó y con qué usuario, para los manejadores (se lee fuera del render).
+  const usuario = usuarioDeLaSesion();
+  const actuales = useRef({ columnas, listo, usuario });
   useLayoutEffect(() => {
-    actuales.current = { columnas, guardado, listo };
+    actuales.current = { columnas, listo, usuario };
   });
 
   const aplicar = useCallback((cambio: CambioColumnas): boolean => {
     const ahora = actuales.current;
-    if (!ahora.listo) return false;
-    if (parteDeColumnas(ahora.columnas, ahora.guardado, cambio) === null) return false;
-    const actualizar = actualizadorColumnas(ahora.columnas, cambio, SIN_GUARDAR);
-    let escribio = false;
-    guardarParte((anterior) => {
-      const parte = actualizar(anterior);
-      escribio = Object.keys(parte).length > 0;
-      return parte;
+    return guardarCambioColumnas(guardarParte, {
+      definicion: ahora.columnas, cambio, sinGuardar: SIN_GUARDAR, listo: ahora.listo,
+      usuarioRender: ahora.usuario, usuarioToken: usuarioDeLaSesion(),
     });
-    return escribio;
   }, [guardarParte]);
 
   const guardarAncho = useCallback(

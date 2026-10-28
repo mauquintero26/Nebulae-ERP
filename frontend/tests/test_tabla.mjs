@@ -18,6 +18,7 @@ import {
   CAMPOS_SESION_TABLA, claveSesionTabla, textoSesionTabla, leerSesionTabla, armarEstadoTabla, cambiosEstadoTabla,
   dependenciasTablero, parteDeColumnas, urlListado, crearCargaListado, aplicarLlegadaListado, estadoListado,
   listadoCliente,
+  MAXIMO_ESTADOS, sesionVigente, escriturasDeAccion, guardarCambioColumnas, lanzarListado, esErrorDeOrden, rechazoPorAtender,
 } from '../src/lib/tabla.js';
 
 const ids = (filas) => filas.map((f) => f.id);
@@ -429,10 +430,11 @@ console.log('--- TEST 15 (T4A): esModoTabla (useVistaGuardada) y posicionMenu (M
 
 const tic = () => new Promise((r) => setImmediate(r));
 
-console.log('--- TEST 16 (T4C, R4 y C2): lo de la sesión (tabla-sesion:{id}): pestaña, página, búsqueda, orden, semáforo y paso ---');
+console.log('--- TEST 16 (T4C y r1, R4 y C2): lo de la sesión (tabla-sesion:{id}): pestaña, página, búsqueda, orden, semáforo, paso y estados ---');
 {
-  assert.deepEqual(CAMPOS_SESION_TABLA, ['vista', 'pagina', 'q', 'orden', 'semaforo', 'paso']);
+  assert.deepEqual(CAMPOS_SESION_TABLA, ['vista', 'pagina', 'q', 'orden', 'semaforo', 'paso', 'estados']);
   assert.ok(Object.isFrozen(CAMPOS_SESION_TABLA));
+  assert.equal(MAXIMO_ESTADOS, 20);
   assert.equal(claveSesionTabla('ventas.hub'), 'tabla-sesion:ventas.hub');
   const estado = estadoTablaInicial({
     vista: 'cot', modo: 'kanban', semaforo: 'vencidos', paso: 'cotizar', estados: ['A', 'B'], q: 'colchón', orden: '-monto',
@@ -440,10 +442,10 @@ console.log('--- TEST 16 (T4C, R4 y C2): lo de la sesión (tabla-sesion:{id}): p
   });
   const texto = textoSesionTabla(estado, 7);
   assert.deepEqual(JSON.parse(texto),
-    { usuario: 7, vista: 'cot', pagina: 4, q: 'colchón', orden: '-monto', semaforo: 'vencidos', paso: 'cotizar' },
-    'ni el modo ni el tamaño (son del usuario, R4) ni el filtro de estados');
+    { usuario: 7, vista: 'cot', pagina: 4, q: 'colchón', orden: '-monto', semaforo: 'vencidos', paso: 'cotizar', estados: ['A', 'B'] },
+    'ni el modo ni el tamaño (son del usuario, R4)');
   assert.deepEqual(leerSesionTabla(texto, 7),
-    { vista: 'cot', pagina: 4, q: 'colchón', orden: '-monto', semaforo: 'vencidos', paso: 'cotizar' });
+    { vista: 'cot', pagina: 4, q: 'colchón', orden: '-monto', semaforo: 'vencidos', paso: 'cotizar', estados: ['A', 'B'] });
   // sessionStorage sobrevive a cerrar la sesión y entrar con otra cuenta en la misma pestaña (como el borrador del
   // Chatter): la búsqueda y la página de un usuario no se le muestran a otro.
   assert.deepEqual(leerSesionTabla(texto, 8), {});
@@ -455,22 +457,37 @@ console.log('--- TEST 16 (T4C, R4 y C2): lo de la sesión (tabla-sesion:{id}): p
   }
   // Solo los campos de la sesión, normalizados como en estadoTablaInicial; lo demás se ignora.
   assert.deepEqual(
-    leerSesionTabla(JSON.stringify({ usuario: 7, pagina: '3', q: 5, vista: '', estados: ['X'], modo: 'kanban', tamano: 50, otro: 1 }), 7),
-    { pagina: 3, q: '5', vista: null },
+    leerSesionTabla(JSON.stringify({ usuario: 7, pagina: '3', q: 5, vista: '', estados: [' X ', 'X'], modo: 'kanban', tamano: 50, otro: 1 }), 7),
+    { pagina: 3, q: '5', vista: null, estados: ['X'] },
   );
   assert.deepEqual(leerSesionTabla(JSON.stringify({ usuario: 7, pagina: -2, orden: 'cliente' }), 7), { pagina: 1, orden: 'cliente' });
+  // r1, punto 2: 'estados' se valida (un arreglo de hasta 20 textos no vacíos, el máximo del servidor). Si no vale,
+  // se descarta ese campo y los demás quedan.
+  const veinte = Array.from({ length: 20 }, (_, i) => `E${i}`);
+  assert.deepEqual(leerSesionTabla(JSON.stringify({ usuario: 7, pagina: 2, estados: veinte }), 7), { pagina: 2, estados: veinte });
+  for (const malos of ['ENVIADA', 'A,B', [...veinte, 'E20'], ['A', ''], ['A', '  '], ['A', 5], ['A', null], { a: 1 }, null, 3]) {
+    assert.deepEqual(leerSesionTabla(JSON.stringify({ usuario: 7, pagina: 2, q: 'cama', estados: malos }), 7), { pagina: 2, q: 'cama' },
+      JSON.stringify(malos));
+  }
+  assert.deepEqual(leerSesionTabla(JSON.stringify({ usuario: 7, estados: [] }), 7), { estados: [] });
+  // El caso del revisor (probar_sesion.mjs): estados=['ENVIADA'] → página 3 → volver del documento.
+  let e = estadoTablaInicial({ vista: 'todos' });
+  e = reducirEstadoTabla(e, { tipo: 'estados', valor: ['ENVIADA'] });
+  e = reducirEstadoTabla(e, { tipo: 'pagina', valor: 3 });
+  const vuelta = armarEstadoTabla({ vista: 'todos' }, { sesion: leerSesionTabla(textoSesionTabla(e, 7), 7) });
+  assert.deepEqual({ vista: vuelta.vista, estados: vuelta.estados, pagina: vuelta.pagina }, { vista: 'todos', estados: ['ENVIADA'], pagina: 3 });
 }
 
-console.log('--- TEST 17 (T4C, R5, C3 y RP26): armarEstadoTabla, cambiosEstadoTabla y dependenciasTablero (D39) ---');
+console.log('--- TEST 17 (T4C y r1, R5, C3 y RP26): armarEstadoTabla, cambiosEstadoTabla y dependenciasTablero (D39) ---');
 {
   const inicial = { vista: 'todos', orden: 'atencion' };
   // La primera vez, lo de la pantalla. El CRM entra en Kanban (RP26, punto 4).
   assert.deepEqual(armarEstadoTabla(inicial, {}), estadoTablaInicial(inicial));
   assert.deepEqual(armarEstadoTabla(inicial), estadoTablaInicial(inicial));
   assert.equal(armarEstadoTabla({ modo: 'kanban' }, {}).modo, 'kanban');
-  // Con todo: la sesión, el filtro de estados y las dos preferencias, SIN volver a la página 1 (es una restauración).
+  // Con todo: la sesión (con su filtro de estados) y las dos preferencias, SIN volver a la página 1 (es una restauración).
   const armado = armarEstadoTabla(inicial, {
-    sesion: { vista: 'cot', pagina: 4, q: 'cama' }, estados: ['ENVIADA'], modo: 'kanban', tamano: 50,
+    sesion: { vista: 'cot', pagina: 4, q: 'cama', estados: ['ENVIADA'] }, modo: 'kanban', tamano: 50,
   });
   assert.deepEqual(armado, {
     ...estadoTablaInicial(inicial), vista: 'cot', pagina: 4, q: 'cama', estados: ['ENVIADA'], modo: 'kanban', tamano: 50,
@@ -481,30 +498,30 @@ console.log('--- TEST 17 (T4C, R5, C3 y RP26): armarEstadoTabla, cambiosEstadoTa
   assert.deepEqual([raro.modo, raro.tamano], ['kanban', 50]);
   const sinPrefs = armarEstadoTabla(crm, { modo: undefined, tamano: undefined });
   assert.deepEqual([sinPrefs.modo, sinPrefs.tamano], ['kanban', 50]);
-  // Sin filtro: el de la pantalla. Una sesión que no es un objeto no cuenta; la sesión no trae ni modo ni tamaño.
+  // Sin sesión, los estados de la pantalla. Una sesión que no es un objeto no cuenta; la sesión no trae ni modo ni tamaño.
   assert.deepEqual(armarEstadoTabla({ estados: ['A'] }, {}).estados, ['A']);
+  assert.deepEqual(armarEstadoTabla({ estados: ['A'] }, { sesion: { estados: [] } }).estados, [], 'lo de la sesión gana');
   assert.deepEqual(armarEstadoTabla(inicial, { sesion: /** @type {any} */ ('x') }), estadoTablaInicial(inicial));
-  assert.deepEqual(armarEstadoTabla(inicial, { sesion: /** @type {any} */ ({ modo: 'kanban', tamano: 50, estados: ['Z'] }) }),
-    estadoTablaInicial(inicial));
+  assert.deepEqual(armarEstadoTabla(inicial, { sesion: /** @type {any} */ ({ modo: 'kanban', tamano: 50 }) }), estadoTablaInicial(inicial));
   // No muta lo que recibe.
-  const sesion = { vista: 'sc', pagina: 2 };
-  armarEstadoTabla(inicial, { sesion, estados: ['X'] });
-  assert.deepEqual(sesion, { vista: 'sc', pagina: 2 });
+  const sesion = { vista: 'sc', pagina: 2, estados: ['X'] };
+  armarEstadoTabla(inicial, { sesion });
+  assert.deepEqual(sesion, { vista: 'sc', pagina: 2, estados: ['X'] });
 
-  // Qué hay que escribir después de un cambio (cada campo tiene UN lugar).
-  const nada = { sesion: false, estados: false, modo: false, tamano: false };
+  // Qué hay que escribir después de un cambio (cada campo tiene UN lugar: la sesión, el modo o el tamaño).
+  const nada = { sesion: false, modo: false, tamano: false };
   assert.deepEqual(cambiosEstadoTabla(armado, armado), nada);
   const pagina = reducirEstadoTabla(armado, { tipo: 'pagina', valor: 5 });
   assert.deepEqual(cambiosEstadoTabla(armado, pagina), { ...nada, sesion: true });
   const estados = reducirEstadoTabla(armado, { tipo: 'estados', valor: ['A'] });
-  assert.deepEqual(cambiosEstadoTabla(armado, estados), { ...nada, sesion: true, estados: true }, 'vuelve a la página 1');
+  assert.deepEqual(cambiosEstadoTabla(armado, estados), { ...nada, sesion: true });
   const estados2 = reducirEstadoTabla(estados, { tipo: 'estados', valor: ['B'] });
-  assert.deepEqual(cambiosEstadoTabla(estados, estados2), { ...nada, estados: true }, 'ya estaba en la página 1');
+  assert.deepEqual(cambiosEstadoTabla(estados, estados2), { ...nada, sesion: true }, 'el filtro es de la sesión aunque ya estuviera en la página 1');
   assert.deepEqual(cambiosEstadoTabla(estados, reducirEstadoTabla(estados, { tipo: 'tamano', valor: 25 })), { ...nada, tamano: true });
   assert.deepEqual(cambiosEstadoTabla(armado, reducirEstadoTabla(armado, { tipo: 'modo', valor: 'lista' })),
     { ...nada, sesion: true, modo: true }, 'cambiar de modo también vuelve a la página 1');
 
-  // Lo repartido (sesión, filtro y preferencias) vuelve a armar EXACTAMENTE el mismo estado.
+  // Lo repartido (sesión y preferencias) vuelve a armar EXACTAMENTE el mismo estado.
   let e = estadoTablaInicial(inicial);
   const acciones = [
     { tipo: 'vista', valor: 'cot' }, { tipo: 'pagina', valor: 3 }, { tipo: 'busqueda', valor: 'cama doble' },
@@ -516,7 +533,7 @@ console.log('--- TEST 17 (T4C, R5, C3 y RP26): armarEstadoTabla, cambiosEstadoTa
   for (const a of acciones) {
     const s = reducirEstadoTabla(e, /** @type {any} */ (a));
     const rearmado = armarEstadoTabla(inicial, {
-      sesion: leerSesionTabla(textoSesionTabla(s, 7), 7), estados: s.estados, modo: s.modo, tamano: s.tamano,
+      sesion: leerSesionTabla(textoSesionTabla(s, 7), 7), modo: s.modo, tamano: s.tamano,
     });
     assert.deepEqual(rearmado, s, JSON.stringify(a));
     e = s;
@@ -663,21 +680,22 @@ console.log('--- TEST 19 (T4C, RP8): urlListado — q y estados en CSV, con_cont
   }
 }
 
-console.log('--- TEST 20 (T4C, D28): crearCargaListado — una carga lenta no pisa a la nueva ---');
+// pedir(url, signal) a mano; ignora el signal a propósito (resuelve igual), como un fetch que ya respondió.
+const aMano = () => {
+  const llamadas = [];
+  const pedir = (url, signal) => new Promise((resolver, rechazar) => llamadas.push({ url, signal, resolver, rechazar }));
+  return { llamadas, pedir };
+};
+
+console.log('--- TEST 20 (T4C y r1, D28): crearCargaListado — una carga lenta no pisa a la nueva ---');
 {
-  // pedir(url, signal) a mano; ignora el signal a propósito (resuelve igual), como un fetch que ya respondió.
-  const aMano = () => {
-    const llamadas = [];
-    const pedir = (url, signal) => new Promise((resolver, rechazar) => llamadas.push({ url, signal, resolver, rechazar }));
-    return { llamadas, pedir };
-  };
   {
     const { llamadas, pedir } = aMano();
     const llegadas = [];
     const carga = crearCargaListado({ pedir, alLlegar: (l) => llegadas.push(l) });
     carga.cargar('/x?offset=0', 'k1');
     await tic();
-    carga.cargar('/x?offset=25', 'k2');
+    carga.cargar('/x?offset=25', 'k2', { ruta: '/x', orden: null });
     await tic();
     assert.deepEqual(llamadas.map((l) => l.url), ['/x?offset=0', '/x?offset=25']);
     assert.equal(llamadas[0].signal.aborted, true, 'la anterior se aborta (AbortController)');
@@ -687,7 +705,9 @@ console.log('--- TEST 20 (T4C, D28): crearCargaListado — una carga lenta no pi
     // La lenta llega después: se descarta antes de publicar (el turno ya no es el suyo).
     llamadas[0].resolver({ data: [{ id: 1 }], total: 30 });
     await tic();
-    assert.deepEqual(llegadas, [{ marca: 'k2', ok: true, respuesta: { data: [{ id: 2 }], total: 30 } }]);
+    assert.deepEqual(llegadas, [{
+      marca: 'k2', ok: true, respuesta: { data: [{ id: 2 }], total: 30 }, contexto: { ruta: '/x', orden: null }, repeticion: 0,
+    }]);
     assert.equal(carga.turno(), 2);
   }
   {
@@ -705,7 +725,7 @@ console.log('--- TEST 20 (T4C, D28): crearCargaListado — una carga lenta no pi
     const error = Object.assign(new Error('No se puede ordenar por «x».'), { status: 422 });
     llamadas[1].rechazar(error);
     await tic();
-    assert.deepEqual(llegadas, [{ marca: 'k2', ok: false, error }]);
+    assert.deepEqual(llegadas, [{ marca: 'k2', ok: false, error, contexto: null, repeticion: 0 }]);
   }
   {
     // cancelar (el efecto se limpia: otra dependencia, activo = false o desmontaje) aborta y nada se publica.
@@ -733,7 +753,7 @@ console.log('--- TEST 20 (T4C, D28): crearCargaListado — una carga lenta no pi
     assert.equal(llamadas.length, 1, 'la abortada antes de salir no se pide');
     llamadas[0].resolver({ data: [{ id: 1 }] });
     await tic();
-    assert.deepEqual(llegadas.map((l) => [l.marca, l.ok]), [['k1', true]]);
+    assert.deepEqual(llegadas.map((l) => [l.marca, l.ok, l.repeticion]), [['k1', true, 0]], 'y no cuenta como una vuelta');
   }
   {
     // Un pedir que lanza de inmediato es un error de la carga vigente, no una excepción del efecto.
@@ -742,29 +762,62 @@ console.log('--- TEST 20 (T4C, D28): crearCargaListado — una carga lenta no pi
     const carga = crearCargaListado({ pedir: () => { throw error; }, alLlegar: (l) => llegadas.push(l) });
     assert.doesNotThrow(() => carga.cargar('/a', 'k1'));
     await tic();
-    assert.deepEqual(llegadas, [{ marca: 'k1', ok: false, error }]);
+    assert.deepEqual(llegadas, [{ marca: 'k1', ok: false, error, contexto: null, repeticion: 0 }]);
+  }
+  {
+    // r1, punto 6b: volver a pedir una consulta que ya llegó (activo: false → true, o esperar: true → false) es una
+    // vuelta: sube repeticion y avisa a los suscriptores (useSyncExternalStore), para que la tabla se vea recargando.
+    const { llamadas, pedir } = aMano();
+    const llegadas = [];
+    const carga = crearCargaListado({ pedir, alLlegar: (l) => llegadas.push(l) });
+    let avisos = 0;
+    const quitar = carga.suscribir(() => { avisos += 1; });
+    carga.cargar('/a', 'k1');
+    await tic();
+    llamadas[0].resolver({ data: [] });
+    await tic();
+    assert.deepEqual([carga.repeticion(), avisos], [0, 0]);
+    carga.cancelar();
+    carga.cargar('/a', 'k1');
+    assert.deepEqual([carga.repeticion(), avisos], [1, 1]);
+    await tic();
+    llamadas[1].resolver({ data: [{ id: 1 }] });
+    await tic();
+    assert.equal(llegadas[1].repeticion, 1);
+    // Otra consulta no es una vuelta; la misma otra vez sin que haya llegado, tampoco.
+    carga.cargar('/b', 'k2');
+    carga.cargar('/b', 'k2');
+    assert.deepEqual([carga.repeticion(), avisos], [1, 1]);
+    quitar();
+    await tic();
+    llamadas.at(-1).resolver({ data: [] });
+    await tic();
+    carga.cargar('/b', 'k2');
+    assert.deepEqual([carga.repeticion(), avisos], [2, 1], 'sin suscriptores no se avisa a nadie');
   }
 }
 
-console.log('--- TEST 21 (T4C, H6 y RP35): aplicarLlegadaListado y estadoListado ---');
+console.log('--- TEST 21 (T4C y r1, H6, RP35, esperar y vueltas): aplicarLlegadaListado, estadoListado y lanzarListado ---');
 {
   const a = { id: 1 };
   const b = { id: 2 };
+  const SIN_AVISO = { avisoOrden: null };
   // Antes de la primera respuesta no se inventa nada: total, conteos y resumen null y cargandoInicial.
-  assert.deepEqual(estadoListado(null, { clave: 'k1' }),
-    { filas: [], total: null, conteos: null, resumen: null, crudo: null, cargandoInicial: true, recargando: false, error: null });
+  assert.deepEqual(estadoListado(null, { clave: 'k1' }), {
+    filas: [], total: null, conteos: null, resumen: null, crudo: null, cargandoInicial: true, recargando: false, error: null, ...SIN_AVISO,
+  });
   const respuesta = { status: 'success', total: 134, data: [a, b], conteos: { todos: 134 }, resumen: { monto: 5 } };
   const r1 = aplicarLlegadaListado(null, { marca: 'k1', ok: true, respuesta });
   assert.deepEqual(estadoListado(r1, { clave: 'k1' }), {
     filas: [a, b], total: 134, conteos: { todos: 134 }, resumen: { monto: 5 }, crudo: respuesta, cargandoInicial: false,
-    recargando: false, error: null,
+    recargando: false, error: null, ...SIN_AVISO,
   });
   // Otra página, búsqueda o filtro en camino: conserva las filas anteriores y avisa recargando.
   const recargando = estadoListado(r1, { clave: 'k2' });
   assert.deepEqual([recargando.filas, recargando.total, recargando.conteos, recargando.cargandoInicial, recargando.recargando],
     [[a, b], 134, { todos: 134 }, false, true]);
   // Falla: conserva lo último y trae el error (dentro de la tabla); mientras se reintenta, el error no se muestra.
-  const error = Object.assign(new Error('No se puede ordenar por «x».'), { status: 422 });
+  const error = Object.assign(new Error('Error del servidor (500)'), { status: 500 });
   const r2 = aplicarLlegadaListado(r1, { marca: 'k2', ok: false, error });
   const fallo = estadoListado(r2, { clave: 'k2' });
   assert.deepEqual([fallo.filas, fallo.total, fallo.error, fallo.recargando, fallo.cargandoInicial], [[a, b], 134, error, false, false]);
@@ -772,8 +825,9 @@ console.log('--- TEST 21 (T4C, H6 y RP35): aplicarLlegadaListado y estadoListado
   assert.deepEqual([reintento.error, reintento.recargando], [null, true]);
   // La primera falla: sin filas, sin total y con el error; al reintentar, otra vez cargandoInicial (no hay qué mostrar).
   const r0 = aplicarLlegadaListado(null, { marca: 'k1', ok: false, error });
-  assert.deepEqual(estadoListado(r0, { clave: 'k1' }),
-    { filas: [], total: null, conteos: null, resumen: null, crudo: null, cargandoInicial: false, recargando: false, error });
+  assert.deepEqual(estadoListado(r0, { clave: 'k1' }), {
+    filas: [], total: null, conteos: null, resumen: null, crudo: null, cargandoInicial: false, recargando: false, error, ...SIN_AVISO,
+  });
   assert.equal(estadoListado(r0, { clave: 'k2' }).cargandoInicial, true);
   // Una respuesta buena después de un error lo borra; una sin conteos los deja en null.
   const r3 = aplicarLlegadaListado(r2, { marca: 'k3', ok: true, respuesta: { data: [b], total: 1 } });
@@ -781,9 +835,39 @@ console.log('--- TEST 21 (T4C, H6 y RP35): aplicarLlegadaListado y estadoListado
   // RP35: con activo = false no hay nada en camino y se conserva lo último.
   assert.deepEqual(estadoListado(r1, { clave: 'k9', activo: false }), estadoListado(r1, { clave: 'k1' }));
   assert.equal(estadoListado(null, { clave: 'k1', activo: false }).cargandoInicial, false);
-  // No muta lo que recibe.
+  // No muta lo que recibe; cada llegada lleva su número.
   assert.deepEqual(r1.datos?.filas, [a, b]);
   assert.equal(r1.error, null);
+  assert.deepEqual([r1.n, r2.n, r3.n], [1, 2, 3]);
+
+  // r1, punto 5: con esperar (las preferencias todavía no están listas) no hay petición y la tabla se ve cargando, no
+  // vacía: cargandoInicial sin datos, recargando con datos. activo = false gana (RP35 no cambia).
+  assert.deepEqual([estadoListado(null, { clave: 'k1', esperar: true }).cargandoInicial, estadoListado(null, { clave: 'k1', esperar: true }).error],
+    [true, null]);
+  const conDatos = estadoListado(r2, { clave: 'k2', esperar: true });
+  assert.deepEqual([conDatos.recargando, conDatos.cargandoInicial, conDatos.filas, conDatos.error], [true, false, [a, b], null]);
+  assert.deepEqual(estadoListado(r1, { clave: 'k1', esperar: true, activo: false }), estadoListado(r1, { clave: 'k1' }));
+  // r1, punto 6b: una vuelta en camino (la misma consulta pedida otra vez) se ve recargando y esconde el error anterior.
+  const vuelta = estadoListado(r2, { clave: 'k2', repeticion: 1 });
+  assert.deepEqual([vuelta.recargando, vuelta.error, vuelta.filas], [true, null, [a, b]]);
+  const llegoLaVuelta = aplicarLlegadaListado(r2, { marca: 'k2', ok: true, respuesta: { data: [a], total: 1 }, repeticion: 1 });
+  assert.deepEqual([estadoListado(llegoLaVuelta, { clave: 'k2', repeticion: 1 }).recargando, llegoLaVuelta.repeticion], [false, 1]);
+
+  // lanzarListado (el cuerpo del efecto de useListado): con activo = false o esperar no pide; al dejar de esperar sale
+  // UNA petición; la limpieza la aborta.
+  const { llamadas, pedir } = aMano();
+  const carga = crearCargaListado({ pedir, alLlegar: () => {} });
+  assert.equal(lanzarListado(carga, { url: '/a', clave: 'k1', esperar: true }), undefined);
+  assert.equal(lanzarListado(carga, { url: '/a', clave: 'k1', activo: false }), undefined);
+  assert.equal(lanzarListado(carga, { url: '/a', clave: 'k1', activo: false, esperar: false }), undefined);
+  await tic();
+  assert.equal(llamadas.length, 0);
+  const limpiar = lanzarListado(carga, { url: '/a', clave: 'k1', esperar: false, contexto: { ruta: '/a', orden: null } });
+  await tic();
+  assert.deepEqual(llamadas.map((l) => l.url), ['/a']);
+  assert.equal(typeof limpiar, 'function');
+  limpiar?.();
+  assert.equal(llamadas[0].signal.aborted, true);
 }
 
 console.log('--- TEST 22 (T4C): listadoCliente (useListadoCliente) — estados, búsqueda sin tildes, orden y página válida ---');
@@ -818,7 +902,7 @@ console.log('--- TEST 22 (T4C): listadoCliente (useListadoCliente) — estados, 
   assert.deepEqual(ids(filas), [1, 2, 3]);
 }
 
-console.log('--- TEST 23 (T4C, R4, RP8, RP26, RP35, D28 y D38): el fuente de los hooks de components/tabla ---');
+console.log('--- TEST 23 (T4C y r1, R4, RP8, RP26, RP35, D28 y D38): el fuente de los hooks de components/tabla ---');
 {
   const leer = (archivo) => readFileSync(new URL(`../src/components/tabla/${archivo}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const estado = leer('useEstadoTabla.ts');
@@ -835,25 +919,157 @@ console.log('--- TEST 23 (T4C, R4, RP8, RP26, RP35, D28 y D38): el fuente de los
   // RP26: useEstadoTabla es el único dueño de vista:<id> (el modo) y escribe el tamaño en tabla:<id> con usePreferenciaParte.
   assert.match(estado, /usePreferencia<ModoTabla>\(`vista:\$\{id\}`, inicialFijo\.modo, \{ validar: esModoTabla \}\)/);
   assert.match(estado, /usePreferenciaParte<[A-Za-z]+>\(`tabla:\$\{id\}`/);
-  assert.ok(estado.includes('guardarTabla({ tamano: siguiente.tamano })'), 'solo la pieza del tamaño');
+  assert.ok(estado.includes('guardarTabla({ tamano: escrituras.tamano })'), 'solo la pieza del tamaño');
   assert.ok(!estado.includes('useVistaGuardada'), 'sin el otro escritor de vista:');
-  assert.ok(estado.includes('reducirEstadoTabla(') && estado.includes('armarEstadoTabla(') && estado.includes('cambiosEstadoTabla('));
-  // D38: usePreferenciasTabla escribe con usePreferenciaParte la pieza de parteDeColumnas, y nada antes de listo.
+  assert.ok(estado.includes('reducirEstadoTabla(') && estado.includes('armarEstadoTabla('));
+  // r1, puntos 2, 3 y 4: los estados van con la sesión (sin canal aparte), lo local mira el usuario (sesionVigente) y
+  // cada escritura va con el usuario con que se pintó la pantalla (escriturasDeAccion).
+  assert.match(estado, /type Local = \{ id: string; usuario: number \| null; sesion: SesionTabla \};/);
+  assert.ok(!/setFiltro|vigente\.estados|inicialFijo\.estados/.test(estado), 'sin canal aparte para los estados');
+  assert.match(estado, /sesionVigente\(local, \{ id, usuario, texto: textoGuardado \}\)/);
+  assert.match(estado, /escriturasDeAccion\(actual, siguiente, \{\s*usuarioRender: usuarioDelRender\.current, usuarioToken: usuarioDeLaSesion\(\),?\s*\}\)/);
+  assert.match(estado, /if \(!escrituras\) return;/);
+  // D38 y r1: usePreferenciasTabla escribe con usePreferenciaParte la pieza de actualizadorColumnas por medio de
+  // guardarCambioColumnas (nada antes de listo y nada si el usuario del token ya no es el del render), sin el filtro
+  // previo con el guardado del render (r1, 6a).
   assert.match(prefs, /usePreferenciaParte<[A-Za-z]+>\(`tabla:\$\{id\}`/);
-  assert.ok(prefs.includes('reconciliarColumnas(') && prefs.includes('parteDeColumnas('));
-  assert.match(prefs, /if \(!ahora\.listo\) return false;/, 'nada se escribe antes de listo');
+  assert.ok(prefs.includes('reconciliarColumnas('));
+  assert.match(prefs, /guardarCambioColumnas\(guardarParte, \{[\s\S]*?listo: ahora\.listo,[\s\S]*?usuarioRender: ahora\.usuario, usuarioToken: usuarioDeLaSesion\(\),[\s\S]*?\}\)/);
+  assert.ok(!prefs.includes('parteDeColumnas('), 'sin el filtro previo con lo del render');
   // RP8 y D28: la URL con queryListado (urlListado), el signal hasta apiFetch y la carga vigente (crearCargaListado).
   assert.ok(listado.includes('urlListado(') && listado.includes('crearCargaListado('));
   assert.ok(listado.includes('apiFetch(url, { signal })'), 'apiFetch recibe el signal del AbortController');
-  assert.match(listado, /carga\.cargar\(url, clave\);\s*return \(\) => carga\.cancelar\(\);/, 'el efecto aborta al limpiarse (StrictMode, otra consulta)');
+  assert.match(listado, /useEffect\(\s*\(\) => lanzarListado\(carga, \{/, 'el efecto pide y su limpieza aborta (lanzarListado, StrictMode)');
   assert.ok(listado.includes('aplicarLlegadaListado(') && listado.includes('estadoListado('));
   assert.match(listado, /activo = true/, 'RP35: activo, true por defecto');
+  assert.match(listado, /esperar = false/, 'r1, punto 5: esperar, false por defecto');
+  assert.ok(listado.includes('useSyncExternalStore(carga.suscribir, carga.repeticion'), 'r1, 6b: las vueltas en la clave');
+  // r1, punto 1: la vuelta al orden por defecto se despacha UNA vez y desde un useEffect, nunca en el render.
+  const despachos = listado.split("despachar({ tipo: 'orden', valor: null })").length - 1;
+  assert.equal(despachos, 1);
+  const efecto = /useEffect\(\(\) => \{([\s\S]*?)\n {2}\}, \[[^\]]*\]\);/g;
+  const cuerpos = [...listado.matchAll(efecto)].map((m) => m[1]);
+  assert.ok(cuerpos.some((c) => c.includes('rechazoPorAtender(') && c.includes("despachar({ tipo: 'orden', valor: null })")),
+    'el despacho está dentro de un useEffect');
   assert.ok(!/search=|[?&]estado=/.test(listado));
   assert.ok(listado.includes('listadoCliente('));
   for (const exportado of ['useEstadoTabla', 'usePreferenciasTabla', 'useListado']) {
     assert.ok(indice.includes(`export * from './${exportado}';`), exportado);
   }
+  // r1, 6d: un solo usePreferenciasTabla por id.
+  for (const fuente of [prefs, indice]) assert.ok(fuente.includes('un solo usePreferenciasTabla por id en cada pantalla'));
+  // r1, 6c: los accesores de useListadoCliente, estables.
+  assert.ok(listado.includes('los accesores deben ser estables (una constante o useMemo)'));
+}
+
+console.log('--- TEST 24 (T4C r1, puntos 3 y 4): sesionVigente, escriturasDeAccion y guardarCambioColumnas ---');
+{
+  const id = 'ventas.hub';
+  const texto7 = textoSesionTabla(estadoTablaInicial({ vista: 'cot', q: 'Pérez Cliente Reservado', estados: ['ENVIADA'] }), 7);
+  const local = { id, usuario: 7, sesion: { vista: 'cot', q: 'Pérez Cliente Reservado', pagina: 2, estados: ['ENVIADA'] } };
+  // Lo que cambió el usuario en este montaje vale para él y para esta pantalla.
+  assert.equal(sesionVigente(local, { id, usuario: 7, texto: texto7 }), local.sesion);
+  // Otra cuenta (el token pasó a 8 en otra pestaña): ni lo local ni lo guardado de 7; la pantalla arranca de inicial.
+  assert.deepEqual(sesionVigente(local, { id, usuario: 8, texto: texto7 }), {});
+  assert.deepEqual(sesionVigente(local, { id, usuario: null, texto: texto7 }), {});
+  // Otra pantalla: lo guardado de esa (aquí, nada).
+  assert.deepEqual(sesionVigente(local, { id: 'ventas.cot', usuario: 7, texto: null }), {});
+  // Sin nada local: lo guardado, leído con el usuario de hoy.
+  assert.deepEqual(sesionVigente(null, { id, usuario: 7, texto: texto7 }), leerSesionTabla(texto7, 7));
+  assert.deepEqual(sesionVigente(null, { id, usuario: 8, texto: texto7 }), {});
+
+  // Las escrituras de una acción, con el usuario del render.
+  const actual = estadoTablaInicial({ vista: 'todos' });
+  const pagina = reducirEstadoTabla(actual, { tipo: 'pagina', valor: 3 });
+  const conPagina = escriturasDeAccion(actual, pagina, { usuarioRender: 7, usuarioToken: 7 });
+  assert.deepEqual([conPagina?.modo, conPagina?.tamano], [null, null]);
+  assert.deepEqual(JSON.parse(/** @type {string} */ (conPagina?.sesion)), JSON.parse(textoSesionTabla(pagina, 7)), 'firmada con el usuario del render');
+  assert.deepEqual(escriturasDeAccion(actual, reducirEstadoTabla(actual, { tipo: 'tamano', valor: 50 }), { usuarioRender: 7, usuarioToken: 7 }),
+    { sesion: null, modo: null, tamano: 50 });
+  assert.deepEqual(escriturasDeAccion(actual, reducirEstadoTabla(actual, { tipo: 'modo', valor: 'kanban' }), { usuarioRender: 7, usuarioToken: 7 }),
+    { sesion: null, modo: 'kanban', tamano: null });
+  // El token ya es de otro: la acción (hecha sobre la pantalla del anterior) no se guarda en ningún lado.
+  assert.equal(escriturasDeAccion(actual, pagina, { usuarioRender: 7, usuarioToken: 8 }), null);
+  assert.equal(escriturasDeAccion(actual, pagina, { usuarioRender: 7, usuarioToken: null }), null);
+  assert.ok(escriturasDeAccion(actual, pagina, { usuarioRender: null, usuarioToken: null }), 'sin usuario y sin token: el mismo');
+
+  // guardarCambioColumnas: antes de listo, o con otro usuario en el token, no llama a guardarParte.
+  const llamadas = [];
+  const guardarParte = (entrada) => { llamadas.push(typeof entrada === 'function' ? entrada({ version: 1 }) : entrada); };
+  const base = { definicion: DEFINICION, cambio: { tipo: 'anchos', anchos: { cli: 300 } }, sinGuardar: {} };
+  assert.equal(guardarCambioColumnas(guardarParte, { ...base, listo: false, usuarioRender: 7, usuarioToken: 7 }), false);
+  assert.equal(guardarCambioColumnas(guardarParte, { ...base, listo: true, usuarioRender: 7, usuarioToken: 8 }), false);
+  assert.equal(llamadas.length, 0);
+  assert.equal(guardarCambioColumnas(guardarParte, { ...base, listo: true, usuarioRender: 7, usuarioToken: 7 }), true);
+  assert.deepEqual(llamadas, [{ version: 1, anchos: { cli: 300 } }]);
+  // Un cambio que no cambia nada: guardarParte recibe {} (la librería no publica) y devuelve false.
+  assert.equal(guardarCambioColumnas(guardarParte, { ...base, cambio: { tipo: 'ocultar', id: 'num' }, listo: true, usuarioRender: 7, usuarioToken: 7 }), false);
+  assert.deepEqual(llamadas.at(-1), {});
+  // Si guardarParte descarta el guardado (cambio de sesión que el hook no vio) y no llama al actualizador: false.
+  assert.equal(guardarCambioColumnas(() => {}, { ...base, listo: true, usuarioRender: 7, usuarioToken: 7 }), false);
+}
+
+console.log('--- TEST 25 (T4C r1, punto 1): un orden que el servidor rechaza vuelve al orden por defecto ---');
+{
+  const a = { id: 1 };
+  const b = { id: 2 };
+  const ruta = '/ventas/pedidos';
+  const e422 = Object.assign(new Error('No se puede ordenar por «cliente».'), { status: 422, detail: 'No se puede ordenar por «cliente».' });
+  // esErrorDeOrden: solo un 422 con el texto de core/listados.py y con un orden puesto.
+  assert.equal(esErrorDeOrden(e422, { orden: 'cliente' }), true);
+  assert.equal(esErrorDeOrden(Object.assign(new Error('Error de validación'), { status: 422, detail: 'No se puede ordenar por «x».' }), { orden: 'x' }), true,
+    'el texto puede venir solo en detail');
+  assert.equal(esErrorDeOrden(Object.assign(new Error('El campo «estados» admite hasta 20 valores.'), { status: 422 }), { orden: 'cliente' }), false,
+    'otro 422 es un error común');
+  for (const orden of [null, undefined, '', '  ']) assert.equal(esErrorDeOrden(e422, { orden }), false, String(orden));
+  assert.equal(esErrorDeOrden(Object.assign(new Error('No se puede ordenar por «cliente».'), { status: 500 }), { orden: 'cliente' }), false);
+  assert.equal(esErrorDeOrden(null, { orden: 'cliente' }), false);
+  assert.equal(esErrorDeOrden(e422, null), false);
+
+  const r1 = aplicarLlegadaListado(null, { marca: 'k1', ok: true, respuesta: { data: [a], total: 1 }, contexto: { ruta, orden: null } });
+  // Llega el 422 de orden: el aviso trae el mensaje; con despachar el error no se pinta, porque la vuelta al orden por
+  // defecto ya va en camino (la tabla se ve recargando).
+  const r2 = aplicarLlegadaListado(r1, { marca: 'k2', ok: false, error: e422, contexto: { ruta, orden: 'cliente' } });
+  assert.deepEqual(r2.rechazo, { n: r2.n, texto: 'No se puede ordenar por «cliente».', ruta, orden: 'cliente' });
+  const conDespacho = estadoListado(r2, { clave: 'k2', ruta, orden: 'cliente', restablece: true });
+  assert.deepEqual([conDespacho.avisoOrden, conDespacho.error, conDespacho.recargando, conDespacho.filas],
+    ['No se puede ordenar por «cliente».', null, true, [a]]);
+  // Sin despachar, el hook solo expone el aviso (y el error queda).
+  const sinDespacho = estadoListado(r2, { clave: 'k2', ruta, orden: 'cliente' });
+  assert.deepEqual([sinDespacho.avisoOrden, sinDespacho.error, sinDespacho.recargando], ['No se puede ordenar por «cliente».', e422, false]);
+  // Se despacha UNA vez por esa llegada.
+  assert.equal(rechazoPorAtender(r2, { orden: 'cliente', atendido: null }), r2.n);
+  assert.equal(rechazoPorAtender(r2, { orden: 'cliente', atendido: r2.n }), null, 'ya atendido');
+  assert.equal(rechazoPorAtender(r2, { orden: '-monto', atendido: null }), null, 'el usuario ya eligió otro orden');
+  assert.equal(rechazoPorAtender(r1, { orden: null, atendido: null }), null);
+  assert.equal(rechazoPorAtender(null, { orden: 'cliente', atendido: null }), null);
+  // La petición siguiente, sin orden, reemplaza el error con las filas, y el aviso sobrevive.
+  const r3 = aplicarLlegadaListado(r2, { marca: 'k3', ok: true, respuesta: { data: [a, b], total: 2 }, contexto: { ruta, orden: null } });
+  const vuelta = estadoListado(r3, { clave: 'k3', ruta, orden: null, restablece: true });
+  assert.deepEqual([vuelta.filas, vuelta.error, vuelta.recargando, vuelta.avisoOrden], [[a, b], null, false, 'No se puede ordenar por «cliente».']);
+  assert.equal(rechazoPorAtender(r3, { orden: null, atendido: r2.n }), null, 'no se vuelve a despachar');
+  // Otra página con el orden por defecto: el aviso sigue.
+  const r4 = aplicarLlegadaListado(r3, { marca: 'k4', ok: true, respuesta: { data: [b], total: 2 }, contexto: { ruta, orden: null } });
+  assert.equal(estadoListado(r4, { clave: 'k4', ruta, orden: null }).avisoOrden, 'No se puede ordenar por «cliente».');
+  // El usuario elige un orden no nulo: el aviso se va ya en el render, y la respuesta lo borra.
+  assert.equal(estadoListado(r4, { clave: 'k5', ruta, orden: '-monto' }).avisoOrden, null);
+  const r5 = aplicarLlegadaListado(r4, { marca: 'k5', ok: true, respuesta: { data: [b, a], total: 2 }, contexto: { ruta, orden: '-monto' } });
+  assert.equal(r5.rechazo, null);
+  assert.equal(estadoListado(r5, { clave: 'k6', ruta, orden: null }).avisoOrden, null, 'no vuelve si se quita el orden');
+  // Otra ruta: el aviso se va.
+  assert.equal(estadoListado(r4, { clave: 'k7', ruta: '/ventas/cotizaciones', orden: null }).avisoOrden, null);
+  assert.equal(aplicarLlegadaListado(r4, { marca: 'k7', ok: true, respuesta: { data: [] }, contexto: { ruta: '/ventas/cotizaciones', orden: null } }).rechazo, null);
+  // Si el orden por defecto (null) también da 422, es un error común: sin aviso nuevo, sin otra vuelta (no hay bucle).
+  const nulo = aplicarLlegadaListado(null, { marca: 'k1', ok: false, error: e422, contexto: { ruta, orden: null } });
+  assert.equal(nulo.rechazo, null);
+  const nuloVisto = estadoListado(nulo, { clave: 'k1', ruta, orden: null, restablece: true });
+  assert.deepEqual([nuloVisto.error, nuloVisto.avisoOrden, nuloVisto.recargando], [e422, null, false]);
+  assert.equal(rechazoPorAtender(nulo, { orden: null, atendido: null }), null);
+  const otraVez = aplicarLlegadaListado(r3, { marca: 'k8', ok: false, error: e422, contexto: { ruta, orden: null } });
+  assert.equal(rechazoPorAtender(otraVez, { orden: null, atendido: r2.n }), null);
+  assert.equal(estadoListado(otraVez, { clave: 'k8', ruta, orden: null, restablece: true }).error, e422);
 }
 
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');
 console.log('✓ T4C: sesión, estado armado, partes de columnas, URL de la lista, carga vigente, estado de la lista y modo cliente.');
+console.log('✓ T4C r1: orden rechazado, estados en la sesión, escrituras del usuario del render, esperar y vueltas.');

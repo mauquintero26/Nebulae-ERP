@@ -645,6 +645,9 @@ export function vincularPreferencia({ obtener, clave, porDefecto, alCambiar, val
     const nuevo = typeof entrada === 'function' ? entrada(estado.valor) : entrada;
     if (parte) {
       const pieza = esObjetoPlano(nuevo) ? nuevo : {};
+      // T4C r1: una pieza vacía no cambia nada, así que no publica ni se acumula. Con eso el valor sigue siendo el MISMO
+      // porDefecto hasta listo (usePreferenciasTabla lo reconoce y no arma piezas sobre él).
+      if (!Object.keys(pieza).length) return;
       const valor = /** @type {T} */ ({ ...(esObjetoPlano(estado.valor) ? estado.valor : {}), ...pieza });
       if (!estado.listo) {
         pendiente = { ...(pendiente === SIN_VALOR ? {} : pendiente), ...pieza };

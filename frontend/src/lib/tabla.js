@@ -19,13 +19,16 @@
  *    undefined y '' se omiten; los arreglos van en CSV.
  *  - normalizarRespuesta(d): {data, total} (listados.respuesta), un arreglo plano, {data: {items, total_skus}} y
  *    {data: {items, total}} (el Kardex, RP54).
- *  - T4C (los hooks de components/tabla; R4, R5, C2, C3, RP8, RP26, RP35, D28, D38 y D39):
- *    · useEstadoTabla: lo de la sesión (CAMPOS_SESION_TABLA, claveSesionTabla, textoSesionTabla y leerSesionTabla), el
- *      estado armado con sus tres fuentes (armarEstadoTabla), qué escribir tras un cambio (cambiosEstadoTabla) y las
+ *  - T4C y r1 (los hooks de components/tabla; R4, R5, C2, C3, RP8, RP26, RP35, D28, D38 y D39):
+ *    · useEstadoTabla: lo de la sesión (CAMPOS_SESION_TABLA, con los estados; MAXIMO_ESTADOS, claveSesionTabla,
+ *      textoSesionTabla, leerSesionTabla y sesionVigente, que mira el usuario), el estado armado (armarEstadoTabla), qué
+ *      cambió tras una acción (cambiosEstadoTabla), qué se escribe y con qué usuario (escriturasDeAccion) y las
  *      dependencias del tablero de la misma pantalla (dependenciasTablero).
- *    · usePreferenciasTabla: parteDeColumnas, la pieza de tabla:<id> que se escribe con escribirParte.
- *    · useListado: urlListado (con queryListado), crearCargaListado (aborta la anterior y descarta lo viejo),
- *      aplicarLlegadaListado y estadoListado. useListadoCliente: listadoCliente.
+ *    · usePreferenciasTabla: parteDeColumnas (la pieza de tabla:<id> que se escribe con escribirParte),
+ *      actualizadorColumnas y guardarCambioColumnas (antes de listo, o con otro usuario en el token, no escribe).
+ *    · useListado: urlListado (con queryListado), crearCargaListado (aborta la anterior, descarta lo viejo y cuenta las
+ *      vueltas), lanzarListado (el efecto, con activo y esperar), aplicarLlegadaListado, estadoListado, esErrorDeOrden y
+ *      rechazoPorAtender (un orden que el servidor rechaza vuelve al por defecto). useListadoCliente: listadoCliente.
  */
 
 import { normalizarBusqueda } from './busqueda.js';
@@ -45,17 +48,21 @@ import { formatoEntero } from './kpis.js';
  *   AccionTabla
  * @typedef {{filas: any[], total: number, conteos: Record<string, number> | null, resumen: Record<string, any> | null,
  *   crudo: unknown}} RespuestaListado
- * @typedef {'vista' | 'pagina' | 'q' | 'orden' | 'semaforo' | 'paso'} CampoSesionTabla
+ * @typedef {'vista' | 'pagina' | 'q' | 'orden' | 'semaforo' | 'paso' | 'estados'} CampoSesionTabla
  * @typedef {Partial<Pick<EstadoTabla, CampoSesionTabla>>} SesionTabla
- * @typedef {{sesion: boolean, estados: boolean, modo: boolean, tamano: boolean}} CambiosEstadoTabla
+ * @typedef {{sesion: boolean, modo: boolean, tamano: boolean}} CambiosEstadoTabla
  * @typedef {{tipo: 'anchos', anchos: Record<string, number>} | {tipo: 'mover', id: string, hueco: number}
  *   | {tipo: 'desplazar', id: string, paso: number} | {tipo: 'ocultar', id: string, oculta?: boolean}
  *   | {tipo: 'restablecer'}} CambioColumnas
  * @typedef {{version: number, orden?: string[], anchos?: Record<string, number>, ocultas?: string[]}} ParteColumnas
- * @typedef {{marca: string, ok: true, respuesta: unknown} | {marca: string, ok: false, error: unknown}} LlegadaListado
- * @typedef {{clave: string, datos: RespuestaListado | null, error: unknown}} ResultadoListado
+ * @typedef {{ruta?: string | null, orden?: string | null}} ContextoListado
+ * @typedef {{marca: string, ok: true, respuesta: unknown, contexto?: ContextoListado | null, repeticion?: number}
+ *   | {marca: string, ok: false, error: unknown, contexto?: ContextoListado | null, repeticion?: number}} LlegadaListado
+ * @typedef {{n: number, texto: string, ruta: string | null, orden: string}} RechazoOrden
+ * @typedef {{clave: string, n: number, repeticion: number, datos: RespuestaListado | null, error: unknown,
+ *   rechazo: RechazoOrden | null}} ResultadoListado
  * @typedef {{filas: any[], total: number | null, conteos: Record<string, any> | null, resumen: Record<string, any> | null,
- *   crudo: unknown, cargandoInicial: boolean, recargando: boolean, error: unknown}} EstadoListado
+ *   crudo: unknown, cargandoInicial: boolean, recargando: boolean, error: unknown, avisoOrden: string | null}} EstadoListado
  */
 
 /** 25 o 50 filas por página (y por columna del tablero). Inmutable. */
@@ -619,13 +626,20 @@ export function posicionMenu(boton, menu, ventana, { margen = 8, separacion = 4 
 // ─── T4C: el estado de la pantalla entre la sesión y las preferencias (useEstadoTabla) ──────────────────────────────
 
 /**
- * Lo del estado de la pantalla que va en sessionStorage 'tabla-sesion:{id}' (R4, C2): solo el estado de la sesión, para
- * volver a la misma pestaña, página, búsqueda y orden (y semáforo y paso) al regresar de un documento. El modo
- * (vista:<id>) y el tamaño (tabla:<id>) son preferencias del usuario (lib/preferencias.js); el filtro de estados no se
- * guarda. Inmutable.
+ * Lo del estado de la pantalla que va en sessionStorage 'tabla-sesion:{id}' (R4, C2): el estado de la SESIÓN, para
+ * volver a la misma pestaña, página, búsqueda y orden (y semáforo, paso y filtro de estados) al regresar de un
+ * documento. T4C r1, punto 2: 'estados' también, porque la página N solo tiene sentido con el filtro con que se llegó a
+ * ella. El modo (vista:<id>) y el tamaño (tabla:<id>) son preferencias del usuario (lib/preferencias.js). Inmutable.
  * @type {ReadonlyArray<CampoSesionTabla>}
  */
-export const CAMPOS_SESION_TABLA = congelar(['vista', 'pagina', 'q', 'orden', 'semaforo', 'paso']);
+export const CAMPOS_SESION_TABLA = congelar(['vista', 'pagina', 'q', 'orden', 'semaforo', 'paso', 'estados']);
+
+/** El máximo de valores de 'estados' que acepta el servidor (core/listados.py); más, en la sesión, no se restaura. */
+export const MAXIMO_ESTADOS = 20;
+
+/** 'estados' de la sesión que vale: un arreglo de hasta MAXIMO_ESTADOS textos no vacíos. */
+const estadosDeSesionValidos = (v) => Array.isArray(v) && v.length <= MAXIMO_ESTADOS
+  && v.every((e) => typeof e === 'string' && e.trim() !== '');
 
 /**
  * La clave de sessionStorage del estado de la sesión de una pantalla: 'tabla-sesion:{id}'.
@@ -637,9 +651,10 @@ export function claveSesionTabla(id) {
 }
 
 /**
- * El texto que se guarda en 'tabla-sesion:{id}': el JSON de CAMPOS_SESION_TABLA (normalizados) y el usuario de la
- * sesión. sessionStorage sobrevive a cerrar la sesión y entrar con otra cuenta en la misma pestaña (como el borrador
- * del Chatter, lib/chatter.js): con el usuario, la búsqueda de uno no se le muestra a otro.
+ * El texto que se guarda en 'tabla-sesion:{id}': el JSON de CAMPOS_SESION_TABLA (normalizados) y el usuario. Va el
+ * usuario con que se pintó la pantalla (escriturasDeAccion): sessionStorage sobrevive a cerrar la sesión y entrar con
+ * otra cuenta en la misma pestaña (como el borrador del Chatter, lib/chatter.js), y leerSesionTabla no le restaura a
+ * un usuario lo de otro.
  * @param {Partial<EstadoTabla> | null | undefined} estado
  * @param {number | null} [usuario] el sub del token (usuarioDelToken de lib/preferencias.js), o null
  * @returns {string}
@@ -654,7 +669,9 @@ export function textoSesionTabla(estado, usuario = null) {
 
 /**
  * Lo que se restaura de 'tabla-sesion:{id}': solo los CAMPOS_SESION_TABLA que trae el texto, normalizados como en
- * estadoTablaInicial. Un texto de otro usuario, dañado o que no es un objeto da {} (nada que restaurar); nunca lanza.
+ * estadoTablaInicial. 'estados' se valida (un arreglo de hasta MAXIMO_ESTADOS textos no vacíos): si no vale, se descarta
+ * ese campo y los demás quedan. Un texto de otro usuario, dañado o que no es un objeto da {} (nada que restaurar); nunca
+ * lanza.
  * @param {unknown} texto
  * @param {number | null} [usuario]
  * @returns {SesionTabla}
@@ -671,37 +688,53 @@ export function leerSesionTabla(texto, usuario = null) {
   const normalizar = /** @type {Record<string, (v: unknown) => unknown>} */ (NORMALIZAR);
   /** @type {Record<string, unknown>} */
   const sesion = {};
-  for (const campo of CAMPOS_SESION_TABLA) if (tiene(crudo, campo)) sesion[campo] = normalizar[campo](crudo[campo]);
+  for (const campo of CAMPOS_SESION_TABLA) {
+    if (!tiene(crudo, campo)) continue;
+    if (campo === 'estados' && !estadosDeSesionValidos(crudo.estados)) continue;
+    sesion[campo] = normalizar[campo](crudo[campo]);
+  }
   return /** @type {SesionTabla} */ (sesion);
 }
 
 /**
- * El estado de la pantalla armado con sus tres fuentes (useEstadoTabla; R4, R5, C2, C3 y RP26): `inicial` (el de la
- * pantalla), lo de la sesión (leerSesionTabla), el filtro de estados y las dos preferencias del usuario: el modo
- * (vista:<id>) y el tamaño (tabla:<id>). Un modo o un tamaño que no vale (o undefined, mientras no están listas) da el
- * de `inicial`; estados undefined da el de `inicial`. Es una restauración: NO vuelve a la página 1. No muta lo que
+ * La sesión que vale para la pantalla (useEstadoTabla, T4C r1, punto 4): lo que el usuario cambió en este montaje
+ * (`local`, {id, usuario, sesion}) solo si es de esta misma pantalla y de este mismo usuario; si no, lo guardado en
+ * tabla-sesion:{id} leído con el usuario de hoy. Con otra cuenta en el token, lo de la anterior no vale: ni lo local ni
+ * lo guardado (que da {}), y la pantalla arranca de `inicial`.
+ * @param {{id: string, usuario: number | null, sesion: SesionTabla} | null | undefined} local
+ * @param {{id: string, usuario: number | null, texto: unknown}} vigente
+ * @returns {SesionTabla}
+ */
+export function sesionVigente(local, { id, usuario, texto }) {
+  if (local && local.id === id && (local.usuario ?? null) === (usuario ?? null) && objeto(local.sesion)) return local.sesion;
+  return leerSesionTabla(texto, usuario);
+}
+
+/**
+ * El estado de la pantalla armado con sus fuentes (useEstadoTabla; R4, R5, C2, C3 y RP26): `inicial` (el de la
+ * pantalla), lo de la sesión (sesionVigente: pestaña, página, búsqueda, orden, semáforo, paso y estados) y las dos
+ * preferencias del usuario: el modo (vista:<id>) y el tamaño (tabla:<id>). Un modo o un tamaño que no vale (o
+ * undefined, mientras no están listas) da el de `inicial`. Es una restauración: NO vuelve a la página 1. No muta lo que
  * recibe.
  * @param {Partial<Record<keyof EstadoTabla, unknown>> | null | undefined} inicial
- * @param {{sesion?: SesionTabla | null, estados?: unknown, modo?: unknown, tamano?: unknown}} [fuentes]
+ * @param {{sesion?: SesionTabla | null, modo?: unknown, tamano?: unknown}} [fuentes]
  * @returns {EstadoTabla}
  */
-export function armarEstadoTabla(inicial, { sesion, estados, modo, tamano } = {}) {
+export function armarEstadoTabla(inicial, { sesion, modo, tamano } = {}) {
   const base = estadoTablaInicial(inicial ?? {});
   /** @type {Record<string, unknown>} */
   const parcial = { ...base };
   if (objeto(sesion)) {
     for (const campo of CAMPOS_SESION_TABLA) if (tiene(sesion, campo)) parcial[campo] = /** @type {any} */ (sesion)[campo];
   }
-  if (estados !== undefined) parcial.estados = estados;
   if (esModoTabla(modo)) parcial.modo = modo;
   if (TAMANOS_PAGINA.includes(/** @type {number} */ (tamano))) parcial.tamano = tamano;
   return estadoTablaInicial(parcial);
 }
 
 /**
- * Qué hay que escribir después de un cambio del estado (useEstadoTabla): cada campo tiene UN lugar, así que la sesión
- * (si cambió alguno de CAMPOS_SESION_TABLA), el filtro de estados (estado de React), el modo (vista:<id>) y el tamaño
- * (la pieza {tamano} de tabla:<id>).
+ * Qué cambió después de una acción (useEstadoTabla): cada campo tiene UN lugar, así que la sesión (si cambió alguno de
+ * CAMPOS_SESION_TABLA, también los estados), el modo (vista:<id>) y el tamaño (la pieza {tamano} de tabla:<id>).
  * @param {EstadoTabla | null | undefined} actual
  * @param {EstadoTabla | null | undefined} siguiente
  * @returns {CambiosEstadoTabla}
@@ -711,9 +744,27 @@ export function cambiosEstadoTabla(actual, siguiente) {
   const s = /** @type {any} */ (siguiente ?? ESTADO_TABLA_INICIAL);
   return {
     sesion: CAMPOS_SESION_TABLA.some((campo) => !iguales(a[campo], s[campo])),
-    estados: !iguales(a.estados, s.estados),
     modo: a.modo !== s.modo,
     tamano: a.tamano !== s.tamano,
+  };
+}
+
+/**
+ * Lo que useEstadoTabla escribe después de una acción (T4C r1, puntos 3 y 4): null si el usuario del token ya no es el
+ * del render (la acción se hizo sobre la pantalla de otra cuenta: no se guarda ni se pinta); si no, el texto de la
+ * sesión firmado con el usuario del render (o null si no cambió), el modo y el tamaño (o null si no cambiaron).
+ * @param {EstadoTabla} actual
+ * @param {EstadoTabla} siguiente
+ * @param {{usuarioRender?: number | null, usuarioToken?: number | null}} usuarios
+ * @returns {{sesion: string | null, modo: ModoTabla | null, tamano: number | null} | null}
+ */
+export function escriturasDeAccion(actual, siguiente, { usuarioRender = null, usuarioToken = null } = {}) {
+  if ((usuarioRender ?? null) !== (usuarioToken ?? null)) return null;
+  const c = cambiosEstadoTabla(actual, siguiente);
+  return {
+    sesion: c.sesion ? textoSesionTabla(siguiente, usuarioRender ?? null) : null,
+    modo: c.modo ? siguiente.modo : null,
+    tamano: c.tamano ? siguiente.tamano : null,
   };
 }
 
@@ -756,6 +807,9 @@ const presente = (g, k) => tiene(g, k) && g[k] !== undefined;
  *    tamaño de useEstadoTabla. Sin nada que borrar, null.
  *  - Si lo guardado es de otra versión (reconciliarColumnas no lo lee), las piezas viejas que no cambian se borran
  *    igual: con la versión de hoy revivirían.
+ *  - Límite conocido (T4C r1, 6e): si la precarga falló y después el servidor vuelve, lo guardado que ve el vínculo es
+ *    {} y una pieza compuesta ({orden, ocultas}, o el mapa de anchos) se arma sobre {} y reemplaza esa pieza guardada en
+ *    el servidor. No se cierra aquí: haría falta que T4A exponga que la precarga está fallida.
  * Un cambio desconocido es un error de programación (lanza Error). No muta lo que recibe.
  * @param {ReadonlyArray<DefinicionColumna>} definicion
  * @param {unknown} guardado lo de tabla:<id> (con el tamaño y lo que haya)
@@ -837,9 +891,10 @@ export function parteDeColumnas(definicion, guardado, cambio) {
 /**
  * El actualizador que usePreferenciasTabla le pasa a guardarParte (usePreferenciaParte, T4A): la pieza se calcula con
  * lo último del vínculo, no con lo del render, así que dos cambios seguidos (antes de otro render) no se pisan. Si
- * recibe `sinGuardar` (el valor por defecto del vínculo, que solo se ve antes de listo o recién cambiado el usuario)
- * devuelve {}: una pieza armada sobre lo por defecto subiría sin lo que hay en el servidor, o iría a la cuenta de otro
- * usuario (D35 y D38). Un cambio que no cambia nada también da {} (escribirParte no manda nada).
+ * recibe `sinGuardar` (el valor por defecto del vínculo) devuelve {}: una pieza armada sobre lo por defecto subiría sin
+ * lo que hay en el servidor (D35 y D38). Un cambio que no cambia nada también da {}. Con una pieza vacía
+ * vincularPreferencia no publica ni acumula nada (T4C r1), así que el valor sigue siendo `sinGuardar` hasta listo: la
+ * guarda vale para cualquier cantidad de llamadas. No mira el usuario: eso lo hace guardarCambioColumnas.
  * @param {ReadonlyArray<DefinicionColumna>} definicion
  * @param {CambioColumnas} cambio
  * @param {object} sinGuardar el MISMO objeto que el hook pasa como valor por defecto a usePreferenciaParte
@@ -847,6 +902,29 @@ export function parteDeColumnas(definicion, guardado, cambio) {
  */
 export function actualizadorColumnas(definicion, cambio, sinGuardar) {
   return (anterior) => (anterior === sinGuardar ? {} : (parteDeColumnas(definicion, anterior, cambio) ?? {}));
+}
+
+/**
+ * Lo que hace cada operación de usePreferenciasTabla (T4C r1, puntos 3 y 6a): no escribe (false) antes de listo ni si
+ * el usuario del token ya no es el usuario con que se pintó la pantalla (el gesto se hizo sobre la pantalla de otra
+ * cuenta). Si no, guardarParte(actualizadorColumnas(…)) y devuelve si la pieza trajo algo. La pieza se calcula con lo
+ * último del vínculo: sin un filtro previo con lo del render, dos cambios seguidos en el mismo manejador se suman bien.
+ * Si guardarParte descarta el guardado (un cambio de sesión que el hook no vio) y no llama al actualizador, false.
+ * @param {(entrada: (anterior: any) => Record<string, unknown>) => void} guardarParte
+ * @param {{definicion: ReadonlyArray<DefinicionColumna>, cambio: CambioColumnas, sinGuardar: object, listo: boolean,
+ *   usuarioRender: number | null, usuarioToken: number | null}} opciones
+ * @returns {boolean}
+ */
+export function guardarCambioColumnas(guardarParte, { definicion, cambio, sinGuardar, listo, usuarioRender, usuarioToken }) {
+  if (!listo || (usuarioRender ?? null) !== (usuarioToken ?? null)) return false;
+  const actualizar = actualizadorColumnas(definicion, cambio, sinGuardar);
+  let escribio = false;
+  guardarParte((anterior) => {
+    const parte = actualizar(anterior);
+    escribio = Object.keys(parte).length > 0;
+    return parte;
+  });
+  return escribio;
 }
 
 // ─── T4C: la lista desde el servidor (useListado) y en el navegador (useListadoCliente) ──────────────────────────
@@ -873,20 +951,30 @@ export function urlListado(ruta, estado, { extra = {}, conConteos = false, conRe
 /**
  * La carga de una lista paginada (useListado; TABLA-api punto 3 y D28: «una carga lenta no pisa a la nueva»), en JS
  * plano para probarla con node:
- *  - cargar(url, marca): aborta la petición anterior (AbortController), toma un turno nuevo y pide con su signal. Lo que
- *    llega (la respuesta o el error) se publica con alLlegar({marca, ok, respuesta | error}) SOLO si su petición sigue
- *    siendo la vigente: la de una vieja se descarta ANTES de publicar, aunque `pedir` no respete el signal.
- *  - cancelar(): aborta la vigente y nada pendiente se publica (el efecto se limpia: otra consulta, activo = false o
- *    desmontaje). Con StrictMode (monta, desmonta y vuelve a montar en el mismo tic) la abortada antes de salir no se
- *    pide: sale una sola petición.
+ *  - cargar(url, marca, contexto?): aborta la petición anterior (AbortController), toma un turno nuevo y pide con su
+ *    signal. Lo que llega (la respuesta o el error) se publica con alLlegar({marca, ok, respuesta | error, contexto,
+ *    repeticion}) SOLO si su petición sigue siendo la vigente: la de una vieja se descarta ANTES de publicar, aunque
+ *    `pedir` no respete el signal. `contexto` ({ruta, orden}) vuelve tal cual con la llegada (el 422 de orden).
+ *  - cancelar(): aborta la vigente y nada pendiente se publica (el efecto se limpia: otra consulta, activo = false,
+ *    esperar o desmontaje). Con StrictMode (monta, desmonta y vuelve a montar en el mismo tic) la abortada antes de salir
+ *    no se pide: sale una sola petición.
+ *  - T4C r1, 6b: volver a pedir la consulta que ya llegó (activo: false → true, o esperar: true → false, con la misma
+ *    consulta) es una VUELTA: repeticion() sube y se avisa a los suscriptores (suscribir, para useSyncExternalStore). La
+ *    llegada lleva la repetición con que se pidió: mientras no llega, la tabla se ve recargando y sin el error anterior.
  *  - Un `pedir` que lanza de inmediato es un error de la carga, no una excepción de cargar.
  * @param {{pedir: (url: string, signal: AbortSignal) => unknown, alLlegar: (llegada: LlegadaListado) => void}} opciones
- * @returns {{cargar: (url: string, marca: string) => number, cancelar: () => void, turno: () => number}}
+ * @returns {{cargar: (url: string, marca: string, contexto?: ContextoListado | null) => number, cancelar: () => void,
+ *   turno: () => number, repeticion: () => number, suscribir: (oyente: () => void) => () => void}}
  */
 export function crearCargaListado({ pedir, alLlegar }) {
   let turno = 0;
   /** @type {AbortController | null} */
   let control = null;
+  /** La marca de la última llegada publicada. */
+  let entregada = /** @type {string | null} */ (null);
+  let repeticion = 0;
+  /** @type {Set<() => void>} */
+  const oyentes = new Set();
 
   function cancelar() {
     turno += 1;
@@ -896,36 +984,126 @@ export function crearCargaListado({ pedir, alLlegar }) {
     }
   }
 
-  function cargar(url, marca) {
+  function cargar(url, marca, contexto = null) {
     if (control) control.abort();
     turno += 1;
     const mio = turno;
+    if (marca === entregada) {
+      repeticion += 1;
+      for (const oyente of [...oyentes]) oyente();
+    }
+    const vuelta = repeticion;
     const propio = new AbortController();
     control = propio;
     const vigente = () => mio === turno && !propio.signal.aborted;
+    const publicar = (/** @type {Partial<LlegadaListado>} */ resto) => {
+      if (!vigente()) return;
+      entregada = marca;
+      alLlegar(/** @type {LlegadaListado} */ ({ marca, ...resto, contexto, repeticion: vuelta }));
+    };
     Promise.resolve()
       .then(() => (vigente() ? pedir(url, propio.signal) : null))
       .then(
-        (respuesta) => { if (vigente()) alLlegar({ marca, ok: true, respuesta }); },
-        (error) => { if (vigente()) alLlegar({ marca, ok: false, error }); },
+        (respuesta) => publicar({ ok: true, respuesta }),
+        (error) => publicar({ ok: false, error }),
       );
     return mio;
   }
 
-  return { cargar, cancelar, turno: () => turno };
+  function suscribir(oyente) {
+    oyentes.add(oyente);
+    return () => { oyentes.delete(oyente); };
+  }
+
+  return { cargar, cancelar, turno: () => turno, repeticion: () => repeticion, suscribir };
 }
+
+/**
+ * El cuerpo del efecto de useListado (T4C r1, puntos 5 y 6b): con activo = false (RP35) o mientras `esperar` (las
+ * preferencias de la pantalla todavía no están listas) no pide nada; si no, carga la consulta vigente y devuelve la
+ * limpieza, que la aborta (otra consulta, activo = false, esperar, desmontaje o StrictMode).
+ * @param {{cargar: (url: string, marca: string, contexto?: ContextoListado | null) => number, cancelar: () => void}} carga
+ * @param {{url: string, clave: string, contexto?: ContextoListado | null, activo?: boolean, esperar?: boolean}} consulta
+ * @returns {(() => void) | undefined}
+ */
+export function lanzarListado(carga, { url, clave, contexto = null, activo = true, esperar = false }) {
+  if (!activo || esperar) return undefined;
+  carga.cargar(url, clave, contexto);
+  return () => carga.cancelar();
+}
+
+/** El texto con que core/listados.py rechaza un orden (HTTPException 422). */
+export const TEXTO_ORDEN_RECHAZADO = 'No se puede ordenar por';
+
+const textoDelError = (error) => {
+  const e = /** @type {any} */ (error);
+  return [e?.message, e?.detail].filter((t) => typeof t === 'string');
+};
+
+/**
+ * true si `error` es el 422 con que el servidor rechaza el orden de la consulta (T4C r1, punto 1): status 422, el
+ * estado con un orden puesto (no null ni vacío) y el texto de core/listados.py («No se puede ordenar por…», en el
+ * message o en el detail de apiFetch). Cualquier otro 422, o el mismo con el orden por defecto (null), es un error
+ * común: no hay vuelta al orden por defecto ni bucle.
+ * @param {unknown} error
+ * @param {{orden?: string | null} | null | undefined} estado
+ * @returns {boolean}
+ */
+export function esErrorDeOrden(error, estado) {
+  if (/** @type {any} */ (error)?.status !== 422) return false;
+  const orden = estado?.orden;
+  if (typeof orden !== 'string' || orden.trim() === '') return false;
+  return textoDelError(error).some((t) => t.includes(TEXTO_ORDEN_RECHAZADO));
+}
+
+/** El aviso de un orden rechazado sigue mientras la ruta sea la misma y el orden sea el rechazado o el por defecto. */
+const sigueRechazo = (rechazo, { ruta = null, orden = null } = {}) => rechazo.ruta === (ruta ?? null)
+  && (orden === null || orden === undefined || orden === '' || orden === rechazo.orden);
 
 /**
  * Lo que queda de la lista cuando llega la respuesta (o el error) de la carga `marca`: con una respuesta,
  * normalizarRespuesta y sin error; con un error, lo último que llegó bien (las filas, el total, los conteos y el
- * resumen) y el error. No muta lo que recibe.
+ * resumen) y el error. Cada llegada lleva su número `n` (sube siempre) y la repetición con que se pidió (6b).
+ * T4C r1, punto 1: un 422 de orden (esErrorDeOrden con el orden del contexto) deja `rechazo` {n, texto, ruta, orden}.
+ * El rechazo sobrevive a las llegadas siguientes (también a la respuesta buena, ya sin orden) mientras sean de la misma
+ * ruta y con el orden rechazado o el por defecto; con otro orden o en otra ruta, se borra. No muta lo que recibe.
  * @param {ResultadoListado | null | undefined} previo
  * @param {LlegadaListado} llegada
  * @returns {ResultadoListado}
  */
 export function aplicarLlegadaListado(previo, llegada) {
-  if (llegada.ok) return { clave: llegada.marca, datos: normalizarRespuesta(llegada.respuesta), error: null };
-  return { clave: llegada.marca, datos: previo?.datos ?? null, error: llegada.error ?? null };
+  const n = (previo?.n ?? 0) + 1;
+  const contexto = llegada.contexto ?? {};
+  const repeticion = llegada.repeticion ?? 0;
+  /** @type {RechazoOrden | null} */
+  let rechazo = null;
+  if (!llegada.ok && esErrorDeOrden(llegada.error, contexto)) {
+    const textos = textoDelError(llegada.error);
+    rechazo = {
+      n, texto: textos.find((t) => t.includes(TEXTO_ORDEN_RECHAZADO)) ?? textos[0], ruta: contexto.ruta ?? null,
+      orden: /** @type {string} */ (contexto.orden),
+    };
+  } else if (previo?.rechazo && sigueRechazo(previo.rechazo, contexto)) {
+    rechazo = previo.rechazo;
+  }
+  if (llegada.ok) {
+    return { clave: llegada.marca, n, repeticion, datos: normalizarRespuesta(llegada.respuesta), error: null, rechazo };
+  }
+  return { clave: llegada.marca, n, repeticion, datos: previo?.datos ?? null, error: llegada.error ?? null, rechazo };
+}
+
+/**
+ * El número del rechazo de orden que useListado tiene que atender (despachar UNA vez {tipo: 'orden', valor: null}, desde
+ * un efecto): el de la ÚLTIMA llegada, si fue un 422 de orden, no se atendió (`atendido`, el último número despachado)
+ * y la pantalla sigue con el orden rechazado. Si no, null.
+ * @param {ResultadoListado | null | undefined} resultado
+ * @param {{orden: string | null | undefined, atendido: number | null}} opciones
+ * @returns {number | null}
+ */
+export function rechazoPorAtender(resultado, { orden, atendido }) {
+  const r = resultado?.rechazo;
+  if (!resultado || !r || r.n !== resultado.n || r.n === atendido || orden !== r.orden) return null;
+  return r.n;
 }
 
 /**
@@ -934,14 +1112,25 @@ export function aplicarLlegadaListado(previo, llegada) {
  *  - antes de la primera respuesta: sin filas, total, conteos ni resumen (null, nunca 0: H6) y cargandoInicial;
  *  - con una respuesta anterior: sus filas siguen y recargando (las filas atenuadas y la barra fina de T4D);
  *  - el error de la última carga se muestra (dentro de la tabla, con Reintentar) mientras no haya otra en camino;
- *  - RP35: con activo = false no hay nada en camino y queda lo último que llegó.
+ *  - RP35: con activo = false no hay nada en camino y queda lo último que llegó;
+ *  - T4C r1, punto 5: mientras `esperar` (y activo) cuenta como en camino: cargandoInicial sin datos, recargando con
+ *    datos, nunca la tabla vacía;
+ *  - 6b: con una vuelta en camino (`repeticion` de la carga distinta de la del resultado), también en camino;
+ *  - punto 1: avisoOrden es el texto del 422 de orden mientras la ruta sea la misma y el orden sea el rechazado o el por
+ *    defecto. Con `restablece` (la pantalla pasó despachar), la llegada del rechazo cuenta como en camino y su error no se
+ *    pinta: la vuelta al orden por defecto ya sale.
  * @param {ResultadoListado | null | undefined} resultado
- * @param {{clave: string, activo?: boolean}} opciones
+ * @param {{clave: string, activo?: boolean, esperar?: boolean, repeticion?: number, ruta?: string | null,
+ *   orden?: string | null, restablece?: boolean}} opciones
  * @returns {EstadoListado}
  */
-export function estadoListado(resultado, { clave, activo = true }) {
+export function estadoListado(resultado, {
+  clave, activo = true, esperar = false, repeticion = 0, ruta = null, orden = null, restablece = false,
+}) {
   const datos = resultado?.datos ?? null;
-  const enCamino = activo && resultado?.clave !== clave;
+  const rechazo = resultado?.rechazo ?? null;
+  const volviendo = restablece && rechazo !== null && rechazo.n === resultado?.n && orden === rechazo.orden;
+  const enCamino = activo && (esperar || volviendo || resultado?.clave !== clave || (resultado?.repeticion ?? 0) !== repeticion);
   return {
     filas: datos ? datos.filas : [],
     total: datos ? datos.total : null,
@@ -951,6 +1140,7 @@ export function estadoListado(resultado, { clave, activo = true }) {
     cargandoInicial: enCamino && !datos,
     recargando: enCamino && Boolean(datos),
     error: enCamino ? null : (resultado?.error ?? null),
+    avisoOrden: rechazo && sigueRechazo(rechazo, { ruta, orden }) ? rechazo.texto : null,
   };
 }
 
