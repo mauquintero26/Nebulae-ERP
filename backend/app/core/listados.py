@@ -1,0 +1,185 @@
+"""Parámetros comunes de las listas del ERP: estados en CSV, búsqueda, orden, conteos por vista y paginación.
+
+Bloque 4, T1A (TABLA-api punto 1 fusionado con el punto 7 de KANBAN-base; C8, R5, R27): es el ÚNICO módulo de
+parámetros de lista (no hay core/filtros_lista.py). Cada endpoint de lista (T6, T12, T13 y T20) lo aplica así:
+- 'estados' (CSV, máximo MAX_ESTADOS) es el parámetro nuevo; 'estado' (un valor) se conserva por compatibilidad y pasa
+  por la misma filtrar_por_estados.
+- 'q' es la búsqueda de la tabla estándar y 'search' sigue como alias: texto_busqueda(q, search) (RP8).
+- 'orden' = 'campo' o '-campo' de la lista blanca del endpoint, más sus órdenes especiales ('atencion',
+  'sin_movimiento' y 'reciente'), con leer_orden. El texto recibido nunca llega al SQL.
+- limit = Query(<el de hoy>, ge=0, le=200); limit=0 devuelve solo el total (paginar).
+- con_conteos se calcula con contar_por_vista, con la búsqueda y los filtros extra pero SIN vista, estados, semáforo,
+  paso ni columna.
+Sin los parámetros nuevos cada lista responde lo mismo que hoy.
+
+Errores (RP9 y su ajuste): leer_orden lanza él mismo HTTPException(422, 'No se puede ordenar por «x».'); leer_lista
+(más de MAX_ESTADOS) y orden_tiempo (un valor que no vale) lanzan ValueError, que el endpoint convierte en 422 con
+str(e). Los parámetros de negocio se validan a mano (R21): el manejador global convierte los RequestValidationError en
+un 400 técnico en inglés.
+
+Las funciones que solo arman la consulta (filtrar_por_estados, orden_tiempo) sirven con un Query de la sesión o con un
+select(); las que la ejecutan (contar_por_vista, paginar) reciben el Query de la sesión, como las listas de hoy.
+"""
+from fastapi import HTTPException
+from sqlalchemy import case, func
+
+MAX_ESTADOS = 20
+# Órdenes que cada endpoint define a su manera y que no tienen sentido al revés: '-atencion', '-sin_movimiento' y
+# '-reciente' dan 422. leer_orden no sabe qué significan (RP9): solo las usa para ese chequeo.
+ORDENES_ESPECIALES = ("atencion", "sin_movimiento", "reciente")
+
+
+def _no_se_puede_ordenar(orden) -> str:
+    return f"No se puede ordenar por «{orden}»."
+
+
+def leer_lista(valor, maximo: int = MAX_ESTADOS) -> list[str]:
+    """'A, B,,A' -> ['A', 'B']: separa por coma, quita los espacios de los bordes, los vacíos y los repetidos (conserva
+    el orden en que llegaron). None o '' -> []. También acepta una lista de textos (cada uno puede traer comas).
+
+    Con más de `maximo` valores distintos lanza ValueError('Puedes filtrar por 20 estados como máximo.'); el endpoint
+    responde 422 con str(e)."""
+    if valor is None:
+        return []
+    partes = valor.split(",") if isinstance(valor, str) else [p for v in valor for p in str(v).split(",")]
+    lista: list[str] = []
+    for parte in partes:
+        parte = parte.strip()
+        if parte and parte not in lista:
+            lista.append(parte)
+    if len(lista) > maximo:
+        raise ValueError(f"Puedes filtrar por {maximo} estados como máximo.")
+    return lista
+
+
+def texto_busqueda(q, search) -> str | None:
+    """La búsqueda de una lista (RP8): gana `q` (la de la tabla estándar) y `search` sigue como alias para los
+    selectores, la tienda, el Dashboard, el Asistente y las pruebas. Se quitan los espacios de los bordes; un texto
+    vacío (o solo espacios) da None. Un `q` en blanco no tapa un `search` con texto."""
+    for texto in (q, search):
+        if texto is not None and texto.strip():
+            return texto.strip()
+    return None
+
+
+def filtrar_por_estados(q, columna, valor):
+    """Filtra `q` por los estados de `valor` (CSV o lista, con leer_lista):
+    - ninguno -> `q` sin cambios (el mismo objeto);
+    - uno -> columna == estado (la misma consulta de hoy con ?estado=);
+    - varios -> columna IN (...).
+    Con más de MAX_ESTADOS lanza el ValueError de leer_lista."""
+    estados = leer_lista(valor)
+    if not estados:
+        return q
+    if len(estados) == 1:
+        return q.filter(columna == estados[0])
+    return q.filter(columna.in_(estados))
+
+
+def _id_de(col):
+    """La columna id de la tabla de `col`, para desempatar: la del modelo de un atributo (SalesQuotation.total_cop ->
+    SalesQuotation.id, también con aliased) o la de la tabla o subconsulta de una columna. None si no tiene."""
+    padre = getattr(col, "parent", None)
+    entidad = getattr(padre, "entity", None)
+    if entidad is not None and getattr(entidad, "id", None) is not None:
+        return entidad.id
+    tabla = getattr(getattr(col, "expression", col), "table", None)
+    columnas = getattr(tabla, "c", None)
+    if columnas is not None and "id" in columnas:
+        return columnas.id
+    return None
+
+
+def leer_orden(orden, permitidas: dict, por_defecto: str, *, desempate=None) -> list:
+    """El orden de una lista, como lista de expresiones para order_by(*...).
+
+    `orden` es 'campo' (ascendente) o '-campo' (descendente); None o en blanco -> `por_defecto` (una clave de
+    `permitidas`, con la misma regla). Cada clave de `permitidas` apunta a:
+    - una columna (o una expresión, como orden_por_lista): se ordena con nulls_last() y se desempata por id desc, para
+      que la paginación sea estable. El id sale de la tabla de la columna; una expresión sin tabla (un CASE) lo recibe
+      en `desempate` (si no, TypeError: es un error de programación, no del usuario);
+    - una lista de expresiones de order_by: se devuelve tal cual. Así pone cada endpoint sus órdenes especiales
+      ('atencion': [rango, ...]; 'reciente' y 'sin_movimiento' con expresiones_tiempo). Su dirección la fija la lista,
+      así que '-clave' no vale.
+    Una clave que no está, '-atencion', '-sin_movimiento', '-reciente' o '-' sobre una lista -> HTTPException(422,
+    'No se puede ordenar por «x».') (RP9, ajuste). El texto recibido nunca llega al SQL: solo se usa como clave."""
+    clave = (orden or "").strip() or por_defecto
+    descendente = clave.startswith("-")
+    campo = clave[1:] if descendente else clave
+    if campo not in permitidas or (descendente and campo in ORDENES_ESPECIALES):
+        raise HTTPException(status_code=422, detail=_no_se_puede_ordenar(clave))
+    destino = permitidas[campo]
+    if isinstance(destino, (list, tuple)):
+        if descendente:
+            raise HTTPException(status_code=422, detail=_no_se_puede_ordenar(clave))
+        return list(destino)
+    id_desempate = desempate if desempate is not None else _id_de(destino)
+    if id_desempate is None:
+        raise TypeError(f"leer_orden: «{campo}» no tiene un id para desempatar; pasa desempate=")
+    principal = destino.desc() if descendente else destino.asc()
+    return [principal.nulls_last(), id_desempate.desc()]
+
+
+def expresiones_tiempo(creado, actualizado, orden) -> list:
+    """Las expresiones de order_by de 'reciente' y 'sin_movimiento' (KANBAN-base):
+    - 'reciente' (por defecto, también con None o '') = creado desc: el order_by de las listas de hoy;
+    - 'sin_movimiento' = coalesce(actualizado, creado) asc y luego creado asc (el que lleva más tiempo quieto arriba).
+    Otro valor -> ValueError('No se puede ordenar por «x».'), que el endpoint convierte en 422 con str(e) (RP9).
+    Sirven para poner esas dos órdenes en `permitidas` de leer_orden."""
+    clave = (orden or "").strip() or "reciente"
+    if clave == "reciente":
+        return [creado.desc()]
+    if clave == "sin_movimiento":
+        return [func.coalesce(actualizado, creado).asc(), creado.asc()]
+    raise ValueError(_no_se_puede_ordenar(clave))
+
+
+def orden_tiempo(q, creado, actualizado, orden):
+    """`q` ordenado por 'reciente' o 'sin_movimiento' (ver expresiones_tiempo). Reemplaza el aplicar_orden de
+    KANBAN-base (C8). Otro valor -> ValueError('No se puede ordenar por «x».')."""
+    return q.order_by(*expresiones_tiempo(creado, actualizado, orden))
+
+
+def orden_por_lista(col, lista):
+    """CASE que ordena `col` por su posición en `lista` (un estado por su lugar en el flujo, no alfabéticamente). Lo que
+    no está en la lista va al final."""
+    return case({valor: i for i, valor in enumerate(lista)}, value=col, else_=len(lista))
+
+
+def contar_por_vista(q, vistas: dict) -> dict:
+    """{vista: n} en UNA consulta, con count(*) FILTER (WHERE condición) por vista; una condición None cuenta todo.
+
+    `q` es el Query de la lista con la búsqueda y los filtros extra, pero SIN vista, estados, semáforo, paso ni columna
+    (R5). Su orden y sus opciones de carga (selectinload) no estorban: se quitan para contar."""
+    if not vistas:
+        return {}
+    claves = list(vistas)
+    columnas = [(func.count() if cond is None else func.count().filter(cond)).label(f"vista_{i}")
+                for i, cond in enumerate(vistas.values())]
+    fila = q.order_by(None).enable_eagerloads(False).with_entities(*columnas).one()
+    return {clave: int(fila[i] or 0) for i, clave in enumerate(claves)}
+
+
+def paginar(q, limit, offset) -> tuple[int, list]:
+    """(total, items) de un Query ya filtrado y ordenado: total cuenta todo el filtro y items es solo la página
+    (offset, limit). Con limit=0 no se trae ninguna fila: (total, []), para los números de las pestañas y de las
+    columnas plegadas del Kanban. limit=None trae todo desde offset."""
+    total = q.order_by(None).count()
+    if limit == 0:
+        return total, []
+    pagina = q.offset(offset or 0)
+    if limit is not None:
+        pagina = pagina.limit(limit)
+    return total, pagina.all()
+
+
+def respuesta(total, data, conteos=None, resumen=None, **extra) -> dict:
+    """El cuerpo de una lista: {status, total, data}, más 'conteos' y 'resumen' solo si se pasaron (no None), y las
+    claves propias del endpoint (por ejemplo los grupos del Hub) tal cual."""
+    cuerpo = {"status": "success", "total": total, "data": data}
+    if conteos is not None:
+        cuerpo["conteos"] = conteos
+    if resumen is not None:
+        cuerpo["resumen"] = resumen
+    cuerpo.update(extra)
+    return cuerpo
