@@ -18,6 +18,9 @@ import {
   COLUMNAS_PEC, COLUMNAS_RECEPCION, COLUMNAS_LISTA, COLUMNAS_TRASLADO, COLUMNAS_STOCK, ESTADOS_PEC, columnaPec,
   reglaSoltarPec,
 } from '../src/lib/estados-compras.js';
+// T4B: lo nuevo del tablero común se pide por el módulo entero, para que una función que falta falle con su nombre.
+import * as kanban from '../src/lib/kanban.js';
+import { COLUMNAS_HUB, COLUMNAS_PEDIDO } from '../src/lib/kanban-ventas.js';
 
 const COLS = [
   { clave: 'nuevo', titulo: 'Nuevo', tono: 'slate', estados: ['NUEVO'] },
@@ -268,4 +271,244 @@ console.log('--- TEST 11 (T4A): motivoValido (ModalMotivo: 5 caracteres o más, 
   assert.ok(!/setMotivo\(''\)/.test(fuente), 'lo escrito no se borra');
 }
 
+console.log('--- TEST 12 (T4B): lo que usan useTableroKanban y TableroKanban ---');
+{
+  const nombres = ['UMBRAL_ARRASTRE', 'superaUmbral', 'ordenPorDefecto', 'consultaColumna', 'firmaConsulta',
+    'plegadasPorDefecto', 'plegadasValidas', 'resolverPlegadas', 'alternarPlegada', 'crearTurnos', 'paginaDeRespuesta',
+    'quedanEnServidor', 'tableroCliente', 'estadoColumna', 'reemplazarTarjeta', 'deshacerMovimiento',
+    'reglaSegunManejadores', 'opcionesMoverA', 'estadoDestino', 'textoMovimiento', 'ALTO_MINIMO_TABLERO', 'altoTablero',
+    'asegurarColumna'];
+  for (const n of nombres) assert.ok(n in kanban, `lib/kanban.js exporta ${n}`);
+  const columnas = definirColumnas(COLS);
+
+  // a) El umbral del arrastre (H1, el del CRM): menos de 6 px es un clic.
+  assert.equal(kanban.UMBRAL_ARRASTRE, 6);
+  assert.equal(kanban.superaUmbral(3, 4), false, '5 px es un clic');
+  assert.equal(kanban.superaUmbral(6, 0), true, '6 px ya es arrastre');
+  assert.equal(kanban.superaUmbral(-4, -5), true, 'en cualquier dirección');
+  assert.equal(kanban.superaUmbral(0, 0), false);
+  assert.equal(kanban.superaUmbral(Number.NaN, 10), false);
+  assert.equal(kanban.superaUmbral(9, 0, 10), false, 'el umbral se puede cambiar');
+
+  // b) RP10: el orden por columna, con ordenDe de la pantalla; plegada → limit 0 (solo el total, R11).
+  assert.equal(kanban.ordenPorDefecto(columnas[0]), 'sin_movimiento', 'abierta: lo que más lleva quieto');
+  assert.equal(kanban.ordenPorDefecto(columnas[2]), 'reciente', 'cerrada: lo más reciente');
+  assert.deepEqual(kanban.consultaColumna(columnas[0], { porColumna: 25 }), { offset: 0, limit: 25, orden: 'sin_movimiento' });
+  assert.deepEqual(kanban.consultaColumna(columnas[2], { porColumna: 50 }), { offset: 0, limit: 50, orden: 'reciente' });
+  assert.deepEqual(kanban.consultaColumna(columnas[2], { porColumna: 50, plegada: true }), { offset: 0, limit: 0, orden: 'reciente' });
+  assert.deepEqual(kanban.consultaColumna(columnas[1], { porColumna: 25, offset: 25 }), { offset: 25, limit: 25, orden: 'sin_movimiento' },
+    '«Ver más» pide la página siguiente');
+  // T7 (Hub): 'atencion' en las abiertas y '-creado' en Cancelado.
+  const ordenHub = (c) => (c.cerrada ? '-creado' : 'atencion');
+  const cancelado = COLUMNAS_HUB.find((c) => c.clave === 'Cancelado');
+  assert.deepEqual(kanban.consultaColumna(COLUMNAS_HUB[0], { porColumna: 25, ordenDe: ordenHub }), { offset: 0, limit: 25, orden: 'atencion' });
+  assert.deepEqual(kanban.consultaColumna(cancelado, { porColumna: 25, ordenDe: ordenHub, plegada: true }), { offset: 0, limit: 0, orden: '-creado' });
+  assert.equal(kanban.consultaColumna(columnas[0], { ordenDe: () => '' }).orden, 'sin_movimiento', 'sin orden de la pantalla, el de siempre');
+  assert.equal(kanban.consultaColumna(columnas[0]).limit, 25, 'por defecto, 25 por columna');
+  // La firma cambia con la búsqueda, el tamaño, el orden y cada recarga; no con el offset de «Ver más».
+  const f = (c, o) => kanban.firmaConsulta(c, o);
+  const base = kanban.consultaColumna(columnas[0], { porColumna: 25 });
+  assert.equal(typeof f(base, { dependencias: ['ana'], version: 0 }), 'string');
+  assert.equal(f(base, { dependencias: ['ana'], version: 0 }), f({ ...base }, { dependencias: ['ana'], version: 0 }));
+  assert.notEqual(f(base, { dependencias: ['ana'] }), f(base, { dependencias: ['ana b'] }));
+  assert.notEqual(f(base, { dependencias: ['ana'] }), f({ ...base, limit: 50 }, { dependencias: ['ana'] }));
+  assert.notEqual(f(base, { dependencias: ['ana'] }), f({ ...base, orden: 'reciente' }, { dependencias: ['ana'] }));
+  assert.notEqual(f(base, { dependencias: ['ana'], version: 0 }), f(base, { dependencias: ['ana'], version: 1 }));
+  assert.equal(f(base, { dependencias: ['ana'] }), f({ ...base, offset: 50 }, { dependencias: ['ana'] }));
+
+  // c) Plegadas (kanban:<pantalla>, R4 y R11): por defecto las cerradas; lo guardado gana y se limpia.
+  assert.deepEqual(kanban.plegadasPorDefecto(columnas), ['hecho']);
+  assert.deepEqual(kanban.plegadasPorDefecto(COLUMNAS_PEDIDO), ['facturado', 'cancelado']);
+  assert.deepEqual(kanban.resolverPlegadas(null, columnas), ['hecho'], 'nada guardado: las cerradas');
+  assert.deepEqual(kanban.resolverPlegadas([], columnas), [], 'el usuario las abrió todas');
+  assert.deepEqual(kanban.resolverPlegadas(['curso', 'vieja', 'nuevo'], columnas), ['nuevo', 'curso'],
+    'en el orden de las columnas y sin las que ya no existen');
+  assert.equal(kanban.plegadasValidas(['a', 'b']), true);
+  assert.equal(kanban.plegadasValidas([]), true);
+  for (const malo of [null, 'hecho', [1], { hecho: true }, ['a', null]]) assert.equal(kanban.plegadasValidas(malo), false, JSON.stringify(malo));
+  const abiertas = kanban.alternarPlegada(['hecho'], 'hecho');
+  assert.deepEqual(abiertas, [], 'un clic abre la plegada');
+  assert.deepEqual(kanban.alternarPlegada(abiertas, 'curso'), ['curso'], 'otro la pliega');
+  assert.deepEqual(kanban.alternarPlegada(['curso'], 'curso', true), ['curso']);
+  const igual = ['curso'];
+  assert.equal(kanban.alternarPlegada(igual, 'curso', true), igual, 'sin cambio devuelve la misma lista');
+  assert.deepEqual(kanban.alternarPlegada(['curso', 'hecho'], 'curso', false), ['hecho']);
+
+  // d) Turnos: una respuesta vieja de una columna se descarta; las columnas no se pisan.
+  const turnos = kanban.crearTurnos();
+  const t1 = turnos.siguiente('curso');
+  const t2 = turnos.siguiente('curso');
+  const otro = turnos.siguiente('hecho');
+  assert.equal(turnos.vigente('curso', t1), false, 'la primera respuesta llega tarde: se descarta');
+  assert.equal(turnos.vigente('curso', t2), true);
+  assert.equal(turnos.vigente('hecho', otro), true, 'otra columna lleva su propio turno');
+  assert.equal(turnos.vigente('nuevo', 1), false, 'sin consulta no hay turno vigente');
+
+  // e) La respuesta de cargar: {items, total, resumen?}, también {filas} (normalizarRespuesta) o un arreglo.
+  assert.deepEqual(kanban.paginaDeRespuesta({ items: [{ id: 1 }], total: 9, resumen: { monto_cop: 5 } }),
+    { items: [{ id: 1 }], total: 9, resumen: { monto_cop: 5 } });
+  assert.deepEqual(kanban.paginaDeRespuesta({ filas: [{ id: 2 }], total: 4 }), { items: [{ id: 2 }], total: 4, resumen: null });
+  assert.deepEqual(kanban.paginaDeRespuesta([{ id: 3 }]), { items: [{ id: 3 }], total: 1, resumen: null });
+  assert.deepEqual(kanban.paginaDeRespuesta({ items: [], total: 12 }), { items: [], total: 12, resumen: null }, 'una plegada: solo el total');
+  assert.deepEqual(kanban.paginaDeRespuesta(null), { items: [], total: null, resumen: null });
+  assert.equal(kanban.paginaDeRespuesta({ items: [{ id: 1 }], total: 'x' }).total, null, 'un total raro no se inventa');
+  assert.equal(kanban.quedanEnServidor({ items: [{ id: 1 }], total: 3 }), true);
+  assert.equal(kanban.quedanEnServidor({ items: [{ id: 1 }], total: 1 }), false);
+  assert.equal(kanban.quedanEnServidor({ items: [], total: null }), false);
+
+  // f) Modo cliente: agrupa, ordena, corta en porColumna y RP61 (totales reemplaza el contador de esa columna).
+  const leads = [
+    { id: 1, estado: 'NUEVO', f: haceDias(1) }, { id: 2, estado: 'NUEVO', f: haceDias(5) }, { id: 3, estado: 'NUEVO', f: haceDias(3) },
+    { id: 4, estado: 'HECHO', f: haceDias(9) }, { id: 5, estado: 'HECHO', f: haceDias(2) }, { id: 6, estado: 'RARO', f: haceDias(1) },
+  ];
+  const opciones = { fechaMovimiento: (x) => x.f, esAtrasado: (x) => x.id === 3, porColumna: 2 };
+  const cliente = kanban.tableroCliente(leads, columnas, opciones);
+  assert.deepEqual(Object.keys(cliente), ['nuevo', 'curso', 'hecho'], 'lo que no cae en ninguna columna no se pinta');
+  assert.deepEqual(cliente.nuevo.items.map((x) => x.id), [3, 2], 'atrasada primero, luego la más quieta; corte en 2');
+  assert.equal(cliente.nuevo.total, 3);
+  assert.equal(cliente.nuevo.hayMas, true);
+  assert.deepEqual([cliente.nuevo.cargando, cliente.nuevo.error], [false, null]);
+  assert.deepEqual(cliente.hecho.items.map((x) => x.id), [5, 4], 'cerrada: la más reciente primero');
+  assert.equal(cliente.hecho.hayMas, false);
+  assert.deepEqual(cliente.curso, { items: [], total: 0, cargando: false, error: null, hayMas: false });
+  const mas = kanban.tableroCliente(leads, columnas, { ...opciones, cortes: { nuevo: 4 } });
+  assert.deepEqual(mas.nuevo.items.map((x) => x.id), [3, 2, 1], '«Ver más» sube el corte');
+  assert.equal(mas.nuevo.hayMas, false);
+  const conTotales = kanban.tableroCliente(leads, columnas, { ...opciones, totales: { hecho: 312 } });
+  assert.equal(conTotales.hecho.total, 312, 'RP61: los 50 más recientes y el total real');
+  assert.equal(kanban.textoTotalColumna(conTotales.hecho.items.length, conTotales.hecho.total), '2 de 312');
+  assert.equal(conTotales.hecho.hayMas, false, 'en modo cliente «Ver más» solo muestra lo que ya llegó');
+  assert.equal(conTotales.nuevo.total, 3, 'las demás columnas cuentan lo cargado');
+  const sinItems = kanban.tableroCliente(undefined, columnas, opciones);
+  assert.deepEqual(sinItems.nuevo, { items: [], total: null, cargando: true, error: null, hayMas: false }, 'sin ítems todavía: cargando');
+  assert.deepEqual(kanban.tableroCliente([{ id: 1, etapa: 'x' }], columnas, { columnaDe: () => 'curso' }).curso.items, [{ id: 1, etapa: 'x' }]);
+
+  // g) El estado de cada columna con el vocabulario de estadoKpi (C13): nunca 0 mientras carga.
+  assert.equal(kanban.estadoColumna({ items: [], total: null, cargando: true, error: null }), 'cargando');
+  assert.equal(kanban.estadoColumna({ items: [{ id: 1 }], total: 4, cargando: true, error: null }), 'actualizando');
+  assert.equal(kanban.estadoColumna({ items: [], total: null, cargando: false, error: new Error('x') }), 'error');
+  assert.equal(kanban.estadoColumna({ items: [], total: 0, cargando: false, error: null }), 'listo');
+  assert.equal(kanban.estadoColumna(undefined), 'cargando');
+
+  // h) La tarjeta toma los datos del servidor en su lugar; si ya no está, nada cambia.
+  let t = estadoTableroInicial(columnas);
+  t = aplicarPagina(t, 'nuevo', { items: [{ id: 1, estado: 'NUEVO' }, { id: 2, estado: 'NUEVO' }], total: 2 });
+  t = aplicarPagina(t, 'curso', { items: [{ id: 9, estado: 'EN_CURSO' }], total: 1 });
+  const r1 = kanban.reemplazarTarjeta(t, 'nuevo', 2, { id: 2, estado: 'NUEVO', numero: 'X-2' });
+  assert.deepEqual(r1.nuevo.items, [{ id: 1, estado: 'NUEVO' }, { id: 2, estado: 'NUEVO', numero: 'X-2' }]);
+  assert.equal(r1.curso, t.curso);
+  assert.equal(kanban.reemplazarTarjeta(t, 'nuevo', 77, { id: 77 }), t);
+  assert.equal(kanban.reemplazarTarjeta(t, 'nuevo', 2, null), t, 'sin documento del servidor queda la optimista');
+  assert.deepEqual(kanban.reemplazarTarjeta(t, 'curso', 'a', { k: 'a' }, { idDe: (x) => x.k }), t, 'con idDe propio');
+
+  // i) Deshacer: si nada más cambió, exactamente el tablero anterior; si otra carga llegó en medio, la tarjeta vuelve.
+  const foto = structuredClone(t);
+  const mov = moverTarjeta(t, 2, 'nuevo', 'curso', { estado: 'EN_CURSO' });
+  const datosMov = { id: 2, origen: 'nuevo', destino: 'curso', original: { id: 2, estado: 'NUEVO' } };
+  assert.deepEqual(kanban.deshacerMovimiento(mov.tablero, mov.tablero, mov.deshacer, datosMov), foto);
+  const luego = aplicarPagina(mov.tablero, 'hecho', { items: [], total: 7 });
+  const vuelta = kanban.deshacerMovimiento(luego, mov.tablero, mov.deshacer, datosMov);
+  assert.deepEqual(vuelta.nuevo.items[0], { id: 2, estado: 'NUEVO' }, 'vuelve al origen con sus datos de antes');
+  assert.deepEqual(vuelta.curso.items.map((x) => x.id), [9]);
+  assert.deepEqual([vuelta.nuevo.total, vuelta.curso.total, vuelta.hecho.total], [2, 1, 7], 'lo que llegó en medio se conserva');
+  assert.equal(kanban.deshacerMovimiento(luego, mov.tablero, mov.deshacer, { ...datosMov, origen: 'vieja' }), luego,
+    'una columna que ya no existe no rompe');
+
+  // j) Una regla que pide un cambio o una acción que la pantalla no maneja queda bloqueada (no se ofrece).
+  const regla = (it, o, d) => (d === 'curso' ? { tipo: 'cambio', estado: 'EN_CURSO' } : { tipo: 'accion', accion: 'cerrar' });
+  const sinNada = kanban.reglaSegunManejadores(regla, { cambio: false, accion: false });
+  assert.deepEqual(sinNada({}, 'nuevo', 'curso'), { tipo: 'bloqueado', motivo: TEXTO_SOLO_VER });
+  assert.deepEqual(sinNada({}, 'nuevo', 'hecho'), { tipo: 'bloqueado', motivo: TEXTO_SOLO_VER });
+  const conAmbos = kanban.reglaSegunManejadores(regla, { cambio: true, accion: true });
+  assert.deepEqual(conAmbos({}, 'nuevo', 'curso'), { tipo: 'cambio', estado: 'EN_CURSO' });
+  assert.deepEqual(conAmbos({}, 'nuevo', 'hecho'), { tipo: 'accion', accion: 'cerrar' });
+  assert.equal(kanban.reglaSegunManejadores(null, { cambio: true }), null, 'sin regla sigue sin regla (RP67)');
+  assert.throws(() => resolverSoltar({}, 'a', 'b', kanban.reglaSegunManejadores(() => ({ tipo: 'raro' }), { cambio: true })),
+    /regla del tablero/, 'una forma rara sigue siendo un error');
+
+  // k) «Mover a…» (teclado y celular): todas las columnas menos el origen; bloqueadas con su motivo; sin efecto, fuera.
+  const regla2 = (it, o, d) => (d === 'curso' ? { tipo: 'cambio', estado: 'EN_CURSO' }
+    : d === 'hecho' ? { tipo: 'bloqueado', motivo: 'Primero pásalo a En curso.' } : { tipo: 'ninguno' });
+  const destinos = mapaDestinos({ id: 1 }, 'nuevo', columnas, regla2);
+  assert.deepEqual(kanban.opcionesMoverA('nuevo', columnas, destinos), [
+    { clave: 'curso', titulo: 'En curso', permitido: true, motivo: null },
+    { clave: 'hecho', titulo: 'Hecho', permitido: false, motivo: 'Primero pásalo a En curso.' },
+  ]);
+  const destinos2 = mapaDestinos({ id: 1 }, 'hecho', columnas, regla2);
+  assert.deepEqual(kanban.opcionesMoverA('hecho', columnas, destinos2).map((o) => o.clave), ['curso'], 'un destino sin efecto no se ofrece');
+  // Mientras se arrastra: cómo se pinta cada columna.
+  assert.equal(kanban.estadoDestino(destinos, 'nuevo', 'nuevo'), 'origen');
+  assert.equal(kanban.estadoDestino(destinos, 'curso', 'nuevo'), 'permitido');
+  assert.equal(kanban.estadoDestino(destinos, 'hecho', 'nuevo'), 'bloqueado');
+  assert.equal(kanban.estadoDestino(destinos2, 'nuevo', 'hecho'), 'neutro');
+  assert.equal(kanban.estadoDestino(null, 'curso', 'nuevo'), null, 'sin arrastre no se marca nada');
+
+  // l) Lo que anuncia la región aria-live y el alto del tablero (el alto libre de la ventana, mínimo 420 px).
+  assert.equal(kanban.textoMovimiento('PVEN-20260012', 'Listo para entrega'), 'PVEN-20260012 movido a Listo para entrega');
+  assert.equal(kanban.textoMovimiento('', 'Cancelado'), 'Movido a Cancelado');
+  assert.equal(kanban.ALTO_MINIMO_TABLERO, 420);
+  assert.equal(kanban.altoTablero(900, 200), 684, '900 − 200 − 16 de margen');
+  assert.equal(kanban.altoTablero(500, 300), 420, 'nunca menos de 420');
+  assert.equal(kanban.altoTablero(900, 200, { margen: 0 }), 700);
+  assert.equal(kanban.altoTablero(Number.NaN, 0), 420);
+
+  // m) Una columna que llega después (otro juego de columnas, p. ej. el filtro por estado) entra como en la primera carga.
+  const vacio = {};
+  const conNueva = kanban.asegurarColumna(vacio, 'curso');
+  assert.deepEqual(conNueva, { curso: { items: [], total: null, cargando: true, error: null } });
+  assert.deepEqual(vacio, {}, 'no muta el anterior');
+  const yaEsta = aplicarPagina(conNueva, 'curso', { items: [{ id: 1 }], total: 1 });
+  assert.equal(kanban.asegurarColumna(yaEsta, 'curso'), yaEsta, 'si ya está, el mismo tablero');
+  assert.equal(aplicarPagina(kanban.asegurarColumna(yaEsta, 'hecho'), 'hecho', { items: [], total: 4 }).hecho.total, 4);
+}
+
+console.log('--- TEST 13 (T4B): components/ui/Kanban.tsx sobre el fuente (sin DOM en node) ---');
+{
+  const fuente = readFileSync(new URL('../src/components/ui/Kanban.tsx', import.meta.url), 'utf8');
+  const indice = readFileSync(new URL('../src/components/ui/index.ts', import.meta.url), 'utf8');
+  assert.match(indice, /export \* from '\.\/Kanban';/, 'index.ts exporta el tablero');
+  assert.ok(fuente.startsWith("'use client';"), "«use client»");
+  for (const n of ['useTableroKanban', 'TableroKanban', 'TarjetaKanban']) {
+    assert.match(fuente, new RegExp(`export function ${n}\\b`), `exporta ${n}`);
+  }
+  // Preferencias (R4, C2, RP26, D35 y D38): las plegadas en kanban:<pantalla> con usePreferencia; nada de almacenamiento propio.
+  assert.match(fuente, /usePreferencia<[^>]+>\(`kanban:\$\{pantalla\}`/, 'plegadas en kanban:<pantalla>');
+  assert.ok(!/localStorage|sessionStorage/.test(fuente), 'el tablero no toca el almacenamiento (R4)');
+  // Lógica probada de lib/kanban.js, no copiada.
+  for (const n of ['definirColumnas', 'consultaColumna', 'firmaConsulta', 'crearTurnos', 'paginaDeRespuesta', 'aplicarPagina',
+    'tableroCliente', 'resolverPlegadas', 'alternarPlegada', 'resolverSoltar', 'mapaDestinos', 'moverTarjeta',
+    'deshacerMovimiento', 'reemplazarTarjeta', 'reglaSegunManejadores', 'opcionesMoverA', 'estadoDestino', 'columnaBajoPunto',
+    'velocidadAutodesplazamiento', 'superaUmbral', 'estadoColumna', 'textoTotalColumna', 'textoMovimiento', 'altoTablero',
+    'asegurarColumna', 'quedanEnServidor']) {
+    assert.match(fuente, new RegExp(`\\b${n}\\(`), `usa ${n}`);
+  }
+  // El arrastre del CRM (H1): pointer events, captura después del umbral, Escape y pointercancel cancelan.
+  assert.match(fuente, /setPointerCapture\(/);
+  assert.match(fuente, /onPointerCancel=/);
+  assert.match(fuente, /e\.key === 'Escape'/);
+  assert.match(fuente, /className="pointer-events-none fixed left-0 top-0 z-\[80\]/, 'clon flotante sin eventos y en z-[80]');
+  assert.match(fuente, /requestAnimationFrame\(/, 'autodesplazamiento cuadro a cuadro');
+  // Al soltar: el bloqueo con su motivo y su enlace; el error del servidor; la región aria-live.
+  assert.match(fuente, /avisar\(resultado\.motivo, \{ tono: 'error', accion: resultado\.enlace \}\)/);
+  assert.match(fuente, /avisarError\(err\)/);
+  assert.match(fuente, /aria-live="polite"/);
+  // Menú ⋯ (C1): el único MenuFila; contadores con Contador (C13), sin textoContador ni «…».
+  assert.match(fuente, /<MenuFila\b/);
+  assert.match(fuente, /deshabilitado: !opcion\.permitido/);
+  assert.match(fuente, /titulo: opcion\.motivo/);
+  assert.match(fuente, /<Contador\b/);
+  assert.ok(!/textoContador/.test(fuente));
+  assert.ok(!fuente.includes("'…'"), 'sin «…» en los contadores');
+  // Tarjeta: el monto con formatoPesos (pesos enteros) y la acción principal sin enlace cuando href es null (D37).
+  assert.match(fuente, /formatoPesos\(monto\)/);
+  assert.match(fuente, /accionPrincipal\.href \?/);
+  // Columnas (KANBAN-base f y g): ancho, celular con scroll-snap, alto mínimo, textos de carga, error y vacío.
+  for (const texto of ['w-72', 'w-[85vw]', 'snap-x', 'snap-start', 'min-h-[420px]', 'overflow-x-auto', 'overflow-y-auto',
+    "'Sin documentos aquí'", 'Reintentar', 'Soltar aquí', 'Ver más']) {
+    assert.ok(fuente.includes(texto), `trae ${texto}`);
+  }
+  assert.ok(!/\bdark:/.test(fuente), 'sin dark:');
+}
+
 console.log('✓ lib/kanban.js: columnas, reparto, orden, páginas, movimiento, reglas, destinos, arrastre y motivo.');
+console.log('✓ T4B: modo servidor y cliente, plegadas, turnos, deshacer, «Mover a…» y Kanban.tsx.');

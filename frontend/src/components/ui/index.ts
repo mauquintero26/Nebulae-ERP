@@ -17,3 +17,5 @@ export * from './usePreferencia';
 export * from './ConmutadorVista';
 export * from './MenuFila';
 export * from './ModalMotivo';
+// Bloque 4, T4B: el tablero Kanban común (useTableroKanban, TableroKanban y TarjetaKanban).
+export * from './Kanban';

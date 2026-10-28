@@ -364,3 +364,345 @@ export const MINIMO_MOTIVO = 5;
 export function motivoValido(texto, minimo = MINIMO_MOTIVO) {
   return typeof texto === 'string' && [...texto.trim()].length >= minimo;
 }
+
+// ─── tablero común (T4B: useTableroKanban y TableroKanban de components/ui/Kanban.tsx) ──────────────
+
+/**
+ * @typedef {{offset: number, limit: number, orden: string}} ConsultaColumna
+ * @typedef {DatosColumna & {hayMas: boolean}} DatosColumnaCliente
+ * @typedef {'cargando' | 'actualizando' | 'error' | 'listo'} EstadoColumna
+ * @typedef {{clave: string, titulo: string, permitido: boolean, motivo: string | null}} OpcionMover
+ * @typedef {'origen' | 'permitido' | 'bloqueado' | 'neutro'} EstadoDestino
+ */
+
+/** Los píxeles que tiene que moverse el puntero para que sea un arrastre (H1, el umbral del CRM); menos es un clic. */
+export const UMBRAL_ARRASTRE = 6;
+
+/**
+ * true si el puntero ya se movió `umbral` píxeles o más desde donde se presionó (en cualquier dirección): desde ahí es
+ * un arrastre; antes, soltar es un clic (onAbrir).
+ * @param {number} dx
+ * @param {number} dy
+ * @param {number} [umbral]
+ * @returns {boolean}
+ */
+export function superaUmbral(dx, dy, umbral = UMBRAL_ARRASTRE) {
+  const d = Math.hypot(dx, dy);
+  return Number.isFinite(d) && d >= umbral;
+}
+
+/**
+ * El orden de una columna en modo servidor cuando la pantalla no pasa ordenDe (RP10): 'reciente' (lo más reciente
+ * primero) en una cerrada y 'sin_movimiento' (lo que más tiempo lleva quieto) en una abierta.
+ * @param {ColumnaKanban} columna
+ * @returns {'reciente' | 'sin_movimiento'}
+ */
+export function ordenPorDefecto(columna) {
+  return columna?.cerrada === true ? 'reciente' : 'sin_movimiento';
+}
+
+/**
+ * La consulta de una columna en modo servidor (R11, RP10): {offset, limit, orden}. limit es porColumna (el tamaño de
+ * página de la tabla, 25 o 50), o 0 si la columna está plegada (solo trae el total). orden es ordenDe(columna) (T7:
+ * 'atencion' y '-creado'); si la pantalla no da uno, ordenPorDefecto.
+ * @param {ColumnaKanban} columna
+ * @param {{plegada?: boolean, porColumna?: number, offset?: number, ordenDe?: (columna: ColumnaKanban) => string | null | undefined}} [opciones]
+ * @returns {ConsultaColumna}
+ */
+export function consultaColumna(columna, { plegada = false, porColumna = 25, offset = 0, ordenDe = ordenPorDefecto } = {}) {
+  const propio = typeof ordenDe === 'function' ? ordenDe(columna) : null;
+  return {
+    offset: plegada ? 0 : offset,
+    limit: plegada ? 0 : porColumna,
+    orden: textoLleno(propio) ? /** @type {string} */ (propio) : ordenPorDefecto(columna),
+  };
+}
+
+/**
+ * La firma de la consulta vigente de una columna: cambia con las dependencias de la pantalla (búsqueda y filtros), el
+ * tamaño, el orden y cada recarga (version); el offset de «Ver más» no cuenta. Si la firma de lo que llegó no es la
+ * vigente, la columna está cargando. `dependencias` son valores simples (texto, número, booleano o arreglos de ellos).
+ * @param {ConsultaColumna} consulta
+ * @param {{dependencias?: unknown, version?: number}} [opciones]
+ * @returns {string}
+ */
+export function firmaConsulta(consulta, { dependencias = null, version = 0 } = {}) {
+  return JSON.stringify([dependencias ?? null, consulta?.limit ?? null, consulta?.orden ?? null, version]);
+}
+
+/**
+ * Las claves de las columnas que salen plegadas por defecto: las cerradas (kanban_columnas_cerradas = «Plegadas: se ve
+ * el nombre y cuántas hay, y con un clic se abren»).
+ * @param {ReadonlyArray<ColumnaKanban>} columnas
+ * @returns {string[]}
+ */
+export function plegadasPorDefecto(columnas) {
+  return (columnas ?? []).filter((c) => c?.cerrada === true).map((c) => c.clave);
+}
+
+/**
+ * true si `valor` sirve como lo guardado en kanban:<pantalla>: una lista de claves (textos). Lo demás se ignora (la
+ * validación de usePreferencia).
+ * @param {unknown} valor
+ * @returns {boolean}
+ */
+export function plegadasValidas(valor) {
+  return Array.isArray(valor) && valor.every((v) => typeof v === 'string');
+}
+
+/**
+ * Las columnas plegadas de verdad: sin nada guardado (null), las cerradas; con una lista guardada, esa lista en el
+ * orden de las columnas y sin las claves que ya no existen.
+ * @param {unknown} guardado
+ * @param {ReadonlyArray<ColumnaKanban>} columnas
+ * @returns {string[]}
+ */
+export function resolverPlegadas(guardado, columnas) {
+  if (!plegadasValidas(guardado)) return plegadasPorDefecto(columnas);
+  const lista = /** @type {string[]} */ (guardado);
+  return (columnas ?? []).map((c) => c.clave).filter((clave) => lista.includes(clave));
+}
+
+/**
+ * La lista de plegadas después de plegar o abrir `clave`: sin `plegada`, alterna; con true o false, la deja así. Si no
+ * cambia nada devuelve la misma lista (así no se guarda de nuevo).
+ * @param {ReadonlyArray<string>} plegadas
+ * @param {string} clave
+ * @param {boolean} [plegada]
+ * @returns {ReadonlyArray<string>}
+ */
+export function alternarPlegada(plegadas, clave, plegada) {
+  const ya = plegadas.includes(clave);
+  const quiere = plegada === undefined ? !ya : plegada === true;
+  if (quiere === ya) return plegadas;
+  return quiere ? [...plegadas, clave] : plegadas.filter((k) => k !== clave);
+}
+
+/**
+ * El número de turno de cada columna (KANBAN-base a): cada consulta toma el siguiente y su respuesta vale solo si
+ * sigue siendo el vigente (una respuesta vieja se descarta). Cada columna lleva su propia cuenta.
+ * @returns {{siguiente: (clave: string) => number, vigente: (clave: string, turno: number) => boolean}}
+ */
+export function crearTurnos() {
+  /** @type {Map<string, number>} */
+  const actuales = new Map();
+  return {
+    siguiente(clave) {
+      const n = (actuales.get(clave) ?? 0) + 1;
+      actuales.set(clave, n);
+      return n;
+    },
+    vigente(clave, turno) {
+      return actuales.has(clave) && actuales.get(clave) === turno;
+    },
+  };
+}
+
+/**
+ * Lo que devolvió cargar(columna, consulta) de la pantalla, como {items, total, resumen}: acepta {items, total,
+ * resumen?}, {filas, total, resumen?} (normalizarRespuesta de lib/tabla.js) o un arreglo. Un total que no es un número
+ * no negativo queda null (aplicarPagina usa entonces el largo de la lista).
+ * @param {unknown} respuesta
+ * @returns {{items: any[], total: number | null, resumen: any}}
+ */
+export function paginaDeRespuesta(respuesta) {
+  if (Array.isArray(respuesta)) return { items: respuesta, total: respuesta.length, resumen: null };
+  const r = /** @type {any} */ (respuesta);
+  const items = Array.isArray(r?.items) ? r.items : Array.isArray(r?.filas) ? r.filas : [];
+  const total = typeof r?.total === 'number' && Number.isFinite(r.total) && r.total >= 0 ? r.total : null;
+  return { items, total, resumen: r?.resumen ?? null };
+}
+
+/**
+ * true si el servidor tiene más tarjetas de esa columna que las que se ven («Ver más» en modo servidor).
+ * @param {{items?: any[], total?: number | null} | null | undefined} datos
+ * @returns {boolean}
+ */
+export function quedanEnServidor(datos) {
+  return typeof datos?.total === 'number' && Array.isArray(datos.items) && datos.items.length < datos.total;
+}
+
+/**
+ * El tablero del modo cliente (KANBAN-base a; R11: solo donde el endpoint devuelve todo): agrupa los ítems con
+ * columnaDe (por defecto, los `estados` de cada columna), ordena cada columna con ordenarTarjetas (abiertas: lo atrasado
+ * y lo más quieto primero; cerradas: lo más reciente) y la corta en cortes[clave] (por defecto porColumna; «Ver más»
+ * lo sube). total = totales[clave] si la pantalla lo da (RP61: «los 50 más recientes y el total real»), si no, cuántos
+ * hay en esa columna. hayMas: si quedan tarjetas ya cargadas sin mostrar. Lo que no cae en ninguna columna no se pinta.
+ * Sin `items` (todavía no llegan) todas las columnas están cargando.
+ * @param {ReadonlyArray<any> | null | undefined} items
+ * @param {ReadonlyArray<ColumnaKanban>} columnas
+ * @param {{columnaDe?: (item: any) => string | null | undefined, esAtrasado?: (item: any) => boolean,
+ *   fechaMovimiento?: (item: any) => unknown, porColumna?: number, cortes?: Record<string, number>,
+ *   totales?: Record<string, number>}} [opciones]
+ * @returns {Record<string, DatosColumnaCliente>}
+ */
+export function tableroCliente(items, columnas, {
+  columnaDe, esAtrasado, fechaMovimiento, porColumna = 25, cortes = {}, totales = {},
+} = {}) {
+  /** @type {Record<string, DatosColumnaCliente>} */
+  const tablero = {};
+  if (!Array.isArray(items)) {
+    for (const c of columnas) tablero[c.clave] = { items: [], total: null, cargando: true, error: null, hayMas: false };
+    return tablero;
+  }
+  const grupos = agruparEnColumnas(items, columnas, columnaDe ?? columnaPorEstados(columnas));
+  for (const c of columnas) {
+    const ordenadas = ordenarTarjetas(grupos[c.clave], { esAtrasado, fechaMovimiento, cerrada: c.cerrada === true });
+    const corte = cortes?.[c.clave] ?? porColumna;
+    const visibles = ordenadas.slice(0, corte);
+    const propio = totales?.[c.clave];
+    tablero[c.clave] = {
+      items: visibles,
+      total: typeof propio === 'number' && Number.isFinite(propio) && propio >= 0 ? propio : ordenadas.length,
+      cargando: false,
+      error: null,
+      hayMas: ordenadas.length > visibles.length,
+    };
+  }
+  return tablero;
+}
+
+/**
+ * El estado de una columna con el vocabulario de estadoKpi (C13): 'cargando' sin datos todavía (Contador pinta su
+ * barra gris, nunca 0), 'actualizando' si recarga con un total ya conocido, 'error' si falló y 'listo'.
+ * @param {{total?: number | null, cargando?: boolean, error?: unknown} | null | undefined} datos
+ * @returns {EstadoColumna}
+ */
+export function estadoColumna(datos) {
+  if (!datos) return 'cargando';
+  if (datos.cargando) return typeof datos.total === 'number' ? 'actualizando' : 'cargando';
+  if (datos.error) return 'error';
+  return 'listo';
+}
+
+/**
+ * El tablero con la columna `clave`: si no está (un juego de columnas que cambió, p. ej. el filtro por estado), la
+ * agrega como en estadoTableroInicial (sin tarjetas, total null y cargando); si ya está, devuelve el mismo tablero.
+ * Así aplicarPagina y marcarColumna no lanzan con una columna que llegó después.
+ * @param {Tablero} tablero
+ * @param {string} clave
+ * @returns {Tablero}
+ */
+export function asegurarColumna(tablero, clave) {
+  if (tablero && tiene(tablero, clave)) return tablero;
+  return { ...(tablero ?? {}), [clave]: { items: [], total: null, cargando: true, error: null } };
+}
+
+/**
+ * Un tablero nuevo con `item` (el documento que devolvió el servidor) en el lugar de la tarjeta `id` de la columna
+ * `clave`. Si la tarjeta ya no está ahí, o `item` no es un objeto, devuelve el mismo tablero (queda la optimista).
+ * @param {Tablero} tablero
+ * @param {string} clave
+ * @param {unknown} id
+ * @param {unknown} item
+ * @param {{idDe?: (item: any) => unknown}} [opciones]
+ * @returns {Tablero}
+ */
+export function reemplazarTarjeta(tablero, clave, id, item, { idDe = idPorDefecto } = {}) {
+  const columna = exigirColumna(tablero, clave);
+  const i = columna.items.findIndex((x) => idDe(x) === id);
+  if (i < 0 || !item || typeof item !== 'object') return tablero;
+  return { ...tablero, [clave]: { ...columna, items: columna.items.map((x, j) => (j === i ? item : x)) } };
+}
+
+/**
+ * Deshace un movimiento optimista que el servidor rechazó (KANBAN-base d): si el tablero sigue siendo el que dejó
+ * moverTarjeta (`movido`), exactamente el anterior (deshacer()); si en medio llegó otra carga, la tarjeta vuelve de
+ * `destino` a `origen` con sus datos de antes (`original`) y lo demás que llegó se conserva. Si una de las dos columnas
+ * ya no está, devuelve el tablero actual.
+ * @param {Tablero} actual
+ * @param {Tablero} movido
+ * @param {() => Tablero} deshacer
+ * @param {{id: unknown, origen: string, destino: string, original: Record<string, unknown>, idDe?: (item: any) => unknown}} datos
+ * @returns {Tablero}
+ */
+export function deshacerMovimiento(actual, movido, deshacer, { id, origen, destino, original, idDe = idPorDefecto }) {
+  if (actual === movido) return deshacer();
+  if (!actual || !tiene(actual, origen) || !tiene(actual, destino)) return actual;
+  return moverTarjeta(actual, id, destino, origen, original ?? {}, { idDe }).tablero;
+}
+
+/**
+ * La regla del tablero sin lo que la pantalla no puede hacer: un 'cambio' sin onCambio o una 'accion' sin onAccion
+ * quedan bloqueados con «Este tablero es solo para ver.» (no se ofrecen al arrastrar ni en «Mover a…»). Sin regla
+ * devuelve lo mismo (resolverSoltar ya la trata como solo para ver, RP67).
+ * @param {ReglaSoltar | null | undefined} regla
+ * @param {{cambio?: boolean, accion?: boolean}} [manejadores]
+ * @returns {ReglaSoltar | null | undefined}
+ */
+export function reglaSegunManejadores(regla, { cambio = false, accion = false } = {}) {
+  if (typeof regla !== 'function') return regla;
+  return (item, origen, destino) => {
+    const resultado = regla(item, origen, destino);
+    if ((resultado?.tipo === 'cambio' && !cambio) || (resultado?.tipo === 'accion' && !accion)) {
+      return { tipo: 'bloqueado', motivo: TEXTO_SOLO_VER };
+    }
+    return resultado;
+  };
+}
+
+/**
+ * Las opciones de «Mover a…» del menú ⋯ de una tarjeta (KANBAN-base e; para el teclado y el celular), con el mapa de
+ * mapaDestinos: todas las columnas menos el origen, en su orden; las permitidas y las bloqueadas con su motivo. Las que
+ * no harían nada ('ninguno', sin motivo) no se ofrecen.
+ * @param {string} origen
+ * @param {ReadonlyArray<ColumnaKanban>} columnas
+ * @param {Record<string, Destino> | null | undefined} destinos
+ * @returns {OpcionMover[]}
+ */
+export function opcionesMoverA(origen, columnas, destinos) {
+  /** @type {OpcionMover[]} */
+  const opciones = [];
+  for (const c of columnas ?? []) {
+    if (c.clave === origen) continue;
+    const d = destinos?.[c.clave];
+    if (d?.permitido) opciones.push({ clave: c.clave, titulo: c.titulo, permitido: true, motivo: null });
+    else if (d?.motivo) opciones.push({ clave: c.clave, titulo: c.titulo, permitido: false, motivo: d.motivo });
+  }
+  return opciones;
+}
+
+/**
+ * Cómo se pinta la columna `clave` mientras se arrastra una tarjeta de `origen` (KANBAN-base c): 'origen';
+ * 'permitido' (borde punteado del tono y «Soltar aquí»); 'bloqueado' (apagada, con candado y el motivo); 'neutro'
+ * (soltarla ahí no hace nada). Sin arrastre (destinos null), null.
+ * @param {Record<string, Destino> | null | undefined} destinos
+ * @param {string} clave
+ * @param {string} origen
+ * @returns {EstadoDestino | null}
+ */
+export function estadoDestino(destinos, clave, origen) {
+  if (!destinos) return null;
+  if (clave === origen) return 'origen';
+  const d = destinos[clave];
+  if (d?.permitido) return 'permitido';
+  if (d?.motivo) return 'bloqueado';
+  return 'neutro';
+}
+
+/**
+ * Lo que anuncia la región aria-live al mover una tarjeta: 'PVEN-… movido a Listo para entrega'.
+ * @param {unknown} nombre
+ * @param {string} titulo
+ * @returns {string}
+ */
+export function textoMovimiento(nombre, titulo) {
+  const n = String(nombre ?? '').trim();
+  return n ? `${n} movido a ${titulo}` : `Movido a ${titulo}`;
+}
+
+/** El alto mínimo del tablero, en píxeles (KANBAN-base f). */
+export const ALTO_MINIMO_TABLERO = 420;
+
+/**
+ * El alto del tablero: el alto libre de la ventana debajo de su borde de arriba, menos un margen, y nunca menos de
+ * `minimo` (420 px).
+ * @param {number} altoVentana
+ * @param {number} arriba
+ * @param {{minimo?: number, margen?: number}} [opciones]
+ * @returns {number}
+ */
+export function altoTablero(altoVentana, arriba, { minimo = ALTO_MINIMO_TABLERO, margen = 16 } = {}) {
+  const libre = Math.floor(altoVentana - arriba - margen);
+  return Number.isFinite(libre) ? Math.max(minimo, libre) : minimo;
+}
