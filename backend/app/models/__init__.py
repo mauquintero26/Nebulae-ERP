@@ -59,3 +59,6 @@ from app.models.fase5 import (
 
 # GO/NO-GO V2.1 — tablas funcionales faltantes en Alembic (corrección 80/77)
 from app.models.admin_calendar_crm import AdminConfig, CalendarEvent, CrmConfig
+
+# Bloque 4 (TABLA-base, R4) — preferencias de pantalla de cada usuario (fa6_033)
+from app.models.preferencias import PreferenciaUsuario

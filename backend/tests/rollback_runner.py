@@ -18,6 +18,10 @@ Fixtures que resuelve (ademas de las que defina el propio modulo de tests, que t
     monkeypatch                               un pytest.MonkeyPatch por prueba; .undo() al terminar
     user_vendedor, vendedor_token             usuario VENDEDOR creado dentro de la transaccion revertida
     brand, category, product, sku             igual que conftest.py (dentro de la transaccion revertida)
+    warehouse, inv_level_zero, supplier,      igual que conftest.py (B4 T1B, D13): bodega, existencia en 0, proveedor,
+    pec_10u, eninv_5u, eninv_5u_b,            PEC de 10 unidades y sus ENINV en BORRADOR. Todas sobre la MISMA sesion
+    eninv_10u, eninv_logistica                `db` de la prueba: sus commit() solo liberan savepoints y se revierten
+    tmp_path                                  un directorio temporal nuevo por prueba (pathlib.Path); se borra al final
     contador_sql                              cuenta consultas SQL y commits (ver ContadorSQL)
     clave_de_prueba                           la clave de prueba CLAVE_DE_PRUEBA (la de user_vendedor)
 Las fixtures generadoras (yield) entregan el valor del yield y su teardown corre despues de la prueba,
@@ -35,8 +39,8 @@ empezar cada prueba (r2). Un modulo que vuelva a cargar el .env no las abre.
 Cada intento de salir a Chatwoot o por urlopen se cuenta. Al final se imprime «Chatwoot real bloqueado N veces», y con
 N > 0 la corrida falla aunque todas las pruebas pasen: una prueba llego al transporte real y la guarda la paro.
 """
-import sys, os, re, importlib, inspect, traceback, contextlib, uuid
-from datetime import timedelta
+import sys, os, re, importlib, inspect, traceback, contextlib, uuid, shutil, tempfile
+from datetime import datetime, timedelta
 from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parent.parent
@@ -145,7 +149,12 @@ TABLAS = ["customer_requests", "sales_quotations", "sale_orders", "purchase_orde
           "document_confirmation_tokens", "customers", "sales_orders",
           "users", "brands", "categories", "products", "product_skus",
           "envios_al_cliente",  # B3 T8 (fa6_030): los mensajes de WhatsApp al cliente tampoco pueden escaparse
-          "seguimientos_confirmacion"]  # B3 T11 (fa6_031): ni los recordatorios programados
+          "seguimientos_confirmacion",  # B3 T11 (fa6_031): ni los recordatorios programados
+          "preferencias_usuario",  # B4 T1B (fa6_033): ni las preferencias de pantalla
+          # B4 T1B (RP72, D13/D15): Compras e Inventario (las pruebas de T1C, T12 y T13 y las fixtures de D13)
+          "goods_receipts", "purchase_order_lines", "suppliers", "warehouses", "inventory_levels",
+          "inventory_movements", "inventory_operations", "inventory_reservations", "inventory_quarantine",
+          "product_web_listings"]
 MODULOS_CON_SESSIONLOCAL = (dbmod, m_compras, m_inv, m_f4)
 
 # Salvaguarda como la de conftest.py: jamas correr contra una base que no se identifique como de pruebas.
@@ -336,6 +345,101 @@ def _sku(db, product):
     return s
 
 
+# ---- B4 T1B (D13/D15): las fixtures de Compras e Inventario de conftest.py -----------------------------------------
+# Las mismas filas que conftest.py (warehouse :496, inv_level_zero :503, supplier :511, pec_10u :522, _make_eninv :538 y
+# las eninv_* :553-570), sobre la sesion `db` de la prueba: todo queda en la transaccion que se revierte. sku es la de
+# arriba (_sku, D15: no se registra dos veces). Sus tablas estan en TABLAS para que «Base intacta» las vigile.
+@_fixture_del_runner
+def _warehouse(db):
+    from app.models.inventory import Warehouse
+    w = Warehouse(name=f"BodegaTest-{uuid.uuid4().hex[:6]}", location_type="Central")
+    db.add(w)
+    db.commit()
+    return w
+
+
+@_fixture_del_runner
+def _inv_level_zero(db, sku, warehouse):
+    from app.models.inventory import InventoryLevel
+    lvl = InventoryLevel(sku_id=sku.id, warehouse_id=warehouse.id, quantity=0)
+    db.add(lvl)
+    db.commit()
+    return lvl
+
+
+@_fixture_del_runner
+def _supplier(db):
+    from app.models.erp_documents import Supplier
+    s = Supplier(name=f"TestSupplier-{uuid.uuid4().hex[:6]}", country="Colombia", is_active=True)
+    db.add(s)
+    db.commit()
+    return s
+
+
+@_fixture_del_runner
+def _pec_10u(db, sku, warehouse, supplier):
+    from app.models.erp_documents import PurchaseOrderFull
+    p = PurchaseOrderFull(
+        numero=f"PEC-TEST-{uuid.uuid4().hex[:8].upper()}",
+        supplier_id=supplier.id, supplier_name=supplier.name,
+        warehouse_id=warehouse.id, estado="EMITIDO",
+        fecha_entrega_estimada=datetime.utcnow() + timedelta(days=15),
+        productos=[{"sku_id": sku.id, "sku": sku.sku, "nombre": "Test Product",
+                    "qty": 10, "qty_recibida": 0, "precio_usd": 10.0}],
+    )
+    db.add(p)
+    db.commit()
+    return p
+
+
+def _crear_eninv(db, pec, sku, warehouse, qty, receipt_type="FISICA", suffix=""):
+    """La ENINV en BORRADOR de _make_eninv de conftest.py."""
+    from app.models.erp_documents import GoodsReceipt
+    g = GoodsReceipt(
+        numero=f"ENINV-T-{uuid.uuid4().hex[:8].upper()}{suffix}",
+        pec_id=pec.id, pec_numero=pec.numero,
+        supplier_id=pec.supplier_id, supplier_name=pec.supplier_name,
+        warehouse_id=warehouse.id, warehouse_name=warehouse.name,
+        estado="BORRADOR", stock_actualizado=False, receipt_type=receipt_type,
+        productos=[{"sku_id": sku.id, "sku": sku.sku, "nombre": "Test Product",
+                    "qty_esperada": qty, "qty_recibida": qty}],
+    )
+    db.add(g)
+    db.commit()
+    return g
+
+
+@_fixture_del_runner
+def _eninv_5u(db, pec_10u, sku, warehouse):
+    return _crear_eninv(db, pec_10u, sku, warehouse, qty=5)
+
+
+@_fixture_del_runner
+def _eninv_5u_b(db, pec_10u, sku, warehouse):
+    return _crear_eninv(db, pec_10u, sku, warehouse, qty=5, suffix="B")
+
+
+@_fixture_del_runner
+def _eninv_10u(db, pec_10u, sku, warehouse):
+    return _crear_eninv(db, pec_10u, sku, warehouse, qty=10)
+
+
+@_fixture_del_runner
+def _eninv_logistica(db, pec_10u, sku, warehouse):
+    return _crear_eninv(db, pec_10u, sku, warehouse, qty=10, receipt_type="LOGISTICA")
+
+
+@_fixture_del_runner
+def _tmp_path():
+    """Como tmp_path de pytest (D13, para test_startup_health): un directorio nuevo por prueba, como pathlib.Path. Se
+    borra al terminar (pytest guarda los ultimos tres; aqui no queda nada). Las pruebas nuevas no lo usan (R22)."""
+    carpeta = Path(tempfile.mkdtemp(prefix="rollback_runner_"))
+    try:
+        yield carpeta
+    finally:
+        shutil.rmtree(carpeta, ignore_errors=True)
+
+
 if os.environ.get("PARCHE"):  # prueba "roja": codigo que anula la regla bajo prueba, para ver que los tests lo notan
     exec(os.environ["PARCHE"])
 
@@ -425,8 +529,19 @@ for nombre, fn in recolectar():
             ok = False
             detalles.append(f"[teardown de la fixture '{n}'] hizo yield mas de una vez\n")
     finally:
-        session.close()
-        trans.rollback()
+        # B4 T1B (D13): una prueba con hilos (test_receipt_concurrency) usa la MISMA conexion desde dos peticiones a la vez y
+        # deja sus savepoints invalidos; session.close() lanza PendingRollbackError. Antes eso tumbaba la corrida sin
+        # «Base intacta»; ahora la prueba queda en FAIL con el motivo y, si tampoco se puede revertir, la conexion se
+        # descarta (Postgres revierte la transaccion abierta al perderla). Nada se confirma en ningun caso.
+        try:
+            session.close()
+        except Exception:
+            ok = False
+            detalles.append(f"[cierre de la sesion de la prueba]\n{traceback.format_exc()}")
+        try:
+            trans.rollback()
+        except Exception:
+            conn.invalidate()
         conn.close()
         for m in MODULOS_CON_SESSIONLOCAL:
             if hasattr(m, "SessionLocal"):

@@ -10,6 +10,7 @@ from app.api.v1 import erp_ventas, erp_ventas_fase4, erp_compras, erp_compras_as
 from app.api.v1 import confirmacion_publica  # Gate 1/2 — confirmacion publica de SC/COT por link, sin autenticacion
 from app.api.v1 import empresa  # Bloque 3 (MARCA) — datos de la empresa; su router_publico va sin autenticacion
 from app.api.v1 import envio_cliente  # Bloque 3 (U16-envio) — WhatsApp automatico por Chatwoot y estado de entrega
+from app.api.v1 import preferencias  # Bloque 4 (TABLA-base, R4) — como deja cada usuario sus pantallas
 from app.api.v1 import whatsapp_webhook  # BLOQUE 5 — Modo Sombra WhatsApp
 from app.api.v1 import debug_db  # Hardening — endpoint de verificacion de DB (solo ADMIN)
 from app.api import ws
@@ -214,6 +215,7 @@ app.include_router(debug_db.router, prefix="/api/v1/debug", tags=["Debug / Verif
 app.include_router(confirmacion_publica.router, prefix="/api/v1", tags=["confirmacion-publica"])  # Sin autenticacion -- publico por diseno
 app.include_router(empresa.router, prefix="/api/v1/empresa", tags=["Empresa"])
 app.include_router(empresa.router_publico, prefix="/api/v1/publico", tags=["publico"])  # Sin autenticacion -- publico por diseno
+app.include_router(preferencias.router, prefix="/api/v1/preferencias", tags=["Preferencias"])
 
 @app.get("/")
 def read_root(request: Request):
