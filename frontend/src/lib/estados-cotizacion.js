@@ -10,6 +10,10 @@
  *
  * RP4: la forma es {codigo: {label, clases}} (la del spec). El ESTADOS hex de cotizacion-client.tsx ({label, color, bg,
  * border}) NO se reemplaza aquí: T9 solo toma `label` de esta tabla.
+ *
+ * Diferencia aceptada con el respaldo de etiqueta_estado (T2 r1): un código desconocido sale humanizado igual en los dos
+ * lados, salvo EN_GESTION, que aquí dice «En gestión» (ETIQUETAS_SIN_TABLA de estados-pedido.js) y en Python «En
+ * gestion» (para COT y PEC). Se deja así: ningún documento tiene ese estado.
  */
 
 // congelar: mutar estas tablas lanza TypeError (una sola función en todo el frontend; no se copia).
@@ -50,12 +54,14 @@ export const ESTADOS_COTIZACION = congelar({
 export const ESTADOS_COT_MANUALES = congelar(['BORRADOR', 'RECHAZADA', 'VENCIDA']);
 
 /**
- * Etiqueta y clases de un estado de la cotización. Un código desconocido sale humanizado ('ALGO_NUEVO' -> 'Algo
- * nuevo') y en gris: nunca el código crudo. Inmutable.
+ * Etiqueta y clases de un estado de la cotización. El código se recorta antes de buscarlo, como etiqueta_estado de
+ * Python (' BORRADOR' -> 'Borrador'). Un código desconocido sale humanizado ('ALGO_NUEVO' -> 'Algo nuevo') y en gris:
+ * nunca el código crudo. Inmutable.
  * @param {unknown} e
  * @returns {Readonly<InfoEstadoCotizacion>}
  */
 export function infoEstadoCotizacion(e) {
-  if (typeof e === 'string' && tiene(ESTADOS_COTIZACION, e)) return ESTADOS_COTIZACION[e];
+  const codigo = typeof e === 'string' ? e.trim() : e;
+  if (typeof codigo === 'string' && tiene(ESTADOS_COTIZACION, codigo)) return ESTADOS_COTIZACION[codigo];
   return congelar({ label: humanizarCodigo(e), clases: { ...GRIS } });
 }

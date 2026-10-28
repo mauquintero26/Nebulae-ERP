@@ -157,6 +157,40 @@ def test_clasificar_de_python_es_clasificar_de_hub_ventas_js():
     assert len(casos) >= 24
 
 
+def test_clasificar_en_todo_el_producto_tipo_estado_banderas_y_horas():
+    """T2 r1: la paridad completa. El TEXTO exacto de clasificar de Python y de hub-ventas.js en todo el producto: los
+    estados de ETIQUETAS_ESTADO SC, COT y VEN mas EN_GESTION, N/A_SOPORTE y ALGO_NUEVO; los tipos SC, COT, VEN y PVEN;
+    las cuatro banderas en verdadero y falso; y las horas None, dias×24 y dias×24 + 1 min. Una sola llamada a node."""
+    import itertools
+    ahora = ahora_utc().replace(microsecond=0)
+    estados = sorted(set(ETIQUETAS_ESTADO['SC']) | set(ETIQUETAS_ESTADO['COT']) | set(ETIQUETAS_ESTADO['VEN'])
+                     | {'EN_GESTION', rv.ESTADO_SOPORTE, 'ALGO_NUEVO'})
+    banderas = ('sc_con_cot_activa', 'cot_con_pedido_vigente', 'confirmacion_vigente', 'es_soporte')
+    casos, esperado = [], []
+    for tipo, estado, valores in itertools.product(('SC', 'COT', 'VEN', 'PVEN'), estados,
+                                                   itertools.product((False, True), repeat=len(banderas))):
+        flags = dict(zip(banderas, valores))
+        limite = DIAS['VEN' if tipo == 'PVEN' else tipo] * 24
+        for horas in (None, limite, limite + 1 / 60):
+            fila = {'tipo': tipo, 'id': 1, 'estado': estado, 'confirmacion_vigente': flags['confirmacion_vigente'],
+                    'tipo_solicitud': rv.TIPO_SOPORTE if flags['es_soporte'] else 'Cotizacion de Producto',
+                    'updated_at': None, 'created_at': None}
+            if horas is not None:
+                fila['updated_at'] = iso_z(ahora - timedelta(hours=horas))
+            casos.append([fila, {'scConCotActiva': flags['sc_con_cot_activa'],
+                                 'cotConPedidoVigente': flags['cot_con_pedido_vigente']}])
+            esperado.append(rv.clasificar(tipo, estado, rv.horas_desde_movimiento(
+                ahora - timedelta(hours=horas) if horas is not None else None, None, ahora), DIAS, **flags))
+    js = _node("""
+      console.log(JSON.stringify(entrada.casos.map(([fila, ctx]) => hub.clasificar(fila, {dias: entrada.dias, ahora: entrada.ahora, ...ctx}))));
+    """, casos=casos, dias=DIAS, ahora=_ms(ahora))
+    assert len(js) == len(esperado) == 4 * len(estados) * 16 * 3
+    distintos = [(c[0]['tipo'], c[0]['estado'], c[1], c[0]['confirmacion_vigente'], c[0]['tipo_solicitud'],
+                  c[0]['updated_at'], e, j) for c, e, j in zip(casos, esperado, js) if e != j]
+    assert not distintos, f'{len(distintos)} casos distintos; los primeros: {distintos[:5]}'
+    assert set(esperado) == {'ATRASADO', 'NO_RESUELTO', 'ACCION_TOMADA', 'CERRADO', None}
+
+
 def test_horas_del_api_leidas_como_utc_dan_lo_mismo_que_horas_desde_movimiento():
     """La fila trae updated_at / created_at del API; Python calcula las horas con horas_desde_movimiento. Alrededor de la
     frontera (dias×24 h ± 1 s), en los dos formatos de fecha."""

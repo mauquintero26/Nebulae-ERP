@@ -820,30 +820,44 @@ console.log('--- B4 T2 TEST 3: esNoResuelto / esAccionTomada con el tercer argum
   }
 }
 
-console.log('--- B4 T2 TEST 4 (D19): sin el tercer argumento, lo mismo que en c2c9f9f (salvo la COT CONFIRMADA de P1) ---');
+console.log('--- B4 T2 TEST 4 (D19): sin el tercer argumento, lo de c2c9f9f con las dos excepciones ratificadas (P1 y RP2) ---');
 {
-  // Copia literal de esNoResuelto / esAccionTomada de c2c9f9f (Bloque 1, T9 y T9B), con su lista de 9 estados.
+  // Copia literal de esNoResuelto / esAccionTomada de c2c9f9f (Bloque 1, T9 y T9B), con la lista de no resolución que
+  // se le pase: la de 9 estados de c2c9f9f, o la de 8 de RP2 (sin EN_GESTION).
   const NO_RES_B1 = ['BORRADOR', 'ASIGNADA', 'PENDIENTE_CONFIRMACION', 'EN_GESTION', 'ENVIADA', 'PENDIENTE_COMPRA', 'PENDIENTE_PAGO', 'EN_PROCESO', 'EN_TRANSITO'];
+  const NO_RES_RP2 = NO_RES_B1.filter((e) => e !== 'EN_GESTION');
   const ACC_B1 = ['CONFIRMADA', 'COTIZADA', 'EN_ESPERA_CONFIRMACION', 'LISTO_ENTREGA', 'ENTREGADO', 'FACTURADO', 'CANCELADO', 'CANCELADA', 'RECHAZADA'];
   const scConf = (row) => row?.tipo === 'SC' && row?.estado === 'CONFIRMADA';
-  const temprana = (row, s) => row?.tipo === 'SC' && NO_RES_B1.includes(row?.estado) && !!s?.has(row.id);
-  const noResB1 = (row, s) => (scConf(row) ? !s?.has(row.id) : temprana(row, s) ? false : NO_RES_B1.includes(row?.estado));
-  const accB1 = (row, s) => (scConf(row) ? !!s?.has(row.id) : temprana(row, s) ? true : ACC_B1.includes(row?.estado));
-  const estados = [...new Set([...Object.keys(ESTADOS_SC), ...Object.keys(ESTADOS_COTIZACION), ...Object.keys(ESTADOS_PEDIDO)])];
+  const temprana = (lista, row, s) => row?.tipo === 'SC' && lista.includes(row?.estado) && !!s?.has(row.id);
+  const noResB1 = (lista, row, s) => (scConf(row) ? !s?.has(row.id) : temprana(lista, row, s) ? false : lista.includes(row?.estado));
+  const accB1 = (lista, row, s) => (scConf(row) ? !!s?.has(row.id) : temprana(lista, row, s) ? true : ACC_B1.includes(row?.estado));
+  const estados = [...new Set([...Object.keys(ESTADOS_SC), ...Object.keys(ESTADOS_COTIZACION), ...Object.keys(ESTADOS_PEDIDO), 'EN_GESTION'])];
   for (const tipo of ['SC', 'COT', 'VEN', undefined]) {
     for (const estado of estados) {
       for (const s of [new Set([1]), new Set(), undefined]) {
         const fila = { tipo, id: 1, estado };
         const nombre = `${tipo} ${estado} ${s ? s.size : 'sin set'}`;
-        assert.equal(esNoResuelto(fila, s), noResB1(fila, s), nombre);
+        // Excepción 2 (RP2, cruce C2): EN_GESTION ya no es «no resuelto», tampoco para esSCConCotizacionTemprana.
+        const lista = estado === 'EN_GESTION' ? NO_RES_RP2 : NO_RES_B1;
+        assert.equal(esNoResuelto(fila, s), noResB1(lista, fila, s), nombre);
         if (tipo === 'COT' && estado === 'CONFIRMADA') {
-          assert.equal(esAccionTomada(fila, s), false, `${nombre}: P1 (D19)`);
+          assert.equal(esAccionTomada(fila, s), false, `${nombre}: P1 (D19)`);   // excepción 1
         } else {
-          assert.equal(esAccionTomada(fila, s), accB1(fila, s), nombre);
+          assert.equal(esAccionTomada(fila, s), accB1(lista, fila, s), nombre);
         }
       }
     }
   }
+  // EN_GESTION, en concreto: ni «no resuelto» ni acción tomada, con o sin cotización (en c2c9f9f, la SC con cotización
+  // era temprana y contaba como acción tomada)
+  for (const tipo of ['SC', 'COT', 'VEN']) {
+    for (const s of [new Set([1]), new Set()]) {
+      assert.equal(esNoResuelto({ tipo, id: 1, estado: 'EN_GESTION' }, s), false, `${tipo} EN_GESTION ${s.size}`);
+      assert.equal(esAccionTomada({ tipo, id: 1, estado: 'EN_GESTION' }, s), false, `${tipo} EN_GESTION ${s.size}`);
+    }
+  }
+  assert.equal(esSCConCotizacionTemprana({ tipo: 'SC', id: 1, estado: 'EN_GESTION' }, new Set([1])), false);
+  assert.equal(accB1(NO_RES_B1, { tipo: 'SC', id: 1, estado: 'EN_GESTION' }, new Set([1])), true, 'así era en c2c9f9f');
   // null como tercer argumento cuenta como «no llegó»
   assert.equal(esAccionTomada({ tipo: 'VEN', estado: 'DEVUELTO_TOTAL' }, new Set(), null), false, 'como hoy');
   assert.equal(esAccionTomada({ tipo: 'VEN', estado: 'DEVUELTO_TOTAL' }, new Set(), {}), true, 'regla nueva: cerrado');

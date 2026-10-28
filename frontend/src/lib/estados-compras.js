@@ -28,7 +28,7 @@
 
 // congelar: mutar estas tablas lanza TypeError (una sola función en todo el frontend; no se copia).
 import { congelar, humanizarCodigo, tiene } from './estados-pedido.js';
-import { diaColombia } from './fechas-colombia.js';
+import { diaColombia, fechaSolo } from './fechas-colombia.js';
 
 /**
  * @typedef {{ bg: string, text: string, border: string }} ClasesEstado
@@ -41,9 +41,13 @@ import { diaColombia } from './fechas-colombia.js';
 /** Las clases de un código que no está en la tabla (el mismo gris de infoEstadoPedido). */
 const GRIS = congelar({ bg: 'bg-gray-100', text: 'text-gray-700', border: 'border-gray-200' });
 
-/** La entrada de `tabla` para `e`, o una humanizada en gris (nunca el código crudo). */
+/**
+ * La entrada de `tabla` para `e`, o una humanizada en gris (nunca el código crudo). El código se recorta antes de
+ * buscarlo, como etiqueta_estado de Python (' BORRADOR' -> 'Borrador').
+ */
 function infoDe(tabla, e) {
-  if (typeof e === 'string' && tiene(tabla, e)) return tabla[e];
+  const codigo = typeof e === 'string' ? e.trim() : e;
+  if (typeof codigo === 'string' && tiene(tabla, codigo)) return tabla[codigo];
   return congelar({ label: humanizarCodigo(e), clases: { ...GRIS } });
 }
 
@@ -129,6 +133,9 @@ const FECHA_DE_CALENDARIO = /^\d{4}-\d{2}-\d{2}$/;
  * de entrega (fecha_entrega_estimada tal como se guarda: sus 10 primeros caracteres, sin pasarla a Colombia) es
  * anterior a `hoy`. Sin fecha no vence; en bodega, recibido, borrador o cancelado nunca vence. Una entrega guardada hoy
  * a las 00:00 no está vencida hoy. Es la regla de es_vencido (estados_compras.py).
+ * T2 r1: un día que no existe en el calendario ('2026-02-30', 'basura') no vence (se valida con fechaSolo de
+ * fechas-colombia.js). es_vencido de Python no se toca: su dato real es el DateTime del ORM, así que nunca recibe una
+ * fecha imposible.
  * @param {{estado?: string, fecha_entrega_estimada?: string | null} | null | undefined} p
  * @param {string} [hoy]  'AAAA-MM-DD' (por defecto, diaColombia())
  * @returns {boolean}
@@ -137,7 +144,7 @@ export function esPecVencido(p, hoy = diaColombia()) {
   const fecha = p?.fecha_entrega_estimada;
   if (typeof fecha !== 'string') return false;
   const dia = fecha.trim().slice(0, 10);
-  if (!FECHA_DE_CALENDARIO.test(dia)) return false;
+  if (!FECHA_DE_CALENDARIO.test(dia) || !fechaSolo(dia)) return false;
   const etapa = etapaPec(p?.estado);
   return (etapa === 'emitido' || etapa === 'en_transito') && dia < hoy;
 }
@@ -324,12 +331,13 @@ export function grupoRecepcion(estado) {
 }
 
 /**
- * El tablero solo para ver de Recepciones: una columna por grupo, con sus nombres de las pestañas (RP41, D6); la clave
- * es la de grupoRecepcion. Confirmadas y Canceladas, plegadas. Inmutable.
+ * El tablero solo para ver de Recepciones: una columna por grupo, con la clave de grupoRecepcion. La de trabajo se
+ * titula «Por contar» (spec KANBAN-logistica 5, con su acción «Contar y confirmar»); Confirmadas y Canceladas, como las
+ * pestañas (RP41, D6), van plegadas. Inmutable.
  * @type {ReadonlyArray<Readonly<Columna>>}
  */
 export const COLUMNAS_RECEPCION = congelar([
-  columna('por_confirmar', 'Por confirmar', 'amber', GRUPOS_RECEPCION.por_confirmar),
+  columna('por_confirmar', 'Por contar', 'amber', GRUPOS_RECEPCION.por_confirmar),
   columna('confirmadas', 'Confirmadas', 'emerald', GRUPOS_RECEPCION.confirmadas, true),
   columna('canceladas', 'Canceladas', 'rose', GRUPOS_RECEPCION.canceladas, true),
 ]);

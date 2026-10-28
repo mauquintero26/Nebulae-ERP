@@ -54,6 +54,10 @@ console.log('--- TEST 3: un código desconocido sale humanizado y en gris (nunca
   // las claves del prototipo no son estados
   assert.equal(infoEstadoCotizacion('constructor').label, 'Constructor');
   assert.equal(infoEstadoCotizacion('toString').label, 'Tostring');
+  // T2 r1: el código se recorta antes de buscarlo (como etiqueta_estado de Python)
+  assert.equal(infoEstadoCotizacion(' PENDIENTE_CONFIRMACION'), ESTADOS_COTIZACION.PENDIENTE_CONFIRMACION);
+  assert.equal(infoEstadoCotizacion(' BORRADOR ').label, 'Borrador');
+  assert.equal(infoEstadoCotizacion(' BORRADOR '), ESTADOS_COTIZACION.BORRADOR);
 }
 
 console.log('--- TEST 4: ESTADOS_COT_MANUALES = la constante de erp_ventas.py ---');

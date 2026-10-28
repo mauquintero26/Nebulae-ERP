@@ -23,6 +23,8 @@ _FRONTEND_LIB = Path(__file__).resolve().parents[2] / 'frontend' / 'src' / 'lib'
 # Estados que no son del PEC (los heredados del modulo de logistica) y basura: cuentan como emitido.
 _DESCONOCIDOS = ['CONFIRMADA', 'ENVIADA', 'PARCIALMENTE_ENVIADA', 'ALGO_NUEVO', '', 'borrador']
 _ESTADOS = list(ec.ESTADOS_PEC) + _DESCONOCIDOS
+# T2 r1: codigos para la etiqueta, con espacios en los bordes (los dos lados los recortan antes de buscar)
+_ETIQUETAS_RARAS = ['PENDIENTE_ALGO', ' BORRADOR', ' PENDIENTE_CONFIRMACION', 'EN_TRANSITO ', 'ALGO_NUEVO', '', 'x']
 
 # esPecVencido(p, hoy) contra es_vencido(estado, fecha, hoy): fechas como las manda el API (ISO sin zona, a medianoche
 # o con hora, o fecha de calendario) y None.
@@ -39,6 +41,7 @@ console.log(JSON.stringify({
   estados: Object.keys(m.ESTADOS_PEC),
   labels: Object.fromEntries(Object.entries(m.ESTADOS_PEC).map(([k, v]) => [k, v.label])),
   desconocido: m.infoEstadoPec('PENDIENTE_ALGO').label,
+  etiquetas_raras: entrada.etiquetas.map(e => m.infoEstadoPec(e).label),
   etapa_de: Object.fromEntries(raros.map(e => [e, m.etapaPec(e)])),
   etapa_nulo: m.etapaPec(null),
   grupos: m.GRUPOS_PEC,
@@ -69,7 +72,7 @@ def _espejo_frontend():
     if not node or not _FRONTEND_LIB.exists():
         pytest.skip('sin node o sin frontend/src/lib/estados-compras.js: no se puede comprobar la paridad')
     entrada = {
-        'estados': _ESTADOS, 'fechas': _FECHAS, 'hoy': _HOY,
+        'estados': _ESTADOS, 'fechas': _FECHAS, 'hoy': _HOY, 'etiquetas': _ETIQUETAS_RARAS,
         'recepciones': ['BORRADOR', 'COMPLETADA', 'COMPLETADA_LOGISTICA', 'CANCELADA', 'PENDIENTE', 'CONFIRMADA', ''],
         'operaciones': ['DRAFT', 'READY', 'DONE', 'CANCELLED', 'done', 'PENDIENTE', ''],
     }
@@ -96,6 +99,9 @@ def test_las_etiquetas_de_estados_pec_son_las_de_etiquetas_estado_pec():
     assert list(espejo['labels']) == list(ETIQUETAS_ESTADO['PEC'])
     assert espejo['labels']['PARCIALMENTE_RECIBIDA'] == 'Recibido en parte'   # RP67
     assert espejo['desconocido'] == etiqueta_estado('PEC', 'PENDIENTE_ALGO')
+    # T2 r1: el codigo se recorta antes de buscarlo, igual que etiqueta_estado (' BORRADOR' -> 'Borrador')
+    assert espejo['etiquetas_raras'] == [etiqueta_estado('PEC', e) for e in _ETIQUETAS_RARAS]
+    assert espejo['etiquetas_raras'][1:4] == ['Borrador', 'Pendiente confirmacion', 'En tránsito']
 
 
 def test_grupos_pec_son_los_mismos():
@@ -128,7 +134,9 @@ def test_es_pec_vencido_es_es_vencido_con_el_borde_de_rp40():
     hoy = date.fromisoformat(_HOY)
     for i, estado in enumerate(_ESTADOS):
         for j, fecha in enumerate(_FECHAS):
-            assert espejo['vencido'][i][j] == ec.es_vencido(estado, fecha, hoy), (estado, fecha)
+            # T2 r1: con hora, Python recibe el DateTime que da el ORM en produccion (la rama .date()); sin hora, el texto
+            dato = datetime.fromisoformat(fecha) if fecha is not None and 'T' in fecha else fecha
+            assert espejo['vencido'][i][j] == ec.es_vencido(estado, dato, hoy), (estado, fecha)
     # el borde: guardada hoy a las 00:00 no esta vencida hoy (en los dos lados)
     j = _FECHAS.index('2026-10-28T00:00:00')
     assert not ec.es_vencido('EN_TRANSITO', datetime(2026, 10, 28, 0, 0), hoy)

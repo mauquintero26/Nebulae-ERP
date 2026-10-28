@@ -345,8 +345,10 @@ function rangoConLaReglaNueva(row, scConCot, opciones) {
  * No resuelto: una SC CONFIRMADA sin cotizacion activa (scConCot = ids de SC con una COT activa) todavia necesita que
  * la cotizen; una SC sin confirmar con cotizacion activa ya no (R20); el resto segun ESTADOS_NO_RESOLUCION.
  * B4 T2 (RP81, D19): con el tercer argumento `{cotConPedidoVigente}` es la regla nueva de resolucion_ventas (rango
- * ATRASADO o NO_RESUELTO de clasificar: la COT CONFIRMADA sin pedido vigente y la VENCIDA cuentan; Soporte queda fuera);
- * sin el, lo mismo que en el Bloque 1 (el Hub viejo de ventas/page.tsx no cambia hasta T7).
+ * ATRASADO o NO_RESUELTO de clasificar: la COT CONFIRMADA sin pedido vigente y la VENCIDA cuentan; Soporte queda fuera).
+ * Sin el tercer argumento devuelven lo del Bloque 1, con dos excepciones ratificadas (D19): una COT CONFIRMADA ya no es
+ * acción tomada (P1) y EN_GESTION ya no es no resuelto (RP2); hasta T7, en el Hub viejo, la COT CONFIRMADA no aparece en
+ * «Acciones Tomadas» ni en «No Resueltos».
  * @param {any} row
  * @param {Set<number>} [scConCot]
  * @param {{cotConPedidoVigente?: boolean} | null} [opciones]
@@ -366,8 +368,10 @@ export function esNoResuelto(row, scConCot, opciones) {
  * Accion tomada: una SC CONFIRMADA solo cuando ya tiene cotizacion activa; una SC sin confirmar con cotizacion activa
  * tambien (R20); el resto segun ESTADOS_ACCION_TOMADA.
  * B4 T2 (RP81, D19): con el tercer argumento `{cotConPedidoVigente}` es la regla nueva (rango ACCION_TOMADA o CERRADO de
- * clasificar: la vista acciones_tomadas, C7); sin el, lo mismo que en el Bloque 1, salvo lo que P1 cambia: una COT
- * CONFIRMADA sin pedido vigente (sin el tercer argumento no se sabe si lo tiene) ya no es accion tomada.
+ * clasificar: la vista acciones_tomadas, C7).
+ * Sin el tercer argumento devuelven lo del Bloque 1, con dos excepciones ratificadas (D19): una COT CONFIRMADA ya no es
+ * acción tomada (P1) y EN_GESTION ya no es no resuelto (RP2); hasta T7, en el Hub viejo, la COT CONFIRMADA no aparece en
+ * «Acciones Tomadas» ni en «No Resueltos».
  * @param {any} row
  * @param {Set<number>} [scConCot]
  * @param {{cotConPedidoVigente?: boolean} | null} [opciones]

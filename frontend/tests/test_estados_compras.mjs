@@ -87,6 +87,10 @@ console.log('--- TEST 1: ESTADOS_PEC con las etiquetas de R9 (RP67: «Recibido e
   assert.deepEqual(infoEstadoPec('ALGO_NUEVO').clases, { bg: 'bg-gray-100', text: 'text-gray-700', border: 'border-gray-200' });
   assert.equal(infoEstadoPec(null).label, '');
   assert.equal(infoEstadoPec('constructor').label, 'Constructor');
+  // T2 r1: el código se recorta antes de buscarlo (como etiqueta_estado de Python)
+  assert.equal(infoEstadoPec(' BORRADOR'), ESTADOS_PEC.BORRADOR);
+  assert.equal(infoEstadoPec('EN_TRANSITO '), ESTADOS_PEC.EN_TRANSITO);
+  assert.equal(infoEstadoPec(' PENDIENTE_CONFIRMACION').label, 'Pendiente confirmacion');
 }
 
 console.log('--- TEST 2: ETAPAS_PEC y etapaPec (un desconocido cuenta como emitido) ---');
@@ -240,6 +244,10 @@ console.log('--- TEST 8: esPecVencido (R9, RP40): emitido o en tránsito con el 
   // sin pedido o con una fecha que no es fecha: no vence
   assert.equal(esPecVencido(null, HOY), false);
   assert.equal(esPecVencido(p('EN_TRANSITO', 'basura'), HOY), false);
+  // T2 r1: un día que no existe en el calendario no vence (aunque como texto sea «anterior» a hoy)
+  assert.equal(esPecVencido(p('EN_TRANSITO', '2026-02-30T00:00:00'), '2026-03-01'), false);
+  assert.equal(esPecVencido(p('EMITIDO', '2026-13-01'), '2027-01-01'), false);
+  assert.equal(esPecVencido(p('EN_TRANSITO', '2026-02-28T00:00:00'), '2026-03-01'), true, 'el día anterior sí existe');
   // por defecto, hoy = diaColombia()
   assert.equal(esPecVencido(p('EN_TRANSITO', '2020-01-01T00:00:00')), true);
   assert.equal(esPecVencido(p('EN_TRANSITO', '2999-01-01T00:00:00')), false);
@@ -268,15 +276,16 @@ console.log('--- TEST 10: recepciones (ESTADOS_RECEPCION = ETIQUETAS_ESTADO["ENI
   assert.equal(grupoRecepcion('CANCELADA'), 'canceladas');
   for (const raro of ['PENDIENTE', 'CONFIRMADA', '', null, undefined]) assert.equal(grupoRecepcion(raro), null, String(raro));
   formaDeColumnas(COLUMNAS_RECEPCION, 'COLUMNAS_RECEPCION');
-  // RP41/D6: «Por confirmar», «Confirmadas» y «Canceladas», con las claves de GRUPOS_RECEPCION
+  // T2 r1: la columna de trabajo se llama «Por contar» (spec KANBAN-logistica 5, con su «Contar y confirmar»); las otras,
+  // como las pestañas (RP41/D6). Las claves son las de GRUPOS_RECEPCION.
   assert.deepEqual(COLUMNAS_RECEPCION.map((c) => [c.clave, c.titulo]), [
-    ['por_confirmar', 'Por confirmar'], ['confirmadas', 'Confirmadas'], ['canceladas', 'Canceladas'],
+    ['por_confirmar', 'Por contar'], ['confirmadas', 'Confirmadas'], ['canceladas', 'Canceladas'],
   ]);
   cadaEstadoEnUnaColumna(COLUMNAS_RECEPCION, Object.keys(ESTADOS_RECEPCION), 'COLUMNAS_RECEPCION');
   for (const e of Object.keys(ESTADOS_RECEPCION)) {
     assert.equal(COLUMNAS_RECEPCION.find((c) => c.estados.includes(e)).clave, grupoRecepcion(e), e);
   }
-  assert.equal(COLUMNAS_RECEPCION[0].cerrada, false, 'Por confirmar es la columna de trabajo');
+  assert.equal(COLUMNAS_RECEPCION[0].cerrada, false, 'Por contar es la columna de trabajo');
 }
 
 console.log('--- TEST 11: ítems de la lista de compras (DESCARTADO no se muestra) ---');

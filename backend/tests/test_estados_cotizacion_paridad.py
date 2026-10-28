@@ -16,7 +16,8 @@ from app.core.textos_actividad import ETIQUETAS_ESTADO, etiqueta_estado
 
 _FRONTEND_LIB = Path(__file__).resolve().parents[2] / 'frontend' / 'src' / 'lib' / 'estados-cotizacion.js'
 
-_DESCONOCIDOS = ['PENDIENTE_ALGO', 'ALGO_NUEVO', 'x']
+# T2 r1: con espacios en los bordes, los dos lados recortan el codigo antes de buscarlo (' BORRADOR' -> 'Borrador')
+_DESCONOCIDOS = ['PENDIENTE_ALGO', 'ALGO_NUEVO', 'x', ' BORRADOR', ' PENDIENTE_CONFIRMACION']
 
 _SCRIPT_NODE = """
 import(%s).then(m => {
@@ -56,6 +57,7 @@ def test_las_etiquetas_de_estados_cotizacion_son_las_de_etiquetas_estado_cot():
 def test_un_estado_desconocido_se_humaniza_igual_en_los_dos_lados():
     espejo = _espejo_frontend()
     assert espejo['desconocidos'] == [etiqueta_estado('COT', e) for e in _DESCONOCIDOS]
+    assert espejo['desconocidos'][-2:] == ['Borrador', 'Esperando confirmación del cliente']
     assert espejo['vacio'] == etiqueta_estado('COT', '') == ''
 
 
