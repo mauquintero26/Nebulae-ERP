@@ -9,21 +9,28 @@ Semántica (la de ANALISIS-api), en días calendario de Colombia, con las dos fe
 - '7d', '30d' y '90d': hoy y los n−1 días anteriores, contra los n días justo antes.
 - 'mes': del día 1 del mes a hoy, contra el mismo tramo del mes pasado (desde su día 1, con el mismo número de días),
   recortado al fin de ese mes.
-- '12m': del día 1 del mes de hace 11 meses a hoy, contra los 12 meses calendario anteriores.
+- '12m': del día 1 del mes de hace 11 meses a hoy, contra el mismo tramo un año antes (como 'mes', los mismos días):
+  desde el día 1 de ese mes del año pasado hasta el día de hoy del año pasado, recortado al fin de su mes
+  (2028-02-29 -> 2027-02-28). Con hoy 2026-10-03: 2025-11-01..2026-10-03 contra 2024-11-01..2025-10-03 (r1).
 - 'personalizado': desde y hasta en 'AAAA-MM-DD' (o date), contra el tramo del mismo largo justo antes.
 Granularidad: hasta 31 días 'dia', hasta 92 'semana' (desde el lunes), más de 92 'mes'.
 Los instantes (inicio_utc, fin_utc y los del anterior) son UTC sin zona, como created_at: el inicio es las 00:00 de
 `desde` en Colombia y el fin, EXCLUIDO, las 00:00 del día siguiente a `hasta`.
+`comparado` es 'vs 5 ago – 3 sept' (meses cortos es-CO: ene, feb, mar, abr, may, jun, jul, ago, sept, oct, nov, dic).
+Lleva el año en las dos puntas ('vs 1 nov 2024 – 3 oct 2025') cuando el tramo anterior cruza de año o no es del año de
+hoy; un tramo de un solo día es 'vs 2 oct'.
 
-Un período que no vale lanza ValueError con uno de los seis textos de ERRORES; el endpoint responde 422 con str(e).
+Un período que no vale lanza ValueError con uno de los seis textos de ERRORES; el endpoint responde 422 con str(e). Una
+fecha tan extrema que el período anterior se saldría del calendario (el año 1) da el de formato, no un OverflowError.
 
 Sin FastAPI ni sesión: contar_en y sumar_en reciben el Query de la sesión y hacen una sola consulta.
 """
+import calendar
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 
-from sqlalchemy import and_, case, func, or_
+from sqlalchemy import Date, and_, case, func, or_
 
 from app.core import fechas
 from app.core.fechas import ZONA_COLOMBIA
@@ -77,6 +84,12 @@ def _sumar_meses(dia: date, meses: int) -> date:
     return date(indice // 12, indice % 12 + 1, 1)
 
 
+def _mismo_dia_otro_anio(dia: date, anios: int) -> date:
+    """El mismo día `anios` años después (o antes), recortado al fin de su mes: 2028-02-29 (-1) -> 2027-02-28."""
+    anio = dia.year + anios
+    return date(anio, dia.month, min(dia.day, calendar.monthrange(anio, dia.month)[1]))
+
+
 def _leer_fecha(valor) -> date:
     if isinstance(valor, datetime):  # un instante no es un día de calendario
         raise ValueError(ERROR_FORMATO)
@@ -125,7 +138,14 @@ def resolver_periodo(clave, desde=None, hasta=None, ahora_utc: datetime | None =
     if clave not in PERIODOS:
         raise ValueError(ERROR_PERIODO)
     hoy = fechas.hoy_colombia(ahora_utc)
+    try:
+        return _armar(clave, desde, hasta, hoy)
+    except OverflowError:  # el período anterior (o el fin) se sale del calendario: '0001-01-01'
+        raise ValueError(ERROR_FORMATO) from None
 
+
+def _armar(clave: str, desde, hasta, hoy: date) -> Periodo:
+    """El Periodo de una clave ya validada, con `hoy` en Colombia (ver la semántica en el docstring del módulo)."""
     if clave in _DIAS_MOVILES:
         n = _DIAS_MOVILES[clave]
         inicio, fin = hoy - timedelta(days=n - 1), hoy
@@ -138,7 +158,7 @@ def resolver_periodo(clave, desde=None, hasta=None, ahora_utc: datetime | None =
     elif clave == "12m":
         inicio, fin = _sumar_meses(hoy, -11), hoy
         ant_inicio = _sumar_meses(inicio, -12)
-        ant_fin = inicio - timedelta(days=1)
+        ant_fin = _mismo_dia_otro_anio(hoy, -1)
     else:  # personalizado
         if _vacio(desde) or _vacio(hasta):
             raise ValueError(ERROR_SIN_FECHAS)
@@ -178,9 +198,17 @@ def bloque_periodo(periodo: Periodo) -> dict:
 
 
 def en_rango(col, ini: datetime, fin: datetime):
-    """col >= ini AND col < fin, sobre la columna cruda (así se pueden usar sus índices). `ini` y `fin` son UTC sin
-    zona; si la columna es timestamptz se mandan como UTC con zona, para no depender de la zona de la sesión."""
-    if getattr(getattr(col, "type", None), "timezone", False):
+    """col >= ini AND col < fin, sobre la columna cruda (así se pueden usar sus índices). `ini` y `fin` son los instantes
+    UTC sin zona de un Periodo (el fin, excluido).
+    - Columna Date (un día de calendario, como sale_order_payments.fecha): se compara con los días de Colombia de esos
+      instantes, col >= a_colombia(ini).date() AND col < a_colombia(fin).date(). Como `fin` es el inicio del día
+      siguiente en Colombia, el último día del período queda adentro (r1).
+    - Columna timestamptz: los bordes se mandan como UTC con zona, para no depender de la zona de la sesión.
+    - Columna DateTime sin zona (UTC ingenuo): tal cual."""
+    tipo = getattr(col, "type", None)
+    if isinstance(tipo, Date):  # DateTime no es subclase de Date
+        return and_(col >= fechas.a_colombia(ini).date(), col < fechas.a_colombia(fin).date())
+    if getattr(tipo, "timezone", False):
         ini = ini.replace(tzinfo=timezone.utc) if ini.tzinfo is None else ini
         fin = fin.replace(tzinfo=timezone.utc) if fin.tzinfo is None else fin
     return and_(col >= ini, col < fin)

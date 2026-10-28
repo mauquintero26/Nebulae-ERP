@@ -10,8 +10,10 @@ COUNT y LIMIT, no filas al navegador) y arma su respuesta con respuesta(...).
 - Montos en pesos enteros con dinero() (redondear_peso de core/ventas_dinero.py, Bloque 1).
 - Las fechas de las cubetas van como 'AAAA-MM-DD' de Colombia, sin hora ni zona.
 
-Un error de negocio (top que no vale) lanza ValueError con el texto en español y la ruta responde 422. Un bloque con
-claves de más o de menos es un error de programación: respuesta() lanza ValueError('Contrato de Análisis: ...').
+Errores (r1): un error de NEGOCIO (un top que no vale, un período que no vale) lanza ValueError con el texto en español
+y la ruta responde 422 con str(e). Un error de PROGRAMACIÓN (un formato o un «mejor» que no vale en kpi, una
+granularidad que no vale en expr_cubeta, un bloque del contrato con claves de más o de menos) lanza ErrorDeContrato,
+que NO es ValueError: llega como 500 con su traceback en vez de esconderse como un 422.
 """
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -20,8 +22,9 @@ from sqlalchemy import Date, cast, func
 
 from app.core import fechas
 from app.core.fechas import ZONA_COLOMBIA
-from app.core.periodos import (MAX_DIAS, PERIODO_POR_DEFECTO, PERIODOS, Periodo,  # noqa: F401 (se reexportan)
-                               en_rango, resolver_periodo)
+from app.core.periodos import (MAX_DIAS, PERIODO_POR_DEFECTO, PERIODOS, PERIODOS_KPI,  # noqa: F401 (se reexportan)
+                               Periodo, _sumar_meses, bloque_periodo, contar_en, en_rango, resolver_periodo,
+                               sumar_en)
 from app.core.ventas_dinero import redondear_peso
 
 TOPS = (5, 10, 25)
@@ -31,6 +34,12 @@ GRANULARIDADES = {"dia": "day", "semana": "week", "mes": "month"}
 MAX_SEGMENTOS = 6
 
 ERROR_TOP = "El ranking solo puede mostrar 5, 10 o 25."
+
+
+class ErrorDeContrato(Exception):
+    """Un error de programación en un endpoint de Análisis (un formato, un «mejor» o una granularidad que no vale, o un
+    bloque del contrato con claves de más o de menos). NO es ValueError a propósito: los endpoints convierten los
+    ValueError en 422, y esto tiene que llegar como 500 con su traceback."""
 
 # ─── el contrato (claves exactas de cada bloque) ──────────────────────────────────────────────────────────────
 CLAVES_ANALISIS = frozenset({"periodo", "kpis", "linea", "donas", "barras", "movimientos", "ranking", "filtros",
@@ -56,7 +65,11 @@ CLAVES_FILTROS = ("foco", "top", "producto", "bodega")
 # ─── validaciones y números ──────────────────────────────────────────────────────────────────────────────────
 
 def validar_top(top) -> int:
-    """El tamaño del ranking: 5, 10 o 25. Otro valor -> ValueError('El ranking solo puede mostrar 5, 10 o 25.')."""
+    """El tamaño del ranking: 5, 10 o 25, como int o como texto de dígitos ('10' -> 10; R21 permite declarar top como
+    str). Otro valor (bool, None, un float, otro texto) -> ValueError('El ranking solo puede mostrar 5, 10 o 25.')."""
+    if isinstance(top, str):
+        texto = top.strip()
+        top = int(texto) if texto.isascii() and texto.isdigit() else None
     if isinstance(top, bool) or not isinstance(top, int) or top not in TOPS:
         raise ValueError(ERROR_TOP)
     return top
@@ -93,9 +106,9 @@ def kpi(clave, etiqueta, valor, anterior=None, formato="entero", mejor="sube", e
     'pesos' se redondean al peso); mejor: 'sube' | 'baja' | 'neutro'. Una foto (es_foto, por ejemplo el saldo por cobrar
     de hoy) no lleva anterior ni %. Un valor None se queda en None: nunca se inventa un número."""
     if formato not in FORMATOS:
-        raise ValueError(f"Formato de indicador no válido: {formato!r}.")
+        raise ErrorDeContrato(f"Formato de indicador no válido: {formato!r}.")
     if mejor not in MEJORES:
-        raise ValueError(f"«mejor» no válido: {mejor!r}.")
+        raise ErrorDeContrato(f"«mejor» no válido: {mejor!r}.")
     if es_foto:
         anterior = None
     if formato == "pesos":
@@ -149,7 +162,7 @@ def expr_cubeta(col, granularidad: str):
     """El día de la cubeta (Date) de cada fila: date_trunc('day' | 'week' | 'month') sobre la hora de Colombia. Las
     semanas empiezan el lunes. Una columna Date (sale_order_payments.fecha) ya es un día: se trunca sin pasar de zona."""
     if granularidad not in GRANULARIDADES:
-        raise ValueError(f"Granularidad no válida: {granularidad!r}.")
+        raise ErrorDeContrato(f"Granularidad no válida: {granularidad!r}.")
     base = col if _es_solo_fecha(col) else expr_local(col)
     return cast(func.date_trunc(GRANULARIDADES[granularidad], base), Date)
 
@@ -166,7 +179,7 @@ def _siguiente(dia: date, granularidad: str) -> date:
     if granularidad == "semana":
         return dia + timedelta(days=7)
     if granularidad == "mes":
-        return date(dia.year + dia.month // 12, dia.month % 12 + 1, 1)
+        return _sumar_meses(dia, 1)
     return dia + timedelta(days=1)
 
 
@@ -198,12 +211,12 @@ def rellenar(filas: dict, periodo: Periodo, anterior: bool = False) -> list[floa
 def _exigir(nombre, bloque, claves):
     if not isinstance(bloque, dict) or set(bloque) != set(claves):
         tiene = sorted(bloque) if isinstance(bloque, dict) else type(bloque).__name__
-        raise ValueError(f"Contrato de Análisis: «{nombre}» debe traer {sorted(claves)} y trae {tiene}.")
+        raise ErrorDeContrato(f"Contrato de Análisis: «{nombre}» debe traer {sorted(claves)} y trae {tiene}.")
 
 
 def _exigir_lista(nombre, filas, claves):
     if not isinstance(filas, (list, tuple)):
-        raise ValueError(f"Contrato de Análisis: «{nombre}» debe ser una lista.")
+        raise ErrorDeContrato(f"Contrato de Análisis: «{nombre}» debe ser una lista.")
     for i, fila in enumerate(filas):
         _exigir(f"{nombre}[{i}]", fila, claves)
 
@@ -213,6 +226,14 @@ def _bloque_periodo_analisis(periodo: Periodo) -> dict:
             "hasta": periodo.hasta.isoformat(), "anterior_desde": periodo.anterior_desde.isoformat(),
             "anterior_hasta": periodo.anterior_hasta.isoformat(), "granularidad": periodo.granularidad,
             "comparado": periodo.comparado}
+
+
+def _lista_de_avisos(avisos) -> list[str]:
+    if avisos is None:
+        return []
+    if isinstance(avisos, str):
+        return [avisos]
+    return [str(a) for a in avisos]
 
 
 def respuesta(periodo: Periodo, *, kpis, linea, donas, barras, movimientos, ranking, filtros, avisos=()) -> dict:
@@ -228,8 +249,9 @@ def respuesta(periodo: Periodo, *, kpis, linea, donas, barras, movimientos, rank
       estado_etiqueta, doc_tipo, doc_id}]} y ranking {titulo, columna, formato, filas [{posicion, nombre, detalle,
       valor, cantidad, pct}]}: cada uno puede ir en None si el módulo no lo tiene.
     - filtros: {foco, top, producto, bodega}; las que no se pasan van en None y una clave de más es un error.
-    - avisos: lista de textos. generado_en: ahora, en ISO con Z (fechas.iso_z).
-    Comprueba que cada bloque traiga exactamente sus claves (ValueError 'Contrato de Análisis: ...')."""
+    - avisos: lista de textos; None es «sin avisos» y un texto suelto es un solo aviso. generado_en: ahora, en ISO
+      con Z (fechas.iso_z).
+    Comprueba que cada bloque traiga exactamente sus claves (ErrorDeContrato 'Contrato de Análisis: ...')."""
     kpis = list(kpis or [])
     donas = list(donas or [])
     _exigir_lista("kpis", kpis, CLAVES_KPI)
@@ -251,7 +273,7 @@ def respuesta(periodo: Periodo, *, kpis, linea, donas, barras, movimientos, rank
     filtros = dict(filtros or {})
     sobran = set(filtros) - set(CLAVES_FILTROS)
     if sobran:
-        raise ValueError(f"Contrato de Análisis: «filtros» no admite {sorted(sobran)}.")
+        raise ErrorDeContrato(f"Contrato de Análisis: «filtros» no admite {sorted(sobran)}.")
 
     data = {
         "periodo": _bloque_periodo_analisis(periodo),
@@ -262,9 +284,9 @@ def respuesta(periodo: Periodo, *, kpis, linea, donas, barras, movimientos, rank
         "movimientos": movimientos,
         "ranking": ranking,
         "filtros": {clave: filtros.get(clave) for clave in CLAVES_FILTROS},
-        "avisos": [str(a) for a in avisos],
+        "avisos": _lista_de_avisos(avisos),
         "generado_en": fechas.iso_z(fechas.ahora_utc()),
     }
     if set(data) != CLAVES_ANALISIS:  # salvaguarda: el contrato y CLAVES_ANALISIS no se separan
-        raise ValueError(f"Contrato de Análisis: claves {sorted(data)}.")
+        raise ErrorDeContrato(f"Contrato de Análisis: claves {sorted(data)}.")
     return {"status": "success", "data": data}

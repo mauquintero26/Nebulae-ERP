@@ -10,6 +10,7 @@ que el runner revierte (sufijo uuid y un db.add por objeto).
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_listados
 """
 import uuid
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import null, select
@@ -63,6 +64,8 @@ def test_leer_lista_separa_limpia_y_quita_repetidos():
     assert leer_lista(None) == []
     assert leer_lista("") == []
     assert leer_lista(" , ,") == []
+    # r1 (g): con una lista también se descartan los None y los vacíos (no llegan como 'None').
+    assert leer_lista(["A", None, "", " B,", "A"]) == ["A", "B"]
 
 
 def test_leer_lista_con_mas_de_20_lanza_value_error():
@@ -122,21 +125,47 @@ def test_filtrar_por_estados_en_la_base(db):
     assert filtrar_por_estados(q, SaleOrder.estado, None).count() == 3
 
 
-# ─── leer_orden (TABLA-api 1, RP9 y su ajuste) ───────────────────────────────────────────────────────────────
+# ─── validar_orden y leer_orden (TABLA-api 1, RP9 y su ajuste; r1: desempate por la fila de la lista) ────────
 
 PERMITIDAS_COT = {"total_cop": SalesQuotation.total_cop, "numero": SalesQuotation.numero}
+ID_COT = SalesQuotation.id
+
+
+def test_validar_orden_da_la_clave_y_la_direccion():
+    """r1 (e): para las listas que se ordenan en Python (lista de compras, catálogo de dos fuentes), la misma regla y el
+    mismo 422 de leer_orden, sin expresiones SQL."""
+    from fastapi import HTTPException
+    from app.core.listados import validar_orden
+    claves = ("fecha", "producto", "atencion")
+    assert validar_orden("producto", claves, "-fecha") == ("producto", False)
+    assert validar_orden(" -producto ", claves, "-fecha") == ("producto", True)
+    assert validar_orden(None, claves, "-fecha") == ("fecha", True)
+    assert validar_orden("", claves, "atencion") == ("atencion", False)
+    for malo in ("drop table", "-atencion", "proveedor", "-"):
+        e = _lanza(HTTPException, validar_orden, malo, claves, "fecha")
+        assert e.status_code == 422 and e.detail == f"No se puede ordenar por «{malo}».", e.detail
 
 
 def test_leer_orden_ascendente_y_descendente_con_nulos_al_final_y_desempate_por_id():
     from app.core.listados import leer_orden
-    asc = _sql(select(SalesQuotation.id).order_by(*leer_orden("total_cop", PERMITIDAS_COT, "-total_cop")))
+    asc = _sql(select(SalesQuotation.id).order_by(*leer_orden("total_cop", PERMITIDAS_COT, "-total_cop",
+                                                              id_lista=ID_COT)))
     assert "ORDER BY sales_quotations.total_cop ASC NULLS LAST, sales_quotations.id DESC" in asc, asc
-    desc = _sql(select(SalesQuotation.id).order_by(*leer_orden("-total_cop", PERMITIDAS_COT, "numero")))
+    desc = _sql(select(SalesQuotation.id).order_by(*leer_orden("-total_cop", PERMITIDAS_COT, "numero",
+                                                               id_lista=ID_COT)))
     assert "ORDER BY sales_quotations.total_cop DESC NULLS LAST, sales_quotations.id DESC" in desc, desc
     # Sin orden (None o en blanco) se usa el de por defecto, con la misma regla.
     for vacio in (None, "", "  "):
-        por_defecto = _sql(select(SalesQuotation.id).order_by(*leer_orden(vacio, PERMITIDAS_COT, "-total_cop")))
+        por_defecto = _sql(select(SalesQuotation.id).order_by(*leer_orden(vacio, PERMITIDAS_COT, "-total_cop",
+                                                                          id_lista=ID_COT)))
         assert "ORDER BY sales_quotations.total_cop DESC NULLS LAST, sales_quotations.id DESC" in por_defecto
+
+
+def test_leer_orden_exige_id_lista_por_nombre():
+    """r1 (Important 1): el id del desempate es el de la entidad que se lista; nunca se adivina."""
+    from app.core.listados import leer_orden
+    _lanza(TypeError, leer_orden, "total_cop", PERMITIDAS_COT, "numero")
+    _lanza(TypeError, leer_orden, "total_cop", PERMITIDAS_COT, "numero", ID_COT)  # solo por nombre
 
 
 def test_leer_orden_en_la_base(db):
@@ -152,84 +181,140 @@ def test_leer_orden_en_la_base(db):
         cots.append(c)
     q = db.query(SalesQuotation).filter(SalesQuotation.numero.like(f"CL{suf}%"))
     assert cots[1].total_cop is None
-    asc = [c.id for c in q.order_by(*leer_orden("total_cop", PERMITIDAS_COT, "numero"))]
+    asc = [c.id for c in q.order_by(*leer_orden("total_cop", PERMITIDAS_COT, "numero", id_lista=ID_COT))]
     assert asc == [cots[2].id, cots[3].id, cots[0].id, cots[1].id]
-    desc = [c.id for c in q.order_by(*leer_orden("-total_cop", PERMITIDAS_COT, "numero"))]
+    desc = [c.id for c in q.order_by(*leer_orden("-total_cop", PERMITIDAS_COT, "numero", id_lista=ID_COT))]
     assert desc == [cots[3].id, cots[0].id, cots[2].id, cots[1].id]
+
+
+def test_leer_orden_columna_de_tabla_unida_desempata_por_la_fila_de_la_lista(db):
+    """r1 (Important 1): una lista de pedidos ordenada por el nombre del cliente desempata por sale_orders.id, no por
+    customers.id. Dos pedidos del mismo cliente empatan y customers.id vale lo mismo para los dos: con LIMIT/OFFSET una
+    fila podía salir en dos páginas o en ninguna."""
+    from app.core.listados import leer_orden
+    from app.models.customers import Customer
+    orden = leer_orden("cliente", {"cliente": Customer.first_name}, "cliente", id_lista=SaleOrder.id)
+    sql = _sql(select(SaleOrder.id).join(Customer, SaleOrder.customer_id == Customer.id).order_by(*orden))
+    assert sql.rstrip().endswith("ORDER BY customers.first_name ASC NULLS LAST, sale_orders.id DESC"), sql
+    suf = _suf()
+    cliente = Customer(first_name=f"Empate {suf}", last_name="T1A", email=f"t1a-{suf.lower()}@test.nebulae")
+    db.add(cliente)
+    db.commit()
+    pedidos = []
+    for i in range(2):
+        v = SaleOrder(numero=f"PL{suf}{i:02d}", customer_id=cliente.id, customer_name=cliente.first_name,
+                      estado="EN_PROCESO")
+        db.add(v)
+        db.commit()
+        pedidos.append(v)
+    q = (db.query(SaleOrder).join(Customer, SaleOrder.customer_id == Customer.id)
+         .filter(SaleOrder.numero.like(f"PL{suf}%")).order_by(*orden))
+    paginas = q.limit(1).offset(0).all() + q.limit(1).offset(1).all()
+    assert [v.id for v in paginas] == [pedidos[1].id, pedidos[0].id]
 
 
 def test_leer_orden_fuera_de_la_lista_da_422_en_espanol():
     from fastapi import HTTPException
     from app.core.listados import leer_orden
-    e = _lanza(HTTPException, leer_orden, "drop table", PERMITIDAS_COT, "numero")
+    e = _lanza(HTTPException, leer_orden, "drop table", PERMITIDAS_COT, "numero", id_lista=ID_COT)
     assert e.status_code == 422
     assert e.detail == "No se puede ordenar por «drop table»."
-    e = _lanza(HTTPException, leer_orden, "-created_at", PERMITIDAS_COT, "numero")
+    e = _lanza(HTTPException, leer_orden, "-created_at", PERMITIDAS_COT, "numero", id_lista=ID_COT)
     assert e.status_code == 422 and e.detail == "No se puede ordenar por «-created_at»."
 
 
-def test_leer_orden_especial_es_una_lista_de_expresiones_y_no_se_invierte():
+def test_leer_orden_especial_es_una_lista_y_termina_en_el_id_de_la_lista():
     """RP9: cada endpoint pone sus órdenes especiales en `permitidas` como lista de expresiones; leer_orden no sabe qué
-    significan. '-atencion', '-reciente' y '-sin_movimiento' dan 422."""
+    significan y no las invierte ('-atencion', '-reciente' y '-sin_movimiento' dan 422). r1: toda orden termina en
+    id_lista desc, también una lista; si la lista ya lo trae al final no se repite."""
     from fastapi import HTTPException
     from app.core.listados import ORDENES_ESPECIALES, leer_orden
     assert ORDENES_ESPECIALES == ("atencion", "sin_movimiento", "reciente")
-    atencion = [SaleOrder.estado.asc(), SaleOrder.created_at.desc(), SaleOrder.id.desc()]
+    atencion = [SaleOrder.estado.asc(), SaleOrder.created_at.desc()]
     permitidas = {"atencion": atencion, "reciente": [SaleOrder.created_at.desc()],
-                  "sin_movimiento": [SaleOrder.updated_at.asc()], "total_cop": SaleOrder.total_cop}
-    assert leer_orden("atencion", permitidas, "total_cop") == atencion
-    assert leer_orden(None, permitidas, "atencion") == atencion
-    sql = _sql(select(SaleOrder.id).order_by(*leer_orden("atencion", permitidas, "total_cop")))
-    assert "ORDER BY sale_orders.estado ASC, sale_orders.created_at DESC, sale_orders.id DESC" in sql, sql
+                  "sin_movimiento": [SaleOrder.updated_at.asc()], "total_cop": SaleOrder.total_cop,
+                  "con_id": [SaleOrder.estado.asc(), SaleOrder.id.desc()]}
+    sql = _sql(select(SaleOrder.id).order_by(*leer_orden("atencion", permitidas, "total_cop", id_lista=SaleOrder.id)))
+    assert sql.rstrip().endswith(
+        "ORDER BY sale_orders.estado ASC, sale_orders.created_at DESC, sale_orders.id DESC"), sql
+    assert len(leer_orden(None, permitidas, "atencion", id_lista=SaleOrder.id)) == 3
+    assert len(atencion) == 2  # la lista del endpoint no se modifica
+    con_id = leer_orden("con_id", permitidas, "total_cop", id_lista=SaleOrder.id)
+    assert len(con_id) == 2 and _sql(select(SaleOrder.id).order_by(*con_id)).rstrip().endswith(
+        "ORDER BY sale_orders.estado ASC, sale_orders.id DESC")
     for especial in ORDENES_ESPECIALES:
-        e = _lanza(HTTPException, leer_orden, f"-{especial}", permitidas, "total_cop")
+        e = _lanza(HTTPException, leer_orden, f"-{especial}", permitidas, "total_cop", id_lista=SaleOrder.id)
         assert e.status_code == 422 and e.detail == f"No se puede ordenar por «-{especial}».", e.detail
+    e = _lanza(HTTPException, leer_orden, "-con_id", permitidas, "total_cop", id_lista=SaleOrder.id)
+    assert e.detail == "No se puede ordenar por «-con_id»."
     # Una orden especial que el endpoint no ofrece también da 422.
-    e = _lanza(HTTPException, leer_orden, "atencion", PERMITIDAS_COT, "numero")
+    e = _lanza(HTTPException, leer_orden, "atencion", PERMITIDAS_COT, "numero", id_lista=ID_COT)
     assert e.detail == "No se puede ordenar por «atencion»."
 
 
-def test_leer_orden_sin_id_de_desempate_lo_recibe_aparte():
-    """Una expresión sin tabla (un CASE) no tiene de dónde sacar el id: se pasa con desempate=."""
+def test_leer_orden_de_una_expresion_sin_tabla():
+    """Un CASE (orden_por_lista) se ordena igual que una columna y desempata por id_lista."""
     from app.core.listados import leer_orden, orden_por_lista
     rango = orden_por_lista(SaleOrder.estado, ["PENDIENTE_COMPRA", "EN_PROCESO"])
-    permitidas = {"estado": rango}
-    _lanza(TypeError, leer_orden, "estado", permitidas, "estado")
-    sql = _sql(select(SaleOrder.id).order_by(*leer_orden("-estado", permitidas, "estado", desempate=SaleOrder.id)))
+    sql = _sql(select(SaleOrder.id).order_by(*leer_orden("-estado", {"estado": rango}, "estado",
+                                                         id_lista=SaleOrder.id)))
     assert sql.rstrip().endswith("END DESC NULLS LAST, sale_orders.id DESC"), sql
 
 
-# ─── orden_tiempo (KANBAN-base 7: aplicar_orden) ─────────────────────────────────────────────────────────────
+# ─── orden_tiempo y expresiones_tiempo (KANBAN-base 7: aplicar_orden) ────────────────────────────────────────
 
 def test_orden_tiempo_sin_movimiento_y_reciente():
     from app.core.listados import orden_tiempo
     base = select(SaleOrder.id)
-    sin_mov = _sql(orden_tiempo(base, SaleOrder.created_at, SaleOrder.updated_at, "sin_movimiento"))
-    assert ("ORDER BY coalesce(sale_orders.updated_at, sale_orders.created_at) ASC, sale_orders.created_at ASC"
-            in sin_mov), sin_mov
-    reciente = _sql(orden_tiempo(base, SaleOrder.created_at, SaleOrder.updated_at, "reciente"))
-    assert reciente.rstrip().endswith("ORDER BY sale_orders.created_at DESC"), reciente
-    # 'reciente' es el de por defecto: es el order_by de las listas de hoy.
+    sin_mov = _sql(orden_tiempo(base, SaleOrder.created_at, SaleOrder.updated_at, "sin_movimiento",
+                                id_lista=SaleOrder.id))
+    assert sin_mov.rstrip().endswith(
+        "ORDER BY coalesce(sale_orders.updated_at, sale_orders.created_at) ASC NULLS LAST, "
+        "sale_orders.created_at ASC NULLS LAST, sale_orders.id DESC"), sin_mov
+    reciente = _sql(orden_tiempo(base, SaleOrder.created_at, SaleOrder.updated_at, "reciente", id_lista=SaleOrder.id))
+    assert reciente.rstrip().endswith("ORDER BY sale_orders.created_at DESC NULLS LAST, sale_orders.id DESC"), reciente
+    # 'reciente' es el de por defecto.
     for vacio in (None, ""):
-        assert _sql(orden_tiempo(base, SaleOrder.created_at, SaleOrder.updated_at, vacio)) == reciente
+        assert _sql(orden_tiempo(base, SaleOrder.created_at, SaleOrder.updated_at, vacio,
+                                 id_lista=SaleOrder.id)) == reciente
+    _lanza(TypeError, orden_tiempo, base, SaleOrder.created_at, SaleOrder.updated_at, "reciente")
+
+
+def test_orden_tiempo_reciente_en_la_base_deja_los_nulos_al_final(db):
+    from app.core.listados import orden_tiempo
+    suf = _suf()
+    filas = []
+    for i, creado in enumerate([datetime(2001, 1, 1, 12), null(), datetime(2001, 1, 2, 12), datetime(2001, 1, 2, 12)]):
+        v = SaleOrder(numero=f"PL{suf}{i:02d}", customer_name=f"Cliente Tiempo {suf}", estado="EN_PROCESO",
+                      created_at=creado, updated_at=datetime(2001, 1, 3))
+        db.add(v)
+        db.commit()
+        filas.append(v)
+    q = orden_tiempo(_del_sufijo(db, suf), SaleOrder.created_at, SaleOrder.updated_at, "reciente",
+                     id_lista=SaleOrder.id)
+    assert [v.id for v in q] == [filas[3].id, filas[2].id, filas[0].id, filas[1].id]
 
 
 def test_orden_tiempo_con_otro_valor_lanza_value_error():
     from app.core.listados import orden_tiempo
-    e = _lanza(ValueError, orden_tiempo, select(SaleOrder.id), SaleOrder.created_at, SaleOrder.updated_at, "x")
-    assert str(e) == "No se puede ordenar por «x»."
-    e = _lanza(ValueError, orden_tiempo, select(SaleOrder.id), SaleOrder.created_at, SaleOrder.updated_at, "-reciente")
-    assert str(e) == "No se puede ordenar por «-reciente»."
+    for malo in ("x", "-reciente"):
+        e = _lanza(ValueError, orden_tiempo, select(SaleOrder.id), SaleOrder.created_at, SaleOrder.updated_at, malo,
+                   id_lista=SaleOrder.id)
+        assert str(e) == f"No se puede ordenar por «{malo}»."
 
 
 def test_expresiones_de_tiempo_sirven_como_orden_especial():
-    """Las mismas expresiones de orden_tiempo, para ponerlas en `permitidas` de leer_orden."""
+    """Las mismas expresiones de orden_tiempo, para ponerlas en `permitidas` de leer_orden; el id no se repite."""
     from app.core.listados import expresiones_tiempo, leer_orden, orden_tiempo
-    permitidas = {"sin_movimiento": expresiones_tiempo(SaleOrder.created_at, SaleOrder.updated_at, "sin_movimiento"),
-                  "reciente": expresiones_tiempo(SaleOrder.created_at, SaleOrder.updated_at, "reciente")}
+    _lanza(TypeError, expresiones_tiempo, SaleOrder.created_at, SaleOrder.updated_at, "reciente")
+    permitidas = {clave: expresiones_tiempo(SaleOrder.created_at, SaleOrder.updated_at, clave, id_lista=SaleOrder.id)
+                  for clave in ("sin_movimiento", "reciente")}
     for clave in ("sin_movimiento", "reciente"):
-        por_lista = _sql(select(SaleOrder.id).order_by(*leer_orden(clave, permitidas, "reciente")))
-        assert por_lista == _sql(orden_tiempo(select(SaleOrder.id), SaleOrder.created_at, SaleOrder.updated_at, clave))
+        por_lista = _sql(select(SaleOrder.id).order_by(*leer_orden(clave, permitidas, "reciente",
+                                                                   id_lista=SaleOrder.id)))
+        assert por_lista == _sql(orden_tiempo(select(SaleOrder.id), SaleOrder.created_at, SaleOrder.updated_at, clave,
+                                              id_lista=SaleOrder.id))
+        assert por_lista.count("sale_orders.id DESC") == 1
 
 
 # ─── orden_por_lista ─────────────────────────────────────────────────────────────────────────────────────────
@@ -263,6 +348,14 @@ def test_contar_por_vista_en_una_sola_consulta(db, contador_sql):
     assert v.consultas == 1, v.sentencias
     assert "count(*) FILTER (WHERE" in v.sentencias[0], v.sentencias[0]
     assert contar_por_vista(q, {}) == {}
+
+
+def test_contar_por_vista_sin_condiciones_cuenta_desde_la_tabla(db):
+    """r1 (f): sin WHERE ni join y con todas las condiciones en None, la consulta igual sale de la tabla del Query (un
+    SELECT count(*) sin FROM daría 1)."""
+    from app.core.listados import contar_por_vista
+    _pedidos(db, _suf(), ["EN_PROCESO"])
+    assert contar_por_vista(db.query(SaleOrder), {"todos": None}) == {"todos": db.query(SaleOrder).count()}
 
 
 def test_contar_por_vista_sin_filas_da_ceros(db):

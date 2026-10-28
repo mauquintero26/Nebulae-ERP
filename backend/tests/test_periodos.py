@@ -2,9 +2,10 @@
 
 Semántica de ANALISIS-api (pruebas 1 a 6 de su diseño): días calendario de Colombia; '30d' = hoy y los 29 días
 anteriores contra los 30 justo antes; 'mes' = del día 1 a hoy contra el mismo tramo del mes pasado, recortado a su fin;
-'12m' = desde el día 1 del mes de hace 11 meses; 'personalizado' con 'AAAA-MM-DD' y sus seis textos de error. Los bordes
+'12m' = desde el día 1 del mes de hace 11 meses, contra el mismo tramo un año antes (r1); 'personalizado' con 'AAAA-MM-DD' y sus seis textos de error. Los bordes
 salen de ZONA_COLOMBIA (nada de un −5 h propio, D1). bloque_periodo da los instantes en ISO con Z (RP29: `hasta` es el
-instante exclusivo) y contar_en / sumar_en cuentan y suman las dos ventanas en una sola consulta.
+instante exclusivo) y contar_en / sumar_en cuentan y suman las dos ventanas en una sola consulta, también sobre una
+columna Date (r1: un pago del primer día cuenta en ese día).
 
 Como no se aceptan fechas futuras, las pruebas con la base usan ventanas del año 2001 (R22), donde erp_test no tiene
 datos, y además filtran por su sufijo.
@@ -130,11 +131,22 @@ def test_periodo_12m():
     p = resolver_periodo("12m", ahora_utc=AHORA)
     assert (p.desde, p.hasta) == (date(2025, 11, 1), date(2026, 10, 3))
     assert (p.etiqueta, p.granularidad) == ("12 meses", "mes")
-    # Los 12 meses anteriores: de noviembre de 2024 a octubre de 2025.
-    assert (p.anterior_desde, p.anterior_hasta) == (date(2024, 11, 1), date(2025, 10, 31))
-    assert p.comparado == "vs 1 nov 2024 – 31 oct 2025"
+    # r1: el mismo tramo un año antes (como 'mes'), para que el % compare tramos del mismo largo.
+    assert (p.anterior_desde, p.anterior_hasta) == (date(2024, 11, 1), date(2025, 10, 3))
+    assert p.anterior_inicio_utc == datetime(2024, 11, 1, 5, 0)
+    assert p.anterior_fin_utc == datetime(2025, 10, 4, 5, 0)
+    assert p.comparado == "vs 1 nov 2024 – 3 oct 2025"
     p = resolver_periodo("12m", ahora_utc=datetime(2026, 1, 15, 15, 0))
-    assert (p.desde, p.anterior_desde, p.anterior_hasta) == (date(2025, 2, 1), date(2024, 2, 1), date(2025, 1, 31))
+    assert (p.desde, p.anterior_desde, p.anterior_hasta) == (date(2025, 2, 1), date(2024, 2, 1), date(2025, 1, 15))
+
+
+def test_periodo_12m_desde_un_29_de_febrero():
+    """El día de hoy un año antes se recorta al fin de su mes: 2028-02-29 -> 2027-02-28."""
+    from app.core.periodos import resolver_periodo
+    p = resolver_periodo("12m", ahora_utc=datetime(2028, 2, 29, 15, 0))
+    assert (p.desde, p.hasta) == (date(2027, 3, 1), date(2028, 2, 29))
+    assert (p.anterior_desde, p.anterior_hasta) == (date(2026, 3, 1), date(2027, 2, 28))
+    assert p.comparado == "vs 1 mar 2026 – 28 feb 2027"
 
 
 # ─── 5) granularidad ─────────────────────────────────────────────────────────────────────────────────────────
@@ -183,9 +195,21 @@ def test_errores_de_periodo():
     desde = (date(2026, 10, 3) - timedelta(days=799)).isoformat()  # 800 días
     assert _lanza_valor(resolver_periodo, "personalizado", desde, "2026-10-03", ahora_utc=AHORA) == (
         "El período no puede ser mayor a 2 años.")
-    # 731 días (MAX_DIAS) sí se aceptan.
+    # 731 días (MAX_DIAS) sí se aceptan; 732 no (r1, j).
     desde = (date(2026, 10, 3) - timedelta(days=730)).isoformat()
     assert resolver_periodo("personalizado", desde, "2026-10-03", ahora_utc=AHORA).granularidad == "mes"
+    desde = (date(2026, 10, 3) - timedelta(days=731)).isoformat()
+    assert _lanza_valor(resolver_periodo, "personalizado", desde, "2026-10-03", ahora_utc=AHORA) == (
+        "El período no puede ser mayor a 2 años.")
+
+
+def test_fechas_extremas_dan_el_error_de_fecha():
+    """r1 (h): el año 1 no lanza OverflowError al calcular el período anterior: da el error de fecha de ERRORES."""
+    from app.core.periodos import ERROR_FORMATO, ERRORES, resolver_periodo
+    assert ERROR_FORMATO in ERRORES
+    for desde, hasta in (("0001-01-01", "0001-01-05"), ("0001-01-01", "0001-01-01")):
+        assert _lanza_valor(resolver_periodo, "personalizado", desde, hasta, ahora_utc=AHORA) == (
+            "Las fechas deben tener el formato AAAA-MM-DD."), (desde, hasta)
 
 
 # ─── bloque_periodo (RP29) ───────────────────────────────────────────────────────────────────────────────────
@@ -241,6 +265,35 @@ def test_contar_en_y_sumar_en_sin_filas_dan_cero(db):
     p = resolver_periodo("personalizado", "2001-01-06", "2001-01-10", ahora_utc=AHORA)
     assert contar_en(q, SaleOrder.created_at, p) == {"actual": 0, "anterior": 0}
     assert sumar_en(q, SaleOrder.created_at, SaleOrder.total_cop, p) == {"actual": 0, "anterior": 0}
+
+
+def test_contar_en_y_sumar_en_con_una_columna_date(db):
+    """r1 (Important 2): sale_order_payments.fecha es Date (un día de calendario, sin hora). Se compara con los días
+    de Colombia, no con los instantes UTC de las 05:00: el `desde` del actual cuenta en el actual, el `desde` del
+    anterior en el anterior y el día siguiente al `hasta` no cuenta."""
+    from app.core.periodos import contar_en, resolver_periodo, sumar_en
+    from app.models.fase4 import SaleOrderPayment
+    suf = uuid.uuid4().hex[:8].upper()
+    pedido = SaleOrder(numero=f"PP{suf}D", customer_name=f"Cliente Pagos {suf}", estado="EN_PROCESO")
+    db.add(pedido)
+    db.commit()
+    pagos = [
+        (date(2001, 1, 6), 100),     # desde del actual: actual
+        (date(2001, 1, 10), 200),    # hasta del actual: actual
+        (date(2001, 1, 1), 30),      # desde del anterior: anterior
+        (date(2001, 1, 5), 4),       # hasta del anterior: anterior
+        (date(2001, 1, 11), 5000),   # el día siguiente al hasta: fuera
+        (date(2000, 12, 31), 60000), # el día anterior al anterior: fuera
+    ]
+    for fecha, monto in pagos:
+        pago = SaleOrderPayment(sale_order_id=pedido.id, tipo="ABONO", monto=Decimal(monto), moneda="COP",
+                                metodo_pago="Transferencia bancaria", fecha=fecha, usuario="t1a@test")
+        db.add(pago)
+        db.commit()
+    q = db.query(SaleOrderPayment).filter(SaleOrderPayment.sale_order_id == pedido.id)
+    p = resolver_periodo("personalizado", "2001-01-06", "2001-01-10", ahora_utc=AHORA)
+    assert contar_en(q, SaleOrderPayment.fecha, p) == {"actual": 2, "anterior": 2}
+    assert sumar_en(q, SaleOrderPayment.fecha, SaleOrderPayment.monto, p) == {"actual": 300, "anterior": 34}
 
 
 # ─── sin un −5 h propio (R7, C12, D1) ────────────────────────────────────────────────────────────────────────

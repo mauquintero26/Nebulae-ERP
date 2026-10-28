@@ -5,6 +5,9 @@ Colombia con ZONA_COLOMBIA de core/fechas.py (RP1/D1: sin un desfase propio). No
 fechas.iso_z (RP29), así que la prueba 13 se reescribe sobre iso_z. kpi conserva formato='entero' (RP27) y trae valor,
 anterior, mejor y es_foto, que el frontend lee.
 
+r1: los errores de programación (formato o «mejor» de un kpi, granularidad, bloque del contrato con claves de más o de
+menos) son ErrorDeContrato, que NO es ValueError: llegan como 500 con su traceback y no se esconden como un 422.
+
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_analisis_base
 """
 from datetime import date, datetime, timedelta, timezone
@@ -33,6 +36,15 @@ def _lanza_valor(fn, *args, **kwargs):
     raise AssertionError(f"{fn.__name__}{args} no lanzó ValueError")
 
 
+def _lanza_contrato(fn, *args, **kwargs):
+    from app.core.analisis import ErrorDeContrato
+    try:
+        fn(*args, **kwargs)
+    except ErrorDeContrato as e:
+        return str(e)
+    raise AssertionError(f"{fn.__name__}{args} no lanzó ErrorDeContrato")
+
+
 def _periodo(desde, hasta):
     from app.core.periodos import resolver_periodo
     return resolver_periodo("personalizado", desde, hasta, ahora_utc=AHORA)
@@ -47,6 +59,15 @@ def test_periodo_vive_en_periodos():
     assert analisis.PERIODOS == periodos.PERIODOS and analisis.MAX_DIAS == 731
     assert not hasattr(analisis, "iso_utc")  # RP29: se usa fechas.iso_z
     assert analisis.TOPS == (5, 10, 25)
+    # r1 (d): los consumidores (T12, T13 y T20) los importan de core/analisis.py.
+    for nombre in ("bloque_periodo", "contar_en", "sumar_en", "en_rango", "PERIODOS_KPI"):
+        assert getattr(analisis, nombre) is getattr(periodos, nombre), nombre
+
+
+def test_error_de_contrato_no_es_un_error_de_negocio():
+    from app.core.analisis import ErrorDeContrato
+    assert issubclass(ErrorDeContrato, Exception)
+    assert not issubclass(ErrorDeContrato, ValueError)
 
 
 # ─── 7) validar_top ──────────────────────────────────────────────────────────────────────────────────────────
@@ -55,7 +76,9 @@ def test_validar_top():
     from app.core.analisis import validar_top
     for top in (5, 10, 25):
         assert validar_top(top) == top
-    for malo in (7, 0, None, "x", True):
+    # r1 (b): un texto de dígitos también vale (R21 permite declarar top como str).
+    assert validar_top("10") == 10 and validar_top("5") == 5 and validar_top(" 25 ") == 25
+    for malo in (7, 0, None, "x", True, False, "7", "", "1o", "10.0", 10.0):
         assert _lanza_valor(validar_top, malo) == "El ranking solo puede mostrar 5, 10 o 25.", malo
 
 
@@ -90,8 +113,9 @@ def test_kpi_trae_lo_que_lee_el_frontend():
     # Sin dato no se inventa un número.
     k = kpi("ticket", "Ticket promedio", None, None, formato="pesos")
     assert (k["valor"], k["anterior"], k["variacion_pct"]) == (None, None, None)
-    assert _lanza_valor(kpi, "x", "X", 1, formato="numero_raro").startswith("Formato de indicador no válido")
-    assert _lanza_valor(kpi, "x", "X", 1, mejor="bien").startswith("«mejor» no válido")
+    # r1 (a): un formato o un «mejor» que no vale es un error de programación, no un 422.
+    assert _lanza_contrato(kpi, "x", "X", 1, formato="numero_raro").startswith("Formato de indicador no válido")
+    assert _lanza_contrato(kpi, "x", "X", 1, mejor="bien").startswith("«mejor» no válido")
 
 
 def test_dinero():
@@ -136,6 +160,13 @@ def test_rellenar_por_mes_con_claves_en_dia_1():
     assert claves_cubetas(p) == [date(2001, m, 1) for m in range(1, 7)]
     assert rellenar({date(2001, 3, 1): 7, datetime(2001, 6, 1): 1}, p) == [0.0, 0.0, 7.0, 0.0, 0.0, 1.0]
     assert len(rellenar({}, p, anterior=True)) == 6
+
+
+def test_rellenar_por_mes_cruza_el_fin_de_anio():
+    from app.core.analisis import claves_cubetas
+    p = _periodo("2000-11-15", "2001-03-31")  # 137 días: mes
+    assert claves_cubetas(p) == [date(2000, 11, 1), date(2000, 12, 1), date(2001, 1, 1), date(2001, 2, 1),
+                                 date(2001, 3, 1)]
 
 
 def test_rellenar_anterior_mas_corto_queda_del_mismo_largo():
@@ -236,8 +267,8 @@ def test_respuesta_rechaza_claves_de_mas_o_de_menos():
     b = _bloques(); b["movimientos"]["filas"][0]["url"] = "/x"; malos.append(b)
     b = _bloques(); b["ranking"]["filas"][0].pop("cantidad"); malos.append(b)
     b = _bloques(); b["filtros"] = {"foco": "hub", "periodo": "30d"}; malos.append(b)
-    for bloques in malos:
-        assert _lanza_valor(respuesta, p, **bloques).startswith("Contrato de Análisis"), bloques
+    for bloques in malos:  # r1 (a): ErrorDeContrato, no ValueError
+        assert _lanza_contrato(respuesta, p, **bloques).startswith("Contrato de Análisis"), bloques
     # Un bloque que el módulo no tiene va en None (o lista vacía): el frontend lo completa sin inventar cifras.
     b = _bloques()
     b.update(linea=None, barras=None, movimientos=None, ranking=None, donas=[])
@@ -245,6 +276,15 @@ def test_respuesta_rechaza_claves_de_mas_o_de_menos():
     assert (data["linea"], data["barras"], data["movimientos"], data["ranking"], data["donas"]) == (
         None, None, None, None, [])
     assert data["avisos"] == []
+
+
+def test_respuesta_avisos_none_o_un_texto_suelto():
+    """r1 (c): avisos=None es «sin avisos» y un texto suelto es UN aviso (no una letra por aviso)."""
+    from app.core.analisis import respuesta
+    p = _periodo("2001-01-06", "2001-01-10")
+    assert respuesta(p, **_bloques(), avisos=None)["data"]["avisos"] == []
+    assert respuesta(p, **_bloques(), avisos="Faltan costos.")["data"]["avisos"] == ["Faltan costos."]
+    assert respuesta(p, **_bloques(), avisos=["Uno", "Dos"])["data"]["avisos"] == ["Uno", "Dos"]
 
 
 # ─── 12) expr_local, expr_cubeta y en_rango en la base ───────────────────────────────────────────────────────
@@ -279,7 +319,7 @@ def test_expr_cubeta_en_la_base(db):
     dia = cast(literal("2001-01-07"), Date)
     assert db.execute(select(expr_cubeta(dia, "dia"))).scalar() == date(2001, 1, 7)
     assert db.execute(select(expr_cubeta(dia, "semana"))).scalar() == date(2001, 1, 1)
-    assert _lanza_valor(expr_cubeta, instante, "anio").startswith("Granularidad no válida")
+    assert _lanza_contrato(expr_cubeta, instante, "anio").startswith("Granularidad no válida")  # r1 (a)
 
 
 def test_en_rango_usa_la_columna_cruda(db):
@@ -295,6 +335,28 @@ def test_en_rango_usa_la_columna_cruda(db):
     antes = cast(literal("2001-01-06 04:59:59+00"), DateTime(timezone=True))
     assert db.execute(select(en_rango(antes, p.inicio_utc, p.fin_utc))).scalar() is False
     assert InventoryMovement.created_at.type.timezone is True
+
+
+def test_en_rango_con_una_columna_date_compara_dias_de_colombia(db):
+    """r1 (Important 2): una columna Date (sale_order_payments.fecha) no se compara con los instantes UTC de las 05:00
+    sino con los días de Colombia: el desde del actual cuenta en el actual, el desde del anterior en el anterior y el
+    día siguiente al hasta no cuenta."""
+    from app.core.analisis import en_rango
+    from app.models.fase4 import SaleOrderPayment
+    p = _periodo("2001-01-06", "2001-01-10")
+
+    def dentro(dia, ini, fin):
+        return db.execute(select(en_rango(cast(literal(dia), Date), ini, fin))).scalar()
+
+    actual, anterior = (p.inicio_utc, p.fin_utc), (p.anterior_inicio_utc, p.anterior_fin_utc)
+    assert dentro("2001-01-06", *actual) is True       # desde del actual
+    assert dentro("2001-01-10", *actual) is True       # hasta del actual
+    assert dentro("2001-01-11", *actual) is False      # el día siguiente al hasta
+    assert dentro("2001-01-01", *anterior) is True     # desde del anterior
+    assert dentro("2001-01-05", *anterior) is True
+    assert dentro("2001-01-06", *anterior) is False
+    sql = _sql_literal(en_rango(SaleOrderPayment.fecha, p.inicio_utc, p.fin_utc))
+    assert sql == "sale_order_payments.fecha >= '2001-01-06' AND sale_order_payments.fecha < '2001-01-11'", sql
 
 
 # ─── 13) ISO con Z: fechas.iso_z (RP29) ──────────────────────────────────────────────────────────────────────
