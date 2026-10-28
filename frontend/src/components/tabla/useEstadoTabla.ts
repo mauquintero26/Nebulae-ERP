@@ -35,13 +35,14 @@ import { usuarioDeLaSesion } from './usuarioDeLaSesion';
  *
  * Las preferencias se leen después del montaje y nada se escribe antes de listo (D35 y D38: usePreferencia y
  * usePreferenciaParte ya lo resuelven). Mientras tanto el estado usa inicial.modo e inicial.tamano. El tercer valor,
- * `listo`, dice que ya se leyeron. r1, punto 5: para no pedir la lista con el tamaño por defecto y abortarla al llegar
+ * `listo`, dice que ya se leyeron o que venció el tope de espera (r2, abajo). r1, punto 5: para no pedir la lista con el tamaño por defecto y abortarla al llegar
  * el guardado, la pantalla pasa useListado({…, esperar: !listo}) (la tabla se ve cargando, no vacía). El tablero (D39)
  * espera igual: no carga hasta listo.
  * r2, punto 4: el `listo` que devuelve este hook pasa a true cuando los vínculos de las preferencias están listos o
- * cuando vence ESPERA_PREFERENCIAS_MS (4000 ms, lib/tabla.js) desde el montaje, lo que ocurra primero. Si el GET de
- * preferencias se cuelga (apiFetch no tiene tope), con esperar: !listo la tabla carga igual con los valores en memoria.
- * Las escrituras no cambian: siguen esperando el listo de su vínculo (T4A). El temporizador se limpia al desmontar.
+ * cuando vence ESPERA_PREFERENCIAS_MS (4000 ms, lib/tabla.js) desde el montaje o desde un cambio de usuario, lo que
+ * ocurra primero; el tope solo corre mientras los vínculos no están listos. Si el GET de preferencias se cuelga
+ * (apiFetch no tiene tope), con esperar: !listo la tabla carga igual con los valores en memoria. Las escrituras no
+ * cambian: siguen esperando el listo de su vínculo (T4A). El temporizador se limpia al desmontar.
  *
  * D39: si la pantalla tiene tablero, useTableroKanban recibe pantalla = este mismo id, porColumna = estado.tamano,
  * activo = listo && estado.modo === 'kanban' y dependencias = dependenciasTablero(estado) (lib/tabla.js). Regla:
@@ -151,12 +152,15 @@ export function useEstadoTabla(
     if (escrituras.tamano !== null) guardarTabla({ tamano: escrituras.tamano });
   }, [id, guardarModo, guardarTabla]);
 
-  // r2, punto 4: el tope de espera de las preferencias, desde el montaje (se limpia al desmontar).
-  const [vencido, setVencido] = useState(false);
-  useEffect(
-    () => esperarPreferencias({ alVencer: () => setVencido(true) }),
-    [],
-  );
+  // r2, punto 4: el tope de espera de las preferencias (se limpia al desmontar). Es del usuario del render: si el token
+  // pasa a otra cuenta, vuelve a esperar sus preferencias en lugar de pedir con los valores por defecto. Solo se arma
+  // mientras los vínculos no están listos, así que una navegación dentro de la app no pinta de más a los 4 s.
+  const vinculosListos = modoListo && tablaListo;
+  const [vencidoPara, setVencidoPara] = useState<number | null | undefined>(undefined);
+  useEffect(() => {
+    if (vinculosListos) return undefined;
+    return esperarPreferencias({ alVencer: () => setVencidoPara(usuario) });
+  }, [usuario, vinculosListos]);
 
-  return [estado, despachar, listoConTope(modoListo && tablaListo, vencido)];
+  return [estado, despachar, listoConTope(vinculosListos, vencidoPara === usuario)];
 }

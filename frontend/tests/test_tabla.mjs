@@ -1011,10 +1011,17 @@ console.log('--- TEST 23 (T4C y r1, R4, RP8, RP26, RP35, D28 y D38): el fuente d
   assert.ok(listado.includes('estadoListado(resultado, { clave, activo, esperar, repeticion, ruta, orden, restablece, atendido, usuario })'),
     'M23: estadoListado recibe esperar (y lo demás)');
   assert.ok(estado.includes('setLocal({ id, usuario: usuarioDelRender.current, sesion: siguiente });'), 'M22');
-  // r2, punto 4: el tope de espera de las preferencias, desde el montaje y con su limpieza.
-  assert.match(estado, /useEffect\(\s*\(\) => esperarPreferencias\(\{ alVencer: \(\) => setVencido\(true\) \}\),\s*\[\],?\s*\);/);
-  assert.ok(estado.includes('const [vencido, setVencido] = useState(false);'));
-  assert.ok(estado.includes('return [estado, despachar, listoConTope(modoListo && tablaListo, vencido)];'));
+  // r2, punto 4: el tope de espera de las preferencias, con su limpieza. Revisión de r2 (controlador): el tope es del
+  // usuario del render (un cambio de cuenta vuelve a esperar) y solo se arma mientras los vínculos no están listos (sin
+  // un render de más a los 4 s en las navegaciones dentro de la app).
+  assert.ok(estado.includes('const vinculosListos = modoListo && tablaListo;'));
+  assert.ok(estado.includes('const [vencidoPara, setVencidoPara] = useState<number | null | undefined>(undefined);'));
+  assert.match(estado, /useEffect\(\(\) => \{\s*if \(vinculosListos\) return undefined;\s*return esperarPreferencias\(\{ alVencer: \(\) => setVencidoPara\(usuario\) \}\);\s*\}, \[usuario, vinculosListos\]\);/);
+  assert.ok(estado.includes('return [estado, despachar, listoConTope(vinculosListos, vencidoPara === usuario)];'));
+  // Revisión de r2 (mutante H2): rechazoPorAtender recibe el usuario; sin él (usuario = null por defecto) el hook nunca
+  // despacha la vuelta y la tabla queda en esqueleto.
+  assert.ok(cuerpos.some((c) => c.includes('rechazoPorAtender(resultado, { orden, atendido, usuario })')),
+    'H2: rechazoPorAtender con el usuario, dentro del efecto');
   // r2, punto 5: la fórmula del tablero (D39) con listo.
   assert.ok(estado.includes("activo = listo && estado.modo === 'kanban'"));
   assert.ok(estado.includes('mientras !listo, la pantalla pinta el esqueleto de la vista'));

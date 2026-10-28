@@ -1068,7 +1068,7 @@ export function esperarPreferencias({ alVencer, temporizador = relojDelSistema, 
 
 /**
  * El `listo` que devuelve useEstadoTabla: las preferencias de sus vínculos ya se leyeron, o venció el tope de espera
- * desde el montaje (lo que ocurra primero).
+ * para el usuario del render, desde el montaje o desde un cambio de usuario (lo que ocurra primero).
  * @param {boolean} vinculosListos
  * @param {boolean} vencido
  * @returns {boolean}
