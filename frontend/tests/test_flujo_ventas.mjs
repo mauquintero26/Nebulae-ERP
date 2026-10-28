@@ -12,6 +12,12 @@ import {
   PASOS_FLUJO_VENTAS, textoRegla, conteosDesdeResumen, tabHubDePaso, cadenaVentas, PASOS_COTIZACION, pasoCotizacion,
 } from '../src/lib/flujo-ventas.js';
 import { pasosConConteos, pasosConProgreso } from '../src/lib/flujo.js';
+// T5A r1: las etiquetas únicas (RP4) para los casos de compacta.
+import { infoEstadoPedido } from '../src/lib/estados-pedido.js';
+import { infoEstadoSolicitud } from '../src/lib/estados-solicitud.js';
+import { infoEstadoCotizacion } from '../src/lib/estados-cotizacion.js';
+
+const ETIQUETAS_UNICAS = { sc: infoEstadoSolicitud, cot: infoEstadoCotizacion, pven: infoEstadoPedido };
 // r1: conteosDePasos por el espacio de nombres, para que su falta no tape los demás rojos.
 import * as flujo from '../src/lib/flujo.js';
 
@@ -406,10 +412,9 @@ console.log('--- TEST 21 (T5A; RP4, RP74): CadenaDocumentos — etiquetas única
   const normal = cadenaVentas(sc, 'SC', { rutaActual: RUTA });
   assert.deepEqual(normal.map((p) => p.sublabel),
     ['SC-1 · Asignada', 'COT-11 · Esperando confirmación del cliente (+1 rechazada)', 'Sin pedido todavía']);
-  // compacta: las funciones de etiqueta dan '' y queda solo el número (lo que falta conserva su texto).
-  const SIN = () => '';
-  const compacta = cadenaVentas(sc, 'SC', { etiquetas: { sc: SIN, cot: SIN, pven: SIN }, rutaActual: RUTA });
-  assert.deepEqual(compacta.map((p) => p.sublabel), ['SC-1', 'COT-11 (+1 rechazada)', 'Sin pedido todavía']);
+  // compacta (r1, M2): la opción de cadenaVentas (TEST 22); solo cambia los textos.
+  const compacta = cadenaVentas(sc, 'SC', { etiquetas: ETIQUETAS_UNICAS, rutaActual: RUTA, compacta: true });
+  assert.deepEqual(compacta.map((p) => p.sublabel), ['SC-1', 'COT-11', 'Sin pedido todavía']);
   assert.deepEqual(compacta.map((p) => [p.estado, p.esEste, p.href]), normal.map((p) => [p.estado, p.esEste, p.href]),
     'compacta solo cambia los textos');
   // RP74: el panel rápido del Hub pasa filas con tipo 'VEN'.
@@ -426,12 +431,44 @@ console.log('--- TEST 21 (T5A; RP4, RP74): CadenaDocumentos — etiquetas única
   assert.match(c, /import \{ infoEstadoCotizacion \} from '@\/lib\/estados-cotizacion';/, 'RP4: la etiqueta de T2');
   assert.match(c, /const ETIQUETAS = \{ sc: infoEstadoSolicitud, cot: infoEstadoCotizacion, pven: infoEstadoPedido \};/);
   assert.ok(!/cotizacion-client|ESTADOS\b/.test(c), 'RP4: no importa el ESTADOS hex de cotizacion-client.tsx');
-  assert.match(c, /cadenaVentas\(doc, tipo, \{ etiquetas: compacta \? SOLO_NUMERO : ETIQUETAS, rutaActual: rutaActual \|\| null \}\)/);
-  assert.match(c, /const SIN_ESTADO = \(\) => '';\nconst SOLO_NUMERO = \{ sc: SIN_ESTADO, cot: SIN_ESTADO, pven: SIN_ESTADO \};/);
+  // r1 (M2): compacta es la opción de cadenaVentas (la regla CAIDO vive allá), no funciones de etiqueta vacías.
+  assert.match(c, /cadenaVentas\(doc, tipo, \{ etiquetas: ETIQUETAS, rutaActual: rutaActual \|\| null, compacta \}\)/);
+  assert.ok(!/SOLO_NUMERO|SIN_ESTADO/.test(c), 'sin las etiquetas vacías de r0');
   assert.match(c, /<PasosFlujo variante="barra" pasos=\{pasos\} etiqueta="Flujo de este documento" compacto=\{compacta\} \/>/);
   assert.match(c, /tipo: TipoCadena;/, 'RP74: el tipo de la prop es TipoCadena (SC, COT, PVEN o VEN)');
   assert.match(leer('lib/flujo-ventas.js'), /@typedef \{'SC' \| 'COT' \| 'PVEN' \| 'VEN'\} TipoCadena/);
   assert.match(c, /if \(!pasos\.length\) return null;/);
+}
+
+console.log('--- TEST 22 (T5A r1; M2): cadenaVentas compacta — solo el número, salvo las cajas caídas, que conservan su palabra ---');
+{
+  const ver = (doc, tipo, op = {}) => cadenaVentas(doc, tipo, { compacta: true, ...op }).map((p) => [p.clave, p.estado, p.sublabel]);
+  // Lo vigente: solo el número (sin estado en palabras ni « (+1 rechazada)»); lo que falta conserva su texto.
+  const sc = {
+    id: 1, numero: 'SC-1', estado: 'ASIGNADA', pedidos_venta: [],
+    cotizaciones: [{ id: 10, numero: 'COT-10', estado: 'RECHAZADA' }, { id: 11, numero: 'COT-11', estado: 'PENDIENTE_CONFIRMACION' }],
+  };
+  assert.deepEqual(ver(sc, 'SC'), [['SC', 'hecho', 'SC-1'], ['COT', 'actual', 'COT-11'], ['PVEN', 'pendiente', 'Sin pedido todavía']]);
+  // Una cotización rechazada sin reemplazo conserva «Rechazada».
+  const rechazada = { id: 1, numero: 'SC-1', estado: 'COTIZADA', cotizaciones: [{ id: 10, numero: 'COT-10', estado: 'RECHAZADA' }] };
+  assert.deepEqual(ver(rechazada, 'SC')[1], ['COT', 'cancelado', `COT-10 · ${infoEstadoCotizacion('RECHAZADA').label}`]);
+  // Un pedido cancelado conserva «Cancelado» (y la cotización vuelve a ser la actual, H46).
+  const cot = {
+    id: 11, numero: 'COT-11', estado: 'CONFIRMADA', sc_id: 1, sc_numero: 'SC-1',
+    pedidos_venta: [{ id: 52, numero: 'PVEN-52', estado: 'CANCELADO' }],
+  };
+  assert.deepEqual(ver(cot, 'COT'), [['SC', 'hecho', 'SC-1'], ['COT', 'actual', 'COT-11'],
+    ['PVEN', 'cancelado', `PVEN-52 · ${infoEstadoPedido('CANCELADO').label}`]]);
+  // La caja propia caída también (una SC cancelada); la Compra del pedido va con su número.
+  assert.deepEqual(ver({ id: 1, numero: 'SC-1', estado: 'CANCELADA' }, 'SC')[0],
+    ['SC', 'cancelado', `SC-1 · ${infoEstadoSolicitud('CANCELADA').label}`]);
+  const pven = { id: 52, numero: 'PVEN-52', estado: 'EN_PROCESO', cot_id: 11, cot_numero: 'COT-11', pec_id: 9, pec_numero: 'PEC-9' };
+  assert.deepEqual(ver(pven, 'VEN'), [['SC', 'neutro', 'Cotización directa'], ['COT', 'hecho', 'COT-11'], ['PVEN', 'actual', 'PVEN-52'],
+    ['PEC', 'neutro', 'PEC-9']]);
+  // Las etiquetas que se inyectan siguen valiendo en las caídas; sin compacta, nada cambia.
+  assert.deepEqual(ver(rechazada, 'SC', { etiquetas: { cot: () => 'Rechazada X' } })[1][2], 'COT-10 · Rechazada X');
+  assert.deepEqual(cadenaVentas(sc, 'SC', { compacta: false }), cadenaVentas(sc, 'SC'));
+  assert.equal(cadenaVentas(sc, 'SC')[1].sublabel, 'COT-11 · Esperando confirmación del cliente (+1 rechazada)');
 }
 
 console.log('\nOK: test_flujo_ventas.mjs');

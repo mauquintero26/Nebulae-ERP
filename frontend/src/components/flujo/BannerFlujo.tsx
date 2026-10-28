@@ -1,22 +1,22 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import {
   AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, CircleDashed, HelpCircle, RotateCw, SlidersHorizontal,
 } from 'lucide-react';
 import { Contador } from '@/components/ui/Contador';
 import { usePreferencia } from '@/components/ui/usePreferencia';
-import { estadoKpi } from '@/lib/kpis';
-import type { EstadoKpi } from '@/lib/kpis';
-import { estadoDeConteo } from '@/lib/tabla';
-import { alternarFiltroSemaforo, opcionesSemaforo, semaforoDeFranja } from '@/lib/flujo';
+import {
+  alternarFiltroSemaforo, estadoDeFranja, estadoNumeroFranja, opcionesSemaforo, semaforoDeFranja,
+} from '@/lib/flujo';
 import { ChipAviso, PasosFlujo } from './PasosFlujo';
 import type { AccionAjustar, AvisoFranja, PartesFranja, PasoVista, SemaforoFranja } from './tipos';
 
 /**
- * FLUJO-base punto 4 (Bloque 4, T5A; R4, R6, R12, C2, C13, RP33, RP67, D21 y D38): la franja del flujo, UNA sola franja
- * arriba (flujo_posicion), igual en Ventas, Compras y las listas. Un <section aria-label={titulo}> con fondo blanco,
- * border-b y px-6 py-3 (el lugar y el fondo del semáforo del Hub de hoy).
+ * FLUJO-base punto 4 (Bloque 4, T5A y r1; R4, R6, R12, C2, C13, RP33, RP67, D21 y D38): la franja del flujo, UNA sola
+ * franja arriba (flujo_posicion), igual en Ventas, Compras y las listas. Un <section> con fondo blanco, border-b y px-6
+ * py-3 (el lugar y el fondo del semáforo del Hub de hoy), nombrado por su h2 (aria-labelledby, r1 M9). La pantalla la
+ * pone directo en el <main>, sin otro padding horizontal (el umbral @2xl de las cajas se mide en la franja).
  *  - Fila 1, a la izquierda: el ícono y el texto del semáforo (semaforoDeFranja: gris, rose o emerald, sin emojis; gris y
  *    '—' con error, RP67), el título, la regla (text-xs slate-500) y los avisos como chips. A la derecha: el control
  *    segmentado del semáforo (opcionesSemaforo: 'Con atraso (n)', 'No resueltos (n)' solo si llega noResueltos, y 'Ver
@@ -24,15 +24,26 @@ import type { AccionAjustar, AvisoFranja, PartesFranja, PasoVista, SemaforoFranj
  *    accionAjustar (si no es null), '¿Cómo funciona?' (muestra la ayuda debajo de cada caja; no se guarda) y 'Ocultar
  *    flujo' / 'Ver flujo'.
  *  - Fila 2: <PasosFlujo variante="banner">; en modo compacto, los mismos pasos en pastillas, en una sola línea.
- *  - Los números van con Contador (C13): la barra gris mientras cargan, '—' solo con error (D21), y al recargar los
- *    anteriores siguen (atenuados). El estado sale de estadoKpi (lib/kpis.js) y el de cada número de estadoDeConteo
- *    (lib/tabla.js, el mismo de BarraTabla).
- *  - Error: una línea rose 'No se pudieron cargar los números del flujo.' con 'Reintentar'; las cajas sin número
- *    muestran '—'.
+ *  - Los números van con Contador (C13): la barra gris mientras cargan y, al recargar, los anteriores siguen
+ *    (atenuados en las cajas; en los segmentos del semáforo, plenos: r1 M8). El estado sale de estadoDeFranja y el de
+ *    cada número de estadoNumeroFranja (lib/flujo.js).
+ *  - Error (ruling de r1 sobre M1): «—» en TODA la franja (las cajas, los botones del semáforo y el semáforo), sin chips
+ *    de atraso, y una línea rose 'No se pudieron cargar los números del flujo.' con 'Reintentar'. r1 (M5): mientras se
+ *    reintenta, la línea sigue montada y el botón dice 'Reintentando…' (aria-disabled: conserva el foco); cuando sale
+ *    bien, vuelven los números y, si el foco quedó en el body, pasa al h2 de la franja.
  *  - El modo compacto se recuerda EN TU USUARIO (R4, RP33): usePreferencia(`flujo:${idPreferencia}`) de components/ui
  *    (D38), que lo lee después de montar (el primer render es siempre la franja completa: sin diferencias de
  *    hidratación) y no escribe antes de tenerlo listo (D35). Sin almacenamiento, la franja abre completa.
  *  - partes: solo 'todo' (R1: la rama 'semaforo' | 'diagrama' del diseño no se implementa).
+ * Uso para T7 (Ventas) y T14 (Compras), con flujo = useResumenFlujo(ruta, recarga) (r1, M15b: cuando un conteo no viene
+ * se pasa `undefined`, no `null`; null es «todavía carga» y pinta la barra gris):
+ *    semaforo={{
+ *      atrasados: flujo.datos?.semaforo?.atrasados ?? null,
+ *      // Ventas manda no_resueltos: null mientras carga. Compras no lo manda: undefined (no se pinta el botón).
+ *      noResueltos: flujo.datos ? flujo.datos.semaforo?.no_resueltos : null,
+ *      filtro, onFiltrar,
+ *    }}
+ *    cargando={flujo.cargando} error={flujo.error} onReintentar={flujo.recargar}
  * Sin variantes de modo oscuro ni diálogos nativos del navegador (avisos en la misma franja); textos en español con
  * tildes.
  */
@@ -65,7 +76,8 @@ const ICONO_SEMAFORO = { gris: CircleDashed, rojo: AlertTriangle, verde: CheckCi
 const COLOR_SEMAFORO = { gris: 'text-slate-400', rojo: 'text-rose-600', verde: 'text-emerald-600' } as const;
 const TEXTO_SEMAFORO = { gris: 'text-slate-500', rojo: 'text-rose-700', verde: 'text-emerald-700' } as const;
 
-const FOCO = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1';
+/** r1 (C1, M10): el foco es un outline, distinto de cualquier anillo de estado y visible en forced-colors. */
+const FOCO = 'outline-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
 const BOTON = `inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-800 ${FOCO}`;
 
 /** Un valor guardado en flujo:<id> vale solo si es true o false (otro valor: la franja completa). */
@@ -78,18 +90,34 @@ export function BannerFlujo({
 }: PropsBannerFlujo) {
   const [compacto, guardarCompacto] = usePreferencia<boolean>(`flujo:${idPreferencia}`, false, { validar: esBooleano });
   const [verAyuda, setVerAyuda] = useState(false);
+  const idTitulo = useId();
+  const tituloRef = useRef<HTMLHeadingElement>(null);
+  // r1 (M5): el usuario tocó Reintentar; si al salir bien el foco quedó en el body, pasa al h2.
+  const focoPendiente = useRef(false);
 
-  const estadoConteos: EstadoKpi = estadoKpi({ loading: cargando, error });
-  const resumen = semaforoDeFranja({ atrasados: semaforo?.atrasados ?? null, cargando, error });
+  // r1 (M1 y M5): useResumenFlujo no trae el error mientras vuelve a cargar; la franja recuerda que lo hubo (ajuste del
+  // estado durante el render, como useEstadoKpi) para seguir en «—» y con la línea de error hasta que la carga sale bien.
+  const [huboError, setHuboError] = useState(false);
+  const f = estadoDeFranja({ cargando, error, huboError });
+  if (f.conError !== huboError) setHuboError(f.conError);
+
+  const resumen = semaforoDeFranja({ atrasados: semaforo?.atrasados ?? null, cargando: f.cargandoNumeros, error: f.conError });
   const opciones = opcionesSemaforo(semaforo);
   const IconoSemaforo = ICONO_SEMAFORO[resumen.tono];
 
+  useEffect(() => {
+    if (f.conError || !focoPendiente.current) return;
+    focoPendiente.current = false;
+    const activo = document.activeElement;
+    if (!activo || activo === document.body) tituloRef.current?.focus();
+  }, [f.conError]);
+
   return (
-    <section aria-label={titulo} aria-busy={cargando} className="min-w-0 border-b border-slate-200 bg-white px-6 py-3">
+    <section aria-labelledby={idTitulo} aria-busy={cargando} className="min-w-0 border-b border-slate-200 bg-white px-6 py-3">
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           {semaforo ? <IconoSemaforo aria-hidden="true" size={18} className={`shrink-0 ${COLOR_SEMAFORO[resumen.tono]}`} /> : null}
-          <h2 className="text-sm font-bold text-slate-800">{titulo}</h2>
+          <h2 id={idTitulo} ref={tituloRef} tabIndex={-1} className={`rounded text-sm font-bold text-slate-800 ${FOCO}`}>{titulo}</h2>
           {semaforo ? (
             <span role="status" className={`text-xs font-semibold ${TEXTO_SEMAFORO[resumen.tono]}`}>{resumen.texto}</span>
           ) : null}
@@ -112,7 +140,7 @@ export function BannerFlujo({
                   {o.texto}
                   {o.conConteo ? (
                     <span className="inline-flex items-center">
-                      (<Contador valor={o.conteo} estado={estadoDeConteo(o.conteo, estadoConteos)} />)
+                      (<Contador valor={o.conteo} estado={estadoNumeroFranja(o.conteo, f.estadoConteos, { atenuar: false })} />)
                     </span>
                   ) : null}
                 </button>
@@ -136,19 +164,27 @@ export function BannerFlujo({
         </div>
       </div>
 
-      {error ? (
+      {f.conError ? (
         <div role="alert" className="mt-2 flex flex-wrap items-center gap-2 text-xs font-semibold text-rose-700">
           <AlertTriangle size={14} aria-hidden="true" className="shrink-0" />
           <span>No se pudieron cargar los números del flujo.</span>
           {onReintentar ? (
             <button
               type="button"
-              onClick={onReintentar}
-              disabled={cargando}
-              className={`inline-flex items-center gap-1 rounded-md border border-rose-200 bg-white px-2 py-0.5 text-rose-700 hover:bg-rose-50 disabled:opacity-60 ${FOCO}`}
+              aria-disabled={f.reintentando || undefined}
+              onClick={() => {
+                if (f.reintentando) return;
+                focoPendiente.current = true;
+                onReintentar();
+              }}
+              onBlur={(e) => {
+                // Si el usuario se fue a otro control, ya no hay foco que devolver.
+                if (e.relatedTarget) focoPendiente.current = false;
+              }}
+              className={`inline-flex items-center gap-1 rounded-md border border-rose-200 bg-white px-2 py-0.5 text-rose-700 hover:bg-rose-50 aria-disabled:cursor-wait aria-disabled:opacity-80 ${FOCO}`}
             >
-              <RotateCw size={12} aria-hidden="true" />
-              Reintentar
+              <RotateCw size={12} aria-hidden="true" className={f.reintentando ? 'motion-safe:animate-spin' : ''} />
+              {f.reintentando ? 'Reintentando…' : 'Reintentar'}
             </button>
           ) : null}
         </div>
@@ -163,7 +199,7 @@ export function BannerFlujo({
           compacto={compacto}
           mostrarAntiguedad={mostrarAntiguedad}
           mostrarAyuda={verAyuda}
-          estadoConteos={estadoConteos}
+          estadoConteos={f.estadoConteos}
         />
       </div>
     </section>

@@ -15,7 +15,7 @@ import { congelar as congelarDePedido, PASOS_PEDIDO } from '../src/lib/estados-p
 import { PASOS_SC } from '../src/lib/estados-solicitud.js';
 // T5A: lo nuevo por el espacio de nombres, para que la falta de una función no tape los demás casos.
 import * as F from '../src/lib/flujo.js';
-import { crearCargaListado } from '../src/lib/tabla.js';
+import { crearCargaListado, estadoDeConteo } from '../src/lib/tabla.js';
 
 const estados = (pasos) => pasos.map((p) => p.estado);
 
@@ -255,6 +255,9 @@ console.log('--- TEST 11 (T5A; RP67, D21): semaforoDeFranja — sin parpadeo al 
   assert.deepEqual(F.semaforoDeFranja(), { tono: 'gris', texto: '—' });
   // Un número que no es finito no cuenta como visto.
   assert.deepEqual(F.semaforoDeFranja({ cargando: true, atrasados: NaN }), { tono: 'gris', texto: 'Cargando…' });
+  // r1 (M16, ruling): un conteo negativo no es un dato válido: cuenta como sin número (nunca «Todo al día»).
+  assert.deepEqual(F.semaforoDeFranja({ atrasados: -2 }), { tono: 'gris', texto: '—' });
+  assert.deepEqual(F.semaforoDeFranja({ atrasados: -2, cargando: true }), { tono: 'gris', texto: 'Cargando…' });
 }
 
 console.log('--- TEST 12 (T5A; R6, RP67 y cruce C9 de la verificación): opcionesSemaforo y alternarFiltroSemaforo ---');
@@ -271,9 +274,15 @@ console.log('--- TEST 12 (T5A; R6, RP67 y cruce C9 de la verificación): opcione
   const cargando = F.opcionesSemaforo({ atrasados: null, noResueltos: null, filtro: 'no_resueltos' });
   assert.deepEqual(cargando.map((o) => [o.filtro, o.conteo, o.activo]),
     [['atrasados', null, false], ['no_resueltos', null, true], ['todos', null, false]]);
-  // Un conteo que no es número no se inventa; un filtro que no está entre las opciones deja activo «Ver todo».
+  // Un conteo que no es número no se inventa; un filtro desconocido deja activo «Ver todo».
   assert.equal(F.opcionesSemaforo({ atrasados: 'x', filtro: 'todos' })[0].conteo, null);
-  assert.deepEqual(F.opcionesSemaforo({ atrasados: 1, filtro: 'no_resueltos' }).map((o) => o.activo), [false, true]);
+  // r1 (M16): lo mismo en noResueltos, y un negativo no es un dato válido (ruling): null.
+  assert.equal(F.opcionesSemaforo({ atrasados: 1, noResueltos: 'x' })[1].conteo, null);
+  assert.equal(F.opcionesSemaforo({ atrasados: 1, noResueltos: NaN })[1].conteo, null);
+  assert.deepEqual(F.opcionesSemaforo({ atrasados: -1, noResueltos: -3 }).map((o) => o.conteo), [null, null, null]);
+  // r1 (M15a): un filtro que vale pero cuyo botón no se pinta (no_resueltos sin noResueltos) no deja NINGÚN botón
+  // presionado: «Ver todo» mentiría, porque la tabla sigue filtrada.
+  assert.deepEqual(F.opcionesSemaforo({ atrasados: 1, filtro: 'no_resueltos' }).map((o) => o.activo), [false, false]);
   assert.deepEqual(F.opcionesSemaforo({ atrasados: 1, filtro: 'raro' }).map((o) => o.activo), [false, true]);
   assert.deepEqual(F.opcionesSemaforo({ atrasados: 1 }).map((o) => o.activo), [false, true]);
   for (const nada of [null, undefined, 'x', []]) assert.deepEqual(F.opcionesSemaforo(/** @type {any} */ (nada)), []);
@@ -306,6 +315,7 @@ console.log('--- TEST 13 (T5A): textoDetalle (solo en el paso esEste) y textoAnt
   assert.equal(F.textoAntiguedad(0), 'El más antiguo: 0 días');
   assert.equal(F.textoAntiguedad(1200), 'El más antiguo: 1.200 días');
   assert.equal(F.textoAntiguedad(1.4), 'El más antiguo: 1 día', 'redondeado, y el plural sale del redondeado');
+  assert.equal(F.textoAntiguedad(1.6), 'El más antiguo: 2 días', 'r1 (M16): se redondea, no se trunca');
   for (const nada of [null, undefined, NaN, -1, '6']) assert.equal(F.textoAntiguedad(/** @type {any} */ (nada)), '');
 }
 
@@ -318,6 +328,9 @@ console.log('--- TEST 14 (T5A): textos de la barra y de los puntos — tituloPas
   assert.equal(F.tituloPaso({ clave: 'E', label: 'Aduana', estado: 'actual', sublabel: 'llega 3 nov', avisos: [{ texto: 'Atrasada 2 días', tono: 'rojo' }] }),
     'Aduana: llega 3 nov · Atrasada 2 días');
   assert.equal(F.tituloPaso({ clave: 'E', label: 'Aduana', estado: 'actual', avisos: [{ texto: 'A tiempo', tono: 'gris' }, null] }), 'Aduana: A tiempo');
+  // r1 (M16): un aviso en blanco no se suma.
+  assert.equal(F.tituloPaso({ clave: 'E', label: 'Aduana', estado: 'actual', avisos: [{ texto: '  ', tono: 'gris' }] }), 'Aduana');
+  assert.equal(F.tituloPunto({ clave: 'E', label: 'Aduana', estado: 'actual', avisos: [{ texto: '  ', tono: 'rojo' }] }, 0, 1), 'Etapa 1 de 1: Aduana, en curso');
   // Lo que oye un lector de pantalla del círculo de la barra (el ✓ y la X no se leen).
   assert.deepEqual(['hecho', 'actual', 'pendiente', 'cancelado', 'neutro', 'raro'].map((e) => F.textoEstadoPaso(e)),
     ['Paso hecho', 'Paso en curso', 'Paso pendiente', 'Paso cancelado', '', '']);
@@ -423,14 +436,169 @@ console.log('--- TEST 15 (T5A): useResumenFlujo — aplicarLlegadaResumen y esta
   assert.equal(r.datos, D1);
   assert.ok(r.error instanceof Error);
   assert.deepEqual(F.aplicarLlegadaResumen(null, { marca: 'k', ok: true, respuesta: { data: D1 }, contexto: { ruta: RUTA } }),
-    { clave: 'k', ruta: RUTA, datos: D1, error: null });
+    { clave: 'k', ruta: RUTA, usuario: null, repeticion: 0, datos: D1, error: null });
   // Sin contexto la ruta es null, y estadoResumen la compara igual.
   const sinRuta = F.aplicarLlegadaResumen(null, { marca: 'k', ok: true, respuesta: { data: D1 } });
   assert.equal(sinRuta.ruta, null);
   assert.deepEqual(F.estadoResumen(sinRuta, { clave: 'k', ruta: RUTA }), { datos: null, cargando: true, error: null });
 }
 
-console.log('--- TEST 16 (T5A; R4, C2, C13, RP33, RP67, D21, D38): el fuente de components/flujo (sin DOM en node) ---');
+console.log('--- TEST 17 (T5A r1; M1, M5, M8, M11 y ruling): con error, «—» en toda la franja; Reintentando…; atraso corto ---');
+{
+  // estadoNumeroFranja: el estado de cada Contador de la franja. Sin error es estadoDeConteo de lib/tabla.js (la misma
+  // regla de carga que BarraTabla).
+  for (const [n, e] of [[null, undefined], [3, undefined], [3, 'actualizando'], [null, 'actualizando'], [0, 'listo'], [7, 'cargando'], [null, 'cargando']]) {
+    assert.equal(F.estadoNumeroFranja(n, /** @type {any} */ (e)), estadoDeConteo(n, e), `${n}/${e}`);
+  }
+  assert.equal(F.estadoNumeroFranja(null), 'cargando', 'RP33: sin estado, un null es la barra gris');
+  assert.equal(F.estadoNumeroFranja(5, 'cargando'), 'actualizando');
+  // Ruling (M1): con error, «—» aunque quede un número (el último bueno).
+  assert.equal(F.estadoNumeroFranja(5, 'error'), 'error');
+  assert.equal(F.estadoNumeroFranja(0, 'error'), 'error');
+  assert.equal(F.estadoNumeroFranja(null, 'error'), 'error');
+  // M8: sin atenuar (el segmento activo del semáforo): al recargar el número se ve pleno; sin número, la barra gris.
+  assert.equal(F.estadoNumeroFranja(5, 'cargando', { atenuar: false }), 'listo');
+  assert.equal(F.estadoNumeroFranja(5, 'actualizando', { atenuar: false }), 'listo');
+  assert.equal(F.estadoNumeroFranja(null, 'cargando', { atenuar: false }), 'cargando');
+  assert.equal(F.estadoNumeroFranja(5, 'error', { atenuar: false }), 'error');
+
+  // chipAtraso: el largo ('3 con atraso') y el corto ('3', para la pastilla; M11). Con error no se pinta (ruling).
+  assert.deepEqual(F.chipAtraso(3), { largo: '3 con atraso', corto: '3' });
+  assert.deepEqual(F.chipAtraso(1), { largo: '1 con atraso', corto: '1' });
+  assert.deepEqual(F.chipAtraso(1234), { largo: '1.234 con atraso', corto: '1.234' });
+  for (const nada of [0, null, undefined, -1, NaN]) assert.equal(F.chipAtraso(/** @type {any} */ (nada)), null, String(nada));
+  // El largo es siempre textoAtraso (T3B): el chip no tiene otra regla.
+  for (const n of [0, 1, 2, 1500, -3, null, '4']) assert.equal(F.chipAtraso(/** @type {any} */ (n))?.largo ?? '', textoAtraso(n), String(n));
+  assert.equal(F.chipAtraso(3, { estadoConteos: 'error' }), null, 'con error, sin chip de atraso');
+  assert.deepEqual(F.chipAtraso(3, { estadoConteos: 'cargando' }), { largo: '3 con atraso', corto: '3' }, 'al recargar sigue');
+
+  // estadoDeFranja: la línea de error sigue mientras se reintenta (M5) y los números quedan en «—» hasta que sale bien.
+  const NADA = { conError: false, reintentando: false, cargandoNumeros: false, estadoConteos: 'listo' };
+  const falla = new Error('x');
+  assert.deepEqual(F.estadoDeFranja(), NADA);
+  assert.deepEqual(F.estadoDeFranja({ cargando: true }), { ...NADA, cargandoNumeros: true, estadoConteos: 'cargando' }, 'primera carga');
+  assert.deepEqual(F.estadoDeFranja({ error: falla }), { ...NADA, conError: true, estadoConteos: 'error' });
+  // Reintentar: useResumenFlujo ya no trae el error mientras carga; la franja lo recuerda (huboError).
+  assert.deepEqual(F.estadoDeFranja({ cargando: true, huboError: true }), { conError: true, reintentando: true, cargandoNumeros: false, estadoConteos: 'error' });
+  assert.deepEqual(F.estadoDeFranja({ cargando: true, error: falla }), { conError: true, reintentando: true, cargandoNumeros: false, estadoConteos: 'error' });
+  // Sale bien: vuelven los números. Una recarga sin error previo no es un reintento.
+  assert.deepEqual(F.estadoDeFranja({ huboError: true }), NADA);
+  assert.deepEqual(F.estadoDeFranja({ cargando: true, huboError: false }), { ...NADA, cargandoNumeros: true, estadoConteos: 'cargando' });
+
+  // La franja entera con error y datos viejos: cajas, botones y semáforo en «—»; sin chips de atraso.
+  const f = F.estadoDeFranja({ cargando: true, huboError: true });
+  const caja = pasosConConteos(FRANJA, { SC: { total: 4, atrasados: 2 } })[0];
+  assert.equal(F.estadoNumeroFranja(caja.total, f.estadoConteos), 'error');
+  assert.equal(F.chipAtraso(caja.atrasados, { estadoConteos: f.estadoConteos }), null);
+  for (const o of F.opcionesSemaforo({ atrasados: 3, noResueltos: 8, filtro: 'atrasados' }).filter((x) => x.conConteo)) {
+    assert.equal(F.estadoNumeroFranja(o.conteo, f.estadoConteos, { atenuar: !o.activo }), 'error', o.filtro);
+  }
+  assert.deepEqual(F.semaforoDeFranja({ atrasados: 3, cargando: f.cargandoNumeros, error: f.conError }), { tono: 'gris', texto: '—' });
+  // Ya sin error: los números, el chip y el semáforo vuelven.
+  const bien = F.estadoDeFranja({ huboError: true });
+  assert.equal(F.estadoNumeroFranja(caja.total, bien.estadoConteos), 'listo');
+  assert.deepEqual(F.chipAtraso(caja.atrasados, { estadoConteos: bien.estadoConteos }), { largo: '2 con atraso', corto: '2' });
+  assert.deepEqual(F.semaforoDeFranja({ atrasados: 3, cargando: bien.cargandoNumeros, error: bien.conError }), { tono: 'rojo', texto: '3 con atraso' });
+}
+
+console.log('--- TEST 18 (T5A r1; M3, M9): conectorHecho y hayEnlaces ---');
+{
+  const p = (...estados) => estados.map((estado, i) => ({ clave: String(i), label: String(i), estado }));
+  // Emerald solo de un paso hecho hacia uno hecho o actual; nunca hacia cancelado, pendiente o neutro.
+  assert.equal(F.conectorHecho(p('hecho', 'hecho'), 0), true);
+  assert.equal(F.conectorHecho(p('hecho', 'actual'), 0), true);
+  for (const siguiente of ['cancelado', 'pendiente', 'neutro']) assert.equal(F.conectorHecho(p('hecho', siguiente), 0), false, siguiente);
+  for (const desde of ['actual', 'pendiente', 'cancelado', 'neutro']) assert.equal(F.conectorHecho(p(desde, 'hecho'), 0), false, desde);
+  assert.deepEqual([0, 1, 2, 3].map((i) => F.conectorHecho(pasosConProgreso(CINCO, 2), i)), [true, true, false, false]);
+  assert.deepEqual([0, 1, 2, 3].map((i) => F.conectorHecho(pasosConProgreso(CINCO, 2, { canceladoEn: 1 }), i)), [false, false, false, false]);
+  for (const i of [1, 5, -1, 0.5]) assert.equal(F.conectorHecho(p('hecho', 'hecho'), i), false, `índice ${i}`);
+  for (const nada of [null, undefined, 'x', [null, null]]) assert.equal(F.conectorHecho(/** @type {any} */ (nada), 0), false);
+  // El landmark navigation solo si algún paso es un enlace (M9).
+  assert.equal(F.hayEnlaces([{ clave: 'a', href: '/x' }, { clave: 'b' }]), true);
+  for (const sin of [[{ clave: 'a' }], [{ clave: 'a', href: '' }], [], null, undefined, [null]]) {
+    assert.equal(F.hayEnlaces(/** @type {any} */ (sin)), false, JSON.stringify(sin));
+  }
+}
+
+console.log('--- TEST 19 (T5A r1; M12, M13): el usuario del token y las vueltas en useResumenFlujo (sim-usuario, S8 y S9) ---');
+{
+  const RUTA = '/ventas/flujo';
+  const DA = { semaforo: { atrasados: 3, no_resueltos: 9 } };
+  const DB = { semaforo: { atrasados: 1, no_resueltos: 2 } };
+  const { llamadas, pedir } = aMano();
+  let resultado = null;
+  const carga = crearCargaListado({ pedir, alLlegar: (l) => { resultado = F.aplicarLlegadaResumen(resultado, l); } });
+  // La clave del hook: `${version}|${usuario ?? ''}|${recarga}|${ruta}`; la repetición es la de la carga.
+  const clave = (usuario, recarga = 0, ruta = RUTA, version = 0) => `${version}|${usuario ?? ''}|${recarga}|${ruta}`;
+  const pedirA = (usuario, recarga = 0, ruta = RUTA) => carga.cargar(ruta, clave(usuario, recarga, ruta), { ruta, usuario });
+  const ver = (usuario, recarga = 0, ruta = RUTA) => F.estadoResumen(resultado, {
+    clave: clave(usuario, recarga, ruta), ruta, usuario, repeticion: carga.repeticion(),
+  });
+
+  // M12: A carga sus números; la otra pestaña entra con B: nada de A se muestra, ni mientras carga ni con un error.
+  pedirA(7);
+  await tic();
+  llamadas[0].resolver({ data: DA });
+  await tic();
+  assert.deepEqual(ver(7), { datos: DA, cargando: false, error: null });
+  assert.deepEqual(ver(8), { datos: null, cargando: true, error: null }, 'otro usuario: cargando sin datos');
+  pedirA(8);
+  await tic();
+  const prohibido = Object.assign(new Error('No tienes permiso'), { status: 403 });
+  llamadas[1].rechazar(prohibido);
+  await tic();
+  assert.deepEqual(ver(8), { datos: null, cargando: false, error: prohibido }, 'B recibe 403: el error sin los datos de A');
+  assert.equal(resultado.usuario, 8);
+  // Y si B carga bien después, son los suyos.
+  pedirA(8, 1);
+  await tic();
+  llamadas[2].resolver({ data: DB });
+  await tic();
+  assert.deepEqual(ver(8, 1), { datos: DB, cargando: false, error: null });
+  // aplicarLlegadaResumen tampoco trae los datos de otro usuario a un error.
+  const deA = F.aplicarLlegadaResumen(null, { marca: 'k', ok: true, respuesta: { data: DA }, contexto: { ruta: RUTA, usuario: 7 } });
+  assert.equal(F.aplicarLlegadaResumen(deA, { marca: 'k2', ok: false, error: prohibido, contexto: { ruta: RUTA, usuario: 8 } }).datos, null);
+  assert.equal(F.aplicarLlegadaResumen(deA, { marca: 'k2', ok: false, error: prohibido, contexto: { ruta: RUTA, usuario: 7 } }).datos, DA);
+
+  // M13, S8: ruta B → A → B sin que llegue A. Volver a la clave que ya llegó es una vuelta: cargando hasta que llegue.
+  const RB = '/compras/flujo';
+  pedirA(8, 0, RB);
+  await tic();
+  llamadas[3].resolver({ data: DB });
+  await tic();
+  assert.deepEqual(ver(8, 0, RB), { datos: DB, cargando: false, error: null });
+  pedirA(8, 0, RUTA);
+  await tic();
+  pedirA(8, 0, RB);
+  await tic();
+  assert.deepEqual(ver(8, 0, RB), { datos: DB, cargando: true, error: null }, 'S8: datos de B, cargando');
+  llamadas[5].resolver({ data: DA });
+  await tic();
+  assert.deepEqual(ver(8, 0, RB), { datos: DA, cargando: false, error: null }, 'S8: llega la vuelta');
+  assert.equal(resultado.repeticion, carga.repeticion());
+
+  // M13, S9: recarga 5 → 6 → 5.
+  pedirA(8, 5);
+  await tic();
+  llamadas[6].resolver({ data: DA });
+  await tic();
+  pedirA(8, 6);
+  await tic();
+  pedirA(8, 5);
+  await tic();
+  assert.deepEqual(ver(8, 5), { datos: DA, cargando: true, error: null }, 'S9: datos de 5, cargando');
+  assert.equal(llamadas[7].signal.aborted, true, 'la de 6 se abortó');
+  llamadas[8].resolver({ data: DB });
+  await tic();
+  assert.deepEqual(ver(8, 5), { datos: DB, cargando: false, error: null }, 'S9: llega la vuelta');
+  // estadoResumen sin usuario ni repetición es el de antes (usuario null, repetición 0).
+  const viejo = F.aplicarLlegadaResumen(null, { marca: 'k', ok: true, respuesta: { data: DA }, contexto: { ruta: RUTA } });
+  assert.deepEqual(F.estadoResumen(viejo, { clave: 'k', ruta: RUTA }), { datos: DA, cargando: false, error: null });
+  assert.deepEqual(F.estadoResumen(viejo, { clave: 'k', ruta: RUTA, usuario: 7 }), { datos: null, cargando: true, error: null });
+  assert.deepEqual(F.estadoResumen(viejo, { clave: 'k', ruta: RUTA, repeticion: 1 }), { datos: DA, cargando: true, error: null });
+}
+
+console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuente de components/flujo (sin DOM en node) ---');
 {
   const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   // Sin comentarios (/* … */, {/* … */} y las líneas //): lo que se busca es el código, no lo que dicen los comentarios.
@@ -446,6 +614,8 @@ console.log('--- TEST 16 (T5A; R4, C2, C13, RP33, RP67, D21, D38): el fuente de 
     assert.ok(!/localStorage|sessionStorage|window\./.test(c), `${nombre}: no toca el almacenamiento ni window (R4: eso es de preferencias.js)`);
     assert.ok(!/\p{Extended_Pictographic}/u.test(c), `${nombre}: sin emojis`);
     assert.ok(!/['"`>]—['"`<]/.test(c), `${nombre}: el «—» solo lo pinta Contador (D21)`);
+    // r1 (C1, M10): el foco es un outline (sobrevive a forced-colors); nunca outline-none.
+    assert.ok(!/outline-none/.test(c), `${nombre}: sin outline-none`);
   }
   for (const n of ['PasosFlujo', 'BannerFlujo', 'CadenaDocumentos', 'useResumenFlujo']) {
     assert.match(codigo(fuentes[`${n}${n.startsWith('use') ? '.ts' : '.tsx'}`]), new RegExp(`export function ${n}\\b`), `${n}: exporta`);
@@ -461,16 +631,21 @@ console.log('--- TEST 16 (T5A; R4, C2, C13, RP33, RP67, D21, D38): el fuente de 
   assert.match(tipos, /export type VarianteFlujo = 'banner' \| 'barra' \| 'mini';/);
   assert.match(tipos, /export type OrientacionFlujo = 'horizontal' \| 'vertical';/);
   assert.match(tipos, /export type PartesFranja = 'todo';/, "R1: la rama 'semaforo' | 'diagrama' no se implementa");
+  // r1 (M15b): cuando un conteo no viene se pasa undefined, no null (null es «todavía carga»).
+  assert.ok(fuentes['tipos.ts'].includes('se pasa `undefined`, no `null`'), 'tipos.ts documenta undefined frente a null');
+  assert.ok(fuentes['BannerFlujo.tsx'].includes('se pasa `undefined`, no `null`'), 'el uso para T7 y T14 también');
 
   // PasosFlujo.
   const pasos = codigo(fuentes['PasosFlujo.tsx']);
   assert.match(pasos, /import \{ Contador \} from '@\/components\/ui\/Contador';/);
-  assert.match(pasos, /import \{ estadoDeConteo \} from '@\/lib\/tabla';/, 'el estado de cada número es el de BarraTabla (C13)');
-  for (const n of ['indicePasoActual', 'textoAntiguedad', 'textoAtraso', 'textoDetalle', 'textoEstadoPaso', 'tituloPaso', 'tituloPunto']) {
+  assert.ok(!/estadoDeConteo|from '@\/lib\/tabla'/.test(pasos), 'el estado de cada número es estadoNumeroFranja (lib/flujo.js)');
+  for (const n of ['indicePasoActual', 'textoAntiguedad', 'chipAtraso', 'textoDetalle', 'textoEstadoPaso', 'tituloPaso', 'tituloPunto',
+    'estadoNumeroFranja', 'conectorHecho', 'hayEnlaces']) {
     assert.match(pasos, new RegExp(`\\b${n}\\(`), `PasosFlujo usa ${n}`);
   }
-  // RP33 y D21: con el total en null, la barra gris de Contador (no un «—» con animate-pulse).
-  assert.match(pasos, /<Contador\s+valor=\{paso\.total\}\s+estado=\{estadoDeConteo\(paso\.total, estadoConteos\)\}/);
+  // RP33, D21 y el ruling de r1 (M1): la barra gris de Contador mientras carga y «—» con error, aunque haya número.
+  assert.match(pasos, /<Contador\s+valor=\{paso\.total\}\s+estado=\{estadoNumeroFranja\(paso\.total, estadoConteos\)\}/);
+  assert.match(pasos, /const chip = chipAtraso\(paso\.atrasados, \{ estadoConteos \}\);/, 'con error, sin chip de atraso');
   assert.ok(!pasos.includes('animate-pulse'), 'RP33: el pulso es solo el de Contador');
   // Los íconos de ClaveIcono (lucide-react 1.31 los exporta todos; sin reemplazos).
   const ICONOS = {
@@ -482,22 +657,41 @@ console.log('--- TEST 16 (T5A; R4, C2, C13, RP33, RP67, D21, D38): el fuente de 
   for (const tono of ['indigo', 'amber', 'emerald', 'teal', 'purple']) {
     assert.match(pasos, new RegExp(`${tono}: 'bg-${tono}-50 text-${tono}-600',`), `TONO_PASO.${tono}`);
   }
-  // Los avisos: ámbar, rojo y gris (slate, D36).
+  // Los avisos: ámbar, rojo y gris (slate, D36); r1 (C3): cada chip en una línea, recortado y con su title.
   assert.match(pasos, /ambar: 'border-amber-200 bg-amber-50 text-amber-800',/);
   assert.match(pasos, /rojo: 'border-rose-200 bg-rose-50 text-rose-700',/);
   assert.match(pasos, /gris: 'border-slate-200 bg-slate-100 text-slate-600',/);
-  // La estructura: <nav aria-label> con un <ol class="@container/flujo"> que se desplaza por dentro, y flechas aria-hidden.
-  assert.match(pasos, /<nav aria-label=\{etiqueta\}/);
-  assert.match(pasos, /const lista = `@container\/flujo flex min-w-0 gap-1 overflow-x-auto overscroll-x-contain snap-x/);
-  assert.match(pasos, /<ol className=\{lista\}>/);
-  assert.match(pasos, /<ol className=\{`@container\/flujo flex w-full/, 'la barra también responde a su ancho');
-  assert.equal((pasos.match(/<svg aria-hidden="true"/g) ?? []).length, 2, 'la flecha horizontal y la vertical');
+  assert.match(pasos, /const CHIP = 'inline-block min-w-0 max-w-full truncate whitespace-nowrap rounded-full border align-middle font-semibold';/);
+  assert.equal((pasos.match(/title=\{texto\}/g) ?? []).length, 2, 'el chip y el chip-botón llevan el texto completo en su title');
+  assert.match(pasos, /<span className=\{`w-full min-w-0 flex-wrap gap-1 \$\{display\}`\}>/, 'los chips no salen de la caja');
+  // r1 (C1, M10): el foco es un outline, distinto del anillo de la selección.
+  // El color va también en reposo: transition-colors anima outline-color, y sin él el outline aparecería negro y se
+  // iría volviendo índigo.
+  const FOCO_R1 = "const FOCO = 'outline-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';";
+  assert.ok(pasos.includes(FOCO_R1), 'PasosFlujo: FOCO');
+  assert.ok(codigo(fuentes['BannerFlujo.tsx']).includes(FOCO_R1), 'BannerFlujo: el mismo FOCO');
+  // r1 (M9 y M6): <nav> solo si hay enlaces; si no, un <ol aria-label>. El contenedor lleva w-full.
+  assert.match(pasos, /if \(conNav\) \{\s*return \(\s*<nav aria-label=\{etiqueta\} className="w-full min-w-0">\s*<ol className=\{clases\}>\{children\}<\/ol>/);
+  assert.match(pasos, /<div className="w-full min-w-0">\s*<ol aria-label=\{etiqueta\} className=\{clases\}>\{children\}<\/ol>/);
+  assert.equal((pasos.match(/conNav=\{hayEnlaces\(pasos\)\}/g) ?? []).length, 2, 'la franja y la barra');
+  // La franja: ol con relleno (C1: el anillo y el outline no se recortan), compensado con -mx-1, y scroll por dentro.
+  // r1 (M11): el snap solo con puntero táctil; con teclado, el snap devolvía la pastilla enfocada a medias (375 px).
+  assert.match(pasos, /const lista = `@container\/flujo -mx-1 flex min-w-0 gap-1 overflow-x-auto overscroll-x-contain pointer-coarse:snap-x scroll-px-1 p-1 /);
+  assert.ok(!/(?<![:\w-])snap-x/.test(pasos), 'sin snap-x para todos los punteros');
+  assert.match(pasos, /const clases = `@container\/flujo flex w-full min-w-0 p-1 /, 'la barra: relleno y su propio ancho');
+  assert.equal((pasos.match(/<svg\s+aria-hidden="true"/g) ?? []).length, 2, 'la flecha horizontal y la vertical');
   assert.match(pasos, /<path d="M2 12l4 4 4-4" \/>/, 'en vertical la punta va hacia abajo');
+  // r1 (C3): la caja se estira al alto de la fila y la flecha queda centrada en ella (en la pastilla, a su altura).
+  assert.ok(pasos.includes('@2xl/flujo:w-full @2xl/flujo:flex-1 @2xl/flujo:min-w-[7rem]'), 'la caja: flex-1 en su columna');
+  assert.match(pasos, /self-start mt-\[9px\] @2xl\/flujo:mt-0 @2xl\/flujo:self-center/);
   // Link si trae href; button aria-pressed si hay onSeleccionar y no es esEste; div en los demás.
-  assert.match(pasos, /if \(paso\.href\) \{\s*return \(\s*<Link href=\{paso\.href\} aria-current=\{actual\}/);
+  assert.match(pasos, /if \(paso\.href\) \{\s*return \(\s*<Link href=\{paso\.href\} aria-current=\{actual\} onFocus=\{alEnfocar\}/);
   assert.match(pasos, /if \(onSeleccionar && !paso\.esEste\) \{\s*return \(\s*<button\s+type="button"\s+aria-pressed=\{Boolean\(paso\.seleccionado\)\}/);
-  assert.match(pasos, /<div aria-current=\{actual\} title=\{title\} className=\{className\}>/);
+  assert.match(pasos, /<div aria-current=\{actual\} className=\{className\}>/);
   assert.match(pasos, /onClick=\{\(\) => onSeleccionar\(paso\.clave\)\}/);
+  // r1 (M11): al recibir el foco, el paso se desplaza para verse entero.
+  assert.match(pasos, /const alEnfocar = \(e: FocusEvent<HTMLElement>\) => e\.currentTarget\.scrollIntoView\(\{ inline: 'nearest', block: 'nearest' \}\);/);
+  assert.equal((pasos.match(/onFocus=\{alEnfocar\}/g) ?? []).length, 2, 'el enlace y el botón');
   // aria-current: 'page' en la franja, 'step' en la barra y en los puntos.
   assert.match(pasos, /actual=\{i === marcado \? 'page' : undefined\}/);
   assert.match(pasos, /actual=\{i === marcado \? 'step' : undefined\}/);
@@ -505,25 +699,47 @@ console.log('--- TEST 16 (T5A; R4, C2, C13, RP33, RP67, D21, D38): el fuente de 
   // La franja: caja (rounded-xl, min-w-[7rem], número text-xl font-black) desde @2xl y pastilla por debajo.
   for (const clase of ['@2xl/flujo:min-w-[7rem]', '@2xl/flujo:rounded-xl', '@2xl/flujo:flex-col', 'rounded-full', 'whitespace-nowrap',
     '@2xl/flujo:text-xl', 'font-black', 'text-xs font-bold', 'ring-2 ring-indigo-500', 'border-indigo-300 bg-indigo-50/60',
-    '@2xl/flujo:border-l-rose-400', 'bg-rose-50', 'text-rose-700', "const SOLO_CAJA = 'hidden @2xl/flujo:block';"]) {
+    '@2xl/flujo:border-l-rose-400', 'bg-rose-50', 'text-rose-700', "const SOLO_CAJA = 'hidden @2xl/flujo:block';",
+    // r1 (M8): el sufijo, el detalle y la antigüedad en slate-600 (4,5:1 también sobre indigo-50).
+    'hidden text-xs text-slate-600 @2xl/flujo:inline', '${SOLO_CAJA} text-[11px] text-slate-600']) {
     assert.ok(pasos.includes(clase), `PasosFlujo: ${clase}`);
   }
+  assert.ok(!/text-slate-500 @2xl\/flujo:inline|SOLO_CAJA\} text-\[11px\] text-slate-500/.test(pasos), 'M8: nada de slate-500 en la caja');
+  // r1 (M11): el atraso corto en la pastilla («3», con el largo en el title y para el lector).
+  assert.match(pasos, /title=\{chip\.largo\}/);
+  assert.match(pasos, /<span aria-hidden="true">\{chip\.corto\}<\/span>\s*<span className="sr-only">\{chip\.largo\}<\/span>/, 'compacto: siempre corto');
+  assert.match(pasos, /<span aria-hidden="true" className="@2xl\/flujo:hidden">\{chip\.corto\}<\/span>\s*<span className="sr-only @2xl\/flujo:not-sr-only">\{chip\.largo\}<\/span>/);
   assert.match(pasos, /const detalle = paso\.esEste \? textoDetalle\(paso\.detalle\) : '';/, 'el detalle solo en el esEste');
   assert.match(pasos, /const antiguedad = mostrarAntiguedad \? textoAntiguedad\(paso\.masAntiguoDias\) : '';/);
   assert.match(pasos, /const ayuda = mostrarAyuda && paso\.ayuda \? paso\.ayuda : '';/);
   assert.match(pasos, /variante = 'barra'/, "por defecto 'barra'");
   assert.match(pasos, /mostrarAntiguedad = false/, 'flujo_contenido_caja: sin antigüedad por defecto');
   assert.equal((pasos.match(/>\s*Estás aquí\s*</g) ?? []).length, 2, "'Estás aquí' en la franja y en la barra");
-  // La barra: 28 px (22 px compacta), ✓ y X de lucide, label 11 px y sublabel 10 px recortado, con title.
+  // La barra: 28 px (22 px compacta), ✓ y X de lucide, label 11 px y sublabel 10 px recortado.
   for (const clase of ["'h-[22px] w-[22px] text-[10px]'", "'h-7 w-7 text-xs'", 'border-emerald-500 bg-emerald-500 text-white',
-    'border-indigo-600 bg-indigo-600 text-white ring-4 ring-indigo-100', 'border-slate-300 bg-white text-slate-400',
-    'border-rose-500 bg-rose-500 text-white', 'border-slate-200 bg-slate-100 text-slate-400', 'text-[11px] font-bold',
-    'truncate text-[10px] text-slate-500', 'sr-only @md/flujo:not-sr-only', 'h-0.5 min-w-3 flex-1']) {
+    'border-indigo-600 bg-indigo-600 text-white ring-4 ring-indigo-100', 'border-rose-500 bg-rose-500 text-white',
+    'text-[11px] font-bold', 'truncate text-[10px] text-slate-500', 'sr-only @md/flujo:not-sr-only', 'h-0.5 min-w-3 flex-1']) {
     assert.ok(pasos.includes(clase), `barra: ${clase}`);
   }
+  // r1 (M8): en la tabla CIRCULO, el número del pendiente en slate-500 (4,76:1 sobre blanco) y el del neutro, sobre
+  // slate-100, en slate-600 (slate-500 da 4,35:1 ahí). Se mira la tabla: los avisos grises usan las mismas clases.
+  const circulo = pasos.split('const CIRCULO')[1].split('};')[0];
+  assert.match(circulo, /pendiente: 'border-slate-300 bg-white text-slate-500',/);
+  assert.match(circulo, /neutro: 'border-slate-200 bg-slate-100 text-slate-600',/);
+  assert.ok(!/text-slate-400'/.test(circulo), 'M8: ningún círculo en slate-400');
   assert.match(pasos, /estado === 'hecho' \? <Check size=\{icono\} strokeWidth=\{3\} \/> : estado === 'cancelado' \? <X size=\{icono\} strokeWidth=\{3\} \/> : i \+ 1/);
-  assert.match(pasos, /title=\{tituloPaso\(paso\)\}/);
-  assert.match(pasos, /\$\{estado === 'hecho' \? 'bg-emerald-500' : 'bg-slate-200'\}/, 'el conector es emerald después de un paso hecho');
+  // r1 (C2): sin tope fijo; los li se reparten el ancho por su contenido y el último también puede achicarse.
+  assert.ok(!pasos.includes('max-w-[9rem]'), 'C2: sin el tope de 144 px');
+  assert.match(pasos, /\$\{i < ultimo \? 'flex-auto' : 'flex-initial'\}/);
+  // r1 (M9): el title no repite el nombre del paso: va en el label (el tooltip del paso) y en el sublabel recortado.
+  assert.match(pasos, /<span title=\{tituloPaso\(paso\)\} className=\{`max-w-full truncate text-\[11px\] font-bold/);
+  assert.equal((pasos.match(/title=\{paso\.sublabel\}/g) ?? []).length, 2, 'el sublabel recortado lleva su tooltip');
+  assert.ok(!/title=\{title\}|title\?: string/.test(pasos), 'el elemento del paso ya no lleva title');
+  // r1 (M7): en compacto el sublabel (solo el número) siempre se ve.
+  assert.match(pasos, /\{paso\.sublabel \? \(compacto \? \(\s*<span title=\{paso\.sublabel\} className="block max-w-full truncate text-\[10px\] text-slate-500">/);
+  // r1 (M3): emerald solo de hecho a hecho o actual, en la barra (horizontal y vertical) y en los puntos.
+  assert.equal((pasos.match(/conectorHecho\(pasos, i\) \? 'bg-emerald-500' : 'bg-slate-200'/g) ?? []).length, 3);
+  assert.ok(!/estado === 'hecho' \? 'bg-emerald-500'/.test(pasos), 'sin el conector de r0');
   // Los puntos: 10 px, conectores de 8 px y el title de cada punto.
   assert.match(pasos, /const titulo = tituloPunto\(paso, i, n\);/);
   assert.ok(pasos.includes('h-2.5 w-2.5') && pasos.includes('h-0.5 w-2 shrink-0'), 'mini: 10 px y 8 px');
@@ -533,23 +749,38 @@ console.log('--- TEST 16 (T5A; R4, C2, C13, RP33, RP67, D21, D38): el fuente de 
   const banner = codigo(fuentes['BannerFlujo.tsx']);
   assert.match(banner, /import \{ usePreferencia \} from '@\/components\/ui\/usePreferencia';/, 'D38: el hook de components/ui');
   assert.match(banner, /usePreferencia<boolean>\(`flujo:\$\{idPreferencia\}`, false, \{ validar: esBooleano \}\)/, 'R4: flujo:<id>');
-  assert.ok(!/guardarPreferencia|claveCompacto|preferenciasApp\(|useEffect/.test(banner),
+  assert.ok(!/guardarPreferencia|claveCompacto|preferenciasApp\(/.test(banner),
     'RP33: sin guardarPreferencia(claveCompacto(…)); la lectura después de montar la hace usePreferencia');
-  assert.match(banner, /<section aria-label=\{titulo\} aria-busy=\{cargando\} className="min-w-0 border-b border-slate-200 bg-white px-6 py-3">/);
-  assert.match(banner, /const estadoConteos: EstadoKpi = estadoKpi\(\{ loading: cargando, error \}\);/);
-  assert.match(banner, /const resumen = semaforoDeFranja\(\{ atrasados: semaforo\?\.atrasados \?\? null, cargando, error \}\);/);
+  // r1 (M9): la sección se nombra con su h2 (aria-labelledby), que además recibe el foco al salir bien un reintento.
+  assert.match(banner, /<section aria-labelledby=\{idTitulo\} aria-busy=\{cargando\} className="min-w-0 border-b border-slate-200 bg-white px-6 py-3">/);
+  assert.match(banner, /<h2 id=\{idTitulo\} ref=\{tituloRef\} tabIndex=\{-1\}/);
+  assert.match(banner, /const idTitulo = useId\(\);/);
+  // r1 (M1 y M5): el estado de la franja (lib/flujo.js) y lo que vio en el render anterior.
+  assert.match(banner, /const f = estadoDeFranja\(\{ cargando, error, huboError \}\);\s*if \(f\.conError !== huboError\) setHuboError\(f\.conError\);/);
+  assert.match(banner, /const resumen = semaforoDeFranja\(\{ atrasados: semaforo\?\.atrasados \?\? null, cargando: f\.cargandoNumeros, error: f\.conError \}\);/);
   assert.match(banner, /const opciones = opcionesSemaforo\(semaforo\);/);
   assert.match(banner, /aria-pressed=\{o\.activo\}\s+onClick=\{\(\) => semaforo\.onFiltrar\(alternarFiltroSemaforo\(semaforo\.filtro, o\.filtro\)\)\}/);
-  assert.match(banner, /<Contador valor=\{o\.conteo\} estado=\{estadoDeConteo\(o\.conteo, estadoConteos\)\} \/>/, 'C13: los números del semáforo');
+  // C13, el ruling M1 y M8: «—» con error; sin atenuar en los segmentos (el activo es blanco sobre rose-600).
+  assert.match(banner, /<Contador valor=\{o\.conteo\} estado=\{estadoNumeroFranja\(o\.conteo, f\.estadoConteos, \{ atenuar: false \}\)\} \/>/);
+  assert.ok(!/estadoDeConteo|estadoKpi\(/.test(banner), 'el estado de los números sale de estadoDeFranja y estadoNumeroFranja');
   assert.match(banner, /gris: CircleDashed, rojo: AlertTriangle, verde: CheckCircle2/);
   assert.match(banner, /gris: 'text-slate-400', rojo: 'text-rose-600', verde: 'text-emerald-600'/);
-  assert.match(banner, /<PasosFlujo\s+variante="banner"\s+pasos=\{pasos\}\s+etiqueta="Pasos del flujo"\s+onSeleccionar=\{onSeleccionarPaso\}\s+compacto=\{compacto\}\s+mostrarAntiguedad=\{mostrarAntiguedad\}\s+mostrarAyuda=\{verAyuda\}\s+estadoConteos=\{estadoConteos\}\s+\/>/);
+  assert.match(banner, /<PasosFlujo\s+variante="banner"\s+pasos=\{pasos\}\s+etiqueta="Pasos del flujo"\s+onSeleccionar=\{onSeleccionarPaso\}\s+compacto=\{compacto\}\s+mostrarAntiguedad=\{mostrarAntiguedad\}\s+mostrarAyuda=\{verAyuda\}\s+estadoConteos=\{f\.estadoConteos\}\s+\/>/);
   assert.match(banner, /onClick=\{\(\) => guardarCompacto\(!compacto\)\}/);
   assert.match(banner, /\{compacto \? 'Ver flujo' : 'Ocultar flujo'\}/);
   assert.match(banner, /aria-pressed=\{verAyuda\} onClick=\{\(\) => setVerAyuda\(\(v\) => !v\)\}/, '¿Cómo funciona? no se guarda');
   assert.match(banner, /accionAjustar = null/);
   assert.match(banner, /\{accionAjustar \? \(/);
-  for (const texto of ['¿Cómo funciona?', 'No se pudieron cargar los números del flujo.', 'Reintentar', 'role="alert"', 'role="group"']) {
+  // r1 (M5): la línea de error sigue mientras se reintenta; el botón no se deshabilita (conserva el foco).
+  assert.match(banner, /\{f\.conError \? \(\s*<div role="alert"/);
+  assert.match(banner, /aria-disabled=\{f\.reintentando \|\| undefined\}/);
+  assert.match(banner, /if \(f\.reintentando\) return;\s*focoPendiente\.current = true;\s*onReintentar\(\);/);
+  assert.match(banner, /\{f\.reintentando \? 'Reintentando…' : 'Reintentar'\}/);
+  assert.ok(!/(?<![-\w])disabled=\{/.test(banner), 'aria-disabled, no disabled');
+  assert.match(banner, /useEffect\(\(\) => \{\s*if \(f\.conError \|\| !focoPendiente\.current\) return;\s*focoPendiente\.current = false;\s*const activo = document\.activeElement;\s*if \(!activo \|\| activo === document\.body\) tituloRef\.current\?\.focus\(\);\s*\}, \[f\.conError\]\);/,
+    'al salir bien, el foco no cae al body: va al encabezado');
+  assert.equal((banner.match(/useEffect\(/g) ?? []).length, 1, 'un solo efecto (el del foco)');
+  for (const texto of ['¿Cómo funciona?', 'No se pudieron cargar los números del flujo.', 'Reintentar', 'role="group"']) {
     assert.ok(banner.includes(texto), `BannerFlujo: ${texto}`);
   }
   assert.ok(!/Sin resolver|Pendientes/.test(banner), 'cruce C9: el botón es «No resueltos» (sale de opcionesSemaforo)');
@@ -561,10 +792,16 @@ console.log('--- TEST 16 (T5A; R4, C2, C13, RP33, RP67, D21, D38): el fuente de 
   assert.match(hook, /const pedirResumen = \(url: string, signal: AbortSignal\) => apiFetch\(url, \{ signal \}\);/);
   assert.match(hook, /import \{ crearCargaListado \} from '@\/lib\/tabla';/);
   assert.match(hook, /alLlegar: \(llegada\) => setResultado\(\(previo\) => aplicarLlegadaResumen\(previo, llegada\)\)/);
-  assert.match(hook, /const clave = `\$\{version\}\|\$\{recarga\}\|\$\{ruta\}`;/);
-  assert.match(hook, /useEffect\(\(\) => \{\s*carga\.cargar\(ruta, clave, \{ ruta \}\);\s*return \(\) => carga\.cancelar\(\);\s*\}, \[carga, ruta, clave\]\);/);
+  // r1 (M12): el usuario del token, como useListado (T4C r2); usuarioDeLaSesion sigue sin exportarse en el index de tabla.
+  assert.match(hook, /import \{ usuarioDeLaSesion \} from '@\/components\/tabla\/usuarioDeLaSesion';/);
+  assert.ok(!/usuarioDeLaSesion/.test(leer('components/tabla/index.ts')), 'el index de tabla no lo exporta');
+  assert.match(hook, /const usuario = usuarioDeLaSesion\(\);/);
+  // r1 (M13): las vueltas de la carga.
+  assert.match(hook, /const repeticion = useSyncExternalStore\(carga\.suscribir, carga\.repeticion, carga\.repeticion\);/);
+  assert.match(hook, /const clave = `\$\{version\}\|\$\{usuario \?\? ''\}\|\$\{recarga\}\|\$\{ruta\}`;/);
+  assert.match(hook, /useEffect\(\(\) => \{\s*carga\.cargar\(ruta, clave, \{ ruta, usuario \}\);\s*return \(\) => carga\.cancelar\(\);\s*\}, \[carga, ruta, clave, usuario\]\);/);
   assert.match(hook, /const recargar = useCallback\(\(\) => setVersion\(\(v\) => v \+ 1\), \[\]\);/);
-  assert.match(hook, /const visto = estadoResumen\(resultado, \{ clave, ruta \}\);/);
+  assert.match(hook, /const visto = estadoResumen\(resultado, \{ clave, ruta, usuario, repeticion \}\);/);
   assert.match(hook, /recarga: number = 0/);
 }
 

@@ -17,8 +17,9 @@ import type { DocumentoCadena, TipoCadena } from './tipos';
  *  - Las etiquetas de estado son las únicas de cada documento (RP4): infoEstadoSolicitud, infoEstadoCotizacion
  *    (lib/estados-cotizacion.js, {label, clases}; no el ESTADOS hex de cotizacion-client.tsx) e infoEstadoPedido.
  *  - rutaActual = usePathname().
- *  - compacta (el panel rápido): círculos de 22 px y solo el número de cada documento (sin su estado en palabras).
- * Sin documento no pinta nada.
+ *  - compacta (el panel rápido): círculos de 22 px y solo el número de cada documento; las cajas caídas conservan su
+ *    palabra (Rechazada, Cancelado). Es la opción `compacta` de cadenaVentas (r1, M2), donde vive la regla CAIDO.
+ * Necesita un padre con ancho definido (PasosFlujo, r1 M6). Sin documento no pinta nada.
  */
 
 export type PropsCadenaDocumentos = {
@@ -30,15 +31,11 @@ export type PropsCadenaDocumentos = {
 /** RP4: las tablas únicas de etiquetas (las mismas que cadenaVentas usa por defecto, pasadas a la vista). */
 const ETIQUETAS = { sc: infoEstadoSolicitud, cot: infoEstadoCotizacion, pven: infoEstadoPedido };
 
-/** compacta: ninguna etiqueta de estado (cadenaVentas deja solo el número del documento). */
-const SIN_ESTADO = () => '';
-const SOLO_NUMERO = { sc: SIN_ESTADO, cot: SIN_ESTADO, pven: SIN_ESTADO };
-
 /** La cadena de documentos de Ventas. Ver arriba. */
 export function CadenaDocumentos({ doc, tipo, compacta = false }: PropsCadenaDocumentos) {
   const rutaActual = usePathname();
   const pasos = useMemo(
-    () => cadenaVentas(doc, tipo, { etiquetas: compacta ? SOLO_NUMERO : ETIQUETAS, rutaActual: rutaActual || null }),
+    () => cadenaVentas(doc, tipo, { etiquetas: ETIQUETAS, rutaActual: rutaActual || null, compacta }),
     [doc, tipo, compacta, rutaActual],
   );
   if (!pasos.length) return null;

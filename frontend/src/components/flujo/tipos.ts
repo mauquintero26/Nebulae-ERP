@@ -22,6 +22,11 @@ export type OrientacionFlujo = 'horizontal' | 'vertical';
 /**
  * El semáforo de BannerFlujo (R6): los números de GET /ventas/flujo (o /compras/flujo) y el filtro del estado único de
  * la pantalla. noResueltos: sin la propiedad no se pinta «No resueltos (n)»; con null se pinta cargando.
+ * r1 (M15b): cuando un conteo no viene (el endpoint no lo manda), se pasa `undefined`, no `null`: null es «todavía
+ * carga» y, con la carga ya lista, dejaría la barra gris para siempre. Por eso no se usa `?? null` sobre un campo que el
+ * servidor puede no mandar (Compras no manda no_resueltos); ver el uso para T7 y T14 en BannerFlujo.tsx. Un conteo
+ * negativo cuenta como sin número (r1, M16). Si el filtro vale pero su botón no se pinta (no_resueltos sin
+ * noResueltos), ningún botón queda presionado (M15a).
  */
 export type SemaforoFranja = {
   atrasados: number | null;
@@ -50,7 +55,10 @@ export type PasoDelServidor = {
   por_estado?: Record<string, number> | null;
 };
 
-/** res.data de GET /ventas/flujo (resumen_flujo_ventas) y de GET /compras/flujo («la misma forma»). */
+/**
+ * res.data de GET /ventas/flujo (resumen_flujo_ventas) y de GET /compras/flujo («la misma forma»). Lo que el servidor
+ * no manda queda undefined: al pasarlo a la franja se pasa `undefined`, no `null` (M15b).
+ */
 export type DatosFlujo = {
   pasos?: Record<string, PasoDelServidor | null> | null;
   semaforo?: { atrasados?: number | null; no_resueltos?: number | null } | null;

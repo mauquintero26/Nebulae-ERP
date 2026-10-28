@@ -23,8 +23,11 @@
 import { congelar, tiene } from './estados-pedido.js';
 import { cantidadPositiva } from './hub-ventas.js';
 import { formatoEntero } from './kpis.js';
+import { estadoDeConteo } from './tabla.js';
 
 export { congelar };
+
+/** @typedef {import('./kpis.js').EstadoKpi} EstadoKpi */
 
 /**
  * @typedef {'hecho' | 'actual' | 'pendiente' | 'cancelado' | 'neutro'} EstadoPaso
@@ -230,20 +233,27 @@ export function resumenSemaforo({ atrasados = null, cargando = false, error = nu
 
 // ─── T5A: lo que usan los componentes de components/flujo ───────────────────────
 // PasosFlujo, BannerFlujo, CadenaDocumentos y useResumenFlujo solo pintan: los textos, los estados y la carga salen de
-// aquí (con su caso en test_flujo.mjs). El estado de cada Contador es estadoDeConteo de lib/tabla.js (el mismo de
-// BarraTabla, C13) y el turno de la carga, crearCargaListado de lib/tabla.js.
+// aquí (con su caso en test_flujo.mjs). El estado de cada Contador es estadoNumeroFranja (estadoDeConteo de
+// lib/tabla.js, el mismo de BarraTabla, C13, más el «—» de la franja con error) y el turno de la carga,
+// crearCargaListado de lib/tabla.js.
+
+/** r1 (M16, ruling): un conteo es un número finito y no negativo; lo demás (también un negativo) cuenta como sin número. */
+const conteoONulo = (v) => {
+  const n = numeroONulo(v);
+  return n !== null && n >= 0 ? n : null;
+};
 
 /**
  * El ícono y el texto del semáforo de BannerFlujo (T5A): resumenSemaforo, salvo que al RECARGAR con un número ya
  * visto ese número sigue (no vuelve a 'Cargando…': «al recargar se ven los números anteriores hasta que llegan los
  * nuevos», y la franja no parpadea en cada recarga de la pantalla). Sin número, mientras carga, 'Cargando…'. Con
- * error, gris y '—' aunque quede el último número bueno (RP67).
+ * error, gris y '—' aunque quede el último número bueno (RP67). Un conteo negativo no es un dato: sin número (r1).
  * @param {{atrasados?: number | null, cargando?: boolean, error?: unknown}} [estado]
  * @returns {ResumenSemaforo}
  */
 export function semaforoDeFranja({ atrasados = null, cargando = false, error = null } = {}) {
-  const visto = numeroONulo(atrasados) !== null;
-  return resumenSemaforo({ atrasados, cargando: Boolean(cargando) && !visto, error });
+  const n = conteoONulo(atrasados);
+  return resumenSemaforo({ atrasados: n, cargando: Boolean(cargando) && n === null, error });
 }
 
 /**
@@ -259,8 +269,12 @@ const FILTROS_SEMAFORO = congelar(['atrasados', 'no_resueltos', 'todos']);
  * Los botones del control segmentado del semáforo de BannerFlujo (R6), en orden: 'Con atraso (n)', 'No resueltos (n)'
  * (solo si `noResueltos` llega: undefined es que no llega; null, que llega y todavía carga) y 'Ver todo' (sin número).
  * «No resueltos» es el texto aprobado del botón (cruce C9 de la verificación, ajuste de RP67): «Sin resolver» es solo
- * de los separadores. `activo` refleja semaforo.filtro; uno que no está entre los botones deja activo 'Ver todo'. Un
- * conteo que no es un número queda en null (el Contador pinta la barra gris o '—', nunca un 0). Sin semáforo: [].
+ * de los separadores. `activo` refleja semaforo.filtro:
+ *  - un filtro desconocido (o ninguno) deja activo 'Ver todo';
+ *  - r1 (M15a): un filtro que vale pero cuyo botón no se pinta (no_resueltos sin noResueltos, p. ej. el estado
+ *    restaurado de la sesión) no deja ningún botón activo: 'Ver todo' mentiría, porque la tabla sigue filtrada.
+ * Un conteo que no es un número, o que es negativo (r1, ruling M16), queda en null (el Contador pinta la barra gris o
+ * '—', nunca un 0). Sin semáforo: [].
  * @param {{atrasados?: number | null, noResueltos?: number | null, filtro?: string} | null | undefined} semaforo
  * @returns {OpcionSemaforo[]}
  */
@@ -268,12 +282,12 @@ export function opcionesSemaforo(semaforo) {
   if (!esMapa(semaforo)) return [];
   const s = /** @type {any} */ (semaforo);
   /** @type {Array<Omit<OpcionSemaforo, 'activo'>>} */
-  const opciones = [{ filtro: 'atrasados', texto: 'Con atraso', conConteo: true, conteo: numeroONulo(s.atrasados) }];
+  const opciones = [{ filtro: 'atrasados', texto: 'Con atraso', conConteo: true, conteo: conteoONulo(s.atrasados) }];
   if (s.noResueltos !== undefined) {
-    opciones.push({ filtro: 'no_resueltos', texto: 'No resueltos', conConteo: true, conteo: numeroONulo(s.noResueltos) });
+    opciones.push({ filtro: 'no_resueltos', texto: 'No resueltos', conConteo: true, conteo: conteoONulo(s.noResueltos) });
   }
   opciones.push({ filtro: 'todos', texto: 'Ver todo', conConteo: false, conteo: null });
-  const filtro = opciones.some((o) => o.filtro === s.filtro) ? s.filtro : 'todos';
+  const filtro = FILTROS_SEMAFORO.includes(s.filtro) ? s.filtro : 'todos';
   return opciones.map((o) => ({ ...o, activo: o.filtro === filtro }));
 }
 
@@ -384,31 +398,121 @@ export function indicePasoActual(pasos) {
   return este !== -1 ? este : pasos.findIndex((p) => esMapa(p) && p.estado === 'actual');
 }
 
+/**
+ * Si el conector entre el paso i y el i+1 de la barra (y de los puntos) va en emerald (r1, M3: «en emerald entre pasos
+ * hechos»): solo si el paso i está 'hecho' y el i+1 está 'hecho' o 'actual'; nunca hacia 'cancelado', 'pendiente' o
+ * 'neutro'. Fuera de rango, o sin pasos: false.
+ * @param {ReadonlyArray<PasoVista | null | undefined> | null | undefined} pasos
+ * @param {number} i
+ * @returns {boolean}
+ */
+export function conectorHecho(pasos, i) {
+  if (!Array.isArray(pasos) || !Number.isInteger(i) || i < 0 || i >= pasos.length - 1) return false;
+  const [a, b] = [pasos[i], pasos[i + 1]];
+  return esMapa(a) && esMapa(b) && a.estado === 'hecho' && (b.estado === 'hecho' || b.estado === 'actual');
+}
+
+/**
+ * Si algún paso es un enlace (trae un href no vacío). r1 (M9): solo entonces la lista va dentro de un <nav>; si no,
+ * es un <ol aria-label> (los pasos propios de un documento o una franja de filtros no son un landmark de navegación).
+ * @param {ReadonlyArray<PasoVista | null | undefined> | null | undefined} pasos
+ * @returns {boolean}
+ */
+export function hayEnlaces(pasos) {
+  return Array.isArray(pasos) && pasos.some((p) => esMapa(p) && typeof p.href === 'string' && p.href !== '');
+}
+
+// ─── r1: el estado de los números de la franja (M1, M5, M8 y M11) ───────────────
+
+/**
+ * El estado del Contador de un número de la franja (las cajas y los botones del semáforo):
+ *  - con estadoConteos 'error', 'error' aunque quede un número (el último bueno): con error, «—» en TODA la franja
+ *    (ruling de r1 sobre M1: «Las cajas siguen mostrando '—'», C13);
+ *  - si no, estadoDeConteo de lib/tabla.js (la regla de BarraTabla): sin número, la barra gris; con número, atenuado
+ *    mientras carga ('actualizando');
+ *  - atenuar: false (M8, el segmento activo del semáforo, blanco sobre rose-600): con número, 'listo' también mientras
+ *    carga, para no bajar el contraste de 4,5:1.
+ * @param {unknown} n
+ * @param {EstadoKpi} [estadoConteos]
+ * @param {{atenuar?: boolean}} [opciones]
+ * @returns {EstadoKpi}
+ */
+export function estadoNumeroFranja(n, estadoConteos, { atenuar = true } = {}) {
+  if (estadoConteos === 'error') return 'error';
+  const estado = /** @type {EstadoKpi} */ (estadoDeConteo(n, estadoConteos));
+  return !atenuar && estado === 'actualizando' ? 'listo' : estado;
+}
+
+/**
+ * El chip rosa de atraso de una caja: {largo: '3 con atraso', corto: '3'} (el corto va en la pastilla, M11, con el
+ * largo en su title y para el lector de pantalla), o null si no hay atrasados (textoAtraso) o si la franja está en
+ * error (ruling M1: con error no se pinta).
+ * @param {unknown} atrasados
+ * @param {{estadoConteos?: EstadoKpi}} [opciones]
+ * @returns {{largo: string, corto: string} | null}
+ */
+export function chipAtraso(atrasados, { estadoConteos } = {}) {
+  if (estadoConteos === 'error') return null;
+  const largo = textoAtraso(atrasados);
+  return largo ? { largo, corto: formatoEntero(cantidadPositiva(atrasados)) } : null;
+}
+
+/**
+ * El estado de BannerFlujo a partir de lo que trae useResumenFlujo (r1, M1 y M5):
+ *  - conError: hay un error, o se está reintentando después de uno (`huboError`, lo que la franja vio en el render
+ *    anterior: useResumenFlujo ya no trae el error mientras vuelve a cargar). La línea de error sigue montada y el
+ *    botón dice 'Reintentando…' (reintentando);
+ *  - estadoConteos: 'error' con conError (todos los números en «—» hasta que la carga sale bien), si no 'cargando'
+ *    mientras carga y 'listo';
+ *  - cargandoNumeros: el `cargando` que recibe semaforoDeFranja (mientras se reintenta, el semáforo sigue en «—»).
+ * @param {{cargando?: boolean, error?: unknown, huboError?: boolean}} [estado]
+ * @returns {{conError: boolean, reintentando: boolean, cargandoNumeros: boolean, estadoConteos: EstadoKpi}}
+ */
+export function estadoDeFranja({ cargando = false, error = null, huboError = false } = {}) {
+  const carga = Boolean(cargando);
+  const conError = Boolean(error) || (carga && Boolean(huboError));
+  return {
+    conError,
+    reintentando: conError && carga,
+    cargandoNumeros: carga && !conError,
+    estadoConteos: conError ? 'error' : carga ? 'cargando' : 'listo',
+  };
+}
+
 // ─── la carga del resumen (useResumenFlujo) ─────────────────────────────────────
 
 /**
- * @typedef {{clave: string, ruta: string | null, datos: Record<string, any> | null, error: unknown}} ResultadoResumen
- *   Lo último que llegó a useResumenFlujo: la clave de la consulta que lo pidió, su ruta, los datos buenos (res.data) y
- *   el error de esa llegada.
+ * @typedef {{clave: string, ruta: string | null, usuario: number | null, repeticion: number,
+ *   datos: Record<string, any> | null, error: unknown}} ResultadoResumen
+ *   Lo último que llegó a useResumenFlujo: la clave de la consulta que lo pidió, su ruta, el usuario del token con que
+ *   se pidió (r1, M12), la vuelta de la carga (r1, M13), los datos buenos (res.data) y el error de esa llegada.
  * @typedef {{datos: Record<string, any> | null, cargando: boolean, error: unknown}} EstadoResumen
  */
 
+/** El resultado es de esa ruta y de ese usuario (sin usuario en los dos lados, también). */
+const delMismo = (resultado, ruta, usuario) => Boolean(resultado) && resultado.ruta === ruta
+  && (resultado.usuario ?? null) === (usuario ?? null);
+
 /**
  * Lo que queda del resumen cuando llega la respuesta (o el error) de una carga de useResumenFlujo. La llegada es la de
- * crearCargaListado de lib/tabla.js (el turno: lo de una carga vieja nunca llega aquí), con contexto {ruta}.
+ * crearCargaListado de lib/tabla.js (el turno: lo de una carga vieja nunca llega aquí), con contexto {ruta, usuario}
+ * y su repetición.
  *  - Una respuesta con un objeto en `data` (apiFetch devuelve el cuerpo completo: se lee res.data): esos datos, sin
  *    error.
  *  - Un error, o una respuesta sin un objeto en `data`: el error (un Error si no viene ninguno) y los últimos datos
- *    buenos de la MISMA ruta (un error conserva lo último bueno; los de otra ruta no se muestran).
+ *    buenos de la MISMA ruta y del MISMO usuario (un error conserva lo último bueno; lo de otra ruta o de otra cuenta
+ *    no se muestra, como useListado en T4C r2).
  * No muta lo que recibe.
  * @param {ResultadoResumen | null | undefined} previo
- * @param {{marca: string, ok: boolean, respuesta?: unknown, error?: unknown, contexto?: {ruta?: string | null} | null}} llegada
+ * @param {{marca: string, ok: boolean, respuesta?: unknown, error?: unknown, repeticion?: number,
+ *   contexto?: {ruta?: string | null, usuario?: number | null} | null}} llegada
  * @returns {ResultadoResumen}
  */
 export function aplicarLlegadaResumen(previo, llegada) {
   const ruta = llegada?.contexto?.ruta ?? null;
-  const anteriores = previo && previo.ruta === ruta ? previo.datos : null;
-  const base = { clave: llegada.marca, ruta };
+  const usuario = llegada?.contexto?.usuario ?? null;
+  const anteriores = delMismo(previo, ruta, usuario) ? /** @type {ResultadoResumen} */ (previo).datos : null;
+  const base = { clave: llegada.marca, ruta, usuario, repeticion: llegada.repeticion ?? 0 };
   if (llegada.ok) {
     const datos = /** @type {any} */ (llegada.respuesta)?.data;
     if (esMapa(datos)) return { ...base, datos, error: null };
@@ -419,17 +523,19 @@ export function aplicarLlegadaResumen(previo, llegada) {
 
 /**
  * Lo que devuelve useResumenFlujo para la consulta `clave` de `ruta`, con `resultado` (lo último que llegó):
- *  - un resultado de otra ruta cuenta como ninguno;
- *  - si su clave no es la pedida, hay una carga en camino: `cargando`, con los datos anteriores (al recargar los
- *    números no parpadean) y sin el error anterior (Reintentar ya está cargando);
+ *  - un resultado de otra ruta o de otro usuario (r1, M12) cuenta como ninguno: cargando sin datos y, si falla, el
+ *    error sin datos;
+ *  - si su clave no es la pedida, o la carga dio otra vuelta (`repeticion`, r1, M13: volver a pedir una clave que ya
+ *    llegó, como B → A → B o una recarga 5 → 6 → 5), hay una carga en camino: `cargando`, con los datos anteriores (al
+ *    recargar los números no parpadean) y sin el error anterior (Reintentar ya está cargando);
  *  - en la primera carga, datos null (las cajas pintan la barra gris de Contador, D21);
  *  - ya llegada: sus datos y su error (con error, los últimos datos buenos).
  * @param {ResultadoResumen | null | undefined} resultado
- * @param {{clave: string, ruta: string | null}} consulta
+ * @param {{clave: string, ruta: string | null, usuario?: number | null, repeticion?: number}} consulta
  * @returns {EstadoResumen}
  */
-export function estadoResumen(resultado, { clave, ruta }) {
-  const propio = resultado && resultado.ruta === ruta ? resultado : null;
-  const cargando = !propio || propio.clave !== clave;
-  return { datos: propio?.datos ?? null, cargando, error: cargando ? null : (propio.error ?? null) };
+export function estadoResumen(resultado, { clave, ruta, usuario = null, repeticion = 0 }) {
+  const propio = delMismo(resultado, ruta, usuario) ? /** @type {ResultadoResumen} */ (resultado) : null;
+  const cargando = !propio || propio.clave !== clave || (propio.repeticion ?? 0) !== repeticion;
+  return { datos: propio?.datos ?? null, cargando, error: cargando ? null : (propio?.error ?? null) };
 }
