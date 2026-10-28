@@ -19,6 +19,13 @@
  *    undefined y '' se omiten; los arreglos van en CSV.
  *  - normalizarRespuesta(d): {data, total} (listados.respuesta), un arreglo plano, {data: {items, total_skus}} y
  *    {data: {items, total}} (el Kardex, RP54).
+ *  - T4C (los hooks de components/tabla; R4, R5, C2, C3, RP8, RP26, RP35, D28, D38 y D39):
+ *    · useEstadoTabla: lo de la sesión (CAMPOS_SESION_TABLA, claveSesionTabla, textoSesionTabla y leerSesionTabla), el
+ *      estado armado con sus tres fuentes (armarEstadoTabla), qué escribir tras un cambio (cambiosEstadoTabla) y las
+ *      dependencias del tablero de la misma pantalla (dependenciasTablero).
+ *    · usePreferenciasTabla: parteDeColumnas, la pieza de tabla:<id> que se escribe con escribirParte.
+ *    · useListado: urlListado (con queryListado), crearCargaListado (aborta la anterior y descarta lo viejo),
+ *      aplicarLlegadaListado y estadoListado. useListadoCliente: listadoCliente.
  */
 
 import { normalizarBusqueda } from './busqueda.js';
@@ -38,6 +45,17 @@ import { formatoEntero } from './kpis.js';
  *   AccionTabla
  * @typedef {{filas: any[], total: number, conteos: Record<string, number> | null, resumen: Record<string, any> | null,
  *   crudo: unknown}} RespuestaListado
+ * @typedef {'vista' | 'pagina' | 'q' | 'orden' | 'semaforo' | 'paso'} CampoSesionTabla
+ * @typedef {Partial<Pick<EstadoTabla, CampoSesionTabla>>} SesionTabla
+ * @typedef {{sesion: boolean, estados: boolean, modo: boolean, tamano: boolean}} CambiosEstadoTabla
+ * @typedef {{tipo: 'anchos', anchos: Record<string, number>} | {tipo: 'mover', id: string, hueco: number}
+ *   | {tipo: 'desplazar', id: string, paso: number} | {tipo: 'ocultar', id: string, oculta?: boolean}
+ *   | {tipo: 'restablecer'}} CambioColumnas
+ * @typedef {{version: number, orden?: string[], anchos?: Record<string, number>, ocultas?: string[]}} ParteColumnas
+ * @typedef {{marca: string, ok: true, respuesta: unknown} | {marca: string, ok: false, error: unknown}} LlegadaListado
+ * @typedef {{clave: string, datos: RespuestaListado | null, error: unknown}} ResultadoListado
+ * @typedef {{filas: any[], total: number | null, conteos: Record<string, any> | null, resumen: Record<string, any> | null,
+ *   crudo: unknown, cargandoInicial: boolean, recargando: boolean, error: unknown}} EstadoListado
  */
 
 /** 25 o 50 filas por página (y por columna del tablero). Inmutable. */
@@ -596,4 +614,377 @@ export function posicionMenu(boton, menu, ventana, { margen = 8, separacion = 4 
   const haciaArriba = menu.alto > abajo && (menu.alto <= arriba || arriba > abajo);
   if (!haciaArriba) return { top: boton.bottom + separacion, left, haciaArriba, altoMaximo: abajo };
   return { top: Math.max(margen, boton.top - separacion - menu.alto), left, haciaArriba, altoMaximo: arriba };
+}
+
+// ─── T4C: el estado de la pantalla entre la sesión y las preferencias (useEstadoTabla) ──────────────────────────────
+
+/**
+ * Lo del estado de la pantalla que va en sessionStorage 'tabla-sesion:{id}' (R4, C2): solo el estado de la sesión, para
+ * volver a la misma pestaña, página, búsqueda y orden (y semáforo y paso) al regresar de un documento. El modo
+ * (vista:<id>) y el tamaño (tabla:<id>) son preferencias del usuario (lib/preferencias.js); el filtro de estados no se
+ * guarda. Inmutable.
+ * @type {ReadonlyArray<CampoSesionTabla>}
+ */
+export const CAMPOS_SESION_TABLA = congelar(['vista', 'pagina', 'q', 'orden', 'semaforo', 'paso']);
+
+/**
+ * La clave de sessionStorage del estado de la sesión de una pantalla: 'tabla-sesion:{id}'.
+ * @param {string} id
+ * @returns {string}
+ */
+export function claveSesionTabla(id) {
+  return `tabla-sesion:${id}`;
+}
+
+/**
+ * El texto que se guarda en 'tabla-sesion:{id}': el JSON de CAMPOS_SESION_TABLA (normalizados) y el usuario de la
+ * sesión. sessionStorage sobrevive a cerrar la sesión y entrar con otra cuenta en la misma pestaña (como el borrador
+ * del Chatter, lib/chatter.js): con el usuario, la búsqueda de uno no se le muestra a otro.
+ * @param {Partial<EstadoTabla> | null | undefined} estado
+ * @param {number | null} [usuario] el sub del token (usuarioDelToken de lib/preferencias.js), o null
+ * @returns {string}
+ */
+export function textoSesionTabla(estado, usuario = null) {
+  const e = /** @type {Record<string, unknown>} */ (estadoTablaInicial(estado ?? {}));
+  /** @type {Record<string, unknown>} */
+  const sesion = { usuario: usuario ?? null };
+  for (const campo of CAMPOS_SESION_TABLA) sesion[campo] = e[campo];
+  return JSON.stringify(sesion);
+}
+
+/**
+ * Lo que se restaura de 'tabla-sesion:{id}': solo los CAMPOS_SESION_TABLA que trae el texto, normalizados como en
+ * estadoTablaInicial. Un texto de otro usuario, dañado o que no es un objeto da {} (nada que restaurar); nunca lanza.
+ * @param {unknown} texto
+ * @param {number | null} [usuario]
+ * @returns {SesionTabla}
+ */
+export function leerSesionTabla(texto, usuario = null) {
+  if (typeof texto !== 'string' || !texto) return {};
+  let crudo;
+  try {
+    crudo = JSON.parse(texto);
+  } catch {
+    return {};
+  }
+  if (!objeto(crudo) || (crudo.usuario ?? null) !== (usuario ?? null)) return {};
+  const normalizar = /** @type {Record<string, (v: unknown) => unknown>} */ (NORMALIZAR);
+  /** @type {Record<string, unknown>} */
+  const sesion = {};
+  for (const campo of CAMPOS_SESION_TABLA) if (tiene(crudo, campo)) sesion[campo] = normalizar[campo](crudo[campo]);
+  return /** @type {SesionTabla} */ (sesion);
+}
+
+/**
+ * El estado de la pantalla armado con sus tres fuentes (useEstadoTabla; R4, R5, C2, C3 y RP26): `inicial` (el de la
+ * pantalla), lo de la sesión (leerSesionTabla), el filtro de estados y las dos preferencias del usuario: el modo
+ * (vista:<id>) y el tamaño (tabla:<id>). Un modo o un tamaño que no vale (o undefined, mientras no están listas) da el
+ * de `inicial`; estados undefined da el de `inicial`. Es una restauración: NO vuelve a la página 1. No muta lo que
+ * recibe.
+ * @param {Partial<Record<keyof EstadoTabla, unknown>> | null | undefined} inicial
+ * @param {{sesion?: SesionTabla | null, estados?: unknown, modo?: unknown, tamano?: unknown}} [fuentes]
+ * @returns {EstadoTabla}
+ */
+export function armarEstadoTabla(inicial, { sesion, estados, modo, tamano } = {}) {
+  const base = estadoTablaInicial(inicial ?? {});
+  /** @type {Record<string, unknown>} */
+  const parcial = { ...base };
+  if (objeto(sesion)) {
+    for (const campo of CAMPOS_SESION_TABLA) if (tiene(sesion, campo)) parcial[campo] = /** @type {any} */ (sesion)[campo];
+  }
+  if (estados !== undefined) parcial.estados = estados;
+  if (esModoTabla(modo)) parcial.modo = modo;
+  if (TAMANOS_PAGINA.includes(/** @type {number} */ (tamano))) parcial.tamano = tamano;
+  return estadoTablaInicial(parcial);
+}
+
+/**
+ * Qué hay que escribir después de un cambio del estado (useEstadoTabla): cada campo tiene UN lugar, así que la sesión
+ * (si cambió alguno de CAMPOS_SESION_TABLA), el filtro de estados (estado de React), el modo (vista:<id>) y el tamaño
+ * (la pieza {tamano} de tabla:<id>).
+ * @param {EstadoTabla | null | undefined} actual
+ * @param {EstadoTabla | null | undefined} siguiente
+ * @returns {CambiosEstadoTabla}
+ */
+export function cambiosEstadoTabla(actual, siguiente) {
+  const a = /** @type {any} */ (actual ?? ESTADO_TABLA_INICIAL);
+  const s = /** @type {any} */ (siguiente ?? ESTADO_TABLA_INICIAL);
+  return {
+    sesion: CAMPOS_SESION_TABLA.some((campo) => !iguales(a[campo], s[campo])),
+    estados: !iguales(a.estados, s.estados),
+    modo: a.modo !== s.modo,
+    tamano: a.tamano !== s.tamano,
+  };
+}
+
+/**
+ * Las dependencias del tablero de la misma pantalla (useTableroKanban con pantalla = el id de useEstadoTabla; D39): la
+ * pestaña, el semáforo, el paso, la búsqueda (sin los espacios de los bordes, como queryListado) y el filtro de estados
+ * en CSV. No van la página, el orden de la tabla (cada columna tiene el suyo), el modo (es `activo`) ni el tamaño (es
+ * porColumna). Valores simples, para la firma del tablero.
+ * @param {Partial<EstadoTabla> | null | undefined} estado
+ * @returns {[string | null, string | null, string | null, string, string]}
+ */
+export function dependenciasTablero(estado) {
+  const e = estadoTablaInicial(estado ?? {});
+  return [e.vista, e.semaforo, e.paso, e.q.trim(), e.estados.join(',')];
+}
+
+// ─── T4C: la pieza de las columnas que escribe usePreferenciasTabla ───────────────────────────────────────────────
+
+const PIEZAS_COLUMNAS = /** @type {const} */ (['orden', 'anchos', 'ocultas']);
+/** La pieza está en lo guardado (una que se borró con undefined, en el valor del vínculo, ya no cuenta). */
+const presente = (g, k) => tiene(g, k) && g[k] !== undefined;
+
+/**
+ * La parte de tabla:<id> que escribe usePreferenciasTabla con escribirParte para un cambio del usuario (RP26, D38): SOLO
+ * la pieza que cambió, con la versión, sin un objeto armado con todo el estado de la tabla. null si el cambio no cambia
+ * nada de lo que se ve (no hay que escribir).
+ *  - {tipo: 'anchos', anchos: {id: px}} (al soltar el borde o con 'Ajustar al ancho'): {version, anchos}, con los anchos
+ *    ya guardados de las columnas de hoy más los nuevos (limitarAncho con el mínimo y el máximo de cada columna). Una
+ *    columna que nunca se estiró no se guarda: sigue su ancho por defecto.
+ *  - {tipo: 'mover', id, hueco}: {version, orden}. `hueco` es el de los encabezados VISIBLES (indiceDestino): 0 = antes
+ *    de la primera visible, visibles.length = después de la última. Sin cruzar las fijas (moverColumna).
+ *  - {tipo: 'desplazar', id, paso: -1 | 1} (las flechas de 'Ajustar tabla'): un lugar en el orden completo.
+ *  - {tipo: 'ocultar', id, oculta?}: {version, ocultas} (sin `oculta`, alterna). Una clave no se oculta y nunca quedan
+ *    cero columnas visibles.
+ *  - reconciliarColumnas lee 'ocultas' solo para las columnas del 'orden' guardado (las demás son nuevas y salen con
+ *    ocultaPorDefecto). Por eso, si lo guardado no tiene todas las columnas de hoy en su orden, 'mover' va con las
+ *    ocultas que ve el usuario y 'ocultar' con el orden que ve: si no, el orden solo destaparía una oculta por defecto,
+ *    o la oculta no se leería.
+ *  - {tipo: 'restablecer'}: borra las tres piezas (van como undefined: el JSON de escribirParte las quita) y conserva el
+ *    tamaño de useEstadoTabla. Sin nada que borrar, null.
+ *  - Si lo guardado es de otra versión (reconciliarColumnas no lo lee), las piezas viejas que no cambian se borran
+ *    igual: con la versión de hoy revivirían.
+ * Un cambio desconocido es un error de programación (lanza Error). No muta lo que recibe.
+ * @param {ReadonlyArray<DefinicionColumna>} definicion
+ * @param {unknown} guardado lo de tabla:<id> (con el tamaño y lo que haya)
+ * @param {CambioColumnas} cambio
+ * @returns {ParteColumnas | null}
+ */
+export function parteDeColumnas(definicion, guardado, cambio) {
+  const columnas = (definicion ?? []).filter((c) => c && typeof c.id === 'string' && c.id);
+  const porId = new Map(columnas.map((c) => [c.id, c]));
+  const g = /** @type {any} */ (objeto(guardado) ? guardado : {});
+  const vigente = g.version === VERSION_PREFS;
+  const actual = reconciliarColumnas(columnas, g);
+  const conoceTodas = vigente && Array.isArray(g.orden) && columnas.every((c) => g.orden.includes(c.id));
+  const c = /** @type {any} */ (cambio);
+  const tipo = c?.tipo;
+  /** @type {Record<string, unknown>} */
+  let pieza;
+
+  if (tipo === 'anchos') {
+    const previos = vigente && objeto(g.anchos) ? g.anchos : {};
+    /** @type {Record<string, number>} */
+    const anchos = {};
+    for (const col of columnas) {
+      if (tiene(previos, col.id) && typeof previos[col.id] === 'number') {
+        anchos[col.id] = limitarAncho(previos[col.id], col.anchoMin ?? ANCHO_MIN, col.anchoMax ?? ANCHO_MAX);
+      }
+    }
+    let cambia = false;
+    for (const [id, px] of Object.entries(objeto(c.anchos) ? c.anchos : {})) {
+      const col = porId.get(id);
+      if (!col || typeof px !== 'number' || !Number.isFinite(px)) continue;
+      const nuevo = limitarAncho(px, col.anchoMin ?? ANCHO_MIN, col.anchoMax ?? ANCHO_MAX);
+      anchos[id] = nuevo;
+      if (nuevo !== actual.anchos[id]) cambia = true;
+    }
+    if (!cambia) return null;
+    pieza = { anchos };
+  } else if (tipo === 'mover' || tipo === 'desplazar') {
+    if (!porId.has(c.id)) return null;
+    let destino;
+    if (tipo === 'mover') {
+      const hueco = Math.trunc(Number(c.hueco));
+      if (!Number.isFinite(hueco)) return null;
+      const visibles = actual.orden.filter((id) => !actual.ocultas.includes(id));
+      const h = Math.max(0, Math.min(visibles.length, hueco));
+      destino = h < visibles.length ? actual.orden.indexOf(visibles[h]) : actual.orden.indexOf(visibles[visibles.length - 1]) + 1;
+    } else {
+      const paso = Math.sign(Number(c.paso));
+      if (!paso) return null;
+      const i = actual.orden.indexOf(c.id);
+      destino = paso > 0 ? i + 2 : i - 1;
+    }
+    const orden = moverColumna(actual.orden, c.id, destino, fijasDe(columnas));
+    if (iguales(orden, actual.orden)) return null;
+    pieza = conoceTodas ? { orden } : { orden, ocultas: actual.ocultas };
+  } else if (tipo === 'ocultar') {
+    const col = porId.get(c.id);
+    if (!col || col.clave) return null;
+    const ya = actual.ocultas.includes(col.id);
+    const quiere = c.oculta === undefined ? !ya : c.oculta === true;
+    if (quiere === ya) return null;
+    const nuevas = new Set(quiere ? [...actual.ocultas, col.id] : actual.ocultas.filter((id) => id !== col.id));
+    if (columnas.every((x) => nuevas.has(x.id))) return null;
+    const ocultas = columnas.filter((x) => nuevas.has(x.id)).map((x) => x.id);
+    pieza = conoceTodas ? { ocultas } : { orden: actual.orden, ocultas };
+  } else if (tipo === 'restablecer') {
+    if (!PIEZAS_COLUMNAS.some((k) => presente(g, k))) return null;
+    return { version: VERSION_PREFS, orden: undefined, anchos: undefined, ocultas: undefined };
+  } else {
+    throw new Error(`Cambio de columnas desconocido: ${String(tipo)}`);
+  }
+
+  /** @type {Record<string, unknown>} */
+  const parte = { version: VERSION_PREFS, ...pieza };
+  if (!vigente) for (const k of PIEZAS_COLUMNAS) if (!tiene(parte, k) && presente(g, k)) parte[k] = undefined;
+  return /** @type {ParteColumnas} */ (parte);
+}
+
+/**
+ * El actualizador que usePreferenciasTabla le pasa a guardarParte (usePreferenciaParte, T4A): la pieza se calcula con
+ * lo último del vínculo, no con lo del render, así que dos cambios seguidos (antes de otro render) no se pisan. Si
+ * recibe `sinGuardar` (el valor por defecto del vínculo, que solo se ve antes de listo o recién cambiado el usuario)
+ * devuelve {}: una pieza armada sobre lo por defecto subiría sin lo que hay en el servidor, o iría a la cuenta de otro
+ * usuario (D35 y D38). Un cambio que no cambia nada también da {} (escribirParte no manda nada).
+ * @param {ReadonlyArray<DefinicionColumna>} definicion
+ * @param {CambioColumnas} cambio
+ * @param {object} sinGuardar el MISMO objeto que el hook pasa como valor por defecto a usePreferenciaParte
+ * @returns {(anterior: unknown) => Partial<ParteColumnas>}
+ */
+export function actualizadorColumnas(definicion, cambio, sinGuardar) {
+  return (anterior) => (anterior === sinGuardar ? {} : (parteDeColumnas(definicion, anterior, cambio) ?? {}));
+}
+
+// ─── T4C: la lista desde el servidor (useListado) y en el navegador (useListadoCliente) ──────────────────────────
+
+/**
+ * La URL de una lista para apiFetch: `ruta` más queryListado(estado, extra) (RP8: q y estados en CSV, nunca search ni
+ * estado=) y, al final, con_conteos=1 y con_resumen=1 si se piden (sin pedirlos no van: la respuesta es la de hoy).
+ * Una ruta que ya trae '?' sigue con '&'.
+ * @param {string} ruta
+ * @param {EstadoTabla | null | undefined} estado
+ * @param {{extra?: Record<string, unknown> | null, conConteos?: boolean, conResumen?: boolean}} [opciones]
+ * @returns {string}
+ */
+export function urlListado(ruta, estado, { extra = {}, conConteos = false, conResumen = false } = {}) {
+  const consulta = queryListado(estado, {
+    ...(extra ?? {}),
+    ...(conConteos ? { con_conteos: true } : {}),
+    ...(conResumen ? { con_resumen: true } : {}),
+  });
+  if (!consulta) return ruta;
+  return `${ruta}${ruta.includes('?') ? '&' : '?'}${consulta}`;
+}
+
+/**
+ * La carga de una lista paginada (useListado; TABLA-api punto 3 y D28: «una carga lenta no pisa a la nueva»), en JS
+ * plano para probarla con node:
+ *  - cargar(url, marca): aborta la petición anterior (AbortController), toma un turno nuevo y pide con su signal. Lo que
+ *    llega (la respuesta o el error) se publica con alLlegar({marca, ok, respuesta | error}) SOLO si su petición sigue
+ *    siendo la vigente: la de una vieja se descarta ANTES de publicar, aunque `pedir` no respete el signal.
+ *  - cancelar(): aborta la vigente y nada pendiente se publica (el efecto se limpia: otra consulta, activo = false o
+ *    desmontaje). Con StrictMode (monta, desmonta y vuelve a montar en el mismo tic) la abortada antes de salir no se
+ *    pide: sale una sola petición.
+ *  - Un `pedir` que lanza de inmediato es un error de la carga, no una excepción de cargar.
+ * @param {{pedir: (url: string, signal: AbortSignal) => unknown, alLlegar: (llegada: LlegadaListado) => void}} opciones
+ * @returns {{cargar: (url: string, marca: string) => number, cancelar: () => void, turno: () => number}}
+ */
+export function crearCargaListado({ pedir, alLlegar }) {
+  let turno = 0;
+  /** @type {AbortController | null} */
+  let control = null;
+
+  function cancelar() {
+    turno += 1;
+    if (control) {
+      control.abort();
+      control = null;
+    }
+  }
+
+  function cargar(url, marca) {
+    if (control) control.abort();
+    turno += 1;
+    const mio = turno;
+    const propio = new AbortController();
+    control = propio;
+    const vigente = () => mio === turno && !propio.signal.aborted;
+    Promise.resolve()
+      .then(() => (vigente() ? pedir(url, propio.signal) : null))
+      .then(
+        (respuesta) => { if (vigente()) alLlegar({ marca, ok: true, respuesta }); },
+        (error) => { if (vigente()) alLlegar({ marca, ok: false, error }); },
+      );
+    return mio;
+  }
+
+  return { cargar, cancelar, turno: () => turno };
+}
+
+/**
+ * Lo que queda de la lista cuando llega la respuesta (o el error) de la carga `marca`: con una respuesta,
+ * normalizarRespuesta y sin error; con un error, lo último que llegó bien (las filas, el total, los conteos y el
+ * resumen) y el error. No muta lo que recibe.
+ * @param {ResultadoListado | null | undefined} previo
+ * @param {LlegadaListado} llegada
+ * @returns {ResultadoListado}
+ */
+export function aplicarLlegadaListado(previo, llegada) {
+  if (llegada.ok) return { clave: llegada.marca, datos: normalizarRespuesta(llegada.respuesta), error: null };
+  return { clave: llegada.marca, datos: previo?.datos ?? null, error: llegada.error ?? null };
+}
+
+/**
+ * Lo que ve la tabla de una lista del servidor (useListado). `clave` es la de la consulta que quiere la pantalla y
+ * `resultado` el de la última que llegó; si no son la misma (y está activa), hay una carga en camino:
+ *  - antes de la primera respuesta: sin filas, total, conteos ni resumen (null, nunca 0: H6) y cargandoInicial;
+ *  - con una respuesta anterior: sus filas siguen y recargando (las filas atenuadas y la barra fina de T4D);
+ *  - el error de la última carga se muestra (dentro de la tabla, con Reintentar) mientras no haya otra en camino;
+ *  - RP35: con activo = false no hay nada en camino y queda lo último que llegó.
+ * @param {ResultadoListado | null | undefined} resultado
+ * @param {{clave: string, activo?: boolean}} opciones
+ * @returns {EstadoListado}
+ */
+export function estadoListado(resultado, { clave, activo = true }) {
+  const datos = resultado?.datos ?? null;
+  const enCamino = activo && resultado?.clave !== clave;
+  return {
+    filas: datos ? datos.filas : [],
+    total: datos ? datos.total : null,
+    conteos: datos ? datos.conteos : null,
+    resumen: datos ? datos.resumen : null,
+    crudo: datos ? datos.crudo : null,
+    cargandoInicial: enCamino && !datos,
+    recargando: enCamino && Boolean(datos),
+    error: enCamino ? null : (resultado?.error ?? null),
+  };
+}
+
+/**
+ * Una lista chica que el endpoint trae completa (useListadoCliente: la papelera de SC, los leads de una campaña, las
+ * tablas de detalle), filtrada, ordenada y paginada en el navegador con el mismo estado de la pantalla:
+ *  - filtro(fila, estado): el propio de la pantalla (vista, semáforo, paso), si lo hay;
+ *  - estados: estadoDe(fila) (por defecto fila.estado) tiene que estar en estado.estados (si hay filtro);
+ *  - q con filtrarFilas (sin tildes) sobre `busqueda` (claves o funciones; sin campos, todos los textos y números);
+ *  - orden con ordenarFilas y los accesores `orden` (el valorOrden de cada columna);
+ *  - la página con paginaValida (una fuera de rango salta a la última que existe) y paginar.
+ * Mientras la pantalla trae los datos (filas null o undefined): sin filas, total null y cargandoInicial. No muta.
+ * @template T
+ * @param {ReadonlyArray<T> | null | undefined} filas
+ * @param {EstadoTabla | null | undefined} estado
+ * @param {{busqueda?: ReadonlyArray<string | ((fila: T) => unknown)>, orden?: Record<string, (fila: T) => unknown>,
+ *   estadoDe?: (fila: T) => unknown, filtro?: (fila: T, estado: EstadoTabla) => boolean}} [accesores]
+ * @returns {{filas: T[], total: number | null, todas: T[], pagina: number, cargandoInicial: boolean}}
+ */
+export function listadoCliente(filas, estado, { busqueda, orden, estadoDe, filtro } = {}) {
+  if (!Array.isArray(filas)) return { filas: [], total: null, todas: [], pagina: 1, cargandoInicial: true };
+  const e = estadoTablaInicial(/** @type {any} */ (estado ?? {}));
+  /** @type {T[]} */
+  let lista = filtro ? filas.filter((fila) => filtro(fila, e)) : [...filas];
+  if (e.estados.length) {
+    const permitidos = new Set(e.estados);
+    const de = estadoDe ?? ((fila) => /** @type {any} */ (fila)?.estado);
+    lista = lista.filter((fila) => {
+      const valor = de(fila);
+      return valor !== null && valor !== undefined && permitidos.has(String(valor));
+    });
+  }
+  lista = filtrarFilas(lista, e.q, busqueda);
+  lista = ordenarFilas(lista, e.orden, orden);
+  const pagina = paginaValida(e.pagina, lista.length, e.tamano);
+  return { filas: paginar(lista, pagina, e.tamano), total: lista.length, todas: lista, pagina, cargandoInicial: false };
 }

@@ -17,6 +17,7 @@ import {
   usuarioDelToken, usuarioDeSesion, servidorDeUsuario, crearPreferenciasDeSesion,
 } from '../src/lib/preferencias.js';
 import { validarPeriodo, PERIODO_POR_DEFECTO } from '../src/lib/analisis.js';
+import { actualizadorColumnas, reconciliarColumnas } from '../src/lib/tabla.js';
 
 // Las MISMAS tres claves inválidas de backend/tests/test_preferencias_usuario.py (CLAVES_INVALIDAS, RP24).
 const CLAVES_INVALIDAS = ['pantalla:ventas', 'tabla:Ventas', 'tabla:' + 'a'.repeat(81)];
@@ -1265,6 +1266,91 @@ console.log('--- TEST 28 (T4A r2, punto 2): una parte en espera que no cabe con 
   assert.equal(visto.anchos.length, 5000, 'encima de lo que trajo el servidor');
   assert.ok(avisos.some((t) => t.includes('tabla:x') && t.includes('queda solo en memoria')), avisos.join(' | '));
   assert.ok(!String(almacen.datos.get('pref:7:tabla:x')).includes('xxxxx'), 'ni pasa al almacén');
+}
+
+console.log('--- TEST 29 (T4C, RP26, D35 y D38): el tamaño (useEstadoTabla) y las columnas (usePreferenciasTabla) en tabla:x ---');
+{
+  // Los dos dueños de tabla:x, como los arma usePreferenciaParte: un vínculo con parte = true cada uno. Las columnas
+  // escriben con actualizadorColumnas (lib/tabla.js): la pieza se calcula con lo último del vínculo.
+  const DEF = [
+    { id: 'num', ancho: 120, clave: true, fija: 'izquierda' },
+    { id: 'cli', ancho: 200 },
+    { id: 'est', ancho: 140 },
+    { id: 'monto', ancho: 120, ocultaPorDefecto: true },
+  ];
+  const SIN_GUARDAR = {};
+  const servidor = servidorAMano();
+  const almacen = almacenFalso();
+  const reloj = relojFalso();
+  const p = crearPreferencias({ usuarioId: 7, almacen, servidor, temporizador: reloj });
+  const precarga = p.precargar('');
+  const columnas = vincularPreferencia({ obtener: () => p, clave: 'tabla:x', porDefecto: SIN_GUARDAR, parte: true, alCambiar: () => {} });
+  const tamano = vincularPreferencia({ obtener: () => p, clave: 'tabla:x', porDefecto: { tamano: 25 }, parte: true, alCambiar: () => {} });
+  // (a) Antes de listo el actualizador recibe el valor por defecto del vínculo y no arma nada (D35): una parte calculada
+  // sobre {} subiría sin las piezas que hay en el servidor.
+  columnas.guardar(actualizadorColumnas(DEF, { tipo: 'anchos', anchos: { cli: 300 } }, SIN_GUARDAR));
+  const delServidor = { version: 0, orden: ['est', 'cli', 'num'], anchos: { cli: 500 }, ocultas: ['est'], tamano: 50 };
+  await tic();
+  servidor.gets[0].resolver({ status: 'success', data: { 'tabla:x': delServidor } });
+  await precarga;
+  await tic();
+  reloj.avanzar(800);
+  await tic();
+  assert.deepEqual(servidor.puts, [], 'lo de antes de listo no escribió nada');
+  assert.deepEqual(p.leer('tabla:x'), delServidor);
+  // (b) Con listo: solo la pieza de los anchos (y la versión); lo de la otra versión se borra y el tamaño queda.
+  columnas.guardar(actualizadorColumnas(DEF, { tipo: 'anchos', anchos: { cli: 300 } }, SIN_GUARDAR));
+  assert.deepEqual(p.leer('tabla:x'), { version: 1, anchos: { cli: 300 }, tamano: 50 });
+  // (c) El tamaño, por su lado, conserva las columnas.
+  tamano.guardar({ tamano: 25 });
+  assert.deepEqual(p.leer('tabla:x'), { version: 1, anchos: { cli: 300 }, tamano: 25 });
+  // (d) Dos cambios seguidos, en el mismo tic (antes de otro render): el segundo parte de lo que dejó el primero.
+  columnas.guardar(actualizadorColumnas(DEF, { tipo: 'mover', id: 'est', hueco: 1 }, SIN_GUARDAR));
+  columnas.guardar(actualizadorColumnas(DEF, { tipo: 'ocultar', id: 'cli' }, SIN_GUARDAR));
+  const guardado = p.leer('tabla:x');
+  assert.deepEqual(guardado, { version: 1, anchos: { cli: 300 }, tamano: 25, orden: ['num', 'est', 'cli', 'monto'], ocultas: ['cli', 'monto'] });
+  const visto = reconciliarColumnas(DEF, guardado);
+  assert.deepEqual(visto.orden.filter((id) => !visto.ocultas.includes(id)), ['num', 'est']);
+  reloj.avanzar(800);
+  await tic();
+  assert.deepEqual(servidor.puts.map((x) => [x.clave, x.valor]), [['tabla:x', guardado]], 'un solo PUT con todo');
+  servidor.puts[0].resolver({ status: 'success' });
+  await tic();
+  // Un cambio que no cambia nada no escribe (ni PUT).
+  columnas.guardar(actualizadorColumnas(DEF, { tipo: 'ocultar', id: 'num' }, SIN_GUARDAR));
+  reloj.avanzar(800);
+  await tic();
+  assert.equal(servidor.puts.length, 1);
+}
+{
+  // (e) El usuario cambió y el vínculo ya pasó a la instancia nueva (sin listo) antes de que la pantalla lo viera: el
+  // cambio de la pantalla del usuario anterior no se arma sobre el valor por defecto ni va a la cuenta del nuevo.
+  const SIN_GUARDAR = {};
+  const DEF = [{ id: 'num', clave: true }, { id: 'cli' }, { id: 'est' }];
+  const almacen = almacenFalso();
+  const reloj = relojFalso();
+  const s8 = servidorAMano();
+  const p7 = crearPreferencias({ usuarioId: 7, almacen, temporizador: reloj });
+  const p8 = crearPreferencias({ usuarioId: 8, almacen, servidor: s8, temporizador: reloj });
+  const precarga8 = p8.precargar('');
+  let actual = p7;
+  const columnas = vincularPreferencia({ obtener: () => actual, clave: 'tabla:x', porDefecto: SIN_GUARDAR, parte: true, alCambiar: () => {} });
+  await tic();
+  assert.equal(columnas.estado().listo, true);
+  actual = p8;
+  columnas.revisarUsuario();
+  assert.equal(columnas.estado().listo, false);
+  columnas.guardar(actualizadorColumnas(DEF, { tipo: 'ocultar', id: 'cli' }, SIN_GUARDAR));
+  const del8 = { version: 1, orden: ['est', 'cli', 'num'], ocultas: ['est'] };
+  await tic();
+  s8.gets[0].resolver({ status: 'success', data: { 'tabla:x': del8 } });
+  await precarga8;
+  await tic();
+  reloj.avanzar(800);
+  await tic();
+  assert.deepEqual(p8.leer('tabla:x'), del8, 'lo del usuario 8 queda intacto');
+  assert.deepEqual(s8.puts, []);
+  assert.equal(almacen.datos.get('pref:7:tabla:x'), undefined);
 }
 
 console.log('✓ lib/preferencias.js: ámbitos, ráfagas, usuarios, memoria, 8 KB, precarga, reintentos, escribirParte, niveles, cerrar, instancia por usuario, vínculo de los hooks, usuario del token, precarga fallida y guardar tras un cambio de sesión.');
