@@ -785,11 +785,12 @@ console.log('--- TEST 15 (T4B r2): una tarjeta sigue pendiente hasta la recarga 
     const sinEspera = kanban.agregarPendiente([], { n: 2, id: 'A', origen: 'X', destino: 'Y' });
     assert.equal(kanban.llegoRecarga(sinEspera, 'X', 99), sinEspera, 'mientras el PATCH no responde, ninguna recarga lo suelta');
   }
-  // subirVersiones: solo las columnas que existen; devuelve las versiones nuevas de esas columnas.
+  // subirVersiones (r3, punto 1): sube la versión de TODA clave pedida (una columna oculta se recarga al reaparecer);
+  // `subidas`, lo que el movimiento espera, son solo las visibles.
   {
     const r = kanban.subirVersiones({ X: 2 }, ['X', 'Y', 'vieja'], ['X', 'Y', 'Z']);
-    assert.deepEqual(r, { versiones: { X: 3, Y: 1 }, subidas: { X: 3, Y: 1 } });
-    assert.deepEqual(kanban.subirVersiones({ X: 2 }, undefined, ['X', 'Y']).subidas, { X: 3, Y: 1 }, 'sin claves, todas');
+    assert.deepEqual(r, { versiones: { X: 3, Y: 1, vieja: 1 }, subidas: { X: 3, Y: 1 } });
+    assert.deepEqual(kanban.subirVersiones({ X: 2 }, undefined, ['X', 'Y']).subidas, { X: 3, Y: 1 }, 'sin claves, todas las visibles');
   }
 
   // Punto 2 (R3b): un «Ver más» en vuelo en el origen o el destino se deja al empezar el movimiento.
@@ -832,6 +833,161 @@ console.log('--- TEST 15 (T4B r2): una tarjeta sigue pendiente hasta la recarga 
     assert.equal(kanban.marcarRecibido(t, 'Y').Y.recibido, (t.Y.recibido ?? 0) + 1);
   }
 
+  // ── r3 ──
+  for (const n of ['soltarEsperasOcultas', 'bloqueoDeColumna', 'TEXTO_REINTENTA_COLUMNA', 'ESPERA_RECARGA_MS',
+    'crearTopesDeEspera', 'vencerEspera']) {
+    assert.ok(n in kanban, `lib/kanban.js exporta ${n}`);
+  }
+  const tresCols = (claves) => definirColumnas(claves.map((k) => ({ clave: k, titulo: k })));
+  const dondeEsta = (t, id) => Object.entries(t).flatMap(([k, c]) => c.items.filter((x) => x.id === id).map(() => k));
+
+  // r3 punto 1 (E10): la pantalla oculta X y Y (un filtro) mientras el PATCH de B (X→Y) está en camino; el servidor lo
+  // aplica pero el cliente recibe un error, así que B vuelve a X. Al volver a verse, X y Y se recargan (sus versiones
+  // subieron aunque no se veían) y ninguna tarjeta queda duplicada ni con lo viejo.
+  {
+    const srv = { X: ['B', 'x2'], Y: ['y1'], Z: ['z1'] };
+    const todas = ['X', 'Y', 'Z'];
+    let t = {};
+    let versiones = {};
+    let lanzadas = {};
+    const deseadasDe = (vis) => Object.fromEntries(vis.map((k) => [k, { firma: `v${versiones[k] ?? 0}` }]));
+    const llega = (k) => { t = kanban.marcarRecibido(aplicarPagina(kanban.asegurarColumna(t, k), k, { items: srv[k].map((id) => ({ id })), total: srv[k].length }), k); };
+    const lanzar = (vis) => {
+      const r = kanban.columnasPorLanzar(tresCols(vis), deseadasDe(vis), lanzadas);
+      lanzadas = r.lanzadas;
+      return r.lista.map((c) => c.clave);
+    };
+    for (const k of lanzar(todas)) llega(k);
+    let pend = kanban.agregarPendiente([], { n: 1, id: 'B', origen: 'X', destino: 'Y' });
+    const mov = moverTarjeta(t, 'B', 'X', 'Y');
+    t = mov.tablero;
+    const visibles = ['Z']; // el filtro
+    srv.X = ['x2']; srv.Y = ['B', 'y1']; // el servidor aplica el cambio…
+    t = kanban.deshacerMovimiento(t, mov.tablero, mov.deshacer, { id: 'B', origen: 'X', destino: 'Y', original: { id: 'B' } }); // …y el cliente recibe error
+    const s = kanban.subirVersiones(versiones, ['X', 'Y'], visibles);
+    versiones = s.versiones;
+    assert.deepEqual(versiones, { X: 1, Y: 1 }, 'las ocultas también suben de versión');
+    assert.deepEqual(s.subidas, {}, 'el movimiento no espera columnas que no se ven');
+    pend = kanban.esperarRecarga(pend, 1, s.subidas);
+    assert.equal(pend.length, 0);
+    assert.deepEqual(lanzar(visibles), [], 'mientras no se ven, nada se lanza');
+    const relanzadas = lanzar(todas); // se quita el filtro
+    assert.deepEqual(relanzadas, ['X', 'Y'], 'al volver a verse, se recargan');
+    for (const k of relanzadas) llega(k);
+    assert.deepEqual(dondeEsta(t, 'B'), ['Y'], 'B una sola vez, donde la tiene el servidor');
+    assert.deepEqual([t.X.items.map((x) => x.id), t.X.total, t.Y.total], [['x2'], 1, 2]);
+  }
+  // Las esperas de columnas que dejaron de verse se sueltan en el efecto que lanza (soltarEsperasOcultas).
+  {
+    let l = kanban.esperarRecarga(kanban.agregarPendiente([], { n: 1, id: 'A', origen: 'X', destino: 'Y' }), 1, { X: 1, Y: 2 });
+    assert.equal(kanban.soltarEsperasOcultas(l, ['X', 'Y', 'Z']), l, 'todas visibles: la misma lista');
+    l = kanban.soltarEsperasOcultas(l, ['Y', 'Z']);
+    assert.deepEqual(l[0].espera, { Y: 2 }, 'X dejó de verse: ya no se espera');
+    assert.equal(kanban.soltarEsperasOcultas(l, ['Z']).length, 0, 'sin nada que esperar, termina');
+    const sinEspera = kanban.agregarPendiente([], { n: 2, id: 'B', origen: 'X', destino: 'Y' });
+    assert.equal(kanban.soltarEsperasOcultas(sinEspera, []), sinEspera, 'un PATCH en camino no se suelta');
+  }
+
+  // r3 punto 2 (E1): CV1 y la recarga de X (la del movimiento de B) falla. B queda libre, pero X sigue pintando su copia
+  // vieja: mientras la última carga de X sea un error, sus tarjetas no se mueven; con un Reintentar exitoso, sí.
+  {
+    const s = flujo({ X: ['A', 'B', 'x3'], Y: ['y1'], Z: ['z1'], W: ['w1'] });
+    const a = s.mover('A', 'X', 'Y');
+    const b = s.mover('B', 'X', 'Z');
+    const va = a.ok();
+    const fotosA = { X: s.foto('X'), Y: s.foto('Y') };
+    s.llega('X', fotosA.X, va.X);
+    s.llega('Y', fotosA.Y, va.Y);
+    const vb = b.ok();
+    s.tablero = marcarColumna(s.tablero, 'X', { error: new Error('Sin conexión'), cargando: false }); // la recarga de X falla
+    s.pendientes = kanban.llegoRecarga(s.pendientes, 'X', vb.X);
+    s.llega('Z', s.foto('Z'), vb.Z);
+    assert.equal(kanban.idsPendientes(s.pendientes).size, 0, 'B ya no espera');
+    assert.ok(s.tablero.X.items.some((x) => x.id === 'B'), 'X (con error) sigue pintando la copia vieja de B');
+    const datosX = { ...s.tablero.X, cargaFallida: Boolean(s.tablero.X.error) };
+    assert.equal(kanban.TEXTO_REINTENTA_COLUMNA, 'Reintenta esta columna para mover sus tarjetas.');
+    assert.equal(kanban.bloqueoDeColumna(datosX), kanban.TEXTO_REINTENTA_COLUMNA, 'la copia de X no se puede mover');
+    const destinos = mapaDestinos({ id: 'B' }, 'X', CUATRO, () => ({ tipo: 'cambio', estado: 'W' }));
+    assert.deepEqual(kanban.opcionesMoverA('X', CUATRO, destinos, { bloqueo: kanban.bloqueoDeColumna(datosX) }),
+      ['Y', 'Z', 'W'].map((k) => ({ clave: k, titulo: k, permitido: false, motivo: 'Reintenta esta columna para mover sus tarjetas.' })),
+      'en «Mover a…», todos los destinos deshabilitados con el motivo');
+    s.llega('X', s.foto('X'), vb.X + 1); // Reintentar sale bien
+    assert.equal(kanban.bloqueoDeColumna({ ...s.tablero.X, cargaFallida: Boolean(s.tablero.X.error) }), null, 'todo vuelve a ser normal');
+    assert.equal(kanban.bloqueoDeColumna(undefined), null);
+    s.comparar();
+  }
+
+  // r3 punto 3: el tope de espera de una recarga (reloj falso). Vence a los ESPERA_RECARGA_MS, suelta lo que faltaba y
+  // la pantalla lo vuelve a pedir; se quita si el movimiento termina antes y al desmontar. El PATCH no lleva tope.
+  {
+    assert.equal(kanban.ESPERA_RECARGA_MS, 20000);
+    const reloj = (() => {
+      let ahora = 0;
+      let siguiente = 0;
+      const tareas = new Map();
+      return {
+        setTimeout(f, ms) { tareas.set(++siguiente, { f, cuando: ahora + ms }); return siguiente; },
+        clearTimeout(i) { tareas.delete(i); },
+        avanzar(ms) { ahora += ms; for (const [i, tarea] of [...tareas]) if (tarea.cuando <= ahora) { tareas.delete(i); tarea.f(); } },
+        cuantas: () => tareas.size,
+      };
+    })();
+    const vencidos = [];
+    const topes = kanban.crearTopesDeEspera({ alVencer: (n) => vencidos.push(n), temporizador: reloj });
+    let l = kanban.esperarRecarga(kanban.agregarPendiente([], { n: 1, id: 'B', origen: 'X', destino: 'Y' }), 1, { X: 1, Y: 1 });
+    topes.armar(1);
+    topes.armar(1);
+    assert.equal(reloj.cuantas(), 1, 'un solo temporizador por movimiento');
+    l = kanban.llegoRecarga(l, 'X', 1); // llega X; Y no responde
+    topes.sincronizar(l);
+    reloj.avanzar(19999);
+    assert.deepEqual(vencidos, [], 'antes del tope, nada');
+    reloj.avanzar(1);
+    assert.deepEqual(vencidos, [1], 'a los 20 s vence');
+    const v = kanban.vencerEspera(l, 1);
+    assert.deepEqual(v.faltan, ['Y'], 'lo que faltaba, para volver a pedirlo');
+    assert.equal(v.lista.length, 0, 'la tarjeta queda libre');
+    assert.deepEqual(kanban.vencerEspera(v.lista, 1), { lista: v.lista, faltan: [] }, 'un movimiento que ya no está: nada');
+    // El movimiento termina antes del tope: su temporizador se quita.
+    let l2 = kanban.esperarRecarga(kanban.agregarPendiente([], { n: 2, id: 'C', origen: 'X', destino: 'Y' }), 2, { X: 2 });
+    topes.armar(2);
+    l2 = kanban.llegoRecarga(l2, 'X', 2);
+    topes.sincronizar(l2);
+    assert.equal(reloj.cuantas(), 0);
+    reloj.avanzar(60000);
+    assert.deepEqual(vencidos, [1], 'no vence un movimiento que ya terminó');
+    // Un movimiento cuyo PATCH no ha respondido (espera null) no tiene tope; al desmontar se limpian todos.
+    const l3 = kanban.agregarPendiente([], { n: 3, id: 'D', origen: 'X', destino: 'Y' });
+    topes.armar(3);
+    topes.sincronizar(l3);
+    assert.equal(reloj.cuantas(), 0, 'sin espera de recarga no hay tope (el PATCH no lo lleva)');
+    topes.armar(4);
+    topes.limpiar();
+    assert.equal(reloj.cuantas(), 0, 'al desmontar');
+    reloj.avanzar(60000);
+    assert.deepEqual(vencidos, [1]);
+  }
+
+  // r3 punto 4 (E7b): un «Ver más» en vuelo se cancela al mover y su slot toma un turno nuevo, así que su página se
+  // descarta aunque llegue (cargar no le pasó el signal a apiFetch).
+  {
+    const turnos = kanban.crearTurnos();
+    let t = estadoTableroInicial(columnas);
+    t = aplicarPagina(t, 'nuevo', { items: [{ id: 'x1' }, { id: 'x2' }, { id: 'x3' }], total: 6 });
+    t = aplicarPagina(t, 'curso', { items: [{ id: 'y1' }], total: 1 });
+    const turnoVerMas = turnos.siguiente('nuevo');
+    t = { ...t, nuevo: { ...t.nuevo, cargandoMas: true } };
+    const control = new AbortController();
+    const r = kanban.cancelarVerMas(t, ['nuevo', 'curso']);
+    for (const clave of r.abortar) { control.abort(); turnos.siguiente(clave); }
+    t = moverTarjeta(r.tablero, 'x1', 'nuevo', 'curso').tablero;
+    // La página corrida llega igual (cargar ignoró el signal): el then de pedir mira el turno y la descarta.
+    const llegaria = turnos.vigente('nuevo', turnoVerMas);
+    assert.equal(llegaria, false, 'la respuesta vieja se descarta aunque llegue');
+    assert.deepEqual(t.nuevo.items.map((x) => x.id), ['x2', 'x3']);
+    assert.equal(t.nuevo.cargandoMas, false);
+  }
+
   // Kanban.tsx sobre el fuente.
   const fuente = readFileSync(new URL('../src/components/ui/Kanban.tsx', import.meta.url), 'utf8');
   // Punto 1: los pendientes viven en el hook; TableroKanban no tiene estado propio de espera.
@@ -841,12 +997,14 @@ console.log('--- TEST 15 (T4B r2): una tarjeta sigue pendiente hasta la recarga 
   assert.ok((fuente.match(/llegoRecarga\(/g) ?? []).length >= 2, 'suelta la espera al llegar y al fallar la recarga');
   assert.match(fuente, /pendientes: ReadonlySet<string>;/);
   assert.match(fuente, /if \(tablero\.pendientes\.has\(clave\)\) return;/);
-  assert.match(fuente, /if \(soloVer \|\| tablero\.pendientes\.has\(s\.clave\)\)/);
+  // r3: la guarda del arrastre suma la columna con su última carga fallida.
+  assert.match(fuente, /if \(soloVer \|\| tablero\.pendientes\.has\(s\.clave\) \|\| bloqueoDeColumna\(tablero\.datos\[s\.origen\]\)\)/);
   assert.match(fuente, /const pendiente = tablero\.pendientes\.has\(clave\);/);
   assert.ok(!/marcarEsperando|setEsperando/.test(fuente), 'el tablero ya no lleva su propia espera');
   // Punto 2: el «Ver más» en vuelo se aborta al empezar un movimiento.
   assert.match(fuente, /const \{ tablero: sinVerMas, abortar \} = cancelarVerMas\(tableroRef\.current, \[origen, destino\]\);/);
-  assert.match(fuente, /if \(slot\?\.agregar\) slot\.control\.abort\(\);/);
+  // r3 punto 4: además del abort, un turno nuevo para ese slot (la respuesta vieja se descarta aunque llegue).
+  assert.match(fuente, /if \(slot\?\.agregar\) \{\s*slot\.control\.abort\(\);\s*obtenerTurnos\(\)\.siguiente\(clave\);\s*\}/);
   // Punto 3: cada respuesta del servidor marca la columna.
   assert.match(fuente, /marcarRecibido\(/);
   // Punto 4: el arrastre se cancela si el nodo sale del DOM.
@@ -857,9 +1015,22 @@ console.log('--- TEST 15 (T4B r2): una tarjeta sigue pendiente hasta la recarga 
   assert.match(fuente, /if \(seguido && !seguido\.el\.isConnected\) \{/, 'el bucle rAF cancela si la tarjeta salió del DOM');
   // Punto 6: sin contenedor desplazable, también document.body.
   assert.match(fuente, /else observador\.observe\(document\.body\);/);
+  // r3 punto 1: el efecto que lanza suelta las esperas de las columnas que ya no se ven.
+  assert.match(fuente, /actualizarPendientes\(\(l\) => soltarEsperasOcultas\(l, visibles\)\)/);
+  // r3 punto 2: una columna cuya última carga falló no deja mover sus tarjetas (arrastre, «Mover a…» y soltar).
+  assert.match(fuente, /cargaFallida: Boolean\(base\.error\)/);
+  assert.ok((fuente.match(/bloqueoDeColumna\(tablero\.datos\[/g) ?? []).length >= 3, 'en el arrastre, en el menú y en soltar');
+  assert.match(fuente, /opcionesMoverA\(origen, columnas, destinos, \{ bloqueo \}\)/);
+  // r3 punto 3: el tope se arma en cerrar (con la espera de la recarga), se sincroniza con los pendientes y se limpia al
+  // desmontar; el PATCH no lo lleva.
+  assert.match(fuente, /if \(Object\.keys\(subidas\)\.length\) obtenerTopes\(\)\.armar\(n\);/);
+  assert.match(fuente, /topes\.current\?\.sincronizar\(nueva\);/);
+  assert.match(fuente, /topes\.current\?\.limpiar\(\);/);
+  assert.match(fuente, /const \{ lista, faltan \} = vencerEspera\(pendientesRef\.current, n\);/);
 }
 
 console.log('✓ lib/kanban.js: columnas, reparto, orden, páginas, movimiento, reglas, destinos, arrastre y motivo.');
 console.log('✓ T4B: modo servidor y cliente, plegadas, turnos, deshacer, «Mover a…» y Kanban.tsx.');
 console.log('✓ T4B r1: deshacer sin perder tarjetas, «Ver más» quieto, StrictMode, alto, foco y anuncio.');
 console.log('✓ T4B r2: pendiente hasta su recarga, sin copias viejas, «Ver más» abortado y arrastre fuera del DOM.');
+console.log('✓ T4B r3: columnas ocultas que se recargan, columnas con error quietas, tope de espera y «Ver más» descartado.');

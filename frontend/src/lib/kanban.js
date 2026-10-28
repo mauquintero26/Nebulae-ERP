@@ -743,24 +743,117 @@ export function idsPendientes(lista) {
 }
 
 /**
- * Las versiones con una más en cada columna de `claves` que existe (todas las de `existentes` sin claves): {versiones,
- * subidas}, donde subidas son las versiones nuevas de esas columnas (lo que un movimiento espera, T4B r2).
+ * Las versiones con una más en cada columna de `claves` (todas las `visibles` sin claves): {versiones, subidas}.
+ * T4B r3: sube la versión de TODA clave pedida, también la de una columna que hoy no se ve (un filtro, una tarjeta de
+ * indicador), para que se recargue cuando vuelva a verse; `subidas` (lo que un movimiento espera, r2) son solo las
+ * visibles.
  * @param {Record<string, number>} versiones
  * @param {ReadonlyArray<string> | null | undefined} claves
- * @param {ReadonlyArray<string>} existentes
+ * @param {ReadonlyArray<string>} visibles
  * @returns {{versiones: Record<string, number>, subidas: Record<string, number>}}
  */
-export function subirVersiones(versiones, claves, existentes) {
-  const validas = new Set(existentes);
+export function subirVersiones(versiones, claves, visibles) {
+  const seVen = new Set(visibles);
   const nuevas = { ...(versiones ?? {}) };
   /** @type {Record<string, number>} */
   const subidas = {};
-  for (const clave of claves ?? existentes) {
-    if (!validas.has(clave)) continue;
+  for (const clave of claves ?? visibles) {
     nuevas[clave] = (nuevas[clave] ?? 0) + 1;
-    subidas[clave] = nuevas[clave];
+    if (seVen.has(clave)) subidas[clave] = nuevas[clave];
   }
   return { versiones: nuevas, subidas };
+}
+
+/**
+ * T4B r3: los movimientos dejan de esperar las columnas que ya no se ven (como si su recarga hubiera llegado,
+ * llegoRecarga con Infinity); el que ya no espera nada termina. Cuando la columna vuelva a verse, su versión (que subió)
+ * la recarga. Un movimiento cuyo cambio todavía no respondió el servidor (espera null) no se toca. Sin cambios devuelve
+ * la misma lista.
+ * @param {ReadonlyArray<PendienteMovimiento>} lista
+ * @param {ReadonlyArray<string>} visibles
+ * @returns {ReadonlyArray<PendienteMovimiento>}
+ */
+export function soltarEsperasOcultas(lista, visibles) {
+  const seVen = new Set(visibles);
+  let nueva = lista;
+  for (const p of lista) {
+    for (const clave of Object.keys(p.espera ?? {})) {
+      if (!seVen.has(clave)) nueva = llegoRecarga(nueva, clave, Number.POSITIVE_INFINITY);
+    }
+  }
+  return nueva;
+}
+
+/** El motivo de «Mover a…» en una columna cuya última carga falló (T4B r3). */
+export const TEXTO_REINTENTA_COLUMNA = 'Reintenta esta columna para mover sus tarjetas.';
+
+/**
+ * T4B r3: por qué las tarjetas de una columna no se pueden mover, o null. Si la última carga principal de la columna
+ * falló (`cargaFallida`, la da useTableroKanban), lo que pinta puede ser viejo: sus tarjetas no se arrastran y en «Mover
+ * a…» todos los destinos salen deshabilitados con TEXTO_REINTENTA_COLUMNA, hasta que un Reintentar sale bien.
+ * @param {{cargaFallida?: boolean} | null | undefined} datos
+ * @returns {string | null}
+ */
+export function bloqueoDeColumna(datos) {
+  return datos?.cargaFallida === true ? TEXTO_REINTENTA_COLUMNA : null;
+}
+
+/** Lo que un movimiento espera la recarga de su origen y su destino antes de soltarla y volver a pedirla (T4B r3). */
+export const ESPERA_RECARGA_MS = 20000;
+
+/**
+ * T4B r3: el movimiento `n` deja de esperar sus recargas (venció su tope): {lista sin él, faltan: las columnas que
+ * todavía esperaba, para volver a pedirlas}. Si ya no está, la misma lista y faltan [].
+ * @param {ReadonlyArray<PendienteMovimiento>} lista
+ * @param {number} n
+ * @returns {{lista: ReadonlyArray<PendienteMovimiento>, faltan: string[]}}
+ */
+export function vencerEspera(lista, n) {
+  const p = lista.find((x) => x.n === n);
+  if (!p) return { lista, faltan: [] };
+  return { lista: lista.filter((x) => x.n !== n), faltan: Object.keys(p.espera ?? {}) };
+}
+
+/**
+ * T4B r3: los topes de espera de las recargas, uno por movimiento, con el reloj inyectado (en las pruebas, uno falso).
+ *  - armar(n): un temporizador de `ms` (ESPERA_RECARGA_MS) para el movimiento n, si no tiene uno; al vencer llama
+ *    alVencer(n) (el hook suelta lo que faltaba y lo vuelve a pedir).
+ *  - sincronizar(lista): quita el de cada movimiento que ya no espera recargas (terminó, o su PATCH no ha respondido:
+ *    el PATCH no lleva tope, el servidor todavía puede aplicar el cambio).
+ *  - limpiar(): los quita todos (al desmontar).
+ * @param {{alVencer: (n: number) => void, ms?: number,
+ *   temporizador?: {setTimeout: (f: () => void, ms: number) => unknown, clearTimeout: (id: any) => void}}} opciones
+ * @returns {{armar: (n: number) => void, sincronizar: (lista: ReadonlyArray<PendienteMovimiento>) => void,
+ *   limpiar: () => void, armados: () => number[]}}
+ */
+export function crearTopesDeEspera({
+  alVencer, ms = ESPERA_RECARGA_MS,
+  temporizador = { setTimeout: (f, t) => setTimeout(f, t), clearTimeout: (id) => clearTimeout(id) },
+}) {
+  /** @type {Map<number, unknown>} */
+  const activos = new Map();
+  return {
+    armar(n) {
+      if (activos.has(n)) return;
+      activos.set(n, temporizador.setTimeout(() => {
+        activos.delete(n);
+        alVencer(n);
+      }, ms));
+    },
+    sincronizar(lista) {
+      const esperan = new Set(lista.filter((p) => p.espera).map((p) => p.n));
+      for (const [n, id] of activos) {
+        if (esperan.has(n)) continue;
+        temporizador.clearTimeout(id);
+        activos.delete(n);
+      }
+    },
+    limpiar() {
+      for (const id of activos.values()) temporizador.clearTimeout(id);
+      activos.clear();
+    },
+    armados: () => [...activos.keys()],
+  };
 }
 
 /**
@@ -861,17 +954,23 @@ export function reglaSegunManejadores(regla, { cambio = false, accion = false } 
 /**
  * Las opciones de «Mover a…» del menú ⋯ de una tarjeta (KANBAN-base e; para el teclado y el celular), con el mapa de
  * mapaDestinos: todas las columnas menos el origen, en su orden; las permitidas y las bloqueadas con su motivo. Las que
- * no harían nada ('ninguno', sin motivo) no se ofrecen.
+ * no harían nada ('ninguno', sin motivo) no se ofrecen. Con `bloqueo` (T4B r3: bloqueoDeColumna del origen), todos los
+ * destinos salen deshabilitados con ese motivo.
  * @param {string} origen
  * @param {ReadonlyArray<ColumnaKanban>} columnas
  * @param {Record<string, Destino> | null | undefined} destinos
+ * @param {{bloqueo?: string | null}} [opciones]
  * @returns {OpcionMover[]}
  */
-export function opcionesMoverA(origen, columnas, destinos) {
+export function opcionesMoverA(origen, columnas, destinos, { bloqueo = null } = {}) {
   /** @type {OpcionMover[]} */
   const opciones = [];
   for (const c of columnas ?? []) {
     if (c.clave === origen) continue;
+    if (textoLleno(bloqueo)) {
+      opciones.push({ clave: c.clave, titulo: c.titulo, permitido: false, motivo: /** @type {string} */ (bloqueo) });
+      continue;
+    }
     const d = destinos?.[c.clave];
     if (d?.permitido) opciones.push({ clave: c.clave, titulo: c.titulo, permitido: true, motivo: null });
     else if (d?.motivo) opciones.push({ clave: c.clave, titulo: c.titulo, permitido: false, motivo: d.motivo });
