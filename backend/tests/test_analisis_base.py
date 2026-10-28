@@ -78,7 +78,8 @@ def test_validar_top():
         assert validar_top(top) == top
     # r1 (b): un texto de dígitos también vale (R21 permite declarar top como str).
     assert validar_top("10") == 10 and validar_top("5") == 5 and validar_top(" 25 ") == 25
-    for malo in (7, 0, None, "x", True, False, "7", "", "1o", "10.0", 10.0):
+    # r2 (4): un texto de dígitos enorme da el mismo error en español, no el de Python en inglés.
+    for malo in (7, 0, None, "x", True, False, "7", "", "1o", "10.0", 10.0, "05", "1" * 5000):
         assert _lanza_valor(validar_top, malo) == "El ranking solo puede mostrar 5, 10 o 25.", malo
 
 
@@ -357,6 +358,23 @@ def test_en_rango_con_una_columna_date_compara_dias_de_colombia(db):
     assert dentro("2001-01-06", *anterior) is False
     sql = _sql_literal(en_rango(SaleOrderPayment.fecha, p.inicio_utc, p.fin_utc))
     assert sql == "sale_order_payments.fecha >= '2001-01-06' AND sale_order_payments.fecha < '2001-01-11'", sql
+
+
+def test_en_rango_con_una_columna_date_y_un_fin_que_no_cae_a_medianoche():
+    """r2 (2): un fin a media jornada (hoy a las 10:00 de Colombia) se redondea hacia ARRIBA: el día de hoy cuenta. El
+    inicio se redondea hacia abajo."""
+    from datetime import time
+    from app.core.analisis import en_rango
+    from app.core.fechas import ZONA_COLOMBIA
+    from app.core.periodos import inicio_del_dia_utc
+    from app.models.fase4 import SaleOrderPayment
+    hoy = date(2026, 10, 3)
+    a_las_10 = datetime.combine(hoy, time(10, 0), tzinfo=ZONA_COLOMBIA).astimezone(timezone.utc).replace(tzinfo=None)
+    sql = _sql_literal(en_rango(SaleOrderPayment.fecha, inicio_del_dia_utc(hoy), a_las_10))
+    assert sql == "sale_order_payments.fecha >= '2026-10-03' AND sale_order_payments.fecha < '2026-10-04'", sql
+    # Un inicio a media jornada (las 10:00) se redondea hacia abajo: ese día también cuenta.
+    sql = _sql_literal(en_rango(SaleOrderPayment.fecha, a_las_10, inicio_del_dia_utc(hoy + timedelta(days=1))))
+    assert sql == "sale_order_payments.fecha >= '2026-10-03' AND sale_order_payments.fecha < '2026-10-04'", sql
 
 
 # ─── 13) ISO con Z: fechas.iso_z (RP29) ──────────────────────────────────────────────────────────────────────

@@ -144,6 +144,12 @@ def test_validar_orden_da_la_clave_y_la_direccion():
     for malo in ("drop table", "-atencion", "proveedor", "-"):
         e = _lanza(HTTPException, validar_orden, malo, claves, "fecha")
         assert e.status_code == 422 and e.detail == f"No se puede ordenar por «{malo}».", e.detail
+    # r2 (3): ("fecha") no es una tupla sino un str, y dejaría pasar cualquier subcadena ('fe', 'ech'...).
+    e = _lanza(TypeError, validar_orden, "fe", "fecha", "fecha")
+    assert str(e) == "validar_orden: claves debe ser una tupla, una lista, un conjunto o un dict."
+    assert validar_orden("fecha", ["fecha"], "fecha") == ("fecha", False)
+    assert validar_orden("-fecha", {"fecha"}, "fecha") == ("fecha", True)
+    assert validar_orden("fecha", {"fecha": None}, "fecha") == ("fecha", False)
 
 
 def test_leer_orden_ascendente_y_descendente_con_nulos_al_final_y_desempate_por_id():
@@ -272,7 +278,9 @@ def test_orden_tiempo_sin_movimiento_y_reciente():
         "ORDER BY coalesce(sale_orders.updated_at, sale_orders.created_at) ASC NULLS LAST, "
         "sale_orders.created_at ASC NULLS LAST, sale_orders.id DESC"), sin_mov
     reciente = _sql(orden_tiempo(base, SaleOrder.created_at, SaleOrder.updated_at, "reciente", id_lista=SaleOrder.id))
-    assert reciente.rstrip().endswith("ORDER BY sale_orders.created_at DESC NULLS LAST, sale_orders.id DESC"), reciente
+    # r2 (1, R5): 'reciente' es el created_at desc de hoy (en PostgreSQL los NULL quedan primero), solo con el desempate
+    # por el id de la fila al final.
+    assert reciente.rstrip().endswith("ORDER BY sale_orders.created_at DESC, sale_orders.id DESC"), reciente
     # 'reciente' es el de por defecto.
     for vacio in (None, ""):
         assert _sql(orden_tiempo(base, SaleOrder.created_at, SaleOrder.updated_at, vacio,
@@ -280,7 +288,8 @@ def test_orden_tiempo_sin_movimiento_y_reciente():
     _lanza(TypeError, orden_tiempo, base, SaleOrder.created_at, SaleOrder.updated_at, "reciente")
 
 
-def test_orden_tiempo_reciente_en_la_base_deja_los_nulos_al_final(db):
+def test_orden_tiempo_reciente_en_la_base_es_el_orden_de_hoy(db):
+    """r2 (1, R5): como el created_at.desc() de hoy, un created_at NULL sale primero; los empates, por id desc."""
     from app.core.listados import orden_tiempo
     suf = _suf()
     filas = []
@@ -292,7 +301,9 @@ def test_orden_tiempo_reciente_en_la_base_deja_los_nulos_al_final(db):
         filas.append(v)
     q = orden_tiempo(_del_sufijo(db, suf), SaleOrder.created_at, SaleOrder.updated_at, "reciente",
                      id_lista=SaleOrder.id)
-    assert [v.id for v in q] == [filas[3].id, filas[2].id, filas[0].id, filas[1].id]
+    assert [v.id for v in q] == [filas[1].id, filas[3].id, filas[2].id, filas[0].id]
+    hoy = _del_sufijo(db, suf).order_by(SaleOrder.created_at.desc()).all()
+    assert hoy[0].id == filas[1].id  # el orden de hoy también deja el NULL primero
 
 
 def test_orden_tiempo_con_otro_valor_lanza_value_error():

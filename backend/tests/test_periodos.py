@@ -279,6 +279,7 @@ def test_contar_en_y_sumar_en_con_una_columna_date(db):
     db.commit()
     pagos = [
         (date(2001, 1, 6), 100),     # desde del actual: actual
+        (date(2001, 1, 6), 7),       # r2 (5): otro el mismo día, para que los conteos viejos no se compensen
         (date(2001, 1, 10), 200),    # hasta del actual: actual
         (date(2001, 1, 1), 30),      # desde del anterior: anterior
         (date(2001, 1, 5), 4),       # hasta del anterior: anterior
@@ -292,8 +293,9 @@ def test_contar_en_y_sumar_en_con_una_columna_date(db):
         db.commit()
     q = db.query(SaleOrderPayment).filter(SaleOrderPayment.sale_order_id == pedido.id)
     p = resolver_periodo("personalizado", "2001-01-06", "2001-01-10", ahora_utc=AHORA)
-    assert contar_en(q, SaleOrderPayment.fecha, p) == {"actual": 2, "anterior": 2}
-    assert sumar_en(q, SaleOrderPayment.fecha, SaleOrderPayment.monto, p) == {"actual": 300, "anterior": 34}
+    # Contra los instantes UTC (la comparación vieja) daría {actual: 2, anterior: 3}: los dos del 6 en el anterior.
+    assert contar_en(q, SaleOrderPayment.fecha, p) == {"actual": 3, "anterior": 2}
+    assert sumar_en(q, SaleOrderPayment.fecha, SaleOrderPayment.monto, p) == {"actual": 307, "anterior": 34}
 
 
 # ─── sin un −5 h propio (R7, C12, D1) ────────────────────────────────────────────────────────────────────────

@@ -13,6 +13,7 @@ parámetros de lista (no hay core/filtros_lista.py). Cada endpoint de lista (T6,
 - limit = Query(<el de hoy>, ge=0, le=200); limit=0 devuelve solo el total (paginar).
 - con_conteos se calcula con contar_por_vista, con la búsqueda y los filtros extra pero SIN vista, estados, semáforo,
   paso ni columna.
+Sin los parámetros nuevos cada lista responde lo mismo que hoy; el único agregado es el desempate final por el id de la fila, que fija el orden entre empates.
 
 Errores (RP9 y su ajuste): leer_orden y validar_orden lanzan HTTPException(422, 'No se puede ordenar por «x».');
 leer_lista (más de MAX_ESTADOS) y orden_tiempo (un valor que no vale) lanzan ValueError, que el endpoint convierte en
@@ -85,12 +86,15 @@ def filtrar_por_estados(q, columna, valor):
 
 def validar_orden(orden, claves, por_defecto: str) -> tuple[str, bool]:
     """(clave, descendente) de un 'orden' recibido, sin expresiones SQL. `orden` es 'campo' o '-campo'; None o en
-    blanco -> `por_defecto`. `claves` son las claves permitidas (una tupla o el dict de leer_orden). Una clave que no
+    blanco -> `por_defecto`. `claves` son las claves permitidas: una tupla, una lista, un conjunto o el dict de
+    leer_orden (un str lanza TypeError: es un error de programación). Una clave que no
     está, '-atencion', '-sin_movimiento' o '-reciente' -> HTTPException(422, 'No se puede ordenar por «x».'), con la
     «x» recortada. La usan leer_orden y las listas que se ordenan en Python (list_lista_compras, el catálogo)."""
     clave = (orden or "").strip() or por_defecto
     descendente = clave.startswith("-")
     campo = clave[1:] if descendente else clave
+    if isinstance(claves, str):  # ("fecha") no es una tupla: dejaría pasar cualquier subcadena
+        raise TypeError("validar_orden: claves debe ser una tupla, una lista, un conjunto o un dict.")
     if campo not in claves or (descendente and campo in ORDENES_ESPECIALES):
         raise HTTPException(status_code=422, detail=_no_se_puede_ordenar(clave))
     return campo, descendente
@@ -138,15 +142,17 @@ def leer_orden(orden, permitidas: dict, por_defecto: str, *, id_lista) -> list:
 
 
 def expresiones_tiempo(creado, actualizado, orden, *, id_lista) -> list:
-    """Las expresiones de order_by de 'reciente' y 'sin_movimiento' (KANBAN-base), con los nulos al final y el
-    desempate por `id_lista desc`:
-    - 'reciente' (por defecto, también con None o '') = creado desc;
-    - 'sin_movimiento' = coalesce(actualizado, creado) asc y luego creado asc (el que lleva más tiempo quieto arriba).
+    """Las expresiones de order_by de 'reciente' y 'sin_movimiento' (KANBAN-base), con el desempate final por
+    `id_lista desc`:
+    - 'reciente' (por defecto, también con None o '') = creado desc, el order_by de las listas de hoy (R5; en PostgreSQL
+      los NULL quedan primero, como hoy);
+    - 'sin_movimiento' = coalesce(actualizado, creado) asc y luego creado asc, los dos con los nulos al final (el que
+      lleva más tiempo quieto arriba).
     Otro valor -> ValueError('No se puede ordenar por «x».'), que el endpoint convierte en 422 con str(e) (RP9).
     Sirven para poner esas dos órdenes en `permitidas` de leer_orden (que no repite el id)."""
     clave = (orden or "").strip() or "reciente"
     if clave == "reciente":
-        expresiones = [creado.desc().nulls_last()]
+        expresiones = [creado.desc()]
     elif clave == "sin_movimiento":
         expresiones = [func.coalesce(actualizado, creado).asc().nulls_last(), creado.asc().nulls_last()]
     else:

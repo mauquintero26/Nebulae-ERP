@@ -67,9 +67,9 @@ CLAVES_FILTROS = ("foco", "top", "producto", "bodega")
 def validar_top(top) -> int:
     """El tamaño del ranking: 5, 10 o 25, como int o como texto de dígitos ('10' -> 10; R21 permite declarar top como
     str). Otro valor (bool, None, un float, otro texto) -> ValueError('El ranking solo puede mostrar 5, 10 o 25.')."""
-    if isinstance(top, str):
+    if isinstance(top, str):  # se compara el texto antes de convertir: '1' × 5000 no llega a int()
         texto = top.strip()
-        top = int(texto) if texto.isascii() and texto.isdigit() else None
+        top = int(texto) if texto in {str(t) for t in TOPS} else None
     if isinstance(top, bool) or not isinstance(top, int) or top not in TOPS:
         raise ValueError(ERROR_TOP)
     return top

@@ -201,13 +201,16 @@ def en_rango(col, ini: datetime, fin: datetime):
     """col >= ini AND col < fin, sobre la columna cruda (así se pueden usar sus índices). `ini` y `fin` son los instantes
     UTC sin zona de un Periodo (el fin, excluido).
     - Columna Date (un día de calendario, como sale_order_payments.fecha): se compara con los días de Colombia de esos
-      instantes, col >= a_colombia(ini).date() AND col < a_colombia(fin).date(). Como `fin` es el inicio del día
-      siguiente en Colombia, el último día del período queda adentro (r1).
+      instantes: col >= el día de `ini` (hacia abajo) AND col < el día de `fin`, redondeado hacia ARRIBA si `fin` no es
+      la medianoche de Colombia (r2: un fin a las 10:00 de hoy deja adentro el día de hoy). Con los bordes de un Periodo
+      `fin` es el inicio del día siguiente, así que el último día del período queda adentro (r1).
     - Columna timestamptz: los bordes se mandan como UTC con zona, para no depender de la zona de la sesión.
     - Columna DateTime sin zona (UTC ingenuo): tal cual."""
     tipo = getattr(col, "type", None)
     if isinstance(tipo, Date):  # DateTime no es subclase de Date
-        return and_(col >= fechas.a_colombia(ini).date(), col < fechas.a_colombia(fin).date())
+        fin_co = fechas.a_colombia(fin)
+        dia_fin = fin_co.date() + timedelta(days=1) if fin_co.time() != time(0) else fin_co.date()
+        return and_(col >= fechas.a_colombia(ini).date(), col < dia_fin)
     if getattr(tipo, "timezone", False):
         ini = ini.replace(tzinfo=timezone.utc) if ini.tzinfo is None else ini
         fin = fin.replace(tzinfo=timezone.utc) if fin.tzinfo is None else fin
