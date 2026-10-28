@@ -32,6 +32,16 @@
  *    · r2: la acción restablecerOrden del reductor (la vuelta condicional), el usuario de cada resultado (sin filas de
  *      otra cuenta), lo atendido en la carga y el tope de espera de las preferencias (ESPERA_PREFERENCIAS_MS,
  *      esperarPreferencias y listoConTope).
+ *  - T4D (los componentes de vista de components/tabla: TablaEstandar, BarraTabla, FiltroEstados, MenuAjustes y
+ *    Paginacion; TABLA-base punto 3, R5, R26, C1, C3, C13, D38 y D40): el umbral para mover una columna
+ *    (superaUmbralColumna), el ancho al contenido (anchoAlContenido), 'Ajustar al ancho de la pantalla'
+ *    (ajustarAlAncho), la geometría que se pinta (geometriaTabla: columna flexible, fijas y casilla), el destino al
+ *    arrastrar (destinoArrastre y bordeDeHueco), el orden por columna (campoOrden, direccionOrden y accesoresDeOrden),
+ *    lo que pinta el cuerpo (vistaCuerpo), los separadores (filasConGrupos), la página que ya no existe
+ *    (paginaCorregida), la selección (alternarSeleccion, estadoSeleccionPagina, alternarSeleccionPagina y
+ *    firmaSeleccion), la búsqueda con retardo (crearBusquedaConRetardo y sincronizarBusqueda), 'N resultados'
+ *    (textoResultados), el Contador de cada pestaña (estadoDeConteo), las pestañas con su filtro (opcionesDeVista,
+ *    accionPestana y alternarEstado) y las flechas de 'Ajustar tabla' (puedeDesplazar).
  */
 
 import { normalizarBusqueda } from './busqueda.js';
@@ -1249,4 +1259,502 @@ export function listadoCliente(filas, estado, { busqueda, orden, estadoDe, filtr
   lista = ordenarFilas(lista, e.orden, orden);
   const pagina = paginaValida(e.pagina, lista.length, e.tamano);
   return { filas: paginar(lista, pagina, e.tamano), total: lista.length, todas: lista, pagina, cargandoInicial: false };
+}
+
+// ─── T4D: la lógica de los componentes de vista (TablaEstandar, BarraTabla, FiltroEstados, MenuAjustes y Paginacion) ──
+
+/**
+ * @typedef {{valor: string, etiqueta: string}} OpcionEstado
+ * @typedef {ReadonlyArray<OpcionEstado> | ((vista: string | null) => ReadonlyArray<OpcionEstado> | null | undefined)} OpcionesEstados
+ * @typedef {string | number} ClaveFila
+ * @typedef {'todas' | 'algunas' | 'ninguna'} EstadoSeleccion
+ * @typedef {'esqueleto' | 'error' | 'vacio' | 'filas'} VistaCuerpo
+ * @typedef {{tipo: 'grupo', grupo: string, n: number} | {tipo: 'fila', fila: any, indice: number}} RenglonTabla
+ * @typedef {{texto: string, visto: string, enviado: string | null}} LocalBusqueda
+ */
+
+/** Los píxeles que hay que pasar, presionando el título, para que sea mover la columna (TABLA-base: «más de 5 px»). */
+export const UMBRAL_MOVER_COLUMNA = 5;
+
+/**
+ * true si el puntero ya se movió MÁS de UMBRAL_MOVER_COLUMNA px desde donde se presionó el título (en cualquier
+ * dirección): desde ahí es mover la columna; hasta ahí, soltar es un clic (ordena).
+ * @param {number} dx
+ * @param {number} dy
+ * @returns {boolean}
+ */
+export function superaUmbralColumna(dx, dy) {
+  const d = Math.hypot(dx, dy);
+  return Number.isFinite(d) && d > UMBRAL_MOVER_COLUMNA;
+}
+
+/** El doble clic en el borde ajusta la columna al texto más largo que se ve, hasta este ancho. */
+export const ANCHO_AJUSTE_CONTENIDO = 480;
+/** El relleno de una celda (px-3 a cada lado: TABLE.celda y TABLE.encabezado de design-system.ts). */
+export const RELLENO_CELDA = 24;
+/** El ancho de la casilla de selección (no es una columna de las preferencias: va siempre primera y fija). */
+export const ANCHO_SELECCION = 40;
+
+/** El mínimo y el máximo de una columna (64 y 640 si no los dice; el máximo nunca menor que el mínimo). */
+const limitesDe = (c) => {
+  const min = c?.anchoMin ?? ANCHO_MIN;
+  return { min, max: Math.max(min, c?.anchoMax ?? ANCHO_MAX) };
+};
+
+/**
+ * El ancho del doble clic en el borde: el contenido más ancho medido (scrollWidth de las celdas que se ven), hacia
+ * arriba, más `relleno`, entre el mínimo de la columna y el menor entre su máximo y ANCHO_AJUSTE_CONTENIDO (un mínimo
+ * de más de 480 manda). null si no hay ninguna medida (un número finito, 0 o más).
+ * @param {ReadonlyArray<unknown>} medidas
+ * @param {{anchoMin?: number, anchoMax?: number}} [columna]
+ * @param {number} [relleno]
+ * @returns {number | null}
+ */
+export function anchoAlContenido(medidas, columna = {}, relleno = RELLENO_CELDA) {
+  const validas = /** @type {number[]} */ ((medidas ?? []).filter((m) => typeof m === 'number' && Number.isFinite(m) && m >= 0));
+  if (!validas.length) return null;
+  const { min } = limitesDe(columna);
+  const max = Math.max(min, Math.min(columna?.anchoMax ?? ANCHO_MAX, ANCHO_AJUSTE_CONTENIDO));
+  return limitarAncho(Math.ceil(Math.max(...validas)) + relleno, min, max);
+}
+
+/**
+ * 'Ajustar al ancho de la pantalla' (MenuAjustes): los anchos de las columnas visibles para que sumen `disponible` px
+ * (el ancho para las columnas, sin la casilla; TablaEstandar lo publica en anchoRef) y la tabla no se corra de lado:
+ *  - las de ancho fijo (anchoMin = anchoMax: la casilla, las acciones) no cambian;
+ *  - las demás se escalan en proporción a su ancho de hoy (lo guardado, o el de la definición), cada una entre su
+ *    mínimo y su máximo (las que llegan a su mínimo se quedan ahí y lo demás se reparte entre las otras);
+ *  - píxeles enteros: lo que sobra del redondeo va a las de mayor fracción (empate: la primera);
+ *  - si ni con los mínimos cabe, los mínimos (la tabla se corre); si ni con los máximos se llena, los máximos.
+ * Devuelve {id: px} de las visibles que están en la definición, o null si `disponible` no es un número positivo o no
+ * hay ninguna. No muta lo que recibe. Es lo que la pantalla guarda con guardarAnchos (D38: solo la pieza {anchos}).
+ * @param {ReadonlyArray<DefinicionColumna>} definicion
+ * @param {ReadonlyArray<string>} visibles
+ * @param {Record<string, number>} anchos
+ * @param {unknown} disponible
+ * @returns {Record<string, number> | null}
+ */
+export function ajustarAlAncho(definicion, visibles, anchos, disponible) {
+  if (typeof disponible !== 'number' || !Number.isFinite(disponible) || disponible <= 0) return null;
+  const porId = new Map((definicion ?? []).filter((c) => c && typeof c.id === 'string').map((c) => [c.id, c]));
+  const columnas = (visibles ?? []).filter((id) => porId.has(id)).map((id) => {
+    const c = porId.get(id);
+    const { min, max } = limitesDe(c);
+    const guardado = anchos?.[id];
+    const actual = limitarAncho(typeof guardado === 'number' ? guardado : (c.ancho ?? ANCHO_POR_DEFECTO), min, max);
+    return { id, min, max, actual };
+  });
+  if (!columnas.length) return null;
+  /** @type {Record<string, number>} */
+  const resultado = {};
+  const libres = [];
+  let fijo = 0;
+  for (const c of columnas) {
+    if (c.min === c.max) {
+      resultado[c.id] = c.min;
+      fijo += c.min;
+    } else libres.push(c);
+  }
+  const objetivo = Math.floor(disponible - fijo);
+  const sumaMin = libres.reduce((a, c) => a + c.min, 0);
+  const sumaMax = libres.reduce((a, c) => a + c.max, 0);
+  if (sumaMin >= objetivo) {
+    for (const c of libres) resultado[c.id] = c.min;
+  } else if (sumaMax <= objetivo) {
+    for (const c of libres) resultado[c.id] = c.max;
+  } else {
+    // El factor f con Σ min(max, max(min, actual × f)) = objetivo (la suma crece con f): búsqueda binaria.
+    const ancho = (c, f) => Math.min(c.max, Math.max(c.min, c.actual * f));
+    let bajo = 0;
+    let alto = Math.max(...libres.map((c) => c.max / c.actual));
+    for (let i = 0; i < 60; i += 1) {
+      const f = (bajo + alto) / 2;
+      if (libres.reduce((a, c) => a + ancho(c, f), 0) < objetivo) bajo = f;
+      else alto = f;
+    }
+    const exactos = libres.map((c, i) => ({ c, i, w: ancho(c, alto) }));
+    let resto = objetivo;
+    for (const x of exactos) {
+      resultado[x.c.id] = Math.floor(x.w);
+      resto -= resultado[x.c.id];
+    }
+    const porFraccion = [...exactos].sort((a, b) => (b.w - Math.floor(b.w)) - (a.w - Math.floor(a.w)) || a.i - b.i);
+    for (const x of porFraccion) {
+      if (resto <= 0) break;
+      if (resultado[x.c.id] < x.c.max) {
+        resultado[x.c.id] += 1;
+        resto -= 1;
+      }
+    }
+  }
+  return Object.fromEntries(columnas.map((c) => [c.id, resultado[c.id]]));
+}
+
+/**
+ * Lo que pinta TablaEstandar (<colgroup>, el ancho de la <table> y position: sticky):
+ *  - anchos: el de cada visible (o ANCHO_POR_DEFECTO) y, si la tabla mide menos que `disponible` (el ancho del
+ *    contenedor, medido con ResizeObserver), las columnas flexibles visibles se reparten lo que sobra (píxeles enteros;
+ *    el suelto, a la primera en el orden visible). Nunca bajan de su ancho: si no sobra, la tabla se corre de lado;
+ *  - total: la suma, con la casilla de selección (`anchoSeleccion`, 0 sin selección);
+ *  - offsets: {id: px} de las fijas visibles (offsetsFijas); las de la izquierda empiezan después de la casilla.
+ * No muta lo que recibe.
+ * @param {{visibles: ReadonlyArray<string>, anchos: Record<string, number>, fijas?: Record<string, LadoFijo>,
+ *   flexibles?: ReadonlyArray<string>, disponible?: number | null, anchoSeleccion?: number}} entrada
+ * @returns {{anchos: Record<string, number>, total: number, offsets: Record<string, number>}}
+ */
+export function geometriaTabla({ visibles, anchos, fijas = {}, flexibles = [], disponible = null, anchoSeleccion = 0 }) {
+  const lista = [...(visibles ?? [])];
+  const lados = fijas ?? {};
+  /** @type {Record<string, number>} */
+  const pintados = {};
+  for (const id of lista) pintados[id] = typeof anchos?.[id] === 'number' ? anchos[id] : ANCHO_POR_DEFECTO;
+  const seleccion = Number.isFinite(anchoSeleccion) && anchoSeleccion > 0 ? anchoSeleccion : 0;
+  const suma = lista.reduce((a, id) => a + pintados[id], 0) + seleccion;
+  const flex = lista.filter((id) => (flexibles ?? []).includes(id));
+  if (flex.length && typeof disponible === 'number' && Number.isFinite(disponible) && disponible > suma) {
+    const sobra = Math.floor(disponible - suma);
+    const parte = Math.floor(sobra / flex.length);
+    flex.forEach((id, i) => {
+      pintados[id] += parte + (i === 0 ? sobra - parte * flex.length : 0);
+    });
+  }
+  /** @type {Record<string, number>} */
+  const offsets = {};
+  for (const [id, px] of Object.entries(offsetsFijas(lista, pintados, lados))) {
+    offsets[id] = lados[id] === 'izquierda' ? px + seleccion : px;
+  }
+  return { anchos: pintados, total: lista.reduce((a, id) => a + pintados[id], 0) + seleccion, offsets };
+}
+
+/**
+ * El destino de la columna `id` que se arrastra (TablaEstandar): el hueco de los encabezados VISIBLES (el de
+ * indiceDestino), sin cruzar las fijas (queda entre las de la izquierda y las de la derecha), y si soltar ahí cambia el
+ * orden (con `cambia` false no se pinta la línea azul ni se guarda). Una fija o un id que no está no cambian nada; un
+ * hueco que no es número da {hueco: null, cambia: false}.
+ * @param {ReadonlyArray<string>} visibles
+ * @param {Record<string, LadoFijo>} fijas
+ * @param {string} id
+ * @param {number} hueco
+ * @returns {{hueco: number | null, cambia: boolean}}
+ */
+export function destinoArrastre(visibles, fijas, id, hueco) {
+  if (typeof hueco !== 'number' || !Number.isFinite(hueco)) return { hueco: null, cambia: false };
+  const lista = [...(visibles ?? [])];
+  const lados = fijas ?? {};
+  const izquierda = lista.filter((x) => lados[x] === 'izquierda').length;
+  const derecha = lista.filter((x) => lados[x] === 'derecha').length;
+  const h = Math.max(izquierda, Math.min(lista.length - derecha, Math.trunc(hueco)));
+  // moverColumna no mueve una fija ni un id que no está: el orden queda igual y no cambia nada.
+  const cambia = !iguales(moverColumna(lista, id, h, lados), lista);
+  return { hueco: h, cambia };
+}
+
+/**
+ * Dónde va la línea azul del hueco `hueco` (en px, en las mismas coordenadas que `bordes`): el borde izquierdo del
+ * encabezado de ese hueco, o el derecho del último. `bordes` como en indiceDestino. null sin bordes o sin número.
+ * @param {ReadonlyArray<[number, number] | {left: number, right: number}>} bordes
+ * @param {number} hueco
+ * @returns {number | null}
+ */
+export function bordeDeHueco(bordes, hueco) {
+  const lista = bordes ?? [];
+  if (!lista.length || typeof hueco !== 'number' || !Number.isFinite(hueco)) return null;
+  const h = Math.max(0, Math.trunc(hueco));
+  const par = (b) => (Array.isArray(b) ? b : [b.left, b.right]);
+  return h < lista.length ? par(lista[h])[0] : par(lista[lista.length - 1])[1];
+}
+
+/**
+ * El campo de orden de una columna: su id con ordenable: true, el texto de ordenable (el campo del servidor, por
+ * ejemplo 'total_cop'), o null si no se ordena.
+ * @param {{id: string, ordenable?: boolean | string} | null | undefined} columna
+ * @returns {string | null}
+ */
+export function campoOrden(columna) {
+  if (!columna) return null;
+  if (columna.ordenable === true) return columna.id;
+  if (typeof columna.ordenable === 'string' && columna.ordenable.trim()) return columna.ordenable.trim();
+  return null;
+}
+
+/**
+ * La flecha del título (y su aria-sort): 'asc' si la tabla está ordenada por `campo`, 'desc' si por '-campo', o null.
+ * @param {string | null | undefined} orden
+ * @param {string | null | undefined} campo
+ * @returns {'asc' | 'desc' | null}
+ */
+export function direccionOrden(orden, campo) {
+  if (!campo || !orden) return null;
+  if (orden === campo) return 'asc';
+  if (orden === `-${campo}`) return 'desc';
+  return null;
+}
+
+/**
+ * Los accesores de orden de useListadoCliente (modo 'cliente'): {campo: valorOrden} de las columnas que se ordenan y
+ * traen valorOrden (sin valorOrden, ordenarFilas usa fila[campo]). Conviene armarlo una vez (constante o useMemo).
+ * @template T
+ * @param {ReadonlyArray<{id: string, ordenable?: boolean | string, valorOrden?: (fila: T) => unknown}>} columnas
+ * @returns {Record<string, (fila: T) => unknown>}
+ */
+export function accesoresDeOrden(columnas) {
+  /** @type {Record<string, (fila: T) => unknown>} */
+  const accesores = {};
+  for (const c of columnas ?? []) {
+    const campo = campoOrden(c);
+    if (campo && typeof c.valorOrden === 'function') accesores[campo] = c.valorOrden;
+  }
+  return accesores;
+}
+
+/**
+ * Qué pinta el cuerpo de TablaEstandar: 'esqueleto' mientras carga sin datos (8 renglones grises, nunca 0), 'error'
+ * (la fila 'No se pudo cargar la lista: …' con Reintentar; sin filas viejas, que serían de otra consulta), 'vacio' (lo
+ * de la prop vacio) o 'filas'.
+ * @param {{cargando?: boolean, error?: unknown, filas?: ReadonlyArray<unknown> | null}} entrada
+ * @returns {VistaCuerpo}
+ */
+export function vistaCuerpo({ cargando = false, error = null, filas = [] }) {
+  if (cargando) return 'esqueleto';
+  if (error !== null && error !== undefined && error !== false) return 'error';
+  return filas?.length ? 'filas' : 'vacio';
+}
+
+/**
+ * Los renglones del cuerpo con sus separadores (grupoFila y tituloGrupo de TablaEstandar; el semáforo del Hub): un
+ * separador {tipo: 'grupo', grupo, n} al empezar cada tramo seguido de filas del mismo grupo (n = cuántas tiene el
+ * tramo) y cada fila como {tipo: 'fila', fila, indice}. Una fila sin grupo (null, undefined o '') no pinta separador.
+ * Sin grupoDe, solo filas.
+ * @template T
+ * @param {ReadonlyArray<T> | null | undefined} filas
+ * @param {(fila: T) => unknown} [grupoDe]
+ * @returns {RenglonTabla[]}
+ */
+export function filasConGrupos(filas, grupoDe) {
+  const lista = [...(filas ?? [])];
+  if (typeof grupoDe !== 'function') return lista.map((fila, indice) => ({ tipo: 'fila', fila, indice }));
+  const grupos = lista.map((fila) => {
+    const g = grupoDe(fila);
+    return g === null || g === undefined || g === '' ? null : String(g);
+  });
+  /** @type {RenglonTabla[]} */
+  const renglones = [];
+  lista.forEach((fila, indice) => {
+    const g = grupos[indice];
+    if (g !== null && (indice === 0 || grupos[indice - 1] !== g)) {
+      let n = 0;
+      while (indice + n < grupos.length && grupos[indice + n] === g) n += 1;
+      renglones.push({ tipo: 'grupo', grupo: g, n });
+    }
+    renglones.push({ tipo: 'fila', fila, indice });
+  });
+  return renglones;
+}
+
+/**
+ * La página a la que hay que saltar porque un filtro dejó menos páginas (TablaEstandar despacha {tipo: 'pagina'}): la
+ * última que existe (paginaValida), o null si la página existe. Solo con el total ya llegado de la consulta vigente:
+ * mientras carga, recarga (el total es el de la consulta anterior) o con error, null.
+ * @param {{pagina: number, tamano: number, total: number | null | undefined, cargando?: boolean,
+ *   recargando?: boolean, error?: unknown}} entrada
+ * @returns {number | null}
+ */
+export function paginaCorregida({ pagina, tamano, total, cargando = false, recargando = false, error = null }) {
+  if (cargando || recargando || (error !== null && error !== undefined)) return null;
+  if (typeof total !== 'number' || !Number.isFinite(total)) return null;
+  const valida = paginaValida(pagina, total, tamano);
+  return valida === pagina ? null : valida;
+}
+
+// ─── T4D: la selección (la casilla de cada fila y la del encabezado) ─────────────────────────────────────────────
+
+/**
+ * La selección con `clave` marcada o desmarcada (una copia).
+ * @param {ReadonlyArray<ClaveFila>} seleccion
+ * @param {ClaveFila} clave
+ * @returns {ClaveFila[]}
+ */
+export function alternarSeleccion(seleccion, clave) {
+  const lista = [...(seleccion ?? [])];
+  return lista.includes(clave) ? lista.filter((c) => c !== clave) : [...lista, clave];
+}
+
+/**
+ * La casilla del encabezado: 'todas' si están marcadas todas las filas seleccionables de la página (`claves`),
+ * 'algunas' (indeterminada) o 'ninguna' (también sin filas seleccionables).
+ * @param {ReadonlyArray<ClaveFila>} seleccion
+ * @param {ReadonlyArray<ClaveFila>} claves
+ * @returns {EstadoSeleccion}
+ */
+export function estadoSeleccionPagina(seleccion, claves) {
+  const marcadas = new Set(seleccion ?? []);
+  const lista = claves ?? [];
+  const n = lista.filter((c) => marcadas.has(c)).length;
+  if (!lista.length || n === 0) return 'ninguna';
+  return n === lista.length ? 'todas' : 'algunas';
+}
+
+/**
+ * La casilla del encabezado marca SOLO la página visible (TABLA-base): si ya estaban todas, las quita; si no, agrega
+ * las que faltan (en el orden de la página). Lo de otras páginas no se toca. Una copia.
+ * @param {ReadonlyArray<ClaveFila>} seleccion
+ * @param {ReadonlyArray<ClaveFila>} claves
+ * @returns {ClaveFila[]}
+ */
+export function alternarSeleccionPagina(seleccion, claves) {
+  const lista = [...(seleccion ?? [])];
+  const pagina = [...(claves ?? [])];
+  if (estadoSeleccionPagina(lista, pagina) === 'todas') return lista.filter((c) => !pagina.includes(c));
+  return [...lista, ...pagina.filter((c) => !lista.includes(c))];
+}
+
+/**
+ * La firma de la lista que se ve (TablaEstandar limpia la selección cuando cambia; R5 y C3): la pestaña, el modo, el
+ * semáforo, el paso, el filtro de estados, la búsqueda, el orden, la página y el tamaño, normalizados.
+ * @param {Partial<EstadoTabla> | null | undefined} estado
+ * @returns {string}
+ */
+export function firmaSeleccion(estado) {
+  const e = /** @type {Record<string, unknown>} */ (estadoTablaInicial(estado ?? {}));
+  return JSON.stringify(CAMPOS.map((campo) => e[campo]));
+}
+
+// ─── T4D: la barra (búsqueda, resultados, pestañas con su filtro) y las flechas de 'Ajustar tabla' ───────────────
+
+/** La búsqueda de BarraTabla sale 300 ms después de la última tecla (Enter y la X, de inmediato). */
+export const RETARDO_BUSQUEDA_MS = 300;
+
+/**
+ * La búsqueda con retardo de BarraTabla: escribir(texto) espera `ms` desde la ÚLTIMA tecla y llama alBuscar UNA vez con
+ * lo último; ya(texto) (Enter, la X) busca de inmediato y descarta lo que esperaba; cancelar() (al desmontar) no deja
+ * nada en espera. El temporizador se inyecta para probarlo con node.
+ * @param {{alBuscar: (texto: string) => void, temporizador?: {setTimeout: (fn: () => void, ms: number) => any,
+ *   clearTimeout: (id: any) => void}, ms?: number}} opciones
+ * @returns {{escribir: (texto: string) => void, ya: (texto: string) => void, cancelar: () => void}}
+ */
+export function crearBusquedaConRetardo({ alBuscar, temporizador = relojDelSistema, ms = RETARDO_BUSQUEDA_MS }) {
+  /** @type {any} */
+  let id = null;
+  const cancelar = () => {
+    if (id !== null) temporizador.clearTimeout(id);
+    id = null;
+  };
+  return {
+    escribir(texto) {
+      cancelar();
+      id = temporizador.setTimeout(() => {
+        id = null;
+        alBuscar(texto);
+      }, ms);
+    },
+    ya(texto) {
+      cancelar();
+      alBuscar(texto);
+    },
+    cancelar,
+  };
+}
+
+/**
+ * La caja de búsqueda de BarraTabla cuando cambia el q del estado (`q` distinto de `local.visto`): si es el eco de lo
+ * que la caja mandó (`enviado`), se conserva lo que se sigue escribiendo; si vino de afuera (limpiar filtros, volver de
+ * un documento), el texto pasa a ser q. Sin cambio de q, el MISMO objeto.
+ * @param {LocalBusqueda} local
+ * @param {string} q
+ * @returns {LocalBusqueda}
+ */
+export function sincronizarBusqueda(local, q) {
+  if (q === local.visto) return local;
+  if (local.enviado !== null && q === local.enviado) return { texto: local.texto, visto: q, enviado: null };
+  return { texto: q, visto: q, enviado: null };
+}
+
+/**
+ * 'N resultados' de BarraTabla: '1 resultado', '1.452 resultados', 'Sin resultados' con 0, o null mientras no hay total
+ * (Contador pinta la barra gris; nunca 0).
+ * @param {unknown} total
+ * @returns {string | null}
+ */
+export function textoResultados(total) {
+  if (typeof total !== 'number' || !Number.isFinite(total) || total < 0) return null;
+  if (total === 0) return 'Sin resultados';
+  return `${formatoEntero(total)} ${total === 1 ? 'resultado' : 'resultados'}`;
+}
+
+/**
+ * El estado del Contador (C13) de una pestaña de BarraTabla (y de 'N resultados'), con el de los conteos de la barra
+ * (`estadoConteos`, de estadoKpi): sin número, 'cargando' (la barra gris; nunca 0) o 'error' ('—') si los conteos
+ * fallaron; con número, 'actualizando' (atenuado) mientras se vuelven a pedir y 'listo' en lo demás (si la recarga
+ * falla, queda el último número).
+ * @param {unknown} conteo
+ * @param {'cargando' | 'actualizando' | 'error' | 'listo'} [estadoConteos]
+ * @returns {'cargando' | 'actualizando' | 'error' | 'listo'}
+ */
+export function estadoDeConteo(conteo, estadoConteos) {
+  if (typeof conteo !== 'number' || !Number.isFinite(conteo)) return estadoConteos === 'error' ? 'error' : 'cargando';
+  return estadoConteos === 'actualizando' || estadoConteos === 'cargando' ? 'actualizando' : 'listo';
+}
+
+/**
+ * Las opciones del filtro de estados de la pestaña `vista` (FiltroEstados): las mismas para todas (un arreglo) o una
+ * función por pestaña. Nada (o una función que no devuelve un arreglo) da [].
+ * @param {OpcionesEstados | null | undefined} opciones
+ * @param {string | null} vista
+ * @returns {ReadonlyArray<OpcionEstado>}
+ */
+export function opcionesDeVista(opciones, vista) {
+  const lista = typeof opciones === 'function' ? opciones(vista) : opciones;
+  return Array.isArray(lista) ? lista : [];
+}
+
+/**
+ * La acción de una pestaña de BarraTabla: {tipo: 'vista', valor}, o {tipo: 'cambiar', cambios: {vista, estados}} si
+ * la pestaña nueva no tiene alguno de los estados filtrados (se quitan: si no, filtrarían sin verse). Sin opciones de
+ * estados (la barra no tiene filtro), el filtro no se toca. Como todo cambio, vuelve a la página 1.
+ * @param {EstadoTabla} estado
+ * @param {string} vista
+ * @param {OpcionesEstados | null | undefined} opciones
+ * @returns {AccionTabla}
+ */
+export function accionPestana(estado, vista, opciones) {
+  const actuales = estado?.estados ?? [];
+  if (opciones === null || opciones === undefined || !actuales.length) return { tipo: 'vista', valor: vista };
+  const validos = new Set(opcionesDeVista(opciones, vista).map((o) => o.valor));
+  const quedan = actuales.filter((e) => validos.has(e));
+  if (quedan.length === actuales.length) return { tipo: 'vista', valor: vista };
+  return { tipo: 'cambiar', cambios: { vista, estados: quedan } };
+}
+
+/**
+ * Una casilla de FiltroEstados: los estados con `valor` marcado o desmarcado, en el orden de las opciones (el mismo
+ * filtro da la misma URL); lo que no es una opción de la pestaña se descarta.
+ * @param {ReadonlyArray<string>} seleccion
+ * @param {string} valor
+ * @param {ReadonlyArray<OpcionEstado>} opciones
+ * @returns {string[]}
+ */
+export function alternarEstado(seleccion, valor, opciones) {
+  const marcados = new Set(seleccion ?? []);
+  if (marcados.has(valor)) marcados.delete(valor);
+  else marcados.add(valor);
+  return (opciones ?? []).map((o) => o.valor).filter((v) => marcados.has(v));
+}
+
+/**
+ * Si la flecha de 'Ajustar tabla' (subir con −1, bajar con 1) mueve la columna `id` en el orden completo (el mismo
+ * movimiento que desplazar de usePreferenciasTabla): no con una fija ni hacia el otro lado de las fijas.
+ * @param {ReadonlyArray<string>} orden
+ * @param {Record<string, LadoFijo>} fijas
+ * @param {string} id
+ * @param {number} paso
+ * @returns {boolean}
+ */
+export function puedeDesplazar(orden, fijas, id, paso) {
+  const lista = [...(orden ?? [])];
+  const lados = fijas ?? {};
+  const i = lista.indexOf(id);
+  const s = Math.sign(Number(paso));
+  if (i < 0 || !s) return false;
+  // moverColumna no mueve una fija ni cruza las de los lados: el orden queda igual.
+  return !iguales(moverColumna(lista, id, s > 0 ? i + 2 : i - 1, lados), lista);
 }

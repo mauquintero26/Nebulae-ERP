@@ -62,6 +62,7 @@ export const getTipoClass = (t: string) =>
 // ─── COLORES DE KPI CARD ─────────────────────────────────────────────
 export type KpiColor = 'indigo' | 'amber' | 'emerald' | 'purple' | 'orange' | 'red' | 'blue' | 'teal';
 
+// Lo usa components/AlertasBadge.tsx (B2).
 export const KPI_COLOR_MAP: Record<KpiColor, {
   bg: string; text: string; border: string; iconBg: string; iconText: string;
 }> = {
@@ -120,17 +121,6 @@ export const BTN = {
   whatsapp:  'flex items-center gap-1.5 px-3 py-2 bg-[#25D366] text-white rounded-xl hover:bg-[#1ebe5d] font-bold text-sm',
 };
 
-/** KPI Card */
-export const KPI_CARD = {
-  wrapper: 'rounded-2xl p-5 border hover:shadow-md transition-all',
-  label:   'text-xs font-black text-gray-400 uppercase tracking-wide mb-1',
-  value:   'text-3xl font-black text-gray-900 mb-1',
-  sub:     'text-xs font-semibold flex items-center gap-1',
-  subOk:   'text-emerald-600',
-  subWarn: 'text-red-500',
-  icon:    'w-10 h-10 rounded-xl flex items-center justify-center mb-3',
-};
-
 /** Alert banner */
 export const ALERT_BANNER = {
   wrapper: 'bg-red-50 border-b border-red-200 px-6 py-3 flex items-center gap-3',
@@ -157,17 +147,62 @@ export const SEARCH_BAR = {
   pill:    'flex items-center bg-gray-100 rounded-xl px-3 py-2.5 gap-2',     // variante sin borde
 };
 
-/** Tabla */
+/**
+ * Tabla estándar (Bloque 4, T4D; TABLA-base punto 5): las clases de components/tabla/TablaEstandar.tsx (y de su
+ * Esqueleto), que importa este token. Clases literales, para que Tailwind las vea. La tarjeta que encierra BarraTabla y
+ * TablaEstandar la pone la pantalla: TABLE.tarjeta, o TABLE.tarjetaCompleta con «Pantalla completa» (fixed inset-4
+ * z-40; la sombra de 100vmax oscurece lo de atrás sin otra capa). Las fijas usan bg-inherit: el fondo de la fila
+ * (claseFila) tiene que ser opaco.
+ */
 export const TABLE = {
-  wrapper: 'bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden',
-  thead:   'bg-gray-50 border-b border-gray-100',
-  th:      'px-4 py-3.5 text-xs font-black text-gray-400 uppercase tracking-wide',
-  thFirst: 'px-5 py-3.5 w-10',
-  tbody:   'divide-y divide-gray-50',
-  tr:      'hover:bg-indigo-50/30 cursor-pointer transition-colors group',
-  td:      'px-4 py-4',
-  tdFirst: 'px-5 py-4',
-  footer:  'px-5 py-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-400 font-medium',
+  // La tarjeta de la pantalla (la barra, la tabla y su paginación).
+  tarjeta:          'flex min-w-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm',
+  tarjetaCompleta:  'fixed inset-4 z-40 flex min-w-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-[0_0_0_100vmax_rgb(15_23_42/0.35)]',
+  // El contenedor: la tabla tiene su propia barra vertical, hasta el alto de la pantalla (TABLA-base, riesgos).
+  raiz:             'relative flex min-h-0 min-w-0 flex-1 flex-col',
+  cuerpo:           'relative flex min-h-0 min-w-0 flex-1 flex-col',
+  caja:             'relative min-h-0 flex-1 overflow-auto max-h-[calc(100vh-180px)]',
+  cajaSimple:       'relative overflow-x-auto',
+  tabla:            'table-fixed border-separate border-spacing-0 text-sm text-slate-700',
+  // Encabezado: sticky arriba; las fijas, además, a su lado.
+  encabezado:       'sticky top-0 z-20 h-10 border-b border-slate-200 bg-slate-50 px-3 text-left align-middle text-xs font-bold text-slate-500 select-none',
+  encabezadoFijo:   'z-30',
+  encabezadoCasilla: 'sticky left-0 top-0 z-30 h-10 border-b border-slate-200 bg-slate-50 text-center align-middle',
+  encabezadoInterior: 'flex h-full min-w-0 items-center gap-1',
+  encabezadoArrastrado: 'opacity-40',
+  titulo:           'flex min-w-0 flex-1 items-center gap-1 rounded text-left outline-none focus-visible:ring-2 focus-visible:ring-indigo-300',
+  tituloOrdenable:  'cursor-pointer hover:text-slate-800',
+  flechaOrden:      'shrink-0 text-indigo-600',
+  asa:              'absolute right-0 top-0 z-10 h-full w-2 cursor-col-resize touch-none after:absolute after:bottom-2 after:right-0 after:top-2 after:w-px after:bg-slate-200 hover:after:w-0.5 hover:after:bg-blue-500',
+  // Filas: el fondo va en la fila (las fijas lo heredan con bg-inherit).
+  fila:             'group transition-colors',
+  filaFondo:        'bg-white',
+  filaHover:        'hover:bg-slate-50',
+  filaClic:         'cursor-pointer outline-none focus-visible:bg-indigo-50',
+  filaSeleccionada: 'bg-indigo-50 hover:bg-indigo-100',
+  celda:            'h-11 border-b border-slate-100 px-3 align-middle tabular-nums',
+  celdaFija:        'sticky z-10 bg-inherit',
+  celdaCasilla:     'sticky left-0 z-10 h-11 border-b border-slate-100 bg-inherit text-center align-middle',
+  bordeFijaIzquierda: 'border-r border-r-slate-200',
+  bordeFijaDerecha: 'border-l border-l-slate-200',
+  contenido:        'truncate',
+  casilla:          'h-4 w-4 cursor-pointer accent-indigo-600 disabled:cursor-not-allowed disabled:opacity-40',
+  // Separadores, vacío, error y aviso (el texto queda a la vista aunque la tabla se corra de lado).
+  grupoCelda:       'h-8 border-b border-slate-200 bg-slate-100 px-3 text-xs font-bold text-slate-600',
+  mensajeFijo:      'sticky left-3 max-w-full',
+  vacio:            'border-b border-slate-100 px-3 py-10 text-center text-sm text-slate-500',
+  error:            'border-b border-rose-100 bg-rose-50 px-3 py-6 text-center text-sm font-semibold text-rose-700',
+  botonReintentar:  'ml-3 inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-100',
+  aviso:            'flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-800',
+  // Recargando: las filas atenuadas y una barra fina arriba.
+  recarga:          'pointer-events-none absolute inset-x-0 top-0 z-40 h-0.5 animate-pulse bg-indigo-500',
+  atenuado:         'opacity-60 transition-opacity',
+  pie:              'flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-4 py-2.5 text-xs text-slate-500',
+  // Mover una columna: la copia del título y la línea azul de destino (en un portal).
+  fantasma:         'pointer-events-none fixed left-0 top-0 z-[80] max-w-[16rem] truncate rounded-lg border border-blue-300 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-xl',
+  linea:            'pointer-events-none fixed z-[80] w-0.5 rounded-full bg-blue-500',
+  // Esqueleto: renglones grises que se mueven, nunca ceros.
+  esqueleto:        'block h-3 animate-pulse rounded-full bg-slate-200',
 };
 
 /** Badge de estado (pill) */

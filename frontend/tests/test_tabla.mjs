@@ -8,7 +8,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import {
   TAMANOS_PAGINA, VERSION_PREFS, ANCHO_MIN, ANCHO_MAX, ANCHO_POR_DEFECTO, MODOS_TABLA,
   reconciliarColumnas, fijasDe, moverColumna, indiceDestino, limitarAncho, offsetsFijas, alternarOrden,
@@ -20,6 +20,11 @@ import {
   listadoCliente,
   MAXIMO_ESTADOS, sesionVigente, escriturasDeAccion, guardarCambioColumnas, lanzarListado, esErrorDeOrden, rechazoPorAtender,
   ESPERA_PREFERENCIAS_MS, esperarPreferencias, listoConTope,
+  UMBRAL_MOVER_COLUMNA, superaUmbralColumna, ANCHO_AJUSTE_CONTENIDO, RELLENO_CELDA, anchoAlContenido, ajustarAlAncho,
+  ANCHO_SELECCION, geometriaTabla, destinoArrastre, bordeDeHueco, campoOrden, direccionOrden, accesoresDeOrden,
+  vistaCuerpo, filasConGrupos, paginaCorregida, alternarSeleccion, estadoSeleccionPagina, alternarSeleccionPagina,
+  firmaSeleccion, RETARDO_BUSQUEDA_MS, crearBusquedaConRetardo, sincronizarBusqueda, textoResultados, opcionesDeVista,
+  accionPestana, alternarEstado, puedeDesplazar, estadoDeConteo,
 } from '../src/lib/tabla.js';
 
 const ids = (filas) => filas.map((f) => f.id);
@@ -1213,7 +1218,449 @@ console.log('--- TEST 26 (T4C r2, punto 4): el tope de espera de las preferencia
   assert.deepEqual([tarde, reloj.pendientes()], [false, 0]);
 }
 
+// ─── T4D: la lógica de los componentes de vista (TablaEstandar, BarraTabla, FiltroEstados, MenuAjustes y Paginacion) ───
+
+/** Un reloj falso como el de TEST 26: setTimeout y clearTimeout que solo corren con avanzar(ms). */
+const relojFalso = () => {
+  let ahora = 0;
+  let siguiente = 1;
+  let tareas = [];
+  return {
+    setTimeout(fn, ms) { const id = siguiente++; tareas.push({ id, en: ahora + ms, fn }); return id; },
+    clearTimeout(id) { tareas = tareas.filter((t) => t.id !== id); },
+    avanzar(ms) {
+      ahora += ms;
+      for (const t of tareas.filter((x) => x.en <= ahora)) { tareas = tareas.filter((x) => x !== t); t.fn(); }
+    },
+    pendientes: () => tareas.length,
+  };
+};
+const suma = (anchos) => Object.values(anchos).reduce((a, b) => a + b, 0);
+
+console.log('--- TEST 27 (T4D): mover una columna pasa de 5 px; ancho al contenido y «Ajustar al ancho de la pantalla» ---');
+{
+  // Presionar el título y arrastrar MÁS de 5 px mueve la columna; hasta 5 px es un clic (ordena).
+  assert.equal(UMBRAL_MOVER_COLUMNA, 5);
+  assert.equal(superaUmbralColumna(3, 4), false, 'exactamente 5 px todavía es un clic');
+  assert.equal(superaUmbralColumna(3, 4.1), true);
+  assert.equal(superaUmbralColumna(-6, 0), true, 'en cualquier dirección');
+  assert.equal(superaUmbralColumna(0, 0), false);
+  assert.equal(superaUmbralColumna(Number.NaN, 9), false);
+
+  // Doble clic en el borde: el texto más largo que se ve más el relleno de la celda, máximo 480 px.
+  assert.equal(ANCHO_AJUSTE_CONTENIDO, 480);
+  assert.equal(RELLENO_CELDA, 24);
+  assert.equal(anchoAlContenido([100, 250.2, 80]), 275, 'el más largo, redondeado hacia arriba, más 24');
+  assert.equal(anchoAlContenido([900]), 480, 'máximo 480');
+  assert.equal(anchoAlContenido([900], { anchoMax: 300 }), 300, 'y nunca más que el máximo de la columna');
+  assert.equal(anchoAlContenido([10]), ANCHO_MIN);
+  assert.equal(anchoAlContenido([10], { anchoMin: 90 }), 90);
+  assert.equal(anchoAlContenido([0]), ANCHO_MIN, 'una celda vacía cuenta');
+  assert.equal(anchoAlContenido([800], { anchoMin: 500 }), 500, 'un mínimo de más de 480 manda');
+  assert.equal(anchoAlContenido([100], {}, 10), 110, 'el relleno se puede cambiar');
+  assert.equal(anchoAlContenido([]), null, 'sin medidas no hay nada que ajustar');
+  assert.equal(anchoAlContenido([Number.NaN, -3, undefined]), null);
+
+  // 'Ajustar al ancho de la pantalla': reparte en proporción para que las visibles sumen el ancho de la tabla; las de
+  // ancho fijo (mínimo = máximo: la casilla, las acciones) no cambian; lo que sobra del redondeo va a las de mayor fracción.
+  const visibles = ['sel', 'num', 'cli', 'est', 'acc'];
+  const anchos = POR_DEFECTO.anchos;
+  const angosto = ajustarAlAncho(DEFINICION, visibles, anchos, 456);
+  assert.deepEqual(angosto, { sel: 40, num: 94, cli: 156, est: 110, acc: 56 });
+  assert.equal(suma(angosto), 456, 'cabe justo: sin correr la tabla');
+  const ancho = ajustarAlAncho(DEFINICION, visibles, anchos, 1000);
+  assert.deepEqual(ancho, { sel: 40, num: 236, cli: 393, est: 275, acc: 56 }, 'también crece si sobra espacio');
+  assert.equal(suma(ancho), 1000);
+  // Las que llegan a su mínimo se quedan ahí y lo demás va a las otras.
+  assert.deepEqual(ajustarAlAncho(DEFINICION, visibles, anchos, 300), { sel: 40, num: 64, cli: 76, est: 64, acc: 56 });
+  // Si ni con los mínimos cabe, los mínimos (la tabla se corre); si ni con los máximos se llena, los máximos.
+  assert.deepEqual(ajustarAlAncho(DEFINICION, visibles, anchos, 200), { sel: 40, num: 64, cli: 64, est: 64, acc: 56 });
+  assert.deepEqual(ajustarAlAncho(DEFINICION, visibles, anchos, 5000), { sel: 40, num: 640, cli: 640, est: 640, acc: 56 });
+  // Lo guardado cuenta (no lo por defecto), las ocultas no entran y un id que no está en la definición se ignora.
+  assert.deepEqual(ajustarAlAncho(DEFINICION, ['num', 'zzz', 'cli'], { num: 100, cli: 300 }, 600), { num: 150, cli: 450 });
+  assert.deepEqual(ajustarAlAncho(DEFINICION, ['cli'], {}, 300), { cli: 300 }, 'sin ancho guardado, el de la definición');
+  for (const malo of [0, -10, null, undefined, Number.NaN]) assert.equal(ajustarAlAncho(DEFINICION, visibles, anchos, malo), null, String(malo));
+  assert.equal(ajustarAlAncho(DEFINICION, [], anchos, 500), null);
+  const anchosCopia = structuredClone(anchos);
+  ajustarAlAncho(DEFINICION, visibles, anchos, 456);
+  assert.deepEqual(anchos, anchosCopia, 'no muta lo que recibe');
+}
+
+console.log('--- TEST 28 (T4D): la geometría de la tabla (columna flexible, fijas y casilla) y el destino al arrastrar ---');
+{
+  const visibles = ['num', 'cli', 'est', 'acc'];
+  const anchos = { num: 120, cli: 200, est: 140, acc: 56 };
+  const fijas = { num: 'izquierda', acc: 'derecha' };
+  assert.equal(ANCHO_SELECCION, 40);
+  // La columna flexible toma lo que sobra del ancho de la tarjeta; las fijas de la izquierda empiezan después de la casilla.
+  assert.deepEqual(geometriaTabla({ visibles, anchos, fijas, flexibles: ['cli'], disponible: 700, anchoSeleccion: 40 }), {
+    anchos: { num: 120, cli: 344, est: 140, acc: 56 }, total: 700, offsets: { num: 40, acc: 0 },
+  });
+  // Sin flexible, o si no sobra (la tabla se corre de lado), los anchos de siempre.
+  const fijo = { anchos, total: 556, offsets: { num: 40, acc: 0 } };
+  assert.deepEqual(geometriaTabla({ visibles, anchos, fijas, disponible: 700, anchoSeleccion: 40 }), fijo);
+  assert.deepEqual(geometriaTabla({ visibles, anchos, fijas, flexibles: ['cli'], disponible: 500, anchoSeleccion: 40 }), fijo);
+  assert.deepEqual(geometriaTabla({ visibles, anchos, fijas, flexibles: ['cli'], disponible: null, anchoSeleccion: 40 }), fijo,
+    'antes de medir, sin estirar');
+  assert.deepEqual(geometriaTabla({ visibles, anchos, fijas, flexibles: ['monto'], disponible: 700, anchoSeleccion: 40 }), fijo,
+    'una flexible oculta no estira nada');
+  // Dos flexibles se reparten lo que sobra (el píxel suelto va a la primera); los decimales del ancho no cuentan.
+  assert.deepEqual(geometriaTabla({ visibles, anchos, fijas, flexibles: ['est', 'cli'], disponible: 701.6, anchoSeleccion: 40 }).anchos,
+    { num: 120, cli: 273, est: 212, acc: 56 });
+  // Sin casilla, las fijas de la izquierda empiezan en 0; una visible sin ancho toma ANCHO_POR_DEFECTO.
+  assert.deepEqual(geometriaTabla({ visibles: ['num', 'x'], anchos: { num: 100 }, fijas: { num: 'izquierda' } }),
+    { anchos: { num: 100, x: ANCHO_POR_DEFECTO }, total: 100 + ANCHO_POR_DEFECTO, offsets: { num: 0 } });
+  const anchosCopia = structuredClone(anchos);
+  geometriaTabla({ visibles, anchos, fijas, flexibles: ['cli'], disponible: 900 });
+  assert.deepEqual(anchos, anchosCopia, 'no muta los anchos recibidos');
+
+  // El hueco de los encabezados VISIBLES donde caería la columna (indiceDestino), sin cruzar las fijas, y si cambia algo.
+  const orden = ['num', 'cli', 'est', 'monto', 'acc'];
+  assert.deepEqual(destinoArrastre(orden, fijas, 'est', 0), { hueco: 1, cambia: true }, 'no pasa a la izquierda de num');
+  assert.deepEqual(destinoArrastre(orden, fijas, 'cli', 1), { hueco: 1, cambia: false }, 'su mismo lugar');
+  assert.deepEqual(destinoArrastre(orden, fijas, 'cli', 2), { hueco: 2, cambia: false }, 'justo después de sí misma');
+  assert.deepEqual(destinoArrastre(orden, fijas, 'cli', 3), { hueco: 3, cambia: true });
+  assert.deepEqual(destinoArrastre(orden, fijas, 'cli', 99), { hueco: 4, cambia: true }, 'no pasa a la derecha de acc');
+  assert.deepEqual(destinoArrastre(orden, fijas, 'cli', 2.7), { hueco: 2, cambia: false });
+  assert.deepEqual(destinoArrastre(orden, fijas, 'acc', 1), { hueco: 1, cambia: false }, 'una fija no se mueve');
+  assert.deepEqual(destinoArrastre(orden, fijas, 'nada', 2), { hueco: 2, cambia: false });
+  assert.deepEqual(destinoArrastre(orden, fijas, 'cli', Number.NaN), { hueco: null, cambia: false });
+  // Dónde va la línea azul: el borde izquierdo del encabezado del hueco, o el derecho del último.
+  const bordes = [[0, 100], [100, 250], [250, 400]];
+  assert.deepEqual([0, 1, 2, 3, 7, -1].map((h) => bordeDeHueco(bordes, h)), [0, 100, 250, 400, 400, 0]);
+  assert.equal(bordeDeHueco([{ left: 10, right: 60 }, { left: 60, right: 90 }], 1), 60, 'acepta rectángulos');
+  assert.equal(bordeDeHueco([], 0), null);
+  assert.equal(bordeDeHueco(bordes, Number.NaN), null);
+}
+
+console.log('--- TEST 29 (T4D): orden por columna, qué pinta el cuerpo, separadores de grupo y página que ya no existe ---');
+{
+  // ordenable: true ordena por el id; un texto es el campo del servidor; lo demás no ordena.
+  assert.equal(campoOrden({ id: 'cli', ordenable: true }), 'cli');
+  assert.equal(campoOrden({ id: 'monto', ordenable: 'total_cop' }), 'total_cop');
+  for (const c of [{ id: 'x' }, { id: 'x', ordenable: false }, { id: 'x', ordenable: '  ' }, null]) assert.equal(campoOrden(c), null);
+  assert.equal(direccionOrden('cli', 'cli'), 'asc');
+  assert.equal(direccionOrden('-cli', 'cli'), 'desc');
+  assert.equal(direccionOrden(null, 'cli'), null);
+  assert.equal(direccionOrden('-monto', 'cli'), null);
+  assert.equal(direccionOrden('cli', null), null);
+  // Modo cliente: los accesores de useListadoCliente salen del valorOrden de cada columna, con su campo de orden.
+  const porNombre = (f) => f.nombre;
+  const porTotal = (f) => f.total;
+  const accesores = accesoresDeOrden([
+    { id: 'cli', ordenable: true, valorOrden: porNombre }, { id: 'monto', ordenable: 'total', valorOrden: porTotal },
+    { id: 'est', ordenable: true }, { id: 'x', valorOrden: porNombre },
+  ]);
+  assert.deepEqual(Object.keys(accesores), ['cli', 'total']);
+  assert.equal(accesores.cli, porNombre);
+  const filasCliente = [{ id: 1, nombre: 'Bravo', total: 5 }, { id: 2, nombre: 'Álvarez', total: 9 }, { id: 3, nombre: 'Alba', total: 1 }];
+  assert.deepEqual(ids(ordenarFilas(filasCliente, 'cli', accesores)), [3, 2, 1]);
+  assert.deepEqual(ids(ordenarFilas(filasCliente, '-total', accesores)), [2, 1, 3]);
+
+  // Lo que pinta el cuerpo: cargando (esqueleto) gana; después el error; después vacío o filas.
+  const err = new Error('caído');
+  assert.equal(vistaCuerpo({ cargando: true, error: err, filas: [1] }), 'esqueleto');
+  assert.equal(vistaCuerpo({ cargando: false, error: err, filas: [1] }), 'error', 'con error no se pintan filas viejas');
+  assert.equal(vistaCuerpo({ error: null, filas: [] }), 'vacio');
+  assert.equal(vistaCuerpo({ filas: null }), 'vacio');
+  assert.equal(vistaCuerpo({ filas: [1] }), 'filas');
+
+  // Separadores: uno al empezar cada tramo de un mismo grupo, con cuántas filas tiene el tramo; una fila sin grupo no
+  // pinta separador.
+  const filas = [{ id: 1, g: 'A' }, { id: 2, g: 'A' }, { id: 3, g: 'B' }, { id: 4, g: null }, { id: 5, g: 'B' }];
+  assert.deepEqual(filasConGrupos(filas, (f) => f.g), [
+    { tipo: 'grupo', grupo: 'A', n: 2 }, { tipo: 'fila', fila: filas[0], indice: 0 }, { tipo: 'fila', fila: filas[1], indice: 1 },
+    { tipo: 'grupo', grupo: 'B', n: 1 }, { tipo: 'fila', fila: filas[2], indice: 2 }, { tipo: 'fila', fila: filas[3], indice: 3 },
+    { tipo: 'grupo', grupo: 'B', n: 1 }, { tipo: 'fila', fila: filas[4], indice: 4 },
+  ]);
+  assert.deepEqual(filasConGrupos(filas.slice(0, 2)), [
+    { tipo: 'fila', fila: filas[0], indice: 0 }, { tipo: 'fila', fila: filas[1], indice: 1 },
+  ], 'sin grupoFila, solo filas');
+  assert.deepEqual(filasConGrupos(null, (f) => f.g), []);
+
+  // Si un filtro deja menos páginas, salta a la última que existe; solo con el total ya llegado de ESA consulta.
+  assert.equal(paginaCorregida({ pagina: 5, tamano: 25, total: 60 }), 3);
+  assert.equal(paginaCorregida({ pagina: 3, tamano: 25, total: 0 }), 1);
+  assert.equal(paginaCorregida({ pagina: 2, tamano: 25, total: 60 }), null, 'la página existe');
+  assert.equal(paginaCorregida({ pagina: 1, tamano: 25, total: 0 }), null);
+  assert.equal(paginaCorregida({ pagina: 5, tamano: 50, total: 60 }), 2);
+  for (const espera of [{ cargando: true }, { recargando: true }, { error: err }, { total: null }]) {
+    assert.equal(paginaCorregida({ pagina: 5, tamano: 25, total: 60, ...espera }), null, JSON.stringify(Object.keys(espera)));
+  }
+}
+
+console.log('--- TEST 30 (T4D): la selección marca la página visible y se limpia con cualquier cambio de la lista ---');
+{
+  const sel = [1, 2];
+  assert.deepEqual(alternarSeleccion(sel, 2), [1]);
+  assert.deepEqual(alternarSeleccion(sel, 3), [1, 2, 3]);
+  assert.deepEqual(sel, [1, 2], 'no muta');
+  assert.equal(estadoSeleccionPagina([1, 2, 9], [1, 2, 3]), 'algunas');
+  assert.equal(estadoSeleccionPagina([1, 2, 3, 9], [1, 2, 3]), 'todas');
+  assert.equal(estadoSeleccionPagina([9], [1, 2]), 'ninguna');
+  assert.equal(estadoSeleccionPagina([1], []), 'ninguna', 'una página sin filas seleccionables');
+  // La casilla del encabezado: marca solo las de la página (conserva las otras); si ya estaban todas, las quita.
+  assert.deepEqual(alternarSeleccionPagina([9, 1], [1, 2, 3]), [9, 1, 2, 3]);
+  assert.deepEqual(alternarSeleccionPagina([9, 1, 2, 3], [1, 2, 3]), [9]);
+  assert.deepEqual(alternarSeleccionPagina([], []), []);
+  // La firma de la lista: cambia con la página, la pestaña, la búsqueda, el filtro, el orden, el tamaño y el modo.
+  const base = estadoTablaInicial({ vista: 'todos', estados: ['A'] });
+  assert.equal(firmaSeleccion(base), firmaSeleccion({ ...base, estados: ['A'] }), 'el mismo estado, la misma firma');
+  const cambios = [
+    { tipo: 'pagina', valor: 2 }, { tipo: 'vista', valor: 'sc' }, { tipo: 'q', valor: 'x' }, { tipo: 'estados', valor: ['B'] },
+    { tipo: 'orden', valor: 'cli' }, { tipo: 'tamano', valor: 50 }, { tipo: 'modo', valor: 'kanban' },
+    { tipo: 'semaforo', valor: 'atrasados' }, { tipo: 'paso', valor: 'COT' },
+  ];
+  for (const accion of cambios) {
+    assert.notEqual(firmaSeleccion(reducirEstadoTabla(base, accion)), firmaSeleccion(base), accion.tipo);
+  }
+}
+
+console.log('--- TEST 31 (T4D): búsqueda con retardo de 300 ms, «N resultados», pestañas con su filtro y flechas de «Ajustar tabla» ---');
+{
+  assert.equal(RETARDO_BUSQUEDA_MS, 300);
+  const reloj = relojFalso();
+  const llamadas = [];
+  const b = crearBusquedaConRetardo({ alBuscar: (t) => llamadas.push(t), temporizador: reloj });
+  b.escribir('a');
+  reloj.avanzar(200);
+  b.escribir('ab');
+  reloj.avanzar(299);
+  assert.deepEqual(llamadas, [], 'cada tecla vuelve a esperar 300 ms');
+  reloj.avanzar(1);
+  assert.deepEqual(llamadas, ['ab'], 'una sola búsqueda, con lo último');
+  reloj.avanzar(1000);
+  assert.deepEqual(llamadas, ['ab']);
+  b.escribir('abc');
+  b.ya('abcd');
+  assert.deepEqual(llamadas, ['ab', 'abcd'], 'Enter busca de inmediato');
+  reloj.avanzar(1000);
+  assert.deepEqual(llamadas, ['ab', 'abcd'], 'y lo que esperaba ya no sale');
+  b.escribir('x');
+  b.cancelar();
+  reloj.avanzar(1000);
+  assert.deepEqual([llamadas.length, reloj.pendientes()], [2, 0], 'cancelar (al desmontar) no deja nada en espera');
+  b.ya('');
+  assert.deepEqual(llamadas.at(-1), '', 'la X limpia de inmediato');
+  const b300 = crearBusquedaConRetardo({ alBuscar: (t) => llamadas.push(t), temporizador: reloj });
+  b300.escribir('y');
+  reloj.avanzar(RETARDO_BUSQUEDA_MS);
+  assert.equal(llamadas.at(-1), 'y', 'por defecto, 300 ms');
+
+  // La caja de búsqueda y el estado: el eco de lo que la caja mandó no pisa lo que se sigue escribiendo; un cambio de
+  // afuera (limpiar filtros, volver de un documento) sí reemplaza el texto.
+  const local = { texto: 'abc', visto: '', enviado: 'ab' };
+  assert.deepEqual(sincronizarBusqueda(local, 'ab'), { texto: 'abc', visto: 'ab', enviado: null });
+  assert.deepEqual(sincronizarBusqueda({ texto: 'abc', visto: 'ab', enviado: null }, ''), { texto: '', visto: '', enviado: null });
+  assert.deepEqual(sincronizarBusqueda({ texto: '', visto: '', enviado: 'ab' }, 'pérez'), { texto: 'pérez', visto: 'pérez', enviado: null });
+  assert.equal(sincronizarBusqueda(local, ''), local, 'sin cambio de q, el mismo objeto');
+
+  // 'N resultados': null mientras carga (Contador pinta la barra gris, nunca 0).
+  assert.equal(textoResultados(null), null);
+  assert.equal(textoResultados(undefined), null);
+  assert.equal(textoResultados(Number.NaN), null);
+  assert.equal(textoResultados(-1), null);
+  assert.equal(textoResultados(0), 'Sin resultados');
+  assert.equal(textoResultados(1), '1 resultado');
+  assert.equal(textoResultados(2), '2 resultados');
+  assert.equal(textoResultados(1452), '1.452 resultados');
+  // El Contador de cada pestaña (y de 'N resultados'): sin número, la barra gris (o '—' si los conteos fallaron); con
+  // número, atenuado mientras se actualiza. Nunca 0 mientras carga.
+  assert.equal(estadoDeConteo(null), 'cargando');
+  assert.equal(estadoDeConteo(undefined, 'listo'), 'cargando', 'un conteo que no llegó no es 0');
+  assert.equal(estadoDeConteo(null, 'actualizando'), 'cargando');
+  assert.equal(estadoDeConteo(null, 'error'), 'error');
+  assert.equal(estadoDeConteo(12), 'listo');
+  assert.equal(estadoDeConteo(12, 'actualizando'), 'actualizando');
+  assert.equal(estadoDeConteo(12, 'cargando'), 'actualizando', 'el número anterior, atenuado');
+  assert.equal(estadoDeConteo(12, 'error'), 'listo', 'si la recarga falla, queda el último número');
+  assert.equal(estadoDeConteo(0), 'listo');
+
+  // Las opciones del filtro de estados van por pestaña; al cambiar de pestaña, los estados que la otra no tiene se quitan.
+  const OPS = [{ valor: 'A', etiqueta: 'Asignada' }, { valor: 'B', etiqueta: 'Borrador' }];
+  const porVista = (v) => (v === 'sc' ? [OPS[0]] : v === 'nada' ? null : OPS);
+  assert.equal(opcionesDeVista(OPS, 'x'), OPS);
+  assert.deepEqual(opcionesDeVista(porVista, 'sc'), [OPS[0]]);
+  assert.deepEqual(opcionesDeVista(porVista, 'nada'), []);
+  assert.deepEqual(opcionesDeVista(undefined, 'x'), []);
+  const conEstados = estadoTablaInicial({ vista: 'todos', estados: ['A', 'B'], pagina: 3 });
+  const aSc = accionPestana(conEstados, 'sc', porVista);
+  assert.deepEqual(aSc, { tipo: 'cambiar', cambios: { vista: 'sc', estados: ['A'] } });
+  assert.deepEqual(reducirEstadoTabla(conEstados, aSc), { ...conEstados, vista: 'sc', estados: ['A'], pagina: 1 });
+  assert.deepEqual(accionPestana(conEstados, 'cot', porVista), { tipo: 'vista', valor: 'cot' }, 'los dos siguen valiendo');
+  assert.deepEqual(accionPestana(conEstados, 'sc', undefined), { tipo: 'vista', valor: 'sc' }, 'sin opciones no se toca el filtro');
+  assert.deepEqual(accionPestana(estadoTablaInicial({}), 'sc', porVista), { tipo: 'vista', valor: 'sc' });
+  // Una casilla del filtro: alterna y deja los estados en el orden de las opciones (la misma URL para el mismo filtro).
+  assert.deepEqual(alternarEstado(['B'], 'A', OPS), ['A', 'B']);
+  assert.deepEqual(alternarEstado(['A', 'B'], 'A', OPS), ['B']);
+  assert.deepEqual(alternarEstado(['Z', 'A'], 'B', OPS), ['A', 'B'], 'lo que no es una opción se descarta');
+
+  // Las flechas de 'Ajustar tabla' (sin arrastre): no cruzan las fijas, que tampoco se mueven.
+  const fijas = fijasDe(DEFINICION);
+  const orden = POR_DEFECTO.orden;
+  assert.equal(puedeDesplazar(orden, fijas, 'cli', -1), false, 'num está fija a la izquierda');
+  assert.equal(puedeDesplazar(orden, fijas, 'cli', 1), true);
+  assert.equal(puedeDesplazar(orden, fijas, 'monto', 1), false, 'acc está fija a la derecha');
+  assert.equal(puedeDesplazar(orden, fijas, 'monto', -1), true);
+  assert.equal(puedeDesplazar(orden, fijas, 'acc', -1), false);
+  assert.equal(puedeDesplazar(orden, fijas, 'sel', 1), false);
+  assert.equal(puedeDesplazar(orden, fijas, 'nada', 1), false);
+  assert.equal(puedeDesplazar(orden, fijas, 'est', 0), false);
+}
+
+console.log('--- TEST 32 (T4D): el fuente de los componentes de vista de components/tabla y el token TABLE (sin DOM en node) ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // Sin comentarios (/* … */, {/* … */} y las líneas //): lo que se busca es el código, no lo que dicen los comentarios.
+  const codigo = (texto) => texto.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const NOMBRES = ['TablaEstandar', 'BarraTabla', 'FiltroEstados', 'MenuAjustes', 'Paginacion', 'Esqueleto'];
+  const fuentes = Object.fromEntries(NOMBRES.map((n) => [n, leer(`components/tabla/${n}.tsx`)]));
+  const indice = leer('components/tabla/index.ts');
+  const ds = leer('lib/design-system.ts');
+  for (const [nombre, fuente] of Object.entries(fuentes)) {
+    const c = codigo(fuente);
+    assert.ok(fuente.startsWith("'use client';"), `${nombre}: «use client»`);
+    assert.match(fuente, new RegExp(`export function ${nombre}\\b`), `${nombre}: exporta el componente`);
+    assert.ok(indice.includes(`export * from './${nombre}';`), `index.ts exporta ${nombre}`);
+    assert.ok(!/\bdark:/.test(fuente), `${nombre}: sin dark:`);
+    assert.ok(!/(^|[^\w.$])(?:(?:window|globalThis)\??\.)?(?:alert|confirm|prompt)\s*\(/m.test(c), `${nombre}: sin alert, confirm ni prompt`);
+    assert.ok(!/localStorage|sessionStorage/.test(c), `${nombre}: no toca el almacenamiento (R4: eso es de preferencias.js y useEstadoTabla)`);
+    // D40: una sola instancia de usePreferenciasTabla por id, la de la pantalla; los componentes la reciben por props.
+    assert.ok(!/usePreferenciasTabla\(|usePreferencia(Parte)?\(|preferenciasApp\(/.test(c), `${nombre}: no crea otro vínculo de preferencias (D40)`);
+  }
+  // C1 y R27: ConmutadorVista y MenuFila son los de components/ui; no hay copias en components/tabla.
+  for (const n of ['ConmutadorVista', 'MenuFila']) {
+    assert.ok(!existsSync(new URL(`../src/components/tabla/${n}.tsx`, import.meta.url)), `sin components/tabla/${n}.tsx`);
+  }
+
+  // TablaEstandar: el token TABLE de design-system.ts, la lógica de lib/tabla.js y las dos props de D40.
+  const tabla = fuentes.TablaEstandar;
+  const t = codigo(tabla);
+  assert.match(tabla, /import \{ TABLE \} from '@\/lib\/design-system';/);
+  assert.match(fuentes.Esqueleto, /import \{ TABLE \} from '@\/lib\/design-system';/);
+  const bloqueTabla = /export const TABLE = \{([\s\S]*?)\n\};/.exec(ds);
+  assert.ok(bloqueTabla, 'design-system.ts tiene el token TABLE');
+  const claves = new Set([...bloqueTabla[1].matchAll(/^\s+([A-Za-z]+):/gm)].map((m) => m[1]));
+  for (const fuente of [tabla, fuentes.Esqueleto]) {
+    for (const [, clave] of fuente.matchAll(/TABLE\.([A-Za-z]+)/g)) assert.ok(claves.has(clave), `TABLE.${clave} existe en design-system.ts`);
+  }
+  const clase = (clave) => new RegExp(`^\\s+${clave}:\\s+'([^']*)'`, 'm').exec(bloqueTabla[1])?.[1] ?? '';
+  assert.ok(clase('tabla').includes('table-fixed'), 'table-layout: fixed');
+  assert.ok(clase('caja').includes('overflow-auto') && clase('caja').includes('max-h-[calc(100vh-180px)]'), 'su propia barra, hasta el alto de la pantalla');
+  assert.ok(clase('encabezado').includes('sticky') && clase('encabezado').includes('top-0') && clase('encabezado').includes('bg-slate-50'), 'el encabezado queda quieto y opaco');
+  assert.ok(clase('celdaFija').includes('sticky') && clase('celdaFija').includes('bg-inherit'), 'las fijas, sticky con el fondo de la fila');
+  assert.ok(clase('celda').includes('tabular-nums') && clase('contenido').includes('truncate'), 'números alineados y texto truncado');
+  assert.ok(clase('tarjetaCompleta').includes('fixed inset-4 z-40'), 'pantalla completa');
+  assert.ok(clase('aviso').includes('bg-amber-50'), 'D40: el aviso del orden es ámbar, no un error');
+  assert.ok(clase('esqueleto').includes('animate-pulse') && clase('esqueleto').includes('bg-slate-200'), 'renglones grises que se mueven');
+  assert.ok(clase('asa').includes('w-2') && clase('asa').includes('cursor-col-resize'), 'el asa de 8 px');
+  assert.ok(clase('linea').includes('bg-blue-500'), 'la línea azul de destino');
+  for (const n of ['geometriaTabla', 'superaUmbralColumna', 'indiceDestino', 'destinoArrastre', 'bordeDeHueco', 'anchoAlContenido',
+    'limitarAncho', 'alternarOrden', 'campoOrden', 'direccionOrden', 'vistaCuerpo', 'filasConGrupos', 'paginaCorregida',
+    'firmaSeleccion', 'estadoSeleccionPagina', 'alternarSeleccionPagina', 'alternarSeleccion', 'reconciliarColumnas',
+    'velocidadAutodesplazamiento', 'textoDeError']) {
+    assert.match(t, new RegExp(`\\b${n}\\(`), `TablaEstandar usa ${n}`);
+  }
+  assert.ok(t.includes('<colgroup>') && t.includes("style={{ width: geometria.total, minWidth: '100%' }}"), '<colgroup> y ancho = suma (mínimo 100%)');
+  // D40: las dos props nuevas.
+  assert.match(tabla, /preferencias: PreferenciasTabla;/, 'D40: preferencias, el resultado del usePreferenciasTabla de la pantalla');
+  assert.match(tabla, /aviso\?: string \| null;/, 'D40: aviso');
+  assert.match(t, /\{aviso \? \(\s*<div role="status" className=\{TABLE\.aviso\}>/, 'el aviso va sobre la tabla, como status (no alert)');
+  assert.ok(t.indexOf('TABLE.aviso') < t.indexOf('<table'), 'el aviso no tapa las filas: va antes de la tabla');
+  // «Ajustar al ancho»: la tabla publica su ancho en el ref de la pantalla y MenuAjustes lo lee al hacer clic.
+  assert.match(t, /anchoRef\.current = disponible === null \? null : Math\.max\(0, disponible - anchoSeleccion\);/);
+  assert.match(t, /new ResizeObserver\(\(\) => setDisponible\(el\.clientWidth\)\)/, 'el ancho del contenedor, con ResizeObserver');
+  // El arrastre (H1, como el tablero común de T4B): captura después del umbral, document en captura con el pointerId,
+  // cancelar si el nodo salió del DOM, Esc, y limpieza al desmontar.
+  assert.match(t, /setPointerCapture\(pointerId\)/);
+  const MANEJADOR = { pointermove: 'alMover', pointerup: 'alSoltar', pointercancel: 'alCancelar', lostpointercapture: 'alCancelar' };
+  for (const [evento, manejador] of Object.entries(MANEJADOR)) {
+    const cuenta = (verbo) => t.split(`document.${verbo}('${evento}', ${manejador}, true)`).length - 1;
+    assert.equal(cuenta('addEventListener'), 2, `estirar y mover escuchan ${evento} en document, en captura`);
+    assert.equal(cuenta('removeEventListener'), 2, `y lo quitan (${evento})`);
+  }
+  assert.equal((t.match(/if \(ev\.pointerId !== pointerId\) return;/g) ?? []).length, 6,
+    'cada manejador de puntero (3 de estirar y 3 de mover) mira su pointerId');
+  assert.match(t, /const conectado = el\.isConnected;/, 'al soltar, si el asa salió del DOM no se guarda');
+  assert.match(t, /iniciado && el\.isConnected \? destino : null/, 'al soltar, si el título salió del DOM no se mueve');
+  assert.match(t, /if \(!el\.isConnected\) \{\s*limpiar\(\);/, 'el bucle del arrastre cancela si el título salió del DOM');
+  assert.match(t, /ev\.key !== 'Escape'/, 'Esc cancela');
+  assert.match(t, /useEffect\(\(\) => \{\s*const gesto = terminar;\s*return \(\) => gesto\.current\?\.\(\);\s*\}, \[\]\);/, 'se limpia al desmontar');
+  // D38: el ancho se guarda al soltar, no en cada movimiento (durante el arrastre va al <col> por ref).
+  const moverAsa = /const alMover = \(ev: PointerEvent\) => \{([\s\S]*?)\n {4}\};/.exec(t);
+  assert.ok(moverAsa && moverAsa[1].includes('pintar(ancho)') && !moverAsa[1].includes('guardarAncho'), 'mover el asa solo pinta');
+  assert.match(t, /if \(conectado\) preferencias\.guardarAncho\(col\.id, ancho\);/, 'se guarda en pointerup');
+  assert.match(t, /c\.style\.width = `\$\{px\}px`/, 'el ancho va al <col> por ref');
+  assert.match(t, /if \(px !== null\) preferencias\.guardarAncho\(col\.id, px\);/, 'el doble clic guarda el ancho al contenido');
+  assert.match(t, /preferencias\.mover\(col\.id, elegido\.hueco\)/, 'mover usa el hueco de los encabezados visibles');
+  // D35: sin preferencias listas, sin asas ni arrastre.
+  assert.match(t, /const ajustable = Boolean\(preferencias\?\.listo\);/);
+  // Orden, estados, selección y textos exactos.
+  assert.match(t, /aria-sort=\{campo \? \(direccion \? ARIA_ORDEN\[direccion\] : 'none'\) : undefined\}/);
+  assert.match(t, /lista\.onEstado\(\{ tipo: 'orden', valor: alternarOrden\(lista\.estado\.orden, campo\) \}\)/);
+  assert.match(t, /onEstado\?\.\(\{ tipo: 'pagina', valor: corregida \}\)/, 'si un filtro deja menos páginas, a la última');
+  assert.match(t, /if \(haySeleccion\) onSeleccion\?\.\(\[\]\);/, 'la selección se limpia al cambiar la lista');
+  assert.match(t, /<Esqueleto columnas=\{nColumnas\} \/>/);
+  assert.match(fuentes.Esqueleto, /filas = 8/, '8 renglones');
+  for (const texto of ["'No se pudo cargar la lista'", 'Reintentar', 'Cargando…', 'Seleccionar las filas de esta página',
+    'aria-label="Actualizando la lista"', '<Paginacion']) {
+    assert.ok(t.includes(texto), `TablaEstandar: ${texto}`);
+  }
+
+  // BarraTabla: el estado único, la búsqueda con retardo, Contador, el conmutador de components/ui y la pantalla completa.
+  const barra = codigo(fuentes.BarraTabla);
+  for (const n of ['crearBusquedaConRetardo', 'sincronizarBusqueda', 'accionPestana', 'opcionesDeVista', 'textoResultados',
+    'estadoDeConteo', 'pestanaConTecla']) {
+    assert.match(barra, new RegExp(`\\b${n}\\(`), `BarraTabla usa ${n}`);
+  }
+  assert.match(barra, /import \{ ConmutadorVista \} from '@\/components\/ui\/ConmutadorVista';/, 'C1: el conmutador de components/ui');
+  assert.match(barra, /<ConmutadorVista\s+modo=\{estado\.modo\}\s+onCambiar=\{\(modo\) => onEstado\(\{ tipo: 'modo', valor: modo \}\)\}/);
+  assert.match(barra, /<Contador valor=\{p\.conteo\} estado=\{estadoDeConteo\(p\.conteo, estadoConteos\)\} \/>/, 'C13: el conteo de cada pestaña');
+  assert.match(barra, /<MenuAjustes columnas=\{columnas\} preferencias=\{preferencias\} anchoRef=\{anchoRef\} \/>/, 'D40: el mismo resultado y el mismo ref');
+  assert.match(barra, /columnas && preferencias && estado\.modo !== 'kanban' &&/, '«Ajustar tabla» solo en Lista');
+  assert.match(barra, /<FiltroEstados\b/);
+  assert.match(barra, /onEstado\(\{ tipo: 'estados', valor: estados \}\)/);
+  assert.match(barra, /e\.key === 'Escape' && !e\.defaultPrevented\) onPantallaCompleta\(false\)/, 'Esc sale de la pantalla completa');
+  assert.match(barra, /e\.key !== 'Enter'/, 'Enter busca de inmediato');
+  assert.match(barra, /setBusqueda\(\(b\) => \(\{ \.\.\.b, texto \}\)\);\s*retardo\(\)\.escribir\(texto\);/, 'cada tecla espera 300 ms (no despacha)');
+  assert.ok(!/onChange=\{[^}]*onEstado\(/.test(barra), 'la caja no despacha en cada tecla');
+  assert.match(barra, /retardo\(\)\.ya\(''\)/, 'la X limpia de inmediato');
+  assert.match(barra, /useEffect\(\(\) => \{\s*const busquedas = retardoRef;\s*return \(\) => busquedas\.current\?\.cancelar\(\);\s*\}, \[\]\);/,
+    'al desmontar no queda una búsqueda en espera');
+  for (const texto of ['Maximize2', 'Pantalla completa', 'Limpiar la búsqueda', 'resultados', 'role="tablist"']) {
+    assert.ok(barra.includes(texto), `BarraTabla: ${texto}`);
+  }
+  // FiltroEstados: casillas con la etiqueta legible, contador en el botón y 'Limpiar'.
+  const filtro = codigo(fuentes.FiltroEstados);
+  assert.match(filtro, /onCambiar\(alternarEstado\(seleccion, o\.valor, opciones\)\)/);
+  assert.match(filtro, /onClick=\{\(\) => onCambiar\(\[\]\)\}/);
+  for (const texto of ['type="checkbox"', '{o.etiqueta}', '<Contador', 'Limpiar', "e.key !== 'Escape'"]) assert.ok(filtro.includes(texto), `FiltroEstados: ${texto}`);
+  // MenuAjustes: columnas (las clave, bloqueadas), flechas, 'Ajustar al ancho de la pantalla' y 'Restablecer columnas'.
+  const menu = codigo(fuentes.MenuAjustes);
+  for (const texto of ['SlidersHorizontal', 'Ajustar tabla', 'Ajustar al ancho de la pantalla', 'Restablecer columnas',
+    'Esta columna siempre se ve', 'Cargando tus columnas…', 'preferencias.desplazar(id, paso)', 'preferencias.ocultar(id, !oculta)',
+    'preferencias.restablecer()', 'preferencias.guardarAnchos(nuevos)', 'anchoRef?.current ?? null', 'disabled={!listo || bloqueada}']) {
+    assert.ok(menu.includes(texto), `MenuAjustes: ${texto}`);
+  }
+  assert.match(menu, /\bajustarAlAncho\(/);
+  assert.match(menu, /puedeDesplazar\(orden, fijas, id, -1\)/);
+  assert.match(menu, /puedeDesplazar\(orden, fijas, id, 1\)/);
+  // Paginacion: 'Mostrando 26–50 de 134', 25/50 y « ‹ 1 2 3 4 5 › ».
+  const paginacion = codigo(fuentes.Paginacion);
+  for (const n of ['textoRango', 'rangoPaginas', 'totalPaginas', 'paginaValida']) assert.match(paginacion, new RegExp(`\\b${n}\\(`));
+  assert.ok(paginacion.includes('TAMANOS_PAGINA.map('));
+  for (const signo of ['>«<', '>‹<', '>›<', '>»<']) assert.ok(paginacion.includes(signo), `Paginacion: ${signo}`);
+  assert.match(paginacion, /aria-current=\{n === actual \? 'page' : undefined\}/);
+
+  // design-system.ts (RP5): sin KPI_CARD; KPI_COLOR_MAP se queda, con su comentario, porque lo importa AlertasBadge.tsx.
+  assert.ok(!ds.includes('KPI_CARD'), 'sin KPI_CARD');
+  assert.match(ds, /\/\/ Lo usa components\/AlertasBadge\.tsx \(B2\)\.\nexport const KPI_COLOR_MAP: Record<KpiColor,/);
+  assert.match(ds, /export type KpiColor = /);
+  assert.match(leer('components/AlertasBadge.tsx'), /import \{ KPI_COLOR_MAP \} from '@\/lib\/design-system';/, 'AlertasBadge sigue igual');
+}
+
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');
 console.log('✓ T4C: sesión, estado armado, partes de columnas, URL de la lista, carga vigente, estado de la lista y modo cliente.');
 console.log('✓ T4C r1: orden rechazado, estados en la sesión, escrituras del usuario del render, esperar y vueltas.');
 console.log('✓ T4C r2: sin filas de otra cuenta, vuelta al orden condicional y atendida, tope de espera y cables vigilados.');
+console.log('✓ T4D: umbral, ancho al contenido, ajustar al ancho, geometría, destino, orden, cuerpo, grupos, selección, barra y el fuente de los componentes.');
