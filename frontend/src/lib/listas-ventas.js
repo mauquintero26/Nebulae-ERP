@@ -13,7 +13,9 @@
  *    botonALaVista (ronda 1: el menú se cierra si su botón sale de la vista); recortesDeAncestros (revisión final: la
  *    parte pura de recortesDe de solicitud-client.tsx).
  */
-import { ESTADOS_PEDIDO_CERRADOS, grupoPedido, esCotizacionActiva, esPedidoVigente } from './estados-pedido.js';
+import {
+  ESTADOS_PEDIDO_CERRADOS, ESTADOS_PEDIDO_SIN_DINERO, grupoPedido, esCotizacionActiva, esPedidoVigente,
+} from './estados-pedido.js';
 import { comoUTC, esSoporte } from './hub-ventas.js';
 import { redondearPeso } from './pesos.js';
 import { TEXTO_PAPELERA_SIN_FECHA } from './estados-solicitud.js';
@@ -185,11 +187,10 @@ export function pestanaCotizacion(cot) {
 // ─── H47: resumen de la lista de pedidos ────────────────────────────────────────────────────────────
 
 /**
- * Pedidos cuyo dinero no cuenta (ni vendido ni por cobrar): espejo de ESTADOS_VEN_SIN_DINERO
- * (backend/app/core/estados_pedido.py), el mismo criterio del resumen de GET /ventas/pedidos. Inmutable.
- * @type {ReadonlyArray<string>}
+ * Pedidos cuyo dinero no cuenta (ni vendido ni por cobrar). B4 T2 (RP14): la constante vive en estados-pedido.js y aquí
+ * solo se reexporta (la usan pedidoSumaDinero y cifrasVentasDashboard con su nombre local).
  */
-export const ESTADOS_PEDIDO_SIN_DINERO = Object.freeze(['CANCELADO', 'DEVUELTO_TOTAL']);
+export { ESTADOS_PEDIDO_SIN_DINERO };
 
 const esObjeto = (v) => v !== null && typeof v === 'object';
 

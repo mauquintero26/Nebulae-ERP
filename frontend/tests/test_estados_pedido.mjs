@@ -21,7 +21,11 @@ import {
   esPedidoVigente,
   esCotizacionActiva,
   humanizarCodigo,
+  ESTADOS_PEDIDO_SIN_DINERO,
+  congelar,
 } from '../src/lib/estados-pedido.js';
+import * as estadosPedido from '../src/lib/estados-pedido.js';
+import { ESTADOS_PEDIDO_SIN_DINERO as SIN_DINERO_DE_LISTAS } from '../src/lib/listas-ventas.js';
 
 // [estado, etiqueta, paso, backend que lo pone]. Lineas de la base de la Tarea 2: se desplazan con las tareas siguientes.
 const ESTADOS = [
@@ -187,6 +191,39 @@ console.log('--- TEST 9: los exports son inmutables (fuente unica: nadie la camb
   assert.ok(!('NUEVO' in ESTADOS_PEDIDO) && !('NUEVO' in TRANSICIONES_PEDIDO_PATCH));
   assert.deepEqual(TRANSICIONES_PEDIDO_PATCH.ENTREGADO, ['FACTURADO']);
   assert.equal(PASOS_PEDIDO.length, 5);
+}
+
+console.log('--- B4 T2 TEST 10: ESTADOS_PEDIDO_SIN_DINERO vive aquí (RP14), congelado y con los dos estados ---');
+{
+  assert.deepEqual([...ESTADOS_PEDIDO_SIN_DINERO], ['CANCELADO', 'DEVUELTO_TOTAL'], 'espejo de ESTADOS_VEN_SIN_DINERO');
+  assert.ok(Object.isFrozen(ESTADOS_PEDIDO_SIN_DINERO));
+  assert.throws(() => { ESTADOS_PEDIDO_SIN_DINERO.push('FACTURADO'); }, TypeError);
+  for (const e of ESTADOS_PEDIDO_SIN_DINERO) assert.ok(Object.hasOwn(ESTADOS_PEDIDO, e), e);
+  // listas-ventas.js la reexporta: es la MISMA constante (no hay dos que puedan divergir)
+  assert.equal(SIN_DINERO_DE_LISTAS, ESTADOS_PEDIDO_SIN_DINERO);
+}
+
+console.log('--- B4 T2 TEST 11: congelar está exportado y congela todos los niveles; los exports de antes siguen ---');
+{
+  const anidado = congelar({ a: { b: { c: [1, { d: 2 }] } }, e: [3] });
+  assert.ok(Object.isFrozen(anidado) && Object.isFrozen(anidado.a) && Object.isFrozen(anidado.a.b));
+  assert.ok(Object.isFrozen(anidado.a.b.c) && Object.isFrozen(anidado.a.b.c[1]) && Object.isFrozen(anidado.e));
+  assert.throws(() => { anidado.a.b.c[1].d = 9; }, TypeError);
+  assert.throws(() => { anidado.e.push(4); }, TypeError);
+  // devuelve el mismo objeto; lo que no es objeto pasa igual
+  const o = { x: 1 };
+  assert.equal(congelar(o), o);
+  for (const v of [null, undefined, 3, 'texto', true]) assert.equal(congelar(v), v);
+  // los exports de antes (c2c9f9f) siguen ahí, con su mismo tipo
+  const DE_ANTES = {
+    ESTADOS_PEDIDO: 'object', ESTADOS_PEDIDO_CERRADOS: 'object', ESTADOS_PEDIDO_MANUALES: 'object',
+    ESTADOS_PEDIDO_OPERATIVOS: 'object', PASOS_PEDIDO: 'object', TRANSICIONES_PEDIDO_PATCH: 'object',
+    congelar: 'function', esCotizacionActiva: 'function', esPedidoVigente: 'function', grupoPedido: 'function',
+    humanizarCodigo: 'function', infoEstadoPedido: 'function', pasoPedido: 'function', tiene: 'function',
+    transicionesPedido: 'function',
+  };
+  for (const [nombre, tipo] of Object.entries(DE_ANTES)) assert.equal(typeof estadosPedido[nombre], tipo, nombre);
+  assert.ok(Object.hasOwn(estadosPedido, 'ESTADOS_PEDIDO_SIN_DINERO'));
 }
 
 console.log('\nOK: test_estados_pedido.mjs');

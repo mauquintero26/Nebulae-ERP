@@ -19,9 +19,13 @@ import {
   ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, tieneProductos, esNoResuelto, esAccionTomada, accionSiguienteSC,
   esSCConCotizacionTemprana, TIPOS_NOTA_REINICIAN_ATRASO, notaReiniciaAtraso, desdeElHub, fusionarCargaHub,
   cantidadPositiva, textoAtrasados, conDetalleDelEnvio,
+  RUTA_HUB_VENTAS, ESTADOS_CERRADOS, clasificar, esAtrasado, columnaHub, accionSiguienteCOT, accionSiguientePVEN,
+  accionSiguienteDocumento, ETIQUETA_GRUPO, tituloGrupo,
 } from '../src/lib/hub-ventas.js';
 import { destinoVolver, etiquetaVolver } from '../src/lib/detalle-layout.js';
-import { ESTADOS_PEDIDO } from '../src/lib/estados-pedido.js';
+import { ESTADOS_PEDIDO, ESTADOS_PEDIDO_CERRADOS, pasoPedido } from '../src/lib/estados-pedido.js';
+import { ESTADOS_COTIZACION } from '../src/lib/estados-cotizacion.js';
+import { pedidoVigente } from '../src/lib/listas-ventas.js';
 import { ESTADOS_SC, ESTADOS_SC_SIN_CONFIRMAR } from '../src/lib/estados-solicitud.js';
 import { TIPOS_CHATTER, esEntradaChatter, tipoChatter } from '../src/lib/chatter.js';
 
@@ -366,7 +370,10 @@ console.log('--- H3 TEST 12: esNoResuelto / esAccionTomada ---');
   assert.equal(esNoResuelto({ tipo: 'SC', id: 1, estado: 'CONFIRMADA' }, new Set([1])), false);
   assert.equal(esNoResuelto({ tipo: 'SC', estado: 'COTIZADA' }, new Set()), false);
   assert.equal(esAccionTomada({ tipo: 'SC', estado: 'COTIZADA' }, new Set()), true);
-  assert.equal(esAccionTomada({ tipo: 'COT', estado: 'CONFIRMADA' }, new Set()), true);
+  // B4 T2 (P1 del plan, D19): una COT CONFIRMADA sin pedido vigente ya no es acción tomada (cot_confirmada_sin_pedido =
+  // «Como pendiente, y como atrasada si pasan los días de alerta»). Es la única excepción de D19 a «con dos argumentos,
+  // lo mismo que hoy».
+  assert.equal(esAccionTomada({ tipo: 'COT', estado: 'CONFIRMADA' }, new Set()), false);
   assert.equal(esAccionTomada({ tipo: 'SC', id: 1, estado: 'CONFIRMADA' }, new Set()), false);
   assert.equal(esAccionTomada({ tipo: 'SC', id: 1, estado: 'CONFIRMADA' }, new Set([1])), true);
   assert.equal(esNoResuelto({ tipo: 'VEN', estado: 'EN_PROCESO' }, new Set()), true);
@@ -669,6 +676,354 @@ console.log('--- Revisión final B3 (F3, M3): tras el 409 de la bandera, el Hub 
   // El toast con el mensaje del servidor sigue saliendo, con 409 o con cualquier otro error.
   assert.ok(captura.indexOf("setToast({msg: 'No se pudo enviar para confirmación: '") > captura.indexOf('setEnvioHub(null);'),
     'el toast sale para todos los errores');
+}
+
+// ─── B4 T2: la regla única de atraso (espejo de backend/app/core/resolucion_ventas.py; R8, C5, C7, RP2, D19, D20) ────
+
+console.log('--- B4 T2 TEST 1: ESTADOS_NO_RESOLUCION son los 8 de alertas_resumen (sin EN_GESTION) y ESTADOS_CERRADOS ---');
+{
+  assert.deepEqual([...ESTADOS_NO_RESOLUCION].sort(), ['ASIGNADA', 'BORRADOR', 'ENVIADA', 'EN_PROCESO', 'EN_TRANSITO',
+    'PENDIENTE_COMPRA', 'PENDIENTE_CONFIRMACION', 'PENDIENTE_PAGO']);
+  assert.ok(!ESTADOS_NO_RESOLUCION.includes('EN_GESTION'), 'RP2: EN_GESTION sale');
+  assert.ok(Object.isFrozen(ESTADOS_NO_RESOLUCION));
+  assert.deepEqual(JSON.parse(JSON.stringify(ESTADOS_CERRADOS)), {
+    SC: ['CANCELADA'], COT: ['RECHAZADA'], VEN: [...ESTADOS_PEDIDO_CERRADOS],
+  });
+  assert.throws(() => { ESTADOS_CERRADOS.VEN.push('X'); }, TypeError);
+  // EN_GESTION ya no es «no resuelto» (C2: ningún documento tiene ese estado; su etiqueta sigue en estados-pedido.js)
+  assert.equal(esNoResuelto({ tipo: 'COT', estado: 'EN_GESTION' }, new Set()), false);
+}
+
+const AHORA_B4 = Date.UTC(2026, 9, 28, 12, 0, 0);
+const HORA = 3600 * 1000;
+const DIAS_B4 = { SC: 2, COT: 3, VEN: 4 };
+/** La fecha como la manda el API: UTC sin zona ('2026-10-26T12:00:00'). */
+const sinZona = (ms) => new Date(ms).toISOString().replace(/\.000Z$/, '');
+/** Una fila con `horas` sin movimiento (null = sin fechas). */
+const filaB4 = (tipo, estado, horas, extra = {}) => ({
+  tipo, id: 1, estado,
+  ...(horas === null ? { updated_at: null, created_at: null } : { updated_at: sinZona(AHORA_B4 - horas * HORA), created_at: sinZona(AHORA_B4 - 9999 * HORA) }),
+  ...extra,
+});
+
+console.log('--- B4 T2 TEST 2: clasificar, la tabla de RP2 en orden (frontera estricta, Soporte solo en SC) ---');
+{
+  const M = 1 / 60;   // un minuto en horas
+  const [scLim, cotLim, venLim] = [48, 72, 96];
+  const SOPORTE = { tipo_solicitud: 'Soporte Tecnico' };
+  const CONF = { confirmacion_vigente: true };
+  // [tipo, estado, horas, extra de la fila, ctx, esperado]: la misma matriz que test_clasificar_matriz (T1C)
+  const casos = [
+    ['SC', 'BORRADOR', 0, {}, {}, 'NO_RESUELTO'],
+    ['SC', 'BORRADOR', scLim, {}, {}, 'NO_RESUELTO'],          // exactamente días×24 h no
+    ['SC', 'BORRADOR', scLim + M, {}, {}, 'ATRASADO'],          // un minuto más, sí
+    ['SC', 'ASIGNADA', 100, {}, {}, 'ATRASADO'],
+    ['SC', 'ASIGNADA', 10, {}, {}, 'NO_RESUELTO'],
+    ['SC', 'PENDIENTE_CONFIRMACION', 100, {}, { scConCotActiva: true }, 'ACCION_TOMADA'],
+    ['SC', 'CONFIRMADA', 100, CONF, {}, 'ATRASADO'],
+    ['SC', 'CONFIRMADA', 100, {}, {}, 'NO_RESUELTO'],
+    ['SC', 'CONFIRMADA', 10, CONF, {}, 'NO_RESUELTO'],
+    ['SC', 'CONFIRMADA', 100, CONF, { scConCotActiva: true }, 'ACCION_TOMADA'],
+    ['SC', 'CANCELADA', 100, {}, {}, 'CERRADO'],
+    ['SC', 'CANCELADA', 100, {}, { scConCotActiva: true }, 'CERRADO'],
+    ['SC', 'BORRADOR', 100, SOPORTE, {}, null],
+    ['SC', 'N/A_SOPORTE', 100, {}, {}, null],
+    ['COT', 'BORRADOR', 100, SOPORTE, {}, 'ATRASADO'],         // Soporte solo en SC (T1C r1)
+    ['COT', 'N/A_SOPORTE', 100, {}, {}, 'ACCION_TOMADA'],
+    ['VEN', 'EN_PROCESO', 200, SOPORTE, {}, 'ATRASADO'],
+    ['VEN', 'N/A_SOPORTE', 200, SOPORTE, {}, 'ACCION_TOMADA'],
+    ['SC', 'COTIZADA', 100, {}, {}, 'ACCION_TOMADA'],
+    ['COT', 'BORRADOR', cotLim, {}, {}, 'NO_RESUELTO'],
+    ['COT', 'BORRADOR', cotLim + M, {}, {}, 'ATRASADO'],
+    ['COT', 'ENVIADA', 100, {}, {}, 'ATRASADO'],
+    ['COT', 'PENDIENTE_CONFIRMACION', 1, {}, {}, 'NO_RESUELTO'],
+    ['COT', 'CONFIRMADA', 100, CONF, {}, 'ATRASADO'],
+    ['COT', 'CONFIRMADA', 1, CONF, {}, 'NO_RESUELTO'],
+    ['COT', 'CONFIRMADA', 100, {}, {}, 'NO_RESUELTO'],
+    ['COT', 'CONFIRMADA', 100, CONF, { cotConPedidoVigente: true }, 'ACCION_TOMADA'],
+    ['COT', 'RECHAZADA', 100, {}, {}, 'CERRADO'],
+    ['COT', 'VENCIDA', 1000, {}, {}, 'NO_RESUELTO'],
+    ['COT', 'VENCIDA', 1000, CONF, {}, 'NO_RESUELTO'],
+    ['COT', 'EN_GESTION', 1000, {}, {}, 'ACCION_TOMADA'],
+    ['VEN', 'PENDIENTE_COMPRA', venLim, {}, {}, 'NO_RESUELTO'],
+    ['VEN', 'PENDIENTE_COMPRA', venLim + M, {}, {}, 'ATRASADO'],
+    ['VEN', 'EN_PROCESO', 200, {}, { scConCotActiva: true }, 'ATRASADO'],
+    ['VEN', 'EN_TRANSITO', 200, {}, {}, 'ATRASADO'],
+    ['VEN', 'PENDIENTE_PAGO', 200, {}, {}, 'ATRASADO'],
+    ['VEN', 'LISTO_ENTREGA', 200, {}, {}, 'ACCION_TOMADA'],
+    ['VEN', 'PENDIENTE_ANTICIPO', 200, {}, {}, 'ACCION_TOMADA'],
+    ['VEN', 'ENTREGADO', 200, {}, {}, 'CERRADO'],
+    ['VEN', 'FACTURADO', 200, {}, {}, 'CERRADO'],
+    ['VEN', 'CANCELADO', 200, {}, {}, 'CERRADO'],
+    ['VEN', 'DEVUELTO_TOTAL', 200, {}, {}, 'CERRADO'],
+    ['PVEN', 'EN_PROCESO', 200, {}, {}, 'ATRASADO'],
+    ['SC', 'BORRADOR', null, {}, {}, 'NO_RESUELTO'],          // sin fecha no supera nada
+  ];
+  for (const [tipo, estado, horas, extra, ctx, esperado] of casos) {
+    const fila = filaB4(tipo, estado, horas, extra);
+    const etiqueta = JSON.stringify([tipo, estado, horas, extra, ctx]);
+    assert.equal(clasificar(fila, { dias: DIAS_B4, ahora: AHORA_B4, ...ctx }), esperado, etiqueta);
+    assert.equal(esAtrasado(fila, { dias: DIAS_B4, ahora: AHORA_B4, ...ctx }), esperado === 'ATRASADO', etiqueta);
+  }
+  // los días también pueden ser un número; `ahora` también un Date; la fecha con 'Z' se lee igual
+  assert.equal(clasificar(filaB4('SC', 'BORRADOR', 48), { dias: 2, ahora: AHORA_B4 }), 'NO_RESUELTO');
+  assert.equal(clasificar(filaB4('SC', 'BORRADOR', 48 + M), { dias: 2, ahora: new Date(AHORA_B4) }), 'ATRASADO');
+  assert.equal(clasificar({ tipo: 'SC', estado: 'BORRADOR', updated_at: `${sinZona(AHORA_B4 - 49 * HORA)}Z` }, { dias: 2, ahora: AHORA_B4 }), 'ATRASADO');
+  // el tiempo sale de updated_at y, si no hay, de created_at (RP2: comoUTC(updated_at || created_at))
+  assert.equal(clasificar({ tipo: 'SC', estado: 'BORRADOR', updated_at: null, created_at: sinZona(AHORA_B4 - 49 * HORA) },
+    { dias: 2, ahora: AHORA_B4 }), 'ATRASADO');
+  assert.equal(clasificar({ tipo: 'SC', estado: 'BORRADOR', updated_at: sinZona(AHORA_B4 - HORA), created_at: sinZona(AHORA_B4 - 99 * HORA) },
+    { dias: 2, ahora: AHORA_B4 }), 'NO_RESUELTO');
+  // la fecha sin zona es UTC (no hora local): 47 h en UTC no son 52 h
+  assert.equal(clasificar({ tipo: 'SC', estado: 'BORRADOR', updated_at: '2026-10-26T13:00:00' }, { dias: 2, ahora: AHORA_B4 }), 'NO_RESUELTO');
+  // una fecha inválida no supera nada
+  assert.equal(clasificar({ tipo: 'COT', estado: 'BORRADOR', updated_at: 'basura' }, { dias: 0, ahora: AHORA_B4 }), 'NO_RESUELTO');
+  // confirmacion_vigente: solo true cuenta (como R19 en accionSiguienteSC)
+  assert.equal(clasificar(filaB4('COT', 'CONFIRMADA', 100, { confirmacion_vigente: 'true' }), { dias: DIAS_B4, ahora: AHORA_B4 }), 'NO_RESUELTO');
+  // un tipo que no es SC, COT, VEN ni PVEN es un error de programación (ValueError en Python)
+  for (const tipo of [undefined, null, 'XYZ', 'sc']) {
+    assert.throws(() => clasificar({ tipo, estado: 'BORRADOR' }, { dias: 2, ahora: AHORA_B4 }), /Tipo de documento no válido/, String(tipo));
+  }
+}
+
+console.log('--- B4 T2 TEST 3: esNoResuelto / esAccionTomada con el tercer argumento = la regla nueva (RP81) ---');
+{
+  const con = (cotConPedidoVigente) => ({ cotConPedidoVigente });
+  // COT CONFIRMADA: sin pedido vigente es «sin resolver»; con él, acción tomada
+  assert.equal(esNoResuelto({ tipo: 'COT', id: 1, estado: 'CONFIRMADA' }, new Set(), con(false)), true);
+  assert.equal(esAccionTomada({ tipo: 'COT', id: 1, estado: 'CONFIRMADA' }, new Set(), con(false)), false);
+  assert.equal(esNoResuelto({ tipo: 'COT', id: 1, estado: 'CONFIRMADA' }, new Set(), con(true)), false);
+  assert.equal(esAccionTomada({ tipo: 'COT', id: 1, estado: 'CONFIRMADA' }, new Set(), con(true)), true);
+  assert.equal(esNoResuelto({ tipo: 'COT', id: 1, estado: 'VENCIDA' }, new Set(), {}), true, 'VENCIDA: sin resolver');
+  // la SC con documentos activos (scConCot) es acción tomada; sin ellos, CONFIRMADA es sin resolver
+  assert.equal(esAccionTomada({ tipo: 'SC', id: 1, estado: 'ASIGNADA' }, new Set([1]), {}), true);
+  assert.equal(esNoResuelto({ tipo: 'SC', id: 1, estado: 'CONFIRMADA' }, new Set(), {}), true);
+  // los cerrados cuentan en acción tomada (C7: la vista acciones_tomadas = acción tomada + cerrados), DEVUELTO_TOTAL incluido
+  for (const [tipo, estado] of [['SC', 'CANCELADA'], ['COT', 'RECHAZADA'], ['VEN', 'ENTREGADO'], ['VEN', 'DEVUELTO_TOTAL']]) {
+    assert.equal(esAccionTomada({ tipo, id: 1, estado }, new Set(), {}), true, estado);
+    assert.equal(esNoResuelto({ tipo, id: 1, estado }, new Set(), {}), false, estado);
+  }
+  // Soporte queda fuera del semáforo: ni una ni otra
+  assert.equal(esNoResuelto({ tipo: 'SC', id: 1, estado: 'BORRADOR', tipo_solicitud: 'Soporte Tecnico' }, new Set(), {}), false);
+  assert.equal(esAccionTomada({ tipo: 'SC', id: 1, estado: 'BORRADOR', tipo_solicitud: 'Soporte Tecnico' }, new Set(), {}), false);
+  // con el tercer argumento son exactamente los rangos de clasificar (no dependen de los días ni de la hora)
+  const estados = [...new Set([...Object.keys(ESTADOS_SC), ...Object.keys(ESTADOS_COTIZACION), ...Object.keys(ESTADOS_PEDIDO)])];
+  for (const tipo of ['SC', 'COT', 'VEN']) {
+    for (const estado of estados) {
+      for (const [scConCot, pedido] of [[new Set([1]), true], [new Set(), false]]) {
+        const fila = filaB4(tipo, estado, 500, { confirmacion_vigente: true });
+        const r = clasificar(fila, { dias: DIAS_B4, ahora: AHORA_B4, scConCotActiva: tipo === 'SC' && scConCot.has(1), cotConPedidoVigente: pedido });
+        assert.equal(esNoResuelto(fila, scConCot, con(pedido)), r === 'ATRASADO' || r === 'NO_RESUELTO', `${tipo} ${estado}`);
+        assert.equal(esAccionTomada(fila, scConCot, con(pedido)), r === 'ACCION_TOMADA' || r === 'CERRADO', `${tipo} ${estado}`);
+      }
+    }
+  }
+}
+
+console.log('--- B4 T2 TEST 4 (D19): sin el tercer argumento, lo mismo que en c2c9f9f (salvo la COT CONFIRMADA de P1) ---');
+{
+  // Copia literal de esNoResuelto / esAccionTomada de c2c9f9f (Bloque 1, T9 y T9B), con su lista de 9 estados.
+  const NO_RES_B1 = ['BORRADOR', 'ASIGNADA', 'PENDIENTE_CONFIRMACION', 'EN_GESTION', 'ENVIADA', 'PENDIENTE_COMPRA', 'PENDIENTE_PAGO', 'EN_PROCESO', 'EN_TRANSITO'];
+  const ACC_B1 = ['CONFIRMADA', 'COTIZADA', 'EN_ESPERA_CONFIRMACION', 'LISTO_ENTREGA', 'ENTREGADO', 'FACTURADO', 'CANCELADO', 'CANCELADA', 'RECHAZADA'];
+  const scConf = (row) => row?.tipo === 'SC' && row?.estado === 'CONFIRMADA';
+  const temprana = (row, s) => row?.tipo === 'SC' && NO_RES_B1.includes(row?.estado) && !!s?.has(row.id);
+  const noResB1 = (row, s) => (scConf(row) ? !s?.has(row.id) : temprana(row, s) ? false : NO_RES_B1.includes(row?.estado));
+  const accB1 = (row, s) => (scConf(row) ? !!s?.has(row.id) : temprana(row, s) ? true : ACC_B1.includes(row?.estado));
+  const estados = [...new Set([...Object.keys(ESTADOS_SC), ...Object.keys(ESTADOS_COTIZACION), ...Object.keys(ESTADOS_PEDIDO)])];
+  for (const tipo of ['SC', 'COT', 'VEN', undefined]) {
+    for (const estado of estados) {
+      for (const s of [new Set([1]), new Set(), undefined]) {
+        const fila = { tipo, id: 1, estado };
+        const nombre = `${tipo} ${estado} ${s ? s.size : 'sin set'}`;
+        assert.equal(esNoResuelto(fila, s), noResB1(fila, s), nombre);
+        if (tipo === 'COT' && estado === 'CONFIRMADA') {
+          assert.equal(esAccionTomada(fila, s), false, `${nombre}: P1 (D19)`);
+        } else {
+          assert.equal(esAccionTomada(fila, s), accB1(fila, s), nombre);
+        }
+      }
+    }
+  }
+  // null como tercer argumento cuenta como «no llegó»
+  assert.equal(esAccionTomada({ tipo: 'VEN', estado: 'DEVUELTO_TOTAL' }, new Set(), null), false, 'como hoy');
+  assert.equal(esAccionTomada({ tipo: 'VEN', estado: 'DEVUELTO_TOTAL' }, new Set(), {}), true, 'regla nueva: cerrado');
+}
+
+console.log('--- B4 T2 TEST 5: columnaHub = getKanbanCol del Bloque 1 (T9) con DEVUELTO_TOTAL → Cancelado (C7, D20) ---');
+{
+  // Copia literal de getKanbanCol (ventas/page.tsx, c2c9f9f), que T7 reemplaza por columnaHub.
+  const NO_RES_B1 = ['BORRADOR', 'ASIGNADA', 'PENDIENTE_CONFIRMACION', 'EN_GESTION', 'ENVIADA', 'PENDIENTE_COMPRA', 'PENDIENTE_PAGO', 'EN_PROCESO', 'EN_TRANSITO'];
+  const getKanbanColB1 = (item, scConCot) => {
+    if (item.tipo === 'SC' && item.estado === 'CONFIRMADA' && !scConCot.has(item.id)) return 'No Resuelto';
+    if (item?.tipo === 'SC' && NO_RES_B1.includes(item?.estado) && !!scConCot?.has(item.id)) return 'Acción Tomada';
+    const e = item.estado || '';
+    if (['CANCELADO', 'CANCELADA', 'RECHAZADA'].includes(e)) return 'Cancelado';
+    if (['ENTREGADO', 'FACTURADO', 'CONFIRMADA', 'LISTO_ENTREGA'].includes(e)) return 'Acción Tomada';
+    if (['EN_PROCESO', 'ENVIADA', 'EN_TRANSITO'].includes(e)) return 'En Gestión';
+    return 'No Resuelto';
+  };
+  const casos = [   // los de test_columna_hub_conserva_las_columnas_del_bloque_1 (T1C)
+    ['SC', 'CONFIRMADA', false, 'No Resuelto'], ['SC', 'CONFIRMADA', true, 'Acción Tomada'],
+    ['SC', 'PENDIENTE_CONFIRMACION', true, 'Acción Tomada'], ['SC', 'BORRADOR', false, 'No Resuelto'],
+    ['SC', 'ASIGNADA', false, 'No Resuelto'], ['SC', 'CANCELADA', false, 'Cancelado'],
+    ['COT', 'RECHAZADA', false, 'Cancelado'], ['COT', 'ENVIADA', false, 'En Gestión'],
+    ['COT', 'CONFIRMADA', false, 'Acción Tomada'], ['COT', 'BORRADOR', false, 'No Resuelto'],
+    ['COT', 'VENCIDA', false, 'No Resuelto'], ['VEN', 'CANCELADO', false, 'Cancelado'],
+    ['VEN', 'DEVUELTO_TOTAL', false, 'Cancelado'], ['VEN', 'ENTREGADO', false, 'Acción Tomada'],
+    ['VEN', 'FACTURADO', false, 'Acción Tomada'], ['VEN', 'LISTO_ENTREGA', false, 'Acción Tomada'],
+    ['VEN', 'EN_PROCESO', false, 'En Gestión'], ['VEN', 'EN_TRANSITO', false, 'En Gestión'],
+    ['VEN', 'PENDIENTE_COMPRA', false, 'No Resuelto'], ['PVEN', 'DEVUELTO_TOTAL', false, 'Cancelado'],
+  ];
+  for (const [tipo, estado, conCot, esperado] of casos) {
+    assert.equal(columnaHub({ tipo, id: 1, estado }, { scConCot: new Set(conCot ? [1] : []) }), esperado, `${tipo} ${estado} ${conCot}`);
+  }
+  // todas las combinaciones: igual que getKanbanCol, salvo DEVUELTO_TOTAL (hoy caía en «No Resuelto») y una SC en
+  // EN_GESTION con cotización (RP2: EN_GESTION ya no es «no resuelto»; ninguna SC tiene ese estado)
+  const estados = [...new Set([...Object.keys(ESTADOS_SC), ...Object.keys(ESTADOS_COTIZACION), ...Object.keys(ESTADOS_PEDIDO), 'EN_GESTION', 'ALGO_NUEVO'])];
+  for (const tipo of ['SC', 'COT', 'VEN']) {
+    for (const estado of estados) {
+      for (const s of [new Set([1]), new Set()]) {
+        const fila = { tipo, id: 1, estado };
+        let esperado = getKanbanColB1(fila, s);
+        if (estado === 'DEVUELTO_TOTAL') esperado = 'Cancelado';
+        if (tipo === 'SC' && estado === 'EN_GESTION' && s.size) esperado = 'No Resuelto';
+        assert.equal(columnaHub(fila, { scConCot: s }), esperado, `${tipo} ${estado} ${s.size}`);
+        // D20: 'PVEN' es el mismo tipo que 'VEN'
+        if (tipo === 'VEN') assert.equal(columnaHub({ ...fila, tipo: 'PVEN' }, { scConCot: s }), columnaHub(fila, { scConCot: s }), `PVEN ${estado}`);
+      }
+    }
+  }
+  // el id de otro tipo no cuenta como SC con cotización; sin scConCot no rompe
+  assert.equal(columnaHub({ tipo: 'COT', id: 1, estado: 'BORRADOR' }, { scConCot: new Set([1]) }), 'No Resuelto');
+  assert.equal(columnaHub({ tipo: 'SC', id: 1, estado: 'CONFIRMADA' }), 'No Resuelto');
+  assert.equal(columnaHub({ tipo: 'SC', id: 1, estado: 'CONFIRMADA' }, {}), 'No Resuelto');
+  assert.throws(() => columnaHub({ tipo: 'XYZ', estado: 'BORRADOR' }), /Tipo de documento no válido/);
+}
+
+const DEL_HUB_B4 = `?return_to=${encodeURIComponent(RUTA_HUB_VENTAS)}`;
+
+console.log('--- B4 T2 TEST 6: accionSiguienteCOT (R26, RP15: {texto, href, tono}) ---');
+{
+  const cot = (estado, extra = {}) => ({ tipo: 'COT', id: 12, estado, total_cop: 500000, pedidos_venta: [], ...extra });
+  const enCot = `/dashboard/ventas/cotizacion/12${DEL_HUB_B4}`;
+  for (const estado of ['BORRADOR', 'VENCIDA', 'ENVIADA']) {
+    assert.deepEqual(accionSiguienteCOT(cot(estado)), { texto: 'Enviar al cliente', href: enCot, tono: 'indigo' }, estado);
+    assert.deepEqual(accionSiguienteCOT(cot(estado, { total_cop: '1500' })), { texto: 'Enviar al cliente', href: enCot, tono: 'indigo' }, estado);
+    for (const total of [0, -5, '0', null, undefined, 'abc']) {
+      assert.deepEqual(accionSiguienteCOT(cot(estado, { total_cop: total })), { texto: 'Completar precios', href: enCot, tono: 'amber' },
+        `${estado} ${total}`);
+    }
+  }
+  assert.deepEqual(accionSiguienteCOT(cot('PENDIENTE_CONFIRMACION')), { texto: 'Esperando al cliente', href: null, tono: 'blue' });
+  assert.deepEqual(accionSiguienteCOT(cot('CONFIRMADA')), { texto: 'Crear pedido', href: enCot, tono: 'emerald' });
+  assert.deepEqual(accionSiguienteCOT(cot('CONFIRMADA', { pedidos_venta: [{ id: 3, estado: 'CANCELADO' }] })),
+    { texto: 'Crear pedido', href: enCot, tono: 'emerald' }, 'un pedido cancelado no cuenta (H46)');
+  const conPedido = cot('CONFIRMADA', { pedidos_venta: [{ id: 3, estado: 'CANCELADO' }, { id: 4, estado: 'EN_PROCESO' }, { id: 6, estado: 'PENDIENTE_COMPRA' }] });
+  assert.deepEqual(accionSiguienteCOT(conPedido), { texto: 'Ver pedido', href: `/dashboard/ventas/venta/6${DEL_HUB_B4}`, tono: 'emerald' });
+  assert.equal(pedidoVigente(conPedido).id, 6, 'el mismo pedido vigente que pedidoVigente de listas-ventas.js');
+  assert.equal(accionSiguienteCOT(cot('RECHAZADA')), null);
+  assert.equal(accionSiguienteCOT(cot('ALGO_NUEVO')), null);
+  assert.equal(accionSiguienteCOT(null), null);
+  // solo navegan: ninguna cambia estado
+  for (const estado of Object.keys(ESTADOS_COTIZACION)) {
+    const a = accionSiguienteCOT(cot(estado));
+    if (a) assert.deepEqual(Object.keys(a).sort(), ['href', 'texto', 'tono'], estado);
+  }
+}
+
+console.log('--- B4 T2 TEST 7: accionSiguientePVEN (R26, RP15: el orden del pedido) ---');
+{
+  const p = (estado, saldo = 0) => ({ tipo: 'VEN', id: 8, estado, saldo_cop: saldo });
+  const enPedido = `/dashboard/ventas/venta/8${DEL_HUB_B4}`;
+  for (const e of ['CANCELADO', 'DEVUELTO_TOTAL', 'FACTURADO']) assert.equal(accionSiguientePVEN(p(e, 500)), null, e);
+  // ENTREGADO y PARCIALMENTE_ENTREGADO (paso 2) dan «Facturar» antes de mirar el paso
+  assert.equal(pasoPedido('PARCIALMENTE_ENTREGADO'), 2);
+  for (const e of ['ENTREGADO', 'PARCIALMENTE_ENTREGADO']) {
+    for (const saldo of [0, 500]) assert.deepEqual(accionSiguientePVEN(p(e, saldo)), { texto: 'Facturar', href: enPedido, tono: 'emerald' }, `${e} ${saldo}`);
+  }
+  for (const e of ['PENDIENTE_COMPRA', 'PENDIENTE_PAGO']) {
+    assert.deepEqual(accionSiguientePVEN(p(e)), { texto: 'Gestionar compra', href: `/dashboard/compras${DEL_HUB_B4}`, tono: 'amber' }, e);
+  }
+  for (const e of ['EN_PROCESO', 'EN_TRANSITO']) {
+    assert.deepEqual(accionSiguientePVEN(p(e, 500)), { texto: 'Ver pedido', href: enPedido, tono: 'slate' }, e);
+  }
+  // paso 2 (listo para entrega): con saldo, cobrar; sin saldo, despachar en Entregas
+  for (const e of ['LISTO_ENTREGA', 'DISPONIBLE', 'PENDIENTE_SALDO', 'LISTO_PARA_ENTREGA']) {
+    assert.equal(pasoPedido(e), 2, e);
+    assert.deepEqual(accionSiguientePVEN(p(e, 120000)), { texto: 'Cobrar saldo', href: enPedido, tono: 'amber' }, e);
+    assert.deepEqual(accionSiguientePVEN(p(e, '120000')), { texto: 'Cobrar saldo', href: enPedido, tono: 'amber' }, e);
+    for (const saldo of [0, -1, null, undefined]) {
+      assert.deepEqual(accionSiguientePVEN(p(e, saldo)), { texto: 'Despachar', href: `/dashboard/inventario/entregas${DEL_HUB_B4}`, tono: 'indigo' },
+        `${e} ${saldo}`);
+    }
+  }
+  // el resto (pasos 0 y 1 de fase4 y de la tienda, y un desconocido): «Ver pedido»
+  for (const e of ['PAGADO', 'BORRADOR', 'CONFIRMADO', 'PENDIENTE_ANTICIPO', 'PARCIALMENTE_DISPONIBLE', 'ALGO_NUEVO']) {
+    assert.deepEqual(accionSiguientePVEN(p(e, 500)), { texto: 'Ver pedido', href: enPedido, tono: 'slate' }, e);
+  }
+  assert.equal(accionSiguientePVEN(null), null);
+  for (const e of Object.keys(ESTADOS_PEDIDO)) {
+    const a = accionSiguientePVEN(p(e, 500));
+    if (a) assert.ok(a.href.startsWith('/dashboard/') && a.href.endsWith(DEL_HUB_B4), e);
+  }
+}
+
+console.log('--- B4 T2 TEST 8: accionSiguienteDocumento (RP15) con returnTo (cruce C5 de la verificación) ---');
+{
+  // SC: accionSiguienteSC con las cotizaciones y los pedidos de la fila, con label → texto
+  const sc = { tipo: 'SC', id: 5, estado: 'CONFIRMADA', productos: [{ product_name: 'Cuna' }],
+    cotizaciones: [{ id: 9, estado: 'CONFIRMADA' }], pedidos_venta: [{ id: 4, estado: 'EN_PROCESO' }] };
+  assert.deepEqual(accionSiguienteDocumento(sc), { texto: 'Ver pedido', href: `/dashboard/ventas/venta/4${DEL_HUB_B4}`, tono: 'emerald' });
+  const deSC = accionSiguienteSC(sc, { cotizaciones: sc.cotizaciones, pedidos: sc.pedidos_venta });
+  assert.deepEqual(accionSiguienteDocumento(sc), { texto: deSC.label, href: deSC.href, tono: deSC.tono });
+  assert.deepEqual(accionSiguienteDocumento({ ...sc, pedidos_venta: undefined }),
+    { texto: 'Ver cotización', href: `/dashboard/ventas/cotizacion/9${DEL_HUB_B4}`, tono: 'indigo' });
+  assert.equal(accionSiguienteDocumento({ tipo: 'SC', id: 5, estado: 'CANCELADA' }), null);
+  // COT y PVEN (también con tipo 'PVEN')
+  const cot = { tipo: 'COT', id: 12, estado: 'PENDIENTE_CONFIRMACION' };
+  assert.deepEqual(accionSiguienteDocumento(cot), accionSiguienteCOT(cot));
+  const ven = { tipo: 'VEN', id: 8, estado: 'EN_PROCESO' };
+  assert.deepEqual(accionSiguienteDocumento(ven), accionSiguientePVEN(ven));
+  assert.deepEqual(accionSiguienteDocumento({ ...ven, tipo: 'PVEN' }), accionSiguientePVEN(ven));
+  assert.equal(accionSiguienteDocumento({ tipo: 'XYZ', id: 1, estado: 'BORRADOR' }), null);
+  assert.equal(accionSiguienteDocumento(null), null);
+  // una sola forma en la columna Acción
+  for (const fila of [sc, cot, ven, { tipo: 'SC', id: 2, estado: 'ASIGNADA', productos: [] }]) {
+    assert.deepEqual(Object.keys(accionSiguienteDocumento(fila)).sort(), ['href', 'texto', 'tono'], fila.tipo);
+  }
+  // C5: returnTo (por defecto RUTA_HUB_VENTAS); la lista de Solicitudes (T8) pasa la suya
+  const LISTA = '/dashboard/ventas/solicitud';
+  const DE_LA_LISTA = `?return_to=${encodeURIComponent(LISTA)}`;
+  assert.equal(accionSiguienteDocumento(sc, { returnTo: LISTA }).href, `/dashboard/ventas/venta/4${DE_LA_LISTA}`);
+  assert.equal(accionSiguienteDocumento({ tipo: 'SC', id: 5, estado: 'BORRADOR', productos: [] }, { returnTo: LISTA }).href,
+    `/dashboard/ventas/solicitud/5${DE_LA_LISTA}`);
+  assert.equal(accionSiguienteDocumento({ tipo: 'COT', id: 12, estado: 'BORRADOR', total_cop: 5 }, { returnTo: LISTA }).href,
+    `/dashboard/ventas/cotizacion/12${DE_LA_LISTA}`);
+  assert.equal(accionSiguienteDocumento({ tipo: 'VEN', id: 8, estado: 'PENDIENTE_COMPRA' }, { returnTo: LISTA }).href,
+    `/dashboard/compras${DE_LA_LISTA}`);
+  assert.equal(accionSiguienteDocumento(cot, { returnTo: LISTA }).href, null, 'un href null sigue siendo null');
+  assert.equal(accionSiguienteDocumento(sc, {}).href, `/dashboard/ventas/venta/4${DEL_HUB_B4}`, 'por defecto, el Hub');
+  // accionSiguienteSC también recibe returnTo (en su contexto); sin él, el Hub como siempre
+  assert.equal(accionSiguienteSC({ tipo: 'SC', id: 5, estado: 'ASIGNADA', productos: [{ product_name: 'Cuna' }] },
+    { cotizaciones: [], pedidos: [], returnTo: LISTA }).href, `/dashboard/ventas/solicitud/5${DE_LA_LISTA}`);
+  assert.equal(accionSiguienteSC({ tipo: 'SC', id: 5, estado: 'ASIGNADA', productos: [{ product_name: 'Cuna' }] }).href,
+    `/dashboard/ventas/solicitud/5${DEL_HUB_B4}`);
+  assert.equal(desdeElHub('/dashboard/ventas/venta/3'), `/dashboard/ventas/venta/3${DEL_HUB_B4}`, 'desdeElHub no cambia');
+}
+
+console.log('--- B4 T2 TEST 9: ETIQUETA_GRUPO y tituloGrupo (RP67: «Sin resolver · n» solo en separadores) ---');
+{
+  assert.deepEqual({ ...ETIQUETA_GRUPO }, {
+    ATRASADO: 'Atrasados', NO_RESUELTO: 'Sin resolver', ACCION_TOMADA: 'Acción tomada', CERRADO: 'Cerrados',
+  });
+  assert.ok(Object.isFrozen(ETIQUETA_GRUPO));
+  assert.equal(tituloGrupo('ATRASADO', 3), 'Atrasados · 3');
+  assert.equal(tituloGrupo('NO_RESUELTO', 5), 'Sin resolver · 5');
+  assert.equal(tituloGrupo('ACCION_TOMADA', 40), 'Acción tomada · 40');
+  assert.equal(tituloGrupo('CERRADO', 12), 'Cerrados · 12');
+  assert.equal(tituloGrupo('ATRASADO', 0), 'Atrasados · 0');
+  assert.equal(tituloGrupo('ATRASADO', '7'), 'Atrasados · 7');
+  for (const n of [null, undefined, -1, NaN, 'x']) assert.equal(tituloGrupo('CERRADO', n), 'Cerrados · 0', String(n));
 }
 
 console.log('OK test_hub_ventas.mjs');

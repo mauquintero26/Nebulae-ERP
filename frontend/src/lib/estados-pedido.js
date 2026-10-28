@@ -100,6 +100,14 @@ export const ESTADOS_PEDIDO_MANUALES = congelar(['PENDIENTE_COMPRA', 'EN_PROCESO
  */
 export const ESTADOS_PEDIDO_CERRADOS = congelar(['ENTREGADO', 'FACTURADO', 'CANCELADO', 'DEVUELTO_TOTAL']);
 
+/**
+ * Pedidos cuyo dinero no cuenta (ni vendido ni por cobrar): espejo de ESTADOS_VEN_SIN_DINERO
+ * (backend/app/core/estados_pedido.py), el mismo criterio del resumen de GET /ventas/pedidos (H47). B4 T2 (RP14): vive
+ * aquí y listas-ventas.js la reexporta (una sola constante). Inmutable.
+ * @type {ReadonlyArray<string>}
+ */
+export const ESTADOS_PEDIDO_SIN_DINERO = congelar(['CANCELADO', 'DEVUELTO_TOTAL']);
+
 // Un solo arreglo (congelado) compartido por los 5 operativos y por los estados desconocidos.
 const DESDE_OPERATIVO = congelar([...ESTADOS_PEDIDO_OPERATIVOS, 'ENTREGADO', 'CANCELADO']);
 
@@ -129,8 +137,9 @@ export function tiene(obj, clave) {
 }
 
 /**
- * B2: codigos que no estan en ninguna tabla de documentos pero se muestran (EN_GESTION esta en el filtro del Hub,
- * ESTADOS_NO_RESOLUCION): su nombre con tilde, en vez del respaldo humanizado ('En gestion'). Inmutable.
+ * B2: codigos que no estan en ninguna tabla de documentos pero todavia se pueden mostrar (EN_GESTION: ningun documento
+ * tiene ese estado; desde B4 T2, RP2, ya no esta en ESTADOS_NO_RESOLUCION de hub-ventas.js, y el Hub viejo lo conserva en
+ * sus colores hasta T7): su nombre con tilde, en vez del respaldo humanizado ('En gestion'). Inmutable.
  * @type {Readonly<Record<string, string>>}
  */
 const ETIQUETAS_SIN_TABLA = congelar({ EN_GESTION: 'En gestión' });

@@ -164,3 +164,55 @@ def test_el_frontend_espeja_las_transiciones_y_las_listas_del_pedido():
     assert espejo['operativos'] == list(ESTADOS_VEN_OPERATIVOS)
     assert espejo['manuales'] == list(ESTADOS_VEN_MANUALES)
     assert sorted(espejo['heredado']) == sorted(destinos_ven_permitidos('PAGADO'))
+
+
+# --- B4 T2 (KPI-ventas, TABLA-listas-ventas; RP14): cerrados, sin dinero y la pestaña de la lista ----------------
+
+_RAROS_GRUPO = ['ALGO_NUEVO', '', ' EN_PROCESO', 'en_proceso', 'constructor']
+
+_SCRIPT_NODE_B4 = """
+import(%s).then(m => {
+  const raros = %s;
+  console.log(JSON.stringify({
+    cerrados: m.ESTADOS_PEDIDO_CERRADOS,
+    sin_dinero: m.ESTADOS_PEDIDO_SIN_DINERO,
+    grupos: Object.fromEntries(Object.keys(m.ESTADOS_PEDIDO).map(e => [e, m.grupoPedido(e)])),
+    raros: raros.map(e => m.grupoPedido(e)),
+    nulo: m.grupoPedido(null),
+    numero: m.grupoPedido(3),
+  }));
+});
+"""
+
+
+def _espejo_frontend_b4():
+    node = shutil.which('node')
+    if not node or not _FRONTEND_LIB.exists():
+        pytest.skip('sin node o sin frontend/src/lib/estados-pedido.js: no se puede comprobar la paridad')
+    script = _SCRIPT_NODE_B4 % (json.dumps(_FRONTEND_LIB.as_uri()), json.dumps(_RAROS_GRUPO))
+    r = subprocess.run([node, '--input-type=module', '-e', script], capture_output=True, text=True,
+                       encoding='utf-8', timeout=60)
+    assert r.returncode == 0, f'node fallo:\n{r.stderr}'
+    return json.loads(r.stdout)
+
+
+def test_el_frontend_espeja_los_cerrados_y_los_sin_dinero():
+    from app.core.estados_pedido import ESTADOS_VEN_CERRADOS, ESTADOS_VEN_SIN_DINERO
+    espejo = _espejo_frontend_b4()
+    assert espejo['cerrados'] == list(ESTADOS_VEN_CERRADOS)
+    assert espejo['sin_dinero'] == list(ESTADOS_VEN_SIN_DINERO) == ['CANCELADO', 'DEVUELTO_TOTAL']
+
+
+def test_grupo_pedido_es_grupoPedido_en_los_18_estados_y_un_desconocido():
+    from app.core.estados_pedido import grupo_pedido
+    espejo = _espejo_frontend_b4()
+    # los 18 estados que el frontend etiqueta son los de ETIQUETAS_ESTADO['VEN'], y cada uno cae en la misma pestaña
+    assert set(espejo['grupos']) == set(ETIQUETAS_ESTADO['VEN']) and len(espejo['grupos']) == 18
+    for estado, grupo in espejo['grupos'].items():
+        assert grupo_pedido(estado) == grupo, f'{estado}: backend {grupo_pedido(estado)!r}, frontend {grupo!r}'
+        assert grupo in ('Pend. Compra', 'En Proceso', 'Listo Entrega', 'Entregado', 'Facturado', 'Cancelado'), estado
+    # un desconocido (o algo que no es un estado) no cae en ninguna: None / null, sin recortar espacios
+    assert espejo['raros'] == [None] * len(_RAROS_GRUPO)
+    assert [grupo_pedido(e) for e in _RAROS_GRUPO] == espejo['raros']
+    assert espejo['nulo'] is None and grupo_pedido(None) is None
+    assert espejo['numero'] is None and grupo_pedido(3) is None

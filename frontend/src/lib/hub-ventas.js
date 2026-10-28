@@ -10,10 +10,16 @@
  *  - H3: la proxima accion de una solicitud (replica renderSiguientePaso de solicitud/[id]/page.tsx) y el semaforo.
  *  - T9B (Bloque 2): R19 (Cotizar solo con la confirmacion del cliente vigente), R20 (una SC sin confirmar con
  *    cotizacion activa ya tiene la accion tomada) y R1 (la nota del Chatter que reinicia el atraso).
+ *  - B4 T2 (R8, C5, C7; RP2, RP15, D19, D20): el UNICO espejo en el frontend de la regla de atraso, resolucion y
+ *    columnas de backend/app/core/resolucion_ventas.py (clasificar, esAtrasado, esNoResuelto, esAccionTomada y
+ *    columnaHub; paridad en backend/tests/test_paridad_reglas_ventas.py), la proxima accion de COT y PVEN (R26) y los
+ *    separadores de la tabla (tituloGrupo). El Hub y las listas reciben la resolucion por fila del servidor: esto sirve
+ *    para el tablero, las pruebas y lo que todavia calcula el navegador.
  */
 
 import {
-  ESTADOS_PEDIDO, ESTADOS_PEDIDO_MANUALES, infoEstadoPedido, transicionesPedido, esPedidoVigente, esCotizacionActiva,
+  ESTADOS_PEDIDO, ESTADOS_PEDIDO_MANUALES, ESTADOS_PEDIDO_CERRADOS, infoEstadoPedido, pasoPedido, transicionesPedido,
+  esPedidoVigente, esCotizacionActiva, congelar, humanizarCodigo, tiene,
 } from './estados-pedido.js';
 
 // ─── N3: cancelar documentos ────────────────────────────────────────────────────
@@ -268,14 +274,15 @@ export function fechaEditadaParaGuardar(dia, guardada) {
 // ─── H3: semaforo y proxima accion de la solicitud ──────────────────────────────
 
 /**
- * Estados que requieren accion o estan en espera de gestion (SC, COT y PVEN). Inmutable.
+ * Estados que requieren accion o estan en espera de gestion (SC, COT y PVEN): los 8 de alertas_resumen, espejo de
+ * ESTADOS_NO_RESOLUCION de backend/app/core/resolucion_ventas.py (ASIGNADA incluida). B4 T2 (RP2): sin EN_GESTION,
+ * que ningun documento tiene (su etiqueta sigue en estados-pedido.js). Inmutable.
  * @type {ReadonlyArray<string>}
  */
 export const ESTADOS_NO_RESOLUCION = Object.freeze([
   'BORRADOR',
   'ASIGNADA',
   'PENDIENTE_CONFIRMACION',
-  'EN_GESTION',
   'ENVIADA',
   'PENDIENTE_COMPRA',
   'PENDIENTE_PAGO',
@@ -322,11 +329,34 @@ export function esSCConCotizacionTemprana(row, scConCot) {
 }
 
 /**
+ * El rango de `row` con la regla nueva (B4 T2): clasificar con los ids de scConCot como «SC con documentos activos» y,
+ * para una COT, el pedido vigente que dice `opciones`. Sin dias: ATRASADO y NO_RESUELTO se suman, asi que la hora no
+ * cambia nada (como contar_no_resueltos).
+ */
+function rangoConLaReglaNueva(row, scConCot, opciones) {
+  return clasificar(row, {
+    dias: 0,
+    scConCotActiva: row?.tipo === 'SC' && !!scConCot?.has(row?.id),
+    cotConPedidoVigente: !!opciones?.cotConPedidoVigente,
+  });
+}
+
+/**
  * No resuelto: una SC CONFIRMADA sin cotizacion activa (scConCot = ids de SC con una COT activa) todavia necesita que
  * la cotizen; una SC sin confirmar con cotizacion activa ya no (R20); el resto segun ESTADOS_NO_RESOLUCION.
- * @param {Set<number>} scConCot
+ * B4 T2 (RP81, D19): con el tercer argumento `{cotConPedidoVigente}` es la regla nueva de resolucion_ventas (rango
+ * ATRASADO o NO_RESUELTO de clasificar: la COT CONFIRMADA sin pedido vigente y la VENCIDA cuentan; Soporte queda fuera);
+ * sin el, lo mismo que en el Bloque 1 (el Hub viejo de ventas/page.tsx no cambia hasta T7).
+ * @param {any} row
+ * @param {Set<number>} [scConCot]
+ * @param {{cotConPedidoVigente?: boolean} | null} [opciones]
+ * @returns {boolean}
  */
-export function esNoResuelto(row, scConCot) {
+export function esNoResuelto(row, scConCot, opciones) {
+  if (opciones !== undefined && opciones !== null) {
+    const rango = rangoConLaReglaNueva(row, scConCot, opciones);
+    return rango === 'ATRASADO' || rango === 'NO_RESUELTO';
+  }
   if (esSCConfirmada(row)) return !scConCot?.has(row.id);
   if (esSCConCotizacionTemprana(row, scConCot)) return false;
   return ESTADOS_NO_RESOLUCION.includes(row?.estado);
@@ -335,11 +365,155 @@ export function esNoResuelto(row, scConCot) {
 /**
  * Accion tomada: una SC CONFIRMADA solo cuando ya tiene cotizacion activa; una SC sin confirmar con cotizacion activa
  * tambien (R20); el resto segun ESTADOS_ACCION_TOMADA.
+ * B4 T2 (RP81, D19): con el tercer argumento `{cotConPedidoVigente}` es la regla nueva (rango ACCION_TOMADA o CERRADO de
+ * clasificar: la vista acciones_tomadas, C7); sin el, lo mismo que en el Bloque 1, salvo lo que P1 cambia: una COT
+ * CONFIRMADA sin pedido vigente (sin el tercer argumento no se sabe si lo tiene) ya no es accion tomada.
+ * @param {any} row
+ * @param {Set<number>} [scConCot]
+ * @param {{cotConPedidoVigente?: boolean} | null} [opciones]
+ * @returns {boolean}
  */
-export function esAccionTomada(row, scConCot) {
+export function esAccionTomada(row, scConCot, opciones) {
+  if (opciones !== undefined && opciones !== null) {
+    const rango = rangoConLaReglaNueva(row, scConCot, opciones);
+    return rango === 'ACCION_TOMADA' || rango === 'CERRADO';
+  }
   if (esSCConfirmada(row)) return !!scConCot?.has(row.id);
   if (esSCConCotizacionTemprana(row, scConCot)) return true;
+  if (row?.tipo === 'COT' && row?.estado === 'CONFIRMADA') return false; // P1 (D19)
   return ESTADOS_ACCION_TOMADA.includes(row?.estado);
+}
+
+// ─── B4 T2: la regla única de atraso (espejo de resolucion_ventas.py; R8, C5, RP2) ─
+
+/** Los tipos de documento; 'PVEN' es el mismo que 'VEN' (_ALIAS_TIPO del backend). */
+const TIPO_DOCUMENTO = congelar({ SC: 'SC', COT: 'COT', VEN: 'VEN', PVEN: 'VEN' });
+
+/** 'SC', 'COT' o 'VEN' ('PVEN' -> 'VEN'); otro tipo es un error de programación (ValueError en Python). */
+function tipoDocumento(tipo) {
+  if (typeof tipo === 'string' && tiene(TIPO_DOCUMENTO, tipo)) return TIPO_DOCUMENTO[tipo];
+  throw new Error(`Tipo de documento no válido: ${JSON.stringify(tipo ?? null)}`);
+}
+
+/**
+ * Los estados cerrados de cada tipo (regla 2 de clasificar): espejo de ESTADOS_CERRADOS de resolucion_ventas.py.
+ * Inmutable.
+ * @type {Readonly<{SC: ReadonlyArray<string>, COT: ReadonlyArray<string>, VEN: ReadonlyArray<string>}>}
+ */
+export const ESTADOS_CERRADOS = congelar({ SC: ['CANCELADA'], COT: ['RECHAZADA'], VEN: [...ESTADOS_PEDIDO_CERRADOS] });
+
+/** Los dias de alerta del tipo: `dias` es {SC, COT, VEN} (leer_dias_alerta) o ya un numero. */
+function diasDelTipo(dias, tipo) {
+  return Number(dias !== null && typeof dias === 'object' ? dias[tipo] : dias);
+}
+
+/**
+ * La fila lleva ESTRICTAMENTE mas de `dias` × 24 h sin movimiento (la cuenta de superaDiasAlerta, listas-ventas.js):
+ * el tiempo sale de updated_at o, si no hay, de created_at, leidos como UTC (comoUTC). Sin fecha valida, no.
+ */
+function pasoElPlazo(fila, dias, ahora) {
+  const iso = fila?.updated_at || fila?.created_at;
+  if (!iso) return false;
+  const t = new Date(comoUTC(iso)).getTime();
+  return !Number.isNaN(t) && (ahora - t) / 86400000 > dias;
+}
+
+/**
+ * La regla unica de resolucion de Ventas (RP2), espejo exacto de clasificar de backend/app/core/resolucion_ventas.py:
+ * 'ATRASADO', 'NO_RESUELTO', 'ACCION_TOMADA', 'CERRADO' o null (Soporte). En este orden:
+ *  1. Soporte, solo en una SC (esSoporte: tipo 'Soporte Tecnico' o estado N/A_SOPORTE) -> null.
+ *  2. CERRADO: SC CANCELADA, COT RECHAZADA, pedido en ESTADOS_PEDIDO_CERRADOS.
+ *  3. SC con documentos activos (scConCotActiva) -> ACCION_TOMADA.
+ *  4. SC CONFIRMADA sin ellos -> NO_RESUELTO; ATRASADO solo con confirmacion_vigente y el plazo pasado.
+ *  5. COT CONFIRMADA: con pedido vigente (cotConPedidoVigente) -> ACCION_TOMADA; sin el, NO_RESUELTO, y ATRASADO solo
+ *     con confirmacion_vigente y el plazo pasado.
+ *  6. Estado en ESTADOS_NO_RESOLUCION -> NO_RESUELTO, o ATRASADO con el plazo pasado.
+ *  7. COT VENCIDA -> NO_RESUELTO, nunca ATRASADO.
+ *  8. El resto -> ACCION_TOMADA.
+ * «El plazo pasado» es ESTRICTAMENTE mas de dias × 24 h desde comoUTC(updated_at || created_at): (ahora − t) / 86400000
+ * > dias. diasDesde (piso) es solo para mostrar la antigüedad. Lee fila.tipo ('SC', 'COT', 'VEN' o 'PVEN'; otro lanza
+ * Error), fila.estado y fila.confirmacion_vigente (solo true cuenta).
+ * @param {any} fila
+ * @param {{dias: number | {SC: number, COT: number, VEN: number}, ahora?: number | Date, scConCotActiva?: boolean,
+ *   cotConPedidoVigente?: boolean}} [opciones]
+ * @returns {'ATRASADO' | 'NO_RESUELTO' | 'ACCION_TOMADA' | 'CERRADO' | null}
+ */
+export function clasificar(fila, { dias, ahora = Date.now(), scConCotActiva = false, cotConPedidoVigente = false } = /** @type {any} */ ({})) {
+  const tipo = tipoDocumento(fila?.tipo);
+  const estado = fila?.estado;
+  if (tipo === 'SC' && esSoporte(fila)) return null;
+  if (ESTADOS_CERRADOS[tipo].includes(estado)) return 'CERRADO';
+  const ms = ahora instanceof Date ? ahora.getTime() : Number(ahora);
+  const atraso = pasoElPlazo(fila, diasDelTipo(dias, tipo), ms);
+  if (tipo === 'SC' && scConCotActiva) return 'ACCION_TOMADA';
+  if ((tipo === 'SC' || tipo === 'COT') && estado === 'CONFIRMADA') {
+    if (tipo === 'COT' && cotConPedidoVigente) return 'ACCION_TOMADA';
+    return fila?.confirmacion_vigente === true && atraso ? 'ATRASADO' : 'NO_RESUELTO';
+  }
+  if (ESTADOS_NO_RESOLUCION.includes(estado)) return atraso ? 'ATRASADO' : 'NO_RESUELTO';
+  if (tipo === 'COT' && estado === 'VENCIDA') return 'NO_RESUELTO';
+  return 'ACCION_TOMADA';
+}
+
+/**
+ * La fila esta atrasada: clasificar(fila, opciones) === 'ATRASADO' (la misma regla que la pastilla roja).
+ * @param {any} fila
+ * @param {Parameters<typeof clasificar>[1]} [opciones]
+ * @returns {boolean}
+ */
+export function esAtrasado(fila, opciones) {
+  return clasificar(fila, opciones) === 'ATRASADO';
+}
+
+const COLUMNA_CANCELADO = congelar(['CANCELADO', 'CANCELADA', 'RECHAZADA', 'DEVUELTO_TOTAL']);
+const COLUMNA_ACCION = congelar(['ENTREGADO', 'FACTURADO', 'CONFIRMADA', 'LISTO_ENTREGA']);
+const COLUMNA_GESTION = congelar(['EN_PROCESO', 'ENVIADA', 'EN_TRANSITO']);
+
+/**
+ * La columna del tablero del Hub ('No Resuelto', 'En Gestión', 'Acción Tomada' o 'Cancelado'): el getKanbanCol del
+ * Bloque 1 (T9) que ventas/page.tsx deja de tener en T7, mas DEVUELTO_TOTAL -> 'Cancelado' (C7). Espejo de columna_hub de
+ * resolucion_ventas.py. scConCot = ids de SC con documentos activos (solo cuenta en una SC: los ids de SC, COT y PVEN
+ * pueden coincidir). No es la resolucion: una COT CONFIRMADA sin pedido va a 'Acción Tomada', como hoy. D20: 'PVEN' es el
+ * mismo tipo que 'VEN'; otro tipo lanza Error.
+ * @param {any} fila
+ * @param {{scConCot?: Set<number>}} [opciones]
+ * @returns {'No Resuelto' | 'En Gestión' | 'Acción Tomada' | 'Cancelado'}
+ */
+export function columnaHub(fila, { scConCot } = {}) {
+  const tipo = tipoDocumento(fila?.tipo);
+  const estado = fila?.estado;
+  const conCot = tipo === 'SC' && !!scConCot?.has(fila?.id);
+  if (tipo === 'SC' && estado === 'CONFIRMADA' && !conCot) return 'No Resuelto'; // H3: falta cotizarla
+  if (tipo === 'SC' && ESTADOS_NO_RESOLUCION.includes(estado) && conCot) return 'Acción Tomada'; // R20
+  if (COLUMNA_CANCELADO.includes(estado)) return 'Cancelado';
+  if (COLUMNA_ACCION.includes(estado)) return 'Acción Tomada';
+  if (COLUMNA_GESTION.includes(estado)) return 'En Gestión';
+  return 'No Resuelto';
+}
+
+/**
+ * El nombre de cada grupo de la tabla (las claves de clasificar y de RANGO del backend) para los separadores (R6, RP67:
+ * «Sin resolver» va solo en los separadores; el botón y la pestaña dicen «No resueltos»). Inmutable.
+ * @type {Readonly<{ATRASADO: string, NO_RESUELTO: string, ACCION_TOMADA: string, CERRADO: string}>}
+ */
+export const ETIQUETA_GRUPO = congelar({
+  ATRASADO: 'Atrasados',
+  NO_RESUELTO: 'Sin resolver',
+  ACCION_TOMADA: 'Acción tomada',
+  CERRADO: 'Cerrados',
+});
+
+/**
+ * El separador de un grupo de la tabla con su cantidad: tituloGrupo('ATRASADO', 3) === 'Atrasados · 3'. Una cantidad que
+ * no es un numero positivo cuenta 0; un grupo desconocido sale humanizado.
+ * @param {string} grupo
+ * @param {unknown} n
+ * @returns {string}
+ */
+export function tituloGrupo(grupo, n) {
+  const etiqueta = typeof grupo === 'string' && tiene(ETIQUETA_GRUPO, grupo) ? ETIQUETA_GRUPO[grupo] : humanizarCodigo(grupo);
+  const cuantos = Number(n);
+  return `${etiqueta} · ${Number.isFinite(cuantos) && cuantos > 0 ? Math.floor(cuantos) : 0}`;
 }
 
 const masReciente = (lista) => [...lista].sort((a, b) => Number(b?.id || 0) - Number(a?.id || 0))[0];
@@ -378,7 +552,18 @@ export function textoAtrasados(n) {
  * @returns {string}
  */
 export function desdeElHub(ruta) {
-  return `${ruta}?return_to=${encodeURIComponent(RUTA_HUB_VENTAS)}`;
+  return conRegresoA(ruta, RUTA_HUB_VENTAS);
+}
+
+/**
+ * B4 T2 (cruce C5 de la verificación): la ruta con ?return_to= de `returnTo` (el Hub si no llega), para que el detalle
+ * abierto desde la lista de Solicitudes (T8) vuelva a la lista y no al Hub. desdeElHub es este con el Hub.
+ * @param {string} ruta
+ * @param {string} [returnTo]
+ * @returns {string}
+ */
+function conRegresoA(ruta, returnTo) {
+  return `${ruta}?return_to=${encodeURIComponent(returnTo || RUTA_HUB_VENTAS)}`;
 }
 
 /** Textos del aviso de fusionarCargaHub (uno solo por recarga). */
@@ -435,23 +620,25 @@ export function fusionarCargaHub(previas, respuestas) {
  * ella, 'Reiniciar o cotizar' (el servidor solo envia una Asignada o reenvia una Pendiente por confirmacion, nunca una
  * Confirmada; el detalle ofrece 'Reiniciar solicitud' o 'Cotizar sin esperar confirmacion'), y 'Enviar para
  * confirmacion' queda para la Asignada.
- * Cada href lleva ?return_to= del Hub (desdeElHub).
+ * Cada href lleva ?return_to= del Hub (desdeElHub), o de `ctx.returnTo` si llega (B4 T2, cruce C5 de la verificación:
+ * la lista de Solicitudes pasa la suya).
  * `tono` es uno de los de NextStepCard (flujo.tsx): slate, emerald, indigo, amber o blue.
- * @param {{cotizaciones?: any[], pedidos?: any[]}} [ctx] cotizaciones y pedidos de esa solicitud
+ * @param {{cotizaciones?: any[], pedidos?: any[], returnTo?: string}} [ctx] cotizaciones y pedidos de esa solicitud
  * @returns {{label: string, href: string, tono: string} | null}
  */
 export function accionSiguienteSC(row, ctx = {}) {
   const cotizaciones = ctx.cotizaciones || [];
   const pedidos = ctx.pedidos || [];
-  const enSolicitud = desdeElHub(`/dashboard/ventas/solicitud/${row?.id}`);
+  const volver = (ruta) => conRegresoA(ruta, ctx.returnTo);
+  const enSolicitud = volver(`/dashboard/ventas/solicitud/${row?.id}`);
   const estado = row?.estado;
   if (esSoporte(row)) return { label: 'Ver ticket', href: enSolicitud, tono: 'slate' };
   if (estado === 'CANCELADA') return null;
   const pedido = masReciente(pedidos.filter((v) => v && esPedidoVigente(v.estado)));
-  if (pedido) return { label: 'Ver pedido', href: desdeElHub(`/dashboard/ventas/venta/${pedido.id}`), tono: 'emerald' };
+  if (pedido) return { label: 'Ver pedido', href: volver(`/dashboard/ventas/venta/${pedido.id}`), tono: 'emerald' };
   // choque H3/N4: una COT VENCIDA cuenta como activa (esCotizacionActiva), igual que en el backend.
   const cot = masReciente(cotizaciones.filter((c) => c && esCotizacionActiva(c.estado)));
-  if (cot) return { label: 'Ver cotización', href: desdeElHub(`/dashboard/ventas/cotizacion/${cot.id}`), tono: 'indigo' };
+  if (cot) return { label: 'Ver cotización', href: volver(`/dashboard/ventas/cotizacion/${cot.id}`), tono: 'indigo' };
   if (!tieneProductos(row?.productos) && ['ASIGNADA', 'PENDIENTE_CONFIRMACION', 'CONFIRMADA'].includes(estado)) {
     return { label: 'Agregar productos', href: enSolicitud, tono: 'amber' };
   }
@@ -464,6 +651,104 @@ export function accionSiguienteSC(row, ctx = {}) {
   if (estado === 'ASIGNADA') return { label: 'Enviar para confirmación', href: enSolicitud, tono: 'indigo' };
   if (estado === 'BORRADOR') return { label: 'Asignar asesor', href: enSolicitud, tono: 'amber' };
   return { label: 'Ver solicitud', href: enSolicitud, tono: 'slate' };
+}
+
+// ─── B4 T2 (R26, RP15): la próxima acción de COT y PVEN y la de cualquier fila ──
+
+/** El pedido vigente (no CANCELADO) más nuevo de la cotización (pedidoVigente de listas-ventas.js), o undefined. */
+const pedidoVigenteDe = (cot) => masReciente((Array.isArray(cot?.pedidos_venta) ? cot.pedidos_venta : [])
+  .filter((v) => v && typeof v === 'object' && esPedidoVigente(v.estado)));
+
+/**
+ * La próxima acción de una cotización (R26), con la forma de la columna Acción: {texto, href, tono} o null ('—'). Solo
+ * navega: ninguna cambia el estado.
+ *  - BORRADOR, VENCIDA o ENVIADA: 'Completar precios' (amber) si total_cop ≤ 0 (o no es un número), si no 'Enviar al
+ *    cliente' (indigo); las dos abren la COT.
+ *  - PENDIENTE_CONFIRMACION: 'Esperando al cliente' (blue), sin href.
+ *  - CONFIRMADA: con pedido vigente (pedidos_venta de la fila), 'Ver pedido' (emerald) abre el pedido; sin él, 'Crear
+ *    pedido' (emerald) abre la COT.
+ *  - RECHAZADA (o un estado que R26 no nombra): null.
+ * Cada href lleva ?return_to= de `returnTo` (el Hub por defecto).
+ * @param {any} cot
+ * @param {{returnTo?: string}} [opciones]
+ * @returns {{texto: string, href: string | null, tono: string} | null}
+ */
+export function accionSiguienteCOT(cot, { returnTo } = {}) {
+  const estado = cot?.estado;
+  const enCot = conRegresoA(`/dashboard/ventas/cotizacion/${cot?.id}`, returnTo);
+  if (estado === 'BORRADOR' || estado === 'VENCIDA' || estado === 'ENVIADA') {
+    const total = Number(cot?.total_cop);
+    return Number.isFinite(total) && total > 0
+      ? { texto: 'Enviar al cliente', href: enCot, tono: 'indigo' }
+      : { texto: 'Completar precios', href: enCot, tono: 'amber' };
+  }
+  if (estado === 'PENDIENTE_CONFIRMACION') return { texto: 'Esperando al cliente', href: null, tono: 'blue' };
+  if (estado === 'CONFIRMADA') {
+    const pedido = pedidoVigenteDe(cot);
+    return pedido
+      ? { texto: 'Ver pedido', href: conRegresoA(`/dashboard/ventas/venta/${pedido.id}`, returnTo), tono: 'emerald' }
+      : { texto: 'Crear pedido', href: enCot, tono: 'emerald' };
+  }
+  return null;
+}
+
+const PVEN_SIN_ACCION = congelar(['CANCELADO', 'DEVUELTO_TOTAL', 'FACTURADO']);
+const PVEN_POR_FACTURAR = congelar(['ENTREGADO', 'PARCIALMENTE_ENTREGADO']);
+const PVEN_POR_COMPRAR = congelar(['PENDIENTE_COMPRA', 'PENDIENTE_PAGO']);
+const PVEN_EN_CURSO = congelar(['EN_PROCESO', 'EN_TRANSITO']);
+
+/**
+ * La próxima acción de un pedido de venta (R26, en el orden de RP15): {texto, href, tono} o null. Solo navega.
+ *  - CANCELADO, DEVUELTO_TOTAL o FACTURADO: null.
+ *  - ENTREGADO o PARCIALMENTE_ENTREGADO: 'Facturar' (emerald), abre el pedido (antes de mirar el paso: entregado en
+ *    parte es paso 2).
+ *  - PENDIENTE_COMPRA o PENDIENTE_PAGO: 'Gestionar compra' (amber), a /dashboard/compras.
+ *  - EN_PROCESO o EN_TRANSITO: 'Ver pedido' (slate).
+ *  - Paso 2 de estados-pedido (listo para entrega): 'Cobrar saldo' (amber, abre el pedido) si saldo_cop > 0; si no,
+ *    'Despachar' (indigo), a /dashboard/inventario/entregas.
+ *  - El resto: 'Ver pedido' (slate).
+ * Cada href lleva ?return_to= de `returnTo` (el Hub por defecto).
+ * @param {any} p
+ * @param {{returnTo?: string}} [opciones]
+ * @returns {{texto: string, href: string, tono: string} | null}
+ */
+export function accionSiguientePVEN(p, { returnTo } = {}) {
+  if (!p || typeof p !== 'object') return null;
+  const estado = p.estado;
+  const enPedido = conRegresoA(`/dashboard/ventas/venta/${p.id}`, returnTo);
+  if (PVEN_SIN_ACCION.includes(estado)) return null;
+  if (PVEN_POR_FACTURAR.includes(estado)) return { texto: 'Facturar', href: enPedido, tono: 'emerald' };
+  if (PVEN_POR_COMPRAR.includes(estado)) {
+    return { texto: 'Gestionar compra', href: conRegresoA('/dashboard/compras', returnTo), tono: 'amber' };
+  }
+  if (PVEN_EN_CURSO.includes(estado)) return { texto: 'Ver pedido', href: enPedido, tono: 'slate' };
+  if (pasoPedido(estado) === 2) {
+    return Number(p.saldo_cop) > 0
+      ? { texto: 'Cobrar saldo', href: enPedido, tono: 'amber' }
+      : { texto: 'Despachar', href: conRegresoA('/dashboard/inventario/entregas', returnTo), tono: 'indigo' };
+  }
+  return { texto: 'Ver pedido', href: enPedido, tono: 'slate' };
+}
+
+/**
+ * RP15: la próxima acción de cualquier fila (SC, COT o VEN/PVEN) con UNA forma, {texto, href, tono} o null, para la
+ * columna Acción del Hub (T7) y las tarjetas de los tableros (T3C, T8). Una SC usa accionSiguienteSC con
+ * fila.cotizaciones y fila.pedidos_venta (su `label` pasa a `texto`); COT y PVEN, las de R26. Cruce C5 de la
+ * verificación: cada href lleva ?return_to= de `returnTo` (por defecto RUTA_HUB_VENTAS); un href null sigue null. Un
+ * tipo desconocido: null.
+ * @param {any} fila
+ * @param {{returnTo?: string}} [opciones]
+ * @returns {{texto: string, href: string | null, tono: string} | null}
+ */
+export function accionSiguienteDocumento(fila, { returnTo } = {}) {
+  const tipo = fila?.tipo;
+  if (tipo === 'SC') {
+    const accion = accionSiguienteSC(fila, { cotizaciones: fila.cotizaciones, pedidos: fila.pedidos_venta, returnTo });
+    return accion ? { texto: accion.label, href: accion.href, tono: accion.tono } : null;
+  }
+  if (tipo === 'COT') return accionSiguienteCOT(fila, { returnTo });
+  if (tipo === 'VEN' || tipo === 'PVEN') return accionSiguientePVEN(fila, { returnTo });
+  return null;
 }
 
 // ─── T9B (R1): la nota del Chatter que reinicia el atraso ───────────────────────
