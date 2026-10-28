@@ -395,8 +395,9 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
     const columna = ahora.columnas.find((c) => c.clave === clave);
     const datos = tableroRef.current[clave];
     const deseada = ahora.deseadas[clave];
-    // Solo con la columna ya cargada y sin otro «Ver más» en camino.
-    if (!columna || !datos || !deseada || datos.firma !== deseada.firma || datos.cargandoMas) return;
+    // Solo con la columna ya cargada y sin otro «Ver más» en camino. Tampoco con su última carga fallida: un «Ver más»
+    // exitoso borraría el error y levantaría el bloqueo de sus tarjetas sin un Reintentar (revisión de T4B r3).
+    if (!columna || !datos || !deseada || datos.firma !== deseada.firma || datos.cargandoMas || datos.error) return;
     actualizar((t) => ({ ...t, [clave]: { ...t[clave], cargandoMas: true, errorMas: null } }));
     pedir(columna, consultaColumna(columna, { porColumna: ahora.porColumna, ordenDe: ahora.ordenDe, offset: datos.items.length }), null, true, null);
   }, [actualizar, pedir, claveCortes]);
@@ -1309,8 +1310,8 @@ export function TableroKanban<T = unknown>({
               onClick={() => {
                 if (!ocupada) tablero.verMas(c.clave);
               }}
-              disabled={d.cargandoMas || d.cargando || ocupada}
-              title={ocupada ? 'Espera a que termine el cambio de una tarjeta de esta columna.' : undefined}
+              disabled={d.cargandoMas || d.cargando || ocupada || d.cargaFallida}
+              title={ocupada ? 'Espera a que termine el cambio de una tarjeta de esta columna.' : d.cargaFallida ? 'Reintenta esta columna para ver más.' : undefined}
               className={`flex w-full items-center justify-center gap-1 rounded-xl border border-dashed border-slate-300 py-2 text-xs font-bold hover:bg-white disabled:opacity-60 ${ACCENTS[color].text}`}
             >
               {d.cargandoMas && <Loader2 size={12} aria-hidden="true" className="animate-spin" />}

@@ -629,7 +629,7 @@ console.log('--- TEST 14 (T4B r1): ninguna tarjeta perdida, «Ver más» sin sal
   assert.match(fuente, /catch \(err\) \{\s*movimiento\.deshacer\(\);/);
   // Punto 3: «Ver más» quieto con un movimiento pendiente (en el botón y en el hook; r2: los pendientes son del hook).
   assert.match(fuente, /const ocupada = columnaOcupada\(tablero\.movimientosPendientes, c\.clave\);/);
-  assert.match(fuente, /disabled=\{d\.cargandoMas \|\| d\.cargando \|\| ocupada\}/);
+  assert.match(fuente, /disabled=\{d\.cargandoMas \|\| d\.cargando \|\| ocupada( \|\| d\.cargaFallida)?\}/);
   assert.match(fuente, /if \(columnaOcupada\(pendientesRef\.current, clave\)\) return;/);
   // Punto 4: el desmontaje aborta y limpia la guarda (StrictMode monta, desmonta y vuelve a montar).
   assert.match(fuente,
@@ -1027,6 +1027,13 @@ console.log('--- TEST 15 (T4B r2): una tarjeta sigue pendiente hasta la recarga 
   assert.match(fuente, /topes\.current\?\.sincronizar\(nueva\);/);
   assert.match(fuente, /topes\.current\?\.limpiar\(\);/);
   assert.match(fuente, /const \{ lista, faltan \} = vencerEspera\(pendientesRef\.current, n\);/);
+  // Revisión de r3 (controlador): al vencer se vuelven a pedir las que faltaban, y StrictMode rearma los topes.
+  assert.match(fuente, /if \(faltan\.length\) subir\(faltan\);/, 'al vencer, se vuelven a pedir las columnas que faltaban');
+  assert.match(fuente, /if \(p\.espera\) obtenerTopes\(\)\.armar\(p\.n\);/, 'al volver a montar se rearman los topes');
+  // Revisión de r3 (controlador): «Ver más» no corre en una columna cuya última carga falló, porque un «Ver más»
+  // exitoso borraría el error y levantaría el bloqueo sin un Reintentar.
+  assert.match(fuente, /datos\.cargandoMas \|\| datos\.error\) return;/, 'verMas no corre con la columna en error');
+  assert.match(fuente, /disabled=\{d\.cargandoMas \|\| d\.cargando \|\| ocupada \|\| d\.cargaFallida\}/, 'el botón «Ver más» se deshabilita');
 }
 
 console.log('✓ lib/kanban.js: columnas, reparto, orden, páginas, movimiento, reglas, destinos, arrastre y motivo.');
