@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import {
   SIN_COLUMNA, TEXTO_SOLO_VER, definirColumnas, columnaPorEstados, agruparEnColumnas, ordenarTarjetas,
   estadoTableroInicial, aplicarPagina, marcarColumna, moverTarjeta, resolverSoltar, mapaDestinos, columnaBajoPunto,
-  velocidadAutodesplazamiento, textoTotalColumna,
+  velocidadAutodesplazamiento, textoTotalColumna, MINIMO_MOTIVO, motivoValido,
 } from '../src/lib/kanban.js';
 import {
   COLUMNAS_PEC, COLUMNAS_RECEPCION, COLUMNAS_LISTA, COLUMNAS_TRASLADO, COLUMNAS_STOCK, ESTADOS_PEC, columnaPec,
@@ -244,4 +244,20 @@ console.log('--- TEST 10: textoTotalColumna (C13: sin textoContador ni «…») 
   assert.equal(textoTotalColumna(0, 0), '0');
 }
 
-console.log('✓ lib/kanban.js: columnas, reparto, orden, páginas, movimiento, reglas, destinos y arrastre.');
+console.log('--- TEST 11 (T4A): motivoValido (ModalMotivo: 5 caracteres o más, sin contar los espacios del borde) ---');
+{
+  assert.equal(MINIMO_MOTIVO, 5);
+  assert.equal(motivoValido('abcde'), true);
+  assert.equal(motivoValido('abcd'), false);
+  assert.equal(motivoValido('   abcd   '), false, 'los espacios del borde no cuentan');
+  assert.equal(motivoValido('\n abcde \t'), true);
+  assert.equal(motivoValido('a b c'), true, 'los espacios de adentro sí cuentan');
+  assert.equal(motivoValido('😀😀😀😀'), false, 'se cuentan caracteres, no unidades UTF-16 (como len() del servidor)');
+  assert.equal(motivoValido('😀😀😀😀😀'), true);
+  assert.equal(motivoValido('Señor'), true);
+  for (const otro of [null, undefined, 12345, {}, ['abcde']]) assert.equal(motivoValido(otro), false, String(otro));
+  assert.equal(motivoValido('abc', 3), true, 'el mínimo se puede cambiar');
+  assert.equal(motivoValido('ab', 3), false);
+}
+
+console.log('✓ lib/kanban.js: columnas, reparto, orden, páginas, movimiento, reglas, destinos, arrastre y motivo.');

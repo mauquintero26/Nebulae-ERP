@@ -13,7 +13,7 @@
 import assert from 'node:assert/strict';
 import {
   AMBITOS, CLAVE_VALIDA, LIMITE_BYTES, RETARDO_MS, MAXIMO_NIVELES, claveValida, claveInterna, tamanoEnBytes, pasaDeNiveles,
-  crearPreferencias,
+  crearPreferencias, normalizarUsuario, crearPreferenciasPorUsuario, vincularPreferencia,
 } from '../src/lib/preferencias.js';
 import { validarPeriodo, PERIODO_POR_DEFECTO } from '../src/lib/analisis.js';
 
@@ -626,4 +626,316 @@ console.log('--- TEST 18 (r1, punto 4b): cerrar() descarta lo pendiente y deja l
   assert.equal(p.estaLista(), true);
 }
 
-console.log('✓ lib/preferencias.js: ámbitos, ráfagas, usuarios, memoria, 8 KB, precarga, reintentos, escribirParte, niveles y cerrar.');
+// ─── T4A: la instancia de la app por usuario y el vínculo de los hooks (RP25, RP26 y D35) ──────────────────────────
+
+console.log('--- TEST 19 (T4A, RP25): normalizarUsuario (el user_id de AuthGuard) ---');
+{
+  const casos = [
+    ['7', 7], [7, 7], [' 8 ', 8], ['0', null], [0, null], ['', null], [null, null], [undefined, null], ['abc', null],
+    ['7.5', null], ['-3', null], [Number.NaN, null], ['null', null], ['undefined', null],
+  ];
+  for (const [entrada, esperado] of casos) assert.equal(normalizarUsuario(entrada), esperado, JSON.stringify(entrada));
+  // crearPreferencias usa la misma regla: sin un id válido no toca el almacén ni hace PUT ni GET.
+  for (const invalido of ['0', 'abc', '7.5', '']) {
+    const servidor = servidorFalso();
+    const almacen = almacenFalso();
+    const reloj = relojFalso();
+    const p = crearPreferencias({ usuarioId: invalido, almacen, servidor, temporizador: reloj });
+    assert.equal(p.usuarioId, null, JSON.stringify(invalido));
+    p.escribir('vista:x', 'kanban');
+    reloj.avanzar(800);
+    await p.precargar('');
+    assert.deepEqual([almacen.datos.size, servidor.puts.length, servidor.gets.length], [0, 0, 0], JSON.stringify(invalido));
+  }
+}
+
+console.log('--- TEST 20 (T4A, RP25 y D35): una instancia por usuario; al cambiar, cerrar() la vieja ANTES de crear la nueva ---');
+{
+  const eventos = [];
+  const servidores = new Map();
+  const almacen = almacenFalso(); // localStorage es uno solo para todos los usuarios del equipo
+  const reloj = relojFalso();
+  let usuario = '7';
+  const gestor = crearPreferenciasPorUsuario({
+    leerUsuario: () => usuario,
+    crear: (usuarioId) => {
+      eventos.push(`crear:${usuarioId}`);
+      const servidor = servidorFalso({ datos: { 'vista:x': `de ${usuarioId}` } });
+      servidores.set(usuarioId, servidor);
+      const p = crearPreferencias({ usuarioId, almacen, servidor, temporizador: reloj });
+      return { ...p, cerrar: () => { eventos.push(`cerrar:${usuarioId}`); p.cerrar(); } };
+    },
+  });
+  const avisados = [];
+  const quitar = gestor.alCambiar((instancia) => avisados.push(instancia.usuarioId));
+  assert.deepEqual(eventos, [], 'crear el gestor no lee el usuario ni crea nada');
+
+  const a = gestor.obtener();
+  assert.equal(a.usuarioId, 7);
+  assert.equal(gestor.obtener(), a, 'el mismo usuario: la misma instancia');
+  await tic();
+  assert.deepEqual(servidores.get(7).gets, [''], "la instancia nueva hace precargar(''): un solo GET por sesión");
+  await a.listo;
+  assert.equal(a.leer('vista:x'), 'de 7');
+  assert.deepEqual(avisados, [7]);
+
+  // Un cambio del usuario 7 queda pendiente (su PUT sale a los 800 ms)...
+  a.escribir('vista:x', 'kanban');
+  // ...y entra otro usuario (AuthGuard escribió otro user_id).
+  usuario = '8';
+  const b = gestor.obtener();
+  assert.notEqual(b, a);
+  assert.equal(b.usuarioId, 8);
+  assert.deepEqual(eventos, ['crear:7', 'cerrar:7', 'crear:8'], 'D35: cerrar() de la vieja ANTES de crear la nueva');
+  assert.deepEqual(avisados, [7, 8], 'avisa a quien escucha');
+  reloj.avanzar(800);
+  await tic();
+  assert.equal(servidores.get(7).puts.length, 0, 'el PUT pendiente del usuario 7 no sale con la sesión del 8');
+  assert.equal(a.escribir('vista:x', 'lista'), false, 'la instancia vieja queda muda');
+  assert.deepEqual(servidores.get(8).gets, ['']);
+  await b.listo;
+  assert.equal(b.leer('vista:x'), 'de 8', 'cada usuario lee lo suyo');
+  assert.equal(almacen.datos.get('pref:7:vista:x'), '"kanban"', 'lo local del 7 queda en su clave interna');
+
+  // Sin un id válido: solo memoria, sin PUT ni GET (RP25). Volver a un id válido crea otra instancia.
+  usuario = null;
+  const c = gestor.obtener();
+  assert.equal(c.usuarioId, null);
+  assert.deepEqual(eventos.slice(3), ['cerrar:8', 'crear:null']);
+  c.escribir('vista:x', 'lista');
+  reloj.avanzar(800);
+  await tic();
+  assert.deepEqual([servidores.get(null).puts.length, servidores.get(null).gets.length], [0, 0]);
+  assert.ok(![...almacen.datos.keys()].some((k) => k.startsWith('pref:null')), "nada de 'pref:null:…' en el almacén");
+  usuario = '0';
+  assert.equal(gestor.obtener(), c, "'0' tampoco es un usuario: sigue la misma instancia en memoria");
+  quitar();
+  usuario = '7';
+  const d = gestor.obtener();
+  assert.notEqual(d, a, 'el usuario 7 que vuelve tiene una instancia nueva');
+  assert.deepEqual(eventos.slice(5), ['cerrar:null', 'crear:7']);
+  assert.deepEqual(avisados, [7, 8, null], 'quitar() deja de avisar');
+  await d.listo;
+}
+{
+  // Leer user_id puede lanzar (localStorage bloqueado): cuenta como sin usuario. Un oyente que lanza no rompe obtener().
+  let lanza = false;
+  const creados = [];
+  const gestor = crearPreferenciasPorUsuario({
+    leerUsuario: () => { if (lanza) throw new Error('SecurityError'); return '7'; },
+    crear: (usuarioId) => { const p = crearPreferencias({ usuarioId, almacen: almacenFalso() }); creados.push(p); return p; },
+  });
+  gestor.alCambiar(() => { throw new Error('oyente roto'); });
+  const avisos = await conAvisos(async () => {
+    assert.equal(gestor.obtener().usuarioId, 7);
+    lanza = true;
+    assert.equal(gestor.obtener().usuarioId, null);
+  });
+  assert.equal(creados.length, 2);
+  assert.ok(avisos.length >= 1, 'el oyente roto deja un console.warn');
+}
+
+console.log('--- TEST 21 (T4A, D35): el vínculo de un hook no escribe nada antes de listo ---');
+{
+  const servidor = servidorAMano();
+  const almacen = almacenFalso();
+  const reloj = relojFalso();
+  const p = crearPreferencias({ usuarioId: 7, almacen, servidor, temporizador: reloj });
+  const precarga = p.precargar('');
+  const publicados = [];
+  const v = vincularPreferencia({
+    obtener: () => p, clave: 'vista:ventas.hub', porDefecto: 'lista', alCambiar: (e) => publicados.push(e),
+  });
+  assert.deepEqual(v.estado(), { valor: 'lista', listo: false }, 'hasta listo, el valor por defecto en memoria');
+  assert.equal(publicados.length, 0, 'crear el vínculo no publica nada');
+  reloj.avanzar(800);
+  await tic();
+  assert.deepEqual([almacen.datos.size, servidor.puts.length], [0, 0], 'al montar no se escribe nada, ni el valor por defecto');
+  servidor.gets[0].resolver({ status: 'success', data: { 'vista:ventas.hub': 'kanban' } });
+  await precarga;
+  await tic();
+  assert.deepEqual(v.estado(), { valor: 'kanban', listo: true }, 'con listo, lo guardado');
+  assert.deepEqual(publicados, [{ valor: 'kanban', listo: true }]);
+  reloj.avanzar(800);
+  await tic();
+  assert.equal(servidor.puts.length, 0, 'leer lo del servidor no escribe');
+  v.guardar('lista');
+  assert.deepEqual(v.estado(), { valor: 'lista', listo: true });
+  assert.equal(almacen.datos.get('pref:7:vista:ventas.hub'), '"lista"', 'después de listo se escribe de inmediato en local');
+  reloj.avanzar(800);
+  await tic();
+  assert.deepEqual(servidor.puts.map((x) => [x.clave, x.valor]), [['vista:ventas.hub', 'lista']]);
+  v.guardar((anterior) => (anterior === 'lista' ? 'kanban' : 'lista'));
+  assert.equal(v.estado().valor, 'kanban', 'guardar acepta una función del valor anterior');
+}
+{
+  // Lo que el usuario elige antes de listo se ve en memoria y se escribe recién con listo: gana sobre lo del servidor.
+  const servidor = servidorAMano();
+  const almacen = almacenFalso();
+  const reloj = relojFalso();
+  const p = crearPreferencias({ usuarioId: 7, almacen, servidor, temporizador: reloj });
+  const precarga = p.precargar('');
+  const v = vincularPreferencia({ obtener: () => p, clave: 'vista:x', porDefecto: 'lista', alCambiar: () => {} });
+  v.guardar('kanban');
+  assert.deepEqual(v.estado(), { valor: 'kanban', listo: false });
+  reloj.avanzar(800);
+  await tic();
+  assert.deepEqual([almacen.datos.size, servidor.puts.length], [0, 0], 'antes de listo no toca el almacén ni hace PUT');
+  servidor.gets[0].resolver({ status: 'success', data: { 'vista:x': 'lista' } });
+  await precarga;
+  await tic();
+  assert.deepEqual(v.estado(), { valor: 'kanban', listo: true });
+  assert.equal(almacen.datos.get('pref:7:vista:x'), '"kanban"');
+  reloj.avanzar(800);
+  await tic();
+  assert.deepEqual(servidor.puts.map((x) => [x.clave, x.valor]), [['vista:x', 'kanban']]);
+}
+
+console.log('--- TEST 22 (T4A, RP26 y D35): en modo parte, escribirParte solo con listo y las partes conviven ---');
+{
+  const servidor = servidorAMano();
+  const almacen = almacenFalso();
+  const reloj = relojFalso();
+  const p = crearPreferencias({ usuarioId: 7, almacen, servidor, temporizador: reloj });
+  const precarga = p.precargar('');
+  const columnas = vincularPreferencia({
+    obtener: () => p, clave: 'tabla:x', porDefecto: { anchos: {} }, parte: true, alCambiar: () => {},
+  });
+  const tamano = vincularPreferencia({
+    obtener: () => p, clave: 'tabla:x', porDefecto: { tamano: 25 }, parte: true, alCambiar: () => {},
+  });
+  tamano.guardar({ tamano: 50 });
+  assert.deepEqual(tamano.estado(), { valor: { tamano: 50 }, listo: false });
+  reloj.avanzar(800);
+  await tic();
+  assert.deepEqual([almacen.datos.size, servidor.puts.length], [0, 0], 'la parte no se escribe antes de listo (mezclaría con {})');
+  // El servidor trae los anchos que se guardaron en otro equipo.
+  servidor.gets[0].resolver({ status: 'success', data: { 'tabla:x': { anchos: { num: 120 }, orden: ['num'] } } });
+  await precarga;
+  await tic();
+  assert.deepEqual(JSON.parse(almacen.datos.get('pref:7:tabla:x')), { anchos: { num: 120 }, orden: ['num'], tamano: 50 },
+    'la parte pendiente se mezcla con lo del servidor');
+  assert.deepEqual(tamano.estado(), { valor: { tamano: 50, anchos: { num: 120 }, orden: ['num'] }, listo: true });
+  assert.deepEqual(columnas.estado().valor.anchos, { num: 120 }, 'el otro dueño lee lo guardado, con su valor por defecto debajo');
+  columnas.guardar({ anchos: { num: 200 } });
+  reloj.avanzar(800);
+  await tic();
+  assert.deepEqual(servidor.puts.map((x) => x.valor), [{ anchos: { num: 200 }, orden: ['num'], tamano: 50 }],
+    'un solo PUT y cada parte conserva la otra');
+  // Sin nada guardado, el valor es el por defecto; con solo la otra parte guardada, la propia sale del valor por defecto.
+  const p2 = crearPreferencias({ usuarioId: 7, almacen: almacenFalso({ 'pref:7:tabla:z': '{"anchos":{"a":1}}' }) });
+  const vacio = vincularPreferencia({ obtener: () => p2, clave: 'tabla:y', porDefecto: { tamano: 25 }, parte: true, alCambiar: () => {} });
+  const otra = vincularPreferencia({ obtener: () => p2, clave: 'tabla:z', porDefecto: { tamano: 25 }, parte: true, alCambiar: () => {} });
+  await tic();
+  assert.deepEqual(vacio.estado(), { valor: { tamano: 25 }, listo: true });
+  assert.deepEqual(otra.estado(), { valor: { tamano: 25, anchos: { a: 1 } }, listo: true });
+}
+
+console.log('--- TEST 23 (T4A, RP25 y D35): el vínculo cambia de instancia cuando cambia el usuario ---');
+{
+  let usuario = '7';
+  const reloj = relojFalso();
+  const almacen = almacenFalso();
+  const servidores = {};
+  const gestor = crearPreferenciasPorUsuario({
+    leerUsuario: () => usuario,
+    crear: (usuarioId) => {
+      servidores[usuarioId] = servidorAMano();
+      return crearPreferencias({ usuarioId, almacen, servidor: servidores[usuarioId], temporizador: reloj });
+    },
+  });
+  const publicados = [];
+  const v = vincularPreferencia({
+    obtener: gestor.obtener, clave: 'flujo:ventas', porDefecto: false, alCambiar: (e) => publicados.push(e),
+  });
+  await tic();
+  servidores[7].gets[0].resolver({ status: 'success', data: {} });
+  await tic();
+  await tic();
+  assert.deepEqual(v.estado(), { valor: false, listo: true });
+  v.guardar(true); // el usuario 7 oculta el flujo: su PUT queda pendiente
+  usuario = '8';
+  v.revisarUsuario();
+  assert.deepEqual(v.estado(), { valor: false, listo: false }, 'vuelve al valor por defecto hasta que el usuario 8 esté listo');
+  assert.deepEqual(publicados.at(-1), { valor: false, listo: false });
+  reloj.avanzar(800);
+  await tic();
+  assert.equal(servidores[7].puts.length, 0, 'el PUT pendiente del 7 se descartó');
+  servidores[8].gets[0].resolver({ status: 'success', data: { 'flujo:ventas': { compacto: true } } });
+  await tic();
+  await tic();
+  assert.deepEqual(v.estado(), { valor: { compacto: true }, listo: true }, 'lee lo del usuario 8');
+  assert.equal(almacen.datos.has('pref:8:flujo:ventas'), true);
+  v.revisarUsuario();
+  assert.deepEqual(v.estado(), { valor: { compacto: true }, listo: true }, 'el mismo usuario: nada cambia');
+
+  // Si el usuario cambia y el hook guarda sin enterarse antes, el valor no va ni al 8 ni al 9: se resincroniza.
+  usuario = '9';
+  v.guardar({ compacto: false });
+  assert.deepEqual(v.estado(), { valor: false, listo: false });
+  reloj.avanzar(800);
+  await tic();
+  assert.deepEqual([servidores[8].puts.length, servidores[9].puts.length], [0, 0]);
+  assert.equal(almacen.datos.has('pref:9:flujo:ventas'), false);
+  assert.equal(almacen.datos.get('pref:8:flujo:ventas'), '{"compacto":true}', 'lo del 8 no cambió');
+  servidores[9].gets[0].resolver({ status: 'success', data: {} });
+  await tic();
+  await tic();
+  assert.deepEqual(v.estado(), { valor: false, listo: true }, 'tampoco queda pendiente para el 9');
+  reloj.avanzar(800);
+  await tic();
+  assert.equal(almacen.datos.has('pref:9:flujo:ventas'), false);
+  assert.equal(servidores[9].puts.length, 0);
+}
+{
+  // El usuario cambia ANTES de que la primera instancia esté lista: su GET tardío no publica nada del usuario viejo.
+  let usuario = '7';
+  const servidores = {};
+  const gestor = crearPreferenciasPorUsuario({
+    leerUsuario: () => usuario,
+    crear: (usuarioId) => {
+      servidores[usuarioId] = servidorAMano();
+      return crearPreferencias({ usuarioId, almacen: almacenFalso(), servidor: servidores[usuarioId], temporizador: relojFalso() });
+    },
+  });
+  const publicados = [];
+  const v = vincularPreferencia({ obtener: gestor.obtener, clave: 'vista:x', porDefecto: 'lista', alCambiar: (e) => publicados.push(e) });
+  await tic();
+  v.guardar('kanban'); // antes de listo: queda en memoria, sin escribir
+  usuario = '8';
+  v.revisarUsuario();
+  assert.deepEqual(v.estado(), { valor: 'lista', listo: false }, 'lo elegido en la pantalla del 7 se descarta');
+  servidores[7].gets[0].resolver({ status: 'success', data: { 'vista:x': 'kanban' } });
+  await tic();
+  await tic();
+  assert.deepEqual(publicados.map((e) => e.valor), ['kanban', 'lista'], 'nada del usuario 7 después del cambio');
+  assert.deepEqual(v.estado(), { valor: 'lista', listo: false });
+  await tic();
+  servidores[8].gets[0].resolver({ status: 'success', data: {} });
+  await tic();
+  await tic();
+  assert.deepEqual(v.estado(), { valor: 'lista', listo: true });
+  assert.equal(gestor.obtener().leer('vista:x'), undefined, 'lo pendiente del 7 no se escribió en el 8');
+}
+
+console.log('--- TEST 24 (T4A): validar y soltar ---');
+{
+  const esModo = (x) => x === 'lista' || x === 'kanban';
+  const p = crearPreferencias({ usuarioId: 7, almacen: almacenFalso({ 'pref:7:vista:x': '"tablero"', 'pref:7:vista:y': '"kanban"' }) });
+  const x = vincularPreferencia({ obtener: () => p, clave: 'vista:x', porDefecto: 'lista', validar: esModo, alCambiar: () => {} });
+  const y = vincularPreferencia({ obtener: () => p, clave: 'vista:y', porDefecto: 'lista', validar: esModo, alCambiar: () => {} });
+  await tic();
+  assert.deepEqual(x.estado(), { valor: 'lista', listo: true }, 'un valor guardado que no vale da el valor por defecto');
+  assert.deepEqual(y.estado(), { valor: 'kanban', listo: true });
+  const publicados = [];
+  const p2 = crearPreferencias({ usuarioId: 7, almacen: almacenFalso() });
+  const w = vincularPreferencia({ obtener: () => p2, clave: 'vista:z', porDefecto: 'lista', alCambiar: (e) => publicados.push(e) });
+  w.soltar();
+  await tic();
+  w.guardar('kanban');
+  w.revisarUsuario();
+  assert.equal(publicados.length, 0, 'suelto (el componente se desmontó), no publica');
+  assert.equal(p2.leer('vista:z'), undefined, 'ni escribe');
+}
+
+console.log('✓ lib/preferencias.js: ámbitos, ráfagas, usuarios, memoria, 8 KB, precarga, reintentos, escribirParte, niveles, cerrar, instancia por usuario y vínculo de los hooks.');

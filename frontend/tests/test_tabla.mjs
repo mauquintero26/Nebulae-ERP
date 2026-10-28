@@ -13,6 +13,7 @@ import {
   reconciliarColumnas, fijasDe, moverColumna, indiceDestino, limitarAncho, offsetsFijas, alternarOrden,
   filtrarFilas, ordenarFilas, paginar, totalPaginas, rangoPaginas, paginaValida, textoRango,
   ESTADO_TABLA_INICIAL, estadoTablaInicial, reducirEstadoTabla, queryListado, normalizarRespuesta,
+  esModoTabla, posicionMenu,
 } from '../src/lib/tabla.js';
 
 const ids = (filas) => filas.map((f) => f.id);
@@ -369,4 +370,34 @@ console.log('--- TEST 14: normalizarRespuesta (las cuatro formas; RP54) ---');
   }
 }
 
-console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista y respuestas.');
+console.log('--- TEST 15 (T4A): esModoTabla (useVistaGuardada) y posicionMenu (MenuFila) ---');
+{
+  assert.equal(esModoTabla('lista'), true);
+  assert.equal(esModoTabla('kanban'), true);
+  for (const otro of ['tablero', 'Lista', '', null, undefined, 1, {}]) assert.equal(esModoTabla(otro), false, String(otro));
+
+  // El menú se alinea al borde derecho del botón ⋯ y abre hacia abajo; si no cabe, hacia arriba (posición fija).
+  const ventana = { ancho: 1000, alto: 800 };
+  const menu = { ancho: 200, alto: 150 };
+  const boton = (top, left) => ({ top, bottom: top + 30, left, right: left + 30 });
+  assert.deepEqual(posicionMenu(boton(100, 600), menu, ventana), { top: 134, left: 430, haciaArriba: false, altoMaximo: 658 });
+  assert.deepEqual(posicionMenu(boton(700, 600), menu, ventana), { top: 546, left: 430, haciaArriba: true, altoMaximo: 688 },
+    'abre hacia arriba si no cabe abajo');
+  // Justo cabe abajo: el borde cuenta.
+  assert.equal(posicionMenu({ top: 600, bottom: 638, left: 600, right: 630 }, menu, ventana).haciaArriba, false);
+  assert.equal(posicionMenu({ top: 600, bottom: 639, left: 600, right: 630 }, menu, ventana).haciaArriba, true);
+  // Nunca se sale de la ventana por los lados (margen de 8 px).
+  assert.equal(posicionMenu(boton(100, 10), menu, ventana).left, 8);
+  assert.equal(posicionMenu(boton(100, 940), menu, ventana).left, 770, 'alineado al borde derecho del botón');
+  assert.equal(posicionMenu({ top: 100, bottom: 130, left: 995, right: 1025 }, menu, ventana).left, 792);
+  assert.equal(posicionMenu(boton(100, 600), { ancho: 1200, alto: 150 }, ventana).left, 8, 'más ancho que la ventana');
+  // No cabe en ningún lado: va donde hay más espacio, con su alto máximo para desplazarse adentro.
+  assert.deepEqual(posicionMenu(boton(300, 600), { ancho: 200, alto: 700 }, ventana), { top: 334, left: 430, haciaArriba: false, altoMaximo: 458 });
+  assert.deepEqual(posicionMenu(boton(500, 600), { ancho: 200, alto: 700 }, ventana), { top: 8, left: 430, haciaArriba: true, altoMaximo: 488 });
+  assert.deepEqual(posicionMenu(boton(385, 600), { ancho: 200, alto: 500 }, ventana), { top: 419, left: 430, haciaArriba: false, altoMaximo: 373 },
+    'si empatan, abajo');
+  // Acepta un DOMRect (o cualquier objeto con top, bottom y right).
+  assert.equal(posicionMenu({ x: 600, y: 100, width: 30, height: 30, top: 100, bottom: 130, left: 600, right: 630 }, menu, ventana).top, 134);
+}
+
+console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');

@@ -53,6 +53,16 @@ export const ANCHO_POR_DEFECTO = 160;
  */
 export const MODOS_TABLA = congelar(['lista', 'kanban']);
 
+/**
+ * true si `valor` es uno de MODOS_TABLA (useVistaGuardada, T4A: un 'vista:<pantalla>' guardado que no vale da el modo
+ * por defecto).
+ * @param {unknown} valor
+ * @returns {valor is ModoTabla}
+ */
+export function esModoTabla(valor) {
+  return MODOS_TABLA.includes(/** @type {ModoTabla} */ (valor));
+}
+
 // ─── columnas ───────────────────────────────────────────────────────────────────
 
 /**
@@ -564,4 +574,26 @@ export function normalizarRespuesta(d) {
     resumen: objeto(r.resumen) ? r.resumen : null,
     crudo: d,
   };
+}
+
+// ─── menú de fila (MenuFila, T4A) ───────────────────────────────────────────────
+
+/**
+ * Dónde va el menú ⋯ de una fila o una tarjeta (components/ui/MenuFila.tsx, posición fija en un portal): alineado al
+ * borde derecho del botón, `separacion` px debajo; si no cabe abajo y sí arriba, abre hacia arriba. Si no cabe en
+ * ningún lado, va donde hay más espacio (abajo si empatan) y altoMaximo es ese espacio (el menú se desplaza adentro).
+ * Nunca se sale de la ventana por los lados: queda a `margen` px de los bordes.
+ * @param {{top: number, bottom: number, right: number}} boton el getBoundingClientRect() del botón
+ * @param {{ancho: number, alto: number}} menu
+ * @param {{ancho: number, alto: number}} ventana
+ * @param {{margen?: number, separacion?: number}} [opciones]
+ * @returns {{top: number, left: number, haciaArriba: boolean, altoMaximo: number}}
+ */
+export function posicionMenu(boton, menu, ventana, { margen = 8, separacion = 4 } = {}) {
+  const left = Math.max(margen, Math.min(boton.right - menu.ancho, ventana.ancho - menu.ancho - margen));
+  const abajo = ventana.alto - boton.bottom - separacion - margen;
+  const arriba = boton.top - separacion - margen;
+  const haciaArriba = menu.alto > abajo && (menu.alto <= arriba || arriba > abajo);
+  if (!haciaArriba) return { top: boton.bottom + separacion, left, haciaArriba, altoMaximo: abajo };
+  return { top: Math.max(margen, boton.top - separacion - menu.alto), left, haciaArriba, altoMaximo: arriba };
 }

@@ -308,6 +308,93 @@ export function acentoDesdeClase(clase) {
   return COLORES_KPI.includes(/** @type {ColorKpi} */ (color)) ? /** @type {ColorKpi} */ (color) : 'indigo';
 }
 
+// ─── lo que usan TarjetaKpi, Contador y useEstadoKpi (T4A) ──────────────────────
+
+/**
+ * El valor de una tarjeta como texto, o null si es otra cosa (un elemento de React, un arreglo, un booleano): la
+ * tarjeta lo pinta tal cual. null o undefined dan '—'. Sin formato, un número va con formatoEntero ('1.452') y un texto
+ * tal cual; con formato, formatoValorKpi (StatCard pasa 'texto': el valor como lo armó la pantalla).
+ * @param {unknown} valor
+ * @param {FormatoKpi | 'entero'} [formato]
+ * @returns {string | null}
+ */
+export function textoValorTarjeta(valor, formato) {
+  if (valor === null || valor === undefined) return '—';
+  if (typeof valor !== 'number' && typeof valor !== 'string') return null;
+  const f = formato ?? (typeof valor === 'number' ? 'numero' : 'texto');
+  return formatoValorKpi(valor, f);
+}
+
+/**
+ * El final del texto para lectores de pantalla de la variación de una tarjeta, por período (RP27 punto 6: 'Sube
+ * 12,5 % frente a los 30 días anteriores'). Inmutable.
+ * @type {Readonly<Record<'30d' | '7d' | 'mes', string>>}
+ */
+export const FRENTE_PERIODO = congelar({
+  '30d': 'frente a los 30 días anteriores',
+  '7d': 'frente a los 7 días anteriores',
+  mes: 'frente al mes pasado',
+});
+
+/**
+ * El FRENTE_PERIODO del período cuyo texto comparado es `comparado` (el textoPeriodo de la tarjeta; por defecto, el de
+ * PERIODO_KPI). Un texto propio da el genérico de lib/analisis.js, 'frente al período anterior'.
+ * @param {string} [comparado]
+ * @returns {string}
+ */
+export function frenteDeComparado(comparado = TEXTO_PERIODO[PERIODO_KPI].comparado) {
+  for (const [clave, textos] of Object.entries(TEXTO_PERIODO)) {
+    if (textos.comparado === comparado) return FRENTE_PERIODO[/** @type {'30d' | '7d' | 'mes'} */ (clave)];
+  }
+  return 'frente al período anterior';
+}
+
+/**
+ * El inverso de mejorDesde: true -> 'sube', false -> 'baja' y cualquier otro -> 'neutro' (el «mejor» que recibe
+ * infoVariacion de lib/analisis.js, la regla única de la variación que usa la tarjeta).
+ * @param {boolean | null | undefined} mejorSiSube
+ * @returns {'sube' | 'baja' | 'neutro'}
+ */
+export function mejorComoTexto(mejorSiSube) {
+  if (mejorSiSube === true) return 'sube';
+  if (mejorSiSube === false) return 'baja';
+  return 'neutro';
+}
+
+/**
+ * El estado de un Contador: el que se pasa o, sin estado, 'cargando' si el valor todavía no llegó (null o undefined;
+ * un conteo null nunca se pinta 0) y 'listo' si llegó.
+ * @param {unknown} valor
+ * @param {EstadoKpi} [estado]
+ * @returns {EstadoKpi}
+ */
+export function estadoContador(valor, estado) {
+  if (estado) return estado;
+  return valor === null || valor === undefined ? 'cargando' : 'listo';
+}
+
+/**
+ * @typedef {{vioCarga: boolean, yaCargo: boolean}} MarcaCarga
+ */
+
+/** La marca de useEstadoKpi antes de la primera carga. Inmutable. */
+export const CARGA_INICIAL = congelar({ vioCarga: false, yaCargo: false });
+
+/**
+ * La marca de carga de useEstadoKpi después de ver `loading`: vioCarga se prende con un loading en true, y yaCargo con
+ * el primer loading en false que viene después (una carga que de verdad pasó). Una pantalla que arranca con
+ * loading=false y carga después no cuenta como cargada: su primera carga es 'cargando' (barra gris), no
+ * 'actualizando' con ceros. Sin cambios devuelve la misma marca (el hook compara por identidad).
+ * @param {MarcaCarga} marca
+ * @param {boolean} loading
+ * @returns {MarcaCarga}
+ */
+export function avanzarCarga(marca, loading) {
+  if (loading && !marca.vioCarga) return { vioCarga: true, yaCargo: marca.yaCargo };
+  if (!loading && marca.vioCarga && !marca.yaCargo) return { vioCarga: true, yaCargo: true };
+  return marca;
+}
+
 // ─── catálogo (R12, RP70, D26) ──────────────────────────────────────────────────
 
 /**

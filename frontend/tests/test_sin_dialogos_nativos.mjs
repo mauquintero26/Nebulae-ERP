@@ -39,6 +39,7 @@ const RAICES = [
   'src/components/PastillaMenuLateral.tsx', // B3 T18 r1: la forma de las pastillas del menú lateral
   'src/app/confirmar',
   'src/app/pedido',
+  'src/components/ui', 'src/components/tabla', 'src/components/flujo', 'src/components/analisis', // B4 T4A (RP30): piezas comunes del Bloque 4
 ];
 
 // alert( / confirm( / prompt(, sueltos o con window. / window?. / globalThis. / self. delante, que no sean parte de

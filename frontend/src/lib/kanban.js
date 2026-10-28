@@ -350,3 +350,17 @@ export function textoTotalColumna(n, total) {
   }
   return formatoEntero(visibles);
 }
+
+/** Los caracteres mínimos del motivo de cancelar o rechazar desde un tablero (ModalMotivo, T4A). */
+export const MINIMO_MOTIVO = 5;
+
+/**
+ * true si `texto` tiene `minimo` caracteres o más sin contar los espacios del borde (ModalMotivo: el botón de peligro
+ * solo se activa así). Cuenta caracteres, no unidades UTF-16, como len() del servidor. Lo que no es texto da false.
+ * @param {unknown} texto
+ * @param {number} [minimo]
+ * @returns {boolean}
+ */
+export function motivoValido(texto, minimo = MINIMO_MOTIVO) {
+  return typeof texto === 'string' && [...texto.trim()].length >= minimo;
+}

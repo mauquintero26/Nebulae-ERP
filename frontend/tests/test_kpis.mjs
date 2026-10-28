@@ -10,14 +10,16 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import {
   PERIODO_KPI, TEXTO_PERIODO, FORMATOS_KPI, COLORES_KPI, estadoKpi, variacionPct, textoVariacion, direccionVariacion,
   tonoVariacion, mejorDesde, formatoEntero, formatoDecimal, formatoValorKpi, tamanoValor, clasesFranja, textoContador,
   acentoDesdeClase, CATALOGO_KPI, etiquetaKpi, ICONOS_KPI,
+  FRENTE_PERIODO, frenteDeComparado, mejorComoTexto, textoValorTarjeta, estadoContador, CARGA_INICIAL, avanzarCarga,
 } from '../src/lib/kpis.js';
 import { formatoPct } from '../src/lib/dinero-ventas.js';
-import { PERIODOS } from '../src/lib/analisis.js';
+import { PERIODOS, infoVariacion } from '../src/lib/analisis.js';
 
 const MENOS = '−';
 
@@ -261,4 +263,91 @@ console.log('--- TEST 10: CATALOGO_KPI, etiquetaKpi e ICONOS_KPI ---');
   assert.deepEqual(faltan, [], `íconos que no trae lucide-react: ${faltan.join(', ')}`);
 }
 
-console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento y catálogo.');
+console.log('--- TEST 11 (T4A): lo que usan TarjetaKpi, Contador y useEstadoKpi ---');
+{
+  // textoValorTarjeta: el texto del valor, o null si es un elemento de React (la tarjeta lo pinta tal cual).
+  assert.equal(textoValorTarjeta(4927538.46, 'pesos'), '$4.927.538');
+  assert.equal(textoValorTarjeta(65.04, 'porcentaje'), '65 %');
+  assert.equal(textoValorTarjeta(1452, 'entero'), '1.452', "'entero' es sinónimo de 'numero' (RP27)");
+  assert.equal(textoValorTarjeta(1452), '1.452', 'un número sin formato va con los miles con punto');
+  assert.equal(textoValorTarjeta('Contado 30 días'), 'Contado 30 días', 'un texto sin formato va tal cual');
+  assert.equal(textoValorTarjeta(1452, 'texto'), '1452', 'StatCard (formato texto): el valor tal como lo pasa la pantalla');
+  assert.equal(textoValorTarjeta('$1.062.523', 'texto'), '$1.062.523');
+  assert.equal(textoValorTarjeta(0, 'texto'), '0');
+  for (const vacio of [null, undefined]) {
+    assert.equal(textoValorTarjeta(vacio, 'pesos'), '—');
+    assert.equal(textoValorTarjeta(vacio), '—');
+  }
+  assert.equal(textoValorTarjeta({ type: 'span', props: {} }, 'pesos'), null, 'un elemento de React no se formatea');
+  assert.equal(textoValorTarjeta([1, 2]), null);
+  assert.equal(textoValorTarjeta(true), null);
+  assert.throws(() => textoValorTarjeta(1, 'raro'), /desconocido/, 'un formato desconocido sigue siendo un error');
+
+  // frenteDeComparado: el final del texto para lectores de pantalla de la variación (RP27 punto 6).
+  assert.deepEqual(Object.keys(FRENTE_PERIODO).sort(), Object.keys(TEXTO_PERIODO).sort(), 'un texto por período de las tarjetas');
+  assert.ok(Object.isFrozen(FRENTE_PERIODO));
+  assert.equal(frenteDeComparado(), 'frente a los 30 días anteriores', 'por defecto, el de PERIODO_KPI');
+  assert.equal(frenteDeComparado(TEXTO_PERIODO['30d'].comparado), 'frente a los 30 días anteriores');
+  assert.equal(frenteDeComparado(TEXTO_PERIODO['7d'].comparado), 'frente a los 7 días anteriores');
+  assert.equal(frenteDeComparado(TEXTO_PERIODO.mes.comparado), 'frente al mes pasado');
+  assert.equal(frenteDeComparado('vs el trimestre'), 'frente al período anterior', 'un texto propio: el genérico');
+
+  // mejorComoTexto: el inverso de mejorDesde (la tarjeta pasa su mejorSiSube a infoVariacion de lib/analisis.js).
+  for (const m of [true, false, null]) assert.equal(mejorDesde(mejorComoTexto(m)), m, String(m));
+  assert.equal(mejorComoTexto(true), 'sube');
+  assert.equal(mejorComoTexto(false), 'baja');
+  assert.equal(mejorComoTexto(undefined), 'neutro');
+
+  // El texto sr-only de TarjetaKpi y su chip (RP27 puntos 1, 3 y 6), con la regla única de infoVariacion.
+  const chip = (actual, anterior, mejorSiSube) =>
+    infoVariacion({ valor: actual, anterior, mejor: mejorComoTexto(mejorSiSube) }, { frente: frenteDeComparado() });
+  assert.deepEqual(chip(112.5, 100, true), {
+    texto: '+12,5 %', tono: 'bien', flecha: 'sube', lector: 'Sube 12,5 % frente a los 30 días anteriores',
+  });
+  assert.deepEqual(chip(92, 100, true), { texto: `${MENOS}8 %`, tono: 'mal', flecha: 'baja', lector: 'Baja 8 % frente a los 30 días anteriores' });
+  assert.equal(chip(110, 100, false).tono, 'mal', "subir en 'Saldo por cobrar' es rojo");
+  assert.equal(chip(110, 100, null).tono, 'neutro', 'Comprado: en gris');
+  assert.deepEqual([chip(5, 0, true).texto, chip(0, 0, true).texto], ['Nuevo', 'Sin cambio']);
+  assert.equal(chip(5, null, true).texto, '—', 'sin período anterior no hay comparación');
+
+  // estadoContador: un conteo null (o sin llegar) es «cargando», nunca 0 (TABLA-base: la pastilla gris).
+  assert.equal(estadoContador(null), 'cargando');
+  assert.equal(estadoContador(undefined), 'cargando');
+  assert.equal(estadoContador(0), 'listo', 'el 0 es un número');
+  assert.equal(estadoContador(12), 'listo');
+  assert.equal(estadoContador(null, 'error'), 'error', 'el estado que se pasa manda');
+  assert.equal(estadoContador(12, 'actualizando'), 'actualizando');
+  assert.equal(textoContador(null, estadoContador(null)), '', 'mientras carga, Contador pinta la barra gris');
+
+  // avanzarCarga: la marca de useEstadoKpi. «Ya cargó» solo después de una carga que de verdad pasó (loading en
+  // true y luego en false): una pantalla que arranca con loading=false y carga después muestra la barra gris, no 0.
+  assert.deepEqual(CARGA_INICIAL, { vioCarga: false, yaCargo: false });
+  assert.ok(Object.isFrozen(CARGA_INICIAL));
+  assert.equal(avanzarCarga(CARGA_INICIAL, false), CARGA_INICIAL, 'sin cambios devuelve la misma marca');
+  const cargando = avanzarCarga(CARGA_INICIAL, true);
+  assert.deepEqual(cargando, { vioCarga: true, yaCargo: false });
+  assert.equal(avanzarCarga(cargando, true), cargando);
+  const cargo = avanzarCarga(cargando, false);
+  assert.deepEqual(cargo, { vioCarga: true, yaCargo: true });
+  assert.equal(avanzarCarga(cargo, true), cargo);
+  assert.equal(avanzarCarga(cargo, false), cargo);
+  const secuencia = (cargas, error = null) => {
+    let marca = CARGA_INICIAL;
+    return cargas.map((loading) => {
+      marca = avanzarCarga(marca, loading);
+      return estadoKpi({ loading, yaCargo: marca.yaCargo, error });
+    });
+  };
+  assert.deepEqual(secuencia([true, false, true, false]), ['cargando', 'listo', 'actualizando', 'listo']);
+  assert.deepEqual(secuencia([false, true, false]), ['listo', 'cargando', 'listo'], 'arrancar en false no cuenta como carga');
+  assert.deepEqual(secuencia([true, false], 'falló'), ['cargando', 'error']);
+
+  // TarjetaKpi.tsx traduce cada nombre de ICONOS_KPI a su componente de lucide-react: ninguno falta en su mapa.
+  const fuente = readFileSync(new URL('../src/components/ui/TarjetaKpi.tsx', import.meta.url), 'utf8');
+  const mapa = /const ICONOS[^=]*=\s*\{([^}]*)\}/.exec(fuente);
+  assert.ok(mapa, 'TarjetaKpi.tsx tiene el mapa ICONOS');
+  const nombres = mapa[1].split(',').map((s) => s.trim()).filter(Boolean);
+  assert.deepEqual([...nombres].sort(), [...ICONOS_KPI].sort(), 'el mapa de TarjetaKpi tiene exactamente los de ICONOS_KPI');
+}
+
+console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

@@ -24,6 +24,8 @@
  *    anchos (usePreferenciasTabla) se escriben por separado en tabla:<id> y conviven.
  *  - cerrar() deja la instancia muda: cancela el temporizador y descarta lo pendiente sin PUT (al cambiar de usuario,
  *    T4A la cierra: un PUT pendiente saldría con la sesión del usuario nuevo y escribiría en la cuenta del otro).
+ *  - T4A (RP25, D35): crearPreferenciasPorUsuario da la instancia del usuario actual (al cambiar de usuario cierra la
+ *    vieja ANTES de crear la nueva) y vincularPreferencia es la regla de los hooks: nada se escribe antes de `listo`.
  * El servidor inyectado es {leer(prefijo) -> Promise<{status, data: {clave: valor}} | {clave: valor}>,
  * guardar(clave, valor) -> Promise}; un error lleva .status (apiFetch) o no lleva (la red).
  */
@@ -142,6 +144,17 @@ function mapaDeRespuesta(r) {
 }
 
 /**
+ * El id de un usuario (el localStorage 'user_id' que escribe AuthGuard, RP25): un entero positivo, o null si no hay un
+ * id válido (null, '', '0', 'abc', '7.5', '-3', NaN…).
+ * @param {unknown} valor
+ * @returns {number | null}
+ */
+export function normalizarUsuario(valor) {
+  const n = Number(valor);
+  return valor !== null && valor !== undefined && valor !== '' && Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/**
  * Las preferencias de un usuario.
  * @param {{usuarioId?: unknown, almacen?: Almacen | null, servidor?: ServidorPreferencias | null, retardoMs?: number,
  *   temporizador?: Temporizador}} [opciones]
@@ -150,8 +163,7 @@ function mapaDeRespuesta(r) {
 export function crearPreferencias({
   usuarioId, almacen = null, servidor = null, retardoMs = RETARDO_MS, temporizador = relojDelSistema,
 } = {}) {
-  const n = Number(usuarioId);
-  const usuario = usuarioId !== null && usuarioId !== undefined && usuarioId !== '' && Number.isInteger(n) && n > 0 ? n : null;
+  const usuario = normalizarUsuario(usuarioId);
   // Sin usuario válido: solo memoria (nada de 'pref:null:…' en el almacén ni PUT a la cuenta de nadie).
   const tienda = usuario === null ? null : almacen;
   const remoto = usuario === null ? null : servidor;
@@ -389,4 +401,192 @@ export function crearPreferencias({
     listo,
     estaLista: () => lista,
   };
+}
+
+// ─── T4A: la instancia de la app por usuario y el vínculo de los hooks (RP25, RP26 y D35) ──────────────────────────
+
+/**
+ * La instancia de preferencias del usuario que está usando la app (RP25). components/ui/usePreferencia.ts (T4A) arma
+ * con esto preferenciasApp(): `leerUsuario` lee el localStorage 'user_id' de AuthGuard y `crear` llama a
+ * crearPreferencias con localStorage y el servidor.
+ *  - obtener() lee el usuario EN CADA LLAMADA (si leer lanza, cuenta como sin usuario). Con el mismo usuario devuelve la
+ *    misma instancia. Si cambió, primero llama a cerrar() de la vieja y DESPUÉS crea la nueva (D35: si no, un PUT
+ *    pendiente del usuario anterior saldría con la sesión del nuevo), le hace precargar('') (un solo GET por sesión) y
+ *    avisa a los oyentes de alCambiar.
+ *  - Sin un id válido (normalizarUsuario da null) la instancia trabaja solo en memoria y no hace PUT ni GET.
+ *  - Crear el gestor no lee nada: la primera instancia nace en la primera llamada a obtener().
+ * Un oyente que lanza deja un console.warn y no impide avisar a los demás.
+ * @param {{leerUsuario: () => unknown, crear: (usuarioId: number | null) => Preferencias}} opciones
+ * @returns {{obtener: () => Preferencias, alCambiar: (oyente: (instancia: Preferencias) => void) => () => void}}
+ */
+export function crearPreferenciasPorUsuario({ leerUsuario, crear }) {
+  /** @type {{usuarioId: number | null, instancia: Preferencias} | null} */
+  let actual = null;
+  /** @type {Set<(instancia: Preferencias) => void>} */
+  const oyentes = new Set();
+
+  function usuarioActual() {
+    try {
+      return normalizarUsuario(leerUsuario());
+    } catch {
+      return null; // localStorage bloqueado (o del lado del servidor): sin usuario, solo memoria
+    }
+  }
+
+  function obtener() {
+    const usuarioId = usuarioActual();
+    if (actual && actual.usuarioId === usuarioId) return actual.instancia;
+    // D35: la vieja se cierra ANTES de crear la nueva.
+    if (actual) actual.instancia.cerrar();
+    const instancia = crear(usuarioId);
+    actual = { usuarioId, instancia };
+    instancia.precargar('');
+    for (const oyente of [...oyentes]) {
+      try {
+        oyente(instancia);
+      } catch (error) {
+        console.warn('[preferencias] Un oyente del cambio de usuario falló.', /** @type {any} */ (error)?.message ?? '');
+      }
+    }
+    return instancia;
+  }
+
+  /** @param {(instancia: Preferencias) => void} oyente */
+  function alCambiar(oyente) {
+    oyentes.add(oyente);
+    return () => { oyentes.delete(oyente); };
+  }
+
+  return { obtener, alCambiar };
+}
+
+const SIN_VALOR = Symbol('sin valor');
+const esObjetoPlano = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * @template T
+ * @typedef {{valor: T, listo: boolean}} EstadoPreferencia
+ */
+
+/**
+ * El vínculo entre un hook (usePreferencia, T4A) y una clave de preferencias. JS plano para probar con node la regla
+ * D35, que usePreferencia solo envuelve en estado de React:
+ *  - Hasta que la instancia está `listo`, el valor es `porDefecto` en memoria y NO se escribe nada: ni al crear el
+ *    vínculo (tampoco el valor por defecto) ni al guardar. Lo que se guarda antes de listo se ve en memoria y se
+ *    escribe recién con listo; gana sobre lo que trajo el servidor (es lo último que eligió el usuario).
+ *  - Con listo, el valor es lo guardado (si no hay, o si `validar` lo rechaza, `porDefecto`), y guardar escribe de
+ *    inmediato (escribir de lib/preferencias.js: local ya, PUT agrupado).
+ *  - `parte: true` (RP26, para las claves con dos dueños como tabla:<id>): guardar recibe una parte del objeto y la
+ *    escribe con escribirParte, también solo con listo (antes de listo, una parte se mezclaría con {} y su PUT borraría
+ *    en el servidor las otras partes). El valor es {...porDefecto, ...lo guardado}.
+ *  - El usuario puede cambiar (RP25): obtener() devuelve otra instancia. revisarUsuario() y guardar() lo notan; el
+ *    vínculo pasa a la instancia nueva con `porDefecto` y listo = false hasta que esa esté lista, y descarta lo que
+ *    tenía sin escribir (era la pantalla del usuario anterior: no se guarda en la cuenta de otro). Un `listo` que llega
+ *    de una instancia que ya no es la del vínculo (por ejemplo el de cerrar()) no publica nada.
+ *  - Crear el vínculo no publica: alCambiar se llama solo cuando el estado cambia (con listo o al guardar). soltar()
+ *    (el componente se desmontó) lo deja mudo.
+ * @template T
+ * @param {{obtener: () => Preferencias, clave: string, porDefecto: T, alCambiar: (estado: EstadoPreferencia<T>) => void,
+ *   validar?: ((valor: unknown) => boolean) | null, parte?: boolean}} opciones
+ * @returns {{
+ *   estado: () => EstadoPreferencia<T>,
+ *   guardar: (entrada: T | Partial<T> | ((anterior: T) => T | Partial<T>)) => void,
+ *   revisarUsuario: () => void,
+ *   soltar: () => void,
+ * }}
+ */
+export function vincularPreferencia({ obtener, clave, porDefecto, alCambiar, validar = null, parte = false }) {
+  /** @type {Preferencias} */
+  let instancia = obtener();
+  /** @type {EstadoPreferencia<T>} */
+  let estado = { valor: porDefecto, listo: false };
+  /** Lo que se guardó antes de listo (el valor completo o, con parte, la suma de las partes). */
+  let pendiente = /** @type {any} */ (SIN_VALOR);
+  let suelto = false;
+
+  // Quien llama ya miró `suelto` (guardar, revisarUsuario y alListo salen antes).
+  const publicar = (/** @type {EstadoPreferencia<T>} */ nuevo) => {
+    estado = nuevo;
+    alCambiar(estado);
+  };
+
+  /** Lo guardado en la instancia, validado y (con parte) sobre el valor por defecto. */
+  function leerGuardado(/** @type {Preferencias} */ inst) {
+    const leido = inst.leer(clave, SIN_VALOR);
+    let valor = leido === SIN_VALOR || (validar && !validar(leido)) ? porDefecto : leido;
+    if (parte && esObjetoPlano(porDefecto) && esObjetoPlano(valor)) valor = { ...porDefecto, ...valor };
+    return /** @type {T} */ (valor);
+  }
+
+  function alListo(/** @type {Preferencias} */ inst) {
+    if (suelto || inst !== instancia) return;
+    let valor;
+    if (pendiente === SIN_VALOR) {
+      valor = leerGuardado(inst);
+    } else if (parte) {
+      inst.escribirParte(clave, pendiente);
+      pendiente = SIN_VALOR;
+      valor = leerGuardado(inst);
+    } else {
+      inst.escribir(clave, pendiente);
+      valor = pendiente;
+      pendiente = SIN_VALOR;
+    }
+    publicar({ valor, listo: true });
+  }
+
+  function esperar(/** @type {Preferencias} */ inst) {
+    inst.listo.then(() => alListo(inst));
+  }
+
+  /** Pasa a la instancia nueva: porDefecto, sin listo y sin lo pendiente del usuario anterior. */
+  function enlazar(/** @type {Preferencias} */ inst) {
+    instancia = inst;
+    pendiente = SIN_VALOR;
+    publicar({ valor: porDefecto, listo: false });
+    esperar(inst);
+  }
+
+  function revisarUsuario() {
+    if (suelto) return;
+    const actual = obtener();
+    if (actual !== instancia) enlazar(actual);
+  }
+
+  function guardar(entrada) {
+    if (suelto) return;
+    const actual = obtener();
+    if (actual !== instancia) {
+      // El usuario cambió sin que el hook se enterara: lo de esta pantalla no va a la cuenta del otro.
+      enlazar(actual);
+      return;
+    }
+    const nuevo = typeof entrada === 'function' ? entrada(estado.valor) : entrada;
+    if (parte) {
+      const pieza = esObjetoPlano(nuevo) ? nuevo : {};
+      const valor = /** @type {T} */ ({ ...(esObjetoPlano(estado.valor) ? estado.valor : {}), ...pieza });
+      if (!estado.listo) {
+        pendiente = { ...(pendiente === SIN_VALOR ? {} : pendiente), ...pieza };
+        publicar({ valor, listo: false });
+        return;
+      }
+      instancia.escribirParte(clave, pieza);
+      publicar({ valor, listo: true });
+      return;
+    }
+    if (!estado.listo) {
+      pendiente = nuevo;
+      publicar({ valor: nuevo, listo: false });
+      return;
+    }
+    instancia.escribir(clave, nuevo);
+    publicar({ valor: nuevo, listo: true });
+  }
+
+  function soltar() {
+    suelto = true;
+  }
+
+  esperar(instancia);
+  return { estado: () => estado, guardar, revisarUsuario, soltar };
 }
