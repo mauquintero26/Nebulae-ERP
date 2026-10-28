@@ -538,6 +538,17 @@ console.log('--- TEST 17 (r1, punto 4a): más de 32 niveles anidados se rechaza,
   assert.ok(!almacen.datos.has('pref:7:tabla:hondo') && !almacen.datos.has('pref:7:tabla:parte'), 'no toca el almacén');
   assert.deepEqual(servidor.puts.map((x) => x.clave), ['tabla:ok'], 'ni hace PUT');
   assert.ok(avisos.some((a) => a.includes('demasiados niveles anidados (máximo 32)')), avisos.join(' | '));
+  // r2 (punto 3): los niveles se miden sobre el JSON que recibe el servidor.
+  const circular = {};
+  circular.yo = circular;
+  let conFecha = new Date('2026-10-28T00:00:00Z');
+  for (let i = 0; i < 32; i += 1) conFecha = [conFecha];
+  const avisos2 = await conAvisos(async () => {
+    assert.equal(p.escribir('tabla:circular', circular), false);
+    assert.equal(p.escribir('tabla:fecha', conFecha), true, '32 arreglos con un Date en el fondo pasan: en el JSON es un texto');
+  });
+  assert.ok(avisos2.some((a) => a.includes('tabla:circular') && a.includes('no se puede guardar como JSON')), avisos2.join(' | '));
+  assert.ok(!avisos2.some((a) => a.includes('demasiados niveles')), avisos2.join(' | '));
 }
 
 console.log('--- TEST 18 (r1, punto 4b): cerrar() descarta lo pendiente y deja la instancia muda ---');
@@ -579,6 +590,40 @@ console.log('--- TEST 18 (r1, punto 4b): cerrar() descarta lo pendiente y deja l
     await tic();
   });
   assert.equal(aMano.puts.length, 1, 'ningún reintento después de cerrar');
+}
+{
+  // r2 (punto 2): una precarga en vuelo que responde después de cerrar() no escribe nada.
+  const servidor = servidorAMano();
+  const almacen = almacenFalso();
+  const p = crearPreferencias({ usuarioId: 7, almacen, servidor, temporizador: relojFalso() });
+  const precarga = p.precargar('');
+  await tic();
+  assert.equal(servidor.gets.length, 1, 'el GET salió');
+  p.cerrar();
+  servidor.gets[0].resolver({ status: 'success', data: { 'tabla:x': { a: 1 }, 'vista:x': 'kanban' } });
+  assert.equal(await precarga, false, 'la precarga que responde después de cerrar devuelve false');
+  assert.equal(almacen.datos.size, 0, 'el almacén queda sin cambios');
+  assert.equal(p.leer('tabla:x'), undefined, 'y leer no ve lo que trajo el GET');
+}
+{
+  // Un cerrar() en el mismo tic que precargar no deja salir el GET.
+  const servidor = servidorAMano();
+  const p = crearPreferencias({ usuarioId: 7, almacen: almacenFalso(), servidor, temporizador: relojFalso() });
+  const precarga = p.precargar('');
+  p.cerrar();
+  await tic();
+  // Se mira antes de esperar la promesa: si el GET saliera, el servidor a mano no contesta nunca.
+  assert.equal(servidor.gets.length, 0, 'ningún GET');
+  assert.equal(await precarga, false);
+}
+{
+  // cerrar() resuelve listo: nadie queda esperando para siempre.
+  const p = crearPreferencias({ usuarioId: 7, almacen: almacenFalso(), servidor: servidorAMano(), temporizador: relojFalso() });
+  assert.equal(p.estaLista(), false);
+  p.cerrar();
+  const quien = await Promise.race([p.listo.then(() => 'listo'), tic().then(() => 'colgado')]);
+  assert.equal(quien, 'listo');
+  assert.equal(p.estaLista(), true);
 }
 
 console.log('✓ lib/preferencias.js: ámbitos, ráfagas, usuarios, memoria, 8 KB, precarga, reintentos, escribirParte, niveles y cerrar.');

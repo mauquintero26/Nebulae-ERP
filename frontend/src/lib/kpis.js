@@ -147,7 +147,8 @@ export function estadoKpi({ loading = false, yaCargo = false, error = null } = {
  *  - {tipo: 'nuevo', signo} si el anterior es 0 y el actual no (RP27: distinto de 0); signo 1 o −1 es el del valor
  *    actual, del que sale la dirección (direccionVariacion);
  *  - si no, {tipo: 'pct', pct} con pct = (actual − anterior) / |anterior| × 100, redondeado a 1 decimal con la mitad
- *    hacia arriba (Math.round; sin −0).
+ *    alejándose del cero en los dos sentidos (ROUND_HALF_UP, como redondear_peso: +12,25 -> +12,3 y −12,25 -> −12,3;
+ *    sin −0), igual que formatoDecimal y el porcentaje de formatoValorKpi.
  * @param {unknown} actual
  * @param {unknown} anterior
  * @returns {Variacion | null}
@@ -158,8 +159,9 @@ export function variacionPct(actual, anterior) {
   if (a === null || b === null) return null;
   if (b === 0) return a === 0 ? { tipo: 'igual' } : { tipo: 'nuevo', signo: a < 0 ? -1 : 1 };
   const crudo = ((a - b) / Math.abs(b)) * 100;
-  const pct = Math.round(Number((crudo * 10).toPrecision(12))) / 10;
-  return { tipo: 'pct', pct: pct === 0 ? 0 : pct };
+  const d = decimas(crudo);
+  const pct = d === 0 ? 0 : (crudo < 0 ? -d : d) / 10;
+  return { tipo: 'pct', pct };
 }
 
 /**

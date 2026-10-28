@@ -51,6 +51,11 @@ console.log('--- TEST 3: variacionPct ---');
   assert.deepEqual(variacionPct(-50, -100), { tipo: 'pct', pct: 50 }, 'se divide por el valor absoluto');
   assert.deepEqual(variacionPct(100, 100), { tipo: 'pct', pct: 0 });
   assert.ok(!Object.is(variacionPct(1000, 1000.0001).pct, -0), 'sin −0');
+  // r2 (punto 1): la mitad se aleja del cero en los dos sentidos (ROUND_HALF_UP, como redondear_peso).
+  assert.deepEqual(variacionPct(112.25, 100), { tipo: 'pct', pct: 12.3 });
+  assert.deepEqual(variacionPct(87.75, 100), { tipo: 'pct', pct: -12.3 });
+  assert.deepEqual(variacionPct(100.15, 100), { tipo: 'pct', pct: 0.2 });
+  assert.deepEqual(variacionPct(99.85, 100), { tipo: 'pct', pct: -0.2 });
   // r1 (punto 3): «Nuevo» lleva el signo del valor actual; la dirección sale SOLO de aquí.
   assert.deepEqual(variacionPct(5, 0), { tipo: 'nuevo', signo: 1 });
   assert.deepEqual(variacionPct(-5, 0), { tipo: 'nuevo', signo: -1 }, 'RP27: anterior 0 y actual distinto de 0');

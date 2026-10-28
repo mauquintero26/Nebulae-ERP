@@ -253,9 +253,9 @@ export function crearPreferencias({
 
   /**
    * Guarda `valor` en `clave`: de inmediato en local y, con servidor, en un PUT agrupado (RETARDO_MS después del
-   * último cambio). Devuelve false, sin lanzar y con un console.warn, si la clave no vale, si el valor tiene más de
-   * MAXIMO_NIVELES niveles anidados, si no se puede serializar o si pasa de LIMITE_BYTES en bytes UTF-8 (no toca el
-   * almacén ni hay PUT). Después de cerrar() devuelve false y no hace nada. Escribir lo mismo que ya está y no está
+   * último cambio). Devuelve false, sin lanzar y con un console.warn, si la clave no vale, si el valor no se puede
+   * serializar, si pasa de LIMITE_BYTES en bytes UTF-8 o si su JSON tiene más de MAXIMO_NIVELES niveles anidados
+   * (no toca el almacén ni hay PUT). Después de cerrar() devuelve false y no hace nada. Escribir lo mismo que ya está y no está
    * pendiente no manda nada.
    * @param {string} clave
    * @param {unknown} valor
@@ -267,10 +267,6 @@ export function crearPreferencias({
       avisar(`Clave de preferencia no válida: ${String(clave)}`);
       return false;
     }
-    if (pasaDeNiveles(valor)) {
-      avisar(`El valor de ${clave} tiene demasiados niveles anidados (máximo ${MAXIMO_NIVELES}): no se guarda.`);
-      return false;
-    }
     const texto = aJson(valor);
     if (texto === null) {
       avisar(`El valor de ${clave} no se puede guardar como JSON.`);
@@ -278,6 +274,11 @@ export function crearPreferencias({
     }
     if (CODIFICADOR.encode(texto).length > LIMITE_BYTES) {
       avisar(`El valor de ${clave} pasa de 8 KB (${LIMITE_BYTES} bytes): no se guarda.`);
+      return false;
+    }
+    // Sobre el JSON, como el servidor: un Date es un texto y un valor circular ya cayó arriba (no se serializa).
+    if (pasaDeNiveles(JSON.parse(texto))) {
+      avisar(`El valor de ${clave} tiene demasiados niveles anidados (máximo ${MAXIMO_NIVELES}): no se guarda.`);
       return false;
     }
     if (leerTexto(clave) === texto && !pendientes.has(clave)) return true;
@@ -292,6 +293,8 @@ export function crearPreferencias({
 
   /**
    * Guarda {...leer(clave), ...parcial} (RP26). Si lo guardado no es un objeto, la parte arranca de cero.
+   * Regla para los hooks (T4A): no se llama antes de `listo`. En un equipo sin copia local, una parte escrita antes de
+   * la precarga mezcla con {} y su PUT borraría en el servidor las otras partes de la clave.
    * @param {string} clave
    * @param {Record<string, unknown>} parcial
    * @returns {boolean}
@@ -321,7 +324,7 @@ export function crearPreferencias({
     const p = typeof prefijo === 'string' ? prefijo : '';
     for (const [hecho, promesa] of precargas) if (p.startsWith(hecho)) return promesa;
     const promesa = Promise.resolve()
-      .then(() => remoto.leer(p))
+      .then(() => (cerrada ? null : remoto.leer(p))) // un cerrar() del mismo tic no deja salir el GET
       .then((respuesta) => {
         if (cerrada) return false;
         for (const [clave, valor] of Object.entries(mapaDeRespuesta(respuesta))) {
@@ -359,8 +362,9 @@ export function crearPreferencias({
 
   /**
    * Deja la instancia muda (al cambiar de usuario): cancela el temporizador y descarta lo pendiente sin PUT. Desde
-   * aquí escribir y escribirParte devuelven false y no hacen nada, precargar resuelve false sin GET, y un PUT que ya
-   * estaba en camino y falla no se reintenta. leer sigue leyendo lo de este usuario.
+   * aquí escribir y escribirParte devuelven false y no hacen nada, precargar resuelve false sin GET, una precarga que
+   * ya estaba en camino no escribe lo que traiga, y un PUT que ya estaba en camino y falla no se reintenta. `listo`
+   * queda resuelto. leer sigue leyendo lo de este usuario.
    */
   function cerrar() {
     cerrada = true;
@@ -369,6 +373,9 @@ export function crearPreferencias({
       temporizadorId = null;
     }
     pendientes.clear();
+    // Nadie queda esperando una precarga que ya no va a escribir nada.
+    lista = true;
+    marcarLista();
   }
 
   return {
