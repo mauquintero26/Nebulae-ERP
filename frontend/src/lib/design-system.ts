@@ -150,14 +150,16 @@ export const SEARCH_BAR = {
 /**
  * Tabla estándar (Bloque 4, T4D; TABLA-base punto 5): las clases de components/tabla/TablaEstandar.tsx (y de su
  * Esqueleto), que importa este token. Clases literales, para que Tailwind las vea. La tarjeta que encierra BarraTabla y
- * TablaEstandar la pone la pantalla: TABLE.tarjeta, o TABLE.tarjetaCompleta con «Pantalla completa» (fixed inset-4
- * z-40; la sombra de 100vmax oscurece lo de atrás sin otra capa). Las fijas usan bg-inherit: el fondo de la fila
- * (claseFila) tiene que ser opaco.
+ * TablaEstandar la pone la pantalla con usePantallaCompleta (components/tabla): TABLE.tarjeta, o TABLE.tarjetaCompleta
+ * con «Pantalla completa» (fixed inset-4 z-40) y detrás TABLE.capaCompleta (z-[39], el oscurecido; un clic sale). En
+ * pantalla completa el pie de la tabla (data-pie-tabla) deja libre la esquina del botón flotante de la IA (pr-20). Las
+ * fijas usan bg-inherit: el fondo de la fila (claseFila) tiene que ser opaco, uno de los tonos fila* de aquí.
  */
 export const TABLE = {
   // La tarjeta de la pantalla (la barra, la tabla y su paginación).
   tarjeta:          'flex min-w-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm',
-  tarjetaCompleta:  'fixed inset-4 z-40 flex min-w-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-[0_0_0_100vmax_rgb(15_23_42/0.35)]',
+  tarjetaCompleta:  'fixed inset-4 z-40 flex min-w-0 flex-col overscroll-contain rounded-2xl border border-slate-200 bg-white shadow-2xl [&_[data-pie-tabla]]:pr-20',
+  capaCompleta:     'fixed inset-0 z-[39] touch-none overscroll-contain bg-slate-900/35',
   // El contenedor: la tabla tiene su propia barra vertical, hasta el alto de la pantalla (TABLA-base, riesgos).
   raiz:             'relative flex min-h-0 min-w-0 flex-1 flex-col',
   cuerpo:           'relative flex min-h-0 min-w-0 flex-1 flex-col',
@@ -173,19 +175,24 @@ export const TABLE = {
   titulo:           'flex min-w-0 flex-1 items-center gap-1 rounded text-left outline-none focus-visible:ring-2 focus-visible:ring-indigo-300',
   tituloOrdenable:  'cursor-pointer hover:text-slate-800',
   flechaOrden:      'shrink-0 text-indigo-600',
-  asa:              'absolute right-0 top-0 z-10 h-full w-2 cursor-col-resize touch-none after:absolute after:bottom-2 after:right-0 after:top-2 after:w-px after:bg-slate-200 hover:after:w-0.5 hover:after:bg-blue-500',
+  asa:              'absolute right-0 top-0 z-10 h-full w-2 cursor-col-resize touch-none before:absolute before:inset-y-0 before:left-0 before:right-0 pointer-coarse:before:-left-2 pointer-coarse:before:-right-2 after:absolute after:bottom-2 after:right-0 after:top-2 after:w-px after:bg-slate-200 hover:after:w-0.5 hover:after:bg-blue-500',
   // Filas: el fondo va en la fila (las fijas lo heredan con bg-inherit).
   fila:             'group transition-colors',
   filaFondo:        'bg-white',
   filaHover:        'hover:bg-slate-50',
   filaClic:         'cursor-pointer outline-none focus-visible:bg-indigo-50',
   filaSeleccionada: 'bg-indigo-50 hover:bg-indigo-100',
+  // Tonos opacos para claseFila (las columnas fijas heredan el fondo: un /NN dejaría ver lo de debajo).
+  filaAlerta:       'bg-rose-50 hover:bg-rose-100',
+  filaAviso:        'bg-amber-50 hover:bg-amber-100',
+  filaInfo:         'bg-sky-50 hover:bg-sky-100',
+  filaApagada:      'bg-slate-50 hover:bg-slate-100',
   celda:            'h-11 border-b border-slate-100 px-3 align-middle tabular-nums',
   celdaFija:        'sticky z-10 bg-inherit',
   celdaCasilla:     'sticky left-0 z-10 h-11 border-b border-slate-100 bg-inherit text-center align-middle',
   bordeFijaIzquierda: 'border-r border-r-slate-200',
   bordeFijaDerecha: 'border-l border-l-slate-200',
-  contenido:        'truncate',
+  contenido:        'inline-block max-w-full truncate align-middle',
   casilla:          'h-4 w-4 cursor-pointer accent-indigo-600 disabled:cursor-not-allowed disabled:opacity-40',
   // Separadores, vacío, error y aviso (el texto queda a la vista aunque la tabla se corra de lado).
   grupoCelda:       'h-8 border-b border-slate-200 bg-slate-100 px-3 text-xs font-bold text-slate-600',

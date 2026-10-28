@@ -25,6 +25,7 @@ import {
   vistaCuerpo, filasConGrupos, paginaCorregida, alternarSeleccion, estadoSeleccionPagina, alternarSeleccionPagina,
   firmaSeleccion, RETARDO_BUSQUEDA_MS, crearBusquedaConRetardo, sincronizarBusqueda, textoResultados, opcionesDeVista,
   accionPestana, alternarEstado, puedeDesplazar, estadoDeConteo,
+  anchoAlSoltar, limitesDelAsa, estadoDelTotal, recortarBordes, etiquetasDeEstados, opcionesConMarcados, posicionPanel, saleConEsc,
 } from '../src/lib/tabla.js';
 
 const ids = (filas) => filas.map((f) => f.id);
@@ -1579,17 +1580,17 @@ console.log('--- TEST 32 (T4D): el fuente de los componentes de vista de compone
     assert.equal(cuenta('addEventListener'), 2, `estirar y mover escuchan ${evento} en document, en captura`);
     assert.equal(cuenta('removeEventListener'), 2, `y lo quitan (${evento})`);
   }
-  assert.equal((t.match(/if \(ev\.pointerId !== pointerId\) return;/g) ?? []).length, 6,
-    'cada manejador de puntero (3 de estirar y 3 de mover) mira su pointerId');
+  assert.equal((t.match(/if \(ev\.pointerId !== pointerId\) return;/g) ?? []).length, 7,
+    'cada manejador de puntero (3 de estirar, 3 de mover y la espera del pointerup de r1) mira su pointerId');
   assert.match(t, /const conectado = el\.isConnected;/, 'al soltar, si el asa salió del DOM no se guarda');
   assert.match(t, /iniciado && el\.isConnected \? destino : null/, 'al soltar, si el título salió del DOM no se mueve');
-  assert.match(t, /if \(!el\.isConnected\) \{\s*limpiar\(\);/, 'el bucle del arrastre cancela si el título salió del DOM');
+  assert.match(t, /if \(!el\.isConnected\) \{\s*terminarGesto\(false\);/, 'el bucle del arrastre cancela si el título salió del DOM');
   assert.match(t, /ev\.key !== 'Escape'/, 'Esc cancela');
-  assert.match(t, /useEffect\(\(\) => \{\s*const gesto = terminar;\s*return \(\) => gesto\.current\?\.\(\);\s*\}, \[\]\);/, 'se limpia al desmontar');
+  assert.match(t, /useEffect\(\(\) => \{\s*const gesto = terminar;\s*const espera = esperaClic;\s*return \(\) => \{\s*gesto\.current\?\.\(\);\s*espera\.current\?\.\(\);\s*\};\s*\}, \[\]\);/, 'se limpia al desmontar');
   // D38: el ancho se guarda al soltar, no en cada movimiento (durante el arrastre va al <col> por ref).
   const moverAsa = /const alMover = \(ev: PointerEvent\) => \{([\s\S]*?)\n {4}\};/.exec(t);
   assert.ok(moverAsa && moverAsa[1].includes('pintar(ancho)') && !moverAsa[1].includes('guardarAncho'), 'mover el asa solo pinta');
-  assert.match(t, /if \(conectado\) preferencias\.guardarAncho\(col\.id, ancho\);/, 'se guarda en pointerup');
+  assert.match(t, /if \(conectado && px !== null\) preferencias\.guardarAncho\(col\.id, px\);/, 'se guarda en pointerup');
   assert.match(t, /c\.style\.width = `\$\{px\}px`/, 'el ancho va al <col> por ref');
   assert.match(t, /if \(px !== null\) preferencias\.guardarAncho\(col\.id, px\);/, 'el doble clic guarda el ancho al contenido');
   assert.match(t, /preferencias\.mover\(col\.id, elegido\.hueco\)/, 'mover usa el hueco de los encabezados visibles');
@@ -1616,11 +1617,10 @@ console.log('--- TEST 32 (T4D): el fuente de los componentes de vista de compone
   assert.match(barra, /import \{ ConmutadorVista \} from '@\/components\/ui\/ConmutadorVista';/, 'C1: el conmutador de components/ui');
   assert.match(barra, /<ConmutadorVista\s+modo=\{estado\.modo\}\s+onCambiar=\{\(modo\) => onEstado\(\{ tipo: 'modo', valor: modo \}\)\}/);
   assert.match(barra, /<Contador valor=\{p\.conteo\} estado=\{estadoDeConteo\(p\.conteo, estadoConteos\)\} \/>/, 'C13: el conteo de cada pestaña');
-  assert.match(barra, /<MenuAjustes columnas=\{columnas\} preferencias=\{preferencias\} anchoRef=\{anchoRef\} \/>/, 'D40: el mismo resultado y el mismo ref');
-  assert.match(barra, /columnas && preferencias && estado\.modo !== 'kanban' &&/, '«Ajustar tabla» solo en Lista');
+  assert.match(barra, /<MenuAjustes columnas=\{ajustes\.columnas\} preferencias=\{ajustes\.preferencias\} anchoRef=\{ajustes\.anchoRef\} \/>/, 'D40: el mismo resultado y el mismo ref');
+  assert.match(barra, /ajustes && estado\.modo !== 'kanban' &&/, '«Ajustar tabla» solo en Lista');
   assert.match(barra, /<FiltroEstados\b/);
   assert.match(barra, /onEstado\(\{ tipo: 'estados', valor: estados \}\)/);
-  assert.match(barra, /e\.key === 'Escape' && !e\.defaultPrevented\) onPantallaCompleta\(false\)/, 'Esc sale de la pantalla completa');
   assert.match(barra, /e\.key !== 'Enter'/, 'Enter busca de inmediato');
   assert.match(barra, /setBusqueda\(\(b\) => \(\{ \.\.\.b, texto \}\)\);\s*retardo\(\)\.escribir\(texto\);/, 'cada tecla espera 300 ms (no despacha)');
   assert.ok(!/onChange=\{[^}]*onEstado\(/.test(barra), 'la caja no despacha en cada tecla');
@@ -1632,14 +1632,14 @@ console.log('--- TEST 32 (T4D): el fuente de los componentes de vista de compone
   }
   // FiltroEstados: casillas con la etiqueta legible, contador en el botón y 'Limpiar'.
   const filtro = codigo(fuentes.FiltroEstados);
-  assert.match(filtro, /onCambiar\(alternarEstado\(seleccion, o\.valor, opciones\)\)/);
-  assert.match(filtro, /onClick=\{\(\) => onCambiar\(\[\]\)\}/);
+  assert.match(filtro, /onCambiar\(alternarEstado\(seleccion, o\.valor, lista\)\)/);
+  assert.match(filtro, /onClick=\{\(\) => \{\s*onCambiar\(\[\]\);/);
   for (const texto of ['type="checkbox"', '{o.etiqueta}', '<Contador', 'Limpiar', "e.key !== 'Escape'"]) assert.ok(filtro.includes(texto), `FiltroEstados: ${texto}`);
   // MenuAjustes: columnas (las clave, bloqueadas), flechas, 'Ajustar al ancho de la pantalla' y 'Restablecer columnas'.
   const menu = codigo(fuentes.MenuAjustes);
   for (const texto of ['SlidersHorizontal', 'Ajustar tabla', 'Ajustar al ancho de la pantalla', 'Restablecer columnas',
     'Esta columna siempre se ve', 'Cargando tus columnas…', 'preferencias.desplazar(id, paso)', 'preferencias.ocultar(id, !oculta)',
-    'preferencias.restablecer()', 'preferencias.guardarAnchos(nuevos)', 'anchoRef?.current ?? null', 'disabled={!listo || bloqueada}']) {
+    'preferencias.restablecer()', 'preferencias.guardarAnchos(nuevos)', 'anchoRef.current);', 'disabled={!listo || bloqueada}']) {
     assert.ok(menu.includes(texto), `MenuAjustes: ${texto}`);
   }
   assert.match(menu, /\bajustarAlAncho\(/);
@@ -1659,8 +1659,252 @@ console.log('--- TEST 32 (T4D): el fuente de los componentes de vista de compone
   assert.match(leer('components/AlertasBadge.tsx'), /import \{ KPI_COLOR_MAP \} from '@\/lib\/design-system';/, 'AlertasBadge sigue igual');
 }
 
+console.log('--- TEST 33 (T4D r1, punto 3): anchoAlSoltar — la columna flexible no guarda el espacio que sobra ---');
+{
+  // Sin moverse no se guarda nada (un clic, o el primero de un doble clic).
+  assert.equal(anchoAlSoltar({ base: 200, pintado: 1084, px: 1084, flexible: true }), null);
+  assert.equal(anchoAlSoltar({ base: 140, pintado: 140, px: 140 }), null);
+  // Una columna que no es flexible guarda lo que se soltó.
+  assert.equal(anchoAlSoltar({ base: 140, pintado: 140, px: 210 }), 210);
+  assert.equal(anchoAlSoltar({ base: 140, pintado: 140, px: 90 }), 90);
+  // La flexible al ensanchar: su base más lo que se estiró (sin lo que sobra de la tarjeta).
+  assert.equal(anchoAlSoltar({ base: 200, pintado: 1084, px: 1134, flexible: true }), 250);
+  // La flexible al angostar mientras llena el espacio: nunca más que su base.
+  assert.equal(anchoAlSoltar({ base: 200, pintado: 1084, px: 900, flexible: true }), 200);
+  assert.equal(anchoAlSoltar({ base: 200, pintado: 1084, px: 150, flexible: true }), 150);
+  // Una flexible que no llena nada (pintado = base) se comporta como las demás.
+  assert.equal(anchoAlSoltar({ base: 200, pintado: 200, px: 260, flexible: true }), 260);
+  // Siempre entre el mínimo y el máximo de la columna (64 y 640 si no los dice).
+  assert.equal(anchoAlSoltar({ base: 140, pintado: 140, px: 10 }), ANCHO_MIN);
+  assert.equal(anchoAlSoltar({ base: 140, pintado: 140, px: 9000 }), ANCHO_MAX);
+  assert.equal(anchoAlSoltar({ base: 200, pintado: 1084, px: 2000, flexible: true, anchoMax: 500 }), 500);
+  assert.equal(anchoAlSoltar({ base: 120, pintado: 120, px: 80, anchoMin: 100 }), 100);
+  assert.equal(anchoAlSoltar({ base: 140, pintado: 140, px: Number.NaN }), null, 'sin un número no se guarda');
+  // Mientras se arrastra el asa: la flexible pintada más ancha que su máximo no salta a 640 al primer movimiento, y se
+  // puede ensanchar hasta que su base llegue al máximo; las demás, entre su mínimo y su máximo.
+  assert.deepEqual(limitesDelAsa({ base: 200, pintado: 1084, flexible: true }), { min: ANCHO_MIN, max: 1524 });
+  assert.deepEqual(limitesDelAsa({ base: 200, pintado: 200, flexible: true }), { min: ANCHO_MIN, max: ANCHO_MAX });
+  assert.deepEqual(limitesDelAsa({ base: 140, pintado: 140 }), { min: ANCHO_MIN, max: ANCHO_MAX });
+  assert.deepEqual(limitesDelAsa({ base: 120, pintado: 120, anchoMin: 100, anchoMax: 50 }), { min: 100, max: 100 });
+  assert.deepEqual(limitesDelAsa({ base: 200, pintado: 900, flexible: true, anchoMax: 300 }), { min: ANCHO_MIN, max: 1000 });
+  const { max } = limitesDelAsa({ base: 200, pintado: 1084, flexible: true });
+  assert.equal(anchoAlSoltar({ base: 200, pintado: 1084, px: max, flexible: true }), ANCHO_MAX, 'el tope deja la base en su máximo');
+}
+
+console.log('--- TEST 34 (T4D r1, 6a y 6f): estado de «N resultados» y la línea azul con la tabla corrida de lado ---');
+{
+  // Con error se ve '—' (nunca un número viejo junto a la fila de error); recargando, el número va atenuado.
+  assert.equal(estadoDelTotal({ total: 134, error: new Error('x') }), 'error');
+  assert.equal(estadoDelTotal({ total: null, error: new Error('x') }), 'error');
+  assert.equal(estadoDelTotal({ total: null, cargando: true }), 'cargando');
+  assert.equal(estadoDelTotal({ total: null }), 'cargando', 'sin total, la barra gris');
+  assert.equal(estadoDelTotal({ total: 134, recargando: true }), 'actualizando');
+  assert.equal(estadoDelTotal({ total: 134 }), 'listo');
+  assert.equal(estadoDelTotal({ total: 0 }), 'listo');
+  assert.equal(estadoDelTotal({ total: 134, cargando: true, error: null }), 'cargando');
+
+  // Los rectángulos de los títulos, recortados a la zona libre entre las fijas: «Número» fija en [0,120] y «Cliente»
+  // corrida a [-130,70] (debajo de la fija). Sin recortar, el puntero sobre «Número» daba el hueco 2 y la línea en 70.
+  const bordes = [[0, 120], [-130, 70], [70, 210], [210, 330], [600, 656]];
+  const lados = ['izquierda', null, null, null, 'derecha'];
+  const recortados = recortarBordes(bordes, lados);
+  assert.deepEqual(recortados, [[0, 120], [120, 120], [120, 210], [210, 330], [600, 656]]);
+  assert.equal(indiceDestino(bordes, 100), 2, 'sin recortar, el error del revisor');
+  assert.equal(indiceDestino(recortados, 100), 1, 'recortado: el puntero sobre la fija da el hueco de después de ella');
+  assert.equal(bordeDeHueco(recortados, 1), 120, 'la línea va en el borde de la fija, no encima');
+  // A la derecha, igual: lo que queda debajo de la fija de la derecha no cuenta.
+  assert.deepEqual(recortarBordes([[0, 100], [100, 700], [600, 656]], [null, null, 'derecha']), [[0, 100], [100, 600], [600, 656]]);
+  // Sin fijas, los mismos bordes; acepta rectángulos.
+  assert.deepEqual(recortarBordes([{ left: 0, right: 50 }, { left: 50, right: 90 }], [null, null]), [[0, 50], [50, 90]]);
+  assert.deepEqual(recortarBordes([], []), []);
+}
+
+console.log('--- TEST 35 (T4D r1, punto 5 y 6k): estados filtrados que la pestaña no tiene y paneles que no se salen ---');
+{
+  const OPS = { todos: [{ valor: 'A', etiqueta: 'Asignada' }, { valor: 'B', etiqueta: 'Borrador' }, { valor: 'E', etiqueta: 'En curso' }],
+    sc: [{ valor: 'A', etiqueta: 'Asignada' }], ven: [{ valor: 'E', etiqueta: 'En curso' }] };
+  const opciones = (v) => OPS[v] ?? [];
+  // Las etiquetas que se conocen de todas las pestañas (para un estado que la pestaña de hoy no tiene).
+  assert.deepEqual(etiquetasDeEstados(opciones, ['todos', 'sc', 'ven']), { A: 'Asignada', B: 'Borrador', E: 'En curso' });
+  assert.deepEqual(etiquetasDeEstados(OPS.sc, []), { A: 'Asignada' });
+  assert.deepEqual(etiquetasDeEstados(undefined, ['todos']), {});
+  // El panel muestra las de la pestaña y, marcados, los estados que la pestaña no tiene (legibles si se conocen).
+  assert.deepEqual(opcionesConMarcados(OPS.sc, ['E', 'A', 'ZZ'], { E: 'En curso' }), [
+    { valor: 'A', etiqueta: 'Asignada' }, { valor: 'E', etiqueta: 'En curso' }, { valor: 'ZZ', etiqueta: 'ZZ' },
+  ]);
+  assert.deepEqual(opcionesConMarcados([], ['B'], {}), [{ valor: 'B', etiqueta: 'B' }], 'una pestaña sin opciones con un filtro restaurado');
+  assert.deepEqual(opcionesConMarcados(OPS.sc, [], {}), OPS.sc);
+  // Y se pueden desmarcar: alternarEstado sobre esa lista conserva los demás.
+  const lista = opcionesConMarcados(OPS.sc, ['E', 'A'], { E: 'En curso' });
+  assert.deepEqual(alternarEstado(['E', 'A'], 'E', lista), ['A']);
+  assert.deepEqual(alternarEstado(['E', 'A'], 'A', lista), ['E'], 'desmarcar uno de la pestaña no borra el escondido');
+  // La tarjeta pulsable (o una caja del flujo) que pone una vista poda con el mismo ayudante que las pestañas.
+  const conFiltro = estadoTablaInicial({ vista: 'todos', estados: ['A', 'B'], pagina: 4 });
+  const tarjeta = accionPestana(conFiltro, 'ven', opciones);
+  assert.deepEqual(tarjeta, { tipo: 'cambiar', cambios: { vista: 'ven', estados: [] } });
+  assert.deepEqual(reducirEstadoTabla(conFiltro, tarjeta), { ...conFiltro, vista: 'ven', estados: [], pagina: 1 });
+
+  // Los paneles de FiltroEstados y MenuAjustes no se salen de la ventana (a 375 px, con 8 px de margen).
+  assert.equal(posicionPanel({ boton: { left: 100, right: 180 }, ancho: 256, ventana: 1024, alinear: 'izquierda' }), 0, 'cabe: alineado al botón');
+  assert.equal(posicionPanel({ boton: { left: 230, right: 330 }, ancho: 256, ventana: 375, alinear: 'izquierda' }), -119, 'se corre a la izquierda');
+  assert.equal(posicionPanel({ boton: { left: 300, right: 360 }, ancho: 288, ventana: 1024, alinear: 'derecha' }), -228, 'alineado al borde derecho');
+  assert.equal(posicionPanel({ boton: { left: 20, right: 80 }, ancho: 288, ventana: 375, alinear: 'derecha' }), -12, 'sin salirse por la izquierda');
+  assert.equal(posicionPanel({ boton: { left: 20, right: 80 }, ancho: 400, ventana: 375, alinear: 'izquierda' }), -12, 'más ancho que la ventana: desde el margen');
+}
+
+console.log('--- TEST 36 (T4D r1, punto 4 y 6n): Esc de la pantalla completa y los casos de los mutantes que vivían ---');
+{
+  // Esc sale de la pantalla completa solo si nadie más lo atendió.
+  assert.equal(saleConEsc({ tecla: 'Escape' }), true);
+  assert.equal(saleConEsc({ tecla: 'Escape', defaultPrevented: true }), false, 'un menú, el filtro o la búsqueda ya lo usaron');
+  assert.equal(saleConEsc({ tecla: 'Escape', dialogoEncima: true }), false, 'un Modal, ModalMotivo o confirmación encima');
+  assert.equal(saleConEsc({ tecla: 'Enter' }), false);
+
+  // ajustarAlAncho: en un empate de fracciones, el píxel suelto va a la primera.
+  assert.deepEqual(ajustarAlAncho([{ id: 'a', ancho: 100 }, { id: 'b', ancho: 100 }], ['a', 'b'], {}, 201), { a: 101, b: 100 });
+  // Un ancho guardado fuera de rango cuenta ya limitado (640), no tal cual.
+  assert.deepEqual(ajustarAlAncho(DEFINICION, ['num', 'cli'], { num: 120, cli: 9999 }, 500), { num: 79, cli: 421 });
+  // Un máximo menor que el mínimo: manda el mínimo (la columna queda de ancho fijo).
+  assert.deepEqual(ajustarAlAncho([{ id: 'x', ancho: 80, anchoMin: 100, anchoMax: 50 }, { id: 'y', ancho: 100 }], ['x', 'y'], {}, 300),
+    { x: 100, y: 200 });
+  // anchoMin 0 y ancho 0: sin NaN.
+  const cero = ajustarAlAncho([{ id: 'a', ancho: 0, anchoMin: 0 }, { id: 'b', ancho: 100 }], ['a', 'b'], {}, 300);
+  assert.ok(Object.values(cero).every(Number.isFinite), `sin NaN: ${JSON.stringify(cero)}`);
+  assert.equal(suma(cero), 300);
+  // filasConGrupos: un grupo '' no pinta separador.
+  const filas = [{ id: 1, g: '' }, { id: 2, g: 'A' }];
+  assert.deepEqual(filasConGrupos(filas, (f) => f.g), [
+    { tipo: 'fila', fila: filas[0], indice: 0 }, { tipo: 'grupo', grupo: 'A', n: 1 }, { tipo: 'fila', fila: filas[1], indice: 1 },
+  ]);
+}
+
+console.log('--- TEST 37 (T4D r1): los cables de la ronda r1 en el fuente (gestos, ajuste, flexible, pantalla completa, filtros y menores) ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = (texto) => texto.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const tabla = leer('components/tabla/TablaEstandar.tsx');
+  const t = codigo(tabla);
+  const barra = codigo(leer('components/tabla/BarraTabla.tsx'));
+  const filtro = codigo(leer('components/tabla/FiltroEstados.tsx'));
+  const menu = codigo(leer('components/tabla/MenuAjustes.tsx'));
+  const pantallaFuente = leer('components/tabla/usePantallaCompleta.tsx');
+  const pantalla = codigo(pantallaFuente);
+  const indice = leer('components/tabla/index.ts');
+  const ds = leer('lib/design-system.ts');
+  const lib = leer('lib/tabla.js');
+  const bloqueTabla = /export const TABLE = \{([\s\S]*?)\n\};/.exec(ds)[1];
+  const clase = (clave) => new RegExp(`^\\s+${clave}:\\s+'([^']*)'`, 'm').exec(bloqueTabla)?.[1] ?? '';
+
+  // 1. Cancelar (Esc, captura perdida) no ordena: se suelta la captura y el clic se bloquea hasta el pointerup de ESE
+  //    puntero (un oyente de una sola vez); el asa igual (su doble clic). sinClic es por columna y por gesto.
+  assert.match(t, /const sinClic = useRef<string \| null>\(null\);/);
+  assert.match(t, /if \(sinClic\.current === `orden:\$\{col\.id\}`\) \{\s*sinClic\.current = null;\s*return;\s*\}/, 'el clic que sigue a mover no ordena');
+  assert.match(t, /if \(sinClic\.current === `ajuste:\$\{col\.id\}`\) \{\s*sinClic\.current = null;\s*return;\s*\}/, 'el doble clic que sigue a estirar no ajusta');
+  assert.equal(t.split('el.releasePointerCapture(pointerId)').length - 1, 2, 'mover y estirar sueltan la captura');
+  assert.match(t, /try \{\s*if \(el\.hasPointerCapture\(pointerId\)\) el\.releasePointerCapture\(pointerId\);\s*\} catch/);
+  assert.match(t, /const esperarSoltar = \(pointerId: number, clave: string\) => \{/, 'el oyente de una sola vez');
+  assert.match(t, /document\.addEventListener\('pointerup', alSoltarDespues, true\);/);
+  assert.match(t, /const liberarClic = \(clave: string\) => \{\s*window\.setTimeout\(\(\) => \{\s*if \(sinClic\.current === clave\) sinClic\.current = null;/);
+  assert.match(t, /if \(ev\.key !== 'Escape' \|\| !iniciado\) return;\s*ev\.preventDefault\(\);\s*ev\.stopPropagation\(\);\s*terminarGesto\(false\);/,
+    'Esc al mover termina sin pointerup (el clic espera al de después)');
+  assert.match(t, /if \(ev\.key !== 'Escape'\) return;\s*ev\.preventDefault\(\);\s*ev\.stopPropagation\(\);\s*terminarGesto\(false\);/,
+    'Esc al estirar, igual');
+  assert.equal(t.split("terminarGesto(ev.type === 'pointercancel');").length - 1, 2, 'la captura perdida, sin pointerup; pointercancel, con él');
+  assert.match(t, /preferencias\.guardarAncho\(col\.id, px\);\s*terminarGesto\(true\);/, 'soltar el asa');
+  assert.match(t, /const elegido = iniciado && el\.isConnected \? destino : null;\s*terminarGesto\(true\);/, 'soltar el título');
+  assert.match(t, /return \(\) => \{\s*gesto\.current\?\.\(\);\s*espera\.current\?\.\(\);\s*\};/, 'al desmontar se quitan el gesto y la espera');
+  // Sin el botón apretado (pointerup perdido), el gesto se cancela también después del umbral.
+  assert.equal((t.match(/if \(\(ev\.buttons & 1\) === 0\) \{/g) ?? []).length, 2, 'mover y estirar miran el botón');
+  // 6g: mover no es táctil; el asa táctil tiene 24 px.
+  assert.match(t, /e\.pointerType === 'touch'/);
+  assert.ok(clase('asa').includes('pointer-coarse:before:-left-2') && clase('asa').includes('pointer-coarse:before:-right-2')
+    && clase('asa').includes('after:w-px'), 'zona táctil de 24 px y la línea visible');
+
+  // 2. El doble clic mide el ancho propio del contenido: un inline-block que se encoge (y trunca con su máximo).
+  assert.match(t, /<span data-celda=\{v\} className=\{TABLE\.contenido\}>\{contenido\}<\/span>/);
+  assert.equal(clase('contenido'), 'inline-block max-w-full truncate align-middle');
+
+  // 3. La flexible: anchoAlSoltar con la base de las preferencias y el ancho pintado.
+  assert.match(t, /const base = forma\.anchos\[col\.id\] \?\? ancho0;/, 'la base es la de las preferencias, sin lo que sobra');
+  assert.match(t, /anchoAlSoltar\(\{\s*base, pintado: ancho0, px: ancho, flexible: Boolean\(col\.flexible\),/);
+  assert.match(t, /const \{ min, max \} = limitesDelAsa\(\{\s*base, pintado: ancho0, flexible: Boolean\(col\.flexible\),/, 'el asa de la flexible no salta al máximo');
+  assert.match(t, /if \(conectado && px !== null\) preferencias\.guardarAncho\(col\.id, px\);/);
+
+  // 4. Pantalla completa: la esquina de la IA, la capa z-[39], overscroll-contain y usePantallaCompleta.
+  assert.ok(clase('tarjetaCompleta').includes('[&_[data-pie-tabla]]:pr-20'), 'el pie deja libre la esquina del botón de la IA');
+  assert.ok(clase('tarjetaCompleta').includes('overscroll-contain') && clase('tarjetaCompleta').includes('fixed inset-4 z-40'));
+  assert.ok(!clase('tarjetaCompleta').includes('100vmax'), 'el oscurecido lo pone la capa');
+  assert.ok(clase('capaCompleta').includes('fixed inset-0 z-[39]') && clase('capaCompleta').includes('bg-slate-900/35'), 'la capa de atrás');
+  assert.match(t, /<div data-pie-tabla className=\{TABLE\.pie\}>/);
+  assert.ok(pantallaFuente.startsWith("'use client';"));
+  assert.match(pantalla, /export function usePantallaCompleta\(\): PantallaCompleta \{/);
+  assert.match(pantalla, /claseTarjeta: completa \? TABLE\.tarjetaCompleta : TABLE\.tarjeta/);
+  assert.match(pantalla, /<div aria-hidden="true" className=\{TABLE\.capaCompleta\} onClick=\{salir\} \/>/, 'un clic en la capa sale');
+  assert.match(pantalla, /saleConEsc\(\{ tecla: e\.key, defaultPrevented: e\.defaultPrevented, dialogoEncima: hayDialogoEncima\(refTarjeta\.current\) \}\)/);
+  assert.match(pantalla, /'\[role="dialog"\], \[role="alertdialog"\], \[aria-modal="true"\]'/);
+  assert.ok(indice.includes("export * from './usePantallaCompleta';"));
+  assert.ok(!/addEventListener\('keydown'/.test(barra), 'el Esc de la pantalla completa lo atiende usePantallaCompleta, no la barra');
+
+  // 5. FiltroEstados cuenta y limpia TODO estado.estados y muestra los que la pestaña no tiene.
+  assert.match(filtro, /const lista = opcionesConMarcados\(opciones, seleccion, etiquetas\);/);
+  assert.match(filtro, /if \(!lista\.length\) return null;/);
+  assert.match(filtro, /<Contador valor=\{seleccion\.length\} \/>/);
+  assert.match(filtro, /disabled=\{!seleccion\.length\}/);
+  assert.match(filtro, /onCambiar\(alternarEstado\(seleccion, o\.valor, lista\)\)/);
+  assert.match(barra, /etiquetas=\{etiquetasDeEstados\(opcionesEstados, \(pestanas \?\? \[\]\)\.map\(\(p\) => p\.id\)\)\}/);
+  assert.ok(lib.includes('úsalo también en tarjetas y cajas del flujo'), 'accionPestana, documentado para T7+');
+
+  // 6a: 'N resultados' con estadoTotal (estadoDelTotal, documentado con useListado).
+  assert.match(barra, /estadoTotal\?: EstadoKpi;/);
+  assert.ok(lib.includes('estadoTotal={estadoDelTotal({total: listado.total, cargando: listado.cargandoInicial,'));
+  // 6b: al montar con una selección, se limpia una vez (vuelta desde el Kanban).
+  assert.match(t, /const firmaVista = useRef<string \| null>\(null\);/);
+  // 6c: ajustes agrupados y anchoRef requerido en las listas.
+  assert.match(barra, /ajustes\?: \{ columnas: ReadonlyArray<ColumnaAjustes>; preferencias: PreferenciasTabla; anchoRef: RefObject<number \| null> \};/);
+  assert.match(barra, /<MenuAjustes columnas=\{ajustes\.columnas\} preferencias=\{ajustes\.preferencias\} anchoRef=\{ajustes\.anchoRef\} \/>/);
+  assert.match(tabla, /export type PropsTablaLista<T> = PropsComunes<T> & \{[\s\S]*?\n {2}anchoRef: RefObject<number \| null>;/);
+  assert.match(menu, /anchoRef: RefObject<number \| null>;/);
+  // 6d: Esc en la búsqueda con texto limpia y no sale de la pantalla completa.
+  assert.match(barra, /if \(e\.key === 'Escape' && busqueda\.texto !== ''\) \{\s*e\.preventDefault\(\);/);
+  // 6e: activación manual de las pestañas: las flechas solo mueven el foco.
+  assert.match(barra, /const teclaPestanas = [\s\S]*?botonesPestana\.current\.get\(siguiente\)\?\.focus\(\);/);
+  assert.ok(!/const teclaPestanas = [^;]*;[\s\S]*?elegirPestana\(siguiente\)/.test(barra), 'las flechas no activan');
+  // 6f: los títulos se recortan a la zona libre entre las fijas.
+  assert.match(t, /recortarBordes\(rects, enOrden\.map\(\(v\) => lados\[v\]\)\)/);
+  // 6h: tonos de fila opacos y el JSDoc de claseFila.
+  for (const [clave, tono] of [['filaAlerta', 'rose'], ['filaAviso', 'amber'], ['filaInfo', 'sky'], ['filaApagada', 'slate']]) {
+    assert.equal(clase(clave), `bg-${tono}-50 hover:bg-${tono}-100`, clave);
+  }
+  assert.ok(tabla.includes('usa un tono opaco de TABLE (filaAlerta, filaAviso, filaInfo, filaApagada); un tono translúcido (/NN) deja ver lo que pasa debajo de las columnas fijas'));
+  // 6i: accesibilidad.
+  assert.match(t, /<span\s+aria-hidden="true"\s+title="Arrastra para cambiar el ancho; doble clic para ajustarlo al texto"/);
+  assert.ok(!t.includes('role="separator"'));
+  for (const [nombre, fuente] of [['FiltroEstados', filtro], ['MenuAjustes', menu]]) {
+    assert.ok(!fuente.includes('aria-haspopup'), `${nombre}: sin aria-haspopup`);
+    assert.ok(fuente.includes('aria-expanded={abierto}') && fuente.includes('aria-controls={abierto ? idPanel : undefined}'));
+  }
+  assert.match(menu, /querySelector<HTMLElement>\('input:not\(:disabled\), button:not\(:disabled\)'\)/, 'el foco al primer control habilitado');
+  assert.match(filtro, /onCambiar\(\[\]\);\s*boton\.current\?\.focus\(\{ preventScroll: true \}\);/, '«Limpiar» devuelve el foco al botón');
+  assert.match(barra, /entrada\.current\?\.focus\(\);/, 'la X devuelve el foco a la búsqueda');
+  assert.ok(!barra.includes('aria-pressed'), 'pantalla completa: solo el cambio de texto');
+  // 6j: el cuerpo, memoizado y sin depender de moviendo.
+  assert.match(t, /const CuerpoTabla = memo\(CuerpoTablaBase\) as typeof CuerpoTablaBase;/);
+  const cuerpo = /function CuerpoTablaBase<T>\([\s\S]*?\n\}\n/.exec(t)?.[0] ?? '';
+  assert.ok(cuerpo && !cuerpo.includes('moviendo'), 'CuerpoTabla no recibe moviendo');
+  // 6k: paneles a 375 px.
+  for (const fuente of [filtro, menu]) {
+    assert.ok(fuente.includes('max-w-[calc(100vw-2rem)]') && fuente.includes('posicionPanel('), 'el panel no se sale de la pantalla');
+  }
+  // 6l: cargando en el modo cliente.
+  assert.ok(tabla.includes('cargando={!listo || cliente.cargandoInicial}'));
+  // 6m: las casillas, deshabilitadas mientras recarga.
+  assert.ok(t.includes("disabled={recargando || vista !== 'filas' || !clavesPagina.length}"), 'la del encabezado');
+  assert.ok(t.includes('disabled={recargando || (seleccionable ? !seleccionable(fila) : false)}'), 'las de las filas');
+}
+
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');
 console.log('✓ T4C: sesión, estado armado, partes de columnas, URL de la lista, carga vigente, estado de la lista y modo cliente.');
 console.log('✓ T4C r1: orden rechazado, estados en la sesión, escrituras del usuario del render, esperar y vueltas.');
 console.log('✓ T4C r2: sin filas de otra cuenta, vuelta al orden condicional y atendida, tope de espera y cables vigilados.');
 console.log('✓ T4D: umbral, ancho al contenido, ajustar al ancho, geometría, destino, orden, cuerpo, grupos, selección, barra y el fuente de los componentes.');
+console.log('✓ T4D r1: anchoAlSoltar, estado del total, títulos recortados, filtros a la vista, paneles, Esc de la pantalla completa y los cables de r1.');

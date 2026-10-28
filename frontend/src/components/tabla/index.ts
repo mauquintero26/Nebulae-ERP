@@ -12,3 +12,5 @@ export * from './FiltroEstados';
 export * from './MenuAjustes';
 export * from './Paginacion';
 export * from './Esqueleto';
+// T4D r1: la pantalla completa (la clase de la tarjeta, la capa de atrás y el Esc), para no repetirla en cada pantalla.
+export * from './usePantallaCompleta';

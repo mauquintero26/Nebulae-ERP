@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { ChevronDown, ChevronUp, Lock, MoveHorizontal, RotateCcw, SlidersHorizontal } from 'lucide-react';
-import { ajustarAlAncho, puedeDesplazar } from '@/lib/tabla';
+import { ajustarAlAncho, posicionPanel, puedeDesplazar } from '@/lib/tabla';
 import type { DefinicionColumna } from '@/lib/tabla';
 import type { PreferenciasTabla } from './usePreferenciasTabla';
 
@@ -16,12 +16,15 @@ import type { PreferenciasTabla } from './usePreferenciasTabla';
  *    (puedeDesplazar);
  *  - 'Ajustar al ancho de la pantalla': reparte los anchos para que la tabla quepa sin correrse (ajustarAlAncho) con el
  *    ancho que TablaEstandar publica en `anchoRef` (el mismo ref que la pantalla le pasa a la tabla; se lee al hacer
- *    clic). Sin anchoRef no se ofrece;
+ *    clic). r1, 6c: anchoRef es requerido, así que la opción no desaparece en silencio;
  *  - 'Restablecer columnas': vuelve a la forma por defecto (borra orden, anchos y ocultas; conserva el tamaño).
  * D40: recibe `preferencias`, el resultado del ÚNICO usePreferenciasTabla de la pantalla (el mismo que recibe
  * TablaEstandar); no llama a usePreferenciasTabla por su cuenta: dos vínculos con el mismo id se pisarían la pieza
  * {anchos}. D35 y D38: cada operación escribe solo su pieza y nada antes de listo; mientras no está listo, todo queda
  * deshabilitado con 'Cargando tus columnas…'.
+ * r1 (6i y 6k): el botón usa aria-expanded y aria-controls (el panel no es un menú); al abrir, el foco va al primer
+ * control habilitado y, con Esc, vuelve al botón; el panel no se sale de la ventana (posicionPanel, alineado a la
+ * derecha del botón, y máximo el ancho de la pantalla menos 2rem).
  */
 
 /** Lo que MenuAjustes necesita de cada columna (ColumnaTabla de TablaEstandar lo cumple). */
@@ -37,7 +40,7 @@ export function MenuAjustes({
   /** El resultado del único usePreferenciasTabla(id, columnas) de la pantalla (D40). */
   preferencias: PreferenciasTabla;
   /** El ancho para las columnas que publica TablaEstandar (el mismo ref de la pantalla). */
-  anchoRef?: RefObject<number | null>;
+  anchoRef: RefObject<number | null>;
 }) {
   const [abierto, setAbierto] = useState(false);
   const caja = useRef<HTMLDivElement>(null);
@@ -49,9 +52,18 @@ export function MenuAjustes({
   const { listo, orden, ocultas, visibles, fijas } = preferencias;
   const porId = new Map(columnas.map((c) => [c.id, c]));
 
+  // Al abrir: el panel se ubica dentro de la ventana (antes de pintarse) y el foco va al primer control habilitado (la
+  // primera columna suele ser clave, con la casilla deshabilitada).
+  useLayoutEffect(() => {
+    const b = boton.current;
+    const p = panel.current;
+    if (!abierto || !b || !p) return;
+    p.style.left = `${posicionPanel({ boton: b.getBoundingClientRect(), ancho: p.offsetWidth, ventana: window.innerWidth, alinear: 'derecha' })}px`;
+    p.querySelector<HTMLElement>('input:not(:disabled), button:not(:disabled)')?.focus({ preventScroll: true });
+  }, [abierto]);
+
   useEffect(() => {
     if (!abierto) return undefined;
-    panel.current?.querySelector<HTMLElement>('input, button')?.focus({ preventScroll: true });
     const alPresionar = (e: PointerEvent) => {
       if (!(e.target instanceof Node && caja.current?.contains(e.target))) setAbierto(false);
     };
@@ -87,7 +99,7 @@ export function MenuAjustes({
   };
 
   const ajustar = () => {
-    const nuevos = ajustarAlAncho(columnas, visibles, preferencias.anchos, anchoRef?.current ?? null);
+    const nuevos = ajustarAlAncho(columnas, visibles, preferencias.anchos, anchoRef.current);
     if (nuevos) preferencias.guardarAnchos(nuevos);
   };
 
@@ -96,7 +108,6 @@ export function MenuAjustes({
       <button
         ref={boton}
         type="button"
-        aria-haspopup="true"
         aria-expanded={abierto}
         aria-controls={abierto ? idPanel : undefined}
         title="Ajustar tabla"
@@ -113,7 +124,7 @@ export function MenuAjustes({
           id={idPanel}
           role="group"
           aria-label="Ajustar tabla"
-          className="absolute right-0 top-full z-50 mt-2 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 bg-white p-2 shadow-xl"
+          className="absolute left-0 top-full z-50 mt-2 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 bg-white p-2 shadow-xl"
         >
           <p className="px-2 pb-1 pt-0.5 text-[11px] font-bold uppercase tracking-wide text-slate-400">Columnas</p>
           {!listo && <p className="px-2 pb-2 text-xs text-slate-500" role="status">Cargando tus columnas…</p>}
@@ -175,12 +186,10 @@ export function MenuAjustes({
             })}
           </ul>
           <div className="mt-1 border-t border-slate-100 pt-1">
-            {anchoRef && (
-              <button type="button" onClick={ajustar} disabled={!listo} className={ACCION}>
-                <MoveHorizontal size={14} aria-hidden="true" className="shrink-0 text-slate-500" />
-                Ajustar al ancho de la pantalla
-              </button>
-            )}
+            <button type="button" onClick={ajustar} disabled={!listo} className={ACCION}>
+              <MoveHorizontal size={14} aria-hidden="true" className="shrink-0 text-slate-500" />
+              Ajustar al ancho de la pantalla
+            </button>
             <button type="button" onClick={() => preferencias.restablecer()} disabled={!listo} className={ACCION}>
               <RotateCcw size={14} aria-hidden="true" className="shrink-0 text-slate-500" />
               Restablecer columnas

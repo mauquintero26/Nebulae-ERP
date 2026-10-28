@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type {
   CSSProperties, KeyboardEvent as EventoTeclado, MouseEvent as EventoRaton, PointerEvent as EventoPuntero, ReactNode, RefObject,
 } from 'react';
@@ -10,62 +10,74 @@ import { TABLE } from '@/lib/design-system';
 import { textoDeError } from '@/lib/avisos';
 import { velocidadAutodesplazamiento } from '@/lib/kanban';
 import {
-  ANCHO_MAX, ANCHO_MIN, ANCHO_SELECCION, RELLENO_CELDA, alternarOrden, alternarSeleccion, alternarSeleccionPagina,
-  anchoAlContenido, bordeDeHueco, campoOrden, destinoArrastre, direccionOrden, estadoSeleccionPagina, fijasDe,
-  filasConGrupos, firmaSeleccion, geometriaTabla, indiceDestino, limitarAncho, paginaCorregida, reconciliarColumnas,
-  superaUmbralColumna, vistaCuerpo,
+  ANCHO_SELECCION, RELLENO_CELDA, alternarOrden, alternarSeleccion, alternarSeleccionPagina, anchoAlContenido,
+  anchoAlSoltar, bordeDeHueco, campoOrden, destinoArrastre, direccionOrden, estadoSeleccionPagina, fijasDe,
+  filasConGrupos, firmaSeleccion, geometriaTabla, indiceDestino, limitarAncho, limitesDelAsa, paginaCorregida,
+  reconciliarColumnas, recortarBordes, superaUmbralColumna, vistaCuerpo,
 } from '@/lib/tabla';
-import type { ClaveFila, DefinicionColumna, EstadoTabla, LadoFijo } from '@/lib/tabla';
+import type { ClaveFila, DefinicionColumna, EstadoTabla, LadoFijo, RenglonTabla, VistaCuerpo } from '@/lib/tabla';
 import type { DespacharTabla } from './useEstadoTabla';
 import type { PreferenciasTabla } from './usePreferenciasTabla';
 import { Esqueleto } from './Esqueleto';
 import { Paginacion } from './Paginacion';
 
 /**
- * La tabla estándar de la app (Bloque 4, T4D; TABLA-base punto 3, R4, R5, R26, C1, C3, C13, D35, D38 y D40). Toda la
- * lógica es de lib/tabla.js (probada en tests/test_tabla.mjs); aquí solo se pinta y se conecta.
+ * La tabla estándar de la app (Bloque 4, T4D y r1; TABLA-base punto 3, R4, R5, R26, C1, C3, C13, D35, D38 y D40). Toda
+ * la lógica es de lib/tabla.js (probada en tests/test_tabla.mjs); aquí solo se pinta y se conecta.
  *
  * Modos:
  *  - 'servidor': la página la trae useListado (T4C) con el estado de useEstadoTabla; ordenar y paginar despachan a ese
- *    estado (onEstado) y el servidor responde la página nueva.
+ *    estado (onEstado) y el servidor responde la página nueva. `cargando={listado.cargandoInicial}` alcanza: con
+ *    esperar: !listo, cubre también la espera de las preferencias.
  *  - 'cliente': igual, pero las filas son las de useListadoCliente (el endpoint trae todo): su `orden` sale de
- *    accesoresDeOrden(columnas) (el valorOrden de cada columna).
+ *    accesoresDeOrden(columnas) (el valorOrden de cada columna). useListadoCliente no espera las preferencias, así que
+ *    aquí va `cargando={!listo || cliente.cargandoInicial}` (T4D r1, 6l).
  *  - 'simple' (tablas de detalle dentro de un documento): sin paginación, orden ni selección, y no necesita estado.
  *    DECISIÓN T4D (D40): no recuerda nada por su cuenta. Sin `preferencias`, las columnas quedan con su forma por
  *    defecto (ancho, orden y ocultaPorDefecto de la definición) y no se estiran ni se mueven; si la pantalla le pasa
  *    `preferencias` (su único usePreferenciasTabla), se estiran, se mueven y se recuerdan como en las listas.
  *
  * D40: `preferencias` es el resultado del ÚNICO usePreferenciasTabla(id, columnas) de la pantalla, el mismo que recibe
- * «Ajustar tabla» (BarraTabla → MenuAjustes): dos vínculos con el mismo id se pisarían la pieza {anchos}. Esta tabla no
- * llama a usePreferenciasTabla. `aviso` es el avisoOrden de useListado: un aviso ámbar sobre la tabla que no tapa las
- * filas. `cargando` = listado.cargandoInicial alcanza (con esperar: !listo, cubre también la espera de preferencias).
+ * «Ajustar tabla» (BarraTabla, en `ajustes`, → MenuAjustes): dos vínculos con el mismo id se pisarían la pieza {anchos}.
+ * Esta tabla no llama a usePreferenciasTabla. `aviso` es el avisoOrden de useListado: un aviso ámbar sobre la tabla que
+ * no tapa las filas.
  *
  * «Ajustar al ancho de la pantalla» (DECISIÓN T4D): la pantalla crea `const anchoTablaRef = useRef<number | null>(null)`
- * y se lo pasa a esta tabla y a BarraTabla (anchoRef). La tabla publica ahí el ancho que tienen sus columnas (el del
- * contenedor medido con ResizeObserver, sin la casilla de selección) y MenuAjustes lo lee al hacer clic: sin otro
- * estado ni un render de la pantalla por cada cambio de tamaño, y sin una segunda instancia de preferencias.
+ * y se lo pasa a esta tabla (anchoRef, requerido en las listas desde r1) y a BarraTabla (ajustes.anchoRef). La tabla
+ * publica ahí el ancho que tienen sus columnas (el del contenedor medido con ResizeObserver, sin la casilla de
+ * selección) y MenuAjustes lo lee al hacer clic: sin otro estado ni un render de la pantalla por cada cambio de tamaño,
+ * y sin una segunda instancia de preferencias.
  *
  * Dibujo: <table> con table-layout: fixed, <colgroup> y ancho = suma de anchos (mínimo 100%); la columna flexible toma
  * lo que sobra de la tarjeta (geometriaTabla). El contenedor tiene su propia barra (máximo calc(100vh − 180px)), el
- * encabezado es sticky y las columnas fijas son sticky con fondo opaco (heredan el de la fila: claseFila tiene que dar un
- * fondo opaco). Las celdas se truncan con title y los números usan tabular-nums sin partirse.
+ * encabezado es sticky y las columnas fijas son sticky con fondo opaco (heredan el de la fila: claseFila tiene que dar
+ * uno de los tonos opacos de TABLE). Las celdas se truncan con title y los números usan tabular-nums sin partirse. En
+ * pantalla completa (usePantallaCompleta) el pie lleva data-pie-tabla para dejar libre la esquina del botón de la IA.
  * Encabezado (pointer events, el arrastre del Kanban del CRM, H1, como lo resolvió el tablero común de T4B):
  *  - clic en el título: ordena (alternarOrden: ascendente, descendente y el por defecto), con aria-sort y la flecha;
- *  - presionar y arrastrar MÁS de 5 px (superaUmbralColumna): mueve la columna, con una copia del título y una línea
- *    azul de destino (indiceDestino, destinoArrastre y bordeDeHueco), sin cruzar las fijas; cerca de los bordes la tabla
- *    se desplaza sola. setPointerCapture después del umbral;
- *  - el asa de 8 px del borde derecho: estira o angosta (entre su mínimo y su máximo); durante el arrastre el ancho va
- *    al <col> por ref, sin volver a pintar las filas, y se guarda al soltar (guardarAncho en pointerup, D38);
- *  - doble clic en el asa: ajusta al texto más largo que se ve (anchoAlContenido, máximo 480 px).
+ *  - presionar y arrastrar MÁS de 5 px (superaUmbralColumna) con el mouse o el lápiz (r1, 6g: no con el dedo; en
+ *    táctil quedan las flechas de «Ajustar tabla»): mueve la columna, con una copia del título y una línea azul de
+ *    destino (los títulos recortados a la zona libre entre las fijas, recortarBordes; indiceDestino, destinoArrastre y
+ *    bordeDeHueco), sin cruzar las fijas; cerca de los bordes la tabla se desplaza sola. setPointerCapture después del
+ *    umbral;
+ *  - el asa de 8 px del borde derecho (24 px con el dedo): estira o angosta (entre su mínimo y su máximo); durante el
+ *    arrastre el ancho va al <col> por ref, sin volver a pintar las filas, y se guarda al soltar (D38) con
+ *    anchoAlSoltar: sin moverse no se guarda, y la flexible guarda su base sin el espacio que sobra (r1, punto 3);
+ *  - doble clic en el asa: ajusta al texto que se ve (anchoAlContenido, máximo 480 px), medido con el ancho propio del
+ *    contenido (un inline-block que se encoge; r1, punto 2), así que también angosta.
  *  Los gestos se escuchan en document, en captura, con su pointerId: pointerup termina (si el nodo con la captura ya no
- *  está en el DOM, cancela), pointercancel, lostpointercapture y Esc cancelan, y todo se limpia al desmontar. Sin mouse
- *  (o en pantallas táctiles), «Ajustar tabla» tiene flechas. Mientras las preferencias no están listas (D35) no hay
- *  asas ni arrastre: nada se podría guardar.
+ *  está en el DOM, no guarda), pointercancel, lostpointercapture, Esc y un puntero sin el botón apretado cancelan, y todo
+ *  se limpia al desmontar. r1, punto 1: un gesto que se cancela sin pointerup (Esc o la captura perdida) suelta la
+ *  captura y bloquea el clic de ESA columna hasta el pointerup de ese puntero (un oyente de una sola vez): cancelar no
+ *  ordena, ni el doble clic del asa ajusta. Mientras las preferencias no están listas (D35) no hay asas ni arrastre.
+ * El cuerpo (CuerpoTabla, memoizado) no depende del arrastre: mover una columna no vuelve a pintar las celdas (r1, 6j).
  * Estados (vistaCuerpo): sin datos y cargando, 8 renglones esqueleto y el pie 'Cargando…'; recargando, las filas
- * atenuadas y una barra fina arriba; error, la fila 'No se pudo cargar la lista: <detalle>' con 'Reintentar'; vacío, lo
- * que traiga `vacio`. Si un filtro deja menos páginas, salta a la última que existe (paginaCorregida).
+ * atenuadas, una barra fina arriba y las casillas deshabilitadas; error, la fila 'No se pudo cargar la lista: <detalle>'
+ * con 'Reintentar'; vacío, lo que traiga `vacio`. Si un filtro deja menos páginas, salta a la última que existe
+ * (paginaCorregida).
  * Selección: la casilla del encabezado marca solo la página visible (alternarSeleccionPagina) y la selección se limpia
- * cuando cambia la lista: página, pestaña, búsqueda, filtro, orden, tamaño o modo (firmaSeleccion; R5 y C3).
+ * cuando cambia la lista: página, pestaña, búsqueda, filtro, orden, tamaño o modo (firmaSeleccion; R5 y C3), y también
+ * una vez al montar (r1, 6b: al volver del Kanban).
  * Sin alert, confirm ni prompt.
  */
 
@@ -95,7 +107,7 @@ type PropsComunes<T> = {
   id: string;
   columnas: ReadonlyArray<ColumnaTabla<T>>;
   filas: ReadonlyArray<T>;
-  /** Sin datos y cargando (listado.cargandoInicial): 8 renglones esqueleto. */
+  /** Sin datos y cargando: 8 renglones esqueleto (ver los modos arriba). */
   cargando?: boolean;
   /** Con datos y otra carga en camino (listado.recargando): las filas atenuadas y una barra fina. */
   recargando?: boolean;
@@ -106,7 +118,10 @@ type PropsComunes<T> = {
   claveFila?: (fila: T, indice: number) => ClaveFila;
   /** Clic (o Enter) en la fila; no salta con un clic en un enlace, un botón, una casilla o el menú ⋯. */
   onFila?: (fila: T) => void;
-  /** Clases de la fila: un fondo opaco (las columnas fijas lo heredan); reemplaza el blanco y el hover de siempre. */
+  /**
+   * Las clases de la fila: usa un tono opaco de TABLE (filaAlerta, filaAviso, filaInfo, filaApagada); un tono translúcido (/NN) deja ver lo que pasa debajo de las columnas fijas.
+   * Reemplaza el blanco y el hover de siempre (los tonos de TABLE traen el suyo).
+   */
   claseFila?: (fila: T) => string | null | undefined;
   /** El grupo de la fila: un separador al empezar cada tramo (filasConGrupos). */
   grupoFila?: (fila: T) => string | null | undefined;
@@ -118,8 +133,6 @@ type PropsComunes<T> = {
   pie?: ReactNode;
   /** D40: el aviso ámbar sobre la tabla (listado.avisoOrden). */
   aviso?: string | null;
-  /** «Ajustar al ancho de la pantalla»: el mismo ref que recibe BarraTabla; la tabla publica ahí su ancho. */
-  anchoRef?: RefObject<number | null>;
   /** El nombre de la tabla para los lectores de pantalla. */
   etiqueta?: string;
 };
@@ -128,6 +141,8 @@ export type PropsTablaLista<T> = PropsComunes<T> & {
   modo: 'servidor' | 'cliente';
   /** D40: el resultado del único usePreferenciasTabla(id, columnas) de la pantalla. */
   preferencias: PreferenciasTabla;
+  /** «Ajustar al ancho de la pantalla»: el mismo ref que recibe BarraTabla (ajustes.anchoRef); la tabla publica su ancho. */
+  anchoRef: RefObject<number | null>;
   /** El total de la consulta (listado.total; null mientras carga). */
   total: number | null;
   /** El estado de useEstadoTabla. */
@@ -144,6 +159,7 @@ export type PropsTablaSimple<T> = PropsComunes<T> & {
   modo: 'simple';
   /** Opcional: con él, las columnas se estiran, se mueven y se recuerdan. */
   preferencias?: PreferenciasTabla;
+  anchoRef?: RefObject<number | null>;
   total?: never;
   estado?: never;
   onEstado?: never;
@@ -171,6 +187,152 @@ const INTERACTIVO = 'a, button, input, select, textarea, label, [role="menu"], [
 const mismaLinea = (a: Linea | null, b: Linea | null) =>
   a === b || (a !== null && b !== null && a.x === b.x && a.top === b.top && a.alto === b.alto);
 
+/** left o right de una columna fija (position: sticky). */
+function estiloFija(v: string, fijas: Record<string, LadoFijo>, offsets: Record<string, number>): CSSProperties | undefined {
+  const lado = fijas[v];
+  if (!lado) return undefined;
+  return lado === 'izquierda' ? { left: offsets[v] ?? 0 } : { right: offsets[v] ?? 0 };
+}
+
+/** El borde de la última fija de la izquierda y de la primera de la derecha. */
+function clasesFija(v: string, fijas: Record<string, LadoFijo>, visibles: ReadonlyArray<string>) {
+  if (fijas[v] === 'izquierda' && [...visibles].reverse().find((x) => fijas[x] === 'izquierda') === v) return TABLE.bordeFijaIzquierda;
+  if (fijas[v] === 'derecha' && visibles.find((x) => fijas[x] === 'derecha') === v) return TABLE.bordeFijaDerecha;
+  return '';
+}
+
+type PropsCuerpo<T> = {
+  vista: VistaCuerpo;
+  renglones: RenglonTabla[];
+  visibles: string[];
+  porId: Map<string, ColumnaTabla<T>>;
+  fijas: Record<string, LadoFijo>;
+  offsets: Record<string, number>;
+  nColumnas: number;
+  disponible: number | null;
+  recargando: boolean;
+  error: unknown;
+  onReintentar?: () => void;
+  vacio?: ReactNode;
+  tituloGrupo?: (grupo: string, n: number) => ReactNode;
+  claveDe: (fila: T, indice: number) => ClaveFila;
+  claseFila?: (fila: T) => string | null | undefined;
+  onFila?: (fila: T) => void;
+  seleccionActiva: boolean;
+  seleccion: ReadonlyArray<ClaveFila>;
+  onSeleccion?: (seleccion: ClaveFila[]) => void;
+  seleccionable?: (fila: T) => boolean;
+};
+
+/** El <tbody> (memoizado en CuerpoTabla): solo depende de los datos, la forma de las columnas y la selección. */
+function CuerpoTablaBase<T>({
+  vista, renglones, visibles, porId, fijas, offsets, nColumnas, disponible, recargando, error, onReintentar, vacio,
+  tituloGrupo, claveDe, claseFila, onFila, seleccionActiva, seleccion, onSeleccion, seleccionable,
+}: PropsCuerpo<T>) {
+  // Los mensajes de ancho completo (vacío, error, separadores) quedan a la vista aunque la tabla se corra de lado.
+  const anchoMensaje: CSSProperties | undefined = disponible === null
+    ? undefined
+    : { width: Math.max(0, disponible - RELLENO_CELDA) };
+  const alClicFila = (e: EventoRaton<HTMLTableRowElement>, fila: T) => {
+    if (!onFila) return;
+    const interactivo = (e.target as HTMLElement).closest(INTERACTIVO);
+    if (interactivo && e.currentTarget.contains(interactivo)) return;
+    if (window.getSelection()?.toString()) return;
+    onFila(fila);
+  };
+  const alTeclearFila = (e: EventoTeclado<HTMLTableRowElement>, fila: T) => {
+    if (onFila && e.key === 'Enter' && e.target === e.currentTarget) {
+      e.preventDefault();
+      onFila(fila);
+    }
+  };
+  return (
+    <tbody className={recargando && vista === 'filas' ? TABLE.atenuado : undefined}>
+      {vista === 'esqueleto' && <Esqueleto columnas={nColumnas} />}
+      {vista === 'error' && (
+        <tr>
+          <td colSpan={nColumnas} className={TABLE.error}>
+            <div role="alert" className={TABLE.mensajeFijo} style={anchoMensaje}>
+              {textoDeError(error, 'No se pudo cargar la lista')}
+              {onReintentar && (
+                <button type="button" onClick={onReintentar} className={TABLE.botonReintentar}>
+                  <RotateCw size={12} aria-hidden="true" />
+                  Reintentar
+                </button>
+              )}
+            </div>
+          </td>
+        </tr>
+      )}
+      {vista === 'vacio' && (
+        <tr>
+          <td colSpan={nColumnas} className={TABLE.vacio}>
+            <div className={TABLE.mensajeFijo} style={anchoMensaje}>{vacio ?? TEXTO_VACIO}</div>
+          </td>
+        </tr>
+      )}
+      {vista === 'filas' && renglones.map((r, i) => {
+        if (r.tipo === 'grupo') {
+          return (
+            <tr key={`grupo-${i}-${r.grupo}`}>
+              <td colSpan={nColumnas} className={TABLE.grupoCelda}>
+                <div className={TABLE.mensajeFijo} style={anchoMensaje}>
+                  {tituloGrupo ? tituloGrupo(r.grupo, r.n) : `${r.grupo} · ${r.n}`}
+                </div>
+              </td>
+            </tr>
+          );
+        }
+        const fila = r.fila as T;
+        const clave = claveDe(fila, r.indice);
+        const seleccionada = seleccionActiva && seleccion.includes(clave);
+        const propia = claseFila?.(fila);
+        const fondo = seleccionada ? TABLE.filaSeleccionada : `${propia || TABLE.filaFondo} ${propia ? '' : TABLE.filaHover}`;
+        return (
+          <tr
+            key={String(clave)}
+            tabIndex={onFila ? 0 : undefined}
+            onClick={onFila ? (e) => alClicFila(e, fila) : undefined}
+            onKeyDown={onFila ? (e) => alTeclearFila(e, fila) : undefined}
+            className={`${TABLE.fila} ${fondo} ${onFila ? TABLE.filaClic : ''}`}
+          >
+            {seleccionActiva && (
+              <td className={TABLE.celdaCasilla}>
+                <input
+                  type="checkbox"
+                  aria-label="Seleccionar esta fila"
+                  checked={seleccionada}
+                  disabled={recargando || (seleccionable ? !seleccionable(fila) : false)}
+                  onChange={() => onSeleccion?.(alternarSeleccion(seleccion, clave))}
+                  className={TABLE.casilla}
+                />
+              </td>
+            )}
+            {visibles.map((v) => {
+              const col = porId.get(v) as ColumnaTabla<T>;
+              const contenido = col.celda(fila);
+              const titulo = col.titleCelda?.(fila)
+                ?? (typeof contenido === 'string' || typeof contenido === 'number' ? String(contenido) : undefined);
+              return (
+                <td
+                  key={v}
+                  title={titulo ?? undefined}
+                  style={estiloFija(v, fijas, offsets)}
+                  className={`${TABLE.celda} ${fijas[v] ? TABLE.celdaFija : ''} ${clasesFija(v, fijas, visibles)} ${ALINEAR[col.alinear ?? 'izquierda']}`}
+                >
+                  <span data-celda={v} className={TABLE.contenido}>{contenido}</span>
+                </td>
+              );
+            })}
+          </tr>
+        );
+      })}
+    </tbody>
+  );
+}
+
+const CuerpoTabla = memo(CuerpoTablaBase) as typeof CuerpoTablaBase;
+
 export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
   const {
     id, columnas, filas, cargando = false, recargando = false, error = null, onReintentar, claveFila, onFila, claseFila,
@@ -180,6 +342,7 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
   const preferencias = props.preferencias ?? null;
   const onEstado = lista?.onEstado;
   const onSeleccion = lista?.onSeleccion;
+  const seleccionable = lista?.seleccionable;
   const seleccion = lista?.seleccion ?? SIN_SELECCION;
   const seleccionActiva = Boolean(onSeleccion);
   const anchoSeleccion = seleccionActiva ? ANCHO_SELECCION : 0;
@@ -223,14 +386,14 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
   // ── el cuerpo ──
   const vista = vistaCuerpo({ cargando, error, filas });
   const renglones = useMemo(() => filasConGrupos(filas, grupoFila), [filas, grupoFila]);
-  const claveDe = (fila: T, indice: number): ClaveFila => {
+  const claveDe = useCallback((fila: T, indice: number): ClaveFila => {
     if (claveFila) return claveFila(fila, indice);
     const propia = (fila as { id?: unknown } | null)?.id;
     return typeof propia === 'string' || typeof propia === 'number' ? propia : indice;
-  };
+  }, [claveFila]);
   // Las filas seleccionables de la página: la casilla del encabezado marca solo estas.
-  const clavesPagina = lista?.onSeleccion
-    ? filas.flatMap((f, i) => ((lista.seleccionable?.(f) ?? true) ? [claveDe(f, i)] : []))
+  const clavesPagina = seleccionActiva
+    ? filas.flatMap((f, i) => ((seleccionable?.(f) ?? true) ? [claveDe(f, i)] : []))
     : [];
   const estadoSeleccion = estadoSeleccionPagina(seleccion, clavesPagina);
   const nColumnas = visibles.length + (seleccionActiva ? 1 : 0);
@@ -245,9 +408,9 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
     if (corregida !== null) onEstado?.({ tipo: 'pagina', valor: corregida });
   }, [corregida, onEstado]);
 
-  // ── la selección se limpia cuando cambia la lista (R5, C3) ──
+  // ── la selección se limpia cuando cambia la lista (R5, C3) y una vez al montar (r1, 6b: al volver del Kanban) ──
   const firma = lista ? firmaSeleccion(lista.estado) : '';
-  const firmaVista = useRef(firma);
+  const firmaVista = useRef<string | null>(null);
   const haySeleccion = seleccion.length > 0;
   useEffect(() => {
     if (firmaVista.current === firma) return;
@@ -261,8 +424,10 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
   const fantasma = useRef<HTMLDivElement | null>(null);
   // La limpieza del gesto en curso (estirar o mover): uno a la vez; se llama al terminar, al cancelar y al desmontar.
   const terminar = useRef<(() => void) | null>(null);
-  // Después de mover una columna, el clic que sigue al soltar no ordena.
-  const sinClic = useRef(false);
+  // r1, punto 1: el clic que se bloquea después de un gesto, por columna ('orden:<id>' para el título,
+  // 'ajuste:<id>' para el doble clic del asa), y la espera del pointerup de un gesto cancelado sin soltar.
+  const sinClic = useRef<string | null>(null);
+  const esperaClic = useRef<(() => void) | null>(null);
   const [moviendo, setMoviendo] = useState<Moviendo | null>(null);
   // Los anchos que pintó React (el último render), para devolverle el <col> y la <table> al terminar de estirar.
   const pintada = useRef(geometria);
@@ -271,12 +436,40 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
   });
   useEffect(() => {
     const gesto = terminar;
-    return () => gesto.current?.();
+    const espera = esperaClic;
+    return () => {
+      gesto.current?.();
+      espera.current?.();
+    };
   }, []);
 
+  /** El clic bloqueado (`clave`) vuelve a valer después del clic que sigue al soltar (misma tarea que el pointerup). */
+  const liberarClic = (clave: string) => {
+    window.setTimeout(() => {
+      if (sinClic.current === clave) sinClic.current = null;
+    }, 0);
+  };
+  /** Un gesto cancelado sin soltar (Esc, captura perdida): el clic sigue bloqueado hasta el pointerup de ese puntero. */
+  const esperarSoltar = (pointerId: number, clave: string) => {
+    esperaClic.current?.();
+    function alSoltarDespues(ev: PointerEvent) {
+      if (ev.pointerId !== pointerId) return;
+      quitar();
+      liberarClic(clave);
+    }
+    function quitar() {
+      document.removeEventListener('pointerup', alSoltarDespues, true);
+      document.removeEventListener('pointercancel', alSoltarDespues, true);
+      if (esperaClic.current === quitar) esperaClic.current = null;
+    }
+    document.addEventListener('pointerup', alSoltarDespues, true);
+    document.addEventListener('pointercancel', alSoltarDespues, true);
+    esperaClic.current = quitar;
+  };
+
   const ordenar = (col: ColumnaTabla<T>) => {
-    if (sinClic.current) {
-      sinClic.current = false;
+    if (sinClic.current === `orden:${col.id}`) {
+      sinClic.current = null;
       return;
     }
     const campo = campoOrden(col);
@@ -284,19 +477,26 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
     lista.onEstado({ tipo: 'orden', valor: alternarOrden(lista.estado.orden, campo) });
   };
 
-  /** Estirar o angostar con el asa: el ancho va al <col> por ref y se guarda al soltar. */
+  /** Estirar o angostar con el asa: el ancho va al <col> por ref y se guarda al soltar (anchoAlSoltar). */
   const alPresionarAsa = (e: EventoPuntero<HTMLElement>, col: ColumnaTabla<T>) => {
     if (e.button !== 0 || !e.isPrimary || !ajustable || !preferencias || terminar.current) return;
     e.preventDefault();
     e.stopPropagation();
+    esperaClic.current?.();
+    sinClic.current = null;
+    const clave = `ajuste:${col.id}`;
     const el = e.currentTarget;
     const pointerId = e.pointerId;
     const x0 = e.clientX;
     const ancho0 = geometria.anchos[col.id] ?? 0;
+    const base = forma.anchos[col.id] ?? ancho0;
     const total0 = geometria.total;
-    const min = col.anchoMin ?? ANCHO_MIN;
-    const max = Math.max(min, col.anchoMax ?? ANCHO_MAX);
+    // La flexible se pinta más ancha que su máximo: el asa arranca de ahí sin saltar (limitesDelAsa).
+    const { min, max } = limitesDelAsa({
+      base, pintado: ancho0, flexible: Boolean(col.flexible), anchoMin: col.anchoMin, anchoMax: col.anchoMax,
+    });
     let ancho = ancho0;
+    let movido = false;
     const pintar = (px: number) => {
       const c = cols.current.get(col.id);
       if (c) c.style.width = `${px}px`;
@@ -312,39 +512,57 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
     };
     const alMover = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return;
+      if ((ev.buttons & 1) === 0) {
+        // Se soltó sin que llegara el pointerup (menú contextual, otra ventana): se cancela.
+        terminarGesto(true);
+        return;
+      }
       ancho = limitarAncho(ancho0 + ev.clientX - x0, min, max);
+      if (!movido && ancho !== ancho0) {
+        movido = true;
+        sinClic.current = clave;
+      }
       pintar(ancho);
       ev.preventDefault();
     };
     const alSoltar = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return;
       const conectado = el.isConnected;
-      limpiar();
-      // Se guarda al soltar (D38), solo si el asa sigue en el DOM.
-      if (conectado) preferencias.guardarAncho(col.id, ancho);
-      restaurar();
+      // Se guarda al soltar (D38), solo si el asa sigue en el DOM y el puntero se movió (anchoAlSoltar; la flexible,
+      // sin el espacio que sobra).
+      const px = anchoAlSoltar({
+        base, pintado: ancho0, px: ancho, flexible: Boolean(col.flexible),
+        anchoMin: col.anchoMin, anchoMax: col.anchoMax,
+      });
+      if (conectado && px !== null) preferencias.guardarAncho(col.id, px);
+      terminarGesto(true);
     };
     const alCancelar = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return;
-      cancelar();
+      terminarGesto(ev.type === 'pointercancel');
     };
     const alTeclear = (ev: KeyboardEvent) => {
       if (ev.key !== 'Escape') return;
       ev.preventDefault();
       ev.stopPropagation();
-      cancelar();
+      terminarGesto(false);
     };
-    function limpiar() {
+    function terminarGesto(conPunteroArriba: boolean) {
       document.removeEventListener('pointermove', alMover, true);
       document.removeEventListener('pointerup', alSoltar, true);
       document.removeEventListener('pointercancel', alCancelar, true);
       document.removeEventListener('lostpointercapture', alCancelar, true);
       window.removeEventListener('keydown', alTeclear, true);
       terminar.current = null;
-    }
-    function cancelar() {
-      limpiar();
       restaurar();
+      try {
+        if (el.hasPointerCapture(pointerId)) el.releasePointerCapture(pointerId);
+      } catch {
+        // ya no tenía la captura (o el asa salió del DOM)
+      }
+      if (!movido) return;
+      if (conPunteroArriba) liberarClic(clave);
+      else esperarSoltar(pointerId, clave);
     }
     try {
       el.setPointerCapture(pointerId);
@@ -356,25 +574,34 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
     document.addEventListener('pointercancel', alCancelar, true);
     document.addEventListener('lostpointercapture', alCancelar, true);
     window.addEventListener('keydown', alTeclear, true);
-    terminar.current = cancelar;
+    terminar.current = () => terminarGesto(true);
   };
 
-  /** Doble clic en el asa: al texto más largo que se ve (máximo 480 px). */
+  /** Doble clic en el asa: al texto que se ve (máximo 480 px), medido con el ancho propio de cada contenido. */
   const ajustarAlContenido = (col: ColumnaTabla<T>) => {
+    if (sinClic.current === `ajuste:${col.id}`) {
+      sinClic.current = null;
+      return;
+    }
     const t = tabla.current;
     if (!t || !ajustable || !preferencias) return;
     const selector = CSS.escape(col.id);
     const medidas = Array.from(t.querySelectorAll<HTMLElement>(`[data-celda="${selector}"]`)).map((el) => el.scrollWidth);
     const titulo = t.querySelector<HTMLElement>(`[data-encabezado="${selector}"]`);
     if (titulo) medidas.push(titulo.scrollWidth + (campoOrden(col) ? ANCHO_FLECHA : 0));
+    // La flexible guarda el ancho al contenido, sin sumar lo que sobra (el que se ve lo vuelve a poner geometriaTabla).
     const px = anchoAlContenido(medidas, col);
     if (px !== null) preferencias.guardarAncho(col.id, px);
   };
 
   /** Mover la columna: presionar el título y arrastrar más de 5 px; al soltar, mover(columna, hueco). */
   const alPresionarTitulo = (e: EventoPuntero<HTMLElement>, col: ColumnaTabla<T>) => {
-    sinClic.current = false;
+    // r1, 6g: con el dedo no se mueve (el navegador desplaza la tabla); quedan las flechas de «Ajustar tabla».
+    if (e.pointerType === 'touch') return;
     if (e.button !== 0 || !e.isPrimary || !ajustable || !preferencias || forma.fijas[col.id] || terminar.current) return;
+    esperaClic.current?.();
+    sinClic.current = null;
+    const clave = `orden:${col.id}`;
     const el = e.currentTarget;
     const pointerId = e.pointerId;
     const x0 = e.clientX;
@@ -389,9 +616,14 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
     const medir = () => {
       const c = caja.current;
       if (!c) return;
-      const rects = enOrden.map((v) => ths.current.get(v)?.getBoundingClientRect());
-      if (rects.some((r) => !r)) return;
-      const bordes = rects as DOMRect[];
+      const rects: DOMRect[] = [];
+      for (const v of enOrden) {
+        const r = ths.current.get(v)?.getBoundingClientRect();
+        if (!r) return;
+        rects.push(r);
+      }
+      // r1, 6f: con la tabla corrida de lado, lo que quedó debajo de una fija no cuenta.
+      const bordes = recortarBordes(rects, enOrden.map((v) => lados[v]));
       destino = destinoArrastre(enOrden, lados, col.id, indiceDestino(bordes, puntero.x));
       const borde = destino.cambia && destino.hueco !== null ? bordeDeHueco(bordes, destino.hueco) : null;
       const r = c.getBoundingClientRect();
@@ -401,7 +633,7 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
     // Cerca de los bordes la tabla se desplaza sola (como el tablero); si el título sale del DOM, se cancela.
     const paso = () => {
       if (!el.isConnected) {
-        limpiar();
+        terminarGesto(false);
         return;
       }
       const c = caja.current;
@@ -417,16 +649,16 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
     };
     const alMover = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return;
+      if ((ev.buttons & 1) === 0) {
+        // Se soltó sin que llegara el pointerup (antes del umbral, o un menú contextual después): no hay arrastre.
+        terminarGesto(true);
+        return;
+      }
       puntero = { x: ev.clientX, y: ev.clientY };
       if (!iniciado) {
-        // Sin el botón presionado (se soltó fuera antes del umbral), no hay arrastre.
-        if ((ev.buttons & 1) === 0) {
-          limpiar();
-          return;
-        }
         if (!superaUmbralColumna(ev.clientX - x0, ev.clientY - y0)) return;
         iniciado = true;
-        sinClic.current = true;
+        sinClic.current = clave;
         try {
           el.setPointerCapture(pointerId);
         } catch {
@@ -443,20 +675,20 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
       if (ev.pointerId !== pointerId) return;
       // Antes del umbral es un clic: lo atiende el onClick del título (ordena).
       const elegido = iniciado && el.isConnected ? destino : null;
-      limpiar();
+      terminarGesto(true);
       if (elegido?.cambia && elegido.hueco !== null) preferencias.mover(col.id, elegido.hueco);
     };
     const alCancelar = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return;
-      limpiar();
+      terminarGesto(ev.type === 'pointercancel');
     };
     const alTeclear = (ev: KeyboardEvent) => {
       if (ev.key !== 'Escape' || !iniciado) return;
       ev.preventDefault();
       ev.stopPropagation();
-      limpiar();
+      terminarGesto(false);
     };
-    function limpiar() {
+    function terminarGesto(conPunteroArriba: boolean) {
       window.cancelAnimationFrame(cuadro);
       document.removeEventListener('pointermove', alMover, true);
       document.removeEventListener('pointerup', alSoltar, true);
@@ -464,54 +696,25 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
       document.removeEventListener('lostpointercapture', alCancelar, true);
       window.removeEventListener('keydown', alTeclear, true);
       terminar.current = null;
-      if (iniciado) {
-        setMoviendo(null);
-        // El clic que sigue al soltar (si llega) no ordena; después, el título vuelve a ordenar.
-        window.setTimeout(() => {
-          sinClic.current = false;
-        }, 0);
+      if (!iniciado) return;
+      setMoviendo(null);
+      try {
+        if (el.hasPointerCapture(pointerId)) el.releasePointerCapture(pointerId);
+      } catch {
+        // ya no tenía la captura (o el título salió del DOM)
       }
+      // Soltando, el clic que sigue no ordena; cancelado sin soltar, tampoco el que llegue con el pointerup de después.
+      if (conPunteroArriba) liberarClic(clave);
+      else esperarSoltar(pointerId, clave);
     }
     document.addEventListener('pointermove', alMover, true);
     document.addEventListener('pointerup', alSoltar, true);
     document.addEventListener('pointercancel', alCancelar, true);
     document.addEventListener('lostpointercapture', alCancelar, true);
     window.addEventListener('keydown', alTeclear, true);
-    terminar.current = limpiar;
+    terminar.current = () => terminarGesto(true);
   };
 
-  // ── filas ──
-  const alClicFila = (e: EventoRaton<HTMLTableRowElement>, fila: T) => {
-    if (!onFila) return;
-    const interactivo = (e.target as HTMLElement).closest(INTERACTIVO);
-    if (interactivo && e.currentTarget.contains(interactivo)) return;
-    if (window.getSelection()?.toString()) return;
-    onFila(fila);
-  };
-  const alTeclearFila = (e: EventoTeclado<HTMLTableRowElement>, fila: T) => {
-    if (onFila && e.key === 'Enter' && e.target === e.currentTarget) {
-      e.preventDefault();
-      onFila(fila);
-    }
-  };
-
-  const ultimaIzquierda = [...visibles].reverse().find((v) => forma.fijas[v] === 'izquierda');
-  const primeraDerecha = visibles.find((v) => forma.fijas[v] === 'derecha');
-  const estiloFija = (v: string): CSSProperties | undefined => {
-    const lado = forma.fijas[v];
-    if (!lado) return undefined;
-    return lado === 'izquierda' ? { left: geometria.offsets[v] ?? 0 } : { right: geometria.offsets[v] ?? 0 };
-  };
-  const clasesFija = (v: string) => {
-    if (!forma.fijas[v]) return '';
-    if (v === ultimaIzquierda) return TABLE.bordeFijaIzquierda;
-    if (v === primeraDerecha) return TABLE.bordeFijaDerecha;
-    return '';
-  };
-  // Los mensajes de ancho completo (vacío, error, separadores) quedan a la vista aunque la tabla se corra de lado.
-  const anchoMensaje: CSSProperties | undefined = disponible === null
-    ? undefined
-    : { width: Math.max(0, disponible - RELLENO_CELDA) };
   const simple = !lista;
 
   return (
@@ -557,7 +760,7 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
                       ref={(el) => {
                         if (el) el.indeterminate = estadoSeleccion === 'algunas';
                       }}
-                      disabled={vista !== 'filas' || !clavesPagina.length}
+                      disabled={recargando || vista !== 'filas' || !clavesPagina.length}
                       onChange={() => onSeleccion?.(alternarSeleccionPagina(seleccion, clavesPagina))}
                       className={TABLE.casilla}
                     />
@@ -585,8 +788,8 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
                       }}
                       scope="col"
                       aria-sort={campo ? (direccion ? ARIA_ORDEN[direccion] : 'none') : undefined}
-                      style={estiloFija(v)}
-                      className={`${TABLE.encabezado} ${forma.fijas[v] ? TABLE.encabezadoFijo : ''} ${clasesFija(v)} ${moviendo?.id === v ? TABLE.encabezadoArrastrado : ''}`}
+                      style={estiloFija(v, forma.fijas, geometria.offsets)}
+                      className={`${TABLE.encabezado} ${forma.fijas[v] ? TABLE.encabezadoFijo : ''} ${clasesFija(v, forma.fijas, visibles)} ${moviendo?.id === v ? TABLE.encabezadoArrastrado : ''}`}
                     >
                       <div className={TABLE.encabezadoInterior}>
                         {campo ? (
@@ -611,9 +814,7 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
                       </div>
                       {ajustable && (
                         <span
-                          role="separator"
-                          aria-orientation="vertical"
-                          aria-label={`Ancho de «${col.titulo}»`}
+                          aria-hidden="true"
                           title="Arrastra para cambiar el ancho; doble clic para ajustarlo al texto"
                           onPointerDown={(e) => alPresionarAsa(e, col)}
                           onDoubleClick={() => ajustarAlContenido(col)}
@@ -625,92 +826,33 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
                 })}
               </tr>
             </thead>
-            <tbody className={recargando && vista === 'filas' ? TABLE.atenuado : undefined}>
-              {vista === 'esqueleto' && <Esqueleto columnas={nColumnas} />}
-              {vista === 'error' && (
-                <tr>
-                  <td colSpan={nColumnas} className={TABLE.error}>
-                    <div role="alert" className={TABLE.mensajeFijo} style={anchoMensaje}>
-                      {textoDeError(error, 'No se pudo cargar la lista')}
-                      {onReintentar && (
-                        <button type="button" onClick={onReintentar} className={TABLE.botonReintentar}>
-                          <RotateCw size={12} aria-hidden="true" />
-                          Reintentar
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              )}
-              {vista === 'vacio' && (
-                <tr>
-                  <td colSpan={nColumnas} className={TABLE.vacio}>
-                    <div className={TABLE.mensajeFijo} style={anchoMensaje}>{vacio ?? TEXTO_VACIO}</div>
-                  </td>
-                </tr>
-              )}
-              {vista === 'filas' && renglones.map((r, i) => {
-                if (r.tipo === 'grupo') {
-                  return (
-                    <tr key={`grupo-${i}-${r.grupo}`}>
-                      <td colSpan={nColumnas} className={TABLE.grupoCelda}>
-                        <div className={TABLE.mensajeFijo} style={anchoMensaje}>
-                          {tituloGrupo ? tituloGrupo(r.grupo, r.n) : `${r.grupo} · ${r.n}`}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                }
-                const fila = r.fila as T;
-                const clave = claveDe(fila, r.indice);
-                const seleccionada = seleccionActiva && seleccion.includes(clave);
-                const propia = claseFila?.(fila);
-                const fondo = seleccionada ? TABLE.filaSeleccionada : `${propia || TABLE.filaFondo} ${propia ? '' : TABLE.filaHover}`;
-                return (
-                  <tr
-                    key={String(clave)}
-                    tabIndex={onFila ? 0 : undefined}
-                    onClick={onFila ? (e) => alClicFila(e, fila) : undefined}
-                    onKeyDown={onFila ? (e) => alTeclearFila(e, fila) : undefined}
-                    className={`${TABLE.fila} ${fondo} ${onFila ? TABLE.filaClic : ''}`}
-                  >
-                    {seleccionActiva && (
-                      <td className={TABLE.celdaCasilla}>
-                        <input
-                          type="checkbox"
-                          aria-label="Seleccionar esta fila"
-                          checked={seleccionada}
-                          disabled={lista?.seleccionable ? !lista.seleccionable(fila) : false}
-                          onChange={() => onSeleccion?.(alternarSeleccion(seleccion, clave))}
-                          className={TABLE.casilla}
-                        />
-                      </td>
-                    )}
-                    {visibles.map((v) => {
-                      const col = porId.get(v) as ColumnaTabla<T>;
-                      const contenido = col.celda(fila);
-                      const titulo = col.titleCelda?.(fila)
-                        ?? (typeof contenido === 'string' || typeof contenido === 'number' ? String(contenido) : undefined);
-                      return (
-                        <td
-                          key={v}
-                          title={titulo ?? undefined}
-                          style={estiloFija(v)}
-                          className={`${TABLE.celda} ${forma.fijas[v] ? TABLE.celdaFija : ''} ${clasesFija(v)} ${ALINEAR[col.alinear ?? 'izquierda']}`}
-                        >
-                          <div data-celda={v} className={TABLE.contenido}>{contenido}</div>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
-            </tbody>
+            <CuerpoTabla
+              vista={vista}
+              renglones={renglones}
+              visibles={visibles}
+              porId={porId}
+              fijas={forma.fijas}
+              offsets={geometria.offsets}
+              nColumnas={nColumnas}
+              disponible={disponible}
+              recargando={recargando}
+              error={error}
+              onReintentar={onReintentar}
+              vacio={vacio}
+              tituloGrupo={tituloGrupo}
+              claveDe={claveDe}
+              claseFila={claseFila}
+              onFila={onFila}
+              seleccionActiva={seleccionActiva}
+              seleccion={seleccion}
+              onSeleccion={onSeleccion}
+              seleccionable={seleccionable}
+            />
           </table>
         </div>
       </div>
       {(lista || pie || cargando) && (
-        <div className={TABLE.pie}>
+        <div data-pie-tabla className={TABLE.pie}>
           {pie ? <div className="min-w-0">{pie}</div> : null}
           {cargando ? (
             <span role="status" className="ml-auto">Cargando…</span>

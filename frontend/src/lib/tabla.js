@@ -42,6 +42,10 @@
  *    firmaSeleccion), la búsqueda con retardo (crearBusquedaConRetardo y sincronizarBusqueda), 'N resultados'
  *    (textoResultados), el Contador de cada pestaña (estadoDeConteo), las pestañas con su filtro (opcionesDeVista,
  *    accionPestana y alternarEstado) y las flechas de 'Ajustar tabla' (puedeDesplazar).
+ *  - T4D r1: el ancho que se guarda al soltar el asa (anchoAlSoltar: la flexible sin el espacio que sobra), el estado
+ *    de 'N resultados' (estadoDelTotal), los títulos recortados a la zona libre entre las fijas (recortarBordes), los
+ *    estados filtrados que la pestaña no tiene (etiquetasDeEstados y opcionesConMarcados), los paneles dentro de la
+ *    ventana (posicionPanel) y el Esc de la pantalla completa (saleConEsc).
  */
 
 import { normalizarBusqueda } from './busqueda.js';
@@ -1342,7 +1346,8 @@ export function ajustarAlAncho(definicion, visibles, anchos, disponible) {
     const { min, max } = limitesDe(c);
     const guardado = anchos?.[id];
     const actual = limitarAncho(typeof guardado === 'number' ? guardado : (c.ancho ?? ANCHO_POR_DEFECTO), min, max);
-    return { id, min, max, actual };
+    // T4D r1 (6n): con anchoMin 0 y ancho 0 la proporción sería 0 (y el tope, una división por cero): pesa como 1 px.
+    return { id, min, max, actual: actual > 0 ? actual : 1 };
   });
   if (!columnas.length) return null;
   /** @type {Record<string, number>} */
@@ -1711,6 +1716,9 @@ export function opcionesDeVista(opciones, vista) {
  * La acción de una pestaña de BarraTabla: {tipo: 'vista', valor}, o {tipo: 'cambiar', cambios: {vista, estados}} si
  * la pestaña nueva no tiene alguno de los estados filtrados (se quitan: si no, filtrarían sin verse). Sin opciones de
  * estados (la barra no tiene filtro), el filtro no se toca. Como todo cambio, vuelve a la página 1.
+ * T4D r1, punto 5: úsalo también en tarjetas y cajas del flujo (todo lo que pone una vista; T7 en adelante), con las
+ * mismas opciones que la barra: onEstado(accionPestana(estado, vista, opcionesEstados)). Lo que igual quede filtrado
+ * fuera de la pestaña (la sesión restaurada) lo muestra FiltroEstados, que se puede desmarcar.
  * @param {EstadoTabla} estado
  * @param {string} vista
  * @param {OpcionesEstados | null | undefined} opciones
@@ -1757,4 +1765,141 @@ export function puedeDesplazar(orden, fijas, id, paso) {
   if (i < 0 || !s) return false;
   // moverColumna no mueve una fija ni cruza las de los lados: el orden queda igual.
   return !iguales(moverColumna(lista, id, s > 0 ? i + 2 : i - 1, lados), lista);
+}
+
+// ─── T4D r1: gestos sin clics fantasma, columna flexible, pantalla completa y filtros a la vista ──────────────────
+
+/**
+ * El ancho que se guarda al soltar el asa (TablaEstandar, T4D r1, punto 3): `base` es el ancho de las preferencias (sin
+ * lo que sobra de la tarjeta), `pintado` el que se veía al empezar y `px` el del puntero al soltar.
+ *  - si el puntero no se movió (px === pintado), null: no se guarda (un clic, o el primero de un doble clic);
+ *  - una columna que no es flexible guarda px;
+ *  - la flexible, al ensanchar, guarda base + (px − pintado): lo que se estiró, sin el espacio que sobra (que en otro
+ *    equipo no existe); al angostar mientras llena el espacio, min(base, px);
+ *  - siempre entre anchoMin y anchoMax (64 y 640 si la columna no los dice). Un px que no es número da null.
+ * @param {{base: number, pintado: number, px: number, flexible?: boolean, anchoMin?: number, anchoMax?: number}} entrada
+ * @returns {number | null}
+ */
+export function anchoAlSoltar({ base, pintado, px, flexible = false, anchoMin, anchoMax }) {
+  if (typeof px !== 'number' || !Number.isFinite(px) || px === pintado) return null;
+  const { min, max } = limitesDe({ anchoMin, anchoMax });
+  let ancho = px;
+  if (flexible) ancho = px > pintado ? base + (px - pintado) : Math.min(base, px);
+  return limitarAncho(ancho, min, max);
+}
+
+/**
+ * Entre qué anchos se mueve el asa mientras se arrastra (TablaEstandar, T4D r1): el mínimo y el máximo de la columna;
+ * en la flexible que llena espacio, el tope es pintado + (máximo − base), para que no salte al máximo al primer
+ * movimiento (se pinta más ancha que él) y se pueda ensanchar hasta que su base (anchoAlSoltar) llegue al máximo.
+ * @param {{base: number, pintado: number, flexible?: boolean, anchoMin?: number, anchoMax?: number}} entrada
+ * @returns {{min: number, max: number}}
+ */
+export function limitesDelAsa({ base, pintado, flexible = false, anchoMin, anchoMax }) {
+  const { min, max } = limitesDe({ anchoMin, anchoMax });
+  if (!flexible || !(pintado > base)) return { min, max };
+  return { min, max: Math.max(max, pintado + (max - base)) };
+}
+
+/**
+ * El estado del número de 'N resultados' de BarraTabla (la prop estadoTotal; T4D r1, 6a), con lo de useListado:
+ *    estadoTotal={estadoDelTotal({total: listado.total, cargando: listado.cargandoInicial,
+ *      recargando: listado.recargando, error: listado.error})}
+ * Con error, 'error' ('—': nunca un número viejo junto a la fila de error); sin datos, 'cargando' (la barra gris);
+ * recargando, 'actualizando' (el número atenuado); si no, 'listo'.
+ * @param {{total: number | null | undefined, cargando?: boolean, recargando?: boolean, error?: unknown}} entrada
+ * @returns {'cargando' | 'actualizando' | 'error' | 'listo'}
+ */
+export function estadoDelTotal({ total, cargando = false, recargando = false, error = null }) {
+  if (error !== null && error !== undefined && error !== false) return 'error';
+  if (cargando || typeof total !== 'number' || !Number.isFinite(total)) return 'cargando';
+  return recargando ? 'actualizando' : 'listo';
+}
+
+/**
+ * Los bordes de los títulos visibles recortados a la zona libre entre las fijas (TablaEstandar, T4D r1, 6f): con la
+ * tabla corrida de lado, lo que quedó debajo de una fija (sticky) no cuenta para indiceDestino ni para la línea azul.
+ * `lados` va en el mismo orden que `bordes` ('izquierda', 'derecha' o nada). La zona va del borde derecho de la última
+ * fija de la izquierda al borde izquierdo de la primera de la derecha; las fijas quedan como están. Devuelve [inicio,
+ * fin] por título (acepta pares o rectángulos {left, right}).
+ * @param {ReadonlyArray<[number, number] | {left: number, right: number}>} bordes
+ * @param {ReadonlyArray<LadoFijo | null | undefined>} lados
+ * @returns {Array<[number, number]>}
+ */
+export function recortarBordes(bordes, lados) {
+  const pares = (bordes ?? []).map((b) => (Array.isArray(b) ? [b[0], b[1]] : [b.left, b.right]));
+  let inicio = -Infinity;
+  let fin = Infinity;
+  pares.forEach(([l, r], i) => {
+    if (lados?.[i] === 'izquierda') inicio = Math.max(inicio, r);
+    if (lados?.[i] === 'derecha') fin = Math.min(fin, l);
+  });
+  const tope = Math.max(inicio, fin);
+  const dentro = (x) => Math.min(tope, Math.max(inicio, x));
+  return pares.map(([l, r], i) => (lados?.[i] ? [l, r] : [dentro(l), dentro(r)]));
+}
+
+/**
+ * Las etiquetas legibles de los estados que se conocen en la barra (T4D r1, punto 5): las de las opciones de todas las
+ * pestañas (`vistas`), o las del arreglo si son las mismas para todas. FiltroEstados las usa para un estado filtrado
+ * que la pestaña de hoy no tiene. {valor: etiqueta}; la primera etiqueta de un valor gana.
+ * @param {OpcionesEstados | null | undefined} opciones
+ * @param {ReadonlyArray<string | null>} vistas
+ * @returns {Record<string, string>}
+ */
+export function etiquetasDeEstados(opciones, vistas) {
+  const listas = typeof opciones === 'function'
+    ? (vistas ?? []).map((v) => opcionesDeVista(opciones, v))
+    : [opcionesDeVista(opciones, null)];
+  /** @type {Record<string, string>} */
+  const etiquetas = {};
+  for (const lista of listas) for (const o of lista) if (!tiene(etiquetas, o.valor)) etiquetas[o.valor] = o.etiqueta;
+  return etiquetas;
+}
+
+/**
+ * Lo que muestra el panel de FiltroEstados (T4D r1, punto 5: un filtro nunca queda escondido): las opciones de la
+ * pestaña y, después, los estados filtrados que la pestaña no tiene (los dejó una tarjeta, una caja del flujo o la
+ * sesión restaurada), marcados, con su etiqueta legible si se conoce (`etiquetas`) o el valor crudo si no, para poder
+ * desmarcarlos. alternarEstado sobre esta lista conserva los demás.
+ * @param {ReadonlyArray<OpcionEstado>} opciones
+ * @param {ReadonlyArray<string>} seleccion
+ * @param {Record<string, string>} [etiquetas]
+ * @returns {OpcionEstado[]}
+ */
+export function opcionesConMarcados(opciones, seleccion, etiquetas = {}) {
+  const propias = [...(opciones ?? [])];
+  const conocidas = new Set(propias.map((o) => o.valor));
+  const extras = [];
+  for (const valor of seleccion ?? []) {
+    if (conocidas.has(valor)) continue;
+    conocidas.add(valor);
+    extras.push({ valor, etiqueta: tiene(etiquetas, valor) ? etiquetas[valor] : valor });
+  }
+  return [...propias, ...extras];
+}
+
+/**
+ * El `left` (en px, desde el borde izquierdo del botón) del panel de FiltroEstados o MenuAjustes para que no se salga
+ * de la ventana (T4D r1, 6k): alineado al borde izquierdo del botón ('izquierda') o al derecho ('derecha'), y corrido lo
+ * necesario para quedar a `margen` px de los bordes; si el panel es más ancho que la ventana, desde el margen izquierdo.
+ * @param {{boton: {left: number, right: number}, ancho: number, ventana: number, alinear?: 'izquierda' | 'derecha',
+ *   margen?: number}} entrada
+ * @returns {number}
+ */
+export function posicionPanel({ boton, ancho, ventana, alinear = 'izquierda', margen = 8 }) {
+  const deseado = alinear === 'derecha' ? boton.right - ancho : boton.left;
+  const absoluto = Math.max(margen, Math.min(deseado, ventana - margen - ancho));
+  return Math.round(absoluto - boton.left);
+}
+
+/**
+ * Si un Esc sale de la pantalla completa (usePantallaCompleta, T4D r1, punto 4): solo si nadie más lo atendió, ni un
+ * menú, el filtro o la búsqueda (defaultPrevented), ni hay un Modal, ModalMotivo o confirmación encima (`dialogoEncima`:
+ * el foco en un [role=dialog] o [aria-modal=true] fuera de la tarjeta, o uno de esos abierto).
+ * @param {{tecla: string, defaultPrevented?: boolean, dialogoEncima?: boolean}} entrada
+ * @returns {boolean}
+ */
+export function saleConEsc({ tecla, defaultPrevented = false, dialogoEncima = false }) {
+  return tecla === 'Escape' && !defaultPrevented && !dialogoEncima;
 }
