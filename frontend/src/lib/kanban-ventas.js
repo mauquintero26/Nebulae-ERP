@@ -21,7 +21,9 @@
  *    return_to a la lista). El Hub conserva su envío (abrirEnvioHub → confirmarEnvioHub).
  *  - T3C r1: ningún tablero ofrece enviar una COT que enviar_cotizacion_para_confirmacion rechaza con 400: una VENCIDA
  *    («Primero pásala a Borrador para retomarla.») o una sin productos o sin total («Calcula los precios antes de
- *    enviarla.», el criterio de «Completar precios» de accionSiguienteCOT).
+ *    enviarla.», el criterio de «Completar precios» de accionSiguienteCOT). Tampoco ofrece cancelar una SC con una
+ *    cotización activa o un pedido vigente (N4, el 409 de POST /cancelar; pasosParaCancelarSolicitud de listas-ventas.js
+ *    y, en el Hub, scConCot): «No se puede cancelar: tiene una cotización o un pedido vigente.».
  *
  * Los resultados tienen la forma de lib/kanban.js: {tipo: 'ninguno'} | {tipo: 'bloqueado', motivo, enlace?} |
  * {tipo: 'cambio', estado} | {tipo: 'accion', accion}. Las acciones que la pantalla resuelve: 'enviar', 'cancelar',
@@ -45,7 +47,7 @@ import {
   ESTADOS_SC, PASOS_SC, ESTADOS_SC_HEREDADOS, ESTADOS_SC_CON_CONFIRMACION, infoEstadoSolicitud, puedeReiniciar,
 } from './estados-solicitud.js';
 import { infoEstadoCotizacion } from './estados-cotizacion.js';
-import { pedidoVigente, cotizacionesVigentes } from './listas-ventas.js';
+import { pedidoVigente, cotizacionesVigentes, pasosParaCancelarSolicitud } from './listas-ventas.js';
 import {
   avisoCambiosCliente, etiquetaChipCambios, RUTA_LISTA_SOLICITUDES, RUTA_LISTA_COTIZACIONES,
 } from './cambios-cliente.js';
@@ -91,6 +93,7 @@ const TEXTO = congelar({
   ABRELA_ENVIAR: 'Ábrela para enviar.',
   ABRELA_CAMBIAR: 'Ábrela para cambiar su estado.',
   NO_REINICIAR: 'No se puede reiniciar: tiene una cotización o un pedido vigente.',
+  NO_CANCELAR: 'No se puede cancelar: tiene una cotización o un pedido vigente.',
   SOLO_REINICIABLE: 'Solo se reinicia una solicitud pendiente por confirmación o confirmada.',
   PAPELERA: 'Una solicitud cancelada se restaura desde la Papelera.',
   SC_SOLO_CLIENTE: 'Solo el cliente confirma la solicitud con su enlace.',
@@ -280,7 +283,10 @@ function reglaHubSC(sc, destino, scConCot) {
   if (esSoporte(sc)) return bloqueado(oracion(motivoNoCancelable({ ...sc, tipo: 'SC' })));
   if (destino === 'Cancelado') {
     const motivo = motivoNoCancelable({ ...sc, tipo: 'SC' });
-    return motivo ? bloqueado(oracion(motivo)) : accion('cancelar');
+    if (motivo) return bloqueado(oracion(motivo));
+    // T3C r1 (punto 3): N4, como el 409 del servidor; en el Hub cuenta también scConCot (la fila puede no traer sus documentos).
+    if (scConCot?.has(sc?.id) || pasosParaCancelarSolicitud(sc).length > 0) return bloqueado(TEXTO.NO_CANCELAR, enlace);
+    return accion('cancelar');
   }
   if (estado === 'CANCELADA') return bloqueado(TEXTO.PAPELERA);
   if (destino === 'Acción Tomada') return bloqueado(TEXTO.SC_ACCION_TOMADA);
@@ -334,7 +340,8 @@ function reglaHubVEN(ven, destino) {
  * Qué pasa al soltar una fila del Hub (SC, COT o VEN/PVEN, con su `tipo`) de la columna `origen` en `destino` (claves
  * de COLUMNAS_HUB), con la matriz de «comportamiento» de KANBAN-hub-ventas y C15(a):
  *  - la misma columna: ninguno.
- *  - SC: → Cancelado, 'cancelar' (o el motivo de N3); → En gestión, 'enviar' si está Asignada y con productos (si no,
+ *  - SC: → Cancelado, 'cancelar' (o el motivo de N3; r1: con una cotización activa de scConCot o un documento vigente
+ *    en la fila, bloqueado «No se puede cancelar: …»); → En gestión, 'enviar' si está Asignada y con productos (si no,
  *    el bloqueo de cada caso, con el enlace a la solicitud cuando hay que hacer algo en ella); → No resuelto,
  *    'reiniciar' si está Pendiente por confirmación o Confirmada y puedeReiniciar (bloqueado con una cotización activa
  *    de scConCot o con los documentos de la fila, D22); → Acción tomada, siempre bloqueado; cancelada: la Papelera.
@@ -661,7 +668,9 @@ const CLAVES_SC = congelar(COLUMNAS_SC.map((c) => c.clave));
  *    confirmacionReiniciarSolicitud) solo si puedeReiniciar con las cotizaciones y los pedidos_venta de la fila (si no,
  *    D22), y solo en la columna donde va a quedar (Asignada con asesor, Nueva sin él);
  *  - entre Nueva y Asignada: bloqueado (el asesor se pone o se quita en la solicitud);
- *  - → Cancelada: acción 'cancelar' (la pantalla pide el motivo).
+ *  - → Cancelada: acción 'cancelar' (la pantalla pide el motivo); con una cotización activa o un pedido vigente en la fila
+ *    (pasosParaCancelarSolicitud, N4), bloqueado 'No se puede cancelar: tiene una cotización o un pedido vigente.' con
+ *    el enlace (T3C r1).
  * Los enlaces llevan ?return_to= de `returnTo` (por defecto la lista de Solicitudes).
  * @param {any} sc
  * @param {string} origen
@@ -677,7 +686,10 @@ export function reglaSoltarSC(sc, origen, destino, { puedeEnviar = false, return
   if (estado === 'CANCELADA') return bloqueado(TEXTO.PAPELERA);
   if (esSoporte(sc)) return bloqueado(oracion(motivoNoCancelable({ ...sc, tipo: 'SC' })));
   if (destino === 'confirmada') return bloqueado(TEXTO.SC_SOLO_CLIENTE);
-  if (destino === 'cancelada') return accion('cancelar');
+  if (destino === 'cancelada') {
+    // T3C r1 (punto 3): N4, como el 409 del servidor.
+    return pasosParaCancelarSolicitud(sc).length > 0 ? bloqueado(TEXTO.NO_CANCELAR, enlace) : accion('cancelar');
+  }
   if (destino === 'pendiente') {
     if (estado === 'BORRADOR') return bloqueado(TEXTO.ASIGNA_ASESOR, enlace);
     if (estado === 'ASIGNADA') {

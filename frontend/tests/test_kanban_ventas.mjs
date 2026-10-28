@@ -10,7 +10,8 @@
  *  - Listas: motivoTransicionPedido (los textos de N2 sin el número), COLUMNAS_PEDIDO / reglaSoltarPedido,
  *    COLUMNAS_COT / reglaSoltarCotizacion y COLUMNAS_SC / reglaSoltarSC (RP16: sin puedeEnviar no se envía; D22).
  *  - Ronda r1 (fixes-3C-r1): una COT vencida o sin precios no se ofrece para enviar (el servidor da 400), tarjetaHub
- *    acepta returnTo (cruce C5) y estadoDeTarjeta se exporta.
+ *    acepta returnTo (cruce C5) y estadoDeTarjeta se exporta. Punto 3 (decisión del controlador, opción A): una SC con
+ *    una cotización activa o un pedido vigente no se ofrece para cancelar (N4: el servidor da 409).
  */
 
 import assert from 'node:assert/strict';
@@ -41,6 +42,13 @@ const abrir = (tipo, id, returnTo) => ({
 const RE_COTIZAR = 'Ábrela para re-cotizar; te pedirá la razón.';
 const ABRELA_ENVIAR = 'Ábrela para enviar.';
 const NO_REINICIAR = 'No se puede reiniciar: tiene una cotización o un pedido vigente.';
+const NO_CANCELAR = 'No se puede cancelar: tiene una cotización o un pedido vigente.';
+/** Los documentos de una SC: con uno vigente no se cancela (N4); con solo los caídos, sí. */
+const CON_COT_BORRADOR = { cotizaciones: [{ id: 1, numero: 'COT-1', estado: 'BORRADOR' }] };
+const CON_PVEN_EN_PROCESO = { pedidos_venta: [{ id: 2, numero: 'PVEN-2', estado: 'EN_PROCESO' }] };
+const SOLO_CAIDOS = {
+  cotizaciones: [{ id: 1, numero: 'COT-1', estado: 'RECHAZADA' }], pedidos_venta: [{ id: 2, numero: 'PVEN-2', estado: 'CANCELADO' }],
+};
 
 // ─── Hub ────────────────────────────────────────────────────────────────────────
 
@@ -109,6 +117,14 @@ console.log('--- TEST 2: reglaSoltarHub — solicitudes ---');
   // → Cancelado
   assert.deepEqual(hub(sc('ASIGNADA'), 'Cancelado'), { tipo: 'accion', accion: 'cancelar' });
   assert.deepEqual(hub(sc('CONFIRMADA'), 'Cancelado'), { tipo: 'accion', accion: 'cancelar' });
+  // r1 (punto 3): con una cotización activa o un pedido vigente no se ofrece cancelar (N4: pasosParaCancelarSolicitud).
+  assert.deepEqual(hub(sc('CONFIRMADA', CON_COT_BORRADOR), 'Cancelado'), bloqueado(NO_CANCELAR, enlace), 'una COT en Borrador');
+  assert.deepEqual(hub(sc('CONFIRMADA', CON_PVEN_EN_PROCESO), 'Cancelado'), bloqueado(NO_CANCELAR, enlace), 'un PVEN en proceso');
+  assert.deepEqual(hub(sc('CONFIRMADA', SOLO_CAIDOS), 'Cancelado'), { tipo: 'accion', accion: 'cancelar' }, 'solo documentos caídos');
+  assert.deepEqual(hub(sc('ASIGNADA'), 'Cancelado', new Set([7])), bloqueado(NO_CANCELAR, enlace),
+    'en el Hub también cuenta scConCot (la fila puede no traer sus documentos)');
+  assert.deepEqual(hub(sc('ASIGNADA', SOLO_CAIDOS), 'Cancelado', new Set([8])), { tipo: 'accion', accion: 'cancelar' },
+    'scConCot de otra SC no cuenta');
   // Soporte no llega al Hub (R8); si llegara, queda quieta con el motivo de N3.
   assert.deepEqual(hub(sc('N/A_SOPORTE'), 'Cancelado'), bloqueado('Es un ticket de soporte: se cierra desde su estado de soporte.'));
   assert.deepEqual(hub(sc('ASIGNADA', { tipo_solicitud: 'Soporte Tecnico', productos: CON_PRODUCTOS }), 'En Gestión'),
@@ -511,6 +527,12 @@ console.log('--- TEST 15: reglaSoltarSC (RP16, D11, D22) ---');
   assert.deepEqual(soltar(sc('BORRADOR'), 'asignada'), bloqueado('Asígnale un asesor desde la solicitud.', enlace));
   // → Cancelada: cancelar. Desde Cancelada: la Papelera.
   assert.deepEqual(soltar(sc('ASIGNADA'), 'cancelada'), { tipo: 'accion', accion: 'cancelar' });
+  // r1 (punto 3): con una cotización activa o un pedido vigente no se ofrece cancelar (N4).
+  assert.deepEqual(soltar(sc('CONFIRMADA', CON_COT_BORRADOR), 'cancelada'), bloqueado(NO_CANCELAR, enlace), 'una COT en Borrador');
+  assert.deepEqual(soltar(sc('ASIGNADA', CON_PVEN_EN_PROCESO), 'cancelada'), bloqueado(NO_CANCELAR, enlace), 'un PVEN en proceso');
+  assert.deepEqual(soltar(sc('CONFIRMADA', SOLO_CAIDOS), 'cancelada'), { tipo: 'accion', accion: 'cancelar' }, 'solo documentos caídos');
+  assert.deepEqual(soltar(sc('CONFIRMADA', CON_COT_BORRADOR), 'cancelada', { returnTo: '/dashboard/ventas' }),
+    bloqueado(NO_CANCELAR, abrir('SC', 7, '/dashboard/ventas')), 'el return_to de la pantalla que llama');
   for (const destino of ['nueva', 'asignada', 'pendiente', 'confirmada']) {
     assert.deepEqual(soltar(sc('CANCELADA'), destino), bloqueado('Una solicitud cancelada se restaura desde la Papelera.'), destino);
   }
