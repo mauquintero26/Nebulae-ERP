@@ -27,7 +27,8 @@ import { formatoEntero } from './kpis.js';
  * @typedef {{tipo: 'ninguno'} | {tipo: 'bloqueado', motivo: string, enlace?: EnlaceBloqueo}
  *   | {tipo: 'cambio', estado: string, cuerpo?: any} | {tipo: 'accion', accion: string, datos?: any}} ResultadoSoltar
  * @typedef {(item: any, origen: string, destino: string) => ResultadoSoltar} ReglaSoltar
- * @typedef {{items: any[], total: number | null, cargando: boolean, error: unknown}} DatosColumna
+ * @typedef {{items: any[], total: number | null, cargando: boolean, error: unknown, recibido?: number}} DatosColumna
+ *   recibido (T4B r2): cuántas respuestas del servidor llegaron a la columna (marcarRecibido).
  * @typedef {Record<string, DatosColumna>} Tablero
  * @typedef {{permitido: boolean, motivo: string | null, enlace?: EnlaceBloqueo, resultado: ResultadoSoltar}} Destino
  */
@@ -608,16 +609,16 @@ export function reemplazarTarjeta(tablero, clave, id, item, { idDe = idPorDefect
 }
 
 /**
- * Deshace un movimiento optimista que el servidor rechazó (KANBAN-base d; T4B r1: ninguna tarjeta se pierde ni se
+ * Deshace un movimiento optimista que el servidor rechazó (KANBAN-base d; T4B r1 y r2: ninguna tarjeta se pierde ni se
  * duplica):
  *  - si el tablero sigue siendo el que dejó moverTarjeta (`movido`), exactamente el anterior (deshacer());
- *  - si en medio llegó otra carga:
- *     · la tarjeta sigue en el destino y no en el origen: vuelve al origen con sus datos de antes (`original`);
- *     · ya está en el origen (lo trajo una recarga): solo se quita del destino si sigue ahí (su total baja 1), y el
- *       total del origen, que ya es el del servidor, no se toca;
- *     · no está en ninguna de las dos (una recarga reemplazó el destino): `original` vuelve de primera al origen, con
- *       su total + 1.
- *    Lo demás que llegó se conserva. Después la pantalla recarga las dos columnas: el servidor manda.
+ *  - si en medio llegó otra carga, cada columna se mira por separado:
+ *     · destino: si la tarjeta sigue ahí, sale (su total baja 1); pero si al destino le llegaron datos del servidor
+ *       después del movimiento (`recibido` cambió), no se toca: lo que tiene es lo del servidor;
+ *     · origen: si la tarjeta no está y al origen no le llegaron datos del servidor, `original` vuelve de primera con su
+ *       total + 1; si le llegaron (r2, R8b), no se inserta ni se toca el total: ya está contada (aunque quede fuera de la
+ *       página), y la recarga de después la pone en su lugar.
+ *    Lo demás que llegó se conserva. Después el hook recarga las dos columnas: el servidor manda.
  * Si una de las dos columnas ya no está, devuelve el tablero actual.
  * @param {Tablero} actual
  * @param {Tablero} movido
@@ -628,18 +629,138 @@ export function reemplazarTarjeta(tablero, clave, id, item, { idDe = idPorDefect
 export function deshacerMovimiento(actual, movido, deshacer, { id, origen, destino, original, idDe = idPorDefecto }) {
   if (actual === movido) return deshacer();
   if (!actual || !tiene(actual, origen) || !tiene(actual, destino)) return actual;
+  const recibio = (clave) => (actual[clave]?.recibido ?? 0) !== (movido?.[clave]?.recibido ?? 0);
   const desde = actual[origen];
   const hacia = actual[destino];
-  const enOrigen = desde.items.some((x) => idDe(x) === id);
-  const enDestino = hacia.items.some((x) => idDe(x) === id);
-  if (enOrigen) {
-    if (!enDestino) return actual;
+  let t = actual;
+  if (hacia.items.some((x) => idDe(x) === id) && !recibio(destino)) {
     const total = typeof hacia.total === 'number' ? Math.max(0, hacia.total - 1) : hacia.total;
-    return { ...actual, [destino]: { ...hacia, items: hacia.items.filter((x) => idDe(x) !== id), total } };
+    t = { ...t, [destino]: { ...hacia, items: hacia.items.filter((x) => idDe(x) !== id), total } };
   }
-  if (enDestino) return moverTarjeta(actual, id, destino, origen, original ?? {}, { idDe }).tablero;
-  const total = typeof desde.total === 'number' ? desde.total + 1 : desde.total;
-  return { ...actual, [origen]: { ...desde, items: [{ ...(original ?? {}) }, ...desde.items], total } };
+  if (!desde.items.some((x) => idDe(x) === id) && !recibio(origen)) {
+    const total = typeof desde.total === 'number' ? desde.total + 1 : desde.total;
+    t = { ...t, [origen]: { ...desde, items: [{ ...(original ?? {}) }, ...desde.items], total } };
+  }
+  return t;
+}
+
+/**
+ * La columna `clave` con una respuesta más del servidor (T4B r2): el hook la marca en cada página que llega, y
+ * deshacerMovimiento sabe así si lo que tiene ya es lo del servidor. Una clave que no está lanza Error.
+ * @param {Tablero} tablero
+ * @param {string} clave
+ * @returns {Tablero}
+ */
+export function marcarRecibido(tablero, clave) {
+  const columna = exigirColumna(tablero, clave);
+  return { ...tablero, [clave]: { ...columna, recibido: (columna.recibido ?? 0) + 1 } };
+}
+
+/**
+ * Al empezar un movimiento (T4B r2, R3b): las columnas de `claves` con un «Ver más» en camino lo dejan (cargandoMas
+ * false); su página saldría corrida un lugar y con un total que ya cuenta la tarjeta. Devuelve el tablero (el mismo si
+ * nada cambió) y las claves cuya consulta hay que abortar.
+ * @param {Tablero} tablero
+ * @param {ReadonlyArray<string>} claves
+ * @returns {{tablero: Tablero, abortar: string[]}}
+ */
+export function cancelarVerMas(tablero, claves) {
+  let t = tablero;
+  /** @type {string[]} */
+  const abortar = [];
+  for (const clave of new Set(claves)) {
+    const columna = /** @type {any} */ (t?.[clave]);
+    if (!columna?.cargandoMas) continue;
+    t = { ...t, [clave]: { ...columna, cargandoMas: false, errorMas: null } };
+    abortar.push(clave);
+  }
+  return { tablero: t, abortar };
+}
+
+/**
+ * @typedef {{n: number, id: string, origen: string, destino: string, espera: Record<string, number> | null}} PendienteMovimiento
+ *   espera: null mientras el servidor no responde el cambio; después, {[clave]: versión} de las recargas que faltan.
+ */
+
+/**
+ * Los movimientos pendientes con uno más (T4B r2): la tarjeta `id` (como texto, igual que la clave de la tarjeta en el
+ * tablero) queda pendiente desde que se mueve.
+ * @param {ReadonlyArray<PendienteMovimiento>} lista
+ * @param {{n: number, id: unknown, origen: string, destino: string}} movimiento
+ * @returns {PendienteMovimiento[]}
+ */
+export function agregarPendiente(lista, { n, id, origen, destino }) {
+  return [...(lista ?? []), { n, id: String(id), origen, destino, espera: null }];
+}
+
+/**
+ * El servidor ya respondió el cambio `n` (bien o mal): desde ahí espera las recargas de `versiones` ({[clave]: la
+ * versión que se pidió después}). Sin recargas (modo cliente, o columnas que ya no están), termina ahí mismo.
+ * @param {ReadonlyArray<PendienteMovimiento>} lista
+ * @param {number} n
+ * @param {Record<string, number> | null | undefined} versiones
+ * @returns {ReadonlyArray<PendienteMovimiento>}
+ */
+export function esperarRecarga(lista, n, versiones) {
+  const espera = { ...(versiones ?? {}) };
+  if (!Object.keys(espera).length) return lista.filter((p) => p.n !== n);
+  return lista.map((p) => (p.n === n ? { ...p, espera } : p));
+}
+
+/**
+ * Llegó (o falló) la consulta principal de `clave` con su `version`: los movimientos que esperaban esa columna en esa
+ * versión o una anterior la dejan de esperar, y el que ya no espera nada termina. Un movimiento cuyo cambio todavía no
+ * respondió el servidor (espera null) no se suelta. Sin cambios devuelve la misma lista.
+ * @param {ReadonlyArray<PendienteMovimiento>} lista
+ * @param {string} clave
+ * @param {number} version
+ * @returns {ReadonlyArray<PendienteMovimiento>}
+ */
+export function llegoRecarga(lista, clave, version) {
+  let cambio = false;
+  /** @type {PendienteMovimiento[]} */
+  const nueva = [];
+  for (const p of lista) {
+    if (!p.espera || !tiene(p.espera, clave) || p.espera[clave] > version) {
+      nueva.push(p);
+      continue;
+    }
+    cambio = true;
+    const espera = { ...p.espera };
+    delete espera[clave];
+    if (Object.keys(espera).length) nueva.push({ ...p, espera });
+  }
+  return cambio ? nueva : lista;
+}
+
+/**
+ * Los ids (como texto) de las tarjetas con un movimiento pendiente: no se arrastran ni se mueven con «Mover a…».
+ * @param {ReadonlyArray<PendienteMovimiento>} lista
+ * @returns {Set<string>}
+ */
+export function idsPendientes(lista) {
+  return new Set((lista ?? []).map((p) => p.id));
+}
+
+/**
+ * Las versiones con una más en cada columna de `claves` que existe (todas las de `existentes` sin claves): {versiones,
+ * subidas}, donde subidas son las versiones nuevas de esas columnas (lo que un movimiento espera, T4B r2).
+ * @param {Record<string, number>} versiones
+ * @param {ReadonlyArray<string> | null | undefined} claves
+ * @param {ReadonlyArray<string>} existentes
+ * @returns {{versiones: Record<string, number>, subidas: Record<string, number>}}
+ */
+export function subirVersiones(versiones, claves, existentes) {
+  const validas = new Set(existentes);
+  const nuevas = { ...(versiones ?? {}) };
+  /** @type {Record<string, number>} */
+  const subidas = {};
+  for (const clave of claves ?? existentes) {
+    if (!validas.has(clave)) continue;
+    nuevas[clave] = (nuevas[clave] ?? 0) + 1;
+    subidas[clave] = nuevas[clave];
+  }
+  return { versiones: nuevas, subidas };
 }
 
 /**

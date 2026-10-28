@@ -6,13 +6,16 @@ import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { ArrowRightLeft, ChevronsRightLeft, ExternalLink, Loader2, Lock, RotateCw } from 'lucide-react';
 import {
-  TEXTO_SOLO_VER, aplicarPagina, alternarPlegada, altoEnContenedor, asegurarColumna, columnaBajoPunto, columnaOcupada,
-  columnasPorLanzar, consultaColumna, crearTurnos, definirColumnas, deshacerMovimiento, esDesplazable, estadoColumna,
-  estadoDestino, firmaConsulta, mapaDestinos, moverTarjeta, opcionesMoverA, paginaDeRespuesta, plegadasValidas,
-  quedanEnServidor, reemplazarTarjeta, reglaSegunManejadores, resolverPlegadas, resolverSoltar, siguienteAnuncio,
-  superaUmbral, tableroCliente, textoMovimiento, textoTotalColumna, velocidadAutodesplazamiento,
+  TEXTO_SOLO_VER, agregarPendiente, aplicarPagina, alternarPlegada, altoEnContenedor, asegurarColumna, cancelarVerMas,
+  columnaBajoPunto, columnaOcupada, columnasPorLanzar, consultaColumna, crearTurnos, definirColumnas, deshacerMovimiento,
+  esDesplazable, esperarRecarga, estadoColumna, estadoDestino, firmaConsulta, idsPendientes, llegoRecarga, mapaDestinos,
+  marcarRecibido, moverTarjeta, opcionesMoverA, paginaDeRespuesta, plegadasValidas, quedanEnServidor, reemplazarTarjeta,
+  reglaSegunManejadores, resolverPlegadas, resolverSoltar, siguienteAnuncio, subirVersiones, superaUmbral,
+  tableroCliente, textoMovimiento, textoTotalColumna, velocidadAutodesplazamiento,
 } from '@/lib/kanban';
-import type { ColumnaKanban, ConsultaColumna, DatosColumna, Destino, ReglaSoltar, ResultadoSoltar } from '@/lib/kanban';
+import type {
+  ColumnaKanban, ConsultaColumna, DatosColumna, Destino, PendienteMovimiento, ReglaSoltar, ResultadoSoltar,
+} from '@/lib/kanban';
 import { formatoPesos } from '@/lib/pesos';
 import { textoDeError } from '@/lib/avisos';
 import { useAvisos } from './Avisos';
@@ -133,13 +136,26 @@ export type TableroKanbanEstado<T> = {
   /** Ya se leyeron las plegadas guardadas. */
   listo: boolean;
   idDe: (item: T) => Id;
-  /** Lo usa TableroKanban: el movimiento optimista de una tarjeta, con su confirmar y su deshacer. */
+  /**
+   * T4B r2: los ids (como texto) de las tarjetas con un movimiento pendiente. Una tarjeta queda pendiente desde que se
+   * mueve hasta que llega (o falla) la recarga de su origen y su destino posterior a la respuesta del servidor: no se
+   * arrastra ni se mueve con «Mover a…», y «Ver más» de esas columnas queda quieto.
+   */
+  pendientes: ReadonlySet<string>;
+  /** Los mismos movimientos, con su origen y su destino (columnaOcupada). */
+  movimientosPendientes: ReadonlyArray<PendienteMovimiento>;
+  /**
+   * Lo usa TableroKanban: el movimiento optimista de una tarjeta. confirmar (con el documento del servidor) y deshacer
+   * recargan el origen y el destino, y la tarjeta sigue pendiente hasta que esas recargas llegan.
+   */
   moverOptimista: (
     item: T, origen: string, destino: string, cambios: Record<string, unknown>, idDe?: (item: T) => Id,
   ) => MovimientoOptimista<T>;
 };
 
 type ColumnaInterna = DatosColumna & { firma?: string; resumen?: unknown; cargandoMas?: boolean; errorMas?: unknown };
+/** La consulta en camino de una columna: la principal o la de «Ver más» (T4B r2: solo esa se aborta al mover). */
+type ControlConsulta = { control: AbortController; agregar: boolean };
 type TableroInterno = Record<string, ColumnaInterna>;
 type MovimientoCliente<T> = {
   n: number;
@@ -185,12 +201,19 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
   const [tablero, setTablero] = useState<TableroInterno>({});
   const tableroRef = useRef<TableroInterno>({});
   const [versiones, setVersiones] = useState<Record<string, number>>({});
+  // T4B r2: la copia síncrona de las versiones, para saber en el manejador qué versión espera cada movimiento.
+  const versionesRef = useRef<Record<string, number>>({});
+  // Los movimientos pendientes (T4B r2): la copia síncrona y el estado que pinta.
+  const pendientesRef = useRef<ReadonlyArray<PendienteMovimiento>>([]);
+  const [pendientesLista, setPendientesLista] = useState<ReadonlyArray<PendienteMovimiento>>([]);
 
-  // La consulta vigente de cada columna y su firma (si lo que llegó tiene otra firma, la columna está cargando).
-  const deseadas: Record<string, { consulta: ConsultaColumna; firma: string }> = {};
+  // La consulta vigente de cada columna, su versión y su firma (si lo que llegó tiene otra firma, la columna está
+  // cargando).
+  const deseadas: Record<string, { consulta: ConsultaColumna; firma: string; version: number }> = {};
   for (const c of columnas) {
     const consulta = consultaColumna(c, { plegada: plegadas.includes(c.clave), porColumna, ordenDe });
-    deseadas[c.clave] = { consulta, firma: firmaConsulta(consulta, { dependencias: claveDeps, version: versiones[c.clave] ?? 0 }) };
+    const version = versiones[c.clave] ?? 0;
+    deseadas[c.clave] = { consulta, version, firma: firmaConsulta(consulta, { dependencias: claveDeps, version }) };
   }
   const firmas = columnas.map((c) => `${c.clave}\u0000${deseadas[c.clave].firma}`).join('\u0001');
 
@@ -206,12 +229,10 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
   });
 
   const lanzadas = useRef<Record<string, string>>({});
-  const controles = useRef<Record<string, AbortController>>({});
+  const controles = useRef<Record<string, ControlConsulta>>({});
   const turnos = useRef<ReturnType<typeof crearTurnos> | null>(null);
   const ultimasDeps = useRef<string | null>(null);
   const contador = useRef(0);
-  /** Los movimientos que esperan al servidor (T4B r1): su «Ver más» queda quieto. */
-  const enCurso = useRef(new Map<number, { origen: string; destino: string }>());
 
   const actualizar = useCallback((cambio: (t: TableroInterno) => TableroInterno) => {
     const nuevo = cambio(tableroRef.current);
@@ -220,13 +241,28 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
     setTablero(nuevo);
   }, [setTablero]);
 
-  /** Una consulta de una columna: la principal (firma) o la de «Ver más» (agregar). */
-  const pedir = useCallback((columna: ColumnaKanban, consulta: ConsultaColumna, firma: string | null, agregar: boolean) => {
+  const actualizarPendientes = useCallback((
+    cambio: (lista: ReadonlyArray<PendienteMovimiento>) => ReadonlyArray<PendienteMovimiento>,
+  ) => {
+    const nueva = cambio(pendientesRef.current);
+    if (nueva === pendientesRef.current) return;
+    pendientesRef.current = nueva;
+    setPendientesLista(nueva);
+  }, [setPendientesLista]);
+
+  /**
+   * Una consulta de una columna: la principal (firma y version) o la de «Ver más» (agregar). T4B r2: cada respuesta
+   * marca la columna (marcarRecibido) y la principal, al llegar o al fallar, suelta los movimientos que esperaban esa
+   * versión (llegoRecarga).
+   */
+  const pedir = useCallback((
+    columna: ColumnaKanban, consulta: ConsultaColumna, firma: string | null, agregar: boolean, version: number | null,
+  ) => {
     const clave = columna.clave;
     const lista = (turnos.current ??= crearTurnos());
-    controles.current[clave]?.abort();
+    controles.current[clave]?.control.abort();
     const control = new AbortController();
-    controles.current[clave] = control;
+    controles.current[clave] = { control, agregar };
     const turno = lista.siguiente(clave);
     const cargarAhora = actuales.current.cargar;
     const idDeAhora = actuales.current.idDe;
@@ -239,12 +275,14 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
         if (!lista.vigente(clave, turno)) return;
         const pagina = paginaDeRespuesta(respuesta);
         actualizar((t) => {
-          const conPagina = aplicarPagina(asegurarColumna(t, clave), clave, pagina, { agregar, idDe: idDeAhora }) as TableroInterno;
+          const conPagina = aplicarPagina(asegurarColumna(t, clave), clave, pagina, { agregar, idDe: idDeAhora });
+          const marcado = marcarRecibido(conPagina, clave) as TableroInterno;
           const extra: Partial<ColumnaInterna> = agregar
             ? { cargandoMas: false, errorMas: null }
             : { firma: firma ?? undefined, resumen: pagina.resumen, cargandoMas: false, errorMas: null };
-          return { ...conPagina, [clave]: { ...conPagina[clave], ...extra } };
+          return { ...marcado, [clave]: { ...marcado[clave], ...extra } };
         });
+        if (!agregar && version !== null) actualizarPendientes((l) => llegoRecarga(l, clave, version));
       })
       .catch((err: unknown) => {
         if (!lista.vigente(clave, turno) || control.signal.aborted) return;
@@ -255,8 +293,10 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
             : { firma: firma ?? undefined, error: err, cargando: false, cargandoMas: false };
           return { ...previo, [clave]: { ...previo[clave], ...extra } };
         });
+        // Una recarga que falla también termina la espera: la columna muestra su error y «Reintentar».
+        if (!agregar && version !== null) actualizarPendientes((l) => llegoRecarga(l, clave, version));
       });
-  }, [actualizar]);
+  }, [actualizar, actualizarPendientes]);
 
   // Lanza las consultas de las columnas cuya firma cambió (al activarse, con otras dependencias, otro tamaño, al
   // plegar o abrir, o con recargar). Nada de setState aquí: la columna «cargando» se deduce de la firma.
@@ -270,7 +310,7 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
       const { deseadas: vigentes } = actuales.current;
       const { lista, lanzadas: nuevas } = columnasPorLanzar(actuales.current.columnas, vigentes, lanzadas.current);
       lanzadas.current = nuevas;
-      for (const c of lista) pedir(c, vigentes[c.clave].consulta, vigentes[c.clave].firma, false);
+      for (const c of lista) pedir(c, vigentes[c.clave].consulta, vigentes[c.clave].firma, false, vigentes[c.clave].version);
     };
     if (esperaMs > 0 && ultimasDeps.current !== null && ultimasDeps.current !== claveDeps) {
       const espera = window.setTimeout(lanzar, esperaMs);
@@ -284,7 +324,7 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
   useEffect(() => {
     const vivos = controles.current;
     return () => {
-      for (const control of Object.values(vivos)) control.abort();
+      for (const { control } of Object.values(vivos)) control.abort();
       // T4B r1: StrictMode (en desarrollo) desmonta y vuelve a montar. Lo que se acaba de abortar tiene que relanzarse
       // al montar otra vez, así que la guarda de lo lanzado y las últimas dependencias se olvidan con las consultas;
       // si no, el efecto ve las mismas firmas, no relanza y el tablero queda cargando para siempre.
@@ -293,15 +333,19 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
     };
   }, []);
 
-  const recargar = useCallback((claves?: ReadonlyArray<string>) => {
-    if (actuales.current.modo !== 'servidor') return;
-    const lista = claves ?? actuales.current.columnas.map((c) => c.clave);
-    setVersiones((v) => {
-      const nuevas = { ...v };
-      for (const clave of lista) nuevas[clave] = (nuevas[clave] ?? 0) + 1;
-      return nuevas;
-    });
+  /** Sube la versión de esas columnas (o de todas) y devuelve las versiones nuevas; en modo cliente, {}. */
+  const subir = useCallback((claves?: ReadonlyArray<string>): Record<string, number> => {
+    const ahora = actuales.current;
+    if (ahora.modo !== 'servidor') return {};
+    const r = subirVersiones(versionesRef.current, claves, ahora.columnas.map((c) => c.clave));
+    versionesRef.current = r.versiones;
+    setVersiones(r.versiones);
+    return r.subidas;
   }, [setVersiones]);
+
+  const recargar = useCallback((claves?: ReadonlyArray<string>) => {
+    subir(claves);
+  }, [subir]);
 
   const verMas = useCallback((clave: string) => {
     const ahora = actuales.current;
@@ -312,15 +356,15 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
       });
       return;
     }
-    // T4B r1: con un movimiento pendiente hacia o desde la columna, el offset contaría la tarjeta optimista.
-    if (columnaOcupada(enCurso.current.values(), clave)) return;
+    // T4B r1 y r2: con un movimiento pendiente hacia o desde la columna, el offset contaría la tarjeta optimista.
+    if (columnaOcupada(pendientesRef.current, clave)) return;
     const columna = ahora.columnas.find((c) => c.clave === clave);
     const datos = tableroRef.current[clave];
     const deseada = ahora.deseadas[clave];
     // Solo con la columna ya cargada y sin otro «Ver más» en camino.
     if (!columna || !datos || !deseada || datos.firma !== deseada.firma || datos.cargandoMas) return;
     actualizar((t) => ({ ...t, [clave]: { ...t[clave], cargandoMas: true, errorMas: null } }));
-    pedir(columna, consultaColumna(columna, { porColumna: ahora.porColumna, ordenDe: ahora.ordenDe, offset: datos.items.length }), null, true);
+    pedir(columna, consultaColumna(columna, { porColumna: ahora.porColumna, ordenDe: ahora.ordenDe, offset: datos.items.length }), null, true, null);
   }, [actualizar, pedir, claveCortes]);
 
   const plegar = useCallback((clave: string, plegada?: boolean) => {
@@ -333,41 +377,56 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
     const idDeUsado = idDeTarjeta ?? actuales.current.idDe;
     const id = idDeUsado(item);
     const n = ++contador.current;
-    enCurso.current.set(n, { origen, destino });
-    const terminar = () => enCurso.current.delete(n);
+    // T4B r2: la tarjeta queda pendiente desde ya y hasta que llegue la recarga de su origen y su destino.
+    actualizarPendientes((l) => agregarPendiente(l, { n, id, origen, destino }));
+    // Con la respuesta del servidor (bien o mal): se recargan el origen y el destino (aunque el destino no hubiera
+    // cargado, CV2) y el movimiento espera esas versiones. En modo cliente no hay recarga: termina ahí.
+    const cerrar = () => {
+      const subidas = subir([origen, destino]);
+      actualizarPendientes((l) => esperarRecarga(l, n, subidas));
+    };
     if (actuales.current.modo === 'cliente') {
       const base = actuales.current.items;
       setMovimientos((lista) => [...lista.filter((m) => m.base === base), { n, base, id, origen, destino, cambios, idDe: idDeUsado }]);
       return {
         confirmar: (documento) => {
-          terminar();
+          cerrar();
           if (!documento || typeof documento !== 'object') return;
           setMovimientos((lista) => lista.map((m) => (m.n === n ? { ...m, servidor: documento } : m)));
         },
         deshacer: () => {
-          terminar();
+          cerrar();
           setMovimientos((lista) => lista.filter((m) => m.n !== n));
         },
       };
     }
+    // T4B r2 (R3b): un «Ver más» en vuelo en el origen o el destino se deja; su página saldría corrida y con un total
+    // que ya cuenta la tarjeta.
+    const { tablero: sinVerMas, abortar } = cancelarVerMas(tableroRef.current, [origen, destino]);
+    for (const clave of abortar) {
+      const slot = controles.current[clave];
+      if (slot?.agregar) slot.control.abort();
+    }
+    actualizar(() => sinVerMas as TableroInterno);
     const antes = tableroRef.current;
-    if (!antes[origen] || !antes[destino]) return { confirmar: terminar, deshacer: terminar };
+    if (!antes[origen] || !antes[destino]) return { confirmar: cerrar, deshacer: cerrar };
     const { tablero: movido, deshacer } = moverTarjeta(antes, id, origen, destino, cambios, { idDe: idDeUsado });
     actualizar(() => movido as TableroInterno);
     const original = { ...(item as Record<string, unknown>) };
     return {
       // T4B r1: la respuesta se mezcla sobre la fila (reemplazarTarjeta), sin perder lo que el PATCH no devuelve.
       confirmar: (documento) => {
-        terminar();
-        if (!documento || typeof documento !== 'object') return;
-        actualizar((t) => (t[destino] ? reemplazarTarjeta(t, destino, id, documento, { idDe: idDeUsado }) as TableroInterno : t));
+        if (documento && typeof documento === 'object') {
+          actualizar((t) => (t[destino] ? reemplazarTarjeta(t, destino, id, documento, { idDe: idDeUsado }) as TableroInterno : t));
+        }
+        cerrar();
       },
       deshacer: () => {
-        terminar();
         actualizar((t) => deshacerMovimiento(t, movido, deshacer, { id, origen, destino, original, idDe: idDeUsado }) as TableroInterno);
+        cerrar();
       },
     };
-  }, [actualizar]);
+  }, [actualizar, actualizarPendientes, subir]);
 
   // ── lo que ve la pantalla ──
   const cortesVigentes = cortes.clave === claveCortes ? cortes.valores : SIN_CORTES;
@@ -398,7 +457,12 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
     cargandoInicial = columnas.some((c) => tablero[c.clave]?.firma === undefined);
   }
 
-  return { modo, columnas, datos, cargandoInicial, verMas, recargar, plegar, plegadas, listo, idDe, moverOptimista };
+  const pendientes = useMemo(() => idsPendientes(pendientesLista), [pendientesLista]);
+
+  return {
+    modo, columnas, datos, cargandoInicial, verMas, recargar, plegar, plegadas, listo, idDe, pendientes,
+    movimientosPendientes: pendientesLista, moverOptimista,
+  };
 }
 
 // ─── TarjetaKanban ──────────────────────────────────────────────────────────────
@@ -667,9 +731,6 @@ type Arrastre<T> = {
   ancho: number;
 };
 
-/** Un movimiento de una tarjeta que espera al servidor (T4B r1: su «Ver más» queda quieto). */
-type Pendiente = { origen: string; destino: string };
-
 /** A dónde va el foco después del render (T4B r1): la tarjeta en su columna, su encabezado o el botón de plegar/abrir. */
 type FocoPendiente = { columna: string; tarjeta?: string; boton?: 'abrir' | 'plegar'; n: number };
 
@@ -717,7 +778,6 @@ export function TableroKanban<T = unknown>({
 
   const [arrastre, setArrastre] = useState<Arrastre<T> | null>(null);
   const [sobre, setSobre] = useState<string | null>(null);
-  const [esperando, setEsperando] = useState<ReadonlyMap<string, Pendiente>>(() => new Map());
   const [anuncio, setAnuncio] = useState('');
 
   const envoltura = useRef<HTMLDivElement>(null);
@@ -783,7 +843,7 @@ export function TableroKanban<T = unknown>({
         observador.observe(desplazable);
         // Lo que está arriba del tablero (la franja de indicadores, el banner del flujo) cambia el alto de la página.
         for (const hijo of Array.from(desplazable.children)) observador.observe(hijo);
-      }
+      } else observador.observe(document.body);
       if (envoltura.current) observador.observe(envoltura.current);
     }
     return () => {
@@ -826,11 +886,18 @@ export function TableroKanban<T = unknown>({
   });
 
   // Mientras se arrastra: autodesplazamiento cuadro a cuadro (horizontal en el tablero y vertical en la columna bajo el
-  // puntero), la columna de encima y Escape para cancelar.
+  // puntero), la columna de encima y Escape para cancelar. T4B r2: si la tarjeta que tiene la captura sale del DOM (una
+  // recarga la quitó), lostpointercapture va al document y no a React; por eso también se escucha ahí, en captura, y el
+  // bucle cancela si el nodo ya no está conectado.
   useEffect(() => {
     if (!arrastre) return undefined;
     let cuadro = 0;
     const paso = () => {
+      const seguido = seguimiento.current;
+      if (seguido && !seguido.el.isConnected) {
+        cancelarArrastre();
+        return;
+      }
       const p = puntero.current;
       const caja = contenedor.current;
       if (p && caja) {
@@ -860,24 +927,28 @@ export function TableroKanban<T = unknown>({
         cancelarArrastre();
       }
     };
+    // Con la tarjeta conectada, pointerup lo atiende alLevantar (React); aquí solo se cancela si ya no está en el DOM.
+    const alDocumento = (e: PointerEvent) => {
+      const s = seguimiento.current;
+      if (!s || !s.iniciado || e.pointerId !== s.pointerId) return;
+      if (e.type !== 'pointerup' || !s.el.isConnected) cancelarArrastre();
+    };
     window.addEventListener('keydown', alTeclear, true);
+    document.addEventListener('lostpointercapture', alDocumento, true);
+    document.addEventListener('pointerup', alDocumento, true);
+    document.addEventListener('pointercancel', alDocumento, true);
     return () => {
       window.cancelAnimationFrame(cuadro);
       window.removeEventListener('keydown', alTeclear, true);
+      document.removeEventListener('lostpointercapture', alDocumento, true);
+      document.removeEventListener('pointerup', alDocumento, true);
+      document.removeEventListener('pointercancel', alDocumento, true);
     };
   }, [arrastre, rectangulos, cancelarArrastre]);
 
   const tituloDe = (clave: string) => columnas.find((c) => c.clave === clave)?.titulo ?? clave;
   const datosDe = (item: T): DatosTarjetaKanban => tarjetaDe?.(item) ?? { numero: String(idTarjeta(item) ?? ''), titulo: '' };
   const nombreDe = (item: T) => datosDe(item).numero;
-  const marcarEsperando = (clave: string, pendiente: Pendiente | null) => {
-    setEsperando((previo) => {
-      const nuevo = new Map(previo);
-      if (pendiente) nuevo.set(clave, pendiente);
-      else nuevo.delete(clave);
-      return nuevo;
-    });
-  };
   /** La región aria-live; un texto igual al anterior se vuelve a anunciar (T4B r1). */
   const anunciar = (texto: string) => setAnuncio((anterior) => siguienteAnuncio(anterior, texto));
   const enfocarDespues = (foco: Omit<FocoPendiente, 'n'>) => {
@@ -899,23 +970,20 @@ export function TableroKanban<T = unknown>({
     }
     if (!onCambio) return;
     const clave = String(idTarjeta(item));
-    if (esperando.has(clave)) return;
+    // T4B r2: los pendientes son del hook; una tarjeta (o una copia vieja suya) espera hasta la recarga de su movimiento.
+    if (tablero.pendientes.has(clave)) return;
     const movimiento = tablero.moverOptimista(item, origen, destino, { estado: resultado.estado }, idTarjeta);
-    marcarEsperando(clave, { origen, destino });
     if (desdeMenu) enfocarDespues({ columna: destino, tarjeta: clave });
     try {
       const documento = await onCambio(item, resultado);
+      // confirmar y deshacer recargan el origen y el destino; la tarjeta sigue pendiente hasta que esas recargas llegan.
       movimiento.confirmar(documento);
       anunciar(textoMovimiento(nombreDe(item), tituloDe(destino)));
-      tablero.recargar([origen, destino]);
     } catch (err) {
       movimiento.deshacer();
-      tablero.recargar([origen, destino]);
       if (desdeMenu) enfocarDespues({ columna: origen, tarjeta: clave });
       avisarError(err);
       anunciar(textoDeError(err));
-    } finally {
-      marcarEsperando(clave, null);
     }
   };
 
@@ -951,7 +1019,7 @@ export function TableroKanban<T = unknown>({
     if (!s.iniciado) {
       if (!superaUmbral(e.clientX - s.x0, e.clientY - s.y0)) return;
       // Un tablero para ver o una tarjeta que espera al servidor no se arrastran (y ya no es un clic).
-      if (soloVer || esperando.has(s.clave)) {
+      if (soloVer || tablero.pendientes.has(s.clave)) {
         seguimiento.current = null;
         return;
       }
@@ -1039,7 +1107,7 @@ export function TableroKanban<T = unknown>({
   const pintarTarjeta = (item: T, origen: string) => {
     const clave = String(idTarjeta(item));
     const datos = datosDe(item);
-    const pendiente = esperando.has(clave);
+    const pendiente = tablero.pendientes.has(clave);
     const arrastrando = arrastre?.clave === clave;
     const menu = menuDe(item, origen, pendiente);
     const movible = !soloVer && !pendiente;
@@ -1130,7 +1198,7 @@ export function TableroKanban<T = unknown>({
       ? <span className="tabular-nums">{textoTotalColumna(d.items.length, d.total)}</span>
       : <Contador valor={estado === 'actualizando' ? d.total : null} estado={estado} />;
     const sinTarjetas = !d || d.items.length === 0;
-    const ocupada = columnaOcupada(esperando.values(), c.clave);
+    const ocupada = columnaOcupada(tablero.movimientosPendientes, c.clave);
 
     return (
       <section

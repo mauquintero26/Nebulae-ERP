@@ -410,9 +410,16 @@ console.log('--- TEST 15 (T4A): esModoTabla (useVistaGuardada) y posicionMenu (M
   const linea = /<span className="([^"]*text-\[11px\] text-slate-500[^"]*)">\{item\.titulo\}<\/span>/.exec(fuente);
   assert.ok(linea, 'la segunda línea: text-[11px] text-slate-500 con el titulo');
   assert.ok(!linea[1].includes('truncate') && linea[1].includes('whitespace-normal'), 'sin truncar');
-  assert.ok(fuente.includes('title={item.titulo}'), 'el title se conserva');
   assert.ok(!/[\s"`]aria-disabled:opacity-50/.test(fuente) && /group-aria-disabled:opacity-50/.test(fuente),
     'lo apagado es el ícono y la etiqueta, no el motivo (que se lee completo)');
+  // T4B r2 (punto 5): con el motivo en la segunda línea, el botón no lleva además el mismo texto en title (el lector de
+  // pantalla lo diría dos veces); en un ítem habilitado, el title se conserva.
+  assert.ok(fuente.includes('title={item.deshabilitado && item.titulo ? undefined : item.titulo}'), 'sin title repetido');
+  assert.ok(!fuente.includes('title={item.titulo}'));
+  // Con el foco (flechas) o el mouse encima cambia el fondo (slate-100, rose-50): ahí el motivo pasa a slate-600, para
+  // conservar al menos 4,5:1 (slate-500 sobre slate-100 da 4,3:1).
+  assert.ok(linea[1].includes('group-focus:text-slate-600') && linea[1].includes('group-hover:text-slate-600'),
+    'el motivo conserva el contraste con el foco o el mouse encima');
 }
 
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');

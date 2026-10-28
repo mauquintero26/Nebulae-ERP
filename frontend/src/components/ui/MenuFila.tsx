@@ -182,7 +182,8 @@ export function MenuFila({
                 type="button"
                 role="menuitem"
                 aria-disabled={item.deshabilitado || undefined}
-                title={item.titulo}
+                // T4B r2: con el motivo a la vista (segunda línea), sin el mismo texto en title: no se lee dos veces.
+                title={item.deshabilitado && item.titulo ? undefined : item.titulo}
                 onClick={() => elegir(item)}
                 className={`group flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold outline-none aria-disabled:cursor-not-allowed ${
                   item.peligro ? 'text-rose-600 hover:bg-rose-50 focus:bg-rose-50' : 'text-slate-700 hover:bg-slate-50 focus:bg-slate-100'
@@ -191,9 +192,10 @@ export function MenuFila({
                 {Icono && <Icono size={14} className="mt-[3px] shrink-0 group-aria-disabled:opacity-50" />}
                 <span className="min-w-0 flex-1">
                   <span className="block truncate group-aria-disabled:opacity-50">{item.etiqueta}</span>
-                  {/* T4B r1: el porqué de un ítem deshabilitado se lee (teclado y celular no tienen title). */}
+                  {/* T4B r1: el porqué de un ítem deshabilitado se lee (teclado y celular no tienen title). r2: con el foco o
+                      el mouse encima el fondo cambia (slate-100, rose-50) y el motivo pasa a slate-600 (4,5:1 o más). */}
                   {item.deshabilitado && item.titulo && (
-                    <span className="mt-0.5 block whitespace-normal break-words text-[11px] text-slate-500 font-normal leading-snug">{item.titulo}</span>
+                    <span className="mt-0.5 block whitespace-normal break-words text-[11px] text-slate-500 group-hover:text-slate-600 group-focus:text-slate-600 font-normal leading-snug">{item.titulo}</span>
                   )}
                 </span>
               </button>

@@ -624,15 +624,16 @@ console.log('--- TEST 14 (T4B r1): ninguna tarjeta perdida, «Ver más» sin sal
 
   // i) Kanban.tsx sobre el fuente (sin DOM en node).
   const fuente = readFileSync(new URL('../src/components/ui/Kanban.tsx', import.meta.url), 'utf8');
-  // Punto 2: el servidor manda también cuando falla.
-  assert.match(fuente, /catch \(err\) \{\s*movimiento\.deshacer\(\);\s*tablero\.recargar\(\[origen, destino\]\);/);
-  // Punto 3: «Ver más» quieto con un movimiento pendiente (en el botón y en el hook).
-  assert.match(fuente, /const ocupada = columnaOcupada\(esperando\.values\(\), c\.clave\);/);
+  // Punto 2: el servidor manda también cuando falla (r2: la recarga de las dos columnas la hace el hook en deshacer y en
+  // confirmar, y la tarjeta sigue pendiente hasta que llega; TEST 15).
+  assert.match(fuente, /catch \(err\) \{\s*movimiento\.deshacer\(\);/);
+  // Punto 3: «Ver más» quieto con un movimiento pendiente (en el botón y en el hook; r2: los pendientes son del hook).
+  assert.match(fuente, /const ocupada = columnaOcupada\(tablero\.movimientosPendientes, c\.clave\);/);
   assert.match(fuente, /disabled=\{d\.cargandoMas \|\| d\.cargando \|\| ocupada\}/);
-  assert.match(fuente, /if \(columnaOcupada\(enCurso\.current\.values\(\), clave\)\) return;/);
+  assert.match(fuente, /if \(columnaOcupada\(pendientesRef\.current, clave\)\) return;/);
   // Punto 4: el desmontaje aborta y limpia la guarda (StrictMode monta, desmonta y vuelve a montar).
   assert.match(fuente,
-    /for \(const control of Object\.values\(vivos\)\) control\.abort\(\);[\s\S]{0,500}?lanzadas\.current = \{\};\s*ultimasDeps\.current = null;/);
+    /for \(const \{ control \} of Object\.values\(vivos\)\) control\.abort\(\);[\s\S]{0,500}?lanzadas\.current = \{\};\s*ultimasDeps\.current = null;/);
   assert.match(fuente, /columnasPorLanzar\(/);
   // Punto 5: el alto se recalcula con el aviso y el banner, y con el contenedor desplazable y el propio tablero.
   assert.match(fuente, /useLayoutEffect\(\(\) => \{\s*ajustarAlto\(\);\s*\}, \[aviso, soloVer, ajustarAlto\]\);/);
@@ -657,6 +658,208 @@ console.log('--- TEST 14 (T4B r1): ninguna tarjeta perdida, «Ver más» sin sal
   assert.ok(!fuente.includes('text-slate-400'), 'el tiempo, el vacío y el ícono de plegar en text-slate-500');
 }
 
+console.log('--- TEST 15 (T4B r2): una tarjeta sigue pendiente hasta la recarga de su movimiento (copias viejas) ---');
+{
+  for (const n of ['agregarPendiente', 'esperarRecarga', 'llegoRecarga', 'idsPendientes', 'subirVersiones', 'cancelarVerMas',
+    'marcarRecibido']) {
+    assert.ok(n in kanban, `lib/kanban.js exporta ${n}`);
+  }
+  const columnas = definirColumnas(COLS);
+  const CUATRO = definirColumnas(['X', 'Y', 'Z', 'W'].map((k) => ({ clave: k, titulo: k })));
+
+  // El flujo del modo servidor de useTableroKanban con las funciones de la librería, en el orden en que las llama el
+  // hook: moverOptimista → agregarPendiente; confirmar/deshacer → subirVersiones de origen y destino + esperarRecarga;
+  // cada respuesta principal → aplicarPagina + marcarRecibido + llegoRecarga. TableroKanban no deja mover una tarjeta
+  // cuyo id está en idsPendientes. El servidor lee cuando se le pide (la «foto») y responde después.
+  function flujo(inicial, cargadas = Object.keys(inicial)) {
+    const srv = structuredClone(inicial);
+    const s = { srv, tablero: {}, pendientes: [], versiones: {}, n: 0, rechazados: 0 };
+    s.foto = (k) => ({ items: srv[k].map((id) => ({ id, col: k })), total: srv[k].length });
+    s.llega = (k, pagina, version) => {
+      s.tablero = kanban.marcarRecibido(aplicarPagina(kanban.asegurarColumna(s.tablero, k), k, pagina), k);
+      s.pendientes = kanban.llegoRecarga(s.pendientes, k, version);
+    };
+    for (const k of cargadas) s.llega(k, s.foto(k), 0);
+    s.mover = (id, origen, destino) => {
+      if (kanban.idsPendientes(s.pendientes).has(String(id))) { s.rechazados++; return null; }
+      const n = ++s.n;
+      s.pendientes = kanban.agregarPendiente(s.pendientes, { n, id, origen, destino });
+      let movido = null;
+      let deshacer = null;
+      if (s.tablero[origen] && s.tablero[destino]) {
+        ({ tablero: movido, deshacer } = moverTarjeta(s.tablero, id, origen, destino, { col: destino }));
+        s.tablero = movido;
+      }
+      const cerrar = () => {
+        const r = kanban.subirVersiones(s.versiones, [origen, destino], CUATRO.map((c) => c.clave));
+        s.versiones = r.versiones;
+        s.pendientes = kanban.esperarRecarga(s.pendientes, n, r.subidas);
+        return r.subidas;
+      };
+      return {
+        ok() {
+          srv[origen] = srv[origen].filter((x) => x !== id);
+          for (const k of Object.keys(srv)) srv[k] = srv[k].filter((x) => x !== id);
+          srv[destino] = [id, ...srv[destino]];
+          if (s.tablero[destino]) s.tablero = kanban.reemplazarTarjeta(s.tablero, destino, id, { id, col: destino });
+          return cerrar();
+        },
+        falla() {
+          if (movido) s.tablero = kanban.deshacerMovimiento(s.tablero, movido, deshacer, { id, origen, destino, original: { id, col: origen } });
+          return cerrar();
+        },
+      };
+    };
+    s.comparar = () => {
+      const vistos = {};
+      for (const [k, c] of Object.entries(s.tablero)) {
+        assert.deepEqual(c.items.map((x) => x.id), srv[k], `${k}: las tarjetas del servidor`);
+        assert.equal(c.total, srv[k].length, `${k}: el total del servidor`);
+        for (const x of c.items) vistos[x.id] = [...(vistos[x.id] ?? []), k];
+      }
+      for (const [id, cols] of Object.entries(vistos)) assert.equal(cols.length, 1, `${id} en ${cols.join(', ')}`);
+    };
+    return s;
+  }
+
+  // CV1: dos tarjetas seguidas desde X. La recarga del éxito de A se lee antes de que el servidor aplique B y trae a B
+  // otra vez a X (copia vieja). B sale bien; antes de que llegue su recarga, el usuario quiere mover la copia de X a W.
+  {
+    const s = flujo({ X: ['A', 'B', 'x3'], Y: ['y1'], Z: ['z1'], W: ['w1'] });
+    const a = s.mover('A', 'X', 'Y');
+    const b = s.mover('B', 'X', 'Z');
+    const va = a.ok();
+    const fotosA = { X: s.foto('X'), Y: s.foto('Y') }; // el servidor lee antes de aplicar B
+    s.llega('X', fotosA.X, va.X);
+    s.llega('Y', fotosA.Y, va.Y);
+    assert.deepEqual(kanban.idsPendientes(s.pendientes), new Set(['B']), 'A ya no espera; B sí (su PATCH sigue en camino)');
+    const vb = b.ok();
+    const fotosB = { X: s.foto('X'), Z: s.foto('Z') };
+    assert.deepEqual([...kanban.idsPendientes(s.pendientes)], ['B'], 'B sigue pendiente hasta la recarga de su movimiento');
+    assert.equal(s.mover('B', 'X', 'W'), null, 'la copia vieja de B no se puede mover');
+    assert.equal(s.rechazados, 1);
+    s.llega('X', fotosB.X, vb.X);
+    assert.deepEqual([...kanban.idsPendientes(s.pendientes)], ['B'], 'falta la recarga de Z');
+    s.llega('Z', fotosB.Z, vb.Z);
+    assert.equal(kanban.idsPendientes(s.pendientes).size, 0, 'con las dos recargas, B queda libre');
+    s.comparar();
+  }
+  // CV2: el destino Y todavía no había cargado (sin movimiento optimista). B sale bien y sigue en X hasta la recarga;
+  // «Mover a Z» sobre esa copia no sale. La recarga de después incluye Y.
+  {
+    const s = flujo({ X: ['B', 'x2'], Y: ['y1'], Z: ['z1'] }, ['X', 'Z']);
+    const b = s.mover('B', 'X', 'Y');
+    assert.equal(s.tablero.Y, undefined, 'Y sin cargar: no hay movimiento optimista');
+    const v = b.ok();
+    assert.deepEqual(v, { X: 1, Y: 1 }, 'la recarga de después incluye el destino que no había cargado');
+    const fotos = { X: s.foto('X'), Y: s.foto('Y') };
+    assert.equal(s.mover('B', 'X', 'Z'), null, 'la copia de X espera la recarga');
+    s.llega('Y', { items: [{ id: 'y1', col: 'Y' }], total: 1 }, 0); // la primera carga de Y, vieja: no suelta nada
+    assert.deepEqual([...kanban.idsPendientes(s.pendientes)], ['B'], 'una respuesta de una versión anterior no suelta la espera');
+    s.llega('X', fotos.X, v.X);
+    s.llega('Y', fotos.Y, v.Y);
+    assert.equal(kanban.idsPendientes(s.pendientes).size, 0);
+    s.comparar();
+  }
+  // Un movimiento que falla también espera su recarga; una recarga que falla también suelta (llegoRecarga desde catch).
+  {
+    const s = flujo({ X: ['B', 'x2'], Y: ['y1'] });
+    const v = s.mover('B', 'X', 'Y').falla();
+    assert.deepEqual([...kanban.idsPendientes(s.pendientes)], ['B']);
+    s.pendientes = kanban.llegoRecarga(s.pendientes, 'X', v.X); // la recarga de X falló
+    s.llega('Y', s.foto('Y'), v.Y);
+    assert.equal(kanban.idsPendientes(s.pendientes).size, 0);
+  }
+  // esperarRecarga sin recargas (modo cliente, o columnas que ya no están): el movimiento termina ahí mismo. Una
+  // versión posterior también suelta; sin cambios, la misma lista.
+  {
+    let l = kanban.agregarPendiente([], { n: 1, id: 7, origen: 'X', destino: 'Y' });
+    assert.deepEqual([...kanban.idsPendientes(l)], ['7'], 'los ids como texto, igual que las claves de la tarjeta');
+    assert.equal(kanban.esperarRecarga(l, 1, {}).length, 0);
+    l = kanban.esperarRecarga(l, 1, { X: 3, Y: 2 });
+    assert.equal(kanban.llegoRecarga(l, 'Z', 9), l, 'otra columna: nada cambia');
+    l = kanban.llegoRecarga(l, 'X', 5);
+    assert.deepEqual(l[0].espera, { Y: 2 }, 'una versión posterior a la esperada también suelta');
+    assert.equal(kanban.llegoRecarga(l, 'Y', 1), l, 'una anterior no');
+    assert.equal(kanban.llegoRecarga(l, 'Y', 2).length, 0);
+    const sinEspera = kanban.agregarPendiente([], { n: 2, id: 'A', origen: 'X', destino: 'Y' });
+    assert.equal(kanban.llegoRecarga(sinEspera, 'X', 99), sinEspera, 'mientras el PATCH no responde, ninguna recarga lo suelta');
+  }
+  // subirVersiones: solo las columnas que existen; devuelve las versiones nuevas de esas columnas.
+  {
+    const r = kanban.subirVersiones({ X: 2 }, ['X', 'Y', 'vieja'], ['X', 'Y', 'Z']);
+    assert.deepEqual(r, { versiones: { X: 3, Y: 1 }, subidas: { X: 3, Y: 1 } });
+    assert.deepEqual(kanban.subirVersiones({ X: 2 }, undefined, ['X', 'Y']).subidas, { X: 3, Y: 1 }, 'sin claves, todas');
+  }
+
+  // Punto 2 (R3b): un «Ver más» en vuelo en el origen o el destino se deja al empezar el movimiento.
+  {
+    let t = estadoTableroInicial(columnas);
+    t = aplicarPagina(t, 'nuevo', { items: [{ id: 1 }], total: 9 });
+    t = aplicarPagina(t, 'curso', { items: [{ id: 2 }], total: 1 });
+    t = { ...t, nuevo: { ...t.nuevo, cargandoMas: true, errorMas: null } };
+    const r = kanban.cancelarVerMas(t, ['nuevo', 'curso']);
+    assert.deepEqual(r.abortar, ['nuevo'], 'solo la que tenía uno en camino');
+    assert.equal(r.tablero.nuevo.cargandoMas, false);
+    assert.equal(r.tablero.curso, t.curso);
+    const quieto = kanban.cancelarVerMas(r.tablero, ['nuevo', 'curso']);
+    assert.equal(quieto.tablero, r.tablero, 'sin nada en camino, el mismo tablero');
+    assert.deepEqual(quieto.abortar, []);
+  }
+
+  // Punto 3 (R8b): B estaba 5ª en X (llegó con «Ver más»); otra tarjeta sale de X con éxito y X se recarga con la primera
+  // página, sin B (4ª en el servidor). B falla: X queda en el total del servidor, no en uno más, y B no se inserta (la
+  // recarga de después la pone en su lugar).
+  {
+    const tres = definirColumnas(['X', 'Y', 'Z'].map((k) => ({ clave: k, titulo: k })));
+    let t = estadoTableroInicial(tres);
+    const pag = (k, ids, total = ids.length) => { t = kanban.marcarRecibido(aplicarPagina(t, k, { items: ids.map((id) => ({ id })), total }), k); };
+    pag('X', ['x0', 'x1', 'x2', 'x3', 'B']);
+    pag('Y', ['y1']);
+    pag('Z', ['z1']);
+    const movB = moverTarjeta(t, 'B', 'X', 'Y');
+    t = movB.tablero;
+    t = moverTarjeta(t, 'x0', 'X', 'Z').tablero; // éxito de x0
+    pag('X', ['x1', 'x2', 'x3'], 4); // la recarga de X: B sigue en el servidor (4ª), fuera de la página
+    const r = kanban.deshacerMovimiento(t, movB.tablero, movB.deshacer, { id: 'B', origen: 'X', destino: 'Y', original: { id: 'B' } });
+    assert.equal(r.X.total, 4, 'X en el total del servidor');
+    assert.deepEqual(r.X.items.map((x) => x.id), ['x1', 'x2', 'x3'], 'B no se inserta: ya está contada');
+    assert.deepEqual([r.Y.items.map((x) => x.id), r.Y.total], [['y1'], 1], 'sale del destino');
+    // Si el destino recibió datos del servidor después del movimiento, tampoco se toca (el servidor manda).
+    const conDestino = kanban.marcarRecibido(aplicarPagina(t, 'Y', { items: [{ id: 'B' }, { id: 'y1' }], total: 2 }), 'Y');
+    const r2 = kanban.deshacerMovimiento(conDestino, movB.tablero, movB.deshacer, { id: 'B', origen: 'X', destino: 'Y', original: { id: 'B' } });
+    assert.deepEqual([r2.Y.items.map((x) => x.id), r2.Y.total], [['B', 'y1'], 2]);
+    assert.equal(kanban.marcarRecibido(t, 'Y').Y.recibido, (t.Y.recibido ?? 0) + 1);
+  }
+
+  // Kanban.tsx sobre el fuente.
+  const fuente = readFileSync(new URL('../src/components/ui/Kanban.tsx', import.meta.url), 'utf8');
+  // Punto 1: los pendientes viven en el hook; TableroKanban no tiene estado propio de espera.
+  assert.match(fuente, /actualizarPendientes\(\(l\) => agregarPendiente\(l, \{ n, id, origen, destino \}\)\);/);
+  assert.match(fuente, /actualizarPendientes\(\(l\) => esperarRecarga\(l, n, subidas\)\);/);
+  assert.match(fuente, /actualizarPendientes\(\(l\) => llegoRecarga\(l, clave, version\)\);/);
+  assert.ok((fuente.match(/llegoRecarga\(/g) ?? []).length >= 2, 'suelta la espera al llegar y al fallar la recarga');
+  assert.match(fuente, /pendientes: ReadonlySet<string>;/);
+  assert.match(fuente, /if \(tablero\.pendientes\.has\(clave\)\) return;/);
+  assert.match(fuente, /if \(soloVer \|\| tablero\.pendientes\.has\(s\.clave\)\)/);
+  assert.match(fuente, /const pendiente = tablero\.pendientes\.has\(clave\);/);
+  assert.ok(!/marcarEsperando|setEsperando/.test(fuente), 'el tablero ya no lleva su propia espera');
+  // Punto 2: el «Ver más» en vuelo se aborta al empezar un movimiento.
+  assert.match(fuente, /const \{ tablero: sinVerMas, abortar \} = cancelarVerMas\(tableroRef\.current, \[origen, destino\]\);/);
+  assert.match(fuente, /if \(slot\?\.agregar\) slot\.control\.abort\(\);/);
+  // Punto 3: cada respuesta del servidor marca la columna.
+  assert.match(fuente, /marcarRecibido\(/);
+  // Punto 4: el arrastre se cancela si el nodo sale del DOM.
+  for (const tipo of ['lostpointercapture', 'pointerup', 'pointercancel']) {
+    assert.match(fuente, new RegExp(`document\\.addEventListener\\('${tipo}', alDocumento, true\\);`), `escucha ${tipo} en document`);
+    assert.match(fuente, new RegExp(`document\\.removeEventListener\\('${tipo}', alDocumento, true\\);`), `y lo quita`);
+  }
+  assert.match(fuente, /if \(seguido && !seguido\.el\.isConnected\) \{/, 'el bucle rAF cancela si la tarjeta salió del DOM');
+  // Punto 6: sin contenedor desplazable, también document.body.
+  assert.match(fuente, /else observador\.observe\(document\.body\);/);
+}
+
 console.log('✓ lib/kanban.js: columnas, reparto, orden, páginas, movimiento, reglas, destinos, arrastre y motivo.');
 console.log('✓ T4B: modo servidor y cliente, plegadas, turnos, deshacer, «Mover a…» y Kanban.tsx.');
 console.log('✓ T4B r1: deshacer sin perder tarjetas, «Ver más» quieto, StrictMode, alto, foco y anuncio.');
+console.log('✓ T4B r2: pendiente hasta su recarga, sin copias viejas, «Ver más» abortado y arrastre fuera del DOM.');
