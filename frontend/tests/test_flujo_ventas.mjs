@@ -396,4 +396,42 @@ console.log('--- TEST 20: solo presentación (C5, R8, RP67) y sin almacenamiento
   assert.ok(!/\.mas_antiguo_dias|\.por_estado/.test(fuente), 'una sola conversión de los pasos (flujo.js)');
 }
 
+console.log('--- TEST 21 (T5A; RP4, RP74): CadenaDocumentos — etiquetas únicas, compacta solo con el número y su fuente ---');
+{
+  const sc = {
+    id: 1, numero: 'SC-1', estado: 'ASIGNADA',
+    cotizaciones: [{ id: 10, numero: 'COT-10', estado: 'RECHAZADA' }, { id: 11, numero: 'COT-11', estado: 'PENDIENTE_CONFIRMACION' }],
+  };
+  // Lo normal: las etiquetas únicas de cada documento (RP4: la de la cotización es infoEstadoCotizacion de T2).
+  const normal = cadenaVentas(sc, 'SC', { rutaActual: RUTA });
+  assert.deepEqual(normal.map((p) => p.sublabel),
+    ['SC-1 · Asignada', 'COT-11 · Esperando confirmación del cliente (+1 rechazada)', 'Sin pedido todavía']);
+  // compacta: las funciones de etiqueta dan '' y queda solo el número (lo que falta conserva su texto).
+  const SIN = () => '';
+  const compacta = cadenaVentas(sc, 'SC', { etiquetas: { sc: SIN, cot: SIN, pven: SIN }, rutaActual: RUTA });
+  assert.deepEqual(compacta.map((p) => p.sublabel), ['SC-1', 'COT-11 (+1 rechazada)', 'Sin pedido todavía']);
+  assert.deepEqual(compacta.map((p) => [p.estado, p.esEste, p.href]), normal.map((p) => [p.estado, p.esEste, p.href]),
+    'compacta solo cambia los textos');
+  // RP74: el panel rápido del Hub pasa filas con tipo 'VEN'.
+  const pven = { id: 52, numero: 'PVEN-52', estado: 'CANCELADO', cot_id: 11, cot_numero: 'COT-11', sc_id: 1, sc_numero: 'SC-1' };
+  assert.deepEqual(cadenaVentas(pven, 'VEN', { rutaActual: RUTA }), cadenaVentas(pven, 'PVEN', { rutaActual: RUTA }));
+
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const fuente = leer('components/flujo/CadenaDocumentos.tsx');
+  const c = fuente.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(fuente.startsWith("'use client';"));
+  assert.match(c, /import \{ usePathname \} from 'next\/navigation';/);
+  assert.match(c, /const rutaActual = usePathname\(\);/, 'rutaActual (usePathname): los enlaces llevan return_to');
+  assert.match(c, /import \{ cadenaVentas \} from '@\/lib\/flujo-ventas';/);
+  assert.match(c, /import \{ infoEstadoCotizacion \} from '@\/lib\/estados-cotizacion';/, 'RP4: la etiqueta de T2');
+  assert.match(c, /const ETIQUETAS = \{ sc: infoEstadoSolicitud, cot: infoEstadoCotizacion, pven: infoEstadoPedido \};/);
+  assert.ok(!/cotizacion-client|ESTADOS\b/.test(c), 'RP4: no importa el ESTADOS hex de cotizacion-client.tsx');
+  assert.match(c, /cadenaVentas\(doc, tipo, \{ etiquetas: compacta \? SOLO_NUMERO : ETIQUETAS, rutaActual: rutaActual \|\| null \}\)/);
+  assert.match(c, /const SIN_ESTADO = \(\) => '';\nconst SOLO_NUMERO = \{ sc: SIN_ESTADO, cot: SIN_ESTADO, pven: SIN_ESTADO \};/);
+  assert.match(c, /<PasosFlujo variante="barra" pasos=\{pasos\} etiqueta="Flujo de este documento" compacto=\{compacta\} \/>/);
+  assert.match(c, /tipo: TipoCadena;/, 'RP74: el tipo de la prop es TipoCadena (SC, COT, PVEN o VEN)');
+  assert.match(leer('lib/flujo-ventas.js'), /@typedef \{'SC' \| 'COT' \| 'PVEN' \| 'VEN'\} TipoCadena/);
+  assert.match(c, /if \(!pasos\.length\) return null;/);
+}
+
 console.log('\nOK: test_flujo_ventas.mjs');

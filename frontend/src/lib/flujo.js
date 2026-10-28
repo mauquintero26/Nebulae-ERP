@@ -227,3 +227,209 @@ export function resumenSemaforo({ atrasados = null, cargando = false, error = nu
   if (n === null) return { tono: 'gris', texto: '—' };
   return n > 0 ? { tono: 'rojo', texto: textoAtraso(n) } : { tono: 'verde', texto: 'Todo al día' };
 }
+
+// ─── T5A: lo que usan los componentes de components/flujo ───────────────────────
+// PasosFlujo, BannerFlujo, CadenaDocumentos y useResumenFlujo solo pintan: los textos, los estados y la carga salen de
+// aquí (con su caso en test_flujo.mjs). El estado de cada Contador es estadoDeConteo de lib/tabla.js (el mismo de
+// BarraTabla, C13) y el turno de la carga, crearCargaListado de lib/tabla.js.
+
+/**
+ * El ícono y el texto del semáforo de BannerFlujo (T5A): resumenSemaforo, salvo que al RECARGAR con un número ya
+ * visto ese número sigue (no vuelve a 'Cargando…': «al recargar se ven los números anteriores hasta que llegan los
+ * nuevos», y la franja no parpadea en cada recarga de la pantalla). Sin número, mientras carga, 'Cargando…'. Con
+ * error, gris y '—' aunque quede el último número bueno (RP67).
+ * @param {{atrasados?: number | null, cargando?: boolean, error?: unknown}} [estado]
+ * @returns {ResumenSemaforo}
+ */
+export function semaforoDeFranja({ atrasados = null, cargando = false, error = null } = {}) {
+  const visto = numeroONulo(atrasados) !== null;
+  return resumenSemaforo({ atrasados, cargando: Boolean(cargando) && !visto, error });
+}
+
+/**
+ * @typedef {'todos' | 'atrasados' | 'no_resueltos'} FiltroSemaforo
+ * @typedef {{filtro: FiltroSemaforo, texto: string, conConteo: boolean, conteo: number | null, activo: boolean}}
+ *   OpcionSemaforo
+ */
+
+/** Los filtros del semáforo, en el orden del control segmentado. */
+const FILTROS_SEMAFORO = congelar(['atrasados', 'no_resueltos', 'todos']);
+
+/**
+ * Los botones del control segmentado del semáforo de BannerFlujo (R6), en orden: 'Con atraso (n)', 'No resueltos (n)'
+ * (solo si `noResueltos` llega: undefined es que no llega; null, que llega y todavía carga) y 'Ver todo' (sin número).
+ * «No resueltos» es el texto aprobado del botón (cruce C9 de la verificación, ajuste de RP67): «Sin resolver» es solo
+ * de los separadores. `activo` refleja semaforo.filtro; uno que no está entre los botones deja activo 'Ver todo'. Un
+ * conteo que no es un número queda en null (el Contador pinta la barra gris o '—', nunca un 0). Sin semáforo: [].
+ * @param {{atrasados?: number | null, noResueltos?: number | null, filtro?: string} | null | undefined} semaforo
+ * @returns {OpcionSemaforo[]}
+ */
+export function opcionesSemaforo(semaforo) {
+  if (!esMapa(semaforo)) return [];
+  const s = /** @type {any} */ (semaforo);
+  /** @type {Array<Omit<OpcionSemaforo, 'activo'>>} */
+  const opciones = [{ filtro: 'atrasados', texto: 'Con atraso', conConteo: true, conteo: numeroONulo(s.atrasados) }];
+  if (s.noResueltos !== undefined) {
+    opciones.push({ filtro: 'no_resueltos', texto: 'No resueltos', conConteo: true, conteo: numeroONulo(s.noResueltos) });
+  }
+  opciones.push({ filtro: 'todos', texto: 'Ver todo', conConteo: false, conteo: null });
+  const filtro = opciones.some((o) => o.filtro === s.filtro) ? s.filtro : 'todos';
+  return opciones.map((o) => ({ ...o, activo: o.filtro === filtro }));
+}
+
+/**
+ * El filtro que queda al tocar un botón del semáforo (R6): el elegido o, si ya estaba puesto, 'todos' (tocarlo otra
+ * vez lo quita); 'Ver todo' siempre deja 'todos'.
+ * @param {string | null | undefined} actual
+ * @param {FiltroSemaforo} elegido
+ * @returns {FiltroSemaforo}
+ */
+export function alternarFiltroSemaforo(actual, elegido) {
+  if (!FILTROS_SEMAFORO.includes(elegido)) return 'todos';
+  return actual === elegido ? 'todos' : elegido;
+}
+
+/**
+ * La línea de detalle de una caja de la franja (solo en el paso esEste): 'Nueva 1 · Asignada 2', con los miles con
+ * punto. Lo que no trae etiqueta o número se salta; nada da ''.
+ * @param {ReadonlyArray<DetallePaso | null | undefined> | null | undefined} detalle
+ * @returns {string}
+ */
+export function textoDetalle(detalle) {
+  if (!Array.isArray(detalle)) return '';
+  return detalle
+    .filter((d) => esMapa(d) && typeof d.label === 'string' && d.label !== '' && numeroONulo(d.n) !== null)
+    .map((d) => `${d.label} ${formatoEntero(d.n)}`)
+    .join(' · ');
+}
+
+/**
+ * 'El más antiguo: N días' de una caja de la franja (solo con mostrarAntiguedad; flujo_contenido_caja = total y
+ * atrasados, así que por defecto no se pinta). Los días se redondean y el plural sale del redondeado ('1 día'). Lo
+ * que no es un número de días (null, NaN, negativo o texto) da ''.
+ * @param {unknown} dias
+ * @returns {string}
+ */
+export function textoAntiguedad(dias) {
+  const n = numeroONulo(dias);
+  if (n === null || n < 0) return '';
+  const r = Math.round(n);
+  return `El más antiguo: ${formatoEntero(r)} ${r === 1 ? 'día' : 'días'}`;
+}
+
+/** Los textos no vacíos de los avisos de un paso. */
+const textosDeAvisos = (avisos) => (Array.isArray(avisos) ? avisos : [])
+  .map((a) => (esMapa(a) && typeof a.texto === 'string' ? a.texto.trim() : ''))
+  .filter(Boolean);
+
+/**
+ * El title de un paso de la barra: el label y, si los hay, el sublabel y los avisos ('Cotización: COT-20260485 ·
+ * Pendiente'). Por debajo de @md la barra oculta los sublabels: quedan aquí.
+ * @param {PasoVista} paso
+ * @returns {string}
+ */
+export function tituloPaso(paso) {
+  const resto = [typeof paso?.sublabel === 'string' ? paso.sublabel.trim() : '', ...textosDeAvisos(paso?.avisos)].filter(Boolean);
+  const label = String(paso?.label ?? '');
+  return resto.length ? `${label}: ${resto.join(' · ')}` : label;
+}
+
+/** Lo que oye un lector de pantalla del círculo de la barra (el ✓ y la X son aria-hidden). Inmutable. */
+const ESTADO_PARA_LECTOR = congelar({
+  hecho: 'Paso hecho', actual: 'Paso en curso', pendiente: 'Paso pendiente', cancelado: 'Paso cancelado',
+});
+
+/**
+ * El estado de un paso de la barra para lectores de pantalla: 'Paso hecho', 'Paso en curso', 'Paso pendiente' o
+ * 'Paso cancelado'. 'neutro' (una caja que no aplica o la Compra, que es un anexo) y lo desconocido dan '': su
+ * sublabel ya lo dice.
+ * @param {unknown} estado
+ * @returns {string}
+ */
+export function textoEstadoPaso(estado) {
+  return typeof estado === 'string' && tiene(ESTADO_PARA_LECTOR, estado) ? /** @type {any} */ (ESTADO_PARA_LECTOR)[estado] : '';
+}
+
+/**
+ * El estado de una etapa en el title de un punto de la variante mini (las etapas del envío): las mismas palabras de
+ * ETIQUETA_ETAPA_TRACKING de flujo-compras.js, en minúscula (test_flujo_compras.mjs lo comprueba). Inmutable.
+ */
+const ESTADO_DE_ETAPA = congelar({ hecho: 'completada', actual: 'en curso', pendiente: 'pendiente', cancelado: 'cancelada' });
+
+/**
+ * El title de un punto de la variante mini (las celdas de la tabla de Tránsito): 'Etapa 2 de 4: Aduana, en curso' y,
+ * si los hay, el sublabel y los avisos detrás de ' · '. Un paso 'neutro' va sin estado.
+ * @param {PasoVista} paso
+ * @param {number} indice  la posición del paso (desde 0)
+ * @param {number} total  cuántos pasos hay
+ * @returns {string}
+ */
+export function tituloPunto(paso, indice, total) {
+  const estado = typeof paso?.estado === 'string' && tiene(ESTADO_DE_ETAPA, paso.estado)
+    ? `, ${/** @type {any} */ (ESTADO_DE_ETAPA)[paso.estado]}`
+    : '';
+  const resto = [typeof paso?.sublabel === 'string' ? paso.sublabel.trim() : '', ...textosDeAvisos(paso?.avisos)].filter(Boolean);
+  return `Etapa ${indice + 1} de ${total}: ${String(paso?.label ?? '')}${estado}${resto.map((t) => ` · ${t}`).join('')}`;
+}
+
+/**
+ * El paso que lleva aria-current: el esEste (el de la pantalla en la franja; el documento abierto en la cadena) o, si
+ * ninguno lo es, el primero en estado 'actual' (las barras de los pasos propios de cada documento). Ninguno: -1.
+ * @param {ReadonlyArray<PasoVista | null | undefined> | null | undefined} pasos
+ * @returns {number}
+ */
+export function indicePasoActual(pasos) {
+  if (!Array.isArray(pasos)) return -1;
+  const este = pasos.findIndex((p) => esMapa(p) && p.esEste === true);
+  return este !== -1 ? este : pasos.findIndex((p) => esMapa(p) && p.estado === 'actual');
+}
+
+// ─── la carga del resumen (useResumenFlujo) ─────────────────────────────────────
+
+/**
+ * @typedef {{clave: string, ruta: string | null, datos: Record<string, any> | null, error: unknown}} ResultadoResumen
+ *   Lo último que llegó a useResumenFlujo: la clave de la consulta que lo pidió, su ruta, los datos buenos (res.data) y
+ *   el error de esa llegada.
+ * @typedef {{datos: Record<string, any> | null, cargando: boolean, error: unknown}} EstadoResumen
+ */
+
+/**
+ * Lo que queda del resumen cuando llega la respuesta (o el error) de una carga de useResumenFlujo. La llegada es la de
+ * crearCargaListado de lib/tabla.js (el turno: lo de una carga vieja nunca llega aquí), con contexto {ruta}.
+ *  - Una respuesta con un objeto en `data` (apiFetch devuelve el cuerpo completo: se lee res.data): esos datos, sin
+ *    error.
+ *  - Un error, o una respuesta sin un objeto en `data`: el error (un Error si no viene ninguno) y los últimos datos
+ *    buenos de la MISMA ruta (un error conserva lo último bueno; los de otra ruta no se muestran).
+ * No muta lo que recibe.
+ * @param {ResultadoResumen | null | undefined} previo
+ * @param {{marca: string, ok: boolean, respuesta?: unknown, error?: unknown, contexto?: {ruta?: string | null} | null}} llegada
+ * @returns {ResultadoResumen}
+ */
+export function aplicarLlegadaResumen(previo, llegada) {
+  const ruta = llegada?.contexto?.ruta ?? null;
+  const anteriores = previo && previo.ruta === ruta ? previo.datos : null;
+  const base = { clave: llegada.marca, ruta };
+  if (llegada.ok) {
+    const datos = /** @type {any} */ (llegada.respuesta)?.data;
+    if (esMapa(datos)) return { ...base, datos, error: null };
+    return { ...base, datos: anteriores, error: new Error('La respuesta del flujo no trae datos.') };
+  }
+  return { ...base, datos: anteriores, error: llegada.error ?? new Error('No se pudieron cargar los números del flujo.') };
+}
+
+/**
+ * Lo que devuelve useResumenFlujo para la consulta `clave` de `ruta`, con `resultado` (lo último que llegó):
+ *  - un resultado de otra ruta cuenta como ninguno;
+ *  - si su clave no es la pedida, hay una carga en camino: `cargando`, con los datos anteriores (al recargar los
+ *    números no parpadean) y sin el error anterior (Reintentar ya está cargando);
+ *  - en la primera carga, datos null (las cajas pintan la barra gris de Contador, D21);
+ *  - ya llegada: sus datos y su error (con error, los últimos datos buenos).
+ * @param {ResultadoResumen | null | undefined} resultado
+ * @param {{clave: string, ruta: string | null}} consulta
+ * @returns {EstadoResumen}
+ */
+export function estadoResumen(resultado, { clave, ruta }) {
+  const propio = resultado && resultado.ruta === ruta ? resultado : null;
+  const cargando = !propio || propio.clave !== clave;
+  return { datos: propio?.datos ?? null, cargando, error: cargando ? null : (propio.error ?? null) };
+}

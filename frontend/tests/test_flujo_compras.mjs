@@ -209,4 +209,26 @@ console.log('--- TEST 9: JS puro, sin almacenamiento y sin esPecAtrasado ni etap
   assert.ok(!/function congelar\(/.test(fuente), 'congelar no se copia');
 }
 
+console.log('--- TEST 10 (T5A): los puntos de la variante mini (Progreso de Tránsito) dicen el estado como ETIQUETA_ETAPA_TRACKING ---');
+{
+  // tituloPunto (lib/flujo.js) dice el estado de la etapa con las mismas palabras que el resto de Compras, en minúscula.
+  const CORRESPONDE = { hecho: 'COMPLETADO', actual: 'EN_PROCESO', pendiente: 'PENDIENTE', cancelado: 'CANCELADO' };
+  for (const [estado, deTracking] of Object.entries(CORRESPONDE)) {
+    assert.equal(/** @type {any} */ (flujo).tituloPunto({ clave: 'x', label: 'X', estado }, 0, 1),
+      `Etapa 1 de 1: X, ${ETIQUETA_ETAPA_TRACKING[deTracking].toLowerCase()}`, estado);
+  }
+  // Con las etapas reales de un envío por casillero (pasosDeTracking): la fecha o la llegada van detrás de ' · '.
+  const pasos = pasosDeTracking(CASILLERO);
+  const titulos = pasos.map((p, i) => /** @type {any} */ (flujo).tituloPunto(p, i, pasos.length));
+  assert.deepEqual(titulos, [
+    `Etapa 1 de 4: Pendiente Despacho Proveedor, completada · ${fechaLarga('2026-10-05T14:00:00')}`,
+    `Etapa 2 de 4: Proveedor -> Casillero, en curso · llega ${fechaLarga('2026-10-20')}`,
+    'Etapa 3 de 4: Casillero -> Bodega Nebulae, pendiente',
+    'Etapa 4 de 4: Recibido, pendiente',
+  ]);
+  // Una etapa atrasada suma su aviso (rojo) al title.
+  const atrasada = pasosDeTracking([etapa('ADUANA', 'Aduana', 'EN_PROCESO', { alert: { nivel: 'atrasado', mensaje: 'Atrasada 2 día(s)' } })]);
+  assert.equal(/** @type {any} */ (flujo).tituloPunto(atrasada[0], 1, 4), 'Etapa 2 de 4: Aduana, en curso · Atrasada 2 día(s)');
+}
+
 console.log('\nOK: test_flujo_compras.mjs');
