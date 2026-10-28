@@ -2,17 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch, getToken } from '@/lib/api';
-import { crearPreferencias, crearPreferenciasPorUsuario, vincularPreferencia } from '@/lib/preferencias';
+import { crearPreferencias, crearPreferenciasDeSesion, vincularPreferencia } from '@/lib/preferencias';
 import type { Preferencias } from '@/lib/preferencias';
 
 /**
  * La ÚNICA puerta de las pantallas a lib/preferencias.js (Bloque 4, T4A; R4, C2, RP24, RP25, RP26 y D35).
- *  - preferenciasApp(): la instancia de crearPreferencias del usuario que está usando la app, con localStorage y el
- *    servidor (GET /api/v1/preferencias?prefijo= y PUT /api/v1/preferencias/{clave} con {valor}, T1B). Lee el
- *    localStorage 'user_id' (lo escribe AuthGuard) en cada llamada: si cambió, cierra la instancia vieja ANTES de
- *    crear la nueva (D35) y la nueva hace precargar('') (un solo GET por sesión). Sin un id válido trabaja solo en
- *    memoria, sin PUT (RP25). Los errores de apiFetch pasan tal cual, con su .status, para que preferencias.js
- *    reintente solo la red o un 5xx (RP24).
+ *  - preferenciasApp(): la instancia de crearPreferencias del usuario de la SESIÓN, con localStorage y el servidor
+ *    (GET /api/v1/preferencias?prefijo= y PUT /api/v1/preferencias/{clave} con {valor}, T1B). Ver su JSDoc.
+ *    Los errores de apiFetch pasan tal cual, con su .status, para que preferencias.js reintente solo la red o un 5xx
+ *    (RP24).
  *  - usePreferencia(clave, porDefecto) -> [valor, guardar, listo]: hasta que la instancia está lista, `valor` es
  *    porDefecto y no se escribe nada (tampoco el valor por defecto); lo que se guarde antes se ve en memoria y se
  *    escribe con listo (D35). El primer render siempre es porDefecto (sin desajuste de hidratación). Si cambia el
@@ -32,29 +30,29 @@ export type OpcionesPreferencia = {
   validar?: (valor: unknown) => boolean;
 };
 
-const servidor = {
-  leer: (prefijo: string) =>
-    apiFetch(prefijo ? `/preferencias?prefijo=${encodeURIComponent(prefijo)}` : '/preferencias'),
-  guardar: (clave: string, valor: unknown) =>
-    apiFetch(`/preferencias/${encodeURIComponent(clave)}`, { method: 'PUT', body: JSON.stringify({ valor }) }),
-};
-
-function almacenDelNavegador(): Storage | null {
-  try {
-    return window.localStorage;
-  } catch {
-    return null; // bloqueado: preferencias.js trabaja en memoria
-  }
-}
-
-// Sin token (salió de la sesión, o una página pública) no hay usuario: nada de GET ni PUT que lleven al login, ni
-// escrituras en la cuenta de quien salió.
-const gestor = crearPreferenciasPorUsuario({
-  leerUsuario: () => (getToken() ? window.localStorage.getItem('user_id') : null),
-  crear: (usuarioId) => crearPreferencias({ usuarioId, almacen: almacenDelNavegador(), servidor }),
+// T4A r1: el usuario es el del TOKEN. crearPreferenciasDeSesion (lib/preferencias.js, con sus pruebas) toma el user_id
+// de AuthGuard solo si es el sub del JWT vigente, y el servidor de cada instancia comprueba antes de cada GET y PUT
+// que el token sigue siendo de su usuario; apiFetch va con sinReintento401 (un 401 no se reintenta con otro token).
+const gestor = crearPreferenciasDeSesion({
+  leerToken: getToken,
+  leerUserId: () => window.localStorage.getItem('user_id'),
+  leerAlmacen: () => window.localStorage,
+  pedir: apiFetch,
 });
 
-/** La instancia de preferencias del usuario actual (ver arriba). Del lado del servidor, una en memoria y de un solo uso. */
+/**
+ * La instancia de preferencias del usuario de la sesión (T4A y r1; RP25 y D35):
+ *  - Es la del usuario del TOKEN vigente: el localStorage 'user_id' de AuthGuard vale solo si es el sub del JWT. Sin
+ *    token, o con el token de otro usuario (nadie borra 'user_id' al cerrar la sesión), es una instancia en memoria,
+ *    sin GET ni PUT, hasta que AuthGuard escriba el user_id correcto. Al cambiar de usuario cierra la vieja ANTES de
+ *    crear la nueva, y la nueva hace precargar('') (un solo GET por sesión).
+ *  - Llámala en CADA uso (en el efecto o en el manejador que va a leer o escribir) y no guardes la instancia en un ref
+ *    ni en el estado: después de un cambio de usuario la vieja queda cerrada y muda.
+ *  - No escribas antes de estaLista() (o de `await preferenciasApp().listo`), ni siquiera un valor por defecto (D35).
+ *  - Para escribir por partes (tabla:<id>), usePreferenciaParte ya resuelve D35: escribe con escribirParte solo con
+ *    listo y sigue al usuario si cambia.
+ * Del lado del servidor (render de Next) devuelve una instancia en memoria de un solo uso.
+ */
 export function preferenciasApp(): Preferencias {
   if (typeof window === 'undefined') return crearPreferencias({ usuarioId: null });
   return gestor.obtener();

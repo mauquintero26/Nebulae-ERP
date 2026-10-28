@@ -8,6 +8,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   SIN_COLUMNA, TEXTO_SOLO_VER, definirColumnas, columnaPorEstados, agruparEnColumnas, ordenarTarjetas,
   estadoTableroInicial, aplicarPagina, marcarColumna, moverTarjeta, resolverSoltar, mapaDestinos, columnaBajoPunto,
@@ -258,6 +259,13 @@ console.log('--- TEST 11 (T4A): motivoValido (ModalMotivo: 5 caracteres o más, 
   for (const otro of [null, undefined, 12345, {}, ['abcde']]) assert.equal(motivoValido(otro), false, String(otro));
   assert.equal(motivoValido('abc', 3), true, 'el mínimo se puede cambiar');
   assert.equal(motivoValido('ab', 3), false);
+  // T4A r1 (punto 5): si el servidor responde con error, el foco vuelve al campo (habilitado otra vez) y lo escrito
+  // se conserva. Sin DOM en node: se fija sobre el fuente de ModalMotivo.tsx.
+  const fuente = readFileSync(new URL('../src/components/ui/ModalMotivo.tsx', import.meta.url), 'utf8');
+  assert.ok(fuente.includes('ref={campo}'), 'el textarea tiene su ref');
+  assert.match(fuente, /if \(fallos > 0 && !guardando\) campo\.current\?\.focus\(\)/, 'el foco vuelve al campo después de un error');
+  assert.match(fuente, /setFallos\(\(n\) => n \+ 1\)/, 'cada error cuenta, aunque el mensaje se repita');
+  assert.ok(!/setMotivo\(''\)/.test(fuente), 'lo escrito no se borra');
 }
 
 console.log('✓ lib/kanban.js: columnas, reparto, orden, páginas, movimiento, reglas, destinos, arrastre y motivo.');

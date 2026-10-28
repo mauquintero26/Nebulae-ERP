@@ -14,6 +14,8 @@
  * (h) Si el token cambio mientras la peticion estaba en camino (otra peticion re-ingreso o renovo), un 401 se
  *     reintenta UNA vez con el token nuevo sin pedir re-ingreso (con y sin manejador); renovarSesion da 'ok'.
  * (i) login(): el Error lleva el status HTTP (401 -> 401, 500 -> 500); si fetch falla no lleva status.
+ * (j) B4 T4A r1: con la opcion sinReintento401 (las preferencias) un 401 lanza SesionVencidaError de inmediato: sin
+ *     re-ingreso, sin reintentar con otro token y sin redirigir ni borrar el token; la opcion no llega a fetch.
  * Cada caso importa una instancia nueva del modulo (?caso=...) para no compartir el estado interno.
  */
 
@@ -338,6 +340,57 @@ console.log('--- TEST i: login() deja el status HTTP en el error ---');
     assert.equal(err.status, undefined, 'sin respuesta no hay status: la ventana dice que no hubo conexion');
     return true;
   });
+}
+
+console.log('--- TEST j: sinReintento401 (preferencias, B4 T4A r1): un 401 no se reintenta con otro token ---');
+{
+  const api = await cargar('j');
+  const esSesionVencida = (err) => {
+    assert.ok(err instanceof api.SesionVencidaError);
+    assert.equal(err.status, 401);
+    assert.equal(err.message, MENSAJE);
+    return true;
+  };
+  // (1) Con manejador: no pide re-ingreso ni reintenta; el 200 normal sigue igual y la opcion no llega a fetch.
+  reiniciar();
+  let vecesManejador = 0;
+  api.registrarReautenticacion(async () => { vecesManejador++; localStorage.setItem('token', 'nuevo'); });
+  responder = r401SiViejo({ data: { ok: 1 } });
+  await assert.rejects(api.apiFetch('/preferencias/vista%3Ax', { method: 'PUT', body: '{"valor":"kanban"}', sinReintento401: true }), esSesionVencida);
+  assert.equal(vecesManejador, 0, 'no abre la ventana de re-ingreso');
+  assert.equal(llamadas.length, 1, 'una sola llamada: no hay reintento');
+  assert.equal('sinReintento401' in llamadas[0].opciones, false, 'la opcion no llega a fetch');
+  assert.equal(llamadas[0].opciones.method, 'PUT');
+  assert.deepEqual(redirecciones, []);
+  assert.equal(localStorage.getItem('token'), 'viejo', 'el token no se toca');
+  localStorage.setItem('token', 'otro');
+  llamadas = [];
+  const bien = await api.apiFetch('/preferencias', { sinReintento401: true });
+  assert.deepEqual(bien.data, { ok: 1 });
+  assert.equal(llamadas.length, 1);
+  // (2) El token cambio mientras la peticion iba en camino: NO se reintenta con el token nuevo (otro usuario).
+  reiniciar();
+  responder = (url, opciones) => {
+    localStorage.setItem('token', 'de-otro-usuario');
+    return respuesta(opciones.headers.Authorization === 'Bearer viejo' ? 401 : 200, {});
+  };
+  await assert.rejects(api.apiFetch('/preferencias', { sinReintento401: true }), esSesionVencida);
+  assert.equal(llamadas.length, 1, 'ningun GET con el token del otro usuario');
+  // (3) Sin manejador: no redirige ni borra el token (lo hace la pantalla con sus propias peticiones).
+  api.registrarReautenticacion(null);
+  reiniciar();
+  responder = () => respuesta(401, {});
+  await assert.rejects(api.apiFetch('/preferencias', { sinReintento401: true }), esSesionVencida);
+  assert.deepEqual(redirecciones, []);
+  assert.equal(localStorage.getItem('token'), 'viejo');
+  assert.equal(sessionStorage.getItem('returnUrl'), null);
+  // (4) Sin la opcion, lo de siempre (TEST a): con manejador reautentica y reintenta.
+  reiniciar();
+  vecesManejador = 0;
+  api.registrarReautenticacion(async () => { vecesManejador++; localStorage.setItem('token', 'nuevo'); });
+  responder = r401SiViejo({ data: { ok: 2 } });
+  const r = await api.apiFetch('/ventas/solicitudes', { method: 'POST', body: '{}' });
+  assert.deepEqual([vecesManejador, llamadas.length, r.data.ok], [1, 2, 2]);
 }
 
 console.log('✓ Todos los tests de frontend apiFetch pasaron exitosamente.');

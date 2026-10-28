@@ -18,8 +18,9 @@ import { infoVariacion } from '@/lib/analisis';
  * KPI-base (Bloque 4, T4A; R12, C13, RP27 y RP82): la ÚNICA tarjeta de indicadores de la app, su franja y el estado de
  * carga. Los textos, formatos, variaciones y tonos salen de lib/kpis.js (con infoVariacion de lib/analisis.js, la
  * regla única de la variación); aquí solo se pintan.
- *  - TarjetaKpi: ícono a la izquierda, el nombre arriba, el valor (completo; la letra se achica con tamanoValor) y UNA
- *    línea debajo: la variación contra el período anterior (flecha verde, roja o gris + '+12,5 %' + 'vs 30 días antes',
+ *  - TarjetaKpi: ícono a la izquierda, el nombre arriba, el valor (completo: la letra se achica con tamanoValor y, si
+ *    aun así no cabe, pasa a otra línea; nunca se corta, r1) y UNA línea debajo (el nombre y la ayuda, en dos líneas
+ *    como mucho y con su title): la variación contra el período anterior (flecha verde, roja o gris + '+12,5 %' + 'vs 30 días antes',
  *    y para lectores de pantalla 'Sube 12,5 % frente a los 30 días anteriores') o, sin variación, la ayuda.
  *  - Estados (C13): 'cargando' pinta barras grises en lugar del valor y de la ayuda (nunca 0 ni 'Todas al día');
  *    'actualizando' atenúa lo que ya se veía; 'error' sin valor muestra '—' y 'No se pudo cargar'.
@@ -142,7 +143,7 @@ export function TarjetaKpi({
     cuerpoValor = <span aria-hidden="true" className="block h-7 w-24 rounded-md bg-slate-200 animate-pulse mt-1" />;
   } else if (texto !== null) {
     cuerpoValor = (
-      <span title={texto} className={`block ${tamanoValor(texto)} font-black text-slate-900 leading-tight tabular-nums truncate mt-0.5 ${atenuado}`}>
+      <span title={texto} className={`block ${tamanoValor(texto)} font-black text-slate-900 leading-tight tabular-nums break-words mt-0.5 ${atenuado}`}>
         {texto}
       </span>
     );
@@ -155,7 +156,7 @@ export function TarjetaKpi({
   if (cargando) {
     linea = <span aria-hidden="true" className="block h-3 w-32 rounded bg-slate-200 animate-pulse mt-2" />;
   } else if (conError) {
-    linea = <span className="block text-xs font-semibold text-rose-600 truncate mt-1">No se pudo cargar</span>;
+    linea = <span title="No se pudo cargar" className="line-clamp-2 text-xs font-semibold text-rose-600 mt-1">No se pudo cargar</span>;
   } else if (info) {
     linea = (
       <span className={`mt-1 flex items-center gap-1.5 min-w-0 ${atenuado}`}>
@@ -163,13 +164,13 @@ export function TarjetaKpi({
           {info.flecha === 'sube' ? <ArrowUpRight size={12} /> : info.flecha === 'baja' ? <ArrowDownRight size={12} /> : <Minus size={12} />}
           {info.texto}
         </span>
-        <span aria-hidden="true" className="text-xs text-slate-400 truncate">{comparado}</span>
+        <span aria-hidden="true" title={comparado} className="min-w-0 line-clamp-2 text-xs text-slate-400">{comparado}</span>
         <span className="sr-only">{info.lector}</span>
       </span>
     );
   } else if (ayuda !== undefined && ayuda !== null && ayuda !== false && ayuda !== '') {
     linea = (
-      <span title={typeof ayuda === 'string' ? ayuda : undefined} className={`block text-xs font-semibold truncate mt-1 ${TONO_AYUDA[tono]} ${atenuado}`}>
+      <span title={typeof ayuda === 'string' ? ayuda : undefined} className={`line-clamp-2 text-xs font-semibold mt-1 ${TONO_AYUDA[tono]} ${atenuado}`}>
         {ayuda}
       </span>
     );
@@ -189,7 +190,7 @@ export function TarjetaKpi({
         </span>
       )}
       <span className="block min-w-0 flex-1">
-        <span title={nombre} className="block text-xs font-semibold text-slate-500 truncate">{nombre}</span>
+        <span title={nombre} className="line-clamp-2 text-xs font-semibold text-slate-500">{nombre}</span>
         {cuerpoValor}
         {linea}
         {cargando && <span className="sr-only">Cargando</span>}

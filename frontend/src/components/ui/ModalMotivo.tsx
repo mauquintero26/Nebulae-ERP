@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { Modal } from './Modal';
 import { Button } from './Button';
@@ -15,7 +15,8 @@ import { textoDeError } from '@/lib/avisos';
  *    (motivoValido de lib/kanban.js).
  *  - onConfirmar recibe el motivo sin los espacios del borde y es async. Si termina bien, la ventana se cierra
  *    (onCerrar). Si falla, el error queda en una caja rose dentro de la ventana y lo escrito no se borra (regla del
- *    Bloque 2). Mientras guarda no se puede cerrar ni volver a confirmar.
+ *    Bloque 2). Mientras guarda no se puede cerrar ni volver a confirmar. Después de un error el campo vuelve a estar
+ *    habilitado y con el foco (r1), para corregir y reintentar.
  */
 export function ModalMotivo({
   titulo, mensaje, efectos, textoConfirmar = 'Confirmar', textoCancelar = 'Volver', placeholder, onConfirmar, onCerrar,
@@ -32,10 +33,18 @@ export function ModalMotivo({
   const [motivo, setMotivo] = useState('');
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Cuántas veces falló: el foco vuelve al campo después de cada error, aunque el mensaje sea el mismo. */
+  const [fallos, setFallos] = useState(0);
+  const campo = useRef<HTMLTextAreaElement>(null);
   const idCampo = useId();
   const idMensaje = useId();
   const idError = useId();
   const valido = motivoValido(motivo);
+
+  // Ya sin guardar (el campo otra vez habilitado): el foco vuelve al motivo, con lo escrito intacto.
+  useEffect(() => {
+    if (fallos > 0 && !guardando) campo.current?.focus();
+  }, [fallos, guardando]);
 
   const cerrar = () => {
     if (!guardando) onCerrar();
@@ -50,6 +59,7 @@ export function ModalMotivo({
       onCerrar();
     } catch (err) {
       setError(textoDeError(err));
+      setFallos((n) => n + 1);
     } finally {
       setGuardando(false);
     }
@@ -84,6 +94,7 @@ export function ModalMotivo({
           {`Motivo (mínimo ${MINIMO_MOTIVO} caracteres)`}
         </label>
         <textarea
+          ref={campo}
           id={idCampo}
           value={motivo}
           onChange={(e) => setMotivo(e.target.value)}

@@ -271,9 +271,17 @@ console.log('--- TEST 11 (T4A): lo que usan TarjetaKpi, Contador y useEstadoKpi 
   assert.equal(textoValorTarjeta(1452, 'entero'), '1.452', "'entero' es sinónimo de 'numero' (RP27)");
   assert.equal(textoValorTarjeta(1452), '1.452', 'un número sin formato va con los miles con punto');
   assert.equal(textoValorTarjeta('Contado 30 días'), 'Contado 30 días', 'un texto sin formato va tal cual');
-  assert.equal(textoValorTarjeta(1452, 'texto'), '1452', 'StatCard (formato texto): el valor tal como lo pasa la pantalla');
+  // StatCard (r1, punto 3): un entero va sin formato ('1.452', R7); un decimal o un texto, con 'texto' (tal cual).
+  assert.equal(textoValorTarjeta(1452, undefined), '1.452', 'StatCard con un entero');
+  assert.equal(textoValorTarjeta(12.5, 'texto'), '12.5', 'StatCard con un decimal: tal como lo pasa la pantalla');
   assert.equal(textoValorTarjeta('$1.062.523', 'texto'), '$1.062.523');
-  assert.equal(textoValorTarjeta(0, 'texto'), '0');
+  assert.equal(textoValorTarjeta('...', 'texto'), '...');
+  assert.equal(textoValorTarjeta(0, undefined), '0');
+  const statCard = readFileSync(new URL('../src/components/ui/StatCard.tsx', import.meta.url), 'utf8');
+  assert.ok(
+    statCard.includes("formato={typeof value === 'number' && Number.isInteger(value) ? undefined : 'texto'}"),
+    'StatCard pasa los enteros sin formato y lo demás como texto',
+  );
   for (const vacio of [null, undefined]) {
     assert.equal(textoValorTarjeta(vacio, 'pesos'), '—');
     assert.equal(textoValorTarjeta(vacio), '—');
@@ -348,6 +356,19 @@ console.log('--- TEST 11 (T4A): lo que usan TarjetaKpi, Contador y useEstadoKpi 
   assert.ok(mapa, 'TarjetaKpi.tsx tiene el mapa ICONOS');
   const nombres = mapa[1].split(',').map((s) => s.trim()).filter(Boolean);
   assert.deepEqual([...nombres].sort(), [...ICONOS_KPI].sort(), 'el mapa de TarjetaKpi tiene exactamente los de ICONOS_KPI');
+
+  // r1 (punto 4): el valor no se trunca nunca (se achica con tamanoValor o pasa a otra línea); la etiqueta y la ayuda
+  // usan line-clamp-2 con su title.
+  const lineas = fuente.split(/\r?\n/);
+  assert.ok(!/\btruncate\b/.test(fuente), 'TarjetaKpi no usa truncate');
+  const lineaValor = lineas.find((l) => l.includes('${tamanoValor(texto)}'));
+  assert.ok(lineaValor && lineaValor.includes('break-words'), `el valor pasa a otra línea: ${lineaValor}`);
+  const lineaEtiqueta = lineas.find((l) => l.includes('title={nombre}'));
+  assert.ok(lineaEtiqueta && lineaEtiqueta.includes('line-clamp-2'), `la etiqueta: ${lineaEtiqueta}`);
+  const lineaAyuda = lineas.find((l) => l.includes('${TONO_AYUDA[tono]}'));
+  assert.ok(lineaAyuda && lineaAyuda.includes('line-clamp-2') && lineaAyuda.includes('title='), `la ayuda: ${lineaAyuda}`);
+  const lineaError = lineas.find((l) => l.includes('>No se pudo cargar<'));
+  assert.ok(lineaError && lineaError.includes('line-clamp-2') && lineaError.includes('title="No se pudo cargar"'), `el error: ${lineaError}`);
 }
 
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

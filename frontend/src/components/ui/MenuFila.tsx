@@ -31,6 +31,16 @@ export type ItemMenuFila = {
 
 const ITEM = '[role="menuitem"]';
 
+/**
+ * Enfoca un ítem sin mover la página y, si el menú está recortado (altoMaximo) y el ítem no se ve, lo trae a la vista
+ * dentro del menú (T4A r1). El scroll del propio menú no lo cierra (alDesplazar lo ignora).
+ */
+function enfocar(item: HTMLElement | null | undefined) {
+  if (!item) return;
+  item.focus({ preventScroll: true });
+  item.scrollIntoView({ block: 'nearest' });
+}
+
 export function MenuFila({
   items, etiqueta = 'Acciones',
 }: {
@@ -63,7 +73,7 @@ export function MenuFila({
     m.style.left = `${p.left}px`;
     m.style.maxHeight = `${p.altoMaximo}px`;
     m.style.visibility = 'visible';
-    m.querySelector<HTMLElement>(ITEM)?.focus({ preventScroll: true });
+    enfocar(m.querySelector<HTMLElement>(ITEM));
   }, [abierto]);
 
   useEffect(() => {
@@ -122,7 +132,7 @@ export function MenuFila({
     }
     if (destino) {
       e.preventDefault();
-      destino.focus({ preventScroll: true });
+      enfocar(destino);
     }
   };
 

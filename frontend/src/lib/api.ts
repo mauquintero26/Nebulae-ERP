@@ -132,22 +132,28 @@ export function renovarSesion(): Promise<ResultadoRenovacion> {
  * montado espera el re-ingreso y reintenta UNA vez con el token nuevo (el 401 garantiza que el servidor no ejecuto
  * nada); un reintento que vuelve a dar 401 lanza SesionVencidaError sin redirigir; fuera del dashboard (sin
  * manejador) borra el token, guarda returnUrl y redirige una sola vez a /login.
+ * B4 T4A r1: con sinReintento401 (opt-in; lo usan las preferencias) un 401 lanza SesionVencidaError de inmediato,
+ * sin re-ingreso, sin reintento y sin redirigir ni borrar el token: la peticion nunca sale con el token de otro
+ * usuario. La opcion no se manda a fetch. Los demas llamadores no cambian.
  */
+export type OpcionesApiFetch = RequestInit & { sinReintento401?: boolean };
+
 export async function apiFetch(
   path: string,
-  options: RequestInit = {},
+  options: OpcionesApiFetch = {},
   _reintento = false
 ): Promise<any> {
+  const { sinReintento401 = false, ...init } = options;
   const token = getToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(options.headers as Record<string, string> || {}),
+    ...(init.headers as Record<string, string> || {}),
     ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
   };
-  const res = await fetch(`${API_URL}${path}`, { ...options, headers });
+  const res = await fetch(`${API_URL}${path}`, { ...init, headers });
   if (!res.ok) {
     if (res.status === 401) {
-      if (_reintento) throw new SesionVencidaError();
+      if (_reintento || sinReintento401) throw new SesionVencidaError();
       // El token cambio mientras la peticion iba en camino (otra peticion re-ingreso o renovo): el 401 era del
       // token viejo. Se reintenta una vez con el nuevo, sin pedir re-ingreso.
       const tokenActual = getToken();

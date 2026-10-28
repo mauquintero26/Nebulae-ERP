@@ -26,11 +26,17 @@
  *    T4A la cierra: un PUT pendiente saldría con la sesión del usuario nuevo y escribiría en la cuenta del otro).
  *  - T4A (RP25, D35): crearPreferenciasPorUsuario da la instancia del usuario actual (al cambiar de usuario cierra la
  *    vieja ANTES de crear la nueva) y vincularPreferencia es la regla de los hooks: nada se escribe antes de `listo`.
+ *  - T4A r1: el usuario de las preferencias es el del TOKEN (usuarioDeSesion: el user_id de AuthGuard solo si es el sub
+ *    del JWT vigente) y cada instancia comprueba antes de cada GET y PUT que el token sigue siendo de su usuario
+ *    (servidorDeUsuario); crearPreferenciasDeSesion arma las dos cosas para usePreferencia.ts. Si la precarga falló,
+ *    las partes (escribirParte) esperan en memoria, sin PUT, hasta una precarga buena (cada escritura la reintenta
+ *    una vez).
  * El servidor inyectado es {leer(prefijo) -> Promise<{status, data: {clave: valor}} | {clave: valor}>,
  * guardar(clave, valor) -> Promise}; un error lleva .status (apiFetch) o no lleva (la red).
  */
 
 import { congelar } from './estados-pedido.js';
+import { leerPayload } from './session.js';
 
 /**
  * @typedef {{getItem(clave: string): string | null, setItem(clave: string, valor: string): void}} Almacen
@@ -180,6 +186,13 @@ export function crearPreferencias({
   let cerrada = false;
   /** prefijo -> Promise<boolean> de su precarga (una por sesión). */
   const precargas = new Map();
+  /** T4A r1: la última precarga('') falló y ninguna salió bien desde entonces. */
+  let precargaFallo = false;
+  /**
+   * T4A r1: clave -> las partes escritas mientras precargaFallo (solo en memoria, sin PUT): la copia local puede no
+   * tener las partes que hay en el servidor. Con la primera precarga buena se escriben sobre lo que trajo el servidor.
+   */
+  const partesEnEspera = new Map();
   /** @type {any} */
   let temporizadorId = null;
   let cola = Promise.resolve();
@@ -209,13 +222,8 @@ export function crearPreferencias({
     } catch { /* lleno o bloqueado: queda en memoria */ }
   }
 
-  /**
-   * El valor guardado en `clave`, o `porDefecto` si no hay, si el JSON está dañado o si la clave no vale. Devuelve
-   * una copia: mutarla no cambia lo guardado.
-   * @param {string} clave
-   * @param {any} [porDefecto]
-   */
-  function leer(clave, porDefecto = undefined) {
+  /** Lo guardado (memoria o almacén), sin las partes en espera. */
+  function leerGuardado(clave, porDefecto) {
     if (!claveValida(clave)) return porDefecto;
     const texto = leerTexto(clave);
     if (texto === null) return porDefecto;
@@ -224,6 +232,19 @@ export function crearPreferencias({
     } catch {
       return porDefecto;
     }
+  }
+
+  /**
+   * El valor guardado en `clave`, o `porDefecto` si no hay, si el JSON está dañado o si la clave no vale, con las partes
+   * que esperan una precarga buena encima. Devuelve una copia: mutarla no cambia lo guardado.
+   * @param {string} clave
+   * @param {any} [porDefecto]
+   */
+  function leer(clave, porDefecto = undefined) {
+    const guardado = leerGuardado(clave, porDefecto);
+    const espera = partesEnEspera.get(clave);
+    if (!espera) return guardado;
+    return { ...(esObjetoPlano(guardado) ? guardado : {}), ...espera };
   }
 
   async function enviarPendientes() {
@@ -263,36 +284,57 @@ export function crearPreferencias({
     }, retardoMs);
   }
 
+  /** El JSON de `valor` si se puede guardar en `clave`, o null con un console.warn (clave, JSON, 8 KB y niveles). */
+  function textoGuardable(clave, valor) {
+    if (!claveValida(clave)) {
+      avisar(`Clave de preferencia no válida: ${String(clave)}`);
+      return null;
+    }
+    const texto = aJson(valor);
+    if (texto === null) {
+      avisar(`El valor de ${clave} no se puede guardar como JSON.`);
+      return null;
+    }
+    if (CODIFICADOR.encode(texto).length > LIMITE_BYTES) {
+      avisar(`El valor de ${clave} pasa de 8 KB (${LIMITE_BYTES} bytes): no se guarda.`);
+      return null;
+    }
+    // Sobre el JSON, como el servidor: un Date es un texto y un valor circular ya cayó arriba (no se serializa).
+    if (pasaDeNiveles(JSON.parse(texto))) {
+      avisar(`El valor de ${clave} tiene demasiados niveles anidados (máximo ${MAXIMO_NIVELES}): no se guarda.`);
+      return null;
+    }
+    return texto;
+  }
+
+  /**
+   * T4A r1: si la última precarga('') falló, la vuelve a pedir, una vez por escritura (si ya va una en camino,
+   * precargar devuelve esa misma y no sale otro GET).
+   */
+  function reintentarPrecarga() {
+    if (!remoto || cerrada || !precargaFallo) return;
+    precargar('');
+  }
+
   /**
    * Guarda `valor` en `clave`: de inmediato en local y, con servidor, en un PUT agrupado (RETARDO_MS después del
    * último cambio). Devuelve false, sin lanzar y con un console.warn, si la clave no vale, si el valor no se puede
    * serializar, si pasa de LIMITE_BYTES en bytes UTF-8 o si su JSON tiene más de MAXIMO_NIVELES niveles anidados
    * (no toca el almacén ni hay PUT). Después de cerrar() devuelve false y no hace nada. Escribir lo mismo que ya está y no está
-   * pendiente no manda nada.
+   * pendiente no manda nada. Si la precarga falló, la pide otra vez (T4A r1) y el valor sube igual: reemplaza la clave
+   * entera, así que no borra partes ajenas.
    * @param {string} clave
    * @param {unknown} valor
    * @returns {boolean}
    */
   function escribir(clave, valor) {
     if (cerrada) return false;
-    if (!claveValida(clave)) {
-      avisar(`Clave de preferencia no válida: ${String(clave)}`);
-      return false;
-    }
-    const texto = aJson(valor);
-    if (texto === null) {
-      avisar(`El valor de ${clave} no se puede guardar como JSON.`);
-      return false;
-    }
-    if (CODIFICADOR.encode(texto).length > LIMITE_BYTES) {
-      avisar(`El valor de ${clave} pasa de 8 KB (${LIMITE_BYTES} bytes): no se guarda.`);
-      return false;
-    }
-    // Sobre el JSON, como el servidor: un Date es un texto y un valor circular ya cayó arriba (no se serializa).
-    if (pasaDeNiveles(JSON.parse(texto))) {
-      avisar(`El valor de ${clave} tiene demasiados niveles anidados (máximo ${MAXIMO_NIVELES}): no se guarda.`);
-      return false;
-    }
+    const texto = textoGuardable(clave, valor);
+    if (texto === null) return false;
+    // Un valor completo reemplaza la clave entera (no borra partes ajenas): sube aunque la precarga haya fallado, y
+    // deja sin efecto las partes de esa clave que esperaban.
+    partesEnEspera.delete(clave);
+    reintentarPrecarga();
     if (leerTexto(clave) === texto && !pendientes.has(clave)) return true;
     guardarLocal(clave, texto);
     if (remoto) {
@@ -307,15 +349,35 @@ export function crearPreferencias({
    * Guarda {...leer(clave), ...parcial} (RP26). Si lo guardado no es un objeto, la parte arranca de cero.
    * Regla para los hooks (T4A): no se llama antes de `listo`. En un equipo sin copia local, una parte escrita antes de
    * la precarga mezcla con {} y su PUT borraría en el servidor las otras partes de la clave.
+   * T4A r1: si la precarga falló (y ninguna salió bien desde entonces), la parte queda solo en memoria, sin PUT ni
+   * almacén (leer ya la ve), y se pide otra precarga, una vez por escritura. Con la primera precarga buena, las partes
+   * en espera se escriben sobre lo que trajo el servidor.
    * @param {string} clave
    * @param {Record<string, unknown>} parcial
    * @returns {boolean}
    */
   function escribirParte(clave, parcial) {
+    if (cerrada) return false;
+    const parte = esObjetoPlano(parcial) ? parcial : {};
+    if (remoto && precargaFallo) {
+      const espera = { ...(partesEnEspera.get(clave) ?? {}), ...parte };
+      const guardado = leerGuardado(clave, undefined);
+      if (textoGuardable(clave, { ...(esObjetoPlano(guardado) ? guardado : {}), ...espera }) === null) return false;
+      partesEnEspera.set(clave, espera);
+      reintentarPrecarga();
+      return true;
+    }
     const actual = leer(clave);
-    const base = actual !== null && typeof actual === 'object' && !Array.isArray(actual) ? actual : {};
-    const parte = parcial !== null && typeof parcial === 'object' && !Array.isArray(parcial) ? parcial : {};
-    return escribir(clave, { ...base, ...parte });
+    return escribir(clave, { ...(esObjetoPlano(actual) ? actual : {}), ...parte });
+  }
+
+  /** T4A r1: con una precarga buena, las partes en espera se escriben sobre lo guardado (lo que trajo el servidor). */
+  function escribirPartesEnEspera() {
+    for (const [clave, espera] of [...partesEnEspera]) {
+      partesEnEspera.delete(clave);
+      const guardado = leerGuardado(clave, undefined);
+      escribir(clave, { ...(esObjetoPlano(guardado) ? guardado : {}), ...espera });
+    }
   }
 
   /**
@@ -325,6 +387,8 @@ export function crearPreferencias({
    * tarde, gana lo local) y las que no cumplen la expresión. Resuelve true si cargó y false si falló (sigue con lo
    * local, y una precarga posterior lo vuelve a intentar); nunca rechaza. La primera que termina deja `listo`
    * resuelto. Sin servidor (o sin usuario), resuelve true de inmediato; después de cerrar(), false sin GET.
+   * T4A r1: si la de '' falla, cada escritura siguiente la vuelve a pedir una vez (reintentarPrecarga, sin bucle), y
+   * cuando una sale bien escribe las partes que esperaban (escribirPartesEnEspera).
    * Límite conocido: lo pendiente no sobrevive a una recarga de la página. El valor queda en el almacén, pero la
    * precarga de la sesión siguiente lo pisa con el del servidor si el PUT nunca llegó.
    * @param {string} [prefijo]
@@ -345,9 +409,14 @@ export function crearPreferencias({
           const texto = aJson(valor);
           if (texto !== null) guardarLocal(clave, texto);
         }
+        if (p === '') {
+          precargaFallo = false;
+          escribirPartesEnEspera();
+        }
         return true;
       }, (error) => {
         precargas.delete(p);
+        if (p === '' && !cerrada) precargaFallo = true;
         avisar('No se pudieron traer las preferencias del servidor; se usan las de este equipo.', /** @type {any} */ (error)?.message ?? '');
         return false;
       })
@@ -385,6 +454,7 @@ export function crearPreferencias({
       temporizadorId = null;
     }
     pendientes.clear();
+    partesEnEspera.clear();
     // Nadie queda esperando una precarga que ya no va a escribir nada.
     lista = true;
     marcarLista();
@@ -589,4 +659,104 @@ export function vincularPreferencia({ obtener, clave, porDefecto, alCambiar, val
 
   esperar(instancia);
   return { estado: () => estado, guardar, revisarUsuario, soltar };
+}
+
+// ─── T4A r1: las preferencias atadas al usuario del token ──────────────────────────────────────────────────────────
+
+/**
+ * El id del usuario dueño de `token`: el sub del JWT (backend/app/api/v1/auth.py firma sub = str(user.id)), o null si
+ * no hay token, si no se puede leer o si su sub no es un id válido. No verifica la firma: el servidor decide.
+ * @param {unknown} token
+ * @returns {number | null}
+ */
+export function usuarioDelToken(token) {
+  const sub = leerPayload(token)?.sub;
+  return sub === undefined || sub === null ? null : normalizarUsuario(sub);
+}
+
+/**
+ * El usuario de las preferencias (RP25, T4A r1): el localStorage 'user_id' de AuthGuard SOLO si es el sub del token
+ * vigente. Nadie borra 'user_id' al cerrar la sesión, así que con el token de otro usuario (o sin token) da null: la
+ * instancia queda en memoria, sin GET ni PUT, hasta que AuthGuard escriba el user_id correcto.
+ * @param {unknown} token
+ * @param {unknown} userId
+ * @returns {number | null}
+ */
+export function usuarioDeSesion(token, userId) {
+  const delToken = usuarioDelToken(token);
+  return delToken !== null && delToken === normalizarUsuario(userId) ? delToken : null;
+}
+
+/** El texto del error de una petición de preferencias con la sesión de otro usuario. */
+export const MENSAJE_OTRO_USUARIO = 'La sesión es de otro usuario: estas preferencias no se envían con ella.';
+
+/**
+ * El servidor de las preferencias de `usuarioId` (T4A r1): GET /preferencias[?prefijo=] y PUT /preferencias/{clave}
+ * con {valor} (backend/app/api/v1/preferencias.py) por medio de `pedir` (apiFetch). ANTES de cada GET y de cada PUT
+ * comprueba que el token vigente sigue siendo de `usuarioId`; si no, rechaza sin pedir nada con un error de status 409
+ * y otroUsuario = true, que preferencias.js no reintenta (no es de red ni 5xx). Cada petición va con
+ * sinReintento401: un 401 no se reintenta con el token de otro usuario (lib/api.ts). La comprobación y la llamada a
+ * `pedir` van en el mismo tic: apiFetch lee el token al empezar, antes de su primer await.
+ * @param {{usuarioId: number, leerToken: () => unknown,
+ *   pedir: (ruta: string, opciones: {method?: string, body?: string, sinReintento401: boolean}) => Promise<unknown>}} opciones
+ * @returns {ServidorPreferencias}
+ */
+export function servidorDeUsuario({ usuarioId, leerToken, pedir }) {
+  const tokenVigente = () => {
+    try {
+      return leerToken();
+    } catch {
+      return null; // localStorage bloqueado: sin token, no se pide nada
+    }
+  };
+  const comprobar = () => {
+    if (usuarioDelToken(tokenVigente()) === usuarioId) return;
+    const error = /** @type {Error & {status?: number, otroUsuario?: boolean}} */ (new Error(MENSAJE_OTRO_USUARIO));
+    error.status = 409;
+    error.otroUsuario = true;
+    throw error;
+  };
+  return {
+    async leer(prefijo) {
+      comprobar();
+      const ruta = prefijo ? `/preferencias?prefijo=${encodeURIComponent(prefijo)}` : '/preferencias';
+      return pedir(ruta, { sinReintento401: true });
+    },
+    async guardar(clave, valor) {
+      comprobar();
+      return pedir(`/preferencias/${encodeURIComponent(clave)}`, {
+        method: 'PUT', body: JSON.stringify({ valor }), sinReintento401: true,
+      });
+    },
+  };
+}
+
+/**
+ * Las preferencias de la sesión de la app (T4A r1; lo usa preferenciasApp de components/ui/usePreferencia.ts): el
+ * gestor de crearPreferenciasPorUsuario con el usuario de usuarioDeSesion(token, user_id) y, para cada usuario válido,
+ * el servidor protegido de servidorDeUsuario. Todo se lee en cada llamada (leerToken, leerUserId y leerAlmacen pueden
+ * lanzar: cuenta como sin usuario o sin almacén).
+ * @param {{leerToken: () => unknown, leerUserId: () => unknown, leerAlmacen?: () => Almacen | null,
+ *   pedir: (ruta: string, opciones: {method?: string, body?: string, sinReintento401: boolean}) => Promise<unknown>,
+ *   temporizador?: Temporizador, retardoMs?: number}} opciones
+ * @returns {{obtener: () => Preferencias, alCambiar: (oyente: (instancia: Preferencias) => void) => () => void}}
+ */
+export function crearPreferenciasDeSesion({ leerToken, leerUserId, leerAlmacen = () => null, pedir, temporizador, retardoMs }) {
+  const almacenSeguro = () => {
+    try {
+      return leerAlmacen();
+    } catch {
+      return null;
+    }
+  };
+  return crearPreferenciasPorUsuario({
+    leerUsuario: () => usuarioDeSesion(leerToken(), leerUserId()),
+    crear: (usuarioId) => crearPreferencias({
+      usuarioId,
+      almacen: almacenSeguro(),
+      servidor: usuarioId === null ? null : servidorDeUsuario({ usuarioId, leerToken, pedir }),
+      temporizador,
+      retardoMs,
+    }),
+  });
 }

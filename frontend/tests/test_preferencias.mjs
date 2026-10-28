@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import {
   AMBITOS, CLAVE_VALIDA, LIMITE_BYTES, RETARDO_MS, MAXIMO_NIVELES, claveValida, claveInterna, tamanoEnBytes, pasaDeNiveles,
   crearPreferencias, normalizarUsuario, crearPreferenciasPorUsuario, vincularPreferencia,
+  usuarioDelToken, usuarioDeSesion, servidorDeUsuario, crearPreferenciasDeSesion,
 } from '../src/lib/preferencias.js';
 import { validarPeriodo, PERIODO_POR_DEFECTO } from '../src/lib/analisis.js';
 
@@ -938,4 +939,253 @@ console.log('--- TEST 24 (T4A): validar y soltar ---');
   assert.equal(p2.leer('vista:z'), undefined, 'ni escribe');
 }
 
-console.log('✓ lib/preferencias.js: ámbitos, ráfagas, usuarios, memoria, 8 KB, precarga, reintentos, escribirParte, niveles, cerrar, instancia por usuario y vínculo de los hooks.');
+// ─── T4A r1: las preferencias atadas al usuario del TOKEN (punto 1) ─────────────────────────────────────────────────
+
+/** Un JWT de prueba (sin firma real) con el sub del usuario, como el que firma backend/app/api/v1/auth.py:89. */
+const jwt = (sub, extra = {}) =>
+  `h.${Buffer.from(JSON.stringify({ sub: String(sub), exp: 4102444800, ...extra })).toString('base64url')}.firma`;
+const subDe = (token) => (token ? Number(JSON.parse(Buffer.from(token.split('.')[1], 'base64url')).sub) : null);
+
+console.log('--- TEST 25 (T4A r1, punto 1): el usuario de las preferencias es el del token; nada de B en la cuenta de A ---');
+{
+  // usuarioDelToken y usuarioDeSesion: el user_id de AuthGuard vale SOLO si es el sub del token vigente.
+  assert.equal(usuarioDelToken(jwt(7)), 7);
+  assert.equal(usuarioDelToken(null), null);
+  assert.equal(usuarioDelToken('basura'), null);
+  assert.equal(usuarioDelToken(jwt('abc')), null);
+  assert.equal(usuarioDelToken(`h.${Buffer.from('{"exp":1}').toString('base64url')}.f`), null, 'sin sub');
+  assert.equal(usuarioDeSesion(jwt(7), '7'), 7);
+  assert.equal(usuarioDeSesion(jwt(8), '7'), null, 'el user_id viejo de otro usuario no vale');
+  assert.equal(usuarioDeSesion(null, '7'), null, 'sin token, sin usuario');
+  assert.equal(usuarioDeSesion(jwt(7), null), null, 'sin user_id todavía (AuthGuard no lo escribió)');
+  assert.equal(usuarioDeSesion(jwt(7), '0'), null);
+}
+{
+  // El servidor de una instancia comprueba ANTES de cada GET y de cada PUT que el token sigue siendo de su usuario.
+  let token = jwt(7);
+  const pedidas = [];
+  const pedir = async (ruta, opciones = {}) => { pedidas.push({ sub: subDe(token), ruta, opciones }); return { status: 'success', data: {} }; };
+  const s = servidorDeUsuario({ usuarioId: 7, leerToken: () => token, pedir });
+  await s.leer('');
+  await s.leer('tabla:');
+  await s.guardar('vista:ventas.hub', 'kanban');
+  assert.deepEqual(pedidas.map((x) => [x.ruta, x.opciones.method ?? 'GET']), [
+    ['/preferencias', 'GET'], ['/preferencias?prefijo=tabla%3A', 'GET'], ['/preferencias/vista%3Aventas.hub', 'PUT'],
+  ]);
+  assert.deepEqual(JSON.parse(pedidas[2].opciones.body), { valor: 'kanban' });
+  assert.ok(pedidas.every((x) => x.opciones.sinReintento401 === true), 'ninguna se reintenta con otro token tras un 401');
+  token = jwt(8);
+  for (const llamada of [() => s.leer(''), () => s.guardar('vista:x', 'lista')]) {
+    await assert.rejects(llamada(), (e) => {
+      assert.equal(e.status, 409, 'un error que preferencias.js no reintenta');
+      assert.equal(e.otroUsuario, true);
+      return true;
+    });
+  }
+  token = null;
+  await assert.rejects(s.guardar('vista:x', 'lista'), (e) => e.status === 409);
+  // Leer el token puede lanzar (localStorage bloqueado): cuenta como sin token y el error sigue sin ser de red.
+  const lanza = servidorDeUsuario({ usuarioId: 7, leerToken: () => { throw new Error('SecurityError'); }, pedir });
+  await assert.rejects(lanza.guardar('vista:x', 'lista'), (e) => e.status === 409 && e.otroUsuario === true);
+  assert.equal(pedidas.length, 3, 'con el token de otro (o sin token) no sale nada');
+}
+{
+  // Un PUT pendiente de A cuando el token cambia a B sin que nadie llame a obtener(): no sale y no se reintenta.
+  const ls = new Map([['token', jwt(7)], ['user_id', '7']]);
+  const almacen = { getItem: (k) => (ls.has(k) ? ls.get(k) : null), setItem: (k, v) => { ls.set(k, String(v)); } };
+  const pedidas = [];
+  const pedir = async (ruta, opciones = {}) => {
+    pedidas.push({ sub: subDe(ls.get('token')), metodo: opciones.method ?? 'GET', ruta });
+    return { status: 'success', data: {} };
+  };
+  const reloj = relojFalso();
+  const gestor = crearPreferenciasDeSesion({
+    leerToken: () => ls.get('token') ?? null, leerUserId: () => ls.get('user_id') ?? null, leerAlmacen: () => almacen, pedir,
+    temporizador: reloj,
+  });
+  const a = gestor.obtener();
+  await a.listo;
+  a.escribir('vista:x', 'kanban');
+  ls.set('token', jwt(8));
+  const avisos = await conAvisos(async () => {
+    reloj.avanzar(800);
+    await tic();
+    a.escribir('vista:y', 'lista');
+    reloj.avanzar(800);
+    await tic();
+  });
+  assert.deepEqual(pedidas, [{ sub: 7, metodo: 'GET', ruta: '/preferencias' }], 'ningún PUT con el token de B');
+  assert.ok(avisos.some((t) => t.includes('vista:x') && t.includes('409')), avisos.join(' | '));
+}
+{
+  // La secuencia de dos pestañas de la revisión (sim_token_userid.mjs): el servidor falso escribe en la cuenta del TOKEN.
+  const ls = new Map(); // localStorage, compartido por las pestañas
+  const almacen = { getItem: (k) => (ls.has(k) ? ls.get(k) : null), setItem: (k, v) => { ls.set(k, String(v)); } };
+  const cuentas = { 7: {}, 8: { 'tabla:ventas.hub': { anchos: { cli: 333 }, ocultas: ['est'] } } };
+  const pedidas = [];
+  const pedir = async (ruta, opciones = {}) => {
+    const sub = subDe(ls.get('token') ?? null);
+    const metodo = opciones.method ?? 'GET';
+    pedidas.push({ sub, metodo, ruta, valor: opciones.body ? JSON.parse(opciones.body).valor : undefined, sin401: opciones.sinReintento401 });
+    if (sub === null) throw errorConStatus(401);
+    if (metodo === 'GET') return { status: 'success', data: structuredClone(cuentas[sub]) };
+    cuentas[sub][decodeURIComponent(ruta.split('/').pop())] = JSON.parse(opciones.body).valor;
+    return { status: 'success', data: {} };
+  };
+  const reloj = relojFalso();
+  const gestor = crearPreferenciasDeSesion({
+    leerToken: () => ls.get('token') ?? null, leerUserId: () => ls.get('user_id') ?? null, leerAlmacen: () => almacen, pedir,
+    temporizador: reloj,
+  });
+  const CLAVE = 'tabla:ventas.hub';
+  const nadaDeB = (paso) => {
+    assert.ok(!String(ls.get(`pref:7:${CLAVE}`) ?? '').includes('333'), `${paso}: nada de B en pref:7`);
+    assert.ok(!JSON.stringify(cuentas[7]).includes('333'), `${paso}: nada de B en la cuenta de A`);
+  };
+  const v = vincularPreferencia({ obtener: gestor.obtener, clave: CLAVE, porDefecto: { tamano: 25 }, parte: true, alCambiar: () => {} });
+  const quitar = gestor.alCambiar(() => v.revisarUsuario());
+  const enOtraPestana = async (clave, valor) => {
+    if (valor === null) ls.delete(clave); else ls.set(clave, valor);
+    v.revisarUsuario(); // el evento storage de la otra pestaña
+    await tic();
+    await tic();
+  };
+  await conAvisos(async () => {
+    // 1. A (7) tiene sesión y escribe (su PUT queda pendiente).
+    ls.set('token', jwt(7));
+    ls.set('user_id', '7');
+    v.revisarUsuario();
+    await tic();
+    await tic();
+    assert.equal(gestor.obtener().usuarioId, 7);
+    v.guardar({ tamano: 50 });
+    nadaDeB('paso 1');
+    // 2. En otra pestaña se cierra la sesión (Sidebar quita el token; nadie quita user_id).
+    await enOtraPestana('token', null);
+    assert.equal(gestor.obtener().usuarioId, null, 'sin token: solo memoria');
+    reloj.avanzar(800);
+    await tic();
+    nadaDeB('paso 2');
+    // 3. Entra B (8): llega su token con el user_id todavía en '7'.
+    await enOtraPestana('token', jwt(8));
+    assert.equal(gestor.obtener().usuarioId, null, "token de 8 con user_id '7': no hay usuario hasta que AuthGuard escriba el de B");
+    reloj.avanzar(800);
+    await tic();
+    nadaDeB('paso 3');
+    // 4. AuthGuard escribe el user_id de B.
+    await enOtraPestana('user_id', '8');
+    assert.equal(gestor.obtener().usuarioId, 8);
+    assert.deepEqual(v.estado().valor.anchos, { cli: 333 }, 'B ve lo suyo');
+    nadaDeB('paso 4');
+    // 5. A vuelve a entrar en este equipo y cambia el tamaño.
+    ls.set('token', jwt(7));
+    await enOtraPestana('user_id', '7');
+    assert.equal(gestor.obtener().usuarioId, 7);
+    assert.equal(v.estado().valor.anchos, undefined, 'A no ve las columnas de B');
+    v.guardar({ tamano: 75 });
+    reloj.avanzar(800);
+    await tic();
+    await tic();
+    nadaDeB('paso 5');
+  });
+  quitar();
+  // Ninguna petición salió con el token de un usuario distinto al de la instancia que la hizo: con el token de 8 solo
+  // el GET de la instancia de 8 (paso 4), y con el de 7 solo las de las instancias de 7.
+  assert.deepEqual(pedidas.map((x) => [x.sub, x.metodo]), [[7, 'GET'], [8, 'GET'], [7, 'GET'], [7, 'PUT']]);
+  assert.ok(pedidas.every((x) => x.sin401 === true));
+  assert.deepEqual(pedidas[3].valor, { tamano: 75 }, 'el primer escribirParte de A al volver no sube nada de B');
+  assert.deepEqual(cuentas[7], { [CLAVE]: { tamano: 75 } });
+  assert.deepEqual(cuentas[8], { [CLAVE]: { anchos: { cli: 333 }, ocultas: ['est'] } }, 'la cuenta de B no se tocó');
+}
+
+console.log('--- TEST 26 (T4A r1, punto 2): con la precarga fallida, una parte no se sube sobre una copia vieja ---');
+{
+  let fallarGet = true;
+  const gets = [];
+  const puts = [];
+  const servidor = {
+    async leer(prefijo) {
+      gets.push(prefijo);
+      if (fallarGet) throw new TypeError('Failed to fetch');
+      return { status: 'success', data: { 'tabla:x': { anchos: { num: 120 }, orden: ['num'] } } };
+    },
+    async guardar(clave, valor) { puts.push({ clave, valor }); return { status: 'success' }; },
+  };
+  const COPIA_VIEJA = '{"orden":["viejo"],"tamano":25}';
+  const almacen = almacenFalso({ 'pref:7:tabla:x': COPIA_VIEJA });
+  const reloj = relojFalso();
+  const p = crearPreferencias({ usuarioId: 7, almacen, servidor, temporizador: reloj });
+  await conAvisos(async () => {
+    assert.equal(await p.precargar(''), false);
+    assert.equal(p.estaLista(), true, 'listo se resuelve también si el GET falló');
+    // Primera parte: queda solo en memoria, sin PUT, y dispara UNA nueva precarga.
+    assert.equal(p.escribirParte('tabla:x', { tamano: 50 }), true);
+    assert.deepEqual(p.leer('tabla:x'), { orden: ['viejo'], tamano: 50 }, 'se ve en memoria');
+    reloj.avanzar(800);
+    await tic();
+    await tic();
+    assert.equal(puts.length, 0, 'sin PUT: la copia local puede no tener las partes que hay en el servidor');
+    assert.equal(almacen.datos.get('pref:7:tabla:x'), COPIA_VIEJA, 'ni toca el almacén');
+    assert.deepEqual(gets, ['', ''], 'una sola nueva precarga por escritura');
+    await tic();
+    await tic();
+    assert.equal(gets.length, 2, 'sin bucle: la precarga que vuelve a fallar no se reintenta sola');
+    // Segunda parte, ahora con el GET funcionando: la precarga sale bien y las partes van sobre lo del servidor.
+    fallarGet = false;
+    assert.equal(p.escribirParte('tabla:x', { ocultas: ['est'] }), true);
+    await tic();
+    await tic();
+    assert.equal(gets.length, 3);
+    reloj.avanzar(800);
+    await tic();
+  });
+  assert.deepEqual(puts, [{ clave: 'tabla:x', valor: { anchos: { num: 120 }, orden: ['num'], tamano: 50, ocultas: ['est'] } }],
+    'un PUT con lo del servidor más las dos partes (sin la copia vieja)');
+  assert.deepEqual(JSON.parse(almacen.datos.get('pref:7:tabla:x')), puts[0].valor);
+  // Ya con una precarga buena, una parte se sube como siempre (sin otro GET).
+  p.escribirParte('tabla:x', { tamano: 25 });
+  reloj.avanzar(800);
+  await tic();
+  assert.equal(gets.length, 3);
+  assert.deepEqual(puts.at(-1).valor, { anchos: { num: 120 }, orden: ['num'], tamano: 25, ocultas: ['est'] });
+}
+{
+  // Un valor completo sí sube con la precarga fallida (reemplaza la clave entera) y también pide una nueva precarga.
+  const gets = [];
+  const puts = [];
+  const servidor = {
+    async leer(prefijo) { gets.push(prefijo); throw new TypeError('Failed to fetch'); },
+    async guardar(clave, valor) { puts.push({ clave, valor }); return {}; },
+  };
+  const reloj = relojFalso();
+  const p = crearPreferencias({ usuarioId: 7, almacen: almacenFalso(), servidor, temporizador: reloj });
+  await conAvisos(async () => {
+    await p.precargar('');
+    assert.equal(p.escribir('vista:x', 'kanban'), true);
+    reloj.avanzar(800);
+    await tic();
+    await tic();
+  });
+  assert.deepEqual(puts, [{ clave: 'vista:x', valor: 'kanban' }]);
+  assert.deepEqual(gets, ['', '']);
+  // Sin precarga intentada (lo de siempre): una parte sube sin pedir GET.
+  const s2 = servidorFalso();
+  const r2 = relojFalso();
+  const q = crearPreferencias({ usuarioId: 7, almacen: almacenFalso(), servidor: s2, temporizador: r2 });
+  q.escribirParte('tabla:z', { tamano: 50 });
+  r2.avanzar(800);
+  await tic();
+  assert.deepEqual([s2.gets.length, s2.puts.length], [0, 1]);
+  // cerrar() descarta las partes en espera.
+  const s3 = { async leer() { throw new TypeError('Failed to fetch'); }, async guardar() { throw new Error('no debería'); } };
+  const w = crearPreferencias({ usuarioId: 7, almacen: almacenFalso(), servidor: s3, temporizador: relojFalso() });
+  await conAvisos(async () => {
+    await w.precargar('');
+    w.escribirParte('tabla:x', { tamano: 50 });
+    w.cerrar();
+    await tic();
+  });
+  assert.equal(w.leer('tabla:x'), undefined, 'lo que esperaba ya no se ve');
+}
+
+console.log('✓ lib/preferencias.js: ámbitos, ráfagas, usuarios, memoria, 8 KB, precarga, reintentos, escribirParte, niveles, cerrar, instancia por usuario, vínculo de los hooks, usuario del token y precarga fallida.');

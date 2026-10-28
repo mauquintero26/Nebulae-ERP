@@ -8,6 +8,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   TAMANOS_PAGINA, VERSION_PREFS, ANCHO_MIN, ANCHO_MAX, ANCHO_POR_DEFECTO, MODOS_TABLA,
   reconciliarColumnas, fijasDe, moverColumna, indiceDestino, limitarAncho, offsetsFijas, alternarOrden,
@@ -398,6 +399,11 @@ console.log('--- TEST 15 (T4A): esModoTabla (useVistaGuardada) y posicionMenu (M
     'si empatan, abajo');
   // Acepta un DOMRect (o cualquier objeto con top, bottom y right).
   assert.equal(posicionMenu({ x: 600, y: 100, width: 30, height: 30, top: 100, bottom: 130, left: 600, right: 630 }, menu, ventana).top, 134);
+  // T4A r1 (punto 5): en un menú recortado (altoMaximo), el ítem que recibe el foco se trae a la vista dentro del menú,
+  // sin mover la página. Sin DOM en node: se fija sobre el fuente de MenuFila.tsx.
+  const fuente = readFileSync(new URL('../src/components/ui/MenuFila.tsx', import.meta.url), 'utf8');
+  assert.ok(fuente.includes("scrollIntoView({ block: 'nearest' })"), 'MenuFila trae el ítem a la vista');
+  assert.ok(!/(destino|querySelector<HTMLElement>\(ITEM\)\?)\.focus\(/.test(fuente), 'ningún ítem se enfoca sin traerlo a la vista (pasa por enfocar)');
 }
 
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');
