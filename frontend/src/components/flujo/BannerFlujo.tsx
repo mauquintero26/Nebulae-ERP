@@ -125,20 +125,24 @@ export function BannerFlujo({
     if (devolver && (!activo || activo === document.body)) tituloRef.current?.focus({ preventScroll: true });
   }, [f.reintentando, f.conError]);
 
-  // r2 (M2): mientras se ve la línea de error, un pointerdown en cualquier parte o el foco en otro control sueltan el
-  // foco pendiente (un clic en texto no enfocable deja el foco en el body sin relatedTarget).
+  // r2 (M2): mientras se ve la línea de error, un pointerdown fuera de Reintentar o el foco en otro control sueltan el
+  // foco pendiente (un clic en texto no enfocable deja el foco en el body sin relatedTarget). Un segundo clic en el
+  // mismo botón (doble clic, o «Reintentando…») no es irse a otra parte.
   useEffect(() => {
     if (!f.conError) return undefined;
     const soltar = () => {
       focoPendiente.current = false;
     };
+    const alPulsar = (e: PointerEvent) => {
+      if (!(e.target instanceof Node && reintentarRef.current?.contains(e.target))) soltar();
+    };
     const alEnfocarOtro = (e: FocusEvent) => {
       if (e.target !== reintentarRef.current) soltar();
     };
-    document.addEventListener('pointerdown', soltar, true);
+    document.addEventListener('pointerdown', alPulsar, true);
     document.addEventListener('focusin', alEnfocarOtro, true);
     return () => {
-      document.removeEventListener('pointerdown', soltar, true);
+      document.removeEventListener('pointerdown', alPulsar, true);
       document.removeEventListener('focusin', alEnfocarOtro, true);
     };
   }, [f.conError]);
