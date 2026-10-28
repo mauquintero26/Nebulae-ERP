@@ -17,7 +17,7 @@
  *  - PASOS_COTIZACION y pasoCotizacion(estado): los 3 pasos propios de la cotización (RP87).
  */
 
-import { congelar } from './flujo.js';
+import { congelar, conteosDePasos } from './flujo.js';
 import { esCotizacionActiva, esPedidoVigente, humanizarCodigo, infoEstadoPedido, tiene } from './estados-pedido.js';
 import { infoEstadoSolicitud } from './estados-solicitud.js';
 import { infoEstadoCotizacion } from './estados-cotizacion.js';
@@ -80,7 +80,6 @@ export const PASOS_FLUJO_VENTAS = congelar([
 const PASO_POR_CLAVE = congelar(Object.fromEntries(PASOS_FLUJO_VENTAS.map((p) => [p.clave, p])));
 
 const esObjeto = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
-const numeroONulo = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 // ─── la regla ───────────────────────────────────────────────────────────────────
 
@@ -143,30 +142,26 @@ function avisosDelPaso(datos, clave) {
 }
 
 /**
- * La respuesta de GET /ventas/flujo (res.data: {cambios_cliente, sin_respuesta, pasos: {SC: {total, atrasados,
- * mas_antiguo_dias, por_estado}, …}, semaforo, dias_alerta, generado_at}) en la forma que lee pasosConConteos:
- * {clave: {total, atrasados, masAntiguoDias, porEstado, avisos}} para las 5 claves de PASOS_FLUJO_VENTAS.
- *  - Tolera nulos: sin datos (o sin el paso) todo queda en null y sin avisos; un número que no es número, en null.
+ * La respuesta de GET /ventas/flujo (res.data: {cambios_cliente, sin_respuesta, pasos, semaforo, dias_alerta,
+ * generado_at}) en la forma que lee pasosConConteos: {clave: {total, atrasados, masAntiguoDias, porEstado, avisos}}
+ * para las 5 claves de PASOS_FLUJO_VENTAS.
+ *  - Los números son los de conteosDePasos de flujo.js (r1: la única conversión de los pasos del servidor); un paso
+ *    que no viene queda todo en null.
  *  - avisos (RP12), solo en SC y COT: «N con cambios pedidos» (ámbar) y «N sin respuesta al recordatorio» (rojo),
- *    cuando vienen y son mayores que 0.
- *  - porEstado es una copia del por_estado del servidor (para el detalle de la caja «Estás aquí»).
+ *    cuando vienen y son mayores que 0. Es lo único que agrega Ventas.
+ *  - Tolera nulos: sin datos, todo en null y sin avisos.
  * @param {any} datos
  * @returns {Record<ClavePasoVentas, ConteoVentas>}
  */
 export function conteosDesdeResumen(datos) {
-  const pasos = esObjeto(datos) && esObjeto(datos.pasos) ? datos.pasos : null;
+  const pasos = esObjeto(datos) && esObjeto(datos.pasos) ? datos.pasos : {};
+  // Las 5 claves de Ventas, en su orden; un paso que no vino va como null y conteosDePasos lo deja todo en null.
+  const base = conteosDePasos({
+    pasos: Object.fromEntries(PASOS_FLUJO_VENTAS.map(({ clave }) => [clave, tiene(pasos, clave) ? pasos[clave] : null])),
+  });
   /** @type {any} */
   const conteos = {};
-  for (const { clave } of PASOS_FLUJO_VENTAS) {
-    const p = pasos && tiene(pasos, clave) && esObjeto(pasos[clave]) ? pasos[clave] : null;
-    conteos[clave] = {
-      total: p ? numeroONulo(p.total) : null,
-      atrasados: p ? numeroONulo(p.atrasados) : null,
-      masAntiguoDias: p ? numeroONulo(p.mas_antiguo_dias) : null,
-      porEstado: p && esObjeto(p.por_estado) ? { ...p.por_estado } : null,
-      avisos: avisosDelPaso(datos, clave),
-    };
-  }
+  for (const { clave } of PASOS_FLUJO_VENTAS) conteos[clave] = { ...base[clave], avisos: avisosDelPaso(datos, clave) };
   return conteos;
 }
 
@@ -191,12 +186,14 @@ const TIPO_CADENA = congelar({ SC: 'SC', COT: 'COT', PVEN: 'PVEN', VEN: 'PVEN' }
 /** Las etiquetas de estado por defecto: las tablas únicas de cada documento (no se copia ninguna). */
 const ETIQUETAS_POR_DEFECTO = congelar({ sc: infoEstadoSolicitud, cot: infoEstadoCotizacion, pven: infoEstadoPedido });
 
-/** Si el documento de cada caja está cancelado o rechazado (CANCELADA, RECHAZADA o CANCELADO). */
+/**
+ * Si el documento de cada caja está cancelado o rechazado (CANCELADA, RECHAZADA o CANCELADO). La caja Compra no está:
+ * es un anexo del pedido, siempre 'neutro' (la fila del pedido no trae el estado de su compra).
+ */
 const CAIDO = congelar({
   SC: (e) => e === 'CANCELADA',
   COT: (e) => !esCotizacionActiva(e),
   PVEN: (e) => !esPedidoVigente(e),
-  PEC: () => false, // la fila del pedido no trae el estado de su compra
 });
 
 /** « (+1 rechazada)», « (+2 cancelados)»: los caídos que tienen un reemplazo vigente. */
@@ -232,12 +229,15 @@ function vinculado(id, numero) {
 /**
  * El contexto de la cadena de UN documento (ayudante interno de cadenaVentas, RP67): qué solicitud, cotización, pedido
  * y compra se muestran. Cada caja es {doc, caidos, propio?}, {neutro: texto} (no aplica: «Cotización directa»,
- * «Pedido directo») o null (todavía no existe).
+ * «Sin solicitud», «Sin cotización») o null (todavía no existe).
  *  - SC: la SC es el documento; la COT, la más reciente activa (esCotizacionActiva) o la última; el PVEN, el más
  *    reciente vigente (esPedidoVigente) de pedidos_venta o el último.
- *  - COT: la SC es {sc_id, sc_numero} (sin ella, «Cotización directa»); el PVEN sale de pedidos_venta.
- *  - PVEN: la SC {sc_id, sc_numero} y la COT {cot_id, cot_numero}; sin ellas, «Cotización directa» o «Pedido
- *    directo». Con pec_numero, la compra {pec_id, pec_numero}.
+ *  - COT: la SC es {sc_id, sc_numero} (sin ella, «Cotización directa», el texto del spec); el PVEN sale de
+ *    pedidos_venta.
+ *  - PVEN: la SC {sc_id, sc_numero} y la COT {cot_id, cot_numero}. Sin SC: «Cotización directa» si tiene COT (es la
+ *    misma cotización sin solicitud) o «Sin solicitud»; sin COT: «Sin cotización». No se usa «Pedido directo»: en el
+ *    sistema es el pedido que EXIGE una cotización confirmada (B2.1 D3). Con pec_numero, la compra {pec_id,
+ *    pec_numero}.
  */
 function contextoFlujo(doc, tipo) {
   const propio = { doc, caidos: 0, propio: true };
@@ -254,8 +254,8 @@ function contextoFlujo(doc, tipo) {
   const cot = vinculado(doc.cot_id, doc.cot_numero);
   const pec = doc.pec_numero ? vinculado(doc.pec_id, doc.pec_numero) : null;
   return {
-    SC: vinculado(doc.sc_id, doc.sc_numero) ?? { neutro: cot ? 'Cotización directa' : 'Pedido directo' },
-    COT: cot ?? { neutro: 'Pedido directo' },
+    SC: vinculado(doc.sc_id, doc.sc_numero) ?? { neutro: cot ? 'Cotización directa' : 'Sin solicitud' },
+    COT: cot ?? { neutro: 'Sin cotización' },
     PVEN: propio,
     ...(pec ? { PEC: pec } : {}),
   };
@@ -281,7 +281,8 @@ const CAJAS = congelar([
 
 /**
  * La barra del flujo de un documento (CadenaDocumentos, T5A; detalles de T8 a T11 y panel rápido del Hub): Solicitud →
- * Cotización → Pedido de venta, y una cuarta caja «Compra» si el pedido trae pec_numero.
+ * Cotización → Pedido de venta y, si el pedido trae pec_numero, la caja «Compra» como ANEXO del pedido (r1, ruling del
+ * controlador): siempre 'neutro', fuera de la progresión, con su número y su enlace.
  *  - tipo: 'SC', 'COT' o 'PVEN'; 'VEN' es lo mismo que 'PVEN' (RP74). Otro tipo es un error de programación (lanza
  *    Error). Sin documento: [].
  *  - etiquetas = {sc, cot, pven}: funciones que dan el texto de cada estado (un texto o un objeto con label, como
@@ -290,11 +291,14 @@ const CAJAS = congelar([
  *    returnToSeguro). Sin ella, el enlace va sin return_to.
  * Cada caja: label; sublabel '{numero} · {etiqueta}' (solo el número si el estado no viene); href al detalle
  * (enlaceDocumento de analisis.js), salvo la del propio documento, que va sin href y con esEste. Estado:
- *  - la caja más avanzada que existe y no está cancelada: 'actual'; las anteriores, 'hecho';
+ *  - la caja más avanzada que existe y no está cancelada, entre Solicitud, Cotización y Pedido: 'actual'; las
+ *    anteriores, 'hecho';
  *  - las que no existen: 'pendiente', con 'Sin cotización todavía' o 'Sin pedido todavía';
  *  - un documento CANCELADA, RECHAZADA o CANCELADO sin reemplazo vigente: 'cancelado', con su etiqueta; si hay
  *    reemplazo, se muestra el vigente con ' (+1 rechazada)' o ' (+1 cancelado)';
- *  - la que no aplica (una COT o un pedido sin solicitud): 'neutro', con 'Cotización directa' o 'Pedido directo'.
+ *  - la que no aplica (una COT o un pedido sin solicitud, un pedido sin cotización): 'neutro', con 'Cotización
+ *    directa', 'Sin solicitud' o 'Sin cotización';
+ *  - la caja Compra: 'neutro'.
  * @param {any} doc
  * @param {TipoCadena} tipo
  * @param {{etiquetas?: EtiquetasCadena, rutaActual?: string | null}} [opciones]
@@ -307,8 +311,9 @@ export function cadenaVentas(doc, tipo, { etiquetas = {}, rutaActual = null } = 
   const ctx = contextoFlujo(doc, t);
   const cajas = CAJAS.filter((c) => c.clave !== 'PEC' || ctx.PEC);
   const caido = (c) => Boolean(ctx[c.clave]?.doc) && CAIDO[c.clave](ctx[c.clave].doc.estado);
+  // r1 (ruling del controlador): la progresión es SOLO Solicitud → Cotización → Pedido de venta; Compra es un anexo.
   let actual = -1;
-  cajas.forEach((c, i) => { if (ctx[c.clave]?.doc && !caido(c)) actual = i; });
+  cajas.forEach((c, i) => { if (c.clave !== 'PEC' && ctx[c.clave]?.doc && !caido(c)) actual = i; });
   return cajas.map((c, i) => {
     const caja = ctx[c.clave];
     /** @type {PasoVista} */
@@ -332,7 +337,8 @@ export function cadenaVentas(doc, tipo, { etiquetas = {}, rutaActual = null } = 
       sublabel += ` (+${caja.caidos} ${caja.caidos === 1 ? uno : varios})`;
     }
     if (sublabel) vista.sublabel = sublabel;
-    vista.estado = caido(c) ? 'cancelado' : i === actual ? 'actual' : 'hecho';
+    if (c.clave === 'PEC') vista.estado = 'neutro';
+    else vista.estado = caido(c) ? 'cancelado' : i === actual ? 'actual' : 'hecho';
     if (!caja.propio) {
       const href = enlaceDocumento(c.enlace, id, { returnTo: rutaActual });
       if (href) vista.href = href;

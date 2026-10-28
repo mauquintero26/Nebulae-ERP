@@ -12,6 +12,9 @@ import {
   esPecVencido, pasoFlujoPec,
 } from '../src/lib/flujo-compras.js';
 import * as estadosCompras from '../src/lib/estados-compras.js';
+// r1: conteosDePasos por el espacio de nombres, para que su falta no tape los demás rojos.
+import * as flujo from '../src/lib/flujo.js';
+import { pasosConConteos } from '../src/lib/flujo.js';
 import { fechaLarga } from '../src/lib/fechas-colombia.js';
 
 const estados = (pasos) => pasos.map((p) => p.estado);
@@ -49,6 +52,9 @@ console.log('--- TEST 1: PASOS_FLUJO_COMPRAS — 5 pasos, congelado, con ayuda, 
     assert.ok(typeof p.ayuda === 'string' && p.ayuda.endsWith('.') && p.ayuda.length > 10, `${p.clave} trae su ayuda`);
     assert.ok(['indigo', 'amber', 'emerald', 'teal', 'purple'].includes(p.tono), `${p.clave}: un tono de la franja`);
   }
+  // r1: R9 pone también PARCIALMENTE_RECIBIDA en la etapa de la recepción.
+  assert.equal(PASOS_FLUJO_COMPRAS[3].ayuda,
+    'Llegó a bodega, toda o en parte, y falta confirmarla. Avanza cuando se confirma la recepción.');
   assert.ok(Object.isFrozen(PASOS_FLUJO_COMPRAS) && PASOS_FLUJO_COMPRAS.every((p) => Object.isFrozen(p)));
   assert.throws(() => { /** @type {any} */ (PASOS_FLUJO_COMPRAS)[4].ruta = '/otra'; }, TypeError);
 }
@@ -130,6 +136,41 @@ console.log('--- TEST 6: pasosDeTracking — el aviso rojo solo con nivel «atra
   assert.deepEqual(sinAlerta.avisos, []);
   // Una alerta sin mensaje no pinta nada.
   assert.deepEqual(pasosDeTracking([etapa('D', 'D', 'PENDIENTE', { alert: { nivel: 'atrasado' } })])[0].avisos, []);
+}
+
+console.log('--- TEST 6b (r1): una etapa CANCELADO no lleva avisos ni «llega …» (_stage_alert también la calcula) ---');
+{
+  const [conFecha, sinFecha] = pasosDeTracking([
+    etapa('A', 'A', 'CANCELADO', {
+      timestamp: '2026-10-06T15:00:00', eta: '2026-10-01',
+      alert: { nivel: 'atrasado', mensaje: 'Entrega atrasada por 27 dia(s) (ETA 01/10/2026)', dias_restantes: -27 },
+    }),
+    etapa('B', 'B', 'CANCELADO', { eta: '2026-10-01', alert: { nivel: 'ok', mensaje: '2 dia(s) para confirmar esta etapa' } }),
+  ]);
+  assert.equal(conFecha.estado, 'cancelado');
+  assert.deepEqual(conFecha.avisos, [], 'sin el aviso rojo');
+  assert.equal(conFecha.sublabel, '6 de octubre de 2026', 'la fecha del cambio, no «llega …»');
+  assert.equal(sinFecha.estado, 'cancelado');
+  assert.deepEqual(sinFecha.avisos, []);
+  assert.equal(sinFecha.sublabel, undefined);
+}
+
+console.log('--- TEST 6c (r1): los conteos de /compras/flujo pasan por conteosDePasos de flujo.js ---');
+{
+  // «La misma forma que el de Ventas»: pasos.{total, atrasados, mas_antiguo_dias, por_estado} (T12).
+  const datos = {
+    pasos: {
+      LISTA: { total: 7, atrasados: null, mas_antiguo_dias: 3, por_estado: { PENDIENTE: 7 } },
+      PEC: { total: 4, atrasados: 1, mas_antiguo_dias: 20, por_estado: { BORRADOR: 1, EMITIDO: 3 } },
+      TRANSITO: { total: 2, atrasados: 2, mas_antiguo_dias: 9, por_estado: { EN_TRANSITO: 2 } },
+    },
+    semaforo: { atrasados: 3, no_resueltos: 6 },
+  };
+  const pasos = pasosConConteos(PASOS_FLUJO_COMPRAS, /** @type {any} */ (flujo).conteosDePasos(datos), { actual: 'PEC' });
+  assert.deepEqual(pasos.map((p) => [p.clave, p.total, p.atrasados, p.masAntiguoDias]), [
+    ['LISTA', 7, null, 3], ['PEC', 4, 1, 20], ['TRANSITO', 2, 2, 9], ['RECEPCION', null, null, null], ['RECIBIDO', null, null, null],
+  ]);
+  assert.equal(pasos[1].esEste, true);
 }
 
 console.log('--- TEST 7: textoReglaCompras() sin parámetro (RP28, R9: sin tolerancia) ---');

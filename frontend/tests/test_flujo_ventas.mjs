@@ -12,6 +12,8 @@ import {
   PASOS_FLUJO_VENTAS, textoRegla, conteosDesdeResumen, tabHubDePaso, cadenaVentas, PASOS_COTIZACION, pasoCotizacion,
 } from '../src/lib/flujo-ventas.js';
 import { pasosConConteos, pasosConProgreso } from '../src/lib/flujo.js';
+// r1: conteosDePasos por el espacio de nombres, para que su falta no tape los demás rojos.
+import * as flujo from '../src/lib/flujo.js';
 
 const CLAVES = ['SC', 'COT', 'PVEN', 'ENTREGADO', 'FACTURADO'];
 const estados = (pasos) => pasos.map((p) => p.estado);
@@ -238,7 +240,7 @@ console.log('--- TEST 12: COT con su PVEN CANCELADO — Pedido cancelado y Cotiz
   assert.equal(rechazada[1].sublabel, 'COT-22 · Rechazada');
 }
 
-console.log('--- TEST 13: PVEN — con pec_numero son 4 cajas y la de Compra apunta a compras; sin él, 3 ---');
+console.log('--- TEST 13 (r1): PVEN — con pec_numero se agrega «Compra» como anexo (neutro, fuera de la progresión); sin él, 3 ---');
 {
   const pven = {
     id: 40, numero: 'PVEN-40', estado: 'EN_PROCESO', sc_id: 3, sc_numero: 'SC-3', cot_id: 21, cot_numero: 'COT-21',
@@ -247,9 +249,10 @@ console.log('--- TEST 13: PVEN — con pec_numero son 4 cajas y la de Compra apu
   const pasos = cadenaVentas(pven, 'PVEN', { rutaActual: RUTA });
   assert.deepEqual(pasos.map((p) => p.clave), ['SC', 'COT', 'PVEN', 'PEC']);
   assert.deepEqual(pasos.map((p) => p.label), ['Solicitud', 'Cotización', 'Pedido de venta', 'Compra']);
-  assert.deepEqual(estados(pasos), ['hecho', 'hecho', 'hecho', 'actual'], 'la caja más avanzada que existe es la actual');
+  assert.deepEqual(estados(pasos), ['hecho', 'hecho', 'actual', 'neutro'], 'la compra es un anexo del pedido, no un paso');
   assert.equal(pasos[3].sublabel, 'PEC-5');
   assert.equal(pasos[3].href, `/dashboard/compras/pedidos?id=5&${REGRESO}`);
+  assert.equal(pasos[3].esEste, false);
   assert.equal(pasos[2].esEste, true);
   assert.equal(pasos[2].sublabel, 'PVEN-40 · En proceso');
   assert.equal(pasos[0].href, `/dashboard/ventas/solicitud/3?${REGRESO}`);
@@ -257,8 +260,20 @@ console.log('--- TEST 13: PVEN — con pec_numero son 4 cajas y la de Compra apu
   const sinPec = cadenaVentas({ ...pven, pec_id: null, pec_numero: null }, 'PVEN', { rutaActual: RUTA });
   assert.deepEqual(sinPec.map((p) => p.clave), ['SC', 'COT', 'PVEN']);
   assert.deepEqual(estados(sinPec), ['hecho', 'hecho', 'actual']);
-  // Un pedido cancelado: la cotización queda como la caja actual.
+  // Un pedido cancelado que conserva su pec_numero (cancelar el PVEN no lo borra): Pedido en rojo, Cotización actual.
+  assert.deepEqual(estados(cadenaVentas({ ...pven, estado: 'CANCELADO' }, 'PVEN')), ['hecho', 'actual', 'cancelado', 'neutro']);
   assert.deepEqual(estados(cadenaVentas({ ...pven, estado: 'CANCELADO', pec_numero: null }, 'PVEN')), ['hecho', 'actual', 'cancelado']);
+  // Con la compra, el pedido sigue siendo la caja actual en cualquier estado vigente (también FACTURADO).
+  for (const estado of ['PENDIENTE_COMPRA', 'LISTO_ENTREGA', 'ENTREGADO', 'FACTURADO']) {
+    assert.deepEqual(estados(cadenaVentas({ ...pven, estado }, 'PVEN')), ['hecho', 'hecho', 'actual', 'neutro'], estado);
+  }
+  // La misma cadena vista desde la SC: el pedido queda 'actual', no con ✓.
+  const desdeSc = cadenaVentas({
+    id: 3, numero: 'SC-3', estado: 'CONFIRMADA', cotizaciones: [{ id: 21, numero: 'COT-21', estado: 'CONFIRMADA' }],
+    pedidos_venta: [pven],
+  }, 'SC');
+  assert.deepEqual(estados(desdeSc), ['hecho', 'hecho', 'actual']);
+  assert.equal(desdeSc[2].estado, pasos[2].estado, 'el pedido se ve igual desde la SC y desde el pedido');
 }
 
 console.log('--- TEST 14: RP74 — VEN y PVEN son el mismo tipo ---');
@@ -268,15 +283,22 @@ console.log('--- TEST 14: RP74 — VEN y PVEN son el mismo tipo ---');
   assert.equal(cadenaVentas(pven, 'VEN')[2].sublabel, 'PVEN-40 · Entregado');
 }
 
-console.log('--- TEST 15: PVEN sin solicitud o sin cotización (pedido directo) ---');
+console.log('--- TEST 15 (r1): PVEN sin solicitud o sin cotización: «Sin solicitud» y «Sin cotización» ---');
 {
+  // Su cotización no tiene solicitud: es una «Cotización directa» (el texto del spec para una COT sin SC).
   const desdeCot = cadenaVentas({ id: 41, numero: 'PVEN-41', estado: 'EN_PROCESO', cot_id: 21, cot_numero: 'COT-21' }, 'PVEN');
   assert.deepEqual(estados(desdeCot), ['neutro', 'hecho', 'actual']);
   assert.equal(desdeCot[0].sublabel, 'Cotización directa');
-  const directo = cadenaVentas({ id: 42, numero: 'PVEN-42', estado: 'PENDIENTE_PAGO' }, 'PVEN');
-  assert.deepEqual(estados(directo), ['neutro', 'neutro', 'actual']);
-  assert.deepEqual(directo.slice(0, 2).map((p) => p.sublabel), ['Pedido directo', 'Pedido directo']);
-  assert.ok(directo.every((p) => p.href === undefined));
+  // Sin cotización ni solicitud (por ejemplo, un pedido de la tienda web). «Pedido directo» ya significa lo contrario
+  // (B2.1 D3: el pedido que EXIGE una cotización confirmada).
+  const sinNada = cadenaVentas({ id: 42, numero: 'PVEN-42', estado: 'PENDIENTE_PAGO' }, 'PVEN');
+  assert.deepEqual(estados(sinNada), ['neutro', 'neutro', 'actual']);
+  assert.deepEqual(sinNada.slice(0, 2).map((p) => p.sublabel), ['Sin solicitud', 'Sin cotización']);
+  assert.ok(sinNada.every((p) => p.href === undefined));
+  // Con solicitud pero sin cotización.
+  const sinCot = cadenaVentas({ id: 43, numero: 'PVEN-43', estado: 'EN_PROCESO', sc_id: 3, sc_numero: 'SC-3' }, 'PVEN');
+  assert.deepEqual(estados(sinCot), ['hecho', 'neutro', 'actual']);
+  assert.equal(sinCot[1].sublabel, 'Sin cotización');
 }
 
 console.log('--- TEST 16: la caja propia no tiene href; las demás sí, con return_to; las etiquetas se inyectan ---');
@@ -345,6 +367,16 @@ console.log('--- TEST 19: pasoCotizacion ---');
   assert.deepEqual(barra('VENCIDA'), ['hecho', 'actual', 'pendiente']);
 }
 
+console.log('--- TEST 19b (r1): conteosDesdeResumen = conteosDePasos de flujo.js + los avisos de RP12 ---');
+{
+  const base = /** @type {any} */ (flujo).conteosDePasos(DATOS);
+  const conteos = conteosDesdeResumen(DATOS);
+  for (const clave of CLAVES) {
+    assert.deepEqual(conteos[clave], { ...base[clave], avisos: conteos[clave].avisos }, clave);
+  }
+  assert.deepEqual(conteos.SC.avisos, [{ texto: '2 con cambios pedidos', tono: 'ambar' }]);
+}
+
 console.log('--- TEST 20: solo presentación (C5, R8, RP67) y sin almacenamiento (R4) ---');
 {
   const fuente = readFileSync(new URL('../src/lib/flujo-ventas.js', import.meta.url), 'utf8');
@@ -358,6 +390,10 @@ console.log('--- TEST 20: solo presentación (C5, R8, RP67) y sin almacenamiento
   assert.ok(!/export\s+(function\s+)?contextoFlujo|export\s*\{[^}]*contextoFlujo/.test(fuente), 'RP67: contextoFlujo no se exporta');
   const modulo = await import('../src/lib/flujo-ventas.js');
   assert.equal(/** @type {any} */ (modulo).contextoFlujo, undefined);
+  // r1: «Pedido directo» no se usa (B2.1 D3); la conversión de los pasos es la de flujo.js.
+  assert.ok(!/['"`]Pedido directo/i.test(fuente), 'ningún texto visible dice «Pedido directo»');
+  assert.ok(/import \{[^}]*\bconteosDePasos\b[^}]*\} from '\.\/flujo\.js'/.test(fuente), 'conteosDePasos sale de flujo.js');
+  assert.ok(!/\.mas_antiguo_dias|\.por_estado/.test(fuente), 'una sola conversión de los pasos (flujo.js)');
 }
 
 console.log('\nOK: test_flujo_ventas.mjs');

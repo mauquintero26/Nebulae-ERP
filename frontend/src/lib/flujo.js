@@ -7,7 +7,10 @@
  *  - congelar es la de estados-pedido.js, re-exportada (no una copia).
  *  - pasosConProgreso: las barras de los documentos (hecho, actual, pendiente, cancelado). Acepta pasos con `key`
  *    (PASOS_PEDIDO) o con `clave` (PASOS_SC, PASOS_COTIZACION) (RP87).
- *  - pasosConConteos: la franja (los números por paso de GET /ventas/flujo o /compras/flujo; el actual y el elegido).
+ *  - conteosDePasos (r1): la única conversión de res.data.pasos de GET /ventas/flujo o /compras/flujo (snake_case) a
+ *    la forma de pasosConConteos (camelCase).
+ *  - pasosConConteos: la franja (los números por paso, el actual y el elegido).
+ *  - El chequeo de claves es tiene() de estados-pedido.js (sin copia propia).
  *  - textoConteo, textoAtraso, alternarSeleccion y resumenSemaforo: los textos y el clic de la franja.
  * No lee ni escribe ningún almacenamiento (R4): el modo compacto de la franja lo guarda BannerFlujo con
  * usePreferencia('flujo:<id>') (T5A). La regla de atraso NO vive aquí: Ventas la trae del servidor (resolucion_ventas.py,
@@ -17,7 +20,7 @@
  * <Contador estado="cargando"/> (la barra gris); el «—» de textoConteo es solo para el error.
  */
 
-import { congelar } from './estados-pedido.js';
+import { congelar, tiene } from './estados-pedido.js';
 import { cantidadPositiva } from './hub-ventas.js';
 import { formatoEntero } from './kpis.js';
 
@@ -50,13 +53,16 @@ export { congelar };
  *   Un paso de una definición: con `clave` o, como PASOS_PEDIDO, con `key` (RP87).
  * @typedef {{
  *   total?: number | null, atrasados?: number | null, masAntiguoDias?: number | null,
+ *   porEstado?: Readonly<Record<string, number>> | null,
  *   detalle?: ReadonlyArray<DetallePaso> | null, avisos?: ReadonlyArray<AvisoPaso> | null,
  * }} ConteoPaso
+ *   Los números de un paso en la forma que lee pasosConConteos (camelCase). conteosDePasos los saca de la respuesta del
+ *   servidor; porEstado no pasa a la caja: la pantalla arma con él el `detalle`.
  * @typedef {{tono: 'gris' | 'rojo' | 'verde', texto: string}} ResumenSemaforo
  */
 
-/** true si `obj` tiene la clave PROPIA `clave` (nunca las del prototipo: 'toString'...). */
-const tienePropia = (obj, clave) => obj !== null && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, clave);
+/** Un objeto que no es un arreglo. */
+const esMapa = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 /** El número de `v` si es finito, o null (nunca se inventa un 0). */
 const numeroONulo = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -112,11 +118,38 @@ export function pasosConProgreso(definicion, indiceActual, { canceladoEn = null 
   });
 }
 
+const SIN_CONTEO = congelar({ total: null, atrasados: null, masAntiguoDias: null, porEstado: null });
+
+/**
+ * La ÚNICA conversión de los pasos que manda el servidor (r1). GET /ventas/flujo y GET /compras/flujo («la misma forma
+ * que el de Ventas», T12) traen res.data.pasos = {clave: {total, atrasados, mas_antiguo_dias, por_estado}} en
+ * snake_case; esto los deja en la forma de pasosConConteos: {clave: {total, atrasados, masAntiguoDias, porEstado}}.
+ *  - Las claves son las que manda el servidor, en su orden (la definición decide cuáles se pintan).
+ *  - Lo que falta, o no es un número (o un mapa, en por_estado), queda en null; un paso nulo, todo en null.
+ *  - porEstado es una copia. Sin datos o sin pasos: {}.
+ * conteosDesdeResumen de flujo-ventas.js la usa y solo agrega los avisos de RP12; T14 la usa para Compras.
+ * @param {any} datos  res.data de /ventas/flujo o /compras/flujo
+ * @returns {Record<string, ConteoPaso>}
+ */
+export function conteosDePasos(datos) {
+  const pasos = esMapa(datos) && esMapa(datos.pasos) ? datos.pasos : null;
+  if (!pasos) return {};
+  return Object.fromEntries(Object.entries(pasos).map(([clave, p]) => [clave, esMapa(p)
+    ? {
+      total: numeroONulo(p.total),
+      atrasados: numeroONulo(p.atrasados),
+      masAntiguoDias: numeroONulo(p.mas_antiguo_dias),
+      porEstado: esMapa(p.por_estado) ? { ...p.por_estado } : null,
+    }
+    : { ...SIN_CONTEO }]));
+}
+
 /**
  * Los pasos de la franja del flujo (BannerFlujo, T5A):
- *  - total, atrasados, masAntiguoDias, detalle y avisos salen de conteos[clave] (conteosDesdeResumen de
- *    flujo-ventas.js, o los de /compras/flujo); quedan en null mientras carga o si falta la clave (la pantalla pinta
- *    entonces Contador, D21). Un valor que no es un número también queda en null.
+ *  - total, atrasados, masAntiguoDias, detalle y avisos salen de conteos[clave], en camelCase: los de conteosDePasos
+ *    (Compras, T14) o los de conteosDesdeResumen de flujo-ventas.js (Ventas, que les suma los avisos); la respuesta
+ *    cruda del servidor (snake_case) NO se pasa aquí. Quedan en null mientras carga o si falta la clave (la pantalla
+ *    pinta entonces Contador, D21). Un valor que no es un número también queda en null.
  *  - el paso que coincide con `actual` (la pantalla en la que estás) lleva esEste y estado 'actual';
  *  - el que coincide con `seleccionado` (el filtro elegido) lleva seleccionado;
  *  - los demás quedan 'neutro'.
@@ -130,7 +163,7 @@ export function pasosConConteos(definicion, conteos, { actual = null, selecciona
   const pasos = Array.isArray(definicion) ? definicion : [];
   return pasos.map((p) => {
     const vista = pasoBase(p, 'neutro');
-    const c = !cargando && tienePropia(conteos, vista.clave) ? /** @type {any} */ (conteos)[vista.clave] : null;
+    const c = !cargando && tiene(conteos, vista.clave) ? /** @type {any} */ (conteos)[vista.clave] : null;
     const hay = c !== null && typeof c === 'object';
     vista.total = hay ? numeroONulo(c.total) : null;
     vista.atrasados = hay ? numeroONulo(c.atrasados) : null;

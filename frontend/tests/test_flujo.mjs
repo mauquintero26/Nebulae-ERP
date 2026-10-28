@@ -8,7 +8,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  congelar, pasosConProgreso, pasosConConteos, textoConteo, textoAtraso, alternarSeleccion, resumenSemaforo,
+  congelar, pasosConProgreso, pasosConConteos, conteosDePasos, textoConteo, textoAtraso, alternarSeleccion,
+  resumenSemaforo,
 } from '../src/lib/flujo.js';
 import { congelar as congelarDePedido, PASOS_PEDIDO } from '../src/lib/estados-pedido.js';
 import { PASOS_SC } from '../src/lib/estados-solicitud.js';
@@ -138,6 +139,38 @@ console.log('--- TEST 5: pasosConConteos — cargando, sin conteos, seleccionado
   assert.equal(pasosConConteos([{ clave: 'toString', label: 'x' }], {})[0].total, null);
 }
 
+console.log('--- TEST 5b (r1): conteosDePasos — la ÚNICA conversión de los pasos del servidor (snake_case) ---');
+{
+  // La forma de GET /ventas/flujo y de /compras/flujo («la misma forma que el de Ventas»): pasos.{total, atrasados,
+  // mas_antiguo_dias, por_estado}.
+  const DATOS = {
+    pasos: {
+      LISTA: { total: 3, atrasados: null, mas_antiguo_dias: null, por_estado: { PENDIENTE: 3 } },
+      PEC: { total: 5, atrasados: 2, mas_antiguo_dias: 12, por_estado: { BORRADOR: 1, EMITIDO: 4 } },
+      RARO: null,
+      TEXTO: { total: 'x', atrasados: NaN, mas_antiguo_dias: '4', por_estado: [] },
+    },
+    semaforo: { atrasados: 2, no_resueltos: 8 },
+  };
+  const NULOS = { total: null, atrasados: null, masAntiguoDias: null, porEstado: null };
+  const c = conteosDePasos(DATOS);
+  assert.deepEqual(Object.keys(c), ['LISTA', 'PEC', 'RARO', 'TEXTO'], 'las claves que manda el servidor, en su orden');
+  assert.deepEqual(c.PEC, { total: 5, atrasados: 2, masAntiguoDias: 12, porEstado: { BORRADOR: 1, EMITIDO: 4 } });
+  assert.deepEqual(c.LISTA, { total: 3, atrasados: null, masAntiguoDias: null, porEstado: { PENDIENTE: 3 } });
+  assert.deepEqual(c.RARO, NULOS, 'un paso nulo: todo en null');
+  assert.deepEqual(c.TEXTO, NULOS, 'lo que no es un número (o un mapa) no se inventa');
+  for (const vacio of [null, undefined, {}, { pasos: null }, { pasos: [] }, { pasos: [{ total: 1 }] }, { pasos: 'abc' }, 'x']) {
+    assert.deepEqual(conteosDePasos(/** @type {any} */ (vacio)), {}, `sin pasos: ${JSON.stringify(vacio)}`);
+  }
+  c.PEC.porEstado.BORRADOR = 99;
+  assert.equal(DATOS.pasos.PEC.por_estado.BORRADOR, 1, 'porEstado es una copia');
+  // Se conecta con pasosConConteos: masAntiguoDias llega en camelCase.
+  const pasos = pasosConConteos([{ clave: 'LISTA', label: 'L' }, { clave: 'PEC', label: 'P' }, { clave: 'NADA', label: 'N' }],
+    conteosDePasos(DATOS), { actual: 'PEC' });
+  assert.deepEqual(pasos.map((p) => [p.total, p.atrasados, p.masAntiguoDias]), [[3, null, null], [5, 2, 12], [null, null, null]]);
+  assert.equal(pasos[1].estado, 'actual');
+}
+
 console.log('--- TEST 6: textoConteo (con formatoEntero de kpis.js, RP75) ---');
 {
   assert.equal(textoConteo(null), '—');
@@ -191,6 +224,9 @@ console.log('--- TEST 10: JS puro, sin almacenamiento propio (R4) y congelar re-
   assert.ok(!/leerPreferencia|guardarPreferencia|claveCompacto/.test(fuente), 'sin preferencias propias (R4)');
   assert.ok(!/function congelar\(/.test(fuente), 'congelar no se copia');
   assert.ok(!/toLocaleString/.test(fuente), 'RP75: el número sale de formatoEntero');
+  // r1: el chequeo de claves es tiene() de estados-pedido.js, sin una copia propia.
+  assert.ok(/import \{[^}]*\btiene\b[^}]*\} from '\.\/estados-pedido\.js'/.test(fuente), 'tiene sale de estados-pedido.js');
+  assert.ok(!/tienePropia|hasOwnProperty/.test(fuente), 'sin copia de tiene()');
 }
 
 console.log('\nOK: test_flujo.mjs');

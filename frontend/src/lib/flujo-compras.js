@@ -58,7 +58,7 @@ export const PASOS_FLUJO_COMPRAS = congelar([
   {
     clave: 'RECEPCION', label: 'Recepción en bodega', sufijo: 'por confirmar', tono: 'teal', icono: 'recepcion',
     ruta: '/dashboard/compras/recepciones',
-    ayuda: 'Llegó a bodega y falta contarla. Avanza cuando se confirma la recepción.',
+    ayuda: 'Llegó a bodega, toda o en parte, y falta confirmarla. Avanza cuando se confirma la recepción.',
   },
   {
     clave: 'RECIBIDO', label: 'Recibido', sufijo: 'recibidos', tono: 'emerald', icono: 'recibido',
@@ -93,14 +93,17 @@ const ESTADO_DE_ETAPA = congelar({ COMPLETADO: 'hecho', EN_PROCESO: 'actual', PE
 
 const textoNoVacio = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 
+/** Las etapas que ya no esperan nada: completada o cancelada (r1). */
+const ETAPAS_CERRADAS = congelar(['COMPLETADO', 'CANCELADO']);
+
 /**
- * El sublabel de una etapa: la fecha en que se completó; si no está completada y tiene ETA, 'llega {eta}'; si no, la
- * fecha en que cambió (en curso o cancelada). Las fechas, en Colombia con fechaLarga (un instante sin zona es UTC; una
- * fecha de calendario no se corre de día). Nada legible: sin sublabel.
+ * El sublabel de una etapa: completada o cancelada, la fecha en que cambió (r1: una cancelada no «llega»); si no y
+ * tiene ETA, 'llega {eta}'; si no, la fecha en que cambió (en curso). Las fechas, en Colombia con fechaLarga (un
+ * instante sin zona es UTC; una fecha de calendario no se corre de día). Nada legible: sin sublabel.
  */
 function sublabelDeEtapa(s) {
   const cuando = fechaLarga(s.timestamp);
-  if (s.status === 'COMPLETADO') return cuando || null;
+  if (ETAPAS_CERRADAS.includes(s.status)) return cuando || null;
   const llega = fechaLarga(s.eta);
   if (llega) return `llega ${llega}`;
   return cuando || null;
@@ -108,12 +111,13 @@ function sublabelDeEtapa(s) {
 
 /**
  * El aviso de una etapa (RP28): rojo solo si alert.nivel es 'atrasado'; con otro nivel (el 'ok' de una etapa a tiempo)
- * el mensaje va como texto neutro ('gris'). Sin mensaje, nada.
+ * el mensaje va como texto neutro ('gris'). Sin mensaje, nada. Una etapa CANCELADO no lleva avisos (r1): _stage_alert
+ * del servidor solo deja fuera COMPLETADO y también le calcula el atraso.
  * @returns {AvisoPaso[]}
  */
 function avisosDeEtapa(s) {
   const mensaje = textoNoVacio(s.alert?.mensaje);
-  if (!mensaje) return [];
+  if (!mensaje || s.status === 'CANCELADO') return [];
   return [{ texto: mensaje, tono: s.alert.nivel === 'atrasado' ? 'rojo' : 'gris' }];
 }
 
@@ -123,8 +127,8 @@ function avisosDeEtapa(s) {
  *  - COMPLETADO -> 'hecho', EN_PROCESO -> 'actual', PENDIENTE -> 'pendiente' y CANCELADO -> 'cancelado' (RP28); un
  *    estado desconocido, 'pendiente';
  *  - clave: el `stage` (sin él, 'etapa_N' por su posición); label: el de la etapa (sin él, la clave humanizada);
- *  - sublabel: la fecha de la etapa, o 'llega {eta}';
- *  - avisos: el mensaje de la alerta, rojo solo con nivel 'atrasado' (RP28).
+ *  - sublabel: la fecha de la etapa, o 'llega {eta}' (nunca en una completada o cancelada);
+ *  - avisos: el mensaje de la alerta, rojo solo con nivel 'atrasado' (RP28); ninguno en una cancelada (r1).
  * Lo que no es un arreglo da []; los elementos que no son objetos se saltan.
  * @param {ReadonlyArray<EtapaTracking | null | undefined> | null | undefined} stages
  * @returns {PasoVista[]}
