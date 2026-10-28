@@ -29,6 +29,9 @@
  *    · useListado: urlListado (con queryListado), crearCargaListado (aborta la anterior, descarta lo viejo y cuenta las
  *      vueltas), lanzarListado (el efecto, con activo y esperar), aplicarLlegadaListado, estadoListado, esErrorDeOrden y
  *      rechazoPorAtender (un orden que el servidor rechaza vuelve al por defecto). useListadoCliente: listadoCliente.
+ *    · r2: la acción restablecerOrden del reductor (la vuelta condicional), el usuario de cada resultado (sin filas de
+ *      otra cuenta), lo atendido en la carga y el tope de espera de las preferencias (ESPERA_PREFERENCIAS_MS,
+ *      esperarPreferencias y listoConTope).
  */
 
 import { normalizarBusqueda } from './busqueda.js';
@@ -44,8 +47,8 @@ import { formatoEntero } from './kpis.js';
  * @typedef {{vista: string | null, modo: ModoTabla, semaforo: string | null, paso: string | null, estados: string[],
  *   q: string, orden: string | null, pagina: number, tamano: number}} EstadoTabla
  * @typedef {{tipo: 'vista' | 'modo' | 'semaforo' | 'paso' | 'estados' | 'q' | 'busqueda' | 'orden' | 'pagina' | 'tamano',
- *   valor?: unknown} | {tipo: 'cambiar', cambios: Partial<Record<keyof EstadoTabla, unknown>>} | {tipo: 'limpiarFiltros'}}
- *   AccionTabla
+ *   valor?: unknown} | {tipo: 'cambiar', cambios: Partial<Record<keyof EstadoTabla, unknown>>} | {tipo: 'limpiarFiltros'}
+ *   | {tipo: 'restablecerOrden', rechazado: string}} AccionTabla
  * @typedef {{filas: any[], total: number, conteos: Record<string, number> | null, resumen: Record<string, any> | null,
  *   crudo: unknown}} RespuestaListado
  * @typedef {'vista' | 'pagina' | 'q' | 'orden' | 'semaforo' | 'paso' | 'estados'} CampoSesionTabla
@@ -55,12 +58,12 @@ import { formatoEntero } from './kpis.js';
  *   | {tipo: 'desplazar', id: string, paso: number} | {tipo: 'ocultar', id: string, oculta?: boolean}
  *   | {tipo: 'restablecer'}} CambioColumnas
  * @typedef {{version: number, orden?: string[], anchos?: Record<string, number>, ocultas?: string[]}} ParteColumnas
- * @typedef {{ruta?: string | null, orden?: string | null}} ContextoListado
+ * @typedef {{ruta?: string | null, orden?: string | null, usuario?: number | null}} ContextoListado
  * @typedef {{marca: string, ok: true, respuesta: unknown, contexto?: ContextoListado | null, repeticion?: number}
  *   | {marca: string, ok: false, error: unknown, contexto?: ContextoListado | null, repeticion?: number}} LlegadaListado
  * @typedef {{n: number, texto: string, ruta: string | null, orden: string}} RechazoOrden
- * @typedef {{clave: string, n: number, repeticion: number, datos: RespuestaListado | null, error: unknown,
- *   rechazo: RechazoOrden | null}} ResultadoListado
+ * @typedef {{clave: string, n: number, repeticion: number, usuario: number | null, datos: RespuestaListado | null,
+ *   error: unknown, rechazo: RechazoOrden | null}} ResultadoListado
  * @typedef {{filas: any[], total: number | null, conteos: Record<string, any> | null, resumen: Record<string, any> | null,
  *   crudo: unknown, cargandoInicial: boolean, recargando: boolean, error: unknown, avisoOrden: string | null}} EstadoListado
  */
@@ -475,7 +478,10 @@ const iguales = (a, b) => (Array.isArray(a) && Array.isArray(b) ? a.length === b
  *  - {tipo: 'vista' | 'modo' | 'semaforo' | 'paso' | 'estados' | 'q' | 'orden' | 'tamano' | 'pagina', valor}
  *    ('busqueda' es lo mismo que 'q');
  *  - {tipo: 'cambiar', cambios: {...}} para varios campos a la vez (una tarjeta que pone la vista y quita el paso);
- *  - {tipo: 'limpiarFiltros'}: sin semáforo, paso, estados ni búsqueda (conserva pestaña, modo, orden y tamaño).
+ *  - {tipo: 'limpiarFiltros'}: sin semáforo, paso, estados ni búsqueda (conserva pestaña, modo, orden y tamaño);
+ *  - {tipo: 'restablecerOrden', rechazado} (T4C r2, punto 2; la despacha useListado cuando el servidor rechaza un orden
+ *    con 422): quita el orden SOLO si sigue siendo el rechazado (como cualquier cambio, vuelve a la página 1); si el
+ *    usuario ya eligió otro, devuelve el MISMO estado y su elección no se pisa.
  * Todo cambio que no sea solo de página vuelve a la página 1; uno que no cambia nada devuelve el MISMO estado (sin
  * otra carga). Los valores se normalizan (un tamaño que no está en TAMANOS_PAGINA es 25; un modo desconocido, 'lista').
  * Una acción o un campo desconocidos son un error de programación (lanza Error). No muta el estado recibido.
@@ -492,7 +498,11 @@ export function reducirEstadoTabla(estado, accion) {
   else if (tipo === 'busqueda') cambios = { q: /** @type {any} */ (accion).valor };
   else if (tipo === 'cambiar') cambios = { .../** @type {any} */ (accion).cambios };
   else if (tipo === 'limpiarFiltros') cambios = { semaforo: null, paso: null, estados: [], q: '' };
-  else throw new Error(`Acción de la tabla desconocida: ${String(tipo)}`);
+  else if (tipo === 'restablecerOrden') {
+    const rechazado = /** @type {any} */ (accion).rechazado;
+    if (typeof rechazado !== 'string' || actual.orden !== rechazado) return actual;
+    cambios = { orden: null };
+  } else throw new Error(`Acción de la tabla desconocida: ${String(tipo)}`);
 
   const siguiente = /** @type {any} */ ({ ...actual });
   const previo = /** @type {any} */ (actual);
@@ -961,10 +971,14 @@ export function urlListado(ruta, estado, { extra = {}, conConteos = false, conRe
  *  - T4C r1, 6b: volver a pedir la consulta que ya llegó (activo: false → true, o esperar: true → false, con la misma
  *    consulta) es una VUELTA: repeticion() sube y se avisa a los suscriptores (suscribir, para useSyncExternalStore). La
  *    llegada lleva la repetición con que se pidió: mientras no llega, la tabla se ve recargando y sin el error anterior.
+ *  - T4C r2, punto 3: atender(n) guarda el número del rechazo de orden ya atendido y avisa a los suscriptores (como las
+ *    vueltas): es estado que vuelve a pintar la tabla, no un ref. Un useState fijado en el cuerpo del efecto daría el
+ *    error de lint react-hooks/set-state-in-effect.
  *  - Un `pedir` que lanza de inmediato es un error de la carga, no una excepción de cargar.
  * @param {{pedir: (url: string, signal: AbortSignal) => unknown, alLlegar: (llegada: LlegadaListado) => void}} opciones
  * @returns {{cargar: (url: string, marca: string, contexto?: ContextoListado | null) => number, cancelar: () => void,
- *   turno: () => number, repeticion: () => number, suscribir: (oyente: () => void) => () => void}}
+ *   turno: () => number, repeticion: () => number, atender: (n: number) => void, atendido: () => number | null,
+ *   suscribir: (oyente: () => void) => () => void}}
  */
 export function crearCargaListado({ pedir, alLlegar }) {
   let turno = 0;
@@ -1010,12 +1024,57 @@ export function crearCargaListado({ pedir, alLlegar }) {
     return mio;
   }
 
+  /** El número del último rechazo de orden atendido (T4C r2, punto 3); cambiarlo avisa a los suscriptores. */
+  let atendido = /** @type {number | null} */ (null);
+  function atender(n) {
+    if (atendido === n) return;
+    atendido = n;
+    for (const oyente of [...oyentes]) oyente();
+  }
+
   function suscribir(oyente) {
     oyentes.add(oyente);
     return () => { oyentes.delete(oyente); };
   }
 
-  return { cargar, cancelar, turno: () => turno, repeticion: () => repeticion, suscribir };
+  return {
+    cargar, cancelar, turno: () => turno, repeticion: () => repeticion, atender, atendido: () => atendido, suscribir,
+  };
+}
+
+/**
+ * El tope de espera de las preferencias de una pantalla (useEstadoTabla, T4C r2, punto 4): si el GET de preferencias se
+ * cuelga (apiFetch no tiene tope), a los 4 s el `listo` que devuelve useEstadoTabla pasa a true igual y la tabla carga
+ * con los valores en memoria. Las escrituras no cambian: siguen esperando el listo de su vínculo (T4A, D35).
+ */
+export const ESPERA_PREFERENCIAS_MS = 4000;
+
+const relojDelSistema = {
+  setTimeout: (/** @type {() => void} */ fn, /** @type {number} */ ms) => globalThis.setTimeout(fn, ms),
+  clearTimeout: (/** @type {any} */ id) => globalThis.clearTimeout(id),
+};
+
+/**
+ * Arma el tope de espera de las preferencias: llama a `alVencer` UNA vez, `ms` después (ESPERA_PREFERENCIAS_MS), y
+ * devuelve la limpieza (al desmontar, el tope no vence después). El temporizador se inyecta para probarlo con node.
+ * @param {{alVencer: () => void, temporizador?: {setTimeout: (fn: () => void, ms: number) => any,
+ *   clearTimeout: (id: any) => void}, ms?: number}} opciones
+ * @returns {() => void}
+ */
+export function esperarPreferencias({ alVencer, temporizador = relojDelSistema, ms = ESPERA_PREFERENCIAS_MS }) {
+  const id = temporizador.setTimeout(alVencer, ms);
+  return () => temporizador.clearTimeout(id);
+}
+
+/**
+ * El `listo` que devuelve useEstadoTabla: las preferencias de sus vínculos ya se leyeron, o venció el tope de espera
+ * desde el montaje (lo que ocurra primero).
+ * @param {boolean} vinculosListos
+ * @param {boolean} vencido
+ * @returns {boolean}
+ */
+export function listoConTope(vinculosListos, vencido) {
+  return Boolean(vinculosListos || vencido);
 }
 
 /**
@@ -1060,13 +1119,18 @@ export function esErrorDeOrden(error, estado) {
 const sigueRechazo = (rechazo, { ruta = null, orden = null } = {}) => rechazo.ruta === (ruta ?? null)
   && (orden === null || orden === undefined || orden === '' || orden === rechazo.orden);
 
+/** T4C r2, punto 1: el resultado es del usuario de hoy (sin usuario en los dos lados, también). */
+const mismoUsuario = (resultado, usuario) => (resultado?.usuario ?? null) === (usuario ?? null);
+
 /**
  * Lo que queda de la lista cuando llega la respuesta (o el error) de la carga `marca`: con una respuesta,
  * normalizarRespuesta y sin error; con un error, lo último que llegó bien (las filas, el total, los conteos y el
- * resumen) y el error. Cada llegada lleva su número `n` (sube siempre) y la repetición con que se pidió (6b).
+ * resumen) y el error. Cada llegada lleva su número `n` (sube siempre), la repetición con que se pidió (6b) y el usuario
+ * del contexto (T4C r2, punto 1): las filas de un usuario nunca pasan a otro, ni siquiera con un error, y un rechazo de
+ * orden tampoco.
  * T4C r1, punto 1: un 422 de orden (esErrorDeOrden con el orden del contexto) deja `rechazo` {n, texto, ruta, orden}.
- * El rechazo sobrevive a las llegadas siguientes (también a la respuesta buena, ya sin orden) mientras sean de la misma
- * ruta y con el orden rechazado o el por defecto; con otro orden o en otra ruta, se borra. No muta lo que recibe.
+ * El rechazo sobrevive a las llegadas siguientes (también a la respuesta buena, ya sin orden) mientras sean del mismo
+ * usuario, de la misma ruta y con el orden rechazado o el por defecto; si no, se borra. No muta lo que recibe.
  * @param {ResultadoListado | null | undefined} previo
  * @param {LlegadaListado} llegada
  * @returns {ResultadoListado}
@@ -1075,6 +1139,8 @@ export function aplicarLlegadaListado(previo, llegada) {
   const n = (previo?.n ?? 0) + 1;
   const contexto = llegada.contexto ?? {};
   const repeticion = llegada.repeticion ?? 0;
+  const usuario = contexto.usuario ?? null;
+  const propio = previo && mismoUsuario(previo, usuario) ? previo : null;
   /** @type {RechazoOrden | null} */
   let rechazo = null;
   if (!llegada.ok && esErrorDeOrden(llegada.error, contexto)) {
@@ -1083,26 +1149,26 @@ export function aplicarLlegadaListado(previo, llegada) {
       n, texto: textos.find((t) => t.includes(TEXTO_ORDEN_RECHAZADO)) ?? textos[0], ruta: contexto.ruta ?? null,
       orden: /** @type {string} */ (contexto.orden),
     };
-  } else if (previo?.rechazo && sigueRechazo(previo.rechazo, contexto)) {
-    rechazo = previo.rechazo;
+  } else if (propio?.rechazo && sigueRechazo(propio.rechazo, contexto)) {
+    rechazo = propio.rechazo;
   }
-  if (llegada.ok) {
-    return { clave: llegada.marca, n, repeticion, datos: normalizarRespuesta(llegada.respuesta), error: null, rechazo };
-  }
-  return { clave: llegada.marca, n, repeticion, datos: previo?.datos ?? null, error: llegada.error ?? null, rechazo };
+  const base = { clave: llegada.marca, n, repeticion, usuario, rechazo };
+  if (llegada.ok) return { ...base, datos: normalizarRespuesta(llegada.respuesta), error: null };
+  return { ...base, datos: propio?.datos ?? null, error: llegada.error ?? null };
 }
 
 /**
- * El número del rechazo de orden que useListado tiene que atender (despachar UNA vez {tipo: 'orden', valor: null}, desde
- * un efecto): el de la ÚLTIMA llegada, si fue un 422 de orden, no se atendió (`atendido`, el último número despachado)
- * y la pantalla sigue con el orden rechazado. Si no, null.
+ * El número del rechazo de orden que useListado tiene que atender (despachar UNA vez {tipo: 'restablecerOrden',
+ * rechazado}, desde un efecto): el de la ÚLTIMA llegada, si fue un 422 de orden, no se atendió (`atendido`, el último
+ * número atendido), es del usuario de hoy y la pantalla sigue con el orden rechazado. Si no, null.
  * @param {ResultadoListado | null | undefined} resultado
- * @param {{orden: string | null | undefined, atendido: number | null}} opciones
+ * @param {{orden: string | null | undefined, atendido: number | null, usuario?: number | null}} opciones
  * @returns {number | null}
  */
-export function rechazoPorAtender(resultado, { orden, atendido }) {
+export function rechazoPorAtender(resultado, { orden, atendido, usuario = null }) {
   const r = resultado?.rechazo;
-  if (!resultado || !r || r.n !== resultado.n || r.n === atendido || orden !== r.orden) return null;
+  if (!resultado || !r || !mismoUsuario(resultado, usuario)) return null;
+  if (r.n !== resultado.n || r.n === atendido || orden !== r.orden) return null;
   return r.n;
 }
 
@@ -1118,19 +1184,25 @@ export function rechazoPorAtender(resultado, { orden, atendido }) {
  *  - 6b: con una vuelta en camino (`repeticion` de la carga distinta de la del resultado), también en camino;
  *  - punto 1: avisoOrden es el texto del 422 de orden mientras la ruta sea la misma y el orden sea el rechazado o el por
  *    defecto. Con `restablece` (la pantalla pasó despachar), la llegada del rechazo cuenta como en camino y su error no se
- *    pinta: la vuelta al orden por defecto ya sale.
+ *    pinta mientras no se haya atendido (r2, punto 3: `atendido` es el número del último atendido); si se atendió y la
+ *    consulta no cambió (el orden sigue siendo el rechazado), el error vuelve a verse, con Reintentar;
+ *  - T4C r2, punto 1: un resultado de otro usuario (`usuario`, el del token del render) cuenta como sin resultado: ni
+ *    sus filas, ni su total, conteos, resumen, error o aviso; la tabla queda en cargandoInicial.
  * @param {ResultadoListado | null | undefined} resultado
  * @param {{clave: string, activo?: boolean, esperar?: boolean, repeticion?: number, ruta?: string | null,
- *   orden?: string | null, restablece?: boolean}} opciones
+ *   orden?: string | null, restablece?: boolean, atendido?: number | null, usuario?: number | null}} opciones
  * @returns {EstadoListado}
  */
 export function estadoListado(resultado, {
-  clave, activo = true, esperar = false, repeticion = 0, ruta = null, orden = null, restablece = false,
+  clave, activo = true, esperar = false, repeticion = 0, ruta = null, orden = null, restablece = false, atendido = null,
+  usuario = null,
 }) {
-  const datos = resultado?.datos ?? null;
-  const rechazo = resultado?.rechazo ?? null;
-  const volviendo = restablece && rechazo !== null && rechazo.n === resultado?.n && orden === rechazo.orden;
-  const enCamino = activo && (esperar || volviendo || resultado?.clave !== clave || (resultado?.repeticion ?? 0) !== repeticion);
+  const propio = resultado && mismoUsuario(resultado, usuario) ? resultado : null;
+  const datos = propio?.datos ?? null;
+  const rechazo = propio?.rechazo ?? null;
+  const volviendo = restablece && rechazo !== null && rechazo.n === propio?.n && orden === rechazo.orden
+    && atendido !== rechazo.n;
+  const enCamino = activo && (esperar || volviendo || propio?.clave !== clave || (propio?.repeticion ?? 0) !== repeticion);
   return {
     filas: datos ? datos.filas : [],
     total: datos ? datos.total : null,
@@ -1139,7 +1211,7 @@ export function estadoListado(resultado, {
     crudo: datos ? datos.crudo : null,
     cargandoInicial: enCamino && !datos,
     recargando: enCamino && Boolean(datos),
-    error: enCamino ? null : (resultado?.error ?? null),
+    error: enCamino ? null : (propio?.error ?? null),
     avisoOrden: rechazo && sigueRechazo(rechazo, { ruta, orden }) ? rechazo.texto : null,
   };
 }

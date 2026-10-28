@@ -1467,20 +1467,36 @@ async function soloLibreria({ aviso, llamadas }) {
     assert.deepEqual(u.srv[8].puts, [], `${nombre}: nada a la cuenta 8`);
   }
   // F: una acción de useEstadoTabla (tamaño y modo) hecha sobre la pantalla de 7 después de enlazar: no se guarda.
-  const f = await dosUsuarios({ conTablaYVista: true });
-  f.cambiarA8({ aviso: true });
+  // r2, punto 6: se imita despachar del hook (escriturasDeAccion y, solo si no es null, guardarModo y guardarTabla), así
+  // que la aserción sobre s8.puts prueba algo: el contracontrol de abajo, sin la guarda, sí manda el PUT a la cuenta 8.
   const actual = estadoTablaInicial({ vista: 'todos', tamano: 50 });
   const siguiente = reducirEstadoTabla(reducirEstadoTabla(actual, { tipo: 'modo', valor: 'kanban' }), { tipo: 'tamano', valor: 25 });
-  const escrituras = escriturasDeAccion(actual, siguiente, { usuarioRender: 7, usuarioToken: f.usuarioDelToken() });
-  assert.equal(escrituras, null);
+  const despacharComoElHook = (u, { usuarioRender, sinGuarda = false }) => {
+    const escrituras = escriturasDeAccion(actual, siguiente, {
+      usuarioRender, usuarioToken: sinGuarda ? usuarioRender : u.usuarioDelToken(),
+    });
+    if (!escrituras) return null;
+    if (escrituras.modo !== null) u.vista.guardar(escrituras.modo);
+    if (escrituras.tamano !== null) u.tam.guardar({ tamano: escrituras.tamano });
+    return escrituras;
+  };
+  const f = await dosUsuarios({ conTablaYVista: true });
+  f.cambiarA8({ aviso: true });
+  assert.equal(despacharComoElHook(f, { usuarioRender: 7 }), null);
   await f.terminar();
   assert.deepEqual(f.srv[8].puts, [], 'F: ni el tamaño ni el modo van a la cuenta 8');
-  // Lo mismo con el usuario de siempre sí escribe (el control).
+  // El contracontrol: la misma acción sin la guarda del usuario termina en la cuenta 8 (lo de antes de listo se escribe
+  // con el listo de la instancia nueva, T4A).
+  const sinGuarda = await dosUsuarios({ conTablaYVista: true });
+  sinGuarda.cambiarA8({ aviso: true });
+  assert.ok(despacharComoElHook(sinGuarda, { usuarioRender: 7, sinGuarda: true }));
+  await sinGuarda.terminar();
+  // (el tamaño 25 es el que 8 ya tiene guardado, así que esa pieza no cambia nada y no sale; el modo sí)
+  assert.deepEqual(sinGuarda.srv[8].puts.map((x) => [x.clave, x.valor]), [['vista:x', 'kanban']], 'sin la guarda, sí llegaría a 8');
+  // El control: con el usuario de siempre, la acción sí se guarda en su cuenta.
   const g = await dosUsuarios({ conTablaYVista: true });
-  const mias = escriturasDeAccion(actual, siguiente, { usuarioRender: 7, usuarioToken: 7 });
+  const mias = despacharComoElHook(g, { usuarioRender: 7 });
   assert.deepEqual([mias?.modo, mias?.tamano], ['kanban', 25]);
-  g.vista.guardar(mias.modo);
-  g.tam.guardar({ tamano: mias.tamano });
   g.reloj.avanzar(800);
   await tic();
   assert.deepEqual(g.srv[7].puts.map((x) => x.clave).sort(), ['tabla:x', 'vista:x']);

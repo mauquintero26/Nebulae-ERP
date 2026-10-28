@@ -1,9 +1,9 @@
 'use client';
 
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
-  armarEstadoTabla, claveSesionTabla, esModoTabla, escriturasDeAccion, estadoTablaInicial, reducirEstadoTabla,
-  sesionVigente,
+  armarEstadoTabla, claveSesionTabla, esModoTabla, escriturasDeAccion, esperarPreferencias, estadoTablaInicial,
+  listoConTope, reducirEstadoTabla, sesionVigente,
 } from '@/lib/tabla';
 import type { AccionTabla, EstadoTabla, ModoTabla, SesionTabla } from '@/lib/tabla';
 import { usePreferencia, usePreferenciaParte } from '@/components/ui/usePreferencia';
@@ -38,9 +38,14 @@ import { usuarioDeLaSesion } from './usuarioDeLaSesion';
  * `listo`, dice que ya se leyeron. r1, punto 5: para no pedir la lista con el tamaño por defecto y abortarla al llegar
  * el guardado, la pantalla pasa useListado({…, esperar: !listo}) (la tabla se ve cargando, no vacía). El tablero (D39)
  * espera igual: no carga hasta listo.
+ * r2, punto 4: el `listo` que devuelve este hook pasa a true cuando los vínculos de las preferencias están listos o
+ * cuando vence ESPERA_PREFERENCIAS_MS (4000 ms, lib/tabla.js) desde el montaje, lo que ocurra primero. Si el GET de
+ * preferencias se cuelga (apiFetch no tiene tope), con esperar: !listo la tabla carga igual con los valores en memoria.
+ * Las escrituras no cambian: siguen esperando el listo de su vínculo (T4A). El temporizador se limpia al desmontar.
  *
  * D39: si la pantalla tiene tablero, useTableroKanban recibe pantalla = este mismo id, porColumna = estado.tamano,
- * activo = estado.modo === 'kanban' y dependencias = dependenciasTablero(estado) (lib/tabla.js).
+ * activo = listo && estado.modo === 'kanban' y dependencias = dependenciasTablero(estado) (lib/tabla.js). Regla:
+ * mientras !listo, la pantalla pinta el esqueleto de la vista.
  *
  * `inicial` (por ejemplo {vista: 'todos', orden: 'atencion'}) se toma al montar, como el valor inicial de useState.
  * despachar es estable y se puede llamar varias veces seguidas: cada acción parte de lo que dejó la anterior.
@@ -146,5 +151,12 @@ export function useEstadoTabla(
     if (escrituras.tamano !== null) guardarTabla({ tamano: escrituras.tamano });
   }, [id, guardarModo, guardarTabla]);
 
-  return [estado, despachar, modoListo && tablaListo];
+  // r2, punto 4: el tope de espera de las preferencias, desde el montaje (se limpia al desmontar).
+  const [vencido, setVencido] = useState(false);
+  useEffect(
+    () => esperarPreferencias({ alVencer: () => setVencido(true) }),
+    [],
+  );
+
+  return [estado, despachar, listoConTope(modoListo && tablaListo, vencido)];
 }

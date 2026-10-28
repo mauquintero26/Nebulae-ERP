@@ -19,6 +19,7 @@ import {
   dependenciasTablero, parteDeColumnas, urlListado, crearCargaListado, aplicarLlegadaListado, estadoListado,
   listadoCliente,
   MAXIMO_ESTADOS, sesionVigente, escriturasDeAccion, guardarCambioColumnas, lanzarListado, esErrorDeOrden, rechazoPorAtender,
+  ESPERA_PREFERENCIAS_MS, esperarPreferencias, listoConTope,
 } from '../src/lib/tabla.js';
 
 const ids = (filas) => filas.map((f) => f.id);
@@ -795,6 +796,20 @@ console.log('--- TEST 20 (T4C y r1, D28): crearCargaListado — una carga lenta 
     carga.cargar('/b', 'k2');
     assert.deepEqual([carga.repeticion(), avisos], [2, 1], 'sin suscriptores no se avisa a nadie');
   }
+  {
+    // r2, punto 3: el rechazo atendido vive en la carga (como las vueltas) y avisa a los suscriptores, para que la tabla
+    // vuelva a pintarse; atender el mismo otra vez no avisa.
+    const carga = crearCargaListado({ pedir: () => new Promise(() => {}), alLlegar: () => {} });
+    let avisos = 0;
+    carga.suscribir(() => { avisos += 1; });
+    assert.equal(carga.atendido(), null);
+    carga.atender(3);
+    assert.deepEqual([carga.atendido(), avisos], [3, 1]);
+    carga.atender(3);
+    assert.deepEqual([carga.atendido(), avisos], [3, 1]);
+    carga.atender(5);
+    assert.deepEqual([carga.atendido(), avisos], [5, 2]);
+  }
 }
 
 console.log('--- TEST 21 (T4C y r1, H6, RP35, esperar y vueltas): aplicarLlegadaListado, estadoListado y lanzarListado ---');
@@ -868,6 +883,38 @@ console.log('--- TEST 21 (T4C y r1, H6, RP35, esperar y vueltas): aplicarLlegada
   assert.equal(typeof limpiar, 'function');
   limpiar?.();
   assert.equal(llamadas[0].signal.aborted, true);
+
+  // r2, punto 1: con otro usuario no se muestran las filas del anterior (scratchpad rev4c_r1/tools/duda2.mjs). El token
+  // pasa de 7 a 8: la tabla de 8 queda en cargandoInicial, sin filas, total, conteos ni resumen de 7; si la petición de
+  // 8 falla (403), queda el error sin filas.
+  const url = '/ventas/hub/documentos?vista=todos&limit=25&offset=0&con_conteos=1';
+  const ruta = '/ventas/hub/documentos';
+  const de7 = aplicarLlegadaListado(null, {
+    marca: `0|7|${url}`, ok: true, respuesta: { data: [{ id: 1, cliente: 'Cliente de 7' }], total: 1, conteos: { todos: 1 }, resumen: { monto: 9 } },
+    contexto: { ruta, orden: null, usuario: 7 },
+  });
+  assert.equal(de7.usuario, 7);
+  assert.deepEqual(estadoListado(de7, { clave: `0|7|${url}`, ruta, usuario: 7 }).filas, [{ id: 1, cliente: 'Cliente de 7' }]);
+  const en8 = estadoListado(de7, { clave: `0|8|${url}`, ruta, usuario: 8 });
+  assert.deepEqual(
+    [en8.cargandoInicial, en8.recargando, en8.filas, en8.total, en8.conteos, en8.resumen, en8.crudo, en8.error],
+    [true, false, [], null, null, null, null, null],
+  );
+  const prohibido = Object.assign(new Error('No tienes permiso'), { status: 403 });
+  const fallo8 = aplicarLlegadaListado(de7, { marca: `0|8|${url}`, ok: false, error: prohibido, contexto: { ruta, orden: null, usuario: 8 } });
+  assert.deepEqual([fallo8.datos, fallo8.usuario], [null, 8], 'no pasa las filas de 7 a 8, ni con un error');
+  const visto8 = estadoListado(fallo8, { clave: `0|8|${url}`, ruta, usuario: 8 });
+  assert.deepEqual([visto8.error, visto8.filas, visto8.total, visto8.cargandoInicial], [prohibido, [], null, false]);
+  // Con el mismo usuario, un error sí conserva lo último que llegó bien (como siempre).
+  const fallo7 = aplicarLlegadaListado(de7, { marca: `1|7|${url}`, ok: false, error: prohibido, contexto: { ruta, orden: null, usuario: 7 } });
+  assert.equal(estadoListado(fallo7, { clave: `1|7|${url}`, ruta, usuario: 7 }).total, 1);
+  // Un rechazo de orden de 7 tampoco pasa a 8.
+  const e422 = Object.assign(new Error('No se puede ordenar por «cliente».'), { status: 422 });
+  const rechazo7 = aplicarLlegadaListado(de7, { marca: `0|7|x`, ok: false, error: e422, contexto: { ruta, orden: 'cliente', usuario: 7 } });
+  assert.equal(estadoListado(rechazo7, { clave: `0|8|y`, ruta, orden: 'cliente', usuario: 8 }).avisoOrden, null);
+  assert.equal(rechazoPorAtender(rechazo7, { orden: 'cliente', atendido: null, usuario: 8 }), null, 'ni se atiende en la pantalla de 8');
+  assert.equal(rechazoPorAtender(rechazo7, { orden: 'cliente', atendido: null, usuario: 7 }), rechazo7.n);
+  assert.equal(aplicarLlegadaListado(rechazo7, { marca: '0|8|y', ok: true, respuesta: { data: [] }, contexto: { ruta, orden: null, usuario: 8 } }).rechazo, null);
 }
 
 console.log('--- TEST 22 (T4C): listadoCliente (useListadoCliente) — estados, búsqueda sin tildes, orden y página válida ---');
@@ -944,13 +991,35 @@ console.log('--- TEST 23 (T4C y r1, R4, RP8, RP26, RP35, D28 y D38): el fuente d
   assert.match(listado, /activo = true/, 'RP35: activo, true por defecto');
   assert.match(listado, /esperar = false/, 'r1, punto 5: esperar, false por defecto');
   assert.ok(listado.includes('useSyncExternalStore(carga.suscribir, carga.repeticion'), 'r1, 6b: las vueltas en la clave');
-  // r1, punto 1: la vuelta al orden por defecto se despacha UNA vez y desde un useEffect, nunca en el render.
-  const despachos = listado.split("despachar({ tipo: 'orden', valor: null })").length - 1;
-  assert.equal(despachos, 1);
+  // r1, punto 1, y r2, puntos 2 y 3: la vuelta al orden por defecto se despacha UNA vez, desde un useEffect (nunca en
+  // el render), con la acción condicional restablecerOrden, y lo atendido queda en la carga (vuelve a pintar).
+  const VUELTA = "despachar({ tipo: 'restablecerOrden', rechazado: rechazo.orden })";
+  assert.equal(listado.split(VUELTA).length - 1, 1);
+  assert.ok(!listado.includes("despachar({ tipo: 'orden', valor: null })"), 'ya no la vuelta sin condición');
   const efecto = /useEffect\(\(\) => \{([\s\S]*?)\n {2}\}, \[[^\]]*\]\);/g;
   const cuerpos = [...listado.matchAll(efecto)].map((m) => m[1]);
-  assert.ok(cuerpos.some((c) => c.includes('rechazoPorAtender(') && c.includes("despachar({ tipo: 'orden', valor: null })")),
-    'el despacho está dentro de un useEffect');
+  assert.ok(cuerpos.some((c) => c.includes('rechazoPorAtender(') && c.includes('carga.atender(n);') && c.includes(VUELTA)),
+    'el despacho y lo atendido están dentro de un useEffect');
+  assert.ok(listado.includes('const atendido = useSyncExternalStore(carga.suscribir, carga.atendido, carga.atendido);'),
+    'r2, punto 3: lo atendido vuelve a pintar (no es un ref)');
+  assert.ok(!/atendido\.current|useRef</.test(listado), 'sin el ref de r1');
+  // r2, punto 6: los cables del hook (mutantes M14, M15, M22 y M23 del revisor).
+  assert.ok(listado.includes('const usuario = usuarioDeLaSesion();'), 'M14: el usuario del render');
+  assert.ok(listado.includes("const clave = `${version}|${usuario ?? ''}|${url}`;"), 'M14: el usuario en la clave');
+  assert.ok(listado.includes('contexto: { ruta, orden, usuario }'), 'r2, punto 1: la llegada sabe de qué usuario es');
+  assert.ok(listado.includes('const restablece = Boolean(despachar);'), 'M15');
+  assert.ok(listado.includes('estadoListado(resultado, { clave, activo, esperar, repeticion, ruta, orden, restablece, atendido, usuario })'),
+    'M23: estadoListado recibe esperar (y lo demás)');
+  assert.ok(estado.includes('setLocal({ id, usuario: usuarioDelRender.current, sesion: siguiente });'), 'M22');
+  // r2, punto 4: el tope de espera de las preferencias, desde el montaje y con su limpieza.
+  assert.match(estado, /useEffect\(\s*\(\) => esperarPreferencias\(\{ alVencer: \(\) => setVencido\(true\) \}\),\s*\[\],?\s*\);/);
+  assert.ok(estado.includes('const [vencido, setVencido] = useState(false);'));
+  assert.ok(estado.includes('return [estado, despachar, listoConTope(modoListo && tablaListo, vencido)];'));
+  // r2, punto 5: la fórmula del tablero (D39) con listo.
+  assert.ok(estado.includes("activo = listo && estado.modo === 'kanban'"));
+  assert.ok(estado.includes('mientras !listo, la pantalla pinta el esqueleto de la vista'));
+  // r2, punto 3: el estado que recibe useListado es el de useEstadoTabla.
+  assert.ok(listado.includes('`estado` es el de useEstadoTabla, sin derivar'));
   assert.ok(!/search=|[?&]estado=/.test(listado));
   assert.ok(listado.includes('listadoCliente('));
   for (const exportado of ['useEstadoTabla', 'usePreferenciasTabla', 'useListado']) {
@@ -1068,8 +1137,76 @@ console.log('--- TEST 25 (T4C r1, punto 1): un orden que el servidor rechaza vue
   const otraVez = aplicarLlegadaListado(r3, { marca: 'k8', ok: false, error: e422, contexto: { ruta, orden: null } });
   assert.equal(rechazoPorAtender(otraVez, { orden: null, atendido: r2.n }), null);
   assert.equal(estadoListado(otraVez, { clave: 'k8', ruta, orden: null, restablece: true }).error, e422);
+
+  // r2, punto 2: la vuelta al orden por defecto es condicional (restablecerOrden). Solo quita el orden si sigue siendo el
+  // rechazado, con la página en 1 como cualquier cambio; si no, devuelve el MISMO estado.
+  const conCliente = estadoTablaInicial({ vista: 'todos', orden: 'cliente', pagina: 3 });
+  const restablecido = reducirEstadoTabla(conCliente, { tipo: 'restablecerOrden', rechazado: 'cliente' });
+  assert.deepEqual([restablecido.orden, restablecido.pagina, restablecido.vista], [null, 1, 'todos']);
+  assert.equal(reducirEstadoTabla(conCliente, { tipo: 'restablecerOrden', rechazado: '-monto' }), conCliente, 'otro orden: el mismo estado');
+  const sinOrden = estadoTablaInicial({ vista: 'todos' });
+  assert.equal(reducirEstadoTabla(sinOrden, { tipo: 'restablecerOrden', rechazado: 'cliente' }), sinOrden);
+  assert.equal(reducirEstadoTabla(sinOrden, /** @type {any} */ ({ tipo: 'restablecerOrden' })), sinOrden, 'sin rechazado, nada');
+  // La carrera del revisor (rev4c_r1_conc, carrera-orden): llega el rechazo, el usuario elige '-monto' antes de los
+  // efectos y después sale la vuelta: queda '-monto'.
+  let carrera = conCliente;
+  carrera = reducirEstadoTabla(carrera, { tipo: 'orden', valor: '-monto' });
+  const tras = reducirEstadoTabla(carrera, { tipo: 'restablecerOrden', rechazado: 'cliente' });
+  assert.equal(tras, carrera);
+  assert.equal(tras.orden, '-monto');
+
+  // r2, punto 3: un rechazo atendido que no cambió la consulta vuelve a mostrar el error (con Reintentar). Pasa con un
+  // estado derivado (rev4c_r1_conc/out/derivado.mjs: estado.orden ?? 'atencion', y 'atencion' se rechaza): el
+  // despacho no cambia el orden que ve useListado.
+  const eAtencion = Object.assign(new Error('No se puede ordenar por «atencion».'), { status: 422 });
+  const d1 = aplicarLlegadaListado(null, { marca: 'k1', ok: false, error: eAtencion, contexto: { ruta, orden: 'atencion' } });
+  const antes = estadoListado(d1, { clave: 'k1', ruta, orden: 'atencion', restablece: true, atendido: null });
+  assert.deepEqual([antes.cargandoInicial, antes.error], [true, null], 'antes de atender: la vuelta está por salir');
+  const despues = estadoListado(d1, { clave: 'k1', ruta, orden: 'atencion', restablece: true, atendido: d1.n });
+  assert.deepEqual([despues.cargandoInicial, despues.recargando, despues.error, despues.avisoOrden],
+    [false, false, eAtencion, 'No se puede ordenar por «atencion».'], 'atendido sin cambio de consulta: se ve el error');
+  assert.equal(rechazoPorAtender(d1, { orden: 'atencion', atendido: d1.n }), null, 'y no se despacha otra vez');
+}
+
+console.log('--- TEST 26 (T4C r2, punto 4): el tope de espera de las preferencias ---');
+{
+  assert.equal(ESPERA_PREFERENCIAS_MS, 4000);
+  const reloj = (() => {
+    let ahora = 0;
+    let siguiente = 1;
+    let tareas = [];
+    return {
+      setTimeout(fn, ms) { const id = siguiente++; tareas.push({ id, en: ahora + ms, fn }); return id; },
+      clearTimeout(id) { tareas = tareas.filter((t) => t.id !== id); },
+      avanzar(ms) {
+        ahora += ms;
+        for (const t of tareas.filter((x) => x.en <= ahora)) { tareas = tareas.filter((x) => x !== t); t.fn(); }
+      },
+      pendientes: () => tareas.length,
+    };
+  })();
+  // Las preferencias se cuelgan (sin precarga): a los 4000 ms el tope vence UNA vez y la tabla carga igual.
+  let vencido = false;
+  let veces = 0;
+  const limpiar = esperarPreferencias({ alVencer: () => { vencido = true; veces += 1; }, temporizador: reloj });
+  reloj.avanzar(3999);
+  assert.deepEqual([vencido, listoConTope(false, vencido)], [false, false]);
+  reloj.avanzar(1);
+  assert.deepEqual([vencido, listoConTope(false, vencido), veces], [true, true, 1]);
+  reloj.avanzar(10000);
+  assert.equal(veces, 1);
+  limpiar();
+  // Las preferencias llegan antes del tope: listo de inmediato, sin esperar los 4000 ms.
+  assert.equal(listoConTope(true, false), true);
+  // Al desmontar se limpia: el tope no vence después.
+  let tarde = false;
+  const quitar = esperarPreferencias({ alVencer: () => { tarde = true; }, temporizador: reloj, ms: 100 });
+  quitar();
+  reloj.avanzar(1000);
+  assert.deepEqual([tarde, reloj.pendientes()], [false, 0]);
 }
 
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');
 console.log('✓ T4C: sesión, estado armado, partes de columnas, URL de la lista, carga vigente, estado de la lista y modo cliente.');
 console.log('✓ T4C r1: orden rechazado, estados en la sesión, escrituras del usuario del render, esperar y vueltas.');
+console.log('✓ T4C r2: sin filas de otra cuenta, vuelta al orden condicional y atendida, tope de espera y cables vigilados.');
