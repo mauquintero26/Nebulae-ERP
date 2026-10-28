@@ -4,7 +4,8 @@
 - GET ''        ?prefijo= opcional -> {status, data: {clave: valor}}; sin prefijo, todas (máximo 500).
 - PUT '/{clave}' con {valor} -> upsert (una fila por usuario y clave, UNIQUE(user_id, clave)).
 - 422 en español (validado a mano, R21) si la clave no cumple ^(tabla|vista|kanban|flujo|analisis):[a-z0-9._-]{1,80}$
-  o si len(json.dumps(valor, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > 8192 (RP24).
+  o si len(json.dumps(valor, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > 8192 (RP24); r1: también si
+  el valor tiene más de 32 niveles anidados o un surrogate suelto (antes daban 500).
 - 401 sin token.
 
 Las tres claves inválidas de RP24 (T3A usa las mismas en test_preferencias.mjs): CLAVES_INVALIDAS.
@@ -23,6 +24,10 @@ MAXIMO_GET = 500
 
 # RP24: una de otro ámbito, una con mayúsculas y una de más de 80 caracteres después del ámbito.
 CLAVES_INVALIDAS = ("pantalla:ventas", "tabla:Ventas", "tabla:" + "a" * 81)
+
+# Textos exactos de los 422 de r1 (fixes-1B-r1.md, punto 3).
+MENSAJE_PROFUNDIDAD = "El valor tiene demasiados niveles anidados (máximo 32)."
+MENSAJE_VALOR_NO_JSON = "El valor de la preferencia no es un JSON válido."
 
 
 def _h(token):
@@ -208,7 +213,42 @@ def test_cuerpo_sin_valor_o_no_json_valido_da_422(app_client, db, user_vendedor,
     r = app_client.put(f"{URL}/{clave}", content='{"valor": NaN}',
                        headers={**_h(vendedor_token), "Content-Type": "application/json"})
     assert r.status_code == 422, r.text
+    # r1 (3b): un surrogate suelto (\ud800) se lee como texto, pero no se puede pasar a UTF-8: medir el tamaño lanzaba
+    # UnicodeEncodeError (500). En el valor y en una clave del objeto.
+    for cuerpo in ('{"valor": "\\ud800"}', '{"valor": {"\\udfff": 1}}'):
+        r = app_client.put(f"{URL}/{clave}", content=cuerpo,
+                           headers={**_h(vendedor_token), "Content-Type": "application/json"})
+        assert r.status_code == 422, (cuerpo, r.status_code, r.text)
+        assert r.json()["detail"] == MENSAJE_VALOR_NO_JSON, r.text
     assert _filas(db, usuario) == []
+
+
+def _anidado(niveles, en_objeto=False):
+    """Un valor con `niveles` listas (u objetos) una dentro de otra; 0 es un número suelto."""
+    valor = 0
+    for _ in range(niveles):
+        valor = {"a": valor} if en_objeto else [valor]
+    return valor
+
+
+def test_valor_con_mas_de_32_niveles_anidados_da_422_sin_guardar(app_client, db, user_vendedor, vendedor_token):
+    """r1 (3a): con unos 1000 niveles el PUT confirmaba y la respuesta daba 500 (RecursionError), y desde entonces el GET
+    sin prefijo de ese usuario daba 500. Ahora la profundidad se mide antes que el tamaño: más de 32 -> 422."""
+    usuario = user_vendedor.id
+    s = _suf()
+    for clave, valor in ((f"tabla:hondo-1200-{s}", _anidado(1200)), (f"tabla:hondo-33-{s}", _anidado(33)),
+                         (f"tabla:hondo-33-objeto-{s}", _anidado(33, en_objeto=True))):
+        r = _put(app_client, vendedor_token, clave, valor)
+        assert r.status_code == 422, (clave, r.status_code, r.text[:200])
+        assert r.json()["detail"] == MENSAJE_PROFUNDIDAD, r.text[:200]
+    assert _filas(db, usuario) == []
+
+    for clave, valor in ((f"tabla:hondo-32-{s}", _anidado(32)), (f"tabla:hondo-32-objeto-{s}", _anidado(32, True))):
+        r = _put(app_client, vendedor_token, clave, valor)
+        assert r.status_code == 200, (clave, r.status_code, r.text[:200])
+    r = _get(app_client, vendedor_token)
+    assert r.status_code == 200, r.text[:200]
+    assert r.json()["data"] == {f"tabla:hondo-32-{s}": _anidado(32), f"tabla:hondo-32-objeto-{s}": _anidado(32, True)}
 
 
 # ─── 401 sin token ──────────────────────────────────────────────────────────────────────────────────────────

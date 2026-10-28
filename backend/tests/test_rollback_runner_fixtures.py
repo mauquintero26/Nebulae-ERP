@@ -13,10 +13,12 @@ un prefijo numerico (_1_, _2_) para que el orden sea el mismo bajo cualquier rec
 """
 import os
 import sys
+import uuid
+from pathlib import Path
 
 import pytest
 from sqlalchemy import event, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session
 
 import app.db.database as dbmod
@@ -25,6 +27,7 @@ _ESTE_MODULO = sys.modules[__name__]
 _CENTINELA = "original"
 _BITACORA = []            # eventos de setup/teardown de las fixtures generadoras
 _CONTADOR_PREVIO = {}     # contador de una prueba anterior, para comprobar que ya no cuenta
+_TMP_PREVIO = {}          # tmp_path de una prueba anterior, para comprobar que se borro
 
 
 def _filas_visibles_desde_otra_conexion(tabla, id_):
@@ -88,6 +91,49 @@ def test_sku_con_su_producto_marca_y_categoria(db, sku):
 
 def test_sku_cuelga_del_mismo_producto_que_la_fixture_product(sku, product):
     assert sku.product_id == product.id
+
+
+# ---- SessionLocal y tmp_path (B4 T1B r1) -----------------------------------------------------------
+def test_sessionlocal_dentro_de_la_prueba_es_el_de_la_transaccion(db):
+    """Dentro de una prueba, SessionLocal (el de app.db.database y el de los modulos que lo importan por nombre) abre
+    sesiones sobre la MISMA conexion de la prueba: su commit() solo libera un savepoint. Entre pruebas el runner lo
+    deja en un centinela que lanza; eso no se ve desde una prueba y se demostro con una sonda (task-1B-report-r1)."""
+    import app.api.v1.erp_inventario as m_inv
+    import app.api.v1.erp_ventas_fase4 as m_f4
+    for modulo in (dbmod, m_inv, m_f4):
+        s = modulo.SessionLocal()
+        try:
+            assert isinstance(s.bind, Connection), modulo.__name__
+            assert s.bind is db.bind, modulo.__name__
+        finally:
+            s.close()
+
+    from app.models.catalog import Brand
+    s = dbmod.SessionLocal()
+    try:
+        b = Brand(name=f"TestBrand-SL-{uuid.uuid4().hex[:6]}")
+        s.add(b)
+        s.commit()
+        assert db.query(Brand).filter(Brand.id == b.id).count() == 1
+        assert _filas_visibles_desde_otra_conexion("brands", b.id) == 0
+    finally:
+        s.close()
+
+
+def test_tmp_path_1_es_un_directorio_nuevo_y_escribible(tmp_path):
+    assert isinstance(tmp_path, Path)
+    assert tmp_path.is_dir()
+    assert list(tmp_path.iterdir()) == []
+    archivo = tmp_path / "prueba.txt"
+    archivo.write_text("preferencia ñ", encoding="utf-8")
+    assert archivo.read_text(encoding="utf-8") == "preferencia ñ"
+    _TMP_PREVIO["ruta"] = tmp_path
+
+
+def test_tmp_path_2_se_borro_al_terminar_la_prueba_anterior(tmp_path):
+    previo = _TMP_PREVIO["ruta"]
+    assert not previo.exists()
+    assert tmp_path != previo and tmp_path.is_dir()
 
 
 # ---- fixtures generadoras (yield) ------------------------------------------------------------------

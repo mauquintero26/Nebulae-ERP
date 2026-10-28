@@ -27,6 +27,12 @@ Fixtures que resuelve (ademas de las que defina el propio modulo de tests, que t
 Las fixtures generadoras (yield) entregan el valor del yield y su teardown corre despues de la prueba,
 en orden inverso, ANTES de cerrar la sesion y revertir la transaccion.
 
+Fuera de una prueba (antes de la primera, entre pruebas y despues de la ultima) SessionLocal es un centinela que lanza
+RuntimeError('SessionLocal fuera de una prueba del runner'); el real no se repone (B4 T1B r1). Si al terminar una prueba
+quedan hilos vivos que nacieron en ella, la prueba es FAIL («[hilos vivos al terminar la prueba]»), la conexion se
+descarta y la corrida aborta. Si no se puede revertir la transaccion, la prueba es FAIL («[revertir la transaccion de la
+prueba]») y la conexion se descarta: Postgres revierte lo que estuviera abierto.
+
 Variable de entorno PARCHE: codigo Python que se ejecuta antes de cargar el modulo (para pruebas "rojas").
 
 Ningun servicio externo real, sea cual sea el .env compartido:
@@ -39,8 +45,8 @@ empezar cada prueba (r2). Un modulo que vuelva a cargar el .env no las abre.
 Cada intento de salir a Chatwoot o por urlopen se cuenta. Al final se imprime «Chatwoot real bloqueado N veces», y con
 N > 0 la corrida falla aunque todas las pruebas pasen: una prueba llego al transporte real y la guarda la paro.
 """
-import sys, os, re, importlib, inspect, traceback, contextlib, uuid, shutil, tempfile
-from datetime import datetime, timedelta
+import sys, os, re, importlib, inspect, traceback, contextlib, uuid, shutil, tempfile, threading, time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parent.parent
@@ -154,8 +160,52 @@ TABLAS = ["customer_requests", "sales_quotations", "sale_orders", "purchase_orde
           # B4 T1B (RP72, D13/D15): Compras e Inventario (las pruebas de T1C, T12 y T13 y las fixtures de D13)
           "goods_receipts", "purchase_order_lines", "suppliers", "warehouses", "inventory_levels",
           "inventory_movements", "inventory_operations", "inventory_reservations", "inventory_quarantine",
-          "product_web_listings"]
+          "product_web_listings",
+          # B4 T1B r1: lo que escribe confirmar una recepcion (erp_compras.py:1811ss), que D13 dejo correr
+          "idempotency_requests", "goods_receipt_lines", "goods_receipt_line_allocations", "procurement_allocations",
+          "inventory_owner_balances"]
 MODULOS_CON_SESSIONLOCAL = (dbmod, m_compras, m_inv, m_f4)
+
+
+class _SessionLocalFueraDePrueba:
+    """B4 T1B r1: lo que vale SessionLocal (en MODULOS_CON_SESSIONLOCAL) ANTES de la primera prueba, ENTRE pruebas y
+    despues de la ultima. Usarlo lanza RuntimeError: un hilo que sobreviva a su prueba y haga
+    `from app.db.database import SessionLocal` (el COMMIT INDEPENDIENTE de idempotency_requests, erp_compras.py:1902, o
+    :2727 y :2804) no puede abrir una sesion real ni confirmar nada en erp_test. El SessionLocal real no se repone: despues
+    de la ultima prueba el runner solo usa dbmod.engine (maximos)."""
+
+    MENSAJE = "SessionLocal fuera de una prueba del runner"
+
+    def __call__(self, *args, **kwargs):
+        raise RuntimeError(self.MENSAJE)
+
+    def __getattr__(self, nombre):
+        if nombre.startswith("__") and nombre.endswith("__"):
+            raise AttributeError(nombre)
+        raise RuntimeError(self.MENSAJE)
+
+    def __repr__(self):
+        return "<SessionLocal centinela del rollback_runner>"
+
+
+CENTINELA_SESSIONLOCAL = _SessionLocalFueraDePrueba()
+_ESPERA_HILOS_SEG = 1.0  # lo que se espera a que terminen los hilos de una prueba (los de anyio se apagan solos)
+
+
+def _desviar_sessionlocal(destino):
+    for m in MODULOS_CON_SESSIONLOCAL:
+        if hasattr(m, "SessionLocal"):
+            m.SessionLocal = destino
+
+
+def _hilos_que_quedaron(al_empezar):
+    """Hilos que nacieron durante la prueba y siguen vivos. Les da hasta _ESPERA_HILOS_SEG para terminar: los hilos de
+    trabajo de anyio de cada peticion del TestClient se apagan un instante despues de responder."""
+    limite = time.monotonic() + _ESPERA_HILOS_SEG
+    for h in threading.enumerate():
+        if h not in al_empezar:
+            h.join(max(0.0, limite - time.monotonic()))
+    return [h for h in threading.enumerate() if h not in al_empezar and h.is_alive()]
 
 # Salvaguarda como la de conftest.py: jamas correr contra una base que no se identifique como de pruebas.
 _nombre_base = (dbmod.engine.url.database or "").lower()
@@ -383,7 +433,7 @@ def _pec_10u(db, sku, warehouse, supplier):
         numero=f"PEC-TEST-{uuid.uuid4().hex[:8].upper()}",
         supplier_id=supplier.id, supplier_name=supplier.name,
         warehouse_id=warehouse.id, estado="EMITIDO",
-        fecha_entrega_estimada=datetime.utcnow() + timedelta(days=15),
+        fecha_entrega_estimada=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=15),
         productos=[{"sku_id": sku.id, "sku": sku.sku, "nombre": "Test Product",
                     "qty": 10, "qty_recibida": 0, "precio_usd": 10.0}],
     )
@@ -446,7 +496,9 @@ if os.environ.get("PARCHE"):  # prueba "roja": codigo que anula la regla bajo pr
 mod = importlib.import_module(sys.argv[1])
 _bloquear_servicios_externos()  # B3 T8 r2: por si el modulo de pruebas recargo el .env al importarse
 client = TestClient(app, raise_server_exceptions=False)
-sessionlocal_original = dbmod.SessionLocal
+# B4 T1B r1: desde aqui, fuera de una prueba, SessionLocal es el centinela (despues de importar el modulo de pruebas:
+# los que hacen `from app.db.database import SessionLocal` al importarse se quedan con el que habia, como antes).
+_desviar_sessionlocal(CENTINELA_SESSIONLOCAL)
 print(f"[rollback_runner] codigo: {BACKEND}  base: {_nombre_base}", flush=True)
 antes = maximos()
 
@@ -462,9 +514,27 @@ def recolectar():
                     yield f"{cnombre}.{mnombre}", getattr(cls(), mnombre)
 
 
+def _cerrar_corrida(passed, failed):
+    """Las tres lineas finales; devuelve el codigo de salida."""
+    despues = maximos()
+    cambios = {t: (antes[t], despues[t]) for t in TABLAS if despues[t] != antes[t]}
+    print(f"\n{passed} passed, {failed} failed")
+    # B3 T8 r2 (guarda 2): la guarda de Chatwoot no se queda callada. Si actuo, una prueba llego al transporte real (el
+    # envio la atrapa y responde 200, asi que la prueba pudo quedar en verde): la corrida falla igual. Va antes de la
+    # ultima linea para que la salida siga terminando en «Base intacta».
+    bloqueos_chatwoot = _ChatwootBloqueado.veces
+    print(f"Chatwoot real bloqueado {bloqueos_chatwoot} veces"
+          + ("" if not bloqueos_chatwoot else ": OJO, una prueba intento salir a Chatwoot o por urlopen (falla la corrida)"))
+    print("Base intacta (max(id) sin cambios)." if not cambios else f"OJO, max(id) cambio en: {cambios}", flush=True)
+    return 1 if failed or bloqueos_chatwoot else 0
+
+
 passed = failed = 0
 for nombre, fn in recolectar():
     _bloquear_servicios_externos()  # B3 T8 r2: al empezar cada prueba (una prueba anterior pudo recargar el .env)
+    hilos_al_empezar = set(threading.enumerate())  # B4 T1B r1 (b)
+    cuantos_al_empezar = threading.active_count()
+    abortar = False
     conn = dbmod.engine.connect()
     trans = conn.begin()
     Sesion = sessionmaker(bind=conn, autocommit=False, autoflush=False, join_transaction_mode="create_savepoint")
@@ -477,9 +547,7 @@ for nombre, fn in recolectar():
             s.close()
 
     app.dependency_overrides[dbmod.get_db] = get_db_de_prueba
-    for m in MODULOS_CON_SESSIONLOCAL:
-        if hasattr(m, "SessionLocal"):
-            m.SessionLocal = Sesion
+    _desviar_sessionlocal(Sesion)
     session = Sesion()
     generadoras = []  # (nombre, generador) de las fixtures con yield, en el orden en que se armaron
     ok, detalles = True, []
@@ -529,38 +597,50 @@ for nombre, fn in recolectar():
             ok = False
             detalles.append(f"[teardown de la fixture '{n}'] hizo yield mas de una vez\n")
     finally:
-        # B4 T1B (D13): una prueba con hilos (test_receipt_concurrency) usa la MISMA conexion desde dos peticiones a la vez y
-        # deja sus savepoints invalidos; session.close() lanza PendingRollbackError. Antes eso tumbaba la corrida sin
-        # «Base intacta»; ahora la prueba queda en FAIL con el motivo y, si tampoco se puede revertir, la conexion se
-        # descarta (Postgres revierte la transaccion abierta al perderla). Nada se confirma en ningun caso.
-        try:
-            session.close()
-        except Exception:
+        vivos = _hilos_que_quedaron(hilos_al_empezar)
+        if vivos:
+            # B4 T1B r1 (b): un hilo que sobrevive a su prueba podria seguir usando la base. La prueba es FAIL, SessionLocal
+            # queda en el centinela, la conexion se descarta (Postgres revierte la transaccion abierta al perderla) y se
+            # cierra (ya no se puede volver a usar), y la corrida aborta sin reponer nada.
             ok = False
-            detalles.append(f"[cierre de la sesion de la prueba]\n{traceback.format_exc()}")
-        try:
-            trans.rollback()
-        except Exception:
-            conn.invalidate()
-        conn.close()
-        for m in MODULOS_CON_SESSIONLOCAL:
-            if hasattr(m, "SessionLocal"):
-                m.SessionLocal = sessionlocal_original
-        app.dependency_overrides.clear()
+            abortar = True
+            detalles.append(f"[hilos vivos al terminar la prueba] al empezar {cuantos_al_empezar}, al terminar "
+                            f"{threading.active_count()}: {', '.join(h.name for h in vivos)}\n")
+            _desviar_sessionlocal(CENTINELA_SESSIONLOCAL)
+            for paso in (conn.invalidate, conn.close):
+                try:
+                    paso()
+                except Exception:
+                    pass
+        else:
+            # B4 T1B (D13): una prueba con hilos (test_receipt_concurrency) usa la MISMA conexion desde dos peticiones a la
+            # vez y deja sus savepoints invalidos; session.close() lanza PendingRollbackError. La prueba queda en FAIL con
+            # el motivo y, si tampoco se puede revertir (r1, c), la conexion se descarta (Postgres revierte la
+            # transaccion abierta al perderla). Nada se confirma en ningun caso.
+            try:
+                session.close()
+            except Exception:
+                ok = False
+                detalles.append(f"[cierre de la sesion de la prueba]\n{traceback.format_exc()}")
+            try:
+                trans.rollback()
+            except Exception:
+                ok = False
+                detalles.append(f"[revertir la transaccion de la prueba]\n{traceback.format_exc()}")
+                conn.invalidate()
+            conn.close()
+            _desviar_sessionlocal(CENTINELA_SESSIONLOCAL)  # r1 (a): entre pruebas, el centinela (nunca el real)
+            app.dependency_overrides.clear()  # get_db vuelve a ser el real, que usa dbmod.SessionLocal: el centinela
     print(f"{'PASS' if ok else 'FAIL'} {nombre}", flush=True)
     for d in detalles:
         sys.stderr.write(d)
     sys.stderr.flush()
     passed, failed = passed + ok, failed + (not ok)
+    if abortar:
+        print(f"[rollback_runner] CORRIDA ABORTADA en {nombre}: quedaron hilos vivos al terminar la prueba. No se corren "
+              "las pruebas que faltan y no se repone nada.", flush=True)
+        _cerrar_corrida(passed, failed)
+        sys.stderr.flush()
+        os._exit(3)  # sin esperar a los hilos vivos (sys.exit esperaria a los que no son daemon)
 
-despues = maximos()
-cambios = {t: (antes[t], despues[t]) for t in TABLAS if despues[t] != antes[t]}
-print(f"\n{passed} passed, {failed} failed")
-# B3 T8 r2 (guarda 2): la guarda de Chatwoot no se queda callada. Si actuo, una prueba llego al transporte real (el
-# envio la atrapa y responde 200, asi que la prueba pudo quedar en verde): la corrida falla igual. Va antes de la ultima
-# linea para que la salida siga terminando en «Base intacta».
-bloqueos_chatwoot = _ChatwootBloqueado.veces
-print(f"Chatwoot real bloqueado {bloqueos_chatwoot} veces"
-      + ("" if not bloqueos_chatwoot else ": OJO, una prueba intento salir a Chatwoot o por urlopen (falla la corrida)"))
-print("Base intacta (max(id) sin cambios)." if not cambios else f"OJO, max(id) cambio en: {cambios}")
-sys.exit(1 if failed or bloqueos_chatwoot else 0)
+sys.exit(_cerrar_corrida(passed, failed))
