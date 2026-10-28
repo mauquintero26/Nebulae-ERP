@@ -19,6 +19,9 @@
  *  - RP16 / D11: las listas no envían. reglaSoltarSC y reglaSoltarCotizacion dan la acción 'enviar' solo con
  *    {puedeEnviar: true}; sin ella, «Ábrela para enviar.» con el enlace al documento (D22: enlaceDocumento con
  *    return_to a la lista). El Hub conserva su envío (abrirEnvioHub → confirmarEnvioHub).
+ *  - T3C r1: ningún tablero ofrece enviar una COT que enviar_cotizacion_para_confirmacion rechaza con 400: una VENCIDA
+ *    («Primero pásala a Borrador para retomarla.») o una sin productos o sin total («Calcula los precios antes de
+ *    enviarla.», el criterio de «Completar precios» de accionSiguienteCOT).
  *
  * Los resultados tienen la forma de lib/kanban.js: {tipo: 'ninguno'} | {tipo: 'bloqueado', motivo, enlace?} |
  * {tipo: 'cambio', estado} | {tipo: 'accion', accion}. Las acciones que la pantalla resuelve: 'enviar', 'cancelar',
@@ -35,7 +38,7 @@ import {
   infoEstadoPedido, tiene,
 } from './estados-pedido.js';
 import {
-  RUTA_HUB_VENTAS, esSoporte, motivoNoCancelable, tieneProductos, accionSiguienteDocumento, diasDesde,
+  RUTA_HUB_VENTAS, esSoporte, motivoNoCancelable, tieneProductos, accionSiguienteCOT, accionSiguienteDocumento, diasDesde,
   textoAntiguedad,
 } from './hub-ventas.js';
 import {
@@ -104,6 +107,7 @@ const TEXTO = congelar({
   ASIGNA_DESDE_SC: 'Asígnale un asesor desde la solicitud.',
   RETOMALA_HUB: 'Primero retómala: suéltala en No resuelto.',
   PASALA_BORRADOR: 'Primero pásala a Borrador para retomarla.',
+  CALCULA_PRECIOS: 'Calcula los precios antes de enviarla.',
   ENTREGAS: 'Se despacha desde Entregas: ahí eliges la bodega y se descuenta el inventario.',
 });
 
@@ -187,6 +191,27 @@ function documentosDeSC(sc) {
 }
 
 const SC_CONFIRMADAS = congelar(['CONFIRMADA', ...ESTADOS_SC_HEREDADOS]);
+
+/**
+ * T3C r1: la COT no tiene nada que el cliente pueda confirmar, y enviar_cotizacion_para_confirmacion responde 400: no
+ * trae productos (la lista vacía o ausente, `not cot.productos`) o su total da «Completar precios» en la columna Acción
+ * (accionSiguienteCOT: total_cop ≤ 0 o que no es un número). Para BORRADOR y la antigua ENVIADA.
+ */
+function sinPrecios(cot) {
+  return !Array.isArray(cot?.productos) || cot.productos.length === 0
+    || accionSiguienteCOT(cot)?.texto === 'Completar precios';
+}
+
+/**
+ * T3C r1: lo que pasa al querer enviar una COT desde un tablero (Hub → En gestión, lista → Esperando al cliente), o
+ * null si se puede enviar: una VENCIDA se pasa primero a Borrador y una sin precios se calcula primero, con el enlace a
+ * la cotización. Vale con o sin puedeEnviar.
+ */
+function bloqueoAlEnviarCot(cot, enlace) {
+  if (cot?.estado === 'VENCIDA') return bloqueado(TEXTO.PASALA_BORRADOR, enlace);
+  if (sinPrecios(cot)) return bloqueado(TEXTO.CALCULA_PRECIOS, enlace);
+  return null;
+}
 
 // ─── Pedidos: motivo de N2 ──────────────────────────────────────────────────────
 
@@ -284,7 +309,7 @@ function reglaHubCOT(cot, destino) {
   }
   if (destino === 'Acción Tomada') return bloqueado(TEXTO.COT_SOLO_CLIENTE);
   if (destino === 'En Gestión') {
-    if (estado === 'BORRADOR' || estado === 'VENCIDA' || estado === 'ENVIADA') return accion('enviar');
+    if (estado === 'BORRADOR' || estado === 'VENCIDA' || estado === 'ENVIADA') return bloqueoAlEnviarCot(cot, enlace) ?? accion('enviar');
     if (estado === 'PENDIENTE_CONFIRMACION') return bloqueado(TEXTO.YA_PENDIENTE);
     if (estado === 'CONFIRMADA') return bloqueado(TEXTO.YA_CONFIRMO);
     if (estado === 'RECHAZADA') return bloqueado(TEXTO.RETOMALA_HUB);
@@ -314,7 +339,8 @@ function reglaHubVEN(ven, destino) {
  *    'reiniciar' si está Pendiente por confirmación o Confirmada y puedeReiniciar (bloqueado con una cotización activa
  *    de scConCot o con los documentos de la fila, D22); → Acción tomada, siempre bloqueado; cancelada: la Papelera.
  *  - COT: con un pedido vigente en la fila, todo bloqueado; → Cancelado, 'cancelar' (N3: queda Rechazada); → En
- *    gestión, 'enviar' desde Borrador, Vencida o Enviada; → No resuelto, cambio a BORRADOR desde Rechazada, Enviada o
+ *    gestión, 'enviar' desde Borrador o Enviada con productos y total (r1: una Vencida o una sin precios queda
+ *    bloqueada, como en el servidor); → No resuelto, cambio a BORRADOR desde Rechazada, Enviada o
  *    Vencida, y bloqueado «Ábrela para re-cotizar; te pedirá la razón.» desde Pendiente o Confirmada (C15(a)); →
  *    Acción tomada, bloqueado (lo confirma el cliente).
  *  - VEN: No resuelto = PENDIENTE_COMPRA, En gestión = EN_PROCESO y Acción tomada = LISTO_ENTREGA, si transicionesPedido
@@ -378,16 +404,21 @@ function montoDe(v) {
 }
 
 /**
- * @param {'SC' | 'COT' | 'VEN'} tipo
+ * La insignia de estado de una tarjeta de Ventas (T3C r1: exportada para las tarjetas de T8, T9 y T10): {label, clases,
+ * colores} de estados-solicitud.js (SC: los hex en `colores`), estados-cotizacion.js o estados-pedido.js (COT y pedido:
+ * las clases de Tailwind en `clases`). 'PVEN' es el mismo tipo que 'VEN'; otro tipo lanza Error. Un código desconocido
+ * sale humanizado y en gris, como en las tablas de estados.
+ * @param {'SC' | 'COT' | 'VEN' | 'PVEN'} tipo
  * @param {unknown} estado
  * @returns {EstadoTarjeta}
  */
-function estadoDeTarjeta(tipo, estado) {
-  if (tipo === 'SC') {
+export function estadoDeTarjeta(tipo, estado) {
+  const t = tipoDocumento(tipo);
+  if (t === 'SC') {
     const info = infoEstadoSolicitud(estado);
     return { label: info.label, clases: null, colores: { color: info.color, bg: info.bg, border: info.border } };
   }
-  const info = tipo === 'COT' ? infoEstadoCotizacion(estado) : infoEstadoPedido(estado);
+  const info = t === 'COT' ? infoEstadoCotizacion(estado) : infoEstadoPedido(estado);
   return { label: info.label, clases: info.clases, colores: null };
 }
 
@@ -401,14 +432,15 @@ function estadoDeTarjeta(tipo, estado) {
  *  - estado = {label, clases, colores} de estados-solicitud, estados-cotizacion o estados-pedido;
  *  - tiempo = la antigüedad de R5 ('hoy', 'hace N días') con dias_creado del servidor, o desde created_at;
  *  - atrasada = fila.resolucion === 'ATRASADO'; chips = chipsDocumentoVentas;
- *  - accionPrincipal = accionSiguienteDocumento de hub-ventas.js (D25: {texto, href, tono}, con return_to al Hub; su
- *    href puede ser null, como «Esperando al cliente»).
+ *  - accionPrincipal = accionSiguienteDocumento de hub-ventas.js (D25: {texto, href, tono}; su href puede ser null, como
+ *    «Esperando al cliente»), con return_to de `returnTo` (cruce C5: por defecto el Hub; T8 manda la ruta de su lista).
  * Un tipo que no es SC, COT, VEN o PVEN lanza Error.
  * @param {any} fila
- * @param {{ahora?: number}} [opciones]  el instante para la antigüedad cuando no viene dias_creado (pruebas)
+ * @param {{ahora?: number, returnTo?: string}} [opciones]  `ahora`: el instante para la antigüedad cuando no viene
+ *   dias_creado (pruebas)
  * @returns {TarjetaVentas}
  */
-export function tarjetaHub(fila, { ahora = Date.now() } = {}) {
+export function tarjetaHub(fila, { ahora = Date.now(), returnTo } = {}) {
   const tipo = tipoDocumento(fila?.tipo);
   const cliente = String(fila?.customer_name || fila?.cliente?.nombre || '').trim();
   const asesor = String(fila?.advisor_name || fila?.cotizador || fila?.asesor?.nombre || '').trim();
@@ -424,7 +456,7 @@ export function tarjetaHub(fila, { ahora = Date.now() } = {}) {
     tiempo: textoAntiguedad(dias),
     atrasada: fila?.resolucion === 'ATRASADO',
     chips: chipsDocumentoVentas(fila, tipo),
-    accionPrincipal: accionSiguienteDocumento(fila),
+    accionPrincipal: accionSiguienteDocumento(fila, { returnTo }),
   };
 }
 
@@ -544,8 +576,9 @@ const CLAVES_COT = congelar(COLUMNAS_COT.map((c) => c.clave));
  * Qué pasa al soltar una cotización de la columna `origen` en `destino` (claves de COLUMNAS_COT):
  *  - con un pedido vigente (pedidoVigente de listas-ventas.js): todo bloqueado 'Tiene el pedido PVEN-… activo: …';
  *  - → Confirmada: bloqueado (la confirma el cliente con su enlace);
- *  - → Esperando al cliente: desde Borrador o Vencida, la acción 'enviar' solo con {puedeEnviar: true}; sin ella,
- *    bloqueado 'Ábrela para enviar.' con el enlace (RP16, D11, D22). Desde Rechazada o Confirmada, bloqueado;
+ *  - → Esperando al cliente: desde Borrador con productos y total, la acción 'enviar' solo con {puedeEnviar: true}; sin
+ *    ella, bloqueado 'Ábrela para enviar.' con el enlace (RP16, D11, D22). Desde Vencida o sin precios, bloqueado con o
+ *    sin puedeEnviar (r1: el servidor no la envía). Desde Rechazada o Confirmada, bloqueado;
  *  - → Borrador o Vencida desde Pendiente o Confirmada: bloqueado «Ábrela para re-cotizar; te pedirá la razón.»
  *    (C15(a): reemplaza la acción 'confirmar');
  *  - → Borrador: cambio desde Enviada, Vencida o Rechazada; → Vencida: cambio desde Borrador o Enviada;
@@ -567,10 +600,13 @@ export function reglaSoltarCotizacion(cot, origen, destino, { puedeEnviar = fals
   if (destino === 'confirmada') return bloqueado(TEXTO.COT_SOLO_CLIENTE);
   if (destino === 'rechazada') return accion('rechazar');
   if (destino === 'esperando') {
-    if (estado === 'BORRADOR' || estado === 'VENCIDA') return puedeEnviar ? accion('enviar') : bloqueado(TEXTO.ABRELA_ENVIAR, enlace);
+    // La antigua ENVIADA ya está en esta columna; si llegara de otra, pasa por las mismas guardas que en el Hub.
+    if (estado === 'BORRADOR' || estado === 'VENCIDA' || estado === 'ENVIADA') {
+      return bloqueoAlEnviarCot(cot, enlace) ?? (puedeEnviar ? accion('enviar') : bloqueado(TEXTO.ABRELA_ENVIAR, enlace));
+    }
     if (estado === 'RECHAZADA') return bloqueado(TEXTO.PASALA_BORRADOR);
     if (estado === 'CONFIRMADA') return bloqueado(TEXTO.YA_CONFIRMO);
-    if (estado === 'PENDIENTE_CONFIRMACION' || estado === 'ENVIADA') return ninguno();
+    if (estado === 'PENDIENTE_CONFIRMACION') return ninguno();
     return bloqueado(TEXTO.ABRELA_ENVIAR, enlace);
   }
   // → Borrador o Vencida

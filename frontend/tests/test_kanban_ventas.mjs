@@ -9,11 +9,13 @@
  *  - confirmacionReiniciarSolicitud (RP17): el texto de «Reiniciar solicitud» de solicitud/[id]/page.tsx.
  *  - Listas: motivoTransicionPedido (los textos de N2 sin el número), COLUMNAS_PEDIDO / reglaSoltarPedido,
  *    COLUMNAS_COT / reglaSoltarCotizacion y COLUMNAS_SC / reglaSoltarSC (RP16: sin puedeEnviar no se envía; D22).
+ *  - Ronda r1 (fixes-3C-r1): una COT vencida o sin precios no se ofrece para enviar (el servidor da 400), tarjetaHub
+ *    acepta returnTo (cruce C5) y estadoDeTarjeta se exporta.
  */
 
 import assert from 'node:assert/strict';
 import {
-  COLUMNAS_HUB, reglaSoltarHub, tarjetaHub, chipsDocumentoVentas, confirmacionReiniciarSolicitud,
+  COLUMNAS_HUB, reglaSoltarHub, tarjetaHub, estadoDeTarjeta, chipsDocumentoVentas, confirmacionReiniciarSolicitud,
   motivoTransicionPedido, COLUMNAS_PEDIDO, reglaSoltarPedido, COLUMNAS_COT, reglaSoltarCotizacion, COLUMNAS_SC,
   reglaSoltarSC,
 } from '../src/lib/kanban-ventas.js';
@@ -27,6 +29,10 @@ import { enlaceDocumento } from '../src/lib/analisis.js';
 import { mapaDestinos, agruparEnColumnas, SIN_COLUMNA } from '../src/lib/kanban.js';
 
 const CON_PRODUCTOS = [{ product_name: 'Cuna' }];
+/** Una COT con algo que el cliente pueda confirmar: líneas y total (enviar_cotizacion_para_confirmacion da 400 sin ellos). */
+const CON_PRECIO = { productos: CON_PRODUCTOS, total_cop: 250000 };
+const CALCULA = 'Calcula los precios antes de enviarla.';
+const PASALA_BORRADOR = 'Primero pásala a Borrador para retomarla.';
 const bloqueado = (motivo, enlace) => (enlace ? { tipo: 'bloqueado', motivo, enlace } : { tipo: 'bloqueado', motivo });
 const abrir = (tipo, id, returnTo) => ({
   texto: tipo === 'SC' ? 'Abrir solicitud' : tipo === 'COT' ? 'Abrir cotización' : 'Abrir pedido',
@@ -116,8 +122,16 @@ console.log('--- TEST 3: reglaSoltarHub — cotizaciones (C15(a)) ---');
   const cot = (estado, extra = {}) => ({ tipo: 'COT', id: 9, numero: 'COT-9', estado, ...extra });
   const enlace = abrir('COT', 9, RUTA_HUB_VENTAS);
   // → En gestión
-  assert.deepEqual(hub(cot('BORRADOR'), 'En Gestión'), { tipo: 'accion', accion: 'enviar' });
-  assert.deepEqual(hub(cot('VENCIDA'), 'En Gestión'), { tipo: 'accion', accion: 'enviar' });
+  assert.deepEqual(hub(cot('BORRADOR', CON_PRECIO), 'En Gestión'), { tipo: 'accion', accion: 'enviar' });
+  // r1 (fixes-3C-r1, punto 2): lo que enviar_cotizacion_para_confirmacion rechaza con 400 ya no se ofrece.
+  assert.deepEqual(hub(cot('VENCIDA', CON_PRECIO), 'En Gestión'), bloqueado(PASALA_BORRADOR, enlace));
+  assert.deepEqual(hub(cot('BORRADOR', { total_cop: 250000, productos: [] }), 'En Gestión'), bloqueado(CALCULA, enlace), 'sin productos');
+  assert.deepEqual(hub(cot('BORRADOR', { total_cop: 250000 }), 'En Gestión'), bloqueado(CALCULA, enlace), 'sin la lista de productos');
+  assert.deepEqual(hub(cot('BORRADOR', { ...CON_PRECIO, total_cop: 0 }), 'En Gestión'), bloqueado(CALCULA, enlace), 'total en 0');
+  assert.deepEqual(hub(cot('BORRADOR', { ...CON_PRECIO, total_cop: null }), 'En Gestión'), bloqueado(CALCULA, enlace), 'sin total');
+  assert.deepEqual(reglaSoltarHub(cot('ENVIADA', { productos: CON_PRODUCTOS, total_cop: 0 }), 'No Resuelto', 'En Gestión'),
+    bloqueado(CALCULA, enlace), 'la ENVIADA antigua también');
+  assert.deepEqual(reglaSoltarHub(cot('ENVIADA', CON_PRECIO), 'No Resuelto', 'En Gestión'), { tipo: 'accion', accion: 'enviar' });
   assert.deepEqual(hub(cot('PENDIENTE_CONFIRMACION'), 'En Gestión'), bloqueado('Ya está pendiente de confirmación del cliente.'));
   assert.deepEqual(hub(cot('CONFIRMADA'), 'En Gestión'), bloqueado('El cliente ya la confirmó.'));
   assert.deepEqual(hub(cot('RECHAZADA'), 'En Gestión'), bloqueado('Primero retómala: suéltala en No resuelto.'));
@@ -232,6 +246,11 @@ console.log('--- TEST 7: tarjetaHub lee la fila (C14, D25, RP74) ---');
   assert.deepEqual(t.chips.map((c) => c.texto), ['Atrasado 3 días', 'Sin respuesta al recordatorio']);
   assert.deepEqual(t.accionPrincipal, accionSiguienteDocumento(sc), 'D25: la de T2, sin traducir');
   assert.deepEqual(t.accionPrincipal, { texto: 'Enviar para confirmación', href: '/dashboard/ventas/solicitud/7?return_to=%2Fdashboard%2Fventas', tono: 'indigo' });
+  // r1 (punto 4, cruce C5): returnTo llega a accionSiguienteDocumento (T8 manda la ruta de su lista).
+  const desdeLista = tarjetaHub(sc, { returnTo: RUTA_LISTA_SOLICITUDES });
+  assert.deepEqual(desdeLista.accionPrincipal, accionSiguienteDocumento(sc, { returnTo: RUTA_LISTA_SOLICITUDES }));
+  assert.equal(desdeLista.accionPrincipal.href, '/dashboard/ventas/solicitud/7?return_to=%2Fdashboard%2Fventas%2Fsolicitud');
+  assert.deepEqual({ ...desdeLista, accionPrincipal: null }, { ...t, accionPrincipal: null }, 'returnTo solo cambia la acción');
 
   const cot = { tipo: 'COT', id: 9, numero: 'COT-9', estado: 'PENDIENTE_CONFIRMACION', customer_name: 'Ana', cotizador: 'Pedro',
     total_cop: 1062523.4, created_at: '2026-10-28T11:00:00' };
@@ -258,6 +277,18 @@ console.log('--- TEST 7: tarjetaHub lee la fila (C14, D25, RP74) ---');
   // Nunca un chip «Soporte»: el Hub no trae Soporte (R8).
   assert.ok(!tarjetaHub({ ...sc, tipo_solicitud: 'Soporte Tecnico' }).chips.some((c) => c.texto === 'Soporte'));
   assert.throws(() => tarjetaHub({ tipo: 'XX', id: 1 }), /Tipo de documento/);
+}
+
+console.log('--- TEST 7b: estadoDeTarjeta se exporta (r1, punto 4) ---');
+{
+  assert.deepEqual(estadoDeTarjeta('SC', 'PENDIENTE_CONFIRMACION'), { label: 'Pendiente por confirmación', clases: null,
+    colores: { color: '#b45309', bg: '#fffbeb', border: '#fde68a' } });
+  assert.deepEqual(estadoDeTarjeta('COT', 'VENCIDA'), { label: 'Vencida', clases: ESTADOS_COTIZACION.VENCIDA.clases, colores: null });
+  assert.deepEqual(estadoDeTarjeta('PVEN', 'EN_PROCESO'), estadoDeTarjeta('VEN', 'EN_PROCESO'), 'PVEN = VEN');
+  assert.deepEqual(estadoDeTarjeta('VEN', 'EN_PROCESO'), { label: 'En proceso', clases: infoEstadoPedido('EN_PROCESO').clases, colores: null });
+  assert.equal(estadoDeTarjeta('COT', 'ALGO_NUEVO').label, 'Algo nuevo', 'un código desconocido sale humanizado');
+  assert.deepEqual(estadoDeTarjeta('SC', 'ASIGNADA'), tarjetaHub({ tipo: 'SC', id: 1, estado: 'ASIGNADA' }).estado, 'la misma de tarjetaHub');
+  assert.throws(() => estadoDeTarjeta('XX', 'A'), /Tipo de documento/);
 }
 
 console.log('--- TEST 8: confirmacionReiniciarSolicitud (RP17) ---');
@@ -376,11 +407,18 @@ console.log('--- TEST 13: reglaSoltarCotizacion (C15(a), RP16, D11, D22) ---');
       bloqueado('Tiene el pedido PVEN-4 activo: para cambiarla, cancela primero el pedido.', abrir('PVEN', 4, RUTA_LISTA_COTIZACIONES)), destino);
   }
   // Enviar: solo con puedeEnviar (RP16); sin él, «Ábrela para enviar.» con el enlace de D22.
-  assert.deepEqual(soltar('BORRADOR', 'esperando', { puedeEnviar: true }), { tipo: 'accion', accion: 'enviar' });
-  assert.deepEqual(soltar('BORRADOR', 'esperando'), bloqueado(ABRELA_ENVIAR, enlace));
-  assert.deepEqual(soltar('VENCIDA', 'esperando', { puedeEnviar: true }), { tipo: 'accion', accion: 'enviar' });
-  assert.deepEqual(soltar('VENCIDA', 'esperando'), bloqueado(ABRELA_ENVIAR, enlace));
-  assert.deepEqual(soltar('BORRADOR', 'esperando', { returnTo: '/dashboard/ventas' }), bloqueado(ABRELA_ENVIAR, abrir('COT', 9, '/dashboard/ventas')),
+  assert.deepEqual(soltar('BORRADOR', 'esperando', { puedeEnviar: true }, CON_PRECIO), { tipo: 'accion', accion: 'enviar' });
+  assert.deepEqual(soltar('BORRADOR', 'esperando', {}, CON_PRECIO), bloqueado(ABRELA_ENVIAR, enlace));
+  // r1 (punto 2): «VENCIDA → Esperando» queda tachado (el servidor no la envía); sin precios no se ofrece, con o sin puedeEnviar.
+  for (const puedeEnviar of [true, false]) {
+    assert.deepEqual(soltar('VENCIDA', 'esperando', { puedeEnviar }, CON_PRECIO), bloqueado(PASALA_BORRADOR, enlace), `VENCIDA ${puedeEnviar}`);
+    assert.deepEqual(soltar('BORRADOR', 'esperando', { puedeEnviar }), bloqueado(CALCULA, enlace), `sin productos ni total ${puedeEnviar}`);
+    assert.deepEqual(soltar('BORRADOR', 'esperando', { puedeEnviar }, { ...CON_PRECIO, productos: [] }), bloqueado(CALCULA, enlace));
+    assert.deepEqual(soltar('BORRADOR', 'esperando', { puedeEnviar }, { ...CON_PRECIO, total_cop: -5 }), bloqueado(CALCULA, enlace));
+  }
+  assert.deepEqual(reglaSoltarCotizacion(cot('ENVIADA', { total_cop: 0, productos: CON_PRODUCTOS }), 'borrador', 'esperando', { puedeEnviar: true }),
+    bloqueado(CALCULA, enlace), 'la ENVIADA antigua también');
+  assert.deepEqual(soltar('BORRADOR', 'esperando', { returnTo: '/dashboard/ventas' }, CON_PRECIO), bloqueado(ABRELA_ENVIAR, abrir('COT', 9, '/dashboard/ventas')),
     'el return_to de la pantalla que llama');
   assert.deepEqual(soltar('RECHAZADA', 'esperando', { puedeEnviar: true }), bloqueado('Primero pásala a Borrador para retomarla.'));
   assert.deepEqual(soltar('CONFIRMADA', 'esperando', { puedeEnviar: true }), bloqueado('El cliente ya la confirmó.'));
