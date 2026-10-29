@@ -5,8 +5,9 @@ Se corre SOLO con el runner de ROLLBACK (python tests/rollback_runner.py test_re
 transaccion que se revierte. Como erp_test ya tiene datos, las cuentas se comparan como «despues − antes» sobre documentos
 con un sufijo unico. Sin parametrize (el runner no lo soporta): las matrices van en un bucle. La paridad con el frontend
 (hub-ventas.js, listas-ventas.js y estados-pedido.js) es de T2 (test_paridad_reglas_ventas.py).
+B4 T6A: erp_ventas.py ya no tiene sus copias (RP11, RP12) y alertas_resumen suma contar_atrasados (C5); las pruebas de
+«copia fiel» comparan contra la version de antes de T6A (c2c9f9f), congelada en este modulo.
 """
-import datetime as _dtmod
 import uuid
 from datetime import datetime, timedelta
 
@@ -231,23 +232,69 @@ def _sql(expr):
     return str(expr.compile(dialect=postgresql.dialect()))
 
 
+# B4 T6A (RP11, RP12): erp_ventas.py ya no tiene sus copias; las importa de core/resolucion_ventas.py. Las de antes de
+# T6A (c2c9f9f) quedan congeladas aqui, para que la regla movida no cambie sin que una prueba lo note.
+
+def _sc_sin_documentos_activos_de_c2c9f9f():
+    """_sc_sin_documentos_activos de erp_ventas.py tal como estaba antes de T6A (c2c9f9f), con su correlate."""
+    cot_activa = (select(SalesQuotation.id)
+                  .where(SalesQuotation.sc_id == CustomerRequest.id, SalesQuotation.estado != "RECHAZADA")
+                  .exists())
+    cots_de_la_sc = (select(SalesQuotation.id).where(SalesQuotation.sc_id == CustomerRequest.id)
+                     .correlate(CustomerRequest))
+    pven_vigente = (select(SaleOrder.id)
+                    .where(SaleOrder.estado != "CANCELADO",
+                           or_(SaleOrder.sc_id == CustomerRequest.id, SaleOrder.cot_id.in_(cots_de_la_sc)))
+                    .exists())
+    return and_(~cot_activa, ~pven_vigente)
+
+
+_ESTADOS_CON_CAMBIOS_VIGENTES_DE_C2C9F9F = {"SC": ("ASIGNADA", "BORRADOR"), "COT": ("BORRADOR",)}
+
+
+def _filtro_cambios_cliente_vigentes_de_c2c9f9f(modelo, entidad):
+    """_filtro_cambios_cliente_vigentes de erp_ventas.py tal como estaba antes de T6A (c2c9f9f)."""
+    return and_(modelo.cambios_cliente_at.isnot(None),
+                modelo.estado.in_(_ESTADOS_CON_CAMBIOS_VIGENTES_DE_C2C9F9F[entidad]))
+
+
 def test_sc_sin_documentos_activos_es_la_copia_de_erp_ventas():
     """RP11.1: la misma subconsulta de _sc_sin_documentos_activos (con su correlate), armada con cot_activa_de_sc y
-    pven_vigente_de_sc; sc_con_documentos_activos es su negacion (D16)."""
+    pven_vigente_de_sc; sc_con_documentos_activos es su negacion (D16). T6A borro la de erp_ventas.py, que ahora usa
+    la de core (get_alertas y, por contar_atrasados, alertas_resumen)."""
     from app.api.v1 import erp_ventas
     from app.core import resolucion_ventas as rv
-    assert _sql(rv.sc_sin_documentos_activos()) == _sql(erp_ventas._sc_sin_documentos_activos())
+    assert not hasattr(erp_ventas, "_sc_sin_documentos_activos")
+    assert erp_ventas.sc_sin_documentos_activos is rv.sc_sin_documentos_activos
+    assert _sql(rv.sc_sin_documentos_activos()) == _sql(_sc_sin_documentos_activos_de_c2c9f9f())
     assert _sql(rv.sc_sin_documentos_activos()) == _sql(and_(~rv.cot_activa_de_sc(), ~rv.pven_vigente_de_sc()))
     assert _sql(rv.sc_con_documentos_activos()) == _sql(or_(rv.cot_activa_de_sc(), rv.pven_vigente_de_sc()))
 
 
 def test_filtro_cambios_cliente_vigentes_es_la_copia_de_erp_ventas():
+    """RP12.2: T6A borro _ESTADOS_CON_CAMBIOS_VIGENTES y _filtro_cambios_cliente_vigentes de erp_ventas.py, que importa
+    los de core; _cambios_cliente_vigentes (la de _cambios_cliente_dict y del envio de la SC) usa la constante
+    importada (cruce C3 de la verificacion)."""
     from app.api.v1 import erp_ventas
     from app.core import resolucion_ventas as rv
-    assert dict(rv.ESTADOS_CON_CAMBIOS_VIGENTES) == erp_ventas._ESTADOS_CON_CAMBIOS_VIGENTES
+    assert not hasattr(erp_ventas, "_ESTADOS_CON_CAMBIOS_VIGENTES")
+    assert not hasattr(erp_ventas, "_filtro_cambios_cliente_vigentes")
+    assert erp_ventas.ESTADOS_CON_CAMBIOS_VIGENTES is rv.ESTADOS_CON_CAMBIOS_VIGENTES
+    assert erp_ventas.filtro_cambios_cliente_vigentes is rv.filtro_cambios_cliente_vigentes
+    assert dict(rv.ESTADOS_CON_CAMBIOS_VIGENTES) == _ESTADOS_CON_CAMBIOS_VIGENTES_DE_C2C9F9F
     for modelo, entidad in ((CustomerRequest, "SC"), (SalesQuotation, "COT")):
         assert _sql(rv.filtro_cambios_cliente_vigentes(modelo, entidad)) == \
-            _sql(erp_ventas._filtro_cambios_cliente_vigentes(modelo, entidad))
+            _sql(_filtro_cambios_cliente_vigentes_de_c2c9f9f(modelo, entidad))
+    marca = _ahora()
+    casos = [(CustomerRequest(estado="ASIGNADA", cambios_cliente_at=marca), "SC", True),
+             (CustomerRequest(estado="BORRADOR", cambios_cliente_at=marca), "SC", True),
+             (CustomerRequest(estado="PENDIENTE_CONFIRMACION", cambios_cliente_at=marca), "SC", False),
+             (CustomerRequest(estado="ASIGNADA"), "SC", False),
+             (SalesQuotation(estado="BORRADOR", cambios_cliente_at=marca), "COT", True),
+             (SalesQuotation(estado="ENVIADA", cambios_cliente_at=marca), "COT", False)]
+    for doc, entidad, vigente in casos:
+        assert erp_ventas._cambios_cliente_vigentes(doc, entidad) is vigente, (entidad, doc.estado)
+        assert (erp_ventas._cambios_cliente_dict(doc, entidad) is not None) is vigente, (entidad, doc.estado)
 
 
 def test_sin_soporte_deja_pasar_el_tipo_nulo(db):
@@ -365,62 +412,63 @@ def test_expresiones_dan_el_mismo_rango_que_clasificar(db):
 
 # ─── contar_atrasados: la copia fiel de alertas_resumen ──────────────────────────────────────────────────────────────
 
-class _RelojFijo(datetime):
-    """datetime.datetime con utcnow fijo, para que alertas_resumen y contar_atrasados usen el mismo instante."""
-
-    fijo = None
-
-    @classmethod
-    def utcnow(cls):
-        return cls.fijo
-
-
-class _DatetimeConRelojFijo:
-    """El modulo datetime tal cual, salvo datetime.datetime (con utcnow fijo)."""
-
-    datetime = _RelojFijo
-
-    def __getattr__(self, nombre):
-        return getattr(_dtmod, nombre)
-
-
 def _alertas_atrasados(app_client, admin_token):
     resp = app_client.get("/api/v1/ventas/alertas/resumen", headers={"Authorization": f"Bearer {admin_token}"})
     assert resp.status_code == 200, resp.text
     return resp.json()["data"]["atrasados"]
 
 
+def _atrasados_de_alertas_resumen_c2c9f9f(db, dias, ahora):
+    """La cuenta 'atrasados' de alertas_resumen tal como estaba antes de T6A (c2c9f9f: sus cinco consultas, solo
+    updated_at y el '<' estricto), congelada aqui. T6A la reemplazo por la suma de contar_atrasados (C5)."""
+    cr, sq, so = CustomerRequest, SalesQuotation, SaleOrder
+    no_resolucion = ESTADOS_NO_RESOLUCION_DE_ALERTAS
+
+    def limite(tipo):
+        return ahora - timedelta(days=dias[tipo])
+
+    return (db.query(cr).filter(cr.estado.in_(no_resolucion), cr.updated_at < limite("SC"),
+                                _sc_sin_documentos_activos_de_c2c9f9f()).count()
+            + db.query(sq).filter(sq.estado.in_(no_resolucion), sq.updated_at < limite("COT")).count()
+            + db.query(so).filter(so.estado.in_(no_resolucion), so.updated_at < limite("VEN")).count()
+            + db.query(cr).filter(cr.estado == "CONFIRMADA", cr.gate1_confirmed_at.isnot(None),
+                                  cr.updated_at < limite("SC"),
+                                  ~db.query(sq).filter(sq.sc_id == cr.id, sq.estado != "RECHAZADA").exists()).count()
+            + db.query(sq).filter(sq.estado == "CONFIRMADA", sq.gate2_confirmed_at.isnot(None),
+                                  sq.updated_at < limite("COT"),
+                                  ~db.query(so).filter(so.cot_id == sq.id, so.estado != "CANCELADO").exists()).count())
+
+
 def _solo_cuenta_alertas(db, dias, ahora):
-    """Las SC que alertas_resumen cuenta y contar_atrasados no (las dos diferencias permitidas), con la logica del
-    endpoint de hoy: (a) las de Soporte Tecnico (R8) y (b) D16, una SC CONFIRMADA sin COT activa pero con un pedido
-    vigente (por sc_id o por el cot_id de una de sus COT)."""
-    from app.api.v1 import erp_ventas
+    """Las SC que la cuenta de antes de T6A contaba y contar_atrasados no (las dos diferencias permitidas): (a) las de
+    Soporte Tecnico (R8) y (b) D16, una SC CONFIRMADA sin COT activa pero con un pedido vigente (por sc_id o por el
+    cot_id de una de sus COT)."""
     cr = CustomerRequest
     limite = ahora - timedelta(days=dias["SC"])
     es_soporte = or_(func.coalesce(cr.tipo_solicitud, "") == "Soporte Tecnico", cr.estado == "N/A_SOPORTE")
     sc_atrasada = and_(cr.estado.in_(ESTADOS_NO_RESOLUCION_DE_ALERTAS), cr.updated_at < limite,
-                       erp_ventas._sc_sin_documentos_activos())
+                       _sc_sin_documentos_activos_de_c2c9f9f())
     sin_cot_activa = ~exists().where(SalesQuotation.sc_id == cr.id, SalesQuotation.estado != "RECHAZADA")
     sc_confirmada = and_(cr.estado == "CONFIRMADA", cr.gate1_confirmed_at.isnot(None), cr.updated_at < limite,
                          sin_cot_activa)
     soporte = db.scalar(select(func.count(cr.id)).where(es_soporte, or_(sc_atrasada, sc_confirmada)))
     d16 = db.scalar(select(func.count(cr.id)).where(~es_soporte, sc_confirmada,
-                                                    ~erp_ventas._sc_sin_documentos_activos()))
+                                                    ~_sc_sin_documentos_activos_de_c2c9f9f()))
     return soporte, d16
 
 
 def test_contar_atrasados_es_la_copia_fiel_de_alertas_resumen(app_client, db, admin_token, monkeypatch):
-    """Sobre TODA la base y sobre documentos nuevos: GET /ventas/alertas/resumen (antes de T6A) y contar_atrasados dan
-    lo mismo, salvo las SC de Soporte (R8) y la SC confirmada con pedido vigente y sin COT activa (D16)."""
-    from app.api.v1 import erp_ventas
+    """Sobre TODA la base y sobre documentos nuevos. Desde T6A, GET /ventas/alertas/resumen suma contar_atrasados (C5):
+    dan exactamente lo mismo. Frente a la cuenta de antes de T6A (congelada aqui), la unica diferencia son las SC de
+    Soporte (R8) y la SC confirmada con pedido vigente y sin COT activa (D16)."""
     from app.core import resolucion_ventas as rv
     ahora = _ahora()
-    _RelojFijo.fijo = ahora
-    monkeypatch.setattr(erp_ventas, "datetime", _DatetimeConRelojFijo())
+    monkeypatch.setattr(rv, "ahora_utc", lambda: ahora)   # el mismo instante en alertas_resumen y aqui
     dias = rv.leer_dias_alerta(db)
 
     api_antes = _alertas_atrasados(app_client, admin_token)
     antes = rv.contar_atrasados(db, dias, ahora)
+    viejo_antes = _atrasados_de_alertas_resumen_c2c9f9f(db, dias, ahora)
     assert set(antes) == {"sc", "sc_confirmadas_sin_accion", "cot", "cot_confirmadas_sin_accion", "ven"}
 
     f = _Fabrica(db, ahora)
@@ -433,9 +481,9 @@ def test_contar_atrasados_es_la_copia_fiel_de_alertas_resumen(app_client, db, ad
     f.sc("CONFIRMADA", viejo["SC"], gate1_confirmed_at=ahora - viejo["SC"])    # sc_confirmadas_sin_accion +1
     f.sc("CONFIRMADA", viejo["SC"])                                            # sin marca gate1: no
     f.sc("CANCELADA", viejo["SC"])                                             # no
-    f.sc("BORRADOR", viejo["SC"], tipo_solicitud="Soporte Tecnico")            # solo alertas_resumen (R8)
+    f.sc("BORRADOR", viejo["SC"], tipo_solicitud="Soporte Tecnico")            # solo la cuenta de antes (R8)
     sc_d16 = f.sc("CONFIRMADA", viejo["SC"], gate1_confirmed_at=ahora - viejo["SC"])
-    f.pven("EN_PROCESO", sc=sc_d16)                                            # solo alertas_resumen (D16)
+    f.pven("EN_PROCESO", sc=sc_d16)                                            # solo la cuenta de antes (D16)
     f.cot("PENDIENTE_CONFIRMACION", viejo["COT"])                              # cot +1
     f.cot("RECHAZADA", viejo["COT"])                                           # no
     f.cot("CONFIRMADA", viejo["COT"], gate2_confirmed_at=ahora - viejo["COT"])  # cot_confirmadas_sin_accion +1
@@ -446,14 +494,17 @@ def test_contar_atrasados_es_la_copia_fiel_de_alertas_resumen(app_client, db, ad
 
     api_despues = _alertas_atrasados(app_client, admin_token)
     despues = rv.contar_atrasados(db, dias, ahora)
+    viejo_despues = _atrasados_de_alertas_resumen_c2c9f9f(db, dias, ahora)
     delta = {k: despues[k] - antes[k] for k in despues}
     assert delta == {"sc": 2, "sc_confirmadas_sin_accion": 1, "cot": 1, "cot_confirmadas_sin_accion": 1, "ven": 1}
-    assert api_despues - api_antes == sum(delta.values()) + 2   # + la de Soporte + la de D16
+    assert api_despues - api_antes == sum(delta.values())       # T6A: ni la de Soporte ni la de D16
+    assert api_despues == sum(despues.values())                 # toda la base: la pastilla es contar_atrasados
+    assert viejo_despues - viejo_antes == sum(delta.values()) + 2   # la cuenta de antes si las contaba
 
     soporte, d16 = _solo_cuenta_alertas(db, dias, ahora)
-    assert api_despues - sum(despues.values()) == soporte + d16, (
-        f"toda la base: alertas_resumen={api_despues}, contar_atrasados={sum(despues.values())} {despues}, "
-        f"solo en alertas: Soporte={soporte}, D16={d16}")
+    assert viejo_despues - sum(despues.values()) == soporte + d16, (
+        f"toda la base: antes de T6A={viejo_despues}, contar_atrasados={sum(despues.values())} {despues}, "
+        f"solo en la de antes: Soporte={soporte}, D16={d16}")
 
 
 def test_contar_atrasados_frontera_estricta(db):

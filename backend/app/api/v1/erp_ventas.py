@@ -46,6 +46,12 @@ from app.core.textos_actividad import (
 )
 from app.core.chatter import validar_nota, reinicia_atraso, puede_registrar, CONTACTO_SOLO_ASESOR
 from app.core.estados_pedido import ESTADOS_VEN_DESTINOS, ESTADOS_VEN_SIN_DINERO, destinos_ven_permitidos
+# B4 T6A (R8, C5; RP11, RP12, RP71): la regla unica de atraso de Ventas. erp_ventas ya no tiene sus copias de la marca de
+# cambios del cliente, de «SC sin documentos activos» ni de la lectura de los dias de alerta.
+from app.core.resolucion_ventas import (
+    ESTADOS_CON_CAMBIOS_VIGENTES, contar_atrasados, filtro_cambios_cliente_vigentes, leer_dias_alerta,
+    sc_sin_documentos_activos,
+)
 from app.api.v1.schemas_compras import CancelarSolicitudBody, CotizarSinConfirmacionBody
 from app.api.v1.crm import mover_lead_de_solicitud, reabrir_lead_de_solicitud
 import datetime
@@ -1196,17 +1202,12 @@ def _texto_estado_cambiado(etiqueta: str, motivo: str) -> str:
 # B3 T6 (r1, calidad 1): LA regla de «marca de cambios vigente». La marca (cambios_cliente_*) cuenta y se muestra solo
 # mientras el documento sigue en manos del asesor: la SC en Asignada o Nueva y la COT en Borrador. Fuera de esos
 # estados (cancelada, rechazada, reenviada...) ya no es un pendiente: ni las alertas ni el detalle ni la lista la ven.
-_ESTADOS_CON_CAMBIOS_VIGENTES = {"SC": ("ASIGNADA", "BORRADOR"), "COT": ("BORRADOR",)}
-
-
+# B4 T6A (RP12.2): la constante (ESTADOS_CON_CAMBIOS_VIGENTES) y su filtro SQL (filtro_cambios_cliente_vigentes) viven
+# en core/resolucion_ventas.py; aqui se importan (cruce C3 de la verificacion: esta funcion usa la importada).
 def _cambios_cliente_vigentes(doc, entidad: str) -> bool:
-    """La marca de cambios del cliente de `doc` ('SC' o 'COT') sigue vigente (_ESTADOS_CON_CAMBIOS_VIGENTES)."""
-    return doc.cambios_cliente_at is not None and doc.estado in _ESTADOS_CON_CAMBIOS_VIGENTES[entidad]
-
-
-def _filtro_cambios_cliente_vigentes(modelo, entidad: str):
-    """La misma regla que _cambios_cliente_vigentes, como filtro SQL (CustomerRequest/'SC' o SalesQuotation/'COT')."""
-    return and_(modelo.cambios_cliente_at.isnot(None), modelo.estado.in_(_ESTADOS_CON_CAMBIOS_VIGENTES[entidad]))
+    """La marca de cambios del cliente de `doc` ('SC' o 'COT') sigue vigente (ESTADOS_CON_CAMBIOS_VIGENTES); su filtro
+    SQL es filtro_cambios_cliente_vigentes."""
+    return doc.cambios_cliente_at is not None and doc.estado in ESTADOS_CON_CAMBIOS_VIGENTES[entidad]
 
 
 def _cambios_cliente_dict(doc, entidad: str) -> Optional[dict]:
@@ -4915,12 +4916,15 @@ def ventas_analytics(
 
 # ─── ALERTAS (SC/COT sin cambio en N dias) ───────────────────────────────────
 
+# B4 T6A (RP71): la clave de admin_config de cada tipo de leer_dias_alerta.
+_TIPO_DE_CLAVE_ALERTA = {"alerta_sc_dias": "SC", "alerta_cot_dias": "COT", "alerta_ven_dias": "VEN"}
+
+
 def _get_alert_days(db: Session, key: str = "alerta_sc_dias") -> int:
-    try:
-        r = db.execute(text("SELECT value FROM admin_config WHERE key = :key"), {"key": key}).fetchone()
-        return int(r[0]) if r else 2
-    except Exception:
-        return 2
+    """Los dias de alerta de `key` (alerta_sc_dias, alerta_cot_dias o alerta_ven_dias). B4 T6A (RP71): delega en
+    resolucion_ventas.leer_dias_alerta, que lee las tres claves en UNA consulta con la lectura de siempre (int(valor), y
+    2 si falta o no es un entero; sin topes)."""
+    return leer_dias_alerta(db)[_TIPO_DE_CLAVE_ALERTA[key]]
 
 
 def _get_alert_hours_soporte(db: Session, urgencia: str) -> int:
@@ -4934,100 +4938,24 @@ def _get_alert_hours_soporte(db: Session, urgencia: str) -> int:
         return default_map.get(urgencia, 48)
 
 
-def _sc_sin_documentos_activos():
-    """R20 (U11): filtro SQL de las SC SIN documentos activos, el mismo criterio que _documentos_activos_de_solicitud
-    pero en la consulta (NOT EXISTS, sin una consulta por fila): ninguna COT con estado != RECHAZADA y ningun pedido de
-    venta != CANCELADO vinculado por sc_id o por el cot_id de cualquier COT de la SC. Una SC con documentos activos (p.ej.
-    la cotizada sin confirmacion) no cuenta como atrasada: la alerta la lleva su cotizacion o su pedido."""
-    cot_activa = (select(SalesQuotation.id)
-                  .where(SalesQuotation.sc_id == CustomerRequest.id, SalesQuotation.estado != "RECHAZADA")
-                  .exists())
-    # correlate explicito: este SELECT va dos niveles adentro y, sin el, SQLAlchemy le pone su propio customer_requests
-    # (contaria las COT de TODAS las SC).
-    cots_de_la_sc = (select(SalesQuotation.id).where(SalesQuotation.sc_id == CustomerRequest.id)
-                     .correlate(CustomerRequest))
-    pven_vigente = (select(SaleOrder.id)
-                    .where(SaleOrder.estado != "CANCELADO",
-                           or_(SaleOrder.sc_id == CustomerRequest.id, SaleOrder.cot_id.in_(cots_de_la_sc)))
-                    .exists())
-    return and_(~cot_activa, ~pven_vigente)
-
-
 @router.get("/alertas/resumen")
 def alertas_resumen(user: User = Depends(require_roles(*ALL_ERP_ROLES)), db: Session = Depends(get_db)):
-    """Endpoint that returns a count of late documents (SC, COT, VEN) for global alert badge.
+    """La pastilla roja global (AlertasBadge): cuantos documentos de Ventas estan atrasados, y aparte los que tienen
+    cambios pedidos por el cliente.
 
-    Uses configurable thresholds:
-    - alerta_sc_dias: days threshold for CustomerRequest (SC)
-    - alerta_cot_dias: days threshold for SalesQuotation (COT)
-    - alerta_ven_dias: days threshold for SaleOrder (VEN)
-
-    Each defaults to 2 days if not configured in admin_config.
-    """
-    sc_dias = _get_alert_days(db, "alerta_sc_dias")
-    cot_dias = _get_alert_days(db, "alerta_cot_dias")
-    ven_dias = _get_alert_days(db, "alerta_ven_dias")
-
-    ahora = datetime.datetime.utcnow()
-    no_resolucion = [
-        "BORRADOR", "PENDIENTE_CONFIRMACION", "ASIGNADA", "ENVIADA",
-        "PENDIENTE_COMPRA", "PENDIENTE_PAGO", "EN_PROCESO", "EN_TRANSITO"
-    ]
-
-    sc_atrasadas = db.query(CustomerRequest).filter(
-        CustomerRequest.estado.in_(no_resolucion),
-        CustomerRequest.updated_at < ahora - datetime.timedelta(days=sc_dias),
-        _sc_sin_documentos_activos(),  # R20: la alerta la lleva su COT o su pedido (no se cuenta dos veces)
-    ).count()
-
-    cot_atrasadas = db.query(SalesQuotation).filter(
-        SalesQuotation.estado.in_(no_resolucion),
-        SalesQuotation.updated_at < ahora - datetime.timedelta(days=cot_dias),
-    ).count()
-
-    ven_atrasados = db.query(SaleOrder).filter(
-        SaleOrder.estado.in_(no_resolucion),
-        SaleOrder.updated_at < ahora - datetime.timedelta(days=ven_dias),
-    ).count()
-
-    # Final whole-branch review (hallazgo #4): no_resolucion trata CONFIRMADA como
-    # "resuelto" para SC y COT -- pero una SC CONFIRMADA con gate1_confirmed_at todavia
-    # puesto (el cliente dijo que si, el asesor todavia no le da clic a "Crear
-    # Cotizacion") y una COT CONFIRMADA con gate2_confirmed_at todavia puesto y SIN
-    # Pedido de Venta vinculado todavia (el cliente dijo que si, el asesor todavia no
-    # convierte a PVEN) son exactamente los documentos que mas urgentemente necesitan
-    # atencion -- el cliente ya actuo, falta que el negocio actue. El badge no los veia
-    # en absoluto. Mismo criterio de umbral (dias sin actividad) que las demas cuentas
-    # de esta funcion, no un conteo inmediato/incondicional -- si no, el badge se
-    # dispararia el instante mismo en que el cliente confirma, lo que seria ruido, no
-    # una alerta de "lleva tiempo sin atenderse".
-    sc_confirmadas_sin_accion = db.query(CustomerRequest).filter(
-        CustomerRequest.estado == "CONFIRMADA",
-        CustomerRequest.gate1_confirmed_at.isnot(None),
-        CustomerRequest.updated_at < ahora - datetime.timedelta(days=sc_dias),
-        # Re-review del fix final: sin este exists(), una SC que ya tiene una Cotizacion
-        # vinculada (p.ej. reenviada y re-confirmada por error, marca que nunca se puede
-        # consumir porque canConfirmarSC ya es False) quedaba contada para siempre --
-        # misma guarda que ya usa cot_confirmadas_sin_accion para su propio PVEN. N7: una
-        # COT RECHAZADA no cuenta (la SC sigue activa y lista para otra cotizacion).
-        ~db.query(SalesQuotation).filter(SalesQuotation.sc_id == CustomerRequest.id,
-                                         SalesQuotation.estado != "RECHAZADA").exists(),
-    ).count()
-
-    cot_confirmadas_sin_accion = db.query(SalesQuotation).filter(
-        SalesQuotation.estado == "CONFIRMADA",
-        SalesQuotation.gate2_confirmed_at.isnot(None),
-        SalesQuotation.updated_at < ahora - datetime.timedelta(days=cot_dias),
-        # H46: un pedido CANCELADO no cuenta como "el asesor ya actuo".
-        ~db.query(SaleOrder).filter(SaleOrder.cot_id == SalesQuotation.id, SaleOrder.estado != "CANCELADO").exists(),
-    ).count()
-
+    B4 T6A (R8, C5): 'atrasados' es la suma de resolucion_ventas.contar_atrasados, la regla unica que tambien usan
+    GET /ventas/flujo (semaforo.atrasados) y el Hub: las cinco cuentas de siempre (los 8 estados de no resolucion,
+    ASIGNADA incluida; la SC y la COT confirmadas por el cliente y sin accion del asesor; una SC con documentos activos no
+    cuenta: la alerta la lleva su COT o su pedido; atrasado = mas de dias × 24 h sin movimiento, el '<' estricto), con
+    los dias de alerta_sc_dias, alerta_cot_dias y alerta_ven_dias (leer_dias_alerta, 2 por defecto). Las SC de Soporte
+    Tecnico ya no cuentan (R8) y la SC confirmada con un pedido vigente tampoco (D16): el numero puede bajar. La
+    respuesta conserva sus claves."""
+    atrasados = contar_atrasados(db, leer_dias_alerta(db))
     cambios_sc, cambios_cot = _contar_cambios_cliente(db, user)
     return {
         "status": "success",
         "data": {
-            "atrasados": sc_atrasadas + cot_atrasadas + ven_atrasados
-                         + sc_confirmadas_sin_accion + cot_confirmadas_sin_accion,
+            "atrasados": sum(atrasados.values()),
             # B3 T18 r1: por separado, para que la pastilla del menu lleve a la lista de cada uno; cambios_cliente sigue
             # siendo la suma, por compatibilidad.
             "cambios_cliente": cambios_sc + cambios_cot,
@@ -5042,8 +4970,8 @@ def _contar_cambios_cliente(db: Session, user: User) -> tuple:
     marca en Asignada o Nueva y COT con la marca en Borrador (reenviar la limpia). Es una cuenta APARTE que no suma a
     'atrasados'. Un asesor ve solo las suyas (la SC con su advisor_user_id; la COT por el asesor de su SC); los demas
     roles, todas. B3 T18 r1: devuelve (solicitudes, cotizaciones), con el mismo filtro para las dos."""
-    solicitudes = db.query(CustomerRequest.id).filter(_filtro_cambios_cliente_vigentes(CustomerRequest, "SC"))
-    cotizaciones = db.query(SalesQuotation.id).filter(_filtro_cambios_cliente_vigentes(SalesQuotation, "COT"))
+    solicitudes = db.query(CustomerRequest.id).filter(filtro_cambios_cliente_vigentes(CustomerRequest, "SC"))
+    cotizaciones = db.query(SalesQuotation.id).filter(filtro_cambios_cliente_vigentes(SalesQuotation, "COT"))
     if normalize_role(user.role) == "ASESOR":
         solicitudes = solicitudes.filter(CustomerRequest.advisor_user_id == user.id)
         cotizaciones = (cotizaciones.join(CustomerRequest, SalesQuotation.sc_id == CustomerRequest.id)
@@ -5063,7 +4991,7 @@ def get_alertas(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *R
         CustomerRequest.updated_at <= cutoff,
         CustomerRequest.estado.notin_(["CONFIRMADA", "CANCELADA"]),
         CustomerRequest.tipo_solicitud != "Soporte Tecnico",
-        _sc_sin_documentos_activos(),  # R20: la alerta la lleva su COT o su pedido
+        sc_sin_documentos_activos(),  # R20: la alerta la lleva su COT o su pedido (B4 T6A, RP11: la de core)
     ).options(selectinload(CustomerRequest.customer)).all()
 
     # COT activas sin cambio de estado en N dias

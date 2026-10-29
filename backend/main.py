@@ -11,6 +11,7 @@ from app.api.v1 import confirmacion_publica  # Gate 1/2 — confirmacion publica
 from app.api.v1 import empresa  # Bloque 3 (MARCA) — datos de la empresa; su router_publico va sin autenticacion
 from app.api.v1 import envio_cliente  # Bloque 3 (U16-envio) — WhatsApp automatico por Chatwoot y estado de entrega
 from app.api.v1 import preferencias  # Bloque 4 (TABLA-base, R4) — como deja cada usuario sus pantallas
+from app.api.v1 import ventas_hub  # Bloque 4 (TABLA-hub-ventas, FLUJO-ventas-datos; R6, R8) — Hub y flujo en el servidor
 from app.api.v1 import whatsapp_webhook  # BLOQUE 5 — Modo Sombra WhatsApp
 from app.api.v1 import debug_db  # Hardening — endpoint de verificacion de DB (solo ADMIN)
 from app.api import ws
@@ -204,6 +205,9 @@ app.include_router(ws.router, prefix="/ws", tags=["WebSockets"])
 app.include_router(erp_ventas.router, prefix="/api/v1/ventas", tags=["ERP Ventas"])
 app.include_router(erp_ventas_fase4.router, prefix="/api/v1/ventas", tags=["ERP Ventas Fase 4"])
 app.include_router(envio_cliente.router, prefix="/api/v1/ventas", tags=["ERP Ventas - Envío al cliente"])
+# B4 T6A: GET /api/v1/ventas/hub/documentos y /api/v1/ventas/flujo. Ninguno de los tres routers de arriba tiene una ruta
+# '/{...}' en la raiz de /api/v1/ventas, asi que no las tapan (test_hub_ventas_listado lo comprueba).
+app.include_router(ventas_hub.router, prefix="/api/v1/ventas", tags=["Ventas Hub"])
 app.include_router(erp_compras.router, prefix="/api/v1/compras", tags=["ERP Compras"])
 app.include_router(erp_compras_asignaciones.router, prefix="/api/v1/compras", tags=["ERP Compras - Asignaciones"])
 app.include_router(erp_logistica.router, prefix="/api/v1/logistica", tags=["ERP Logística y Tránsito"])
