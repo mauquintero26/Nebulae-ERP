@@ -155,9 +155,11 @@ export function GraficoLinea({ linea, granularidad, acento, mejor = 'sube', fren
   return (
     <section aria-labelledby={idTitulo} className={TARJETA}>
       <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
-        <div className="min-w-0 flex-1">
+        {/* T5C r1 (M16): la columna del total crece desde su contenido (grow, no flex-1): si el total y el chip no caben
+            juntos (247 px), el chip baja de línea; el total va entero (whitespace-nowrap), nunca partido. */}
+        <div className="min-w-0 grow">
           <h3 id={idTitulo} title={titulo} className="truncate text-sm font-bold text-slate-900">{titulo}</h3>
-          <p aria-hidden={sinDatos ? undefined : true} title={total} className={`${tamanoValor(total)} break-words font-black leading-tight text-slate-900 tabular-nums`}>
+          <p aria-hidden={sinDatos ? undefined : true} title={total} className={`${tamanoValor(total)} whitespace-nowrap font-black leading-tight text-slate-900 tabular-nums`}>
             {total}
           </p>
         </div>

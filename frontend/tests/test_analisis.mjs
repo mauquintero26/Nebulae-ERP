@@ -682,9 +682,13 @@ console.log('--- TEST 18 (T5B): el fuente de las ocho piezas de components/anali
     "export function GraficoLinea({ linea, granularidad, acento, mejor = 'sube', frente }: PropsGraficoLinea)",
     // T5B r1 (M9): con el gráfico dibujado, el total y el chip del encabezado van con aria-hidden (ya los dice el aria-label
     // del canvas); sin datos no hay canvas y los dos se leen.
-    '<p aria-hidden={sinDatos ? undefined : true} title={total}']) {
+    '<p aria-hidden={sinDatos ? undefined : true} title={total}',
+    // T5C r1 (M16): a 247 px el total no se parte: va entero (whitespace-nowrap) y el chip baja de línea (la columna del
+    // total crece desde su contenido: grow, no flex-1).
+    '<div className="min-w-0 grow">', '${tamanoValor(total)} whitespace-nowrap font-black']) {
     assert.ok(linea.includes(texto), `GraficoLinea: ${texto}`);
   }
+  assert.ok(!linea.includes('${tamanoValor(total)} break-words'), 'GraficoLinea: el total no se parte (M16)');
   // Revisión de r1 (controlador): el chip va con aria-hidden solo si el aria-label del canvas ya dice la variación
   // (hay comparación); con «—» (sin período anterior) el lector lo lee. Y el chip está DENTRO de ese span.
   assert.ok(linea.includes('const chipOculto = !sinDatos && variacionPct(linea.total, linea.total_anterior) !== null;'));
@@ -941,13 +945,22 @@ console.log('--- TEST 20 (T5C): la lógica del panel (preferencias, foco, produc
   assert.equal(productoConsulta('  cuna  '), 'cuna');
   assert.equal(productoConsulta('😀a'), '😀a', 'cuenta letras, no unidades de UTF-16');
   assert.equal(productoConsulta('😀'), null);
-  assert.deepEqual(parametrosAnalisis({ bodega: '3' }, { foco: 'sc', producto: 'cu' }), { bodega: '3', foco: 'sc', producto: 'cu' });
-  assert.deepEqual(parametrosAnalisis(undefined, { foco: null, producto: 'c' }), {});
-  assert.deepEqual(parametrosAnalisis({ foco: 'hub', producto: 'viejo' }, { foco: 'cot', producto: '' }), { foco: 'cot' },
-    'el foco y el producto del panel ganan sobre params');
-  assert.equal(consultaAnalisis({ clave: '30d' }, 5, parametrosAnalisis({ bodega: 2 }, { foco: 'pven', producto: ' cuna ' })),
+  const panel = (foco, producto) => ({ conFoco: true, foco, conProducto: true, producto });
+  assert.deepEqual(parametrosAnalisis({ bodega: '3' }, panel('sc', 'cu')), { bodega: '3', foco: 'sc', producto: 'cu' });
+  assert.deepEqual(parametrosAnalisis(undefined, panel(null, 'c')), {});
+  assert.deepEqual(parametrosAnalisis({ foco: 'hub', producto: 'viejo' }, panel('cot', '')), { foco: 'cot' },
+    'el foco y el producto del panel ganan sobre params cuando el panel los maneja');
+  assert.equal(consultaAnalisis({ clave: '30d' }, 5, parametrosAnalisis({ bodega: 2 }, panel('pven', ' cuna '))),
     'periodo=30d&top=5&bodega=2&foco=pven&producto=cuna');
-  assert.equal(consultaAnalisis({ clave: '7d' }, 10, parametrosAnalisis({}, { foco: null, producto: 'c' })), 'periodo=7d&top=10');
+  assert.equal(consultaAnalisis({ clave: '7d' }, 10, parametrosAnalisis({}, panel(null, 'c'))), 'periodo=7d&top=10');
+  // r1 (M7 y M12, s6): lo que el panel NO maneja (sin focos o sin busquedaProducto) pasa tal cual desde params.
+  assert.deepEqual(parametrosAnalisis({ foco: 'hub' }, { conFoco: false, foco: null, conProducto: false, producto: null }), { foco: 'hub' },
+    "PanelAnalisis({modulo:'compras', params:{foco:'hub'}}) sin focos pide con foco=hub");
+  assert.deepEqual(parametrosAnalisis({ bodega: 3, producto: 'pantalla' }, { conFoco: false, conProducto: false }), { bodega: 3, producto: 'pantalla' },
+    'sin busquedaProducto, el producto de params no desaparece');
+  assert.deepEqual(parametrosAnalisis({ bodega: 3, producto: 'pantalla' }, { conProducto: true, producto: 'ab' }), { bodega: 3, producto: 'ab' });
+  assert.deepEqual(parametrosAnalisis({ foco: 'hub' }, { conFoco: true, foco: null }), {}, 'con focos, el foco es el del panel');
+  assert.deepEqual(parametrosAnalisis({ foco: 'hub', producto: 'p' }), { foco: 'hub', producto: 'p' }, 'sin panel, todo pasa');
 
   // La carga (useAnalisis): la llegada de crearCargaListado con su ContextoListado {ruta: el ámbito, usuario}; un error
   // conserva lo último bueno del MISMO ámbito y del MISMO usuario (como useResumenFlujo, T5A r1); otro ámbito u otra
@@ -1009,20 +1022,34 @@ console.log('--- TEST 20 (T5C): la lógica del panel (preferencias, foco, produc
   assert.equal(errorAnalisis(null), null);
   assert.deepEqual(errorAnalisis(Object.assign(new Error('Forbidden'), { status: 403 })),
     { tipo: 'permiso', texto: MENSAJE_SIN_PERMISO_ANALISIS, reintentar: false });
+  const { errorDeRespuesta } = await import('../src/lib/avisos.js');
+  // r1 (M5): el 422 sin detail de apiFetch trae el texto genérico «El servidor respondió con un error (422). Intenta de
+  // nuevo.»: cuenta como 'carga', con Reintentar (el caso de antes, un Error('') con 422, no ocurre con apiFetch).
+  const generico = errorDeRespuesta(422, {});
+  assert.equal(generico.message, 'El servidor respondió con un error (422). Intenta de nuevo.');
   for (const e of [Object.assign(new Error('x'), { status: 500 }), new TypeError('Failed to fetch'), Object.assign(new Error('Sesión'), { status: 401 }),
-    new Error('La respuesta del análisis no trae datos.'), Object.assign(new Error(''), { status: 422 })]) {
+    new Error('La respuesta del análisis no trae datos.'), generico, errorDeRespuesta(422, { detail: '   ' }), errorDeRespuesta(500, { detail: 'boom' })]) {
     assert.deepEqual(errorAnalisis(e), { tipo: 'carga', texto: MENSAJE_ERROR_ANALISIS, reintentar: true }, e.message);
   }
-  assert.deepEqual(errorAnalisis(Object.assign(new Error('El ranking solo puede mostrar 5, 10 o 25.'), { status: 422 })),
-    { tipo: 'validacion', texto: 'El ranking solo puede mostrar 5, 10 o 25.', reintentar: false }, 'el 422 trae el texto del servidor');
+  assert.deepEqual(errorAnalisis(errorDeRespuesta(422, { detail: 'El ranking solo puede mostrar 5, 10 o 25.' })),
+    { tipo: 'validacion', texto: 'El ranking solo puede mostrar 5, 10 o 25.', reintentar: false }, 'el 422 con detail trae el texto del servidor');
+  assert.deepEqual(errorAnalisis(Object.assign(new Error('El ranking solo puede mostrar 5, 10 o 25.'), { status: 422, detail: null })).tipo, 'carga',
+    'sin detail no es un rechazo del servidor con su texto');
   // Lo que se ve: mientras carga (el reintento) se conserva el error que se vio; al terminar, el de la última llegada.
-  const visto = errorAnalisis(Object.assign(new Error('x'), { status: 500 }));
-  assert.equal(siguienteErrorVisto(visto, { cargando: true, error: null }), visto, 'reintentando: el mismo aviso');
-  assert.equal(siguienteErrorVisto(null, { cargando: true, error: null }), null);
-  assert.equal(siguienteErrorVisto(visto, { cargando: false, error: null }), null, 'salió bien');
-  assert.equal(siguienteErrorVisto(visto, { cargando: false, error: new TypeError('Failed to fetch') }), visto, 'el mismo texto: la misma identidad');
-  assert.deepEqual(siguienteErrorVisto(visto, { cargando: false, error: Object.assign(new Error('x'), { status: 403 }) }),
-    errorAnalisis({ status: 403 }));
+  const A = '/ventas/analisis|hub|7';
+  const visto = siguienteErrorVisto(null, { cargando: false, error: Object.assign(new Error('x'), { status: 500 }), ambito: A });
+  assert.deepEqual(visto, { ambito: A, aviso: errorAnalisis(Object.assign(new Error('x'), { status: 500 })) });
+  assert.equal(siguienteErrorVisto(visto, { cargando: true, error: null, ambito: A }), visto, 'reintentando: el mismo aviso');
+  assert.equal(siguienteErrorVisto(null, { cargando: true, error: null, ambito: A }), null);
+  assert.equal(siguienteErrorVisto(visto, { cargando: false, error: null, ambito: A }), null, 'salió bien');
+  assert.equal(siguienteErrorVisto(visto, { cargando: false, error: new TypeError('Failed to fetch'), ambito: A }), visto, 'el mismo texto: la misma identidad');
+  assert.deepEqual(siguienteErrorVisto(visto, { cargando: false, error: Object.assign(new Error('x'), { status: 403 }), ambito: A }),
+    { ambito: A, aviso: errorAnalisis({ status: 403 }) });
+  // r1 (M11, s3 y s8): otro foco u otra cuenta descartan el aviso aunque haya una carga en camino (se ve el esqueleto).
+  assert.equal(siguienteErrorVisto(visto, { cargando: true, error: null, ambito: '/ventas/analisis|cot|7' }), null, 'otro foco');
+  assert.equal(siguienteErrorVisto(visto, { cargando: true, error: null, ambito: '/ventas/analisis|hub|8' }), null, 'otra cuenta');
+  assert.deepEqual(siguienteErrorVisto(visto, { cargando: false, error: new TypeError('x'), ambito: '/ventas/analisis|cot|7' }),
+    { ambito: '/ventas/analisis|cot|7', aviso: visto.aviso }, 'el error del ámbito nuevo, con su ámbito');
 
   // 'Comparado con 5 ago – 3 sept' (periodo.comparado del servidor: 'vs 5 ago – 3 sept').
   assert.equal(textoComparado({ comparado: 'vs 5 ago – 3 sept' }), 'Comparado con 5 ago – 3 sept');
@@ -1040,23 +1067,28 @@ console.log('--- TEST 20 (T5C): la lógica del panel (preferencias, foco, produc
     formato: 'pesos', mejor: 'sube', es_foto: false, ayuda: 'Pedidos creados en el período, sin cancelados ni devueltos.' };
   assert.deepEqual(tarjetaKpiAnalisis(vendido), {
     clave: 'vendido_periodo', kpi: 'vendido_periodo', etiqueta: 'Vendido (30 días)', formato: 'pesos', valor: 4927538, icono: null,
-    variacion: { actual: 4927538, anterior: 4380034, mejorSiSube: true }, ayuda: vendido.ayuda, titulo: null,
+    variacion: { actual: 4927538, anterior: 4380034, mejorSiSube: true, es_foto: false }, ayuda: vendido.ayuda, titulo: null,
   }, 'un id del catálogo trae el ícono y el color de CATALOGO_KPI; la etiqueta es la del servidor');
   const nuevos = tarjetaKpiAnalisis({ clave: 'pedidos_nuevos', etiqueta: 'Pedidos', valor: '12', anterior: 0, formato: 'entero', mejor: 'baja' });
   assert.deepEqual([nuevos.kpi, nuevos.icono, nuevos.formato, nuevos.valor, nuevos.variacion],
-    [null, 'Activity', 'entero', '12', { actual: 12, anterior: 0, mejorSiSube: false }]);
+    [null, 'Activity', 'entero', '12', { actual: 12, anterior: 0, mejorSiSube: false, es_foto: false }]);
   const dias = tarjetaKpiAnalisis({ clave: 'dias_entrega', etiqueta: 'Días de entrega', valor: 3.46, anterior: 2, formato: 'dias', mejor: 'baja' });
-  assert.deepEqual([dias.formato, dias.valor, dias.icono, dias.variacion], ['texto', '3,5 días', 'Clock', { actual: 3.46, anterior: 2, mejorSiSube: false }]);
+  assert.deepEqual([dias.formato, dias.valor, dias.icono, dias.variacion], ['texto', '3,5 días', 'Clock', { actual: 3.46, anterior: 2, mejorSiSube: false, es_foto: false }]);
   assert.deepEqual(tarjetaKpiAnalisis({ clave: 'u', valor: 1234, formato: 'unidades', mejor: 'sube' }).valor, '1.234 u.');
   assert.equal(tarjetaKpiAnalisis({ clave: 'u', valor: null, formato: 'dias' }).valor, null, 'sin valor: null (la tarjeta pinta «—»), no «null días»');
   assert.equal(tarjetaKpiAnalisis({ clave: 'u', formato: 'pesos' }).valor, null, 'nunca 0');
   assert.equal(tarjetaKpiAnalisis({ clave: 'u', valor: { x: 1 }, formato: 'pesos' }).valor, null);
   const saldo = tarjetaKpiAnalisis({ clave: 'pven_saldo_por_cobrar', etiqueta: 'Saldo por cobrar', valor: 1200000, anterior: null, formato: 'pesos',
     mejor: 'baja', es_foto: true, ayuda: 'Lo que deben los pedidos vigentes.' });
-  assert.deepEqual([saldo.variacion, saldo.ayuda, saldo.titulo], [null, 'Cifra de hoy, sin comparación', 'Lo que deben los pedidos vigentes.'],
-    'una foto: sin variación, lo dice debajo y su ayuda va en el title');
+  assert.deepEqual([saldo.variacion, saldo.ayuda, saldo.titulo],
+    [{ actual: 1200000, anterior: null, mejorSiSube: false, es_foto: true }, 'Lo que deben los pedidos vigentes.', null],
+    'r1 (M2): una foto lleva es_foto en la variación (TarjetaKpi dice «Hoy» con infoVariacion) y su ayuda va al title');
+  assert.deepEqual(infoVariacion({ valor: saldo.variacion.actual, anterior: saldo.variacion.anterior, es_foto: saldo.variacion.es_foto }),
+    { texto: 'Hoy', tono: 'neutro', flecha: null, lector: 'Cifra de hoy, sin comparación' });
+  assert.equal(tarjetaKpiAnalisis(vendido).variacion.es_foto, false, 'las demás, sin foto');
+  assert.equal(tarjetaKpiAnalisis({ clave: 'x', valor: 3, anterior: 5, es_foto: true }).variacion.anterior, null, 'una foto no se compara aunque traiga anterior');
   assert.deepEqual(tarjetaKpiAnalisis({ clave: 'x', valor: 5, anterior: null, formato: 'entero', mejor: 'sube' }).variacion,
-    { actual: 5, anterior: null, mejorSiSube: true }, 'sin anterior la tarjeta dice «—» (RP27)');
+    { actual: 5, anterior: null, mejorSiSube: true, es_foto: false }, 'sin anterior la tarjeta dice «—» (RP27)');
   assert.equal(tarjetaKpiAnalisis({ clave: 'x', valor: 5, anterior: 4, mejor: 'neutro' }).variacion.mejorSiSube, null);
   assert.equal(tarjetaKpiAnalisis({ clave: 'x', valor: 5, anterior: 4 }).variacion.mejorSiSube, null, 'sin mejor: gris (nunca un verde inventado)');
   for (const [f, esperado] of [['numero', 'entero'], ['porcentaje', 'porcentaje'], [null, 'entero'], ['raro', 'entero'], ['texto', 'texto']]) {
@@ -1076,11 +1108,20 @@ console.log('--- TEST 20 (T5C): la lógica del panel (preferencias, foco, produc
   assert.equal(mejorDeLinea({ formato: 'pesos', total: 4927538 }, kpis), 'baja', 'el mismo formato y el mismo total');
   assert.equal(mejorDeLinea({ formato: 'entero', total: 3 }, kpis), 'neutro', 'un solo kpi con ese formato');
   assert.equal(mejorDeLinea({ total: 4927538 }, kpis), 'neutro', 'sin formato es entero');
-  assert.equal(mejorDeLinea({ formato: 'pesos', total: 1 }, kpis), 'sube', 'ambiguo: el de por defecto');
+  assert.equal(mejorDeLinea({ formato: 'pesos', total: 1 }, kpis), 'neutro', 'r1 (M3): ambiguo, gris (nunca un verde inventado)');
   assert.equal(mejorDeLinea({ formato: 'pesos', total: 900 }, kpis, 'baja'), 'baja', 'la pantalla lo fija');
   assert.equal(mejorDeLinea({ formato: 'pesos', total: 900 }, kpis, 'raro'), 'neutro', 'uno que no vale se ignora');
-  assert.equal(mejorDeLinea(null, kpis), 'sube');
-  assert.equal(mejorDeLinea({ formato: 'pesos', total: 4927538 }, [{ formato: 'pesos', valor: 4927538, mejor: 'x' }]), 'sube');
+  assert.equal(mejorDeLinea(null, kpis), 'neutro');
+  assert.equal(mejorDeLinea({ formato: 'pesos', total: 4927538 }, [{ formato: 'pesos', valor: 4927538, mejor: 'x' }]), 'neutro', 'sin un mejor válido');
+  assert.equal(mejorDeLinea({ formato: 'pesos', total: 5 }, []), 'neutro', 'sin kpis');
+  // r1 (M3): con dos kpis del mismo total, desempata el anterior (total_anterior contra anterior).
+  const dos = [{ formato: 'pesos', valor: 100, anterior: 80, mejor: 'sube' }, { formato: 'pesos', valor: 100, anterior: 90, mejor: 'baja' }];
+  assert.equal(mejorDeLinea({ formato: 'pesos', total: 100, total_anterior: 90 }, dos), 'baja');
+  assert.equal(mejorDeLinea({ formato: 'pesos', total: 100, total_anterior: 80 }, dos), 'sube');
+  assert.equal(mejorDeLinea({ formato: 'pesos', total: 100 }, dos), 'neutro', 'el mismo total y sin anterior para desempatar');
+  assert.equal(mejorDeLinea({ formato: 'pesos', total: 100, total_anterior: 1 }, dos), 'neutro', 'ningún anterior coincide');
+  const iguales = [{ formato: 'pesos', valor: 100, mejor: 'baja' }, { formato: 'pesos', valor: 100, mejor: 'baja' }];
+  assert.equal(mejorDeLinea({ formato: 'pesos', total: 100 }, iguales), 'baja', 'si los que coinciden dicen lo mismo, ese');
 
   // 'Actualizado hace 2 minutos' (generado_en, ISO con Z; hace() de lib/fechas-colombia.js, RP60).
   const T = Date.parse('2026-10-28T15:02:30Z');
@@ -1093,12 +1134,84 @@ console.log('--- TEST 20 (T5C): la lógica del panel (preferencias, foco, produc
   assert.ok(Object.isFrozen(ASISTENTE_POR_DEFECTO));
 }
 
+console.log('--- TEST 22 (T5C r1): las decisiones del panel que antes solo cuidaba el fuente ---');
+{
+  const {
+    escrituraDelRender, focoUrlInicial, focoUrlTras, aceptaReintento, siguienteReintento, periodoCoincide, periodoVisible,
+    textoMovimientosMas, MOVIMIENTOS_AL_LADO: AL_LADO, resolverFoco, textoComparado,
+  } = analisis;
+
+  // M9 (s4): una acción hecha sobre la pantalla de una cuenta no se guarda si el token ya es de otra.
+  assert.equal(escrituraDelRender(7, 7), true);
+  assert.equal(escrituraDelRender(7, 8), false, 'la pantalla de 7 con el token de 8 (storage primero): no escribe');
+  assert.equal(escrituraDelRender(null, null), true, 'sin sesión en los dos: en memoria');
+  assert.equal(escrituraDelRender(undefined, null), true);
+  assert.equal(escrituraDelRender(7, null), false, 'cerró la sesión');
+  assert.equal(escrituraDelRender(null, 8), false, 'entró otra cuenta');
+
+  // M1 y M6: el foco de la URL gana hasta que el usuario elige; un ?foco= nuevo vuelve a ganar.
+  const e0 = focoUrlInicial('sc');
+  assert.deepEqual(e0, { inicial: 'sc', usar: true });
+  assert.deepEqual(focoUrlInicial(undefined), { inicial: null, usar: true });
+  assert.equal(focoUrlTras(e0, { tipo: 'url', foco: 'sc' }), e0, 'el mismo ?foco=: la misma identidad');
+  const e1 = focoUrlTras(e0, { tipo: 'elegir' });
+  assert.deepEqual(e1, { inicial: 'sc', usar: false }, 'elegir otro foco deja de usar el de la URL');
+  assert.equal(focoUrlTras(e1, { tipo: 'elegir' }), e1);
+  assert.equal(focoUrlTras(e1, { tipo: 'url', foco: 'sc' }), e1, 'el mismo ?foco= no vuelve a ganar');
+  assert.deepEqual(focoUrlTras(e1, { tipo: 'url', foco: 'pven' }), { inicial: 'pven', usar: true }, 'otro ?foco= vuelve a ganar');
+  assert.deepEqual(focoUrlTras(e1, { tipo: 'url', foco: null }), { inicial: null, usar: true });
+  assert.throws(() => focoUrlTras(e0, { tipo: 'otro' }), /Evento de foco desconocido/);
+  // Con resolverFoco: lo que se ve.
+  const ver = (e, guardado) => resolverFoco(FOCOS_VENTAS, e.usar ? e.inicial : null, guardado);
+  assert.deepEqual([ver(e0, 'cot'), ver(e1, 'cot')], ['sc', 'cot']);
+
+  // M5, M9 y M11: Reintentar se acepta solo con un aviso que lo ofrece y sin otro reintento en camino; «Reintentando…»
+  // dura lo que dura la carga de ESE reintento.
+  const carga = { tipo: 'carga', texto: 'x', reintentar: true };
+  assert.equal(aceptaReintento(carga, false), true);
+  assert.equal(aceptaReintento(carga, true), false, 'un doble toque no duplica la petición');
+  assert.equal(aceptaReintento({ tipo: 'permiso', texto: 'x', reintentar: false }, false), false);
+  assert.equal(aceptaReintento(null, false), false);
+  assert.equal(siguienteReintento(true, { cargando: true }), true, 'la carga del reintento sigue en camino');
+  assert.equal(siguienteReintento(true, { cargando: false }), false, 'llegó: se limpia');
+  assert.equal(siguienteReintento(false, { cargando: true }), false, 'otra carga (período, foco) no es un reintento');
+  assert.equal(siguienteReintento(false, { cargando: false }), false);
+
+  // M10 (s3): el período de los datos solo se muestra (Comparado con…, el borrador de Personalizado) si es el elegido o
+  // si no hay aviso ni recarga.
+  const p30 = { clave: '30d', comparado: 'vs 30 ago – 28 sept', desde: '2026-09-29', hasta: '2026-10-28' };
+  assert.equal(periodoCoincide(p30, { clave: '30d' }), true);
+  assert.equal(periodoCoincide(p30, { clave: '7d' }), false);
+  assert.equal(periodoCoincide({ clave: 'personalizado', desde: '2026-09-01', hasta: '2026-09-30' }, { clave: 'personalizado', desde: '2026-09-01', hasta: '2026-09-30' }), true);
+  assert.equal(periodoCoincide({ clave: 'personalizado', desde: '2026-09-01', hasta: '2026-09-30' }, { clave: 'personalizado', desde: '2026-09-02', hasta: '2026-09-30' }), false);
+  assert.equal(periodoCoincide(null, { clave: '30d' }), false);
+  assert.equal(periodoCoincide({ comparado: 'vs C30' }, { clave: '30d' }), false, 'sin clave no coincide');
+  const datos = { periodo: p30 };
+  const aviso = { tipo: 'carga', texto: 'x', reintentar: true };
+  assert.equal(periodoVisible(datos, { recargando: false, aviso: null, periodo: { clave: '7d' } }), p30, 'sin aviso ni recarga: los datos son de la consulta');
+  assert.equal(periodoVisible(datos, { recargando: true, aviso: null, periodo: { clave: '30d' } }), null, 'mientras recarga, no');
+  assert.equal(periodoVisible(datos, { recargando: false, aviso, periodo: { clave: '7d' } }), null, 's3: 7 días elegido y falló: no se lee «Comparado con» de 30');
+  assert.equal(periodoVisible(datos, { recargando: false, aviso, periodo: { clave: '30d' } }), p30, 'falló Actualizar del mismo período: sigue siendo cierto');
+  assert.equal(periodoVisible(null, { recargando: false, aviso: null, periodo: { clave: '30d' } }), null);
+  assert.equal(textoComparado(periodoVisible(datos, { recargando: false, aviso, periodo: { clave: '7d' } })), null);
+
+  // M1 y M19: desde @2xl se ven MOVIMIENTOS_AL_LADO filas; debajo, cuántas quedan (de las 8 que pinta ListaMovimientos).
+  assert.equal(AL_LADO, 4);
+  assert.equal(textoMovimientosMas(4), null);
+  assert.equal(textoMovimientosMas(0), null);
+  assert.equal(textoMovimientosMas(5), 'y 1 movimiento más');
+  assert.equal(textoMovimientosMas(6), 'y 2 movimientos más');
+  assert.equal(textoMovimientosMas(8), 'y 4 movimientos más');
+  assert.equal(textoMovimientosMas(20), 'y 4 movimientos más', 'ListaMovimientos pinta hasta 8');
+  assert.equal(textoMovimientosMas(null), null);
+}
+
 console.log('--- TEST 21 (T5C): el fuente de las siete piezas del panel (sin DOM en node) ---');
 {
   const leer = (nombre) => readFileSync(new URL(`../src/components/analisis/${nombre}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const codigo = (texto) => texto.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   const PIEZAS = {
-    'PanelAnalisis.tsx': /export function PanelAnalisis\(/, 'PanelAnalisisPerezoso.tsx': /export const PanelAnalisisPerezoso = dynamic</,
+    'PanelAnalisis.tsx': /export function PanelAnalisis\(/, 'PanelAnalisisPerezoso.tsx': /export function PanelAnalisisPerezoso\(/,
     'useAnalisis.ts': /export function useAnalisis\(/, 'SelectorPeriodo.tsx': /export function SelectorPeriodo\(/,
     'FilaKpis.tsx': /export function FilaKpis\(/, 'AsistenteEnConstruccion.tsx': /export function AsistenteEnConstruccion\(/,
   };
@@ -1122,6 +1235,8 @@ console.log('--- TEST 21 (T5C): el fuente de las siete piezas del panel (sin DOM
       assert.ok(/\btitle=/.test(linea), `${archivo}: truncate sin title: ${linea.trim()}`);
     }
     assert.ok(!/text-(slate|gray)-(300|400|500)\b|text-(emerald|rose|red|amber|green)-(400|500|600)\b/.test(c), `${archivo}: contraste`);
+    // r1 (M21): un atenuado por debajo de opacity-80 deja el texto bajo 4,5:1 (slate-600 al 60 %: 2,88:1).
+    for (const m of c.matchAll(/\bopacity-(\d+)\b/g)) assert.ok(Number(m[1]) >= 80, `${archivo}: opacity-${m[1]} atenúa de más`);
   }
 
   // AsistenteEnConstruccion (R2): la tarjeta sin respuestas, sin endpoints y sin temporizadores; el ÚNICO aviso de IA.
@@ -1131,6 +1246,8 @@ console.log('--- TEST 21 (T5C): el fuente de las siete piezas del panel (sin DOM
     assert.ok(asistente.includes(texto), `AsistenteEnConstruccion: ${texto}`);
   }
   assert.equal((asistente.match(/^\s*disabled$/gm) ?? []).length, 2, 'los chips y la caja, deshabilitados');
+  assert.ok(asistente.includes('aria-labelledby={`${idTitulo} ${idPastilla}`}') && asistente.includes('id={idPastilla}'),
+    'r1 (M20): la región se llama «título En construcción»');
   assert.ok(!/useState|useEffect|setTimeout|setInterval|apiFetch|fetch\(|onClick|onChange|onSubmit|onKeyDown|async\b|await\b/.test(asistente),
     'AsistenteEnConstruccion: sin estado, sin temporizadores, sin endpoints y sin respuestas');
   assert.ok(!/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(fuentes['AsistenteEnConstruccion.tsx']), 'sin emojis');
@@ -1142,7 +1259,9 @@ console.log('--- TEST 21 (T5C): el fuente de las siete piezas del panel (sin DOM
   // PanelAnalisisPerezoso (R13, D43 M6): PanelAnalisis en su propio chunk, con el esqueleto mientras llega.
   const perezoso = codigo(fuentes['PanelAnalisisPerezoso.tsx']);
   for (const texto of ["import dynamic from 'next/dynamic';", "import type { PropsPanelAnalisis } from './PanelAnalisis';",
-    "() => import('./PanelAnalisis').then((m) => m.PanelAnalisis),", '{ ssr: false, loading: () => <EsqueletoAnalisis /> },']) {
+    "() => import('./PanelAnalisis').then((m) => m.PanelAnalisis),", '{ ssr: false, loading: () => <Cargando /> },',
+    '<EsqueletoBarra focos={forma.focos} producto={forma.producto} />', '<EsqueletoAnalisis barra={false} />',
+    '<FormaEsqueleto.Provider value={forma}>', 'focos: props.focos?.length ?? 0, producto: Boolean(props.busquedaProducto)']) {
     assert.ok(perezoso.includes(texto), `PanelAnalisisPerezoso: ${texto}`);
   }
   assert.ok(!/^import (?!type\b)[^;]*from '\.\/(PanelAnalisis|Grafico\w+|registro)';/m.test(perezoso), 'PanelAnalisisPerezoso: sin import estático del panel ni de los gráficos');
@@ -1166,19 +1285,31 @@ console.log('--- TEST 21 (T5C): el fuente de las siete piezas del panel (sin DOM
     "const clave = `${version}|${usuario ?? ''}|${url}`;", 'if (esperar) return undefined;', 'carga.cargar(url, clave, { ruta: ambitoFinal, usuario });',
     'return () => carga.cancelar();', 'estadoAnalisis(resultado, { clave, ambito: ambitoFinal, usuario, repeticion })',
     'const cargando = visto.cargando || esperar;', 'aviso: errorAnalisis(error),', 'cargandoInicial: cargando && !datos,',
-    'recargando: cargando && Boolean(datos),', 'const recargar = useCallback(() => setVersion((v) => v + 1), []);']) {
+    'recargando: cargando && Boolean(datos),', 'const recargar = useCallback(() => setVersion((v) => v + 1), []);',
+    // r1 (M2 del revisor): sin `clave` en las dependencias, Reintentar y Actualizar no piden nada.
+    '}, [carga, url, clave, ambitoFinal, usuario, esperar]);']) {
     assert.ok(hook.includes(texto), `useAnalisis: ${texto}`);
   }
 
   // SelectorPeriodo: píldoras (o un select en anchos chicos), Personalizado con el error del servidor en línea.
   const selector = codigo(fuentes['SelectorPeriodo.tsx']);
-  for (const texto of ['PERIODOS.map((p) =>', 'aria-pressed={p.clave === elegido}', 'hidden min-w-0 flex-wrap gap-1.5 @xl:flex', 'min-w-0 @xl:hidden',
+  for (const texto of ['PERIODOS.map((p) =>', 'aria-pressed={p.clave === elegido}', 'hidden min-w-0 flex-wrap gap-1.5 @xl:flex', 'w-40 min-w-0 max-w-full @xl:hidden',
     '<select', '<label htmlFor={idSelect} className="sr-only">Período</label>', 'const texto = errorPeriodo(periodo, hoy);', 'if (!texto) alAplicar(periodo);',
     '<form noValidate onSubmit={aplicar}', 'role="alert"', 'Aplicar', 'borradorPersonalizado(periodo, periodoDatos)', "elegido === 'personalizado' &&",
     'aria-invalid={conError}', 'aria-describedby={descrito}', "{comparado ?? ''}", 'if (clave !== periodo.clave) alCambiar({ clave });']) {
     assert.ok(selector.includes(texto), `SelectorPeriodo: ${texto}`);
   }
   assert.equal((selector.match(/type="date"/g) ?? []).length, 2, 'SelectorPeriodo: Desde y Hasta');
+  // r1 (M15): un date tiene 4 paradas de Tab (día, mes, año y el calendario); en la cuarta el input ya no cumple
+  // :focus-visible NI :focus (medido en Chromium), pero sí :focus-within: el outline va con las dos.
+  assert.ok(selector.includes("const CAMPO_FECHA = `block w-full min-w-0 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 outline-indigo-700 focus:outline-2 focus:outline-offset-2 focus:outline-indigo-700 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-indigo-700`;"));
+  assert.equal((selector.match(/className=\{`mt-1 \$\{CAMPO_FECHA\}`\}/g) ?? []).length, 2, 'los dos date con CAMPO_FECHA');
+  // r1 (M14): el esqueleto de la barra, con los mismos altos que la barra real (píldoras de 26 px o el select de 34 px,
+  // la línea de 'Comparado con…' y la de 'Actualizado…').
+  for (const texto of ['export function EsqueletoBarra(', 'h-[26px]', 'h-[34px]', 'h-[30px]', '@xl:hidden', '@xl:flex', 'mt-1.5 h-4',
+    'block h-8 w-40 max-w-full rounded-xl @xl:hidden', '<div className="w-40 min-w-0 max-w-full @xl:hidden">']) {
+    assert.ok(selector.includes(texto), `EsqueletoBarra: ${texto}`);
+  }
   assert.equal((selector.match(/max=\{hoy\}/g) ?? []).length, 2, 'SelectorPeriodo: a lo sumo hoy');
 
   // FilaKpis (C12, D43 M2): TarjetaKpi con variación dentro de FranjaKpis, sin una grilla propia.
@@ -1195,14 +1326,39 @@ console.log('--- TEST 21 (T5C): el fuente de las siete piezas del panel (sin DOM
   for (const texto of ['usePreferenciaParte(clavePreferenciaAnalisis(modulo), PREFERENCIA_ANALISIS_POR_DEFECTO)',
     'leerPreferenciaAnalisis(guardado, { focos })', 'esperarPreferencias({ alVencer: () => setVencidoPara(usuario) })',
     'const listo = listoConTope(prefsListas, vencidoPara === usuario);', 'if (prefsListas) return undefined;',
-    'resolverFoco(focos, usarInicial ? focoInicial : null, prefs.foco)', 'productoConsulta(producto)), ESPERA_PRODUCTO_MS)',
-    'parametrosAnalisis(params, { foco, producto: busquedaProducto ? productoAplicado : null })', "ambito: `${endpoint}|${foco ?? ''}`,",
-    'esperar: !listo,', 'periodo: prefs.periodo,', 'top: prefs.top,', 'siguienteErrorVisto(errorVisto, { cargando: analisis.cargando, error: analisis.error })',
-    'aria-busy={analisis.cargando}', 'mejor={mejorDeLinea(datos.linea, datos.kpis, mejorLinea)}', '<FilaKpis kpis={datos.kpis} comparado={datos.periodo?.comparado} acento={acento} />',
+    'resolverFoco(focos, focoUrlVisto.usar ? focoUrlVisto.inicial : null, prefs.foco)', 'productoConsulta(producto)), ESPERA_PRODUCTO_MS)',
+    'parametrosAnalisis(params, { conFoco, foco, conProducto: busquedaProducto, producto: productoAplicado })', "ambito: `${endpoint}|${foco ?? ''}`,",
+    'esperar: !listo,', 'periodo: prefs.periodo,', 'top: prefs.top,',
+    'siguienteErrorVisto(errorVisto, { cargando: analisis.cargando, error: analisis.error, ambito: ambitoError })',
+    "const ambitoError = `${endpoint}|${foco ?? ''}|${usuario ?? ''}`;",
+    'aria-busy={analisis.recargando}', 'mejor={mejorDeLinea(datos.linea, datos.kpis, mejorLinea)}', '<FilaKpis kpis={datos.kpis} comparado={datos.periodo?.comparado} acento={acento} />',
+    // r1 (M9): las escrituras van con el usuario del render.
+    'useLayoutEffect(() => {\n    usuarioDelRender.current = usuario;\n  }, [usuario]);',
+    'const puedeEscribir = () => escrituraDelRender(usuarioDelRender.current, usuarioDeLaSesion());',
+    // r1 (M1, M6 y M4): el foco de la URL con focoUrlTras, y alCambiarFoco para la URL.
+    "const focoUrlVisto = focoUrlTras(focoUrl, { tipo: 'url', foco: focoInicial });", "setFocoUrl((e) => focoUrlTras(e, { tipo: 'elegir' }));",
+    'alCambiarFoco?.(clave);',
+    // r1 (M5, M9 y M11): Reintentar.
+    'if (!aceptaReintento(aviso, reintentando)) return;', 'siguienteReintento(reintentoPedido, { cargando: analisis.cargando })',
+    'const reintentando = Boolean(aviso) && pedido;', 'setReintentoPedido(true);',
+    // r1 (M10): el período de los datos arriba solo si es cierto.
+    'const periodoDatos = periodoVisible(datos, { recargando: analisis.recargando, aviso, periodo: prefs.periodo });',
+    'comparado={textoComparado(periodoDatos)} periodoDatos={periodoDatos}',
+    // r1 (M21): sin atenuar con error.
+    'const atenuar = analisis.recargando;',
+    // r1 (M1 y M19): «y N movimientos más» desde @2xl.
+    'textoMovimientosMas(datos.movimientos.filas.length)', 'hidden', '@2xl/analisis:block',
+    // r1 (M14): el esqueleto con la barra y la fila de focos.
+    '<EsqueletoBarra focos={focos?.length ?? 0} producto={busquedaProducto} />',
+    // r1 (M13): el pegamento que solo se ve en el fuente (mutantes R6, R8, R14, R16 y C9 de la ronda).
+    'if (focoUrlVisto !== focoUrl) setFocoUrl(focoUrlVisto);', '    return () => window.clearTimeout(id);\n  }, [producto, busquedaProducto]);',
+    'if (vistoAhora !== errorVisto) setErrorVisto(vistoAhora);', 'if (pedido !== reintentoPedido) setReintentoPedido(pedido);',
+    'if (devolver && (!activo || activo === document.body)) regionRef.current?.focus({ preventScroll: true });',
+    '{masMovimientos && (', '<p className="mt-2 hidden px-4 text-xs font-semibold text-slate-600 @2xl/analisis:block">{masMovimientos}</p>',
     '<EsqueletoAnalisis barra={false} />', 'asistente ?? ASISTENTE_POR_DEFECTO', '<AsistenteEnConstruccion titulo={elAsistente.titulo} ejemplos={elAsistente.ejemplos} />',
     'alCambiarTop={elegirTop}', 'modo={modoDona} alCambiarModo={setModoDona}', 'alAbrir={alAbrirMovimiento}', 'aria-pressed={f.clave === foco}',
     "{reintentando ? 'Reintentando…' : 'Reintentar'}", 'aria-disabled={reintentando || undefined}', 'regionRef.current?.focus({ preventScroll: true })',
-    'textoComparado(datos.periodo)', 'textoActualizado(datos.generado_en)', "atenuar ? 'opacity-60' : ''", 'granularidad={granularidad}',
+    'textoActualizado(datos.generado_en)', "atenuar ? 'opacity-90' : ''", 'granularidad={granularidad}',
     'pointer-events-none absolute', 'aria-describedby={productoCorto ? idAyudaProducto : undefined}']) {
     assert.ok(panel.includes(texto), `PanelAnalisis: ${texto}`);
   }
@@ -1212,6 +1368,14 @@ console.log('--- TEST 21 (T5C): el fuente de las siete piezas del panel (sin DOM
   for (const bloque of panel.split('useEffect(').slice(1)) {
     const cuerpo = bloque.slice(0, bloque.indexOf('}, ['));
     assert.ok(!cuerpo.includes('guardarParte'), 'ningún efecto escribe preferencias (D35)');
+  }
+  // r1 (M9): las tres escrituras (y alCambiarFoco) van detrás de la regla del usuario del render.
+  assert.equal((panel.match(/if \(!puedeEscribir\(\)\) return;/g) ?? []).length, 3, 'los tres manejadores comprueban el usuario');
+  for (const nombre of ['elegirFoco', 'elegirPeriodo', 'elegirTop']) {
+    const ini = panel.indexOf(`const ${nombre} = `);
+    const cuerpo = panel.slice(ini, panel.indexOf('};', ini));
+    assert.ok(cuerpo.indexOf('if (!puedeEscribir()) return;') >= 0 && cuerpo.indexOf('if (!puedeEscribir()) return;') < cuerpo.indexOf('guardarParte('),
+      `${nombre}: comprueba antes de escribir`);
   }
   assert.equal((panel.match(/aria-busy=/g) ?? []).length, 1, 'aria-busy solo en la región que se actualiza (D43, M12)');
   for (const clave of Object.keys(analisis.GRILLA_ANALISIS)) assert.ok(panel.includes(`G.${clave}`), `PanelAnalisis usa GRILLA_ANALISIS.${clave}`);

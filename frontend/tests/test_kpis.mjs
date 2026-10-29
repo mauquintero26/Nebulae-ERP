@@ -371,4 +371,26 @@ console.log('--- TEST 11 (T4A): lo que usan TarjetaKpi, Contador y useEstadoKpi 
   assert.ok(lineaError && lineaError.includes('line-clamp-2') && lineaError.includes('title="No se pudo cargar"'), `el error: ${lineaError}`);
 }
 
+console.log('--- TEST 12 (T5C r1): TarjetaKpi con 4,5:1 y la foto «Hoy» (M6, M22 y M2) ---');
+{
+  const fuente = readFileSync(new URL('../src/components/ui/TarjetaKpi.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const lineas = fuente.split('\n');
+  // El chip y las ayudas en tonos de 4,5:1 o más sobre el blanco y sobre el fondo de 'alerta' (emerald-700 5,37;
+  // rose-700 6,06; slate-600 7,56), como ChipVariacion. Antes: emerald-600 3,67 y el «vs …» en slate-400 2,63.
+  assert.ok(fuente.includes("const TONO_CHIP = { bien: 'text-emerald-700', mal: 'text-rose-700', neutro: 'text-slate-600' } as const;"), 'TONO_CHIP');
+  assert.ok(fuente.includes("  normal: 'text-slate-500',\n  alerta: 'text-rose-700',\n  bien: 'text-emerald-700',\n"), 'TONO_AYUDA');
+  const lineaVs = lineas.find((l) => l.includes('title={comparado}'));
+  assert.ok(lineaVs && lineaVs.includes('text-slate-600') && !lineaVs.includes('text-slate-400'), `el «vs …»: ${lineaVs}`);
+  const lineaError = lineas.find((l) => l.includes('>No se pudo cargar<'));
+  assert.ok(lineaError && lineaError.includes('text-rose-700'), `el error: ${lineaError}`);
+  assert.ok(!/text-(slate|gray)-(300|400)\b|text-(emerald|rose|red|green)-(400|500|600)\b/.test(fuente), 'ningún texto por debajo de 4,5:1');
+  // RP27 punto 3: una foto (es_foto) dice «Hoy» con infoVariacion (y su lector), sin el «vs …» (no se compara).
+  assert.ok(fuente.includes('es_foto?: boolean'), 'VariacionTarjeta acepta es_foto');
+  assert.ok(fuente.includes('{ valor: variacion.actual, anterior: variacion.anterior, mejor: mejorComoTexto(mejorSiSube), es_foto: variacion.es_foto }'),
+    'la tarjeta le pasa es_foto a infoVariacion');
+  assert.ok(fuente.includes('{!variacion?.es_foto && ('), 'una foto no dice contra qué se compara');
+  const foto = infoVariacion({ valor: 1200000, anterior: null, mejor: mejorComoTexto(false), es_foto: true }, { frente: frenteDeComparado() });
+  assert.deepEqual(foto, { texto: 'Hoy', tono: 'neutro', flecha: null, lector: 'Cifra de hoy, sin comparación' });
+}
+
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

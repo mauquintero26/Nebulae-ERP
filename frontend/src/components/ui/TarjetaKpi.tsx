@@ -39,8 +39,11 @@ export type { EstadoKpi, IdKpi } from '@/lib/kpis';
 export type FormatoTarjeta = 'numero' | 'entero' | 'pesos' | 'porcentaje' | 'texto';
 export type TonoTarjeta = 'normal' | 'alerta' | 'bien';
 export type IconoKpi = React.ComponentType<{ size?: number; className?: string }>;
-/** La cifra de un período contra la del período anterior. Sin mejorSiSube, el del catálogo (o subir es mejor). */
-export type VariacionTarjeta = { actual: number | null; anterior: number | null; mejorSiSube?: boolean | null };
+/**
+ * La cifra de un período contra la del período anterior. Sin mejorSiSube, el del catálogo (o subir es mejor). Con
+ * es_foto (una cifra de hoy, sin comparación; RP27 punto 3, T5C r1), el chip dice «Hoy» y no se dice contra qué se compara.
+ */
+export type VariacionTarjeta = { actual: number | null; anterior: number | null; mejorSiSube?: boolean | null; es_foto?: boolean };
 
 export type PropsTarjetaKpi = {
   /** Id de CATALOGO_KPI: trae la etiqueta, el ícono, el color, el formato y si subir es mejor. */
@@ -96,11 +99,13 @@ const FOCO: Record<ColorKpi, string> = {
   red: 'focus-visible:ring-red-300',
   slate: 'focus-visible:ring-slate-300',
 };
-const TONO_CHIP = { bien: 'text-emerald-600', mal: 'text-rose-600', neutro: 'text-slate-500' } as const;
+// T5C r1 (M6 y M22): tonos de 4,5:1 o más sobre el blanco y sobre el fondo de 'alerta' (emerald-700, rose-700 y
+// slate-600, como ChipVariacion); antes emerald-600 daba 3,67:1.
+const TONO_CHIP = { bien: 'text-emerald-700', mal: 'text-rose-700', neutro: 'text-slate-600' } as const;
 const TONO_AYUDA: Record<TonoTarjeta, string> = {
   normal: 'text-slate-500',
-  alerta: 'text-rose-600',
-  bien: 'text-emerald-600',
+  alerta: 'text-rose-700',
+  bien: 'text-emerald-700',
 };
 
 const EstadoFranja = createContext<EstadoKpi | null>(null);
@@ -131,7 +136,7 @@ export function TarjetaKpi({
   const mejorSiSube = variacion && variacion.mejorSiSube !== undefined ? variacion.mejorSiSube : (definicion?.mejorSiSube ?? true);
   const info = variacion && !conError
     ? infoVariacion(
-      { valor: variacion.actual, anterior: variacion.anterior, mejor: mejorComoTexto(mejorSiSube) },
+      { valor: variacion.actual, anterior: variacion.anterior, mejor: mejorComoTexto(mejorSiSube), es_foto: variacion.es_foto },
       { frente: frenteDeComparado(comparado) },
     )
     : null;
@@ -156,15 +161,17 @@ export function TarjetaKpi({
   if (cargando) {
     linea = <span aria-hidden="true" className="block h-3 w-32 rounded bg-slate-200 animate-pulse mt-2" />;
   } else if (conError) {
-    linea = <span title="No se pudo cargar" className="line-clamp-2 text-xs font-semibold text-rose-600 mt-1">No se pudo cargar</span>;
+    linea = <span title="No se pudo cargar" className="line-clamp-2 text-xs font-semibold text-rose-700 mt-1">No se pudo cargar</span>;
   } else if (info) {
     linea = (
       <span className={`mt-1 flex items-center gap-1.5 min-w-0 ${atenuado}`}>
         <span aria-hidden="true" className={`inline-flex items-center gap-0.5 text-xs font-bold shrink-0 ${TONO_CHIP[info.tono]}`}>
-          {info.flecha === 'sube' ? <ArrowUpRight size={12} /> : info.flecha === 'baja' ? <ArrowDownRight size={12} /> : <Minus size={12} />}
+          {info.flecha === 'sube' ? <ArrowUpRight size={12} /> : info.flecha === 'baja' ? <ArrowDownRight size={12} /> : variacion?.es_foto ? null : <Minus size={12} />}
           {info.texto}
         </span>
-        <span aria-hidden="true" title={comparado} className="min-w-0 line-clamp-2 text-xs text-slate-400">{comparado}</span>
+        {!variacion?.es_foto && (
+          <span aria-hidden="true" title={comparado} className="min-w-0 line-clamp-2 text-xs text-slate-600">{comparado}</span>
+        )}
         <span className="sr-only">{info.lector}</span>
       </span>
     );

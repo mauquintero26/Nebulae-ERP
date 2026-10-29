@@ -26,17 +26,19 @@ export type PropsAsistenteEnConstruccion = {
 
 export function AsistenteEnConstruccion({ titulo, ejemplos = [] }: PropsAsistenteEnConstruccion) {
   const idTitulo = useId();
+  const idPastilla = useId();
   const idAviso = useId();
   const preguntas = ejemplos.filter((e) => typeof e === 'string' && e.trim());
 
   return (
-    <section aria-labelledby={idTitulo} className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
+    // T5C r1 (M20): la región se llama «Copilot de Ventas En construcción» (quien navega por regiones oye el aviso).
+    <section aria-labelledby={`${idTitulo} ${idPastilla}`} className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
         <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
           <Sparkles size={18} />
         </span>
         <h3 id={idTitulo} className="min-w-0 break-words text-sm font-bold text-slate-900">{titulo}</h3>
-        <span className="shrink-0 whitespace-nowrap rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-bold text-amber-800 ring-1 ring-amber-300">
+        <span id={idPastilla} className="shrink-0 whitespace-nowrap rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-bold text-amber-800 ring-1 ring-amber-300">
           En construcción
         </span>
       </div>

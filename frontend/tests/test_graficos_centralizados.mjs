@@ -14,7 +14,7 @@
  *    GraficoDona y GraficoBarras (react-chartjs-2 y los tipos de chart.js, con registrarGraficos() al cargarse) importan
  *    los gráficos; las piezas de T5C (PanelAnalisis y las demás) usan esos componentes.
  * 4) T5C (R13 y D43 M6): chart.js solo entra en el chunk de la pestaña. Siguiendo los imports ESTÁTICOS (sin import type
- *    ni import('…')), nada de lo que alcanzan components/analisis/index.ts ni PanelAnalisisPerezoso.tsx importa chart.js
+ *    ni import('…'); T5C r1: leídos con el compilador de TypeScript, ts.preProcessFile y el árbol, también require()), nada de lo que alcanzan components/analisis/index.ts ni PanelAnalisisPerezoso.tsx importa chart.js
  *    o react-chartjs-2 (PanelAnalisisPerezoso carga PanelAnalisis con import('./PanelAnalisis'), un chunk aparte); y
  *    fuera de components/analisis nadie importa estático PanelAnalisis, los gráficos ni registro.ts (las pantallas
  *    importan PanelAnalisisPerezoso o el índice).
@@ -26,6 +26,7 @@
 
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -173,16 +174,47 @@ console.log('--- T5C: chart.js solo entra en el chunk de la pestaña (PanelAnali
     }
     return null;
   };
-  // Los imports estáticos con valor: import … from '…', import '…' y export … from '…'. No cuentan import type ni
-  // export type (se borran al compilar) ni import('…') (otro chunk).
-  const PATRON_ESTATICO = /^\s*(?:import|export)\s+(?!type\b)(?:[^'"`;]*?\bfrom\s*)?(['"])([^'"]+)\1/gm;
-  const estaticos = (texto) => [...texto.matchAll(PATRON_ESTATICO)].map((m) => m[2]);
-  // Autoprueba del patrón.
+  // T5C r1 (M18): los imports se leen con el compilador de TypeScript, no con un patrón por línea (que no veía dos
+  // imports en una línea ni require()). ts.preProcessFile da los módulos que nombra el archivo, sin los de comentarios y
+  // cadenas; en el typescript instalado (5.9) no trae isTypeOnly, así que cada uno se clasifica con el árbol
+  // (createSourceFile) y las dos listas tienen que coincidir:
+  //  - import type / export type, o un import o export con todos sus nombres 'type': solo tipos (se borran al compilar);
+  //  - import('…'): otro chunk (no cuenta);
+  //  - lo demás (import … from, import '…', export … from, require('…')): estático, va en el mismo chunk.
+  const ts = createRequire(import.meta.url)('typescript');
+  const todosTipo = (elementos) => elementos.length > 0 && elementos.every((e) => e.isTypeOnly);
+  const estaticos = (texto, nombre = 'muestra.tsx') => {
+    const arbol = ts.createSourceFile(nombre, texto, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const valor = [];
+    const otros = [];
+    const visitar = (n) => {
+      if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier)) {
+        const c = n.importClause;
+        const tipo = Boolean(c && (c.isTypeOnly || (!c.name && c.namedBindings && ts.isNamedImports(c.namedBindings)
+          && todosTipo(c.namedBindings.elements))));
+        (tipo ? otros : valor).push(n.moduleSpecifier.text);
+      } else if (ts.isExportDeclaration(n) && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)) {
+        const tipo = n.isTypeOnly || Boolean(n.exportClause && ts.isNamedExports(n.exportClause) && todosTipo(n.exportClause.elements));
+        (tipo ? otros : valor).push(n.moduleSpecifier.text);
+      } else if (ts.isCallExpression(n) && n.arguments.length === 1 && ts.isStringLiteralLike(n.arguments[0])) {
+        if (n.expression.kind === ts.SyntaxKind.ImportKeyword) otros.push(n.arguments[0].text);
+        else if (ts.isIdentifier(n.expression) && n.expression.text === 'require') valor.push(n.arguments[0].text);
+      }
+      ts.forEachChild(n, visitar);
+    };
+    visitar(arbol);
+    const nombrados = ts.preProcessFile(texto, true, true).importedFiles.map((f) => f.fileName);
+    assert.deepEqual([...nombrados].sort(), [...valor, ...otros].sort(), `${nombre}: el árbol clasifica todo lo que nombra preProcessFile`);
+    return valor;
+  };
+  // Autoprueba: dos imports en una línea (el punto ciego del patrón de antes), require, tipos, import() y comentarios.
   assert.deepEqual(estaticos([
-    "import { A } from './A';", "import type { B } from './B';", "export { C } from './C';", "export type { D } from './D';",
-    "import {\n  E,\n  F,\n} from '@/lib/e';", "import './g.css';", "export * from './H';", "const P = dynamic(() => import('./P'));",
-    "export function f() { return 'x'; }", "import x, { type Y } from 'chart.js';",
-  ].join('\n')), ['./A', './C', '@/lib/e', './g.css', './H', 'chart.js']);
+    "import { A } from './A'; import { G } from './GraficoLinea';", "import type { B } from './B';", "export { C } from './C';",
+    "export type { D } from './D';", "import {\n  E,\n  F,\n} from '@/lib/e';", "import './g.css';", "export * from './H';",
+    "const P = dynamic(() => import('./P'));", "export function f() { return 'x'; }", "import x, { type Y } from 'chart.js';",
+    "import { type T } from './T';", "export { type U } from './U';", "const r = require('./R');",
+    "// import z from './comentado';", "const s = \"import w from './cadena'\";",
+  ].join('\n')), ['./A', './GraficoLinea', './C', '@/lib/e', './g.css', './H', 'chart.js', './R']);
   const GRAFICOS = /^(react-chartjs-2|chart\.js)(\/|$)/;
   /** Los archivos de src que alcanza `entrada` por imports estáticos, y los imports de los gráficos que encuentra. */
   const alcanzables = (entrada) => {
@@ -193,7 +225,7 @@ console.log('--- T5C: chart.js solo entra en el chunk de la pestaña (PanelAnali
       const ruta = pila.pop();
       if (vistos.has(ruta)) continue;
       vistos.add(ruta);
-      for (const spec of estaticos(readFileSync(ruta, 'utf8'))) {
+      for (const spec of estaticos(readFileSync(ruta, 'utf8'), rel(ruta))) {
         if (GRAFICOS.test(spec)) {
           graficos.push(`${rel(ruta)} → ${spec}`);
           continue;
@@ -224,7 +256,7 @@ console.log('--- T5C: chart.js solo entra en el chunk de la pestaña (PanelAnali
   for (const ruta of archivos(src)) {
     const r = rel(ruta);
     if (r.startsWith(CARPETA_GRAFICOS) || r.startsWith('src/app_mocks_backup/')) continue;
-    for (const spec of estaticos(readFileSync(ruta, 'utf8'))) {
+    for (const spec of estaticos(readFileSync(ruta, 'utf8'), rel(ruta))) {
       const destino = resolver(ruta, spec);
       if (destino && PROHIBIDOS.includes(rel(destino))) fuera.push(`${r} → ${spec}`);
     }

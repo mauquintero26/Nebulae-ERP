@@ -855,10 +855,11 @@ export function resumenAccesible(linea, { frente = 'frente al período anterior'
  *   del token con que se pidió, la vuelta de la carga, los datos buenos (normalizados) y el error de esa llegada.
  * @typedef {{datos: DatosAnalisis | null, cargando: boolean, error: unknown}} EstadoAnalisis
  * @typedef {{tipo: 'permiso' | 'validacion' | 'carga', texto: string, reintentar: boolean}} ErrorAnalisis
+ * @typedef {{ambito: string, aviso: ErrorAnalisis}} ErrorVisto
  * @typedef {'pesos' | 'entero' | 'porcentaje' | 'texto'} FormatoTarjetaAnalisis
  * @typedef {{clave: string, kpi: string | null, etiqueta: string, formato: FormatoTarjetaAnalisis,
  *   valor: number | string | null, icono: string | null,
- *   variacion: {actual: number | null, anterior: number | null, mejorSiSube: boolean | null} | null,
+ *   variacion: {actual: number | null, anterior: number | null, mejorSiSube: boolean | null, es_foto: boolean},
  *   ayuda: string | null, titulo: string | null}} TarjetaAnalisis
  */
 
@@ -950,20 +951,27 @@ export function productoConsulta(texto) {
 
 /**
  * Los parámetros propios de la consulta del panel (los extra de consultaAnalisis): los de la pantalla (`params`, por
- * ejemplo {bodega}) más el foco y el producto del panel, que ganan sobre los de `params`; un foco null o un producto
- * corto (productoConsulta) no van.
+ * ejemplo {bodega}) más el foco y el producto del panel. El panel solo pisa lo que maneja (r1, M7 y M12):
+ *  - con `conFoco` (el panel tiene focos), el foco es el suyo (null: no va) y params.foco se ignora; sin él, params.foco
+ *    pasa tal cual;
+ *  - con `conProducto` (busquedaProducto), el producto es el del campo, solo con 2 letras o más (productoConsulta), y
+ *    params.producto se ignora; sin él, params.producto pasa tal cual.
  * @param {Record<string, unknown> | null | undefined} params
- * @param {{foco?: string | null, producto?: unknown}} [panel]
+ * @param {{conFoco?: boolean, foco?: string | null, conProducto?: boolean, producto?: unknown}} [panel]
  * @returns {Record<string, unknown>}
  */
-export function parametrosAnalisis(params, { foco = null, producto = null } = {}) {
+export function parametrosAnalisis(params, { conFoco = false, foco = null, conProducto = false, producto = null } = {}) {
   /** @type {Record<string, unknown>} */
   const salida = { ...(esObjeto(params) ? /** @type {Record<string, unknown>} */ (params) : {}) };
-  delete salida.foco;
-  delete salida.producto;
-  if (foco) salida.foco = foco;
-  const p = productoConsulta(producto);
-  if (p) salida.producto = p;
+  if (conFoco) {
+    delete salida.foco;
+    if (foco) salida.foco = foco;
+  }
+  if (conProducto) {
+    delete salida.producto;
+    const p = productoConsulta(producto);
+    if (p) salida.producto = p;
+  }
   return salida;
 }
 
@@ -1015,6 +1023,13 @@ export function estadoAnalisis(resultado, { clave, ambito, usuario = null, repet
   return { datos: propio?.datos ?? null, cargando, error: cargando ? null : (propio?.error ?? null) };
 }
 
+/** Un detail de FastAPI que dice algo: un texto no vacío, una lista con algo o un objeto con algo. */
+function detalleConTexto(d) {
+  if (typeof d === 'string') return d.trim() !== '';
+  if (Array.isArray(d)) return d.length > 0;
+  return esObjeto(d) && Object.keys(d).length > 0;
+}
+
 /** El aviso de un 403 (ANALISIS-base, comportamiento esperado). */
 export const MENSAJE_SIN_PERMISO_ANALISIS = 'No tienes permiso para ver este análisis.';
 /** El aviso de cualquier otra falla de la carga, con 'Reintentar'. */
@@ -1023,8 +1038,10 @@ export const MENSAJE_ERROR_ANALISIS = 'No pudimos cargar el análisis. Revisa tu
 /**
  * El aviso de un error de la carga (apiFetch lanza con .status y .detail, Bloque 2):
  *  - 403: MENSAJE_SIN_PERMISO_ANALISIS, sin 'Reintentar' (volver a pedir no lo cambia);
- *  - 422 con texto: el texto del servidor (en español: los de core/periodos.py y core/analisis.py), sin 'Reintentar';
- *  - cualquier otro (la red, un 5xx, un 401 que no se pudo renovar, una respuesta sin datos, un 422 sin texto):
+ *  - 422 con detail (r1, M5: el rechazo del servidor, en español: los de core/periodos.py y core/analisis.py): su
+ *    texto (el message que arma errorDeRespuesta desde ese detail), sin 'Reintentar';
+ *  - cualquier otro (la red, un 5xx, un 401 que no se pudo renovar, una respuesta sin datos, un 422 sin detail, que
+ *    apiFetch trae con el texto genérico «El servidor respondió con un error (422). Intenta de nuevo.»):
  *    MENSAJE_ERROR_ANALISIS con 'Reintentar'.
  * Sin error, null.
  * @param {unknown} error
@@ -1035,24 +1052,31 @@ export function errorAnalisis(error) {
   const e = /** @type {any} */ (error);
   if (e.status === 403) return { tipo: 'permiso', texto: MENSAJE_SIN_PERMISO_ANALISIS, reintentar: false };
   const texto = typeof e.message === 'string' ? e.message.trim() : '';
-  if (e.status === 422 && texto) return { tipo: 'validacion', texto, reintentar: false };
+  if (e.status === 422 && texto && detalleConTexto(e.detail)) return { tipo: 'validacion', texto, reintentar: false };
   return { tipo: 'carga', texto: MENSAJE_ERROR_ANALISIS, reintentar: true };
 }
 
 /**
- * El aviso de error que muestra el panel: mientras carga (un reintento, o el período nuevo después de un error) se
- * conserva el que ya se veía, así el botón 'Reintentar' sigue montado y no suelta el foco; al terminar, el de la
- * última llegada (null si salió bien). Si el aviso nuevo dice lo mismo, devuelve `visto` (la misma identidad: el panel
- * lo guarda en su estado durante el render y compara por identidad).
- * @param {ErrorAnalisis | null} visto
- * @param {{cargando: boolean, error: unknown}} estado
- * @returns {ErrorAnalisis | null}
+ * El aviso de error que muestra el panel, atado a su `ambito` (r1, M11: el endpoint, el foco y el usuario,
+ * '/ventas/analisis|hub|7'):
+ *  - un aviso de otro ámbito (otro foco u otra cuenta) se descarta enseguida, aunque haya una carga en camino: se ve el
+ *    esqueleto, no el mensaje de otra consulta;
+ *  - mientras carga (un reintento, u otro período del mismo foco después de un error) se conserva el que ya se veía, así
+ *    el botón 'Reintentar' sigue montado y no suelta el foco;
+ *  - al terminar, el de la última llegada (null si salió bien). Si dice lo mismo, devuelve `visto` (la misma identidad:
+ *    el panel lo guarda en su estado durante el render y compara por identidad).
+ * @param {ErrorVisto | null} visto
+ * @param {{cargando: boolean, error: unknown, ambito: string}} estado
+ * @returns {ErrorVisto | null}
  */
-export function siguienteErrorVisto(visto, { cargando, error }) {
-  if (cargando) return visto;
+export function siguienteErrorVisto(visto, { cargando, error, ambito }) {
+  const propio = visto && visto.ambito === ambito ? visto : null;
+  if (cargando) return propio;
   const nuevo = errorAnalisis(error);
-  if (nuevo && visto && nuevo.tipo === visto.tipo && nuevo.texto === visto.texto && nuevo.reintentar === visto.reintentar) return visto;
-  return nuevo;
+  if (!nuevo) return null;
+  const a = propio?.aviso;
+  if (a && nuevo.tipo === a.tipo && nuevo.texto === a.texto && nuevo.reintentar === a.reintentar) return propio;
+  return { ambito, aviso: nuevo };
 }
 
 /**
@@ -1111,8 +1135,8 @@ export const ICONO_KPI_POR_FORMATO = congelar({
  *  - valor: el del servidor (un número o un número en texto); sin valor, null (la tarjeta pinta '—'): nunca 0;
  *  - variacion {actual, anterior, mejorSiSube} con los números del servidor (mejorDesde: 'sube' true, 'baja' false,
  *    'neutro' u otro null, en gris); sin anterior queda con anterior null y la tarjeta dice '—' (RP27);
- *  - una foto (es_foto): sin variación, 'Cifra de hoy, sin comparación' debajo y la ayuda del servidor en el title;
- *    si no, la ayuda (con variación, TarjetaKpi la lleva al title).
+ *  - una foto (es_foto): la variación lleva es_foto: true y TarjetaKpi dice «Hoy» (infoVariacion, RP27 punto 3; r1, M2);
+ *  - la ayuda del servidor (con variación, TarjetaKpi la lleva al title).
  * @param {KpiAnalisis | null | undefined} kpi
  * @returns {TarjetaAnalisis}
  */
@@ -1143,9 +1167,13 @@ export function tarjetaKpiAnalisis(kpi) {
     formato,
     valor,
     icono,
-    variacion: foto ? null : { actual: numero(k.valor), anterior: numero(k.anterior), mejorSiSube: mejorDesde(k.mejor) },
-    ayuda: foto ? 'Cifra de hoy, sin comparación' : ayuda,
-    titulo: foto ? ayuda : null,
+    // r1 (M2, RP27 punto 3): una foto lleva es_foto y TarjetaKpi dice «Hoy» con infoVariacion (su lector, para el lector
+    // de pantalla); sin anterior: la foto no se compara.
+    variacion: {
+      actual: numero(k.valor), anterior: foto ? null : numero(k.anterior), mejorSiSube: mejorDesde(k.mejor), es_foto: foto,
+    },
+    ayuda,
+    titulo: null,
   };
 }
 
@@ -1153,8 +1181,10 @@ const MEJORES_ANALISIS = congelar(['sube', 'baja', 'neutro']);
 
 /**
  * El «mejor» del chip de la línea (D43, M19: el contrato de la línea no lo trae): `explicito` si la pantalla lo fija y
- * vale; si no, el del kpi de la MISMA cifra (el mismo formato y el mismo valor que linea.total); si no, el del único kpi
- * con ese formato; si no (ninguno o varios), 'sube'. Solo cuentan los kpis con un «mejor» válido.
+ * vale (T7, T14, T17, T21 y T22 lo pasan); si no, el del kpi de la MISMA cifra: el mismo formato y el mismo valor que
+ * linea.total y, si hay varios, el que además tiene el mismo anterior que linea.total_anterior; si los que quedan dicen
+ * lo mismo, ese. Si no hay ninguno, el del único kpi con ese formato. Con ambigüedad (varios que no se ponen de acuerdo,
+ * o ninguno), 'neutro': gris, nunca un verde inventado (r1, M3). Solo cuentan los kpis con un «mejor» válido.
  * @param {{formato?: unknown, total?: unknown} | null | undefined} linea
  * @param {ReadonlyArray<KpiAnalisis | null> | null | undefined} kpis
  * @param {unknown} [explicito]
@@ -1163,15 +1193,127 @@ const MEJORES_ANALISIS = congelar(['sube', 'baja', 'neutro']);
 export function mejorDeLinea(linea, kpis, explicito) {
   const valido = (m) => MEJORES_ANALISIS.includes(/** @type {MejorAnalisis} */ (m));
   if (valido(explicito)) return /** @type {MejorAnalisis} */ (explicito);
-  if (!esObjeto(linea)) return 'sube';
+  if (!esObjeto(linea)) return 'neutro';
   const l = /** @type {any} */ (linea);
   const formato = l.formato ?? 'entero';
   const total = numero(l.total);
+  const anterior = numero(l.total_anterior);
   const mismos = lista(kpis).filter((k) => esObjeto(k) && (k.formato ?? 'entero') === formato && valido(k.mejor));
-  const igual = total === null ? null : mismos.find((k) => numero(k.valor) === total);
-  if (igual) return igual.mejor;
+  let iguales = total === null ? [] : mismos.filter((k) => numero(k.valor) === total);
+  if (iguales.length > 1 && anterior !== null) iguales = iguales.filter((k) => numero(k.anterior) === anterior);
+  const unico = (lista_) => (lista_.length && lista_.every((k) => k.mejor === lista_[0].mejor) ? lista_[0].mejor : null);
+  if (iguales.length) return unico(iguales) ?? 'neutro';
   if (mismos.length === 1) return mismos[0].mejor;
-  return 'sube';
+  return 'neutro';
+}
+
+// ─── T5C r1: las decisiones del panel (antes solo las cuidaban cadenas del fuente; M13) ───────────────────────────
+
+/**
+ * Si PanelAnalisis puede escribir una preferencia (r1, M9; la regla de escriturasDeAccion de la tabla, D40): solo si el
+ * usuario con que se pintó la pantalla es el del token vigente. Con el token de otra cuenta (otra pestaña entró y el
+ * vínculo ya pasó a la instancia nueva), el gesto se hizo sobre la pantalla de la anterior y no se guarda.
+ * @param {number | null | undefined} usuarioRender
+ * @param {number | null | undefined} usuarioToken
+ * @returns {boolean}
+ */
+export function escrituraDelRender(usuarioRender, usuarioToken) {
+  return (usuarioRender ?? null) === (usuarioToken ?? null);
+}
+
+/**
+ * @typedef {{inicial: string | null, usar: boolean}} EstadoFocoUrl
+ *   El ?foco= de la URL que vio el panel (`inicial`) y si todavía gana sobre el guardado (`usar`).
+ */
+
+/**
+ * El estado del foco de la URL al montar el panel: lo usa (R13: «Ver análisis» abre el Hub ya enfocado).
+ * @param {unknown} focoInicial
+ * @returns {EstadoFocoUrl}
+ */
+export function focoUrlInicial(focoInicial) {
+  return { inicial: typeof focoInicial === 'string' ? focoInicial : null, usar: true };
+}
+
+/**
+ * El estado del foco de la URL tras un evento (r1, M1 y M6):
+ *  - {tipo: 'elegir'}: el usuario eligió un foco en el panel; el de la URL deja de ganar;
+ *  - {tipo: 'url', foco}: el ?foco= que llega en el render; si es otro, vuelve a ganar.
+ * Sin cambios devuelve el mismo objeto (el panel lo ajusta durante el render y compara por identidad). Un evento
+ * desconocido es un error de programación (lanza Error).
+ * @param {EstadoFocoUrl} estado
+ * @param {{tipo: 'elegir'} | {tipo: 'url', foco: unknown}} evento
+ * @returns {EstadoFocoUrl}
+ */
+export function focoUrlTras(estado, evento) {
+  if (evento?.tipo === 'elegir') return estado.usar ? { ...estado, usar: false } : estado;
+  if (evento?.tipo === 'url') {
+    const foco = typeof evento.foco === 'string' ? evento.foco : null;
+    return foco === estado.inicial ? estado : { inicial: foco, usar: true };
+  }
+  throw new Error(`Evento de foco desconocido: ${String(evento?.tipo)}`);
+}
+
+/**
+ * Si un toque de Reintentar se acepta (r1, M5 y M9): el aviso ofrece Reintentar y no hay otro reintento en camino (un
+ * doble toque, o «Reintentando…» con aria-disabled, no duplica la petición).
+ * @param {ErrorAnalisis | null | undefined} aviso
+ * @param {boolean} reintentando
+ * @returns {boolean}
+ */
+export function aceptaReintento(aviso, reintentando) {
+  return Boolean(aviso?.reintentar) && !reintentando;
+}
+
+/**
+ * Si sigue en camino el reintento que pidió el usuario (r1, M11): se marca al tocar Reintentar y se limpia cuando la
+ * carga termina; otra carga (otro período u otro foco) no lo marca. «Reintentando…» = aviso && este valor.
+ * @param {boolean} pedido
+ * @param {{cargando: boolean}} estado
+ * @returns {boolean}
+ */
+export function siguienteReintento(pedido, { cargando }) {
+  return Boolean(pedido) && Boolean(cargando);
+}
+
+/**
+ * Si el período de los datos es el elegido: la misma clave y, en un personalizado, las mismas fechas.
+ * @param {{clave?: unknown, desde?: unknown, hasta?: unknown} | null | undefined} periodoDatos
+ * @param {PeriodoAnalisis | null | undefined} elegido
+ * @returns {boolean}
+ */
+export function periodoCoincide(periodoDatos, elegido) {
+  if (!esObjeto(periodoDatos) || !elegido || typeof periodoDatos?.clave !== 'string') return false;
+  if (periodoDatos.clave !== elegido.clave) return false;
+  if (elegido.clave !== 'personalizado') return true;
+  return periodoDatos.desde === elegido.desde && periodoDatos.hasta === elegido.hasta;
+}
+
+/**
+ * El período de los datos que se puede mostrar arriba ('Comparado con …' y las fechas con que se abre Personalizado),
+ * o null (r1, M10): no mientras recarga, y con un aviso solo si los datos son del período elegido (si falló otro
+ * período, los datos que quedan son del anterior y su rango contradiría la píldora).
+ * @param {{periodo?: any} | null | undefined} datos
+ * @param {{recargando: boolean, aviso: unknown, periodo: PeriodoAnalisis | null | undefined}} estado
+ * @returns {any}
+ */
+export function periodoVisible(datos, { recargando, aviso, periodo }) {
+  const p = datos?.periodo;
+  if (!esObjeto(p) || recargando) return null;
+  if (aviso && !periodoCoincide(p, periodo)) return null;
+  return p;
+}
+
+/**
+ * La línea de debajo de los movimientos desde @2xl (r1, M1 y M19): 'y 4 movimientos más', 'y 1 movimiento más', o null
+ * si no se esconde ninguna (de las MAX_MOVIMIENTOS que pinta ListaMovimientos se ven MOVIMIENTOS_AL_LADO).
+ * @param {unknown} filas  cuántas filas trae el bloque
+ * @returns {string | null}
+ */
+export function textoMovimientosMas(filas) {
+  const n = Number.isFinite(filas) ? Math.min(Number(filas), MAX_MOVIMIENTOS) - MOVIMIENTOS_AL_LADO : 0;
+  if (n <= 0) return null;
+  return `y ${n} ${n === 1 ? 'movimiento' : 'movimientos'} más`;
 }
 
 /**
