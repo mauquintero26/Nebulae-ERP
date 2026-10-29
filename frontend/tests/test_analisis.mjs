@@ -491,6 +491,9 @@ console.log('--- TEST 15 (T5B): resumenAccesible de la dona y de las barras (el 
     'Cumplimiento: Promedio, de 2 días a 5,5 días');
   assert.equal(resumenAccesible({ ...cumplimiento, formato: 'numero', series: [{ etiqueta: 'Pedidos', valores: [2, 3] }] }),
     'Cumplimiento: Pedidos, total 5');
+  // Revisión de r1: 'entero' (el de «Solicitudes por asesor» y el que se usa sin formato) se suma.
+  assert.equal(resumenAccesible({ titulo: 'Por asesor', formato: 'entero', eje: 'categorias', etiquetas: ['Ana', 'Beto'],
+    series: [{ etiqueta: 'Pedidos', valores: [2, 3] }] }), 'Por asesor: Pedidos, total 5');
   // La línea sigue igual (TEST 11).
   assert.equal(resumenAccesible({ titulo: 'Pedidos', formato: 'entero', fechas: [], series: [], total: 90, total_anterior: 100 }),
     'Pedidos: total 90, bajó 10 % frente al período anterior');
@@ -526,6 +529,12 @@ console.log('--- TEST 16 (T5B): el ranking y los movimientos (proporcionesRankin
   // ni un '$0' rojo sin su menos.
   assert.deepEqual(montoMovimiento({ monto: 0, formato: 'pesos', signo: '+' }), { texto: '$0', tono: 'neutro' });
   assert.deepEqual(montoMovimiento({ monto: 0.4, formato: 'pesos', signo: '-' }), { texto: '$0', tono: 'neutro' });
+  // Revisión de r1 (controlador): el negativo se arma desde la magnitud, igual que el '+'; en x,5 no queda '$0' rojo ni
+  // un redondeo distinto según el signo.
+  assert.deepEqual(montoMovimiento({ monto: 0.5, formato: 'pesos', signo: '-' }), { texto: '-$1', tono: 'negativo' });
+  assert.deepEqual(montoMovimiento({ monto: 2.5, formato: 'pesos', signo: '-' }), { texto: '-$3', tono: 'negativo' });
+  assert.deepEqual(montoMovimiento({ monto: 2.5, formato: 'pesos', signo: '+' }), { texto: '+$3', tono: 'positivo' });
+  assert.deepEqual(montoMovimiento({ monto: 0.5, formato: 'unidades', signo: '-' }), { texto: '-1 u.', tono: 'negativo' });
   assert.deepEqual(montoMovimiento({ monto: -0.3, formato: 'pesos', signo: null }), { texto: '$0', tono: 'neutro' });
   assert.deepEqual(montoMovimiento({ monto: 0, formato: 'unidades', signo: '-' }), { texto: '0 u.', tono: 'neutro' });
   assert.deepEqual(montoMovimiento({ monto: 0.6, formato: 'pesos', signo: '-' }), { texto: '-$1', tono: 'negativo' }, 'un peso sí lleva signo');
@@ -665,9 +674,13 @@ console.log('--- TEST 18 (T5B): el fuente de las ocho piezas de components/anali
     "export function GraficoLinea({ linea, granularidad, acento, mejor = 'sube', frente }: PropsGraficoLinea)",
     // T5B r1 (M9): con el gráfico dibujado, el total y el chip del encabezado van con aria-hidden (ya los dice el aria-label
     // del canvas); sin datos no hay canvas y los dos se leen.
-    '<p aria-hidden={sinDatos ? undefined : true} title={total}', '<span aria-hidden={sinDatos ? undefined : true} className="shrink-0">']) {
+    '<p aria-hidden={sinDatos ? undefined : true} title={total}']) {
     assert.ok(linea.includes(texto), `GraficoLinea: ${texto}`);
   }
+  // Revisión de r1 (controlador): el chip va con aria-hidden solo si el aria-label del canvas ya dice la variación
+  // (hay comparación); con «—» (sin período anterior) el lector lo lee. Y el chip está DENTRO de ese span.
+  assert.ok(linea.includes('const chipOculto = !sinDatos && variacionPct(linea.total, linea.total_anterior) !== null;'));
+  assert.match(linea, /<span aria-hidden=\{chipOculto \? true : undefined\} className="shrink-0">\s*<ChipVariacion /);
   // T5B r1 (M1): el texto de los ejes en las opciones de cada escala (COLOR_EJES), no en ChartJS.defaults.color.
   assert.equal((linea.match(/color: COLOR_EJES,/g) ?? []).length, 2, 'GraficoLinea: color de las marcas en x y en y');
   const dona = codigo(fuentes['GraficoDona.tsx']);
@@ -780,6 +793,28 @@ console.log('--- TEST 19 (T5B r1, M16): registro.ts de verdad (transpilado), con
   const conChart = js.replace(/from ['"]chart\.js['"]/, `from '${urlChart}'`);
   const { Chart, Tooltip, Legend, Filler } = await import(urlChart);
   const colorAntes = Chart.defaults.color;
+  // Revisión de r1 (controlador): una foto profunda de Chart.defaults (las hojas; las funciones por su nombre) antes de
+  // registrar. Después solo pueden cambiar la fuente y la animación: ni el color de los ejes por otra vía
+  // (defaults.scale.ticks.color), ni borderColor, ni font.size. Lo que agrega el registro (claves nuevas) no cuenta.
+  const fotoDefaults = (raiz) => {
+    const hojas = new Map();
+    const vistos = new WeakSet();
+    const recorrer = (obj, ruta, profundidad) => {
+      if (obj === null || typeof obj !== 'object' || vistos.has(obj) || profundidad > 8) return;
+      vistos.add(obj);
+      for (const clave of Object.keys(obj)) {
+        let valor;
+        try { valor = obj[clave]; } catch { continue; }
+        const r = ruta ? `${ruta}.${clave}` : clave;
+        if (typeof valor === 'function') hojas.set(r, `fn:${valor.name}`);
+        else if (valor === null || typeof valor !== 'object') hojas.set(r, valor);
+        else recorrer(valor, r, profundidad + 1);
+      }
+    };
+    recorrer(raiz, '', 0);
+    return hojas;
+  };
+  const fotoAntes = fotoDefaults(Chart.defaults);
   const oyentes = [];
   let consultas = 0;
   const previos = { window: globalThis.window, document: globalThis.document };
@@ -810,6 +845,12 @@ console.log('--- TEST 19 (T5B r1, M16): registro.ts de verdad (transpilado), con
     assert.equal(Chart.defaults.animation.duration, 0);
     assert.equal(Chart.defaults.font.family, 'Arial, Helvetica, sans-serif', 'la fuente de la app');
     assert.equal(Chart.defaults.color, colorAntes, 'el color global sigue el de Chart.js (M1)');
+    const PERMITIDOS = new Set(['font.family', 'animation.duration', 'transitions.active.animation.duration']);
+    const fotoDespues = fotoDefaults(Chart.defaults);
+    const cambiados = [...fotoAntes].filter(([clave, valor]) => !PERMITIDOS.has(clave) && fotoDespues.has(clave)
+      && !Object.is(fotoDespues.get(clave), valor)).map(([clave]) => clave);
+    assert.ok(fotoAntes.size > 50, 'la foto de Chart.defaults tiene sus hojas');
+    assert.deepEqual(cambiados, [], 'registro.ts solo cambia la fuente y la animación globales');
     // Los tooltips, la leyenda y el relleno globales quedan con los valores que trae cada plugin de Chart.js (también
     // ante un defaults['plugins'] con corchetes, que la guarda del fuente no ve).
     for (const plugin of [Tooltip, Legend, Filler]) {

@@ -9,7 +9,7 @@ import {
   valoresConSigno,
 } from '@/lib/analisis';
 import type { FormatoAnalisis, Granularidad, LineaAnalisis, MejorAnalisis } from '@/lib/analisis';
-import { tamanoValor } from '@/lib/kpis';
+import { tamanoValor, variacionPct } from '@/lib/kpis';
 import { ChipVariacion } from './ChipVariacion';
 import { COLOR_EJES, ESTILO_TOOLTIP, registrarGraficos } from './registro';
 
@@ -148,6 +148,9 @@ export function GraficoLinea({ linea, granularidad, acento, mejor = 'sube', fren
   const titulo = linea.titulo || 'En el tiempo';
   const total = formatearValor(linea.total, formato);
   const sinDatos = bloqueSinDatos('linea', linea);
+  // El chip se oculta al lector solo si el aria-label del canvas ya dice la variación; sin período anterior («—») no la
+  // dice, y el chip («Sin comparación con el período anterior») se lee.
+  const chipOculto = !sinDatos && variacionPct(linea.total, linea.total_anterior) !== null;
 
   return (
     <section aria-labelledby={idTitulo} className={TARJETA}>
@@ -158,7 +161,7 @@ export function GraficoLinea({ linea, granularidad, acento, mejor = 'sube', fren
             {total}
           </p>
         </div>
-        <span aria-hidden={sinDatos ? undefined : true} className="shrink-0">
+        <span aria-hidden={chipOculto ? true : undefined} className="shrink-0">
           <ChipVariacion kpi={{ valor: linea.total, anterior: linea.total_anterior, mejor }} frente={frente} />
         </span>
       </div>

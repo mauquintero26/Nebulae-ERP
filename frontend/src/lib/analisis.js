@@ -616,7 +616,8 @@ export function montoMovimiento(fila) {
   const cero = formatearValor(0, formato);
   if (formatearValor(Math.abs(n), formato) === cero) return { texto: cero, tono: 'neutro' };
   if (fila?.signo === '+') return { texto: `+${formatearValor(Math.abs(n), formato)}`, tono: 'positivo' };
-  if (fila?.signo === '-') return { texto: formatearValor(n === 0 ? 0 : -Math.abs(n), formato), tono: 'negativo' };
+  // Revisión de r1: el negativo se arma desde la magnitud, como el '+' (en x,5 el redondeo de -x,5 daba otro número).
+  if (fila?.signo === '-') return { texto: `-${formatearValor(Math.abs(n), formato)}`, tono: 'negativo' };
   return { texto: formatearValor(n, formato), tono: 'neutro' };
 }
 
