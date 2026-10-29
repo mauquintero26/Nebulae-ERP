@@ -16,7 +16,8 @@ ALL paginada en el servidor (el Hub ya no guarda arreglos en memoria, C4). Las S
     estado debe ser uno de los de su tipo (r1, M10: ETIQUETAS_ESTADO para SC y COT; los 18 de estados_pedido para VEN).
   - columna: No Resuelto, En Gestión, Acción Tomada o Cancelado (el tablero, expr_columna_hub; C7).
   - q: busca en el numero, el cliente, el asesor, los numeros de origen y los productos (solo q, sin alias search; RP8).
-    q o un estado con un caracter de control (NUL incluido) -> 422 (r1, M13: core/listados).
+    q o un estado con un caracter de control (NUL incluido) -> 422 (r1, M13: core/listados); un tabulador o un salto de
+    linea en medio pasa a un espacio.
   - orden: atencion (por defecto), sin_movimiento, reciente, o tipo, numero, cliente, asesor, creado, estado o monto, con
     '-' para descendente (leer_orden; otro valor, '-atencion', '-reciente' o '-sin_movimiento' -> 422).
   - limit (25; 0 a 200; 0 = solo el total), offset (0 a MAX_OFFSET de core/listados; fuera de rango, el 400 legible

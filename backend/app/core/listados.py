@@ -20,7 +20,8 @@ Sin los parámetros nuevos cada lista responde lo mismo que hoy; el único agreg
 Errores (RP9 y su ajuste): leer_orden y validar_orden lanzan HTTPException(422, 'No se puede ordenar por «x».');
 leer_lista (más de MAX_ESTADOS) y orden_tiempo (un valor que no vale) lanzan ValueError, que el endpoint convierte en
 422 con str(e). B4 T6A r1 (M13): texto_busqueda y leer_lista lanzan además ValueError(MENSAJE_CONTROL) si el texto
-trae un carácter de control (NUL incluido: psycopg2 no adapta un NUL y la petición daba 500). Los parámetros de negocio
+trae un carácter de control (NUL incluido: psycopg2 no adapta un NUL y la petición daba 500); los espacios de control
+interiores (tabulador, saltos de línea…) pasan a un espacio, no son un error (revisión de T6A r1). Los parámetros de negocio
 se validan a mano (R21): el manejador global convierte los RequestValidationError en un 400 técnico en inglés.
 
 Las funciones que solo arman la consulta (filtrar_por_estados, orden_tiempo) sirven con un Query de la sesión o con un
@@ -68,7 +69,8 @@ def leer_lista(valor, maximo: int = MAX_ESTADOS) -> list[str]:
     y los vacíos se descartan).
 
     Con más de `maximo` valores distintos lanza ValueError('Puedes filtrar por 20 estados como máximo.'), y con un
-    carácter de control en un valor, ValueError(MENSAJE_CONTROL) (T6A r1); el endpoint responde 422 con str(e)."""
+    carácter de control en un valor, ValueError(MENSAJE_CONTROL) (T6A r1); el endpoint responde 422 con str(e). Los
+    espacios de control interiores (tabulador, saltos de línea…) pasan a un espacio."""
     if valor is None:
         return []
     if isinstance(valor, str):
@@ -89,7 +91,8 @@ def texto_busqueda(q, search) -> str | None:
     """La búsqueda de una lista (RP8): gana `q` (la de la tabla estándar) y `search` sigue como alias para los
     selectores, la tienda, el Dashboard, el Asistente y las pruebas. Se quitan los espacios de los bordes; un texto
     vacío (o solo espacios) da None. Un `q` en blanco no tapa un `search` con texto. Si el texto que se usa trae un
-    carácter de control, lanza ValueError(MENSAJE_CONTROL) (T6A r1, M13); el endpoint responde 422 con str(e)."""
+    carácter de control, lanza ValueError(MENSAJE_CONTROL) (T6A r1, M13); el endpoint responde 422 con str(e). Los
+    espacios de control interiores (tabulador, saltos de línea…) pasan a un espacio: no son un error."""
     for texto in (q, search):
         if texto is not None and texto.strip():
             return _sin_caracteres_de_control(texto.strip())

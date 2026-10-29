@@ -275,6 +275,12 @@ def test_filtros_vista_semaforo_estados_q_y_paso(app_client, db, admin_token):
     # q con espacios en los bordes se recorta (texto_busqueda); en blanco no filtra.
     assert _claves(_hub(app_client, admin_token, q=f"  {f.producto}  ")["data"]) == [k["cot"]]
     assert _hub(app_client, admin_token, q="   ", limit=0)["total"] == _hub(app_client, admin_token, limit=0)["total"]
+    # Revisión de T6A r1: un tabulador o un salto de linea EN MEDIO (texto pegado) se busca como un espacio, no da 422.
+    for interior in ("	", "
+", ""):
+        con_control = _hub(app_client, admin_token, q=f"{f.producto}{interior}x", limit=0)
+        con_espacio = _hub(app_client, admin_token, q=f"{f.producto} x", limit=0)
+        assert con_control["total"] == con_espacio["total"], repr(interior)
 
 
 def test_busqueda_por_asesor_y_numeros_de_origen(app_client, db, admin_token):
