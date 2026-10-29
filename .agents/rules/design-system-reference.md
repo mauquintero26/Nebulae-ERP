@@ -254,8 +254,8 @@ const tarjetaDe = (p: Pedido): DatosTarjetaKanban => ({
   atrasada: p.atrasado,
 });
 
-// stats: las cifras de período (GET /ventas/stats); el resto sale del listado.
-export function PedidosDeVenta({ stats }: { stats: { vendido: number | null; vendido_anterior: number | null } | null }) {
+// Las tarjetas salen de /ventas/stats (D5); los números de las pestañas, de listado.conteos. Qué tarjetas lleva cada lista lo dice su tarea (T10 para Pedidos).
+export function PedidosDeVenta({ stats }: { stats: { vendido: number | null; vendido_anterior: number | null; saldo_por_cobrar: number | null } | null }) {
   const router = useRouter();
   const abrir = useCallback((p: Pedido) => router.push(`/dashboard/ventas/venta/${p.id}`), [router]);
 
@@ -278,9 +278,10 @@ export function PedidosDeVenta({ stats }: { stats: { vendido: number | null; ven
     ruta: '/ventas/pedidos', estado, esperar: !listo, despachar, conConteos: true, conResumen: true,
   });
   const anchoTablaRef = useRef<number | null>(null);
-  const pantalla = usePantallaCompleta();
+  // Desestructurado: con el objeto entero en ref={…}, react-hooks/refs marca «Cannot access refs during render».
+  const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
   // Pasar a Kanban sale de la pantalla completa: el conmutador sigue visible dentro de la tarjeta.
-  useEffect(() => { if (estado.modo === 'kanban') pantalla.salir(); }, [estado.modo, pantalla.salir]);
+  useEffect(() => { if (estado.modo === 'kanban') salir(); }, [estado.modo, salir]);
   const estadoKpis = useEstadoKpi(listado.cargandoInicial || listado.recargando, listado.error);
 
   // El tablero: el mismo id, el mismo tamaño y los mismos filtros que la tabla; solo carga en modo Kanban.
@@ -311,7 +312,7 @@ export function PedidosDeVenta({ stats }: { stats: { vendido: number | null; ven
           valor={stats?.vendido ?? null}
           variacion={{ actual: stats?.vendido ?? null, anterior: stats?.vendido_anterior ?? null }}
         />
-        <TarjetaKpi kpi="pven_saldo_por_cobrar" valor={listado.resumen?.saldo_cop ?? null} ayuda="Pedidos con saldo pendiente" />
+        <TarjetaKpi kpi="pven_saldo_por_cobrar" valor={stats?.saldo_por_cobrar ?? null} ayuda="Pedidos con saldo pendiente" />
         <TarjetaKpi
           kpi="pven_en_curso"
           valor={listado.conteos?.en_curso ?? null}
@@ -320,8 +321,8 @@ export function PedidosDeVenta({ stats }: { stats: { vendido: number | null; ven
         />
       </FranjaKpis>
 
-      {pantalla.capa}
-      <section ref={pantalla.refTarjeta} className={pantalla.claseTarjeta}>
+      {capa}
+      <section ref={refTarjeta} className={claseTarjeta}>
         <BarraTabla
           estado={estado}
           onEstado={despachar}
@@ -330,7 +331,7 @@ export function PedidosDeVenta({ stats }: { stats: { vendido: number | null; ven
           opcionesEstados={ESTADOS}
           ajustes={{ columnas, preferencias: prefs, anchoRef: anchoTablaRef }}
           kanbanDisponible
-          pantallaCompleta={estado.modo === 'lista' ? pantalla : undefined}
+          pantallaCompleta={estado.modo === 'lista' ? { completa, alternar } : undefined}
           total={listado.total}
           estadoTotal={estadoDelTotal({
             total: listado.total, cargando: listado.cargandoInicial, recargando: listado.recargando, error: listado.error,
@@ -371,7 +372,7 @@ export function PedidosDeVenta({ stats }: { stats: { vendido: number | null; ven
             });
           }}
           onAccion={(p, resultado, origen, destino) => {
-            // Cada acción que devuelve la regla necesita su manejador (reglaSoltarPedido también da 'facturar').
+            // cada acción de la regla necesita su manejador (reglaSoltarPedido también da 'facturar').
             if (resultado.accion === 'cancelar') setCancelando({ pedido: p, origen, destino });
           }}
           color="indigo"
@@ -408,7 +409,7 @@ export function PedidosDeVenta({ stats }: { stats: { vendido: number | null; ven
 
 - `id`, `titulo` y `celda(fila)` son obligatorios. `ancho`, `anchoMin` y `anchoMax` en px, `alinear`, `ordenable` (`true` ordena por el id; un texto es el campo de orden del servidor), `valorOrden` (modo cliente), `titleCelda` y `ocultaPorDefecto` (las columnas de poco uso salen ocultas y se muestran con «Ajustar tabla»).
 - `clave: true` va en la columna del número del documento (nunca se oculta). `fija: 'izquierda' | 'derecha'` la deja pegada al lado.
-- `flexible: true` va en UNA sola columna, Cliente o Proveedor: toma el espacio que sobra. A 1024 px con el menú abierto las columnas clave tienen que caber sin correr la tabla; si no caben, baja primero el ancho por defecto de esta columna (hasta 120). Con el asa no pasa de su `anchoMax`; si la pantalla quiere poder ensancharla en monitores anchos, que le dé un `anchoMax` mayor.
+- `flexible: true` va en UNA sola columna, Cliente o Proveedor: toma el espacio que sobra. A 1024 px con el menú abierto las columnas clave tienen que caber sin correr la tabla; si no caben, baja primero el ancho por defecto de esta columna (hasta 120). Con el asa no pasa de su `anchoMax` (640 por defecto); si la pantalla quiere poder ensancharla en monitores anchos, que le dé un `anchoMax` mayor.
 - `celda` y `claseFila` solo dependen de la fila y de lo que esté en las dependencias del `useMemo` de `columnas` (o de la identidad de `claseFila`), porque el cuerpo de la tabla está memoizado.
 
 ##### Filas y tonos (`TABLE`)
@@ -416,7 +417,7 @@ export function PedidosDeVenta({ stats }: { stats: { vendido: number | null; ven
 - `claseFila` solo da tonos OPACOS de `TABLE`: `filaAlerta`, `filaAviso`, `filaInfo` o `filaApagada`. NUNCA un tinte translúcido (`bg-red-50/40`): las columnas fijas heredan el fondo de la fila (`bg-inherit`) y un `/NN` deja ver lo que pasa debajo. Los tintes translúcidos de las pantallas viejas (`bg-purple-50/30`…) se cambian por el token opaco más parecido.
 - `onFila(fila)` abre la fila con un clic o con Enter (no si el clic cae en un enlace, un botón, una casilla o el menú ⋯). Otras props: `claveFila`, `grupoFila` y `tituloGrupo` (separadores «Atrasados · 3»), `seleccion`, `onSeleccion` y `seleccionable` (casillas), `vacio` y `pie`.
 - Estados: cargando (esqueleto, nunca ceros), recargando (filas atenuadas), error con «Reintentar» (sin filas viejas) y sin filas (`vacio`). `aviso` (el `avisoOrden`) es un aviso ámbar sobre la tabla que no tapa las filas.
-- La tarjeta que encierra la barra y la tabla la pone `usePantallaCompleta()`: `pantalla.claseTarjeta` (`TABLE.tarjeta`, o `TABLE.tarjetaCompleta` en «Pantalla completa»), `pantalla.capa` (`TABLE.capaCompleta`), `pantalla.refTarjeta` y `pantalla.salir()`.
+- La tarjeta que encierra la barra y la tabla la pone `usePantallaCompleta()`, desestructurado: `claseTarjeta` (`TABLE.tarjeta`, o `TABLE.tarjetaCompleta` en «Pantalla completa»), `capa` (`TABLE.capaCompleta`), `refTarjeta` y `salir()`; a la barra se le pasa `{ completa, alternar }`. NUNCA pases el objeto entero a `ref={…}` ni lo leas junto al ref: react-hooks/refs marca «Cannot access refs during render».
 - Tablas de detalle dentro de un documento: `modo="simple"`, sin estado, paginación, orden ni selección; no recuerda nada salvo que le pases `preferencias`.
 
 ```tsx
@@ -444,7 +445,7 @@ export function LineasDelPedido({ lineas }: { lineas: Linea[] }) {
 - Pestañas `{ id, etiqueta, conteo, alerta? }`: la activa es `estado.vista`. El número va en `Contador` (`conteo: null` mientras carga, nunca 0; `estadoConteos` en `'error'` pinta «—»). Sin emojis.
 - Búsqueda y filtro de estados (`opcionesEstados`: un arreglo o una función de la vista) con etiquetas legibles, nunca el código crudo; el filtro muestra, marcados, los estados que queden filtrados aunque la pestaña no los tenga, para poder quitarlos. `filtros` es un espacio para filtros propios de la pantalla.
 - «Ajustar tabla» (solo en Lista y solo con `ajustes`), `ConmutadorVista` (solo con `kanbanDisponible`), «Pantalla completa» (solo con `pantallaCompleta`; en Kanban no se pasa: es de la tabla) y «N resultados» (con `total` va siempre `estadoTotal`, de `estadoDelTotal`).
-- Al pasar a Kanban, sal de la pantalla completa (`pantalla.salir()`, el efecto del ejemplo): el conmutador sigue visible dentro de la tarjeta a pantalla completa y, sin la salida, el tablero queda tapado.
+- al pasar a Kanban, sal de la pantalla completa (`salir()` de usePantallaCompleta, el efecto del ejemplo): el conmutador sigue visible dentro de la tarjeta a pantalla completa y, sin la salida, el tablero queda tapado.
 - Todo despacha al estado único; al cambiar de pestaña, `accionPestana` quita los estados filtrados que la pestaña nueva no tiene.
 
 ### Tablero Kanban: `TableroKanban`
@@ -456,7 +457,7 @@ Un solo tablero para toda la app (Hub de Ventas, listas, Compras, Entregas, Lead
 - **Regla de soltar** `(item, origen, destino) => ResultadoSoltar`: `'ninguno'`, `'bloqueado'` (con su motivo), `'cambio'` (mueve la tarjeta, llama `onCambio` y, si falla, la devuelve y avisa) o `'accion'` (se la pasa a `onAccion`: la pantalla abre su ventana y, al terminar, llama `tablero.recargar([origen, destino])`). Sin `regla` o con `soloLectura`, el tablero es solo para ver.
 - **Arrastre** con pointer events (con 6 px o más; menos es un clic que llama `onAbrir`). Con el teclado y en el celular, el menú ⋯ trae «Abrir», «Mover a …» por columna (las bloqueadas, deshabilitadas con su motivo) y las `accionesTarjeta(item)` de la pantalla.
 - **Cancelar o rechazar** pide el motivo con `ModalMotivo` (nunca `prompt`): se confirma con 5 caracteres o más, y si falla el error queda en la ventana sin borrar lo escrito.
-- **Tarjeta** (`TarjetaKanban`): `tarjetaDe(item)` devuelve `{ numero, tipo, titulo, subtitulo, monto, estado, chips, tiempo, atrasada, accionPrincipal }`; el estado con `estadoDeTarjeta(tipo, estado)` (`lib/kanban-ventas.js`) y `accionPrincipal` con `href: null` es solo texto. Para una tarjeta propia, `renderTarjeta`.
+- **Tarjeta** (`TarjetaKanban`): `tarjetaDe(item)` devuelve `{ numero, tipo, titulo, subtitulo, monto, estado, chips, tiempo, atrasada, accionPrincipal }`; el `estado` es `{ label, clases }` (clases de Tailwind) o `{ label, colores }` (hex) de la librería de estados del tipo; en Ventas (SC, COT, PVEN), `estadoDeTarjeta(tipo, estado)` de `lib/kanban-ventas.js`, que no acepta otros tipos; y `accionPrincipal` con `href: null` es solo texto. Para una tarjeta propia, `renderTarjeta`.
 - El tablero ocupa todo el ancho del contenido, SIN una tarjeta que lo encierre; los contadores de columna son `Contador`.
 
 ### Botón de vista, menú de fila y motivo
@@ -570,7 +571,7 @@ Toda pestaña Análisis es `PanelAnalisisPerezoso` de `@/components/analisis`; l
 
 ## Fuente de verdad — colores por módulo
 
-| Módulo | Acento (`AccentColor`) | Nav pill activo (`ACCENTS[acento].navActive`) | `MODULE_COLORS` (legado, sin uso) |
+| Módulo | Acento (`AccentColor`) | `ACCENTS[acento].navActive` (si la pantalla usa el acento) | `MODULE_COLORS` (legado, sin uso) |
 |--------|------------------------|-----------------------------------------------|-----------------------------------|
 | Ventas | indigo | bg-indigo-600 text-white | indigo + amber |
 | Compras | purple | bg-purple-600 text-white | blue + cyan |
@@ -578,4 +579,4 @@ Toda pestaña Análisis es `PanelAnalisisPerezoso` de `@/components/analisis`; l
 | CRM | purple | bg-purple-600 text-white | violet + purple |
 | Finanzas | blue | bg-blue-600 text-white | emerald + green |
 
-El acento de un Hub es el de `analisis-tab-standard.md`, sección 1. El ícono de una `TarjetaKpi` toma el color de su id en `CATALOGO_KPI`; el acento no lo pisa. `cyan`, `violet` y `green` no son un `AccentColor`.
+El acento de un Hub es el de `analisis-tab-standard.md`, sección 1. El ícono de una `TarjetaKpi` toma el color de su id en `CATALOGO_KPI`; el acento no lo pisa. `cyan`, `violet` y `green` no son un `AccentColor`. El color actual del SubNav de cada pantalla no cambia por esta tabla.

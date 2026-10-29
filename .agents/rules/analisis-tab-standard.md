@@ -4,7 +4,7 @@ trigger: always_on
 
 # Estándar Canónico: Pestaña Análisis en Nebulae ERP
 
-Toda pestaña Análisis de un Hub (Ventas, Compras, Inventario, CRM y Finanzas › Resumen) DEBE ser un `PanelAnalisisPerezoso` importado de `@/components/analisis`. Es la misma pestaña en todo el sistema: el selector de período, de 3 a 5 indicadores con su variación contra el período anterior, una línea en el tiempo, una dona, los movimientos recientes, un ranking, un gráfico de barras y, al final, el asistente «En construcción». Entre módulos solo cambian los datos que manda su endpoint y el color del módulo, no la estructura.
+Toda pestaña Análisis de un Hub (Ventas, Compras, Inventario, CRM y Finanzas › Resumen) DEBE ser un `PanelAnalisisPerezoso` importado de `@/components/analisis`. Es la misma pestaña en todo el sistema: el selector de período, de 3 a 5 indicadores con su variación contra el período anterior, una línea en el tiempo, una dona, los movimientos recientes, un ranking, un gráfico de barras y, al final, el asistente «En construcción». Entre módulos solo cambian los datos que manda su endpoint y el acento del Hub, no la estructura.
 
 La pantalla no arma nada de esto a mano: ni tarjetas de KPI propias, ni SVG o `<canvas>` propios, ni listas de ranking, ni un chat de IA propio.
 
@@ -179,7 +179,7 @@ GET /<módulo>/analisis?periodo=30d&top=5[&desde=AAAA-MM-DD&hasta=AAAA-MM-DD][&f
 
 ### Colores
 
-- La serie principal usa el color del módulo (`colorDeAcento(acento)`, el -600 del `AccentColor`); la del período anterior, `COLOR_ANTERIOR` (gris).
+- La serie principal usa el acento del Hub (`colorDeAcento(acento)`, el -600 del `AccentColor`); la del período anterior, `COLOR_ANTERIOR` (gris).
 - Las series de línea y de barras salen de `PALETA_SERIES` (contraste de 3:1 o más). La dona usa `PALETA`, cuyos colores no llegan a 3:1; se acepta porque la leyenda nombra cada segmento con texto.
 - Una serie `'_otros'` sale en gris (`GRIS_OTROS`, 1,48:1). Úsala solo si la leyenda o la tabla dicen «Otros».
 - El verde y el rojo se usan SOLO para subir y bajar, y siempre con flecha y texto, no solo con color.

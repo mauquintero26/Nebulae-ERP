@@ -8,11 +8,11 @@ import { saleConEsc } from '@/lib/tabla';
 /**
  * «Pantalla completa» de la tabla estándar (Bloque 4, T4D r1, punto 4), para no repetir el estado en cada pantalla:
  *
- *    const pantalla = usePantallaCompleta();
+ *    const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
  *    …
- *    {pantalla.capa}
- *    <section ref={pantalla.refTarjeta} className={pantalla.claseTarjeta}>
- *      <BarraTabla … pantallaCompleta={pantalla} />
+ *    {capa}
+ *    <section ref={refTarjeta} className={claseTarjeta}>
+ *      <BarraTabla … pantallaCompleta={{ completa, alternar }} />
  *      <TablaEstandar … />
  *    </section>
  *
@@ -26,6 +26,8 @@ import { saleConEsc } from '@/lib/tabla';
  *    [role=alertdialog] o [aria-modal=true] fuera de la tarjeta, o uno de esos abierto). Se escucha en window, en la
  *    fase de burbuja: los demás lo atienden antes.
  *  - refTarjeta: para saber si un diálogo está fuera de la tarjeta.
+ * Se usa DESESTRUCTURADO: con el objeto entero en ref={…}, react-hooks/refs marca «Cannot access refs during render»
+ * en cada lectura de pantalla.capa o pantalla.claseTarjeta (revisión de T5D r1).
  * No atrapa el foco (no lo pide el ruling).
  */
 
