@@ -418,38 +418,46 @@ def _alertas_atrasados(app_client, admin_token):
     return resp.json()["data"]["atrasados"]
 
 
+def _movimiento(modelo):
+    """El tiempo de la regla de atraso de hoy: coalesce(updated_at, created_at), en expresiones y, desde T6A r1 (M6),
+    tambien en contar_atrasados."""
+    return func.coalesce(modelo.updated_at, modelo.created_at)
+
+
 def _atrasados_de_alertas_resumen_c2c9f9f(db, dias, ahora):
-    """La cuenta 'atrasados' de alertas_resumen tal como estaba antes de T6A (c2c9f9f: sus cinco consultas, solo
-    updated_at y el '<' estricto), congelada aqui. T6A la reemplazo por la suma de contar_atrasados (C5)."""
+    """La cuenta 'atrasados' de alertas_resumen tal como estaba antes de T6A (c2c9f9f: sus cinco consultas y el '<'
+    estricto), congelada aqui. T6A la reemplazo por la suma de contar_atrasados (C5). Lo unico que se le cambia es el
+    tiempo, que pasa de updated_at a la regla de hoy (_movimiento; T6A r1, M6), para que la comparacion mida solo las
+    diferencias de logica."""
     cr, sq, so = CustomerRequest, SalesQuotation, SaleOrder
     no_resolucion = ESTADOS_NO_RESOLUCION_DE_ALERTAS
 
     def limite(tipo):
         return ahora - timedelta(days=dias[tipo])
 
-    return (db.query(cr).filter(cr.estado.in_(no_resolucion), cr.updated_at < limite("SC"),
+    return (db.query(cr).filter(cr.estado.in_(no_resolucion), _movimiento(cr) < limite("SC"),
                                 _sc_sin_documentos_activos_de_c2c9f9f()).count()
-            + db.query(sq).filter(sq.estado.in_(no_resolucion), sq.updated_at < limite("COT")).count()
-            + db.query(so).filter(so.estado.in_(no_resolucion), so.updated_at < limite("VEN")).count()
+            + db.query(sq).filter(sq.estado.in_(no_resolucion), _movimiento(sq) < limite("COT")).count()
+            + db.query(so).filter(so.estado.in_(no_resolucion), _movimiento(so) < limite("VEN")).count()
             + db.query(cr).filter(cr.estado == "CONFIRMADA", cr.gate1_confirmed_at.isnot(None),
-                                  cr.updated_at < limite("SC"),
+                                  _movimiento(cr) < limite("SC"),
                                   ~db.query(sq).filter(sq.sc_id == cr.id, sq.estado != "RECHAZADA").exists()).count()
             + db.query(sq).filter(sq.estado == "CONFIRMADA", sq.gate2_confirmed_at.isnot(None),
-                                  sq.updated_at < limite("COT"),
+                                  _movimiento(sq) < limite("COT"),
                                   ~db.query(so).filter(so.cot_id == sq.id, so.estado != "CANCELADO").exists()).count())
 
 
 def _solo_cuenta_alertas(db, dias, ahora):
     """Las SC que la cuenta de antes de T6A contaba y contar_atrasados no (las dos diferencias permitidas): (a) las de
     Soporte Tecnico (R8) y (b) D16, una SC CONFIRMADA sin COT activa pero con un pedido vigente (por sc_id o por el
-    cot_id de una de sus COT)."""
+    cot_id de una de sus COT). Con el mismo tiempo que _atrasados_de_alertas_resumen_c2c9f9f."""
     cr = CustomerRequest
     limite = ahora - timedelta(days=dias["SC"])
     es_soporte = or_(func.coalesce(cr.tipo_solicitud, "") == "Soporte Tecnico", cr.estado == "N/A_SOPORTE")
-    sc_atrasada = and_(cr.estado.in_(ESTADOS_NO_RESOLUCION_DE_ALERTAS), cr.updated_at < limite,
+    sc_atrasada = and_(cr.estado.in_(ESTADOS_NO_RESOLUCION_DE_ALERTAS), _movimiento(cr) < limite,
                        _sc_sin_documentos_activos_de_c2c9f9f())
     sin_cot_activa = ~exists().where(SalesQuotation.sc_id == cr.id, SalesQuotation.estado != "RECHAZADA")
-    sc_confirmada = and_(cr.estado == "CONFIRMADA", cr.gate1_confirmed_at.isnot(None), cr.updated_at < limite,
+    sc_confirmada = and_(cr.estado == "CONFIRMADA", cr.gate1_confirmed_at.isnot(None), _movimiento(cr) < limite,
                          sin_cot_activa)
     soporte = db.scalar(select(func.count(cr.id)).where(es_soporte, or_(sc_atrasada, sc_confirmada)))
     d16 = db.scalar(select(func.count(cr.id)).where(~es_soporte, sc_confirmada,
@@ -523,16 +531,53 @@ def test_contar_atrasados_frontera_estricta(db):
                                                            "cot_confirmadas_sin_accion": 0, "ven": 1}
 
 
+def test_contar_atrasados_usa_coalesce_como_expresiones(db):
+    """T6A r1 (M6): contar_atrasados mira coalesce(updated_at, created_at), la misma regla que expresiones: una fila
+    con updated_at NULL y un created_at viejo cuenta en las cinco cuentas y su rango es ATRASADO; con un created_at
+    reciente no cuenta."""
+    from app.core import resolucion_ventas as rv
+    ahora = _ahora()
+    antes = rv.contar_atrasados(db, DIAS, ahora)
+    f = _Fabrica(db, ahora)
+    viejos = [("SC", f.sc("BORRADOR", _dias(9))),
+              ("SC", f.sc("CONFIRMADA", _dias(9), gate1_confirmed_at=ahora - _dias(9))),
+              ("COT", f.cot("ENVIADA", _dias(9))),
+              ("COT", f.cot("CONFIRMADA", _dias(9), gate2_confirmed_at=ahora - _dias(9))),
+              ("VEN", f.pven("EN_PROCESO", _dias(9)))]
+    recientes = [("SC", f.sc("BORRADOR")), ("COT", f.cot("ENVIADA")), ("VEN", f.pven("EN_PROCESO"))]
+    for _, doc in viejos + recientes:
+        tabla = type(doc).__table__
+        db.execute(tabla.update().where(tabla.c.id == doc.id).values(updated_at=None))   # sin onupdate: va el NULL
+        db.commit()
+        db.refresh(doc)
+        assert doc.updated_at is None
+    despues = rv.contar_atrasados(db, DIAS, ahora)
+    assert {k: despues[k] - antes[k] for k in despues} == {"sc": 1, "sc_confirmadas_sin_accion": 1, "cot": 1,
+                                                           "cot_confirmadas_sin_accion": 1, "ven": 1}
+    modelos = {"SC": CustomerRequest, "COT": SalesQuotation, "VEN": SaleOrder}
+    for tipo, doc in viejos + recientes:
+        modelo = modelos[tipo]
+        rango = db.scalar(select(rv.expresiones(tipo, modelo, DIAS, ahora)["rango"]).where(modelo.id == doc.id))
+        esperado = rv.RANGO["ATRASADO"] if (tipo, doc) in viejos else rv.RANGO["NO_RESUELTO"]
+        assert rango == esperado, (tipo, doc.estado, rango)
+
+
 # ─── leer_dias_alerta (RP71) ─────────────────────────────────────────────────────────────────────────────────────────
 
 def test_leer_dias_alerta_una_consulta_y_lo_mismo_que_get_alert_days(db, contador_sql):
+    """Una consulta y los valores escritos con guardar_config, comparados con numeros fijos (T6A r1, M9: antes la
+    igualdad se comparaba consigo misma, porque _get_alert_days delega en leer_dias_alerta)."""
     from app.api.v1.erp_ventas import _get_alert_days
+    from app.core.admin_config import guardar_config
     from app.core.resolucion_ventas import leer_dias_alerta
+    guardar_config(db, {"alerta_sc_dias": "3", "alerta_cot_dias": " 6 ", "alerta_ven_dias": "x"})
+    db.commit()
     with contador_sql.ventana() as v:
         dias = leer_dias_alerta(db)
     assert v.consultas == 1
-    assert dias == {"SC": _get_alert_days(db, "alerta_sc_dias"), "COT": _get_alert_days(db, "alerta_cot_dias"),
-                    "VEN": _get_alert_days(db, "alerta_ven_dias")}
+    assert dias == {"SC": 3, "COT": 6, "VEN": 2}
+    assert (_get_alert_days(db, "alerta_sc_dias"), _get_alert_days(db, "alerta_cot_dias"),
+            _get_alert_days(db, "alerta_ven_dias")) == (3, 6, 2)
 
 
 def test_leer_dias_alerta_interpreta_como_get_alert_days(db, monkeypatch):

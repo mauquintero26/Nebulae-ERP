@@ -262,3 +262,47 @@ def test_get_alert_days_delega_en_leer_dias_alerta(db, contador_sql):
         assert valor == leer_dias_alerta(db)[tipo] == {"SC": 3, "COT": 5, "VEN": 7}[tipo]
         assert v.consultas == 1 and "ANY(" in v.sentencias[0], v.sentencias
     assert _get_alert_days(db) == 3   # por defecto, la de las solicitudes (get_alertas)
+    # r1 (M11): una clave que no es de dias de alerta es un error de programacion: ValueError con un mensaje claro.
+    for clave in ("alerta_soporte_alta_horas", "", "alerta_sc"):
+        try:
+            _get_alert_days(db, clave)
+        except ValueError as e:
+            assert str(e) == (f"_get_alert_days: «{clave}» no es una clave de días de alerta (alerta_sc_dias, "
+                              f"alerta_cot_dias o alerta_ven_dias)."), str(e)
+        else:
+            raise AssertionError(f"_get_alert_days({clave!r}) no lanzó ValueError")
+
+
+# ─── r1 (M6): la misma regla de atraso en el flujo, la pastilla y el Hub ─────────────────────────────────────────────
+
+def test_una_fila_sin_updated_at_cuenta_igual_en_el_flujo_la_pastilla_y_el_hub(app_client, db, admin_token):
+    """contar_atrasados usa coalesce(updated_at, created_at), como expresiones: una fila con updated_at NULL y un
+    created_at viejo cuenta igual en semaforo.atrasados de /ventas/flujo, en alertas_resumen y en semaforo=atrasados
+    del Hub (RP13: los botones del semaforo filtran exactamente lo que cuenta el flujo)."""
+    _dias_de_alerta(db)
+    ahora = _ahora()
+    antes, alertas_antes = _flujo(app_client, admin_token), _alertas(app_client, admin_token)
+    f = _Fabrica(db, ahora)
+    docs = [f.sc("BORRADOR", _dias(9)),
+            f.sc("CONFIRMADA", _dias(9), gate1_confirmed_at=ahora - _dias(9)),
+            f.cot("ENVIADA", _dias(9)),
+            f.cot("CONFIRMADA", _dias(9), gate2_confirmed_at=ahora - _dias(9)),
+            f.pven("EN_PROCESO", _dias(9))]
+    for doc in docs:
+        tabla = type(doc).__table__
+        db.execute(tabla.update().where(tabla.c.id == doc.id).values(updated_at=None))   # sin onupdate: va el NULL
+        db.commit()
+        db.refresh(doc)
+        assert doc.updated_at is None and doc.created_at is not None
+    despues, alertas_despues = _flujo(app_client, admin_token), _alertas(app_client, admin_token)
+    assert _delta(_atrasados(despues), _atrasados(antes)) == {"SC": 2, "COT": 2, "PVEN": 1, "ENTREGADO": None,
+                                                              "FACTURADO": None}
+    assert despues["semaforo"]["atrasados"] - antes["semaforo"]["atrasados"] == 5
+    assert alertas_despues["atrasados"] - alertas_antes["atrasados"] == 5
+    assert alertas_despues["atrasados"] == despues["semaforo"]["atrasados"]
+    hub = app_client.get("/api/v1/ventas/hub/documentos", params={"q": f.sufijo, "semaforo": "atrasados",
+                                                                   "con_conteos": 1}, headers=_auth(admin_token))
+    assert hub.status_code == 200, hub.text
+    cuerpo = hub.json()
+    assert cuerpo["total"] == 5 and cuerpo["conteos"]["grupos"]["ATRASADO"] == 5
+    assert {x["dias_sin_mov"] for x in cuerpo["data"]} == {9}

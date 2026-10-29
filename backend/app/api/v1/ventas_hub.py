@@ -9,14 +9,18 @@ ALL paginada en el servidor (el Hub ya no guarda arreglos en memoria, C4). Las S
   Parametros (R5 y R6; los de negocio se validan a mano y responden 422 en español, R21):
   - vista: todos (por defecto), no_resueltos, sc, cot, ven o acciones_tomadas (las pestañas). no_resueltos = atrasado o
     sin resolver; acciones_tomadas = accion tomada o cerrado (su composicion de siempre, C7).
-  - semaforo: atrasados o no_resueltos (los botones del aviso, con las cuentas de GET /flujo).
+  - semaforo: atrasados o no_resueltos (los botones del aviso, con las cuentas de GET /flujo); todos = sin filtro, como
+    vista=todos (r1, M1: el frontend lo manda al quitar el filtro o con «Ver todo»).
   - paso: SC, COT, PVEN, ENTREGADO o FACTURADO (el diagrama; cond_paso: cada documento cae en un solo paso).
-  - estados: pares TIPO:ESTADO en CSV ('SC:ASIGNADA,VEN:EN_PROCESO'; PVEN es alias de VEN), 20 como maximo.
+  - estados: pares TIPO:ESTADO en CSV ('SC:ASIGNADA,VEN:EN_PROCESO'; PVEN es alias de VEN), 20 como maximo; cada
+    estado debe ser uno de los de su tipo (r1, M10: ETIQUETAS_ESTADO para SC y COT; los 18 de estados_pedido para VEN).
   - columna: No Resuelto, En Gestión, Acción Tomada o Cancelado (el tablero, expr_columna_hub; C7).
   - q: busca en el numero, el cliente, el asesor, los numeros de origen y los productos (solo q, sin alias search; RP8).
+    q o un estado con un caracter de control (NUL incluido) -> 422 (r1, M13: core/listados).
   - orden: atencion (por defecto), sin_movimiento, reciente, o tipo, numero, cliente, asesor, creado, estado o monto, con
     '-' para descendente (leer_orden; otro valor, '-atencion', '-reciente' o '-sin_movimiento' -> 422).
-  - limit (25; 0 a 200; 0 = solo el total), offset y con_conteos.
+  - limit (25; 0 a 200; 0 = solo el total), offset (0 a MAX_OFFSET de core/listados; fuera de rango, el 400 legible
+    del manejador global, r1 M14) y con_conteos.
   Responde {status, total, data[, conteos]} (core/listados.respuesta). Con con_conteos:
   - conteos.pestanas = {todos, no_resueltos, sc, cot, ven, acciones_tomadas}, con q, estados y paso pero SIN vista,
     semaforo ni columna (R6);
@@ -47,8 +51,8 @@ from app.core import resolucion_ventas as rv
 from app.core.busqueda import productos_ilike
 from app.core.estados_pedido import VISTA_DE_GRUPO, estados_de_vista
 from app.core.fechas import ahora_utc
-from app.core.listados import (contar_por_vista, expresiones_tiempo, leer_lista, leer_orden, orden_por_lista, paginar,
-                               respuesta, texto_busqueda)
+from app.core.listados import (MAX_OFFSET, contar_por_vista, expresiones_tiempo, leer_lista, leer_orden,
+                               orden_por_lista, paginar, respuesta, texto_busqueda)
 from app.core.seguimiento_confirmacion import estados_para_alertas
 from app.core.textos_actividad import ETIQUETAS_ESTADO
 from app.db.database import get_db
@@ -59,6 +63,7 @@ router = APIRouter()
 
 VISTAS_HUB = ("todos", "no_resueltos", "sc", "cot", "ven", "acciones_tomadas")
 SEMAFOROS_HUB = ("atrasados", "no_resueltos")
+SIN_FILTRO = "todos"   # r1 (M1): semaforo=todos es «sin filtro», como vista=todos
 LIMIT_HUB = 25
 
 _TIPOS = (("SC", CustomerRequest), ("COT", SalesQuotation), ("VEN", SaleOrder))
@@ -78,6 +83,13 @@ _FLUJO_DE_ESTADOS = MappingProxyType({
     "VEN": tuple(e for vista in VISTA_DE_GRUPO.values() for e in estados_de_vista(vista)),
 })
 _SALTO_DE_TIPO = 100   # orden_estado = 100 × indice del tipo + la posicion del estado en el flujo de su tipo
+# r1 (M10): los estados que existen en cada tipo, para validar `estados`: son los mismos del flujo de arriba (los de
+# ETIQUETAS_ESTADO en SC y COT; los 18 de estados_pedido en VEN, los heredados de la tienda y de fase4 incluidos).
+_ESTADOS_DEL_TIPO = _FLUJO_DE_ESTADOS
+
+# r1 (M7): los caracteres que str.strip() quita (los de str.isspace(); ninguno pasa de U+3000), para que el asesor del
+# UNION se limpie igual que _texto_o_none de erp_ventas, que es el que se muestra en la fila.
+_ESPACIOS = "".join(chr(c) for c in range(0x3001) if chr(c).isspace())
 
 
 # ─── Validacion de los parametros (R21: a mano, con 422 en español) ──────────────────────────────────────────────────
@@ -98,7 +110,8 @@ def _opcion(valor, opciones, mensaje: str):
 
 def _estados_por_tipo(estados) -> dict | None:
     """{'SC': [...], 'COT': [...], 'VEN': [...]} de los pares TIPO:ESTADO de `estados` (leer_lista), o None si no hay
-    ninguno. Un par sin ':' o con un tipo que no es SC, COT, VEN o PVEN -> 422."""
+    ninguno. 422 con: mas de 20 o un caracter de control (leer_lista), un par sin ':' o con un tipo que no es SC, COT,
+    VEN o PVEN, o un estado que no existe en su tipo (_ESTADOS_DEL_TIPO, r1 M10)."""
     try:
         pares = leer_lista(estados)
     except ValueError as e:
@@ -112,6 +125,8 @@ def _estados_por_tipo(estados) -> dict | None:
         if not separador or tipo not in por_tipo or not estado:
             raise HTTPException(status_code=422, detail=(
                 f"El estado «{par}» no es válido: usa TIPO:ESTADO, con TIPO SC, COT o VEN (por ejemplo SC:ASIGNADA)."))
+        if estado not in _ESTADOS_DEL_TIPO[tipo]:
+            raise HTTPException(status_code=422, detail=f"El estado «{estado}» no existe en {tipo}.")
         if estado not in por_tipo[tipo]:
             por_tipo[tipo].append(estado)
     return por_tipo
@@ -120,8 +135,9 @@ def _estados_por_tipo(estados) -> dict | None:
 # ─── La consulta: un SELECT por tipo, unidos con UNION ALL ───────────────────────────────────────────────────────────
 
 def _texto(columna):
-    """El texto sin espacios en los bordes, o NULL si queda vacio (la regla de _texto_o_none de erp_ventas)."""
-    return func.nullif(func.btrim(columna), "")
+    """El texto sin espacios en los bordes, o NULL si queda vacio: la regla de _texto_o_none de erp_ventas, con los
+    mismos caracteres de str.strip() (_ESPACIOS: espacios, tabuladores, saltos de linea y los de Unicode; r1 M7)."""
+    return func.nullif(func.btrim(columna, literal(_ESPACIOS)), "")
 
 
 def _rama(tipo, modelo, dias, ahora, like, estados_del_tipo, cond_del_paso):
@@ -293,18 +309,24 @@ def hub_documentos(
     q: Optional[str] = None,
     orden: Optional[str] = None,
     limit: int = Query(LIMIT_HUB, ge=0, le=200),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
     con_conteos: bool = False,
     user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db),
 ):
     """La tabla y el tablero del Hub de Ventas (R6): ver el docstring del modulo."""
     vista = _opcion(vista, VISTAS_HUB, "La vista «{}» no existe en el Hub de Ventas.") or "todos"
-    semaforo = _opcion(semaforo, SEMAFOROS_HUB, "El filtro del semáforo «{}» no existe: usa atrasados o no_resueltos.")
+    semaforo = _opcion(semaforo, SEMAFOROS_HUB + (SIN_FILTRO,),
+                       "El filtro del semáforo «{}» no existe: usa atrasados o no_resueltos.")
+    if semaforo == SIN_FILTRO:
+        semaforo = None
     paso = _opcion(paso, rv.PASOS_FLUJO_VENTAS, "El paso «{}» no existe en el flujo de Ventas.")
     columna = _opcion(columna, rv.COLUMNAS_HUB, "La columna «{}» no existe en el tablero del Hub.")
     por_tipo = _estados_por_tipo(estados)
-    texto = texto_busqueda(q, None)
+    try:
+        texto = texto_busqueda(q, None)
+    except ValueError as e:   # r1 (M13): un caracter de control no llega al SQL
+        raise HTTPException(status_code=422, detail=str(e))
 
     u = _documentos(rv.leer_dias_alerta(db), ahora_utc(), f"%{texto}%" if texto else None, por_tipo, paso)
     orden_sql = leer_orden(orden, _ordenes(u), "atencion", id_lista=u.c.id) + [u.c.orden_tipo.asc()]

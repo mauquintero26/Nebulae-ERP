@@ -10,24 +10,32 @@ parámetros de lista (no hay core/filtros_lista.py). Cada endpoint de lista (T6,
   Python (la lista de compras, el catálogo de dos fuentes) validan con validar_orden: la misma regla y el mismo 422.
 - Toda orden termina en `id_lista desc`, el id de la FILA que se lista (r1): así la paginación es estable aunque se
   ordene por una columna de una tabla unida (el nombre del cliente de un pedido).
-- limit = Query(<el de hoy>, ge=0, le=200); limit=0 devuelve solo el total (paginar).
+- limit = Query(<el de hoy>, ge=0, le=200); limit=0 devuelve solo el total (paginar). offset = Query(0, ge=0,
+  le=MAX_OFFSET) (B4 T6A r1, M14): sin techo, un offset enorme llegaba al SQL y PostgreSQL respondia «bigint out of
+  range» (un 500); con el, el manejador global responde el 400 legible, que R21 acepta para la paginacion.
 - con_conteos se calcula con contar_por_vista, con la búsqueda y los filtros extra pero SIN vista, estados, semáforo,
   paso ni columna.
 Sin los parámetros nuevos cada lista responde lo mismo que hoy; el único agregado es el desempate final por el id de la fila, que fija el orden entre empates.
 
 Errores (RP9 y su ajuste): leer_orden y validar_orden lanzan HTTPException(422, 'No se puede ordenar por «x».');
 leer_lista (más de MAX_ESTADOS) y orden_tiempo (un valor que no vale) lanzan ValueError, que el endpoint convierte en
-422 con str(e). Los parámetros de negocio se validan a mano (R21): el manejador global convierte los
-RequestValidationError en un 400 técnico en inglés.
+422 con str(e). B4 T6A r1 (M13): texto_busqueda y leer_lista lanzan además ValueError(MENSAJE_CONTROL) si el texto
+trae un carácter de control (NUL incluido: psycopg2 no adapta un NUL y la petición daba 500). Los parámetros de negocio
+se validan a mano (R21): el manejador global convierte los RequestValidationError en un 400 técnico en inglés.
 
 Las funciones que solo arman la consulta (filtrar_por_estados, orden_tiempo) sirven con un Query de la sesión o con un
 select(); las que la ejecutan (contar_por_vista, paginar) reciben el Query de la sesión, como las listas de hoy (un
 Select o un UNION se envuelve en db.query(<subconsulta>)).
 """
+import unicodedata
+
 from fastapi import HTTPException
 from sqlalchemy import case, func
 
 MAX_ESTADOS = 20
+# B4 T6A r1 (M14): el techo del offset de las listas, para Query(0, ge=0, le=MAX_OFFSET).
+MAX_OFFSET = 1_000_000
+MENSAJE_CONTROL = "La búsqueda no puede llevar caracteres de control."
 # Órdenes que cada endpoint define a su manera y que no tienen sentido al revés: '-atencion', '-sin_movimiento' y
 # '-reciente' dan 422. leer_orden no sabe qué significan (RP9): solo las usa para ese chequeo.
 ORDENES_ESPECIALES = ("atencion", "sin_movimiento", "reciente")
@@ -37,13 +45,22 @@ def _no_se_puede_ordenar(orden) -> str:
     return f"No se puede ordenar por «{orden}»."
 
 
+def _sin_caracteres_de_control(texto: str) -> str:
+    """`texto` tal cual, o ValueError(MENSAJE_CONTROL) si trae un carácter de control (categoría Unicode Cc: NUL, los
+    demás de C0 y C1, y DEL). Se aplica al texto ya recortado: los tabuladores y saltos de línea de los bordes se quitan
+    antes, como siempre (T6A r1, M13)."""
+    if any(unicodedata.category(ch) == "Cc" for ch in texto):
+        raise ValueError(MENSAJE_CONTROL)
+    return texto
+
+
 def leer_lista(valor, maximo: int = MAX_ESTADOS) -> list[str]:
     """'A, B,,A' -> ['A', 'B']: separa por coma, quita los espacios de los bordes, los vacíos y los repetidos (conserva
     el orden en que llegaron). None o '' -> []. También acepta una lista de textos (cada uno puede traer comas; los None
     y los vacíos se descartan).
 
-    Con más de `maximo` valores distintos lanza ValueError('Puedes filtrar por 20 estados como máximo.'); el endpoint
-    responde 422 con str(e)."""
+    Con más de `maximo` valores distintos lanza ValueError('Puedes filtrar por 20 estados como máximo.'), y con un
+    carácter de control en un valor, ValueError(MENSAJE_CONTROL) (T6A r1); el endpoint responde 422 con str(e)."""
     if valor is None:
         return []
     if isinstance(valor, str):
@@ -52,7 +69,7 @@ def leer_lista(valor, maximo: int = MAX_ESTADOS) -> list[str]:
         partes = [p for v in valor if v is not None for p in str(v).split(",")]
     lista: list[str] = []
     for parte in partes:
-        parte = parte.strip()
+        parte = _sin_caracteres_de_control(parte.strip())
         if parte and parte not in lista:
             lista.append(parte)
     if len(lista) > maximo:
@@ -63,10 +80,11 @@ def leer_lista(valor, maximo: int = MAX_ESTADOS) -> list[str]:
 def texto_busqueda(q, search) -> str | None:
     """La búsqueda de una lista (RP8): gana `q` (la de la tabla estándar) y `search` sigue como alias para los
     selectores, la tienda, el Dashboard, el Asistente y las pruebas. Se quitan los espacios de los bordes; un texto
-    vacío (o solo espacios) da None. Un `q` en blanco no tapa un `search` con texto."""
+    vacío (o solo espacios) da None. Un `q` en blanco no tapa un `search` con texto. Si el texto que se usa trae un
+    carácter de control, lanza ValueError(MENSAJE_CONTROL) (T6A r1, M13); el endpoint responde 422 con str(e)."""
     for texto in (q, search):
         if texto is not None and texto.strip():
-            return texto.strip()
+            return _sin_caracteres_de_control(texto.strip())
     return None
 
 

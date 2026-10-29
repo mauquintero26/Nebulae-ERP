@@ -4923,7 +4923,11 @@ _TIPO_DE_CLAVE_ALERTA = {"alerta_sc_dias": "SC", "alerta_cot_dias": "COT", "aler
 def _get_alert_days(db: Session, key: str = "alerta_sc_dias") -> int:
     """Los dias de alerta de `key` (alerta_sc_dias, alerta_cot_dias o alerta_ven_dias). B4 T6A (RP71): delega en
     resolucion_ventas.leer_dias_alerta, que lee las tres claves en UNA consulta con la lectura de siempre (int(valor), y
-    2 si falta o no es un entero; sin topes)."""
+    2 si falta o no es un entero; sin topes). T6A r1 (M11): otra clave (por ejemplo una de las horas de Soporte, que lee
+    _get_alert_hours_soporte) es un error de programacion: ValueError con un mensaje claro, no un KeyError."""
+    if key not in _TIPO_DE_CLAVE_ALERTA:
+        raise ValueError(f"_get_alert_days: «{key}» no es una clave de días de alerta (alerta_sc_dias, "
+                         f"alerta_cot_dias o alerta_ven_dias).")
     return leer_dias_alerta(db)[_TIPO_DE_CLAVE_ALERTA[key]]
 
 

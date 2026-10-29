@@ -23,8 +23,9 @@ La tabla de clasificar (RP2), en este orden:
 coalesce(updated_at, created_at) < ahora − dias), como el '<' de alertas_resumen: exactamente dias×24 h no es atrasado.
 
 contar_atrasados es la COPIA de las cinco consultas de alertas_resumen (erp_ventas.py, tal como la dejan B2 y B3; T6A la
-mueve aqui). Lo que cambia, y nada mas: las SC de Soporte quedan fuera (R8) y sc_confirmadas_sin_accion usa la misma
-subconsulta de «SC sin documentos activos» que sc (D16), para que la fila y el contador nunca se contradigan.
+mueve aqui). Lo que cambia, y nada mas: las SC de Soporte quedan fuera (R8), sc_confirmadas_sin_accion usa la misma
+subconsulta de «SC sin documentos activos» que sc (D16) y el tiempo es coalesce(updated_at, created_at), el de
+expresiones (T6A r1, M6), para que la fila y el contador nunca se contradigan.
 
 Exporta: TIPO_SOPORTE, ESTADO_SOPORTE, TIPOS, ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, ESTADOS_CERRADOS, RANGO,
 PASOS_FLUJO_VENTAS, COLUMNAS_HUB, DIAS_ALERTA_POR_DEFECTO, ESTADOS_CON_CAMBIOS_VIGENTES; sin_soporte, cot_activa_de_sc,
@@ -249,8 +250,7 @@ def expresiones(tipo, modelo, dias, ahora=None) -> dict:
     `dias` es el dict de leer_dias_alerta (o el numero de dias del tipo); `ahora` es UTC sin zona (por defecto,
     ahora_utc()).
 
-    Coinciden fila a fila mientras updated_at no sea NULL: contar_atrasados copia alertas_resumen (solo updated_at) y
-    expresiones usa coalesce(updated_at, created_at)."""
+    Coincide fila a fila con contar_atrasados, que usa el mismo coalesce(updated_at, created_at) desde T6A r1 (M6)."""
     tipo = _tipo(tipo)
     ahora = ahora if ahora is not None else ahora_utc()
     movimiento = func.coalesce(modelo.updated_at, modelo.created_at)
@@ -349,43 +349,47 @@ def contar_atrasados(db: Session, dias, ahora=None) -> dict:
     alertas_resumen, COPIADAS (T6A las mueve y alertas_resumen suma estas cinco). `dias` = {'SC', 'COT', 'VEN'}
     (leer_dias_alerta); `ahora` UTC sin zona (por defecto, ahora_utc(), como su datetime.utcnow()).
 
-    Igual que alertas_resumen: los 8 ESTADOS_NO_RESOLUCION, solo updated_at y el '<' estricto; una SC con documentos
-    activos no cuenta (la alerta la lleva su COT o su pedido); una SC CONFIRMADA con gate1 y una COT CONFIRMADA con gate2
-    y sin pedido vigente cuentan con los mismos dias. Diferencias permitidas: sin las SC de Soporte (R8), y
+    Igual que alertas_resumen: los 8 ESTADOS_NO_RESOLUCION y el '<' estricto; una SC con documentos activos no cuenta
+    (la alerta la lleva su COT o su pedido); una SC CONFIRMADA con gate1 y una COT CONFIRMADA con gate2 y sin pedido
+    vigente cuentan con los mismos dias. Diferencias permitidas: sin las SC de Soporte (R8), y
     sc_confirmadas_sin_accion con sc_sin_documentos_activos (D16) en vez de «sin COT activa».
 
-    Coinciden fila a fila mientras updated_at no sea NULL: contar_atrasados copia alertas_resumen (solo updated_at) y
-    expresiones usa coalesce(updated_at, created_at)."""
+    El tiempo es coalesce(updated_at, created_at), el mismo de expresiones (B4 T6A r1, M6): antes miraba solo updated_at,
+    y una fila con updated_at NULL contaba en el Hub (semaforo=atrasados) pero no en la pastilla ni en el flujo. Asi
+    coincide fila a fila con el rango ATRASADO de expresiones."""
     ahora = ahora if ahora is not None else ahora_utc()
 
     def limite(tipo):
         return ahora - timedelta(days=_dias_del_tipo(dias, tipo))
 
+    def movimiento(modelo):
+        return func.coalesce(modelo.updated_at, modelo.created_at)
+
     sc_atrasadas = db.query(CustomerRequest).filter(
         CustomerRequest.estado.in_(ESTADOS_NO_RESOLUCION),
-        CustomerRequest.updated_at < limite("SC"),
+        movimiento(CustomerRequest) < limite("SC"),
         sc_sin_documentos_activos(),
         sin_soporte(CustomerRequest),
     ).count()
     cot_atrasadas = db.query(SalesQuotation).filter(
         SalesQuotation.estado.in_(ESTADOS_NO_RESOLUCION),
-        SalesQuotation.updated_at < limite("COT"),
+        movimiento(SalesQuotation) < limite("COT"),
     ).count()
     ven_atrasados = db.query(SaleOrder).filter(
         SaleOrder.estado.in_(ESTADOS_NO_RESOLUCION),
-        SaleOrder.updated_at < limite("VEN"),
+        movimiento(SaleOrder) < limite("VEN"),
     ).count()
     sc_confirmadas_sin_accion = db.query(CustomerRequest).filter(
         CustomerRequest.estado == "CONFIRMADA",
         CustomerRequest.gate1_confirmed_at.isnot(None),
-        CustomerRequest.updated_at < limite("SC"),
+        movimiento(CustomerRequest) < limite("SC"),
         sc_sin_documentos_activos(),   # D16: la misma subconsulta que la fila (expresiones) y que sc_atrasadas
         sin_soporte(CustomerRequest),
     ).count()
     cot_confirmadas_sin_accion = db.query(SalesQuotation).filter(
         SalesQuotation.estado == "CONFIRMADA",
         SalesQuotation.gate2_confirmed_at.isnot(None),
-        SalesQuotation.updated_at < limite("COT"),
+        movimiento(SalesQuotation) < limite("COT"),
         ~pven_vigente_de_cot(),   # H46: un pedido CANCELADO no cuenta como «el asesor ya actuo»
     ).count()
     return {"sc": sc_atrasadas, "sc_confirmadas_sin_accion": sc_confirmadas_sin_accion, "cot": cot_atrasadas,

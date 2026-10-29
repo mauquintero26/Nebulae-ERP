@@ -92,6 +92,36 @@ def test_texto_busqueda_gana_q_y_un_vacio_da_none():
     assert texto_busqueda("  ", "sofa") == "sofa"
 
 
+# ─── B4 T6A r1: caracteres de control (M13) y tope del offset (M14) ─────────────────────────────────────────────
+
+CONTROL = "La búsqueda no puede llevar caracteres de control."
+
+
+def test_caracteres_de_control_lanzan_value_error():
+    """Un caracter de control (NUL incluido) en la busqueda o en los estados no llega al SQL (psycopg2 no adapta un NUL
+    y daba 500): ValueError con el texto exacto, que el endpoint convierte en 422 con str(e). Se mira despues de
+    recortar: los espacios de los bordes, tabuladores y saltos de linea incluidos, se siguen quitando."""
+    from app.core.listados import leer_lista, texto_busqueda
+    for malo in ("\x00", "a\x00b", "abc\x07", "\x1bxyz", "a\tb", "x\x7f", "y\x85z", " \x00 "):
+        assert str(_lanza(ValueError, texto_busqueda, malo, None)) == CONTROL, repr(malo)
+        assert str(_lanza(ValueError, texto_busqueda, None, malo)) == CONTROL, repr(malo)
+        assert str(_lanza(ValueError, leer_lista, f"A,{malo}")) == CONTROL, repr(malo)
+        assert str(_lanza(ValueError, leer_lista, ["A", malo])) == CONTROL, repr(malo)
+    # Los bordes en blanco se recortan como antes, y el texto normal (con tildes) pasa.
+    assert texto_busqueda("\tabc\r\n", None) == "abc"
+    assert texto_busqueda(None, "\n Colchón ") == "Colchón"
+    assert leer_lista(" A\t,\nB \r\n") == ["A", "B"]
+    # q gana: un search que no se usa no se mira.
+    assert texto_busqueda("abc", "\x00") == "abc"
+
+
+def test_max_offset():
+    """El techo del offset de las listas: Query(0, ge=0, le=MAX_OFFSET) responde 400 legible por encima (PostgreSQL da
+    «bigint out of range» con un offset enorme, que salia como 500)."""
+    from app.core.listados import MAX_OFFSET
+    assert MAX_OFFSET == 1_000_000
+
+
 # ─── filtrar_por_estados (KANBAN-base 7) ─────────────────────────────────────────────────────────────────────
 
 def test_filtrar_por_estados_uno_es_igualdad_y_varios_in():

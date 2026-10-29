@@ -254,6 +254,10 @@ def test_filtros_vista_semaforo_estados_q_y_paso(app_client, db, admin_token):
     assert claves(vista="cot") == [k["cot"]]
     assert claves(vista="ven") == [k["pven_atrasado"], k["pven_entregado"]]
     assert claves(vista="todos") == _orden_de_atencion(d)
+    # r1 (M1): semaforo=todos es «sin filtro», como vista=todos (el frontend lo manda al quitar el filtro o con «Ver
+    # todo», y la sesion lo puede restaurar).
+    assert claves(semaforo="todos") == _orden_de_atencion(d)
+    assert claves(semaforo="todos", vista="no_resueltos") == claves(vista="no_resueltos")
     assert claves(estados="VEN:ENTREGADO") == [k["pven_entregado"]]
     assert claves(estados="SC:ASIGNADA, VEN:EN_PROCESO") == [k["pven_atrasado"], k["sc_atrasada"]]
     assert claves(estados="PVEN:EN_PROCESO") == [k["pven_atrasado"]]   # PVEN es alias de VEN
@@ -433,18 +437,85 @@ def test_orden_por_columna(app_client, db, admin_token):
 
 
 def test_errores_en_espanol(app_client, db, admin_token):
-    """R5, R9 y R21: los parametros de negocio se validan a mano y responden 422 con el texto en español."""
+    """R5, RP9 y R21: los parametros de negocio se validan a mano y responden 422 con el texto exacto en español."""
     assert _error(app_client, admin_token, orden="hackeo") == "No se puede ordenar por «hackeo»."
     for orden in ("-atencion", "-reciente", "-sin_movimiento", "monto; drop table"):
         assert _error(app_client, admin_token, orden=orden) == f"No se puede ordenar por «{orden}».", orden
-    assert "vista" in _error(app_client, admin_token, vista="analisis").lower()
-    assert "semáforo" in _error(app_client, admin_token, semaforo="acciones_tomadas").lower()
-    assert "paso" in _error(app_client, admin_token, paso="LISTA").lower()
-    assert "columna" in _error(app_client, admin_token, columna="Cerrado").lower()
+    assert _error(app_client, admin_token, vista="analisis") == "La vista «analisis» no existe en el Hub de Ventas."
+    assert _error(app_client, admin_token, semaforo="acciones_tomadas") == (
+        "El filtro del semáforo «acciones_tomadas» no existe: usa atrasados o no_resueltos.")
+    assert _error(app_client, admin_token, paso="LISTA") == "El paso «LISTA» no existe en el flujo de Ventas."
+    assert _error(app_client, admin_token, columna="Cerrado") == "La columna «Cerrado» no existe en el tablero del Hub."
     for malo in ("ASIGNADA", "XX:ASIGNADA", "SC:", ":ASIGNADA"):
-        assert "TIPO:ESTADO" in _error(app_client, admin_token, estados=malo), malo
+        assert _error(app_client, admin_token, estados=malo) == (
+            f"El estado «{malo}» no es válido: usa TIPO:ESTADO, con TIPO SC, COT o VEN (por ejemplo SC:ASIGNADA)."), malo
     muchos = ",".join(f"SC:E{i}" for i in range(21))
     assert _error(app_client, admin_token, estados=muchos) == "Puedes filtrar por 20 estados como máximo."
+    # r1 (M13): un caracter de control en q o en los estados no llega al SQL (era un 500).
+    control = "La búsqueda no puede llevar caracteres de control."
+    assert _error(app_client, admin_token, q="\x00") == control
+    assert _error(app_client, admin_token, q="tor\x00nillo") == control
+    assert _error(app_client, admin_token, estados="SC:\x00") == control
+    # r1 (M10): cada estado se valida contra los de su tipo (ETIQUETAS_ESTADO; los del pedido, heredados incluidos).
+    for par, texto in (("SC:FOO", "El estado «FOO» no existe en SC."),
+                       ("COT:ASIGNADA", "El estado «ASIGNADA» no existe en COT."),
+                       ("VEN:ENTREGAD", "El estado «ENTREGAD» no existe en VEN."),
+                       ("PVEN:ENTREGAD", "El estado «ENTREGAD» no existe en VEN."),
+                       ("SC:ASIGNADA,VEN:FOO", "El estado «FOO» no existe en VEN.")):
+        assert _error(app_client, admin_token, estados=par) == texto, par
+
+
+def test_estados_conocidos_de_cada_tipo(app_client, admin_token):
+    """r1 (M10): los estados de la SC y la COT son los de ETIQUETAS_ESTADO; los del pedido, los 18 de estados_pedido
+    (los heredados de la tienda y de fase4 incluidos), que son tambien los de ETIQUETAS_ESTADO['VEN']."""
+    from app.api.v1 import ventas_hub
+    from app.core.textos_actividad import ETIQUETAS_ESTADO
+    assert set(ventas_hub._ESTADOS_DEL_TIPO["VEN"]) == set(ETIQUETAS_ESTADO["VEN"])
+    assert len(ventas_hub._ESTADOS_DEL_TIPO["VEN"]) == 18
+    for tipo in ("SC", "COT"):
+        assert set(ventas_hub._ESTADOS_DEL_TIPO[tipo]) == set(ETIQUETAS_ESTADO[tipo]), tipo
+    pares = ",".join(["SC:COTIZADA", "SC:EN_ESPERA_CONFIRMACION", "COT:VENCIDA", "VEN:PAGADO", "VEN:PENDIENTE_ANTICIPO",
+                      "VEN:PARCIALMENTE_ENTREGADO", "PVEN:DEVUELTO_TOTAL"])
+    _hub(app_client, admin_token, estados=pares, limit=0)
+
+
+def test_paginacion_fuera_de_rango_da_400_legible(app_client, admin_token):
+    """r1 (M12, M14): un limit o un offset fuera de rango dan el 400 legible del manejador global ({status: 'error',
+    message, errores}), nunca un 500. offset=10**20 llegaba al SQL y PostgreSQL respondia «bigint out of range»."""
+    from app.core.listados import MAX_OFFSET
+    from main import MENSAJE_DATOS_INVALIDOS
+    for params in ({"limit": 201}, {"limit": -1}, {"offset": -1}, {"offset": 10 ** 20}, {"offset": MAX_OFFSET + 1}):
+        resp = app_client.get(RUTA, params=params, headers=_auth(admin_token))
+        assert resp.status_code == 400, (params, resp.status_code, resp.text)
+        cuerpo = resp.json()
+        assert cuerpo["status"] == "error" and cuerpo["message"] == MENSAJE_DATOS_INVALIDOS, (params, cuerpo)
+        assert isinstance(cuerpo["errores"], list) and cuerpo["errores"], (params, cuerpo)
+    # En el borde todavia responde (una pagina vacia, con el total de siempre).
+    r = _hub(app_client, admin_token, offset=MAX_OFFSET, limit=1)
+    assert r["data"] == [] and r["total"] == _hub(app_client, admin_token, limit=0)["total"]
+
+
+def test_el_asesor_se_recorta_igual_en_sql_y_en_python(app_client, db, admin_token):
+    """r1 (M7): el asesor del UNION (busqueda y orden) se limpia como _texto_o_none, que muestra la fila: str.strip()
+    quita espacios, tabuladores, saltos de linea y los demas espacios de Unicode."""
+    from sqlalchemy import literal, select
+    from app.api.v1.erp_ventas import _texto_o_none
+    from app.api.v1.ventas_hub import _ESPACIOS, _texto
+    assert set(_ESPACIOS) == {chr(c) for c in range(0x110000) if chr(c).isspace()}
+    muestras = ["\tAna\n", " Ana ", "\r\n", " Beto ", "Ana\x0b", "\x1cAna\x1f", "", "   ", "Ana Beto", "　",
+                " Ana ", "\x85Ana"]
+    for muestra in muestras:
+        assert db.scalar(select(_texto(literal(muestra)))) == _texto_o_none(muestra), repr(muestra)
+    # De punta a punta: un cotizador hecho solo de un tabulador y un salto de linea no cuenta (H4): el asesor del pedido
+    # es el de su SC, en la fila y en la busqueda.
+    f = _Fabrica(db, _ahora())
+    marca = uuid.uuid4().hex[:10]
+    sc = f.sc("ASIGNADA", advisor_name=f"Beto{marca}")
+    cot = f.cot("BORRADOR", sc=sc, cotizador="\t\n")
+    pven = f.pven("EN_PROCESO", sc=sc, cot=cot)
+    filas = {(x["tipo"], x["id"]): x for x in _hub(app_client, admin_token, q=f"Beto{marca}")["data"]}
+    assert set(filas) == {_clave(sc), _clave(pven)}
+    assert filas[_clave(pven)]["advisor_name"] == f"Beto{marca}"
 
 
 # ─── Rutas, roles y rendimiento ──────────────────────────────────────────────────────────────────────────────────────
@@ -512,6 +583,9 @@ def test_no_resueltos_de_la_pestana_igual_al_semaforo_del_flujo(app_client, db, 
     flujo = app_client.get(RUTA_FLUJO, headers=_auth(admin_token))
     assert flujo.status_code == 200, flujo.text
     semaforo = flujo.json()["data"]["semaforo"]
+    # r1 (M3): el semaforo del flujo trae, por lo menos, los del escenario (2 atrasados y 3 sin resolver).
+    assert semaforo["atrasados"] >= 2
+    assert semaforo["no_resueltos"] >= 3
     hub = _hub(app_client, admin_token, con_conteos=1, limit=0)
     assert hub["conteos"]["pestanas"]["no_resueltos"] == semaforo["no_resueltos"]
     assert _hub(app_client, admin_token, semaforo="no_resueltos", limit=0)["total"] == semaforo["no_resueltos"]
