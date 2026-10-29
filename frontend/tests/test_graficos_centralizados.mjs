@@ -183,8 +183,11 @@ console.log('--- T5C: chart.js solo entra en el chunk de la pestaña (PanelAnali
   //  - lo demás (import … from, import '…', export … from, require('…')): estático, va en el mismo chunk.
   const ts = createRequire(import.meta.url)('typescript');
   const todosTipo = (elementos) => elementos.length > 0 && elementos.every((e) => e.isTypeOnly);
+  // Revisión de T5C r1 (M5): cada archivo se lee con el ScriptKind de su extensión (un .ts con <T>(x) => … no es JSX).
+  const kindDe = (nombre) => (/\.tsx$/.test(nombre) ? ts.ScriptKind.TSX : /\.ts$/.test(nombre) ? ts.ScriptKind.TS
+    : /\.jsx$/.test(nombre) ? ts.ScriptKind.JSX : /\.[cm]?js$/.test(nombre) ? ts.ScriptKind.JS : ts.ScriptKind.TSX);
   const estaticos = (texto, nombre = 'muestra.tsx') => {
-    const arbol = ts.createSourceFile(nombre, texto, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const arbol = ts.createSourceFile(nombre, texto, ts.ScriptTarget.Latest, true, kindDe(nombre));
     const valor = [];
     const otros = [];
     const visitar = (n) => {
@@ -196,6 +199,9 @@ console.log('--- T5C: chart.js solo entra en el chunk de la pestaña (PanelAnali
       } else if (ts.isExportDeclaration(n) && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)) {
         const tipo = n.isTypeOnly || Boolean(n.exportClause && ts.isNamedExports(n.exportClause) && todosTipo(n.exportClause.elements));
         (tipo ? otros : valor).push(n.moduleSpecifier.text);
+      } else if (ts.isImportEqualsDeclaration(n) && ts.isExternalModuleReference(n.moduleReference)
+        && ts.isStringLiteral(n.moduleReference.expression)) {
+        (n.isTypeOnly ? otros : valor).push(n.moduleReference.expression.text);
       } else if (ts.isCallExpression(n) && n.arguments.length === 1 && ts.isStringLiteralLike(n.arguments[0])) {
         if (n.expression.kind === ts.SyntaxKind.ImportKeyword) otros.push(n.arguments[0].text);
         else if (ts.isIdentifier(n.expression) && n.expression.text === 'require') valor.push(n.arguments[0].text);
@@ -203,8 +209,11 @@ console.log('--- T5C: chart.js solo entra en el chunk de la pestaña (PanelAnali
       ts.forEachChild(n, visitar);
     };
     visitar(arbol);
-    const nombrados = ts.preProcessFile(texto, true, true).importedFiles.map((f) => f.fileName);
-    assert.deepEqual([...nombrados].sort(), [...valor, ...otros].sort(), `${nombre}: el árbol clasifica todo lo que nombra preProcessFile`);
+    // El árbol manda. preProcessFile solo controla que el árbol no se salte nada de lo que él nombra (tiene huecos
+    // conocidos: export * as, una regex con comilla; por eso no se exige que nombre todo lo que ve el árbol).
+    const vistosArbol = new Set([...valor, ...otros]);
+    const sinVer = ts.preProcessFile(texto, true, true).importedFiles.map((f) => f.fileName).filter((f) => !vistosArbol.has(f));
+    assert.deepEqual(sinVer, [], `${nombre}: el árbol ve todo lo que nombra preProcessFile`);
     return valor;
   };
   // Autoprueba: dos imports en una línea (el punto ciego del patrón de antes), require, tipos, import() y comentarios.
@@ -215,6 +224,10 @@ console.log('--- T5C: chart.js solo entra en el chunk de la pestaña (PanelAnali
     "import { type T } from './T';", "export { type U } from './U';", "const r = require('./R');",
     "// import z from './comentado';", "const s = \"import w from './cadena'\";",
   ].join('\n')), ['./A', './GraficoLinea', './C', '@/lib/e', './g.css', './H', 'chart.js', './R']);
+  // Revisión de T5C r1 (M5): los bordes donde preProcessFile no nombra todo (export * as, una regex con comilla antes de
+  // un import(), import x = require) y un .ts con una flecha genérica, que leído como TSX perdía los nodos siguientes.
+  assert.deepEqual(estaticos("export * as ns from './NS';\nimport q = require('./Q');", 'a.ts'), ['./NS', './Q']);
+  assert.deepEqual(estaticos("const f = <T>(x: T) => x;\nconst re = /'/;\nconst P = import('./P2');\nimport { Z } from './Z';", 'b.ts'), ['./Z']);
   const GRAFICOS = /^(react-chartjs-2|chart\.js)(\/|$)/;
   /** Los archivos de src que alcanza `entrada` por imports estáticos, y los imports de los gráficos que encuentra. */
   const alcanzables = (entrada) => {

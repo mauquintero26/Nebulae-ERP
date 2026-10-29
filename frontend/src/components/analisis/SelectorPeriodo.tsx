@@ -171,6 +171,11 @@ export type PropsEsqueletoBarra = {
   focos?: number;
   /** Si va el campo Producto. */
   producto?: boolean;
+  /**
+   * Los controles extra de la pantalla (controlesExtra de PanelAnalisis, por ejemplo la bodega de Inventario), pintados
+   * inertes con su propio tamaño para que la barra no cambie de alto al llegar los datos (revisión de T5C r1).
+   */
+  extra?: React.ReactNode;
 };
 
 /**
@@ -180,7 +185,7 @@ export type PropsEsqueletoBarra = {
  * campo Producto (192 x 34 px), el botón Actualizar (103 x 30 px) y la línea de 'Actualizado hace …'. Va con aria-hidden: el anuncio de carga es el role="status"
  * de EsqueletoAnalisis. Lo usan la rama !listo de PanelAnalisis y el loading de PanelAnalisisPerezoso.
  */
-export function EsqueletoBarra({ focos = 0, producto = false }: PropsEsqueletoBarra) {
+export function EsqueletoBarra({ focos = 0, producto = false, extra }: PropsEsqueletoBarra) {
   const n = Math.max(0, Math.min(8, Math.trunc(Number(focos)) || 0));
   return (
     <div aria-hidden="true" className="flex min-w-0 flex-col gap-4">
@@ -202,6 +207,7 @@ export function EsqueletoBarra({ focos = 0, producto = false }: PropsEsqueletoBa
         <div className="min-w-0">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             {producto && <span className={`block h-[34px] w-48 max-w-full rounded-xl ${GRIS}`} />}
+            {extra != null && <div inert className="contents">{extra}</div>}
             <span className={`block h-[30px] w-[103px] rounded-xl ${GRIS}`} />
           </div>
           <span className="mt-1.5 h-4 block" />

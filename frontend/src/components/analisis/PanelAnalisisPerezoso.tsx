@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useContext, useMemo } from 'react';
+import type { ReactNode } from 'react';
 import dynamic from 'next/dynamic';
 import { GRILLA_ANALISIS } from '@/lib/analisis';
 import { EsqueletoAnalisis } from './EsqueletoAnalisis';
@@ -18,7 +19,7 @@ import type { PropsPanelAnalisis } from './PanelAnalisis';
  * gráficos directo: test_graficos_centralizados.mjs lo vigila.
  */
 
-type Forma = { focos: number; producto: boolean };
+type Forma = { focos: number; producto: boolean; extra?: ReactNode };
 
 const FormaEsqueleto = createContext<Forma>({ focos: 0, producto: false });
 
@@ -27,7 +28,7 @@ function Cargando() {
   return (
     <div className={GRILLA_ANALISIS.raiz}>
       <div className={GRILLA_ANALISIS.filas}>
-        <EsqueletoBarra focos={forma.focos} producto={forma.producto} />
+        <EsqueletoBarra focos={forma.focos} producto={forma.producto} extra={forma.extra} />
         <EsqueletoAnalisis barra={false} />
       </div>
     </div>
@@ -41,8 +42,8 @@ const Diferido = dynamic<PropsPanelAnalisis>(
 
 export function PanelAnalisisPerezoso(props: PropsPanelAnalisis) {
   const forma = useMemo(
-    () => ({ focos: props.focos?.length ?? 0, producto: Boolean(props.busquedaProducto) }),
-    [props.focos, props.busquedaProducto],
+    () => ({ focos: props.focos?.length ?? 0, producto: Boolean(props.busquedaProducto), extra: props.controlesExtra }),
+    [props.focos, props.busquedaProducto, props.controlesExtra],
   );
   return (
     <FormaEsqueleto.Provider value={forma}>

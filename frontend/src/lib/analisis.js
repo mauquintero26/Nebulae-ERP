@@ -1266,14 +1266,15 @@ export function aceptaReintento(aviso, reintentando) {
 }
 
 /**
- * Si sigue en camino el reintento que pidió el usuario (r1, M11): se marca al tocar Reintentar y se limpia cuando la
- * carga termina; otra carga (otro período u otro foco) no lo marca. «Reintentando…» = aviso && este valor.
- * @param {boolean} pedido
- * @param {{cargando: boolean}} estado
- * @returns {boolean}
+ * Si sigue en camino el reintento que pidió el usuario (r1, M11): al tocar Reintentar se guarda la firma de la consulta
+ * (`pedido`); se limpia cuando la carga termina, y también si otra consulta la reemplaza (otro período, otro foco u
+ * otros params de la pantalla; revisión de r1). «Reintentando…» = aviso && este valor !== null.
+ * @param {string | null} pedido
+ * @param {{cargando: boolean, consulta: string}} estado
+ * @returns {string | null}
  */
-export function siguienteReintento(pedido, { cargando }) {
-  return Boolean(pedido) && Boolean(cargando);
+export function siguienteReintento(pedido, { cargando, consulta }) {
+  return pedido !== null && pedido !== undefined && Boolean(cargando) && pedido === consulta ? pedido : null;
 }
 
 /**

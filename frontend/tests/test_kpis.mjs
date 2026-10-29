@@ -389,6 +389,9 @@ console.log('--- TEST 12 (T5C r1): TarjetaKpi con 4,5:1 y la foto «Hoy» (M6, M
   assert.ok(fuente.includes('{ valor: variacion.actual, anterior: variacion.anterior, mejor: mejorComoTexto(mejorSiSube), es_foto: variacion.es_foto }'),
     'la tarjeta le pasa es_foto a infoVariacion');
   assert.ok(fuente.includes('{!variacion?.es_foto && ('), 'una foto no dice contra qué se compara');
+  // Revisión de r1 (M4, X9 y X11): la foto sin el ícono Minus, y el lector oye el `lector` de infoVariacion.
+  assert.ok(fuente.includes('variacion?.es_foto ? null : <Minus size={12} />'), 'una foto no lleva el guion');
+  assert.ok(fuente.includes('<span className="sr-only">{info.lector}</span>'), 'el lector oye info.lector');
   const foto = infoVariacion({ valor: 1200000, anterior: null, mejor: mejorComoTexto(false), es_foto: true }, { frente: frenteDeComparado() });
   assert.deepEqual(foto, { texto: 'Hoy', tono: 'neutro', flecha: null, lector: 'Cifra de hoy, sin comparación' });
 }

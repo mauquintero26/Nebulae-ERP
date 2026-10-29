@@ -1031,6 +1031,7 @@ console.log('--- TEST 20 (T5C): la lógica del panel (preferencias, foco, produc
     new Error('La respuesta del análisis no trae datos.'), generico, errorDeRespuesta(422, { detail: '   ' }), errorDeRespuesta(500, { detail: 'boom' })]) {
     assert.deepEqual(errorAnalisis(e), { tipo: 'carga', texto: MENSAJE_ERROR_ANALISIS, reintentar: true }, e.message);
   }
+  assert.equal(errorAnalisis(errorDeRespuesta(422, { detail: [] })).tipo, 'carga', 'un detail [] no es un texto');
   assert.deepEqual(errorAnalisis(errorDeRespuesta(422, { detail: 'El ranking solo puede mostrar 5, 10 o 25.' })),
     { tipo: 'validacion', texto: 'El ranking solo puede mostrar 5, 10 o 25.', reintentar: false }, 'el 422 con detail trae el texto del servidor');
   assert.deepEqual(errorAnalisis(Object.assign(new Error('El ranking solo puede mostrar 5, 10 o 25.'), { status: 422, detail: null })).tipo, 'carga',
@@ -1172,10 +1173,13 @@ console.log('--- TEST 22 (T5C r1): las decisiones del panel que antes solo cuida
   assert.equal(aceptaReintento(carga, true), false, 'un doble toque no duplica la petición');
   assert.equal(aceptaReintento({ tipo: 'permiso', texto: 'x', reintentar: false }, false), false);
   assert.equal(aceptaReintento(null, false), false);
-  assert.equal(siguienteReintento(true, { cargando: true }), true, 'la carga del reintento sigue en camino');
-  assert.equal(siguienteReintento(true, { cargando: false }), false, 'llegó: se limpia');
-  assert.equal(siguienteReintento(false, { cargando: true }), false, 'otra carga (período, foco) no es un reintento');
-  assert.equal(siguienteReintento(false, { cargando: false }), false);
+  // Revisión de r1 (controlador): el reintento es de UNA consulta (su firma); si otra la reemplaza (otro período, otro
+  // foco, otros params de la pantalla), «Reintentando…» se va aunque haya una carga en camino.
+  assert.equal(siguienteReintento('A', { cargando: true, consulta: 'A' }), 'A', 'la carga del reintento sigue en camino');
+  assert.equal(siguienteReintento('A', { cargando: false, consulta: 'A' }), null, 'llegó: se limpia');
+  assert.equal(siguienteReintento(null, { cargando: true, consulta: 'A' }), null, 'otra carga no es un reintento');
+  assert.equal(siguienteReintento('A', { cargando: true, consulta: 'B' }), null, 'otra consulta reemplazó al reintento');
+  assert.equal(siguienteReintento(null, { cargando: false, consulta: 'A' }), null);
 
   // M10 (s3): el período de los datos solo se muestra (Comparado con…, el borrador de Personalizado) si es el elegido o
   // si no hay aviso ni recarga.
@@ -1184,6 +1188,7 @@ console.log('--- TEST 22 (T5C r1): las decisiones del panel que antes solo cuida
   assert.equal(periodoCoincide(p30, { clave: '7d' }), false);
   assert.equal(periodoCoincide({ clave: 'personalizado', desde: '2026-09-01', hasta: '2026-09-30' }, { clave: 'personalizado', desde: '2026-09-01', hasta: '2026-09-30' }), true);
   assert.equal(periodoCoincide({ clave: 'personalizado', desde: '2026-09-01', hasta: '2026-09-30' }, { clave: 'personalizado', desde: '2026-09-02', hasta: '2026-09-30' }), false);
+  assert.equal(periodoCoincide({ clave: 'personalizado', desde: '2026-09-01', hasta: '2026-09-30' }, { clave: 'personalizado', desde: '2026-09-01', hasta: '2026-09-29' }), false, 'otro hasta');
   assert.equal(periodoCoincide(null, { clave: '30d' }), false);
   assert.equal(periodoCoincide({ comparado: 'vs C30' }, { clave: '30d' }), false, 'sin clave no coincide');
   const datos = { periodo: p30 };
@@ -1260,8 +1265,8 @@ console.log('--- TEST 21 (T5C): el fuente de las siete piezas del panel (sin DOM
   const perezoso = codigo(fuentes['PanelAnalisisPerezoso.tsx']);
   for (const texto of ["import dynamic from 'next/dynamic';", "import type { PropsPanelAnalisis } from './PanelAnalisis';",
     "() => import('./PanelAnalisis').then((m) => m.PanelAnalisis),", '{ ssr: false, loading: () => <Cargando /> },',
-    '<EsqueletoBarra focos={forma.focos} producto={forma.producto} />', '<EsqueletoAnalisis barra={false} />',
-    '<FormaEsqueleto.Provider value={forma}>', 'focos: props.focos?.length ?? 0, producto: Boolean(props.busquedaProducto)']) {
+    '<EsqueletoBarra focos={forma.focos} producto={forma.producto} extra={forma.extra} />', '<EsqueletoAnalisis barra={false} />',
+    '<FormaEsqueleto.Provider value={forma}>', 'focos: props.focos?.length ?? 0, producto: Boolean(props.busquedaProducto), extra: props.controlesExtra']) {
     assert.ok(perezoso.includes(texto), `PanelAnalisisPerezoso: ${texto}`);
   }
   assert.ok(!/^import (?!type\b)[^;]*from '\.\/(PanelAnalisis|Grafico\w+|registro)';/m.test(perezoso), 'PanelAnalisisPerezoso: sin import estático del panel ni de los gráficos');
@@ -1307,7 +1312,9 @@ console.log('--- TEST 21 (T5C): el fuente de las siete piezas del panel (sin DOM
   // r1 (M14): el esqueleto de la barra, con los mismos altos que la barra real (píldoras de 26 px o el select de 34 px,
   // la línea de 'Comparado con…' y la de 'Actualizado…').
   for (const texto of ['export function EsqueletoBarra(', 'h-[26px]', 'h-[34px]', 'h-[30px]', '@xl:hidden', '@xl:flex', 'mt-1.5 h-4',
-    'block h-8 w-40 max-w-full rounded-xl @xl:hidden', '<div className="w-40 min-w-0 max-w-full @xl:hidden">']) {
+    'block h-8 w-40 max-w-full rounded-xl @xl:hidden', '<div className="w-40 min-w-0 max-w-full @xl:hidden">',
+    // Revisión de r1 (M1): los controles extra de la pantalla, inertes, con su propio tamaño (la bodega de Inventario).
+    '{extra != null && <div inert className="contents">{extra}</div>}']) {
     assert.ok(selector.includes(texto), `EsqueletoBarra: ${texto}`);
   }
   assert.equal((selector.match(/max=\{hoy\}/g) ?? []).length, 2, 'SelectorPeriodo: a lo sumo hoy');
@@ -1339,8 +1346,10 @@ console.log('--- TEST 21 (T5C): el fuente de las siete piezas del panel (sin DOM
     "const focoUrlVisto = focoUrlTras(focoUrl, { tipo: 'url', foco: focoInicial });", "setFocoUrl((e) => focoUrlTras(e, { tipo: 'elegir' }));",
     'alCambiarFoco?.(clave);',
     // r1 (M5, M9 y M11): Reintentar.
-    'if (!aceptaReintento(aviso, reintentando)) return;', 'siguienteReintento(reintentoPedido, { cargando: analisis.cargando })',
-    'const reintentando = Boolean(aviso) && pedido;', 'setReintentoPedido(true);',
+    'if (!aceptaReintento(aviso, reintentando)) return;',
+    'siguienteReintento(reintentoPedido, { cargando: analisis.cargando, consulta: firmaConsulta })',
+    'const reintentando = Boolean(aviso) && pedido !== null;', 'setReintentoPedido(firmaConsulta);',
+    'const firmaConsulta = JSON.stringify([endpoint, prefs.periodo, prefs.top, extra]);',
     // r1 (M10): el período de los datos arriba solo si es cierto.
     'const periodoDatos = periodoVisible(datos, { recargando: analisis.recargando, aviso, periodo: prefs.periodo });',
     'comparado={textoComparado(periodoDatos)} periodoDatos={periodoDatos}',
@@ -1349,7 +1358,7 @@ console.log('--- TEST 21 (T5C): el fuente de las siete piezas del panel (sin DOM
     // r1 (M1 y M19): «y N movimientos más» desde @2xl.
     'textoMovimientosMas(datos.movimientos.filas.length)', 'hidden', '@2xl/analisis:block',
     // r1 (M14): el esqueleto con la barra y la fila de focos.
-    '<EsqueletoBarra focos={focos?.length ?? 0} producto={busquedaProducto} />',
+    '<EsqueletoBarra focos={focos?.length ?? 0} producto={busquedaProducto} extra={controlesExtra} />',
     // r1 (M13): el pegamento que solo se ve en el fuente (mutantes R6, R8, R14, R16 y C9 de la ronda).
     'if (focoUrlVisto !== focoUrl) setFocoUrl(focoUrlVisto);', '    return () => window.clearTimeout(id);\n  }, [producto, busquedaProducto]);',
     'if (vistoAhora !== errorVisto) setErrorVisto(vistoAhora);', 'if (pedido !== reintentoPedido) setReintentoPedido(pedido);',

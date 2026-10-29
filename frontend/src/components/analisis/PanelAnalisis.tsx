@@ -195,11 +195,14 @@ export function PanelAnalisis({
 
   const [modoDona, setModoDona] = useState<string | null>(null);
 
+  const extra = parametrosAnalisis(params, { conFoco, foco, conProducto: busquedaProducto, producto: productoAplicado });
+  // La consulta que se ve (revisión de r1): un reintento es de ESTA consulta; si otra la reemplaza, no hay reintento.
+  const firmaConsulta = JSON.stringify([endpoint, prefs.periodo, prefs.top, extra]);
   const analisis = useAnalisis({
     endpoint,
     periodo: prefs.periodo,
     top: prefs.top,
-    extra: parametrosAnalisis(params, { conFoco, foco, conProducto: busquedaProducto, producto: productoAplicado }),
+    extra,
     ambito: `${endpoint}|${foco ?? ''}`,
     esperar: !listo,
   });
@@ -212,10 +215,10 @@ export function PanelAnalisis({
   if (vistoAhora !== errorVisto) setErrorVisto(vistoAhora);
   const aviso = vistoAhora?.aviso ?? null;
   // «Reintentando…» solo mientras está en camino la carga que pidió Reintentar (no otra: un período, un foco).
-  const [reintentoPedido, setReintentoPedido] = useState(false);
-  const pedido = siguienteReintento(reintentoPedido, { cargando: analisis.cargando });
+  const [reintentoPedido, setReintentoPedido] = useState<string | null>(null);
+  const pedido = siguienteReintento(reintentoPedido, { cargando: analisis.cargando, consulta: firmaConsulta });
   if (pedido !== reintentoPedido) setReintentoPedido(pedido);
-  const reintentando = Boolean(aviso) && pedido;
+  const reintentando = Boolean(aviso) && pedido !== null;
 
   // Reintentar tenía el foco al tocarlo: si al terminar el reintento el foco quedó en el body (React quitó el botón),
   // pasa a la región de los datos sin desplazar la página. Un pointerdown o el foco en otro control lo sueltan.
@@ -247,7 +250,7 @@ export function PanelAnalisis({
   const reintentar = (e: React.MouseEvent<HTMLButtonElement>) => {
     if (!aceptaReintento(aviso, reintentando)) return;
     focoPendiente.current = document.activeElement === e.currentTarget;
-    setReintentoPedido(true);
+    setReintentoPedido(firmaConsulta);
     analisis.recargar();
   };
 
@@ -265,7 +268,7 @@ export function PanelAnalisis({
     return (
       <div className={G.raiz}>
         <div className={G.filas}>
-          <EsqueletoBarra focos={focos?.length ?? 0} producto={busquedaProducto} />
+          <EsqueletoBarra focos={focos?.length ?? 0} producto={busquedaProducto} extra={controlesExtra} />
           <EsqueletoAnalisis barra={false} />
           {pie}
           {asistenteFinal}

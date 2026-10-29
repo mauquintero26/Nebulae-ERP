@@ -15,7 +15,8 @@ import type { EstadoKpi } from '@/lib/kpis';
  *    (nunca 0 si no vino: '—'), la variación contra el período anterior con la regla única de RP27 (infoVariacion dentro
  *    de TarjetaKpi: '+12,5 %', '−8 %', 'Nuevo', 'Sin cambio' o '—', con los tonos bien, mal y neutro) y, al lado,
  *    `comparado` (periodo.comparado del servidor, 'vs 5 ago – 3 sept'). La ayuda va en el title de la tarjeta. Una foto
- *    (es_foto) no lleva variación: dice 'Cifra de hoy, sin comparación'.
+ *    (es_foto) lleva la variación con es_foto: la tarjeta dice «Hoy», sin «vs …», y el lector oye 'Cifra de hoy, sin
+ *    comparación' (infoVariacion).
  *  - El ícono y el color: los de CATALOGO_KPI si la clave es un id del catálogo; si no, el ícono por formato y el color
  *    del módulo (`acento`).
  *  - `estado` llega a las tarjetas (FranjaKpis): 'cargando' las pinta como esqueleto (barras grises, nunca ceros; sin
