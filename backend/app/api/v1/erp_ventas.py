@@ -18,11 +18,11 @@ from app.models.erp_documents import (
 from app.models.fase4 import SaleOrderPayment
 from app.models.customers import Customer
 from app.models.sales import SalesOrder as LeadCRM  # el lead del CRM (tabla sales_orders), no el Pedido de Venta
-from app.models.inventory import InventoryLevel, InventoryOperation, InventoryMovement
+from app.models.inventory import InventoryLevel, InventoryOperation, InventoryMovement, Warehouse
 from app.models.fase1b import InventoryOwnerBalance, SaleOrderLineErp, ProcurementAllocation, PurchaseOrderLine
 from app.api.dependencies import (
     require_roles, get_current_user,
-    ROLE_ADMIN, ROLE_ASESOR, ROLE_COMPRAS, ROLE_FINANZAS, ALL_ERP_ROLES, normalize_role
+    ROLE_ADMIN, ROLE_ASESOR, ROLE_COMPRAS, ROLE_BODEGA, ROLE_FINANZAS, ALL_ERP_ROLES, normalize_role
 )
 from app.models.users import User
 from app.core.busqueda import productos_ilike
@@ -45,12 +45,20 @@ from app.core.textos_actividad import (
     etiqueta_estado, ETIQUETAS_ESTADO, PASOS_SC, nombre_de_usuario, autor_de_actividad,
 )
 from app.core.chatter import validar_nota, reinicia_atraso, puede_registrar, CONTACTO_SOLO_ASESOR
-from app.core.estados_pedido import ESTADOS_VEN_DESTINOS, ESTADOS_VEN_SIN_DINERO, destinos_ven_permitidos
+from app.core.estados_pedido import (
+    ESTADOS_VEN_DESTINOS, ESTADOS_VEN_SIN_DINERO, VISTA_DE_GRUPO, destinos_ven_permitidos, estados_de_vista,
+)
 # B4 T6A (R8, C5; RP11, RP12, RP71): la regla unica de atraso de Ventas. erp_ventas ya no tiene sus copias de la marca de
 # cambios del cliente, de «SC sin documentos activos» ni de la lectura de los dias de alerta.
 from app.core.resolucion_ventas import (
     ESTADOS_CON_CAMBIOS_VIGENTES, contar_atrasados, filtro_cambios_cliente_vigentes, leer_dias_alerta,
     sc_sin_documentos_activos,
+)
+# B4 T6B (R5, R8, C8): las tres listas usan la misma regla (resolucion_ventas) y los mismos parametros (listados).
+from app.core import resolucion_ventas as rv
+from app.core.listados import (
+    MAX_OFFSET, contar_por_vista, expresiones_tiempo, filtrar_por_estados, leer_lista, leer_orden, orden_por_lista,
+    paginar, texto_busqueda, respuesta as respuesta_de_lista,
 )
 from app.api.v1.schemas_compras import CancelarSolicitudBody, CotizarSinConfirmacionBody
 from app.api.v1.crm import mover_lead_de_solicitud, reabrir_lead_de_solicitud
@@ -59,9 +67,11 @@ import functools
 import hashlib
 import json
 import logging
+import math
 import re
 import unicodedata
-from app.core.fechas import ZONA_COLOMBIA, a_colombia, hoy_colombia, iso_z, vence_al_final_del_dia
+from types import MappingProxyType
+from app.core.fechas import ZONA_COLOMBIA, a_colombia, ahora_utc, hoy_colombia, iso_z, vence_al_final_del_dia
 
 logger = logging.getLogger(__name__)
 
@@ -1693,6 +1703,237 @@ def _agregar_nota(db: Session, entidad: str, doc, body: dict, user: User) -> dic
     db.commit()
     return {"status": "success", "data": d}
 
+# ─── B4 T6B: las tres listas de Ventas paginadas en el servidor ─────────────────────────────────────────────────────
+# TABLA-listas-ventas puntos 1 a 4, KANBAN-ventas-listas puntos 1 y 2 y el punto 3 de TABLA-inventario (R5, R8, R21; C3,
+# C8, C9, C14, C19; RP3, RP8, RP9, RP11, RP12, RP15, RP19, RP20, RP22, RP89; D29, D34, D37, D46). Las tres listas
+# (GET /solicitudes, /cotizaciones y /pedidos) aceptan, ademas de lo de hoy:
+#   - q (la busqueda de la tabla estandar; search sigue como alias, texto_busqueda: gana q y se recortan los bordes);
+#   - estados (CSV, 20 como maximo, cada uno de los estados conocidos del tipo; 'estado' sigue igual: un valor);
+#   - vista (las pestañas y las tarjetas pulsables), semaforo (atrasados; todos = sin filtro, D46) y orden ('atencion',
+#     'reciente' (por defecto, D29: el mas reciente primero, como hoy), 'sin_movimiento' o un campo con '-');
+#   - con_conteos (las pestañas, con la busqueda y los filtros extra pero SIN vista, estado(s) ni semaforo, R5);
+#   - SC y COT: con_resumen (las tarjetas, sobre TODOS los documentos de la lista: sin busqueda, vista, estado(s) ni
+#     semaforo, y sin Soporte, RP19); los pedidos: saldo (pendiente | pagado) y siempre su resumen de H47 sobre TODO el
+#     filtro (C9).
+# Los de negocio se validan a mano y responden 422 en español (R21); limit y offset con Query (400 legible, D46).
+# Cada fila trae lo de hoy mas tipo, resolucion, dias_sin_mov, dias_creado, seguimiento_estado y cambios_cliente (R8,
+# C14): la resolucion es la de resolucion_ventas.clasificar con la misma hora y los mismos dias que el filtro del
+# semaforo y el orden 'atencion' (rv.expresiones), asi que la fila y el filtro nunca se contradicen. Sin los
+# parametros nuevos cada lista responde lo mismo que hoy: las filas solo agregan esas claves.
+
+_SIN_FILTRO_LISTA = "todos"            # D46: semaforo=todos es «sin filtro», como en el Hub
+SEMAFOROS_LISTAS = ("atrasados",)
+VISTAS_SOLICITUDES = ("activas", "confirmadas", "canceladas", "soporte", "todas", "esperan_cotizacion",
+                      "todas_sin_soporte")
+VISTAS_COTIZACIONES = ("activas", "confirmadas", "rechazadas", "todas")
+VISTAS_PEDIDOS = ("todos", *VISTA_DE_GRUPO.values(), "en_curso")
+SALDOS_PEDIDOS = ("pendiente", "pagado")
+# D46: los estados que existen en cada tipo (ETIQUETAS_ESTADO; los 18 del pedido, los heredados incluidos).
+_ESTADOS_DE_LISTA = MappingProxyType({tipo: tuple(ETIQUETAS_ESTADO[tipo]) for tipo in ("SC", "COT", "VEN")})
+# 'orden=estado' sigue el flujo: SC y COT en el orden de ETIQUETAS_ESTADO; los pedidos, en el de sus pestañas.
+_FLUJO_DE_ESTADOS = MappingProxyType({
+    "SC": _ESTADOS_DE_LISTA["SC"],
+    "COT": _ESTADOS_DE_LISTA["COT"],
+    "VEN": tuple(e for vista in VISTA_DE_GRUPO.values() for e in estados_de_vista(vista)),
+})
+_RANGOS_SIN_RESOLVER = (rv.RANGO["ATRASADO"], rv.RANGO["NO_RESUELTO"])
+_RANGOS_RESUELTOS = (rv.RANGO["ACCION_TOMADA"], rv.RANGO["CERRADO"])
+
+
+def _parametro_de_lista(valor, opciones, mensaje: str) -> Optional[str]:
+    """El parametro sin espacios en los bordes; None si no vino o quedo vacio; 422 con `mensaje` (que lleva «{}») si no
+    es una de `opciones` (R21)."""
+    valor = valor.strip() if isinstance(valor, str) else valor
+    if not valor:
+        return None
+    if valor not in opciones:
+        raise HTTPException(422, mensaje.format(valor))
+    return valor
+
+
+def _semaforo_de_lista(semaforo) -> Optional[str]:
+    """'atrasados' o None (sin filtro: no vino, vino en blanco o es 'todos', D46)."""
+    semaforo = _parametro_de_lista(semaforo, SEMAFOROS_LISTAS + (_SIN_FILTRO_LISTA,),
+                                   "El filtro del semáforo «{}» no existe: usa atrasados.")
+    return None if semaforo == _SIN_FILTRO_LISTA else semaforo
+
+
+def _estados_de_lista(tipo: str, estados) -> list:
+    """Los estados del CSV (leer_lista: sin repetidos ni vacios), cada uno de los conocidos del tipo (D46). 422 con mas de
+    20, con un caracter de control o con un estado que no existe: «El estado «x» no existe en SC|COT|VEN.»."""
+    try:
+        lista = leer_lista(estados)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    for estado in lista:
+        if estado not in _ESTADOS_DE_LISTA[tipo]:
+            raise HTTPException(422, f"El estado «{estado}» no existe en {tipo}.")
+    return lista
+
+
+def _busqueda_de_lista(q, search) -> Optional[str]:
+    """RP8: el texto de texto_busqueda(q, search) con sus comodines para ilike, o None. Un caracter de control -> 422
+    (D46: un tabulador o un salto de linea en medio pasa a un espacio)."""
+    try:
+        texto = texto_busqueda(q, search)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return f"%{texto}%" if texto else None
+
+
+def _ordenes_de_lista(modelo, tipo: str, rango, campos: dict) -> dict:
+    """Las ordenes permitidas de leer_orden (D34) para la lista de `modelo`: los campos de su lista blanca mas
+    - 'atencion' (R8, atencion_primero_listas): el rango de resolucion_ventas.expresiones (atrasados, sin resolver,
+      accion tomada y cerrados); en los dos primeros el que lleva mas tiempo sin movimiento arriba, en los dos ultimos el
+      mas reciente; desempate por id. Las SC de Soporte (rango NULL) van al final.
+    - 'reciente' (el orden de hoy, D29) y 'sin_movimiento' (expresiones_tiempo).
+    - 'estado': la posicion en el flujo del tipo (_FLUJO_DE_ESTADOS)."""
+    movimiento = func.coalesce(modelo.updated_at, modelo.created_at)
+    atencion = [
+        rango.asc().nulls_last(),
+        case((rango.in_(_RANGOS_SIN_RESOLVER), movimiento)).asc().nulls_last(),
+        case((rango.in_(_RANGOS_RESUELTOS), modelo.created_at)).desc().nulls_last(),
+        modelo.id.desc(),
+    ]
+    return {
+        "atencion": atencion,
+        "reciente": expresiones_tiempo(modelo.created_at, modelo.updated_at, "reciente", id_lista=modelo.id),
+        "sin_movimiento": expresiones_tiempo(modelo.created_at, modelo.updated_at, "sin_movimiento",
+                                             id_lista=modelo.id),
+        "estado": orden_por_lista(modelo.estado, _FLUJO_DE_ESTADOS[tipo]),
+        "creado": modelo.created_at,
+        "numero": modelo.numero,
+        "cliente": modelo.customer_name,
+        **campos,
+    }
+
+
+def _dias_completos(desde, ahora) -> int:
+    """Dias completos (piso) desde `desde` hasta `ahora`; nunca negativo; 0 sin fecha. Es el _dias_desde de
+    resolucion_ventas en Python (greatest(0, floor(segundos / 86400)))."""
+    if desde is None:
+        return 0
+    if desde.tzinfo is not None:
+        desde = desde.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    return max(0, math.floor((ahora - desde).total_seconds() / 86400))
+
+
+def _marcas_de_fila(tipo: str, doc, dias, ahora, seguimiento: dict, **banderas) -> dict:
+    """Lo que la fila agrega (R8, C14): tipo, resolucion (resolucion_ventas.clasificar con `dias` y `ahora`, los mismos
+    del filtro del semaforo), dias_sin_mov (desde coalesce(updated_at, created_at)), dias_creado y seguimiento_estado
+    (estados_para_alertas: 'AGOTADO', 'DETENIDO' o None)."""
+    horas = rv.horas_desde_movimiento(doc.updated_at, doc.created_at, ahora)
+    return {
+        "tipo": tipo,
+        "resolucion": rv.clasificar(tipo, doc.estado, horas, dias, **banderas),
+        "dias_sin_mov": _dias_completos(doc.updated_at if doc.updated_at is not None else doc.created_at, ahora),
+        "dias_creado": _dias_completos(doc.created_at, ahora),
+        "seguimiento_estado": seguimiento.get(doc.id),
+    }
+
+
+def _ligero(id_, numero, estado) -> dict:
+    return {"id": id_, "numero": numero, "estado": estado}
+
+
+def _pedidos_ligeros_de_solicitudes(db: Session, sc_ids, sc_de_cot: dict) -> dict:
+    """RP15 (5) y D37: {sc_id: [{id, numero, estado}]} de los pedidos de cada SC por su sc_id o por el cot_id de
+    CUALQUIERA de sus COT (`sc_de_cot`, tambien las rechazadas: el filtro de get_solicitud y de las filas SC del Hub), del
+    mas viejo al mas nuevo, en UNA consulta para toda la pagina."""
+    if not sc_ids:
+        return {}
+    vinculos = [SaleOrder.sc_id.in_(sc_ids)]
+    if sc_de_cot:
+        vinculos.append(SaleOrder.cot_id.in_(list(sc_de_cot)))
+    de_la_pagina = set(sc_ids)
+    pedidos = {}
+    for v_id, v_num, v_est, v_sc, v_cot in (db.query(SaleOrder.id, SaleOrder.numero, SaleOrder.estado,
+                                                     SaleOrder.sc_id, SaleOrder.cot_id)
+                                            .filter(or_(*vinculos)).order_by(SaleOrder.id.asc())):
+        duenas = {v_sc} & de_la_pagina
+        if v_cot in sc_de_cot:
+            duenas.add(sc_de_cot[v_cot])
+        for sc_id in duenas:
+            pedidos.setdefault(sc_id, []).append(_ligero(v_id, v_num, v_est))
+    return pedidos
+
+
+def _filas_de_solicitudes(db: Session, items, dias, ahora) -> list:
+    """Las filas de la pagina de SC: _sc_dict, sus cotizaciones (H32) y pedidos (RP15) ligeros, y las marcas. Consultas
+    IN para toda la pagina (RP20): las COT, los pedidos y el seguimiento."""
+    ids = [s.id for s in items]
+    cots_por_sc, sc_de_cot = {}, {}
+    if ids:
+        # H32: las cotizaciones de cada solicitud (version ligera: id, numero y estado), con una sola consulta para toda
+        # la pagina. Con eso la lista dice cuantas solicitudes generaron cotizacion de verdad (el detalle trae la
+        # completa).
+        for c_id, c_num, c_est, c_sc in (db.query(SalesQuotation.id, SalesQuotation.numero, SalesQuotation.estado,
+                                                  SalesQuotation.sc_id)
+                                         .filter(SalesQuotation.sc_id.in_(ids)).order_by(SalesQuotation.id.asc())):
+            cots_por_sc.setdefault(c_sc, []).append(_ligero(c_id, c_num, c_est))
+            sc_de_cot[c_id] = c_sc
+    pedidos_por_sc = _pedidos_ligeros_de_solicitudes(db, ids, sc_de_cot)
+    seguimiento = seguimiento_confirmacion.estados_para_alertas(db, "SC", items)
+    data = []
+    for s in items:
+        cots, pedidos = cots_por_sc.get(s.id, []), pedidos_por_sc.get(s.id, [])
+        # D16: documentos activos = una COT que no esta RECHAZADA o un pedido que no esta CANCELADO.
+        con_documentos = (any(c["estado"] != "RECHAZADA" for c in cots)
+                          or any(p["estado"] != "CANCELADO" for p in pedidos))
+        data.append({**_sc_dict(s), "cotizaciones": cots, "pedidos_venta": pedidos,
+                     **_marcas_de_fila("SC", s, dias, ahora, seguimiento, sc_con_cot_activa=con_documentos,
+                                       confirmacion_vigente=s.gate1_confirmed_at is not None,
+                                       es_soporte=s.tipo_solicitud == rv.TIPO_SOPORTE)})
+    return data
+
+
+def _es_soporte_sql(sc=CustomerRequest):
+    """La SC es de Soporte Tecnico (por su tipo o por su estado N/A_SOPORTE): esSoporte de hub-ventas.js. Un tipo NULL no
+    lo es (RP11)."""
+    return or_(sc.tipo_solicitud == rv.TIPO_SOPORTE, sc.estado == rv.ESTADO_SOPORTE)
+
+
+def _condicion_vista_solicitudes(vista):
+    """La condicion de la pestaña (o tarjeta) `vista` de Solicitudes; None = todas. RP3 y RP11: activas =
+    f_sc_activa (esSolicitudActiva); confirmadas, canceladas y esperan_cotizacion, sin Soporte (pestanaDeSolicitud mira
+    Soporte primero; esperan_cotizacion = f_sc_espera_cot, la tarjeta «N esperan cotización» de Confirmadas)."""
+    sc = CustomerRequest
+    return {
+        "activas": rv.f_sc_activa(sc),
+        "confirmadas": and_(rv.sin_soporte(sc), sc.estado == "CONFIRMADA"),
+        "canceladas": and_(rv.sin_soporte(sc), sc.estado == "CANCELADA"),
+        "soporte": _es_soporte_sql(sc),
+        "esperan_cotizacion": and_(rv.sin_soporte(sc), rv.f_sc_espera_cot(sc)),
+        "todas_sin_soporte": rv.sin_soporte(sc),
+        "todas": None,
+    }.get(vista)
+
+
+def _resumen_solicitudes(db: Session, extras, dias, ahora) -> dict:
+    """RP19 (3) y (4): las cifras de las tarjetas de Solicitudes sobre TODAS las solicitudes de la lista (solo con los
+    filtros extra, como customer_id: sin busqueda, vista, estado(s) ni semaforo), sin Soporte, en UNA consulta. Las
+    definiciones de H32 y N8, las del navegador de hoy:
+    - activas = esSolicitudActiva; confirmadas y canceladas, por estado; total = todas sin Soporte;
+    - con_cot = generoCotizacion (alguna COT con su sc_id, en cualquier estado); esperan_cot = esperaCotizacion;
+    - sin_atender = Nueva (BORRADOR) con coalesce(updated_at, fecha_solicitud) de hace MAS de los dias de alerta de la SC
+      (superaDiasAlerta, estricto); vencidas = activas con fecha_vencimiento antes de `ahora`."""
+    sc = CustomerRequest
+    no_soporte = rv.sin_soporte(sc)
+    genero_cotizacion = select(SalesQuotation.id).where(SalesQuotation.sc_id == sc.id).exists()
+    limite = ahora - datetime.timedelta(days=dias["SC"])
+    return contar_por_vista(db.query(sc).filter(*extras), {
+        "activas": rv.f_sc_activa(sc),
+        "confirmadas": and_(no_soporte, sc.estado == "CONFIRMADA"),
+        "canceladas": and_(no_soporte, sc.estado == "CANCELADA"),
+        "total": no_soporte,
+        "con_cot": and_(no_soporte, genero_cotizacion),
+        "esperan_cot": and_(no_soporte, rv.f_sc_espera_cot(sc)),
+        "sin_atender": and_(no_soporte, sc.estado == "BORRADOR",
+                            func.coalesce(sc.updated_at, sc.fecha_solicitud) < limite),
+        "vencidas": and_(rv.f_sc_activa(sc), sc.fecha_vencimiento < ahora),
+    })
+
+
 # ─── SOLICITUDES (SC) ────────────────────────────────────────────────────────
 
 @router.get("/solicitudes")
@@ -1700,40 +1941,64 @@ def list_solicitudes(
     estado: Optional[str] = None,
     customer_id: Optional[int] = None,
     search: Optional[str] = None,
-    limit: int = Query(50, le=200),
-    offset: int = 0,
-    
+    q: Optional[str] = None,
+    estados: Optional[str] = None,
+    vista: Optional[str] = None,
+    semaforo: Optional[str] = None,
+    orden: Optional[str] = None,
+    con_conteos: bool = False,
+    con_resumen: bool = False,
+    limit: int = Query(50, ge=0, le=200),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
     user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db)
 ):
-    q = db.query(CustomerRequest)
-    if estado:
-        q = q.filter(CustomerRequest.estado == estado)
-    if customer_id:
-        q = q.filter(CustomerRequest.customer_id == customer_id)
-    if search:
-        like = f"%{search}%"
-        q = q.filter(
+    """La lista de Solicitudes (B4 T6B; ver el bloque de arriba). vista: activas, confirmadas, canceladas, soporte,
+    todas (sin vista: todas, como hoy), esperan_cotizacion o todas_sin_soporte (el tablero; reemplaza a sin_soporte).
+    orden: atencion, reciente (por defecto), sin_movimiento o [-]numero, tipo, cliente, asesor, creado, vencimiento o
+    estado. con_conteos = {activas, confirmadas, canceladas, soporte}; con_resumen = {activas, confirmadas, canceladas,
+    total, con_cot, esperan_cot, sin_atender, vencidas}. Cada fila: _sc_dict, cotizaciones y pedidos_venta ligeros y las
+    marcas de _marcas_de_fila."""
+    vista = _parametro_de_lista(vista, VISTAS_SOLICITUDES, "La vista «{}» no existe en Solicitudes.")
+    semaforo = _semaforo_de_lista(semaforo)
+    lista_estados = _estados_de_lista("SC", estados)
+    like = _busqueda_de_lista(q, search)
+    dias, ahora = leer_dias_alerta(db), ahora_utc()
+    rango = rv.expresiones("SC", CustomerRequest, dias, ahora)["rango"].element
+    orden_sql = leer_orden(orden, _ordenes_de_lista(CustomerRequest, "SC", rango, {
+        "tipo": func.coalesce(CustomerRequest.tipo_solicitud, "Cotizacion de Producto"),
+        "asesor": CustomerRequest.advisor_name,
+        "vencimiento": CustomerRequest.fecha_vencimiento,
+    }), "reciente", id_lista=CustomerRequest.id)
+
+    extras = [CustomerRequest.customer_id == customer_id] if customer_id else []
+    base = db.query(CustomerRequest).filter(*extras)
+    if like:
+        base = base.filter(
             CustomerRequest.numero.ilike(like) |
             CustomerRequest.customer_name.ilike(like) |
             CustomerRequest.advisor_name.ilike(like) |
             productos_ilike(CustomerRequest.productos, like)
         )
-    total = q.count()
+    filtrado = base
+    if estado:
+        filtrado = filtrado.filter(CustomerRequest.estado == estado)   # compatibilidad: un valor, igualdad (RP8)
+    filtrado = filtrar_por_estados(filtrado, CustomerRequest.estado, lista_estados)
+    condicion = _condicion_vista_solicitudes(vista)
+    if condicion is not None:
+        filtrado = filtrado.filter(condicion)
+    if semaforo == "atrasados":
+        filtrado = filtrado.filter(rango == rv.RANGO["ATRASADO"])
+
+    conteos = None
+    if con_conteos:
+        conteos = contar_por_vista(base, {v: _condicion_vista_solicitudes(v)
+                                          for v in ("activas", "confirmadas", "canceladas", "soporte")})
+    resumen = _resumen_solicitudes(db, extras, dias, ahora) if con_resumen else None
     # B3 T8 (RP20): la ficha del cliente en UNA consulta para toda la pagina (telefono_whatsapp de _sc_dict).
-    items = (q.order_by(CustomerRequest.created_at.desc()).offset(offset).limit(limit)
-             .options(selectinload(CustomerRequest.customer)).all())
-    # H32: las cotizaciones de cada solicitud (version ligera: id, numero y estado), con una sola consulta para toda la
-    # pagina. Con eso la lista dice cuantas solicitudes generaron cotizacion de verdad (el detalle trae la completa).
-    ids = [s.id for s in items]
-    cots_por_sc = {}
-    if ids:
-        for c_id, c_num, c_est, c_sc in (db.query(SalesQuotation.id, SalesQuotation.numero, SalesQuotation.estado,
-                                                  SalesQuotation.sc_id)
-                                         .filter(SalesQuotation.sc_id.in_(ids)).order_by(SalesQuotation.id.asc())):
-            cots_por_sc.setdefault(c_sc, []).append({"id": c_id, "numero": c_num, "estado": c_est})
-    return {"status": "success", "total": total,
-            "data": [{**_sc_dict(s), "cotizaciones": cots_por_sc.get(s.id, [])} for s in items]}
+    total, items = paginar(filtrado.order_by(*orden_sql).options(selectinload(CustomerRequest.customer)),
+                           limit, offset)
+    return respuesta_de_lista(total, _filas_de_solicitudes(db, items, dias, ahora), conteos=conteos, resumen=resumen)
 
 
 @router.post("/solicitudes", status_code=201)
@@ -2815,35 +3080,8 @@ def add_sc_activity(sc_id: int, body: dict, user: User = Depends(require_roles(*
 
 # ─── COTIZACIONES (COT) ──────────────────────────────────────────────────────
 
-@router.get("/cotizaciones")
-def list_cotizaciones(
-    estado: Optional[str] = None,
-    sc_id: Optional[int] = None,
-    search: Optional[str] = None,
-    limit: int = Query(50, le=200),
-    offset: int = 0,
-    
-    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
-    db: Session = Depends(get_db)
-):
-    q = db.query(SalesQuotation)
-    if estado:
-        q = q.filter(SalesQuotation.estado == estado)
-    if sc_id:
-        q = q.filter(SalesQuotation.sc_id == sc_id)
-    if search:
-        like = f"%{search}%"
-        q = q.filter(
-            SalesQuotation.numero.ilike(like) |
-            SalesQuotation.customer_name.ilike(like) |
-            SalesQuotation.cotizador.ilike(like) |
-            SalesQuotation.sc_numero.ilike(like) |
-            productos_ilike(SalesQuotation.productos, like)
-        )
-    total = q.count()
-    # B3 T8 (RP20): la ficha del cliente en UNA consulta para toda la pagina (telefono_whatsapp de _cot_dict).
-    items = (q.order_by(SalesQuotation.created_at.desc()).offset(offset).limit(limit)
-             .options(selectinload(SalesQuotation.customer)).all())
+def _filas_de_cotizaciones(db: Session, items, dias, ahora) -> list:
+    """Las filas de la pagina de COT: _cot_dict, sus pedidos ligeros (COT-LISTA) y las marcas, con consultas IN (RP20)."""
     # COT-LISTA: los pedidos de cada cotizacion (version ligera: id, numero y estado, del mas viejo al mas nuevo), con
     # una sola consulta para toda la pagina. Con eso la lista distingue una COT confirmada con pedido vigente de una
     # cuyo pedido se cancelo (el detalle trae el pedido completo).
@@ -2852,9 +3090,134 @@ def list_cotizaciones(
     if ids:
         for v_id, v_num, v_est, v_cot in (db.query(SaleOrder.id, SaleOrder.numero, SaleOrder.estado, SaleOrder.cot_id)
                                           .filter(SaleOrder.cot_id.in_(ids)).order_by(SaleOrder.id.asc())):
-            pvs_por_cot.setdefault(v_cot, []).append({"id": v_id, "numero": v_num, "estado": v_est})
-    return {"status": "success", "total": total,
-            "data": [{**_cot_dict(c), "pedidos_venta": pvs_por_cot.get(c.id, [])} for c in items]}
+            pvs_por_cot.setdefault(v_cot, []).append(_ligero(v_id, v_num, v_est))
+    seguimiento = seguimiento_confirmacion.estados_para_alertas(db, "COT", items)
+    data = []
+    for c in items:
+        pedidos = pvs_por_cot.get(c.id, [])
+        data.append({**_cot_dict(c), "pedidos_venta": pedidos,
+                     **_marcas_de_fila("COT", c, dias, ahora, seguimiento,
+                                       cot_con_pedido_vigente=any(p["estado"] != "CANCELADO" for p in pedidos),
+                                       confirmacion_vigente=c.gate2_confirmed_at is not None)})
+    return data
+
+
+def _condicion_vista_cotizaciones(vista):
+    """La condicion de la pestaña `vista` de Cotizaciones; None = todas. RP3: activas = f_cot_activa y confirmadas =
+    f_cot_confirmada (pestanaCotizacion de COT-LISTA, con el «pedido caido» por EXISTS sobre sale_orders: una CONFIRMADA
+    con sus pedidos cancelados y sin confirmacion vigente es activa; la re-confirmada con gate2, confirmada)."""
+    cot = SalesQuotation
+    return {
+        "activas": rv.f_cot_activa(cot),
+        "confirmadas": rv.f_cot_confirmada(cot),
+        "rechazadas": cot.estado == "RECHAZADA",
+        "todas": None,
+    }.get(vista)
+
+
+def _resumen_cotizaciones(db: Session, extras, dias, ahora) -> dict:
+    """RP19 (3), RP3 y RP89: las cifras de las tarjetas y del aviso de Cotizaciones sobre TODAS las cotizaciones de la
+    lista (solo con los filtros extra, como sc_id), en UNA consulta. Las definiciones de COT-LISTA (las del navegador de
+    hoy): activas, confirmadas y rechazadas por pestanaCotizacion; con_pedido = CONFIRMADA con pedido vigente;
+    por_convertir = confirmadas − con_pedido; total = todas; monto_confirmado = Σ total_cop de las confirmadas, al peso;
+    sin_calc = activas con total_cop ≤ 0 o sin total; vencen_pronto = activas con valida_hasta entre hoy y hoy + 7 dias en
+    Colombia (los dos incluidos, RP89); sin_atender = activas con coalesce(updated_at, created_at) de hace MAS de los
+    dias de alerta de la COT."""
+    cot = SalesQuotation
+    activa, confirmada = rv.f_cot_activa(cot), rv.f_cot_confirmada(cot)
+    hoy = hoy_colombia(ahora)
+    limite = ahora - datetime.timedelta(days=dias["COT"])
+    condiciones = {
+        "activas": activa,
+        "confirmadas": confirmada,
+        "con_pedido": rv.f_cot_con_pedido(cot),
+        "rechazadas": cot.estado == "RECHAZADA",
+        "total": None,
+        "sin_calc": and_(activa, or_(cot.total_cop.is_(None), cot.total_cop <= 0)),
+        "vencen_pronto": and_(activa, cot.valida_hasta >= hoy, cot.valida_hasta <= hoy + datetime.timedelta(days=7)),
+        "sin_atender": and_(activa, func.coalesce(cot.updated_at, cot.created_at) < limite),
+    }
+    columnas = [func.count() if c is None else func.count().filter(c) for c in condiciones.values()]
+    monto = func.coalesce(func.sum(cot.total_cop).filter(confirmada), 0)
+    fila = db.query(*columnas, monto).select_from(cot).filter(*extras).one()
+    n = {clave: int(fila[i] or 0) for i, clave in enumerate(condiciones)}
+    return {
+        "activas": n["activas"], "confirmadas": n["confirmadas"], "con_pedido": n["con_pedido"],
+        "por_convertir": n["confirmadas"] - n["con_pedido"], "rechazadas": n["rechazadas"], "total": n["total"],
+        "monto_confirmado": float(redondear_peso(fila[-1])), "sin_calc": n["sin_calc"],
+        "vencen_pronto": n["vencen_pronto"], "sin_atender": n["sin_atender"],
+    }
+
+
+@router.get("/cotizaciones")
+def list_cotizaciones(
+    estado: Optional[str] = None,
+    sc_id: Optional[int] = None,
+    search: Optional[str] = None,
+    q: Optional[str] = None,
+    estados: Optional[str] = None,
+    vista: Optional[str] = None,
+    semaforo: Optional[str] = None,
+    orden: Optional[str] = None,
+    con_conteos: bool = False,
+    con_resumen: bool = False,
+    limit: int = Query(50, ge=0, le=200),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+    db: Session = Depends(get_db)
+):
+    """La lista de Cotizaciones (B4 T6B; ver el bloque de list_solicitudes). vista: activas, confirmadas, rechazadas o
+    todas (sin vista: todas, como hoy). La busqueda tambien encuentra la COT por el numero de su pedido (EXISTS sobre
+    sale_orders; antes lo hacia el JSON.stringify del navegador). orden: atencion, reciente (por defecto),
+    sin_movimiento o [-]numero, cliente, cotizador, total, anticipo, entrega, estado o creado. con_conteos = {activas,
+    confirmadas, rechazadas}; con_resumen = _resumen_cotizaciones. Cada fila: _cot_dict, pedidos_venta ligeros y las
+    marcas de _marcas_de_fila."""
+    vista = _parametro_de_lista(vista, VISTAS_COTIZACIONES, "La vista «{}» no existe en Cotizaciones.")
+    semaforo = _semaforo_de_lista(semaforo)
+    lista_estados = _estados_de_lista("COT", estados)
+    like = _busqueda_de_lista(q, search)
+    dias, ahora = leer_dias_alerta(db), ahora_utc()
+    rango = rv.expresiones("COT", SalesQuotation, dias, ahora)["rango"].element
+    orden_sql = leer_orden(orden, _ordenes_de_lista(SalesQuotation, "COT", rango, {
+        "cotizador": SalesQuotation.cotizador,
+        "total": SalesQuotation.total_cop,
+        "anticipo": SalesQuotation.anticipo_cop,
+        "entrega": SalesQuotation.fecha_entrega_estimada,
+    }), "reciente", id_lista=SalesQuotation.id)
+
+    extras = [SalesQuotation.sc_id == sc_id] if sc_id else []
+    base = db.query(SalesQuotation).filter(*extras)
+    if like:
+        del_pedido = (select(SaleOrder.id)
+                      .where(SaleOrder.cot_id == SalesQuotation.id, SaleOrder.numero.ilike(like)).exists())
+        base = base.filter(
+            SalesQuotation.numero.ilike(like) |
+            SalesQuotation.customer_name.ilike(like) |
+            SalesQuotation.cotizador.ilike(like) |
+            SalesQuotation.sc_numero.ilike(like) |
+            productos_ilike(SalesQuotation.productos, like) |
+            del_pedido
+        )
+    filtrado = base
+    if estado:
+        filtrado = filtrado.filter(SalesQuotation.estado == estado)   # compatibilidad: un valor, igualdad (RP8)
+    filtrado = filtrar_por_estados(filtrado, SalesQuotation.estado, lista_estados)
+    condicion = _condicion_vista_cotizaciones(vista)
+    if condicion is not None:
+        filtrado = filtrado.filter(condicion)
+    if semaforo == "atrasados":
+        filtrado = filtrado.filter(rango == rv.RANGO["ATRASADO"])
+
+    conteos = None
+    if con_conteos:
+        conteos = contar_por_vista(base, {v: _condicion_vista_cotizaciones(v)
+                                          for v in ("activas", "confirmadas", "rechazadas")})
+    resumen = _resumen_cotizaciones(db, extras, dias, ahora) if con_resumen else None
+    # B3 T8 (RP20): la ficha del cliente en UNA consulta para toda la pagina (telefono_whatsapp de _cot_dict).
+    total, items = paginar(filtrado.order_by(*orden_sql).options(selectinload(SalesQuotation.customer)),
+                           limit, offset)
+    return respuesta_de_lista(total, _filas_de_cotizaciones(db, items, dias, ahora), conteos=conteos,
+                              resumen=resumen)
 
 
 @router.post("/cotizaciones", status_code=201)
@@ -4050,28 +4413,77 @@ def add_ven_activity(ven_id: int, body: dict, user: User = Depends(require_roles
 
 
 
+def _resumen_pedidos(q) -> dict:
+    """H47 (C9, RP19.1): el resumen cubre TODO lo que cumple el filtro (busqueda, estado o estados, vista, saldo y
+    semaforo; no solo la pagina), con sus 4 claves. El dinero no suma los pedidos cancelados ni devueltos por completo
+    (siguen guardando su saldo, simplemente no cuentan); por_estado los cuenta a todos. Las sumas salen en pesos enteros
+    (redondear_peso): un documento viejo con centavos no deja la cifra con decimales. Sirve para la suma de cada columna
+    del tablero; las tarjetas de Pedidos leen /ventas/stats (D5)."""
+    vigente = SaleOrder.estado.notin_(ESTADOS_VEN_SIN_DINERO)
+    suma = lambda col: func.coalesce(func.sum(case((vigente, col), else_=0)), 0)
+    monto, saldo, anticipo = q.with_entities(suma(SaleOrder.total_cop), suma(SaleOrder.saldo_cop),
+                                             suma(SaleOrder.anticipo_cop)).one()
+    por_estado = dict(q.with_entities(SaleOrder.estado, func.count(SaleOrder.id)).group_by(SaleOrder.estado).all())
+    return {"monto_cop": float(redondear_peso(monto)), "saldo_cop": float(redondear_peso(saldo)),
+            "anticipo_cop": float(redondear_peso(anticipo)), "por_estado": por_estado}
+
+
+def _condicion_vista_pedidos(vista):
+    """La condicion de la pestaña `vista` de Pedidos de venta; None = todos. Las pestañas son las de grupo_pedido
+    (VISTA_DE_GRUPO y estados_de_vista: pend_compra trae PENDIENTE_PAGO, cancelado trae DEVUELTO_TOTAL; un estado
+    desconocido solo sale en todos); en_curso (C3) = f_pven_en_curso (fuera de ESTADOS_VEN_CERRADOS)."""
+    if vista == "en_curso":
+        return rv.f_pven_en_curso(SaleOrder)
+    estados_vista = estados_de_vista(vista)
+    return SaleOrder.estado.in_(estados_vista) if estados_vista else None
+
+
 @router.get("/pedidos")
 def list_pedidos(
     estado: Optional[str] = None,
     cot_id: Optional[int] = None,
     canal_venta: Optional[str] = None,
     search: Optional[str] = None,
-    limit: int = Query(50, le=200),
-    offset: int = 0,
-    
+    q: Optional[str] = None,
+    estados: Optional[str] = None,
+    vista: Optional[str] = None,
+    semaforo: Optional[str] = None,
+    saldo: Optional[str] = None,
+    orden: Optional[str] = None,
+    con_conteos: bool = False,
+    limit: int = Query(50, ge=0, le=200),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
     user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db)
 ):
-    q = db.query(SaleOrder)
-    if estado:
-        q = q.filter(SaleOrder.estado == estado)
+    """La lista de Pedidos de venta (B4 T6B; ver el bloque de list_solicitudes). vista = la pestaña: todos (sin vista,
+    como hoy), pend_compra, en_proceso, listo_entrega, entregado, facturado, cancelado o en_curso. saldo (Entregas, C19 y
+    D37): pendiente = saldo_cop > 0; pagado = saldo_cop ≤ 0 o sin saldo. orden: atencion, reciente (por defecto),
+    sin_movimiento o [-]numero, cliente, total, anticipo, saldo, entrega, estado o creado. con_conteos = {todos,
+    pend_compra, en_proceso, listo_entrega, entregado, facturado, cancelado} (con la busqueda y los filtros extra,
+    saldo incluido). resumen: siempre, H47 sobre TODO el filtro. Cada fila: _ven_dict, el asesor de H4 y las marcas
+    (seguimiento_estado y cambios_cliente en None, como en el Hub)."""
+    vista = _parametro_de_lista(vista, VISTAS_PEDIDOS, "La vista «{}» no existe en Pedidos de venta.")
+    semaforo = _semaforo_de_lista(semaforo)
+    saldo = _parametro_de_lista(saldo, SALDOS_PEDIDOS, "El filtro de saldo «{}» no existe: usa pendiente o pagado.")
+    lista_estados = _estados_de_lista("VEN", estados)
+    like = _busqueda_de_lista(q, search)
+    dias, ahora = leer_dias_alerta(db), ahora_utc()
+    rango = rv.expresiones("VEN", SaleOrder, dias, ahora)["rango"].element
+    orden_sql = leer_orden(orden, _ordenes_de_lista(SaleOrder, "VEN", rango, {
+        "total": SaleOrder.total_cop,
+        "anticipo": SaleOrder.anticipo_cop,
+        "saldo": SaleOrder.saldo_cop,
+        "entrega": SaleOrder.fecha_entrega_estimada,
+    }), "reciente", id_lista=SaleOrder.id)
+
+    base = db.query(SaleOrder)
     if cot_id:
-        q = q.filter(SaleOrder.cot_id == cot_id)
+        base = base.filter(SaleOrder.cot_id == cot_id)
     if canal_venta:
-        q = q.filter(SaleOrder.canal_venta == canal_venta)
-    if search:
-        like = f"%{search}%"
-        q = q.filter(
+        base = base.filter(SaleOrder.canal_venta == canal_venta)
+    if like:
+        base = base.filter(
             SaleOrder.numero.ilike(like) |
             SaleOrder.customer_name.ilike(like) |
             SaleOrder.sc_numero.ilike(like) |
@@ -4079,24 +4491,32 @@ def list_pedidos(
             SaleOrder.pweb_numero.ilike(like) |
             productos_ilike(SaleOrder.productos, like)
         )
-    total = q.count()
-    # H47: el resumen cubre TODO lo que cumple el filtro (no solo la pagina). El dinero no suma los pedidos cancelados
-    # ni devueltos por completo (siguen guardando su saldo, simplemente no cuentan); por_estado los cuenta a todos.
-    # Las sumas salen en pesos enteros (redondear_peso): un documento viejo con centavos no deja la cifra con decimales.
-    vigente = SaleOrder.estado.notin_(ESTADOS_VEN_SIN_DINERO)
-    suma = lambda col: func.coalesce(func.sum(case((vigente, col), else_=0)), 0)
-    monto, saldo, anticipo = q.with_entities(suma(SaleOrder.total_cop), suma(SaleOrder.saldo_cop),
-                                             suma(SaleOrder.anticipo_cop)).one()
-    por_estado = dict(q.with_entities(SaleOrder.estado, func.count(SaleOrder.id)).group_by(SaleOrder.estado).all())
+    if saldo == "pendiente":
+        base = base.filter(SaleOrder.saldo_cop > 0)
+    elif saldo == "pagado":
+        base = base.filter(or_(SaleOrder.saldo_cop <= 0, SaleOrder.saldo_cop.is_(None)))
+    filtrado = base
+    if estado:
+        filtrado = filtrado.filter(SaleOrder.estado == estado)   # compatibilidad: un valor, igualdad (RP8)
+    filtrado = filtrar_por_estados(filtrado, SaleOrder.estado, lista_estados)
+    condicion = _condicion_vista_pedidos(vista)
+    if condicion is not None:
+        filtrado = filtrado.filter(condicion)
+    if semaforo == "atrasados":
+        filtrado = filtrado.filter(rango == rv.RANGO["ATRASADO"])
+
+    conteos = None
+    if con_conteos:
+        conteos = contar_por_vista(base, {"todos": None, **{v: _condicion_vista_pedidos(v)
+                                                            for v in VISTA_DE_GRUPO.values()}})
+    resumen = _resumen_pedidos(filtrado)
     # B3 T8 (RP20): la ficha del cliente en UNA consulta para toda la pagina (telefono_whatsapp de _ven_dict).
-    items = (q.order_by(SaleOrder.created_at.desc()).offset(offset).limit(limit)
-             .options(selectinload(SaleOrder.customer)).all())
+    total, items = paginar(filtrado.order_by(*orden_sql).options(selectinload(SaleOrder.customer)), limit, offset)
     # H4: el asesor real de cada pedido (el de su COT o, si no, el de su SC), con 2 consultas en bloque.
     asesores = _asesores_de_pedidos(db, items)
-    return {"status": "success", "total": total,
-            "resumen": {"monto_cop": float(redondear_peso(monto)), "saldo_cop": float(redondear_peso(saldo)),
-                        "anticipo_cop": float(redondear_peso(anticipo)), "por_estado": por_estado},
-            "data": [{**_ven_dict(v), "advisor_name": asesores.get(v.id)} for v in items]}
+    data = [{**_ven_dict(v), "advisor_name": asesores.get(v.id), **_marcas_de_fila("VEN", v, dias, ahora, {}),
+             "cambios_cliente": None} for v in items]
+    return respuesta_de_lista(total, data, conteos=conteos, resumen=resumen)
 
 
 @router.post("/pedidos", status_code=201)
@@ -4504,9 +4924,49 @@ def _motivo_con_credito(motivo, credito):
     return f"{limpio} Crédito a favor del cliente: {pesos(credito)}." if credito > 0 else limpio
 
 
+# B4 T6B (R15, RP23; despacho_bodega = «También Bodega, eligiendo la bodega de salida»): lo unico que BODEGA puede hacer
+# con PATCH /ventas/pedidos/{id} es despachar el pedido (pasarlo a ENTREGADO) desde la bodega que elige.
+_SOLO_DESPACHO_BODEGA = "Bodega solo puede marcar el pedido como despachado."
+_ELIGE_LA_BODEGA = "Elige la bodega de salida."
+# Lo que BODEGA puede mandar: el estado, la bodega y updated_by, que se ignora (Entregas lo manda hoy; RP23).
+_CLAVES_DEL_DESPACHO_BODEGA = frozenset({"estado", "warehouse_id", "updated_by"})
+_MAX_ID_BODEGA = 2 ** 31 - 1   # warehouses.id es Integer: un id mas grande no existe (y no llega al SQL)
+
+
+def _bodega_del_despacho(db: Session, body: dict) -> tuple:
+    """RP23: el despacho de BODEGA. Con otra clave (fuera de estado, warehouse_id y updated_by) o con un estado que no es
+    exactamente 'ENTREGADO' -> 403 «Bodega solo puede marcar el pedido como despachado.». Sin warehouse_id, con uno que
+    no es el id de una bodega (texto, bool, decimal, lista...) o con una bodega que no existe -> 422 «Elige la bodega de
+    salida.». Todo ANTES de leer el pedido y sus lineas (una consulta: la bodega). Devuelve (id, nombre) de la bodega."""
+    if not set(body) <= _CLAVES_DEL_DESPACHO_BODEGA or body.get("estado") != "ENTREGADO":
+        raise HTTPException(403, _SOLO_DESPACHO_BODEGA)
+    valor = body.get("warehouse_id")
+    if isinstance(valor, bool) or (isinstance(valor, float) and not valor.is_integer()):
+        raise HTTPException(422, _ELIGE_LA_BODEGA)
+    try:
+        warehouse_id = _int_or_none(valor)
+    except (TypeError, ValueError, OverflowError):
+        raise HTTPException(422, _ELIGE_LA_BODEGA)
+    if warehouse_id is None or not 0 < warehouse_id <= _MAX_ID_BODEGA:
+        raise HTTPException(422, _ELIGE_LA_BODEGA)
+    fila = db.query(Warehouse.id, Warehouse.name).filter(Warehouse.id == warehouse_id).first()
+    if fila is None:
+        raise HTTPException(422, _ELIGE_LA_BODEGA)
+    return fila.id, fila.name
+
+
 @router.patch("/pedidos/{ven_id}")
-def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+def update_pedido(ven_id: int, body: dict,
+        user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *ROLE_BODEGA)),
         db: Session = Depends(get_db)):
+    # B4 T6B (R15, RP23): BODEGA solo despacha (ENTREGADO con la bodega de salida, _bodega_del_despacho, antes de leer
+    # nada). Su body queda en {estado, warehouse_id, updated_by}: el autor sale de la sesion, no del updated_by que
+    # mando. Desde ahi sigue el camino de siempre (la transicion de TRANSICIONES_VEN_PATCH, el descuento de inventario y
+    # la Actividad); ADMIN y ASESOR siguen igual.
+    bodega_de_salida = None
+    if normalize_role(user.role) == "BODEGA":
+        bodega_de_salida = _bodega_del_despacho(db, body)
+        body = {"estado": "ENTREGADO", "warehouse_id": bodega_de_salida[0], "updated_by": nombre_de_usuario(user)}
     _exigir_estado_valido(body)  # S1 (T11): antes de leer nada
     # Bloqueado: la transicion (N2) se valida sobre la fila que se va a escribir (una recepcion, un pago o una
     # cancelacion de fase4 concurrentes esperan).
@@ -4653,9 +5113,16 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
     db.refresh(v)
     _registrar_cambios(db, "VEN", v, antes_log, body, user)
     if body.get("estado") and body["estado"] != old_estado:
-        _log(db, "VEN", v.id, v.numero, "ESTADO_CHANGED",
-             ("Estado cambiado a Entregado (el inventario ya se había descontado en un despacho anterior; no se "
-              "descuenta otra vez)") if ya_despachado else f"Estado cambiado a {etiqueta_estado('VEN', v.estado)}",
+        if ya_despachado:
+            texto_estado = ("Estado cambiado a Entregado (el inventario ya se había descontado en un despacho anterior; "
+                            "no se descuenta otra vez)")
+        elif bodega_de_salida is not None:
+            # R15: la Actividad dice quien despacho (el autor de la sesion) y desde que bodega.
+            texto_estado = (f"Estado cambiado a {etiqueta_estado('VEN', v.estado)} "
+                            f"(despachado desde {bodega_de_salida[1]})")
+        else:
+            texto_estado = f"Estado cambiado a {etiqueta_estado('VEN', v.estado)}"
+        _log(db, "VEN", v.id, v.numero, "ESTADO_CHANGED", texto_estado,
              old_estado=old_estado, new_estado=v.estado, user_name=autor, usuario=user)
     if cancela:
         # H46+U25: la cotizacion del pedido vuelve a Borrador para reusarla (no hace fallar la cancelacion).
