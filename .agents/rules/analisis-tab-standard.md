@@ -32,30 +32,18 @@ NUNCA:
 
 ## 1. Una pestaña por Hub, con «Ver análisis» en las listas
 
-| Hub | `modulo` | `endpoint` | Foco |
-| :--- | :--- | :--- | :--- |
-| Ventas | `'ventas'` | `/ventas/analisis` | Selector Todo / Solicitudes / Cotizaciones / Pedidos (`FOCOS_VENTAS` de `@/lib/analisis`) |
-| Compras | `'compras'` | `/compras/analisis` | Sin selector |
-| Inventario | `'inventario'` | `/inventory/analisis` | Sin selector (la bodega entra como `controlesExtra`) |
-| CRM | `'crm'` | `/crm/analisis` | Sin selector |
-| Finanzas › Resumen | `'finanzas'` | `/finance/analisis` | Sin selector |
+| Hub | `modulo` | `endpoint` | `acento` | Foco |
+| :--- | :--- | :--- | :--- | :--- |
+| Ventas | `'ventas'` | `/ventas/analisis` | `'indigo'` | Selector Todo / Solicitudes / Cotizaciones / Pedidos (`FOCOS_VENTAS` de `@/lib/analisis`) |
+| Compras | `'compras'` | `/compras/analisis` | `'purple'` | Sin selector |
+| Inventario | `'inventario'` | `/inventory/analisis` | `'teal'` | Sin selector (la bodega entra como `controlesExtra`) |
+| CRM | `'crm'` | `/crm/analisis` | `'purple'` | Sin selector |
+| Finanzas › Resumen | `'finanzas'` | `/finance/analisis` | `'blue'` | Sin selector |
 
 - `modulo` es un `ModuloAnalisis` (`MODULOS_ANALISIS` de `@/lib/analisis`) y da la clave de preferencias `analisis:<modulo>`. En Ventas el foco va DENTRO de `analisis:ventas`; no existen `analisis:ventas-sc`, `analisis:ventas-cot` ni `analisis:ventas-pven`.
-- Las listas de Solicitudes, Cotizaciones y Pedidos de venta NO llevan pestaña Análisis propia: llevan un botón «Ver análisis» que abre el del Hub ya enfocado: `/dashboard/ventas?tab=analisis&foco=sc`, `foco=cot` o `foco=pven`. Pedidos de compra, Lista de compras y Traslados hacen lo mismo hacia `/dashboard/compras?tab=analisis`.
+- Las listas de Solicitudes, Cotizaciones y Pedidos de venta NO llevan pestaña Análisis propia: llevan un botón «Ver análisis» que abre el del Hub ya enfocado: `/dashboard/ventas?tab=analisis&foco=sc`, `foco=cot` o `foco=pven`. Pedidos de compra, Lista de compras y Traslados hacen lo mismo hacia `/dashboard/compras?tab=analisis`. El botón es un `<Link>` con `BTN.secondary` (`@/lib/design-system`).
 - Todavía no tienen Análisis E-commerce, Marketing, Logística ni el Dashboard General. No se les agrega uno sin que el usuario lo pida.
-
-```tsx
-import Link from 'next/link';
-import { BTN } from '@/lib/design-system';
-
-export function VerAnalisisCotizaciones() {
-  return (
-    <Link href="/dashboard/ventas?tab=analisis&foco=cot" className={BTN.secondary}>
-      Ver análisis
-    </Link>
-  );
-}
-```
+- `acento` es un `AccentColor` (`components/ui/colors.ts`) y el de esta tabla es el que vale para el Hub. No es el de `MODULE_COLORS` de `design-system.ts`, que es legado.
 
 ---
 
@@ -127,54 +115,17 @@ export function AnalisisInventario({ bodegas }: { bodegas: { id: number; nombre:
 }
 ```
 
-### Props de `PropsPanelAnalisis`
+### Lo que no dice el JSDoc de `PropsPanelAnalisis`
 
-| Prop | Qué hace |
+| Prop | Regla |
 | :--- | :--- |
-| `modulo` (requerida) | El `ModuloAnalisis`: da la clave de preferencias `analisis:<modulo>`. |
-| `endpoint` (requerida) | La ruta del API sin el prefijo `/api/v1`: `GET /<módulo>/analisis`. |
-| `acento` | Un `AccentColor` de `components/ui/colors.ts`: el color del módulo. Pinta la serie principal de los gráficos, la barra del ranking y las tarjetas cuyo id no está en `CATALOGO_KPI`. |
-| `mejorLinea` | `'sube'`, `'baja'` o `'neutro'`: si subir es bueno para la cifra de la línea. Pásalo SIEMPRE de forma explícita. Sin él y con una cifra ambigua, el chip sale gris (`'neutro'`), nunca con un verde inventado. |
-| `focos`, `focoInicial`, `alCambiarFoco` | El selector de foco (Ventas: `FOCOS_VENTAS`). `focoInicial` es el `?foco=` de la URL («Ver análisis») y gana sobre el guardado hasta que el usuario elige otro. `alCambiarFoco` mantiene `?foco=` al día con `router.replace`. El foco de la URL no se guarda en las preferencias. |
-| `params` | Parámetros propios del endpoint (por ejemplo `{ bodega }`). El panel solo pisa lo que maneja: `foco`, si hay `focos`, y `producto`, si hay `busquedaProducto`. Lo demás llega tal cual al servidor. |
-| `busquedaProducto` | El campo «Producto»: manda `producto=` 400 ms después de la última tecla y solo con 2 letras o más. |
-| `controlesExtra` | Controles de la pantalla junto a «Actualizar» (su valor entra por `params`). Se pintan también, inertes, en el esqueleto. |
-| `etiquetar` | `(bloque, clave, etiqueta) => string`: renombra los segmentos de la dona, las filas del ranking y las series y categorías de las barras. Debe devolver la etiqueta recibida cuando no conoce la clave. |
-| `alAbrirMovimiento` | Abre un movimiento a su manera. Sin él, cada fila es un `<Link>` a `enlaceDocumento(doc_tipo, doc_id)`. |
-| `pie` | Algo de la pantalla debajo de la grilla, antes del asistente. |
-| `asistente` | `{ titulo, ejemplos }` de la tarjeta «En construcción» (sección 6). Sin él: `{ titulo: 'Asistente con IA', ejemplos: [] }`. |
-
-`etiquetar` y `alAbrirMovimiento` con los tipos reales:
-
-```tsx
-import { PanelAnalisisPerezoso } from '@/components/analisis';
-import { enlaceDocumento } from '@/lib/analisis';
-import type { Etiquetar, FilaMovimiento } from '@/lib/analisis';
-import { etiquetaTipoSC } from '@/lib/etiquetas-solicitud';
-
-const etiquetar: Etiquetar = (bloque, clave, etiqueta) => {
-  if (bloque !== 'dona') return etiqueta;
-  const tipo = etiquetaTipoSC(clave);
-  return tipo && tipo !== clave ? tipo : etiqueta; // si no la conoce, la etiqueta que llegó
-};
-
-export function AnalisisCrm({ abrir }: { abrir: (ruta: string) => void }) {
-  const alAbrirMovimiento = (fila: FilaMovimiento) => {
-    const ruta = enlaceDocumento(fila.doc_tipo, fila.doc_id);
-    if (ruta) abrir(ruta);
-  };
-  return (
-    <PanelAnalisisPerezoso
-      modulo="crm"
-      endpoint="/crm/analisis"
-      acento="purple"
-      mejorLinea="sube"
-      etiquetar={etiquetar}
-      alAbrirMovimiento={alAbrirMovimiento}
-    />
-  );
-}
-```
+| `acento` | El acento del Hub (tabla de la sección 1). Pinta la serie principal, la barra del ranking y las tarjetas cuyo id no está en `CATALOGO_KPI`. |
+| `mejorLinea` | `'sube'`, `'baja'` o `'neutro'`. Pásalo SIEMPRE de forma explícita: sin él y con una cifra ambigua, el chip sale gris (`'neutro'`), nunca con un verde inventado. |
+| `focoInicial`, `alCambiarFoco` | `focoInicial` (el `?foco=` de «Ver análisis») gana sobre el guardado hasta que el usuario elige otro, y no se guarda. `alCambiarFoco` mantiene `?foco=` al día con `router.replace`. |
+| `params` | El panel solo pisa lo que maneja: `foco`, si hay `focos`, y `producto`, si hay `busquedaProducto` (400 ms y 2 letras o más). Lo demás llega tal cual. `controlesExtra` se pinta también, inerte, en el esqueleto. |
+| `etiquetar` | `(bloque, clave, etiqueta) => string`. Debe devolver la etiqueta recibida cuando no conoce la clave. |
+| `alAbrirMovimiento` | Sin él, cada fila es un `<Link>` a `enlaceDocumento(doc_tipo, doc_id)`, que no conoce LEAD (devuelve `null`): los movimientos del CRM se abren con `alAbrirMovimiento`, por `doc_id`. |
+| `asistente` | `{ titulo, ejemplos }` de la tarjeta «En construcción» (sección 6). Por defecto, `{ titulo: 'Asistente con IA', ejemplos: [] }`. |
 
 ---
 
@@ -194,12 +145,9 @@ pie                     opcional, de la pantalla
 AsistenteEnConstruccion siempre al final
 ```
 
-- **Selector de período:** píldoras en el ancho del panel desde `@xl` y un `<select>` en anchos chicos. «Personalizado» abre dos fechas (Desde y Hasta, a lo sumo hoy en Colombia) con «Aplicar». Las fechas inválidas no se aplican y el aviso usa el mismo texto que daría el servidor (`errorPeriodo`).
-- **Indicadores:** son `TarjetaKpi` dentro de `FranjaKpis` (`FilaKpis`), las mismas tarjetas del resto de la app (ver `design-system-reference.md`). Nunca tarjetas con gradiente propio.
-- **Fila 2:** la línea va a todo el ancho hasta `@5xl`; desde ahí la línea ocupa 6/12, la dona 3/12 y los movimientos 3/12. Entre `@2xl` y `@5xl`, la dona y los movimientos van lado a lado debajo de la línea. En una sola columna se ven todos los movimientos (hasta 8); desde `@2xl`, 4 y debajo «y N movimientos más». Con 2 o más donas hay píldoras para cambiar entre ellas.
-- **Fila 3:** el ranking (5/12) y las barras (7/12) lado a lado desde `@5xl`. El ranking trae `Top 5`, `Top 10` y `Top 25`; las tres primeras filas llevan medalla (oro, plata y bronce) y cada fila una barra proporcional al mayor.
 - Un bloque que el módulo no tiene (`null`) no deja celda vacía: la grilla se cierra.
-- Los movimientos abren su documento con un `<Link>` a `enlaceDocumento` (SC, COT, PVEN o VEN, PEC, ENINV, GASTO y KARDEX) o con `alAbrirMovimiento`.
+- Movimientos: se ven 4 desde `@2xl` del panel, con la línea «y N movimientos más»; por debajo, los 8.
+- Los movimientos abren su documento con `enlaceDocumento` (SC, COT, PVEN o VEN, PEC, ENINV, GASTO y KARDEX) o con `alAbrirMovimiento`.
 
 ---
 
@@ -214,13 +162,10 @@ GET /<módulo>/analisis?periodo=30d&top=5[&desde=AAAA-MM-DD&hasta=AAAA-MM-DD][&f
   "data": { "periodo", "kpis", "linea", "donas", "barras", "movimientos", "ranking", "filtros", "avisos", "generado_en" } }
 ```
 
-- **Un solo contrato** (`backend/app/core/analisis.py`): `kpi(...)`, `segmentos(...)` y las claves exactas de cada bloque (`CLAVES_ANALISIS`, `CLAVES_KPI`, `CLAVES_LINEA`…). Un bloque con claves de más o de menos es un `ErrorDeContrato` (500 con su traceback), no se esconde. En el navegador, `normalizarAnalisis` completa lo que falte con `null` o `[]` y nunca rellena una cifra.
-- **Un solo resolver de períodos** (`backend/app/core/periodos.py`): `7d`, `30d`, `90d`, `mes`, `12m` y `personalizado`, en días calendario de Colombia, con la comparación contra el período anterior y los seis textos de error en español (422). El navegador valida con `validarPeriodo` y `errorPeriodo` de `@/lib/analisis`, que dicen lo mismo.
-- **Ranking:** `top` es 5, 10 o 25 (`validar_top`); cualquier otro valor da 422.
-- **Agregado en SQL:** `GROUP BY`, `SUM`, `COUNT` y `LIMIT`; como máximo 14 consultas por llamada (las pruebas del endpoint lo miden con la fixture `contador_sql`).
-- **Dinero** en pesos enteros (`dinero()`), fechas de las cubetas como `AAAA-MM-DD` de Colombia y `generado_en` como ISO con `Z`.
-- **Cada cifra se calcula con la regla única del sistema.** Ejemplo: «Vendido» son los pedidos creados en el período, sin cancelados ni devueltos; el Dashboard General, las tarjetas y el Análisis dicen lo mismo.
-- Lo que muestra cada módulo (qué indicadores, qué dona, qué ranking) lo decide su endpoint. La pantalla no calcula, no completa y no renombra cifras.
+- **Un solo contrato** (`backend/app/core/analisis.py`): `kpi(...)`, `segmentos(...)` y las claves exactas de cada bloque (`CLAVES_ANALISIS`…). Un bloque con claves de más o de menos es un `ErrorDeContrato` (500), no se esconde. En el navegador, `normalizarAnalisis` completa lo que falte con `null` o `[]` y nunca rellena una cifra.
+- **Un solo resolver de períodos** (`backend/app/core/periodos.py`): `7d`, `30d`, `90d`, `mes`, `12m` y `personalizado`, en días calendario de Colombia, con la comparación contra el período anterior y sus textos de error en español (422). El navegador valida con `validarPeriodo` y `errorPeriodo` de `@/lib/analisis`, que dicen lo mismo. `top` es 5, 10 o 25 (`validar_top`); otro valor da 422.
+- **Agregado en SQL** (`GROUP BY`, `SUM`, `COUNT`, `LIMIT`): como máximo 14 consultas por llamada (las pruebas lo miden con la fixture `contador_sql`). Dinero en pesos enteros (`dinero()`), fechas de las cubetas `AAAA-MM-DD` de Colombia y `generado_en` ISO con `Z`.
+- **Cada cifra usa la regla única del sistema** (por ejemplo, «Vendido»: los pedidos creados en el período, sin cancelados ni devueltos; igual en las tarjetas, el Dashboard General y el Análisis). Qué indicadores, dona y ranking trae cada módulo lo decide su endpoint: la pantalla no calcula, no completa y no renombra cifras.
 
 ---
 
@@ -228,9 +173,6 @@ GET /<módulo>/analisis?periodo=30d&top=5[&desde=AAAA-MM-DD&hasta=AAAA-MM-DD][&f
 
 `chart.js` y `react-chartjs-2` solo se importan en `components/analisis`: `registro.ts` (el ÚNICO `ChartJS.register`) y los tres gráficos `GraficoLinea`, `GraficoDona` y `GraficoBarras`. Las excepciones de `test_graficos_centralizados.mjs` (`ventas/proyecciones`, `compras/proyecciones`, `finanzas/resumen` hasta que pase a `PanelAnalisisPerezoso`, y `app_mocks_backup`) son una lista blanca que se va vaciando.
 
-- **Línea:** el título, el total en grande con su variación (`ChipVariacion`) y el gráfico (256 px de alto, a lo sumo 8 marcas en el eje X). La serie del período lleva el color del módulo con un área en degradado; la del período anterior, gris punteada.
-- **Dona:** el total va en el centro (la letra se achica con el largo) y la leyenda es HTML con color, etiqueta, valor y porcentaje.
-- **Barras:** con eje `'fechas'` van verticales; con `'categorias'`, horizontales con la etiqueta recortada en el eje y completa en el tooltip y en la tabla. `apiladas` las apila.
 - **Registro:** los valores globales de Chart.js son solo la fuente de la app y la animación de 400 ms, que pasa a 0 con `prefers-reduced-motion`. El color de los ejes (`COLOR_EJES`, slate-600) y el estilo de los tooltips (`ESTILO_TOOLTIP`) van en las opciones de cada gráfico, no en `ChartJS.defaults`.
 - **Tooltips:** pesos colombianos y fechas en español, con `formatearValor` y `etiquetaFecha` de `@/lib/analisis`.
 - **Accesibilidad:** cada `<canvas>` lleva `role="img"` y `aria-label` con `resumenAccesible`. Los datos también van en una tabla para lectores de pantalla, como `<div className="sr-only"><table>…</table></div>` y NO como `<table className="sr-only">`, que desplaza la página de lado. El `<caption>` es genérico («Datos del gráfico») y la tabla va dentro de la región que nombra el `<h3>` del gráfico.
@@ -254,28 +196,9 @@ GET /<módulo>/analisis?periodo=30d&top=5[&desde=AAAA-MM-DD&hasta=AAAA-MM-DD][&f
 
 ## 6. Asistente IA: tarjeta «En construcción», sin respuestas simuladas, hasta el Bloque 5
 
-`PanelAnalisis` pinta `AsistenteEnConstruccion` al final de TODA pestaña Análisis. La pantalla solo le da el título y las preguntas de ejemplo con la prop `asistente` de `PanelAnalisisPerezoso`:
+`PanelAnalisis` pinta `AsistenteEnConstruccion` al final de TODA pestaña Análisis. La pantalla solo le da el título y las preguntas de ejemplo con la prop `asistente` de `PanelAnalisisPerezoso` (ejemplos de la sección 2).
 
-```tsx
-import { PanelAnalisisPerezoso } from '@/components/analisis';
-
-export function AnalisisCompras() {
-  return (
-    <PanelAnalisisPerezoso
-      modulo="compras"
-      endpoint="/compras/analisis"
-      acento="purple"
-      mejorLinea="neutro"
-      asistente={{
-        titulo: 'Copilot de Compras',
-        ejemplos: ['¿Qué pedidos de compra llegan tarde?', '¿Qué proveedor tiene más pedidos en tránsito?'],
-      }}
-    />
-  );
-}
-```
-
-- La tarjeta lleva el título del asistente, la pastilla ámbar «En construcción», el texto «El asistente con IA llega en el Bloque 5: responderá con los datos reales de esta pantalla.», las preguntas de ejemplo como chips deshabilitados y la caja de texto deshabilitada.
+- La tarjeta lleva el título del asistente, la pastilla ámbar «En construcción», el aviso que anuncia el Bloque 5 (su texto está solo en `AsistenteEnConstruccion.tsx`), las preguntas de ejemplo como chips deshabilitados y la caja de texto deshabilitada.
 - NO llama a ningún endpoint, NO usa `setTimeout`, NO responde nada (ni un texto fijo ni uno simulado) y NO tiene estado.
 - El aviso «En construcción» de la IA vive SOLO en `AsistenteEnConstruccion.tsx`. Ninguna pantalla escribe el suyo: el Bloque 5 lo cambia en un solo lugar y se detiene si encuentra otro.
 - Los ejemplos son preguntas reales de la pantalla, en español, sin códigos crudos ni emojis.
@@ -286,36 +209,28 @@ export function AnalisisCompras() {
 
 ## 7. Cifras, estados y textos
 
-### Sin cifras inventadas
+Formatos, textos, tildes, foco y `dark:` valen para toda la app: ver «Indicadores» y «Reglas Tailwind críticas» en `design-system-reference.md`.
 
 - Una cifra que el servidor no manda se ve «—» (`valor: null`), nunca 0, nunca un número de respaldo (`|| 12450`), nunca `Math.random()` ni datos de ejemplo.
-- Los formatos son los de `lib/kpis.js`: montos completos con `formatoPesos` (`$4.927.538`; la letra se achica, no se abrevia), porcentaje `45,2 %` (coma decimal y un espacio antes del `%`) y variación `+12,5 %`, `−8 %`, `Nuevo`, `Sin cambio` o `—`. Una cifra «de hoy» (`es_foto`, por ejemplo el saldo por cobrar) dice `Hoy` y no se compara. `pesosCorto` (`$4,9 M`) es solo para los ejes de los gráficos.
+- `pesosCorto` (`lib/analisis.js`, `$4,9 M`) es solo para los ejes de los gráficos; las cifras van completas con `formatoPesos` (`lib/pesos.js`).
 - Cada variación dice contra qué se compara: `vs 5 ago – 3 sept`, el `periodo.comparado` del servidor.
-
-### Estados
-
-- **Cargando:** el esqueleto (`EsqueletoAnalisis`), nunca ceros. También mientras se leen las preferencias (a lo sumo 4 s), sin que salga ninguna petición hasta tener el período guardado.
-- **Recargando** (otro período, foco, producto o «Actualizar»): los datos anteriores se ven al 90 % y la región lleva `aria-busy`. Si cambias varias veces seguidas, solo cuenta la última consulta.
+- **Cargando:** el esqueleto (`EsqueletoAnalisis`), nunca ceros, también mientras se leen las preferencias (a lo sumo 4 s; no sale ninguna petición hasta tener el período guardado). Al cambiar de foco se ve el esqueleto, nunca las cifras del foco anterior.
+- **Recargando** (otro período, producto, bodega o «Actualizar»): los datos anteriores se ven al 90 % y la región lleva `aria-busy`. Si cambias varias veces seguidas, solo cuenta la última consulta.
 - **Sin datos:** el bloque dice «Sin datos en este período». La dona y las barras no se dibujan vacías.
-- **Error:** «No pudimos cargar el análisis. Revisa tu conexión y vuelve a intentarlo.» con el botón «Reintentar», y los últimos datos buenos sin atenuar. Sin permiso (403): «No tienes permiso para ver este análisis.», sin botón. Un 422 muestra el texto del servidor, sin botón.
-
-### Fechas y textos
-
-- Las fechas del API vienen en UTC sin zona. Se muestran en hora de Colombia con `fechas-colombia.js`: `diaColombia()`, `hace(iso)` («hace 2 horas»), `fechaHoraLarga(iso)`. Una fecha de calendario (`AAAA-MM-DD`) no se corre de día.
-- Etiquetas, avisos y botones en español con tildes; los estados con su etiqueta (nunca el código crudo) y sin emojis.
-- Foco visible en todo control. Clases de Tailwind literales y sin `dark:` (la app es siempre clara).
+- **Error:** «No pudimos cargar el análisis. Revisa tu conexión y vuelve a intentarlo.» con «Reintentar», y los últimos datos buenos sin atenuar. Sin permiso (403): «No tienes permiso para ver este análisis.», sin botón. Un 422 muestra el texto del servidor, sin botón.
+- Las fechas del API vienen en UTC sin zona y se muestran en hora de Colombia (`diaColombia()`, `hace(iso)`, `fechaHoraLarga(iso)` de `lib/fechas-colombia.js`). Una fecha `AAAA-MM-DD` no se corre de día.
 
 ---
 
 ## 8. Lo que recuerda la pestaña
 
-`analisis:<modulo>` (preferencias del usuario, iguales en cualquier computador): el período, el Top del ranking y el foco, cada pieza por separado (`usePreferenciaParte`). Nada se escribe antes de tener lo guardado. Si el navegador no deja guardar, la pestaña funciona igual con 30 días y Top 5. Producto, bodega y los demás `params` no se guardan.
+`analisis:<modulo>`: el período, el Top del ranking y el foco, cada pieza por separado (`usePreferenciaParte`). Si el navegador no deja guardar, la pestaña funciona igual con 30 días y Top 5. Producto, bodega y los demás `params` no se guardan.
 
 ---
 
 ## 9. Antes de dar por terminada una pantalla con Análisis
 
 - `grep -rn "chart.js\|react-chartjs-2" frontend/src` solo encuentra `components/analisis` y la lista blanca.
-- Revisa capturas a 375 px con el menú plegado y a 768, 1024 y 1440 px con el menú abierto. Mira que nada salte del esqueleto a los datos, que el foco se vea en los campos de fecha y que el total de la línea quepa en tarjetas angostas. El atenuado al 90 % es transitorio: algunos textos quedan por debajo de 4,5:1 mientras `aria-busy` está activo.
-- A 375 px con el menú lateral abierto (`w-64`) el panel queda en unos 71 px y la página se desplaza de lado: el menú no se adapta, no es del panel.
-- Corre `npm test` y `npx tsc --noEmit` en `frontend/`.
+- Capturas a 375 px con el menú plegado y a 768, 1024 y 1440 px con el menú abierto: que nada salte del esqueleto a los datos, que el foco se vea en los campos de fecha y que el total de la línea quepa en tarjetas angostas. El atenuado al 90 % es transitorio y deja algunos textos por debajo de 4,5:1 mientras `aria-busy` está activo.
+- A 375 px con el menú lateral abierto (`w-64`) el panel queda en unos 71 px y la página se desplaza de lado: es del menú, no del panel.
+- `npm test` y `npx tsc --noEmit` en `frontend/`.
