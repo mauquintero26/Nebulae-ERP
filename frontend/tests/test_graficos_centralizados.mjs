@@ -4,14 +4,20 @@
  * 1) R13: 'chart.js' y 'react-chartjs-2' (también sus subrutas, como 'chart.js/auto') solo se importan en
  *    src/components/analisis/. Recorre todo src/ y falla con archivo:línea fuera de la lista blanca:
  *    - siempre: ventas/proyecciones, compras/proyecciones y src/app_mocks_backup;
- *    - hasta T5C, que los borra: ventas/components/AnalisisVentas.tsx y compras/components/AnalisisCompras.tsx;
  *    - hasta T22: finanzas/resumen.
+ *    (T5C borró los dos Análisis muertos, ventas/components/AnalisisVentas.tsx y compras/components/AnalisisCompras.tsx,
+ *    y sus dos entradas.)
  * 2) R2: ningún archivo de src/app contiene '/ventas/ai-chat' (el endpoint no existe; los asistentes quedan «En
  *    construcción»), salvo la lista blanca temporal: ventas/page.tsx hasta T7 y compras/pedidos/page.tsx hasta T15
  *    (src/app_mocks_backup no está dentro de src/app y tampoco se revisa).
  * 3) T5B: dentro de components/analisis, solo registro.ts (chart.js y el único ChartJS.register) y GraficoLinea,
  *    GraficoDona y GraficoBarras (react-chartjs-2 y los tipos de chart.js, con registrarGraficos() al cargarse) importan
  *    los gráficos; las piezas de T5C (PanelAnalisis y las demás) usan esos componentes.
+ * 4) T5C (R13 y D43 M6): chart.js solo entra en el chunk de la pestaña. Siguiendo los imports ESTÁTICOS (sin import type
+ *    ni import('…')), nada de lo que alcanzan components/analisis/index.ts ni PanelAnalisisPerezoso.tsx importa chart.js
+ *    o react-chartjs-2 (PanelAnalisisPerezoso carga PanelAnalisis con import('./PanelAnalisis'), un chunk aparte); y
+ *    fuera de components/analisis nadie importa estático PanelAnalisis, los gráficos ni registro.ts (las pantallas
+ *    importan PanelAnalisisPerezoso o el índice).
  * Cada tarea que deja de necesitar una entrada temporal la BORRA de su lista en el mismo commit (una por línea). Una
  * entrada que ya no se usa no hace fallar la prueba: se lista al final para que se borre.
  * Detecta import … from '…', import '…', import('…') y require('…'); un comentario que escriba esa forma también cuenta
@@ -32,8 +38,6 @@ const PERMITIDOS_GRAFICOS = [
   'src/app/dashboard/ventas/proyecciones/', // siempre
   'src/app/dashboard/compras/proyecciones/', // siempre
   'src/app_mocks_backup/', // siempre
-  'src/app/dashboard/ventas/components/AnalisisVentas.tsx', // hasta T5C (lo borra)
-  'src/app/dashboard/compras/components/AnalisisCompras.tsx', // hasta T5C (lo borra)
   'src/app/dashboard/finanzas/resumen/', // hasta T22
 ];
 // R2: lista blanca temporal de '/ventas/ai-chat' dentro de src/app.
@@ -150,6 +154,82 @@ console.log('--- T5B: dentro de components/analisis, solo registro.ts y los tres
     assert.match(texto, /^registrarGraficos\(\);$/m, `${nombre}: llama a registrarGraficos() al cargarse`);
   }
   console.log(`  ${todos.length} archivos en ${CARPETA_GRAFICOS}; importan gráficos: ${IMPORTAN.join(', ')}`);
+}
+
+console.log('--- T5C: chart.js solo entra en el chunk de la pestaña (PanelAnalisisPerezoso) ---');
+{
+  const src = join(RAIZ, 'src');
+  const carpeta = join(RAIZ, CARPETA_GRAFICOS);
+  const EXTENSIONES = ['', '.ts', '.tsx', '.js', '.mjs', '/index.ts', '/index.tsx', '/index.js'];
+  /** El archivo de src al que apunta `spec` desde `desde` ('@/…', './…' o '../…'), o null (un paquete o nada). */
+  const resolver = (desde, spec) => {
+    let base;
+    if (spec.startsWith('@/')) base = join(src, spec.slice(2));
+    else if (spec.startsWith('./') || spec.startsWith('../')) base = join(dirname(desde), spec);
+    else return null;
+    for (const e of EXTENSIONES) {
+      const r = base + e;
+      if (existsSync(r) && statSync(r).isFile()) return r;
+    }
+    return null;
+  };
+  // Los imports estáticos con valor: import … from '…', import '…' y export … from '…'. No cuentan import type ni
+  // export type (se borran al compilar) ni import('…') (otro chunk).
+  const PATRON_ESTATICO = /^\s*(?:import|export)\s+(?!type\b)(?:[^'"`;]*?\bfrom\s*)?(['"])([^'"]+)\1/gm;
+  const estaticos = (texto) => [...texto.matchAll(PATRON_ESTATICO)].map((m) => m[2]);
+  // Autoprueba del patrón.
+  assert.deepEqual(estaticos([
+    "import { A } from './A';", "import type { B } from './B';", "export { C } from './C';", "export type { D } from './D';",
+    "import {\n  E,\n  F,\n} from '@/lib/e';", "import './g.css';", "export * from './H';", "const P = dynamic(() => import('./P'));",
+    "export function f() { return 'x'; }", "import x, { type Y } from 'chart.js';",
+  ].join('\n')), ['./A', './C', '@/lib/e', './g.css', './H', 'chart.js']);
+  const GRAFICOS = /^(react-chartjs-2|chart\.js)(\/|$)/;
+  /** Los archivos de src que alcanza `entrada` por imports estáticos, y los imports de los gráficos que encuentra. */
+  const alcanzables = (entrada) => {
+    const vistos = new Set();
+    const pila = [entrada];
+    const graficos = [];
+    while (pila.length) {
+      const ruta = pila.pop();
+      if (vistos.has(ruta)) continue;
+      vistos.add(ruta);
+      for (const spec of estaticos(readFileSync(ruta, 'utf8'))) {
+        if (GRAFICOS.test(spec)) {
+          graficos.push(`${rel(ruta)} → ${spec}`);
+          continue;
+        }
+        const destino = resolver(ruta, spec);
+        if (destino && /\.(tsx?|jsx?|mjs)$/.test(destino)) pila.push(destino);
+      }
+    }
+    return { archivos: [...vistos].map(rel), graficos };
+  };
+  const PROHIBIDOS = ['PanelAnalisis.tsx', 'registro.ts', 'GraficoLinea.tsx', 'GraficoDona.tsx', 'GraficoBarras.tsx']
+    .map((n) => `${CARPETA_GRAFICOS}${n}`);
+  // El recorrido de verdad encuentra chart.js desde PanelAnalisis (si no, la prueba no vería nada).
+  const desdePanel = alcanzables(join(carpeta, 'PanelAnalisis.tsx'));
+  assert.ok(desdePanel.graficos.length >= 4 && desdePanel.archivos.includes(`${CARPETA_GRAFICOS}registro.ts`),
+    'el recorrido llega a chart.js desde PanelAnalisis');
+  for (const entrada of ['index.ts', 'PanelAnalisisPerezoso.tsx']) {
+    const { archivos: alcanzados, graficos } = alcanzables(join(carpeta, entrada));
+    assert.deepEqual(graficos, [], `${entrada} alcanza chart.js por imports estáticos (iría en el chunk de la pantalla):\n  ${graficos.join('\n  ')}`);
+    const malos = alcanzados.filter((a) => PROHIBIDOS.includes(a));
+    assert.deepEqual(malos, [], `${entrada} alcanza ${malos.join(', ')} por imports estáticos`);
+    console.log(`  ${entrada}: ${alcanzados.length} archivos alcanzables, ninguno con chart.js`);
+  }
+  const perezoso = readFileSync(join(carpeta, 'PanelAnalisisPerezoso.tsx'), 'utf8');
+  assert.match(perezoso, /import\('\.\/PanelAnalisis'\)/, 'PanelAnalisisPerezoso carga PanelAnalisis con import()');
+  // Fuera de components/analisis nadie importa estático el panel, los gráficos ni registro.ts.
+  const fuera = [];
+  for (const ruta of archivos(src)) {
+    const r = rel(ruta);
+    if (r.startsWith(CARPETA_GRAFICOS) || r.startsWith('src/app_mocks_backup/')) continue;
+    for (const spec of estaticos(readFileSync(ruta, 'utf8'))) {
+      const destino = resolver(ruta, spec);
+      if (destino && PROHIBIDOS.includes(rel(destino))) fuera.push(`${r} → ${spec}`);
+    }
+  }
+  assert.deepEqual(fuera, [], `importan el panel o los gráficos directo (usa PanelAnalisisPerezoso):\n  ${fuera.join('\n  ')}`);
 }
 
 console.log("--- R2: '/ventas/ai-chat' no aparece en src/app ---");

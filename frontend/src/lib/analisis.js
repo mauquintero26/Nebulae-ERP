@@ -19,16 +19,21 @@
  *    «Sin datos en este período» (bloqueSinDatos), el resumen de cada gráfico (resumenAccesible), el ranking
  *    (proporcionesRanking), los movimientos (MAX_MOVIMIENTOS, montoMovimiento, iconoMovimiento), el total de la dona
  *    (tamanoCentroDona) y la grilla de container queries (GRILLA_ANALISIS).
+ *  - T5C, lo que decide PanelAnalisis y useAnalisis: la clave analisis:<modulo> y la lectura de lo guardado
+ *    (clavePreferenciaAnalisis, leerPreferenciaAnalisis), el foco (resolverFoco), el campo Producto (productoConsulta,
+ *    parametrosAnalisis), la carga y sus errores (aplicarLlegadaAnalisis, estadoAnalisis, errorAnalisis,
+ *    siguienteErrorVisto), los textos de arriba (textoComparado, borradorPersonalizado, textoActualizado), las tarjetas
+ *    de FilaKpis (tarjetaKpiAnalisis), el «mejor» de la línea (mejorDeLinea) y el asistente por defecto.
  * No lee ni escribe el almacenamiento (R4): el período, el top y el foco se guardan en analisis:<modulo> con
- * lib/preferencias.js (PanelAnalisis, T5C).
+ * lib/preferencias.js (PanelAnalisis, T5C, con usePreferenciaParte).
  */
 
 import { congelar, tiene } from './estados-pedido.js';
-import { diaColombia } from './fechas-colombia.js';
+import { diaColombia, hace } from './fechas-colombia.js';
 import { formatoPesos } from './pesos.js';
 import {
   variacionPct, textoVariacion, direccionVariacion, tonoDeDireccion, mejorDesde, formatoValorKpi, formatoEntero,
-  formatoDecimal, ETIQUETAS_PERIODO,
+  formatoDecimal, ETIQUETAS_PERIODO, CATALOGO_KPI,
 } from './kpis.js';
 
 /**
@@ -565,6 +570,11 @@ export function enlaceDocumento(tipo, id, { returnTo = null } = {}) {
 
 /** Las filas que muestra ListaMovimientos, como mucho (ANALISIS-base punto 2). */
 export const MAX_MOVIMIENTOS = 8;
+/**
+ * Las filas de movimientos que se ven desde @2xl, al lado de la dona o de la línea (T5C, D43 M10); la clase
+ * '@2xl/analisis:[&_li:nth-child(n+5)]:hidden' de GRILLA_ANALISIS.movimientos dice lo mismo (test_analisis.mjs lo comprueba).
+ */
+export const MOVIMIENTOS_AL_LADO = 4;
 
 /**
  * El ícono (un nombre de lucide-react) de un movimiento por su tipo: SC, COT, PVEN o VEN, PAGO, PEC, ENINV, GASTO,
@@ -658,15 +668,22 @@ export function tamanoCentroDona(texto) {
  *  - Fila 2: la línea a todo el ancho hasta @5xl y desde ahí 6/12, con la dona (3/12) y los movimientos (3/12); entre
  *    @2xl y @5xl, la dona y los movimientos lado a lado debajo de la línea.
  *  - Fila 3: el ranking (5/12) y las barras (7/12) lado a lado desde @5xl.
+ *  - T5C (D43, M10, la opción de items-start): desde @2xl, donde los movimientos van al lado de otra tarjeta, la fila 2
+ *    va con items-start y se ven solo las primeras MOVIMIENTOS_AL_LADO filas (medido en Chromium con el CSS real: las 8
+ *    filas en 272 px miden 873 px contra los 367 de la línea y los 436 de la dona; con 4, unos 467). En una sola
+ *    columna (por debajo de @2xl) se ven todas. EsqueletoAnalisis usa la misma fila (sus 5 filas grises ya son bajas).
+ *    La raíz es un @container con nombre (analisis): esa regla estiliza los <li>, cuyo contenedor más cercano es el
+ *    <ul @container> de ListaMovimientos, y con el nombre la condición mide el ancho del panel (las demás clases @…:
+ *    siguen midiendo el contenedor más cercano, que es la raíz).
  * Cada celda lleva min-w-0: un <canvas> no ensancha su columna. Inmutable.
  */
 export const GRILLA_ANALISIS = congelar({
-  raiz: '@container',
+  raiz: '@container/analisis',
   filas: 'flex flex-col gap-4',
-  fila2: 'grid grid-cols-1 gap-4 @2xl:grid-cols-2 @5xl:grid-cols-12',
+  fila2: 'grid grid-cols-1 gap-4 @2xl:grid-cols-2 @2xl:items-start @5xl:grid-cols-12',
   linea: 'min-w-0 @2xl:col-span-2 @5xl:col-span-6',
   dona: 'min-w-0 @5xl:col-span-3',
-  movimientos: 'min-w-0 @5xl:col-span-3',
+  movimientos: 'min-w-0 @5xl:col-span-3 @2xl/analisis:[&_li:nth-child(n+5)]:hidden',
   fila3: 'grid grid-cols-1 gap-4 @5xl:grid-cols-12',
   ranking: 'min-w-0 @5xl:col-span-5',
   barras: 'min-w-0 @5xl:col-span-7',
@@ -822,3 +839,343 @@ export function resumenAccesible(linea, { frente = 'frente al período anterior'
   if (!direccion) return `${base}, sin cambio ${frente}`;
   return `${base}, ${direccion === 'sube' ? 'subió' : 'bajó'} ${formatoValorKpi(Math.abs(/** @type {any} */ (v).pct), 'porcentaje')} ${frente}`;
 }
+
+// ─── T5C: el panel (PanelAnalisis, useAnalisis, SelectorPeriodo, FilaKpis y el asistente) ───────────────────
+
+/**
+ * @typedef {'ventas' | 'compras' | 'inventario' | 'crm' | 'finanzas'} ModuloAnalisis
+ * @typedef {{periodo: PeriodoAnalisis, top: 5 | 10 | 25, foco: string | null}} PreferenciaAnalisis
+ * @typedef {{clave?: string | null, etiqueta?: string | null, valor?: unknown, anterior?: unknown,
+ *   variacion_pct?: number | null, formato?: FormatoAnalisis | null, mejor?: MejorAnalisis | null, es_foto?: boolean,
+ *   ayuda?: string | null}} KpiAnalisis
+ * @typedef {ReturnType<typeof normalizarAnalisis>} DatosAnalisis
+ * @typedef {{clave: string, ambito: string | null, usuario: number | null, repeticion: number,
+ *   datos: DatosAnalisis | null, error: unknown}} ResultadoAnalisis
+ *   Lo último que llegó a useAnalisis: la clave de la consulta que lo pidió, su ámbito (el endpoint y el foco), el usuario
+ *   del token con que se pidió, la vuelta de la carga, los datos buenos (normalizados) y el error de esa llegada.
+ * @typedef {{datos: DatosAnalisis | null, cargando: boolean, error: unknown}} EstadoAnalisis
+ * @typedef {{tipo: 'permiso' | 'validacion' | 'carga', texto: string, reintentar: boolean}} ErrorAnalisis
+ * @typedef {'pesos' | 'entero' | 'porcentaje' | 'texto'} FormatoTarjetaAnalisis
+ * @typedef {{clave: string, kpi: string | null, etiqueta: string, formato: FormatoTarjetaAnalisis,
+ *   valor: number | string | null, icono: string | null,
+ *   variacion: {actual: number | null, anterior: number | null, mejorSiSube: boolean | null} | null,
+ *   ayuda: string | null, titulo: string | null}} TarjetaAnalisis
+ */
+
+/**
+ * Los módulos con pestaña Análisis (R13 y RP69: uno por Hub; el foco de Ventas va dentro de analisis:ventas, sin
+ * 'ventas-sc', 'ventas-cot' ni 'ventas-pven'). Inmutable.
+ * @type {ReadonlyArray<ModuloAnalisis>}
+ */
+export const MODULOS_ANALISIS = congelar(/** @type {ModuloAnalisis[]} */ (['ventas', 'compras', 'inventario', 'crm', 'finanzas']));
+
+/**
+ * La clave de las preferencias de la pestaña: 'analisis:ventas' (R4; el ámbito analisis: de lib/preferencias.js). Un
+ * módulo que no está en MODULOS_ANALISIS es un error de programación (lanza Error).
+ * @param {unknown} modulo
+ * @returns {string}
+ */
+export function clavePreferenciaAnalisis(modulo) {
+  if (typeof modulo !== 'string' || !MODULOS_ANALISIS.includes(/** @type {ModuloAnalisis} */ (modulo))) {
+    throw new Error(`Módulo de Análisis desconocido: ${String(modulo)}`);
+  }
+  return `analisis:${modulo}`;
+}
+
+/**
+ * Lo que vale analisis:<modulo> sin nada guardado: los últimos 30 días, el Top 5 y sin foco (el porDefecto de
+ * usePreferenciaParte en PanelAnalisis). Inmutable.
+ * @type {Readonly<PreferenciaAnalisis>}
+ */
+export const PREFERENCIA_ANALISIS_POR_DEFECTO = congelar(/** @type {PreferenciaAnalisis} */ ({ periodo: { clave: '30d' }, top: 5, foco: null }));
+
+/**
+ * Lo guardado en analisis:<modulo>, leído pieza por pieza (una pieza que no vale vuelve a la de por defecto sin tumbar
+ * las otras; lo vacío, dañado o de otro tipo da todo por defecto):
+ *  - periodo: validarPeriodo (un personalizado con una fecha que ya no vale vuelve a 30 días), como {clave} o, en
+ *    'personalizado', {clave, desde, hasta}, sin claves de más; también acepta la clave sola;
+ *  - top: 5, 10 o 25 (TOPS), si no 5;
+ *  - foco: una clave de `focos` (FOCOS_VENTAS en Ventas), si no la primera; sin focos, null.
+ * Devuelve objetos nuevos (no muta lo guardado ni devuelve la constante).
+ * @param {unknown} valor
+ * @param {{focos?: ReadonlyArray<{clave: string}> | null, hoy?: string}} [opciones]
+ * @returns {PreferenciaAnalisis}
+ */
+export function leerPreferenciaAnalisis(valor, { focos = null, hoy } = {}) {
+  const v = esObjeto(valor) ? /** @type {any} */ (valor) : {};
+  const crudo = typeof v.periodo === 'string' ? { clave: v.periodo } : v.periodo;
+  const p = esObjeto(crudo) ? validarPeriodo(/** @type {PeriodoAnalisis} */ (crudo), hoy) : null;
+  /** @type {PeriodoAnalisis} */
+  let periodo = { clave: PERIODO_POR_DEFECTO.clave };
+  if (p) {
+    periodo = p.clave === 'personalizado'
+      ? { clave: p.clave, desde: String(p.desde).trim(), hasta: String(p.hasta).trim() }
+      : { clave: p.clave };
+  }
+  const top = /** @type {5 | 10 | 25} */ (TOPS.includes(v.top) ? v.top : PREFERENCIA_ANALISIS_POR_DEFECTO.top);
+  return { periodo, top, foco: resolverFoco(focos, null, v.foco) };
+}
+
+/**
+ * El foco que se ve (R13): `inicial` (el ?foco= de la URL, el «Ver análisis» de las listas) si es una clave de `focos`;
+ * si no, `guardado` si lo es; si no, el primero. Sin focos, null. Las claves se comparan exactas.
+ * @param {ReadonlyArray<{clave: string}> | null | undefined} focos
+ * @param {unknown} inicial
+ * @param {unknown} guardado
+ * @returns {string | null}
+ */
+export function resolverFoco(focos, inicial, guardado) {
+  const claves = lista(focos).map((f) => f?.clave).filter((c) => typeof c === 'string');
+  if (!claves.length) return null;
+  if (claves.includes(/** @type {string} */ (inicial))) return /** @type {string} */ (inicial);
+  if (claves.includes(/** @type {string} */ (guardado))) return /** @type {string} */ (guardado);
+  return claves[0];
+}
+
+/** El campo Producto manda producto= con al menos estas letras (RP69: T6C responde 422 con menos). */
+export const PRODUCTO_MINIMO = 2;
+/** Lo que espera el campo Producto, desde la última tecla, antes de pedir (ANALISIS-base punto 2). */
+export const ESPERA_PRODUCTO_MS = 400;
+
+/**
+ * El producto= de la consulta: el texto sin espacios en los bordes si tiene PRODUCTO_MINIMO letras o más (cuenta letras,
+ * no unidades de UTF-16); si no, null (no se manda).
+ * @param {unknown} texto
+ * @returns {string | null}
+ */
+export function productoConsulta(texto) {
+  const limpio = typeof texto === 'string' ? texto.trim() : '';
+  return Array.from(limpio).length >= PRODUCTO_MINIMO ? limpio : null;
+}
+
+/**
+ * Los parámetros propios de la consulta del panel (los extra de consultaAnalisis): los de la pantalla (`params`, por
+ * ejemplo {bodega}) más el foco y el producto del panel, que ganan sobre los de `params`; un foco null o un producto
+ * corto (productoConsulta) no van.
+ * @param {Record<string, unknown> | null | undefined} params
+ * @param {{foco?: string | null, producto?: unknown}} [panel]
+ * @returns {Record<string, unknown>}
+ */
+export function parametrosAnalisis(params, { foco = null, producto = null } = {}) {
+  /** @type {Record<string, unknown>} */
+  const salida = { ...(esObjeto(params) ? /** @type {Record<string, unknown>} */ (params) : {}) };
+  delete salida.foco;
+  delete salida.producto;
+  if (foco) salida.foco = foco;
+  const p = productoConsulta(producto);
+  if (p) salida.producto = p;
+  return salida;
+}
+
+/** El resultado es de ese ámbito y de ese usuario (sin usuario en los dos lados, también). */
+const delMismoAmbito = (resultado, ambito, usuario) => Boolean(resultado) && resultado.ambito === ambito
+  && (resultado.usuario ?? null) === (usuario ?? null);
+
+/**
+ * Lo que queda del análisis cuando llega la respuesta (o el error) de una carga de useAnalisis. La llegada es la de
+ * crearCargaListado de lib/tabla.js (el turno: lo de una carga vieja nunca llega aquí), con su ContextoListado
+ * {ruta, usuario} (ruta = el ámbito de la consulta: el endpoint y el foco) y su repetición. La misma regla de
+ * useResumenFlujo (T5A r1) y useListado (T4C r2):
+ *  - una respuesta con un objeto en `data` (apiFetch devuelve el cuerpo completo): normalizarAnalisis, sin error;
+ *  - un error, o una respuesta sin `data`: el error y los últimos datos buenos del MISMO ámbito (el endpoint y el foco)
+ *    y del MISMO usuario; los de otro foco o de otra cuenta no se muestran.
+ * No muta lo que recibe.
+ * @param {ResultadoAnalisis | null | undefined} previo
+ * @param {{marca: string, ok: boolean, respuesta?: unknown, error?: unknown, repeticion?: number,
+ *   contexto?: {ruta?: string | null, usuario?: number | null} | null}} llegada
+ * @returns {ResultadoAnalisis}
+ */
+export function aplicarLlegadaAnalisis(previo, llegada) {
+  const ambito = llegada?.contexto?.ruta ?? null;
+  const usuario = llegada?.contexto?.usuario ?? null;
+  const anteriores = delMismoAmbito(previo, ambito, usuario) ? /** @type {ResultadoAnalisis} */ (previo).datos : null;
+  const base = { clave: llegada.marca, ambito, usuario, repeticion: llegada.repeticion ?? 0 };
+  if (llegada.ok) {
+    const respuesta = /** @type {any} */ (llegada.respuesta);
+    if (esObjeto(respuesta) && esObjeto(respuesta.data)) return { ...base, datos: normalizarAnalisis(respuesta), error: null };
+    return { ...base, datos: anteriores, error: new Error('La respuesta del análisis no trae datos.') };
+  }
+  return { ...base, datos: anteriores, error: llegada.error ?? new Error('No se pudo cargar el análisis.') };
+}
+
+/**
+ * Lo que devuelve useAnalisis para la consulta `clave`, con `resultado` (lo último que llegó):
+ *  - un resultado de otro ámbito (otro endpoint u otro foco) o de otro usuario cuenta como ninguno: cargando sin datos
+ *    (el esqueleto);
+ *  - si su clave no es la pedida, o la carga dio otra vuelta (`repeticion`), hay una carga en camino: `cargando`, con
+ *    los datos anteriores (se ven atenuados: al cambiar el período no se borran) y sin el error anterior;
+ *  - ya llegada: sus datos y su error (con error, los últimos datos buenos).
+ * @param {ResultadoAnalisis | null | undefined} resultado
+ * @param {{clave: string, ambito: string | null, usuario?: number | null, repeticion?: number}} consulta
+ * @returns {EstadoAnalisis}
+ */
+export function estadoAnalisis(resultado, { clave, ambito, usuario = null, repeticion = 0 }) {
+  const propio = delMismoAmbito(resultado, ambito, usuario) ? /** @type {ResultadoAnalisis} */ (resultado) : null;
+  const cargando = !propio || propio.clave !== clave || (propio.repeticion ?? 0) !== repeticion;
+  return { datos: propio?.datos ?? null, cargando, error: cargando ? null : (propio?.error ?? null) };
+}
+
+/** El aviso de un 403 (ANALISIS-base, comportamiento esperado). */
+export const MENSAJE_SIN_PERMISO_ANALISIS = 'No tienes permiso para ver este análisis.';
+/** El aviso de cualquier otra falla de la carga, con 'Reintentar'. */
+export const MENSAJE_ERROR_ANALISIS = 'No pudimos cargar el análisis. Revisa tu conexión y vuelve a intentarlo.';
+
+/**
+ * El aviso de un error de la carga (apiFetch lanza con .status y .detail, Bloque 2):
+ *  - 403: MENSAJE_SIN_PERMISO_ANALISIS, sin 'Reintentar' (volver a pedir no lo cambia);
+ *  - 422 con texto: el texto del servidor (en español: los de core/periodos.py y core/analisis.py), sin 'Reintentar';
+ *  - cualquier otro (la red, un 5xx, un 401 que no se pudo renovar, una respuesta sin datos, un 422 sin texto):
+ *    MENSAJE_ERROR_ANALISIS con 'Reintentar'.
+ * Sin error, null.
+ * @param {unknown} error
+ * @returns {ErrorAnalisis | null}
+ */
+export function errorAnalisis(error) {
+  if (!error) return null;
+  const e = /** @type {any} */ (error);
+  if (e.status === 403) return { tipo: 'permiso', texto: MENSAJE_SIN_PERMISO_ANALISIS, reintentar: false };
+  const texto = typeof e.message === 'string' ? e.message.trim() : '';
+  if (e.status === 422 && texto) return { tipo: 'validacion', texto, reintentar: false };
+  return { tipo: 'carga', texto: MENSAJE_ERROR_ANALISIS, reintentar: true };
+}
+
+/**
+ * El aviso de error que muestra el panel: mientras carga (un reintento, o el período nuevo después de un error) se
+ * conserva el que ya se veía, así el botón 'Reintentar' sigue montado y no suelta el foco; al terminar, el de la
+ * última llegada (null si salió bien). Si el aviso nuevo dice lo mismo, devuelve `visto` (la misma identidad: el panel
+ * lo guarda en su estado durante el render y compara por identidad).
+ * @param {ErrorAnalisis | null} visto
+ * @param {{cargando: boolean, error: unknown}} estado
+ * @returns {ErrorAnalisis | null}
+ */
+export function siguienteErrorVisto(visto, { cargando, error }) {
+  if (cargando) return visto;
+  const nuevo = errorAnalisis(error);
+  if (nuevo && visto && nuevo.tipo === visto.tipo && nuevo.texto === visto.texto && nuevo.reintentar === visto.reintentar) return visto;
+  return nuevo;
+}
+
+/**
+ * 'Comparado con 5 ago – 3 sept': el texto de debajo del selector de período, con periodo.comparado del servidor
+ * ('vs 5 ago – 3 sept'). Sin comparado, null.
+ * @param {{comparado?: unknown} | null | undefined} periodo
+ * @returns {string | null}
+ */
+export function textoComparado(periodo) {
+  const crudo = typeof periodo?.comparado === 'string' ? periodo.comparado.trim() : '';
+  const texto = crudo.replace(/^vs\.?\s+/i, '').trim();
+  return texto ? `Comparado con ${texto}` : null;
+}
+
+const diaValido = (v) => (typeof v === 'string' && FECHA.test(v.trim()) ? v.trim() : '');
+
+/**
+ * Las fechas con que se abre 'Personalizado' en SelectorPeriodo: las del personalizado aplicado o, si el período es
+ * otro, las del período que se ve (periodo.desde y periodo.hasta del contrato, días de Colombia). Solo 'AAAA-MM-DD'; si
+ * no hay, ''.
+ * @param {PeriodoAnalisis | null | undefined} periodo
+ * @param {{desde?: unknown, hasta?: unknown} | null | undefined} periodoDatos
+ * @returns {{desde: string, hasta: string}}
+ */
+export function borradorPersonalizado(periodo, periodoDatos) {
+  const fuente = periodo?.clave === 'personalizado' ? periodo : periodoDatos;
+  return { desde: diaValido(fuente?.desde), hasta: diaValido(fuente?.hasta) };
+}
+
+/**
+ * 'Actualizado hace 2 minutos' (generado_en del contrato, ISO con Z) con hace() de lib/fechas-colombia.js (RP60). Sin
+ * fecha válida, ''.
+ * @param {unknown} generadoEn
+ * @param {Date | number} [ahora]
+ * @returns {string}
+ */
+export function textoActualizado(generadoEn, ahora = new Date()) {
+  const relativa = generadoEn ? hace(generadoEn, ahora) : '';
+  return relativa ? `Actualizado ${relativa}` : '';
+}
+
+/**
+ * El ícono de una tarjeta de FilaKpis cuyo id no está en CATALOGO_KPI, por su formato (nombres de ICONOS_KPI). Inmutable.
+ * @type {Readonly<Record<'pesos' | 'entero' | 'porcentaje' | 'dias' | 'unidades' | 'texto', string>>}
+ */
+export const ICONO_KPI_POR_FORMATO = congelar({
+  pesos: 'DollarSign', entero: 'Activity', porcentaje: 'PieChart', dias: 'Clock', unidades: 'Package', texto: 'Activity',
+});
+
+/**
+ * Las props de la TarjetaKpi de un indicador del contrato (FilaKpis = TarjetaKpi con variación, C12 y RP27):
+ *  - etiqueta: la del servidor (o la clave); kpi: la clave si es un id de CATALOGO_KPI (trae su ícono y su color), si no
+ *    null y el ícono va por formato (ICONO_KPI_POR_FORMATO);
+ *  - formato de la tarjeta: 'pesos', 'entero' ('numero' también), 'porcentaje' o 'texto'; 'dias' y 'unidades' llegan ya
+ *    escritos con formatearValor ('3,5 días', '1.234 u.') en formato 'texto'; uno desconocido o null, 'entero';
+ *  - valor: el del servidor (un número o un número en texto); sin valor, null (la tarjeta pinta '—'): nunca 0;
+ *  - variacion {actual, anterior, mejorSiSube} con los números del servidor (mejorDesde: 'sube' true, 'baja' false,
+ *    'neutro' u otro null, en gris); sin anterior queda con anterior null y la tarjeta dice '—' (RP27);
+ *  - una foto (es_foto): sin variación, 'Cifra de hoy, sin comparación' debajo y la ayuda del servidor en el title;
+ *    si no, la ayuda (con variación, TarjetaKpi la lleva al title).
+ * @param {KpiAnalisis | null | undefined} kpi
+ * @returns {TarjetaAnalisis}
+ */
+export function tarjetaKpiAnalisis(kpi) {
+  const k = esObjeto(kpi) ? /** @type {any} */ (kpi) : {};
+  const clave = typeof k.clave === 'string' && k.clave.trim() ? k.clave.trim() : '';
+  const etiqueta = typeof k.etiqueta === 'string' && k.etiqueta.trim() ? k.etiqueta.trim() : (clave || 'Indicador');
+  const enCatalogo = clave !== '' && tiene(CATALOGO_KPI, clave);
+  const f = k.formato === 'numero' ? 'entero' : k.formato;
+  const crudo = (typeof k.valor === 'number' || typeof k.valor === 'string') && k.valor !== '' ? k.valor : null;
+  /** @type {FormatoTarjetaAnalisis} */
+  let formato = 'entero';
+  /** @type {number | string | null} */
+  let valor = crudo;
+  if (f === 'dias' || f === 'unidades') {
+    formato = 'texto';
+    valor = numero(crudo) === null ? null : formatearValor(crudo, f);
+  } else if (f === 'pesos' || f === 'entero' || f === 'porcentaje' || f === 'texto') {
+    formato = f;
+  }
+  const icono = enCatalogo ? null : ICONO_KPI_POR_FORMATO[tiene(ICONO_KPI_POR_FORMATO, f) ? f : 'entero'];
+  const ayuda = typeof k.ayuda === 'string' && k.ayuda.trim() ? k.ayuda.trim() : null;
+  const foto = k.es_foto === true;
+  return {
+    clave,
+    kpi: enCatalogo ? clave : null,
+    etiqueta,
+    formato,
+    valor,
+    icono,
+    variacion: foto ? null : { actual: numero(k.valor), anterior: numero(k.anterior), mejorSiSube: mejorDesde(k.mejor) },
+    ayuda: foto ? 'Cifra de hoy, sin comparación' : ayuda,
+    titulo: foto ? ayuda : null,
+  };
+}
+
+const MEJORES_ANALISIS = congelar(['sube', 'baja', 'neutro']);
+
+/**
+ * El «mejor» del chip de la línea (D43, M19: el contrato de la línea no lo trae): `explicito` si la pantalla lo fija y
+ * vale; si no, el del kpi de la MISMA cifra (el mismo formato y el mismo valor que linea.total); si no, el del único kpi
+ * con ese formato; si no (ninguno o varios), 'sube'. Solo cuentan los kpis con un «mejor» válido.
+ * @param {{formato?: unknown, total?: unknown} | null | undefined} linea
+ * @param {ReadonlyArray<KpiAnalisis | null> | null | undefined} kpis
+ * @param {unknown} [explicito]
+ * @returns {MejorAnalisis}
+ */
+export function mejorDeLinea(linea, kpis, explicito) {
+  const valido = (m) => MEJORES_ANALISIS.includes(/** @type {MejorAnalisis} */ (m));
+  if (valido(explicito)) return /** @type {MejorAnalisis} */ (explicito);
+  if (!esObjeto(linea)) return 'sube';
+  const l = /** @type {any} */ (linea);
+  const formato = l.formato ?? 'entero';
+  const total = numero(l.total);
+  const mismos = lista(kpis).filter((k) => esObjeto(k) && (k.formato ?? 'entero') === formato && valido(k.mejor));
+  const igual = total === null ? null : mismos.find((k) => numero(k.valor) === total);
+  if (igual) return igual.mejor;
+  if (mismos.length === 1) return mismos[0].mejor;
+  return 'sube';
+}
+
+/**
+ * El asistente de toda pestaña Análisis cuando la pantalla no pasa el suyo (R2 y RP69). Inmutable.
+ * @type {Readonly<{titulo: string, ejemplos: ReadonlyArray<string>}>}
+ */
+export const ASISTENTE_POR_DEFECTO = congelar({ titulo: 'Asistente con IA', ejemplos: [] });

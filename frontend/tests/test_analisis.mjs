@@ -569,20 +569,28 @@ console.log('--- TEST 17 (T5B): GRILLA_ANALISIS (container queries de Tailwind v
 {
   const { GRILLA_ANALISIS } = analisis;
   assert.deepEqual({ ...GRILLA_ANALISIS }, {
-    raiz: '@container',
+    // T5C: la raíz es un @container con nombre (analisis): la regla de los movimientos (abajo) estiliza los <li>, cuyo
+    // contenedor más cercano es el <ul @container> de ListaMovimientos; con el nombre mide el ancho del panel.
+    raiz: '@container/analisis',
     filas: 'flex flex-col gap-4',
     // Fila 2: la línea a todo el ancho hasta @5xl y desde ahí 6/12, con la dona (3/12) y los movimientos (3/12); entre
     // @2xl y @5xl la dona y los movimientos van lado a lado debajo de la línea.
-    fila2: 'grid grid-cols-1 gap-4 @2xl:grid-cols-2 @5xl:grid-cols-12',
+    // T5C (D43, M10, la opción de items-start): desde @2xl, donde los movimientos van al lado de otra tarjeta, la fila
+    // va con items-start y se ven las primeras MOVIMIENTOS_AL_LADO filas (medido: 8 filas en 272 px miden 873 px contra
+    // los 367 de la línea; con 4, unos 467, como la dona). En una sola columna se ven todas.
+    fila2: 'grid grid-cols-1 gap-4 @2xl:grid-cols-2 @2xl:items-start @5xl:grid-cols-12',
     linea: 'min-w-0 @2xl:col-span-2 @5xl:col-span-6',
     dona: 'min-w-0 @5xl:col-span-3',
-    movimientos: 'min-w-0 @5xl:col-span-3',
+    movimientos: 'min-w-0 @5xl:col-span-3 @2xl/analisis:[&_li:nth-child(n+5)]:hidden',
     // Fila 3: el ranking (5/12) y las barras (7/12) lado a lado desde @5xl.
     fila3: 'grid grid-cols-1 gap-4 @5xl:grid-cols-12',
     ranking: 'min-w-0 @5xl:col-span-5',
     barras: 'min-w-0 @5xl:col-span-7',
   });
   assert.ok(Object.isFrozen(GRILLA_ANALISIS));
+  assert.equal(analisis.MOVIMIENTOS_AL_LADO, 4);
+  assert.ok(GRILLA_ANALISIS.movimientos.includes(`[&_li:nth-child(n+${analisis.MOVIMIENTOS_AL_LADO + 1})]:hidden`), 'la clase y la constante dicen lo mismo');
+  assert.ok(analisis.MOVIMIENTOS_AL_LADO < analisis.MAX_MOVIMIENTOS);
   // Fila 1 (KPIs): la de FranjaKpis (clasesFranja de lib/kpis.js, R12), para que el esqueleto y la franja coincidan.
   assert.equal(clasesFranja(4), 'grid-cols-1 @sm:grid-cols-2 @4xl:grid-cols-4');
 }
@@ -867,5 +875,351 @@ console.log('--- TEST 19 (T5B r1, M16): registro.ts de verdad (transpilado), con
   }
 }
 
+console.log('--- TEST 20 (T5C): la lógica del panel (preferencias, foco, producto, carga, errores y textos) ---');
+{
+  const {
+    MODULOS_ANALISIS, clavePreferenciaAnalisis, PREFERENCIA_ANALISIS_POR_DEFECTO, leerPreferenciaAnalisis, resolverFoco,
+    PRODUCTO_MINIMO, ESPERA_PRODUCTO_MS, productoConsulta, parametrosAnalisis, aplicarLlegadaAnalisis, estadoAnalisis,
+    MENSAJE_SIN_PERMISO_ANALISIS, MENSAJE_ERROR_ANALISIS, errorAnalisis, siguienteErrorVisto, textoComparado,
+    borradorPersonalizado, tarjetaKpiAnalisis, ICONO_KPI_POR_FORMATO, mejorDeLinea, textoActualizado, ASISTENTE_POR_DEFECTO,
+  } = analisis;
+  const { claveValida } = await import('../src/lib/preferencias.js');
+  const { ICONOS_KPI } = await import('../src/lib/kpis.js');
+  const { crearCargaListado } = await import('../src/lib/tabla.js');
+
+  // RP69: un módulo por Hub; 'ventas-sc', 'ventas-cot' y 'ventas-pven' se descartan (el foco va en analisis:ventas).
+  assert.deepEqual(MODULOS_ANALISIS, ['ventas', 'compras', 'inventario', 'crm', 'finanzas']);
+  assert.ok(Object.isFrozen(MODULOS_ANALISIS));
+  for (const m of MODULOS_ANALISIS) {
+    assert.equal(clavePreferenciaAnalisis(m), `analisis:${m}`);
+    assert.ok(claveValida(clavePreferenciaAnalisis(m)), `la clave de ${m} pasa la regex del servidor`);
+  }
+  for (const malo of ['ventas-sc', 'ventas-pven', 'Ventas', '', null, undefined]) {
+    assert.throws(() => clavePreferenciaAnalisis(malo), /Módulo de Análisis desconocido/, String(malo));
+  }
+
+  // R4: período, top y foco en analisis:<modulo>; lo guardado se lee pieza por pieza (una pieza mala no tumba las demás).
+  assert.deepEqual(PREFERENCIA_ANALISIS_POR_DEFECTO, { periodo: { clave: '30d' }, top: 5, foco: null });
+  assert.ok(Object.isFrozen(PREFERENCIA_ANALISIS_POR_DEFECTO) && Object.isFrozen(PREFERENCIA_ANALISIS_POR_DEFECTO.periodo));
+  const POR_DEFECTO = { periodo: { clave: '30d' }, top: 5, foco: null };
+  for (const raro of [undefined, null, '{malo', 42, [1, 2], true, {}]) {
+    assert.deepEqual(leerPreferenciaAnalisis(raro, { hoy: HOY }), POR_DEFECTO, `vacío o dañado: ${JSON.stringify(raro)}`);
+  }
+  assert.deepEqual(leerPreferenciaAnalisis({ periodo: { clave: '90d' }, top: 10 }, { hoy: HOY }), { periodo: { clave: '90d' }, top: 10, foco: null });
+  assert.deepEqual(leerPreferenciaAnalisis({ periodo: '7d', top: 25 }, { hoy: HOY }).periodo, { clave: '7d' }, 'la clave sola');
+  assert.deepEqual(leerPreferenciaAnalisis({ periodo: { clave: '7d', desde: '2026-01-01', hasta: '2026-01-02' } }, { hoy: HOY }).periodo,
+    { clave: '7d' }, 'las fechas solo cuentan en personalizado');
+  const valido = { clave: 'personalizado', desde: '2026-09-01', hasta: '2026-09-30', otra: 'x' };
+  assert.deepEqual(leerPreferenciaAnalisis({ periodo: valido }, { hoy: HOY }).periodo,
+    { clave: 'personalizado', desde: '2026-09-01', hasta: '2026-09-30' }, 'un personalizado válido, sin claves de más');
+  assert.equal(valido.otra, 'x', 'no muta lo guardado');
+  for (const malo of [{ clave: 'personalizado', desde: '2026-10-01', hasta: '2026-11-30' }, { clave: 'personalizado' },
+    { clave: 'personalizado', desde: '2026-09-30', hasta: '2026-09-01' }, { clave: '15d' }, 'semana']) {
+    assert.deepEqual(leerPreferenciaAnalisis({ periodo: malo, top: 10 }, { hoy: HOY }), { periodo: { clave: '30d' }, top: 10, foco: null },
+      `período que ya no vale: ${JSON.stringify(malo)}`);
+  }
+  for (const malo of [7, '10', 0, null, 5.5]) assert.equal(leerPreferenciaAnalisis({ top: malo }, { hoy: HOY }).top, 5, `top ${malo}`);
+  assert.equal(leerPreferenciaAnalisis({ foco: 'cot' }, { focos: FOCOS_VENTAS, hoy: HOY }).foco, 'cot');
+  assert.equal(leerPreferenciaAnalisis({ foco: 'xx' }, { focos: FOCOS_VENTAS, hoy: HOY }).foco, 'hub', 'un foco que no existe: el primero');
+  assert.equal(leerPreferenciaAnalisis({}, { focos: FOCOS_VENTAS, hoy: HOY }).foco, 'hub');
+  assert.equal(leerPreferenciaAnalisis({ foco: 'cot' }, { hoy: HOY }).foco, null, 'sin focos no hay foco');
+  const leida = leerPreferenciaAnalisis(undefined, { hoy: HOY });
+  assert.ok(!Object.isFrozen(leida.periodo) && leida.periodo !== PERIODO_POR_DEFECTO, 'una copia, no la constante');
+
+  // R13: el foco de la URL («Ver análisis» de las listas) gana sobre el guardado; si no vale, el guardado; si no, el primero.
+  assert.equal(resolverFoco(FOCOS_VENTAS, 'sc', 'cot'), 'sc');
+  assert.equal(resolverFoco(FOCOS_VENTAS, 'xx', 'cot'), 'cot');
+  assert.equal(resolverFoco(FOCOS_VENTAS, null, 'pven'), 'pven');
+  assert.equal(resolverFoco(FOCOS_VENTAS, undefined, 'xx'), 'hub');
+  assert.equal(resolverFoco(FOCOS_VENTAS, 'SC', null), 'hub', 'la clave exacta');
+  for (const sin of [null, undefined, []]) assert.equal(resolverFoco(sin, 'sc', 'cot'), null);
+
+  // RP69: el campo Producto manda producto= solo con 2 caracteres o más (T6C da 422 con menos), 400 ms después.
+  assert.deepEqual([PRODUCTO_MINIMO, ESPERA_PRODUCTO_MS], [2, 400]);
+  for (const corto of ['', 'a', '  a  ', 'ñ', null, undefined, '   ']) assert.equal(productoConsulta(corto), null, JSON.stringify(corto));
+  assert.equal(productoConsulta('ab'), 'ab');
+  assert.equal(productoConsulta('  cuna  '), 'cuna');
+  assert.equal(productoConsulta('😀a'), '😀a', 'cuenta letras, no unidades de UTF-16');
+  assert.equal(productoConsulta('😀'), null);
+  assert.deepEqual(parametrosAnalisis({ bodega: '3' }, { foco: 'sc', producto: 'cu' }), { bodega: '3', foco: 'sc', producto: 'cu' });
+  assert.deepEqual(parametrosAnalisis(undefined, { foco: null, producto: 'c' }), {});
+  assert.deepEqual(parametrosAnalisis({ foco: 'hub', producto: 'viejo' }, { foco: 'cot', producto: '' }), { foco: 'cot' },
+    'el foco y el producto del panel ganan sobre params');
+  assert.equal(consultaAnalisis({ clave: '30d' }, 5, parametrosAnalisis({ bodega: 2 }, { foco: 'pven', producto: ' cuna ' })),
+    'periodo=30d&top=5&bodega=2&foco=pven&producto=cuna');
+  assert.equal(consultaAnalisis({ clave: '7d' }, 10, parametrosAnalisis({}, { foco: null, producto: 'c' })), 'periodo=7d&top=10');
+
+  // La carga (useAnalisis): la llegada de crearCargaListado con su ContextoListado {ruta: el ámbito, usuario}; un error
+  // conserva lo último bueno del MISMO ámbito y del MISMO usuario (como useResumenFlujo, T5A r1); otro ámbito u otra
+  // cuenta no se muestran.
+  const R = (data) => ({ status: 'success', data });
+  const ctx = { ruta: '/ventas/analisis|hub', usuario: 7 };
+  const llegadaBuena = { marca: 'k1', ok: true, respuesta: R({ kpis: [{ clave: 'v', valor: 5 }] }), contexto: ctx, repeticion: 0 };
+  const r1 = aplicarLlegadaAnalisis(null, llegadaBuena);
+  assert.deepEqual(r1, { clave: 'k1', ambito: ctx.ruta, usuario: 7, repeticion: 0, datos: normalizarAnalisis(llegadaBuena.respuesta), error: null });
+  assert.equal(r1.datos.kpis[0].anterior, null, 'normalizado: nunca rellena cifras');
+  const sinData = aplicarLlegadaAnalisis(r1, { marca: 'k2', ok: true, respuesta: { status: 'success' }, contexto: ctx, repeticion: 0 });
+  assert.equal(sinData.datos, r1.datos, 'una respuesta sin data conserva lo último bueno');
+  assert.equal(sinData.error.message, 'La respuesta del análisis no trae datos.');
+  const caida = Object.assign(new Error('Failed to fetch'), { status: undefined });
+  const r2 = aplicarLlegadaAnalisis(r1, { marca: 'k2', ok: false, error: caida, contexto: ctx, repeticion: 0 });
+  assert.deepEqual([r2.clave, r2.datos, r2.error], ['k2', r1.datos, caida], 'el error conserva lo último bueno');
+  assert.equal(aplicarLlegadaAnalisis(r1, { marca: 'k2', ok: false, contexto: { ...ctx, usuario: 8 }, repeticion: 0 }).datos, null, 'otra cuenta');
+  assert.equal(aplicarLlegadaAnalisis(r1, { marca: 'k2', ok: false, contexto: { ...ctx, ruta: '/ventas/analisis|sc' }, repeticion: 0 }).datos,
+    null, 'otro ámbito (otro foco)');
+  assert.equal(aplicarLlegadaAnalisis(null, { marca: 'k', ok: false, contexto: ctx }).error.message, 'No se pudo cargar el análisis.');
+  assert.deepEqual(r1.datos.kpis[0].valor, 5, 'aplicar no muta el previo');
+
+  const consulta = (clave, extra = {}) => ({ clave, ambito: ctx.ruta, usuario: 7, repeticion: 0, ...extra });
+  assert.deepEqual(estadoAnalisis(null, consulta('k1')), { datos: null, cargando: true, error: null }, 'antes de la primera respuesta');
+  assert.deepEqual(estadoAnalisis(r1, consulta('k1')), { datos: r1.datos, cargando: false, error: null });
+  assert.deepEqual(estadoAnalisis(r1, consulta('k9')), { datos: r1.datos, cargando: true, error: null },
+    'otro período: los datos anteriores siguen (atenuados) mientras llega');
+  assert.deepEqual(estadoAnalisis(r1, consulta('k1', { usuario: 8 })), { datos: null, cargando: true, error: null }, 'otra cuenta: nada');
+  assert.deepEqual(estadoAnalisis(r1, consulta('k1', { ambito: '/ventas/analisis|sc' })), { datos: null, cargando: true, error: null },
+    'otro foco: el esqueleto, no los datos del foco anterior');
+  assert.deepEqual(estadoAnalisis(r1, consulta('k1', { repeticion: 1 })), { datos: r1.datos, cargando: true, error: null }, 'una vuelta');
+  assert.deepEqual(estadoAnalisis(r2, consulta('k2')), { datos: r1.datos, cargando: false, error: caida });
+  assert.deepEqual(estadoAnalisis(r2, consulta('k3')), { datos: r1.datos, cargando: true, error: null }, 'reintentando: sin el error');
+
+  // De punta a punta con crearCargaListado (el turno de useListado): si cambias el período varias veces, solo cuenta el
+  // último, aunque la respuesta vieja llegue después.
+  {
+    const pendientes = [];
+    let resultado = null;
+    const carga = crearCargaListado({
+      pedir: (url, signal) => new Promise((resolver) => pendientes.push({ url, signal, resolver })),
+      alLlegar: (llegada) => { resultado = aplicarLlegadaAnalisis(resultado, llegada); },
+    });
+    carga.cargar('/ventas/analisis?periodo=7d&top=5', 'a', ctx);
+    await Promise.resolve();
+    carga.cargar('/ventas/analisis?periodo=90d&top=5', 'b', ctx);
+    await new Promise((r) => setTimeout(r, 0));
+    assert.deepEqual(pendientes.map((p) => [p.url, p.signal.aborted]),
+      [['/ventas/analisis?periodo=7d&top=5', true], ['/ventas/analisis?periodo=90d&top=5', false]], 'la anterior se cancela');
+    pendientes[1].resolver(R({ kpis: [{ clave: 'v', valor: 90 }] }));
+    pendientes[0].resolver(R({ kpis: [{ clave: 'v', valor: 7 }] }));
+    await new Promise((r) => setTimeout(r, 0));
+    assert.deepEqual([resultado.clave, resultado.datos.kpis[0].valor], ['b', 90], 'la vieja no pisa a la nueva');
+  }
+
+  // Errores: el 403 se distingue (apiFetch lanza con .status, Bloque 2).
+  assert.equal(MENSAJE_SIN_PERMISO_ANALISIS, 'No tienes permiso para ver este análisis.');
+  assert.equal(MENSAJE_ERROR_ANALISIS, 'No pudimos cargar el análisis. Revisa tu conexión y vuelve a intentarlo.');
+  assert.equal(errorAnalisis(null), null);
+  assert.deepEqual(errorAnalisis(Object.assign(new Error('Forbidden'), { status: 403 })),
+    { tipo: 'permiso', texto: MENSAJE_SIN_PERMISO_ANALISIS, reintentar: false });
+  for (const e of [Object.assign(new Error('x'), { status: 500 }), new TypeError('Failed to fetch'), Object.assign(new Error('Sesión'), { status: 401 }),
+    new Error('La respuesta del análisis no trae datos.'), Object.assign(new Error(''), { status: 422 })]) {
+    assert.deepEqual(errorAnalisis(e), { tipo: 'carga', texto: MENSAJE_ERROR_ANALISIS, reintentar: true }, e.message);
+  }
+  assert.deepEqual(errorAnalisis(Object.assign(new Error('El ranking solo puede mostrar 5, 10 o 25.'), { status: 422 })),
+    { tipo: 'validacion', texto: 'El ranking solo puede mostrar 5, 10 o 25.', reintentar: false }, 'el 422 trae el texto del servidor');
+  // Lo que se ve: mientras carga (el reintento) se conserva el error que se vio; al terminar, el de la última llegada.
+  const visto = errorAnalisis(Object.assign(new Error('x'), { status: 500 }));
+  assert.equal(siguienteErrorVisto(visto, { cargando: true, error: null }), visto, 'reintentando: el mismo aviso');
+  assert.equal(siguienteErrorVisto(null, { cargando: true, error: null }), null);
+  assert.equal(siguienteErrorVisto(visto, { cargando: false, error: null }), null, 'salió bien');
+  assert.equal(siguienteErrorVisto(visto, { cargando: false, error: new TypeError('Failed to fetch') }), visto, 'el mismo texto: la misma identidad');
+  assert.deepEqual(siguienteErrorVisto(visto, { cargando: false, error: Object.assign(new Error('x'), { status: 403 }) }),
+    errorAnalisis({ status: 403 }));
+
+  // 'Comparado con 5 ago – 3 sept' (periodo.comparado del servidor: 'vs 5 ago – 3 sept').
+  assert.equal(textoComparado({ comparado: 'vs 5 ago – 3 sept' }), 'Comparado con 5 ago – 3 sept');
+  assert.equal(textoComparado({ comparado: '28 sept – 27 oct' }), 'Comparado con 28 sept – 27 oct');
+  for (const nada of [null, undefined, {}, { comparado: '' }, { comparado: '  ' }, { comparado: 5 }]) assert.equal(textoComparado(nada), null);
+  // El borrador de Personalizado: las fechas aplicadas o, si no, las del período que se ve.
+  assert.deepEqual(borradorPersonalizado({ clave: 'personalizado', desde: '2026-09-01', hasta: '2026-09-30' }, { desde: '2026-01-01', hasta: '2026-01-31' }),
+    { desde: '2026-09-01', hasta: '2026-09-30' });
+  assert.deepEqual(borradorPersonalizado({ clave: '30d' }, { desde: '2026-09-29', hasta: '2026-10-28' }), { desde: '2026-09-29', hasta: '2026-10-28' });
+  assert.deepEqual(borradorPersonalizado({ clave: '30d' }, null), { desde: '', hasta: '' });
+  assert.deepEqual(borradorPersonalizado(null, { desde: '2026-09-29T00:00:00Z', hasta: 5 }), { desde: '', hasta: '' }, 'solo AAAA-MM-DD');
+
+  // FilaKpis = TarjetaKpi con variación (C12, RP27): cada kpi del contrato a las props de la tarjeta.
+  const vendido = { clave: 'vendido_periodo', etiqueta: 'Vendido (30 días)', valor: 4927538, anterior: 4380034, variacion_pct: 12.5,
+    formato: 'pesos', mejor: 'sube', es_foto: false, ayuda: 'Pedidos creados en el período, sin cancelados ni devueltos.' };
+  assert.deepEqual(tarjetaKpiAnalisis(vendido), {
+    clave: 'vendido_periodo', kpi: 'vendido_periodo', etiqueta: 'Vendido (30 días)', formato: 'pesos', valor: 4927538, icono: null,
+    variacion: { actual: 4927538, anterior: 4380034, mejorSiSube: true }, ayuda: vendido.ayuda, titulo: null,
+  }, 'un id del catálogo trae el ícono y el color de CATALOGO_KPI; la etiqueta es la del servidor');
+  const nuevos = tarjetaKpiAnalisis({ clave: 'pedidos_nuevos', etiqueta: 'Pedidos', valor: '12', anterior: 0, formato: 'entero', mejor: 'baja' });
+  assert.deepEqual([nuevos.kpi, nuevos.icono, nuevos.formato, nuevos.valor, nuevos.variacion],
+    [null, 'Activity', 'entero', '12', { actual: 12, anterior: 0, mejorSiSube: false }]);
+  const dias = tarjetaKpiAnalisis({ clave: 'dias_entrega', etiqueta: 'Días de entrega', valor: 3.46, anterior: 2, formato: 'dias', mejor: 'baja' });
+  assert.deepEqual([dias.formato, dias.valor, dias.icono, dias.variacion], ['texto', '3,5 días', 'Clock', { actual: 3.46, anterior: 2, mejorSiSube: false }]);
+  assert.deepEqual(tarjetaKpiAnalisis({ clave: 'u', valor: 1234, formato: 'unidades', mejor: 'sube' }).valor, '1.234 u.');
+  assert.equal(tarjetaKpiAnalisis({ clave: 'u', valor: null, formato: 'dias' }).valor, null, 'sin valor: null (la tarjeta pinta «—»), no «null días»');
+  assert.equal(tarjetaKpiAnalisis({ clave: 'u', formato: 'pesos' }).valor, null, 'nunca 0');
+  assert.equal(tarjetaKpiAnalisis({ clave: 'u', valor: { x: 1 }, formato: 'pesos' }).valor, null);
+  const saldo = tarjetaKpiAnalisis({ clave: 'pven_saldo_por_cobrar', etiqueta: 'Saldo por cobrar', valor: 1200000, anterior: null, formato: 'pesos',
+    mejor: 'baja', es_foto: true, ayuda: 'Lo que deben los pedidos vigentes.' });
+  assert.deepEqual([saldo.variacion, saldo.ayuda, saldo.titulo], [null, 'Cifra de hoy, sin comparación', 'Lo que deben los pedidos vigentes.'],
+    'una foto: sin variación, lo dice debajo y su ayuda va en el title');
+  assert.deepEqual(tarjetaKpiAnalisis({ clave: 'x', valor: 5, anterior: null, formato: 'entero', mejor: 'sube' }).variacion,
+    { actual: 5, anterior: null, mejorSiSube: true }, 'sin anterior la tarjeta dice «—» (RP27)');
+  assert.equal(tarjetaKpiAnalisis({ clave: 'x', valor: 5, anterior: 4, mejor: 'neutro' }).variacion.mejorSiSube, null);
+  assert.equal(tarjetaKpiAnalisis({ clave: 'x', valor: 5, anterior: 4 }).variacion.mejorSiSube, null, 'sin mejor: gris (nunca un verde inventado)');
+  for (const [f, esperado] of [['numero', 'entero'], ['porcentaje', 'porcentaje'], [null, 'entero'], ['raro', 'entero'], ['texto', 'texto']]) {
+    assert.equal(tarjetaKpiAnalisis({ clave: 'x', valor: 1, formato: f }).formato, esperado, String(f));
+  }
+  assert.deepEqual([tarjetaKpiAnalisis({ valor: 1 }).etiqueta, tarjetaKpiAnalisis({ clave: 'abc', valor: 1 }).etiqueta], ['Indicador', 'abc']);
+  assert.deepEqual({ ...ICONO_KPI_POR_FORMATO },
+    { pesos: 'DollarSign', entero: 'Activity', porcentaje: 'PieChart', dias: 'Clock', unidades: 'Package', texto: 'Activity' });
+  for (const icono of Object.values(ICONO_KPI_POR_FORMATO)) assert.ok(ICONOS_KPI.includes(icono), `${icono} está en ICONOS_KPI`);
+  assert.equal(tarjetaKpiAnalisis(null).valor, null);
+
+  // M19 (D43): el «mejor» de la línea es el del kpi de la misma cifra; la pantalla puede fijarlo.
+  const kpis = [
+    { clave: 'a', formato: 'pesos', valor: 900, mejor: 'neutro' }, { clave: 'b', formato: 'pesos', valor: 4927538, mejor: 'baja' },
+    { clave: 'c', formato: 'entero', valor: 4927538, mejor: 'neutro' },
+  ];
+  assert.equal(mejorDeLinea({ formato: 'pesos', total: 4927538 }, kpis), 'baja', 'el mismo formato y el mismo total');
+  assert.equal(mejorDeLinea({ formato: 'entero', total: 3 }, kpis), 'neutro', 'un solo kpi con ese formato');
+  assert.equal(mejorDeLinea({ total: 4927538 }, kpis), 'neutro', 'sin formato es entero');
+  assert.equal(mejorDeLinea({ formato: 'pesos', total: 1 }, kpis), 'sube', 'ambiguo: el de por defecto');
+  assert.equal(mejorDeLinea({ formato: 'pesos', total: 900 }, kpis, 'baja'), 'baja', 'la pantalla lo fija');
+  assert.equal(mejorDeLinea({ formato: 'pesos', total: 900 }, kpis, 'raro'), 'neutro', 'uno que no vale se ignora');
+  assert.equal(mejorDeLinea(null, kpis), 'sube');
+  assert.equal(mejorDeLinea({ formato: 'pesos', total: 4927538 }, [{ formato: 'pesos', valor: 4927538, mejor: 'x' }]), 'sube');
+
+  // 'Actualizado hace 2 minutos' (generado_en, ISO con Z; hace() de lib/fechas-colombia.js, RP60).
+  const T = Date.parse('2026-10-28T15:02:30Z');
+  assert.equal(textoActualizado('2026-10-28T15:00:00Z', T), 'Actualizado hace 2 minutos');
+  assert.equal(textoActualizado('2026-10-28T15:02:00Z', T), 'Actualizado hace un momento');
+  for (const nada of [null, undefined, '', 'ayer']) assert.equal(textoActualizado(nada, T), '');
+
+  // R2 y RP69: sin la prop asistente, {titulo: 'Asistente con IA', ejemplos: []}.
+  assert.deepEqual(ASISTENTE_POR_DEFECTO, { titulo: 'Asistente con IA', ejemplos: [] });
+  assert.ok(Object.isFrozen(ASISTENTE_POR_DEFECTO));
+}
+
+console.log('--- TEST 21 (T5C): el fuente de las siete piezas del panel (sin DOM en node) ---');
+{
+  const leer = (nombre) => readFileSync(new URL(`../src/components/analisis/${nombre}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = (texto) => texto.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const PIEZAS = {
+    'PanelAnalisis.tsx': /export function PanelAnalisis\(/, 'PanelAnalisisPerezoso.tsx': /export const PanelAnalisisPerezoso = dynamic</,
+    'useAnalisis.ts': /export function useAnalisis\(/, 'SelectorPeriodo.tsx': /export function SelectorPeriodo\(/,
+    'FilaKpis.tsx': /export function FilaKpis\(/, 'AsistenteEnConstruccion.tsx': /export function AsistenteEnConstruccion\(/,
+  };
+  const fuentes = Object.fromEntries(Object.keys(PIEZAS).map((n) => [n, leer(n)]));
+  const FOCO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
+  for (const [archivo, exporta] of Object.entries(PIEZAS)) {
+    const fuente = fuentes[archivo];
+    const c = codigo(fuente);
+    assert.ok(fuente.startsWith("'use client';"), `${archivo}: «use client»`);
+    assert.match(fuente, exporta, `${archivo}: exporta su pieza`);
+    assert.ok(!/\bdark:/.test(fuente), `${archivo}: sin dark:`);
+    assert.ok(!/(^|[^\w.$])(?:(?:window|globalThis)\??\.)?(?:alert|confirm|prompt)\s*\(/m.test(c), `${archivo}: sin alert, confirm ni prompt`);
+    assert.ok(!/outline-none/.test(c), `${archivo}: nunca outline-none`);
+    assert.ok(!/localStorage|sessionStorage|preferenciasApp|\bfetch\(/.test(c), `${archivo}: nada de almacenamiento ni fetch directo (R4)`);
+    assert.equal(/\bapiFetch\(/.test(c), archivo === 'useAnalisis.ts', `${archivo}: solo useAnalisis pide los datos`);
+    assert.equal(/usePreferencia/.test(c), archivo === 'PanelAnalisis.tsx', `${archivo}: solo PanelAnalisis recuerda (analisis:<modulo>)`);
+    assert.ok(!c.includes('/ventas/ai-chat'), `${archivo}: R2, ningún endpoint de IA`);
+    // Lo que toma el foco usa el outline de focus-visible (los controles deshabilitados del asistente no lo toman).
+    if (archivo !== 'AsistenteEnConstruccion.tsx' && /<button\b|<Link\b|<input\b|<select\b/.test(c)) assert.ok(c.includes(FOCO), `${archivo}: foco visible`);
+    for (const linea of c.split('\n').filter((l) => /className=[^>]*\btruncate\b/.test(l))) {
+      assert.ok(/\btitle=/.test(linea), `${archivo}: truncate sin title: ${linea.trim()}`);
+    }
+    assert.ok(!/text-(slate|gray)-(300|400|500)\b|text-(emerald|rose|red|amber|green)-(400|500|600)\b/.test(c), `${archivo}: contraste`);
+  }
+
+  // AsistenteEnConstruccion (R2): la tarjeta sin respuestas, sin endpoints y sin temporizadores; el ÚNICO aviso de IA.
+  const asistente = codigo(fuentes['AsistenteEnConstruccion.tsx']);
+  for (const texto of ['En construcción', 'El asistente con IA llega en el Bloque 5: responderá con los datos reales de esta pantalla.',
+    'bg-amber-100', 'text-amber-800', '{titulo}', 'preguntas.map((pregunta, i) =>', '<input', 'type="text"']) {
+    assert.ok(asistente.includes(texto), `AsistenteEnConstruccion: ${texto}`);
+  }
+  assert.equal((asistente.match(/^\s*disabled$/gm) ?? []).length, 2, 'los chips y la caja, deshabilitados');
+  assert.ok(!/useState|useEffect|setTimeout|setInterval|apiFetch|fetch\(|onClick|onChange|onSubmit|onKeyDown|async\b|await\b/.test(asistente),
+    'AsistenteEnConstruccion: sin estado, sin temporizadores, sin endpoints y sin respuestas');
+  assert.ok(!/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(fuentes['AsistenteEnConstruccion.tsx']), 'sin emojis');
+  for (const [archivo, fuente] of Object.entries(fuentes)) {
+    if (archivo === 'AsistenteEnConstruccion.tsx') continue;
+    assert.ok(!/En construcción|llega en el Bloque 5/.test(fuente), `${archivo}: el aviso de IA vive solo en AsistenteEnConstruccion`);
+  }
+
+  // PanelAnalisisPerezoso (R13, D43 M6): PanelAnalisis en su propio chunk, con el esqueleto mientras llega.
+  const perezoso = codigo(fuentes['PanelAnalisisPerezoso.tsx']);
+  for (const texto of ["import dynamic from 'next/dynamic';", "import type { PropsPanelAnalisis } from './PanelAnalisis';",
+    "() => import('./PanelAnalisis').then((m) => m.PanelAnalisis),", '{ ssr: false, loading: () => <EsqueletoAnalisis /> },']) {
+    assert.ok(perezoso.includes(texto), `PanelAnalisisPerezoso: ${texto}`);
+  }
+  assert.ok(!/^import (?!type\b)[^;]*from '\.\/(PanelAnalisis|Grafico\w+|registro)';/m.test(perezoso), 'PanelAnalisisPerezoso: sin import estático del panel ni de los gráficos');
+
+  // index.ts (D43 M6): sin PanelAnalisis, los gráficos ni registro.ts (solo tipos del panel).
+  const indice = leer('index.ts');
+  for (const linea of indice.split('\n').filter((l) => /^export /.test(l))) {
+    assert.ok(!/from '\.\/(Grafico\w+|registro)'/.test(linea), `index.ts no reexporta los gráficos: ${linea}`);
+    if (/from '\.\/PanelAnalisis'/.test(linea)) assert.match(linea, /^export type \{/, `index.ts: de PanelAnalisis solo tipos: ${linea}`);
+  }
+  for (const nombre of ['PanelAnalisisPerezoso', 'useAnalisis', 'SelectorPeriodo', 'FilaKpis', 'AsistenteEnConstruccion']) {
+    assert.match(indice, new RegExp(`^export \\{ ${nombre} \\} from '\\./${nombre}';$`, 'm'), `index.ts exporta ${nombre}`);
+  }
+
+  // useAnalisis: la pauta de useListado y useResumenFlujo (turno, signal, usuario del token y repetición).
+  const hook = codigo(fuentes['useAnalisis.ts']);
+  for (const texto of ["import { crearCargaListado } from '@/lib/tabla';", "import { usuarioDeLaSesion } from '@/components/tabla/usuarioDeLaSesion';",
+    'apiFetch(url, { signal })', 'const consulta = consultaAnalisis(periodo, top, extra ?? {});',
+    'alLlegar: (llegada) => setResultado((previo) => aplicarLlegadaAnalisis(previo, llegada)),',
+    'useSyncExternalStore(carga.suscribir, carga.repeticion, carga.repeticion)', 'const usuario = usuarioDeLaSesion();',
+    "const clave = `${version}|${usuario ?? ''}|${url}`;", 'if (esperar) return undefined;', 'carga.cargar(url, clave, { ruta: ambitoFinal, usuario });',
+    'return () => carga.cancelar();', 'estadoAnalisis(resultado, { clave, ambito: ambitoFinal, usuario, repeticion })',
+    'const cargando = visto.cargando || esperar;', 'aviso: errorAnalisis(error),', 'cargandoInicial: cargando && !datos,',
+    'recargando: cargando && Boolean(datos),', 'const recargar = useCallback(() => setVersion((v) => v + 1), []);']) {
+    assert.ok(hook.includes(texto), `useAnalisis: ${texto}`);
+  }
+
+  // SelectorPeriodo: píldoras (o un select en anchos chicos), Personalizado con el error del servidor en línea.
+  const selector = codigo(fuentes['SelectorPeriodo.tsx']);
+  for (const texto of ['PERIODOS.map((p) =>', 'aria-pressed={p.clave === elegido}', 'hidden min-w-0 flex-wrap gap-1.5 @xl:flex', 'min-w-0 @xl:hidden',
+    '<select', '<label htmlFor={idSelect} className="sr-only">Período</label>', 'const texto = errorPeriodo(periodo, hoy);', 'if (!texto) alAplicar(periodo);',
+    '<form noValidate onSubmit={aplicar}', 'role="alert"', 'Aplicar', 'borradorPersonalizado(periodo, periodoDatos)', "elegido === 'personalizado' &&",
+    'aria-invalid={conError}', 'aria-describedby={descrito}', "{comparado ?? ''}", 'if (clave !== periodo.clave) alCambiar({ clave });']) {
+    assert.ok(selector.includes(texto), `SelectorPeriodo: ${texto}`);
+  }
+  assert.equal((selector.match(/type="date"/g) ?? []).length, 2, 'SelectorPeriodo: Desde y Hasta');
+  assert.equal((selector.match(/max=\{hoy\}/g) ?? []).length, 2, 'SelectorPeriodo: a lo sumo hoy');
+
+  // FilaKpis (C12, D43 M2): TarjetaKpi con variación dentro de FranjaKpis, sin una grilla propia.
+  const fila = codigo(fuentes['FilaKpis.tsx']);
+  for (const texto of ["import { FranjaKpis, TarjetaKpi } from '@/components/ui/TarjetaKpi';", '<FranjaKpis estado={estado}', 'const t = tarjetaKpiAnalisis(k);',
+    'variacion={t.variacion}', 'formato={t.formato}', 'valor={t.valor}', 'etiqueta={t.etiqueta}', 'textoPeriodo={comparado || SIN_COMPARADO}',
+    'ayuda={t.ayuda ?? undefined}', 'titulo={t.titulo ?? undefined}', '<FranjaKpis estado="cargando"']) {
+    assert.ok(fila.includes(texto), `FilaKpis: ${texto}`);
+  }
+  assert.ok(!/grid-cols|clasesFranja|\bgrid\b/.test(fila), 'FilaKpis: la grilla es la de FranjaKpis (D43, M2)');
+
+  // PanelAnalisis: preferencias por partes, el tope de espera, el foco, el producto, la carga y la grilla.
+  const panel = codigo(fuentes['PanelAnalisis.tsx']);
+  for (const texto of ['usePreferenciaParte(clavePreferenciaAnalisis(modulo), PREFERENCIA_ANALISIS_POR_DEFECTO)',
+    'leerPreferenciaAnalisis(guardado, { focos })', 'esperarPreferencias({ alVencer: () => setVencidoPara(usuario) })',
+    'const listo = listoConTope(prefsListas, vencidoPara === usuario);', 'if (prefsListas) return undefined;',
+    'resolverFoco(focos, usarInicial ? focoInicial : null, prefs.foco)', 'productoConsulta(producto)), ESPERA_PRODUCTO_MS)',
+    'parametrosAnalisis(params, { foco, producto: busquedaProducto ? productoAplicado : null })', "ambito: `${endpoint}|${foco ?? ''}`,",
+    'esperar: !listo,', 'periodo: prefs.periodo,', 'top: prefs.top,', 'siguienteErrorVisto(errorVisto, { cargando: analisis.cargando, error: analisis.error })',
+    'aria-busy={analisis.cargando}', 'mejor={mejorDeLinea(datos.linea, datos.kpis, mejorLinea)}', '<FilaKpis kpis={datos.kpis} comparado={datos.periodo?.comparado} acento={acento} />',
+    '<EsqueletoAnalisis barra={false} />', 'asistente ?? ASISTENTE_POR_DEFECTO', '<AsistenteEnConstruccion titulo={elAsistente.titulo} ejemplos={elAsistente.ejemplos} />',
+    'alCambiarTop={elegirTop}', 'modo={modoDona} alCambiarModo={setModoDona}', 'alAbrir={alAbrirMovimiento}', 'aria-pressed={f.clave === foco}',
+    "{reintentando ? 'Reintentando…' : 'Reintentar'}", 'aria-disabled={reintentando || undefined}', 'regionRef.current?.focus({ preventScroll: true })',
+    'textoComparado(datos.periodo)', 'textoActualizado(datos.generado_en)', "atenuar ? 'opacity-60' : ''", 'granularidad={granularidad}',
+    'pointer-events-none absolute', 'aria-describedby={productoCorto ? idAyudaProducto : undefined}']) {
+    assert.ok(panel.includes(texto), `PanelAnalisis: ${texto}`);
+  }
+  // D38: cada cambio escribe SOLO su pieza, desde un manejador (nunca al montar ni en un efecto: D35).
+  const escrituras = [...panel.matchAll(/guardarParte\(([^)]*)\)/g)].map((m) => m[1]);
+  assert.deepEqual(escrituras, ['{ foco: clave }', '{ periodo }', '{ top }'], 'una pieza por escritura');
+  for (const bloque of panel.split('useEffect(').slice(1)) {
+    const cuerpo = bloque.slice(0, bloque.indexOf('}, ['));
+    assert.ok(!cuerpo.includes('guardarParte'), 'ningún efecto escribe preferencias (D35)');
+  }
+  assert.equal((panel.match(/aria-busy=/g) ?? []).length, 1, 'aria-busy solo en la región que se actualiza (D43, M12)');
+  for (const clave of Object.keys(analisis.GRILLA_ANALISIS)) assert.ok(panel.includes(`G.${clave}`), `PanelAnalisis usa GRILLA_ANALISIS.${clave}`);
+  // Todos los hooks van antes del return temprano de !listo (se llaman en cada render).
+  const retorno = panel.indexOf('if (!listo) {');
+  assert.ok(retorno > 0 && !/\buse[A-Z]\w*\(/.test(panel.slice(retorno)), 'ningún hook después del return temprano');
+}
+
 console.log('✓ lib/analisis.js: períodos, consulta, variación, formato, ejes, fechas, colores, enlaces y contrato.');
 console.log('✓ T5B: lógica y fuente de las piezas de components/analisis.');
+console.log('✓ T5C: la lógica y el fuente del panel (preferencias, foco, producto, carga, errores, textos y piezas).');
