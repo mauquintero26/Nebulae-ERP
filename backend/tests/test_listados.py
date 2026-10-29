@@ -102,7 +102,7 @@ def test_caracteres_de_control_lanzan_value_error():
     y daba 500): ValueError con el texto exacto, que el endpoint convierte en 422 con str(e). Se mira despues de
     recortar: los espacios de los bordes, tabuladores y saltos de linea incluidos, se siguen quitando."""
     from app.core.listados import leer_lista, texto_busqueda
-    for malo in ("\x00", "a\x00b", "abc\x07", "\x1bxyz", "a\tb", "x\x7f", "y\x85z", " \x00 "):
+    for malo in ("\x00", "a\x00b", "abc\x07", "\x1bxyz", "x\x7f", " \x00 ", "a\tb\x00"):
         assert str(_lanza(ValueError, texto_busqueda, malo, None)) == CONTROL, repr(malo)
         assert str(_lanza(ValueError, texto_busqueda, None, malo)) == CONTROL, repr(malo)
         assert str(_lanza(ValueError, leer_lista, f"A,{malo}")) == CONTROL, repr(malo)
@@ -113,6 +113,19 @@ def test_caracteres_de_control_lanzan_value_error():
     assert leer_lista(" A\t,\nB \r\n") == ["A", "B"]
     # q gana: un search que no se usa no se mira.
     assert texto_busqueda("abc", "\x00") == "abc"
+
+
+def test_espacios_de_control_interiores_son_un_espacio():
+    """Revision de T6A r1 (controlador): un tabulador o un salto de linea EN MEDIO (texto pegado de una hoja de calculo)
+    no es un error: cada tramo de espacios de control (\\t \\n \\r \\v \\f, los separadores \\x1c-\\x1f y NEL) pasa a un
+    espacio. Los demas caracteres de control siguen dando ValueError."""
+    from app.core.listados import leer_lista, texto_busqueda
+    assert texto_busqueda("a\tb", None) == "a b"
+    assert texto_busqueda("PVEN-2026\r\n2813", None) == "PVEN-2026 2813"
+    assert texto_busqueda("y\x85z", None) == "y z"
+    assert texto_busqueda(None, "uno\x1fdos") == "uno dos"
+    assert leer_lista("SC:A\tB,COT:C") == ["SC:A B", "COT:C"]
+    assert str(_lanza(ValueError, texto_busqueda, "a\tb\x00", None)) == CONTROL
 
 
 def test_max_offset():

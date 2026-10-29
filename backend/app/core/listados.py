@@ -27,6 +27,7 @@ Las funciones que solo arman la consulta (filtrar_por_estados, orden_tiempo) sir
 select(); las que la ejecutan (contar_por_vista, paginar) reciben el Query de la sesión, como las listas de hoy (un
 Select o un UNION se envuelve en db.query(<subconsulta>)).
 """
+import re
 import unicodedata
 
 from fastapi import HTTPException
@@ -45,10 +46,17 @@ def _no_se_puede_ordenar(orden) -> str:
     return f"No se puede ordenar por «{orden}»."
 
 
+# Los caracteres de control que son espacios (str.isspace): tabulador, saltos de línea, \v, \f, los separadores
+# \x1c-\x1f y NEL. Un tramo de ellos en medio del texto (pegado de una hoja de cálculo) pasa a un espacio.
+_ESPACIOS_DE_CONTROL = re.compile(r"[\t\n\x0b\x0c\r\x1c-\x1f\x85]+")
+
+
 def _sin_caracteres_de_control(texto: str) -> str:
-    """`texto` tal cual, o ValueError(MENSAJE_CONTROL) si trae un carácter de control (categoría Unicode Cc: NUL, los
-    demás de C0 y C1, y DEL). Se aplica al texto ya recortado: los tabuladores y saltos de línea de los bordes se quitan
-    antes, como siempre (T6A r1, M13)."""
+    """`texto` con cada tramo de espacios de control interiores (tabulador, saltos de línea…) cambiado por un espacio,
+    o ValueError(MENSAJE_CONTROL) si trae otro carácter de control (categoría Unicode Cc: NUL, los demás de C0 y C1, y
+    DEL). Se aplica al texto ya recortado: los de los bordes se quitan antes, como siempre (T6A r1, M13; revisión de r1:
+    un tabulador en medio no es un error)."""
+    texto = _ESPACIOS_DE_CONTROL.sub(" ", texto)
     if any(unicodedata.category(ch) == "Cc" for ch in texto):
         raise ValueError(MENSAJE_CONTROL)
     return texto
