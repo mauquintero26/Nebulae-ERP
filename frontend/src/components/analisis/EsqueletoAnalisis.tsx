@@ -12,7 +12,8 @@ import { clasesFranja } from '@/lib/kpis';
  *  - Fila 2: la línea (256 px), la dona (176 px) y los movimientos; fila 3: el ranking y las barras (256 px).
  *  - `barra` (por defecto true) agrega arriba la fila del selector de período; PanelAnalisis pasa barra={false} cuando
  *    su barra real ya está pintada.
- *  - role="status" con aria-busy y el texto 'Cargando el análisis…' para lectores de pantalla; los bloques van con
+ *  - role="status" con el texto 'Cargando el análisis…' para lectores de pantalla, SIN aria-busy (retendría su anuncio;
+ *    T5B r1, M12): el aria-busy va en el contenedor que se actualiza, que es de PanelAnalisis (T5C). Los bloques van con
  *    aria-hidden. El pulso respeta prefers-reduced-motion (motion-safe:animate-pulse).
  * Para PanelAnalisisPerezoso (T5C): loading: () => <EsqueletoAnalisis />.
  * Clases de Tailwind literales, sin variantes de modo oscuro.
@@ -35,7 +36,7 @@ function Linea({ ancho, alto = 'h-3' }: { ancho: string; alto?: string }) {
 export function EsqueletoAnalisis({ kpis = 4, barra = true }: PropsEsqueletoAnalisis) {
   const n = Math.min(6, Math.max(1, Math.trunc(Number(kpis)) || 4));
   return (
-    <div role="status" aria-busy="true" className={GRILLA_ANALISIS.raiz}>
+    <div role="status" className={GRILLA_ANALISIS.raiz}>
       <span className="sr-only">Cargando el análisis…</span>
       <div aria-hidden="true" className={GRILLA_ANALISIS.filas}>
         {barra && (

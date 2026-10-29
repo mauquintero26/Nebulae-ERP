@@ -9,7 +9,7 @@ import {
   recortarEtiqueta, resumenAccesible, valoresConSigno,
 } from '@/lib/analisis';
 import type { BarrasAnalisis, Etiquetar, FormatoAnalisis, Granularidad } from '@/lib/analisis';
-import { ESTILO_TOOLTIP, registrarGraficos } from './registro';
+import { COLOR_EJES, ESTILO_TOOLTIP, registrarGraficos } from './registro';
 
 registrarGraficos();
 
@@ -19,14 +19,18 @@ registrarGraficos();
  *  - Con eje 'fechas', barras verticales (las fechas con etiquetaFecha y la `granularidad` del período, a lo sumo 8
  *    marcas; alto de 256 px). Con eje 'categorias', horizontales (la etiqueta recortada en el eje con recortarEtiqueta,
  *    completa en el tooltip y en la tabla; alto de altoGraficoBarras).
- *  - El tono 'negativo' dibuja la barra hacia abajo (valoresConSigno), como el flujo de caja de la referencia; el
- *    tooltip y la tabla muestran el valor que manda el servidor. Colores con coloresSeries: positivo en POSITIVO,
- *    negativo en NEGATIVO y la primera serie neutra con el color del módulo (colorDeAcento(acento)).
+ *  - El tono 'negativo' dibuja la barra hacia abajo (valoresConSigno: −|v|), como el flujo de caja de la referencia. Los
+ *    tres canales dicen lo mismo que el dibujo (T5B r1, M18): el tooltip, la tabla sr-only y el resumen leen el valor
+ *    DIBUJADO (una salida se lee '-5 u.', igual que el eje), mande el servidor magnitudes o valores con signo.
+ *  - Colores con coloresSeries: positivo en POSITIVO, negativo en NEGATIVO, la primera serie neutra con el color del
+ *    módulo (colorDeAcento(acento)) y las demás con PALETA_SERIES (≥ 3:1, sin chocar con el módulo).
+ *  - El texto de las marcas de los ejes en COLOR_EJES (en las opciones, no en ChartJS.defaults.color).
  *  - `apiladas` las apila (en los dos ejes; las negativas se apilan hacia abajo).
  *  - Con 2 o más series, una leyenda HTML (aria-hidden: la tabla ya nombra las series).
  *  - `etiquetar(bloque 'barras', clave, etiqueta)` cambia el nombre de cada serie (con su clave) y de cada categoría (con
  *    la etiqueta como clave); debe devolver la etiqueta recibida cuando no conoce la clave.
- *  - El <canvas role="img"> lleva aria-label = resumenAccesible(barras) y una <table> dentro de una caja sr-only.
+ *  - El <canvas role="img"> lleva aria-label = resumenAccesible(barras) y una <table> dentro de una caja sr-only (caption
+ *    «Datos del gráfico»: el título ya es el nombre de la región y el h3).
  *  - barras null (el módulo no las tiene): no pinta nada. Sin datos (bloqueSinDatos): no se dibuja, 'Sin datos en este
  *    período'.
  * Clases de Tailwind literales, sin variantes de modo oscuro; los textos con al menos 4,5:1.
@@ -68,6 +72,7 @@ export function GraficoBarras({ barras, granularidad, acento, etiquetar }: Props
       return {
         etiqueta: etiquetar ? etiquetar('barras', String(s.clave ?? ''), original) : original,
         valores: s.valores,
+        tono: s.tono,
         dibujados: valoresConSigno(s),
         color: colores[i],
       };
@@ -92,6 +97,7 @@ export function GraficoBarras({ barras, granularidad, acento, etiquetar }: Props
       grid: { color: '#e2e8f0' },
       border: { display: false },
       ticks: {
+        color: COLOR_EJES,
         maxTicksLimit: 5,
         precision: FORMATOS_ENTEROS.includes(formato) ? 0 : undefined,
         callback: (valor: number | string) => etiquetaEje(valor, formato),
@@ -101,9 +107,12 @@ export function GraficoBarras({ barras, granularidad, acento, etiquetar }: Props
       stacked: apiladas,
       grid: { display: false },
       border: { display: false },
-      ticks: horizontal
-        ? { autoSkip: false, callback: (valor: number | string) => recortarEtiqueta(etiquetas[Number(valor)]) }
-        : { autoSkip: true, maxTicksLimit: 8, maxRotation: 0, callback: (valor: number | string) => etiquetas[Number(valor)] ?? '' },
+      ticks: {
+        color: COLOR_EJES,
+        ...(horizontal
+          ? { autoSkip: false, callback: (valor: number | string) => recortarEtiqueta(etiquetas[Number(valor)]) }
+          : { autoSkip: true, maxTicksLimit: 8, maxRotation: 0, callback: (valor: number | string) => etiquetas[Number(valor)] ?? '' }),
+      },
     };
     return {
       responsive: true,
@@ -116,8 +125,8 @@ export function GraficoBarras({ barras, granularidad, acento, etiquetar }: Props
           ...ESTILO_TOOLTIP,
           callbacks: {
             title: (items) => (items.length ? etiquetas[items[0].dataIndex] ?? '' : ''),
-            // El valor que manda el servidor (una salida se lee '5 u.', no '-5 u.').
-            label: (item) => `${item.dataset.label ?? ''}: ${formatearValor(series[item.datasetIndex]?.valores[item.dataIndex], formato)}`,
+            // El valor dibujado, el mismo del eje, de la tabla y del resumen (una salida se lee '-5 u.').
+            label: (item) => `${item.dataset.label ?? ''}: ${formatearValor(series[item.datasetIndex]?.dibujados[item.dataIndex], formato)}`,
           },
         },
       },
@@ -156,7 +165,7 @@ export function GraficoBarras({ barras, granularidad, acento, etiquetar }: Props
               afuera la recorta. Con sr-only en la <table>, la página se desplazaba 135 px de lado a 375 px. */}
           <div className="sr-only">
             <table>
-              <caption>{titulo}</caption>
+              <caption>Datos del gráfico</caption>
               <thead>
                 <tr>
                   <th scope="col">{horizontal ? 'Categoría' : 'Fecha'}</th>
@@ -167,7 +176,7 @@ export function GraficoBarras({ barras, granularidad, acento, etiquetar }: Props
                 {etiquetas.map((etiqueta, i) => (
                   <tr key={`${etiqueta}-${i}`}>
                     <th scope="row">{etiqueta}</th>
-                    {series.map((s, j) => <td key={`${s.etiqueta}-${j}`}>{formatearValor(s.valores[i], formato)}</td>)}
+                    {series.map((s, j) => <td key={`${s.etiqueta}-${j}`}>{formatearValor(s.dibujados[i], formato)}</td>)}
                   </tr>
                 ))}
               </tbody>

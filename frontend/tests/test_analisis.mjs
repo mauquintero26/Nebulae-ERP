@@ -177,7 +177,8 @@ console.log('--- TEST 7: etiquetaFecha (tabla propia de meses, sin zona horaria)
 console.log('--- TEST 8: colores (PALETA, GRIS_OTROS, colorSegmento y HEX_CLASE_TAILWIND de RP73) ---');
 {
   assert.deepEqual(PALETA, ['#4f46e5', '#0d9488', '#f59e0b', '#0ea5e9', '#8b5cf6', '#e11d48', '#65a30d', '#64748b']);
-  assert.deepEqual([GRIS_OTROS, COLOR_ANTERIOR, POSITIVO, NEGATIVO], ['#cbd5e1', '#94a3b8', '#059669', '#e11d48']);
+  // T5B r1 (M15): COLOR_ANTERIOR pasa de slate-400 (#94a3b8, 2,56:1) a slate-500 (#64748b, 4,76:1); sigue punteado.
+  assert.deepEqual([GRIS_OTROS, COLOR_ANTERIOR, POSITIVO, NEGATIVO], ['#cbd5e1', '#64748b', '#059669', '#e11d48']);
   // Recorre la PALETA en orden (y vuelve a empezar); '_otros' y los «Sin …» van en gris; el color propio gana.
   for (let i = 0; i < 10; i += 1) assert.equal(colorSegmento(i, { clave: `c${i}` }), PALETA[i % 8], `segmento ${i}`);
   assert.equal(colorSegmento(2, { clave: '_otros', etiqueta: 'Otros' }), GRIS_OTROS);
@@ -315,18 +316,72 @@ console.log('--- TEST 12 (T5B): el color del módulo y de las series (colorDeAce
   assert.equal(conAlfa('#FFF', 0), 'rgba(255, 255, 255, 0)', 'tres cifras y mayúsculas');
   assert.equal(conAlfa('#4f46e5', 2), 'rgba(79, 70, 229, 1)', 'el alfa se limita a 0..1');
   assert.equal(conAlfa('rojo', 0.5), 'rojo', 'lo que no es un hex sale tal cual');
-  // coloresSeries: anterior gris; tono positivo/negativo con POSITIVO/NEGATIVO; la primera principal con el módulo y las
-  // demás con colorSegmento (su color propio o la PALETA en orden).
+  // T5B r1 (M14, M15, M11 y M21): coloresSeries ya no pasa por colorSegmento (la regla de la dona). Anterior en
+  // COLOR_ANTERIOR; tono positivo/negativo con POSITIVO/NEGATIVO; '_otros' en GRIS_OTROS (el único gris); la primera
+  // principal con el módulo; las demás con su color propio o PALETA_SERIES en orden, saltando los colores iguales o muy
+  // cercanos (distanciaColor < DISTANCIA_MINIMA_COLOR) al módulo, a POSITIVO y a NEGATIVO.
+  const { PALETA_SERIES, distanciaColor, DISTANCIA_MINIMA_COLOR } = analisis;
+  assert.deepEqual(PALETA_SERIES, ['#4f46e5', '#0284c7', '#d97706', '#a21caf', '#4d7c0f', '#9d174d']);
+  assert.ok(Object.isFrozen(PALETA_SERIES));
+  assert.equal(DISTANCIA_MINIMA_COLOR, 25);
+  // distanciaColor: ΔE (CIE76, en Lab) entre dos '#rrggbb'.
+  assert.equal(distanciaColor('#4f46e5', '#4f46e5'), 0);
+  assert.ok(distanciaColor('#d97706', '#f59e0b') < 25, 'amber-600 y amber-500 se confunden');
+  assert.ok(distanciaColor('#0d9488', '#059669') < 25, 'teal-600 y emerald-600 se confunden');
+  assert.ok(distanciaColor('#4f46e5', '#9333ea') < 25, 'indigo-600 y purple-600 se confunden');
+  assert.ok(distanciaColor('#4f46e5', '#0284c7') > 25);
+  assert.ok(Math.abs(distanciaColor('#ffffff', '#000000') - 100) < 0.01, 'blanco a negro: 100');
+  assert.equal(distanciaColor('rojo', '#000000'), Infinity, 'lo que no es un hex nunca está cerca');
+  // Cada color que puede salir de coloresSeries llega a 3:1 sobre el blanco (líneas de 2 px y barras, WCAG 1.4.11), y los
+  // de PALETA_SERIES se distinguen entre sí y de POSITIVO y NEGATIVO.
+  for (const hex of [...PALETA_SERIES, COLOR_ANTERIOR, POSITIVO, NEGATIVO, ...Object.values(SEISCIENTOS)]) {
+    assert.ok(contraste(hex, '#ffffff') >= 3, `${hex} contra el blanco: ${contraste(hex, '#ffffff').toFixed(2)}`);
+  }
+  for (let i = 0; i < PALETA_SERIES.length; i += 1) {
+    for (const otro of [...PALETA_SERIES.slice(i + 1), POSITIVO, NEGATIVO]) {
+      assert.ok(distanciaColor(PALETA_SERIES[i], otro) >= 25, `${PALETA_SERIES[i]} y ${otro} se distinguen`);
+    }
+  }
   const MOD = '#d97706';
   assert.deepEqual(coloresSeries([{ clave: 'actual', es_anterior: false }, { clave: 'anterior', es_anterior: true }], MOD), [MOD, COLOR_ANTERIOR]);
   assert.deepEqual(coloresSeries([{ clave: 'e', tono: 'positivo' }, { clave: 's', tono: 'negativo' }], MOD), [POSITIVO, NEGATIVO]);
-  assert.deepEqual(coloresSeries([{ clave: 'a', tono: 'neutro' }, { clave: 'b' }, { clave: 'c' }], MOD), [MOD, PALETA[1], PALETA[2]]);
-  assert.deepEqual(coloresSeries([{ clave: 'a', color: '#123456' }, { clave: 'b' }], MOD), ['#123456', PALETA[1]], 'el color propio gana');
-  assert.deepEqual(coloresSeries([{ clave: 'ant', es_anterior: true }, { clave: 'a' }, { clave: 'b' }], MOD), [COLOR_ANTERIOR, MOD, PALETA[1]],
+  assert.deepEqual(coloresSeries([{ clave: 'a', tono: 'neutro' }, { clave: 'b' }, { clave: 'c' }], MOD), [MOD, '#4f46e5', '#0284c7'],
+    'con amber, el amber-600 de la PALETA_SERIES se salta');
+  assert.deepEqual(coloresSeries([{ clave: 'a', color: '#123456' }, { clave: 'b' }], MOD), ['#123456', '#4f46e5'], 'el color propio gana');
+  assert.deepEqual(coloresSeries([{ clave: 'a' }, { clave: 'b', color: 'bg-red-500' }], MOD), [MOD, '#ef4444'], 'una clase de Tailwind pasa a hex');
+  assert.deepEqual(coloresSeries([{ clave: 'ant', es_anterior: true }, { clave: 'a' }, { clave: 'b' }], MOD), [COLOR_ANTERIOR, MOD, '#4f46e5'],
     'la anterior no cuenta como principal');
-  assert.deepEqual(coloresSeries([{ clave: 'a' }]), [PALETA[0]], 'sin color de módulo');
+  assert.deepEqual(coloresSeries([{ clave: 'a' }]), [PALETA[0]], 'sin color de módulo, el índigo de Ventas');
+  assert.deepEqual(coloresSeries([{ clave: 'a' }, { clave: 'b' }]), ['#4f46e5', '#0284c7'], 'con el índigo por defecto, la 2.ª en sky-600');
   assert.deepEqual(coloresSeries(null, MOD), []);
-  assert.deepEqual(coloresSeries([null, { clave: 'b' }], MOD), [MOD, PALETA[1]], 'una serie rota no rompe');
+  assert.deepEqual(coloresSeries([null, { clave: 'b' }], MOD), [MOD, '#4f46e5'], 'una serie rota no rompe');
+  // M14: «Sin cotización» ya no sale en gris (1,48:1), ni en primer ni en segundo lugar; el gris queda solo para '_otros'.
+  assert.deepEqual(coloresSeries([{ clave: 'con', etiqueta: 'Con cotización' }, { clave: 'sin', etiqueta: 'Sin cotización' }], '#4f46e5'),
+    ['#4f46e5', '#0284c7']);
+  assert.deepEqual(coloresSeries([{ clave: 'sin', etiqueta: 'Sin fecha prometida' }, { clave: 'a', etiqueta: 'A tiempo' }], '#4f46e5'),
+    ['#4f46e5', '#0284c7']);
+  assert.deepEqual(coloresSeries([{ clave: 'a' }, { clave: '_otros', etiqueta: 'Otros' }], '#4f46e5'), ['#4f46e5', GRIS_OTROS]);
+  // M11 y M21: un caso por acento. Cinco series principales, más una positiva y una negativa: ninguna k ≥ 1 repite ni se
+  // parece al módulo, a POSITIVO ni a NEGATIVO, y todas se distinguen entre sí.
+  const CINCO = [{ clave: 'a' }, { clave: 'b' }, { clave: 'c' }, { clave: 'd' }, { clave: 'e' }, { clave: 'p', tono: 'positivo' }, { clave: 'n', tono: 'negativo' }];
+  const ESPERADO = {
+    teal: ['#0d9488', '#4f46e5', '#0284c7', '#d97706', '#a21caf', POSITIVO, NEGATIVO],
+    emerald: ['#059669', '#4f46e5', '#0284c7', '#d97706', '#a21caf', POSITIVO, NEGATIVO],
+    rose: ['#e11d48', '#4f46e5', '#0284c7', '#d97706', '#a21caf', POSITIVO, NEGATIVO],
+    amber: ['#d97706', '#4f46e5', '#0284c7', '#a21caf', '#4d7c0f', POSITIVO, NEGATIVO],
+  };
+  for (const [acento, esperado] of Object.entries(ESPERADO)) {
+    const colores = coloresSeries(CINCO, colorDeAcento(acento));
+    assert.deepEqual(colores, esperado, `acento ${acento}`);
+    const resto = colores.slice(1, 5);
+    for (const c of resto) {
+      for (const evitar of [colores[0], POSITIVO, NEGATIVO]) assert.ok(distanciaColor(c, evitar) >= 25, `${acento}: ${c} frente a ${evitar}`);
+    }
+    for (let i = 0; i < resto.length; i += 1) for (const otro of resto.slice(i + 1)) assert.ok(distanciaColor(resto[i], otro) >= 25, `${acento}: ${resto[i]} y ${otro}`);
+  }
+  // Con acento purple (cerca del índigo) o blue, el índigo se salta.
+  assert.deepEqual(coloresSeries([{ clave: 'a' }, { clave: 'b' }], colorDeAcento('purple')), ['#9333ea', '#0284c7']);
+  assert.deepEqual(coloresSeries([{ clave: 'a' }, { clave: 'b' }], colorDeAcento('blue')), ['#2563eb', '#0284c7']);
 }
 
 console.log('--- TEST 13 (T5B): las barras y los ejes (valoresConSigno, etiquetaEje, recortarEtiqueta, altoGraficoBarras) ---');
@@ -335,6 +390,11 @@ console.log('--- TEST 13 (T5B): las barras y los ejes (valoresConSigno, etiqueta
   // El tono 'negativo' dibuja la barra hacia abajo (como el flujo de caja de la referencia); los demás, tal cual.
   assert.deepEqual(valoresConSigno({ tono: 'negativo', valores: [5, -3, null, 0, '7'] }), [-5, -3, null, 0, -7]);
   assert.ok(Object.is(valoresConSigno({ tono: 'negativo', valores: [0] })[0], 0), 'sin −0');
+  // T5B r1 (M20): nunca −0, con cualquier tono (rellenar del servidor manda −0.0 en una cubeta vacía de salidas).
+  for (const tono of ['negativo', 'positivo', 'neutro', undefined]) {
+    const r = valoresConSigno({ tono, valores: [-0, '-0', 0] });
+    assert.ok(r.every((v) => Object.is(v, 0)), `tono ${tono}: ${r.map((v) => (Object.is(v, -0) ? '-0' : v)).join(', ')}`);
+  }
   assert.deepEqual(valoresConSigno({ tono: 'positivo', valores: [5, '7', 'x', undefined] }), [5, 7, null, null]);
   assert.deepEqual(valoresConSigno({ valores: [-2, 3] }), [-2, 3], 'neutro o sin tono: tal cual');
   assert.deepEqual(valoresConSigno(null), []);
@@ -348,6 +408,12 @@ console.log('--- TEST 13 (T5B): las barras y los ejes (valoresConSigno, etiqueta
   assert.equal(etiquetaEje(2.5, 'dias'), '2,5');
   assert.equal(etiquetaEje('12', null), '12', 'sin formato: número');
   assert.equal(etiquetaEje('x', 'pesos'), '—');
+  assert.equal(etiquetaEje('x', 'porcentaje'), '—');
+  // T5B r1 (M5, RP75): el porcentaje del eje sale de formatoValorKpi (lib/kpis.js), no de una segunda copia de la regla.
+  const fuenteLib = readFileSync(new URL('../src/lib/analisis.js', import.meta.url), 'utf8');
+  const cuerpoEje = /export function etiquetaEje\(valor, formato\) \{([\s\S]*?)\n\}/.exec(fuenteLib)?.[1] ?? '';
+  assert.match(cuerpoEje, /if \(formato === 'porcentaje'\) return formatoValorKpi\(valor, 'porcentaje'\);/);
+  assert.ok(!cuerpoEje.includes(' %`'), 'sin armar el % a mano');
   // Las etiquetas largas de las categorías se recortan en el eje (el tooltip y la tabla llevan la completa).
   assert.equal(recortarEtiqueta('Juan Pérez', 18), 'Juan Pérez');
   const larga = recortarEtiqueta('Distribuidora Nacional de Colchones', 18);
@@ -405,10 +471,26 @@ console.log('--- TEST 15 (T5B): resumenAccesible de la dona y de las barras (el 
     titulo: 'Entradas y salidas', formato: 'unidades', eje: 'fechas', etiquetas: ['2026-10-01', '2026-10-02'], apiladas: false,
     series: [{ clave: 'e', etiqueta: 'Entradas', valores: [3, 4], tono: 'positivo' }, { clave: 's', etiqueta: 'Salidas', valores: [2, null], tono: 'negativo' }],
   };
-  assert.equal(resumenAccesible(barras), 'Entradas y salidas: Entradas, total 7 u.; Salidas, total 2 u.');
+  // T5B r1 (M18, ruling del punto 2): con tono 'negativo' el resumen lee el valor DIBUJADO (−|v|), el mismo del eje, del
+  // tooltip y de la tabla, mande el servidor magnitudes (Inventario) o valores con signo (Finanzas).
+  assert.equal(resumenAccesible(barras), 'Entradas y salidas: Entradas, total 7 u.; Salidas, total -2 u.');
+  assert.equal(resumenAccesible({ ...barras, series: [barras.series[0], { ...barras.series[1], valores: [-2, null] }] }),
+    'Entradas y salidas: Entradas, total 7 u.; Salidas, total -2 u.', 'con signo da lo mismo que con magnitudes');
+  assert.equal(resumenAccesible({
+    titulo: 'Flujo de caja', formato: 'pesos', eje: 'fechas', etiquetas: ['2026-10-01', '2026-10-02'],
+    series: [{ etiqueta: 'Entradas', valores: [1000, 500], tono: 'positivo' }, { etiqueta: 'Salidas', valores: [-300, -100], tono: 'negativo' }],
+  }), 'Flujo de caja: Entradas, total $1.500; Salidas, total -$400');
   assert.equal(resumenAccesible({ ...barras, series: [{ etiqueta: 'Entradas', valores: [0, 0] }] }), 'Entradas y salidas: sin datos en este período');
   assert.equal(resumenAccesible({ titulo: 'Por asesor', formato: 'pesos', eje: 'categorias', etiquetas: ['Ana'], series: [{ valores: [1500] }] }),
     'Por asesor: Serie, total $1.500');
+  // T5B r1 (M17): «total» solo con formatos que se suman (pesos, entero, numero y unidades); con porcentaje o días, el rango.
+  const cumplimiento = { titulo: 'Cumplimiento', formato: 'porcentaje', eje: 'fechas', etiquetas: ['a', 'b', 'c'], series: [{ etiqueta: 'A tiempo', valores: [70, 90, 80] }] };
+  assert.equal(resumenAccesible(cumplimiento), 'Cumplimiento: A tiempo, de 70 % a 90 %');
+  assert.equal(resumenAccesible({ ...cumplimiento, series: [{ etiqueta: 'A tiempo', valores: [80, null, 80] }] }), 'Cumplimiento: A tiempo, 80 %');
+  assert.equal(resumenAccesible({ ...cumplimiento, formato: 'dias', series: [{ etiqueta: 'Promedio', valores: [2, 5.5] }] }),
+    'Cumplimiento: Promedio, de 2 días a 5,5 días');
+  assert.equal(resumenAccesible({ ...cumplimiento, formato: 'numero', series: [{ etiqueta: 'Pedidos', valores: [2, 3] }] }),
+    'Cumplimiento: Pedidos, total 5');
   // La línea sigue igual (TEST 11).
   assert.equal(resumenAccesible({ titulo: 'Pedidos', formato: 'entero', fechas: [], series: [], total: 90, total_anterior: 100 }),
     'Pedidos: total 90, bajó 10 % frente al período anterior');
@@ -421,7 +503,11 @@ console.log('--- TEST 16 (T5B): el ranking y los movimientos (proporcionesRankin
   // La barra proporcional del ranking: % del mayor valor, con 1 decimal.
   assert.deepEqual(proporcionesRanking([{ valor: 200 }, { valor: 100 }, { valor: 50 }]), [100, 50, 25]);
   assert.deepEqual(proporcionesRanking([{ valor: 3 }, { valor: 1 }]), [100, 33.3]);
-  assert.deepEqual(proporcionesRanking([{ valor: '40' }, { valor: -20 }, { valor: 'x' }]), [100, 50, 0], 'texto, negativo (por su tamaño) y basura');
+  // T5B r1 (M22): un negativo queda sin barra (Math.max(0, n)); antes crecía con |n| y el último puesto podía tener la
+  // barra más larga.
+  assert.deepEqual(proporcionesRanking([{ valor: '40' }, { valor: -20 }, { valor: 'x' }]), [100, 0, 0], 'texto, negativo sin barra y basura');
+  assert.deepEqual(proporcionesRanking([{ valor: 500 }, { valor: 100 }, { valor: -800 }]), [100, 20, 0]);
+  assert.deepEqual(proporcionesRanking([{ valor: -5 }, { valor: -10 }, { valor: -20 }]), [0, 0, 0], 'todos negativos: sin barras');
   assert.deepEqual(proporcionesRanking([{ valor: 0 }, { valor: null }]), [0, 0], 'todo en 0: sin barras');
   assert.deepEqual(proporcionesRanking([]), []);
   assert.deepEqual(proporcionesRanking(null), []);
@@ -436,6 +522,13 @@ console.log('--- TEST 16 (T5B): el ranking y los movimientos (proporcionesRankin
   assert.deepEqual(montoMovimiento({ monto: null, signo: '+' }), { texto: '—', tono: 'neutro' }, 'nunca inventa un monto');
   assert.deepEqual(montoMovimiento({ monto: 'x', signo: '-' }), { texto: '—', tono: 'neutro' });
   assert.deepEqual(montoMovimiento(null), { texto: '—', tono: 'neutro' });
+  // T5B r1 (M23): una magnitud que formatea a 0 da '$0' (o '0 u.') en tono neutro, con cualquier signo: ni '+$0' en verde
+  // ni un '$0' rojo sin su menos.
+  assert.deepEqual(montoMovimiento({ monto: 0, formato: 'pesos', signo: '+' }), { texto: '$0', tono: 'neutro' });
+  assert.deepEqual(montoMovimiento({ monto: 0.4, formato: 'pesos', signo: '-' }), { texto: '$0', tono: 'neutro' });
+  assert.deepEqual(montoMovimiento({ monto: -0.3, formato: 'pesos', signo: null }), { texto: '$0', tono: 'neutro' });
+  assert.deepEqual(montoMovimiento({ monto: 0, formato: 'unidades', signo: '-' }), { texto: '0 u.', tono: 'neutro' });
+  assert.deepEqual(montoMovimiento({ monto: 0.6, formato: 'pesos', signo: '-' }), { texto: '-$1', tono: 'negativo' }, 'un peso sí lleva signo');
   // El ícono por tipo: primero tipo, después doc_tipo, sin importar mayúsculas ni tildes; si no, el de por defecto.
   assert.equal(iconoMovimiento({ tipo: 'PVEN' }), 'ShoppingBag');
   assert.equal(iconoMovimiento({ tipo: 'pago', doc_tipo: 'PVEN' }), 'Wallet');
@@ -534,7 +627,9 @@ console.log('--- TEST 18 (T5B): el fuente de las ocho piezas de components/anali
     'y sigue al usuario si cambia la preferencia');
   assert.match(registro, /activa\.duration = ms;/, 'también la animación al pasar el mouse');
   assert.match(registro, /ChartJS\.defaults\.font\.family = fuenteDeLaApp\(\);/);
-  assert.ok(!/defaults\.plugins/.test(registro), 'no cambia los tooltips ni la leyenda globales');
+  // T5B r1 (M1): globales solo la fuente y la animación (las pide el diseño); el color de los ejes va en cada gráfico.
+  assert.ok(!/defaults\s*(\.|\[\s*['"`])\s*(color|plugins)\b/.test(registro), 'no cambia el color, los tooltips ni la leyenda globales');
+  assert.match(registro, /export const COLOR_EJES = '#475569';/);
 
   // Los tres gráficos: react-chartjs-2, registrarGraficos() al cargar el módulo, <canvas role="img"> con aria-label =
   // resumenAccesible y su tabla sr-only, 'Sin datos en este período' y los tooltips con formatearValor.
@@ -543,11 +638,13 @@ console.log('--- TEST 18 (T5B): el fuente de las ocho piezas de components/anali
     const fuente = fuentes[archivo];
     const c = codigo(fuente);
     assert.match(fuente, new RegExp(`import \\{ ${componente} \\} from 'react-chartjs-2';`), `${archivo}: <${componente}>`);
-    assert.match(fuente, /import \{ ESTILO_TOOLTIP, registrarGraficos \} from '\.\/registro';\n\nregistrarGraficos\(\);\n/, `${archivo}: registra al cargarse`);
+    assert.match(fuente, /import \{ (COLOR_EJES, )?ESTILO_TOOLTIP, registrarGraficos \} from '\.\/registro';\n\nregistrarGraficos\(\);\n/, `${archivo}: registra al cargarse`);
     assert.match(c, new RegExp(`<${componente} data=\\{datos\\} options=\\{opciones\\} role="img" aria-label=\\{resumenAccesible\\(`), `${archivo}: canvas role=img`);
     // La tabla para lectores de pantalla, dentro de una caja sr-only: con sr-only en la <table> misma, la tabla se
     // ensancha con su contenido (no obedece width:1px ni overflow:hidden) y la página se desplazaba de lado (medido).
-    assert.match(c, /<div className="sr-only">\s*<table>\s*<caption>\{titulo\}<\/caption>/, `${archivo}: la tabla para lectores de pantalla`);
+    // T5B r1 (M9): el caption no repite el título (ya es el nombre de la región, el h3 y el inicio del aria-label).
+    assert.match(c, /<div className="sr-only">\s*<table>\s*<caption>Datos del gráfico<\/caption>/, `${archivo}: la tabla para lectores de pantalla`);
+    assert.ok(!c.includes('<caption>{titulo}</caption>'), `${archivo}: el caption sin el título`);
     assert.ok(!/<table className=/.test(c), `${archivo}: la <table> sin clases (la recorta su caja)`);
     assert.match(c, new RegExp(`bloqueSinDatos\\('${bloque}', ${bloque}\\)`), `${archivo}: sin datos`);
     assert.ok(c.includes('Sin datos en este período'), `${archivo}: el texto exacto`);
@@ -560,25 +657,52 @@ console.log('--- TEST 18 (T5B): el fuente de las ocho piezas de components/anali
   for (const texto of ['pointRadius: 0,', 'pointHoverRadius: 4,', "borderDash: s.anterior ? [6, 4] : [],", "fill: s.area ? 'origin' : false,",
     'maxTicksLimit: 8,', 'etiquetaFecha(fechas[Number(valor)], gran)', 'etiquetaEje(valor, formato)', 'createLinearGradient(',
     'colorDeAcento(acento)', 'coloresSeries(crudas, colorModulo)', 'h-64', "mode: 'index', intersect: false",
-    '<ChipVariacion kpi={{ valor: linea.total, anterior: linea.total_anterior, mejor }} frente={frente} />', '${tamanoValor(total)}']) {
+    '<ChipVariacion kpi={{ valor: linea.total, anterior: linea.total_anterior, mejor }} frente={frente} />', '${tamanoValor(total)}',
+    // T5B r1 (M16): el flujo de datos, con los textos exactos (la tabla en la misma fecha que el eje y el resumen con frente).
+    '<th scope="row">{etiquetaFecha(fecha, gran)}</th>', '<td key={`${s.etiqueta}-${j}`}>{formatearValor(s.valores[i], formato)}</td>',
+    'resumenAccesible(linea, frente ? { frente } : {})', 'data: s.valores,',
+    // El «mejor» por defecto del chip es el documentado ('sube'); T5C lo pasa por módulo (M19, nota del controlador).
+    "export function GraficoLinea({ linea, granularidad, acento, mejor = 'sube', frente }: PropsGraficoLinea)",
+    // T5B r1 (M9): con el gráfico dibujado, el total y el chip del encabezado van con aria-hidden (ya los dice el aria-label
+    // del canvas); sin datos no hay canvas y los dos se leen.
+    '<p aria-hidden={sinDatos ? undefined : true} title={total}', '<span aria-hidden={sinDatos ? undefined : true} className="shrink-0">']) {
     assert.ok(linea.includes(texto), `GraficoLinea: ${texto}`);
   }
+  // T5B r1 (M1): el texto de los ejes en las opciones de cada escala (COLOR_EJES), no en ChartJS.defaults.color.
+  assert.equal((linea.match(/color: COLOR_EJES,/g) ?? []).length, 2, 'GraficoLinea: color de las marcas en x y en y');
   const dona = codigo(fuentes['GraficoDona.tsx']);
   for (const texto of ["cutout: '72%',", 'pointer-events-none absolute inset-0', '>Total<', '${tamanoCentroDona(total)} whitespace-nowrap',
     'todas.length > 1 &&', 'aria-pressed={presionada}', 'colorSegmento(i, s)', "etiquetar('dona', String(s.clave ?? ''), original)",
     "formatearValor(s.pct, 'porcentaje')", 'alCambiarModo?.(clave);', 'h-44 w-44',
     // La leyenda: la etiqueta con min-w-0 y al menos 6rem; si no cabe, el valor y el % bajan (flex-wrap), nunca «Col…».
-    'flex min-w-0 flex-wrap items-center', 'min-w-0 flex-1 basis-24 truncate', 'inline-flex min-w-0 max-w-full']) {
+    'flex min-w-0 flex-wrap items-center', 'min-w-0 flex-1 basis-24 truncate', 'inline-flex min-w-0 max-w-full',
+    // T5B r1 (M16): el modo controlado gana; la tabla con la etiqueta (ya pasada por etiquetar) y el valor del segmento.
+    'const activa = modo ?? elegida;', '<th scope="row">{s.etiqueta}</th>', '<td>{formatearValor(s.valor, formato)}</td>',
+    "<td>{formatearValor(s.pct, 'porcentaje')}</td>", 'resumenAccesible({ ...dona, segmentos })']) {
     assert.ok(dona.includes(texto), `GraficoDona: ${texto}`);
   }
+  // El estado de la dona elegida vive DENTRO del componente (uno por instancia), no en el módulo.
+  const inicioDona = dona.indexOf('export function GraficoDona(');
+  const estadoDona = dona.indexOf('const [elegida, setElegida] = useState<string | null>(null);');
+  assert.ok(inicioDona >= 0 && estadoDona > inicioDona, 'GraficoDona: useState dentro de la función');
+  assert.equal((dona.match(/\buseState\b/g) ?? []).length, 2, 'GraficoDona: el import y un solo useState');
   assert.ok(!/overflow-/.test(dona), 'GraficoDona: nada recorta el foco de las píldoras');
   const barras = codigo(fuentes['GraficoBarras.tsx']);
   for (const texto of ["indexAxis: horizontal ? 'y' : 'x',", "const horizontal = barras?.eje === 'categorias';", 'valoresConSigno(s)',
     'stacked: apiladas,', 'altoGraficoBarras(barras.eje, etiquetas.length)', 'recortarEtiqueta(etiquetas[Number(valor)])',
-    "etiquetar('barras', String(s.clave ?? ''), original)", "etiquetar('barras', texto, texto)", 'series[item.datasetIndex]?.valores[item.dataIndex]',
-    'coloresSeries(crudas, colorModulo)', 'style={{ height: alto }}']) {
+    "etiquetar('barras', String(s.clave ?? ''), original)", "etiquetar('barras', texto, texto)",
+    'coloresSeries(crudas, colorModulo)', 'style={{ height: alto }}',
+    // T5B r1 (M16 y M18): lo dibujado (tono 'negativo' hacia abajo) es lo que leen el tooltip, la tabla y el resumen.
+    'data: s.dibujados,', 'formatearValor(series[item.datasetIndex]?.dibujados[item.dataIndex], formato)',
+    '<td key={`${s.etiqueta}-${j}`}>{formatearValor(s.dibujados[i], formato)}</td>', 'resumenAccesible({ ...barras, series })',
+    'tono: s.tono,']) {
     assert.ok(barras.includes(texto), `GraficoBarras: ${texto}`);
   }
+  assert.ok(!/formatearValor\(s\.valores\[|\.valores\[item\.dataIndex\]|item\.raw/.test(barras), 'GraficoBarras: ningún canal lee el valor sin dibujar');
+  assert.ok((barras.match(/color: COLOR_EJES,/g) ?? []).length >= 1 && /ticks: \{\s*color: COLOR_EJES,/.test(barras),
+    'GraficoBarras: color de las marcas en las dos escalas');
+  assert.equal((barras.match(/ticks: \{/g) ?? []).length, (barras.match(/ticks: \{\s*color: COLOR_EJES,/g) ?? []).length,
+    'GraficoBarras: cada ticks lleva COLOR_EJES');
   assert.equal((barras.match(/stacked: apiladas,/g) ?? []).length, 2, 'GraficoBarras: apila en los dos ejes');
 
   // ListaMovimientos: hasta 8, la fecha de hace() (RP60, sin un formato nuevo), el monto y el ícono de lib/analisis.js.
@@ -588,9 +712,12 @@ console.log('--- TEST 18 (T5B): el fuente de las ocho piezas de components/anali
     'onClick={() => alAbrir(fila)}', '<Link href={href}', "bloqueSinDatos('movimientos', movimientos)", 'Sin datos en este período',
     '{relativa && (', '<ul className="@container', '@xs:',
     // Los contenedores flex de los textos recortados llevan min-w-0 (si no, el título empuja el monto fuera de la fila).
-    '<span className="block min-w-0 flex-1 @xs:flex', '<span className="block min-w-0 @xs:flex-1">', 'flex flex-wrap items-baseline justify-between']) {
+    '<span className="block min-w-0 flex-1 @xs:flex', '<span className="block min-w-0 @xs:flex-1">', 'flex flex-wrap items-baseline justify-between',
+    // T5B r1 (M16): el monto que se pinta es el de montoMovimiento (con su signo), con su tono.
+    '{monto.texto}', '${TONO_MONTO[monto.tono]}']) {
     assert.ok(movs.includes(texto), `ListaMovimientos: ${texto}`);
   }
+  assert.ok(!/formatearValor\(|formatoPesos\(/.test(movs), 'ListaMovimientos: el monto solo sale de montoMovimiento');
   assert.match(fuentes['ListaMovimientos.tsx'], /import \{ fechaHoraLarga, hace \} from '@\/lib\/fechas-colombia';/);
   assert.ok(!/'ayer'|hace \d+ h'|toLocale|Intl\./.test(movs), 'ListaMovimientos: no arma su propia fecha relativa');
   assert.ok(!/overflow-/.test(movs), 'ListaMovimientos: nada recorta el foco de las filas');
@@ -603,11 +730,14 @@ console.log('--- TEST 18 (T5B): el fuente de las ocho piezas de components/anali
   // RankingTop: las píldoras Top 5/10/25, las primeras `top` filas, la barra proporcional y las medallas.
   const ranking = codigo(fuentes['RankingTop.tsx']);
   for (const texto of ['TOPS.map((t) =>', 'aria-pressed={t === top}', 'Top {t}', 'onClick={() => alCambiarTop(t)}',
-    'ranking.filas.slice(0, top)', 'proporcionesRanking(filas)', 'style={{ width: `${anchos[i]}%` }}', "bloqueSinDatos('ranking', ranking)",
+    'ranking.filas.slice(0, top)', 'proporcionesRanking(filas)', "bloqueSinDatos('ranking', ranking)",
+    // T5B r1 (M8): la barra con el -600 del acento (colorDeAcento), el mismo criterio de 3:1 de la línea.
+    'const barra = colorDeAcento(acento);', 'style={{ width: `${anchos[i]}%`, backgroundColor: barra }}',
     "etiquetar('ranking', crudo, crudo)", 'Sin datos en este período', '{alCambiarTop && (',
     'flex min-w-0 flex-wrap items-baseline justify-between', 'min-w-0 flex-1 basis-24 truncate', 'ml-auto shrink-0 whitespace-nowrap']) {
     assert.ok(ranking.includes(texto), `RankingTop: ${texto}`);
   }
+  assert.ok(!/bg-[a-z]+-500/.test(ranking), 'RankingTop: sin los -500 (amber 2,15:1, teal 2,49:1)');
   for (const n of [1, 2, 3]) assert.match(ranking, new RegExp(`\\n  ${n}: \\{ clases: '`), `RankingTop: medalla ${n}`);
   assert.equal((ranking.match(/overflow-/g) ?? []).length, 1, 'RankingTop: solo la pista de la barra (aria-hidden, sin controles) recorta');
   assert.match(ranking, /<span aria-hidden="true" className="[^"]*overflow-hidden/);
@@ -626,13 +756,74 @@ console.log('--- TEST 18 (T5B): el fuente de las ocho piezas de components/anali
   for (const clave of Object.keys(analisis.GRILLA_ANALISIS)) {
     assert.ok(esqueleto.includes(`GRILLA_ANALISIS.${clave}`), `EsqueletoAnalisis usa GRILLA_ANALISIS.${clave}`);
   }
-  for (const texto of ['clasesFranja(n)', 'role="status" aria-busy="true"', 'Cargando el análisis…', 'motion-safe:animate-pulse', 'h-64', 'h-44 w-44']) {
+  for (const texto of ['clasesFranja(n)', '<div role="status" className={GRILLA_ANALISIS.raiz}>', 'Cargando el análisis…', 'motion-safe:animate-pulse', 'h-64', 'h-44 w-44']) {
     assert.ok(esqueleto.includes(texto), `EsqueletoAnalisis: ${texto}`);
   }
+  // T5B r1 (M12): sin aria-busy en el status (retiene su anuncio); el aria-busy va en el contenedor que se actualiza (T5C).
+  assert.ok(!esqueleto.includes('aria-busy'), 'EsqueletoAnalisis: sin aria-busy');
   assert.ok(!/[^:]animate-pulse/.test(esqueleto.replace(/motion-safe:animate-pulse/g, '')), 'el pulso solo con motion-safe');
   assert.ok(!/>\s*0\s*</.test(esqueleto), 'nunca ceros');
   // Las ocho piezas existen (index.ts, PanelAnalisis y los demás son de T5C).
   for (const archivo of Object.keys(PIEZAS)) assert.ok(existsSync(new URL(`../src/components/analisis/${archivo}`, import.meta.url)), archivo);
+}
+
+console.log('--- TEST 19 (T5B r1, M16): registro.ts de verdad (transpilado), con el Chart.js instalado y un matchMedia falso ---');
+{
+  // Se transpila registro.ts con el typescript instalado y se evalúa DOS veces (como una recarga en caliente del módulo),
+  // con tres llamadas a registrarGraficos(): registra una sola vez, deja un solo oyente de prefers-reduced-motion y no
+  // toca defaults.color ni defaults.plugins (los comparten las pantallas viejas de la lista blanca).
+  const ts = createRequire(import.meta.url)('typescript');
+  const fuente = readFileSync(new URL('../src/components/analisis/registro.ts', import.meta.url), 'utf8');
+  const js = ts.transpileModule(fuente, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
+  const urlChart = import.meta.resolve('chart.js');
+  assert.match(js, /from ['"]chart\.js['"]/);
+  const conChart = js.replace(/from ['"]chart\.js['"]/, `from '${urlChart}'`);
+  const { Chart, Tooltip, Legend, Filler } = await import(urlChart);
+  const colorAntes = Chart.defaults.color;
+  const oyentes = [];
+  let consultas = 0;
+  const previos = { window: globalThis.window, document: globalThis.document };
+  globalThis.window = {
+    matchMedia: (q) => {
+      consultas += 1;
+      assert.equal(q, '(prefers-reduced-motion: reduce)');
+      return { matches: true, addEventListener: (tipo, fn) => oyentes.push([tipo, fn]) };
+    },
+    getComputedStyle: () => ({ fontFamily: 'Arial, Helvetica, sans-serif' }),
+  };
+  globalThis.document = { body: {} };
+  try {
+    const evaluar = (n) => import(`data:text/javascript;charset=utf-8,${encodeURIComponent(`${conChart}\n// evaluación ${n}`)}`);
+    const m1 = await evaluar(1);
+    m1.registrarGraficos();
+    m1.registrarGraficos();
+    const m2 = await evaluar(2);
+    m2.registrarGraficos();
+    assert.deepEqual([consultas, oyentes.length, oyentes[0]?.[0]], [1, 1, 'change'], 'un solo oyente con 2 evaluaciones y 3 llamadas');
+    assert.deepEqual(Object.keys(Chart.registry.elements.items).sort(), ['arc', 'bar', 'line', 'point']);
+    assert.deepEqual(Object.keys(Chart.registry.scales.items).sort(), ['category', 'linear']);
+    assert.deepEqual(Object.keys(Chart.registry.plugins.items).sort(), ['filler', 'legend', 'tooltip']);
+    assert.deepEqual([Chart.defaults.animation.duration, Chart.defaults.transitions.active.animation.duration], [0, 0], 'pide menos movimiento');
+    oyentes[0][1]({ matches: false });
+    assert.deepEqual([Chart.defaults.animation.duration, Chart.defaults.transitions.active.animation.duration], [400, 400], 'cambia la preferencia');
+    oyentes[0][1]({ matches: true });
+    assert.equal(Chart.defaults.animation.duration, 0);
+    assert.equal(Chart.defaults.font.family, 'Arial, Helvetica, sans-serif', 'la fuente de la app');
+    assert.equal(Chart.defaults.color, colorAntes, 'el color global sigue el de Chart.js (M1)');
+    // Los tooltips, la leyenda y el relleno globales quedan con los valores que trae cada plugin de Chart.js (también
+    // ante un defaults['plugins'] con corchetes, que la guarda del fuente no ve).
+    for (const plugin of [Tooltip, Legend, Filler]) {
+      const registrado = Chart.defaults.plugins[plugin.id];
+      for (const [clave, valor] of Object.entries(plugin.defaults)) {
+        if (valor === null || typeof valor !== 'object') assert.equal(registrado[clave], valor, `defaults.plugins.${plugin.id}.${clave}`);
+      }
+    }
+    assert.equal(Chart.defaults.plugins.tooltip.callbacks.label, Tooltip.defaults.callbacks.label, 'el label global de Chart.js');
+    assert.deepEqual([m1.ANIMACION_MS, m1.COLOR_EJES], [400, '#475569']);
+  } finally {
+    globalThis.window = previos.window;
+    globalThis.document = previos.document;
+  }
 }
 
 console.log('✓ lib/analisis.js: períodos, consulta, variación, formato, ejes, fechas, colores, enlaces y contrato.');

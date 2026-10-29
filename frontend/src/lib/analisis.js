@@ -50,6 +50,9 @@ import {
  * @typedef {{clave?: string | null, titulo?: string | null, formato?: FormatoAnalisis | null, total?: number | null,
  *   segmentos: ReadonlyArray<SegmentoDona>}} DonaAnalisis
  * @typedef {'positivo' | 'negativo' | 'neutro'} TonoSerie
+ * Una serie de barras con tono 'negativo' se DIBUJA hacia abajo (valoresConSigno: −|v|), y el tooltip, la tabla sr-only y
+ * el resumen accesible leen ese mismo valor dibujado, el que lee el eje (T5B r1, M18): da igual si el servidor manda
+ * magnitudes (Inventario: salidas 5) o valores con signo (Finanzas: −400); una salida se lee '-5 u.' o '-$400'.
  * @typedef {{clave?: string | null, etiqueta?: string | null, valores: ReadonlyArray<number | string | null>, tono?: TonoSerie | null,
  *   color?: string | null}} SerieBarras
  * @typedef {{titulo?: string | null, formato?: FormatoAnalisis | null, eje?: 'fechas' | 'categorias' | null,
@@ -292,8 +295,8 @@ function numero(v) {
  */
 export function etiquetaEje(valor, formato) {
   if (formato === 'pesos') return pesosCorto(valor);
-  const texto = formatoDecimal(valor);
-  return formato === 'porcentaje' && texto !== '—' ? `${texto} %` : texto;
+  if (formato === 'porcentaje') return formatoValorKpi(valor, 'porcentaje');
+  return formatoDecimal(valor);
 }
 
 /**
@@ -308,7 +311,8 @@ export function valoresConSigno(serie) {
   return lista(s.valores).map((v) => {
     const n = numero(v);
     if (n === null) return null;
-    return negativo && n !== 0 ? -Math.abs(n) : n;
+    if (n === 0) return 0; // también −0 (rellenar del servidor manda −0.0 en una cubeta vacía): nunca −0
+    return negativo ? -Math.abs(n) : n;
   });
 }
 
@@ -362,14 +366,57 @@ export function etiquetaFecha(fecha, granularidad) {
 
 // ─── colores ────────────────────────────────────────────────────────────────────
 
-/** Los colores de las series y los segmentos, en orden fijo. Inmutable. */
+/**
+ * Los colores de los segmentos de la dona, en orden fijo (cada segmento lleva su texto en la leyenda; las series de la
+ * línea y las barras usan PALETA_SERIES). Inmutable.
+ */
 export const PALETA = congelar(['#4f46e5', '#0d9488', '#f59e0b', '#0ea5e9', '#8b5cf6', '#e11d48', '#65a30d', '#64748b']);
-/** 'Otros' y los segmentos 'Sin …'. */
+/** 'Otros' y los segmentos 'Sin …' de la dona; en las series, solo la clave '_otros'. */
 export const GRIS_OTROS = '#cbd5e1';
-/** La serie del período anterior. */
-export const COLOR_ANTERIOR = '#94a3b8';
+/** La serie del período anterior: slate-500 (4,76:1 sobre el blanco; T5B r1, antes slate-400 con 2,56:1), punteada. */
+export const COLOR_ANTERIOR = '#64748b';
 export const POSITIVO = '#059669';
 export const NEGATIVO = '#e11d48';
+
+/**
+ * Los colores de las series de la línea y de las barras desde la 2.ª principal (T5B r1, M14 y M15): indigo-600,
+ * sky-600, amber-600, fuchsia-700, lime-700 y pink-800. Todos llegan a 3:1 sobre el blanco (una línea de 2 px o una
+ * barra, WCAG 1.4.11) y se distinguen entre sí y de POSITIVO y NEGATIVO (distanciaColor ≥ DISTANCIA_MINIMA_COLOR).
+ * Inmutable.
+ */
+export const PALETA_SERIES = congelar(['#4f46e5', '#0284c7', '#d97706', '#a21caf', '#4d7c0f', '#9d174d']);
+/** Por debajo de esta distancia (ΔE CIE76) dos colores de serie se confunden: amber-600 y amber-500 dan 17,7. */
+export const DISTANCIA_MINIMA_COLOR = 25;
+
+/** [L, a, b] (CIELAB, D65) de un '#rrggbb' o '#rgb', o null. */
+function lab(hex) {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(typeof hex === 'string' ? hex.trim() : '');
+  if (!m) return null;
+  const cifras = m[1].length === 3 ? [...m[1]].map((c) => c + c) : [m[1].slice(0, 2), m[1].slice(2, 4), m[1].slice(4, 6)];
+  const [r, g, b] = cifras.map((c) => {
+    const v = parseInt(c, 16) / 255;
+    return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  });
+  const x = (r * 0.4124 + g * 0.3576 + b * 0.1805) / 0.95047;
+  const y = r * 0.2126 + g * 0.7152 + b * 0.0722;
+  const z = (r * 0.0193 + g * 0.1192 + b * 0.9505) / 1.08883;
+  const f = (t) => (t > 216 / 24389 ? Math.cbrt(t) : ((24389 / 27) * t + 16) / 116);
+  return [116 * f(y) - 16, 500 * (f(x) - f(y)), 200 * (f(y) - f(z))];
+}
+
+/**
+ * La distancia entre dos colores (ΔE CIE76: la distancia en CIELAB; 0 = el mismo, 100 = del blanco al negro). Lo que no
+ * es un hex da Infinity (nunca está «cerca»).
+ * @param {unknown} a
+ * @param {unknown} b
+ * @returns {number}
+ */
+export function distanciaColor(a, b) {
+  const p = lab(a);
+  const q = lab(b);
+  if (!p || !q) return Infinity;
+  return Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+}
 
 /**
  * La ÚNICA tabla de clases de Tailwind a hex (RP73): las 12 de COLOR_HEX de crm/page.tsx más 'bg-red-500' (la etapa
@@ -452,25 +499,34 @@ export function conAlfa(hex, alfa) {
 }
 
 /**
- * El color de cada serie de la línea o de las barras, en su orden: la del período anterior (es_anterior) en
- * COLOR_ANTERIOR; tono 'positivo' en POSITIVO y 'negativo' en NEGATIVO; la primera principal en `colorModulo`
- * (colorDeAcento; por defecto PALETA[0]) y las demás con colorSegmento (su color propio o la PALETA en orden). Un color
- * propio (serie.color) gana en cualquier principal.
+ * El color de cada serie de la línea o de las barras, en su orden (T5B r1: ya no pasa por colorSegmento, la regla de la
+ * dona; una serie «Sin cotización» no sale en gris):
+ *  - la del período anterior (es_anterior) en COLOR_ANTERIOR; tono 'positivo' en POSITIVO y 'negativo' en NEGATIVO;
+ *  - la clave '_otros' en GRIS_OTROS (el único gris);
+ *  - un color propio (serie.color: un '#hex' o una clase de Tailwind) gana en cualquier principal;
+ *  - la primera principal en `colorModulo` (colorDeAcento; por defecto PALETA_SERIES[0], el índigo de Ventas);
+ *  - las demás, PALETA_SERIES en orden, saltando los colores iguales o muy cercanos (distanciaColor <
+ *    DISTANCIA_MINIMA_COLOR) a `colorModulo`, a POSITIVO y a NEGATIVO. Si se acaban, vuelve a empezar.
  * @param {ReadonlyArray<{es_anterior?: unknown, tono?: unknown, clave?: unknown, etiqueta?: unknown, color?: unknown} | null> | null | undefined} series
  * @param {string} [colorModulo]
  * @returns {string[]}
  */
-export function coloresSeries(series, colorModulo = PALETA[0]) {
+export function coloresSeries(series, colorModulo = PALETA_SERIES[0]) {
+  const evitar = [colorModulo, POSITIVO, NEGATIVO];
+  const disponibles = PALETA_SERIES.filter((c) => evitar.every((e) => distanciaColor(c, e) >= DISTANCIA_MINIMA_COLOR));
+  const paleta = disponibles.length ? disponibles : PALETA_SERIES;
   let principal = 0;
   return lista(series).map((s) => {
     const serie = esObjeto(s) ? s : {};
     if (serie.es_anterior === true) return COLOR_ANTERIOR;
     if (serie.tono === 'positivo') return POSITIVO;
     if (serie.tono === 'negativo') return NEGATIVO;
+    if (serie.clave === '_otros') return GRIS_OTROS;
     const k = principal;
     principal += 1;
-    const propio = typeof serie.color === 'string' && serie.color.trim() !== '';
-    return k === 0 && !propio ? colorModulo : colorSegmento(k, serie);
+    const propio = typeof serie.color === 'string' ? serie.color.trim() : '';
+    if (propio) return propio.startsWith('#') ? propio : hexDeClaseTailwind(propio);
+    return k === 0 ? colorModulo : paleta[(k - 1) % paleta.length];
   });
 }
 
@@ -547,6 +603,8 @@ export function iconoMovimiento(fila) {
  *  - signo '+': '+$1.500.000' y 'positivo'; signo '-': '-$1.500.000' (el menos de formatoPesos) y 'negativo'; el monto
  *    se toma por su tamaño, así que no sale un doble signo;
  *  - sin signo: formatearValor tal cual y 'neutro'. Formato por defecto: 'pesos'.
+ *  - una magnitud que se ve como 0 ('$0', '0 u.'; también 0,4 pesos): ese 0, sin signo y en 'neutro', con cualquier
+ *    signo (T5B r1, M23: ni '+$0' en verde ni un '$0' rojo sin su menos).
  *  - sin monto (null o lo que no es número): '—' y 'neutro'; nunca inventa un monto.
  * @param {{monto?: unknown, formato?: FormatoAnalisis | null, signo?: unknown} | null | undefined} fila
  * @returns {{texto: string, tono: 'positivo' | 'negativo' | 'neutro'}}
@@ -555,19 +613,22 @@ export function montoMovimiento(fila) {
   const n = numero(fila?.monto);
   if (n === null) return { texto: '—', tono: 'neutro' };
   const formato = fila?.formato || 'pesos';
+  const cero = formatearValor(0, formato);
+  if (formatearValor(Math.abs(n), formato) === cero) return { texto: cero, tono: 'neutro' };
   if (fila?.signo === '+') return { texto: `+${formatearValor(Math.abs(n), formato)}`, tono: 'positivo' };
   if (fila?.signo === '-') return { texto: formatearValor(n === 0 ? 0 : -Math.abs(n), formato), tono: 'negativo' };
   return { texto: formatearValor(n, formato), tono: 'neutro' };
 }
 
 /**
- * El ancho (0 a 100, con 1 decimal) de la barra proporcional de cada fila del ranking: su valor contra el mayor, por su
- * tamaño. Si todo es 0 (o no es número), todas en 0.
+ * El ancho (0 a 100, con 1 decimal) de la barra proporcional de cada fila del ranking: su valor contra el mayor. Un
+ * negativo queda sin barra (Math.max(0, n); T5B r1 M22: con |n|, el último puesto podía tener la barra más larga). Si
+ * todo es 0, negativo o no es número, todas en 0.
  * @param {ReadonlyArray<{valor?: unknown} | null> | null | undefined} filas
  * @returns {number[]}
  */
 export function proporcionesRanking(filas) {
-  const tamanos = lista(filas).map((f) => Math.abs(numero(f?.valor) ?? 0));
+  const tamanos = lista(filas).map((f) => Math.max(0, numero(f?.valor) ?? 0));
   const mayor = Math.max(0, ...tamanos);
   return tamanos.map((t) => (mayor > 0 ? Math.round((t / mayor) * 1000) / 10 : 0));
 }
@@ -704,16 +765,32 @@ export function bloqueSinDatos(tipo, bloque) {
   return !lista(b.filas).length;
 }
 
-/** La suma de los valores numéricos de una serie (los que no son número no cuentan). */
-const sumaSerie = (s) => lista(s?.valores).reduce((total, v) => total + (numero(v) ?? 0), 0);
+/** Los formatos cuyas cifras se pueden sumar (el «total» de una serie de barras, T5B r1 M17). */
+const FORMATOS_SUMABLES = congelar(['pesos', 'entero', 'numero', 'unidades']);
+
+/**
+ * Una serie de barras en el resumen, con los valores DIBUJADOS (valoresConSigno: con tono 'negativo', −|v|; T5B r1, el
+ * ruling del punto 2): 'Salidas, total -2 u.' con un formato que se suma; con porcentaje o días, el rango
+ * ('A tiempo, de 70 % a 90 %', o '80 %' si es uno solo).
+ */
+function parteBarras(s, formato) {
+  const valores = valoresConSigno(s).filter((v) => v !== null);
+  const nombre = s.etiqueta || 'Serie';
+  if (FORMATOS_SUMABLES.includes(formato)) return `${nombre}, total ${formatearValor(valores.reduce((t, v) => t + v, 0), formato)}`;
+  if (!valores.length) return `${nombre}, sin datos`;
+  const [menor, mayor] = [Math.min(...valores), Math.max(...valores)];
+  if (menor === mayor) return `${nombre}, ${formatearValor(menor, formato)}`;
+  return `${nombre}, de ${formatearValor(menor, formato)} a ${formatearValor(mayor, formato)}`;
+}
 
 /**
  * El resumen de un gráfico para lectores de pantalla (el aria-label de su <canvas role="img">, T5B). Lee la forma del
  * bloque del contrato:
  *  - una dona (trae segmentos): 'Ventas por canal: total $1.000.000. Tienda web 60 %, Otros 40 %', o
  *    'Ventas por canal: sin datos en este período';
- *  - unas barras (traen etiquetas): 'Entradas y salidas: Entradas, total 7 u.; Salidas, total 2 u.' (la suma de cada
- *    serie, como la manda el servidor), o '…: sin datos en este período';
+ *  - unas barras (traen etiquetas): 'Entradas y salidas: Entradas, total 7 u.; Salidas, total -2 u.' (la suma de lo
+ *    DIBUJADO en cada serie, con pesos, entero, numero o unidades; con porcentaje o días, 'de 70 % a 90 %'), o
+ *    '…: sin datos en este período';
  *  - una línea (lo demás): 'Ventas en el tiempo: total $4.927.538, subió 12,5 % frente al período anterior' (o 'bajó',
  *    'sin cambio', 'nuevo (antes era 0)'); sin total_anterior, solo el total. `frente` cambia el final.
  * Sin bloque, ''.
@@ -733,8 +810,7 @@ export function resumenAccesible(linea, { frente = 'frente al período anterior'
   if (Array.isArray(l.etiquetas)) {
     const titulo = l.titulo || 'Barras';
     if (bloqueSinDatos('barras', l)) return `${titulo}: sin datos en este período`;
-    const partes = lista(l.series).filter(esObjeto)
-      .map((s) => `${s.etiqueta || 'Serie'}, total ${formatearValor(sumaSerie(s), l.formato || 'entero')}`);
+    const partes = lista(l.series).filter(esObjeto).map((s) => parteBarras(s, l.formato || 'entero'));
     return `${titulo}: ${partes.join('; ')}`;
   }
   const base = `${l.titulo || 'Serie'}: total ${formatearValor(l.total, l.formato || 'entero')}`;

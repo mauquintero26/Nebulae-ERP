@@ -11,7 +11,7 @@ import {
 import type { FormatoAnalisis, Granularidad, LineaAnalisis, MejorAnalisis } from '@/lib/analisis';
 import { tamanoValor } from '@/lib/kpis';
 import { ChipVariacion } from './ChipVariacion';
-import { ESTILO_TOOLTIP, registrarGraficos } from './registro';
+import { COLOR_EJES, ESTILO_TOOLTIP, registrarGraficos } from './registro';
 
 registrarGraficos();
 
@@ -25,8 +25,11 @@ registrarGraficos();
  *    de 4 px al pasar el mouse.
  *  - Eje Y con etiquetaEje (pesosCorto o enteros); eje X con etiquetaFecha (`granularidad` del período), a lo sumo 8
  *    marcas. Tooltips con la fecha y formatearValor. Alto fijo de 256 px (maintainAspectRatio: false).
- *  - El <canvas role="img"> lleva aria-label = resumenAccesible(linea) y una <table> con los datos dentro de una caja sr-only;
- *    la leyenda visible va con aria-hidden (la tabla ya nombra las series).
+ *  - El <canvas role="img"> lleva aria-label = resumenAccesible(linea) y una <table> con los datos dentro de una caja sr-only
+ *    (caption «Datos del gráfico»: el título ya es el nombre de la región y el h3); la leyenda visible va con aria-hidden
+ *    (la tabla ya nombra las series). Con el gráfico dibujado, el total y el chip del encabezado también van con
+ *    aria-hidden: el aria-label del canvas ya dice los dos (T5B r1, M9). Sin datos no hay canvas y los dos se leen.
+ *  - El texto de las marcas de los ejes en COLOR_EJES (en las opciones, no en ChartJS.defaults.color).
  *  - linea null (el módulo no la tiene): no pinta nada. Sin datos en el período (bloqueSinDatos): 'Sin datos en este
  *    período' en lugar del gráfico, con el encabezado.
  * Clases de Tailwind literales, sin variantes de modo oscuro; los textos con al menos 4,5:1.
@@ -119,13 +122,20 @@ export function GraficoLinea({ linea, granularidad, acento, mejor = 'sube', fren
       x: {
         grid: { display: false },
         border: { display: false },
-        ticks: { autoSkip: true, maxTicksLimit: 8, maxRotation: 0, callback: (valor) => etiquetaFecha(fechas[Number(valor)], gran) },
+        ticks: {
+          color: COLOR_EJES,
+          autoSkip: true,
+          maxTicksLimit: 8,
+          maxRotation: 0,
+          callback: (valor) => etiquetaFecha(fechas[Number(valor)], gran),
+        },
       },
       y: {
         beginAtZero: true,
         grid: { color: '#e2e8f0' },
         border: { display: false },
         ticks: {
+          color: COLOR_EJES,
           maxTicksLimit: 5,
           precision: FORMATOS_ENTEROS.includes(formato) ? 0 : undefined,
           callback: (valor) => etiquetaEje(valor, formato),
@@ -144,9 +154,13 @@ export function GraficoLinea({ linea, granularidad, acento, mejor = 'sube', fren
       <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
         <div className="min-w-0 flex-1">
           <h3 id={idTitulo} title={titulo} className="truncate text-sm font-bold text-slate-900">{titulo}</h3>
-          <p title={total} className={`${tamanoValor(total)} break-words font-black leading-tight text-slate-900 tabular-nums`}>{total}</p>
+          <p aria-hidden={sinDatos ? undefined : true} title={total} className={`${tamanoValor(total)} break-words font-black leading-tight text-slate-900 tabular-nums`}>
+            {total}
+          </p>
         </div>
-        <ChipVariacion kpi={{ valor: linea.total, anterior: linea.total_anterior, mejor }} frente={frente} />
+        <span aria-hidden={sinDatos ? undefined : true} className="shrink-0">
+          <ChipVariacion kpi={{ valor: linea.total, anterior: linea.total_anterior, mejor }} frente={frente} />
+        </span>
       </div>
       {sinDatos ? (
         <p className="mt-3 flex h-64 items-center justify-center rounded-xl border border-dashed border-slate-200 text-sm font-semibold text-slate-600">
@@ -169,7 +183,7 @@ export function GraficoLinea({ linea, granularidad, acento, mejor = 'sube', fren
               afuera la recorta. Con sr-only en la <table>, la página se desplazaba 135 px de lado a 375 px. */}
           <div className="sr-only">
             <table>
-              <caption>{titulo}</caption>
+              <caption>Datos del gráfico</caption>
               <thead>
                 <tr>
                   <th scope="col">Fecha</th>

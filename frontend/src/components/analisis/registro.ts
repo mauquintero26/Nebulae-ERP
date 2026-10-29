@@ -11,9 +11,11 @@ import {
  *  - Registra una sola vez: la marca vive en globalThis, así que ni el doble montaje de StrictMode ni una recarga en
  *    caliente del módulo vuelven a registrar ni a escuchar prefers-reduced-motion otra vez. (Los controladores Line, Bar y
  *    Doughnut los registra react-chartjs-2 con cada componente.)
- *  - Valores por defecto: la fuente de la app (la del body, Arial de globals.css), el texto de los ejes en slate-600
- *    (#475569, 7,6:1 sobre el blanco) y una animación de 400 ms, que pasa a 0 (también la de pasar el mouse) si el usuario
- *    pide menos movimiento con prefers-reduced-motion, y vuelve si lo cambia mientras la pestaña está abierta.
+ *  - Valores por defecto GLOBALES (los pide el diseño): la fuente de la app (la del body, Arial de globals.css) y una
+ *    animación de 400 ms, que pasa a 0 (también la de pasar el mouse) si el usuario pide menos movimiento con
+ *    prefers-reduced-motion, y vuelve si lo cambia mientras la pestaña está abierta.
+ *  - El texto de los ejes (COLOR_EJES, slate-600, 7,6:1 sobre el blanco) va en las opciones de cada gráfico, no en
+ *    ChartJS.defaults.color (T5B r1, M1): las pantallas viejas no cambian según por dónde se navegó.
  *  - Los tooltips: ESTILO_TOOLTIP (fondo slate-900 y texto blanco), y cada gráfico arma sus textos con formatearValor de
  *    lib/analisis.js (pesos colombianos, fechas en español). No se cambian los tooltips globales de Chart.js: las
  *    pantallas viejas de la lista blanca (proyecciones y finanzas/resumen) comparten el mismo Chart.js.
@@ -23,8 +25,8 @@ import {
 export const ANIMACION_MS = 400;
 /** La fuente del body de la app (globals.css), por si no se puede leer del documento. */
 const FUENTE_APP = 'Arial, Helvetica, sans-serif';
-/** slate-600: el texto de los ejes. */
-const COLOR_TEXTO = '#475569';
+/** slate-600: el texto de las marcas de los ejes (ticks.color de GraficoLinea y GraficoBarras). */
+export const COLOR_EJES = '#475569';
 const CONSULTA_MOVIMIENTO = '(prefers-reduced-motion: reduce)';
 const MARCA = '__nebulaeGraficosRegistrados';
 
@@ -63,7 +65,6 @@ export function registrarGraficos(): void {
   global[MARCA] = true;
   ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, ArcElement, Filler, Tooltip, Legend);
   ChartJS.defaults.font.family = fuenteDeLaApp();
-  ChartJS.defaults.color = COLOR_TEXTO;
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
     aplicarMovimiento(false);
     return;

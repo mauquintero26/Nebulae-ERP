@@ -2,7 +2,7 @@
 
 import { useId } from 'react';
 import type { AccentColor } from '@/components/ui/colors';
-import { TOPS, bloqueSinDatos, formatearValor, proporcionesRanking } from '@/lib/analisis';
+import { TOPS, bloqueSinDatos, colorDeAcento, formatearValor, proporcionesRanking } from '@/lib/analisis';
 import type { Etiquetar, FormatoAnalisis, RankingAnalisis } from '@/lib/analisis';
 
 /**
@@ -11,7 +11,8 @@ import type { Etiquetar, FormatoAnalisis, RankingAnalisis } from '@/lib/analisis
  *  - Píldoras Top 5 / 10 / 25 (TOPS, aria-pressed) si llega `alCambiarTop`: PanelAnalisis guarda el top y lo manda al
  *    servidor (top=); aquí solo se muestran las primeras `top` filas.
  *  - Cada fila: la posición (las 3 primeras con medalla: oro, plata y bronce), el nombre y el detalle (recortados con su
- *    title: nunca empujan el valor), una barra proporcional al mayor (proporcionesRanking, con el color del módulo) y el
+ *    title: nunca empujan el valor), una barra proporcional al mayor (proporcionesRanking; un negativo queda sin barra)
+ *    con el -600 del módulo (colorDeAcento, T5B r1 M8: los -500 de amber, teal y emerald no llegan a 3:1) y el
  *    valor (formatearValor, completo). `columna` va como encabezado del valor.
  *  - `etiquetar(bloque 'ranking', nombre, nombre)` cambia el nombre de cada fila; debe devolver el recibido cuando no lo
  *    conoce.
@@ -43,10 +44,6 @@ const MEDALLA: Record<number, { clases: string; nombre: string }> = {
   3: { clases: 'bg-orange-100 text-orange-800 ring-1 ring-orange-300', nombre: 'Tercer lugar' },
 };
 const SIN_MEDALLA = 'bg-slate-50 text-slate-600';
-const BARRA: Record<AccentColor, string> = {
-  amber: 'bg-amber-500', rose: 'bg-rose-500', orange: 'bg-orange-500', indigo: 'bg-indigo-500', purple: 'bg-purple-500',
-  emerald: 'bg-emerald-500', blue: 'bg-blue-500', teal: 'bg-teal-500', red: 'bg-red-500',
-};
 
 export function RankingTop({ ranking, top, alCambiarTop, acento, etiquetar }: PropsRankingTop) {
   const idTitulo = useId();
@@ -55,7 +52,7 @@ export function RankingTop({ ranking, top, alCambiarTop, acento, etiquetar }: Pr
   const formato: FormatoAnalisis = ranking.formato ?? 'entero';
   const filas = bloqueSinDatos('ranking', ranking) ? [] : ranking.filas.slice(0, top);
   const anchos = proporcionesRanking(filas);
-  const barra = BARRA[acento ?? 'indigo'] ?? BARRA.indigo;
+  const barra = colorDeAcento(acento);
 
   return (
     <section aria-labelledby={idTitulo} className={TARJETA}>
@@ -110,7 +107,7 @@ export function RankingTop({ ranking, top, alCambiarTop, acento, etiquetar }: Pr
                     </span>
                     {fila.detalle && <span title={fila.detalle} className="block truncate text-xs text-slate-600">{fila.detalle}</span>}
                     <span aria-hidden="true" className="mt-1.5 block h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-                      <span className={`block h-full rounded-full ${barra}`} style={{ width: `${anchos[i]}%` }} />
+                      <span className="block h-full rounded-full" style={{ width: `${anchos[i]}%`, backgroundColor: barra }} />
                     </span>
                   </span>
                 </li>

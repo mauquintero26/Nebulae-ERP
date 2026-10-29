@@ -23,7 +23,8 @@ registrarGraficos();
  *    mientras está montada. Sin modo válido, la primera.
  *  - `etiquetar(bloque 'dona', clave, etiqueta)` cambia el nombre de cada segmento (PanelAnalisis, por ejemplo
  *    etiquetaTipoSC); debe devolver la etiqueta recibida cuando no conoce la clave.
- *  - El <canvas role="img"> lleva aria-label = resumenAccesible(dona) y una <table> dentro de una caja sr-only; el total del
+ *  - El <canvas role="img"> lleva aria-label = resumenAccesible(dona) y una <table> dentro de una caja sr-only (caption
+ *    «Datos del gráfico»: el título ya es el nombre de la región y el h3); el total del
  *    centro y la leyenda van con aria-hidden (los dos están en la tabla y en el resumen).
  *  - donas vacío (el módulo no tiene): no pinta nada. Una dona sin datos (bloqueSinDatos) no se dibuja: 'Sin datos en
  *    este período'.
@@ -156,7 +157,7 @@ export function GraficoDona({ donas, modo, alCambiarModo, etiquetar }: PropsGraf
               afuera la recorta. Con sr-only en la <table>, la página se desplazaba 135 px de lado a 375 px. */}
           <div className="sr-only">
             <table>
-              <caption>{titulo}</caption>
+              <caption>Datos del gráfico</caption>
               <thead>
                 <tr>
                   <th scope="col">Segmento</th>
