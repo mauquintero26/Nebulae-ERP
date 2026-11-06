@@ -1232,7 +1232,8 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   assert.match(lista, /const recargarTrasCambio = useCallback\(\(\) => \{\s*recargarListado\(\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*setVueltaStats\(\(n\) => n \+ 1\);\s*\}, \[recargarListado\]\);/);
   assert.match(lista, /actions=\{<AccionesCabecera onActualizar=\{recargarLista\} actualizando=\{actualizando\} \/>\}/);
   // RP21: ?tab= al montar, con window.location en el efecto, una sola vez, como un clic en la pestaña; después se quita.
-  assert.match(lista, /const vista = leerEnlacePedidos\(window\.location\.search\);\s*if \(!vista\) return;\s*despachar\(accionPestana\(estado, vista, opcionesEstadosPedidos\)\);\s*router\.replace\(rutaSinParametro\(RUTA_LISTA_PEDIDOS, window\.location\.search, 'tab'\), \{ scroll: false \}\);/);
+  // r1 (I1): la vista queda anotada en enlacePendiente (el modo guardado todavía no se conoce; ver el bloque de I1).
+  assert.match(lista, /const vista = leerEnlacePedidos\(window\.location\.search\);\s*if \(!vista\) return;\s*enlacePendiente\.current = vista;\s*despachar\(accionPestana\(estado, vista, opcionesEstadosPedidos\)\);\s*router\.replace\(rutaSinParametro\(RUTA_LISTA_PEDIDOS, window\.location\.search, 'tab'\), \{ scroll: false \}\);/);
   assert.match(lista, /if \(enlaceLeido\.current\) return;\s*enlaceLeido\.current = true;/);
   // Lo de B1 que se queda: la redirección de ?id=.
   assert.match(lista, /router\.replace\(`\/dashboard\/ventas\/venta\/\$\{numId\}`\)/);
@@ -1319,8 +1320,8 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   assert.match(lista, /<TarjetaKpi kpi="pven_pendiente_compra" valor=\{tarjetas\?\.pendiente_compra\.valor \?\? null\} ayuda=\{tarjetas\?\.pendiente_compra\.ayuda \?\? undefined\}\s*activo=\{vistaActiva === 'pend_compra'\} onClick=\{\(\) => elegirVista\('pend_compra'\)\} \/>/);
   assert.match(lista, /<TarjetaKpi kpi="pven_saldo_por_cobrar" valor=\{tarjetas\?\.saldo_por_cobrar\.valor \?\? null\} ayuda=\{tarjetas\?\.saldo_por_cobrar\.ayuda \?\? undefined\}\s*variacion=\{\{ actual: tarjetas\?\.saldo_por_cobrar\.valor \?\? null, anterior: null, es_foto: true \}\} \/>/);
   assert.match(lista, /<FranjaKpis estado=\{estadoKpis\} titulo="Pedidos de venta">/);
-  assert.match(lista, /despachar\(accionPestana\(estado, siguiente, opcionesEstadosPedidos\)\);\s*if \(enKanban\) despachar\(\{ tipo: 'modo', valor: 'lista' \}\);/);
-  assert.match(lista, /const siguiente = enKanban \? vista : \(alternarSeleccion\(estado\.vista, vista\) \?\? INICIAL_PEDIDOS\.vista\);/);
+  // r1 (I1): en Kanban abre esa pestaña en Lista con accionVistaEnLista (la misma acción del enlace ?tab=).
+  assert.match(lista, /const siguiente = enKanban \? vista : \(alternarSeleccion\(estado\.vista, vista\) \?\? INICIAL_PEDIDOS\.vista\);\s*despachar\(accionVistaEnLista\(estado, siguiente, opcionesEstadosPedidos\)\);\s*\};/);
 
   // Bloque 6 (D42, RP21, RP90): la franja con «Estás aquí» en Pedido de venta, Entregado y Facturado como pestañas y los
   // atrasados del paso PVEN; sin noResueltos.
@@ -1367,6 +1368,49 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   assert.match(lista, /subtitle="Pedidos confirmados por tus clientes"/);
   // Lo de los Bloques 1 a 3 que se queda: NewSupplierModal exportado (lo importa venta/[id]; F5 fija sus tildes).
   assert.match(codigo, /\nexport function NewSupplierModal\(/);
+}
+
+console.log('--- B4 T10 r1 (I1): ?tab= con Kanban guardado abre esa pestaña en Lista, como elegirVista ---');
+{
+  // El tablero no filtra por vista (consultaColumnaPedido pide vista=todos): con Kanban guardado, ?tab=entregado o
+  // ?tab=facturado cambiaba una vista que no se ve. Ahora el enlace hace lo mismo que elegirVista: abre esa pestaña en
+  // Lista («el tablero muestra todas»), con la poda de las opciones de la LISTA, que es el destino.
+  const { accionVistaEnLista } = listas;
+  const { estadoTablaInicial, reducirEstadoTabla, accionPestana } = await import('../src/lib/tabla.js');
+  const { opcionesEstadosPedidos } = await import('../src/lib/kanban-ventas.js');
+  // En Lista es accionPestana tal cual (con su poda).
+  const enLista = estadoTablaInicial({ vista: 'en_proceso', estados: ['EN_TRANSITO'] });
+  assert.deepEqual(accionVistaEnLista(enLista, 'facturado', opcionesEstadosPedidos), accionPestana(enLista, 'facturado', opcionesEstadosPedidos));
+  assert.deepEqual(accionVistaEnLista(estadoTablaInicial({ vista: 'todos' }), 'entregado', opcionesEstadosPedidos), { tipo: 'vista', valor: 'entregado' });
+  // En Kanban: la vista y el modo Lista en UNA acción; el filtro del tablero se poda con las opciones de la pestaña.
+  const enKanban = estadoTablaInicial({ vista: 'todos', modo: 'kanban', estados: ['PENDIENTE_COMPRA'] });
+  const salto = accionVistaEnLista(enKanban, 'facturado', opcionesEstadosPedidos);
+  assert.deepEqual(salto, { tipo: 'cambiar', cambios: { vista: 'facturado', estados: [], modo: 'lista' } });
+  const despues = reducirEstadoTabla(enKanban, salto);
+  assert.deepEqual([despues.vista, despues.modo, despues.estados], ['facturado', 'lista', []]);
+  // Lo que la pestaña ofrece se queda; sin filtro, solo la vista y el modo.
+  const conFacturado = estadoTablaInicial({ vista: 'todos', modo: 'kanban', estados: ['FACTURADO'] });
+  assert.deepEqual(accionVistaEnLista(conFacturado, 'facturado', opcionesEstadosPedidos), { tipo: 'cambiar', cambios: { vista: 'facturado', modo: 'lista' } });
+  assert.deepEqual(accionVistaEnLista(estadoTablaInicial({ modo: 'kanban' }), 'entregado', opcionesEstadosPedidos),
+    { tipo: 'cambiar', cambios: { vista: 'entregado', modo: 'lista' } });
+  // No toca el estado que recibe.
+  assert.deepEqual(enKanban.estados, ['PENDIENTE_COMPRA']);
+  assert.equal(enKanban.modo, 'kanban');
+
+  // El cableado: el modo guardado se conoce con `listo` (usePreferencia pinta primero el valor por defecto). La vista se
+  // despacha al montar, antes de listo (useListado espera: la tabla se pide una sola vez, ya con la pestaña del enlace),
+  // y queda anotada en enlacePendiente; con listo, si el modo es Kanban, accionVistaEnLista pasa a Lista. La ref se
+  // consume una vez (StrictMode no la repite) y el efecto es de layout: el tablero no llega a pintarse.
+  const fuente = readFileSync(new URL('../src/app/dashboard/ventas/venta/venta-client.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const lista = codigo.slice(codigo.indexOf('export default function VentaClient('));
+  assert.match(lista, /const enlacePendiente = useRef<string \| null>\(null\);/);
+  assert.match(lista, /useLayoutEffect\(\(\) => \{\s*const vista = enlacePendiente\.current;\s*if \(!listo \|\| vista === null\) return;\s*enlacePendiente\.current = null;\s*if \(estado\.modo === 'kanban'\) despachar\(accionVistaEnLista\(estado, vista, opcionesEstadosPedidos\)\);\s*\}, \[listo, estado, despachar\]\);/);
+  assert.ok(lista.indexOf('enlacePendiente.current = vista;') < lista.indexOf('useLayoutEffect(() => {\n    const vista = enlacePendiente.current;'),
+    'primero se anota, después se consume');
+  // elegirVista usa la misma acción: el enlace y el clic dan lo mismo.
+  assert.equal((lista.match(/accionVistaEnLista\(/g) ?? []).length, 2, 'el enlace y elegirVista');
+  assert.ok(!/despachar\(\{ tipo: 'modo', valor: 'lista' \}\)/.test(lista), 'el cambio a Lista va en la misma acción');
 }
 
 console.log('--- B4 T10: el esqueleto del Suspense de Pedidos arma la lista con sus MISMAS piezas ---');

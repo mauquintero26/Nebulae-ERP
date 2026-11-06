@@ -1,7 +1,7 @@
 'use client';
 
 export const dynamic = 'force-dynamic';
-import React, { useState, useEffect, useMemo, useRef, useCallback, createContext, useContext } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, createContext, useContext } from 'react';
 import Link from 'next/link';
 // B4 T10: se fueron Search, MoreHorizontal, FileText y Package de la lista hecha a mano (la búsqueda, el ⋯ propio, las
 // StatCard y la pestaña Análisis); entran BarChart3 («Ver análisis») y Truck/Package de «Marcar En tránsito / En proceso».
@@ -16,7 +16,9 @@ import { infoEstadoPedido, transicionesPedido } from '@/lib/estados-pedido';
 // B4 T10: la lista ya no cuenta ni filtra en el navegador (kpisPedidos, opcionesFiltroEstado, grupoPedido y la búsqueda
 // con coincideProducto): las vistas, los conteos y las tarjetas son del servidor (T6B y T6C). Lo de cada fila sigue
 // saliendo de las librerías.
-import { tarjetasPedidos, saldoVisiblePedido, alertaEntregaPedido, diaDeNegocio, rutaSinParametro } from '@/lib/listas-ventas';
+import {
+  tarjetasPedidos, saldoVisiblePedido, alertaEntregaPedido, diaDeNegocio, rutaSinParametro, accionVistaEnLista,
+} from '@/lib/listas-ventas';
 import { pedidoAdmitePxp } from '@/lib/dinero-ventas';
 import {
   SubNav, PageHeader, Button, Modal, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila, ModalMotivo,
@@ -423,15 +425,29 @@ export default function VentaClient() {
   // pestaña, una sola vez al montar, como un clic en ella (accionPestana). Se lee con window.location en el efecto (sin
   // window en el render del servidor); un valor desconocido se ignora. Después se quita de la URL: recargar o volver con
   // el navegador no pisa la pestaña que el usuario elija después.
+  // r1 (I1): el enlace hace lo mismo que elegirVista, también con Kanban guardado: abre esa pestaña en LISTA (el tablero
+  // pide vista=todos: la pestaña no se vería). El modo guardado se conoce con `listo` (usePreferencia pinta primero el
+  // valor por defecto), así que la vista se despacha al montar, antes de listo (useListado espera: la tabla se pide una
+  // sola vez, ya con la pestaña del enlace), y queda anotada en enlacePendiente. Con listo, si el modo es Kanban,
+  // accionVistaEnLista pasa a Lista con la poda de la Lista. Las dos refs se consumen una vez (StrictMode no repite el
+  // enlace) y el segundo efecto es de layout: el tablero no llega a pintarse antes de pasar a Lista.
   const enlaceLeido = useRef(false);
+  const enlacePendiente = useRef<string | null>(null);
   useEffect(() => {
     if (enlaceLeido.current) return;
     enlaceLeido.current = true;
     const vista = leerEnlacePedidos(window.location.search);
     if (!vista) return;
+    enlacePendiente.current = vista;
     despachar(accionPestana(estado, vista, opcionesEstadosPedidos));
     router.replace(rutaSinParametro(RUTA_LISTA_PEDIDOS, window.location.search, 'tab'), { scroll: false });
   }, [estado, despachar, router]);
+  useLayoutEffect(() => {
+    const vista = enlacePendiente.current;
+    if (!listo || vista === null) return;
+    enlacePendiente.current = null;
+    if (estado.modo === 'kanban') despachar(accionVistaEnLista(estado, vista, opcionesEstadosPedidos));
+  }, [listo, estado, despachar]);
 
   // ── B4 T10, bloque 2: pestañas y búsqueda (TABLA-listas-ventas punto 7; R5, RP21, RP26, D40, D41; H15, H17) ──
   const pestanas = pestanasDeLaLista(listado.conteos as ConteosPedidos | null);
@@ -574,12 +590,12 @@ export default function VentaClient() {
   // ── B4 T10, bloque 5: las tarjetas (KPI-ventas punto 9; R12, RP19 (2), D5) ──
   const tarjetas = tarjetasPedidos(stats?.datos?.kpis ?? null);
   // En Lista son pestañas (D41: accionPestana, como un clic en la pestaña); tocar la activa vuelve a Todos (la de siempre,
-  // alternarSeleccion). En Kanban abren esa pestaña en Lista. El monto vendido y el saldo no tienen una vista: no son botones.
+  // alternarSeleccion). En Kanban abren esa pestaña en Lista (accionVistaEnLista, la misma acción del enlace ?tab=). El
+  // monto vendido y el saldo no tienen una vista: no son botones.
   const vistaActiva = enKanban ? null : estado.vista;
   const elegirVista = (vista: string) => {
     const siguiente = enKanban ? vista : (alternarSeleccion(estado.vista, vista) ?? INICIAL_PEDIDOS.vista);
-    despachar(accionPestana(estado, siguiente, opcionesEstadosPedidos));
-    if (enKanban) despachar({ tipo: 'modo', valor: 'lista' });
+    despachar(accionVistaEnLista(estado, siguiente, opcionesEstadosPedidos));
   };
 
   // ── B4 T10, bloque 6: la franja del flujo (FLUJO-ventas-pantallas D; R8, C3, D42, RP21, RP90) ──

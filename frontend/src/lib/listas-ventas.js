@@ -21,6 +21,7 @@ import { redondearPeso, formatoPesos } from './pesos.js';
 import { diaColombia, fechaSolo } from './fechas-colombia.js';
 import { TEXTO_PAPELERA_SIN_FECHA } from './estados-solicitud.js';
 import { normalizarTarifaIva, TARIFA_IVA_POR_DEFECTO } from './iva.js';
+import { accionPestana } from './tabla.js';
 
 /**
  * Dias de alerta de `clave` (alerta_sc_dias, alerta_cot_dias, alerta_ven_dias) en la configuracion. Acepta la
@@ -730,6 +731,23 @@ export function alertaEntregaPedido(p, ahora = Date.now()) {
   if (!esObjeto(p) || ESTADOS_PEDIDO_CERRADOS.includes(p.estado)) return null;
   if (fechaNegocioVencida(p.fecha_entrega_estimada, ahora)) return 'vencida';
   return fechaPorVencer(p.fecha_entrega_estimada, 7, ahora) ? 'por_vencer' : null;
+}
+
+/**
+ * B4 T10 r1 (I1): la acción de abrir la pestaña `vista` de una lista que tiene tablero, también desde Kanban (el enlace
+ * ?tab= y elegirVista de Pedidos de venta): en Lista, accionPestana tal cual; en Kanban, la misma vista y la poda de
+ * accionPestana con `opciones` (las de la LISTA, que es el destino) más {modo: 'lista'}, en una sola acción
+ * {tipo: 'cambiar'}, porque el tablero muestra todas las vistas (pide vista=todos). No toca `estado`.
+ * @param {import('./tabla.js').EstadoTabla} estado
+ * @param {string} vista
+ * @param {import('./tabla.js').OpcionesEstados | null | undefined} opciones
+ * @returns {import('./tabla.js').AccionTabla}
+ */
+export function accionVistaEnLista(estado, vista, opciones) {
+  const accion = /** @type {any} */ (accionPestana(estado, vista, opciones));
+  if (estado?.modo !== 'kanban') return accion;
+  const cambios = accion.tipo === 'cambiar' ? accion.cambios : { vista: accion.valor };
+  return { tipo: 'cambiar', cambios: { ...cambios, modo: 'lista' } };
 }
 
 const SEPARACION_MENU_FILA = 4; // px entre el botón «⋮» y su menú
