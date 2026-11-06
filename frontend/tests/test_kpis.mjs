@@ -424,12 +424,20 @@ console.log('--- TEST 13 (B4 T7 r1b): el esqueleto de TarjetaKpi tiene la forma 
   // La línea de variación. El esqueleto es el mismo elemento (span), con el mismo display (flex), el mismo margen (mt-1)
   // y el alto de un renglón de text-xs (h-4): Chrome ya no lo cuenta como un nodo que se movió.
   const lineaCargada = /linea = \(\s*<span className=\{`([^`]*)`\}>/.exec(fuente)?.[1];
-  const lineaEsqueleto = /if \(cargando\) \{\s*(?:\/\/[^\n]*\n\s*)*linea = \(\s*<span aria-hidden="true" className="([^"]*)">\s*<span className="block h-3 w-32 rounded bg-slate-200 animate-pulse" \/>\s*<\/span>\s*\);/.exec(fuente)?.[1];
+  const [, lineaEsqueleto, barraLinea] = /if \(cargando\) \{\s*(?:\/\/[^\n]*\n\s*)*linea = \(\s*<span aria-hidden="true" className="([^"]*)">\s*<span className="([^"]*)" \/>\s*<\/span>\s*\);/.exec(fuente) ?? [];
   assert.ok(lineaCargada && lineaEsqueleto, 'las dos líneas');
   for (const c of ['flex', 'mt-1', 'items-center', 'gap-1.5', 'min-w-0']) {
     assert.ok(clases(lineaCargada).includes(c) && clases(lineaEsqueleto).includes(c), `la línea: ${c} en las dos`);
   }
   assert.ok(clases(lineaEsqueleto).includes('h-4'), 'la línea del esqueleto mide un renglón de text-xs');
+  // r1b (medida a 1536 px): el primer hijo también conserva su display. El de la línea cargada es el chip inline-flex
+  // shrink-0; si la barra fuera block, Chrome contaría el chip como movido «0→378» al llegar los datos.
+  const chipCargado = /<span aria-hidden="true" className=\{`(inline-flex items-center gap-0\.5 text-xs font-bold shrink-0) \$\{TONO_CHIP\[info\.tono\]\}`\}>/.exec(fuente)?.[1];
+  assert.ok(chipCargado, 'el chip de la variación');
+  for (const c of ['inline-flex', 'shrink-0']) {
+    assert.ok(clases(chipCargado).includes(c) && clases(barraLinea).includes(c), `el primer hijo de la línea: ${c} en los dos`);
+  }
+  assert.ok(['h-3', 'w-32', 'rounded', 'bg-slate-200', 'animate-pulse'].every((c) => clases(barraLinea).includes(c)), 'la barra de la línea, la de antes');
   // Sin el esqueleto de antes.
   assert.ok(!fuente.includes('block h-7 w-24') && !fuente.includes('animate-pulse mt-2'), 'sin las barras de antes');
 }

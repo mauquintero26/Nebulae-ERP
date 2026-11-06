@@ -174,10 +174,11 @@ export function TarjetaKpi({
   let linea: React.ReactNode = null;
   if (cargando) {
     // B4 T7 r1b (CLS): el mismo elemento, display, margen y alto que la línea de variación cargada (un renglón de
-    // text-xs): Chrome ya no lo cuenta como un nodo que pasa de block a flex y se mueve.
+    // text-xs): Chrome ya no lo cuenta como un nodo que pasa de block a flex y se mueve. La barra, su primer hijo, va
+    // inline-flex y shrink-0 como el chip de la variación que la reemplaza (medido a 1536 px).
     linea = (
       <span aria-hidden="true" className="mt-1 flex h-4 items-center gap-1.5 min-w-0">
-        <span className="block h-3 w-32 rounded bg-slate-200 animate-pulse" />
+        <span className="inline-flex h-3 w-32 shrink-0 rounded bg-slate-200 animate-pulse" />
       </span>
     );
   } else if (conError) {
