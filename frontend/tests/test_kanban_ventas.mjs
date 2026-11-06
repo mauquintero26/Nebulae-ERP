@@ -898,8 +898,9 @@ console.log('--- B4 T9 TEST K: tarjetaCotizacion — la tarjeta del tablero de C
   assert.equal(kv.tarjetaCotizacion(cot, { returnTo: RUTA_HUB_VENTAS }).accionPrincipal.href,
     '/dashboard/ventas/venta/30?return_to=%2Fdashboard%2Fventas');
 
-  // r1 (I1), los chips de la COT: primero el del pedido («Pedido PVEN-…» emerald o «Pedido … cancelado» rose, COT-LISTA),
-  // después «Sin precio» (amber) si el total no es mayor que 0, y después los de chipsDocumentoVentas; como mucho 3.
+  // r1 (I1), los chips de la COT: primero el del pedido («Pedido PVEN-…» emerald o «Pedido … cancelado» rose, COT-LISTA);
+  // r2 (p3), después el de los cambios del cliente, «Sin precio» (amber) si el total no es mayor que 0, y después el resto
+  // de chipsDocumentoVentas (el atraso y el recordatorio); como mucho 3.
   // (1) CONFIRMADA con un PVEN vigente: «Pedido PVEN-30» delante del atraso y del recordatorio.
   assert.deepEqual(t.chips, [{ texto: 'Pedido PVEN-30', tono: 'emerald' }, { texto: 'Atrasado 4 días', tono: 'rose' },
     { texto: 'Sin respuesta al recordatorio', tono: 'amber' }]);
@@ -912,17 +913,44 @@ console.log('--- B4 T9 TEST K: tarjetaCotizacion — la tarjeta del tablero de C
     [{ texto: 'Pedido PVEN-31 cancelado', tono: 'rose' }, { texto: 'Sin precio', tono: 'amber' }]);
   assert.deepEqual(kv.tarjetaCotizacion({ ...caida, confirmacion_vigente: true, estado: 'CONFIRMADA' }).chips.map((c) => c.texto),
     ['Sin precio'], 'la re-confirmada no lleva la marca rosa (COT-LISTA, como la tabla)');
-  // (3) Más chips que el tope: la marca, «Sin precio» y el atraso; el recordatorio y los cambios del cliente no caben.
+  // (3) Más chips que el tope. r2 (p3, corrige el orden de I1.2): el tope NUNCA saca el chip de los cambios del cliente
+  // (B3-T18, una señal del cliente que antes siempre se veía): va segundo, después del pedido. Una COT re-cotizada
+  // (BORRADOR con su PVEN vigente), atrasada, sin respuesta al recordatorio y con «Ya no la necesita»: el pedido, los
+  // cambios del cliente y uno más (el atraso).
+  const recotizada = { tipo: 'COT', id: 14, numero: 'COT-14', estado: 'BORRADOR', total_cop: 90000, productos: CON_PRODUCTOS,
+    pedidos_venta: [{ id: 32, numero: 'PVEN-32', estado: 'EN_PROCESO' }], dias_creado: 3, resolucion: 'ATRASADO', dias_sin_mov: 5,
+    seguimiento_estado: 'AGOTADO', cambios_cliente: { tipo: 'NO_LA_NECESITA', at: '2026-11-01T10:00:00', comentario: null } };
+  assert.equal(chipsDocumentoVentas(recotizada, 'COT').length, 3, 'chipsDocumentoVentas solo ya llena el tope');
+  assert.deepEqual(kv.tarjetaCotizacion(recotizada).chips, [{ texto: 'Pedido PVEN-32', tono: 'emerald' },
+    { texto: 'Ya no la necesita', tono: 'rose' }, { texto: 'Atrasado 5 días', tono: 'rose' }]);
+  // Con «Sin precio» también: el pedido, los cambios y «Sin precio»; el atraso y el recordatorio no caben.
   const llena = { ...caida, resolucion: 'ATRASADO', dias_sin_mov: 6, seguimiento_estado: 'AGOTADO',
     cambios_cliente: { tipo: 'CAMBIOS', at: '2026-11-01T10:00:00', comentario: 'Otro color' } };
-  assert.equal(chipsDocumentoVentas(llena, 'COT').length, 3, 'chipsDocumentoVentas solo ya llena el tope');
-  assert.deepEqual(kv.tarjetaCotizacion(llena).chips.map((c) => c.texto), ['Pedido PVEN-31 cancelado', 'Sin precio', 'Atrasado 6 días']);
-  // La regla es la de la tabla (listas-ventas.js), no una copia.
-  const { marcaPedidoCotizacion, cotizacionSinPrecio } = await import('../src/lib/listas-ventas.js');
-  for (const fila of [cot, caida, llena, { ...caida, pedidos_venta: [] }]) {
-    const propios = [marcaPedidoCotizacion(fila), cotizacionSinPrecio(fila) ? { texto: 'Sin precio', tono: 'amber' } : null].filter(Boolean);
-    assert.deepEqual(kv.tarjetaCotizacion(fila).chips, [...propios, ...chipsDocumentoVentas(fila, 'COT')].slice(0, 3), fila.numero);
+  assert.deepEqual(kv.tarjetaCotizacion(llena).chips.map((c) => c.texto), ['Pedido PVEN-31 cancelado', 'Cambios pedidos', 'Sin precio']);
+  // Sin el pedido, los cambios del cliente van primero.
+  assert.deepEqual(kv.tarjetaCotizacion({ ...llena, pedidos_venta: [] }).chips.map((c) => c.texto), ['Cambios pedidos', 'Sin precio', 'Atrasado 6 días']);
+  // La regla es la de la tabla (listas-ventas.js), no una copia: el pedido, los cambios del cliente (de
+  // chipsDocumentoVentas), «Sin precio» (chipSinPrecio) y el resto de chipsDocumentoVentas, con el tope.
+  const { marcaPedidoCotizacion, chipSinPrecio } = await import('../src/lib/listas-ventas.js');
+  const esCambios = (c) => c.texto === 'Cambios pedidos' || c.texto === 'Ya no la necesita';
+  // Las filas de GET /ventas/cotizaciones no traen `tipo`: los cambios del cliente salen igual (se leen como de una COT).
+  const sinElTipo = (fila) => { const f = { ...fila }; delete f.tipo; return f; };
+  for (const fila of [cot, caida, llena, recotizada, { ...caida, pedidos_venta: [] }, { ...recotizada, cambios_cliente: null },
+    sinElTipo(llena), sinElTipo(recotizada)]) {
+    const deLaFila = chipsDocumentoVentas(fila, 'COT');
+    const esperado = [marcaPedidoCotizacion(fila), ...deLaFila.filter(esCambios), chipSinPrecio(fila), ...deLaFila.filter((c) => !esCambios(c))]
+      .filter(Boolean).slice(0, 3);
+    assert.deepEqual(kv.tarjetaCotizacion(fila).chips, esperado, fila.numero);
+    // El de los cambios del cliente, si la fila lo trae, siempre está.
+    if (deLaFila.some(esCambios)) assert.ok(kv.tarjetaCotizacion(fila).chips.some(esCambios), `${fila.numero}: los cambios del cliente se ven`);
   }
+  // r2 (p2): «Sin precio» sale de un solo lugar, chipSinPrecio (listas-ventas.js); la lib del tablero no tiene su copia.
+  const codigoKv = readFileSync(new URL('../src/lib/kanban-ventas.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const desdeTarjeta = codigoKv.indexOf('export function tarjetaCotizacion(');
+  assert.ok(desdeTarjeta >= 0);
+  assert.ok(codigoKv.slice(desdeTarjeta, codigoKv.indexOf('\n}\n', desdeTarjeta)).includes('chipSinPrecio(cot)'), 'la tarjeta usa chipSinPrecio');
+  assert.ok(!codigoKv.includes('Sin precio'), 'kanban-ventas.js sin su propio «Sin precio»');
   // Sin la COT, tarjetaHub queda igual: las tarjetas del Hub no llevan estos chips.
   assert.deepEqual(tarjetaHub(caida).chips, chipsDocumentoVentas(caida, 'COT'));
   // El tono emerald existe en los chips del tablero (CLASE_CHIP de components/ui/Kanban.tsx).

@@ -36,9 +36,10 @@ import {
 } from '@/lib/dinero-ventas';
 // B4 T9: la lista ya no cuenta en el navegador (diasAlerta, pestanaCotizacion): las vistas, los conteos y el resumen son
 // del servidor (T6B). Las marcas del pedido de cada fila (COT-LISTA) siguen saliendo de aquí. r1 (I1 e I2): la marca del
-// pedido y «Sin precio» con la regla de la tarjeta del tablero; la Entrega est. como día de calendario.
+// pedido y «Sin precio» con la regla de la tarjeta del tablero; la Entrega est. como día de calendario. r2 (p2): el chip
+// «Sin precio» es chipSinPrecio, el mismo objeto de la tarjeta.
 import {
-  pedidoVigente, tarjetasCotizaciones, marcaPedidoCotizacion, cotizacionSinPrecio, diaDeNegocio, fechaNegocioVencida,
+  pedidoVigente, tarjetasCotizaciones, marcaPedidoCotizacion, chipSinPrecio, diaDeNegocio, fechaNegocioVencida,
   fechaPorVencer, avisoSolicitudTrasRechazo,
 } from '@/lib/listas-ventas';
 import {
@@ -910,12 +911,14 @@ function CeldaCliente({ cot }: { cot: FilaCOT }) {
 }
 
 /** Total: el monto y, debajo, «Sin precio» si el total no es mayor que 0 (como antes, en cualquier estado). r1 (I1): la
- *  regla es cotizacionSinPrecio (listas-ventas.js), la misma del chip del tablero. */
+ *  regla es cotizacionSinPrecio (listas-ventas.js), la misma del chip del tablero. r2 (p2): el chip (texto y tono) sale
+ *  de chipSinPrecio, el mismo objeto de la tarjeta. */
 function CeldaTotal({ cot }: { cot: FilaCOT }) {
+  const chip = chipSinPrecio(cot);
   return (
     <span className="flex min-w-0 flex-col items-end gap-0.5 leading-tight">
       <span className="max-w-full truncate text-xs font-black text-slate-800">{fCOP(cot.total_cop)}</span>
-      {cotizacionSinPrecio(cot) && <span className={`${CHIP} text-[10px] ${CLASE_CHIP.amber}`}>Sin precio</span>}
+      {chip && <span className={`${CHIP} text-[10px] ${CLASE_CHIP[chip.tono] ?? CLASE_CHIP.slate}`}>{chip.texto}</span>}
     </span>
   );
 }
@@ -1006,7 +1009,7 @@ export const COLUMNAS_TABLA_COT: ColumnaTabla<FilaCOT>[] = [
   { id: 'cotizador', titulo: 'Cotizador', ancho: 120, ordenable: 'cotizador', titleCelda: (cot) => cot.cotizador || null,
     celda: (cot) => <span className="block truncate text-xs font-medium text-slate-600">{cot.cotizador || '-'}</span> },
   { id: 'total', titulo: 'Total', ancho: 104, alinear: 'derecha', ordenable: 'total',
-    titleCelda: (cot) => [fCOP(cot.total_cop), cotizacionSinPrecio(cot) ? 'Sin precio' : null].filter(Boolean).join(' · '),
+    titleCelda: (cot) => [fCOP(cot.total_cop), chipSinPrecio(cot)?.texto].filter(Boolean).join(' · '),
     celda: (cot) => <CeldaTotal cot={cot} /> },
   { id: 'anticipo', titulo: 'Anticipo', ancho: 96, alinear: 'derecha', ocultaPorDefecto: true, ordenable: 'anticipo',
     titleCelda: (cot) => fCOP(cot.anticipo_cop),

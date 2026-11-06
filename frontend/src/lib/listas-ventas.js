@@ -486,6 +486,16 @@ export function cotizacionSinPrecio(cot) {
 }
 
 /**
+ * B4 T9 r2 (p2): el chip «Sin precio» en un solo lugar: {texto: 'Sin precio', tono: 'amber'} si cotizacionSinPrecio, o
+ * null. Lo pintan la columna Total de la lista (con CLASE_CHIP[tono]) y la tarjeta del tablero (tarjetaCotizacion).
+ * @param {any} cot
+ * @returns {{texto: string, tono: 'amber'} | null}
+ */
+export function chipSinPrecio(cot) {
+  return cotizacionSinPrecio(cot) ? { texto: 'Sin precio', tono: 'amber' } : null;
+}
+
+/**
  * B4 T9 r1 (m4; B2, test_rechazo_cotizacion_solicitud_activa): lo que pasa con la solicitud al rechazar una cotización
  * que viene de una: 'La solicitud SC-… seguirá activa y podrás crearle otra cotización.' ('de origen' sin número). Sin
  * solicitud, null. Una sola frase para la confirmación del detalle (cotizacion/[id]) y los efectos del ModalMotivo del

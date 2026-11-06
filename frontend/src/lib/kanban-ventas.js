@@ -50,7 +50,7 @@ import {
 } from './estados-solicitud.js';
 import { ESTADOS_COTIZACION, infoEstadoCotizacion } from './estados-cotizacion.js';
 import {
-  pedidoVigente, cotizacionesVigentes, pasosParaCancelarSolicitud, marcaPedidoCotizacion, cotizacionSinPrecio,
+  pedidoVigente, cotizacionesVigentes, pasosParaCancelarSolicitud, marcaPedidoCotizacion, chipSinPrecio,
 } from './listas-ventas.js';
 import {
   avisoCambiosCliente, etiquetaChipCambios, RUTA_LISTA_SOLICITUDES, RUTA_LISTA_COTIZACIONES,
@@ -420,15 +420,28 @@ function textoAtrasado(dias) {
  * @returns {ChipTarjeta[]}
  */
 export function chipsDocumentoVentas(fila, tipo = fila?.tipo) {
-  /** @type {ChipTarjeta[]} */
-  const chips = [];
-  if (fila?.resolucion === 'ATRASADO') chips.push({ texto: textoAtrasado(fila?.dias_sin_mov), tono: 'rose' });
-  if (fila?.seguimiento_estado === 'AGOTADO') chips.push({ texto: ACCIONES_BLOQUE3.SEGUIMIENTO_AGOTADO.etiqueta, tono: 'amber' });
+  const { atraso, recordatorio, cambios } = chipsDeLaFila(fila, tipo);
+  return /** @type {ChipTarjeta[]} */ ([atraso, recordatorio, cambios].filter(Boolean)).slice(0, MAX_CHIPS);
+}
+
+/**
+ * Los tres chips de la fila por separado (null si no va): los arma chipsDocumentoVentas en su orden y, B4 T9 r2 (p3),
+ * tarjetaCotizacion en el suyo (el de los cambios del cliente antes que «Sin precio», para que el tope no lo saque).
+ * @param {any} fila
+ * @param {string} [tipo]
+ * @returns {{atraso: ChipTarjeta | null, recordatorio: ChipTarjeta | null, cambios: ChipTarjeta | null}}
+ */
+function chipsDeLaFila(fila, tipo) {
+  const atraso = fila?.resolucion === 'ATRASADO' ? { texto: textoAtrasado(fila?.dias_sin_mov), tono: /** @type {TonoChip} */ ('rose') } : null;
+  const recordatorio = fila?.seguimiento_estado === 'AGOTADO'
+    ? { texto: ACCIONES_BLOQUE3.SEGUIMIENTO_AGOTADO.etiqueta, tono: /** @type {TonoChip} */ ('amber') } : null;
+  /** @type {ChipTarjeta | null} */
+  let cambios = null;
   if (tipo === 'SC' || tipo === 'COT') {
     const etiqueta = etiquetaChipCambios(fila, tipo);
-    if (etiqueta) chips.push({ texto: etiqueta, tono: avisoCambiosCliente(fila, tipo)?.tono === 'rosa' ? 'rose' : 'amber' });
+    if (etiqueta) cambios = { texto: etiqueta, tono: avisoCambiosCliente(fila, tipo)?.tono === 'rosa' ? 'rose' : 'amber' };
   }
-  return chips.slice(0, MAX_CHIPS);
+  return { atraso, recordatorio, cambios };
 }
 
 /** Un monto del API en pesos enteros, o null si no viene un número. */
@@ -973,10 +986,13 @@ export function consultaColumnaCOT(estado, columna, { orden, limit, offset }) {
  * tarjetaHub (número, cliente, el cotizador, el total, el estado de estados-cotizacion.js, la antigüedad, el atraso,
  * chipsDocumentoVentas y accionSiguienteDocumento) con el return_to de la lista (`returnTo`, por defecto
  * RUTA_LISTA_COTIZACIONES). La fila es una COT aunque no traiga `tipo`.
- * r1 (I1; punto 6 de KANBAN-ventas-listas): los chips llevan delante los de la COT, con la MISMA regla de la tabla
- * (listas-ventas.js): primero el del pedido («Pedido PVEN-…» emerald, o «Pedido … cancelado» rose: marcaPedidoCotizacion,
- * COT-LISTA), después «Sin precio» (amber, cotizacionSinPrecio) y después los de chipsDocumentoVentas; como mucho
- * MAX_CHIPS. tarjetaHub no cambia: las tarjetas del Hub no los llevan.
+ * r1 (I1; punto 6 de KANBAN-ventas-listas): los chips de la COT, con la MISMA regla de la tabla (listas-ventas.js). r2
+ * (p3, corrige el orden de I1.2: el tope nunca saca la señal del cliente), en este orden y como mucho MAX_CHIPS:
+ *  1. el del pedido («Pedido PVEN-…» emerald, o «Pedido … cancelado» rose: marcaPedidoCotizacion, COT-LISTA);
+ *  2. el de los cambios del cliente de B3-T18 («Cambios pedidos» o «Ya no la necesita», el de chipsDocumentoVentas);
+ *  3. «Sin precio» (chipSinPrecio, el mismo de la columna Total);
+ *  4. el resto de chipsDocumentoVentas: el atraso y el recordatorio.
+ * tarjetaHub no cambia: las tarjetas del Hub no los llevan.
  * @param {any} fila
  * @param {{ahora?: number, returnTo?: string}} [opciones]
  * @returns {TarjetaVentas}
@@ -984,10 +1000,7 @@ export function consultaColumnaCOT(estado, columna, { orden, limit, offset }) {
 export function tarjetaCotizacion(fila, { ahora, returnTo = RUTA_LISTA_COTIZACIONES } = {}) {
   const cot = { ...fila, tipo: 'COT' };
   const tarjeta = tarjetaHub(cot, { ahora, returnTo });
-  /** @type {ChipTarjeta[]} */
-  const propios = [];
-  const marca = marcaPedidoCotizacion(cot);
-  if (marca) propios.push(marca);
-  if (cotizacionSinPrecio(cot)) propios.push({ texto: 'Sin precio', tono: 'amber' });
-  return { ...tarjeta, chips: [...propios, ...tarjeta.chips].slice(0, MAX_CHIPS) };
+  const { atraso, recordatorio, cambios } = chipsDeLaFila(cot, 'COT');
+  const chips = /** @type {ChipTarjeta[]} */ ([marcaPedidoCotizacion(cot), cambios, chipSinPrecio(cot), atraso, recordatorio].filter(Boolean));
+  return { ...tarjeta, chips: chips.slice(0, MAX_CHIPS) };
 }

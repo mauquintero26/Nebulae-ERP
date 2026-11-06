@@ -775,6 +775,29 @@ console.log('--- B4 T8 r1: el cableado de la lista de Solicitudes (A2, A3, m1, m
   assert.ok(carga.includes('const prefs = usePreferenciasTabla(ID_SC, COLUMNAS_TABLA_SC);'), 'las columnas que el usuario guardó');
   assert.ok(carga.includes('const ESTADO_CARGANDO = estadoTablaInicial(INICIAL_SC);'), 'el estado inicial de la lista');
   assert.ok(lista.includes('<div className={CONTENEDOR_LISTA}>'), 'la lista usa el mismo contenedor');
+  // B4 T9 r2 (p1): el esqueleto es INERTE pieza por pieza (antes no había aserción): mientras carga no se enfoca ni se toca
+  // nada que vaya a desaparecer al llegar la lista.
+  afirmarEsqueletoInerte(carga, 'Cargando las solicitudes…', 'CargandoSolicitudes');
+}
+
+/**
+ * B4 T9 r2 (p1): un esqueleto del Suspense de una lista de Ventas (CargandoSolicitudes y CargandoCotizaciones) es inerte
+ * pieza por pieza, sobre el código sin comentarios (un comentario que diga «inert» no cuenta): la franja, la cabecera (sus
+ * botones, además, invisibles), las tarjetas y la tarjeta de la tabla; y el aviso de la carga va aparte, en un
+ * role="status" sr-only (lo inerte no llega al lector de pantalla). Cuatro atributos inert, ni uno más ni uno menos.
+ * @param {string} fuente
+ * @param {string} textoEstado
+ * @param {string} nombre
+ */
+function afirmarEsqueletoInerte(fuente, textoEstado, nombre) {
+  const codigo = fuente.replace(/\r\n/g, '\n').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  assert.match(codigo, /<div inert>\s*<BannerFlujo\b/, `${nombre}: la franja, inerte`);
+  assert.match(codigo, /actions=\{<div inert className="invisible"><AccionesCabecera /, `${nombre}: la cabecera, inerte e invisible`);
+  assert.match(codigo, /<div inert>\s*<FranjaKpis\b/, `${nombre}: las tarjetas, inertes`);
+  assert.match(codigo, /<section inert className=\{TABLE\.tarjeta\}>\s*<BarraTabla\b/, `${nombre}: la barra y la tabla, inertes`);
+  assert.ok(codigo.includes(`<p role="status" className="sr-only">${textoEstado}</p>`), `${nombre}: el aviso de la carga aparte`);
+  assert.equal((codigo.match(/\binert\b/g) ?? []).length, 4, `${nombre}: cuatro atributos inert`);
 }
 
 console.log('--- B4 T9 TEST 1: tarjetasCotizaciones — las 4 tarjetas de Cotizaciones con el resumen del servidor (RP19) ---');
@@ -887,6 +910,14 @@ console.log('--- B4 T9 TEST 3 (r1, I1): marcaPedidoCotizacion y cotizacionSinPre
     assert.equal(listas.cotizacionSinPrecio({ estado: 'RECHAZADA', total_cop: total }), esperado, String(total));
   }
   assert.equal(listas.cotizacionSinPrecio(null), true);
+  // r2 (p2): el CHIP «Sin precio» también sale de aquí (texto y tono), para la columna Total, su title y el tablero.
+  assert.deepEqual(listas.chipSinPrecio({ total_cop: 0 }), { texto: 'Sin precio', tono: 'amber' });
+  assert.equal(listas.chipSinPrecio({ total_cop: 250000 }), null);
+  for (const [total, esperado] of [[0, true], [null, true], ['x', true], [1, false]]) {
+    assert.equal(listas.chipSinPrecio({ total_cop: total }) !== null, listas.cotizacionSinPrecio({ total_cop: total }), String(total));
+    assert.equal(listas.chipSinPrecio({ total_cop: total }) !== null, esperado, String(total));
+  }
+  assert.notEqual(listas.chipSinPrecio({}), listas.chipSinPrecio({}), 'un objeto nuevo cada vez (nadie comparte uno mutable)');
 }
 
 console.log('--- B4 T9 TEST 4 (r1, m4): avisoSolicitudTrasRechazo — el rechazo dice lo mismo en el detalle y en el tablero ---');
@@ -991,9 +1022,13 @@ console.log('--- B4 T9: el cableado de la lista de Cotizaciones con el servidor 
   assert.match(codigo, /const TEXTO_MARCA: Record<'emerald' \| 'rose', string> = \{ emerald: 'text-emerald-700', rose: 'text-rose-600' \};/);
   assert.match(codigo, /const tituloNumero = \(cot: FilaCOT\) =>\s*\[cot\.numero, cot\.sc_numero \? `SC: \$\{cot\.sc_numero\}` : null, marcaPedidoCotizacion\(cot\)\?\.texto\]/);
   assert.ok(!/function marcaPedido\(|soloPedidosCancelados\(|situacionPedidoCotizacion\(/.test(codigo), 'sin la regla copiada en la pantalla');
-  // «Sin precio» de la columna Total con cotizacionSinPrecio, la del chip del tablero.
-  assert.match(codigo, /\{cotizacionSinPrecio\(cot\) && <span className=\{`\$\{CHIP\} text-\[10px\] \$\{CLASE_CHIP\.amber\}`\}>Sin precio<\/span>\}/);
-  assert.match(codigo, /titleCelda: \(cot\) => \[fCOP\(cot\.total_cop\), cotizacionSinPrecio\(cot\) \? 'Sin precio' : null\]/);
+  // «Sin precio» de la columna Total: r2 (p2) el MISMO chip del tablero (chipSinPrecio de listas-ventas.js), con su texto
+  // y su tono, en la celda y en el title; la pantalla ya no escribe ni el texto ni el tono.
+  const celdaTotal = codigo.slice(codigo.indexOf('function CeldaTotal('), codigo.indexOf('\n}\n', codigo.indexOf('function CeldaTotal(')));
+  assert.match(celdaTotal, /const chip = chipSinPrecio\(cot\);/);
+  assert.match(celdaTotal, /\{chip && <span className=\{`\$\{CHIP\} text-\[10px\] \$\{CLASE_CHIP\[chip\.tono\] \?\? CLASE_CHIP\.slate\}`\}>\{chip\.texto\}<\/span>\}/);
+  assert.match(codigo, /titleCelda: \(cot\) => \[fCOP\(cot\.total_cop\), chipSinPrecio\(cot\)\?\.texto\]\.filter\(Boolean\)\.join\(' · '\)/);
+  assert.ok(!codigo.includes("'Sin precio'") && !codigo.includes('>Sin precio<'), 'la pantalla no escribe «Sin precio»');
   // La Entrega est. con las reglas de la librería (antes isOverdue / isExpiringSoon en la pantalla). r1 (I2): como día de
   // calendario (diaDeNegocio y fechaSolo), con fechaNegocioVencida y fechaPorVencer; nunca fechaVencida (instantes).
   assert.match(codigo, /const vencida = fechaNegocioVencida\(cot\.fecha_entrega_estimada\);\s*const porVencer = !vencida && fechaPorVencer\(cot\.fecha_entrega_estimada\);/);
@@ -1092,7 +1127,8 @@ console.log('--- B4 T9 r1 (A2): el esqueleto del Suspense de Cotizaciones arma l
   assert.match(carga, /<TarjetaKpi kpi="cot_activas" valor=\{null\} activo onClick=\{nada\} \/>\s*<TarjetaKpi kpi="cot_confirmadas" valor=\{null\} onClick=\{nada\} \/>\s*<TarjetaKpi kpi="cot_monto_confirmado" valor=\{null\} onClick=\{nada\} \/>\s*<TarjetaKpi kpi="cot_total" valor=\{null\} \/>/);
   assert.ok(carga.includes('placeholder="Buscar por número, cliente, cotizador, solicitud, pedido o producto…"'), 'la misma búsqueda');
   assert.ok(lista.includes('placeholder="Buscar por número, cliente, cotizador, solicitud, pedido o producto…"'), 'la de la lista');
-  assert.ok((carga.match(/\binert\b/g) ?? []).length >= 4, 'todo inerte');
+  // r2 (p1): todo inerte, atributo por atributo y sin contar los comentarios (antes se contaba el archivo con ellos).
+  afirmarEsqueletoInerte(carga, 'Cargando las cotizaciones…', 'CargandoCotizaciones');
 }
 
 console.log('OK test_listas_ventas.mjs');
