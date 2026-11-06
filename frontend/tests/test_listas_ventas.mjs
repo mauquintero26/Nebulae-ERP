@@ -1396,4 +1396,67 @@ console.log('--- B4 T10: el esqueleto del Suspense de Pedidos arma la lista con 
   afirmarEsqueletoInerte(carga, 'Cargando los pedidos de venta…', 'CargandoPedidos');
 }
 
+console.log('--- B4 T10: el cableado del detalle del pedido (FLUJO-documentos 5, KPI-ventas 10, U24; RP87; D27) ---');
+{
+  const fuente = readFileSync(new URL('../src/app/dashboard/ventas/venta/[id]/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  // La cadena de documentos (RP87: con doc), entre la barra de acciones y el panel dividido (fuera del @container de H37).
+  assert.match(codigo, /<div className="[^"]*\bshrink-0\b[^"]*">\s*<CadenaDocumentos doc=\{pedido\} tipo="PVEN" \/>\s*<\/div>\s*<div className="flex-1 flex flex-row overflow-hidden">/);
+  assert.match(codigo, /import \{ CadenaDocumentos, PasosFlujo \} from '@\/components\/flujo';/);
+  // El Status Tracker: PASOS_PEDIDO y pasoPedido (Bloque 1) con pasosConProgreso; solo con stepIndex >= 0 (RP87); la línea
+  // «Estado actual» y los avisos de cancelado y devuelto se quedan.
+  assert.ok(codigo.includes('const stepIndex = pasoPedido(estadoActual);'));
+  assert.ok(codigo.includes('const pasosPedido = pasosConProgreso(STEPS, stepIndex);'));
+  assert.match(codigo, /\{stepIndex >= 0 && \(\s*<div className="[^"]*">\s*<PasosFlujo variante="barra" pasos=\{pasosPedido\} etiqueta="Pasos del pedido" \/>/);
+  assert.match(codigo, /\{stepIndex >= 0 && STEPS\[stepIndex\]\?\.key !== estadoActual && \(\s*<p [^>]*>Estado actual: \{estadoCfg\.label\}<\/p>/);
+  assert.ok(codigo.includes('Este pedido fue devuelto totalmente.') && codigo.includes('Este pedido de venta fue cancelado.'));
+  {
+    // Cancelado y Devuelto (paso -1) no pintan la barra; los demás, con su paso actual.
+    const { pasoPedido, PASOS_PEDIDO } = await import('../src/lib/estados-pedido.js');
+    const { pasosConProgreso } = await import('../src/lib/flujo.js');
+    assert.deepEqual([pasoPedido('CANCELADO'), pasoPedido('DEVUELTO_TOTAL')], [-1, -1]);
+    assert.deepEqual(pasosConProgreso(PASOS_PEDIDO, pasoPedido('LISTO_ENTREGA')).map((p) => p.estado), ['hecho', 'hecho', 'actual', 'pendiente', 'pendiente']);
+    assert.deepEqual(pasosConProgreso(PASOS_PEDIDO, pasoPedido('LISTO_ENTREGA')).map((p) => p.label), PASOS_PEDIDO.map((p) => p.label));
+  }
+  // El Resumen Financiero (KPI-ventas punto 10, U24): FranjaKpis con 3 TarjetaKpi en pesos, con los textos, casos y
+  // colores de U24; los valores de resumenPagoPedido. El total, la barra, el aviso ámbar y la lista de pagos no cambian.
+  const resumen = codigo.slice(codigo.indexOf('<FranjaKpis titulo="Resumen de pagos">'), codigo.indexOf('</FranjaKpis>'));
+  assert.ok(resumen.length > 100, 'la franja del Resumen Financiero');
+  assert.equal((resumen.match(/<TarjetaKpi\b/g) ?? []).length, 3, 'tres tarjetas');
+  assert.match(resumen, /<TarjetaKpi etiqueta=\{`Anticipo requerido · \$\{formatoPct\(resumenPago\.anticipoPct\)\}`\} icono="Coins" color="indigo" formato="pesos"\s*valor=\{resumenPago\.requerido\} ayuda=\{resumenPago\.requerido === 0 \? 'No pide anticipo' : 'Del total del pedido'\} \/>/);
+  assert.match(resumen, /<TarjetaKpi etiqueta="Pagado \(verificado\)" icono="CheckCircle2" color="emerald" formato="pesos"\s*valor=\{resumenPago\.pagado\} ayuda=\{resumenPago\.pctPagado === null \? 'Saldo sin datos' : `\$\{resumenPago\.pctPagado\}% del total`\} \/>/);
+  assert.match(resumen, /<TarjetaKpi etiqueta=\{tercerRecuadro\.titulo\} icono=\{tercerRecuadro\.icono\} color=\{tercerRecuadro\.color\} tono=\{tercerRecuadro\.tono\}\s*formato="pesos" ayuda=\{tercerRecuadro\.ayuda\}/);
+  assert.match(resumen, /valor=\{cancelado \? resumenPago\.saldo\s*: resumenPago\.caso === 'pendiente' \? resumenPago\.saldo\s*: resumenPago\.caso === 'a_favor' \? resumenPago\.saldoAFavor\s*: resumenPago\.caso === 'completo' \? 0 : null\} \/>/);
+  const tercer = codigo.slice(codigo.indexOf('const TERCER_RECUADRO'), codigo.indexOf('};', codigo.indexOf('const TERCER_RECUADRO')));
+  assert.match(tercer, /pendiente: \{ titulo: 'Saldo pendiente', color: 'rose', tono: 'alerta', [^}]*ayuda: 'Total menos lo pagado' \}/);
+  assert.match(tercer, /completo: \{ titulo: 'Pagado completo', color: 'emerald', tono: 'bien', [^}]*ayuda: 'Sin saldo pendiente' \}/);
+  assert.match(tercer, /a_favor: \{ titulo: 'Saldo a favor del cliente', color: 'amber', [^}]*ayuda: 'Pagó más que el total del pedido' \}/);
+  assert.match(tercer, /desconocido: \{ titulo: 'Saldo pendiente', color: 'slate', [^}]*ayuda: 'Saldo sin datos' \}/);
+  assert.ok(codigo.includes("const RECUADRO_CANCELADO = { ...TERCER_RECUADRO.desconocido, titulo: 'Sin cobrar (pedido cancelado)', ayuda: 'El pedido se canceló: no se cobra.' };"));
+  assert.ok(codigo.includes('const tercerRecuadro = cancelado ? RECUADRO_CANCELADO : (TERCER_RECUADRO[resumenPago.caso] || TERCER_RECUADRO.desconocido);'));
+  assert.ok(codigo.includes('const resumenPago = resumenPagoPedido(pedido);'));
+  for (const sigue of ['{fCOP(resumenPago.total)}', 'Pagado {fCOP(resumenPago.pagado)} de {fCOP(resumenPago.total)} ({resumenPago.pctPagado}%)',
+    'Anticipo pendiente: {fCOP(resumenPago.anticipoPendiente)}. El cliente todavía debe esta parte del anticipo.', 'const d = describirPago(p);',
+    '<LineaEnlaceCliente enlace={pedido?.enlace_cliente} estado={estadoActual} />']) {
+    assert.ok(codigo.includes(sigue), `se queda: ${sigue}`);
+  }
+  assert.ok(!/rounded-xl border border-indigo-200 bg-indigo-50 p-4|tercerRecuadro\.caja/.test(codigo), 'sin los recuadros hechos a mano');
+  {
+    // Los textos de U24 con las cuentas de resumenPagoPedido, en sus tres casos.
+    const { resumenPagoPedido } = await import('../src/lib/resumen-pago.js');
+    assert.equal(resumenPagoPedido({ total_cop: 1000, saldo_cop: 400, anticipo_pct: 60 }).caso, 'pendiente');
+    assert.equal(resumenPagoPedido({ total_cop: 1000, saldo_cop: 0 }).caso, 'completo');
+    assert.equal(resumenPagoPedido({ total_cop: 1000, saldo_cop: -200 }).caso, 'a_favor');
+    assert.equal(resumenPagoPedido({ total_cop: 1000 }).caso, 'desconocido');
+  }
+  // El modal de cancelar: las tres frases salen de kanban-ventas.js (las mismas de los efectos del tablero); ninguna a mano.
+  assert.match(codigo, /const avisoCotizacionCancelar = avisoCotizacionAlCancelarPedido\(pedido\);\s*const avisoSaldoCancelar = avisoSaldoAFavorAlCancelarPedido\(pedido\);\s*const avisoPxpCancelar = avisoPxpAlCancelarPedido\(pedido\);/);
+  for (const v of ['avisoCotizacionCancelar', 'avisoSaldoCancelar', 'avisoPxpCancelar']) {
+    assert.match(codigo, new RegExp(`\\{${v} && \\(\\s*<p className="[^"]*">\\{${v}\\}</p>\\s*\\)\\}`), v);
+  }
+  for (const aMano of ['volverá a Borrador para que puedas', 'saldo a favor de la cotización y pasa', 'También se cancelará la orden de pago', 'no se cancela y queda un aviso']) {
+    assert.ok(!codigo.includes(aMano), `sin la frase a mano: ${aMano}`);
+  }
+}
+
 console.log('OK test_listas_ventas.mjs');

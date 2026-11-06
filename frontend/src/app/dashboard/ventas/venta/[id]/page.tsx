@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
+// B4 T10: Circle se fue con la barra de pasos hecha a mano (ahora PasosFlujo).
 import {
-  DollarSign, CheckCircle2, Circle,
+  DollarSign, CheckCircle2,
   ShoppingCart, RefreshCw, AlertCircle, ListChecks, ExternalLink,
   Activity, FileText, X, Edit2, Save, Sparkles, MessageSquare, Send,
 } from 'lucide-react';
@@ -10,7 +11,15 @@ import Link from 'next/link';
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
-import { Button, Modal, useAvisos } from '@/components/ui';
+import { Button, Modal, useAvisos, FranjaKpis, TarjetaKpi } from '@/components/ui';
+import type { ColorKpi, TonoTarjeta } from '@/components/ui';
+// B4 T10 (FLUJO-documentos punto 5): la cadena de documentos y la barra de pasos con las piezas comunes (T5A).
+import { CadenaDocumentos, PasosFlujo } from '@/components/flujo';
+import { pasosConProgreso } from '@/lib/flujo';
+// B4 T10: las frases del modal de cancelar salen de la misma lib que usa el tablero de la lista (una sola fuente).
+import {
+  avisoCotizacionAlCancelarPedido, avisoPxpAlCancelarPedido, avisoSaldoAFavorAlCancelarPedido,
+} from '@/lib/kanban-ventas';
 import { textoDeError, recargarTrasError } from '@/lib/avisos';
 import { NewSupplierModal } from '../venta-client';
 import { CambiosDeActividad, CabeceraActividad, getUsuarioActual, puedeCrearOrdenDePago, returnToSeguro, BotonVolver, EnlaceConfirmacionModal } from '../../flujo';
@@ -24,7 +33,7 @@ import {
   humanizarCodigo,
 } from '@/lib/estados-pedido';
 import {
-  formatoPct, describirPago, etiquetaEstadoPxp, pxpsDelPedido, pedidoAdmitePxp, textoChipPxp, saldoAFavorAlCancelar,
+  formatoPct, describirPago, pxpsDelPedido, pedidoAdmitePxp, textoChipPxp,
 } from '@/lib/dinero-ventas';
 import { rutaSinParametro } from '@/lib/listas-ventas';
 import { destinoVolver, anchoInicialPanel } from '@/lib/detalle-layout';
@@ -46,13 +55,16 @@ const ACTIVITY_STYLE: Record<string, string> = {
   CHATTER: '#0891b2', NOTE_ADDED: '#3b82f6',
 };
 
-// U24: el tercer recuadro del Resumen Financiero según resumenPagoPedido(...).caso (clases literales para Tailwind).
-// Las ayudas son hechos del saldo. Un pedido CANCELADO no usa este mapa: ya no se cobra y lleva RECUADRO_CANCELADO.
-const TERCER_RECUADRO: Record<string, { titulo: string; caja: string; texto: string; valor: string; ayuda: string }> = {
-  pendiente: { titulo: 'Saldo pendiente', caja: 'border-red-200 bg-red-50', texto: 'text-red-700', valor: 'text-red-800', ayuda: 'Total menos lo pagado' },
-  completo: { titulo: 'Pagado completo', caja: 'border-emerald-200 bg-emerald-50', texto: 'text-emerald-700', valor: 'text-emerald-800', ayuda: 'Sin saldo pendiente' },
-  a_favor: { titulo: 'Saldo a favor del cliente', caja: 'border-amber-200 bg-amber-50', texto: 'text-amber-800', valor: 'text-amber-900', ayuda: 'Pagó más que el total del pedido' },
-  desconocido: { titulo: 'Saldo pendiente', caja: 'border-slate-200 bg-slate-50', texto: 'text-slate-600', valor: 'text-slate-500', ayuda: 'Saldo sin datos' },
+// U24: el tercer recuadro del Resumen Financiero según resumenPagoPedido(...).caso. Las ayudas son hechos del saldo. Un
+// pedido CANCELADO no usa este mapa: ya no se cobra y lleva RECUADRO_CANCELADO.
+// B4 T10 (KPI-ventas punto 10): los recuadros son TarjetaKpi; los colores de U24 pasan al color de la tarjeta y a su tono:
+// el saldo pendiente en rose (con el tono 'alerta': el borde y el fondo rosa), el pagado completo en esmeralda (la ayuda en
+// verde), el saldo a favor en ámbar y, sin datos, gris.
+const TERCER_RECUADRO: Record<string, { titulo: string; color: ColorKpi; tono: TonoTarjeta; icono: string; ayuda: string }> = {
+  pendiente: { titulo: 'Saldo pendiente', color: 'rose', tono: 'alerta', icono: 'AlertCircle', ayuda: 'Total menos lo pagado' },
+  completo: { titulo: 'Pagado completo', color: 'emerald', tono: 'bien', icono: 'CheckCircle2', ayuda: 'Sin saldo pendiente' },
+  a_favor: { titulo: 'Saldo a favor del cliente', color: 'amber', tono: 'normal', icono: 'Wallet', ayuda: 'Pagó más que el total del pedido' },
+  desconocido: { titulo: 'Saldo pendiente', color: 'slate', tono: 'normal', icono: 'Circle', ayuda: 'Saldo sin datos' },
 };
 
 // Ronda 1 (punto 8): un pedido cancelado ya no se cobra: el tercer recuadro, neutro, dice eso (y no 'Saldo pendiente').
@@ -129,7 +141,9 @@ function PedidoVentaDetalleContent() {
     }
     if (!silencioso) setLoading(false);
     return fresco;
-  }, [params.id]);
+    // B4 T10 (D8): los dos setters son estables (la identidad de loadPedido sigue dependiendo solo de params.id); van en
+    // la lista porque React Compiler los infiere y, si no coinciden, salta este componente (preserve-manual-memoization).
+  }, [params.id, setPedido, setShowCancelModal]);
 
   useEffect(() => { loadPedido(); }, [loadPedido]);
 
@@ -186,9 +200,9 @@ function PedidoVentaDetalleContent() {
   // N10: nombre claro de cualquier estado y su lugar en los 5 pasos (-1: cancelado o devuelto, sin stepper).
   const estadoCfg = infoEstadoPedido(estadoActual);
   const stepIndex = pasoPedido(estadoActual);
-  // T11 (V5): la línea de la barra de pasos va del centro del primer círculo al del último: p-6 (1.5rem) + media
-  // columna, con las columnas del mismo ancho ((100% - 3rem) / pasos).
-  const bordeLineaPasos = `calc(1.5rem + (100% - 3rem) / ${2 * STEPS.length})`;
+  // B4 T10 (FLUJO-documentos punto 5, RP87): los 5 pasos de PASOS_PEDIDO con pasosConProgreso (lib/flujo.js): los de
+  // antes de stepIndex 'hecho', el suyo 'actual' y los siguientes 'pendiente'; los pinta PasosFlujo (la pieza común).
+  const pasosPedido = pasosConProgreso(STEPS, stepIndex);
   // N2: solo se ofrece lo que el servidor acepta por PATCH desde el estado actual.
   const puedeCancelar = transicionesPedido(estadoActual).includes('CANCELADO');
   const opcionesEstado = ESTADOS_PEDIDO_MANUALES.filter(k => transicionesPedido(estadoActual).includes(k));
@@ -390,6 +404,10 @@ function PedidoVentaDetalleContent() {
   const tercerRecuadro = cancelado ? RECUADRO_CANCELADO : (TERCER_RECUADRO[resumenPago.caso] || TERCER_RECUADRO.desconocido);
   const pagos = Array.isArray(pedido?.pagos) ? pedido.pagos : [];
   const ivaIncluido = textoIvaIncluido(pedido);
+  // B4 T10: las frases del modal de cancelar (las del tablero de la lista; con las pxps y los pagos del detalle).
+  const avisoCotizacionCancelar = avisoCotizacionAlCancelarPedido(pedido);
+  const avisoSaldoCancelar = avisoSaldoAFavorAlCancelarPedido(pedido);
+  const avisoPxpCancelar = avisoPxpAlCancelarPedido(pedido);
 
   return (
     <div className="w-full h-full bg-white flex flex-col overflow-hidden">
@@ -452,6 +470,14 @@ function PedidoVentaDetalleContent() {
         </div>
       </div>
 
+      {/* B4 T10 (FLUJO-documentos punto 5; RP87, D36, D42): la barra Solicitud → Cotización → Pedido de venta (→ Compra,
+          si ya hay un pedido de compra) de este pedido, con «Estás aquí» en el pedido y un enlace (con return_to) en las
+          demás. Va fuera del panel dividido (H37: no compite con el ancho del @container de la izquierda), con su propio
+          ancho. Las etiquetas de estado son las únicas de cada documento (CadenaDocumentos). */}
+      <div className="bg-white px-6 py-2 border-b border-slate-200 shrink-0">
+        <CadenaDocumentos doc={pedido} tipo="PVEN" />
+      </div>
+
       {/* Main Content Layout (Split Pane) */}
       <div className="flex-1 flex flex-row overflow-hidden">
 
@@ -459,27 +485,14 @@ function PedidoVentaDetalleContent() {
         <div className="flex-1 overflow-y-auto px-8 py-8 custom-scrollbar bg-white relative">
 
           {/* Status Tracker -- N10: los 5 pasos; cada estado cae en el mas cercano y el exacto se lee abajo.
-              Se oculta solo en Cancelado y Devuelto (paso -1).
-              T11 (V5): cinco columnas del mismo ancho, cada etiqueta centrada bajo su paso, separada (px-1) y con salto
-              de línea permitido (a 1024 px salían pegadas). La línea queda a la altura del centro de los círculos
-              (top-10 = p-6 + medio círculo) aunque una etiqueta ocupe dos líneas. */}
+              Se oculta solo en Cancelado y Devuelto (paso -1; RP87: se conserva stepIndex >= 0).
+              B4 T10 (FLUJO-documentos punto 5): el Bloque 1 lo sigue alimentando con PASOS_PEDIDO y pasoPedido; solo
+              cambia el dibujo, a PasosFlujo variante 'barra' (los mismos círculos, colores y ✓ de la cadena de arriba).
+              T11 (V5): cada paso es su propia columna con un conector entre pasos, y la etiqueta va centrada bajo su
+              círculo; la pieza común la recorta (con el nombre completo en su title) en lugar de pegarla a la siguiente. */}
           {stepIndex >= 0 && (
-            <div className="bg-white p-6 border-b border-slate-100 mb-8 flex relative">
-              <div className="absolute top-10 h-1 bg-slate-100 -translate-y-1/2 z-0" style={{ left: bordeLineaPasos, right: bordeLineaPasos }} />
-              <div className="absolute top-10 h-1 bg-emerald-500 -translate-y-1/2 transition-all duration-500 z-0"
-                style={{ left: bordeLineaPasos, width: `calc((100% - 3rem) * ${stepIndex} / ${STEPS.length})` }} />
-              {STEPS.map((s, i) => (
-                <div key={s.key} className="relative z-10 flex flex-1 basis-0 min-w-0 flex-col items-center gap-2 px-1">
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold shadow-md transition-colors ${
-                    i < stepIndex ? 'bg-emerald-500 text-white shadow-emerald-200'
-                    : i === stepIndex ? 'bg-indigo-600 text-white shadow-indigo-200'
-                    : 'bg-white border-2 border-slate-200 text-slate-300'
-                  }`}>
-                    {i < stepIndex ? <CheckCircle2 size={16} /> : <Circle size={16} fill={i === stepIndex ? 'currentColor' : 'transparent'} />}
-                  </div>
-                  <span className={`text-center text-xs font-bold leading-tight break-words ${i <= stepIndex ? 'text-slate-800' : 'text-slate-400'}`}>{s.label}</span>
-                </div>
-              ))}
+            <div className="bg-white p-6 border-b border-slate-100 mb-8">
+              <PasosFlujo variante="barra" pasos={pasosPedido} etiqueta="Pasos del pedido" />
             </div>
           )}
           {stepIndex >= 0 && STEPS[stepIndex]?.key !== estadoActual && (
@@ -633,29 +646,23 @@ function PedidoVentaDetalleContent() {
                       pedido viejo sin IVA, 'IVA no discriminado'. */}
                   {ivaIncluido && <p className="text-sm font-semibold text-slate-500">{ivaIncluido}</p>}
                 </div>
-                <div className="grid grid-cols-1 @md:grid-cols-3 gap-3">
-                  <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4">
-                    <p className="text-xs font-bold uppercase tracking-wider text-indigo-700">Anticipo requerido · {formatoPct(resumenPago.anticipoPct)}</p>
-                    <p className="text-2xl font-black text-indigo-900">{fCOP(resumenPago.requerido)}</p>
-                    {/* Lo que falta del anticipo lo dice el aviso de abajo (R4); en un pedido cancelado el servidor manda 0. */}
-                    <p className="text-sm text-indigo-700">{resumenPago.requerido === 0 ? 'No pide anticipo' : 'Del total del pedido'}</p>
-                  </div>
-                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-                    <p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Pagado (verificado)</p>
-                    <p className="text-2xl font-black text-emerald-800">{resumenPago.pagado === null ? '—' : fCOP(resumenPago.pagado)}</p>
-                    <p className="text-sm text-emerald-700">{resumenPago.pctPagado === null ? 'Saldo sin datos' : `${resumenPago.pctPagado}% del total`}</p>
-                  </div>
-                  <div className={`rounded-xl border p-4 ${tercerRecuadro.caja}`}>
-                    <p className={`text-xs font-bold uppercase tracking-wider ${tercerRecuadro.texto}`}>{tercerRecuadro.titulo}</p>
-                    <p className={`text-2xl font-black ${tercerRecuadro.valor}`}>
-                      {cancelado ? (resumenPago.saldo === null ? '—' : fCOP(resumenPago.saldo))
-                        : resumenPago.caso === 'pendiente' ? fCOP(resumenPago.saldo)
-                        : resumenPago.caso === 'a_favor' ? fCOP(resumenPago.saldoAFavor)
-                        : resumenPago.caso === 'completo' ? fCOP(0) : '—'}
-                    </p>
-                    <p className={`text-sm ${tercerRecuadro.texto}`}>{tercerRecuadro.ayuda}</p>
-                  </div>
-                </div>
+                {/* B4 T10 (KPI-ventas punto 10): los tres recuadros son la tarjeta estándar (FranjaKpis con 3 TarjetaKpi en
+                    pesos, igual de grandes; la franja decide las columnas por su ancho, @container), con los mismos textos,
+                    casos y colores de U24: el anticipo requerido en índigo, lo pagado (verificado) en esmeralda y el
+                    tercero según el saldo (TERCER_RECUADRO o RECUADRO_CANCELADO). Los valores son los de resumenPagoPedido. */}
+                <FranjaKpis titulo="Resumen de pagos">
+                  {/* Lo que falta del anticipo lo dice el aviso de abajo (R4); en un pedido cancelado el servidor manda 0. */}
+                  <TarjetaKpi etiqueta={`Anticipo requerido · ${formatoPct(resumenPago.anticipoPct)}`} icono="Coins" color="indigo" formato="pesos"
+                    valor={resumenPago.requerido} ayuda={resumenPago.requerido === 0 ? 'No pide anticipo' : 'Del total del pedido'} />
+                  <TarjetaKpi etiqueta="Pagado (verificado)" icono="CheckCircle2" color="emerald" formato="pesos"
+                    valor={resumenPago.pagado} ayuda={resumenPago.pctPagado === null ? 'Saldo sin datos' : `${resumenPago.pctPagado}% del total`} />
+                  <TarjetaKpi etiqueta={tercerRecuadro.titulo} icono={tercerRecuadro.icono} color={tercerRecuadro.color} tono={tercerRecuadro.tono}
+                    formato="pesos" ayuda={tercerRecuadro.ayuda}
+                    valor={cancelado ? resumenPago.saldo
+                      : resumenPago.caso === 'pendiente' ? resumenPago.saldo
+                      : resumenPago.caso === 'a_favor' ? resumenPago.saldoAFavor
+                      : resumenPago.caso === 'completo' ? 0 : null} />
+                </FranjaKpis>
                 {/* Sin saldo conocido (caso 'desconocido') no se pinta la barra ni el % (T6B); en un pedido cancelado
                     tampoco (ronda 1, punto 8): ya no se cobra. */}
                 {!cancelado && resumenPago.pagado !== null && resumenPago.pctPagado !== null && (
@@ -985,24 +992,18 @@ function PedidoVentaDetalleContent() {
             </>
           )}>
           <p className="text-sm text-slate-500">Esta acción marca el pedido como <strong>Cancelado</strong>. Indica el motivo (mínimo 5 caracteres).</p>
-          {pedido?.cot_numero && (
-            <p className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-xl p-3">
-              La cotización {pedido.cot_numero} volverá a Borrador para que puedas ajustarla, reenviarla al cliente y crear otro pedido.
-            </p>
+          {/* B4 T10: las tres frases salen de lib/kanban-ventas.js, las mismas de los efectos del ModalMotivo del tablero
+              de la lista (una sola fuente; aquí, con las pxps y los pagos del detalle). H46: la cotización vuelve a Borrador. */}
+          {avisoCotizacionCancelar && (
+            <p className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-xl p-3">{avisoCotizacionCancelar}</p>
           )}
           {/* B7 (R6): lo pagado no se pierde: queda como saldo a favor de la cotización (sin COT no hay a dónde pasarlo). */}
-          {pedido?.cot_numero && saldoAFavorAlCancelar(pedido) > 0 && (
-            <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-xl p-3">
-              El dinero ya pagado queda como saldo a favor de la cotización y pasa al pedido nuevo si la vuelves a convertir.
-            </p>
+          {avisoSaldoCancelar && (
+            <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-xl p-3">{avisoSaldoCancelar}</p>
           )}
           {/* H45: el servidor cancela solo las PXP PENDIENTE; una pagada no se toca y deja un aviso de revision. */}
-          {pxpVigente && (
-            <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-3">
-              {pxpVigente.estado === 'PENDIENTE'
-                ? `También se cancelará la orden de pago ${pxpVigente.numero} (pendiente ${fCOP(pxpVigente.monto_pendiente)}).`
-                : `La orden de pago ${pxpVigente.numero} está ${etiquetaEstadoPxp(pxpVigente.estado).toLowerCase()}: no se cancela y queda un aviso para revisar la devolución o el saldo a favor del cliente.`}
-            </p>
+          {avisoPxpCancelar && (
+            <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-3">{avisoPxpCancelar}</p>
           )}
           <textarea value={cancelRazon} onChange={e => { setCancelError(''); setCancelRazon(e.target.value); }} rows={3} autoFocus
             placeholder="Ej: Cliente desistió de la compra, error en el pedido, etc."

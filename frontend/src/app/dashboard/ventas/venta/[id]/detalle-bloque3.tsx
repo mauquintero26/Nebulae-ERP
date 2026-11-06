@@ -1,9 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Send } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { useAvisos } from '@/components/ui';
+// B4 T10 (TABLA-listas-ventas punto 8, RP38): la tabla de productos es la tabla estándar en modo 'simple'.
+import { TablaEstandar, usePreferenciasTabla } from '@/components/tabla';
+import type { ColumnaTabla } from '@/components/tabla';
 import { textoDeError, recargarTrasError } from '@/lib/avisos';
 import { textoEnlaceVigente, TEXTO_ENLACE_PEDIDO_VENCIDO } from '@/lib/documento-comercial';
 import {
@@ -169,6 +172,9 @@ export function LineaEnlaceCliente({ enlace, estado }: { enlace: unknown; estado
   );
 }
 
+/** B4 T10: una línea de la tabla de productos (filaProductoPedido de lib/iva.js) con su clave para TablaEstandar. */
+type FilaProductoPedido = ReturnType<typeof filaProductoPedido> & { id: number };
+
 /**
  * IVA punto 12: los productos del pedido y, debajo, los totales de la COT (TotalesIvaCotizacion: Subtotal, Descuento,
  * IVA por tarifa) y TOTAL, de la cabecera (nunca recalculados, C2).
@@ -180,12 +186,48 @@ export function LineaEnlaceCliente({ enlace, estado }: { enlace: unknown; estado
  *   IVA / TOTAL CON IVA; por debajo (a 1024 px la columna mide unos 390 px y la tabla no cabe), cada línea es una tarjeta
  *   (textosTarjetaPedido, el lenguaje de PrecioLineaIva de la COT) con el total con IVA a la derecha.
  * - r1: si se cancelaron productos (LINEA_CANCELADA en la Actividad), la misma nota que ve el cliente.
+ * - B4 T10 (TABLA-listas-ventas punto 8; RP38, D40, D41): desde @xl la tabla es TablaEstandar en modo 'simple', id
+ *   'ventas.pedido.productos', con su único usePreferenciasTabla: las columnas se estiran, se mueven y se recuerdan; sin
+ *   paginación, orden ni selección. Son las 5 de antes, con el IVA y `discriminado`; la tabla estándar pone el scope="col"
+ *   de cada encabezado. Las tarjetas bajo @xl y los totales no cambian.
  */
 export function TablaProductosPedido({ pedido }: { pedido: PedidoBloque3 | null }) {
   const productos = Array.isArray(pedido?.productos) ? pedido.productos : [];
   const discriminado = pedido?.iva_discriminado === true;
   const filas = productos.map((p) => filaProductoPedido(p, discriminado));
   const notaCancelados = notaProductosCancelados(pedido?.actividades);
+  // La clave de cada fila es su posición (las líneas del JSON del pedido no traen id).
+  const filasTabla: FilaProductoPedido[] = filas.map((f, idx) => ({ ...f, id: idx }));
+  // Estables (D40): solo cambian con `discriminado` (el título de la última columna).
+  const columnas = useMemo<ColumnaTabla<FilaProductoPedido>[]>(() => [
+    { id: 'producto', titulo: 'Producto', ancho: 240, flexible: true, titleCelda: (f) => f.producto,
+      celda: (f) => <span className="block truncate font-bold text-slate-800 text-sm">{f.producto}</span> },
+    { id: 'cantidad', titulo: 'Cant.', ancho: 80, alinear: 'centro',
+      celda: (f) => <span className="text-sm font-bold text-slate-700">{f.cantidad}</span> },
+    { id: 'unitario', titulo: 'P. unit. sin IVA', ancho: 144, alinear: 'derecha', titleCelda: (f) => formatoPesos(f.unitario),
+      celda: (f) => <span className="text-sm font-bold text-slate-700 whitespace-nowrap">{formatoPesos(f.unitario)}</span> },
+    { id: 'iva', titulo: 'IVA', ancho: 128,
+      titleCelda: (f) => (f.iva ? `${f.iva.etiqueta} · ${formatoPesos(f.iva.valor)}` : f.sinDiscriminar ? ETIQUETA_SIN_TARIFA : 'Sin IVA'),
+      celda: (f) => (f.iva ? (
+        <span className="block leading-tight">
+          <span className="block text-sm font-bold text-slate-700">{f.iva.etiqueta}</span>
+          <span className="block text-xs text-slate-500">{formatoPesos(f.iva.valor)}</span>
+        </span>
+      ) : f.sinDiscriminar ? (
+        <span className="text-xs text-slate-500">{ETIQUETA_SIN_TARIFA}</span>
+      ) : (
+        <><span aria-hidden="true" className="text-slate-300">—</span><span className="sr-only">Sin IVA</span></>
+      )) },
+    { id: 'total', titulo: discriminado ? 'Total con IVA' : 'Total', ancho: 144, alinear: 'derecha',
+      titleCelda: (f) => [formatoPesos(f.total), f.iva?.descuento].filter(Boolean).join(' · '),
+      celda: (f) => (
+        <span className="block leading-tight whitespace-nowrap">
+          <span className="block font-black text-slate-800">{formatoPesos(f.total)}</span>
+          {f.iva?.descuento && <span className="block text-xs text-slate-500">{f.iva.descuento}</span>}
+        </span>
+      ) },
+  ], [discriminado]);
+  const prefs = usePreferenciasTabla('ventas.pedido.productos', columnas);
   return (
     <>
       <ul className="@xl:hidden space-y-3">
@@ -210,45 +252,8 @@ export function TablaProductosPedido({ pedido }: { pedido: PedidoBloque3 | null 
         })}
       </ul>
       <div className="hidden @xl:block bg-white border border-slate-200 rounded-2xl overflow-x-auto shadow-sm">
-        <table className="w-full text-left">
-          <thead className="bg-slate-50 border-b border-slate-200">
-            <tr>
-              <th scope="col" className="px-4 py-3 text-xs font-bold text-slate-500 uppercase">Producto</th>
-              <th scope="col" className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-20 text-center">Cant.</th>
-              <th scope="col" className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-36 text-right">P. unit. sin IVA</th>
-              <th scope="col" className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-32">IVA</th>
-              <th scope="col" className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-36 text-right">{discriminado ? 'Total con IVA' : 'Total'}</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {filas.length === 0 && (
-              <tr><td colSpan={5} className="px-4 py-6 text-center text-sm text-slate-500 italic">Sin productos registrados.</td></tr>
-            )}
-            {filas.map((f, idx) => (
-              <tr key={idx} className="hover:bg-slate-50 align-top">
-                <td className="px-4 py-3 font-bold text-slate-800 text-sm break-words min-w-40">{f.producto}</td>
-                <td className="px-4 py-3 text-center text-sm font-bold text-slate-700">{f.cantidad}</td>
-                <td className="px-4 py-3 text-right text-sm font-bold text-slate-700 whitespace-nowrap">{formatoPesos(f.unitario)}</td>
-                <td className="px-4 py-3 text-sm whitespace-nowrap">
-                  {f.iva ? (
-                    <>
-                      <span className="block font-bold text-slate-700">{f.iva.etiqueta}</span>
-                      <span className="block text-xs text-slate-500">{formatoPesos(f.iva.valor)}</span>
-                    </>
-                  ) : f.sinDiscriminar ? (
-                    <span className="text-xs text-slate-500">{ETIQUETA_SIN_TARIFA}</span>
-                  ) : (
-                    <><span aria-hidden="true" className="text-slate-300">—</span><span className="sr-only">Sin IVA</span></>
-                  )}
-                </td>
-                <td className="px-4 py-3 text-right whitespace-nowrap">
-                  <span className="block font-black text-slate-800">{formatoPesos(f.total)}</span>
-                  {f.iva?.descuento && <span className="block text-xs text-slate-500">{f.iva.descuento}</span>}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <TablaEstandar id="ventas.pedido.productos" modo="simple" columnas={columnas} preferencias={prefs} filas={filasTabla}
+          vacio={<span className="italic">Sin productos registrados.</span>} etiqueta="Productos del pedido" />
       </div>
       {notaCancelados && (
         <p className="mt-3 text-xs font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">{notaCancelados}</p>

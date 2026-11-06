@@ -214,19 +214,31 @@ console.log('--- V4 TEST: la caja del Chatter va en el flujo normal (sin sticky)
 
 console.log('--- V5 TEST: barra de pasos del pedido con las etiquetas separadas ---');
 {
+  // B4 T10 (D27; FLUJO-documentos punto 5, RP87): el Status Tracker ya no se arma a mano: lo dibuja la pieza común
+  // PasosFlujo 'barra' con los 5 pasos de PASOS_PEDIDO (pasosConProgreso), solo con stepIndex >= 0. La protección de V5
+  // (a 1024 px las etiquetas salían pegadas) sigue, ahora en la pieza: cada paso es su propio elemento, con la etiqueta
+  // centrada bajo su círculo; entre dos pasos va un conector con margen y ancho mínimo (dos etiquetas nunca se tocan) y,
+  // si una no cabe, se recorta con el nombre completo en su title en lugar de montarse sobre la siguiente.
   const venta = sinComentarios(leer('app/dashboard/ventas/venta/[id]/page.tsx'));
-  const inicio = venta.indexOf('{STEPS.map((s, i) => (');
-  assert.ok(inicio > 0, 'barra de pasos encontrada');
-  const pasos = venta.slice(inicio, venta.indexOf('))}', inicio));
+  assert.ok(venta.includes('const pasosPedido = pasosConProgreso(STEPS, stepIndex);'), 'los pasos de PASOS_PEDIDO con su progreso');
+  assert.match(venta, /\{stepIndex >= 0 && \(\s*<div className="[^"]*">\s*<PasosFlujo variante="barra" pasos=\{pasosPedido\} etiqueta="Pasos del pedido" \/>\s*<\/div>\s*\)\}/,
+    'la barra, con la pieza común y solo con stepIndex >= 0');
+  assert.ok(!venta.includes('{STEPS.map((s, i) => ('), 'sin la barra hecha a mano');
+  const barra = cuerpo(sinComentarios(leer('components/flujo/PasosFlujo.tsx')), 'function PasosBarra(');
   // Ronda 1 (6): clases sueltas, no la cadena exacta.
-  const columna = pasos.match(/<div key=\{s\.key\} className="([^"]*)"/);
-  assert.ok(columna, 'columna de cada paso encontrada');
-  conClases(columna[1], ['flex', 'flex-1', 'basis-0', 'min-w-0', 'flex-col', 'items-center', 'px-1'], [],
-    'cada paso es una columna del mismo ancho, con su espacio a los lados');
-  const etiqueta = pasos.match(/<span className=\{`([^`$]*)/);
-  assert.ok(etiqueta, 'etiqueta de cada paso encontrada');
-  conClases(etiqueta[1], ['text-center', 'leading-tight', 'break-words'], ['whitespace-nowrap'],
-    'la etiqueta va centrada bajo su paso y puede partirse en dos líneas');
+  const conector = barra.match(/: `(mx-1 [^`$]*)/);
+  assert.ok(conector, 'el conector entre dos pasos encontrado');
+  conClases(conector[1], ['mx-1', 'min-w-3', 'flex-1'], [], 'entre dos pasos, un conector con margen y ancho mínimo');
+  assert.ok(barra.includes("'flex-col items-center text-center'"), 'cada paso es una columna, centrada bajo su círculo');
+  const etiqueta = barra.match(/<span title=\{tituloPaso\(paso\)\} className=\{`([^`$]*)/);
+  assert.ok(etiqueta, 'la etiqueta de cada paso encontrada, con su title');
+  conClases(etiqueta[1], ['max-w-full', 'truncate'], [], 'la etiqueta no pasa del ancho de su paso: se recorta, con el nombre en el title');
+  assert.ok(barra.includes('>{paso.label}</span>'), 'la etiqueta es el label del paso');
+  {
+    const { tituloPaso, pasosConProgreso } = await import('../src/lib/flujo.js');
+    const { PASOS_PEDIDO } = await import('../src/lib/estados-pedido.js');
+    for (const p of pasosConProgreso(PASOS_PEDIDO, 2)) assert.ok(tituloPaso(p).includes(p.label), `el title de «${p.label}» lo dice completo`);
+  }
 }
 
 console.log('--- V6 + V7 TEST: lista de solicitudes ---');
@@ -449,7 +461,15 @@ console.log('--- B3 T19 r1: la tabla de productos del pedido a 1024 px (tarjetas
   conClases(envoltura[1], ['hidden', '@xl:block'], [/^(sm|md|lg|xl):/], 'la tabla desde @xl');
   assert.ok(!/(^|[\s"'`])(sm|md|lg|xl):/m.test(tabla), 'sin breakpoints de la ventana en el panel (solo @container)');
   // Accesibilidad (menor 9): los cinco encabezados con scope="col"; el texto gris legible; la raya con su texto.
-  assert.equal((tabla.match(/<th scope="col" /g) || []).length, 5, 'scope="col" en los cinco th');
+  // B4 T10 (D27; TABLA-listas-ventas punto 8, RP38): desde @xl la tabla es TablaEstandar en modo 'simple' con las cinco
+  // columnas (ninguna oculta por defecto) y la tabla estándar pone scope="col" en el encabezado de cada columna visible.
+  assert.match(tabla, /<TablaEstandar id="ventas\.pedido\.productos" modo="simple" columnas=\{columnas\} preferencias=\{prefs\}/);
+  assert.deepEqual([...tabla.matchAll(/\{ id: '([a-z]+)', titulo: /g)].map((m) => m[1]), ['producto', 'cantidad', 'unitario', 'iva', 'total'],
+    'las cinco columnas');
+  assert.ok(!tabla.includes('ocultaPorDefecto'), 'ninguna sale oculta: se ven los cinco encabezados');
+  const estandar = sinComentarios(leer('components/tabla/TablaEstandar.tsx'));
+  const encabezados = estandar.slice(estandar.indexOf('<thead>'), estandar.indexOf('</thead>'));
+  assert.match(encabezados, /\{visibles\.map\(\(v\) => \{[\s\S]*?<th\s+key=\{v\}[\s\S]*?scope="col"/, 'scope="col" en el th de cada columna');
   assert.ok(!tabla.includes('text-slate-400">{ETIQUETA_SIN_TARIFA}'), 'IVA no discriminado sin slate-400');
   assert.ok(/<span aria-hidden="true"[^>]*>—<\/span><span className="sr-only">Sin IVA<\/span>/.test(tabla), 'la raya con su texto');
   // Ruling r1 (menor 6): la columna dice «Total con IVA» cuando el pedido tiene el IVA discriminado.
