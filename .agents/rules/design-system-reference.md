@@ -500,7 +500,8 @@ no como un selector propio encima de la tarjeta. Es una pestaña que no es una v
 - `onCambiar` solo cambia algo si `activa !== enAnalisis`. Tocar otra vez la pestaña en la que ya se está no hace nada.
 
 ```tsx
-const [enAnalisis, setEnAnalisis] = useState(() => leerEnlaceHub(window.location.search).analisis);
+// Como en el Hub: sin window en el render del servidor.
+const [enAnalisis, setEnAnalisis] = useState(() => leerEnlaceHub(typeof window === 'undefined' ? '' : window.location.search).analisis);
 const cambiarApartado = useCallback((analisis: boolean) => {
   setEnAnalisis(analisis);
   setSeleccion(new Set());
