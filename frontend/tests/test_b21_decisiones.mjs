@@ -204,6 +204,20 @@ console.log('--- D2 TEST 4: el botón «Vaciar las vencidas» (solo ADMIN) en la
   // B2.1 (revisión final, Minor 2): y la lista, para que «Canceladas» y los contadores de las pestañas no sigan
   // mostrando las purgadas (como restaurarSC).
   assert.ok(vaciar.indexOf('recargarLista();') > vaciar.indexOf('recargarPapelera();'), 'recarga también la lista');
+  // B4 T8 r1 (I1, D27): dentro de la Papelera la lista va apagada (RP35), así que recargarLista() sola no pone al día las
+  // pestañas ni las tarjetas. pedirConteos() arma otra vez la petición única de los conteos (EXTRA_PAPELERA: sin la vista
+  // y con limit=0) y la marca prende `activo` hasta que llegan (una respuesta nueva: otro `crudo`). Lo mismo en restaurarSC
+  // y en el «Actualizar» de la cabecera.
+  assert.ok(vaciar.indexOf('pedirConteos();') > post, 'vaciar vuelve a pedir los conteos de la Papelera');
+  assert.ok(cuerpoDe(lista, 'async function restaurarSC(').includes('pedirConteos();'), 'restaurar también');
+  const actualizar = cuerpoDe(lista, 'const actualizar = (');
+  assert.match(actualizar, /if \(enPapelera\) \{\s*recargarPapelera\(\);\s*pedirConteos\(\);\s*\}/, 'y «Actualizar» dentro de la Papelera');
+  assert.match(lista, /activo: !enPapelera \|\| conteosPendientes !== null,/, 'la marca prende la lista en la Papelera');
+  assert.match(lista, /extra: enPapelera \? EXTRA_PAPELERA : /, 'en la Papelera, con EXTRA_PAPELERA');
+  assert.match(lista, /const EXTRA_PAPELERA = \{ vista: null, limit: 0 \};/, 'sin la vista y sin filas (RP35)');
+  // La marca se apaga con la respuesta nueva (no con «ya hay conteos», que ya era cierto) y se pone con el crudo de ahora.
+  assert.match(lista, /if \(conteosPendientes !== null && listado\.crudo !== conteosPendientes\.antes\) setConteosPendientes\(null\);/);
+  assert.match(cuerpoDe(lista, 'const pedirConteos = useCallback(('), /setConteosPendientes\(\{ antes: crudoActual\.current \}\);\s*recargarListado\(\);/);
   assert.ok(/avisarError\(err,'No se pudo vaciar la Papelera'\)/.test(vaciar), 'el error sale como aviso');
   assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(vaciar), 'sin diálogos nativos');
 }

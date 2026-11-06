@@ -533,11 +533,14 @@ const VISTAS_SIN_TABLERO = ['soporte', 'papelera'];
 /** R5: el tablero de Solicitudes trae todas, sin Soporte (la vista que reemplaza al viejo sin_soporte). */
 const VISTA_TABLERO_SC = 'todas_sin_soporte';
 /**
- * RP35: la Papelera no es una vista del servidor y ahí la lista no pide nada. Solo si se entra directo a ella (la sesión
- * la recuerda) y todavía no llegaron los conteos, se piden una vez sin filas (limit=0) y sin la vista: las pestañas y las
- * tarjetas, que se ven también en la Papelera, no quedan en gris (D-T8-2 del reporte).
+ * RP35: la Papelera no es una vista del servidor y ahí la lista no pide nada. Solo cuando hacen falta los conteos (se
+ * entró directo a ella y todavía no llegaron, o r1 (I1): después de Restaurar, de «Vaciar las vencidas» o de
+ * «Actualizar»), se piden una vez sin filas (limit=0) y sin la vista: las pestañas y las tarjetas, que se ven también en
+ * la Papelera, no quedan en gris ni viejas (D-T8-2 del reporte).
  */
 const EXTRA_PAPELERA = { vista: null, limit: 0 };
+/** La marca de los conteos pendientes al montar: hacen falta, y todavía no hay ninguna respuesta (crudo null). */
+const CONTEOS_AL_ENTRAR = { antes: null };
 const PAPELERA_SIN_CARGAR: CargaPapelera = { vuelta: -1, filas: null, error: '' };
 const SIN_FILAS_PAPELERA: FilaPapelera[] = [];
 
@@ -1021,15 +1024,23 @@ export default function SolicitudClient() {
 
   // La tabla (T6B): GET /ventas/solicitudes con vista, estados, semáforo, q, orden, limit y offset del estado, más los
   // conteos de las pestañas y el resumen de las tarjetas (RP19) en la MISMA llamada. esperar: !listo (D40): el esqueleto,
-  // nunca «vacío». RP35: en la Papelera no pide nada (nunca manda vista=papelera) salvo, una vez, los conteos si se entró
-  // directo a ella (EXTRA_PAPELERA, D-T8-2).
-  const [conteosVistos, setConteosVistos] = useState(false);
+  // nunca «vacío». RP35: en la Papelera no pide nada y nunca manda vista=papelera, salvo la petición única de los conteos
+  // (EXTRA_PAPELERA: sin la vista y con limit=0, D-T8-2) cuando hacen falta:
+  //  - al entrar directo a ella (la sesión la recuerda) sin conteos todavía (la marca empieza puesta);
+  //  - B4 T8 r1 (I1; B2.1, revisión final Minor 2): después de Restaurar, de «Vaciar las vencidas» y de «Actualizar»
+  //    (pedirConteos), para que las pestañas y las tarjetas no sigan contando las restauradas o las purgadas.
+  // La marca guarda el `crudo` que había al ponerla y se apaga cuando llega otra respuesta (no con «ya hay conteos», que
+  // ya era cierto).
+  const [conteosPendientes, setConteosPendientes] = useState<{ antes: unknown } | null>(CONTEOS_AL_ENTRAR);
   const listado = useListado<FilaSC>({
     ruta: '/ventas/solicitudes', estado, conConteos: true, conResumen: true, esperar: !listo, despachar,
-    activo: !enPapelera || !conteosVistos,
+    activo: !enPapelera || conteosPendientes !== null,
     extra: enPapelera ? EXTRA_PAPELERA : null,
   });
-  if (!conteosVistos && listado.conteos !== null) setConteosVistos(true);
+  if (conteosPendientes !== null && listado.crudo !== conteosPendientes.antes) setConteosPendientes(null);
+  // El crudo de ahora, para la marca que se pone en un manejador (después de un await, el del render ya pudo cambiar).
+  const crudoActual = useRef<unknown>(null);
+  useLayoutEffect(() => { crudoActual.current = listado.crudo; });
 
   // La franja del flujo (R8): GET /ventas/flujo; recargaFlujo sube con cada recarga de la lista.
   const [recargaFlujo, setRecargaFlujo] = useState(0);
@@ -1065,6 +1076,11 @@ export default function SolicitudClient() {
     recargarTablero();
     setRecargaFlujo((n) => n + 1);
   }, [recargarListado, recargarTablero]);
+  // B4 T8 r1 (I1): una petición más de los conteos (en la Papelera, la de EXTRA_PAPELERA; fuera de ella, la de siempre).
+  const pedirConteos = useCallback(() => {
+    setConteosPendientes({ antes: crudoActual.current });
+    recargarListado();
+  }, [recargarListado]);
 
   // La Papelera (RP35, RP37): GET /ventas/solicitudes/papelera (trae como mucho 200) en modo cliente. Se pide al entrar a
   // la pestaña y con «Actualizar» (vueltaPapelera); el estado se escribe solo cuando llega la respuesta.
@@ -1210,9 +1226,11 @@ export default function SolicitudClient() {
       const d=await apiFetch('/ventas/papelera/purgar',{method:'POST'});
       const purgadas=(d?.data??d)?.purgadas;
       avisar(textoPapeleraVaciada(purgadas),{tono:purgadas>0?'ok':'info'});
-      // B4 T8: la Papelera y también la lista (las pestañas, las tarjetas y la franja ya no cuentan las purgadas).
+      // B4 T8: la Papelera y también la lista (las pestañas, las tarjetas y la franja ya no cuentan las purgadas). r1 (I1):
+      // dentro de la Papelera la lista va apagada (RP35): pedirConteos() trae otra vez sus conteos y su resumen.
       recargarPapelera();
       recargarLista();
+      pedirConteos();
     }catch(err){
       avisarError(err,'No se pudo vaciar la Papelera');
       // Sin respuesta del servidor (la red se cortó) pudo vaciarse igual: la lista recargada dice qué quedó.
@@ -1232,6 +1250,7 @@ export default function SolicitudClient() {
         {tono:'ok',accion:{texto:'Ver solicitud',href:`/dashboard/ventas/solicitud/${id}`}});
       recargarPapelera();
       recargarLista();
+      pedirConteos();
     }catch(err:any){avisarError(err,'No se pudo restaurar la solicitud');}
   }
 
@@ -1427,7 +1446,10 @@ export default function SolicitudClient() {
   // «Actualizar»: la lista, el tablero, la franja y, en la Papelera, también ella.
   const actualizar = () => {
     recargarLista();
-    if (enPapelera) recargarPapelera();
+    if (enPapelera) {
+      recargarPapelera();
+      pedirConteos();
+    }
   };
   const actualizando = listado.recargando || flujo.cargando || cargandoPapelera;
 
