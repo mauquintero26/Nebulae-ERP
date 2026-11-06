@@ -873,12 +873,13 @@ console.log('--- B4 T9 TEST K: tarjetaCotizacion — la tarjeta del tablero de C
     dias_creado: 2, resolucion: 'ATRASADO', dias_sin_mov: 4, seguimiento_estado: 'AGOTADO',
   };
   const t = kv.tarjetaCotizacion(cot);
-  assert.deepEqual(t, tarjetaHub(cot, { returnTo: RUTA_LISTA_COTIZACIONES }));
+  const base = tarjetaHub(cot, { returnTo: RUTA_LISTA_COTIZACIONES });
+  // r1 (I1): lo demás es la tarjeta del Hub; los chips llevan delante los de la COT (punto 6 de KANBAN-ventas-listas).
+  assert.deepEqual({ ...t, chips: null }, { ...base, chips: null }, 'lo demás es la tarjeta del Hub');
   assert.equal(t.tipo, 'COT');
   assert.equal(t.subtitulo, 'Laura', 'el cotizador');
   assert.equal(t.monto, 250000);
   assert.deepEqual(t.estado, estadoDeTarjeta('COT', 'CONFIRMADA'));
-  assert.deepEqual(t.chips.map((c) => c.texto), ['Atrasado 4 días', 'Sin respuesta al recordatorio']);
   assert.deepEqual(t.accionPrincipal, { texto: 'Ver pedido', href: '/dashboard/ventas/venta/30?return_to=%2Fdashboard%2Fventas%2Fcotizacion', tono: 'emerald' });
   assert.equal(kv.tarjetaCotizacion({ ...cot, estado: 'BORRADOR', pedidos_venta: [] }).accionPrincipal.href,
     '/dashboard/ventas/cotizacion/12?return_to=%2Fdashboard%2Fventas%2Fcotizacion');
@@ -887,6 +888,37 @@ console.log('--- B4 T9 TEST K: tarjetaCotizacion — la tarjeta del tablero de C
   assert.deepEqual(kv.tarjetaCotizacion(sinTipo), t);
   assert.equal(kv.tarjetaCotizacion(cot, { returnTo: RUTA_HUB_VENTAS }).accionPrincipal.href,
     '/dashboard/ventas/venta/30?return_to=%2Fdashboard%2Fventas');
+
+  // r1 (I1), los chips de la COT: primero el del pedido («Pedido PVEN-…» emerald o «Pedido … cancelado» rose, COT-LISTA),
+  // después «Sin precio» (amber) si el total no es mayor que 0, y después los de chipsDocumentoVentas; como mucho 3.
+  // (1) CONFIRMADA con un PVEN vigente: «Pedido PVEN-30» delante del atraso y del recordatorio.
+  assert.deepEqual(t.chips, [{ texto: 'Pedido PVEN-30', tono: 'emerald' }, { texto: 'Atrasado 4 días', tono: 'rose' },
+    { texto: 'Sin respuesta al recordatorio', tono: 'amber' }]);
+  assert.deepEqual(kv.tarjetaCotizacion({ ...cot, resolucion: 'ACCION_TOMADA', seguimiento_estado: null }).chips,
+    [{ texto: 'Pedido PVEN-30', tono: 'emerald' }], 'solo el del pedido');
+  // (2) BORRADOR con total 0 y un pedido cancelado (y el cliente no la volvió a confirmar): la marca rosa y «Sin precio».
+  const caida = { tipo: 'COT', id: 13, numero: 'COT-13', estado: 'BORRADOR', total_cop: 0, productos: [],
+    pedidos_venta: [{ id: 31, numero: 'PVEN-31', estado: 'CANCELADO' }], dias_creado: 1, resolucion: 'NO_RESUELTO' };
+  assert.deepEqual(kv.tarjetaCotizacion(caida).chips,
+    [{ texto: 'Pedido PVEN-31 cancelado', tono: 'rose' }, { texto: 'Sin precio', tono: 'amber' }]);
+  assert.deepEqual(kv.tarjetaCotizacion({ ...caida, confirmacion_vigente: true, estado: 'CONFIRMADA' }).chips.map((c) => c.texto),
+    ['Sin precio'], 'la re-confirmada no lleva la marca rosa (COT-LISTA, como la tabla)');
+  // (3) Más chips que el tope: la marca, «Sin precio» y el atraso; el recordatorio y los cambios del cliente no caben.
+  const llena = { ...caida, resolucion: 'ATRASADO', dias_sin_mov: 6, seguimiento_estado: 'AGOTADO',
+    cambios_cliente: { tipo: 'CAMBIOS', at: '2026-11-01T10:00:00', comentario: 'Otro color' } };
+  assert.equal(chipsDocumentoVentas(llena, 'COT').length, 3, 'chipsDocumentoVentas solo ya llena el tope');
+  assert.deepEqual(kv.tarjetaCotizacion(llena).chips.map((c) => c.texto), ['Pedido PVEN-31 cancelado', 'Sin precio', 'Atrasado 6 días']);
+  // La regla es la de la tabla (listas-ventas.js), no una copia.
+  const { marcaPedidoCotizacion, cotizacionSinPrecio } = await import('../src/lib/listas-ventas.js');
+  for (const fila of [cot, caida, llena, { ...caida, pedidos_venta: [] }]) {
+    const propios = [marcaPedidoCotizacion(fila), cotizacionSinPrecio(fila) ? { texto: 'Sin precio', tono: 'amber' } : null].filter(Boolean);
+    assert.deepEqual(kv.tarjetaCotizacion(fila).chips, [...propios, ...chipsDocumentoVentas(fila, 'COT')].slice(0, 3), fila.numero);
+  }
+  // Sin la COT, tarjetaHub queda igual: las tarjetas del Hub no llevan estos chips.
+  assert.deepEqual(tarjetaHub(caida).chips, chipsDocumentoVentas(caida, 'COT'));
+  // El tono emerald existe en los chips del tablero (CLASE_CHIP de components/ui/Kanban.tsx).
+  const kanban = readFileSync(new URL('../src/components/ui/Kanban.tsx', import.meta.url), 'utf8');
+  assert.match(kanban, /emerald: 'bg-emerald-50 text-emerald-700 border-emerald-200',/);
 }
 
 console.log('--- B4 T9 TEST L: el cableado del tablero de Cotizaciones (C15, RP16, D11, D39; D27) ---');

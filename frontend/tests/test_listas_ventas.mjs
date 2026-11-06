@@ -815,24 +815,78 @@ console.log('--- B4 T9 TEST 1: tarjetasCotizaciones — las 4 tarjetas de Cotiza
   assert.equal(incompleto.confirmadas.ayuda, 'Sin confirmadas');
 }
 
-console.log('--- B4 T9 TEST 2: fechaPorVencer — la Entrega est. en ámbar (la regla de isExpiringSoon, fuera del render) ---');
+console.log('--- B4 T9 TEST 2 (r1, I2): la Entrega est. es un DÍA de calendario: diaDeNegocio, fechaNegocioVencida y fechaPorVencer ---');
 {
-  // La de antes: no pasó todavía y faltan `dias` días o menos (7 por defecto). La fecha del API llega en UTC sin zona.
-  const ahora = Date.UTC(2026, 10, 6, 15, 0, 0);
-  const DIA = 86400000;
-  assert.equal(listas.fechaPorVencer('2026-11-06T15:00:00', 7, ahora), true, 'ahora mismo: todavía no pasó');
-  assert.equal(listas.fechaPorVencer('2026-11-13T15:00:00', 7, ahora), true, 'justo 7 días');
-  assert.equal(listas.fechaPorVencer('2026-11-13T15:00:01', 7, ahora), false, 'más de 7 días');
-  assert.equal(listas.fechaPorVencer('2026-11-06T14:59:59', 7, ahora), false, 'ya pasó (eso es fechaVencida)');
-  assert.equal(listas.fechaPorVencer('2026-11-08 15:00:00', 7, ahora), true, 'con espacio, como el backend');
-  assert.equal(listas.fechaPorVencer('2026-11-08T15:00:00Z', 1, ahora), false, 'con otro plazo');
-  assert.equal(listas.fechaPorVencer(new Date(ahora + 3 * DIA).toISOString(), undefined, ahora), true, '7 días por defecto');
-  assert.equal(listas.fechaPorVencer(new Date(ahora + 8 * DIA).toISOString(), undefined, ahora), false, 'por defecto, 8 días ya no');
-  for (const nada of [null, undefined, '', 'x', 5]) assert.equal(listas.fechaPorVencer(nada, 7, ahora), false, String(nada));
-  // Una fecha no es las dos cosas a la vez.
-  for (const iso of ['2026-11-01T00:00:00', '2026-11-07T00:00:00', '2026-12-01T00:00:00']) {
-    assert.ok(!(listas.fechaVencida(iso, ahora) && listas.fechaPorVencer(iso, 7, ahora)), iso);
+  // fecha_entrega_estimada es una fecha de negocio (erp_ventas.py, la F3 del B3 y la cabecera de fechas-colombia.js): se
+  // lee su día con los 10 primeros caracteres, sin pasarla a ninguna zona, y se compara con el día de HOY en Colombia
+  // (diaColombia), como vencen_pronto con valida_hasta (RP89). r1 quita la lectura como instante UTC de r0, que corría la
+  // medianoche al día anterior.
+  const { fechaCorta, fechaSolo } = await import('../src/lib/fechas-colombia.js');
+  const ENTREGA = '2026-11-10T00:00:00';   // lo que guarda el selector de fecha de la calculadora
+  assert.equal(listas.diaDeNegocio(ENTREGA), '2026-11-10');
+  assert.equal(fechaCorta(listas.diaDeNegocio(ENTREGA)), '10 nov 2026', 'la celda: el mismo día del detalle y del editor');
+  assert.equal(fechaSolo(ENTREGA), '10 de noviembre de 2026', 'el title');
+  for (const [valor, dia] of [['2026-11-10', '2026-11-10'], ['2026-11-10 00:00:00', '2026-11-10'], [' 2026-11-10T23:59:59 ', '2026-11-10'],
+    ['2026-11-10T03:00:00Z', '2026-11-10'], ['2026-02-30T00:00:00', ''], ['10/11/2026', ''], ['', ''], [null, ''], [5, '']]) {
+    assert.equal(listas.diaDeNegocio(valor), dia, String(valor));
   }
+  // El día de hoy es el de Colombia: las 8 p. m. del 9 (la 1 a. m. UTC del 10) todavía es el 9.
+  const nueveNoche = Date.UTC(2026, 10, 10, 1, 0, 0);
+  assert.equal(listas.fechaNegocioVencida(ENTREGA, nueveNoche), false, 'a las 8 p. m. del 9 no está vencida');
+  assert.equal(listas.fechaPorVencer(ENTREGA, 7, nueveNoche), true, 'y vence en 7 días o menos');
+  const diezNoche = Date.UTC(2026, 10, 11, 4, 0, 0);   // las 11 p. m. del 10 en Colombia
+  assert.equal(listas.fechaNegocioVencida(ENTREGA, diezNoche), false, 'el mismo día no está vencida');
+  assert.equal(listas.fechaPorVencer(ENTREGA, 7, diezNoche), true, 'el mismo día, por vencer');
+  const once = Date.UTC(2026, 10, 11, 15, 0, 0);
+  assert.equal(listas.fechaNegocioVencida(ENTREGA, once), true, 'el 11 sí está vencida');
+  assert.equal(listas.fechaPorVencer(ENTREGA, 7, once), false, 'vencida no es por vencer');
+  // El plazo cuenta días de calendario, los dos bordes incluidos (hoy + 7), y es 7 por defecto.
+  const tres = Date.UTC(2026, 10, 3, 15, 0, 0);
+  const dos = Date.UTC(2026, 10, 2, 15, 0, 0);
+  assert.equal(listas.fechaPorVencer(ENTREGA, 7, tres), true, 'justo 7 días');
+  assert.equal(listas.fechaPorVencer(ENTREGA, 7, dos), false, '8 días ya no');
+  assert.equal(listas.fechaPorVencer(ENTREGA, undefined, tres), true, '7 por defecto');
+  assert.equal(listas.fechaPorVencer(ENTREGA, undefined, dos), false, 'por defecto, 8 días ya no');
+  assert.equal(listas.fechaPorVencer(ENTREGA, 1, nueveNoche), true, 'mañana, con un plazo de 1');
+  assert.equal(listas.fechaPorVencer('2026-12-31T00:00:00', 30, Date.UTC(2026, 11, 2, 15)), true, 'el plazo cruza el mes');
+  for (const nada of [null, undefined, '', 'x', 5, '2026-02-30T00:00:00']) {
+    assert.equal(listas.fechaPorVencer(nada, 7, once), false, String(nada));
+    assert.equal(listas.fechaNegocioVencida(nada, once), false, String(nada));
+  }
+  // Sin `ahora`, el día de hoy del sistema.
+  assert.equal(listas.fechaNegocioVencida('2000-01-01T00:00:00'), true);
+  assert.equal(listas.fechaNegocioVencida('2999-01-01T00:00:00'), false);
+  // Una fecha no es las dos cosas a la vez.
+  for (const iso of ['2026-11-01T00:00:00', '2026-11-10T00:00:00', '2026-11-12T00:00:00', '2026-12-01T00:00:00']) {
+    assert.ok(!(listas.fechaNegocioVencida(iso, once) && listas.fechaPorVencer(iso, 7, once)), iso);
+  }
+}
+
+console.log('--- B4 T9 TEST 3 (r1, I1): marcaPedidoCotizacion y cotizacionSinPrecio — COT-LISTA en un solo lugar (tabla y tablero) ---');
+{
+  // La marca del pedido de una COT: «Pedido PVEN-…» (emerald) con un pedido vigente; «Pedido … cancelado» (rose) si todos
+  // se cancelaron y el cliente no la volvió a confirmar (avisoCancelado, como el detalle); si no, null.
+  const vigente = { id: 30, numero: 'PVEN-30', estado: 'EN_PROCESO' };
+  const cancelado = { id: 31, numero: 'PVEN-31', estado: 'CANCELADO' };
+  assert.deepEqual(listas.marcaPedidoCotizacion({ estado: 'CONFIRMADA', pedidos_venta: [vigente] }), { texto: 'Pedido PVEN-30', tono: 'emerald' });
+  assert.deepEqual(listas.marcaPedidoCotizacion({ estado: 'CONFIRMADA', pedidos_venta: [cancelado, vigente] }),
+    { texto: 'Pedido PVEN-30', tono: 'emerald' }, 'con uno vigente manda el vigente');
+  assert.deepEqual(listas.marcaPedidoCotizacion({ estado: 'BORRADOR', pedidos_venta: [cancelado] }),
+    { texto: 'Pedido PVEN-31 cancelado', tono: 'rose' });
+  assert.deepEqual(listas.marcaPedidoCotizacion({ estado: 'BORRADOR', pedidos_venta: [{ ...cancelado, numero: 'PVEN-29' }, cancelado] }),
+    { texto: 'Pedido PVEN-31 cancelado', tono: 'rose' }, 'el último cancelado');
+  assert.equal(listas.marcaPedidoCotizacion({ estado: 'CONFIRMADA', confirmacion_vigente: true, pedidos_venta: [cancelado] }), null,
+    'el cliente la volvió a confirmar: sin la marca');
+  assert.deepEqual(listas.marcaPedidoCotizacion({ estado: 'BORRADOR', pedidos_venta: [{ id: 31, estado: 'CANCELADO' }] }),
+    { texto: 'Pedido cancelado', tono: 'rose' }, 'sin número, sin el espacio de más');
+  for (const sin of [{ estado: 'BORRADOR', pedidos_venta: [] }, { estado: 'BORRADOR' }, null, undefined]) {
+    assert.equal(listas.marcaPedidoCotizacion(sin), null, JSON.stringify(sin));
+  }
+  // «Sin precio»: el total no es mayor que 0 (o no viene), en cualquier estado (como la tabla de antes).
+  for (const [total, esperado] of [[0, true], [null, true], [undefined, true], ['', true], ['x', true], [-5, true], [1, false], ['250000', false]]) {
+    assert.equal(listas.cotizacionSinPrecio({ estado: 'RECHAZADA', total_cop: total }), esperado, String(total));
+  }
+  assert.equal(listas.cotizacionSinPrecio(null), true);
 }
 
 console.log('--- B4 T9: el cableado de la lista de Cotizaciones con el servidor (el patrón de T8; D27) ---');
@@ -905,12 +959,23 @@ console.log('--- B4 T9: el cableado de la lista de Cotizaciones con el servidor 
   assert.match(acciones, /<MenuFila items=\{items\} etiqueta=\{`Acciones de \$\{cot\.numero\}`\} \/>/);
   assert.match(acciones, /enlaceDocumento\('SC', cot\.sc_id, \{ returnTo: RUTA_LISTA_COTIZACIONES \}\)/);
   assert.match(acciones, /const pedido = pedidoVigente\(cot\);/);
-  // COT-LISTA: «Pedido …» o «Pedido … cancelado» debajo del número (la misma regla de antes, en marcaPedido).
-  const marca = codigo.slice(codigo.indexOf('function marcaPedido('), codigo.indexOf('\n}\n', codigo.indexOf('function marcaPedido(')));
-  assert.match(marca, /const vigente = pedidoVigente\(cot\);\s*if \(vigente\) return \{ texto: `Pedido \$\{vigente\.numero \?\? ''\}`\.trim\(\)/);
-  assert.match(marca, /if \(soloPedidosCancelados\(cot\) && situacionPedidoCotizacion\(cot\)\.avisoCancelado\) \{\s*return \{ texto: `Pedido \$\{ultimoPedidoCancelado\(cot\)\?\.numero \?\? ''\} cancelado`/);
-  // La Entrega est. con las reglas de la librería (antes isOverdue / isExpiringSoon en la pantalla).
-  assert.match(codigo, /const vencida = fechaVencida\(cot\.fecha_entrega_estimada\);\s*const porVencer = !vencida && fechaPorVencer\(cot\.fecha_entrega_estimada\);/);
+  // COT-LISTA: «Pedido …» o «Pedido … cancelado» debajo del número. r1 (I1): con marcaPedidoCotizacion (listas-ventas.js,
+  // TEST 3), la MISMA regla de la tarjeta del tablero; la pantalla ya no tiene una copia.
+  const celdaNumero = codigo.slice(codigo.indexOf('function CeldaNumero('), codigo.indexOf('\n}\n', codigo.indexOf('function CeldaNumero(')));
+  assert.match(celdaNumero, /const marca = marcaPedidoCotizacion\(cot\);/);
+  assert.match(celdaNumero, /\{marca && <span className=\{`[^`]*\$\{TEXTO_MARCA\[marca\.tono\]\}`\}>\{marca\.texto\}<\/span>\}/);
+  assert.match(codigo, /const TEXTO_MARCA: Record<'emerald' \| 'rose', string> = \{ emerald: 'text-emerald-700', rose: 'text-rose-600' \};/);
+  assert.match(codigo, /const tituloNumero = \(cot: FilaCOT\) =>\s*\[cot\.numero, cot\.sc_numero \? `SC: \$\{cot\.sc_numero\}` : null, marcaPedidoCotizacion\(cot\)\?\.texto\]/);
+  assert.ok(!/function marcaPedido\(|soloPedidosCancelados\(|situacionPedidoCotizacion\(/.test(codigo), 'sin la regla copiada en la pantalla');
+  // «Sin precio» de la columna Total con cotizacionSinPrecio, la del chip del tablero.
+  assert.match(codigo, /\{cotizacionSinPrecio\(cot\) && <span className=\{`\$\{CHIP\} text-\[10px\] \$\{CLASE_CHIP\.amber\}`\}>Sin precio<\/span>\}/);
+  assert.match(codigo, /titleCelda: \(cot\) => \[fCOP\(cot\.total_cop\), cotizacionSinPrecio\(cot\) \? 'Sin precio' : null\]/);
+  // La Entrega est. con las reglas de la librería (antes isOverdue / isExpiringSoon en la pantalla). r1 (I2): como día de
+  // calendario (diaDeNegocio y fechaSolo), con fechaNegocioVencida y fechaPorVencer; nunca fechaVencida (instantes).
+  assert.match(codigo, /const vencida = fechaNegocioVencida\(cot\.fecha_entrega_estimada\);\s*const porVencer = !vencida && fechaPorVencer\(cot\.fecha_entrega_estimada\);/);
+  assert.ok(codigo.includes("{fechaCorta(diaDeNegocio(cot.fecha_entrega_estimada)) || '-'}"), 'la celda: el día de calendario');
+  assert.ok(codigo.includes("titleCelda: (cot) => fechaSolo(cot.fecha_entrega_estimada) || 'Sin fecha de entrega'"), 'el title: el mismo día');
+  assert.ok(!/fechaVencida|fechaLarga/.test(codigo), 'ni fechaVencida ni fechaLarga con la fecha de entrega');
   assert.ok(!/isOverdue|isExpiringSoon/.test(codigo), 'sin las reglas de fecha en la pantalla');
 
   // Bloque 5 (RP19): las 4 tarjetas con el resumen de la misma llamada; las 3 primeras son vistas y el total no.

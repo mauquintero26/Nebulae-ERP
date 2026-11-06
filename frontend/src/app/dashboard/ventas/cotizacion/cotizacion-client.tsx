@@ -35,10 +35,11 @@ import {
   resumenPropagacionPedido, anticipoDeCalculadora,
 } from '@/lib/dinero-ventas';
 // B4 T9: la lista ya no cuenta en el navegador (diasAlerta, pestanaCotizacion): las vistas, los conteos y el resumen son
-// del servidor (T6B). Las marcas del pedido de cada fila (COT-LISTA) siguen saliendo de aquí.
+// del servidor (T6B). Las marcas del pedido de cada fila (COT-LISTA) siguen saliendo de aquí. r1 (I1 e I2): la marca del
+// pedido y «Sin precio» con la regla de la tarjeta del tablero; la Entrega est. como día de calendario.
 import {
-  pedidoVigente, soloPedidosCancelados, ultimoPedidoCancelado, situacionPedidoCotizacion, tarjetasCotizaciones,
-  fechaVencida, fechaPorVencer,
+  pedidoVigente, tarjetasCotizaciones, marcaPedidoCotizacion, cotizacionSinPrecio, diaDeNegocio, fechaNegocioVencida,
+  fechaPorVencer,
 } from '@/lib/listas-ventas';
 import {
   SubNav, PageHeader, Modal, Button, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila, ModalMotivo,
@@ -62,7 +63,7 @@ import {
   opcionesEstadosCotizaciones, reglaSoltarCotizacion, tarjetaCotizacion,
 } from '@/lib/kanban-ventas';
 import { ESTADOS_COTIZACION } from '@/lib/estados-cotizacion';
-import { fechaCorta, fechaLarga } from '@/lib/fechas-colombia';
+import { fechaCorta, fechaSolo } from '@/lib/fechas-colombia';
 import { enlaceDocumento } from '@/lib/analisis';
 import { textoDeError } from '@/lib/avisos';
 import { TABLE } from '@/lib/design-system';
@@ -106,8 +107,9 @@ export const fTime = (iso: string | null | undefined) =>
   iso ? new Date(iso).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }) : '';
 // H42: pesos enteros ('$1.062.523'); se mantiene el export porque lo importan el detalle y otros.
 export const fCOP = (v: number | string | null | undefined) => formatoPesos(v);
-// B4 T9: isOverdue e isExpiringSoon (la Entrega est. en rojo o en ámbar) pasaron a fechaVencida y fechaPorVencer de
-// lib/listas-ventas.js (probadas, con la fecha del API leída como UTC); «vencen en 7 días» es resumen.vencen_pronto (RP89).
+// B4 T9: isOverdue e isExpiringSoon (la Entrega est. en rojo o en ámbar) pasaron a lib/listas-ventas.js, probadas. r1
+// (I2): son fechaNegocioVencida y fechaPorVencer, que leen la entrega como día de calendario (una fecha de negocio, como
+// fDate: no se corre de día); «vencen en 7 días» es resumen.vencen_pronto (RP89).
 
 // â”€â”€ ActionIcon for activity â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export function ActionDot({ action }: { action: string }) {
@@ -878,28 +880,22 @@ const autorActual = () => { const u = getUsuarioActual(); return u.name || u.ema
 type AccionesFilaCOT = { abrir: (cot: { id: number }) => void; ir: (ruta: string) => void };
 const AccionesLista = createContext<AccionesFilaCOT | null>(null);
 
-/** COT-LISTA: «Pedido PVEN-…» si tiene un pedido vigente, o «Pedido … cancelado» si todos se cancelaron y el cliente no la
- *  volvió a confirmar (igual que en su detalle). */
-function marcaPedido(cot: FilaCOT): { texto: string; clase: string } | null {
-  const vigente = pedidoVigente(cot);
-  if (vigente) return { texto: `Pedido ${vigente.numero ?? ''}`.trim(), clase: 'text-emerald-700' };
-  if (soloPedidosCancelados(cot) && situacionPedidoCotizacion(cot).avisoCancelado) {
-    return { texto: `Pedido ${ultimoPedidoCancelado(cot)?.numero ?? ''} cancelado`, clase: 'text-rose-600' };
-  }
-  return null;
-}
+/** r1 (I1): el color del texto de la marca del pedido en la celda (los tonos de marcaPedidoCotizacion, los del chip del
+ *  tablero). */
+const TEXTO_MARCA: Record<'emerald' | 'rose', string> = { emerald: 'text-emerald-700', rose: 'text-rose-600' };
 
 const tituloNumero = (cot: FilaCOT) =>
-  [cot.numero, cot.sc_numero ? `SC: ${cot.sc_numero}` : null, marcaPedido(cot)?.texto].filter(Boolean).join(' · ');
+  [cot.numero, cot.sc_numero ? `SC: ${cot.sc_numero}` : null, marcaPedidoCotizacion(cot)?.texto].filter(Boolean).join(' · ');
 
-/** COT / SC: el número y, debajo, la solicitud de origen y la marca del pedido (COT-LISTA). */
+/** COT / SC: el número y, debajo, la solicitud de origen y la marca del pedido (COT-LISTA). r1 (I1): la marca sale de
+ *  marcaPedidoCotizacion (listas-ventas.js), la misma regla de la tarjeta del tablero. */
 function CeldaNumero({ cot }: { cot: FilaCOT }) {
-  const marca = marcaPedido(cot);
+  const marca = marcaPedidoCotizacion(cot);
   return (
     <span className="flex min-w-0 flex-col items-start leading-tight">
       <span className="max-w-full truncate text-xs font-black text-amber-700">{cot.numero}</span>
       {cot.sc_numero && <span className="max-w-full truncate text-[10px] font-bold text-indigo-600">SC: {cot.sc_numero}</span>}
-      {marca && <span className={`max-w-full truncate text-[10px] font-bold ${marca.clase}`}>{marca.texto}</span>}
+      {marca && <span className={`max-w-full truncate text-[10px] font-bold ${TEXTO_MARCA[marca.tono]}`}>{marca.texto}</span>}
     </span>
   );
 }
@@ -913,25 +909,30 @@ function CeldaCliente({ cot }: { cot: FilaCOT }) {
   );
 }
 
-/** Total: el monto y, debajo, «Sin precio» si el total no es mayor que 0 (como antes, en cualquier estado). */
-const sinPrecio = (cot: FilaCOT) => !(Number(cot.total_cop) > 0);
+/** Total: el monto y, debajo, «Sin precio» si el total no es mayor que 0 (como antes, en cualquier estado). r1 (I1): la
+ *  regla es cotizacionSinPrecio (listas-ventas.js), la misma del chip del tablero. */
 function CeldaTotal({ cot }: { cot: FilaCOT }) {
   return (
     <span className="flex min-w-0 flex-col items-end gap-0.5 leading-tight">
       <span className="max-w-full truncate text-xs font-black text-slate-800">{fCOP(cot.total_cop)}</span>
-      {sinPrecio(cot) && <span className={`${CHIP} text-[10px] ${CLASE_CHIP.amber}`}>Sin precio</span>}
+      {cotizacionSinPrecio(cot) && <span className={`${CHIP} text-[10px] ${CLASE_CHIP.amber}`}>Sin precio</span>}
     </span>
   );
 }
 
-/** Entrega est.: en rojo y con el ícono si ya pasó (fechaVencida) y en ámbar si vence en 7 días o menos (fechaPorVencer). */
+/**
+ * Entrega est.: en rojo y con el ícono si ya pasó y en ámbar si vence en 7 días o menos. r1 (I2): fecha_entrega_estimada
+ * es una fecha de NEGOCIO (la F3 del B3): se pinta su día de calendario (diaDeNegocio, sin pasarla a ninguna zona; el
+ * mismo día del detalle y del editor) y «vencida» y «por vencer» comparan ese día con el de hoy en Colombia
+ * (fechaNegocioVencida y fechaPorVencer). Nunca fechaVencida, que lee instantes.
+ */
 function CeldaEntrega({ cot }: { cot: FilaCOT }) {
-  const vencida = fechaVencida(cot.fecha_entrega_estimada);
+  const vencida = fechaNegocioVencida(cot.fecha_entrega_estimada);
   const porVencer = !vencida && fechaPorVencer(cot.fecha_entrega_estimada);
   return (
     <span className={`text-xs font-bold ${vencida ? 'text-red-600' : porVencer ? 'text-amber-700' : 'text-slate-600'}`}>
       {vencida && <AlertCircle size={11} aria-hidden="true" className="mr-1 inline" />}
-      {fechaCorta(cot.fecha_entrega_estimada) || '-'}
+      {fechaCorta(diaDeNegocio(cot.fecha_entrega_estimada)) || '-'}
     </span>
   );
 }
@@ -1005,13 +1006,14 @@ export const COLUMNAS_TABLA_COT: ColumnaTabla<FilaCOT>[] = [
   { id: 'cotizador', titulo: 'Cotizador', ancho: 120, ordenable: 'cotizador', titleCelda: (cot) => cot.cotizador || null,
     celda: (cot) => <span className="block truncate text-xs font-medium text-slate-600">{cot.cotizador || '-'}</span> },
   { id: 'total', titulo: 'Total', ancho: 104, alinear: 'derecha', ordenable: 'total',
-    titleCelda: (cot) => [fCOP(cot.total_cop), sinPrecio(cot) ? 'Sin precio' : null].filter(Boolean).join(' · '),
+    titleCelda: (cot) => [fCOP(cot.total_cop), cotizacionSinPrecio(cot) ? 'Sin precio' : null].filter(Boolean).join(' · '),
     celda: (cot) => <CeldaTotal cot={cot} /> },
   { id: 'anticipo', titulo: 'Anticipo', ancho: 96, alinear: 'derecha', ocultaPorDefecto: true, ordenable: 'anticipo',
     titleCelda: (cot) => fCOP(cot.anticipo_cop),
     celda: (cot) => <span className="block truncate text-xs font-bold text-slate-600">{fCOP(cot.anticipo_cop)}</span> },
   { id: 'entrega', titulo: 'Entrega est.', ancho: 104, ocultaPorDefecto: true, ordenable: 'entrega',
-    titleCelda: (cot) => fechaLarga(cot.fecha_entrega_estimada) || 'Sin fecha de entrega', celda: (cot) => <CeldaEntrega cot={cot} /> },
+    // r1 (I2): el title es el día de calendario (fechaSolo), como la celda.
+    titleCelda: (cot) => fechaSolo(cot.fecha_entrega_estimada) || 'Sin fecha de entrega', celda: (cot) => <CeldaEntrega cot={cot} /> },
   { id: 'estado', titulo: 'Estado', ancho: 120, clave: true, ordenable: 'estado', titleCelda: tituloEstado,
     celda: (cot) => <CeldaEstado cot={cot} /> },
   { id: 'acciones', titulo: 'Acciones', ancho: 88, clave: true, fija: 'derecha', celda: (cot) => <CeldaAcciones cot={cot} /> },

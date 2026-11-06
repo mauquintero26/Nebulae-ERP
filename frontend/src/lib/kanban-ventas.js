@@ -49,7 +49,9 @@ import {
   ESTADOS_SC, PASOS_SC, ESTADOS_SC_HEREDADOS, ESTADOS_SC_CON_CONFIRMACION, infoEstadoSolicitud, puedeReiniciar,
 } from './estados-solicitud.js';
 import { ESTADOS_COTIZACION, infoEstadoCotizacion } from './estados-cotizacion.js';
-import { pedidoVigente, cotizacionesVigentes, pasosParaCancelarSolicitud } from './listas-ventas.js';
+import {
+  pedidoVigente, cotizacionesVigentes, pasosParaCancelarSolicitud, marcaPedidoCotizacion, cotizacionSinPrecio,
+} from './listas-ventas.js';
 import {
   avisoCambiosCliente, etiquetaChipCambios, RUTA_LISTA_SOLICITUDES, RUTA_LISTA_COTIZACIONES,
 } from './cambios-cliente.js';
@@ -72,7 +74,8 @@ import { queryListado } from './tabla.js';
  * @typedef {'nueva' | 'asignada' | 'pendiente' | 'confirmada' | 'cancelada'} ClaveColumnaSc
  * @typedef {{clave: ClaveColumnaSc, titulo: string, tono: string, estados: ReadonlyArray<string>, cerrada: boolean,
  *   ayuda?: string}} ColumnaSc
- * @typedef {'rose' | 'amber'} TonoChip
+ * @typedef {'rose' | 'amber' | 'emerald'} TonoChip
+ *   B4 T9 r1 (I1): emerald es el de «Pedido PVEN-…» de la tarjeta de Cotizaciones (CLASE_CHIP ya lo tiene).
  * @typedef {{texto: string, tono: TonoChip}} ChipTarjeta
  * @typedef {{bg: string, text: string, border: string}} ClasesEstado
  * @typedef {{color: string, bg: string, border: string}} ColoresEstado
@@ -970,10 +973,21 @@ export function consultaColumnaCOT(estado, columna, { orden, limit, offset }) {
  * tarjetaHub (número, cliente, el cotizador, el total, el estado de estados-cotizacion.js, la antigüedad, el atraso,
  * chipsDocumentoVentas y accionSiguienteDocumento) con el return_to de la lista (`returnTo`, por defecto
  * RUTA_LISTA_COTIZACIONES). La fila es una COT aunque no traiga `tipo`.
+ * r1 (I1; punto 6 de KANBAN-ventas-listas): los chips llevan delante los de la COT, con la MISMA regla de la tabla
+ * (listas-ventas.js): primero el del pedido («Pedido PVEN-…» emerald, o «Pedido … cancelado» rose: marcaPedidoCotizacion,
+ * COT-LISTA), después «Sin precio» (amber, cotizacionSinPrecio) y después los de chipsDocumentoVentas; como mucho
+ * MAX_CHIPS. tarjetaHub no cambia: las tarjetas del Hub no los llevan.
  * @param {any} fila
  * @param {{ahora?: number, returnTo?: string}} [opciones]
  * @returns {TarjetaVentas}
  */
 export function tarjetaCotizacion(fila, { ahora, returnTo = RUTA_LISTA_COTIZACIONES } = {}) {
-  return tarjetaHub({ ...fila, tipo: 'COT' }, { ahora, returnTo });
+  const cot = { ...fila, tipo: 'COT' };
+  const tarjeta = tarjetaHub(cot, { ahora, returnTo });
+  /** @type {ChipTarjeta[]} */
+  const propios = [];
+  const marca = marcaPedidoCotizacion(cot);
+  if (marca) propios.push(marca);
+  if (cotizacionSinPrecio(cot)) propios.push({ texto: 'Sin precio', tono: 'amber' });
+  return { ...tarjeta, chips: [...propios, ...tarjeta.chips].slice(0, MAX_CHIPS) };
 }

@@ -18,6 +18,7 @@ import {
 } from './estados-pedido.js';
 import { comoUTC, esSoporte } from './hub-ventas.js';
 import { redondearPeso } from './pesos.js';
+import { diaColombia, fechaSolo } from './fechas-colombia.js';
 import { TEXTO_PAPELERA_SIN_FECHA } from './estados-solicitud.js';
 import { normalizarTarifaIva, TARIFA_IVA_POR_DEFECTO } from './iva.js';
 
@@ -401,20 +402,87 @@ export function fechaVencida(iso, ahora = Date.now()) {
   return !Number.isNaN(t) && t < ahora;
 }
 
+/** El inicio 'AAAA-MM-DD' de una fecha de negocio del API (con o sin la hora que le pone isoformat()). */
+const INICIO_DIA_DE_NEGOCIO = /^\s*(\d{4}-\d{2}-\d{2})/;
+
 /**
- * B4 T9: la fecha del API (UTC, con o sin 'Z': comoUTC) todavía no pasó y le faltan `dias` días o menos (7 por defecto):
- * la columna Entrega est. de la lista de Cotizaciones la pinta en ámbar (la regla de isExpiringSoon de la fila de antes,
- * aquí para no llamar al reloj en el render). Una fecha vencida es de fechaVencida, no de esta. Lo que no es una fecha:
- * false.
- * @param {unknown} iso
+ * B4 T9 r1 (I2): el día de calendario 'AAAA-MM-DD' de una FECHA DE NEGOCIO del API (fecha_entrega_estimada:
+ * '2026-11-10T00:00:00' -> '2026-11-10'): sus 10 primeros caracteres, sin pasarla a ninguna zona (la regla de la cabecera
+ * de fechas-colombia.js, la F3 del B3 y erp_ventas.py: una fecha de negocio a las 00:00 no se corre de día). Un día que
+ * no existe ('2026-02-30') o lo que no empieza con una fecha: ''.
+ * @param {unknown} valor
+ * @returns {string}
+ */
+export function diaDeNegocio(valor) {
+  if (typeof valor !== 'string') return '';
+  const m = INICIO_DIA_DE_NEGOCIO.exec(valor);
+  return m && fechaSolo(m[1]) ? m[1] : '';
+}
+
+/** 'AAAA-MM-DD' + n días de calendario (en UTC, para que el día no cambie). */
+function sumarDias(dia, n) {
+  const [anio, mes, d] = dia.split('-').map(Number);
+  return new Date(Date.UTC(anio, mes - 1, d + n)).toISOString().slice(0, 10);
+}
+
+/**
+ * B4 T9 r1 (I2): la fecha de negocio ya pasó: su día (diaDeNegocio) es anterior al día de HOY en Colombia (diaColombia de
+ * `ahora`). El mismo día todavía no está vencida. La columna Entrega est. la pinta en rojo (la regla de isOverdue de la
+ * fila de antes, sin llamar al reloj en el render). Lo que no es una fecha: false. No se usa fechaVencida, que lee
+ * instantes.
+ * @param {unknown} valor
+ * @param {number} [ahora]
+ * @returns {boolean}
+ */
+export function fechaNegocioVencida(valor, ahora = Date.now()) {
+  const dia = diaDeNegocio(valor);
+  const hoy = diaColombia(ahora);
+  return Boolean(dia && hoy) && dia < hoy;
+}
+
+/**
+ * B4 T9 (r1, I2: ahora de calendario): la fecha de negocio no venció y su día está entre hoy y hoy + `dias` en Colombia,
+ * los dos incluidos (7 por defecto; como vencen_pronto con valida_hasta, RP89). La columna Entrega est. la pinta en ámbar
+ * (la regla de isExpiringSoon de la fila de antes). Lo que no es una fecha: false.
+ * @param {unknown} valor
  * @param {number} [dias]
  * @param {number} [ahora]
  * @returns {boolean}
  */
-export function fechaPorVencer(iso, dias = 7, ahora = Date.now()) {
-  if (typeof iso !== 'string' || !iso.trim()) return false;
-  const t = new Date(comoUTC(iso)).getTime();
-  return !Number.isNaN(t) && t >= ahora && (t - ahora) / 86400000 <= dias;
+export function fechaPorVencer(valor, dias = 7, ahora = Date.now()) {
+  const dia = diaDeNegocio(valor);
+  const hoy = diaColombia(ahora);
+  if (!dia || !hoy) return false;
+  return dia >= hoy && dia <= sumarDias(hoy, dias);
+}
+
+/**
+ * B4 T9 r1 (I1, COT-LISTA en un solo lugar): la marca del pedido de una cotización, la de la columna COT / SC de la lista
+ * y la de la tarjeta del tablero (tarjetaCotizacion):
+ *  - {texto: 'Pedido PVEN-…', tono: 'emerald'} si tiene un pedido vigente (pedidoVigente);
+ *  - {texto: 'Pedido PVEN-… cancelado', tono: 'rose'} si todos sus pedidos se cancelaron y el cliente no la volvió a
+ *    confirmar (situacionPedidoCotizacion(cot).avisoCancelado, como su detalle), con el último cancelado;
+ *  - null en otro caso.
+ * @param {any} cot
+ * @returns {{texto: string, tono: 'emerald' | 'rose'} | null}
+ */
+export function marcaPedidoCotizacion(cot) {
+  const vigente = pedidoVigente(cot);
+  if (vigente) return { texto: ['Pedido', vigente.numero].filter(Boolean).join(' '), tono: 'emerald' };
+  if (soloPedidosCancelados(cot) && situacionPedidoCotizacion(cot).avisoCancelado) {
+    return { texto: ['Pedido', ultimoPedidoCancelado(cot)?.numero, 'cancelado'].filter(Boolean).join(' '), tono: 'rose' };
+  }
+  return null;
+}
+
+/**
+ * B4 T9 r1 (I1): «Sin precio»: el total de la cotización no es mayor que 0 (o no viene), en cualquier estado. La usan el
+ * chip de la columna Total y el de la tarjeta del tablero.
+ * @param {any} cot
+ * @returns {boolean}
+ */
+export function cotizacionSinPrecio(cot) {
+  return !(Number(cot?.total_cop) > 0);
 }
 
 /**
