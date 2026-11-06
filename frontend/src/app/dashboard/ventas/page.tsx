@@ -204,7 +204,8 @@ const CHIP_TONO: Record<string, string> = {
   emerald: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   slate: 'bg-slate-100 text-slate-600 border-slate-200',
 };
-const CHIP = 'inline-block max-w-full truncate rounded-full border px-2 py-0.5 text-[10px] font-bold leading-tight';
+// B4 T7 (medidas del banco): px-1 y tracking-tight para que «Atrasado +12 d» quepa en la columna de 104 px.
+const CHIP = 'inline-block max-w-full truncate rounded-full border px-1 py-0.5 text-[10px] font-bold leading-tight tracking-tight';
 const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
 
 /** Los dos apartados del Hub. Análisis es un estado de la página, no una vista de la tabla (RP35, RP21). */
@@ -285,6 +286,9 @@ function CeldaAccion({ fila }: { fila: FilaHub }) {
  * a la derecha y, en medio, Número (con su tipo), Cliente (la flexible, con el teléfono), Estado y Monto. Asesor,
  * Antigüedad (R5: desde la creación) y Chatter quedan a la derecha (se traen arrastrándolos); Tipo existe, oculta. Una
  * constante (estable, D40). La resolución, el atraso y la próxima acción salen de la fila (R8, RP15).
+ * Medidas del banco (R26): con las barras de desplazamiento clásicas (la del <main> y la de la tabla) quedan 704 px para
+ * las columnas a 1024 px, no 716, y la casilla mide 40. Por eso Cliente baja a 120 (el primer paso de R26) y Estado a
+ * 104: 40 + 104 + 108 + 120 + 104 + 96 + 128 = 700. El número va en 11 px y el monto en 12 px para verse completos.
  */
 const COLUMNAS_TABLA_HUB: ColumnaTabla<FilaHub>[] = [
   { id: 'resolucion', titulo: 'Resolución', ancho: 104, clave: true, fija: 'izquierda',
@@ -294,21 +298,22 @@ const COLUMNAS_TABLA_HUB: ColumnaTabla<FilaHub>[] = [
     celda: (f) => (
       <span className="flex min-w-0 flex-col items-start gap-0.5 leading-tight">
         <span className={`rounded-full border px-1.5 text-[9px] font-black ${getTipoClass(f.tipo)}`}>{siglaTipo(f.tipo)}</span>
-        <span className="max-w-full truncate font-bold text-slate-900">{f.numero}</span>
+        <span className="max-w-full truncate text-[11px] font-bold text-slate-900">{f.numero}</span>
       </span>
     ) },
-  { id: 'cliente', titulo: 'Cliente', ancho: 136, clave: true, flexible: true, ordenable: 'cliente',
+  { id: 'cliente', titulo: 'Cliente', ancho: 120, clave: true, flexible: true, ordenable: 'cliente',
     titleCelda: (f) => [f.customer_name || f.cliente?.nombre || 'Cliente General', f.customer_phone].filter(Boolean).join(' · '),
     celda: (f) => (
       <span className="flex min-w-0 flex-col leading-tight">
-        <span className="truncate font-bold text-slate-800">{f.customer_name || f.cliente?.nombre || 'Cliente General'}</span>
+        <span className="truncate text-xs font-bold text-slate-800">{f.customer_name || f.cliente?.nombre || 'Cliente General'}</span>
         {f.customer_phone && <span className="truncate font-mono text-[11px] text-slate-400">{f.customer_phone}</span>}
       </span>
     ) },
-  { id: 'estado', titulo: 'Estado', ancho: 112, clave: true, ordenable: 'estado',
+  { id: 'estado', titulo: 'Estado', ancho: 104, clave: true, ordenable: 'estado',
     titleCelda: (f) => estadoDeTarjeta(f.tipo, f.estado).label, celda: (f) => <InsigniaEstado tipo={f.tipo} estado={f.estado} /> },
   { id: 'monto', titulo: 'Monto', ancho: 96, clave: true, alinear: 'derecha', ordenable: 'monto',
-    celda: (f) => (f.tipo === 'SC' ? '—' : formatoPesos(f.total_cop)) },
+    titleCelda: (f) => (f.tipo === 'SC' ? 'Sin monto' : formatoPesos(f.total_cop)),
+    celda: (f) => <span className="text-xs font-bold text-slate-900">{f.tipo === 'SC' ? '—' : formatoPesos(f.total_cop)}</span> },
   { id: 'asesor', titulo: 'Asesor', ancho: 120, ordenable: 'asesor',
     titleCelda: (f) => f.advisor_name || f.cotizador || f.asesor?.nombre || 'Sin asignar',
     celda: (f) => f.advisor_name || f.cotizador || f.asesor?.nombre || <span className="italic text-slate-400">Sin asignar</span> },
@@ -1040,7 +1045,8 @@ export default function VentasHub() {
           title="HUB Ventas"
           subtitle="Solicitudes, cotizaciones y pedidos de tus clientes en un solo lugar."
           actions={(
-            <div className="flex items-center gap-2.5">
+            // B4 T7 (medidas del banco): los tres botones bajan de renglón en lugar de correr la página a 375 y 768 px.
+            <div className="flex flex-wrap items-center gap-2.5">
               {/* H9: directo a la lista con ?new=1 (abre el formulario y limpia la URL, U9), sin pasar por
                   /solicitud/nueva; «Abriendo…» apenas se hace clic. */}
               <Link href="/dashboard/ventas/solicitud?new=1" aria-label="Nueva solicitud"
