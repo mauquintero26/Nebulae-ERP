@@ -814,6 +814,43 @@ console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuent
     /<Contador\s+valor=\{paso\.total\}\s+estado=\{estadoNumeroFranja\(paso\.total, estadoConteos\)\}\s+className=\{`font-black text-slate-900 \$\{compacto \? 'text-sm' : 'text-sm @2xl\/flujo:text-xl'\}`\}/,
     'A1: la caja le pasa a Contador la letra del número cargado');
   assert.ok(!/animate-pulse/.test(pasos), 'A1: en las cajas, la única barra es la de Contador');
+  // B4 T7 r1c (ruling de 1536 px): en qué renglón va el grupo del semáforo lo decide el ancho de la fila (un breakpoint
+  // de container query), nunca el largo de la regla. Desde 960 px de fila: el bloque del título y la regla con
+  // min-w-0 flex-1 y el grupo al lado con shrink-0, arriba (items-start), sin bajar (flex-nowrap). Por debajo: el bloque
+  // se deshace (contents) y el grupo va en su propio renglón (basis-full) entre el título y la regla (order), así que
+  // la regla larga no lo mueve. Los conteos del grupo van en una ranura de min-w-4, el ancho de la barra de Contador.
+  const fuenteBanner = fuentes['BannerFlujo.tsx'];
+  // Tailwind solo genera las clases que ve escritas enteras: el breakpoint va literal en cada una, y es uno solo.
+  const PUNTO = '@min-[960px]/fila';
+  assert.deepEqual([...new Set(codigo(fuenteBanner).match(/@min-\[[^\]]+\]\/\w+/g) ?? [])], [PUNTO], 'r1c: un solo breakpoint, el de la fila');
+  assert.match(fuenteBanner, /960 = el grupo en una línea \(719 px/, 'r1c: el porqué del breakpoint, con los números');
+  const clasesDe = (nombre) => (new RegExp(`const ${nombre} = '([^']*)';`).exec(fuenteBanner)?.[1] ?? '').split(/\s+/).filter(Boolean);
+  const fila = clasesDe('FILA');
+  const bloque = clasesDe('BLOQUE_TITULO');
+  const grupo = clasesDe('GRUPO_SEMAFORO');
+  for (const c of ['flex', 'flex-wrap', 'items-center', `${PUNTO}:flex-nowrap`, `${PUNTO}:items-start`, `${PUNTO}:gap-x-4`]) {
+    assert.ok(fila.includes(c), `r1c: la fila lleva ${c}`);
+  }
+  // Una container query no se aplica al elemento que la declara: el contenedor es una envoltura de la fila.
+  assert.ok(!fila.includes('@container/fila'), 'r1c: la fila no es su propio contenedor');
+  assert.match(banner, /<div className="@container\/fila">\s*<div className=\{FILA\}>/, 'r1c: la envoltura con @container/fila');
+  for (const c of ['contents', `${PUNTO}:flex`, 'min-w-0', 'flex-1', 'flex-wrap']) assert.ok(bloque.includes(c), `r1c: el bloque lleva ${c}`);
+  for (const c of ['order-1', 'basis-full', 'shrink-0', `${PUNTO}:basis-auto`]) assert.ok(grupo.includes(c), `r1c: el grupo lleva ${c}`);
+  assert.ok(!grupo.some((c) => c.startsWith('@min') && c.includes('shrink')), 'r1c: el grupo no encoge en ningún ancho');
+  assert.match(banner, /<div className=\{FILA\}>\s*<div className=\{BLOQUE_TITULO\}>/);
+  assert.match(banner, /<div className=\{GRUPO_SEMAFORO\}>\s*\{semaforo && opciones\.length \? \(/);
+  // La regla va siempre en su propio renglón (basis-full): en su columna desde el breakpoint y después del grupo por
+  // debajo. Así, al llegar la larga, solo crece hacia abajo; no salta del lado del título al renglón de abajo (medido a
+  // 1536 × 864: ese salto de lado pesaba 0,10 de CLS).
+  assert.match(banner, /\{regla \? <span className="order-2 basis-full text-xs text-slate-500">\{regla\}<\/span> : null\}/, 'r1c: la regla, en su renglón y completa (sin truncate)');
+  assert.match(banner, /\{avisos\?\.length \? \(\s*<span className="order-3 /, 'r1c: los avisos, después de la regla');
+  assert.ok(!/truncate|line-clamp/.test(banner.slice(banner.indexOf('<div className={BLOQUE_TITULO}>'), banner.indexOf('<div className={GRUPO_SEMAFORO}>'))),
+    'r1c: la regla no se trunca');
+  // La ranura del conteo con sus paréntesis: el ancho de «(» + la barra de Contador + «)» (min-w-6, 24 px medidos) y el
+  // alto de un renglón de text-xs (h-4), cargando y con un número de una o dos cifras. Sin la fila por delante
+  // (justify-start), el «( 9 )» no lleva espacios adentro: el aire queda fuera de los paréntesis.
+  assert.match(banner, /<span className="inline-flex h-4 min-w-6 items-center justify-center">\s*\(<Contador valor=\{o\.conteo\} estado=\{estadoNumeroFranja\(o\.conteo, f\.estadoConteos, \{ atenuar: false \}\)\} \/>\)\s*<\/span>/, 'r1c: la ranura del conteo');
+  assert.ok(!fila.includes('justify-between'), 'r1c: sin justify-between (por debajo del breakpoint separaba el título de su estado)');
   assert.match(banner, /aria-pressed=\{o\.activo\}\s+onClick=\{\(\) => semaforo\.onFiltrar\(alternarFiltroSemaforo\(semaforo\.filtro, o\.filtro\)\)\}/);
   // C13, el ruling M1 y M8: «—» con error; sin atenuar en los segmentos (el activo es blanco sobre rose-600).
   assert.match(banner, /<Contador valor=\{o\.conteo\} estado=\{estadoNumeroFranja\(o\.conteo, f\.estadoConteos, \{ atenuar: false \}\)\} \/>/);

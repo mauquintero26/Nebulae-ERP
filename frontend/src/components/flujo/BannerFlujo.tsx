@@ -94,6 +94,29 @@ const BOTON = `inline-flex items-center gap-1.5 rounded-lg border border-slate-2
  */
 const RENGLON_DEL_NUMERO = '[&_:has(>.animate-pulse)]:min-h-lh';
 
+/*
+ * B4 T7 r1c (ruling de 1536 px): en qué renglón va el grupo del semáforo (los botones de la derecha) lo decide el ANCHO
+ * de la fila, con la container query @min-[960px]/fila, nunca el largo de la regla:
+ *  - desde 960 px: el bloque del título y la regla (min-w-0 flex-1) y, al lado, el grupo (shrink-0), arriba
+ *    (items-start) y sin bajar (flex-nowrap); la regla se parte dentro de su columna, completa;
+ *  - por debajo: el bloque se deshace (contents) y el grupo va en su propio renglón (basis-full) justo después del
+ *    título; la regla y los avisos van después (order-2 y order-3), así que crecer no lo mueve.
+ *  - La regla va siempre en su propio renglón (basis-full): al llegar la larga solo crece hacia abajo, sin saltar del
+ *    lado del título al renglón de abajo (medido a 1536 × 864: ese salto de lado pesaba 0,10 de CLS).
+ * El contenedor de la query es una envoltura de la fila (@container/fila): una container query no se aplica al mismo
+ * elemento que la declara, y la fila cambia su propio flex-nowrap, items-start y gap-x-4.
+ * 960 = el grupo en una línea (719 px con «Ajustar tiempos» y los conteos cargando; medido en el banco) + gap-x-4 (16)
+ * + el renglón del título con un estado de tres cifras (ícono, «Flujo comercial» y «123 con atraso»: unos 221 px), con
+ * unos px de holgura. Con el menú abierto y las barras clásicas, la fila llega a 960 px a los 1280 px de pantalla.
+ * Los conteos del grupo van, con sus paréntesis, en una ranura de min-w-6 (24 px: «(» + la barra de Contador + «)»,
+ * medido) y h-4 (un renglón de text-xs): el grupo mide lo mismo cargando y con números de una o dos cifras, y no se corre
+ * de lado al llegar los datos. La fila no lleva justify-between: por debajo del breakpoint, con el bloque deshecho,
+ * separaría el título de su estado.
+ */
+const FILA = 'flex flex-wrap items-center gap-x-2 gap-y-2 @min-[960px]/fila:flex-nowrap @min-[960px]/fila:items-start @min-[960px]/fila:gap-x-4';
+const BLOQUE_TITULO = 'contents @min-[960px]/fila:flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1';
+const GRUPO_SEMAFORO = 'order-1 flex basis-full shrink-0 flex-wrap items-center gap-2 @min-[960px]/fila:basis-auto';
+
 /** Un valor guardado en flujo:<id> vale solo si es true o false (otro valor: la franja completa). */
 const esBooleano = (valor: unknown) => typeof valor === 'boolean';
 
@@ -164,53 +187,59 @@ export function BannerFlujo({
 
   return (
     <section aria-labelledby={idTitulo} aria-busy={cargando} className="min-w-0 border-b border-slate-200 bg-white px-6 py-3">
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-          {semaforo ? <IconoSemaforo aria-hidden="true" size={18} className={`shrink-0 ${COLOR_SEMAFORO[resumen.tono]}`} /> : null}
-          <h2 id={idTitulo} ref={tituloRef} tabIndex={-1} className={`rounded text-sm font-bold text-slate-800 ${FOCO}`}>{titulo}</h2>
-          {semaforo ? (
-            <span role="status" className={`text-xs font-semibold ${TEXTO_SEMAFORO[resumen.tono]}`}>{resumen.texto}</span>
-          ) : null}
-          {regla ? <span className="text-xs text-slate-500">{regla}</span> : null}
-          {avisos?.map((a, i) => <ChipAviso key={`${a.texto}-${i}`} texto={a.texto} tono={a.tono} onClick={a.onClick} />)}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {semaforo && opciones.length ? (
-            <div role="group" aria-label="Filtrar por atraso" className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
-              {opciones.map((o) => (
-                <button
-                  key={o.filtro}
-                  type="button"
-                  aria-pressed={o.activo}
-                  onClick={() => semaforo.onFiltrar(alternarFiltroSemaforo(semaforo.filtro, o.filtro))}
-                  className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-semibold ${FOCO} ${o.activo
-                    ? (o.filtro === 'atrasados' ? 'bg-rose-600 text-white shadow-sm' : 'bg-white text-indigo-700 shadow-sm ring-1 ring-indigo-200')
-                    : 'text-slate-600 hover:bg-white hover:text-slate-800'}`}
-                >
-                  {o.texto}
-                  {o.conConteo ? (
-                    <span className="inline-flex items-center">
-                      (<Contador valor={o.conteo} estado={estadoNumeroFranja(o.conteo, f.estadoConteos, { atenuar: false })} />)
-                    </span>
-                  ) : null}
-                </button>
-              ))}
-            </div>
-          ) : null}
-          {accionAjustar ? (
-            <button type="button" onClick={accionAjustar.onClick} disabled={accionAjustar.deshabilitado} title={accionAjustar.titulo} className={`${BOTON} disabled:cursor-not-allowed disabled:opacity-50`}>
-              <SlidersHorizontal size={14} aria-hidden="true" />
-              {accionAjustar.label}
+      <div className="@container/fila">
+        <div className={FILA}>
+          <div className={BLOQUE_TITULO}>
+            {semaforo ? <IconoSemaforo aria-hidden="true" size={18} className={`shrink-0 ${COLOR_SEMAFORO[resumen.tono]}`} /> : null}
+            <h2 id={idTitulo} ref={tituloRef} tabIndex={-1} className={`rounded text-sm font-bold text-slate-800 ${FOCO}`}>{titulo}</h2>
+            {semaforo ? (
+              <span role="status" className={`text-xs font-semibold ${TEXTO_SEMAFORO[resumen.tono]}`}>{resumen.texto}</span>
+            ) : null}
+            {regla ? <span className="order-2 basis-full text-xs text-slate-500">{regla}</span> : null}
+            {avisos?.length ? (
+              <span className="order-3 inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+                {avisos.map((a, i) => <ChipAviso key={`${a.texto}-${i}`} texto={a.texto} tono={a.tono} onClick={a.onClick} />)}
+              </span>
+            ) : null}
+          </div>
+          <div className={GRUPO_SEMAFORO}>
+            {semaforo && opciones.length ? (
+              <div role="group" aria-label="Filtrar por atraso" className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+                {opciones.map((o) => (
+                  <button
+                    key={o.filtro}
+                    type="button"
+                    aria-pressed={o.activo}
+                    onClick={() => semaforo.onFiltrar(alternarFiltroSemaforo(semaforo.filtro, o.filtro))}
+                    className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-semibold ${FOCO} ${o.activo
+                      ? (o.filtro === 'atrasados' ? 'bg-rose-600 text-white shadow-sm' : 'bg-white text-indigo-700 shadow-sm ring-1 ring-indigo-200')
+                      : 'text-slate-600 hover:bg-white hover:text-slate-800'}`}
+                  >
+                    {o.texto}
+                    {o.conConteo ? (
+                      <span className="inline-flex h-4 min-w-6 items-center justify-center">
+                        (<Contador valor={o.conteo} estado={estadoNumeroFranja(o.conteo, f.estadoConteos, { atenuar: false })} />)
+                      </span>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {accionAjustar ? (
+              <button type="button" onClick={accionAjustar.onClick} disabled={accionAjustar.deshabilitado} title={accionAjustar.titulo} className={`${BOTON} disabled:cursor-not-allowed disabled:opacity-50`}>
+                <SlidersHorizontal size={14} aria-hidden="true" />
+                {accionAjustar.label}
+              </button>
+            ) : null}
+            <button type="button" aria-pressed={verAyuda} onClick={() => setVerAyuda((v) => !v)} className={`${BOTON} ${verAyuda ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : ''}`}>
+              <HelpCircle size={14} aria-hidden="true" />
+              ¿Cómo funciona?
             </button>
-          ) : null}
-          <button type="button" aria-pressed={verAyuda} onClick={() => setVerAyuda((v) => !v)} className={`${BOTON} ${verAyuda ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : ''}`}>
-            <HelpCircle size={14} aria-hidden="true" />
-            ¿Cómo funciona?
-          </button>
-          <button type="button" onClick={() => guardarCompacto(!compacto)} className={BOTON}>
-            {compacto ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronUp size={14} aria-hidden="true" />}
-            {compacto ? 'Ver flujo' : 'Ocultar flujo'}
-          </button>
+            <button type="button" onClick={() => guardarCompacto(!compacto)} className={BOTON}>
+              {compacto ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronUp size={14} aria-hidden="true" />}
+              {compacto ? 'Ver flujo' : 'Ocultar flujo'}
+            </button>
+          </div>
         </div>
       </div>
 
