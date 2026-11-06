@@ -1619,7 +1619,8 @@ console.log('--- TEST 32 (T4D): el fuente de los componentes de vista de compone
   }
   assert.match(barra, /import \{ ConmutadorVista \} from '@\/components\/ui\/ConmutadorVista';/, 'C1: el conmutador de components/ui');
   assert.match(barra, /<ConmutadorVista\s+modo=\{estado\.modo\}\s+onCambiar=\{\(modo\) => onEstado\(\{ tipo: 'modo', valor: modo \}\)\}/);
-  assert.match(barra, /<Contador valor=\{p\.conteo\} estado=\{estadoDeConteo\(p\.conteo, estadoConteos\)\} \/>/, 'C13: el conteo de cada pestaña');
+  // B4 T7 r2 (I-r1): el estado sale de estadoPastillaPestana, que sin la aparte activa es estadoDeConteo (TEST 42).
+  assert.match(barra, /<Contador valor=\{p\.conteo\} estado=\{estadoPastilla\} \/>/, 'C13: el conteo de cada pestaña');
   assert.match(barra, /<MenuAjustes columnas=\{ajustes\.columnas\} preferencias=\{ajustes\.preferencias\} anchoRef=\{ajustes\.anchoRef\} \/>/, 'D40: el mismo resultado y el mismo ref');
   assert.match(barra, /ajustes && estado\.modo !== 'kanban' &&/, '«Ajustar tabla» solo en Lista');
   assert.match(barra, /<FiltroEstados\b/);
@@ -2088,7 +2089,8 @@ console.log('--- TEST 40 (B4 T7 r1, A3): la pestaña aparte de BarraTabla (Anál
     assert.ok(aparteJsx.includes(texto), `la aparte: ${texto}`);
   }
   assert.ok(!/Contador/.test(aparteJsx), 'la aparte no lleva Contador');
-  assert.match(barra, /\{\(pestanas && pestanas\.length > 0\) \|\| pestanaAparte \? \(\s*<div role="tablist"/, 'la fila de pestañas también con solo la aparte');
+  // B4 T7 r2 (m-r1-a): la fila lleva su ref para mostrar la pestaña activa.
+  assert.match(barra, /\{\(pestanas && pestanas\.length > 0\) \|\| pestanaAparte \? \(\s*<div ref=\{filaPestanas\} role="tablist"/, 'la fila de pestañas también con solo la aparte');
   // La barra reducida: con la aparte activa, ni búsqueda, ni filtros, ni «Ajustar tabla», ni conmutador, ni pantalla
   // completa, ni «N resultados»: todo eso va en la segunda fila, que no se pinta.
   const fila2 = barra.indexOf('{!aparteActiva && (\n        <div className="flex flex-wrap items-center gap-2">');
@@ -2136,6 +2138,54 @@ console.log('--- TEST 41 (B4 T7 r1, m4): ordenInverso — la flecha dice lo que 
   assert.match(t, /lista\.onEstado\(\{ tipo: 'orden', valor: ordenAlTocar\(lista\.estado\.orden, col\) \}\);/);
   assert.match(t, /const direccion = lista \? direccionDeColumna\(lista\.estado\.orden, col\) : null;/);
   assert.ok(!/alternarOrden\(lista\.estado\.orden/.test(t), 'el toque pasa por ordenAlTocar');
+}
+
+console.log('--- TEST 42 (B4 T7 r2, I-r1 y m-r1-a): la pastilla de una pestaña de vista con la aparte activa y la pestaña activa a la vista ---');
+{
+  const { estadoPastillaPestana, scrollParaVer } = TABLA;
+  // I-r1: con la aparte activa (RP35: useListado apagado), un conteo que no es un número es «sin dato», no «cargando»:
+  // la pastilla no se pinta ('oculto'). Sin la aparte, exactamente lo de estadoDeConteo.
+  for (const conteo of [null, undefined, 12, 0, NaN, 'x']) {
+    for (const estado of [undefined, 'listo', 'cargando', 'actualizando', 'error']) {
+      assert.equal(estadoPastillaPestana(conteo, estado), estadoDeConteo(conteo, estado), `sin aparte: ${conteo} ${estado}`);
+      assert.equal(estadoPastillaPestana(conteo, estado, { aparteActiva: false }), estadoDeConteo(conteo, estado));
+    }
+  }
+  assert.equal(estadoPastillaPestana(null, 'listo', { aparteActiva: true }), 'oculto', 'con aparte y null: sin pastilla');
+  assert.equal(estadoPastillaPestana(undefined, undefined, { aparteActiva: true }), 'oculto');
+  assert.equal(estadoPastillaPestana(NaN, 'cargando', { aparteActiva: true }), 'oculto');
+  assert.equal(estadoPastillaPestana('7', 'listo', { aparteActiva: true }), 'oculto', 'un texto no es un número');
+  // Con la aparte activa y conteos de antes (se llegó desde los documentos), los números, como siempre.
+  assert.equal(estadoPastillaPestana(12, 'listo', { aparteActiva: true }), 'listo');
+  assert.equal(estadoPastillaPestana(0, 'listo', { aparteActiva: true }), 'listo', 'un 0 es un número');
+  assert.equal(estadoPastillaPestana(12, 'actualizando', { aparteActiva: true }), 'actualizando');
+  // Con la aparte activa y los conteos en error, como hoy («—»).
+  assert.equal(estadoPastillaPestana(null, 'error', { aparteActiva: true }), 'error');
+  assert.equal(estadoPastillaPestana(12, 'error', { aparteActiva: true }), 'listo');
+
+  // m-r1-a: el scrollLeft de la fila que deja a la vista la pestaña [inicio, inicio + ancho) (en coordenadas del
+  // contenido de la fila): si ya se ve, el mismo; si queda a la izquierda, su inicio; si queda a la derecha, lo justo
+  // para ver su final. Nunca negativo.
+  assert.equal(scrollParaVer({ inicio: 100, ancho: 80 }, { scroll: 0, visible: 400 }), 0, 'ya se ve');
+  assert.equal(scrollParaVer({ inicio: 760, ancho: 76 }, { scroll: 0, visible: 695 }), 141, 'Análisis, la última, a 1024 px');
+  assert.equal(scrollParaVer({ inicio: 20, ancho: 80 }, { scroll: 141, visible: 695 }), 20, 'una a la izquierda');
+  assert.equal(scrollParaVer({ inicio: 0, ancho: 80 }, { scroll: 30, visible: 400 }), 0);
+  assert.equal(scrollParaVer({ inicio: 300, ancho: 900 }, { scroll: 0, visible: 400 }), 300, 'más ancha que la fila: su inicio');
+  assert.equal(scrollParaVer({ inicio: NaN, ancho: 80 }, { scroll: 30, visible: 400 }), 30, 'datos raros: queda donde está');
+  assert.equal(scrollParaVer({ inicio: -5, ancho: 80 }, { scroll: 30, visible: 400 }), 0);
+
+  // BarraTabla: la pastilla con estadoPastillaPestana (y la alerta rosa solo con la pastilla); la fila se desplaza
+  // sola, al montar y al cambiar la pestaña activa, con su scrollLeft (sin scrollIntoView: la página no se mueve).
+  const barra = readFileSync(new URL('../src/components/tabla/BarraTabla.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(barra, /const estadoPastilla = estadoPastillaPestana\(p\.conteo, estadoConteos, \{ aparteActiva \}\);/);
+  assert.match(barra,
+    /\{estadoPastilla !== 'oculto' && \(\s*<span className=\{`inline-flex min-w-\[1\.25rem\] items-center justify-center rounded-full px-1\.5 py-px text-\[11px\] \$\{activa \? PASTILLA_ACTIVA : p\.alerta \? PASTILLA_ALERTA : PASTILLA\}`\}>\s*<Contador valor=\{p\.conteo\} estado=\{estadoPastilla\} \/>\s*<\/span>\s*\)\}/,
+    'sin pastilla, ni Contador ni la alerta rosa');
+  assert.match(barra, /const filaPestanas = useRef<HTMLDivElement>\(null\);/);
+  assert.match(barra, /<div ref=\{filaPestanas\} role="tablist"/);
+  assert.match(barra,
+    /useLayoutEffect\(\(\) => \{\s*const fila = filaPestanas\.current;\s*const boton = enfocable \? botonesPestana\.current\.get\(enfocable\) : undefined;\s*if \(!fila \|\| !boton\) return;\s*const caja = fila\.getBoundingClientRect\(\);\s*const r = boton\.getBoundingClientRect\(\);\s*fila\.scrollLeft = scrollParaVer\(\{ inicio: r\.left - caja\.left \+ fila\.scrollLeft, ancho: r\.width \}, \{ scroll: fila\.scrollLeft, visible: fila\.clientWidth \}\);\s*\}, \[enfocable\]\);/);
+  assert.ok(!/scrollIntoView/.test(barra), 'sin scrollIntoView: la página no se mueve');
 }
 
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');

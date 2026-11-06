@@ -10,8 +10,8 @@ import type { AccentColor } from '@/components/ui/colors';
 import type { EstadoKpi } from '@/lib/kpis';
 import { pestanaConTecla } from '@/lib/pestanas';
 import {
-  accionPestana, crearBusquedaConRetardo, estadoDeConteo, etiquetasDeEstados, idsDePestanas, opcionesDeVista,
-  pestanaEnfocable, sincronizarBusqueda, textoResultados, toquePestana,
+  accionPestana, crearBusquedaConRetardo, estadoDeConteo, estadoPastillaPestana, etiquetasDeEstados, idsDePestanas,
+  opcionesDeVista, pestanaEnfocable, scrollParaVer, sincronizarBusqueda, textoResultados, toquePestana,
 } from '@/lib/tabla';
 import type { EstadoTabla, LocalBusqueda, OpcionesEstados } from '@/lib/tabla';
 import type { DespacharTabla } from './useEstadoTabla';
@@ -181,6 +181,17 @@ export function BarraTabla({
     e.preventDefault();
     botonesPestana.current.get(siguiente)?.focus();
   };
+  // B4 T7 r2 (m-r1-a): al montar y al cambiar la pestaña activa (la aparte incluida), la fila se desplaza para mostrarla
+  // (scrollParaVer). Solo la fila, con su scrollLeft: la ventana no se desplaza.
+  const filaPestanas = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const fila = filaPestanas.current;
+    const boton = enfocable ? botonesPestana.current.get(enfocable) : undefined;
+    if (!fila || !boton) return;
+    const caja = fila.getBoundingClientRect();
+    const r = boton.getBoundingClientRect();
+    fila.scrollLeft = scrollParaVer({ inicio: r.left - caja.left + fila.scrollLeft, ancho: r.width }, { scroll: fila.scrollLeft, visible: fila.clientWidth });
+  }, [enfocable]);
 
   const opciones = opcionesDeVista(opcionesEstados, estado.vista);
   const resultados = textoResultados(total);
@@ -191,9 +202,11 @@ export function BarraTabla({
   return (
     <div className="flex flex-col gap-3 border-b border-slate-100 px-4 py-3">
       {(pestanas && pestanas.length > 0) || pestanaAparte ? (
-        <div role="tablist" aria-label="Pestañas" onKeyDown={teclaPestanas} className="-mx-1 flex min-w-0 items-center gap-1 overflow-x-auto px-1 pb-0.5">
+        <div ref={filaPestanas} role="tablist" aria-label="Pestañas" onKeyDown={teclaPestanas} className="-mx-1 flex min-w-0 items-center gap-1 overflow-x-auto px-1 pb-0.5">
           {pestanas?.map((p) => {
             const activa = !aparteActiva && p.id === estado.vista;
+            // B4 T7 r2 (I-r1): con la aparte activa y sin conteo, sin pastilla: no hay nada cargando (RP35).
+            const estadoPastilla = estadoPastillaPestana(p.conteo, estadoConteos, { aparteActiva });
             return (
               <button
                 key={p.id}
@@ -210,9 +223,11 @@ export function BarraTabla({
                 className={`${PESTANA} ${activa ? ACCENTS[color].navActive : PESTANA_INACTIVA}`}
               >
                 {p.etiqueta}
-                <span className={`inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 py-px text-[11px] ${activa ? PASTILLA_ACTIVA : p.alerta ? PASTILLA_ALERTA : PASTILLA}`}>
-                  <Contador valor={p.conteo} estado={estadoDeConteo(p.conteo, estadoConteos)} />
-                </span>
+                {estadoPastilla !== 'oculto' && (
+                  <span className={`inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 py-px text-[11px] ${activa ? PASTILLA_ACTIVA : p.alerta ? PASTILLA_ALERTA : PASTILLA}`}>
+                    <Contador valor={p.conteo} estado={estadoPastilla} />
+                  </span>
+                )}
               </button>
             );
           })}

@@ -381,6 +381,14 @@ console.log('--- B4 T7 r1 (A3): Análisis es la 7.ª pestaña de la barra (pesta
   assert.match(codigo, /if \(s === 'documentos' && leerEnlaceHub\(window\.location\.search\)\.analisis\) router\.replace\(RUTA_HUB_VENTAS\);/);
   // D-9: tocar un paso o el semáforo vuelve a Documentos.
   assert.equal((codigo.match(/if \(enAnalisis\) cambiarSeccion\('documentos'\);/g) ?? []).length, 2);
+  // B4 T7 r2 (I-r1): al entrar directo en Análisis no hay conteos y nada carga (RP35). Las 6 pestañas de vista dan
+  // conteo null (no 0) y estadoConteos sale de useListado, así que BarraTabla, con la aparte activa, no pinta sus
+  // pastillas (estadoPastillaPestana de lib/tabla.js, TEST 42 de test_tabla.mjs).
+  for (const id of ['todos', 'no_resueltos', 'sc', 'cot', 'ven', 'acciones_tomadas']) {
+    assert.ok(codigo.includes(`conteo: conteos?.pestanas?.${id} ?? null`), `I-r1: ${id} sin conteo da null`);
+  }
+  assert.match(codigo, /const estadoConteos = useEstadoKpi\(listado\.cargandoInicial \|\| listado\.recargando, listado\.error\);/);
+  assert.match(codigo, /pestanas=\{pestanas\}\s*pestanaAparte=\{\{ id: 'analisis', etiqueta: 'Análisis', activa: enAnalisis, onCambiar: alCambiarAparte \}\}\s*estadoConteos=\{estadoConteos\}/);
 }
 
 console.log('--- H3 TEST 12: esNoResuelto / esAccionTomada ---');

@@ -1761,6 +1761,43 @@ export function estadoDeConteo(conteo, estadoConteos) {
 }
 
 /**
+ * B4 T7 r2 (I-r1): el estado de la pastilla de una pestaña de vista de BarraTabla. Es el de estadoDeConteo, salvo con
+ * la pestaña aparte activa y un conteo que no es un número: entonces 'oculto' (la pastilla no se pinta). Con la aparte
+ * activa, la pantalla apaga su carga (RP35, `activo: !enAnalisis`), así que no hay nada en camino: es «sin dato», y la
+ * barra gris diría «Cargando» para siempre.
+ *  - Sin la aparte activa: exactamente estadoDeConteo.
+ *  - Con la aparte activa y un número (se llegó desde los documentos): el de siempre, se ven los últimos números.
+ *  - Con la aparte activa y estadoConteos 'error': el de siempre ('error', «—»).
+ * @param {unknown} conteo
+ * @param {'cargando' | 'actualizando' | 'error' | 'listo'} [estadoConteos]
+ * @param {{aparteActiva?: boolean}} [opciones]
+ * @returns {'cargando' | 'actualizando' | 'error' | 'listo' | 'oculto'}
+ */
+export function estadoPastillaPestana(conteo, estadoConteos, { aparteActiva = false } = {}) {
+  const estado = estadoDeConteo(conteo, estadoConteos);
+  if (!aparteActiva || estado !== 'cargando') return estado;
+  return 'oculto';
+}
+
+/**
+ * B4 T7 r2 (m-r1-a): el scrollLeft de una fila que se desplaza de lado (la de las pestañas de BarraTabla) para que se
+ * vea el elemento [inicio, inicio + ancho), en coordenadas del contenido de la fila. Si ya se ve, el mismo; si queda a
+ * la izquierda (o es más ancho que la fila), su inicio; si queda a la derecha, lo justo para ver su final. Nunca
+ * negativo; con datos que no son números, el mismo scroll.
+ * @param {{inicio: number, ancho: number}} elemento
+ * @param {{scroll: number, visible: number}} fila
+ * @returns {number}
+ */
+export function scrollParaVer({ inicio, ancho }, { scroll, visible }) {
+  if (![inicio, ancho, scroll, visible].every((n) => typeof n === 'number' && Number.isFinite(n))) {
+    return typeof scroll === 'number' && Number.isFinite(scroll) ? scroll : 0;
+  }
+  if (inicio < scroll || ancho > visible) return Math.max(0, inicio);
+  if (inicio + ancho > scroll + visible) return Math.max(0, inicio + ancho - visible);
+  return scroll;
+}
+
+/**
  * Las opciones del filtro de estados de la pestaña `vista` (FiltroEstados): las mismas para todas (un arreglo) o una
  * función por pestaña. Nada (o una función que no devuelve un arreglo) da [].
  * @param {OpcionesEstados | null | undefined} opciones
