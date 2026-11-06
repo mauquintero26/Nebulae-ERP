@@ -1768,12 +1768,15 @@ export function estadoDeConteo(conteo, estadoConteos) {
  *  - Sin la aparte activa: exactamente estadoDeConteo.
  *  - Con la aparte activa y un número (se llegó desde los documentos): el de siempre, se ven los últimos números.
  *  - Con la aparte activa y estadoConteos 'error': el de siempre ('error', «—»).
+ *  - B4 T8: con `sinConteo` (una pestaña de vista que no lleva número, la Papelera de Solicitudes), siempre 'oculto'.
+ *    Sin esa opción, todo como arriba.
  * @param {unknown} conteo
  * @param {'cargando' | 'actualizando' | 'error' | 'listo'} [estadoConteos]
- * @param {{aparteActiva?: boolean}} [opciones]
+ * @param {{aparteActiva?: boolean, sinConteo?: boolean}} [opciones]
  * @returns {'cargando' | 'actualizando' | 'error' | 'listo' | 'oculto'}
  */
-export function estadoPastillaPestana(conteo, estadoConteos, { aparteActiva = false } = {}) {
+export function estadoPastillaPestana(conteo, estadoConteos, { aparteActiva = false, sinConteo = false } = {}) {
+  if (sinConteo) return 'oculto';
   const estado = estadoDeConteo(conteo, estadoConteos);
   if (!aparteActiva || estado !== 'cargando') return estado;
   return 'oculto';

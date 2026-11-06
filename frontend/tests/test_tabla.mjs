@@ -2177,7 +2177,8 @@ console.log('--- TEST 42 (B4 T7 r2, I-r1 y m-r1-a): la pastilla de una pestaña 
   // BarraTabla: la pastilla con estadoPastillaPestana (y la alerta rosa solo con la pastilla); la fila se desplaza
   // sola, al montar y al cambiar la pestaña activa, con su scrollLeft (sin scrollIntoView: la página no se mueve).
   const barra = readFileSync(new URL('../src/components/tabla/BarraTabla.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-  assert.match(barra, /const estadoPastilla = estadoPastillaPestana\(p\.conteo, estadoConteos, \{ aparteActiva \}\);/);
+  // B4 T8: también con la marca sinConteo de la pestaña (TEST 43); la aparte sigue llegando igual.
+  assert.match(barra, /const estadoPastilla = estadoPastillaPestana\(p\.conteo, estadoConteos, \{ aparteActiva, sinConteo: p\.sinConteo \}\);/);
   assert.match(barra,
     /\{estadoPastilla !== 'oculto' && \(\s*<span className=\{`inline-flex min-w-\[1\.25rem\] items-center justify-center rounded-full px-1\.5 py-px text-\[11px\] \$\{activa \? PASTILLA_ACTIVA : p\.alerta \? PASTILLA_ALERTA : PASTILLA\}`\}>\s*<Contador valor=\{p\.conteo\} estado=\{estadoPastilla\} \/>\s*<\/span>\s*\)\}/,
     'sin pastilla, ni Contador ni la alerta rosa');
@@ -2186,6 +2187,27 @@ console.log('--- TEST 42 (B4 T7 r2, I-r1 y m-r1-a): la pastilla de una pestaña 
   assert.match(barra,
     /useLayoutEffect\(\(\) => \{\s*const fila = filaPestanas\.current;\s*const boton = enfocable \? botonesPestana\.current\.get\(enfocable\) : undefined;\s*if \(!fila \|\| !boton\) return;\s*const caja = fila\.getBoundingClientRect\(\);\s*const r = boton\.getBoundingClientRect\(\);\s*fila\.scrollLeft = scrollParaVer\(\{ inicio: r\.left - caja\.left \+ fila\.scrollLeft, ancho: r\.width \}, \{ scroll: fila\.scrollLeft, visible: fila\.clientWidth \}\);\s*\}, \[enfocable\]\);/);
   assert.ok(!/scrollIntoView/.test(barra), 'sin scrollIntoView: la página no se mueve');
+}
+
+console.log('--- TEST 43 (B4 T8): una pestaña de vista sin conteo (la Papelera de Solicitudes) no pinta su pastilla ---');
+{
+  const { estadoPastillaPestana } = TABLA;
+  // TABLA-listas-ventas punto 5: «la Papelera, sin conteo». Con sinConteo la pastilla no se pinta nunca ('oculto'), con
+  // o sin la aparte y con cualquier estado de los conteos (no hay número que esperar: no es «cargando» ni «—»).
+  for (const conteo of [null, undefined, 12, 0, NaN]) {
+    for (const estado of [undefined, 'listo', 'cargando', 'actualizando', 'error']) {
+      assert.equal(estadoPastillaPestana(conteo, estado, { sinConteo: true }), 'oculto', `sinConteo: ${conteo} ${estado}`);
+      assert.equal(estadoPastillaPestana(conteo, estado, { aparteActiva: true, sinConteo: true }), 'oculto');
+      // Aditivo: sin la opción (o en false), exactamente lo de TEST 42.
+      assert.equal(estadoPastillaPestana(conteo, estado, { sinConteo: false }), estadoPastillaPestana(conteo, estado));
+      assert.equal(estadoPastillaPestana(conteo, estado, { aparteActiva: true, sinConteo: false }),
+        estadoPastillaPestana(conteo, estado, { aparteActiva: true }));
+    }
+  }
+  // BarraTabla le pasa la marca de la pestaña (PestanaTabla.sinConteo, opcional).
+  const barra = readFileSync(new URL('../src/components/tabla/BarraTabla.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(barra, /const estadoPastilla = estadoPastillaPestana\(p\.conteo, estadoConteos, \{ aparteActiva, sinConteo: p\.sinConteo \}\);/);
+  assert.match(barra, /sinConteo\?: boolean;/, 'PestanaTabla.sinConteo es opcional');
 }
 
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');

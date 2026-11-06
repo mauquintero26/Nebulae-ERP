@@ -540,4 +540,78 @@ console.log('--- B4 T7 TEST 3: pasoTrasPestana — elegir a mano la pestaña de 
   assert.equal(fv.pasoTrasPestana('OTRO', 'todos'), null);
 }
 
+console.log('--- B4 T8 TEST 1: pasosDeLista — la franja de una lista de Ventas con «Estás aquí», su detalle y los enlaces ---');
+{
+  // FLUJO-ventas-pantallas B.2 (D42): la caja de la lista es `actual` (esEste, sin href) y trae el detalle por estado
+  // con la etiqueta única de su tipo (infoEstadoSolicitud, infoEstadoCotizacion o infoEstadoPedido), en el orden de la
+  // tabla de estados y sin los ceros; las demás llevan el href de su lista (su ruta).
+  const datos = {
+    pasos: {
+      SC: { total: 5, atrasados: 2, mas_antiguo_dias: 9, por_estado: { CONFIRMADA: 1, ASIGNADA: 2, BORRADOR: 1, PENDIENTE_CONFIRMACION: 1 } },
+      COT: { total: 3, atrasados: 1, mas_antiguo_dias: 4, por_estado: { PENDIENTE_CONFIRMACION: 1, BORRADOR: 2 } },
+      PVEN: { total: 4, atrasados: 0, mas_antiguo_dias: 2, por_estado: { EN_PROCESO: 3, PENDIENTE_COMPRA: 1 } },
+      ENTREGADO: { total: 1, atrasados: null, mas_antiguo_dias: 1, por_estado: { ENTREGADO: 1 } },
+      FACTURADO: { total: 6, atrasados: null, mas_antiguo_dias: null, por_estado: { FACTURADO: 6 } },
+    },
+    cambios_cliente: { SC: 1, COT: 0 }, sin_respuesta: { SC: 0, COT: 2 },
+  };
+  const pasos = fv.pasosDeLista(datos, 'SC');
+  const base = pasosConConteos(PASOS_FLUJO_VENTAS, conteosDesdeResumen(datos), { actual: 'SC' });
+  assert.deepEqual(pasos.map((p) => p.clave), CLAVES);
+  assert.deepEqual(pasos.map((p) => p.esEste), [true, false, false, false, false]);
+  assert.equal(pasos[0].estado, 'actual');
+  assert.equal(pasos[0].href, undefined, 'la caja «Estás aquí» no lleva href (D42)');
+  assert.deepEqual(pasos.slice(1).map((p) => p.href), PASOS_FLUJO_VENTAS.slice(1).map((p) => p.ruta), 'las demás, a su lista');
+  assert.deepEqual(pasos[0].detalle, [
+    { label: 'Nueva', n: 1 }, { label: 'Asignada', n: 2 }, { label: 'Pendiente por confirmación', n: 1 }, { label: 'Confirmada', n: 1 },
+  ], 'en el orden de la tabla de estados de la SC');
+  assert.equal(flujo.textoDetalle(pasos[0].detalle), 'Nueva 1 · Asignada 2 · Pendiente por confirmación 1 · Confirmada 1');
+  for (const p of pasos.slice(1)) assert.equal(p.detalle, null, `${p.clave}: el detalle solo en la caja de la lista`);
+  // Lo demás (números, avisos de RP12, presentación) es lo de pasosConConteos con conteosDesdeResumen.
+  const sinMarcas = (p) => ({ ...p, href: undefined, detalle: undefined });
+  assert.deepEqual(pasos.map(sinMarcas), base.map(sinMarcas));
+  // Cotizaciones y Pedidos de venta (T9 y T10): el detalle con su tabla.
+  assert.deepEqual(fv.pasosDeLista(datos, 'COT')[1].detalle,
+    [{ label: infoEstadoCotizacion('BORRADOR').label, n: 2 }, { label: infoEstadoCotizacion('PENDIENTE_CONFIRMACION').label, n: 1 }]);
+  assert.deepEqual(fv.pasosDeLista(datos, 'PVEN')[2].detalle,
+    [{ label: infoEstadoPedido('PENDIENTE_COMPRA').label, n: 1 }, { label: infoEstadoPedido('EN_PROCESO').label, n: 3 }]);
+  assert.equal(fv.pasosDeLista(datos, 'COT')[0].href, '/dashboard/ventas/solicitud');
+  // Un estado desconocido va al final y humanizado; los ceros, los negativos y lo que no es un número no se pintan.
+  const raro = { pasos: { SC: { total: 3, atrasados: 0, por_estado: { ESTADO_NUEVO: 2, BORRADOR: 0, ASIGNADA: -1, CONFIRMADA: 'x', PENDIENTE_CONFIRMACION: 1 } } } };
+  assert.deepEqual(fv.pasosDeLista(raro, 'SC')[0].detalle,
+    [{ label: 'Pendiente por confirmación', n: 1 }, { label: infoEstadoSolicitud('ESTADO_NUEVO').label, n: 2 }]);
+  // Sin por_estado, el detalle vacío (la caja no pinta la línea).
+  assert.deepEqual(fv.pasosDeLista({ pasos: { SC: { total: 0, atrasados: 0 } } }, 'SC')[0].detalle, []);
+  // Mientras carga (sin datos): todo en null, como pasosConConteos con cargando, y los enlaces ya puestos.
+  const cargando = fv.pasosDeLista(null, 'SC');
+  assert.deepEqual(cargando.map((p) => [p.total, p.atrasados, p.detalle]), CLAVES.map(() => [null, null, null]));
+  assert.equal(cargando[0].esEste, true);
+  assert.deepEqual(cargando.slice(1).map((p) => p.href), PASOS_FLUJO_VENTAS.slice(1).map((p) => p.ruta));
+  // Sin `actual` conocido, ninguna es «Estás aquí» y todas son enlaces.
+  assert.deepEqual(fv.pasosDeLista(datos, 'OTRA').map((p) => [p.esEste, p.href]), PASOS_FLUJO_VENTAS.map((p) => [false, p.ruta]));
+}
+
+console.log('--- B4 T8 TEST 2: enlaceVerAnalisis — el botón «Ver análisis» de las listas abre el Hub enfocado (R13) ---');
+{
+  assert.equal(fv.enlaceVerAnalisis('sc'), '/dashboard/ventas?tab=analisis&foco=sc');
+  for (const { clave } of FOCOS_VENTAS) {
+    // El Hub lee lo mismo que la lista escribe (leerEnlaceHub, la de T7).
+    const enlace = fv.enlaceVerAnalisis(clave);
+    assert.deepEqual(fv.leerEnlaceHub(enlace.slice(enlace.indexOf('?'))), { paso: null, analisis: true, foco: clave }, clave);
+  }
+  // Un foco que no existe abre el Análisis sin foco (el Hub lo ignoraría igual).
+  for (const raro of ['pec', '', null, undefined, 'sc&tab=x']) {
+    assert.equal(fv.enlaceVerAnalisis(raro), '/dashboard/ventas?tab=analisis', String(raro));
+  }
+}
+
+console.log('--- B4 T8 TEST 3: avisoVencidas — el chip ámbar «N vencidas» de la franja de Solicitudes ---');
+{
+  // FLUJO-ventas-pantallas B.2 y RP19 (4): lee resumen.vencidas; sin vencidas, no hay chip.
+  assert.deepEqual(fv.avisoVencidas(1), { texto: '1 vencida', tono: 'ambar' });
+  assert.deepEqual(fv.avisoVencidas(3), { texto: '3 vencidas', tono: 'ambar' });
+  assert.deepEqual(fv.avisoVencidas(1234), { texto: '1.234 vencidas', tono: 'ambar' }, 'con el punto de miles');
+  for (const n of [0, -2, null, undefined, NaN, 'x', '']) assert.equal(fv.avisoVencidas(n), null, String(n));
+}
+
 console.log('\nOK: test_flujo_ventas.mjs');

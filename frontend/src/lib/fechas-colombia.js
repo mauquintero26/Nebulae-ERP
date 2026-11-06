@@ -92,6 +92,24 @@ export function fechaLarga(valor) {
   return `${p.day} de ${p.month} de ${p.year}`;
 }
 
+/** B4 T8: los meses en tres letras, sin punto (una tabla propia: el «nov.» de cada navegador varía). */
+const MESES_CORTOS = Object.freeze(['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']);
+
+/**
+ * B4 T8: '5 nov 2026', la fecha de las columnas de las tablas (cabe en 104 px). El mismo día que fechaLarga: un
+ * 'AAAA-MM-DD' es ese mismo día; un instante (Date o texto con hora; sin zona = UTC) es el día de Colombia. Lo demás
+ * -> ''.
+ * @param {unknown} valor
+ * @returns {string}
+ */
+export function fechaCorta(valor) {
+  const texto = typeof valor === 'string' ? valor.trim() : '';
+  const fecha = instante(valor);
+  const dia = diaDeCalendario(texto) ? texto : fecha ? diaColombia(fecha) : '';
+  const m = FECHA_DE_CALENDARIO.exec(dia);
+  return m ? `${Number(m[3])} ${MESES_CORTOS[Number(m[2]) - 1]} ${m[1]}` : '';
+}
+
 /**
  * La fecha de calendario 'AAAA-MM-DD' (o el inicio 'AAAA-MM-DD…' de un texto, como fecha_solo del backend) como
  * '21 de octubre de 2026', sin pasarla a ninguna zona. Lo demás -> ''.

@@ -55,6 +55,7 @@ import {
 } from './cambios-cliente.js';
 import { ACCIONES_BLOQUE3 } from './acciones-bloque3.js';
 import { enlaceDocumento } from './analisis.js';
+import { etiquetaTipoSolicitud } from './etiquetas-ventas.js';
 import { redondearPeso } from './pesos.js';
 
 /**
@@ -800,4 +801,79 @@ export function reglaSoltarSC(sc, origen, destino, { puedeEnviar = false, return
   if (destino === 'nueva' && estado === 'ASIGNADA') return bloqueado(TEXTO.QUITA_ASESOR, enlace);
   if (destino === 'asignada' && estado === 'BORRADOR') return bloqueado(TEXTO.ASIGNA_DESDE_SC, enlace);
   return bloqueado(TEXTO.SOLO_REINICIABLE);
+}
+
+// ─── B4 T8: lo que comparten la tabla y el tablero de la lista de Solicitudes ───
+
+/** Una opción del filtro de estados con la etiqueta única de la SC (estados-solicitud.js). */
+const opcionSC = (estado) => congelar({ valor: estado, etiqueta: infoEstadoSolicitud(estado).label });
+
+const SIN_OPCIONES = congelar([]);
+
+/** Los estados de cada pestaña (vista de GET /ventas/solicitudes) que el filtro ofrece. */
+const OPCIONES_SC_POR_VISTA = congelar({
+  activas: congelar(['BORRADOR', 'ASIGNADA', 'PENDIENTE_CONFIRMACION'].map(opcionSC)),
+  confirmadas: congelar([opcionSC('CONFIRMADA')]),
+  canceladas: congelar([opcionSC('CANCELADA')]),
+});
+
+/**
+ * B4 T8 (TABLA-listas-ventas punto 5, H15): las opciones del filtro de estados (FiltroEstados de BarraTabla) de la
+ * pestaña `vista` de Solicitudes, con los nombres de estados-solicitud.js: Activas → Nueva, Asignada y Pendiente por
+ * confirmación; Confirmadas → Confirmada; Canceladas → Cancelada. Soporte, la Papelera y cualquier otra vista no tienen
+ * filtro ([]). Los heredados (COTIZADA, …) no se ofrecen, como en el Hub (opcionesEstadosHub). Inmutables y la misma
+ * referencia en cada llamada.
+ * @param {string | null | undefined} vista
+ * @returns {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
+ */
+export function opcionesEstadosSolicitudes(vista) {
+  return typeof vista === 'string' && tiene(OPCIONES_SC_POR_VISTA, vista) ? OPCIONES_SC_POR_VISTA[vista] : SIN_OPCIONES;
+}
+
+/**
+ * B4 T8: las opciones del filtro de estados en el tablero de Solicitudes (vista=todas_sin_soporte): el estado de cada
+ * columna de COLUMNAS_SC (Nueva, Asignada, Pendiente por confirmación, Confirmada y Cancelada), en su orden. Inmutable.
+ * @type {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
+ */
+export const OPCIONES_ESTADOS_TABLERO_SC = congelar(COLUMNAS_SC.map((c) => opcionSC(c.estados[0])));
+
+/**
+ * B4 T8 (KANBAN-ventas-listas punto 7, R5): los estados que pide una columna del tablero de una lista: los de la columna
+ * cruzados con el filtro de estados de la pantalla (estado.estados), en el orden de la columna; sin filtro, los de la
+ * columna. Sin ninguno en común, [] (la pantalla no pide esa columna). Una copia nueva.
+ * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
+ * @param {ReadonlyArray<string> | null | undefined} filtro
+ * @returns {string[]}
+ */
+export function estadosDeColumnaLista(columna, filtro) {
+  const propios = Array.isArray(columna?.estados) ? columna.estados : [];
+  if (!Array.isArray(filtro) || filtro.length === 0) return [...propios];
+  return propios.filter((e) => filtro.includes(e));
+}
+
+/**
+ * B4 T8 (KANBAN-ventas-listas punto 7; RP15, RP18, D4, D37 y el cruce C5): la tarjeta del tablero de Solicitudes. Es
+ * la de tarjetaHub (número, cliente, estado, antigüedad, atraso, chipsDocumentoVentas y accionSiguienteDocumento) con el
+ * return_to de la lista (`returnTo`, por defecto RUTA_LISTA_SOLICITUDES) y el subtítulo «asesor · tipo de solicitud»
+ * (etiquetaTipoSolicitud; sin tipo, Cotización de producto, como la lista). La fila es una SC aunque no traiga `tipo`.
+ * @param {any} fila
+ * @param {{ahora?: number, returnTo?: string}} [opciones]
+ * @returns {TarjetaVentas}
+ */
+export function tarjetaSolicitud(fila, { ahora, returnTo = RUTA_LISTA_SOLICITUDES } = {}) {
+  const tarjeta = tarjetaHub({ ...fila, tipo: 'SC' }, { ahora, returnTo });
+  const tipoSolicitud = etiquetaTipoSolicitud(fila?.tipo_solicitud || 'Cotizacion de Producto');
+  return { ...tarjeta, subtitulo: `${tarjeta.subtitulo} · ${tipoSolicitud}` };
+}
+
+/**
+ * B4 T8 (RP16): si se ofrece «Reiniciar» en el menú ⋯ de una fila de Solicitudes, con la misma regla del tablero
+ * (reglaSoltarSC): puedeReiniciar con las cotizaciones activas y los pedidos_venta vigentes de la fila (T6B). Una fila
+ * que no es un objeto: false.
+ * @param {any} sc
+ * @returns {boolean}
+ */
+export function puedeReiniciarSC(sc) {
+  if (!sc || typeof sc !== 'object') return false;
+  return puedeReiniciar(sc, documentosDeSC(sc));
 }

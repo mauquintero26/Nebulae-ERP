@@ -357,9 +357,10 @@ export function contadoresSolicitudes(solicitudes, totalServidor = null) {
   const totalConf = lista.filter((s) => s.estado === 'CONFIRMADA').length;
   const conCot = lista.filter(generoCotizacion).length;
   const esperanCot = lista.filter(esperaCotizacion).length;
-  const hintConfirmadas = totalConf === 0 ? 'Sin confirmadas' : esperanCot > 0 ? `${esperanCot} esperan cotización` : 'Todas con cotización';
+  // B4 T8: las frases son las de pistaConfirmadasSolicitudes y pistaTotalSolicitudes (las de las tarjetas del servidor).
+  const hintConfirmadas = pistaConfirmadasSolicitudes(totalConf, esperanCot);
   const hayMas = Number.isFinite(totalServidor) && totalServidor > lista.length;
-  const hintTotal = `${conCot} generaron cotización` + (hayMas ? ` · se ven las ${lista.length} más recientes de ${totalServidor}` : '');
+  const hintTotal = pistaTotalSolicitudes(conCot) + (hayMas ? ` · se ven las ${lista.length} más recientes de ${totalServidor}` : '');
   return { total: lista.length, totalConf, conCot, esperanCot, hintConfirmadas, hintTotal };
 }
 
@@ -385,6 +386,19 @@ export function superaDiasAlerta(iso, dias, ahora = Date.now()) {
   if (!iso) return false;
   const t = new Date(comoUTC(iso)).getTime();
   return !Number.isNaN(t) && (ahora - t) / 86400000 > dias;
+}
+
+/**
+ * B4 T8: la fecha del API (UTC, con o sin 'Z': comoUTC) ya pasó: la columna Vencimiento de la lista de Solicitudes la
+ * pinta en rojo (la regla de la fila de antes, aquí para no llamar al reloj en el render). Lo que no es una fecha: false.
+ * @param {unknown} iso
+ * @param {number} [ahora]
+ * @returns {boolean}
+ */
+export function fechaVencida(iso, ahora = Date.now()) {
+  if (typeof iso !== 'string' || !iso.trim()) return false;
+  const t = new Date(comoUTC(iso)).getTime();
+  return !Number.isNaN(t) && t < ahora;
 }
 
 /**
@@ -434,6 +448,53 @@ export function pistaActivasSolicitudes(sinAtender, vencidas) {
   if (s > 0) partes.push(`${s} sin atender`);
   if (v > 0) partes.push(`${v} ${v === 1 ? 'vencida' : 'vencidas'}`);
   return partes.length > 0 ? partes.join(' · ') : 'Todas atendidas';
+}
+
+/**
+ * H32 (B4 T8: sacada de contadoresSolicitudes, la misma frase): la ayuda de la tarjeta de las solicitudes confirmadas:
+ * 'Sin confirmadas', 'N esperan cotización' o 'Todas con cotización'.
+ * @param {number} confirmadas
+ * @param {number} esperanCot
+ * @returns {string}
+ */
+export function pistaConfirmadasSolicitudes(confirmadas, esperanCot) {
+  const e = conteo(esperanCot);
+  if (conteo(confirmadas) === 0) return 'Sin confirmadas';
+  return e > 0 ? `${e} esperan cotización` : 'Todas con cotización';
+}
+
+/**
+ * H32 (B4 T8: sacada de contadoresSolicitudes): la ayuda de la tarjeta del total de solicitudes, 'N generaron
+ * cotización' (las que tienen al menos una COT, en cualquier estado).
+ * @param {number} conCot
+ * @returns {string}
+ */
+export function pistaTotalSolicitudes(conCot) {
+  return `${conteo(conCot)} generaron cotización`;
+}
+
+/** Un conteo del servidor (entero >= 0) o null (la tarjeta dice «—»; nunca se inventa un 0). */
+const conteoONulo = (n) => (typeof n === 'number' && Number.isInteger(n) && n >= 0 ? n : null);
+
+/**
+ * B4 T8 (KPI-ventas punto 7 con RP19 (3) y (4)): las 4 tarjetas de la lista de Solicitudes con el `resumen` de GET
+ * /ventas/solicitudes?con_resumen=1 (todas las solicitudes, sin Soporte):
+ *  - activas (sc_activas): resumen.activas, con pistaActivasSolicitudes(resumen.sin_atender, resumen.vencidas) (V7);
+ *  - confirmadas (sc_confirmadas): resumen.confirmadas, con pistaConfirmadasSolicitudes(confirmadas, esperan_cot);
+ *  - canceladas (sc_canceladas): resumen.canceladas, con 'Fuera del flujo';
+ *  - total (sc_total): resumen.total, con pistaTotalSolicitudes(con_cot).
+ * Sin resumen (cargando o con error), null. Un número que no viene queda en null.
+ * @param {any} resumen
+ * @returns {null | Record<'activas' | 'confirmadas' | 'canceladas' | 'total', {valor: number | null, ayuda: string}>}
+ */
+export function tarjetasSolicitudes(resumen) {
+  if (!esObjeto(resumen) || Array.isArray(resumen)) return null;
+  return {
+    activas: { valor: conteoONulo(resumen.activas), ayuda: pistaActivasSolicitudes(resumen.sin_atender, resumen.vencidas) },
+    confirmadas: { valor: conteoONulo(resumen.confirmadas), ayuda: pistaConfirmadasSolicitudes(resumen.confirmadas, resumen.esperan_cot) },
+    canceladas: { valor: conteoONulo(resumen.canceladas), ayuda: 'Fuera del flujo' },
+    total: { valor: conteoONulo(resumen.total), ayuda: pistaTotalSolicitudes(resumen.con_cot) },
+  };
 }
 
 const SEPARACION_MENU_FILA = 4; // px entre el botón «⋮» y su menú

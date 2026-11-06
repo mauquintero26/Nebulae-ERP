@@ -139,7 +139,14 @@ console.log('--- TEST 6 (T18 r1): AYUDA_NOTA_CLIENTE y las pantallas que usan la
   // La pastilla de la lista es UNA (ventas/chip-cambios-cliente.tsx) con etiquetaChipCambios, en las dos listas.
   const chip = leer('app/dashboard/ventas/chip-cambios-cliente.tsx');
   assert.ok(chip.includes('etiquetaChipCambios(doc, tipoDoc)') && chip.includes('avisoCambiosCliente(doc, tipoDoc)'));
-  assert.ok(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx').includes('<ChipCambiosCliente doc={sc}/>'), 'lista de SC');
+  // B4 T8 (D27, RP18, D4): la lista de SC pinta los chips de la fila con chipsDocumentoVentas (los mismos de la tarjeta
+  // del tablero y del Hub), cuyo chip de cambios sale de etiquetaChipCambios y avisoCambiosCliente: la misma fuente única.
+  const listaSC = leer('app/dashboard/ventas/solicitud/solicitud-client.tsx');
+  assert.ok(listaSC.includes("const chips = chipsDocumentoVentas(sc, 'SC');"), 'lista de SC');
+  assert.ok(!/'Cambios pedidos'|'Ya no la necesita'/.test(listaSC), 'lista de SC: sin el texto armado a mano');
+  const kanbanVentas = leer('lib/kanban-ventas.js');
+  assert.ok(/const etiqueta = etiquetaChipCambios\(fila, tipo\);/.test(kanbanVentas)
+    && /avisoCambiosCliente\(fila, tipo\)\?\.tono === 'rosa'/.test(kanbanVentas), 'chipsDocumentoVentas usa la fuente única');
   assert.ok(leer('app/dashboard/ventas/cotizacion/cotizacion-client.tsx').includes('<ChipCambiosCliente doc={cot} tipoDoc="COT"/>'),
     'lista de COT');
 }

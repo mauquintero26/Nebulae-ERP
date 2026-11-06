@@ -659,4 +659,99 @@ console.log('--- B4 T7 r1 TEST C (m7c y m7d): una sola lectura de los días y un
   }
 }
 
+console.log('--- B4 T8 TEST D: opcionesEstadosSolicitudes — el filtro de estados de cada pestaña de Solicitudes ---');
+{
+  // TABLA-listas-ventas punto 5 (H15): casillas con los nombres de estados-solicitud.js y solo los estados de la
+  // pestaña (las vistas de GET /ventas/solicitudes). Soporte y la Papelera no tienen filtro de estados.
+  const etiquetas = (vista) => kv.opcionesEstadosSolicitudes(vista).map((o) => [o.valor, o.etiqueta]);
+  assert.deepEqual(etiquetas('activas'), [['BORRADOR', 'Nueva'], ['ASIGNADA', 'Asignada'],
+    ['PENDIENTE_CONFIRMACION', 'Pendiente por confirmación']]);
+  assert.deepEqual(etiquetas('confirmadas'), [['CONFIRMADA', 'Confirmada']]);
+  assert.deepEqual(etiquetas('canceladas'), [['CANCELADA', 'Cancelada']]);
+  for (const vista of ['soporte', 'papelera', 'todas', null, undefined, 'otra']) {
+    assert.deepEqual(kv.opcionesEstadosSolicitudes(vista), [], String(vista));
+  }
+  // Las etiquetas son las de la tabla única (nunca el código crudo).
+  for (const vista of ['activas', 'confirmadas', 'canceladas']) {
+    for (const o of kv.opcionesEstadosSolicitudes(vista)) assert.equal(o.etiqueta, infoEstadoSolicitud(o.valor).label);
+  }
+  // El tablero (vista=todas_sin_soporte): un estado por columna, en el orden de COLUMNAS_SC.
+  assert.deepEqual(kv.OPCIONES_ESTADOS_TABLERO_SC.map((o) => o.valor),
+    ['BORRADOR', 'ASIGNADA', 'PENDIENTE_CONFIRMACION', 'CONFIRMADA', 'CANCELADA']);
+  assert.deepEqual(kv.OPCIONES_ESTADOS_TABLERO_SC.map((o) => o.valor), COLUMNAS_SC.map((c) => c.estados[0]));
+  for (const o of kv.OPCIONES_ESTADOS_TABLERO_SC) assert.equal(o.etiqueta, infoEstadoSolicitud(o.valor).label);
+  // Inmutables y la misma referencia en cada llamada (BarraTabla la llama en cada render).
+  assert.equal(kv.opcionesEstadosSolicitudes('activas'), kv.opcionesEstadosSolicitudes('activas'));
+  assert.equal(kv.opcionesEstadosSolicitudes('papelera'), kv.opcionesEstadosSolicitudes('soporte'));
+  assert.ok(Object.isFrozen(kv.opcionesEstadosSolicitudes('activas')) && Object.isFrozen(kv.OPCIONES_ESTADOS_TABLERO_SC));
+  assert.ok(Object.isFrozen(kv.opcionesEstadosSolicitudes('activas')[0]));
+}
+
+console.log('--- B4 T8 TEST E: estadosDeColumnaLista — los estados de una columna del tablero con el filtro de la pantalla ---');
+{
+  // KANBAN-ventas-listas punto 7 y R5: el tablero lee el MISMO estado que la tabla. Cada columna pide sus estados,
+  // cruzados con los del filtro (en el orden de la columna); sin filtro, los de la columna.
+  const confirmada = COLUMNAS_SC.find((c) => c.clave === 'confirmada');
+  assert.deepEqual(kv.estadosDeColumnaLista(confirmada, []), [...confirmada.estados]);
+  assert.deepEqual(kv.estadosDeColumnaLista(confirmada, null), [...confirmada.estados]);
+  assert.deepEqual(kv.estadosDeColumnaLista(confirmada, undefined), [...confirmada.estados]);
+  assert.deepEqual(kv.estadosDeColumnaLista(confirmada, ['CONFIRMADA']), ['CONFIRMADA']);
+  assert.deepEqual(kv.estadosDeColumnaLista(confirmada, ['VENCIDA', 'CONFIRMADA', 'ASIGNADA']), ['CONFIRMADA', 'VENCIDA'],
+    'el orden de la columna');
+  // Sin ninguno en común: [] (la pantalla no pide esa columna: queda vacía).
+  assert.deepEqual(kv.estadosDeColumnaLista(confirmada, ['ASIGNADA']), []);
+  assert.deepEqual(kv.estadosDeColumnaLista({ clave: 'x' }, ['ASIGNADA']), [], 'una columna sin estados');
+  assert.deepEqual(kv.estadosDeColumnaLista(null, []), []);
+  // Una copia: no se puede tocar la columna inmutable desde afuera.
+  const copia = kv.estadosDeColumnaLista(confirmada, []);
+  assert.notEqual(copia, confirmada.estados);
+}
+
+console.log('--- B4 T8 TEST F: tarjetaSolicitud — la tarjeta del tablero de Solicitudes ---');
+{
+  // KANBAN-ventas-listas punto 7, RP15, RP18, D4, D37 y el cruce C5: la de tarjetaHub con la lista de Solicitudes como
+  // return_to, y el subtítulo con el asesor y el tipo de solicitud.
+  const sc = {
+    tipo: 'SC', id: 7, numero: 'SC-7', estado: 'ASIGNADA', customer_name: 'Ana Ruiz', advisor_name: 'Laura',
+    productos: CON_PRODUCTOS, cotizaciones: [], pedidos_venta: [], dias_creado: 3, resolucion: 'ATRASADO', dias_sin_mov: 3,
+    seguimiento_estado: 'AGOTADO',
+  };
+  const base = tarjetaHub(sc, { returnTo: RUTA_LISTA_SOLICITUDES });
+  const t = kv.tarjetaSolicitud(sc);
+  assert.deepEqual({ ...t, subtitulo: null }, { ...base, subtitulo: null }, 'lo demás es la tarjeta del Hub');
+  assert.equal(t.subtitulo, 'Laura · Cotización de producto', 'sin tipo, Cotización de producto (como la lista)');
+  assert.equal(t.accionPrincipal.href, '/dashboard/ventas/solicitud/7?return_to=%2Fdashboard%2Fventas%2Fsolicitud');
+  assert.deepEqual(t.chips.map((c) => c.texto), ['Atrasado 3 días', 'Sin respuesta al recordatorio']);
+  assert.equal(kv.tarjetaSolicitud({ ...sc, tipo_solicitud: 'Devolucion de Producto' }).subtitulo, 'Laura · Devolución de producto');
+  assert.equal(kv.tarjetaSolicitud({ ...sc, advisor_name: '  ' }).subtitulo, 'Sin asignar · Cotización de producto');
+  // Con otra ruta de regreso (la que pase la pantalla) y sin `tipo` en la fila (es una SC).
+  const sinTipo = { ...sc };
+  delete sinTipo.tipo;
+  assert.deepEqual(kv.tarjetaSolicitud(sinTipo), t);
+  assert.equal(kv.tarjetaSolicitud(sc, { returnTo: RUTA_HUB_VENTAS }).accionPrincipal.href,
+    '/dashboard/ventas/solicitud/7?return_to=%2Fdashboard%2Fventas');
+}
+
+console.log('--- B4 T8 TEST G: puedeReiniciarSC — «Reiniciar» del menú de la fila con la misma regla del tablero (RP16) ---');
+{
+  // El menú ⋯ de la lista ofrece «Reiniciar» con los pedidos_venta de la fila (T6B), igual que reglaSoltarSC: antes
+  // pasaba pedidosVigentes: [] (la lista no los traía).
+  const pendiente = { tipo: 'SC', id: 3, estado: 'PENDIENTE_CONFIRMACION', advisor_user_id: 4, cotizaciones: [], pedidos_venta: [] };
+  assert.equal(kv.puedeReiniciarSC(pendiente), true);
+  assert.equal(kv.puedeReiniciarSC({ ...pendiente, estado: 'CONFIRMADA' }), true);
+  assert.equal(kv.puedeReiniciarSC({ ...pendiente, pedidos_venta: [{ id: 9, estado: 'EN_PROCESO' }] }), false, 'pedido vigente');
+  assert.equal(kv.puedeReiniciarSC({ ...pendiente, pedidos_venta: [{ id: 9, estado: 'CANCELADO' }] }), true, 'pedido cancelado');
+  assert.equal(kv.puedeReiniciarSC({ ...pendiente, cotizaciones: [{ id: 2, estado: 'BORRADOR' }] }), false, 'COT activa');
+  assert.equal(kv.puedeReiniciarSC({ ...pendiente, cotizaciones: [{ id: 2, estado: 'RECHAZADA' }] }), true, 'COT rechazada');
+  for (const estado of ['BORRADOR', 'ASIGNADA', 'CANCELADA']) assert.equal(kv.puedeReiniciarSC({ ...pendiente, estado }), false, estado);
+  assert.equal(kv.puedeReiniciarSC(null), false);
+  // La misma respuesta que el tablero: «reiniciar» en la columna donde queda, o el bloqueo «No se puede reiniciar».
+  for (const fila of [pendiente, { ...pendiente, pedidos_venta: [{ id: 9, estado: 'EN_PROCESO' }] },
+    { ...pendiente, estado: 'CONFIRMADA', cotizaciones: [{ id: 2, estado: 'ENVIADA' }] }]) {
+    const origen = fila.estado === 'CONFIRMADA' ? 'confirmada' : 'pendiente';
+    const r = reglaSoltarSC(fila, origen, 'asignada');
+    assert.equal(r.tipo === 'accion' && r.accion === 'reiniciar', kv.puedeReiniciarSC(fila), JSON.stringify(fila));
+  }
+}
+
 console.log('OK test_kanban_ventas');

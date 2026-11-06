@@ -154,15 +154,23 @@ console.log('--- V2 TEST 3: nunca se sale de la ventana (margen de 8 px) ---');
 
 console.log('--- V2 TEST 4: el menú de fila de la lista de solicitudes usa la posición fija ---');
 {
-  const rowMenu = cuerpo(sinComentarios(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx')), 'function RowMenu(');
-  assert.ok(/posicionMenuFila\(/.test(rowMenu), 'calcula la posición con posicionMenuFila');
-  assert.ok(/className="fixed /.test(rowMenu), 'el menú va con position: fixed');
-  assert.ok(!/absolute right-0 top-8/.test(rowMenu), 'sin la posición absoluta que el overflow cortaba');
+  // B4 T8 (D27, R11): el RowMenu de T11 se reemplazó por MenuFila de components/ui, el ÚNICO menú ⋯ de la app. La
+  // protección es la misma: posición fija calculada desde el botón (posicionMenu), en un portal sobre document.body (el
+  // overflow de la tabla no lo corta), las mismas opciones y se cierra con un clic afuera.
+  const lista = sinComentarios(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx'));
+  assert.ok(!lista.includes('function RowMenu('), 'sin el menú propio de la lista');
+  const acciones = cuerpo(lista, 'function CeldaAcciones(');
+  assert.ok(/<MenuFila items=\{items\} etiqueta=\{`Acciones de \$\{sc\.numero\}`\} \/>/.test(acciones), 'la fila usa MenuFila');
+  const menu = sinComentarios(leer('components/ui/MenuFila.tsx'));
+  assert.ok(/posicionMenu\(/.test(menu), 'calcula la posición desde el botón (posicionMenu)');
+  assert.ok(/createPortal\(/.test(menu) && /className="invisible fixed /.test(menu), 'en un portal, con position: fixed');
+  assert.ok(!/absolute right-0 top-8/.test(acciones), 'sin la posición absoluta que el overflow cortaba');
   // Las opciones y su lógica no cambian.
-  for (const texto of ['Ver Detalle', 'Editar', 'Reiniciar (volver a {destinoReinicio})', 'Enviar a la papelera', 'Cancelar Solicitud']) {
-    assert.ok(rowMenu.includes(texto), `sigue la opción ${texto}`);
+  for (const texto of ["etiqueta: 'Ver Detalle'", "etiqueta: 'Editar'", 'etiqueta: `Reiniciar (volver a ${destinoReinicio})`',
+    "etiqueta: 'Enviar a la papelera'", "etiqueta: 'Cancelar Solicitud'"]) {
+    assert.ok(acciones.includes(texto), `sigue la opción ${texto}`);
   }
-  assert.ok(rowMenu.includes("document.addEventListener('mousedown',close)"), 'sigue cerrando con un clic afuera');
+  assert.ok(menu.includes("document.addEventListener('pointerdown', alPresionar, true)"), 'sigue cerrando con un clic afuera');
 }
 
 console.log('--- V3 TEST 1 (revisión final, F12): CabeceraActividad apila el título y la fecha ---');
@@ -224,8 +232,16 @@ console.log('--- V5 TEST: barra de pasos del pedido con las etiquetas separadas 
 console.log('--- V6 + V7 TEST: lista de solicitudes ---');
 {
   const lista = sinComentarios(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx'));
-  assert.ok(lista.includes("tab==='Analisis'?'Análisis':tab"), 'la pestaña se ve «Análisis» (la clave sigue igual)');
-  assert.ok(/hint=\{pistaActivasSolicitudes\(sinAtender,vencidas\)\}/.test(lista), 'la tarjeta ACTIVAS usa pistaActivasSolicitudes');
+  // B4 T8 (D27, R13): la lista ya no tiene pestaña Análisis; queda el botón «Ver análisis» (con su tilde) al del Hub.
+  assert.ok(!/'Analisis'/.test(lista), 'sin la pestaña Analisis');
+  assert.ok(/<ContenidoEnlace icon=\{BarChart3\}>Ver análisis<\/ContenidoEnlace>/.test(lista), 'el botón dice «Ver análisis»');
+  // V7: la tarjeta de las activas dice la pista de pistaActivasSolicitudes; B4 T8 (RP19 (4)): con sin_atender y vencidas del
+  // resumen del servidor, por tarjetasSolicitudes (test_listas_ventas.mjs, B4 T8 TEST 1).
+  assert.ok(/<TarjetaKpi kpi="sc_activas" valor=\{tarjetas\?\.activas\.valor \?\? null\} ayuda=\{tarjetas\?\.activas\.ayuda\}/.test(lista),
+    'la tarjeta de las activas usa la ayuda de tarjetasSolicitudes');
+  assert.ok(/const tarjetas = tarjetasSolicitudes\(listado\.resumen\);/.test(lista));
+  const libListas = sinComentarios(leer('lib/listas-ventas.js'));
+  assert.ok(/ayuda: pistaActivasSolicitudes\(resumen\.sin_atender, resumen\.vencidas\)/.test(libListas), 'con pistaActivasSolicitudes');
   assert.ok(!lista.includes("'Todas atendidas'"), 'sin el texto armado a mano');
 }
 
@@ -305,8 +321,11 @@ console.log('--- R1 (4) TEST: la tarjeta de Activas de la pestaña Análisis no 
 {
   const lista = sinComentarios(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx'));
   assert.ok(!lista.includes('Todas en seguimiento regular'), 'sin el texto que ignoraba las vencidas');
-  const usos = lista.match(/hint=\{pistaActivasSolicitudes\(sinAtender,\s*vencidas\)\}/g) ?? [];
-  assert.equal(usos.length, 2, 'la tarjeta de la lista y la de Análisis usan la misma pista');
+  // B4 T8 (D27, R13): la pestaña Análisis de la lista se fue (y con ella su tarjeta de Activas). Queda UNA tarjeta de las
+  // activas, con la pista de tarjetasSolicitudes; ninguna otra arma su propia ayuda.
+  const usos = lista.match(/ayuda=\{tarjetas\?\.activas\.ayuda\}/g) ?? [];
+  assert.equal(usos.length, 1, 'una sola tarjeta de las activas, con la pista de la librería');
+  assert.equal((lista.match(/pistaActivasSolicitudes\(/g) ?? []).length, 0, 'la pantalla no arma la pista: la da tarjetasSolicitudes');
 }
 
 console.log('--- R1 (5) TEST 1: botonALaVista (el centro del botón dentro de la ventana y de sus contenedores) ---');
@@ -358,25 +377,28 @@ console.log('--- R1 (5) TEST 1b (revisión final, F11 M2): recortesDeAncestros, 
   // Con botonALaVista: el botón dentro de la ventana pero fuera de la tabla desplazada no está a la vista.
   const boton = { top: 100, bottom: 127, left: 880, right: 907 };
   assert.equal(botonALaVista(boton, recortesDeAncestros(ventana, [{ overflowX: 'auto', overflowY: 'visible', rect: caja(0, 0, 850, 900) }])), false);
-  // recortesDe (solicitud-client.tsx) solo junta los ancestros del DOM y llama a la función pura.
+  // B4 T8 (D27): recortesDe se fue con RowMenu (la lista usa MenuFila, que no deja el menú flotando: se cierra con
+  // cualquier scroll, ver el TEST 2). recortesDeAncestros y botonALaVista quedan probadas arriba como funciones puras.
   const lista = sinComentarios(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx'));
-  const recortes = lista.slice(lista.indexOf('function recortesDe('), lista.indexOf('function RowMenu('));
-  assert.ok(/recortesDeAncestros\(/.test(recortes), 'recortesDe usa recortesDeAncestros');
-  assert.ok(/getComputedStyle\(/.test(recortes) && /getBoundingClientRect\(\)/.test(recortes), 'lee el DOM y nada más');
+  assert.ok(!lista.includes('function recortesDe(') && !lista.includes('function RowMenu('), 'sin el menú propio de la lista');
 }
 
 console.log('--- R1 (5) TEST 2: RowMenu se cierra si su botón sale de la vista (solo al desplazar o redimensionar) ---');
 {
-  const rowMenu = cuerpo(sinComentarios(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx')), 'function RowMenu(');
-  assert.ok(/if\s*\(\s*alMover\s*\)\s*\{[^}]*if\s*\(\s*!botonALaVista\([^)]*\)\s*\)\s*\{\s*setOpen\(false\)/.test(rowMenu),
-    'fuera de la vista al desplazar o redimensionar: setOpen(false)');
-  assert.ok(/recortesDe\(/.test(rowMenu), 'con los contenedores que recortan (overflow) además de la ventana');
-  // Revisión final (F11, M3): la primera medición, la del clic que lo abre, nunca lo cierra (aunque el centro del «⋮»
-  // esté apenas fuera); solo un scroll o un resize posterior.
-  assert.ok(/ubicar\(false\);/.test(rowMenu), 'la primera medición no cierra');
-  assert.ok(/const alDesplazar\s*=\s*\(\)\s*=>\s*ubicar\(true\);/.test(rowMenu), 'el scroll y el resize sí');
-  assert.ok(/addEventListener\('scroll',\s*alDesplazar,\s*true\)/.test(rowMenu) && /addEventListener\('resize',\s*alDesplazar\)/.test(rowMenu));
-  assert.ok(/removeEventListener\('scroll',\s*alDesplazar,\s*true\)/.test(rowMenu) && /removeEventListener\('resize',\s*alDesplazar\)/.test(rowMenu));
+  // B4 T8 (D27, R11): el menú de la fila es MenuFila. Un scroll (de la página o de la tabla, en captura) o un cambio de
+  // tamaño de la ventana lo cierran (más estricto que T11: no queda pegado a un botón que se fue de la vista), y abrirlo no
+  // lo cierra (la primera medición solo lo ubica y lo muestra).
+  const lista = sinComentarios(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx'));
+  assert.ok(/<MenuFila items=\{items\}/.test(cuerpo(lista, 'function CeldaAcciones(')), 'la fila usa MenuFila');
+  const menu = sinComentarios(leer('components/ui/MenuFila.tsx'));
+  assert.ok(/const alDesplazar = \(e: Event\) => \{\s*if \(!\(e\.target instanceof Node && menu\.current\?\.contains\(e\.target\)\)\) setAbierto\(false\);/.test(menu),
+    'un scroll fuera del menú lo cierra');
+  assert.ok(/const alRedimensionar = \(\) => setAbierto\(false\);/.test(menu), 'un cambio de tamaño lo cierra');
+  assert.ok(/addEventListener\('scroll', alDesplazar, true\)/.test(menu) && /addEventListener\('resize', alRedimensionar\)/.test(menu));
+  assert.ok(/removeEventListener\('scroll', alDesplazar, true\)/.test(menu) && /removeEventListener\('resize', alRedimensionar\)/.test(menu));
+  // La primera medición (al abrir) solo ubica el menú y lo muestra: no lo cierra.
+  const abrir = menu.slice(menu.indexOf('useLayoutEffect(() => {'), menu.indexOf('}, [abierto]);'));
+  assert.ok(/m\.style\.visibility = 'visible';/.test(abrir) && !/setAbierto\(false\)/.test(abrir), 'abrir no lo cierra');
 }
 
 console.log('--- Revisión final (F3): la fecha y la hora de la Actividad de la COT y del PVEN pasan por comoUTC ---');

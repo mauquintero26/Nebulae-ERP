@@ -1,39 +1,50 @@
 'use client';
 
-import { useState, useEffect, useLayoutEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react';
+import {
+  useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, forwardRef, useImperativeHandle, createContext, useContext,
+} from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  FileText, AlertTriangle, CheckCircle2, Clock, Search, Plus, X,
-  Mail, ExternalLink, RefreshCw, ArrowLeft,
-  Activity, ChevronRight, MoreVertical, DollarSign, MessageCircle,
-  Edit2, Send, AlertCircle, ChevronDown, Truck,
-  Trash2, RotateCcw, LayoutGrid, List, ShieldAlert,
-  MessageSquare, Paperclip, Camera, TrendingUp, BarChart3, PieChart,
-  Sparkles, HelpCircle, Info, ChevronUp, Check, Bot, CornerDownLeft,
-  Eye, Archive, XCircle, ArrowUpRight, Award, Flame, Zap
+  FileText, AlertTriangle, CheckCircle2, Plus, X, Mail, RefreshCw, MessageCircle, Edit2, AlertCircle, Trash2, RotateCcw,
+  XCircle, BarChart3,
 } from 'lucide-react';
 
-import { apiFetch, API_URL, getToken } from '@/lib/api';
-import { SubNav, PageHeader, StatCard, Badge as SharedBadge, Modal, Button, EmptyState, useAvisos } from '@/components/ui';
+import { apiFetch, getToken } from '@/lib/api';
+import {
+  SubNav, PageHeader, Modal, Button, EmptyState, useAvisos, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila,
+  TableroKanban, useTableroKanban, CLASE_CHIP,
+} from '@/components/ui';
+import type { ItemMenuFila } from '@/components/ui';
+// B4 T8: la lista 100 % en el servidor con las piezas estándar (R5, R8, R11, R12, R13, R26; C3, C4, C13, C14, C15, C21).
+import {
+  BarraTabla, TablaEstandar, useEstadoTabla, useListado, useListadoCliente, usePantallaCompleta, usePreferenciasTabla,
+} from '@/components/tabla';
+import type { ColumnaTabla, PestanaTabla } from '@/components/tabla';
+import { BannerFlujo, useResumenFlujo } from '@/components/flujo';
+import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
+import {
+  accesoresDeOrden, accionPestana, dependenciasTablero, estadoDelTotal, normalizarRespuesta, queryListado,
+} from '@/lib/tabla';
+import { alternarSeleccion } from '@/lib/flujo';
+import { avisoVencidas, enlaceVerAnalisis, pasosDeLista, textoRegla } from '@/lib/flujo-ventas';
+import {
+  COLUMNAS_SC, OPCIONES_ESTADOS_TABLERO_SC, chipsDocumentoVentas, confirmacionReiniciarSolicitud, estadoDeTarjeta,
+  estadosDeColumnaLista, opcionesEstadosSolicitudes, puedeReiniciarSC, reglaSoltarSC, tarjetaSolicitud,
+} from '@/lib/kanban-ventas';
 import { textoDeError, recargarTrasError } from '@/lib/avisos';
 import { VEN_NAV } from '../ven-nav';
-import { PAGE_HEADER } from '@/lib/design-system';
+import { PAGE_HEADER, TABLE } from '@/lib/design-system';
 import { esAdministrador, esAsesorElegible, getUsuarioActual } from '../flujo';
-import { coincideProducto } from '@/lib/busqueda';
 import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas';
 import {
-  diasAlerta, generoCotizacion, cotizacionesVigentes, contadoresSolicitudes, tasaConversionCotizacion,
-  superaDiasAlerta, resumenCancelacionSolicitudes, repartirCancelacionSolicitudes, estadoEnPapelera, esSolicitudActiva,
-  pestanaDeSolicitud, pistaActivasSolicitudes, posicionMenuFila, botonALaVista, recortesDeAncestros,
-  contarVencidasEnPapelera, confirmacionVaciarVencidas, textoPapeleraVaciada,
+  generoCotizacion, cotizacionesVigentes, resumenCancelacionSolicitudes, repartirCancelacionSolicitudes, estadoEnPapelera,
+  contarVencidasEnPapelera, confirmacionVaciarVencidas, textoPapeleraVaciada, tarjetasSolicitudes, fechaVencida,
 } from '@/lib/listas-ventas';
-import { comoUTC } from '@/lib/hub-ventas';
+import { fechaCorta, fechaLarga } from '@/lib/fechas-colombia';
 import { mailtoUrl, telUrl, motivoTelefono } from '@/lib/chatter';
 import { waUrl } from '@/lib/whatsapp';
-import {
-  ESTADOS_SC as ESTADOS_SC_LIB, ESTADOS_SC_HEREDADOS, infoEstadoSolicitud, puedeReiniciar, motivoDeCancelacion,
-} from '@/lib/estados-solicitud';
+import { ESTADOS_SC as ESTADOS_SC_LIB, infoEstadoSolicitud, motivoDeCancelacion } from '@/lib/estados-solicitud';
 import { infoEstadoPedido, humanizarCodigo } from '@/lib/estados-pedido';
 import { ESTADOS as ESTADOS_COT } from '../cotizacion/cotizacion-client';
 import { TIPOS_SC, MODALIDADES_PAGO, pctAnticipoDeModalidad } from '@/lib/etiquetas-solicitud';
@@ -42,7 +53,7 @@ import { nombreCliente } from '@/lib/cliente-desde-busqueda';
 import { ProductSearch } from './buscador-producto';
 import { SelectorClienteSC } from './selector-cliente';
 import { LineasProducto } from './lineas-producto';
-import { ChipCambiosCliente } from '../chip-cambios-cliente';
+import { RUTA_LISTA_SOLICITUDES } from '@/lib/cambios-cliente';
 
 // T7: las tablas viven en las librerías (H10/C16 y U15/C5: una sola fuente). Se reexportan desde aquí para no romper los
 // imports del detalle (solicitud/[id]), del Hub y del Asistente Omnicanal. ProductSearch (buscador-producto.tsx) y
@@ -448,105 +459,329 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
   );
 });
 
-// â”€â”€ 3-dot Row Menu â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// T11 ronda 1 (5): lo que recorta al botón «⋮»: la ventana y cada ancestro con overflow distinto de visible (el
-// overflow-x-auto de la tabla, la tarjeta con overflow-hidden, el <main> que se desplaza), en coordenadas de la ventana.
-// Revisión final (F11, M2): aquí solo se leen los ancestros del DOM; la decisión es recortesDeAncestros (listas-ventas.js,
-// probada con node).
-function recortesDe(el:HTMLElement|null){
-  const ancestros:{overflowX:string;overflowY:string;rect:DOMRect}[]=[];
-  for(let p=el?.parentElement;p&&p!==document.body;p=p.parentElement){
-    const {overflowX,overflowY}=getComputedStyle(p);
-    ancestros.push({overflowX,overflowY,rect:p.getBoundingClientRect()});
-  }
-  return recortesDeAncestros({ancho:window.innerWidth,alto:window.innerHeight},ancestros);
+// ── B4 T8: las piezas de la lista (TABLA-listas-ventas, KANBAN-ventas-listas, KPI-ventas y FLUJO-ventas-pantallas) ──
+// T11 (V2) armó aquí RowMenu (el menú «⋮» con posición fija, posicionMenuFila y recortesDe): lo reemplaza MenuFila de
+// components/ui (R11: el ÚNICO menú ⋯, en un portal con posición fija, que se cierra con un clic afuera, Esc, un scroll o
+// un cambio de tamaño). Las opciones y su lógica son las mismas (CeldaAcciones).
+
+/** Un documento ligero de las listas `cotizaciones` y `pedidos_venta` de una fila (H32, RP15). */
+type DocLigero = { id: number; numero?: string | null; estado?: string | null };
+
+/**
+ * Una fila de GET /ventas/solicitudes (T6B): el _sc_dict de la solicitud, sus cotizaciones y pedidos_venta ligeros, y
+ * tipo, resolucion, dias_sin_mov, dias_creado y seguimiento_estado (R8, C14). La resolución y el atraso son los del
+ * servidor: aquí no se recalculan. Lo demás pasa tal cual a las librerías.
+ */
+type FilaSC = {
+  id: number;
+  numero: string;
+  estado: string;
+  tipo?: string;
+  tipo_solicitud?: string | null;
+  customer_name?: string | null;
+  customer_phone?: string | null;
+  advisor_name?: string | null;
+  advisor_user_id?: number | null;
+  fecha_solicitud?: string | null;
+  fecha_vencimiento?: string | null;
+  eliminada_at?: string | null;
+  cotizaciones?: DocLigero[] | null;
+  pedidos_venta?: DocLigero[] | null;
+  resolucion?: 'ATRASADO' | 'NO_RESUELTO' | 'ACCION_TOMADA' | 'CERRADO' | null;
+  dias_sin_mov?: number | null;
+  dias_creado?: number | null;
+  seguimiento_estado?: string | null;
+  [campo: string]: unknown;
+};
+
+/** Una fila de GET /ventas/solicitudes/papelera (B2.1 y N4): todas canceladas, sin `estado`. */
+type FilaPapelera = {
+  id: number;
+  numero: string;
+  customer_name?: string | null;
+  advisor_name?: string | null;
+  tipo_solicitud?: string | null;
+  razon_cancelacion?: string | null;
+  notas?: string | null;
+  eliminada_at?: string | null;
+  dias_restantes?: number | null;
+  tiene_documentos?: boolean;
+  [campo: string]: unknown;
+};
+
+/** `resumen` de con_resumen=1 (RP19): las tarjetas, la ayuda de Activas y el aviso «N vencidas». */
+type ResumenSC = {
+  activas?: number; confirmadas?: number; canceladas?: number; total?: number; con_cot?: number; esperan_cot?: number;
+  sin_atender?: number; vencidas?: number;
+};
+/** `conteos` de con_conteos=1: las pestañas (con la búsqueda; sin vista, estados ni semáforo, R5). */
+type ConteosSC = Partial<Record<'activas' | 'confirmadas' | 'canceladas' | 'soporte', number>>;
+/** Lo que trajo la Papelera: `vuelta` es la de la petición que llegó; `filas`, null hasta la primera respuesta. */
+type CargaPapelera = { vuelta: number; filas: FilaPapelera[] | null; error: string };
+
+/** El id de la lista: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26), y el del
+ *  modo compacto de la franja (RP90). */
+const ID_SC = 'ventas.solicitudes';
+/** RP37: la Papelera es otra tabla (modo cliente), con su propio id para sus columnas. */
+const ID_PAPELERA = 'ventas.solicitudes.papelera';
+/** R8 (atencion_primero_listas = «Sí; con un clic en una columna ordenas como quieras»): primero lo atrasado. */
+const INICIAL_SC = { vista: 'activas', orden: 'atencion' };
+/** KANBAN-ventas-listas punto 7: los tickets de Soporte y la Papelera no van al tablero (se ven en lista). */
+const VISTAS_SIN_TABLERO = ['soporte', 'papelera'];
+/** R5: el tablero de Solicitudes trae todas, sin Soporte (la vista que reemplaza al viejo sin_soporte). */
+const VISTA_TABLERO_SC = 'todas_sin_soporte';
+/**
+ * RP35: la Papelera no es una vista del servidor y ahí la lista no pide nada. Solo si se entra directo a ella (la sesión
+ * la recuerda) y todavía no llegaron los conteos, se piden una vez sin filas (limit=0) y sin la vista: las pestañas y las
+ * tarjetas, que se ven también en la Papelera, no quedan en gris (D-T8-2 del reporte).
+ */
+const EXTRA_PAPELERA = { vista: null, limit: 0 };
+const PAPELERA_SIN_CARGAR: CargaPapelera = { vuelta: -1, filas: null, error: '' };
+const SIN_FILAS_PAPELERA: FilaPapelera[] = [];
+
+// Los chips: los tintes del tablero (CLASE_CHIP de components/ui/Kanban.tsx), así la misma marca sale igual en Lista y en
+// Kanban (como el Hub, T7 r1 m7a). Sin tamaño de letra: cada uso pone el suyo.
+const CHIP = 'inline-block max-w-full truncate rounded-full border px-1.5 py-0.5 font-bold leading-tight';
+const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
+// D41: el tono opaco filaAlerta para la fila atrasada (la resolución del servidor, R8; antes un rosa translúcido solo en
+// las Nuevas sin atender) y la marca rosa a la izquierda del Hub (una sombra en la primera celda, no un tinte).
+const MARCA_ATRASO = '[&>td:first-child]:shadow-[inset_3px_0_0_var(--color-rose-500)]';
+const claseDeFila = (sc: FilaSC) => (sc.resolucion === 'ATRASADO' ? `${TABLE.filaAlerta} ${MARCA_ATRASO}` : null);
+const BOTON_FILA = `p-1.5 rounded-lg text-xs font-bold transition-colors ${FOCO_VISIBLE}`;
+
+/** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
+type AccionesFilaSC = {
+  abrir: (sc: { id: number }) => void;
+  cancelar: (sc: FilaSC) => void;
+  aPapelera: (sc: FilaSC) => void;
+  reiniciar: (sc: FilaSC) => void;
+  restaurar: (sc: FilaPapelera) => void;
+  eliminar: (sc: FilaPapelera) => void;
+};
+const AccionesLista = createContext<AccionesFilaSC | null>(null);
+
+/** H32: la marca de la cotización de la solicitud, debajo del número (las COT ligeras de la fila, T6B). */
+function marcaCotizacion(sc: FilaSC): { texto: string; clase: string } | null {
+  if (cotizacionesVigentes(sc).length > 0) return { texto: 'COT vinculada', clase: 'text-amber-700' };
+  if (generoCotizacion(sc)) return { texto: 'COT rechazada', clase: 'text-rose-600' };
+  return null;
 }
-function RowMenu({sc,onView,onReiniciar,onCancel,onSendToTrash}:{sc:any;onView:()=>void;onReiniciar:()=>void;onCancel:()=>void;onSendToTrash:()=>void}) {
-  const [open,setOpen]=useState(false);
-  const ref=useRef<any>(null);
-  const botonRef=useRef<HTMLButtonElement>(null);
-  const menuRef=useRef<HTMLDivElement>(null);
-  const [posicion,setPosicion]=useState<{top:number;left:number}|null>(null);
-  useEffect(()=>{
-    function close(e:MouseEvent){if(ref.current&&!ref.current.contains(e.target))setOpen(false);}
-    document.addEventListener('mousedown',close);
-    return()=>document.removeEventListener('mousedown',close);
-  },[]);
-  // T11 (V2): el menú va con position: fixed calculado desde el botón (posicionMenuFila): el overflow del contenedor de
-  // la tabla ya no lo corta, y si no cabe abajo se abre hacia arriba. Se mide antes de pintar (useLayoutEffect) y se
-  // recalcula al desplazar o cambiar el tamaño de la ventana, para que siga pegado al botón. Sigue dentro de `ref`: el
-  // clic afuera lo cierra igual que antes. Ronda 1 (5): si al desplazar el botón sale de la vista (de la ventana o de un
-  // contenedor que lo recorta), el menú se cierra en vez de quedar flotando pegado al borde.
-  // Revisión final (F11, M3): solo al desplazar o redimensionar (alMover). La primera medición, la del clic que lo abre,
-  // nunca lo cierra: un «⋮» con el centro apenas fuera de la vista ya no hace que el menú se abra y se cierre solo.
-  useLayoutEffect(()=>{
-    if(!open) return;
-    function ubicar(alMover:boolean){
-      const boton=botonRef.current?.getBoundingClientRect();
-      const menu=menuRef.current;
-      if(!boton||!menu) return;
-      if(alMover){
-        const recortes=recortesDe(botonRef.current);
-        if(!botonALaVista(boton,recortes)){setOpen(false);return;}
-      }
-      setPosicion(posicionMenuFila(boton,{ancho:menu.offsetWidth,alto:menu.offsetHeight},{ancho:window.innerWidth,alto:window.innerHeight}));
-    }
-    const alDesplazar = () => ubicar(true);
-    ubicar(false);
-    window.addEventListener('scroll', alDesplazar, true);
-    window.addEventListener('resize', alDesplazar);
-    return()=>{window.removeEventListener('scroll', alDesplazar, true);window.removeEventListener('resize', alDesplazar);};
-  },[open]);
-  const isCancelled = sc.estado === 'CANCELADA';
-  const isSoporte = sc.tipo_solicitud === 'Soporte Tecnico';
-  // N4: una SC cancelada solo vuelve por "Restaurar" en la Papelera (el PATCH responde 409) y una que ya tiene
-  // eliminada_at ya esta en la Papelera: no se ofrece mandarla otra vez.
-  // U15 (R30): ningún estado se pone a mano; 'Reiniciar' solo en Pendiente por confirmación o Confirmada sin documentos
-  // activos (nunca en Cancelada ni en Soporte). La lista no trae los pedidos de venta: un PVEN vigente siempre cuelga de
-  // una COT activa, y si no, el 409 de R10 del servidor lo explica.
-  const reiniciable = puedeReiniciar(sc, {cotizacionesActivas: cotizacionesVigentes(sc), pedidosVigentes: []});
-  const destinoReinicio = infoEstadoSolicitud(sc.advisor_user_id ? 'ASIGNADA' : 'BORRADOR').label;
-  const mostrarAcciones = !isCancelled || !sc.eliminada_at;
+
+/** SC / Trazabilidad: el número y, debajo, «COT vinculada» o «COT rechazada» (H32). */
+function CeldaNumero({ sc }: { sc: FilaSC }) {
+  const marca = marcaCotizacion(sc);
   return (
-    <div className="relative" ref={ref}>
-      <button ref={botonRef} onClick={e=>{e.stopPropagation();setOpen(o=>!o);}} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg"><MoreVertical size={15}/></button>
-      {open&&(
-        <div ref={menuRef} style={posicion?{top:posicion.top,left:posicion.left}:{top:0,left:0,visibility:'hidden'}}
-          className="fixed z-50 bg-white border border-slate-200 rounded-xl shadow-xl w-56 py-1">
-          <button onClick={()=>{onView();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm font-medium flex items-center gap-2"><FileText size={14} className="text-indigo-500"/>Ver Detalle</button>
-          <button onClick={()=>{onView();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm font-medium flex items-center gap-2"><Edit2 size={14} className="text-amber-500"/>Editar</button>
-          {/* Soporte Tecnico no participa del estado ligado a Cotizacion (siempre
-              N/A_SOPORTE) ni de su flujo de cancelacion/papelera — su estado
-              propio (estado_soporte) se cambia desde el panel de detalle, no con
-              estos botones (cancelar aqui marcaria eliminada_at y lo mandaria a
-              purga en 30 dias, perdiendo el ticket de soporte real) */}
-          {!isSoporte && mostrarAcciones && (
-            <>
-              <div className="border-t border-slate-100 my-1"/>
-              {reiniciable&&(
-                <>
-                  <button onClick={()=>{onReiniciar();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm font-medium flex items-center gap-2 text-slate-700">
-                    <RotateCcw size={14} className="text-cyan-600"/>Reiniciar (volver a {destinoReinicio})
-                  </button>
-                  <div className="border-t border-slate-100 my-1"/>
-                </>
-              )}
-              {isCancelled ? (
-                <button onClick={()=>{onSendToTrash();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-rose-50 text-sm font-medium flex items-center gap-2 text-rose-600">
-                  <Trash2 size={14}/>Enviar a la papelera
-                </button>
-              ) : (
-                <button onClick={()=>{onCancel();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-amber-50 text-sm font-medium flex items-center gap-2 text-amber-600">
-                  <AlertCircle size={14}/>Cancelar Solicitud
-                </button>
-              )}
-            </>
-          )}
-        </div>
-      )}
-    </div>
+    <span className="flex min-w-0 flex-col items-start leading-tight">
+      <span className="max-w-full truncate text-xs font-black text-indigo-700">{sc.numero}</span>
+      {marca && <span className={`max-w-full truncate text-[10px] font-bold ${marca.clase}`}>{marca.texto}</span>}
+    </span>
   );
 }
+
+function CeldaCliente({ sc }: { sc: FilaSC }) {
+  return (
+    <span className="flex min-w-0 flex-col leading-tight">
+      <span className="truncate text-xs font-bold text-slate-800">{sc.customer_name || '-'}</span>
+      {sc.customer_phone && <span className="truncate text-[11px] text-slate-500">{sc.customer_phone}</span>}
+    </span>
+  );
+}
+
+/** Vencimiento: en rojo y con el triángulo si ya pasó (fechaVencida; la fecha llega en UTC sin zona). «5 nov 2026». */
+function CeldaVencimiento({ sc }: { sc: FilaSC }) {
+  const vencida = fechaVencida(sc.fecha_vencimiento);
+  return (
+    <span className={`text-xs ${vencida ? 'font-bold text-red-600' : 'font-medium text-slate-600'}`}>
+      {vencida && <AlertTriangle size={10} aria-hidden="true" className="mr-1 inline" />}
+      {fechaCorta(sc.fecha_vencimiento) || '-'}
+    </span>
+  );
+}
+
+/** U18+H31: en Canceladas, el motivo de la cancelación (nunca se inventa uno). */
+function CeldaMotivo({ sc }: { sc: FilaSC }) {
+  const motivo = motivoDeCancelacion(sc);
+  return <span className={`text-xs ${motivo ? 'font-semibold text-rose-800' : 'italic text-slate-500'}`}>{motivo || SIN_MOTIVO_REGISTRADO}</span>;
+}
+
+/**
+ * Estado: la insignia de estados-solicitud.js (U15: un estado desconocido sale humanizado) y, debajo, los chips de la
+ * fila (chipsDocumentoVentas, RP18 y D4): «Atrasado N días», «Sin respuesta al recordatorio» (C14) y el de los cambios del
+ * cliente de B3-T18 («Cambios pedidos» o «Ya no la necesita», etiquetaChipCambios): los mismos de la tarjeta del tablero.
+ */
+function CeldaEstado({ sc }: { sc: FilaSC }) {
+  const e = estadoDeTarjeta('SC', sc.estado);
+  const chips = chipsDocumentoVentas(sc, 'SC');
+  const estilo = e.colores ? { color: e.colores.color, backgroundColor: e.colores.bg, borderColor: e.colores.border } : undefined;
+  return (
+    <span className="flex min-w-0 flex-col items-start gap-0.5">
+      <span className={`${CHIP} text-[11px]`} style={estilo}>{e.label}</span>
+      {chips.length > 0 && (
+        <span className="flex min-w-0 max-w-full flex-col items-start gap-0.5">
+          {chips.map((c) => <span key={c.texto} className={`${CHIP} min-w-0 text-[10px] ${CLASE_CHIP[c.tono] ?? CLASE_CHIP.slate}`}>{c.texto}</span>)}
+        </span>
+      )}
+    </span>
+  );
+}
+
+const tituloEstado = (sc: FilaSC) =>
+  [estadoDeTarjeta('SC', sc.estado).label, ...chipsDocumentoVentas(sc, 'SC').map((c) => c.texto)].join(' · ');
+
+/**
+ * Acciones: Ver, Cancelar (o «Enviar a la papelera» si ya está cancelada y no está en ella) y el menú ⋯ de T11 con sus
+ * mismas opciones. N4: una SC cancelada solo vuelve por «Restaurar» en la Papelera y una que ya tiene eliminada_at ya está
+ * en ella. Soporte Técnico no participa del estado ligado a la cotización ni de su cancelación (cancelarla la mandaría a
+ * la purga y se perdería el ticket): su estado propio se cambia en el detalle. U15 (R30): ningún estado se pone a mano;
+ * «Reiniciar» solo en Pendiente por confirmación o Confirmada sin documentos activos (puedeReiniciarSC: la regla del
+ * tablero, con los pedidos_venta de la fila).
+ */
+function CeldaAcciones({ sc }: { sc: FilaSC }) {
+  const acciones = useContext(AccionesLista);
+  const soporte = sc.tipo_solicitud === 'Soporte Tecnico';
+  const cancelada = sc.estado === 'CANCELADA';
+  const conAcciones = !soporte && (!cancelada || !sc.eliminada_at);
+  const destinoReinicio = infoEstadoSolicitud(sc.advisor_user_id ? 'ASIGNADA' : 'BORRADOR').label;
+  const items: ItemMenuFila[] = [
+    { etiqueta: 'Ver Detalle', icono: FileText, onClick: () => acciones?.abrir(sc) },
+    { etiqueta: 'Editar', icono: Edit2, onClick: () => acciones?.abrir(sc) },
+    { etiqueta: `Reiniciar (volver a ${destinoReinicio})`, icono: RotateCcw, onClick: () => acciones?.reiniciar(sc),
+      oculto: !conAcciones || !puedeReiniciarSC(sc) },
+    { etiqueta: 'Enviar a la papelera', icono: Trash2, peligro: true, onClick: () => acciones?.aPapelera(sc), oculto: !conAcciones || !cancelada },
+    { etiqueta: 'Cancelar Solicitud', icono: AlertCircle, peligro: true, onClick: () => acciones?.cancelar(sc), oculto: !conAcciones || cancelada },
+  ];
+  return (
+    <span className="flex items-center justify-end gap-1">
+      <button type="button" onClick={() => acciones?.abrir(sc)} title="Ver Detalle" aria-label={`Ver ${sc.numero}`}
+        className={`${BOTON_FILA} bg-indigo-50 hover:bg-indigo-100 text-indigo-700`}>
+        <FileText size={13} aria-hidden="true" />
+      </button>
+      {conAcciones && (cancelada ? (
+        <button type="button" onClick={() => acciones?.aPapelera(sc)} title="Enviar a la papelera" aria-label={`Enviar ${sc.numero} a la papelera`}
+          className={`${BOTON_FILA} bg-rose-50 hover:bg-rose-100 text-rose-600`}>
+          <Trash2 size={13} aria-hidden="true" />
+        </button>
+      ) : (
+        <button type="button" onClick={() => acciones?.cancelar(sc)} title="Cancelar Solicitud" aria-label={`Cancelar ${sc.numero}`}
+          className={`${BOTON_FILA} bg-slate-100 hover:bg-amber-50 hover:text-amber-700 text-slate-600`}>
+          <X size={13} aria-hidden="true" />
+        </button>
+      ))}
+      <MenuFila items={items} etiqueta={`Acciones de ${sc.numero}`} />
+    </span>
+  );
+}
+
+/**
+ * B4 T8, la tabla (TABLA-listas-ventas punto 5; R26, D41). Las columnas del diseño: SC / Trazabilidad (clave, fija a la
+ * izquierda), Tipo, Cliente (la flexible), Asesor, Fecha, Vencimiento, Estado (clave) y Acciones (fija a la derecha). Tipo,
+ * Asesor y Fecha salen ocultas (R26: se muestran con «Ajustar tabla»). A 1024 px con el menú abierto quedan 704 px para
+ * las columnas (lo midió T7 en el Hub, con el mismo contenedor): 40 de la casilla + 132 + 160 + 104 + 120 + 104 = 660.
+ * Constantes (estables, D40); sus celdas piden a la pantalla lo suyo por AccionesLista.
+ */
+const COLUMNA_VENCIMIENTO: ColumnaTabla<FilaSC> = {
+  id: 'vencimiento', titulo: 'Vencimiento', ancho: 104, ordenable: 'vencimiento',
+  titleCelda: (sc) => fechaLarga(sc.fecha_vencimiento) || 'Sin vencimiento', celda: (sc) => <CeldaVencimiento sc={sc} />,
+};
+/** En Canceladas, la misma columna (el mismo id: el usuario la mueve y la estira una sola vez) dice el motivo. */
+const COLUMNA_MOTIVO: ColumnaTabla<FilaSC> = {
+  id: 'vencimiento', titulo: 'Motivo', ancho: 140,
+  titleCelda: (sc) => motivoDeCancelacion(sc) || SIN_MOTIVO_REGISTRADO, celda: (sc) => <CeldaMotivo sc={sc} />,
+};
+
+function columnasDeLaTabla(vencimiento: ColumnaTabla<FilaSC>): ColumnaTabla<FilaSC>[] {
+  return [
+    { id: 'numero', titulo: 'SC / Trazabilidad', ancho: 132, clave: true, fija: 'izquierda', ordenable: 'numero',
+      titleCelda: (sc) => [sc.numero, marcaCotizacion(sc)?.texto].filter(Boolean).join(' · '), celda: (sc) => <CeldaNumero sc={sc} /> },
+    { id: 'tipo', titulo: 'Tipo', ancho: 120, ocultaPorDefecto: true, ordenable: 'tipo',
+      titleCelda: (sc) => etiquetaTipoSolicitud(sc.tipo_solicitud || 'Cotizacion de Producto'),
+      celda: (sc) => <TipoBadge tipo={sc.tipo_solicitud || 'Cotizacion de Producto'} /> },
+    { id: 'cliente', titulo: 'Cliente', ancho: 160, flexible: true, ordenable: 'cliente',
+      titleCelda: (sc) => [sc.customer_name || '-', sc.customer_phone].filter(Boolean).join(' · '),
+      celda: (sc) => <CeldaCliente sc={sc} /> },
+    { id: 'asesor', titulo: 'Asesor', ancho: 120, ocultaPorDefecto: true, ordenable: 'asesor', celda: (sc) => sc.advisor_name || '-' },
+    { id: 'fecha', titulo: 'Fecha', ancho: 96, ocultaPorDefecto: true, ordenable: 'creado',
+      titleCelda: (sc) => fechaLarga(sc.fecha_solicitud) || null, celda: (sc) => fechaCorta(sc.fecha_solicitud) || '-' },
+    vencimiento,
+    { id: 'estado', titulo: 'Estado', ancho: 120, clave: true, ordenable: 'estado', titleCelda: tituloEstado,
+      celda: (sc) => <CeldaEstado sc={sc} /> },
+    { id: 'acciones', titulo: 'Acciones', ancho: 104, clave: true, fija: 'derecha', celda: (sc) => <CeldaAcciones sc={sc} /> },
+  ];
+}
+const COLUMNAS_TABLA_SC = columnasDeLaTabla(COLUMNA_VENCIMIENTO);
+const COLUMNAS_CANCELADAS = columnasDeLaTabla(COLUMNA_MOTIVO);
+
+/** La Papelera: «Se borra» con estadoEnPapelera (B2.1 D2: TEXTO_PAPELERA_VENCIDA en las vencidas; nada se borra solo). */
+function CeldaSeBorra({ sc }: { sc: FilaPapelera }) {
+  const enPapelera = estadoEnPapelera(sc);
+  return (
+    <span className="flex min-w-0 flex-col leading-tight">
+      <span className={`truncate text-xs font-black ${enPapelera.conservada ? 'text-slate-600' : enPapelera.urgente ? 'text-red-600' : 'text-amber-700'}`}>{enPapelera.texto}</span>
+      {enPapelera.nota && <span className="truncate text-[10px] text-slate-500">{enPapelera.nota}</span>}
+    </span>
+  );
+}
+
+/** Acciones de la Papelera: «Restaurar» y, solo para un administrador y si se puede (H34), «Eliminar permanentemente». */
+function CeldaAccionesPapelera({ sc }: { sc: FilaPapelera }) {
+  const acciones = useContext(AccionesLista);
+  const enPapelera = estadoEnPapelera(sc);
+  return (
+    <span className="flex items-center justify-end gap-1.5">
+      <button type="button" onClick={() => acciones?.restaurar(sc)}
+        className={`bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2.5 py-1.5 rounded-lg text-xs font-bold border border-emerald-200 flex items-center gap-1 ${FOCO_VISIBLE}`}>
+        <RotateCcw size={11} aria-hidden="true" />Restaurar
+      </button>
+      {esAdministrador(getUsuarioActual().role)&&enPapelera.puedeEliminar&&(
+        <button type="button" onClick={() => acciones?.eliminar(sc)} title="Eliminar permanentemente" aria-label={`Eliminar ${sc.numero} permanentemente`}
+          className={`bg-red-50 hover:bg-red-100 text-red-600 p-1.5 rounded-lg border border-red-200 ${FOCO_VISIBLE}`}>
+          <Trash2 size={13} aria-hidden="true" />
+        </button>
+      )}
+    </span>
+  );
+}
+
+/**
+ * RP37: la Papelera como tabla, con sus columnas: SC (y su tipo), Cliente (y el asesor), Motivo (motivoDeCancelacion),
+ * Cancelada el, «Se borra» y Acciones. Se ordena por número o cliente (los mismos campos que entiende el servidor: el
+ * estado de la pantalla es uno solo y al volver a la lista el orden sigue sirviendo).
+ */
+const COLUMNAS_PAPELERA: ColumnaTabla<FilaPapelera>[] = [
+  { id: 'numero', titulo: 'SC', ancho: 120, clave: true, fija: 'izquierda', ordenable: 'numero', valorOrden: (sc) => sc.numero,
+    titleCelda: (sc) => [sc.numero, etiquetaTipoSolicitud(sc.tipo_solicitud)].filter(Boolean).join(' · '),
+    celda: (sc) => (
+      <span className="flex min-w-0 flex-col items-start leading-tight">
+        <span className="max-w-full truncate text-xs font-black text-red-700">{sc.numero}</span>
+        <span className="max-w-full truncate text-[10px] font-bold text-slate-500">{etiquetaTipoSolicitud(sc.tipo_solicitud) || 'SC'}</span>
+      </span>
+    ) },
+  { id: 'cliente', titulo: 'Cliente', ancho: 140, flexible: true, ordenable: 'cliente', valorOrden: (sc) => sc.customer_name ?? '',
+    titleCelda: (sc) => [sc.customer_name || '-', sc.advisor_name].filter(Boolean).join(' · '),
+    celda: (sc) => (
+      <span className="flex min-w-0 flex-col leading-tight">
+        <span className="truncate text-xs font-bold text-slate-800">{sc.customer_name || '-'}</span>
+        <span className="truncate text-[11px] text-slate-500">{sc.advisor_name || '-'}</span>
+      </span>
+    ) },
+  { id: 'motivo', titulo: 'Motivo', ancho: 160, titleCelda: (sc) => motivoDeCancelacion(sc) || SIN_MOTIVO_REGISTRADO,
+    celda: (sc) => <span className="text-xs italic text-slate-600">{motivoDeCancelacion(sc) || SIN_MOTIVO_REGISTRADO}</span> },
+  { id: 'cancelada', titulo: 'Cancelada el', ancho: 104, titleCelda: (sc) => fechaLarga(sc.eliminada_at) || null,
+    celda: (sc) => fechaCorta(sc.eliminada_at) || '-' },
+  { id: 'se_borra', titulo: 'Se borra', ancho: 150, titleCelda: (sc) => [estadoEnPapelera(sc).texto, estadoEnPapelera(sc).nota].filter(Boolean).join(' '),
+    celda: (sc) => <CeldaSeBorra sc={sc} /> },
+  { id: 'acciones', titulo: 'Acciones', ancho: 140, clave: true, fija: 'derecha', celda: (sc) => <CeldaAccionesPapelera sc={sc} /> },
+];
+
+/** useListadoCliente de la Papelera (D40: accesores estables). Todas sus filas están canceladas (no traen `estado`). */
+const ACCESORES_PAPELERA = {
+  busqueda: ['numero', 'customer_name', 'advisor_name', (sc: FilaPapelera) => motivoDeCancelacion(sc)],
+  orden: accesoresDeOrden(COLUMNAS_PAPELERA),
+  estadoDe: () => 'CANCELADA',
+};
+
+/** La tarjeta del tablero (KANBAN-ventas-listas punto 7, RP15, RP18, D37 y el cruce C5): vuelve a esta lista. */
+const tarjetaDeSC = (sc: FilaSC) => tarjetaSolicitud(sc, { returnTo: RUTA_LISTA_SOLICITUDES });
 
 
 // ── IA Panel SC ────────────────────────────────────────────────────────────────
@@ -655,10 +890,8 @@ const SIN_MOTIVO_REGISTRADO = 'Sin motivo registrado';
 const getRazonCancelacion = (sc: any): string => motivoDeCancelacion(sc);
 
 export default function SolicitudClient() {
-  const [solicitudes,setSolicitudes]=useState<any[]>([]);
-  const [loading,setLoading]=useState(true);
-  const [search,setSearch]=useState('');
-  const [activeTab,setActiveTab]=useState('Activas');
+  // B4 T8: ya no hay arreglos en memoria (antes, las 200 más recientes): la lista, la búsqueda, la pestaña y la página
+  // son del estado único y del servidor (bloque 1, más abajo).
   const [showCreate,setShowCreate]=useState(false);
   const [saving,setSaving]=useState(false);
   // H49 (T1B): avisos y confirmaciones del sistema (showToast, más abajo, es el adaptador de las llamadas de siempre).
@@ -671,28 +904,13 @@ export default function SolicitudClient() {
     return () => { vivo.current = false; };
   }, []);
   const [currentUser,setCurrentUser]=useState('');
-  const [alertDias,setAlertDias]=useState(2);
-  // H32: total de solicitudes que informa el servidor (la lista trae como mucho 200).
-  const [totalServidor,setTotalServidor]=useState<number|null>(null);
-
-  // Paginación
-  
-  // Enhanced Analisis & Pipeline State
-  const [topClientsLimit, setTopClientsLimit] = useState<number>(5);
-  const [donutMode, setDonutMode] = useState<'estados' | 'motivos'>('estados');
-  const [showPipelineGuide, setShowPipelineGuide] = useState<boolean>(false);
-  const [aiQuery, setAiQuery] = useState<string>('');
-  const [aiLoading, setAiLoading] = useState<boolean>(false);
-  const [aiChatHistory, setAiChatHistory] = useState<{role:'user'|'ia'; text:string; time:string}[]>([
-    {
-      role: 'ia',
-      text: '¡Hola! Soy tu asistente de inteligencia comercial para el Pipeline de Solicitudes de Nebulae. Puedo analizar tasas de conversión (SC → COT), tiempos de resolución, clientes top y razones de cancelación. Selecciona una pregunta rápida o escribe tu consulta.',
-      time: 'Ahora'
-    }
-  ]);
+  // B4 T8 (ANALISIS-ventas punto 4 con R2 y R13): se fueron los estados del Análisis de la lista (topClientsLimit,
+  // donutMode, aiQuery, aiLoading, aiChatHistory y su chat simulado con setTimeout), el del pipeline oscuro
+  // (showPipelineGuide), los días de alerta de la Configuración (alertDias: sin atender y las vencidas llegan en el resumen
+  // del servidor) y el total del servidor (totalServidor: la tabla trae el suyo).
 
   async function enviarAPapelera(id:number) {
-    const existing = solicitudes.find(s => s.id === id);
+    const existing = filaPorId(id);
     if(!(await confirmar({
       titulo: `Enviar ${existing?.numero || 'la solicitud'} a la papelera`,
       mensaje: 'La solicitud ya está cancelada. Desde la papelera se puede restaurar.',
@@ -710,86 +928,12 @@ export default function SolicitudClient() {
         })
       });
       showToast('Solicitud enviada a la papelera', 'ok');
-      await load();
-      await loadPapelera();
+      recargarLista();
+      recargarPapelera();
     } catch(err:any) {
       showToast('Error: ' + err.message, 'err');
     }
   }
-
-  function handleAiQuestion(customQ?: string) {
-    const q = (customQ || aiQuery).trim();
-    if (!q) return;
-    setAiLoading(true);
-    const nowTime = new Date().toLocaleTimeString('es-CO', {hour:'2-digit', minute:'2-digit'});
-    setAiChatHistory(prev => [...prev, { role: 'user', text: q, time: nowTime }]);
-    if (!customQ) setAiQuery('');
-
-    setTimeout(() => {
-      const total = solicitudes.length || 1;
-      // H32: "conversion" = solicitudes de cotizacion que de verdad generaron una cotizacion (no las que solo estan Confirmadas).
-      const tasa = tasaConversionCotizacion(solicitudes);
-      const conf = tasa.conCot;
-      // C12 (ronda 1): el mismo predicado que la pestaña 'Activas' (con los estados heredados, hasta T12).
-      const act = solicitudes.filter(esSolicitudActiva).length;
-      const canc = solicitudes.filter(s => s.estado === 'CANCELADA').length;
-      const convRate = tasa.pct.toFixed(1);
-      const cancRate = ((canc / total) * 100).toFixed(1);
-
-      // Top client
-      const custCounts: Record<string, number> = {};
-      solicitudes.forEach(s => {
-        const c = s.customer_name || 'Sin nombre';
-        custCounts[c] = (custCounts[c] || 0) + 1;
-      });
-      const sortedCusts = Object.entries(custCounts).sort((a,b)=>b[1]-a[1]);
-      const topCustName = sortedCusts[0] ? sortedCusts[0][0] : 'N/A';
-      const topCustCount = sortedCusts[0] ? sortedCusts[0][1] : 0;
-
-      // Cancellation reasons
-      const cancelRazones: Record<string, number> = {};
-      solicitudes.filter(s => s.estado === 'CANCELADA').forEach(s => {
-        const r = getRazonCancelacion(s) || SIN_MOTIVO_REGISTRADO;
-        cancelRazones[r] = (cancelRazones[r] || 0) + 1;
-      });
-      const topReason = Object.entries(cancelRazones).sort((a,b)=>b[1]-a[1])[0]?.[0] || SIN_MOTIVO_REGISTRADO;
-
-      let aiReply = '';
-      const qLower = q.toLowerCase();
-
-      if (qLower.includes('diagnóstico') || qLower.includes('conversion') || qLower.includes('tasa') || qLower.includes('pipeline')) {
-        aiReply = `📊 **Diagnóstico del Pipeline SC → COT:**\n\n` +
-          `• **Total Solicitudes registradas:** ${total}\n` +
-          `• **Tasa de Conversión a Cotización:** **${convRate}%** (${conf} solicitudes que generaron cotización).\n` +
-          `• **Solicitudes Activas en Proceso:** **${act}** pendientes de resolución.\n` +
-          `• **Tasa de Cancelación:** **${cancRate}%** (${canc} solicitudes canceladas).\n\n` +
-          `💡 **Recomendación:** El objetivo estándar para Nebulae Kids es superar el 65% de conversión. Prioriza las ${act} solicitudes activas para convertirlas a cotización antes de 48 horas.`;
-      } else if (qLower.includes('cancelac') || qLower.includes('motivo') || qLower.includes('razon')) {
-        aiReply = `🚫 **Análisis de Cancelaciones:**\n\n` +
-          `• Actualmente hay **${canc} solicitudes canceladas** (${cancRate}% del total).\n` +
-          `• **Motivo más recurrente registrado:** *"${topReason}"*.\n` +
-          `• Las solicitudes canceladas pasan a la **Papelera** con trazabilidad: se pueden eliminar definitivamente después de 30 días si no se restauran; un administrador vacía las vencidas, y la revisión automática también.\n\n` +
-          `💡 **Acción sugerida:** Implementar seguimiento preventivo vía WhatsApp antes de los 3 días de inactividad para recuperar leads dubitativos antes de que desistan.`;
-      } else if (qLower.includes('cliente') || qLower.includes('top') || qLower.includes('volumen')) {
-        aiReply = `👑 **Comportamiento de Clientes:**\n\n` +
-          `• El cliente con mayor demanda es **${topCustName}** con **${topCustCount} solicitudes** generadas.\n` +
-          `• Hay **${Object.keys(custCounts).length} clientes únicos** en el pipeline comercial.\n` +
-          `• Consulta la tabla de **Top Clientes** interactiva abajo para filtrar entre Top 5, 10, 20 o 50 y ver su tasa de éxito particular.`;
-      } else {
-        aiReply = `🔍 **Análisis para "${q}":**\n\n` +
-          `• Con base en el análisis en tiempo real de las **${total} solicitudes**, ${act} siguen activas (sin confirmar ni cancelar).\n` +
-          `• La conversión acumulada se sitúa en **${convRate}%** y el ${cancRate}% fue cancelado.\n` +
-          `• El cliente líder es **${topCustName}** y el motivo principal de descarte reportado es *"${topReason}"*.\n\n` +
-          `¿Deseas profundizar en algún segmento o tipo de solicitud específico?`;
-      }
-
-      setAiChatHistory(prev => [...prev, { role: 'ia', text: aiReply, time: nowTime }]);
-      setAiLoading(false);
-    }, 450);
-  }
-
-  const [currentPage,setCurrentPage]=useState(1);
-  const [pageSize,setPageSize]=useState(25);
 
   // Cancelar con razón
   const [showCancelModal,setShowCancelModal]=useState(false);
@@ -801,19 +945,12 @@ export default function SolicitudClient() {
   // Marcadas que no se envian a /cancelar (ya estan en la Papelera o son de Soporte): se informan, no se llaman.
   const [cancelOmitidas,setCancelOmitidas]=useState<{id:any;numero:string;motivo:string}[]>([]);
 
-  // Papelera
-  const [papelera,setPapelera]=useState<any[]>([]);
-  const [loadingPapelera,setLoadingPapelera]=useState(false);
-  const [papeleraError,setPapeleraError]=useState('');
+  // Papelera (lo que trajo GET /ventas/solicitudes/papelera vive en el bloque 1, más abajo).
   // B2.1 D2: «Vaciar las vencidas» en curso (el botón no se puede pulsar dos veces).
   const [vaciandoPapelera,setVaciandoPapelera]=useState(false);
 
-  // Formato confirmación
-  const [showConfirmFormat,setShowConfirmFormat]=useState(false);
-
-  // Checkboxes
+  // Checkboxes (N4: la barra masiva). B4 T8: la barra se ve con algo marcado (ya no hay un estado aparte).
   const [checked,setChecked]=useState<Set<number>>(new Set());
-  const [showBulkBar,setShowBulkBar]=useState(false);
 
   // Create form
   const [form,setForm]=useState<SolicitudFormState>({advisor_name:'',advisor_user_id:'',tipo_solicitud:'Cotizacion de Producto',modalidad_pago:'Contado',notas:'',dias_vencimiento:5,tipo_problema:'',descripcion_problema:'',urgencia:'',evidencia_descripcion:'',asignado_a_user_id:''});
@@ -836,22 +973,111 @@ export default function SolicitudClient() {
     setForm(f=>({...f,advisor_name:u}));
   },[]);
 
-  const load=useCallback(async()=>{
-    setLoading(true);
-    try{
-      const [sc,cfg]=await Promise.all([
-        apiFetch('/ventas/solicitudes?limit=200').catch(()=>[]),
-        apiFetch('/ventas/config').catch(()=>({})),
-      ]);
-      const lista=Array.isArray(sc)?sc:(sc?.data??[]);
-      setSolicitudes(lista);
-      setTotalServidor(typeof sc?.total==='number'?sc.total:null);
-      // N8: los dias de alerta guardados en Configuracion (cualquier rol los lee); sin valor valido, 2.
-      setAlertDias(diasAlerta(cfg,'alerta_sc_dias'));
-    }catch{setSolicitudes([]);setTotalServidor(null);}
-    setLoading(false);
-  },[]);
-  useEffect(()=>{load();},[load]);
+  // ── B4 T8, bloque 1: la carga del servidor (TABLA-listas-ventas punto 5; R5, R8, C3, C4; RP26, RP35, D39, D40) ──
+  // El estado ÚNICO de la lista: las pestañas, la búsqueda, el filtro de estados, el semáforo de la franja, las tarjetas,
+  // la tabla y el tablero despachan a él. El modo (Lista o Kanban) se guarda en vista:ventas.solicitudes (RP26: este hook
+  // es su único dueño) y la pestaña, la página y la búsqueda en la sesión (volver del detalle deja lo mismo).
+  const [estado, despachar, listo] = useEstadoTabla(ID_SC, INICIAL_SC);
+  const enPapelera = estado.vista === 'papelera';
+  // KANBAN-ventas-listas punto 7: Soporte y la Papelera no tienen tablero (ahí no aparece el botón y se ve la lista).
+  const kanbanDisponible = !VISTAS_SIN_TABLERO.includes(estado.vista ?? '');
+  const modoEfectivo = kanbanDisponible ? estado.modo : 'lista';
+
+  // La tabla (T6B): GET /ventas/solicitudes con vista, estados, semáforo, q, orden, limit y offset del estado, más los
+  // conteos de las pestañas y el resumen de las tarjetas (RP19) en la MISMA llamada. esperar: !listo (D40): el esqueleto,
+  // nunca «vacío». RP35: en la Papelera no pide nada (nunca manda vista=papelera) salvo, una vez, los conteos si se entró
+  // directo a ella (EXTRA_PAPELERA, D-T8-2).
+  const [conteosVistos, setConteosVistos] = useState(false);
+  const listado = useListado<FilaSC>({
+    ruta: '/ventas/solicitudes', estado, conConteos: true, conResumen: true, esperar: !listo, despachar,
+    activo: !enPapelera || !conteosVistos,
+    extra: enPapelera ? EXTRA_PAPELERA : null,
+  });
+  if (!conteosVistos && listado.conteos !== null) setConteosVistos(true);
+
+  // La franja del flujo (R8): GET /ventas/flujo; recargaFlujo sube con cada recarga de la lista.
+  const [recargaFlujo, setRecargaFlujo] = useState(0);
+  const flujo = useResumenFlujo<DatosFlujo>('/ventas/flujo', recargaFlujo);
+
+  // El tablero en modo servidor (R11, C4, D39): una consulta por columna con vista=todas_sin_soporte (R5), los estados de
+  // la columna cruzados con el filtro de la pantalla (estadosDeColumnaLista; sin ninguno en común, la columna queda vacía
+  // sin pedir nada) y el MISMO estado (búsqueda y semáforo); porColumna = el tamaño de la tabla y limit=0 en la plegada
+  // (lo hace el hook). 'atencion' en las abiertas y 'reciente' en Cancelada (D39).
+  const tablero = useTableroKanban<FilaSC>({
+    pantalla: ID_SC,
+    modo: 'servidor',
+    columnas: COLUMNAS_SC,
+    activo: listo && modoEfectivo === 'kanban',
+    porColumna: estado.tamano,
+    dependencias: dependenciasTablero(estado),
+    ordenDe: (c) => (c.cerrada ? 'reciente' : 'atencion'),
+    cargar: async (columna, { offset, limit, orden, signal }) => {
+      const estados = estadosDeColumnaLista(columna, estado.estados);
+      if (estados.length === 0) return { filas: [], total: 0 };
+      return normalizarRespuesta(await apiFetch(
+        `/ventas/solicitudes?${queryListado(estado, { vista: VISTA_TABLERO_SC, estados, orden, limit, offset })}`, { signal },
+      ));
+    },
+  });
+
+  // Después de un cambio hecho en la pantalla (cancelar, reiniciar, restaurar, la Papelera): la tabla, el tablero y la
+  // franja. Ninguna recarga vacía lo que se ve: los hooks conservan lo último mientras recargan (D28).
+  const { recargar: recargarListado } = listado;
+  const { recargar: recargarTablero } = tablero;
+  const recargarLista = useCallback(() => {
+    recargarListado();
+    recargarTablero();
+    setRecargaFlujo((n) => n + 1);
+  }, [recargarListado, recargarTablero]);
+
+  // La Papelera (RP35, RP37): GET /ventas/solicitudes/papelera (trae como mucho 200) en modo cliente. Se pide al entrar a
+  // la pestaña y con «Actualizar» (vueltaPapelera); el estado se escribe solo cuando llega la respuesta.
+  const [vueltaPapelera, setVueltaPapelera] = useState(0);
+  const [cargaPapelera, setCargaPapelera] = useState<CargaPapelera>(PAPELERA_SIN_CARGAR);
+  useEffect(() => {
+    if (!enPapelera) return;
+    const control = new AbortController();
+    apiFetch('/ventas/solicitudes/papelera', { signal: control.signal })
+      .then((d: unknown) => setCargaPapelera({ vuelta: vueltaPapelera, filas: normalizarRespuesta(d).filas as FilaPapelera[], error: '' }))
+      .catch((err: unknown) => {
+        if (control.signal.aborted) return;
+        // N4: un fallo ya no se disfraza de «papelera vacía»: se avisa y la lista (si había una) se conserva.
+        const msg = (err instanceof Error && err.message) || 'error desconocido';
+        setCargaPapelera((c) => ({ vuelta: vueltaPapelera, filas: c.filas, error: msg }));
+        avisar(textoDeError('No se pudo cargar la papelera: ' + msg), { tono: 'error' });
+      });
+    return () => control.abort();
+  }, [enPapelera, vueltaPapelera, avisar]);
+  const recargarPapelera = useCallback(() => setVueltaPapelera((n) => n + 1), []);
+  const papelera = cargaPapelera.filas ?? SIN_FILAS_PAPELERA;
+  const papeleraCargada = cargaPapelera.filas !== null;
+  const papeleraError = cargaPapelera.error;
+  const cargandoPapelera = enPapelera && cargaPapelera.vuelta !== vueltaPapelera;
+  // Sin ninguna lista cargada, el error va en la tabla (con «Reintentar»); con una, en el aviso de arriba.
+  const errorPapeleraTabla = papeleraError && !papeleraCargada ? papeleraError : null;
+  const papeleraCliente = useListadoCliente<FilaPapelera>(cargaPapelera.filas, estado, ACCESORES_PAPELERA);
+
+  // RP36: las filas cargadas (la página de la tabla y las tarjetas del tablero), para el modal del motivo y la barra.
+  const filasCargadas = useMemo(
+    () => [...listado.filas, ...Object.values(tablero.datos).flatMap((d) => d.items)],
+    [listado.filas, tablero.datos],
+  );
+  const filaPorId = useCallback((id: number) => filasCargadas.find((s) => s.id === id), [filasCargadas]);
+
+  // D40 y D41: un solo usePreferenciasTabla por id (la tabla y «Ajustar tabla» comparten su resultado y el ref del
+  // ancho). La lista y la Papelera son dos tablas con su id. En Canceladas, la columna Vencimiento dice el motivo.
+  const columnasTabla = estado.vista === 'canceladas' ? COLUMNAS_CANCELADAS : COLUMNAS_TABLA_SC;
+  const prefs = usePreferenciasTabla(ID_SC, columnasTabla);
+  const prefsPapelera = usePreferenciasTabla(ID_PAPELERA, COLUMNAS_PAPELERA);
+  const anchoTablaRef = useRef<number | null>(null);
+  const anchoPapeleraRef = useRef<number | null>(null);
+  // Desestructurado: con el objeto entero en ref={…}, react-hooks/refs marca «Cannot access refs during render».
+  const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
+  // Pasar a Kanban sale de la pantalla completa: el conmutador sigue a la vista y el tablero no queda tapado.
+  useEffect(() => { if (modoEfectivo === 'kanban') salir(); }, [modoEfectivo, salir]);
+  // Las pestañas y las tarjetas salen de la misma llamada: un solo estado (C13; barras grises mientras cargan, «—» con error).
+  const estadoConteos = useEstadoKpi(listado.cargandoInicial || listado.recargando, listado.error);
+  const estadoKpis = estadoConteos;
 
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -875,19 +1101,6 @@ export default function SolicitudClient() {
     }
   },[searchParams]);
 
-  async function loadPapelera() {
-    setLoadingPapelera(true);
-    setPapeleraError('');
-    try{ const d=await apiFetch('/ventas/solicitudes/papelera'); setPapelera(Array.isArray(d)?d:(d?.data??[])); }
-    catch(err:any){
-      // N4: un fallo ya no se disfraza de "papelera vacia": se avisa y la lista (si habia una) se conserva.
-      const msg=err?.message||'error desconocido';
-      setPapeleraError(msg);
-      showToast('No se pudo cargar la papelera: '+msg,'err');
-    }
-    setLoadingPapelera(false);
-  }
-
   function cerrarCancelacion() {
     setShowCancelModal(false);setCancelTarget([]);setCancelRazon('');setCancelErrores([]);setCancelOmitidas([]);
   }
@@ -904,7 +1117,7 @@ export default function SolicitudClient() {
     const canceladas:number[]=[];
     const fallidas:number[]=[];
     for(const id of cancelTarget){
-      const numero=solicitudes.find(s=>s.id===id)?.numero||`#${id}`;
+      const numero=filaPorId(id)?.numero||`#${id}`;
       try{
         await apiFetch(`/ventas/solicitudes/${id}/cancelar`,{method:'POST',body:JSON.stringify({razon,user_name:currentUser})});
         resultados.push({numero,ok:true});
@@ -921,14 +1134,16 @@ export default function SolicitudClient() {
     // Las omitidas ya se informaron en el toast: al reintentar solo quedan las que fallaron.
     else{setCancelTarget(fallidas);setCancelOmitidas([]);setCancelErrores(resumen.fallidas.map(f=>f.texto));}
     // Las canceladas y las omitidas dejan de estar seleccionadas; las que fallaron siguen marcadas.
-    setChecked(prev=>{const n=new Set(prev);canceladas.forEach(id=>n.delete(id));cancelOmitidas.forEach(o=>n.delete(o.id));setShowBulkBar(n.size>0);return n;});
-    await load();
+    setChecked(prev=>{const n=new Set(prev);canceladas.forEach(id=>n.delete(id));cancelOmitidas.forEach(o=>n.delete(o.id));return n;});
+    // B4 T8: la tabla, el tablero (también si se canceló desde una tarjeta) y la franja.
+    recargarLista();
     setCancelling(false);
   }
 
-  // T7 ronda 1: el motivo de una fila de la Papelera con la misma regla que Canceladas. GET /papelera no trae las notas:
-  // si la SC está en la lista cargada, sus notas viejas sirven de respaldo (la fila de la Papelera manda en lo demás).
-  const motivoEnPapelera=(sc:any)=>getRazonCancelacion({...solicitudes.find(s=>s.id===sc.id),...sc});
+  // T7 ronda 1: el motivo de una fila de la Papelera con la misma regla que Canceladas. B4 T8: GET /papelera ya trae la
+  // razón y las notas de cada fila (T11 calidad, A3), así que el respaldo de la lista cargada (las 200 de antes) ya no
+  // aporta nada: es motivoDeCancelacion de la fila, la misma de la columna Motivo.
+  const motivoEnPapelera=(sc:any)=>getRazonCancelacion(sc);
 
   // H34: recibe la fila para mostrar número, cliente y motivo en la confirmación; el 409 del servidor (tiene
   // documentos vinculados) sale en el aviso de error.
@@ -943,7 +1158,7 @@ export default function SolicitudClient() {
     try{
       await apiFetch(`/ventas/solicitudes/${sc.id}/permanente`,{method:'DELETE'});
       avisar(`${sc.numero} eliminada definitivamente`);
-      await loadPapelera();
+      recargarPapelera();
     }catch(err:any){avisarError(err,`No se pudo eliminar ${sc.numero}`);}
   }
 
@@ -959,12 +1174,13 @@ export default function SolicitudClient() {
       const d=await apiFetch('/ventas/papelera/purgar',{method:'POST'});
       const purgadas=(d?.data??d)?.purgadas;
       avisar(textoPapeleraVaciada(purgadas),{tono:purgadas>0?'ok':'info'});
-      await loadPapelera();
-      await load();
+      // B4 T8: la Papelera y también la lista (las pestañas, las tarjetas y la franja ya no cuentan las purgadas).
+      recargarPapelera();
+      recargarLista();
     }catch(err){
       avisarError(err,'No se pudo vaciar la Papelera');
       // Sin respuesta del servidor (la red se cortó) pudo vaciarse igual: la lista recargada dice qué quedó.
-      if(recargarTrasError(err)) await loadPapelera();
+      if(recargarTrasError(err)) recargarPapelera();
     }
     setVaciandoPapelera(false);
   }
@@ -978,30 +1194,26 @@ export default function SolicitudClient() {
       const r=d?.data??d;
       avisar(r?.mensaje||`Solicitud restaurada: queda ${infoEstadoSolicitud(r?.estado).label}`,
         {tono:'ok',accion:{texto:'Ver solicitud',href:`/dashboard/ventas/solicitud/${id}`}});
-      await loadPapelera();
-      await load();
+      recargarPapelera();
+      recargarLista();
     }catch(err:any){avisarError(err,'No se pudo restaurar la solicitud');}
   }
 
   // U15 (R30): 'Reiniciar' es el único cambio de estado a mano (PATCH {estado:'BORRADOR'}: vuelve a Nueva, o a Asignada
   // si tiene asesor). Se confirma antes; cancelar va por cancelWithReason. El 409 de R10 (cotización o pedido activos)
-  // sale con su mensaje.
+  // sale con su mensaje. B4 T8 (RP17 y el cruce C4): el texto de la confirmación es el de la librería
+  // (confirmacionReiniciarSolicitud, el mismo del detalle y del tablero). Lo usan el menú ⋯ de la fila y el tablero.
   async function reiniciarSC(sc:any) {
-    const destino=infoEstadoSolicitud(sc.advisor_user_id?'ASIGNADA':'BORRADOR').label;
-    if(!(await confirmar({
-      titulo:'Reiniciar solicitud',
-      mensaje:`La solicitud vuelve a ${destino}: se anula el enlace que se le envió al cliente y su confirmación, y habrá que enviársela de nuevo.`,
-      textoConfirmar:'Reiniciar solicitud',
-      peligro:true,
-    }))) return;
+    if(!(await confirmar(confirmacionReiniciarSolicitud(sc)))) return;
     setSaving(true);
     try{
       const r=await apiFetch(`/ventas/solicitudes/${sc.id}`,{method:'PATCH',body:JSON.stringify({estado:'BORRADOR',updated_by:currentUser})});
-      // Se pinta lo que devolvió el servidor (con asesor queda Asignada), no lo que se pidió.
+      // Se dice lo que devolvió el servidor (con asesor queda Asignada), no lo que se pidió.
       const nueva=r?.data;
-      setSolicitudes(prev=>prev.map(s=>s.id===sc.id?{...s,...(nueva||{})}:s));
       avisar(`${sc.numero} reiniciada: queda ${infoEstadoSolicitud(nueva?.estado??(sc.advisor_user_id?'ASIGNADA':'BORRADOR')).label}`);
     }catch(err:any){avisarError(err,`No se pudo reiniciar ${sc.numero}`);}
+    // B4 T8: la lista, el tablero (la tarjeta pasa a su columna) y la franja, también si el servidor la rechazó.
+    recargarLista();
     setSaving(false);
   }
 
@@ -1014,10 +1226,10 @@ export default function SolicitudClient() {
     // N4: ya no hace PATCH: abre el modal del motivo y las cancela con POST /cancelar. Las que ya estan canceladas (ya
     // estan en la Papelera) y las de Soporte Tecnico (su ciclo es estado_soporte: cancelarlas las mandaria a purga en
     // 30 dias y se perderia el ticket) no se envian al servidor: se informan como omitidas.
-    const {cancelables,omitidas}=repartirCancelacionSolicitudes(Array.from(checked).map(id=>solicitudes.find(s=>s.id===id)||{id}));
+    const {cancelables,omitidas}=repartirCancelacionSolicitudes(Array.from(checked).map(id=>filaPorId(id)||{id}));
     if(cancelables.length===0){
       showToast(resumenCancelacionSolicitudes([],omitidas).mensaje,'err');
-      setChecked(new Set());setShowBulkBar(false);
+      setChecked(new Set());
       return;
     }
     setCancelTarget(cancelables.map(s=>s.id));setCancelOmitidas(omitidas);setCancelRazon('');setCancelErrores([]);setShowCancelModal(true);
@@ -1076,7 +1288,7 @@ export default function SolicitudClient() {
       }
       // Respaldo si la respuesta no trae id: se queda en la lista como antes.
       showToast('Solicitud creada');
-      setShowCreate(false);resetCreateForm();load();
+      setShowCreate(false);resetCreateForm();recargarLista();
     }catch(err:any){showToast('Error: '+err.message,'err');}
     setSaving(false);
   }
@@ -1088,900 +1300,287 @@ export default function SolicitudClient() {
     setForm({advisor_name:currentUser,advisor_user_id:'',tipo_solicitud:'Cotizacion de Producto',modalidad_pago:'Contado',notas:'',dias_vencimiento:5,tipo_problema:'',descripcion_problema:'',urgencia:'',evidencia_descripcion:'',asignado_a_user_id:''});
   }
 
-  function toggleCheck(id:number) {
-    setChecked(prev=>{
-      const n=new Set(prev);
-      if(n.has(id)) n.delete(id); else n.add(id);
-      setShowBulkBar(n.size>0);
-      return n;
-    });
-  }
-  function toggleAll() {
-    if(checked.size===filtered.length){setChecked(new Set());setShowBulkBar(false);}
-    else{setChecked(new Set(filtered.map((s:any)=>s.id)));setShowBulkBar(true);}
-  }
+  // ── B4 T8, bloque 2: pestañas y búsqueda (TABLA-listas-ventas punto 5; R5, RP26, RP35, D40, D41) ──
+  // Las 4 vistas del servidor con sus conteos (con_conteos: con la búsqueda, sin la vista, los estados ni el semáforo;
+  // null mientras cargan: la barra gris, nunca 0) y la Papelera sin conteo (no es una vista del servidor). Sin emojis.
+  const conteos = listado.conteos as ConteosSC | null;
+  const pestanas: PestanaTabla[] = [
+    { id: 'activas', etiqueta: 'Activas', conteo: conteos?.activas ?? null },
+    { id: 'confirmadas', etiqueta: 'Confirmadas', conteo: conteos?.confirmadas ?? null },
+    { id: 'canceladas', etiqueta: 'Canceladas', conteo: conteos?.canceladas ?? null },
+    { id: 'soporte', etiqueta: 'Soporte', conteo: conteos?.soporte ?? null },
+    { id: 'papelera', etiqueta: 'Papelera', conteo: null, sinConteo: true },
+  ];
+  // La barra recibe el modo que se ve: en Soporte y la Papelera es Lista (no tienen tablero), así «Ajustar tabla» está
+  // aunque lo guardado sea Kanban. El estado de la pantalla no cambia (useEstadoTabla sigue siendo su único dueño).
+  const estadoBarra = useMemo(() => (estado.modo === modoEfectivo ? estado : { ...estado, modo: modoEfectivo }), [estado, modoEfectivo]);
+  // «N resultados» es el de la tabla que se ve; en Kanban cada columna trae su total (la barra no lo repite).
+  const totalDeLaBarra = modoEfectivo === 'kanban' ? {}
+    : enPapelera ? {
+      total: papeleraCliente.total,
+      estadoTotal: estadoDelTotal({
+        total: papeleraCliente.total, cargando: !papeleraCargada && !papeleraError, recargando: cargandoPapelera && papeleraCargada,
+        error: errorPapeleraTabla,
+      }),
+    } : {
+      total: listado.total,
+      estadoTotal: estadoDelTotal({
+        total: listado.total, cargando: listado.cargandoInicial, recargando: listado.recargando, error: listado.error,
+      }),
+    };
 
-  // Stats. C12 (ronda 1): 'Activas' (pestaña, contador, vencidas y diagnóstico) sale de un solo predicado.
-  const totalActivas=solicitudes.filter(esSolicitudActiva).length;
-  // H32: contadores reales: 'Confirmadas' es por estado (igual que la pestana) y avisa cuantas esperan su cotizacion;
-  // 'generaron cotizacion' (conCot) cuenta las que tienen al menos una COT vinculada, en cualquier estado.
-  const {totalConf,conCot,hintConfirmadas,hintTotal}=contadoresSolicitudes(solicitudes,totalServidor);
-  // N4: la tasa de conversion es solo con las solicitudes de cotizacion de producto (decision del usuario).
-  const tasaConv=tasaConversionCotizacion(solicitudes);
-  // N8: 'sin atender' = Borrador que lleva mas de los dias de alerta de Configuracion sin cambios (fechas del API en UTC).
-  const sinAtender=solicitudes.filter(s=>s.estado==='BORRADOR'&&superaDiasAlerta(s.updated_at||s.fecha_solicitud,alertDias)).length;
-  // Ronda 2: fecha_vencimiento llega en UTC sin zona (utcnow + días): comoUTC, para no vencer 5 h tarde en Colombia.
-  const vencidas=solicitudes.filter(s=>{
-    if(!esSolicitudActiva(s)) return false;
-    return s.fecha_vencimiento&&new Date(comoUTC(s.fecha_vencimiento))<new Date();
-  }).length;
-
-  // Ronda 2: cada SC cae en exactamente una pestaña (pestanaDeSolicitud); la misma regla da los contadores.
-  const PESTANAS_SC=['Activas','Confirmadas','Canceladas','Soporte'];
-  const filtered=solicitudes.filter(sc=>{
-    const ms=!search||(sc.numero||'').toLowerCase().includes(search.toLowerCase())||(sc.customer_name||'').toLowerCase().includes(search.toLowerCase())||(sc.advisor_name||'').toLowerCase().includes(search.toLowerCase())||coincideProducto(sc,search);
-    if(!ms) return false;
-    if(PESTANAS_SC.includes(activeTab)) return pestanaDeSolicitud(sc)===activeTab;
-    return true;
+  // ── B4 T8, bloque 3: la tabla (las columnas son constantes del módulo; en Canceladas, Vencimiento dice el motivo) ──
+  // N4: la selección es la de la página (TablaEstandar la limpia al cambiar de página, pestaña, búsqueda, filtro u orden).
+  const seleccion = useMemo(() => Array.from(checked), [checked]);
+  const alSeleccionar = useCallback((claves: (string | number)[]) => setChecked(new Set(claves.map(Number))), []);
+  const abrirSolicitud = useCallback((sc: { id: number }) => router.push(`/dashboard/ventas/solicitud/${sc.id}`), [router]);
+  // Las celdas (constantes, D40 y D41) piden a la pantalla lo suyo por AccionesLista. El valor del contexto es estable
+  // (las celdas no se repintan con cada cambio de la página) y llama siempre a los manejadores del último render: la ref
+  // se pone al día después de pintar y solo se lee en un clic.
+  const manejadores = useRef<AccionesFilaSC | null>(null);
+  useLayoutEffect(() => {
+    manejadores.current = {
+      abrir: abrirSolicitud,
+      cancelar: (sc) => deleteItem(sc.id),
+      aPapelera: (sc) => { void enviarAPapelera(sc.id); },
+      reiniciar: (sc) => { void reiniciarSC(sc); },
+      restaurar: (sc) => { void restaurarSC(sc.id); },
+      eliminar: (sc) => { void eliminarPermanente(sc); },
+    };
   });
+  const accionesFila = useMemo<AccionesFilaSC>(() => ({
+    abrir: (sc) => manejadores.current?.abrir(sc),
+    cancelar: (sc) => manejadores.current?.cancelar(sc),
+    aPapelera: (sc) => manejadores.current?.aPapelera(sc),
+    reiniciar: (sc) => manejadores.current?.reiniciar(sc),
+    restaurar: (sc) => manejadores.current?.restaurar(sc),
+    eliminar: (sc) => manejadores.current?.eliminar(sc),
+  }), []);
+
+  // ── B4 T8, bloque 4: el tablero (KANBAN-ventas-listas punto 7; C15, R11; RP16, RP17, D11, D39) ──
+  // reglaSoltarSC sin puedeEnviar (D11): soltar para enviar queda bloqueado con «Ábrela para enviar.» y el enlace a la
+  // solicitud; no se arma otro ChannelModal ni otro POST. Las acciones que quedan las resuelve la pantalla:
+  //  - cancelar: el modal del motivo de N4 (cancelWithReason, POST /cancelar) con cancelTarget = [id];
+  //  - reiniciar: confirmacionReiniciarSolicitud (RP17) y PATCH {estado: 'BORRADOR'} (reiniciarSC; el 409 de R10 sale como
+  //    aviso). Las dos recargan la lista, el tablero y la franja al terminar.
+  function accionDesdeTablero(sc: FilaSC, resultado: { accion: string }) {
+    if (resultado.accion === 'cancelar') deleteItem(sc.id);
+    else if (resultado.accion === 'reiniciar') void reiniciarSC(sc);
+  }
+
+  // ── B4 T8, bloque 5: las tarjetas (KPI-ventas punto 7; R12, RP19) ──
+  const tarjetas = tarjetasSolicitudes(listado.resumen);
+  // En Lista son las pestañas (D41: accionPestana, como un clic en la pestaña); tocar la activa vuelve a Activas (la de
+  // siempre, alternarSeleccion). En Kanban abren esa pestaña en Lista: el tablero muestra todas.
+  const vistaActiva = modoEfectivo === 'lista' ? estado.vista : null;
+  const elegirVista = (vista: string) => {
+    const siguiente = modoEfectivo === 'lista' ? (alternarSeleccion(estado.vista, vista) ?? INICIAL_SC.vista) : vista;
+    despachar(accionPestana(estado, siguiente, opcionesEstadosSolicitudes));
+    if (modoEfectivo === 'kanban') despachar({ tipo: 'modo', valor: 'lista' });
+  };
+
+  // ── B4 T8, bloque 6: la franja del flujo (FLUJO-ventas-pantallas B; R8, C3, D42) ──
+  const pasosFlujo = useMemo(() => pasosDeLista(flujo.datos, 'SC'), [flujo.datos]);
+  const atrasadosSC = pasosFlujo.find((p) => p.esEste)?.atrasados ?? null;
+  // RP19 (4): el aviso ámbar «N vencidas» lee resumen.vencidas (las activas con el vencimiento pasado).
+  const vencidasResumen = (listado.resumen as ResumenSC | null)?.vencidas;
+  const avisosFlujo = useMemo(() => {
+    const aviso = avisoVencidas(vencidasResumen);
+    return aviso ? [aviso] : undefined;
+  }, [vencidasResumen]);
+  const filtroSemaforo: FiltroSemaforo = estado.semaforo === 'atrasados' ? 'atrasados' : 'todos';
+  // «Con atraso» pone semaforo=atrasados en el estado único (la tabla y el tablero lo mandan al servidor) y vuelve a la
+  // página 1; «Ver todo» lo quita. Soporte queda fuera del semáforo (R8) y la Papelera es de canceladas: desde ellas, «Con
+  // atraso» abre Activas.
+  const alFiltrarSemaforo = (f: FiltroSemaforo) => {
+    if (f !== 'todos' && !kanbanDisponible) despachar(accionPestana(estado, INICIAL_SC.vista, opcionesEstadosSolicitudes));
+    despachar({ tipo: 'semaforo', valor: f === 'todos' ? null : f });
+  };
+
+  // «Actualizar»: la lista, el tablero, la franja y, en la Papelera, también ella.
+  const actualizar = () => {
+    recargarLista();
+    if (enPapelera) recargarPapelera();
+  };
+  const actualizando = listado.recargando || flujo.cargando || cargandoPapelera;
 
   return (
-    <div className="w-full bg-slate-50 min-h-full">
+    <div className="w-full bg-slate-50 min-h-full flex flex-col">
       {/* Sub-module nav */}
       <SubNav label="Hub Ventas" items={VEN_NAV} currentPath="/dashboard/ventas/solicitud" color="indigo" hub={{ href: '/dashboard/ventas' }} />
 
-      {/* Alert Banner */}
-      {(sinAtender>0||vencidas>0)&&(
-        <div className="bg-rose-50 border-b border-rose-200 px-6 py-3 flex items-start gap-4">
-          <ShieldAlert className="text-rose-600 shrink-0 mt-0.5" size={20}/>
-          <div className="flex-1">
-            <h4 className="text-sm font-black text-rose-800">ATENCIÓN REQUERIDA (Alerta de {alertDias} días)</h4>
-            <p className="text-xs font-bold text-rose-600 mt-1">
-              {sinAtender>0&&`* ${sinAtender} solicitud(es) sin atender más de ${alertDias} días `}
-              {vencidas>0&&`* ${vencidas} solicitud(es) vencidas`}
-            </p>
-          </div>
-          <button onClick={load} className="bg-rose-600 text-white px-4 py-2 rounded-lg text-xs font-bold">Actualizar</button>
-        </div>
-      )}
+      {/* B4 T8 (FLUJO-ventas-pantallas B; R8, D42, RP90): la franja del flujo reemplaza el aviso rojo de arriba y el
+          pipeline oscuro. «Estás aquí» en Solicitud, con su detalle por estado; las otras cajas llevan a su lista. «Con
+          atraso» es semaforo=atrasados en el servidor, con los atrasados del paso Solicitud; no hay «No resueltos» (lo cubre
+          la pestaña Activas: la clave noResueltos no se escribe). El aviso ámbar «N vencidas» es resumen.vencidas. Va
+          directo bajo la barra de submódulos, sin otro padding horizontal. */}
+      <BannerFlujo
+        titulo="Flujo comercial"
+        idPreferencia={ID_SC}
+        regla={textoRegla(flujo.datos?.dias_alerta)}
+        semaforo={{ atrasados: atrasadosSC, filtro: filtroSemaforo, onFiltrar: alFiltrarSemaforo }}
+        pasos={pasosFlujo}
+        avisos={avisosFlujo}
+        cargando={flujo.cargando}
+        error={flujo.error}
+        onReintentar={flujo.recargar}
+      />
 
-      {/* Bulk action bar */}
-      {showBulkBar&&(
-        <div className="bg-indigo-600 text-white px-6 py-3 flex items-center gap-4 shadow-lg">
-          <span className="font-bold text-sm">{checked.size} seleccionada(s)</span>
-          <div className="flex gap-2">
-            {/* U15: sin botones 'Estado: …' (ningún estado se pone a mano). */}
-            <button onClick={bulkCancelar} className="bg-rose-600 hover:bg-rose-700 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1"><XCircle size={12}/>Cancelar seleccionadas</button>
-            <button onClick={()=>{setChecked(new Set());setShowBulkBar(false);}} className="bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1"><X size={12}/>Limpiar</button>
-          </div>
-        </div>
-      )}
-
-      <div className="p-8 max-w-[1600px] mx-auto space-y-8">
+      {/* B4 T8: el contenedor del Hub (T7). pb-24 deja libre, con la página al fondo, la esquina del botón flotante de la
+          IA (GlobalAIChat: fixed bottom-6 de 56 px, 80 px en total); en la pantalla completa la reserva es el pr-20 del pie
+          (D41). px-4 hasta xl: a 1024 px con el menú abierto las columnas clave caben (R26). */}
+      <div className="flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6">
         {/* Header */}
         <PageHeader
           icon={FileText} color="indigo"
           title="Solicitudes de Cliente"
-          subtitle="Pipeline: Solicitud (SC) → Cotización (COT) → Pedido de Venta (PVEN)"
+          subtitle="Lo que te piden los clientes, antes de cotizar."
           actions={(
-            <div className="flex gap-3">
-              <button onClick={load} className="bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm shadow-sm"><RefreshCw size={15} className={loading?'animate-spin':''}/> Actualizar</button>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button type="button" onClick={actualizar} className={`bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm shadow-sm ${FOCO_VISIBLE}`}><RefreshCw size={15} aria-hidden="true" className={actualizando?'animate-spin':''}/> Actualizar</button>
+              {/* R13 (ANALISIS-ventas punto 7): la lista ya no tiene pestaña Análisis; este botón abre la del Hub enfocada
+                  en Solicitudes (?tab=analisis&foco=sc, enlaceVerAnalisis). */}
+              <Link href={enlaceVerAnalisis('sc')}
+                className={`bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 flex items-center gap-2 text-sm shadow-sm ${FOCO_VISIBLE}`}>
+                <ContenidoEnlace icon={BarChart3}>Ver análisis</ContenidoEnlace>
+              </Link>
               <Button onClick={()=>setShowCreate(true)} color="indigo" icon={Plus}>Nueva Solicitud</Button>
             </div>
           )} />
 
-        {/* Interactive Pipeline Component */}
-        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-4 shadow-lg border border-indigo-900/50">
-              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                {/* Steps Flow */}
-                <div className="flex items-center gap-2 sm:gap-4 overflow-x-auto pb-1 lg:pb-0">
-                  {/* Step 1: SC */}
-                  <div
-                    onClick={() => { setActiveTab('Activas'); setCurrentPage(1); }}
-                    className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl cursor-pointer transition-all border ${activeTab==='Activas' ? 'bg-indigo-600/40 border-indigo-400 ring-2 ring-indigo-400/40' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
-                    title="Clic para ver Solicitudes Activas"
-                  >
-                    <div className="w-8 h-8 rounded-lg bg-indigo-500/30 text-indigo-300 flex items-center justify-center font-black text-xs shrink-0 border border-indigo-400/30">
-                      1
+        {/* B4 T8 (KPI-ventas punto 7; R12, RP19): las 4 tarjetas con con_resumen de la MISMA llamada de la lista (todas las
+            solicitudes, sin Soporte): mientras cargan, barras grises (nunca 0); con error, «—». Las tres primeras son sus
+            pestañas (accionPestana; tocar la activa vuelve a Activas); el total no tiene una vista. */}
+        <FranjaKpis estado={estadoKpis} titulo="Solicitudes">
+          <TarjetaKpi kpi="sc_activas" valor={tarjetas?.activas.valor ?? null} ayuda={tarjetas?.activas.ayuda}
+            activo={vistaActiva === 'activas'} onClick={() => elegirVista('activas')} />
+          <TarjetaKpi kpi="sc_confirmadas" valor={tarjetas?.confirmadas.valor ?? null} ayuda={tarjetas?.confirmadas.ayuda}
+            activo={vistaActiva === 'confirmadas'} onClick={() => elegirVista('confirmadas')} />
+          <TarjetaKpi kpi="sc_canceladas" valor={tarjetas?.canceladas.valor ?? null} ayuda={tarjetas?.canceladas.ayuda}
+            activo={vistaActiva === 'canceladas'} onClick={() => elegirVista('canceladas')} />
+          <TarjetaKpi kpi="sc_total" valor={tarjetas?.total.valor ?? null} ayuda={tarjetas?.total.ayuda} />
+        </FranjaKpis>
+
+        {/* B4 T8 (TABLA-listas-ventas punto 5, KANBAN-ventas-listas punto 7): la barra y la tabla estándar, o la Papelera
+            (otra tabla, en modo cliente), o el tablero en modo servidor, con el MISMO estado (búsqueda, estados y semáforo). */}
+        <div className="flex min-w-0 flex-col gap-4">
+          {capa}
+          <AccionesLista.Provider value={accionesFila}>
+            <section ref={refTarjeta} className={claseTarjeta}>
+              <BarraTabla
+                estado={estadoBarra}
+                onEstado={despachar}
+                pestanas={modoEfectivo === 'lista' ? pestanas : undefined}
+                estadoConteos={estadoConteos}
+                placeholder="Buscar por número, cliente, asesor o producto…"
+                opcionesEstados={modoEfectivo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_SC : opcionesEstadosSolicitudes}
+                ajustes={enPapelera
+                  ? { columnas: COLUMNAS_PAPELERA, preferencias: prefsPapelera, anchoRef: anchoPapeleraRef }
+                  : { columnas: columnasTabla, preferencias: prefs, anchoRef: anchoTablaRef }}
+                kanbanDisponible={kanbanDisponible}
+                pantallaCompleta={modoEfectivo === 'lista' ? { completa, alternar } : undefined}
+                {...totalDeLaBarra}
+              />
+              {enPapelera ? (
+                <>
+                  {/* B2.1 D2: la Papelera ya no se borra al abrirla; un administrador vacía las vencidas (solo él ve el
+                      botón). B3 T18 (RP7): desde B3-T10 también la revisión automática (purga_papelera). B2.1 T4 r1: el
+                      título solo; la regla va debajo, sin mayúsculas, con el subtítulo del design-system. */}
+                  <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-black text-slate-500 uppercase">Solicitudes en Papelera</p>
+                      <p className={PAGE_HEADER.subtitle}>Las solicitudes canceladas se pueden eliminar definitivamente después de 30 días si no se restauran, salvo las que tienen documentos vinculados; un administrador vacía las vencidas, y la revisión automática también.</p>
                     </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-extrabold text-sm tracking-wide text-white">SC · Solicitud</span>
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30">
-                          {totalActivas} Activas
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-300 font-medium">Requerimiento inicial del cliente</p>
-                    </div>
-                  </div>
-
-                  {/* Arrow 1 */}
-                  <div className="flex items-center justify-center text-indigo-400 shrink-0">
-                    <ChevronRight size={18} className="animate-pulse" />
-                  </div>
-
-                  {/* Step 2: COT */}
-                  <div
-                    onClick={() => { setActiveTab('Confirmadas'); setCurrentPage(1); }}
-                    className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl cursor-pointer transition-all border ${activeTab==='Confirmadas' ? 'bg-emerald-600/40 border-emerald-400 ring-2 ring-emerald-400/40' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
-                    title="Clic para ver Solicitudes Confirmadas"
-                  >
-                    <div className="w-8 h-8 rounded-lg bg-emerald-500/30 text-emerald-300 flex items-center justify-center font-black text-xs shrink-0 border border-emerald-400/30">
-                      2
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-extrabold text-sm tracking-wide text-white">COT · Cotización</span>
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-400/20 text-emerald-300 border border-emerald-400/30">
-                          {conCot} con COT
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-300 font-medium">Propuesta formal con precios y TRM</p>
-                    </div>
-                  </div>
-
-                  {/* Arrow 2 */}
-                  <div className="flex items-center justify-center text-emerald-400 shrink-0">
-                    <ChevronRight size={18} className="animate-pulse" />
-                  </div>
-
-                  {/* Step 3: VEN */}
-                  <Link
-                    href="/dashboard/ventas/venta"
-                    className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all border bg-white/5 border-white/10 hover:bg-purple-600/30 hover:border-purple-400 shrink-0 group"
-                    title="Ir al módulo de Pedidos de Venta"
-                  >
-                    <div className="w-8 h-8 rounded-lg bg-purple-500/30 text-purple-300 flex items-center justify-center font-black text-xs shrink-0 border border-purple-400/30 group-hover:scale-105 transition-transform">
-                      3
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-extrabold text-sm tracking-wide text-white group-hover:text-purple-200">VEN · Pedido de Venta</span>
-                        <ArrowUpRight size={12} className="text-purple-400 group-hover:translate-x-0.5 transition-transform" />
-                      </div>
-                      <p className="text-[11px] text-slate-300 font-medium">Pago, empaque, reserva y despacho</p>
-                    </div>
-                  </Link>
-                </div>
-
-                {/* Right guide toggle button */}
-                <button
-                  onClick={() => setShowPipelineGuide(!showPipelineGuide)}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-indigo-200 text-xs font-bold border border-white/10 shrink-0 transition-colors"
-                >
-                  <Info size={14} className="text-indigo-400" />
-                  {showPipelineGuide ? 'Ocultar Guía' : '¿Cómo funciona el flujo?'}
-                </button>
-              </div>
-
-              {/* Collapsible Pipeline Guide Card */}
-              {showPipelineGuide && (
-                <div className="mt-3.5 pt-3.5 border-t border-white/10 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-                  <div className="bg-white/5 rounded-xl p-3 border border-white/5">
-                    <p className="font-black text-indigo-300 uppercase text-[10px] tracking-wider mb-1">1. Registro de SC</p>
-                    <p className="text-slate-300 leading-relaxed">
-                      Captura los datos del cliente, productos y modalidad de pago (Contado, 60/40 o Crédito). Avanza sola: <strong>{infoEstadoSolicitud('BORRADOR').label}</strong>, <strong>{infoEstadoSolicitud('ASIGNADA').label}</strong> y <strong>{infoEstadoSolicitud('PENDIENTE_CONFIRMACION').label}</strong> hasta que el cliente la confirma.
-                    </p>
-                  </div>
-                  <div className="bg-white/5 rounded-xl p-3 border border-white/5">
-                    <p className="font-black text-emerald-300 uppercase text-[10px] tracking-wider mb-1">2. Auto-conversión a COT</p>
-                    <p className="text-slate-300 leading-relaxed">
-                      Cuando el cliente confirma, el botón <strong>Cotizar</strong> del detalle valida las líneas y genera la cotización vinculada con TRM en tiempo real. Para cotizar antes, <strong>Cotizar sin confirmación</strong> pide el motivo.
-                    </p>
-                  </div>
-                  <div className="bg-white/5 rounded-xl p-3 border border-white/5">
-                    <p className="font-black text-rose-300 uppercase text-[10px] tracking-wider mb-1">3. Cancelación & Papelera</p>
-                    <p className="text-slate-300 leading-relaxed">
-                      Si una SC se cancela, se exige el <strong>motivo</strong> y se traslada a la <strong>Papelera</strong>. Allí, una SC sin cotización ni pedido se puede eliminar; si tiene documentos vinculados, se conserva.
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-
-        {/* KPI Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-          {/* T11 (V7): la pista dice también las vencidas del banner, para no decir «Todas atendidas» mientras avisa. */}
-          <StatCard icon={FileText} label="Activas" value={totalActivas} hint={pistaActivasSolicitudes(sinAtender,vencidas)} color="amber"/>
-          <StatCard icon={CheckCircle2} label="Confirmadas" value={totalConf} hint={hintConfirmadas} color="emerald"/>
-          <StatCard icon={X} label="Canceladas" value={solicitudes.filter(s=>s.estado==='CANCELADA').length} hint="Fuera del pipeline" color="red"/>
-          <StatCard icon={Activity} label="Total" value={solicitudes.length} hint={hintTotal} color="indigo"/>
-        </div>
-
-        {/* Table */}
-        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col overflow-hidden">
-          <div className="border-b border-slate-200 bg-slate-50/50 px-4 pt-4 pb-3">
-            {/* ROW 1: TABS + VIEW TOGGLE */}
-            <div className="flex items-center justify-between pb-0">
-              <div className="flex items-center gap-1 overflow-x-auto">
-                {(['Activas','Confirmadas','Canceladas','Soporte','Papelera','Analisis'] as const).map(tab=>(
-                  <button key={tab} onClick={()=>{setActiveTab(tab as any);setCurrentPage(1);if(tab==='Papelera')loadPapelera();}}
-                    className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all ${activeTab===tab?'bg-indigo-600 text-white shadow-sm':'text-gray-600 hover:text-indigo-700 hover:bg-indigo-50'}`}>
-                    {/* T11 (V6): la clave sigue 'Analisis'; el texto visible lleva tilde. */}
-                    {tab==='Papelera'?'🗑️ Papelera':tab==='Analisis'?'Análisis':tab}
-                    {tab!=='Analisis'&&tab!=='Papelera'&&<span className={`ml-1.5 text-xs font-black ${activeTab===tab?'text-indigo-200':'text-gray-400'}`}>
-                      {solicitudes.filter(s=>pestanaDeSolicitud(s)===tab).length}
-                    </span>}
-                  </button>
-                ))}
-              </div>
-              {activeTab!=='Analisis'&&(
-                <div className="flex items-center gap-1 shrink-0 ml-4">
-                  <button className="p-2 rounded-lg border bg-indigo-50 border-indigo-200 text-indigo-700">
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="3" width="14" height="2" rx="1" fill="currentColor"/><rect x="1" y="7" width="14" height="2" rx="1" fill="currentColor"/><rect x="1" y="11" width="14" height="2" rx="1" fill="currentColor"/></svg>
-                  </button>
-                  <button className="p-2 rounded-lg border border-gray-200 text-gray-400 hover:bg-gray-50">
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="14" rx="1.5" fill="currentColor"/><rect x="9" y="1" width="6" height="14" rx="1.5" fill="currentColor"/></svg>
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* ROW 2: SEARCH + FILTER + COUNT */}
-            {activeTab!=='Analisis'&&(
-              <div className="flex items-center gap-3 pt-3 mt-3 border-t border-slate-100">
-                <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-2 gap-2 flex-1 max-w-[420px] shadow-sm">
-                  <Search className="text-slate-400 shrink-0" size={14}/>
-                  <input type="text" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar SC, cliente, asesor, producto..." className="w-full bg-transparent text-sm font-medium text-slate-700 outline-none placeholder-slate-400"/>
-                  {search&&<button onClick={()=>setSearch('')}><X size={13} className="text-slate-400 hover:text-slate-600"/></button>}
-                </div>
-                <button onClick={load} className="flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-600 text-sm font-semibold hover:bg-slate-50 shadow-sm">
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M3 7h8M5 11h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-                  Filtrar Estado
-                </button>
-                <span className="text-sm text-slate-400 font-medium">{filtered.length} registros</span>
-              </div>
-            )}
-          </div>
-
-          {/* PAPELERA TABLE */}
-          {activeTab==='Papelera'&&(
-            <div className="p-4">
-              {/* B2.1 D2: la Papelera ya no se borra al abrirla; un administrador vacía las vencidas (solo él ve el botón). B3
-                  T18 (RP7): desde B3-T10 también la revisión automática (purga_papelera). */}
-              {/* B2.1 T4 r1: el título solo; la regla va debajo, sin mayúsculas, con el subtítulo del design-system. */}
-              <div className="flex items-start justify-between gap-3 mb-3">
-                <div className="min-w-0">
-                  <p className="text-xs font-black text-slate-500 uppercase">Solicitudes en Papelera</p>
-                  <p className={PAGE_HEADER.subtitle}>Las solicitudes canceladas se pueden eliminar definitivamente después de 30 días si no se restauran, salvo las que tienen documentos vinculados; un administrador vacía las vencidas, y la revisión automática también.</p>
-                </div>
-                <div className="flex items-center gap-3 shrink-0">
-                  {esAdministrador(getUsuarioActual().role)&&<button onClick={vaciarVencidas} disabled={vaciandoPapelera} className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"><Trash2 size={11} className={vaciandoPapelera?'animate-pulse':''}/>Vaciar las vencidas</button>}
-                  <button onClick={loadPapelera} className="text-xs text-slate-400 hover:text-slate-600 font-bold flex items-center gap-1"><RefreshCw size={11} className={loadingPapelera?'animate-spin':''}/> Actualizar</button>
-                </div>
-              </div>
-              {papeleraError&&(
-                <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl px-4 py-3 mb-3 text-xs font-bold flex items-start gap-2">
-                  <AlertCircle size={14} className="shrink-0 mt-0.5"/>
-                  <span>No se pudo cargar la papelera: {papeleraError}{papelera.length>0?' (se muestra la última lista cargada).':'.'}</span>
-                </div>
-              )}
-              {loadingPapelera?<div className="flex justify-center py-8"><RefreshCw size={20} className="animate-spin text-slate-400"/></div>:papelera.length===0?(papeleraError?null:<EmptyState icon={Trash2} message="La papelera está vacía." hint="Las solicitudes canceladas aparecen aquí; se pueden eliminar definitivamente después de 30 días si no se restauran, salvo las que tienen cotizaciones, pedidos o leads vinculados. Un administrador vacía las vencidas, y la revisión automática también."/>):(
-                <div className="space-y-2">
-                  {papelera.map((sc:any)=>{
-                    const enPapelera=estadoEnPapelera(sc);
-                    const motivo=motivoEnPapelera(sc);
-                    return (
-                    <div key={sc.id} className="bg-white border border-red-100 rounded-xl p-4 flex items-center justify-between hover:border-red-300 transition-colors">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="font-black text-red-700 text-sm">{sc.numero}</span>
-                          <SharedBadge tone="danger">{etiquetaTipoSolicitud(sc.tipo_solicitud)||'SC'}</SharedBadge>
-                        </div>
-                        <p className="text-xs text-slate-600 font-medium">{sc.customer_name||'-'} — {sc.advisor_name||'-'}</p>
-                        {motivo&&<p className="text-xs text-slate-500 mt-1 italic">Razón: {motivo}</p>}
-                      </div>
-                      <div className="flex items-center gap-3 flex-shrink-0 ml-4">
-                        <div className="text-right max-w-[220px]">
-                          <p className={`text-xs font-black ${enPapelera.conservada?'text-slate-600':enPapelera.urgente?'text-red-600':'text-amber-600'}`}>{enPapelera.texto}</p>
-                          {enPapelera.nota&&<p className="text-[10px] text-slate-400">{enPapelera.nota}</p>}
-                        </div>
-                        <button onClick={()=>restaurarSC(sc.id)} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-lg text-xs font-bold border border-emerald-200 flex items-center gap-1"><RotateCcw size={11}/>Restaurar</button>
-                        {/* H34: solo un administrador (único que puede hacerlo) ve 'Eliminar permanentemente'. */}
-                        {esAdministrador(getUsuarioActual().role)&&enPapelera.puedeEliminar&&<button onClick={()=>eliminarPermanente(sc)} className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 flex items-center gap-1"><Trash2 size={11}/>Eliminar permanentemente</button>}
-                      </div>
-                    </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-
-          {activeTab!=='Papelera' && activeTab!=='Analisis' && (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead className="bg-slate-50 border-b border-slate-200 text-[11px] font-black text-slate-500 uppercase tracking-wider">
-                <tr>
-                  <th className="px-4 py-4"><input type="checkbox" onChange={toggleAll} checked={checked.size===filtered.length&&filtered.length>0} className="rounded border-slate-300"/></th>
-                  <th className="px-4 py-4">SC / Trazabilidad</th>
-                  <th className="px-4 py-4">Tipo</th>
-                  <th className="px-4 py-4">Cliente</th>
-                  <th className="px-4 py-4">Asesor</th>
-                  <th className="px-4 py-4">Fecha</th>
-                  {activeTab === 'Canceladas' ? (
-                    <th className="px-4 py-4 min-w-[240px]">Razón de Cancelación</th>
-                  ) : (
-                    <th className="px-4 py-4">Vencimiento</th>
-                  )}
-                  <th className="px-4 py-4">Estado</th>
-                  <th className="px-4 py-4 text-center">Acciones</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50 text-sm">
-                {loading?(
-                  <tr><td colSpan={9} className="px-6 py-16 text-center"><RefreshCw size={24} className="animate-spin text-indigo-400 mx-auto mb-2"/><p className="text-slate-400">Cargando...</p></td></tr>
-                ):filtered.length===0?(
-                  <tr><td colSpan={9}><EmptyState icon={FileText} message="No hay registros." hint="Ajusta la búsqueda o el filtro, o crea una nueva solicitud."/></td></tr>
-                ):filtered.slice((currentPage-1)*pageSize, currentPage*pageSize).map(sc=>{
-                  const isOverdue=sc.fecha_vencimiento&&new Date(comoUTC(sc.fecha_vencimiento))<new Date();
-                  const isStale=superaDiasAlerta(sc.updated_at||sc.fecha_solicitud,alertDias);
-                  return (
-                    <tr key={sc.id} onClick={()=>router.push(`/dashboard/ventas/solicitud/${sc.id}`)} className={`hover:bg-slate-50/80 transition-colors group cursor-pointer ${isStale&&sc.estado==='BORRADOR'?'bg-rose-50/30':''}`}>
-                      <td className="px-4 py-4" onClick={e=>e.stopPropagation()}>
-                        <input type="checkbox" checked={checked.has(sc.id)} onChange={()=>toggleCheck(sc.id)} className="rounded border-slate-300"/>
-                      </td>
-                      <td className="px-4 py-4">
-                        <span className="font-black text-indigo-700">{sc.numero}</span>
-                        {cotizacionesVigentes(sc).length>0
-                          ?<p className="text-[10px] font-bold text-amber-500 mt-0.5">COT vinculada</p>
-                          :generoCotizacion(sc)&&<p className="text-[10px] font-bold text-rose-500 mt-0.5">COT rechazada</p>}
-                        {isStale&&sc.estado==='BORRADOR'&&<p className="text-[10px] font-bold text-rose-500 mt-0.5 flex items-center gap-1"><AlertTriangle size={8}/>Sin atender</p>}
-                      </td>
-                      <td className="px-4 py-4"><TipoBadge tipo={sc.tipo_solicitud||'Cotizacion de Producto'}/></td>
-                      <td className="px-4 py-4"><span className="font-bold text-slate-800">{sc.customer_name||'-'}</span>{sc.customer_phone&&<p className="text-[11px] text-slate-400">{sc.customer_phone}</p>}</td>
-                      <td className="px-4 py-4 text-slate-600 font-medium text-sm">{sc.advisor_name||'-'}</td>
-                      <td className="px-4 py-4 text-slate-500 font-medium text-xs">{fDate(comoUTC(sc.fecha_solicitud))}</td>
-                      {activeTab === 'Canceladas' ? (
-                        <td className="px-4 py-4 min-w-[240px]" onClick={e=>e.stopPropagation()}>
-                          <div className="bg-rose-50 border border-rose-200 text-rose-800 px-3 py-1.5 rounded-xl text-xs font-semibold flex items-start gap-2 shadow-sm">
-                            <AlertCircle size={14} className="text-rose-500 shrink-0 mt-0.5" />
-                            <span className="line-clamp-2 leading-relaxed" title={getRazonCancelacion(sc)||SIN_MOTIVO_REGISTRADO}>
-                              {getRazonCancelacion(sc)||SIN_MOTIVO_REGISTRADO}
-                            </span>
-                          </div>
-                        </td>
-                      ) : (
-                        <td className="px-4 py-4"><span className={`font-medium text-xs ${isOverdue?'text-red-600 font-bold':''}`}>{isOverdue&&<AlertTriangle size={10} className="inline mr-1"/>}{fDate(comoUTC(sc.fecha_vencimiento))}</span></td>
-                      )}
-                      {/* B3 T18 (H28-cambios punto 9): junto al estado, «Cambios pedidos» o «Ya no la necesita». */}
-                      <td className="px-4 py-4"><div className="flex flex-wrap items-center gap-1.5"><EstadoBadge estado={sc.estado}/><ChipCambiosCliente doc={sc}/></div></td>
-                      <td className="px-4 py-4" onClick={e=>e.stopPropagation()}>
-                        <div className="flex items-center justify-center gap-1.5">
-                          <button onClick={()=>router.push(`/dashboard/ventas/solicitud/${sc.id}`)} title="Ver Detalle" className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 p-1.5 rounded-lg text-xs font-bold transition-colors">
-                            <FileText size={13}/>
-                          </button>
-                          {sc.tipo_solicitud!=='Soporte Tecnico' && (
-                            sc.estado === 'CANCELADA' ? (
-                              // N4: una SC que ya tiene eliminada_at ya esta en la Papelera: no se ofrece mandarla otra vez.
-                              !sc.eliminada_at&&(
-                              <button onClick={()=>enviarAPapelera(sc.id)} title="Enviar a la papelera" className="bg-rose-50 hover:bg-rose-100 text-rose-600 p-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1">
-                                <Trash2 size={13}/>
-                              </button>
-                              )
-                            ) : (
-                              <button onClick={()=>deleteItem(sc.id)} title="Cancelar Solicitud" className="bg-slate-100 hover:bg-amber-50 hover:text-amber-600 text-slate-500 p-1.5 rounded-lg text-xs font-bold transition-colors">
-                                <X size={13}/>
-                              </button>
-                            )
-                          )}
-                          <RowMenu sc={sc} onView={()=>router.push(`/dashboard/ventas/solicitud/${sc.id}`)} onReiniciar={()=>reiniciarSC(sc)} onCancel={()=>deleteItem(sc.id)} onSendToTrash={()=>enviarAPapelera(sc.id)}/>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          )}
-
-          {/* PAGINATION FOOTER */}
-          {activeTab!=='Analisis'&&activeTab!=='Papelera'&&(
-            <div className="border-t border-slate-100 px-6 py-3 flex items-center justify-between bg-slate-50/50">
-              <div className="flex items-center gap-3">
-                <span className="text-xs font-bold text-slate-400">{filtered.length} registros</span>
-                <select value={pageSize} onChange={e=>{setPageSize(Number(e.target.value));setCurrentPage(1);}} className="text-xs border border-slate-200 rounded-lg px-2 py-1 font-bold text-slate-600 outline-none focus:ring-1 focus:ring-indigo-200">
-                  <option value={25}>25 por página</option>
-                  <option value={50}>50 por página</option>
-                </select>
-              </div>
-              {Math.ceil(filtered.length/pageSize)>1&&(
-                <div className="flex items-center gap-1">
-                  <button disabled={currentPage===1} onClick={()=>setCurrentPage(1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">«</button>
-                  <button disabled={currentPage===1} onClick={()=>setCurrentPage(p=>p-1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">‹</button>
-                  {Array.from({length:Math.min(5,Math.ceil(filtered.length/pageSize))},(_, i)=>{
-                    const tp=Math.ceil(filtered.length/pageSize);
-                    let page=i+1;
-                    if(tp>5){const half=Math.floor(5/2);const start=Math.max(1,Math.min(currentPage-half,tp-4));page=start+i;}
-                    return <button key={page} onClick={()=>setCurrentPage(page)} className={`px-2.5 py-1 text-xs font-bold border rounded-lg ${currentPage===page?'bg-indigo-600 text-white border-indigo-600':'border-slate-200 hover:bg-slate-100'}`}>{page}</button>;
-                  })}
-                  <button disabled={currentPage===Math.ceil(filtered.length/pageSize)} onClick={()=>setCurrentPage(p=>p+1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">›</button>
-                  <button disabled={currentPage===Math.ceil(filtered.length/pageSize)} onClick={()=>setCurrentPage(Math.ceil(filtered.length/pageSize))} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">»</button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* TAB ANALISIS: DASHBOARD, GRAFICAS (LINEAS, BARRAS, TORTA), TOP CLIENTES & IA ANALYST */}
-          {activeTab === 'Analisis' && (
-            <div className="p-6 space-y-8">
-              {/* Analytics KPI Row */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-                <StatCard icon={TrendingUp} color="indigo"
-                  label="Tasa de Conversión"
-                  value={`${tasaConv.pct.toFixed(1)}%`}
-                  hint={`${tasaConv.conCot} de ${tasaConv.total} solicitudes de cotización generaron cotización`}/>
-                {/* T11 ronda 1: la misma pista que la tarjeta ACTIVAS de la lista (V7): cuenta también las vencidas. */}
-                <StatCard icon={Clock} color="amber"
-                  label="Solicitudes Activas"
-                  value={totalActivas}
-                  hint={pistaActivasSolicitudes(sinAtender, vencidas)}/>
-                <StatCard icon={AlertTriangle} color="rose"
-                  label="Cancelaciones"
-                  value={solicitudes.filter(s=>s.estado==='CANCELADA').length}
-                  hint={`${solicitudes.length > 0 ? ((solicitudes.filter(s=>s.estado==='CANCELADA').length / solicitudes.length) * 100).toFixed(1) : 0}% tasa de descarte global`}/>
-                <StatCard icon={CheckCircle2} color="emerald"
-                  label="Total Pipeline"
-                  value={solicitudes.length}
-                  hint="Histórico acumulado de requerimientos"/>
-              </div>
-
-              {/* Charts Section: Line & Bar & Donut */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* 1. DIAGRAMA DE LÍNEAS: Tendencia Temporal */}
-                <div className="lg:col-span-2 bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col justify-between">
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <h4 className="font-black text-slate-800 text-base flex items-center gap-2">
-                        <Activity size={18} className="text-indigo-600"/> Tendencia de Solicitudes Recibidas
-                      </h4>
-                      <p className="text-xs text-slate-400 font-medium">Volumen por fecha de ingreso al ERP</p>
-                    </div>
-                    <span className="text-xs font-bold bg-indigo-50 text-indigo-700 px-3 py-1 rounded-full border border-indigo-100">
-                      Últimos registros
-                    </span>
-                  </div>
-
-                  {/* Dynamic SVG Line Chart */}
-                  {(() => {
-                    // Group solicitudes by date. T11 calidad (E5): la fecha llega en UTC sin zona (comoUTC, como la
-                    // columna Fecha de la lista): sin eso, las SC de 7 pm a medianoche contaban en el día siguiente.
-                    const dateMap: Record<string, number> = {};
-                    solicitudes.forEach(s => {
-                      const d = s.fecha_solicitud ? new Date(comoUTC(s.fecha_solicitud)).toLocaleDateString('es-CO', {month:'short', day:'numeric'}) : 'Reciente';
-                      dateMap[d] = (dateMap[d] || 0) + 1;
-                    });
-                    const entries = Object.entries(dateMap).slice(-8);
-                    if (entries.length === 0) entries.push(['Hoy', 0]);
-                    const maxVal = Math.max(...entries.map(e => e[1]), 5);
-                    const width = 600;
-                    const height = 180;
-                    const padding = 35;
-                    const stepX = entries.length > 1 ? (width - padding * 2) / (entries.length - 1) : 0;
-                    const points = entries.map((e, idx) => {
-                      const x = padding + idx * stepX;
-                      const y = height - padding - ((e[1] / maxVal) * (height - padding * 2));
-                      return { x, y, label: e[0], val: e[1] };
-                    });
-                    const polylinePts = points.map(p => `${p.x},${p.y}`).join(' ');
-                    const areaD = points.length > 0 ? `M ${points[0].x} ${height - padding} ` + points.map(p => `L ${p.x} ${p.y}`).join(' ') + ` L ${points[points.length-1].x} ${height - padding} Z` : '';
-
-                    return (
-                      <div className="w-full overflow-x-auto">
-                        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-48 select-none">
-                          <defs>
-                            <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="0%" stopColor="#4f46e5" stopOpacity="0.3"/>
-                              <stop offset="100%" stopColor="#4f46e5" stopOpacity="0.0"/>
-                            </linearGradient>
-                          </defs>
-                          {/* Grid horizontal lines */}
-                          {[0, 0.5, 1].map((ratio, i) => {
-                            const y = height - padding - ratio * (height - padding * 2);
-                            return (
-                              <g key={i}>
-                                <line x1={padding} y1={y} x2={width - padding} y2={y} stroke="#f1f5f9" strokeDasharray="4 4" strokeWidth="1"/>
-                                <text x={padding - 8} y={y + 3} textAnchor="end" fontSize="9" fill="#94a3b8" fontWeight="bold">
-                                  {Math.round(ratio * maxVal)}
-                                </text>
-                              </g>
-                            );
-                          })}
-                          {/* Area & Line */}
-                          {areaD && <path d={areaD} fill="url(#areaGrad)" />}
-                          {polylinePts && <polyline fill="none" stroke="#4f46e5" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" points={polylinePts}/>}
-                          {/* Circles & Labels */}
-                          {points.map((p, i) => (
-                            <g key={i} className="group cursor-pointer">
-                              <circle cx={p.x} cy={p.y} r="5" fill="#ffffff" stroke="#4f46e5" strokeWidth="2.5" className="transition-all hover:scale-125"/>
-                              <text x={p.x} y={p.y - 10} textAnchor="middle" fontSize="10" fill="#1e293b" fontWeight="bold">
-                                {p.val}
-                              </text>
-                              <text x={p.x} y={height - 10} textAnchor="middle" fontSize="9" fill="#64748b" fontWeight="600">
-                                {p.label}
-                              </text>
-                            </g>
-                          ))}
-                        </svg>
-                      </div>
-                    );
-                  })()}
-                </div>
-
-                {/* 2. DIAGRAMA DE TORTA / DONUT: Estados o Razones */}
-                <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col justify-between">
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <h4 className="font-black text-slate-800 text-base flex items-center gap-2">
-                        <PieChart size={18} className="text-emerald-600"/> Distribución
-                      </h4>
-                      <p className="text-xs text-slate-400 font-medium">Proporciones del pipeline</p>
-                    </div>
-                    {/* Toggle Estados vs Motivos */}
-                    <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200">
-                      <button
-                        onClick={() => setDonutMode('estados')}
-                        className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition-all ${donutMode==='estados'?'bg-white text-slate-800 shadow-sm':'text-slate-500 hover:text-slate-700'}`}
-                      >
-                        Estados
-                      </button>
-                      <button
-                        onClick={() => setDonutMode('motivos')}
-                        className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition-all ${donutMode==='motivos'?'bg-white text-slate-800 shadow-sm':'text-slate-500 hover:text-slate-700'}`}
-                      >
-                        Canceladas
-                      </button>
+                    <div className="flex items-center gap-3 shrink-0">
+                      {esAdministrador(getUsuarioActual().role)&&<button onClick={vaciarVencidas} disabled={vaciandoPapelera} className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"><Trash2 size={11} className={vaciandoPapelera?'animate-pulse':''}/>Vaciar las vencidas</button>}
+                      <button onClick={recargarPapelera} className="text-xs text-slate-500 hover:text-slate-700 font-bold flex items-center gap-1"><RefreshCw size={11} className={cargandoPapelera?'animate-spin':''}/> Actualizar</button>
                     </div>
                   </div>
-
-                  {/* SVG Donut */}
-                  {(() => {
-                    const slices: { label: string; count: number; color: string }[] = [];
-                    if (donutMode === 'estados') {
-                      // U15: los pasos de la solicitud (con Asignada, que faltaba) y Cancelada; etiquetas de la librería.
-                      const colores: [string, string][] = [['BORRADOR', '#94a3b8'], ['ASIGNADA', '#06b6d4'], ['PENDIENTE_CONFIRMACION', '#f59e0b'], ['CONFIRMADA', '#10b981'], ['CANCELADA', '#ef4444']];
-                      colores.forEach(([estado, color]) => {
-                        slices.push({ label: infoEstadoSolicitud(estado).label, count: solicitudes.filter(s=>s.estado===estado).length, color });
-                      });
-                      // C12 (ronda 1): los estados heredados (hasta que T12 los ajuste) en un trozo aparte, solo si hay.
-                      const anteriores = solicitudes.filter(s=>ESTADOS_SC_HEREDADOS.includes(s.estado)).length;
-                      if (anteriores > 0) slices.push({ label: 'Estados anteriores', count: anteriores, color: '#a78bfa' });
-                    } else {
-                      const reasonCounts: Record<string, number> = {};
-                      solicitudes.filter(s=>s.estado==='CANCELADA').forEach(s => {
-                        const r = getRazonCancelacion(s) || SIN_MOTIVO_REGISTRADO;
-                        reasonCounts[r] = (reasonCounts[r] || 0) + 1;
-                      });
-                      const pal = ['#ef4444', '#f97316', '#ec4899', '#8b5cf6', '#64748b'];
-                      Object.entries(reasonCounts).slice(0, 5).forEach(([r, count], i) => {
-                        slices.push({ label: r, count, color: pal[i % pal.length] });
-                      });
-                      if (slices.length === 0) {
-                        slices.push({ label: 'Sin cancelaciones', count: 1, color: '#10b981' });
-                      }
-                    }
-
-                    const sum = slices.reduce((acc, s) => acc + s.count, 0) || 1;
-                    let accumulatedPercent = 0;
-
-                    return (
-                      <div className="flex flex-col items-center justify-center py-2">
-                        <div className="relative w-36 h-36 flex items-center justify-center">
-                          <svg viewBox="0 0 42 42" className="w-full h-full transform -rotate-90">
-                            <circle cx="21" cy="21" r="15.915" fill="transparent" stroke="#f1f5f9" strokeWidth="5"/>
-                            {slices.map((slice, i) => {
-                              const pct = (slice.count / sum) * 100;
-                              const strokeDasharray = `${pct} ${100 - pct}`;
-                              const strokeDashoffset = -accumulatedPercent;
-                              accumulatedPercent += pct;
-                              return (
-                                <circle
-                                  key={i}
-                                  cx="21"
-                                  cy="21"
-                                  r="15.915"
-                                  fill="transparent"
-                                  stroke={slice.color}
-                                  strokeWidth="5"
-                                  strokeDasharray={strokeDasharray}
-                                  strokeDashoffset={strokeDashoffset}
-                                  className="transition-all duration-500"
-                                />
-                              );
-                            })}
-                          </svg>
-                          <div className="absolute text-center">
-                            <span className="text-xl font-black text-slate-800">{sum}</span>
-                            <p className="text-[9px] uppercase font-black text-slate-400">Total</p>
-                          </div>
-                        </div>
-
-                        {/* Legend */}
-                        <div className="w-full mt-4 space-y-1.5">
-                          {slices.map((s, i) => (
-                            <div key={i} className="flex items-center justify-between text-xs">
-                              <div className="flex items-center gap-2 min-w-0">
-                                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: s.color }}/>
-                                <span className="text-slate-600 font-medium truncate" title={s.label}>{s.label}</span>
-                              </div>
-                              <span className="font-bold text-slate-800 shrink-0 ml-2">
-                                {s.count} ({Math.round((s.count / sum) * 100)}%)
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })()}
-                </div>
-              </div>
-
-              {/* 3. DIAGRAMA DE BARRAS: Distribución por Tipo de Solicitud */}
-              <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <h4 className="font-black text-slate-800 text-base flex items-center gap-2">
-                      <BarChart3 size={18} className="text-purple-600"/> Distribución por Tipo de Solicitud de Cliente
-                    </h4>
-                    <p className="text-xs text-slate-400 font-medium">Comparativa de motivos y tasas de conversión por categoría</p>
-                  </div>
-                  <span className="text-xs font-bold text-slate-500">Categorías oficiales</span>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {TIPOS_SC.map(tipo => {
-                    const matching = solicitudes.filter(s => (s.tipo_solicitud || 'Cotizacion de Producto') === tipo);
-                    const count = matching.length;
-                    const confCount = matching.filter(generoCotizacion).length;
-                    const totalAll = solicitudes.length || 1;
-                    const pctOfAll = Math.round((count / totalAll) * 100);
-                    const convRatio = count > 0 ? Math.round((confCount / count) * 100) : 0;
-
-                    return (
-                      <div key={tipo} className="bg-slate-50 border border-slate-100 rounded-xl p-4 hover:border-indigo-200 transition-colors">
-                        <div className="flex items-start justify-between mb-2">
-                          <p className="font-black text-xs text-slate-800 leading-tight">{etiquetaTipoSolicitud(tipo)}</p>
-                          <span className="font-extrabold text-sm text-indigo-700 bg-white px-2 py-0.5 rounded-md border border-slate-100 shadow-xs">
-                            {count}
-                          </span>
-                        </div>
-                        <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden mb-2">
-                          <div className="bg-indigo-600 h-full rounded-full transition-all duration-500" style={{ width: `${Math.min(pctOfAll * 2.5, 100)}%` }}/>
-                        </div>
-                        <div className="flex items-center justify-between text-[11px] text-slate-500 font-semibold">
-                          <span>{pctOfAll}% del pipeline</span>
-                          <span className="text-emerald-700 font-bold">{convRatio}% a COT</span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* 4. SELECTOR DE TOP CLIENTES (Top 5, 10, 20, 50) */}
-              <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
-                  <div>
-                    <h4 className="font-black text-slate-800 text-lg flex items-center gap-2">
-                      <Award size={20} className="text-amber-500"/> Ranking de Top Clientes
-                    </h4>
-                    <p className="text-xs text-slate-400 font-medium">Clientes con mayor recurrencia y generación de solicitudes en Nebulae</p>
-                  </div>
-                  {/* Selector de Límite */}
-                  <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 shrink-0">
-                    <span className="text-xs font-black text-slate-500 px-2 uppercase">Mostrar:</span>
-                    {[5, 10, 20, 50].map(lim => (
-                      <button
-                        key={lim}
-                        onClick={() => setTopClientsLimit(lim)}
-                        className={`px-3 py-1 text-xs font-black rounded-lg transition-all ${topClientsLimit === lim ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200'}`}
-                      >
-                        Top {lim}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Table Top Clientes */}
-                {(() => {
-                  const clientAgg: Record<string, { name: string; phone: string; email: string; total: number; conf: number; act: number; canc: number }> = {};
-                  solicitudes.forEach(s => {
-                    const key = (s.customer_name || 'Cliente Sin Nombre').trim();
-                    if (!clientAgg[key]) {
-                      clientAgg[key] = {
-                        name: key,
-                        phone: s.customer_phone || '',
-                        email: s.customer_email || '',
-                        total: 0,
-                        conf: 0,
-                        act: 0,
-                        canc: 0
-                      };
-                    }
-                    clientAgg[key].total += 1;
-                    // H32: 'COT' = generó cotización de verdad (no solo Confirmada); Cancelada se revisa primero.
-                    if (s.estado === 'CANCELADA') clientAgg[key].canc += 1;
-                    else if (generoCotizacion(s)) clientAgg[key].conf += 1;
-                    else clientAgg[key].act += 1;
-                  });
-
-                  const ranked = Object.values(clientAgg).sort((a,b) => b.total - a.total).slice(0, topClientsLimit);
-
-                  return (
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left text-sm">
-                        <thead className="bg-slate-50 text-[11px] font-black text-slate-400 uppercase tracking-wider border-b border-slate-100">
-                          <tr>
-                            <th className="px-4 py-3">Posición</th>
-                            <th className="px-4 py-3">Cliente</th>
-                            <th className="px-4 py-3">Contacto</th>
-                            <th className="px-4 py-3 text-center">Total Solicitudes</th>
-                            <th className="px-4 py-3">Desglose de Estados</th>
-                            <th className="px-4 py-3 text-right">Efectividad</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 text-xs">
-                          {ranked.length === 0 ? (
-                            <tr><td colSpan={6} className="py-8 text-center text-slate-400">Sin datos de clientes disponibles.</td></tr>
-                          ) : ranked.map((c, idx) => {
-                            const successRate = c.total > 0 ? Math.round((c.conf / c.total) * 100) : 0;
-                            return (
-                              <tr key={c.name} className="hover:bg-slate-50/80 transition-colors">
-                                <td className="px-4 py-3">
-                                  <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full font-black text-xs ${idx===0 ? 'bg-amber-100 text-amber-800' : idx===1 ? 'bg-slate-200 text-slate-700' : idx===2 ? 'bg-orange-100 text-orange-800' : 'bg-slate-100 text-slate-500'}`}>
-                                    {idx + 1}
-                                  </span>
-                                </td>
-                                <td className="px-4 py-3">
-                                  <p className="font-extrabold text-slate-800">{c.name}</p>
-                                </td>
-                                <td className="px-4 py-3 text-slate-500">
-                                  {c.phone || c.email ? (
-                                    <div className="space-y-0.5">
-                                      {c.phone && <p>{c.phone}</p>}
-                                      {c.email && <p className="text-indigo-600">{c.email}</p>}
-                                    </div>
-                                  ) : (
-                                    <span className="text-slate-400 italic">Sin datos directos</span>
-                                  )}
-                                </td>
-                                <td className="px-4 py-3 text-center">
-                                  <span className="font-black text-sm text-indigo-700 bg-indigo-50 border border-indigo-100 px-3 py-1 rounded-xl">
-                                    {c.total}
-                                  </span>
-                                </td>
-                                <td className="px-4 py-3">
-                                  <div className="flex items-center gap-1.5 flex-wrap">
-                                    <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded font-bold text-[10px]" title="Generaron cotización">
-                                      {c.conf} COT
-                                    </span>
-                                    <span className="bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded font-bold text-[10px]" title="Activas">
-                                      {c.act} Activas
-                                    </span>
-                                    {c.canc > 0 && (
-                                      <span className="bg-rose-50 text-rose-600 border border-rose-200 px-2 py-0.5 rounded font-bold text-[10px]" title="Canceladas">
-                                        {c.canc} Canc.
-                                      </span>
-                                    )}
-                                  </div>
-                                </td>
-                                <td className="px-4 py-3 text-right">
-                                  <div className="inline-flex items-center gap-2">
-                                    <div className="w-16 bg-slate-200 h-2 rounded-full overflow-hidden">
-                                      <div className="bg-emerald-500 h-full rounded-full" style={{ width: `${successRate}%` }}/>
-                                    </div>
-                                    <span className="font-black text-emerald-700 w-10 text-right">{successRate}%</span>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  );
-                })()}
-              </div>
-
-              {/* 5. SECCIÓN DE IA: PREGUNTAS Y RESPUESTAS DEL PIPELINE DE SOLICITUDES */}
-              <div className="bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 rounded-3xl p-6 sm:p-8 text-white shadow-xl border border-indigo-900/50">
-                <div className="flex items-center justify-between gap-4 mb-4 pb-4 border-b border-indigo-800/40">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-2xl bg-indigo-500/30 border border-indigo-400/40 flex items-center justify-center text-indigo-300 shadow-inner">
-                      <Bot size={22} className="text-indigo-300 animate-pulse"/>
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-black tracking-tight text-white flex items-center gap-2">
-                        Nebulae AI · Analista del Pipeline de Ventas
-                        <span className="text-[10px] uppercase font-black bg-indigo-500/20 text-indigo-300 border border-indigo-400/30 px-2 py-0.5 rounded-full">
-                          En Vivo
-                        </span>
-                      </h3>
-                      <p className="text-xs text-slate-300 font-medium">
-                        Respuestas estratégicas, cuellos de botella y proyecciones basadas en datos reales de solicitudes
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => setAiChatHistory([{ role: 'ia', text: 'Historial reiniciado. Hazme una consulta sobre tus solicitudes y conversiones.', time: 'Ahora' }])}
-                    className="text-xs text-slate-400 hover:text-white font-bold flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10"
-                  >
-                    <RotateCcw size={12}/> Limpiar
-                  </button>
-                </div>
-
-                {/* Quick Prompts Chips */}
-                <div className="mb-5">
-                  <p className="text-xs font-black text-indigo-300 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                    <Sparkles size={13} className="text-amber-400"/> Consultas rápidas recomendadas:
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {[
-                      '¿Cuál es el diagnóstico de conversión del pipeline (SC → COT)?',
-                      '¿Cuáles son los principales motivos de cancelación registrados?',
-                      '¿Qué clientes tienen mayor volumen o solicitudes estancadas?',
-                      '¿Cuáles son las recomendaciones comerciales para optimizar el cierre?'
-                    ].map((promptText, i) => (
-                      <button
-                        key={i}
-                        onClick={() => handleAiQuestion(promptText)}
-                        disabled={aiLoading}
-                        className="text-xs font-semibold px-3 py-1.5 rounded-xl bg-white/10 hover:bg-indigo-600/50 border border-white/10 text-slate-200 hover:text-white transition-colors text-left"
-                      >
-                        {promptText}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Conversation Box */}
-                <div className="bg-black/30 rounded-2xl p-4 max-h-[360px] overflow-y-auto space-y-4 border border-white/10">
-                  {aiChatHistory.map((msg, i) => (
-                    <div key={i} className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                      {msg.role === 'ia' && (
-                        <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center text-xs font-black shrink-0 mt-0.5">
-                          AI
-                        </div>
-                      )}
-                      <div className={`rounded-2xl px-4 py-3 max-w-[85%] text-xs leading-relaxed shadow-sm ${msg.role === 'user' ? 'bg-indigo-600 text-white font-semibold' : 'bg-white/10 text-slate-100 border border-white/10 font-normal'}`}>
-                        <div className="whitespace-pre-wrap">{msg.text}</div>
-                        <span className="block text-[10px] mt-1.5 opacity-60 text-right">{msg.time}</span>
-                      </div>
-                    </div>
-                  ))}
-                  {aiLoading && (
-                    <div className="flex items-center gap-2 text-indigo-300 text-xs font-bold pl-2 py-1">
-                      <RefreshCw size={14} className="animate-spin text-indigo-400"/>
-                      <span>Analizando pipeline y métricas de solicitudes...</span>
+                  {/* N4: un fallo no se disfraza de «papelera vacía»: se avisa y la última lista cargada se conserva. Sin
+                      ninguna, la tabla muestra el error con «Reintentar». */}
+                  {papeleraError && papelera.length > 0 && (
+                    <div className="mx-4 mt-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl px-4 py-3 text-xs font-bold flex items-start gap-2">
+                      <AlertCircle size={14} className="shrink-0 mt-0.5"/>
+                      <span>No se pudo cargar la papelera: {papeleraError} (se muestra la última lista cargada).</span>
                     </div>
                   )}
-                </div>
-
-                {/* Question Input */}
-                <div className="mt-4 flex gap-2">
-                  <input
-                    type="text"
-                    value={aiQuery}
-                    onChange={e => setAiQuery(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && handleAiQuestion()}
-                    placeholder="Pregunta a la IA sobre solicitudes, estados, conversión de clientes o asesores..."
-                    className="flex-1 bg-white/10 border border-white/20 rounded-xl px-4 py-2.5 text-xs text-white placeholder-slate-400 outline-none focus:ring-2 focus:ring-indigo-400"
+                  {/* RP37: la Papelera como tabla (modo cliente: GET /ventas/solicitudes/papelera trae como mucho 200). */}
+                  <TablaEstandar
+                    id={ID_PAPELERA}
+                    modo="cliente"
+                    columnas={COLUMNAS_PAPELERA}
+                    preferencias={prefsPapelera}
+                    anchoRef={anchoPapeleraRef}
+                    estado={estado}
+                    onEstado={despachar}
+                    filas={papeleraCliente.filas}
+                    total={papeleraCliente.total}
+                    cargando={!listo || papeleraCliente.cargandoInicial && !papeleraError}
+                    recargando={cargandoPapelera && papeleraCargada}
+                    error={errorPapeleraTabla}
+                    onReintentar={recargarPapelera}
+                    onFila={abrirSolicitud}
+                    vacio={<EmptyState icon={Trash2} message="La papelera está vacía." hint="Las solicitudes canceladas aparecen aquí; se pueden eliminar definitivamente después de 30 días si no se restauran, salvo las que tienen cotizaciones, pedidos o leads vinculados. Un administrador vacía las vencidas, y la revisión automática también."/>}
+                    etiqueta="Papelera de solicitudes"
                   />
-                  <button
-                    onClick={() => handleAiQuestion()}
-                    disabled={!aiQuery.trim() || aiLoading}
-                    className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md disabled:opacity-50 flex items-center gap-1.5 shrink-0"
-                  >
-                    <Send size={13}/> Preguntar
-                  </button>
-                </div>
-              </div>
-            </div>
+                </>
+              ) : modoEfectivo === 'lista' ? (
+                <TablaEstandar
+                  id={ID_SC}
+                  modo="servidor"
+                  columnas={columnasTabla}
+                  preferencias={prefs}
+                  anchoRef={anchoTablaRef}
+                  estado={estado}
+                  onEstado={despachar}
+                  filas={listado.filas}
+                  total={listado.total}
+                  cargando={listado.cargandoInicial}
+                  recargando={listado.recargando}
+                  error={listado.error}
+                  onReintentar={listado.recargar}
+                  aviso={listado.avisoOrden}
+                  onFila={abrirSolicitud}
+                  claseFila={claseDeFila}
+                  seleccion={seleccion}
+                  onSeleccion={alSeleccionar}
+                  vacio={(
+                    <div>
+                      <p className="font-semibold text-slate-600">{estado.q.trim() ? `Sin resultados para «${estado.q.trim()}»` : 'No hay solicitudes en esta vista'}</p>
+                      <p className="mt-1 text-xs text-slate-400">Ajusta la búsqueda o el filtro, o crea una nueva solicitud.</p>
+                    </div>
+                  )}
+                  etiqueta="Solicitudes de cliente"
+                />
+              ) : null}
+            </section>
+          </AccionesLista.Provider>
+          {modoEfectivo === 'kanban' && (
+            <TableroKanban
+              tablero={tablero}
+              regla={reglaSoltarSC}
+              tarjetaDe={tarjetaDeSC}
+              onAbrir={abrirSolicitud}
+              onAccion={accionDesdeTablero}
+              color="indigo"
+            />
           )}
-
         </div>
       </div>
+
+      {/* N4 (barra masiva): solo cancela las marcadas (U15: ningún estado se pone a mano). B4 T8: la selección es de la
+          página de la tabla («Seleccionar todo» marca la página), así que solo en Lista y fuera de la Papelera; va abajo y
+          fija, como la del Hub, para no correr la lista al marcar una fila. */}
+      {checked.size>0 && modoEfectivo === 'lista' && !enPapelera && (
+        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-indigo-600 text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-4 z-40">
+          <span className="font-bold text-sm">{checked.size} seleccionada(s)</span>
+          <div className="flex gap-2">
+            {/* U15: sin botones 'Estado: …' (ningún estado se pone a mano). */}
+            <button onClick={bulkCancelar} className="bg-rose-600 hover:bg-rose-700 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1"><XCircle size={12}/>Cancelar seleccionadas</button>
+            <button onClick={()=>setChecked(new Set())} className="bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1"><X size={12}/>Limpiar</button>
+          </div>
+        </div>
+      )}
 
       {/* MODAL: MOTIVO DE CANCELACIÓN (N4: una o varias solicitudes; el servidor revisa que no tengan documentos activos) */}
       {showCancelModal&&(
@@ -1996,7 +1595,7 @@ export default function SolicitudClient() {
             </>
           )}>
           <div>
-            {(cancelTarget.length>1||cancelOmitidas.length>0)&&<p className="text-xs font-bold text-slate-500 mb-3">{cancelTarget.map(id=>solicitudes.find(s=>s.id===id)?.numero||`#${id}`).join(', ')}</p>}
+            {(cancelTarget.length>1||cancelOmitidas.length>0)&&<p className="text-xs font-bold text-slate-500 mb-3">{cancelTarget.map(id=>filaPorId(id)?.numero||`#${id}`).join(', ')}</p>}
             {cancelOmitidas.length>0&&(
               <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-3">
                 No se enviarán: {cancelOmitidas.map(o=>`${o.numero} ${o.motivo}`).join('; ')}.
@@ -2022,8 +1621,6 @@ export default function SolicitudClient() {
           </div>
         </Modal>
       )}
-
-      {/* Papelera view active */}
 
       {/* CREATE MODAL */}
       {showCreate&&(

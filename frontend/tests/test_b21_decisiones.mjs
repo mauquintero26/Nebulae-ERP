@@ -198,10 +198,12 @@ console.log('--- D2 TEST 4: el botón «Vaciar las vencidas» (solo ADMIN) en la
   assert.ok(pide > 0, 'confirmar() con las vencidas contadas en la lista');
   assert.ok(post > pide, 'POST /ventas/papelera/purgar después de confirmar');
   assert.ok(/avisar\(textoPapeleraVaciada\(/.test(vaciar), 'avisa cuántas borró');
-  assert.ok(vaciar.indexOf('await loadPapelera()') > post, 'recarga la Papelera');
+  // B4 T8 (D27): la Papelera la pide su efecto (recargarPapelera sube la vuelta) y la lista es la del servidor
+  // (recargarLista: la tabla, el tablero y la franja), en vez de loadPapelera() y load(). La misma protección.
+  assert.ok(vaciar.indexOf('recargarPapelera();') > post, 'recarga la Papelera');
   // B2.1 (revisión final, Minor 2): y la lista, para que «Canceladas» y los contadores de las pestañas no sigan
   // mostrando las purgadas (como restaurarSC).
-  assert.ok(vaciar.indexOf('await load();') > vaciar.indexOf('await loadPapelera()'), 'recarga también la lista');
+  assert.ok(vaciar.indexOf('recargarLista();') > vaciar.indexOf('recargarPapelera();'), 'recarga también la lista');
   assert.ok(/avisarError\(err,'No se pudo vaciar la Papelera'\)/.test(vaciar), 'el error sale como aviso');
   assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(vaciar), 'sin diálogos nativos');
 }
@@ -212,10 +214,18 @@ console.log('--- D2 TEST 5: los textos ya no dicen que la Papelera se borra sola
   assert.ok(!/se eliminan a los 30 días/i.test(lista), 'cabecera y estado vacío sin «se eliminan a los 30 días»');
   assert.ok(!lista.includes('antes de su eliminación permanente'), 'el análisis sin el borrado automático');
   assert.ok(!lista.includes('almacenan automáticamente'), 'el análisis sin el borrado automático');
-  assert.ok((lista.match(/un administrador vacía las vencidas/gi) ?? []).length >= 3, 'cabecera, estado vacío y análisis');
-  // B3 T18 (RP7): y los tres dicen que desde B3-T10 la revisión automática también las vacía.
-  assert.ok((lista.match(/un administrador vacía las vencidas, y la revisión automática también/gi) ?? []).length >= 3,
-    'cabecera, estado vacío y análisis con la revisión automática');
+  // B4 T8 (D27 (b)): la tercera copia vivía en el chat simulado de la pestaña Análisis, que se borró (R2, R13): el conteo
+  // baja exactamente en esa. El texto sigue donde la Papelera lo explica (la cabecera y el estado vacío) y cada fila
+  // vencida lo dice con TEXTO_PAPELERA_VENCIDA (estadoEnPapelera, en la columna «Se borra»).
+  assert.ok((lista.match(/un administrador vacía las vencidas/gi) ?? []).length >= 2, 'cabecera y estado vacío');
+  // B3 T18 (RP7): y los dos dicen que desde B3-T10 la revisión automática también las vacía.
+  assert.ok((lista.match(/un administrador vacía las vencidas, y la revisión automática también/gi) ?? []).length >= 2,
+    'cabecera y estado vacío con la revisión automática');
+  assert.ok(/<CeldaSeBorra sc=\{sc\} \/>/.test(lista) && /const enPapelera = estadoEnPapelera\(sc\);/.test(lista),
+    'la columna «Se borra» usa estadoEnPapelera');
+  assert.equal(estadoEnPapelera({ dias_restantes: 0, tiene_documentos: false }).texto, TEXTO_PAPELERA_VENCIDA,
+    'una fila vencida lo dice con TEXTO_PAPELERA_VENCIDA');
+  assert.ok(/revisión automática/.test(TEXTO_PAPELERA_VENCIDA));
   const hub = leer('app/dashboard/ventas/page.tsx');
   assert.ok(!hub.includes("'La solicitud se cancela y pasa a la papelera (30 días)'"), 'el Hub sin «(30 días)»');
   assert.ok(hub.includes("SC: 'La solicitud se cancela y pasa a la Papelera: se puede eliminar definitivamente después de 30 días si no se restaura',"));

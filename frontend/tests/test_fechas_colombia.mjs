@@ -113,4 +113,26 @@ console.log('--- B3 T17 TEST 7: diaColombia (el día de hoy en Colombia, para la
   for (const malo of [new Date('x'), NaN, 'abc', null]) assert.equal(diaColombia(malo), '', String(malo));
 }
 
+console.log('--- B4 T8: fechaCorta (las columnas de fecha de las tablas: «5 nov 2026») ---');
+{
+  const { fechaCorta } = await import('../src/lib/fechas-colombia.js');
+  assert.equal(typeof fechaCorta, 'function', 'fechaCorta existe');
+  // El mismo día que fechaLarga, con el mes en tres letras y sin «de»: cabe en una columna de 104 px.
+  assert.equal(fechaCorta('2026-11-05'), '5 nov 2026', 'un AAAA-MM-DD no se corre de día');
+  assert.equal(fechaCorta('2026-10-03T03:00:00Z'), '2 oct 2026', 'las 3 a. m. UTC son la víspera en Colombia');
+  assert.equal(fechaCorta('2026-10-03T03:00:00'), '2 oct 2026', 'sin zona = UTC');
+  assert.equal(fechaCorta('2026-10-03 03:00:00.123456'), '2 oct 2026');
+  assert.equal(fechaCorta('2026-10-03T23:30:00-05:00'), '3 oct 2026', 'con desfase se respeta');
+  assert.equal(fechaCorta(new Date('2026-12-31T12:00:00Z')), '31 dic 2026');
+  const meses = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+  meses.forEach((mes, i) => assert.equal(fechaCorta(`2026-${String(i + 1).padStart(2, '0')}-15`), `15 ${mes} 2026`, mes));
+  for (const malo of [null, undefined, '', '   ', 'abc', '2026-02-30', '2026-13-01', 42, {}, new Date('x')]) {
+    assert.equal(fechaCorta(malo), '', String(malo));
+  }
+  // Para el mismo valor, el mismo día que fechaLarga.
+  for (const v of ['2026-10-08', '2026-10-03T03:00:00Z', '2026-01-01T04:59:00Z']) {
+    assert.equal(fechaCorta(v).split(' ')[0], fechaLarga(v).split(' ')[0], v);
+  }
+}
+
 console.log('✓ Todas las pruebas de fechas de Colombia pasaron.');

@@ -661,4 +661,52 @@ console.log('--- B3 T17: tarifaIvaDeConfig (el IVA con que arranca el Cotizador 
   }
 }
 
+console.log('--- B4 T8 TEST 1: tarjetasSolicitudes — las 4 tarjetas de Solicitudes con el resumen del servidor (RP19) ---');
+{
+  // RP19 (3) y (4): valor de con_resumen (sc_activas ← activas, sc_confirmadas ← confirmadas, sc_canceladas ←
+  // canceladas, sc_total ← total) y las ayudas de H32 y N8 con los números del resumen, no con una lista cargada.
+  const resumen = { activas: 7, confirmadas: 3, canceladas: 2, total: 12, con_cot: 4, esperan_cot: 1, sin_atender: 2, vencidas: 1 };
+  assert.deepEqual(listas.tarjetasSolicitudes(resumen), {
+    activas: { valor: 7, ayuda: '2 sin atender · 1 vencida' },
+    confirmadas: { valor: 3, ayuda: '1 esperan cotización' },
+    canceladas: { valor: 2, ayuda: 'Fuera del flujo' },
+    total: { valor: 12, ayuda: '4 generaron cotización' },
+  });
+  // La ayuda de Activas es la de V7 (pistaActivasSolicitudes) con sin_atender y vencidas del resumen.
+  assert.equal(listas.tarjetasSolicitudes({ ...resumen, sin_atender: 0, vencidas: 0 }).activas.ayuda, 'Todas atendidas');
+  assert.equal(listas.tarjetasSolicitudes(resumen).activas.ayuda, pistaActivasSolicitudes(2, 1));
+  // Confirmadas, con la regla de H32 de contadoresSolicitudes (la misma frase).
+  assert.equal(listas.tarjetasSolicitudes({ ...resumen, confirmadas: 0, esperan_cot: 0 }).confirmadas.ayuda, 'Sin confirmadas');
+  assert.equal(listas.tarjetasSolicitudes({ ...resumen, esperan_cot: 0 }).confirmadas.ayuda, 'Todas con cotización');
+  assert.equal(listas.pistaConfirmadasSolicitudes(1, 1), contadoresSolicitudes([{ estado: 'CONFIRMADA', cotizaciones: [] }], 1).hintConfirmadas);
+  assert.equal(listas.pistaConfirmadasSolicitudes(0, 0), 'Sin confirmadas');
+  assert.equal(listas.pistaConfirmadasSolicitudes(2, 0), 'Todas con cotización');
+  assert.equal(listas.pistaTotalSolicitudes(4), '4 generaron cotización');
+  assert.equal(listas.pistaTotalSolicitudes(null), '0 generaron cotización');
+  // contadoresSolicitudes no cambia (usa las mismas frases).
+  assert.equal(contadoresSolicitudes([{ estado: 'CONFIRMADA', cotizaciones: [] }], 350).hintTotal,
+    `${listas.pistaTotalSolicitudes(0)} · se ven las 1 más recientes de 350`);
+  // Sin resumen (cargando o con error): null, la franja pinta las barras grises o «—» (nunca 0).
+  for (const nada of [null, undefined, 'x', 3, []]) assert.equal(listas.tarjetasSolicitudes(nada), null, String(nada));
+  // Un número que falta o no sirve queda en null (la tarjeta dice «—»), no en 0.
+  const incompleto = listas.tarjetasSolicitudes({ activas: 5, confirmadas: 'x', canceladas: -1 });
+  assert.deepEqual([incompleto.activas.valor, incompleto.confirmadas.valor, incompleto.canceladas.valor, incompleto.total.valor],
+    [5, null, null, null]);
+  assert.equal(incompleto.activas.ayuda, 'Todas atendidas');
+}
+
+console.log('--- B4 T8 TEST 2: fechaVencida — la columna Vencimiento en rojo (la regla de la fila de antes, fuera del render) ---');
+{
+  // La fecha del API llega en UTC sin zona (comoUTC, ronda 2 de T7): vence cuando ese instante ya pasó.
+  const ahora = Date.UTC(2026, 10, 6, 15, 0, 0);
+  assert.equal(listas.fechaVencida('2026-11-06T14:59:59', ahora), true, 'sin zona: se lee como UTC');
+  assert.equal(listas.fechaVencida('2026-11-06T15:00:01', ahora), false);
+  assert.equal(listas.fechaVencida('2026-11-06T15:00:00Z', ahora), false, 'el mismo instante no es antes');
+  assert.equal(listas.fechaVencida('2026-11-05 20:00:00', ahora), true, 'con espacio, como el backend');
+  for (const nada of [null, undefined, '', 'x', 5]) assert.equal(listas.fechaVencida(nada, ahora), false, String(nada));
+  // Sin `ahora`, la hora del sistema.
+  assert.equal(listas.fechaVencida('2000-01-01T00:00:00'), true);
+  assert.equal(listas.fechaVencida('2999-01-01T00:00:00'), false);
+}
+
 console.log('OK test_listas_ventas.mjs');

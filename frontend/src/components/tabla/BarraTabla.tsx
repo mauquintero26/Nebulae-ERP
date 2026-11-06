@@ -70,6 +70,11 @@ export type PestanaTabla = {
   conteo: number | null;
   /** La pastilla en rojo (por ejemplo, hay atrasados). */
   alerta?: boolean;
+  /**
+   * B4 T8: una pestaña de vista que no lleva número (la Papelera de Solicitudes, TABLA-listas-ventas punto 5): sin
+   * pastilla ni Contador (estadoPastillaPestana da 'oculto'). Sin esta marca, todo como siempre.
+   */
+  sinConteo?: boolean;
 };
 
 /** B4 T7 r1 (A3): la pestaña que no es una vista de la lista (ver arriba). */
@@ -206,7 +211,7 @@ export function BarraTabla({
           {pestanas?.map((p) => {
             const activa = !aparteActiva && p.id === estado.vista;
             // B4 T7 r2 (I-r1): con la aparte activa y sin conteo, sin pastilla: no hay nada cargando (RP35).
-            const estadoPastilla = estadoPastillaPestana(p.conteo, estadoConteos, { aparteActiva });
+            const estadoPastilla = estadoPastillaPestana(p.conteo, estadoConteos, { aparteActiva, sinConteo: p.sinConteo });
             return (
               <button
                 key={p.id}

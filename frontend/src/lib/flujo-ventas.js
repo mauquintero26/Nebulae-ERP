@@ -20,11 +20,13 @@
  *    el paso).
  */
 
-import { congelar, conteosDePasos, opcionesSemaforo } from './flujo.js';
-import { esCotizacionActiva, esPedidoVigente, humanizarCodigo, infoEstadoPedido, tiene } from './estados-pedido.js';
-import { infoEstadoSolicitud } from './estados-solicitud.js';
-import { infoEstadoCotizacion } from './estados-cotizacion.js';
-import { cantidadPositiva } from './hub-ventas.js';
+import { congelar, conteosDePasos, opcionesSemaforo, pasosConConteos } from './flujo.js';
+import {
+  ESTADOS_PEDIDO, esCotizacionActiva, esPedidoVigente, humanizarCodigo, infoEstadoPedido, tiene,
+} from './estados-pedido.js';
+import { ESTADOS_SC, infoEstadoSolicitud } from './estados-solicitud.js';
+import { ESTADOS_COTIZACION, infoEstadoCotizacion } from './estados-cotizacion.js';
+import { RUTA_HUB_VENTAS, cantidadPositiva } from './hub-ventas.js';
 import { enlaceDocumento, FOCOS_VENTAS } from './analisis.js';
 import { formatoEntero } from './kpis.js';
 
@@ -248,6 +250,86 @@ export function pasoTrasPestana(paso, vista) {
   if (typeof paso !== 'string' || !tiene(PASO_POR_CLAVE, paso)) return null;
   if (typeof vista !== 'string' || !VISTAS_DE_UN_TIPO.includes(vista)) return /** @type {ClavePasoVentas} */ (paso);
   return tabHubDePaso(paso) === vista ? /** @type {ClavePasoVentas} */ (paso) : null;
+}
+
+// ─── B4 T8: la franja de las listas (Solicitudes; después Cotizaciones y Pedidos) ──
+
+/** La tabla de estados de cada paso (su orden y su etiqueta única, RP4) para el detalle de la caja de la lista. */
+const ESTADOS_DEL_PASO = congelar({
+  SC: { orden: Object.keys(ESTADOS_SC), info: infoEstadoSolicitud },
+  COT: { orden: Object.keys(ESTADOS_COTIZACION), info: infoEstadoCotizacion },
+  PVEN: { orden: Object.keys(ESTADOS_PEDIDO), info: infoEstadoPedido },
+  ENTREGADO: { orden: Object.keys(ESTADOS_PEDIDO), info: infoEstadoPedido },
+  FACTURADO: { orden: Object.keys(ESTADOS_PEDIDO), info: infoEstadoPedido },
+});
+
+/**
+ * El detalle por estado de la caja de la lista ('Nueva 1 · Asignada 2', lo pinta textoDetalle de flujo.js) con el
+ * por_estado del servidor: la etiqueta única del tipo del paso, en el orden de su tabla de estados (uno desconocido va
+ * al final, humanizado) y solo los que tienen un número positivo.
+ * @param {Readonly<Record<string, number>> | null | undefined} porEstado
+ * @param {string} clave
+ * @returns {{label: string, n: number}[]}
+ */
+function detalleDelPaso(porEstado, clave) {
+  const tabla = tiene(ESTADOS_DEL_PASO, clave) ? ESTADOS_DEL_PASO[clave] : null;
+  if (!tabla || !esObjeto(porEstado)) return [];
+  const conocidos = tabla.orden.filter((e) => tiene(porEstado, e));
+  const otros = Object.keys(porEstado).filter((e) => !tabla.orden.includes(e));
+  /** @type {{label: string, n: number}[]} */
+  const detalle = [];
+  for (const estado of [...conocidos, ...otros]) {
+    const n = cantidadPositiva(porEstado[estado]);
+    if (n !== null) detalle.push({ label: tabla.info(estado).label, n });
+  }
+  return detalle;
+}
+
+/**
+ * B4 T8 (FLUJO-ventas-pantallas B.2; D42): los pasos de la franja de una lista de Ventas (Solicitudes con 'SC';
+ * Cotizaciones y Pedidos con 'COT' y 'PVEN'), con la respuesta de GET /ventas/flujo (`datos`; null mientras carga):
+ *  - pasosConConteos de flujo.js con conteosDesdeResumen (los números y los avisos de RP12) y `actual`;
+ *  - la caja de la lista (esEste: «Estás aquí») no lleva href y trae el detalle por estado de su por_estado (null
+ *    mientras carga);
+ *  - las demás llevan href = la ruta de su lista (PASOS_FLUJO_VENTAS), también mientras carga.
+ * @param {any} datos
+ * @param {string} actual
+ * @returns {PasoVista[]}
+ */
+export function pasosDeLista(datos, actual) {
+  const conteos = conteosDesdeResumen(datos);
+  const pasos = pasosConConteos(PASOS_FLUJO_VENTAS, conteos, { actual, cargando: !datos });
+  return pasos.map((p) => {
+    if (!p.esEste) return { ...p, href: p.ruta };
+    return { ...p, detalle: datos ? detalleDelPaso(/** @type {any} */ (conteos)[p.clave]?.porEstado, p.clave) : null };
+  });
+}
+
+/** Las claves de FOCOS_VENTAS que el Hub entiende en ?foco= (hub, sc, cot, pven). */
+const FOCOS_DEL_HUB = congelar(FOCOS_VENTAS.map((f) => f.clave));
+
+/**
+ * B4 T8 (R13, ANALISIS-ventas punto 7): el enlace del botón «Ver análisis» de una lista de Ventas: el Hub en su pestaña
+ * Análisis, enfocado en `foco` ('sc', 'cot' o 'pven'; también 'hub'). Lo lee leerEnlaceHub. Un foco que no es de
+ * FOCOS_VENTAS abre el Análisis sin foco.
+ * @param {unknown} foco
+ * @returns {string}
+ */
+export function enlaceVerAnalisis(foco) {
+  const base = `${RUTA_HUB_VENTAS}?tab=analisis`;
+  return typeof foco === 'string' && FOCOS_DEL_HUB.includes(foco) ? `${base}&foco=${foco}` : base;
+}
+
+/**
+ * B4 T8 (FLUJO-ventas-pantallas B.2, RP19 (4)): el chip ámbar de la franja de Solicitudes con resumen.vencidas ('1
+ * vencida', '3 vencidas', con el punto de miles), o null si no hay un número positivo.
+ * @param {unknown} n
+ * @returns {AvisoPaso | null}
+ */
+export function avisoVencidas(n) {
+  const cantidad = cantidadPositiva(n);
+  if (cantidad === null) return null;
+  return { texto: `${formatoEntero(cantidad)} ${cantidad === 1 ? 'vencida' : 'vencidas'}`, tono: 'ambar' };
 }
 
 // ─── la cadena de documentos (FLUJO-documentos) ─────────────────────────────────
