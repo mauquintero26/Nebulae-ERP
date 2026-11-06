@@ -108,6 +108,13 @@ const TONO_AYUDA: Record<TonoTarjeta, string> = {
   bien: 'text-emerald-700',
 };
 
+/**
+ * B4 T7 r1b (CLS): mientras carga no hay texto, así que la letra del esqueleto del valor (tamanoValor) sale de un valor
+ * típico de su formato: los pesos de las franjas son de millones ('$48.123.456' da text-xl). Sin muestra, tamanoValor('')
+ * da text-2xl, la letra de los números cortos, los porcentajes y los elementos de React.
+ */
+const MUESTRA_VALOR: Record<string, string> = { pesos: '$00.000.000' };
+
 const EstadoFranja = createContext<EstadoKpi | null>(null);
 
 function fondoIcono(color: ColorKpi): string {
@@ -145,7 +152,14 @@ export function TarjetaKpi({
 
   let cuerpoValor: React.ReactNode;
   if (cargando) {
-    cuerpoValor = <span aria-hidden="true" className="block h-7 w-24 rounded-md bg-slate-200 animate-pulse mt-1" />;
+    // B4 T7 r1b (CLS): el esqueleto ocupa la misma caja que el valor cargado: block, la letra (la de un valor típico de
+    // su formato, MUESTRA_VALOR), leading-tight y mt-0.5; la barra gris va adentro, del alto del renglón.
+    const letra = tamanoValor(MUESTRA_VALOR[formato ?? definicion?.formato ?? ''] ?? '');
+    cuerpoValor = (
+      <span aria-hidden="true" className={`block ${letra} leading-tight mt-0.5`}>
+        <span className="inline-block h-lh w-24 rounded-md bg-slate-200 animate-pulse align-top" />
+      </span>
+    );
   } else if (texto !== null) {
     cuerpoValor = (
       <span title={texto} className={`block ${tamanoValor(texto)} font-black text-slate-900 leading-tight tabular-nums break-words mt-0.5 ${atenuado}`}>
@@ -159,7 +173,13 @@ export function TarjetaKpi({
 
   let linea: React.ReactNode = null;
   if (cargando) {
-    linea = <span aria-hidden="true" className="block h-3 w-32 rounded bg-slate-200 animate-pulse mt-2" />;
+    // B4 T7 r1b (CLS): el mismo elemento, display, margen y alto que la línea de variación cargada (un renglón de
+    // text-xs): Chrome ya no lo cuenta como un nodo que pasa de block a flex y se mueve.
+    linea = (
+      <span aria-hidden="true" className="mt-1 flex h-4 items-center gap-1.5 min-w-0">
+        <span className="block h-3 w-32 rounded bg-slate-200 animate-pulse" />
+      </span>
+    );
   } else if (conError) {
     linea = <span title="No se pudo cargar" className="line-clamp-2 text-xs font-semibold text-rose-700 mt-1">No se pudo cargar</span>;
   } else if (info) {

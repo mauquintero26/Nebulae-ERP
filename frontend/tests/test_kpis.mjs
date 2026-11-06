@@ -396,4 +396,42 @@ console.log('--- TEST 12 (T5C r1): TarjetaKpi con 4,5:1 y la foto «Hoy» (M6, M
   assert.deepEqual(foto, { texto: 'Hoy', tono: 'neutro', flecha: null, lector: 'Cifra de hoy, sin comparación' });
 }
 
+console.log('--- TEST 13 (B4 T7 r1b): el esqueleto de TarjetaKpi tiene la forma de lo cargado (CLS) ---');
+{
+  const fuente = readFileSync(new URL('../src/components/ui/TarjetaKpi.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const clases = (texto) => (texto ?? '').split(/\s+/).filter(Boolean);
+  // El valor. Cargado: `block ${tamanoValor(texto)} … leading-tight … mt-0.5`. El esqueleto ocupa la misma caja: un
+  // contenedor block con la letra (tamanoValor de un valor típico de su formato), leading-tight y mt-0.5, y adentro la
+  // barra gris inline-block del alto del renglón (h-lh, arriba).
+  const valorCargado = /cuerpoValor = \(\s*<span title=\{texto\} className=\{`([^`]*)`\}>/.exec(fuente)?.[1];
+  assert.ok(valorCargado, 'el valor cargado');
+  const esqueletoValor = /if \(cargando\) \{\s*([\s\S]*?)\n {2}\} else if \(texto !== null\) \{/.exec(fuente)?.[1] ?? '';
+  assert.match(esqueletoValor, /const letra = tamanoValor\(MUESTRA_VALOR\[[^\]]+\] \?\? ''\);/, 'la letra del esqueleto sale de tamanoValor');
+  const cajaEsqueleto = /<span aria-hidden="true" className=\{`block \$\{letra\} ([^`]*)`\}>/.exec(esqueletoValor)?.[1];
+  assert.ok(cajaEsqueleto, 'el esqueleto del valor es un contenedor block con la letra');
+  for (const c of ['leading-tight', 'mt-0.5']) {
+    assert.ok(clases(valorCargado).includes(c) && clases(cajaEsqueleto).includes(c), `el esqueleto y el valor comparten ${c}`);
+  }
+  assert.ok(clases(valorCargado).includes('block') && clases(valorCargado).includes('${tamanoValor(texto)}'), 'el valor cargado: block y tamanoValor');
+  assert.match(esqueletoValor, /<span className="inline-block h-lh w-24 rounded-md bg-slate-200 animate-pulse align-top" \/>/,
+    'la barra gris, inline-block del alto del renglón y con el ancho de antes');
+  assert.match(fuente, /const MUESTRA_VALOR: Record<string, string> = \{ pesos: '\$00\.000\.000' \};/);
+  // La muestra de los pesos (millones) tiene la letra de un monto real de esa franja; sin muestra, la de siempre
+  // (text-2xl con leading-tight y mt-0.5 son 32 px, lo mismo que la barra h-7 con mt-1 de antes).
+  assert.equal(tamanoValor('$00.000.000'), tamanoValor('$48.123.456'));
+  assert.equal(tamanoValor('$00.000.000'), 'text-xl');
+  assert.equal(tamanoValor(''), 'text-2xl');
+  // La línea de variación. El esqueleto es el mismo elemento (span), con el mismo display (flex), el mismo margen (mt-1)
+  // y el alto de un renglón de text-xs (h-4): Chrome ya no lo cuenta como un nodo que se movió.
+  const lineaCargada = /linea = \(\s*<span className=\{`([^`]*)`\}>/.exec(fuente)?.[1];
+  const lineaEsqueleto = /if \(cargando\) \{\s*(?:\/\/[^\n]*\n\s*)*linea = \(\s*<span aria-hidden="true" className="([^"]*)">\s*<span className="block h-3 w-32 rounded bg-slate-200 animate-pulse" \/>\s*<\/span>\s*\);/.exec(fuente)?.[1];
+  assert.ok(lineaCargada && lineaEsqueleto, 'las dos líneas');
+  for (const c of ['flex', 'mt-1', 'items-center', 'gap-1.5', 'min-w-0']) {
+    assert.ok(clases(lineaCargada).includes(c) && clases(lineaEsqueleto).includes(c), `la línea: ${c} en las dos`);
+  }
+  assert.ok(clases(lineaEsqueleto).includes('h-4'), 'la línea del esqueleto mide un renglón de text-xs');
+  // Sin el esqueleto de antes.
+  assert.ok(!fuente.includes('block h-7 w-24') && !fuente.includes('animate-pulse mt-2'), 'sin las barras de antes');
+}
+
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');
