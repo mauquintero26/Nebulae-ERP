@@ -164,6 +164,17 @@ function tipoDocumento(tipo) {
   throw new Error(`Tipo de documento no válido: ${JSON.stringify(tipo ?? null)}`);
 }
 
+/**
+ * B4 T7 r1 (m7d): la sigla del tipo que ve el usuario: 'SC', 'COT' o 'PVEN' (las filas del Hub traen 'VEN', RP74). La
+ * única: la usan la tarjeta del tablero (tarjetaHub) y la tabla del Hub. Otro valor queda como está.
+ * @template {string} T
+ * @param {T} tipo
+ * @returns {T | 'PVEN'}
+ */
+export function siglaDeTipo(tipo) {
+  return tipo === 'VEN' ? 'PVEN' : tipo;
+}
+
 /** Lanza Error si `destino` no es una de las claves del tablero. */
 function exigirDestino(claves, destino, tablero) {
   if (!claves.includes(destino)) throw new Error(`Columna del tablero ${tablero} desconocida: ${String(destino)}`);
@@ -373,11 +384,21 @@ export function reglaSoltarHub(fila, origen, destino, { scConCot } = {}) {
 
 // ─── chips y tarjeta ────────────────────────────────────────────────────────────
 
+/**
+ * B4 T7 r1 (m7c): los días enteros de un conteo del servidor (dias_sin_mov): un número, o un texto con un número, finito
+ * y no negativo, hacia abajo. Si no, null. La única lectura de los días de textoAtrasado y chipsResolucionHub.
+ * @param {unknown} valor
+ * @returns {number | null}
+ */
+function diasEnteros(valor) {
+  const n = typeof valor === 'number' || (typeof valor === 'string' && valor.trim() !== '') ? Number(valor) : NaN;
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+}
+
 /** 'Atrasado 4 días', 'Atrasado 1 día'; sin un número válido, 'Atrasado'. */
 function textoAtrasado(dias) {
-  const n = typeof dias === 'number' || (typeof dias === 'string' && dias.trim() !== '') ? Number(dias) : NaN;
-  if (!Number.isFinite(n) || n < 0) return 'Atrasado';
-  const d = Math.floor(n);
+  const d = diasEnteros(dias);
+  if (d === null) return 'Atrasado';
   return `Atrasado ${d} ${d === 1 ? 'día' : 'días'}`;
 }
 
@@ -457,7 +478,7 @@ export function tarjetaHub(fila, { ahora = Date.now(), returnTo } = {}) {
     ? fila.dias_creado : diasDesde(fila?.created_at, ahora);
   return {
     numero: String(fila?.numero ?? fila?.id ?? ''),
-    tipo: tipo === 'VEN' ? 'PVEN' : tipo,
+    tipo: siglaDeTipo(tipo),
     titulo: cliente || 'Cliente General',
     subtitulo: asesor || 'Sin asignar',
     monto: tipo === 'SC' ? null : montoDe(fila?.total_cop),
@@ -542,9 +563,7 @@ export function chipsResolucionHub(fila) {
   const resolucion = fila?.resolucion;
   const chips = fila && typeof fila === 'object' ? chipsDocumentoVentas(fila) : [];
   if (resolucion === 'ATRASADO') {
-    const d = fila?.dias_sin_mov;
-    const n = typeof d === 'number' || (typeof d === 'string' && d.trim() !== '') ? Number(d) : NaN;
-    const dias = Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+    const dias = diasEnteros(fila?.dias_sin_mov);
     const principal = dias === null
       ? { texto: 'Atrasado', tono: 'rose', titulo: 'Atrasado' }
       : { texto: `Atrasado +${dias} d`, tono: 'rose', titulo: `Atrasado: ${dias} ${dias === 1 ? 'día' : 'días'} sin movimiento` };

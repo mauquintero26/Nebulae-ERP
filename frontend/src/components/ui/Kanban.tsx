@@ -553,7 +553,11 @@ const CLASE_TIPO: Record<string, string> = {
 };
 const CLASE_TIPO_OTRO = 'bg-slate-100 text-slate-600 border-slate-200';
 
-const CLASE_CHIP: Record<string, string> = {
+/**
+ * La clase de un chip por su tono (los de chipsDocumentoVentas y los de la tarjeta). B4 T7 r1 (m7a): exportada para que
+ * la tabla del Hub pinte el mismo chip con el mismo tinte que el tablero.
+ */
+export const CLASE_CHIP: Record<string, string> = {
   rose: 'bg-rose-50 text-rose-700 border-rose-200',
   red: 'bg-red-50 text-red-700 border-red-200',
   amber: 'bg-amber-50 text-amber-800 border-amber-200',

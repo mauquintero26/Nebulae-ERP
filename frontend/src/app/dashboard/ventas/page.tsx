@@ -9,7 +9,7 @@ import { useRouter } from 'next/navigation';
 import { apiFetch } from '@/lib/api';
 import {
   SubNav, PageHeader, Drawer, Modal, Button, useAvisos, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila,
-  TableroKanban, useTableroKanban,
+  TableroKanban, useTableroKanban, CLASE_CHIP,
 } from '@/components/ui';
 import type { DatosColumnaKanban, ItemMenuFila } from '@/components/ui';
 // B4 T7: el Hub 100 % sobre el servidor (R6, C4): la tabla y el tablero estándar con el estado único de la pantalla
@@ -22,14 +22,14 @@ import { BannerFlujo, CadenaDocumentos, useResumenFlujo } from '@/components/flu
 import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
 import { PanelAnalisisPerezoso } from '@/components/analisis';
 import { TABLE } from '@/lib/design-system';
-import { accionPestana, dependenciasTablero, estadoDelTotal, normalizarRespuesta, queryListado } from '@/lib/tabla';
+import { accionPestana, campoOrden, dependenciasTablero, estadoDelTotal, normalizarRespuesta, queryListado } from '@/lib/tabla';
 import { alternarSeleccion, pasosConConteos } from '@/lib/flujo';
 import {
   PASOS_FLUJO_VENTAS, chipsFiltroHub, conteosDesdeResumen, leerEnlaceHub, pasoTrasPestana, tabHubDePaso, textoRegla,
 } from '@/lib/flujo-ventas';
 import {
   COLUMNAS_HUB, chipsResolucionHub, confirmacionReiniciarSolicitud, estadoDeTarjeta, opcionesEstadosHub, reglaSoltarHub,
-  tarjetaHub,
+  siglaDeTipo, tarjetaHub,
 } from '@/lib/kanban-ventas';
 import { PERIODO_KPI } from '@/lib/kpis';
 import { FOCOS_VENTAS } from '@/lib/analisis';
@@ -45,14 +45,15 @@ import { infoEstadoPedido } from '@/lib/estados-pedido';
 import {
   ordenParaCancelar, motivoNoCancelable, resumenLote, ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN,
   repartirCambioEstadoPVEN, comoUTC, textoAntiguedad, notaReiniciaAtraso, conDetalleDelEnvio, accionSiguienteDocumento,
-  tituloGrupo, scConCotDeFilas, ordenEsAtencion, textoOrdenHub, RUTA_HUB_VENTAS, cantidadPositiva,
+  tituloGrupo, scConCotDeFilas, ordenEsAtencion, textoOrdenHub, RUTA_HUB_VENTAS, cantidadPositiva, focoEnlaceTras,
+  filaDelHub,
 } from '@/lib/hub-ventas';
 import { waUrl, abrirWhatsApp } from '@/lib/whatsapp';
 import { correoDelCliente } from '@/lib/aviso-correo';
 import { formatoPesos } from '@/lib/pesos';
 import { etiquetaTipoSolicitud } from '@/lib/etiquetas-ventas';
 import { diasAlerta, valorConfig, enteroConfig, DIAS_VALIDEZ_COTIZACION, configLeida, cuerpoGuardarConfig,
-  AVISO_CONFIG_SIN_LEER } from '@/lib/listas-ventas';
+  AVISO_CONFIG_SIN_LEER, configDeRespuesta } from '@/lib/listas-ventas';
 // B3 T16: las secciones nuevas del ConfigPanel, la etiqueta de las acciones del Bloque 3 y el WhatsApp automático del
 // envío desde el tablero (R15: lo nuevo vive en sus archivos; aquí solo se cablea).
 import { SeccionSeguimiento } from './seguimiento';
@@ -88,6 +89,12 @@ const TONO_ACCION: Record<string,string> = {
   blue:    'bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200',
   slate:   'bg-slate-50 hover:bg-slate-100 text-slate-600 border-slate-200',
 };
+/** B4 T7 r1 (m9a): los mismos tonos sin el hover, para una acción que no es un enlace. */
+const TONO_ACCION_QUIETO: Record<string, string> = Object.fromEntries(
+  Object.entries(TONO_ACCION).map(([tono, clases]) => [tono, clases.split(' ').filter((c) => !c.startsWith('hover:')).join(' ')]),
+);
+/** La forma de la acción de la fila (columna Acción). */
+const BASE_ACCION = 'min-w-0 truncate rounded-lg border px-2 py-1 text-[11px] font-bold';
 
 // N3: lo que pasa con cada tipo de documento al cancelarlo desde el Hub.
 const EFECTO_CANCELACION: Record<string,string> = {
@@ -176,14 +183,16 @@ type ConteosHub = { pestanas?: Partial<Record<string, number>>; grupos?: Partial
 const ID_HUB = 'ventas.hub';
 const INICIAL_HUB = { vista: 'todos', orden: 'atencion' };
 const claveDeFila = (f: FilaHub) => `${f.tipo}|${f.id}`;
-// U1: con el orden de atención, un separador por resolución. Las atrasadas van con el tono opaco filaAlerta (D41: la
-// fila ya no lleva el borde ni el tinte translúcido de antes, que dejaba ver lo de debajo de las columnas fijas).
+// U1: con el orden de atención, un separador por resolución. D41: los tintes translúcidos de antes (dejaban ver lo de
+// debajo de las columnas fijas) pasan a los tonos opacos más parecidos: las atrasadas a filaAlerta y, B4 T7 r1 (m3 y
+// m14), las no resueltas a filaAviso. La atrasada recupera la marca rosa a la izquierda de 372f71c: una sombra en la
+// primera celda (la casilla, que es fija), no un tinte ni un borde de la fila (con border-separate no se pinta).
+const MARCA_ATRASO = '[&>td:first-child]:shadow-[inset_3px_0_0_var(--color-rose-500)]';
 const grupoDeFila = (f: FilaHub) => f.resolucion ?? null;
-const claseDeFila = (f: FilaHub) => (f.resolucion === 'ATRASADO' ? TABLE.filaAlerta : null);
+const claseDeFila = (f: FilaHub) => (f.resolucion === 'ATRASADO' ? `${TABLE.filaAlerta} ${MARCA_ATRASO}`
+  : f.resolucion === 'NO_RESUELTO' ? TABLE.filaAviso : null);
 const tarjetaDeFila = (f: FilaHub) => tarjetaHub(f);
 const variacionDe = (p?: ParPeriodo | null) => ({ actual: p?.actual ?? null, anterior: p?.anterior ?? null });
-/** El tipo que ve el usuario: SC, COT o PVEN (las filas del Hub traen 'VEN', RP74). */
-const siglaTipo = (t: FilaHub['tipo']) => (t === 'VEN' ? 'PVEN' : t);
 
 /** RP69 con su ajuste: cambia solo el primer ejemplo y se quita el emoji; los otros tres quedan como estaban. */
 const ASISTENTE_VENTAS = {
@@ -196,15 +205,10 @@ const ASISTENTE_VENTAS = {
   ],
 };
 
-/** Los tonos de los chips de la columna Resolución (clases literales para Tailwind). */
-const CHIP_TONO: Record<string, string> = {
-  rose: 'bg-rose-100 text-rose-700 border-rose-200',
-  amber: 'bg-amber-50 text-amber-800 border-amber-200',
-  emerald: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  slate: 'bg-slate-100 text-slate-600 border-slate-200',
-};
-// B4 T7 (medidas del banco): px-1 y tracking-tight para que «Atrasado +12 d» quepa en la columna de 104 px.
-const CHIP = 'inline-block max-w-full truncate rounded-full border px-1 py-0.5 text-[10px] font-bold leading-tight tracking-tight';
+// B4 T7 (medidas del banco): px-1 y tracking-tight para que «Atrasado +12 d» quepa en la columna de 104 px. B4 T7 r1:
+// los tintes por tono son los del tablero (CLASE_CHIP de components/ui/Kanban.tsx, m7a: el mismo chip sale igual en
+// Lista y en Kanban) y la base no lleva tamaño de letra: cada uso pone el suyo (m9b).
+const CHIP = 'inline-block max-w-full truncate rounded-full border px-1 py-0.5 font-bold leading-tight tracking-tight';
 const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
 
 /**
@@ -226,9 +230,9 @@ function CeldaResolucion({ fila }: { fila: FilaHub }) {
   const { principal, extras } = chipsResolucionHub(fila);
   return (
     <span className="flex min-w-0 flex-col items-start gap-0.5">
-      {principal ? <span className={`${CHIP} ${CHIP_TONO[principal.tono] ?? CHIP_TONO.slate}`}>{principal.texto}</span>
+      {principal ? <span className={`${CHIP} text-[10px] ${CLASE_CHIP[principal.tono] ?? CLASE_CHIP.slate}`}>{principal.texto}</span>
         : <span className="text-xs text-slate-400">—</span>}
-      {extras.map((c) => <span key={c.texto} className={`${CHIP} ${CHIP_TONO[c.tono] ?? CHIP_TONO.slate}`}>{c.texto}</span>)}
+      {extras.map((c) => <span key={c.texto} className={`${CHIP} text-[10px] ${CLASE_CHIP[c.tono] ?? CLASE_CHIP.slate}`}>{c.texto}</span>)}
     </span>
   );
 }
@@ -269,16 +273,31 @@ function CeldaAccion({ fila }: { fila: FilaHub }) {
     { etiqueta: 'Cancelar documento', icono: Trash2, peligro: true, onClick: () => acciones?.cancelar([claveDeFila(fila)]),
       oculto: Boolean(motivoNoCancelable(fila)) },
   ];
-  const tono = TONO_ACCION[accion?.tono ?? 'slate'] ?? TONO_ACCION.slate;
-  const boton = `min-w-0 truncate rounded-lg border px-2 py-1 text-[11px] font-bold transition-colors ${tono}`;
+  const clave = accion?.tono ?? 'slate';
   return (
     <span className="flex min-w-0 items-center justify-end gap-1">
       {!accion ? <span className="text-xs text-slate-400">—</span>
-        : accion.href ? <Link href={accion.href} title={accion.texto} className={`${boton} ${FOCO_VISIBLE}`}>{accion.texto}</Link>
-        : <span title={accion.texto} className={boton}>{accion.texto}</span>}
+        : accion.href ? (
+          <Link href={accion.href} title={accion.texto}
+            className={`${BASE_ACCION} transition-colors ${TONO_ACCION[clave] ?? TONO_ACCION.slate} ${FOCO_VISIBLE}`}>
+            {accion.texto}
+          </Link>
+        )
+        // B4 T7 r1 (m9a): sin enlace («Esperando al cliente») no parece pulsable: sin hover ni transición.
+        : <span title={accion.texto} className={`${BASE_ACCION} cursor-default ${TONO_ACCION_QUIETO[clave] ?? TONO_ACCION_QUIETO.slate}`}>{accion.texto}</span>}
       <MenuFila items={items} etiqueta={`Acciones de ${fila.numero || 'este documento'}`} />
     </span>
   );
+}
+
+/**
+ * Antigüedad (R5: desde la creación). B4 T7 r1: sin un número (m8), «—» en gris como las demás celdas vacías, no «hoy»;
+ * la de una fila atrasada, en rojo y negrita como en 372f71c (m14).
+ */
+function CeldaAntiguedad({ fila }: { fila: FilaHub }) {
+  const dias = Number.isFinite(fila.dias_creado) ? Math.floor(fila.dias_creado as number) : null;
+  if (dias === null) return <span className="text-xs text-slate-400">—</span>;
+  return <span className={fila.resolucion === 'ATRASADO' ? 'font-bold text-rose-600' : undefined}>{textoAntiguedad(dias)}</span>;
 }
 
 /**
@@ -298,7 +317,7 @@ const COLUMNAS_TABLA_HUB: ColumnaTabla<FilaHub>[] = [
     titleCelda: (f) => `${getTipoLabel(f.tipo)} ${f.numero}`,
     celda: (f) => (
       <span className="flex min-w-0 flex-col items-start gap-0.5 leading-tight">
-        <span className={`rounded-full border px-1.5 text-[9px] font-black ${getTipoClass(f.tipo)}`}>{siglaTipo(f.tipo)}</span>
+        <span className={`rounded-full border px-1.5 text-[9px] font-black ${getTipoClass(f.tipo)}`}>{siglaDeTipo(f.tipo)}</span>
         <span className="max-w-full truncate text-[11px] font-bold text-slate-900">{f.numero}</span>
       </span>
     ) },
@@ -318,15 +337,22 @@ const COLUMNAS_TABLA_HUB: ColumnaTabla<FilaHub>[] = [
   { id: 'asesor', titulo: 'Asesor', ancho: 120, ordenable: 'asesor',
     titleCelda: (f) => f.advisor_name || f.cotizador || f.asesor?.nombre || 'Sin asignar',
     celda: (f) => f.advisor_name || f.cotizador || f.asesor?.nombre || <span className="italic text-slate-400">Sin asignar</span> },
-  { id: 'antiguedad', titulo: 'Antigüedad', ancho: 96, celda: (f) => textoAntiguedad(Number(f.dias_creado) || 0) },
+  { id: 'antiguedad', titulo: 'Antigüedad', ancho: 96, ordenable: 'creado', ordenInverso: true,
+    titleCelda: (f) => (Number.isFinite(f.dias_creado) ? textoAntiguedad(Math.floor(f.dias_creado as number)) : 'Sin fecha de creación'),
+    celda: (f) => <CeldaAntiguedad fila={f} /> },
   { id: 'chatter', titulo: 'Chatter', ancho: 56, alinear: 'centro', celda: (f) => <BotonChatter fila={f} /> },
   { id: 'tipo', titulo: 'Tipo', ancho: 96, ocultaPorDefecto: true, ordenable: 'tipo', celda: (f) => getTipoLabel(f.tipo) },
   { id: 'accion', titulo: 'Acción', ancho: 128, clave: true, fija: 'derecha', celda: (f) => <CeldaAccion fila={f} /> },
 ];
-/** {campo de orden: título}, para el chip «Orden: Monto ↓» (textoOrdenHub). */
+/**
+ * {campo de orden: título}, para el chip «Orden: Monto ↓» (textoOrdenHub). B4 T7 r1 (m7b): con campoOrden de
+ * lib/tabla.js y solo de las columnas que se ordenan; las de orden inverso, aparte, para que la flecha del chip diga lo
+ * mismo que la del título (m4).
+ */
 const TITULOS_ORDEN_HUB: Record<string, string> = Object.fromEntries(
-  COLUMNAS_TABLA_HUB.map((c) => [typeof c.ordenable === 'string' ? c.ordenable : c.id, c.titulo]),
+  COLUMNAS_TABLA_HUB.flatMap((c) => { const campo = campoOrden(c); return campo ? [[campo, c.titulo]] : []; }),
 );
+const INVERSOS_ORDEN_HUB = COLUMNAS_TABLA_HUB.filter((c) => c.ordenInverso).map((c) => campoOrden(c));
 
 /* ── Activities floating panel ── */
 // U6+H22 (T9B): notas rápidas con el mismo Chatter de la SC, la COT y el PVEN (ComposerChatter compacto, con la Nota
@@ -563,6 +589,9 @@ export default function VentasHub() {
   // página no necesita Suspense; AuthGuard la pinta solo en el navegador). Análisis es un estado de la página (RP35).
   const [enlace] = useState(() => leerEnlaceHub(typeof window === 'undefined' ? '' : window.location.search));
   const [seccion, setSeccion] = useState<SeccionHub>(enlace.analisis ? 'analisis' : 'documentos');
+  // B4 T7 r1 (I1): el ?foco= de «Ver análisis» en un estado propio: vale hasta que el usuario elige un foco o vuelve a los
+  // documentos (focoEnlaceTras); después la pestaña Análisis abre en lo guardado, no en el foco viejo del enlace.
+  const [focoEnlace, setFocoEnlace] = useState(enlace.foco);
   const enAnalisis = seccion === 'analisis';
   const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set());
   const [alertDias, setAlertDias]   = useState<any>({alerta_sc_dias:'2',alerta_cot_dias:'2',alerta_ven_dias:'2'});
@@ -641,8 +670,9 @@ export default function VentasHub() {
     apiFetch('/ventas/config')
       .then((cfg: unknown) => {
         if (!vigente) return;
-        const datos = cfg && typeof cfg === 'object' ? ((cfg as { data?: unknown }).data || cfg) : null;
-        if (datos && typeof datos === 'object') setAlertDias(datos);
+        // B4 T7 r1 (m12): el sobre se desenvuelve en la lib; lo que no es un objeto no reemplaza lo de pantalla.
+        const datos = configDeRespuesta(cfg);
+        if (datos) setAlertDias(datos);
         if (configLeida(cfg)) setConfigCargada(true);
       })
       .catch((err: unknown) => {
@@ -675,7 +705,9 @@ export default function VentasHub() {
     [listado.filas, tablero.datos],
   );
   const scConCot = useMemo(() => scConCotDeFilas(filasCargadas), [filasCargadas]);
-  const filaPorId = useCallback((idStr: string) => filasCargadas.find((f) => claveDeFila(f) === idStr), [filasCargadas]);
+  // B4 T7 r1 (m11): como último recurso, el documento del panel rápido (filaDelHub): un pedido que salió de la página por
+  // un filtro se sigue pudiendo cancelar o cambiar desde el panel, como en 372f71c.
+  const filaPorId = useCallback((idStr: string) => filaDelHub(filasCargadas, idStr, quickDetailDoc), [filasCargadas, quickDetailDoc]);
   const quitarDeSeleccion = (ids: Set<string>) =>
     setSelectedIds(prev => { const n = new Set(prev); ids.forEach(i => n.delete(i)); return n; });
 
@@ -724,6 +756,20 @@ export default function VentasHub() {
   const abrirCancelacion = useCallback((ids: string[]) => {
     setCancelacion({ids});
     setMotivoCancelacion('');
+  }, []);
+
+  // El panel rápido del documento. B4 T7 r1 (m6): declarado antes de las funciones que lo llaman, para que el compilador
+  // de React pueda conservar el useMemo de AccionesFila.
+  const openDocDetail = useCallback(async (row: any) => {
+    try {
+      let d: any = null;
+      if(row.tipo === 'SC')  d = await apiFetch(`/ventas/solicitudes/${row.id}`);
+      if(row.tipo === 'COT') d = await apiFetch(`/ventas/cotizaciones/${row.id}`);
+      if(row.tipo === 'VEN') d = await apiFetch(`/ventas/pedidos/${row.id}`);
+      setQuickDetailDoc({ ...row, ...(d?.data || d) });
+    } catch {
+      setQuickDetailDoc(row);
+    }
   }, []);
 
   // Filas del modal de cancelación, en el orden en que se procesan (VEN, COT, SC) y con el motivo si se omiten. RP36: la
@@ -781,18 +827,6 @@ export default function VentasHub() {
       setToast({msg:`Estado actualizado a ${ETIQUETA_ESTADO_VEN[est] || est}`,type:'ok'});
     }catch(e:any){setToast({msg:e.message,type:'error'});}
   }
-
-  const openDocDetail = useCallback(async (row: any) => {
-    try {
-      let d: any = null;
-      if(row.tipo === 'SC')  d = await apiFetch(`/ventas/solicitudes/${row.id}`);
-      if(row.tipo === 'COT') d = await apiFetch(`/ventas/cotizaciones/${row.id}`);
-      if(row.tipo === 'VEN') d = await apiFetch(`/ventas/pedidos/${row.id}`);
-      setQuickDetailDoc({ ...row, ...(d?.data || d) });
-    } catch {
-      setQuickDetailDoc(row);
-    }
-  }, []);
 
   // ── B4 T7, Kanban (KANBAN-hub-ventas punto 2; C4, C15, R11; RP17, D39) ──
   // Lo que T9 resolvía al soltar una tarjeta vive ahora en reglaSoltarHub (kanban-ventas.js, con su matriz probada): soltar en
@@ -893,7 +927,12 @@ export default function VentasHub() {
 
   // ── B4 T7, tabla (TABLA-hub-ventas puntos 5 a 8; R26, D41): las columnas son COLUMNAS_TABLA_HUB (una constante); sus
   // celdas piden a la pantalla lo que necesitan por AccionesFila (abrir el panel rápido, el chatter y la cancelación).
-  const accionesFila: AccionesFilaHub = { abrir: openDocDetail, actividad: setActRow, cancelar: abrirCancelacion };
+  // B4 T7 r1 (m6): un valor estable para el contexto (sus tres manejadores ya lo son): las celdas no se repintan con cada
+  // cambio de la página.
+  const accionesFila = useMemo<AccionesFilaHub>(
+    () => ({ abrir: openDocDetail, actividad: setActRow, cancelar: abrirCancelacion }),
+    [openDocDetail, abrirCancelacion],
+  );
   // D40: un solo usePreferenciasTabla por id; la tabla y «Ajustar tabla» comparten su resultado y el ref del ancho.
   const prefs = usePreferenciasTabla(ID_HUB, COLUMNAS_TABLA_HUB);
   const anchoTablaRef = useRef<number | null>(null);
@@ -927,7 +966,7 @@ export default function VentasHub() {
   const atencion = ordenEsAtencion(estado.orden);
   const grupos = conteos?.grupos;
   const tituloDeGrupo = useCallback((grupo: string, n: number) => tituloGrupo(grupo, grupos?.[grupo] ?? n), [grupos]);
-  const textoOrden = textoOrdenHub(estado.orden, TITULOS_ORDEN_HUB);
+  const textoOrden = textoOrdenHub(estado.orden, TITULOS_ORDEN_HUB, { inversos: INVERSOS_ORDEN_HUB });
   const chipsFiltro = chipsFiltroHub(estado);
   // N3/N5: la selección de la página (TablaEstandar la limpia al cambiar de página, de pestaña, de filtro o de orden).
   const seleccion = useMemo(() => Array.from(selectedIds), [selectedIds]);
@@ -937,8 +976,15 @@ export default function VentasHub() {
   const cambiarSeccion = useCallback((s: SeccionHub) => {
     setSeccion(s);
     setSelectedIds(new Set());
+    // B4 T7 r1 (I1): al volver a los documentos se suelta también el foco del enlace.
+    if (s === 'documentos') setFocoEnlace((f) => focoEnlaceTras(f, { tipo: 'documentos' }));
     // Al volver a los documentos la URL deja de decir ?tab=analisis (recargar no reabre el Análisis).
     if (s === 'documentos' && leerEnlaceHub(window.location.search).analisis) router.replace(RUTA_HUB_VENTAS);
+  }, [router]);
+  // ANALISIS-ventas: el foco que elige el usuario queda en la URL; el del enlace ya no cuenta (I1).
+  const alCambiarFoco = useCallback((foco: string) => {
+    setFocoEnlace((f) => focoEnlaceTras(f, { tipo: 'elegir' }));
+    router.replace(`${RUTA_HUB_VENTAS}?tab=analisis&foco=${foco}`);
   }, [router]);
   // B4 T7 r1 (A3): la pestaña Análisis de la barra (pestanaAparte). Tocarla otra vez, o tocar la vista de siempre con
   // los documentos a la vista, no cambia nada.
@@ -1178,15 +1224,16 @@ export default function VentasHub() {
           </section>
           {enAnalisis ? (
             /* ANALISIS-ventas punto 3 (R2, R13, RP6, RP68, RP69, D45): /ventas/analisis con el selector Todo /
-               Solicitudes / Cotizaciones / Pedidos; el ?foco= de «Ver análisis» gana hasta que el usuario elige otro y la
-               URL se mantiene al día. El Copilot es la tarjeta «En construcción» del panel (R2): no llama a ningún chat. */
+               Solicitudes / Cotizaciones / Pedidos; el ?foco= de «Ver análisis» gana hasta que el usuario elige otro o
+               vuelve a los documentos (focoEnlace, I1) y la URL se mantiene al día. El Copilot es la tarjeta de
+               AsistenteEnConstruccion del panel (R2): no llama a ningún chat. */
             <PanelAnalisisPerezoso
               modulo="ventas"
               endpoint="/ventas/analisis"
               acento="indigo"
               focos={FOCOS_VENTAS}
-              focoInicial={enlace.foco}
-              alCambiarFoco={(foco) => router.replace(`${RUTA_HUB_VENTAS}?tab=analisis&foco=${foco}`)}
+              focoInicial={focoEnlace}
+              alCambiarFoco={alCambiarFoco}
               mejorLinea="sube"
               busquedaProducto
               asistente={ASISTENTE_VENTAS}

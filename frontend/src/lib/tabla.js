@@ -1524,6 +1524,38 @@ export function direccionOrden(orden, campo) {
 }
 
 /**
+ * B4 T7 r1 (m4): el orden que manda tocar el título de `columna` (TablaEstandar). Sin ordenInverso, alternarOrden con
+ * su campoOrden. Con `ordenInverso: true`, la flecha dice lo que ve el usuario y el servidor recibe lo contrario: el
+ * primer toque es «↑» y manda '-campo', el segundo es «↓» y manda 'campo', y el tercero vuelve al orden por defecto
+ * (null). Es el caso de una Antigüedad que se ordena por la fecha de creación ('creado'). Una columna que no se ordena
+ * deja el orden como está.
+ * @param {string | null | undefined} orden
+ * @param {{id: string, ordenable?: boolean | string, ordenInverso?: boolean} | null | undefined} columna
+ * @returns {string | null}
+ */
+export function ordenAlTocar(orden, columna) {
+  const campo = campoOrden(columna);
+  if (!campo) return orden ?? null;
+  if (!columna?.ordenInverso) return alternarOrden(orden, campo);
+  if (orden === `-${campo}`) return campo;
+  if (orden === campo) return null;
+  return `-${campo}`;
+}
+
+/**
+ * B4 T7 r1 (m4): la flecha del título de `columna` y su aria-sort: direccionOrden con su campoOrden, al revés si la
+ * columna tiene ordenInverso ('-creado' es «↑», 'asc'). null si la tabla no está ordenada por ella.
+ * @param {string | null | undefined} orden
+ * @param {{id: string, ordenable?: boolean | string, ordenInverso?: boolean} | null | undefined} columna
+ * @returns {'asc' | 'desc' | null}
+ */
+export function direccionDeColumna(orden, columna) {
+  const direccion = direccionOrden(orden, campoOrden(columna));
+  if (!direccion || !columna?.ordenInverso) return direccion;
+  return direccion === 'asc' ? 'desc' : 'asc';
+}
+
+/**
  * Los accesores de orden de useListadoCliente (modo 'cliente'): {campo: valorOrden} de las columnas que se ordenan y
  * traen valorOrden (sin valorOrden, ordenarFilas usa fila[campo]). Conviene armarlo una vez (constante o useMemo).
  * @template T

@@ -20,6 +20,8 @@ import {
   pistaActivasSolicitudes, valorConfig, enteroConfig, DIAS_VALIDEZ_COTIZACION, configLeida, cuerpoGuardarConfig,
   tarifaIvaDeConfig, AVISO_CONFIG_SIN_LEER,
 } from '../src/lib/listas-ventas.js';
+// B4 T7 r1: lo nuevo por el espacio de nombres, para que su falta no tape los demás rojos.
+import * as listas from '../src/lib/listas-ventas.js';
 import { readFileSync } from 'node:fs';
 import { TEXTO_PAPELERA_SIN_FECHA, ESTADOS_SC } from '../src/lib/estados-solicitud.js';
 
@@ -581,6 +583,23 @@ console.log('--- B3 T16: valorConfig y enteroConfig (las secciones nuevas de la 
   assert.equal(enteroConfig(null, 'dias_validez_cotizacion', 5, 1, 60), 5);
   assert.equal(enteroConfig({ data: { dias_validez_cotizacion: { value: '12' } } }, 'dias_validez_cotizacion', 5, 1, 60),
     12);
+}
+
+console.log('--- B4 T7 r1 (m12): configDeRespuesta, los valores de GET /ventas/config (los casos de fusionarCargaHub) ---');
+{
+  const { configDeRespuesta } = listas;
+  // El sobre {status, data} se desenvuelve; una respuesta que no es un objeto no reemplaza la que hay (null).
+  assert.deepEqual(configDeRespuesta({ data: { alerta_sc_dias: '3' } }), { alerta_sc_dias: '3' });
+  assert.equal(configDeRespuesta(null), null);
+  assert.equal(configDeRespuesta('x'), null);
+  // Sin sobre, el objeto tal cual (como `cfg.data || cfg`); un data que no es un objeto, tampoco reemplaza.
+  assert.deepEqual(configDeRespuesta({ alerta_sc_dias: '4' }), { alerta_sc_dias: '4' });
+  assert.equal(configDeRespuesta({ data: 'x' }), null);
+  assert.equal(configDeRespuesta(undefined), null);
+  // La página la usa para el ConfigPanel: solo una buena reemplaza lo de pantalla.
+  const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(hub, /const datos = configDeRespuesta\(cfg\);\s*if \(datos\) setAlertDias\(datos\);/);
+  assert.ok(!hub.includes('(cfg as { data?: unknown }).data || cfg'), 'sin el desenvolvimiento a mano');
 }
 
 console.log('--- B3 T16 r1: «Guardar Configuración» nunca pisa claves que no se tocaron ---');

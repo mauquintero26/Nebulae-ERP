@@ -324,7 +324,8 @@ console.log('--- B4 T7 (RP86 y D28): la recarga del Hub sin perder lo que había
   assert.ok(cfg.includes('return () => { vigente = false; };'), 'config: la última gana');
   // E4: si la configuración falla, un aviso con el texto de siempre, y la de pantalla sigue (solo se pisa con una buena).
   assert.ok(cfg.includes("avisar('No se pudo cargar la configuración de alertas.', { tono: 'error' });"), 'config: el aviso');
-  assert.ok(cfg.includes("if (datos && typeof datos === 'object') setAlertDias(datos);"), 'config: solo con una respuesta buena');
+  // B4 T7 r1 (m12): el desenvolvimiento va en configDeRespuesta (lib/listas-ventas.js, con sus casos en test_listas_ventas).
+  assert.match(cfg, /const datos = configDeRespuesta\(cfg\);\s*if \(datos\) setAlertDias\(datos\);/, 'config: solo con una respuesta buena');
 }
 
 console.log('--- B4 T7 (R6, C4, R2, RP6): el Hub ya no tiene arreglos en memoria ni llamadas viejas ---');
@@ -1105,6 +1106,97 @@ console.log('--- B4 T7 TEST 2: ordenEsAtencion y textoOrdenHub (R6: «Orden: Mon
   assert.equal(hv.textoOrdenHub('-dias_creado', titulos), 'Orden: Dias creado ↓');
   assert.equal(hv.textoOrdenHub('monto'), 'Orden: Monto ↑');
   assert.equal(hv.textoOrdenHub('cliente', { cliente: '' }), 'Orden: Cliente ↑', 'un título vacío no cuenta');
+}
+
+console.log('--- B4 T7 r1 TEST 3 (I1, m11 y m4): focoEnlaceTras, filaDelHub y la flecha de un orden inverso ---');
+{
+  // I1: el foco del enlace (?foco=) es el focoInicial de la pestaña Análisis hasta que el usuario elige un foco o vuelve
+  // a los documentos (donde la URL se limpia); después, null: la pestaña abre en lo guardado (analisis:ventas).
+  assert.equal(hv.focoEnlaceTras('cot', { tipo: 'elegir' }), null);
+  assert.equal(hv.focoEnlaceTras('cot', { tipo: 'documentos' }), null);
+  assert.equal(hv.focoEnlaceTras('cot', { tipo: 'analisis' }), 'cot', 'abrir Análisis no lo cambia');
+  assert.equal(hv.focoEnlaceTras('cot', null), 'cot');
+  assert.equal(hv.focoEnlaceTras(null, { tipo: 'analisis' }), null);
+  assert.equal(hv.focoEnlaceTras(undefined, {}), null);
+  // El caso de la revisión: ?tab=analisis&foco=cot, elige «Todo», va a Documentos y vuelve a Análisis.
+  let foco = 'cot';
+  for (const tipo of ['elegir', 'documentos', 'analisis']) foco = hv.focoEnlaceTras(foco, { tipo });
+  assert.equal(foco, null, 'abre en lo que eligió el usuario, no en Cotizaciones');
+  // Sin elegir nada: ir a Documentos también lo suelta.
+  assert.equal(hv.focoEnlaceTras(hv.focoEnlaceTras('cot', { tipo: 'documentos' }), { tipo: 'analisis' }), null);
+
+  // m11: la fila de una clave entre las cargadas y, como último recurso, el documento del panel rápido si es ese (el
+  // pedido que salió de la página por un filtro se sigue pudiendo cancelar desde el panel, como en 372f71c).
+  const filas = [{ tipo: 'SC', id: 1 }, { tipo: 'VEN', id: 7, estado: 'EN_PROCESO' }];
+  const panel = { tipo: 'VEN', id: 9, estado: 'PENDIENTE_COMPRA' };
+  assert.equal(hv.filaDelHub(filas, 'VEN|7', panel), filas[1]);
+  assert.equal(hv.filaDelHub(filas, 'VEN|9', panel), panel, 'el del panel');
+  assert.equal(hv.filaDelHub(filas, 'SC|9', panel), undefined, 'otro tipo con el mismo id, no');
+  assert.equal(hv.filaDelHub(filas, 'VEN|7', { tipo: 'VEN', id: 7, estado: 'X' }), filas[1], 'la cargada gana');
+  assert.equal(hv.filaDelHub(null, 'VEN|9', panel), panel);
+  assert.equal(hv.filaDelHub(filas, 'VEN|9', null), undefined);
+  assert.equal(hv.filaDelHub(filas, 'VEN|9'), undefined);
+
+  // m4: en una columna de orden inverso la flecha dice lo que ve el usuario: «Antigüedad ↑» (la más nueva primero) es
+  // -creado y «Antigüedad ↓» es creado.
+  const titulos = { creado: 'Antigüedad', monto: 'Monto' };
+  assert.equal(hv.textoOrdenHub('-creado', titulos, { inversos: ['creado'] }), 'Orden: Antigüedad ↑');
+  assert.equal(hv.textoOrdenHub('creado', titulos, { inversos: ['creado'] }), 'Orden: Antigüedad ↓');
+  assert.equal(hv.textoOrdenHub('-monto', titulos, { inversos: ['creado'] }), 'Orden: Monto ↓', 'las demás, como siempre');
+  assert.equal(hv.textoOrdenHub('creado', titulos), 'Orden: Antigüedad ↑', 'sin inversos, como siempre');
+  assert.equal(hv.textoOrdenHub('creado', titulos, { inversos: null }), 'Orden: Antigüedad ↑');
+}
+
+console.log('--- B4 T7 r1 (B): el foco del enlace, la fila de último recurso, los tonos de fila y la fuente única ---');
+{
+  const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = hub.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  // m1 (R2): el texto «En construcción» vive solo en AsistenteEnConstruccion.tsx, tampoco en los comentarios de la página.
+  assert.ok(!hub.includes('En construcci'), 'm1: sin «En construcción» en page.tsx');
+  // I1: el foco del enlace en un estado propio, suelto al elegir un foco y al volver a los documentos.
+  assert.match(codigo, /const \[focoEnlace, setFocoEnlace\] = useState\(enlace\.foco\);/);
+  assert.match(codigo, /if \(s === 'documentos'\) setFocoEnlace\(\(f\) => focoEnlaceTras\(f, \{ tipo: 'documentos' \}\)\);/);
+  assert.match(codigo,
+    /const alCambiarFoco = useCallback\(\(foco: string\) => \{\s*setFocoEnlace\(\(f\) => focoEnlaceTras\(f, \{ tipo: 'elegir' \}\)\);\s*router\.replace\(`\$\{RUTA_HUB_VENTAS\}\?tab=analisis&foco=\$\{foco\}`\);\s*\}, \[router\]\);/);
+  assert.match(codigo, /focoInicial=\{focoEnlace\}\s*alCambiarFoco=\{alCambiarFoco\}/);
+  assert.ok(!codigo.includes('focoInicial={enlace.foco}'), 'sin la foto del montaje');
+  // m11: filaPorId con el panel rápido como último recurso.
+  assert.match(codigo, /const filaPorId = useCallback\(\(idStr: string\) => filaDelHub\(filasCargadas, idStr, quickDetailDoc\), \[filasCargadas, quickDetailDoc\]\);/);
+  // m3 y m14 (D41): no resueltas con el tono opaco filaAviso; las atrasadas con filaAlerta y la marca rosa a la izquierda
+  // (una sombra en la primera celda, que no es un tinte y no rompe la casilla fija).
+  assert.match(codigo, /const MARCA_ATRASO = '\[&>td:first-child\]:shadow-\[inset_3px_0_0_var\(--color-rose-500\)\]';/);
+  assert.match(codigo,
+    /const claseDeFila = \(f: FilaHub\) => \(f\.resolucion === 'ATRASADO' \? `\$\{TABLE\.filaAlerta\} \$\{MARCA_ATRASO\}`\s*: f\.resolucion === 'NO_RESUELTO' \? TABLE\.filaAviso : null\);/);
+  // m4 y m8: Antigüedad se ordena (orden inverso: ↑ manda -creado) y sin dato pinta «—» en gris; la de una atrasada, en
+  // rojo y negrita (372f71c).
+  assert.match(codigo, /\{ id: 'antiguedad', titulo: 'Antigüedad', ancho: 96, ordenable: 'creado', ordenInverso: true,/);
+  assert.match(codigo, /const dias = Number\.isFinite\(fila\.dias_creado\) \? Math\.floor\(fila\.dias_creado as number\) : null;/);
+  assert.match(codigo, /if \(dias === null\) return <span className="text-xs text-slate-400">—<\/span>;/);
+  assert.match(codigo, /fila\.resolucion === 'ATRASADO' \? 'font-bold text-rose-600' : undefined/);
+  assert.ok(!codigo.includes('Number(f.dias_creado) || 0'), 'm8: sin «hoy» para un dato que falta');
+  // m6: el valor del contexto es estable.
+  assert.match(codigo,
+    /const accionesFila = useMemo<AccionesFilaHub>\(\s*\(\) => \(\{ abrir: openDocDetail, actividad: setActRow, cancelar: abrirCancelacion \}\),\s*\[openDocDetail, abrirCancelacion\],\s*\);/);
+  // m7: fuente única. (a) los chips con CLASE_CHIP de components/ui/Kanban.tsx; (b) los títulos del orden con
+  // campoOrden y solo de las columnas que se ordenan (y las de orden inverso, aparte); (d) una sola sigla de tipo.
+  assert.ok(!codigo.includes('CHIP_TONO'), 'm7a: sin CHIP_TONO');
+  const kanban = readFileSync(new URL('../src/components/ui/Kanban.tsx', import.meta.url), 'utf8');
+  assert.match(kanban, /^export const CLASE_CHIP: Record<string, string> = \{/m, 'm7a: Kanban.tsx exporta CLASE_CHIP');
+  assert.match(codigo, /\bCLASE_CHIP,\s*\} from '@\/components\/ui';/, 'm7a: la página la toma de components/ui');
+  assert.equal((codigo.match(/CLASE_CHIP\[[^\]]+\] \?\? CLASE_CHIP\.slate/g) ?? []).length, 2, 'm7a: los dos chips de Resolución');
+  assert.match(codigo,
+    /const TITULOS_ORDEN_HUB: Record<string, string> = Object\.fromEntries\(\s*COLUMNAS_TABLA_HUB\.flatMap\(\(c\) => \{ const campo = campoOrden\(c\); return campo \? \[\[campo, c\.titulo\]\] : \[\]; \}\),\s*\);/);
+  assert.match(codigo, /const INVERSOS_ORDEN_HUB = COLUMNAS_TABLA_HUB\.filter\(\(c\) => c\.ordenInverso\)\.map\(\(c\) => campoOrden\(c\)\);/);
+  assert.match(codigo, /textoOrdenHub\(estado\.orden, TITULOS_ORDEN_HUB, \{ inversos: INVERSOS_ORDEN_HUB \}\)/);
+  assert.ok(!/=== 'VEN' \? 'PVEN'/.test(codigo), "m7d: sin otro t === 'VEN' ? 'PVEN'");
+  assert.match(codigo, /\{siglaDeTipo\(f\.tipo\)\}/);
+  // m9: (a) la acción sin enlace no parece pulsable; (b) un solo tamaño de letra en cada chip.
+  assert.match(codigo, /const TONO_ACCION_QUIETO: Record<string, string> = Object\.fromEntries\(/);
+  assert.match(codigo, /<span title=\{accion\.texto\} className=\{`\$\{BASE_ACCION\} cursor-default \$\{TONO_ACCION_QUIETO\[clave\] \?\? TONO_ACCION_QUIETO\.slate\}`\}>/);
+  assert.ok(!/text-\[1\dpx\][^`'"]*text-\[1\dpx\]/.test(codigo.match(/const CHIP = '[^']*'/)?.[0] ?? ''), 'm9b');
+  assert.ok(!/const CHIP = '[^']*text-\[/.test(codigo), 'm9b: la base del chip no lleva tamaño de letra');
+  assert.match(codigo, /className=\{`\$\{CHIP\} text-\[11px\] \$\{clases\}`\}/, 'm9b: la insignia, en 11 px');
+  assert.equal((codigo.match(/`\$\{CHIP\} text-\[10px\] \$\{CLASE_CHIP/g) ?? []).length, 2, 'm9b: los chips de Resolución, en 10 px');
 }
 
 console.log('OK test_hub_ventas.mjs');

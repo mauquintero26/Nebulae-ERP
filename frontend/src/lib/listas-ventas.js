@@ -99,6 +99,18 @@ export function configLeida(respuesta) {
 }
 
 /**
+ * B4 T7 r1 (m12): los valores de GET /ventas/config para el ConfigPanel del Hub. El sobre {status, data} se desenvuelve
+ * (`cfg.data || cfg`, como hacía fusionarCargaHub); lo que no es un objeto da null y no reemplaza lo que hay en pantalla.
+ * @param {unknown} cfg
+ * @returns {Record<string, any> | null}
+ */
+export function configDeRespuesta(cfg) {
+  if (!cfg || typeof cfg !== 'object') return null;
+  const datos = /** @type {any} */ (cfg).data || cfg;
+  return datos && typeof datos === 'object' ? datos : null;
+}
+
+/**
  * Revision final B3 (F2, M16): el porque de «Ajustar Tiempos» y «Configuracion» del Hub deshabilitados mientras
  * GET /ventas/config no llega (configLeida): ante un error de red pasajero, el boton gris dice que hacer.
  */

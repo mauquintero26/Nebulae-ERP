@@ -554,17 +554,52 @@ export function ordenEsAtencion(orden) {
  * El chip del orden de la tabla del Hub (R6, orden_clic_columna): 'Orden: Monto ↓' (descendente, con '-') u
  * 'Orden: Monto ↑'; junto a él va el botón «Atención primero». Con el orden de atención, null (no hay chip). `titulos`
  * es {campo: título de la columna}; un campo sin título sale humanizado (nunca el código crudo).
+ * B4 T7 r1 (m4): `inversos` son los campos de las columnas con ordenInverso (lib/tabla.js), cuya flecha dice lo que ve
+ * el usuario: 'Antigüedad ↑' es '-creado' (la más nueva primero) y 'Antigüedad ↓' es 'creado'.
  * @param {string | null | undefined} orden
  * @param {Readonly<Record<string, string>>} [titulos]
+ * @param {{inversos?: ReadonlyArray<string | null> | null}} [opciones]
  * @returns {string | null}
  */
-export function textoOrdenHub(orden, titulos = {}) {
+export function textoOrdenHub(orden, titulos = {}, { inversos = [] } = {}) {
   if (ordenEsAtencion(orden) || typeof orden !== 'string') return null;
   const desc = orden.startsWith('-');
   const campo = desc ? orden.slice(1) : orden;
   const propio = titulos && tiene(titulos, campo) && typeof titulos[campo] === 'string' && titulos[campo].trim()
     ? titulos[campo].trim() : humanizarCodigo(campo);
-  return `Orden: ${propio} ${desc ? '↓' : '↑'}`;
+  const abajo = (inversos ?? []).includes(campo) ? !desc : desc;
+  return `Orden: ${propio} ${abajo ? '↓' : '↑'}`;
+}
+
+/**
+ * B4 T7 r1 (I1): el foco del enlace (?foco= de «Ver análisis») que el Hub le pasa a la pestaña Análisis como
+ * focoInicial. Vale hasta que el usuario elige un foco ({tipo: 'elegir'}) o vuelve a los documentos ({tipo:
+ * 'documentos'}, donde la URL se limpia): desde ahí, null, y la pestaña abre en lo guardado (analisis:ventas). Otro
+ * evento lo deja como está.
+ * @param {string | null | undefined} foco
+ * @param {{tipo?: string} | null | undefined} evento
+ * @returns {string | null}
+ */
+export function focoEnlaceTras(foco, evento) {
+  if (evento?.tipo === 'elegir' || evento?.tipo === 'documentos') return null;
+  return foco ?? null;
+}
+
+/**
+ * B4 T7 r1 (m11): la fila de la clave `idStr` ('TIPO|id') entre las cargadas (la página de la tabla y las tarjetas del
+ * tablero, RP36) y, como último recurso, el documento del panel rápido (`panel`) si es ese: así un pedido que salió de
+ * la página por un filtro se sigue pudiendo cancelar o cambiar desde el panel, como en 372f71c. undefined si no está.
+ * @template T
+ * @param {ReadonlyArray<T> | null | undefined} filas
+ * @param {string} idStr
+ * @param {any} [panel]
+ * @returns {T | any | undefined}
+ */
+export function filaDelHub(filas, idStr, panel = null) {
+  const clave = (f) => `${f?.tipo}|${f?.id}`;
+  const fila = (filas ?? []).find((f) => clave(f) === idStr);
+  if (fila !== undefined) return fila;
+  return panel && typeof panel === 'object' && clave(panel) === idStr ? panel : undefined;
 }
 
 const masReciente = (lista) => [...lista].sort((a, b) => Number(b?.id || 0) - Number(a?.id || 0))[0];

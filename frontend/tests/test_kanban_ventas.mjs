@@ -15,6 +15,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   COLUMNAS_HUB, reglaSoltarHub, tarjetaHub, estadoDeTarjeta, chipsDocumentoVentas, confirmacionReiniciarSolicitud,
   motivoTransicionPedido, COLUMNAS_PEDIDO, reglaSoltarPedido, COLUMNAS_COT, reglaSoltarCotizacion, COLUMNAS_SC,
@@ -631,6 +632,31 @@ console.log('--- B4 T7 TEST B: chipsResolucionHub — la columna Resolución del
   assert.deepEqual(r(sinAtraso).extras, chipsDocumentoVentas(sinAtraso));
   assert.deepEqual(r({ tipo: 'VEN', resolucion: 'ATRASADO', dias_sin_mov: 2 }).extras, []);
   assert.deepEqual(r(null), { principal: null, extras: [] });
+}
+
+console.log('--- B4 T7 r1 TEST C (m7c y m7d): una sola lectura de los días y una sola sigla de tipo ---');
+{
+  // m7d: la sigla que ve el usuario (VEN y PVEN son el mismo tipo, RP74). La usan la tarjeta del tablero y la tabla.
+  assert.equal(kv.siglaDeTipo('VEN'), 'PVEN');
+  assert.equal(kv.siglaDeTipo('PVEN'), 'PVEN');
+  assert.equal(kv.siglaDeTipo('SC'), 'SC');
+  assert.equal(kv.siglaDeTipo('COT'), 'COT');
+  assert.equal(tarjetaHub({ tipo: 'VEN', id: 1, numero: 'PVEN-1', estado: 'EN_PROCESO' }).tipo, kv.siglaDeTipo('VEN'));
+  const fuente = readFileSync(new URL('../src/lib/kanban-ventas.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(fuente, /tipo: siglaDeTipo\(tipo\),/, 'tarjetaHub usa siglaDeTipo');
+  assert.equal((fuente.match(/=== 'VEN' \? 'PVEN'/g) ?? []).length, 1, "tipo === 'VEN' ? 'PVEN' solo en siglaDeTipo");
+  assert.match(fuente, /export function siglaDeTipo\(tipo\) \{\s*return tipo === 'VEN' \? 'PVEN' : tipo;\s*\}/);
+  // m7c: textoAtrasado y chipsResolucionHub leen dias_sin_mov con el mismo diasEnteros (los mismos casos de antes).
+  assert.match(fuente, /^function diasEnteros\(valor\) \{/m);
+  const textoAtrasado = /function textoAtrasado\(dias\) \{([\s\S]*?)\n\}/.exec(fuente)?.[1] ?? '';
+  const resolucion = /export function chipsResolucionHub\(fila\) \{([\s\S]*?)\n\}/.exec(fuente)?.[1] ?? '';
+  assert.match(textoAtrasado, /const d = diasEnteros\(dias\);/);
+  assert.match(resolucion, /const dias = diasEnteros\(fila\?\.dias_sin_mov\);/);
+  for (const cuerpo of [textoAtrasado, resolucion]) assert.ok(!/Math\.floor|Number\(/.test(cuerpo), 'sin otra lectura de los días');
+  for (const [d, texto] of [[4, 'Atrasado 4 días'], [1, 'Atrasado 1 día'], ['3', 'Atrasado 3 días'], [2.9, 'Atrasado 2 días'],
+    [-1, 'Atrasado'], ['', 'Atrasado'], [null, 'Atrasado'], ['x', 'Atrasado']]) {
+    assert.equal(chipsDocumentoVentas({ tipo: 'VEN', resolucion: 'ATRASADO', dias_sin_mov: d })[0].texto, texto, String(d));
+  }
 }
 
 console.log('OK test_kanban_ventas');

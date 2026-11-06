@@ -10,9 +10,9 @@ import { TABLE } from '@/lib/design-system';
 import { textoDeError } from '@/lib/avisos';
 import { velocidadAutodesplazamiento } from '@/lib/kanban';
 import {
-  ANCHO_SELECCION, RELLENO_CELDA, alternarOrden, alternarSeleccion, alternarSeleccionPagina, anchoAlContenido,
-  anchoAlSoltar, bordeDeHueco, campoOrden, destinoArrastre, direccionOrden, estadoSeleccionPagina, fijasActivas, fijasDe,
-  filasConGrupos, firmaSeleccion, geometriaTabla, indiceDestino, limitarAncho, limitesDelAsa, paginaCorregida,
+  ANCHO_SELECCION, RELLENO_CELDA, alternarSeleccion, alternarSeleccionPagina, anchoAlContenido,
+  anchoAlSoltar, bordeDeHueco, campoOrden, destinoArrastre, direccionDeColumna, estadoSeleccionPagina, fijasActivas, fijasDe,
+  filasConGrupos, firmaSeleccion, geometriaTabla, indiceDestino, limitarAncho, limitesDelAsa, ordenAlTocar, paginaCorregida,
   reconciliarColumnas, recortarBordes, superaUmbralAsa, superaUmbralColumna, vistaCuerpo,
 } from '@/lib/tabla';
 import type { ClaveFila, DefinicionColumna, EstadoTabla, LadoFijo, RenglonTabla, VistaCuerpo } from '@/lib/tabla';
@@ -55,6 +55,7 @@ import { Paginacion } from './Paginacion';
  * pantalla completa (usePantallaCompleta) el pie lleva data-pie-tabla para dejar libre la esquina del botón de la IA.
  * Encabezado (pointer events, el arrastre del Kanban del CRM, H1, como lo resolvió el tablero común de T4B):
  *  - clic en el título: ordena (alternarOrden: ascendente, descendente y el por defecto), con aria-sort y la flecha;
+ *    B4 T7 r1 (m4): con ordenAlTocar y direccionDeColumna, que invierten lo que se manda en una columna ordenInverso;
  *  - presionar y arrastrar MÁS de 5 px (superaUmbralColumna) con el mouse o el lápiz (r1, 6g: no con el dedo; en
  *    táctil quedan las flechas de «Ajustar tabla»): mueve la columna, con una copia del título y una línea azul de
  *    destino (los títulos recortados a la zona libre entre las fijas y la casilla de selección, recortarBordes;
@@ -99,6 +100,11 @@ export type ColumnaTabla<T> = DefinicionColumna & {
   alinear?: AlineacionColumna;
   /** true ordena por el id; un texto es el campo de orden del servidor (por ejemplo 'total_cop'). */
   ordenable?: boolean | string;
+  /**
+   * B4 T7 r1 (m4): la flecha dice lo que ve el usuario y el servidor recibe lo contrario (ordenAlTocar y
+   * direccionDeColumna): una Antigüedad que se ordena por 'creado' manda '-creado' con «↑» y 'creado' con «↓».
+   */
+  ordenInverso?: boolean;
   /** El valor de orden en el modo 'cliente' (accesoresDeOrden, para useListadoCliente). */
   valorOrden?: (fila: T) => unknown;
   /**
@@ -493,7 +499,7 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
     }
     const campo = campoOrden(col);
     if (!lista || !campo) return;
-    lista.onEstado({ tipo: 'orden', valor: alternarOrden(lista.estado.orden, campo) });
+    lista.onEstado({ tipo: 'orden', valor: ordenAlTocar(lista.estado.orden, col) });
   };
 
   /** Estirar o angostar con el asa: el ancho va al <col> por ref y se guarda al soltar (anchoAlSoltar). */
@@ -794,7 +800,7 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
                 {visibles.map((v) => {
                   const col = porId.get(v) as ColumnaTabla<T>;
                   const campo = lista ? campoOrden(col) : null;
-                  const direccion = lista ? direccionOrden(lista.estado.orden, campo) : null;
+                  const direccion = lista ? direccionDeColumna(lista.estado.orden, col) : null;
                   const Flecha = direccion === 'asc' ? ArrowUp : direccion === 'desc' ? ArrowDown : null;
                   const movible = ajustable && !forma.fijas[v];
                   const alinear = ALINEAR_TITULO[col.alinear ?? 'izquierda'];

@@ -1559,7 +1559,8 @@ console.log('--- TEST 32 (T4D): el fuente de los componentes de vista de compone
   assert.ok(clase('asa').includes('w-2') && clase('asa').includes('cursor-col-resize'), 'el asa de 8 px');
   assert.ok(clase('linea').includes('bg-blue-500'), 'la línea azul de destino');
   for (const n of ['geometriaTabla', 'superaUmbralColumna', 'indiceDestino', 'destinoArrastre', 'bordeDeHueco', 'anchoAlContenido',
-    'limitarAncho', 'alternarOrden', 'campoOrden', 'direccionOrden', 'vistaCuerpo', 'filasConGrupos', 'paginaCorregida',
+    // B4 T7 r1 (m4): el orden pasa por ordenAlTocar y direccionDeColumna, que usan alternarOrden y direccionOrden.
+    'limitarAncho', 'ordenAlTocar', 'campoOrden', 'direccionDeColumna', 'vistaCuerpo', 'filasConGrupos', 'paginaCorregida',
     'firmaSeleccion', 'estadoSeleccionPagina', 'alternarSeleccionPagina', 'alternarSeleccion', 'reconciliarColumnas',
     'velocidadAutodesplazamiento', 'textoDeError']) {
     assert.match(t, new RegExp(`\\b${n}\\(`), `TablaEstandar usa ${n}`);
@@ -1600,7 +1601,7 @@ console.log('--- TEST 32 (T4D): el fuente de los componentes de vista de compone
   assert.match(t, /const ajustable = Boolean\(preferencias\?\.listo\);/);
   // Orden, estados, selección y textos exactos.
   assert.match(t, /aria-sort=\{campo \? \(direccion \? ARIA_ORDEN\[direccion\] : 'none'\) : undefined\}/);
-  assert.match(t, /lista\.onEstado\(\{ tipo: 'orden', valor: alternarOrden\(lista\.estado\.orden, campo\) \}\)/);
+  assert.match(t, /lista\.onEstado\(\{ tipo: 'orden', valor: ordenAlTocar\(lista\.estado\.orden, col\) \}\)/);
   assert.match(t, /onEstado\?\.\(\{ tipo: 'pagina', valor: corregida \}\)/, 'si un filtro deja menos páginas, a la última');
   assert.match(t, /if \(haySeleccion\) onSeleccion\?\.\(\[\]\);/, 'la selección se limpia al cambiar la lista');
   assert.match(t, /<Esqueleto columnas=\{nColumnas\} \/>/);
@@ -2098,6 +2099,43 @@ console.log('--- TEST 40 (B4 T7 r1, A3): la pestaña aparte de BarraTabla (Anál
     assert.ok(!barra.slice(0, fila2).includes(pieza) || pieza === 'resultados', `${pieza} no va antes`);
   }
   assert.ok(!/elegirPestana/.test(barra), 'un solo manejador de los toques (tocarPestana)');
+}
+
+console.log('--- TEST 41 (B4 T7 r1, m4): ordenInverso — la flecha dice lo que ve el usuario (Antigüedad ↑ = -creado) ---');
+{
+  const { ordenAlTocar, direccionDeColumna } = TABLA;
+  const antiguedad = { id: 'antiguedad', ordenable: 'creado', ordenInverso: true };
+  const monto = { id: 'monto', ordenable: 'monto' };
+  // Sin ordenInverso, alternarOrden de siempre: ascendente, descendente y el por defecto.
+  assert.equal(ordenAlTocar(null, monto), 'monto');
+  assert.equal(ordenAlTocar('monto', monto), '-monto');
+  assert.equal(ordenAlTocar('-monto', monto), null);
+  assert.equal(ordenAlTocar('-creado', monto), 'monto', 'otra columna empieza en ascendente');
+  // Con ordenInverso: el primer toque es «↑» para el usuario y manda -creado; el segundo, «↓», manda creado.
+  assert.equal(ordenAlTocar(null, antiguedad), '-creado');
+  assert.equal(ordenAlTocar('atencion', antiguedad), '-creado');
+  assert.equal(ordenAlTocar('-creado', antiguedad), 'creado');
+  assert.equal(ordenAlTocar('creado', antiguedad), null);
+  assert.equal(ordenAlTocar('-monto', antiguedad), '-creado');
+  // La flecha y aria-sort.
+  assert.equal(direccionDeColumna('-creado', antiguedad), 'asc');
+  assert.equal(direccionDeColumna('creado', antiguedad), 'desc');
+  assert.equal(direccionDeColumna('monto', antiguedad), null);
+  assert.equal(direccionDeColumna('monto', monto), 'asc');
+  assert.equal(direccionDeColumna('-monto', monto), 'desc');
+  assert.equal(direccionDeColumna(null, monto), null);
+  // Sin campo de orden, nada.
+  assert.equal(ordenAlTocar('monto', { id: 'x' }), 'monto', 'una columna que no se ordena no cambia el orden');
+  assert.equal(direccionDeColumna('x', { id: 'x' }), null);
+  assert.equal(ordenAlTocar(null, null), null);
+  assert.equal(direccionDeColumna('monto', null), null);
+
+  // TablaEstandar: la prop aditiva de la columna, el toque y la flecha con la lib.
+  const t = readFileSync(new URL('../src/components/tabla/TablaEstandar.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(t, /ordenInverso\?: boolean;/);
+  assert.match(t, /lista\.onEstado\(\{ tipo: 'orden', valor: ordenAlTocar\(lista\.estado\.orden, col\) \}\);/);
+  assert.match(t, /const direccion = lista \? direccionDeColumna\(lista\.estado\.orden, col\) : null;/);
+  assert.ok(!/alternarOrden\(lista\.estado\.orden/.test(t), 'el toque pasa por ordenAlTocar');
 }
 
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');

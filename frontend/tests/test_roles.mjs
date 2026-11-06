@@ -72,19 +72,25 @@ console.log('--- TEST 5: la fuente: una sola regla sobre normalizarRol ---');
     'dinero-ventas.js');
   const hub = leer('app/dashboard/ventas/page.tsx');
   assert.ok(hub.includes('const soloLectura = !esAdmin(getUsuarioActual().role);'), 'el ConfigPanel del Hub usa esAdmin');
-  // B4 T7 (D27): la tabla estándar del Hub tiene la columna del asesor del documento, con su id, su título y su campo de
-  // orden del servidor (`id: 'asesor'`, `titulo: 'Asesor'`, `ordenable: 'asesor'`): no es un rol. Se quitan solo esas
-  // tres formas (las de ColumnaTabla) antes de buscar.
-  const sinColumnas = (fuente) => fuente.replace(/\b(id|titulo|ordenable): '[^'\n]*'/g, '$1: …');
-  assert.ok(hub.includes("{ id: 'asesor', titulo: 'Asesor', ancho: 120, ordenable: 'asesor',"), 'la columna del asesor del Hub');
+  // B4 T7 (D27) y r1 (m10 y m13): la tabla estándar del Hub tiene la columna del asesor del documento (su id, su título
+  // y su campo de orden del servidor): no es un rol. La excepción vale SOLO en page.tsx y quita SOLO ese literal exacto,
+  // una vez; en los otros cinco archivos la guarda queda como en 372f71c, y cualquier otro 'asesor' o 'admin' de
+  // page.tsx la sigue haciendo fallar.
+  const PAGINA_HUB = 'app/dashboard/ventas/page.tsx';
+  const COLUMNA_ASESOR = "{ id: 'asesor', titulo: 'Asesor', ancho: 120, ordenable: 'asesor',";
+  assert.equal(hub.split(COLUMNA_ASESOR).length - 1, 1, 'la columna del asesor del Hub, una sola vez');
+  const sinColumnaAsesor = (ruta, fuente) => (ruta === PAGINA_HUB ? fuente.replace(COLUMNA_ASESOR, '{') : fuente);
   // Y el Hub decide «Ajustar tiempos» con la misma regla (RP34).
   assert.ok(hub.includes('const accionAjustar = esAdmin(getUsuarioActual().role)'), '«Ajustar tiempos» usa esAdmin');
-  for (const ruta of ['app/dashboard/ventas/flujo.tsx', 'app/dashboard/ventas/page.tsx', 'lib/seguimiento.js',
+  for (const ruta of ['app/dashboard/ventas/flujo.tsx', PAGINA_HUB, 'lib/seguimiento.js',
     'lib/nombre-para-mostrar.js', 'lib/dinero-ventas.js', 'lib/envio-whatsapp.js']) {
-    assert.doesNotMatch(sinColumnas(codigo(leer(ruta))), /['"](admin|asesor|vendedor|finanzas)['"]/i, `${ruta}: sin un rol escrito a mano`);
+    assert.doesNotMatch(sinColumnaAsesor(ruta, codigo(leer(ruta))), /['"](admin|asesor|vendedor|finanzas)['"]/i, `${ruta}: sin un rol escrito a mano`);
   }
-  // La excepción no tapa un rol de verdad.
-  assert.match(sinColumnas("if (rol === 'asesor') x();"), /['"]asesor['"]/i);
+  // La excepción no tapa un rol de verdad: ni en page.tsx (otro literal) ni en los otros archivos (ni el mismo).
+  assert.match(sinColumnaAsesor(PAGINA_HUB, "if (rol === 'asesor') x();"), /['"]asesor['"]/i);
+  assert.match(sinColumnaAsesor(PAGINA_HUB, `${COLUMNA_ASESOR} celda: x }, { id: 'admin', titulo: 'Admin' }`), /['"]admin['"]/i);
+  assert.match(sinColumnaAsesor(PAGINA_HUB, `${COLUMNA_ASESOR} x }, ${COLUMNA_ASESOR} y }`), /['"]asesor['"]/i, 'solo una vez');
+  assert.match(sinColumnaAsesor('lib/seguimiento.js', COLUMNA_ASESOR), /['"]asesor['"]/i, 'solo en page.tsx');
 }
 
 console.log('OK test_roles.mjs');
