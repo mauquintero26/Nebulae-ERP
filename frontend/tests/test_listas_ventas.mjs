@@ -22,7 +22,7 @@ import {
 } from '../src/lib/listas-ventas.js';
 // B4 T7 r1: lo nuevo por el espacio de nombres, para que su falta no tape los demás rojos.
 import * as listas from '../src/lib/listas-ventas.js';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { TEXTO_PAPELERA_SIN_FECHA, ESTADOS_SC } from '../src/lib/estados-solicitud.js';
 
 console.log('--- N8 TEST 1: diasAlerta lee las tres formas de la configuracion ---');
@@ -861,7 +861,7 @@ console.log('--- B4 T9: el cableado de la lista de Cotizaciones con el servidor 
   assert.match(lista, /total: sinPagina \? null : listado\.total,\s*estadoTotal: estadoDelTotal\(\{\s*total: listado\.total, cargando: listado\.cargandoInicial \|\| sinPagina,/);
   // «Actualizar» recarga la tabla, el tablero y la franja.
   assert.match(lista, /const recargarLista = useCallback\(\(\) => \{\s*recargarListado\(\);\s*recargarTablero\(\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*\}, \[recargarListado, recargarTablero\]\);/);
-  assert.match(lista, /<button type="button" onClick=\{recargarLista\}[^>]*>\s*<RefreshCw [^>]*\/> Actualizar/);
+  // r1 (A2): «Actualizar» es el de AccionesCabecera con recargarLista (ver el bloque 7, abajo).
 
   // Bloque 2 (H15, H17, m2 de T8): las 3 pestañas con los conteos del servidor (sin Análisis), el filtro con las opciones
   // de la pestaña (o del tablero en Kanban) y el conmutador con la poda de accionModo.
@@ -956,14 +956,54 @@ console.log('--- B4 T9: el cableado de la lista de Cotizaciones con el servidor 
     assert.deepEqual([enActivas.vista, enActivas.estados], ['activas', []]);
   }
 
-  // Bloque 7 (R13): «Ver análisis» al Hub enfocado en Cotizaciones, y el contenedor con pb-24 (el botón de la IA).
-  assert.match(lista, /<Link href=\{enlaceVerAnalisis\('cot'\)\}/);
-  assert.match(lista, /<ContenidoEnlace icon=\{BarChart3\}>Ver análisis<\/ContenidoEnlace>/);
-  assert.match(codigo, /const CONTENEDOR_LISTA = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-\[1600px\] mx-auto w-full min-w-0 gap-6';/);
+  // Bloque 7 (R13): «Ver análisis» al Hub enfocado en Cotizaciones, y el contenedor con pb-24 (el botón de la IA). r1 (A2):
+  // los botones de la cabecera viven en AccionesCabecera, los mismos del esqueleto del Suspense.
+  const cabecera = codigo.slice(codigo.indexOf('export function AccionesCabecera('), codigo.indexOf('\n}\n', codigo.indexOf('export function AccionesCabecera(')));
+  assert.ok(cabecera.length > 100, 'AccionesCabecera exportada');
+  assert.match(lista, /actions=\{<AccionesCabecera onActualizar=\{recargarLista\} actualizando=\{actualizando\} \/>\}/);
+  assert.match(cabecera, /<button type="button" onClick=\{onActualizar\}[^>]*>\s*<RefreshCw [^>]*className=\{actualizando \? 'animate-spin' : ''\}\/> Actualizar/);
+  assert.match(cabecera, /<Link href=\{enlaceVerAnalisis\('cot'\)\}/);
+  assert.match(cabecera, /<ContenidoEnlace icon=\{BarChart3\}>Ver análisis<\/ContenidoEnlace>/);
+  assert.match(codigo, /export const CONTENEDOR_LISTA = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-\[1600px\] mx-auto w-full min-w-0 gap-6';/);
   assert.ok(lista.includes('<div className={CONTENEDOR_LISTA}>'), 'la lista usa el contenedor');
   // Lo de los Bloques 1 a 3 que se queda: la redirección de ?id= y «Nueva desde SC».
   assert.match(lista, /router\.replace\(`\/dashboard\/ventas\/cotizacion\/\$\{numId\}`\)/);
-  assert.match(lista, /<Link href="\/dashboard\/ventas\/solicitud" [^>]*>\s*<Plus [^>]*\/> Nueva desde SC/);
+  assert.match(cabecera, /<Link href="\/dashboard\/ventas\/solicitud" [^>]*>\s*<Plus [^>]*\/> Nueva desde SC/);
+}
+
+console.log('--- B4 T9 r1 (A2): el esqueleto del Suspense de Cotizaciones arma la lista con sus MISMAS piezas ---');
+{
+  const ruta = (r) => new URL(`../src/app/dashboard/ventas/cotizacion/${r}`, import.meta.url);
+  assert.ok(existsSync(ruta('CargandoCotizaciones.tsx')), 'existe cotizacion/CargandoCotizaciones.tsx');
+  const leerCot = (r) => readFileSync(ruta(r), 'utf8').replace(/\r\n/g, '\n');
+  const carga = leerCot('CargandoCotizaciones.tsx');
+  const pagina = leerCot('page.tsx');
+  const lista = leerCot('cotizacion-client.tsx');
+  // page.tsx: el fallback del Suspense es el esqueleto, no el «Cargando...» centrado en h-screen.
+  assert.match(pagina, /import \{ CargandoCotizaciones \} from '\.\/CargandoCotizaciones';/);
+  assert.ok(pagina.includes('<Suspense fallback={<CargandoCotizaciones />}>'), 'el fallback del Suspense');
+  assert.ok(!pagina.includes('h-screen'), 'sin el «Cargando...» de toda la pantalla');
+  // Las piezas son las de la lista (importadas, no copiadas): el contenedor, la cabecera, las pestañas, las columnas que
+  // el usuario guardó, el estado inicial y la franja con «Estás aquí» en Cotización.
+  assert.match(carga, /AccionesCabecera, COLUMNAS_TABLA_COT, CONTENEDOR_LISTA, ID_COT, INICIAL_COT, pestanasDeLaLista,\s*\} from '\.\/cotizacion-client';/);
+  for (const nombre of ['ID_COT', 'INICIAL_COT', 'CONTENEDOR_LISTA', 'COLUMNAS_TABLA_COT']) {
+    assert.match(lista, new RegExp(`\\nexport const ${nombre}\\b`), `${nombre} exportado`);
+  }
+  assert.match(lista, /\nexport function pestanasDeLaLista\(/);
+  assert.match(lista, /\nexport function AccionesCabecera\(/);
+  assert.ok(carga.includes('<div className={CONTENEDOR_LISTA}>'), 'el contenedor de la lista');
+  assert.ok(carga.includes("pasos={pasosDeLista(null, 'COT')}"), 'la franja con las cajas de la lista');
+  assert.ok(carga.includes('idPreferencia={ID_COT}'), 'el modo compacto de la franja de la lista');
+  assert.ok(carga.includes('const prefs = usePreferenciasTabla(ID_COT, COLUMNAS_TABLA_COT);'), 'las columnas que el usuario guardó');
+  assert.ok(carga.includes('const ESTADO_CARGANDO = estadoTablaInicial(INICIAL_COT);'), 'el estado inicial de la lista');
+  assert.ok(carga.includes('const PESTANAS_CARGANDO = pestanasDeLaLista(null);'), 'las pestañas, cargando');
+  assert.ok(carga.includes('<AccionesCabecera onActualizar={nada} actualizando={false} />'), 'la cabecera mide lo mismo');
+  assert.ok(carga.includes('subtitle="Precios y anticipo para el cliente; al confirmar se crea el pedido."'), 'el mismo subtítulo');
+  // Las 4 tarjetas de la lista, cargando, con los mismos botones (la de las activas, activa: la vista inicial).
+  assert.match(carga, /<TarjetaKpi kpi="cot_activas" valor=\{null\} activo onClick=\{nada\} \/>\s*<TarjetaKpi kpi="cot_confirmadas" valor=\{null\} onClick=\{nada\} \/>\s*<TarjetaKpi kpi="cot_monto_confirmado" valor=\{null\} onClick=\{nada\} \/>\s*<TarjetaKpi kpi="cot_total" valor=\{null\} \/>/);
+  assert.ok(carga.includes('placeholder="Buscar por número, cliente, cotizador, solicitud, pedido o producto…"'), 'la misma búsqueda');
+  assert.ok(lista.includes('placeholder="Buscar por número, cliente, cotizador, solicitud, pedido o producto…"'), 'la de la lista');
+  assert.ok((carga.match(/\binert\b/g) ?? []).length >= 4, 'todo inerte');
 }
 
 console.log('OK test_listas_ventas.mjs');

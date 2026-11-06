@@ -849,13 +849,14 @@ type ConteosCOT = Partial<Record<'activas' | 'confirmadas' | 'rechazadas', numbe
 type ColumnasDeTarjeta = readonly [string, string];
 
 /** El id de la lista: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26), y el del
- *  modo compacto de la franja (RP90). */
-const ID_COT = 'ventas.cotizaciones';
+ *  modo compacto de la franja (RP90). B4 T9 r1 (A2): exportado para el esqueleto del Suspense (CargandoCotizaciones). */
+export const ID_COT = 'ventas.cotizaciones';
 /** R8 (atencion_primero_listas = «Sí; con un clic en una columna ordenas como quieras»): primero lo atrasado. */
-const INICIAL_COT = { vista: 'activas', orden: 'atencion' };
+export const INICIAL_COT = { vista: 'activas', orden: 'atencion' };
 /** El contenedor de la lista, el del Hub y el de Solicitudes (T7 y T8): pb-24 deja libre, con la página al fondo, la
- *  esquina del botón flotante de la IA; px-4 hasta xl: a 1024 px con el menú abierto las columnas clave caben (R26). */
-const CONTENEDOR_LISTA = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
+ *  esquina del botón flotante de la IA; px-4 hasta xl: a 1024 px con el menú abierto las columnas clave caben (R26). El
+ *  mismo en la pantalla y en su esqueleto del Suspense (r1, A2). */
+export const CONTENEDOR_LISTA = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
 /** R8: una rechazada está cerrada y nunca va atrasada: desde Rechazadas, «Con atraso» abre Activas (m7 de T8). */
 const VISTAS_SIN_ATRASO = ['rechazadas'];
 /** D39 (m6 de T8): en Kanban la lista va sin filas (limit=0): las tarjetas siguen con su resumen en una consulta barata; las
@@ -992,8 +993,9 @@ function CeldaAcciones({ cot }: { cot: FilaCOT }) {
  * R26 (medido en el banco): a 1024 px con el menú abierto la caja de la tabla deja 704 px cuando la página trae su barra
  * vertical (RP85 contaba 716). Con Cliente en 152 las columnas sumaban 716 y la tabla corría 12 px; Cliente nace en 136
  * (132 + 136 + 120 + 104 + 120 + 88 = 700, 4 px de holgura) y, como es la flexible, toma lo que sobra en pantallas anchas.
+ * r1 (A2): exportadas para el esqueleto del Suspense (las columnas que el usuario guardó, con usePreferenciasTabla).
  */
-const COLUMNAS_TABLA_COT: ColumnaTabla<FilaCOT>[] = [
+export const COLUMNAS_TABLA_COT: ColumnaTabla<FilaCOT>[] = [
   { id: 'numero', titulo: 'COT / SC', ancho: 132, clave: true, fija: 'izquierda', ordenable: 'numero', titleCelda: tituloNumero,
     celda: (cot) => <CeldaNumero cot={cot} /> },
   { id: 'cliente', titulo: 'Cliente', ancho: 136, flexible: true, ordenable: 'cliente',
@@ -1018,14 +1020,36 @@ const COLUMNAS_TABLA_COT: ColumnaTabla<FilaCOT>[] = [
 /**
  * Las pestañas de la lista (TABLA-listas-ventas punto 6): las 3 vistas del servidor con sus conteos (con_conteos: con la
  * búsqueda, sin la vista, los estados ni el semáforo; null mientras cargan: la barra gris, nunca 0). Se fue la pestaña
- * Análisis (R13: «Ver análisis» abre el del Hub). Sin emojis.
+ * Análisis (R13: «Ver análisis» abre el del Hub). Sin emojis. r1 (A2): la misma en la pantalla y en su esqueleto.
  */
-function pestanasDeLaLista(conteos: ConteosCOT | null): PestanaTabla[] {
+export function pestanasDeLaLista(conteos: ConteosCOT | null): PestanaTabla[] {
   return [
     { id: 'activas', etiqueta: 'Activas', conteo: conteos?.activas ?? null },
     { id: 'confirmadas', etiqueta: 'Confirmadas', conteo: conteos?.confirmadas ?? null },
     { id: 'rechazadas', etiqueta: 'Rechazadas', conteo: conteos?.rechazadas ?? null },
   ];
+}
+
+/**
+ * Los botones de la cabecera: «Actualizar», «Ver análisis» (R13: el Análisis del Hub enfocado en Cotizaciones,
+ * ?tab=analisis&foco=cot, enlaceVerAnalisis) y «Nueva desde SC». r1 (A2, el patrón de T8 r1): los mismos en el esqueleto
+ * del Suspense, que los pinta invisibles para que la cabecera mida lo mismo.
+ */
+export function AccionesCabecera({ onActualizar, actualizando }: { onActualizar: () => void; actualizando: boolean }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2.5">
+      <button type="button" onClick={onActualizar} className={`bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm shadow-sm ${FOCO_VISIBLE}`}>
+        <RefreshCw size={15} aria-hidden="true" className={actualizando ? 'animate-spin' : ''}/> Actualizar
+      </button>
+      <Link href={enlaceVerAnalisis('cot')}
+        className={`bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-amber-50 hover:text-amber-800 hover:border-amber-200 flex items-center gap-2 text-sm shadow-sm ${FOCO_VISIBLE}`}>
+        <ContenidoEnlace icon={BarChart3}>Ver análisis</ContenidoEnlace>
+      </Link>
+      <Link href="/dashboard/ventas/solicitud" className={`bg-amber-600 hover:bg-amber-700 text-white px-6 py-2.5 rounded-xl font-bold shadow-md flex items-center gap-2 text-sm ${FOCO_VISIBLE}`}>
+        <Plus size={16} aria-hidden="true"/> Nueva desde SC
+      </Link>
+    </div>
+  );
 }
 
 /** La tarjeta del tablero (KANBAN-ventas-listas punto 6, RP18, D4, D37 y el cruce C5): vuelve a esta lista. */
@@ -1247,25 +1271,13 @@ export default function CotizacionClient() {
       {/* B4 T9: el contenedor del Hub y de Solicitudes (T7 y T8, CONTENEDOR_LISTA). */}
       <div className={CONTENEDOR_LISTA}>
         {/* Header. B4 T9 (FLUJO-ventas-pantallas C.3): la frase corta, sin el código COT-YYYY####. R13 (ANALISIS-ventas
-            punto 7): «Ver análisis» abre el Análisis del Hub enfocado en Cotizaciones (?tab=analisis&foco=cot). */}
+            punto 7): «Ver análisis» abre el Análisis del Hub enfocado en Cotizaciones (?tab=analisis&foco=cot). r1 (A2): los
+            botones son AccionesCabecera, los mismos del esqueleto del Suspense. */}
         <PageHeader
           icon={FileText} color="amber"
           title="Cotizaciones"
           subtitle="Precios y anticipo para el cliente; al confirmar se crea el pedido."
-          actions={(
-            <div className="flex flex-wrap items-center gap-2.5">
-              <button type="button" onClick={recargarLista} className={`bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm shadow-sm ${FOCO_VISIBLE}`}>
-                <RefreshCw size={15} aria-hidden="true" className={actualizando ? 'animate-spin' : ''}/> Actualizar
-              </button>
-              <Link href={enlaceVerAnalisis('cot')}
-                className={`bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-amber-50 hover:text-amber-800 hover:border-amber-200 flex items-center gap-2 text-sm shadow-sm ${FOCO_VISIBLE}`}>
-                <ContenidoEnlace icon={BarChart3}>Ver análisis</ContenidoEnlace>
-              </Link>
-              <Link href="/dashboard/ventas/solicitud" className={`bg-amber-600 hover:bg-amber-700 text-white px-6 py-2.5 rounded-xl font-bold shadow-md flex items-center gap-2 text-sm ${FOCO_VISIBLE}`}>
-                <Plus size={16} aria-hidden="true"/> Nueva desde SC
-              </Link>
-            </div>
-          )}
+          actions={<AccionesCabecera onActualizar={recargarLista} actualizando={actualizando} />}
         />
 
         {/* B4 T9 (KPI-ventas punto 8; R12, RP19): las 4 tarjetas iguales (sin el div a medida ni la variante gradient),
