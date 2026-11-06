@@ -273,7 +273,7 @@ def test_stats_flujo_sin_documentos_no_inventa_cifras(app_client, admin_token, m
 
 def test_stats_periodo_invalido_422(app_client, admin_token):
     """R21: el período se valida a mano: solo los de las tarjetas (7d, 30d, mes); cualquier otro, 422 en español."""
-    for periodo in ("xx", "90d", "personalizado", "12m", "30D"):
+    for periodo in ("xx", "90d", "personalizado", "12m", "30D", "7d\x00"):   # r1 (m7): con un NUL, 422 y no 500
         resp = app_client.get(RUTA, params={"periodo": periodo}, headers=_auth(admin_token))
         assert resp.status_code == 422, (periodo, resp.text)
         assert resp.json()["detail"] == "Período no válido.", periodo
@@ -312,6 +312,30 @@ def test_stats_claves_viejas_y_nuevas(app_client, admin_token):
     for clave in ("cot_monto_confirmado", "pven_monto_vendido", "pven_monto_entregado", "pven_saldo_por_cobrar",
                   "pven_saldo_en_curso", "pven_anticipo"):
         assert float(data["kpis"][clave]).is_integer(), clave   # pesos enteros (redondear_peso)
+
+
+def test_stats_consultas_constantes(app_client, db, admin_token, contador_sql):
+    """r1 (m4): /ventas/stats hace un número fijo de consultas agregadas: con N pedidos (cada uno con su SC y su COT) y
+    con N + 20, las mismas, y 14 como mucho contando la de la sesión."""
+    f = _Fabrica(db)
+
+    def crear(n):
+        for i in range(n):
+            sc = f.sc("CONFIRMADA")
+            cot = f.cot("CONFIRMADA", sc=sc, total_cop=100_000 + i)
+            f.pven("PENDIENTE_COMPRA" if i % 2 else "ENTREGADO", cot=cot, total_cop=100_000 + i, saldo_cop=i)
+
+    def medir():
+        with contador_sql.ventana() as v:
+            _stats(app_client, admin_token)
+        return v.consultas
+
+    crear(3)
+    con_pocos = medir()
+    crear(20)
+    con_mas = medir()
+    assert con_pocos == con_mas, (con_pocos, con_mas)
+    assert con_mas <= 14, con_mas
 
 
 def test_stats_pxp_pendiente_sigue_contando(app_client, db, admin_token):

@@ -11,9 +11,10 @@ de Ventas y, después, el Dashboard General y Finanzas (T20 reutiliza ventas_por
   (rv.pven_vigente_de_cot), con 1 decimal (None sin COT).
 - Saldo por cobrar = Σ max(0, saldo_cop) de los pedidos con dinero (expr_saldo_por_cobrar): una foto de hoy, sin %. Un
   pedido entregado o facturado que todavía debe sigue por cobrar (R7 anula el «pedidos no cerrados» del diseño).
-- Pagos recibidos (pagos_recibidos_q) = SaleOrderPayment CONFIRMADO, de un tipo de TIPOS_PAGO_INGRESO y con un método
-  que no es TRASLADO, SALDO_A_FAVOR ni CONVERSION_COTIZACION (el saldo trasladado no es dinero nuevo, R6), filtrados por
-  su `fecha` (Date: días de Colombia). Un pago sin método sí es dinero que entró.
+- Pagos recibidos (pagos_recibidos_q) = SaleOrderPayment CONFIRMADO o TRASLADADO (r1, I1: el pago de origen cuyo dinero
+  pasó a otro pedido entró una vez, en su fecha), de un tipo de TIPOS_PAGO_INGRESO y con un método que no es TRASLADO,
+  SALDO_A_FAVOR ni CONVERSION_COTIZACION (el saldo trasladado no es dinero nuevo, R6), filtrados por su `fecha` (Date:
+  días de Colombia). Un pago sin método sí es dinero que entró.
 - Las solicitudes de Soporte Técnico quedan fuera (R8: fuera de las tarjetas y del Hub), con rv.sin_soporte.
 - Los días son de Colombia: los bordes del Periodo (core/periodos.py) y las cubetas de expr_cubeta (ZONA_COLOMBIA, RP1).
 - Los montos van en pesos enteros (analisis.dinero = redondear_peso). Las fechas de los movimientos, con fechas.iso_z.
@@ -42,8 +43,8 @@ from app.core.fechas import iso_z
 from app.core.listados import texto_busqueda
 from app.core.periodos import Periodo, contar_en, en_rango, sumar_en
 from app.core.textos_actividad import TIPOS_PAGO, etiqueta_estado, etiqueta_tipo_solicitud
-from app.core.ventas_dinero import (METODO_PAGO_SALDO_A_FAVOR, METODO_PAGO_SIN_VERIFICAR, METODO_PAGO_TRASLADO,
-                                    TIPOS_PAGO_INGRESO)
+from app.core.ventas_dinero import (ESTADO_PAGO_TRASLADADO, METODO_PAGO_SALDO_A_FAVOR, METODO_PAGO_SIN_VERIFICAR,
+                                    METODO_PAGO_TRASLADO, TIPOS_PAGO_INGRESO)
 from app.models.catalog import Category, Product, ProductSKU
 from app.models.erp_documents import CustomerRequest, SaleOrder, SalesQuotation
 from app.models.fase1b import SaleOrderLineErp
@@ -54,16 +55,23 @@ FOCO_POR_DEFECTO = "hub"
 TOP_POR_DEFECTO = 5
 MIN_PRODUCTO, MAX_PRODUCTO = 2, 60
 
-ERROR_FOCO = "El foco «{}» no existe: usa hub, sc, cot o pven."
+# r1 (m5): «{:.40}» recorta a 40 caracteres el valor que se repite (un foco de 2000 caracteres no vuelve entero). El
+# endpoint, antes de dar formato, responde con listados.MENSAJE_CONTROL si el foco trae un carácter de control (D46).
+ERROR_FOCO = "El foco «{:.40}» no existe: usa hub, sc, cot o pven."
 ERROR_PRODUCTO = "El producto debe tener entre 2 y 60 caracteres."
 # RP106 y D3 (el usuario contestó «Sin IVA» el 2026-10-27): el aviso de la dona «Ventas por categoría».
 AVISO_SIN_IVA = "Por categoría se suma el valor de los productos sin IVA; el total puede ser menor que Ventas."
 
 MAX_MOVIMIENTOS = 8    # MAX_MOVIMIENTOS de lib/analisis.js
 MAX_ASESORES = 8       # las barras «Solicitudes por asesor»: 8 y el resto en «Otros»
-ESTADO_PAGO_CONFIRMADO = "CONFIRMADO"
+ESTADO_PAGO_CONFIRMADO = "CONFIRMADO"   # core/ventas_dinero.py no tiene esta constante (solo ESTADO_PAGO_TRASLADADO)
+# r1 (I1, ruling de fixes-6C-r1, gana sobre la letra de RP60): un pago recibido está CONFIRMADO o TRASLADADO. Al reconvertir
+# la COT de un pedido cancelado, _trasladar_saldos_a_favor (erp_ventas_fase4) pasa los pagos de origen a TRASLADADO y crea
+# en el pedido nuevo un pago con método TRASLADO: el dinero entró una vez, con el pago de origen y en su fecha.
+ESTADOS_PAGO_RECIBIDO = (ESTADO_PAGO_CONFIRMADO, ESTADO_PAGO_TRASLADADO)
 # Los métodos de un pago que no son dinero nuevo (R6, RP60): el saldo trasladado desde un pedido cancelado, lo que queda a
 # favor y el pago automático de la conversión que nadie verificó (METODO_PAGO_SIN_VERIFICAR = 'CONVERSION_COTIZACION').
+# Un pago TRASLADO o SALDO_A_FAVOR que se vuelve a trasladar queda TRASLADADO y lo sigue excluyendo su método.
 METODOS_SIN_DINERO_NUEVO = (METODO_PAGO_TRASLADO, METODO_PAGO_SALDO_A_FAVOR, METODO_PAGO_SIN_VERIFICAR)
 ETIQUETAS_CANAL = {"CRM": "Asesor", "WEB": "Tienda web", "PRESENCIAL": "Presencial"}
 TIPO_SC_POR_DEFECTO = "Cotizacion de Producto"   # el default de CustomerRequest.tipo_solicitud
@@ -94,7 +102,11 @@ def expr_saldo_por_cobrar(pven=SaleOrder):
 
 
 def _like(producto):
-    return f"%{producto.strip()}%" if producto and producto.strip() else None
+    """El patrón ILIKE del campo Producto, o None sin producto. r1 (m6): pasa por validar_producto (idempotente), así las
+    funciones públicas que reutiliza T20 (ventas_por_cubeta, ventas_y_pedidos, conversion_cotizaciones) nunca le pasan un
+    NUL a psycopg2: un producto que no vale da el ValueError en español de validar_producto."""
+    texto = validar_producto(producto)
+    return f"%{texto}%" if texto else None
 
 
 def _con_producto(q, columna, like):
@@ -178,13 +190,18 @@ def ventas_por_cubeta(db: Session, periodo: Periodo, *, anterior: bool = False, 
 
 def pagos_recibidos_q(db: Session, desde: date, hasta: date):
     """La consulta de los pagos recibidos entre `desde` y `hasta` (días de Colombia, los dos incluidos, como
-    Periodo.desde y Periodo.hasta) contra SaleOrderPayment.fecha (Date): estado CONFIRMADO, tipo en TIPOS_PAGO_INGRESO y
-    metodo_pago fuera de METODOS_SIN_DINERO_NUEVO (o sin método). Devuelve el Query para que quien llama agregue (sum,
-    group_by) o una sus pedidos."""
+    Periodo.desde y Periodo.hasta) contra SaleOrderPayment.fecha (Date): estado CONFIRMADO o TRASLADADO
+    (ESTADOS_PAGO_RECIBIDO), tipo en TIPOS_PAGO_INGRESO y metodo_pago fuera de METODOS_SIN_DINERO_NUEVO (o sin método).
+    Devuelve el Query para que quien llama agregue (sum, group_by) o una sus pedidos.
+
+    r1 (I1, ruling de fixes-6C-r1): cada peso que entró cuenta UNA vez, en la fecha del pago original. Cuando un pedido
+    cancelado traslada su dinero a otro (erp_ventas_fase4._trasladar_saldos_a_favor), el pago de origen queda TRASLADADO
+    y cuenta; el ANTICIPO del pedido nuevo (método TRASLADO) y lo que queda a favor en el cancelado (método
+    SALDO_A_FAVOR) no cuentan, por su método. Un pago REVERTIDO o ANULADO no cuenta."""
     pago = SaleOrderPayment
     return db.query(pago).filter(
         pago.fecha >= desde, pago.fecha <= hasta,
-        pago.estado == ESTADO_PAGO_CONFIRMADO,
+        pago.estado.in_(ESTADOS_PAGO_RECIBIDO),
         pago.tipo.in_(TIPOS_PAGO_INGRESO),
         or_(pago.metodo_pago.is_(None), pago.metodo_pago.notin_(METODOS_SIN_DINERO_NUEVO)),
     )
@@ -317,12 +334,14 @@ def _dona_categorias(db: Session, periodo: Periodo, like) -> tuple:
     round(base × descuento_pct / 100), como core/iva.totales_lineas_pedido (RP32 con su ajuste), sin IVA (D3); una
     línea sin unidades vigentes no cuenta. La categoría sale de product_skus → products → categories; una línea sin SKU
     va a «Sin categoría». round() de PostgreSQL sobre numeric redondea las mitades alejándose de cero, como
-    redondear_peso. Una consulta."""
+    redondear_peso. Una consulta. r1 (m3): los pedidos sin categoría que se cuentan para el aviso son los que tienen una
+    línea con neto > 0 en ese segmento (una línea de $0 sin SKU, un obsequio, no hace salir el aviso)."""
     linea = SaleOrderLineErp
     vigentes = linea.quantity - func.coalesce(linea.quantity_cancelled, 0)
     base = func.round(vigentes * linea.unit_price_cop)
     neto = base - func.round(base * func.coalesce(linea.descuento_pct, 0) / 100)
-    q = (db.query(Category.id, Category.name, func.coalesce(func.sum(neto), 0), func.count(func.distinct(linea.so_id)))
+    q = (db.query(Category.id, Category.name, func.coalesce(func.sum(neto), 0),
+                  func.count(func.distinct(linea.so_id)).filter(neto > 0))
          .select_from(linea)
          .join(SaleOrder, SaleOrder.id == linea.so_id)
          .outerjoin(ProductSKU, ProductSKU.id == linea.sku_id)
@@ -341,8 +360,11 @@ def _dona_categorias(db: Session, periodo: Periodo, like) -> tuple:
 
 
 def _avisos_de_categorias(dona, sin_categoria) -> list:
+    """Los avisos de la dona de categorías: «N pedidos tienen productos sin categoría» solo si el segmento «Sin categoría»
+    se ve en la dona (r1, m3: con valor 0 segmentos() lo quita y con más de 6 categorías puede quedar dentro de «Otros»),
+    y el de RP106 si la dona tiene segmentos."""
     avisos = []
-    if sin_categoria:
+    if sin_categoria and any(s["clave"] == "sin_categoria" for s in dona["segmentos"]):
         avisos.append("1 pedido tiene productos sin categoría" if sin_categoria == 1
                       else f"{sin_categoria} pedidos tienen productos sin categoría")
     if dona["segmentos"]:
@@ -652,7 +674,7 @@ def analisis_ventas(db: Session, periodo: Periodo, foco=FOCO_POR_DEFECTO, top=TO
     - pven: Vendido, Pedidos, Recaudado y Saldo por cobrar (foto); la línea de ventas; por estado y por canal; «Vendido
       vs. recaudado»; los últimos pagos y pedidos; los mejores clientes."""
     if foco not in _POR_FOCO:
-        raise ValueError(ERROR_FOCO.format(foco))
+        raise ValueError(ERROR_FOCO.format(str(foco)))
     top = validar_top(top)
     producto = validar_producto(producto)
     bloques = _POR_FOCO[foco](db, periodo, top, producto)

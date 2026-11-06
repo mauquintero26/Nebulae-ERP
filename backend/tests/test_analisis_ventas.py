@@ -232,11 +232,21 @@ def test_dona_por_categoria(app_client, db, admin_token, sku, category):
 
 
 def test_dona_por_categoria_sin_lineas_no_trae_avisos(app_client, db, admin_token, sku, category):
+    """r1 (m3): el aviso «N pedidos tienen productos sin categoría» cuenta solo los pedidos con neto > 0 en ese
+    segmento; una línea de $0 sin SKU (un obsequio) no hace salir el aviso."""
     f = _Fabrica(db)
+    data = _analisis(app_client, admin_token, foco="hub")
+    assert _dona(data, "categoria")["segmentos"] == [] and data["avisos"] == []
+    obsequio = f.pven(datetime(2001, 1, 3, 15, 0), 100_000)
+    f.linea(obsequio, 1, 0)                            # sin SKU y de $0
     data = _analisis(app_client, admin_token, foco="hub")
     assert _dona(data, "categoria")["segmentos"] == [] and data["avisos"] == []
     pedido = f.pven(datetime(2001, 1, 4, 15, 0), 100_000)
     f.linea(pedido, 1, 100_000, sku=sku)
+    f.linea(pedido, 1, 0)                              # otro obsequio, en un pedido con categoría
+    data = _analisis(app_client, admin_token, foco="hub")
+    assert _segmentos(_dona(data, "categoria")) == {category.name: 100_000}
+    assert data["avisos"] == [AVISO_IVA]
     otro = f.pven(datetime(2001, 1, 6, 15, 0), 100_000)
     f.linea(otro, 1, 20_000)
     tercero = f.pven(datetime(2001, 1, 7, 15, 0), 100_000)
@@ -245,16 +255,38 @@ def test_dona_por_categoria_sin_lineas_no_trae_avisos(app_client, db, admin_toke
     assert data["avisos"] == ["2 pedidos tienen productos sin categoría", AVISO_IVA]
 
 
+def test_aviso_sin_categoria_solo_si_el_segmento_se_ve(app_client, db, admin_token, brand):
+    """r1 (m3): si «Sin categoría» no aparece en la dona (con más de 6 categorías, segmentos() lo junta en «Otros»), no
+    sale su aviso; el de RP106 sí, porque la dona tiene segmentos."""
+    from app.models.catalog import Category, Product, ProductSKU
+    f = _Fabrica(db)
+    pedido = f.pven(datetime(2001, 1, 4, 15, 0), 10_000_000)
+    for i in range(7):
+        categoria = f.guardar(Category(name=f"Cat {f.sufijo} {i}"))
+        producto = f.guardar(Product(brand_id=brand.id, category_id=categoria.id, name=f"Prod {f.sufijo} {i}",
+                                     type="Fisico", base_currency="USD", uom="Ud"))
+        sku = f.guardar(ProductSKU(product_id=producto.id, sku=f"TST-{f.sufijo}-{i}", cost_price=1, sale_price=2))
+        f.linea(pedido, 1, 1_000_000 + i, sku=sku)
+    f.linea(pedido, 1, 5_000)                          # sin SKU: queda en «Otros»
+    data = _analisis(app_client, admin_token, foco="hub")
+    claves = [s["clave"] for s in _dona(data, "categoria")["segmentos"]]
+    assert "sin_categoria" not in claves and claves[-1] == "_otros"
+    assert data["avisos"] == [AVISO_IVA]
+
+
 # ─── 5) Conversión de cotizaciones (R7) ───────────────────────────────────────────────────────────────────────────────
 
 def test_conversion_cotizaciones(app_client, db, admin_token):
-    """4 COT del período: una con un pedido vigente y otra solo con un pedido CANCELADO -> 25,0."""
+    """5 COT del período: una con un pedido vigente, otra solo con un pedido CANCELADO y otra cuyo único pedido está
+    DEVUELTO_TOTAL -> 40,0 (2 de 5). r1 (m2): la conversión es «con un PVEN distinto de CANCELADO» (R7): el devuelto sí
+    cuenta como convertida aunque su dinero no sume (no es la regla de f_pven_con_dinero)."""
     f = _Fabrica(db)
-    cots = [f.cot(datetime(2001, 1, d, 15, 0), estado="CONFIRMADA") for d in (2, 3, 4, 5)]
+    cots = [f.cot(datetime(2001, 1, d, 15, 0), estado="CONFIRMADA") for d in (2, 3, 4, 5, 6)]
     f.pven(datetime(2001, 1, 6, 15, 0), 100_000, cot=cots[0])
     f.pven(datetime(2001, 1, 6, 16, 0), 100_000, estado="CANCELADO", cot=cots[1])
+    f.pven(datetime(2001, 1, 7, 15, 0), 100_000, estado="DEVUELTO_TOTAL", cot=cots[4])
     k = _kpis(_analisis(app_client, admin_token, foco="hub"))
-    assert (k["cot_conversion"]["valor"], k["cot_conversion"]["anterior"]) == (25.0, None)
+    assert (k["cot_conversion"]["valor"], k["cot_conversion"]["anterior"]) == (40.0, None)
 
 
 # ─── 6) Ranking y top (D34) ───────────────────────────────────────────────────────────────────────────────────────────
@@ -446,6 +478,46 @@ def test_foco_pven_recaudado(app_client, db, admin_token):
     assert _segmentos(_dona(data, "canal")) == {"Asesor": 1_000_000}
 
 
+def test_recaudado_cuenta_una_vez_el_dinero_trasladado(app_client, db, admin_token):
+    """r1 (I1, ruling de fixes-6C-r1): al reconvertir la COT de un pedido cancelado, erp_ventas_fase4.
+    _trasladar_saldos_a_favor deja los pagos de origen en TRASLADADO y crea en el pedido nuevo un ANTICIPO CONFIRMADO con
+    método TRASLADO (y, si no cupo todo, un SALDO_A_FAVOR CONFIRMADO en el cancelado). El dinero entró UNA vez: cuenta
+    el pago de origen (estado TRASLADADO), en su fecha; los de método TRASLADO y SALDO_A_FAVOR siguen fuera.
+    - Traslado completo: ANTICIPO de 600.000 (3 ene) pasado a un pedido nuevo de 1.000.000.
+    - Traslado parcial: ANTICIPO de 500.000 (4 ene) a un pedido nuevo de 300.000; quedan 200.000 a favor."""
+    from decimal import Decimal
+    from app.api.v1.erp_ventas_fase4 import _trasladar_saldos_a_favor
+    from app.core.ventas_dinero import saldos_a_favor_de_cotizacion
+    f = _Fabrica(db)
+
+    def reconvertir(dia_pago, monto, total_nuevo, dia_nuevo):
+        cot = f.cot(datetime(2001, 1, 2, 9, 0), estado="CONFIRMADA", total=monto)
+        cancelado = f.pven(datetime(2001, 1, 2, 10, 0), monto, estado="CANCELADO", cot=cot)
+        f.pago(cancelado, monto, dia_pago)
+        nuevo = f.pven(datetime.combine(dia_nuevo, datetime.min.time()).replace(hour=11), total_nuevo, cot=cot)
+        saldos = saldos_a_favor_de_cotizacion(db, cot.id, bloquear=True)
+        _trasladar_saldos_a_favor(db, saldos, Decimal(min(monto, total_nuevo)), nuevo, cot, "Prueba T6C", dia_nuevo)
+        db.commit()
+        return cancelado, nuevo
+
+    completo, _ = reconvertir(date(2001, 1, 3), 600_000, 1_000_000, date(2001, 1, 6))
+    parcial, _ = reconvertir(date(2001, 1, 4), 500_000, 300_000, date(2001, 1, 7))
+    db.expire_all()
+    estados = {(p.sale_order_id, p.metodo_pago, p.estado) for p in db.query(SaleOrderPayment).filter(
+        SaleOrderPayment.sale_order_id.in_([completo.id, parcial.id]))}
+    assert (completo.id, "Transferencia bancaria", "TRASLADADO") in estados          # el dato que deja la conversión
+    assert (parcial.id, "SALDO_A_FAVOR", "CONFIRMADO") in estados
+
+    data = _analisis(app_client, admin_token, foco="pven")
+    assert _kpis(data)["recaudado"]["valor"] == 1_100_000
+    recaudado = _serie(data["barras"], "recaudado")["valores"]
+    assert (recaudado[2], recaudado[3], sum(recaudado)) == (600_000, 500_000, 1_100_000)
+    for foco in ("pven", "hub"):
+        pagos = [(m["monto"], m["doc_id"]) for m in _analisis(app_client, admin_token, foco=foco)["movimientos"]["filas"]
+                 if m["tipo"] == "PAGO"]
+        assert pagos == [(500_000, parcial.id), (600_000, completo.id)], foco   # cada pago, una sola vez
+
+
 def test_pagos_se_llaman_como_en_la_actividad(app_client, db, admin_token):
     """RP31: el título de cada pago es textos_actividad.TIPOS_PAGO[tipo], en el Hub y en Pedidos."""
     f = _Fabrica(db)
@@ -540,6 +612,15 @@ def test_errores_422(app_client, admin_token):
         ({**VENTANA, "foco": "otro"}, "El foco «otro» no existe: usa hub, sc, cot o pven."),
         ({**VENTANA, "foco": "HUB"}, "El foco «HUB» no existe: usa hub, sc, cot o pven."),
         ({**VENTANA, "producto": "cu\x00na"}, "La búsqueda no puede llevar caracteres de control."),
+        # r1 (m7): entradas hostiles de punta a punta, con el texto por igualdad (D46).
+        ({"periodo": "x\x00"}, "Período no válido."),
+        ({**VENTANA, "desde": "2001-02-30"}, "Las fechas deben tener el formato AAAA-MM-DD."),
+        ({**VENTANA, "desde": "1998-01-01"}, "El período no puede ser mayor a 2 años."),
+        ({**VENTANA, "top": "5\x00"}, "El ranking solo puede mostrar 5, 10 o 25."),
+        # r1 (m5): un foco con un carácter de control da el 422 de D46; uno larguísimo se repite recortado a 40.
+        ({**VENTANA, "foco": "hub\x00"}, "La búsqueda no puede llevar caracteres de control."),
+        ({**VENTANA, "foco": "\x07"}, "La búsqueda no puede llevar caracteres de control."),
+        ({**VENTANA, "foco": "z" * 2000}, f"El foco «{'z' * 40}» no existe: usa hub, sc, cot o pven."),
     ]
     for params, texto in casos:
         assert _error(app_client, admin_token, params) == texto, params
@@ -618,5 +699,33 @@ def test_ventas_por_cubeta_y_pagos_recibidos(db):
     f.pago(a, 200_000, date(2001, 1, 10))
     f.pago(a, 400_000, date(2001, 1, 11))
     f.pago(a, 800_000, date(2000, 12, 31))
+    # r1 (I1): un pago de origen TRASLADADO es dinero que entró (cuenta); uno TRASLADADO con método TRASLADO o
+    # SALDO_A_FAVOR (un traslado que se volvió a trasladar) sigue fuera por su método; un REVERTIDO no cuenta.
+    f.pago(a, 30_000, date(2001, 1, 5), estado="TRASLADADO")
+    f.pago(a, 40_000, date(2001, 1, 5), metodo="TRASLADO", estado="TRASLADADO")
+    f.pago(a, 50_000, date(2001, 1, 5), metodo="SALDO_A_FAVOR", estado="TRASLADADO")
+    f.pago(a, 60_000, date(2001, 1, 5), estado="REVERTIDO")
     pagos = pagos_recibidos_q(db, periodo.desde, periodo.hasta)
-    assert sorted(int(p.monto) for p in pagos.all()) == [100_000, 200_000]
+    assert sorted(int(p.monto) for p in pagos.all()) == [30_000, 100_000, 200_000]
+
+
+def test_las_funciones_publicas_validan_el_producto(db):
+    """r1 (m6): ventas_por_cubeta, ventas_y_pedidos y conversion_cotizaciones (las que reutiliza T20) validan el
+    producto con validar_producto: un carácter de control da el ValueError de D46 (nunca llega un NUL a psycopg2) y un
+    texto de menos de 2 o más de 60 caracteres, el de RP69. En blanco no filtra."""
+    from app.core.analisis_ventas import (ERROR_PRODUCTO, conversion_cotizaciones, ventas_por_cubeta,
+                                          ventas_y_pedidos)
+    from app.core.listados import MENSAJE_CONTROL
+    from app.core.periodos import resolver_periodo
+    periodo = resolver_periodo("personalizado", "2001-01-01", "2001-01-10")
+    llamadas = (lambda p: ventas_por_cubeta(db, periodo, producto=p), lambda p: ventas_y_pedidos(db, periodo, p),
+                lambda p: conversion_cotizaciones(db, periodo, p))
+    for llamar in llamadas:
+        for producto, texto in (("cu\x00na", MENSAJE_CONTROL), ("a", ERROR_PRODUCTO), ("x" * 61, ERROR_PRODUCTO)):
+            try:
+                llamar(producto)
+            except ValueError as e:
+                assert str(e) == texto, (producto, str(e))
+            else:
+                raise AssertionError(f"{producto!r} debía dar ValueError")
+        llamar("   ")   # en blanco: sin filtro, sin error

@@ -5461,7 +5461,9 @@ def ventas_analisis(
     cot o pven; top: 5 (por defecto), 10 o 25; producto: de 2 a 60 caracteres (RP69). Todo se declara como texto y se
     valida aqui (R21): un valor que no sirve responde 422 con su texto en español. Los errores del calculo no se
     convierten en 422: llegan como 500."""
-    foco = _parametro_de_lista(foco, av.FOCOS, av.ERROR_FOCO) or av.FOCO_POR_DEFECTO
+    # r1 (m5): un foco con un caracter de control da el 422 de D46 (MENSAJE_CONTROL, _sin_caracteres_de_control de T6B);
+    # si no, el de ERROR_FOCO repite el valor recortado a 40 caracteres.
+    foco = _parametro_de_lista(_sin_caracteres_de_control(foco), av.FOCOS, av.ERROR_FOCO) or av.FOCO_POR_DEFECTO
     try:
         p = resolver_periodo(periodo, desde, hasta)
         top = validar_top(top if isinstance(top, str) and top.strip() else av.TOP_POR_DEFECTO)
