@@ -777,4 +777,183 @@ console.log('--- B4 T8 r1: el cableado de la lista de Solicitudes (A2, A3, m1, m
   assert.ok(lista.includes('<div className={CONTENEDOR_LISTA}>'), 'la lista usa el mismo contenedor');
 }
 
+console.log('--- B4 T9 TEST 1: tarjetasCotizaciones — las 4 tarjetas de Cotizaciones con el resumen del servidor (RP19) ---');
+{
+  // RP19 (3): cot_activas ← activas, cot_confirmadas ← confirmadas, cot_monto_confirmado ← monto_confirmado y cot_total
+  // ← total, con las ayudas de COT-LISTA (las de las StatCard de antes) armadas con los números del resumen.
+  const resumen = {
+    activas: 9, confirmadas: 3, con_pedido: 1, por_convertir: 2, rechazadas: 4, total: 16, monto_confirmado: 11000,
+    sin_calc: 2, vencen_pronto: 3, sin_atender: 1,
+  };
+  assert.deepEqual(listas.tarjetasCotizaciones(resumen), {
+    activas: { valor: 9, ayuda: '2 sin precio' },
+    confirmadas: { valor: 3, ayuda: '1 con pedido de venta · 2 por convertir' },
+    monto_confirmado: { valor: 11000, ayuda: '1 con pedido de venta vigente' },
+    total: { valor: 16, ayuda: '4 rechazadas' },
+  });
+  const t = (cambios) => listas.tarjetasCotizaciones({ ...resumen, ...cambios });
+  // Activas: «Todas calculadas» sin ninguna sin precio.
+  assert.equal(t({ sin_calc: 0 }).activas.ayuda, 'Todas calculadas');
+  assert.equal(t({ sin_calc: 'x' }).activas.ayuda, 'Todas calculadas', 'lo que no es un número cuenta como 0');
+  // Confirmadas: «Sin confirmadas», «N con pedido · M por convertir» o «Todas con pedido de venta».
+  assert.equal(t({ confirmadas: 0, con_pedido: 0, por_convertir: 0 }).confirmadas.ayuda, 'Sin confirmadas');
+  assert.equal(t({ confirmadas: 2, con_pedido: 2, por_convertir: 0 }).confirmadas.ayuda, 'Todas con pedido de venta');
+  assert.equal(t({ con_pedido: 0, por_convertir: 3 }).confirmadas.ayuda, '0 con pedido de venta · 3 por convertir');
+  // El total: el singular de «rechazada».
+  assert.equal(t({ rechazadas: 1 }).total.ayuda, '1 rechazada');
+  assert.equal(t({ rechazadas: 0 }).total.ayuda, '0 rechazadas');
+  // El monto: pesos enteros (el servidor lo manda como float: 11000.0); lo que no es un número, null («—»).
+  assert.equal(t({ monto_confirmado: 1062523.4 }).monto_confirmado.valor, 1062523);
+  assert.equal(t({ monto_confirmado: 0 }).monto_confirmado.valor, 0);
+  for (const malo of ['11000', null, undefined, NaN, Infinity]) assert.equal(t({ monto_confirmado: malo }).monto_confirmado.valor, null, String(malo));
+  // Sin resumen (cargando o con error): null, la franja pinta las barras grises o «—» (nunca 0).
+  for (const nada of [null, undefined, 'x', 3, []]) assert.equal(listas.tarjetasCotizaciones(nada), null, String(nada));
+  // Un conteo que falta o no sirve queda en null (la tarjeta dice «—»), no en 0.
+  const incompleto = listas.tarjetasCotizaciones({ activas: 5, confirmadas: 'x', total: -1 });
+  assert.deepEqual([incompleto.activas.valor, incompleto.confirmadas.valor, incompleto.monto_confirmado.valor, incompleto.total.valor],
+    [5, null, null, null]);
+  assert.equal(incompleto.confirmadas.ayuda, 'Sin confirmadas');
+}
+
+console.log('--- B4 T9 TEST 2: fechaPorVencer — la Entrega est. en ámbar (la regla de isExpiringSoon, fuera del render) ---');
+{
+  // La de antes: no pasó todavía y faltan `dias` días o menos (7 por defecto). La fecha del API llega en UTC sin zona.
+  const ahora = Date.UTC(2026, 10, 6, 15, 0, 0);
+  const DIA = 86400000;
+  assert.equal(listas.fechaPorVencer('2026-11-06T15:00:00', 7, ahora), true, 'ahora mismo: todavía no pasó');
+  assert.equal(listas.fechaPorVencer('2026-11-13T15:00:00', 7, ahora), true, 'justo 7 días');
+  assert.equal(listas.fechaPorVencer('2026-11-13T15:00:01', 7, ahora), false, 'más de 7 días');
+  assert.equal(listas.fechaPorVencer('2026-11-06T14:59:59', 7, ahora), false, 'ya pasó (eso es fechaVencida)');
+  assert.equal(listas.fechaPorVencer('2026-11-08 15:00:00', 7, ahora), true, 'con espacio, como el backend');
+  assert.equal(listas.fechaPorVencer('2026-11-08T15:00:00Z', 1, ahora), false, 'con otro plazo');
+  assert.equal(listas.fechaPorVencer(new Date(ahora + 3 * DIA).toISOString(), undefined, ahora), true, '7 días por defecto');
+  for (const nada of [null, undefined, '', 'x', 5]) assert.equal(listas.fechaPorVencer(nada, 7, ahora), false, String(nada));
+  // Una fecha no es las dos cosas a la vez.
+  for (const iso of ['2026-11-01T00:00:00', '2026-11-07T00:00:00', '2026-12-01T00:00:00']) {
+    assert.ok(!(listas.fechaVencida(iso, ahora) && listas.fechaPorVencer(iso, 7, ahora)), iso);
+  }
+}
+
+console.log('--- B4 T9: el cableado de la lista de Cotizaciones con el servidor (el patrón de T8; D27) ---');
+{
+  const fuente = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/cotizacion-client.tsx', import.meta.url), 'utf8')
+    .replace(/\r\n/g, '\n');
+  // Solo el código (sin comentarios): un comentario puede citar lo que se fue.
+  const codigo = fuente.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const lista = codigo.slice(codigo.indexOf('export default function CotizacionClient('));
+  assert.ok(lista.length > 1000, 'se lee la lista');
+
+  // Bloque 1 (R5, D40): el estado único y una sola llamada con los conteos y el resumen; nunca las 200 más recientes ni los
+  // días de alerta de la Configuración (el atraso y los conteos son del servidor, R8).
+  assert.match(codigo, /const ID_COT = 'ventas\.cotizaciones';/);
+  assert.match(codigo, /const INICIAL_COT = \{ vista: 'activas', orden: 'atencion' \};/);
+  assert.match(lista, /const \[estado, despachar, listo\] = useEstadoTabla\(ID_COT, INICIAL_COT\);/);
+  assert.match(lista, /ruta: '\/ventas\/cotizaciones', estado, conConteos: true, conResumen: true, esperar: !listo, despachar,\s*extra: enKanban \? EXTRA_TABLERO : null,/);
+  assert.match(codigo, /const EXTRA_TABLERO = \{ limit: 0 \};/);
+  for (const viejo of ['limit=200', "'/ventas/config'", 'JSON.stringify(c)', 'pestanaCotizacion(', 'diasAlerta(', 'Date.now()', 'useVistaGuardada']) {
+    assert.ok(!lista.includes(viejo), `la lista ya no usa ${viejo}`);
+  }
+  // m5 de T8: la llegada sin filas de Kanban deja la tabla y el total en «cargando» hasta que llega la página.
+  assert.match(lista, /const llegadaAhora = llegadaDeListado\(llegada, listado\.crudo, enKanban\);\s*if \(llegadaAhora !== llegada\) setLlegada\(llegadaAhora\);/);
+  assert.match(lista, /const sinPagina = !enKanban && llegadaAhora\.sinFilas && !listado\.error;/);
+  assert.match(lista, /total=\{sinPagina \? null : listado\.total\}\s*cargando=\{listado\.cargandoInicial \|\| sinPagina\}/);
+  assert.match(lista, /total: sinPagina \? null : listado\.total,\s*estadoTotal: estadoDelTotal\(\{\s*total: listado\.total, cargando: listado\.cargandoInicial \|\| sinPagina,/);
+  // «Actualizar» recarga la tabla, el tablero y la franja.
+  assert.match(lista, /const recargarLista = useCallback\(\(\) => \{\s*recargarListado\(\);\s*recargarTablero\(\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*\}, \[recargarListado, recargarTablero\]\);/);
+  assert.match(lista, /<button type="button" onClick=\{recargarLista\}[^>]*>\s*<RefreshCw [^>]*\/> Actualizar/);
+
+  // Bloque 2 (H15, H17, m2 de T8): las 3 pestañas con los conteos del servidor (sin Análisis), el filtro con las opciones
+  // de la pestaña (o del tablero en Kanban) y el conmutador con la poda de accionModo.
+  assert.match(codigo, /\{ id: 'activas', etiqueta: 'Activas', conteo: conteos\?\.activas \?\? null \},\s*\{ id: 'confirmadas', etiqueta: 'Confirmadas', conteo: conteos\?\.confirmadas \?\? null \},\s*\{ id: 'rechazadas', etiqueta: 'Rechazadas', conteo: conteos\?\.rechazadas \?\? null \},\s*\];/);
+  assert.ok(!/'Analisis'|'Análisis'/.test(lista), 'sin la pestaña Análisis');
+  assert.match(lista, /<BarraTabla\s+estado=\{estado\}\s+onEstado=\{alCambiarBarra\}\s+pestanas=\{enKanban \? undefined : pestanas\}/);
+  assert.match(lista, /opcionesEstados=\{enKanban \? OPCIONES_ESTADOS_TABLERO_COT : opcionesEstadosCotizaciones\}/);
+  assert.match(lista, /kanbanDisponible\n/);
+  assert.match(lista, /if \(accion\.tipo === 'modo'\) \{\s*const modo = String\(accion\.valor\);\s*despachar\(accionModo\(estado, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_COT : opcionesEstadosCotizaciones\)\);\s*\} else despachar\(accion\);/);
+  // m8 de T8: el «vacío» memoizado (la búsqueda y la pestaña), con el enlace a Solicitudes en Activas.
+  assert.match(lista, /const vacioLista = useMemo\(\(\) => \{[\s\S]*?Ir a Solicitudes para crear una COT[\s\S]*?\}, \[estado\.q, estado\.vista\]\);/);
+  assert.match(lista, /vacio=\{vacioLista\}/);
+
+  // Bloque 3 (R26, RP85, D41): la tabla estándar en el servidor con sus columnas; Anticipo y Entrega est. ocultas; «Ver»
+  // siempre a la vista (sin opacity-0 ni group-hover) y el menú de la fila con «Abrir solicitud» y «Ver pedido».
+  assert.match(lista, /<TablaEstandar\s+id=\{ID_COT\}\s+modo="servidor"\s+columnas=\{COLUMNAS_TABLA_COT\}/);
+  assert.match(lista, /claseFila=\{claseDeFila\}/);
+  assert.match(codigo, /const claseDeFila = \(cot: FilaCOT\) => \(cot\.resolucion === 'ATRASADO' \? `\$\{TABLE\.filaAlerta\} \$\{MARCA_ATRASO\}` : null\);/);
+  const columnas = codigo.slice(codigo.indexOf('const COLUMNAS_TABLA_COT'), codigo.indexOf('\n];\n', codigo.indexOf('const COLUMNAS_TABLA_COT')));
+  const ids = [...columnas.matchAll(/\{ id: '([a-z_]+)', titulo: '([^']+)', ancho: (\d+)/g)].map((m) => [m[1], m[2], Number(m[3])]);
+  assert.deepEqual(ids, [['numero', 'COT / SC', 132], ['cliente', 'Cliente', 152], ['cotizador', 'Cotizador', 120], ['total', 'Total', 104],
+    ['anticipo', 'Anticipo', 96], ['entrega', 'Entrega est.', 104], ['estado', 'Estado', 120], ['acciones', 'Acciones', 88]]);
+  assert.match(columnas, /\{ id: 'numero', [^\n]*clave: true, fija: 'izquierda'/);
+  assert.match(columnas, /\{ id: 'cliente', [^\n]*flexible: true/);
+  assert.match(columnas, /\{ id: 'anticipo', [^\n]*ocultaPorDefecto: true/);
+  assert.match(columnas, /\{ id: 'entrega', [^\n]*ocultaPorDefecto: true/);
+  assert.match(columnas, /\{ id: 'estado', [^\n]*clave: true/);
+  assert.match(columnas, /\{ id: 'acciones', [^\n]*clave: true, fija: 'derecha'/);
+  assert.equal((columnas.match(/ocultaPorDefecto: true/g) ?? []).length, 2, 'solo Anticipo y Entrega est. salen ocultas (R26)');
+  const acciones = codigo.slice(codigo.indexOf('function CeldaAcciones('), codigo.indexOf('\n}\n', codigo.indexOf('function CeldaAcciones(')));
+  assert.match(acciones, /aria-label=\{`Ver \$\{cot\.numero\}`\}/);
+  assert.ok(!/opacity-0|group-hover/.test(acciones) && !codigo.includes('MoreVertical'), '«Ver» siempre visible; sin el ⋮ sin acción');
+  assert.match(acciones, /\{ etiqueta: 'Abrir solicitud', [^\n]*oculto: !solicitud \}/);
+  assert.match(acciones, /\{ etiqueta: 'Ver pedido', [^\n]*oculto: !enlacePedido \}/);
+  assert.match(acciones, /<MenuFila items=\{items\} etiqueta=\{`Acciones de \$\{cot\.numero\}`\} \/>/);
+  assert.match(acciones, /enlaceDocumento\('SC', cot\.sc_id, \{ returnTo: RUTA_LISTA_COTIZACIONES \}\)/);
+  assert.match(acciones, /const pedido = pedidoVigente\(cot\);/);
+  // COT-LISTA: «Pedido …» o «Pedido … cancelado» debajo del número (la misma regla de antes, en marcaPedido).
+  const marca = codigo.slice(codigo.indexOf('function marcaPedido('), codigo.indexOf('\n}\n', codigo.indexOf('function marcaPedido(')));
+  assert.match(marca, /const vigente = pedidoVigente\(cot\);\s*if \(vigente\) return \{ texto: `Pedido \$\{vigente\.numero \?\? ''\}`\.trim\(\)/);
+  assert.match(marca, /if \(soloPedidosCancelados\(cot\) && situacionPedidoCotizacion\(cot\)\.avisoCancelado\) \{\s*return \{ texto: `Pedido \$\{ultimoPedidoCancelado\(cot\)\?\.numero \?\? ''\} cancelado`/);
+  // La Entrega est. con las reglas de la librería (antes isOverdue / isExpiringSoon en la pantalla).
+  assert.match(codigo, /const vencida = fechaVencida\(cot\.fecha_entrega_estimada\);\s*const porVencer = !vencida && fechaPorVencer\(cot\.fecha_entrega_estimada\);/);
+  assert.ok(!/isOverdue|isExpiringSoon/.test(codigo), 'sin las reglas de fecha en la pantalla');
+
+  // Bloque 5 (RP19): las 4 tarjetas con el resumen de la misma llamada; las 3 primeras son vistas y el total no.
+  assert.match(lista, /const tarjetas = tarjetasCotizaciones\(listado\.resumen\);/);
+  assert.match(lista, /<TarjetaKpi kpi="cot_activas" valor=\{tarjetas\?\.activas\.valor \?\? null\} ayuda=\{tarjetas\?\.activas\.ayuda\}\s*activo=\{vistaActiva === 'activas'\} onClick=\{\(\) => elegirVista\('activas'\)\} \/>/);
+  assert.match(lista, /<TarjetaKpi kpi="cot_confirmadas" valor=\{tarjetas\?\.confirmadas\.valor \?\? null\} ayuda=\{tarjetas\?\.confirmadas\.ayuda\}\s*activo=\{vistaActiva === 'confirmadas'\} onClick=\{\(\) => elegirVista\('confirmadas'\)\} \/>/);
+  assert.match(lista, /<TarjetaKpi kpi="cot_monto_confirmado" valor=\{tarjetas\?\.monto_confirmado\.valor \?\? null\} ayuda=\{tarjetas\?\.monto_confirmado\.ayuda\}\s*activo=\{vistaActiva === 'confirmadas'\} onClick=\{\(\) => elegirVista\('confirmadas'\)\} \/>/);
+  assert.match(lista, /<TarjetaKpi kpi="cot_total" valor=\{tarjetas\?\.total\.valor \?\? null\} ayuda=\{tarjetas\?\.total\.ayuda\} \/>/);
+  assert.ok(!/StatCard|variant="gradient"/.test(codigo), 'sin StatCard ni la variante gradient');
+  assert.match(lista, /despachar\(accionPestana\(estado, siguiente, opcionesEstadosCotizaciones\)\);\s*if \(enKanban\) despachar\(\{ tipo: 'modo', valor: 'lista' \}\);/);
+
+  // Bloque 6 (D42, RP89, RP90): la franja con «Estás aquí» en Cotización, sin noResueltos, con los avisos del resumen; se
+  // fue el aviso ámbar suelto.
+  assert.match(lista, /<BannerFlujo\s+titulo="Flujo comercial"\s+idPreferencia=\{ID_COT\}/);
+  assert.match(lista, /const pasosFlujo = useMemo\(\(\) => pasosDeLista\(flujo\.datos, 'COT'\), \[flujo\.datos\]\);/);
+  assert.match(lista, /semaforo=\{\{ atrasados: atrasadosCOT, filtro: filtroSemaforo, onFiltrar: alFiltrarSemaforo \}\}/);
+  assert.ok(!lista.includes('noResueltos'), 'sin la clave noResueltos');
+  assert.match(lista, /const avisosFlujo = useMemo\(\(\) => avisosCotizaciones\(listado\.resumen\), \[listado\.resumen\]\);/);
+  assert.match(lista, /avisos=\{avisosFlujo\}/);
+  assert.ok(!/ATENCIÓN|ShieldAlert/.test(codigo), 'sin el aviso ámbar de antes');
+  assert.match(lista, /subtitle="Precios y anticipo para el cliente; al confirmar se crea el pedido\."/);
+  // «Con atraso» desde Rechazadas abre Activas, también en Kanban (r2b de T8), con la poda del modo que se ve.
+  assert.match(codigo, /const VISTAS_SIN_ATRASO = \['rechazadas'\];/);
+  assert.match(lista, /const alFiltrarSemaforo = \(f: FiltroSemaforo\) => \{\s*if \(f !== 'todos' && VISTAS_SIN_ATRASO\.includes\(estado\.vista \?\? ''\)\) \{\s*despachar\(accionPestana\(estado, INICIAL_COT\.vista, enKanban \? OPCIONES_ESTADOS_TABLERO_COT : opcionesEstadosCotizaciones\)\);\s*\}\s*despachar\(\{ tipo: 'semaforo', valor: f === 'todos' \? null : f \}\);\s*\};/);
+  {
+    const { estadoTablaInicial, reducirEstadoTabla, accionPestana, accionModo } = await import('../src/lib/tabla.js');
+    const { opcionesEstadosCotizaciones, OPCIONES_ESTADOS_TABLERO_COT } = await import('../src/lib/kanban-ventas.js');
+    // Kanban desde Rechazadas con «Rechazada» en el filtro del tablero, y «Con atraso».
+    const enKanban = estadoTablaInicial({ vista: 'rechazadas', modo: 'kanban', estados: ['RECHAZADA'] });
+    const salto = reducirEstadoTabla(enKanban, accionPestana(enKanban, 'activas', OPCIONES_ESTADOS_TABLERO_COT));
+    const conAtraso = reducirEstadoTabla(salto, { tipo: 'semaforo', valor: 'atrasados' });
+    assert.deepEqual([conAtraso.vista, conAtraso.modo, conAtraso.semaforo, conAtraso.estados], ['activas', 'kanban', 'atrasados', ['RECHAZADA']],
+      'Activas, el filtro del tablero se queda');
+    // Al volver a Lista (accionModo con las opciones de la Lista), RECHAZADA se poda: no está en Activas.
+    const enLista = reducirEstadoTabla(conAtraso, accionModo(conAtraso, 'lista', opcionesEstadosCotizaciones));
+    assert.deepEqual([enLista.vista, enLista.modo, enLista.semaforo, enLista.estados], ['activas', 'lista', 'atrasados', []]);
+    // En Lista, de Rechazadas con «Rechazada» filtrada: Activas y sin ese filtro.
+    const lista0 = estadoTablaInicial({ vista: 'rechazadas', estados: ['RECHAZADA'] });
+    const enActivas = reducirEstadoTabla(lista0, accionPestana(lista0, 'activas', opcionesEstadosCotizaciones));
+    assert.deepEqual([enActivas.vista, enActivas.estados], ['activas', []]);
+  }
+
+  // Bloque 7 (R13): «Ver análisis» al Hub enfocado en Cotizaciones, y el contenedor con pb-24 (el botón de la IA).
+  assert.match(lista, /<Link href=\{enlaceVerAnalisis\('cot'\)\}/);
+  assert.match(lista, /<ContenidoEnlace icon=\{BarChart3\}>Ver análisis<\/ContenidoEnlace>/);
+  assert.match(codigo, /const CONTENEDOR_LISTA = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-\[1600px\] mx-auto w-full min-w-0 gap-6';/);
+  assert.ok(lista.includes('<div className={CONTENEDOR_LISTA}>'), 'la lista usa el contenedor');
+  // Lo de los Bloques 1 a 3 que se queda: la redirección de ?id= y «Nueva desde SC».
+  assert.match(lista, /router\.replace\(`\/dashboard\/ventas\/cotizacion\/\$\{numId\}`\)/);
+  assert.match(lista, /<Link href="\/dashboard\/ventas\/solicitud" [^>]*>\s*<Plus [^>]*\/> Nueva desde SC/);
+}
+
 console.log('OK test_listas_ventas.mjs');

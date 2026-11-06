@@ -402,6 +402,22 @@ export function fechaVencida(iso, ahora = Date.now()) {
 }
 
 /**
+ * B4 T9: la fecha del API (UTC, con o sin 'Z': comoUTC) todavía no pasó y le faltan `dias` días o menos (7 por defecto):
+ * la columna Entrega est. de la lista de Cotizaciones la pinta en ámbar (la regla de isExpiringSoon de la fila de antes,
+ * aquí para no llamar al reloj en el render). Una fecha vencida es de fechaVencida, no de esta. Lo que no es una fecha:
+ * false.
+ * @param {unknown} iso
+ * @param {number} [dias]
+ * @param {number} [ahora]
+ * @returns {boolean}
+ */
+export function fechaPorVencer(iso, dias = 7, ahora = Date.now()) {
+  if (typeof iso !== 'string' || !iso.trim()) return false;
+  const t = new Date(comoUTC(iso)).getTime();
+  return !Number.isNaN(t) && t >= ahora && (t - ahora) / 86400000 <= dias;
+}
+
+/**
  * T7 ronda 2: la pestaña de la lista de solicitudes en la que cae una fila. Cada solicitud cae en exactamente una, en
  * este orden: Soporte Técnico (por tipo o por su estado propio N/A_SOPORTE, también si se le corrigió el tipo en el
  * detalle) -> 'Soporte'; CONFIRMADA -> 'Confirmadas'; CANCELADA -> 'Canceladas'; lo demás (incluidos los estados
@@ -500,6 +516,51 @@ export function tarjetasSolicitudes(resumen) {
     confirmadas: { valor: conteoONulo(resumen.confirmadas), ayuda: pistaConfirmadasSolicitudes(resumen.confirmadas, resumen.esperan_cot) },
     canceladas: { valor: conteoONulo(resumen.canceladas), ayuda: 'Fuera del flujo' },
     total: { valor: conteoONulo(resumen.total), ayuda: pistaTotalSolicitudes(resumen.con_cot) },
+  };
+}
+
+/** Un monto del servidor en pesos enteros (redondearPeso), o null si no es un número (la tarjeta dice «—»). */
+const montoONulo = (v) => (typeof v === 'number' && Number.isFinite(v) ? redondearPeso(v) : null);
+
+/**
+ * COT-LISTA (B4 T9: la frase de la StatCard de antes, con los números del resumen): la ayuda de la tarjeta de las
+ * cotizaciones confirmadas: 'Sin confirmadas', 'N con pedido de venta · M por convertir' o 'Todas con pedido de venta'.
+ */
+function pistaConfirmadasCotizaciones(confirmadas, conPedido, porConvertir) {
+  if (conteo(confirmadas) === 0) return 'Sin confirmadas';
+  return conteo(porConvertir) > 0
+    ? `${conteo(conPedido)} con pedido de venta · ${conteo(porConvertir)} por convertir`
+    : 'Todas con pedido de venta';
+}
+
+/**
+ * B4 T9 (KPI-ventas punto 8 con RP19 (3) y (5)): las 4 tarjetas de la lista de Cotizaciones con el `resumen` de GET
+ * /ventas/cotizaciones?con_resumen=1 (todas las cotizaciones de la lista, sin la búsqueda ni la vista):
+ *  - activas (cot_activas): resumen.activas, con 'N sin precio' (sin_calc) o 'Todas calculadas';
+ *  - confirmadas (cot_confirmadas): resumen.confirmadas, con 'N con pedido de venta · M por convertir' (con_pedido y
+ *    por_convertir), 'Todas con pedido de venta' o 'Sin confirmadas';
+ *  - monto_confirmado (cot_monto_confirmado): resumen.monto_confirmado en pesos enteros, con 'N con pedido de venta
+ *    vigente';
+ *  - total (cot_total): resumen.total, con 'N rechazadas' ('1 rechazada').
+ * Las frases son las de las StatCard de COT-LISTA. Sin resumen (cargando o con error), null. Un número que no viene queda
+ * en null (nunca un 0 inventado).
+ * @param {any} resumen
+ * @returns {null | Record<'activas' | 'confirmadas' | 'monto_confirmado' | 'total', {valor: number | null, ayuda: string}>}
+ */
+export function tarjetasCotizaciones(resumen) {
+  if (!esObjeto(resumen) || Array.isArray(resumen)) return null;
+  const sinPrecio = conteo(resumen.sin_calc);
+  const rechazadas = conteo(resumen.rechazadas);
+  return {
+    activas: { valor: conteoONulo(resumen.activas), ayuda: sinPrecio > 0 ? `${sinPrecio} sin precio` : 'Todas calculadas' },
+    confirmadas: {
+      valor: conteoONulo(resumen.confirmadas),
+      ayuda: pistaConfirmadasCotizaciones(resumen.confirmadas, resumen.con_pedido, resumen.por_convertir),
+    },
+    monto_confirmado: {
+      valor: montoONulo(resumen.monto_confirmado), ayuda: `${conteo(resumen.con_pedido)} con pedido de venta vigente`,
+    },
+    total: { valor: conteoONulo(resumen.total), ayuda: `${rechazadas} ${rechazadas === 1 ? 'rechazada' : 'rechazadas'}` },
   };
 }
 

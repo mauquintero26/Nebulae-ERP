@@ -619,4 +619,24 @@ console.log('--- B4 T8 TEST 3: avisoVencidas — el chip ámbar «N vencidas» d
   for (const n of [0, -2, null, undefined, NaN, 'x', '']) assert.equal(fv.avisoVencidas(n), null, String(n));
 }
 
+console.log('--- B4 T9 TEST 1: avisosCotizaciones — los chips «N sin precio» y «N vencen en 7 días» de la franja de Cotizaciones ---');
+{
+  // FLUJO-ventas-pantallas C.1 (RP19 (3), RP89): lo que decía el aviso ámbar de la lista pasa a la franja, con el resumen
+  // de la MISMA llamada de la lista: sin_calc (activas sin precio) y vencen_pronto (activas con valida_hasta entre hoy y
+  // hoy + 7 días en Colombia). En ese orden; sin un número positivo, ese chip no va.
+  assert.deepEqual(fv.avisosCotizaciones({ sin_calc: 2, vencen_pronto: 3 }),
+    [{ texto: '2 sin precio', tono: 'ambar' }, { texto: '3 vencen en 7 días', tono: 'ambar' }]);
+  assert.deepEqual(fv.avisosCotizaciones({ sin_calc: 1, vencen_pronto: 1 }),
+    [{ texto: '1 sin precio', tono: 'ambar' }, { texto: '1 vence en 7 días', tono: 'ambar' }], 'el singular');
+  assert.deepEqual(fv.avisosCotizaciones({ sin_calc: 1234, vencen_pronto: 0 }), [{ texto: '1.234 sin precio', tono: 'ambar' }],
+    'con el punto de miles; sin vencen_pronto, solo el otro');
+  assert.deepEqual(fv.avisosCotizaciones({ sin_calc: 0, vencen_pronto: 5, sin_atender: 4 }), [{ texto: '5 vencen en 7 días', tono: 'ambar' }],
+    'sin_atender no es un aviso (lo dice «Con atraso» del semáforo)');
+  for (const malo of [0, -2, null, undefined, NaN, 'x', '']) {
+    assert.deepEqual(fv.avisosCotizaciones({ sin_calc: malo, vencen_pronto: malo }), [], String(malo));
+  }
+  // Sin resumen (cargando o con error): ningún chip.
+  for (const nada of [null, undefined, 'x', 3, []]) assert.deepEqual(fv.avisosCotizaciones(nada), [], String(nada));
+}
+
 console.log('\nOK: test_flujo_ventas.mjs');

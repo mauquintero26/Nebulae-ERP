@@ -155,8 +155,19 @@ console.log('--- TEST 6 (T18 r1): AYUDA_NOTA_CLIENTE y las pantallas que usan la
   const kanbanVentas = leer('lib/kanban-ventas.js');
   assert.ok(/const etiqueta = etiquetaChipCambios\(fila, tipo\);/.test(kanbanVentas)
     && /avisoCambiosCliente\(fila, tipo\)\?\.tono === 'rosa'/.test(kanbanVentas), 'chipsDocumentoVentas usa la fuente única');
-  assert.ok(leer('app/dashboard/ventas/cotizacion/cotizacion-client.tsx').includes('<ChipCambiosCliente doc={cot} tipoDoc="COT"/>'),
-    'lista de COT');
+  // B4 T9 (D27, RP18, D4; m12 de T8): la lista de COT, igual que la de SC: el chip de los cambios del cliente sale de
+  // chipsDocumentoVentas(cot, 'COT') (antes <ChipCambiosCliente doc={cot} tipoDoc="COT"/>, la misma fuente única), lo
+  // arma y lo PINTA CeldaEstado junto a la insignia, y es la celda de la columna 'estado'. Sin el texto armado a mano.
+  const listaCOT = leer('app/dashboard/ventas/cotizacion/cotizacion-client.tsx');
+  assert.ok(!/'Cambios pedidos'|'Ya no la necesita'/.test(listaCOT), 'lista de COT: sin el texto armado a mano');
+  const inicioCeldaCOT = listaCOT.indexOf('function CeldaEstado(');
+  assert.ok(inicioCeldaCOT >= 0, 'la lista de COT tiene CeldaEstado');
+  const celdaEstadoCOT = listaCOT.slice(inicioCeldaCOT, listaCOT.indexOf('\n}\n', inicioCeldaCOT));
+  assert.ok(celdaEstadoCOT.includes("const chips = chipsDocumentoVentas(cot, 'COT');"), 'lista de COT: CeldaEstado arma los chips');
+  assert.ok(/\{chips\.map\(\(c\) => <span key=\{c\.texto\}[^>]*>\{c\.texto\}<\/span>\)\}/.test(celdaEstadoCOT),
+    'lista de COT: CeldaEstado pinta cada chip con su texto');
+  assert.ok(/\{ id: 'estado', [^\n]*\n\s*celda: \(cot\) => <CeldaEstado cot=\{cot\} \/> \}/.test(listaCOT), 'lista de COT: la columna Estado es CeldaEstado');
+  assert.ok(/import \{[^}]*\bchipsDocumentoVentas\b[^}]*\} from '@\/lib\/kanban-ventas';/.test(listaCOT), 'lista de COT: de kanban-ventas.js');
 }
 
 console.log('--- Revisión final B3 (F2, M8 y M51): la «Nota para el cliente» de la SC en la COT y el PVEN; un solo aviso ---');

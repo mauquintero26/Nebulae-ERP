@@ -330,6 +330,27 @@ export function avisoVencidas(n) {
   return { texto: `${formatoEntero(cantidad)} ${cantidad === 1 ? 'vencida' : 'vencidas'}`, tono: 'ambar' };
 }
 
+/**
+ * B4 T9 (FLUJO-ventas-pantallas C.1, RP19 (3), RP89): los chips ámbar de la franja de Cotizaciones con el `resumen` de
+ * GET /ventas/cotizaciones?con_resumen=1 (lo que decía el aviso ámbar de la lista): 'N sin precio' (resumen.sin_calc,
+ * las activas sin total) y 'N vencen en 7 días' ('1 vence…'; resumen.vencen_pronto, las activas con valida_hasta entre
+ * hoy y hoy + 7 días en Colombia), en ese orden y con el punto de miles. Un conteo sin un número positivo no pinta su
+ * chip; sin resumen, []. sin_atender no es un aviso: lo dice «Con atraso» del semáforo.
+ * @param {unknown} resumen
+ * @returns {AvisoPaso[]}
+ */
+export function avisosCotizaciones(resumen) {
+  if (!esObjeto(resumen)) return [];
+  const r = /** @type {any} */ (resumen);
+  /** @type {AvisoPaso[]} */
+  const avisos = [];
+  const sinPrecio = cantidadPositiva(r.sin_calc);
+  if (sinPrecio !== null) avisos.push({ texto: `${formatoEntero(sinPrecio)} sin precio`, tono: 'ambar' });
+  const vencen = cantidadPositiva(r.vencen_pronto);
+  if (vencen !== null) avisos.push({ texto: `${formatoEntero(vencen)} ${vencen === 1 ? 'vence' : 'vencen'} en 7 días`, tono: 'ambar' });
+  return avisos;
+}
+
 // ─── la cadena de documentos (FLUJO-documentos) ─────────────────────────────────
 
 /** RP74: VEN y PVEN son el mismo tipo (como _ALIAS_ENTIDAD de textos_actividad.py). */

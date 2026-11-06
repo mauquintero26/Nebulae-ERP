@@ -801,4 +801,128 @@ console.log('--- B4 T8 TEST G: puedeReiniciarSC — «Reiniciar» del menú de l
   }
 }
 
+console.log('--- B4 T9 TEST I: opcionesEstadosCotizaciones — el filtro de estados de cada pestaña de Cotizaciones ---');
+{
+  // TABLA-listas-ventas punto 6 (H15): casillas con los nombres de estados-cotizacion.js (RP4) y solo los estados que
+  // caen en la pestaña (las vistas de GET /ventas/cotizaciones). Activas = todo lo que no es Rechazada ni Confirmada con
+  // pedido o con la confirmación vigente (f_cot_activa): también la antigua ENVIADA y la CONFIRMADA con el pedido caído.
+  const etiquetas = (vista) => kv.opcionesEstadosCotizaciones(vista).map((o) => [o.valor, o.etiqueta]);
+  assert.deepEqual(etiquetas('activas'), [['BORRADOR', 'Borrador'], ['ENVIADA', 'Enviada al cliente'],
+    ['PENDIENTE_CONFIRMACION', 'Esperando confirmación del cliente'], ['CONFIRMADA', 'Confirmada'], ['VENCIDA', 'Vencida']]);
+  assert.deepEqual(etiquetas('confirmadas'), [['CONFIRMADA', 'Confirmada']]);
+  assert.deepEqual(etiquetas('rechazadas'), [['RECHAZADA', 'Rechazada']]);
+  for (const vista of ['todas', null, undefined, 'otra', 'constructor']) {
+    assert.deepEqual(kv.opcionesEstadosCotizaciones(vista), [], String(vista));
+  }
+  for (const vista of ['activas', 'confirmadas', 'rechazadas']) {
+    for (const o of kv.opcionesEstadosCotizaciones(vista)) assert.equal(o.etiqueta, infoEstadoCotizacion(o.valor).label);
+  }
+  // Entre las tres pestañas están los 6 estados, y RECHAZADA solo en la suya.
+  const todas = ['activas', 'confirmadas', 'rechazadas'].flatMap((v) => kv.opcionesEstadosCotizaciones(v).map((o) => o.valor));
+  assert.deepEqual([...new Set(todas)].sort(), Object.keys(ESTADOS_COTIZACION).sort());
+  // El tablero (vista=todas): la opción de cada columna es su estado principal con el TÍTULO de la columna (la de
+  // «Esperando al cliente» trae también la antigua ENVIADA: estadosDeColumnaLista, m3 de T8).
+  assert.deepEqual(kv.OPCIONES_ESTADOS_TABLERO_COT.map((o) => [o.valor, o.etiqueta]), [['BORRADOR', 'Borrador'],
+    ['PENDIENTE_CONFIRMACION', 'Esperando al cliente'], ['CONFIRMADA', 'Confirmada'], ['VENCIDA', 'Vencida'],
+    ['RECHAZADA', 'Rechazada']]);
+  assert.deepEqual(kv.OPCIONES_ESTADOS_TABLERO_COT.map((o) => o.valor), COLUMNAS_COT.map((c) => c.estados[0]));
+  assert.deepEqual(kv.OPCIONES_ESTADOS_TABLERO_COT.map((o) => o.etiqueta), COLUMNAS_COT.map((c) => c.titulo));
+  // Inmutables y la misma referencia en cada llamada (BarraTabla la llama en cada render).
+  assert.equal(kv.opcionesEstadosCotizaciones('activas'), kv.opcionesEstadosCotizaciones('activas'));
+  assert.equal(kv.opcionesEstadosCotizaciones('todas'), kv.opcionesEstadosCotizaciones(null));
+  assert.ok(Object.isFrozen(kv.opcionesEstadosCotizaciones('activas')) && Object.isFrozen(kv.OPCIONES_ESTADOS_TABLERO_COT));
+  assert.ok(Object.isFrozen(kv.opcionesEstadosCotizaciones('activas')[0]) && Object.isFrozen(kv.OPCIONES_ESTADOS_TABLERO_COT[1]));
+}
+
+console.log('--- B4 T9 TEST J: consultaColumnaCOT — la consulta de cada columna del tablero de Cotizaciones ---');
+{
+  const estado = estadoTablaInicial({ vista: 'rechazadas', q: ' cuna ', semaforo: 'atrasados', estados: [], orden: 'cliente', pagina: 3, tamano: 50 });
+  const borrador = COLUMNAS_COT.find((c) => c.clave === 'borrador');
+  const esperando = COLUMNAS_COT.find((c) => c.clave === 'esperando');
+  const params = (q) => Object.fromEntries(new URLSearchParams(q));
+  // R5 (el patrón de consultaColumnaSC): vista=todas (no la pestaña), los estados de la columna, la búsqueda y el
+  // semáforo del estado, y el orden, el límite y el desplazamiento de la columna (no la página ni el orden de la tabla).
+  assert.equal(kv.VISTA_TABLERO_COT, 'todas');
+  const q = kv.consultaColumnaCOT(estado, borrador, { orden: 'atencion', limit: 50, offset: 0 });
+  assert.deepEqual(params(q), { vista: 'todas', semaforo: 'atrasados', q: 'cuna', estados: 'BORRADOR', orden: 'atencion', limit: '50', offset: '0' });
+  assert.equal(q, queryListado(estado, { vista: 'todas', estados: ['BORRADOR'], orden: 'atencion', limit: 50, offset: 0 }));
+  // «Esperando al cliente» pide PENDIENTE_CONFIRMACION y la antigua ENVIADA; la plegada (Rechazada), limit=0.
+  assert.equal(params(kv.consultaColumnaCOT(estado, esperando, { orden: 'atencion', limit: 25, offset: 25 })).estados, 'PENDIENTE_CONFIRMACION,ENVIADA');
+  const rechazada = COLUMNAS_COT.find((c) => c.clave === 'rechazada');
+  assert.equal(params(kv.consultaColumnaCOT(estado, rechazada, { orden: 'reciente', limit: 0, offset: 0 })).limit, '0');
+  // Con el filtro de la pantalla: el cruce (la opción de la columna vale toda la columna); sin nada en común, null.
+  const filtrado = { ...estado, estados: ['PENDIENTE_CONFIRMACION', 'VENCIDA'] };
+  assert.equal(params(kv.consultaColumnaCOT(filtrado, esperando, { orden: 'atencion', limit: 25, offset: 0 })).estados, 'PENDIENTE_CONFIRMACION,ENVIADA');
+  assert.equal(params(kv.consultaColumnaCOT({ ...estado, estados: ['ENVIADA'] }, esperando, { orden: 'atencion', limit: 25, offset: 0 })).estados, 'ENVIADA');
+  assert.equal(kv.consultaColumnaCOT(filtrado, borrador, { orden: 'atencion', limit: 25, offset: 0 }), null);
+  // Sin semáforo ni búsqueda no van (queryListado omite lo vacío), y nunca el paso.
+  const limpio = params(kv.consultaColumnaCOT(estadoTablaInicial({ vista: 'activas' }), borrador, { orden: 'atencion', limit: 25, offset: 0 }));
+  assert.equal(limpio.vista, 'todas');
+  assert.ok(!('semaforo' in limpio) && !('q' in limpio) && !('paso' in limpio));
+  // consultaColumnaSC no cambia (la de Solicitudes sigue con todas_sin_soporte).
+  assert.equal(params(kv.consultaColumnaSC(estado, COLUMNAS_SC[0], { orden: 'atencion', limit: 25, offset: 0 })).vista, 'todas_sin_soporte');
+}
+
+console.log('--- B4 T9 TEST K: tarjetaCotizacion — la tarjeta del tablero de Cotizaciones ---');
+{
+  // KANBAN-ventas-listas punto 6, RP18, D4, D37 y el cruce C5: la de tarjetaHub con la lista de Cotizaciones como
+  // return_to (la acción principal y su enlace vuelven a la lista), y la fila es una COT aunque no traiga `tipo`.
+  const cot = {
+    tipo: 'COT', id: 12, numero: 'COT-12', estado: 'CONFIRMADA', customer_name: 'Ana Ruiz', cotizador: 'Laura',
+    total_cop: 250000.4, productos: CON_PRODUCTOS, pedidos_venta: [{ id: 30, numero: 'PVEN-30', estado: 'EN_PROCESO' }],
+    dias_creado: 2, resolucion: 'ATRASADO', dias_sin_mov: 4, seguimiento_estado: 'AGOTADO',
+  };
+  const t = kv.tarjetaCotizacion(cot);
+  assert.deepEqual(t, tarjetaHub(cot, { returnTo: RUTA_LISTA_COTIZACIONES }));
+  assert.equal(t.tipo, 'COT');
+  assert.equal(t.subtitulo, 'Laura', 'el cotizador');
+  assert.equal(t.monto, 250000);
+  assert.deepEqual(t.estado, estadoDeTarjeta('COT', 'CONFIRMADA'));
+  assert.deepEqual(t.chips.map((c) => c.texto), ['Atrasado 4 días', 'Sin respuesta al recordatorio']);
+  assert.deepEqual(t.accionPrincipal, { texto: 'Ver pedido', href: '/dashboard/ventas/venta/30?return_to=%2Fdashboard%2Fventas%2Fcotizacion', tono: 'emerald' });
+  assert.equal(kv.tarjetaCotizacion({ ...cot, estado: 'BORRADOR', pedidos_venta: [] }).accionPrincipal.href,
+    '/dashboard/ventas/cotizacion/12?return_to=%2Fdashboard%2Fventas%2Fcotizacion');
+  const sinTipo = { ...cot };
+  delete sinTipo.tipo;
+  assert.deepEqual(kv.tarjetaCotizacion(sinTipo), t);
+  assert.equal(kv.tarjetaCotizacion(cot, { returnTo: RUTA_HUB_VENTAS }).accionPrincipal.href,
+    '/dashboard/ventas/venta/30?return_to=%2Fdashboard%2Fventas');
+}
+
+console.log('--- B4 T9 TEST L: el cableado del tablero de Cotizaciones (C15, RP16, D11, D39; D27) ---');
+{
+  const fuente = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/cotizacion-client.tsx', import.meta.url), 'utf8')
+    .replace(/\r\n/g, '\n');
+  const codigo = fuente.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const lista = codigo.slice(codigo.indexOf('export default function CotizacionClient('));
+  // El tablero en modo servidor con el MISMO id y estado (RP26, D39): consultaColumnaCOT y el orden de cada columna.
+  assert.match(lista, /pantalla: ID_COT,\s*modo: 'servidor',\s*columnas: COLUMNAS_COT,\s*activo: listo && enKanban,\s*porColumna: estado\.tamano,\s*dependencias: dependenciasTablero\(estado\),\s*ordenDe: \(c\) => \(c\.cerrada \? 'reciente' : 'atencion'\),/);
+  assert.match(lista, /const consulta = consultaColumnaCOT\(estado, columna, \{ orden, limit, offset \}\);\s*if \(consulta === null\) return \{ filas: \[\], total: 0 \};\s*return normalizarRespuesta\(await apiFetch\(`\/ventas\/cotizaciones\?\$\{consulta\}`, \{ signal \}\)\);/);
+  // D11 (RP16): la regla sin puedeEnviar (soltar en «Esperando al cliente» da «Ábrela para enviar.»); la lista no arma
+  // otro ChannelModal ni otro POST de envío.
+  assert.match(lista, /<TableroKanban\s+tablero=\{tablero\}\s+regla=\{reglaSoltarCotizacion\}\s+tarjetaDe=\{tarjetaDeCOT\}\s+onAbrir=\{abrirCotizacion\}\s+onCambio=\{cambiarDesdeTablero\}\s+onAccion=\{accionDesdeTablero\}/);
+  assert.ok(!codigo.includes('puedeEnviar') && !lista.includes('<ChannelModal') && !lista.includes('enviar-confirmacion'), 'sin envío desde la lista');
+  const conRegla = reglaSoltarCotizacion({ id: 4, estado: 'BORRADOR', ...CON_PRECIO }, 'borrador', 'esperando');
+  assert.equal(conRegla.tipo, 'bloqueado');
+  assert.equal(conRegla.motivo, 'Ábrela para enviar.');
+  assert.equal(reglaSoltarCotizacion({ id: 4, estado: 'PENDIENTE_CONFIRMACION' }, 'esperando', 'borrador').motivo,
+    'Ábrela para re-cotizar; te pedirá la razón.', 'C15(a)');
+  assert.match(codigo, /const tarjetaDeCOT = \(cot: FilaCOT\) => tarjetaCotizacion\(cot\);/);
+  // 'cambio': el PATCH del estado con el autor; el tablero recarga su origen y su destino, aquí las tarjetas y la franja.
+  assert.match(lista, /async function cambiarDesdeTablero\(cot: FilaCOT, resultado: \{ estado: string \}\) \{\s*await apiFetch\(`\/ventas\/cotizaciones\/\$\{cot\.id\}`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ estado: resultado\.estado, updated_by: autorActual\(\) \}\),\s*\}\);\s*recargarListado\(\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*\}/);
+  // 'rechazar': ModalMotivo → PATCH RECHAZADA y la nota «Motivo del rechazo: …» en la Actividad (N3); al terminar, del
+  // tablero solo su origen y su destino (D39).
+  assert.match(lista, /if \(resultado\.accion === 'rechazar'\) setRechazando\(\{ cot, columnas: \[origen, destino\] \}\);/);
+  const rechazar = lista.slice(lista.indexOf('async function rechazarConMotivo('), lista.indexOf('\n  }\n', lista.indexOf('async function rechazarConMotivo(')));
+  const patch = rechazar.indexOf("JSON.stringify({ estado: 'RECHAZADA', updated_by: autor })");
+  const nota = rechazar.indexOf("JSON.stringify({ action: 'NOTE_ADDED', description: `Motivo del rechazo: ${motivo}`, user_name: autor })");
+  assert.ok(patch > 0 && nota > patch, 'primero el PATCH, después la nota');
+  assert.ok(rechazar.indexOf('tablero.recargar([...columnas]);') > nota, 'y la recarga del origen y el destino');
+  assert.match(rechazar, /recargarListado\(\);\s*tablero\.recargar\(\[\.\.\.columnas\]\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);/);
+  assert.match(lista, /<ModalMotivo\s+titulo=\{`Rechazar \$\{rechazando\.cot\.numero\}`\}[\s\S]*?onConfirmar=\{rechazarConMotivo\}\s+onCerrar=\{\(\) => setRechazando\(null\)\}/);
+  // Al pasar a Kanban se sale de la pantalla completa; la barra no la ofrece en Kanban.
+  assert.match(lista, /useEffect\(\(\) => \{ if \(enKanban\) salir\(\); \}, \[enKanban, salir\]\);/);
+  assert.match(lista, /pantallaCompleta=\{enKanban \? undefined : \{ completa, alternar \}\}/);
+}
+
 console.log('OK test_kanban_ventas');

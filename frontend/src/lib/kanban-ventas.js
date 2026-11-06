@@ -905,3 +905,75 @@ export function puedeReiniciarSC(sc) {
   if (!sc || typeof sc !== 'object') return false;
   return puedeReiniciar(sc, documentosDeSC(sc));
 }
+
+// ─── B4 T9: lo que comparten la tabla y el tablero de la lista de Cotizaciones ──
+
+/** Una opción del filtro de estados con la etiqueta única de la COT (estados-cotizacion.js, RP4). */
+const opcionCOT = (estado) => congelar({ valor: estado, etiqueta: infoEstadoCotizacion(estado).label });
+
+/**
+ * Los estados de cada pestaña (vista de GET /ventas/cotizaciones) que el filtro ofrece: los que pueden caer en ella.
+ * Activas (f_cot_activa) es todo menos Rechazada y las Confirmadas con pedido o con la confirmación del cliente vigente,
+ * así que también trae la antigua ENVIADA y la CONFIRMADA con el pedido caído (COT-LISTA).
+ */
+const OPCIONES_COT_POR_VISTA = congelar({
+  activas: congelar(['BORRADOR', 'ENVIADA', 'PENDIENTE_CONFIRMACION', 'CONFIRMADA', 'VENCIDA'].map(opcionCOT)),
+  confirmadas: congelar([opcionCOT('CONFIRMADA')]),
+  rechazadas: congelar([opcionCOT('RECHAZADA')]),
+});
+
+/**
+ * B4 T9 (TABLA-listas-ventas punto 6, H15): las opciones del filtro de estados (FiltroEstados de BarraTabla) de la
+ * pestaña `vista` de Cotizaciones, con los nombres de estados-cotizacion.js: Activas → Borrador, Enviada al cliente,
+ * Esperando confirmación del cliente, Confirmada (la del pedido caído) y Vencida; Confirmadas → Confirmada; Rechazadas →
+ * Rechazada. Cualquier otra vista no tiene filtro ([]). Inmutables y la misma referencia en cada llamada.
+ * @param {string | null | undefined} vista
+ * @returns {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
+ */
+export function opcionesEstadosCotizaciones(vista) {
+  return typeof vista === 'string' && tiene(OPCIONES_COT_POR_VISTA, vista) ? OPCIONES_COT_POR_VISTA[vista] : SIN_OPCIONES;
+}
+
+/**
+ * B4 T9: las opciones del filtro de estados en el tablero de Cotizaciones (vista=todas): el estado principal de cada
+ * columna de COLUMNAS_COT con el título de la columna (Borrador, Esperando al cliente, Confirmada, Vencida y Rechazada),
+ * en su orden. Con estadosDeColumnaLista, la de «Esperando al cliente» trae también la antigua ENVIADA. Inmutable.
+ * @type {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
+ */
+export const OPCIONES_ESTADOS_TABLERO_COT = congelar(COLUMNAS_COT.map((c) => congelar({ valor: c.estados[0], etiqueta: c.titulo })));
+
+/**
+ * B4 T9 (R5): la vista con la que pide cada columna del tablero de Cotizaciones (todas), no la pestaña.
+ * @type {'todas'}
+ */
+export const VISTA_TABLERO_COT = 'todas';
+
+/**
+ * B4 T9 (R5, R11, C4, D39; el patrón de consultaColumnaSC): la consulta de una columna del tablero de Cotizaciones en
+ * modo servidor (la query de GET /ventas/cotizaciones, con queryListado): vista=VISTA_TABLERO_COT, los estados de la
+ * columna cruzados con el filtro de la pantalla (estadosDeColumnaLista), la búsqueda y el semáforo del MISMO estado, y el
+ * orden, el límite y el desplazamiento de la columna (limit=0 en la plegada, lo da useTableroKanban). Sin ningún estado en
+ * común, null (la columna queda vacía sin pedir nada).
+ * @param {import('./tabla.js').EstadoTabla} estado
+ * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
+ * @param {{orden: string | null, limit: number, offset: number}} consulta
+ * @returns {string | null}
+ */
+export function consultaColumnaCOT(estado, columna, { orden, limit, offset }) {
+  const estados = estadosDeColumnaLista(columna, estado?.estados);
+  if (estados.length === 0) return null;
+  return queryListado(estado, { vista: VISTA_TABLERO_COT, estados, orden, limit, offset });
+}
+
+/**
+ * B4 T9 (KANBAN-ventas-listas punto 6; RP18, D4, D37 y el cruce C5): la tarjeta del tablero de Cotizaciones. Es la de
+ * tarjetaHub (número, cliente, el cotizador, el total, el estado de estados-cotizacion.js, la antigüedad, el atraso,
+ * chipsDocumentoVentas y accionSiguienteDocumento) con el return_to de la lista (`returnTo`, por defecto
+ * RUTA_LISTA_COTIZACIONES). La fila es una COT aunque no traiga `tipo`.
+ * @param {any} fila
+ * @param {{ahora?: number, returnTo?: string}} [opciones]
+ * @returns {TarjetaVentas}
+ */
+export function tarjetaCotizacion(fila, { ahora, returnTo = RUTA_LISTA_COTIZACIONES } = {}) {
+  return tarjetaHub({ ...fila, tipo: 'COT' }, { ahora, returnTo });
+}

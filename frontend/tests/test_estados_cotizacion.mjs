@@ -85,4 +85,33 @@ console.log('--- TEST 6: JS puro (sin React ni DOM) y congelar importado, no cop
   assert.ok(!/function congelar\(/.test(fuente), 'congelar no se copia');
 }
 
+console.log('--- TEST 7 (B4 T9, RP4): el ESTADOS de cotizacion-client.tsx toma la etiqueta de aquí y conserva sus hex ---');
+{
+  // ESTADOS sigue exportado con el molde hex {label, color, bg, border} (lo importan ventas/page.tsx, solicitud-client.tsx,
+  // solicitud/[id] y cotizacion/[id]); la etiqueta es la de ESTADOS_COTIZACION y los colores, los hex de antes; un código
+  // de la tabla sin hex va en gris.
+  const fuente = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/cotizacion-client.tsx', import.meta.url), 'utf8')
+    .replace(/\r\n/g, '\n');
+  assert.ok(/import \{[^}]*\bESTADOS_COTIZACION\b[^}]*\} from '@\/lib\/estados-cotizacion';/.test(fuente), 'importa la tabla única');
+  assert.match(fuente, /export const ESTADOS: Record<string, \{ label: string; color: string; bg: string; border: string \}> = Object\.fromEntries\(\n\s*Object\.entries\(ESTADOS_COTIZACION\)\.map\(\(\[codigo, info\]\) => \[codigo, \{ label: info\.label, \.\.\.\(HEX_ESTADOS_COT\[codigo\] \?\? GRIS_ESTADO_COT\) \}\]\),\n\);/);
+  assert.ok(fuente.includes("const GRIS_ESTADO_COT = { color: '#64748b', bg: '#f1f5f9', border: '#e2e8f0' };"), 'el gris de RP4');
+  // Los hex de antes, uno por cada estado de la tabla (los mismos colores en el Hub, la lista de SC y los dos detalles).
+  const HEX = {
+    BORRADOR: "{ color: '#64748b', bg: '#f1f5f9', border: '#e2e8f0' }",
+    ENVIADA: "{ color: '#92400e', bg: '#fef3c7', border: '#fde68a' }",
+    PENDIENTE_CONFIRMACION: "{ color: '#1d4ed8', bg: '#eff6ff', border: '#bfdbfe' }",
+    CONFIRMADA: "{ color: '#065f46', bg: '#f0fdf4', border: '#a7f3d0' }",
+    RECHAZADA: "{ color: '#991b1b', bg: '#fef2f2', border: '#fecaca' }",
+    VENCIDA: "{ color: '#7c3aed', bg: '#f5f3ff', border: '#ddd6fe' }",
+  };
+  const tabla = fuente.slice(fuente.indexOf('const HEX_ESTADOS_COT'), fuente.indexOf('const GRIS_ESTADO_COT'));
+  assert.deepEqual(Object.keys(HEX), Object.keys(ESTADOS_COTIZACION), 'un hex por cada estado de la tabla única');
+  for (const [codigo, hex] of Object.entries(HEX)) {
+    assert.match(tabla, new RegExp(`\\n  ${codigo}:\\s*${hex.replace(/[{}]/g, '\\$&')},\\n`), codigo);
+  }
+  // Ninguna etiqueta escrita a mano (la de antes era «Esp. confirmación»), fuera de los comentarios.
+  const codigo = fuente.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  assert.ok(!/label: '/.test(tabla) && !codigo.includes('Esp. confirmación'), 'sin etiquetas propias');
+}
+
 console.log('\nOK: test_estados_cotizacion.mjs');

@@ -1,14 +1,16 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useMemo, useId, type ReactNode } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, useId, createContext, useContext, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useSearchParams, useRouter } from 'next/navigation';
+// B4 T9: se fueron Activity, Search, MoreVertical y ShieldAlert (las tarjetas, la búsqueda, el ⋮ sin acción y el aviso
+// ámbar de la lista); entran BarChart3 («Ver análisis») y ShoppingBag («Ver pedido» del menú de la fila).
 import {
-  FileText, CheckCircle2, DollarSign, Activity,
-  Search, X, RefreshCw, AlertCircle, AlertTriangle, MoreVertical, Plus,
-  Phone, Mail, ShieldAlert,
+  FileText, CheckCircle2, DollarSign,
+  X, RefreshCw, AlertCircle, AlertTriangle, Plus,
+  Phone, Mail,
   Calculator, Send, Trash2, Save, ArrowRight,
-  MessageCircle, RotateCcw
+  MessageCircle, RotateCcw, BarChart3, ShoppingBag,
 } from 'lucide-react';
 import { Info } from 'lucide-react'; // B3 T17 r3: el aviso neutral de la COT vieja
 
@@ -22,7 +24,7 @@ import {
 import { formatoPesos } from '@/lib/pesos';
 import { humanizarCodigo } from '@/lib/estados-pedido';
 import { lineaWhatsAppCanal } from '@/lib/envio-whatsapp';
-import { AYUDA_NOTA_CLIENTE } from '@/lib/cambios-cliente';
+import { AYUDA_NOTA_CLIENTE, RUTA_LISTA_COTIZACIONES } from '@/lib/cambios-cliente';
 import { PanelAnularConfirmacion, tituloAnulacion } from './anular-confirmacion';
 import type { AnulacionConfirmacion } from './anular-confirmacion';
 import { CeldaIvaLinea, TotalesCalculadoraIva, pesosOGuion } from './calculadora-iva';
@@ -32,21 +34,57 @@ import {
   evaluarVerificacion, verificacionParaEnviar, validarAjusteAnticipo, resumenAnticipoCotizacion, montoDesdeTexto,
   resumenPropagacionPedido, anticipoDeCalculadora,
 } from '@/lib/dinero-ventas';
+// B4 T9: la lista ya no cuenta en el navegador (diasAlerta, pestanaCotizacion): las vistas, los conteos y el resumen son
+// del servidor (T6B). Las marcas del pedido de cada fila (COT-LISTA) siguen saliendo de aquí.
 import {
-  diasAlerta, pedidoVigente, soloPedidosCancelados, ultimoPedidoCancelado, pestanaCotizacion, situacionPedidoCotizacion,
+  pedidoVigente, soloPedidosCancelados, ultimoPedidoCancelado, situacionPedidoCotizacion, tarjetasCotizaciones,
+  fechaVencida, fechaPorVencer,
 } from '@/lib/listas-ventas';
-import { SubNav, PageHeader, StatCard, Modal, Button, EmptyState } from '@/components/ui';
+import {
+  SubNav, PageHeader, Modal, Button, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila, ModalMotivo,
+  TableroKanban, useTableroKanban, CLASE_CHIP, useAvisos,
+} from '@/components/ui';
+import type { ItemMenuFila } from '@/components/ui';
+import {
+  BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
+} from '@/components/tabla';
+import type { ColumnaTabla, PestanaTabla } from '@/components/tabla';
+import { BannerFlujo, useResumenFlujo } from '@/components/flujo';
+import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
+import {
+  accionModo, accionPestana, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta,
+} from '@/lib/tabla';
+import type { AccionTabla } from '@/lib/tabla';
+import { alternarSeleccion } from '@/lib/flujo';
+import { avisosCotizaciones, enlaceVerAnalisis, pasosDeLista, textoRegla } from '@/lib/flujo-ventas';
+import {
+  COLUMNAS_COT, OPCIONES_ESTADOS_TABLERO_COT, chipsDocumentoVentas, consultaColumnaCOT, estadoDeTarjeta,
+  opcionesEstadosCotizaciones, reglaSoltarCotizacion, tarjetaCotizacion,
+} from '@/lib/kanban-ventas';
+import { ESTADOS_COTIZACION } from '@/lib/estados-cotizacion';
+import { fechaCorta, fechaLarga } from '@/lib/fechas-colombia';
+import { enlaceDocumento } from '@/lib/analisis';
+import { textoDeError } from '@/lib/avisos';
+import { TABLE } from '@/lib/design-system';
 import { VEN_NAV } from '../ven-nav';
-import { ChipCambiosCliente } from '../chip-cambios-cliente';
+import { getUsuarioActual } from '../flujo';
 
-export const ESTADOS: Record<string, { label: string; color: string; bg: string; border: string }> = {
-  BORRADOR:              { label: 'Borrador',              color: '#64748b', bg: '#f1f5f9', border: '#e2e8f0' },
-  ENVIADA:               { label: 'Enviada al cliente',    color: '#92400e', bg: '#fef3c7', border: '#fde68a' },
-  PENDIENTE_CONFIRMACION:{ label: 'Esp. confirmación',     color: '#1d4ed8', bg: '#eff6ff', border: '#bfdbfe' },
-  CONFIRMADA:            { label: 'Confirmada',            color: '#065f46', bg: '#f0fdf4', border: '#a7f3d0' },
-  RECHAZADA:             { label: 'Rechazada',             color: '#991b1b', bg: '#fef2f2', border: '#fecaca' },
-  VENCIDA:               { label: 'Vencida',               color: '#7c3aed', bg: '#f5f3ff', border: '#ddd6fe' },
+// B4 T9 (KANBAN-ventas-listas punto 3, RP4): ESTADOS conserva su export y su molde hex {label, color, bg, border} (lo
+// importan ventas/page.tsx, solicitud-client.tsx, solicitud/[id] y cotizacion/[id]), pero la etiqueta es la ÚNICA de
+// estados-cotizacion.js (ESTADOS_COTIZACION, espejo de ETIQUETAS_ESTADO['COT']): «Esp. confirmación» pasa a «Esperando
+// confirmación del cliente». Los colores son los hex de siempre; un código de la tabla sin hex va en gris.
+const HEX_ESTADOS_COT: Record<string, { color: string; bg: string; border: string }> = {
+  BORRADOR:              { color: '#64748b', bg: '#f1f5f9', border: '#e2e8f0' },
+  ENVIADA:               { color: '#92400e', bg: '#fef3c7', border: '#fde68a' },
+  PENDIENTE_CONFIRMACION:{ color: '#1d4ed8', bg: '#eff6ff', border: '#bfdbfe' },
+  CONFIRMADA:            { color: '#065f46', bg: '#f0fdf4', border: '#a7f3d0' },
+  RECHAZADA:             { color: '#991b1b', bg: '#fef2f2', border: '#fecaca' },
+  VENCIDA:               { color: '#7c3aed', bg: '#f5f3ff', border: '#ddd6fe' },
 };
+const GRIS_ESTADO_COT = { color: '#64748b', bg: '#f1f5f9', border: '#e2e8f0' };
+export const ESTADOS: Record<string, { label: string; color: string; bg: string; border: string }> = Object.fromEntries(
+  Object.entries(ESTADOS_COTIZACION).map(([codigo, info]) => [codigo, { label: info.label, ...(HEX_ESTADOS_COT[codigo] ?? GRIS_ESTADO_COT) }]),
+);
 
 // Mapa de estados propio de Cotizacion (rico, varios estados reales del negocio) --
 // se mantiene como pastilla a medida en vez del Badge generico de tono semantico,
@@ -68,12 +106,8 @@ export const fTime = (iso: string | null | undefined) =>
   iso ? new Date(iso).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }) : '';
 // H42: pesos enteros ('$1.062.523'); se mantiene el export porque lo importan el detalle y otros.
 export const fCOP = (v: number | string | null | undefined) => formatoPesos(v);
-const isOverdue = (iso: string | null | undefined) => iso ? new Date(iso) < new Date() : false;
-const isExpiringSoon = (iso: string | null | undefined) => {
-  if (!iso) return false;
-  const d = new Date(iso), now = new Date();
-  return d >= now && (d.getTime() - now.getTime()) / 86400000 <= 7;
-};
+// B4 T9: isOverdue e isExpiringSoon (la Entrega est. en rojo o en ámbar) pasaron a fechaVencida y fechaPorVencer de
+// lib/listas-ventas.js (probadas, con la fecha del API leída como UTC); «vencen en 7 días» es resumen.vencen_pronto (RP89).
 
 // â”€â”€ ActionIcon for activity â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export function ActionDot({ action }: { action: string }) {
@@ -775,32 +809,291 @@ export function AjustarAnticipoModal({ cot, saving, error, onGuardar, onVolverMo
   );
 }
 
+// ── B4 T9: las piezas de la lista (TABLA-listas-ventas, KANBAN-ventas-listas, KPI-ventas y FLUJO-ventas-pantallas) ──
+// El modelo es la lista de Solicitudes (T8): un estado único, la tabla estándar y el tablero en el servidor, las tarjetas
+// con el resumen de la misma llamada y la franja del flujo.
+
+/** Un pedido ligero de la lista `pedidos_venta` de una fila (COT-LISTA, T6B). */
+type PedidoLigero = { id: number; numero?: string | null; estado?: string | null };
+
+/**
+ * Una fila de GET /ventas/cotizaciones (T6B): el _cot_dict de la cotización, sus pedidos_venta ligeros y tipo,
+ * resolucion, dias_sin_mov, dias_creado y seguimiento_estado (R8, C14). La resolución y el atraso son los del servidor:
+ * aquí no se recalculan. Lo demás pasa tal cual a las librerías.
+ */
+type FilaCOT = {
+  id: number;
+  numero: string;
+  estado: string;
+  tipo?: string;
+  sc_id?: number | null;
+  sc_numero?: string | null;
+  customer_name?: string | null;
+  customer_phone?: string | null;
+  cotizador?: string | null;
+  total_cop?: number | string | null;
+  anticipo_cop?: number | string | null;
+  fecha_entrega_estimada?: string | null;
+  confirmacion_vigente?: boolean | null;
+  pedidos_venta?: PedidoLigero[] | null;
+  resolucion?: 'ATRASADO' | 'NO_RESUELTO' | 'ACCION_TOMADA' | 'CERRADO' | null;
+  dias_sin_mov?: number | null;
+  dias_creado?: number | null;
+  seguimiento_estado?: string | null;
+  [campo: string]: unknown;
+};
+
+/** `conteos` de con_conteos=1: las pestañas (con la búsqueda; sin vista, estados ni semáforo, R5). */
+type ConteosCOT = Partial<Record<'activas' | 'confirmadas' | 'rechazadas', number>>;
+/** D39 (m6 de T8): las columnas del tablero de una acción desde una tarjeta: [origen, destino]. */
+type ColumnasDeTarjeta = readonly [string, string];
+
+/** El id de la lista: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26), y el del
+ *  modo compacto de la franja (RP90). */
+const ID_COT = 'ventas.cotizaciones';
+/** R8 (atencion_primero_listas = «Sí; con un clic en una columna ordenas como quieras»): primero lo atrasado. */
+const INICIAL_COT = { vista: 'activas', orden: 'atencion' };
+/** El contenedor de la lista, el del Hub y el de Solicitudes (T7 y T8): pb-24 deja libre, con la página al fondo, la
+ *  esquina del botón flotante de la IA; px-4 hasta xl: a 1024 px con el menú abierto las columnas clave caben (R26). */
+const CONTENEDOR_LISTA = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
+/** R8: una rechazada está cerrada y nunca va atrasada: desde Rechazadas, «Con atraso» abre Activas (m7 de T8). */
+const VISTAS_SIN_ATRASO = ['rechazadas'];
+/** D39 (m6 de T8): en Kanban la lista va sin filas (limit=0): las tarjetas siguen con su resumen en una consulta barata; las
+ *  filas las piden las columnas del tablero. */
+const EXTRA_TABLERO = { limit: 0 };
+
+// Los chips: los tintes del tablero (CLASE_CHIP de components/ui/Kanban.tsx), el chip estándar de las tablas del B4 (m12
+// de T8): la misma marca sale igual en Lista y en Kanban. Sin tamaño de letra: cada uso pone el suyo.
+const CHIP = 'inline-block max-w-full truncate rounded-full border px-1.5 py-0.5 font-bold leading-tight';
+const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
+// D41: el tono opaco filaAlerta para la fila atrasada (la resolución del servidor, R8) y la marca rosa a la izquierda del Hub.
+const MARCA_ATRASO = '[&>td:first-child]:shadow-[inset_3px_0_0_var(--color-rose-500)]';
+const claseDeFila = (cot: FilaCOT) => (cot.resolucion === 'ATRASADO' ? `${TABLE.filaAlerta} ${MARCA_ATRASO}` : null);
+const BOTON_FILA = `p-1.5 rounded-lg text-xs font-bold transition-colors ${FOCO_VISIBLE}`;
+/** Quien hace el cambio desde el tablero (updated_by y user_name, como el Hub). */
+const autorActual = () => { const u = getUsuarioActual(); return u.name || u.email || undefined; };
+
+/** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
+type AccionesFilaCOT = { abrir: (cot: { id: number }) => void; ir: (ruta: string) => void };
+const AccionesLista = createContext<AccionesFilaCOT | null>(null);
+
+/** COT-LISTA: «Pedido PVEN-…» si tiene un pedido vigente, o «Pedido … cancelado» si todos se cancelaron y el cliente no la
+ *  volvió a confirmar (igual que en su detalle). */
+function marcaPedido(cot: FilaCOT): { texto: string; clase: string } | null {
+  const vigente = pedidoVigente(cot);
+  if (vigente) return { texto: `Pedido ${vigente.numero ?? ''}`.trim(), clase: 'text-emerald-700' };
+  if (soloPedidosCancelados(cot) && situacionPedidoCotizacion(cot).avisoCancelado) {
+    return { texto: `Pedido ${ultimoPedidoCancelado(cot)?.numero ?? ''} cancelado`, clase: 'text-rose-600' };
+  }
+  return null;
+}
+
+const tituloNumero = (cot: FilaCOT) =>
+  [cot.numero, cot.sc_numero ? `SC: ${cot.sc_numero}` : null, marcaPedido(cot)?.texto].filter(Boolean).join(' · ');
+
+/** COT / SC: el número y, debajo, la solicitud de origen y la marca del pedido (COT-LISTA). */
+function CeldaNumero({ cot }: { cot: FilaCOT }) {
+  const marca = marcaPedido(cot);
+  return (
+    <span className="flex min-w-0 flex-col items-start leading-tight">
+      <span className="max-w-full truncate text-xs font-black text-amber-700">{cot.numero}</span>
+      {cot.sc_numero && <span className="max-w-full truncate text-[10px] font-bold text-indigo-600">SC: {cot.sc_numero}</span>}
+      {marca && <span className={`max-w-full truncate text-[10px] font-bold ${marca.clase}`}>{marca.texto}</span>}
+    </span>
+  );
+}
+
+function CeldaCliente({ cot }: { cot: FilaCOT }) {
+  return (
+    <span className="flex min-w-0 flex-col leading-tight">
+      <span className="truncate text-xs font-bold text-slate-800">{cot.customer_name || '-'}</span>
+      {cot.customer_phone && <span className="truncate text-[11px] text-slate-500">{cot.customer_phone}</span>}
+    </span>
+  );
+}
+
+/** Total: el monto y, debajo, «Sin precio» si el total no es mayor que 0 (como antes, en cualquier estado). */
+const sinPrecio = (cot: FilaCOT) => !(Number(cot.total_cop) > 0);
+function CeldaTotal({ cot }: { cot: FilaCOT }) {
+  return (
+    <span className="flex min-w-0 flex-col items-end gap-0.5 leading-tight">
+      <span className="max-w-full truncate text-xs font-black text-slate-800">{fCOP(cot.total_cop)}</span>
+      {sinPrecio(cot) && <span className={`${CHIP} text-[10px] ${CLASE_CHIP.amber}`}>Sin precio</span>}
+    </span>
+  );
+}
+
+/** Entrega est.: en rojo y con el ícono si ya pasó (fechaVencida) y en ámbar si vence en 7 días o menos (fechaPorVencer). */
+function CeldaEntrega({ cot }: { cot: FilaCOT }) {
+  const vencida = fechaVencida(cot.fecha_entrega_estimada);
+  const porVencer = !vencida && fechaPorVencer(cot.fecha_entrega_estimada);
+  return (
+    <span className={`text-xs font-bold ${vencida ? 'text-red-600' : porVencer ? 'text-amber-700' : 'text-slate-600'}`}>
+      {vencida && <AlertCircle size={11} aria-hidden="true" className="mr-1 inline" />}
+      {fechaCorta(cot.fecha_entrega_estimada) || '-'}
+    </span>
+  );
+}
+
+/**
+ * Estado: la insignia de estados-cotizacion.js (estadoDeTarjeta, la misma del tablero) y, debajo, los chips de la fila
+ * (chipsDocumentoVentas, RP18 y D4): «Atrasado N días», «Sin respuesta al recordatorio» (C14) y el de los cambios del
+ * cliente de B3-T18 («Cambios pedidos» o «Ya no la necesita», etiquetaChipCambios): los mismos de la tarjeta del tablero.
+ */
+function CeldaEstado({ cot }: { cot: FilaCOT }) {
+  const e = estadoDeTarjeta('COT', cot.estado);
+  const chips = chipsDocumentoVentas(cot, 'COT');
+  const clases = e.clases ? `${e.clases.bg} ${e.clases.text} ${e.clases.border}` : CLASE_CHIP.slate;
+  return (
+    <span className="flex min-w-0 flex-col items-start gap-0.5">
+      <span className={`${CHIP} text-[11px] ${clases}`}>{e.label}</span>
+      {chips.length > 0 && (
+        <span className="flex min-w-0 max-w-full flex-col items-start gap-0.5">
+          {chips.map((c) => <span key={c.texto} className={`${CHIP} min-w-0 text-[10px] ${CLASE_CHIP[c.tono] ?? CLASE_CHIP.slate}`}>{c.texto}</span>)}
+        </span>
+      )}
+    </span>
+  );
+}
+
+const tituloEstado = (cot: FilaCOT) =>
+  [estadoDeTarjeta('COT', cot.estado).label, ...chipsDocumentoVentas(cot, 'COT').map((c) => c.texto)].join(' · ');
+
+/**
+ * Acciones: «Ver» siempre a la vista (antes solo aparecía con el puntero encima) y el menú ⋯ (MenuFila, R11) con «Abrir
+ * solicitud» si la cotización viene de una y «Ver pedido» si tiene un pedido vigente (COT-LISTA); los dos vuelven a esta
+ * lista con return_to. Se fue el MoreVertical sin acción. Sin ninguna de las dos, MenuFila no pinta nada.
+ */
+function CeldaAcciones({ cot }: { cot: FilaCOT }) {
+  const acciones = useContext(AccionesLista);
+  const solicitud = enlaceDocumento('SC', cot.sc_id, { returnTo: RUTA_LISTA_COTIZACIONES });
+  const pedido = pedidoVigente(cot);
+  const enlacePedido = pedido ? enlaceDocumento('PVEN', pedido.id, { returnTo: RUTA_LISTA_COTIZACIONES }) : null;
+  const items: ItemMenuFila[] = [
+    { etiqueta: 'Abrir solicitud', icono: FileText, onClick: () => { if (solicitud) acciones?.ir(solicitud); }, oculto: !solicitud },
+    { etiqueta: 'Ver pedido', icono: ShoppingBag, onClick: () => { if (enlacePedido) acciones?.ir(enlacePedido); }, oculto: !enlacePedido },
+  ];
+  return (
+    <span className="flex items-center justify-end gap-1">
+      <button type="button" onClick={() => acciones?.abrir(cot)} title="Ver cotización" aria-label={`Ver ${cot.numero}`}
+        className={`${BOTON_FILA} bg-amber-50 hover:bg-amber-100 text-amber-700`}>
+        <FileText size={13} aria-hidden="true" />
+      </button>
+      <MenuFila items={items} etiqueta={`Acciones de ${cot.numero}`} />
+    </span>
+  );
+}
+
+/**
+ * B4 T9, la tabla (TABLA-listas-ventas punto 6; R26, RP85, D41). Las columnas del diseño: COT / SC (clave, fija a la
+ * izquierda), Cliente (la flexible; RP85: nace en 152), Cotizador, Total, Anticipo y Entrega est. (ocultas por defecto,
+ * R26: se muestran con «Ajustar tabla»), Estado (clave) y Acciones (fija a la derecha). Sin casillas: la lista no tiene
+ * acciones en lote. Constantes (estables, D40); sus celdas piden a la pantalla lo suyo por AccionesLista.
+ */
+const COLUMNAS_TABLA_COT: ColumnaTabla<FilaCOT>[] = [
+  { id: 'numero', titulo: 'COT / SC', ancho: 132, clave: true, fija: 'izquierda', ordenable: 'numero', titleCelda: tituloNumero,
+    celda: (cot) => <CeldaNumero cot={cot} /> },
+  { id: 'cliente', titulo: 'Cliente', ancho: 152, flexible: true, ordenable: 'cliente',
+    titleCelda: (cot) => [cot.customer_name || '-', cot.customer_phone].filter(Boolean).join(' · '),
+    celda: (cot) => <CeldaCliente cot={cot} /> },
+  { id: 'cotizador', titulo: 'Cotizador', ancho: 120, ordenable: 'cotizador', celda: (cot) => cot.cotizador || '-' },
+  { id: 'total', titulo: 'Total', ancho: 104, alinear: 'derecha', ordenable: 'total',
+    titleCelda: (cot) => [fCOP(cot.total_cop), sinPrecio(cot) ? 'Sin precio' : null].filter(Boolean).join(' · '),
+    celda: (cot) => <CeldaTotal cot={cot} /> },
+  { id: 'anticipo', titulo: 'Anticipo', ancho: 96, alinear: 'derecha', ocultaPorDefecto: true, ordenable: 'anticipo',
+    celda: (cot) => fCOP(cot.anticipo_cop) },
+  { id: 'entrega', titulo: 'Entrega est.', ancho: 104, ocultaPorDefecto: true, ordenable: 'entrega',
+    titleCelda: (cot) => fechaLarga(cot.fecha_entrega_estimada) || 'Sin fecha de entrega', celda: (cot) => <CeldaEntrega cot={cot} /> },
+  { id: 'estado', titulo: 'Estado', ancho: 120, clave: true, ordenable: 'estado', titleCelda: tituloEstado,
+    celda: (cot) => <CeldaEstado cot={cot} /> },
+  { id: 'acciones', titulo: 'Acciones', ancho: 88, clave: true, fija: 'derecha', celda: (cot) => <CeldaAcciones cot={cot} /> },
+];
+
+/**
+ * Las pestañas de la lista (TABLA-listas-ventas punto 6): las 3 vistas del servidor con sus conteos (con_conteos: con la
+ * búsqueda, sin la vista, los estados ni el semáforo; null mientras cargan: la barra gris, nunca 0). Se fue la pestaña
+ * Análisis (R13: «Ver análisis» abre el del Hub). Sin emojis.
+ */
+function pestanasDeLaLista(conteos: ConteosCOT | null): PestanaTabla[] {
+  return [
+    { id: 'activas', etiqueta: 'Activas', conteo: conteos?.activas ?? null },
+    { id: 'confirmadas', etiqueta: 'Confirmadas', conteo: conteos?.confirmadas ?? null },
+    { id: 'rechazadas', etiqueta: 'Rechazadas', conteo: conteos?.rechazadas ?? null },
+  ];
+}
+
+/** La tarjeta del tablero (KANBAN-ventas-listas punto 6, RP18, D4, D37 y el cruce C5): vuelve a esta lista. */
+const tarjetaDeCOT = (cot: FilaCOT) => tarjetaCotizacion(cot);
+
 // â”€â”€ Main Component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export default function CotizacionClient() {
   const router = useRouter();
-  const [cotizaciones, setCotizaciones] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [activeTab, setActiveTab] = useState('Activas');
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
-  const [alertDias, setAlertDias] = useState(2);
+  const { avisar } = useAvisos();
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [d, cfg] = await Promise.all([
-        apiFetch('/ventas/cotizaciones?limit=200'),
-        apiFetch('/ventas/config').catch(() => ({})),
-      ]);
-      setCotizaciones(Array.isArray(d) ? d : (d?.data ?? []));
-      // N8: GET /ventas/config responde {status, data: {clave: {value}}} (cualquier rol lo lee): diasAlerta lo interpreta y, sin valor valido, usa 2.
-      setAlertDias(diasAlerta(cfg, 'alerta_cot_dias'));
-    } catch { setCotizaciones([]); }
-    finally { setLoading(false); }
-  }, []);
+  // ── B4 T9, bloque 1: la carga del servidor (TABLA-listas-ventas punto 6; R5, R8, C3, C4; RP26, D39, D40) ──
+  // Ya no hay arreglos en memoria (antes, las 200 más recientes, filtradas y contadas en el navegador, y los días de
+  // alerta de /ventas/config). El estado ÚNICO de la lista: las pestañas, la búsqueda, el filtro de estados, el semáforo de
+  // la franja, las tarjetas, la tabla y el tablero despachan a él. El modo (Lista o Kanban) se guarda en
+  // vista:ventas.cotizaciones (RP26: este hook es su único dueño) y la pestaña, la página y la búsqueda en la sesión
+  // (volver del detalle deja lo mismo).
+  const [estado, despachar, listo] = useEstadoTabla(ID_COT, INICIAL_COT);
+  const enKanban = estado.modo === 'kanban';
 
-  useEffect(() => { load(); }, [load]);
+  // La tabla (T6B): GET /ventas/cotizaciones con vista, estados, semáforo, q, orden, limit y offset del estado, más los
+  // conteos de las pestañas y el resumen de las tarjetas y de los avisos (RP19) en la MISMA llamada. esperar: !listo
+  // (D40): el esqueleto, nunca «vacío». En Kanban, sin filas (EXTRA_TABLERO): las piden las columnas.
+  const listado = useListado<FilaCOT>({
+    ruta: '/ventas/cotizaciones', estado, conConteos: true, conResumen: true, esperar: !listo, despachar,
+    extra: enKanban ? EXTRA_TABLERO : null,
+  });
+  // m5 de T8: mientras la última respuesta sea la de Kanban (sin filas) y la tabla ya pida su página, la tabla está
+  // cargando y el total en 'cargando': nunca «No hay cotizaciones en esta vista» con el total de la otra consulta.
+  const [llegada, setLlegada] = useState(() => llegadaDeListado(null, null, false));
+  const llegadaAhora = llegadaDeListado(llegada, listado.crudo, enKanban);
+  if (llegadaAhora !== llegada) setLlegada(llegadaAhora);
+  const sinPagina = !enKanban && llegadaAhora.sinFilas && !listado.error;
+
+  // La franja del flujo (R8): GET /ventas/flujo; recargaFlujo sube con cada recarga de la lista.
+  const [recargaFlujo, setRecargaFlujo] = useState(0);
+  const flujo = useResumenFlujo<DatosFlujo>('/ventas/flujo', recargaFlujo);
+
+  // El tablero en modo servidor (R11, C4, D39): una consulta por columna (consultaColumnaCOT: vista=todas, los estados de
+  // la columna cruzados con el filtro de la pantalla; sin ninguno en común la columna queda vacía sin pedir nada) con el
+  // MISMO estado (búsqueda y semáforo); porColumna = el tamaño de la tabla y limit=0 en la plegada (lo hace el hook).
+  // 'atencion' en las abiertas y 'reciente' en Rechazada (D39).
+  const tablero = useTableroKanban<FilaCOT>({
+    pantalla: ID_COT,
+    modo: 'servidor',
+    columnas: COLUMNAS_COT,
+    activo: listo && enKanban,
+    porColumna: estado.tamano,
+    dependencias: dependenciasTablero(estado),
+    ordenDe: (c) => (c.cerrada ? 'reciente' : 'atencion'),
+    cargar: async (columna, { offset, limit, orden, signal }) => {
+      const consulta = consultaColumnaCOT(estado, columna, { orden, limit, offset });
+      if (consulta === null) return { filas: [], total: 0 };
+      return normalizarRespuesta(await apiFetch(`/ventas/cotizaciones?${consulta}`, { signal }));
+    },
+  });
+
+  // «Actualizar»: la tabla, el tablero y la franja. Ninguna recarga vacía lo que se ve: los hooks conservan lo último.
+  const { recargar: recargarListado } = listado;
+  const { recargar: recargarTablero } = tablero;
+  const recargarLista = useCallback(() => {
+    recargarListado();
+    recargarTablero();
+    setRecargaFlujo((n) => n + 1);
+  }, [recargarListado, recargarTablero]);
+
+  // D40 y D41: un solo usePreferenciasTabla por id (la tabla y «Ajustar tabla» comparten su resultado y el ref del ancho).
+  const prefs = usePreferenciasTabla(ID_COT, COLUMNAS_TABLA_COT);
+  const anchoTablaRef = useRef<number | null>(null);
+  // Desestructurado: con el objeto entero en ref={…}, react-hooks/refs marca «Cannot access refs during render».
+  const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
+  // Pasar a Kanban sale de la pantalla completa: el conmutador sigue a la vista y el tablero no queda tapado.
+  useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
+  // Las pestañas y las tarjetas salen de la misma llamada: un solo estado (C13; barras grises mientras cargan, «—» con error).
+  const estadoConteos = useEstadoKpi(listado.cargandoInicial || listado.recargando, listado.error);
 
   const searchParams = useSearchParams();
   // Compatibilidad con enlaces antiguos que abrian el detalle con ?id= (Hub, SC, PVEN):
@@ -810,261 +1103,256 @@ export default function CotizacionClient() {
     if (idParam) { const numId = Number(idParam); if (!isNaN(numId)) router.replace(`/dashboard/ventas/cotizacion/${numId}`); }
   }, [searchParams, router]);
 
-  // Derived stats -- COT-LISTA: una CONFIRMADA cuyo pedido se cancelo vuelve a 'Activas' (se ajusta y se reenvia)
-  // y no suma en 'Confirmadas' ni en 'Monto Confirmado'.
-  const activas     = cotizaciones.filter(c => pestanaCotizacion(c) === 'Activas');
-  const confirmadas = cotizaciones.filter(c => pestanaCotizacion(c) === 'Confirmadas');
-  const rechazadas  = cotizaciones.filter(c => pestanaCotizacion(c) === 'Rechazadas');
-  const conPedido   = confirmadas.filter(c => pedidoVigente(c));
-  const porConvertir= confirmadas.length - conPedido.length;
-  const sinCalc     = activas.filter(c => !(c.total_cop > 0)).length;
-  const vencenPronto= activas.filter(c => isExpiringSoon(c.fecha_entrega_estimada)).length;
-  const montoTotal  = confirmadas.reduce((s, c) => s + (Number(c.total_cop) || 0), 0);
-  const sinAtender  = activas.filter(c => {
-    const ms = (Date.now() - new Date(c.updated_at || c.created_at).getTime());
-    return ms / 3600000 > alertDias * 24;
-  }).length;
+  // ── B4 T9, bloque 2: pestañas y búsqueda (TABLA-listas-ventas punto 6; R5, RP26, D40, D41; H15, H17) ──
+  // COT-LISTA vive en el servidor: una CONFIRMADA cuyo pedido se canceló (y que el cliente no volvió a confirmar) cuenta
+  // en Activas, no en Confirmadas ni en el monto confirmado (f_cot_activa y f_cot_confirmada de T6B).
+  const pestanas = pestanasDeLaLista(listado.conteos as ConteosCOT | null);
+  // «N resultados» es el de la tabla; en Kanban cada columna trae su total (la barra no lo repite).
+  const totalDeLaBarra = enKanban ? {} : {
+    // m5 de T8: sin la página de la vista todavía (llegó la de Kanban), el total en 'cargando'.
+    total: sinPagina ? null : listado.total,
+    estadoTotal: estadoDelTotal({
+      total: listado.total, cargando: listado.cargandoInicial || sinPagina, recargando: listado.recargando, error: listado.error,
+    }),
+  };
+  // m2 de T8: el conmutador Lista / Kanban poda los estados con las opciones del modo nuevo (las columnas del tablero, o
+  // las de la pestaña en Lista), con la regla de accionPestana (accionModo); lo demás de la barra va directo.
+  const alCambiarBarra = useCallback((accion: AccionTabla) => {
+    if (accion.tipo === 'modo') {
+      const modo = String(accion.valor);
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_COT : opcionesEstadosCotizaciones));
+    } else despachar(accion);
+  }, [estado, despachar]);
+  // m8 de T8: el «vacío» de la lista solo cambia con la búsqueda y la pestaña. En Activas, sin búsqueda, el enlace de
+  // siempre a Solicitudes para crear una cotización.
+  const vacioLista = useMemo(() => {
+    const q = estado.q.trim();
+    return (
+      <div>
+        <p className="font-semibold text-slate-600">{q ? `Sin resultados para «${q}»` : 'No hay cotizaciones en esta vista'}</p>
+        <p className="mt-1 text-xs text-slate-500">Ajusta la búsqueda o el filtro de estados.</p>
+        {!q && estado.vista === 'activas' && (
+          <Link href="/dashboard/ventas/solicitud" className={`mt-3 inline-flex items-center gap-1 bg-amber-600 text-white px-4 py-2 rounded-xl font-bold text-xs hover:bg-amber-700 ${FOCO_VISIBLE}`}>
+            <ArrowRight size={12} aria-hidden="true" /> Ir a Solicitudes para crear una COT
+          </Link>
+        )}
+      </div>
+    );
+  }, [estado.q, estado.vista]);
 
-  const filtered = cotizaciones.filter(c => {
-    const ms = !search || JSON.stringify(c).toLowerCase().includes(search.toLowerCase());
-    if (!ms) return false;
-    if (activeTab === 'Activas' || activeTab === 'Confirmadas' || activeTab === 'Rechazadas') return pestanaCotizacion(c) === activeTab;
-    return true;
-  });
+  // ── B4 T9, bloque 3: la tabla (las columnas son constantes del módulo; sus celdas piden lo suyo por AccionesLista) ──
+  const abrirCotizacion = useCallback((cot: { id: number }) => router.push(`/dashboard/ventas/cotizacion/${cot.id}`), [router]);
+  const accionesFila = useMemo<AccionesFilaCOT>(() => ({ abrir: abrirCotizacion, ir: (ruta) => router.push(ruta) }), [abrirCotizacion, router]);
+
+  // ── B4 T9, bloque 4: el tablero (KANBAN-ventas-listas punto 6; C15, R11; RP16, D11, D39) ──
+  // reglaSoltarCotizacion sin puedeEnviar (D11): soltar en «Esperando al cliente» queda bloqueado con «Ábrela para
+  // enviar.» y el enlace a la cotización; no se arma otro ChannelModal ni otro POST. C15(a): sacarla de «Esperando» o de
+  // «Confirmada» queda bloqueado con «Ábrela para re-cotizar; te pedirá la razón.».
+  // 'cambio' (Rechazada → Borrador, Borrador → Vencida…): el PATCH del estado. El tablero mueve la tarjeta y, si el
+  // servidor la rechaza (N7: el 409 de otra activa), la devuelve con su mensaje; recarga su origen y su destino (D39) y
+  // aquí se recargan las tarjetas de arriba y la franja.
+  async function cambiarDesdeTablero(cot: FilaCOT, resultado: { estado: string }) {
+    await apiFetch(`/ventas/cotizaciones/${cot.id}`, {
+      method: 'PATCH', body: JSON.stringify({ estado: resultado.estado, updated_by: autorActual() }),
+    });
+    recargarListado();
+    setRecargaFlujo((n) => n + 1);
+  }
+  // 'accion' 'rechazar': ModalMotivo (5 letras o más) → PATCH {estado: 'RECHAZADA'} y la nota «Motivo del rechazo: …» en
+  // la Actividad (N3). Al terminar, del tablero solo su origen y su destino (D39), más las tarjetas y la franja.
+  const [rechazando, setRechazando] = useState<{ cot: FilaCOT; columnas: ColumnasDeTarjeta } | null>(null);
+  function accionDesdeTablero(cot: FilaCOT, resultado: { accion: string }, origen: string, destino: string) {
+    if (resultado.accion === 'rechazar') setRechazando({ cot, columnas: [origen, destino] });
+  }
+  async function rechazarConMotivo(motivo: string) {
+    if (!rechazando) return;
+    const { cot, columnas } = rechazando;
+    const autor = autorActual();
+    // Si el servidor no la rechaza, ModalMotivo muestra su mensaje y conserva lo escrito (no se recarga nada: no cambió).
+    await apiFetch(`/ventas/cotizaciones/${cot.id}`, { method: 'PATCH', body: JSON.stringify({ estado: 'RECHAZADA', updated_by: autor }) });
+    try {
+      await apiFetch(`/ventas/cotizaciones/${cot.id}/actividad`, {
+        method: 'POST', body: JSON.stringify({ action: 'NOTE_ADDED', description: `Motivo del rechazo: ${motivo}`, user_name: autor }),
+      });
+      avisar(`${cot.numero} rechazada`, { tono: 'ok' });
+    } catch (err) {
+      // El rechazo ya quedó hecho; el aviso dice que el motivo no quedó en la Actividad (como el Hub, N3).
+      avisar(`${cot.numero} quedó rechazada, pero el motivo no quedó en la Actividad: ${textoDeError(err)}`, { tono: 'error' });
+    }
+    recargarListado();
+    tablero.recargar([...columnas]);
+    setRecargaFlujo((n) => n + 1);
+  }
+
+  // ── B4 T9, bloque 5: las tarjetas (KPI-ventas punto 8; R12, RP19) ──
+  const tarjetas = tarjetasCotizaciones(listado.resumen);
+  // En Lista son las pestañas (D41: accionPestana, como un clic en la pestaña); tocar la activa vuelve a Activas (la de
+  // siempre, alternarSeleccion). En Kanban abren esa pestaña en Lista: el tablero muestra todas. Monto confirmado suma las
+  // Confirmadas: abre esa pestaña. El total no tiene una vista: no es un botón (RP19 (5)).
+  const vistaActiva = enKanban ? null : estado.vista;
+  const elegirVista = (vista: string) => {
+    const siguiente = enKanban ? vista : (alternarSeleccion(estado.vista, vista) ?? INICIAL_COT.vista);
+    despachar(accionPestana(estado, siguiente, opcionesEstadosCotizaciones));
+    if (enKanban) despachar({ tipo: 'modo', valor: 'lista' });
+  };
+
+  // ── B4 T9, bloque 6: la franja del flujo (FLUJO-ventas-pantallas C; R8, C3, D42, RP89) ──
+  const pasosFlujo = useMemo(() => pasosDeLista(flujo.datos, 'COT'), [flujo.datos]);
+  const atrasadosCOT = pasosFlujo.find((p) => p.esEste)?.atrasados ?? null;
+  // Lo que decía el aviso ámbar de la lista: «N sin precio» (resumen.sin_calc) y «N vencen en 7 días»
+  // (resumen.vencen_pronto, con valida_hasta del Bloque 3: RP89). Las cotizaciones sin atender son «Con atraso».
+  const avisosFlujo = useMemo(() => avisosCotizaciones(listado.resumen), [listado.resumen]);
+  const filtroSemaforo: FiltroSemaforo = estado.semaforo === 'atrasados' ? 'atrasados' : 'todos';
+  // «Con atraso» pone semaforo=atrasados en el estado único (la tabla y el tablero lo mandan al servidor) y vuelve a la
+  // página 1; «Ver todo» lo quita. Rechazadas nunca va atrasada: desde ahí abre Activas, también en Kanban (r2b de T8),
+  // con la poda de las opciones del modo que se ve (en Kanban, las del tablero: su filtro se queda).
+  const alFiltrarSemaforo = (f: FiltroSemaforo) => {
+    if (f !== 'todos' && VISTAS_SIN_ATRASO.includes(estado.vista ?? '')) {
+      despachar(accionPestana(estado, INICIAL_COT.vista, enKanban ? OPCIONES_ESTADOS_TABLERO_COT : opcionesEstadosCotizaciones));
+    }
+    despachar({ tipo: 'semaforo', valor: f === 'todos' ? null : f });
+  };
+  const actualizando = listado.recargando || flujo.cargando;
 
   return (
-    <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
-
+    <div className="w-full bg-slate-50 min-h-full flex flex-col">
       {/* Sub-module nav */}
       <SubNav label="Hub Ventas" items={VEN_NAV} currentPath="/dashboard/ventas/cotizacion" color="amber" hub={{ href: '/dashboard/ventas' }} />
 
-      {/* Alert Banner */}
-      {(sinCalc > 0 || vencenPronto > 0 || sinAtender > 0) && (
-        <div className="bg-amber-50 border-b border-amber-200 px-6 py-3 flex items-start gap-4">
-          <ShieldAlert className="text-amber-600 shrink-0 mt-0.5" size={20} />
-          <div className="flex-1">
-            <h4 className="text-sm font-black text-amber-800">ATENCIÓN — Cotizaciones requieren acción (Alerta {alertDias} días)</h4>
-            <p className="text-xs font-bold text-amber-700 mt-1">
-              {sinAtender > 0 && `* ${sinAtender} cotización(es) sin atender más de ${alertDias} días `}
-              {sinCalc > 0 && `* ${sinCalc} sin calcular / sin precio `}
-              {vencenPronto > 0 && `* ${vencenPronto} vence(n) en los próximos 7 días `}
-            </p>
-          </div>
-          <button onClick={load} className="bg-amber-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-amber-700 shrink-0">Actualizar</button>
-        </div>
-      )}
+      {/* B4 T9 (FLUJO-ventas-pantallas C; R8, D42, RP90): la franja del flujo reemplaza el aviso ámbar «ATENCIÓN —
+          Cotizaciones requieren acción». «Estás aquí» en Cotización, con su detalle por estado (las etiquetas únicas de
+          estados-cotizacion.js, las mismas de ESTADOS); las otras cajas llevan a su lista. «Con atraso» es
+          semaforo=atrasados en el servidor, con los atrasados del paso Cotización (lo que el aviso llamaba «sin atender»);
+          no hay «No resueltos» (la clave noResueltos no se escribe). Los avisos «N sin precio» y «N vencen en 7 días» son
+          del resumen de la lista (no son botones: no hay una vista que los filtre). Va directo bajo la barra de
+          submódulos, sin otro padding horizontal. */}
+      <BannerFlujo
+        titulo="Flujo comercial"
+        idPreferencia={ID_COT}
+        regla={textoRegla(flujo.datos?.dias_alerta)}
+        semaforo={{ atrasados: atrasadosCOT, filtro: filtroSemaforo, onFiltrar: alFiltrarSemaforo }}
+        pasos={pasosFlujo}
+        avisos={avisosFlujo}
+        cargando={flujo.cargando}
+        error={flujo.error}
+        onReintentar={flujo.recargar}
+      />
 
-      <div className="p-8 max-w-[1600px] mx-auto space-y-8">
-
-        {/* Header */}
+      {/* B4 T9: el contenedor del Hub y de Solicitudes (T7 y T8, CONTENEDOR_LISTA). */}
+      <div className={CONTENEDOR_LISTA}>
+        {/* Header. B4 T9 (FLUJO-ventas-pantallas C.3): la frase corta, sin el código COT-YYYY####. R13 (ANALISIS-ventas
+            punto 7): «Ver análisis» abre el Análisis del Hub enfocado en Cotizaciones (?tab=analisis&foco=cot). */}
         <PageHeader
           icon={FileText} color="amber"
           title="Cotizaciones"
-          subtitle="COT-YYYY#### — Genera precios, envía al cliente y confirma para crear Pedido de Venta."
+          subtitle="Precios y anticipo para el cliente; al confirmar se crea el pedido."
           actions={(
-            <div className="flex gap-3">
-              <button onClick={load} className="bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm shadow-sm">
-                <RefreshCw size={15} className={loading ? 'animate-spin' : ''}/> Actualizar
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button type="button" onClick={recargarLista} className={`bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm shadow-sm ${FOCO_VISIBLE}`}>
+                <RefreshCw size={15} aria-hidden="true" className={actualizando ? 'animate-spin' : ''}/> Actualizar
               </button>
-              <Link href="/dashboard/ventas/solicitud" className="bg-amber-600 hover:bg-amber-700 text-white px-6 py-2.5 rounded-xl font-bold shadow-md flex items-center gap-2 text-sm">
-                <Plus size={16}/> Nueva desde SC
+              <Link href={enlaceVerAnalisis('cot')}
+                className={`bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-amber-50 hover:text-amber-800 hover:border-amber-200 flex items-center gap-2 text-sm shadow-sm ${FOCO_VISIBLE}`}>
+                <ContenidoEnlace icon={BarChart3}>Ver análisis</ContenidoEnlace>
+              </Link>
+              <Link href="/dashboard/ventas/solicitud" className={`bg-amber-600 hover:bg-amber-700 text-white px-6 py-2.5 rounded-xl font-bold shadow-md flex items-center gap-2 text-sm ${FOCO_VISIBLE}`}>
+                <Plus size={16} aria-hidden="true"/> Nueva desde SC
               </Link>
             </div>
           )}
         />
 
-        {/* KPI Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-          <StatCard icon={FileText} color="amber" label="Activas" value={activas.length}
-            hint={sinCalc > 0 ? `${sinCalc} sin precio` : 'Todas calculadas'}
-            onClick={() => setActiveTab('Activas')} />
+        {/* B4 T9 (KPI-ventas punto 8; R12, RP19): las 4 tarjetas iguales (sin el div a medida ni la variante gradient),
+            con con_resumen de la MISMA llamada de la lista (todas las cotizaciones): mientras cargan, barras grises (nunca 0);
+            con error, «—». Activas y Confirmadas son sus pestañas y Monto confirmado abre Confirmadas (accionPestana; tocar
+            la activa vuelve a Activas); el total no tiene una vista (RP19 (5)). */}
+        <FranjaKpis estado={estadoConteos} titulo="Cotizaciones">
+          <TarjetaKpi kpi="cot_activas" valor={tarjetas?.activas.valor ?? null} ayuda={tarjetas?.activas.ayuda}
+            activo={vistaActiva === 'activas'} onClick={() => elegirVista('activas')} />
+          <TarjetaKpi kpi="cot_confirmadas" valor={tarjetas?.confirmadas.valor ?? null} ayuda={tarjetas?.confirmadas.ayuda}
+            activo={vistaActiva === 'confirmadas'} onClick={() => elegirVista('confirmadas')} />
+          <TarjetaKpi kpi="cot_monto_confirmado" valor={tarjetas?.monto_confirmado.valor ?? null} ayuda={tarjetas?.monto_confirmado.ayuda}
+            activo={vistaActiva === 'confirmadas'} onClick={() => elegirVista('confirmadas')} />
+          <TarjetaKpi kpi="cot_total" valor={tarjetas?.total.valor ?? null} ayuda={tarjetas?.total.ayuda} />
+        </FranjaKpis>
 
-          <StatCard icon={CheckCircle2} color="emerald" label="Confirmadas" value={confirmadas.length}
-            hint={confirmadas.length === 0 ? 'Sin confirmadas' : porConvertir > 0 ? `${conPedido.length} con pedido de venta · ${porConvertir} por convertir` : 'Todas con pedido de venta'}
-            onClick={() => setActiveTab('Confirmadas')} />
-
-          {/* Sin acento neutro/gris disponible en AccentColor -- se deja a medida para
-              conservar la misma paleta (slate) en vez de forzar un color del hub. */}
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group cursor-pointer hover:border-slate-300 transition-all">
-            <div className="w-12 h-12 rounded-xl bg-slate-50 flex items-center justify-center text-slate-600 mb-4 group-hover:scale-110 transition-transform">
-              <DollarSign size={24}/>
-            </div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Monto Confirmado</p>
-            <h2 className="text-xl font-black text-slate-800">{fCOP(montoTotal)}</h2>
-            <p className="text-xs font-bold text-slate-400 mt-2">{conPedido.length} con pedido de venta vigente</p>
-          </div>
-
-          <StatCard icon={Activity} color="amber" variant="gradient" label="Total Cotizaciones" value={cotizaciones.length}
-            hint={`${rechazadas.length} rechazadas`}
-            onClick={() => setActiveTab('Activas')} />
-        </div>
-
-        {/* Main Table */}
-        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col overflow-hidden">
-          {/* ROW 1: TABS + VIEW TOGGLE */}
-          <div className="flex items-center justify-between pt-1 pb-0">
-            <div className="flex items-center gap-1 overflow-x-auto">
-              {(['Activas','Confirmadas','Rechazadas','Analisis'] as const).map(tab=>(
-                <button key={tab} onClick={()=>setActiveTab(tab as any)}
-                  className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all ${activeTab===tab?'bg-indigo-600 text-white shadow-sm':'text-gray-600 hover:text-indigo-700 hover:bg-indigo-50'}`}>
-                  {tab === 'Analisis' ? 'Análisis' : tab}
-                  {tab!=='Analisis'&&<span className={`ml-1.5 text-xs font-black ${activeTab===tab?'text-indigo-200':'text-gray-400'}`}>
-                    {tab==='Activas'?activas.length:tab==='Confirmadas'?confirmadas.length:rechazadas.length}
-                  </span>}
-                </button>
-              ))}
-            </div>
-            {activeTab!=='Analisis'&&(
-              <div className="flex items-center gap-1 shrink-0 ml-4">
-                <button className="p-2 rounded-lg border bg-indigo-50 border-indigo-200 text-indigo-700">
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="3" width="14" height="2" rx="1" fill="currentColor"/><rect x="1" y="7" width="14" height="2" rx="1" fill="currentColor"/><rect x="1" y="11" width="14" height="2" rx="1" fill="currentColor"/></svg>
-                </button>
-                <button className="p-2 rounded-lg border border-gray-200 text-gray-400 hover:bg-gray-50">
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="14" rx="1.5" fill="currentColor"/><rect x="9" y="1" width="6" height="14" rx="1.5" fill="currentColor"/></svg>
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* ROW 2: SEARCH + FILTER + COUNT */}
-          {activeTab!=='Analisis'&&(
-            <div className="flex items-center gap-3 pt-3 pb-1 border-t border-slate-100 mt-3">
-              <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-2 gap-2 flex-1 max-w-[420px] shadow-sm focus-within:border-amber-400 focus-within:ring-2 focus-within:ring-amber-100">
-                <Search className="text-slate-400 shrink-0" size={14}/>
-                <input type="text" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar COT, cliente, SC, producto..." className="w-full bg-transparent text-sm font-medium text-slate-700 outline-none placeholder-slate-400"/>
-                {search&&<button onClick={()=>setSearch('')}><X size={13} className="text-slate-400 hover:text-slate-600"/></button>}
-              </div>
-              <button onClick={load} className="flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-600 text-sm font-semibold hover:bg-slate-50 shadow-sm">
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M3 7h8M5 11h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-                Filtrar Estado
-              </button>
-              <span className="text-sm text-slate-400 font-medium">{filtered.length} registros</span>
-            </div>
-          )}
-
-
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead className="bg-slate-50 border-b border-slate-200 text-[11px] font-black text-slate-500 uppercase tracking-wider">
-                <tr>
-                  <th className="px-6 py-4">COT / SC</th>
-                  <th className="px-6 py-4">Cliente</th>
-                  <th className="px-6 py-4">Cotizador</th>
-                  <th className="px-6 py-4">Total</th>
-                  <th className="px-6 py-4">Anticipo</th>
-                  <th className="px-6 py-4">Entrega Est.</th>
-                  <th className="px-6 py-4">Estado</th>
-                  <th className="px-6 py-4 text-center">Acciones</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50 text-sm">
-                {loading ? (
-                  <tr><td colSpan={8} className="px-6 py-16 text-center">
-                    <RefreshCw size={24} className="animate-spin text-amber-400 mx-auto mb-2"/>
-                    <p className="text-slate-400">Cargando cotizaciones...</p>
-                  </td></tr>
-                ) : filtered.length === 0 ? (
-                  <tr><td colSpan={8}>
-                    <EmptyState icon={FileText} message="No hay cotizaciones en esta categoría." />
-                    {activeTab === 'Activas' && (
-                      <div className="text-center pb-8 -mt-6">
-                        <Link href="/dashboard/ventas/solicitud" className="inline-flex items-center gap-1 bg-amber-600 text-white px-4 py-2 rounded-xl font-bold text-xs hover:bg-amber-700">
-                          <ArrowRight size={12}/> Ir a Solicitudes para crear una COT
-                        </Link>
-                      </div>
-                    )}
-                  </td></tr>
-                ) : filtered.slice((currentPage-1)*pageSize, currentPage*pageSize).map(cot => {
-                  const overdue = isOverdue(cot.fecha_entrega_estimada);
-                  const expiring = isExpiringSoon(cot.fecha_entrega_estimada);
-                  return (
-                    <tr key={cot.id} onClick={() => router.push(`/dashboard/ventas/cotizacion/${cot.id}`)}
-                      className="hover:bg-slate-50/80 transition-colors group cursor-pointer">
-                      <td className="px-6 py-4">
-                        <span className="font-black text-amber-700">{cot.numero}</span>
-                        {cot.sc_numero && (
-                          <p className="text-[10px] font-bold text-indigo-500 mt-0.5 flex items-center gap-1">
-                            SC: {cot.sc_numero}
-                          </p>
-                        )}
-                        {pedidoVigente(cot) ? (
-                          <p className="text-[10px] font-bold text-emerald-600 mt-0.5">Pedido {pedidoVigente(cot)?.numero}</p>
-                        ) : soloPedidosCancelados(cot) && situacionPedidoCotizacion(cot).avisoCancelado && (
-                          // Una COT que el cliente volvio a confirmar ya no lleva la marca (igual que en su detalle).
-                          <p className="text-[10px] font-bold text-rose-500 mt-0.5">Pedido {ultimoPedidoCancelado(cot)?.numero} cancelado</p>
-                        )}
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="font-bold text-slate-800">{cot.customer_name || '-'}</span>
-                        {cot.customer_phone && (
-                          <p className="text-[11px] text-slate-400">{cot.customer_phone}</p>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 text-slate-600 font-medium">{cot.cotizador || '-'}</td>
-                      <td className="px-6 py-4">
-                        <span className="font-black text-slate-800">{fCOP(cot.total_cop)}</span>
-                        {!(cot.total_cop > 0) && (
-                          <span className="ml-2 text-[10px] font-bold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">Sin precio</span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 font-bold text-slate-600">{fCOP(cot.anticipo_cop)}</td>
-                      <td className="px-6 py-4">
-                        <span className={`text-xs font-bold ${overdue ? 'text-red-600' : expiring ? 'text-amber-600' : 'text-slate-600'}`}>
-                          {overdue && <AlertCircle size={11} className="inline mr-1"/>}
-                          {fDate(cot.fecha_entrega_estimada)}
-                        </span>
-                      </td>
-                      {/* B3 T18 r1 (H28-cambios, C9): junto al estado, «Cambios pedidos» si el cliente pidió cambios en su enlace. */}
-                      <td className="px-6 py-4"><div className="flex flex-wrap items-center gap-1.5"><EstadoBadge estado={cot.estado}/><ChipCambiosCliente doc={cot} tipoDoc="COT"/></div></td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button onClick={e => { e.stopPropagation(); router.push(`/dashboard/ventas/cotizacion/${cot.id}`); }}
-                            className="bg-amber-100 text-amber-700 hover:bg-amber-200 px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1">
-                            <FileText size={12}/> Ver
-                          </button>
-                          <button className="text-slate-400 hover:text-slate-700 p-1">
-                            <MoreVertical size={15}/>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          {filtered.length > 0 && activeTab !== 'Analisis' && (
-            <div className="border-t border-slate-100 px-5 py-3 flex items-center justify-between bg-slate-50/50">
-              <div className="flex items-center gap-3">
-                <span className="text-xs font-bold text-slate-400">{filtered.length} registros</span>
-                <select value={pageSize} onChange={e=>{setPageSize(Number(e.target.value));setCurrentPage(1);}} className="text-xs border border-slate-200 rounded-lg px-2 py-1 font-bold text-slate-600 outline-none focus:ring-1 focus:ring-amber-200">
-                  <option value={25}>25 por página</option>
-                  <option value={50}>50 por página</option>
-                </select>
-                <p className="text-xs font-black text-amber-700">
-                  Total activas: {fCOP(activas.reduce((s, c) => s + (c.total_cop || 0), 0))}
-                </p>
-              </div>
-              {Math.ceil(filtered.length/pageSize)>1&&(
-                <div className="flex items-center gap-1">
-                  <button disabled={currentPage===1} onClick={()=>setCurrentPage(1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">«</button>
-                  <button disabled={currentPage===1} onClick={()=>setCurrentPage(p=>p-1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">‹</button>
-                  {Array.from({length:Math.min(5,Math.ceil(filtered.length/pageSize))},(_,i)=>{
-                    const tp=Math.ceil(filtered.length/pageSize);let page=i+1;
-                    if(tp>5){const half=2;const start=Math.max(1,Math.min(currentPage-half,tp-4));page=start+i;}
-                    return <button key={page} onClick={()=>setCurrentPage(page)} className={`px-2.5 py-1 text-xs font-bold border rounded-lg ${currentPage===page?'bg-amber-600 text-white border-amber-600':'border-slate-200 hover:bg-slate-100'}`}>{page}</button>;
-                  })}
-                  <button disabled={currentPage===Math.ceil(filtered.length/pageSize)} onClick={()=>setCurrentPage(p=>p+1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">›</button>
-                  <button disabled={currentPage===Math.ceil(filtered.length/pageSize)} onClick={()=>setCurrentPage(Math.ceil(filtered.length/pageSize))} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">»</button>
-                </div>
+        {/* B4 T9 (TABLA-listas-ventas punto 6, KANBAN-ventas-listas punto 6): la barra y la tabla estándar, o el tablero
+            en modo servidor, con el MISMO estado (búsqueda, estados y semáforo). Se fue la pestaña Análisis (R13): en ella
+            ya no se pinta la tabla. */}
+        <div className="flex min-w-0 flex-col gap-4">
+          {capa}
+          <AccionesLista.Provider value={accionesFila}>
+            <section ref={refTarjeta} className={claseTarjeta}>
+              {/* Las pestañas con los conteos del servidor (en Kanban no se pintan: el tablero muestra todas, D-T8-3); la
+                  búsqueda va al servidor (número, cliente, cotizador, la SC, el pedido y el producto, T6B); «Filtrar
+                  Estado» (H15) es FiltroEstados con las etiquetas de estados-cotizacion.js y solo los de la pestaña; los
+                  dos botones de vista sin onClick (H17) son ConmutadorVista. */}
+              <BarraTabla
+                estado={estado}
+                onEstado={alCambiarBarra}
+                pestanas={enKanban ? undefined : pestanas}
+                estadoConteos={estadoConteos}
+                placeholder="Buscar por número, cliente, cotizador, solicitud, pedido o producto…"
+                opcionesEstados={enKanban ? OPCIONES_ESTADOS_TABLERO_COT : opcionesEstadosCotizaciones}
+                ajustes={{ columnas: COLUMNAS_TABLA_COT, preferencias: prefs, anchoRef: anchoTablaRef }}
+                kanbanDisponible
+                pantallaCompleta={enKanban ? undefined : { completa, alternar }}
+                {...totalDeLaBarra}
+              />
+              {/* B4 T9, la tabla estándar en el servidor (TABLA-listas-ventas punto 6; R26, D41): la paginación, el
+                  tamaño (25 o 50) y el orden son de la tabla (se fue la paginación propia, con su «Total activas»); la
+                  fila atrasada en filaAlerta; un clic en la fila (o «Ver») abre la cotización. */}
+              {!enKanban && (
+                <TablaEstandar
+                  id={ID_COT}
+                  modo="servidor"
+                  columnas={COLUMNAS_TABLA_COT}
+                  preferencias={prefs}
+                  anchoRef={anchoTablaRef}
+                  estado={estado}
+                  onEstado={despachar}
+                  filas={listado.filas}
+                  total={sinPagina ? null : listado.total}
+                  cargando={listado.cargandoInicial || sinPagina}
+                  recargando={listado.recargando}
+                  error={listado.error}
+                  onReintentar={listado.recargar}
+                  aviso={listado.avisoOrden}
+                  onFila={abrirCotizacion}
+                  claseFila={claseDeFila}
+                  vacio={vacioLista}
+                  etiqueta="Cotizaciones"
+                />
               )}
-            </div>
+            </section>
+          </AccionesLista.Provider>
+          {/* B4 T9, el tablero (KANBAN-ventas-listas punto 6): Borrador · Esperando al cliente · Confirmada · Vencida ·
+              Rechazada (plegada). Lo que no se puede queda bloqueado con su motivo ANTES de soltar (reglaSoltarCotizacion). */}
+          {enKanban && (
+            <TableroKanban
+              tablero={tablero}
+              regla={reglaSoltarCotizacion}
+              tarjetaDe={tarjetaDeCOT}
+              onAbrir={abrirCotizacion}
+              onCambio={cambiarDesdeTablero}
+              onAccion={accionDesdeTablero}
+              color="amber"
+            />
           )}
         </div>
       </div>
 
+      {/* B4 T9 (KANBAN-ventas-listas punto 6, N3): el motivo del rechazo desde el tablero (ModalMotivo, nunca prompt). */}
+      {rechazando && (
+        <ModalMotivo
+          titulo={`Rechazar ${rechazando.cot.numero}`}
+          efectos={['La cotización pasa a Rechazada.', 'El motivo queda en la Actividad de la cotización.']}
+          textoConfirmar="Rechazar cotización"
+          placeholder="Por qué se rechaza la cotización…"
+          onConfirmar={rechazarConMotivo}
+          onCerrar={() => setRechazando(null)}
+        />
+      )}
     </div>
   );
 }
