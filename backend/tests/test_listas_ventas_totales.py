@@ -1,8 +1,8 @@
 """Resumenes y contadores de las listas de Ventas (API).
 
 - H47: GET /ventas/pedidos trae `resumen` (monto, saldo, anticipo y conteo por estado) sobre TODO el filtro, sin
-  sumar los pedidos CANCELADO ni DEVUELTO_TOTAL y sin el tope de la pagina. /ventas/stats y /ventas/analytics
-  tampoco suman dinero de un pedido devuelto por completo.
+  sumar los pedidos CANCELADO ni DEVUELTO_TOTAL y sin el tope de la pagina. /ventas/stats tampoco suma dinero de un
+  pedido devuelto por completo (B4 T6C retiro /ventas/analytics: su prueba paso a los kpis de /ventas/stats, RP6).
 - H32: GET /ventas/solicitudes trae `cotizaciones` (id, numero, estado) de cada solicitud, con una sola consulta.
 - COT-LISTA: GET /ventas/cotizaciones trae `pedidos_venta` (id, numero, estado) de cada cotizacion.
 - N8: GET /ventas/config lo lee cualquier rol, pero un no-admin solo ve las claves de la lista blanca.
@@ -114,10 +114,10 @@ def test_resumen_de_pedidos_respeta_el_filtro_por_estado(app_client, db, admin_t
 
 def test_el_dinero_total_de_ventas_no_suma_cancelados_ni_devueltos(app_client, db, admin_token):
     """H47 (revision de otros resumenes): /ventas/stats y /ventas/analytics usaban solo `!= CANCELADO`, asi que un
-    pedido devuelto por completo seguia sumando. Se compara contra lo que ya habia en la base (es compartida)."""
+    pedido devuelto por completo seguia sumando. Se compara contra lo que ya habia en la base (es compartida).
+    B4 T6C (RP6, [P9]): /ventas/analytics ya no existe; su mitad pasa a los kpis y a ven_por_estado de /ventas/stats."""
     suf = _suf()
     stats_antes = app_client.get("/api/v1/ventas/stats", headers=auth(admin_token)).json()["data"]
-    analytics_antes = app_client.get("/api/v1/ventas/analytics", headers=auth(admin_token)).json()["data"]
     cliente = _tres_pedidos(db, suf)
     _pedido(db, f"PVEN-TD{suf}", cliente, "DEVUELTO_TOTAL", 700000, 700000, 0)
 
@@ -127,11 +127,11 @@ def test_el_dinero_total_de_ventas_no_suma_cancelados_ni_devueltos(app_client, d
     # El numero de pedidos si cuenta todos.
     assert stats["ven_total"] - stats_antes["ven_total"] == 4
 
-    analytics = app_client.get("/api/v1/ventas/analytics", headers=auth(admin_token)).json()["data"]
-    assert analytics["total_revenue"] - analytics_antes["total_revenue"] == 1500000
-    assert analytics["total_count"] - analytics_antes["total_count"] == 2
-    assert "DEVUELTO_TOTAL" not in analytics["ven_por_estado"] or (
-        analytics["ven_por_estado"]["DEVUELTO_TOTAL"] == analytics_antes["ven_por_estado"].get("DEVUELTO_TOTAL", 0))
+    # RP6 [P9]: lo que afirmaba /ventas/analytics, ahora con los indicadores de /ventas/stats.
+    assert stats["kpis"]["pven_monto_vendido"] - stats_antes["kpis"]["pven_monto_vendido"] == 1500000
+    assert stats["kpis"]["pven_con_dinero"] - stats_antes["kpis"]["pven_con_dinero"] == 2
+    assert (stats["ven_por_estado"]["DEVUELTO_TOTAL"]
+            - stats_antes["ven_por_estado"].get("DEVUELTO_TOTAL", 0)) == 1
 
 
 # ─── H32: cotizaciones de cada solicitud ──────────────────────────────────────────────────────────────────────

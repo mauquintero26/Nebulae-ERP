@@ -60,6 +60,11 @@ from app.core.listados import (
     MAX_OFFSET, contar_por_vista, expresiones_tiempo, filtrar_por_estados, leer_lista, leer_orden, orden_por_lista,
     paginar, texto_busqueda, validar_orden, respuesta as respuesta_de_lista,
 )
+# B4 T6C (R7, R13, R21; C6, C12): los indicadores de /stats y el Análisis de Ventas con un solo resolver_periodo y las
+# definiciones de dinero de core/analisis_ventas.py.
+from app.core import analisis_ventas as av
+from app.core.analisis import validar_top
+from app.core.periodos import ERROR_PERIODO, PERIODOS_KPI, bloque_periodo, resolver_periodo
 from app.api.v1.schemas_compras import CancelarSolicitudBody, CotizarSinConfirmacionBody
 from app.api.v1.crm import mover_lead_de_solicitud, reabrir_lead_de_solicitud
 import datetime
@@ -5337,134 +5342,133 @@ def update_pxp(pxp_id: int, body: dict, user: User = Depends(require_roles(*ROLE
 
 
 # ─── DASHBOARD STATS ─────────────────────────────────────────────────────────
+# B4 T6C (KPI-ventas punto 3; R5, R7, R21; C3, C6, C12; RP3, RP29): /stats para todos los roles del ERP (los mismos de
+# las listas), con el período validado a mano y, ademas de las claves de hoy (que siguen leyendo el Dashboard General y
+# las pantallas que no se migran), ven_por_estado, kpis, periodo y flujo. Una sola regla por concepto:
+#   - las tarjetas de SC y COT son los resumenes de sus listas (_resumen_solicitudes y _resumen_cotizaciones, sobre
+#     TODOS los documentos y con los f_* de resolucion_ventas, RP3): el mismo numero en el Hub y en la lista. Soporte
+#     queda fuera de las tarjetas (R8): kpis.sc_total es el total de la lista; la clave vieja sc_total cuenta todas;
+#   - las de pedidos usan las condiciones de las pestañas (_condicion_vista_pedidos: en_curso = rv.f_pven_en_curso,
+#     pend_compra y cancelado), el dinero de H47 (rv.f_pven_con_dinero) y el saldo de R7 (Σ max(0, saldo_cop));
+#   - flujo (dinero y avance del periodo contra el anterior) sale de core/analisis_ventas.flujo_ventas, la misma regla
+#     del Analisis de Ventas.
+
+def _kpis_de_pedidos(db: Session) -> tuple:
+    """(kpis de pedidos, ven_por_estado) en UNA consulta agrupada por estado: cada columna lleva su FILTER (las
+    condiciones de las pestañas y de H47) y las filas se suman aqui. Los montos, al peso (redondear_peso)."""
+    pv = SaleOrder
+    con_dinero, en_curso = rv.f_pven_con_dinero(pv), _condicion_vista_pedidos("en_curso")
+    saldo = av.expr_saldo_por_cobrar(pv)
+
+    def suma(columna, condicion):
+        return func.coalesce(func.sum(columna).filter(condicion), 0)
+
+    columnas = {
+        "pven_en_curso": func.count(pv.id).filter(en_curso),
+        "pven_saldo_en_curso": suma(saldo, en_curso),
+        "pven_pendiente_compra": func.count(pv.id).filter(_condicion_vista_pedidos("pend_compra")),
+        "pven_cancelados": func.count(pv.id).filter(_condicion_vista_pedidos("cancelado")),
+        "pven_con_dinero": func.count(pv.id).filter(con_dinero),
+        "pven_monto_vendido": suma(pv.total_cop, con_dinero),
+        "pven_monto_entregado": suma(pv.total_cop, pv.estado.in_(("ENTREGADO", "FACTURADO"))),
+        "pven_saldo_por_cobrar": suma(saldo, con_dinero),
+        "pven_anticipo": suma(pv.anticipo_cop, con_dinero),
+    }
+    montos = {"pven_saldo_en_curso", "pven_monto_vendido", "pven_monto_entregado", "pven_saldo_por_cobrar",
+              "pven_anticipo"}
+    filas = db.query(pv.estado, func.count(pv.id), *columnas.values()).group_by(pv.estado).all()
+    por_estado = {fila[0]: int(fila[1]) for fila in filas}
+    sumas = {clave: sum((fila[2 + i] for fila in filas), 0) for i, clave in enumerate(columnas)}
+    kpis = {"pven_total": sum(por_estado.values())}
+    kpis.update({clave: float(redondear_peso(v)) if clave in montos else int(v) for clave, v in sumas.items()})
+    return kpis, por_estado
+
 
 @router.get("/stats")
-def ventas_stats(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *ROLE_COMPRAS, *ROLE_FINANZAS)),
-        db: Session = Depends(get_db)):
-    sc_total = db.query(func.count(CustomerRequest.id)).scalar()
-    cot_total = db.query(func.count(SalesQuotation.id)).scalar()
-    ven_total = db.query(func.count(SaleOrder.id)).scalar()
-    pxp_pendiente = db.query(func.count(PaymentPending.id)).filter(
-        PaymentPending.estado == "PENDIENTE").scalar()
-    # H47: ni cancelados ni devueltos por completo suman dinero (ven_total si los cuenta).
-    ven_monto = db.query(func.sum(SaleOrder.total_cop)).filter(
-        SaleOrder.estado.notin_(ESTADOS_VEN_SIN_DINERO)).scalar() or 0
+def ventas_stats(periodo: Optional[str] = None,
+                 user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+                 db: Session = Depends(get_db)):
+    """Los indicadores de Ventas. periodo: 7d, 30d (por defecto: PERIODO_KPI) o mes; otro valor, 422 «Período no
+    válido.» (R21). data = las claves de hoy (sc_total, cot_total, ven_total, pxp_pendiente, ven_monto_total,
+    sc_por_estado y cot_por_estado) + ven_por_estado + kpis (las 23 tarjetas de KPI-ventas) + periodo (bloque_periodo:
+    instantes ISO con Z, `hasta` exclusivo, RP29) + flujo ({actual, anterior, variacion_pct} de vendido_cop,
+    pedidos_nuevos, ticket_promedio_cop, cot_conversion_pct, solicitudes_nuevas y cotizaciones_nuevas)."""
+    clave = _parametro_de_lista(periodo, PERIODOS_KPI, ERROR_PERIODO)
+    p = resolver_periodo(clave)   # una clave de PERIODOS_KPI (o None: 30 dias) siempre resuelve
+    dias, ahora = leer_dias_alerta(db), ahora_utc()
+    sc = _resumen_solicitudes(db, [], dias, ahora)
+    cot = _resumen_cotizaciones(db, [], dias, ahora)
+    sc_por_estado = dict(db.query(CustomerRequest.estado, func.count(CustomerRequest.id))
+                         .group_by(CustomerRequest.estado).all())
+    cot_por_estado = dict(db.query(SalesQuotation.estado, func.count(SalesQuotation.id))
+                          .group_by(SalesQuotation.estado).all())
+    kpis_pedidos, ven_por_estado = _kpis_de_pedidos(db)
+    pxp_pendiente = db.query(func.count(PaymentPending.id)).filter(PaymentPending.estado == "PENDIENTE").scalar()
 
-    sc_por_estado = db.execute(text(
-        "SELECT estado, COUNT(*) as cnt FROM customer_requests GROUP BY estado"
-    )).fetchall()
-    cot_por_estado = db.execute(text(
-        "SELECT estado, COUNT(*) as cnt FROM sales_quotations GROUP BY estado"
-    )).fetchall()
-
+    kpis = {
+        "sc_activas": sc["activas"],
+        "sc_esperan_cotizacion": sc["esperan_cot"],
+        "sc_confirmadas": sc["confirmadas"],
+        "sc_canceladas": sc["canceladas"],
+        "sc_total": sc["total"],
+        "cot_activas": cot["activas"],
+        "cot_sin_precio": cot["sin_calc"],
+        "cot_confirmadas": cot["confirmadas"],
+        "cot_con_pedido": cot["con_pedido"],
+        "cot_por_convertir": cot["por_convertir"],
+        "cot_monto_confirmado": cot["monto_confirmado"],
+        "cot_rechazadas": cot["rechazadas"],
+        "cot_total": cot["total"],
+        **kpis_pedidos,
+    }
     return {
         "status": "success",
         "data": {
-            "sc_total": sc_total,
-            "cot_total": cot_total,
-            "ven_total": ven_total,
+            "sc_total": sum(sc_por_estado.values()),
+            "cot_total": sum(cot_por_estado.values()),
+            "ven_total": kpis["pven_total"],
             "pxp_pendiente": pxp_pendiente,
-            "ven_monto_total": float(ven_monto),
-            "sc_por_estado": {r[0]: r[1] for r in sc_por_estado},
-            "cot_por_estado": {r[0]: r[1] for r in cot_por_estado},
-        }
-    }
-
-
-# ─── ANALYTICS ───────────────────────────────────────────────────────────────
-
-@router.get("/analytics")
-def ventas_analytics(
-    range: Optional[str] = "30d",
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    product: Optional[str] = None,
-    top_n: int = Query(10, le=50),
-    
-    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
-    db: Session = Depends(get_db)
-):
-    now = datetime.datetime.utcnow()
-    # Determine date range
-    if date_from and date_to:
-        d_from = datetime.datetime.fromisoformat(date_from)
-        d_to   = datetime.datetime.fromisoformat(date_to) + datetime.timedelta(days=1)
-    else:
-        days_map = {"7d": 7, "30d": 30, "90d": 90, "180d": 180, "1y": 365}
-        days = days_map.get(range, 30)
-        d_from = now - datetime.timedelta(days=days)
-        d_to   = now + datetime.timedelta(days=1)
-
-    # Base VEN query in range (ni cancelados ni devueltos por completo: su dinero no cuenta, H47)
-    ven_q = db.query(SaleOrder).filter(
-        SaleOrder.created_at >= d_from,
-        SaleOrder.created_at <= d_to,
-        SaleOrder.estado.notin_(ESTADOS_VEN_SIN_DINERO)
-    )
-    if product:
-        ven_q = ven_q.filter(SaleOrder.productos.cast(text("text")).ilike(f"%{product}%"))
-
-    vens = ven_q.all()
-
-    # Revenue by day
-    revenue_by_day: dict = {}
-    for v in vens:
-        day = v.created_at.strftime("%Y-%m-%d") if v.created_at else "unknown"
-        revenue_by_day[day] = revenue_by_day.get(day, 0) + float(v.total_cop or 0)
-
-    # Top clients by revenue
-    client_rev: dict = {}
-    for v in vens:
-        name = v.customer_name or "Sin nombre"
-        client_rev[name] = client_rev.get(name, 0) + float(v.total_cop or 0)
-    top_clients = sorted(client_rev.items(), key=lambda x: x[1], reverse=True)[:top_n]
-
-    # Clients above thresholds
-    clients_500k  = [(k, v) for k, v in client_rev.items() if v >= 500000]
-    clients_1m    = [(k, v) for k, v in client_rev.items() if v >= 1000000]
-
-    # Total revenue and count
-    total_revenue = sum(float(v.total_cop or 0) for v in vens)
-    total_count   = len(vens)
-    avg_ticket    = total_revenue / total_count if total_count > 0 else 0
-
-    # SC and COT in range
-    sc_range = db.query(func.count(CustomerRequest.id)).filter(
-        CustomerRequest.created_at >= d_from, CustomerRequest.created_at <= d_to
-    ).scalar()
-    cot_range = db.query(func.count(SalesQuotation.id)).filter(
-        SalesQuotation.created_at >= d_from, SalesQuotation.created_at <= d_to
-    ).scalar()
-
-    # Conversion rates
-    conv_sc_cot = round(cot_range / sc_range * 100, 1) if sc_range > 0 else 0
-    conv_cot_ven = round(total_count / cot_range * 100, 1) if cot_range > 0 else 0
-
-    # Status breakdown for VEN
-    ven_por_estado: dict = {}
-    for v in vens:
-        ven_por_estado[v.estado] = ven_por_estado.get(v.estado, 0) + 1
-
-    return {
-        "status": "success",
-        "data": {
-            "range": range,
-            "date_from": d_from.isoformat(),
-            "date_to": d_to.isoformat(),
-            "total_revenue": total_revenue,
-            "total_count": total_count,
-            "avg_ticket": avg_ticket,
-            "sc_count": sc_range,
-            "cot_count": cot_range,
-            "conv_sc_cot_pct": conv_sc_cot,
-            "conv_cot_ven_pct": conv_cot_ven,
-            "revenue_by_day": [{"date": k, "total": v} for k, v in sorted(revenue_by_day.items())],
-            "top_clients": [{"name": k, "total": v} for k, v in top_clients],
-            "clients_above_500k": len(clients_500k),
-            "clients_above_1m": len(clients_1m),
+            # H47: ni cancelados ni devueltos por completo suman dinero (ven_total si los cuenta).
+            "ven_monto_total": kpis["pven_monto_vendido"],
+            "sc_por_estado": sc_por_estado,
+            "cot_por_estado": cot_por_estado,
             "ven_por_estado": ven_por_estado,
+            "kpis": kpis,
+            "periodo": bloque_periodo(p),
+            "flujo": av.flujo_ventas(db, p),
         }
     }
+
+
+# ─── ANÁLISIS DE VENTAS ──────────────────────────────────────────────────────
+# B4 T6C (ANALISIS-ventas punto 2; R7, R13, R21; C12; RP6, RP69, D34): reemplaza a GET /analytics, que se BORRA (su
+# unico consumidor era la pestaña Analisis vieja del Hub, que T7 pasa a esta ruta; entre T6C y T7 esa pestaña recibe un
+# 404, que atrapa su aviso). Los mismos roles que tenia /analytics (ALL_ERP_ROLES).
+
+@router.get("/analisis")
+def ventas_analisis(
+    periodo: Optional[str] = None,
+    desde: Optional[str] = None,
+    hasta: Optional[str] = None,
+    foco: Optional[str] = None,
+    top: Optional[str] = None,
+    producto: Optional[str] = None,
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """El Analisis de Ventas con el contrato unico de core/analisis.py (core/analisis_ventas.analisis_ventas). periodo:
+    7d, 30d (por defecto), 90d, mes, 12m o personalizado (con desde y hasta 'AAAA-MM-DD'); foco: hub (por defecto), sc,
+    cot o pven; top: 5 (por defecto), 10 o 25; producto: de 2 a 60 caracteres (RP69). Todo se declara como texto y se
+    valida aqui (R21): un valor que no sirve responde 422 con su texto en español. Los errores del calculo no se
+    convierten en 422: llegan como 500."""
+    foco = _parametro_de_lista(foco, av.FOCOS, av.ERROR_FOCO) or av.FOCO_POR_DEFECTO
+    try:
+        p = resolver_periodo(periodo, desde, hasta)
+        top = validar_top(top if isinstance(top, str) and top.strip() else av.TOP_POR_DEFECTO)
+        producto = av.validar_producto(producto)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return av.analisis_ventas(db, p, foco, top, producto)
 
 
 # ─── ALERTAS (SC/COT sin cambio en N dias) ───────────────────────────────────
