@@ -1900,7 +1900,7 @@ console.log('--- TEST 37 (T4D r1): los cables de la ronda r1 en el fuente (gesto
   assert.match(barra, /if \(e\.key === 'Escape' && busqueda\.texto !== ''\) \{\s*e\.preventDefault\(\);/);
   // 6e: activación manual de las pestañas: las flechas solo mueven el foco.
   assert.match(barra, /const teclaPestanas = [\s\S]*?botonesPestana\.current\.get\(siguiente\)\?\.focus\(\);/);
-  assert.ok(!/const teclaPestanas = [^;]*;[\s\S]*?elegirPestana\(siguiente\)/.test(barra), 'las flechas no activan');
+  assert.ok(!/const teclaPestanas = [^;]*;[\s\S]*?(elegirPestana|tocarPestana)\(siguiente\)/.test(barra), 'las flechas no activan');
   // 6f: los títulos se recortan a la zona libre entre las fijas (B4 T7 r1, A2: las que están quietas).
   assert.match(t, /recortarBordes\(rects, enOrden\.map\(\(v\) => fijasQuietas\[v\]\), \{ inicio \}\)/);
   // 6h: tonos de fila opacos y el JSDoc de claseFila.
@@ -2034,6 +2034,70 @@ console.log('--- TEST 39 (B4 T7 r1, A2): fijasActivas — en una caja angosta la
   assert.match(t, /const bordes = recortarBordes\(rects, enOrden\.map\(\(v\) => fijasQuietas\[v\]\), \{ inicio \}\);\s*destino = destinoArrastre\(enOrden, lados, col\.id, indiceDestino\(bordes, puntero\.x\)\);/);
   assert.match(t, /const lados = forma\.fijas;/);
   assert.equal((t.match(/forma\.fijas\[v\]/g) ?? []).length, 2, 'forma.fijas[v] solo en las fijas que miden y en «movible»');
+}
+
+console.log('--- TEST 40 (B4 T7 r1, A3): la pestaña aparte de BarraTabla (Análisis de un Hub con lista) ---');
+{
+  const { idsDePestanas, toquePestana, pestanaEnfocable } = TABLA;
+  const PESTANAS = [{ id: 'todos' }, { id: 'sc' }, { id: 'cot' }];
+  const aparte = (activa) => ({ id: 'analisis', etiqueta: 'Análisis', activa, onCambiar: () => {} });
+  // Las flechas, Inicio y Fin incluyen la aparte, al final (pestanaConTecla recibe estos ids).
+  assert.deepEqual(idsDePestanas(PESTANAS, aparte(false)), ['todos', 'sc', 'cot', 'analisis']);
+  assert.deepEqual(idsDePestanas(PESTANAS, null), ['todos', 'sc', 'cot']);
+  assert.deepEqual(idsDePestanas(undefined, aparte(true)), ['analisis']);
+  assert.deepEqual(idsDePestanas(/** @type {any} */ ([{ id: 'todos' }, null, { id: 3 }]), undefined), ['todos'], 'lo raro no entra');
+  assert.deepEqual(idsDePestanas([{ id: 'analisis' }], aparte(false)), ['analisis'], 'un id repetido no se duplica');
+  // Los toques.
+  assert.deepEqual(toquePestana({ id: 'analisis', vista: 'sc', aparte: aparte(false) }), { aparte: true, vista: null }, 'la aparte: onCambiar(true)');
+  assert.deepEqual(toquePestana({ id: 'analisis', vista: 'sc', aparte: aparte(true) }), { aparte: true, vista: null }, 'otra vez la aparte: onCambiar(true)');
+  assert.deepEqual(toquePestana({ id: 'sc', vista: 'sc', aparte: aparte(true) }), { aparte: false, vista: null },
+    'la vista de siempre con la aparte activa: onCambiar(false) y la vista no cambia');
+  assert.deepEqual(toquePestana({ id: 'cot', vista: 'sc', aparte: aparte(true) }), { aparte: false, vista: 'cot' },
+    'otra vista con la aparte activa: onCambiar(false) y accionPestana');
+  assert.deepEqual(toquePestana({ id: 'cot', vista: 'sc', aparte: aparte(false) }), { aparte: null, vista: 'cot' }, 'como hoy');
+  assert.deepEqual(toquePestana({ id: 'sc', vista: 'sc', aparte: aparte(false) }), { aparte: null, vista: null }, 'como hoy: nada');
+  assert.deepEqual(toquePestana({ id: 'cot', vista: 'sc' }), { aparte: null, vista: 'cot' }, 'sin aparte, como hoy');
+  // El tabIndex (el patrón de hoy): 0 en la activa (la aparte si está activa) o en la primera si ninguna lo está.
+  const ids = idsDePestanas(PESTANAS, aparte(false));
+  assert.equal(pestanaEnfocable(ids, 'sc', aparte(false)), 'sc');
+  assert.equal(pestanaEnfocable(ids, 'sc', aparte(true)), 'analisis');
+  assert.equal(pestanaEnfocable(ids, 'otra', aparte(false)), 'todos', 'ninguna activa: la primera');
+  assert.equal(pestanaEnfocable(ids, 'analisis', aparte(false)), 'todos', 'la vista nunca es la aparte (RP35)');
+  assert.equal(pestanaEnfocable(['todos', 'sc'], 'sc', null), 'sc');
+  assert.equal(pestanaEnfocable(['analisis'], null, aparte(false)), 'analisis', 'solo la aparte: es la primera');
+  assert.equal(pestanaEnfocable([], null, null), null);
+
+  // BarraTabla: la prop aditiva, la aparte al final y sin Contador, la barra reducida y los toques con la lib.
+  const barra = readFileSync(new URL('../src/components/tabla/BarraTabla.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(barra, /export type PestanaAparte = \{ id: string; etiqueta: string; activa: boolean; onCambiar: \(activa: boolean\) => void \};/);
+  assert.match(barra, /pestanaAparte\?: PestanaAparte;/);
+  assert.match(barra, /const aparteActiva = Boolean\(pestanaAparte\?\.activa\);/);
+  assert.match(barra, /const ids = idsDePestanas\(pestanas, pestanaAparte\);/);
+  assert.match(barra, /const enfocable = pestanaEnfocable\(ids, estado\.vista, pestanaAparte\);/);
+  assert.match(barra,
+    /const tocarPestana = \(id: string\) => \{\s*const toque = toquePestana\(\{ id, vista: estado\.vista, aparte: pestanaAparte \}\);\s*if \(toque\.aparte !== null\) pestanaAparte\?\.onCambiar\(toque\.aparte\);\s*if \(toque\.vista !== null\) onEstado\(accionPestana\(estado, toque\.vista, opcionesEstados\)\);\s*\};/);
+  assert.match(barra, /const siguiente = pestanaConTecla\(ids, enfocada \?\? enfocable, e\.key\);/, 'las flechas, Inicio y Fin incluyen la aparte');
+  assert.match(barra, /const activa = !aparteActiva && p\.id === estado\.vista;/, 'con la aparte activa, ninguna de vista queda seleccionada');
+  assert.match(barra, /tabIndex=\{p\.id === enfocable \? 0 : -1\}/);
+  const aparteJsx = /\{pestanaAparte && \(\s*<button[\s\S]*?<\/button>\s*\)\}/.exec(barra)?.[0] ?? '';
+  assert.ok(aparteJsx, 'la aparte se pinta');
+  assert.ok(barra.indexOf(aparteJsx) > barra.indexOf('{pestanas?.map((p) => {'), 'al final de la fila de pestañas');
+  for (const texto of ['role="tab"', 'data-pestana={pestanaAparte.id}', 'aria-selected={aparteActiva}',
+    'tabIndex={pestanaAparte.id === enfocable ? 0 : -1}', 'onClick={() => tocarPestana(pestanaAparte.id)}', '{pestanaAparte.etiqueta}']) {
+    assert.ok(aparteJsx.includes(texto), `la aparte: ${texto}`);
+  }
+  assert.ok(!/Contador/.test(aparteJsx), 'la aparte no lleva Contador');
+  assert.match(barra, /\{\(pestanas && pestanas\.length > 0\) \|\| pestanaAparte \? \(\s*<div role="tablist"/, 'la fila de pestañas también con solo la aparte');
+  // La barra reducida: con la aparte activa, ni búsqueda, ni filtros, ni «Ajustar tabla», ni conmutador, ni pantalla
+  // completa, ni «N resultados»: todo eso va en la segunda fila, que no se pinta.
+  const fila2 = barra.indexOf('{!aparteActiva && (\n        <div className="flex flex-wrap items-center gap-2">');
+  assert.ok(fila2 > 0, 'la segunda fila, solo sin la aparte activa');
+  const resto = barra.slice(fila2);
+  for (const pieza of ['type="search"', '<FiltroEstados', '{filtros}', '<MenuAjustes', '<ConmutadorVista', 'pantallaCompleta.alternar()', 'resultados']) {
+    assert.ok(resto.includes(pieza), `${pieza} va en la segunda fila`);
+    assert.ok(!barra.slice(0, fila2).includes(pieza) || pieza === 'resultados', `${pieza} no va antes`);
+  }
+  assert.ok(!/elegirPestana/.test(barra), 'un solo manejador de los toques (tocarPestana)');
 }
 
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');

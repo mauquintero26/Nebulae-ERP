@@ -40,6 +40,9 @@ NUNCA:
 | CRM | `'crm'` | `/crm/analisis` | `'purple'` | Sin selector |
 | Finanzas › Resumen | `'finanzas'` | `/finance/analisis` | `'blue'` | Sin selector |
 
+- La pestaña Análisis de un Hub con lista va como `pestanaAparte` de BarraTabla: la 7.ª de la fila, sin Contador.
+  Con ella activa, la barra queda con solo sus pestañas y debajo va `PanelAnalisisPerezoso`, en lugar de la tabla o
+  el tablero. Ver «La barra (`BarraTabla`)» en `design-system-reference.md`.
 - `modulo` es un `ModuloAnalisis` (`MODULOS_ANALISIS` de `@/lib/analisis`) y da la clave de preferencias `analisis:<modulo>`. En Ventas el foco va DENTRO de `analisis:ventas`; no existen `analisis:ventas-sc`, `analisis:ventas-cot` ni `analisis:ventas-pven`.
 - Las listas de Solicitudes, Cotizaciones y Pedidos de venta NO llevan pestaña Análisis propia: llevan un botón «Ver análisis» que abre el del Hub ya enfocado: `/dashboard/ventas?tab=analisis&foco=sc`, `foco=cot` o `foco=pven`. Pedidos de compra, Lista de compras y Traslados hacen lo mismo hacia `/dashboard/compras?tab=analisis`. El botón es un `<Link>` con `BTN.secondary` (`@/lib/design-system`).
 - Todavía no tienen Análisis E-commerce, Marketing, Logística ni el Dashboard General. No se les agrega uno sin que el usuario lo pida.

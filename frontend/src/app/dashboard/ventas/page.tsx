@@ -21,7 +21,7 @@ import type { AccionTabla, ColumnaTabla, PestanaTabla } from '@/components/tabla
 import { BannerFlujo, CadenaDocumentos, useResumenFlujo } from '@/components/flujo';
 import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
 import { PanelAnalisisPerezoso } from '@/components/analisis';
-import { TABLE, TABS_BAR } from '@/lib/design-system';
+import { TABLE } from '@/lib/design-system';
 import { accionPestana, dependenciasTablero, estadoDelTotal, normalizarRespuesta, queryListado } from '@/lib/tabla';
 import { alternarSeleccion, pasosConConteos } from '@/lib/flujo';
 import {
@@ -33,7 +33,6 @@ import {
 } from '@/lib/kanban-ventas';
 import { PERIODO_KPI } from '@/lib/kpis';
 import { FOCOS_VENTAS } from '@/lib/analisis';
-import { pestanaConTecla } from '@/lib/pestanas';
 import { textoDeError, esErrorDeValidacion } from '@/lib/avisos';
 import { VEN_NAV } from './ven-nav';
 import { CambiosDeActividad, EnlaceConfirmacionModal, getUsuarioActual } from './flujo';
@@ -208,9 +207,11 @@ const CHIP_TONO: Record<string, string> = {
 const CHIP = 'inline-block max-w-full truncate rounded-full border px-1 py-0.5 text-[10px] font-bold leading-tight tracking-tight';
 const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
 
-/** Los dos apartados del Hub. Análisis es un estado de la página, no una vista de la tabla (RP35, RP21). */
-const SECCIONES_HUB = [{ id: 'documentos', etiqueta: 'Documentos' }, { id: 'analisis', etiqueta: 'Análisis' }] as const;
-type SeccionHub = (typeof SECCIONES_HUB)[number]['id'];
+/**
+ * Los dos apartados del Hub. Análisis es un estado de la página, no una vista de la tabla (RP35, RP21). B4 T7 r1 (A3):
+ * su pestaña es la pestanaAparte de BarraTabla, la 7.ª de la fila.
+ */
+type SeccionHub = 'documentos' | 'analisis';
 
 /** La insignia del estado con la tabla única de su tipo (estadoDeTarjeta: clases de Tailwind, o los hex en la SC). */
 function InsigniaEstado({ tipo, estado }: { tipo: FilaHub['tipo']; estado: unknown }) {
@@ -939,15 +940,11 @@ export default function VentasHub() {
     // Al volver a los documentos la URL deja de decir ?tab=analisis (recargar no reabre el Análisis).
     if (s === 'documentos' && leerEnlaceHub(window.location.search).analisis) router.replace(RUTA_HUB_VENTAS);
   }, [router]);
-  const botonesSeccion = useRef(new Map<SeccionHub, HTMLButtonElement>());
-  const teclaSecciones = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    const siguiente = pestanaConTecla(SECCIONES_HUB.map((s) => s.id), seccion, e.key) as SeccionHub | null;
-    if (!siguiente) return;
-    e.preventDefault();
-    cambiarSeccion(siguiente);
-    botonesSeccion.current.get(siguiente)?.focus();
-  };
-  const idSecciones = React.useId();
+  // B4 T7 r1 (A3): la pestaña Análisis de la barra (pestanaAparte). Tocarla otra vez, o tocar la vista de siempre con
+  // los documentos a la vista, no cambia nada.
+  const alCambiarAparte = useCallback((activa: boolean) => {
+    if (activa !== enAnalisis) cambiarSeccion(activa ? 'analisis' : 'documentos');
+  }, [enAnalisis, cambiarSeccion]);
 
   // ── B4 T7, la franja del flujo (FLUJO-ventas-pantallas A; R6, C3, RP21, RP34, D27(a), D42) ──
   const filtroSemaforo: FiltroSemaforo =
@@ -1064,23 +1061,6 @@ export default function VentasHub() {
             </div>
           )} />
 
-        {/* B4 T7: los dos apartados del Hub. «Análisis» es un estado de la página (RP35): nunca va en estado.vista ni
-            se manda vista=analisis; las pestañas de la tabla son las 6 vistas de R6, dentro de la barra. */}
-        <div role="tablist" aria-label="Apartados del Hub de Ventas" onKeyDown={teclaSecciones} className={`${TABS_BAR.group} self-start max-w-full`}>
-          {SECCIONES_HUB.map((s) => {
-            const activa = s.id === seccion;
-            return (
-              <button key={s.id} type="button" role="tab" id={`${idSecciones}-${s.id}`} aria-selected={activa}
-                aria-controls={`${idSecciones}-panel`} tabIndex={activa ? 0 : -1}
-                ref={(el) => { if (el) botonesSeccion.current.set(s.id, el); else botonesSeccion.current.delete(s.id); }}
-                onClick={() => { if (!activa) cambiarSeccion(s.id); }}
-                className={`${activa ? TABS_BAR.tabActive : TABS_BAR.tabInactive} ${FOCO_VISIBLE}`}>
-                {s.etiqueta}
-              </button>
-            );
-          })}
-        </div>
-
         {/* B4 T7 (KPI-ventas, R6, R7, RP68, RP70): dinero y avance de /ventas/stats?periodo=30d, no pulsables (no
             equivalen a una vista); los conteos por paso viven solo en el diagrama (C6). Mientras cargan, barras grises;
             si /ventas/stats falla, «—». No se ven en Análisis (allí van sus propios indicadores). */}
@@ -1114,10 +1094,88 @@ export default function VentasHub() {
           </div>
         )}
 
-        {/* B4 T7: el apartado elegido. Documentos: la barra y la tabla estándar (TABLA-hub-ventas) o el tablero en modo
-            servidor (KANBAN-hub-ventas), con el MISMO estado (pestaña, búsqueda, estados, semáforo y paso). Análisis: la
-            pestaña estándar (ANALISIS-ventas). */}
-        <div role="tabpanel" id={`${idSecciones}-panel`} aria-labelledby={`${idSecciones}-${seccion}`} className="flex min-w-0 flex-col gap-4">
+        {/* B4 T7 r1 (A3): la tarjeta de la barra queda en su lugar en los dos apartados. Documentos: la barra y la tabla
+            estándar (TABLA-hub-ventas) o el tablero en modo servidor (KANBAN-hub-ventas), con el MISMO estado (pestaña,
+            búsqueda, estados, semáforo y paso). Análisis: la 7.ª pestaña de la barra (pestanaAparte, sin Contador; la
+            barra queda con solo sus pestañas) y, debajo, la pestaña estándar (ANALISIS-ventas). */}
+        <div className="flex min-w-0 flex-col gap-4">
+          {capa}
+          <section ref={refTarjeta} className={claseTarjeta}>
+            <BarraTabla
+              estado={estado}
+              onEstado={alEstadoBarra}
+              pestanas={pestanas}
+              pestanaAparte={{ id: 'analisis', etiqueta: 'Análisis', activa: enAnalisis, onCambiar: alCambiarAparte }}
+              estadoConteos={estadoConteos}
+              placeholder="Buscar por número, cliente, asesor o producto…"
+              opcionesEstados={opcionesEstadosHub}
+              filtros={chipsFiltro.length > 0 || textoOrden ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* clic_en_hub (R6): el filtro del paso o del semáforo con su chip para quitarlo. */}
+                  {chipsFiltro.map((c) => (
+                    <button key={c.campo} type="button" onClick={() => despachar({ tipo: c.campo, valor: null })}
+                      aria-label={`Quitar el filtro «${c.texto}»`} title={`Quitar el filtro «${c.texto}»`}
+                      className={`inline-flex items-center gap-1 rounded-xl border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs font-bold text-indigo-700 hover:bg-indigo-100 ${FOCO_VISIBLE}`}>
+                      {c.texto}
+                      <X size={12} aria-hidden="true"/>
+                    </button>
+                  ))}
+                  {/* orden_clic_columna (R6): ordenada por una columna, el chip vuelve al orden del semáforo. */}
+                  {textoOrden && (
+                    <span className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-600">
+                      {textoOrden}
+                      <span aria-hidden="true">·</span>
+                      <button type="button" onClick={() => despachar({ tipo: 'orden', valor: 'atencion' })}
+                        className={`rounded font-bold text-indigo-700 hover:underline ${FOCO_VISIBLE}`}>
+                        Atención primero
+                      </button>
+                    </span>
+                  )}
+                </div>
+              ) : undefined}
+              ajustes={{ columnas: COLUMNAS_TABLA_HUB, preferencias: prefs, anchoRef: anchoTablaRef }}
+              kanbanDisponible
+              pantallaCompleta={estado.modo === 'lista' ? { completa, alternar } : undefined}
+              total={listado.total}
+              estadoTotal={estadoDelTotal({
+                total: listado.total, cargando: listado.cargandoInicial, recargando: listado.recargando, error: listado.error,
+              })}
+            />
+            {!enAnalisis && estado.modo === 'lista' && (
+              <AccionesFila.Provider value={accionesFila}>
+                <TablaEstandar
+                  id={ID_HUB}
+                  modo="servidor"
+                  columnas={COLUMNAS_TABLA_HUB}
+                  preferencias={prefs}
+                  anchoRef={anchoTablaRef}
+                  estado={estado}
+                  onEstado={despachar}
+                  filas={listado.filas}
+                  total={listado.total}
+                  cargando={listado.cargandoInicial}
+                  recargando={listado.recargando}
+                  error={listado.error}
+                  onReintentar={listado.recargar}
+                  aviso={listado.avisoOrden}
+                  claveFila={claveDeFila}
+                  onFila={openDocDetail}
+                  claseFila={claseDeFila}
+                  grupoFila={atencion ? grupoDeFila : undefined}
+                  tituloGrupo={tituloDeGrupo}
+                  seleccion={seleccion}
+                  onSeleccion={alSeleccionar}
+                  vacio={(
+                    <div>
+                      <p className="font-semibold text-slate-600">{estado.q.trim() ? `Sin resultados para «${estado.q.trim()}»` : 'No hay documentos en esta vista'}</p>
+                      <p className="mt-1 text-xs text-slate-400">Prueba cambiando los filtros o agregando una nueva solicitud.</p>
+                    </div>
+                  )}
+                  etiqueta="Documentos del Hub de Ventas"
+                />
+              </AccionesFila.Provider>
+            )}
+          </section>
           {enAnalisis ? (
             /* ANALISIS-ventas punto 3 (R2, R13, RP6, RP68, RP69, D45): /ventas/analisis con el selector Todo /
                Solicitudes / Cotizaciones / Pedidos; el ?foco= de «Ver análisis» gana hasta que el usuario elige otro y la
@@ -1133,99 +1191,19 @@ export default function VentasHub() {
               busquedaProducto
               asistente={ASISTENTE_VENTAS}
             />
-          ) : (
-            <>
-              {capa}
-              <section ref={refTarjeta} className={claseTarjeta}>
-                <BarraTabla
-                  estado={estado}
-                  onEstado={alEstadoBarra}
-                  pestanas={pestanas}
-                  estadoConteos={estadoConteos}
-                  placeholder="Buscar por número, cliente, asesor o producto…"
-                  opcionesEstados={opcionesEstadosHub}
-                  filtros={chipsFiltro.length > 0 || textoOrden ? (
-                    <div className="flex flex-wrap items-center gap-2">
-                      {/* clic_en_hub (R6): el filtro del paso o del semáforo con su chip para quitarlo. */}
-                      {chipsFiltro.map((c) => (
-                        <button key={c.campo} type="button" onClick={() => despachar({ tipo: c.campo, valor: null })}
-                          aria-label={`Quitar el filtro «${c.texto}»`} title={`Quitar el filtro «${c.texto}»`}
-                          className={`inline-flex items-center gap-1 rounded-xl border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs font-bold text-indigo-700 hover:bg-indigo-100 ${FOCO_VISIBLE}`}>
-                          {c.texto}
-                          <X size={12} aria-hidden="true"/>
-                        </button>
-                      ))}
-                      {/* orden_clic_columna (R6): ordenada por una columna, el chip vuelve al orden del semáforo. */}
-                      {textoOrden && (
-                        <span className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-600">
-                          {textoOrden}
-                          <span aria-hidden="true">·</span>
-                          <button type="button" onClick={() => despachar({ tipo: 'orden', valor: 'atencion' })}
-                            className={`rounded font-bold text-indigo-700 hover:underline ${FOCO_VISIBLE}`}>
-                            Atención primero
-                          </button>
-                        </span>
-                      )}
-                    </div>
-                  ) : undefined}
-                  ajustes={{ columnas: COLUMNAS_TABLA_HUB, preferencias: prefs, anchoRef: anchoTablaRef }}
-                  kanbanDisponible
-                  pantallaCompleta={estado.modo === 'lista' ? { completa, alternar } : undefined}
-                  total={listado.total}
-                  estadoTotal={estadoDelTotal({
-                    total: listado.total, cargando: listado.cargandoInicial, recargando: listado.recargando, error: listado.error,
-                  })}
-                />
-                {estado.modo === 'lista' && (
-                  <AccionesFila.Provider value={accionesFila}>
-                    <TablaEstandar
-                      id={ID_HUB}
-                      modo="servidor"
-                      columnas={COLUMNAS_TABLA_HUB}
-                      preferencias={prefs}
-                      anchoRef={anchoTablaRef}
-                      estado={estado}
-                      onEstado={despachar}
-                      filas={listado.filas}
-                      total={listado.total}
-                      cargando={listado.cargandoInicial}
-                      recargando={listado.recargando}
-                      error={listado.error}
-                      onReintentar={listado.recargar}
-                      aviso={listado.avisoOrden}
-                      claveFila={claveDeFila}
-                      onFila={openDocDetail}
-                      claseFila={claseDeFila}
-                      grupoFila={atencion ? grupoDeFila : undefined}
-                      tituloGrupo={tituloDeGrupo}
-                      seleccion={seleccion}
-                      onSeleccion={alSeleccionar}
-                      vacio={(
-                        <div>
-                          <p className="font-semibold text-slate-600">{estado.q.trim() ? `Sin resultados para «${estado.q.trim()}»` : 'No hay documentos en esta vista'}</p>
-                          <p className="mt-1 text-xs text-slate-400">Prueba cambiando los filtros o agregando una nueva solicitud.</p>
-                        </div>
-                      )}
-                      etiqueta="Documentos del Hub de Ventas"
-                    />
-                  </AccionesFila.Provider>
-                )}
-              </section>
-              {estado.modo === 'kanban' && (
-                <TableroKanban
-                  tablero={tablero}
-                  regla={reglaHub}
-                  tarjetaDe={tarjetaDeFila}
-                  onAbrir={openDocDetail}
-                  onCambio={cambiarDesdeTablero}
-                  onAccion={accionDesdeTablero}
-                  accionesTarjeta={accionesTarjeta}
-                  resumenColumna={resumenColumna}
-                  color="indigo"
-                />
-              )}
-            </>
-          )}
+          ) : estado.modo === 'kanban' ? (
+            <TableroKanban
+              tablero={tablero}
+              regla={reglaHub}
+              tarjetaDe={tarjetaDeFila}
+              onAbrir={openDocDetail}
+              onCambio={cambiarDesdeTablero}
+              onAccion={accionDesdeTablero}
+              accionesTarjeta={accionesTarjeta}
+              resumenColumna={resumenColumna}
+              color="indigo"
+            />
+          ) : null}
         </div>
 
         {/* Bulk action bar (N3 y N5): la selección es de la página de la tabla, así que solo en Lista. */}

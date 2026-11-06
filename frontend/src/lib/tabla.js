@@ -1762,6 +1762,55 @@ export function accionPestana(estado, vista, opciones) {
 }
 
 /**
+ * @typedef {{id: string, activa?: boolean}} PestanaAparteLib
+ *   B4 T7 r1 (A3): la pestaña aparte de BarraTabla (la Análisis de un Hub con lista): no es una vista de la lista
+ *   (RP35: nunca va en estado.vista).
+ */
+
+/**
+ * B4 T7 r1 (A3): los ids de las pestañas de BarraTabla en el orden de las flechas, Inicio y Fin (pestanaConTecla): las
+ * de vista y, al final, la aparte. Lo que no trae un id de texto no entra; la aparte no se repite.
+ * @param {ReadonlyArray<{id: string}> | null | undefined} pestanas
+ * @param {PestanaAparteLib | null | undefined} aparte
+ * @returns {string[]}
+ */
+export function idsDePestanas(pestanas, aparte) {
+  const ids = (pestanas ?? []).map((p) => p?.id).filter((id) => typeof id === 'string');
+  if (aparte && typeof aparte.id === 'string' && !ids.includes(aparte.id)) ids.push(aparte.id);
+  return ids;
+}
+
+/**
+ * B4 T7 r1 (A3): lo que hace tocar la pestaña `id` de BarraTabla. `aparte`: lo que recibe onCambiar de la aparte (null,
+ * no se llama); `vista`: la vista que se despacha con accionPestana (null, la vista no cambia).
+ *  - La aparte: {aparte: true, vista: null}.
+ *  - Una de vista con la aparte activa: {aparte: false, vista: id si es otra vista, o null}.
+ *  - Una de vista sin la aparte activa (o sin aparte): como siempre, {aparte: null, vista: id si es otra, o null}.
+ * @param {{id: string, vista: string | null | undefined, aparte?: PestanaAparteLib | null}} entrada
+ * @returns {{aparte: boolean | null, vista: string | null}}
+ */
+export function toquePestana({ id, vista, aparte = null }) {
+  if (aparte && id === aparte.id) return { aparte: true, vista: null };
+  return { aparte: aparte?.activa ? false : null, vista: id !== vista ? id : null };
+}
+
+/**
+ * B4 T7 r1 (A3): la pestaña con tabIndex 0 (el patrón de siempre: la activa, o la primera si ninguna lo está). Con la
+ * aparte activa, la aparte; si no, la vista activa si es una de las de vista (la vista nunca es la aparte); si no, la
+ * primera de `ids` (idsDePestanas). null sin pestañas.
+ * @param {ReadonlyArray<string>} ids
+ * @param {string | null | undefined} vista
+ * @param {PestanaAparteLib | null | undefined} aparte
+ * @returns {string | null}
+ */
+export function pestanaEnfocable(ids, vista, aparte) {
+  const lista = ids ?? [];
+  if (aparte?.activa && lista.includes(aparte.id)) return aparte.id;
+  if (typeof vista === 'string' && vista !== aparte?.id && lista.includes(vista)) return vista;
+  return lista[0] ?? null;
+}
+
+/**
  * Una casilla de FiltroEstados: los estados con `valor` marcado o desmarcado, en el orden de las opciones (el mismo
  * filtro da la misma URL); lo que no es una opción de la pestaña se descarta.
  * @param {ReadonlyArray<string>} seleccion

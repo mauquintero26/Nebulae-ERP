@@ -357,6 +357,31 @@ console.log('--- B4 T7 (R6, C4, R2, RP6): el Hub ya no tiene arreglos en memoria
   assert.ok(!/\p{Extended_Pictographic}/u.test(codigo.replace(/[✓→↑↓×·—…]/g, '')), 'sin emojis');
 }
 
+console.log('--- B4 T7 r1 (A3): Análisis es la 7.ª pestaña de la barra (pestanaAparte), sin el selector aparte ---');
+{
+  const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = hub.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  // El selector «Documentos / Análisis» se borró: ni su tablist ni sus pestañas ni su teclado.
+  for (const viejo of ['SECCIONES_HUB', 'Apartados del Hub', 'teclaSecciones', 'botonesSeccion', 'idSecciones', 'role="tablist"', 'role="tabpanel"', 'TABS_BAR']) {
+    assert.ok(!codigo.includes(viejo), `sin ${viejo}`);
+  }
+  // La barra lleva la aparte y la página la conecta con su estado (RP35: nunca vista=analisis).
+  assert.match(codigo, /<BarraTabla[\s\S]*?pestanaAparte=\{\{ id: 'analisis', etiqueta: 'Análisis', activa: enAnalisis, onCambiar: alCambiarAparte \}\}/);
+  assert.match(codigo, /const alCambiarAparte = useCallback\(\(activa: boolean\) => \{\s*if \(activa !== enAnalisis\) cambiarSeccion\(activa \? 'analisis' : 'documentos'\);\s*\}, \[enAnalisis, cambiarSeccion\]\);/);
+  assert.match(codigo, /activo: !enAnalisis,/, 'useListado sigue apagado en Análisis');
+  // Con Análisis, la barra queda en su lugar y debajo va el panel, en lugar de la tabla o el tablero.
+  const barra = codigo.indexOf('<BarraTabla');
+  const panel = codigo.indexOf('<PanelAnalisisPerezoso');
+  assert.ok(barra > 0 && panel > barra, 'el panel va debajo de la barra');
+  assert.match(codigo, /\{!enAnalisis && estado\.modo === 'lista' && \(\s*<AccionesFila\.Provider/, 'la tabla, solo en Documentos');
+  assert.match(codigo, /\{enAnalisis \? \(\s*<PanelAnalisisPerezoso[\s\S]*?\/>\s*\) : estado\.modo === 'kanban' \? \(\s*<TableroKanban/, 'el panel, en lugar del tablero');
+  // D-7: ?tab=analisis abre en Análisis y volver a Documentos limpia la URL con router.replace.
+  assert.match(codigo, /useState<SeccionHub>\(enlace\.analisis \? 'analisis' : 'documentos'\)/);
+  assert.match(codigo, /if \(s === 'documentos' && leerEnlaceHub\(window\.location\.search\)\.analisis\) router\.replace\(RUTA_HUB_VENTAS\);/);
+  // D-9: tocar un paso o el semáforo vuelve a Documentos.
+  assert.equal((codigo.match(/if \(enAnalisis\) cambiarSeccion\('documentos'\);/g) ?? []).length, 2);
+}
+
 console.log('--- H3 TEST 12: esNoResuelto / esAccionTomada ---');
 {
   assert.equal(esNoResuelto({ tipo: 'SC', estado: 'ASIGNADA' }, new Set()), true);

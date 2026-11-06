@@ -10,8 +10,8 @@ import type { AccentColor } from '@/components/ui/colors';
 import type { EstadoKpi } from '@/lib/kpis';
 import { pestanaConTecla } from '@/lib/pestanas';
 import {
-  accionPestana, crearBusquedaConRetardo, estadoDeConteo, etiquetasDeEstados, opcionesDeVista, sincronizarBusqueda,
-  textoResultados,
+  accionPestana, crearBusquedaConRetardo, estadoDeConteo, etiquetasDeEstados, idsDePestanas, opcionesDeVista,
+  pestanaEnfocable, sincronizarBusqueda, textoResultados, toquePestana,
 } from '@/lib/tabla';
 import type { EstadoTabla, LocalBusqueda, OpcionesEstados } from '@/lib/tabla';
 import type { DespacharTabla } from './useEstadoTabla';
@@ -50,6 +50,15 @@ import type { ColumnaAjustes } from './MenuAjustes';
  *    `total`, `estadoTotal` es obligatorio (un tipo unión).
  *  - r2, punto 4: si el panel de FiltroEstados se cierra porque quedó vacío, el foco va a la búsqueda, o a la pestaña
  *    activa si no hay búsqueda (alQuedarVacio).
+ *  - B4 T7 r1 (A3): `pestanaAparte` {id, etiqueta, activa, onCambiar}, una pestaña que no es una vista de la lista (la
+ *    Análisis de un Hub con lista; RP35: nunca va en estado.vista). Va al final de la fila, sin Contador.
+ *    - Con `activa`, ella queda aria-selected y ninguna de vista. La barra pinta solo la fila de pestañas: sin
+ *      búsqueda, filtros, «Ajustar tabla», conmutador, pantalla completa ni 'N resultados'.
+ *    - Tocarla llama a onCambiar(true). Tocar una de vista con ella activa llama a onCambiar(false) y, si además cambia
+ *      la vista, despacha accionPestana como siempre (toquePestana).
+ *    - Las flechas, Inicio y Fin la incluyen (idsDePestanas) y el tabIndex sigue el patrón de siempre
+ *      (pestanaEnfocable).
+ *    - La pantalla pinta debajo lo suyo en lugar de la tabla o el tablero.
  */
 
 export type { OpcionesEstados } from '@/lib/tabla';
@@ -63,12 +72,17 @@ export type PestanaTabla = {
   alerta?: boolean;
 };
 
+/** B4 T7 r1 (A3): la pestaña que no es una vista de la lista (ver arriba). */
+export type PestanaAparte = { id: string; etiqueta: string; activa: boolean; onCambiar: (activa: boolean) => void };
+
 type PropsBaseBarraTabla = {
   /** El estado de useEstadoTabla. */
   estado: EstadoTabla;
   /** El despachar de useEstadoTabla. */
   onEstado: DespacharTabla;
   pestanas?: ReadonlyArray<PestanaTabla>;
+  /** B4 T7 r1 (A3): la pestaña aparte, al final de las pestañas (por ejemplo, la Análisis de un Hub). */
+  pestanaAparte?: PestanaAparte;
   /** El estado de los conteos de las pestañas, de estadoKpi. */
   estadoConteos?: EstadoKpi;
   /** false quita la búsqueda. */
@@ -102,9 +116,11 @@ const PASTILLA_ACTIVA = 'bg-white/25 text-white';
 const PASTILLA_ALERTA = 'bg-rose-100 text-rose-700';
 const PASTILLA = 'bg-slate-200/70 text-slate-600';
 const BOTON = 'inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300';
+const PESTANA = 'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 py-1.5 text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300';
+const PESTANA_INACTIVA = 'border-transparent text-slate-600 hover:bg-slate-100';
 
 export function BarraTabla({
-  estado, onEstado, pestanas, estadoConteos, buscar = true, placeholder = 'Buscar…', opcionesEstados,
+  estado, onEstado, pestanas, pestanaAparte, estadoConteos, buscar = true, placeholder = 'Buscar…', opcionesEstados,
   etiquetaEstados = 'Estado', filtros, ajustes, kanbanDisponible = false, pantallaCompleta, total, estadoTotal,
   color = 'indigo',
 }: PropsBarraTabla) {
@@ -149,18 +165,22 @@ export function BarraTabla({
 
   // ── pestañas (activación manual: las flechas mueven el foco; Enter o Espacio, el clic del botón, activan) ──
   const botonesPestana = useRef(new Map<string, HTMLButtonElement>());
-  const elegirPestana = (id: string) => {
-    if (id !== estado.vista) onEstado(accionPestana(estado, id, opcionesEstados));
+  // B4 T7 r1 (A3): la aparte va al final, en las flechas y en el tabIndex; con ella activa, ninguna de vista queda elegida.
+  const aparteActiva = Boolean(pestanaAparte?.activa);
+  const ids = idsDePestanas(pestanas, pestanaAparte);
+  const enfocable = pestanaEnfocable(ids, estado.vista, pestanaAparte);
+  const tocarPestana = (id: string) => {
+    const toque = toquePestana({ id, vista: estado.vista, aparte: pestanaAparte });
+    if (toque.aparte !== null) pestanaAparte?.onCambiar(toque.aparte);
+    if (toque.vista !== null) onEstado(accionPestana(estado, toque.vista, opcionesEstados));
   };
   const teclaPestanas = (e: EventoTeclado<HTMLDivElement>) => {
-    const ids = (pestanas ?? []).map((p) => p.id);
     const enfocada = (e.target as HTMLElement).closest<HTMLElement>('[data-pestana]')?.dataset.pestana;
-    const siguiente = pestanaConTecla(ids, enfocada ?? estado.vista ?? ids[0], e.key);
+    const siguiente = pestanaConTecla(ids, enfocada ?? enfocable, e.key);
     if (!siguiente) return;
     e.preventDefault();
     botonesPestana.current.get(siguiente)?.focus();
   };
-  const hayActiva = (pestanas ?? []).some((p) => p.id === estado.vista);
 
   const opciones = opcionesDeVista(opcionesEstados, estado.vista);
   const resultados = textoResultados(total);
@@ -170,10 +190,10 @@ export function BarraTabla({
 
   return (
     <div className="flex flex-col gap-3 border-b border-slate-100 px-4 py-3">
-      {pestanas && pestanas.length > 0 && (
+      {(pestanas && pestanas.length > 0) || pestanaAparte ? (
         <div role="tablist" aria-label="Pestañas" onKeyDown={teclaPestanas} className="-mx-1 flex min-w-0 items-center gap-1 overflow-x-auto px-1 pb-0.5">
-          {pestanas.map((p, i) => {
-            const activa = p.id === estado.vista;
+          {pestanas?.map((p) => {
+            const activa = !aparteActiva && p.id === estado.vista;
             return (
               <button
                 key={p.id}
@@ -185,11 +205,9 @@ export function BarraTabla({
                 role="tab"
                 data-pestana={p.id}
                 aria-selected={activa}
-                tabIndex={activa || (!hayActiva && i === 0) ? 0 : -1}
-                onClick={() => elegirPestana(p.id)}
-                className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 py-1.5 text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 ${
-                  activa ? ACCENTS[color].navActive : 'border-transparent text-slate-600 hover:bg-slate-100'
-                }`}
+                tabIndex={p.id === enfocable ? 0 : -1}
+                onClick={() => tocarPestana(p.id)}
+                className={`${PESTANA} ${activa ? ACCENTS[color].navActive : PESTANA_INACTIVA}`}
               >
                 {p.etiqueta}
                 <span className={`inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 py-px text-[11px] ${activa ? PASTILLA_ACTIVA : p.alerta ? PASTILLA_ALERTA : PASTILLA}`}>
@@ -198,96 +216,115 @@ export function BarraTabla({
               </button>
             );
           })}
-        </div>
-      )}
-      <div className="flex flex-wrap items-center gap-2">
-        {buscar && (
-          <div className="relative flex min-w-[12rem] flex-1 items-center sm:max-w-xs">
-            <Search size={14} aria-hidden="true" className="pointer-events-none absolute left-3 text-slate-400" />
-            <input
-              ref={entrada}
-              type="search"
-              aria-label="Buscar"
-              placeholder={placeholder}
-              value={busqueda.texto}
-              onChange={(e) => {
-                const texto = e.target.value;
-                setBusqueda((b) => ({ ...b, texto }));
-                retardo().escribir(texto);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape' && busqueda.texto !== '') {
-                  // Sin el borrado nativo ni la salida de la pantalla completa (defaultPrevented): limpia de inmediato.
-                  e.preventDefault();
-                  limpiarBusqueda();
-                  return;
-                }
-                if (e.key !== 'Enter') return;
-                e.preventDefault();
-                retardo().ya(busqueda.texto);
-              }}
-              className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-8 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 [&::-webkit-search-cancel-button]:hidden"
-            />
-            {busqueda.texto !== '' && (
-              <button
-                type="button"
-                aria-label="Limpiar la búsqueda"
-                title="Limpiar la búsqueda"
-                onClick={() => {
-                  limpiarBusqueda();
-                  entrada.current?.focus();
-                }}
-                className="absolute right-2 inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-              >
-                <X size={14} aria-hidden="true" />
-              </button>
-            )}
-          </div>
-        )}
-        <FiltroEstados
-          opciones={opciones}
-          seleccion={estado.estados}
-          etiquetas={etiquetasDeEstados(opcionesEstados, (pestanas ?? []).map((p) => p.id))}
-          alQuedarVacio={() => (entrada.current ?? botonesPestana.current.get(estado.vista ?? ''))?.focus()}
-          onCambiar={(estados) => onEstado({ tipo: 'estados', valor: estados })}
-          etiqueta={etiquetaEstados}
-        />
-        {filtros}
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          {total !== undefined && (
-            <span className="whitespace-nowrap text-xs font-semibold text-slate-500" aria-live="polite">
-              {resultados !== null && (estadoNumero === 'listo' || estadoNumero === 'actualizando') ? (
-                <span className={estadoNumero === 'actualizando' ? 'opacity-60' : undefined}>{resultados}</span>
-              ) : (
-                <>
-                  <Contador valor={null} estado={estadoNumero === 'error' ? 'error' : 'cargando'} /> resultados
-                </>
-              )}
-            </span>
-          )}
-          {ajustes && estado.modo !== 'kanban' && (
-            <MenuAjustes columnas={ajustes.columnas} preferencias={ajustes.preferencias} anchoRef={ajustes.anchoRef} />
-          )}
-          <ConmutadorVista
-            modo={estado.modo}
-            onCambiar={(modo) => onEstado({ tipo: 'modo', valor: modo })}
-            kanbanDisponible={kanbanDisponible}
-            color={color}
-          />
-          {pantallaCompleta && (
+          {pestanaAparte && (
             <button
+              ref={(el) => {
+                if (el) botonesPestana.current.set(pestanaAparte.id, el);
+                else botonesPestana.current.delete(pestanaAparte.id);
+              }}
               type="button"
-              title={completa ? `${textoCompleta} (Esc)` : textoCompleta}
-              onClick={() => pantallaCompleta.alternar()}
-              className={BOTON}
+              role="tab"
+              data-pestana={pestanaAparte.id}
+              aria-selected={aparteActiva}
+              tabIndex={pestanaAparte.id === enfocable ? 0 : -1}
+              onClick={() => tocarPestana(pestanaAparte.id)}
+              className={`${PESTANA} ${aparteActiva ? ACCENTS[color].navActive : PESTANA_INACTIVA}`}
             >
-              {completa ? <Minimize2 size={14} aria-hidden="true" /> : <Maximize2 size={14} aria-hidden="true" />}
-              <span className="hidden sm:inline">{textoCompleta}</span>
-              <span className="sr-only sm:hidden">{textoCompleta}</span>
+              {pestanaAparte.etiqueta}
             </button>
           )}
         </div>
-      </div>
+      ) : null}
+      {!aparteActiva && (
+        <div className="flex flex-wrap items-center gap-2">
+          {buscar && (
+            <div className="relative flex min-w-[12rem] flex-1 items-center sm:max-w-xs">
+              <Search size={14} aria-hidden="true" className="pointer-events-none absolute left-3 text-slate-400" />
+              <input
+                ref={entrada}
+                type="search"
+                aria-label="Buscar"
+                placeholder={placeholder}
+                value={busqueda.texto}
+                onChange={(e) => {
+                  const texto = e.target.value;
+                  setBusqueda((b) => ({ ...b, texto }));
+                  retardo().escribir(texto);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape' && busqueda.texto !== '') {
+                    // Sin el borrado nativo ni la salida de la pantalla completa (defaultPrevented): limpia de inmediato.
+                    e.preventDefault();
+                    limpiarBusqueda();
+                    return;
+                  }
+                  if (e.key !== 'Enter') return;
+                  e.preventDefault();
+                  retardo().ya(busqueda.texto);
+                }}
+                className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-8 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 [&::-webkit-search-cancel-button]:hidden"
+              />
+              {busqueda.texto !== '' && (
+                <button
+                  type="button"
+                  aria-label="Limpiar la búsqueda"
+                  title="Limpiar la búsqueda"
+                  onClick={() => {
+                    limpiarBusqueda();
+                    entrada.current?.focus();
+                  }}
+                  className="absolute right-2 inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                >
+                  <X size={14} aria-hidden="true" />
+                </button>
+              )}
+            </div>
+          )}
+          <FiltroEstados
+            opciones={opciones}
+            seleccion={estado.estados}
+            etiquetas={etiquetasDeEstados(opcionesEstados, (pestanas ?? []).map((p) => p.id))}
+            alQuedarVacio={() => (entrada.current ?? botonesPestana.current.get(estado.vista ?? ''))?.focus()}
+            onCambiar={(estados) => onEstado({ tipo: 'estados', valor: estados })}
+            etiqueta={etiquetaEstados}
+          />
+          {filtros}
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+            {total !== undefined && (
+              <span className="whitespace-nowrap text-xs font-semibold text-slate-500" aria-live="polite">
+                {resultados !== null && (estadoNumero === 'listo' || estadoNumero === 'actualizando') ? (
+                  <span className={estadoNumero === 'actualizando' ? 'opacity-60' : undefined}>{resultados}</span>
+                ) : (
+                  <>
+                    <Contador valor={null} estado={estadoNumero === 'error' ? 'error' : 'cargando'} /> resultados
+                  </>
+                )}
+              </span>
+            )}
+            {ajustes && estado.modo !== 'kanban' && (
+              <MenuAjustes columnas={ajustes.columnas} preferencias={ajustes.preferencias} anchoRef={ajustes.anchoRef} />
+            )}
+            <ConmutadorVista
+              modo={estado.modo}
+              onCambiar={(modo) => onEstado({ tipo: 'modo', valor: modo })}
+              kanbanDisponible={kanbanDisponible}
+              color={color}
+            />
+            {pantallaCompleta && (
+              <button
+                type="button"
+                title={completa ? `${textoCompleta} (Esc)` : textoCompleta}
+                onClick={() => pantallaCompleta.alternar()}
+                className={BOTON}
+              >
+                {completa ? <Minimize2 size={14} aria-hidden="true" /> : <Maximize2 size={14} aria-hidden="true" />}
+                <span className="hidden sm:inline">{textoCompleta}</span>
+                <span className="sr-only sm:hidden">{textoCompleta}</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -448,6 +448,29 @@ export function LineasDelPedido({ lineas }: { lineas: Linea[] }) {
 - al pasar a Kanban, sal de la pantalla completa (`salir()` de usePantallaCompleta, el efecto del ejemplo): el conmutador sigue visible dentro de la tarjeta a pantalla completa y, sin la salida, el tablero queda tapado.
 - Todo despacha al estado único; al cambiar de pestaña, `accionPestana` quita los estados filtrados que la pestaña nueva no tiene.
 
+**La pestaña aparte (`pestanaAparte`).** Un Hub con lista lleva su pestaña Análisis como `pestanaAparte` de BarraTabla,
+no como un selector propio encima de la tarjeta. Es una pestaña que no es una vista de la lista: nunca va en
+`estado.vista`, y `useListado` se apaga con `activo: !enAnalisis`.
+- Se pinta al final de la fila y sin `Contador`.
+- Con `activa`, queda seleccionada ella sola. La barra pinta solo su fila de pestañas: sin búsqueda, filtros, «Ajustar
+  tabla», conmutador, «Pantalla completa» ni «N resultados».
+- Tocarla llama a `onCambiar(true)`. Tocar una pestaña de vista con la aparte activa llama a `onCambiar(false)` y, si la
+  vista cambia, despacha `accionPestana` como siempre.
+- Las flechas, Inicio y Fin la incluyen.
+- La pantalla pinta debajo de la tarjeta su `PanelAnalisisPerezoso`, en lugar de la tabla o el tablero.
+
+```tsx
+<BarraTabla
+  estado={estado}
+  onEstado={despachar}
+  pestanas={pestanas}
+  pestanaAparte={{ id: 'analisis', etiqueta: 'Análisis', activa: enAnalisis, onCambiar: (activa) => setEnAnalisis(activa) }}
+  /* … búsqueda, filtros, ajustes, conmutador, pantalla completa y total, como siempre */
+/>
+{!enAnalisis && estado.modo === 'lista' && <TablaEstandar /* … */ />}
+{enAnalisis ? <PanelAnalisisPerezoso /* … */ /> : estado.modo === 'kanban' ? <TableroKanban /* … */ /> : null}
+```
+
 ### Tablero Kanban: `TableroKanban`
 
 Un solo tablero para toda la app (Hub de Ventas, listas, Compras, Entregas, Leads del CRM…). Cada módulo define sus columnas y su regla de soltar en su librería (`COLUMNAS_PEDIDO` y `reglaSoltarPedido` en `lib/kanban-ventas.js`, `COLUMNAS_ENTREGA` en `lib/entregas.js`, `columnasDesdeEtapas` en `lib/crm-etapas.js`…). El ejemplo de arriba es la forma de conectarlo.
