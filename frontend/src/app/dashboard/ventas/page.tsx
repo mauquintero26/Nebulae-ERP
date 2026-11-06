@@ -1080,7 +1080,10 @@ export default function VentasHub() {
         accionAjustar={accionAjustar}
       />
 
-      <div className="flex-1 flex flex-col px-4 xl:px-8 py-6 max-w-[1600px] mx-auto w-full min-w-0 gap-6">
+      {/* B4 T7 r1b (D41): pb-24 deja libre, con la página al fondo, la esquina del botón flotante de la IA (GlobalAIChat:
+          fixed bottom-6 de 56 px, 80 px en total): el pie de la tabla, el tablero y Análisis quedan por encima. En la
+          pantalla completa la reserva es el pr-20 del pie. */}
+      <div className="flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6">
 
         {/* HEADER ROW */}
         <PageHeader
