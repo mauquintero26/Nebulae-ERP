@@ -209,15 +209,28 @@ console.log('--- D2 TEST 4: el botón «Vaciar las vencidas» (solo ADMIN) en la
   // y con limit=0) y la marca prende `activo` hasta que llegan (una respuesta nueva: otro `crudo`). Lo mismo en restaurarSC
   // y en el «Actualizar» de la cabecera.
   assert.ok(vaciar.indexOf('pedirConteos();') > post, 'vaciar vuelve a pedir los conteos de la Papelera');
+  // r2 (D27): en el camino del éxito (antes del catch), no solo en la rama sin respuesta de p4.
+  assert.match(vaciar, /recargarPapelera\(\);\s*recargarLista\(\);\s*pedirConteos\(\);\s*\}catch\(err\)\{/, 'vaciar, al purgar bien');
   assert.ok(cuerpoDe(lista, 'async function restaurarSC(').includes('pedirConteos();'), 'restaurar también');
   const actualizar = cuerpoDe(lista, 'const actualizar = (');
   assert.match(actualizar, /if \(enPapelera\) \{\s*recargarPapelera\(\);\s*pedirConteos\(\);\s*\}/, 'y «Actualizar» dentro de la Papelera');
   assert.match(lista, /activo: !enPapelera \|\| conteosPendientes !== null,/, 'la marca prende la lista en la Papelera');
   assert.match(lista, /extra: enPapelera \? EXTRA_PAPELERA : /, 'en la Papelera, con EXTRA_PAPELERA');
-  assert.match(lista, /const EXTRA_PAPELERA = \{ vista: null, limit: 0 \};/, 'sin la vista y sin filas (RP35)');
+  // r2 (p2): y sin la página ni el orden de la Papelera (paginarla u ordenarla no cambia la URL de los conteos).
+  assert.match(lista, /const EXTRA_PAPELERA = \{ vista: null, limit: 0, offset: 0, orden: null \};/, 'sin la vista, sin filas, sin página ni orden (RP35)');
   // La marca se apaga con la respuesta nueva (no con «ya hay conteos», que ya era cierto) y se pone con el crudo de ahora.
-  assert.match(lista, /if \(conteosPendientes !== null && listado\.crudo !== conteosPendientes\.antes\) setConteosPendientes\(null\);/);
+  // r2 (p2): también con una llegada fallida (el error solo se ve cuando la petición vigente ya llegó, estadoListado): si
+  // no, cada gesto en la Papelera volvía a pedir limit=0. «Actualizar» es el reintento.
+  assert.match(lista, /if \(conteosPendientes !== null && \(listado\.crudo !== conteosPendientes\.antes \|\| listado\.error !== null\)\) setConteosPendientes\(null\);/);
   assert.match(cuerpoDe(lista, 'const pedirConteos = useCallback(('), /setConteosPendientes\(\{ antes: crudoActual\.current \}\);\s*recargarListado\(\);/);
+  // r2 (p3): el crudo de ahora se pone al día después de CADA render (sin dependencias): sin él, pedirConteos pondría
+  // {antes: null} y la marca se apagaría sola en el render siguiente, sin pedir nada (vuelve I1 con la prueba en verde).
+  assert.match(lista, /const crudoActual = useRef<unknown>\(null\);\s*useLayoutEffect\(\(\) => \{ crudoActual\.current = listado\.crudo; \}\);/,
+    'el efecto que pone al día crudoActual, sin dependencias');
+  // r2 (p4): «Eliminar permanentemente» y la rama de vaciar sin respuesta (pudo purgar igual) también ponen al día las
+  // pestañas y las tarjetas.
+  assert.match(cuerpoDe(lista, 'async function eliminarPermanente('), /recargarPapelera\(\);\s*pedirConteos\(\);/, 'eliminar también');
+  assert.match(vaciar, /if\(recargarTrasError\(err\)\) \{ recargarPapelera\(\); pedirConteos\(\); \}/, 'y vaciar sin respuesta del servidor');
   assert.ok(/avisarError\(err,'No se pudo vaciar la Papelera'\)/.test(vaciar), 'el error sale como aviso');
   assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(vaciar), 'sin diálogos nativos');
 }

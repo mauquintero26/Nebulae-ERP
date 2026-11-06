@@ -219,10 +219,15 @@ export function TarjetaKpi({
     );
   }
 
+  // B4 T8 r2 (p1): un solo color de borde, sin depender del orden en que Tailwind emite dos utilidades de la misma
+  // propiedad. Activa, el de ANILLO aunque esté en alerta (la alerta se sigue viendo en el fondo y en la ayuda en rosa);
+  // si no, el de alerta o el de siempre. El hover del borde es solo de las no activas.
+  const borde = activo ? ANILLO[colorFinal] : tono === 'alerta' ? 'border-rose-200' : 'border-slate-200';
+  const hover = activo ? '' : ' hover:border-slate-300';
   const clases = [
     'flex items-start gap-3 rounded-2xl border p-4 shadow-xs min-h-[88px] w-full',
-    tono === 'alerta' ? 'border-rose-200 bg-rose-50/40' : 'border-slate-200 bg-white',
-    activo ? ANILLO[colorFinal] : '',
+    borde,
+    tono === 'alerta' ? 'bg-rose-50/40' : 'bg-white',
   ].join(' ');
 
   const contenido = (
@@ -248,7 +253,7 @@ export function TarjetaKpi({
         onClick={onClick}
         aria-pressed={activo}
         title={tituloFinal}
-        className={`${clases} text-left cursor-pointer transition-colors hover:border-slate-300 focus-visible:outline-none focus-visible:ring-2 ${activo ? FOCO_ACTIVA[colorFinal] : FOCO[colorFinal]}`}
+        className={`${clases} text-left cursor-pointer transition-colors${hover} focus-visible:outline-none focus-visible:ring-2 ${activo ? FOCO_ACTIVA[colorFinal] : FOCO[colorFinal]}`}
       >
         {contenido}
       </button>

@@ -470,4 +470,42 @@ console.log('--- TEST 14 (B4 T8 r1, A1): una tarjeta pulsable y activa muestra e
   assert.match(fuente, /focus-visible:outline-none focus-visible:ring-2 \$\{activo \? FOCO_ACTIVA\[colorFinal\] : FOCO\[colorFinal\]\}/);
 }
 
+console.log('--- TEST 15 (B4 T8 r2, p1): activa y en alerta, un solo color de borde: el de ANILLO ---');
+{
+  const fuente = readFileSync(new URL('../src/components/ui/TarjetaKpi.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const cuerpo = /const ANILLO: Record<ColorKpi, string> = \{([\s\S]*?)\n\};/.exec(fuente)?.[1] ?? '';
+  const ANILLO = Object.fromEntries([...cuerpo.matchAll(/(\w+): '([^']*)'/g)].map((m) => [m[1], m[2]]));
+  const colores = Object.keys(ANILLO);
+  assert.ok(colores.length >= 10, 'los colores del anillo');
+  // Las clases de la tarjeta, evaluadas tal como están en el componente (el arreglo de `clases` y, si están, las
+  // declaraciones de `borde` y `hover` que usa): sin depender del orden en que Tailwind emite las utilidades.
+  const arreglo = /const clases = (\[[\s\S]*?\])\.join\(' '\);/.exec(fuente)?.[1];
+  assert.ok(arreglo, 'el arreglo de las clases');
+  const declaracion = (nombre) => new RegExp(`const ${nombre} = [^\\n]*;`).exec(fuente)?.[0] ?? `const ${nombre} = undefined;`;
+  const componer = new Function('activo', 'tono', 'colorFinal', 'ANILLO',
+    `${declaracion('borde')}\n${declaracion('hover')}\nreturn { clases: ${arreglo}.join(' '), hover };`);
+  const esBorde = (x) => /^border-[a-z]+-\d+$/.test(x);
+  for (const c of colores) {
+    const anillo = ANILLO[c].split(/\s+/).filter(esBorde);
+    assert.equal(anillo.length, 1, `${c}: ANILLO trae un borde`);
+    for (const tono of ['normal', 'alerta', 'bien']) {
+      for (const activo of [true, false]) {
+        const { clases } = componer(activo, tono, c, ANILLO);
+        const bordes = clases.split(/\s+/).filter(esBorde);
+        assert.deepEqual(bordes, activo ? anillo : [tono === 'alerta' ? 'border-rose-200' : 'border-slate-200'],
+          `${c}, ${tono}, ${activo ? 'activa' : 'no activa'}: un solo color de borde`);
+        // La alerta se sigue viendo en el fondo (y en la ayuda en rosa, TONO_AYUDA), también activa.
+        assert.ok(clases.split(/\s+/).includes(tono === 'alerta' ? 'bg-rose-50/40' : 'bg-white'), `${c}, ${tono}: el fondo`);
+        assert.equal(clases.split(/\s+/).filter((x) => x.startsWith('ring-')).length, activo ? 2 : 0, `${c}: el anillo de activa`);
+      }
+    }
+  }
+  // Pulsable: el hover tampoco le cambia el borde a la activa (solo a las demás).
+  assert.equal(componer(true, 'alerta', 'indigo', ANILLO).hover, '', 'activa: sin hover de borde');
+  assert.equal(componer(false, 'alerta', 'indigo', ANILLO).hover, ' hover:border-slate-300', 'no activa: el hover de siempre');
+  assert.match(fuente, /cursor-pointer transition-colors\$\{hover\} focus-visible:outline-none focus-visible:ring-2 /, 'el botón usa ese hover');
+  assert.equal((fuente.match(/hover:border-slate-300/g) ?? []).length, 1, 'un solo hover de borde');
+  assert.match(fuente, /alerta: 'text-rose-700',/, 'la ayuda en alerta sigue en rosa');
+}
+
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

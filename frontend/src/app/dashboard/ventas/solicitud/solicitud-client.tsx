@@ -544,9 +544,11 @@ const EXTRA_TABLERO = { limit: 0 };
  * RP35: la Papelera no es una vista del servidor y ahí la lista no pide nada. Solo cuando hacen falta los conteos (se
  * entró directo a ella y todavía no llegaron, o r1 (I1): después de Restaurar, de «Vaciar las vencidas» o de
  * «Actualizar»), se piden una vez sin filas (limit=0) y sin la vista: las pestañas y las tarjetas, que se ven también en
- * la Papelera, no quedan en gris ni viejas (D-T8-2 del reporte).
+ * la Papelera, no quedan en gris ni viejas (D-T8-2 del reporte). r2 (p2): también sin la página ni el orden (los de la
+ * tabla de la Papelera, que despacha al mismo estado): paginarla u ordenarla no cambia la URL de los conteos. La búsqueda
+ * sí va: los conteos del servidor la usan (con_conteos, R5), como en las demás pestañas.
  */
-const EXTRA_PAPELERA = { vista: null, limit: 0 };
+const EXTRA_PAPELERA = { vista: null, limit: 0, offset: 0, orden: null };
 /** La marca de los conteos pendientes al montar: hacen falta, y todavía no hay ninguna respuesta (crudo null). */
 const CONTEOS_AL_ENTRAR = { antes: null };
 const PAPELERA_SIN_CARGAR: CargaPapelera = { vuelta: -1, filas: null, error: '' };
@@ -1044,14 +1046,16 @@ export default function SolicitudClient() {
   //  - B4 T8 r1 (I1; B2.1, revisión final Minor 2): después de Restaurar, de «Vaciar las vencidas» y de «Actualizar»
   //    (pedirConteos), para que las pestañas y las tarjetas no sigan contando las restauradas o las purgadas.
   // La marca guarda el `crudo` que había al ponerla y se apaga cuando llega otra respuesta (no con «ya hay conteos», que
-  // ya era cierto).
+  // ya era cierto). r2 (p2): o cuando la petición falla. Un error fallido conserva el mismo crudo, y useListado solo
+  // muestra el error cuando la petición vigente ya llegó (mientras va en camino es null: estadoListado). Si no, la lista
+  // seguía prendida y cada gesto en la Papelera volvía a pedir limit=0. «Actualizar» es el reintento.
   const [conteosPendientes, setConteosPendientes] = useState<{ antes: unknown } | null>(CONTEOS_AL_ENTRAR);
   const listado = useListado<FilaSC>({
     ruta: '/ventas/solicitudes', estado, conConteos: true, conResumen: true, esperar: !listo, despachar,
     activo: !enPapelera || conteosPendientes !== null,
     extra: enPapelera ? EXTRA_PAPELERA : modoEfectivo === 'kanban' ? EXTRA_TABLERO : null,
   });
-  if (conteosPendientes !== null && listado.crudo !== conteosPendientes.antes) setConteosPendientes(null);
+  if (conteosPendientes !== null && (listado.crudo !== conteosPendientes.antes || listado.error !== null)) setConteosPendientes(null);
   // El crudo de ahora, para la marca que se pone en un manejador (después de un await, el del render ya pudo cambiar).
   const crudoActual = useRef<unknown>(null);
   useLayoutEffect(() => { crudoActual.current = listado.crudo; });
@@ -1239,7 +1243,9 @@ export default function SolicitudClient() {
     try{
       await apiFetch(`/ventas/solicitudes/${sc.id}/permanente`,{method:'DELETE'});
       avisar(`${sc.numero} eliminada definitivamente`);
+      // r2 (p4): la de la Papelera también cuenta en Canceladas y en las tarjetas: pedirConteos() las pone al día.
       recargarPapelera();
+      pedirConteos();
     }catch(err:any){avisarError(err,`No se pudo eliminar ${sc.numero}`);}
   }
 
@@ -1262,8 +1268,9 @@ export default function SolicitudClient() {
       pedirConteos();
     }catch(err){
       avisarError(err,'No se pudo vaciar la Papelera');
-      // Sin respuesta del servidor (la red se cortó) pudo vaciarse igual: la lista recargada dice qué quedó.
-      if(recargarTrasError(err)) recargarPapelera();
+      // Sin respuesta del servidor (la red se cortó) pudo vaciarse igual: la lista recargada dice qué quedó. r2 (p4): y los
+      // conteos de las pestañas y las tarjetas.
+      if(recargarTrasError(err)) { recargarPapelera(); pedirConteos(); }
     }
     setVaciandoPapelera(false);
   }
@@ -1484,9 +1491,10 @@ export default function SolicitudClient() {
   const filtroSemaforo: FiltroSemaforo = estado.semaforo === 'atrasados' ? 'atrasados' : 'todos';
   // «Con atraso» pone semaforo=atrasados en el estado único (la tabla y el tablero lo mandan al servidor) y vuelve a la
   // página 1; «Ver todo» lo quita. Soporte queda fuera del semáforo (R8) y la Papelera y Canceladas (r1, m7) son de
-  // canceladas: desde ellas, «Con atraso» abre Activas (VISTAS_SIN_ATRASO).
+  // canceladas: desde ellas, «Con atraso» abre Activas (VISTAS_SIN_ATRASO). r2 (p5): solo en Lista. En Kanban el tablero
+  // no usa la pestaña (pide con vista=todas_sin_soporte): solo se pone el semáforo y el filtro del tablero se queda.
   const alFiltrarSemaforo = (f: FiltroSemaforo) => {
-    if (f !== 'todos' && VISTAS_SIN_ATRASO.includes(estado.vista ?? '')) despachar(accionPestana(estado, INICIAL_SC.vista, opcionesEstadosSolicitudes));
+    if (f !== 'todos' && modoEfectivo === 'lista' && VISTAS_SIN_ATRASO.includes(estado.vista ?? '')) despachar(accionPestana(estado, INICIAL_SC.vista, opcionesEstadosSolicitudes));
     despachar({ tipo: 'semaforo', valor: f === 'todos' ? null : f });
   };
 

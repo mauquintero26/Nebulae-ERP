@@ -730,9 +730,25 @@ console.log('--- B4 T8 r1: el cableado de la lista de Solicitudes (A2, A3, m1, m
   assert.match(lista, /const sinPagina = !sinFilasAhora && llegadaAhora\.sinFilas && !listado\.error;/);
   assert.match(lista, /total=\{sinPagina \? null : listado\.total\}\s*cargando=\{listado\.cargandoInicial \|\| sinPagina\}/);
   assert.match(lista, /total: sinPagina \? null : listado\.total,\s*estadoTotal: estadoDelTotal\(\{\s*total: listado\.total, cargando: listado\.cargandoInicial \|\| sinPagina,/);
-  // m7: «Con atraso» desde Soporte, la Papelera o Canceladas abre Activas.
+  // m7: «Con atraso» desde Soporte, la Papelera o Canceladas abre Activas. r2 (p5): solo en Lista; en Kanban el tablero no
+  // usa la pestaña (pide con vista=todas_sin_soporte) y solo se pone el semáforo: el filtro del tablero se queda.
   assert.match(lista, /const VISTAS_SIN_ATRASO = \['soporte', 'papelera', 'canceladas'\];/);
-  assert.match(lista, /if \(f !== 'todos' && VISTAS_SIN_ATRASO\.includes\(estado\.vista \?\? ''\)\) despachar\(accionPestana\(estado, INICIAL_SC\.vista, opcionesEstadosSolicitudes\)\);/);
+  assert.match(lista, /const alFiltrarSemaforo = \(f: FiltroSemaforo\) => \{\s*if \(f !== 'todos' && modoEfectivo === 'lista' && VISTAS_SIN_ATRASO\.includes\(estado\.vista \?\? ''\)\) despachar\(accionPestana\(estado, INICIAL_SC\.vista, opcionesEstadosSolicitudes\)\);\s*despachar\(\{ tipo: 'semaforo', valor: f === 'todos' \? null : f \}\);\s*\};/);
+  {
+    // El caso: Kanban, la vista 'canceladas' (se pasó a Kanban desde esa pestaña) y «Confirmada» en el filtro del tablero.
+    const { estadoTablaInicial, reducirEstadoTabla, accionPestana } = await import('../src/lib/tabla.js');
+    const { opcionesEstadosSolicitudes } = await import('../src/lib/kanban-ventas.js');
+    const enKanban = estadoTablaInicial({ vista: 'canceladas', modo: 'kanban', estados: ['CONFIRMADA'] });
+    // Lo que despacha alFiltrarSemaforo en Kanban: solo el semáforo. El filtro y la vista se quedan.
+    const conAtraso = reducirEstadoTabla(enKanban, { tipo: 'semaforo', valor: 'atrasados' });
+    assert.deepEqual(conAtraso.estados, ['CONFIRMADA'], 'el filtro del tablero se queda');
+    assert.equal(conAtraso.vista, 'canceladas');
+    assert.equal(conAtraso.modo, 'kanban');
+    assert.equal(conAtraso.semaforo, 'atrasados');
+    // Lo que hacía r1 (la rama de Lista también en Kanban): podaba el filtro con las opciones de la Lista de Activas.
+    const salto = accionPestana(enKanban, 'activas', opcionesEstadosSolicitudes);
+    assert.deepEqual(reducirEstadoTabla(enKanban, salto).estados, [], 'la rama de Lista habría vaciado el filtro del tablero');
+  }
   // m8: el «vacío» de la lista se memoiza con la búsqueda y el de la Papelera es una constante del módulo.
   assert.match(lista, /const vacioLista = useMemo\(\(\) => \([\s\S]*?\), \[estado\.q\]\);/);
   assert.match(lista, /vacio=\{vacioLista\}/);
