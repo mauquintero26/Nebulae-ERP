@@ -1,21 +1,49 @@
 'use client';
 
 export const dynamic = 'force-dynamic';
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, createContext, useContext } from 'react';
+import Link from 'next/link';
+// B4 T10: se fueron Search, MoreHorizontal, FileText y Package de la lista hecha a mano (la búsqueda, el ⋯ propio, las
+// StatCard y la pestaña Análisis); entran BarChart3 («Ver análisis») y Truck/Package de «Marcar En tránsito / En proceso».
 import {
-  Search, RefreshCw, MoreHorizontal, X, FileCheck,
-  FileText, AlertCircle, ShoppingCart, Package, DollarSign, UserPlus
+  RefreshCw, X, FileCheck, AlertCircle, ShoppingCart, DollarSign, UserPlus, BarChart3, Truck, Package,
 } from 'lucide-react';
 import { useSearchParams, useRouter } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
-import { coincideProducto } from '@/lib/busqueda';
 import { formatoPesos } from '@/lib/pesos';
-import { ESTADOS_PEDIDO, infoEstadoPedido, grupoPedido, transicionesPedido } from '@/lib/estados-pedido';
-import { kpisPedidos, hintTotalPedidos, opcionesFiltroEstado, pedidoSumaDinero } from '@/lib/listas-ventas';
+import { infoEstadoPedido, transicionesPedido } from '@/lib/estados-pedido';
+// B4 T10: la lista ya no cuenta ni filtra en el navegador (kpisPedidos, opcionesFiltroEstado, grupoPedido y la búsqueda
+// con coincideProducto): las vistas, los conteos y las tarjetas son del servidor (T6B y T6C). Lo de cada fila sigue
+// saliendo de las librerías.
+import { tarjetasPedidos, saldoVisiblePedido, alertaEntregaPedido, diaDeNegocio, rutaSinParametro } from '@/lib/listas-ventas';
 import { pedidoAdmitePxp } from '@/lib/dinero-ventas';
-import { SubNav, PageHeader, StatCard, Button, EmptyState, Modal, useAvisos } from '@/components/ui';
-import { textoDeError } from '@/lib/avisos';
+import {
+  SubNav, PageHeader, Button, Modal, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila, ModalMotivo,
+  TableroKanban, useTableroKanban, CLASE_CHIP, useAvisos,
+} from '@/components/ui';
+import type { DatosColumnaKanban, ItemMenuFila } from '@/components/ui';
+import {
+  BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
+} from '@/components/tabla';
+import type { ClaveFila, ColumnaTabla, PestanaTabla } from '@/components/tabla';
+import { BannerFlujo, useResumenFlujo } from '@/components/flujo';
+import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
+import {
+  accionModo, accionPestana, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta,
+} from '@/lib/tabla';
+import type { AccionTabla } from '@/lib/tabla';
+import { alternarSeleccion } from '@/lib/flujo';
+import { enlaceVerAnalisis, leerEnlacePedidos, pasosDePedidos, textoRegla, vistaDePasoPedido } from '@/lib/flujo-ventas';
+import {
+  COLUMNAS_PEDIDO, OPCIONES_ESTADOS_TABLERO_PEDIDO, RUTA_LISTA_PEDIDOS, accionesTarjetaPedido, chipsDocumentoVentas,
+  confirmacionFacturarPedido, consultaColumnaPedido, efectosCancelarPedido, estadoDeTarjeta, opcionesEstadosPedidos,
+  reglaSoltarPedido, resumenColumnaPedido, tarjetaPedido,
+} from '@/lib/kanban-ventas';
+import { fechaCorta, fechaSolo } from '@/lib/fechas-colombia';
+import { PERIODO_KPI } from '@/lib/kpis';
+import { recargarTrasError, textoDeError } from '@/lib/avisos';
+import { TABLE } from '@/lib/design-system';
 import { VEN_NAV } from '../ven-nav';
 import { getUsuarioActual, puedeCrearOrdenDePago } from '../flujo';
 
@@ -59,56 +87,324 @@ export function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClo
 }
 
 const fCOP  = formatoPesos;
-const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
+
+// ── B4 T10: las piezas de la lista (TABLA-listas-ventas, KANBAN-ventas-listas, KPI-ventas y FLUJO-ventas-pantallas) ──
+// El modelo es el de Solicitudes (T8) y Cotizaciones (T9): un estado único, la tabla estándar y el tablero en el
+// servidor y la franja del flujo; las tarjetas leen los kpis de /ventas/stats (RP19, D5).
+
+/**
+ * Una fila de GET /ventas/pedidos (T6B): el _ven_dict del pedido, el asesor de H4 (advisor_name) y tipo, resolucion,
+ * dias_sin_mov, dias_creado y seguimiento_estado (R8, C14). La resolución y el atraso son los del servidor: aquí no se
+ * recalculan. Lo demás pasa tal cual a las librerías.
+ */
+type FilaPedido = {
+  id: number;
+  numero: string;
+  estado: string;
+  tipo?: string;
+  sc_id?: number | null;
+  sc_numero?: string | null;
+  cot_id?: number | null;
+  cot_numero?: string | null;
+  customer_name?: string | null;
+  advisor_name?: string | null;
+  total_cop?: number | string | null;
+  anticipo_cop?: number | string | null;
+  saldo_cop?: number | string | null;
+  fecha_entrega_estimada?: string | null;
+  pxp_id?: number | null;
+  pxp_numero?: string | null;
+  resolucion?: 'ATRASADO' | 'NO_RESUELTO' | 'ACCION_TOMADA' | 'CERRADO' | null;
+  dias_sin_mov?: number | null;
+  dias_creado?: number | null;
+  seguimiento_estado?: string | null;
+  [campo: string]: unknown;
+};
+
+/** `conteos` de con_conteos=1: las pestañas (con la búsqueda; sin vista, estados ni semáforo, R5). */
+type ConteosPedidos = Partial<Record<'todos' | 'pend_compra' | 'en_proceso' | 'listo_entrega' | 'entregado' | 'facturado' | 'cancelado', number>>;
+/** D39: las columnas del tablero de una acción desde una tarjeta: [origen, destino]. */
+type ColumnasDeTarjeta = readonly [string, string];
+/** Lo que la lista lee de GET /ventas/stats?periodo=30d (T6C): los kpis de las tarjetas (RP19 (2), D5). */
+type StatsPedidos = { kpis?: Record<string, unknown> | null };
+
+/** El id de la lista: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26), y el del
+ *  modo compacto de la franja (RP90). Exportado para el esqueleto del Suspense (CargandoPedidos). */
+export const ID_PEDIDOS = 'ventas.pedidos';
+/** R8 (atencion_primero_listas = «Sí; con un clic en una columna ordenas como quieras»): primero lo atrasado. */
+export const INICIAL_PEDIDOS = { vista: 'todos', orden: 'atencion' };
+/** El contenedor del Hub y de las otras listas (T7 a T9): pb-24 deja libre, con la página al fondo, la esquina del botón
+ *  flotante de la IA; px-4 hasta xl: a 1024 px con el menú abierto las columnas clave caben (R26). El mismo en la
+ *  pantalla y en su esqueleto del Suspense. */
+export const CONTENEDOR_LISTA = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
+/** R8: un pedido entregado, facturado o cancelado está cerrado y nunca va atrasado: desde ahí, «Con atraso» abre Todos. */
+const VISTAS_SIN_ATRASO = ['entregado', 'facturado', 'cancelado'];
+/** D39 (m6 de T8): en Kanban la lista va sin filas (limit=0): los conteos siguen al día en una consulta barata; las filas
+ *  las piden las columnas del tablero. */
+const EXTRA_TABLERO = { limit: 0 };
+
+// Los chips: los tintes del tablero (CLASE_CHIP de components/ui/Kanban.tsx), el chip estándar de las tablas del B4 (m12
+// de T8): la misma marca sale igual en Lista y en Kanban. Sin tamaño de letra: cada uso pone el suyo.
+const CHIP = 'inline-block max-w-full truncate rounded-full border px-1.5 py-0.5 font-bold leading-tight';
+const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
+// D41: el tono opaco filaAlerta para la fila atrasada (la resolución del servidor, R8) y la marca rosa a la izquierda del Hub.
+const MARCA_ATRASO = '[&>td:first-child]:shadow-[inset_3px_0_0_var(--color-rose-500)]';
+const claseDeFila = (p: FilaPedido) => (p.resolucion === 'ATRASADO' ? `${TABLE.filaAlerta} ${MARCA_ATRASO}` : null);
+/** Quien hace el cambio desde el tablero (updated_by, como el Hub). */
+const autorActual = () => { const u = getUsuarioActual(); return u.name || u.email || undefined; };
+
+/** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
+type AccionesFilaPedido = {
+  abrir: (p: { id: number }) => void;
+  ir: (ruta: string) => void;
+  crearPxp: (p: FilaPedido) => void;
+  creandoPxp: number | null;
+  puedePxpRol: boolean;
+};
+const AccionesLista = createContext<AccionesFilaPedido | null>(null);
+
+const tituloNumero = (p: FilaPedido) => [p.numero, p.sc_numero, p.cot_numero].filter(Boolean).join(' · ');
+
+/** Pedido / Origen: el número y, debajo, la solicitud y la cotización de origen (como antes). */
+function CeldaNumero({ p }: { p: FilaPedido }) {
+  const origen = [p.sc_numero, p.cot_numero].filter(Boolean).join(' / ');
+  return (
+    <span className="flex min-w-0 flex-col items-start leading-tight">
+      <span className="max-w-full truncate text-xs font-black text-indigo-700">{p.numero}</span>
+      {origen && <span className="max-w-full truncate text-[10px] font-bold text-slate-500">{origen}</span>}
+    </span>
+  );
+}
+
+/**
+ * Saldo (H47): «—» si el pedido no suma dinero (Cancelado o Devuelto); si no, el saldo, en rosa si queda algo por cobrar.
+ * El dato es saldoVisiblePedido (listas-ventas.js), el mismo del chip «Saldo $X» de la tarjeta del tablero.
+ */
+function CeldaSaldo({ p }: { p: FilaPedido }) {
+  const saldo = saldoVisiblePedido(p);
+  if (saldo === null) return <span className="text-xs font-bold text-slate-400">—</span>;
+  return <span className={`block truncate text-xs font-bold ${saldo > 0 ? 'text-rose-700' : 'text-slate-600'}`}>{fCOP(saldo)}</span>;
+}
+
+/**
+ * Entrega est. (la lección de T9 r1, I2): fecha_entrega_estimada es una fecha de NEGOCIO: se pinta su día de calendario
+ * (diaDeNegocio, el mismo del detalle y del editor) y alertaEntregaPedido la pone en rojo con el ícono si ya pasó o en
+ * ámbar si vence en 7 días o menos, contra el día de hoy en Colombia; un pedido cerrado no lleva alerta.
+ */
+function CeldaEntrega({ p }: { p: FilaPedido }) {
+  const alerta = alertaEntregaPedido(p);
+  return (
+    <span className={`text-xs font-bold ${alerta === 'vencida' ? 'text-red-600' : alerta === 'por_vencer' ? 'text-amber-700' : 'text-slate-600'}`}>
+      {alerta === 'vencida' && <AlertCircle size={11} aria-hidden="true" className="mr-1 inline" />}
+      {fechaCorta(diaDeNegocio(p.fecha_entrega_estimada)) || '-'}
+    </span>
+  );
+}
+
+/**
+ * Estado: la insignia de estados-pedido.js (estadoDeTarjeta, la misma del tablero) y, debajo, los chips de la fila
+ * (chipsDocumentoVentas, RP18): «Atrasado N días» y «Sin respuesta al recordatorio» (C14), los mismos de la tarjeta.
+ */
+function CeldaEstado({ p }: { p: FilaPedido }) {
+  const e = estadoDeTarjeta('PVEN', p.estado);
+  const chips = chipsDocumentoVentas(p, 'VEN');
+  const clases = e.clases ? `${e.clases.bg} ${e.clases.text} ${e.clases.border}` : CLASE_CHIP.slate;
+  return (
+    <span className="flex min-w-0 flex-col items-start gap-0.5">
+      <span className={`${CHIP} text-[11px] ${clases}`}>{e.label}</span>
+      {chips.length > 0 && (
+        <span className="flex min-w-0 max-w-full flex-col items-start gap-0.5">
+          {chips.map((c) => <span key={c.texto} className={`${CHIP} min-w-0 text-[10px] ${CLASE_CHIP[c.tono] ?? CLASE_CHIP.slate}`}>{c.texto}</span>)}
+        </span>
+      )}
+    </span>
+  );
+}
+
+const tituloEstado = (p: FilaPedido) =>
+  [estadoDeTarjeta('PVEN', p.estado).label, ...chipsDocumentoVentas(p, 'VEN').map((c) => c.texto)].join(' · ');
+
+/**
+ * Acciones (H44, R8 y R11): el menú ⋯ de la fila (MenuFila), con «Ver detalle», «Crear PXP» (solo con el rol, sin
+ * cancelar, con saldo y sin otra PXP vigente: H44+N6) y «Cancelar pedido» (solo si el servidor acepta cancelarlo: abre el
+ * modal del detalle con ?accion=cancelar, N2). Son los de la lista de antes, en el menú único.
+ */
+function CeldaAcciones({ p }: { p: FilaPedido }) {
+  const acciones = useContext(AccionesLista);
+  const puedePxp = Boolean(acciones?.puedePxpRol) && pedidoAdmitePxp(p);
+  const items: ItemMenuFila[] = [
+    { etiqueta: 'Ver detalle', icono: FileCheck, onClick: () => acciones?.abrir(p) },
+    { etiqueta: 'Crear PXP', icono: DollarSign, onClick: () => acciones?.crearPxp(p), oculto: !puedePxp,
+      deshabilitado: acciones?.creandoPxp === p.id },
+    { etiqueta: 'Cancelar pedido', icono: X, peligro: true, onClick: () => acciones?.ir(`/dashboard/ventas/venta/${p.id}?accion=cancelar`),
+      oculto: !transicionesPedido(p.estado).includes('CANCELADO') },
+  ];
+  return (
+    <span className="flex items-center justify-end">
+      <MenuFila items={items} etiqueta={`Acciones de ${p.numero}`} />
+    </span>
+  );
+}
+
+/**
+ * B4 T10, la tabla (TABLA-listas-ventas punto 7; R26, RP85, D41). Las columnas del diseño: la casilla (la selección de
+ * B1), Pedido / Origen (clave, fija a la izquierda), Cliente (la flexible), Total, Anticipo y Entrega est. (ocultas por
+ * defecto, R26: se muestran con «Ajustar tabla»), Saldo, Estado (clave) y Acciones (fija a la derecha). Constantes
+ * (estables, D40); sus celdas piden a la pantalla lo suyo por AccionesLista. Exportadas para el esqueleto del Suspense.
+ */
+export const COLUMNAS_TABLA_PEDIDOS: ColumnaTabla<FilaPedido>[] = [
+  { id: 'numero', titulo: 'Pedido / Origen', ancho: 132, clave: true, fija: 'izquierda', ordenable: 'numero', titleCelda: tituloNumero,
+    celda: (p) => <CeldaNumero p={p} /> },
+  { id: 'cliente', titulo: 'Cliente', ancho: 152, flexible: true, ordenable: 'cliente', titleCelda: (p) => p.customer_name || '-',
+    celda: (p) => <span className="block truncate text-xs font-bold text-slate-800">{p.customer_name || '-'}</span> },
+  { id: 'total', titulo: 'Total', ancho: 112, alinear: 'derecha', ordenable: 'total', titleCelda: (p) => fCOP(p.total_cop),
+    celda: (p) => <span className="block truncate text-xs font-black text-slate-800">{fCOP(p.total_cop)}</span> },
+  { id: 'anticipo', titulo: 'Anticipo', ancho: 104, alinear: 'derecha', ocultaPorDefecto: true, ordenable: 'anticipo',
+    titleCelda: (p) => fCOP(p.anticipo_cop),
+    celda: (p) => <span className="block truncate text-xs font-bold text-emerald-700">{fCOP(p.anticipo_cop)}</span> },
+  { id: 'saldo', titulo: 'Saldo', ancho: 104, alinear: 'derecha', ordenable: 'saldo',
+    titleCelda: (p) => { const s = saldoVisiblePedido(p); return s === null ? 'Sin saldo: el pedido no suma dinero (H47)' : fCOP(s); },
+    celda: (p) => <CeldaSaldo p={p} /> },
+  { id: 'entrega', titulo: 'Entrega est.', ancho: 104, ocultaPorDefecto: true, ordenable: 'entrega',
+    titleCelda: (p) => fechaSolo(p.fecha_entrega_estimada) || 'Sin fecha de entrega', celda: (p) => <CeldaEntrega p={p} /> },
+  { id: 'estado', titulo: 'Estado', ancho: 128, clave: true, ordenable: 'estado', titleCelda: tituloEstado,
+    celda: (p) => <CeldaEstado p={p} /> },
+  { id: 'acciones', titulo: 'Acciones', ancho: 56, clave: true, fija: 'derecha', celda: (p) => <CeldaAcciones p={p} /> },
+];
+
+/**
+ * Las pestañas de la lista (TABLA-listas-ventas punto 7, RP21): las 7 vistas de GET /ventas/pedidos con sus conteos
+ * (con_conteos: con la búsqueda, sin la vista, los estados ni el semáforo; null mientras cargan: la barra gris, nunca 0),
+ * con los nombres de los pasos del pedido (grupoPedido). Se fue la pestaña Análisis (R13). Sin emojis. La misma en la
+ * pantalla y en su esqueleto.
+ */
+export function pestanasDeLaLista(conteos: ConteosPedidos | null): PestanaTabla[] {
+  return [
+    { id: 'todos', etiqueta: 'Todos', conteo: conteos?.todos ?? null },
+    { id: 'pend_compra', etiqueta: 'Pend. Compra', conteo: conteos?.pend_compra ?? null },
+    { id: 'en_proceso', etiqueta: 'En Proceso', conteo: conteos?.en_proceso ?? null },
+    { id: 'listo_entrega', etiqueta: 'Listo Entrega', conteo: conteos?.listo_entrega ?? null },
+    { id: 'entregado', etiqueta: 'Entregado', conteo: conteos?.entregado ?? null },
+    { id: 'facturado', etiqueta: 'Facturado', conteo: conteos?.facturado ?? null },
+    { id: 'cancelado', etiqueta: 'Cancelado', conteo: conteos?.cancelado ?? null },
+  ];
+}
+
+/**
+ * Los botones de la cabecera: «Actualizar» y «Ver análisis» (R13: el Análisis del Hub enfocado en Pedidos,
+ * ?tab=analisis&foco=pven, enlaceVerAnalisis). Un pedido solo nace de una cotización confirmada: no hay «Nuevo» (H47).
+ * Los mismos en el esqueleto del Suspense, que los pinta invisibles para que la cabecera mida lo mismo.
+ */
+export function AccionesCabecera({ onActualizar, actualizando }: { onActualizar: () => void; actualizando: boolean }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2.5">
+      <button type="button" onClick={onActualizar} className={`bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm shadow-sm ${FOCO_VISIBLE}`}>
+        <RefreshCw size={15} aria-hidden="true" className={actualizando ? 'animate-spin' : ''}/> Actualizar
+      </button>
+      <Link href={enlaceVerAnalisis('pven')}
+        className={`bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-indigo-50 hover:text-indigo-800 hover:border-indigo-200 flex items-center gap-2 text-sm shadow-sm ${FOCO_VISIBLE}`}>
+        <ContenidoEnlace icon={BarChart3}>Ver análisis</ContenidoEnlace>
+      </Link>
+    </div>
+  );
+}
+
+/** La tarjeta del tablero (KANBAN-ventas-listas punto 5, D37 y el cruce C5): vuelve a esta lista. */
+const tarjetaDePedido = (p: FilaPedido) => tarjetaPedido(p);
 
 export default function VentaClient() {
   const router = useRouter();
-  const [pedidos, setPedidos]           = useState<any[]>([]);
-  const [loading, setLoading]           = useState(true);
-  const [search, setSearch]             = useState('');
-  const [activeTab, setActiveTab]       = useState('Todos');
-  const [currentPage, setCurrentPage]   = useState(1);
-  const [pageSize, setPageSize]         = useState(25);
-  const [selectedIds, setSelectedIds]   = useState<Set<number>>(new Set());
-  // H49 (T1B): avisos del sistema; showToast (más abajo) es el adaptador de las llamadas de siempre.
-  const { avisar } = useAvisos();
-  const [openMenu, setOpenMenu]         = useState<number|null>(null);
-  // H47: resumen del servidor sobre TODOS los pedidos (sin el tope de 200); sin el, se calcula en el navegador.
-  const [resumenServidor, setResumenServidor] = useState<Record<string, unknown> | null>(null);
-  const [creandoPxp, setCreandoPxp]     = useState<number|null>(null);
+  // H49 (T1B): avisos del sistema y confirmar() (nunca confirm, alert ni prompt).
+  const { avisar, avisarError, confirmar } = useAvisos();
 
-  // Los de error pasan por textoDeError (sin conexión, '[object Object]', 'Error: ' repetido).
-  const showToast = (msg:string, type:'ok'|'error'='ok') => {
-    if (type === 'error') avisar(textoDeError(msg), {tono: 'error'});
-    else avisar(msg, {tono: type});
-  };
+  // ── B4 T10, bloque 1: la carga del servidor (TABLA-listas-ventas punto 7; R5, R8, C3, C4, C9; RP8, RP19, RP26, D5, D39, D40) ──
+  // Ya no hay arreglos en memoria (antes, los 200 más recientes, filtrados, contados y sumados en el navegador). El estado
+  // ÚNICO de la lista: las pestañas, la búsqueda, el filtro de estados, el semáforo y las cajas de la franja, las
+  // tarjetas, la tabla y el tablero despachan a él. El modo (Lista o Kanban) se guarda en vista:ventas.pedidos (RP26:
+  // este hook es su único dueño) y la pestaña, la página y la búsqueda en la sesión (volver del detalle deja lo mismo).
+  const [estado, despachar, listo] = useEstadoTabla(ID_PEDIDOS, INICIAL_PEDIDOS);
+  const enKanban = estado.modo === 'kanban';
 
-  const fetchPedidos = async () => {
-    setLoading(true);
-    try {
-      const d=await apiFetch('/ventas/pedidos?limit=200');
-      setPedidos(Array.isArray(d)?d:(d?.data??[]));
-      setResumenServidor(d?.resumen ? {...d.resumen, total: d.total ?? 0} : null);
-    }
-    catch(err:any) { showToast(err.message,'error'); }
-    finally { setLoading(false); }
-  };
+  // La tabla (T6B): GET /ventas/pedidos con vista, estados, semáforo, q, orden, limit y offset del estado, más los conteos
+  // de las pestañas en la MISMA llamada. esperar: !listo (D40): el esqueleto, nunca «vacío». En Kanban, sin filas
+  // (EXTRA_TABLERO): las piden las columnas. El resumen de H47 de esta respuesta no se usa: las tarjetas leen /ventas/stats
+  // (D5) y cada columna del tablero trae el suyo (C9).
+  const listado = useListado<FilaPedido>({
+    ruta: '/ventas/pedidos', estado, conConteos: true, esperar: !listo, despachar,
+    extra: enKanban ? EXTRA_TABLERO : null,
+  });
+  // m5 de T8: mientras la última respuesta sea la de Kanban (sin filas) y la tabla ya pida su página, la tabla está
+  // cargando y el total en 'cargando': nunca «No hay pedidos en esta vista» con el total de la otra consulta.
+  const [llegada, setLlegada] = useState(() => llegadaDeListado(null, null, false));
+  const llegadaAhora = llegadaDeListado(llegada, listado.crudo, enKanban);
+  if (llegadaAhora !== llegada) setLlegada(llegadaAhora);
+  const sinPagina = !enKanban && llegadaAhora.sinFilas && !listado.error;
 
-  // R8 / H44+N6: "Crear PXP" del menu de fila la crea de verdad (los montos salen del pedido en el servidor).
-  const crearPxp = async (p:{id:number; numero:string}) => {
-    setCreandoPxp(p.id);
-    try {
-      const r=await apiFetch(`/ventas/pedidos/${p.id}/crear-pxp`,{method:'POST',body:JSON.stringify({})});
-      showToast(`Orden de pago ${r?.data?.numero || ''} creada para ${p.numero}`);
-      await fetchPedidos();
-    } catch(err) { showToast(err instanceof Error ? err.message : String(err),'error'); }
-    finally { setCreandoPxp(null); }
-  };
+  // La franja del flujo (R8): GET /ventas/flujo; recargaFlujo sube con cada recarga de la lista.
+  const [recargaFlujo, setRecargaFlujo] = useState(0);
+  const flujo = useResumenFlujo<DatosFlujo>('/ventas/flujo', recargaFlujo);
+
+  // Las tarjetas (RP19 (2), D5): los kpis de GET /ventas/stats?periodo=30d (la llamada del Hub: «Saldo por cobrar» es el
+  // mismo número, R7), sin respaldo local. Mientras no llega, 'cargando' (barras grises, nunca 0); si falla, «—».
+  const [vueltaStats, setVueltaStats] = useState(0);
+  const [stats, setStats] = useState<{ vuelta: number; datos: StatsPedidos | null; error: unknown } | null>(null);
+  useEffect(() => {
+    const control = new AbortController();
+    apiFetch(`/ventas/stats?periodo=${PERIODO_KPI}`, { signal: control.signal })
+      .then((r: { data?: StatsPedidos } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
+      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
+    return () => control.abort();
+  }, [vueltaStats]);
+  const cargandoStats = stats?.vuelta !== vueltaStats;
+  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
+
+  // El tablero en modo servidor (R11, C4, D39): una consulta por columna (consultaColumnaPedido: vista=todos, los estados
+  // de la columna cruzados con el filtro de la pantalla; sin ninguno en común la columna queda vacía sin pedir nada) con
+  // el MISMO estado (búsqueda y semáforo; RP8: estados y q, nunca estado= ni search=); porColumna = el tamaño de la tabla
+  // y limit=0 en las plegadas (lo hace el hook). 'atencion' en las abiertas y 'reciente' en Facturado y Cancelado (D39).
+  const tablero = useTableroKanban<FilaPedido>({
+    pantalla: ID_PEDIDOS,
+    modo: 'servidor',
+    columnas: COLUMNAS_PEDIDO,
+    activo: listo && enKanban,
+    porColumna: estado.tamano,
+    dependencias: dependenciasTablero(estado),
+    ordenDe: (c) => (c.cerrada ? 'reciente' : 'atencion'),
+    cargar: async (columna, { offset, limit, orden, signal }) => {
+      const consulta = consultaColumnaPedido(estado, columna, { orden, limit, offset });
+      if (consulta === null) return { filas: [], total: 0 };
+      return normalizarRespuesta(await apiFetch(`/ventas/pedidos?${consulta}`, { signal }));
+    },
+  });
+
+  // «Actualizar»: la tabla, el tablero, la franja y las tarjetas. Ninguna recarga vacía lo que se ve: los hooks conservan
+  // lo último. Después de un cambio de estado, lo que ese cambio mueve (las pestañas, la franja y las tarjetas); del
+  // tablero, solo el origen y el destino (D39).
+  const { recargar: recargarListado } = listado;
+  const { recargar: recargarTablero } = tablero;
+  const recargarLista = useCallback(() => {
+    recargarListado();
+    recargarTablero();
+    setRecargaFlujo((n) => n + 1);
+    setVueltaStats((n) => n + 1);
+  }, [recargarListado, recargarTablero]);
+  const recargarTrasCambio = useCallback(() => {
+    recargarListado();
+    setRecargaFlujo((n) => n + 1);
+    setVueltaStats((n) => n + 1);
+  }, [recargarListado]);
+
+  // D40 y D41: un solo usePreferenciasTabla por id (la tabla y «Ajustar tabla» comparten su resultado y el ref del ancho).
+  const prefs = usePreferenciasTabla(ID_PEDIDOS, COLUMNAS_TABLA_PEDIDOS);
+  const anchoTablaRef = useRef<number | null>(null);
+  // Desestructurado: con el objeto entero en ref={…}, react-hooks/refs marca «Cannot access refs during render».
+  const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
+  // Pasar a Kanban sale de la pantalla completa: el conmutador sigue a la vista y el tablero no queda tapado.
+  useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
+  // Las pestañas salen de la llamada de la lista: barras grises mientras cargan, «—» con error (C13).
+  const estadoConteos = useEstadoKpi(listado.cargandoInicial || listado.recargando, listado.error);
 
   const searchParams = useSearchParams();
-
-  useEffect(()=>{ fetchPedidos(); },[]);
-
   // Compatibilidad con enlaces antiguos que abrian el detalle con ?id=:
   // redirige a la pagina canonica en vez de duplicar la vista aqui.
   useEffect(()=>{
@@ -119,283 +415,322 @@ export default function VentaClient() {
     }
   },[searchParams, router]);
 
-  // N10: las pestañas agrupan cualquier estado en su paso (grupoPedido); DEVUELTO_TOTAL va a 'Cancelado'.
-  const TABS = ['Todos','Pend. Compra','En Proceso','Listo Entrega','Entregado','Facturado','Cancelado','Analisis'];
-  const [showFilterDropdown, setShowFilterDropdown] = useState(false);
-  const [filterEstado, setFilterEstado] = useState('');
-  // R8: cambiar de pestaña, filtro o busqueda vuelve a la pagina 1 (si no, la lista puede quedar vacia).
-  const cambiarTab=(t:string)=>{ setActiveTab(t); setCurrentPage(1); };
-  const cambiarFiltro=(e:string)=>{ setFilterEstado(e); setCurrentPage(1); };
-  const cambiarBusqueda=(s:string)=>{ setSearch(s); setCurrentPage(1); };
+  // RP21: ?tab=<vista> (las cajas Entregado y Facturado de las otras listas: ?tab=entregado y ?tab=facturado) abre esa
+  // pestaña, una sola vez al montar, como un clic en ella (accionPestana). Se lee con window.location en el efecto (sin
+  // window en el render del servidor); un valor desconocido se ignora. Después se quita de la URL: recargar o volver con
+  // el navegador no pisa la pestaña que el usuario elija después.
+  const enlaceLeido = useRef(false);
+  useEffect(() => {
+    if (enlaceLeido.current) return;
+    enlaceLeido.current = true;
+    const vista = leerEnlacePedidos(window.location.search);
+    if (!vista) return;
+    despachar(accionPestana(estado, vista, opcionesEstadosPedidos));
+    router.replace(rutaSinParametro(RUTA_LISTA_PEDIDOS, window.location.search, 'tab'), { scroll: false });
+  }, [estado, despachar, router]);
 
-  const filtered = useMemo(()=>{
-    let base=pedidos;
-    if(activeTab!=='Todos') base=base.filter(p=>grupoPedido(p.estado)===activeTab);
-    if(filterEstado) base=base.filter(p=>p.estado===filterEstado);
-    if(search){ const s=search.toLowerCase(); base=base.filter(p=>p.numero?.toLowerCase().includes(s)||p.customer_name?.toLowerCase().includes(s)||p.cot_numero?.toLowerCase().includes(s)||p.sc_numero?.toLowerCase().includes(s)||coincideProducto(p,search)); }
-    return base;
-  },[pedidos,activeTab,filterEstado,search]);
+  // ── B4 T10, bloque 2: pestañas y búsqueda (TABLA-listas-ventas punto 7; R5, RP21, RP26, D40, D41; H15, H17) ──
+  const pestanas = pestanasDeLaLista(listado.conteos as ConteosPedidos | null);
+  // «N resultados» es el de la tabla; en Kanban cada columna trae su total (la barra no lo repite).
+  const totalDeLaBarra = enKanban ? {} : {
+    // m5 de T8: sin la página de la vista todavía (llegó la de Kanban), el total en 'cargando'.
+    total: sinPagina ? null : listado.total,
+    estadoTotal: estadoDelTotal({
+      total: listado.total, cargando: listado.cargandoInicial || sinPagina, recargando: listado.recargando, error: listado.error,
+    }),
+  };
+  // m2 de T8: el conmutador Lista / Kanban poda los estados con las opciones del modo nuevo (las columnas del tablero, o
+  // las de la pestaña en Lista), con la regla de accionPestana (accionModo); lo demás de la barra va directo.
+  const alCambiarBarra = useCallback((accion: AccionTabla) => {
+    if (accion.tipo === 'modo') {
+      const modo = String(accion.valor);
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesEstadosPedidos));
+    } else despachar(accion);
+  }, [estado, despachar]);
+  // m8 de T8: el «vacío» de la lista solo cambia con la búsqueda. Sin búsqueda, de dónde salen los pedidos (H47).
+  const vacioLista = useMemo(() => {
+    const q = estado.q.trim();
+    return (
+      <div>
+        <p className="font-semibold text-slate-600">{q ? `Sin resultados para «${q}»` : 'No hay pedidos de venta en esta vista'}</p>
+        <p className="mt-1 text-xs text-slate-500">
+          {q ? 'Ajusta la búsqueda o el filtro de estados.' : 'Los pedidos se crean al convertir una cotización confirmada por el cliente.'}
+        </p>
+      </div>
+    );
+  }, [estado.q]);
 
-  // H47: cifras del servidor (todos los pedidos; el dinero sin cancelados ni devueltos) o, si no vino, del navegador.
-  const kpis = useMemo(()=>kpisPedidos(resumenServidor,pedidos),[pedidos,resumenServidor]);
+  // ── B4 T10, bloque 3: la tabla (las columnas son constantes del módulo; sus celdas piden lo suyo por AccionesLista) ──
+  const abrirPedido = useCallback((p: { id: number }) => router.push(`/dashboard/ventas/venta/${p.id}`), [router]);
+  // R8 / H44+N6: "Crear PXP" del menu de fila la crea de verdad (los montos salen del pedido en el servidor).
+  const [creandoPxp, setCreandoPxp] = useState<number | null>(null);
+  const crearPxp = useCallback(async (p: FilaPedido) => {
+    setCreandoPxp(p.id);
+    try {
+      const r = await apiFetch(`/ventas/pedidos/${p.id}/crear-pxp`, { method: 'POST', body: JSON.stringify({}) });
+      avisar(`Orden de pago ${r?.data?.numero || ''} creada para ${p.numero}`, { tono: 'ok' });
+      recargarListado();
+    } catch (err) {
+      // Los de error pasan por textoDeError (sin conexión, '[object Object]', 'Error: ' repetido).
+      avisar(textoDeError(err), { tono: 'error' });
+      if (recargarTrasError(err)) recargarListado();
+    } finally {
+      setCreandoPxp(null);
+    }
+  }, [avisar, recargarListado]);
   const puedePxpRol = puedeCrearOrdenDePago(getUsuarioActual().role);
+  const accionesFila = useMemo<AccionesFilaPedido>(() => ({
+    abrir: abrirPedido, ir: (ruta) => router.push(ruta), crearPxp, creandoPxp, puedePxpRol,
+  }), [abrirPedido, router, crearPxp, creandoPxp, puedePxpRol]);
+  // La selección de las filas (la de B1): «Seleccionar todo» marca la página; TablaEstandar la limpia al cambiar de
+  // página, pestaña, búsqueda, filtro u orden.
+  const [seleccion, setSeleccion] = useState<ClaveFila[]>([]);
+  const alSeleccionar = useCallback((claves: ClaveFila[]) => setSeleccion(claves), []);
+  const pieSeleccion = seleccion.length > 0
+    ? <span className="font-bold text-indigo-700">{seleccion.length} {seleccion.length === 1 ? 'seleccionado' : 'seleccionados'}</span>
+    : null;
 
-  const toggleSelect=(id:number)=>{ const n=new Set(selectedIds); if(n.has(id))n.delete(id); else n.add(id); setSelectedIds(n); };
-  const toggleAll=()=>{ if(selectedIds.size===filtered.length)setSelectedIds(new Set()); else setSelectedIds(new Set(filtered.map(p=>p.id))); };
+  // ── B4 T10, bloque 4: el tablero (KANBAN-ventas-listas punto 5; C15, R11; D37, D39) ──
+  // reglaSoltarPedido (T3C): libre entre Pendiente de compra, En proceso y Listo para entrega; a Entregado no se arrastra
+  // (Entregas elige la bodega); Facturado solo desde Entregado, con confirmación; Cancelado pide el motivo; un pedido
+  // entregado o cancelado no vuelve atrás. Lo que no se puede queda bloqueado con su motivo ANTES de soltar.
+  // 'cambio': el PATCH del estado. El tablero mueve la tarjeta y, si el servidor la rechaza, la devuelve con su mensaje;
+  // recarga su origen y su destino (D39) y aquí se recargan las pestañas, la franja y las tarjetas.
+  async function cambiarDesdeTablero(p: FilaPedido, resultado: { estado: string }) {
+    await apiFetch(`/ventas/pedidos/${p.id}`, {
+      method: 'PATCH', body: JSON.stringify({ estado: resultado.estado, updated_by: autorActual() }),
+    });
+    recargarTrasCambio();
+  }
+  // 'accion' 'facturar' (N2): confirmar() con el texto del panel rápido del Hub → PATCH {estado: 'FACTURADO'}; 'cancelar':
+  // ModalMotivo. Al terminar, del tablero solo su origen y su destino (D39).
+  const [cancelando, setCancelando] = useState<{ pedido: FilaPedido; columnas: ColumnasDeTarjeta } | null>(null);
+  async function facturarDesdeTablero(p: FilaPedido, columnas: ColumnasDeTarjeta) {
+    if (!(await confirmar(confirmacionFacturarPedido(p)))) return;
+    try {
+      await apiFetch(`/ventas/pedidos/${p.id}`, { method: 'PATCH', body: JSON.stringify({ estado: 'FACTURADO', updated_by: autorActual() }) });
+      avisar(`${p.numero} quedó Facturado`, { tono: 'ok' });
+    } catch (err) {
+      avisarError(err, `No se pudo facturar ${p.numero}`);
+      // r1 de T9 (m1): un 400, un 409 o la red cortada recargan (algo cambió en otro lado); un 422 o un 500, no.
+      if (!recargarTrasError(err)) return;
+    }
+    tablero.recargar([...columnas]);
+    recargarTrasCambio();
+  }
+  function accionDesdeTablero(p: FilaPedido, resultado: { accion: string }, origen: string, destino: string) {
+    if (resultado.accion === 'cancelar') setCancelando({ pedido: p, columnas: [origen, destino] });
+    else if (resultado.accion === 'facturar') void facturarDesdeTablero(p, [origen, destino]);
+  }
+  // 'cancelar' (N2, H45, H46): ModalMotivo (5 letras o más) → PATCH {estado: 'CANCELADO', cancellation_reason} (el
+  // servidor deja el motivo en la Actividad, «Motivo de cancelación», anula la PXP pendiente y reabre la cotización). Si
+  // el PATCH falla, con la regla única recargarTrasError se recargan el origen y el destino del tablero, las pestañas, la
+  // franja y las tarjetas, y el error sigue (throw) para que ModalMotivo lo muestre y conserve lo escrito.
+  async function cancelarConMotivo(motivo: string) {
+    if (!cancelando) return;
+    const { pedido, columnas } = cancelando;
+    const autor = autorActual();
+    try {
+      await apiFetch(`/ventas/pedidos/${pedido.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ estado: 'CANCELADO', cancellation_reason: motivo, cancellation_authorized_by: autor, updated_by: autor }),
+      });
+    } catch (err) {
+      if (recargarTrasError(err)) {
+        tablero.recargar([...columnas]);
+        recargarTrasCambio();
+      }
+      throw err;
+    }
+    avisar(`${pedido.numero} cancelado`, { tono: 'ok' });
+    tablero.recargar([...columnas]);
+    recargarTrasCambio();
+  }
+  // accionesTarjeta: «Marcar En tránsito» y «Marcar En proceso» sin salir de la columna En proceso (accionesTarjetaPedido:
+  // solo lo que acepta el PATCH). Al terminar, esa columna y lo que mueve el cambio.
+  const marcarDesdeTablero = useCallback(async (p: FilaPedido, nuevo: string) => {
+    try {
+      await apiFetch(`/ventas/pedidos/${p.id}`, { method: 'PATCH', body: JSON.stringify({ estado: nuevo, updated_by: autorActual() }) });
+      avisar(`${p.numero} pasó a ${infoEstadoPedido(nuevo).label}`, { tono: 'ok' });
+    } catch (err) {
+      avisarError(err, `No se pudo cambiar el estado de ${p.numero}`);
+      if (!recargarTrasError(err)) return;
+    }
+    recargarTablero(['en_proceso']);
+    recargarTrasCambio();
+  }, [avisar, avisarError, recargarTablero, recargarTrasCambio]);
+  const accionesTarjeta = useCallback((p: FilaPedido): ItemMenuFila[] => accionesTarjetaPedido(p).map((a) => ({
+    etiqueta: a.etiqueta, icono: a.estado === 'EN_TRANSITO' ? Truck : Package, onClick: () => { void marcarDesdeTablero(p, a.estado); },
+  })), [marcarDesdeTablero]);
+  // C9: la suma de H47 de cada columna (el resumen de su consulta) debajo del título, salvo en Cancelado.
+  const resumenColumna = useCallback(
+    (clave: string, d: DatosColumnaKanban<FilaPedido>) => resumenColumnaPedido(clave, d.resumen), [],
+  );
+
+  // ── B4 T10, bloque 5: las tarjetas (KPI-ventas punto 9; R12, RP19 (2), D5) ──
+  const tarjetas = tarjetasPedidos(stats?.datos?.kpis ?? null);
+  // En Lista son pestañas (D41: accionPestana, como un clic en la pestaña); tocar la activa vuelve a Todos (la de siempre,
+  // alternarSeleccion). En Kanban abren esa pestaña en Lista. El monto vendido y el saldo no tienen una vista: no son botones.
+  const vistaActiva = enKanban ? null : estado.vista;
+  const elegirVista = (vista: string) => {
+    const siguiente = enKanban ? vista : (alternarSeleccion(estado.vista, vista) ?? INICIAL_PEDIDOS.vista);
+    despachar(accionPestana(estado, siguiente, opcionesEstadosPedidos));
+    if (enKanban) despachar({ tipo: 'modo', valor: 'lista' });
+  };
+
+  // ── B4 T10, bloque 6: la franja del flujo (FLUJO-ventas-pantallas D; R8, C3, D42, RP21, RP90) ──
+  // «Estás aquí» en Pedido de venta, con su detalle agrupado con grupoPedido; Entregado y Facturado son de esta misma
+  // página: un clic abre su pestaña (y otro, vuelve a Todos), como las tarjetas; Solicitud y Cotización llevan a su lista.
+  const pasosFlujo = useMemo(() => pasosDePedidos(flujo.datos, vistaActiva), [flujo.datos, vistaActiva]);
+  const atrasadosPVEN = pasosFlujo.find((p) => p.esEste)?.atrasados ?? null;
+  const filtroSemaforo: FiltroSemaforo = estado.semaforo === 'atrasados' ? 'atrasados' : 'todos';
+  // «Con atraso» pone semaforo=atrasados en el estado único (la tabla y el tablero lo mandan al servidor) y vuelve a la
+  // página 1; «Ver todo» lo quita. Entregado, Facturado y Cancelado nunca van atrasados: desde ahí abre Todos, también en
+  // Kanban (r2b de T8), con la poda de las opciones del modo que se ve.
+  const alFiltrarSemaforo = (f: FiltroSemaforo) => {
+    if (f !== 'todos' && VISTAS_SIN_ATRASO.includes(estado.vista ?? '')) {
+      despachar(accionPestana(estado, INICIAL_PEDIDOS.vista, enKanban ? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesEstadosPedidos));
+    }
+    despachar({ tipo: 'semaforo', valor: f === 'todos' ? null : f });
+  };
+  const alSeleccionarPaso = (clave: string) => {
+    const vista = vistaDePasoPedido(clave);
+    if (vista) elegirVista(vista);
+  };
+  const actualizando = listado.recargando || flujo.cargando || (cargandoStats && stats !== null);
 
   return (
-    <div className="flex flex-col min-h-screen bg-gray-50 font-sans text-gray-900">
+    <div className="w-full bg-slate-50 min-h-full flex flex-col">
       <SubNav label="Hub Ventas" items={VEN_NAV} currentPath="/dashboard/ventas/venta" color="indigo" hub={{ href: '/dashboard/ventas' }} />
 
-      {/* HEADER */}
-      <div className="bg-white border-b border-gray-100 px-8 py-6">
+      {/* B4 T10 (FLUJO-ventas-pantallas D; R8, D42, RP21, RP90): la franja del flujo, con «Estás aquí» en Pedido de venta y
+          su detalle agrupado con grupoPedido. «Con atraso» es semaforo=atrasados en el servidor, con los atrasados del
+          paso Pedido de venta; no hay «No resueltos» (la clave noResueltos no se escribe). Entregado y Facturado abren su
+          pestaña (onSeleccionarPaso); Solicitud y Cotización llevan a su lista. Va directo bajo la barra de submódulos,
+          sin otro padding horizontal. */}
+      <BannerFlujo
+        titulo="Flujo comercial"
+        idPreferencia={ID_PEDIDOS}
+        regla={textoRegla(flujo.datos?.dias_alerta)}
+        semaforo={{ atrasados: atrasadosPVEN, filtro: filtroSemaforo, onFiltrar: alFiltrarSemaforo }}
+        pasos={pasosFlujo}
+        cargando={flujo.cargando}
+        error={flujo.error}
+        onReintentar={flujo.recargar}
+        onSeleccionarPaso={alSeleccionarPaso}
+      />
+
+      {/* B4 T10: el contenedor del Hub y de las otras listas (CONTENEDOR_LISTA). */}
+      <div className={CONTENEDOR_LISTA}>
+        {/* Header. H47: el subtítulo de siempre, una frase corta sin códigos (FLUJO-ventas-pantallas D.4). R13
+            (ANALISIS-ventas punto 7): «Ver análisis» abre el Análisis del Hub enfocado en Pedidos (?tab=analisis&foco=pven).
+            Un pedido solo nace de una cotizacion confirmada (no hay "Nuevo Pedido"). */}
         <PageHeader
           icon={ShoppingCart} color="indigo"
           title="Pedidos de Venta"
           subtitle="Pedidos confirmados por tus clientes"
-          actions={(
-            <div className="flex items-center gap-3">
-              <button onClick={fetchPedidos} className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 font-semibold text-sm shadow-sm">
-                <RefreshCw size={14} className={loading?'animate-spin':''}/> Actualizar
-              </button>
-            </div>
-          )} />
-      </div>
+          actions={<AccionesCabecera onActualizar={recargarLista} actualizando={actualizando} />}
+        />
 
-      {/* KPI CARDS -- H47: un pedido solo nace de una cotizacion confirmada (no hay "Nuevo Pedido") */}
-      <div className="px-8 py-5 bg-white border-b border-gray-100">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatCard icon={FileText} color="indigo" label="Total Pedidos" value={kpis.total} hint={hintTotalPedidos(kpis)} />
-          <StatCard icon={DollarSign} color="emerald" label="Monto vendido" value={fCOP(kpis.monto)} hint="Sin pedidos cancelados ni devueltos" />
-          <StatCard icon={Package} color="orange" label="Pendiente Compra" value={kpis.pCompra} hint="Falta comprar" />
-          <StatCard icon={AlertCircle} color="red" label="Saldo Pendiente" value={fCOP(kpis.saldo)} hint="Por cobrar" />
-        </div>
-      </div>
+        {/* B4 T10 (KPI-ventas punto 9; R12, RP19 (2), D5): las 4 tarjetas con los kpis de /ventas/stats (todos los pedidos):
+            mientras cargan, barras grises (nunca 0); con error, «—». El total y Pendientes de compra son sus pestañas
+            (accionPestana; tocar la activa vuelve a Todos); el monto vendido y el saldo no tienen una vista. «Saldo por
+            cobrar» es el del Hub (R7: una foto de hoy, sin %). */}
+        <FranjaKpis estado={estadoKpis} titulo="Pedidos de venta">
+          <TarjetaKpi kpi="pven_total" valor={tarjetas?.total.valor ?? null} ayuda={tarjetas?.total.ayuda ?? undefined}
+            activo={vistaActiva === 'todos'} onClick={() => elegirVista('todos')} />
+          <TarjetaKpi kpi="pven_monto_vendido" valor={tarjetas?.monto_vendido.valor ?? null} ayuda={tarjetas?.monto_vendido.ayuda ?? undefined} />
+          <TarjetaKpi kpi="pven_pendiente_compra" valor={tarjetas?.pendiente_compra.valor ?? null} ayuda={tarjetas?.pendiente_compra.ayuda ?? undefined}
+            activo={vistaActiva === 'pend_compra'} onClick={() => elegirVista('pend_compra')} />
+          <TarjetaKpi kpi="pven_saldo_por_cobrar" valor={tarjetas?.saldo_por_cobrar.valor ?? null} ayuda={tarjetas?.saldo_por_cobrar.ayuda ?? undefined}
+            variacion={{ actual: tarjetas?.saldo_por_cobrar.valor ?? null, anterior: null, es_foto: true }} />
+        </FranjaKpis>
 
-      {/* ROW 1: TABS + VIEW TOGGLE */}
-      <div className="px-8 pt-4 pb-0 bg-white flex items-center justify-between">
-        <div className="flex items-center gap-1 overflow-x-auto">
-          {TABS.map(tab=>{
-            const count=tab==='Todos'?pedidos.length:tab==='Analisis'?undefined:pedidos.filter(p=>grupoPedido(p.estado)===tab).length;
-            const isActive=activeTab===tab;
-            return (
-              <button key={tab} onClick={()=>cambiarTab(tab)}
-                className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all ${isActive?'bg-indigo-600 text-white shadow-sm':'text-gray-600 hover:text-indigo-700 hover:bg-indigo-50'}`}>
-                {tab}{count!==undefined&&<span className={`ml-1.5 text-xs font-black ${isActive?'text-indigo-200':'text-gray-400'}`}>{count}</span>}
-              </button>
-            );
-          })}
-        </div>
-        {/* R8: el conmutador Lista/Kanban no tenia vista Kanban (queda para el Bloque 4): oculto. */}
-      </div>
-
-      {/* ROW 2: SEARCH + FILTER + COUNT */}
-      {activeTab!=='Analisis'&&(
-        <div className="px-8 py-3 bg-white border-b border-gray-100 flex items-center gap-3">
-          <div className="flex items-center bg-white border border-gray-200 rounded-xl px-3 py-2 gap-2 flex-1 max-w-[420px] shadow-sm">
-            <Search size={14} className="text-gray-400 shrink-0"/>
-            <input value={search} onChange={e=>cambiarBusqueda(e.target.value)}
-              placeholder="Buscar por numero, cliente, producto..."
-              className="text-sm bg-transparent outline-none flex-1 placeholder-gray-400"/>
-            {search&&<button onClick={()=>cambiarBusqueda('')}><X size={13} className="text-gray-400 hover:text-gray-600"/></button>}
-          </div>
-          <div className="relative">
-            <button onClick={()=>setShowFilterDropdown(f=>!f)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-semibold transition-colors shadow-sm ${filterEstado?'bg-indigo-50 border-indigo-300 text-indigo-700':'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M3 7h8M5 11h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-              Filtrar Estado
-              {filterEstado&&<span className="bg-indigo-600 text-white text-[10px] px-1.5 py-0.5 rounded-full font-black leading-none">{infoEstadoPedido(filterEstado).label}</span>}
-            </button>
-            {showFilterDropdown&&(
-              <>
-                <div className="fixed inset-0 z-10" onClick={()=>setShowFilterDropdown(false)}/>
-                <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-2xl shadow-2xl p-4 z-20 w-60">
-                  <p className="text-xs font-black text-gray-400 uppercase mb-2">Filtrar por Estado</p>
-                  {['',...opcionesFiltroEstado(pedidos)].map(e=>(
-                    <button key={e} onClick={()=>{cambiarFiltro(e);setShowFilterDropdown(false);}}
-                      className={`w-full text-left px-3 py-2 text-sm rounded-xl mb-0.5 font-medium transition-colors ${filterEstado===e?'bg-indigo-50 text-indigo-700 font-bold':'hover:bg-gray-50 text-gray-600'}`}>
-                      {e?infoEstadoPedido(e).label:'Todos los estados'}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-          <span className="text-sm text-gray-400 font-medium">{filtered.length} registros</span>
-        </div>
-      )}
-
-      {/* ANALISIS TAB */}
-      {activeTab==='Analisis'&&(
-        <div className="flex-1 px-8 py-6 bg-gray-50 border-b border-gray-100">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-            {[
-              {label:'Total Pedidos',value:kpis.total,color:'text-indigo-700'},
-              {label:'Monto Total',value:fCOP(kpis.monto),color:'text-gray-900'},
-              {label:'Anticipo verificado',value:fCOP(kpis.anticipo),color:'text-emerald-600'},
-              {label:'Saldo Pendiente',value:fCOP(kpis.saldo),color:'text-red-600'},
-            ].map((k,i)=>(
-              <div key={i} className="bg-white rounded-2xl p-5 border border-gray-200 shadow-sm">
-                <p className="text-xs font-black text-gray-400 uppercase mb-2">{k.label}</p>
-                <p className={`text-2xl font-black ${k.color}`}>{k.value}</p>
-              </div>
-            ))}
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="bg-white rounded-2xl p-5 border border-gray-200 shadow-sm">
-              <h3 className="text-sm font-black text-gray-700 mb-4">Distribucion por Estado</h3>
-              {/* N10: todos los estados (los del resumen, sobre todos los pedidos), cada uno con su nombre. */}
-              {Object.keys(kpis.porEstado).sort((a,b)=>{const o=(e:string)=>{const i=Object.keys(ESTADOS_PEDIDO).indexOf(e);return i<0?999:i;};return o(a)-o(b);}).map(key=>{
-                const st=infoEstadoPedido(key);
-                const cnt=Number(kpis.porEstado[key])||0;
-                const pct=kpis.total?Math.round((cnt/kpis.total)*100):0;
-                return cnt>0?(
-                  <div key={key} className="flex items-center gap-3 mb-2">
-                    <span className={`text-xs font-bold ${st.clases.text} shrink-0 w-28`}>{st.label}</span>
-                    <div className="flex-1 bg-gray-100 rounded-full h-2 overflow-hidden">
-                      <div className={`h-2 rounded-full bg-current ${st.clases.text}`} style={{width:`${pct}%`}}/>
-                    </div>
-                    <span className="text-xs text-gray-500 w-12 text-right font-bold">{cnt} ({pct}%)</span>
-                  </div>
-                ):null;
-              })}
-            </div>
-            <div className="bg-white rounded-2xl p-5 border border-gray-200 shadow-sm">
-              <h3 className="text-sm font-black text-gray-700 mb-4">Top 5 Clientes por Monto</h3>
-              {Object.entries(
-                pedidos.filter(pedidoSumaDinero).reduce((acc:any,p:any)=>{
-                  const k=p.customer_name||'Sin cliente';
-                  acc[k]=(acc[k]||0)+(Number(p.total_cop)||0);
-                  return acc;
-                },{})
-              ).sort(([,a]:any,[,b]:any)=>b-a).slice(0,5).map(([name,total]:any,i)=>(
-                <div key={i} className="flex items-center justify-between py-2 border-b last:border-0">
-                  <span className="text-sm font-medium text-gray-700 truncate mr-2">{name}</span>
-                  <span className="text-sm font-black text-indigo-700 shrink-0">{fCOP(total)}</span>
-                </div>
-              ))}
-              {pedidos.length===0&&<p className="text-sm text-gray-400 text-center py-4">Sin datos</p>}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* TABLE */}
-      <div className="flex-1 overflow-auto px-8 py-4">
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-          <table className="w-full text-sm text-left">
-            <thead className="bg-gray-50 border-b border-gray-100">
-              <tr>
-                <th className="px-5 py-4 w-10">
-                  <input type="checkbox" className="rounded border-gray-300"
-                    onChange={toggleAll} checked={selectedIds.size>0&&selectedIds.size===filtered.length}/>
-                </th>
-                <th className="px-4 py-4 text-xs font-black text-gray-400 uppercase tracking-wide">Pedido / Origen</th>
-                <th className="px-4 py-4 text-xs font-black text-gray-400 uppercase tracking-wide">Cliente</th>
-                <th className="px-4 py-4 text-xs font-black text-gray-400 uppercase tracking-wide">Total COP</th>
-                <th className="px-4 py-4 text-xs font-black text-gray-400 uppercase tracking-wide">Anticipo</th>
-                <th className="px-4 py-4 text-xs font-black text-gray-400 uppercase tracking-wide">Saldo</th>
-                <th className="px-4 py-4 text-xs font-black text-gray-400 uppercase tracking-wide">Entrega Est.</th>
-                <th className="px-4 py-4 text-xs font-black text-gray-400 uppercase tracking-wide">Estado</th>
-                <th className="px-4 py-4 text-xs font-black text-gray-400 uppercase tracking-wide text-right">Acciones</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {loading?(
-                <tr><td colSpan={9} className="text-center py-16 text-gray-400">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto mb-3"/>
-                  Cargando pedidos...
-                </td></tr>
-              ):filtered.length===0?(
-                <tr><td colSpan={9}>
-                  <EmptyState icon={ShoppingCart} message={search?`Sin resultados para "${search}"`:'Sin pedidos de venta'}
-                    hint="Los pedidos se crean al convertir una cotización confirmada por el cliente." />
-                </td></tr>
-              ):filtered.slice((currentPage-1)*pageSize, currentPage*pageSize).map(p=>{
-                const st=infoEstadoPedido(p.estado).clases;
-                const isOpen=openMenu===p.id;
-                return (
-                  <tr key={p.id} className="hover:bg-indigo-50/30 cursor-pointer transition-colors group">
-                    <td className="px-5 py-4"><input type="checkbox" className="rounded border-gray-300" checked={selectedIds.has(p.id)} onChange={()=>toggleSelect(p.id)}/></td>
-                    <td className="px-4 py-4 cursor-pointer" onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>
-                      <p className="font-bold text-indigo-700 hover:underline">{p.numero}</p>
-                      <p className="text-xs text-gray-400 mt-0.5">{[p.sc_numero,p.cot_numero].filter(Boolean).join(' / ')}</p>
-                    </td>
-                    <td className="px-4 py-4 text-gray-700 font-medium cursor-pointer" onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>{p.customer_name||'-'}</td>
-                    <td className="px-4 py-4 font-bold text-gray-900 cursor-pointer" onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>{fCOP(p.total_cop)}</td>
-                    <td className="px-4 py-4 text-emerald-600 font-bold cursor-pointer" onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>{fCOP(p.anticipo_cop)}</td>
-                    <td className={`px-4 py-4 font-bold cursor-pointer ${pedidoSumaDinero(p)?'text-red-600':'text-gray-300'}`} onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>{pedidoSumaDinero(p)?fCOP(p.saldo_cop):'—'}</td>
-                    <td className="px-4 py-4 text-gray-500 text-xs cursor-pointer" onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>{fDate(p.fecha_entrega_estimada)}</td>
-                    <td className="px-4 py-4 cursor-pointer" onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>
-                      <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${st.bg} ${st.text} ${st.border}`}>{infoEstadoPedido(p.estado).label}</span>
-                    </td>
-                    <td className="px-4 py-4 text-right relative">
-                      <button onClick={(e)=>{e.stopPropagation();setOpenMenu(isOpen?null:p.id);}}
-                        className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors">
-                        <MoreHorizontal size={18}/>
-                      </button>
-                      {isOpen&&(
-                        <>
-                          <div className="fixed inset-0 z-10" onClick={()=>setOpenMenu(null)}/>
-                          <div className="absolute right-6 top-12 bg-white border border-gray-200 rounded-2xl shadow-2xl py-2 w-52 z-20">
-                            <button className="w-full text-left px-4 py-2.5 hover:bg-indigo-50 text-sm font-medium text-indigo-700 flex items-center gap-2" onClick={()=>{setOpenMenu(null);router.push(`/dashboard/ventas/venta/${p.id}`);}}>
-                              <FileCheck size={14}/> Ver Detalle
-                            </button>
-                            {/* R8: cada opcion hace lo que dice ("Editar" solo abria el detalle: se quito). H44+N6:
-                                "Crear PXP" solo con rol, sin cancelar, con saldo y sin otra PXP vigente. N2:
-                                "Cancelar Pedido" solo si el servidor acepta cancelarlo; abre el modal del detalle. */}
-                            {puedePxpRol&&pedidoAdmitePxp(p)&&(
-                              <button disabled={creandoPxp===p.id} className="w-full text-left px-4 py-2.5 hover:bg-gray-50 text-sm font-medium flex items-center gap-2 text-gray-700 disabled:opacity-50" onClick={()=>{setOpenMenu(null);crearPxp(p);}}>
-                                <DollarSign size={14}/> Crear PXP
-                              </button>
-                            )}
-                            {transicionesPedido(p.estado).includes('CANCELADO')&&(
-                              <>
-                                <div className="border-t border-gray-100 my-1"/>
-                                <button className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm font-medium text-red-600 flex items-center gap-2" onClick={()=>{setOpenMenu(null);router.push(`/dashboard/ventas/venta/${p.id}?accion=cancelar`);}}>
-                                  <X size={14}/> Cancelar Pedido
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {/* PAGINATION FOOTER */}
-          {activeTab!=='Analisis'&&(
-            <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between bg-gray-50/50">
-              <div className="flex items-center gap-3">
-                <span className="text-xs font-bold text-gray-400">{filtered.length} registros</span>
-                <select value={pageSize} onChange={e=>{setPageSize(Number(e.target.value));setCurrentPage(1);}} className="text-xs border border-gray-200 rounded-lg px-2 py-1 font-bold text-gray-600 outline-none focus:ring-1 focus:ring-indigo-200">
-                  <option value={25}>25 por página</option>
-                  <option value={50}>50 por página</option>
-                </select>
-                {selectedIds.size>0&&<span className="text-indigo-600 font-bold text-xs">{selectedIds.size} seleccionados</span>}
-              </div>
-              {Math.ceil(filtered.length/pageSize)>1&&(
-                <div className="flex items-center gap-1">
-                  <button disabled={currentPage===1} onClick={()=>setCurrentPage(1)} className="px-2 py-1 text-xs font-bold border border-gray-200 rounded-lg disabled:opacity-40 hover:bg-gray-100">«</button>
-                  <button disabled={currentPage===1} onClick={()=>setCurrentPage(p=>p-1)} className="px-2 py-1 text-xs font-bold border border-gray-200 rounded-lg disabled:opacity-40 hover:bg-gray-100">‹</button>
-                  {Array.from({length:Math.min(5,Math.ceil(filtered.length/pageSize))},(_,i)=>{
-                    const tp=Math.ceil(filtered.length/pageSize);let page=i+1;
-                    if(tp>5){const half=2;const start=Math.max(1,Math.min(currentPage-half,tp-4));page=start+i;}
-                    return <button key={page} onClick={()=>setCurrentPage(page)} className={`px-2.5 py-1 text-xs font-bold border rounded-lg ${currentPage===page?'bg-indigo-600 text-white border-indigo-600':'border-gray-200 hover:bg-gray-100'}`}>{page}</button>;
-                  })}
-                  <button disabled={currentPage===Math.ceil(filtered.length/pageSize)} onClick={()=>setCurrentPage(p=>p+1)} className="px-2 py-1 text-xs font-bold border border-gray-200 rounded-lg disabled:opacity-40 hover:bg-gray-100">›</button>
-                  <button disabled={currentPage===Math.ceil(filtered.length/pageSize)} onClick={()=>setCurrentPage(Math.ceil(filtered.length/pageSize))} className="px-2 py-1 text-xs font-bold border border-gray-200 rounded-lg disabled:opacity-40 hover:bg-gray-100">»</button>
-                </div>
+        {/* B4 T10 (TABLA-listas-ventas punto 7, KANBAN-ventas-listas punto 5): la barra y la tabla estándar, o el tablero
+            en modo servidor, con el MISMO estado (búsqueda, estados y semáforo). Se fue la pestaña Análisis (R13): ya no
+            se pinta la tabla vacía debajo. */}
+        <div className="flex min-w-0 flex-col gap-4">
+          {capa}
+          <AccionesLista.Provider value={accionesFila}>
+            <section ref={refTarjeta} className={claseTarjeta}>
+              {/* Las pestañas con los conteos del servidor (en Kanban no se pintan: el tablero muestra todas); la búsqueda
+                  va al servidor (número, cliente, asesor, la SC, la COT y el producto, T6B); «Filtrar Estado» (H15) es
+                  FiltroEstados con las etiquetas de estados-pedido.js y solo los de la pestaña; el conmutador que R8 ocultó
+                  vuelve como ConmutadorVista (kanbanDisponible). */}
+              <BarraTabla
+                estado={estado}
+                onEstado={alCambiarBarra}
+                pestanas={enKanban ? undefined : pestanas}
+                estadoConteos={estadoConteos}
+                placeholder="Buscar por número, cliente, asesor, solicitud, cotización o producto…"
+                opcionesEstados={enKanban ? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesEstadosPedidos}
+                ajustes={{ columnas: COLUMNAS_TABLA_PEDIDOS, preferencias: prefs, anchoRef: anchoTablaRef }}
+                kanbanDisponible
+                pantallaCompleta={enKanban ? undefined : { completa, alternar }}
+                {...totalDeLaBarra}
+              />
+              {/* B4 T10, la tabla estándar en el servidor (TABLA-listas-ventas punto 7; R26, D41): la paginación, el
+                  tamaño (25 o 50), el orden y la selección son de la tabla (se fueron la paginación propia y el ⋯ hecho a
+                  mano); N9: la vuelta a la página 1 la hace useEstadoTabla. La fila atrasada en filaAlerta; un clic en la
+                  fila abre el pedido. */}
+              {!enKanban && (
+                <TablaEstandar
+                  id={ID_PEDIDOS}
+                  modo="servidor"
+                  columnas={COLUMNAS_TABLA_PEDIDOS}
+                  preferencias={prefs}
+                  anchoRef={anchoTablaRef}
+                  estado={estado}
+                  onEstado={despachar}
+                  filas={listado.filas}
+                  total={sinPagina ? null : listado.total}
+                  cargando={listado.cargandoInicial || sinPagina}
+                  recargando={listado.recargando}
+                  error={listado.error}
+                  onReintentar={listado.recargar}
+                  aviso={listado.avisoOrden}
+                  onFila={abrirPedido}
+                  claseFila={claseDeFila}
+                  vacio={vacioLista}
+                  seleccion={seleccion}
+                  onSeleccion={alSeleccionar}
+                  pie={pieSeleccion}
+                  etiqueta="Pedidos de venta"
+                />
               )}
-            </div>
+            </section>
+          </AccionesLista.Provider>
+          {/* B4 T10, el tablero (KANBAN-ventas-listas punto 5): Pendiente de compra · En proceso · Listo para entrega ·
+              Entregado · Facturado (plegada) · Cancelado (plegada), con la suma de cada columna. Lo que no se puede queda
+              bloqueado con su motivo ANTES de soltar (reglaSoltarPedido). */}
+          {enKanban && (
+            <TableroKanban
+              tablero={tablero}
+              regla={reglaSoltarPedido}
+              tarjetaDe={tarjetaDePedido}
+              onAbrir={abrirPedido}
+              onCambio={cambiarDesdeTablero}
+              onAccion={accionDesdeTablero}
+              accionesTarjeta={accionesTarjeta}
+              resumenColumna={resumenColumna}
+              color="indigo"
+            />
           )}
         </div>
       </div>
 
-
+      {/* B4 T10 (KANBAN-ventas-listas punto 5; N2, H45, H46): el motivo de la cancelación desde el tablero (ModalMotivo,
+          nunca prompt), con lo mismo que dice el modal del detalle (efectosCancelarPedido). */}
+      {cancelando && (
+        <ModalMotivo
+          titulo={`Cancelar ${cancelando.pedido.numero}`}
+          efectos={efectosCancelarPedido(cancelando.pedido)}
+          textoConfirmar="Cancelar pedido"
+          placeholder="Ej: Cliente desistió de la compra, error en el pedido, etc."
+          onConfirmar={cancelarConMotivo}
+          onCerrar={() => setCancelando(null)}
+        />
+      )}
     </div>
   );
 }

@@ -641,4 +641,84 @@ console.log('--- B4 T9 TEST 1: avisosCotizaciones — los chips «N sin precio»
   assert.deepEqual(fv.avisosCotizaciones(Object.assign([], { sin_calc: 2, vencen_pronto: 1 })), [], 'un arreglo');
 }
 
+console.log('--- B4 T10 TEST 1: pasosDePedidos — la franja de Pedidos: detalle por grupo y Entregado / Facturado en la misma página ---');
+{
+  // FLUJO-ventas-pantallas D (RP21, D42): «Estás aquí» en Pedido de venta; su detalle se agrupa con grupoPedido
+  // ('Pend. Compra 0 · En Proceso 1 · Listo Entrega 0', los tres pasos del pedido en curso, con sus ceros); Solicitud y
+  // Cotización son enlaces a su lista; Entregado y Facturado están en esta misma página: sin href (la pantalla los
+  // vuelve botones que despachan su vista) y marcados (seleccionado) cuando esa es la vista.
+  const datos = {
+    pasos: {
+      SC: { total: 5, atrasados: 2, por_estado: { BORRADOR: 5 } },
+      COT: { total: 3, atrasados: 1, por_estado: { BORRADOR: 3 } },
+      PVEN: { total: 6, atrasados: 1, mas_antiguo_dias: 4, por_estado: { EN_PROCESO: 2, EN_TRANSITO: 1, PENDIENTE_PAGO: 2, PENDIENTE_COMPRA: 1 } },
+      ENTREGADO: { total: 2, atrasados: null, por_estado: { ENTREGADO: 2 } },
+      FACTURADO: { total: 4, atrasados: null, por_estado: { FACTURADO: 4 } },
+    },
+  };
+  const pasos = fv.pasosDePedidos(datos, 'todos');
+  const base = fv.pasosDeLista(datos, 'PVEN');
+  assert.deepEqual(pasos.map((p) => p.clave), CLAVES);
+  assert.deepEqual(pasos.map((p) => p.esEste), [false, false, true, false, false]);
+  assert.deepEqual(pasos.map((p) => p.href), ['/dashboard/ventas/solicitud', '/dashboard/ventas/cotizacion', undefined, undefined, undefined],
+    'Solicitud y Cotización a su lista; Pedido (Estás aquí), Entregado y Facturado sin href');
+  assert.deepEqual(pasos[2].detalle, [{ label: 'Pend. Compra', n: 3 }, { label: 'En Proceso', n: 3 }, { label: 'Listo Entrega', n: 0 }],
+    'el detalle por grupo (grupoPedido), con los ceros');
+  assert.equal(flujo.textoDetalle(pasos[2].detalle), 'Pend. Compra 3 · En Proceso 3 · Listo Entrega 0');
+  assert.deepEqual(pasos.map((p) => Boolean(p.seleccionado)), [false, false, false, false, false], 'en Todos ninguna marcada');
+  // Lo demás (números, atrasos, presentación) es lo de pasosDeLista con 'PVEN'.
+  const sinMarcas = (p) => ({ ...p, href: undefined, detalle: undefined, seleccionado: undefined });
+  assert.deepEqual(pasos.map(sinMarcas), base.map(sinMarcas));
+  assert.equal(pasos[2].atrasados, 1, 'los atrasados del paso PVEN (el semáforo de la lista)');
+  // La vista entregado o facturado marca su caja (aria-pressed en PasosFlujo).
+  assert.deepEqual(fv.pasosDePedidos(datos, 'entregado').map((p) => Boolean(p.seleccionado)), [false, false, false, true, false]);
+  assert.deepEqual(fv.pasosDePedidos(datos, 'facturado').map((p) => Boolean(p.seleccionado)), [false, false, false, false, true]);
+  for (const otra of ['pend_compra', 'cancelado', null, undefined, 'x']) {
+    assert.ok(fv.pasosDePedidos(datos, otra).every((p) => !p.seleccionado), String(otra));
+  }
+  // PARCIALMENTE_ENTREGADO cae en Listo Entrega (paso 2); un estado desconocido va al final, humanizado; los ceros, los
+  // negativos y lo que no es un número no suman.
+  const raros = { pasos: { PVEN: { total: 4, atrasados: 0, por_estado: { PARCIALMENTE_ENTREGADO: 1, LISTO_ENTREGA: 2, ALGO_NUEVO: 1, EN_PROCESO: 0, PAGADO: -3, EN_TRANSITO: 'x' } } } };
+  assert.deepEqual(fv.pasosDePedidos(raros, 'todos')[2].detalle,
+    [{ label: 'Pend. Compra', n: 0 }, { label: 'En Proceso', n: 0 }, { label: 'Listo Entrega', n: 3 }, { label: infoEstadoPedido('ALGO_NUEVO').label, n: 1 }]);
+  // Sin por_estado: los tres grupos en cero. Mientras carga (sin datos): el detalle en null y los enlaces ya puestos.
+  assert.deepEqual(fv.pasosDePedidos({ pasos: { PVEN: { total: 0, atrasados: 0 } } }, 'todos')[2].detalle,
+    [{ label: 'Pend. Compra', n: 0 }, { label: 'En Proceso', n: 0 }, { label: 'Listo Entrega', n: 0 }]);
+  const cargando = fv.pasosDePedidos(null, 'entregado');
+  assert.deepEqual(cargando.map((p) => [p.total, p.detalle]), CLAVES.map(() => [null, null]));
+  assert.deepEqual(cargando.map((p) => p.href), ['/dashboard/ventas/solicitud', '/dashboard/ventas/cotizacion', undefined, undefined, undefined]);
+  assert.equal(cargando[3].seleccionado, true, 'la vista se marca también mientras carga');
+  // Los grupos son los tres primeros pasos del pedido (PASOS_PEDIDO): los de grupoPedido.
+  const { PASOS_PEDIDO } = await import('../src/lib/estados-pedido.js');
+  assert.deepEqual(fv.pasosDePedidos(datos, 'todos')[2].detalle.slice(0, 3).map((d) => d.label), PASOS_PEDIDO.slice(0, 3).map((p) => p.label));
+  // pasosDeLista no cambia (Solicitudes y Cotizaciones siguen igual): su caja PVEN conserva el detalle por estado.
+  assert.deepEqual(fv.pasosDeLista(datos, 'PVEN')[3].href, '/dashboard/ventas/venta?tab=entregado');
+}
+
+console.log('--- B4 T10 TEST 2: vistaDePasoPedido y leerEnlacePedidos — Entregado y Facturado abren su pestaña (RP21) ---');
+{
+  // RP21: las cajas Entregado y Facturado (y las rutas ?tab= de PASOS_FLUJO_VENTAS) llevan la clave de la vista de
+  // GET /ventas/pedidos. Lo demás no es una vista de esta página.
+  assert.equal(fv.vistaDePasoPedido('ENTREGADO'), 'entregado');
+  assert.equal(fv.vistaDePasoPedido('FACTURADO'), 'facturado');
+  for (const otra of ['SC', 'COT', 'PVEN', 'entregado', '', null, undefined, 'constructor']) assert.equal(fv.vistaDePasoPedido(otra), null, String(otra));
+  // ?tab= al montar (con window.location, RP21): las 7 vistas de la lista; un valor desconocido se ignora.
+  assert.equal(fv.leerEnlacePedidos('?tab=entregado'), 'entregado');
+  assert.equal(fv.leerEnlacePedidos('?tab=facturado&id=3'), 'facturado');
+  assert.equal(fv.leerEnlacePedidos('?id=3&tab= cancelado '), 'cancelado', 'sin los espacios de los bordes');
+  for (const vista of ['todos', 'pend_compra', 'en_proceso', 'listo_entrega', 'entregado', 'facturado', 'cancelado']) {
+    assert.equal(fv.leerEnlacePedidos(`?tab=${vista}`), vista, vista);
+  }
+  for (const raro of ['?tab=Entregado', '?tab=en_curso', '?tab=analisis', '?tab=', '', '?id=3', null, undefined, 5, '?tab=constructor']) {
+    assert.equal(fv.leerEnlacePedidos(raro), null, String(raro));
+  }
+  // Las rutas de PASOS_FLUJO_VENTAS son las que esta página lee.
+  for (const p of PASOS_FLUJO_VENTAS.filter((x) => x.clave === 'ENTREGADO' || x.clave === 'FACTURADO')) {
+    assert.equal(fv.leerEnlacePedidos(p.ruta.slice(p.ruta.indexOf('?'))), fv.vistaDePasoPedido(p.clave), p.clave);
+  }
+  // Las vistas de la lista son las columnas del tablero (las vistas de GET /ventas/pedidos) más Todos.
+  const { COLUMNAS_PEDIDO } = await import('../src/lib/kanban-ventas.js');
+  for (const c of COLUMNAS_PEDIDO) assert.equal(fv.leerEnlacePedidos(`?tab=${c.clave}`), c.clave, c.clave);
+}
+
 console.log('\nOK: test_flujo_ventas.mjs');

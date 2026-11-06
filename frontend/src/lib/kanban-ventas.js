@@ -50,15 +50,17 @@ import {
 } from './estados-solicitud.js';
 import { ESTADOS_COTIZACION, infoEstadoCotizacion } from './estados-cotizacion.js';
 import {
-  pedidoVigente, cotizacionesVigentes, pasosParaCancelarSolicitud, marcaPedidoCotizacion, chipSinPrecio,
+  pedidoVigente, cotizacionesVigentes, pasosParaCancelarSolicitud, marcaPedidoCotizacion, chipSinPrecio, chipSaldoPedido,
 } from './listas-ventas.js';
+// B4 T10: las frases de la cancelación de un pedido (las del modal del detalle) con su PXP y su saldo a favor.
+import { etiquetaEstadoPxp, pxpsDelPedido, saldoAFavorAlCancelar } from './dinero-ventas.js';
 import {
   avisoCambiosCliente, etiquetaChipCambios, RUTA_LISTA_SOLICITUDES, RUTA_LISTA_COTIZACIONES,
 } from './cambios-cliente.js';
 import { ACCIONES_BLOQUE3 } from './acciones-bloque3.js';
 import { enlaceDocumento } from './analisis.js';
 import { etiquetaTipoSolicitud } from './etiquetas-ventas.js';
-import { redondearPeso } from './pesos.js';
+import { redondearPeso, formatoPesos } from './pesos.js';
 import { queryListado } from './tabla.js';
 
 /**
@@ -1003,4 +1005,204 @@ export function tarjetaCotizacion(fila, { ahora, returnTo = RUTA_LISTA_COTIZACIO
   const { atraso, recordatorio, cambios } = chipsDeLaFila(cot, 'COT');
   const chips = /** @type {ChipTarjeta[]} */ ([marcaPedidoCotizacion(cot), cambios, chipSinPrecio(cot), atraso, recordatorio].filter(Boolean));
   return { ...tarjeta, chips: chips.slice(0, MAX_CHIPS) };
+}
+
+// ─── B4 T10: lo que comparten la tabla y el tablero de la lista de Pedidos de venta ──
+
+/** La ruta de la lista de Pedidos de venta: el return_to de sus tarjetas (cruce C5). */
+export const RUTA_LISTA_PEDIDOS = '/dashboard/ventas/venta';
+
+/** Una opción del filtro de estados con la etiqueta única del pedido (estados-pedido.js, RP4). */
+const opcionPedido = (estado) => congelar({ valor: estado, etiqueta: infoEstadoPedido(estado).label });
+
+/** Los estados que ofrece el filtro: los operativos y los cerrados (el grupo Pedido del Hub), sin los heredados. */
+const ESTADOS_FILTRO_PEDIDO = congelar([...ESTADOS_PEDIDO_OPERATIVOS, ...ESTADOS_PEDIDO_CERRADOS]);
+
+/** Los estados de cada pestaña (vista de GET /ventas/pedidos): Todos, todos; cada columna, los suyos, en ese orden. */
+const OPCIONES_PEDIDO_POR_VISTA = congelar({
+  ...Object.fromEntries(COLUMNAS_PEDIDO.map((c) => [
+    c.clave, congelar(ESTADOS_FILTRO_PEDIDO.filter((e) => c.estados.includes(e)).map(opcionPedido)),
+  ])),
+  todos: congelar(COLUMNAS_PEDIDO.flatMap((c) => ESTADOS_FILTRO_PEDIDO.filter((e) => c.estados.includes(e))).map(opcionPedido)),
+});
+
+/**
+ * B4 T10 (TABLA-listas-ventas punto 7, H15): las opciones del filtro de estados (FiltroEstados de BarraTabla) de la
+ * pestaña `vista` de Pedidos de venta, con los nombres de estados-pedido.js: Pend. Compra → Pendiente de compra y
+ * Pendiente de pago; En Proceso → En proceso y En tránsito; Listo Entrega, Entregado y Facturado → el suyo; Cancelado →
+ * Cancelado y Devuelto; Todos → los nueve. Los heredados de fase4 y de la tienda no se ofrecen (como en el Hub). Otra
+ * vista, []. Inmutables y la misma referencia en cada llamada.
+ * @param {string | null | undefined} vista
+ * @returns {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
+ */
+export function opcionesEstadosPedidos(vista) {
+  return typeof vista === 'string' && tiene(OPCIONES_PEDIDO_POR_VISTA, vista) ? OPCIONES_PEDIDO_POR_VISTA[vista] : SIN_OPCIONES;
+}
+
+/**
+ * B4 T10: las opciones del filtro de estados en el tablero de Pedidos (vista=todos): el estado principal de cada columna
+ * de COLUMNAS_PEDIDO con el título de la columna, en su orden. Con estadosDeColumnaLista, cada una vale toda su columna
+ * (los heredados incluidos). Inmutable.
+ * @type {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
+ */
+export const OPCIONES_ESTADOS_TABLERO_PEDIDO = congelar(COLUMNAS_PEDIDO.map((c) => congelar({ valor: c.estados[0], etiqueta: c.titulo })));
+
+/**
+ * B4 T10 (R5): la vista con la que pide cada columna del tablero de Pedidos (todos), no la pestaña.
+ * @type {'todos'}
+ */
+export const VISTA_TABLERO_PEDIDO = 'todos';
+
+/**
+ * B4 T10 (R5, R11, C4, RP8, D39; el patrón de consultaColumnaSC y consultaColumnaCOT): la consulta de una columna del
+ * tablero de Pedidos en modo servidor (la query de GET /ventas/pedidos, con queryListado: `estados` en CSV y `q`, nunca
+ * `estado=` ni `search=`): vista=VISTA_TABLERO_PEDIDO, los estados de la columna cruzados con el filtro de la pantalla
+ * (estadosDeColumnaLista), la búsqueda y el semáforo del MISMO estado, y el orden, el límite y el desplazamiento de la
+ * columna (limit=0 en la plegada, lo da useTableroKanban). Sin ningún estado en común, null (la columna queda vacía sin
+ * pedir nada). La respuesta trae el `resumen` de H47 de la columna (su suma, C9).
+ * @param {import('./tabla.js').EstadoTabla} estado
+ * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
+ * @param {{orden: string | null, limit: number, offset: number}} consulta
+ * @returns {string | null}
+ */
+export function consultaColumnaPedido(estado, columna, { orden, limit, offset }) {
+  const estados = estadosDeColumnaLista(columna, estado?.estados);
+  if (estados.length === 0) return null;
+  return queryListado(estado, { vista: VISTA_TABLERO_PEDIDO, estados, orden, limit, offset });
+}
+
+/** Un texto con algo, sin los espacios de los bordes; si no, ''. */
+const textoLimpio = (v) => (typeof v === 'string' ? v.trim() : '');
+
+/**
+ * B4 T10 (KANBAN-ventas-listas punto 5; D37 y el cruce C5): la tarjeta del tablero de Pedidos. Es la de tarjetaHub
+ * (número, cliente, el total, el estado de estados-pedido.js, la antigüedad, el atraso y accionSiguienteDocumento) con
+ * el return_to de la lista (`returnTo`, por defecto RUTA_LISTA_PEDIDOS) y:
+ *  - subtitulo: 'SC-… · COT-…' (lo que haya); sin ninguno, el de tarjetaHub (el asesor);
+ *  - chips, como mucho MAX_CHIPS: «Saldo $X» (chipSaldoPedido de listas-ventas.js, el mismo dato de la columna Saldo de
+ *    la tabla) y después el atraso y el recordatorio (los de chipsDocumentoVentas; un pedido no tiene chip de cambios
+ *    del cliente).
+ * La fila es un pedido aunque no traiga `tipo`. tarjetaHub no cambia.
+ * @param {any} fila
+ * @param {{ahora?: number, returnTo?: string}} [opciones]
+ * @returns {TarjetaVentas}
+ */
+export function tarjetaPedido(fila, { ahora, returnTo = RUTA_LISTA_PEDIDOS } = {}) {
+  const pedido = { ...fila, tipo: 'VEN' };
+  const tarjeta = tarjetaHub(pedido, { ahora, returnTo });
+  const origen = [textoLimpio(fila?.sc_numero), textoLimpio(fila?.cot_numero)].filter(Boolean).join(' · ');
+  const { atraso, recordatorio } = chipsDeLaFila(pedido, 'VEN');
+  const chips = /** @type {ChipTarjeta[]} */ ([chipSaldoPedido(pedido), atraso, recordatorio].filter(Boolean));
+  return { ...tarjeta, subtitulo: origen || tarjeta.subtitulo, chips: chips.slice(0, MAX_CHIPS) };
+}
+
+/** Los cambios de estado que se ofrecen dentro de la columna En proceso, en este orden. */
+const CAMBIOS_EN_PROCESO = congelar([
+  { estado: 'EN_TRANSITO', etiqueta: 'Marcar En tránsito' },
+  { estado: 'EN_PROCESO', etiqueta: 'Marcar En proceso' },
+]);
+const ESTADOS_COLUMNA_EN_PROCESO = congelar([.../** @type {any} */ (COLUMNAS_PEDIDO.find((c) => c.clave === 'en_proceso')).estados]);
+
+/**
+ * B4 T10 (KANBAN-ventas-listas punto 5, accionesTarjeta): «Marcar En tránsito» y «Marcar En proceso», para cambiar de
+ * estado sin salir de la columna En proceso: solo a un pedido de esa columna, a un estado distinto del suyo y si
+ * transicionesPedido lo permite (lo que acepta el PATCH). Cada uno {etiqueta, estado}, en una copia nueva (la pantalla
+ * le pone su onClick). Fuera de esa columna, [].
+ * @param {any} pedido
+ * @returns {{etiqueta: string, estado: string}[]}
+ */
+export function accionesTarjetaPedido(pedido) {
+  const estado = pedido?.estado;
+  if (!ESTADOS_COLUMNA_EN_PROCESO.includes(estado)) return [];
+  return CAMBIOS_EN_PROCESO.filter((c) => c.estado !== estado && transicionesPedido(estado).includes(c.estado)).map((c) => ({ ...c }));
+}
+
+/**
+ * B4 T10 (KANBAN-ventas-listas punto 5, C9): lo que va debajo del título de una columna del tablero de Pedidos: la suma
+ * de H47 de la columna (resumen.monto_cop de su consulta, en pesos: '$4.927.538'). Cancelado no suma dinero: null. Sin
+ * un monto numérico, null.
+ * @param {string} clave
+ * @param {unknown} resumen
+ * @returns {string | null}
+ */
+export function resumenColumnaPedido(clave, resumen) {
+  if (clave === 'cancelado') return null;
+  const monto = resumen !== null && typeof resumen === 'object' && !Array.isArray(resumen) ? /** @type {any} */ (resumen).monto_cop : undefined;
+  return typeof monto === 'number' && Number.isFinite(monto) ? formatoPesos(redondearPeso(monto)) : null;
+}
+
+/**
+ * B4 T10 (KANBAN-ventas-listas punto 5, N2): la confirmación de 'facturar' (soltar un pedido Entregado en Facturado)
+ * para confirmar() de useAvisos: la misma del panel rápido del Hub.
+ * @param {any} pedido
+ * @returns {{titulo: string, mensaje: string, textoConfirmar: string}}
+ */
+export function confirmacionFacturarPedido(pedido) {
+  const numero = textoLimpio(pedido?.numero);
+  return {
+    titulo: numero ? `Marcar ${numero} como Facturado` : 'Marcar como Facturado',
+    mensaje: 'Después de esto el estado del pedido ya no se puede cambiar.',
+    textoConfirmar: 'Marcar como Facturado',
+  };
+}
+
+/** B4 T10 (N2): el primer efecto de cancelar un pedido desde el tablero. */
+export const EFECTO_CANCELAR_PEDIDO = 'El pedido queda Cancelado y no se puede reabrir.';
+
+/**
+ * B4 T10 (H46+U25): la cotización del pedido vuelve a Borrador al cancelarlo (la frase del modal del detalle). Sin
+ * cotización, null.
+ * @param {any} pedido
+ * @returns {string | null}
+ */
+export function avisoCotizacionAlCancelarPedido(pedido) {
+  const cot = textoLimpio(pedido?.cot_numero);
+  return cot ? `La cotización ${cot} volverá a Borrador para que puedas ajustarla, reenviarla al cliente y crear otro pedido.` : null;
+}
+
+/**
+ * B4 T10 (B7, R6): lo pagado no se pierde al cancelar: queda como saldo a favor de la cotización (la frase del modal del
+ * detalle). Sin cotización no hay a dónde pasarlo: null. Con lo pagado del detalle (`pagos`, saldoAFavorAlCancelar) o,
+ * en una fila de la lista (que no trae `pagos`), con lo pagado según el pedido (total − saldo, en pesos enteros).
+ * @param {any} pedido
+ * @returns {string | null}
+ */
+export function avisoSaldoAFavorAlCancelarPedido(pedido) {
+  if (!textoLimpio(pedido?.cot_numero)) return null;
+  const pagado = Array.isArray(pedido?.pagos)
+    ? saldoAFavorAlCancelar(pedido)
+    : redondearPeso(pedido?.total_cop) - redondearPeso(pedido?.saldo_cop);
+  return pagado > 0 ? 'El dinero ya pagado queda como saldo a favor de la cotización y pasa al pedido nuevo si la vuelves a convertir.' : null;
+}
+
+/**
+ * B4 T10 (H45): lo que pasa con la orden de pago al cancelar el pedido. El servidor cancela solo una PXP PENDIENTE; una
+ * pagada no se toca y deja un aviso de revisión. Con las PXP del detalle (`pxps`, pxpsDelPedido): las dos frases del
+ * modal del detalle, o null sin una PXP vigente. Una fila de la lista no trae su estado: con pxp_numero, «Si la orden de
+ * pago PXP-… sigue pendiente, también se cancela.»; sin ella, null.
+ * @param {any} pedido
+ * @returns {string | null}
+ */
+export function avisoPxpAlCancelarPedido(pedido) {
+  if (Array.isArray(pedido?.pxps)) {
+    const { vigente } = pxpsDelPedido(pedido);
+    if (!vigente) return null;
+    return vigente.estado === 'PENDIENTE'
+      ? `También se cancelará la orden de pago ${vigente.numero} (pendiente ${formatoPesos(vigente.monto_pendiente)}).`
+      : `La orden de pago ${vigente.numero} está ${etiquetaEstadoPxp(vigente.estado).toLowerCase()}: no se cancela y queda un aviso para revisar la devolución o el saldo a favor del cliente.`;
+  }
+  const numero = textoLimpio(pedido?.pxp_numero);
+  return numero ? `Si la orden de pago ${numero} sigue pendiente, también se cancela.` : null;
+}
+
+/**
+ * B4 T10 (KANBAN-ventas-listas punto 5; H45, H46): los efectos del ModalMotivo de 'cancelar' en el tablero de Pedidos, en
+ * este orden: EFECTO_CANCELAR_PEDIDO y, si aplican, la cotización que vuelve a Borrador, el saldo a favor y la orden de
+ * pago (las mismas frases del modal del detalle).
+ * @param {any} pedido
+ * @returns {string[]}
+ */
+export function efectosCancelarPedido(pedido) {
+  return [EFECTO_CANCELAR_PEDIDO, avisoCotizacionAlCancelarPedido(pedido), avisoSaldoAFavorAlCancelarPedido(pedido),
+    avisoPxpAlCancelarPedido(pedido)].filter((e) => typeof e === 'string');
 }

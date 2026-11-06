@@ -17,7 +17,7 @@ import {
   ESTADOS_PEDIDO_CERRADOS, ESTADOS_PEDIDO_SIN_DINERO, grupoPedido, esCotizacionActiva, esPedidoVigente,
 } from './estados-pedido.js';
 import { comoUTC, esSoporte } from './hub-ventas.js';
-import { redondearPeso } from './pesos.js';
+import { redondearPeso, formatoPesos } from './pesos.js';
 import { diaColombia, fechaSolo } from './fechas-colombia.js';
 import { TEXTO_PAPELERA_SIN_FECHA } from './estados-solicitud.js';
 import { normalizarTarifaIva, TARIFA_IVA_POR_DEFECTO } from './iva.js';
@@ -654,6 +654,82 @@ export function tarjetasCotizaciones(resumen) {
     },
     total: { valor: conteoONulo(resumen.total), ayuda: `${rechazadas} ${rechazadas === 1 ? 'rechazada' : 'rechazadas'}` },
   };
+}
+
+// ─── B4 T10: la lista de Pedidos de venta ───────────────────────────────────────
+
+/** La ayuda del total de pedidos (H47): '15 activos · 12 cancelados' ('1 activo'); sin ningún número, null. */
+function pistaTotalPedidos(activos, cancelados) {
+  const partes = [];
+  if (activos !== null) partes.push(`${activos} ${activos === 1 ? 'activo' : 'activos'}`);
+  if (cancelados !== null && cancelados > 0) partes.push(`${cancelados} ${cancelados === 1 ? 'cancelado' : 'cancelados'}`);
+  return partes.length > 0 ? partes.join(' · ') : null;
+}
+
+/** H47: el dinero de los pedidos no suma los cancelados ni los devueltos por completo. */
+const SIN_CANCELADOS_NI_DEVUELTOS = 'Sin pedidos cancelados ni devueltos';
+
+/**
+ * B4 T10 (KPI-ventas punto 9 con RP19 (2) y D5): las 4 tarjetas de la lista de Pedidos con los `kpis` de GET
+ * /ventas/stats (todos los pedidos; no el resumen de H47 de la lista, que es para la suma de cada columna del tablero):
+ *  - total (pven_total): kpis.pven_total, con 'N activos · M cancelados' (pven_en_curso y pven_cancelados, la pista de
+ *    H47; los cancelados solo si hay);
+ *  - monto_vendido (pven_monto_vendido): en pesos enteros, con 'Sin pedidos cancelados ni devueltos' (H47);
+ *  - pendiente_compra (pven_pendiente_compra, la pestaña Pend. Compra): con 'Falta comprar';
+ *  - saldo_por_cobrar (pven_saldo_por_cobrar, Σ max(0, saldo) de R7: el mismo del Hub): en pesos enteros, con la ayuda
+ *    del monto.
+ * Sin kpis (cargando o con error), null. Un número que no viene queda en null (nunca un 0 inventado).
+ * @param {any} kpis
+ * @returns {null | Record<'total' | 'monto_vendido' | 'pendiente_compra' | 'saldo_por_cobrar', {valor: number | null, ayuda: string | null}>}
+ */
+export function tarjetasPedidos(kpis) {
+  if (!esObjeto(kpis) || Array.isArray(kpis)) return null;
+  return {
+    total: { valor: conteoONulo(kpis.pven_total), ayuda: pistaTotalPedidos(conteoONulo(kpis.pven_en_curso), conteoONulo(kpis.pven_cancelados)) },
+    monto_vendido: { valor: montoONulo(kpis.pven_monto_vendido), ayuda: SIN_CANCELADOS_NI_DEVUELTOS },
+    pendiente_compra: { valor: conteoONulo(kpis.pven_pendiente_compra), ayuda: 'Falta comprar' },
+    saldo_por_cobrar: { valor: montoONulo(kpis.pven_saldo_por_cobrar), ayuda: SIN_CANCELADOS_NI_DEVUELTOS },
+  };
+}
+
+/**
+ * B4 T10 (H47): el saldo de un pedido como lo muestra la columna Saldo de la lista: null ('—') si el pedido no suma
+ * dinero (Cancelado o Devuelto, pedidoSumaDinero); si no, el saldo en pesos enteros, aunque sea 0 o a favor (negativo).
+ * Un saldo que falta vale 0, como en _ven_dict. Lo que no es un pedido: null.
+ * @param {any} p
+ * @returns {number | null}
+ */
+export function saldoVisiblePedido(p) {
+  if (!pedidoSumaDinero(p)) return null;
+  const n = Number(p.saldo_cop);
+  return Number.isFinite(n) ? redondearPeso(n) : 0;
+}
+
+/**
+ * B4 T10 (KANBAN-ventas-listas punto 5): el chip «Saldo $X» de la tarjeta del tablero de Pedidos, con el MISMO dato de la
+ * columna Saldo de la tabla (saldoVisiblePedido): {texto: 'Saldo $400.000', tono: 'amber'} si queda algo por cobrar; si
+ * no (saldo 0, a favor, o un pedido que no suma dinero), null. Un objeto nuevo en cada llamada.
+ * @param {any} p
+ * @returns {{texto: string, tono: 'amber'} | null}
+ */
+export function chipSaldoPedido(p) {
+  const saldo = saldoVisiblePedido(p);
+  return saldo !== null && saldo > 0 ? { texto: `Saldo ${formatoPesos(saldo)}`, tono: 'amber' } : null;
+}
+
+/**
+ * B4 T10 (la lección de T9 r1, I2): la alerta de la Entrega est. de un pedido, con su DÍA de calendario: 'vencida' si
+ * su día ya pasó en Colombia (fechaNegocioVencida), 'por_vencer' si cae entre hoy y hoy + 7 días (fechaPorVencer); si
+ * no, null. Un pedido cerrado (ESTADOS_PEDIDO_CERRADOS: Entregado, Facturado, Cancelado o Devuelto) no lleva alerta: su
+ * entrega ya no se espera. Lo que no es un pedido o no trae una fecha: null.
+ * @param {any} p
+ * @param {number} [ahora]
+ * @returns {'vencida' | 'por_vencer' | null}
+ */
+export function alertaEntregaPedido(p, ahora = Date.now()) {
+  if (!esObjeto(p) || ESTADOS_PEDIDO_CERRADOS.includes(p.estado)) return null;
+  if (fechaNegocioVencida(p.fecha_entrega_estimada, ahora)) return 'vencida';
+  return fechaPorVencer(p.fecha_entrega_estimada, 7, ahora) ? 'por_vencer' : null;
 }
 
 const SEPARACION_MENU_FILA = 4; // px entre el botón «⋮» y su menú

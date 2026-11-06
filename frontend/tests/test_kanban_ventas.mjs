@@ -1003,4 +1003,266 @@ console.log('--- B4 T9 TEST L: el cableado del tablero de Cotizaciones (C15, RP1
   assert.match(lista, /pantallaCompleta=\{enKanban \? undefined : \{ completa, alternar \}\}/);
 }
 
+// ─── B4 T10: Pedidos de venta ───────────────────────────────────────────────────
+
+console.log('--- B4 T10 TEST M: opcionesEstadosPedidos — el filtro de estados de cada pestaña de Pedidos ---');
+{
+  // TABLA-listas-ventas punto 7 (H15): casillas con los nombres de estados-pedido.js (RP4) y solo los estados de la
+  // pestaña (las vistas de GET /ventas/pedidos): los operativos y los cerrados, como el grupo Pedido del Hub; los
+  // heredados de fase4 y de la tienda no se ofrecen. Todos los ofrece todos.
+  const etiquetas = (vista) => kv.opcionesEstadosPedidos(vista).map((o) => [o.valor, o.etiqueta]);
+  assert.deepEqual(etiquetas('todos'), [['PENDIENTE_COMPRA', 'Pendiente de compra'], ['PENDIENTE_PAGO', 'Pendiente de pago'],
+    ['EN_PROCESO', 'En proceso'], ['EN_TRANSITO', 'En tránsito'], ['LISTO_ENTREGA', 'Listo para entrega'], ['ENTREGADO', 'Entregado'],
+    ['FACTURADO', 'Facturado'], ['CANCELADO', 'Cancelado'], ['DEVUELTO_TOTAL', 'Devuelto']]);
+  assert.deepEqual(etiquetas('pend_compra'), [['PENDIENTE_COMPRA', 'Pendiente de compra'], ['PENDIENTE_PAGO', 'Pendiente de pago']]);
+  assert.deepEqual(etiquetas('en_proceso'), [['EN_PROCESO', 'En proceso'], ['EN_TRANSITO', 'En tránsito']]);
+  assert.deepEqual(etiquetas('listo_entrega'), [['LISTO_ENTREGA', 'Listo para entrega']]);
+  assert.deepEqual(etiquetas('entregado'), [['ENTREGADO', 'Entregado']]);
+  assert.deepEqual(etiquetas('facturado'), [['FACTURADO', 'Facturado']]);
+  assert.deepEqual(etiquetas('cancelado'), [['CANCELADO', 'Cancelado'], ['DEVUELTO_TOTAL', 'Devuelto']]);
+  for (const vista of ['en_curso', null, undefined, 'otra', 'constructor']) assert.deepEqual(kv.opcionesEstadosPedidos(vista), [], String(vista));
+  // Cada pestaña ofrece solo estados de su columna (las vistas son las columnas del tablero) y Todos, la unión.
+  for (const c of COLUMNAS_PEDIDO) {
+    for (const o of kv.opcionesEstadosPedidos(c.clave)) assert.ok(c.estados.includes(o.valor), `${c.clave}: ${o.valor}`);
+  }
+  const deLasPestanas = COLUMNAS_PEDIDO.flatMap((c) => kv.opcionesEstadosPedidos(c.clave).map((o) => o.valor));
+  assert.deepEqual(deLasPestanas, kv.opcionesEstadosPedidos('todos').map((o) => o.valor), 'Todos = la unión, en el orden de las columnas');
+  for (const o of kv.opcionesEstadosPedidos('todos')) assert.equal(o.etiqueta, infoEstadoPedido(o.valor).label);
+  // El tablero (vista=todos): la opción de cada columna es su estado principal con el TÍTULO de la columna (vale toda la
+  // columna, heredados incluidos: estadosDeColumnaLista).
+  assert.deepEqual(kv.OPCIONES_ESTADOS_TABLERO_PEDIDO.map((o) => [o.valor, o.etiqueta]), [['PENDIENTE_COMPRA', 'Pendiente de compra'],
+    ['EN_PROCESO', 'En proceso'], ['LISTO_ENTREGA', 'Listo para entrega'], ['ENTREGADO', 'Entregado'], ['FACTURADO', 'Facturado'],
+    ['CANCELADO', 'Cancelado']]);
+  assert.deepEqual(kv.OPCIONES_ESTADOS_TABLERO_PEDIDO.map((o) => o.valor), COLUMNAS_PEDIDO.map((c) => c.estados[0]));
+  assert.deepEqual(kv.OPCIONES_ESTADOS_TABLERO_PEDIDO.map((o) => o.etiqueta), COLUMNAS_PEDIDO.map((c) => c.titulo));
+  // Inmutables y la misma referencia en cada llamada (BarraTabla la llama en cada render).
+  assert.equal(kv.opcionesEstadosPedidos('todos'), kv.opcionesEstadosPedidos('todos'));
+  assert.equal(kv.opcionesEstadosPedidos('x'), kv.opcionesEstadosPedidos(null));
+  assert.ok(Object.isFrozen(kv.opcionesEstadosPedidos('todos')) && Object.isFrozen(kv.OPCIONES_ESTADOS_TABLERO_PEDIDO));
+  assert.ok(Object.isFrozen(kv.opcionesEstadosPedidos('cancelado')[1]) && Object.isFrozen(kv.OPCIONES_ESTADOS_TABLERO_PEDIDO[0]));
+  // Las de Solicitudes y Cotizaciones no cambian.
+  assert.deepEqual(kv.opcionesEstadosCotizaciones('rechazadas').map((o) => o.valor), ['RECHAZADA']);
+  assert.deepEqual(kv.opcionesEstadosSolicitudes('canceladas').map((o) => o.valor), ['CANCELADA']);
+}
+
+console.log('--- B4 T10 TEST N: consultaColumnaPedido — la consulta de cada columna del tablero de Pedidos ---');
+{
+  const estado = estadoTablaInicial({ vista: 'cancelado', q: ' cuna ', semaforo: 'atrasados', estados: [], orden: 'cliente', pagina: 3, tamano: 50 });
+  const col = (clave) => COLUMNAS_PEDIDO.find((c) => c.clave === clave);
+  const params = (q) => Object.fromEntries(new URLSearchParams(q));
+  // R5 y RP8 (el patrón de consultaColumnaSC y consultaColumnaCOT): vista=todos (no la pestaña), los estados de la columna
+  // en CSV como `estados` (nunca `estado=` ni `search=`), la búsqueda (q) y el semáforo del estado, y el orden, el límite y
+  // el desplazamiento de la columna (no la página ni el orden de la tabla).
+  assert.equal(kv.VISTA_TABLERO_PEDIDO, 'todos');
+  const q = kv.consultaColumnaPedido(estado, col('en_proceso'), { orden: 'atencion', limit: 50, offset: 0 });
+  assert.deepEqual(params(q), { vista: 'todos', semaforo: 'atrasados', q: 'cuna', estados: 'EN_PROCESO,EN_TRANSITO,PAGADO,PARCIALMENTE_DISPONIBLE', orden: 'atencion', limit: '50', offset: '0' });
+  assert.equal(q, queryListado(estado, { vista: 'todos', estados: [...col('en_proceso').estados], orden: 'atencion', limit: 50, offset: 0 }));
+  assert.ok(!/(^|&)estado=|(^|&)search=/.test(q), 'RP8: ni estado= ni search=');
+  // Pendiente de compra pide sus 5 estados (PENDIENTE_PAGO y los heredados); la plegada (Cancelado), limit=0.
+  assert.equal(params(kv.consultaColumnaPedido(estado, col('pend_compra'), { orden: 'atencion', limit: 25, offset: 25 })).estados,
+    'PENDIENTE_COMPRA,PENDIENTE_PAGO,BORRADOR,PENDIENTE_ANTICIPO,CONFIRMADO');
+  assert.equal(params(kv.consultaColumnaPedido(estado, col('cancelado'), { orden: 'reciente', limit: 0, offset: 0 })).limit, '0');
+  assert.equal(params(kv.consultaColumnaPedido(estado, col('cancelado'), { orden: 'reciente', limit: 0, offset: 0 })).estados, 'CANCELADO,DEVUELTO_TOTAL');
+  for (const c of COLUMNAS_PEDIDO) assert.ok(c.estados.length <= MAXIMO_ESTADOS, `${c.clave}: caben en estados=`);
+  // Con el filtro de la pantalla: el cruce (la opción de la columna vale toda la columna); sin nada en común, null.
+  const filtrado = { ...estado, estados: ['EN_PROCESO', 'CANCELADO'] };
+  assert.equal(params(kv.consultaColumnaPedido(filtrado, col('en_proceso'), { orden: 'atencion', limit: 25, offset: 0 })).estados,
+    'EN_PROCESO,EN_TRANSITO,PAGADO,PARCIALMENTE_DISPONIBLE');
+  assert.equal(params(kv.consultaColumnaPedido({ ...estado, estados: ['EN_TRANSITO'] }, col('en_proceso'), { orden: 'atencion', limit: 25, offset: 0 })).estados, 'EN_TRANSITO');
+  assert.equal(kv.consultaColumnaPedido(filtrado, col('listo_entrega'), { orden: 'atencion', limit: 25, offset: 0 }), null);
+  // Sin semáforo ni búsqueda no van (queryListado omite lo vacío).
+  const limpio = params(kv.consultaColumnaPedido(estadoTablaInicial({ vista: 'todos' }), col('entregado'), { orden: 'atencion', limit: 25, offset: 0 }));
+  assert.deepEqual([limpio.vista, limpio.estados], ['todos', 'ENTREGADO']);
+  assert.ok(!('semaforo' in limpio) && !('q' in limpio));
+  // Las de Solicitudes y Cotizaciones no cambian.
+  assert.equal(params(kv.consultaColumnaCOT(estado, COLUMNAS_COT[0], { orden: 'atencion', limit: 25, offset: 0 })).vista, 'todas');
+  assert.equal(params(kv.consultaColumnaSC(estado, COLUMNAS_SC[0], { orden: 'atencion', limit: 25, offset: 0 })).vista, 'todas_sin_soporte');
+}
+
+console.log('--- B4 T10 TEST O: tarjetaPedido — la tarjeta del tablero de Pedidos (y el chip del saldo de la tabla) ---');
+{
+  // KANBAN-ventas-listas punto 5 (D37, cruce C5): la de tarjetaHub (número, cliente, el total, el estado de
+  // estados-pedido.js, la antigüedad de dias_creado, el atraso y accionSiguienteDocumento) con el return_to de la lista
+  // de Pedidos; el subtítulo «SC-… · COT-…»; y los chips: «Saldo $X» (chipSaldoPedido, el mismo dato de la columna Saldo:
+  // saldoVisiblePedido) y después el atraso y el recordatorio de chipsDocumentoVentas. La fila es un pedido aunque no
+  // traiga `tipo` (las de GET /ventas/pedidos traen 'VEN').
+  const { chipSaldoPedido, saldoVisiblePedido } = await import('../src/lib/listas-ventas.js');
+  const pven = {
+    tipo: 'VEN', id: 40, numero: 'PVEN-40', estado: 'LISTO_ENTREGA', customer_name: 'Ana Ruiz', advisor_name: 'Laura',
+    sc_numero: 'SC-3', cot_numero: 'COT-21', total_cop: 1000000.4, saldo_cop: 400000, dias_creado: 3,
+    resolucion: 'ATRASADO', dias_sin_mov: 4, seguimiento_estado: 'AGOTADO',
+  };
+  const t = kv.tarjetaPedido(pven);
+  const base = tarjetaHub(pven, { returnTo: kv.RUTA_LISTA_PEDIDOS });
+  assert.equal(kv.RUTA_LISTA_PEDIDOS, '/dashboard/ventas/venta');
+  assert.deepEqual({ ...t, subtitulo: null, chips: null }, { ...base, subtitulo: null, chips: null }, 'lo demás es la tarjeta del Hub');
+  assert.equal(t.tipo, 'PVEN');
+  assert.equal(t.titulo, 'Ana Ruiz');
+  assert.equal(t.subtitulo, 'SC-3 · COT-21', 'el origen');
+  assert.equal(t.monto, 1000000);
+  assert.deepEqual(t.estado, estadoDeTarjeta('PVEN', 'LISTO_ENTREGA'));
+  assert.equal(t.estado.label, infoEstadoPedido('LISTO_ENTREGA').label);
+  assert.equal(t.tiempo, 'hace 3 días');
+  assert.equal(t.atrasada, true);
+  assert.deepEqual(t.accionPrincipal, { texto: 'Cobrar saldo', href: '/dashboard/ventas/venta/40?return_to=%2Fdashboard%2Fventas%2Fventa', tono: 'amber' });
+  assert.deepEqual(t.chips, [{ texto: 'Saldo $400.000', tono: 'amber' }, { texto: 'Atrasado 4 días', tono: 'rose' },
+    { texto: 'Sin respuesta al recordatorio', tono: 'amber' }]);
+  const sinTipo = { ...pven };
+  delete sinTipo.tipo;
+  assert.deepEqual(kv.tarjetaPedido(sinTipo), t, 'sin tipo, lo mismo');
+  assert.equal(kv.tarjetaPedido(pven, { returnTo: RUTA_HUB_VENTAS }).accionPrincipal.href, '/dashboard/ventas/venta/40?return_to=%2Fdashboard%2Fventas');
+  // El subtítulo: solo lo que hay; sin SC ni COT, el de la tarjeta del Hub (el asesor).
+  assert.equal(kv.tarjetaPedido({ ...pven, sc_numero: null }).subtitulo, 'COT-21');
+  assert.equal(kv.tarjetaPedido({ ...pven, sc_numero: '  ', cot_numero: '' }).subtitulo, 'Laura');
+  assert.equal(kv.tarjetaPedido({ ...pven, sc_numero: null, cot_numero: null, advisor_name: null }).subtitulo, 'Sin asignar');
+  // El saldo: solo si el pedido suma dinero (no Cancelado ni Devuelto, H47) y queda algo por cobrar, en pesos enteros.
+  assert.deepEqual(kv.tarjetaPedido({ ...pven, resolucion: 'NO_RESUELTO', seguimiento_estado: null }).chips, [{ texto: 'Saldo $400.000', tono: 'amber' }]);
+  for (const sinSaldo of [{ saldo_cop: 0 }, { saldo_cop: -5000 }, { saldo_cop: 0.4 }, { saldo_cop: null }, { saldo_cop: 'x' },
+    { estado: 'CANCELADO' }, { estado: 'DEVUELTO_TOTAL' }]) {
+    const fila = { ...pven, resolucion: 'NO_RESUELTO', seguimiento_estado: null, ...sinSaldo };
+    assert.deepEqual(kv.tarjetaPedido(fila).chips, [], JSON.stringify(sinSaldo));
+    assert.equal(chipSaldoPedido(fila), null, JSON.stringify(sinSaldo));
+  }
+  assert.deepEqual(chipSaldoPedido({ estado: 'ENTREGADO', saldo_cop: '1062523.4' }), { texto: 'Saldo $1.062.523', tono: 'amber' });
+  // La columna Saldo: el mismo dato (null = '—' en un pedido que no suma dinero; el número, aunque sea 0 o a favor).
+  assert.equal(saldoVisiblePedido({ estado: 'EN_PROCESO', saldo_cop: 400000.4 }), 400000);
+  assert.equal(saldoVisiblePedido({ estado: 'EN_PROCESO', saldo_cop: 0 }), 0);
+  assert.equal(saldoVisiblePedido({ estado: 'EN_PROCESO', saldo_cop: -2000 }), -2000);
+  assert.equal(saldoVisiblePedido({ estado: 'CANCELADO', saldo_cop: 400000 }), null);
+  assert.equal(saldoVisiblePedido({ estado: 'DEVUELTO_TOTAL', saldo_cop: 400000 }), null);
+  assert.equal(saldoVisiblePedido({ estado: 'EN_PROCESO', saldo_cop: null }), 0, 'sin saldo, 0 (como _ven_dict)');
+  for (const nada of [null, undefined, 'x']) assert.equal(saldoVisiblePedido(nada), null, String(nada));
+  for (const fila of [pven, { ...pven, saldo_cop: 0 }, { ...pven, estado: 'CANCELADO' }, { ...pven, saldo_cop: -1 }]) {
+    const chip = chipSaldoPedido(fila);
+    const saldo = saldoVisiblePedido(fila);
+    assert.equal(chip !== null, saldo !== null && saldo > 0, `${fila.estado} ${fila.saldo_cop}: el chip sale con la regla de la columna`);
+  }
+  // Con el tope de 3 (MAX_CHIPS), el del saldo va primero; un pedido no tiene chip de cambios del cliente.
+  const conCambios = { ...pven, cambios_cliente: { tipo: 'CAMBIOS', at: '2026-11-01T10:00:00', comentario: 'x' } };
+  assert.deepEqual(kv.tarjetaPedido(conCambios).chips, t.chips);
+  // tarjetaHub, tarjetaSolicitud y tarjetaCotizacion no cambian: el Hub no lleva el chip del saldo.
+  assert.deepEqual(tarjetaHub(pven).chips, chipsDocumentoVentas(pven, 'VEN'));
+  // Cada tipo de pedido da su tarjeta sin lanzar (las 18 claves de ESTADOS_PEDIDO).
+  for (const e of Object.keys(ESTADOS_PEDIDO)) assert.equal(kv.tarjetaPedido({ ...pven, estado: e }).estado.label, infoEstadoPedido(e).label, e);
+}
+
+console.log('--- B4 T10 TEST P: las acciones del tablero de Pedidos — mover dentro de En proceso, suma por columna, facturar y cancelar ---');
+{
+  // accionesTarjeta (KANBAN-ventas-listas punto 5): «Marcar En tránsito» y «Marcar En proceso» cambian de estado sin salir
+  // de la columna En proceso, solo si transicionesPedido lo permite.
+  const acciones = (estado) => kv.accionesTarjetaPedido({ id: 5, estado }).map((a) => [a.etiqueta, a.estado]);
+  assert.deepEqual(acciones('EN_PROCESO'), [['Marcar En tránsito', 'EN_TRANSITO']]);
+  assert.deepEqual(acciones('EN_TRANSITO'), [['Marcar En proceso', 'EN_PROCESO']]);
+  assert.deepEqual(acciones('PAGADO'), [['Marcar En tránsito', 'EN_TRANSITO'], ['Marcar En proceso', 'EN_PROCESO']], 'los heredados de la columna');
+  const enProceso = COLUMNAS_PEDIDO.find((c) => c.clave === 'en_proceso');
+  for (const e of Object.keys(ESTADOS_PEDIDO)) {
+    for (const a of kv.accionesTarjetaPedido({ id: 5, estado: e })) {
+      assert.ok(enProceso.estados.includes(e), `${e}: solo en la columna En proceso`);
+      assert.ok(enProceso.estados.includes(a.estado), `${e} → ${a.estado}: no sale de la columna`);
+      assert.ok(transicionesPedido(e).includes(a.estado), `${e} → ${a.estado}: lo acepta el servidor`);
+      assert.notEqual(a.estado, e);
+    }
+    if (!enProceso.estados.includes(e)) assert.deepEqual(kv.accionesTarjetaPedido({ estado: e }), [], e);
+  }
+  for (const nada of [null, undefined, {}, { estado: 'ALGO' }]) assert.deepEqual(kv.accionesTarjetaPedido(nada), [], JSON.stringify(nada));
+  // Una copia nueva cada vez (la pantalla le pone su onClick).
+  assert.notEqual(kv.accionesTarjetaPedido({ estado: 'EN_PROCESO' })[0], kv.accionesTarjetaPedido({ estado: 'EN_PROCESO' })[0]);
+
+  // resumenColumna (C9): la suma de H47 de la columna (resumen.monto_cop de su consulta) debajo del título, salvo en
+  // Cancelado (no suma dinero).
+  assert.equal(kv.resumenColumnaPedido('en_proceso', { monto_cop: 4927538.4, saldo_cop: 1, anticipo_cop: 2, por_estado: {} }), '$4.927.538');
+  assert.equal(kv.resumenColumnaPedido('facturado', { monto_cop: 0 }), '$0');
+  assert.equal(kv.resumenColumnaPedido('cancelado', { monto_cop: 500000 }), null);
+  for (const nada of [null, undefined, {}, { monto_cop: '500' }, { monto_cop: NaN }, [], 'x']) {
+    assert.equal(kv.resumenColumnaPedido('en_proceso', nada), null, JSON.stringify(nada));
+  }
+
+  // facturar (N2): la confirmación de confirmar() de useAvisos, la del panel rápido del Hub.
+  assert.deepEqual(kv.confirmacionFacturarPedido({ numero: 'PVEN-40' }), {
+    titulo: 'Marcar PVEN-40 como Facturado', mensaje: 'Después de esto el estado del pedido ya no se puede cambiar.',
+    textoConfirmar: 'Marcar como Facturado',
+  });
+  assert.equal(kv.confirmacionFacturarPedido({ numero: '  ' }).titulo, 'Marcar como Facturado');
+  assert.equal(kv.confirmacionFacturarPedido(null).titulo, 'Marcar como Facturado');
+  const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8');
+  assert.ok(hub.includes(`mensaje: '${kv.confirmacionFacturarPedido({}).mensaje}'`), 'el mismo texto del panel rápido del Hub');
+
+  // cancelar (H45, H46): los efectos del ModalMotivo. Las frases del modal del detalle salen de aquí (una sola fuente):
+  // la cotización que vuelve a Borrador, el saldo a favor y la orden de pago. El detalle trae `pagos` y `pxps`; la fila
+  // de la lista no, así que ahí el saldo a favor sale de lo pagado (total − saldo) y la orden de pago se dice con «si».
+  const BORRADOR = 'La cotización COT-21 volverá a Borrador para que puedas ajustarla, reenviarla al cliente y crear otro pedido.';
+  const SALDO = 'El dinero ya pagado queda como saldo a favor de la cotización y pasa al pedido nuevo si la vuelves a convertir.';
+  assert.equal(kv.EFECTO_CANCELAR_PEDIDO, 'El pedido queda Cancelado y no se puede reabrir.');
+  const fila = { id: 40, numero: 'PVEN-40', estado: 'EN_PROCESO', cot_numero: 'COT-21', total_cop: 1000000, saldo_cop: 400000, pxp_id: 7, pxp_numero: 'PXP-7' };
+  assert.deepEqual(kv.efectosCancelarPedido(fila), [kv.EFECTO_CANCELAR_PEDIDO, BORRADOR, SALDO, 'Si la orden de pago PXP-7 sigue pendiente, también se cancela.']);
+  assert.deepEqual(kv.efectosCancelarPedido({ ...fila, cot_numero: null, pxp_id: null, pxp_numero: null }), [kv.EFECTO_CANCELAR_PEDIDO]);
+  assert.deepEqual(kv.efectosCancelarPedido({ ...fila, saldo_cop: 1000000, pxp_numero: null }), [kv.EFECTO_CANCELAR_PEDIDO, BORRADOR], 'nada pagado');
+  assert.equal(kv.avisoSaldoAFavorAlCancelarPedido({ ...fila, cot_numero: '' }), null, 'sin cotización no hay a dónde pasarlo');
+  // El detalle (con pagos y pxps): lo de hoy, con saldoAFavorAlCancelar y la PXP vigente (pxpsDelPedido).
+  const detalle = {
+    ...fila, pagos: [{ id: 1, estado: 'CONFIRMADO', tipo: 'ANTICIPO', monto: 600000, metodo_pago: 'TRANSFERENCIA' }],
+    pxps: [{ id: 6, numero: 'PXP-6', estado: 'CANCELADA' }, { id: 7, numero: 'PXP-7', estado: 'PENDIENTE', monto_pendiente: 400000 }],
+  };
+  assert.equal(kv.avisoCotizacionAlCancelarPedido(detalle), BORRADOR);
+  assert.equal(kv.avisoSaldoAFavorAlCancelarPedido(detalle), SALDO);
+  assert.equal(kv.avisoPxpAlCancelarPedido(detalle), 'También se cancelará la orden de pago PXP-7 (pendiente $400.000).');
+  assert.equal(kv.avisoPxpAlCancelarPedido({ ...detalle, pxps: [{ id: 7, numero: 'PXP-7', estado: 'PAGADA', monto_pendiente: 0 }] }),
+    'La orden de pago PXP-7 está pagada: no se cancela y queda un aviso para revisar la devolución o el saldo a favor del cliente.');
+  assert.equal(kv.avisoPxpAlCancelarPedido({ ...detalle, pxps: [{ id: 6, numero: 'PXP-6', estado: 'CANCELADA' }] }), null, 'sin PXP vigente');
+  assert.equal(kv.avisoPxpAlCancelarPedido({ ...detalle, pxps: [] }), null, 'el detalle sin PXP (aunque la fila traiga pxp_numero)');
+  assert.equal(kv.avisoSaldoAFavorAlCancelarPedido({ ...detalle, pagos: [] }), null, 'el detalle: sin pagos verificados no hay saldo a favor');
+  assert.equal(kv.avisoSaldoAFavorAlCancelarPedido({ ...detalle, pagos: [{ id: 1, estado: 'PENDIENTE', tipo: 'ANTICIPO', monto: 9 }] }), null);
+  assert.equal(kv.avisoCotizacionAlCancelarPedido({ cot_numero: '  ' }), null);
+  for (const nada of [null, undefined, {}]) {
+    assert.deepEqual(kv.efectosCancelarPedido(nada), [kv.EFECTO_CANCELAR_PEDIDO], JSON.stringify(nada));
+  }
+  // El detalle usa las mismas funciones (no escribe las frases a mano): ver test_listas_ventas, el cableado del detalle.
+}
+
+console.log('--- B4 T10 TEST Q: el cableado del tablero de Pedidos (C9, C15, R11, RP8, RP26, D39; D27) ---');
+{
+  const fuente = readFileSync(new URL('../src/app/dashboard/ventas/venta/venta-client.tsx', import.meta.url), 'utf8')
+    .replace(/\r\n/g, '\n');
+  const codigo = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const lista = codigo.slice(codigo.indexOf('export default function VentaClient('));
+  // El tablero en modo servidor con el MISMO id y estado (RP26, D39): consultaColumnaPedido y el orden de cada columna.
+  assert.match(lista, /pantalla: ID_PEDIDOS,\s*modo: 'servidor',\s*columnas: COLUMNAS_PEDIDO,\s*activo: listo && enKanban,\s*porColumna: estado\.tamano,\s*dependencias: dependenciasTablero\(estado\),\s*ordenDe: \(c\) => \(c\.cerrada \? 'reciente' : 'atencion'\),/);
+  assert.match(lista, /const consulta = consultaColumnaPedido\(estado, columna, \{ orden, limit, offset \}\);\s*if \(consulta === null\) return \{ filas: \[\], total: 0 \};\s*return normalizarRespuesta\(await apiFetch\(`\/ventas\/pedidos\?\$\{consulta\}`, \{ signal \}\)\);/);
+  // RP8: ni estado= en CSV ni search= en ninguna consulta de la lista.
+  assert.ok(!/[?&]estado=|search=/.test(codigo), 'RP8');
+  assert.match(lista, /<TableroKanban\s+tablero=\{tablero\}\s+regla=\{reglaSoltarPedido\}\s+tarjetaDe=\{tarjetaDePedido\}\s+onAbrir=\{abrirPedido\}\s+onCambio=\{cambiarDesdeTablero\}\s+onAccion=\{accionDesdeTablero\}\s+accionesTarjeta=\{accionesTarjeta\}\s+resumenColumna=\{resumenColumna\}/);
+  assert.match(codigo, /const tarjetaDePedido = \(p: FilaPedido\) => tarjetaPedido\(p\);/);
+  // C9: la suma de cada columna es el resumen de H47 de su consulta (resumenColumnaPedido; Cancelado no).
+  assert.match(lista, /\(clave: string, d: DatosColumnaKanban<FilaPedido>\) => resumenColumnaPedido\(clave, d\.resumen\)/);
+  // 'cambio': el PATCH del estado con el autor; el tablero recarga su origen y su destino, aquí lo demás.
+  assert.match(lista, /async function cambiarDesdeTablero\(p: FilaPedido, resultado: \{ estado: string \}\) \{\s*await apiFetch\(`\/ventas\/pedidos\/\$\{p\.id\}`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ estado: resultado\.estado, updated_by: autorActual\(\) \}\),\s*\}\);\s*recargarTrasCambio\(\);\s*\}/);
+  // 'facturar' (N2): confirmar() con confirmacionFacturarPedido → PATCH FACTURADO; 'cancelar': ModalMotivo.
+  assert.match(lista, /if \(resultado\.accion === 'cancelar'\) setCancelando\(\{ pedido: p, columnas: \[origen, destino\] \}\);\s*else if \(resultado\.accion === 'facturar'\) void facturarDesdeTablero\(p, \[origen, destino\]\);/);
+  const facturar = lista.slice(lista.indexOf('async function facturarDesdeTablero('), lista.indexOf('\n  }\n', lista.indexOf('async function facturarDesdeTablero(')));
+  assert.match(facturar, /if \(!\(await confirmar\(confirmacionFacturarPedido\(p\)\)\)\) return;/);
+  assert.ok(facturar.indexOf('confirmar(') < facturar.indexOf("estado: 'FACTURADO'"), 'primero confirma');
+  assert.match(facturar, /if \(!recargarTrasError\(err\)\) return;\s*\}\s*tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*$/);
+  // 'cancelar' (N2, H45, H46): PATCH CANCELADO con el motivo; si falla, recargarTrasError y el error sigue (ModalMotivo lo
+  // muestra y conserva lo escrito); al terminar, solo el origen y el destino del tablero (D39).
+  const cancelar = lista.slice(lista.indexOf('async function cancelarConMotivo('), lista.indexOf('\n  }\n', lista.indexOf('async function cancelarConMotivo(')));
+  assert.match(cancelar, /JSON\.stringify\(\{ estado: 'CANCELADO', cancellation_reason: motivo, cancellation_authorized_by: autor, updated_by: autor \}\)/);
+  assert.match(cancelar, /\} catch \(err\) \{\s*if \(recargarTrasError\(err\)\) \{\s*tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*\}\s*throw err;\s*\}/);
+  assert.match(cancelar, /tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*$/);
+  assert.match(lista, /<ModalMotivo\s+titulo=\{`Cancelar \$\{cancelando\.pedido\.numero\}`\}\s+efectos=\{efectosCancelarPedido\(cancelando\.pedido\)\}[\s\S]*?onConfirmar=\{cancelarConMotivo\}\s+onCerrar=\{\(\) => setCancelando\(null\)\}/);
+  // accionesTarjeta: accionesTarjetaPedido; al terminar, la columna En proceso y lo que mueve el cambio.
+  assert.match(lista, /accionesTarjetaPedido\(p\)\.map\(\(a\) => \(\{\s*etiqueta: a\.etiqueta, [^\n]*onClick: \(\) => \{ void marcarDesdeTablero\(p, a\.estado\); \},/);
+  const marcar = lista.slice(lista.indexOf('const marcarDesdeTablero'), lista.indexOf('\n  }, [', lista.indexOf('const marcarDesdeTablero')));
+  assert.match(marcar, /JSON\.stringify\(\{ estado: nuevo, updated_by: autorActual\(\) \}\)/);
+  assert.match(marcar, /if \(!recargarTrasError\(err\)\) return;\s*\}\s*recargarTablero\(\['en_proceso'\]\);\s*recargarTrasCambio\(\);\s*$/);
+  // La regla del tablero (T3C) da 'facturar' y 'cancelar', las dos que maneja la pantalla, y bloquea Entregado.
+  assert.deepEqual(reglaSoltarPedido({ id: 1, estado: 'ENTREGADO' }, 'entregado', 'facturado'), { tipo: 'accion', accion: 'facturar' });
+  assert.deepEqual(reglaSoltarPedido({ id: 1, estado: 'EN_PROCESO' }, 'en_proceso', 'cancelado'), { tipo: 'accion', accion: 'cancelar' });
+  assert.equal(reglaSoltarPedido({ id: 1, estado: 'EN_PROCESO' }, 'en_proceso', 'entregado').tipo, 'bloqueado');
+  // Nunca confirm(), alert() ni prompt() (test_sin_dialogos_nativos los vigila también).
+  assert.ok(!/\b(confirm|alert|prompt)\(/.test(codigo.replace(/confirmar\(/g, '')), 'sin diálogos nativos');
+  // Al pasar a Kanban se sale de la pantalla completa; la barra no la ofrece en Kanban.
+  assert.match(lista, /useEffect\(\(\) => \{ if \(enKanban\) salir\(\); \}, \[enKanban, salir\]\);/);
+  assert.match(lista, /pantallaCompleta=\{enKanban \? undefined : \{ completa, alternar \}\}/);
+}
+
 console.log('OK test_kanban_ventas');

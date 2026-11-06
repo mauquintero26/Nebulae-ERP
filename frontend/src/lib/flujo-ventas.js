@@ -22,7 +22,7 @@
 
 import { congelar, conteosDePasos, opcionesSemaforo, pasosConConteos } from './flujo.js';
 import {
-  ESTADOS_PEDIDO, esCotizacionActiva, esPedidoVigente, humanizarCodigo, infoEstadoPedido, tiene,
+  ESTADOS_PEDIDO, esCotizacionActiva, esPedidoVigente, humanizarCodigo, infoEstadoPedido, tiene, PASOS_PEDIDO, grupoPedido,
 } from './estados-pedido.js';
 import { ESTADOS_SC, infoEstadoSolicitud } from './estados-solicitud.js';
 import { ESTADOS_COTIZACION, infoEstadoCotizacion } from './estados-cotizacion.js';
@@ -349,6 +349,87 @@ export function avisosCotizaciones(resumen) {
   const vencen = cantidadPositiva(r.vencen_pronto);
   if (vencen !== null) avisos.push({ texto: `${formatoEntero(vencen)} ${vencen === 1 ? 'vence' : 'vencen'} en 7 días`, tono: 'ambar' });
   return avisos;
+}
+
+// ─── B4 T10: la franja de la lista de Pedidos de venta ──────────────────────────
+
+/** RP21: las cajas de la franja que son una pestaña de la lista de Pedidos (la clave de su vista de GET /ventas/pedidos). */
+const VISTA_DE_PASO_PEDIDO = congelar({ ENTREGADO: 'entregado', FACTURADO: 'facturado' });
+
+/** Las vistas de la lista de Pedidos que son pestañas (Todos y las de grupoPedido, VISTA_DE_GRUPO del backend). */
+const VISTAS_LISTA_PEDIDOS = congelar(['todos', 'pend_compra', 'en_proceso', 'listo_entrega', 'entregado', 'facturado', 'cancelado']);
+
+/** Los grupos del paso Pedido de venta (los pedidos en curso): los tres primeros pasos de PASOS_PEDIDO. */
+const GRUPOS_PASO_PVEN = congelar(PASOS_PEDIDO.slice(0, 3).map((p) => p.label));
+
+/**
+ * B4 T10 (RP21): la vista de la lista de Pedidos que abre la caja `clave` de la franja: ENTREGADO -> 'entregado' y
+ * FACTURADO -> 'facturado' (están en la misma página). Otra clave: null.
+ * @param {unknown} clave
+ * @returns {'entregado' | 'facturado' | null}
+ */
+export function vistaDePasoPedido(clave) {
+  return typeof clave === 'string' && tiene(VISTA_DE_PASO_PEDIDO, clave) ? /** @type {any} */ (VISTA_DE_PASO_PEDIDO)[clave] : null;
+}
+
+/**
+ * B4 T10 (RP21): la pestaña que pide el enlace de la lista de Pedidos (?tab=, del `location.search` que la pantalla lee en
+ * el navegador al montar): una de las 7 vistas (todos, pend_compra, en_proceso, listo_entrega, entregado, facturado o
+ * cancelado), sin los espacios de los bordes. Un valor desconocido se ignora (null).
+ * @param {unknown} search
+ * @returns {string | null}
+ */
+export function leerEnlacePedidos(search) {
+  const tab = (new URLSearchParams(typeof search === 'string' ? search : '').get('tab') ?? '').trim();
+  return VISTAS_LISTA_PEDIDOS.includes(tab) ? tab : null;
+}
+
+/**
+ * El detalle de la caja Pedido de venta agrupado con grupoPedido (FLUJO-ventas-pantallas D.1): 'Pend. Compra 3 · En
+ * Proceso 1 · Listo Entrega 0', los tres grupos de los pedidos en curso, siempre y en ese orden (con sus ceros). Un
+ * estado de otro grupo o desconocido va al final con su etiqueta; los ceros, los negativos y lo que no es un número no
+ * suman.
+ * @param {Readonly<Record<string, number>> | null | undefined} porEstado
+ * @returns {{label: string, n: number}[]}
+ */
+function detallePorGrupoPedido(porEstado) {
+  const grupos = GRUPOS_PASO_PVEN.map((label) => ({ label, n: 0 }));
+  /** @type {{label: string, n: number}[]} */
+  const otros = [];
+  if (esObjeto(porEstado)) {
+    for (const [estado, valor] of Object.entries(/** @type {Record<string, number>} */ (porEstado))) {
+      const n = cantidadPositiva(valor);
+      if (n === null) continue;
+      const grupo = grupos.find((g) => g.label === grupoPedido(estado));
+      if (grupo) grupo.n += n;
+      else otros.push({ label: infoEstadoPedido(estado).label, n });
+    }
+  }
+  return [...grupos, ...otros];
+}
+
+/**
+ * B4 T10 (FLUJO-ventas-pantallas D; RP21, D42): los pasos de la franja de la lista de Pedidos de venta. Son los de
+ * pasosDeLista(datos, 'PVEN') con dos cambios:
+ *  - la caja Pedido de venta («Estás aquí») trae su detalle agrupado con grupoPedido (detallePorGrupoPedido; null
+ *    mientras carga);
+ *  - Entregado y Facturado están en esta misma página: van sin href (la pantalla pasa onSeleccionarPaso y PasosFlujo los
+ *    pinta como botones que despachan su vista) y quedan marcados (seleccionado) cuando `vista` es la suya.
+ * Solicitud y Cotización siguen siendo enlaces a su lista.
+ * @param {any} datos
+ * @param {string | null | undefined} vista
+ * @returns {PasoVista[]}
+ */
+export function pasosDePedidos(datos, vista) {
+  const conteos = conteosDesdeResumen(datos);
+  return pasosDeLista(datos, 'PVEN').map((p) => {
+    if (p.esEste) return { ...p, detalle: datos ? detallePorGrupoPedido(/** @type {any} */ (conteos)[p.clave]?.porEstado) : null };
+    const vistaDelPaso = vistaDePasoPedido(p.clave);
+    if (!vistaDelPaso) return p;
+    const sinEnlace = { ...p, seleccionado: vista === vistaDelPaso };
+    delete sinEnlace.href;
+    return sinEnlace;
+  });
 }
 
 // ─── la cadena de documentos (FLUJO-documentos) ─────────────────────────────────
