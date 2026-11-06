@@ -818,7 +818,8 @@ console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuent
   // de container query), nunca el largo de la regla. Desde 960 px de fila: el bloque del título y la regla con
   // min-w-0 flex-1 y el grupo al lado con shrink-0, arriba (items-start), sin bajar (flex-nowrap). Por debajo: el bloque
   // se deshace (contents) y el grupo va en su propio renglón (basis-full) entre el título y la regla (order), así que
-  // la regla larga no lo mueve. Los conteos del grupo van en una ranura de min-w-4, el ancho de la barra de Contador.
+  // la regla larga no lo mueve. Los conteos del grupo van en una ranura de min-w-6 (24 px: «(» + la barra de Contador
+  // + «)»).
   const fuenteBanner = fuentes['BannerFlujo.tsx'];
   // Tailwind solo genera las clases que ve escritas enteras: el breakpoint va literal en cada una, y es uno solo.
   const PUNTO = '@min-[960px]/fila';

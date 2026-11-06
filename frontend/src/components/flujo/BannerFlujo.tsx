@@ -68,6 +68,14 @@ export type PropsBannerFlujo = {
   error?: unknown;
   onReintentar?: () => void;
   onSeleccionarPaso?: (clave: string) => void;
+  /**
+   * Los chips de aviso de la fila 1, después de la regla.
+   * B4 T7 r2 (m-r1-c): por debajo de 960 px de fila (ver FILA y GRUPO_SEMAFORO), se VEN después del grupo del semáforo
+   * (CSS order), pero en el DOM van antes. Así, un aviso con onClick (un <button>) queda en el orden del Tab antes que
+   * los botones del semáforo, aunque se vea abajo. Hoy ninguna pantalla pasa avisos pulsables (el Hub de Ventas no pasa
+   * avisos). La primera que los pase (Compras, T14) tiene que resolverlo: por ejemplo, poner los avisos después del
+   * grupo en el DOM y conservar su lugar con order.
+   */
   avisos?: ReadonlyArray<AvisoFranja>;
   /** Por defecto null (sin botón). */
   accionAjustar?: AccionAjustar | null;

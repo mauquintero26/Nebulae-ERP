@@ -143,7 +143,7 @@ export function FranjaFlujoVentas({ estado, despachar, recargaFlujo, opcionesEst
       regla={textoRegla(flujo.datos?.dias_alerta)}
       semaforo={{
         atrasados: flujo.datos?.semaforo?.atrasados ?? null,
-        noResueltos: flujo.datos?.semaforo?.no_resueltos, // undefined si la pantalla no tiene ese botón
+        noResueltos: flujo.datos?.semaforo?.no_resueltos, // la CLAVE presente reserva el botón mientras carga; sin ese botón, no escribas la clave
         filtro,
         onFiltrar: (f) => despachar({ tipo: 'semaforo', valor: f === 'todos' ? null : f }),
       }}
@@ -170,6 +170,20 @@ export function FranjaFlujoVentas({ estado, despachar, recargaFlujo, opcionesEst
 - **Tocar un paso o un botón del semáforo** pone ese filtro en el estado único (`paso` o `semaforo`) y tocarlo otra vez lo quita. Si cambia la vista, usa `accionPestana`.
 - **Conteos que no vienen:** pásalos `undefined`, nunca `null`. Un `null` con los datos ya cargados deja la barra gris para siempre (`null` es «todavía carga»). Compras no tiene «No resueltos»: no pases `noResueltos` (ni como `null` mientras carga).
 - **Con error:** toda la franja muestra «—» y una línea con «Reintentar» (`onReintentar={flujo.recargar}`); la pantalla no hace nada más.
+- **Mientras carga**, la franja ya tiene la forma de lo cargado:
+  - Las cajas y la fila del semáforo son las mismas. «No resueltos» se reserva con la barra gris si la pantalla escribe
+    la clave `noResueltos`.
+  - Solo crecen los chips de aviso y la regla.
+- **El renglón del semáforo lo decide el ancho, nunca el largo de la regla.** BannerFlujo lo resuelve con una container
+  query de la fila, `@min-[960px]/fila`.
+  - Desde 960 px de fila, el título y la regla van en una columna (`min-w-0 flex-1`) y el grupo de botones va al lado
+    (`shrink-0`), arriba y sin bajar.
+  - Por debajo, el grupo va en su propio renglón, justo después del título.
+  - **Por qué 960 px:** el grupo de Ventas en una línea, con «Ajustar tiempos», mide 719 px; más 16 de separación y unos
+    221 del título con un estado de tres cifras. Con el menú abierto, eso se alcanza a los 1280 px de pantalla.
+  - La regla va siempre en su propio renglón y completa, sin truncar. Al llegar `dias_alerta`, la regla larga solo
+    crece hacia abajo y el grupo no se mueve.
+  - La pantalla no tiene que hacer nada para esto.
 - **En una lista** (Solicitudes, Cotizaciones, Pedidos) la caja de la pantalla es `actual` («Estás aquí»), no lleva `href`; las demás llevan el `href` de su lista:
 
 ```tsx
@@ -408,7 +422,18 @@ export function PedidosDeVenta({ stats }: { stats: { vendido: number | null; ven
 ##### Columnas (`ColumnaTabla<T>`)
 
 - `id`, `titulo` y `celda(fila)` son obligatorios. `ancho`, `anchoMin` y `anchoMax` en px, `alinear`, `ordenable` (`true` ordena por el id; un texto es el campo de orden del servidor), `valorOrden` (modo cliente), `titleCelda` y `ocultaPorDefecto` (las columnas de poco uso salen ocultas y se muestran con «Ajustar tabla»).
+- `ordenInverso: true` es para una columna que muestra lo contrario de su campo de orden. Por ejemplo, una Antigüedad
+  que se ordena por `ordenable: 'creado'`.
+  - La flecha dice lo que ve el usuario y el servidor recibe lo contrario: «Antigüedad ↑» (la más nueva primero) manda
+    `-creado` y «↓» manda `creado`. Lo hacen `ordenAlTocar` y `direccionDeColumna` de lib/tabla.js.
+  - En modo cliente, `valorOrden` es el valor del CAMPO (la fecha de creación), no el que se ve (los días).
+  - Si la pantalla pinta un chip del orden, invierte también su flecha. El Hub lo hace con
+    `textoOrdenHub(orden, titulos, { inversos })`.
 - `clave: true` va en la columna del número del documento (nunca se oculta). `fija: 'izquierda' | 'derecha'` la deja pegada al lado.
+  - **Excepción:** en una caja más angosta que las fijas, más la casilla de selección, más `MINIMO_ZONA_LIBRE` (160 px),
+    las fijas dejan de ser sticky y la tabla entera se corre de lado. Lo decide `fijasActivas` (lib/tabla.js), con el
+    ancho que mide la tabla.
+  - Para moverlas siguen siendo fijas: no se cruzan con las demás.
 - `flexible: true` va en UNA sola columna, Cliente o Proveedor: toma el espacio que sobra. A 1024 px con el menú abierto las columnas clave tienen que caber sin correr la tabla; si no caben, baja primero el ancho por defecto de esta columna (hasta 120). Con el asa no pasa de su `anchoMax` (640 por defecto); si la pantalla quiere poder ensancharla en monitores anchos, que le dé un `anchoMax` mayor.
 - `celda` y `claseFila` solo dependen de la fila y de lo que esté en las dependencias del `useMemo` de `columnas` (o de la identidad de `claseFila`), porque el cuerpo de la tabla está memoizado.
 
@@ -456,15 +481,43 @@ no como un selector propio encima de la tarjeta. Es una pestaña que no es una v
   tabla», conmutador, «Pantalla completa» ni «N resultados».
 - Tocarla llama a `onCambiar(true)`. Tocar una pestaña de vista con la aparte activa llama a `onCambiar(false)` y, si la
   vista cambia, despacha `accionPestana` como siempre.
-- Las flechas, Inicio y Fin la incluyen.
+- Las flechas, Inicio y Fin la incluyen. La fila se desplaza sola para mostrar la pestaña activa, sin mover la página.
+- **Con la aparte activa, una pestaña de vista sin conteo** (un conteo que no es un número) no pinta su pastilla ni su
+  `Contador`.
+  - Es «sin dato», no «cargando»: con `activo: !enAnalisis` no hay nada en camino. Pasa al entrar directo con
+    `?tab=analisis`.
+  - Si hubo conteos antes (se llegó desde los documentos), se ven esos. Con los conteos en error, «—», como siempre.
+  - Lo decide `estadoPastillaPestana` (lib/tabla.js). La pantalla solo pasa `conteo: null` cuando no hay número, nunca
+    0.
 - La pantalla pinta debajo de la tarjeta su `PanelAnalisisPerezoso`, en lugar de la tabla o el tablero.
+- **El tablero también se apaga en Análisis:** `activo: listo && estado.modo === 'kanban' && !enAnalisis` en
+  `useTableroKanban`.
+- **Al activar la aparte se sale de la pantalla completa,** con el mismo efecto que al pasar a Kanban:
+  `useEffect(() => { if (estado.modo === 'kanban' || enAnalisis) salir(); }, [estado.modo, enAnalisis, salir])`.
+- **`enAnalisis` arranca de `?tab=analisis`** (por ejemplo, `leerEnlaceHub(window.location.search).analisis` en Ventas).
+  Al volver a los documentos, la URL se limpia con `router.replace(<ruta del Hub>)` (D-7): recargar no reabre Análisis.
+- **Al cambiar de apartado se limpia la selección** de la tabla.
+- `onCambiar` solo cambia algo si `activa !== enAnalisis`. Tocar otra vez la pestaña en la que ya se está no hace nada.
 
 ```tsx
+const [enAnalisis, setEnAnalisis] = useState(() => leerEnlaceHub(window.location.search).analisis);
+const cambiarApartado = useCallback((analisis: boolean) => {
+  setEnAnalisis(analisis);
+  setSeleccion(new Set());
+  if (!analisis && leerEnlaceHub(window.location.search).analisis) router.replace(RUTA_HUB);
+}, [router]);
+const alCambiarAparte = useCallback((activa: boolean) => {
+  if (activa !== enAnalisis) cambiarApartado(activa);
+}, [enAnalisis, cambiarApartado]);
+useEffect(() => { if (estado.modo === 'kanban' || enAnalisis) salir(); }, [estado.modo, enAnalisis, salir]);
+const listado = useListado({ ruta, estado, conConteos: true, esperar: !listo, despachar, activo: !enAnalisis });
+const tablero = useTableroKanban({ /* … */ activo: listo && estado.modo === 'kanban' && !enAnalisis });
+
 <BarraTabla
   estado={estado}
   onEstado={despachar}
   pestanas={pestanas}
-  pestanaAparte={{ id: 'analisis', etiqueta: 'Análisis', activa: enAnalisis, onCambiar: (activa) => setEnAnalisis(activa) }}
+  pestanaAparte={{ id: 'analisis', etiqueta: 'Análisis', activa: enAnalisis, onCambiar: alCambiarAparte }}
   /* … búsqueda, filtros, ajustes, conmutador, pantalla completa y total, como siempre */
 />
 {!enAnalisis && estado.modo === 'lista' && <TablaEstandar /* … */ />}
@@ -475,7 +528,7 @@ no como un selector propio encima de la tarjeta. Es una pestaña que no es una v
 
 Un solo tablero para toda la app (Hub de Ventas, listas, Compras, Entregas, Leads del CRM…). Cada módulo define sus columnas y su regla de soltar en su librería (`COLUMNAS_PEDIDO` y `reglaSoltarPedido` en `lib/kanban-ventas.js`, `COLUMNAS_ENTREGA` en `lib/entregas.js`, `columnasDesdeEtapas` en `lib/crm-etapas.js`…). El ejemplo de arriba es la forma de conectarlo.
 
-- **Datos** con `useTableroKanban`: `modo: 'servidor'` hace una consulta por columna (`cargar(columna, { offset, limit, orden, signal })`) y `modo: 'cliente'` agrupa los `items` en el navegador. `items` y `columnas` tienen que ser estables. `pantalla` es el mismo id de `useEstadoTabla`; `activo = listo && estado.modo === 'kanban'`, `porColumna = estado.tamano` y `dependencias = dependenciasTablero(estado)`.
+- **Datos** con `useTableroKanban`: `modo: 'servidor'` hace una consulta por columna (`cargar(columna, { offset, limit, orden, signal })`) y `modo: 'cliente'` agrupa los `items` en el navegador. `items` y `columnas` tienen que ser estables. `pantalla` es el mismo id de `useEstadoTabla`; `activo = listo && estado.modo === 'kanban'` (más `&& !enAnalisis` si la barra tiene una pestaña aparte), `porColumna = estado.tamano` y `dependencias = dependenciasTablero(estado)`.
 - **Columnas:** `{ clave, titulo, tono, estados?, cerrada?, ayuda? }` (`definirColumnas`). Las `cerrada` salen plegadas la primera vez; las plegadas se recuerdan en `kanban:<pantalla>`. Una columna que falla muestra «Reintentar»; vacía, «Sin documentos aquí» (`vacio`).
 - **Regla de soltar** `(item, origen, destino) => ResultadoSoltar`: `'ninguno'`, `'bloqueado'` (con su motivo), `'cambio'` (mueve la tarjeta, llama `onCambio` y, si falla, la devuelve y avisa) o `'accion'` (se la pasa a `onAccion`: la pantalla abre su ventana y, al terminar, llama `tablero.recargar([origen, destino])`). Sin `regla` o con `soloLectura`, el tablero es solo para ver.
 - **Arrastre** con pointer events (con 6 px o más; menos es un clic que llama `onAbrir`). Con el teclado y en el celular, el menú ⋯ trae «Abrir», «Mover a …» por columna (las bloqueadas, deshabilitadas con su motivo) y las `accionesTarjeta(item)` de la pantalla.
