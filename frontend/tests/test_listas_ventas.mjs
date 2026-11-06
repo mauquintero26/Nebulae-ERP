@@ -827,6 +827,7 @@ console.log('--- B4 T9 TEST 2: fechaPorVencer — la Entrega est. en ámbar (la 
   assert.equal(listas.fechaPorVencer('2026-11-08 15:00:00', 7, ahora), true, 'con espacio, como el backend');
   assert.equal(listas.fechaPorVencer('2026-11-08T15:00:00Z', 1, ahora), false, 'con otro plazo');
   assert.equal(listas.fechaPorVencer(new Date(ahora + 3 * DIA).toISOString(), undefined, ahora), true, '7 días por defecto');
+  assert.equal(listas.fechaPorVencer(new Date(ahora + 8 * DIA).toISOString(), undefined, ahora), false, 'por defecto, 8 días ya no');
   for (const nada of [null, undefined, '', 'x', 5]) assert.equal(listas.fechaPorVencer(nada, 7, ahora), false, String(nada));
   // Una fecha no es las dos cosas a la vez.
   for (const iso of ['2026-11-01T00:00:00', '2026-11-07T00:00:00', '2026-12-01T00:00:00']) {
@@ -881,7 +882,8 @@ console.log('--- B4 T9: el cableado de la lista de Cotizaciones con el servidor 
   assert.match(codigo, /const claseDeFila = \(cot: FilaCOT\) => \(cot\.resolucion === 'ATRASADO' \? `\$\{TABLE\.filaAlerta\} \$\{MARCA_ATRASO\}` : null\);/);
   const columnas = codigo.slice(codigo.indexOf('const COLUMNAS_TABLA_COT'), codigo.indexOf('\n];\n', codigo.indexOf('const COLUMNAS_TABLA_COT')));
   const ids = [...columnas.matchAll(/\{ id: '([a-z_]+)', titulo: '([^']+)', ancho: (\d+)/g)].map((m) => [m[1], m[2], Number(m[3])]);
-  assert.deepEqual(ids, [['numero', 'COT / SC', 132], ['cliente', 'Cliente', 152], ['cotizador', 'Cotizador', 120], ['total', 'Total', 104],
+  // R26 (banco): Cliente nace en 136 para que a 1024 px con el menú abierto quepan las columnas por defecto (RP85 daba 152).
+  assert.deepEqual(ids, [['numero', 'COT / SC', 132], ['cliente', 'Cliente', 136], ['cotizador', 'Cotizador', 120], ['total', 'Total', 104],
     ['anticipo', 'Anticipo', 96], ['entrega', 'Entrega est.', 104], ['estado', 'Estado', 120], ['acciones', 'Acciones', 88]]);
   assert.match(columnas, /\{ id: 'numero', [^\n]*clave: true, fija: 'izquierda'/);
   assert.match(columnas, /\{ id: 'cliente', [^\n]*flexible: true/);
@@ -889,7 +891,12 @@ console.log('--- B4 T9: el cableado de la lista de Cotizaciones con el servidor 
   assert.match(columnas, /\{ id: 'entrega', [^\n]*ocultaPorDefecto: true/);
   assert.match(columnas, /\{ id: 'estado', [^\n]*clave: true/);
   assert.match(columnas, /\{ id: 'acciones', [^\n]*clave: true, fija: 'derecha'/);
+  // Banco (T9): el Cotizador y el Anticipo con la letra de las demás celdas (text-xs), y «-» sin cotizador.
+  assert.match(columnas, /\{ id: 'cotizador', [^\n]*\n\s*celda: \(cot\) => <span className="block truncate text-xs[^"]*">\{cot\.cotizador \|\| '-'\}<\/span> \}/);
+  assert.match(columnas, /\{ id: 'anticipo', [^\n]*\n[^\n]*\n\s*celda: \(cot\) => <span className="block truncate text-xs[^"]*">\{fCOP\(cot\.anticipo_cop\)\}<\/span> \}/);
   assert.equal((columnas.match(/ocultaPorDefecto: true/g) ?? []).length, 2, 'solo Anticipo y Entrega est. salen ocultas (R26)');
+  const visibles = ids.filter(([id]) => !['anticipo', 'entrega'].includes(id)).reduce((s, [, , ancho]) => s + ancho, 0);
+  assert.ok(visibles <= 704, `las columnas por defecto suman ${visibles} px: caben en los 704 de la caja a 1024 px`);
   const acciones = codigo.slice(codigo.indexOf('function CeldaAcciones('), codigo.indexOf('\n}\n', codigo.indexOf('function CeldaAcciones(')));
   assert.match(acciones, /aria-label=\{`Ver \$\{cot\.numero\}`\}/);
   assert.ok(!/opacity-0|group-hover/.test(acciones) && !codigo.includes('MoreVertical'), '«Ver» siempre visible; sin el ⋮ sin acción');
@@ -920,6 +927,9 @@ console.log('--- B4 T9: el cableado de la lista de Cotizaciones con el servidor 
   assert.match(lista, /<BannerFlujo\s+titulo="Flujo comercial"\s+idPreferencia=\{ID_COT\}/);
   assert.match(lista, /const pasosFlujo = useMemo\(\(\) => pasosDeLista\(flujo\.datos, 'COT'\), \[flujo\.datos\]\);/);
   assert.match(lista, /semaforo=\{\{ atrasados: atrasadosCOT, filtro: filtroSemaforo, onFiltrar: alFiltrarSemaforo \}\}/);
+  // El botón «Con atraso» queda pulsado con el filtro del estado único (y «Ver todo» sin él).
+  assert.match(lista, /const filtroSemaforo: FiltroSemaforo = estado\.semaforo === 'atrasados' \? 'atrasados' : 'todos';/);
+  assert.match(lista, /const atrasadosCOT = pasosFlujo\.find\(\(p\) => p\.esEste\)\?\.atrasados \?\? null;/);
   assert.ok(!lista.includes('noResueltos'), 'sin la clave noResueltos');
   assert.match(lista, /const avisosFlujo = useMemo\(\(\) => avisosCotizaciones\(listado\.resumen\), \[listado\.resumen\]\);/);
   assert.match(lista, /avisos=\{avisosFlujo\}/);

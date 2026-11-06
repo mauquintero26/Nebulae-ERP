@@ -986,22 +986,28 @@ function CeldaAcciones({ cot }: { cot: FilaCOT }) {
 
 /**
  * B4 T9, la tabla (TABLA-listas-ventas punto 6; R26, RP85, D41). Las columnas del diseño: COT / SC (clave, fija a la
- * izquierda), Cliente (la flexible; RP85: nace en 152), Cotizador, Total, Anticipo y Entrega est. (ocultas por defecto,
- * R26: se muestran con «Ajustar tabla»), Estado (clave) y Acciones (fija a la derecha). Sin casillas: la lista no tiene
- * acciones en lote. Constantes (estables, D40); sus celdas piden a la pantalla lo suyo por AccionesLista.
+ * izquierda), Cliente (la flexible), Cotizador, Total, Anticipo y Entrega est. (ocultas por defecto, R26: se muestran con
+ * «Ajustar tabla»), Estado (clave) y Acciones (fija a la derecha). Sin casillas: la lista no tiene acciones en lote.
+ * Constantes (estables, D40); sus celdas piden a la pantalla lo suyo por AccionesLista.
+ * R26 (medido en el banco): a 1024 px con el menú abierto la caja de la tabla deja 704 px cuando la página trae su barra
+ * vertical (RP85 contaba 716). Con Cliente en 152 las columnas sumaban 716 y la tabla corría 12 px; Cliente nace en 136
+ * (132 + 136 + 120 + 104 + 120 + 88 = 700, 4 px de holgura) y, como es la flexible, toma lo que sobra en pantallas anchas.
  */
 const COLUMNAS_TABLA_COT: ColumnaTabla<FilaCOT>[] = [
   { id: 'numero', titulo: 'COT / SC', ancho: 132, clave: true, fija: 'izquierda', ordenable: 'numero', titleCelda: tituloNumero,
     celda: (cot) => <CeldaNumero cot={cot} /> },
-  { id: 'cliente', titulo: 'Cliente', ancho: 152, flexible: true, ordenable: 'cliente',
+  { id: 'cliente', titulo: 'Cliente', ancho: 136, flexible: true, ordenable: 'cliente',
     titleCelda: (cot) => [cot.customer_name || '-', cot.customer_phone].filter(Boolean).join(' · '),
     celda: (cot) => <CeldaCliente cot={cot} /> },
-  { id: 'cotizador', titulo: 'Cotizador', ancho: 120, ordenable: 'cotizador', celda: (cot) => cot.cotizador || '-' },
+  // Banco (T9): con el texto suelto, la celda tomaba la letra de la tabla (text-sm), más grande que las demás.
+  { id: 'cotizador', titulo: 'Cotizador', ancho: 120, ordenable: 'cotizador', titleCelda: (cot) => cot.cotizador || null,
+    celda: (cot) => <span className="block truncate text-xs font-medium text-slate-600">{cot.cotizador || '-'}</span> },
   { id: 'total', titulo: 'Total', ancho: 104, alinear: 'derecha', ordenable: 'total',
     titleCelda: (cot) => [fCOP(cot.total_cop), sinPrecio(cot) ? 'Sin precio' : null].filter(Boolean).join(' · '),
     celda: (cot) => <CeldaTotal cot={cot} /> },
   { id: 'anticipo', titulo: 'Anticipo', ancho: 96, alinear: 'derecha', ocultaPorDefecto: true, ordenable: 'anticipo',
-    celda: (cot) => fCOP(cot.anticipo_cop) },
+    titleCelda: (cot) => fCOP(cot.anticipo_cop),
+    celda: (cot) => <span className="block truncate text-xs font-bold text-slate-600">{fCOP(cot.anticipo_cop)}</span> },
   { id: 'entrega', titulo: 'Entrega est.', ancho: 104, ocultaPorDefecto: true, ordenable: 'entrega',
     titleCelda: (cot) => fechaLarga(cot.fecha_entrega_estimada) || 'Sin fecha de entrega', celda: (cot) => <CeldaEntrega cot={cot} /> },
   { id: 'estado', titulo: 'Estado', ancho: 120, clave: true, ordenable: 'estado', titleCelda: tituloEstado,

@@ -637,6 +637,8 @@ console.log('--- B4 T9 TEST 1: avisosCotizaciones — los chips «N sin precio»
   }
   // Sin resumen (cargando o con error): ningún chip.
   for (const nada of [null, undefined, 'x', 3, []]) assert.deepEqual(fv.avisosCotizaciones(nada), [], String(nada));
+  // Un arreglo no es un resumen, aunque traiga las claves.
+  assert.deepEqual(fv.avisosCotizaciones(Object.assign([], { sin_calc: 2, vencen_pronto: 1 })), [], 'un arreglo');
 }
 
 console.log('\nOK: test_flujo_ventas.mjs');
