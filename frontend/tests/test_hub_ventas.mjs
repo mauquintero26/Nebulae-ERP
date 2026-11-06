@@ -17,13 +17,15 @@ import {
   ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN, repartirCambioEstadoPVEN,
   comoUTC, diasDesde, textoAntiguedad, diaLocalDeFecha, fechaEditadaParaGuardar,
   ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, tieneProductos, esNoResuelto, esAccionTomada, accionSiguienteSC,
-  esSCConCotizacionTemprana, TIPOS_NOTA_REINICIAN_ATRASO, notaReiniciaAtraso, desdeElHub, fusionarCargaHub,
+  esSCConCotizacionTemprana, TIPOS_NOTA_REINICIAN_ATRASO, notaReiniciaAtraso, desdeElHub,
   cantidadPositiva, textoAtrasados, conDetalleDelEnvio,
   RUTA_HUB_VENTAS, ESTADOS_CERRADOS, clasificar, esAtrasado, columnaHub, accionSiguienteCOT, accionSiguientePVEN,
   accionSiguienteDocumento, ETIQUETA_GRUPO, tituloGrupo,
 } from '../src/lib/hub-ventas.js';
+// B4 T7: lo nuevo por el espacio de nombres, para que su falta no tape los demás rojos.
+import * as hv from '../src/lib/hub-ventas.js';
 import { destinoVolver, etiquetaVolver } from '../src/lib/detalle-layout.js';
-import { ESTADOS_PEDIDO, ESTADOS_PEDIDO_CERRADOS, pasoPedido } from '../src/lib/estados-pedido.js';
+import { ESTADOS_PEDIDO, ESTADOS_PEDIDO_CERRADOS, pasoPedido, esCotizacionActiva } from '../src/lib/estados-pedido.js';
 import { ESTADOS_COTIZACION } from '../src/lib/estados-cotizacion.js';
 import { pedidoVigente } from '../src/lib/listas-ventas.js';
 import { ESTADOS_SC, ESTADOS_SC_SIN_CONFIRMAR } from '../src/lib/estados-solicitud.js';
@@ -280,7 +282,16 @@ console.log('--- T11 calidad E2+E3: los destinos del Hub llevan return_to del Hu
   // E2: la «Próxima Acción» de la COT en el Hub ya no usa la ruta vieja /cotizacion?id= (redirige y pierde el volver).
   const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8');
   assert.ok(!hub.includes('/dashboard/ventas/cotizacion?id='), 'el Hub no enlaza /dashboard/ventas/cotizacion?id=');
-  assert.ok(hub.includes('desdeElHub(`/dashboard/ventas/cotizacion/${row.id}`)'), 'Aprobar Venta usa desdeElHub');
+  // B4 T7 (D27, RP15): la columna Acción usa accionSiguienteDocumento (hub-ventas.js), que lleva a la COT con el
+  // return_to del Hub (desdeElHub): la protección de «Aprobar Venta» pasó a la librería.
+  assert.ok(hub.includes('const accion = accionSiguienteDocumento(fila);'), 'la Acción del Hub sale de accionSiguienteDocumento');
+  for (const estado of ['BORRADOR', 'ENVIADA', 'VENCIDA']) {
+    for (const total_cop of [0, 250000]) {
+      assert.equal(accionSiguienteDocumento({ tipo: 'COT', id: 12, estado, total_cop }).href,
+        desdeElHub('/dashboard/ventas/cotizacion/12'), `${estado} ${total_cop}: a la COT con el return_to del Hub`);
+    }
+  }
+  assert.equal(accionSiguienteDocumento({ tipo: 'COT', id: 12, estado: 'CONFIRMADA' }).href, desdeElHub('/dashboard/ventas/cotizacion/12'));
   // E4: «Actualizar» no pasa su evento a loadData y un GET fallido ya no se convierte en una lista vacía.
   assert.ok(!hub.includes('onClick={loadData}'), 'Actualizar llama loadData() sin el evento');
   assert.ok(!/\.catch\(\(\)\s*=>\s*\[\]\)/.test(hub), 'loadData no cambia un GET fallido por []');
@@ -290,77 +301,60 @@ console.log('--- T11 calidad E2+E3: los destinos del Hub llevan return_to del Hu
   assert.ok(!lista.includes('new Date(s.fecha_solicitud)'), 'la fecha de la SC pasa por comoUTC');
 }
 
-console.log('--- T11 calidad, ronda 1 (7): fusionarCargaHub, la recarga del Hub sin perder lo que había ---');
+console.log('--- B4 T7 (RP86 y D28): la recarga del Hub sin perder lo que había y la última carga gana, con useListado ---');
 {
-  const SIN_PREVIOS = 'No se pudieron cargar las listas. Pulsa Actualizar para intentarlo de nuevo.';
-  const CON_PREVIOS = 'No se pudieron actualizar las listas; se muestran los datos anteriores.';
-  const SIN_CONFIG = 'No se pudo cargar la configuración de alertas.';
-  const sc1 = { id: 1, created_at: '2026-10-01T10:00:00' };
-  const cot1 = { id: 2, created_at: '2026-10-03T10:00:00' };
-  const ven1 = { id: 3, created_at: '2026-10-02T10:00:00' };
-  const cfg = { data: { alerta_sc_dias: '3' } };
-
-  // Todo bien: las listas nuevas (con su tipo), todas juntas de la más nueva a la más vieja, la config y sin aviso.
-  const ok = fusionarCargaHub(null, { sc: { data: [sc1] }, cot: [cot1], ven: { items: [ven1] }, cfg });
-  assert.deepEqual(ok.listas, { sc: [{ ...sc1, tipo: 'SC' }], cot: [{ ...cot1, tipo: 'COT' }], ven: [{ ...ven1, tipo: 'VEN' }] });
-  assert.deepEqual(ok.todas.map((x) => x.tipo), ['COT', 'VEN', 'SC']);
-  assert.deepEqual(ok.cfg, { alerta_sc_dias: '3' });
-  assert.equal(ok.aviso, null);
-
-  // Primera carga y falla una lista (null = GET fallido): esa queda vacía y el aviso pide reintentar.
-  const primera = fusionarCargaHub(null, { sc: null, cot: [cot1], ven: [ven1], cfg });
-  assert.deepEqual(primera.listas.sc, []);
-  assert.equal(primera.aviso, SIN_PREVIOS);
-
-  // Con datos previos: la lista que falla conserva la anterior, la que llega la reemplaza, y un solo aviso aunque
-  // fallen varias (y la config).
-  const previas = ok.listas;
-  const cot2 = { id: 9, created_at: '2026-10-05T10:00:00' };
-  const varias = fusionarCargaHub(previas, { sc: null, cot: [cot2], ven: null, cfg: null });
-  assert.deepEqual(varias.listas, { sc: previas.sc, cot: [{ ...cot2, tipo: 'COT' }], ven: previas.ven });
-  assert.deepEqual(varias.todas.map((x) => x.id), [9, 3, 1]);
-  assert.equal(varias.cfg, null);  // config nula: se conserva la que hay en pantalla
-  assert.equal(varias.aviso, CON_PREVIOS);
-
-  // Solo falla la config.
-  const soloCfg = fusionarCargaHub(previas, { sc: [sc1], cot: [cot1], ven: [ven1], cfg: null });
-  assert.equal(soloCfg.cfg, null);
-  assert.equal(soloCfg.aviso, SIN_CONFIG);
-
-  // Datos previos vacíos (la carga anterior no trajo nada): sigue siendo «no se pudieron cargar».
-  assert.equal(fusionarCargaHub({ sc: [], cot: [], ven: [] }, { sc: null, cot: null, ven: null, cfg }).aviso, SIN_PREVIOS);
-  // Una config que no es un objeto no reemplaza la de pantalla (y no es un fallo).
-  assert.equal(fusionarCargaHub(previas, { sc: [], cot: [], ven: [], cfg: 'x' }).cfg, null);
-  // No muta lo que recibe.
-  assert.deepEqual(previas.sc, [{ ...sc1, tipo: 'SC' }]);
-
-  // En el Hub queda solo la llamada (con el aviso de la función, sin armar el texto allí).
-  const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8');
-  assert.ok(hub.includes('fusionarCargaHub('), 'loadData usa fusionarCargaHub');
-  assert.ok(!hub.includes('No se pudieron actualizar las listas (se muestran'), 'sin el texto viejo en el Hub');
+  // T11 (E4, ronda 1) y la revisión final F4 protegían una carga de tres listas en memoria (fusionarCargaHub y
+  // cargaRef). En B4 T7 el Hub carga con useListado, que aborta la consulta anterior y descarta la respuesta de una que
+  // ya no es la vigente antes de tocar el estado (D28, crearCargaListado; lo prueba test_tabla.mjs) y conserva lo último
+  // bueno cuando una recarga falla. fusionarCargaHub y AVISOS_CARGA_HUB se borran (RP86).
+  const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.equal(typeof hv.fusionarCargaHub, 'undefined', 'RP86: fusionarCargaHub ya no existe');
+  assert.equal(typeof hv.AVISOS_CARGA_HUB, 'undefined', 'RP86: AVISOS_CARGA_HUB ya no existe');
+  assert.match(hub, /const listado = useListado<FilaHub>\(\{\s*ruta: '\/ventas\/hub\/documentos', estado, conConteos: true, esperar: !listo, despachar, activo: !enAnalisis,\s*\}\);/,
+    'la tabla carga con useListado (RP35, RP68, D40)');
+  assert.ok(!/\b(cargaRef|ultimaCarga|fusionarCargaHub)\b/.test(hub), 'sin la carga en memoria de antes');
+  const uso = readFileSync(new URL('../src/components/tabla/useListado.ts', import.meta.url), 'utf8');
+  assert.ok(uso.includes('crearCargaListado({'), 'useListado: la carga que aborta la anterior y descarta las viejas (D28)');
+  // Las tarjetas y la configuración, que siguen con su GET propio, tampoco pintan una respuesta vieja.
+  const stats = hub.slice(hub.indexOf("apiFetch(`/ventas/stats?periodo=${PERIODO_KPI}`"), hub.indexOf('}, [vueltaStats]);'));
+  assert.ok(stats.includes('{ signal: control.signal }') && stats.includes('return () => control.abort();'), 'stats: aborta la anterior');
+  const cfg = hub.slice(hub.indexOf("apiFetch('/ventas/config')"), hub.indexOf('}, [vueltaConfig, avisar]);'));
+  assert.match(cfg, /\.then\(\(cfg: unknown\) => \{\s*if \(!vigente\) return;/, 'config: una respuesta vieja no pinta');
+  assert.match(cfg, /\.catch\(\(err: unknown\) => \{\s*if \(!vigente\) return;/, 'config: el error de una vieja no avisa');
+  assert.ok(cfg.includes('return () => { vigente = false; };'), 'config: la última gana');
+  // E4: si la configuración falla, un aviso con el texto de siempre, y la de pantalla sigue (solo se pisa con una buena).
+  assert.ok(cfg.includes("avisar('No se pudo cargar la configuración de alertas.', { tono: 'error' });"), 'config: el aviso');
+  assert.ok(cfg.includes("if (datos && typeof datos === 'object') setAlertDias(datos);"), 'config: solo con una respuesta buena');
 }
 
-console.log('--- Revisión final (F4): en el Hub, la última carga gana ---');
+console.log('--- B4 T7 (R6, C4, R2, RP6): el Hub ya no tiene arreglos en memoria ni llamadas viejas ---');
 {
-  // La recarga silenciosa de una nota del panel y la de «Actualizar» se pueden cruzar: la más lenta ya no pinta ni
-  // deja ultimaCarga (la base de fusionarCargaHub) con datos viejos. Mismo contador cargaRef de la COT y el PVEN.
   const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-  const inicio = hub.indexOf('const loadData = useCallback(');
-  assert.ok(inicio > 0, 'loadData encontrado');
-  const bloque = hub.slice(inicio, hub.indexOf('},[avisar]);', inicio));
-  // El contador va dentro del bloque de E4, junto a ultimaCarga (R14: solo se toca ese bloque del Hub).
-  const antes = hub.slice(hub.indexOf('const ultimaCarga = React.useRef'), inicio);
-  assert.ok(/const cargaRef = React\.useRef\(0\);/.test(antes), 'cargaRef junto a ultimaCarga');
-  const toma = bloque.indexOf('const miCarga = ++cargaRef.current;');
-  const pide = bloque.indexOf('await Promise.all(');
-  const guarda = bloque.search(/if\s*\(\s*miCarga\s*!==\s*cargaRef\.current\s*\)\s*return;/);
-  const fusiona = bloque.indexOf('fusionarCargaHub(');
-  assert.ok(toma > 0 && toma < pide, 'toma su número antes de pedir');
-  assert.ok(guarda > pide && guarda < fusiona, 'una carga vieja sale antes de fusionar, pintar o tocar ultimaCarga');
-  assert.ok(/finally\s*\{\s*if\s*\(\s*miCarga\s*===\s*cargaRef\.current\s*\)\s*setLoading\(false\);\s*\}/.test(bloque),
-    'solo la última apaga el spinner');
-  assert.ok(/catch\s*\(err:any\)\s*\{\s*if\s*\(\s*miCarga\s*===\s*cargaRef\.current\s*\)\s*setToast\(/.test(bloque),
-    'el error de una carga vieja tampoco se muestra');
+  // Sin los comentarios ({/* */}, /* */ y //): lo que se mira es el código.
+  const codigo = hub.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  for (const nombre of ['allData', 'filteredData', 'noResueltosList', 'atrasadosList', 'accionesTomadasList', 'scAtrasadas',
+    'cotAtrasadas', 'venAtrasadas', 'isDocAtrasado', 'getKanbanCol', 'handleDragStart', 'handleDrop', 'kpiCards',
+    'totalFacturadoCOP', 'colorMap', 'handleAskAI', 'analytics', 'analyticsRange', 'analyticsTopN', 'analyticsProduct',
+    'aiQuestion', 'aiResponse', 'aiLoading', 'loadAnalytics', 'mapaSeguimiento', 'resumenVentasLocal', 'PREDICADOS_KPI_HUB']) {
+    assert.ok(!new RegExp(`\\b${nombre}\\b`).test(codigo), `sin ${nombre}`);
+  }
+  for (const viejo of ['limit=200', '/ventas/analytics', '/ventas/ai-chat', '/ventas/alertas', '/ventas/solicitudes?', '/ventas/cotizaciones?', '/ventas/pedidos?']) {
+    assert.ok(!codigo.includes(viejo), `sin ${viejo}`);
+  }
+  // C4: la tabla y el tablero piden al servidor con el mismo estado; el tablero, con columna=<clave> (RP10, D39).
+  assert.ok(codigo.includes("modo: 'servidor',") && codigo.includes('queryListado(estado, { columna: columna.clave, orden, limit, offset })'),
+    'el tablero en modo servidor con el estado único');
+  assert.ok(codigo.includes("ordenDe: (c) => (c.cerrada ? 'reciente' : 'atencion'),"), 'D39: atención en las abiertas y reciente en Cancelado');
+  // R6: las tarjetas de /ventas/stats?periodo=30d, sin respaldo local; RP70: los nombres del catálogo.
+  for (const kpi of ['vendido_periodo', 'pven_saldo_por_cobrar', 'ticket_promedio', 'cot_conversion']) {
+    assert.ok(codigo.includes(`<TarjetaKpi kpi="${kpi}"`), `la tarjeta ${kpi}`);
+  }
+  assert.ok(!/<TarjetaKpi[^>]*\betiqueta=/.test(codigo), 'RP70: sin etiquetas escritas en la página');
+  assert.ok(!/<TarjetaKpi[^>]*\bonClick=/.test(codigo), 'R6: las tarjetas del Hub no son pulsables');
+  // RP35: la pestaña Análisis no es una vista de la tabla.
+  assert.ok(!/vista:\s*'analisis'|valor:\s*'analisis'/.test(codigo), 'nunca vista=analisis');
+  // Sin emojis en el código (pestañas, botones y avisos).
+  assert.ok(!/\p{Extended_Pictographic}/u.test(codigo.replace(/[✓→↑↓×·—…]/g, '')), 'sin emojis');
 }
 
 console.log('--- H3 TEST 12: esNoResuelto / esAccionTomada ---');
@@ -663,7 +657,10 @@ console.log('--- Revisión final B3 (F2, M47): la nota ámbar del nombre sin con
 console.log('--- Revisión final B3 (F3, M3): tras el 409 de la bandera, el Hub cierra la ventana del canal y recarga ---');
 {
   const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-  const confirmar = hub.slice(hub.indexOf('async function confirmarEnvioHub('), hub.indexOf('// KPIs con contexto'));
+  // B4 T7 (D27): el corte termina en el cierre de la función (antes, en el comentario de las tarjetas que se borraron).
+  const inicioEnvio = hub.indexOf('async function confirmarEnvioHub(');
+  const confirmar = hub.slice(inicioEnvio, hub.indexOf('\n  }\n', inicioEnvio));
+  assert.ok(inicioEnvio > 0 && confirmar.includes('setEnviandoHub(false);'), 'se encontró confirmarEnvioHub entera');
   const captura = confirmar.slice(confirmar.indexOf('}catch(err:any){'), confirmar.indexOf('setEnviandoHub(false);'));
   assert.ok(captura.length > 0 && captura.includes('setToast('), 'se encontró el catch de confirmarEnvioHub');
   // Con el 409 («Ya se le envió al cliente…»: otro asesor o pestaña la envió): la ventana se cierra y el tablero se
@@ -1038,6 +1035,51 @@ console.log('--- B4 T2 TEST 9: ETIQUETA_GRUPO y tituloGrupo (RP67: «Sin resolve
   assert.equal(tituloGrupo('ATRASADO', 0), 'Atrasados · 0');
   assert.equal(tituloGrupo('ATRASADO', '7'), 'Atrasados · 7');
   for (const n of [null, undefined, -1, NaN, 'x']) assert.equal(tituloGrupo('CERRADO', n), 'Cerrados · 0', String(n));
+}
+
+console.log('--- B4 T7 TEST 1: scConCotDeFilas — las SC con una cotización activa, de las filas cargadas (RP36) ---');
+{
+  const filas = [
+    { tipo: 'SC', id: 1, cotizaciones: [{ id: 10, numero: 'COT-10', estado: 'BORRADOR' }] },
+    { tipo: 'SC', id: 2, cotizaciones: [{ id: 11, numero: 'COT-11', estado: 'RECHAZADA' }] },
+    { tipo: 'SC', id: 3, cotizaciones: [{ id: 12, estado: 'RECHAZADA' }, { id: 13, estado: 'VENCIDA' }] },
+    { tipo: 'SC', id: 4 },
+    { tipo: 'SC', id: 5, cotizaciones: null },
+    { tipo: 'SC', id: 8, cotizaciones: [null, { estado: 'PENDIENTE_CONFIRMACION' }] },
+    // Las COT y los pedidos no cuentan aunque traigan una lista con ese nombre (los ids de SC, COT y PVEN coinciden).
+    { tipo: 'COT', id: 6, cotizaciones: [{ id: 14, estado: 'BORRADOR' }] },
+    { tipo: 'VEN', id: 7, cotizaciones: [{ id: 15, estado: 'BORRADOR' }] },
+    null,
+    undefined,
+  ];
+  const conCot = hv.scConCotDeFilas(filas);
+  assert.ok(conCot instanceof Set, 'un Set, como el scConCot de reglaSoltarHub');
+  assert.deepEqual([...conCot].sort((a, b) => a - b), [1, 3, 8]);
+  // La misma regla de esCotizacionActiva (VENCIDA cuenta como activa, choque H3), estado por estado.
+  for (const estado of Object.keys(ESTADOS_COTIZACION)) {
+    assert.equal(hv.scConCotDeFilas([{ tipo: 'SC', id: 9, cotizaciones: [{ estado }] }]).has(9), esCotizacionActiva(estado), estado);
+  }
+  // La misma SC en la tabla y en el tablero cuenta una vez; nada da un Set vacío.
+  assert.equal(hv.scConCotDeFilas([filas[0], { ...filas[0] }]).size, 1);
+  for (const nada of [undefined, null, [], 'x']) assert.equal(hv.scConCotDeFilas(nada).size, 0, String(nada));
+  assert.deepEqual(filas[0].cotizaciones, [{ id: 10, numero: 'COT-10', estado: 'BORRADOR' }], 'no muta las filas');
+}
+
+console.log('--- B4 T7 TEST 2: ordenEsAtencion y textoOrdenHub (R6: «Orden: Monto ↓ · Atención primero») ---');
+{
+  // Sin orden o con 'atencion' la tabla va en el orden del semáforo (con separadores y sin el chip).
+  for (const o of [null, undefined, '', 'atencion']) assert.equal(hv.ordenEsAtencion(o), true, String(o));
+  for (const o of ['monto', '-monto', 'numero', 'reciente', 'sin_movimiento', '-atencion']) assert.equal(hv.ordenEsAtencion(o), false, o);
+  const titulos = { monto: 'Monto', numero: 'Número', cliente: 'Cliente', estado: 'Estado' };
+  assert.equal(hv.textoOrdenHub('monto', titulos), 'Orden: Monto ↑');
+  assert.equal(hv.textoOrdenHub('-monto', titulos), 'Orden: Monto ↓');
+  assert.equal(hv.textoOrdenHub('-numero', titulos), 'Orden: Número ↓');
+  assert.equal(hv.textoOrdenHub('estado', titulos), 'Orden: Estado ↑');
+  for (const o of [null, undefined, '', 'atencion']) assert.equal(hv.textoOrdenHub(o, titulos), null, String(o));
+  // Un campo sin título sale humanizado (nunca el código crudo); sin títulos también.
+  assert.equal(hv.textoOrdenHub('-dias_creado', titulos), 'Orden: Dias creado ↓');
+  assert.equal(hv.textoOrdenHub('monto'), 'Orden: Monto ↑');
+  assert.equal(hv.textoOrdenHub('cliente', { cliente: '' }), 'Orden: Cliente ↑', 'un título vacío no cuenta');
 }
 
 console.log('OK test_hub_ventas.mjs');

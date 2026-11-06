@@ -11,6 +11,8 @@
  *    Solicitudes y Cotizaciones.
  *  - confirmacionReiniciarSolicitud (RP17): el texto de «Reiniciar solicitud» (antes en línea en solicitud/[id]/page.tsx
  *    y en solicitud-client.tsx), para confirmar() de useAvisos.
+ *  - B4 T7, lo que comparten la tabla y el tablero del Hub: opcionesEstadosHub (el filtro de estados agrupado por tipo,
+ *    con TIPO:ESTADO) y chipsResolucionHub (la columna Resolución: el chip corto y, debajo, los de chipsDocumentoVentas).
  *  - Listas: motivoTransicionPedido (los textos de N2 sin el número), COLUMNAS_PEDIDO / reglaSoltarPedido,
  *    COLUMNAS_COT / reglaSoltarCotizacion y COLUMNAS_SC / reglaSoltarSC.
  *  - C15(a): en el Hub y en Cotizaciones, sacar una COT de «Esperando al cliente» o de «Confirmada» queda bloqueado con
@@ -37,16 +39,16 @@
 import { definirColumnas } from './kanban.js';
 import {
   congelar, ESTADOS_PEDIDO, PASOS_PEDIDO, TRANSICIONES_PEDIDO_PATCH, grupoPedido, transicionesPedido, esPedidoVigente,
-  infoEstadoPedido, tiene,
+  infoEstadoPedido, tiene, ESTADOS_PEDIDO_OPERATIVOS, ESTADOS_PEDIDO_CERRADOS,
 } from './estados-pedido.js';
 import {
   RUTA_HUB_VENTAS, esSoporte, motivoNoCancelable, tieneProductos, accionSiguienteCOT, accionSiguienteDocumento, diasDesde,
-  textoAntiguedad,
+  textoAntiguedad, ETIQUETA_GRUPO,
 } from './hub-ventas.js';
 import {
   ESTADOS_SC, PASOS_SC, ESTADOS_SC_HEREDADOS, ESTADOS_SC_CON_CONFIRMACION, infoEstadoSolicitud, puedeReiniciar,
 } from './estados-solicitud.js';
-import { infoEstadoCotizacion } from './estados-cotizacion.js';
+import { ESTADOS_COTIZACION, infoEstadoCotizacion } from './estados-cotizacion.js';
 import { pedidoVigente, cotizacionesVigentes, pasosParaCancelarSolicitud } from './listas-ventas.js';
 import {
   avisoCambiosCliente, etiquetaChipCambios, RUTA_LISTA_SOLICITUDES, RUTA_LISTA_COTIZACIONES,
@@ -481,6 +483,75 @@ export function confirmacionReiniciarSolicitud(sc) {
     textoConfirmar: 'Reiniciar solicitud',
     peligro: true,
   };
+}
+
+// ─── B4 T7: lo que comparten la tabla y el tablero del Hub ──────────────────────
+
+/** El grupo de cada tipo en el filtro de estados del Hub (TABLA-hub-ventas punto 5). */
+const GRUPO_ESTADOS_HUB = congelar([
+  // SC: los 4 pasos (Nueva, Asignada, Pendiente por confirmación y Confirmada) y Cancelada; Soporte no entra al Hub (R8).
+  { tipo: 'SC', nombre: 'Solicitud', estados: [...PASOS_SC.map((p) => p.clave), 'CANCELADA'], info: infoEstadoSolicitud },
+  { tipo: 'COT', nombre: 'Cotización', estados: Object.keys(ESTADOS_COTIZACION), info: infoEstadoCotizacion },
+  // Pedido: los operativos y los cerrados (los de las pestañas de la lista de pedidos, sin los heredados de la tienda).
+  { tipo: 'VEN', nombre: 'Pedido', estados: [...ESTADOS_PEDIDO_OPERATIVOS, ...ESTADOS_PEDIDO_CERRADOS], info: infoEstadoPedido },
+]);
+
+/** Las opciones de un grupo: {valor: 'TIPO:ESTADO', etiqueta: 'Grupo · Etiqueta'}. */
+const opcionesDeGrupo = (g) => g.estados.map((e) => congelar({ valor: `${g.tipo}:${e}`, etiqueta: `${g.nombre} · ${g.info(e).label}` }));
+
+const OPCIONES_HUB_POR_VISTA = congelar({
+  sc: congelar(opcionesDeGrupo(GRUPO_ESTADOS_HUB[0])),
+  cot: congelar(opcionesDeGrupo(GRUPO_ESTADOS_HUB[1])),
+  ven: congelar(opcionesDeGrupo(GRUPO_ESTADOS_HUB[2])),
+});
+const OPCIONES_HUB_TODAS = congelar([...OPCIONES_HUB_POR_VISTA.sc, ...OPCIONES_HUB_POR_VISTA.cot, ...OPCIONES_HUB_POR_VISTA.ven]);
+
+/**
+ * Las opciones del filtro de estados del Hub (FiltroEstados de BarraTabla, `opcionesEstados`), agrupadas por tipo: el
+ * valor es el par TIPO:ESTADO de `estados=` de GET /ventas/hub/documentos ('SC:ASIGNADA', 'VEN:EN_PROCESO') y la
+ * etiqueta lleva el grupo delante ('Solicitud · Asignada', 'Cotización · Borrador', 'Pedido · En proceso'), con el
+ * nombre de la tabla única de cada tipo (estados-solicitud.js, estados-cotizacion.js y estados-pedido.js; RP4). Las
+ * pestañas 'sc', 'cot' y 'ven' traen solo su grupo; las demás (todos, no_resueltos, acciones_tomadas) y una vista
+ * desconocida, los tres (20 en total: caben en MAXIMO_ESTADOS). Inmutables y la misma referencia en cada llamada.
+ * @param {string | null | undefined} vista
+ * @returns {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
+ */
+export function opcionesEstadosHub(vista) {
+  return typeof vista === 'string' && tiene(OPCIONES_HUB_POR_VISTA, vista) ? OPCIONES_HUB_POR_VISTA[vista] : OPCIONES_HUB_TODAS;
+}
+
+/** El chip de cada resolución en la columna Resolución (los nombres de los separadores, RP67: «Sin resolver»). */
+const CHIP_RESOLUCION = congelar({
+  NO_RESUELTO: { texto: ETIQUETA_GRUPO.NO_RESUELTO, tono: 'amber' },
+  ACCION_TOMADA: { texto: ETIQUETA_GRUPO.ACCION_TOMADA, tono: 'emerald' },
+  CERRADO: { texto: 'Cerrado', tono: 'slate' },
+});
+
+/**
+ * La columna Resolución de la tabla del Hub (R6, TABLA-hub-ventas punto 6; RP18, D4), de la fila del servidor (no
+ * recalcula el atraso, R8):
+ *  - principal: el chip de `fila.resolucion`, corto para la columna de 104 px: 'Atrasado +N d' (rose; N =
+ *    fila.dias_sin_mov, con el detalle 'Atrasado: N días sin movimiento' en `titulo`; sin un número, 'Atrasado'),
+ *    'Sin resolver' (amber), 'Acción tomada' (emerald) o 'Cerrado' (slate); sin resolución, null.
+ *  - extras: debajo, los chips de chipsDocumentoVentas sin el de atraso (ya es el principal): «Sin respuesta al
+ *    recordatorio» y el de los cambios del cliente («Cambios pedidos» o «Ya no la necesita»).
+ * @param {any} fila
+ * @returns {{principal: {texto: string, tono: string, titulo: string} | null, extras: ChipTarjeta[]}}
+ */
+export function chipsResolucionHub(fila) {
+  const resolucion = fila?.resolucion;
+  const chips = fila && typeof fila === 'object' ? chipsDocumentoVentas(fila) : [];
+  if (resolucion === 'ATRASADO') {
+    const d = fila?.dias_sin_mov;
+    const n = typeof d === 'number' || (typeof d === 'string' && d.trim() !== '') ? Number(d) : NaN;
+    const dias = Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+    const principal = dias === null
+      ? { texto: 'Atrasado', tono: 'rose', titulo: 'Atrasado' }
+      : { texto: `Atrasado +${dias} d`, tono: 'rose', titulo: `Atrasado: ${dias} ${dias === 1 ? 'día' : 'días'} sin movimiento` };
+    return { principal, extras: chips.slice(1) };
+  }
+  const chip = typeof resolucion === 'string' && tiene(CHIP_RESOLUCION, resolucion) ? CHIP_RESOLUCION[resolucion] : null;
+  return { principal: chip ? { ...chip, titulo: chip.texto } : null, extras: chips };
 }
 
 // ─── Pedidos de venta ───────────────────────────────────────────────────────────

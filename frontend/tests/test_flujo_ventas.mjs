@@ -20,6 +20,9 @@ import { infoEstadoCotizacion } from '../src/lib/estados-cotizacion.js';
 const ETIQUETAS_UNICAS = { sc: infoEstadoSolicitud, cot: infoEstadoCotizacion, pven: infoEstadoPedido };
 // r1: conteosDePasos por el espacio de nombres, para que su falta no tape los demás rojos.
 import * as flujo from '../src/lib/flujo.js';
+// B4 T7: lo nuevo, igual.
+import * as fv from '../src/lib/flujo-ventas.js';
+import { FOCOS_VENTAS } from '../src/lib/analisis.js';
 
 const CLAVES = ['SC', 'COT', 'PVEN', 'ENTREGADO', 'FACTURADO'];
 const estados = (pasos) => pasos.map((p) => p.estado);
@@ -477,6 +480,64 @@ console.log('--- TEST 22 (T5A r1 y r2; M2 y M5): cadenaVentas compacta — solo 
   // Sin compacta no hay etiquetaEstado: la palabra sigue dentro del sublabel, como en r0.
   assert.equal(cadenaVentas(rechazada, 'SC')[1].sublabel, `COT-10 · ${infoEstadoCotizacion('RECHAZADA').label}`);
   assert.ok(cadenaVentas(rechazada, 'SC').every((p) => !('etiquetaEstado' in p)));
+}
+
+console.log('--- B4 T7 TEST 1: leerEnlaceHub — ?paso= y ?tab=analisis&foco= del Hub (R6, RP21) ---');
+{
+  const VACIO = { paso: null, analisis: false, foco: null };
+  // Cada paso del diagrama abre el Hub filtrado; un valor desconocido se ignora (RP21).
+  for (const clave of CLAVES) assert.deepEqual(fv.leerEnlaceHub(`?paso=${clave}`), { ...VACIO, paso: clave }, clave);
+  for (const malo of ['?paso=pven', '?paso=OTRO', '?paso=', '?paso=%20PVEN%20x']) assert.deepEqual(fv.leerEnlaceHub(malo), VACIO, malo);
+  // Los espacios de los bordes no cuentan; sin el '?' también se lee.
+  assert.deepEqual(fv.leerEnlaceHub('?paso=%20COT%20'), { ...VACIO, paso: 'COT' });
+  assert.deepEqual(fv.leerEnlaceHub('paso=SC'), { ...VACIO, paso: 'SC' });
+  // «Ver análisis» de las listas: la pestaña y el foco (los de FOCOS_VENTAS).
+  assert.deepEqual(fv.leerEnlaceHub('?tab=analisis'), { ...VACIO, analisis: true });
+  for (const { clave } of FOCOS_VENTAS) {
+    assert.deepEqual(fv.leerEnlaceHub(`?tab=analisis&foco=${clave}`), { ...VACIO, analisis: true, foco: clave }, clave);
+  }
+  assert.deepEqual(fv.leerEnlaceHub('?tab=analisis&foco=otro'), { ...VACIO, analisis: true }, 'un foco desconocido se ignora');
+  assert.deepEqual(fv.leerEnlaceHub('?foco=sc'), VACIO, 'el foco solo se lee con la pestaña Análisis');
+  for (const malo of ['?tab=Analisis', '?tab=todos', '?tab=']) assert.deepEqual(fv.leerEnlaceHub(malo), VACIO, malo);
+  // Los dos a la vez se leen los dos (la pantalla decide qué muestra).
+  assert.deepEqual(fv.leerEnlaceHub('?paso=PVEN&tab=analisis&foco=pven'), { paso: 'PVEN', analisis: true, foco: 'pven' });
+  for (const nada of [undefined, null, '', 42]) assert.deepEqual(fv.leerEnlaceHub(nada), VACIO, String(nada));
+  assert.ok(Object.isFrozen(fv.leerEnlaceHub('?paso=SC')));
+}
+
+console.log('--- B4 T7 TEST 2: chipsFiltroHub — los chips que quitan el filtro del paso y del semáforo (R6, clic_en_hub) ---');
+{
+  assert.deepEqual(fv.chipsFiltroHub({ paso: 'COT', semaforo: null }), [{ campo: 'paso', texto: 'Paso: Cotización' }]);
+  assert.deepEqual(fv.chipsFiltroHub({ paso: 'PVEN', semaforo: 'atrasados' }), [
+    { campo: 'paso', texto: 'Paso: Pedido de venta' }, { campo: 'semaforo', texto: 'Con atraso' },
+  ]);
+  // Los textos del semáforo son los de sus botones (opcionesSemaforo de flujo.js; cruce C9: «No resueltos»).
+  assert.deepEqual(fv.chipsFiltroHub({ semaforo: 'no_resueltos' }), [{ campo: 'semaforo', texto: 'No resueltos' }]);
+  const botones = flujo.opcionesSemaforo({ atrasados: 1, noResueltos: 1, filtro: 'todos' });
+  assert.equal(fv.chipsFiltroHub({ semaforo: 'atrasados' })[0].texto, botones.find((b) => b.filtro === 'atrasados').texto);
+  assert.equal(fv.chipsFiltroHub({ semaforo: 'no_resueltos' })[0].texto, botones.find((b) => b.filtro === 'no_resueltos').texto);
+  // Cada paso con la etiqueta de PASOS_FLUJO_VENTAS.
+  for (const p of PASOS_FLUJO_VENTAS) assert.deepEqual(fv.chipsFiltroHub({ paso: p.clave }), [{ campo: 'paso', texto: `Paso: ${p.label}` }]);
+  // Sin filtro, 'todos' o un valor desconocido: ningún chip.
+  for (const e of [{}, { paso: null, semaforo: null }, { semaforo: 'todos' }, { paso: 'OTRO', semaforo: 'x' }, null, undefined]) {
+    assert.deepEqual(fv.chipsFiltroHub(e), [], JSON.stringify(e));
+  }
+}
+
+console.log('--- B4 T7 TEST 3: pasoTrasPestana — elegir a mano la pestaña de otro tipo quita el paso (FLUJO-ventas-pantallas A.4) ---');
+{
+  // La pestaña de su tipo (la que activa tabHubDePaso) conserva el paso; la de otro tipo lo quita.
+  for (const clave of CLAVES) {
+    for (const vista of ['sc', 'cot', 'ven']) {
+      assert.equal(fv.pasoTrasPestana(clave, vista), tabHubDePaso(clave) === vista ? clave : null, `${clave} → ${vista}`);
+    }
+  }
+  // Las pestañas que mezclan tipos se combinan con el paso (Todos, No resueltos, Acciones tomadas).
+  for (const vista of ['todos', 'no_resueltos', 'acciones_tomadas']) assert.equal(fv.pasoTrasPestana('COT', vista), 'COT', vista);
+  // Sin paso no hay nada que quitar; un paso desconocido no se conserva.
+  for (const vista of ['sc', 'todos']) assert.equal(fv.pasoTrasPestana(null, vista), null, vista);
+  assert.equal(fv.pasoTrasPestana('OTRO', 'sc'), null);
+  assert.equal(fv.pasoTrasPestana('OTRO', 'todos'), null);
 }
 
 console.log('\nOK: test_flujo_ventas.mjs');

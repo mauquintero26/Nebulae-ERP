@@ -20,10 +20,13 @@ import {
   motivoTransicionPedido, COLUMNAS_PEDIDO, reglaSoltarPedido, COLUMNAS_COT, reglaSoltarCotizacion, COLUMNAS_SC,
   reglaSoltarSC,
 } from '../src/lib/kanban-ventas.js';
+// B4 T7: lo nuevo por el espacio de nombres, para que su falta no tape los demás rojos.
+import * as kv from '../src/lib/kanban-ventas.js';
 import { columnaHub, accionSiguienteDocumento, RUTA_HUB_VENTAS } from '../src/lib/hub-ventas.js';
 import { ESTADOS_PEDIDO, transicionesPedido, infoEstadoPedido } from '../src/lib/estados-pedido.js';
-import { ESTADOS_SC } from '../src/lib/estados-solicitud.js';
-import { ESTADOS_COTIZACION } from '../src/lib/estados-cotizacion.js';
+import { ESTADOS_SC, infoEstadoSolicitud } from '../src/lib/estados-solicitud.js';
+import { ESTADOS_COTIZACION, infoEstadoCotizacion } from '../src/lib/estados-cotizacion.js';
+import { MAXIMO_ESTADOS } from '../src/lib/tabla.js';
 import { ACCIONES_BLOQUE3 } from '../src/lib/acciones-bloque3.js';
 import { RUTA_LISTA_SOLICITUDES, RUTA_LISTA_COTIZACIONES } from '../src/lib/cambios-cliente.js';
 import { enlaceDocumento } from '../src/lib/analisis.js';
@@ -552,6 +555,82 @@ console.log('--- TEST 15: reglaSoltarSC (RP16, D11, D22) ---');
   // Sin id no hay enlace (el bloqueo sigue).
   assert.deepEqual(reglaSoltarSC({ estado: 'BORRADOR' }, 'nueva', 'pendiente'), bloqueado('Primero asígnale un asesor.'));
   assert.throws(() => reglaSoltarSC(sc('BORRADOR'), 'nueva', 'No Resuelto'), /desconocida/);
+}
+
+console.log('--- B4 T7 TEST A: opcionesEstadosHub — el filtro de estados del Hub, agrupado por tipo (TABLA-hub-ventas 5) ---');
+{
+  const todas = kv.opcionesEstadosHub('todos');
+  // Solicitud, Cotización y Pedido, en ese orden, con TIPO:ESTADO (el formato de estados= de /ventas/hub/documentos).
+  assert.deepEqual(todas.map((o) => o.valor), [
+    'SC:BORRADOR', 'SC:ASIGNADA', 'SC:PENDIENTE_CONFIRMACION', 'SC:CONFIRMADA', 'SC:CANCELADA',
+    'COT:BORRADOR', 'COT:ENVIADA', 'COT:PENDIENTE_CONFIRMACION', 'COT:CONFIRMADA', 'COT:RECHAZADA', 'COT:VENCIDA',
+    'VEN:PENDIENTE_COMPRA', 'VEN:PENDIENTE_PAGO', 'VEN:EN_PROCESO', 'VEN:EN_TRANSITO', 'VEN:LISTO_ENTREGA',
+    'VEN:ENTREGADO', 'VEN:FACTURADO', 'VEN:CANCELADO', 'VEN:DEVUELTO_TOTAL',
+  ]);
+  // Caben todas juntas en el filtro (MAXIMO_ESTADOS de lib/tabla.js, el tope de 20 del servidor).
+  assert.ok(todas.length <= MAXIMO_ESTADOS);
+  // La etiqueta lleva el grupo delante y el nombre legible de la tabla única de su tipo (nunca el código crudo).
+  const GRUPO = { SC: 'Solicitud', COT: 'Cotización', VEN: 'Pedido' };
+  const INFO = { SC: infoEstadoSolicitud, COT: infoEstadoCotizacion, VEN: infoEstadoPedido };
+  for (const o of todas) {
+    const [tipo, estado] = o.valor.split(':');
+    assert.equal(o.etiqueta, `${GRUPO[tipo]} · ${INFO[tipo](estado).label}`, o.valor);
+    assert.ok(!o.etiqueta.includes('_'), `${o.valor}: sin el código crudo`);
+  }
+  assert.equal(todas[0].etiqueta, 'Solicitud · Nueva');
+  assert.equal(todas[7].etiqueta, 'Cotización · Esperando confirmación del cliente');
+  assert.equal(todas[19].etiqueta, 'Pedido · Devuelto');
+  // Cada estado existe en su tipo (el servidor da 422 con uno que no).
+  for (const o of todas) {
+    const [tipo, estado] = o.valor.split(':');
+    const tabla = tipo === 'SC' ? ESTADOS_SC : tipo === 'COT' ? ESTADOS_COTIZACION : ESTADOS_PEDIDO;
+    assert.ok(Object.hasOwn(tabla, estado), o.valor);
+  }
+  // Las pestañas de un tipo traen solo su grupo; las demás (y una vista desconocida), los tres.
+  for (const [vista, prefijo] of [['sc', 'SC:'], ['cot', 'COT:'], ['ven', 'VEN:']]) {
+    assert.deepEqual(kv.opcionesEstadosHub(vista), todas.filter((o) => o.valor.startsWith(prefijo)), vista);
+  }
+  for (const vista of ['todos', 'no_resueltos', 'acciones_tomadas', null, undefined, 'algo']) {
+    assert.deepEqual(kv.opcionesEstadosHub(vista), todas, String(vista));
+  }
+  // Inmutables y la misma referencia en cada llamada (BarraTabla la llama en cada render).
+  assert.ok(Object.isFrozen(todas) && todas.every((o) => Object.isFrozen(o)));
+  assert.equal(kv.opcionesEstadosHub('sc'), kv.opcionesEstadosHub('sc'));
+  assert.equal(kv.opcionesEstadosHub('todos'), kv.opcionesEstadosHub('no_resueltos'));
+}
+
+console.log('--- B4 T7 TEST B: chipsResolucionHub — la columna Resolución del Hub (R6, RP18, D4) ---');
+{
+  const r = (fila) => kv.chipsResolucionHub(fila);
+  // El chip corto de la resolución del servidor (no recalcula el atraso, R8): cabe en la columna de 104 px.
+  assert.deepEqual(r({ tipo: 'SC', resolucion: 'ATRASADO', dias_sin_mov: 4 }).principal,
+    { texto: 'Atrasado +4 d', tono: 'rose', titulo: 'Atrasado: 4 días sin movimiento' });
+  assert.equal(r({ tipo: 'COT', resolucion: 'ATRASADO', dias_sin_mov: 1 }).principal.titulo, 'Atrasado: 1 día sin movimiento');
+  assert.equal(r({ tipo: 'VEN', resolucion: 'ATRASADO', dias_sin_mov: 3.9 }).principal.texto, 'Atrasado +3 d');
+  assert.equal(r({ tipo: 'VEN', resolucion: 'ATRASADO', dias_sin_mov: '6' }).principal.texto, 'Atrasado +6 d');
+  for (const d of [null, undefined, -1, 'x', NaN, '']) {
+    assert.deepEqual(r({ tipo: 'VEN', resolucion: 'ATRASADO', dias_sin_mov: d }).principal,
+      { texto: 'Atrasado', tono: 'rose', titulo: 'Atrasado' }, String(d));
+  }
+  // Los demás grupos con el nombre de los separadores (RP67: «Sin resolver», no «Pendiente»).
+  assert.deepEqual(r({ tipo: 'SC', resolucion: 'NO_RESUELTO', dias_sin_mov: 30 }).principal,
+    { texto: 'Sin resolver', tono: 'amber', titulo: 'Sin resolver' });
+  assert.deepEqual(r({ tipo: 'VEN', resolucion: 'ACCION_TOMADA' }).principal, { texto: 'Acción tomada', tono: 'emerald', titulo: 'Acción tomada' });
+  assert.deepEqual(r({ tipo: 'VEN', resolucion: 'CERRADO' }).principal, { texto: 'Cerrado', tono: 'slate', titulo: 'Cerrado' });
+  for (const resolucion of [null, undefined, 'OTRO']) assert.equal(r({ tipo: 'SC', resolucion }).principal, null, String(resolucion));
+  // Debajo, los chips de chipsDocumentoVentas sin el de atraso (ya es el principal): recordatorio y cambios del cliente.
+  const sc = {
+    tipo: 'SC', estado: 'ASIGNADA', resolucion: 'ATRASADO', dias_sin_mov: 4, seguimiento_estado: 'AGOTADO',
+    cambios_cliente: { tipo: 'CAMBIOS', at: '2026-10-20T10:00:00Z', comentario: 'Otro color' },
+  };
+  assert.deepEqual(r(sc).extras, [
+    { texto: ACCIONES_BLOQUE3.SEGUIMIENTO_AGOTADO.etiqueta, tono: 'amber' }, { texto: 'Cambios pedidos', tono: 'amber' },
+  ]);
+  assert.deepEqual(r(sc).extras, chipsDocumentoVentas(sc).slice(1));
+  const sinAtraso = { ...sc, resolucion: 'NO_RESUELTO' };
+  assert.deepEqual(r(sinAtraso).extras, chipsDocumentoVentas(sinAtraso));
+  assert.deepEqual(r({ tipo: 'VEN', resolucion: 'ATRASADO', dias_sin_mov: 2 }).extras, []);
+  assert.deepEqual(r(null), { principal: null, extras: [] });
 }
 
 console.log('OK test_kanban_ventas');

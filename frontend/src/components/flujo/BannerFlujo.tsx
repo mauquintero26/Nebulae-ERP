@@ -21,7 +21,8 @@ import type { AccionAjustar, AvisoFranja, PartesFranja, PasoVista, SemaforoFranj
  *    '—' con error, RP67), el título, la regla (text-xs slate-500) y los avisos como chips. A la derecha: el control
  *    segmentado del semáforo (opcionesSemaforo: 'Con atraso (n)', 'No resueltos (n)' solo si llega noResueltos, y 'Ver
  *    todo'; aria-pressed refleja semaforo.filtro y tocar el activo otra vez lo quita: alternarFiltroSemaforo), la
- *    accionAjustar (si no es null), '¿Cómo funciona?' (muestra la ayuda debajo de cada caja; no se guarda) y 'Ocultar
+ *    accionAjustar (si no es null; B4 T7: su `deshabilitado` y su `titulo` van como disabled y title del botón, D27(a)),
+ *    '¿Cómo funciona?' (muestra la ayuda debajo de cada caja; no se guarda) y 'Ocultar
  *    flujo' / 'Ver flujo'.
  *  - Fila 2: <PasosFlujo variante="banner">; en modo compacto, los mismos pasos en pastillas, en una sola línea.
  *  - Los números van con Contador (C13): la barra gris mientras cargan y, al recargar, los anteriores siguen
@@ -183,7 +184,7 @@ export function BannerFlujo({
             </div>
           ) : null}
           {accionAjustar ? (
-            <button type="button" onClick={accionAjustar.onClick} className={BOTON}>
+            <button type="button" onClick={accionAjustar.onClick} disabled={accionAjustar.deshabilitado} title={accionAjustar.titulo} className={`${BOTON} disabled:cursor-not-allowed disabled:opacity-50`}>
               <SlidersHorizontal size={14} aria-hidden="true" />
               {accionAjustar.label}
             </button>

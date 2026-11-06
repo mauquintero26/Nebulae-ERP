@@ -1,19 +1,39 @@
 'use client';
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import {
-  MoreHorizontal, MessageCircle, MessageSquare, Trash2, X,
-  List, Send, RefreshCw, Search, Bell, Settings, Activity,
-  Filter, LayoutGrid, Clock, CheckCircle2, AlertCircle, Zap,
-  ToggleLeft, ToggleRight, Save, TrendingUp, ShieldAlert,
-  ShoppingBag, FileText, Package, BarChart3, ChevronRight,
-  ArrowRight, Phone, Check, AlertTriangle, HelpCircle,
-  DollarSign, ExternalLink, Calendar, Plus
+  MessageCircle, Trash2, X, RefreshCw, Bell, Settings, Activity, CheckCircle2, Zap, ToggleLeft, ToggleRight, Save,
+  TrendingUp, ArrowRight, AlertTriangle, ExternalLink, Plus,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { apiFetch, API_URL } from '@/lib/api';
-import { coincideProducto } from '@/lib/busqueda';
-import { SubNav, PageHeader, Badge, Drawer, Modal, Button, useAvisos, ContenidoEnlace } from '@/components/ui';
+import { apiFetch } from '@/lib/api';
+import {
+  SubNav, PageHeader, Drawer, Modal, Button, useAvisos, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila,
+  TableroKanban, useTableroKanban,
+} from '@/components/ui';
+import type { DatosColumnaKanban, ItemMenuFila } from '@/components/ui';
+// B4 T7: el Hub 100 % sobre el servidor (R6, C4): la tabla y el tablero estándar con el estado único de la pantalla
+// (C3), la franja del flujo, la cadena de documentos del panel rápido y la pestaña Análisis estándar.
+import {
+  BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
+} from '@/components/tabla';
+import type { AccionTabla, ColumnaTabla, PestanaTabla } from '@/components/tabla';
+import { BannerFlujo, CadenaDocumentos, useResumenFlujo } from '@/components/flujo';
+import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
+import { PanelAnalisisPerezoso } from '@/components/analisis';
+import { TABLE, TABS_BAR } from '@/lib/design-system';
+import { accionPestana, dependenciasTablero, estadoDelTotal, normalizarRespuesta, queryListado } from '@/lib/tabla';
+import { alternarSeleccion, pasosConConteos } from '@/lib/flujo';
+import {
+  PASOS_FLUJO_VENTAS, chipsFiltroHub, conteosDesdeResumen, leerEnlaceHub, pasoTrasPestana, tabHubDePaso, textoRegla,
+} from '@/lib/flujo-ventas';
+import {
+  COLUMNAS_HUB, chipsResolucionHub, confirmacionReiniciarSolicitud, estadoDeTarjeta, opcionesEstadosHub, reglaSoltarHub,
+  tarjetaHub,
+} from '@/lib/kanban-ventas';
+import { PERIODO_KPI } from '@/lib/kpis';
+import { FOCOS_VENTAS } from '@/lib/analisis';
+import { pestanaConTecla } from '@/lib/pestanas';
 import { textoDeError, esErrorDeValidacion } from '@/lib/avisos';
 import { VEN_NAV } from './ven-nav';
 import { CambiosDeActividad, EnlaceConfirmacionModal, getUsuarioActual } from './flujo';
@@ -22,19 +42,18 @@ import { useEstadoEnvioWhatsApp } from './cotizacion/estado-envio-whatsapp';
 import { ESTADOS_SC } from './solicitud/solicitud-client';
 import { ComposerChatter, EtiquetaChatter } from './chatter';
 import { agregarActividad, esEntradaChatter, motivoTelefono, textoSinTelefono } from '@/lib/chatter';
-import { infoEstadoPedido, esCotizacionActiva } from '@/lib/estados-pedido';
+import { infoEstadoPedido } from '@/lib/estados-pedido';
 import {
   ordenParaCancelar, motivoNoCancelable, resumenLote, ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN,
-  repartirCambioEstadoPVEN, comoUTC,
-  diasDesde, textoAntiguedad, ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, esNoResuelto, esAccionTomada, accionSiguienteSC,
-  esSCConCotizacionTemprana, notaReiniciaAtraso, desdeElHub, fusionarCargaHub, conDetalleDelEnvio,
+  repartirCambioEstadoPVEN, comoUTC, textoAntiguedad, notaReiniciaAtraso, conDetalleDelEnvio, accionSiguienteDocumento,
+  tituloGrupo, scConCotDeFilas, ordenEsAtencion, textoOrdenHub, RUTA_HUB_VENTAS, cantidadPositiva,
 } from '@/lib/hub-ventas';
 import { waUrl, abrirWhatsApp } from '@/lib/whatsapp';
 import { correoDelCliente } from '@/lib/aviso-correo';
 import { formatoPesos } from '@/lib/pesos';
 import { etiquetaTipoSolicitud } from '@/lib/etiquetas-ventas';
-import { diasAlerta, pedidoVigente, pestanaCotizacion, valorConfig, enteroConfig, DIAS_VALIDEZ_COTIZACION, configLeida,
-  cuerpoGuardarConfig, AVISO_CONFIG_SIN_LEER } from '@/lib/listas-ventas';
+import { diasAlerta, valorConfig, enteroConfig, DIAS_VALIDEZ_COTIZACION, configLeida, cuerpoGuardarConfig,
+  AVISO_CONFIG_SIN_LEER } from '@/lib/listas-ventas';
 // B3 T16: las secciones nuevas del ConfigPanel, la etiqueta de las acciones del Bloque 3 y el WhatsApp automático del
 // envío desde el tablero (R15: lo nuevo vive en sus archivos; aquí solo se cablea).
 import { SeccionSeguimiento } from './seguimiento';
@@ -53,20 +72,16 @@ const fCOP  = (v: any) => formatoPesos(v);
 // Las fechas del API son UTC; si alguna llega sin zona, comoUTC la marca como UTC (no hora local corrida 5 h).
 const fDate = (iso: any) => iso ? new Date(comoUTC(iso)).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
 const fTime = (iso: any) => iso ? new Date(comoUTC(iso)).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}) : '';
-// H2: fechas del API en UTC (aunque vengan sin zona), nunca negativo.
-const daysDiff = (iso: any) => diasDesde(iso);
 
-// N10: el estado siempre con su etiqueta (pedido: estados-pedido.js; COT y SC: sus tablas), nunca el código crudo.
-// Sin tipo (filtro de estados) se busca en las tres tablas; una clave desconocida sale humanizada. Sin tipo, BORRADOR
-// filtra la SC «Nueva» y la COT y el pedido en «Borrador» (C5): lleva una etiqueta neutra.
+// N10: el estado siempre con su etiqueta (pedido: estados-pedido.js; COT y SC: sus tablas), nunca el código crudo; una
+// clave desconocida sale humanizada. B4 T7: el filtro de estados ya no la usa (opcionesEstadosHub, agrupado por tipo).
 const etiquetaEstado = (tipo: string, e: string): string => {
   if (tipo === 'VEN') return infoEstadoPedido(e).label;
-  if (!tipo && e === 'BORRADOR') return 'Nueva / Borrador';
   const propia = tipo === 'COT' ? ESTADOS_COT[e]?.label : tipo === 'SC' ? ESTADOS_SC[e]?.label : undefined;
   return propia || ESTADOS_SC[e]?.label || ESTADOS_COT[e]?.label || infoEstadoPedido(e).label;
 };
 
-// H3: color del botón "Próxima acción" de una solicitud (tono de accionSiguienteSC).
+// H3 y R26 (B4 T7): el color del botón de la próxima acción (el tono de accionSiguienteDocumento).
 const TONO_ACCION: Record<string,string> = {
   indigo:  'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200',
   emerald: 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200',
@@ -114,6 +129,198 @@ const getTipoLabel = (t: string) => ({
   COT: 'Cotización',
   VEN: 'Pedido Venta',
 } as Record<string,string>)[t] || t;
+
+/* ── B4 T7: la fila del Hub y lo que la pantalla lee de ella ── */
+
+/** Un documento ligero de las listas `cotizaciones` y `pedidos_venta` de una fila (R6, D37). */
+type DocLigero = { id: number; numero?: string | null; estado?: string | null };
+
+/**
+ * Una fila de GET /ventas/hub/documentos (R6): el _sc_dict, _cot_dict o _ven_dict del documento, más tipo, resolucion,
+ * dias_sin_mov, dias_creado, seguimiento_estado y cambios_cliente (C14); las SC traen cotizaciones y pedidos_venta, y
+ * las COT pedidos_venta. La resolución y el atraso son los del servidor: aquí no se recalculan (R8). Lo demás pasa tal
+ * cual a las librerías (accionSiguienteDocumento, tarjetaHub, reglaSoltarHub, chipsResolucionHub…).
+ */
+type FilaHub = {
+  tipo: 'SC' | 'COT' | 'VEN';
+  id: number;
+  numero: string;
+  estado: string;
+  customer_name?: string | null;
+  cliente?: { nombre?: string | null } | null;
+  customer_phone?: string | null;
+  telefono_whatsapp?: string | null;
+  advisor_name?: string | null;
+  cotizador?: string | null;
+  asesor?: { nombre?: string | null } | null;
+  total_cop?: number | null;
+  resolucion?: 'ATRASADO' | 'NO_RESUELTO' | 'ACCION_TOMADA' | 'CERRADO' | null;
+  dias_sin_mov?: number | null;
+  dias_creado?: number | null;
+  seguimiento_estado?: string | null;
+  cotizaciones?: DocLigero[] | null;
+  pedidos_venta?: DocLigero[] | null;
+  [campo: string]: unknown;
+};
+
+/** {actual, anterior, variacion_pct} de un indicador del bloque `flujo` de /ventas/stats (R7). */
+type ParPeriodo = { actual?: number | null; anterior?: number | null; variacion_pct?: number | null };
+/** Lo que el Hub lee de GET /ventas/stats?periodo=30d (T6C; RP68). */
+type StatsHub = {
+  kpis?: { pven_saldo_por_cobrar?: number | null } | null;
+  flujo?: { vendido_cop?: ParPeriodo | null; ticket_promedio_cop?: ParPeriodo | null; cot_conversion_pct?: ParPeriodo | null } | null;
+};
+/** `conteos` de GET /ventas/hub/documentos con con_conteos=1 (R6): las pestañas y los grupos de los separadores. */
+type ConteosHub = { pestanas?: Partial<Record<string, number>>; grupos?: Partial<Record<string, number>> };
+
+/** El id de la pantalla: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26). */
+const ID_HUB = 'ventas.hub';
+const INICIAL_HUB = { vista: 'todos', orden: 'atencion' };
+const claveDeFila = (f: FilaHub) => `${f.tipo}|${f.id}`;
+// U1: con el orden de atención, un separador por resolución. Las atrasadas van con el tono opaco filaAlerta (D41: la
+// fila ya no lleva el borde ni el tinte translúcido de antes, que dejaba ver lo de debajo de las columnas fijas).
+const grupoDeFila = (f: FilaHub) => f.resolucion ?? null;
+const claseDeFila = (f: FilaHub) => (f.resolucion === 'ATRASADO' ? TABLE.filaAlerta : null);
+const tarjetaDeFila = (f: FilaHub) => tarjetaHub(f);
+const variacionDe = (p?: ParPeriodo | null) => ({ actual: p?.actual ?? null, anterior: p?.anterior ?? null });
+/** El tipo que ve el usuario: SC, COT o PVEN (las filas del Hub traen 'VEN', RP74). */
+const siglaTipo = (t: FilaHub['tipo']) => (t === 'VEN' ? 'PVEN' : t);
+
+/** RP69 con su ajuste: cambia solo el primer ejemplo y se quita el emoji; los otros tres quedan como estaban. */
+const ASISTENTE_VENTAS = {
+  titulo: 'Copilot de Ventas',
+  ejemplos: [
+    '¿Qué pedidos están pendientes de compra?',
+    '¿Cuál es el cliente con mayor volumen este mes?',
+    '¿Cuáles son las cotizaciones a punto de vencer?',
+    'Sugerencia de seguimiento comercial para clientes inactivos',
+  ],
+};
+
+/** Los tonos de los chips de la columna Resolución (clases literales para Tailwind). */
+const CHIP_TONO: Record<string, string> = {
+  rose: 'bg-rose-100 text-rose-700 border-rose-200',
+  amber: 'bg-amber-50 text-amber-800 border-amber-200',
+  emerald: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  slate: 'bg-slate-100 text-slate-600 border-slate-200',
+};
+const CHIP = 'inline-block max-w-full truncate rounded-full border px-2 py-0.5 text-[10px] font-bold leading-tight';
+const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
+
+/** Los dos apartados del Hub. Análisis es un estado de la página, no una vista de la tabla (RP35, RP21). */
+const SECCIONES_HUB = [{ id: 'documentos', etiqueta: 'Documentos' }, { id: 'analisis', etiqueta: 'Análisis' }] as const;
+type SeccionHub = (typeof SECCIONES_HUB)[number]['id'];
+
+/** La insignia del estado con la tabla única de su tipo (estadoDeTarjeta: clases de Tailwind, o los hex en la SC). */
+function InsigniaEstado({ tipo, estado }: { tipo: FilaHub['tipo']; estado: unknown }) {
+  const e = estadoDeTarjeta(tipo, estado);
+  const clases = e.clases ? `${e.clases.bg} ${e.clases.text} ${e.clases.border}` : '';
+  const estilo = e.colores ? { color: e.colores.color, backgroundColor: e.colores.bg, borderColor: e.colores.border } : undefined;
+  return <span className={`${CHIP} text-[11px] ${clases}`} style={estilo}>{e.label}</span>;
+}
+
+/** Resolución: el chip corto del servidor y, debajo, el del recordatorio y el de los cambios del cliente (RP18, D4). */
+function CeldaResolucion({ fila }: { fila: FilaHub }) {
+  const { principal, extras } = chipsResolucionHub(fila);
+  return (
+    <span className="flex min-w-0 flex-col items-start gap-0.5">
+      {principal ? <span className={`${CHIP} ${CHIP_TONO[principal.tono] ?? CHIP_TONO.slate}`}>{principal.texto}</span>
+        : <span className="text-xs text-slate-400">—</span>}
+      {extras.map((c) => <span key={c.texto} className={`${CHIP} ${CHIP_TONO[c.tono] ?? CHIP_TONO.slate}`}>{c.texto}</span>)}
+    </span>
+  );
+}
+
+const tituloResolucion = (f: FilaHub) => {
+  const { principal, extras } = chipsResolucionHub(f);
+  return [principal?.titulo, ...extras.map((c) => c.texto)].filter(Boolean).join(' · ') || null;
+};
+
+/**
+ * Lo que las celdas de la tabla le piden a la pantalla (abrir el panel rápido, el chatter y la cancelación de N3). Va por
+ * un contexto para que las columnas sean una constante del módulo (D40 y D41: estables; el cuerpo está memoizado).
+ */
+type AccionesFilaHub = { abrir: (f: FilaHub) => void; actividad: (f: FilaHub) => void; cancelar: (ids: string[]) => void };
+const AccionesFila = React.createContext<AccionesFilaHub | null>(null);
+
+/** Chatter: el panel de notas y actividad del documento (ActivitiesPanel). */
+function BotonChatter({ fila }: { fila: FilaHub }) {
+  const acciones = React.useContext(AccionesFila);
+  return (
+    <button type="button" onClick={() => acciones?.actividad(fila)} aria-label={`Notas y actividad de ${fila.numero}`}
+      title="Notas y actividad"
+      className={`rounded-lg p-1 text-slate-400 transition-colors hover:bg-indigo-50 hover:text-indigo-600 ${FOCO_VISIBLE}`}>
+      <Activity size={14} aria-hidden="true"/>
+    </button>
+  );
+}
+
+/** Acción (R26, RP15): la próxima acción del documento (solo navega) y el menú ⋯ de N3 (MenuFila: clic y portal). */
+function CeldaAccion({ fila }: { fila: FilaHub }) {
+  const acciones = React.useContext(AccionesFila);
+  const accion = accionSiguienteDocumento(fila);
+  const urlWhatsApp = waUrl(fila.customer_phone);
+  const items: ItemMenuFila[] = [
+    { etiqueta: 'Ver detalle completo', icono: ExternalLink, onClick: () => acciones?.abrir(fila) },
+    { etiqueta: 'Ver historial y chatter', icono: Activity, onClick: () => acciones?.actividad(fila) },
+    { etiqueta: 'Abrir WhatsApp', icono: MessageCircle, onClick: () => abrirWhatsApp(urlWhatsApp), oculto: !urlWhatsApp },
+    { etiqueta: 'Cancelar documento', icono: Trash2, peligro: true, onClick: () => acciones?.cancelar([claveDeFila(fila)]),
+      oculto: Boolean(motivoNoCancelable(fila)) },
+  ];
+  const tono = TONO_ACCION[accion?.tono ?? 'slate'] ?? TONO_ACCION.slate;
+  const boton = `min-w-0 truncate rounded-lg border px-2 py-1 text-[11px] font-bold transition-colors ${tono}`;
+  return (
+    <span className="flex min-w-0 items-center justify-end gap-1">
+      {!accion ? <span className="text-xs text-slate-400">—</span>
+        : accion.href ? <Link href={accion.href} title={accion.texto} className={`${boton} ${FOCO_VISIBLE}`}>{accion.texto}</Link>
+        : <span title={accion.texto} className={boton}>{accion.texto}</span>}
+      <MenuFila items={items} etiqueta={`Acciones de ${fila.numero || 'este documento'}`} />
+    </span>
+  );
+}
+
+/**
+ * B4 T7, la tabla (TABLA-hub-ventas punto 6; R26, D41): las columnas por defecto, pensadas para 1024 px con el menú
+ * abierto (unos 716 px útiles con el px-4 de abajo de 1280 px): la casilla y Resolución fijas a la izquierda, Acción fija
+ * a la derecha y, en medio, Número (con su tipo), Cliente (la flexible, con el teléfono), Estado y Monto. Asesor,
+ * Antigüedad (R5: desde la creación) y Chatter quedan a la derecha (se traen arrastrándolos); Tipo existe, oculta. Una
+ * constante (estable, D40). La resolución, el atraso y la próxima acción salen de la fila (R8, RP15).
+ */
+const COLUMNAS_TABLA_HUB: ColumnaTabla<FilaHub>[] = [
+  { id: 'resolucion', titulo: 'Resolución', ancho: 104, clave: true, fija: 'izquierda',
+    celda: (f) => <CeldaResolucion fila={f} />, titleCelda: tituloResolucion },
+  { id: 'numero', titulo: 'Número', ancho: 108, clave: true, ordenable: 'numero',
+    titleCelda: (f) => `${getTipoLabel(f.tipo)} ${f.numero}`,
+    celda: (f) => (
+      <span className="flex min-w-0 flex-col items-start gap-0.5 leading-tight">
+        <span className={`rounded-full border px-1.5 text-[9px] font-black ${getTipoClass(f.tipo)}`}>{siglaTipo(f.tipo)}</span>
+        <span className="max-w-full truncate font-bold text-slate-900">{f.numero}</span>
+      </span>
+    ) },
+  { id: 'cliente', titulo: 'Cliente', ancho: 136, clave: true, flexible: true, ordenable: 'cliente',
+    titleCelda: (f) => [f.customer_name || f.cliente?.nombre || 'Cliente General', f.customer_phone].filter(Boolean).join(' · '),
+    celda: (f) => (
+      <span className="flex min-w-0 flex-col leading-tight">
+        <span className="truncate font-bold text-slate-800">{f.customer_name || f.cliente?.nombre || 'Cliente General'}</span>
+        {f.customer_phone && <span className="truncate font-mono text-[11px] text-slate-400">{f.customer_phone}</span>}
+      </span>
+    ) },
+  { id: 'estado', titulo: 'Estado', ancho: 112, clave: true, ordenable: 'estado',
+    titleCelda: (f) => estadoDeTarjeta(f.tipo, f.estado).label, celda: (f) => <InsigniaEstado tipo={f.tipo} estado={f.estado} /> },
+  { id: 'monto', titulo: 'Monto', ancho: 96, clave: true, alinear: 'derecha', ordenable: 'monto',
+    celda: (f) => (f.tipo === 'SC' ? '—' : formatoPesos(f.total_cop)) },
+  { id: 'asesor', titulo: 'Asesor', ancho: 120, ordenable: 'asesor',
+    titleCelda: (f) => f.advisor_name || f.cotizador || f.asesor?.nombre || 'Sin asignar',
+    celda: (f) => f.advisor_name || f.cotizador || f.asesor?.nombre || <span className="italic text-slate-400">Sin asignar</span> },
+  { id: 'antiguedad', titulo: 'Antigüedad', ancho: 96, celda: (f) => textoAntiguedad(Number(f.dias_creado) || 0) },
+  { id: 'chatter', titulo: 'Chatter', ancho: 56, alinear: 'centro', celda: (f) => <BotonChatter fila={f} /> },
+  { id: 'tipo', titulo: 'Tipo', ancho: 96, ocultaPorDefecto: true, ordenable: 'tipo', celda: (f) => getTipoLabel(f.tipo) },
+  { id: 'accion', titulo: 'Acción', ancho: 128, clave: true, fija: 'derecha', celda: (f) => <CeldaAccion fila={f} /> },
+];
+/** {campo de orden: título}, para el chip «Orden: Monto ↓» (textoOrdenHub). */
+const TITULOS_ORDEN_HUB: Record<string, string> = Object.fromEntries(
+  COLUMNAS_TABLA_HUB.map((c) => [typeof c.ordenable === 'string' ? c.ordenable : c.id, c.titulo]),
+);
 
 /* ── Activities floating panel ── */
 // U6+H22 (T9B): notas rápidas con el mismo Chatter de la SC, la COT y el PVEN (ComposerChatter compacto, con la Nota
@@ -333,9 +540,6 @@ function ConfigPanel({alertDias,configCargada,onSave,onClose}:{alertDias:any,con
    ════════════════════════════════════════════════════════════ */
 export default function VentasHub() {
   const router = useRouter();
-  const [activeTab, setActiveTab]       = useState('Todos');
-  const [viewMode, setViewMode]         = useState<'lista'|'kanban'>('lista');
-  const [loading, setLoading]           = useState(true);
   // H49 (T1B): avisos y confirmaciones del sistema; setToast queda como adaptador ({msg, type}) de las llamadas de siempre.
   // Los de error pasan por textoDeError (sin conexión, '[object Object]', 'Error: ' repetido).
   const { avisar, confirmar } = useAvisos();
@@ -344,26 +548,19 @@ export default function VentasHub() {
     if (t.type === 'error') avisar(textoDeError(t.msg), {tono: 'error'});
     else avisar(t.msg, {tono: t.type});
   }, [avisar]);
-  const [search, setSearch]             = useState('');
-  const [filterEstado, setFilterEstado] = useState('');
-  const [showFilters, setShowFilters]   = useState(false);
-  const [quickFilter, setQuickFilter]   = useState<'todos'|'no_resueltos'|'atrasados'|'acciones_tomadas'>('todos');
 
-  const [solicitudes, setSolicitudes]   = useState<any[]>([]);
-  const [cotizaciones, setCotizaciones] = useState<any[]>([]);
-  const [pedidos, setPedidos]           = useState<any[]>([]);
-  const [allData, setAllData]           = useState<any[]>([]);
+  // B4 T7 (R6, C3, C4; RP26, RP35, D40): el estado ÚNICO de la pantalla. Las pestañas, la búsqueda, el filtro de
+  // estados, el semáforo, las cajas del flujo, la tabla y el tablero despachan a él; el modo (Lista o Kanban) se guarda
+  // en vista:ventas.hub. Ya no hay arreglos en memoria (C4): la tabla y el tablero piden a /ventas/hub/documentos.
+  const [estado, despachar, listo] = useEstadoTabla(ID_HUB, INICIAL_HUB);
+  // R6 y RP21: ?paso= y ?tab=analisis&foco= (leerEnlaceHub) salen de window.location al montar, sin useSearchParams (la
+  // página no necesita Suspense; AuthGuard la pinta solo en el navegador). Análisis es un estado de la página (RP35).
+  const [enlace] = useState(() => leerEnlaceHub(typeof window === 'undefined' ? '' : window.location.search));
+  const [seccion, setSeccion] = useState<SeccionHub>(enlace.analisis ? 'analisis' : 'documentos');
+  const enAnalisis = seccion === 'analisis';
   const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set());
-
-  const [analytics, setAnalytics]           = useState<any>(null);
-  const [analyticsRange, setAnalyticsRange] = useState('30d');
-  const [analyticsTopN, setAnalyticsTopN]   = useState('5');
-  const [analyticsProduct, setAnalyticsProduct] = useState('');
-  const [aiQuestion, setAiQuestion] = useState('');
-  const [aiResponse, setAiResponse] = useState('');
-  const [aiLoading, setAiLoading]   = useState(false);
   const [alertDias, setAlertDias]   = useState<any>({alerta_sc_dias:'2',alerta_cot_dias:'2',alerta_ven_dias:'2'});
-  
+
   const [actRow, setActRow]         = useState<any>(null);
   const [quickDetailDoc, setQuickDetailDoc] = useState<any>(null);
   const [showConfig, setShowConfig] = useState(false);
@@ -386,127 +583,93 @@ export default function VentasHub() {
   const [hubEnlace, setHubEnlace]     = useState<{documento:string, link:string, correo:any, canal:string|null, color:'blue'|'indigo', whatsapp?:string|null,
     envioWhatsapp?:unknown, telefono?:string|null, vence?:string|null, seguimiento?:unknown}|null>(null);
 
-  // T9B r1: silencioso (tras una nota del panel de actividad) recarga sin el spinner de página: la tabla o el Kanban no
-  // se reemplazan detrás del panel y no se pierde el scroll. «Actualizar» la llama sin opciones: con spinner.
-  // T11 calidad (E4, ronda 1): un GET que falla ya no vacía su lista: fusionarCargaHub (lib/hub-ventas.js, con su prueba)
-  // conserva lo de la carga anterior (también la configuración de alertas) y da UN aviso, aunque fallen varios.
-  // Revisión final (F4): la última carga gana (patrón cargaRef de la COT y el PVEN). La recarga silenciosa de una nota
-  // del panel y la de «Actualizar» se pueden cruzar: la más vieja ya no pinta, no deja ultimaCarga desfasada ni apaga
-  // el spinner de la más nueva.
-  const ultimaCarga = React.useRef<{sc:any[];cot:any[];ven:any[]}|null>(null);
-  const cargaRef = React.useRef(0);
-  const loadData = useCallback(async(opciones?: {silencioso?: boolean})=>{
-    const silencioso = opciones?.silencioso === true;
-    const miCarga = ++cargaRef.current;
-    if(!silencioso) setLoading(true);
-    try {
-      const pedir = (ruta: string) => apiFetch(ruta).catch((err: unknown) => { console.error(err); return null; });
-      const [sc,cot,ven,cfg] = await Promise.all([
-        pedir('/ventas/solicitudes?limit=200'), pedir('/ventas/cotizaciones?limit=200'),
-        pedir('/ventas/pedidos?limit=200'), pedir('/ventas/config'),
-      ]);
-      if (miCarga !== cargaRef.current) return;
-      const carga = fusionarCargaHub(ultimaCarga.current, {sc, cot, ven, cfg});
-      ultimaCarga.current = carga.listas;
-      setSolicitudes(carga.listas.sc); setCotizaciones(carga.listas.cot); setPedidos(carga.listas.ven);
-      setAllData(carga.todas);
-      if(carga.cfg) setAlertDias(carga.cfg);
-      if(configLeida(cfg)) setConfigCargada(true);
-      if(carga.aviso) avisar(carga.aviso, {tono: 'error'});
-    } catch(err:any){if (miCarga === cargaRef.current) setToast({msg:err.message,type:'error'});}
-    finally{if (miCarga === cargaRef.current) setLoading(false);}
-  },[avisar]);
+  // ── B4 T7, carga (R6, C4): cada parte pide lo suyo al servidor ──
+  // La tabla (RP35 y RP68: sin conResumen ni extra.semaforo; el semáforo va en estado.semaforo). En la pestaña Análisis
+  // no pide nada (activo: false, RP35) y nunca se manda vista=analisis. esperar: !listo (D40): el esqueleto, nunca vacío.
+  const listado = useListado<FilaHub>({
+    ruta: '/ventas/hub/documentos', estado, conConteos: true, esperar: !listo, despachar, activo: !enAnalisis,
+  });
+  const conteos = listado.conteos as ConteosHub | null;
+  const estadoConteos = useEstadoKpi(listado.cargandoInicial || listado.recargando, listado.error);
 
-  useEffect(()=>{loadData();},[loadData]);
-  useEffect(()=>{if(activeTab==='Analisis')loadAnalytics();},[activeTab,analyticsRange,analyticsTopN]);
+  // El tablero en modo servidor (C4, RP10, D39): una consulta por columna con columna=<clave> y el MISMO estado (vista,
+  // semáforo, paso, q y estados), con porColumna = el tamaño de la tabla y limit=0 en las plegadas (lo hace el hook).
+  // D39: 'atencion' en las abiertas (dentro de cada columna, primero lo atrasado: U1) y 'reciente' en Cancelado.
+  const tablero = useTableroKanban<FilaHub>({
+    pantalla: ID_HUB,
+    modo: 'servidor',
+    columnas: COLUMNAS_HUB,
+    idDe: claveDeFila,
+    activo: listo && estado.modo === 'kanban' && !enAnalisis,
+    porColumna: estado.tamano,
+    dependencias: dependenciasTablero(estado),
+    ordenDe: (c) => (c.cerrada ? 'reciente' : 'atencion'),
+    cargar: async (columna, { offset, limit, orden, signal }) => normalizarRespuesta(
+      await apiFetch(`/ventas/hub/documentos?${queryListado(estado, { columna: columna.clave, orden, limit, offset })}`, { signal }),
+    ),
+  });
 
-  async function loadAnalytics(){
-    try{
-      const res = await apiFetch(`/ventas/analytics?range=${analyticsRange}&top_n=${analyticsTopN}`);
-      setAnalytics(res?.data || res);
-    }
-    catch(err:any){setToast({msg:err.message||'Error al cargar analítica',type:'error'});}
-  }
+  // La franja del flujo (R6): GET /ventas/flujo; recargaFlujo sube con cada loadData.
+  const [recargaFlujo, setRecargaFlujo] = useState(0);
+  const flujo = useResumenFlujo<DatosFlujo>('/ventas/flujo', recargaFlujo);
 
-  // N8: un solo camino de lectura de los días de alerta (respuesta del servidor o lo guardado en el panel).
-  const scAlertDias  = diasAlerta(alertDias, 'alerta_sc_dias');
-  const cotAlertDias = diasAlerta(alertDias, 'alerta_cot_dias');
-  const venAlertDias = diasAlerta(alertDias, 'alerta_ven_dias');
+  // Las tarjetas (R6, RP68): GET /ventas/stats?periodo=30d, sin respaldo local; si falla, «—» (C6, C13).
+  const [vueltaStats, setVueltaStats] = useState(0);
+  const [stats, setStats] = useState<{ vuelta: number; datos: StatsHub | null; error: unknown } | null>(null);
+  useEffect(() => {
+    const control = new AbortController();
+    apiFetch(`/ventas/stats?periodo=${PERIODO_KPI}`, { signal: control.signal })
+      .then((r: { data?: StatsHub } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
+      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
+    return () => control.abort();
+  }, [vueltaStats]);
+  const cargandoStats = stats?.vuelta !== vueltaStats;
+  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
+  const datosStats = stats?.datos ?? null;
 
-  // H3: cotizaciones y pedidos de cada solicitud. La lista de SC trae sus cotizaciones (ligeras, todas); se completan
-  // con las de la lista de COT. Los pedidos salen de la lista de PVEN (sc_id).
-  const cotsPorSC = useMemo(() => {
-    const m = new Map<number, any[]>();
-    for (const s of solicitudes) if (Array.isArray(s.cotizaciones)) m.set(s.id, [...s.cotizaciones]);
-    for (const c of cotizaciones) {
-      if (!c.sc_id) continue;
-      const lista = m.get(c.sc_id) || [];
-      if (!lista.some((x: any) => x.id === c.id)) lista.push(c);
-      m.set(c.sc_id, lista);
-    }
-    return m;
-  }, [solicitudes, cotizaciones]);
-  const pedsPorSC = useMemo(() => {
-    const m = new Map<number, any[]>();
-    for (const v of pedidos) if (v.sc_id) m.set(v.sc_id, [...(m.get(v.sc_id) || []), v]);
-    return m;
-  }, [pedidos]);
-  // SC con una cotización activa (choque H3: esCotizacionActiva, VENCIDA cuenta como activa).
-  const scConCot = useMemo(() => new Set(
-    Array.from(cotsPorSC).filter(([, cots]) => cots.some((c: any) => esCotizacionActiva(c.estado))).map(([scId]) => scId)
-  ), [cotsPorSC]);
+  // La configuración (ConfigPanel, B3-T10d): GET /ventas/config, como antes; configCargada abre el panel y «Ajustar
+  // tiempos» (configLeida). Si falla, un aviso y lo que había en pantalla sigue.
+  const [vueltaConfig, setVueltaConfig] = useState(0);
+  useEffect(() => {
+    let vigente = true;
+    apiFetch('/ventas/config')
+      .then((cfg: unknown) => {
+        if (!vigente) return;
+        const datos = cfg && typeof cfg === 'object' ? ((cfg as { data?: unknown }).data || cfg) : null;
+        if (datos && typeof datos === 'object') setAlertDias(datos);
+        if (configLeida(cfg)) setConfigCargada(true);
+      })
+      .catch((err: unknown) => {
+        if (!vigente) return;
+        console.error(err);
+        avisar('No se pudo cargar la configuración de alertas.', { tono: 'error' });
+      });
+    return () => { vigente = false; };
+  }, [vueltaConfig, avisar]);
 
-  // Clasificación de estados de no resolución vs resueltos
-  const isDocNoResolucion = useCallback((item: any) => {
-    return esNoResuelto(item, scConCot);
-  }, [scConCot]);
+  // La recarga de la pantalla (antes, tres listas de 200 documentos en memoria): la tabla, el tablero y el flujo; sin
+  // `silencioso` («Actualizar», un lote, un envío, el panel de configuración), también las tarjetas y la configuración.
+  // La recarga silenciosa de una nota del panel de actividad (T9B r1) solo pide lo que mueve el atraso. Ninguna vacía lo
+  // que se ve: los hooks conservan lo último mientras recargan y la última carga gana (D28: useListado aborta la anterior).
+  const { recargar: recargarListado } = listado;
+  const { recargar: recargarTablero } = tablero;
+  const loadData = useCallback((opciones?: { silencioso?: boolean }) => {
+    recargarListado();
+    recargarTablero();
+    setRecargaFlujo((n) => n + 1);
+    if (opciones?.silencioso) return;
+    setVueltaStats((n) => n + 1);
+    setVueltaConfig((n) => n + 1);
+  }, [recargarListado, recargarTablero]);
 
-  const isDocAtrasado = useCallback((item: any) => {
-    const dLimit = item.tipo === 'SC' ? scAlertDias : item.tipo === 'COT' ? cotAlertDias : venAlertDias;
-    return isDocNoResolucion(item) && daysDiff(item.updated_at || item.created_at) >= dLimit;
-  }, [scAlertDias, cotAlertDias, venAlertDias, isDocNoResolucion]);
-
-  const noResueltosList = useMemo(() => allData.filter(isDocNoResolucion), [allData, isDocNoResolucion]);
-  const atrasadosList   = useMemo(() => allData.filter(isDocAtrasado), [allData, isDocAtrasado]);
-  const accionesTomadasList = useMemo(() => allData.filter(d => esAccionTomada(d, scConCot)), [allData, scConCot]);
-
-  const scAtrasadas  = useMemo(() => solicitudes.filter(isDocAtrasado), [solicitudes, isDocAtrasado]);
-  const cotAtrasadas = useMemo(() => cotizaciones.filter(isDocAtrasado), [cotizaciones, isDocAtrasado]);
-  const venAtrasadas = useMemo(() => pedidos.filter(isDocAtrasado), [pedidos, isDocAtrasado]);
-  const totalAtrasadas = atrasadosList.length;
-
-  // Filtrado de datos según tab activo, quick filter, búsqueda y estado
-  const filteredData = useMemo(()=>{
-    let base: any[] = [];
-    if(activeTab === 'Todos') base = allData;
-    else if(activeTab === 'No_Resueltos') base = noResueltosList;
-    else if(activeTab === 'SC') base = solicitudes;
-    else if(activeTab === 'Cotizaciones') base = cotizaciones;
-    else if(activeTab === 'Pedidos de Venta') base = pedidos;
-    else if(activeTab === 'Acciones_Tomadas') base = accionesTomadasList;
-    else return [];
-
-    // Quick filter adicional
-    if(quickFilter === 'no_resueltos') base = base.filter(isDocNoResolucion);
-    else if(quickFilter === 'atrasados') base = base.filter(isDocAtrasado);
-    else if(quickFilter === 'acciones_tomadas') base = base.filter(d => esAccionTomada(d, scConCot));
-
-    if(search) {
-      const q = search.toLowerCase();
-      base = base.filter(r =>
-        (r.numero || '').toLowerCase().includes(q) ||
-        (r.customer_name || r.cliente?.nombre || '').toLowerCase().includes(q) ||
-        (r.advisor_name || r.cotizador || r.asesor?.nombre || '').toLowerCase().includes(q) ||
-        (r.estado || '').toLowerCase().includes(q) ||
-        etiquetaEstado(r.tipo, r.estado).toLowerCase().includes(q) ||
-        coincideProducto(r, search)
-      );
-    }
-    if(filterEstado) base = base.filter(r => r.estado === filterEstado);
-    return base;
-  },[activeTab, quickFilter, allData, noResueltosList, solicitudes, cotizaciones, pedidos, accionesTomadasList, search, filterEstado, isDocNoResolucion, isDocAtrasado, scConCot]);
-
-  const filaPorId = (idStr: string) => allData.find((d: any) => `${d.tipo}|${d.id}` === idStr);
+  // RP36: las filas cargadas (la página de la tabla y las tarjetas del tablero). filaPorId las usan el modal de
+  // cancelación, la barra masiva (N3 y N5) y el panel rápido; scConCot, las reglas del tablero.
+  const filasCargadas = useMemo(
+    () => [...listado.filas, ...Object.values(tablero.datos).flatMap((d) => d.items)],
+    [listado.filas, tablero.datos],
+  );
+  const scConCot = useMemo(() => scConCotDeFilas(filasCargadas), [filasCargadas]);
+  const filaPorId = useCallback((idStr: string) => filasCargadas.find((f) => claveDeFila(f) === idStr), [filasCargadas]);
   const quitarDeSeleccion = (ids: Set<string>) =>
     setSelectedIds(prev => { const n = new Set(prev); ids.forEach(i => n.delete(i)); return n; });
 
@@ -552,17 +715,18 @@ export default function VentasHub() {
   }
 
   // N3: cancelar abre un modal con lo que se va a cancelar y el motivo. La acción de fila nunca lee ni cambia la selección.
-  function abrirCancelacion(ids: string[]){
+  const abrirCancelacion = useCallback((ids: string[]) => {
     setCancelacion({ids});
     setMotivoCancelacion('');
-  }
+  }, []);
 
-  // Filas del modal de cancelación, en el orden en que se procesan (VEN, COT, SC) y con el motivo si se omiten.
+  // Filas del modal de cancelación, en el orden en que se procesan (VEN, COT, SC) y con el motivo si se omiten. RP36: la
+  // fila se busca en la tabla y en el tablero (filaPorId); si ya no está, se omite con ese motivo.
   const filasCancelacion = useMemo(() => (cancelacion ? ordenParaCancelar(cancelacion.ids) : []).map(idStr => {
-    const row = allData.find((d: any) => `${d.tipo}|${d.id}` === idStr);
+    const row = filaPorId(idStr);
     return {idStr, row, motivo: row ? motivoNoCancelable(row) : 'ya no está en la lista del Hub'};
-  }), [cancelacion, allData]);
-  const porCancelar = filasCancelacion.filter(f => !f.motivo);
+  }), [cancelacion, filaPorId]);
+  const porCancelar = filasCancelacion.filter((f): f is {idStr: string; row: FilaHub; motivo: null} => !f.motivo && Boolean(f.row));
 
   async function confirmarCancelacion(){
     const motivo = motivoCancelacion.trim();
@@ -612,110 +776,60 @@ export default function VentasHub() {
     }catch(e:any){setToast({msg:e.message,type:'error'});}
   }
 
-  async function handleAskAI(){
-    if(!aiQuestion.trim()) return;
-    setAiLoading(true); setAiResponse('');
-    try{
-      const res = await apiFetch('/ventas/ai-chat',{method:'POST',body:JSON.stringify({question:aiQuestion,context:{stats:analytics, totales: {sc: solicitudes.length, cot: cotizaciones.length, ven: pedidos.length}}})});
-      setAiResponse(res?.response || res?.data?.response || 'El Copilot de Ventas ha analizado el pipeline comercial de Nebulae.');
-    }
-    catch{
-      // Fallback a respuesta contextual de Nebulae
-      setAiResponse(`Para el catálogo de Nebulae Kids (cunas, corrales, ropa infantil y puericultura), se recomienda priorizar los pedidos con más de ${venAlertDias} días en estado PENDIENTE_COMPRA o EN_TRANSITO para asegurar el stock de entrega.`);
-    }
-    setAiLoading(false);
-  }
-
-  async function openDocDetail(row: any){
+  const openDocDetail = useCallback(async (row: any) => {
     try {
       let d: any = null;
       if(row.tipo === 'SC')  d = await apiFetch(`/ventas/solicitudes/${row.id}`);
       if(row.tipo === 'COT') d = await apiFetch(`/ventas/cotizaciones/${row.id}`);
       if(row.tipo === 'VEN') d = await apiFetch(`/ventas/pedidos/${row.id}`);
       setQuickDetailDoc({ ...row, ...(d?.data || d) });
-    } catch(err:any) {
+    } catch {
       setQuickDetailDoc(row);
     }
+  }, []);
+
+  // ── B4 T7, Kanban (KANBAN-hub-ventas punto 2; C4, C15, R11; RP17, D39) ──
+  // Lo que T9 resolvía al soltar una tarjeta vive ahora en reglaSoltarHub (kanban-ventas.js, con su matriz probada): soltar en
+  // la misma columna no hace nada; lo que no se puede queda bloqueado con su motivo ANTES de soltar (una COT que el
+  // cliente confirmó ya no se reenvía al soltarla en «No resuelto»: C15(a)); y lo demás llega aquí.
+  // 'cambio': el PATCH del estado. El tablero mueve la tarjeta y, si el servidor la rechaza (R10: el 409 de una SC con
+  // documentos activos), la devuelve con su mensaje. No se devuelve el documento: el PATCH no trae la resolución ni el
+  // tipo de la fila, y el tablero recarga el origen y el destino (D39). Las pestañas y el flujo se recargan aquí.
+  async function cambiarDesdeTablero(fila: FilaHub, resultado: { estado: string }) {
+    const ruta = fila.tipo === 'SC' ? 'solicitudes' : fila.tipo === 'COT' ? 'cotizaciones' : 'pedidos';
+    await apiFetch(`/ventas/${ruta}/${fila.id}`, {
+      method: 'PATCH', body: JSON.stringify({ estado: resultado.estado, updated_by: autorActual() }),
+    });
+    recargarListado();
+    setRecargaFlujo((n) => n + 1);
   }
 
-  const getKanbanCol=(item:any)=>{
-    if (item.tipo==='SC' && item.estado==='CONFIRMADA' && !scConCot.has(item.id)) return 'No Resuelto'; // H3: falta cotizarla
-    if (esSCConCotizacionTemprana(item, scConCot)) return 'Acción Tomada'; // R20: la alerta la lleva su cotización
-    const e=item.estado||'';
-    if(['CANCELADO','CANCELADA','RECHAZADA'].includes(e)) return 'Cancelado';
-    if(['ENTREGADO','FACTURADO','CONFIRMADA','LISTO_ENTREGA'].includes(e)) return 'Acción Tomada';
-    if(['EN_PROCESO','ENVIADA','EN_TRANSITO'].includes(e)) return 'En Gestión';
-    return 'No Resuelto';
-  };
+  // 'accion' (D39): la pantalla abre su ventana y, al terminar, recarga el origen y el destino.
+  //  - cancelar: el modal de N3 con el motivo (abrirCancelacion), el mismo del menú de la fila;
+  //  - enviar: el envío que ya vive en esta página (C15(b): el canal de H27 y el enlace de B3-T10d, abrirEnvioHub); no
+  //    se arma otro ChannelModal ni otro POST;
+  //  - reiniciar: «Reiniciar solicitud» con la confirmación de U15 (RP17) y PATCH {estado: 'BORRADOR'}.
+  function accionDesdeTablero(fila: FilaHub, resultado: { accion: string }, origen: string, destino: string) {
+    if (resultado.accion === 'cancelar') abrirCancelacion([claveDeFila(fila)]);
+    else if (resultado.accion === 'enviar' && (fila.tipo === 'SC' || fila.tipo === 'COT')) abrirEnvioHub(fila.tipo, String(fila.id), fila);
+    else if (resultado.accion === 'reiniciar' && fila.tipo === 'SC') void reiniciarDesdeTablero(fila, origen, destino);
+  }
 
-  const handleDragStart=(e:React.DragEvent,idStr:string)=>e.dataTransfer.setData('idStr',idStr);
-  const handleDrop=async(e:React.DragEvent,col:string)=>{
-    const idStr=e.dataTransfer.getData('idStr'); if(!idStr) return;
-    const [tipo,id]=idStr.split('|');
-    // Round 3 (adversarial review, hallazgo #3): un drag abortado o un click impreciso
-    // puede soltar la tarjeta en la MISMA columna en la que ya estaba -- sin este
-    // chequeo, eso disparaba el mismo envio de correo real que un drag intencional a
-    // "No Resuelto" (ver mas abajo), solo por soltarla donde ya estaba.
-    const item = allData.find((d:any) => d.tipo === tipo && String(d.id) === id);
-    if (item && getKanbanCol(item) === col) return;
-    // N3: soltar en "Cancelado" tampoco cancela sin motivo: abre el mismo modal que el menú de la fila.
-    if (col === 'Cancelado') { abrirCancelacion([idStr]); return; }
-    const path=tipo==='SC'?`/ventas/solicitudes/${id}`:tipo==='COT'?`/ventas/cotizaciones/${id}`:`/ventas/pedidos/${id}`;
-    // H50: una COT en "En Gestión" se envía por el flujo de confirmación (ya no PATCH a ENVIADA, que da 400).
-    const m:Record<string,Record<string,string>>={
-      'No Resuelto':{SC:'BORRADOR',COT:'PENDIENTE_CONFIRMACION',VEN:'PENDIENTE_COMPRA'},
-      'En Gestión':{SC:'PENDIENTE_CONFIRMACION',COT:'PENDIENTE_CONFIRMACION',VEN:'EN_PROCESO'},
-      'Acción Tomada':{SC:'CONFIRMADA',COT:'CONFIRMADA',VEN:'LISTO_ENTREGA'},
-    };
-    // Gate 2 (Round 2, adversarial review): soltar una COT en "No Resuelto" mapeaba a
-    // un PATCH directo {estado:'PENDIENTE_CONFIRMACION'} -- exactamente el bypass que
-    // creaba y enviaba un email de confirmacion como efecto secundario de un PATCH
-    // generico, alcanzable con soltar una tarjeta BORRADOR sin precios (o revivir una
-    // RECHAZADA) en esa columna. Ahora pasa por el mismo endpoint dedicado que usa el
-    // boton "Enviar al Cliente" (enviar_cotizacion_para_confirmacion), que exige
-    // precios reales calculados y rechaza si ya existe un Pedido de Venta -- el gesto
-    // de arrastrar sigue funcionando, solo que ahora por la via gateada.
-    // Round 3: ademas, esto SI envia un correo real al cliente -- a diferencia de los
-    // demas drops (que solo cambian un estado interno), se confirma explicitamente
-    // antes de disparar el POST, para que un drag accidental no termine emailando a un
-    // cliente sin que nadie lo haya decidido a proposito. H27+H39: esa confirmacion es
-    // ahora la ventana del canal (WhatsApp, Email u Otro), igual que en el detalle.
-    if (tipo === 'COT' && (m[col] || {})[tipo] === 'PENDIENTE_CONFIRMACION') {
-      // Re-review del fix final (Minor 5a): getKanbanCol no tiene un caso explicito para
-      // PENDIENTE_CONFIRMACION, asi que una tarjeta ya pendiente cae en "No Resuelto" por
-      // defecto -- arrastrarla desde ahi hasta "En Gestión" no la detecta el chequeo de
-      // "misma columna" de arriba, y sin esto reenviaria de verdad (revocando el link ya
-      // entregado al cliente) solo por un drag entre columnas, no por una decision real.
-      if (item?.estado === 'PENDIENTE_CONFIRMACION') {
-        setToast({msg: 'Ya está pendiente de confirmación del cliente.', type: 'error'});
-        return;
-      }
-      abrirEnvioHub('COT', id, item);
-      return;
+  async function reiniciarDesdeTablero(fila: FilaHub, origen: string, destino: string) {
+    if (!(await confirmar(confirmacionReiniciarSolicitud(fila)))) return;
+    try {
+      await apiFetch(`/ventas/solicitudes/${fila.id}`, {
+        method: 'PATCH', body: JSON.stringify({ estado: 'BORRADOR', updated_by: autorActual() }),
+      });
+      setToast({msg: 'Solicitud reiniciada', type: 'ok'});
+    } catch (err: unknown) {
+      // R10: con documentos activos el servidor responde 409; el aviso trae su mensaje.
+      setToast({msg: 'No se pudo reiniciar: ' + ((err instanceof Error && err.message) || 'intenta de nuevo.'), type: 'error'});
     }
-    // Final whole-branch review (hallazgo #3): mismo bypass que el de COT arriba, pero
-    // del lado de Solicitud (Gate 1) -- soltar una SC en "En Gestion" mapeaba a un
-    // PATCH directo {estado:'PENDIENTE_CONFIRMACION'}, sin token, sin necesariamente un
-    // asesor involucrado. Mismo remate: pasa por el endpoint dedicado, que exige que la
-    // SC ya este Asignada (con asesor) antes de aceptar el envio.
-    if (tipo === 'SC' && (m[col] || {})[tipo] === 'PENDIENTE_CONFIRMACION') {
-      // Re-review del fix final (Minor 5a, mismo caso que COT arriba): SC pendiente
-      // tambien cae en "No Resuelto" por defecto en getKanbanCol -- un drag entre
-      // columnas no detectado por el chequeo de "misma columna" no debe reenviar de
-      // verdad.
-      if (item?.estado === 'PENDIENTE_CONFIRMACION') {
-        setToast({msg: 'Ya está pendiente de confirmación del cliente.', type: 'error'});
-        return;
-      }
-      abrirEnvioHub('SC', id, item);
-      return;
-    }
-    // R10: devolver a Borrador una SC con COT o PVEN activos responde 409; el toast muestra el mensaje del servidor.
-    await apiFetch(path,{method:'PATCH',body:JSON.stringify({estado:(m[col]||{})[tipo]||col})})
-      .then(() => setToast({msg: 'Estado actualizado', type: 'ok'}))
-      .catch((err: any) => setToast({msg: 'No se pudo mover: ' + (err?.message || 'intenta de nuevo.'), type: 'error'}));
-    loadData();
-  };
+    tablero.recargar([origen, destino]);
+    recargarListado();
+    setRecargaFlujo((n) => n + 1);
+  }
 
   // H27+H39 (usuario: "Sí, preguntar el canal"): el envío desde el tablero pide el canal y luego muestra el enlace.
   function abrirEnvioHub(tipo:'SC'|'COT', id:string, item:any){
@@ -771,58 +885,121 @@ export default function VentasHub() {
     setEnviandoHub(false);
   }
 
-  // KPIs con contexto de Nebulae Kids
-  const totalFacturadoCOP = useMemo(() => {
-    return pedidos.filter(p => p.estado === 'FACTURADO' || p.estado === 'ENTREGADO').reduce((sum, p) => sum + Number(p.total_cop || p.total || 0), 0);
-  }, [pedidos]);
+  // ── B4 T7, tabla (TABLA-hub-ventas puntos 5 a 8; R26, D41): las columnas son COLUMNAS_TABLA_HUB (una constante); sus
+  // celdas piden a la pantalla lo que necesitan por AccionesFila (abrir el panel rápido, el chatter y la cancelación).
+  const accionesFila: AccionesFilaHub = { abrir: openDocDetail, actividad: setActRow, cancelar: abrirCancelacion };
+  // D40: un solo usePreferenciasTabla por id; la tabla y «Ajustar tabla» comparten su resultado y el ref del ancho.
+  const prefs = usePreferenciasTabla(ID_HUB, COLUMNAS_TABLA_HUB);
+  const anchoTablaRef = useRef<number | null>(null);
+  const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
+  // Pasar a Kanban o a Análisis sale de la pantalla completa (el conmutador sigue a la vista).
+  useEffect(() => { if (estado.modo === 'kanban' || enAnalisis) salir(); }, [estado.modo, enAnalisis, salir]);
 
-  const kpiCards = [
-    {
-      label: 'Solicitudes Activas',
-      value: solicitudes.filter(s => !['CONFIRMADA','CANCELADA'].includes(s.estado)).length,
-      color: 'indigo',
-      icon: <FileText size={22}/>,
-      sub: scAtrasadas.length > 0 ? `${scAtrasadas.length} sin atender (+${scAlertDias}d)` : 'Todas al día',
-      ok: scAtrasadas.length === 0,
-      tipo: 'SC'
-    },
-    {
-      label: 'Cotizaciones Vigentes',
-      // COT-LISTA: la misma regla que la pestaña 'Activas' de Cotizaciones (una confirmada que hay que reabrir cuenta;
-      // una re-confirmada por el cliente tras cancelar su pedido no: esta por convertir).
-      value: cotizaciones.filter(c => pestanaCotizacion(c) === 'Activas').length,
-      color: 'amber',
-      icon: <Package size={22}/>,
-      sub: cotAtrasadas.length > 0 ? `${cotAtrasadas.length} sin respuesta (+${cotAlertDias}d)` : 'Flujo en tiempo',
-      ok: cotAtrasadas.length === 0,
-      tipo: 'COT'
-    },
-    {
-      label: 'Pedidos en Curso (PVEN)',
-      value: pedidos.filter(p => !['ENTREGADO','FACTURADO','CANCELADO'].includes(p.estado)).length,
-      color: 'emerald',
-      icon: <ShoppingBag size={22}/>,
-      sub: venAtrasadas.length > 0 ? `${venAtrasadas.length} requieren compra/pago` : 'Stock & Despacho al día',
-      ok: venAtrasadas.length === 0,
-      tipo: 'VEN'
-    },
-    {
-      label: 'Ventas Facturadas (COP)',
-      value: fCOP(totalFacturadoCOP),
-      color: 'purple',
-      icon: <BarChart3 size={22}/>,
-      sub: `${pedidos.filter(p => p.estado === 'FACTURADO').length} pedidos facturados formalmente`,
-      ok: true,
-      tipo: 'TOTAL'
-    },
+  // Las pestañas: las 6 vistas de R6 (RP21), sin emojis, con los conteos del servidor (q, estados y paso; null mientras
+  // cargan: la barra gris, nunca 0). «No resueltos» en rojo si el Hub tiene atrasados (el semáforo de /ventas/flujo).
+  const pestanas: PestanaTabla[] = [
+    { id: 'todos', etiqueta: 'Todos', conteo: conteos?.pestanas?.todos ?? null },
+    { id: 'no_resueltos', etiqueta: 'No resueltos', conteo: conteos?.pestanas?.no_resueltos ?? null,
+      alerta: cantidadPositiva(flujo.datos?.semaforo?.atrasados) !== null },
+    { id: 'sc', etiqueta: 'Solicitudes', conteo: conteos?.pestanas?.sc ?? null },
+    { id: 'cot', etiqueta: 'Cotizaciones', conteo: conteos?.pestanas?.cot ?? null },
+    { id: 'ven', etiqueta: 'Pedidos', conteo: conteos?.pestanas?.ven ?? null },
+    { id: 'acciones_tomadas', etiqueta: 'Acciones tomadas', conteo: conteos?.pestanas?.acciones_tomadas ?? null },
   ];
+  // La barra despacha al estado único; elegir a mano la pestaña de otro tipo quita el paso del diagrama
+  // (pasoTrasPestana, FLUJO-ventas-pantallas A.4): si no, la tabla quedaría vacía sin una razón a la vista.
+  const alEstadoBarra = useCallback((accion: AccionTabla) => {
+    despachar(accion);
+    const vista = accion.tipo === 'vista' ? accion.valor : accion.tipo === 'cambiar' ? accion.cambios.vista : undefined;
+    if (typeof vista === 'string' && estado.paso && pasoTrasPestana(estado.paso, vista) === null) {
+      despachar({ tipo: 'paso', valor: null });
+    }
+  }, [despachar, estado.paso]);
 
-  const colorMap:Record<string,{bg:string,text:string,border:string,iconBg:string}> = {
-    indigo: {bg:'bg-indigo-50',  text:'text-indigo-700',  border:'border-indigo-200', iconBg:'bg-indigo-100'},
-    amber:  {bg:'bg-amber-50',   text:'text-amber-800',   border:'border-amber-200',  iconBg:'bg-amber-100'},
-    emerald:{bg:'bg-emerald-50', text:'text-emerald-700', border:'border-emerald-200',iconBg:'bg-emerald-100'},
-    purple: {bg:'bg-purple-50',  text:'text-purple-700',  border:'border-purple-200', iconBg:'bg-purple-100'},
+  // U1 (R6): con el orden de atención, un separador al empezar cada grupo con su total (conteos.grupos, con todos los
+  // filtros); ordenada por otra columna, sin separadores y con el chip «Orden: … · Atención primero».
+  const atencion = ordenEsAtencion(estado.orden);
+  const grupos = conteos?.grupos;
+  const tituloDeGrupo = useCallback((grupo: string, n: number) => tituloGrupo(grupo, grupos?.[grupo] ?? n), [grupos]);
+  const textoOrden = textoOrdenHub(estado.orden, TITULOS_ORDEN_HUB);
+  const chipsFiltro = chipsFiltroHub(estado);
+  // N3/N5: la selección de la página (TablaEstandar la limpia al cambiar de página, de pestaña, de filtro o de orden).
+  const seleccion = useMemo(() => Array.from(selectedIds), [selectedIds]);
+  const alSeleccionar = useCallback((claves: (string | number)[]) => setSelectedIds(new Set(claves.map(String))), []);
+
+  // ── B4 T7, Documentos / Análisis (RP35): Análisis es un estado de la página; nunca va en estado.vista ──
+  const cambiarSeccion = useCallback((s: SeccionHub) => {
+    setSeccion(s);
+    setSelectedIds(new Set());
+    // Al volver a los documentos la URL deja de decir ?tab=analisis (recargar no reabre el Análisis).
+    if (s === 'documentos' && leerEnlaceHub(window.location.search).analisis) router.replace(RUTA_HUB_VENTAS);
+  }, [router]);
+  const botonesSeccion = useRef(new Map<SeccionHub, HTMLButtonElement>());
+  const teclaSecciones = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const siguiente = pestanaConTecla(SECCIONES_HUB.map((s) => s.id), seccion, e.key) as SeccionHub | null;
+    if (!siguiente) return;
+    e.preventDefault();
+    cambiarSeccion(siguiente);
+    botonesSeccion.current.get(siguiente)?.focus();
   };
+  const idSecciones = React.useId();
+
+  // ── B4 T7, la franja del flujo (FLUJO-ventas-pantallas A; R6, C3, RP21, RP34, D27(a), D42) ──
+  const filtroSemaforo: FiltroSemaforo =
+    estado.semaforo === 'atrasados' || estado.semaforo === 'no_resueltos' ? estado.semaforo : 'todos';
+  // clic_en_hub (R6): tocar un botón del semáforo o un paso pone ese filtro en el estado único y muestra los documentos;
+  // tocarlo otra vez lo quita. El paso activa la pestaña de su tipo (tabHubDePaso, con accionPestana: D41).
+  const alFiltrarSemaforo = (f: FiltroSemaforo) => {
+    despachar({ tipo: 'semaforo', valor: f === 'todos' ? null : f });
+    if (enAnalisis) cambiarSeccion('documentos');
+  };
+  const elegirPaso = (clave: string) => {
+    const paso = alternarSeleccion(estado.paso, clave);
+    despachar({ tipo: 'paso', valor: paso });
+    const vista = paso ? tabHubDePaso(paso) : null;
+    if (vista) despachar(accionPestana(estado, vista, opcionesEstadosHub));
+    if (enAnalisis) cambiarSeccion('documentos');
+  };
+  // ?paso=<clave> (R6): el Hub abre filtrado por ese paso y en la pestaña de su tipo, una sola vez, como tocar la caja.
+  const pasoDelEnlace = useRef(enlace.paso);
+  useEffect(() => {
+    const paso = pasoDelEnlace.current;
+    if (!paso) return;
+    pasoDelEnlace.current = null;
+    despachar({ tipo: 'paso', valor: paso });
+    const vista = tabHubDePaso(paso);
+    if (vista) despachar(accionPestana(estado, vista, opcionesEstadosHub));
+  }, [estado, despachar]);
+  // RP34 y D27(a): «Ajustar tiempos» solo para un administrador (esAdmin, el mismo esAdministrador de flujo.tsx), apagado y
+  // con el porqué mientras no se leyó /ventas/config, igual que el botón «Configuración» de arriba.
+  const accionAjustar = esAdmin(getUsuarioActual().role)
+    ? { label: 'Ajustar tiempos', onClick: () => setShowConfig(true), deshabilitado: !configCargada, titulo: configCargada ? undefined : AVISO_CONFIG_SIN_LEER }
+    : null;
+
+  // ── B4 T7, lo que recibe el tablero (KANBAN-hub-ventas punto 2) ──
+  // La regla de soltar con el scConCot de las filas cargadas (RP36): las tarjetas SC traen sus cotizaciones.
+  const reglaHub = useCallback(
+    (f: FilaHub, origen: string, destino: string) => reglaSoltarHub(f, origen, destino, { scConCot }),
+    [scConCot],
+  );
+  // RP68: el ítem del menú de la tarjeta con `etiqueta` (ItemMenuFila); «Abrir» y «Mover a…» los pone el tablero.
+  const accionesTarjeta = useCallback(
+    (f: FilaHub): ItemMenuFila[] => [{ etiqueta: 'Actividad y chatter', icono: Activity, onClick: () => setActRow(f) }],
+    [],
+  );
+  // KANBAN-hub-ventas punto 3: el punto que late en «No resuelto» cuando su columna trae atrasados (que el servidor
+  // ordena primero). La resolución es la de la fila: aquí no se recalcula (R8).
+  const resumenColumna = useCallback((clave: string, d: DatosColumnaKanban<FilaHub>) => (
+    clave === 'No Resuelto' && d.items.some((f) => f.resolucion === 'ATRASADO') ? (
+      <span className="inline-flex items-center gap-1.5 font-semibold text-rose-700">
+        <span aria-hidden="true" className="relative inline-flex h-2 w-2">
+          <span className="absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75 motion-safe:animate-ping"/>
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-rose-500"/>
+        </span>
+        Primero los atrasados
+      </span>
+    ) : null
+  ), []);
 
   /* ════════════════ RENDER ════════════════ */
   return (
@@ -832,58 +1009,36 @@ export default function VentasHub() {
 
       <SubNav label="Hub Ventas" items={VEN_NAV} currentPath="/dashboard/ventas" color="indigo" />
 
-      {/* ALERT BANNER — SEMÁFORO DE RESOLUCIÓN */}
-      <div className="bg-white border-b border-slate-200 px-6 py-3 flex flex-wrap items-center justify-between gap-3 shadow-xs">
-        <div className="flex items-center gap-3">
-          <div className={`p-2 rounded-xl flex items-center justify-center ${totalAtrasadas > 0 ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>
-            {totalAtrasadas > 0 ? <ShieldAlert size={18}/> : <CheckCircle2 size={18}/>}
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-xs font-black text-slate-800 uppercase tracking-wide">Semáforo de Resolución Comercial:</h2>
-              <span className="text-xs font-medium text-slate-500">Regla de atención: máx {scAlertDias} días sin gestión</span>
-            </div>
-            <div className="flex flex-wrap gap-2 mt-1 text-xs">
-              <span className={`px-2.5 py-0.5 rounded-full font-bold border ${atrasadosList.length > 0 ? 'bg-rose-50 text-rose-700 border-rose-200 animate-pulse' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
-                🔴 {atrasadosList.length} Atrasados (+{scAlertDias}d)
-              </span>
-              <span className="px-2.5 py-0.5 rounded-full font-bold bg-amber-50 text-amber-800 border border-amber-200">
-                🟡 {noResueltosList.length} No Resueltos / En Espera
-              </span>
-              <span className="px-2.5 py-0.5 rounded-full font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                🟢 {accionesTomadasList.length} Acciones Tomadas
-              </span>
-            </div>
-          </div>
-        </div>
+      {/* B4 T7 (FLUJO-ventas-pantallas A; R6, D42): la franja del flujo reemplaza el semáforo con emojis y sus botones
+          repetidos. Va directo bajo la barra de submódulos, sin otro padding horizontal (las 5 cajas se miden en ella). */}
+      <BannerFlujo
+        titulo="Flujo comercial"
+        idPreferencia="ventas"
+        regla={textoRegla(flujo.datos?.dias_alerta)}
+        semaforo={{
+          atrasados: flujo.datos?.semaforo?.atrasados ?? null,
+          noResueltos: flujo.datos?.semaforo?.no_resueltos,
+          filtro: filtroSemaforo,
+          onFiltrar: alFiltrarSemaforo,
+        }}
+        pasos={pasosConConteos(PASOS_FLUJO_VENTAS, conteosDesdeResumen(flujo.datos), {
+          seleccionado: estado.paso,
+          cargando: !flujo.datos,
+        })}
+        cargando={flujo.cargando}
+        error={flujo.error}
+        onReintentar={flujo.recargar}
+        onSeleccionarPaso={elegirPaso}
+        accionAjustar={accionAjustar}
+      />
 
-        {/* Quick Filter Buttons */}
-        <div className="flex items-center gap-2">
-          <button onClick={()=>setQuickFilter(quickFilter === 'atrasados' ? 'todos' : 'atrasados')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors ${quickFilter === 'atrasados' ? 'bg-rose-600 text-white border-rose-600 shadow-xs' : 'bg-slate-50 text-rose-700 border-rose-200 hover:bg-rose-100'}`}>
-            Filtrar Atrasados ({atrasadosList.length})
-          </button>
-          <button onClick={()=>setQuickFilter(quickFilter === 'no_resueltos' ? 'todos' : 'no_resueltos')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors ${quickFilter === 'no_resueltos' ? 'bg-amber-600 text-white border-amber-600 shadow-xs' : 'bg-slate-50 text-amber-800 border-amber-200 hover:bg-amber-100'}`}>
-            No Resueltos ({noResueltosList.length})
-          </button>
-          <button onClick={()=>setQuickFilter('todos')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors ${quickFilter === 'todos' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
-            Ver Todo
-          </button>
-          <button onClick={()=>setShowConfig(true)} disabled={!configCargada} title={configCargada ? undefined : AVISO_CONFIG_SIN_LEER} className="text-xs text-indigo-600 hover:text-indigo-800 font-bold border border-indigo-200 px-3 py-1.5 rounded-xl hover:bg-indigo-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-            Ajustar Tiempos
-          </button>
-        </div>
-      </div>
-
-      <div className="flex-1 flex flex-col px-6 py-6 max-w-[1600px] mx-auto w-full gap-6">
+      <div className="flex-1 flex flex-col px-4 xl:px-8 py-6 max-w-[1600px] mx-auto w-full min-w-0 gap-6">
 
         {/* HEADER ROW */}
         <PageHeader
           icon={TrendingUp} color="indigo"
           title="HUB Ventas"
-          subtitle="Control Unificado del Ciclo Comercial: Solicitud (SC) → Cotización (COT) → Pedido (PVEN) → Facturación y Despacho"
+          subtitle="Solicitudes, cotizaciones y pedidos de tus clientes en un solo lugar."
           actions={(
             <div className="flex items-center gap-2.5">
               {/* H9: directo a la lista con ?new=1 (abre el formulario y limpia la URL, U9), sin pasar por
@@ -894,7 +1049,7 @@ export default function VentasHub() {
               </Link>
               <button onClick={() => loadData()}
                 className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-semibold text-xs shadow-xs transition-colors">
-                <RefreshCw size={13} className={loading?'animate-spin':''}/> Actualizar
+                <RefreshCw size={13} className={listado.recargando || flujo.cargando || cargandoStats ? 'animate-spin' : ''}/> Actualizar
               </button>
               <button onClick={()=>setShowConfig(true)} disabled={!configCargada} title={configCargada ? undefined : AVISO_CONFIG_SIN_LEER}
                 className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 font-semibold text-xs shadow-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
@@ -903,102 +1058,37 @@ export default function VentasHub() {
             </div>
           )} />
 
-        {/* KPI CARDS */}
-        {activeTab !== 'Analisis' && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {kpiCards.map((k,i)=>{
-              const c=colorMap[k.color]||colorMap.indigo;
-              return (
-                <div key={i} className={`bg-white rounded-2xl p-5 border shadow-xs hover:shadow-md transition-all ${k.ok?'border-slate-200':'border-rose-200 bg-rose-50/20'}`}>
-                  <div className="flex items-center justify-between mb-3">
-                    <div className={`p-2.5 rounded-xl ${c.iconBg} ${c.text}`}>{k.icon}</div>
-                    <Badge tone={k.ok ? 'neutral' : 'danger'}>{k.tipo}</Badge>
-                  </div>
-                  <p className="text-xs font-black text-slate-400 uppercase tracking-wide mb-1">{k.label}</p>
-                  <p className="text-2xl sm:text-3xl font-black text-slate-900 mb-1">{k.value}</p>
-                  <p className={`text-xs font-semibold flex items-center gap-1 ${k.ok?'text-emerald-600':'text-rose-600'}`}>
-                    {k.ok?<CheckCircle2 size={12}/>:<AlertCircle size={12}/>}{k.sub}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* TABS ROW */}
-        <div className="flex flex-wrap items-center justify-between bg-white rounded-2xl border border-slate-200 px-4 py-3 shadow-xs gap-3">
-          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl overflow-x-auto max-w-full">
-            {[
-              { id: 'Todos',             label: 'Todos',                  count: allData.length },
-              { id: 'No_Resueltos',      label: '🚨 No Resueltos',        count: noResueltosList.length, alert: atrasadosList.length > 0 },
-              { id: 'SC',                label: 'Solicitudes (SC)',       count: solicitudes.length },
-              { id: 'Cotizaciones',      label: 'Cotizaciones (COT)',     count: cotizaciones.length },
-              { id: 'Pedidos de Venta',  label: 'Pedidos Venta (PVEN)',   count: pedidos.length },
-              { id: 'Acciones_Tomadas',  label: '✅ Acciones Tomadas',    count: accionesTomadasList.length },
-              { id: 'Analisis',          label: '📊 Análisis Funcional',  count: null },
-            ].map(tab=>(
-              <button key={tab.id} onClick={()=>{setActiveTab(tab.id);setSelectedIds(new Set());}}
-                className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1.5 ${activeTab===tab.id?'bg-indigo-600 text-white shadow-xs':'text-slate-600 hover:bg-white hover:text-slate-900'}`}>
-                <span>{tab.label}</span>
-                {tab.count !== null && (
-                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-black ${activeTab===tab.id?'bg-indigo-500 text-white':tab.alert?'bg-rose-100 text-rose-700':'bg-slate-200 text-slate-700'}`}>
-                    {tab.count}
-                  </span>
-                )}
+        {/* B4 T7: los dos apartados del Hub. «Análisis» es un estado de la página (RP35): nunca va en estado.vista ni
+            se manda vista=analisis; las pestañas de la tabla son las 6 vistas de R6, dentro de la barra. */}
+        <div role="tablist" aria-label="Apartados del Hub de Ventas" onKeyDown={teclaSecciones} className={`${TABS_BAR.group} self-start max-w-full`}>
+          {SECCIONES_HUB.map((s) => {
+            const activa = s.id === seccion;
+            return (
+              <button key={s.id} type="button" role="tab" id={`${idSecciones}-${s.id}`} aria-selected={activa}
+                aria-controls={`${idSecciones}-panel`} tabIndex={activa ? 0 : -1}
+                ref={(el) => { if (el) botonesSeccion.current.set(s.id, el); else botonesSeccion.current.delete(s.id); }}
+                onClick={() => { if (!activa) cambiarSeccion(s.id); }}
+                className={`${activa ? TABS_BAR.tabActive : TABS_BAR.tabInactive} ${FOCO_VISIBLE}`}>
+                {s.etiqueta}
               </button>
-            ))}
-          </div>
-
-          {activeTab!=='Analisis'&&(
-            <div className="flex items-center gap-2">
-              <div className="flex items-center bg-slate-100 rounded-xl p-1 border border-slate-200">
-                <button onClick={()=>setViewMode('lista')} className={`p-1.5 rounded-lg transition-colors ${viewMode==='lista'?'bg-white shadow-xs text-indigo-700 font-bold':'text-slate-500 hover:text-slate-800'}`} title="Vista Lista">
-                  <List size={15}/>
-                </button>
-                <button onClick={()=>setViewMode('kanban')} className={`p-1.5 rounded-lg transition-colors ${viewMode==='kanban'?'bg-white shadow-xs text-indigo-700 font-bold':'text-slate-500 hover:text-slate-800'}`} title="Vista Tablero Kanban">
-                  <LayoutGrid size={15}/>
-                </button>
-              </div>
-            </div>
-          )}
+            );
+          })}
         </div>
 
-        {/* SEARCH + FILTER ROW (only for list views) */}
-        {activeTab !== 'Analisis' && (
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center bg-white border border-slate-200 rounded-xl px-4 py-2.5 shadow-xs gap-2 flex-1 min-w-[280px] max-w-[500px]">
-              <Search size={15} className="text-slate-400 shrink-0"/>
-              <input value={search} onChange={e=>setSearch(e.target.value)}
-                placeholder="Buscar por número, cliente, asesor, producto, estado..."
-                className="text-xs outline-none flex-1 bg-transparent text-slate-800 placeholder-slate-400"/>
-              {search&&<button onClick={()=>setSearch('')}><X size={13} className="text-slate-400 hover:text-slate-600"/></button>}
-            </div>
-
-            <div className="relative">
-              <button onClick={()=>setShowFilters(f=>!f)}
-                className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl border text-xs font-semibold shadow-xs bg-white transition-colors ${filterEstado?'border-indigo-400 text-indigo-700 bg-indigo-50':'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
-                <Filter size={13}/> Estado Específico
-                {filterEstado&&<span className="bg-indigo-600 text-white text-[10px] px-1.5 py-0.5 rounded-full font-black">1</span>}
-              </button>
-              {showFilters&&(
-                <div className="absolute top-full left-0 mt-2 bg-white border border-slate-200 rounded-2xl shadow-2xl p-4 z-20 w-64">
-                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Filtrar por Estado</p>
-                  <select value={filterEstado} onChange={e=>setFilterEstado(e.target.value)}
-                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none mb-3 focus:ring-2 focus:ring-indigo-200 bg-white">
-                    <option value="">Todos los estados</option>
-                    {[...new Set([...ESTADOS_NO_RESOLUCION, ...ESTADOS_ACCION_TOMADA])].map(s=>(
-                      <option key={s} value={s}>{etiquetaEstado('', s)}</option>
-                    ))}
-                  </select>
-                  <button onClick={()=>{setFilterEstado('');setShowFilters(false);}} className="text-xs text-rose-500 hover:text-rose-700 font-bold w-full text-center">Limpiar filtro</button>
-                </div>
-              )}
-            </div>
-
-            <p className="text-xs text-slate-400 font-medium ml-auto">
-              Mostrando <strong className="text-slate-700">{filteredData.length}</strong> documentos
-            </p>
-          </div>
+        {/* B4 T7 (KPI-ventas, R6, R7, RP68, RP70): dinero y avance de /ventas/stats?periodo=30d, no pulsables (no
+            equivalen a una vista); los conteos por paso viven solo en el diagrama (C6). Mientras cargan, barras grises;
+            si /ventas/stats falla, «—». No se ven en Análisis (allí van sus propios indicadores). */}
+        {!enAnalisis && (
+          <FranjaKpis estado={estadoKpis} titulo="Dinero y avance">
+            <TarjetaKpi kpi="vendido_periodo" valor={datosStats?.flujo?.vendido_cop?.actual ?? null}
+              variacion={variacionDe(datosStats?.flujo?.vendido_cop)} />
+            <TarjetaKpi kpi="pven_saldo_por_cobrar" valor={datosStats?.kpis?.pven_saldo_por_cobrar ?? null}
+              variacion={{ actual: datosStats?.kpis?.pven_saldo_por_cobrar ?? null, anterior: null, es_foto: true }} />
+            <TarjetaKpi kpi="ticket_promedio" valor={datosStats?.flujo?.ticket_promedio_cop?.actual ?? null}
+              variacion={variacionDe(datosStats?.flujo?.ticket_promedio_cop)} />
+            <TarjetaKpi kpi="cot_conversion" valor={datosStats?.flujo?.cot_conversion_pct?.actual ?? null}
+              variacion={variacionDe(datosStats?.flujo?.cot_conversion_pct)} />
+          </FranjaKpis>
         )}
 
         {/* N3/N5: lo que no se pudo cancelar o actualizar (mensaje del servidor), los avisos y los pedidos omitidos;
@@ -1018,411 +1108,122 @@ export default function VentasHub() {
           </div>
         )}
 
-        {/* ── LOADING ── */}
-        {loading && activeTab !== 'Analisis' ? (
-          <div className="flex-1 flex items-center justify-center py-20 bg-white rounded-2xl border border-slate-200">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600 mx-auto mb-3"/>
-              <p className="text-xs text-slate-400 font-medium">Cargando pipeline comercial de Nebulae...</p>
-            </div>
-          </div>
-
-        /* ── ANALYTICS TAB ── */
-        ) : activeTab === 'Analisis' ? (
-          <div className="flex flex-col gap-6">
-            {/* Range and controls */}
-            <div className="flex flex-wrap gap-2 items-center bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-              <span className="text-xs font-black text-slate-400 uppercase mr-2 flex items-center gap-1"><Calendar size={13}/> Periodo:</span>
-              {[
-                {k:'7d',l:'Últimos 7 días'},
-                {k:'30d',l:'Último mes (30d)'},
-                {k:'90d',l:'Trimestre (90d)'},
-                {k:'180d',l:'Semestre'},
-                {k:'1y',l:'Año Completo'}
-              ].map(({k,l})=>(
-                <button key={k} onClick={()=>setAnalyticsRange(k)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${analyticsRange===k?'bg-indigo-600 text-white shadow-xs':'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{l}</button>
-              ))}
-              <div className="h-6 w-px bg-slate-200 mx-1 hidden sm:block"/>
-              <input type="text" placeholder="Filtrar por producto (ej. Cuna, Coche)..." value={analyticsProduct} onChange={e=>setAnalyticsProduct(e.target.value)}
-                className="border border-slate-200 rounded-xl px-3 py-1.5 text-xs outline-none focus:ring-2 focus:ring-indigo-200 bg-white"/>
-              <select value={analyticsTopN} onChange={e=>setAnalyticsTopN(e.target.value)} className="border border-slate-200 rounded-xl px-3 py-1.5 text-xs outline-none bg-white">
-                <option value="5">Top 5 Clientes</option>
-                <option value="10">Top 10 Clientes</option>
-                <option value="25">Top 25 Clientes</option>
-              </select>
-              <button onClick={loadAnalytics} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 ml-auto shadow-xs">
-                <RefreshCw size={12}/> Recalcular
-              </button>
-            </div>
-
-            {/* Core Metrics */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {[
-                { label:'Total Ventas Facturadas', value:fCOP(analytics?.total_revenue || analytics?.total_ventas || totalFacturadoCOP), desc:'Recaudo acumulado en el periodo', color:'text-emerald-700', bg:'bg-emerald-50' },
-                { label:'Ticket Promedio de Venta', value:fCOP(analytics?.avg_ticket || analytics?.ticket_promedio || 450000), desc:'Valor promedio por orden', color:'text-indigo-700', bg:'bg-indigo-50' },
-                { label:'Tasa Conversión SC → COT', value:`${analytics?.conv_sc_cot_pct || analytics?.conv_sc_cot || 65}%`, desc:'Solicitudes formalizadas a cotización', color:'text-sky-700', bg:'bg-sky-50' },
-                { label:'Tasa Conversión COT → PVEN', value:`${analytics?.conv_cot_ven_pct || analytics?.conv_cot_ven || 48}%`, desc:'Cotizaciones aprobadas a compra', color:'text-purple-700', bg:'bg-purple-50' },
-              ].map((k,i)=>(
-                <div key={i} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-1">
-                  <div className="flex items-center justify-between">
-                    <p className="text-slate-400 text-xs font-black uppercase tracking-wider">{k.label}</p>
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${k.bg} ${k.color}`}>KPI</span>
-                  </div>
-                  <p className="text-2xl font-black text-slate-900">{k.value}</p>
-                  <p className="text-[11px] text-slate-400">{k.desc}</p>
-                </div>
-              ))}
-            </div>
-
-            {/* Daily Trends & Top Customers */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-black text-slate-800 text-sm flex items-center gap-2"><TrendingUp size={16} className="text-indigo-600"/> Curva de Ventas en el Tiempo</h3>
-                  <span className="text-xs text-slate-400">Total en COP</span>
-                </div>
-                <div className="flex flex-col gap-2.5 h-64 overflow-y-auto pr-2">
-                  {(analytics?.revenue_by_day || analytics?.ventas_por_dia || []).map((d:any,i:number)=>{
-                    const list = analytics?.revenue_by_day || analytics?.ventas_por_dia || [];
-                    const max = Math.max(...list.map((x:any)=>Number(x.total)||0), 1);
-                    return (
-                      <div key={i} className="flex items-center gap-3">
-                        <div className="w-24 text-xs font-mono text-slate-500 shrink-0">{d.date || d.fecha}</div>
-                        <div className="flex-1 bg-slate-100 rounded-full h-4 overflow-hidden">
-                          <div className="bg-gradient-to-r from-indigo-500 to-indigo-600 h-full rounded-full transition-all duration-500" style={{width:`${Math.min(100, ((Number(d.total)||0)/max)*100)}%`}}/>
-                        </div>
-                        <div className="w-28 text-right text-xs font-bold text-slate-800">{fCOP(d.total)}</div>
-                      </div>
-                    );
-                  })}
-                  {!(analytics?.revenue_by_day?.length || analytics?.ventas_por_dia?.length)&&(
-                    <div className="text-slate-400 text-xs text-center py-16">
-                      <BarChart3 size={32} className="mx-auto mb-2 opacity-20"/>
-                      Sin ventas registradas en este rango. Haz clic en "Recalcular".
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-black text-slate-800 text-sm flex items-center gap-2">🏆 Top Clientes Frecuentes</h3>
-                  <div className="flex gap-1.5">
-                    <span className="text-[10px] bg-amber-50 border border-amber-200 text-amber-800 px-2 py-0.5 rounded-md font-bold">&gt;$500k</span>
-                    <span className="text-[10px] bg-emerald-50 border border-emerald-200 text-emerald-700 px-2 py-0.5 rounded-md font-bold">&gt;$1M</span>
-                  </div>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-slate-100 text-left text-slate-400 font-black uppercase">
-                        <th className="pb-2">#</th>
-                        <th className="pb-2">Cliente</th>
-                        <th className="pb-2 text-right">Compras Acumuladas</th>
-                        <th className="pb-2 text-right">Segmento</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-50">
-                      {(analytics?.top_clients || analytics?.top_clientes || []).map((c:any,i:number)=>(
-                        <tr key={i} className="hover:bg-slate-50">
-                          <td className="py-2.5 text-slate-400 font-bold">{i+1}</td>
-                          <td className="py-2.5 font-bold text-slate-800">{c.name || c.nombre}</td>
-                          <td className="py-2.5 text-right font-bold text-slate-900">{fCOP(c.total)}</td>
-                          <td className="py-2.5 text-right">
-                            {Number(c.total)>=1000000?(
-                              <span className="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold text-[10px]">VIP &gt; $1M</span>
-                            ):Number(c.total)>=500000?(
-                              <span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-bold text-[10px]">Frecuente</span>
-                            ):(
-                              <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium text-[10px]">Estándar</span>
-                            )}
-                          </td>
-                        </tr>
+        {/* B4 T7: el apartado elegido. Documentos: la barra y la tabla estándar (TABLA-hub-ventas) o el tablero en modo
+            servidor (KANBAN-hub-ventas), con el MISMO estado (pestaña, búsqueda, estados, semáforo y paso). Análisis: la
+            pestaña estándar (ANALISIS-ventas). */}
+        <div role="tabpanel" id={`${idSecciones}-panel`} aria-labelledby={`${idSecciones}-${seccion}`} className="flex min-w-0 flex-col gap-4">
+          {enAnalisis ? (
+            /* ANALISIS-ventas punto 3 (R2, R13, RP6, RP68, RP69, D45): /ventas/analisis con el selector Todo /
+               Solicitudes / Cotizaciones / Pedidos; el ?foco= de «Ver análisis» gana hasta que el usuario elige otro y la
+               URL se mantiene al día. El Copilot es la tarjeta «En construcción» del panel (R2): no llama a ningún chat. */
+            <PanelAnalisisPerezoso
+              modulo="ventas"
+              endpoint="/ventas/analisis"
+              acento="indigo"
+              focos={FOCOS_VENTAS}
+              focoInicial={enlace.foco}
+              alCambiarFoco={(foco) => router.replace(`${RUTA_HUB_VENTAS}?tab=analisis&foco=${foco}`)}
+              mejorLinea="sube"
+              busquedaProducto
+              asistente={ASISTENTE_VENTAS}
+            />
+          ) : (
+            <>
+              {capa}
+              <section ref={refTarjeta} className={claseTarjeta}>
+                <BarraTabla
+                  estado={estado}
+                  onEstado={alEstadoBarra}
+                  pestanas={pestanas}
+                  estadoConteos={estadoConteos}
+                  placeholder="Buscar por número, cliente, asesor o producto…"
+                  opcionesEstados={opcionesEstadosHub}
+                  filtros={chipsFiltro.length > 0 || textoOrden ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      {/* clic_en_hub (R6): el filtro del paso o del semáforo con su chip para quitarlo. */}
+                      {chipsFiltro.map((c) => (
+                        <button key={c.campo} type="button" onClick={() => despachar({ tipo: c.campo, valor: null })}
+                          aria-label={`Quitar el filtro «${c.texto}»`} title={`Quitar el filtro «${c.texto}»`}
+                          className={`inline-flex items-center gap-1 rounded-xl border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs font-bold text-indigo-700 hover:bg-indigo-100 ${FOCO_VISIBLE}`}>
+                          {c.texto}
+                          <X size={12} aria-hidden="true"/>
+                        </button>
                       ))}
-                      {!(analytics?.top_clients?.length || analytics?.top_clientes?.length)&&(
-                        <tr><td colSpan={4} className="text-center py-10 text-slate-400 text-xs">Sin registros de clientes en este período</td></tr>
+                      {/* orden_clic_columna (R6): ordenada por una columna, el chip vuelve al orden del semáforo. */}
+                      {textoOrden && (
+                        <span className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-600">
+                          {textoOrden}
+                          <span aria-hidden="true">·</span>
+                          <button type="button" onClick={() => despachar({ tipo: 'orden', valor: 'atencion' })}
+                            className={`rounded font-bold text-indigo-700 hover:underline ${FOCO_VISIBLE}`}>
+                            Atención primero
+                          </button>
+                        </span>
                       )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-
-            {/* AI Sales Copilot */}
-            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-              <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-indigo-50 text-indigo-600"><MessageSquare size={18}/></div>
-                <div>
-                  <h3 className="font-black text-slate-800 text-sm">Copilot de Ventas & Inteligencia Comercial</h3>
-                  <p className="text-xs text-slate-400">Consulta en lenguaje natural sobre pedidos pendientes, retención de clientes o artículos para bebés.</p>
-                </div>
-              </div>
-
-              {/* Sample prompt chips */}
-              <div className="flex flex-wrap gap-2">
-                {[
-                  '¿Qué pedidos están en estado PENDIENTE_COMPRA?',
-                  '¿Cuál es el cliente con mayor volumen este mes?',
-                  '¿Cuáles son las cotizaciones a punto de vencer?',
-                  'Sugerencia de seguimiento comercial para clientes inactivos'
-                ].map((s, idx)=>(
-                  <button key={idx} onClick={()=>{setAiQuestion(s);}} className="text-[11px] bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 text-slate-600 px-3 py-1 rounded-full font-medium transition-colors">
-                    💡 {s}
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex gap-2">
-                <input value={aiQuestion} onChange={e=>setAiQuestion(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleAskAI()}
-                  placeholder="Ej: ¿Qué pedidos tienen más de 3 días sin gestionar? ¿Qué referencias están pendientes?"
-                  className="flex-1 border border-slate-200 rounded-xl px-4 py-2.5 text-xs outline-none focus:ring-2 focus:ring-indigo-200 bg-white"/>
-                <button onClick={handleAskAI} disabled={aiLoading}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 disabled:opacity-50 transition-colors shadow-xs">
-                  {aiLoading?<RefreshCw size={13} className="animate-spin"/>:<Send size={13}/>} Consultar Copilot
-                </button>
-              </div>
-              {aiLoading&&<div className="text-slate-400 animate-pulse text-xs font-medium">Analizando pipeline comercial de Nebulae...</div>}
-              {aiResponse&&(
-                <div className="bg-indigo-50/60 border border-indigo-100 p-4 rounded-xl text-slate-700 text-xs whitespace-pre-wrap leading-relaxed">
-                  <div className="font-bold text-indigo-900 mb-1 flex items-center gap-1.5"><Zap size={13} className="text-indigo-600"/> Diagnóstico del Asistente Comercial:</div>
-                  {aiResponse}
-                </div>
-              )}
-            </div>
-          </div>
-
-        /* ── LISTA VIEW ── */
-        ) : viewMode === 'lista' ? (
-          <div className="bg-white rounded-2xl shadow-xs border border-slate-200 overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 border-b border-slate-200">
-                  <tr>
-                    <th className="px-4 py-3.5 w-8">
-                      <input type="checkbox" className="rounded border-slate-300"
-                        onChange={e=>{if(e.target.checked)setSelectedIds(new Set(filteredData.map((d:any)=>`${d.tipo}|${d.id}`)));else setSelectedIds(new Set());}}
-                        checked={selectedIds.size===filteredData.length&&filteredData.length>0}/>
-                    </th>
-                    <th className="px-3 py-3.5 text-[11px] font-black text-slate-400 uppercase tracking-wide">Tipo</th>
-                    <th className="px-3 py-3.5 text-[11px] font-black text-slate-400 uppercase tracking-wide">Resolución</th>
-                    <th className="px-3 py-3.5 text-[11px] font-black text-slate-400 uppercase tracking-wide">Número</th>
-                    <th className="px-4 py-3.5 text-[11px] font-black text-slate-400 uppercase tracking-wide">Cliente</th>
-                    <th className="px-3 py-3.5 text-[11px] font-black text-slate-400 uppercase tracking-wide">Asesor</th>
-                    <th className="px-3 py-3.5 text-[11px] font-black text-slate-400 uppercase tracking-wide">Antigüedad</th>
-                    <th className="px-3 py-3.5 text-[11px] font-black text-slate-400 uppercase tracking-wide">Estado</th>
-                    <th className="px-4 py-3.5 text-[11px] font-black text-slate-400 uppercase tracking-wide text-right">Monto COP</th>
-                    <th className="px-3 py-3.5 text-[11px] font-black text-slate-400 uppercase tracking-wide text-center">Próxima Acción</th>
-                    <th className="px-3 py-3.5 text-[11px] font-black text-slate-400 uppercase tracking-wide text-center">Chatter</th>
-                    <th className="px-3 py-3.5 w-8"/>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filteredData.length===0&&(
-                    <tr><td colSpan={12} className="text-center py-16 text-slate-400">
-                      <Activity size={32} className="mx-auto mb-3 opacity-30"/>
-                      <p className="font-semibold text-slate-600">{search?`Sin resultados para "${search}"`:loading?'Cargando...':'Sin registros en esta vista'}</p>
-                      <p className="text-[11px] text-slate-400 mt-1">Prueba cambiando los filtros o agregando una nueva solicitud.</p>
-                    </td></tr>
-                  )}
-                  {filteredData.map((row:any,idx:number)=>{
-                    const idStr = `${row.tipo}|${row.id}`;
-                    const isNoRes = isDocNoResolucion(row);
-                    const isAtras = isDocAtrasado(row);
-                    // El badge "No Resuelto (+Nd)" usa el mismo número que la alerta (días sin movimiento);
-                    // la columna Antigüedad, los días desde que se creó (R5).
-                    const dDiff = daysDiff(row.updated_at || row.created_at);
-                    const dEdad = diasDesde(row.created_at);
-                    const urlWhatsApp = waUrl(row.customer_phone);
-                    const noCancelable = motivoNoCancelable(row);
-
-                    return (
-                      <tr key={idx}
-                        className={`hover:bg-indigo-50/30 cursor-pointer group transition-colors ${isAtras ? 'bg-rose-50/30 border-l-4 border-l-rose-500' : isNoRes ? 'bg-amber-50/20' : ''}`}
-                        onClick={e=>{
-                          if((e.target as any).closest('input')||(e.target as any).closest('button')) return;
-                          openDocDetail(row);
-                        }}>
-                        <td className="px-4 py-3">
-                          <input type="checkbox" className="rounded border-slate-300" checked={selectedIds.has(idStr)}
-                            onChange={e=>{const n=new Set(selectedIds);if(e.target.checked)n.add(idStr);else n.delete(idStr);setSelectedIds(n);}}/>
-                        </td>
-                        <td className="px-3 py-3">
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${getTipoClass(row.tipo)}`}>
-                            {row.tipo}
-                          </span>
-                        </td>
-                        <td className="px-3 py-3">
-                          {isAtras ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700 border border-rose-200">
-                              <AlertTriangle size={10} className="text-rose-600"/> No Resuelto (+{dDiff}d)
-                            </span>
-                          ) : isNoRes ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
-                              <Clock size={10} className="text-amber-600"/> En Espera
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                              <Check size={10} className="text-emerald-600"/> Acción Tomada
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-3 py-3 font-bold text-slate-900">{row.numero}</td>
-                        <td className="px-4 py-3">
-                          <p className="font-bold text-slate-800 leading-tight">{row.customer_name || row.cliente?.nombre || 'Cliente General'}</p>
-                          {row.customer_phone && <p className="text-[10px] text-slate-400 font-mono mt-0.5">{row.customer_phone}</p>}
-                        </td>
-                        <td className="px-3 py-3 text-slate-500 text-[11px]">{row.advisor_name || row.cotizador || row.asesor?.nombre || <span className="italic text-slate-400">Sin asignar</span>}</td>
-                        <td className="px-3 py-3 text-[11px]">
-                          <span className={`font-medium ${isAtras ? 'text-rose-600 font-bold' : 'text-slate-500'}`}>
-                            {textoAntiguedad(dEdad)}
-                          </span>
-                        </td>
-                        <td className="px-3 py-3">
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${getEstadoClass(row.estado)}`}>
-                            {etiquetaEstado(row.tipo, row.estado)}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-right font-black text-slate-900">
-                          {fCOP(row.total_cop || row.total || row.monto || 0)}
-                        </td>
-                        
-                        {/* Accion sugerida segun el tipo y estado */}
-                        <td className="px-3 py-3 text-center">
-                          {row.tipo === 'SC' ? (() => {
-                            // H3: el paso que de verdad toca, directo a la pantalla correcta.
-                            const acc = accionSiguienteSC(row, {cotizaciones: cotsPorSC.get(row.id) || [], pedidos: pedsPorSC.get(row.id) || []});
-                            return acc ? (
-                              <button onClick={e=>{e.stopPropagation();router.push(acc.href);}}
-                                className={`px-2.5 py-1 font-bold text-[10px] rounded-lg border transition-colors ${TONO_ACCION[acc.tono] || TONO_ACCION.slate}`}>
-                                {acc.label}
-                              </button>
-                            ) : <span className="text-[10px] text-slate-400 font-medium">—</span>;
-                          })() : row.tipo === 'COT' && row.estado !== 'CONFIRMADA' && row.estado !== 'RECHAZADA' ? (
-                            <button onClick={e=>{e.stopPropagation();router.push(desdeElHub(`/dashboard/ventas/cotizacion/${row.id}`));}}
-                              className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold text-[10px] rounded-lg border border-amber-200 transition-colors">
-                              Aprobar Venta →
-                            </button>
-                          ) : row.tipo === 'VEN' && row.estado === 'LISTO_ENTREGA' ? (
-                            <button onClick={e=>{e.stopPropagation();openDocDetail(row);}}
-                              className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-teal-800 font-bold text-[10px] rounded-lg border border-teal-200 transition-colors">
-                              Despachar
-                            </button>
-                          ) : (
-                            <span className="text-[10px] text-slate-400 font-medium">Al día</span>
-                          )}
-                        </td>
-
-                        <td className="px-3 py-3 text-center">
-                          <button onClick={e=>{e.stopPropagation();setActRow(row);}}
-                            className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors" title="Notas y actividad">
-                            <Activity size={14}/>
-                          </button>
-                        </td>
-
-                        <td className="px-3 py-3 relative group/m">
-                          <button className="text-slate-400 hover:text-slate-700 transition-colors"><MoreHorizontal size={16}/></button>
-                          <div className="absolute right-6 top-2 bg-white shadow-2xl rounded-xl border border-slate-100 py-1.5 w-48 invisible group-hover/m:visible z-20 text-left">
-                            <button className="w-full px-3 py-1.5 hover:bg-indigo-50 text-xs font-semibold flex items-center gap-2 text-indigo-700"
-                              onClick={e=>{e.stopPropagation();openDocDetail(row);}}>
-                              <ExternalLink size={12}/> Ver Detalle Completo
-                            </button>
-                            <button className="w-full px-3 py-1.5 hover:bg-slate-50 text-xs font-medium flex items-center gap-2 text-slate-700"
-                              onClick={e=>{e.stopPropagation();setActRow(row);}}>
-                              <Activity size={12}/> Ver Historial & Chatter
-                            </button>
-                            {urlWhatsApp && (
-                              <a href={urlWhatsApp} target="_blank" rel="noreferrer"
-                                className="w-full px-3 py-1.5 hover:bg-emerald-50 text-xs font-medium flex items-center gap-2 text-emerald-700"
-                                onClick={e=>e.stopPropagation()}>
-                                <MessageCircle size={12}/> Abrir WhatsApp
-                              </a>
-                            )}
-                            {!noCancelable && (
-                              <>
-                                <div className="border-t border-slate-100 my-1"/>
-                                <button className="w-full px-3 py-1.5 hover:bg-rose-50 text-xs font-medium text-rose-600 flex items-center gap-2"
-                                  onClick={e=>{e.stopPropagation();abrirCancelacion([idStr]);}}>
-                                  <Trash2 size={12}/> Cancelar documento
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    );
+                    </div>
+                  ) : undefined}
+                  ajustes={{ columnas: COLUMNAS_TABLA_HUB, preferencias: prefs, anchoRef: anchoTablaRef }}
+                  kanbanDisponible
+                  pantallaCompleta={estado.modo === 'lista' ? { completa, alternar } : undefined}
+                  total={listado.total}
+                  estadoTotal={estadoDelTotal({
+                    total: listado.total, cargando: listado.cargandoInicial, recargando: listado.recargando, error: listado.error,
                   })}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="px-5 py-3 border-t border-slate-100 text-xs text-slate-500 font-medium flex flex-wrap items-center justify-between gap-2 bg-slate-50/50">
-              <span>Mostrando {filteredData.length} de {allData.length} registros del Hub Comercial</span>
-              {selectedIds.size>0&&(
-                <span className="text-indigo-700 font-bold bg-indigo-50 px-2.5 py-1 rounded-full border border-indigo-200">
-                  {selectedIds.size} seleccionados
-                </span>
+                />
+                {estado.modo === 'lista' && (
+                  <AccionesFila.Provider value={accionesFila}>
+                    <TablaEstandar
+                      id={ID_HUB}
+                      modo="servidor"
+                      columnas={COLUMNAS_TABLA_HUB}
+                      preferencias={prefs}
+                      anchoRef={anchoTablaRef}
+                      estado={estado}
+                      onEstado={despachar}
+                      filas={listado.filas}
+                      total={listado.total}
+                      cargando={listado.cargandoInicial}
+                      recargando={listado.recargando}
+                      error={listado.error}
+                      onReintentar={listado.recargar}
+                      aviso={listado.avisoOrden}
+                      claveFila={claveDeFila}
+                      onFila={openDocDetail}
+                      claseFila={claseDeFila}
+                      grupoFila={atencion ? grupoDeFila : undefined}
+                      tituloGrupo={tituloDeGrupo}
+                      seleccion={seleccion}
+                      onSeleccion={alSeleccionar}
+                      vacio={(
+                        <div>
+                          <p className="font-semibold text-slate-600">{estado.q.trim() ? `Sin resultados para «${estado.q.trim()}»` : 'No hay documentos en esta vista'}</p>
+                          <p className="mt-1 text-xs text-slate-400">Prueba cambiando los filtros o agregando una nueva solicitud.</p>
+                        </div>
+                      )}
+                      etiqueta="Documentos del Hub de Ventas"
+                    />
+                  </AccionesFila.Provider>
+                )}
+              </section>
+              {estado.modo === 'kanban' && (
+                <TableroKanban
+                  tablero={tablero}
+                  regla={reglaHub}
+                  tarjetaDe={tarjetaDeFila}
+                  onAbrir={openDocDetail}
+                  onCambio={cambiarDesdeTablero}
+                  onAccion={accionDesdeTablero}
+                  accionesTarjeta={accionesTarjeta}
+                  resumenColumna={resumenColumna}
+                  color="indigo"
+                />
               )}
-            </div>
-          </div>
+            </>
+          )}
+        </div>
 
-        /* ── KANBAN VIEW ── */
-        ) : (
-          <div className="flex-1 flex gap-4 overflow-x-auto pb-4 custom-scrollbar">
-            {['No Resuelto','En Gestión','Acción Tomada','Cancelado'].map(col=>(
-              <div key={col} className="w-80 shrink-0 flex flex-col bg-white border border-slate-200 rounded-2xl shadow-xs"
-                onDragOver={e=>e.preventDefault()} onDrop={e=>handleDrop(e,col)}>
-                <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/60 rounded-t-2xl">
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-black text-slate-800 text-xs uppercase tracking-wide">{col}</h3>
-                    {col === 'No Resuelto' && atrasadosList.length > 0 && (
-                      <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping"/>
-                    )}
-                  </div>
-                  <span className="bg-slate-200/80 text-slate-700 text-[10px] font-black px-2 py-0.5 rounded-full">
-                    {filteredData.filter(d=>getKanbanCol(d)===col).length}
-                  </span>
-                </div>
-                <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2.5 min-h-[300px]">
-                  {filteredData.filter(d=>getKanbanCol(d)===col).map((row:any,i:number)=>{
-                    const isAtras = isDocAtrasado(row);
-                    const dEdad = diasDesde(row.created_at); // R5: días desde que se creó
-
-                    return (
-                      <div key={i} draggable onDragStart={e=>handleDragStart(e,`${row.tipo}|${row.id}`)} onClick={()=>openDocDetail(row)}
-                        className={`bg-white p-4 rounded-xl shadow-xs border cursor-grab active:cursor-grabbing hover:border-indigo-300 transition-all group ${isAtras?'border-rose-300 bg-rose-50/30':'border-slate-200'}`}>
-                        <div className="flex justify-between items-start mb-2">
-                          <span className="font-bold text-slate-900 text-xs">{row.numero}</span>
-                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-black border ${getTipoClass(row.tipo)}`}>{row.tipo}</span>
-                        </div>
-                        <p className="text-xs font-bold text-slate-700 mb-1 truncate">{row.customer_name || row.cliente?.nombre || 'Cliente Nebulae'}</p>
-                        <div className="flex items-center justify-between text-[10px] text-slate-400 mb-2">
-                          <span>{fDate(row.created_at)}</span>
-                          <span className={`font-semibold ${isAtras ? 'text-rose-600 font-bold' : ''}`}>
-                            {textoAntiguedad(dEdad)}
-                          </span>
-                        </div>
-                        <div className="flex justify-between items-center pt-2 border-t border-slate-100">
-                          <span className="font-black text-xs text-indigo-700">{fCOP(row.total_cop||row.total||0)}</span>
-                          <button onClick={e=>{e.stopPropagation();setActRow(row);}}
-                            className="opacity-0 group-hover:opacity-100 flex items-center gap-1 px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-md text-[10px] font-bold border border-indigo-200 transition-opacity">
-                            <Activity size={10}/> Actividad
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {filteredData.filter(d=>getKanbanCol(d)===col).length===0&&(
-                    <p className="text-center text-xs text-slate-300 font-medium py-12">Sin documentos aquí</p>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Bulk action bar */}
-        {selectedIds.size>0&&(
+        {/* Bulk action bar (N3 y N5): la selección es de la página de la tabla, así que solo en Lista. */}
+        {selectedIds.size>0 && !enAnalisis && estado.modo === 'lista' && (
           <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-6 py-3.5 rounded-2xl shadow-2xl flex items-center gap-4 z-40 border border-slate-700">
             <span className="font-bold text-xs bg-slate-800 px-3 py-1 rounded-full border border-slate-700">{selectedIds.size} seleccionados</span>
             {(() => {
@@ -1455,7 +1256,7 @@ export default function VentasHub() {
         {quickDetailDoc&&(
           <>
             <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-40" onClick={()=>setQuickDetailDoc(null)}/>
-            <div className="fixed top-0 bottom-0 right-0 z-50 bg-white shadow-2xl flex flex-col w-[600px] border-l border-slate-200">
+            <div className="fixed top-0 bottom-0 right-0 z-50 bg-white shadow-2xl flex flex-col w-[600px] max-w-full border-l border-slate-200">
               <div className="flex items-center justify-between px-6 py-5 border-b border-slate-100 bg-slate-50">
                 <div className="flex items-center gap-3">
                   <span className={`px-2.5 py-1 rounded-full text-xs font-black border ${getTipoClass(quickDetailDoc.tipo)}`}>
@@ -1472,33 +1273,11 @@ export default function VentasHub() {
               </div>
 
               <div className="flex-1 overflow-y-auto p-6 space-y-6">
-                {/* Progreso del Flujo -- linea temporal compacta SC -> COT -> PVEN */}
-                {(() => {
-                  const pipelineStep = quickDetailDoc.tipo === 'VEN' ? 2
-                    : quickDetailDoc.tipo === 'COT' ? (pedidoVigente(quickDetailDoc) ? 2 : 1) // COT-LISTA: un pedido cancelado no cuenta
-                    : ((quickDetailDoc.cotizaciones || []).some((c: any) => c.estado === 'CONFIRMADA') ? 2 : (quickDetailDoc.cotizaciones || []).length > 0 ? 1 : 0);
-                  return (
-                    <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs">
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide mb-3">Progreso del Flujo</p>
-                      <div className="flex items-center">
-                        <div className="flex flex-col items-center gap-1">
-                          <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black ${pipelineStep > 0 ? 'bg-emerald-500 text-white' : 'bg-indigo-600 text-white'}`}>{pipelineStep > 0 ? '✓' : '1'}</div>
-                          <span className="text-[9px] font-bold text-slate-700">Solicitud</span>
-                        </div>
-                        <div className={`flex-1 h-0.5 mx-1 ${pipelineStep >= 1 ? 'bg-emerald-400' : 'bg-slate-100'}`} />
-                        <div className="flex flex-col items-center gap-1">
-                          <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black ${pipelineStep > 1 ? 'bg-emerald-500 text-white' : pipelineStep === 1 ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-400'}`}>{pipelineStep > 1 ? '✓' : '2'}</div>
-                          <span className={`text-[9px] font-bold ${pipelineStep >= 1 ? 'text-slate-700' : 'text-slate-300'}`}>Cotización</span>
-                        </div>
-                        <div className={`flex-1 h-0.5 mx-1 ${pipelineStep >= 2 ? 'bg-emerald-400' : 'bg-slate-100'}`} />
-                        <div className="flex flex-col items-center gap-1">
-                          <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black ${pipelineStep === 2 ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-400'}`}>3</div>
-                          <span className={`text-[9px] font-bold ${pipelineStep >= 2 ? 'text-slate-700' : 'text-slate-300'}`}>Pedido de Venta</span>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })()}
+                {/* B4 T7 (FLUJO-documentos punto 6; RP74, D36, D42): la cadena de documentos, compacta (solo los números;
+                    las cajas caídas conservan su palabra). Las etiquetas salen de las tablas únicas de cada tipo (RP4). */}
+                <div className="min-w-0 bg-white rounded-2xl p-4 border border-slate-200 shadow-xs">
+                  <CadenaDocumentos doc={quickDetailDoc} tipo={quickDetailDoc.tipo} compacta/>
+                </div>
 
                 {/* Que se esta pidiendo -- tipo de solicitud + notas, solo aplica a SC */}
                 {quickDetailDoc.tipo === 'SC' && (quickDetailDoc.tipo_solicitud || quickDetailDoc.notas) && (
@@ -1663,7 +1442,7 @@ export default function VentasHub() {
                   <span className="font-bold">{row?.numero || idStr}</span>
                   <span className={motivo ? '' : 'text-slate-500'}>· {getTipoLabel(row?.tipo || idStr.split('|')[0])}</span>
                 </div>
-                <p className="mt-0.5">{motivo ? `Se omite: ${motivo}.` : EFECTO_CANCELACION[row.tipo]}</p>
+                <p className="mt-0.5">{motivo ? `Se omite: ${motivo}.` : EFECTO_CANCELACION[row?.tipo ?? '']}</p>
               </li>
             ))}
           </ul>

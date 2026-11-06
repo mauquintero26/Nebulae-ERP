@@ -520,6 +520,53 @@ export function tituloGrupo(grupo, n) {
   return `${etiqueta} · ${Number.isFinite(cuantos) && cuantos > 0 ? Math.floor(cuantos) : 0}`;
 }
 
+// ─── B4 T7: lo que el Hub (ventas/page.tsx) lee de sus filas y de su orden ──────
+
+/**
+ * RP36: los ids de las SC con una cotización activa (esCotizacionActiva: VENCIDA cuenta, choque H3), sacados de las
+ * filas que el Hub tiene cargadas (la página de la tabla y las tarjetas del tablero de GET /ventas/hub/documentos, que
+ * traen su lista ligera `cotizaciones`). Es el scConCot de reglaSoltarHub y columnaHub. Solo cuentan las filas SC (los
+ * ids de SC, COT y PVEN coinciden). Lo que no es un arreglo da un Set vacío. No muta las filas.
+ * @param {ReadonlyArray<any> | null | undefined} filas
+ * @returns {Set<number>}
+ */
+export function scConCotDeFilas(filas) {
+  const ids = new Set();
+  if (!Array.isArray(filas)) return ids;
+  for (const fila of filas) {
+    if (fila?.tipo !== 'SC' || !Array.isArray(fila.cotizaciones)) continue;
+    if (fila.cotizaciones.some((c) => c && esCotizacionActiva(c.estado))) ids.add(fila.id);
+  }
+  return ids;
+}
+
+/**
+ * La tabla del Hub va en el orden del semáforo («Atención primero», R6 y R8): sin orden (el que deja alternarOrden al
+ * tercer clic) o con 'atencion'. Con él se ven los separadores y no el chip del orden.
+ * @param {string | null | undefined} orden
+ * @returns {boolean}
+ */
+export function ordenEsAtencion(orden) {
+  return orden === null || orden === undefined || orden === '' || orden === 'atencion';
+}
+
+/**
+ * El chip del orden de la tabla del Hub (R6, orden_clic_columna): 'Orden: Monto ↓' (descendente, con '-') u
+ * 'Orden: Monto ↑'; junto a él va el botón «Atención primero». Con el orden de atención, null (no hay chip). `titulos`
+ * es {campo: título de la columna}; un campo sin título sale humanizado (nunca el código crudo).
+ * @param {string | null | undefined} orden
+ * @param {Readonly<Record<string, string>>} [titulos]
+ * @returns {string | null}
+ */
+export function textoOrdenHub(orden, titulos = {}) {
+  if (ordenEsAtencion(orden) || typeof orden !== 'string') return null;
+  const desc = orden.startsWith('-');
+  const campo = desc ? orden.slice(1) : orden;
+  const propio = titulos && tiene(titulos, campo) && typeof titulos[campo] === 'string' && titulos[campo].trim()
+    ? titulos[campo].trim() : humanizarCodigo(campo);
+  return `Orden: ${propio} ${desc ? '↓' : '↑'}`;
+}
+
 const masReciente = (lista) => [...lista].sort((a, b) => Number(b?.id || 0) - Number(a?.id || 0))[0];
 
 /** La ruta del Hub de Ventas: a donde vuelve un detalle abierto desde aqui. */
@@ -568,52 +615,6 @@ export function desdeElHub(ruta) {
  */
 function conRegresoA(ruta, returnTo) {
   return `${ruta}?return_to=${encodeURIComponent(returnTo || RUTA_HUB_VENTAS)}`;
-}
-
-/** Textos del aviso de fusionarCargaHub (uno solo por recarga). */
-export const AVISOS_CARGA_HUB = Object.freeze({
-  sinPrevios: 'No se pudieron cargar las listas. Pulsa Actualizar para intentarlo de nuevo.',
-  conPrevios: 'No se pudieron actualizar las listas; se muestran los datos anteriores.',
-  config: 'No se pudo cargar la configuración de alertas.',
-});
-
-/** Las filas de una respuesta de lista del API (arreglo, {data} o {items}) con su tipo; null si el GET fallo. */
-function filasDe(respuesta, tipo) {
-  if (respuesta === null || respuesta === undefined) return null;
-  const filas = Array.isArray(respuesta) ? respuesta : (respuesta?.data || respuesta?.items || []);
-  return (Array.isArray(filas) ? filas : []).map((x) => ({ ...x, tipo }));
-}
-
-const momentoDeCreacion = (x) => new Date(x?.created_at || 0).getTime();
-
-/**
- * T11 calidad (E4, ronda 1): la recarga del Hub (loadData) en una funcion pura. `previas` es lo que quedo de la carga
- * anterior ({sc, cot, ven}, o null si no hubo); `respuestas` son los cuatro GET ({sc, cot, ven, cfg}), con null para
- * uno que fallo. Una lista que falla conserva la anterior (o queda vacia en la primera carga) y una que llega la
- * reemplaza; `todas` las junta de la mas nueva a la mas vieja; `cfg` es la configuracion de alertas nueva, o null para
- * conservar la de pantalla (fallo o no es un objeto). `aviso`: uno solo, o null — si fallo alguna lista, «no se pudieron
- * cargar» sin datos previos (o previos vacios) y «se muestran los datos anteriores» con ellos; si solo fallo la
- * configuracion, su propio texto (AVISOS_CARGA_HUB). No muta lo que recibe.
- * @param {{sc: any[], cot: any[], ven: any[]} | null} previas
- * @param {{sc: any, cot: any, ven: any, cfg: any}} respuestas
- * @returns {{listas: {sc: any[], cot: any[], ven: any[]}, todas: any[], cfg: any, aviso: string | null}}
- */
-export function fusionarCargaHub(previas, respuestas) {
-  const nuevas = { sc: filasDe(respuestas?.sc, 'SC'), cot: filasDe(respuestas?.cot, 'COT'), ven: filasDe(respuestas?.ven, 'VEN') };
-  const listas = {
-    sc: nuevas.sc ?? previas?.sc ?? [],
-    cot: nuevas.cot ?? previas?.cot ?? [],
-    ven: nuevas.ven ?? previas?.ven ?? [],
-  };
-  const todas = [...listas.sc, ...listas.cot, ...listas.ven].sort((a, b) => momentoDeCreacion(b) - momentoDeCreacion(a));
-  const cfgCruda = respuestas?.cfg;
-  const cfg = cfgCruda && typeof cfgCruda === 'object' ? (cfgCruda.data || cfgCruda) : null;
-  const fallaLista = nuevas.sc === null || nuevas.cot === null || nuevas.ven === null;
-  const habiaDatos = !!previas && ['sc', 'cot', 'ven'].some((k) => Array.isArray(previas[k]) && previas[k].length > 0);
-  let aviso = null;
-  if (fallaLista) aviso = habiaDatos ? AVISOS_CARGA_HUB.conPrevios : AVISOS_CARGA_HUB.sinPrevios;
-  else if (cfgCruda === null || cfgCruda === undefined) aviso = AVISOS_CARGA_HUB.config;
-  return { listas, todas, cfg, aviso };
 }
 
 /**

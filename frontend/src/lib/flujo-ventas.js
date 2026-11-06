@@ -15,14 +15,17 @@
  *  - cadenaVentas(doc, tipo, opciones): la barra Solicitud → Cotización → Pedido de venta (→ Compra) del detalle de un
  *    documento y del panel rápido del Hub. Su ayudante contextoFlujo es interno: no se exporta (RP67).
  *  - PASOS_COTIZACION y pasoCotizacion(estado): los 3 pasos propios de la cotización (RP87).
+ *  - B4 T7, rutas y textos del Hub: leerEnlaceHub(search) (?paso= y ?tab=analisis&foco=), chipsFiltroHub(estado) (los
+ *    chips «Paso: …» y «Con atraso» que quitan el filtro) y pasoTrasPestana(paso, vista) (la pestaña de otro tipo quita
+ *    el paso).
  */
 
-import { congelar, conteosDePasos } from './flujo.js';
+import { congelar, conteosDePasos, opcionesSemaforo } from './flujo.js';
 import { esCotizacionActiva, esPedidoVigente, humanizarCodigo, infoEstadoPedido, tiene } from './estados-pedido.js';
 import { infoEstadoSolicitud } from './estados-solicitud.js';
 import { infoEstadoCotizacion } from './estados-cotizacion.js';
 import { cantidadPositiva } from './hub-ventas.js';
-import { enlaceDocumento } from './analisis.js';
+import { enlaceDocumento, FOCOS_VENTAS } from './analisis.js';
 import { formatoEntero } from './kpis.js';
 
 /**
@@ -176,6 +179,75 @@ const VISTA_DE_PASO = congelar({ SC: 'sc', COT: 'cot', PVEN: 'ven', ENTREGADO: '
  */
 export function tabHubDePaso(clave) {
   return typeof clave === 'string' && tiene(VISTA_DE_PASO, clave) ? /** @type {any} */ (VISTA_DE_PASO)[clave] : null;
+}
+
+// ─── B4 T7: el enlace y los chips del Hub ───────────────────────────────────────
+
+const CLAVES_FOCO_VENTAS = congelar(FOCOS_VENTAS.map((f) => f.clave));
+
+/**
+ * El enlace profundo del Hub de Ventas (R6, RP21), del `location.search` que la pantalla lee en el navegador (sin
+ * useSearchParams): {paso, analisis, foco}.
+ *  - paso: ?paso=<clave> si es una de PASOS_FLUJO_VENTAS (sin los espacios de los bordes); si no, null.
+ *  - analisis: ?tab=analisis («Ver análisis» de las listas, R13).
+ *  - foco: ?foco= solo con la pestaña Análisis y si es una de FOCOS_VENTAS (hub, sc, cot o pven); si no, null.
+ * Un valor desconocido se ignora (RP21); lo que no es un texto da todo vacío. Inmutable.
+ * @param {unknown} search
+ * @returns {Readonly<{paso: ClavePasoVentas | null, analisis: boolean, foco: string | null}>}
+ */
+export function leerEnlaceHub(search) {
+  const params = new URLSearchParams(typeof search === 'string' ? search : '');
+  const paso = (params.get('paso') ?? '').trim();
+  const analisis = params.get('tab') === 'analisis';
+  const foco = params.get('foco') ?? '';
+  return congelar({
+    paso: tiene(PASO_POR_CLAVE, paso) ? /** @type {ClavePasoVentas} */ (paso) : null,
+    analisis,
+    foco: analisis && CLAVES_FOCO_VENTAS.includes(foco) ? foco : null,
+  });
+}
+
+/** Los textos de los botones del semáforo (opcionesSemaforo de flujo.js): la única fuente de «Con atraso» y «No resueltos». */
+const TEXTO_SEMAFORO = congelar(Object.fromEntries(
+  opcionesSemaforo({ atrasados: null, noResueltos: null, filtro: 'todos' })
+    .filter((o) => o.filtro !== 'todos')
+    .map((o) => [o.filtro, o.texto]),
+));
+
+/**
+ * Los chips del Hub que muestran y quitan el filtro que pusieron el diagrama o el semáforo (R6, clic_en_hub: «con un
+ * chip para quitar el filtro»), del estado único de la pantalla: [{campo: 'paso', texto: 'Paso: Cotización'},
+ * {campo: 'semaforo', texto: 'Con atraso'}]. El paso con la etiqueta de PASOS_FLUJO_VENTAS; el semáforo con el texto de
+ * su botón ('Con atraso' o 'No resueltos'). Sin filtro, con 'todos' o con un valor desconocido, ningún chip.
+ * @param {{paso?: string | null, semaforo?: string | null} | null | undefined} estado
+ * @returns {Array<{campo: 'paso' | 'semaforo', texto: string}>}
+ */
+export function chipsFiltroHub(estado) {
+  /** @type {Array<{campo: 'paso' | 'semaforo', texto: string}>} */
+  const chips = [];
+  const paso = estado?.paso;
+  const semaforo = estado?.semaforo;
+  if (typeof paso === 'string' && tiene(PASO_POR_CLAVE, paso)) chips.push({ campo: 'paso', texto: `Paso: ${PASO_POR_CLAVE[paso].label}` });
+  if (typeof semaforo === 'string' && tiene(TEXTO_SEMAFORO, semaforo)) chips.push({ campo: 'semaforo', texto: TEXTO_SEMAFORO[semaforo] });
+  return chips;
+}
+
+/** Las pestañas del Hub que son de un solo tipo (las de tabHubDePaso). */
+const VISTAS_DE_UN_TIPO = congelar(['sc', 'cot', 'ven']);
+
+/**
+ * El paso del diagrama que queda cuando el usuario elige a mano la pestaña `vista` (FLUJO-ventas-pantallas A, punto 4):
+ * la pestaña de su tipo (la que activa tabHubDePaso) lo conserva, la de otro tipo lo quita (null: si no, la tabla
+ * quedaría vacía sin razón visible) y las que mezclan tipos (todos, no_resueltos, acciones_tomadas) se combinan con él.
+ * Sin paso, o con uno que no es de PASOS_FLUJO_VENTAS, null.
+ * @param {string | null | undefined} paso
+ * @param {string | null | undefined} vista
+ * @returns {ClavePasoVentas | null}
+ */
+export function pasoTrasPestana(paso, vista) {
+  if (typeof paso !== 'string' || !tiene(PASO_POR_CLAVE, paso)) return null;
+  if (typeof vista !== 'string' || !VISTAS_DE_UN_TIPO.includes(vista)) return /** @type {ClavePasoVentas} */ (paso);
+  return tabHubDePaso(paso) === vista ? /** @type {ClavePasoVentas} */ (paso) : null;
 }
 
 // ─── la cadena de documentos (FLUJO-documentos) ─────────────────────────────────

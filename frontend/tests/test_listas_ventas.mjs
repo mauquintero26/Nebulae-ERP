@@ -613,12 +613,21 @@ console.log('--- Revisión final B3 (F2, M16): los botones de Configuración del
 {
   assert.equal(AVISO_CONFIG_SIN_LEER, 'No se pudo leer la configuración: pulsa Actualizar.');
   const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-  // «Ajustar Tiempos» y «Configuración»: deshabilitados sin /config, con el porqué en el title.
+  // «Ajustar tiempos» y «Configuración»: deshabilitados sin /config, con el porqué en el title. B4 T7 (D27(a)): los dos
+  // guardias en CADA botón que abre el panel, donde esté: «Configuración» sigue en el encabezado y «Ajustar tiempos» pasó
+  // a la franja del flujo (accionAjustar de BannerFlujo, que los pinta como disabled y title).
+  const aperturas = hub.match(/setShowConfig\(true\)/g) || [];
+  assert.equal(aperturas.length, 2, 'los dos botones que abren el panel');
   const botones = hub.match(/<button onClick=\{\(\)=>setShowConfig\(true\)\} disabled=\{!configCargada\}[^>]*>/g) || [];
-  assert.equal(botones.length, 2, 'los dos botones que abren el panel');
+  assert.equal(botones.length, 1, '«Configuración» en el encabezado');
   for (const boton of botones) {
     assert.ok(boton.includes('title={configCargada ? undefined : AVISO_CONFIG_SIN_LEER}'), boton);
   }
+  assert.ok(hub.includes("{ label: 'Ajustar tiempos', onClick: () => setShowConfig(true), deshabilitado: !configCargada, titulo: configCargada ? undefined : AVISO_CONFIG_SIN_LEER }"),
+    '«Ajustar tiempos» (accionAjustar): apagado sin /config y con el porqué');
+  assert.ok(hub.includes('accionAjustar={accionAjustar}'), 'la franja recibe la acción');
+  const banner = readFileSync(new URL('../src/components/flujo/BannerFlujo.tsx', import.meta.url), 'utf8');
+  assert.ok(banner.includes('disabled={accionAjustar.deshabilitado} title={accionAjustar.titulo}'), 'BannerFlujo los pinta en el botón');
 }
 
 console.log('--- B3 T17: tarifaIvaDeConfig (el IVA con que arranca el Cotizador Rápido) ---');

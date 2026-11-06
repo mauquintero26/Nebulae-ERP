@@ -801,11 +801,20 @@ console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuent
   assert.match(banner, /aria-pressed=\{verAyuda\} onClick=\{\(\) => setVerAyuda\(\(v\) => !v\)\}/, '¿Cómo funciona? no se guarda');
   assert.match(banner, /accionAjustar = null/);
   assert.match(banner, /\{accionAjustar \? \(/);
+  // B4 T7 (D27(a)): «Ajustar tiempos» conserva los dos guardias que tenía en el Hub: apagado mientras no se leyó
+  // /ventas/config (disabled) y el porqué (title). AccionAjustar los suma, opcionales, con los nombres de ItemMenuFila.
+  assert.match(fuentes['tipos.ts'],
+    /export type AccionAjustar = \{ label: string; onClick: \(\) => void; deshabilitado\?: boolean; titulo\?: string \};/);
+  assert.match(banner,
+    /<button type="button" onClick=\{accionAjustar\.onClick\} disabled=\{accionAjustar\.deshabilitado\} title=\{accionAjustar\.titulo\} className=\{`\$\{BOTON\} disabled:cursor-not-allowed disabled:opacity-50`\}>/,
+    'Ajustar tiempos: disabled y title de la acción, con el estilo apagado');
   // r1 (M5): la línea de error sigue mientras se reintenta; el botón no se deshabilita (conserva el foco).
   assert.match(banner, /\{f\.conError \? \(\s*<div role="alert"/);
   assert.match(banner, /aria-disabled=\{f\.reintentando \|\| undefined\}/);
   assert.match(banner, /\{f\.reintentando \? 'Reintentando…' : 'Reintentar'\}/);
-  assert.ok(!/(?<![-\w])disabled=\{/.test(banner), 'aria-disabled, no disabled');
+  // B4 T7: el único disabled es el de «Ajustar tiempos»; Reintentar sigue con aria-disabled (conserva el foco).
+  assert.deepEqual(banner.match(/(?<![-\w])disabled=\{[^}]*\}/g), ['disabled={accionAjustar.deshabilitado}'],
+    'aria-disabled en Reintentar, no disabled');
   // r2 (M2 y M6): focoPendiente solo si el botón tenía el foco en el clic; se limpia al terminar el reintento (bien o
   // mal), con un pointerdown o si el foco va a otra parte; al salir bien, el h2 solo si el foco quedó en el body, y
   // con preventScroll (el main no salta).

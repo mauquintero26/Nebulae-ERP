@@ -8,7 +8,7 @@
  *    (T5C borró los dos Análisis muertos, ventas/components/AnalisisVentas.tsx y compras/components/AnalisisCompras.tsx,
  *    y sus dos entradas.)
  * 2) R2: ningún archivo de src/app contiene '/ventas/ai-chat' (el endpoint no existe; los asistentes quedan «En
- *    construcción»), salvo la lista blanca temporal: ventas/page.tsx hasta T7 y compras/pedidos/page.tsx hasta T15
+ *    construcción»), salvo la lista blanca temporal: compras/pedidos/page.tsx hasta T15 (T7 borró la de ventas/page.tsx)
  *    (src/app_mocks_backup no está dentro de src/app y tampoco se revisa).
  * 3) T5B: dentro de components/analisis, solo registro.ts (chart.js y el único ChartJS.register) y GraficoLinea,
  *    GraficoDona y GraficoBarras (react-chartjs-2 y los tipos de chart.js, con registrarGraficos() al cargarse) importan
@@ -43,7 +43,6 @@ const PERMITIDOS_GRAFICOS = [
 ];
 // R2: lista blanca temporal de '/ventas/ai-chat' dentro de src/app.
 const PERMITIDOS_AI_CHAT = [
-  'src/app/dashboard/ventas/page.tsx', // hasta T7
   'src/app/dashboard/compras/pedidos/page.tsx', // hasta T15
 ];
 

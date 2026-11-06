@@ -38,8 +38,12 @@ export type SemaforoFranja = {
 /** Un aviso de la fila 1 de BannerFlujo, como chip; con onClick es un botón. */
 export type AvisoFranja = { texto: string; tono: TonoAviso; onClick?: () => void };
 
-/** El botón de ajuste de la franja (p. ej. 'Ajustar tiempos' de Ventas, solo para administradores). */
-export type AccionAjustar = { label: string; onClick: () => void };
+/**
+ * El botón de ajuste de la franja (p. ej. 'Ajustar tiempos' de Ventas, solo para administradores). B4 T7 (D27(a)):
+ * `deshabilitado` y `titulo` (los nombres de ItemMenuFila) lo apagan y dicen por qué, como el «Ajustar Tiempos» del Hub
+ * mientras no se leyó /ventas/config (AVISO_CONFIG_SIN_LEER).
+ */
+export type AccionAjustar = { label: string; onClick: () => void; deshabilitado?: boolean; titulo?: string };
 
 /**
  * Qué filas pinta BannerFlujo. Solo 'todo' (R1): flujo_posicion = «una sola franja, igual en todas las pantallas», así

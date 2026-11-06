@@ -72,10 +72,19 @@ console.log('--- TEST 5: la fuente: una sola regla sobre normalizarRol ---');
     'dinero-ventas.js');
   const hub = leer('app/dashboard/ventas/page.tsx');
   assert.ok(hub.includes('const soloLectura = !esAdmin(getUsuarioActual().role);'), 'el ConfigPanel del Hub usa esAdmin');
+  // B4 T7 (D27): la tabla estándar del Hub tiene la columna del asesor del documento, con su id, su título y su campo de
+  // orden del servidor (`id: 'asesor'`, `titulo: 'Asesor'`, `ordenable: 'asesor'`): no es un rol. Se quitan solo esas
+  // tres formas (las de ColumnaTabla) antes de buscar.
+  const sinColumnas = (fuente) => fuente.replace(/\b(id|titulo|ordenable): '[^'\n]*'/g, '$1: …');
+  assert.ok(hub.includes("{ id: 'asesor', titulo: 'Asesor', ancho: 120, ordenable: 'asesor',"), 'la columna del asesor del Hub');
+  // Y el Hub decide «Ajustar tiempos» con la misma regla (RP34).
+  assert.ok(hub.includes('const accionAjustar = esAdmin(getUsuarioActual().role)'), '«Ajustar tiempos» usa esAdmin');
   for (const ruta of ['app/dashboard/ventas/flujo.tsx', 'app/dashboard/ventas/page.tsx', 'lib/seguimiento.js',
     'lib/nombre-para-mostrar.js', 'lib/dinero-ventas.js', 'lib/envio-whatsapp.js']) {
-    assert.doesNotMatch(codigo(leer(ruta)), /['"](admin|asesor|vendedor|finanzas)['"]/i, `${ruta}: sin un rol escrito a mano`);
+    assert.doesNotMatch(sinColumnas(codigo(leer(ruta))), /['"](admin|asesor|vendedor|finanzas)['"]/i, `${ruta}: sin un rol escrito a mano`);
   }
+  // La excepción no tapa un rol de verdad.
+  assert.match(sinColumnas("if (rol === 'asesor') x();"), /['"]asesor['"]/i);
 }
 
 console.log('OK test_roles.mjs');
