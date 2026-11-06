@@ -99,6 +99,21 @@ const FOCO: Record<ColorKpi, string> = {
   red: 'focus-visible:ring-red-300',
   slate: 'focus-visible:ring-slate-300',
 };
+// B4 T8 r1 (A1): el foco de una tarjeta pulsable y ACTIVA. Su anillo de «activa» (ANILLO) es el mismo ring-2 -300 del foco
+// de las demás: enfocada no cambiaba. Con el foco del teclado, el anillo va separado de la tarjeta (ring-offset-2, el
+// blanco entre los dos) y en el tono -600. Sin el foco, la activa se ve igual que siempre.
+const FOCO_ACTIVA: Record<ColorKpi, string> = {
+  amber: 'focus-visible:ring-amber-600 focus-visible:ring-offset-2',
+  rose: 'focus-visible:ring-rose-600 focus-visible:ring-offset-2',
+  orange: 'focus-visible:ring-orange-600 focus-visible:ring-offset-2',
+  indigo: 'focus-visible:ring-indigo-600 focus-visible:ring-offset-2',
+  purple: 'focus-visible:ring-purple-600 focus-visible:ring-offset-2',
+  emerald: 'focus-visible:ring-emerald-600 focus-visible:ring-offset-2',
+  blue: 'focus-visible:ring-blue-600 focus-visible:ring-offset-2',
+  teal: 'focus-visible:ring-teal-600 focus-visible:ring-offset-2',
+  red: 'focus-visible:ring-red-600 focus-visible:ring-offset-2',
+  slate: 'focus-visible:ring-slate-600 focus-visible:ring-offset-2',
+};
 // T5C r1 (M6 y M22): tonos de 4,5:1 o más sobre el blanco y sobre el fondo de 'alerta' (emerald-700, rose-700 y
 // slate-600, como ChipVariacion); antes emerald-600 daba 3,67:1.
 const TONO_CHIP = { bien: 'text-emerald-700', mal: 'text-rose-700', neutro: 'text-slate-600' } as const;
@@ -233,7 +248,7 @@ export function TarjetaKpi({
         onClick={onClick}
         aria-pressed={activo}
         title={tituloFinal}
-        className={`${clases} text-left cursor-pointer transition-colors hover:border-slate-300 focus-visible:outline-none focus-visible:ring-2 ${FOCO[colorFinal]}`}
+        className={`${clases} text-left cursor-pointer transition-colors hover:border-slate-300 focus-visible:outline-none focus-visible:ring-2 ${activo ? FOCO_ACTIVA[colorFinal] : FOCO[colorFinal]}`}
       >
         {contenido}
       </button>

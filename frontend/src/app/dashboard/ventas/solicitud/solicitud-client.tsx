@@ -520,12 +520,14 @@ type ConteosSC = Partial<Record<'activas' | 'confirmadas' | 'canceladas' | 'sopo
 type CargaPapelera = { vuelta: number; filas: FilaPapelera[] | null; error: string };
 
 /** El id de la lista: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26), y el del
- *  modo compacto de la franja (RP90). */
-const ID_SC = 'ventas.solicitudes';
+ *  modo compacto de la franja (RP90). B4 T8 r1 (A2): exportado para el esqueleto del Suspense (CargandoSolicitudes). */
+export const ID_SC = 'ventas.solicitudes';
 /** RP37: la Papelera es otra tabla (modo cliente), con su propio id para sus columnas. */
 const ID_PAPELERA = 'ventas.solicitudes.papelera';
 /** R8 (atencion_primero_listas = «Sí; con un clic en una columna ordenas como quieras»): primero lo atrasado. */
-const INICIAL_SC = { vista: 'activas', orden: 'atencion' };
+export const INICIAL_SC = { vista: 'activas', orden: 'atencion' };
+/** B4 T8 r1 (A2): el contenedor de la lista (el del Hub, T7), el mismo en la pantalla y en su esqueleto del Suspense. */
+export const CONTENEDOR_LISTA = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
 /** KANBAN-ventas-listas punto 7: los tickets de Soporte y la Papelera no van al tablero (se ven en lista). */
 const VISTAS_SIN_TABLERO = ['soporte', 'papelera'];
 /** R5: el tablero de Solicitudes trae todas, sin Soporte (la vista que reemplaza al viejo sin_soporte). */
@@ -708,7 +710,7 @@ function columnasDeLaTabla(vencimiento: ColumnaTabla<FilaSC>): ColumnaTabla<Fila
     { id: 'acciones', titulo: 'Acciones', ancho: 104, clave: true, fija: 'derecha', celda: (sc) => <CeldaAcciones sc={sc} /> },
   ];
 }
-const COLUMNAS_TABLA_SC = columnasDeLaTabla(COLUMNA_VENCIMIENTO);
+export const COLUMNAS_TABLA_SC = columnasDeLaTabla(COLUMNA_VENCIMIENTO);
 const COLUMNAS_CANCELADAS = columnasDeLaTabla(COLUMNA_MOTIVO);
 
 /** La Papelera: «Se borra» con estadoEnPapelera (B2.1 D2: TEXTO_PAPELERA_VENCIDA en las vencidas; nada se borra solo). */
@@ -766,7 +768,8 @@ const COLUMNAS_PAPELERA: ColumnaTabla<FilaPapelera>[] = [
     ) },
   { id: 'motivo', titulo: 'Motivo', ancho: 160, titleCelda: (sc) => motivoDeCancelacion(sc) || SIN_MOTIVO_REGISTRADO,
     celda: (sc) => <span className="text-xs italic text-slate-600">{motivoDeCancelacion(sc) || SIN_MOTIVO_REGISTRADO}</span> },
-  { id: 'cancelada', titulo: 'Cancelada el', ancho: 104, titleCelda: (sc) => fechaLarga(sc.eliminada_at) || null,
+  // B4 T8 r1 (A3): oculta por defecto (el patrón de R26): a 1024 px con el menú abierto la Papelera ya no corre de lado.
+  { id: 'cancelada', titulo: 'Cancelada el', ancho: 104, ocultaPorDefecto: true, titleCelda: (sc) => fechaLarga(sc.eliminada_at) || null,
     celda: (sc) => fechaCorta(sc.eliminada_at) || '-' },
   { id: 'se_borra', titulo: 'Se borra', ancho: 150, titleCelda: (sc) => [estadoEnPapelera(sc).texto, estadoEnPapelera(sc).nota].filter(Boolean).join(' '),
     celda: (sc) => <CeldaSeBorra sc={sc} /> },
@@ -779,6 +782,39 @@ const ACCESORES_PAPELERA = {
   orden: accesoresDeOrden(COLUMNAS_PAPELERA),
   estadoDe: () => 'CANCELADA',
 };
+
+/**
+ * Las pestañas de la lista (TABLA-listas-ventas punto 5): las 4 vistas del servidor con sus conteos (con_conteos: con la
+ * búsqueda, sin la vista, los estados ni el semáforo; null mientras cargan: la barra gris, nunca 0) y la Papelera sin
+ * conteo (no es una vista del servidor). Sin emojis. B4 T8 r1 (A2): la misma en la pantalla y en su esqueleto.
+ */
+export function pestanasDeLaLista(conteos: ConteosSC | null): PestanaTabla[] {
+  return [
+    { id: 'activas', etiqueta: 'Activas', conteo: conteos?.activas ?? null },
+    { id: 'confirmadas', etiqueta: 'Confirmadas', conteo: conteos?.confirmadas ?? null },
+    { id: 'canceladas', etiqueta: 'Canceladas', conteo: conteos?.canceladas ?? null },
+    { id: 'soporte', etiqueta: 'Soporte', conteo: conteos?.soporte ?? null },
+    { id: 'papelera', etiqueta: 'Papelera', conteo: null, sinConteo: true },
+  ];
+}
+
+/**
+ * Los botones de la cabecera: «Actualizar», «Ver análisis» (R13: el Análisis del Hub enfocado en Solicitudes,
+ * ?tab=analisis&foco=sc, enlaceVerAnalisis) y «Nueva Solicitud». B4 T8 r1 (A2): los mismos en el esqueleto del Suspense,
+ * que los pinta invisibles para que la cabecera mida lo mismo.
+ */
+export function AccionesCabecera({ onActualizar, actualizando, onNueva }: { onActualizar: () => void; actualizando: boolean; onNueva: () => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2.5">
+      <button type="button" onClick={onActualizar} className={`bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm shadow-sm ${FOCO_VISIBLE}`}><RefreshCw size={15} aria-hidden="true" className={actualizando?'animate-spin':''}/> Actualizar</button>
+      <Link href={enlaceVerAnalisis('sc')}
+        className={`bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 flex items-center gap-2 text-sm shadow-sm ${FOCO_VISIBLE}`}>
+        <ContenidoEnlace icon={BarChart3}>Ver análisis</ContenidoEnlace>
+      </Link>
+      <Button onClick={onNueva} color="indigo" icon={Plus}>Nueva Solicitud</Button>
+    </div>
+  );
+}
 
 /** La tarjeta del tablero (KANBAN-ventas-listas punto 7, RP15, RP18, D37 y el cruce C5): vuelve a esta lista. */
 const tarjetaDeSC = (sc: FilaSC) => tarjetaSolicitud(sc, { returnTo: RUTA_LISTA_SOLICITUDES });
@@ -1301,16 +1337,7 @@ export default function SolicitudClient() {
   }
 
   // ── B4 T8, bloque 2: pestañas y búsqueda (TABLA-listas-ventas punto 5; R5, RP26, RP35, D40, D41) ──
-  // Las 4 vistas del servidor con sus conteos (con_conteos: con la búsqueda, sin la vista, los estados ni el semáforo;
-  // null mientras cargan: la barra gris, nunca 0) y la Papelera sin conteo (no es una vista del servidor). Sin emojis.
-  const conteos = listado.conteos as ConteosSC | null;
-  const pestanas: PestanaTabla[] = [
-    { id: 'activas', etiqueta: 'Activas', conteo: conteos?.activas ?? null },
-    { id: 'confirmadas', etiqueta: 'Confirmadas', conteo: conteos?.confirmadas ?? null },
-    { id: 'canceladas', etiqueta: 'Canceladas', conteo: conteos?.canceladas ?? null },
-    { id: 'soporte', etiqueta: 'Soporte', conteo: conteos?.soporte ?? null },
-    { id: 'papelera', etiqueta: 'Papelera', conteo: null, sinConteo: true },
-  ];
+  const pestanas = pestanasDeLaLista(listado.conteos as ConteosSC | null);
   // La barra recibe el modo que se ve: en Soporte y la Papelera es Lista (no tienen tablero), así «Ajustar tabla» está
   // aunque lo guardado sea Kanban. El estado de la pantalla no cambia (useEstadoTabla sigue siendo su único dueño).
   const estadoBarra = useMemo(() => (estado.modo === modoEfectivo ? estado : { ...estado, modo: modoEfectivo }), [estado, modoEfectivo]);
@@ -1429,24 +1456,13 @@ export default function SolicitudClient() {
       {/* B4 T8: el contenedor del Hub (T7). pb-24 deja libre, con la página al fondo, la esquina del botón flotante de la
           IA (GlobalAIChat: fixed bottom-6 de 56 px, 80 px en total); en la pantalla completa la reserva es el pr-20 del pie
           (D41). px-4 hasta xl: a 1024 px con el menú abierto las columnas clave caben (R26). */}
-      <div className="flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6">
+      <div className={CONTENEDOR_LISTA}>
         {/* Header */}
         <PageHeader
           icon={FileText} color="indigo"
           title="Solicitudes de Cliente"
           subtitle="Lo que te piden los clientes, antes de cotizar."
-          actions={(
-            <div className="flex flex-wrap items-center gap-2.5">
-              <button type="button" onClick={actualizar} className={`bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm shadow-sm ${FOCO_VISIBLE}`}><RefreshCw size={15} aria-hidden="true" className={actualizando?'animate-spin':''}/> Actualizar</button>
-              {/* R13 (ANALISIS-ventas punto 7): la lista ya no tiene pestaña Análisis; este botón abre la del Hub enfocada
-                  en Solicitudes (?tab=analisis&foco=sc, enlaceVerAnalisis). */}
-              <Link href={enlaceVerAnalisis('sc')}
-                className={`bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 flex items-center gap-2 text-sm shadow-sm ${FOCO_VISIBLE}`}>
-                <ContenidoEnlace icon={BarChart3}>Ver análisis</ContenidoEnlace>
-              </Link>
-              <Button onClick={()=>setShowCreate(true)} color="indigo" icon={Plus}>Nueva Solicitud</Button>
-            </div>
-          )} />
+          actions={<AccionesCabecera onActualizar={actualizar} actualizando={actualizando} onNueva={()=>setShowCreate(true)} />} />
 
         {/* B4 T8 (KPI-ventas punto 7; R12, RP19): las 4 tarjetas con con_resumen de la MISMA llamada de la lista (todas las
             solicitudes, sin Soporte): mientras cargan, barras grises (nunca 0); con error, «—». Las tres primeras son sus

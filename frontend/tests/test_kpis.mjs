@@ -442,4 +442,32 @@ console.log('--- TEST 13 (B4 T7 r1b): el esqueleto de TarjetaKpi tiene la forma 
   assert.ok(!fuente.includes('block h-7 w-24') && !fuente.includes('animate-pulse mt-2'), 'sin las barras de antes');
 }
 
+console.log('--- TEST 14 (B4 T8 r1, A1): una tarjeta pulsable y activa muestra el foco distinto de su anillo de «activa» ---');
+{
+  const fuente = readFileSync(new URL('../src/components/ui/TarjetaKpi.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const mapa = (nombre) => {
+    const cuerpo = new RegExp(`const ${nombre}: Record<ColorKpi, string> = \\{([\\s\\S]*?)\\n\\};`).exec(fuente)?.[1] ?? '';
+    return Object.fromEntries([...cuerpo.matchAll(/(\w+): '([^']*)'/g)].map((m) => [m[1], m[2].split(/\s+/)]));
+  };
+  const anillo = mapa('ANILLO');
+  const foco = mapa('FOCO');
+  const focoActiva = mapa('FOCO_ACTIVA');
+  const colores = Object.keys(anillo);
+  assert.ok(colores.length >= 10, 'los colores del anillo');
+  assert.deepEqual(Object.keys(focoActiva).sort(), [...colores].sort(), 'FOCO_ACTIVA tiene un foco por cada color');
+  for (const c of colores) {
+    const anilloActiva = anillo[c].find((x) => /^ring-[a-z]+-\d+$/.test(x));
+    // Con foco y activa: un anillo separado de la tarjeta (ring-offset-2) y de otro tono que el de «activa».
+    assert.ok(focoActiva[c].includes('focus-visible:ring-offset-2'), `${c}: el foco de la activa va separado`);
+    const tonoFoco = focoActiva[c].find((x) => /^focus-visible:ring-[a-z]+-\d+$/.test(x))?.replace('focus-visible:', '');
+    assert.ok(tonoFoco && tonoFoco !== anilloActiva, `${c}: el foco de la activa no es el anillo ${anilloActiva}`);
+    // Sin foco nada cambia: el anillo de «activa» y el foco de las demás son los de siempre.
+    assert.ok(!anillo[c].some((x) => x.startsWith('focus-visible:')), `${c}: el anillo de activa no depende del foco`);
+    assert.ok(foco[c].every((x) => x.startsWith('focus-visible:')) && !foco[c].includes('focus-visible:ring-offset-2'), `${c}: FOCO igual`);
+    assert.ok(focoActiva[c].every((x) => x.startsWith('focus-visible:')), `${c}: FOCO_ACTIVA solo actúa con el foco`);
+  }
+  // El botón usa FOCO_ACTIVA solo cuando está activo.
+  assert.match(fuente, /focus-visible:outline-none focus-visible:ring-2 \$\{activo \? FOCO_ACTIVA\[colorFinal\] : FOCO\[colorFinal\]\}/);
+}
+
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');
