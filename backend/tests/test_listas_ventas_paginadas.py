@@ -345,7 +345,9 @@ def test_cot_vistas_pedido_caido_y_busqueda_por_el_pedido(app_client, db, admin_
         assert set(_ids(app_client, admin_token, "COT", q=f.sufijo, vista=vista)) == {d.id for d in docs}, vista
     assert set(_ids(app_client, admin_token, "COT", q=f.sufijo)) == {d.id for d in vistas["todas"]}
     conteos = {"activas": 3, "confirmadas": 2, "rechazadas": 1}
-    for extra in ({}, {"vista": "rechazadas"}, {"estados": "BORRADOR"}, {"semaforo": "atrasados"}):
+    # r1 (M6 d): tambien con el parametro simple 'estado' (compatibilidad), que los conteos no aplican (R5).
+    for extra in ({}, {"vista": "rechazadas"}, {"estados": "BORRADOR"}, {"estado": "BORRADOR"},
+                  {"semaforo": "atrasados"}):
         assert _lista(app_client, admin_token, "COT", q=f.sufijo, con_conteos=1, **extra)["conteos"] == conteos, extra
     # COT-LISTA: el navegador encontraba la COT por el numero de su pedido (JSON.stringify): ahora el servidor.
     for params in ({"q": pv_caido.numero}, {"search": pv_caido.numero}, {"q": pv_caido.numero.lower()}):
@@ -1011,3 +1013,273 @@ def test_resumen_y_pestanas_son_los_de_listas_ventas_js(app_client, db, admin_to
     """, estados=estados, vistaDeGrupo=dict(VISTA_DE_GRUPO))
     assert js == {e: vista_de.get(e) for e in estados}
     assert js["ESTADO_RARO"] is None and js["DEVUELTO_TOTAL"] == "cancelado" and js["PENDIENTE_PAGO"] == "pend_compra"
+
+
+# ─── 13) Ronda r1 de la revision de T6B ──────────────────────────────────────────────────────────────────────────────
+
+_TABLAS = {"SC": "customer_requests", "COT": "sales_quotations", "VEN": "sale_orders"}
+
+
+def _consultas_de(app_client, token, tipo, **params):
+    """La respuesta de la lista y las sentencias que llegaron al cursor, con sus parametros (para el EXPLAIN)."""
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+    capturadas = []
+
+    def oir(conn, cursor, statement, parameters, context, executemany):
+        capturadas.append((statement, parameters))
+
+    event.listen(Engine, "before_cursor_execute", oir)
+    try:
+        cuerpo = _lista(app_client, token, tipo, **params)
+    finally:
+        event.remove(Engine, "before_cursor_execute", oir)
+    return cuerpo, capturadas
+
+
+def _plan_de_la_pagina(db, tipo, capturadas):
+    """(sentencia, plan): la sentencia que trae la pagina (SELECT <tabla>.id AS <tabla>_id ... ORDER BY ...) y su
+    EXPLAIN (VERBOSE)."""
+    tabla = _TABLAS[tipo]
+    [(sentencia, parametros)] = [(s, p) for s, p in capturadas
+                                 if s.lstrip().startswith(f"SELECT {tabla}.id AS {tabla}_id") and "ORDER BY" in s]
+    filas = db.connection().exec_driver_sql("EXPLAIN (VERBOSE, COSTS OFF) " + sentencia, parametros).all()
+    return sentencia, "\n".join(f[0] for f in filas)
+
+
+def test_atencion_y_atrasados_calculan_el_rango_una_vez(app_client, db, admin_token):
+    """r1 (M8): con orden=atencion (con y sin semaforo=atrasados) el rango de resolucion_ventas.expresiones (en SC y COT,
+    con los EXISTS de D16 sobre sale_orders) se calcula UNA vez por fila, como en el Hub: una subconsulta con id y rango
+    (con OFFSET 0, para que PostgreSQL no la aplane y copie el CASE en cada uso) y el orden y el filtro leen esa
+    columna. Antes eran hasta cuatro copias (tres en el ORDER BY y una en el WHERE). Se mira:
+    - el SQL emitido: el ORDER BY de la pagina lee rango_de_lista.rango y solo lleva los dos CASE de 'atencion' (el
+      CASE del rango ya no esta ahi);
+    - el plan real: en SC y COT un solo recorrido de sale_orders (un solo SubPlan del EXISTS de D16); con el semaforo,
+      la subconsulta sigue siendo un «Subquery Scan» (no se aplano) y su filtro es la columna (rango = 0).
+    Sin el semaforo PostgreSQL quita el Subquery Scan trivial y EXPLAIN muestra el texto del CASE en el Sort Key, pero
+    es una referencia a la columna ya calculada: por eso se cuenta el SubPlan y no el texto del Sort Key. Se filtra por
+    customer_id, sc_id y cot_id (sin busqueda: la de COT tambien mira sale_orders)."""
+    import re
+    _dias_de_alerta(db)
+    f = _Fabrica(db, _ahora())
+    cliente = Customer(first_name="Rango", last_name=f.sufijo, email=f"rango-{f.sufijo.lower()}@test.nebulae")
+    db.add(cliente)
+    db.commit()
+    sc = f.sc("ASIGNADA", _dias(5), customer_id=cliente.id)       # sin documentos: atrasada
+    otra = f.sc("CONFIRMADA")                                      # la SC de la COT (no es del cliente)
+    cot = f.cot("ENVIADA", _dias(5), sc=otra)                      # enviada y quieta: atrasada
+    pven = f.pven("EN_PROCESO", _dias(5), cot=cot)
+    filtros = {"SC": {"customer_id": cliente.id}, "COT": {"sc_id": otra.id}, "VEN": {"cot_id": cot.id}}
+    esperado = {"SC": sc.id, "COT": cot.id, "VEN": pven.id}
+    for tipo in RUTAS:
+        for extra in ({"semaforo": "atrasados"}, {}):
+            cuerpo, capturadas = _consultas_de(app_client, admin_token, tipo, orden="atencion", **extra,
+                                               **filtros[tipo])
+            assert [x["id"] for x in cuerpo["data"]] == [esperado[tipo]], (tipo, extra)
+            sentencia, plan = _plan_de_la_pagina(db, tipo, capturadas)
+            orden = sentencia.rsplit("ORDER BY", 1)[1]
+            assert "rango_de_lista.rango" in orden and orden.count("CASE") == 2, (tipo, extra, sentencia)
+            assert len(re.findall(r"\bAS rango\b", sentencia)) == 1, (tipo, extra, sentencia)   # una sola vez
+            if tipo in ("SC", "COT"):
+                assert len(re.findall(r" on public\.sale_orders(?:\s|$)", plan, re.M)) == 1, (tipo, extra, plan)
+            if extra:
+                assert "Subquery Scan on rango_de_lista" in plan, (tipo, extra, plan)
+                assert any("Filter:" in linea and "rango_de_lista.rango = 0" in linea
+                           for linea in plan.splitlines()), (tipo, extra, plan)
+                clave = [linea for linea in plan.splitlines() if "Sort Key:" in linea]
+                assert clave and not any("CASE WHEN (CASE WHEN" in linea for linea in clave), (tipo, extra, plan)
+
+
+def test_estado_y_canal_venta_se_validan_como_estados(app_client, db, admin_token):
+    """r1 (M10, M11): el parametro de compatibilidad 'estado' (las tres listas) y 'canal_venta' (pedidos) pasan por la
+    validacion de D46: un caracter de control da el 422 legible (antes, un NUL llegaba al SQL y daba 500) y 'estado' se
+    valida contra los estados del tipo, como 'estados'. Un estado valido y un canal sigan igual: un valor, igualdad."""
+    for tipo in RUTAS:
+        for valor in ("\x00", "ASIG\x00NADA", "a\x7fb", "\x1b"):
+            assert _error(app_client, admin_token, tipo, estado=valor) == CONTROL, (tipo, repr(valor))
+    for valor in ("\x00", "WE\x00B", "\x07"):
+        assert _error(app_client, admin_token, "VEN", canal_venta=valor) == CONTROL, repr(valor)
+    for tipo, malo in (("SC", "FOO"), ("COT", "ASIGNADA"), ("VEN", "ENTREGAD"), ("SC", "ASIGNADA,FOO")):
+        assert _error(app_client, admin_token, tipo, estado=malo) == (
+            f"El estado «{malo.split(',')[-1]}» no existe en {tipo}."), (tipo, malo)
+    f = _Fabrica(db, _ahora())
+    asignada = f.sc("ASIGNADA")
+    f.sc("BORRADOR")
+    enviada = f.cot("ENVIADA")
+    f.cot("BORRADOR")
+    web = f.pven("ENTREGADO", canal_venta="WEB")
+    f.pven("EN_PROCESO", canal_venta="ERP")
+    assert _ids(app_client, admin_token, "SC", q=f.sufijo, estado="ASIGNADA") == [asignada.id]
+    assert _ids(app_client, admin_token, "COT", q=f.sufijo, estado="ENVIADA") == [enviada.id]
+    assert _ids(app_client, admin_token, "VEN", q=f.sufijo, estado="ENTREGADO") == [web.id]
+    assert _ids(app_client, admin_token, "VEN", q=f.sufijo, canal_venta="WEB") == [web.id]
+    assert _ids(app_client, admin_token, "VEN", q=f.sufijo, canal_venta="TIENDA") == []
+    # Sigue siendo igualdad: dos estados en 'estado' no son un CSV (RP8), y uno con espacios no es el estado.
+    assert _ids(app_client, admin_token, "SC", q=f.sufijo, estado="ASIGNADA,BORRADOR") == []
+    assert _ids(app_client, admin_token, "SC", q=f.sufijo, estado=" ASIGNADA ") == []
+
+
+def test_orden_por_asesor_y_cotizador_limpia_los_espacios(app_client, db, admin_token):
+    """r1 (M4): el orden por asesor (SC) y por cotizador (COT) limpia el texto como el Hub (nullif(btrim(col,
+    _ESPACIOS), ''), D46): un '' o un '   ' ordena con los NULL (al final, en los dos sentidos) y '  Beto' ordena como
+    'Beto'. Los vacios empatan entre si: el desempate es el id desc (D34)."""
+    f = _Fabrica(db, _ahora())
+    ana = f.sc("ASIGNADA", advisor_name="Ana")
+    vacio = f.sc("ASIGNADA", advisor_name="")
+    beto = f.sc("ASIGNADA", advisor_name="  Beto")
+    blanco = f.sc("ASIGNADA", advisor_name="   ")
+    nulo = f.sc("ASIGNADA", advisor_name=None)
+    vacios = [nulo.id, blanco.id, vacio.id]
+    assert _ids(app_client, admin_token, "SC", q=f.sufijo, orden="asesor") == [ana.id, beto.id] + vacios
+    assert _ids(app_client, admin_token, "SC", q=f.sufijo, orden="-asesor") == [beto.id, ana.id] + vacios
+
+    f = _Fabrica(db, _ahora())
+    ana = f.cot("BORRADOR", cotizador="Ana")
+    vacio = f.cot("BORRADOR", cotizador="")
+    beto = f.cot("BORRADOR", cotizador="\tBeto ")
+    blanco = f.cot("BORRADOR", cotizador="   ")
+    nulo = f.cot("BORRADOR", cotizador=None)
+    vacios = [nulo.id, blanco.id, vacio.id]
+    assert _ids(app_client, admin_token, "COT", q=f.sufijo, orden="cotizador") == [ana.id, beto.id] + vacios
+    assert _ids(app_client, admin_token, "COT", q=f.sufijo, orden="-cotizador") == [beto.id, ana.id] + vacios
+
+
+def test_pedidos_se_buscan_por_el_asesor_de_h4(app_client, db, admin_token):
+    """r1 (M5): la busqueda de Pedidos (q y su alias search) tambien encuentra por el asesor de H4, como el Hub: el
+    cotizador de su COT o, si esta vacio o no hay COT, el asesor de su SC, con la limpieza de D46. Es el mismo asesor que
+    trae la fila (advisor_name)."""
+    f = _Fabrica(db, _ahora())
+    s = f.sufijo
+    sc = f.sc("CONFIRMADA", advisor_name=f"Beto {s}")
+    cot_ana = f.cot("CONFIRMADA", sc=sc, cotizador=f"Ana {s}")
+    cot_blanco = f.cot("CONFIRMADA", sc=sc, cotizador="   ")
+    cot_carla = f.cot("CONFIRMADA", cotizador=f"  Carla {s}")
+    de_ana = f.pven("EN_PROCESO", sc=sc, cot=cot_ana)            # su asesor es Ana (la COT gana)
+    de_beto = f.pven("EN_PROCESO", sc=sc, cot=cot_blanco)        # cotizador en blanco: el asesor de la SC
+    solo_sc = f.pven("PENDIENTE_COMPRA", sc=sc)                  # sin COT: el asesor de la SC
+    de_carla = f.pven("LISTO_ENTREGA", cot=cot_carla)            # sin SC: el cotizador
+    f.pven("EN_PROCESO")                                         # sin asesor
+
+    def ids(**params):
+        return set(_ids(app_client, admin_token, "VEN", limit=200, **params))
+
+    for param in ("q", "search"):
+        assert ids(**{param: f"Beto {s}"}) == {de_beto.id, solo_sc.id}, param
+        assert ids(**{param: f"ana {s}"}) == {de_ana.id}, param
+        assert ids(**{param: f"Carla {s}"}) == {de_carla.id}, param
+    # Tambien con orden=atencion (la busqueda va dentro de la subconsulta del rango, M8).
+    assert ids(q=f"Beto {s}", orden="atencion") == {de_beto.id, solo_sc.id}
+    filas = {x["id"]: x["advisor_name"] for x in _lista(app_client, admin_token, "VEN", q=s)["data"]}
+    assert (filas[de_ana.id], filas[de_beto.id], filas[solo_sc.id], filas[de_carla.id]) == (
+        f"Ana {s}", f"Beto {s}", f"Beto {s}", f"Carla {s}")
+    # La busqueda por asesor convive con el resto del filtro y con el resumen de H47.
+    r = _lista(app_client, admin_token, "VEN", q=f"Beto {s}", estados="PENDIENTE_COMPRA", con_conteos=1)
+    assert [x["id"] for x in r["data"]] == [solo_sc.id]
+    assert r["conteos"]["todos"] == 2 and r["resumen"]["por_estado"] == {"PENDIENTE_COMPRA": 1}
+
+
+def test_orden_exacto_de_un_campo_y_su_inverso_en_las_tres_listas(app_client, db, admin_token):
+    """r1 (M6 a): el orden EXACTO por campo y por su version con '-' (no solo cuantas filas vuelven). Los nulos van al
+    final en los dos sentidos y los empates se desempatan por id desc (D34)."""
+    ahora = _ahora()
+    f = _Fabrica(db, ahora)
+    a = f.sc("ASIGNADA", fecha_vencimiento=ahora + _dias(3), tipo_solicitud="Pedido Inmediato")
+    b = f.sc("ASIGNADA", fecha_vencimiento=ahora + _dias(1), tipo_solicitud=None)
+    c = f.sc("ASIGNADA", fecha_vencimiento=None, tipo_solicitud="Cotizacion de Producto")
+    d = f.sc("ASIGNADA", fecha_vencimiento=ahora + _dias(2), tipo_solicitud="Pedido Inmediato")
+
+    def ids(tipo, orden, suf):
+        return _ids(app_client, admin_token, tipo, q=suf, orden=orden)
+
+    assert ids("SC", "numero", f.sufijo) == [a.id, b.id, c.id, d.id]
+    assert ids("SC", "-numero", f.sufijo) == [d.id, c.id, b.id, a.id]
+    assert ids("SC", "vencimiento", f.sufijo) == [b.id, d.id, a.id, c.id]
+    assert ids("SC", "-vencimiento", f.sufijo) == [a.id, d.id, b.id, c.id]
+    # tipo NULL ordena como «Cotizacion de Producto» (el valor por defecto del modelo); empates por id desc.
+    assert ids("SC", "tipo", f.sufijo) == [c.id, b.id, d.id, a.id]
+    assert ids("SC", "-tipo", f.sufijo) == [d.id, a.id, c.id, b.id]
+
+    f = _Fabrica(db, ahora)
+    a = f.cot("BORRADOR", anticipo_cop=300, fecha_entrega_estimada=ahora + _dias(5))
+    b = f.cot("BORRADOR", anticipo_cop=100, fecha_entrega_estimada=None)
+    c = f.cot("BORRADOR", anticipo_cop=200, fecha_entrega_estimada=ahora + _dias(2))
+    assert ids("COT", "numero", f.sufijo) == [a.id, b.id, c.id]
+    assert ids("COT", "-numero", f.sufijo) == [c.id, b.id, a.id]
+    assert ids("COT", "anticipo", f.sufijo) == [b.id, c.id, a.id]
+    assert ids("COT", "-anticipo", f.sufijo) == [a.id, c.id, b.id]
+    assert ids("COT", "entrega", f.sufijo) == [c.id, a.id, b.id]
+    assert ids("COT", "-entrega", f.sufijo) == [a.id, c.id, b.id]
+
+    f = _Fabrica(db, ahora)
+    a = f.pven("EN_PROCESO", fecha_entrega_estimada=ahora + _dias(4))
+    b = f.pven("EN_PROCESO", fecha_entrega_estimada=ahora + _dias(1))
+    c = f.pven("EN_PROCESO", fecha_entrega_estimada=None)
+    assert ids("VEN", "numero", f.sufijo) == [a.id, b.id, c.id]
+    assert ids("VEN", "-numero", f.sufijo) == [c.id, b.id, a.id]
+    assert ids("VEN", "entrega", f.sufijo) == [b.id, a.id, c.id]
+    assert ids("VEN", "-entrega", f.sufijo) == [a.id, b.id, c.id]
+    assert ids("VEN", "creado", f.sufijo) == [c.id, b.id, a.id]      # _Fabrica: cada documento nace 1 ms antes
+    assert ids("VEN", "-creado", f.sufijo) == [a.id, b.id, c.id]
+
+
+def test_atencion_desempata_dentro_de_cada_grupo(app_client, db, admin_token):
+    """r1 (M6 b): dentro de atrasados y sin resolver, primero el que lleva mas tiempo sin movimiento; dentro de accion
+    tomada y cerrados, el mas reciente (created_at desc), con dos documentos por grupo en las tres listas. En cada par
+    el que debe ir primero se crea PRIMERO (id menor): asi el desempate por id desc no lo confunde."""
+    _dias_de_alerta(db, sc=2, cot=2, ven=2)
+    ahora = _ahora()
+
+    f = _Fabrica(db, ahora)
+    atr_mas, atr_menos = f.sc("ASIGNADA", _dias(6)), f.sc("ASIGNADA", _dias(3))
+    nr_vieja, nr_nueva = f.sc("BORRADOR", _dias(1)), f.sc("BORRADOR")
+    acc_reciente = f.sc("ASIGNADA", _dias(1))
+    acc_vieja = f.sc("ASIGNADA", _dias(3))
+    for s in (acc_reciente, acc_vieja):
+        f.cot("BORRADOR", sc=s)                                   # D16: con una COT activa la SC queda resuelta
+    cerr_reciente, cerr_vieja = f.sc("CANCELADA", _dias(1)), f.sc("CANCELADA", _dias(4))
+    r = _lista(app_client, admin_token, "SC", q=f.sufijo, orden="atencion")
+    assert [x["id"] for x in r["data"]] == [atr_mas.id, atr_menos.id, nr_vieja.id, nr_nueva.id, acc_reciente.id,
+                                            acc_vieja.id, cerr_reciente.id, cerr_vieja.id]
+    assert [x["resolucion"] for x in r["data"]] == ["ATRASADO"] * 2 + ["NO_RESUELTO"] * 2 + ["ACCION_TOMADA"] * 2 + [
+        "CERRADO"] * 2
+
+    f = _Fabrica(db, ahora)
+    atr_mas, atr_menos = f.cot("ENVIADA", _dias(6)), f.cot("ENVIADA", _dias(3))
+    nr_vieja, nr_nueva = f.cot("BORRADOR", _dias(1)), f.cot("BORRADOR")
+    acc_reciente, acc_vieja = f.cot("CONFIRMADA", _dias(1)), f.cot("CONFIRMADA", _dias(3))
+    cerr_reciente, cerr_vieja = f.cot("RECHAZADA", _dias(1)), f.cot("RECHAZADA", _dias(4))
+    g = _Fabrica(db, ahora)                                       # sus pedidos, con otro sufijo (no salen en q)
+    for c in (acc_reciente, acc_vieja):
+        g.pven("EN_PROCESO", cot=c)
+    r = _lista(app_client, admin_token, "COT", q=f.sufijo, orden="atencion")
+    assert [x["id"] for x in r["data"]] == [atr_mas.id, atr_menos.id, nr_vieja.id, nr_nueva.id, acc_reciente.id,
+                                            acc_vieja.id, cerr_reciente.id, cerr_vieja.id]
+    assert [x["resolucion"] for x in r["data"]] == ["ATRASADO"] * 2 + ["NO_RESUELTO"] * 2 + ["ACCION_TOMADA"] * 2 + [
+        "CERRADO"] * 2
+
+    f = _Fabrica(db, ahora)
+    atr_mas, atr_menos = f.pven("EN_PROCESO", _dias(6)), f.pven("EN_PROCESO", _dias(3))
+    nr_vieja, nr_nueva = f.pven("PENDIENTE_COMPRA", _dias(1)), f.pven("PENDIENTE_COMPRA")
+    acc_reciente, acc_vieja = f.pven("LISTO_ENTREGA", _dias(1)), f.pven("LISTO_ENTREGA", _dias(3))
+    cerr_reciente, cerr_vieja = f.pven("ENTREGADO", _dias(1)), f.pven("ENTREGADO", _dias(4))
+    r = _lista(app_client, admin_token, "VEN", q=f.sufijo, orden="atencion")
+    assert [x["id"] for x in r["data"]] == [atr_mas.id, atr_menos.id, nr_vieja.id, nr_nueva.id, acc_reciente.id,
+                                            acc_vieja.id, cerr_reciente.id, cerr_vieja.id]
+    assert [x["resolucion"] for x in r["data"]] == ["ATRASADO"] * 2 + ["NO_RESUELTO"] * 2 + ["ACCION_TOMADA"] * 2 + [
+        "CERRADO"] * 2
+
+
+def test_semaforo_de_solicitudes_deja_fuera_el_soporte_viejo(app_client, db, admin_token):
+    """r1 (M6 c): una SC de Soporte vieja (por su tipo o por su estado N/A_SOPORTE) no sale en semaforo=atrasados (R8:
+    Soporte queda fuera del semaforo comercial); una SC vieja con tipo NULL si (no es Soporte, RP11). En 'atencion' el
+    Soporte (rango NULL) va al final."""
+    _dias_de_alerta(db, sc=2)
+    f = _Fabrica(db, _ahora())
+    atrasada = f.sc("ASIGNADA", _dias(5))
+    por_tipo = f.sc("BORRADOR", _dias(9), tipo_solicitud="Soporte Tecnico")
+    por_estado = f.sc("N/A_SOPORTE", _dias(9))
+    sin_tipo = f.sc("BORRADOR", _dias(9), tipo_solicitud=None)
+    assert set(_ids(app_client, admin_token, "SC", q=f.sufijo, semaforo="atrasados")) == {atrasada.id, sin_tipo.id}
+    assert _ids(app_client, admin_token, "SC", q=f.sufijo, semaforo="atrasados", orden="atencion") == [
+        sin_tipo.id, atrasada.id]
+    assert _ids(app_client, admin_token, "SC", q=f.sufijo, orden="atencion")[-2:] == [por_estado.id, por_tipo.id]

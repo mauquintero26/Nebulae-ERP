@@ -5,7 +5,7 @@ Pedidos de Venta (VEN), Ordenes Pendientes por Pagar (PXP)
 """
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session, selectinload
-from sqlalchemy import text, func, select, case, and_, or_
+from sqlalchemy import text, func, select, case, and_, or_, literal
 from sqlalchemy.exc import DataError, DBAPIError, IntegrityError, OperationalError
 from typing import Optional, List
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -58,7 +58,7 @@ from app.core.resolucion_ventas import (
 from app.core import resolucion_ventas as rv
 from app.core.listados import (
     MAX_OFFSET, contar_por_vista, expresiones_tiempo, filtrar_por_estados, leer_lista, leer_orden, orden_por_lista,
-    paginar, texto_busqueda, respuesta as respuesta_de_lista,
+    paginar, texto_busqueda, validar_orden, respuesta as respuesta_de_lista,
 )
 from app.api.v1.schemas_compras import CancelarSolicitudBody, CotizarSinConfirmacionBody
 from app.api.v1.crm import mover_lead_de_solicitud, reabrir_lead_de_solicitud
@@ -1738,6 +1738,15 @@ _FLUJO_DE_ESTADOS = MappingProxyType({
 })
 _RANGOS_SIN_RESOLVER = (rv.RANGO["ATRASADO"], rv.RANGO["NO_RESUELTO"])
 _RANGOS_RESUELTOS = (rv.RANGO["ACCION_TOMADA"], rv.RANGO["CERRADO"])
+# r1 (M4, M5): los caracteres que str.strip() quita (los de str.isspace(); ninguno pasa de U+3000). Es el MISMO valor de
+# ventas_hub._ESPACIOS, que alli es privada (y ventas_hub importa de este modulo: no se puede importar de vuelta). Con
+# ellos el asesor y el cotizador se limpian en SQL como en el Hub (D46, «Asesor H4 en SQL») y como _texto_o_none.
+_ESPACIOS = "".join(chr(c) for c in range(0x3001) if chr(c).isspace())
+
+
+def _texto_sql(columna):
+    """El texto sin espacios en los bordes, o NULL si queda vacio: _texto_o_none en SQL (el _texto de ventas_hub)."""
+    return func.nullif(func.btrim(columna, literal(_ESPACIOS)), "")
 
 
 def _parametro_de_lista(valor, opciones, mensaje: str) -> Optional[str]:
@@ -1771,6 +1780,25 @@ def _estados_de_lista(tipo: str, estados) -> list:
     return lista
 
 
+def _estado_de_lista(tipo: str, estado) -> Optional[str]:
+    """r1 (M10, M11): el parametro de compatibilidad 'estado' pasa por la misma validacion que 'estados' (D46): con un
+    caracter de control, 422 «La búsqueda no puede llevar caracteres de control.» (antes un NUL llegaba al SQL y daba
+    500), y con un estado que no es del tipo, 422 «El estado «x» no existe en SC|COT|VEN.». Devuelve el valor tal cual
+    llego: el filtro sigue siendo la igualdad de hoy (RP8; 'ASIGNADA,BORRADOR' no es un CSV y no trae nada)."""
+    _estados_de_lista(tipo, estado)
+    return estado
+
+
+def _sin_caracteres_de_control(valor) -> Optional[str]:
+    """r1 (M11): `valor` tal cual (canal_venta va por igualdad, como hoy), o 422 con el texto de D46 si trae un caracter
+    de control (texto_busqueda: NUL, C0, C1 o DEL; un tabulador en medio no es error)."""
+    try:
+        texto_busqueda(valor, None)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return valor
+
+
 def _busqueda_de_lista(q, search) -> Optional[str]:
     """RP8: el texto de texto_busqueda(q, search) con sus comodines para ilike, o None. Un caracter de control -> 422
     (D46: un tabulador o un salto de linea en medio pasa a un espacio)."""
@@ -1785,7 +1813,8 @@ def _ordenes_de_lista(modelo, tipo: str, rango, campos: dict) -> dict:
     """Las ordenes permitidas de leer_orden (D34) para la lista de `modelo`: los campos de su lista blanca mas
     - 'atencion' (R8, atencion_primero_listas): el rango de resolucion_ventas.expresiones (atrasados, sin resolver,
       accion tomada y cerrados); en los dos primeros el que lleva mas tiempo sin movimiento arriba, en los dos ultimos el
-      mas reciente; desempate por id. Las SC de Soporte (rango NULL) van al final.
+      mas reciente; desempate por id. Las SC de Soporte (rango NULL) van al final. `rango` es la columna de la
+      subconsulta de _lista_con_rango (r1, M8), no la expresion: asi el CASE se calcula una sola vez por fila.
     - 'reciente' (el orden de hoy, D29) y 'sin_movimiento' (expresiones_tiempo).
     - 'estado': la posicion en el flujo del tipo (_FLUJO_DE_ESTADOS)."""
     movimiento = func.coalesce(modelo.updated_at, modelo.created_at)
@@ -1806,6 +1835,28 @@ def _ordenes_de_lista(modelo, tipo: str, rango, campos: dict) -> dict:
         "cliente": modelo.customer_name,
         **campos,
     }
+
+
+def _lista_con_rango(db: Session, modelo, tipo: str, filtrado, dias, ahora, orden, semaforo, campos: dict) -> tuple:
+    """r1 (M8): (consulta, orden_sql) de la lista de `modelo` con todo su filtro (`filtrado`, sin el semaforo).
+
+    'atencion' y semaforo=atrasados leen el rango de resolucion_ventas.expresiones calculado UNA vez por fila, como el
+    Hub (que lo proyecta en su UNION): una subconsulta con el id y el rango de las filas del filtro, unida por id; el
+    orden y el filtro del semaforo leen su columna. El OFFSET 0 va a proposito: sin el, PostgreSQL aplana la subconsulta
+    y vuelve a copiar el CASE (en SC y COT, con los EXISTS de D16 sobre sale_orders) en cada uso: cuatro veces por fila
+    con orden=atencion&semaforo=atrasados. Con otro orden y sin semaforo la consulta es la de hoy, sin la subconsulta
+    (D29; test_listas_ventas_totales cuenta sus sentencias). Un orden que no existe da el 422 de leer_orden."""
+    sub = (filtrado.with_entities(modelo.id.label("id"), rv.expresiones(tipo, modelo, dias, ahora)["rango"])
+           .order_by(None).offset(0).subquery("rango_de_lista"))
+    permitidas = _ordenes_de_lista(modelo, tipo, sub.c.rango, campos)
+    orden_sql = leer_orden(orden, permitidas, "reciente", id_lista=modelo.id)
+    clave, _ = validar_orden(orden, permitidas, "reciente")
+    if clave != "atencion" and semaforo != "atrasados":
+        return filtrado, orden_sql
+    consulta = db.query(modelo).join(sub, sub.c.id == modelo.id)
+    if semaforo == "atrasados":
+        consulta = consulta.filter(sub.c.rango == rv.RANGO["ATRASADO"])
+    return consulta, orden_sql
 
 
 def _dias_completos(desde, ahora) -> int:
@@ -1962,14 +2013,9 @@ def list_solicitudes(
     vista = _parametro_de_lista(vista, VISTAS_SOLICITUDES, "La vista «{}» no existe en Solicitudes.")
     semaforo = _semaforo_de_lista(semaforo)
     lista_estados = _estados_de_lista("SC", estados)
+    estado = _estado_de_lista("SC", estado)
     like = _busqueda_de_lista(q, search)
     dias, ahora = leer_dias_alerta(db), ahora_utc()
-    rango = rv.expresiones("SC", CustomerRequest, dias, ahora)["rango"].element
-    orden_sql = leer_orden(orden, _ordenes_de_lista(CustomerRequest, "SC", rango, {
-        "tipo": func.coalesce(CustomerRequest.tipo_solicitud, "Cotizacion de Producto"),
-        "asesor": CustomerRequest.advisor_name,
-        "vencimiento": CustomerRequest.fecha_vencimiento,
-    }), "reciente", id_lista=CustomerRequest.id)
 
     extras = [CustomerRequest.customer_id == customer_id] if customer_id else []
     base = db.query(CustomerRequest).filter(*extras)
@@ -1987,8 +2033,13 @@ def list_solicitudes(
     condicion = _condicion_vista_solicitudes(vista)
     if condicion is not None:
         filtrado = filtrado.filter(condicion)
-    if semaforo == "atrasados":
-        filtrado = filtrado.filter(rango == rv.RANGO["ATRASADO"])
+    # r1 (M8): el semaforo y 'atencion' leen el rango calculado una vez (_lista_con_rango). r1 (M4): el asesor se ordena
+    # limpio, como en el Hub: un '' o un '   ' va con los NULL.
+    filtrado, orden_sql = _lista_con_rango(db, CustomerRequest, "SC", filtrado, dias, ahora, orden, semaforo, {
+        "tipo": func.coalesce(CustomerRequest.tipo_solicitud, "Cotizacion de Producto"),
+        "asesor": _texto_sql(CustomerRequest.advisor_name),
+        "vencimiento": CustomerRequest.fecha_vencimiento,
+    })
 
     conteos = None
     if con_conteos:
@@ -3175,15 +3226,9 @@ def list_cotizaciones(
     vista = _parametro_de_lista(vista, VISTAS_COTIZACIONES, "La vista «{}» no existe en Cotizaciones.")
     semaforo = _semaforo_de_lista(semaforo)
     lista_estados = _estados_de_lista("COT", estados)
+    estado = _estado_de_lista("COT", estado)
     like = _busqueda_de_lista(q, search)
     dias, ahora = leer_dias_alerta(db), ahora_utc()
-    rango = rv.expresiones("COT", SalesQuotation, dias, ahora)["rango"].element
-    orden_sql = leer_orden(orden, _ordenes_de_lista(SalesQuotation, "COT", rango, {
-        "cotizador": SalesQuotation.cotizador,
-        "total": SalesQuotation.total_cop,
-        "anticipo": SalesQuotation.anticipo_cop,
-        "entrega": SalesQuotation.fecha_entrega_estimada,
-    }), "reciente", id_lista=SalesQuotation.id)
 
     extras = [SalesQuotation.sc_id == sc_id] if sc_id else []
     base = db.query(SalesQuotation).filter(*extras)
@@ -3205,8 +3250,13 @@ def list_cotizaciones(
     condicion = _condicion_vista_cotizaciones(vista)
     if condicion is not None:
         filtrado = filtrado.filter(condicion)
-    if semaforo == "atrasados":
-        filtrado = filtrado.filter(rango == rv.RANGO["ATRASADO"])
+    # r1 (M8): el semaforo y 'atencion' leen el rango calculado una vez. r1 (M4): el cotizador se ordena limpio.
+    filtrado, orden_sql = _lista_con_rango(db, SalesQuotation, "COT", filtrado, dias, ahora, orden, semaforo, {
+        "cotizador": _texto_sql(SalesQuotation.cotizador),
+        "total": SalesQuotation.total_cop,
+        "anticipo": SalesQuotation.anticipo_cop,
+        "entrega": SalesQuotation.fecha_entrega_estimada,
+    })
 
     conteos = None
     if con_conteos:
@@ -4428,6 +4478,18 @@ def _resumen_pedidos(q) -> dict:
             "anticipo_cop": float(redondear_peso(anticipo)), "por_estado": por_estado}
 
 
+def _asesor_de_pedido_sql():
+    """r1 (M5): el asesor de H4 de cada pedido en SQL, el de _asesor_de_pedido y el del UNION del Hub: el cotizador de su
+    COT o, si esta vacio o no hay COT, el asesor de su SC, los dos limpios como _texto_o_none (_texto_sql, D46). Va con
+    subconsultas correlacionadas y no con joins: la consulta de la lista sigue siendo solo de sale_orders, asi que el
+    total, los conteos y el resumen de H47 no cambian de forma."""
+    cotizador = (select(_texto_sql(SalesQuotation.cotizador)).where(SalesQuotation.id == SaleOrder.cot_id)
+                 .scalar_subquery())
+    asesor_de_la_sc = (select(_texto_sql(CustomerRequest.advisor_name)).where(CustomerRequest.id == SaleOrder.sc_id)
+                       .scalar_subquery())
+    return func.coalesce(cotizador, asesor_de_la_sc)
+
+
 def _condicion_vista_pedidos(vista):
     """La condicion de la pestaña `vista` de Pedidos de venta; None = todos. Las pestañas son las de grupo_pedido
     (VISTA_DE_GRUPO y estados_de_vista: pend_compra trae PENDIENTE_PAGO, cancelado trae DEVUELTO_TOTAL; un estado
@@ -4467,15 +4529,10 @@ def list_pedidos(
     semaforo = _semaforo_de_lista(semaforo)
     saldo = _parametro_de_lista(saldo, SALDOS_PEDIDOS, "El filtro de saldo «{}» no existe: usa pendiente o pagado.")
     lista_estados = _estados_de_lista("VEN", estados)
+    estado = _estado_de_lista("VEN", estado)
+    canal_venta = _sin_caracteres_de_control(canal_venta)
     like = _busqueda_de_lista(q, search)
     dias, ahora = leer_dias_alerta(db), ahora_utc()
-    rango = rv.expresiones("VEN", SaleOrder, dias, ahora)["rango"].element
-    orden_sql = leer_orden(orden, _ordenes_de_lista(SaleOrder, "VEN", rango, {
-        "total": SaleOrder.total_cop,
-        "anticipo": SaleOrder.anticipo_cop,
-        "saldo": SaleOrder.saldo_cop,
-        "entrega": SaleOrder.fecha_entrega_estimada,
-    }), "reciente", id_lista=SaleOrder.id)
 
     base = db.query(SaleOrder)
     if cot_id:
@@ -4489,7 +4546,8 @@ def list_pedidos(
             SaleOrder.sc_numero.ilike(like) |
             SaleOrder.cot_numero.ilike(like) |
             SaleOrder.pweb_numero.ilike(like) |
-            productos_ilike(SaleOrder.productos, like)
+            productos_ilike(SaleOrder.productos, like) |
+            _asesor_de_pedido_sql().ilike(like)   # r1 (M5): el asesor de H4, como busca el Hub
         )
     if saldo == "pendiente":
         base = base.filter(SaleOrder.saldo_cop > 0)
@@ -4502,8 +4560,13 @@ def list_pedidos(
     condicion = _condicion_vista_pedidos(vista)
     if condicion is not None:
         filtrado = filtrado.filter(condicion)
-    if semaforo == "atrasados":
-        filtrado = filtrado.filter(rango == rv.RANGO["ATRASADO"])
+    # r1 (M8): el semaforo y 'atencion' leen el rango calculado una vez (el resumen de H47 lleva tambien el semaforo).
+    filtrado, orden_sql = _lista_con_rango(db, SaleOrder, "VEN", filtrado, dias, ahora, orden, semaforo, {
+        "total": SaleOrder.total_cop,
+        "anticipo": SaleOrder.anticipo_cop,
+        "saldo": SaleOrder.saldo_cop,
+        "entrega": SaleOrder.fecha_entrega_estimada,
+    })
 
     conteos = None
     if con_conteos:
@@ -4786,7 +4849,7 @@ def _descontar_inventario_despacho(db: Session, v: SaleOrder, warehouse_id, user
         return
     if not warehouse_id:
         raise HTTPException(422, "Debes indicar la bodega de despacho para descontar el inventario de este pedido")
-    warehouse_id = int(warehouse_id)
+    warehouse_id = _bodega_existente(db, warehouse_id)   # r1 (M12): 422 legible antes de escribir (antes, 500)
     now = datetime.datetime.utcnow()
     owner = "NEBULAE"
 
@@ -4928,9 +4991,35 @@ def _motivo_con_credito(motivo, credito):
 # con PATCH /ventas/pedidos/{id} es despachar el pedido (pasarlo a ENTREGADO) desde la bodega que elige.
 _SOLO_DESPACHO_BODEGA = "Bodega solo puede marcar el pedido como despachado."
 _ELIGE_LA_BODEGA = "Elige la bodega de salida."
+_LA_BODEGA_NO_EXISTE = "La bodega elegida no existe."
 # Lo que BODEGA puede mandar: el estado, la bodega y updated_by, que se ignora (Entregas lo manda hoy; RP23).
 _CLAVES_DEL_DESPACHO_BODEGA = frozenset({"estado", "warehouse_id", "updated_by"})
 _MAX_ID_BODEGA = 2 ** 31 - 1   # warehouses.id es Integer: un id mas grande no existe (y no llega al SQL)
+
+
+def _id_de_bodega(valor) -> Optional[int]:
+    """El entero de `valor` (un int o su texto), o None si no vino ('' o None) o no es un entero: un bool, un decimal,
+    un texto que no es un numero entero, una lista... Lo usan el despacho de BODEGA y el de ADMIN y ASESOR."""
+    if isinstance(valor, bool) or (isinstance(valor, float) and not valor.is_integer()):
+        return None
+    try:
+        return _int_or_none(valor)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _bodega_existente(db: Session, valor) -> int:
+    """r1 (M12): la bodega de salida del despacho de ADMIN y ASESOR (_descontar_inventario_despacho), validada ANTES de
+    escribir. Un valor que no es el id de una bodega (texto, bool, decimal, lista...) -> 422 «Elige la bodega de
+    salida.» (el texto de BODEGA); un entero que no es una bodega (no existe, o fuera del Integer de warehouses.id) ->
+    422 «La bodega elegida no existe.». Antes los dos daban 500 (int() o la FK al hacer flush). Devuelve el id."""
+    warehouse_id = _id_de_bodega(valor)
+    if warehouse_id is None:
+        raise HTTPException(422, _ELIGE_LA_BODEGA)
+    if (not 0 < warehouse_id <= _MAX_ID_BODEGA
+            or db.query(Warehouse.id).filter(Warehouse.id == warehouse_id).first() is None):
+        raise HTTPException(422, _LA_BODEGA_NO_EXISTE)
+    return warehouse_id
 
 
 def _bodega_del_despacho(db: Session, body: dict) -> tuple:
@@ -4940,13 +5029,7 @@ def _bodega_del_despacho(db: Session, body: dict) -> tuple:
     salida.». Todo ANTES de leer el pedido y sus lineas (una consulta: la bodega). Devuelve (id, nombre) de la bodega."""
     if not set(body) <= _CLAVES_DEL_DESPACHO_BODEGA or body.get("estado") != "ENTREGADO":
         raise HTTPException(403, _SOLO_DESPACHO_BODEGA)
-    valor = body.get("warehouse_id")
-    if isinstance(valor, bool) or (isinstance(valor, float) and not valor.is_integer()):
-        raise HTTPException(422, _ELIGE_LA_BODEGA)
-    try:
-        warehouse_id = _int_or_none(valor)
-    except (TypeError, ValueError, OverflowError):
-        raise HTTPException(422, _ELIGE_LA_BODEGA)
+    warehouse_id = _id_de_bodega(body.get("warehouse_id"))
     if warehouse_id is None or not 0 < warehouse_id <= _MAX_ID_BODEGA:
         raise HTTPException(422, _ELIGE_LA_BODEGA)
     fila = db.query(Warehouse.id, Warehouse.name).filter(Warehouse.id == warehouse_id).first()
@@ -5116,6 +5199,9 @@ def update_pedido(ven_id: int, body: dict,
         if ya_despachado:
             texto_estado = ("Estado cambiado a Entregado (el inventario ya se había descontado en un despacho anterior; "
                             "no se descuenta otra vez)")
+            if bodega_de_salida is not None:
+                # r1 (M3): con BODEGA tambien dice desde que bodega lo despacho (R15, RP23).
+                texto_estado += f" (despachado desde {bodega_de_salida[1]})"
         elif bodega_de_salida is not None:
             # R15: la Actividad dice quien despacho (el autor de la sesion) y desde que bodega.
             texto_estado = (f"Estado cambiado a {etiqueta_estado('VEN', v.estado)} "

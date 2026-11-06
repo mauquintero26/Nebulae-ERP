@@ -7,6 +7,8 @@ PATCH /api/v1/ventas/pedidos/{id} acepta el rol BODEGA SOLO para pasar el pedido
   lineas. La transicion sigue las reglas del Bloque 1 (TRANSICIONES_VEN_PATCH).
 - La Actividad dice quien despacho y desde que bodega: «Estado cambiado a Entregado (despachado desde {bodega})».
 - ADMIN y ASESOR siguen igual; BODEGA sigue sin poder usar los demas endpoints que cambian documentos de Ventas.
+- r1 (M12): con ADMIN y ASESOR, una bodega que no es un entero da 422 «Elige la bodega de salida.» y una que no existe,
+  422 «La bodega elegida no existe.» (antes, 500), sin escribir nada.
 
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_despacho_bodega
 """
@@ -17,6 +19,8 @@ from tests.usuarios_de_prueba import bodega_token, compras_token  # noqa: F401  
 
 SOLO_DESPACHO = "Bodega solo puede marcar el pedido como despachado."
 ELIGE_BODEGA = "Elige la bodega de salida."
+BODEGA_NO_EXISTE = "La bodega elegida no existe."
+FALTA_BODEGA = "Debes indicar la bodega de despacho para descontar el inventario de este pedido"
 
 
 def _auth(token):
@@ -306,3 +310,76 @@ def test_admin_y_asesor_siguen_igual(app_client, db, admin_token, vendedor_token
     db.expire_all()
     db.refresh(ven)
     assert ven.estado == "EN_PROCESO"
+
+
+# ─── Ronda r1 de la revision de T6B ──────────────────────────────────────────────────────────────────────────────────
+
+def test_una_bodega_invalida_da_422_sin_escribir_nada(app_client, db, admin_token, vendedor_token, bodega_token, sku,
+                                                     contador_sql):
+    """r1 (M12): con ADMIN y ASESOR, un pedido con lineas de catalogo y un warehouse_id que no es el id de una bodega
+    (texto, bool, decimal, lista...) da 422 «Elige la bodega de salida.» (el texto de BODEGA), y uno que es un entero
+    pero no es una bodega (no existe, negativo o fuera del Integer) da 422 «La bodega elegida no existe.». Antes daban
+    500. Sin bodega sigue el 422 de siempre. BODEGA conserva lo de RP23: cualquiera de esos da «Elige la bodega de
+    salida.». En ningun caso se escribe nada: ni el estado, ni la Actividad, ni el inventario."""
+    from sqlalchemy import func
+    from app.models.inventory import Warehouse
+    _, nivel = _bodega_con_stock(db, sku, 10)
+    ven = _ven(db, productos=[{"product_name": "Taladro", "qty": 3, "sku_id": sku.id}])
+    no_existe = (db.query(func.max(Warehouse.id)).scalar() or 0) + 1000
+    no_es_entero = ("abc", "   ", "1.5", "1e3", True, 1.5, [1], {"id": 1})
+    no_es_bodega = (no_existe, str(no_existe), -1, 2 ** 40, "9" * 30)
+    casos = {
+        admin_token: [(v, ELIGE_BODEGA) for v in no_es_entero] + [(v, BODEGA_NO_EXISTE) for v in no_es_bodega]
+                     + [(v, FALTA_BODEGA) for v in (None, "", 0)],
+        vendedor_token: [(v, ELIGE_BODEGA) for v in no_es_entero] + [(v, BODEGA_NO_EXISTE) for v in no_es_bodega],
+        bodega_token: [(v, ELIGE_BODEGA) for v in no_es_entero + no_es_bodega],
+    }
+    for token, valores in casos.items():
+        for valor, texto in valores:
+            with contador_sql.ventana() as v:
+                resp = _patch(app_client, token, ven.id, {"estado": "ENTREGADO", "warehouse_id": valor})
+            assert resp.status_code == 422, (valor, resp.status_code, resp.text)
+            assert resp.json()["detail"] == texto, (valor, resp.json())
+            assert v.commits == 0, valor
+            # Nada se escribe: ni un INSERT, UPDATE o DELETE llega a la base antes del 422 (la bodega se valida antes
+            # del flush de la operacion de inventario; la sesion no hace autoflush).
+            escrituras = [s for s in v.sentencias if s.lstrip().split(None, 1)[0].upper() in ("INSERT", "UPDATE",
+                                                                                             "DELETE")]
+            assert escrituras == [], (valor, escrituras)
+    db.expire_all()
+    db.refresh(ven)
+    db.refresh(nivel)
+    assert ven.estado == "LISTO_ENTREGA" and nivel.quantity == Decimal("10")
+    assert _logs(db, ven.id) == [] and _operaciones(db, ven.id) == []
+    # Con una bodega que existe, ADMIN despacha como siempre (el texto de la Actividad no cambia).
+    bodega, _ = _bodega_con_stock(db, sku, 5)
+    resp = _patch(app_client, admin_token, ven.id, {"estado": "ENTREGADO", "warehouse_id": str(bodega.id)})
+    assert resp.status_code == 200, resp.text
+    [op] = _operaciones(db, ven.id)
+    assert op.source_warehouse_id == bodega.id
+    [renglon] = _logs(db, ven.id, "ESTADO_CHANGED")
+    assert renglon.description == "Estado cambiado a Entregado"
+
+
+def test_un_pedido_ya_descontado_dice_desde_que_bodega_lo_despacho_bodega(app_client, db, admin_token, bodega_token,
+                                                                         sku):
+    """r1 (M3): si el inventario ya se habia descontado (un despacho anterior y despues lo reabrieron), marcarlo Entregado
+    no descuenta otra vez; con BODEGA el renglon de la Actividad tambien dice desde que bodega (R15, RP23). ADMIN, que
+    no elige la bodega de salida de BODEGA, conserva el texto de hoy."""
+    from app.models.inventory import InventoryOperation
+    ya_descontado = ("Estado cambiado a Entregado (el inventario ya se había descontado en un despacho anterior; no se "
+                     "descuenta otra vez)")
+    bodega, nivel = _bodega_con_stock(db, sku, 10)
+    for token, sufijo in ((bodega_token, f" (despachado desde {bodega.name})"), (admin_token, "")):
+        ven = _ven(db, productos=[{"product_name": "Taladro", "qty": 3, "sku_id": sku.id}])
+        db.add(InventoryOperation(source_warehouse_id=bodega.id, operation_type="DELIVERY", status="DONE",
+                                  source_document_type="PVEN", source_document_id=ven.id,
+                                  source_document_numero=ven.numero))
+        db.commit()
+        resp = _patch(app_client, token, ven.id, {"estado": "ENTREGADO", "warehouse_id": bodega.id})
+        assert resp.status_code == 200, resp.text
+        [renglon] = _logs(db, ven.id, "ESTADO_CHANGED")
+        assert renglon.description == ya_descontado + sufijo, renglon.description
+        assert len(_operaciones(db, ven.id)) == 1
+        db.refresh(nivel)
+        assert nivel.quantity == Decimal("10")
