@@ -1491,10 +1491,13 @@ export default function SolicitudClient() {
   const filtroSemaforo: FiltroSemaforo = estado.semaforo === 'atrasados' ? 'atrasados' : 'todos';
   // «Con atraso» pone semaforo=atrasados en el estado único (la tabla y el tablero lo mandan al servidor) y vuelve a la
   // página 1; «Ver todo» lo quita. Soporte queda fuera del semáforo (R8) y la Papelera y Canceladas (r1, m7) son de
-  // canceladas: desde ellas, «Con atraso» abre Activas (VISTAS_SIN_ATRASO). r2 (p5): solo en Lista. En Kanban el tablero
-  // no usa la pestaña (pide con vista=todas_sin_soporte): solo se pone el semáforo y el filtro del tablero se queda.
+  // canceladas: desde ellas, «Con atraso» abre Activas (VISTAS_SIN_ATRASO). r2b (p5): también en Kanban (vista
+  // 'canceladas'), pero la poda es con las opciones del modo que se ve: en Kanban, las del tablero, así su filtro se
+  // queda; al volver a Lista no se cae en Canceladas con atrasados y accionModo poda con las de Activas.
   const alFiltrarSemaforo = (f: FiltroSemaforo) => {
-    if (f !== 'todos' && modoEfectivo === 'lista' && VISTAS_SIN_ATRASO.includes(estado.vista ?? '')) despachar(accionPestana(estado, INICIAL_SC.vista, opcionesEstadosSolicitudes));
+    if (f !== 'todos' && VISTAS_SIN_ATRASO.includes(estado.vista ?? '')) {
+      despachar(accionPestana(estado, INICIAL_SC.vista, modoEfectivo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_SC : opcionesEstadosSolicitudes));
+    }
     despachar({ tipo: 'semaforo', valor: f === 'todos' ? null : f });
   };
 
