@@ -788,7 +788,32 @@ console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuent
   // r1 (M1 y M5): el estado de la franja (lib/flujo.js) y lo que vio en el render anterior.
   assert.match(banner, /const f = estadoDeFranja\(\{ cargando, error, huboError \}\);\s*if \(f\.conError !== huboError\) setHuboError\(f\.conError\);/);
   assert.match(banner, /const resumen = semaforoDeFranja\(\{ atrasados: semaforo\?\.atrasados \?\? null, cargando: f\.cargandoNumeros, error: f\.conError \}\);/);
-  assert.match(banner, /const opciones = opcionesSemaforo\(semaforo\);/);
+  // B4 T7 r1 (A1, ruling del controlador; reabre M4): el esqueleto de la franja tiene la forma de lo cargado, para que
+  // no crezca al llegar los datos (CLS ≤ 0,1). Solo crecen los chips de aviso, que de verdad dependen de los datos.
+  // (1) La fila del semáforo lleva sus botones: con la clave noResueltos y sin su número todavía (Ventas), «No
+  // resueltos» se reserva con null, la barra gris (M15b); sin la clave (Compras) no aparece. Las opciones siguen
+  // saliendo de opcionesSemaforo; con error o con datos no cambia nada.
+  assert.match(banner,
+    /const semaforoVisto = f\.cargandoNumeros && semaforo && 'noResueltos' in semaforo && semaforo\.noResueltos === undefined\s*\? \{ \.\.\.semaforo, noResueltos: null \}\s*: semaforo;\s*const opciones = opcionesSemaforo\(semaforoVisto\);/,
+    'A1: el semáforo reserva «No resueltos» mientras carga');
+  assert.deepEqual(F.opcionesSemaforo({ atrasados: null, noResueltos: null, filtro: 'todos' }).map((o) => [o.filtro, o.conteo]),
+    [['atrasados', null], ['no_resueltos', null], ['todos', null]], 'null: el botón, con la barra gris');
+  assert.deepEqual(F.opcionesSemaforo({ atrasados: null, filtro: 'todos' }).map((o) => o.filtro), ['atrasados', 'todos'],
+    'sin la clave: sin el botón');
+  // (2) El renglón del número de cada caja: mientras carga, Contador pinta una barra de 8 px como hijo directo del span
+  // que lleva la letra del número; la franja le da a ese span el alto de un renglón de su letra (min-h-lh).
+  assert.match(banner, /const RENGLON_DEL_NUMERO = '\[&_:has\(>\.animate-pulse\)\]:min-h-lh';/, 'A1: el renglón del número');
+  assert.match(banner, /<div className=\{`mt-3 min-w-0 \$\{RENGLON_DEL_NUMERO\}`\}>\s*<PasosFlujo\s+variante="banner"/,
+    'A1: la reserva va sobre los pasos');
+  assert.equal((banner.match(/animate-pulse/g) ?? []).length, 1, 'A1: el selector es el único animate-pulse de la franja');
+  const contador = codigo(leer('components/ui/Contador.tsx'));
+  assert.match(contador,
+    /<span className=\{`inline-flex items-center \$\{className\}`\}>\s*<span aria-hidden="true" className="inline-block h-2 w-4 rounded-full bg-current opacity-30 animate-pulse" \/>/,
+    'A1: la barra de Contador es el hijo directo con animate-pulse del span con la letra');
+  assert.match(pasos,
+    /<Contador\s+valor=\{paso\.total\}\s+estado=\{estadoNumeroFranja\(paso\.total, estadoConteos\)\}\s+className=\{`font-black text-slate-900 \$\{compacto \? 'text-sm' : 'text-sm @2xl\/flujo:text-xl'\}`\}/,
+    'A1: la caja le pasa a Contador la letra del número cargado');
+  assert.ok(!/animate-pulse/.test(pasos), 'A1: en las cajas, la única barra es la de Contador');
   assert.match(banner, /aria-pressed=\{o\.activo\}\s+onClick=\{\(\) => semaforo\.onFiltrar\(alternarFiltroSemaforo\(semaforo\.filtro, o\.filtro\)\)\}/);
   // C13, el ruling M1 y M8: «—» con error; sin atenuar en los segmentos (el activo es blanco sobre rose-600).
   assert.match(banner, /<Contador valor=\{o\.conteo\} estado=\{estadoNumeroFranja\(o\.conteo, f\.estadoConteos, \{ atenuar: false \}\)\} \/>/);

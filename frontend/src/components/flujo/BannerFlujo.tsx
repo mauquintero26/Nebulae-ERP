@@ -40,7 +40,8 @@ import type { AccionAjustar, AvisoFranja, PartesFranja, PasoVista, SemaforoFranj
  *  - partes: solo 'todo' (R1: la rama 'semaforo' | 'diagrama' del diseño no se implementa).
  * Uso con flujo = useResumenFlujo(ruta, recarga) (r1, M15b: cuando un conteo no viene se pasa `undefined`, no `null`;
  * null es «todavía carga» y pinta la barra gris). r2 (M3): un ejemplo por pantalla; ninguno da null mientras carga.
- *  - T7, Ventas (/ventas/flujo manda no_resueltos; mientras carga es undefined y el botón aparece con los datos):
+ *  - T7, Ventas (/ventas/flujo manda no_resueltos; mientras carga es undefined y, como la clave está, el botón se
+ *    reserva con la barra gris: B4 T7 r1, A1):
  *      semaforo={{
  *        atrasados: flujo.datos?.semaforo?.atrasados ?? null,
  *        noResueltos: flujo.datos?.semaforo?.no_resueltos,
@@ -86,6 +87,13 @@ const TEXTO_SEMAFORO = { gris: 'text-slate-500', rojo: 'text-rose-700', verde: '
 const FOCO = 'outline-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
 const BOTON = `inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-800 ${FOCO}`;
 
+/**
+ * B4 T7 r1 (A1): el renglón del número de cada caja mide lo mismo cargando que cargado. Mientras carga, Contador pinta
+ * una barra de 8 px (h-2) como único hijo visible de un span sin texto, que lleva la letra del número (text-sm o, en
+ * la caja, text-xl): ese span recibe el alto de un renglón de su letra (1lh) y la barra queda centrada en él.
+ */
+const RENGLON_DEL_NUMERO = '[&_:has(>.animate-pulse)]:min-h-lh';
+
 /** Un valor guardado en flujo:<id> vale solo si es true o false (otro valor: la franja completa). */
 const esBooleano = (valor: unknown) => typeof valor === 'boolean';
 
@@ -111,7 +119,13 @@ export function BannerFlujo({
   if (f.conError !== huboError) setHuboError(f.conError);
 
   const resumen = semaforoDeFranja({ atrasados: semaforo?.atrasados ?? null, cargando: f.cargandoNumeros, error: f.conError });
-  const opciones = opcionesSemaforo(semaforo);
+  // B4 T7 r1 (A1): mientras carga, la fila del semáforo lleva los botones que tendrá con los datos. La pantalla que pasa
+  // la clave noResueltos (Ventas: undefined hasta que llega el resumen) reserva «No resueltos» con null, la barra gris
+  // (M15b); la que no la pasa (Compras) sigue sin él. Con error o con datos, como antes.
+  const semaforoVisto = f.cargandoNumeros && semaforo && 'noResueltos' in semaforo && semaforo.noResueltos === undefined
+    ? { ...semaforo, noResueltos: null }
+    : semaforo;
+  const opciones = opcionesSemaforo(semaforoVisto);
   const IconoSemaforo = ICONO_SEMAFORO[resumen.tono];
 
   // r2 (M2 y M6): al terminar el reintento (bien o mal) el foco pendiente se olvida; si salió bien y el foco quedó en el
@@ -223,7 +237,7 @@ export function BannerFlujo({
         </div>
       ) : null}
 
-      <div className="mt-3 min-w-0">
+      <div className={`mt-3 min-w-0 ${RENGLON_DEL_NUMERO}`}>
         <PasosFlujo
           variante="banner"
           pasos={pasos}
