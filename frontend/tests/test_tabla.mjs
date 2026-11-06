@@ -27,6 +27,8 @@ import {
   accionPestana, alternarEstado, puedeDesplazar, estadoDeConteo,
   anchoAlSoltar, limitesDelAsa, UMBRAL_ASA, superaUmbralAsa, estadoDelTotal, recortarBordes, etiquetasDeEstados, opcionesConMarcados, posicionPanel, saleConEsc,
 } from '../src/lib/tabla.js';
+// B4 T7 r1: lo nuevo por el espacio de nombres, para que la falta de una función no tape los demás casos.
+import * as TABLA from '../src/lib/tabla.js';
 
 const ids = (filas) => filas.map((f) => f.id);
 
@@ -1899,8 +1901,8 @@ console.log('--- TEST 37 (T4D r1): los cables de la ronda r1 en el fuente (gesto
   // 6e: activación manual de las pestañas: las flechas solo mueven el foco.
   assert.match(barra, /const teclaPestanas = [\s\S]*?botonesPestana\.current\.get\(siguiente\)\?\.focus\(\);/);
   assert.ok(!/const teclaPestanas = [^;]*;[\s\S]*?elegirPestana\(siguiente\)/.test(barra), 'las flechas no activan');
-  // 6f: los títulos se recortan a la zona libre entre las fijas.
-  assert.match(t, /recortarBordes\(rects, enOrden\.map\(\(v\) => lados\[v\]\), \{ inicio \}\)/);
+  // 6f: los títulos se recortan a la zona libre entre las fijas (B4 T7 r1, A2: las que están quietas).
+  assert.match(t, /recortarBordes\(rects, enOrden\.map\(\(v\) => fijasQuietas\[v\]\), \{ inicio \}\)/);
   // 6h: tonos de fila opacos y el JSDoc de claseFila.
   for (const [clave, tono] of [['filaAlerta', 'rose'], ['filaAviso', 'amber'], ['filaInfo', 'sky'], ['filaApagada', 'slate']]) {
     assert.equal(clase(clave), `bg-${tono}-50 hover:bg-${tono}-100`, clave);
@@ -1963,8 +1965,8 @@ console.log('--- TEST 38 (T4D r2): umbral del asa, la flexible guarda lo que se 
   assert.match(barra, /alQuedarVacio=\{\(\) => \(entrada\.current \?\? botonesPestana\.current\.get\(estado\.vista \?\? ''\)\)\?\.focus\(\)\}/,
     'la búsqueda, o la pestaña activa si no hay búsqueda');
 
-  // 5. La línea azul tampoco pasa sobre la casilla de selección.
-  assert.match(t, /const inicio = r\.left \+ anchoSeleccion;/);
+  // 5. La línea azul tampoco pasa sobre la casilla de selección (B4 T7 r1, A2: mientras la casilla esté quieta).
+  assert.match(t, /const inicio = r\.left \+ \(quietas \? anchoSeleccion : 0\);/);
   assert.match(t, /x: Math\.min\(Math\.max\(borde, inicio\), r\.right\)/);
 
   // 6. estadoTotal es obligatorio si viene total.
@@ -1984,6 +1986,54 @@ console.log('--- TEST 38 (T4D r2): umbral del asa, la flexible guarda lo que se 
   assert.match(t, /if \(ev\.key !== 'Escape' \|\| !movido\) return;/);
   assert.match(filtro, /if \(activo !== null && activo !== document\.body\) return;\s*panel\.current\?\.querySelector<HTMLInputElement>\('input:not\(:disabled\)'\)\?\.focus\(\{ preventScroll: true \}\);\s*\}, \[visible, lista\.length\]\);/);
   assert.match(tabla, /Con el asa no pasa de su\s*(\*\s*)?anchoMax \(640 por defecto\): si ya llena más que eso, solo se angosta/);
+}
+
+console.log('--- TEST 39 (B4 T7 r1, A2): fijasActivas — en una caja angosta las fijas dejan de estar quietas ---');
+{
+  // El mínimo legible de lo que se corre entre las fijas: el ancho por defecto de una columna (cabe una entera).
+  assert.equal(TABLA.MINIMO_ZONA_LIBRE, 160);
+  assert.equal(TABLA.MINIMO_ZONA_LIBRE, ANCHO_POR_DEFECTO);
+  const { fijasActivas } = TABLA;
+  // El Hub de Ventas: casilla 40 + Resolución 104 + Acción 128 = 272; con 160 de mínimo, la frontera es 432 px.
+  const HUB = [40, 104, 128];
+  assert.equal(fijasActivas(432, HUB), true, 'justo en la frontera, quietas');
+  assert.equal(fijasActivas(431, HUB), false, 'un px menos, se corren con la tabla');
+  assert.equal(fijasActivas(231, HUB), false, '375 px con el menú plegado (caja de 231 px en el banco)');
+  assert.equal(fijasActivas(448, HUB), true, '768 px con el menú abierto (caja de 448 px en el banco): no cambia nada');
+  assert.equal(fijasActivas(1024, HUB), true);
+  // Otro mínimo.
+  assert.equal(fijasActivas(300, HUB, 28), true);
+  assert.equal(fijasActivas(299, HUB, 28), false);
+  // Un mínimo raro usa el de por defecto.
+  for (const raro of [NaN, -5, 'x', null]) assert.equal(fijasActivas(431, HUB, /** @type {any} */ (raro)), false, `mínimo ${raro}`);
+  assert.equal(fijasActivas(432, HUB, undefined), true);
+  // Sin medir todavía (null, undefined, NaN, texto): como hoy, quietas.
+  for (const nada of [null, undefined, NaN, 'x', Infinity]) assert.equal(fijasActivas(/** @type {any} */ (nada), HUB), true, `caja ${nada}`);
+  // Sin fijas no hay nada que soltar.
+  assert.equal(fijasActivas(100, []), true);
+  assert.equal(fijasActivas(100, [0, 0]), true);
+  assert.equal(fijasActivas(100, /** @type {any} */ (null)), true);
+  // Un ancho que no es un número positivo cuenta 0.
+  assert.equal(fijasActivas(200, /** @type {any} */ ([NaN, 40, null, -3, 'x'])), true, '40 + 160 = 200');
+  assert.equal(fijasActivas(199, /** @type {any} */ ([NaN, 40, null, -3, 'x'])), false);
+
+  // TablaEstandar: mide la caja con su ResizeObserver (disponible) y, sin lugar, nada queda pegado: ni las fijas ni la
+  // casilla de selección (left: auto la suelta de lado y la deja arriba, con el encabezado). Para moverlas siguen
+  // siendo fijas (destinoArrastre con forma.fijas: no se cruzan).
+  const t = readFileSync(new URL('../src/components/tabla/TablaEstandar.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(t, /\bfijasActivas\b[^;]*from '@\/lib\/tabla';/s, 'la importa de lib/tabla.js');
+  assert.match(t,
+    /const quietas = fijasActivas\(disponible, \[anchoSeleccion, \.\.\.visibles\.filter\(\(v\) => forma\.fijas\[v\]\)\.map\(\(v\) => geometria\.anchos\[v\]\)\]\);\s*const fijasQuietas = quietas \? forma\.fijas : SIN_FIJAS;/);
+  assert.match(t, /const SIN_FIJAS: Record<string, LadoFijo> = Object\.freeze\(\{\}\);/);
+  assert.match(t, /const CASILLA_SUELTA: CSSProperties = \{ left: 'auto' \};/);
+  assert.match(t, /<th scope="col" className=\{TABLE\.encabezadoCasilla\} style=\{quietas \? undefined : CASILLA_SUELTA\}>/);
+  assert.match(t, /<td className=\{TABLE\.celdaCasilla\} style=\{casillaQuieta \? undefined : CASILLA_SUELTA\}>/);
+  assert.match(t, /style=\{estiloFija\(v, fijasQuietas, geometria\.offsets\)\}\s*className=\{`\$\{TABLE\.encabezado\} \$\{fijasQuietas\[v\] \? TABLE\.encabezadoFijo : ''\} \$\{clasesFija\(v, fijasQuietas, visibles\)\}/);
+  assert.match(t, /fijas=\{fijasQuietas\}\s*offsets=\{geometria\.offsets\}/);
+  assert.match(t, /casillaQuieta=\{quietas\}/);
+  assert.match(t, /const bordes = recortarBordes\(rects, enOrden\.map\(\(v\) => fijasQuietas\[v\]\), \{ inicio \}\);\s*destino = destinoArrastre\(enOrden, lados, col\.id, indiceDestino\(bordes, puntero\.x\)\);/);
+  assert.match(t, /const lados = forma\.fijas;/);
+  assert.equal((t.match(/forma\.fijas\[v\]/g) ?? []).length, 2, 'forma.fijas[v] solo en las fijas que miden y en «movible»');
 }
 
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');

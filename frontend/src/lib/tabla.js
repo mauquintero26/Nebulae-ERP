@@ -1432,6 +1432,34 @@ export function geometriaTabla({ visibles, anchos, fijas = {}, flexibles = [], d
 }
 
 /**
+ * B4 T7 r1 (A2): lo mínimo que tiene que quedar entre las columnas fijas para leer lo que se corre de lado, en px.
+ * Es ANCHO_POR_DEFECTO, el ancho de una columna que no dice el suyo: entre las fijas cabe al menos una columna
+ * entera (en el Hub de Ventas, la más ancha de las que se corren mide 120).
+ */
+export const MINIMO_ZONA_LIBRE = ANCHO_POR_DEFECTO;
+
+/**
+ * B4 T7 r1 (A2): si las columnas fijas de TablaEstandar siguen quietas (sticky). Solo si la caja de la tabla
+ * (`anchoCaja`, su clientWidth medido con ResizeObserver) deja, además de las fijas (`anchosFijos`: las visibles y la
+ * casilla de selección, que también es sticky), al menos `minimo` px. Si no, nada queda pegado y la tabla entera se
+ * corre de lado: en una caja angosta las fijas taparían lo demás.
+ *  - Sin medir todavía (anchoCaja que no es un número finito): true, como antes.
+ *  - Sin fijas (o todas en 0): true.
+ *  - Un ancho que no es un número positivo cuenta 0; un mínimo que no es un número >= 0 usa MINIMO_ZONA_LIBRE.
+ * @param {number | null | undefined} anchoCaja
+ * @param {ReadonlyArray<number> | null | undefined} anchosFijos
+ * @param {number} [minimo]
+ * @returns {boolean}
+ */
+export function fijasActivas(anchoCaja, anchosFijos, minimo = MINIMO_ZONA_LIBRE) {
+  if (typeof anchoCaja !== 'number' || !Number.isFinite(anchoCaja)) return true;
+  const suma = (anchosFijos ?? []).reduce((a, px) => a + (typeof px === 'number' && Number.isFinite(px) && px > 0 ? px : 0), 0);
+  if (suma === 0) return true;
+  const libre = typeof minimo === 'number' && Number.isFinite(minimo) && minimo >= 0 ? minimo : MINIMO_ZONA_LIBRE;
+  return anchoCaja >= suma + libre;
+}
+
+/**
  * El destino de la columna `id` que se arrastra (TablaEstandar): el hueco de los encabezados VISIBLES (el de
  * indiceDestino), sin cruzar las fijas (queda entre las de la izquierda y las de la derecha), y si soltar ahí cambia el
  * orden (con `cambia` false no se pinta la línea azul ni se guarda). Una fija o un id que no está no cambian nada; un

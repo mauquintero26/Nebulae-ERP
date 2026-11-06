@@ -11,7 +11,7 @@ import { textoDeError } from '@/lib/avisos';
 import { velocidadAutodesplazamiento } from '@/lib/kanban';
 import {
   ANCHO_SELECCION, RELLENO_CELDA, alternarOrden, alternarSeleccion, alternarSeleccionPagina, anchoAlContenido,
-  anchoAlSoltar, bordeDeHueco, campoOrden, destinoArrastre, direccionOrden, estadoSeleccionPagina, fijasDe,
+  anchoAlSoltar, bordeDeHueco, campoOrden, destinoArrastre, direccionOrden, estadoSeleccionPagina, fijasActivas, fijasDe,
   filasConGrupos, firmaSeleccion, geometriaTabla, indiceDestino, limitarAncho, limitesDelAsa, paginaCorregida,
   reconciliarColumnas, recortarBordes, superaUmbralAsa, superaUmbralColumna, vistaCuerpo,
 } from '@/lib/tabla';
@@ -184,6 +184,10 @@ type Linea = { x: number; top: number; alto: number };
 type Moviendo = { id: string; titulo: string; x: number; y: number; linea: Linea | null };
 
 const SIN_SELECCION: ReadonlyArray<ClaveFila> = [];
+/** B4 T7 r1 (A2): las fijas que se pintan quietas cuando la caja no deja lugar (fijasActivas): ninguna. */
+const SIN_FIJAS: Record<string, LadoFijo> = Object.freeze({});
+/** B4 T7 r1 (A2): la casilla de selección suelta de lado; sigue sticky arriba con el encabezado (top-0). */
+const CASILLA_SUELTA: CSSProperties = { left: 'auto' };
 const TEXTO_VACIO = 'No hay nada para mostrar.';
 const ALINEAR: Record<AlineacionColumna, string> = { izquierda: 'text-left', centro: 'text-center', derecha: 'text-right' };
 const ALINEAR_TITULO: Record<AlineacionColumna, string> = { izquierda: '', centro: 'justify-center', derecha: 'justify-end' };
@@ -217,6 +221,8 @@ type PropsCuerpo<T> = {
   porId: Map<string, ColumnaTabla<T>>;
   fijas: Record<string, LadoFijo>;
   offsets: Record<string, number>;
+  /** B4 T7 r1 (A2): la casilla de selección queda quieta de lado (fijasActivas). */
+  casillaQuieta: boolean;
   nColumnas: number;
   disponible: number | null;
   recargando: boolean;
@@ -235,7 +241,7 @@ type PropsCuerpo<T> = {
 
 /** El <tbody> (memoizado en CuerpoTabla): solo depende de los datos, la forma de las columnas y la selección. */
 function CuerpoTablaBase<T>({
-  vista, renglones, visibles, porId, fijas, offsets, nColumnas, disponible, recargando, error, onReintentar, vacio,
+  vista, renglones, visibles, porId, fijas, offsets, casillaQuieta, nColumnas, disponible, recargando, error, onReintentar, vacio,
   tituloGrupo, claveDe, claseFila, onFila, seleccionActiva, seleccion, onSeleccion, seleccionable,
 }: PropsCuerpo<T>) {
   // Los mensajes de ancho completo (vacío, error, separadores) quedan a la vista aunque la tabla se corra de lado.
@@ -306,7 +312,7 @@ function CuerpoTablaBase<T>({
             className={`${TABLE.fila} ${fondo} ${onFila ? TABLE.filaClic : ''}`}
           >
             {seleccionActiva && (
-              <td className={TABLE.celdaCasilla}>
+              <td className={TABLE.celdaCasilla} style={casillaQuieta ? undefined : CASILLA_SUELTA}>
                 <input
                   type="checkbox"
                   aria-label="Seleccionar esta fila"
@@ -391,6 +397,10 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
     () => geometriaTabla({ visibles, anchos: forma.anchos, fijas: forma.fijas, flexibles, disponible, anchoSeleccion }),
     [visibles, forma.anchos, forma.fijas, flexibles, disponible, anchoSeleccion],
   );
+  // B4 T7 r1 (A2): en una caja más angosta que las fijas y la casilla más MINIMO_ZONA_LIBRE, nada queda pegado de lado:
+  // la tabla entera se corre y nada tapa lo que se lee. Para moverlas siguen siendo fijas (forma.fijas: no se cruzan).
+  const quietas = fijasActivas(disponible, [anchoSeleccion, ...visibles.filter((v) => forma.fijas[v]).map((v) => geometria.anchos[v])]);
+  const fijasQuietas = quietas ? forma.fijas : SIN_FIJAS;
 
   // ── el cuerpo ──
   const vista = vistaCuerpo({ cargando, error, filas });
@@ -636,10 +646,10 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
         rects.push(r);
       }
       // r1, 6f, y r2, punto 5: con la tabla corrida de lado, lo que quedó debajo de una fija o de la casilla de
-      // selección (sticky) no cuenta, y la línea azul tampoco se pinta encima de ellas.
+      // selección (sticky) no cuenta, y la línea azul tampoco se pinta encima de ellas. B4 T7 r1 (A2): solo las quietas.
       const r = c.getBoundingClientRect();
-      const inicio = r.left + anchoSeleccion;
-      const bordes = recortarBordes(rects, enOrden.map((v) => lados[v]), { inicio });
+      const inicio = r.left + (quietas ? anchoSeleccion : 0);
+      const bordes = recortarBordes(rects, enOrden.map((v) => fijasQuietas[v]), { inicio });
       destino = destinoArrastre(enOrden, lados, col.id, indiceDestino(bordes, puntero.x));
       const borde = destino.cambia && destino.hueco !== null ? bordeDeHueco(bordes, destino.hueco) : null;
       const linea = borde === null ? null : { x: Math.min(Math.max(borde, inicio), r.right), top: r.top, alto: c.clientHeight };
@@ -766,7 +776,7 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
             <thead>
               <tr>
                 {seleccionActiva && (
-                  <th scope="col" className={TABLE.encabezadoCasilla}>
+                  <th scope="col" className={TABLE.encabezadoCasilla} style={quietas ? undefined : CASILLA_SUELTA}>
                     <input
                       type="checkbox"
                       aria-label="Seleccionar las filas de esta página"
@@ -803,8 +813,8 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
                       }}
                       scope="col"
                       aria-sort={campo ? (direccion ? ARIA_ORDEN[direccion] : 'none') : undefined}
-                      style={estiloFija(v, forma.fijas, geometria.offsets)}
-                      className={`${TABLE.encabezado} ${forma.fijas[v] ? TABLE.encabezadoFijo : ''} ${clasesFija(v, forma.fijas, visibles)} ${moviendo?.id === v ? TABLE.encabezadoArrastrado : ''}`}
+                      style={estiloFija(v, fijasQuietas, geometria.offsets)}
+                      className={`${TABLE.encabezado} ${fijasQuietas[v] ? TABLE.encabezadoFijo : ''} ${clasesFija(v, fijasQuietas, visibles)} ${moviendo?.id === v ? TABLE.encabezadoArrastrado : ''}`}
                     >
                       <div className={TABLE.encabezadoInterior}>
                         {campo ? (
@@ -846,8 +856,9 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
               renglones={renglones}
               visibles={visibles}
               porId={porId}
-              fijas={forma.fijas}
+              fijas={fijasQuietas}
               offsets={geometria.offsets}
+              casillaQuieta={quietas}
               nColumnas={nColumnas}
               disponible={disponible}
               recargando={recargando}
