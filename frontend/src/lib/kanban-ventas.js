@@ -57,6 +57,7 @@ import { ACCIONES_BLOQUE3 } from './acciones-bloque3.js';
 import { enlaceDocumento } from './analisis.js';
 import { etiquetaTipoSolicitud } from './etiquetas-ventas.js';
 import { redondearPeso } from './pesos.js';
+import { queryListado } from './tabla.js';
 
 /**
  * @typedef {import('./kanban.js').ResultadoSoltar} ResultadoSoltar
@@ -841,6 +842,9 @@ export const OPCIONES_ESTADOS_TABLERO_SC = congelar(COLUMNAS_SC.map((c) => opcio
  * B4 T8 (KANBAN-ventas-listas punto 7, R5): los estados que pide una columna del tablero de una lista: los de la columna
  * cruzados con el filtro de estados de la pantalla (estado.estados), en el orden de la columna; sin filtro, los de la
  * columna. Sin ninguno en común, [] (la pantalla no pide esa columna). Una copia nueva.
+ * r1 (m3): si el filtro trae el estado principal de la columna (el primero: la opción de esa columna en
+ * OPCIONES_ESTADOS_TABLERO_SC), la columna entera, también los heredados (Confirmada junta CONFIRMADA y los estados
+ * anteriores): marcar «Confirmada» en el filtro del tablero muestra lo mismo que la columna sin filtro.
  * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
  * @param {ReadonlyArray<string> | null | undefined} filtro
  * @returns {string[]}
@@ -848,7 +852,31 @@ export const OPCIONES_ESTADOS_TABLERO_SC = congelar(COLUMNAS_SC.map((c) => opcio
 export function estadosDeColumnaLista(columna, filtro) {
   const propios = Array.isArray(columna?.estados) ? columna.estados : [];
   if (!Array.isArray(filtro) || filtro.length === 0) return [...propios];
+  if (propios.length > 0 && filtro.includes(propios[0])) return [...propios];
   return propios.filter((e) => filtro.includes(e));
+}
+
+/**
+ * B4 T8 (R5): la vista con la que pide cada columna del tablero de Solicitudes (todas, sin Soporte), no la pestaña.
+ * @type {'todas_sin_soporte'}
+ */
+export const VISTA_TABLERO_SC = 'todas_sin_soporte';
+
+/**
+ * B4 T8 r1 (m10; R5, R11, C4, D39): la consulta de una columna del tablero de Solicitudes en modo servidor (la query de
+ * GET /ventas/solicitudes, con queryListado): vista=VISTA_TABLERO_SC, los estados de la columna cruzados con el filtro
+ * de la pantalla (estadosDeColumnaLista), la búsqueda y el semáforo del MISMO estado, y el orden, el límite y el
+ * desplazamiento de la columna (los da useTableroKanban: limit=0 en la plegada). Sin ningún estado en común, null (la
+ * columna queda vacía sin pedir nada). T9 y T10 copian este patrón.
+ * @param {import('./tabla.js').EstadoTabla} estado
+ * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
+ * @param {{orden: string | null, limit: number, offset: number}} consulta
+ * @returns {string | null}
+ */
+export function consultaColumnaSC(estado, columna, { orden, limit, offset }) {
+  const estados = estadosDeColumnaLista(columna, estado?.estados);
+  if (estados.length === 0) return null;
+  return queryListado(estado, { vista: VISTA_TABLERO_SC, estados, orden, limit, offset });
 }
 
 /**

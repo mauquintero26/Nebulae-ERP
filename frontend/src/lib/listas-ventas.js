@@ -479,18 +479,24 @@ const conteoONulo = (n) => (typeof n === 'number' && Number.isInteger(n) && n >=
 /**
  * B4 T8 (KPI-ventas punto 7 con RP19 (3) y (4)): las 4 tarjetas de la lista de Solicitudes con el `resumen` de GET
  * /ventas/solicitudes?con_resumen=1 (todas las solicitudes, sin Soporte):
- *  - activas (sc_activas): resumen.activas, con pistaActivasSolicitudes(resumen.sin_atender, resumen.vencidas) (V7);
+ *  - activas (sc_activas): resumen.activas, con pistaActivasSolicitudes(resumen.sin_atender, resumen.vencidas) (V7) y,
+ *    r1 (m1, KPI-ventas punto 7), el tono 'alerta' si hay alguna sin atender o vencida ('normal' si no);
  *  - confirmadas (sc_confirmadas): resumen.confirmadas, con pistaConfirmadasSolicitudes(confirmadas, esperan_cot);
  *  - canceladas (sc_canceladas): resumen.canceladas, con 'Fuera del flujo';
  *  - total (sc_total): resumen.total, con pistaTotalSolicitudes(con_cot).
  * Sin resumen (cargando o con error), null. Un número que no viene queda en null.
  * @param {any} resumen
- * @returns {null | Record<'activas' | 'confirmadas' | 'canceladas' | 'total', {valor: number | null, ayuda: string}>}
+ * @returns {null | Record<'confirmadas' | 'canceladas' | 'total', {valor: number | null, ayuda: string}>
+ *   & {activas: {valor: number | null, ayuda: string, tono: 'alerta' | 'normal'}}}
  */
 export function tarjetasSolicitudes(resumen) {
   if (!esObjeto(resumen) || Array.isArray(resumen)) return null;
   return {
-    activas: { valor: conteoONulo(resumen.activas), ayuda: pistaActivasSolicitudes(resumen.sin_atender, resumen.vencidas) },
+    activas: {
+      valor: conteoONulo(resumen.activas),
+      ayuda: pistaActivasSolicitudes(resumen.sin_atender, resumen.vencidas),
+      tono: conteo(resumen.sin_atender) > 0 || conteo(resumen.vencidas) > 0 ? 'alerta' : 'normal',
+    },
     confirmadas: { valor: conteoONulo(resumen.confirmadas), ayuda: pistaConfirmadasSolicitudes(resumen.confirmadas, resumen.esperan_cot) },
     canceladas: { valor: conteoONulo(resumen.canceladas), ayuda: 'Fuera del flujo' },
     total: { valor: conteoONulo(resumen.total), ayuda: pistaTotalSolicitudes(resumen.con_cot) },

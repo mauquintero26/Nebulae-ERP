@@ -2210,6 +2210,49 @@ console.log('--- TEST 43 (B4 T8): una pestaña de vista sin conteo (la Papelera 
   assert.match(barra, /sinConteo\?: boolean;/, 'PestanaTabla.sinConteo es opcional');
 }
 
+console.log('--- TEST 44 (B4 T8 r1, m2): accionModo — el conmutador Lista / Kanban poda los estados como accionPestana ---');
+{
+  const { accionModo } = TABLA;
+  const opciones = (vista) => (vista === 'activas' ? [{ valor: 'BORRADOR', etiqueta: 'Nueva' }, { valor: 'ASIGNADA', etiqueta: 'Asignada' }] : []);
+  const tablero = [{ valor: 'BORRADOR', etiqueta: 'Nueva' }, { valor: 'CONFIRMADA', etiqueta: 'Confirmada' }];
+  const e = estadoTablaInicial({ vista: 'activas', modo: 'kanban', estados: ['CONFIRMADA', 'BORRADOR'] });
+  // De Kanban a Lista en Activas: «Confirmada» no es de la pestaña, se quita (si no, la tabla saldría vacía sin razón).
+  assert.deepEqual(accionModo(e, 'lista', opciones), { tipo: 'cambiar', cambios: { modo: 'lista', estados: ['BORRADOR'] } });
+  assert.deepEqual(reducirEstadoTabla(e, accionModo(e, 'lista', opciones)).estados, ['BORRADOR']);
+  // Si todos los filtrados siguen, o no hay filtro, o no hay opciones: el modo solo (como accionPestana).
+  assert.deepEqual(accionModo({ ...e, estados: ['BORRADOR'] }, 'lista', opciones), { tipo: 'modo', valor: 'lista' });
+  assert.deepEqual(accionModo({ ...e, estados: [] }, 'lista', opciones), { tipo: 'modo', valor: 'lista' });
+  assert.deepEqual(accionModo(e, 'lista', null), { tipo: 'modo', valor: 'lista' });
+  assert.deepEqual(accionModo(e, 'lista', undefined), { tipo: 'modo', valor: 'lista' });
+  // Con un arreglo (las opciones del tablero) y hacia Kanban.
+  assert.deepEqual(accionModo({ ...e, estados: ['ASIGNADA', 'CONFIRMADA'] }, 'kanban', tablero),
+    { tipo: 'cambiar', cambios: { modo: 'kanban', estados: ['CONFIRMADA'] } });
+  // Ninguno queda: el filtro se vacía.
+  assert.deepEqual(accionModo({ ...e, vista: 'soporte' }, 'lista', opciones), { tipo: 'cambiar', cambios: { modo: 'lista', estados: [] } });
+  assert.deepEqual(accionModo(null, 'kanban', tablero), { tipo: 'modo', valor: 'kanban' });
+}
+
+console.log('--- TEST 45 (B4 T8 r1, m5): llegadaDeListado — la tabla no pinta «vacío» con la respuesta de una consulta sin filas ---');
+{
+  const { llegadaDeListado } = TABLA;
+  const pagina = { status: 'success', total: 25, data: [{ id: 1 }] };
+  const soloConteos = { status: 'success', total: 43, data: [] };
+  // Sin respuesta todavía.
+  const vacia = llegadaDeListado(null, null, false);
+  assert.deepEqual(vacia, { crudo: null, sinFilas: false });
+  // Una respuesta que llega con la consulta sin filas (limit=0: la Papelera o el tablero) queda marcada.
+  const conteos = llegadaDeListado(vacia, soloConteos, true);
+  assert.deepEqual(conteos, { crudo: soloConteos, sinFilas: true });
+  // La MISMA respuesta (sin llegada nueva) conserva su marca aunque la consulta vigente ya sea la de la página: es la que
+  // la tabla tiene que esperar (cargando), no pintar como «vacío».
+  assert.equal(llegadaDeListado(conteos, soloConteos, false), conteos, 'misma respuesta: el mismo objeto');
+  // Cuando llega la página real, la marca se va.
+  assert.deepEqual(llegadaDeListado(conteos, pagina, false), { crudo: pagina, sinFilas: false });
+  // Una página que llega con la consulta con filas nunca se marca; null nunca es «sin filas».
+  assert.deepEqual(llegadaDeListado(vacia, pagina, false), { crudo: pagina, sinFilas: false });
+  assert.deepEqual(llegadaDeListado(conteos, null, true), { crudo: null, sinFilas: false });
+}
+
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');
 console.log('✓ T4C: sesión, estado armado, partes de columnas, URL de la lista, carga vigente, estado de la lista y modo cliente.');
 console.log('✓ T4C r1: orden rechazado, estados en la sesión, escrituras del usuario del render, esperar y vueltas.');

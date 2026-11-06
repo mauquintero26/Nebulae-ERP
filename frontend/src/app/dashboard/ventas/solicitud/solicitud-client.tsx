@@ -24,13 +24,14 @@ import type { ColumnaTabla, PestanaTabla } from '@/components/tabla';
 import { BannerFlujo, useResumenFlujo } from '@/components/flujo';
 import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
 import {
-  accesoresDeOrden, accionPestana, dependenciasTablero, estadoDelTotal, normalizarRespuesta, queryListado,
+  accesoresDeOrden, accionModo, accionPestana, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta,
 } from '@/lib/tabla';
+import type { AccionTabla } from '@/lib/tabla';
 import { alternarSeleccion } from '@/lib/flujo';
 import { avisoVencidas, enlaceVerAnalisis, pasosDeLista, textoRegla } from '@/lib/flujo-ventas';
 import {
-  COLUMNAS_SC, OPCIONES_ESTADOS_TABLERO_SC, chipsDocumentoVentas, confirmacionReiniciarSolicitud, estadoDeTarjeta,
-  estadosDeColumnaLista, opcionesEstadosSolicitudes, puedeReiniciarSC, reglaSoltarSC, tarjetaSolicitud,
+  COLUMNAS_SC, OPCIONES_ESTADOS_TABLERO_SC, chipsDocumentoVentas, confirmacionReiniciarSolicitud, consultaColumnaSC,
+  estadoDeTarjeta, opcionesEstadosSolicitudes, puedeReiniciarSC, reglaSoltarSC, tarjetaSolicitud,
 } from '@/lib/kanban-ventas';
 import { textoDeError, recargarTrasError } from '@/lib/avisos';
 import { VEN_NAV } from '../ven-nav';
@@ -518,6 +519,8 @@ type ResumenSC = {
 type ConteosSC = Partial<Record<'activas' | 'confirmadas' | 'canceladas' | 'soporte', number>>;
 /** Lo que trajo la Papelera: `vuelta` es la de la petición que llegó; `filas`, null hasta la primera respuesta. */
 type CargaPapelera = { vuelta: number; filas: FilaPapelera[] | null; error: string };
+/** r1 (m6, D39): las columnas del tablero de una acción desde una tarjeta: [origen, destino]. */
+type ColumnasDeTarjeta = readonly [string, string];
 
 /** El id de la lista: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26), y el del
  *  modo compacto de la franja (RP90). B4 T8 r1 (A2): exportado para el esqueleto del Suspense (CargandoSolicitudes). */
@@ -530,8 +533,13 @@ export const INICIAL_SC = { vista: 'activas', orden: 'atencion' };
 export const CONTENEDOR_LISTA = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
 /** KANBAN-ventas-listas punto 7: los tickets de Soporte y la Papelera no van al tablero (se ven en lista). */
 const VISTAS_SIN_TABLERO = ['soporte', 'papelera'];
-/** R5: el tablero de Solicitudes trae todas, sin Soporte (la vista que reemplaza al viejo sin_soporte). */
-const VISTA_TABLERO_SC = 'todas_sin_soporte';
+/** R8 y r1 (m7): fuera del semáforo (Soporte) o de canceladas (la Papelera y Canceladas): «Con atraso» abre Activas. */
+const VISTAS_SIN_ATRASO = ['soporte', 'papelera', 'canceladas'];
+/**
+ * B4 T8 r1 (m6, D39): en Kanban la lista va sin filas (limit=0): las pestañas no se ven y las filas no se pintan, pero
+ * las tarjetas siguen con su resumen (con_resumen) en una consulta barata; las filas las piden las columnas del tablero.
+ */
+const EXTRA_TABLERO = { limit: 0 };
 /**
  * RP35: la Papelera no es una vista del servidor y ahí la lista no pide nada. Solo cuando hacen falta los conteos (se
  * entró directo a ella y todavía no llegaron, o r1 (I1): después de Restaurar, de «Vaciar las vencidas» o de
@@ -543,6 +551,10 @@ const EXTRA_PAPELERA = { vista: null, limit: 0 };
 const CONTEOS_AL_ENTRAR = { antes: null };
 const PAPELERA_SIN_CARGAR: CargaPapelera = { vuelta: -1, filas: null, error: '' };
 const SIN_FILAS_PAPELERA: FilaPapelera[] = [];
+/** r1 (m8): el «vacío» de la Papelera no depende de nada (una constante: la tabla no lo recibe nuevo en cada render). */
+const VACIO_PAPELERA = (
+  <EmptyState icon={Trash2} message="La papelera está vacía." hint="Las solicitudes canceladas aparecen aquí; se pueden eliminar definitivamente después de 30 días si no se restauran, salvo las que tienen cotizaciones, pedidos o leads vinculados. Un administrador vacía las vencidas, y la revisión automática también."/>
+);
 
 // Los chips: los tintes del tablero (CLASE_CHIP de components/ui/Kanban.tsx), así la misma marca sale igual en Lista y en
 // Kanban (como el Hub, T7 r1 m7a). Sin tamaño de letra: cada uso pone el suyo.
@@ -733,7 +745,7 @@ function CeldaAccionesPapelera({ sc }: { sc: FilaPapelera }) {
   const enPapelera = estadoEnPapelera(sc);
   return (
     <span className="flex items-center justify-end gap-1.5">
-      <button type="button" onClick={() => acciones?.restaurar(sc)}
+      <button type="button" onClick={() => acciones?.restaurar(sc)} aria-label={`Restaurar ${sc.numero}`}
         className={`bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2.5 py-1.5 rounded-lg text-xs font-bold border border-emerald-200 flex items-center gap-1 ${FOCO_VISIBLE}`}>
         <RotateCcw size={11} aria-hidden="true" />Restaurar
       </button>
@@ -983,6 +995,8 @@ export default function SolicitudClient() {
   const [cancelErrores,setCancelErrores]=useState<string[]>([]);
   // Marcadas que no se envian a /cancelar (ya estan en la Papelera o son de Soporte): se informan, no se llaman.
   const [cancelOmitidas,setCancelOmitidas]=useState<{id:any;numero:string;motivo:string}[]>([]);
+  // r1 (m6, D39): si la cancelación salió de una tarjeta del tablero, su origen y su destino (lo que se recarga al final).
+  const [cancelColumnas,setCancelColumnas]=useState<ColumnasDeTarjeta | null>(null);
 
   // Papelera (lo que trajo GET /ventas/solicitudes/papelera vive en el bloque 1, más abajo).
   // B2.1 D2: «Vaciar las vencidas» en curso (el botón no se puede pulsar dos veces).
@@ -1035,12 +1049,20 @@ export default function SolicitudClient() {
   const listado = useListado<FilaSC>({
     ruta: '/ventas/solicitudes', estado, conConteos: true, conResumen: true, esperar: !listo, despachar,
     activo: !enPapelera || conteosPendientes !== null,
-    extra: enPapelera ? EXTRA_PAPELERA : null,
+    extra: enPapelera ? EXTRA_PAPELERA : modoEfectivo === 'kanban' ? EXTRA_TABLERO : null,
   });
   if (conteosPendientes !== null && listado.crudo !== conteosPendientes.antes) setConteosPendientes(null);
   // El crudo de ahora, para la marca que se pone en un manejador (después de un await, el del render ya pudo cambiar).
   const crudoActual = useRef<unknown>(null);
   useLayoutEffect(() => { crudoActual.current = listado.crudo; });
+  // r1 (m5): la última respuesta y si llegó sin filas (la de la Papelera o la de Kanban). Mientras sea de esas y la tabla
+  // ya pida su página (otra pestaña, o de Kanban a Lista), la tabla está cargando y el total en 'cargando': nunca «No hay
+  // solicitudes en esta vista» con el total de la otra consulta. Se pone al día durante el render (llegadaDeListado).
+  const sinFilasAhora = enPapelera || modoEfectivo === 'kanban';
+  const [llegada, setLlegada] = useState(() => llegadaDeListado(null, null, false));
+  const llegadaAhora = llegadaDeListado(llegada, listado.crudo, sinFilasAhora);
+  if (llegadaAhora !== llegada) setLlegada(llegadaAhora);
+  const sinPagina = !sinFilasAhora && llegadaAhora.sinFilas && !listado.error;
 
   // La franja del flujo (R8): GET /ventas/flujo; recargaFlujo sube con cada recarga de la lista.
   const [recargaFlujo, setRecargaFlujo] = useState(0);
@@ -1049,7 +1071,8 @@ export default function SolicitudClient() {
   // El tablero en modo servidor (R11, C4, D39): una consulta por columna con vista=todas_sin_soporte (R5), los estados de
   // la columna cruzados con el filtro de la pantalla (estadosDeColumnaLista; sin ninguno en común, la columna queda vacía
   // sin pedir nada) y el MISMO estado (búsqueda y semáforo); porColumna = el tamaño de la tabla y limit=0 en la plegada
-  // (lo hace el hook). 'atencion' en las abiertas y 'reciente' en Cancelada (D39).
+  // (lo hace el hook). 'atencion' en las abiertas y 'reciente' en Cancelada (D39). r1 (m10): la consulta la arma
+  // consultaColumnaSC (lib/kanban-ventas.js, con su prueba).
   const tablero = useTableroKanban<FilaSC>({
     pantalla: ID_SC,
     modo: 'servidor',
@@ -1059,11 +1082,9 @@ export default function SolicitudClient() {
     dependencias: dependenciasTablero(estado),
     ordenDe: (c) => (c.cerrada ? 'reciente' : 'atencion'),
     cargar: async (columna, { offset, limit, orden, signal }) => {
-      const estados = estadosDeColumnaLista(columna, estado.estados);
-      if (estados.length === 0) return { filas: [], total: 0 };
-      return normalizarRespuesta(await apiFetch(
-        `/ventas/solicitudes?${queryListado(estado, { vista: VISTA_TABLERO_SC, estados, orden, limit, offset })}`, { signal },
-      ));
+      const consulta = consultaColumnaSC(estado, columna, { orden, limit, offset });
+      if (consulta === null) return { filas: [], total: 0 };
+      return normalizarRespuesta(await apiFetch(`/ventas/solicitudes?${consulta}`, { signal }));
     },
   });
 
@@ -1081,6 +1102,13 @@ export default function SolicitudClient() {
     setConteosPendientes({ antes: crudoActual.current });
     recargarListado();
   }, [recargarListado]);
+  // r1 (m6, D39): después de una acción desde una tarjeta, del tablero solo su origen y su destino (no las 5 columnas),
+  // más la lista (en Kanban va sin filas: las tarjetas de arriba) y la franja.
+  function recargarTrasTarjeta([origen, destino]: ColumnasDeTarjeta) {
+    recargarListado();
+    tablero.recargar([origen, destino]);
+    setRecargaFlujo((n) => n + 1);
+  }
 
   // La Papelera (RP35, RP37): GET /ventas/solicitudes/papelera (trae como mucho 200) en modo cliente. Se pide al entrar a
   // la pestaña y con «Actualizar» (vueltaPapelera); el estado se escribe solo cuando llega la respuesta.
@@ -1154,7 +1182,7 @@ export default function SolicitudClient() {
   },[searchParams]);
 
   function cerrarCancelacion() {
-    setShowCancelModal(false);setCancelTarget([]);setCancelRazon('');setCancelErrores([]);setCancelOmitidas([]);
+    setShowCancelModal(false);setCancelTarget([]);setCancelRazon('');setCancelErrores([]);setCancelOmitidas([]);setCancelColumnas(null);
   }
 
   // N4: toda cancelacion de SC pasa por POST /cancelar (pide el motivo y el servidor revisa que no tenga cotizaciones
@@ -1187,8 +1215,9 @@ export default function SolicitudClient() {
     else{setCancelTarget(fallidas);setCancelOmitidas([]);setCancelErrores(resumen.fallidas.map(f=>f.texto));}
     // Las canceladas y las omitidas dejan de estar seleccionadas; las que fallaron siguen marcadas.
     setChecked(prev=>{const n=new Set(prev);canceladas.forEach(id=>n.delete(id));cancelOmitidas.forEach(o=>n.delete(o.id));return n;});
-    // B4 T8: la tabla, el tablero (también si se canceló desde una tarjeta) y la franja.
-    recargarLista();
+    // B4 T8: la tabla, el tablero y la franja; r1 (m6, D39): desde una tarjeta, del tablero solo su origen y su destino.
+    if(cancelColumnas) recargarTrasTarjeta(cancelColumnas);
+    else recargarLista();
     setCancelling(false);
   }
 
@@ -1258,7 +1287,7 @@ export default function SolicitudClient() {
   // si tiene asesor). Se confirma antes; cancelar va por cancelWithReason. El 409 de R10 (cotización o pedido activos)
   // sale con su mensaje. B4 T8 (RP17 y el cruce C4): el texto de la confirmación es el de la librería
   // (confirmacionReiniciarSolicitud, el mismo del detalle y del tablero). Lo usan el menú ⋯ de la fila y el tablero.
-  async function reiniciarSC(sc:any) {
+  async function reiniciarSC(sc:any, columnas?:ColumnasDeTarjeta) {
     if(!(await confirmar(confirmacionReiniciarSolicitud(sc)))) return;
     setSaving(true);
     try{
@@ -1267,13 +1296,15 @@ export default function SolicitudClient() {
       const nueva=r?.data;
       avisar(`${sc.numero} reiniciada: queda ${infoEstadoSolicitud(nueva?.estado??(sc.advisor_user_id?'ASIGNADA':'BORRADOR')).label}`);
     }catch(err:any){avisarError(err,`No se pudo reiniciar ${sc.numero}`);}
-    // B4 T8: la lista, el tablero (la tarjeta pasa a su columna) y la franja, también si el servidor la rechazó.
-    recargarLista();
+    // B4 T8: la lista, el tablero (la tarjeta pasa a su columna) y la franja, también si el servidor la rechazó. r1 (m6,
+    // D39): desde una tarjeta, del tablero solo su origen y su destino.
+    if(columnas) recargarTrasTarjeta(columnas);
+    else recargarLista();
     setSaving(false);
   }
 
-  function deleteItem(scId:number) {
-    setCancelTarget([scId]);setCancelRazon('');setCancelErrores([]);setCancelOmitidas([]);setShowCancelModal(true);
+  function deleteItem(scId:number, columnas:ColumnasDeTarjeta|null=null) {
+    setCancelTarget([scId]);setCancelRazon('');setCancelErrores([]);setCancelOmitidas([]);setCancelColumnas(columnas);setShowCancelModal(true);
   }
 
   // U15: la barra masiva ya no cambia estados (ninguno se pone a mano): solo cancela las marcadas.
@@ -1369,11 +1400,27 @@ export default function SolicitudClient() {
         error: errorPapeleraTabla,
       }),
     } : {
-      total: listado.total,
+      // r1 (m5): sin la página de la vista todavía (llegó la de la Papelera o la de Kanban), el total en 'cargando'.
+      total: sinPagina ? null : listado.total,
       estadoTotal: estadoDelTotal({
-        total: listado.total, cargando: listado.cargandoInicial, recargando: listado.recargando, error: listado.error,
+        total: listado.total, cargando: listado.cargandoInicial || sinPagina, recargando: listado.recargando, error: listado.error,
       }),
     };
+  // r1 (m2): el conmutador Lista / Kanban poda los estados con las opciones del modo nuevo (las columnas del tablero, o
+  // las de la pestaña en Lista), con la regla de accionPestana (accionModo); lo demás de la barra va directo.
+  const alCambiarBarra = useCallback((accion: AccionTabla) => {
+    if (accion.tipo === 'modo') {
+      const modo = String(accion.valor);
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_SC : opcionesEstadosSolicitudes));
+    } else despachar(accion);
+  }, [estado, despachar]);
+  // r1 (m8): el «vacío» de la lista solo cambia con la búsqueda.
+  const vacioLista = useMemo(() => (
+    <div>
+      <p className="font-semibold text-slate-600">{estado.q.trim() ? `Sin resultados para «${estado.q.trim()}»` : 'No hay solicitudes en esta vista'}</p>
+      <p className="mt-1 text-xs text-slate-400">Ajusta la búsqueda o el filtro, o crea una nueva solicitud.</p>
+    </div>
+  ), [estado.q]);
 
   // ── B4 T8, bloque 3: la tabla (las columnas son constantes del módulo; en Canceladas, Vencimiento dice el motivo) ──
   // N4: la selección es la de la página (TablaEstandar la limpia al cambiar de página, pestaña, búsqueda, filtro u orden).
@@ -1408,10 +1455,10 @@ export default function SolicitudClient() {
   // solicitud; no se arma otro ChannelModal ni otro POST. Las acciones que quedan las resuelve la pantalla:
   //  - cancelar: el modal del motivo de N4 (cancelWithReason, POST /cancelar) con cancelTarget = [id];
   //  - reiniciar: confirmacionReiniciarSolicitud (RP17) y PATCH {estado: 'BORRADOR'} (reiniciarSC; el 409 de R10 sale como
-  //    aviso). Las dos recargan la lista, el tablero y la franja al terminar.
-  function accionDesdeTablero(sc: FilaSC, resultado: { accion: string }) {
-    if (resultado.accion === 'cancelar') deleteItem(sc.id);
-    else if (resultado.accion === 'reiniciar') void reiniciarSC(sc);
+  //    aviso). Las dos recargan la lista y la franja al terminar y, r1 (m6, D39), del tablero solo el origen y el destino.
+  function accionDesdeTablero(sc: FilaSC, resultado: { accion: string }, origen: string, destino: string) {
+    if (resultado.accion === 'cancelar') deleteItem(sc.id, [origen, destino]);
+    else if (resultado.accion === 'reiniciar') void reiniciarSC(sc, [origen, destino]);
   }
 
   // ── B4 T8, bloque 5: las tarjetas (KPI-ventas punto 7; R12, RP19) ──
@@ -1436,10 +1483,10 @@ export default function SolicitudClient() {
   }, [vencidasResumen]);
   const filtroSemaforo: FiltroSemaforo = estado.semaforo === 'atrasados' ? 'atrasados' : 'todos';
   // «Con atraso» pone semaforo=atrasados en el estado único (la tabla y el tablero lo mandan al servidor) y vuelve a la
-  // página 1; «Ver todo» lo quita. Soporte queda fuera del semáforo (R8) y la Papelera es de canceladas: desde ellas, «Con
-  // atraso» abre Activas.
+  // página 1; «Ver todo» lo quita. Soporte queda fuera del semáforo (R8) y la Papelera y Canceladas (r1, m7) son de
+  // canceladas: desde ellas, «Con atraso» abre Activas (VISTAS_SIN_ATRASO).
   const alFiltrarSemaforo = (f: FiltroSemaforo) => {
-    if (f !== 'todos' && !kanbanDisponible) despachar(accionPestana(estado, INICIAL_SC.vista, opcionesEstadosSolicitudes));
+    if (f !== 'todos' && VISTAS_SIN_ATRASO.includes(estado.vista ?? '')) despachar(accionPestana(estado, INICIAL_SC.vista, opcionesEstadosSolicitudes));
     despachar({ tipo: 'semaforo', valor: f === 'todos' ? null : f });
   };
 
@@ -1491,7 +1538,7 @@ export default function SolicitudClient() {
             pestañas (accionPestana; tocar la activa vuelve a Activas); el total no tiene una vista. */}
         <FranjaKpis estado={estadoKpis} titulo="Solicitudes">
           <TarjetaKpi kpi="sc_activas" valor={tarjetas?.activas.valor ?? null} ayuda={tarjetas?.activas.ayuda}
-            activo={vistaActiva === 'activas'} onClick={() => elegirVista('activas')} />
+            tono={tarjetas?.activas.tono} activo={vistaActiva === 'activas'} onClick={() => elegirVista('activas')} />
           <TarjetaKpi kpi="sc_confirmadas" valor={tarjetas?.confirmadas.valor ?? null} ayuda={tarjetas?.confirmadas.ayuda}
             activo={vistaActiva === 'confirmadas'} onClick={() => elegirVista('confirmadas')} />
           <TarjetaKpi kpi="sc_canceladas" valor={tarjetas?.canceladas.valor ?? null} ayuda={tarjetas?.canceladas.ayuda}
@@ -1507,7 +1554,7 @@ export default function SolicitudClient() {
             <section ref={refTarjeta} className={claseTarjeta}>
               <BarraTabla
                 estado={estadoBarra}
-                onEstado={despachar}
+                onEstado={alCambiarBarra}
                 pestanas={modoEfectivo === 'lista' ? pestanas : undefined}
                 estadoConteos={estadoConteos}
                 placeholder="Buscar por número, cliente, asesor o producto…"
@@ -1558,7 +1605,7 @@ export default function SolicitudClient() {
                     error={errorPapeleraTabla}
                     onReintentar={recargarPapelera}
                     onFila={abrirSolicitud}
-                    vacio={<EmptyState icon={Trash2} message="La papelera está vacía." hint="Las solicitudes canceladas aparecen aquí; se pueden eliminar definitivamente después de 30 días si no se restauran, salvo las que tienen cotizaciones, pedidos o leads vinculados. Un administrador vacía las vencidas, y la revisión automática también."/>}
+                    vacio={VACIO_PAPELERA}
                     etiqueta="Papelera de solicitudes"
                   />
                 </>
@@ -1572,8 +1619,8 @@ export default function SolicitudClient() {
                   estado={estado}
                   onEstado={despachar}
                   filas={listado.filas}
-                  total={listado.total}
-                  cargando={listado.cargandoInicial}
+                  total={sinPagina ? null : listado.total}
+                  cargando={listado.cargandoInicial || sinPagina}
                   recargando={listado.recargando}
                   error={listado.error}
                   onReintentar={listado.recargar}
@@ -1582,12 +1629,7 @@ export default function SolicitudClient() {
                   claseFila={claseDeFila}
                   seleccion={seleccion}
                   onSeleccion={alSeleccionar}
-                  vacio={(
-                    <div>
-                      <p className="font-semibold text-slate-600">{estado.q.trim() ? `Sin resultados para «${estado.q.trim()}»` : 'No hay solicitudes en esta vista'}</p>
-                      <p className="mt-1 text-xs text-slate-400">Ajusta la búsqueda o el filtro, o crea una nueva solicitud.</p>
-                    </div>
-                  )}
+                  vacio={vacioLista}
                   etiqueta="Solicitudes de cliente"
                 />
               ) : null}

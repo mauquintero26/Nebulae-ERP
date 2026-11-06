@@ -27,7 +27,7 @@ import { columnaHub, accionSiguienteDocumento, RUTA_HUB_VENTAS } from '../src/li
 import { ESTADOS_PEDIDO, transicionesPedido, infoEstadoPedido } from '../src/lib/estados-pedido.js';
 import { ESTADOS_SC, infoEstadoSolicitud } from '../src/lib/estados-solicitud.js';
 import { ESTADOS_COTIZACION, infoEstadoCotizacion } from '../src/lib/estados-cotizacion.js';
-import { MAXIMO_ESTADOS } from '../src/lib/tabla.js';
+import { MAXIMO_ESTADOS, estadoTablaInicial, queryListado } from '../src/lib/tabla.js';
 import { ACCIONES_BLOQUE3 } from '../src/lib/acciones-bloque3.js';
 import { RUTA_LISTA_SOLICITUDES, RUTA_LISTA_COTIZACIONES } from '../src/lib/cambios-cliente.js';
 import { enlaceDocumento } from '../src/lib/analisis.js';
@@ -695,9 +695,16 @@ console.log('--- B4 T8 TEST E: estadosDeColumnaLista — los estados de una colu
   assert.deepEqual(kv.estadosDeColumnaLista(confirmada, []), [...confirmada.estados]);
   assert.deepEqual(kv.estadosDeColumnaLista(confirmada, null), [...confirmada.estados]);
   assert.deepEqual(kv.estadosDeColumnaLista(confirmada, undefined), [...confirmada.estados]);
-  assert.deepEqual(kv.estadosDeColumnaLista(confirmada, ['CONFIRMADA']), ['CONFIRMADA']);
-  assert.deepEqual(kv.estadosDeColumnaLista(confirmada, ['VENCIDA', 'CONFIRMADA', 'ASIGNADA']), ['CONFIRMADA', 'VENCIDA'],
-    'el orden de la columna');
+  // r1 (m3): la opción de una columna en el filtro del tablero (su estado principal, OPCIONES_ESTADOS_TABLERO_SC) vale
+  // TODA la columna: «Confirmada» trae también los heredados que la columna muestra sin filtro.
+  assert.ok(confirmada.estados.length > 1, 'la columna Confirmada junta CONFIRMADA y los heredados');
+  assert.deepEqual(kv.estadosDeColumnaLista(confirmada, ['CONFIRMADA']), [...confirmada.estados]);
+  assert.deepEqual(kv.estadosDeColumnaLista(confirmada, ['VENCIDA', 'CONFIRMADA', 'ASIGNADA']), [...confirmada.estados],
+    'con el principal, la columna entera, en su orden');
+  assert.notEqual(kv.estadosDeColumnaLista(confirmada, ['CONFIRMADA']), confirmada.estados, 'con el principal, también una copia nueva');
+  // Sin el principal, el cruce estado por estado (un filtro de la tabla que trae un heredado).
+  assert.deepEqual(kv.estadosDeColumnaLista(confirmada, ['VENCIDA', 'ASIGNADA', 'COTIZADA']), ['COTIZADA', 'VENCIDA'], 'el orden de la columna');
+  for (const c of COLUMNAS_SC) assert.deepEqual(kv.estadosDeColumnaLista(c, [c.estados[0]]), [...c.estados], c.clave);
   // Sin ninguno en común: [] (la pantalla no pide esa columna: queda vacía).
   assert.deepEqual(kv.estadosDeColumnaLista(confirmada, ['ASIGNADA']), []);
   assert.deepEqual(kv.estadosDeColumnaLista({ clave: 'x' }, ['ASIGNADA']), [], 'una columna sin estados');
@@ -705,6 +712,46 @@ console.log('--- B4 T8 TEST E: estadosDeColumnaLista — los estados de una colu
   // Una copia: no se puede tocar la columna inmutable desde afuera.
   const copia = kv.estadosDeColumnaLista(confirmada, []);
   assert.notEqual(copia, confirmada.estados);
+}
+
+console.log('--- B4 T8 r1 TEST H (m10): consultaColumnaSC — la consulta de cada columna del tablero de Solicitudes ---');
+{
+  const estado = estadoTablaInicial({ vista: 'activas', q: ' cuna ', semaforo: 'atrasados', estados: [], orden: 'cliente', pagina: 3, tamano: 50 });
+  const asignada = COLUMNAS_SC.find((c) => c.clave === 'asignada');
+  const confirmada = COLUMNAS_SC.find((c) => c.clave === 'confirmada');
+  const params = (q) => Object.fromEntries(new URLSearchParams(q));
+  // R5: vista=todas_sin_soporte (no la pestaña), los estados de la columna, la búsqueda y el semáforo del estado, y el
+  // orden, el límite y el desplazamiento de la columna (no la página ni el orden de la tabla).
+  assert.equal(kv.VISTA_TABLERO_SC, 'todas_sin_soporte');
+  const q = kv.consultaColumnaSC(estado, asignada, { orden: 'atencion', limit: 50, offset: 0 });
+  assert.deepEqual(params(q), { vista: 'todas_sin_soporte', semaforo: 'atrasados', q: 'cuna', estados: 'ASIGNADA', orden: 'atencion', limit: '50', offset: '0' });
+  assert.equal(q, queryListado(estado, { vista: 'todas_sin_soporte', estados: ['ASIGNADA'], orden: 'atencion', limit: 50, offset: 0 }));
+  // La plegada: limit=0 (solo el total).
+  assert.equal(params(kv.consultaColumnaSC(estado, confirmada, { orden: 'reciente', limit: 0, offset: 0 })).limit, '0');
+  assert.equal(params(kv.consultaColumnaSC(estado, confirmada, { orden: 'reciente', limit: 0, offset: 0 })).estados, confirmada.estados.join(','));
+  // Con el filtro de la pantalla: el cruce; sin nada en común, null (la columna no se pide y queda vacía).
+  const filtrado = { ...estado, estados: ['ASIGNADA', 'BORRADOR'] };
+  assert.equal(params(kv.consultaColumnaSC(filtrado, asignada, { orden: 'atencion', limit: 25, offset: 25 })).estados, 'ASIGNADA');
+  assert.equal(kv.consultaColumnaSC(filtrado, confirmada, { orden: 'atencion', limit: 25, offset: 0 }), null);
+  // Sin semáforo ni búsqueda no van (queryListado omite lo vacío).
+  const limpio = params(kv.consultaColumnaSC(estadoTablaInicial({ vista: 'soporte' }), asignada, { orden: 'atencion', limit: 25, offset: 0 }));
+  assert.equal(limpio.vista, 'todas_sin_soporte');
+  assert.ok(!('semaforo' in limpio) && !('q' in limpio) && !('paso' in limpio));
+
+  // El cableado de la pantalla (D27, como las de B1 a B3): el tablero pide con consultaColumnaSC; la lista, en Kanban y en
+  // la Papelera, va sin filas (limit=0); y una acción desde una tarjeta recarga solo su origen y su destino (D39).
+  const pantalla = readFileSync(new URL('../src/app/dashboard/ventas/solicitud/solicitud-client.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(pantalla, /const consulta = consultaColumnaSC\(estado, columna, \{ orden, limit, offset \}\);\s*if \(consulta === null\) return \{ filas: \[\], total: 0 \};\s*return normalizarRespuesta\(await apiFetch\(`\/ventas\/solicitudes\?\$\{consulta\}`, \{ signal \}\)\);/);
+  assert.match(pantalla, /extra: enPapelera \? EXTRA_PAPELERA : modoEfectivo === 'kanban' \? EXTRA_TABLERO : null,/);
+  assert.match(pantalla, /const EXTRA_TABLERO = \{ limit: 0 \};/);
+  assert.match(pantalla, /tablero\.recargar\(\[origen, destino\]\)/);
+  // Las dos acciones de una tarjeta llevan su origen y su destino hasta el final (la cancelación pasa por el modal).
+  assert.match(pantalla, /if \(resultado\.accion === 'cancelar'\) deleteItem\(sc\.id, \[origen, destino\]\);/);
+  assert.match(pantalla, /else if \(resultado\.accion === 'reiniciar'\) void reiniciarSC\(sc, \[origen, destino\]\);/);
+  assert.match(pantalla, /if\(cancelColumnas\) recargarTrasTarjeta\(cancelColumnas\);\s*else recargarLista\(\);/);
+  assert.match(pantalla, /if\(columnas\) recargarTrasTarjeta\(columnas\);\s*else recargarLista\(\);/);
+  assert.match(pantalla, /setCancelColumnas\(columnas\);setShowCancelModal\(true\);/);
+  assert.match(pantalla, /setCancelOmitidas\(\[\]\);setCancelColumnas\(null\);\n/, 'cerrar la ventana olvida la tarjeta');
 }
 
 console.log('--- B4 T8 TEST F: tarjetaSolicitud — la tarjeta del tablero de Solicitudes ---');

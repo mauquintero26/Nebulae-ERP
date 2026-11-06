@@ -599,6 +599,11 @@ console.log('--- B4 T8 TEST 2: enlaceVerAnalisis — el botón «Ver análisis»
     const enlace = fv.enlaceVerAnalisis(clave);
     assert.deepEqual(fv.leerEnlaceHub(enlace.slice(enlace.indexOf('?'))), { paso: null, analisis: true, foco: clave }, clave);
   }
+  // r1 (m4): una sola lista de los focos del Hub (CLAVES_FOCO_VENTAS, la de leerEnlaceHub), sin una copia.
+  const fuente = readFileSync(new URL('../src/lib/flujo-ventas.js', import.meta.url), 'utf8');
+  assert.ok(!fuente.includes('FOCOS_DEL_HUB'), 'sin la copia FOCOS_DEL_HUB');
+  assert.equal((fuente.match(/FOCOS_VENTAS\.map\(\(f\) => f\.clave\)/g) ?? []).length, 1, 'una sola lista de las claves de foco');
+  assert.match(fuente, /CLAVES_FOCO_VENTAS\.includes\(foco\) \? `\$\{base\}&foco=\$\{foco\}` : base/);
   // Un foco que no existe abre el Análisis sin foco (el Hub lo ignoraría igual).
   for (const raro of ['pec', '', null, undefined, 'sc&tab=x']) {
     assert.equal(fv.enlaceVerAnalisis(raro), '/dashboard/ventas?tab=analisis', String(raro));

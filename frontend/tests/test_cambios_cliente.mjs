@@ -144,6 +144,14 @@ console.log('--- TEST 6 (T18 r1): AYUDA_NOTA_CLIENTE y las pantallas que usan la
   const listaSC = leer('app/dashboard/ventas/solicitud/solicitud-client.tsx');
   assert.ok(listaSC.includes("const chips = chipsDocumentoVentas(sc, 'SC');"), 'lista de SC');
   assert.ok(!/'Cambios pedidos'|'Ya no la necesita'/.test(listaSC), 'lista de SC: sin el texto armado a mano');
+  // B4 T8 r1 (m11): y el chip se PINTA: CeldaEstado arma los chips y los recorre (hasta el cierre de la función), y es la
+  // celda de la columna 'estado'.
+  const inicioCelda = listaSC.indexOf('function CeldaEstado(');
+  assert.ok(inicioCelda >= 0, 'la lista de SC tiene CeldaEstado');
+  const celdaEstado = listaSC.slice(inicioCelda, listaSC.indexOf('\n}\n', inicioCelda));
+  assert.ok(celdaEstado.includes("const chips = chipsDocumentoVentas(sc, 'SC');"), 'CeldaEstado arma los chips');
+  assert.ok(/\{chips\.map\(\(c\) => <span key=\{c\.texto\}[^>]*>\{c\.texto\}<\/span>\)\}/.test(celdaEstado), 'CeldaEstado pinta cada chip con su texto');
+  assert.ok(/\{ id: 'estado', [^\n]*\n\s*celda: \(sc\) => <CeldaEstado sc=\{sc\} \/> \}/.test(listaSC), 'la columna Estado es CeldaEstado');
   const kanbanVentas = leer('lib/kanban-ventas.js');
   assert.ok(/const etiqueta = etiquetaChipCambios\(fila, tipo\);/.test(kanbanVentas)
     && /avisoCambiosCliente\(fila, tipo\)\?\.tono === 'rosa'/.test(kanbanVentas), 'chipsDocumentoVentas usa la fuente única');

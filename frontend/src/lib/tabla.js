@@ -1834,6 +1834,26 @@ export function accionPestana(estado, vista, opciones) {
 }
 
 /**
+ * B4 T8 r1 (m2): la acción del conmutador Lista / Kanban, con la misma regla que accionPestana: {tipo: 'modo', valor}, o
+ * {tipo: 'cambiar', cambios: {modo, estados}} si las opciones del modo nuevo (las de la vista del estado) no tienen alguno
+ * de los estados filtrados (el tablero ofrece sus columnas y la lista los estados de la pestaña: lo que no está se quita,
+ * si no filtraría sin verse). Sin opciones (null o undefined), el filtro no se toca. La pantalla envuelve el onEstado de
+ * la barra: onEstado(accionModo(estado, valor, opcionesDelModo(valor))).
+ * @param {EstadoTabla} estado
+ * @param {string} modo
+ * @param {OpcionesEstados | null | undefined} opciones
+ * @returns {AccionTabla}
+ */
+export function accionModo(estado, modo, opciones) {
+  const actuales = estado?.estados ?? [];
+  if (opciones === null || opciones === undefined || !actuales.length) return { tipo: 'modo', valor: modo };
+  const validos = new Set(opcionesDeVista(opciones, estado?.vista ?? null).map((o) => o.valor));
+  const quedan = actuales.filter((e) => validos.has(e));
+  if (quedan.length === actuales.length) return { tipo: 'modo', valor: modo };
+  return { tipo: 'cambiar', cambios: { modo, estados: quedan } };
+}
+
+/**
  * @typedef {{id: string, activa?: boolean}} PestanaAparteLib
  *   B4 T7 r1 (A3): la pestaña aparte de BarraTabla (la Análisis de un Hub con lista): no es una vista de la lista
  *   (RP35: nunca va en estado.vista).
@@ -1982,6 +2002,25 @@ export function estadoDelTotal({ total, cargando = false, recargando = false, er
   if (error !== null && error !== undefined && error !== false) return 'error';
   if (cargando || typeof total !== 'number' || !Number.isFinite(total)) return 'cargando';
   return recargando ? 'actualizando' : 'listo';
+}
+
+/**
+ * B4 T8 r1 (m5): la última respuesta de useListado y si llegó con una consulta sin filas (limit=0: la de los conteos en la
+ * Papelera o la del resumen en Kanban). La pantalla la guarda en un estado (se pone al día durante el render, sin efecto):
+ *    const sigue = llegadaDeListado(llegada, listado.crudo, sinFilasAhora); if (sigue !== llegada) setLlegada(sigue);
+ * y mientras la última respuesta sea de esas y la consulta vigente sí pida filas (otra pestaña, o Kanban a Lista), la
+ * tabla está `cargando` y el total en 'cargando': nunca «No hay solicitudes en esta vista» ni el total de la otra
+ * consulta. Con la MISMA respuesta devuelve `previa` (el mismo objeto: no hay que volver a escribirlo); con otra, su
+ * marca es la de la consulta de ahora (useListado descarta la respuesta de una consulta que ya no es la vigente, D28).
+ * Sin respuesta (null) nunca es «sin filas».
+ * @param {{crudo: unknown, sinFilas: boolean} | null | undefined} previa
+ * @param {unknown} crudo
+ * @param {boolean} sinFilas
+ * @returns {{crudo: unknown, sinFilas: boolean}}
+ */
+export function llegadaDeListado(previa, crudo, sinFilas) {
+  if (previa && previa.crudo === crudo) return previa;
+  return { crudo, sinFilas: crudo !== null && crudo !== undefined && Boolean(sinFilas) };
 }
 
 /**

@@ -305,19 +305,17 @@ export function pasosDeLista(datos, actual) {
   });
 }
 
-/** Las claves de FOCOS_VENTAS que el Hub entiende en ?foco= (hub, sc, cot, pven). */
-const FOCOS_DEL_HUB = congelar(FOCOS_VENTAS.map((f) => f.clave));
-
 /**
  * B4 T8 (R13, ANALISIS-ventas punto 7): el enlace del botón «Ver análisis» de una lista de Ventas: el Hub en su pestaña
  * Análisis, enfocado en `foco` ('sc', 'cot' o 'pven'; también 'hub'). Lo lee leerEnlaceHub. Un foco que no es de
- * FOCOS_VENTAS abre el Análisis sin foco.
+ * FOCOS_VENTAS abre el Análisis sin foco. r1 (m4): con CLAVES_FOCO_VENTAS, las mismas que acepta leerEnlaceHub (sin
+ * otra copia de la lista).
  * @param {unknown} foco
  * @returns {string}
  */
 export function enlaceVerAnalisis(foco) {
   const base = `${RUTA_HUB_VENTAS}?tab=analisis`;
-  return typeof foco === 'string' && FOCOS_DEL_HUB.includes(foco) ? `${base}&foco=${foco}` : base;
+  return typeof foco === 'string' && CLAVES_FOCO_VENTAS.includes(foco) ? `${base}&foco=${foco}` : base;
 }
 
 /**

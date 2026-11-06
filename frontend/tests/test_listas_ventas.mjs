@@ -666,14 +666,19 @@ console.log('--- B4 T8 TEST 1: tarjetasSolicitudes — las 4 tarjetas de Solicit
   // RP19 (3) y (4): valor de con_resumen (sc_activas ← activas, sc_confirmadas ← confirmadas, sc_canceladas ←
   // canceladas, sc_total ← total) y las ayudas de H32 y N8 con los números del resumen, no con una lista cargada.
   const resumen = { activas: 7, confirmadas: 3, canceladas: 2, total: 12, con_cot: 4, esperan_cot: 1, sin_atender: 2, vencidas: 1 };
+  // r1 (m1, KPI-ventas punto 7): la de las activas va en alerta si hay sin atender o vencidas.
   assert.deepEqual(listas.tarjetasSolicitudes(resumen), {
-    activas: { valor: 7, ayuda: '2 sin atender · 1 vencida' },
+    activas: { valor: 7, ayuda: '2 sin atender · 1 vencida', tono: 'alerta' },
     confirmadas: { valor: 3, ayuda: '1 esperan cotización' },
     canceladas: { valor: 2, ayuda: 'Fuera del flujo' },
     total: { valor: 12, ayuda: '4 generaron cotización' },
   });
   // La ayuda de Activas es la de V7 (pistaActivasSolicitudes) con sin_atender y vencidas del resumen.
   assert.equal(listas.tarjetasSolicitudes({ ...resumen, sin_atender: 0, vencidas: 0 }).activas.ayuda, 'Todas atendidas');
+  assert.equal(listas.tarjetasSolicitudes({ ...resumen, sin_atender: 0, vencidas: 0 }).activas.tono, 'normal', 'todo atendido: normal');
+  assert.equal(listas.tarjetasSolicitudes({ ...resumen, sin_atender: 0, vencidas: 3 }).activas.tono, 'alerta', 'solo vencidas');
+  assert.equal(listas.tarjetasSolicitudes({ ...resumen, sin_atender: 1, vencidas: 0 }).activas.tono, 'alerta', 'solo sin atender');
+  assert.equal(listas.tarjetasSolicitudes({ ...resumen, sin_atender: -2, vencidas: 'x' }).activas.tono, 'normal', 'lo que no es un número');
   assert.equal(listas.tarjetasSolicitudes(resumen).activas.ayuda, pistaActivasSolicitudes(2, 1));
   // Confirmadas, con la regla de H32 de contadoresSolicitudes (la misma frase).
   assert.equal(listas.tarjetasSolicitudes({ ...resumen, confirmadas: 0, esperan_cot: 0 }).confirmadas.ayuda, 'Sin confirmadas');
@@ -707,6 +712,45 @@ console.log('--- B4 T8 TEST 2: fechaVencida — la columna Vencimiento en rojo (
   // Sin `ahora`, la hora del sistema.
   assert.equal(listas.fechaVencida('2000-01-01T00:00:00'), true);
   assert.equal(listas.fechaVencida('2999-01-01T00:00:00'), false);
+}
+
+console.log('--- B4 T8 r1: el cableado de la lista de Solicitudes (A2, A3, m1, m2, m5, m7, m8, m9; D27) ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/app/dashboard/ventas/solicitud/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const lista = leer('solicitud-client.tsx');
+  // m1: la tarjeta de las activas recibe el tono de tarjetasSolicitudes.
+  assert.match(lista, /<TarjetaKpi kpi="sc_activas" [^>]*\btono=\{tarjetas\?\.activas\.tono\}/);
+  // m2: la barra despacha por alCambiarBarra, que poda con accionModo y las opciones del modo NUEVO.
+  assert.match(lista, /<BarraTabla\s+estado=\{estadoBarra\}\s+onEstado=\{alCambiarBarra\}/);
+  assert.match(lista, /if \(accion\.tipo === 'modo'\) \{\s*const modo = String\(accion\.valor\);\s*despachar\(accionModo\(estado, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_SC : opcionesEstadosSolicitudes\)\);\s*\} else despachar\(accion\);/);
+  // m5: la marca de la llegada sin filas (la Papelera y Kanban), puesta al día en el render, y la tabla y el total en
+  // «cargando» mientras falte la página.
+  assert.match(lista, /const sinFilasAhora = enPapelera \|\| modoEfectivo === 'kanban';/);
+  assert.match(lista, /const llegadaAhora = llegadaDeListado\(llegada, listado\.crudo, sinFilasAhora\);\s*if \(llegadaAhora !== llegada\) setLlegada\(llegadaAhora\);/);
+  assert.match(lista, /const sinPagina = !sinFilasAhora && llegadaAhora\.sinFilas && !listado\.error;/);
+  assert.match(lista, /total=\{sinPagina \? null : listado\.total\}\s*cargando=\{listado\.cargandoInicial \|\| sinPagina\}/);
+  assert.match(lista, /total: sinPagina \? null : listado\.total,\s*estadoTotal: estadoDelTotal\(\{\s*total: listado\.total, cargando: listado\.cargandoInicial \|\| sinPagina,/);
+  // m7: «Con atraso» desde Soporte, la Papelera o Canceladas abre Activas.
+  assert.match(lista, /const VISTAS_SIN_ATRASO = \['soporte', 'papelera', 'canceladas'\];/);
+  assert.match(lista, /if \(f !== 'todos' && VISTAS_SIN_ATRASO\.includes\(estado\.vista \?\? ''\)\) despachar\(accionPestana\(estado, INICIAL_SC\.vista, opcionesEstadosSolicitudes\)\);/);
+  // m8: el «vacío» de la lista se memoiza con la búsqueda y el de la Papelera es una constante del módulo.
+  assert.match(lista, /const vacioLista = useMemo\(\(\) => \([\s\S]*?\), \[estado\.q\]\);/);
+  assert.match(lista, /vacio=\{vacioLista\}/);
+  assert.match(lista, /^const VACIO_PAPELERA = \(/m);
+  assert.match(lista, /vacio=\{VACIO_PAPELERA\}/);
+  // m9: «Restaurar» dice cuál.
+  assert.ok(lista.includes('onClick={() => acciones?.restaurar(sc)} aria-label={`Restaurar ${sc.numero}`}'));
+  // A3: «Cancelada el» de la Papelera sale oculta por defecto (R26; sigue en «Ajustar tabla»).
+  assert.match(lista, /\{ id: 'cancelada', titulo: 'Cancelada el', ancho: \d+, ocultaPorDefecto: true,/);
+  // A2: el esqueleto del Suspense arma la lista con sus MISMAS piezas (el contenedor, la franja, la cabecera, la barra y
+  // las preferencias de la tabla), no una copia.
+  const carga = leer('CargandoSolicitudes.tsx');
+  assert.match(carga, /AccionesCabecera, COLUMNAS_TABLA_SC, CONTENEDOR_LISTA, ID_SC, INICIAL_SC, pestanasDeLaLista,\s*\} from '\.\/solicitud-client';/);
+  assert.ok(carga.includes('<div className={CONTENEDOR_LISTA}>'), 'el contenedor de la lista');
+  assert.ok(carga.includes("pasos={pasosDeLista(null, 'SC')}"), 'la franja con las cajas de la lista');
+  assert.ok(carga.includes('const prefs = usePreferenciasTabla(ID_SC, COLUMNAS_TABLA_SC);'), 'las columnas que el usuario guardó');
+  assert.ok(carga.includes('const ESTADO_CARGANDO = estadoTablaInicial(INICIAL_SC);'), 'el estado inicial de la lista');
+  assert.ok(lista.includes('<div className={CONTENEDOR_LISTA}>'), 'la lista usa el mismo contenedor');
 }
 
 console.log('OK test_listas_ventas.mjs');
