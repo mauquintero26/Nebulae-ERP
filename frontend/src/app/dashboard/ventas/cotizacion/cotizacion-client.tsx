@@ -39,7 +39,7 @@ import {
 // pedido y «Sin precio» con la regla de la tarjeta del tablero; la Entrega est. como día de calendario.
 import {
   pedidoVigente, tarjetasCotizaciones, marcaPedidoCotizacion, cotizacionSinPrecio, diaDeNegocio, fechaNegocioVencida,
-  fechaPorVencer,
+  fechaPorVencer, avisoSolicitudTrasRechazo,
 } from '@/lib/listas-ventas';
 import {
   SubNav, PageHeader, Modal, Button, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila, ModalMotivo,
@@ -65,7 +65,7 @@ import {
 import { ESTADOS_COTIZACION } from '@/lib/estados-cotizacion';
 import { fechaCorta, fechaSolo } from '@/lib/fechas-colombia';
 import { enlaceDocumento } from '@/lib/analisis';
-import { textoDeError } from '@/lib/avisos';
+import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { TABLE } from '@/lib/design-system';
 import { VEN_NAV } from '../ven-nav';
 import { getUsuarioActual } from '../flujo';
@@ -1200,8 +1200,19 @@ export default function CotizacionClient() {
     if (!rechazando) return;
     const { cot, columnas } = rechazando;
     const autor = autorActual();
-    // Si el servidor no la rechaza, ModalMotivo muestra su mensaje y conserva lo escrito (no se recarga nada: no cambió).
-    await apiFetch(`/ventas/cotizaciones/${cot.id}`, { method: 'PATCH', body: JSON.stringify({ estado: 'RECHAZADA', updated_by: autor }) });
+    // Si el servidor no la rechaza, ModalMotivo muestra su mensaje y conserva lo escrito. r1 (m1): con la regla única de
+    // recargarTrasError (un 400, un 409 o la red cortada: algo cambió en otro lado, o el rechazo pudo quedar hecho) se
+    // recargan la lista, el origen y el destino del tablero y la franja; el error sigue para que ModalMotivo lo muestre.
+    try {
+      await apiFetch(`/ventas/cotizaciones/${cot.id}`, { method: 'PATCH', body: JSON.stringify({ estado: 'RECHAZADA', updated_by: autor }) });
+    } catch (err) {
+      if (recargarTrasError(err)) {
+        recargarListado();
+        tablero.recargar([...columnas]);
+        setRecargaFlujo((n) => n + 1);
+      }
+      throw err;
+    }
     try {
       await apiFetch(`/ventas/cotizaciones/${cot.id}/actividad`, {
         method: 'POST', body: JSON.stringify({ action: 'NOTE_ADDED', description: `Motivo del rechazo: ${motivo}`, user_name: autor }),
@@ -1234,6 +1245,10 @@ export default function CotizacionClient() {
   // Lo que decía el aviso ámbar de la lista: «N sin precio» (resumen.sin_calc) y «N vencen en 7 días»
   // (resumen.vencen_pronto, con valida_hasta del Bloque 3: RP89). Las cotizaciones sin atender son «Con atraso».
   const avisosFlujo = useMemo(() => avisosCotizaciones(listado.resumen), [listado.resumen]);
+  // r1 (m6, CLS): los avisos salen de la lista, no de /ventas/flujo. Hasta que la lista responda (o falle), la franja
+  // reserva su renglón (reservarAvisos): al llegar «N sin precio» o «N vencen en 7 días» no empujan las cajas ni lo de
+  // abajo. Una recarga conserva lo último (el hook no vacía lo que se ve).
+  const avisosPendientes = listado.crudo === null && listado.error === null;
   const filtroSemaforo: FiltroSemaforo = estado.semaforo === 'atrasados' ? 'atrasados' : 'todos';
   // «Con atraso» pone semaforo=atrasados en el estado único (la tabla y el tablero lo mandan al servidor) y vuelve a la
   // página 1; «Ver todo» lo quita. Rechazadas nunca va atrasada: desde ahí abre Activas, también en Kanban (r2b de T8),
@@ -1265,6 +1280,7 @@ export default function CotizacionClient() {
         semaforo={{ atrasados: atrasadosCOT, filtro: filtroSemaforo, onFiltrar: alFiltrarSemaforo }}
         pasos={pasosFlujo}
         avisos={avisosFlujo}
+        reservarAvisos={avisosPendientes}
         cargando={flujo.cargando}
         error={flujo.error}
         onReintentar={flujo.recargar}
@@ -1366,7 +1382,9 @@ export default function CotizacionClient() {
       {rechazando && (
         <ModalMotivo
           titulo={`Rechazar ${rechazando.cot.numero}`}
-          efectos={['La cotización pasa a Rechazada.', 'El motivo queda en la Actividad de la cotización.']}
+          // r1 (m4): con la COT de una solicitud, lo mismo que dice el detalle (avisoSolicitudTrasRechazo).
+          efectos={['La cotización pasa a Rechazada.', avisoSolicitudTrasRechazo(rechazando.cot), 'El motivo queda en la Actividad de la cotización.']
+            .filter((e): e is string => Boolean(e))}
           textoConfirmar="Rechazar cotización"
           placeholder="Por qué se rechaza la cotización…"
           onConfirmar={rechazarConMotivo}

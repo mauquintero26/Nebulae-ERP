@@ -19,7 +19,8 @@ import {
  * muestra el fallback del Suspense de cotizacion/page.tsx (antes un «Cargando...» centrado en h-screen, que saltaba al
  * llegar la lista). Tiene la geometría de la lista mientras carga, con sus MISMAS piezas:
  *  - la barra de submódulos;
- *  - la franja del flujo cargando (las 5 cajas con «Estás aquí» en Cotización);
+ *  - la franja del flujo cargando (las 5 cajas con «Estás aquí» en Cotización), con el renglón de sus avisos reservado
+ *    (reservarAvisos, m6 de r1: la lista también lo reserva hasta que responde);
  *  - el contenedor de la lista (CONTENEDOR_LISTA);
  *  - la cabecera con sus botones, invisibles;
  *  - las 4 tarjetas con sus barras grises;
@@ -45,6 +46,7 @@ export function CargandoCotizaciones() {
           regla={textoRegla(undefined)}
           semaforo={{ atrasados: null, filtro: 'todos', onFiltrar: nada }}
           pasos={pasosDeLista(null, 'COT')}
+          reservarAvisos
           cargando
         />
       </div>

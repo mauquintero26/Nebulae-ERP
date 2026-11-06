@@ -85,6 +85,12 @@ export type PropsBannerFlujo = {
   partes?: PartesFranja;
   /** 'El más antiguo: N días' en cada caja (por defecto no). */
   mostrarAntiguedad?: boolean;
+  /**
+   * B4 T9 r1 (m6): sin avisos todavía, reserva su renglón (invisible y fuera del árbol accesible, con el alto de un chip).
+   * Para la pantalla cuyos avisos llegan en otra respuesta que los números (Cotizaciones: los de su lista): al llegar no
+   * empujan las cajas ni lo de abajo (CLS). Por defecto false: la franja es la de siempre. Con avisos no cambia nada.
+   */
+  reservarAvisos?: boolean;
 };
 
 const ICONO_SEMAFORO = { gris: CircleDashed, rojo: AlertTriangle, verde: CheckCircle2 } as const;
@@ -131,7 +137,7 @@ const esBooleano = (valor: unknown) => typeof valor === 'boolean';
 /** La franja del flujo. Ver arriba. */
 export function BannerFlujo({
   titulo, regla, semaforo, pasos, cargando = false, error = null, onReintentar, onSeleccionarPaso, avisos,
-  accionAjustar = null, idPreferencia, mostrarAntiguedad = false,
+  accionAjustar = null, idPreferencia, mostrarAntiguedad = false, reservarAvisos = false,
 }: PropsBannerFlujo) {
   const [compacto, guardarCompacto] = usePreferencia<boolean>(`flujo:${idPreferencia}`, false, { validar: esBooleano });
   const [verAyuda, setVerAyuda] = useState(false);
@@ -207,6 +213,10 @@ export function BannerFlujo({
             {avisos?.length ? (
               <span className="order-3 inline-flex flex-wrap items-center gap-x-2 gap-y-1">
                 {avisos.map((a, i) => <ChipAviso key={`${a.texto}-${i}`} texto={a.texto} tono={a.tono} onClick={a.onClick} />)}
+              </span>
+            ) : reservarAvisos ? (
+              <span aria-hidden="true" className="order-3 inline-flex flex-wrap items-center gap-x-2 gap-y-1 invisible">
+                <ChipAviso texto="Avisos" tono="gris" />
               </span>
             ) : null}
           </div>

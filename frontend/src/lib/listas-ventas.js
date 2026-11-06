@@ -486,6 +486,20 @@ export function cotizacionSinPrecio(cot) {
 }
 
 /**
+ * B4 T9 r1 (m4; B2, test_rechazo_cotizacion_solicitud_activa): lo que pasa con la solicitud al rechazar una cotización
+ * que viene de una: 'La solicitud SC-… seguirá activa y podrás crearle otra cotización.' ('de origen' sin número). Sin
+ * solicitud, null. Una sola frase para la confirmación del detalle (cotizacion/[id]) y los efectos del ModalMotivo del
+ * tablero.
+ * @param {any} cot
+ * @returns {string | null}
+ */
+export function avisoSolicitudTrasRechazo(cot) {
+  if (!cot?.sc_id) return null;
+  const numero = typeof cot.sc_numero === 'string' && cot.sc_numero.trim() ? cot.sc_numero.trim() : 'de origen';
+  return `La solicitud ${numero} seguirá activa y podrás crearle otra cotización.`;
+}
+
+/**
  * T7 ronda 2: la pestaña de la lista de solicitudes en la que cae una fila. Cada solicitud cae en exactamente una, en
  * este orden: Soporte Técnico (por tipo o por su estado propio N/A_SOPORTE, también si se le corrigió el tipo en el
  * detalle) -> 'Soporte'; CONFIRMADA -> 'Confirmadas'; CANCELADA -> 'Canceladas'; lo demás (incluidos los estados

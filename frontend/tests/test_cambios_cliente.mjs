@@ -136,7 +136,8 @@ console.log('--- TEST 6 (T18 r1): AYUDA_NOTA_CLIENTE y las pantallas que usan la
   assert.ok(venta.includes("['Nota de la solicitud', notaSolicitud, null]"), 'la nota interna de la SC no lo lleva');
   assert.ok(venta.includes("['Notas del pedido', mostrarNotaPedido ? notaPedido : '', null]"), 'las notas del pedido tampoco');
   assert.ok(/\{ayuda && <p className="[^"]*">\{ayuda\}<\/p>\}/.test(venta), 'se pinta debajo de la nota');
-  // La pastilla de la lista es UNA (ventas/chip-cambios-cliente.tsx) con etiquetaChipCambios, en las dos listas.
+  // La pastilla es UNA (ventas/chip-cambios-cliente.tsx) con etiquetaChipCambios. B4 T9 r1 (m5): desde T8 y T9 ya no la
+  // usan las listas (pintan chipsDocumentoVentas, abajo): solo la cabecera del detalle de la SC (solicitud/[id]).
   const chip = leer('app/dashboard/ventas/chip-cambios-cliente.tsx');
   assert.ok(chip.includes('etiquetaChipCambios(doc, tipoDoc)') && chip.includes('avisoCambiosCliente(doc, tipoDoc)'));
   // B4 T8 (D27, RP18, D4): la lista de SC pinta los chips de la fila con chipsDocumentoVentas (los mismos de la tarjeta
@@ -151,6 +152,10 @@ console.log('--- TEST 6 (T18 r1): AYUDA_NOTA_CLIENTE y las pantallas que usan la
   const celdaEstado = listaSC.slice(inicioCelda, listaSC.indexOf('\n}\n', inicioCelda));
   assert.ok(celdaEstado.includes("const chips = chipsDocumentoVentas(sc, 'SC');"), 'CeldaEstado arma los chips');
   assert.ok(/\{chips\.map\(\(c\) => <span key=\{c\.texto\}[^>]*>\{c\.texto\}<\/span>\)\}/.test(celdaEstado), 'CeldaEstado pinta cada chip con su texto');
+  // B4 T9 r1 (m3): y con SU tono (CLASE_CHIP[c.tono]): «Ya no la necesita» en rosa y «Cambios pedidos» en ámbar, la
+  // distinción de B3-T18 (antes la elegía ChipCambiosCliente con avisoCambiosCliente). Un tono fijo la perdería.
+  assert.ok(/\{chips\.map\(\(c\) => <span key=\{c\.texto\} className=\{`[^`]*\$\{CLASE_CHIP\[c\.tono\] \?\? CLASE_CHIP\.slate\}`\}>\{c\.texto\}<\/span>\)\}/.test(celdaEstado),
+    'CeldaEstado pinta cada chip con su tono');
   assert.ok(/\{ id: 'estado', [^\n]*\n\s*celda: \(sc\) => <CeldaEstado sc=\{sc\} \/> \}/.test(listaSC), 'la columna Estado es CeldaEstado');
   const kanbanVentas = leer('lib/kanban-ventas.js');
   assert.ok(/const etiqueta = etiquetaChipCambios\(fila, tipo\);/.test(kanbanVentas)
@@ -166,6 +171,14 @@ console.log('--- TEST 6 (T18 r1): AYUDA_NOTA_CLIENTE y las pantallas que usan la
   assert.ok(celdaEstadoCOT.includes("const chips = chipsDocumentoVentas(cot, 'COT');"), 'lista de COT: CeldaEstado arma los chips');
   assert.ok(/\{chips\.map\(\(c\) => <span key=\{c\.texto\}[^>]*>\{c\.texto\}<\/span>\)\}/.test(celdaEstadoCOT),
     'lista de COT: CeldaEstado pinta cada chip con su texto');
+  // r1 (m3): con su tono, como la de SC.
+  assert.ok(/\{chips\.map\(\(c\) => <span key=\{c\.texto\} className=\{`[^`]*\$\{CLASE_CHIP\[c\.tono\] \?\? CLASE_CHIP\.slate\}`\}>\{c\.texto\}<\/span>\)\}/.test(celdaEstadoCOT),
+    'lista de COT: CeldaEstado pinta cada chip con su tono');
+  // Y la fuente única da los dos tonos (la vigencia de B3-T18: la COT en Borrador con cambios_cliente).
+  const { chipsDocumentoVentas } = await import('../src/lib/kanban-ventas.js');
+  const conCambios = (tipo) => ({ estado: 'BORRADOR', cambios_cliente: { tipo, at: '2026-11-01T10:00:00', comentario: null } });
+  assert.deepEqual(chipsDocumentoVentas(conCambios('NO_LA_NECESITA'), 'COT'), [{ texto: 'Ya no la necesita', tono: 'rose' }]);
+  assert.deepEqual(chipsDocumentoVentas(conCambios('CAMBIOS'), 'COT'), [{ texto: 'Cambios pedidos', tono: 'amber' }]);
   assert.ok(/\{ id: 'estado', [^\n]*\n\s*celda: \(cot\) => <CeldaEstado cot=\{cot\} \/> \}/.test(listaCOT), 'lista de COT: la columna Estado es CeldaEstado');
   assert.ok(/import \{[^}]*\bchipsDocumentoVentas\b[^}]*\} from '@\/lib\/kanban-ventas';/.test(listaCOT), 'lista de COT: de kanban-ventas.js');
 }

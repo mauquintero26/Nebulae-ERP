@@ -889,6 +889,30 @@ console.log('--- B4 T9 TEST 3 (r1, I1): marcaPedidoCotizacion y cotizacionSinPre
   assert.equal(listas.cotizacionSinPrecio(null), true);
 }
 
+console.log('--- B4 T9 TEST 4 (r1, m4): avisoSolicitudTrasRechazo — el rechazo dice lo mismo en el detalle y en el tablero ---');
+{
+  // B2 (test_rechazo_cotizacion_solicitud_activa): rechazar una COT que viene de una solicitud la deja activa. La frase
+  // era del detalle (cotizacion/[id]); ahora es una sola y la usa también el ModalMotivo del tablero.
+  assert.equal(listas.avisoSolicitudTrasRechazo({ sc_id: 5, sc_numero: 'SC-20260305' }),
+    'La solicitud SC-20260305 seguirá activa y podrás crearle otra cotización.');
+  assert.equal(listas.avisoSolicitudTrasRechazo({ sc_id: 5, sc_numero: '  ' }),
+    'La solicitud de origen seguirá activa y podrás crearle otra cotización.', 'sin número, «de origen» (como el detalle)');
+  assert.equal(listas.avisoSolicitudTrasRechazo({ sc_id: 5 }), 'La solicitud de origen seguirá activa y podrás crearle otra cotización.');
+  for (const sinSC of [{ sc_id: null, sc_numero: 'SC-1' }, {}, null, undefined]) {
+    assert.equal(listas.avisoSolicitudTrasRechazo(sinSC), null, JSON.stringify(sinSC));
+  }
+  const leerVentas = (r) => readFileSync(new URL(`../src/app/dashboard/ventas/${r}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const sinComentarios = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  // El detalle: la misma frase, de la constante, en la confirmación de «Marcar como Rechazada».
+  const detalle = sinComentarios(leerVentas('cotizacion/[id]/page.tsx'));
+  assert.match(detalle, /import \{[^}]*\bavisoSolicitudTrasRechazo\b[^}]*\} from '@\/lib\/listas-ventas';/);
+  assert.ok(detalle.includes("mensaje: avisoSolicitudTrasRechazo(cotizacion) ?? 'La cotización queda como Rechazada.',"), 'el detalle');
+  assert.ok(!detalle.includes('seguirá activa y podrás crearle otra cotización'), 'el detalle no la escribe a mano');
+  // El tablero: con la COT de una SC, los efectos del ModalMotivo suman la frase.
+  const lista = sinComentarios(leerVentas('cotizacion/cotizacion-client.tsx'));
+  assert.match(lista, /efectos=\{\['La cotización pasa a Rechazada\.', avisoSolicitudTrasRechazo\(rechazando\.cot\), 'El motivo queda en la Actividad de la cotización\.'\]\s*\.filter\(\(e\): e is string => Boolean\(e\)\)\}/);
+}
+
 console.log('--- B4 T9: el cableado de la lista de Cotizaciones con el servidor (el patrón de T8; D27) ---');
 {
   const fuente = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/cotizacion-client.tsx', import.meta.url), 'utf8')

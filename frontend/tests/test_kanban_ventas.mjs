@@ -855,10 +855,19 @@ console.log('--- B4 T9 TEST J: consultaColumnaCOT — la consulta de cada column
   assert.equal(params(kv.consultaColumnaCOT(filtrado, esperando, { orden: 'atencion', limit: 25, offset: 0 })).estados, 'PENDIENTE_CONFIRMACION,ENVIADA');
   assert.equal(params(kv.consultaColumnaCOT({ ...estado, estados: ['ENVIADA'] }, esperando, { orden: 'atencion', limit: 25, offset: 0 })).estados, 'ENVIADA');
   assert.equal(kv.consultaColumnaCOT(filtrado, borrador, { orden: 'atencion', limit: 25, offset: 0 }), null);
-  // Sin semáforo ni búsqueda no van (queryListado omite lo vacío), y nunca el paso.
+  // Sin semáforo ni búsqueda no van (queryListado omite lo vacío).
   const limpio = params(kv.consultaColumnaCOT(estadoTablaInicial({ vista: 'activas' }), borrador, { orden: 'atencion', limit: 25, offset: 0 }));
   assert.equal(limpio.vista, 'todas');
   assert.ok(!('semaforo' in limpio) && !('q' in limpio) && !('paso' in limpio));
+  // r1 (m2): el paso. consultaColumnaCOT hace con él lo mismo que consultaColumnaSC de T8: no lo neutraliza, queryListado
+  // lo pasa tal cual. Hoy no pesa: la lista nunca pone paso (no tiene cajas que filtren; las suyas navegan) y GET
+  // /ventas/cotizaciones no lo lee. Si se quisiera neutralizar, sería en las dos.
+  const conPaso = estadoTablaInicial({ vista: 'activas', paso: 'COT' });
+  assert.equal(conPaso.paso, 'COT', 'el estado trae el paso');
+  const paramsCOT = params(kv.consultaColumnaCOT(conPaso, borrador, { orden: 'atencion', limit: 25, offset: 0 }));
+  const paramsSC = params(kv.consultaColumnaSC(conPaso, COLUMNAS_SC[0], { orden: 'atencion', limit: 25, offset: 0 }));
+  assert.equal(paramsCOT.paso, 'COT', 'el paso viaja');
+  assert.equal(paramsCOT.paso, paramsSC.paso, 'igual que en Solicitudes');
   // consultaColumnaSC no cambia (la de Solicitudes sigue con todas_sin_soporte).
   assert.equal(params(kv.consultaColumnaSC(estado, COLUMNAS_SC[0], { orden: 'atencion', limit: 25, offset: 0 })).vista, 'todas_sin_soporte');
 }
@@ -949,8 +958,17 @@ console.log('--- B4 T9 TEST L: el cableado del tablero de Cotizaciones (C15, RP1
   const patch = rechazar.indexOf("JSON.stringify({ estado: 'RECHAZADA', updated_by: autor })");
   const nota = rechazar.indexOf("JSON.stringify({ action: 'NOTE_ADDED', description: `Motivo del rechazo: ${motivo}`, user_name: autor })");
   assert.ok(patch > 0 && nota > patch, 'primero el PATCH, después la nota');
-  assert.ok(rechazar.indexOf('tablero.recargar([...columnas]);') > nota, 'y la recarga del origen y el destino');
-  assert.match(rechazar, /recargarListado\(\);\s*tablero\.recargar\(\[\.\.\.columnas\]\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);/);
+  assert.ok(rechazar.lastIndexOf('tablero.recargar([...columnas]);') > nota, 'y la recarga del origen y el destino');
+  assert.match(rechazar, /\}\s*recargarListado\(\);\s*tablero\.recargar\(\[\.\.\.columnas\]\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*$/);
+  // r1 (m1): si el PATCH falla, la regla única recargarTrasError (lib/avisos.js) decide si se recargan la lista, el origen
+  // y el destino del tablero y la franja; el error sigue (throw) para que ModalMotivo lo muestre y conserve lo escrito.
+  assert.match(rechazar, /try \{\s*await apiFetch\(`\/ventas\/cotizaciones\/\$\{cot\.id\}`, \{ method: 'PATCH', body: JSON\.stringify\(\{ estado: 'RECHAZADA', updated_by: autor \}\) \}\);\s*\} catch \(err\) \{\s*if \(recargarTrasError\(err\)\) \{\s*recargarListado\(\);\s*tablero\.recargar\(\[\.\.\.columnas\]\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*\}\s*throw err;\s*\}/);
+  assert.match(fuente, /import \{ recargarTrasError, textoDeError \} from '@\/lib\/avisos';/);
+  {
+    // La regla: un 400, un 409 o la red cortada recargan; un 422 o un 500 no.
+    const { recargarTrasError } = await import('../src/lib/avisos.js');
+    assert.deepEqual([400, 409, undefined, 422, 500].map((status) => recargarTrasError({ status })), [true, true, true, false, false]);
+  }
   assert.match(lista, /<ModalMotivo\s+titulo=\{`Rechazar \$\{rechazando\.cot\.numero\}`\}[\s\S]*?onConfirmar=\{rechazarConMotivo\}\s+onCerrar=\{\(\) => setRechazando\(null\)\}/);
   // Al pasar a Kanban se sale de la pantalla completa; la barra no la ofrece en Kanban.
   assert.match(lista, /useEffect\(\(\) => \{ if \(enKanban\) salir\(\); \}, \[enKanban, salir\]\);/);

@@ -19,7 +19,7 @@ import {
 import type { AnulacionConfirmacion } from '../cotizacion-client';
 import { NextStepCard, EnlaceConfirmacionModal, CambiosDeActividad, CabeceraActividad, returnToSeguro, getUsuarioActual, BotonVolver } from '../../flujo';
 import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
-import { situacionPedidoCotizacion } from '@/lib/listas-ventas';
+import { situacionPedidoCotizacion, avisoSolicitudTrasRechazo } from '@/lib/listas-ventas';
 import {
   resumenAnticipoCotizacion, formatoPct, propagacionRecotizacion, puedeGestionarCotizacion, notaAnticipoPorLinea,
   avisoTrasPropagar, PEDIDO_NO_ACTUALIZADO_RECARGA,
@@ -1203,9 +1203,8 @@ function CotizacionDetalleContent() {
                           // value="" se conserva: mientras la confirmación está abierta no queda elegida ninguna opción.
                           if (k === 'RECHAZADA' && !(await confirmar({
                             titulo: `Marcar ${cotizacion.numero} como Rechazada`,
-                            mensaje: cotizacion.sc_id
-                              ? `La solicitud ${cotizacion.sc_numero || 'de origen'} seguirá activa y podrás crearle otra cotización.`
-                              : 'La cotización queda como Rechazada.',
+                            // B4 T9 r1 (m4): la frase es una sola, la del ModalMotivo del tablero de la lista.
+                            mensaje: avisoSolicitudTrasRechazo(cotizacion) ?? 'La cotización queda como Rechazada.',
                             textoConfirmar: 'Marcar como Rechazada',
                             peligro: true,
                           }))) return;

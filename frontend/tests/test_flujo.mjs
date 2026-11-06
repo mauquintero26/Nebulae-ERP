@@ -920,4 +920,31 @@ console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuent
   assert.match(hook, /recarga: number = 0/);
 }
 
+console.log('--- TEST 21 (B4 T9 r1, m6): BannerFlujo reserva el renglón de los avisos con reservarAvisos (aditivo) ---');
+{
+  // Una pantalla cuyos avisos llegan en otra respuesta que /ventas/flujo (Cotizaciones: los de su lista) reserva su
+  // renglón mientras tanto: al llegar no empujan las cajas ni lo de abajo (CLS). Sin la prop, la franja es la de antes.
+  const fuente = readFileSync(new URL('../src/components/flujo/BannerFlujo.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = fuente.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '');
+  assert.match(codigo, /\n {2}reservarAvisos\?: boolean;\n/, 'la prop nueva, opcional');
+  assert.match(codigo, /accionAjustar = null, idPreferencia, mostrarAntiguedad = false, reservarAvisos = false,\n\}: PropsBannerFlujo\)/, 'por defecto false');
+  const FILA = 'order-3 inline-flex flex-wrap items-center gap-x-2 gap-y-1';
+  // Con avisos, los mismos chips de siempre en el mismo renglón (sin la prop o con ella).
+  assert.ok(codigo.includes(`{avisos?.length ? (\n              <span className="${FILA}">\n                {avisos.map((a, i) => <ChipAviso key={\`\${a.texto}-\${i}\`} texto={a.texto} tono={a.tono} onClick={a.onClick} />)}\n              </span>\n            ) : reservarAvisos ? (`),
+    'con avisos, igual que antes');
+  // Sin avisos y con reservarAvisos: el mismo renglón, invisible y fuera del árbol accesible, con un chip del mismo alto.
+  assert.match(codigo, new RegExp(`\\) : reservarAvisos \\? \\(\\s*<span aria-hidden="true" className="${FILA} invisible">\\s*<ChipAviso texto="Avisos" tono="gris" />\\s*</span>\\s*\\) : null\\}`),
+    'el renglón reservado');
+  // Las demás pantallas no la pasan: su franja no cambia (el Hub, Solicitudes y su esqueleto).
+  for (const ruta of ['app/dashboard/ventas/page.tsx', 'app/dashboard/ventas/solicitud/solicitud-client.tsx', 'app/dashboard/ventas/solicitud/CargandoSolicitudes.tsx']) {
+    assert.ok(!readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').includes('reservarAvisos'), `${ruta} no la pasa`);
+  }
+  // Cotizaciones la pasa mientras su lista no respondió, y su esqueleto también (la misma geometría, A2).
+  const cot = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/cotizacion-client.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(cot, /const avisosPendientes = listado\.crudo === null && listado\.error === null;/);
+  assert.match(cot, /avisos=\{avisosFlujo\}\s*reservarAvisos=\{avisosPendientes\}\s*cargando=\{flujo\.cargando\}/);
+  const carga = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/CargandoCotizaciones.tsx', import.meta.url), 'utf8');
+  assert.match(carga, /pasos=\{pasosDeLista\(null, 'COT'\)\}\s*reservarAvisos\s*cargando/);
+}
+
 console.log('\nOK: test_flujo.mjs');
