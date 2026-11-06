@@ -1248,6 +1248,8 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
     assert.deepEqual(ids, ['todos', ...COLUMNAS_PEDIDO.map((c) => c.clave)]);
     for (const id of ids) assert.equal(leerEnlacePedidos(`?tab=${id}`), id, id);
   }
+  // Los conteos de las pestañas son los de la MISMA llamada de la lista (con_conteos).
+  assert.match(lista, /const pestanas = pestanasDeLaLista\(listado\.conteos as ConteosPedidos \| null\);/);
   assert.match(lista, /<BarraTabla\s+estado=\{estado\}\s+onEstado=\{alCambiarBarra\}\s+pestanas=\{enKanban \? undefined : pestanas\}/);
   assert.match(lista, /opcionesEstados=\{enKanban \? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesEstadosPedidos\}/);
   assert.match(lista, /kanbanDisponible\n/);
@@ -1268,6 +1270,15 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   const ancho = Object.fromEntries(ids.map(([id, , a]) => [id, a]));
   assert.deepEqual([ancho.numero, ancho.total, ancho.anticipo, ancho.saldo, ancho.entrega, ancho.estado, ancho.acciones], [132, 112, 104, 104, 104, 128, 56]);
   assert.ok(ancho.cliente >= 120 && ancho.cliente <= 152, `Cliente entre 120 y 152 (RP85, R26): ${ancho.cliente}`);
+  // R26 (banco de T10): a 1024 px con el menú abierto la caja de la tabla deja 704 px (con su barra vertical). Acciones
+  // conserva los 56 del diseño (sin anchoMin la tabla la sube a ANCHO_MIN, 64) y Cliente nace en 132: con la casilla
+  // (ANCHO_SELECCION) las columnas por defecto suman 704 y caben sin correr la tabla.
+  assert.equal(ancho.cliente, 132, 'Cliente nace en 132 (medido en el banco)');
+  assert.match(columnas, /\{ id: 'acciones', titulo: 'Acciones', ancho: 56, anchoMin: 56, /);
+  const { ANCHO_SELECCION, ANCHO_MIN } = await import('../src/lib/tabla.js');
+  assert.ok(ancho.acciones < ANCHO_MIN, 'sin su anchoMin, Acciones subiría al mínimo de la tabla');
+  const visibles = ids.filter(([id]) => !['anticipo', 'entrega'].includes(id)).reduce((s, [, , a]) => s + a, ANCHO_SELECCION);
+  assert.ok(visibles <= 704, `las columnas por defecto suman ${visibles} px: caben en los 704 de la caja a 1024 px`);
   assert.match(columnas, /\{ id: 'numero', [^\n]*clave: true, fija: 'izquierda'/);
   assert.match(columnas, /\{ id: 'cliente', [^\n]*flexible: true/);
   assert.match(columnas, /\{ id: 'anticipo', [^\n]*ocultaPorDefecto: true/);
@@ -1407,7 +1418,9 @@ console.log('--- B4 T10: el cableado del detalle del pedido (FLUJO-documentos 5,
   // «Estado actual» y los avisos de cancelado y devuelto se quedan.
   assert.ok(codigo.includes('const stepIndex = pasoPedido(estadoActual);'));
   assert.ok(codigo.includes('const pasosPedido = pasosConProgreso(STEPS, stepIndex);'));
-  assert.match(codigo, /\{stepIndex >= 0 && \(\s*<div className="[^"]*">\s*<PasosFlujo variante="barra" pasos=\{pasosPedido\} etiqueta="Pasos del pedido" \/>/);
+  // Banco de T10: a 1024 px las cinco etiquetas no caben en una línea: partirEtiquetas las parte (V5 del B2), y la barra
+  // usa todo el ancho de la columna (py-6, sin el p-6 de la línea de antes): así ninguna palabra se corta por la mitad.
+  assert.match(codigo, /\{stepIndex >= 0 && \(\s*<div className="bg-white py-6 border-b border-slate-100 mb-8">\s*<PasosFlujo variante="barra" pasos=\{pasosPedido\} etiqueta="Pasos del pedido" partirEtiquetas \/>/);
   assert.match(codigo, /\{stepIndex >= 0 && STEPS\[stepIndex\]\?\.key !== estadoActual && \(\s*<p [^>]*>Estado actual: \{estadoCfg\.label\}<\/p>/);
   assert.ok(codigo.includes('Este pedido fue devuelto totalmente.') && codigo.includes('Este pedido de venta fue cancelado.'));
   {
@@ -1457,6 +1470,16 @@ console.log('--- B4 T10: el cableado del detalle del pedido (FLUJO-documentos 5,
   for (const aMano of ['volverá a Borrador para que puedas', 'saldo a favor de la cotización y pasa', 'También se cancelará la orden de pago', 'no se cancela y queda un aviso']) {
     assert.ok(!codigo.includes(aMano), `sin la frase a mano: ${aMano}`);
   }
+  // La tabla de productos (banco de T10): los anchos por defecto caben en @xl (36rem, 576 px), desde donde se ve la tabla.
+  const bloque3 = readFileSync(new URL('../src/app/dashboard/ventas/venta/[id]/detalle-bloque3.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const anchosProductos = [...bloque3.matchAll(/\{ id: '(producto|cantidad|unitario|iva|total)', titulo: [^\n]*?, ancho: (\d+)/g)].map((m) => [m[1], Number(m[2])]);
+  assert.deepEqual(anchosProductos.map(([id]) => id), ['producto', 'cantidad', 'unitario', 'iva', 'total']);
+  const sumaProductos = anchosProductos.reduce((s, [, a]) => s + a, 0);
+  assert.ok(sumaProductos <= 576, `las columnas de productos suman ${sumaProductos} px: caben desde @xl (576)`);
+  assert.match(bloque3, /\{ id: 'producto', titulo: 'Producto', ancho: \d+, flexible: true,/, 'Producto es la flexible');
+  // Las columnas son estables (D40) y siguen a `discriminado` (el título «Total con IVA» o «Total»), con su único
+  // usePreferenciasTabla.
+  assert.match(bloque3, /const columnas = useMemo<ColumnaTabla<FilaProductoPedido>\[\]>\(\(\) => \[[\s\S]*?\], \[discriminado\]\);\s*const prefs = usePreferenciasTabla\('ventas\.pedido\.productos', columnas\);/);
 }
 
 console.log('OK test_listas_ventas.mjs');

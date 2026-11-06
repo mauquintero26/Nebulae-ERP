@@ -488,11 +488,13 @@ function PedidoVentaDetalleContent() {
               Se oculta solo en Cancelado y Devuelto (paso -1; RP87: se conserva stepIndex >= 0).
               B4 T10 (FLUJO-documentos punto 5): el Bloque 1 lo sigue alimentando con PASOS_PEDIDO y pasoPedido; solo
               cambia el dibujo, a PasosFlujo variante 'barra' (los mismos círculos, colores y ✓ de la cadena de arriba).
-              T11 (V5): cada paso es su propia columna con un conector entre pasos, y la etiqueta va centrada bajo su
-              círculo; la pieza común la recorta (con el nombre completo en su title) en lugar de pegarla a la siguiente. */}
+              T11 (V5): cada paso es su propia columna con un conector entre pasos y la etiqueta va centrada bajo su
+              círculo; a 1024 px (con el panel de Actividad abierto) las cinco no caben en una línea: partirEtiquetas las
+              parte en dos en lugar de recortarlas, y la barra usa todo el ancho de la columna (sin el px-6 que pedía la
+              línea de antes), así ninguna palabra se corta por la mitad (banco de T10). */}
           {stepIndex >= 0 && (
-            <div className="bg-white p-6 border-b border-slate-100 mb-8">
-              <PasosFlujo variante="barra" pasos={pasosPedido} etiqueta="Pasos del pedido" />
+            <div className="bg-white py-6 border-b border-slate-100 mb-8">
+              <PasosFlujo variante="barra" pasos={pasosPedido} etiqueta="Pasos del pedido" partirEtiquetas />
             </div>
           )}
           {stepIndex >= 0 && STEPS[stepIndex]?.key !== estadoActual && (

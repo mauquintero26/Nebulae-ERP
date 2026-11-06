@@ -757,7 +757,10 @@ console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuent
   assert.ok(!pasos.includes('max-w-[9rem]'), 'C2: sin el tope de 144 px');
   assert.match(pasos, /\$\{i < ultimo \? 'flex-auto' : 'flex-initial'\}/);
   // r1 (M9): el title no repite el nombre del paso: va en el label (el tooltip del paso) y en el sublabel recortado.
-  assert.match(pasos, /<span title=\{tituloPaso\(paso\)\} className=\{`max-w-full truncate text-\[11px\] font-bold/);
+  // B4 T10: la clase de la etiqueta sale de ETIQUETA_RECORTADA (la de siempre, 'max-w-full truncate') o, con
+  // partirEtiquetas, de ETIQUETA_PARTIDA (TEST 22); el title, la letra y el color no cambian.
+  assert.match(pasos, /<span title=\{tituloPaso\(paso\)\} className=\{`\$\{partirEtiquetas \? ETIQUETA_PARTIDA : ETIQUETA_RECORTADA\} text-\[11px\] font-bold/);
+  assert.match(pasos, /const ETIQUETA_RECORTADA = 'max-w-full truncate';/);
   assert.equal((pasos.match(/title=\{paso\.sublabel\}/g) ?? []).length, 1, 'el sublabel recortado lleva su tooltip');
   assert.ok(!/title=\{title\}|title\?: string/.test(pasos), 'el elemento del paso ya no lleva title');
   // r1 (M7): en compacto el sublabel (solo el número) siempre se ve. r2 (M5): la palabra de la caja caída va en su
@@ -945,6 +948,35 @@ console.log('--- TEST 21 (B4 T9 r1, m6): BannerFlujo reserva el renglón de los 
   assert.match(cot, /avisos=\{avisosFlujo\}\s*reservarAvisos=\{avisosPendientes\}\s*cargando=\{flujo\.cargando\}/);
   const carga = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/CargandoCotizaciones.tsx', import.meta.url), 'utf8');
   assert.match(carga, /pasos=\{pasosDeLista\(null, 'COT'\)\}\s*reservarAvisos\s*cargando/);
+}
+
+console.log('--- TEST 22 (B4 T10): PasosFlujo parte las etiquetas de la barra en varias líneas con partirEtiquetas (aditivo) ---');
+{
+  // El Status Tracker del pedido (V5 del B2: a 1024 px, con el panel de Actividad abierto, las 5 etiquetas no caben en una
+  // línea) las parte en dos líneas en lugar de recortarlas. Sin la prop, la barra es la de antes: la etiqueta se recorta
+  // con el nombre completo en su title (la cadena de documentos, el panel rápido del Hub).
+  const fuente = readFileSync(new URL('../src/components/flujo/PasosFlujo.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.match(codigo, /\n {2}partirEtiquetas\?: boolean;\n/, 'la prop nueva, opcional');
+  assert.match(codigo, /mostrarAntiguedad = false, mostrarAyuda = false, estadoConteos, partirEtiquetas = false,\n\}: PropsPasosFlujo\)/, 'por defecto false');
+  assert.match(codigo, /<PasosBarra pasos=\{pasos\} vertical=\{vertical\} etiqueta=\{etiqueta\} onSeleccionar=\{onSeleccionar\} compacto=\{compacto\} partirEtiquetas=\{partirEtiquetas\} \/>/);
+  assert.match(codigo, /const ETIQUETA_RECORTADA = 'max-w-full truncate';/, 'sin la prop: la de antes');
+  assert.match(codigo, /const ETIQUETA_PARTIDA = 'max-w-full whitespace-normal break-words leading-tight';/, 'con la prop: en varias líneas');
+  assert.ok(codigo.includes('<span title={tituloPaso(paso)} className={`${partirEtiquetas ? ETIQUETA_PARTIDA : ETIQUETA_RECORTADA} text-[11px] font-bold ${LABEL_BARRA[estado]}`}>{paso.label}</span>'),
+    'la etiqueta elige su clase con la prop, y conserva su title, su letra y su color');
+  // Con la prop, el paso no se angosta por debajo de su palabra más larga (min-content): no se parte una palabra por la
+  // mitad («Entreg-ado», medido en el banco a 1024 px); sin ella, min-w-0 como siempre.
+  assert.match(codigo, /const PASO_RECORTADO = 'min-w-0';/);
+  assert.match(codigo, /const PASO_PARTIDO = 'min-w-min';/);
+  assert.ok(codigo.includes("className={`flex ${partirEtiquetas ? PASO_PARTIDO : PASO_RECORTADO} rounded-lg ${vertical ? 'items-start gap-2 text-left' : 'flex-col items-center text-center'}"),
+    'el elemento del paso elige su ancho mínimo con la prop');
+  assert.match(codigo, /function PasosBarra\(\{\n {2}pasos, vertical, etiqueta, onSeleccionar, compacto, partirEtiquetas = false,\n\}/, 'PasosBarra: por defecto false');
+  // Solo el Status Tracker del pedido la pasa: la cadena, la franja y el panel rápido quedan como antes.
+  const leerApp = (r) => readFileSync(new URL(`../src/${r}`, import.meta.url), 'utf8');
+  assert.ok(!leerApp('components/flujo/CadenaDocumentos.tsx').includes('partirEtiquetas'));
+  assert.ok(!leerApp('components/flujo/BannerFlujo.tsx').includes('partirEtiquetas'));
+  assert.ok(!leerApp('app/dashboard/ventas/page.tsx').includes('partirEtiquetas'));
+  assert.match(leerApp('app/dashboard/ventas/venta/[id]/page.tsx'), /<PasosFlujo variante="barra" pasos=\{pasosPedido\} etiqueta="Pasos del pedido" partirEtiquetas \/>/);
 }
 
 console.log('\nOK: test_flujo.mjs');

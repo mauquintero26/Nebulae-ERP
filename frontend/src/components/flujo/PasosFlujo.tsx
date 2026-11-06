@@ -73,6 +73,12 @@ export type PropsPasosFlujo = {
    * mientras recarga.
    */
   estadoConteos?: EstadoKpi;
+  /**
+   * B4 T10: 'barra': la etiqueta de cada paso se parte en varias líneas en lugar de recortarse (el Status Tracker del
+   * pedido: V5 del B2, a 1024 px con el panel de Actividad abierto las cinco no caben en una línea). Por defecto false:
+   * la barra es la de siempre (la etiqueta se recorta, con el nombre completo en su title).
+   */
+  partirEtiquetas?: boolean;
 };
 
 type Icono = ComponentType<{ size?: number; className?: string; strokeWidth?: number }>;
@@ -119,6 +125,16 @@ const CIRCULO: Record<EstadoPaso, string> = {
   cancelado: 'border-rose-500 bg-rose-500 text-white',
   neutro: 'border-slate-200 bg-slate-100 text-slate-600',
 };
+
+/**
+ * B4 T10: la etiqueta de un paso de la barra: recortada en una línea (siempre) o, con partirEtiquetas, en varias. Con
+ * partirEtiquetas el paso no se angosta por debajo de su palabra más larga (min-w-min, el min-content): se parten las
+ * etiquetas de dos palabras y se achican los conectores, no una palabra por la mitad («Entreg-ado», banco de T10).
+ */
+const ETIQUETA_RECORTADA = 'max-w-full truncate';
+const ETIQUETA_PARTIDA = 'max-w-full whitespace-normal break-words leading-tight';
+const PASO_RECORTADO = 'min-w-0';
+const PASO_PARTIDO = 'min-w-min';
 
 /** El color del label de la barra por estado. */
 const LABEL_BARRA: Record<EstadoPaso, string> = {
@@ -411,11 +427,12 @@ function PasosBanner({
 }
 
 function PasosBarra({
-  pasos, vertical, etiqueta, onSeleccionar, compacto,
+  pasos, vertical, etiqueta, onSeleccionar, compacto, partirEtiquetas = false,
 }: Required<Pick<PropsPasosFlujo, 'pasos' | 'etiqueta'>> & {
   vertical: boolean;
   onSeleccionar?: (clave: string) => void;
   compacto: boolean;
+  partirEtiquetas?: boolean;
 }) {
   const marcado = indicePasoActual(pasos);
   const ultimo = pasos.length - 1;
@@ -448,14 +465,14 @@ function PasosBarra({
               paso={paso}
               actual={i === marcado ? 'step' : undefined}
               onSeleccionar={onSeleccionar}
-              className={`flex min-w-0 rounded-lg ${vertical ? 'items-start gap-2 text-left' : 'flex-col items-center text-center'} ${interactiva ? 'hover:bg-slate-50' : ''} ${paso.seleccionado ? 'bg-indigo-50 ring-2 ring-indigo-500' : ''}`}
+              className={`flex ${partirEtiquetas ? PASO_PARTIDO : PASO_RECORTADO} rounded-lg ${vertical ? 'items-start gap-2 text-left' : 'flex-col items-center text-center'} ${interactiva ? 'hover:bg-slate-50' : ''} ${paso.seleccionado ? 'bg-indigo-50 ring-2 ring-indigo-500' : ''}`}
             >
               <span aria-hidden="true" className={`flex shrink-0 items-center justify-center rounded-full border-2 font-bold ${circulo} ${CIRCULO[estado]}`}>
                 {estado === 'hecho' ? <Check size={icono} strokeWidth={3} /> : estado === 'cancelado' ? <X size={icono} strokeWidth={3} /> : i + 1}
               </span>
               <span className={`flex min-w-0 max-w-full flex-col ${vertical ? 'items-start' : 'mt-1 items-center'}`}>
                 {lector ? <span className="sr-only">{`${lector}: `}</span> : null}
-                <span title={tituloPaso(paso)} className={`max-w-full truncate text-[11px] font-bold ${LABEL_BARRA[estado]}`}>{paso.label}</span>
+                <span title={tituloPaso(paso)} className={`${partirEtiquetas ? ETIQUETA_PARTIDA : ETIQUETA_RECORTADA} text-[11px] font-bold ${LABEL_BARRA[estado]}`}>{paso.label}</span>
                 {/* Por debajo de @md el sublabel y los avisos no se ven (quedan en el title del label), pero el lector de
                     pantalla los lee. En compacto el sublabel (solo el número) siempre se ve (r1, M7), y la palabra de la
                     caja caída va aparte, sin recortarse (r2, M5). */}
@@ -506,7 +523,7 @@ function PasosMini({ pasos, etiqueta }: { pasos: ReadonlyArray<PasoVista>; etiqu
 /** Los pasos de un flujo. Ver arriba. */
 export function PasosFlujo({
   pasos, variante = 'barra', orientacion = 'horizontal', etiqueta, onSeleccionar, compacto = false,
-  mostrarAntiguedad = false, mostrarAyuda = false, estadoConteos,
+  mostrarAntiguedad = false, mostrarAyuda = false, estadoConteos, partirEtiquetas = false,
 }: PropsPasosFlujo) {
   if (!Array.isArray(pasos) || pasos.length === 0) return null;
   const vertical = orientacion === 'vertical';
@@ -525,5 +542,5 @@ export function PasosFlujo({
       />
     );
   }
-  return <PasosBarra pasos={pasos} vertical={vertical} etiqueta={etiqueta} onSeleccionar={onSeleccionar} compacto={compacto} />;
+  return <PasosBarra pasos={pasos} vertical={vertical} etiqueta={etiqueta} onSeleccionar={onSeleccionar} compacto={compacto} partirEtiquetas={partirEtiquetas} />;
 }

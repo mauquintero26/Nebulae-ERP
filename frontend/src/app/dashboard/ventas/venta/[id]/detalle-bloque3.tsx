@@ -198,15 +198,17 @@ export function TablaProductosPedido({ pedido }: { pedido: PedidoBloque3 | null 
   const notaCancelados = notaProductosCancelados(pedido?.actividades);
   // La clave de cada fila es su posición (las líneas del JSON del pedido no traen id).
   const filasTabla: FilaProductoPedido[] = filas.map((f, idx) => ({ ...f, id: idx }));
-  // Estables (D40): solo cambian con `discriminado` (el título de la última columna).
+  // Estables (D40): solo cambian con `discriminado` (el título de la última columna). Banco de T10: los anchos por
+  // defecto suman 572 px, así la tabla cabe sin correrse desde @xl (36rem, 576 px) y Producto, la flexible, toma lo que
+  // sobra (a 1440 px con el menú abierto la caja mide 697).
   const columnas = useMemo<ColumnaTabla<FilaProductoPedido>[]>(() => [
-    { id: 'producto', titulo: 'Producto', ancho: 240, flexible: true, titleCelda: (f) => f.producto,
+    { id: 'producto', titulo: 'Producto', ancho: 152, flexible: true, titleCelda: (f) => f.producto,
       celda: (f) => <span className="block truncate font-bold text-slate-800 text-sm">{f.producto}</span> },
-    { id: 'cantidad', titulo: 'Cant.', ancho: 80, alinear: 'centro',
+    { id: 'cantidad', titulo: 'Cant.', ancho: 64, alinear: 'centro',
       celda: (f) => <span className="text-sm font-bold text-slate-700">{f.cantidad}</span> },
-    { id: 'unitario', titulo: 'P. unit. sin IVA', ancho: 144, alinear: 'derecha', titleCelda: (f) => formatoPesos(f.unitario),
+    { id: 'unitario', titulo: 'P. unit. sin IVA', ancho: 128, alinear: 'derecha', titleCelda: (f) => formatoPesos(f.unitario),
       celda: (f) => <span className="text-sm font-bold text-slate-700 whitespace-nowrap">{formatoPesos(f.unitario)}</span> },
-    { id: 'iva', titulo: 'IVA', ancho: 128,
+    { id: 'iva', titulo: 'IVA', ancho: 104,
       titleCelda: (f) => (f.iva ? `${f.iva.etiqueta} · ${formatoPesos(f.iva.valor)}` : f.sinDiscriminar ? ETIQUETA_SIN_TARIFA : 'Sin IVA'),
       celda: (f) => (f.iva ? (
         <span className="block leading-tight">
@@ -218,7 +220,7 @@ export function TablaProductosPedido({ pedido }: { pedido: PedidoBloque3 | null 
       ) : (
         <><span aria-hidden="true" className="text-slate-300">—</span><span className="sr-only">Sin IVA</span></>
       )) },
-    { id: 'total', titulo: discriminado ? 'Total con IVA' : 'Total', ancho: 144, alinear: 'derecha',
+    { id: 'total', titulo: discriminado ? 'Total con IVA' : 'Total', ancho: 124, alinear: 'derecha',
       titleCelda: (f) => [formatoPesos(f.total), f.iva?.descuento].filter(Boolean).join(' · '),
       celda: (f) => (
         <span className="block leading-tight whitespace-nowrap">

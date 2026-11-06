@@ -251,11 +251,15 @@ function CeldaAcciones({ p }: { p: FilaPedido }) {
  * B1), Pedido / Origen (clave, fija a la izquierda), Cliente (la flexible), Total, Anticipo y Entrega est. (ocultas por
  * defecto, R26: se muestran con «Ajustar tabla»), Saldo, Estado (clave) y Acciones (fija a la derecha). Constantes
  * (estables, D40); sus celdas piden a la pantalla lo suyo por AccionesLista. Exportadas para el esqueleto del Suspense.
+ * R26 (medido en el banco de T10): a 1024 px con el menú abierto la caja de la tabla deja 704 px con su barra vertical.
+ * Con Cliente en 152 (RP85) y Acciones en el mínimo de la tabla (64, ANCHO_MIN) las columnas sumaban 732 y la tabla corría
+ * 28 px. Acciones queda en los 56 del diseño (anchoMin: 56; el menú ⋯ cabe) y Cliente nace en 132: 40 + 132 + 132 + 112 +
+ * 104 + 128 + 56 = 704. Como es la flexible, toma lo que sobra en pantallas anchas.
  */
 export const COLUMNAS_TABLA_PEDIDOS: ColumnaTabla<FilaPedido>[] = [
   { id: 'numero', titulo: 'Pedido / Origen', ancho: 132, clave: true, fija: 'izquierda', ordenable: 'numero', titleCelda: tituloNumero,
     celda: (p) => <CeldaNumero p={p} /> },
-  { id: 'cliente', titulo: 'Cliente', ancho: 152, flexible: true, ordenable: 'cliente', titleCelda: (p) => p.customer_name || '-',
+  { id: 'cliente', titulo: 'Cliente', ancho: 132, flexible: true, ordenable: 'cliente', titleCelda: (p) => p.customer_name || '-',
     celda: (p) => <span className="block truncate text-xs font-bold text-slate-800">{p.customer_name || '-'}</span> },
   { id: 'total', titulo: 'Total', ancho: 112, alinear: 'derecha', ordenable: 'total', titleCelda: (p) => fCOP(p.total_cop),
     celda: (p) => <span className="block truncate text-xs font-black text-slate-800">{fCOP(p.total_cop)}</span> },
@@ -269,7 +273,7 @@ export const COLUMNAS_TABLA_PEDIDOS: ColumnaTabla<FilaPedido>[] = [
     titleCelda: (p) => fechaSolo(p.fecha_entrega_estimada) || 'Sin fecha de entrega', celda: (p) => <CeldaEntrega p={p} /> },
   { id: 'estado', titulo: 'Estado', ancho: 128, clave: true, ordenable: 'estado', titleCelda: tituloEstado,
     celda: (p) => <CeldaEstado p={p} /> },
-  { id: 'acciones', titulo: 'Acciones', ancho: 56, clave: true, fija: 'derecha', celda: (p) => <CeldaAcciones p={p} /> },
+  { id: 'acciones', titulo: 'Acciones', ancho: 56, anchoMin: 56, clave: true, fija: 'derecha', celda: (p) => <CeldaAcciones p={p} /> },
 ];
 
 /**

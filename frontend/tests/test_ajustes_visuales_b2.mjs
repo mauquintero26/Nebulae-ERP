@@ -218,21 +218,25 @@ console.log('--- V5 TEST: barra de pasos del pedido con las etiquetas separadas 
   // PasosFlujo 'barra' con los 5 pasos de PASOS_PEDIDO (pasosConProgreso), solo con stepIndex >= 0. La protección de V5
   // (a 1024 px las etiquetas salían pegadas) sigue, ahora en la pieza: cada paso es su propio elemento, con la etiqueta
   // centrada bajo su círculo; entre dos pasos va un conector con margen y ancho mínimo (dos etiquetas nunca se tocan) y,
-  // si una no cabe, se recorta con el nombre completo en su title en lugar de montarse sobre la siguiente.
+  // con partirEtiquetas (la pasa el Status Tracker), la etiqueta puede partirse en dos líneas en lugar de recortarse.
   const venta = sinComentarios(leer('app/dashboard/ventas/venta/[id]/page.tsx'));
   assert.ok(venta.includes('const pasosPedido = pasosConProgreso(STEPS, stepIndex);'), 'los pasos de PASOS_PEDIDO con su progreso');
-  assert.match(venta, /\{stepIndex >= 0 && \(\s*<div className="[^"]*">\s*<PasosFlujo variante="barra" pasos=\{pasosPedido\} etiqueta="Pasos del pedido" \/>\s*<\/div>\s*\)\}/,
-    'la barra, con la pieza común y solo con stepIndex >= 0');
+  assert.match(venta, /\{stepIndex >= 0 && \(\s*<div className="[^"]*">\s*<PasosFlujo variante="barra" pasos=\{pasosPedido\} etiqueta="Pasos del pedido" partirEtiquetas \/>\s*<\/div>\s*\)\}/,
+    'la barra, con la pieza común, sus etiquetas partidas y solo con stepIndex >= 0');
   assert.ok(!venta.includes('{STEPS.map((s, i) => ('), 'sin la barra hecha a mano');
-  const barra = cuerpo(sinComentarios(leer('components/flujo/PasosFlujo.tsx')), 'function PasosBarra(');
+  const pasosFlujo = sinComentarios(leer('components/flujo/PasosFlujo.tsx'));
+  const barra = cuerpo(pasosFlujo, 'function PasosBarra(');
   // Ronda 1 (6): clases sueltas, no la cadena exacta.
   const conector = barra.match(/: `(mx-1 [^`$]*)/);
   assert.ok(conector, 'el conector entre dos pasos encontrado');
   conClases(conector[1], ['mx-1', 'min-w-3', 'flex-1'], [], 'entre dos pasos, un conector con margen y ancho mínimo');
   assert.ok(barra.includes("'flex-col items-center text-center'"), 'cada paso es una columna, centrada bajo su círculo');
-  const etiqueta = barra.match(/<span title=\{tituloPaso\(paso\)\} className=\{`([^`$]*)/);
-  assert.ok(etiqueta, 'la etiqueta de cada paso encontrada, con su title');
-  conClases(etiqueta[1], ['max-w-full', 'truncate'], [], 'la etiqueta no pasa del ancho de su paso: se recorta, con el nombre en el title');
+  assert.ok(barra.includes('<span title={tituloPaso(paso)} className={`${partirEtiquetas ? ETIQUETA_PARTIDA : ETIQUETA_RECORTADA} '),
+    'la etiqueta de cada paso, con su title y partida con partirEtiquetas');
+  const partida = pasosFlujo.match(/const ETIQUETA_PARTIDA = '([^']*)';/);
+  assert.ok(partida, 'la clase de la etiqueta partida');
+  conClases(partida[1], ['max-w-full', 'break-words', 'leading-tight', 'whitespace-normal'], ['truncate', 'whitespace-nowrap'],
+    'la etiqueta va centrada bajo su paso y puede partirse en dos líneas');
   assert.ok(barra.includes('>{paso.label}</span>'), 'la etiqueta es el label del paso');
   {
     const { tituloPaso, pasosConProgreso } = await import('../src/lib/flujo.js');
