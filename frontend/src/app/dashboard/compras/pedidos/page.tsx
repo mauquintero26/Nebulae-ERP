@@ -13,24 +13,21 @@ import {
 // la recepción y el alta conservan lo de B1 a B3.
 import {
   SubNav, PageHeader, Button, useAvisos, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila, ModalMotivo,
-  TableroKanban, useTableroKanban, CLASE_CHIP,
+  TableroKanban, useTableroKanban,
 } from '@/components/ui';
 import type { ItemMenuFila } from '@/components/ui';
 import {
   BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
 } from '@/components/tabla';
-import type { AccionTabla, ClaveFila, ColumnaTabla, PestanaTabla } from '@/components/tabla';
+import type { AccionTabla, ClaveFila, PestanaTabla } from '@/components/tabla';
 import { BannerFlujo, PasosFlujo, useResumenFlujo } from '@/components/flujo';
 import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
 import { COMP_NAV } from '../comp-nav';
 
 import { apiFetch as _apiFetch } from '@/lib/api';
 import type { OpcionesApiFetch } from '@/lib/api';
-import { TABLE } from '@/lib/design-system';
-import { formatoPesos } from '@/lib/pesos';
-import { fechaCorta } from '@/lib/fechas-colombia';
 import {
-  accionModo, accionPestana, campoOrden, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta,
+  accionModo, accionPestana, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta,
 } from '@/lib/tabla';
 import { PERIODO_KPI, tarjetasPedidosCompra } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
@@ -39,7 +36,7 @@ import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
 import { accionVistaEnLista, rutaSinParametro } from '@/lib/listas-ventas';
 import {
-  COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, cancelarPecsEnSerie, consultaColumnaPec, diaPec,
+  COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, cancelarPecsEnSerie, consultaColumnaPec,
   despuesDeCancelarPec, etapaPec, grupoMesPec, infoEstadoPec, opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec,
   repartirCancelacionPec, resumenCancelacionPec, tarjetaPedidoCompra, tituloMesPec, transicionesPec,
 } from '@/lib/estados-compras';
@@ -47,6 +44,9 @@ import {
   ENLACE_VER_ANALISIS_COMPRAS, accionSemaforoCompras, avisosFlujoCompras, etiquetaEtapaTracking, filtroSemaforoCompras,
   leerEnlacePedidosCompra, pasosDeTracking, pasosPedidosCompra, textoDiasEtapa, textoReglaCompras, vistaDePasoPedidosCompra,
 } from '@/lib/flujo-compras';
+// B4 T15 r1 (m3, m11): las columnas, las celdas y los formatos que comparte con el Hub de Compras.
+import { claseDeFilaPec, columnasPec, fCOP, textoDia, textoInstante, titulosDeOrdenPec } from '../columnas-pec';
+import type { FilaColumnasPec } from '../columnas-pec';
 
 // La lectura de siempre de B1 a B3: el `data` de la respuesta. Los errores ya llegan legibles de lib/api (status y
 // detail del servidor), así que se muestran tal cual.
@@ -57,12 +57,6 @@ async function apiFetch(path: string, opts: OpcionesApiFetch = {}) {
   return data.data ?? data;
 }
 
-// H42: pesos enteros con punto de miles; lo que no es un monto positivo se ve '—', como el '-' de antes.
-const fCOP = (v: unknown) => (Number(v) > 0 ? formatoPesos(v) : '—');
-// B4 T15 (resolución 4): un instante del API (fecha de compra, creado, Actividad, etapas, guías) en el día de Colombia;
-// un día de negocio (entrega estimada, límite de alerta, la ETA de una etapa) tal como se guarda (diaPec, RP40).
-const textoInstante = (v: unknown) => fechaCorta(v) || '—';
-const textoDia = (v: unknown) => fechaCorta(diaPec(v)) || '—';
 // El nombre de B1 a B3 en el alta y en el panel: el de un instante.
 const fDate = textoInstante;
 
@@ -1371,24 +1365,8 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
    B4 T15 — las piezas de la lista (la tabla estándar y sus celdas)
    ================================================================ */
 
-/**
- * Una fila de GET /compras/pedidos (el _pec_dict de T12). is_overdue es la regla del servidor (RP40: emitido o en
- * tránsito con la entrega pasada): la pantalla no la recalcula.
- */
-type FilaPec = {
-  id: number;
-  numero: string;
-  estado: string;
-  supplier_name?: string | null;
-  ven_numero?: string | null;
-  created_by?: string | null;
-  total_cop?: number | null;
-  fecha_compra?: string | null;
-  created_at?: string | null;
-  fecha_entrega_estimada?: string | null;
-  fecha_alerta?: string | null;
-  is_overdue?: boolean;
-};
+/** Una fila de GET /compras/pedidos: la que leen las columnas compartidas (columnas-pec.tsx; is_overdue es del servidor). */
+type FilaPec = FilaColumnasPec;
 /** Un pedido de venta del alta (GET /ventas/pedidos, como en B1 a B3: «Nuevo PEC» lista sus PENDIENTE_COMPRA). */
 type FilaVenta = {
   id: number; numero: string; estado?: string | null; customer_name?: string | null; created_at?: string | null;
@@ -1418,16 +1396,9 @@ const RUTA_PEDIDOS = '/dashboard/compras/pedidos';
 /** El contenedor de los Hubs y de las listas del bloque (T7 a T14): pb-24 deja libre la esquina del botón de la IA. */
 const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
 
-// Los chips: el chip estándar de las tablas del bloque con los tintes del tablero (CLASE_CHIP): la misma marca en Lista y
-// en Kanban. Sin tamaño de letra: cada uso pone el suyo.
-const CHIP = 'inline-block max-w-full truncate rounded-full border px-1.5 py-0.5 font-bold leading-tight';
 const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-700';
 /** El foco de los botones de la barra masiva (fondo slate-900), como en el Hub (m11 de T14). */
 const FOCO_OSCURO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white';
-// D41: la fila vencida en el tono opaco filaAlerta, con la marca rosa a la izquierda (antes un borde rojo y un tinte
-// translúcido, que dejaba ver lo de debajo de las columnas fijas).
-const MARCA_VENCIDO = '[&>td:first-child]:shadow-[inset_3px_0_0_var(--color-rose-500)]';
-const claseDeFila = (p: FilaPec) => (p.is_overdue ? `${TABLE.filaAlerta} ${MARCA_VENCIDO}` : null);
 
 /** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
 type AccionesFilaPedidos = {
@@ -1437,28 +1408,6 @@ type AccionesFilaPedidos = {
   eliminar: (p: FilaPec) => void;
 };
 const AccionesFila = React.createContext<AccionesFilaPedidos | null>(null);
-
-/** PEC / PVEN: el número, el pedido de venta de origen y el chip «Vencido» (is_overdue del servidor, RP40). */
-function CeldaNumero({ p }: { p: FilaPec }) {
-  return (
-    <span className="flex min-w-0 flex-col items-start gap-0.5 leading-tight">
-      <span className="max-w-full truncate text-xs font-black text-purple-700">{p.numero}</span>
-      {p.ven_numero && <span className="max-w-full truncate text-[10px] font-bold text-indigo-600">{p.ven_numero}</span>}
-      {p.is_overdue && <span className={`${CHIP} text-[10px] ${CLASE_CHIP.rose}`}>Vencido</span>}
-    </span>
-  );
-}
-
-/** Estado: la insignia de estados-compras.js (un heredado sale humanizado, nunca «Borrador»; C10). */
-function CeldaEstado({ p }: { p: FilaPec }) {
-  const { label, clases } = infoEstadoPec(p.estado);
-  return <span className={`${CHIP} text-[11px] ${clases.bg} ${clases.text} ${clases.border}`}>{label}</span>;
-}
-
-/** Entrega est.: el día de negocio tal como se guarda (RP40), en rojo si el servidor dice que está vencido. */
-function CeldaEntrega({ p }: { p: FilaPec }) {
-  return <span className={`text-xs ${p.is_overdue ? 'font-bold text-rose-700' : 'text-slate-700'}`}>{textoDia(p.fecha_entrega_estimada)}</span>;
-}
 
 /**
  * Acciones (R11): el ojo abre el panel del PEC y el menú ⋯ (MenuFila: clic y portal, las mismas opciones de antes) trae
@@ -1488,42 +1437,12 @@ function CeldaAcciones({ p }: { p: FilaPec }) {
 }
 
 /**
- * B4 T15, la tabla (TABLA-compras punto 7; R26, D41): la casilla (la de TablaEstandar), PEC / PVEN (clave, fija a la
- * izquierda, con el chip Vencido), Proveedor (la flexible), Comprador, Monto, F. compra, Entrega est., Límite alerta,
- * Estado (clave) y Acciones (fija a la derecha). Se fue la columna Total, que repetía el Monto. Comprador, F. compra y
- * Límite alerta van ocultas por defecto (R26). Una constante (estable, D40). Los anchos son los del Hub de Compras (T14,
- * medidos a 1024 px con el menú abierto: 40 + 132 + 120 + 108 + 104 + 120 + 80 = 704).
+ * B4 T15, la tabla (TABLA-compras punto 7; R26, D41): las columnas de columnas-pec.tsx (r1: las mismas, compartidas con
+ * el Hub de Compras) con la celda de Acciones de esta lista. Una constante (estable, D40).
  */
-const COLUMNAS_TABLA_PEDIDOS: ColumnaTabla<FilaPec>[] = [
-  { id: 'numero', titulo: 'PEC / PVEN', ancho: 132, clave: true, fija: 'izquierda', ordenable: 'numero',
-    titleCelda: (p) => [p.numero, p.ven_numero, p.is_overdue ? 'Vencido' : null].filter(Boolean).join(' · '),
-    celda: (p) => <CeldaNumero p={p} /> },
-  { id: 'proveedor', titulo: 'Proveedor', ancho: 120, flexible: true, ordenable: 'proveedor',
-    titleCelda: (p) => p.supplier_name || 'Sin proveedor',
-    celda: (p) => <span className="block truncate text-xs font-bold text-slate-800">{p.supplier_name || '—'}</span> },
-  { id: 'comprador', titulo: 'Comprador', ancho: 120, ocultaPorDefecto: true, ordenable: 'comprador',
-    titleCelda: (p) => p.created_by || 'Sin comprador',
-    celda: (p) => <span className="block truncate text-xs text-slate-600">{p.created_by || '—'}</span> },
-  { id: 'monto', titulo: 'Monto', ancho: 108, alinear: 'derecha', ordenable: 'monto', titleCelda: (p) => fCOP(p.total_cop),
-    celda: (p) => <span className="block truncate text-xs font-black text-slate-900">{fCOP(p.total_cop)}</span> },
-  // Sin fecha de compra, la celda muestra la de creación (como antes) y su title lo dice (m13 de T14).
-  { id: 'compra', titulo: 'F. compra', ancho: 96, ocultaPorDefecto: true, ordenable: 'compra',
-    titleCelda: (p) => (p.fecha_compra ? textoInstante(p.fecha_compra)
-      : p.created_at ? 'Fecha de creación (sin fecha de compra)' : 'Sin fecha de compra'),
-    celda: (p) => <span className="text-xs text-slate-600">{textoInstante(p.fecha_compra || p.created_at)}</span> },
-  { id: 'entrega', titulo: 'Entrega est.', ancho: 104, ordenable: 'entrega',
-    titleCelda: (p) => `${textoDia(p.fecha_entrega_estimada)}${p.is_overdue ? ' · Vencido' : ''}`, celda: (p) => <CeldaEntrega p={p} /> },
-  { id: 'limite', titulo: 'Límite alerta', ancho: 104, ocultaPorDefecto: true, ordenable: 'limite',
-    titleCelda: (p) => textoDia(p.fecha_alerta),
-    celda: (p) => <span className="text-xs text-slate-600">{textoDia(p.fecha_alerta)}</span> },
-  { id: 'estado', titulo: 'Estado', ancho: 120, clave: true, ordenable: 'estado', titleCelda: (p) => infoEstadoPec(p.estado).label,
-    celda: (p) => <CeldaEstado p={p} /> },
-  { id: 'acciones', titulo: 'Acciones', ancho: 80, clave: true, fija: 'derecha', celda: (p) => <CeldaAcciones p={p} /> },
-];
+const COLUMNAS_TABLA_PEDIDOS = columnasPec<FilaPec>((p) => <CeldaAcciones p={p} />);
 /** {campo de orden: título}, para el chip «Orden: Monto ↓» (textoOrdenHub), solo de las columnas que se ordenan. */
-const TITULOS_ORDEN_PEDIDOS: Record<string, string> = Object.fromEntries(
-  COLUMNAS_TABLA_PEDIDOS.flatMap((c) => { const campo = campoOrden(c); return campo ? [[campo, c.titulo]] : []; }),
-);
+const TITULOS_ORDEN_PEDIDOS = titulosDeOrdenPec(COLUMNAS_TABLA_PEDIDOS);
 
 /**
  * Las pestañas de Pedidos de compra (R9, RP21, RP93: las vistas del servidor, sin emojis): Todos (vigentes), Activos (en
@@ -1992,7 +1911,7 @@ export default function PedidosCompraPage() {
                   onReintentar={listado.recargar}
                   aviso={listado.avisoOrden}
                   onFila={abrir}
-                  claseFila={claseDeFila}
+                  claseFila={claseDeFilaPec}
                   grupoFila={porMes ? grupoMesPec : undefined}
                   tituloGrupo={tituloDeMes}
                   seleccion={seleccion}

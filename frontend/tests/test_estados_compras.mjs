@@ -762,8 +762,14 @@ console.log('--- TEST 23 (B4 T14): el Hub de Compras (compras/page.tsx) cablea l
   assert.match(hub, /aria-label="Cerrar el panel"/);
   assert.match(hub, /Pago y logística/);
   assert.ok(!/Pago & Logistica/.test(hub));
-  assert.match(hub, /titleCelda: \(p\) => \(p\.fecha_compra \? textoInstante\(p\.fecha_compra\)\s*: p\.created_at \? 'Fecha de creación \(sin fecha de compra\)' : 'Sin fecha de compra'\)/,
+  // T15 r1 (m3, m11; D27): las columnas viven en compras/columnas-pec.tsx, compartidas con Pedidos de compra; la misma
+  // protección de m13, ahora en ese archivo, y el Hub las arma con su celda de Acciones y su clase de fila.
+  const columnasPecFuente = readFileSync(new URL('../src/app/dashboard/compras/columnas-pec.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(columnasPecFuente, /titleCelda: \(p\) => \(p\.fecha_compra \? textoInstante\(p\.fecha_compra\)\s*: p\.created_at \? 'Fecha de creación \(sin fecha de compra\)' : 'Sin fecha de compra'\)/,
     'm13: el title dice «Fecha de creación» solo cuando falta la fecha de compra');
+  assert.match(hub, /const COLUMNAS_TABLA_HUB = columnasPec<FilaPec>\(\(p\) => <CeldaAcciones p=\{p\} \/>\);/);
+  assert.match(hub, /claseFila=\{claseDeFilaPec\}/);
+  assert.ok(!/function CeldaNumero|const MARCA_VENCIDO|id: 'proveedor'/.test(hub), 'el Hub ya no tiene su copia de las columnas');
   assert.ok(!/estado: ?'RECIBIDO'/.test(hub) && !/estado: ?'EN_TRANSITO'/.test(hub), 'ningún PATCH a mano a tránsito o recibido');
   assert.match(hub, /transicionesPec\(/, 'el panel y el menú solo ofrecen lo que acepta el servidor');
   // Franja (D42, RP46): sin «No resueltos» y con el aviso de recepciones; sin «Ajustar tiempos» (R9).
@@ -794,13 +800,19 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
   assert.match(pag, /const ID_PEDIDOS = 'compras\.pedidos';/);
   assert.match(pag, /const INICIAL_PEDIDOS = \{ vista: 'vigentes', orden: 'atencion' \};/, 'Todos = vigentes (RP21) y lo vencido primero (R8)');
   assert.match(pag, /useEstadoTabla\(ID_PEDIDOS, INICIAL_PEDIDOS\)/);
-  assert.match(pag, /ruta: '\/compras\/pedidos', estado, conConteos: true, esperar: !listo, despachar,/);
+  // T15 r1 (m10 b): las llamadas, sin fijar el formato de la línea (un cambio sin efecto no las rompe).
+  const llamadaListado = /useListado<FilaPec>\(\{([\s\S]*?)\}\);/.exec(pag)?.[1] ?? '';
+  for (const parte of [/ruta: '\/compras\/pedidos'/, /conConteos: true/, /esperar: !listo/, /\bdespachar\b/, /extra: enKanban \? EXTRA_TABLERO : extraDeLaLista/]) {
+    assert.match(llamadaListado, parte, `useListado lleva ${parte}`);
+  }
   assert.match(pag, /const EXTRA_TABLERO = \{ limit: 0 \};/, 'en Kanban la lista va sin filas (D39)');
-  assert.match(pag, /extra: enKanban \? EXTRA_TABLERO : extraDeLaLista/);
-  assert.match(pag, /const extraDeLaLista = useMemo\(\(\) => \(\{ orden: estado\.orden \|\| 'atencion' \}\), \[estado\.orden\]\);/,
+  assert.match(pag, /extraDeLaLista = useMemo\(\(\) => \(\{ orden: estado\.orden \|\| 'atencion' \}\)/,
     'R8: sin orden (el tercer clic en un título) sigue lo vencido primero');
   assert.match(pag, /consultaColumnaPec\(estado, columna, \{ orden, limit, offset \}\)/, 'la consulta de cada columna es la de la lib');
-  assert.match(pag, /pantalla: ID_PEDIDOS,\s*modo: 'servidor',\s*columnas: COLUMNAS_PEC,\s*activo: listo && enKanban,/);
+  const llamadaTablero = /useTableroKanban<FilaPec>\(\{([\s\S]*?)\n {2}\}\);/.exec(pag)?.[1] ?? '';
+  for (const parte of [/pantalla: ID_PEDIDOS/, /modo: 'servidor'/, /columnas: COLUMNAS_PEC/, /activo: listo && enKanban\b/]) {
+    assert.match(llamadaTablero, parte, `useTableroKanban lleva ${parte}`);
+  }
   assert.match(pag, /useResumenFlujo<DatosFlujo>\('\/compras\/flujo', recargaFlujo\)/);
   assert.match(pag, /`\/compras\/stats\?periodo=\$\{PERIODO_KPI\}`/);
   assert.ok(!/['"`]\/compras\/stats['"`]/.test(pag), 'ya no se pide /compras/stats sin período');
@@ -812,10 +824,19 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
     assert.match(pag, new RegExp(`\\{ id: '${id}', etiqueta: '${etiqueta}', conteo: conteos\\?\\.${id} \\?\\? null`), `pestaña ${etiqueta}`);
   }
   assert.ok(!/En Tr[aá]nsito'|'Analisis'|JSON\.stringify\(r\)/.test(pag), 'sin «En Tránsito», sin la pestaña Análisis ni la búsqueda en el navegador');
+  // T15 r1 (m3, m11; D27): las columnas viven en columnas-pec.tsx (compartidas con el Hub); la misma protección de R26 ahí.
+  const colPec = readFileSync(new URL('../src/app/dashboard/compras/columnas-pec.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   for (const id of ['comprador', 'compra', 'limite']) {
-    assert.match(pag, new RegExp(`\\{ id: '${id}', titulo: '[^']+', ancho: \\d+, ocultaPorDefecto: true`), `R26: ${id} oculta por defecto`);
+    assert.match(colPec, new RegExp(`\\{ id: '${id}', titulo: '[^']+', ancho: \\d+, ocultaPorDefecto: true`), `R26: ${id} oculta por defecto`);
   }
-  assert.ok(!/id: 'total'/.test(pag), 'sin la columna Total, que repetía el Monto');
+  assert.ok(!/id: 'total'/.test(colPec) && !/id: 'total'/.test(pag), 'sin la columna Total, que repetía el Monto');
+  // R26 (704 px a 1024): los anchos de las 7 visibles, en columnas-pec.tsx.
+  const anchoDe = (id) => Number(new RegExp(`\\{ id: '${id}', titulo: '[^']+', ancho: (\\d+)`).exec(colPec)?.[1]);
+  assert.equal(40 + ['numero', 'proveedor', 'monto', 'entrega', 'estado', 'acciones'].map(anchoDe).reduce((a, b) => a + b, 0), 704,
+    'R26: la casilla y las 6 visibles suman 704 px');
+  assert.match(pag, /const COLUMNAS_TABLA_PEDIDOS = columnasPec<FilaPec>\(\(p\) => <CeldaAcciones p=\{p\} \/>\);/);
+  assert.match(pag, /claseFila=\{claseDeFilaPec\}/);
+  assert.ok(!/function CeldaNumero|const MARCA_VENCIDO|id: 'proveedor'/.test(pag), 'Pedidos ya no tiene su copia de las columnas');
   // El menú de fila (MenuFila) ofrece solo lo que acepta update_pec (R9, C15c): Emitir desde Borrador y cancelar con motivo.
   assert.match(pag, /etiqueta: 'Marcar Emitido'[\s\S]{0,300}oculto: !transicionesPec\(p\.estado\)\.includes\('EMITIDO'\)/);
   assert.match(pag, /etiqueta: 'Cancelar PEC'[\s\S]{0,200}oculto: !transicionesPec\(p\.estado\)\.includes\('CANCELADO'\)/);
