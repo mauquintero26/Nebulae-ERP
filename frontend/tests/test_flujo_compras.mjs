@@ -16,6 +16,9 @@ import * as estadosCompras from '../src/lib/estados-compras.js';
 import * as flujo from '../src/lib/flujo.js';
 import { pasosConConteos } from '../src/lib/flujo.js';
 import { fechaLarga } from '../src/lib/fechas-colombia.js';
+// B4 T14: lo del Hub de Compras por el espacio de nombres (su falta no tapa los demás rojos).
+import * as fc from '../src/lib/flujo-compras.js';
+import { estadoTablaInicial } from '../src/lib/tabla.js';
 
 const estados = (pasos) => pasos.map((p) => p.estado);
 
@@ -229,6 +232,109 @@ console.log('--- TEST 10 (T5A): los puntos de la variante mini (Progreso de Trá
   // Una etapa atrasada suma su aviso (rojo) al title.
   const atrasada = pasosDeTracking([etapa('ADUANA', 'Aduana', 'EN_PROCESO', { alert: { nivel: 'atrasado', mensaje: 'Atrasada 2 día(s)' } })]);
   assert.equal(/** @type {any} */ (flujo).tituloPunto(atrasada[0], 1, 4), 'Etapa 2 de 4: Aduana, en curso · Atrasada 2 día(s)');
+}
+
+/** La respuesta de GET /compras/flujo (T12, Firmas finales). */
+const FLUJO = {
+  pasos: {
+    LISTA: { total: 4, atrasados: null, mas_antiguo_dias: 3, por_estado: { PENDIENTE: 4 } },
+    PEC: { total: 5, atrasados: 2, mas_antiguo_dias: 9, por_estado: { BORRADOR: 1, EMITIDO: 4 } },
+    TRANSITO: { total: 3, atrasados: 1, mas_antiguo_dias: 6, por_estado: { EN_TRANSITO: 3 } },
+    RECEPCION: { total: 2, atrasados: null, mas_antiguo_dias: 2, por_estado: { RECIBIDO: 2 }, recepciones_por_confirmar: 3 },
+    RECIBIDO: { total: 9, atrasados: null, mas_antiguo_dias: null, por_estado: { RECIBIDA: 9 } },
+  },
+  semaforo: { atrasados: 3, no_resueltos: null }, criterio_atraso: 'fecha_entrega', generado_at: '2026-11-07T15:00:00Z',
+};
+
+console.log('--- TEST 11 (B4 T14): pasosHubCompras, la franja del Hub (los conteos del servidor; Lista y Recepción son enlaces) ---');
+{
+  assert.equal(typeof fc.pasosHubCompras, 'function', 'pasosHubCompras existe');
+  const pasos = fc.pasosHubCompras(FLUJO, estadoTablaInicial({ vista: 'pedidos' }));
+  assert.deepEqual(pasos.map((p) => p.clave), ['LISTA', 'PEC', 'TRANSITO', 'RECEPCION', 'RECIBIDO']);
+  assert.deepEqual(pasos.map((p) => p.total), [4, 5, 3, 2, 9]);
+  assert.deepEqual(pasos.map((p) => p.atrasados), [null, 2, 1, null, null]);
+  assert.deepEqual(pasos.map((p) => p.href ?? null), ['/dashboard/compras/lista-compras', null, null, '/dashboard/compras/recepciones', null]);
+  assert.deepEqual(pasos.map((p) => p.seleccionado), [false, true, false, false, false], 'la pestaña Pedidos de compra marca su caja');
+  assert.ok(pasos.every((p) => !p.esEste && p.estado === 'neutro'), 'el Hub no es la pantalla de un paso');
+  // Es pasosConConteos con conteosDePasos (D36), más los enlaces: lo demás de cada caja, igual.
+  const base = pasosConConteos(PASOS_FLUJO_COMPRAS, flujo.conteosDePasos(FLUJO), { seleccionado: 'PEC' });
+  assert.deepEqual(pasos.map((p) => Object.fromEntries(Object.entries(p).filter(([campo]) => campo !== 'href'))), base);
+  // Sin datos (cargando): los números en null (Contador pinta la barra gris), nunca 0.
+  assert.ok(fc.pasosHubCompras(null, estadoTablaInicial({})).every((p) => p.total === null && p.atrasados === null));
+  // En Kanban ninguna caja queda marcada (las pestañas no se ven: la caja abre su pestaña en Lista).
+  assert.ok(fc.pasosHubCompras(FLUJO, estadoTablaInicial({ vista: 'pedidos', modo: 'kanban' })).every((p) => !p.seleccionado));
+}
+
+console.log('--- TEST 12 (B4 T14): pasoHubComprasDe y accionPasoHubCompras: tocar una caja filtra la tabla (R5, C3) ---');
+{
+  assert.equal(typeof fc.pasoHubComprasDe, 'function', 'pasoHubComprasDe existe');
+  const de = (parcial) => fc.pasoHubComprasDe(estadoTablaInicial(parcial));
+  assert.equal(de({ vista: 'pedidos' }), 'PEC');
+  assert.equal(de({ vista: 'en_transito', estados: ['EN_TRANSITO'] }), 'TRANSITO');
+  assert.equal(de({ vista: 'acciones_tomadas', estados: ['COMPLETADO', 'RECIBIDA'] }), 'RECIBIDO', 'Recibido = la pestaña y su etapa');
+  assert.equal(de({ vista: 'acciones_tomadas' }), null);
+  assert.equal(de({ vista: 'acciones_tomadas', estados: ['RECIBIDA'] }), null);
+  assert.equal(de({ vista: 'todos' }), null);
+  assert.equal(de({ vista: 'pedidos', modo: 'kanban' }), null);
+
+  assert.equal(typeof fc.accionPasoHubCompras, 'function', 'accionPasoHubCompras existe');
+  const accion = (parcial, clave) => fc.accionPasoHubCompras(estadoTablaInicial(parcial), clave);
+  assert.equal(accion({ vista: 'todos' }, 'LISTA'), null, 'Lista de compras es un enlace');
+  assert.equal(accion({ vista: 'todos' }, 'RECEPCION'), null, 'Recepción en bodega es un enlace');
+  assert.equal(accion({ vista: 'todos' }, 'OTRO'), null);
+  assert.deepEqual(accion({ vista: 'todos', estados: ['EMITIDO'] }, 'PEC'), { tipo: 'cambiar', cambios: { vista: 'pedidos', estados: [] } });
+  assert.deepEqual(accion({ vista: 'todos' }, 'TRANSITO'), { tipo: 'cambiar', cambios: { vista: 'en_transito', estados: [] } });
+  assert.deepEqual(accion({ vista: 'todos' }, 'RECIBIDO'),
+    { tipo: 'cambiar', cambios: { vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'] } });
+  // Recibido nunca va vencido: con «Con atraso» puesto, la caja lo quita (si no, la tabla quedaría vacía sin razón).
+  assert.deepEqual(accion({ vista: 'todos', semaforo: 'vencidos' }, 'RECIBIDO'),
+    { tipo: 'cambiar', cambios: { vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'], semaforo: null } });
+  assert.deepEqual(accion({ vista: 'todos', semaforo: 'vencidos' }, 'PEC'), { tipo: 'cambiar', cambios: { vista: 'pedidos', estados: [] } });
+  // Tocar la caja marcada vuelve a Todos (R6: tocarlo otra vez quita el filtro).
+  assert.deepEqual(accion({ vista: 'pedidos' }, 'PEC'), { tipo: 'cambiar', cambios: { vista: 'todos', estados: [] } });
+  assert.deepEqual(accion({ vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'] }, 'RECIBIDO'),
+    { tipo: 'cambiar', cambios: { vista: 'todos', estados: [] } });
+  // En Kanban abre su pestaña en Lista (como las tarjetas de T10).
+  assert.deepEqual(accion({ vista: 'pedidos', modo: 'kanban' }, 'TRANSITO'),
+    { tipo: 'cambiar', cambios: { vista: 'en_transito', estados: [], modo: 'lista' } });
+  assert.deepEqual(accion({ vista: 'pedidos', modo: 'kanban' }, 'PEC'),
+    { tipo: 'cambiar', cambios: { vista: 'pedidos', estados: [], modo: 'lista' } });
+}
+
+console.log('--- TEST 13 (B4 T14): accionSemaforoCompras, «Con atraso» = semaforo=vencidos en el servidor (RP40) ---');
+{
+  assert.equal(typeof fc.accionSemaforoCompras, 'function', 'accionSemaforoCompras existe');
+  const accion = (parcial, f) => fc.accionSemaforoCompras(estadoTablaInicial(parcial), f);
+  assert.deepEqual(accion({ vista: 'pedidos', semaforo: 'vencidos' }, 'todos'), { tipo: 'semaforo', valor: null });
+  assert.deepEqual(accion({ vista: 'pedidos' }, 'atrasados'), { tipo: 'cambiar', cambios: { semaforo: 'vencidos' } });
+  // Desde una pestaña que nunca vence (en bodega, acciones tomadas), a Todos; los estados que no vencen se quitan.
+  assert.deepEqual(accion({ vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'] }, 'atrasados'),
+    { tipo: 'cambiar', cambios: { semaforo: 'vencidos', vista: 'todos', estados: [] } });
+  assert.deepEqual(accion({ vista: 'en_bodega' }, 'atrasados'), { tipo: 'cambiar', cambios: { semaforo: 'vencidos', vista: 'todos' } });
+  assert.deepEqual(accion({ vista: 'todos', estados: ['BORRADOR', 'EMITIDO'] }, 'atrasados'),
+    { tipo: 'cambiar', cambios: { semaforo: 'vencidos', estados: ['EMITIDO'] } });
+  // El filtro de la franja: 'vencidos' del estado es 'atrasados' para BannerFlujo.
+  assert.equal(typeof fc.filtroSemaforoCompras, 'function', 'filtroSemaforoCompras existe');
+  assert.equal(fc.filtroSemaforoCompras(estadoTablaInicial({ semaforo: 'vencidos' })), 'atrasados');
+  assert.equal(fc.filtroSemaforoCompras(estadoTablaInicial({ semaforo: 'atrasados' })), 'atrasados');
+  assert.equal(fc.filtroSemaforoCompras(estadoTablaInicial({})), 'todos');
+}
+
+console.log('--- TEST 14 (B4 T14): avisosFlujoCompras (RP46) y leerEnlaceHubCompras (?tab=analisis, R13) ---');
+{
+  assert.equal(typeof fc.avisosFlujoCompras, 'function', 'avisosFlujoCompras existe');
+  assert.deepEqual(fc.avisosFlujoCompras(FLUJO), [{ texto: '3 recepciones por confirmar', tono: 'ambar' }]);
+  const con = (n) => fc.avisosFlujoCompras({ pasos: { RECEPCION: { recepciones_por_confirmar: n } } });
+  assert.deepEqual(con(1), [{ texto: '1 recepción por confirmar', tono: 'ambar' }]);
+  assert.deepEqual(con(1234), [{ texto: '1.234 recepciones por confirmar', tono: 'ambar' }]);
+  for (const n of [0, -2, null, undefined, '3', Number.NaN]) assert.deepEqual(con(n), [], String(n));
+  assert.deepEqual(fc.avisosFlujoCompras(null), []);
+  assert.deepEqual(fc.avisosFlujoCompras({ pasos: {} }), []);
+  assert.equal(typeof fc.leerEnlaceHubCompras, 'function', 'leerEnlaceHubCompras existe');
+  assert.deepEqual(fc.leerEnlaceHubCompras('?tab=analisis'), { analisis: true });
+  assert.deepEqual(fc.leerEnlaceHubCompras('?x=1&tab=analisis'), { analisis: true });
+  for (const s of ['', '?tab=documentos', '?tab=Analisis2', null, undefined]) assert.deepEqual(fc.leerEnlaceHubCompras(s), { analisis: false }, String(s));
+  assert.equal(fc.RUTA_HUB_COMPRAS, '/dashboard/compras');
 }
 
 console.log('\nOK: test_flujo_compras.mjs');

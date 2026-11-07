@@ -18,6 +18,9 @@ import {
   ESTADOS_STOCK, COLUMNAS_STOCK,
 } from '../src/lib/estados-compras.js';
 import { diaColombia } from '../src/lib/fechas-colombia.js';
+// B4 T14: lo nuevo del Hub de Compras por el espacio de nombres, para que la falta de una función no tape los demás rojos.
+import * as ec from '../src/lib/estados-compras.js';
+import { estadoTablaInicial } from '../src/lib/tabla.js';
 
 // R9 / ETIQUETAS_ESTADO['PEC'] (textos_actividad.py, T1C), en el orden de las etapas.
 const ETIQUETAS_PEC = [
@@ -363,6 +366,227 @@ console.log('--- TEST 15: JS puro (sin React ni DOM) y congelar importado, no co
   assert.ok(/import \{[^}]*\bcongelar\b[^}]*\} from '\.\/estados-pedido\.js'/.test(fuente), 'congelar sale de estados-pedido.js');
   assert.ok(!/function congelar\(/.test(fuente), 'congelar no se copia');
   assert.ok(!/esPecAtrasado/.test(fuente), 'RP28/RP93: no se crea esPecAtrasado');
+}
+
+console.log('--- TEST 16 (B4 T14): VISTAS_PEC, el espejo de las vistas de /compras/pedidos (core/estados_compras.py) ---');
+{
+  const V = ec.VISTAS_PEC;
+  assert.ok(V, 'VISTAS_PEC existe');
+  assert.deepEqual(Object.keys(V), ['todos', 'vigentes', 'activos', 'borradores', 'pedidos', 'en_transito', 'en_bodega',
+    'recibidos', 'cancelados', 'no_resueltos', 'acciones_tomadas', 'transito_logistica']);
+  assert.deepEqual(V.todos, GRUPOS_PEC.vigentes, "R9: 'todos' son los vigentes");
+  assert.deepEqual(V.vigentes, GRUPOS_PEC.vigentes);
+  assert.deepEqual(V.activos, GRUPOS_PEC.activos);
+  assert.deepEqual(V.no_resueltos, GRUPOS_PEC.activos, '«No resueltos» = activos');
+  assert.deepEqual(V.borradores, ['BORRADOR']);
+  assert.deepEqual(V.pedidos, ['BORRADOR', 'EMITIDO', 'ENVIADO']);
+  assert.deepEqual(V.en_transito, ['EN_TRANSITO', 'PENDIENTE_ENTREGA']);
+  assert.deepEqual(V.en_bodega, ['RECIBIDO', 'PARCIALMENTE_RECIBIDA'], 'la pestaña de recepciones es en_bodega');
+  assert.deepEqual(V.recibidos, ['RECIBIDA', 'COMPLETADO']);
+  assert.deepEqual(V.cancelados, ['CANCELADO']);
+  assert.deepEqual(V.acciones_tomadas, ['RECIBIDA', 'COMPLETADO', 'CANCELADO'], '«Acciones tomadas» = recibido + cancelado');
+  assert.deepEqual(V.transito_logistica, ['EMITIDO', 'ENVIADO', 'EN_TRANSITO', 'PENDIENTE_ENTREGA', 'RECIBIDO', 'PARCIALMENTE_RECIBIDA']);
+  assert.throws(() => { V.nueva = []; }, TypeError);
+  assert.throws(() => { V.todos.push('X'); }, TypeError);
+}
+
+console.log('--- TEST 17 (B4 T14): las opciones de «Filtrar estado» por pestaña y por columna del tablero ---');
+{
+  assert.equal(typeof ec.opcionesEstadosPec, 'function', 'opcionesEstadosPec existe');
+  assert.deepEqual(ec.opcionesEstadosPec('en_transito'), [
+    { valor: 'EN_TRANSITO', etiqueta: 'En tránsito' }, { valor: 'PENDIENTE_ENTREGA', etiqueta: 'Pendiente de entrega' }]);
+  assert.deepEqual(ec.opcionesEstadosPec('acciones_tomadas').map((o) => o.valor), ['RECIBIDA', 'COMPLETADO', 'CANCELADO']);
+  assert.deepEqual(ec.opcionesEstadosPec('todos').map((o) => o.valor), GRUPOS_PEC.vigentes, 'todos: sin Cancelado');
+  // Sin vista, o una que no existe: los 10 estados, con su etiqueta de R9 y en el orden de las etapas.
+  assert.deepEqual(ec.opcionesEstadosPec(null), ETIQUETAS_PEC.map(([valor, etiqueta]) => ({ valor, etiqueta })));
+  assert.deepEqual(ec.opcionesEstadosPec('rara'), ec.opcionesEstadosPec(undefined));
+  // La misma referencia para la misma vista (BarraTabla y accionPestana la llaman en cada render).
+  assert.equal(ec.opcionesEstadosPec('pedidos'), ec.opcionesEstadosPec('pedidos'));
+  assert.throws(() => { ec.opcionesEstadosPec('pedidos').push({}); }, TypeError);
+  // El tablero: una opción por columna (su estado principal y el título de la columna, como el de Pedidos de venta).
+  assert.deepEqual(ec.OPCIONES_ESTADOS_TABLERO_PEC, [
+    { valor: 'BORRADOR', etiqueta: 'Borrador' }, { valor: 'EMITIDO', etiqueta: 'Emitido' },
+    { valor: 'EN_TRANSITO', etiqueta: 'En tránsito' }, { valor: 'RECIBIDO', etiqueta: 'En bodega' },
+    { valor: 'RECIBIDA', etiqueta: 'Recibido' }, { valor: 'CANCELADO', etiqueta: 'Cancelado' }]);
+  assert.throws(() => { ec.OPCIONES_ESTADOS_TABLERO_PEC.push({}); }, TypeError);
+}
+
+console.log('--- TEST 18 (B4 T14): la consulta de cada columna del tablero del Hub en modo servidor (R11, C4, D39) ---');
+{
+  const [borrador, emitido, , enBodega, , cancelado] = COLUMNAS_PEC;
+  assert.equal(typeof ec.estadosDeColumnaPec, 'function', 'estadosDeColumnaPec existe');
+  // Sin filtro, los de la columna; con su estado principal, la columna entera; si no, el cruce; sin cruce, [].
+  assert.deepEqual(ec.estadosDeColumnaPec(emitido, []), ['EMITIDO', 'ENVIADO']);
+  assert.deepEqual(ec.estadosDeColumnaPec(emitido, null), ['EMITIDO', 'ENVIADO']);
+  assert.deepEqual(ec.estadosDeColumnaPec(emitido, ['EMITIDO']), ['EMITIDO', 'ENVIADO']);
+  assert.deepEqual(ec.estadosDeColumnaPec(emitido, ['ENVIADO', 'BORRADOR']), ['ENVIADO']);
+  assert.deepEqual(ec.estadosDeColumnaPec(enBodega, ['EMITIDO']), []);
+  assert.equal(typeof ec.consultaColumnaPec, 'function', 'consultaColumnaPec existe');
+  const estado = estadoTablaInicial({
+    vista: 'en_transito', modo: 'kanban', semaforo: 'vencidos', paso: 'PEC', q: '  ana ', estados: ['EMITIDO'],
+    orden: 'monto', pagina: 3,
+  });
+  // Sin vista (todos los PEC: Cancelado también trae sus pedidos) ni paso; la búsqueda, el semáforo y el filtro de estados
+  // del MISMO estado; el orden, el límite y el desplazamiento de la columna.
+  assert.equal(ec.consultaColumnaPec(estado, emitido, { orden: 'atencion', limit: 25, offset: 0 }),
+    'semaforo=vencidos&q=ana&estados=EMITIDO,ENVIADO&orden=atencion&limit=25&offset=0');
+  assert.equal(ec.consultaColumnaPec(estado, borrador, { orden: 'atencion', limit: 25, offset: 0 }), null, 'sin cruce: no se pide');
+  const sinFiltro = estadoTablaInicial({ vista: 'todos', modo: 'kanban' });
+  assert.equal(ec.consultaColumnaPec(sinFiltro, cancelado, { orden: 'reciente', limit: 0, offset: 0 }),
+    'estados=CANCELADO&orden=reciente&limit=0&offset=0', 'una plegada pide limit=0, y Cancelado no lleva la vista vigentes');
+  assert.equal(ec.consultaColumnaPec(sinFiltro, emitido, { orden: 'atencion', limit: 50, offset: 50 }),
+    'estados=EMITIDO,ENVIADO&orden=atencion&limit=50&offset=50');
+}
+
+console.log('--- TEST 19 (B4 T14): vistaPuedeVencer y diaPec (RP40: el día tal como se guarda) ---');
+{
+  assert.equal(typeof ec.vistaPuedeVencer, 'function', 'vistaPuedeVencer existe');
+  for (const v of ['todos', 'vigentes', 'activos', 'pedidos', 'en_transito', 'no_resueltos', 'transito_logistica', null, undefined, 'rara']) {
+    assert.equal(ec.vistaPuedeVencer(v), true, String(v));
+  }
+  for (const v of ['borradores', 'en_bodega', 'recibidos', 'cancelados', 'acciones_tomadas']) {
+    assert.equal(ec.vistaPuedeVencer(v), false, v);
+  }
+  assert.equal(typeof ec.diaPec, 'function', 'diaPec existe');
+  assert.equal(ec.diaPec('2026-11-05T00:00:00'), '2026-11-05');
+  assert.equal(ec.diaPec('2026-11-05T23:30:00Z'), '2026-11-05', 'sin pasarlo a Colombia');
+  assert.equal(ec.diaPec(' 2026-11-05 '), '2026-11-05');
+  for (const raro of ['2026-02-30', 'basura', '', null, undefined, 20261105]) assert.equal(ec.diaPec(raro), '', String(raro));
+}
+
+console.log('--- TEST 20 (B4 T14): tarjetaPec, la tarjeta del tablero del Hub (el «Vencido» lo manda el servidor) ---');
+{
+  assert.equal(typeof ec.tarjetaPec, 'function', 'tarjetaPec existe');
+  assert.deepEqual(ec.tarjetaPec({
+    id: 7, numero: 'PEC-20260007', supplier_name: 'Textiles del Norte', ven_numero: 'PVEN-20260001', total_cop: 120000,
+    estado: 'EMITIDO', is_overdue: true, fecha_entrega_estimada: '2026-11-01T00:00:00',
+  }), {
+    numero: 'PEC-20260007', tipo: 'PEC', titulo: 'Textiles del Norte', subtitulo: 'PVEN-20260001', monto: 120000,
+    estado: infoEstadoPec('EMITIDO'), chips: [{ texto: 'Vencido', tono: 'rose' }], tiempo: 'Entrega 1 nov 2026', atrasada: true,
+  });
+  // Sin proveedor, sin fecha ni monto, a tiempo y con un estado heredado (humanizado, nunca «Borrador»).
+  const raro = ec.tarjetaPec({ id: 8, numero: 'PEC-8', estado: 'CONFIRMADA', supplier_name: '  ', ven_numero: '', is_overdue: false });
+  assert.deepEqual(raro, {
+    numero: 'PEC-8', tipo: 'PEC', titulo: 'Sin proveedor', subtitulo: null, monto: null, estado: infoEstadoPec('CONFIRMADA'),
+    chips: [], tiempo: null, atrasada: false,
+  });
+  assert.equal(raro.estado.label, 'Confirmada');
+  // is_overdue es la regla del servidor: la tarjeta no la recalcula (una RECIBIDA con la fecha vieja no es vencida).
+  assert.equal(ec.tarjetaPec({ numero: 'PEC-9', estado: 'RECIBIDA', fecha_entrega_estimada: '2020-01-01T00:00:00' }).atrasada, false);
+  assert.equal(ec.tarjetaPec({ numero: 'PEC-9', estado: 'EMITIDO', fecha_entrega_estimada: '2020-01-01T00:00:00', is_overdue: false }).atrasada,
+    false, 'si el servidor dice que no está vencido, la tarjeta tampoco');
+  assert.equal(ec.tarjetaPec({ numero: 'PEC-9', estado: 'EMITIDO', total_cop: '35000' }).monto, 35000);
+  assert.equal(ec.tarjetaPec({ numero: 'PEC-9', estado: 'EMITIDO', total_cop: 'x' }).monto, null);
+}
+
+console.log('--- TEST 21 (B4 T14): la cancelación masiva del Hub (R9: solo lo que el servidor deja cancelar; en serie) ---');
+{
+  assert.equal(typeof ec.repartirCancelacionPec, 'function', 'repartirCancelacionPec existe');
+  const filas = [
+    { id: 1, numero: 'PEC-1', estado: 'BORRADOR' }, { id: 2, numero: 'PEC-2', estado: 'EN_TRANSITO' },
+    { id: 3, numero: 'PEC-3', estado: 'CANCELADO' }, { id: 4, numero: 'PEC-4', estado: 'PARCIALMENTE_RECIBIDA' },
+    null, { id: 5, numero: '', estado: 'RECIBIDA' }, { id: 6, numero: 'PEC-6', estado: 'CONFIRMADA' },
+  ];
+  const { cancelables, omitidos } = ec.repartirCancelacionPec(filas);
+  assert.deepEqual(cancelables.map((f) => f.id), [1, 2, 6], 'un desconocido cuenta como emitido: se puede cancelar');
+  assert.deepEqual(omitidos, [
+    { id: 3, numero: 'PEC-3', motivo: 'ya está cancelado' },
+    { id: 4, numero: 'PEC-4', motivo: 'ya llegó a bodega: su estado lo lleva la recepción' },
+    { id: 5, numero: '#5', motivo: 'ya llegó a bodega: su estado lo lleva la recepción' },
+  ]);
+  assert.deepEqual(ec.repartirCancelacionPec(null), { cancelables: [], omitidos: [] });
+
+  assert.equal(typeof ec.resumenCancelacionPec, 'function', 'resumenCancelacionPec existe');
+  const r1 = ec.resumenCancelacionPec([{ numero: 'PEC-1', ok: true }, { numero: 'PEC-2', ok: true }]);
+  assert.deepEqual(r1, { exitosos: 2, fallidos: [], mensaje: '2 pedidos de compra cancelados', tipo: 'ok' });
+  assert.equal(ec.resumenCancelacionPec([{ numero: 'PEC-1', ok: true }]).mensaje, '1 pedido de compra cancelado');
+  const r2 = ec.resumenCancelacionPec([
+    { numero: 'PEC-1', ok: true },
+    { numero: 'PEC-2', ok: false, error: 'PEC-2 tiene 1 recepción(es) en bodega: no se puede cancelar.' },
+    { numero: 'PEC-6', ok: false, error: '  ' },
+  ], [{ numero: 'PEC-3', motivo: 'ya está cancelado' }]);
+  assert.deepEqual(r2.fallidos, [
+    { numero: 'PEC-2', error: 'PEC-2 tiene 1 recepción(es) en bodega: no se puede cancelar.',
+      texto: 'PEC-2 tiene 1 recepción(es) en bodega: no se puede cancelar.' },
+    { numero: 'PEC-6', error: 'el servidor no dio detalle del error', texto: 'PEC-6: el servidor no dio detalle del error' },
+  ]);
+  assert.equal(r2.mensaje, '1 pedido de compra cancelado. No se pudieron cancelar: PEC-2, PEC-6. Se omitió PEC-3: ya está cancelado.');
+  assert.equal(r2.tipo, 'err');
+  const r3 = ec.resumenCancelacionPec([{ numero: 'PEC-2', ok: false, error: 'Sin conexión' }]);
+  assert.equal(r3.mensaje, 'No se pudo cancelar: PEC-2');
+  assert.equal(ec.resumenCancelacionPec([], [{ numero: 'PEC-3', motivo: 'ya está cancelado' }]).mensaje,
+    'No se canceló ningún pedido de compra. Se omitió PEC-3: ya está cancelado.');
+}
+
+console.log('--- TEST 22 (B4 T14): los separadores por mes cuando la tabla va por fecha de compra ---');
+{
+  assert.equal(typeof ec.ordenPorFechaDeCompra, 'function', 'ordenPorFechaDeCompra existe');
+  assert.equal(ec.ordenPorFechaDeCompra('compra'), true);
+  assert.equal(ec.ordenPorFechaDeCompra('-compra'), true);
+  for (const o of ['atencion', 'reciente', 'entrega', '', null, undefined]) assert.equal(ec.ordenPorFechaDeCompra(o), false, String(o));
+  assert.equal(typeof ec.grupoMesPec, 'function', 'grupoMesPec existe');
+  // fecha_compra es un instante (UTC sin zona): su mes es el de Colombia. Es el campo con que ordena el servidor
+  // ('compra' = fecha_compra, los nulos al final): sin ella, «Sin fecha de compra» (el último tramo), no created_at.
+  assert.equal(ec.grupoMesPec({ fecha_compra: '2026-11-01T03:00:00', created_at: '2026-11-01T03:00:00' }), '2026-10');
+  assert.equal(ec.grupoMesPec({ fecha_compra: '2026-11-15T12:00:00Z' }), '2026-11');
+  assert.equal(ec.grupoMesPec({ fecha_compra: '2026-12-05' }), '2026-12', 'un día de calendario no se corre');
+  assert.equal(ec.grupoMesPec({ fecha_compra: null, created_at: '2026-11-15T12:00:00' }), 'sin_fecha');
+  assert.equal(ec.grupoMesPec({ fecha_compra: 'basura' }), 'sin_fecha');
+  assert.equal(ec.grupoMesPec(null), 'sin_fecha');
+  assert.equal(typeof ec.tituloMesPec, 'function', 'tituloMesPec existe');
+  assert.equal(ec.tituloMesPec('2026-11'), 'Noviembre de 2026');
+  assert.equal(ec.tituloMesPec('2027-01'), 'Enero de 2027');
+  assert.equal(ec.tituloMesPec('2026-12'), 'Diciembre de 2026');
+  assert.equal(ec.tituloMesPec('2026-00'), 'Sin fecha de compra');
+  assert.equal(ec.tituloMesPec('sin_fecha'), 'Sin fecha de compra');
+  assert.equal(ec.tituloMesPec('2026-13'), 'Sin fecha de compra');
+}
+
+console.log('--- TEST 23 (B4 T14): el Hub de Compras (compras/page.tsx) cablea las piezas y el servidor ---');
+{
+  const hub = readFileSync(new URL('../src/app/dashboard/compras/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.ok(!/@ts-nocheck/.test(hub), 'la página se tipa');
+  // Carga del servidor (R5, C3, C4, D39, D40): la lista, el tablero, la franja y las tarjetas.
+  assert.match(hub, /useEstadoTabla\(ID_HUB, INICIAL_HUB\)/);
+  assert.match(hub, /const ID_HUB = 'compras\.hub';/);
+  assert.match(hub, /const INICIAL_HUB = \{ vista: 'todos', orden: 'atencion' \};/, 'R8: lo vencido primero');
+  assert.match(hub, /ruta: '\/compras\/pedidos', estado, conConteos: true, esperar: !listo, despachar, activo: !enAnalisis,/);
+  assert.match(hub, /const EXTRA_TABLERO = \{ limit: 0 \};/, 'en Kanban la lista va sin filas');
+  assert.match(hub, /extra: enKanban \? EXTRA_TABLERO : extraDeLaLista/);
+  assert.match(hub, /const extraDeLaLista = useMemo\(\(\) => \(\{ orden: estado\.orden \|\| 'atencion' \}\), \[estado\.orden\]\);/,
+    'R8: sin orden (el tercer clic en un título) sigue lo vencido primero, no el created_at del servidor');
+  assert.match(hub, /consultaColumnaPec\(estado, columna, \{ orden, limit, offset \}\)/, 'la consulta de cada columna es la de la lib');
+  assert.match(hub, /activo: listo && enKanban && !enAnalisis,/);
+  assert.match(hub, /useResumenFlujo<DatosFlujo>\('\/compras\/flujo', recargaFlujo\)/);
+  assert.match(hub, /`\/compras\/stats\?periodo=\$\{PERIODO_KPI\}`/);
+  assert.ok(!/['"`]\/compras\/stats['"`]/.test(hub), 'ya no se pide /compras/stats sin período');
+  // Tablero: las reglas de R9 y el cancelar con motivo (C15c).
+  assert.match(hub, /regla=\{reglaSoltarPec\}/);
+  assert.match(hub, /tarjetaDe=\{tarjetaPec\}/);
+  assert.match(hub, /tablero\.recargar\(\[\.\.\.columnas\]\)/, 'D39: tras la acción, solo el origen y el destino');
+  assert.match(hub, /<ModalMotivo[\s\S]{0,400}efectos=\{\[\.\.\.EFECTOS_CANCELAR_PEC\]\}/);
+  assert.match(hub, /estado: 'CANCELADO', motivo/, 'el PATCH lleva el motivo');
+  assert.match(hub, /recargarTrasError\(/);
+  assert.ok(!/estado: ?'RECIBIDO'/.test(hub) && !/estado: ?'EN_TRANSITO'/.test(hub), 'ningún PATCH a mano a tránsito o recibido');
+  assert.match(hub, /transicionesPec\(/, 'el panel y el menú solo ofrecen lo que acepta el servidor');
+  // Franja (D42, RP46): sin «No resueltos» y con el aviso de recepciones; sin «Ajustar tiempos» (R9).
+  assert.match(hub, /titulo="Flujo de compras"/);
+  assert.match(hub, /regla=\{textoReglaCompras\(\)\}/);
+  assert.match(hub, /avisos=\{avisosFlujoCompras\(flujo\.datos\)\}/);
+  assert.ok(!/noResueltos/.test(hub), 'Compras no pasa noResueltos');
+  assert.ok(!/Ajustar [Tt]iempos/.test(hub) && !/pecAlertDias|showConfig/.test(hub), 'se fue «Ajustar tiempos»');
+  // Análisis (R2, R13, RP69): la pestaña estándar con el asistente de hoy; sin chat simulado.
+  assert.match(hub, /<PanelAnalisisPerezoso[\s\S]{0,300}modulo="compras"[\s\S]{0,200}endpoint="\/compras\/analisis"[\s\S]{0,200}acento="purple"/);
+  assert.match(hub, /titulo: 'Nebulae AI · Analista de Compras & Suministros'/);
+  assert.ok(!/setTimeout\(/.test(hub), 'sin el chat simulado');
+  assert.ok(!/aiChatHistory|handleAiQuestion|donutMode|topSuppliersLimit/.test(hub));
+  assert.ok(!/En construcci/.test(hub), 'R2: el aviso vive solo en AsistenteEnConstruccion.tsx');
+  // Se fueron las tablas y los arreglos en memoria de antes (C4) y los estados locales (C10).
+  assert.ok(!/PEC_ESTADOS|getKanbanCol|handleDrop|kpiCards|colorMap|filteredData|compras\/pedidos\?limit=200/.test(hub));
+  // B1 a B3 que se conservan (D27): el panel de consolidación de PVEN lee los pedidos de venta y crea el PEC consolidado.
+  assert.match(hub, /\/ventas\/pedidos\?limit=200/);
+  assert.match(hub, /Crear PEC Consolidado/);
+  assert.match(hub, /Consolidado de PVEN: /);
 }
 
 console.log('\nOK: test_estados_compras.mjs');

@@ -530,3 +530,54 @@ export const ICONOS_KPI = congelar([
   'SlidersHorizontal', 'Sparkles', 'Target', 'TrendingDown', 'TrendingUp', 'Truck', 'Users', 'Wallet', 'Warehouse',
   'XCircle',
 ]);
+
+// ─── B4 T14: las tarjetas del Hub de Compras (KPI-compras punto 5; R7, R12, RP43) ────────────────────────────────
+
+/** Un número que manda el servidor, o null (un texto no se convierte: nunca un 0 ni un número inventado). */
+const delServidor = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+/**
+ * La regla de «Comprado (30 días)» (RP43: la misma de /compras/analisis). Con variación, TarjetaKpi la pone en el title.
+ * @type {string}
+ */
+const REGLA_COMPRADO = 'Pedidos de compra con fecha de compra en el período, sin Borrador ni Cancelado.';
+
+/**
+ * B4 T14: lo que pintan las 4 tarjetas del Hub de Compras con `data` de GET /compras/stats?periodo=30d (T12):
+ *  - activos (pec_activos): el número y la ayuda '3 con entrega vencida' en tono alerta, o 'Todos en fecha';
+ *  - en_transito (pec_en_transito): el número;
+ *  - cumplimiento (pec_cumplimiento): cumplimiento_pct del servidor y '2 recibidos de 9' (recibidos de activos +
+ *    recibidos); sin base, sin ayuda;
+ *  - comprado (comprado_periodo): flujo.comprado_cop con su {actual, anterior} (variación gris: el catálogo lo trae
+ *    neutro) y la regla de RP43.
+ * Sin datos (cargando o con error), null; un valor que no es un número queda en null (Contador pinta la barra o «—»).
+ * @param {any} datos
+ * @returns {{activos: {valor: number | null, ayuda: string | null, tono: 'alerta' | 'normal'}, en_transito: {valor: number | null},
+ *   cumplimiento: {valor: number | null, ayuda: string | null},
+ *   comprado: {valor: number | null, variacion: {actual: number | null, anterior: number | null}, ayuda: string}} | null}
+ */
+export function tarjetasHubCompras(datos) {
+  if (datos === null || typeof datos !== 'object' || Array.isArray(datos)) return null;
+  const activos = delServidor(datos.activos);
+  const vencidos = delServidor(datos.vencidos);
+  const recibidos = delServidor(datos.recibidos);
+  const base = activos !== null && recibidos !== null ? activos + recibidos : null;
+  const comprado = datos.flujo && typeof datos.flujo === 'object' ? datos.flujo.comprado_cop : null;
+  return {
+    activos: {
+      valor: activos,
+      ayuda: vencidos === null ? null : vencidos > 0 ? `${formatoEntero(vencidos)} con entrega vencida` : 'Todos en fecha',
+      tono: vencidos !== null && vencidos > 0 ? 'alerta' : 'normal',
+    },
+    en_transito: { valor: delServidor(datos.en_transito) },
+    cumplimiento: {
+      valor: delServidor(datos.cumplimiento_pct),
+      ayuda: base ? `${formatoEntero(recibidos)} ${recibidos === 1 ? 'recibido' : 'recibidos'} de ${formatoEntero(base)}` : null,
+    },
+    comprado: {
+      valor: delServidor(comprado?.actual),
+      variacion: { actual: delServidor(comprado?.actual), anterior: delServidor(comprado?.anterior) },
+      ayuda: REGLA_COMPRADO,
+    },
+  };
+}

@@ -15,9 +15,11 @@
  *    ni un espejo propio de la etapa (RP28, RP93).
  */
 
-import { congelar } from './flujo.js';
+import { congelar, conteosDePasos, pasosConConteos } from './flujo.js';
 import { humanizarCodigo, tiene } from './estados-pedido.js';
 import { fechaLarga } from './fechas-colombia.js';
+import { formatoEntero } from './kpis.js';
+import { GRUPOS_PEC, vistaPuedeVencer } from './estados-compras.js';
 
 export { esPecVencido, pasoFlujoPec } from './estados-compras.js';
 
@@ -163,4 +165,137 @@ export function pasosDeTracking(stages) {
  */
 export function textoReglaCompras() {
   return 'Con atraso: ya pasó la fecha de entrega estimada';
+}
+
+// ─── La franja del Hub de Compras (B4 T14: FLUJO-compras punto 5; R5, R9, C3, RP46, D36, D42) ────────
+
+/** La ruta del Hub de Compras (la de «Ver análisis» de las listas: ?tab=analisis, R13). */
+export const RUTA_HUB_COMPRAS = '/dashboard/compras';
+
+/**
+ * Las cajas que filtran la tabla del Hub: la pestaña que les corresponde y los estados de su etapa (vacío = la pestaña
+ * entera). Pedido de compra es la pestaña «Pedidos de compra» (borrador y emitido) y En tránsito la suya; Recibido va en
+ * «Acciones tomadas» (recibido + cancelado) con el filtro de su etapa. Lista de compras y Recepción en bodega son enlaces
+ * a su pantalla (su `ruta`).
+ */
+const FILTRO_DE_PASO = congelar({
+  PEC: { vista: 'pedidos', estados: [] },
+  TRANSITO: { vista: 'en_transito', estados: [] },
+  RECIBIDO: { vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'] },
+});
+const PASOS_CON_ENLACE = congelar(['LISTA', 'RECEPCION']);
+
+const mismosEstados = (a, b) => a.length === b.length && a.every((e) => b.includes(e));
+
+/**
+ * B4 T14: la caja de la franja que marca el estado único de la tabla (R5): PEC con la pestaña «Pedidos de compra»,
+ * TRANSITO con «En tránsito» y RECIBIDO con «Acciones tomadas» filtrada a su etapa (RECIBIDA y COMPLETADO, en cualquier
+ * orden). Ninguna en Kanban (las pestañas no se ven: la caja abre su pestaña en Lista) ni con otra vista.
+ * @param {Partial<import('./tabla.js').EstadoTabla> | null | undefined} estado
+ * @returns {'PEC' | 'TRANSITO' | 'RECIBIDO' | null}
+ */
+export function pasoHubComprasDe(estado) {
+  if (!estado || estado.modo === 'kanban') return null;
+  const estados = Array.isArray(estado.estados) ? estado.estados : [];
+  for (const [clave, filtro] of Object.entries(FILTRO_DE_PASO)) {
+    if (estado.vista !== filtro.vista) continue;
+    if (filtro.estados.length === 0 || mismosEstados(estados, filtro.estados)) return /** @type {any} */ (clave);
+  }
+  return null;
+}
+
+/**
+ * B4 T14 (clic_en_hub, R5, C3): lo que despacha el clic en una caja de la franja del Hub. Pedido de compra, En tránsito y
+ * Recibido ponen su pestaña y los estados de su etapa (FILTRO_DE_PASO); tocar la caja marcada vuelve a Todos (R6). Si
+ * la pestaña nueva nunca vence (Recibido), se quita «Con atraso»: la tabla no queda vacía sin una razón a la vista. En
+ * Kanban la caja abre su pestaña en Lista (como las tarjetas de T10). Lista de compras, Recepción en bodega o una clave
+ * desconocida: null (son enlaces).
+ * @param {Partial<import('./tabla.js').EstadoTabla> | null | undefined} estado
+ * @param {unknown} clave
+ * @returns {import('./tabla.js').AccionTabla | null}
+ */
+export function accionPasoHubCompras(estado, clave) {
+  if (typeof clave !== 'string' || !tiene(FILTRO_DE_PASO, clave)) return null;
+  const enKanban = estado?.modo === 'kanban';
+  if (!enKanban && pasoHubComprasDe(estado) === clave) return { tipo: 'cambiar', cambios: { vista: 'todos', estados: [] } };
+  const filtro = /** @type {{vista: string, estados: ReadonlyArray<string>}} */ (/** @type {any} */ (FILTRO_DE_PASO)[clave]);
+  /** @type {Record<string, unknown>} */
+  const cambios = { vista: filtro.vista, estados: [...filtro.estados] };
+  if (estado?.semaforo && !vistaPuedeVencer(filtro.vista)) cambios.semaforo = null;
+  if (enKanban) cambios.modo = 'lista';
+  return { tipo: 'cambiar', cambios };
+}
+
+/**
+ * B4 T14 (D36, D42): los pasos de la franja del Hub de Compras: pasosConConteos de PASOS_FLUJO_COMPRAS con los conteos
+ * de GET /compras/flujo (conteosDePasos; sin datos, todos en null: la barra gris de Contador, nunca 0), la caja marcada
+ * (pasoHubComprasDe) y el `href` de las que son enlaces (Lista de compras y Recepción en bodega, su `ruta`). Ninguna es
+ * «Estás aquí»: el Hub no es la pantalla de un paso.
+ * @param {any} datos  res.data de /compras/flujo (null mientras carga)
+ * @param {Partial<import('./tabla.js').EstadoTabla> | null | undefined} estado
+ * @returns {PasoVista[]}
+ */
+export function pasosHubCompras(datos, estado) {
+  const pasos = pasosConConteos(PASOS_FLUJO_COMPRAS, conteosDePasos(datos), {
+    seleccionado: pasoHubComprasDe(estado), cargando: !datos,
+  });
+  return pasos.map((p) => (PASOS_CON_ENLACE.includes(p.clave) && p.ruta ? { ...p, href: p.ruta } : p));
+}
+
+/** El valor de 'semaforo' de GET /compras/pedidos para «Con atraso» (R5; 'atrasados' es su sinónimo desde T12 r1). */
+const SEMAFORO_VENCIDOS = 'vencidos';
+
+/**
+ * B4 T14 (RP40): lo que despacha un botón del semáforo de la franja del Hub. «Ver todo» quita el filtro; «Con atraso»
+ * pone semaforo=vencidos (la regla del servidor: emitido o en tránsito con la entrega pasada). Desde una pestaña que
+ * nunca vence (en bodega, acciones tomadas) pasa a Todos, y los estados filtrados que no pueden vencer se quitan: si no,
+ * la tabla quedaría vacía sin una razón a la vista.
+ * @param {Partial<import('./tabla.js').EstadoTabla> | null | undefined} estado
+ * @param {unknown} filtro  el FiltroSemaforo de BannerFlujo
+ * @returns {import('./tabla.js').AccionTabla}
+ */
+export function accionSemaforoCompras(estado, filtro) {
+  if (filtro !== 'atrasados') return { tipo: 'semaforo', valor: null };
+  const actuales = Array.isArray(estado?.estados) ? estado.estados : [];
+  const quedan = actuales.filter((e) => GRUPOS_PEC.vencibles.includes(e));
+  /** @type {Record<string, unknown>} */
+  const cambios = { semaforo: SEMAFORO_VENCIDOS };
+  if (!vistaPuedeVencer(estado?.vista)) cambios.vista = 'todos';
+  if (quedan.length !== actuales.length) cambios.estados = quedan;
+  return { tipo: 'cambiar', cambios };
+}
+
+/**
+ * B4 T14: el FiltroSemaforo de la franja ('atrasados' o 'todos') según el semáforo del estado único ('vencidos', o su
+ * sinónimo 'atrasados').
+ * @param {Partial<import('./tabla.js').EstadoTabla> | null | undefined} estado
+ * @returns {'atrasados' | 'todos'}
+ */
+export function filtroSemaforoCompras(estado) {
+  return estado?.semaforo === SEMAFORO_VENCIDOS || estado?.semaforo === 'atrasados' ? 'atrasados' : 'todos';
+}
+
+/**
+ * B4 T14 (RP46, R9): los avisos de la franja del Hub: «N recepciones por confirmar» (las GoodsReceipt en BORRADOR, de
+ * pasos.RECEPCION.recepciones_por_confirmar de /compras/flujo), en ámbar y sin onClick (la caja Recepción en bodega ya es
+ * el enlace). Sin un número positivo, ninguno.
+ * @param {any} datos
+ * @returns {{texto: string, tono: 'ambar'}[]}
+ */
+export function avisosFlujoCompras(datos) {
+  const n = datos?.pasos?.RECEPCION?.recepciones_por_confirmar;
+  if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0) return [];
+  return [{ texto: `${formatoEntero(n)} ${n === 1 ? 'recepción' : 'recepciones'} por confirmar`, tono: 'ambar' }];
+}
+
+/**
+ * B4 T14 (R13): lo que pide el enlace del Hub de Compras (el `location.search` que la pantalla lee en el navegador al
+ * montar): ?tab=analisis abre la pestaña Análisis («Ver análisis» de Pedidos de compra, Lista de compras y Traslados).
+ * @param {unknown} search
+ * @returns {{analisis: boolean}}
+ */
+export function leerEnlaceHubCompras(search) {
+  if (typeof search !== 'string' || !search) return { analisis: false };
+  const tab = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search).get('tab');
+  return { analisis: typeof tab === 'string' && tab.trim() === 'analisis' };
 }
