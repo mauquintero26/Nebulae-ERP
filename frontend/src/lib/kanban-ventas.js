@@ -1061,6 +1061,61 @@ export function opcionesEstadosPedidos(vista, porEstado = null) {
 }
 
 /**
+ * @typedef {{clave: string, porEstado: Readonly<Record<string, number>> | null}} PorEstadoVisto
+ *   r2 (p1): lo que porEstadoVisto lleva visto de resumen.por_estado en una vista, búsqueda y semáforo (`clave`).
+ */
+
+/** Los conteos positivos de un por_estado (un objeto plano), o null si no lo es. */
+function conteosPositivos(porEstado) {
+  if (porEstado === null || typeof porEstado !== 'object' || Array.isArray(porEstado)) return null;
+  /** @type {Record<string, number>} */
+  const r = {};
+  for (const [e, valor] of Object.entries(porEstado)) {
+    const n = Number(valor);
+    if (e && Number.isFinite(n) && n > 0) r[e] = n;
+  }
+  return r;
+}
+
+/**
+ * B4 T10 r2 (p1): el por_estado con el que la Lista arma los heredados del filtro (opcionesEstadosPedidos). El servidor
+ * calcula resumen.por_estado DESPUÉS del filtro de estados (filtrar_por_estados corre antes de _resumen_pedidos): con
+ * un estado marcado, la respuesta ya no trae los heredados que no se marcaron y, leídos directo, salían del panel (nunca
+ * se podían combinar dos). Por eso se guarda lo visto mientras no cambien la vista, la búsqueda ni el semáforo (`clave`;
+ * la página, el orden y el filtro de estados no cuentan):
+ *  - una respuesta sin filtro de estados es la completa: reemplaza lo anterior (lo que ya no está, se va);
+ *  - una filtrada suma los estados que no se habían visto;
+ *  - con otra clave se empieza de nuevo con la respuesta, aunque venga filtrada;
+ *  - sin respuesta vigente (`porEstado` null: cargando, recargando o con error) queda lo de la misma clave; de otra
+ *    clave, {clave, porEstado: null}; sin nada antes, null.
+ * Solo los conteos positivos. Si nada cambia devuelve `previo` (la misma referencia: la pantalla no vuelve a pintar).
+ * Inmutable. La pantalla lo guarda como estado derivado en el render (como llegadaDeListado), sin efectos.
+ * @param {PorEstadoVisto | null} previo
+ * @param {Pick<import('./tabla.js').EstadoTabla, 'vista' | 'q' | 'semaforo' | 'estados'> | null | undefined} estado
+ * @param {unknown} porEstado
+ * @returns {PorEstadoVisto | null}
+ */
+export function porEstadoVisto(previo, estado, porEstado) {
+  const clave = [estado?.vista ?? '', estado?.q ?? '', estado?.semaforo ?? ''].join('|');
+  const mismo = previo !== null && previo !== undefined && previo.clave === clave;
+  const llegado = conteosPositivos(porEstado);
+  if (llegado === null) {
+    if (mismo) return previo;
+    return previo ? congelar({ clave, porEstado: null }) : null;
+  }
+  const anterior = mismo ? previo.porEstado : null;
+  const completo = !(Array.isArray(estado?.estados) && estado.estados.length > 0);
+  if (anterior === null || completo) {
+    const iguales = anterior !== null && Object.keys(anterior).length === Object.keys(llegado).length
+      && Object.keys(llegado).every((e) => tiene(anterior, e));
+    return iguales ? previo : congelar({ clave, porEstado: congelar(llegado) });
+  }
+  const nuevos = Object.keys(llegado).filter((e) => !tiene(anterior, e));
+  if (nuevos.length === 0) return previo;
+  return congelar({ clave, porEstado: congelar({ ...anterior, ...Object.fromEntries(nuevos.map((e) => [e, llegado[e]])) }) });
+}
+
+/**
  * B4 T10: las opciones del filtro de estados en el tablero de Pedidos (vista=todos): el estado principal de cada columna
  * de COLUMNAS_PEDIDO con el título de la columna, en su orden. Con estadosDeColumnaLista, cada una vale toda su columna
  * (los heredados incluidos). Inmutable.

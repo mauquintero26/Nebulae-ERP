@@ -1253,9 +1253,13 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   assert.match(lista, /const pestanas = pestanasDeLaLista\(listado\.conteos as ConteosPedidos \| null\);/);
   assert.match(lista, /<BarraTabla\s+estado=\{estado\}\s+onEstado=\{alCambiarBarra\}\s+pestanas=\{enKanban \? undefined : pestanas\}/);
   assert.match(lista, /opcionesEstados=\{enKanban \? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesDeLaLista\}/);
-  // r1 (m5): las opciones de la Lista llevan los heredados de resumen.por_estado de la MISMA respuesta (H47), en una
-  // función estable; la barra, la poda de las pestañas, del conmutador, del semáforo y del enlace usan la misma.
-  assert.match(lista, /const porEstado = listado\.resumen\?\.por_estado \?\? null;\s*const opcionesDeLaLista = useCallback\(\s*\(vista: string \| null\) => opcionesEstadosPedidos\(vista, porEstado\), \[porEstado\],\s*\);/);
+  // r1 (m5): las opciones de la Lista llevan los heredados de resumen.por_estado (H47), en una función estable; la barra,
+  // la poda de las pestañas, del conmutador, del semáforo y del enlace usan la misma. r2 (p1): el servidor calcula
+  // por_estado después del filtro de estados, así que no se lee directo: porEstadoVisto guarda la unión de lo visto en la
+  // misma vista, búsqueda y semáforo, solo de una respuesta vigente (ni cargando, ni recargando, ni con error), con un
+  // estado derivado en el render (sin efectos), como llegadaDeListado.
+  assert.match(lista, /const vigente = listado\.cargandoInicial \|\| listado\.recargando \|\| listado\.error \? null : \(listado\.resumen\?\.por_estado \?\? null\);\s*const \[vistos, setVistos\] = useState<PorEstadoVisto \| null>\(null\);\s*const vistosAhora = porEstadoVisto\(vistos, estado, vigente\);\s*if \(vistosAhora !== vistos\) setVistos\(vistosAhora\);\s*const porEstado = vistosAhora\?\.porEstado \?\? null;\s*const opcionesDeLaLista = useCallback\(\s*\(vista: string \| null\) => opcionesEstadosPedidos\(vista, porEstado\), \[porEstado\],\s*\);/);
+  assert.equal((lista.match(/por_estado/g) ?? []).length, 1, 'por_estado se lee en un solo lugar (el vigente)');
   assert.equal((lista.match(/opcionesEstadosPedidos/g) ?? []).length, 1, 'la pantalla usa las opciones con los heredados');
   assert.match(lista, /kanbanDisponible\n/);
   assert.match(lista, /if \(accion\.tipo === 'modo'\) \{\s*const modo = String\(accion\.valor\);\s*despachar\(accionModo\(estado, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesDeLaLista\)\);\s*\} else despachar\(accion\);/);

@@ -1070,6 +1070,48 @@ console.log('--- B4 T10 TEST M: opcionesEstadosPedidos — el filtro de estados 
   // Los 18 estados que conoce el servidor (ETIQUETAS_ESTADO['VEN']) son los de ESTADOS_PEDIDO y todos tienen grupo.
   assert.equal(Object.keys(ESTADOS_PEDIDO).length, 18);
   for (const e of Object.keys(ESTADOS_PEDIDO)) assert.ok(grupoPedido(e), e);
+
+  // r2 (p1): el servidor calcula por_estado DESPUÉS del filtro de estados (filtrar_por_estados corre antes de
+  // _resumen_pedidos): con «Pagado» marcado, la respuesta trae solo {PAGADO}. Leído directo, los demás heredados salían
+  // del panel y nunca se podían combinar dos. porEstadoVisto conserva la unión de lo visto mientras no cambien la vista,
+  // la búsqueda ni el semáforo; una respuesta sin filtro de estados es la completa y reemplaza lo anterior.
+  const enProceso = estadoTablaInicial({ vista: 'en_proceso' });
+  const completo = { EN_PROCESO: 3, EN_TRANSITO: 1, PAGADO: 2, PARCIALMENTE_DISPONIBLE: 1 };
+  const valores = (pe) => kv.opcionesEstadosPedidos('en_proceso', pe).map((o) => o.valor);
+  const visto0 = kv.porEstadoVisto(null, enProceso, completo);
+  assert.deepEqual(valores(visto0.porEstado), ['EN_PROCESO', 'EN_TRANSITO', 'PAGADO', 'PARCIALMENTE_DISPONIBLE']);
+  const conPagado = estadoTablaInicial({ vista: 'en_proceso', estados: ['PAGADO'] });
+  const filtrado = { PAGADO: 2 }; // lo que manda el servidor con estados=PAGADO
+  assert.deepEqual(valores(filtrado), ['EN_PROCESO', 'EN_TRANSITO', 'PAGADO'], 'leído directo, «Parcialmente disponible» se iba');
+  const visto1 = kv.porEstadoVisto(visto0, conPagado, filtrado);
+  assert.deepEqual(valores(visto1.porEstado), ['EN_PROCESO', 'EN_TRANSITO', 'PAGADO', 'PARCIALMENTE_DISPONIBLE'], 'los dos heredados siguen');
+  assert.equal(visto1, visto0, 'nada nuevo: la misma referencia (la pantalla no vuelve a pintar)');
+  // Se pueden combinar: con los dos marcados siguen los dos.
+  const conDos = estadoTablaInicial({ vista: 'en_proceso', estados: ['PAGADO', 'PARCIALMENTE_DISPONIBLE'] });
+  assert.deepEqual(valores(kv.porEstadoVisto(visto1, conDos, { PAGADO: 2, PARCIALMENTE_DISPONIBLE: 1 }).porEstado), valores(completo));
+  // Llegando con un filtro de la sesión (sin haber visto la completa), cada respuesta filtrada suma lo suyo.
+  const desdeFiltro = kv.porEstadoVisto(null, conPagado, { PAGADO: 2 });
+  const sumado = kv.porEstadoVisto(desdeFiltro, conDos, { PAGADO: 2, PARCIALMENTE_DISPONIBLE: 1 });
+  assert.deepEqual(Object.keys(sumado.porEstado).sort(), ['PAGADO', 'PARCIALMENTE_DISPONIBLE']);
+  assert.notEqual(sumado, desdeFiltro, 'con algo nuevo, otro objeto');
+  // Una respuesta sin filtro de estados es la completa: reemplaza (lo que ya no está, se va).
+  const sinPagado = kv.porEstadoVisto(visto1, enProceso, { EN_PROCESO: 4, EN_TRANSITO: 1, PARCIALMENTE_DISPONIBLE: 1 });
+  assert.deepEqual(valores(sinPagado.porEstado), ['EN_PROCESO', 'EN_TRANSITO', 'PARCIALMENTE_DISPONIBLE']);
+  assert.equal(kv.porEstadoVisto(visto0, enProceso, { ...completo }), visto0, 'la completa con lo mismo: la misma referencia');
+  // Otra vista, otra búsqueda u otro semáforo: empieza de nuevo, aunque la respuesta venga filtrada.
+  for (const otro of [{ vista: 'todos', estados: ['PAGADO'] }, { vista: 'en_proceso', q: 'ana', estados: ['PAGADO'] },
+    { vista: 'en_proceso', semaforo: 'atrasados', estados: ['PAGADO'] }]) {
+    assert.deepEqual(Object.keys(kv.porEstadoVisto(visto1, estadoTablaInicial(otro), { PAGADO: 2 }).porEstado), ['PAGADO'], JSON.stringify(otro));
+  }
+  // La página, el orden y el filtro de estados no cambian lo visto.
+  assert.equal(kv.porEstadoVisto(visto0, estadoTablaInicial({ vista: 'en_proceso', pagina: 3, orden: 'reciente', estados: ['EN_PROCESO'] }), { EN_PROCESO: 3 }), visto0);
+  // Sin respuesta vigente (cargando, recargando o con error): lo de la misma clave; de otra clave, nada todavía.
+  assert.equal(kv.porEstadoVisto(visto1, conPagado, null), visto1);
+  assert.equal(kv.porEstadoVisto(null, enProceso, null), null);
+  assert.equal(kv.porEstadoVisto(visto1, estadoTablaInicial({ vista: 'todos' }), null).porEstado, null);
+  // Los conteos que no son positivos no cuentan; inmutable.
+  assert.deepEqual(Object.keys(kv.porEstadoVisto(null, enProceso, { EN_PROCESO: 3, PAGADO: 0, DISPONIBLE: 'x' }).porEstado), ['EN_PROCESO']);
+  assert.ok(Object.isFrozen(visto0) && Object.isFrozen(visto0.porEstado));
 }
 
 console.log('--- B4 T10 TEST N: consultaColumnaPedido — la consulta de cada columna del tablero de Pedidos ---');

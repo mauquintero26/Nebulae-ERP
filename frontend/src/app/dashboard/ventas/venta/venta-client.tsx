@@ -40,8 +40,9 @@ import { enlaceVerAnalisis, leerEnlacePedidos, pasosDePedidos, textoRegla, vista
 import {
   COLUMNAS_PEDIDO, OPCIONES_ESTADOS_TABLERO_PEDIDO, RUTA_LISTA_PEDIDOS, accionesTarjetaPedido, chipsDocumentoVentas,
   confirmacionFacturarPedido, consultaColumnaPedido, efectosCancelarPedido, estadoDeTarjeta, opcionesEstadosPedidos,
-  reglaSoltarPedido, resumenColumnaPedido, tarjetaPedido,
+  porEstadoVisto, reglaSoltarPedido, resumenColumnaPedido, tarjetaPedido,
 } from '@/lib/kanban-ventas';
+import type { PorEstadoVisto } from '@/lib/kanban-ventas';
 import { fechaCorta, fechaSolo } from '@/lib/fechas-colombia';
 import { PERIODO_KPI } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
@@ -336,8 +337,8 @@ export default function VentaClient() {
 
   // La tabla (T6B): GET /ventas/pedidos con vista, estados, semáforo, q, orden, limit y offset del estado, más los conteos
   // de las pestañas en la MISMA llamada. esperar: !listo (D40): el esqueleto, nunca «vacío». En Kanban, sin filas
-  // (EXTRA_TABLERO): las piden las columnas. El resumen de H47 de esta respuesta no se usa: las tarjetas leen /ventas/stats
-  // (D5) y cada columna del tablero trae el suyo (C9).
+  // (EXTRA_TABLERO): las piden las columnas. Del resumen de H47 de esta respuesta solo se usa por_estado: los estados
+  // heredados del filtro (r1 m5, r2 p1); las tarjetas leen /ventas/stats (D5) y cada columna del tablero trae el suyo (C9).
   const listado = useListado<FilaPedido>({
     ruta: '/ventas/pedidos', estado, conConteos: true, esperar: !listo, despachar,
     extra: enKanban ? EXTRA_TABLERO : null,
@@ -434,10 +435,17 @@ export default function VentaClient() {
   // sola vez, ya con la pestaña del enlace), y queda anotada en enlacePendiente. Con listo, si el modo es Kanban,
   // accionVistaEnLista pasa a Lista con la poda de la Lista. Las dos refs se consumen una vez (StrictMode no repite el
   // enlace) y el segundo efecto es de layout: el tablero no llega a pintarse antes de pasar a Lista.
-  // r1 (m5): las opciones del filtro de la Lista suman los estados heredados que traen los pedidos (resumen.por_estado
-  // de la MISMA respuesta, H47; opcionesEstadosPedidos). Una sola función, estable mientras no llega otra respuesta: la
-  // barra y la poda de las pestañas, del conmutador, del semáforo y del enlace usan la misma.
-  const porEstado = listado.resumen?.por_estado ?? null;
+  // r1 (m5): las opciones del filtro de la Lista suman los estados heredados que traen los pedidos (resumen.por_estado,
+  // H47; opcionesEstadosPedidos). Una sola función, estable mientras no cambia lo visto: la barra y la poda de las
+  // pestañas, del conmutador, del semáforo y del enlace usan la misma. r2 (p1): el servidor calcula por_estado después
+  // del filtro de estados, así que no se lee directo: porEstadoVisto guarda la unión de lo visto en la misma vista,
+  // búsqueda y semáforo, solo de una respuesta vigente (ni cargando, ni recargando, ni con error). Es un estado derivado
+  // en el render, sin efectos (como llegadaDeListado): con la misma referencia no vuelve a pintar.
+  const vigente = listado.cargandoInicial || listado.recargando || listado.error ? null : (listado.resumen?.por_estado ?? null);
+  const [vistos, setVistos] = useState<PorEstadoVisto | null>(null);
+  const vistosAhora = porEstadoVisto(vistos, estado, vigente);
+  if (vistosAhora !== vistos) setVistos(vistosAhora);
+  const porEstado = vistosAhora?.porEstado ?? null;
   const opcionesDeLaLista = useCallback(
     (vista: string | null) => opcionesEstadosPedidos(vista, porEstado), [porEstado],
   );
