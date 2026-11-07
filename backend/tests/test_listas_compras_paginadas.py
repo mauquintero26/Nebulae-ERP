@@ -436,7 +436,10 @@ def test_lista_compras_solo_sincroniza_con_offset_cero(app_client, db, admin_tok
         assert not [x for x in v.sentencias if x.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))]
         db.expire_all()
         assert _load_lista_compras(db) == antes
-        assert f"Producto {s}" not in [it["producto"] for it in cuerpo["data"]]   # r1 (m15): sin sincronizar
+        # r2 (m7): con q=s y offset=1, sincronizar daría total 1; sin sincronizar el ítem nuevo no existe (total 0).
+        assert _get(app_client, admin_token, RUTA_LISTA, q=s, offset=1)["total"] == 0
+        db.expire_all()
+        assert _load_lista_compras(db) == antes
         cuerpo = _get(app_client, admin_token, RUTA_LISTA, q=s)
         assert [it["producto"] for it in cuerpo["data"]] == [f"Producto {s}"]
         db.expire_all()
@@ -481,7 +484,7 @@ def test_errores_en_espanol(app_client, admin_token):
         f"La vista «{'x' * 40}» no existe en Pedidos de compra.")
     # r1 (m3): 'atrasados' es sinónimo de 'vencidos'; 'no_resueltos' (que /compras/flujo sí manda) no es un filtro.
     assert _error(app_client, admin_token, RUTA_PEC, semaforo="no_resueltos") == (
-        "El filtro del semáforo «no_resueltos» no existe: usa vencidos.")
+        "El filtro del semáforo «no_resueltos» no existe: usa vencidos o atrasados.")
     assert _error(app_client, admin_token, RUTA_PEC, semaforo="\x00") == CONTROL
     assert _error(app_client, admin_token, RUTA_PEC, orden="pec") == "No se puede ordenar por «pec»."
     assert _error(app_client, admin_token, RUTA_REC, vista="pendientes") == (

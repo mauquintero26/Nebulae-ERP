@@ -361,3 +361,19 @@ def test_ranking_y_dona_agrupan_por_la_ficha_del_proveedor(app_client, db, admin
     assert filas == [(500_000, 2), (50_000, 1)]
     dona = next(d for d in data["donas"] if d["clave"] == "proveedor")
     assert sorted(s["valor"] for s in dona["segmentos"]) == [50_000, 500_000]
+
+
+def test_dias_promedio_ignora_un_pedido_sin_fecha_de_compra(app_client, db, admin_token):
+    """r2 (m1, m8): un PEC con fecha_compra y created_at en NULL no tiene desde cuándo contar: GREATEST ignora el NULL
+    y lo contaba como 0 días, bajando el promedio. Su recepción confirmada en la ventana no entra en el promedio."""
+    f = _Fabrica(db)
+    pec = f.pec(datetime(2001, 1, 1, 22, 0), entrega=datetime(2001, 1, 3))
+    f.recepcion(datetime(2001, 1, 4, 1, 0), pec)
+    antes = _kpis(_analisis(app_client, admin_token))["dias_promedio_entrega"]["valor"]
+    assert antes is not None and antes > 0
+    sin_fecha = f.pec(datetime(2001, 1, 1, 22, 0), entrega=datetime(2001, 1, 3))
+    db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == sin_fecha.id).update(
+        {"fecha_compra": None, "created_at": None})
+    db.commit()
+    f.recepcion(datetime(2001, 1, 4, 1, 0), sin_fecha)
+    assert _kpis(_analisis(app_client, admin_token))["dias_promedio_entrega"]["valor"] == antes
