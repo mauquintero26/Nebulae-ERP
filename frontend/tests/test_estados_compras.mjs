@@ -1111,8 +1111,9 @@ function funcionEjecutable(fuente, cabecera) {
 function anchoVisible(fuente, nombre) {
   const inicio = fuente.indexOf(nombre);
   assert.ok(inicio >= 0, `${nombre} existe`);
-  const cuerpo = fuente.slice(inicio, fuente.indexOf('\n];', inicio));
-  const columnas = cuerpo.split(/\n {2}\{ id: '/).slice(1);
+  const fin = fuente.slice(inicio).search(/\n\s*\];/);
+  const cuerpo = fuente.slice(inicio, inicio + fin);
+  const columnas = cuerpo.split(/\n\s*\{ id: '/).slice(1);
   assert.ok(columnas.length > 0, 'columnas');
   return columnas.filter((c) => !/ocultaPorDefecto: true/.test(c.split('\n')[0] + (c.split('\n')[1] ?? '')))
     .reduce((suma, c) => suma + Number(/ancho: (\d+)/.exec(c)?.[1] ?? 0), 0);
@@ -1226,6 +1227,95 @@ console.log('--- TEST 31 (B4 T16A): Tránsito (compras/transito/page.tsx) cablea
   const sinEtapa = await correr({ cuerpo: undefined });
   assert.deepEqual(sinEtapa.llamadas, [], 'sin etapa no se manda nada');
   assert.ok(sinEtapa.error instanceof Error);
+}
+
+console.log('--- TEST 32 (B4 T16A): Recepciones (compras/recepciones/page.tsx) y columnas-recepcion.tsx cablean las piezas y el servidor ---');
+{
+  const colRec = readFileSync(new URL('../src/app/dashboard/compras/columnas-recepcion.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const pag = readFileSync(new URL('../src/app/dashboard/compras/recepciones/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.ok(!/@ts-nocheck/.test(pag), 'la página se tipa');
+  // columnas-recepcion.tsx (T19 la importa): no es una ruta, no depende de ninguna page.tsx y exporta lo que las pantallas arman.
+  assert.ok(!/export default/.test(colRec) && !/from '\.{1,2}\/[^']*page'/.test(colRec) && !/'use client'/.test(colRec), 'no es una ruta ni importa una page');
+  for (const nombre of ['columnasRecepcion', 'titulosDeOrdenRecepcion', 'CeldaEstadoRecepcion', 'CeldaRetraso', 'CeldaStock', 'esPorConfirmar']) {
+    assert.match(colRec, new RegExp(`export (?:function|const) ${nombre}\\b`), `exporta ${nombre}`);
+  }
+  assert.match(colRec, /export function columnasRecepcion<T extends FilaColumnasRecepcion>\(celdaAcciones: \(r: T\) => ReactNode\)/, 'la celda de Acciones es de cada pantalla');
+  for (const [id, titulo] of [['numero', 'Recepción #'], ['pec', 'PEC origen'], ['proveedor', 'Proveedor'], ['bodega', 'Bodega'], ['fecha', 'Fecha'],
+    ['items', 'Ítems'], ['estado', 'Estado'], ['retraso', 'Retraso'], ['stock', 'Stock'], ['acciones', 'Acciones']]) {
+    assert.match(colRec, new RegExp(`\\{ id: '${id}', titulo: '${titulo}'`), `columna ${titulo}`);
+  }
+  assert.match(colRec, /id: 'retraso'[^\n]*ocultaPorDefecto: true/, 'la columna Retraso va oculta por defecto');
+  assert.match(colRec, /id: 'numero'[^\n]*clave: true, fija: 'izquierda'/);
+  assert.match(colRec, /id: 'proveedor'[^\n]*flexible: true/, 'una sola flexible: el proveedor');
+  assert.equal((colRec.match(/flexible: true/g) ?? []).length, 1);
+  assert.match(colRec, /id: 'acciones'[^\n]*fija: 'derecha'/);
+  const visibles = anchoVisible(colRec, 'export function columnasRecepcion');
+  assert.ok(visibles > 0 && visibles <= 704, `R26: las columnas visibles suman ${visibles} px (caja de 704)`);
+  assert.match(colRec, /esPorConfirmar = \(r: \{ estado: string \}\) => grupoRecepcion\(/, 'por confirmar es el grupo de R9, no un estado inventado');
+  assert.ok(!/'PENDIENTE'/.test(colRec) && !/'PENDIENTE'/.test(pag), 'PENDIENTE no existe como estado de recepción');
+
+  // Carga del servidor (R5, C3, C4, D39, D40).
+  assert.match(pag, /const ID_RECEPCIONES = 'compras\.recepciones';/);
+  assert.match(pag, /const INICIAL_RECEPCIONES = \{ vista: 'por_confirmar' \};/);
+  assert.match(pag, /useEstadoTabla\(ID_RECEPCIONES, INICIAL_RECEPCIONES\)/);
+  const llamada = /useListado<FilaRecepcion>\(\{([\s\S]*?)\}\);/.exec(pag)?.[1] ?? '';
+  for (const parte of [/ruta: '\/compras\/recepciones'/, /(?:^|[,{]\s*)estado\s*,/, /conConteos: true/, /esperar: !listo/, /\bdespachar\b/, /extra: enKanban \? EXTRA_TABLERO : null/]) {
+    assert.match(llamada, parte, `useListado lleva ${parte}`);
+  }
+  assert.match(pag, /const EXTRA_TABLERO = \{ limit: 0 \};/, 'en Kanban la lista va sin filas (D39)');
+  assert.match(pag, /consultaColumnaRecepcion\(estado, columna, \{ orden, limit, offset \}\)/, 'la consulta de cada columna es la de la lib');
+  const tablero = /useTableroKanban<FilaRecepcion>\(\{([\s\S]*?)\n {2}\}\);/.exec(pag)?.[1] ?? '';
+  for (const parte of [/pantalla: ID_RECEPCIONES/, /modo: 'servidor'/, /columnas: COLUMNAS_RECEPCION/, /activo: listo && enKanban\b/, /porColumna: estado\.tamano/,
+    /dependencias: dependenciasTablero\(estado\)/]) {
+    assert.match(tablero, parte, `useTableroKanban lleva ${parte}`);
+  }
+  assert.match(pag, /useResumenFlujo<DatosFlujo>\('\/compras\/flujo', recargaFlujo\)/);
+  assert.match(pag, /`\/compras\/stats\?periodo=\$\{PERIODO_KPI\}`/);
+  assert.ok(!/compras\/(?:recepciones|pedidos)\?limit=100/.test(pag) && !/\.catch\(\(\) => (\[\]|\{\}|null)\)/.test(pag), 'ya no se cargan 100 ni se traga un error');
+  // El tablero solo para ver (KANBAN-logistica punto 5): soloLectura con su motivo, sin regla ni onCambio.
+  const tab = /<TableroKanban([\s\S]*?)\/>/.exec(pag)?.[1] ?? '';
+  assert.match(pag, /const TEXTO_SOLO_VER = 'Este tablero es para ver: las recepciones se confirman contando la mercancía\.';/);
+  assert.match(tab, /soloLectura=\{TEXTO_SOLO_VER\}/);
+  assert.match(tab, /tarjetaDe=\{tarjetaRecepcion\}/);
+  assert.match(tab, /onAbrir=\{abrir\}/, 'el clic abre el Drawer, como la fila');
+  assert.ok(!/regla=|onCambio=|onAccion=/.test(tab), 'sin regla: no se arrastra');
+  // La tabla (R26, D41): estándar en el servidor; toda la fila abre el Drawer; las vistas reales de RP41 y D6.
+  assert.match(pag, /<TablaEstandar\s+id=\{ID_RECEPCIONES\}\s+modo="servidor"/);
+  assert.match(pag, /onFila=\{abrir\}/, 'toda la fila abre el Drawer');
+  for (const [id, etiqueta] of [['por_confirmar', 'Por confirmar'], ['confirmadas', 'Confirmadas'], ['canceladas', 'Canceladas'], ['todas', 'Todas']]) {
+    assert.match(pag, new RegExp(`\\{ id: '${id}', etiqueta: '${etiqueta}', conteo: conteos\\?\\.${id} \\?\\? null`), `pestaña ${etiqueta}`);
+  }
+  const codigo = pag.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(!/'Pendientes'|'Completadas'|Regla de Separación|Mesa de Recepcion Activa|r\.estado === 'PENDIENTE'|!r\.stock_actualizado|row\.stock_actualizado/.test(codigo),
+    'sin las pestañas viejas, el estado que no existe ni la tarjeta/aviso de antes');
+  assert.match(pag, /opcionesEstados=\{enKanban \? OPCIONES_ESTADOS_TABLERO_RECEPCION : opcionesEstadosRecepcion\}/);
+  // «Abrir conteo» y Confirmar por fila: cada botón carga por su cuenta (confirmandoId) y se bloquea solo mientras otra confirmación va en camino.
+  assert.ok(!/\bconfirming\b/.test(pag), 'confirming (uno para todos) pasó a confirmandoId');
+  assert.match(pag, /const confirmando = acciones\?\.confirmandoId === r\.id;/, 'solo el botón de esa fila carga');
+  assert.match(pag, /disabled=\{acciones\?\.confirmandoId != null\}/, 'y los demás esperan');
+  assert.match(pag, /setConfirmandoId\(r\.id\);[\s\S]*finally \{\s*setConfirmandoId\(null\);\s*\}/, 'confirmandoId se pone y se quita siempre');
+  assert.match(pag, /aria-label=\{`Abrir el conteo de \$\{numero\}`\}/);
+  assert.match(pag, /aria-label=\{`Confirmar la recepción \$\{numero\}`\}/);
+  assert.match(pag, /href=\{`\/dashboard\/compras\/recepciones\/\$\{r\.id\}`\}/, '«Abrir conteo» va a /compras/recepciones/[id]');
+  assert.match(pag, /oculto: !porConfirmar/, 'Confirmar solo en una recepción por confirmar (BORRADOR), no en logísticas ni canceladas');
+  assert.match(pag, /avisarError\(err, `No se pudo confirmar \$\{numeroDeRecepcion\(r\)\}`\);\s*if \(recargarTrasError\(err\)\) recargarTodo\(\);/, 'un error se dice y, con la regla única, se recarga');
+  // El Drawer conserva «Confirmar Entrada Física y Actualizar Stock» y suma «Abrir conteo».
+  assert.match(pag, /Confirmar Entrada Física y Actualizar Stock/);
+  assert.match(pag, /<ClipboardList size=\{14\} aria-hidden="true" \/> Abrir conteo/);
+  // Las tarjetas (KPI-compras punto 8) y la nota; la franja (FLUJO-compras punto 9) sin semáforo.
+  for (const kpi of ['rec_por_confirmar', 'rec_confirmadas', 'pec_en_transito']) assert.match(pag, new RegExp(`<TarjetaKpi kpi="${kpi}"`), kpi);
+  assert.match(pag, /<FranjaKpis estado=\{estadoKpis\} titulo="Recepciones" nota=\{NOTA_RECEPCIONES\}>/);
+  assert.match(pag, /tarjetasRecepciones\(stats\?\.datos \?\? null\)/);
+  assert.match(pag, /activo=\{vistaActiva === 'por_confirmar'\} onClick=\{\(\) => elegirVista\('por_confirmar'\)\}/);
+  assert.match(pag, /activo=\{vistaActiva === 'confirmadas'\} onClick=\{\(\) => elegirVista\('confirmadas'\)\}/);
+  assert.match(pag, /pasos=\{pasosPantallaCompras\(flujo\.datos, 'RECEPCION'\)\}/);
+  assert.match(pag, /avisos=\{avisosFlujoCompras\(flujo\.datos\)\}/, 'RP46: «N recepciones por confirmar»');
+  assert.ok(!/semaforo=\{|noResueltos/.test(pag), 'Recepciones no tiene semáforo ni «No resueltos»');
+  // El selector de PEC: los estados recepcionables, pedidos al abrir, con su error a la vista y Reintentar (nunca [] en silencio).
+  assert.match(pag, /const ESTADOS_RECEPCIONABLES = 'EN_TRANSITO,PENDIENTE_ENTREGA,RECIBIDO,PARCIALMENTE_RECIBIDA';/);
+  assert.match(pag, /if \(!showPecModal\) return undefined;/, 'el selector pide los pedidos al abrirse');
+  assert.match(pag, /pecs\?\.error != null/);
+  assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(pag.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')), 'sin diálogos nativos');
 }
 
 console.log('\nOK: test_estados_compras.mjs');

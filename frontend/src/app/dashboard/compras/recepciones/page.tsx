@@ -1,76 +1,239 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
+import { usePathname, useRouter } from 'next/navigation';
+import { Check, ClipboardList, Eye, Info, PackageCheck, Plus, RefreshCw, Truck } from 'lucide-react';
+// B4 T16A: Recepciones 100 % sobre el servidor (R5, C3, C4): la tabla estándar con las vistas reales (Por confirmar ·
+// Confirmadas · Canceladas · Todas), el tablero solo para ver en modo servidor, las tarjetas rec_*, la nota en lugar de
+// «Regla de Separación» y la franja del flujo con «Estás aquí» en Recepción en bodega. Se conserva lo de B1 a B3: el Drawer
+// con «Confirmar entrada física», el selector de PEC por recepcionar y los textos del conteo.
 import {
-  PackageCheck, Activity, Search, RefreshCw,
-  CheckCircle2, Clock, Truck, ShieldCheck,
-  Plus, Info, Check
-} from 'lucide-react';
-import { apiFetch as _apiFetch } from '@/lib/api';
-import { coincideProducto } from '@/lib/busqueda';
-import { SubNav, PageHeader, StatCard, Badge, Modal, Drawer, Toast, Button, EmptyState } from '@/components/ui';
+  SubNav, PageHeader, Badge, Button, Modal, Drawer, EmptyState, MenuFila, useAvisos, FranjaKpis, TarjetaKpi, useEstadoKpi,
+  TableroKanban, useTableroKanban,
+} from '@/components/ui';
+import type { ItemMenuFila } from '@/components/ui';
+import {
+  BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
+} from '@/components/tabla';
+import type { AccionTabla, PestanaTabla } from '@/components/tabla';
+import { BannerFlujo, useResumenFlujo } from '@/components/flujo';
+import type { DatosFlujo } from '@/components/flujo';
 import { COMP_NAV } from '../comp-nav';
+import {
+  columnasRecepcion, esPorConfirmar, numeroDeRecepcion, pecDeRecepcion, titulosDeOrdenRecepcion,
+} from '../columnas-recepcion';
+import type { FilaColumnasRecepcion } from '../columnas-recepcion';
 
-async function apiFetch(path: string, opts: RequestInit = {}) {
-  const res = await _apiFetch(path, opts);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || data.message || 'Error al procesar solicitud');
-  return data.data ?? data;
+import { apiFetch } from '@/lib/api';
+import { accionModo, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta } from '@/lib/tabla';
+import { NOTA_RECEPCIONES, PERIODO_KPI, tarjetasRecepciones } from '@/lib/kpis';
+import { recargarTrasError, textoDeError } from '@/lib/avisos';
+import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
+import { accionVistaEnLista } from '@/lib/listas-ventas';
+import { fechaCorta } from '@/lib/fechas-colombia';
+import { formatoPesos } from '@/lib/pesos';
+import {
+  COLUMNAS_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, consultaColumnaRecepcion, diaPec, infoEstadoPec,
+  infoEstadoRecepcion, opcionesEstadosRecepcion, tarjetaRecepcion, textoVacioRecepciones,
+} from '@/lib/estados-compras';
+import { avisosFlujoCompras, pasosPantallaCompras, textoReglaCompras } from '@/lib/flujo-compras';
+
+/** Una línea de la recepción (productos de _gr_dict; los nombres de campo cambian según quién la creó). */
+type LineaRecepcion = {
+  product_name?: string; nombre?: string; descripcion?: string; sku?: string; destino?: string;
+  qty_esperada?: number; quantity_expected?: number; qty?: number; cantidad?: number;
+  qty_recibida?: number; quantity_received?: number;
+};
+/** Una fila de GET /compras/recepciones (el _gr_dict de T12). dias_retraso es del servidor. */
+type FilaRecepcion = FilaColumnasRecepcion & { warehouse_id?: number | null; notas?: string | null };
+/** Un pedido de compra del selector «Recepcionar PEC» (GET /compras/pedidos). */
+type PecPorRecepcionar = {
+  id: number; numero: string; estado: string; supplier_name?: string | null; ven_numero?: string | null;
+  fecha_entrega_estimada?: string | null; total_cop?: number | null;
+};
+/** `conteos` de GET /compras/recepciones con con_conteos=1 (T12): cada vista, con la búsqueda (R5). */
+type ConteosRecepcion = Partial<Record<'por_confirmar' | 'confirmadas' | 'canceladas' | 'todas', number>>;
+
+/** El id de la pantalla: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26). */
+const ID_RECEPCIONES = 'compras.recepciones';
+/** RP41, D6: la pestaña de trabajo es Por confirmar. */
+const INICIAL_RECEPCIONES = { vista: 'por_confirmar' };
+/** D39: en Kanban la lista va sin filas (limit=0); los conteos siguen al día y las filas las piden las columnas. */
+const EXTRA_TABLERO = { limit: 0 };
+/** El motivo de un tablero solo para ver (R11, KANBAN-logistica punto 5). */
+const TEXTO_SOLO_VER = 'Este tablero es para ver: las recepciones se confirman contando la mercancía.';
+/** Los estados del PEC que se pueden recepcionar: en camino y los que ya llegaron a bodega (R9). */
+const ESTADOS_RECEPCIONABLES = 'EN_TRANSITO,PENDIENTE_ENTREGA,RECIBIDO,PARCIALMENTE_RECIBIDA';
+/** El contenedor de los Hubs y de las listas del bloque (T7 a T15): pb-24 deja libre la esquina del botón de la IA. */
+const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
+const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-700';
+const fCOP = (v: unknown) => (Number(v) > 0 ? formatoPesos(v) : '—');
+
+/** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
+type AccionesFilaRecepcion = {
+  abrir: (r: FilaRecepcion) => void;
+  abrirConteo: (r: FilaRecepcion) => void;
+  confirmar: (r: FilaRecepcion) => void;
+  /** La recepción cuyo «Confirmar» está en camino: solo ese botón muestra la carga (antes, todos a la vez). */
+  confirmandoId: number | null;
+};
+const AccionesFila = React.createContext<AccionesFilaRecepcion | null>(null);
+
+const BOTON_FILA = `rounded-lg p-1.5 transition-colors ${FOCO_VISIBLE}`;
+
+/**
+ * Acciones (R11): «Abrir conteo» (hacia /compras/recepciones/{id}), «Confirmar» (solo una recepción por confirmar; cada
+ * botón carga por su cuenta, confirmandoId) y el menú ⋯ (MenuFila: clic y portal) con «Ver detalle», «Abrir conteo» y
+ * «Confirmar». Todo lleva el número de la recepción en su aria-label.
+ */
+function CeldaAcciones({ r }: { r: FilaRecepcion }) {
+  const acciones = useContext(AccionesFila);
+  const numero = numeroDeRecepcion(r);
+  const porConfirmar = esPorConfirmar(r);
+  const confirmando = acciones?.confirmandoId === r.id;
+  const items: ItemMenuFila[] = [
+    { etiqueta: 'Ver detalle', icono: Eye, onClick: () => acciones?.abrir(r) },
+    { etiqueta: 'Abrir conteo', icono: ClipboardList, onClick: () => acciones?.abrirConteo(r) },
+    { etiqueta: 'Confirmar', icono: Check, onClick: () => acciones?.confirmar(r), oculto: !porConfirmar,
+      deshabilitado: acciones?.confirmandoId != null, titulo: acciones?.confirmandoId != null ? 'Hay otra confirmación en camino.' : undefined },
+  ];
+  return (
+    <span className="flex items-center justify-end gap-0.5">
+      <Link href={`/dashboard/compras/recepciones/${r.id}`} aria-label={`Abrir el conteo de ${numero}`} title="Abrir conteo"
+        className={`${BOTON_FILA} text-teal-700 hover:bg-teal-50`}>
+        <ClipboardList size={14} aria-hidden="true" />
+      </Link>
+      {porConfirmar && (
+        <button type="button" onClick={() => acciones?.confirmar(r)} disabled={acciones?.confirmandoId != null}
+          aria-label={`Confirmar la recepción ${numero}`} aria-busy={confirmando}
+          className={`inline-flex items-center gap-1 rounded-lg border border-teal-700 bg-teal-700 px-2 py-1 text-xs font-bold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60 ${FOCO_VISIBLE}`}>
+          {confirmando && <RefreshCw size={12} aria-hidden="true" className="animate-spin" />}
+          Confirmar
+        </button>
+      )}
+      <MenuFila items={items} etiqueta={`Acciones de ${numero}`} />
+    </span>
+  );
 }
 
-const fCOP = (v: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0);
-const fDate = (d: any) => d ? new Date(d).toLocaleDateString('es-CO', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
+/**
+ * B4 T16A, la tabla (TABLA-compras punto 9; R26, D41): las columnas de columnas-recepcion.tsx (compartidas con Inventario ›
+ * Recepciones, T19) con la celda de Acciones de esta lista. Una constante (estable, D40). Retraso, Bodega, Ítems y Stock
+ * van ocultas por defecto.
+ */
+const COLUMNAS_TABLA_RECEPCIONES = columnasRecepcion<FilaRecepcion>((r) => <CeldaAcciones r={r} />);
+/** {campo de orden: título}, para el chip «Orden: Fecha ↓», solo de las columnas que se ordenan. */
+const TITULOS_ORDEN_RECEPCIONES = titulosDeOrdenRecepcion(COLUMNAS_TABLA_RECEPCIONES);
 
+/**
+ * Las pestañas de Recepciones (RP41, D6, sin emojis): las vistas de GET /compras/recepciones, con los conteos del servidor
+ * (con la búsqueda; null mientras cargan: la barra gris, nunca 0). Por confirmar va en ámbar si hay alguna.
+ */
+function pestanasDeRecepciones(conteos: ConteosRecepcion | null): PestanaTabla[] {
+  return [
+    { id: 'por_confirmar', etiqueta: 'Por confirmar', conteo: conteos?.por_confirmar ?? null, alerta: (conteos?.por_confirmar ?? 0) > 0 },
+    { id: 'confirmadas', etiqueta: 'Confirmadas', conteo: conteos?.confirmadas ?? null },
+    { id: 'canceladas', etiqueta: 'Canceladas', conteo: conteos?.canceladas ?? null },
+    { id: 'todas', etiqueta: 'Todas', conteo: conteos?.todas ?? null },
+  ];
+}
+
+/* ================================================================
+   MAIN PAGE — RecepcionesPage (B4 T16A)
+   ================================================================ */
 export default function RecepcionesPage() {
-  const [recepciones, setRecepciones] = useState<any[]>([]);
-  const [pecsEnTransito, setPecsEnTransito] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'Pendientes' | 'Completadas' | 'Todas'>('Pendientes');
-  const [search, setSearch] = useState('');
-  const [selectedItem, setSelectedItem] = useState<any | null>(null);
-  const [isDrawerOpen, setDrawerOpen] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-  const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'error' } | null>(null);
+  const pathname = usePathname();
+  const router = useRouter();
+  const { avisar, avisarError } = useAvisos();
 
-  // Modal para iniciar recepcion desde un PEC
+  // ── bloque 1: la carga del servidor (TABLA-compras punto 9; R5, C3, C4; D39, D40) ──
+  // El estado ÚNICO de la pantalla: las pestañas, la búsqueda, el filtro de estados, las tarjetas, la tabla y el tablero
+  // despachan a él. El modo (Lista o Kanban) se guarda en vista:compras.recepciones.
+  const [estado, despachar, listo] = useEstadoTabla(ID_RECEPCIONES, INICIAL_RECEPCIONES);
+  const enKanban = estado.modo === 'kanban';
+  const [selectedItem, setSelectedItem] = useState<FilaRecepcion | null>(null);
+  const [confirmandoId, setConfirmandoId] = useState<number | null>(null);
+
+  // GET /compras/recepciones con vista, estados, q, orden, limit y offset del estado, más los conteos de las pestañas en la
+  // MISMA llamada. esperar: !listo (D40): el esqueleto, nunca «vacío». En Kanban, sin filas. Sin orden, el del servidor
+  // (la más reciente primero).
+  const listado = useListado<FilaRecepcion>({
+    ruta: '/compras/recepciones', estado, conConteos: true, esperar: !listo, despachar, extra: enKanban ? EXTRA_TABLERO : null,
+  });
+  // m5 de T8: mientras la última respuesta sea la de Kanban (sin filas) y la tabla ya pida su página, la tabla está
+  // cargando y el total en 'cargando': nunca «No hay recepciones…» con el total de la otra consulta.
+  const [llegada, setLlegada] = useState(() => llegadaDeListado(null, null, false));
+  const llegadaAhora = llegadaDeListado(llegada, listado.crudo, enKanban);
+  if (llegadaAhora !== llegada) setLlegada(llegadaAhora);
+  const sinPagina = !enKanban && llegadaAhora.sinFilas && !listado.error;
+  const conteos = listado.conteos as ConteosRecepcion | null;
+  const estadoConteos = useEstadoKpi(listado.cargandoInicial || listado.recargando, listado.error);
+
+  // El tablero solo para ver, en modo servidor (KANBAN-logistica punto 5; R11, C4, D39): una consulta por columna
+  // (consultaColumnaRecepcion: sin vista, los estados de la columna cruzados con el filtro y la búsqueda del MISMO estado),
+  // porColumna = el tamaño de la tabla y limit=0 en las plegadas (lo hace el hook).
+  const tablero = useTableroKanban<FilaRecepcion>({
+    pantalla: ID_RECEPCIONES,
+    modo: 'servidor',
+    columnas: COLUMNAS_RECEPCION,
+    activo: listo && enKanban,
+    porColumna: estado.tamano,
+    dependencias: dependenciasTablero(estado),
+    cargar: async (columna, { offset, limit, orden, signal }) => {
+      const consulta = consultaColumnaRecepcion(estado, columna, { orden, limit, offset });
+      if (consulta === null) return { filas: [], total: 0 };
+      return normalizarRespuesta(await apiFetch(`/compras/recepciones?${consulta}`, { signal }));
+    },
+  });
+
+  // La franja del flujo (FLUJO-compras punto 9; R9, RP46, D36, D42): GET /compras/flujo; recargaFlujo sube con cada recarga.
+  const [recargaFlujo, setRecargaFlujo] = useState(0);
+  const flujo = useResumenFlujo<DatosFlujo>('/compras/flujo', recargaFlujo);
+
+  // Las tarjetas (KPI-compras punto 8; R7, R12): GET /compras/stats?periodo=30d, sin respaldo local. Mientras no llega,
+  // 'cargando' (nunca 0); si falla, «—».
+  const [vueltaStats, setVueltaStats] = useState(0);
+  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
+  useEffect(() => {
+    const control = new AbortController();
+    apiFetch(`/compras/stats?periodo=${PERIODO_KPI}`, { signal: control.signal })
+      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
+      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
+    return () => control.abort();
+  }, [vueltaStats]);
+  const cargandoStats = stats?.vuelta !== vueltaStats;
+  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
+  const tarjetas = tarjetasRecepciones(stats?.datos ?? null);
+
+  // «Actualizar» y lo que sigue a confirmar o recepcionar: la lista con sus conteos, el tablero, la franja y las tarjetas.
+  // Ninguna recarga vacía lo que se ve: los hooks conservan lo último.
+  const { recargar: recargarListado } = listado;
+  const { recargar: recargarTablero } = tablero;
+  const recargarTodo = useCallback(() => {
+    recargarListado();
+    recargarTablero();
+    setRecargaFlujo((n) => n + 1);
+    setVueltaStats((n) => n + 1);
+  }, [recargarListado, recargarTablero]);
+
+  // ── el selector «Recepcionar PEC» (B1 a B3): los pedidos en camino o ya en bodega, pedidos al abrir la ventana ──
   const [showPecModal, setShowPecModal] = useState(false);
   const [creatingFromPec, setCreatingFromPec] = useState<number | null>(null);
-
-  const showToast = (msg: string, type: 'ok' | 'error' = 'ok') => {
-    setToast({ msg, type });
-    setTimeout(() => setToast(null), 3500);
-  };
-
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [recs, pecs] = await Promise.all([
-        apiFetch('/compras/recepciones?limit=100').catch(() => []),
-        apiFetch('/compras/pedidos?limit=100').catch(() => []),
-      ]);
-      const recList = Array.isArray(recs) ? recs : (recs?.data ?? []);
-      const pecList = Array.isArray(pecs) ? pecs : (pecs?.data ?? []);
-
-      setRecepciones(recList);
-      // Filtrar PECs que esten en camino o listos para recepcion fisica.
-      // Los valores reales de PurchaseOrderFull.estado son EN_TRANSITO (tracking
-      // en curso) y RECIBIDO/RECIBIDA (todas las etapas de tracking completadas
-      // -- ver update_tracking en erp_compras.py). Antes esta lista solo tenia
-      // nombres que erp_compras.py nunca produce, asi que un PEC que terminaba
-      // su tracking (RECIBIDO) desaparecia de este picker en vez de aparecer.
-      setPecsEnTransito(pecList.filter((p: any) =>
-        ['EN_TRANSITO', 'RECIBIDO', 'RECIBIDA'].includes(p.estado)
-      ));
-    } catch {
-      showToast('Error al cargar recepciones', 'error');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
+  const [vueltaPecs, setVueltaPecs] = useState(0);
+  const [pecs, setPecs] = useState<{ vuelta: number; filas: PecPorRecepcionar[]; error: unknown } | null>(null);
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    if (!showPecModal) return undefined;
+    const control = new AbortController();
+    apiFetch(`/compras/pedidos?estados=${ESTADOS_RECEPCIONABLES}&orden=atencion&limit=200`, { signal: control.signal })
+      .then((r: unknown) => setPecs({ vuelta: vueltaPecs, filas: normalizarRespuesta(r).filas as PecPorRecepcionar[], error: null }))
+      .catch((err: unknown) => { if (!control.signal.aborted) setPecs({ vuelta: vueltaPecs, filas: [], error: err }); });
+    return () => control.abort();
+  }, [showPecModal, vueltaPecs]);
+  const cargandoPecs = pecs?.vuelta !== vueltaPecs;
+
+  const abrir = useCallback((r: FilaRecepcion) => setSelectedItem(r), []);
+  const abrirConteo = useCallback((r: FilaRecepcion) => router.push(`/dashboard/compras/recepciones/${r.id}`), [router]);
 
   const handleCrearDesdePec = async (pecId: number) => {
     setCreatingFromPec(pecId);
@@ -78,240 +241,212 @@ export default function RecepcionesPage() {
       const user = localStorage.getItem('user_name') || 'Mesa de Recepcion';
       const res = await apiFetch(`/compras/pedidos/${pecId}/recepcionar`, {
         method: 'POST',
-        body: JSON.stringify({
-          created_by: user,
-          force_full: false,
-          notas: 'Recepcion generada en Mesa de Entrada'
-        })
+        body: JSON.stringify({ created_by: user, force_full: false, notas: 'Recepcion generada en Mesa de Entrada' }),
       });
-      showToast('Recepcion ENINV creada exitosamente');
+      avisar('Recepción ENINV creada correctamente', { tono: 'ok' });
       setShowPecModal(false);
-      await loadData();
-      if (res?.data || res) {
-        setSelectedItem(res?.data || res);
-        setDrawerOpen(true);
-      }
-    } catch (e: any) {
-      showToast(e.message, 'error');
+      recargarTodo();
+      const creada = res?.data ?? res;
+      if (creada && typeof creada === 'object') setSelectedItem(creada as FilaRecepcion);
+    } catch (err) {
+      avisarError(err, 'No se pudo crear la recepción');
+      if (recargarTrasError(err)) setVueltaPecs((n) => n + 1);
     } finally {
       setCreatingFromPec(null);
     }
   };
 
-  const handleConfirmarRecepcion = async (recId: number) => {
-    setConfirming(true);
+  // Confirmar (la fila, el menú o el Drawer): cada botón carga por su cuenta (confirmandoId). Si el servidor dice que no, su
+  // mensaje tal cual; con la regla única recargarTrasError (un 404 o un 409), se recarga lo que se ve.
+  const handleConfirmarRecepcion = useCallback(async (r: FilaRecepcion) => {
+    setConfirmandoId(r.id);
     try {
       const user = localStorage.getItem('user_name') || 'Operario Bodega';
       const idempotencyKey = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `rec-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-
-      await apiFetch(`/compras/recepciones/${recId}/confirmar`, {
+      await apiFetch(`/compras/recepciones/${r.id}/confirmar`, {
         method: 'POST',
-        body: JSON.stringify({
-          idempotency_key: idempotencyKey,
-          receipt_type: 'FISICA',
-          user_name: user,
-          notas: 'Confirmado en mesa de recepcion Nebulae'
-        })
+        body: JSON.stringify({ idempotency_key: idempotencyKey, receipt_type: 'FISICA', user_name: user, notas: 'Confirmado en mesa de recepcion Nebulae' }),
       });
-
-      showToast('Recepcion confirmada y stock actualizado correctamente');
-      setDrawerOpen(false);
-      loadData();
-    } catch (e: any) {
-      showToast(e.message, 'error');
+      avisar('Recepción confirmada y stock actualizado correctamente', { tono: 'ok' });
+      setSelectedItem(null);
+      recargarTodo();
+    } catch (err) {
+      avisarError(err, `No se pudo confirmar ${numeroDeRecepcion(r)}`);
+      if (recargarTrasError(err)) recargarTodo();
     } finally {
-      setConfirming(false);
+      setConfirmandoId(null);
     }
+  }, [avisar, avisarError, recargarTodo]);
+  const accionesFila = useMemo<AccionesFilaRecepcion>(() => ({
+    abrir, abrirConteo, confirmar: (r) => { void handleConfirmarRecepcion(r); }, confirmandoId,
+  }), [abrir, abrirConteo, handleConfirmarRecepcion, confirmandoId]);
+
+  // ── bloque 2: la tabla (TABLA-compras punto 9; R5, R26, D40, D41) ──
+  const prefs = usePreferenciasTabla(ID_RECEPCIONES, COLUMNAS_TABLA_RECEPCIONES);
+  const anchoTablaRef = useRef<number | null>(null);
+  // Desestructurado: con el objeto entero en ref={…}, react-hooks/refs marca «Cannot access refs during render».
+  const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
+  // Pasar a Kanban sale de la pantalla completa (el conmutador sigue a la vista y el tablero no queda tapado).
+  useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
+  const pestanas = pestanasDeRecepciones(conteos);
+  // m2 de T8: el conmutador Lista / Kanban poda los estados con las opciones del modo nuevo (las columnas del tablero, o las
+  // de la pestaña en Lista), con la regla de accionPestana (accionModo); lo demás de la barra va directo.
+  const alCambiarBarra = useCallback((accion: AccionTabla) => {
+    if (accion.tipo === 'modo') {
+      const modo = String(accion.valor);
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_RECEPCION : opcionesEstadosRecepcion));
+    } else despachar(accion);
+  }, [estado, despachar]);
+  // R8: ordenada por una columna, el chip «Orden: … · Más recientes» vuelve al orden del servidor.
+  const textoOrden = enKanban || !estado.orden || ordenEsAtencion(estado.orden) ? null : textoOrdenHub(estado.orden, TITULOS_ORDEN_RECEPCIONES);
+  const vacio = useMemo(() => {
+    const texto = textoVacioRecepciones({ vista: estado.vista, q: estado.q, estados: estado.estados });
+    return (
+      <div>
+        <p className="font-semibold text-slate-600">{texto.titulo}</p>
+        {texto.ayuda && <p className="mt-1 text-xs text-slate-500">{texto.ayuda}</p>}
+      </div>
+    );
+  }, [estado.vista, estado.q, estado.estados]);
+  // «N resultados» es el de la tabla; en Kanban cada columna trae su total (la barra no lo repite).
+  const totalDeLaBarra = enKanban ? {} : {
+    total: sinPagina ? null : listado.total,
+    estadoTotal: estadoDelTotal({
+      total: listado.total, cargando: listado.cargandoInicial || sinPagina, recargando: listado.recargando, error: listado.error,
+    }),
   };
 
-  const pendientesCount = recepciones.filter(r => r.estado === 'PENDIENTE' || !r.stock_actualizado).length;
-  const completadasCount = recepciones.filter(r => r.estado === 'COMPLETADA' || r.stock_actualizado).length;
+  // ── bloque 4: las tarjetas (KPI-compras punto 8; R5, R12) ──
+  // rec_por_confirmar abre «Por confirmar» y rec_confirmadas «Confirmadas» (D41: como un clic en la pestaña; tocar la activa
+  // vuelve a Todas). En Kanban abren esa pestaña en Lista (accionVistaEnLista). Los PEC en tránsito son informativos.
+  const vistaActiva = enKanban ? null : estado.vista;
+  const elegirVista = (vista: string) => {
+    const siguiente = vistaActiva === vista ? 'todas' : vista;
+    despachar(accionVistaEnLista(estado, siguiente, opcionesEstadosRecepcion));
+  };
+  const actualizando = listado.recargando || flujo.cargando || (cargandoStats && stats !== null);
 
-  const filtered = recepciones.filter(r => {
-    const term = search.toLowerCase();
-    const match = !search ||
-      (r.numero || '').toLowerCase().includes(term) ||
-      (r.pec_numero || '').toLowerCase().includes(term) ||
-      (r.proveedor_nombre || '').toLowerCase().includes(term) ||
-      coincideProducto(r, search);
-
-    if (!match) return false;
-    if (activeTab === 'Pendientes') return r.estado === 'PENDIENTE' || !r.stock_actualizado;
-    if (activeTab === 'Completadas') return r.estado === 'COMPLETADA' || r.stock_actualizado;
-    return true;
-  });
-
+  /* ════════════════ RENDER ════════════════ */
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col animate-in fade-in">
-      <Toast toast={toast} onClose={() => setToast(null)} />
+    <div className="min-h-screen bg-slate-50 flex flex-col">
 
-      <SubNav label="Hub de Compras" items={COMP_NAV} currentPath="/dashboard/compras/recepciones" color="teal" hub={{ href: '/dashboard/compras' }} />
+      <SubNav label="Hub de Compras" items={COMP_NAV} currentPath={pathname} color="teal" hub={{ href: '/dashboard/compras' }} />
 
-      {/* Banner de Accion Requerida */}
-      {pendientesCount > 0 && (
-        <div className="bg-amber-50 border-l-4 border-amber-500 p-4 mx-6 mt-6 rounded-r-xl flex items-start justify-between gap-3 shadow-sm">
-          <div className="flex items-start gap-3">
-            <Activity className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
-            <div>
-              <h3 className="text-amber-900 font-bold text-sm">Mesa de Recepcion Activa</h3>
-              <p className="text-amber-700 text-xs mt-0.5">
-                Hay <strong>{pendientesCount}</strong> recepcion(es) pendientes de conteo y verificacion fisica en bodega.
-              </p>
-            </div>
-          </div>
-          <Button size="sm" color="teal" onClick={() => setShowPecModal(true)}>
-            + Nueva Entrada desde PEC
-          </Button>
-        </div>
-      )}
+      {/* B4 T16A (FLUJO-compras punto 9; R9, RP46, D42): la franja con «Estás aquí» en Recepción en bodega y el aviso «N
+          recepciones por confirmar» reemplaza el banner ámbar «Mesa de Recepcion Activa». Sin semáforo (la recepción no
+          tiene atraso propio) ni «No resueltos». Va directo bajo la barra de submódulos, sin otro padding. */}
+      <BannerFlujo
+        titulo="Flujo de compras"
+        idPreferencia={ID_RECEPCIONES}
+        regla={textoReglaCompras()}
+        pasos={pasosPantallaCompras(flujo.datos, 'RECEPCION')}
+        avisos={avisosFlujoCompras(flujo.datos)}
+        cargando={flujo.cargando}
+        error={flujo.error}
+        onReintentar={flujo.recargar}
+      />
 
-      {/* Titulo y Acciones */}
-      <div className="px-6 mt-6">
+      <div className={CONTENEDOR}>
+
         <PageHeader
           icon={PackageCheck} color="teal"
           title="Mesa de Recepciones Físico-Digital"
           subtitle="Inspección física y separación por destino: Cliente (despacho), Stock Nebulae (disponible) y Socio Mau."
           actions={(
-            <div className="flex gap-2.5">
+            <div className="flex flex-wrap items-center gap-2.5">
               <Button size="sm" color="teal" icon={Plus} onClick={() => setShowPecModal(true)}>
                 Recepcionar PEC
               </Button>
-              <button
-                onClick={loadData}
-                className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-3.5 py-2.5 rounded-xl flex items-center gap-2 text-xs font-bold shadow-sm transition-colors"
-              >
-                <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Actualizar
+              <button type="button" onClick={recargarTodo}
+                className={`flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 text-xs font-bold shadow-sm transition-colors ${FOCO_VISIBLE}`}>
+                <RefreshCw size={13} aria-hidden="true" className={actualizando ? 'animate-spin' : ''} /> Actualizar
               </button>
             </div>
           )}
         />
-      </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 px-6 mt-6">
-        <StatCard icon={Clock} color="amber" label="Pendientes Mesa" value={pendientesCount} hint="Por confirmar entrada física" />
-        <StatCard icon={CheckCircle2} color="emerald" label="Confirmadas" value={completadasCount} hint="Stock ingresado al ERP" />
-        <StatCard icon={Truck} color="blue" label="PECs en Tránsito" value={pecsEnTransito.length} hint="En camino o aduana" />
-        <StatCard variant="gradient" color="teal" icon={ShieldCheck} label="Regla de Separación"
-          value={<span className="text-sm font-bold leading-relaxed">Los ítems de <strong>Cliente</strong> no se mezclan con stock libre; van directamente a la cola de despacho y saldo del 40%.</span>} />
-      </div>
+        {/* B4 T16A (KPI-compras punto 8; R7, R12): las 3 tarjetas de /compras/stats (todas las recepciones y los PEC en
+            tránsito): mientras cargan, barras grises (nunca 0); con error, «—». La nota corta reemplaza la tarjeta «Regla de
+            Separación». */}
+        <FranjaKpis estado={estadoKpis} titulo="Recepciones" nota={NOTA_RECEPCIONES}>
+          <TarjetaKpi kpi="rec_por_confirmar" valor={tarjetas?.por_confirmar.valor ?? null}
+            activo={vistaActiva === 'por_confirmar'} onClick={() => elegirVista('por_confirmar')} />
+          <TarjetaKpi kpi="rec_confirmadas" valor={tarjetas?.confirmadas.valor ?? null}
+            activo={vistaActiva === 'confirmadas'} onClick={() => elegirVista('confirmadas')} />
+          <TarjetaKpi kpi="pec_en_transito" valor={tarjetas?.en_transito.valor ?? null} />
+        </FranjaKpis>
 
-      {/* Tabla Principal */}
-      <div className="mx-6 my-6 flex-1 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center px-6 py-4 border-b border-slate-200 bg-slate-50/50 gap-4">
-          <div className="flex gap-2">
-            {(['Pendientes', 'Completadas', 'Todas'] as const).map(tab => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                className={`text-xs font-bold px-4 py-2 rounded-xl transition-all ${
-                  activeTab === tab
-                    ? 'bg-teal-600 text-white shadow-sm'
-                    : 'text-slate-600 hover:bg-slate-200/60'
-                }`}
-              >
-                {tab}
-              </button>
-            ))}
-          </div>
-          <div className="relative w-full sm:w-72">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-            <input
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Buscar ENINV, PEC, Proveedor, producto..."
-              className="pl-9 pr-4 py-2 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-teal-500 w-full bg-white"
-            />
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-auto">
-          <table className="w-full text-left border-collapse">
-            <thead className="bg-slate-50/80 sticky top-0 z-10 border-b border-slate-200 text-[11px] uppercase text-slate-400 font-black">
-              <tr>
-                <th className="px-6 py-3.5">Recepción #</th>
-                <th className="px-6 py-3.5">PEC Origen</th>
-                <th className="px-6 py-3.5">Proveedor</th>
-                <th className="px-6 py-3.5">Bodega</th>
-                <th className="px-6 py-3.5">Fecha</th>
-                <th className="px-6 py-3.5 text-center">Ítems</th>
-                <th className="px-6 py-3.5">Estado</th>
-                <th className="px-6 py-3.5 text-center">Stock</th>
-                <th className="px-6 py-3.5 text-right">Acción</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-xs">
-              {loading ? (
-                <tr>
-                  <td colSpan={9} className="px-6 py-12 text-center text-slate-400">
-                    <RefreshCw size={24} className="animate-spin text-teal-500 mx-auto mb-2" />
-                    Cargando recepciones de inventario...
-                  </td>
-                </tr>
-              ) : filtered.length === 0 ? (
-                <tr>
-                  <td colSpan={9}>
-                    <EmptyState icon={PackageCheck} message="No se encontraron recepciones en este filtro" hint='Usa "+ Recepcionar PEC" para iniciar la entrada física de un pedido.' />
-                  </td>
-                </tr>
-              ) : (
-                filtered.map((row, i) => {
-                  const isPending = row.estado === 'PENDIENTE' || !row.stock_actualizado;
-                  return (
-                    <tr key={row.id || i} className="hover:bg-slate-50/80 transition-colors group">
-                      <td className="px-6 py-3.5 font-black text-teal-700 cursor-pointer" onClick={() => { setSelectedItem(row); setDrawerOpen(true); }}>
-                        {row.numero || `ENINV-${row.id}`}
-                      </td>
-                      <td className="px-6 py-3.5 font-bold text-purple-700">
-                        {row.pec_numero || (row.pec_id ? `PEC-${row.pec_id}` : 'Manual')}
-                      </td>
-                      <td className="px-6 py-3.5 font-medium text-slate-800">
-                        {row.supplier_name || row.proveedor_nombre || 'Proveedor Nebulae'}
-                      </td>
-                      <td className="px-6 py-3.5 text-slate-600">
-                        {row.warehouse_name || 'Bodega Principal'}
-                      </td>
-                      <td className="px-6 py-3.5 text-slate-500">
-                        {fDate(row.fecha_recepcion || row.created_at)}
-                      </td>
-                      <td className="px-6 py-3.5 text-center font-bold text-slate-700">
-                        {(row.lineas || row.productos || []).length || row.items_count || 1}
-                      </td>
-                      <td className="px-6 py-3.5">
-                        <Badge tone={isPending ? 'warning' : 'success'}>
-                          {row.estado || (isPending ? 'PENDIENTE' : 'COMPLETADA')}
-                        </Badge>
-                      </td>
-                      <td className="px-6 py-3.5 text-center">
-                        {row.stock_actualizado ? (
-                          <Badge tone="success" icon={CheckCircle2}>Sí</Badge>
-                        ) : (
-                          <Badge tone="neutral">Pendiente</Badge>
-                        )}
-                      </td>
-                      <td className="px-6 py-3.5 text-right">
-                        <div className="flex justify-end gap-2">
-                          <Button size="sm" variant="secondary" onClick={() => { setSelectedItem(row); setDrawerOpen(true); }}>
-                            Inspeccionar
-                          </Button>
-                          {isPending && (
-                            <Button size="sm" color="teal" loading={confirming} onClick={() => handleConfirmarRecepcion(row.id)}>
-                              Confirmar
-                            </Button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
+        {/* B4 T16A (TABLA-compras punto 9, KANBAN-logistica punto 5): la barra y la tabla estándar en el servidor, o el
+            tablero solo para ver en modo servidor, con el MISMO estado (pestaña, búsqueda y estados). En Kanban las
+            pestañas no se ven (el tablero muestra todas las recepciones por grupo). */}
+        <div className="flex min-w-0 flex-col gap-4">
+          {capa}
+          <AccionesFila.Provider value={accionesFila}>
+            <section ref={refTarjeta} className={claseTarjeta}>
+              <BarraTabla
+                estado={estado}
+                onEstado={alCambiarBarra}
+                pestanas={enKanban ? undefined : pestanas}
+                estadoConteos={estadoConteos}
+                placeholder="Buscar por recepción, PEC, proveedor o bodega…"
+                opcionesEstados={enKanban ? OPCIONES_ESTADOS_TABLERO_RECEPCION : opcionesEstadosRecepcion}
+                filtros={textoOrden ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-600">
+                    {textoOrden}
+                    <span aria-hidden="true">·</span>
+                    <button type="button" onClick={() => despachar({ tipo: 'orden', valor: null })}
+                      className={`rounded font-bold text-teal-700 hover:underline ${FOCO_VISIBLE}`}>
+                      Más recientes
+                    </button>
+                  </span>
+                ) : undefined}
+                ajustes={{ columnas: COLUMNAS_TABLA_RECEPCIONES, preferencias: prefs, anchoRef: anchoTablaRef }}
+                kanbanDisponible
+                pantallaCompleta={enKanban ? undefined : { completa, alternar }}
+                color="teal"
+                {...totalDeLaBarra}
+              />
+              {/* La tabla estándar en el servidor: la paginación (25 o 50) y el orden son de la tabla; un clic en la fila
+                  abre el Drawer. */}
+              {!enKanban && (
+                <TablaEstandar
+                  id={ID_RECEPCIONES}
+                  modo="servidor"
+                  columnas={COLUMNAS_TABLA_RECEPCIONES}
+                  preferencias={prefs}
+                  anchoRef={anchoTablaRef}
+                  estado={estado}
+                  onEstado={despachar}
+                  filas={listado.filas}
+                  total={sinPagina ? null : listado.total}
+                  cargando={listado.cargandoInicial || sinPagina}
+                  recargando={listado.recargando}
+                  error={listado.error}
+                  onReintentar={listado.recargar}
+                  aviso={listado.avisoOrden}
+                  onFila={abrir}
+                  vacio={vacio}
+                  etiqueta="Recepciones"
+                />
               )}
-            </tbody>
-          </table>
+            </section>
+          </AccionesFila.Provider>
+          {enKanban ? (
+            /* KANBAN-logistica punto 5: Por contar · Confirmadas (plegada) · Canceladas (plegada), solo para ver: sin regla,
+               con su motivo. El clic abre el Drawer, como la fila; «Contar y confirmar» lleva al conteo. */
+            <TableroKanban
+              tablero={tablero}
+              soloLectura={TEXTO_SOLO_VER}
+              tarjetaDe={tarjetaRecepcion}
+              onAbrir={abrir}
+              color="teal"
+              vacio="Sin recepciones aquí"
+            />
+          ) : null}
         </div>
       </div>
 
-      {/* MODAL SELECCIONAR PEC PARA RECEPCIONAR */}
+      {/* MODAL SELECCIONAR PEC PARA RECEPCIONAR (B1 a B3) */}
       {showPecModal && (
         <Modal
           title="Iniciar Entrada desde Pedido de Compra"
@@ -321,16 +456,25 @@ export default function RecepcionesPage() {
           onClose={() => setShowPecModal(false)}
           footer={<Button variant="secondary" onClick={() => setShowPecModal(false)}>Cancelar</Button>}
         >
-          {pecsEnTransito.length === 0 ? (
-            <EmptyState icon={Truck} message="No hay pedidos de compra activos para recepcionar." />
+          {cargandoPecs ? (
+            <div role="status" className="flex items-center justify-center gap-2 py-8 text-sm text-slate-500">
+              <RefreshCw size={16} aria-hidden="true" className="animate-spin text-teal-500" /> Buscando los pedidos de compra…
+            </div>
+          ) : pecs?.error != null ? (
+            <div role="alert" className="py-6 text-center text-sm text-rose-700">
+              {textoDeError(pecs.error, 'No se pudieron cargar los pedidos de compra')}.{' '}
+              <button type="button" onClick={() => setVueltaPecs((n) => n + 1)} className={`rounded font-bold underline ${FOCO_VISIBLE}`}>Reintentar</button>
+            </div>
+          ) : (pecs?.filas.length ?? 0) === 0 ? (
+            <EmptyState icon={Truck} message="No hay pedidos de compra en camino para recepcionar." />
           ) : (
             <div className="space-y-3">
-              {pecsEnTransito.map((pec: any) => (
+              {pecs?.filas.map((pec) => (
                 <div key={pec.id} className="p-4 border border-slate-200 rounded-2xl hover:border-teal-400 transition-colors flex items-center justify-between gap-4">
-                  <div>
-                    <div className="flex items-center gap-2">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="font-black text-purple-700 text-sm">{pec.numero}</span>
-                      <span className="text-[10px] font-bold px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full">{pec.estado}</span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full">{infoEstadoPec(pec.estado).label}</span>
                       {pec.ven_numero && (
                         <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">
                           Cliente: {pec.ven_numero}
@@ -338,9 +482,10 @@ export default function RecepcionesPage() {
                       )}
                     </div>
                     <p className="text-xs font-semibold text-slate-700 mt-1">{pec.supplier_name || 'Proveedor'}</p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">Entrega est.: {fDate(pec.fecha_entrega_estimada)} · {fCOP(pec.total_cop)}</p>
+                    <p className="text-[11px] text-slate-500 mt-0.5">Entrega est.: {fechaCorta(diaPec(pec.fecha_entrega_estimada)) || '—'} · {fCOP(pec.total_cop)}</p>
                   </div>
-                  <Button size="sm" color="teal" icon={PackageCheck} loading={creatingFromPec === pec.id} onClick={() => handleCrearDesdePec(pec.id)}>
+                  <Button size="sm" color="teal" icon={PackageCheck} loading={creatingFromPec === pec.id} disabled={creatingFromPec !== null}
+                    onClick={() => handleCrearDesdePec(pec.id)}>
                     Recepcionar
                   </Button>
                 </div>
@@ -350,28 +495,33 @@ export default function RecepcionesPage() {
         </Modal>
       )}
 
-      {/* DRAWER DETALLE DE RECEPCION Y SEPARACION POR DESTINO */}
-      {isDrawerOpen && selectedItem && (
+      {/* DRAWER DETALLE DE RECEPCION Y SEPARACION POR DESTINO (B1 a B3) */}
+      {selectedItem && (
         <Drawer
-          onClose={() => setDrawerOpen(false)}
+          onClose={() => setSelectedItem(null)}
           header={(
             <div>
               <div className="flex items-center gap-2.5">
-                <h2 className="text-xl font-black text-slate-800">{selectedItem.numero || `ENINV-${selectedItem.id}`}</h2>
-                <Badge tone={selectedItem.estado === 'COMPLETADA' || selectedItem.stock_actualizado ? 'success' : 'warning'}>
-                  {selectedItem.estado || 'PENDIENTE'}
+                <h2 className="text-xl font-black text-slate-800">{numeroDeRecepcion(selectedItem)}</h2>
+                <Badge tone={esPorConfirmar(selectedItem) ? 'warning' : 'success'}>
+                  {infoEstadoRecepcion(selectedItem.estado).label}
                 </Badge>
               </div>
-              <p className="text-xs text-slate-400 mt-0.5">
+              <p className="text-xs text-slate-500 mt-0.5">
                 Inspección Física y Clasificación de Líneas en Mesa de Entrada
               </p>
             </div>
           )}
           footer={(
             <>
-              <Button variant="secondary" onClick={() => setDrawerOpen(false)}>Cerrar</Button>
-              {(selectedItem.estado === 'PENDIENTE' || !selectedItem.stock_actualizado) && (
-                <Button color="teal" icon={Check} loading={confirming} onClick={() => handleConfirmarRecepcion(selectedItem.id)}>
+              <Button variant="secondary" onClick={() => setSelectedItem(null)}>Cerrar</Button>
+              <Link href={`/dashboard/compras/recepciones/${selectedItem.id}`}
+                className={`inline-flex items-center gap-2 rounded-xl border border-teal-200 bg-white px-4 py-2.5 text-sm font-bold text-teal-800 hover:bg-teal-50 ${FOCO_VISIBLE}`}>
+                <ClipboardList size={14} aria-hidden="true" /> Abrir conteo
+              </Link>
+              {esPorConfirmar(selectedItem) && (
+                <Button color="teal" icon={Check} loading={confirmandoId === selectedItem.id} disabled={confirmandoId !== null}
+                  onClick={() => handleConfirmarRecepcion(selectedItem)}>
                   Confirmar Entrada Física y Actualizar Stock
                 </Button>
               )}
@@ -380,11 +530,11 @@ export default function RecepcionesPage() {
         >
           <div className="grid grid-cols-2 gap-4">
             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-              <p className="text-[10px] font-black text-slate-400 uppercase">PEC Asociado</p>
-              <p className="font-bold text-sm text-purple-700 mt-0.5">{selectedItem.pec_numero || (selectedItem.pec_id ? `PEC-${selectedItem.pec_id}` : 'N/A')}</p>
+              <p className="text-[10px] font-black text-slate-500 uppercase">PEC Asociado</p>
+              <p className="font-bold text-sm text-purple-700 mt-0.5">{pecDeRecepcion(selectedItem)}</p>
             </div>
             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-              <p className="text-[10px] font-black text-slate-400 uppercase">Bodega de Destino</p>
+              <p className="text-[10px] font-black text-slate-500 uppercase">Bodega de Destino</p>
               <p className="font-bold text-sm text-slate-800 mt-0.5">{selectedItem.warehouse_name || 'Bodega Principal Barranquilla'}</p>
             </div>
           </div>
@@ -392,7 +542,7 @@ export default function RecepcionesPage() {
           {/* Guía Visual de Separación */}
           <div className="bg-teal-50 border border-teal-200 rounded-2xl p-4">
             <h4 className="text-xs font-black text-teal-800 uppercase flex items-center gap-1.5 mb-2">
-              <Info size={14}/> Reglas de Distribución de Mercancía
+              <Info size={14} aria-hidden="true" /> Reglas de Distribución de Mercancía
             </h4>
             <div className="grid grid-cols-3 gap-2 text-[11px]">
               <div className="bg-white p-2.5 rounded-xl border border-teal-100">
@@ -415,7 +565,7 @@ export default function RecepcionesPage() {
             <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider mb-3">Líneas de la Recepción</h3>
             <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-sm overflow-x-auto">
               <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 border-b border-slate-200 text-slate-400 font-bold uppercase">
+                <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase">
                   <tr>
                     <th className="px-4 py-3">Producto</th>
                     <th className="px-4 py-3 text-center">Destino</th>
@@ -424,15 +574,15 @@ export default function RecepcionesPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {(selectedItem.lineas || selectedItem.productos || [
-                    { nombre: 'Producto General', descripcion: selectedItem.notas || 'Lote general recibido', destino: 'CLIENTE', qty: 1, cantidad_recibida: 1 }
-                  ]).map((linea: any, idx: number) => {
+                  {((selectedItem.lineas || selectedItem.productos || [
+                    { nombre: 'Producto General', descripcion: selectedItem.notas || 'Lote general recibido', destino: 'CLIENTE', qty: 1, qty_recibida: 1 },
+                  ]) as LineaRecepcion[]).map((linea, idx) => {
                     const destino = (linea.destino || 'CLIENTE').toUpperCase();
                     return (
                       <tr key={idx} className="hover:bg-slate-50/60">
                         <td className="px-4 py-3">
                           <p className="font-bold text-slate-800">{linea.product_name || linea.nombre || linea.descripcion || 'Ítem de Compra'}</p>
-                          {linea.sku && <p className="text-[10px] text-slate-400 font-mono">{linea.sku}</p>}
+                          {linea.sku && <p className="text-[10px] text-slate-500 font-mono">{linea.sku}</p>}
                         </td>
                         <td className="px-4 py-3 text-center">
                           <Badge tone={destino === 'MAU' ? 'purple' : (destino === 'NEBULAE' || destino === 'STOCK') ? 'info' : 'success'}>
