@@ -829,4 +829,25 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
   assert.match(pag, /<TrackingConfigModal/);
 }
 
+console.log('--- TEST 27 (B4 T15): el detalle de un PEC (compras/pedidos/[id]/page.tsx): etapas reales y nada que no guarde ---');
+{
+  const det = readFileSync(new URL('../src/app/dashboard/compras/pedidos/[id]/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.ok(!/STAGE_NODES|ESTADO_LABELS/.test(det), 'sin la barra fija de 4 nodos ni otra tabla de etiquetas (C10)');
+  assert.match(det, /<PasosFlujo variante="barra" pasos=\{pasosDeTracking\(stages\)\}/, '3 etapas si es directo, 4 por casillero');
+  assert.match(det, /const completedCount = stages\.filter\(\(s\) => s\?\.status === 'COMPLETADO'\)\.length;/);
+  assert.match(det, /const cancelado = etapaPec\(estadoActual\) === 'cancelado';/, 'cancelado: sin barra ni «Avanzar etapa»');
+  assert.match(det, /infoEstadoPec\(estadoActual\)/);
+  assert.match(det, /<TablaEstandar id="compras\.pec\.productos" modo="simple"/);
+  assert.match(det, /<TablaEstandar id="compras\.pec\.actividades" modo="simple"/);
+  // H13: ningún campo ni botón que no guarde.
+  assert.ok(!/<input|<textarea|defaultValue=/.test(det), 'los campos que no guardan son texto de solo lectura');
+  assert.ok(!/Guardar Cambios|Rastrear en web|Registra una incidencia/.test(det));
+  assert.match(det, /href=\{`\/dashboard\/compras\/pedidos\?id=\$\{pedido\.id\}`\}/, 'editar se hace en el panel de Pedidos de compra');
+  // RP30: sin diálogos nativos; el error del seguimiento se muestra con su texto.
+  assert.match(det, /avisarError\(err, 'No se pudo actualizar el seguimiento'\)/);
+  // B1 a B3 que se conservan: avanzar la etapa (PATCH /tracking) y el enlace a la recepción.
+  assert.match(det, /`\/compras\/pedidos\/\$\{pedido\.id\}\/tracking`/);
+  assert.match(det, /`\/dashboard\/compras\/recepciones\/\$\{ultimaRecepcion\.id\}`/);
+}
+
 console.log('\nOK: test_estados_compras.mjs');
