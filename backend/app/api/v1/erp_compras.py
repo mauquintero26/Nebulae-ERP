@@ -10,8 +10,9 @@ Recepciones de Inventario (ENINV)
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
-from sqlalchemy import text, func
+from sqlalchemy import text, func, case, cast, Date
 from typing import Optional
+from types import MappingProxyType
 from app.db.database import get_db
 from app.core.busqueda import productos_ilike
 from app.models.erp_documents import (
@@ -44,6 +45,24 @@ from app.api.v1.erp_logistica import (
     ALLOWED_TRANSITIONS_MIAMI,
     transition_shipment_to_recibido_barranquilla,
 )
+# B4 T12: listas, reglas del pedido de compra, indicadores, flujo y Análisis de Compras sobre el core del bloque.
+from app.core import analisis_compras as ac
+from app.core.analisis import validar_top
+from app.core.estados_compras import (
+    ESTADOS_ITEM_LISTA, ESTADOS_PEC, ESTADOS_PEC_MANUALES, ESTADOS_POR_FLUJO, ETAPAS_PEC, GRUPOS_RECEPCION, VISTAS_PEC,
+    cond_estados_pec, cond_vencido, destinos_pec_permitidos, es_vencido, etapa_pec,
+)
+from app.core.fechas import hoy_colombia
+from app.core.flujo_compras import resumen_flujo_compras
+from app.core.listados import (
+    MAX_OFFSET, contar_por_vista, expresiones_tiempo, filtrar_por_estados, leer_lista, leer_orden, orden_por_lista,
+    paginar, respuesta as respuesta_de_lista, texto_busqueda, validar_orden,
+)
+from app.core.periodos import ERROR_PERIODO, PERIODOS_KPI, bloque_periodo, resolver_periodo
+from app.core.textos_actividad import ETIQUETAS_ESTADO, etiqueta_estado
+# Los validadores genéricos de las listas de T6B (erp_ventas.py): se importan, no se copian (para la revisión final:
+# deberían vivir en core/listados.py). erp_ventas no importa este módulo al cargarse, así que no hay ciclo.
+from app.api.v1.erp_ventas import _busqueda_de_lista, _parametro_de_lista, _sin_caracteres_de_control
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +162,9 @@ def _stage_alert(stage: dict, base_date) -> Optional[dict]:
       `fecha_base_etapa_anterior + alert_confirm_days` ("confirmacion atrasada"
       si ya paso), donde fecha_base es el timestamp en que se completo la
       etapa anterior (o fecha_compra para la primera etapa).
+
+    B4 T12 (D36): los mensajes llevan tildes («día(s)», «confirmación» y «Confirmación pendiente atrasada»):
+    pasosDeTracking de lib/flujo-compras.js los muestra tal cual. La lógica no cambia.
     """
     if stage.get("status") == "COMPLETADO":
         return None
@@ -155,8 +177,8 @@ def _stage_alert(stage: dict, base_date) -> Optional[dict]:
         limite = eta_dt + datetime.timedelta(days=overdue_days)
         dias_restantes = (limite - now).days
         if now > limite:
-            return {"nivel": "atrasado", "mensaje": f"Entrega atrasada por {(now-eta_dt).days} dia(s) (ETA {eta_dt.strftime('%d/%m/%Y')})", "dias_restantes": dias_restantes}
-        return {"nivel": "ok", "mensaje": f"ETA {eta_dt.strftime('%d/%m/%Y')} · {dias_restantes} dia(s) para confirmacion atrasada", "dias_restantes": dias_restantes}
+            return {"nivel": "atrasado", "mensaje": f"Entrega atrasada por {(now-eta_dt).days} día(s) (ETA {eta_dt.strftime('%d/%m/%Y')})", "dias_restantes": dias_restantes}
+        return {"nivel": "ok", "mensaje": f"ETA {eta_dt.strftime('%d/%m/%Y')} · {dias_restantes} día(s) para confirmación atrasada", "dias_restantes": dias_restantes}
     confirm_days = stage.get("alert_confirm_days")
     base_dt = _parse_dt(base_date)
     if confirm_days is None or not base_dt:
@@ -165,8 +187,8 @@ def _stage_alert(stage: dict, base_date) -> Optional[dict]:
     dias_restantes = (limite - now).days
     if now > limite:
         dias = (now - limite).days
-        return {"nivel": "atrasado", "mensaje": f"Confirmacion pendiente atrasada por {dias} dia(s)", "dias_restantes": dias_restantes}
-    return {"nivel": "ok", "mensaje": f"{dias_restantes} dia(s) para confirmar esta etapa", "dias_restantes": dias_restantes}
+        return {"nivel": "atrasado", "mensaje": f"Confirmación pendiente atrasada por {dias} día(s)", "dias_restantes": dias_restantes}
+    return {"nivel": "ok", "mensaje": f"{dias_restantes} día(s) para confirmar esta etapa", "dias_restantes": dias_restantes}
 
 
 def _annotate_stage_alerts(stages: list, fecha_compra) -> list:
@@ -218,7 +240,10 @@ def _pec_dict(p: PurchaseOrderFull) -> dict:
         "created_by": p.created_by,
         # timer info
         "days_until_delivery": _days_until(p.fecha_entrega_estimada),
-        "is_overdue": _is_overdue(p.fecha_entrega_estimada),
+        # B4 T12 (R9, RP40): vencido = emitido o en tránsito con el día de entrega (el que se guarda, .date()) anterior
+        # a hoy en Colombia, sin tolerancia: un PEC en bodega o recibido ya no sale vencido. Es es_vencido de
+        # core/estados_compras.py, la misma regla de cond_vencido (lista, semáforo, /stats y /flujo).
+        "is_overdue": es_vencido(p.estado, p.fecha_entrega_estimada, hoy_colombia()),
     }
 
 
@@ -283,13 +308,6 @@ def _days_until(dt) -> int | None:
         return None
     delta = dt - datetime.datetime.utcnow()
     return delta.days
-
-
-def _is_overdue(dt) -> bool:
-
-    if not dt:
-        return False
-    return datetime.datetime.utcnow() > dt
 
 # ─── SUPPLIERS ───────────────────────────────────────────────────────────────
 
@@ -590,6 +608,99 @@ def update_tracking_config(tipo_envio: str, body: dict,
     return {"status": "success", "data": cfg[tipo_envio]}
 
 
+# ─── B4 T12: las listas de Compras paginadas en el servidor ─────────────────────────────────────────────────────────
+# TABLA-compras puntos 2 a 4, TABLA-api punto 2, KANBAN-compras punto 4 y KANBAN-logistica punto 6 (R5, R8, R9, R21; C8,
+# C10; RP8, RP9, RP40, RP41, D32, D34, D46). GET /pedidos, /recepciones y /lista-compras aceptan, además de lo de hoy:
+#   - q (la búsqueda de la tabla estándar; search sigue como alias: texto_busqueda, gana q y se recortan los bordes);
+#   - estados (CSV, 20 como máximo, cada uno de los estados del PEC o de la recepción); 'estado' se conserva y pasa por
+#     la misma filtrar_por_estados (R5): un valor es la igualdad de hoy;
+#   - vista (las pestañas y las tarjetas; la del PEC con VISTAS_PEC, donde «todos» = los vigentes, R9) y, en los PEC,
+#     semaforo=vencidos (todos = sin filtro, D46);
+#   - orden ('atencion' en los PEC, 'reciente' (por defecto: el orden de hoy), 'sin_movimiento' o un campo con '-');
+#   - con_conteos (con la búsqueda y los filtros extra, SIN vista, estado(s) ni semáforo, R5) y, en los PEC, con_resumen
+#     (las tarjetas, sobre la misma base que los conteos).
+# Los de negocio se validan a mano y responden 422 en español (R21); limit y offset con Query (400 legible, D46). Sin los
+# parámetros nuevos cada lista responde lo mismo que hoy (la Lista de compras suma 'total').
+
+_SIN_FILTRO = "todos"                   # D46: semaforo=todos es «sin filtro»
+SEMAFOROS_PEC = ("vencidos",)
+VISTAS_RECEPCION = (*GRUPOS_RECEPCION, "todas")   # RP41: los grupos de recepción y «todas»
+# Los estados que existen en cada lista (D46): los de textos_actividad.ETIQUETAS_ESTADO, la fuente única de los nombres.
+_ESTADOS_DE_COMPRAS = MappingProxyType({"PEC": tuple(ETIQUETAS_ESTADO["PEC"]),
+                                        "ENINV": tuple(ETIQUETAS_ESTADO["ENINV"])})
+# 'atencion': lo que todavía espera su entrega (borrador, emitido y en tránsito) se ordena por su día de entrega.
+_ESTADOS_POR_ENTREGAR = tuple(e for etapa in ("borrador", "emitido", "en_transito") for e in ETAPAS_PEC[etapa])
+
+
+def _estados_de_compras(entidad: str, valor) -> list:
+    """Los estados del CSV (leer_lista: sin repetidos ni vacíos), cada uno de los conocidos de `entidad` (PEC o ENINV,
+    D46). 422 con más de 20, con un carácter de control o con un estado que no existe: «El estado «x» no existe en
+    PEC|ENINV.» (el molde de T6A y T6B; el valor que se repite va recortado a 40 caracteres)."""
+    try:
+        lista = leer_lista(valor)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    for estado in lista:
+        if estado not in _ESTADOS_DE_COMPRAS[entidad]:
+            raise HTTPException(422, f"El estado «{estado:.40}» no existe en {entidad}.")
+    return lista
+
+
+def _opcion(valor, opciones, mensaje: str) -> Optional[str]:
+    """Un parámetro de negocio (vista, semaforo): 422 con MENSAJE_CONTROL si trae un carácter de control y, si no es una
+    de `opciones`, con `mensaje` (lleva «{:.40}»: el valor que se repite va recortado). None si no vino o vino en blanco."""
+    return _parametro_de_lista(_sin_caracteres_de_control(valor), opciones, mensaje)
+
+
+def _vencido_pec(hoy):
+    """RP40, una sola regla: cond_vencido de core/estados_compras.py sobre los PEC (emitido o en tránsito con el día de
+    entrega, cast a date, anterior a `hoy` en Colombia). La usan el semáforo, los conteos y el orden 'atencion'."""
+    return cond_vencido(PurchaseOrderFull.estado, PurchaseOrderFull.fecha_entrega_estimada, hoy)
+
+
+def _condicion_vista_pec(vista):
+    return cond_estados_pec(PurchaseOrderFull.estado, VISTAS_PEC[vista])
+
+
+def _ordenes_pec(hoy) -> dict:
+    """Las órdenes permitidas de leer_orden (D34) para los PEC:
+    - 'atencion' (R8): los vencidos primero; luego, lo que todavía espera su entrega (borrador, emitido y en tránsito)
+      por su día de entrega, el más temprano arriba (así, el más atrasado de los vencidos va primero y después la
+      entrega más cercana); después lo que ya no espera una entrega (en bodega, recibido o cancelado) o no tiene fecha; y
+      en cada grupo created_at desc. El desempate final es el id desc.
+    - 'reciente' (el orden de hoy: created_at desc) y 'sin_movimiento' (expresiones_tiempo).
+    - los campos: numero, proveedor, comprador (created_by), monto (total_cop), compra (fecha_compra), entrega
+      (fecha_entrega_estimada), limite (fecha_alerta) y estado (su posición en el flujo: ESTADOS_PEC)."""
+    pec = PurchaseOrderFull
+    atencion = [
+        case((_vencido_pec(hoy), 0), else_=1).asc(),
+        case((cond_estados_pec(pec.estado, _ESTADOS_POR_ENTREGAR), cast(pec.fecha_entrega_estimada, Date))
+             ).asc().nulls_last(),
+        pec.created_at.desc().nulls_last(),
+    ]
+    return {
+        "atencion": atencion,
+        "reciente": expresiones_tiempo(pec.created_at, pec.updated_at, "reciente", id_lista=pec.id),
+        "sin_movimiento": expresiones_tiempo(pec.created_at, pec.updated_at, "sin_movimiento", id_lista=pec.id),
+        "numero": pec.numero,
+        "proveedor": pec.supplier_name,
+        "comprador": pec.created_by,
+        "monto": pec.total_cop,
+        "compra": pec.fecha_compra,
+        "entrega": pec.fecha_entrega_estimada,
+        "limite": pec.fecha_alerta,
+        "estado": orden_por_lista(pec.estado, ESTADOS_PEC),
+    }
+
+
+def _resumen_lista_pec(cifras: dict) -> dict:
+    """El resumen de la lista (las tarjetas de TABLA-compras) con las cifras de analisis_compras.cifras_pec: capital_cop
+    (lo no cancelado), activos, en_transito, en_bodega, vencidos, recibidos y cumplimiento_pct (R9)."""
+    return {"capital_cop": cifras["monto_cop"], "activos": cifras["activos"], "en_transito": cifras["en_transito"],
+            "en_bodega": cifras["en_bodega"], "vencidos": cifras["vencidos"], "recibidos": cifras["recibidos"],
+            "cumplimiento_pct": cifras["cumplimiento_pct"]}
+
+
 # ─── PEDIDOS DE COMPRA (PEC) ─────────────────────────────────────────────────
 
 
@@ -598,27 +709,60 @@ def list_pec(
     estado: Optional[str] = None,
     supplier_id: Optional[int] = None,
     search: Optional[str] = None,
-    limit: int = Query(50, le=200),
-    offset: int = 0,
+    q: Optional[str] = None,
+    estados: Optional[str] = None,
+    vista: Optional[str] = None,
+    semaforo: Optional[str] = None,
+    orden: Optional[str] = None,
+    con_conteos: bool = False,
+    con_resumen: bool = False,
+    limit: int = Query(50, ge=0, le=200),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
     user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db)
 ):
-    q = db.query(PurchaseOrderFull)
-    if estado:
-        q = q.filter(PurchaseOrderFull.estado == estado)
+    """La lista de Pedidos de compra (B4 T12; ver el bloque de arriba). vista: las de VISTAS_PEC (todos = vigentes,
+    vigentes, activos, borradores, pedidos, en_transito, en_bodega, recibidos, cancelados, no_resueltos,
+    acciones_tomadas y transito_logistica; sin vista, todos los PEC como hoy). semaforo: vencidos (RP40). La búsqueda:
+    número, proveedor, PVEN, productos y comprador (created_by). orden: atencion, reciente (por defecto), sin_movimiento
+    o [-]numero, proveedor, comprador, monto, compra, entrega, limite o estado. con_conteos = cada vista + vencidos;
+    con_resumen = {capital_cop, activos, en_transito, en_bodega, vencidos, recibidos, cumplimiento_pct}, los dos con la
+    búsqueda y supplier_id, sin vista, estado(s) ni semáforo."""
+    vista = _opcion(vista, tuple(VISTAS_PEC), "La vista «{:.40}» no existe en Pedidos de compra.")
+    semaforo = _opcion(semaforo, SEMAFOROS_PEC + (_SIN_FILTRO,),
+                       "El filtro del semáforo «{:.40}» no existe: usa vencidos.")
+    semaforo = None if semaforo == _SIN_FILTRO else semaforo
+    lista_estado = _estados_de_compras("PEC", estado)
+    lista_estados = _estados_de_compras("PEC", estados)
+    like = _busqueda_de_lista(q, search)
+    hoy = hoy_colombia()
+    orden_sql = leer_orden(orden, _ordenes_pec(hoy), "reciente", id_lista=PurchaseOrderFull.id)
+
+    pec = PurchaseOrderFull
+    base = db.query(pec)
     if supplier_id:
-        q = q.filter(PurchaseOrderFull.supplier_id == supplier_id)
-    if search:
-        like = f"%{search}%"
-        q = q.filter(
-            PurchaseOrderFull.numero.ilike(like) |
-            PurchaseOrderFull.supplier_name.ilike(like) |
-            PurchaseOrderFull.ven_numero.ilike(like) |
-            productos_ilike(PurchaseOrderFull.productos, like)
+        base = base.filter(pec.supplier_id == supplier_id)
+    if like:
+        base = base.filter(
+            pec.numero.ilike(like) |
+            pec.supplier_name.ilike(like) |
+            pec.ven_numero.ilike(like) |
+            productos_ilike(pec.productos, like) |
+            pec.created_by.ilike(like)          # el Comprador, que el Hub buscaba en el navegador
         )
-    total = q.count()
-    items = q.order_by(PurchaseOrderFull.created_at.desc()).offset(offset).limit(limit).all()
-    return {"status": "success", "total": total, "data": [_pec_dict(p) for p in items]}
+    filtrado = filtrar_por_estados(filtrar_por_estados(base, pec.estado, lista_estado), pec.estado, lista_estados)
+    if vista:
+        filtrado = filtrado.filter(_condicion_vista_pec(vista))
+    if semaforo == "vencidos":
+        filtrado = filtrado.filter(_vencido_pec(hoy))
+
+    conteos = None
+    if con_conteos:
+        conteos = contar_por_vista(base, {**{v: _condicion_vista_pec(v) for v in VISTAS_PEC},
+                                          "vencidos": _vencido_pec(hoy)})
+    resumen = _resumen_lista_pec(ac.cifras_pec(base, hoy)) if con_resumen else None
+    total, items = paginar(filtrado.order_by(*orden_sql), limit, offset)
+    return respuesta_de_lista(total, [_pec_dict(p) for p in items], conteos=conteos, resumen=resumen)
 
 
 @router.post("/pedidos", status_code=201)
@@ -784,6 +928,83 @@ def _desvincular_pec_cancelado(db: Session, pec_id: int, pec_numero: str, user_n
     db.commit()
 
 
+# ─── B4 T12: las reglas del estado del pedido de compra (KANBAN-compras punto 3, R9, C10, C15c; RP44, RP97) ─────────
+# A mano solo se emite un borrador o se cancela (desde borrador, emitido o en tránsito; pec_cancelar_en_transito = «Sí,
+# mientras no tenga recepciones en bodega»), con un motivo de 5 caracteres o más que queda en la Actividad
+# (pec_motivo_cancelacion = «Sí, obligatorio»; 'motivo' no es una columna, sin migración). EN_TRANSITO lo pone el
+# seguimiento (update_tracking) y los estados de recepción la recepción en bodega (confirmar_recepcion): por el PATCH dan
+# 422 diciendo dónde se hacen. Desde cancelado, en bodega o recibido, 422. Las transiciones son las de
+# core/estados_compras.py (ESTADOS_PEC_MANUALES, ESTADOS_POR_FLUJO y destinos_pec_permitidos), el espejo de
+# lib/estados-compras.js que usan los 8 puntos de las pantallas.
+
+MIN_MOTIVO_CANCELACION = 5
+_DONDE_SE_HACE = MappingProxyType({
+    "seguimiento": "'En tránsito' lo marca el seguimiento del envío (Mercancía en tránsito).",
+    "recepcion": "'Recibido' lo marca la recepción en bodega (Recepciones).",
+})
+_ETAPAS_DE_LA_RECEPCION = ("en_bodega", "recibido")
+
+
+def _texto_sin_control(valor) -> None:
+    """422 con MENSAJE_CONTROL si `valor` (un texto) trae un carácter de control (D46: un NUL no llega a la base)."""
+    try:
+        texto_busqueda(valor, None)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+def _validar_transicion_pec(db: Session, p: PurchaseOrderFull, body: dict) -> Optional[str]:
+    """Valida el cambio de estado de PATCH /pedidos/{id} ANTES de tocar nada (RP97: antes del bloque de productos, que
+    borra purchase_order_lines). Solo actúa si body trae 'estado' y es distinto del actual (sin espacios en los bordes).
+    Devuelve el motivo recortado (o None) para la Actividad. Errores, en este orden:
+    - un carácter de control en el estado -> 422 MENSAJE_CONTROL;
+    - un destino que pone el flujo -> 422 «'En tránsito' lo marca el seguimiento del envío (Mercancía en tránsito).» o
+      «'Recibido' lo marca la recepción en bodega (Recepciones).»;
+    - otro destino que no es manual (BORRADOR, ENVIADO, uno desconocido, un valor que no es texto) -> 422 ««X» no es un
+      estado válido para un pedido de compra.» (X = su etiqueta, o el valor recibido recortado a 40);
+    - desde CANCELADO -> 422 «El pedido de compra {numero} está cancelado y no se puede reabrir.»;
+    - desde en bodega o recibido -> 422 «El pedido de compra {numero} ya llegó a bodega: su estado lo lleva la recepción.»;
+    - EMITIDO desde algo distinto de BORRADOR -> 422 «Solo un pedido en Borrador se puede marcar como Emitido.»;
+    - CANCELADO con recepciones que no están canceladas (RP44) -> 409 «{numero} tiene N recepción(es) en bodega: no se
+      puede cancelar.»;
+    - un carácter de control en el motivo -> 422 MENSAJE_CONTROL;
+    - CANCELADO con un motivo de menos de 5 caracteres -> 422 «Indica el motivo de la cancelación (mínimo 5
+      caracteres).»."""
+    if "estado" not in body:
+        return None
+    valor = body["estado"]
+    destino = None
+    if isinstance(valor, str):
+        _texto_sin_control(valor)
+        destino = valor.strip()
+    if destino == p.estado:
+        return None
+    if destino in ESTADOS_POR_FLUJO:
+        raise HTTPException(422, _DONDE_SE_HACE[ESTADOS_POR_FLUJO[destino]])
+    if destino not in ESTADOS_PEC_MANUALES:
+        nombre = ETIQUETAS_ESTADO["PEC"].get(destino, destino) if destino is not None else (
+            "" if valor is None else str(valor))
+        raise HTTPException(422, f"«{nombre:.40}» no es un estado válido para un pedido de compra.")
+    etapa = etapa_pec(p.estado)
+    if etapa == "cancelado":
+        raise HTTPException(422, f"El pedido de compra {p.numero} está cancelado y no se puede reabrir.")
+    if etapa in _ETAPAS_DE_LA_RECEPCION:
+        raise HTTPException(422, f"El pedido de compra {p.numero} ya llegó a bodega: su estado lo lleva la recepción.")
+    if destino not in destinos_pec_permitidos(p.estado):
+        raise HTTPException(422, "Solo un pedido en Borrador se puede marcar como Emitido.")
+    motivo = body.get("motivo")
+    motivo = str(motivo).strip() if motivo is not None else ""
+    if destino == "CANCELADO":
+        n = (db.query(func.count(GoodsReceipt.id))
+             .filter(GoodsReceipt.pec_id == p.id, GoodsReceipt.estado != "CANCELADA").scalar())
+        if n:
+            raise HTTPException(409, f"{p.numero} tiene {n} recepción(es) en bodega: no se puede cancelar.")
+    _texto_sin_control(motivo)
+    if destino == "CANCELADO" and len(motivo) < MIN_MOTIVO_CANCELACION:
+        raise HTTPException(422, f"Indica el motivo de la cancelación (mínimo {MIN_MOTIVO_CANCELACION} caracteres).")
+    return motivo or None
+
+
 @router.patch("/pedidos/{pec_id}")
 def update_pec(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
         db: Session = Depends(get_db)):
@@ -801,12 +1022,19 @@ def update_pec(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE
 
     - El JSON p.productos se regenera desde PurchaseOrderLine despues del sync.
 
-    - Otros campos (estado, carrier, notas, etc.) se actualizan libremente.
+    - Otros campos (carrier, notas, etc.) se actualizan libremente.
+
+    - B4 T12: el estado solo cambia por el camino correcto (_validar_transicion_pec, antes de todo lo demás); con
+      CANCELADO pide el motivo, que queda en la Actividad. La Actividad dice 'Estado cambiado a {etiqueta}' (más
+      '. Motivo: …') con updated_by o, si no viene, el correo de quien lo hizo.
 
     """
     p = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec_id).first()
     if not p:
         raise HTTPException(404, "Pedido de compra no encontrado")
+    motivo = _validar_transicion_pec(db, p, body)
+    if isinstance(body.get("estado"), str):
+        body = {**body, "estado": body["estado"].strip()}
     old_estado = p.estado
     fecha_vieja = p.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
     # Si el payload trae productos, aplicar logica normalizada
@@ -857,12 +1085,13 @@ def update_pec(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE
     db.commit()
     db.refresh(p)
     if body.get("estado") and body["estado"] != old_estado:
+        autor = body.get("updated_by") or user.email
         _log(db, "PEC", p.id, p.numero, "ESTADO_CHANGED",
-             f"Estado cambiado a {p.estado}",
+             f"Estado cambiado a {etiqueta_estado('PEC', p.estado)}" + (f". Motivo: {motivo}" if motivo else ""),
              old_estado=old_estado, new_estado=p.estado,
-             user_name=body.get("updated_by"))
+             user_name=autor)
         if p.estado == "CANCELADO":
-            _desvincular_pec_cancelado(db, p.id, p.numero, body.get("updated_by"))
+            _desvincular_pec_cancelado(db, p.id, p.numero, autor)
     if fecha_vieja is not None and p.fecha_entrega_estimada and p.fecha_entrega_estimada.date() != fecha_vieja.date():
         # Final whole-branch review (hallazgo #2) -- ver el comentario equivalente en
         # update_solicitud (erp_ventas.py) para la explicacion completa: las fechas
@@ -980,6 +1209,73 @@ def update_tracking(pec_id: int, body: ActualizarTrackingBody,
          f"Etapa {stage_name} -> {new_status}" + (f" | Guia: {tracking_num}" if tracking_num else ""),
          user_name=body.user_name)
     return {"status": "success", "data": _pec_dict(p)}
+
+
+# ─── B4 T12: indicadores, flujo y Análisis de Compras ───────────────────────────────────────────────────────────────
+# KPI-compras punto 2, FLUJO-compras punto 2 y ANALISIS-compras punto 2 (R7, R9, R13, R21; C10, C12, C16; RP29, RP40,
+# RP43, RP46, RP94). Los tres con los roles de list_pec (ALL_ERP_ROLES) y de solo lectura. Las rutas son /stats, /flujo
+# y /analisis: no chocan con /pedidos/{pec_id}.
+
+@router.get("/stats")
+def compras_stats(periodo: Optional[str] = None,
+                  user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+                  db: Session = Depends(get_db)):
+    """Los indicadores de Compras (el endpoint que ya llaman el Hub, Pedidos de compra y Abastecimiento). periodo: 7d,
+    30d (por defecto) o mes; otro valor, 422 «Período no válido.» (R21). data = las cifras de analisis_compras.cifras_pec
+    sobre TODOS los pedidos de compra (total, por_estado, borradores, activos, en_transito, en_bodega, recibidos,
+    cancelados, vigentes, vencidos, monto_cop, monto_por_recibir_cop y cumplimiento_pct) + pec_activos (= activos) y
+    pec_total (= vigentes), que lee Abastecimiento (RP94) + recepciones {por_confirmar, confirmadas, canceladas, total}
+    (GRUPOS_RECEPCION) + periodo (bloque_periodo: instantes ISO con Z, `hasta` exclusivo, RP29) + flujo (comprado_cop y
+    pec_nuevos, cada uno {actual, anterior, variacion_pct}, con la regla única de «Comprado», RP43)."""
+    clave = _parametro_de_lista(periodo, PERIODOS_KPI, ERROR_PERIODO)
+    p = resolver_periodo(clave)   # una clave de PERIODOS_KPI (o None: 30 días) siempre resuelve
+    cifras = ac.cifras_pec(db.query(PurchaseOrderFull), hoy_colombia())
+    gr = GoodsReceipt
+    fila = db.query(func.count(gr.id), *[func.count(gr.id).filter(gr.estado.in_(estados))
+                                         for estados in GRUPOS_RECEPCION.values()]).one()
+    recepciones = {grupo: int(fila[i + 1] or 0) for i, grupo in enumerate(GRUPOS_RECEPCION)}
+    recepciones["total"] = int(fila[0] or 0)
+    return {
+        "status": "success",
+        "data": {
+            **cifras,
+            "pec_activos": cifras["activos"],
+            "pec_total": cifras["vigentes"],
+            "recepciones": recepciones,
+            "periodo": bloque_periodo(p),
+            "flujo": ac.flujo_compras(db, p),
+        },
+    }
+
+
+@router.get("/flujo")
+def compras_flujo(user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+                  db: Session = Depends(get_db)):
+    """Los números de la franja «Flujo de compras» (core/flujo_compras.resumen_flujo_compras): LISTA, PEC, TRANSITO,
+    RECEPCION (con recepciones_por_confirmar, RP46) y RECIBIDO, el semáforo y el criterio de atraso. No escribe: la Lista
+    de compras se lee sin sincronizar (no llama a _sincronizar_pvens_pendientes_a_lista)."""
+    return {"status": "success", "data": resumen_flujo_compras(db)}
+
+
+@router.get("/analisis")
+def compras_analisis(
+    periodo: Optional[str] = None,
+    desde: Optional[str] = None,
+    hasta: Optional[str] = None,
+    top: Optional[str] = None,
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """El Análisis de Compras con el contrato único de core/analisis.py (core/analisis_compras.analisis_compras).
+    periodo: 7d, 30d (por defecto), 90d, mes, 12m o personalizado (con desde y hasta 'AAAA-MM-DD'); top: 5 (por
+    defecto), 10 o 25. Todo se declara como texto y se valida aquí (R21): un valor que no sirve responde 422 con su texto
+    en español (RP9). Los errores del cálculo no se convierten en 422: llegan como 500."""
+    try:
+        p = resolver_periodo(periodo, desde, hasta)
+        top = validar_top(top if isinstance(top, str) and top.strip() else ac.TOP_POR_DEFECTO)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return ac.analisis_compras(db, p, top)
 
 
 @router.post("/pedidos/{pec_id}/recepcionar")
@@ -1212,23 +1508,81 @@ def crear_recepcion_desde_pec(
     return {"status": "success", "data": _gr_dict(gr, db)}
 
 
+def _condicion_vista_recepcion(vista):
+    """RP41: por_confirmar, confirmadas y canceladas son los grupos de GRUPOS_RECEPCION; «todas» no filtra."""
+    return None if vista == "todas" else GoodsReceipt.estado.in_(GRUPOS_RECEPCION[vista])
+
+
+def _dias_retraso_sql():
+    """El dias_retraso de _gr_dict en SQL, para ordenar: día de la recepción − (día prometido de su PEC + la tolerancia
+    de 1 día), solo si es > 0; NULL si llegó a tiempo, si su PEC no tiene fecha prometida o si no tiene PEC (una
+    subconsulta correlacionada: la lista sigue siendo solo de goods_receipts)."""
+    gr, pec = GoodsReceipt, PurchaseOrderFull
+    dias = cast(gr.fecha_recepcion, Date) - (cast(pec.fecha_entrega_estimada, Date) + ac.TOLERANCIA_A_TIEMPO_DIAS)
+    return (select(case((dias > 0, dias))).where(pec.id == gr.pec_id).correlate(gr).scalar_subquery())
+
+
+def _ordenes_recepcion() -> dict:
+    """Las órdenes permitidas de leer_orden (D34) para las recepciones: 'reciente' (el orden de hoy: created_at desc),
+    'sin_movimiento' y [-]numero, pec (pec_numero), proveedor, bodega, fecha (fecha_recepcion), estado (su lugar en
+    ETIQUETAS_ESTADO['ENINV']) o retraso (el dias_retraso de _gr_dict; sin retraso, al final)."""
+    gr = GoodsReceipt
+    return {
+        "reciente": expresiones_tiempo(gr.created_at, gr.updated_at, "reciente", id_lista=gr.id),
+        "sin_movimiento": expresiones_tiempo(gr.created_at, gr.updated_at, "sin_movimiento", id_lista=gr.id),
+        "numero": gr.numero,
+        "pec": gr.pec_numero,
+        "proveedor": gr.supplier_name,
+        "bodega": gr.warehouse_name,
+        "fecha": gr.fecha_recepcion,
+        "estado": orden_por_lista(gr.estado, _ESTADOS_DE_COMPRAS["ENINV"]),
+        "retraso": _dias_retraso_sql(),
+    }
+
+
 @router.get("/recepciones")
 def list_recepciones(
     estado: Optional[str] = None,
     pec_id: Optional[int] = None,
-    limit: int = Query(50, le=200),
-    offset: int = 0,
+    search: Optional[str] = None,
+    q: Optional[str] = None,
+    estados: Optional[str] = None,
+    vista: Optional[str] = None,
+    orden: Optional[str] = None,
+    con_conteos: bool = False,
+    limit: int = Query(50, ge=0, le=200),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
     user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db)
 ):
-    q = db.query(GoodsReceipt)
-    if estado:
-        q = q.filter(GoodsReceipt.estado == estado)
+    """Las recepciones de mercancía (B4 T12; ver el bloque de list_pec). La búsqueda: número, número del PEC, proveedor y
+    bodega. vista (RP41): por_confirmar (BORRADOR), confirmadas (COMPLETADA y COMPLETADA_LOGISTICA), canceladas
+    (CANCELADA) o todas; sin vista, todas como hoy. estados: los de ETIQUETAS_ESTADO['ENINV']. orden: reciente (por
+    defecto), sin_movimiento o [-]numero, pec, proveedor, bodega, fecha, estado o retraso. con_conteos = {por_confirmar,
+    confirmadas, canceladas, todas}, con la búsqueda y pec_id, sin vista ni estado(s)."""
+    vista = _opcion(vista, VISTAS_RECEPCION, "La vista «{:.40}» no existe en Recepciones.")
+    lista_estado = _estados_de_compras("ENINV", estado)
+    lista_estados = _estados_de_compras("ENINV", estados)
+    like = _busqueda_de_lista(q, search)
+    orden_sql = leer_orden(orden, _ordenes_recepcion(), "reciente", id_lista=GoodsReceipt.id)
+
+    gr = GoodsReceipt
+    base = db.query(gr)
     if pec_id:
-        q = q.filter(GoodsReceipt.pec_id == pec_id)
-    total = q.count()
-    items = q.order_by(GoodsReceipt.created_at.desc()).offset(offset).limit(limit).all()
-    return {"status": "success", "total": total, "data": [_gr_dict(g, db) for g in items]}
+        base = base.filter(gr.pec_id == pec_id)
+    if like:
+        base = base.filter(gr.numero.ilike(like) | gr.pec_numero.ilike(like) | gr.supplier_name.ilike(like)
+                           | gr.warehouse_name.ilike(like))
+    filtrado = filtrar_por_estados(filtrar_por_estados(base, gr.estado, lista_estado), gr.estado, lista_estados)
+    condicion = _condicion_vista_recepcion(vista) if vista else None
+    if condicion is not None:
+        filtrado = filtrado.filter(condicion)
+
+    conteos = None
+    if con_conteos:
+        conteos = contar_por_vista(base, {v: _condicion_vista_recepcion(v) for v in VISTAS_RECEPCION})
+    total, items = paginar(filtrado.order_by(*orden_sql), limit, offset)
+    return respuesta_de_lista(total, [_gr_dict(g, db) for g in items], conteos=conteos)
 
 
 @router.post("/recepciones", status_code=201)
@@ -2944,20 +3298,19 @@ def _sincronizar_pvens_pendientes_a_lista(db: Session) -> list:
     return _sin_items_de_pedidos_cancelados(db, items)
 
 
-@router.get("/lista-compras")
-def list_lista_compras(
-    estado: Optional[str] = None,
-    search: Optional[str] = None,
-    proveedor: Optional[str] = None,
-    fecha_desde: Optional[str] = None,
-    fecha_hasta: Optional[str] = None,
-    limit: int = 200,
-    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
-    db: Session = Depends(get_db)
-):
-    items = _sincronizar_pvens_pendientes_a_lista(db)
+# B4 T12 (TABLA-compras punto 4, RP9, D32): la Lista de compras es un JSON (web_builder_config): se filtra, se ordena y
+# se corta en Python. orden: [-]fecha, producto, proveedor, estado (PENDIENTE, EN_PEDIDO y RECIBIDO, en ese orden) o pven
+# (pven_numero); los vacíos al final en los dos sentidos y el desempate por id desc; sin orden, id desc como hoy.
+ORDENES_LISTA = ("fecha", "producto", "proveedor", "estado", "pven")
+_CAMPO_DE_ORDEN_LISTA = MappingProxyType({"fecha": "fecha", "producto": "producto", "proveedor": "proveedor",
+                                          "pven": "pven_numero"})
+_BUSQUEDA_LISTA = ("producto", "pven_numero", "pec_numero", "notas", "proveedor")
 
-    filtered = []
+
+def _filtrar_lista(items: list, estado, like, proveedor, fecha_desde, fecha_hasta) -> list:
+    """El filtro de hoy de list_lista_compras: sin `estado` no salen los DESCARTADO; con él, solo ese estado. `like` es el
+    texto de la búsqueda en minúsculas (producto, PVEN, PEC, notas y proveedor)."""
+    filtrados = []
     for it in items:
         if estado:
             if it.get("estado") != estado:
@@ -2966,29 +3319,70 @@ def list_lista_compras(
             continue
         if proveedor and proveedor.lower() not in (it.get("proveedor") or "").lower():
             continue
-        if search:
-            s = search.lower()
-            match = (
-                s in (it.get("producto") or "").lower() or
-                s in (it.get("pven_numero") or "").lower() or
-                s in (it.get("pec_numero") or "").lower() or
-                s in (it.get("notas") or "").lower() or
-                s in (it.get("proveedor") or "").lower()
-            )
-            if not match:
-                continue
-        if fecha_desde:
-            f = (it.get("fecha") or "")[:10]
-            if f and f < fecha_desde:
-                continue
-        if fecha_hasta:
-            f = (it.get("fecha") or "")[:10]
-            if f and f > fecha_hasta:
-                continue
-        filtered.append(it)
-        
-    filtered.sort(key=lambda x: x.get("id", 0), reverse=True)
-    return {"status": "success", "data": filtered[:limit]}
+        if like and not any(like in str(it.get(campo) or "").lower() for campo in _BUSQUEDA_LISTA):
+            continue
+        fecha = (it.get("fecha") or "")[:10]
+        if fecha_desde and fecha and fecha < fecha_desde:
+            continue
+        if fecha_hasta and fecha and fecha > fecha_hasta:
+            continue
+        filtrados.append(it)
+    return filtrados
+
+
+def _ordenar_lista(items: list, orden) -> list:
+    """Los ítems en el orden pedido (validar_orden con ORDENES_LISTA: el 422 «No se puede ordenar por «x».» de R5)."""
+    por_id = sorted(items, key=lambda x: x.get("id", 0), reverse=True)   # el orden de hoy y el desempate
+    if not (orden or "").strip():
+        return por_id
+    campo, descendente = validar_orden(orden, ORDENES_LISTA, ORDENES_LISTA[0])
+    if campo == "estado":
+        posicion = {e: i for i, e in enumerate(ESTADOS_ITEM_LISTA)}
+        clave = lambda it: posicion.get(it.get("estado"), len(posicion))   # noqa: E731
+    else:
+        nombre = _CAMPO_DE_ORDEN_LISTA[campo]
+        clave = lambda it: (str(it.get(nombre) or "").strip().casefold() or None)   # noqa: E731
+    con_valor = [it for it in por_id if clave(it) is not None]
+    sin_valor = [it for it in por_id if clave(it) is None]
+    return sorted(con_valor, key=clave, reverse=descendente) + sin_valor   # sorted es estable: el id desc se conserva
+
+
+@router.get("/lista-compras")
+def list_lista_compras(
+    estado: Optional[str] = None,
+    search: Optional[str] = None,
+    q: Optional[str] = None,
+    proveedor: Optional[str] = None,
+    fecha_desde: Optional[str] = None,
+    fecha_hasta: Optional[str] = None,
+    orden: Optional[str] = None,
+    con_conteos: bool = False,
+    limit: int = Query(200, ge=0, le=200),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+    db: Session = Depends(get_db)
+):
+    """La Lista de compras (B4 T12). q (D32; search es su alias) busca en el producto, el PVEN, el PEC, las notas y el
+    proveedor. orden: ver ORDENES_LISTA. total = todo lo filtrado; con_conteos = {todos, PENDIENTE, EN_PEDIDO,
+    RECIBIDO} sobre lo filtrado SIN el estado. Solo la primera página (offset 0) sincroniza los PVEN pendientes de
+    compra con la Lista (_sincronizar_pvens_pendientes_a_lista escribe): las demás la leen tal cual."""
+    try:
+        texto = texto_busqueda(q, search)   # D46: un carácter de control da 422
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    like = texto.lower() if texto else None
+    if offset == 0:
+        items = _sincronizar_pvens_pendientes_a_lista(db)
+    else:
+        items = _sin_items_de_pedidos_cancelados(db, _load_lista_compras(db))
+    filtrados = _ordenar_lista(_filtrar_lista(items, estado, like, proveedor, fecha_desde, fecha_hasta), orden)
+    conteos = None
+    if con_conteos:
+        sin_estado = _filtrar_lista(items, None, like, proveedor, fecha_desde, fecha_hasta)
+        conteos = {"todos": len(sin_estado),
+                   **{e: sum(1 for it in sin_estado if it.get("estado") == e) for e in ESTADOS_ITEM_LISTA}}
+    pagina = filtrados[offset:offset + limit] if limit else []
+    return respuesta_de_lista(len(filtrados), pagina, conteos=conteos)
 
 
 @router.get("/lista-compras/stats")

@@ -92,14 +92,15 @@ class TestCancelarPecDesvinculaPvenYLista:
         assert linked["pec_id"] == pec["id"]
         assert linked["estado"] == "EN_PROCESO"
 
+        # B4 T12 (R9, pec_motivo_cancelacion): cancelar un pedido de compra pide un motivo de 5 caracteres o más.
         cancel_r = app_client.patch(
             f"/api/v1/compras/pedidos/{pec['id']}",
-            json={"estado": "CANCELADO", "updated_by": "tester"},
+            json={"estado": "CANCELADO", "updated_by": "tester", "motivo": "El cliente ya no lo necesita"},
             headers=_headers(admin_token),
         )
         assert cancel_r.status_code == 200, cancel_r.text
 
-        after = app_client.get(f"/api/v1/ventas/pedidos/{ven.id}", headers=_headers(admin_token)).json()["data"]
+        after =app_client.get(f"/api/v1/ventas/pedidos/{ven.id}", headers=_headers(admin_token)).json()["data"]
         assert after["pec_id"] is None, "El PVEN debe quedar sin PEC vinculado tras cancelar la PEC"
         assert after["pec_numero"] is None
         assert after["estado"] == "PENDIENTE_COMPRA", "Debe volver a Pendiente de Compra, no quedar en En Proceso"
@@ -127,9 +128,10 @@ class TestCancelarPecDesvinculaPvenYLista:
                 headers=_headers(admin_token),
             )
 
+            # B4 T12 (R9, pec_motivo_cancelacion): cancelar un pedido de compra pide un motivo de 5 caracteres o más.
             cancel_r = app_client.patch(
                 f"/api/v1/compras/pedidos/{pec['id']}",
-                json={"estado": "CANCELADO", "updated_by": "tester"},
+                json={"estado": "CANCELADO", "updated_by": "tester", "motivo": "El cliente ya no lo necesita"},
                 headers=_headers(admin_token),
             )
             assert cancel_r.status_code == 200, cancel_r.text
