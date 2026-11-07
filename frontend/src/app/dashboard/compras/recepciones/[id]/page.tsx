@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { createContext, useContext, useMemo, useState, useRef, useEffect, useCallback } from 'react';
+import type { CSSProperties } from 'react';
 import {
   ArrowLeft, Save, FileText,
   Box, PackageCheck, AlertTriangle, MessageSquareWarning, ShieldCheck, Link as LinkIcon,
@@ -9,9 +10,81 @@ import {
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { apiFetch } from '@/lib/api';
-import { Badge, Button } from '@/components/ui';
+import { Badge, Button, useAvisos } from '@/components/ui';
+// B4 T16A (TABLA-compras punto 12): la tabla del conteo en la tabla estándar, modo simple (se estira, se mueve y se recuerda;
+// sin paginación, orden ni selección), con los campos de conteo editables. Los diálogos nativos pasaron a useAvisos (RP30).
+import { TablaEstandar, usePreferenciasTabla } from '@/components/tabla';
+import type { ColumnaTabla } from '@/components/tabla';
+import { fechaLarga } from '@/lib/fechas-colombia';
+import { recargarTrasError } from '@/lib/avisos';
 
-const fDateLong = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
+// Un instante del API (la fecha de recepción) en el día de Colombia; lo vacío, '-'.
+const fDateLong = (iso: unknown) => fechaLarga(iso) || '-';
+
+/** Una línea del conteo: lo que pide la recepción y lo que se cuenta; `idx` es su posición (la clave si no trae grl_id). */
+type LineaConteo = { idx: number; grl_id?: number; sku_id?: number | string | null; nombre: string; qty_esperada: number; qty_recibida: number };
+/** Lo que las celdas editables le piden a la página (por un contexto, para que las columnas sean una constante, D40 y D41). */
+type ControlConteo = { editable: boolean; actualizar: (idx: number, valor: number) => void };
+const ConteoContext = createContext<ControlConteo | null>(null);
+const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-emerald-700';
+
+/** Cant. Recibida: el campo de conteo (editable solo con la recepción en BORRADOR). */
+function CeldaRecibida({ l }: { l: LineaConteo }) {
+  const control = useContext(ConteoContext);
+  const hayDiferencia = l.qty_recibida !== l.qty_esperada;
+  return (
+    <input
+      type="number"
+      min="0"
+      value={l.qty_recibida || ''}
+      disabled={!control?.editable}
+      aria-label={`Cantidad recibida de ${l.nombre}`}
+      onChange={(e) => control?.actualizar(l.idx, parseInt(e.target.value) || 0)}
+      className={`w-full bg-white border rounded-lg px-2 py-2 text-center font-black outline-none transition-colors disabled:bg-slate-100 disabled:text-slate-500 ${FOCO_VISIBLE} ${
+        hayDiferencia && l.qty_recibida !== 0 ? 'border-amber-400 text-amber-800' : 'border-slate-300 focus:border-emerald-500 text-emerald-700'
+      }`}
+    />
+  );
+}
+
+/** Diferencia: recibida menos esperada (con signo); sin nada contado, un guion. */
+function CeldaDiferencia({ l }: { l: LineaConteo }) {
+  if (l.qty_recibida === 0) return <span className="font-black text-slate-400">-</span>;
+  const diff = l.qty_recibida - l.qty_esperada;
+  return <span className={`font-black ${diff === 0 ? 'text-emerald-700' : 'text-amber-800 bg-amber-50 px-2 py-1 rounded'}`}>{diff > 0 ? `+${diff}` : diff}</span>;
+}
+
+/** Observaciones físicas (B1 a B3: un campo de apoyo del conteo; no se envía al confirmar). */
+function CeldaObservaciones({ l }: { l: LineaConteo }) {
+  const control = useContext(ConteoContext);
+  return (
+    <input
+      type="text"
+      disabled={!control?.editable}
+      placeholder="Ej: Cajas dañadas..."
+      aria-label={`Observaciones físicas de ${l.nombre}`}
+      className={`w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:border-emerald-500 outline-none disabled:bg-slate-100 disabled:text-slate-500 ${FOCO_VISIBLE}`}
+    />
+  );
+}
+
+/**
+ * B4 T16A, la tabla del conteo (TABLA-compras punto 12; D40, D41): Producto (la flexible), Cant. Esperada, Cant. Recibida
+ * (editable), Diferencia y Observaciones. Una constante (estable): las celdas editables leen la página por ConteoContext.
+ */
+const COLUMNAS_CONTEO: ColumnaTabla<LineaConteo>[] = [
+  { id: 'producto', titulo: 'Producto (Referencia PEC)', ancho: 150, flexible: true, anchoMax: 960, clave: true, titleCelda: (l) => l.nombre,
+    celda: (l) => (
+      <span className="block leading-tight">
+        <span className="block truncate text-sm font-bold text-slate-800">{l.nombre}</span>
+        {l.sku_id && <span className="block truncate text-xs text-slate-500">SKU {l.sku_id}</span>}
+      </span>
+    ) },
+  { id: 'esperada', titulo: 'Cant. Esperada', ancho: 96, alinear: 'centro', celda: (l) => <span className="font-black text-slate-600">{l.qty_esperada}</span> },
+  { id: 'recibida', titulo: 'Cant. Recibida', ancho: 104, alinear: 'centro', clave: true, celda: (l) => <CeldaRecibida l={l} /> },
+  { id: 'diferencia', titulo: 'Diferencia', ancho: 88, alinear: 'centro', celda: (l) => <CeldaDiferencia l={l} /> },
+  { id: 'observaciones', titulo: 'Observaciones Físicas', ancho: 128, celda: (l) => <CeldaObservaciones l={l} /> },
+];
 
 // GoodsReceipt.estado reales (ver _gr_dict / confirmar_recepcion en erp_compras.py):
 // BORRADOR (recien creada, editable) -> COMPLETADA (FISICA, stock actualizado) /
@@ -33,6 +106,9 @@ function estadoInfo(estado: string, hasDiscrepancy: boolean) {
 
 export default function RecepcionDetallePage() {
   const params = useParams();
+  const { avisarError } = useAvisos();
+  // TABLA-compras punto 12 (D40): un solo usePreferenciasTabla para la tabla del conteo.
+  const prefsConteo = usePreferenciasTabla('compras.recepcion.conteo', COLUMNAS_CONTEO);
 
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -46,8 +122,10 @@ export default function RecepcionDetallePage() {
   const [savingWarehouse, setSavingWarehouse] = useState(false);
 
   useEffect(() => {
-    apiFetch('/inventory/warehouses').then(d => setWarehouses(Array.isArray(d) ? d : (d?.data ?? []))).catch(() => {});
-  }, []);
+    apiFetch('/inventory/warehouses').then(d => setWarehouses(Array.isArray(d) ? d : (d?.data ?? [])))
+      // Nada se traga: sin la lista no se puede asignar la bodega, y el aviso lo dice con el mensaje del servidor.
+      .catch((err: unknown) => avisarError(err, 'No se pudieron cargar las bodegas'));
+  }, [avisarError]);
 
   useEffect(() => {
     setCurrentUser(localStorage.getItem('user_name') || localStorage.getItem('username') || '');
@@ -117,10 +195,13 @@ export default function RecepcionDetallePage() {
 
   const isEditable = data?.estado === 'BORRADOR';
 
-  function updateReceived(idx: number, val: number) {
+  const updateReceived = useCallback((idx: number, val: number) => {
     if (!isEditable) return;
     setItems(prev => prev.map((it, i) => (i === idx ? { ...it, qty_recibida: val } : it)));
-  }
+  }, [isEditable]);
+  // La tabla del conteo (modo simple): las líneas con su posición y el control que leen las celdas editables.
+  const lineas = useMemo<LineaConteo[]>(() => items.map((it, idx) => ({ ...it, idx })), [items]);
+  const control = useMemo<ControlConteo>(() => ({ editable: isEditable, actualizar: updateReceived }), [isEditable, updateReceived]);
 
   // Bodega Receptora used to be read-only, showing warehouse_name straight
   // from the backend — which falls back to the SUPPLIER's name when the PEC
@@ -136,8 +217,8 @@ export default function RecepcionDetallePage() {
         body: JSON.stringify({ warehouse_id: Number(warehouseId) }),
       });
       await loadRecepcion();
-    } catch (err: any) {
-      alert('Error al asignar la bodega: ' + err.message);
+    } catch (err: unknown) {
+      avisarError(err, 'Error al asignar la bodega');
     } finally {
       setSavingWarehouse(false);
     }
@@ -158,8 +239,8 @@ export default function RecepcionDetallePage() {
       });
       await loadRecepcion();
       return true;
-    } catch (err: any) {
-      alert('Error al guardar el conteo: ' + err.message);
+    } catch (err: unknown) {
+      avisarError(err, 'Error al guardar el conteo');
       return false;
     } finally {
       setSaving(false);
@@ -187,8 +268,10 @@ export default function RecepcionDetallePage() {
         }),
       });
       await loadRecepcion();
-    } catch (err: any) {
-      alert('Error al validar la recepcion: ' + err.message);
+    } catch (err: unknown) {
+      avisarError(err, 'Error al validar la recepción');
+      // Si la recepción cambió en otro lado (un 409, por ejemplo), se vuelve a pedir lo que se muestra (recargarTrasError).
+      if (recargarTrasError(err)) await loadRecepcion();
     }
     setConfirming(false);
   }
@@ -223,7 +306,7 @@ export default function RecepcionDetallePage() {
     <div className="w-full h-full bg-white flex flex-col overflow-hidden">
 
       {/* Top Action Bar */}
-      <div className="bg-white px-6 py-4 border-b border-slate-200 flex items-center justify-between z-20 shadow-sm shrink-0">
+      <div className="bg-white px-4 sm:px-6 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 z-20 shadow-sm shrink-0">
         <div className="flex items-center gap-4">
           <Link href="/dashboard/compras/recepciones" className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 transition-colors">
             <ArrowLeft size={20} />
@@ -255,10 +338,10 @@ export default function RecepcionDetallePage() {
       </div>
 
       {/* Main Content Layout (Split Pane) */}
-      <div className="flex-1 flex flex-row overflow-hidden">
+      <div className="flex-1 flex flex-col xl:flex-row overflow-y-auto xl:overflow-hidden">
 
         {/* BLOQUE 1: Informacion de Recepcion (Formulario Principal) */}
-        <div className="flex-1 overflow-y-auto px-8 py-8 custom-scrollbar bg-white relative">
+        <div className="xl:flex-1 xl:overflow-y-auto px-4 sm:px-8 py-8 custom-scrollbar bg-white relative min-w-0">
 
           {estado === 'BORRADOR' && hasDiscrepancy && (
             <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-8 flex items-center justify-between shadow-sm animate-in fade-in max-w-6xl mx-auto">
@@ -296,10 +379,10 @@ export default function RecepcionDetallePage() {
                 <FileText className="text-emerald-600" size={24} /> Documentos de Origen (Trazabilidad)
               </h2>
 
-              <div className="grid grid-cols-4 gap-6 bg-slate-50 border border-slate-200 rounded-2xl p-6">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-6 bg-slate-50 border border-slate-200 rounded-2xl p-4 sm:p-6">
 
                 {data?.pec_id && (
-                  <div className="col-span-2">
+                  <div className="sm:col-span-2">
                     <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Orden de Compra (Asociada)</label>
                     <Link href={`/dashboard/compras/pedidos/${data.pec_id}`} className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl px-4 py-3 text-sm font-black hover:bg-emerald-100 transition-colors w-max shadow-sm">
                       <LinkIcon size={16} /> {data.pec_numero || `PEC-${data.pec_id}`}
@@ -310,14 +393,14 @@ export default function RecepcionDetallePage() {
                 {/* Nota: _gr_dict no expone ningun campo de Pedido de Venta (PVEN) asociado,
                     asi que esa tarjeta se omite en vez de inventar un enlace falso. */}
 
-                <div className={data?.pec_id ? 'col-span-2' : 'col-span-4'}>
+                <div className={data?.pec_id ? 'sm:col-span-2' : 'sm:col-span-4'}>
                   <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Proveedor</label>
                   <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800">
                     {data?.supplier_name || 'Sin proveedor'}
                   </div>
                 </div>
 
-                <div className="col-span-2">
+                <div className="sm:col-span-2">
                   <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Bodega Receptora</label>
                   {isEditable ? (
                     <select
@@ -336,8 +419,8 @@ export default function RecepcionDetallePage() {
                   )}
                 </div>
 
-                <div className="col-span-2">
-                  <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Fecha de Recepcion</label>
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Fecha de Recepción</label>
                   <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800">
                     {fDateLong(data?.fecha_recepcion || data?.created_at)}
                   </div>
@@ -366,69 +449,15 @@ export default function RecepcionDetallePage() {
                 </div>
               </div>
 
-              <div className="bg-white border border-slate-200 rounded-2xl overflow-x-auto shadow-sm">
-                <table className="w-full text-left whitespace-nowrap min-w-max">
-                  <thead className="bg-slate-50 border-b border-slate-200">
-                    <tr>
-                      <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase">Producto (Referencia PEC)</th>
-                      <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-center bg-slate-100 border-x border-slate-200 w-32">Cant. Esperada</th>
-                      <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-center bg-emerald-50 border-r border-emerald-100 w-32">Cant. Recibida</th>
-                      <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-center w-24">Diferencia</th>
-                      <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-48">Observaciones Fisicas</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {items.map((item, idx) => {
-                      const diff = (Number(item.qty_recibida) || 0) - (Number(item.qty_esperada) || 0);
-                      const isError = diff !== 0;
-                      return (
-                        <tr key={item.grl_id ?? idx} className="hover:bg-slate-50">
-                          <td className="px-4 py-4">
-                            <div className="font-bold text-slate-800 text-sm">{item.nombre}</div>
-                            {item.sku_id && <div className="text-slate-500 text-xs">SKU {item.sku_id}</div>}
-                          </td>
-                          <td className="px-4 py-4 text-center font-black text-slate-500 bg-slate-50 border-x border-slate-100">
-                            {item.qty_esperada}
-                          </td>
-                          <td className="px-4 py-4 bg-emerald-50/30 border-r border-emerald-50">
-                            <input
-                              type="number"
-                              min="0"
-                              value={item.qty_recibida || ''}
-                              disabled={!isEditable}
-                              onChange={(e) => updateReceived(idx, parseInt(e.target.value) || 0)}
-                              className={`w-full bg-white border rounded-lg px-2 py-2 text-center font-black outline-none transition-colors disabled:bg-slate-100 disabled:text-slate-400 ${
-                                isError && item.qty_recibida !== 0 ? 'border-amber-400 focus:ring-1 focus:ring-amber-500 text-amber-700' : 'border-slate-300 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 text-emerald-700'
-                              }`}
-                            />
-                          </td>
-                          <td className="px-4 py-4 text-center font-black">
-                            {item.qty_recibida === 0 ? (
-                              <span className="text-slate-300">-</span>
-                            ) : (
-                              <span className={diff === 0 ? 'text-emerald-500' : 'text-amber-500 bg-amber-50 px-2 py-1 rounded'}>
-                                {diff > 0 ? `+${diff}` : diff}
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-4 py-4">
-                            <input
-                              type="text"
-                              disabled={!isEditable}
-                              placeholder="Ej: Cajas danadas..."
-                              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:border-emerald-500 outline-none disabled:bg-slate-100 disabled:text-slate-400"
-                            />
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {items.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="px-4 py-6 text-center text-sm text-slate-400 italic">Sin lineas registradas en esta recepcion.</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+              {/* B4 T16A (TABLA-compras punto 12): la tabla estándar en modo simple (se estira, se mueve y se recuerda; sin
+                  paginación, orden ni selección). Los campos de conteo siguen editables (ConteoContext) con la recepción en
+                  BORRADOR. */}
+              <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+                <ConteoContext.Provider value={control}>
+                  <TablaEstandar id="compras.recepcion.conteo" modo="simple" columnas={COLUMNAS_CONTEO} preferencias={prefsConteo}
+                    filas={lineas} claveFila={(l) => l.grl_id ?? `linea-${l.idx}`}
+                    vacio={<span className="italic">Sin líneas registradas en esta recepción.</span>} etiqueta="Conteo físico de la recepción" />
+                </ConteoContext.Provider>
               </div>
             </div>
 
@@ -438,12 +467,13 @@ export default function RecepcionDetallePage() {
         {/* Resizer Handle */}
         <div
           onMouseDown={handleMouseDown}
-          className="w-1.5 bg-slate-200 hover:bg-emerald-500 cursor-col-resize shrink-0 transition-colors z-30"
+          className="hidden xl:block w-1.5 bg-slate-200 hover:bg-emerald-500 cursor-col-resize shrink-0 transition-colors z-30"
           title="Arrastrar para ajustar panel de firmas"
         />
 
         {/* BLOQUE 2: Firmas y Control Documental */}
-        <div style={{ width: rightWidth }} className="bg-white flex flex-col overflow-hidden shrink-0 shadow-[-10px_0_15px_-10px_rgba(0,0,0,0.05)]">
+        <div style={{ '--ancho-firmas': `${rightWidth}px` } as CSSProperties}
+          className="bg-white flex flex-col xl:overflow-hidden shrink-0 w-full xl:w-[var(--ancho-firmas)] border-t border-slate-200 xl:border-t-0 shadow-[-10px_0_15px_-10px_rgba(0,0,0,0.05)]">
 
           <div className="p-5 border-b border-slate-200 bg-slate-800 flex items-center justify-between shadow-sm z-10 shrink-0">
             <h3 className="font-black text-white flex items-center gap-2 text-lg">
@@ -451,7 +481,7 @@ export default function RecepcionDetallePage() {
             </h3>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-6 custom-scrollbar bg-slate-50 space-y-6">
+          <div className="xl:flex-1 xl:overflow-y-auto p-4 sm:p-6 custom-scrollbar bg-slate-50 space-y-6">
 
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
               <label className="block text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">Estado Visual de la Carga</label>

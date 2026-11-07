@@ -1318,4 +1318,42 @@ console.log('--- TEST 32 (B4 T16A): Recepciones (compras/recepciones/page.tsx) y
   assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(pag.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')), 'sin diálogos nativos');
 }
 
+console.log('--- TEST 33 (B4 T16A, TABLA-compras punto 12; RP30): el conteo de una recepción (recepciones/[id]/page.tsx) en modo simple y sin diálogos nativos ---');
+{
+  const cont = readFileSync(new URL('../src/app/dashboard/compras/recepciones/[id]/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = cont.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '');
+  // Los 3 diálogos nativos de B1 a B3 (bodega, guardar el conteo y validar) pasaron a useAvisos con el mismo texto.
+  assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(codigo), 'sin diálogos nativos');
+  assert.match(cont, /const \{ avisarError \} = useAvisos\(\);/);
+  for (const texto of ['Error al asignar la bodega', 'Error al guardar el conteo', 'Error al validar la recepción']) {
+    assert.match(cont, new RegExp(`avisarError\\(err, '${texto}'\\)`), texto);
+  }
+  assert.match(cont, /avisarError\(err, 'No se pudieron cargar las bodegas'\)/, 'la lista de bodegas ya no se traga el error');
+  assert.ok(!/\.catch\(\(\) => \{\}\)/.test(cont) && !/\.catch\(\(\) => (\[\]|null)\)/.test(cont), 'ningún error se traga');
+  assert.match(cont, /if \(recargarTrasError\(err\)\) await loadRecepcion\(\);/, 'validar: un 409 recarga lo que se ve');
+  // La tabla (modo simple, D40): una instancia de preferencias, una tabla y los campos de conteo siguen editables.
+  assert.match(cont, /const prefsConteo = usePreferenciasTabla\('compras\.recepcion\.conteo', COLUMNAS_CONTEO\);/);
+  assert.match(cont, /<TablaEstandar id="compras\.recepcion\.conteo" modo="simple" columnas=\{COLUMNAS_CONTEO\} preferencias=\{prefsConteo\}/);
+  assert.ok(!/<table\b/.test(cont), 'la tabla a mano se fue');
+  for (const [id, titulo] of [['producto', 'Producto (Referencia PEC)'], ['esperada', 'Cant. Esperada'], ['recibida', 'Cant. Recibida'], ['diferencia', 'Diferencia'],
+    ['observaciones', 'Observaciones Físicas']]) {
+    assert.match(cont, new RegExp(`\\{ id: '${id}', titulo: '${titulo.replace(/[().]/g, '\\$&')}'`), `columna ${titulo}`);
+  }
+  assert.match(cont, /const isEditable = data\?\.estado === 'BORRADOR';/, 'solo un BORRADOR se cuenta');
+  assert.match(cont, /if \(!isEditable\) return;\s*setItems\(prev => prev\.map\(\(it, i\) => \(i === idx \? \{ \.\.\.it, qty_recibida: val \} : it\)\)\);/, 'el conteo sigue editable solo en BORRADOR');
+  assert.match(cont, /disabled=\{!control\?\.editable\}/, 'el campo se apaga cuando no es editable');
+  assert.match(cont, /onChange=\{\(e\) => control\?\.actualizar\(l\.idx, parseInt\(e\.target\.value\) \|\| 0\)\}/, 'y escribe en la línea de esa fila');
+  assert.match(cont, /aria-label=\{`Cantidad recibida de \$\{l\.nombre\}`\}/);
+  // Lo de B1 a B3 sigue: guardar el borrador, cerrar y validar (guarda antes de confirmar), la bodega y el exceso.
+  for (const texto of ['Guardar Borrador', 'Cerrar y Validar Conteo', 'Bodega Receptora', 'Alerta de Discrepancia en Conteo Fisico']) assert.ok(cont.includes(texto), texto);
+  assert.match(cont, /const saved = await guardarConteo\(\);\s*if \(!saved\) \{ setConfirming\(false\); return; \}/, 'cerrar y validar guarda primero');
+  assert.match(cont, /allow_excess: allowExcess/);
+  assert.match(cont, /\/compras\/recepciones\/\$\{data\.id\}\/confirmar/);
+  // La guardia de diálogos nativos incluye las pantallas de T16A (RP30), en el mismo commit.
+  const guardia = readFileSync(new URL('./test_sin_dialogos_nativos.mjs', import.meta.url), 'utf8');
+  for (const ruta of ['recepciones/[id]/page.tsx', 'transito/page.tsx', 'recepciones/page.tsx', 'columnas-recepcion.tsx']) {
+    assert.ok(guardia.includes(`'src/app/dashboard/compras/${ruta}'`), `RAICES lleva ${ruta}`);
+  }
+}
+
 console.log('\nOK: test_estados_compras.mjs');

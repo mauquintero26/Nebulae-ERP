@@ -43,6 +43,10 @@ const RAICES = [
   'src/app/dashboard/compras/page.tsx', // B4 T14 (RP30): el Hub de Compras, sin sus dos confirm()
   'src/app/dashboard/compras/pedidos/page.tsx', // B4 T15 (RP30): Pedidos de compra, sin sus 5 confirm() ni sus 2 alert()
   'src/app/dashboard/compras/pedidos/[id]/page.tsx', // B4 T15 (RP30): el detalle de un PEC, sin su alert()
+  'src/app/dashboard/compras/recepciones/[id]/page.tsx', // B4 T16A (RP30): el conteo de una recepción, sin sus 3 alert()
+  'src/app/dashboard/compras/transito/page.tsx', // B4 T16A: Tránsito nace sin diálogos nativos
+  'src/app/dashboard/compras/recepciones/page.tsx', // B4 T16A: Recepciones nace sin diálogos nativos
+  'src/app/dashboard/compras/columnas-recepcion.tsx', // B4 T16A: las columnas compartidas con Inventario (T19)
 ];
 
 // alert( / confirm( / prompt(, sueltos o con window. / window?. / globalThis. / self. delante, que no sean parte de
