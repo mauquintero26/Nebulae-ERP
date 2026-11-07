@@ -632,7 +632,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
       setInfoEdit(false);
     } catch(e){
       onToast(e,'error');
-      // T15 r1 (m9): si el PEC cambió en otro lado (un 409 o un 404), se vuelve a pedir lo que se muestra.
+      // T15 r1 (m9): si el PEC cambió en otro lado y recargarTrasError lo indica (un 400, un 409 o sin respuesta; un 404 no recarga), se vuelve a pedir lo que se muestra.
       if (recargarTrasError(e)) { onUpdate(); loadFull(); }
     }
     setSavingInfo(false);
