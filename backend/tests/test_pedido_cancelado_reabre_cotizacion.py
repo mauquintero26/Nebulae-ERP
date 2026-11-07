@@ -452,8 +452,10 @@ def test_la_lista_de_compras_no_muestra_items_de_pedidos_cancelados(app_client, 
          "estado": "PENDIENTE"},
     ]
     _save_lista_compras(db, items)
+    # B4 T12 r1 (I1): limit tiene ahora el tope de las listas (le=200, R5 y D46). Los ítems de la prueba tienen los ids
+    # más altos y la Lista ordena por id desc, así que si se mostraran estarían en esta primera página.
     for filtro in ("", "&estado=PENDIENTE", "&estado=EN_PEDIDO", "&search=REA016"):
-        lista = app_client.get(f"/api/v1/compras/lista-compras?limit=100000{filtro}", headers=auth(admin_token))
+        lista = app_client.get(f"/api/v1/compras/lista-compras?limit=200{filtro}", headers=auth(admin_token))
         assert lista.status_code == 200, lista.text
         productos = {it["producto"] for it in lista.json()["data"]}
         assert "Mesa REA016" not in productos and "Lampara REA016" not in productos, filtro
