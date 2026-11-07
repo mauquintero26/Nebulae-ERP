@@ -297,6 +297,25 @@ def test_dona_por_categoria_y_bodega(app_client, db, admin_token, product, categ
     assert (por_categoria[category.name], por_categoria[otra.name]) == (4_000, 2_000)
 
 
+def test_referencia_sin_rastrear_no_entra_en_el_analisis(app_client, db, admin_token, product):
+    """RP51 y R10: una referencia cuya publicación tiene rastrear_inventario = false no suma al valor, y sus movimientos
+    no cuentan como entradas ni salidas, no mueven la curva y no salen en los movimientos ni en el ranking."""
+    f = _Fabrica(db, product)
+    a = f.sku(costo=1_000, nivel=3)
+    oculto = f.sku(costo=1_000, nivel=9)
+    f._guardar(ProductWebListing(sku_id=oculto.id, rastrear_inventario=False))
+    f.mov(a, "IN", 3, _utc(2001, 1, 2, 12))
+    f.mov(oculto, "IN", 9, _utc(2001, 1, 3, 12))
+    f.mov(oculto, "OUT", 2, _utc(2001, 1, 4, 12))
+    data = _analisis(app_client, admin_token, bodega=f.w.id)
+    k = _kpis(data)
+    assert (k["valor_inventario"]["valor"], k["entradas"]["valor"], k["salidas"]["valor"]) == (3_000, 3, 0)
+    assert _serie(data["linea"], "actual")["valores"] == [0] + [3_000] * 9
+    assert [m["detalle"].split(" · ")[0] for m in data["movimientos"]["filas"]] == [a.sku]
+    assert data["ranking"]["filas"] == []
+    assert _dona(data, "categoria") == {product.category.name: 3_000}
+
+
 # ─── 7) Productos que más salen ──────────────────────────────────────────────────────────────────────────────────────
 
 def test_ranking_productos_que_salen(app_client, db, admin_token, product):
