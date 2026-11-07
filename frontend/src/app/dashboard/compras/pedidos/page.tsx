@@ -1,47 +1,82 @@
 'use client';
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useContext, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams, useRouter } from 'next/navigation';
 import {
-  ShoppingBag, Package, Truck, CheckCircle2, AlertTriangle, Activity,
-  Search, MoreHorizontal, RefreshCw, Filter, X, Trash2, Edit2, Send,
-  TrendingUp, DollarSign, Calendar, MessageSquare, AlertCircle, ChevronRight,
-  ChevronUp, Plus, Eye, ShoppingCart, FileText, LayoutGrid, List,
-  Bell, Receipt, Clock, MapPin, ArrowRight, Save, ChevronDown,
-  ExternalLink, RotateCcw, Layers, Tag, Hash, UserPlus, Settings2, PackageCheck
+  ShoppingBag, Package, CheckCircle2, AlertTriangle,
+  Search, MoreHorizontal, RefreshCw, X, Trash2, Edit2, Send,
+  ChevronUp, Plus, Eye, ShoppingCart, Clock, MapPin, Save, ChevronDown, BarChart3,
+  ExternalLink, RotateCcw, UserPlus, Settings2, PackageCheck
 } from 'lucide-react';
-import { SubNav, PageHeader, Badge, Toast, ToastMsg, Button, EmptyState } from '@/components/ui';
+// B4 T15: Pedidos de compra 100 % sobre el servidor (R5, C3, C4): la tabla y el tablero estándar con el estado único de
+// la pantalla, las tarjetas y la franja del flujo; el Análisis vive en el Hub (R13). El panel del PEC, el seguimiento,
+// la recepción y el alta conservan lo de B1 a B3.
+import {
+  SubNav, PageHeader, Button, useAvisos, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila, ModalMotivo,
+  TableroKanban, useTableroKanban,
+} from '@/components/ui';
+import type { ItemMenuFila } from '@/components/ui';
+import {
+  BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
+} from '@/components/tabla';
+import type { AccionTabla, ClaveFila, PestanaTabla } from '@/components/tabla';
+import { BannerFlujo, PasosFlujo, useResumenFlujo } from '@/components/flujo';
+import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
 import { COMP_NAV } from '../comp-nav';
 
-import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
-async function apiFetch(path: string, opts: any = {}) {
+import { apiFetch as _apiFetch } from '@/lib/api';
+import type { OpcionesApiFetch } from '@/lib/api';
+import {
+  accionModo, accionPestana, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta,
+} from '@/lib/tabla';
+import { PERIODO_KPI, tarjetasPedidosCompra } from '@/lib/kpis';
+// T15 r1 (m7): la etiqueta del estado del pedido de venta (el chip del alta), nunca el código.
+import { infoEstadoPedido } from '@/lib/estados-pedido';
+import { recargarTrasError, textoDeError } from '@/lib/avisos';
+// Piezas genéricas que nacieron en las libs de Ventas (T7 y T10), como en el Hub de Compras (T14): el chip del orden, la
+// pestaña desde Kanban y la ruta sin un parámetro.
+import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
+import { accionVistaEnLista, rutaSinParametro } from '@/lib/listas-ventas';
+import {
+  COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, cancelarPecsEnSerie, consultaColumnaPec,
+  despuesDeCancelarPec, etapaPec, grupoMesPec, infoEstadoPec, opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec,
+  repartirCancelacionPec, resumenCancelacionPec, tarjetaPedidoCompra, textoVacioPec, tituloMesPec, transicionesPec,
+} from '@/lib/estados-compras';
+import {
+  ENLACE_VER_ANALISIS_COMPRAS, TEXTO_SEGUIMIENTO_CERRADO, accionSemaforoCompras, avisoTarjetaEtapa, avisosFlujoCompras,
+  etiquetaEtapaTracking, filtroSemaforoCompras, leerEnlacePedidosCompra, pasosDeTracking, pasosPedidosCompra, seguimientoCerrado,
+  textoReglaCompras, vistaDePasoPedidosCompra,
+} from '@/lib/flujo-compras';
+// B4 T15 r1 (m3, m11): las columnas, las celdas y los formatos que comparte con el Hub de Compras.
+import { claseDeFilaPec, columnasPec, fCOP, textoDia, textoInstante, titulosDeOrdenPec } from '../columnas-pec';
+import type { FilaColumnasPec } from '../columnas-pec';
+
+// La lectura de siempre de B1 a B3: el `data` de la respuesta. Los errores ya llegan legibles de lib/api (status y
+// detail del servidor), así que se muestran tal cual.
+async function apiFetch(path: string, opts: OpcionesApiFetch = {}) {
   const res = await _apiFetch(path, opts);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.detail || data.message || 'Error');
   return data.data ?? data;
 }
 
-const fCOP  = (v: any) => { const n = Number(v)||0; return n > 0 ? '$'+n.toLocaleString('es-CO') : '-'; };
-const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
-const fMonthKey = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{year:'numeric',month:'long'}) : 'Sin fecha';
+// El nombre de B1 a B3 en el alta y en el panel: el de un instante.
+const fDate = textoInstante;
 
-const PEC_ESTADOS: Record<string,{bg:string;text:string;border:string;label:string}> = {
-  BORRADOR:          {bg:'bg-slate-100',   text:'text-slate-700',   border:'border-slate-200',   label:'Borrador'},
-  EMITIDO:           {bg:'bg-amber-100',   text:'text-amber-800',   border:'border-amber-200',   label:'Emitido'},
-  ENVIADO:           {bg:'bg-blue-100',    text:'text-blue-800',    border:'border-blue-200',    label:'Enviado'},
-  EN_TRANSITO:       {bg:'bg-indigo-100',  text:'text-indigo-800',  border:'border-indigo-200',  label:'En Transito'},
-  PENDIENTE_ENTREGA: {bg:'bg-orange-100',  text:'text-orange-800',  border:'border-orange-200',  label:'Pend. Entrega'},
-  RECIBIDO:          {bg:'bg-emerald-100', text:'text-emerald-800', border:'border-emerald-200', label:'Recibido'},
-  // confirmar_recepcion sets the PEC's own estado to one of these two on the
-  // parent PurchaseOrderFull — distinct from RECIBIDO above (set only by the
-  // tracking-stage flow) and missing here entirely, so a PEC that had gone
-  // through a real reception confirmation fell through to PEC_ESTADOS.BORRADOR
-  // and displayed as "Borrador" regardless of its real state.
-  RECIBIDA:            {bg:'bg-emerald-100', text:'text-emerald-800', border:'border-emerald-200', label:'Recibido'},
-  PARCIALMENTE_RECIBIDA:{bg:'bg-amber-100',  text:'text-amber-800',  border:'border-amber-200',   label:'Parcialmente Recibido'},
-  COMPLETADO:        {bg:'bg-green-100',   text:'text-green-800',   border:'border-green-200',   label:'Completado'},
-  CANCELADO:         {bg:'bg-red-100',     text:'text-red-700',     border:'border-red-200',     label:'Cancelado'},
+/** Quien hace el cambio (updated_by: la Actividad del PEC dice su nombre). Sin sesión se omite y el servidor usa el correo. */
+const autorActual = () => {
+  if (typeof window === 'undefined') return undefined;
+  return localStorage.getItem('user_name') || localStorage.getItem('user_email') || undefined;
 };
+
+/**
+ * El aviso de los modales y del panel (B1 a B3: showToast). B4 T15: con el tipo de la página (los de error pasan por
+ * textoDeError en useAvisos): antes el tipo de los modales no admitía el de la página (los 2 errores de tsc de la base).
+ */
+type AvisoPantalla = (msg: unknown, tipo?: 'ok' | 'error') => void;
+
+/** Los tonos de los días de avisoTarjetaEtapa (en -700: se leen sobre el fondo de la tarjeta de la etapa). */
+const CLASE_DIAS_ETAPA: Record<string, string> = { azul: 'text-blue-700', ambar: 'text-amber-700', rojo: 'text-rose-700' };
 
 /* ================================================================
    NUEVO PROVEEDOR MODAL
@@ -49,13 +84,15 @@ const PEC_ESTADOS: Record<string,{bg:string;text:string;border:string;label:stri
 function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClose:()=>void}) {
   const [form, setForm] = useState({name:'',reference:'',contact_name:'',phone:'',email:'',address:'',city:'',country:'Colombia',payment_terms:'',notes:''});
   const [saving, setSaving] = useState(false);
+  // B4 T15 (RP30): el error en un aviso del sistema, con el texto del servidor (nunca alert()).
+  const { avisarError } = useAvisos();
   const set = (k:string,v:string) => setForm(f=>({...f,[k]:v}));
   async function save(e:React.FormEvent) {
     e.preventDefault();
     if (!form.name.trim()) return;
     setSaving(true);
     try { const raw = await apiFetch('/compras/proveedores',{method:'POST',body:JSON.stringify(form)}); onSave(raw?.data ?? raw); }
-    catch(err:any) { alert('Error: '+err.message); }
+    catch(err) { avisarError(err, 'No se pudo crear el proveedor'); }
     setSaving(false);
   }
   return (
@@ -93,13 +130,15 @@ function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClose:()=>
 function NewCasilleroModal({onSave, onClose}: {onSave:(c:any)=>void; onClose:()=>void}) {
   const [form, setForm] = useState({name:'',address:'',reception_point:'',contact_name:'',phone:'',email:'',city:'',country:'Estados Unidos',notes:''});
   const [saving, setSaving] = useState(false);
+  // B4 T15 (RP30): el error en un aviso del sistema, con el texto del servidor (nunca alert()).
+  const { avisarError } = useAvisos();
   const set = (k:string,v:string) => setForm(f=>({...f,[k]:v}));
   async function save(e:React.FormEvent) {
     e.preventDefault();
     if (!form.name.trim()) return;
     setSaving(true);
     try { const raw = await apiFetch('/compras/casilleros',{method:'POST',body:JSON.stringify(form)}); onSave(raw?.data ?? raw); }
-    catch(err:any) { alert('Error: '+err.message); }
+    catch(err) { avisarError(err, 'No se pudo crear el casillero'); }
     setSaving(false);
   }
   return (
@@ -134,7 +173,7 @@ function NewCasilleroModal({onSave, onClose}: {onSave:(c:any)=>void; onClose:()=
 /* ================================================================
    TRACKING CONFIG MODAL — icono de configuracion (Etapas/Alertas + Casilleros)
    ================================================================ */
-function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:(m:string,t?:string)=>void}) {
+function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:AvisoPantalla}) {
   const [tab, setTab] = useState<'etapas'|'casilleros'>('etapas');
   const [tipoEnvio, setTipoEnvio] = useState<'casillero'|'directo'>('casillero');
   const [config, setConfig] = useState<any>(null);
@@ -143,6 +182,8 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:(m:s
   const [saving, setSaving] = useState(false);
   const [casilleros, setCasilleros] = useState<any[]>([]);
   const [showNewCasillero, setShowNewCasillero] = useState(false);
+  // T15 r1 (m9): los errores de la lista de casilleros se dicen (antes se callaban).
+  const { avisarError } = useAvisos();
 
   const loadConfig = useCallback(async () => {
     setLoading(true);
@@ -152,7 +193,7 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:(m:s
   }, [tipoEnvio]);
   const loadCasilleros = async () => {
     try { const d = await apiFetch('/compras/casilleros?limit=100'); setCasilleros(Array.isArray(d)?d:(d?.data||[])); }
-    catch {}
+    catch (err) { avisarError(err, 'No se pudieron cargar los casilleros'); }
   };
   useEffect(()=>{ loadConfig(); loadCasilleros(); }, []);
   useEffect(()=>{ if(config) setStages(config[tipoEnvio]||[]); }, [tipoEnvio]);
@@ -176,8 +217,14 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:(m:s
     setSaving(false);
   };
 
+  // B4 T15 (RP30): confirmar de useAvisos (nunca confirm()), con el nombre del casillero.
+  const { confirmar } = useAvisos();
   const deleteCasillero = async (id:number) => {
-    if (!confirm('Eliminar este casillero?')) return;
+    const nombre = casilleros.find((c) => c.id === id)?.name;
+    if (!(await confirmar({
+      titulo: '¿Eliminar este casillero?', mensaje: nombre ? `Se elimina «${nombre}» de la lista de casilleros.` : 'Se elimina de la lista de casilleros.',
+      textoConfirmar: 'Eliminar casillero', peligro: true,
+    }))) return;
     try { await apiFetch(`/compras/casilleros/${id}`,{method:'DELETE'}); loadCasilleros(); onToast('Casillero eliminado','ok'); }
     catch(e:any) { onToast(e.message,'error'); }
   };
@@ -207,7 +254,7 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:(m:s
               <div className="flex gap-2">
                 {(['casillero','directo'] as const).map(t=>(
                   <button key={t} onClick={()=>setTipoEnvio(t)} className={'px-3 py-1.5 rounded-lg text-xs font-bold border ' + (tipoEnvio===t?'bg-indigo-600 text-white border-indigo-600':'bg-white text-gray-600 border-gray-200 hover:bg-gray-50')}>
-                    {t==='casillero'?'Via Casillero':'Directo Colombia'}
+                    {t==='casillero'?'Vía casillero':'Directo Colombia'}
                   </button>
                 ))}
               </div>
@@ -289,7 +336,7 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:(m:s
    este archivo usaban nombres de etapa distintos, asi que el PATCH de
    las etapas 2/3/4 nunca encontraba coincidencia y no hacia nada).
    ================================================================ */
-function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; onToast:(m:string,t?:string)=>void}) {
+function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; onToast:AvisoPantalla}) {
   const [updating, setUpdating] = useState<string|null>(null);
   const [editStage, setEditStage] = useState<string|null>(null);
   const [guia, setGuia] = useState('');
@@ -301,8 +348,12 @@ function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; on
   const [casilleroResults, setCasilleroResults] = useState<any[]>([]);
   const [showNewCasillero, setShowNewCasillero] = useState(false);
   const casilleroTimer = useRef<any>(null);
+  // T15 r1 (m9): el error de la búsqueda de casilleros se dice (antes se callaba).
+  const { avisarError } = useAvisos();
 
   const stages: any[] = pec.tracking_stages || [];
+  // T15 r1 (m4, m14): con el PEC cancelado, el seguimiento es de solo lectura (seguimientoCerrado, la regla del detalle).
+  const cerrado = seguimientoCerrado(pec.estado);
 
   async function updateStage(stageName: string, status: string) {
     setUpdating(stageName);
@@ -350,23 +401,9 @@ function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; on
       try {
         const d = await apiFetch('/compras/casilleros/search?q='+encodeURIComponent(q));
         setCasilleroResults(Array.isArray(d)?d:(d?.data||[]));
-      } catch {}
+      } catch (err) { avisarError(err, 'No se pudo buscar el casillero'); }
     }, 300);
   }
-
-  const stageColor = (status: string) => {
-    if (status === 'COMPLETADO') return 'bg-emerald-500 border-emerald-500';
-    if (status === 'EN_PROCESO') return 'bg-blue-500 border-blue-500';
-    return 'bg-gray-200 border-gray-300';
-  };
-
-  const diasTexto = (etaVal: string|null) => {
-    if (!etaVal) return null;
-    const d = Math.ceil((new Date(etaVal).getTime() - Date.now()) / 86400000);
-    if (d > 0) return {txt:`${d} dia(s) restante(s)`, color:'text-blue-600'};
-    if (d === 0) return {txt:'Vence hoy', color:'text-amber-600'};
-    return {txt:`${Math.abs(d)} dia(s) de atraso`, color:'text-red-600'};
-  };
 
   if (stages.length === 0) {
     return <p className="text-center py-10 text-gray-400 text-sm">Sin etapas de tracking configuradas para este pedido.</p>;
@@ -377,63 +414,58 @@ function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; on
       {showNewCasillero && (
         <NewCasilleroModal onClose={()=>setShowNewCasillero(false)} onSave={(c:any)=>{setCasilleroId(c.id);setCasilleroSearch(c.name);setCasilleroResults([]);setShowNewCasillero(false);}}/>
       )}
-      {/* Visual progress bar */}
-      <div className="flex items-center gap-1 mb-6">
-        {stages.map((sd,i) => {
-          const status = sd.status || 'PENDIENTE';
-          return (
-            <React.Fragment key={sd.stage}>
-              <div className="flex flex-col items-center flex-1">
-                <div className={'w-10 h-10 rounded-full flex items-center justify-center text-lg border-2 transition-all ' + stageColor(status)}>
-                  {status === 'COMPLETADO' ? <CheckCircle2 size={18} className="text-white"/> :
-                   status === 'EN_PROCESO' ? <Clock size={18} className="text-white"/> :
-                   <span className="text-gray-400 text-sm">{i+1}</span>}
-                </div>
-                <p className="text-[10px] text-center text-gray-500 mt-1 max-w-[70px] leading-tight">{sd.label}</p>
-                {sd.tracking_number && <p className="text-[9px] text-indigo-600 font-bold mt-0.5 max-w-[70px] truncate">{sd.tracking_number}</p>}
-              </div>
-              {i < stages.length - 1 && (
-                <div className={'flex-none h-0.5 w-8 mt-[-24px] ' + (stages[i+1].status !== 'PENDIENTE' ? 'bg-emerald-400' : 'bg-gray-200')}/>
-              )}
-            </React.Fragment>
-          );
-        })}
-      </div>
+      {/* B4 T15 (FLUJO-compras punto 6; RP28): las etapas reales del envío (3 si es directo, 4 por casillero, en el orden del
+          arreglo) en la barra estándar, con la en curso resaltada; el aviso va en rojo solo si la etapa va atrasada.
+          T15 r1 (m4, m14): un PEC cancelado no sigue su envío (seguimientoCerrado, la regla del detalle): sin la barra y
+          con las tarjetas de solo lectura (sin editar, «En proceso», «Completado» ni «Revertir»). */}
+      {cerrado ? (
+        <p className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">{TEXTO_SEGUIMIENTO_CERRADO}</p>
+      ) : (
+        <div className="mb-6">
+          <PasosFlujo variante="barra" pasos={pasosDeTracking(stages)} etiqueta={`Etapas del envío de ${pec.numero || 'este pedido'}`} />
+        </div>
+      )}
 
       {/* Stage cards */}
       {stages.map((sd) => {
         const status = sd.status || 'PENDIENTE';
         const history: any[] = sd.tracking_history || [];
-        const isEditing = editStage === sd.stage;
-        const dias = diasTexto(sd.eta);
+        const isEditing = !cerrado && editStage === sd.stage;
+        // T15 r1 (m2, m6): UNA regla por tarjeta (avisoTarjetaEtapa): el aviso del servidor si lo hay (rojo si va
+        // atrasada, neutro si no) o, si no, los días que faltan para la ETA (el día de calendario de Colombia).
+        const aviso = cerrado ? null : avisoTarjetaEtapa(sd);
         return (
           <div key={sd.stage} className={'rounded-2xl border p-4 transition-all ' + (status==='COMPLETADO'?'border-emerald-200 bg-emerald-50':status==='EN_PROCESO'?'border-blue-200 bg-blue-50':'border-gray-200 bg-white')}>
             <div className="flex items-center justify-between mb-2">
               <div>
                 <p className="font-bold text-sm text-gray-900">{sd.label}</p>
-                {sd.timestamp && <p className="text-[10px] text-gray-400">{fDate(sd.timestamp)}</p>}
+                {sd.timestamp && <p className="text-[10px] text-gray-500">{textoInstante(sd.timestamp)}</p>}
               </div>
               <div className="flex items-center gap-2">
-                <span className={'text-xs font-black px-2 py-1 rounded-full ' + (status==='COMPLETADO'?'bg-emerald-100 text-emerald-700':status==='EN_PROCESO'?'bg-blue-100 text-blue-700':'bg-gray-100 text-gray-500')}>{status}</span>
-                <button onClick={()=>openEdit(sd)} className="p-1.5 hover:bg-white rounded-lg border border-gray-200 text-gray-500"><Edit2 size={12}/></button>
+                {/* RP28: el estado de la etapa en palabras (Pendiente, En curso, Completada, Cancelada), nunca el código. */}
+                <span className={'text-xs font-black px-2 py-1 rounded-full ' + (status==='COMPLETADO'?'bg-emerald-100 text-emerald-700':status==='EN_PROCESO'?'bg-blue-100 text-blue-700':'bg-gray-100 text-gray-600')}>{etiquetaEtapaTracking(status)}</span>
+                {!cerrado && (
+                  <button onClick={()=>openEdit(sd)} aria-label={`Editar la etapa ${sd.label || ''}`} className="p-1.5 hover:bg-white rounded-lg border border-gray-200 text-gray-500"><Edit2 size={12}/></button>
+                )}
               </div>
             </div>
 
-            {/* ETA / carrier / casillero / timer */}
+            {/* ETA / carrier / casillero / guía (T15 r1, m13: la guía vigente, como la barra de antes) / días */}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500 mb-1">
-              {sd.eta && <span className="flex items-center gap-1"><Clock size={11}/> ETA: <strong className="text-gray-700">{fDate(sd.eta)}</strong></span>}
+              {sd.eta && <span className="flex items-center gap-1"><Clock size={11}/> ETA: <strong className="text-gray-700">{textoDia(sd.eta)}</strong></span>}
               {sd.carrier && <span>Carrier: <strong className="text-gray-700">{sd.carrier}</strong></span>}
               {sd.casillero_nombre && <span className="flex items-center gap-1"><MapPin size={11}/> {sd.casillero_nombre}</span>}
-              {dias && status !== 'COMPLETADO' && <span className={'font-bold ' + dias.color}>{dias.txt}</span>}
+              {sd.tracking_number && <span>Guía: <strong className="text-indigo-700">{sd.tracking_number}</strong></span>}
+              {aviso?.fuente === 'dias' && <span className={'font-bold ' + CLASE_DIAS_ETAPA[aviso.tono]}>{aviso.texto}</span>}
             </div>
-            {sd.alert && status !== 'COMPLETADO' && (
-              sd.alert.nivel === 'atrasado' ? (
+            {aviso?.fuente === 'servidor' && (
+              aviso.tono === 'rojo' ? (
                 <div className="mb-2 px-3 py-1.5 bg-red-50 border border-red-200 rounded-lg text-xs font-bold text-red-700 flex items-center gap-1.5">
-                  <AlertTriangle size={12}/> {sd.alert.mensaje}
+                  <AlertTriangle size={12}/> {aviso.texto}
                 </div>
               ) : (
-                <div className="mb-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-lg text-xs font-bold text-blue-700 flex items-center gap-1.5">
-                  <Clock size={12}/> {sd.alert.mensaje}
+                <div className="mb-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-600 flex items-center gap-1.5">
+                  <Clock size={12}/> {aviso.texto}
                 </div>
               )
             )}
@@ -501,8 +533,21 @@ function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; on
 /* ================================================================
    PEC DETAIL PANEL — full-width slide-over (left: 240px)
    ================================================================ */
-function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=>void; onUpdate:()=>void; onToast:(m:string,t?:string)=>void}) {
+type PropsPanelPec = {
+  pec: any;
+  onClose: () => void;
+  onUpdate: () => void;
+  onToast: AvisoPantalla;
+  /** B4 T15 (R9, C15c): cancelar abre el ModalMotivo de la página (el mismo del menú de fila, del tablero y de la masiva). */
+  onCancelar: (pec: any) => void;
+  /** B4 T15 (m10 de T14): sube cuando la página pide releer el detalle (cancelar falló y el servidor pide recargar). */
+  vueltaDetalle: number;
+};
+
+function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDetalle}: PropsPanelPec) {
   const router = useRouter();
+  // B4 T15 (RP30): «Eliminar definitivamente» con confirmar de useAvisos (nunca confirm()).
+  const { confirmar } = useAvisos();
   const [detail, setDetail] = useState<any>(pec);
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState('tracking');
@@ -514,7 +559,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
   const [infoForm, setInfoForm] = useState<any>({});
   const [savingInfo, setSavingInfo] = useState(false);
 
-  // "Hacer Recepcion": ir directo a LA recepcion de este PEC, no al hub general
+  // "Hacer recepción": ir directo a LA recepción de este PEC, no al hub general
   // (con cientos de pedidos, aterrizar en la lista completa obliga a buscarla).
   // Si ya existe una (GoodsReceipt), abrirla; si no, crearla y abrir la nueva.
   async function goToRecepcion() {
@@ -543,14 +588,23 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
     catch(e:any) { onToast(e.message,'error'); }
     finally { setLoading(false); }
   };
-  useEffect(()=>{ if(pec) loadFull(); },[pec?.id]);
+  // B4 T15 (m10 de T14): también cuando la página lo pide (vueltaDetalle), para que el panel no quede con el estado viejo.
+  useEffect(()=>{ if(pec) loadFull(); },[pec?.id, vueltaDetalle]);
 
+  // B4 T15 (KANBAN-compras punto 6; R9, C15c): el botón Estado solo ofrece lo que acepta update_pec (transicionesPec):
+  // emitir un borrador (PATCH) o cancelar, que abre el ModalMotivo de la página con su motivo. En tránsito y Recibido
+  // los ponen el seguimiento y la recepción. Si el servidor dice que no, se ve su mensaje.
+  const transiciones = transicionesPec(detail?.estado);
   const changeEstado = async (est: string) => {
-    try {
-      await apiFetch('/compras/pedidos/'+pec.id,{method:'PATCH',body:JSON.stringify({estado:est,updated_by:localStorage.getItem('user_name')||''})});
-      onToast(est==='CANCELADO' ? 'PEC cancelado: lo encuentras en la pestaña Cancelados' : 'Estado actualizado','ok'); onUpdate(); loadFull();
-    } catch(e:any){ onToast(e.message,'error'); }
     setEditEstado(false);
+    if (est === 'CANCELADO') { onCancelar(detail ?? pec); return; }
+    try {
+      await apiFetch('/compras/pedidos/'+pec.id,{method:'PATCH',body:JSON.stringify({estado:est,updated_by:autorActual()})});
+      onToast('Estado actualizado','ok'); onUpdate(); loadFull();
+    } catch(e){
+      onToast(e,'error');
+      if (recargarTrasError(e)) { onUpdate(); loadFull(); }
+    }
   };
 
   // El backend ya acepta editar proveedor/notas/fechas/modalidad via el mismo
@@ -570,29 +624,43 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
   const saveInfo = async () => {
     setSavingInfo(true);
     try {
-      await apiFetch('/compras/pedidos/'+pec.id,{method:'PATCH',body:JSON.stringify({...infoForm,updated_by:localStorage.getItem('user_name')||''})});
-      onToast('Informacion actualizada','ok'); onUpdate(); await loadFull();
+      // B4 T15 (resolución 4; T12 r2): la fecha de entrega en blanco va como null (la borra), como en el alta.
+      await apiFetch('/compras/pedidos/'+pec.id,{method:'PATCH',body:JSON.stringify({
+        ...infoForm, fecha_entrega_estimada: infoForm.fecha_entrega_estimada || null, updated_by: autorActual(),
+      })});
+      onToast('Información actualizada','ok'); onUpdate(); await loadFull();
       setInfoEdit(false);
-    } catch(e:any){ onToast(e.message,'error'); }
+    } catch(e){
+      onToast(e,'error');
+      // T15 r1 (m9): si el PEC cambió en otro lado y recargarTrasError lo indica (un 400, un 409 o sin respuesta; un 404 no recarga), se vuelve a pedir lo que se muestra.
+      if (recargarTrasError(e)) { onUpdate(); loadFull(); }
+    }
     setSavingInfo(false);
   };
 
-  const cancelPec = async () => {
-    if (!confirm('Cancelar este PEC?')) return;
-    await changeEstado('CANCELADO');
-    onClose();
-  };
+  // B4 T15 (R9, RP30, RP93): sin confirm(): el motivo (5 letras o más) y lo que pasa al cancelar van en el ModalMotivo
+  // de la página; al cancelar bien, el panel se cierra, como antes.
+  const cancelPec = () => onCancelar(detail ?? pec);
 
   const deletePec = async () => {
-    if (!confirm(`Eliminar definitivamente ${detail?.numero || pec.numero}? Esta accion no se puede deshacer.`)) return;
+    const numero = detail?.numero || pec.numero;
+    if (!(await confirmar({
+      titulo: `¿Eliminar definitivamente ${numero}?`, mensaje: 'El pedido de compra cancelado se borra y no se puede recuperar.',
+      textoConfirmar: 'Eliminar definitivamente', peligro: true,
+    }))) return;
     try {
       await apiFetch('/compras/pedidos/'+pec.id, {method:'DELETE'});
       onToast('PEC eliminado','ok'); onUpdate(); onClose();
-    } catch(e:any){ onToast(e.message,'error'); }
+    } catch(e){
+      onToast(e,'error');
+      if (recargarTrasError(e)) { onUpdate(); loadFull(); }
+    }
   };
 
   if (!pec) return null;
-  const est = PEC_ESTADOS[detail?.estado] || PEC_ESTADOS.BORRADOR;
+  // C10: la etiqueta y el color de estados-compras.js (RECIBIDA y PARCIALMENTE_RECIBIDA ya no salen como «Borrador»).
+  const est = { ...infoEstadoPec(detail?.estado).clases, label: infoEstadoPec(detail?.estado).label };
+  const vencido = detail?.is_overdue ?? pec.is_overdue;
   const pvens = detail?.pedidos_venta?.length ? detail.pedidos_venta.map((v:any)=>v.numero) : (detail?.ven_numero ? [detail.ven_numero] : []);
 
   return (
@@ -607,39 +675,51 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
               <div className="flex items-center gap-3 flex-wrap">
                 <h2 className="text-xl font-black text-gray-900">{detail?.numero || pec.numero}</h2>
                 <span className={'px-2.5 py-1 rounded-full text-xs font-black border ' + est.bg + ' ' + est.text + ' ' + est.border}>{est.label}</span>
-                {pec.is_overdue && <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-black border border-red-200">VENCIDO</span>}
+                {vencido && <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-black border border-red-200">Vencido</span>}
                 {pvens.map((v:string,i:number)=><span key={i} className="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-full text-xs font-bold border border-indigo-200">{v}</span>)}
               </div>
               <p className="text-sm text-gray-500 mt-0.5">{detail?.supplier_name||'-'} {detail?.created_by && '· '+detail.created_by}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={()=>setEditEstado(x=>!x)} className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-50 border border-purple-200 text-purple-700 rounded-xl text-xs font-bold hover:bg-purple-100"><Edit2 size={12}/> Estado</button>
-            <button onClick={()=>setShowConfig(true)} title="Configurar etapas, alertas y casilleros" className="p-2 hover:bg-gray-100 rounded-xl text-gray-500"><Settings2 size={16}/></button>
+            {/* B4 T15 (R9): «Estado» solo si el servidor acepta algún cambio a mano (transicionesPec). */}
+            {transiciones.length > 0 && (
+              <button onClick={()=>setEditEstado(x=>!x)} aria-expanded={editEstado} className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-50 border border-purple-200 text-purple-700 rounded-xl text-xs font-bold hover:bg-purple-100"><Edit2 size={12}/> Estado</button>
+            )}
+            <button onClick={()=>setShowConfig(true)} title="Configurar etapas, alertas y casilleros" aria-label="Configurar etapas, alertas y casilleros" className="p-2 hover:bg-gray-100 rounded-xl text-gray-500"><Settings2 size={16}/></button>
             <div className="relative">
-              <button onClick={()=>setMenuOpen(m=>!m)} className="p-2 hover:bg-gray-100 rounded-xl text-gray-500"><MoreHorizontal size={18}/></button>
+              <button onClick={()=>setMenuOpen(m=>!m)} aria-label={`Acciones de ${detail?.numero || pec.numero}`} aria-expanded={menuOpen} className="p-2 hover:bg-gray-100 rounded-xl text-gray-500"><MoreHorizontal size={18}/></button>
               {menuOpen && (
                 <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-2xl shadow-2xl py-2 w-52 z-10" onClick={(e:any)=>e.stopPropagation()}>
                   <button onClick={()=>{setMenuOpen(false);loadFull();}} className="w-full text-left px-4 py-2.5 hover:bg-gray-50 text-sm flex items-center gap-2"><RefreshCw size={13}/> Recargar</button>
-                  <div className="border-t border-gray-100 my-1"/>
-                  {detail?.estado !== 'CANCELADO' ? (
-                    <button onClick={()=>{cancelPec();setMenuOpen(false);}} className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"><Trash2 size={13}/> Cancelar PEC</button>
-                  ) : (
-                    <button onClick={()=>{deletePec();setMenuOpen(false);}} className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"><Trash2 size={13}/> Eliminar definitivamente</button>
+                  {/* B4 T15 (R9): «Cancelar PEC» solo si update_pec lo acepta; «Eliminar definitivamente», solo cancelado. */}
+                  {transiciones.includes('CANCELADO') && (
+                    <>
+                      <div className="border-t border-gray-100 my-1"/>
+                      <button onClick={()=>{cancelPec();setMenuOpen(false);}} className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"><Trash2 size={13}/> Cancelar PEC</button>
+                    </>
+                  )}
+                  {etapaPec(detail?.estado) === 'cancelado' && (
+                    <>
+                      <div className="border-t border-gray-100 my-1"/>
+                      <button onClick={()=>{deletePec();setMenuOpen(false);}} className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"><Trash2 size={13}/> Eliminar definitivamente</button>
+                    </>
                   )}
                 </div>
               )}
             </div>
-            <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-xl text-gray-500"><X size={18}/></button>
+            <button onClick={onClose} aria-label="Cerrar el panel" className="p-2 hover:bg-gray-200 rounded-xl text-gray-500"><X size={18}/></button>
           </div>
         </div>
 
-        {/* Cambiar estado inline */}
-        {editEstado && (
-          <div className="px-8 py-3 border-b border-purple-100 bg-purple-50/50 flex flex-wrap gap-2 shrink-0">
-            {Object.entries(PEC_ESTADOS).map(([k,v])=>(
-              <button key={k} onClick={()=>changeEstado(k)} className={'px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ' + (detail?.estado===k?v.bg+' '+v.text+' '+v.border+' shadow':'bg-white border-gray-200 text-gray-600 hover:bg-gray-50')}>{v.label}</button>
-            ))}
+        {/* Cambiar estado inline (B4 T15, R9): solo lo que acepta el servidor; cancelar pide el motivo. */}
+        {editEstado && transiciones.length > 0 && (
+          <div className="px-8 py-3 border-b border-purple-100 bg-purple-50 flex flex-wrap items-center gap-2 shrink-0">
+            {transiciones.map((k)=>{
+              const v = infoEstadoPec(k);
+              return <button key={k} onClick={()=>changeEstado(k)} className="px-3 py-1.5 rounded-xl text-xs font-bold border transition-all bg-white border-gray-200 text-gray-600 hover:bg-gray-50">{v.label}</button>;
+            })}
+            <p className="text-xs text-gray-500">En tránsito lo marca el seguimiento del envío y Recibido, la recepción en bodega.</p>
           </div>
         )}
 
@@ -650,7 +730,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
           ))}
         </div>
 
-        {/* Mercancia recibida: falta hacer la recepcion fisica, o ya existe y
+        {/* Mercancía recibida: falta hacer la recepción física, o ya existe y
             hay que poder volver a ella -- antes el banner (y su unico link a
             la recepcion) desaparecia por completo en cuanto se creaba una,
             dejando sin forma de volver a encontrarla desde el PEC. */}
@@ -660,18 +740,18 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
               <div className="w-9 h-9 bg-white rounded-full flex items-center justify-center text-emerald-600 shadow-sm"><PackageCheck size={18}/></div>
               <div>
                 <p className="font-black text-emerald-900 text-sm">
-                  {detail?.recepciones?.length > 0 ? 'Mercancia recibida en bodega' : 'Mercancia recibida en bodega — pendiente por recepcion'}
+                  {detail?.recepciones?.length > 0 ? 'Mercancía recibida en bodega' : 'Mercancía recibida en bodega, pendiente de recepción'}
                 </p>
                 <p className="text-xs text-emerald-700">
                   {detail?.recepciones?.length > 0
-                    ? `Recepcion ${detail.recepciones[detail.recepciones.length-1].numero} en curso.`
-                    : 'Inicia el conteo fisico de este pedido.'}
+                    ? `Recepción ${detail.recepciones[detail.recepciones.length-1].numero} en curso.`
+                    : 'Inicia el conteo físico de este pedido.'}
                 </p>
               </div>
             </div>
             <button onClick={goToRecepcion} disabled={goingToRecepcion} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm hover:bg-emerald-700 transition-colors shrink-0 disabled:opacity-50 flex items-center gap-2">
               {goingToRecepcion && <RefreshCw size={12} className="animate-spin"/>}
-              {detail?.recepciones?.length > 0 ? 'Ver Recepcion' : 'Hacer Recepcion'}
+              {detail?.recepciones?.length > 0 ? 'Ver recepción' : 'Hacer recepción'}
             </button>
           </div>
         )}
@@ -684,17 +764,18 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
               <p className="text-xs font-black text-gray-400 uppercase mb-3">Proveedor</p>
               <p className="font-bold text-gray-900">{detail?.supplier_name||'-'}</p>
               {detail?.supplier_ref && <p className="text-xs text-gray-400 mt-0.5">Ref: {detail.supplier_ref}</p>}
-              {detail?.tipo_envio && <p className="text-xs text-purple-600 font-bold mt-1 capitalize">Tipo: {detail.tipo_envio === 'directo' ? 'Directo Colombia' : 'Via Casillero'}</p>}
+              {detail?.tipo_envio && <p className="text-xs text-purple-600 font-bold mt-1 capitalize">Tipo: {detail.tipo_envio === 'directo' ? 'Directo Colombia' : 'Vía casillero'}</p>}
             </div>
             <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
               <p className="text-xs font-black text-gray-400 uppercase mb-3">Fechas</p>
               <div className="space-y-2 text-sm">
-                {[['Fecha Compra',fDate(detail?.fecha_compra||detail?.created_at)],
-                  ['Entrega Est.',fDate(detail?.fecha_entrega_estimada)],
-                  ['Alerta',fDate(detail?.fecha_alerta)]].map(([l,v],i)=>(
+                {/* B4 T15 (resolución 4): la fecha de compra es un instante; la entrega y la alerta, días de negocio (RP40). */}
+                {[['Fecha Compra',textoInstante(detail?.fecha_compra||detail?.created_at)],
+                  ['Entrega Est.',textoDia(detail?.fecha_entrega_estimada)],
+                  ['Alerta',textoDia(detail?.fecha_alerta)]].map(([l,v],i)=>(
                   <div key={i} className="flex justify-between">
                     <span className="text-gray-500">{l}</span>
-                    <span className={'font-bold ' + (l==='Entrega Est.'&&pec.is_overdue?'text-red-600':'text-gray-900')}>{v}</span>
+                    <span className={'font-bold ' + (l==='Entrega Est.'&&vencido?'text-red-600':'text-gray-900')}>{v}</span>
                   </div>
                 ))}
               </div>
@@ -707,7 +788,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
               </div>
             </div>
             <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
-              <p className="text-xs font-black text-gray-400 uppercase mb-3">Logistica</p>
+              <p className="text-xs font-black text-gray-400 uppercase mb-3">Logística</p>
               <div className="grid grid-cols-2 gap-3 text-xs text-gray-600">
                 {[['Modalidad',detail?.modalidad_pago||'-'],['Carrier',detail?.carrier||'-'],['Casillero',detail?.casillero_nombre||'-'],['Tracking',detail?.tracking_number||'-']].map(([l,v],i)=>(
                   <div key={i}><span className="block text-gray-400 font-black uppercase mb-0.5">{l}</span>{v}</div>
@@ -782,7 +863,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
               <div className="space-y-4">
                 <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm">
                   <div className="flex items-center justify-between mb-4">
-                    <p className="text-xs font-black text-gray-400 uppercase">Informacion del PEC</p>
+                    <p className="text-xs font-black text-gray-400 uppercase">Información del PEC</p>
                     {!infoEdit ? (
                       <button onClick={openInfoEdit} className="flex items-center gap-1 text-xs font-bold text-purple-600 hover:text-purple-800"><Edit2 size={12}/> Editar</button>
                     ) : (
@@ -796,7 +877,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
                   </div>
                   {!infoEdit ? (
                     <div className="grid grid-cols-2 gap-4 text-sm">
-                      {[['Numero',detail?.numero],['Estado',detail?.estado],['Proveedor',detail?.supplier_name||'-'],['Ref/NIT',detail?.supplier_ref||'-'],['Modalidad Pago',detail?.modalidad_pago||'-'],['Metodo Pago',detail?.metodo_pago||'-'],['Entrega Est.',fDate(detail?.fecha_entrega_estimada)],['Creado por',detail?.created_by||'-'],['Actualizado',fDate(detail?.updated_at)]].map(([l,v],i)=>(
+                      {[['Número',detail?.numero],['Estado',est.label],['Proveedor',detail?.supplier_name||'-'],['Ref/NIT',detail?.supplier_ref||'-'],['Modalidad de pago',detail?.modalidad_pago||'-'],['Método de pago',detail?.metodo_pago||'-'],['Entrega Est.',textoDia(detail?.fecha_entrega_estimada)],['Creado por',detail?.created_by||'-'],['Actualizado',textoInstante(detail?.updated_at)]].map(([l,v],i)=>(
                         <div key={i}><span className="block text-gray-400 text-xs font-black uppercase mb-0.5">{l}</span><span className="font-bold text-gray-900">{v||'-'}</span></div>
                       ))}
                       <div className="col-span-2"><span className="block text-gray-400 text-xs font-black uppercase mb-0.5">Notas</span><span className="font-bold text-gray-900 whitespace-pre-wrap">{detail?.notas||'-'}</span></div>
@@ -807,7 +888,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
                         <input value={infoForm.supplier_name} onChange={e=>setInfoForm((f:any)=>({...f,supplier_name:e.target.value}))} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
                       <div><label className="block text-gray-400 text-xs font-black uppercase mb-1">Ref/NIT</label>
                         <input value={infoForm.supplier_ref} onChange={e=>setInfoForm((f:any)=>({...f,supplier_ref:e.target.value}))} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-                      <div><label className="block text-gray-400 text-xs font-black uppercase mb-1">Modalidad Pago</label>
+                      <div><label className="block text-gray-400 text-xs font-black uppercase mb-1">Modalidad de pago</label>
                         <select value={infoForm.modalidad_pago} onChange={e=>setInfoForm((f:any)=>({...f,modalidad_pago:e.target.value}))} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200">
                           {/* Si el valor guardado no esta en esta lista (formato viejo/libre,
                               ej. "Credito 60d" en vez de "Credito 60 dias"), se agrega como
@@ -817,7 +898,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
                             .concat(infoForm.modalidad_pago && !['Contado','60/40 (60% anticipo)','Credito 30 dias','Credito 60 dias','Otro'].includes(infoForm.modalidad_pago) ? [infoForm.modalidad_pago] : [])
                             .map(o=><option key={o}>{o}</option>)}
                         </select></div>
-                      <div><label className="block text-gray-400 text-xs font-black uppercase mb-1">Metodo Pago</label>
+                      <div><label className="block text-gray-400 text-xs font-black uppercase mb-1">Método de pago</label>
                         <input value={infoForm.metodo_pago} onChange={e=>setInfoForm((f:any)=>({...f,metodo_pago:e.target.value}))} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
                       <div><label className="block text-gray-400 text-xs font-black uppercase mb-1">Fecha Entrega Est.</label>
                         <input type="date" value={infoForm.fecha_entrega_estimada} onChange={e=>setInfoForm((f:any)=>({...f,fecha_entrega_estimada:e.target.value}))} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
@@ -838,7 +919,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
                       <div className="absolute -left-[29px] top-1.5 w-4 h-4 rounded-full bg-white border-2 border-purple-200"/>
                       <p className="text-xs text-gray-400 mb-0.5">{fDate(a.created_at)}{a.user_name&&' · '+a.user_name}</p>
                       <p className="font-bold text-gray-700 text-sm">{a.description||a.action}</p>
-                      {a.old_estado&&a.new_estado&&<p className="text-xs text-gray-400">{a.old_estado} → {a.new_estado}</p>}
+                      {a.old_estado&&a.new_estado&&<p className="text-xs text-gray-500">{infoEstadoPec(a.old_estado).label} → {infoEstadoPec(a.new_estado).label}</p>}
                     </div>
                   ))}
                   {!(detail?.actividades?.length)&&<p className="text-gray-400 text-xs py-4 text-center">Sin historial registrado</p>}
@@ -855,8 +936,20 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
 /* ================================================================
    NUEVO PEC MODAL — Odoo-style full form
    ================================================================ */
-function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVenta:any[]; onClose:()=>void; onCreated:()=>void; onToast:(m:string,t?:string)=>void}) {
+type PropsNuevoPec = {
+  pedidosVenta: any[];
+  onClose: () => void;
+  onCreated: () => void;
+  onToast: AvisoPantalla;
+  /** B4 T15 (m9 de T14): el error de GET /ventas/pedidos (los PVEN pendientes de compra), y volver a pedirla. */
+  errorVentas: unknown;
+  onReintentarVentas: () => void;
+};
+
+function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, onReintentarVentas}: PropsNuevoPec) {
   const [supplierSearch, setSupplierSearch] = useState('');
+  // T15 r1 (m9): los errores de las búsquedas (proveedor, casillero y producto) se dicen (antes se callaban).
+  const { avisarError } = useAvisos();
   const [supplierResults, setSupplierResults] = useState<any[]>([]);
   const [selectedSupplier, setSelectedSupplier] = useState<any>(null);
   const [showNewSupplier, setShowNewSupplier] = useState(false);
@@ -890,7 +983,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
         const arr = Array.isArray(res) ? res : (res?.data || []);
         setSupplierResults(arr);
         if (arr.length === 0) setShowNewSupplier(true);
-      } catch {}
+      } catch (err) { avisarError(err, 'No se pudo buscar el proveedor'); }
     }, 350);
     setSupplierTimer(t);
   };
@@ -906,7 +999,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
         const arr = Array.isArray(res) ? res : (res?.data || []);
         setCasilleroResults(arr);
         if (arr.length === 0) setShowNewCasillero(true);
-      } catch {}
+      } catch (err) { avisarError(err, 'No se pudo buscar el casillero'); }
     }, 350);
     setCasilleroTimer(t);
   };
@@ -937,7 +1030,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
       try {
         const res = await apiFetch('/crm/products/search?q='+encodeURIComponent(val));
         setProdSearchResults(Array.isArray(res) ? res : (res?.data || []));
-      } catch { setProdSearchResults([]); }
+      } catch (err) { setProdSearchResults([]); avisarError(err, 'No se pudo buscar el producto'); }
     }, 300);
     setProdSearchTimer(t);
   };
@@ -1007,12 +1100,17 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
       // se vincula aqui explicitamente para que TODOS los PVEN marcados queden con
       // pec_id/pec_numero, no solo el primero.
       const restantes = pvensSelected.slice(1);
+      // B4 T15: un PVEN que no se pudo vincular se dice con el mensaje del servidor (antes el error se tragaba).
+      const sinVincular: string[] = [];
       for (const pv of restantes) {
-        await apiFetch(`/ventas/pedidos/${pv.id}`,{method:'PATCH',body:JSON.stringify({
-          pec_id: pecObj.id, pec_numero: pecObj.numero, estado:'EN_PROCESO', updated_by:user,
-        })}).catch(()=>{});
+        try {
+          await apiFetch(`/ventas/pedidos/${pv.id}`,{method:'PATCH',body:JSON.stringify({
+            pec_id: pecObj.id, pec_numero: pecObj.numero, estado:'EN_PROCESO', updated_by:user,
+          })});
+        } catch (err) { sinVincular.push(`${pv.numero}: ${textoDeError(err)}`); }
       }
       onToast('PEC creado exitosamente','ok');
+      if (sinVincular.length > 0) onToast(`No se pudieron vincular al PEC: ${sinVincular.join('; ')}`, 'error');
       onCreated();
       onClose();
     } catch(e:any){ onToast(e.message,'error'); }
@@ -1109,7 +1207,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
                       <div>
                         <label className="block text-xs font-black text-gray-500 uppercase mb-1">Tipo de Envio</label>
                         <select value={form.tipo_envio} onChange={e=>setF('tipo_envio',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200 bg-white">
-                          <option value="casillero">Via Casillero</option>
+                          <option value="casillero">Vía casillero</option>
                           <option value="directo">Directo Colombia</option>
                         </select>
                       </div>
@@ -1137,7 +1235,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
                         <input value={form.carrier} onChange={e=>setF('carrier',e.target.value)} placeholder="ej: DHL, FedEx, Amazon" className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
                       </div>
                       <div>
-                        <label className="block text-xs font-black text-gray-500 uppercase mb-1">Modalidad Pago</label>
+                        <label className="block text-xs font-black text-gray-500 uppercase mb-1">Modalidad de pago</label>
                         <select value={form.modalidad_pago} onChange={e=>setF('modalidad_pago',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200 bg-white">
                           {['Contado','60/40 (60% anticipo)','Credito 30 dias','Credito 60 dias','Otro'].map(m=><option key={m} value={m}>{m}</option>)}
                         </select>
@@ -1242,12 +1340,21 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
                     <input value={searchPven} onChange={e=>setSearchPven(e.target.value)} placeholder="Buscar PVEN..." className="text-sm bg-transparent outline-none flex-1"/>
                   </div>
                   <div className="space-y-2">
-                    {filteredPvens.length === 0 && <p className="text-center py-10 text-gray-400 text-sm">Sin PVEN en estado Pendiente Compra</p>}
+                    {/* B4 T15 (m9 de T14): si GET /ventas/pedidos falló, se dice (no «Sin PVEN…») y se puede reintentar. */}
+                    {errorVentas ? (
+                      <div className="py-8 text-center space-y-3">
+                        <p role="alert" className="text-sm font-bold text-rose-700">No se pudieron cargar los pedidos de venta.</p>
+                        <button type="button" onClick={onReintentarVentas}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-700">
+                          <RefreshCw size={13} aria-hidden="true"/> Reintentar
+                        </button>
+                      </div>
+                    ) : filteredPvens.length === 0 && <p className="text-center py-10 text-gray-400 text-sm">Sin PVEN en estado Pendiente Compra</p>}
                     {filteredPvens.map((p:any)=>(
                       <label key={p.id} className={'flex items-start gap-3 p-4 rounded-2xl border cursor-pointer hover:bg-purple-50 transition-colors ' + (selectedPvens.has(p.id)?'border-purple-300 bg-purple-50':'border-gray-200 bg-white')}>
                         <input type="checkbox" checked={selectedPvens.has(p.id)} onChange={e=>{const n=new Set(selectedPvens);if(e.target.checked)n.add(p.id);else n.delete(p.id);setSelectedPvens(n);}} className="mt-1 rounded border-gray-300 text-purple-600"/>
                         <div className="flex-1">
-                          <div className="flex items-center gap-2"><span className="font-bold text-gray-900">{p.numero}</span><span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-bold">PEND. COMPRA</span></div>
+                          <div className="flex items-center gap-2"><span className="font-bold text-gray-900">{p.numero}</span><span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-bold">{infoEstadoPedido('PENDIENTE_COMPRA').label}</span></div>
                           <p className="text-xs text-gray-500">{p.customer_name||'-'} · {fDate(p.created_at)}</p>
                           <p className="text-xs font-bold text-indigo-700 mt-0.5">{fCOP(p.total_cop||0)} · {(p.productos||[]).length} producto(s)</p>
                           {(p.productos||[]).slice(0,3).map((pr:any,j:number)=><p key={j} className="text-[10px] text-gray-400">· {pr.descripcion||pr.producto_nombre||'Producto'}</p>)}
@@ -1283,563 +1390,617 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
 }
 
 /* ================================================================
-   MAIN PAGE — PedidosCompraPage
+   B4 T15 — las piezas de la lista (la tabla estándar y sus celdas)
+   ================================================================ */
+
+/** Una fila de GET /compras/pedidos: la que leen las columnas compartidas (columnas-pec.tsx; is_overdue es del servidor). */
+type FilaPec = FilaColumnasPec;
+/** Un pedido de venta del alta (GET /ventas/pedidos, como en B1 a B3: «Nuevo PEC» lista sus PENDIENTE_COMPRA). */
+type FilaVenta = {
+  id: number; numero: string; estado?: string | null; customer_name?: string | null; created_at?: string | null;
+  total_cop?: number | null; productos?: unknown[] | null;
+};
+/** `conteos` de GET /compras/pedidos con con_conteos=1 (T12): cada vista y los vencidos, con la búsqueda (R5). */
+type ConteosPec = Partial<Record<'vigentes' | 'activos' | 'en_transito' | 'recibidos' | 'cancelados' | 'vencidos', number>>;
+/** D39: las columnas del tablero de una acción desde una tarjeta: [origen, destino]. */
+type ColumnasDeTarjeta = readonly [string, string];
+/** La cancelación con motivo en curso (panel, menú de fila, tablero o masiva; R9, C15c). */
+type Cancelacion = {
+  pecs: FilaPec[];
+  omitidos: { id: unknown; numero: string; motivo: string }[];
+  columnas: ColumnasDeTarjeta | null;
+  desdePanel: boolean;
+};
+
+/** El id de la pantalla: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26). */
+const ID_PEDIDOS = 'compras.pedidos';
+/** RP21: «Todos» es la vista 'vigentes' del servidor (sin los cancelados, R9). R8: lo vencido primero. */
+const INICIAL_PEDIDOS = { vista: 'vigentes', orden: 'atencion' };
+/** «Con atraso» desde Recibidos o Cancelados vuelve a la pestaña Todos de ESTA lista (accionSemaforoCompras). */
+const OPCIONES_SEMAFORO = { vistaTodos: INICIAL_PEDIDOS.vista };
+/** D39 (m6 de T8): en Kanban la lista va sin filas (limit=0); los conteos siguen al día y las filas las piden las columnas. */
+const EXTRA_TABLERO = { limit: 0 };
+const RUTA_PEDIDOS = '/dashboard/compras/pedidos';
+/** El contenedor de los Hubs y de las listas del bloque (T7 a T14): pb-24 deja libre la esquina del botón de la IA. */
+const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
+
+const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-700';
+/** El foco de los botones de la barra masiva (fondo slate-900), como en el Hub (m11 de T14). */
+const FOCO_OSCURO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white';
+
+/** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
+type AccionesFilaPedidos = {
+  abrir: (p: FilaPec) => void;
+  emitir: (p: FilaPec) => void;
+  cancelar: (filas: FilaPec[]) => void;
+  eliminar: (p: FilaPec) => void;
+};
+const AccionesFila = React.createContext<AccionesFilaPedidos | null>(null);
+
+/**
+ * Acciones (R11): el ojo abre el panel del PEC y el menú ⋯ (MenuFila: clic y portal, las mismas opciones de antes) trae
+ * «Ver detalle», «Marcar Emitido» (solo un Borrador: lo único que se emite a mano, R9), «Cancelar PEC» (solo si update_pec
+ * lo acepta; abre el ModalMotivo) y, en un cancelado, «Eliminar definitivamente» (con confirmar).
+ */
+function CeldaAcciones({ p }: { p: FilaPec }) {
+  const acciones = useContext(AccionesFila);
+  const items: ItemMenuFila[] = [
+    { etiqueta: 'Ver detalle', icono: Eye, onClick: () => acciones?.abrir(p) },
+    { etiqueta: 'Marcar Emitido', icono: Send, onClick: () => acciones?.emitir(p),
+      oculto: !transicionesPec(p.estado).includes('EMITIDO') },
+    { etiqueta: 'Cancelar PEC', icono: Trash2, peligro: true, onClick: () => acciones?.cancelar([p]),
+      oculto: !transicionesPec(p.estado).includes('CANCELADO') },
+    { etiqueta: 'Eliminar definitivamente', icono: Trash2, peligro: true, onClick: () => acciones?.eliminar(p),
+      oculto: etapaPec(p.estado) !== 'cancelado' },
+  ];
+  return (
+    <span className="flex items-center justify-end gap-0.5">
+      <button type="button" onClick={() => acciones?.abrir(p)} aria-label={`Ver el detalle de ${p.numero}`} title="Ver detalle"
+        className={`rounded-lg p-1.5 text-purple-600 transition-colors hover:bg-purple-50 ${FOCO_VISIBLE}`}>
+        <Eye size={14} aria-hidden="true" />
+      </button>
+      <MenuFila items={items} etiqueta={`Acciones de ${p.numero}`} />
+    </span>
+  );
+}
+
+/**
+ * B4 T15, la tabla (TABLA-compras punto 7; R26, D41): las columnas de columnas-pec.tsx (r1: las mismas, compartidas con
+ * el Hub de Compras) con la celda de Acciones de esta lista. Una constante (estable, D40).
+ */
+const COLUMNAS_TABLA_PEDIDOS = columnasPec<FilaPec>((p) => <CeldaAcciones p={p} />);
+/** {campo de orden: título}, para el chip «Orden: Monto ↓» (textoOrdenHub), solo de las columnas que se ordenan. */
+const TITULOS_ORDEN_PEDIDOS = titulosDeOrdenPec(COLUMNAS_TABLA_PEDIDOS);
+
+/**
+ * Las pestañas de Pedidos de compra (R9, RP21, RP93: las vistas del servidor, sin emojis): Todos (vigentes), Activos (en
+ * rojo si hay vencidos), En tránsito, Recibidos (la etapa recibido) y Cancelados. Los conteos son del servidor (con la
+ * búsqueda; null mientras cargan: la barra gris, nunca 0). Ya no hay pestaña Análisis (R13).
+ */
+function pestanasDePedidos(conteos: ConteosPec | null): PestanaTabla[] {
+  return [
+    { id: 'vigentes', etiqueta: 'Todos', conteo: conteos?.vigentes ?? null },
+    { id: 'activos', etiqueta: 'Activos', conteo: conteos?.activos ?? null, alerta: (conteos?.vencidos ?? 0) > 0 },
+    { id: 'en_transito', etiqueta: 'En tránsito', conteo: conteos?.en_transito ?? null },
+    { id: 'recibidos', etiqueta: 'Recibidos', conteo: conteos?.recibidos ?? null },
+    { id: 'cancelados', etiqueta: 'Cancelados', conteo: conteos?.cancelados ?? null },
+  ];
+}
+
+/* ================================================================
+   MAIN PAGE — PedidosCompraPage (B4 T15)
    ================================================================ */
 export default function PedidosCompraPage() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const [loading, setLoading]         = useState(true);
-  const [toast, setToast]             = useState<ToastMsg>(null);
-  const [pedidos, setPedidos]         = useState<any[]>([]);
-  const [pedidosVenta, setPedidosVenta] = useState<any[]>([]);
-  const [stats, setStats]             = useState<any>({});
-  const [activeTab, setActiveTab]     = useState('Todos');
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize]       = useState(25);
-  const [viewMode, setViewMode]       = useState<'lista'|'kanban'>('lista');
-  const [search, setSearch]           = useState('');
-  const [filterEstado, setFilterEstado] = useState('');
-  const [showFilters, setShowFilters] = useState(false);
-  const [groupByMonth, setGroupByMonth] = useState(false);
-  const [expandedMonths, setExpandedMonths] = useState<Set<string>>(new Set());
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const [selectedPec, setSelectedPec] = useState<any>(null);
-  const [menuOpenId, setMenuOpenId]   = useState<number|null>(null);
-  const [menuPos, setMenuPos] = useState<{top?:number; bottom?:number; left:number}|null>(null);
+  // H49 (B2): avisos y confirmaciones del sistema (nunca alert, confirm ni prompt). showToast es el adaptador de los
+  // modales y del panel de B1 a B3: los de error pasan por textoDeError (sin conexión, '[object Object]', 'Error: ').
+  const { avisar, confirmar } = useAvisos();
+  const showToast = useCallback<AvisoPantalla>((msg, tipo) => {
+    if (tipo === 'error') avisar(textoDeError(msg), { tono: 'error' });
+    else avisar(String(msg), { tono: 'ok' });
+  }, [avisar]);
   const [showNuevoPec, setShowNuevoPec] = useState(false);
-  // Analytics
-  const [analyticsRange, setAnalyticsRange] = useState('30d');
-  const [chartType, setChartType]     = useState('bars');
-  const [aiQuestion, setAiQuestion]   = useState('');
-  const [aiResponse, setAiResponse]   = useState('');
-  const [aiLoading, setAiLoading]     = useState(false);
+  const [selectedPec, setSelectedPec] = useState<FilaPec | null>(null);
 
-  const showToast = (msg:string, type:'ok'|'error'='ok') => setToast({msg,type});
+  // ── B4 T15, bloque 1: la carga del servidor (TABLA-compras punto 7; R5, R8, C3, C4; D39, D40) ──
+  // El estado ÚNICO de la pantalla: las pestañas, la búsqueda, el filtro de estados, el semáforo, las cajas de la franja,
+  // las tarjetas, la tabla y el tablero despachan a él. El modo (Lista o Kanban) se guarda en vista:compras.pedidos. Ya
+  // no hay arreglos en memoria (antes, los 200 más recientes filtrados, contados y paginados en el navegador).
+  const [estado, despachar, listo] = useEstadoTabla(ID_PEDIDOS, INICIAL_PEDIDOS);
+  const enKanban = estado.modo === 'kanban';
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [p, s, pv] = await Promise.all([
-        apiFetch('/compras/pedidos?limit=200').catch(()=>[]),
-        apiFetch('/compras/stats').catch(()=>({})),
-        apiFetch('/ventas/pedidos?limit=200').catch(()=>[]),
-      ]);
-      setPedidos(Array.isArray(p)?p:(p?.data??[]));
-      setStats(s?.data??s??{});
-      setPedidosVenta(Array.isArray(pv)?pv:(pv?.data??[]));
-    } catch(e:any){ showToast(e.message,'error'); }
-    finally { setLoading(false); }
-  }, []);
+  // GET /compras/pedidos con vista, estados, semáforo, q, orden, limit y offset del estado, más los conteos de las
+  // pestañas en la MISMA llamada. esperar: !listo (D40): el esqueleto, nunca «vacío». En Kanban, sin filas. Sin orden (el
+  // tercer clic en un título), 'atencion': lo vencido primero sigue siendo el orden por defecto (R8).
+  const extraDeLaLista = useMemo(() => ({ orden: estado.orden || 'atencion' }), [estado.orden]);
+  const listado = useListado<FilaPec>({
+    ruta: '/compras/pedidos', estado, conConteos: true, esperar: !listo, despachar,
+    extra: enKanban ? EXTRA_TABLERO : extraDeLaLista,
+  });
+  // m5 de T8: mientras la última respuesta sea la de Kanban (sin filas) y la tabla ya pida su página, la tabla está
+  // cargando y el total en 'cargando': nunca «No hay pedidos de compra en esta vista» con el total de la otra consulta.
+  const [llegada, setLlegada] = useState(() => llegadaDeListado(null, null, false));
+  const llegadaAhora = llegadaDeListado(llegada, listado.crudo, enKanban);
+  if (llegadaAhora !== llegada) setLlegada(llegadaAhora);
+  const sinPagina = !enKanban && llegadaAhora.sinFilas && !listado.error;
+  const conteos = listado.conteos as ConteosPec | null;
+  const estadoConteos = useEstadoKpi(listado.cargandoInicial || listado.recargando, listado.error);
 
-  useEffect(()=>{ load(); }, [load]);
+  // El tablero en modo servidor (KANBAN-compras punto 6; R11, C4, D39): una consulta por columna (consultaColumnaPec: sin
+  // vista, los estados de la columna cruzados con el filtro, la búsqueda y el semáforo del MISMO estado), porColumna = el
+  // tamaño de la tabla y limit=0 en las plegadas (lo hace el hook). 'atencion' en las abiertas (lo vencido primero, R8)
+  // y 'reciente' en Recibido y Cancelado. Un PEC con un estado desconocido no sale en ninguna columna (RP97).
+  const tablero = useTableroKanban<FilaPec>({
+    pantalla: ID_PEDIDOS,
+    modo: 'servidor',
+    columnas: COLUMNAS_PEC,
+    activo: listo && enKanban,
+    porColumna: estado.tamano,
+    dependencias: dependenciasTablero(estado),
+    ordenDe: (c) => (c.cerrada ? 'reciente' : 'atencion'),
+    cargar: async (columna, { offset, limit, orden, signal }) => {
+      const consulta = consultaColumnaPec(estado, columna, { orden, limit, offset });
+      if (consulta === null) return { filas: [], total: 0 };
+      return normalizarRespuesta(await _apiFetch(`/compras/pedidos?${consulta}`, { signal }));
+    },
+  });
 
-  // Deep-link: otras paginas (ej. Mercancia en Transito) enlazan aqui con
-  // ?id=<pec_id> para abrir directamente el panel de detalle de ese PEC.
+  // La franja del flujo (FLUJO-compras punto 6; R9, RP46, D36, D42): GET /compras/flujo; recargaFlujo sube con cada recarga.
+  const [recargaFlujo, setRecargaFlujo] = useState(0);
+  const flujo = useResumenFlujo<DatosFlujo>('/compras/flujo', recargaFlujo);
+
+  // Las tarjetas (KPI-compras punto 6; R7, R12): GET /compras/stats?periodo=30d (antes se pedía sin período a un
+  // endpoint que no existía y quedaba en {}), sin respaldo local. Mientras no llega, 'cargando' (nunca 0); si falla, «—».
+  const [vueltaStats, setVueltaStats] = useState(0);
+  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
+  useEffect(() => {
+    const control = new AbortController();
+    _apiFetch(`/compras/stats?periodo=${PERIODO_KPI}`, { signal: control.signal })
+      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
+      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
+    return () => control.abort();
+  }, [vueltaStats]);
+  const cargandoStats = stats?.vuelta !== vueltaStats;
+  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
+  const tarjetas = tarjetasPedidosCompra(stats?.datos ?? null);
+
+  // B1 a B3 (queda igual): los pedidos de venta del alta (sus PENDIENTE_COMPRA se eligen en «Nuevo PEC»). Si el GET
+  // falla, el error queda en el estado (el alta lo dice con «Reintentar», m9 de T14) y la lista de antes se conserva.
+  const [ventas, setVentas] = useState<{ filas: FilaVenta[]; error: unknown }>({ filas: [], error: null });
+  const [vueltaVentas, setVueltaVentas] = useState(0);
+  useEffect(() => {
+    let vigente = true;
+    apiFetch('/ventas/pedidos?limit=200')
+      .then((r) => { if (vigente) setVentas({ filas: Array.isArray(r) ? r : (r && Array.isArray(r.data) ? r.data : []), error: null }); })
+      .catch((err: unknown) => { if (vigente) setVentas((v) => ({ filas: v.filas, error: err })); });
+    return () => { vigente = false; };
+  }, [vueltaVentas]);
+  // m10 de T14: releer el detalle del panel abierto cuando cancelar desde él falla y el servidor pide recargar.
+  const [vueltaDetalle, setVueltaDetalle] = useState(0);
+
+  // Enlace profundo (B1 a B3): otras páginas (por ejemplo Mercancía en tránsito) enlazan con ?id=<pec_id> para abrir el
+  // panel de ese PEC. B4 T15: se pide su detalle (la lista ya no trae los 200 más recientes) y un error se dice.
   useEffect(() => {
     const idParam = searchParams.get('id');
-    if (!idParam || loading) return;
-    const found = pedidos.find(p => String(p.id) === idParam);
-    if (found) { setSelectedPec(found); return; }
-    apiFetch('/compras/pedidos/'+idParam).then(setSelectedPec).catch(()=>{});
-  }, [searchParams, pedidos, loading]);
-
+    if (!idParam) return;
+    let vigente = true;
+    apiFetch('/compras/pedidos/' + idParam)
+      .then((d) => { if (vigente) setSelectedPec(d); })
+      .catch((err: unknown) => { if (vigente) showToast(err, 'error'); });
+    return () => { vigente = false; };
+  }, [searchParams, showToast]);
   const closePecPanel = useCallback(() => {
     setSelectedPec(null);
     if (searchParams.get('id')) router.replace(pathname);
   }, [searchParams, router, pathname]);
 
-  async function handleAskAI() {
-    if (!aiQuestion.trim()) return;
-    setAiLoading(true); setAiResponse('');
-    try {
-      const res = await apiFetch('/ventas/ai-chat',{method:'POST',body:JSON.stringify({question:aiQuestion,context:{pedidos_count:pedidos.length}})});
-      setAiResponse(res.response||'Asistente IA en configuracion.');
-    } catch { setAiResponse('Asistente IA en configuracion. Intenta mas tarde.'); }
-    setAiLoading(false);
-  }
+  // RP21: ?tab=<vista> (la caja Recibido de las otras franjas: ?tab=recibidos) abre esa pestaña, una sola vez al montar,
+  // como un clic en ella (accionPestana). Se lee con window.location en el efecto (sin window en el render del servidor);
+  // un valor desconocido se ignora. Después se quita de la URL (el ?id se conserva). Como en Pedidos de venta (T10 r1,
+  // I1): con Kanban guardado, la pestaña se abre en LISTA (el tablero no tiene pestañas), cuando `listo` dice el modo.
+  const enlaceLeido = useRef(false);
+  const enlacePendiente = useRef<string | null>(null);
+  useEffect(() => {
+    if (enlaceLeido.current) return;
+    enlaceLeido.current = true;
+    const vista = leerEnlacePedidosCompra(window.location.search);
+    if (!vista) return;
+    enlacePendiente.current = vista;
+    despachar(accionPestana(estado, vista, opcionesEstadosPec));
+    router.replace(rutaSinParametro(RUTA_PEDIDOS, window.location.search, 'tab'), { scroll: false });
+  }, [estado, despachar, router]);
+  useLayoutEffect(() => {
+    const vista = enlacePendiente.current;
+    if (!listo || vista === null) return;
+    enlacePendiente.current = null;
+    if (estado.modo === 'kanban') despachar(accionVistaEnLista(estado, vista, opcionesEstadosPec));
+  }, [listo, estado, despachar]);
 
-  async function handleBulkCancel() {
-    if (!selectedIds.size||!confirm('Cancelar seleccionados?')) return;
-    for (const id of Array.from(selectedIds)) {
-      await apiFetch('/compras/pedidos/'+id,{method:'PATCH',body:JSON.stringify({estado:'CANCELADO'})}).catch(()=>{});
+  // «Actualizar»: la tabla, el tablero, la franja, las tarjetas y los pedidos de venta del alta. Ninguna recarga vacía
+  // lo que se ve: los hooks conservan lo último. Después de un cambio de estado, lo que ese cambio mueve (la lista con sus
+  // conteos, la franja y las tarjetas); del tablero, solo el origen y el destino (D39).
+  const { recargar: recargarListado } = listado;
+  const { recargar: recargarTablero } = tablero;
+  const recargarTodo = useCallback(() => {
+    recargarListado();
+    recargarTablero();
+    setRecargaFlujo((n) => n + 1);
+    setVueltaStats((n) => n + 1);
+    setVueltaVentas((n) => n + 1);
+  }, [recargarListado, recargarTablero]);
+  const recargarTrasCambio = useCallback(() => {
+    recargarListado();
+    setRecargaFlujo((n) => n + 1);
+    setVueltaStats((n) => n + 1);
+  }, [recargarListado]);
+
+  // ── B4 T15, bloque 4: cancelar con motivo (KANBAN-compras punto 6; R9, C15c, RP30, RP93) ──
+  // Un solo ModalMotivo para el panel, el menú de la fila, el tablero y la barra masiva (nunca confirm()): el motivo de
+  // 5 letras o más va en el PATCH y el servidor lo deja en la Actividad («Estado cambiado a Cancelado. Motivo: …»). Solo se
+  // mandan los que update_pec deja cancelar (repartirCancelacionPec); los demás se nombran como omitidos.
+  const [cancelacion, setCancelacion] = useState<Cancelacion | null>(null);
+  const [seleccion, setSeleccion] = useState<ClaveFila[]>([]);
+  const pedirCancelacion = useCallback((filas: FilaPec[], opciones: { columnas?: ColumnasDeTarjeta; desdePanel?: boolean } = {}) => {
+    const { cancelables, omitidos } = repartirCancelacionPec(filas);
+    if (cancelables.length === 0) {
+      avisar(resumenCancelacionPec([], omitidos).mensaje, { tono: 'error' });
+      return;
     }
-    showToast('PEC cancelados: los encuentras en la pestaña Cancelados','ok'); setSelectedIds(new Set()); load();
+    setCancelacion({ pecs: cancelables, omitidos, columnas: opciones.columnas ?? null, desdePanel: Boolean(opciones.desdePanel) });
+  }, [avisar]);
+
+  // En serie, con el mismo motivo para todos (cancelarPecsEnSerie), y lo que sigue lo decide despuesDeCancelarPec
+  // (estados-compras.js, con sus casos; T14 r1): qué sale de la selección, qué queda en la ventana, cuándo recargar (la
+  // regla única recargarTrasError), los pedidos de venta del alta (lección I1 de T14: los vinculados vuelven a Pendiente
+  // de compra) y el detalle del panel (m10), y qué error se relanza para que ModalMotivo muestre el mensaje del servidor.
+  async function cancelarConMotivo(motivo: string) {
+    if (!cancelacion) return;
+    const { pecs, omitidos, columnas, desdePanel } = cancelacion;
+    const autor = autorActual();
+    const resultados = await cancelarPecsEnSerie(pecs, (p) => _apiFetch(`/compras/pedidos/${p.id}`, {
+      method: 'PATCH', body: JSON.stringify({ estado: 'CANCELADO', motivo, updated_by: autor }),
+    }));
+    const r = despuesDeCancelarPec(pecs, resultados, omitidos);
+    if (r.fuera.length > 0) setSeleccion((s) => s.filter((c) => !r.fuera.includes(String(c))));
+    if (r.recargar) {
+      // T15 r1 (I1): desde el panel (que también se abre con una tarjeta del tablero) no hay columnas: el tablero entero.
+      // Fuera de Kanban no cuesta nada (el hook inactivo solo marca la recarga para cuando se active).
+      if (columnas) tablero.recargar([...columnas]);
+      else tablero.recargar();
+      recargarTrasCambio();
+    }
+    if (r.recargarVentas) setVueltaVentas((n) => n + 1);
+    if (r.mensajeOk) avisar(r.mensajeOk, { tono: 'ok' });
+    if (r.error === null) {
+      if (desdePanel) closePecPanel();
+      return;
+    }
+    if (desdePanel && r.recargarDetalle) setVueltaDetalle((n) => n + 1);
+    setCancelacion({ ...cancelacion, pecs: r.pendientes, omitidos: [] });
+    throw r.error;
   }
 
-  // Computed tabs
-  // Un PEC cancelado vive solo en la pestaña "Cancelados": "Todos", los KPI y el monto
-  // trabajan sobre los vigentes (antes "Todos" los mezclaba con los cancelados, y el KPI
-  // "Total" contaba cancelados mientras su monto no).
-  const vigentes   = useMemo(()=>pedidos.filter(p=>p.estado!=='CANCELADO'), [pedidos]);
-  const activos    = pedidos.filter(p=>['EMITIDO','ENVIADO','EN_TRANSITO','PENDIENTE_ENTREGA'].includes(p.estado));
-  const enTransito = pedidos.filter(p=>['EN_TRANSITO','ENVIADO'].includes(p.estado));
-  const recibidos  = pedidos.filter(p=>['RECIBIDO','COMPLETADO'].includes(p.estado));
-  const cancelados = pedidos.filter(p=>p.estado==='CANCELADO');
-  const vencidos   = vigentes.filter(p=>p.is_overdue);
-  const montoTotal = vigentes.reduce((s,p)=>s+(p.total_cop||0),0);
-
-  const kpiCards = [
-    {label:'PEC Activos',  value:activos.length,     color:'purple', icon:<Receipt size={22}/>,      sub:vigentes.length+' total',      ok:true},
-    {label:'En Transito',  value:enTransito.length,  color:'blue',   icon:<Truck size={22}/>,         sub:'Enviados + En transito',      ok:true},
-    {label:'Vencidos',     value:vencidos.length,    color:'red',    icon:<AlertTriangle size={22}/>, sub:'Entrega vencida',             ok:vencidos.length===0},
-    {label:'Total',        value:vigentes.length,    color:'teal',   icon:<Activity size={22}/>,      sub:fCOP(montoTotal)+' en compras',ok:true},
-  ];
-  const colorMap: Record<string,any> = {
-    purple:{bg:'bg-purple-50',text:'text-purple-700',iconBg:'bg-purple-100'},
-    blue:  {bg:'bg-blue-50',  text:'text-blue-700',  iconBg:'bg-blue-100'},
-    red:   {bg:'bg-red-50',   text:'text-red-700',   iconBg:'bg-red-100'},
-    teal:  {bg:'bg-teal-50',  text:'text-teal-700',  iconBg:'bg-teal-100'},
-  };
-
-  const tabConfig = [
-    {k:'Todos',      count:vigentes.length,     data:vigentes},
-    {k:'Activos',    count:activos.length,      data:activos},
-    {k:'En Transito',count:enTransito.length,   data:enTransito},
-    {k:'Recibidos',  count:recibidos.length,    data:recibidos},
-    {k:'Cancelados', count:cancelados.length,    data:cancelados},
-    {k:'Analisis',   count:null,                data:[]},
-  ];
-
-  // Filtrar explicitamente por estado "Cancelado" desde "Todos" sigue funcionando: sin esta
-  // excepcion el filtro devolveria siempre cero registros porque la base ya excluye cancelados.
-  const baseData = (activeTab==='Todos' && filterEstado==='CANCELADO')
-    ? pedidos
-    : (tabConfig.find(t=>t.k===activeTab)?.data || vigentes);
-  const filteredData = useMemo(()=>{
-    let d = baseData;
-    if (search) d = d.filter((r:any)=>JSON.stringify(r).toLowerCase().includes(search.toLowerCase()));
-    if (filterEstado) d = d.filter((r:any)=>r.estado===filterEstado);
-    return d;
-  }, [baseData, search, filterEstado]);
-
-  const groupedByMonth = useMemo(()=>{
-    const map: Record<string,any[]> = {};
-    filteredData.forEach((p:any)=>{ const k=fMonthKey(p.fecha_compra||p.created_at); if(!map[k])map[k]=[]; map[k].push(p); });
-    return map;
-  }, [filteredData]);
-
-  const getKanbanCol = (item: any) => {
-    const e = item.estado||'';
-    if (e==='CANCELADO') return 'Cancelado';
-    if (['RECIBIDO','COMPLETADO'].includes(e)) return 'Recibido';
-    if (['EN_TRANSITO','ENVIADO','PENDIENTE_ENTREGA'].includes(e)) return 'En Transito';
-    if (e==='EMITIDO') return 'Emitido';
-    return 'Borrador';
-  };
-  const handleDragStart = (e:React.DragEvent, id:number) => e.dataTransfer.setData('pecId', String(id));
-  const handleDrop = async (e:React.DragEvent, col:string) => {
-    const id = e.dataTransfer.getData('pecId'); if (!id) return;
-    const m: Record<string,string> = {'Borrador':'BORRADOR','Emitido':'EMITIDO','En Transito':'EN_TRANSITO','Recibido':'RECIBIDO','Cancelado':'CANCELADO'};
+  // «Marcar Emitido» del menú de fila (R9: solo un Borrador) y «Eliminar definitivamente» (solo un cancelado, con
+  // confirmar). Si el servidor dice que no, su mensaje; con la regla única recargarTrasError, se recarga.
+  const emitir = useCallback(async (p: FilaPec) => {
     try {
-      await apiFetch('/compras/pedidos/'+id,{method:'PATCH',body:JSON.stringify({estado:m[col]||'BORRADOR'})});
-      // Un PEC cancelado sale de "Todos": sin este aviso la tarjeta parece desaparecer.
-      if (m[col]==='CANCELADO') showToast('PEC cancelado: lo encuentras en la pestaña Cancelados','ok');
-    } catch(ex:any) { showToast(ex.message,'error'); }
-    load();
+      await _apiFetch(`/compras/pedidos/${p.id}`, { method: 'PATCH', body: JSON.stringify({ estado: 'EMITIDO', updated_by: autorActual() }) });
+      avisar(`${p.numero} quedó Emitido`, { tono: 'ok' });
+    } catch (err) {
+      avisar(textoDeError(err), { tono: 'error' });
+      if (!recargarTrasError(err)) return;
+    }
+    recargarTrasCambio();
+  }, [avisar, recargarTrasCambio]);
+  const eliminar = useCallback(async (p: FilaPec) => {
+    if (!(await confirmar({
+      titulo: `¿Eliminar definitivamente ${p.numero}?`, mensaje: 'El pedido de compra cancelado se borra y no se puede recuperar.',
+      textoConfirmar: 'Eliminar definitivamente', peligro: true,
+    }))) return;
+    try {
+      await _apiFetch(`/compras/pedidos/${p.id}`, { method: 'DELETE' });
+      avisar(`${p.numero} eliminado`, { tono: 'ok' });
+    } catch (err) {
+      avisar(textoDeError(err), { tono: 'error' });
+      if (!recargarTrasError(err)) return;
+    }
+    recargarTrasCambio();
+  }, [avisar, confirmar, recargarTrasCambio]);
+
+  // ── B4 T15, bloque 2: la tabla (TABLA-compras punto 7; R5, R26, D40, D41) ──
+  const prefs = usePreferenciasTabla(ID_PEDIDOS, COLUMNAS_TABLA_PEDIDOS);
+  const anchoTablaRef = useRef<number | null>(null);
+  // Desestructurado: con el objeto entero en ref={…}, react-hooks/refs marca «Cannot access refs during render».
+  const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
+  // Pasar a Kanban sale de la pantalla completa (el conmutador sigue a la vista y el tablero no queda tapado).
+  useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
+  const abrir = useCallback((p: FilaPec) => setSelectedPec(p), []);
+  const accionesFila = useMemo<AccionesFilaPedidos>(() => ({
+    abrir, emitir: (p) => { void emitir(p); }, cancelar: (filas) => pedirCancelacion(filas), eliminar: (p) => { void eliminar(p); },
+  }), [abrir, emitir, pedirCancelacion, eliminar]);
+  const pestanas = pestanasDePedidos(conteos);
+  // m2 de T8: el conmutador Lista / Kanban poda los estados con las opciones del modo nuevo (las columnas del tablero, o
+  // las de la pestaña en Lista), con la regla de accionPestana (accionModo); lo demás de la barra va directo.
+  const alCambiarBarra = useCallback((accion: AccionTabla) => {
+    if (accion.tipo === 'modo') {
+      const modo = String(accion.valor);
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEC : opcionesEstadosPec));
+    } else despachar(accion);
+  }, [estado, despachar]);
+  // R8: ordenada por una columna, el chip «Orden: … · Atención primero» vuelve a lo vencido primero.
+  const textoOrden = enKanban || ordenEsAtencion(estado.orden) ? null : textoOrdenHub(estado.orden, TITULOS_ORDEN_PEDIDOS);
+  // TABLA-compras («Agrupar mes»): con el orden por fecha de compra, un separador por mes (en la página que se ve).
+  const porMes = ordenPorFechaDeCompra(estado.orden);
+  const tituloDeMes = useCallback((grupo: string, n: number) => `${tituloMesPec(grupo)} · ${n} en esta página`, []);
+  // La selección de la página (TablaEstandar la limpia al cambiar de página, de pestaña, de búsqueda, de filtro o de orden).
+  const alSeleccionar = useCallback((claves: ClaveFila[]) => setSeleccion(claves), []);
+  const pieSeleccion = seleccion.length > 0
+    ? <span className="font-bold text-purple-700">{seleccion.length} {seleccion.length === 1 ? 'seleccionado' : 'seleccionados'}</span>
+    : null;
+  const filasSeleccionadas = () => seleccion
+    .map((c) => listado.filas.find((f) => String(f.id) === String(c)))
+    .filter((f): f is FilaPec => Boolean(f));
+  // m8 de T8: el «vacío» memoizado. T15 r1 (m8): dice qué lo deja vacío (textoVacioPec): «Con atraso», el filtro de
+  // estados o la búsqueda; si no, la pista de crear un PEC.
+  const vacio = useMemo(() => {
+    const texto = textoVacioPec({ q: estado.q, semaforo: estado.semaforo, estados: estado.estados }, 'Los pedidos de compra se crean con «Nuevo PEC».');
+    return (
+      <div>
+        <p className="font-semibold text-slate-600">{texto.titulo}</p>
+        {texto.ayuda && <p className="mt-1 text-xs text-slate-500">{texto.ayuda}</p>}
+      </div>
+    );
+  }, [estado.q, estado.semaforo, estado.estados]);
+  // «N resultados» es el de la tabla; en Kanban cada columna trae su total (la barra no lo repite).
+  const totalDeLaBarra = enKanban ? {} : {
+    total: sinPagina ? null : listado.total,
+    estadoTotal: estadoDelTotal({
+      total: listado.total, cargando: listado.cargandoInicial || sinPagina, recargando: listado.recargando, error: listado.error,
+    }),
   };
 
-  // Table Row
-  function PecRow({p}: {p:any}) {
-    const est = PEC_ESTADOS[p.estado]||PEC_ESTADOS.BORRADOR;
-    const isSelected = selectedIds.has(p.id);
-    const menuBtnRef = useRef<HTMLButtonElement|null>(null);
-    // menuPos vive en el padre (no aqui) -- PecRow se redefine en cada render
-    // del padre (es una funcion anidada dentro de su cuerpo), asi que un
-    // setMenuOpenId del padre remonta esta fila con un tipo "nuevo" y
-    // cualquier estado local propio de PecRow se perdia justo despues de
-    // calcularlo, dejando el menu con menuPos=null para siempre.
-    const toggleMenu = () => {
-      if (menuOpenId === p.id) { setMenuOpenId(null); return; }
-      const rect = menuBtnRef.current?.getBoundingClientRect();
-      if (rect) {
-        // Menu es ~150px alto; si no cabe hacia abajo en el viewport (el caso
-        // de la ultima fila visible, sea o no la ultima fila de la tabla),
-        // se abre hacia arriba en vez de quedar cortado por el overflow-hidden
-        // del contenedor de la tabla.
-        const menuHeight = 150;
-        if (rect.bottom + menuHeight > window.innerHeight) {
-          setMenuPos({ bottom: window.innerHeight - rect.top + 4, left: rect.right - 208 });
-        } else {
-          setMenuPos({ top: rect.bottom + 4, left: rect.right - 208 });
-        }
-      }
-      setMenuOpenId(p.id);
-    };
-    return (
-      <tr className={'group hover:bg-purple-50/30 cursor-pointer transition-colors ' + (p.is_overdue?'border-l-4 border-l-red-400 bg-red-50/20 ':'') + (isSelected?'bg-purple-50/40':'')}
-        onClick={(e:any)=>{const t=e.target as HTMLElement;if(t.closest('input')||t.closest('button'))return;setSelectedPec(p);}}>
-        <td className="px-5 py-3.5 shrink-0">
-          <input type="checkbox" className="rounded border-gray-300 text-purple-600" checked={isSelected}
-            onChange={e=>{const n=new Set(selectedIds);if(e.target.checked)n.add(p.id);else n.delete(p.id);setSelectedIds(n);}}/>
-        </td>
-        <td className="px-4 py-3.5">
-          <span className="font-black text-purple-700 text-sm block">{p.numero}</span>
-          {p.ven_numero && <span className="text-[10px] text-indigo-600 font-bold">{p.ven_numero}</span>}
-          {p.is_overdue && <span className="ml-1 text-[10px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full font-black">VENC.</span>}
-        </td>
-        <td className="px-4 py-3.5 font-bold text-gray-900">{p.supplier_name||'-'}</td>
-        <td className="px-4 py-3.5 text-xs text-gray-400">{p.created_by||'-'}</td>
-        <td className="px-4 py-3.5 font-black text-gray-900">{fCOP(p.total_cop||0)}</td>
-        <td className="px-4 py-3.5 text-xs text-gray-500">{fDate(p.fecha_compra||p.created_at)}</td>
-        <td className="px-4 py-3.5"><span className={'text-xs font-bold '+(p.is_overdue?'text-red-600':'text-gray-700')}>{fDate(p.fecha_entrega_estimada)}</span></td>
-        <td className="px-4 py-3.5 text-xs text-gray-400">{fDate(p.fecha_alerta)}</td>
-        <td className="px-4 py-3.5"><span className={'px-2.5 py-1 rounded-full text-xs font-black border '+est.bg+' '+est.text+' '+est.border}>{est.label}</span></td>
-        <td className="px-4 py-3.5 text-right font-black text-gray-900">{fCOP(p.total_cop||0)}</td>
-        <td className="px-4 py-3.5 relative">
-          <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100">
-            <button onClick={e=>{e.stopPropagation();setSelectedPec(p);}} className="p-1.5 rounded-lg bg-purple-50 text-purple-600 hover:bg-purple-100"><Eye size={13}/></button>
-            <div className="relative">
-              <button ref={menuBtnRef} onClick={e=>{e.stopPropagation();toggleMenu();}} className="p-1.5 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200"><MoreHorizontal size={13}/></button>
-              {menuOpenId===p.id && menuPos && (
-                <div style={{position:'fixed', top:menuPos.top, bottom:menuPos.bottom, left:menuPos.left}} className="bg-white border border-gray-200 rounded-2xl shadow-2xl py-2 w-52 z-50" onClick={(e:any)=>e.stopPropagation()}>
-                  <button onClick={()=>{setSelectedPec(p);setMenuOpenId(null);}} className="w-full text-left px-4 py-2.5 hover:bg-purple-50 text-sm flex items-center gap-2"><Eye size={13} className="text-purple-600"/> Ver Detalle</button>
-                  {p.estado !== 'CANCELADO' && (
-                    <button onClick={async()=>{try{await apiFetch('/compras/pedidos/'+p.id,{method:'PATCH',body:JSON.stringify({estado:'EMITIDO'})});showToast('Marcado como Emitido','ok');load();}catch(ex:any){showToast(ex.message,'error');}setMenuOpenId(null);}} className="w-full text-left px-4 py-2.5 hover:bg-amber-50 text-sm flex items-center gap-2 text-amber-700"><Send size={13}/> Marcar Emitido</button>
-                  )}
-                  <div className="border-t border-gray-100 my-1"/>
-                  {p.estado !== 'CANCELADO' ? (
-                    <button onClick={async()=>{try{await apiFetch('/compras/pedidos/'+p.id,{method:'PATCH',body:JSON.stringify({estado:'CANCELADO'})});showToast('PEC cancelado: lo encuentras en la pestaña Cancelados','ok');load();}catch(ex:any){showToast(ex.message,'error');}setMenuOpenId(null);}} className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"><Trash2 size={13}/> Cancelar PEC</button>
-                  ) : (
-                    <button onClick={async()=>{if(!confirm(`Eliminar definitivamente ${p.numero}? Esta accion no se puede deshacer.`))return;try{await apiFetch('/compras/pedidos/'+p.id,{method:'DELETE'});showToast('PEC eliminado','ok');load();}catch(ex:any){showToast(ex.message,'error');}setMenuOpenId(null);}} className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"><Trash2 size={13}/> Eliminar definitivamente</button>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        </td>
-      </tr>
-    );
+  // ── B4 T15, bloque 3: el tablero (KANBAN-compras punto 6; R9, R11, C15c; D39) ──
+  // reglaSoltarPec (T2): a mano solo Borrador → Emitido y cancelar (con motivo); En tránsito, En bodega y Recibido quedan
+  // bloqueados ANTES de soltar con el enlace a donde se hacen; un cancelado no se reabre. 'cambio': el PATCH; si falla, la
+  // regla recargarTrasError y el error sigue para que el tablero deshaga (eso ya recarga su origen y su destino).
+  async function cambiarDesdeTablero(p: FilaPec, resultado: { estado: string }) {
+    try {
+      await _apiFetch(`/compras/pedidos/${p.id}`, {
+        method: 'PATCH', body: JSON.stringify({ estado: resultado.estado, updated_by: autorActual() }),
+      });
+    } catch (err) {
+      if (recargarTrasError(err)) recargarTrasCambio();
+      throw err;
+    }
+    recargarTrasCambio();
+  }
+  // 'accion' 'cancelar': el ModalMotivo; al terminar, del tablero solo el origen y el destino (D39).
+  function accionDesdeTablero(p: FilaPec, resultado: { accion: string }, origen: string, destino: string) {
+    if (resultado.accion === 'cancelar') pedirCancelacion([p], { columnas: [origen, destino] });
   }
 
-  const TABLE_HEADERS = ['#PEC / PVEN','Proveedor','Comprador','Monto','F. Compra','F. Entrega Est.','F. Limite','Estado','Total','Acciones'];
+  // ── B4 T15, bloque 5: las tarjetas (KPI-compras punto 6; R12, RP92, RP93) ──
+  // pec_activos abre «Activos», pec_en_transito «En tránsito» y pec_monto «Todos» (D41: como un clic en la pestaña; tocar
+  // la activa vuelve a Todos). En Kanban abren esa pestaña en Lista (accionVistaEnLista). pec_vencidos es el mismo filtro
+  // que «Con atraso» de la franja (semaforo=vencidos, RP92); tocarla otra vez lo quita.
+  const vistaActiva = enKanban ? null : estado.vista;
+  const elegirVista = (vista: string) => {
+    const siguiente = vistaActiva === vista ? INICIAL_PEDIDOS.vista : vista;
+    despachar(accionVistaEnLista(estado, siguiente, opcionesEstadosPec));
+  };
 
-  /* ═══════════════ RETURN JSX ═══════════════ */
+  // ── B4 T15, bloque 6: la franja del flujo (FLUJO-compras punto 6; R5, R9, C3, RP21, RP40, RP46, D42) ──
+  // «Estás aquí» en Pedido de compra. «Con atraso» es semaforo=vencidos en el servidor (accionSemaforoCompras; desde
+  // Recibidos o Cancelados, que nunca vencen, pasa a Todos). En tránsito y Recibido abren su pestaña de esta lista (RP21) y
+  // otro clic vuelve a Todos; Lista de compras y Recepción en bodega son enlaces a su pantalla.
+  const filtroSemaforo = filtroSemaforoCompras(estado);
+  const alFiltrarSemaforo = (f: FiltroSemaforo) => {
+    despachar(accionSemaforoCompras(estado, f, enKanban ? OPCIONES_ESTADOS_TABLERO_PEC : opcionesEstadosPec, OPCIONES_SEMAFORO));
+  };
+  const alternarVencidos = () => alFiltrarSemaforo(filtroSemaforo === 'atrasados' ? 'todos' : 'atrasados');
+  const alSeleccionarPaso = (clave: string) => {
+    const vista = vistaDePasoPedidosCompra(clave);
+    if (vista) elegirVista(vista);
+  };
+  const actualizando = listado.recargando || flujo.cargando || (cargandoStats && stats !== null);
+
+  /* ════════════════ RENDER ════════════════ */
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      <Toast toast={toast} onClose={()=>setToast(null)}/>
+    <div className="min-h-screen bg-slate-50 flex flex-col">
       {selectedPec && (
         <PecDetailPanel
           pec={selectedPec}
           onClose={closePecPanel}
-          onUpdate={load}
+          onUpdate={recargarTodo}
           onToast={showToast}
+          onCancelar={(p) => pedirCancelacion([p], { desdePanel: true })}
+          vueltaDetalle={vueltaDetalle}
         />
       )}
       {showNuevoPec && (
         <NuevoPecModal
-          pedidosVenta={pedidosVenta}
+          pedidosVenta={ventas.filas}
+          errorVentas={ventas.error}
+          onReintentarVentas={() => setVueltaVentas((n) => n + 1)}
           onClose={()=>setShowNuevoPec(false)}
-          onCreated={load}
+          onCreated={recargarTodo}
           onToast={showToast}
         />
       )}
 
       <SubNav label="Hub de Compras" items={COMP_NAV} currentPath={pathname} color="purple" hub={{ href: '/dashboard/compras' }} />
 
-      {/* Alert vencidos */}
-      {vencidos.length > 0 && (
-        <div className="bg-orange-50 border-b border-orange-200 px-6 py-3 flex items-center gap-3">
-          <AlertCircle className="text-orange-600 shrink-0" size={16}/>
-          <span className="text-xs font-bold text-orange-700">{vencidos.length} PEC con entrega vencida — Revisa el tracking</span>
-        </div>
-      )}
+      {/* B4 T15 (FLUJO-compras punto 6; R9, D42, RP21, RP46): la franja del flujo con «Estás aquí» en Pedido de compra
+          reemplaza el aviso naranja de los vencidos (ahora es «Con atraso» del semáforo) y el subtítulo con códigos. Sin el
+          botón de los no resueltos (Compras no lo tiene). Va directo bajo la barra de submódulos, sin otro padding. */}
+      <BannerFlujo
+        titulo="Flujo de compras"
+        idPreferencia={ID_PEDIDOS}
+        regla={textoReglaCompras()}
+        semaforo={{
+          atrasados: flujo.datos?.semaforo?.atrasados ?? null,
+          filtro: filtroSemaforo,
+          onFiltrar: alFiltrarSemaforo,
+        }}
+        pasos={pasosPedidosCompra(flujo.datos, vistaActiva)}
+        avisos={avisosFlujoCompras(flujo.datos)}
+        cargando={flujo.cargando}
+        error={flujo.error}
+        onReintentar={flujo.recargar}
+        onSeleccionarPaso={alSeleccionarPaso}
+      />
 
-      <div className="flex-1 flex flex-col px-6 py-6 max-w-[1600px] mx-auto w-full gap-6">
+      <div className={CONTENEDOR}>
 
-        {/* HEADER */}
+        {/* HEADER. R13 (ANALISIS-compras punto 5): «Ver análisis» abre el Análisis del Hub de Compras (?tab=analisis);
+            esta lista ya no tiene pestaña Análisis ni el chat que llamaba a un endpoint inexistente (R2). */}
         <PageHeader
           icon={ShoppingBag} color="purple"
           title="Pedidos de Compra"
-          subtitle="PEC-YYYY#### · Pipeline: BORRADOR → EMITIDO → EN_TRANSITO → RECIBIDO"
+          subtitle="Pedidos a proveedores y su seguimiento."
           actions={(
-            <div className="flex items-center gap-2.5">
-              <button onClick={load} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-semibold text-sm shadow-sm transition-colors">
-                <RefreshCw size={14} className={loading?'animate-spin':''}/> Actualizar
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button type="button" onClick={recargarTodo}
+                className={`flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-semibold text-sm shadow-sm transition-colors ${FOCO_VISIBLE}`}>
+                <RefreshCw size={14} aria-hidden="true" className={actualizando ? 'animate-spin' : ''}/> Actualizar
               </button>
+              <Link href={ENLACE_VER_ANALISIS_COMPRAS}
+                className={`flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-purple-50 hover:text-purple-800 hover:border-purple-200 font-semibold text-sm shadow-sm transition-colors ${FOCO_VISIBLE}`}>
+                <ContenidoEnlace icon={BarChart3}>Ver análisis</ContenidoEnlace>
+              </Link>
               <Button color="purple" icon={Plus} onClick={()=>setShowNuevoPec(true)}>Nuevo PEC</Button>
             </div>
           )}
         />
 
-        {/* KPI CARDS */}
-        {activeTab !== 'Analisis' && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {kpiCards.map((k,i)=>{
-              const c = colorMap[k.color]||colorMap.purple;
-              return (
-                <div key={i} className={`bg-white rounded-2xl p-5 border shadow-xs hover:shadow-md transition-all ${k.ok?'border-slate-200':'border-rose-200 bg-rose-50/20'}`}>
-                  <div className="flex items-center justify-between mb-3">
-                    <div className={`p-2.5 rounded-xl ${c.iconBg} ${c.text}`}>{k.icon}</div>
-                    <Badge tone={k.ok ? 'neutral' : 'danger'}>{k.ok ? 'Óptimo' : 'Alerta'}</Badge>
-                  </div>
-                  <p className="text-xs font-black text-slate-400 uppercase tracking-wide mb-1">{k.label}</p>
-                  <p className="text-2xl sm:text-3xl font-black text-slate-900 mb-1">{k.value}</p>
-                  <p className={`text-xs font-semibold flex items-center gap-1 ${k.ok?'text-emerald-600':'text-rose-600'}`}>
-                    {k.ok?<CheckCircle2 size={12}/>:<AlertCircle size={12}/>}{k.sub}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-        )}
+        {/* B4 T15 (KPI-compras punto 6; R7, R12, RP92): las 4 tarjetas de /compras/stats (todos los PEC): mientras cargan,
+            barras grises (nunca 0); con error, «—». Activos, En tránsito y Monto abren su pestaña; Con entrega vencida, el
+            filtro «Con atraso». */}
+        <FranjaKpis estado={estadoKpis} titulo="Pedidos de compra">
+          <TarjetaKpi kpi="pec_activos" valor={tarjetas?.activos.valor ?? null}
+            activo={vistaActiva === 'activos'} onClick={() => elegirVista('activos')} />
+          <TarjetaKpi kpi="pec_en_transito" valor={tarjetas?.en_transito.valor ?? null}
+            activo={vistaActiva === 'en_transito'} onClick={() => elegirVista('en_transito')} />
+          <TarjetaKpi kpi="pec_vencidos" valor={tarjetas?.vencidos.valor ?? null} tono={tarjetas?.vencidos.tono ?? 'normal'}
+            activo={filtroSemaforo === 'atrasados'} onClick={alternarVencidos} />
+          <TarjetaKpi kpi="pec_monto" valor={tarjetas?.monto.valor ?? null} ayuda={tarjetas?.monto.ayuda ?? undefined}
+            activo={vistaActiva === 'vigentes'} onClick={() => elegirVista('vigentes')} />
+        </FranjaKpis>
 
-        {/* TABS ROW — formato imagen: pills sin bg container */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1">
-            {tabConfig.map(({k,count})=>(
-              <button key={k} onClick={()=>setActiveTab(k)}
-                className={'px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap '+(activeTab===k?'bg-purple-600 text-white shadow':'text-gray-600 hover:text-purple-700 hover:bg-purple-50')}>
-                {k}
-                {count !== null && <span className={'ml-1.5 text-xs font-black '+(activeTab===k?'text-purple-200':'text-gray-400')}>{count}</span>}
-              </button>
-            ))}
-          </div>
-          {activeTab !== 'Analisis' && (
-            <div className="flex items-center gap-2">
-              <button onClick={()=>setGroupByMonth(g=>!g)}
-                className={'flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition-colors '+(groupByMonth?'bg-purple-50 border-purple-300 text-purple-700':'bg-white border-gray-200 text-gray-600 hover:bg-gray-50')}>
-                <Calendar size={13}/> Agrupar mes
-              </button>
-              <div className="flex items-center bg-gray-100 rounded-xl p-1">
-                <button onClick={()=>setViewMode('lista')} className={'p-2 rounded-lg transition-colors '+(viewMode==='lista'?'bg-white shadow text-purple-700':'text-gray-500 hover:bg-white/50')} title="Lista">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3" cy="6" r="1" fill="currentColor"/><circle cx="3" cy="12" r="1" fill="currentColor"/><circle cx="3" cy="18" r="1" fill="currentColor"/></svg>
-                </button>
-                <button onClick={()=>setViewMode('kanban')} className={'p-2 rounded-lg transition-colors '+(viewMode==='kanban'?'bg-white shadow text-purple-700':'text-gray-500 hover:bg-white/50')} title="Kanban">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-                </button>
-              </div>
-            </div>
-          )}
+        {/* B4 T15 (TABLA-compras punto 7, KANBAN-compras punto 6): la barra y la tabla estándar en el servidor, o el tablero
+            en modo servidor, con el MISMO estado (pestaña, búsqueda, estados y semáforo). En Kanban las pestañas no se ven
+            (el tablero muestra todos los PEC por etapa). */}
+        <div className="flex min-w-0 flex-col gap-4">
+          {capa}
+          <AccionesFila.Provider value={accionesFila}>
+            <section ref={refTarjeta} className={claseTarjeta}>
+              <BarraTabla
+                estado={estado}
+                onEstado={alCambiarBarra}
+                pestanas={enKanban ? undefined : pestanas}
+                estadoConteos={estadoConteos}
+                placeholder="Buscar por número, proveedor, pedido de venta, comprador o producto…"
+                opcionesEstados={enKanban ? OPCIONES_ESTADOS_TABLERO_PEC : opcionesEstadosPec}
+                filtros={textoOrden ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-600">
+                    {textoOrden}
+                    <span aria-hidden="true">·</span>
+                    <button type="button" onClick={() => despachar({ tipo: 'orden', valor: 'atencion' })}
+                      className={`rounded font-bold text-purple-700 hover:underline ${FOCO_VISIBLE}`}>
+                      Atención primero
+                    </button>
+                  </span>
+                ) : undefined}
+                ajustes={{ columnas: COLUMNAS_TABLA_PEDIDOS, preferencias: prefs, anchoRef: anchoTablaRef }}
+                kanbanDisponible
+                pantallaCompleta={enKanban ? undefined : { completa, alternar }}
+                color="purple"
+                {...totalDeLaBarra}
+              />
+              {/* La tabla estándar en el servidor: la paginación (25 o 50), el orden, la selección de la página y los
+                  separadores por mes son de la tabla; la fila vencida en filaAlerta; un clic en la fila abre el panel. */}
+              {!enKanban && (
+                <TablaEstandar
+                  id={ID_PEDIDOS}
+                  modo="servidor"
+                  columnas={COLUMNAS_TABLA_PEDIDOS}
+                  preferencias={prefs}
+                  anchoRef={anchoTablaRef}
+                  estado={estado}
+                  onEstado={despachar}
+                  filas={listado.filas}
+                  total={sinPagina ? null : listado.total}
+                  cargando={listado.cargandoInicial || sinPagina}
+                  recargando={listado.recargando}
+                  error={listado.error}
+                  onReintentar={listado.recargar}
+                  aviso={listado.avisoOrden}
+                  onFila={abrir}
+                  claseFila={claseDeFilaPec}
+                  grupoFila={porMes ? grupoMesPec : undefined}
+                  tituloGrupo={tituloDeMes}
+                  seleccion={seleccion}
+                  onSeleccion={alSeleccionar}
+                  pie={pieSeleccion}
+                  vacio={vacio}
+                  etiqueta="Pedidos de compra"
+                />
+              )}
+            </section>
+          </AccionesFila.Provider>
+          {enKanban ? (
+            /* KANBAN-compras punto 6: Borrador · Emitido · En tránsito · En bodega · Recibido (plegada) · Cancelado
+               (plegada). Lo que no se puede queda bloqueado con su motivo y su enlace ANTES de soltar (reglaSoltarPec);
+               en En bodega, «Recepcionar» (tarjetaPedidoCompra). */
+            <TableroKanban
+              tablero={tablero}
+              regla={reglaSoltarPec}
+              tarjetaDe={tarjetaPedidoCompra}
+              onAbrir={abrir}
+              onCambio={cambiarDesdeTablero}
+              onAccion={accionDesdeTablero}
+              color="purple"
+            />
+          ) : null}
         </div>
 
-        {/* SEARCH + FILTER ROW */}
-        {activeTab !== 'Analisis' && (
-          <div className="flex items-center gap-3">
-            <div className="flex items-center bg-white border border-gray-200 rounded-xl px-4 py-2.5 shadow-sm gap-2 flex-1 max-w-[500px]">
-              <Search size={15} className="text-gray-400 shrink-0"/>
-              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar PEC, proveedor, PVEN o producto..." className="text-sm outline-none flex-1 bg-transparent text-gray-700 placeholder-gray-400"/>
-              {search && <button onClick={()=>setSearch('')}><X size={13} className="text-gray-400 hover:text-gray-600"/></button>}
-            </div>
-            <div className="relative">
-              <button onClick={()=>setShowFilters(f=>!f)}
-                className={'flex items-center gap-2 px-4 py-2.5 rounded-xl border text-sm font-semibold shadow-sm bg-white '+(filterEstado?'border-purple-400 text-purple-700 bg-purple-50':'border-gray-200 text-gray-600 hover:bg-gray-50')}>
-                <Filter size={14}/> Filtrar Estado
-                {filterEstado && <span className="bg-purple-600 text-white text-[10px] px-1.5 py-0.5 rounded-full font-black">1</span>}
-              </button>
-              {showFilters && (
-                <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-2xl shadow-2xl p-4 z-20 w-64">
-                  <p className="text-xs font-black text-gray-400 uppercase mb-2">Por Estado</p>
-                  <select value={filterEstado} onChange={e=>setFilterEstado(e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none mb-3">
-                    <option value="">Todos los estados</option>
-                    {Object.entries(PEC_ESTADOS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
-                  </select>
-                  <button onClick={()=>{setFilterEstado('');setShowFilters(false);}} className="text-xs text-red-500 font-bold w-full text-center">Limpiar filtro</button>
-                </div>
-              )}
-            </div>
-            <p className="text-sm text-gray-400 font-medium ml-1">{filteredData.length} registros</p>
+        {/* La barra masiva (la selección es de la página de la tabla, así que solo en Lista): cancelar con un motivo. */}
+        {seleccion.length > 0 && !enKanban && (
+          <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-4 z-40 border border-slate-700">
+            <span className="font-bold text-sm bg-slate-800 px-3 py-1 rounded-full">{seleccion.length} {seleccion.length === 1 ? 'seleccionado' : 'seleccionados'}</span>
+            <button type="button" onClick={() => pedirCancelacion(filasSeleccionadas())}
+              className={`bg-rose-500/20 text-rose-300 hover:bg-rose-500/40 px-3 py-1.5 rounded-xl flex items-center gap-2 text-xs font-bold transition-colors ${FOCO_OSCURO}`}>
+              <Trash2 size={14} aria-hidden="true"/> Cancelar seleccionados
+            </button>
+            <button type="button" onClick={() => setSeleccion([])} aria-label="Quitar la selección" title="Quitar la selección"
+              className={`rounded-lg p-1.5 text-slate-400 hover:text-white ${FOCO_OSCURO}`}><X size={14} aria-hidden="true"/></button>
           </div>
         )}
-
-        {/* LOADING */}
-        {loading && activeTab !== 'Analisis' ? (
-          <div className="flex-1 flex items-center justify-center py-20">
-            <div className="text-center"><div className="animate-spin rounded-full h-10 w-10 border-b-2 border-purple-600 mx-auto mb-3"/><p className="text-sm text-gray-400 font-medium">Cargando pedidos de compra...</p></div>
-          </div>
-
-        ) : activeTab === 'Analisis' ? (
-          /* ── ANALYTICS ── */
-          <div className="flex flex-col gap-5">
-            <div className="flex flex-wrap gap-2 items-center bg-white p-4 rounded-2xl border border-gray-200 shadow-sm">
-              <span className="text-xs font-black text-gray-400 uppercase mr-1">Periodo:</span>
-              {[{k:'7d',l:'Ultimos 7 dias'},{k:'30d',l:'Ultimo mes'},{k:'90d',l:'Trimestre'},{k:'180d',l:'Semestre'},{k:'1y',l:'Ultimo Ano'},{k:'custom',l:'Personalizado'}].map(({k,l})=>(
-                <button key={k} onClick={()=>setAnalyticsRange(k)} className={'px-3 py-1.5 rounded-lg text-sm font-bold '+(analyticsRange===k?'bg-purple-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200')}>{l}</button>
-              ))}
-              <div className="h-6 w-px bg-gray-200 mx-1"/>
-              <span className="text-xs font-black text-gray-400 uppercase">Grafico:</span>
-              {[{k:'bars',l:'Barras'},{k:'lines',l:'Lineas'},{k:'pie',l:'Torta'}].map(({k,l})=>(
-                <button key={k} onClick={()=>setChartType(k)} className={'px-3 py-1.5 rounded-lg text-xs font-bold '+(chartType===k?'bg-indigo-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200')}>{l}</button>
-              ))}
-            </div>
-            <div className="grid grid-cols-4 gap-4">
-              {[{l:'Total PEC',v:String(pedidos.length)},{l:'Capital COP',v:fCOP(montoTotal)},{l:'En Proceso',v:String(activos.length)},{l:'Recibidos',v:String(recibidos.length)}].map((k,i)=>(
-                <div key={i} className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm">
-                  <p className="text-gray-400 text-xs font-black uppercase mb-2">{k.l}</p><p className="text-2xl font-black text-gray-900">{k.v}</p>
-                </div>
-              ))}
-            </div>
-            <div className="grid grid-cols-2 gap-5">
-              <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm">
-                <h3 className="font-black text-gray-800 mb-4 flex items-center gap-2"><TrendingUp size={16} className="text-purple-600"/> Compras por Estado</h3>
-                <div className="flex flex-col gap-3">
-                  {Object.entries(PEC_ESTADOS).filter(([k])=>pedidos.some((p:any)=>p.estado===k)).map(([k,v])=>{
-                    const count = pedidos.filter((p:any)=>p.estado===k).length;
-                    const maxC = Math.max(...Object.keys(PEC_ESTADOS).map(s=>pedidos.filter((p:any)=>p.estado===s).length),1);
-                    return (
-                      <div key={k} className="flex items-center gap-3">
-                        <div className="w-28 text-xs text-gray-500 shrink-0">{v.label}</div>
-                        <div className="flex-1 bg-gray-100 rounded-full h-5 overflow-hidden">
-                          <div className={v.bg+' h-full rounded-full flex items-center justify-end pr-2'} style={{width:Math.round((count/maxC)*100)+'%'}}>
-                            <span className="text-[10px] font-black text-gray-700">{count}</span>
-                          </div>
-                        </div>
-                        <div className="w-8 text-right text-xs font-bold">{count}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-              <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm">
-                <h3 className="font-black text-gray-800 mb-3">Top Proveedores</h3>
-                <table className="w-full text-sm">
-                  <thead><tr className="border-b text-xs text-gray-400 font-black uppercase"><th className="pb-2 text-left">#</th><th className="text-left">Proveedor</th><th className="text-right">PECs</th><th className="text-right">Total</th></tr></thead>
-                  <tbody>
-                    {Object.entries(pedidos.reduce((acc:Record<string,{count:number,total:number}>,p:any)=>{const k=p.supplier_name||'Sin proveedor';if(!acc[k])acc[k]={count:0,total:0};acc[k].count++;acc[k].total+=p.total_cop||0;return acc;},{} as Record<string,{count:number,total:number}>)).sort((a:any,b:any)=>b[1].total-a[1].total).slice(0,8).map(([name,v]:any,i:number)=>(
-                      <tr key={i} className="border-b last:border-0 hover:bg-gray-50">
-                        <td className="py-2 text-gray-400 font-bold">{i+1}</td>
-                        <td className="py-2 font-medium truncate max-w-[120px]">{name}</td>
-                        <td className="py-2 text-right text-gray-500">{v.count}</td>
-                        <td className="py-2 text-right font-bold">{fCOP(v.total)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-            <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm">
-              <h3 className="font-black text-gray-800 mb-4 flex items-center gap-2"><MessageSquare size={18} className="text-purple-600"/> AI Compras Assistant</h3>
-              <div className="flex gap-2 mb-4">
-                <input value={aiQuestion} onChange={e=>setAiQuestion(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleAskAI()}
-                  placeholder="Ej: Cual proveedor tuvo mas retrasos? Cuanto gastamos este mes?"
-                  className="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
-                <button onClick={handleAskAI} disabled={aiLoading} className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 disabled:opacity-50">
-                  {aiLoading?<RefreshCw size={14} className="animate-spin"/>:<Send size={14}/>} Preguntar
-                </button>
-              </div>
-              {aiLoading && <div className="text-gray-400 animate-pulse text-sm">Analizando...</div>}
-              {aiResponse && <div className="bg-purple-50 border border-purple-100 p-4 rounded-xl text-gray-700 text-sm whitespace-pre-wrap">{aiResponse}</div>}
-            </div>
-          </div>
-
-        ) : viewMode === 'lista' ? (
-          /* ── LISTA ── */
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-            {groupByMonth ? (
-              Object.entries(groupedByMonth).map(([month,rows]:any)=>{
-                const isOpen = expandedMonths.has(month);
-                return (
-                  <div key={month}>
-                    <button onClick={()=>{const n=new Set(expandedMonths);if(n.has(month))n.delete(month);else n.add(month);setExpandedMonths(n);}}
-                      className="w-full flex items-center justify-between px-6 py-3 bg-gray-50 border-b border-gray-200 hover:bg-purple-50/50 transition-colors">
-                      <span className="font-black text-gray-700 text-sm capitalize">{month}</span>
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs text-gray-400 font-bold">{(rows as any[]).length} pedido(s) · {fCOP((rows as any[]).reduce((s:number,r:any)=>s+(r.total_cop||0),0))}</span>
-                        {isOpen?<ChevronUp size={16} className="text-gray-400"/>:<ChevronRight size={16} className="text-gray-400"/>}
-                      </div>
-                    </button>
-                    {isOpen && (
-                      <table className="w-full text-left text-sm">
-                        <thead className="bg-gray-50/50 border-b border-gray-100"><tr><th className="px-5 py-3 w-10"/>{TABLE_HEADERS.map((h,i)=><th key={i} className={'px-4 py-3 text-xs font-black text-gray-400 uppercase'+(i===TABLE_HEADERS.length-1?' text-center':'')}>{h}</th>)}</tr></thead>
-                        <tbody className="divide-y divide-gray-100">{(rows as any[]).map((p:any)=><PecRow key={p.id} p={p}/>)}</tbody>
-                      </table>
-                    )}
-                  </div>
-                );
-              })
-            ) : (
-              <table className="w-full text-left text-sm">
-                <thead className="bg-gray-50 border-b border-gray-200">
-                  <tr>
-                    <th className="px-5 py-3.5 w-10"><input type="checkbox" className="rounded border-gray-300" onChange={e=>{if(e.target.checked)setSelectedIds(new Set(filteredData.map((d:any)=>d.id)));else setSelectedIds(new Set());}} checked={selectedIds.size===filteredData.length&&filteredData.length>0}/></th>
-                    {TABLE_HEADERS.map((h,i)=><th key={i} className={'px-4 py-3.5 text-xs font-black text-gray-400 uppercase tracking-wide'+(i===TABLE_HEADERS.length-1?' text-center':'')}>{h}</th>)}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filteredData.length===0&&(
-                    <tr><td colSpan={11}>
-                      <EmptyState icon={Package}
-                        message={search?`Sin resultados para "${search}"`:'Sin pedidos de compra registrados'}
-                        hint={search?undefined:'Usa el boton "Nuevo PEC" arriba para crear el primero'} />
-                    </td></tr>
-                  )}
-                  {filteredData.slice((currentPage-1)*pageSize, currentPage*pageSize).map((p:any)=><PecRow key={p.id} p={p}/>)}
-                </tbody>
-              </table>
-            )}
-            {activeTab!=='Analisis'&&(
-              <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-between bg-slate-50/50">
-                <div className="flex items-center gap-3">
-                  <span className="text-xs font-bold text-slate-400">{filteredData.length} registros</span>
-                  <select value={pageSize} onChange={e=>{setPageSize(Number(e.target.value));setCurrentPage(1);}} className="text-xs border border-slate-200 rounded-lg px-2 py-1 font-bold text-slate-600 outline-none">
-                    <option value={25}>25 por página</option>
-                    <option value={50}>50 por página</option>
-                  </select>
-                  {selectedIds.size>0&&<span className="text-purple-600 font-bold text-xs">{selectedIds.size} seleccionados</span>}
-                </div>
-                {Math.ceil(filteredData.length/pageSize)>1&&(
-                  <div className="flex items-center gap-1">
-                    <button disabled={currentPage===1} onClick={()=>setCurrentPage(1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">«</button>
-                    <button disabled={currentPage===1} onClick={()=>setCurrentPage(p=>p-1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">‹</button>
-                    {Array.from({length:Math.min(5,Math.ceil(filteredData.length/pageSize))},(_,i)=>{
-                      const tp=Math.ceil(filteredData.length/pageSize);let page=i+1;
-                      if(tp>5){const half=2;const start=Math.max(1,Math.min(currentPage-half,tp-4));page=start+i;}
-                      return <button key={page} onClick={()=>setCurrentPage(page)} className={`px-2.5 py-1 text-xs font-bold border rounded-lg ${currentPage===page?'bg-indigo-600 text-white border-indigo-600':'border-slate-200 hover:bg-slate-100'}`}>{page}</button>;
-                    })}
-                    <button disabled={currentPage===Math.ceil(filteredData.length/pageSize)} onClick={()=>setCurrentPage(p=>p+1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">›</button>
-                    <button disabled={currentPage===Math.ceil(filteredData.length/pageSize)} onClick={()=>setCurrentPage(Math.ceil(filteredData.length/pageSize))} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">»</button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-        ) : (
-          /* ── KANBAN ── */
-          <div className="flex-1 flex gap-4 overflow-x-auto pb-4">
-            {['Borrador','Emitido','En Transito','Recibido','Cancelado'].map(col=>(
-              <div key={col} className="w-72 flex-shrink-0 flex flex-col bg-white border border-gray-200 rounded-2xl shadow-sm"
-                onDragOver={e=>e.preventDefault()} onDrop={e=>handleDrop(e,col)}>
-                <div className="p-4 border-b border-gray-100 flex items-center justify-between">
-                  <h3 className="font-black text-gray-700 text-sm">{col}</h3>
-                  <span className="bg-gray-100 text-gray-600 text-xs font-bold px-2 py-0.5 rounded-full">{filteredData.filter((d:any)=>getKanbanCol(d)===col).length}</span>
-                </div>
-                <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2 min-h-[200px]">
-                  {filteredData.filter((d:any)=>getKanbanCol(d)===col).map((p:any,i:number)=>{
-                    const est = PEC_ESTADOS[p.estado]||PEC_ESTADOS.BORRADOR;
-                    return (
-                      <div key={i} draggable onDragStart={e=>handleDragStart(e,p.id)} onClick={()=>setSelectedPec(p)}
-                        className={'bg-white p-4 rounded-xl shadow-sm border cursor-grab hover:border-purple-300 transition-colors '+(p.is_overdue?'border-red-300 bg-red-50/30':'border-gray-200')}>
-                        <div className="flex justify-between items-start mb-1.5">
-                          <span className="font-bold text-gray-900 text-sm">{p.numero}</span>
-                          {p.is_overdue&&<span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-black">VEN.</span>}
-                        </div>
-                        <p className="text-xs text-gray-500 mb-1 truncate">{p.supplier_name||'-'}</p>
-                        {p.ven_numero&&<p className="text-[10px] text-indigo-600 font-bold mb-1">{p.ven_numero}</p>}
-                        <div className="flex justify-between items-center pt-2 border-t border-gray-100">
-                          <span className="font-bold text-xs text-purple-700">{fCOP(p.total_cop||0)}</span>
-                          <span className={'text-[10px] font-bold px-2 py-0.5 rounded-full '+est.bg+' '+est.text}>{est.label}</span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {filteredData.filter((d:any)=>getKanbanCol(d)===col).length===0&&<p className="text-center text-xs text-gray-300 py-8">Arrastra aqui</p>}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Bulk actions */}
-        {selectedIds.size>0&&(
-          <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-gray-900 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-4 z-40">
-            <span className="font-bold text-sm bg-gray-800 px-3 py-1 rounded-full">{selectedIds.size} seleccionados</span>
-            <Button variant="danger" size="sm" icon={Trash2} onClick={handleBulkCancel}>Cancelar</Button>
-            <button onClick={()=>setSelectedIds(new Set())} className="p-2 text-gray-400 hover:text-white"><X size={16}/></button>
-          </div>
-        )}
-
       </div>
+
+      {/* B4 T15 (R9, C15c, RP93): el motivo de la cancelación (ModalMotivo, nunca confirm) con lo que pasa al cancelar. */}
+      {cancelacion && (
+        <ModalMotivo
+          efectos={[...EFECTOS_CANCELAR_PEC]}
+          titulo={cancelacion.pecs.length === 1 ? `Cancelar ${cancelacion.pecs[0].numero}` : `Cancelar ${cancelacion.pecs.length} pedidos de compra`}
+          mensaje={cancelacion.pecs.length > 1 || cancelacion.omitidos.length > 0 ? (
+            <>
+              {cancelacion.pecs.length > 1 && (
+                <p>Se cancelan uno por uno, con el mismo motivo: {cancelacion.pecs.map((p) => p.numero).join(', ')}.</p>
+              )}
+              {cancelacion.omitidos.length > 0 && (
+                <p className="mt-1 text-slate-500">Se omiten: {cancelacion.omitidos.map((o) => `${o.numero} (${o.motivo})`).join('; ')}.</p>
+              )}
+            </>
+          ) : undefined}
+          textoConfirmar={cancelacion.pecs.length === 1 ? 'Cancelar pedido de compra' : 'Cancelar pedidos de compra'}
+          placeholder="Ej: El proveedor no tiene existencias, se pidió por error, etc."
+          onConfirmar={cancelarConMotivo}
+          onCerrar={() => setCancelacion(null)}
+        />
+      )}
     </div>
   );
 }

@@ -36,7 +36,7 @@
  * lucide-react, pero aquí no se pinta nada.
  */
 
-import { definirColumnas } from './kanban.js';
+import { definirColumnas, estadosDeColumnaLista } from './kanban.js';
 import {
   congelar, ESTADOS_PEDIDO, PASOS_PEDIDO, TRANSICIONES_PEDIDO_PATCH, grupoPedido, transicionesPedido, esPedidoVigente,
   infoEstadoPedido, tiene, ESTADOS_PEDIDO_OPERATIVOS, ESTADOS_PEDIDO_CERRADOS,
@@ -856,23 +856,13 @@ export function opcionesEstadosSolicitudes(vista) {
  */
 export const OPCIONES_ESTADOS_TABLERO_SC = congelar(COLUMNAS_SC.map((c) => opcionSC(c.estados[0])));
 
-/**
- * B4 T8 (KANBAN-ventas-listas punto 7, R5): los estados que pide una columna del tablero de una lista: los de la columna
- * cruzados con el filtro de estados de la pantalla (estado.estados), en el orden de la columna; sin filtro, los de la
- * columna. Sin ninguno en común, [] (la pantalla no pide esa columna). Una copia nueva.
- * r1 (m3): si el filtro trae el estado principal de la columna (el primero: la opción de esa columna en
- * OPCIONES_ESTADOS_TABLERO_SC), la columna entera, también los heredados (Confirmada junta CONFIRMADA y los estados
- * anteriores): marcar «Confirmada» en el filtro del tablero muestra lo mismo que la columna sin filtro.
- * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
- * @param {ReadonlyArray<string> | null | undefined} filtro
- * @returns {string[]}
+/*
+ * B4 T8 (KANBAN-ventas-listas punto 7, R5): estadosDeColumnaLista, los estados que pide una columna del tablero de una
+ * lista (con el filtro de la pantalla; con el estado principal de la columna, OPCIONES_ESTADOS_TABLERO_SC, la columna
+ * entera). B4 T14 r1 (m4 y m14): vive en kanban.js (la misma regla para Compras) y se re-exporta aquí con su nombre: sus
+ * consumidores no cambian.
  */
-export function estadosDeColumnaLista(columna, filtro) {
-  const propios = Array.isArray(columna?.estados) ? columna.estados : [];
-  if (!Array.isArray(filtro) || filtro.length === 0) return [...propios];
-  if (propios.length > 0 && filtro.includes(propios[0])) return [...propios];
-  return propios.filter((e) => filtro.includes(e));
-}
+export { estadosDeColumnaLista };
 
 /**
  * B4 T8 (R5): la vista con la que pide cada columna del tablero de Solicitudes (todas, sin Soporte), no la pestaña.

@@ -74,8 +74,13 @@ export const COLORES_KPI = congelar(['amber', 'rose', 'orange', 'indigo', 'purpl
 
 // ─── números ────────────────────────────────────────────────────────────────────
 
-/** El número de `v` si es finito (también un número en texto, como un Decimal del API), o null. */
-function numeroFinito(v) {
+/**
+ * El número de `v` si es finito (también un número en texto, como un Decimal del API), o null. B4 T14 r1 (m7): exportado,
+ * la política única de «un número del servidor» (las tarjetas del Hub de Compras y la tarjeta del tablero de PEC).
+ * @param {unknown} v
+ * @returns {number | null}
+ */
+export function numeroFinito(v) {
   if (typeof v === 'number') return Number.isFinite(v) ? v : null;
   if (typeof v === 'string' && v.trim() !== '') {
     const n = Number(v);
@@ -530,3 +535,80 @@ export const ICONOS_KPI = congelar([
   'SlidersHorizontal', 'Sparkles', 'Target', 'TrendingDown', 'TrendingUp', 'Truck', 'Users', 'Wallet', 'Warehouse',
   'XCircle',
 ]);
+
+// ─── B4 T14: las tarjetas del Hub de Compras (KPI-compras punto 5; R7, R12, RP43) ────────────────────────────────
+
+/**
+ * La regla de «Comprado (30 días)» (RP43: la misma de /compras/analisis). Con variación, TarjetaKpi la pone en el title.
+ * @type {string}
+ */
+const REGLA_COMPRADO = 'Pedidos de compra con fecha de compra en el período, sin Borrador ni Cancelado.';
+
+/**
+ * B4 T14: lo que pintan las 4 tarjetas del Hub de Compras con `data` de GET /compras/stats?periodo=30d (T12):
+ *  - activos (pec_activos): el número y la ayuda '3 con entrega vencida' en tono alerta, o 'Todos en fecha';
+ *  - en_transito (pec_en_transito): el número;
+ *  - cumplimiento (pec_cumplimiento): cumplimiento_pct del servidor y '2 recibidos de 9' (recibidos de activos +
+ *    recibidos); sin base, sin ayuda;
+ *  - comprado (comprado_periodo): flujo.comprado_cop con su {actual, anterior} (variación gris: el catálogo lo trae
+ *    neutro) y la regla de RP43.
+ * Sin datos (cargando o con error), null. Cada número pasa por numeroFinito (T14 r1, m7: un texto numérico vale; lo que no
+ * es un número queda en null y Contador pinta la barra o «—»).
+ * @param {any} datos
+ * @returns {{activos: {valor: number | null, ayuda: string | null, tono: 'alerta' | 'normal'}, en_transito: {valor: number | null},
+ *   cumplimiento: {valor: number | null, ayuda: string | null},
+ *   comprado: {valor: number | null, variacion: {actual: number | null, anterior: number | null}, ayuda: string}} | null}
+ */
+export function tarjetasHubCompras(datos) {
+  if (datos === null || typeof datos !== 'object' || Array.isArray(datos)) return null;
+  const activos = numeroFinito(datos.activos);
+  const vencidos = numeroFinito(datos.vencidos);
+  const recibidos = numeroFinito(datos.recibidos);
+  const base = activos !== null && recibidos !== null ? activos + recibidos : null;
+  const comprado = datos.flujo && typeof datos.flujo === 'object' ? datos.flujo.comprado_cop : null;
+  return {
+    activos: {
+      valor: activos,
+      ayuda: vencidos === null ? null : vencidos > 0 ? `${formatoEntero(vencidos)} con entrega vencida` : 'Todos en fecha',
+      tono: vencidos !== null && vencidos > 0 ? 'alerta' : 'normal',
+    },
+    en_transito: { valor: numeroFinito(datos.en_transito) },
+    cumplimiento: {
+      valor: numeroFinito(datos.cumplimiento_pct),
+      ayuda: base ? `${formatoEntero(recibidos)} ${recibidos === 1 ? 'recibido' : 'recibidos'} de ${formatoEntero(base)}` : null,
+    },
+    comprado: {
+      valor: numeroFinito(comprado?.actual),
+      variacion: { actual: numeroFinito(comprado?.actual), anterior: numeroFinito(comprado?.anterior) },
+      ayuda: REGLA_COMPRADO,
+    },
+  };
+}
+
+/**
+ * B4 T15 (KPI-compras punto 6; R7, R12, RP92): lo que pintan las 4 tarjetas de Pedidos de compra con `data` de GET
+ * /compras/stats?periodo=30d (T12; todos los PEC, no la página):
+ *  - activos (pec_activos): el número;
+ *  - en_transito (pec_en_transito): el número;
+ *  - vencidos (pec_vencidos): el número, en tono alerta si hay alguno;
+ *  - monto (pec_monto): monto_cop (lo de los vigentes) con la ayuda '12 pedidos vigentes'.
+ * Sin datos (cargando o con error), null. Cada número pasa por numeroFinito (lo que no es un número queda en null y
+ * Contador pinta la barra o «—», nunca 0).
+ * @param {any} datos
+ * @returns {{activos: {valor: number | null}, en_transito: {valor: number | null},
+ *   vencidos: {valor: number | null, tono: 'alerta' | 'normal'}, monto: {valor: number | null, ayuda: string | null}} | null}
+ */
+export function tarjetasPedidosCompra(datos) {
+  if (datos === null || typeof datos !== 'object' || Array.isArray(datos)) return null;
+  const vencidos = numeroFinito(datos.vencidos);
+  const vigentes = numeroFinito(datos.vigentes);
+  return {
+    activos: { valor: numeroFinito(datos.activos) },
+    en_transito: { valor: numeroFinito(datos.en_transito) },
+    vencidos: { valor: vencidos, tono: vencidos !== null && vencidos > 0 ? 'alerta' : 'normal' },
+    monto: {
+      valor: numeroFinito(datos.monto_cop),
+      ayuda: vigentes === null ? null : `${formatoEntero(vigentes)} ${vigentes === 1 ? 'pedido vigente' : 'pedidos vigentes'}`,
+    },
+  };
+}

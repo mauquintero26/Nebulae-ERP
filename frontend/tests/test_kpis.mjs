@@ -20,6 +20,8 @@ import {
 } from '../src/lib/kpis.js';
 import { formatoPct } from '../src/lib/dinero-ventas.js';
 import { PERIODOS, infoVariacion } from '../src/lib/analisis.js';
+// B4 T14: las tarjetas del Hub de Compras por el espacio de nombres (su falta no tapa los demás rojos).
+import * as kpisLib from '../src/lib/kpis.js';
 
 const MENOS = '−';
 
@@ -506,6 +508,89 @@ console.log('--- TEST 15 (B4 T8 r2, p1): activa y en alerta, un solo color de bo
   assert.match(fuente, /cursor-pointer transition-colors\$\{hover\} focus-visible:outline-none focus-visible:ring-2 /, 'el botón usa ese hover');
   assert.equal((fuente.match(/hover:border-slate-300/g) ?? []).length, 1, 'un solo hover de borde');
   assert.match(fuente, /alerta: 'text-rose-700',/, 'la ayuda en alerta sigue en rosa');
+}
+
+console.log('--- TEST 16 (B4 T14, KPI-compras punto 5): tarjetasHubCompras con lo de GET /compras/stats ---');
+{
+  const tarjetas = kpisLib.tarjetasHubCompras;
+  assert.equal(typeof tarjetas, 'function', 'tarjetasHubCompras existe');
+  const REGLA = 'Pedidos de compra con fecha de compra en el período, sin Borrador ni Cancelado.';
+  const stats = {
+    activos: 7, en_transito: 2, vencidos: 3, recibidos: 2, cumplimiento_pct: 22.2,
+    flujo: { comprado_cop: { actual: 4927538, anterior: 4000000, variacion_pct: 23.2 }, pec_nuevos: { actual: 4, anterior: 3 } },
+  };
+  assert.deepEqual(tarjetas(stats), {
+    activos: { valor: 7, ayuda: '3 con entrega vencida', tono: 'alerta' },
+    en_transito: { valor: 2 },
+    cumplimiento: { valor: 22.2, ayuda: '2 recibidos de 9' },
+    comprado: { valor: 4927538, variacion: { actual: 4927538, anterior: 4000000 }, ayuda: REGLA },
+  });
+  const t0 = tarjetas({ ...stats, vencidos: 0, recibidos: 1, activos: 3 });
+  assert.deepEqual(t0.activos, { valor: 3, ayuda: 'Todos en fecha', tono: 'normal' });
+  assert.equal(t0.cumplimiento.ayuda, '1 recibido de 4');
+  assert.equal(tarjetas({ ...stats, vencidos: 1234 }).activos.ayuda, '1.234 con entrega vencida');
+  // Sin datos (todavía cargan o falló): null; un valor que no es un número no se vuelve 0.
+  assert.equal(tarjetas(null), null);
+  assert.equal(tarjetas('x'), null);
+  // T14 r1 (m7): un número del servidor es numeroFinito (la política única): un texto numérico como '7' vale 7 (un Decimal
+  // del API llega así); lo que no es un número queda en null.
+  const raros = tarjetas({ activos: '7', en_transito: null, vencidos: undefined, recibidos: Number.NaN, cumplimiento_pct: 'x',
+    flujo: { comprado_cop: { actual: '4927538', anterior: '' } } });
+  assert.deepEqual(raros, {
+    activos: { valor: 7, ayuda: null, tono: 'normal' },
+    en_transito: { valor: null },
+    cumplimiento: { valor: null, ayuda: null },
+    comprado: { valor: 4927538, variacion: { actual: 4927538, anterior: null }, ayuda: REGLA },
+  });
+  assert.equal(tarjetas({ ...stats, vencidos: '2', recibidos: '1' }).activos.ayuda, '2 con entrega vencida');
+  assert.equal(tarjetas({ ...stats, vencidos: '2', recibidos: '1' }).cumplimiento.ayuda, '1 recibido de 8');
+  // numeroFinito, exportado (lo usan también estados-compras.js y la tarjeta del tablero).
+  const numero = kpisLib.numeroFinito;
+  assert.equal(typeof numero, 'function', 'numeroFinito exportado');
+  for (const [v, esperado] of [[7, 7], ['7', 7], [' 35000 ', 35000], [-2.5, -2.5], ['', null], ['  ', null], ['x', null], [null, null],
+    [undefined, null], [Number.NaN, null], [Infinity, null], [true, null], [{}, null]]) {
+    assert.equal(numero(v), esperado, `numeroFinito(${String(v)})`);
+  }
+  // Sin pedidos emitidos ni recibidos, el cumplimiento no tiene base: sin ayuda (nunca «0 recibidos de 0»).
+  assert.equal(tarjetas({ ...stats, activos: 0, recibidos: 0, cumplimiento_pct: null }).cumplimiento.ayuda, null);
+  // El catálogo trae los nombres (CATALOGO_KPI, la única fuente) y «Comprado» es neutro (variación gris, R7).
+  assert.equal(etiquetaKpi('comprado_periodo'), 'Comprado (30 días)');
+  assert.equal(CATALOGO_KPI.comprado_periodo.mejorSiSube, null);
+  assert.equal(CATALOGO_KPI.pec_activos.etiqueta, 'Pedidos de compra activos');
+}
+
+console.log('--- TEST 17 (B4 T15, KPI-compras punto 6): tarjetasPedidosCompra con lo de GET /compras/stats ---');
+{
+  const tarjetas = kpisLib.tarjetasPedidosCompra;
+  assert.equal(typeof tarjetas, 'function', 'tarjetasPedidosCompra existe');
+  const stats = { activos: 7, en_transito: 2, vencidos: 3, vigentes: 12, monto_cop: 4927538, recibidos: 5 };
+  assert.deepEqual(tarjetas(stats), {
+    activos: { valor: 7 },
+    en_transito: { valor: 2 },
+    vencidos: { valor: 3, tono: 'alerta' },
+    monto: { valor: 4927538, ayuda: '12 pedidos vigentes' },
+  });
+  // Sin vencidos, la tarjeta no va en alerta; «1 pedido vigente» en singular; el punto de miles.
+  assert.deepEqual(tarjetas({ ...stats, vencidos: 0 }).vencidos, { valor: 0, tono: 'normal' });
+  assert.equal(tarjetas({ ...stats, vigentes: 1 }).monto.ayuda, '1 pedido vigente');
+  assert.equal(tarjetas({ ...stats, vigentes: 1234 }).monto.ayuda, '1.234 pedidos vigentes');
+  assert.equal(tarjetas({ ...stats, vigentes: 0 }).monto.ayuda, '0 pedidos vigentes');
+  // Sin datos (todavía cargan o falló): null; lo que no es un número queda en null (Contador pinta la barra o «—»), nunca 0.
+  assert.equal(tarjetas(null), null);
+  assert.equal(tarjetas('x'), null);
+  assert.equal(tarjetas([1, 2]), null);
+  assert.deepEqual(tarjetas({ activos: '7', en_transito: null, vencidos: 'x', vigentes: undefined, monto_cop: '35000' }), {
+    activos: { valor: 7 },
+    en_transito: { valor: null },
+    vencidos: { valor: null, tono: 'normal' },
+    monto: { valor: 35000, ayuda: null },
+  });
+  // El monto que no llegó o no es un número queda en null («—» o la barra gris), nunca $0 (numeroFinito, la política única).
+  for (const monto of [null, undefined, 'x', '', Number.NaN]) assert.equal(tarjetas({ ...stats, monto_cop: monto }).monto.valor, null, String(monto));
+  // Los ids existen en el catálogo (la única fuente de nombres) y «Con entrega vencida» es mejor si baja.
+  for (const id of ['pec_activos', 'pec_en_transito', 'pec_vencidos', 'pec_monto']) assert.ok(CATALOGO_KPI[id], id);
+  assert.equal(CATALOGO_KPI.pec_vencidos.mejorSiSube, false);
+  assert.equal(etiquetaKpi('pec_monto'), 'Monto en compras');
 }
 
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

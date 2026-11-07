@@ -15,9 +15,27 @@ import * as estadosCompras from '../src/lib/estados-compras.js';
 // r1: conteosDePasos por el espacio de nombres, para que su falta no tape los demás rojos.
 import * as flujo from '../src/lib/flujo.js';
 import { pasosConConteos } from '../src/lib/flujo.js';
-import { fechaLarga } from '../src/lib/fechas-colombia.js';
+import { diaColombia, fechaLarga } from '../src/lib/fechas-colombia.js';
+// B4 T14: lo del Hub de Compras por el espacio de nombres (su falta no tapa los demás rojos).
+import * as fc from '../src/lib/flujo-compras.js';
+import { accionPestana, estadoTablaInicial } from '../src/lib/tabla.js';
 
 const estados = (pasos) => pasos.map((p) => p.estado);
+
+/**
+ * T15 r1 (m10 a): corre `fn` con el reloj fijo en `iso` (Date sin argumentos y Date.now() dan ese instante) y deja el
+ * Date de verdad al salir, también si `fn` falla.
+ */
+function conRelojFijo(iso, fn) {
+  const DateReal = globalThis.Date;
+  const fijo = DateReal.parse(iso);
+  class DateFijo extends DateReal {
+    constructor(...args) { super(...(args.length ? args : [fijo])); }
+    static now() { return fijo; }
+  }
+  globalThis.Date = DateFijo;
+  try { fn(); } finally { globalThis.Date = DateReal; }
+}
 
 /** Una etapa como la guarda el servidor (create_pec y update_tracking de erp_compras.py, con su `alert`). */
 const etapa = (stage, label, status, extra = {}) => ({
@@ -229,6 +247,289 @@ console.log('--- TEST 10 (T5A): los puntos de la variante mini (Progreso de Trá
   // Una etapa atrasada suma su aviso (rojo) al title.
   const atrasada = pasosDeTracking([etapa('ADUANA', 'Aduana', 'EN_PROCESO', { alert: { nivel: 'atrasado', mensaje: 'Atrasada 2 día(s)' } })]);
   assert.equal(/** @type {any} */ (flujo).tituloPunto(atrasada[0], 1, 4), 'Etapa 2 de 4: Aduana, en curso · Atrasada 2 día(s)');
+}
+
+/** La respuesta de GET /compras/flujo (T12, Firmas finales). */
+const FLUJO = {
+  pasos: {
+    LISTA: { total: 4, atrasados: null, mas_antiguo_dias: 3, por_estado: { PENDIENTE: 4 } },
+    PEC: { total: 5, atrasados: 2, mas_antiguo_dias: 9, por_estado: { BORRADOR: 1, EMITIDO: 4 } },
+    TRANSITO: { total: 3, atrasados: 1, mas_antiguo_dias: 6, por_estado: { EN_TRANSITO: 3 } },
+    RECEPCION: { total: 2, atrasados: null, mas_antiguo_dias: 2, por_estado: { RECIBIDO: 2 }, recepciones_por_confirmar: 3 },
+    RECIBIDO: { total: 9, atrasados: null, mas_antiguo_dias: null, por_estado: { RECIBIDA: 9 } },
+  },
+  semaforo: { atrasados: 3, no_resueltos: null }, criterio_atraso: 'fecha_entrega', generado_at: '2026-11-07T15:00:00Z',
+};
+
+console.log('--- TEST 11 (B4 T14): pasosHubCompras, la franja del Hub (los conteos del servidor; Lista y Recepción son enlaces) ---');
+{
+  assert.equal(typeof fc.pasosHubCompras, 'function', 'pasosHubCompras existe');
+  const pasos = fc.pasosHubCompras(FLUJO, estadoTablaInicial({ vista: 'pedidos' }));
+  assert.deepEqual(pasos.map((p) => p.clave), ['LISTA', 'PEC', 'TRANSITO', 'RECEPCION', 'RECIBIDO']);
+  assert.deepEqual(pasos.map((p) => p.total), [4, 5, 3, 2, 9]);
+  assert.deepEqual(pasos.map((p) => p.atrasados), [null, 2, 1, null, null]);
+  assert.deepEqual(pasos.map((p) => p.href ?? null), ['/dashboard/compras/lista-compras', null, null, '/dashboard/compras/recepciones', null]);
+  assert.deepEqual(pasos.map((p) => p.seleccionado), [false, true, false, false, false], 'la pestaña Pedidos de compra marca su caja');
+  assert.ok(pasos.every((p) => !p.esEste && p.estado === 'neutro'), 'el Hub no es la pantalla de un paso');
+  // Es pasosConConteos con conteosDePasos (D36), más los enlaces: lo demás de cada caja, igual.
+  const base = pasosConConteos(PASOS_FLUJO_COMPRAS, flujo.conteosDePasos(FLUJO), { seleccionado: 'PEC' });
+  assert.deepEqual(pasos.map((p) => Object.fromEntries(Object.entries(p).filter(([campo]) => campo !== 'href'))), base);
+  // Sin datos (cargando): los números en null (Contador pinta la barra gris), nunca 0.
+  assert.ok(fc.pasosHubCompras(null, estadoTablaInicial({})).every((p) => p.total === null && p.atrasados === null));
+  // En Kanban ninguna caja queda marcada (las pestañas no se ven: la caja abre su pestaña en Lista).
+  assert.ok(fc.pasosHubCompras(FLUJO, estadoTablaInicial({ vista: 'pedidos', modo: 'kanban' })).every((p) => !p.seleccionado));
+}
+
+console.log('--- TEST 12 (B4 T14): pasoHubComprasDe y accionPasoHubCompras: tocar una caja filtra la tabla (R5, C3) ---');
+{
+  assert.equal(typeof fc.pasoHubComprasDe, 'function', 'pasoHubComprasDe existe');
+  const de = (parcial) => fc.pasoHubComprasDe(estadoTablaInicial(parcial));
+  assert.equal(de({ vista: 'pedidos' }), 'PEC');
+  assert.equal(de({ vista: 'en_transito', estados: ['EN_TRANSITO'] }), 'TRANSITO');
+  assert.equal(de({ vista: 'acciones_tomadas', estados: ['COMPLETADO', 'RECIBIDA'] }), 'RECIBIDO', 'Recibido = la pestaña y su etapa');
+  assert.equal(de({ vista: 'acciones_tomadas' }), null);
+  assert.equal(de({ vista: 'acciones_tomadas', estados: ['RECIBIDA'] }), null);
+  assert.equal(de({ vista: 'todos' }), null);
+  assert.equal(de({ vista: 'pedidos', modo: 'kanban' }), null);
+
+  assert.equal(typeof fc.accionPasoHubCompras, 'function', 'accionPasoHubCompras existe');
+  // T14 r1 (m1; D41, D42): la vista cambia con accionPestana (con las opciones de la Lista), como T7; solo la caja Recibido
+  // agrega los estados de su etapa (el endpoint no acepta `paso`). No toca el semáforo.
+  const opciones = estadosCompras.opcionesEstadosPec;
+  const accion = (parcial, clave) => fc.accionPasoHubCompras(estadoTablaInicial(parcial), clave, opciones);
+  assert.equal(accion({ vista: 'todos' }, 'LISTA'), null, 'Lista de compras es un enlace');
+  assert.equal(accion({ vista: 'todos' }, 'RECEPCION'), null, 'Recepción en bodega es un enlace');
+  assert.equal(accion({ vista: 'todos' }, 'OTRO'), null);
+  // Un filtro que vale en la pestaña nueva se conserva (EMITIDO en Pedidos de compra); uno que no, se poda.
+  assert.deepEqual(accion({ vista: 'todos', estados: ['EMITIDO'] }, 'PEC'), { tipo: 'vista', valor: 'pedidos' });
+  assert.deepEqual(accion({ vista: 'todos', estados: ['EN_TRANSITO', 'EMITIDO'] }, 'PEC'),
+    { tipo: 'cambiar', cambios: { vista: 'pedidos', estados: ['EMITIDO'] } });
+  assert.deepEqual(accion({ vista: 'todos' }, 'TRANSITO'), { tipo: 'vista', valor: 'en_transito' });
+  for (const [parcial, clave, vista] of [[{ vista: 'todos', estados: ['EMITIDO'] }, 'PEC', 'pedidos'],
+    [{ vista: 'no_resueltos', estados: ['RECIBIDO', 'EN_TRANSITO'] }, 'TRANSITO', 'en_transito']]) {
+    const e = estadoTablaInicial(parcial);
+    assert.deepEqual(fc.accionPasoHubCompras(e, clave, opciones), accionPestana(e, vista, opciones), `${clave}: la de accionPestana`);
+  }
+  assert.deepEqual(accion({ vista: 'todos' }, 'RECIBIDO'),
+    { tipo: 'cambiar', cambios: { vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'] } });
+  assert.deepEqual(accion({ vista: 'todos', semaforo: 'vencidos' }, 'RECIBIDO'),
+    { tipo: 'cambiar', cambios: { vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'], semaforo: null } },
+    'cierre T14: Recibido apaga «Con atraso» (sus estados nunca vencen; si no, la tabla queda vacía)');
+  assert.deepEqual(accion({ vista: 'pedidos', modo: 'kanban', semaforo: 'vencidos' }, 'RECIBIDO'),
+    { tipo: 'cambiar', cambios: { vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'], semaforo: null, modo: 'lista' } },
+    'también desde Kanban');
+  assert.deepEqual(accion({ vista: 'todos', semaforo: 'vencidos' }, 'PEC'), { tipo: 'vista', valor: 'pedidos' });
+  // Tocar la caja marcada vuelve a Todos (R6) con accionPestana; Recibido suelta además los estados de su etapa.
+  assert.deepEqual(accion({ vista: 'pedidos', estados: ['EMITIDO'] }, 'PEC'), { tipo: 'vista', valor: 'todos' });
+  assert.deepEqual(accion({ vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'] }, 'RECIBIDO'),
+    { tipo: 'cambiar', cambios: { vista: 'todos', estados: [] } });
+  // En Kanban abre su pestaña en Lista (como las tarjetas de T10), con la poda de la Lista.
+  assert.deepEqual(accion({ vista: 'pedidos', modo: 'kanban' }, 'TRANSITO'), { tipo: 'cambiar', cambios: { vista: 'en_transito', modo: 'lista' } });
+  assert.deepEqual(accion({ vista: 'pedidos', modo: 'kanban', estados: ['EMITIDO'] }, 'TRANSITO'),
+    { tipo: 'cambiar', cambios: { vista: 'en_transito', estados: [], modo: 'lista' } });
+  assert.deepEqual(accion({ vista: 'pedidos', modo: 'kanban' }, 'RECIBIDO'),
+    { tipo: 'cambiar', cambios: { vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'], modo: 'lista' } });
+}
+
+console.log('--- TEST 13 (B4 T14): accionSemaforoCompras, «Con atraso» = semaforo=vencidos en el servidor (RP40) ---');
+{
+  assert.equal(typeof fc.accionSemaforoCompras, 'function', 'accionSemaforoCompras existe');
+  // T14 r1 (m1): «Con atraso» no cambia de pestaña ni poda el filtro (como T7); solo si la vista activa no puede tener
+  // atrasos (en bodega, acciones tomadas) pasa a Todos con accionPestana (como T10) y pone el semáforo.
+  const opciones = estadosCompras.opcionesEstadosPec;
+  const accion = (parcial, f) => fc.accionSemaforoCompras(estadoTablaInicial(parcial), f, opciones);
+  assert.deepEqual(accion({ vista: 'pedidos', semaforo: 'vencidos' }, 'todos'), { tipo: 'semaforo', valor: null });
+  assert.deepEqual(accion({ vista: 'pedidos' }, 'atrasados'), { tipo: 'semaforo', valor: 'vencidos' });
+  assert.deepEqual(accion({ vista: 'todos', estados: ['BORRADOR', 'EMITIDO'] }, 'atrasados'), { tipo: 'semaforo', valor: 'vencidos' });
+  assert.deepEqual(accion({ vista: 'en_bodega' }, 'atrasados'), { tipo: 'cambiar', cambios: { vista: 'todos', semaforo: 'vencidos' } });
+  // Cierre T14 (re-revisión r1): en Lista, la poda usa las opciones de Todos que pueden vencer (T8 r2b: no caer en
+  // una tabla vacía); la caja Recibido pone RECIBIDA y COMPLETADO, que nunca vencen.
+  assert.deepEqual(accion({ vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'] }, 'atrasados'),
+    { tipo: 'cambiar', cambios: { vista: 'todos', estados: [], semaforo: 'vencidos' } }, 'poda lo que nunca vence');
+  assert.deepEqual(accion({ vista: 'en_bodega', estados: ['RECIBIDO'] }, 'atrasados'),
+    { tipo: 'cambiar', cambios: { vista: 'todos', estados: [], semaforo: 'vencidos' } });
+  // En Kanban se poda con las opciones del tablero (T8 r2b): el filtro del tablero se queda.
+  const tablero = [{ valor: 'RECIBIDA', etiqueta: 'Recibido' }, { valor: 'EMITIDO', etiqueta: 'Emitido' }];
+  assert.deepEqual(fc.accionSemaforoCompras(estadoTablaInicial({ vista: 'acciones_tomadas', modo: 'kanban', estados: ['RECIBIDA'] }),
+    'atrasados', tablero), { tipo: 'cambiar', cambios: { vista: 'todos', semaforo: 'vencidos' } }, 'en Kanban el filtro del tablero se queda');
+  // Sin opciones (la barra sin filtro), el filtro no se toca.
+  assert.deepEqual(fc.accionSemaforoCompras(estadoTablaInicial({ vista: 'en_bodega', estados: ['RECIBIDO'] }), 'atrasados', null),
+    { tipo: 'cambiar', cambios: { vista: 'todos', semaforo: 'vencidos' } });
+  assert.deepEqual(accion({ vista: 'acciones_tomadas', estados: ['CANCELADO'] }, 'atrasados'),
+    { tipo: 'cambiar', cambios: { vista: 'todos', estados: [], semaforo: 'vencidos' } }, 'y poda lo que no');
+  // El filtro de la franja: 'vencidos' del estado es 'atrasados' para BannerFlujo.
+  assert.equal(typeof fc.filtroSemaforoCompras, 'function', 'filtroSemaforoCompras existe');
+  assert.equal(fc.filtroSemaforoCompras(estadoTablaInicial({ semaforo: 'vencidos' })), 'atrasados');
+  assert.equal(fc.filtroSemaforoCompras(estadoTablaInicial({ semaforo: 'atrasados' })), 'atrasados');
+  assert.equal(fc.filtroSemaforoCompras(estadoTablaInicial({})), 'todos');
+}
+
+console.log('--- TEST 14 (B4 T14): avisosFlujoCompras (RP46) y leerEnlaceHubCompras (?tab=analisis, R13) ---');
+{
+  assert.equal(typeof fc.avisosFlujoCompras, 'function', 'avisosFlujoCompras existe');
+  assert.deepEqual(fc.avisosFlujoCompras(FLUJO), [{ texto: '3 recepciones por confirmar', tono: 'ambar' }]);
+  const con = (n) => fc.avisosFlujoCompras({ pasos: { RECEPCION: { recepciones_por_confirmar: n } } });
+  assert.deepEqual(con(1), [{ texto: '1 recepción por confirmar', tono: 'ambar' }]);
+  assert.deepEqual(con(1234), [{ texto: '1.234 recepciones por confirmar', tono: 'ambar' }]);
+  for (const n of [0, -2, null, undefined, '3', Number.NaN]) assert.deepEqual(con(n), [], String(n));
+  assert.deepEqual(fc.avisosFlujoCompras(null), []);
+  assert.deepEqual(fc.avisosFlujoCompras({ pasos: {} }), []);
+  assert.equal(typeof fc.leerEnlaceHubCompras, 'function', 'leerEnlaceHubCompras existe');
+  assert.deepEqual(fc.leerEnlaceHubCompras('?tab=analisis'), { analisis: true });
+  assert.deepEqual(fc.leerEnlaceHubCompras('?x=1&tab=analisis'), { analisis: true });
+  for (const s of ['', '?tab=documentos', '?tab=Analisis2', null, undefined]) assert.deepEqual(fc.leerEnlaceHubCompras(s), { analisis: false }, String(s));
+  assert.equal(fc.RUTA_HUB_COMPRAS, '/dashboard/compras');
+}
+
+console.log('--- TEST 15 (B4 T15): la franja de Pedidos de compra, con «Estás aquí» en Pedido de compra (RP21, D42) ---');
+{
+  assert.equal(typeof fc.pasosPedidosCompra, 'function', 'pasosPedidosCompra existe');
+  const sinHref = (pasos) => pasos.map((p) => Object.fromEntries(Object.entries(p).filter(([campo]) => campo !== 'href')));
+  const pasos = fc.pasosPedidosCompra(FLUJO, 'vigentes');
+  assert.deepEqual(pasos.map((p) => p.clave), ['LISTA', 'PEC', 'TRANSITO', 'RECEPCION', 'RECIBIDO']);
+  assert.deepEqual(pasos.map((p) => p.total), [4, 5, 3, 2, 9], 'los conteos de /compras/flujo (conteosDePasos)');
+  assert.deepEqual(pasos.map((p) => p.atrasados), [null, 2, 1, null, null]);
+  assert.deepEqual(pasos.map((p) => p.esEste), [false, true, false, false, false], 'Estás aquí: Pedido de compra');
+  assert.equal(pasos[1].estado, 'actual');
+  // La caja de la pantalla no lleva href (D42); Lista de compras y Recepción en bodega son enlaces; En tránsito y Recibido
+  // están en esta misma página (RP21): sin href, la pantalla los despacha como pestaña.
+  assert.deepEqual(pasos.map((p) => p.href ?? null), ['/dashboard/compras/lista-compras', null, null, '/dashboard/compras/recepciones', null]);
+  assert.ok(pasos.every((p) => !p.seleccionado), 'en Todos ninguna caja queda marcada');
+  assert.deepEqual(sinHref(pasos), sinHref(pasosConConteos(PASOS_FLUJO_COMPRAS, flujo.conteosDePasos(FLUJO), { actual: 'PEC' })),
+    'es pasosConConteos con conteosDePasos (D36) y actual PEC, más los enlaces');
+  // La pestaña de En tránsito o Recibido marca su caja; en Kanban (sin vista) ninguna.
+  assert.deepEqual(fc.pasosPedidosCompra(FLUJO, 'en_transito').map((p) => p.seleccionado), [false, false, true, false, false]);
+  assert.deepEqual(fc.pasosPedidosCompra(FLUJO, 'recibidos').map((p) => p.seleccionado), [false, false, false, false, true]);
+  assert.ok(fc.pasosPedidosCompra(FLUJO, 'activos').every((p) => !p.seleccionado));
+  assert.ok(fc.pasosPedidosCompra(FLUJO, null).every((p) => !p.seleccionado));
+  // Sin datos (cargando): los números en null (Contador pinta la barra gris), nunca 0; la caja de la pantalla, igual.
+  const cargando = fc.pasosPedidosCompra(null, 'vigentes');
+  assert.ok(cargando.every((p) => p.total === null && p.atrasados === null));
+  assert.equal(cargando[1].esEste, true);
+
+  assert.equal(typeof fc.vistaDePasoPedidosCompra, 'function', 'vistaDePasoPedidosCompra existe');
+  assert.equal(fc.vistaDePasoPedidosCompra('TRANSITO'), 'en_transito');
+  assert.equal(fc.vistaDePasoPedidosCompra('RECIBIDO'), 'recibidos');
+  for (const c of ['PEC', 'LISTA', 'RECEPCION', 'OTRO', '', null, undefined, 'toString', 3]) {
+    assert.equal(fc.vistaDePasoPedidosCompra(c), null, String(c));
+  }
+
+  // RP21: ?tab= con la clave de la vista del servidor (vigentes para Todos); un valor desconocido se ignora.
+  assert.equal(typeof fc.leerEnlacePedidosCompra, 'function', 'leerEnlacePedidosCompra existe');
+  for (const v of ['vigentes', 'activos', 'en_transito', 'recibidos', 'cancelados']) assert.equal(fc.leerEnlacePedidosCompra(`?tab=${v}`), v);
+  assert.equal(fc.leerEnlacePedidosCompra('?id=8&tab=recibidos'), 'recibidos', 'convive con el enlace profundo ?id');
+  assert.equal(fc.leerEnlacePedidosCompra('tab=%20recibidos%20'), 'recibidos', 'sin los espacios de los bordes');
+  for (const s of ['', '?tab=todos', '?tab=Recibidos', '?tab=analisis', '?tab=en_bodega', '?tab=toString', '?id=8', null, undefined, 5]) {
+    assert.equal(fc.leerEnlacePedidosCompra(s), null, String(s));
+  }
+  // La caja Recibido de las otras franjas (PASOS_FLUJO_COMPRAS, RP21) abre esta lista en su pestaña: la misma clave.
+  const recibido = PASOS_FLUJO_COMPRAS.find((p) => p.clave === 'RECIBIDO');
+  assert.equal(fc.leerEnlacePedidosCompra(recibido.ruta.slice(recibido.ruta.indexOf('?'))), 'recibidos');
+
+  // R13: «Ver análisis» abre la pestaña Análisis del Hub de Compras (la lee leerEnlaceHubCompras).
+  assert.equal(fc.ENLACE_VER_ANALISIS_COMPRAS, '/dashboard/compras?tab=analisis');
+  assert.ok(fc.ENLACE_VER_ANALISIS_COMPRAS.startsWith(`${fc.RUTA_HUB_COMPRAS}?`));
+  assert.deepEqual(fc.leerEnlaceHubCompras(fc.ENLACE_VER_ANALISIS_COMPRAS.slice(fc.RUTA_HUB_COMPRAS.length)), { analisis: true });
+}
+
+console.log('--- TEST 16 (B4 T15): «Con atraso» en Pedidos de compra vuelve a SU pestaña Todos (vigentes; aditivo) ---');
+{
+  const opciones = estadosCompras.opcionesEstadosPec;
+  const conVista = (parcial, f, op = opciones) => fc.accionSemaforoCompras(estadoTablaInicial(parcial), f, op, { vistaTodos: 'vigentes' });
+  assert.deepEqual(conVista({ vista: 'vigentes', semaforo: 'vencidos' }, 'todos'), { tipo: 'semaforo', valor: null });
+  assert.deepEqual(conVista({ vista: 'vigentes' }, 'atrasados'), { tipo: 'semaforo', valor: 'vencidos' });
+  assert.deepEqual(conVista({ vista: 'activos', estados: ['EMITIDO'] }, 'atrasados'), { tipo: 'semaforo', valor: 'vencidos' });
+  assert.deepEqual(conVista({ vista: 'en_transito' }, 'atrasados'), { tipo: 'semaforo', valor: 'vencidos' });
+  // Recibidos y Cancelados nunca vencen: pasan a la pestaña Todos de esta lista ('vigentes', no 'todos') con la poda de lo
+  // que no vence (T8 r2b), en la misma acción.
+  assert.deepEqual(conVista({ vista: 'recibidos' }, 'atrasados'), { tipo: 'cambiar', cambios: { vista: 'vigentes', semaforo: 'vencidos' } });
+  assert.deepEqual(conVista({ vista: 'recibidos', estados: ['RECIBIDA'] }, 'atrasados'),
+    { tipo: 'cambiar', cambios: { vista: 'vigentes', estados: [], semaforo: 'vencidos' } });
+  assert.deepEqual(conVista({ vista: 'cancelados', estados: ['CANCELADO'] }, 'atrasados'),
+    { tipo: 'cambiar', cambios: { vista: 'vigentes', estados: [], semaforo: 'vencidos' } });
+  const tablero = [{ valor: 'RECIBIDA', etiqueta: 'Recibido' }, { valor: 'EMITIDO', etiqueta: 'Emitido' }];
+  assert.deepEqual(conVista({ vista: 'recibidos', modo: 'kanban', estados: ['RECIBIDA'] }, 'atrasados', tablero),
+    { tipo: 'cambiar', cambios: { vista: 'vigentes', semaforo: 'vencidos' } }, 'en Kanban el filtro del tablero se queda');
+  // Aditivo: sin la opción (el Hub) y con una vista que no es un texto, lo de siempre ('todos').
+  for (const extra of [undefined, {}, { vistaTodos: '' }, { vistaTodos: 5 }, null]) {
+    assert.deepEqual(fc.accionSemaforoCompras(estadoTablaInicial({ vista: 'en_bodega' }), 'atrasados', opciones, extra),
+      { tipo: 'cambiar', cambios: { vista: 'todos', semaforo: 'vencidos' } }, JSON.stringify(extra));
+  }
+}
+
+console.log('--- TEST 17 (B4 T15): textoDiasEtapa, los días que faltan para la ETA de una etapa (un día de calendario) ---');
+{
+  assert.equal(typeof fc.textoDiasEtapa, 'function', 'textoDiasEtapa existe');
+  const HOY = '2026-11-07';
+  assert.deepEqual(fc.textoDiasEtapa('2026-11-10', HOY), { texto: '3 días restantes', tono: 'azul' });
+  assert.deepEqual(fc.textoDiasEtapa('2026-11-08', HOY), { texto: '1 día restante', tono: 'azul' });
+  assert.deepEqual(fc.textoDiasEtapa('2026-11-07', HOY), { texto: 'Vence hoy', tono: 'ambar' });
+  assert.deepEqual(fc.textoDiasEtapa('2026-11-06', HOY), { texto: '1 día de atraso', tono: 'rojo' });
+  assert.deepEqual(fc.textoDiasEtapa('2026-10-28', HOY), { texto: '10 días de atraso', tono: 'rojo' });
+  // El día tal como se guarda (los 10 primeros caracteres, diaPec; RP40): una ETA con hora no se corre de día.
+  assert.deepEqual(fc.textoDiasEtapa('2026-11-07T00:00:00', HOY), { texto: 'Vence hoy', tono: 'ambar' });
+  assert.deepEqual(fc.textoDiasEtapa('2026-11-08T03:00:00Z', HOY), { texto: '1 día restante', tono: 'azul' });
+  // Cruza meses y años por el calendario (sin horas de verano ni zonas).
+  assert.deepEqual(fc.textoDiasEtapa('2027-01-02', '2026-12-30'), { texto: '3 días restantes', tono: 'azul' });
+  assert.deepEqual(fc.textoDiasEtapa('2026-03-01', '2026-02-28'), { texto: '1 día restante', tono: 'azul' });
+  // Sin ETA, o una que no es un día, o un hoy que no lo es: null (no se pinta nada).
+  for (const eta of [null, undefined, '', 'basura', '2026-02-30', 5]) assert.equal(fc.textoDiasEtapa(eta, HOY), null, String(eta));
+  assert.equal(fc.textoDiasEtapa('2026-11-10', ''), null);
+  assert.equal(fc.textoDiasEtapa('2026-11-10', 'ayer'), null);
+  // Sin hoy, el de Colombia (diaColombia): el mismo resultado que pasándolo.
+  const manana = new Date(Date.now() + 36 * 3600 * 1000).toISOString().slice(0, 10);
+  assert.deepEqual(fc.textoDiasEtapa(manana), fc.textoDiasEtapa(manana, diaColombia()));
+  // T15 r1 (m10 a): con un reloj fijo a las 2026-11-08T02:00:00Z, que son las 21:00 del 07/11 en Colombia, «hoy» es el 07
+  // (el día UTC ya sería el 08): un valor por defecto con el día UTC falla aquí a cualquier hora en que corra la prueba.
+  conRelojFijo('2026-11-08T02:00:00Z', () => {
+    assert.deepEqual(fc.textoDiasEtapa('2026-11-07'), { texto: 'Vence hoy', tono: 'ambar' }, 'el día de Colombia, no el UTC');
+    assert.deepEqual(fc.textoDiasEtapa('2026-11-08'), { texto: '1 día restante', tono: 'azul' });
+    assert.deepEqual(fc.textoDiasEtapa('2026-11-06'), { texto: '1 día de atraso', tono: 'rojo' });
+  });
+}
+
+console.log('--- TEST 18 (B4 T15 r1, m4 y m14): el seguimiento de un PEC cancelado es de solo lectura (una sola regla) ---');
+{
+  assert.equal(typeof fc.seguimientoCerrado, 'function', 'seguimientoCerrado existe');
+  assert.equal(fc.seguimientoCerrado('CANCELADO'), true);
+  for (const e of ['BORRADOR', 'EMITIDO', 'ENVIADO', 'EN_TRANSITO', 'PENDIENTE_ENTREGA', 'RECIBIDO', 'PARCIALMENTE_RECIBIDA',
+    'RECIBIDA', 'COMPLETADO', 'ALGO_NUEVO', '', null, undefined]) {
+    assert.equal(fc.seguimientoCerrado(e), false, String(e));
+  }
+  // Es la etapa de estados-compras.js (no otra lista de estados).
+  for (const e of Object.keys(estadosCompras.ESTADOS_PEC)) {
+    assert.equal(fc.seguimientoCerrado(e), estadosCompras.etapaPec(e) === 'cancelado', e);
+  }
+  assert.equal(fc.TEXTO_SEGUIMIENTO_CERRADO, 'Pedido de compra cancelado: su envío ya no se sigue.');
+}
+
+console.log('--- TEST 19 (B4 T15 r1, m2 y m6): avisoTarjetaEtapa, UNA regla para la tarjeta de cada etapa del envío ---');
+{
+  assert.equal(typeof fc.avisoTarjetaEtapa, 'function', 'avisoTarjetaEtapa existe');
+  const HOY = '2026-11-07';
+  const aviso = (extra) => fc.avisoTarjetaEtapa(etapa('PROVEEDOR_BODEGA', 'Proveedor -> Bodega', 'EN_PROCESO', extra), HOY);
+  // Con el aviso del servidor, ese y solo ese: rojo si va atrasada; con 'ok', neutro (gris, como la barra: RP28, D36).
+  assert.deepEqual(aviso({ eta: '2026-11-05', alert: { nivel: 'atrasado', mensaje: 'Entrega atrasada por 2 día(s)', dias_restantes: -2 } }),
+    { texto: 'Entrega atrasada por 2 día(s)', tono: 'rojo', fuente: 'servidor' });
+  assert.deepEqual(aviso({ eta: '2026-11-05', alert: { nivel: 'ok', mensaje: 'ETA 05/11/2026 · 0 día(s) para confirmación atrasada', dias_restantes: 0 } }),
+    { texto: 'ETA 05/11/2026 · 0 día(s) para confirmación atrasada', tono: 'gris', fuente: 'servidor' },
+    'el ejemplo de m6: ya no sale al lado «2 días de atraso»');
+  assert.deepEqual(aviso({ eta: '2026-11-10', alert: { nivel: 'ok', mensaje: '  ' } }),
+    { texto: '3 días restantes', tono: 'azul', fuente: 'dias' }, 'un aviso sin mensaje cuenta como sin aviso');
+  // Sin aviso del servidor, los días que faltan para la ETA (textoDiasEtapa, el día de calendario de Colombia).
+  assert.deepEqual(aviso({ eta: '2026-11-10' }), { texto: '3 días restantes', tono: 'azul', fuente: 'dias' });
+  assert.deepEqual(aviso({ eta: '2026-11-07' }), { texto: 'Vence hoy', tono: 'ambar', fuente: 'dias' });
+  assert.deepEqual(aviso({ eta: '2026-11-01' }), { texto: '6 días de atraso', tono: 'rojo', fuente: 'dias' });
+  assert.equal(aviso({ eta: null }), null, 'sin aviso ni ETA, nada');
+  // Una etapa completada o cancelada no lleva aviso (como la barra, r1 de T3B).
+  for (const status of ['COMPLETADO', 'CANCELADO']) {
+    assert.equal(fc.avisoTarjetaEtapa(etapa('X', 'X', status, { eta: '2026-11-01', alert: { nivel: 'atrasado', mensaje: 'Atrasada' } }), HOY), null, status);
+  }
+  for (const raro of [null, undefined, 5, 'x']) assert.equal(fc.avisoTarjetaEtapa(raro, HOY), null, String(raro));
+  // El valor por defecto de hoy es el día de Colombia (reloj fijo, m10 a).
+  conRelojFijo('2026-11-08T02:00:00Z', () => {
+    assert.deepEqual(fc.avisoTarjetaEtapa(etapa('X', 'X', 'EN_PROCESO', { eta: '2026-11-07' })), { texto: 'Vence hoy', tono: 'ambar', fuente: 'dias' });
+  });
 }
 
 console.log('\nOK: test_flujo_compras.mjs');

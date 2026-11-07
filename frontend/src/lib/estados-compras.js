@@ -18,6 +18,11 @@
  *    T12, es la autoridad). EFECTOS_CANCELAR_PEC (RP93): lo que pasa al cancelar.
  *  - COLUMNAS_PEC / columnaPec / reglaSoltarPec: el tablero del Hub de Compras y de Pedidos de compra (una columna por
  *    etapa; Recibido y Cancelado plegadas). pasoFlujoPec: el paso del diagrama del flujo de Compras.
+ *  - B4 T14 (las listas del Hub y de Pedidos de compra): VISTAS_PEC (espejo de las vistas de T12), opcionesEstadosPec y
+ *    OPCIONES_ESTADOS_TABLERO_PEC (el filtro de estados), consultaColumnaPec (el tablero en modo servidor, con
+ *    estadosDeColumnaLista de kanban.js), vistaPuedeVencer, diaPec (el día de una fecha de negocio), tarjetaPec,
+ *    repartirCancelacionPec, resumenCancelacionPec, cancelarPecsEnSerie y despuesDeCancelarPec (cancelar con motivo,
+ *    T14 r1) y ordenPorFechaDeCompra, grupoMesPec y tituloMesPec (los separadores).
  * Recepciones (ESTADOS_RECEPCION, GRUPOS_RECEPCION, grupoRecepcion, COLUMNAS_RECEPCION), ítems de la lista de compras
  * (ESTADOS_ITEM_LISTA, COLUMNAS_LISTA; DESCARTADO no se muestra), traslados (ESTADOS_TRASLADO, COLUMNAS_TRASLADO,
  * GRUPOS_OPERACION, grupoOperacion) y estado del stock (ESTADOS_STOCK, COLUMNAS_STOCK; RP53).
@@ -28,7 +33,14 @@
 
 // congelar: mutar estas tablas lanza TypeError (una sola función en todo el frontend; no se copia).
 import { congelar, humanizarCodigo, tiene } from './estados-pedido.js';
-import { diaColombia, fechaSolo } from './fechas-colombia.js';
+import { diaColombia, fechaCorta, fechaSolo, instante } from './fechas-colombia.js';
+// B4 T14: la consulta de cada columna del tablero de Compras (consultaColumnaPec) sale de la misma queryListado.
+import { queryListado } from './tabla.js';
+// B4 T14 r1: la regla de la columna con filtro (m4, la misma de Ventas), el número del servidor (m7) y la regla de
+// recarga y el texto de los errores (m15).
+import { estadosDeColumnaLista } from './kanban.js';
+import { numeroFinito } from './kpis.js';
+import { recargarTrasError, textoDeError } from './avisos.js';
 
 /**
  * @typedef {{ bg: string, text: string, border: string }} ClasesEstado
@@ -141,10 +153,8 @@ const FECHA_DE_CALENDARIO = /^\d{4}-\d{2}-\d{2}$/;
  * @returns {boolean}
  */
 export function esPecVencido(p, hoy = diaColombia()) {
-  const fecha = p?.fecha_entrega_estimada;
-  if (typeof fecha !== 'string') return false;
-  const dia = fecha.trim().slice(0, 10);
-  if (!FECHA_DE_CALENDARIO.test(dia) || !fechaSolo(dia)) return false;
+  const dia = diaPec(p?.fecha_entrega_estimada);
+  if (!dia) return false;
   const etapa = etapaPec(p?.estado);
   return (etapa === 'emitido' || etapa === 'en_transito') && dia < hoy;
 }
@@ -288,6 +298,336 @@ const PASO_DE_ETAPA = congelar({
  */
 export function pasoFlujoPec(estado) {
   return PASO_DE_ETAPA[etapaPec(estado)];
+}
+
+// ─── Pedido de compra: las listas del Hub y de Pedidos de compra (B4 T14) ───────
+
+/**
+ * B4 T14: las vistas de GET /compras/pedidos (espejo de VISTAS_PEC de core/estados_compras.py, T12): vista -> estados.
+ * 'todos' son los vigentes (R9: sin cancelados), 'no_resueltos' los activos y 'acciones_tomadas' lo recibido más lo
+ * cancelado; 'en_bodega' es la pestaña «Recepciones» del Hub. Inmutable. (test_paridad_estados_compras.py todavía no la
+ * compara con Python: es del carril de backend.)
+ * @type {Readonly<Record<string, ReadonlyArray<string>>>}
+ */
+export const VISTAS_PEC = congelar({
+  todos: GRUPOS_PEC.vigentes,
+  vigentes: GRUPOS_PEC.vigentes,
+  activos: GRUPOS_PEC.activos,
+  borradores: estadosDe('borrador'),
+  pedidos: estadosDe('borrador', 'emitido'),
+  en_transito: estadosDe('en_transito'),
+  en_bodega: estadosDe('en_bodega'),
+  recibidos: estadosDe('recibido'),
+  cancelados: estadosDe('cancelado'),
+  no_resueltos: GRUPOS_PEC.activos,
+  acciones_tomadas: estadosDe('recibido', 'cancelado'),
+  transito_logistica: estadosDe('emitido', 'en_transito', 'en_bodega'),
+});
+
+/** {valor, etiqueta} de cada estado del PEC, en el orden de las etapas (la etiqueta de R9). */
+const OPCION_DE_ESTADO = congelar(Object.fromEntries(
+  Object.entries(ESTADOS_PEC).map(([valor, info]) => [valor, { valor, etiqueta: info.label }]),
+));
+const TODAS_LAS_OPCIONES = congelar(Object.values(OPCION_DE_ESTADO));
+const OPCIONES_DE_VISTA = congelar(Object.fromEntries(
+  Object.entries(VISTAS_PEC).map(([vista, estados]) => [vista, estados.map((e) => OPCION_DE_ESTADO[e])]),
+));
+
+/**
+ * B4 T14: las opciones de «Filtrar estado» (FiltroEstados de BarraTabla) de la pestaña `vista`: los estados de esa
+ * vista con su etiqueta; sin vista, o una que no existe, los 10. La misma referencia para la misma vista (la barra y
+ * accionPestana la llaman en cada render). Inmutable.
+ * @param {unknown} vista
+ * @returns {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
+ */
+export function opcionesEstadosPec(vista) {
+  return typeof vista === 'string' && tiene(OPCIONES_DE_VISTA, vista) ? OPCIONES_DE_VISTA[vista] : TODAS_LAS_OPCIONES;
+}
+
+/**
+ * B4 T14: «Filtrar estado» en el tablero (como el de Pedidos de venta, T10): una opción por columna, con su estado
+ * principal (el primero) y el título de la columna; estadosDeColumnaPec la convierte en la columna entera. Inmutable.
+ * @type {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
+ */
+export const OPCIONES_ESTADOS_TABLERO_PEC = congelar(COLUMNAS_PEC.map((c) => ({ valor: c.estados[0], etiqueta: c.titulo })));
+
+/**
+ * B4 T14 (R11, C4, D39): la consulta de una columna del tablero del Hub de Compras en modo servidor (la query de GET
+ * /compras/pedidos, con queryListado): SIN vista (todos los PEC: la vista 'todos' son los vigentes y dejaría vacía la
+ * columna Cancelado) ni paso (el endpoint no lo tiene), los estados de la columna cruzados con el filtro de la pantalla
+ * (estadosDeColumnaLista de kanban.js, la misma regla de Ventas: con el estado principal de la columna,
+ * OPCIONES_ESTADOS_TABLERO_PEC, la columna entera), la búsqueda y el semáforo del MISMO estado, y el orden, el límite y
+ * el desplazamiento de la columna (el límite 0 de una plegada lo pone el hook). Sin estados en común, null: la columna
+ * queda vacía sin pedir.
+ * @param {import('./tabla.js').EstadoTabla | null | undefined} estado
+ * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
+ * @param {{orden?: string | null, limit?: number, offset?: number}} consulta
+ * @returns {string | null}
+ */
+export function consultaColumnaPec(estado, columna, { orden, limit, offset }) {
+  const estados = estadosDeColumnaLista(columna, estado?.estados);
+  if (estados.length === 0) return null;
+  return queryListado(estado, { vista: null, paso: null, estados, orden, limit, offset });
+}
+
+/**
+ * B4 T14: la vista tiene algún estado que puede estar vencido (emitido o en tránsito). En bodega, recibidos,
+ * cancelados, borradores y acciones tomadas nunca: ahí «Con atraso» daría una tabla vacía sin razón a la vista. Sin
+ * vista, o una que no existe, true (todos los PEC).
+ * @param {unknown} vista
+ * @returns {boolean}
+ */
+export function vistaPuedeVencer(vista) {
+  if (typeof vista !== 'string' || !tiene(VISTAS_PEC, vista)) return true;
+  return VISTAS_PEC[vista].some((e) => GRUPOS_PEC.vencibles.includes(e));
+}
+
+/**
+ * B4 T14 (RP40, resolución 4 de T14): el día de una fecha de negocio del PEC (fecha_entrega_estimada, fecha_alerta) tal
+ * como se guarda: sus 10 primeros caracteres, sin pasarla a Colombia, como esPecVencido. Un día que no existe o lo que
+ * no empieza con una fecha: ''.
+ * @param {unknown} valor
+ * @returns {string}
+ */
+export function diaPec(valor) {
+  if (typeof valor !== 'string') return '';
+  const dia = valor.trim().slice(0, 10);
+  return FECHA_DE_CALENDARIO.test(dia) && fechaSolo(dia) ? dia : '';
+}
+
+/** Un texto con algo, sin los espacios de los bordes; si no, null. */
+const textoLimpio = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+const esObjeto = (v) => v !== null && typeof v === 'object';
+
+/**
+ * B4 T14 (KANBAN-compras punto 7): la tarjeta de un PEC en el tablero (la forma de DatosTarjetaKanban de
+ * components/ui/Kanban.tsx): el número, el proveedor (o 'Sin proveedor'), el PVEN de origen, el total, el estado con su
+ * etiqueta (infoEstadoPec: un heredado sale humanizado, nunca «Borrador»), la entrega estimada (su día, diaPec) y el chip
+ * «Vencido». Vencido es is_overdue del servidor (T12: emitido o en tránsito con la entrega pasada, RP40): aquí no se
+ * recalcula.
+ * @param {any} p
+ * @returns {{numero: string, tipo: 'PEC', titulo: string, subtitulo: string | null, monto: number | null,
+ *   estado: Readonly<InfoEstado>, chips: {texto: string, tono: string}[], tiempo: string | null, atrasada: boolean}}
+ */
+export function tarjetaPec(p) {
+  const dia = diaPec(p?.fecha_entrega_estimada);
+  const vencido = p?.is_overdue === true;
+  return {
+    numero: String(p?.numero ?? ''),
+    tipo: 'PEC',
+    titulo: textoLimpio(p?.supplier_name) ?? 'Sin proveedor',
+    subtitulo: textoLimpio(p?.ven_numero),
+    monto: numeroFinito(p?.total_cop),
+    estado: infoEstadoPec(p?.estado),
+    chips: vencido ? [{ texto: 'Vencido', tono: 'rose' }] : [],
+    tiempo: dia ? `Entrega ${fechaCorta(dia)}` : null,
+    atrasada: vencido,
+  };
+}
+
+/** B4 T15: la acción de las tarjetas de la columna En bodega: Recepciones, donde se elige el PEC que llegó. */
+const ACCION_RECEPCIONAR = congelar({ texto: 'Recepcionar', href: '/dashboard/compras/recepciones', tono: 'teal' });
+
+/**
+ * B4 T15 (KANBAN-compras punto 6): la tarjeta del tablero de Pedidos de compra: la de tarjetaPec (T14, la del Hub, que
+ * no cambia) más, en la columna En bodega (columnaPec), la acción principal «Recepcionar» (a Recepciones) y, si se
+ * recibió en parte (PARCIALMENTE_RECIBIDA), el chip «Falta por recibir» después del «Vencido» del servidor. En las demás
+ * columnas, sin acción principal.
+ * @param {any} p
+ * @returns {ReturnType<typeof tarjetaPec> & {accionPrincipal: {texto: string, href: string, tono: string} | null}}
+ */
+export function tarjetaPedidoCompra(p) {
+  const tarjeta = tarjetaPec(p);
+  const enBodega = columnaPec(p?.estado) === 'en_bodega';
+  const chips = p?.estado === 'PARCIALMENTE_RECIBIDA' ? [...tarjeta.chips, { texto: 'Falta por recibir', tono: 'amber' }] : tarjeta.chips;
+  return { ...tarjeta, chips, accionPrincipal: enBodega ? { ...ACCION_RECEPCIONAR } : null };
+}
+
+/**
+ * B4 T15 r1 (m8): lo que dice la tabla de pedidos de compra cuando no hay filas, según lo que la deja vacía (el Hub y
+ * Pedidos de compra):
+ *  - con «Con atraso» (semaforo vencidos o su sinónimo atrasados): 'Ningún pedido de compra con la entrega vencida.';
+ *  - con un filtro de estados: 'Ningún pedido de compra con esos estados. Ajusta el filtro.';
+ *  - con una búsqueda: 'Sin resultados para «q»' y 'Ajusta la búsqueda o el filtro de estados.';
+ *  - si no: 'No hay pedidos de compra en esta vista' y la `ayuda` de la pantalla (o null).
+ * @param {Partial<import('./tabla.js').EstadoTabla> | null | undefined} estado
+ * @param {string | null} [ayuda]
+ * @returns {{titulo: string, ayuda: string | null}}
+ */
+export function textoVacioPec(estado, ayuda = null) {
+  const semaforo = estado?.semaforo;
+  if (semaforo === 'vencidos' || semaforo === 'atrasados') return { titulo: 'Ningún pedido de compra con la entrega vencida.', ayuda: null };
+  if (Array.isArray(estado?.estados) && estado.estados.length > 0) {
+    return { titulo: 'Ningún pedido de compra con esos estados. Ajusta el filtro.', ayuda: null };
+  }
+  const q = typeof estado?.q === 'string' ? estado.q.trim() : '';
+  if (q) return { titulo: `Sin resultados para «${q}»`, ayuda: 'Ajusta la búsqueda o el filtro de estados.' };
+  return { titulo: 'No hay pedidos de compra en esta vista', ayuda: ayuda ?? null };
+}
+
+/**
+ * B4 T14 (R9, C15c): de los PEC marcados para cancelar, cuáles se mandan (los que transicionesPec deja cancelar) y
+ * cuáles se omiten sin llamar al servidor, con su motivo: los cancelados y los que ya llegaron a bodega o se recibieron
+ * (su estado lo lleva la recepción). Las filas que no son objetos se ignoran.
+ * @param {any[] | null | undefined} filas
+ * @returns {{cancelables: any[], omitidos: {id: unknown, numero: string, motivo: string}[]}}
+ */
+export function repartirCancelacionPec(filas) {
+  const cancelables = [];
+  const omitidos = [];
+  for (const p of Array.isArray(filas) ? filas : []) {
+    if (!esObjeto(p)) continue;
+    if (transicionesPec(p.estado).includes('CANCELADO')) {
+      cancelables.push(p);
+      continue;
+    }
+    const motivo = etapaPec(p.estado) === 'cancelado' ? 'ya está cancelado' : 'ya llegó a bodega: su estado lo lleva la recepción';
+    omitidos.push({ id: p.id, numero: textoLimpio(p.numero) ?? `#${String(p.id)}`, motivo });
+  }
+  return { cancelables, omitidos };
+}
+
+/**
+ * B4 T14: el resultado de cancelar varios PEC en serie con un mismo motivo. `resultados`: [{numero, ok, error}];
+ * `omitidos` (de repartirCancelacionPec) se nombran al final y no cuentan como error. `mensaje` va al aviso ('2 pedidos
+ * de compra cancelados'; con fallos 'No se pudieron cancelar: PEC-1, PEC-2') y `fallidos[].texto` es el mensaje del
+ * servidor de cada uno, con su número delante si no lo trae (ningún error queda en blanco).
+ * @param {{numero?: string, ok: boolean, error?: string}[] | null | undefined} resultados
+ * @param {{numero?: string, motivo?: string}[]} [omitidos]
+ * @returns {{exitosos: number, fallidos: {numero: string, error: string, texto: string}[], mensaje: string, tipo: 'ok' | 'err'}}
+ */
+export function resumenCancelacionPec(resultados, omitidos = []) {
+  const lista = (Array.isArray(resultados) ? resultados : []).filter(esObjeto);
+  const exitosos = lista.filter((r) => r.ok).length;
+  const fallidos = lista.filter((r) => !r.ok).map((r) => {
+    const numero = String(r.numero || '').trim();
+    const error = String(r.error || '').trim() || 'el servidor no dio detalle del error';
+    return { numero, error, texto: numero && !error.includes(numero) ? `${numero}: ${error}` : error };
+  });
+  const cancelados = exitosos === 1 ? '1 pedido de compra cancelado' : `${exitosos} pedidos de compra cancelados`;
+  const numeros = fallidos.map((f) => f.numero).filter(Boolean).join(', ');
+  const noSePudo = fallidos.length === 1 ? 'No se pudo cancelar' : 'No se pudieron cancelar';
+  const fallo = `${noSePudo}${numeros ? `: ${numeros}` : ' el pedido de compra'}`;
+  let mensaje;
+  if (fallidos.length === 0) mensaje = exitosos > 0 ? cancelados : 'No se canceló ningún pedido de compra';
+  else mensaje = exitosos > 0 ? `${cancelados}. ${fallo}` : fallo;
+  const validos = (Array.isArray(omitidos) ? omitidos : []).filter(esObjeto);
+  if (validos.length > 0) {
+    const detalle = validos.map((o) => `${o.numero || 'un pedido de compra'}: ${o.motivo || 'se omitió'}`).join('; ');
+    mensaje += `. ${validos.length === 1 ? 'Se omitió' : 'Se omitieron'} ${detalle}.`;
+  }
+  return { exitosos, fallidos, mensaje, tipo: fallidos.length === 0 && exitosos > 0 ? 'ok' : 'err' };
+}
+
+/**
+ * B4 T14 r1 (m15; R9: «la masiva va en serie»): cancela los PEC UNO POR UNO con `cancelarUno(pec)` (el PATCH de la
+ * pantalla, que lleva el motivo): espera cada uno antes del siguiente (nunca dos en vuelo) y en el orden de la lista. No
+ * corta en una falla: cada resultado dice {id, numero, ok} y, si falló, el error tal cual (`err`, para relanzarlo) y su
+ * texto (`error`, textoDeError). Lo que no es un arreglo da [].
+ * @param {any[] | null | undefined} pecs
+ * @param {(pec: any) => Promise<unknown>} cancelarUno
+ * @returns {Promise<{id: unknown, numero: string, ok: boolean, error?: string, err?: unknown}[]>}
+ */
+export async function cancelarPecsEnSerie(pecs, cancelarUno) {
+  const resultados = [];
+  for (const p of Array.isArray(pecs) ? pecs : []) {
+    try {
+      await cancelarUno(p);
+      resultados.push({ id: p?.id, numero: p?.numero, ok: true });
+    } catch (err) {
+      resultados.push({ id: p?.id, numero: p?.numero, ok: false, error: textoDeError(err), err });
+    }
+  }
+  return resultados;
+}
+
+/**
+ * B4 T14 r1 (I1, m10, m15): lo que hace la pantalla después de cancelar en serie (cancelarPecsEnSerie), para que la
+ * página solo lo ejecute:
+ *  - fuera: las claves que salen de la selección (lo cancelado y lo omitido); lo que falló sigue marcado;
+ *  - pendientes: los PEC que fallaron (se quedan en la ventana del motivo para reintentar con lo escrito);
+ *  - recargar: la lista, la franja, las tarjetas y del tablero el origen y el destino, si se canceló algo o si una falla
+ *    lo pide (recargarTrasError: un 409, un 400 o la red; un 422 no);
+ *  - recargarVentas (I1): si se canceló algo, los pedidos de venta del panel de consolidación (los vinculados vuelven a
+ *    Pendiente de compra);
+ *  - recargarDetalle (m10): si una falla pide recargar, el detalle del panel abierto también;
+ *  - mensajeOk: el aviso de lo cancelado (con los omitidos solo si no hubo fallas: con fallas quedan en la ventana);
+ *  - error: null si nada falló; con un solo PEC, el MISMO error (el modal muestra el detail del servidor); con varios,
+ *    un Error con una línea por PEC (resumenCancelacionPec). Nunca se resuelve en silencio con una falla.
+ * @param {any[] | null | undefined} pecs
+ * @param {{id: unknown, numero?: string, ok: boolean, error?: string, err?: unknown}[] | null | undefined} resultados
+ * @param {{id: unknown, numero?: string, motivo?: string}[]} [omitidos]
+ * @returns {{fuera: string[], pendientes: any[], recargar: boolean, recargarVentas: boolean, recargarDetalle: boolean,
+ *   mensajeOk: string | null, error: unknown}}
+ */
+export function despuesDeCancelarPec(pecs, resultados, omitidos = []) {
+  const lista = (Array.isArray(resultados) ? resultados : []).filter(esObjeto);
+  const omitidosValidos = (Array.isArray(omitidos) ? omitidos : []).filter(esObjeto);
+  const cancelados = lista.filter((r) => r.ok);
+  const fallidos = lista.filter((r) => !r.ok);
+  const idsFallidos = new Set(fallidos.map((r) => r.id));
+  const recargarDetalle = fallidos.some((r) => recargarTrasError(r.err));
+  let error = null;
+  if (fallidos.length > 0) {
+    const resumen = resumenCancelacionPec(fallidos, []);
+    error = lista.length === 1 && fallidos[0].err instanceof Error
+      ? fallidos[0].err
+      : new Error(resumen.fallidos.map((f) => f.texto).join('\n'));
+  }
+  return {
+    fuera: [...cancelados, ...omitidosValidos].map((r) => String(r.id)),
+    pendientes: (Array.isArray(pecs) ? pecs : []).filter((p) => esObjeto(p) && idsFallidos.has(p.id)),
+    recargar: cancelados.length > 0 || recargarDetalle,
+    recargarVentas: cancelados.length > 0,
+    recargarDetalle,
+    mensajeOk: cancelados.length > 0 ? resumenCancelacionPec(cancelados, fallidos.length === 0 ? omitidosValidos : []).mensaje : null,
+    error,
+  };
+}
+
+/**
+ * B4 T14 (TABLA-compras punto 6: «'Agrupar mes' pasa a separadores por mes cuando el orden es por fecha de compra»): la
+ * tabla va ordenada por la fecha de compra ('compra' o '-compra', el campo de _ordenes_pec de T12).
+ * @param {unknown} orden
+ * @returns {boolean}
+ */
+export function ordenPorFechaDeCompra(orden) {
+  return orden === 'compra' || orden === '-compra';
+}
+
+/** La clave del tramo de los PEC sin fecha de compra (van al final: el servidor ordena con los nulos al final). */
+const SIN_FECHA_DE_COMPRA = 'sin_fecha';
+const MESES = congelar(['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre',
+  'Noviembre', 'Diciembre']);
+
+/**
+ * B4 T14: el mes ('AAAA-MM') de la fecha de compra de un PEC, la clave de su separador (grupoFila de TablaEstandar).
+ * fecha_compra es un instante (create_pec la pone con la hora): su mes es el de Colombia; un 'AAAA-MM-DD' no se corre.
+ * Es el MISMO campo con que ordena el servidor ('compra' = fecha_compra, los nulos al final), así que sin ella el PEC va
+ * en el tramo 'sin_fecha' (el último), no en el mes de created_at.
+ * @param {any} p
+ * @returns {string}
+ */
+export function grupoMesPec(p) {
+  const valor = p?.fecha_compra;
+  if (typeof valor !== 'string') return SIN_FECHA_DE_COMPRA;
+  const texto = valor.trim();
+  const calendario = FECHA_DE_CALENDARIO.test(texto) && fechaSolo(texto) ? texto : '';
+  const momento = calendario ? null : instante(texto);
+  const dia = calendario || (momento ? diaColombia(momento) : '');
+  return dia ? dia.slice(0, 7) : SIN_FECHA_DE_COMPRA;
+}
+
+/**
+ * B4 T14: el título del separador de un mes: 'Noviembre de 2026'; el tramo sin fecha (o una clave que no es un mes),
+ * 'Sin fecha de compra'.
+ * @param {unknown} clave
+ * @returns {string}
+ */
+export function tituloMesPec(clave) {
+  const m = typeof clave === 'string' ? /^(\d{4})-(\d{2})$/.exec(clave) : null;
+  const mes = m ? Number(m[2]) : 0;
+  return m && mes >= 1 && mes <= 12 ? `${MESES[mes - 1]} de ${m[1]}` : 'Sin fecha de compra';
 }
 
 // ─── Recepciones (GoodsReceipt) ─────────────────────────────────────────────────

@@ -1036,6 +1036,26 @@ console.log('--- TEST 15 (T4B r2): una tarjeta sigue pendiente hasta la recarga 
   assert.match(fuente, /disabled=\{d\.cargandoMas \|\| d\.cargando \|\| ocupada \|\| d\.cargaFallida\}/, 'el botón «Ver más» se deshabilita');
 }
 
+console.log('--- TEST 16 (B4 T14 r1, m4 y m14): estadosDeColumnaLista vive en kanban.js (una sola regla para Ventas y Compras) ---');
+{
+  const deColumna = /** @type {any} */ (kanban).estadosDeColumnaLista;
+  assert.equal(typeof deColumna, 'function', 'estadosDeColumnaLista está en kanban.js');
+  const col = { estados: ['EMITIDO', 'ENVIADO'] };
+  assert.deepEqual(deColumna(col, []), ['EMITIDO', 'ENVIADO'], 'sin filtro, la columna');
+  assert.deepEqual(deColumna(col, null), ['EMITIDO', 'ENVIADO']);
+  assert.notEqual(deColumna(col, null), col.estados, 'una copia nueva');
+  assert.deepEqual(deColumna(col, ['EMITIDO']), ['EMITIDO', 'ENVIADO'], 'con el estado principal, la columna entera');
+  assert.deepEqual(deColumna(col, ['ENVIADO', 'BORRADOR']), ['ENVIADO'], 'si no, el cruce en el orden de la columna');
+  assert.deepEqual(deColumna(col, ['BORRADOR']), [], 'sin cruce, []');
+  assert.deepEqual(deColumna(null, ['EMITIDO']), []);
+  // Ventas la re-exporta (la misma función) y Compras la importa: ninguna de las dos tiene su copia.
+  const kv = await import('../src/lib/kanban-ventas.js');
+  assert.equal(kv.estadosDeColumnaLista, deColumna, 'kanban-ventas.js re-exporta la de kanban.js');
+  const sinComentarios = (ruta) => readFileSync(new URL(ruta, import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.ok(!/function estadosDeColumna/.test(sinComentarios('../src/lib/kanban-ventas.js')), 'kanban-ventas.js sin su copia');
+  assert.ok(!/function estadosDeColumna/.test(sinComentarios('../src/lib/estados-compras.js')), 'estados-compras.js sin su copia');
+}
+
 console.log('✓ lib/kanban.js: columnas, reparto, orden, páginas, movimiento, reglas, destinos, arrastre y motivo.');
 console.log('✓ T4B: modo servidor y cliente, plegadas, turnos, deshacer, «Mover a…» y Kanban.tsx.');
 console.log('✓ T4B r1: deshacer sin perder tarjetas, «Ver más» quieto, StrictMode, alto, foco y anuncio.');
