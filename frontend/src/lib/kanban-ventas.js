@@ -1082,7 +1082,8 @@ function conteosPositivos(porEstado) {
  * calcula resumen.por_estado DESPUÉS del filtro de estados (filtrar_por_estados corre antes de _resumen_pedidos): con
  * un estado marcado, la respuesta ya no trae los heredados que no se marcaron y, leídos directo, salían del panel (nunca
  * se podían combinar dos). Por eso se guarda lo visto mientras no cambien la vista, la búsqueda ni el semáforo (`clave`;
- * la página, el orden y el filtro de estados no cuentan):
+ * la página, el orden y el filtro de estados no cuentan; r3 (q2): la búsqueda va recortada, como en dependenciasTablero
+ * y queryListado, porque «ana» y «ana » son la misma consulta):
  *  - una respuesta sin filtro de estados es la completa: reemplaza lo anterior (lo que ya no está, se va);
  *  - una filtrada suma los estados que no se habían visto;
  *  - con otra clave se empieza de nuevo con la respuesta, aunque venga filtrada;
@@ -1096,7 +1097,7 @@ function conteosPositivos(porEstado) {
  * @returns {PorEstadoVisto | null}
  */
 export function porEstadoVisto(previo, estado, porEstado) {
-  const clave = [estado?.vista ?? '', estado?.q ?? '', estado?.semaforo ?? ''].join('|');
+  const clave = [estado?.vista ?? '', (estado?.q ?? '').trim(), estado?.semaforo ?? ''].join('|');
   const mismo = previo !== null && previo !== undefined && previo.clave === clave;
   const llegado = conteosPositivos(porEstado);
   if (llegado === null) {

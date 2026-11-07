@@ -1094,6 +1094,10 @@ console.log('--- B4 T10 TEST M: opcionesEstadosPedidos — el filtro de estados 
   const sumado = kv.porEstadoVisto(desdeFiltro, conDos, { PAGADO: 2, PARCIALMENTE_DISPONIBLE: 1 });
   assert.deepEqual(Object.keys(sumado.porEstado).sort(), ['PAGADO', 'PARCIALMENTE_DISPONIBLE']);
   assert.notEqual(sumado, desdeFiltro, 'con algo nuevo, otro objeto');
+  // r3 (q1): una respuesta filtrada que NO contiene a lo visto también se une (no reemplaza): PAGADO se queda.
+  const conOtros = estadoTablaInicial({ vista: 'en_proceso', estados: ['PARCIALMENTE_DISPONIBLE', 'EN_PROCESO'] });
+  assert.deepEqual(Object.keys(kv.porEstadoVisto(desdeFiltro, conOtros, { PARCIALMENTE_DISPONIBLE: 1, EN_PROCESO: 3 }).porEstado).sort(),
+    ['EN_PROCESO', 'PAGADO', 'PARCIALMENTE_DISPONIBLE'], 'la unión, no el reemplazo');
   // Una respuesta sin filtro de estados es la completa: reemplaza (lo que ya no está, se va).
   const sinPagado = kv.porEstadoVisto(visto1, enProceso, { EN_PROCESO: 4, EN_TRANSITO: 1, PARCIALMENTE_DISPONIBLE: 1 });
   assert.deepEqual(valores(sinPagado.porEstado), ['EN_PROCESO', 'EN_TRANSITO', 'PARCIALMENTE_DISPONIBLE']);
@@ -1103,6 +1107,16 @@ console.log('--- B4 T10 TEST M: opcionesEstadosPedidos — el filtro de estados 
     { vista: 'en_proceso', semaforo: 'atrasados', estados: ['PAGADO'] }]) {
     assert.deepEqual(Object.keys(kv.porEstadoVisto(visto1, estadoTablaInicial(otro), { PAGADO: 2 }).porEstado), ['PAGADO'], JSON.stringify(otro));
   }
+  // r3 (q1): otra vista con un estado marcado y una respuesta filtrada vacía: la clave nueva con {}, nunca lo visto en la
+  // otra vista.
+  const otraVacia = kv.porEstadoVisto(visto1, estadoTablaInicial({ vista: 'todos', estados: ['PAGADO'] }), {});
+  assert.notEqual(otraVacia, visto1, 'no devuelve lo de la otra vista');
+  assert.equal(otraVacia.clave, 'todos||');
+  assert.deepEqual(otraVacia.porEstado, {});
+  // r3 (q2): la clave recorta la búsqueda, como dependenciasTablero y queryListado: «ana» y «ana » son la misma consulta.
+  const conAna = kv.porEstadoVisto(null, estadoTablaInicial({ vista: 'en_proceso', q: 'ana' }), completo);
+  assert.equal(kv.porEstadoVisto(conAna, estadoTablaInicial({ vista: 'en_proceso', q: 'ana ', estados: ['PAGADO'] }), { PAGADO: 2 }), conAna,
+    '«ana» y «ana »: la misma referencia');
   // La página, el orden y el filtro de estados no cambian lo visto.
   assert.equal(kv.porEstadoVisto(visto0, estadoTablaInicial({ vista: 'en_proceso', pagina: 3, orden: 'reciente', estados: ['EN_PROCESO'] }), { EN_PROCESO: 3 }), visto0);
   // Sin respuesta vigente (cargando, recargando o con error): lo de la misma clave; de otra clave, nada todavía.
