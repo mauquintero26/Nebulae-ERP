@@ -27,3 +27,13 @@ def bodega_token(db):
     u = User(email=f"bodega-{uuid.uuid4().hex[:6]}@test.nebulae", password_hash="x", role="BODEGA", is_active=True)
     db.add(u); db.commit()
     return create_access_token({"sub": str(u.id), "role": u.role})
+
+
+@pytest.fixture
+def finanzas_token(db):
+    """Token de un usuario FINANZAS: ve Finanzas (gastos y su Analisis); no es ADMIN ni ASESOR."""
+    from app.core.security import create_access_token
+    from app.models.users import User
+    u = User(email=f"finanzas-{uuid.uuid4().hex[:6]}@test.nebulae", password_hash="x", role="FINANZAS", is_active=True)
+    db.add(u); db.commit()
+    return create_access_token({"sub": str(u.id), "role": u.role})
