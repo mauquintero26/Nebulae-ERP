@@ -1131,6 +1131,10 @@ def delete_pec(pec_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROL
     return {"status": "success", "message": f"PEC {numero} eliminado"}
 
 
+# B4 T12 (RP45): las etapas del PEC cuyo estado todavía lo mueve el seguimiento del envío.
+_ETAPAS_QUE_AVANZA_EL_SEGUIMIENTO = ("borrador", "emitido", "en_transito")
+
+
 @router.patch("/pedidos/{pec_id}/tracking")
 def update_tracking(pec_id: int, body: ActualizarTrackingBody,
         user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
@@ -1191,13 +1195,16 @@ def update_tracking(pec_id: int, body: ActualizarTrackingBody,
     flag_modified(p, "tracking_stages")
     p.updated_at = datetime.datetime.utcnow()
     # Auto-update PEC estado based on tracking completions
+    # B4 T12 (RP45, D7): el cambio automático de estado solo corre si el PEC está en borrador, emitido o en tránsito
+    # (etapa_pec). Uno en bodega, recibido o cancelado guarda sus etapas y conserva su estado: completar la última etapa
+    # no saca un PEC de «Recibidos» ni reabre uno cancelado. La guarda de orden de las etapas (H14) sigue fuera.
     last_stage = stages[-1] if stages else {}
     if last_stage.get("status") == "COMPLETADO":
-        old_e = p.estado
-        p.estado = "RECIBIDO"
-        if old_e != "RECIBIDO":
+        if etapa_pec(p.estado) in _ETAPAS_QUE_AVANZA_EL_SEGUIMIENTO:
+            old_e = p.estado
+            p.estado = "RECIBIDO"
             _log(db, "PEC", p.id, p.numero, "ESTADO_CHANGED",
-                 "Recibido en bodega — todos los stages completados",
+                 "Llegó a bodega: se completaron todas las etapas del envío.",
                  old_estado=old_e, new_estado="RECIBIDO",
                  user_name=body.user_name)
     elif any(s.get("status") == "EN_PROCESO" for s in stages):

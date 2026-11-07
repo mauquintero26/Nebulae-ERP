@@ -8,6 +8,10 @@ o recibido, 422. pec_cancelar_en_transito = «Sí, mientras no tenga recepciones
 obligatorio (mínimo 5 letras)». El estilo es el de test_pendiente_compra_lista_pec.py: el PEC se crea por la API o por
 ORM con db.add.
 
+RP45 (D7): el seguimiento (PATCH /tracking) solo cambia el estado de un PEC en borrador, emitido o en tránsito: uno en
+bodega, recibido o cancelado guarda sus etapas sin cambiar de estado; la Actividad dice «Llegó a bodega: se completaron
+todas las etapas del envío.».
+
 Se corre SOLO con el runner de ROLLBACK (python tests/rollback_runner.py test_pec_transiciones).
 """
 import uuid
@@ -316,3 +320,49 @@ def test_lista_pec_varios_estados(app_client, db, admin_token):
                               headers=_auth(admin_token))
         assert resp.status_code == 200, resp.text
         assert {x["id"] for x in resp.json()["data"]} == {a.id, b.id}, clave
+
+
+# ─── RP45 (D7): completar la última etapa no reabre un PEC recibido, en bodega ni cancelado ─────────────────────────
+
+def _pec_con_seguimiento(app_client, admin_token, supplier):
+    body = {"supplier_id": supplier.id, "supplier_name": supplier.name, "tipo_envio": "directo",
+            "productos": [{"producto_nombre": "Producto", "nombre": "Producto", "qty": 1, "unit_price_cop": 1000}]}
+    resp = app_client.post(RUTA, json=body, headers=_auth(admin_token))
+    assert resp.status_code == 201, resp.text
+    return resp.json()["data"]
+
+
+def _tracking(app_client, admin_token, pec_id, stage, status):
+    resp = app_client.patch(f"{RUTA}/{pec_id}/tracking", json={"stage": stage, "status": status,
+                                                                "user_name": "tester"},
+                            headers=_auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    return resp.json()["data"]
+
+
+def test_completar_la_ultima_etapa_deja_recibido_con_su_texto(app_client, db, admin_token, supplier):
+    pec = _pec_con_seguimiento(app_client, admin_token, supplier)
+    for stage in ("PENDIENTE_DESPACHO", "PROVEEDOR_BODEGA", "RECIBIDO"):
+        data = _tracking(app_client, admin_token, pec["id"], stage, "COMPLETADO")
+    assert data["estado"] == "RECIBIDO"
+    fila = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec["id"]).one()
+    assert [(l.description, l.old_estado, l.new_estado) for l in _logs(db, fila)] == [
+        ("Llegó a bodega: se completaron todas las etapas del envío.", "BORRADOR", "RECIBIDO")]
+
+
+def test_el_seguimiento_no_reabre_recibidos_ni_cancelados(app_client, db, admin_token, supplier):
+    """RP45: el cambio automático de estado solo corre si el PEC está en borrador, emitido o en tránsito. Con un PEC
+    RECIBIDA, PARCIALMENTE_RECIBIDA o CANCELADO se guardan las etapas y el estado no cambia (sin Actividad de estado)."""
+    for estado in ("RECIBIDA", "PARCIALMENTE_RECIBIDA", "CANCELADO", "COMPLETADO"):
+        pec = _pec_con_seguimiento(app_client, admin_token, supplier)
+        fila = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec["id"]).one()
+        fila.estado = estado
+        db.commit()
+        data = _tracking(app_client, admin_token, pec["id"], "PENDIENTE_DESPACHO", "EN_PROCESO")
+        assert data["estado"] == estado, estado
+        for stage in ("PENDIENTE_DESPACHO", "PROVEEDOR_BODEGA", "RECIBIDO"):
+            data = _tracking(app_client, admin_token, pec["id"], stage, "COMPLETADO")
+        assert data["estado"] == estado, estado
+        assert [s["status"] for s in data["tracking_stages"]] == ["COMPLETADO"] * 3, estado
+        assert _estado(db, fila) == estado, estado
+        assert _logs(db, fila) == [], estado
