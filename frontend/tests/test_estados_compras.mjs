@@ -24,6 +24,59 @@ import { estadoTablaInicial } from '../src/lib/tabla.js';
 // T14 r1: la regla de la columna con filtro (kanban.js) y los textos de error (avisos.js).
 import * as kanbanLib from '../src/lib/kanban.js';
 import { textoDeError } from '../src/lib/avisos.js';
+// T15 r1 (I1): cancelarConMotivo de las dos páginas se ejecuta de verdad (transpilado), con dobles de lo que toca.
+import { createRequire } from 'node:module';
+
+const tsLib = createRequire(import.meta.url)('typescript');
+
+/**
+ * T15 r1 (I1): la función `async function cancelarConMotivo(…) {…}` de una página (el fuente), transpilada a JS y lista
+ * para ejecutarse con un entorno de dobles (cada nombre que usa la función: la cancelación en curso, el tablero, las
+ * recargas…). Así la prueba mira lo que HACE, no cómo está escrita.
+ */
+function cancelarConMotivoDe(fuente) {
+  const inicio = fuente.indexOf('async function cancelarConMotivo(');
+  assert.ok(inicio >= 0, 'la página tiene cancelarConMotivo');
+  const abre = fuente.indexOf('{', fuente.indexOf(')', inicio));
+  let nivel = 0;
+  let fin = -1;
+  for (let j = abre; j < fuente.length; j += 1) {
+    if (fuente[j] === '{') nivel += 1;
+    else if (fuente[j] === '}') { nivel -= 1; if (nivel === 0) { fin = j; break; } }
+  }
+  assert.ok(fin > abre, 'cancelarConMotivo cierra');
+  const js = tsLib.transpileModule(`(${fuente.slice(inicio, fin + 1)})`, { compilerOptions: { target: tsLib.ScriptTarget.ES2020 } })
+    .outputText.replace(/^"use strict";\s*/, '').trim().replace(/;$/, '');
+  return (entorno) => new Function('entorno', `with (entorno) { return ${js}; }`)(entorno);
+}
+
+/** Corre cancelarConMotivo de `fuente` con un PEC y las `columnas` del tablero; devuelve lo que llamó y el error. */
+async function correrCancelar(fuente, { columnas, desdePanel, falla }) {
+  const llamadas = [];
+  const pec = { id: 7, numero: 'PEC-7', estado: 'EMITIDO' };
+  const entorno = {
+    cancelacion: { pecs: [pec], omitidos: [], columnas, desdePanel },
+    autorActual: () => 'Prueba',
+    cancelarPecsEnSerie: ec.cancelarPecsEnSerie,
+    despuesDeCancelarPec: ec.despuesDeCancelarPec,
+    _apiFetch: async () => {
+      if (falla) throw Object.assign(new Error('PEC-7 tiene 1 recepción(es) en bodega: no se puede cancelar.'), { status: 409 });
+      return {};
+    },
+    setSeleccion: () => {},
+    tablero: { recargar: (...a) => llamadas.push(a.length ? `tablero ${a[0].join(',')}` : 'tablero entero') },
+    recargarTrasCambio: () => llamadas.push('lista'),
+    setVueltaVentas: () => llamadas.push('ventas'),
+    avisar: () => {},
+    closePecPanel: () => llamadas.push('cerrar panel'),
+    setSelectedPec: () => llamadas.push('cerrar panel'),
+    setVueltaDetalle: () => llamadas.push('detalle'),
+    setCancelacion: () => {},
+  };
+  let error = null;
+  try { await cancelarConMotivoDe(fuente)(entorno)('El proveedor cerró'); } catch (err) { error = err; }
+  return { llamadas, error };
+}
 
 // R9 / ETIQUETAS_ESTADO['PEC'] (textos_actividad.py, T1C), en el orden de las etapas.
 const ETIQUETAS_PEC = [
@@ -680,7 +733,9 @@ console.log('--- TEST 23 (B4 T14): el Hub de Compras (compras/page.tsx) cablea l
   // T14 r1 (m15): la página solo ejecuta lo que deciden cancelarPecsEnSerie y despuesDeCancelarPec.
   assert.match(hub, /const resultados = await cancelarPecsEnSerie\(pecs, \(p\) => _apiFetch\(/);
   assert.match(hub, /const r = despuesDeCancelarPec\(pecs, resultados, omitidos\);/);
-  assert.match(hub, /if \(r\.recargar\) \{\s*if \(columnas\) tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*\}/);
+  // T15 r1 (I1, D27): la recarga del tablero y de la lista tras cancelar se prueba por comportamiento en TEST 28 (antes
+  // esta línea fijaba el texto `if (columnas) tablero.recargar([...columnas]); recargarTrasCambio();`).
+  assert.match(hub, /if \(r\.recargar\) \{[\s\S]{0,500}recargarTrasCambio\(\);/);
   assert.match(hub, /if \(r\.recargarVentas\) setVueltaVentas\(\(n\) => n \+ 1\);/, 'I1: los PVEN del panel se vuelven a pedir');
   assert.match(hub, /if \(desdePanel && r\.recargarDetalle\) setVueltaDetalle\(\(n\) => n \+ 1\);/, 'm10: y el detalle del panel');
   assert.match(hub, /\}, \[pec && pec\.id, vueltaDetalle\]\);/, 'el panel relee su detalle con vueltaDetalle');
@@ -848,6 +903,28 @@ console.log('--- TEST 27 (B4 T15): el detalle de un PEC (compras/pedidos/[id]/pa
   // B1 a B3 que se conservan: avanzar la etapa (PATCH /tracking) y el enlace a la recepción.
   assert.match(det, /`\/compras\/pedidos\/\$\{pedido\.id\}\/tracking`/);
   assert.match(det, /`\/dashboard\/compras\/recepciones\/\$\{ultimaRecepcion\.id\}`/);
+}
+
+console.log('--- TEST 28 (B4 T15 r1, I1): cancelar recarga el tablero también desde el panel (Hub y Pedidos), por comportamiento ---');
+{
+  const paginas = [
+    ['Pedidos de compra', readFileSync(new URL('../src/app/dashboard/compras/pedidos/page.tsx', import.meta.url), 'utf8')],
+    ['Hub de Compras', readFileSync(new URL('../src/app/dashboard/compras/page.tsx', import.meta.url), 'utf8')],
+  ];
+  for (const [nombre, fuente] of paginas) {
+    // Desde el panel (sin columnas: el panel se abre también con un clic en una tarjeta del tablero): el tablero ENTERO,
+    // la lista, la franja y las tarjetas, los PVEN (I1 de T14) y se cierra el panel.
+    const panel = await correrCancelar(fuente, { columnas: null, desdePanel: true });
+    assert.equal(panel.error, null, `${nombre}: sin error`);
+    assert.deepEqual(panel.llamadas, ['tablero entero', 'lista', 'ventas', 'cerrar panel'], `${nombre}: desde el panel`);
+    // Desde una tarjeta del tablero: solo su origen y su destino (D39).
+    const tarjeta = await correrCancelar(fuente, { columnas: ['emitido', 'cancelado'], desdePanel: false });
+    assert.deepEqual(tarjeta.llamadas, ['tablero emitido,cancelado', 'lista', 'ventas'], `${nombre}: desde la tarjeta`);
+    // Con un 409 desde el panel: también se recarga el tablero entero (y el detalle), y el error sigue para el modal.
+    const conflicto = await correrCancelar(fuente, { columnas: null, desdePanel: true, falla: true });
+    assert.equal(conflicto.error?.status, 409, `${nombre}: relanza el 409`);
+    assert.deepEqual(conflicto.llamadas, ['tablero entero', 'lista', 'detalle'], `${nombre}: el 409 desde el panel`);
+  }
 }
 
 console.log('\nOK: test_estados_compras.mjs');

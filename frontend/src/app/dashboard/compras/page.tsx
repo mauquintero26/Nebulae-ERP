@@ -725,7 +725,10 @@ export default function ComprasHub() {
     const r = despuesDeCancelarPec(pecs, resultados, omitidos);
     if (r.fuera.length > 0) setSeleccion((s) => s.filter((c) => !r.fuera.includes(String(c))));
     if (r.recargar) {
+      // T15 r1 (I1): desde el panel (que también se abre con una tarjeta del tablero) no hay columnas: el tablero entero.
+      // Fuera de Kanban no cuesta nada (el hook inactivo solo marca la recarga para cuando se active).
       if (columnas) tablero.recargar([...columnas]);
+      else tablero.recargar();
       recargarTrasCambio();
     }
     if (r.recargarVentas) setVueltaVentas((n) => n + 1);
