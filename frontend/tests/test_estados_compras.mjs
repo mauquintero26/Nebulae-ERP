@@ -706,6 +706,28 @@ console.log('--- TEST 25 (B4 T15, KANBAN-compras punto 6): tarjetaPedidoCompra, 
   assert.deepEqual(hub.chips, []);
 }
 
+console.log('--- TEST 29 (B4 T15 r1, m8): textoVacioPec, el «vacío» de la tabla dice qué filtro lo causa ---');
+{
+  assert.equal(typeof ec.textoVacioPec, 'function', 'textoVacioPec existe');
+  const AYUDA = 'Los pedidos de compra se crean con «Nuevo PEC».';
+  const vacio = (parcial) => ec.textoVacioPec(estadoTablaInicial(parcial), AYUDA);
+  // Con «Con atraso» (la tarjeta de vencidos o la franja): no hay vencidos, una buena noticia; nada de «crea un PEC».
+  const vencidos = { titulo: 'Ningún pedido de compra con la entrega vencida.', ayuda: null };
+  assert.deepEqual(vacio({ semaforo: 'vencidos' }), vencidos);
+  assert.deepEqual(vacio({ semaforo: 'atrasados' }), vencidos, 'su sinónimo');
+  assert.deepEqual(vacio({ semaforo: 'vencidos', estados: ['EMITIDO'], q: 'acme' }), vencidos, 'el semáforo primero');
+  // Con un filtro de estados.
+  const filtrado = { titulo: 'Ningún pedido de compra con esos estados. Ajusta el filtro.', ayuda: null };
+  assert.deepEqual(vacio({ estados: ['RECIBIDA'] }), filtrado);
+  assert.deepEqual(vacio({ estados: ['RECIBIDA'], q: 'acme' }), filtrado);
+  // Si no, el de antes: la búsqueda, o la pantalla vacía con la ayuda de cada pantalla.
+  assert.deepEqual(vacio({ q: '  acme ' }), { titulo: 'Sin resultados para «acme»', ayuda: 'Ajusta la búsqueda o el filtro de estados.' });
+  assert.deepEqual(vacio({}), { titulo: 'No hay pedidos de compra en esta vista', ayuda: AYUDA });
+  assert.deepEqual(vacio({ semaforo: 'todos' }), { titulo: 'No hay pedidos de compra en esta vista', ayuda: AYUDA }, "'todos' es sin filtro");
+  assert.deepEqual(ec.textoVacioPec(null, AYUDA), { titulo: 'No hay pedidos de compra en esta vista', ayuda: AYUDA });
+  assert.deepEqual(ec.textoVacioPec({}), { titulo: 'No hay pedidos de compra en esta vista', ayuda: null }, 'sin ayuda, null');
+}
+
 console.log('--- TEST 23 (B4 T14): el Hub de Compras (compras/page.tsx) cablea las piezas y el servidor ---');
 {
   const hub = readFileSync(new URL('../src/app/dashboard/compras/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
@@ -770,6 +792,9 @@ console.log('--- TEST 23 (B4 T14): el Hub de Compras (compras/page.tsx) cablea l
   assert.match(hub, /const COLUMNAS_TABLA_HUB = columnasPec<FilaPec>\(\(p\) => <CeldaAcciones p=\{p\} \/>\);/);
   assert.match(hub, /claseFila=\{claseDeFilaPec\}/);
   assert.ok(!/function CeldaNumero|const MARCA_VENCIDO|id: 'proveedor'/.test(hub), 'el Hub ya no tiene su copia de las columnas');
+  // T15 r1 (m8): el «vacío» dice qué filtro lo causa (textoVacioPec), y se recalcula con el semáforo y los estados.
+  assert.match(hub, /textoVacioPec\(\{ q: estado\.q, semaforo: estado\.semaforo, estados: estado\.estados \}/);
+  assert.match(hub, /\}, \[estado\.q, estado\.semaforo, estado\.estados\]\);/);
   assert.ok(!/estado: ?'RECIBIDO'/.test(hub) && !/estado: ?'EN_TRANSITO'/.test(hub), 'ningún PATCH a mano a tránsito o recibido');
   assert.match(hub, /transicionesPec\(/, 'el panel y el menú solo ofrecen lo que acepta el servidor');
   // T15 r1 (m4, m14): con el PEC cancelado, el panel no pinta la barra del seguimiento (seguimientoCerrado).
@@ -839,6 +864,21 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
   assert.match(pag, /const COLUMNAS_TABLA_PEDIDOS = columnasPec<FilaPec>\(\(p\) => <CeldaAcciones p=\{p\} \/>\);/);
   assert.match(pag, /claseFila=\{claseDeFilaPec\}/);
   assert.ok(!/function CeldaNumero|const MARCA_VENCIDO|id: 'proveedor'/.test(pag), 'Pedidos ya no tiene su copia de las columnas');
+  // T15 r1 (m8): el «vacío» dice qué filtro lo causa (textoVacioPec), y se recalcula con el semáforo y los estados.
+  assert.match(pag, /textoVacioPec\(\{ q: estado\.q, semaforo: estado\.semaforo, estados: estado\.estados \}/);
+  assert.match(pag, /\}, \[estado\.q, estado\.semaforo, estado\.estados\]\);/);
+  // T15 r1 (m7): los textos visibles con tildes y el chip del alta con la etiqueta del estado (nunca un código).
+  assert.ok(!/Metodo Pago|Modalidad Pago|'Numero'|Ver Recepcion|Hacer Recepcion|Via Casillero|>Logistica<|Informacion del PEC|PEND\. COMPRA|Mercancia recibida|conteo fisico/.test(pag),
+    'sin los textos sin tilde ni el chip con código');
+  for (const texto of ['Método de pago', "'Número'", 'Ver recepción', 'Hacer recepción', 'Vía casillero', '>Logística<', 'Información del PEC']) {
+    assert.ok(pag.includes(texto), texto);
+  }
+  assert.match(pag, /\{infoEstadoPedido\('PENDIENTE_COMPRA'\)\.label\}/);
+  // T15 r1 (m9): guardar la información y eliminar desde el panel aplican recargarTrasError; ningún `catch {}` mudo.
+  assert.equal((pag.match(/onToast\(e,'error'\);\s*(?:\/\/[^\n]*\n\s*)?if \(recargarTrasError\(e\)\) \{ onUpdate\(\); loadFull\(\); \}/g) ?? []).length, 3,
+    'saveInfo, deletePec y changeEstado');
+  assert.ok(!/catch \{\s*\}|catch \{ setProdSearchResults\(\[\]\); \}/.test(pag), 'ningún error mudo');
+  assert.equal((pag.match(/avisarError\(err, 'No se pudo buscar el (?:casillero|proveedor|producto)'\)/g) ?? []).length, 4, 'las cuatro búsquedas');
   // El menú de fila (MenuFila) ofrece solo lo que acepta update_pec (R9, C15c): Emitir desde Borrador y cancelar con motivo.
   assert.match(pag, /etiqueta: 'Marcar Emitido'[\s\S]{0,300}oculto: !transicionesPec\(p\.estado\)\.includes\('EMITIDO'\)/);
   assert.match(pag, /etiqueta: 'Cancelar PEC'[\s\S]{0,200}oculto: !transicionesPec\(p\.estado\)\.includes\('CANCELADO'\)/);
@@ -934,6 +974,8 @@ console.log('--- TEST 27 (B4 T15): el detalle de un PEC (compras/pedidos/[id]/pa
   assert.match(det, /href=\{`\/dashboard\/compras\/pedidos\?id=\$\{pedido\.id\}`\}/, 'editar se hace en el panel de Pedidos de compra');
   // RP30: sin diálogos nativos; el error del seguimiento se muestra con su texto.
   assert.match(det, /avisarError\(err, 'No se pudo actualizar el seguimiento'\)/);
+  // T15 r1 (m9): con un 409 o un 404, el detalle se vuelve a pedir.
+  assert.match(det, /if \(recargarTrasError\(err\)\) await loadPedido\(\);/);
   // B1 a B3 que se conservan: avanzar la etapa (PATCH /tracking) y el enlace a la recepción.
   assert.match(det, /`\/compras\/pedidos\/\$\{pedido\.id\}\/tracking`/);
   assert.match(det, /`\/dashboard\/compras\/recepciones\/\$\{ultimaRecepcion\.id\}`/);

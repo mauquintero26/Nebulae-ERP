@@ -33,7 +33,7 @@ import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, consultaColumnaPec, grupoMesPec, infoEstadoPec,
   opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec, repartirCancelacionPec, resumenCancelacionPec, tarjetaPec,
-  cancelarPecsEnSerie, despuesDeCancelarPec,
+  cancelarPecsEnSerie, despuesDeCancelarPec, textoVacioPec,
   tituloMesPec, transicionesPec,
 } from '@/lib/estados-compras';
 import {
@@ -709,18 +709,18 @@ export default function ComprasHub() {
   const filasSeleccionadas = () => seleccion
     .map((c) => listado.filas.find((f) => String(f.id) === String(c)))
     .filter((f): f is FilaPec => Boolean(f));
-  // m8 de T8: el «vacío» solo cambia con la búsqueda.
+  // m8 de T8: el «vacío» memoizado. T15 r1 (m8): dice qué lo deja vacío (textoVacioPec): «Con atraso», el filtro de
+  // estados o la búsqueda; si no, de dónde salen los PEC.
   const vacio = useMemo(() => {
-    const q = estado.q.trim();
+    const texto = textoVacioPec({ q: estado.q, semaforo: estado.semaforo, estados: estado.estados },
+      'Los pedidos de compra se crean con «Nuevo PEC» o desde el panel de un pedido.');
     return (
       <div>
-        <p className="font-semibold text-slate-600">{q ? `Sin resultados para «${q}»` : 'No hay pedidos de compra en esta vista'}</p>
-        <p className="mt-1 text-xs text-slate-500">
-          {q ? 'Ajusta la búsqueda o el filtro de estados.' : 'Los pedidos de compra se crean con «Nuevo PEC» o desde el panel de un pedido.'}
-        </p>
+        <p className="font-semibold text-slate-600">{texto.titulo}</p>
+        {texto.ayuda && <p className="mt-1 text-xs text-slate-500">{texto.ayuda}</p>}
       </div>
     );
-  }, [estado.q]);
+  }, [estado.q, estado.semaforo, estado.estados]);
   // «N resultados» es el de la tabla; en Kanban cada columna trae su total (la barra no lo repite).
   const totalDeLaBarra = enKanban ? {} : {
     total: sinPagina ? null : listado.total,

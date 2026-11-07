@@ -444,6 +444,28 @@ export function tarjetaPedidoCompra(p) {
 }
 
 /**
+ * B4 T15 r1 (m8): lo que dice la tabla de pedidos de compra cuando no hay filas, según lo que la deja vacía (el Hub y
+ * Pedidos de compra):
+ *  - con «Con atraso» (semaforo vencidos o su sinónimo atrasados): 'Ningún pedido de compra con la entrega vencida.';
+ *  - con un filtro de estados: 'Ningún pedido de compra con esos estados. Ajusta el filtro.';
+ *  - con una búsqueda: 'Sin resultados para «q»' y 'Ajusta la búsqueda o el filtro de estados.';
+ *  - si no: 'No hay pedidos de compra en esta vista' y la `ayuda` de la pantalla (o null).
+ * @param {Partial<import('./tabla.js').EstadoTabla> | null | undefined} estado
+ * @param {string | null} [ayuda]
+ * @returns {{titulo: string, ayuda: string | null}}
+ */
+export function textoVacioPec(estado, ayuda = null) {
+  const semaforo = estado?.semaforo;
+  if (semaforo === 'vencidos' || semaforo === 'atrasados') return { titulo: 'Ningún pedido de compra con la entrega vencida.', ayuda: null };
+  if (Array.isArray(estado?.estados) && estado.estados.length > 0) {
+    return { titulo: 'Ningún pedido de compra con esos estados. Ajusta el filtro.', ayuda: null };
+  }
+  const q = typeof estado?.q === 'string' ? estado.q.trim() : '';
+  if (q) return { titulo: `Sin resultados para «${q}»`, ayuda: 'Ajusta la búsqueda o el filtro de estados.' };
+  return { titulo: 'No hay pedidos de compra en esta vista', ayuda: ayuda ?? null };
+}
+
+/**
  * B4 T14 (R9, C15c): de los PEC marcados para cancelar, cuáles se mandan (los que transicionesPec deja cancelar) y
  * cuáles se omiten sin llamar al servidor, con su motivo: los cancelados y los que ya llegaron a bodega o se recibieron
  * (su estado lo lleva la recepción). Las filas que no son objetos se ignoran.

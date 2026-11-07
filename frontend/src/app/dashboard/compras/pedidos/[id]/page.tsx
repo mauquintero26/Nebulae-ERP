@@ -21,6 +21,7 @@ import { diaPec, infoEstadoPec } from '@/lib/estados-compras';
 import { TEXTO_SEGUIMIENTO_CERRADO, pasosDeTracking, seguimientoCerrado } from '@/lib/flujo-compras';
 import { fechaCorta, fechaHoraLarga } from '@/lib/fechas-colombia';
 import { formatoPesos } from '@/lib/pesos';
+import { recargarTrasError } from '@/lib/avisos';
 
 // C10: la etiqueta y el color del estado salen de estados-compras.js (se fueron la barra fija de 4 nodos, que se pintaba
 // por posición, y la tabla de etiquetas propia de esta página, que contradecía a la de la lista).
@@ -236,6 +237,8 @@ export default function PedidoCompraDetallePage() {
     } catch (err) {
       // RP30: un aviso del sistema con el mensaje del servidor (nunca alert()).
       avisarError(err, 'No se pudo actualizar el seguimiento');
+      // T15 r1 (m9): si el PEC cambió en otro lado (un 409 o un 404), se vuelve a pedir lo que se muestra.
+      if (recargarTrasError(err)) await loadPedido();
     }
     setAdvancing(false);
   }

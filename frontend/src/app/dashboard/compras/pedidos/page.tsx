@@ -30,6 +30,8 @@ import {
   accionModo, accionPestana, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta,
 } from '@/lib/tabla';
 import { PERIODO_KPI, tarjetasPedidosCompra } from '@/lib/kpis';
+// T15 r1 (m7): la etiqueta del estado del pedido de venta (el chip del alta), nunca el código.
+import { infoEstadoPedido } from '@/lib/estados-pedido';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 // Piezas genéricas que nacieron en las libs de Ventas (T7 y T10), como en el Hub de Compras (T14): el chip del orden, la
 // pestaña desde Kanban y la ruta sin un parámetro.
@@ -38,7 +40,7 @@ import { accionVistaEnLista, rutaSinParametro } from '@/lib/listas-ventas';
 import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, cancelarPecsEnSerie, consultaColumnaPec,
   despuesDeCancelarPec, etapaPec, grupoMesPec, infoEstadoPec, opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec,
-  repartirCancelacionPec, resumenCancelacionPec, tarjetaPedidoCompra, tituloMesPec, transicionesPec,
+  repartirCancelacionPec, resumenCancelacionPec, tarjetaPedidoCompra, textoVacioPec, tituloMesPec, transicionesPec,
 } from '@/lib/estados-compras';
 import {
   ENLACE_VER_ANALISIS_COMPRAS, TEXTO_SEGUIMIENTO_CERRADO, accionSemaforoCompras, avisoTarjetaEtapa, avisosFlujoCompras,
@@ -180,6 +182,8 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:Avis
   const [saving, setSaving] = useState(false);
   const [casilleros, setCasilleros] = useState<any[]>([]);
   const [showNewCasillero, setShowNewCasillero] = useState(false);
+  // T15 r1 (m9): los errores de la lista de casilleros se dicen (antes se callaban).
+  const { avisarError } = useAvisos();
 
   const loadConfig = useCallback(async () => {
     setLoading(true);
@@ -189,7 +193,7 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:Avis
   }, [tipoEnvio]);
   const loadCasilleros = async () => {
     try { const d = await apiFetch('/compras/casilleros?limit=100'); setCasilleros(Array.isArray(d)?d:(d?.data||[])); }
-    catch {}
+    catch (err) { avisarError(err, 'No se pudieron cargar los casilleros'); }
   };
   useEffect(()=>{ loadConfig(); loadCasilleros(); }, []);
   useEffect(()=>{ if(config) setStages(config[tipoEnvio]||[]); }, [tipoEnvio]);
@@ -250,7 +254,7 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:Avis
               <div className="flex gap-2">
                 {(['casillero','directo'] as const).map(t=>(
                   <button key={t} onClick={()=>setTipoEnvio(t)} className={'px-3 py-1.5 rounded-lg text-xs font-bold border ' + (tipoEnvio===t?'bg-indigo-600 text-white border-indigo-600':'bg-white text-gray-600 border-gray-200 hover:bg-gray-50')}>
-                    {t==='casillero'?'Via Casillero':'Directo Colombia'}
+                    {t==='casillero'?'Vía casillero':'Directo Colombia'}
                   </button>
                 ))}
               </div>
@@ -344,6 +348,8 @@ function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; on
   const [casilleroResults, setCasilleroResults] = useState<any[]>([]);
   const [showNewCasillero, setShowNewCasillero] = useState(false);
   const casilleroTimer = useRef<any>(null);
+  // T15 r1 (m9): el error de la búsqueda de casilleros se dice (antes se callaba).
+  const { avisarError } = useAvisos();
 
   const stages: any[] = pec.tracking_stages || [];
   // T15 r1 (m4, m14): con el PEC cancelado, el seguimiento es de solo lectura (seguimientoCerrado, la regla del detalle).
@@ -395,7 +401,7 @@ function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; on
       try {
         const d = await apiFetch('/compras/casilleros/search?q='+encodeURIComponent(q));
         setCasilleroResults(Array.isArray(d)?d:(d?.data||[]));
-      } catch {}
+      } catch (err) { avisarError(err, 'No se pudo buscar el casillero'); }
     }, 300);
   }
 
@@ -553,7 +559,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
   const [infoForm, setInfoForm] = useState<any>({});
   const [savingInfo, setSavingInfo] = useState(false);
 
-  // "Hacer Recepcion": ir directo a LA recepcion de este PEC, no al hub general
+  // "Hacer recepción": ir directo a LA recepción de este PEC, no al hub general
   // (con cientos de pedidos, aterrizar en la lista completa obliga a buscarla).
   // Si ya existe una (GoodsReceipt), abrirla; si no, crearla y abrir la nueva.
   async function goToRecepcion() {
@@ -624,7 +630,11 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
       })});
       onToast('Información actualizada','ok'); onUpdate(); await loadFull();
       setInfoEdit(false);
-    } catch(e){ onToast(e,'error'); }
+    } catch(e){
+      onToast(e,'error');
+      // T15 r1 (m9): si el PEC cambió en otro lado (un 409 o un 404), se vuelve a pedir lo que se muestra.
+      if (recargarTrasError(e)) { onUpdate(); loadFull(); }
+    }
     setSavingInfo(false);
   };
 
@@ -641,7 +651,10 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
     try {
       await apiFetch('/compras/pedidos/'+pec.id, {method:'DELETE'});
       onToast('PEC eliminado','ok'); onUpdate(); onClose();
-    } catch(e){ onToast(e,'error'); }
+    } catch(e){
+      onToast(e,'error');
+      if (recargarTrasError(e)) { onUpdate(); loadFull(); }
+    }
   };
 
   if (!pec) return null;
@@ -717,7 +730,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
           ))}
         </div>
 
-        {/* Mercancia recibida: falta hacer la recepcion fisica, o ya existe y
+        {/* Mercancía recibida: falta hacer la recepción física, o ya existe y
             hay que poder volver a ella -- antes el banner (y su unico link a
             la recepcion) desaparecia por completo en cuanto se creaba una,
             dejando sin forma de volver a encontrarla desde el PEC. */}
@@ -727,18 +740,18 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
               <div className="w-9 h-9 bg-white rounded-full flex items-center justify-center text-emerald-600 shadow-sm"><PackageCheck size={18}/></div>
               <div>
                 <p className="font-black text-emerald-900 text-sm">
-                  {detail?.recepciones?.length > 0 ? 'Mercancia recibida en bodega' : 'Mercancia recibida en bodega — pendiente por recepcion'}
+                  {detail?.recepciones?.length > 0 ? 'Mercancía recibida en bodega' : 'Mercancía recibida en bodega, pendiente de recepción'}
                 </p>
                 <p className="text-xs text-emerald-700">
                   {detail?.recepciones?.length > 0
-                    ? `Recepcion ${detail.recepciones[detail.recepciones.length-1].numero} en curso.`
-                    : 'Inicia el conteo fisico de este pedido.'}
+                    ? `Recepción ${detail.recepciones[detail.recepciones.length-1].numero} en curso.`
+                    : 'Inicia el conteo físico de este pedido.'}
                 </p>
               </div>
             </div>
             <button onClick={goToRecepcion} disabled={goingToRecepcion} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm hover:bg-emerald-700 transition-colors shrink-0 disabled:opacity-50 flex items-center gap-2">
               {goingToRecepcion && <RefreshCw size={12} className="animate-spin"/>}
-              {detail?.recepciones?.length > 0 ? 'Ver Recepcion' : 'Hacer Recepcion'}
+              {detail?.recepciones?.length > 0 ? 'Ver recepción' : 'Hacer recepción'}
             </button>
           </div>
         )}
@@ -751,7 +764,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
               <p className="text-xs font-black text-gray-400 uppercase mb-3">Proveedor</p>
               <p className="font-bold text-gray-900">{detail?.supplier_name||'-'}</p>
               {detail?.supplier_ref && <p className="text-xs text-gray-400 mt-0.5">Ref: {detail.supplier_ref}</p>}
-              {detail?.tipo_envio && <p className="text-xs text-purple-600 font-bold mt-1 capitalize">Tipo: {detail.tipo_envio === 'directo' ? 'Directo Colombia' : 'Via Casillero'}</p>}
+              {detail?.tipo_envio && <p className="text-xs text-purple-600 font-bold mt-1 capitalize">Tipo: {detail.tipo_envio === 'directo' ? 'Directo Colombia' : 'Vía casillero'}</p>}
             </div>
             <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
               <p className="text-xs font-black text-gray-400 uppercase mb-3">Fechas</p>
@@ -775,7 +788,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
               </div>
             </div>
             <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
-              <p className="text-xs font-black text-gray-400 uppercase mb-3">Logistica</p>
+              <p className="text-xs font-black text-gray-400 uppercase mb-3">Logística</p>
               <div className="grid grid-cols-2 gap-3 text-xs text-gray-600">
                 {[['Modalidad',detail?.modalidad_pago||'-'],['Carrier',detail?.carrier||'-'],['Casillero',detail?.casillero_nombre||'-'],['Tracking',detail?.tracking_number||'-']].map(([l,v],i)=>(
                   <div key={i}><span className="block text-gray-400 font-black uppercase mb-0.5">{l}</span>{v}</div>
@@ -850,7 +863,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
               <div className="space-y-4">
                 <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm">
                   <div className="flex items-center justify-between mb-4">
-                    <p className="text-xs font-black text-gray-400 uppercase">Informacion del PEC</p>
+                    <p className="text-xs font-black text-gray-400 uppercase">Información del PEC</p>
                     {!infoEdit ? (
                       <button onClick={openInfoEdit} className="flex items-center gap-1 text-xs font-bold text-purple-600 hover:text-purple-800"><Edit2 size={12}/> Editar</button>
                     ) : (
@@ -864,7 +877,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
                   </div>
                   {!infoEdit ? (
                     <div className="grid grid-cols-2 gap-4 text-sm">
-                      {[['Numero',detail?.numero],['Estado',est.label],['Proveedor',detail?.supplier_name||'-'],['Ref/NIT',detail?.supplier_ref||'-'],['Modalidad Pago',detail?.modalidad_pago||'-'],['Metodo Pago',detail?.metodo_pago||'-'],['Entrega Est.',textoDia(detail?.fecha_entrega_estimada)],['Creado por',detail?.created_by||'-'],['Actualizado',textoInstante(detail?.updated_at)]].map(([l,v],i)=>(
+                      {[['Número',detail?.numero],['Estado',est.label],['Proveedor',detail?.supplier_name||'-'],['Ref/NIT',detail?.supplier_ref||'-'],['Modalidad de pago',detail?.modalidad_pago||'-'],['Método de pago',detail?.metodo_pago||'-'],['Entrega Est.',textoDia(detail?.fecha_entrega_estimada)],['Creado por',detail?.created_by||'-'],['Actualizado',textoInstante(detail?.updated_at)]].map(([l,v],i)=>(
                         <div key={i}><span className="block text-gray-400 text-xs font-black uppercase mb-0.5">{l}</span><span className="font-bold text-gray-900">{v||'-'}</span></div>
                       ))}
                       <div className="col-span-2"><span className="block text-gray-400 text-xs font-black uppercase mb-0.5">Notas</span><span className="font-bold text-gray-900 whitespace-pre-wrap">{detail?.notas||'-'}</span></div>
@@ -875,7 +888,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
                         <input value={infoForm.supplier_name} onChange={e=>setInfoForm((f:any)=>({...f,supplier_name:e.target.value}))} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
                       <div><label className="block text-gray-400 text-xs font-black uppercase mb-1">Ref/NIT</label>
                         <input value={infoForm.supplier_ref} onChange={e=>setInfoForm((f:any)=>({...f,supplier_ref:e.target.value}))} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-                      <div><label className="block text-gray-400 text-xs font-black uppercase mb-1">Modalidad Pago</label>
+                      <div><label className="block text-gray-400 text-xs font-black uppercase mb-1">Modalidad de pago</label>
                         <select value={infoForm.modalidad_pago} onChange={e=>setInfoForm((f:any)=>({...f,modalidad_pago:e.target.value}))} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200">
                           {/* Si el valor guardado no esta en esta lista (formato viejo/libre,
                               ej. "Credito 60d" en vez de "Credito 60 dias"), se agrega como
@@ -885,7 +898,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
                             .concat(infoForm.modalidad_pago && !['Contado','60/40 (60% anticipo)','Credito 30 dias','Credito 60 dias','Otro'].includes(infoForm.modalidad_pago) ? [infoForm.modalidad_pago] : [])
                             .map(o=><option key={o}>{o}</option>)}
                         </select></div>
-                      <div><label className="block text-gray-400 text-xs font-black uppercase mb-1">Metodo Pago</label>
+                      <div><label className="block text-gray-400 text-xs font-black uppercase mb-1">Método de pago</label>
                         <input value={infoForm.metodo_pago} onChange={e=>setInfoForm((f:any)=>({...f,metodo_pago:e.target.value}))} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
                       <div><label className="block text-gray-400 text-xs font-black uppercase mb-1">Fecha Entrega Est.</label>
                         <input type="date" value={infoForm.fecha_entrega_estimada} onChange={e=>setInfoForm((f:any)=>({...f,fecha_entrega_estimada:e.target.value}))} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
@@ -935,6 +948,8 @@ type PropsNuevoPec = {
 
 function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, onReintentarVentas}: PropsNuevoPec) {
   const [supplierSearch, setSupplierSearch] = useState('');
+  // T15 r1 (m9): los errores de las búsquedas (proveedor, casillero y producto) se dicen (antes se callaban).
+  const { avisarError } = useAvisos();
   const [supplierResults, setSupplierResults] = useState<any[]>([]);
   const [selectedSupplier, setSelectedSupplier] = useState<any>(null);
   const [showNewSupplier, setShowNewSupplier] = useState(false);
@@ -968,7 +983,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
         const arr = Array.isArray(res) ? res : (res?.data || []);
         setSupplierResults(arr);
         if (arr.length === 0) setShowNewSupplier(true);
-      } catch {}
+      } catch (err) { avisarError(err, 'No se pudo buscar el proveedor'); }
     }, 350);
     setSupplierTimer(t);
   };
@@ -984,7 +999,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
         const arr = Array.isArray(res) ? res : (res?.data || []);
         setCasilleroResults(arr);
         if (arr.length === 0) setShowNewCasillero(true);
-      } catch {}
+      } catch (err) { avisarError(err, 'No se pudo buscar el casillero'); }
     }, 350);
     setCasilleroTimer(t);
   };
@@ -1015,7 +1030,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
       try {
         const res = await apiFetch('/crm/products/search?q='+encodeURIComponent(val));
         setProdSearchResults(Array.isArray(res) ? res : (res?.data || []));
-      } catch { setProdSearchResults([]); }
+      } catch (err) { setProdSearchResults([]); avisarError(err, 'No se pudo buscar el producto'); }
     }, 300);
     setProdSearchTimer(t);
   };
@@ -1192,7 +1207,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
                       <div>
                         <label className="block text-xs font-black text-gray-500 uppercase mb-1">Tipo de Envio</label>
                         <select value={form.tipo_envio} onChange={e=>setF('tipo_envio',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200 bg-white">
-                          <option value="casillero">Via Casillero</option>
+                          <option value="casillero">Vía casillero</option>
                           <option value="directo">Directo Colombia</option>
                         </select>
                       </div>
@@ -1220,7 +1235,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
                         <input value={form.carrier} onChange={e=>setF('carrier',e.target.value)} placeholder="ej: DHL, FedEx, Amazon" className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
                       </div>
                       <div>
-                        <label className="block text-xs font-black text-gray-500 uppercase mb-1">Modalidad Pago</label>
+                        <label className="block text-xs font-black text-gray-500 uppercase mb-1">Modalidad de pago</label>
                         <select value={form.modalidad_pago} onChange={e=>setF('modalidad_pago',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200 bg-white">
                           {['Contado','60/40 (60% anticipo)','Credito 30 dias','Credito 60 dias','Otro'].map(m=><option key={m} value={m}>{m}</option>)}
                         </select>
@@ -1339,7 +1354,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
                       <label key={p.id} className={'flex items-start gap-3 p-4 rounded-2xl border cursor-pointer hover:bg-purple-50 transition-colors ' + (selectedPvens.has(p.id)?'border-purple-300 bg-purple-50':'border-gray-200 bg-white')}>
                         <input type="checkbox" checked={selectedPvens.has(p.id)} onChange={e=>{const n=new Set(selectedPvens);if(e.target.checked)n.add(p.id);else n.delete(p.id);setSelectedPvens(n);}} className="mt-1 rounded border-gray-300 text-purple-600"/>
                         <div className="flex-1">
-                          <div className="flex items-center gap-2"><span className="font-bold text-gray-900">{p.numero}</span><span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-bold">PEND. COMPRA</span></div>
+                          <div className="flex items-center gap-2"><span className="font-bold text-gray-900">{p.numero}</span><span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-bold">{infoEstadoPedido('PENDIENTE_COMPRA').label}</span></div>
                           <p className="text-xs text-gray-500">{p.customer_name||'-'} · {fDate(p.created_at)}</p>
                           <p className="text-xs font-bold text-indigo-700 mt-0.5">{fCOP(p.total_cop||0)} · {(p.productos||[]).length} producto(s)</p>
                           {(p.productos||[]).slice(0,3).map((pr:any,j:number)=><p key={j} className="text-[10px] text-gray-400">· {pr.descripcion||pr.producto_nombre||'Producto'}</p>)}
@@ -1727,18 +1742,17 @@ export default function PedidosCompraPage() {
   const filasSeleccionadas = () => seleccion
     .map((c) => listado.filas.find((f) => String(f.id) === String(c)))
     .filter((f): f is FilaPec => Boolean(f));
-  // m8 de T8: el «vacío» solo cambia con la búsqueda.
+  // m8 de T8: el «vacío» memoizado. T15 r1 (m8): dice qué lo deja vacío (textoVacioPec): «Con atraso», el filtro de
+  // estados o la búsqueda; si no, la pista de crear un PEC.
   const vacio = useMemo(() => {
-    const q = estado.q.trim();
+    const texto = textoVacioPec({ q: estado.q, semaforo: estado.semaforo, estados: estado.estados }, 'Los pedidos de compra se crean con «Nuevo PEC».');
     return (
       <div>
-        <p className="font-semibold text-slate-600">{q ? `Sin resultados para «${q}»` : 'No hay pedidos de compra en esta vista'}</p>
-        <p className="mt-1 text-xs text-slate-500">
-          {q ? 'Ajusta la búsqueda o el filtro de estados.' : 'Los pedidos de compra se crean con «Nuevo PEC».'}
-        </p>
+        <p className="font-semibold text-slate-600">{texto.titulo}</p>
+        {texto.ayuda && <p className="mt-1 text-xs text-slate-500">{texto.ayuda}</p>}
       </div>
     );
-  }, [estado.q]);
+  }, [estado.q, estado.semaforo, estado.estados]);
   // «N resultados» es el de la tabla; en Kanban cada columna trae su total (la barra no lo repite).
   const totalDeLaBarra = enKanban ? {} : {
     total: sinPagina ? null : listado.total,
