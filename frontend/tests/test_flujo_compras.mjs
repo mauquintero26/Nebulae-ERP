@@ -532,4 +532,27 @@ console.log('--- TEST 19 (B4 T15 r1, m2 y m6): avisoTarjetaEtapa, UNA regla para
   });
 }
 
+console.log('--- TEST 20 (B4 T16A, FLUJO-compras puntos 8 y 9): la franja de Tránsito y la de Recepciones, con «Estás aquí» en la suya ---');
+{
+  assert.equal(typeof fc.pasosPantallaCompras, 'function', 'pasosPantallaCompras existe');
+  const sinHref = (pasos) => pasos.map((p) => Object.fromEntries(Object.entries(p).filter(([campo]) => campo !== 'href')));
+  const HREFS = ['/dashboard/compras/lista-compras', '/dashboard/compras/pedidos', '/dashboard/compras/transito',
+    '/dashboard/compras/recepciones', '/dashboard/compras/pedidos?tab=recibidos'];
+  for (const [actual, i] of [['TRANSITO', 2], ['RECEPCION', 3]]) {
+    const pasos = fc.pasosPantallaCompras(FLUJO, actual);
+    assert.deepEqual(pasos.map((p) => p.clave), ['LISTA', 'PEC', 'TRANSITO', 'RECEPCION', 'RECIBIDO'], actual);
+    assert.deepEqual(pasos.map((p) => p.total), [4, 5, 3, 2, 9], `${actual}: los conteos de /compras/flujo`);
+    assert.deepEqual(pasos.map((p) => p.esEste), [0, 1, 2, 3, 4].map((k) => k === i), `${actual}: Estás aquí en su caja`);
+    assert.equal(pasos[i].estado, 'actual');
+    // Las demás cajas son enlaces a su pantalla; la de esta pantalla no lleva href (D42); Recibido abre la pestaña de Pedidos.
+    assert.deepEqual(pasos.map((p) => p.href ?? null), HREFS.map((h, k) => (k === i ? null : h)), `${actual}: enlaces`);
+    assert.deepEqual(sinHref(pasos), sinHref(pasosConConteos(PASOS_FLUJO_COMPRAS, flujo.conteosDePasos(FLUJO), { actual })),
+      `${actual}: es pasosConConteos con conteosDePasos (D36)`);
+  }
+  // Sin datos (cargando): los números en null (la barra gris), nunca 0; la caja de la pantalla, igual.
+  const cargando = fc.pasosPantallaCompras(null, 'TRANSITO');
+  assert.ok(cargando.every((p) => p.total === null && p.atrasados === null));
+  assert.equal(cargando[2].esEste, true);
+}
+
 console.log('\nOK: test_flujo_compras.mjs');

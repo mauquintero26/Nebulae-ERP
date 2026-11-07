@@ -1003,4 +1003,229 @@ console.log('--- TEST 28 (B4 T15 r1, I1): cancelar recarga el tablero también d
   }
 }
 
+console.log('--- TEST 30 (B4 T16A, TABLA-compras punto 9, KANBAN-logistica punto 5; RP41, D6): Recepciones, vistas, filtro y tablero solo para ver ---');
+{
+  // Las vistas de GET /compras/recepciones (espejo de las claves de GRUPOS_RECEPCION más 'todas').
+  assert.deepEqual(Object.keys(ec.VISTAS_RECEPCION ?? {}), ['por_confirmar', 'confirmadas', 'canceladas', 'todas']);
+  assert.deepEqual(ec.VISTAS_RECEPCION.por_confirmar, ['BORRADOR']);
+  assert.deepEqual(ec.VISTAS_RECEPCION.confirmadas, ['COMPLETADA', 'COMPLETADA_LOGISTICA']);
+  assert.deepEqual(ec.VISTAS_RECEPCION.canceladas, ['CANCELADA']);
+  assert.deepEqual(ec.VISTAS_RECEPCION.todas, ['BORRADOR', 'COMPLETADA', 'COMPLETADA_LOGISTICA', 'CANCELADA']);
+  for (const [vista, estados] of Object.entries(GRUPOS_RECEPCION)) assert.deepEqual(ec.VISTAS_RECEPCION[vista], estados, `${vista} es el grupo`);
+  assert.throws(() => { ec.VISTAS_RECEPCION.otra = []; }, TypeError, 'inmutable');
+
+  // La insignia de un estado: la de ESTADOS_RECEPCION; uno desconocido sale humanizado en gris, nunca el código crudo.
+  assert.equal(typeof ec.infoEstadoRecepcion, 'function', 'infoEstadoRecepcion existe');
+  assert.equal(ec.infoEstadoRecepcion('BORRADOR').label, 'Por contar');
+  assert.equal(ec.infoEstadoRecepcion(' COMPLETADA_LOGISTICA ').label, 'Solo registro logístico');
+  assert.equal(ec.infoEstadoRecepcion('ALGO_NUEVO').label, 'Algo nuevo');
+  assert.match(ec.infoEstadoRecepcion('ALGO_NUEVO').clases.bg, /gray/);
+
+  // «Filtrar estado»: los estados de la pestaña con su etiqueta; sin pestaña (o 'todas', o una rara), los 4. La misma referencia.
+  assert.deepEqual(ec.opcionesEstadosRecepcion('confirmadas'),
+    [{ valor: 'COMPLETADA', etiqueta: 'Recibida' }, { valor: 'COMPLETADA_LOGISTICA', etiqueta: 'Solo registro logístico' }]);
+  assert.deepEqual(ec.opcionesEstadosRecepcion('por_confirmar'), [{ valor: 'BORRADOR', etiqueta: 'Por contar' }]);
+  for (const v of ['todas', null, undefined, 'rara', 'toString']) {
+    assert.deepEqual(ec.opcionesEstadosRecepcion(v).map((o) => o.valor), ['BORRADOR', 'COMPLETADA', 'COMPLETADA_LOGISTICA', 'CANCELADA'], String(v));
+  }
+  assert.equal(ec.opcionesEstadosRecepcion('confirmadas'), ec.opcionesEstadosRecepcion('confirmadas'));
+  // En el tablero: una opción por columna, con su estado principal y el título de la columna.
+  assert.deepEqual(ec.OPCIONES_ESTADOS_TABLERO_RECEPCION,
+    [{ valor: 'BORRADOR', etiqueta: 'Por contar' }, { valor: 'COMPLETADA', etiqueta: 'Confirmadas' }, { valor: 'CANCELADA', etiqueta: 'Canceladas' }]);
+
+  // La consulta de una columna del tablero en modo servidor: sin vista ni paso ni semáforo (Recepciones no tiene), los
+  // estados de la columna cruzados con el filtro, la búsqueda del MISMO estado, el orden, el límite y el desplazamiento.
+  assert.equal(typeof ec.consultaColumnaRecepcion, 'function', 'consultaColumnaRecepcion existe');
+  const [porContar, confirmadas, canceladas] = COLUMNAS_RECEPCION;
+  const estado = estadoTablaInicial({ vista: 'confirmadas', modo: 'kanban', semaforo: 'vencidos', paso: 'PEC', q: ' acme ', estados: ['COMPLETADA'], pagina: 4 });
+  assert.equal(ec.consultaColumnaRecepcion(estado, confirmadas, { orden: 'reciente', limit: 25, offset: 0 }),
+    'q=acme&estados=COMPLETADA,COMPLETADA_LOGISTICA&orden=reciente&limit=25&offset=0', 'su estado principal pide la columna entera');
+  assert.equal(ec.consultaColumnaRecepcion(estado, porContar, { orden: 'sin_movimiento', limit: 25, offset: 0 }), null, 'sin cruce: no se pide');
+  const sinFiltro = estadoTablaInicial({ vista: 'todas', modo: 'kanban' });
+  assert.equal(ec.consultaColumnaRecepcion(sinFiltro, canceladas, { orden: 'reciente', limit: 0, offset: 0 }),
+    'estados=CANCELADA&orden=reciente&limit=0&offset=0', 'una plegada pide limit=0 y no lleva la vista');
+  assert.equal(ec.consultaColumnaRecepcion(sinFiltro, porContar, { orden: 'sin_movimiento', limit: 50, offset: 50 }),
+    'estados=BORRADOR&orden=sin_movimiento&limit=50&offset=50');
+  // Cada columna del tablero es un grupo de recepción (la clave de grupoRecepcion).
+  for (const c of COLUMNAS_RECEPCION) assert.ok(c.estados.every((e) => grupoRecepcion(e) === c.clave), c.clave);
+
+  // La tarjeta del tablero solo para ver: el ENINV, la bodega y la fecha, el chip «Retraso N días» (dias_retraso de _gr_dict) y,
+  // en «Por contar», «Contar y confirmar» hacia el conteo.
+  assert.equal(typeof ec.tarjetaRecepcion, 'function', 'tarjetaRecepcion existe');
+  const rec = { id: 7, numero: 'ENINV-7', pec_id: 3, pec_numero: 'PEC-3', supplier_name: 'Acme', warehouse_name: 'Bodega A',
+    estado: 'BORRADOR', fecha_recepcion: '2026-11-05T15:00:00', dias_retraso: 2 };
+  const t = ec.tarjetaRecepcion(rec);
+  assert.equal(t.numero, 'ENINV-7');
+  assert.equal(t.tipo, 'ENINV');
+  assert.equal(t.titulo, 'Acme');
+  assert.equal(t.subtitulo, 'PEC-3');
+  assert.equal(t.monto, null);
+  assert.equal(t.estado.label, 'Por contar');
+  assert.deepEqual(t.chips, [{ texto: 'Retraso 2 días', tono: 'rose' }]);
+  assert.equal(t.tiempo, 'Bodega A · 5 nov 2026');
+  assert.equal(t.atrasada, true);
+  assert.deepEqual(t.accionPrincipal, { texto: 'Contar y confirmar', href: '/dashboard/compras/recepciones/7', tono: 'teal' });
+  assert.equal(ec.tarjetaRecepcion({ ...rec, dias_retraso: 1 }).chips[0].texto, 'Retraso 1 día');
+  // Confirmada, cancelada, sin retraso (0 o null), sin PEC, sin proveedor ni bodega: lo mínimo, sin código crudo.
+  const hecha = ec.tarjetaRecepcion({ ...rec, estado: 'COMPLETADA', dias_retraso: 0 });
+  assert.equal(hecha.accionPrincipal, null);
+  assert.deepEqual(hecha.chips, []);
+  assert.equal(hecha.atrasada, false);
+  assert.equal(ec.tarjetaRecepcion({ ...rec, estado: 'CANCELADA', dias_retraso: null }).accionPrincipal, null);
+  const manual = ec.tarjetaRecepcion({ id: 9, estado: 'BORRADOR', created_at: '2026-11-04T10:00:00' });
+  assert.equal(manual.numero, 'ENINV-9', 'sin número: ENINV-id');
+  assert.equal(manual.titulo, 'Sin proveedor');
+  assert.equal(manual.subtitulo, 'Entrada manual');
+  assert.equal(manual.tiempo, 'Sin bodega · 4 nov 2026');
+
+  // El «vacío» de la tabla dice qué lo causa.
+  assert.equal(typeof ec.textoVacioRecepciones, 'function', 'textoVacioRecepciones existe');
+  const vacio = (parcial) => ec.textoVacioRecepciones(estadoTablaInicial(parcial));
+  assert.deepEqual(vacio({ estados: ['CANCELADA'], q: 'x' }), { titulo: 'Ninguna recepción con esos estados. Ajusta el filtro.', ayuda: null });
+  assert.deepEqual(vacio({ q: ' acme ' }), { titulo: 'Sin resultados para «acme»', ayuda: 'Ajusta la búsqueda o el filtro de estados.' });
+  assert.deepEqual(vacio({ vista: 'por_confirmar' }), { titulo: 'No hay recepciones por confirmar', ayuda: 'Las nuevas aparecen aquí hasta que se cuentan y se confirman.' });
+  assert.deepEqual(vacio({ vista: 'confirmadas' }), { titulo: 'Aún no hay recepciones confirmadas', ayuda: null });
+  assert.deepEqual(vacio({ vista: 'canceladas' }), { titulo: 'No hay recepciones canceladas', ayuda: null });
+  assert.deepEqual(vacio({ vista: 'todas' }), { titulo: 'No hay recepciones en esta vista', ayuda: 'Usa «Recepcionar PEC» para iniciar la entrada física de un pedido.' });
+  assert.deepEqual(ec.textoVacioRecepciones(null).titulo, 'No hay recepciones en esta vista');
+}
+
+/** El cuerpo de la función `cabecera … { … }` del fuente de una página (llaves balanceadas), transpilado a JS para ejecutarlo con dobles. */
+function funcionEjecutable(fuente, cabecera) {
+  const inicio = fuente.indexOf(cabecera);
+  assert.ok(inicio >= 0, `la página tiene ${cabecera}`);
+  const abre = fuente.indexOf('{', fuente.indexOf(')', inicio));
+  let nivel = 0;
+  let fin = -1;
+  for (let j = abre; j < fuente.length; j += 1) {
+    if (fuente[j] === '{') nivel += 1;
+    else if (fuente[j] === '}') { nivel -= 1; if (nivel === 0) { fin = j; break; } }
+  }
+  assert.ok(fin > abre, `${cabecera} cierra`);
+  const js = tsLib.transpileModule(`(${fuente.slice(inicio, fin + 1)})`, { compilerOptions: { target: tsLib.ScriptTarget.ES2020 } })
+    .outputText.replace(/^"use strict";\s*/, '').trim().replace(/;$/, '');
+  return (entorno) => new Function('entorno', `with (entorno) { return ${js}; }`)(entorno);
+}
+
+/** La suma de los anchos de las columnas visibles por defecto de un arreglo de columnas escrito en el fuente (R26). */
+function anchoVisible(fuente, nombre) {
+  const inicio = fuente.indexOf(nombre);
+  assert.ok(inicio >= 0, `${nombre} existe`);
+  const cuerpo = fuente.slice(inicio, fuente.indexOf('\n];', inicio));
+  const columnas = cuerpo.split(/\n {2}\{ id: '/).slice(1);
+  assert.ok(columnas.length > 0, 'columnas');
+  return columnas.filter((c) => !/ocultaPorDefecto: true/.test(c.split('\n')[0] + (c.split('\n')[1] ?? '')))
+    .reduce((suma, c) => suma + Number(/ancho: (\d+)/.exec(c)?.[1] ?? 0), 0);
+}
+
+console.log('--- TEST 31 (B4 T16A): Tránsito (compras/transito/page.tsx) cablea las piezas, el tablero de etapas y el servidor ---');
+{
+  const pag = readFileSync(new URL('../src/app/dashboard/compras/transito/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.ok(!/@ts-nocheck/.test(pag), 'la página se tipa');
+  // Carga del servidor (R5, C3, C4, D39, D40): el estado único, la tabla en el servidor y el tablero con la vista completa.
+  assert.match(pag, /const ID_TRANSITO = 'compras\.transito';/);
+  assert.match(pag, /const INICIAL_TRANSITO = \{ vista: 'transito_logistica', orden: 'atencion' \};/, 'la vista de T12 y lo vencido primero (R8)');
+  assert.match(pag, /useEstadoTabla\(ID_TRANSITO, INICIAL_TRANSITO\)/);
+  const lista = /const lista = useListado<FilaTransito>\(\{([\s\S]*?)\}\);/.exec(pag)?.[1] ?? '';
+  for (const parte of [/ruta: '\/compras\/pedidos'/, /(?:^|[,{]\s*)estado\s*,/, /esperar: !listo/, /\bdespachar\b/, /activo: !enKanban/, /extra: extraDeLaLista/]) {
+    assert.match(lista, parte, `la tabla lleva ${parte}`);
+  }
+  assert.match(pag, /extraDeLaLista = useMemo\(\(\) => \(\{ orden: estado\.orden \|\| 'atencion' \}\), \[estado\.orden\]\);/,
+    'R8: sin orden (el tercer clic en un título) sigue lo vencido primero');
+  const completa = /const completa = useListado<FilaTransito>\(\{([\s\S]*?)\}\);/.exec(pag)?.[1] ?? '';
+  for (const parte of [/ruta: '\/compras\/pedidos'/, /(?:^|[,{]\s*)estado\s*,/, /esperar: !listo/, /activo: enKanban/, /extra: EXTRA_TABLERO/]) {
+    assert.match(completa, parte, `el tablero pide la vista completa con ${parte}`);
+  }
+  assert.match(pag, /const TOPE_TABLERO = 200;/);
+  assert.match(pag, /const EXTRA_TABLERO = \{ orden: 'reciente', limit: TOPE_TABLERO, offset: 0 \};/, 'C4: hasta 200 pedidos, de la primera página');
+  assert.match(pag, /apiFetch\('\/compras\/tracking-config', \{ signal: control\.signal \}\)/, 'GET /compras/tracking-config al cargar');
+  assert.match(pag, /useResumenFlujo<DatosFlujo>\('\/compras\/flujo', recargaFlujo\)/);
+  assert.match(pag, /`\/compras\/stats\?periodo=\$\{PERIODO_KPI\}`/);
+  assert.ok(!/compras\/pedidos\?limit=200/.test(pag) && !/ESTADOS_EXCLUIDOS_TRANSITO/.test(pag), 'ya no se cargan 200 y se filtran en el navegador');
+  assert.ok(!/\.catch\(\(\) => (\[\]|\{\}|null)\)/.test(pag) && !/catch \{ *set/.test(pag), 'ningún error se traga');
+  assert.ok(!/days_until_delivery|\.is_overdue\)\.length|pedidos\.filter/.test(pag), 'ni los vencidos ni los promedios se calculan sobre arreglos del navegador');
+  // La tabla (TABLA-compras punto 8; R26, D41): estándar en el servidor, 25 o 50, las columnas del diseño y la acción.
+  assert.match(pag, /<TablaEstandar\s+id=\{ID_TRANSITO\}\s+modo="servidor"/);
+  for (const [id, titulo] of [['pedido', 'Pedido de compra'], ['cliente', 'Cliente / PVEN'], ['tipo', 'Tipo'], ['etapa', 'Etapa actual'],
+    ['progreso', 'Progreso'], ['entrega', 'Entrega est.'], ['monto', 'Monto'], ['accion', 'Acción']]) {
+    assert.match(pag, new RegExp(`\\{ id: '${id}', titulo: '${titulo}'`), `columna ${titulo}`);
+  }
+  assert.match(pag, /id: 'pedido', titulo: 'Pedido de compra', ancho: \d+, clave: true, fija: 'izquierda', flexible: true/, 'el pedido es la clave, fija y flexible');
+  assert.match(pag, /id: 'accion', titulo: 'Acción', ancho: \d+, clave: true, fija: 'derecha'/, 'la acción, fija a la derecha');
+  assert.match(pag, /<PasosFlujo variante="mini" pasos=\{pasosDeTracking\(p\.tracking_stages\)\}/, 'Progreso: un punto por etapa (pasosDeTracking)');
+  assert.match(pag, /avanceTransito\(p\)\.texto/, 'y «n de m»');
+  assert.match(pag, /etiquetaEtapaTracking\(etapa\.status\)/, 'Etapa actual usa etiquetaEtapaTracking');
+  assert.match(pag, /etapa\.alert\?\.nivel === 'atrasado'/, 'RP28: el rojo solo con nivel atrasado');
+  assert.match(pag, /claseFila=\{claseDeFilaPec\}/, 'D41: la fila vencida en el tono opaco filaAlerta');
+  assert.match(pag, /acciones\?\.enCurso\.includes\(p\.id\)/, 'cada fila carga por su cuenta');
+  assert.match(pag, /aria-label=\{`\$\{accion\.texto\} la etapa actual de \$\{p\.numero\}`\}/, 'el botón lleva el número en su aria-label');
+  // R26 (704 px a 1024): las visibles caben.
+  const visibles = anchoVisible(pag, 'const COLUMNAS_TABLA_TRANSITO');
+  assert.ok(visibles > 0 && visibles <= 704, `R26: las columnas visibles suman ${visibles} px (caja de 704)`);
+  assert.match(pag, /id: 'cliente'[^\n]*ocultaPorDefecto: true/);
+  assert.match(pag, /id: 'tipo'[^\n]*ocultaPorDefecto: true/);
+  // «Solo vencidos» = semaforo=vencidos: UNA sola función para el botón, la tarjeta y la franja (R5, RP92).
+  assert.match(pag, /const alFiltrarSemaforo = \(f: FiltroSemaforo\) => despachar\(accionSemaforoCompras\(estado, f, opcionesEstadosPec\)\);/);
+  assert.match(pag, /const alternarVencidos = \(\) => alFiltrarSemaforo\(filtroSemaforo === 'atrasados' \? 'todos' : 'atrasados'\);/);
+  assert.match(pag, /onClick=\{alternarVencidos\} aria-pressed=\{filtroSemaforo === 'atrasados'\}|aria-pressed=\{filtroSemaforo === 'atrasados'\}/, 'el botón «Solo vencidos»');
+  assert.match(pag, /<TarjetaKpi kpi="pec_vencidos"[^>]*onClick=\{alternarVencidos\}/, 'la tarjeta pec_vencidos es el mismo filtro');
+  assert.match(pag, /onFiltrar: alFiltrarSemaforo/, 'y «Con atraso» de la franja');
+  assert.match(pag, /filtroSemaforoCompras\(estado\)/, 'el filtro sale del estado único');
+  // La franja (FLUJO-compras punto 8): «Estás aquí» en En tránsito, sin «No resueltos» y con el aviso de recepciones.
+  assert.match(pag, /pasos=\{pasosPantallaCompras\(flujo\.datos, 'TRANSITO'\)\}/);
+  assert.match(pag, /avisos=\{avisosFlujoCompras\(flujo\.datos\)\}/);
+  assert.ok(!/noResueltos/.test(pag), 'Compras no tiene «No resueltos»');
+  assert.ok(!/ALERTA DE RETRASO/.test(pag), 'el aviso rojo pasó a la franja');
+  // Las tarjetas (KPI-compras punto 7): las de /compras/stats y el avance de la página (RP95); nunca 0 mientras cargan.
+  for (const kpi of ['pec_activos', 'pec_vencidos', 'pec_avance', 'pec_monto_por_recibir']) assert.match(pag, new RegExp(`<TarjetaKpi kpi="${kpi}"`), kpi);
+  assert.match(pag, /tarjetasTransito\(stats\?\.datos \?\? null, avance\)/);
+  assert.match(pag, /avancePromedioTransito\(filasVisibles\)/, 'el avance es de las filas que se ven');
+  assert.match(pag, /const estadoAvance = errorLista \? 'error' : filasVisibles === null \? 'cargando' : undefined;/);
+  // El tablero (KANBAN-logistica punto 2; R11, C4): modo cliente con las etapas de la configuración y la regla de soltar.
+  const tablero = /useTableroKanban<FilaTransito>\(\{([\s\S]*?)\n {2}\}\);/.exec(pag)?.[1] ?? '';
+  for (const parte of [/pantalla: ID_TRANSITO/, /modo: 'cliente'/, /columnas: columnasTablero/, /activo: listo && enKanban\b/, /items: itemsTablero/,
+    /columnaDe: columnaTransito/, /porColumna: estado\.tamano/]) {
+    assert.match(tablero, parte, `useTableroKanban lleva ${parte}`);
+  }
+  assert.match(pag, /columnasDeEtapas\(config\?\.datos \?\? null, \{ pedidos: completa\.filas \}\)/, 'las columnas salen de tracking-config y de los pedidos');
+  assert.match(pag, /\(completa\.cargandoInicial \|\| cargandoConfig \? null : completa\.filas\)/, 'mientras cargan, items null (nunca un tablero vacío)');
+  assert.match(pag, /reglaSoltarTransito\(p, origen, destino, \{ columnas: columnasTablero \}\)/);
+  assert.match(pag, /regla=\{reglaTablero\}/);
+  assert.match(pag, /onCambio=\{cambiarDesdeTablero\}/);
+  assert.match(pag, /\(completa\.total \?\? 0\) > TOPE_TABLERO/, 'el aviso de los 200 solo si total > 200');
+  assert.match(pag, /Se muestran los 200 más recientes de/);
+  assert.match(pag, /Reintentar/, 'si falla tracking-config, el tablero ofrece Reintentar');
+  // Los diálogos nativos no existen (RP30) y el PATCH es el de /tracking.
+  assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(pag.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')), 'sin diálogos nativos');
+  assert.match(pag, /apiFetch\(`\/compras\/pedidos\/\$\{p\.id\}\/tracking`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ stage, status, user_name: autorActual\(\) \}\)/);
+  assert.match(pag, /avisarError\(err, `No se pudo actualizar \$\{p\.numero\}`\)/, 'updateTracking ya no se traga el error');
+
+  // Lo que HACE arrastrar (cambiarDesdeTablero): completa la etapa que manda la regla; si falla, recarga con la regla única
+  // recargarTrasError y relanza el error para que el tablero devuelva la tarjeta y avise.
+  const correr = async ({ cuerpo, falla }) => {
+    const llamadas = [];
+    const entorno = {
+      aplicarEtapa: async (p, stage, status) => {
+        llamadas.push(`PATCH ${p.id} ${stage} ${status}`);
+        if (falla) throw Object.assign(new Error('La etapa ya estaba completada.'), { status: falla });
+      },
+      recargarTrasError: (err) => err.status === 409,
+      recargarTodo: () => llamadas.push('recargar'),
+    };
+    let error = null;
+    try { await funcionEjecutable(pag, 'async function cambiarDesdeTablero(')(entorno)({ id: 4 }, { cuerpo }); } catch (err) { error = err; }
+    return { llamadas, error };
+  };
+  assert.deepEqual((await correr({ cuerpo: { stage: 'PROVEEDOR_CASILLERO' } })).llamadas, ['PATCH 4 PROVEEDOR_CASILLERO COMPLETADO', 'recargar'], 'completa la etapa y recarga');
+  const conflicto = await correr({ cuerpo: { stage: 'X' }, falla: 409 });
+  assert.deepEqual(conflicto.llamadas, ['PATCH 4 X COMPLETADO', 'recargar'], 'un 409 recarga');
+  assert.equal(conflicto.error?.status, 409, 'y el error sigue (el tablero devuelve la tarjeta y avisa)');
+  const otro = await correr({ cuerpo: { stage: 'X' }, falla: 500 });
+  assert.deepEqual(otro.llamadas, ['PATCH 4 X COMPLETADO'], 'un 500 no recarga');
+  assert.equal(otro.error?.status, 500);
+  const sinEtapa = await correr({ cuerpo: undefined });
+  assert.deepEqual(sinEtapa.llamadas, [], 'sin etapa no se manda nada');
+  assert.ok(sinEtapa.error instanceof Error);
+}
+
 console.log('\nOK: test_estados_compras.mjs');

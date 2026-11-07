@@ -8,6 +8,8 @@
 import assert from 'node:assert/strict';
 import { columnasDeEtapas, etapaActual, columnaTransito, reglaSoltarTransito } from '../src/lib/transito.js';
 import { mapaDestinos } from '../src/lib/kanban.js';
+// B4 T16A: lo nuevo de la pantalla por el espacio de nombres (su falta no tapa los demás rojos).
+import * as tr from '../src/lib/transito.js';
 
 // La configuración por defecto (DEFAULT_TRACKING_STAGES de backend/app/api/v1/erp_compras.py).
 const CONFIG = {
@@ -106,6 +108,98 @@ console.log('--- TEST 3: reglaSoltarTransito: solo la etapa siguiente ---');
       mapaDestinos(p, columnaTransito(p), COLUMNAS, (x, o, d) => reglaSoltarTransito(x, o, d, { columnas: COLUMNAS }));
     }
   }
+}
+
+// ─── B4 T16A: la pantalla de Tránsito (TABLA-compras punto 8, KANBAN-logistica punto 2, KPI-compras punto 7) ───────
+
+/** Las etapas de un PEC con estados a la medida: ['COMPLETADO', 'EN_PROCESO'…] en el orden de su envío. */
+function conEstados(tipo, estados, extra = {}) {
+  const etapas = CONFIG[tipo].map((s, i) => ({ stage: s.key, label: s.label, status: estados[i] ?? 'PENDIENTE' }));
+  return {
+    id: 5, numero: 'PEC-5', tipo_envio: tipo, estado: 'EN_TRANSITO', supplier_name: 'Acme', ven_numero: 'PVEN-9',
+    total_cop: 1500000, fecha_entrega_estimada: '2026-11-10T00:00:00', is_overdue: false, tracking_stages: etapas, ...extra,
+  };
+}
+
+console.log('--- TEST 7 (B4 T16A): accionEtapaTransito, el botón de la fila y de la tarjeta (Iniciar o Completar la etapa actual) ---');
+{
+  assert.equal(typeof tr.accionEtapaTransito, 'function', 'accionEtapaTransito existe');
+  // La etapa actual sin empezar: «Iniciar» (EN_PROCESO); en curso: «Completar» (COMPLETADO).
+  assert.deepEqual(tr.accionEtapaTransito(conEstados('casillero', [])),
+    { stage: 'PENDIENTE_DESPACHO', status: 'EN_PROCESO', texto: 'Iniciar' });
+  assert.deepEqual(tr.accionEtapaTransito(conEstados('casillero', ['COMPLETADO', 'EN_PROCESO'])),
+    { stage: 'PROVEEDOR_CASILLERO', status: 'COMPLETADO', texto: 'Completar' });
+  assert.deepEqual(tr.accionEtapaTransito(conEstados('directo', ['COMPLETADO', 'COMPLETADO', 'PENDIENTE'])),
+    { stage: 'RECIBIDO', status: 'EN_PROCESO', texto: 'Iniciar' }, 'Recibido se inicia y se completa con el botón');
+  // Todas completadas, sin etapas o una etapa cancelada: ninguna acción.
+  assert.equal(tr.accionEtapaTransito(conEstados('directo', ['COMPLETADO', 'COMPLETADO', 'COMPLETADO'])), null);
+  assert.equal(tr.accionEtapaTransito({ id: 1, tracking_stages: [] }), null);
+  assert.equal(tr.accionEtapaTransito(null), null);
+  assert.equal(tr.accionEtapaTransito(conEstados('casillero', ['COMPLETADO', 'CANCELADO'])), null, 'una etapa cancelada no se inicia');
+  // Es la etapa que el tablero tiene como columna (la misma regla que columnaTransito).
+  const p = conEstados('casillero', ['COMPLETADO']);
+  assert.equal(tr.accionEtapaTransito(p).stage, columnaTransito(p));
+}
+
+console.log('--- TEST 8 (B4 T16A): avanceTransito y avancePromedioTransito («n de m» y la tarjeta Avance promedio) ---');
+{
+  assert.equal(typeof tr.avanceTransito, 'function');
+  assert.deepEqual(tr.avanceTransito(conEstados('casillero', ['COMPLETADO', 'COMPLETADO', 'EN_PROCESO'])), { hechas: 2, total: 4, texto: '2 de 4' });
+  assert.deepEqual(tr.avanceTransito(conEstados('directo', [])), { hechas: 0, total: 3, texto: '0 de 3' });
+  assert.deepEqual(tr.avanceTransito({ tracking_stages: [] }), { hechas: 0, total: 0, texto: 'Sin etapas' });
+  assert.deepEqual(tr.avanceTransito(null), { hechas: 0, total: 0, texto: 'Sin etapas' });
+  assert.equal(typeof tr.avancePromedioTransito, 'function');
+  // El promedio de etapas completadas sobre el promedio de etapas, de las filas dadas (la página, RP95); coma decimal.
+  const filas = [conEstados('casillero', ['COMPLETADO', 'COMPLETADO']), conEstados('directo', ['COMPLETADO']), conEstados('directo', [])];
+  assert.equal(tr.avancePromedioTransito(filas), '1/3', '3 hechas entre 3 pedidos y 10 etapas entre 3');
+  assert.equal(tr.avancePromedioTransito([conEstados('casillero', ['COMPLETADO', 'COMPLETADO', 'COMPLETADO'])]), '3/4');
+  assert.equal(tr.avancePromedioTransito([conEstados('casillero', ['COMPLETADO']), conEstados('casillero', ['COMPLETADO', 'COMPLETADO'])]), '1,5/4');
+  // Sin filas (o lo que no es un arreglo): null, nunca «0/-».
+  for (const v of [[], null, undefined, 'x']) assert.equal(tr.avancePromedioTransito(v), null, String(v));
+}
+
+console.log('--- TEST 9 (B4 T16A): textoEntregaTransito, «Entrega en N días» y «Vencido hace N días» (RP40: día de calendario) ---');
+{
+  assert.equal(typeof tr.textoEntregaTransito, 'function');
+  const hoy = '2026-11-07';
+  const t = (fecha, vencido) => tr.textoEntregaTransito({ fecha_entrega_estimada: fecha, is_overdue: vencido }, hoy);
+  assert.equal(t('2026-11-10T00:00:00', false), 'Entrega en 3 días');
+  assert.equal(t('2026-11-08T05:00:00', false), 'Entrega en 1 día');
+  assert.equal(t('2026-11-07T00:00:00', false), 'Entrega hoy', 'una entrega guardada hoy a las 00:00 no está vencida hoy');
+  assert.equal(t('2026-11-04', true), 'Vencido hace 3 días');
+  assert.equal(t('2026-11-06T23:59:59', true), 'Vencido hace 1 día');
+  // «Vencido» lo manda el servidor (is_overdue): una fecha pasada sin la marca no se pinta vencida (un PEC en bodega nunca lo es).
+  assert.equal(t('2026-11-04', false), 'Debía llegar hace 3 días', 'pasada y sin marca del servidor: se dice sin alarma');
+  // Sin fecha, o una que no es un día: null.
+  for (const f of [null, undefined, '', 'x', '2026-13-45']) assert.equal(t(f, false), null, String(f));
+}
+
+console.log('--- TEST 10 (B4 T16A): tarjetaTransito, la tarjeta del tablero de etapas (chips, tiempo y botón) ---');
+{
+  assert.equal(typeof tr.tarjetaTransito, 'function');
+  const hoy = '2026-11-07';
+  const normal = tr.tarjetaTransito(conEstados('casillero', ['COMPLETADO', 'EN_PROCESO']), { hoy });
+  assert.equal(normal.numero, 'PEC-5');
+  assert.equal(normal.tipo, 'PEC');
+  assert.equal(normal.titulo, 'Acme');
+  assert.equal(normal.subtitulo, 'PVEN-9');
+  assert.equal(normal.monto, 1500000);
+  assert.deepEqual(normal.chips, [{ texto: 'Casillero', tono: 'slate' }], 'el tipo de envío en un chip');
+  assert.equal(normal.tiempo, 'Entrega en 3 días');
+  assert.equal(normal.atrasada, false);
+  assert.deepEqual(normal.accionPrincipal, { texto: 'Completar', tono: 'emerald' });
+  assert.equal(normal.estado.label, 'En tránsito');
+  // Vencido (del servidor) + directo + sin iniciar: 'Vencido' primero, luego 'Directo'; el botón es Iniciar.
+  const vencida = tr.tarjetaTransito(conEstados('directo', [], { is_overdue: true, fecha_entrega_estimada: '2026-11-04' }), { hoy });
+  assert.deepEqual(vencida.chips, [{ texto: 'Vencido', tono: 'rose' }, { texto: 'Directo', tono: 'slate' }]);
+  assert.equal(vencida.tiempo, 'Vencido hace 3 días');
+  assert.equal(vencida.atrasada, true);
+  assert.deepEqual(vencida.accionPrincipal, { texto: 'Iniciar', tono: 'slate' });
+  // Todas las etapas completadas: sin botón. Sin tipo_envio es por casillero (como el servidor). Sin proveedor, 'Sin proveedor'.
+  const hecha = tr.tarjetaTransito(conEstados('directo', ['COMPLETADO', 'COMPLETADO', 'COMPLETADO'], { tipo_envio: null, supplier_name: ' ' }), { hoy });
+  assert.equal(hecha.accionPrincipal, null);
+  assert.equal(hecha.titulo, 'Sin proveedor');
+  assert.equal(hecha.chips[0].texto, 'Casillero');
 }
 
 console.log('OK test_transito');

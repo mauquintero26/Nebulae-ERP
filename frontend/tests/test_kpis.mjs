@@ -593,4 +593,42 @@ console.log('--- TEST 17 (B4 T15, KPI-compras punto 6): tarjetasPedidosCompra co
   assert.equal(etiquetaKpi('pec_monto'), 'Monto en compras');
 }
 
+console.log('--- TEST 18 (B4 T16A, KPI-compras puntos 7 y 8): tarjetasTransito y tarjetasRecepciones con lo de GET /compras/stats ---');
+{
+  const transito = kpisLib.tarjetasTransito;
+  assert.equal(typeof transito, 'function', 'tarjetasTransito existe');
+  const stats = { activos: 9, vencidos: 3, monto_por_recibir_cop: 12500000, en_transito: 4 };
+  // Tránsito: activos (con su ayuda), vencidos (en alerta), el avance promedio de la página (RP95) y el monto por recibir.
+  assert.deepEqual(transito(stats, '2,5/4'), {
+    activos: { valor: 9, ayuda: 'En seguimiento de entrega' },
+    vencidos: { valor: 3, tono: 'alerta' },
+    avance: { valor: '2,5/4', ayuda: 'Promedio de esta página' },
+    monto_por_recibir: { valor: 12500000 },
+  });
+  assert.deepEqual(transito({ ...stats, vencidos: 0 }, null).vencidos, { valor: 0, tono: 'normal' });
+  assert.equal(transito(stats, null).avance.valor, null, 'sin página todavía, la barra gris (nunca 0/-)');
+  // Sin datos del servidor o con basura: null en cada número (Contador pinta la barra o «—»), nunca 0; el avance es de la página.
+  for (const malo of [null, undefined, 'x', [1]]) {
+    assert.deepEqual(transito(malo, '1/3'), {
+      activos: { valor: null, ayuda: 'En seguimiento de entrega' }, vencidos: { valor: null, tono: 'normal' },
+      avance: { valor: '1/3', ayuda: 'Promedio de esta página' }, monto_por_recibir: { valor: null },
+    }, String(malo));
+  }
+  assert.deepEqual(transito({ activos: '5', vencidos: 'x', monto_por_recibir_cop: '35000' }, null).monto_por_recibir, { valor: 35000 });
+  // Recepciones: por confirmar y confirmadas (del bloque recepciones) y los PEC en tránsito.
+  const recepciones = kpisLib.tarjetasRecepciones;
+  assert.equal(typeof recepciones, 'function', 'tarjetasRecepciones existe');
+  assert.deepEqual(recepciones({ en_transito: 4, recepciones: { por_confirmar: 6, confirmadas: 21, canceladas: 1, total: 28 } }), {
+    por_confirmar: { valor: 6 }, confirmadas: { valor: 21 }, en_transito: { valor: 4 },
+  });
+  assert.deepEqual(recepciones({ en_transito: 'x' }), { por_confirmar: { valor: null }, confirmadas: { valor: null }, en_transito: { valor: null } });
+  assert.equal(recepciones(null), null);
+  assert.equal(recepciones('x'), null);
+  // La nota que reemplaza a la tarjeta «Regla de Separación» (KPI-compras punto 8).
+  assert.equal(kpisLib.NOTA_RECEPCIONES, 'La recepción física suma stock; la recepción logística solo registra el evento.');
+  for (const id of ['pec_activos', 'pec_vencidos', 'pec_avance', 'pec_monto_por_recibir', 'rec_por_confirmar', 'rec_confirmadas', 'pec_en_transito']) {
+    assert.ok(CATALOGO_KPI[id], id);
+  }
+}
+
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

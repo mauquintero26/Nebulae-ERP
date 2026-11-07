@@ -447,3 +447,19 @@ export function avisoTarjetaEtapa(stage, hoy = diaColombia()) {
   const dias = textoDiasEtapa(stage.eta, hoy);
   return dias ? { ...dias, fuente: 'dias' } : null;
 }
+
+// ─── Tránsito y Recepciones (B4 T16A: FLUJO-compras puntos 8 y 9; R9, D36, D42) ────────
+
+/**
+ * Los pasos de la franja de Mercancía en tránsito (actual 'TRANSITO') y de Recepciones (actual 'RECEPCION'):
+ * pasosConConteos de PASOS_FLUJO_COMPRAS con los conteos de GET /compras/flujo (conteosDePasos; sin datos, en null: la barra
+ * gris, nunca 0) y «Estás aquí» en la caja de la pantalla (sin href, D42). Las demás cajas son enlaces a su pantalla (su
+ * `ruta`: la de Recibido abre Pedidos de compra en su pestaña, RP21).
+ * @param {any} datos  res.data de /compras/flujo (null mientras carga)
+ * @param {'TRANSITO' | 'RECEPCION'} actual
+ * @returns {PasoVista[]}
+ */
+export function pasosPantallaCompras(datos, actual) {
+  const pasos = pasosConConteos(PASOS_FLUJO_COMPRAS, conteosDePasos(datos), { actual, cargando: !datos });
+  return pasos.map((p) => (!p.esEste && p.ruta ? { ...p, href: p.ruta } : p));
+}

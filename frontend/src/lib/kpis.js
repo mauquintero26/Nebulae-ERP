@@ -612,3 +612,49 @@ export function tarjetasPedidosCompra(datos) {
     },
   };
 }
+
+/**
+ * B4 T16A (KPI-compras punto 7): lo que pintan las 4 tarjetas de Mercancía en tránsito. Los números son de GET
+ * /compras/stats?periodo=30d (todos los PEC) y el avance es de la página que se ve (RP95; lo arma avancePromedioTransito
+ * de transito.js, que esta librería no importa para no cerrar un ciclo):
+ *  - activos (pec_activos): el número y la ayuda 'En seguimiento de entrega';
+ *  - vencidos (pec_vencidos): el número, en tono alerta si hay alguno;
+ *  - avance (pec_avance): el texto '2,5/4' y la ayuda 'Promedio de esta página';
+ *  - monto_por_recibir (pec_monto_por_recibir): monto_por_recibir_cop.
+ * Cada número pasa por numeroFinito (lo que no es un número queda en null y Contador pinta la barra o «—», nunca 0); sin
+ * `datos` (cargando o con error) los números van en null, pero el avance sigue siendo el de la página.
+ * @param {any} datos
+ * @param {string | null | undefined} avance
+ * @returns {{activos: {valor: number | null, ayuda: string}, vencidos: {valor: number | null, tono: 'alerta' | 'normal'},
+ *   avance: {valor: string | null, ayuda: string}, monto_por_recibir: {valor: number | null}}}
+ */
+export function tarjetasTransito(datos, avance) {
+  const d = datos !== null && typeof datos === 'object' && !Array.isArray(datos) ? datos : {};
+  const vencidos = numeroFinito(d.vencidos);
+  return {
+    activos: { valor: numeroFinito(d.activos), ayuda: 'En seguimiento de entrega' },
+    vencidos: { valor: vencidos, tono: vencidos !== null && vencidos > 0 ? 'alerta' : 'normal' },
+    avance: { valor: typeof avance === 'string' && avance ? avance : null, ayuda: 'Promedio de esta página' },
+    monto_por_recibir: { valor: numeroFinito(d.monto_por_recibir_cop) },
+  };
+}
+
+/**
+ * B4 T16A (KPI-compras punto 8): lo que pintan las 3 tarjetas de Recepciones con `data` de GET /compras/stats: por
+ * confirmar y confirmadas (data.recepciones, T12) y los PEC en tránsito (data.en_transito). Cada número pasa por
+ * numeroFinito. Sin datos (cargando o con error), null.
+ * @param {any} datos
+ * @returns {{por_confirmar: {valor: number | null}, confirmadas: {valor: number | null}, en_transito: {valor: number | null}} | null}
+ */
+export function tarjetasRecepciones(datos) {
+  if (datos === null || typeof datos !== 'object' || Array.isArray(datos)) return null;
+  const rec = datos.recepciones !== null && typeof datos.recepciones === 'object' ? datos.recepciones : {};
+  return {
+    por_confirmar: { valor: numeroFinito(rec.por_confirmar) },
+    confirmadas: { valor: numeroFinito(rec.confirmadas) },
+    en_transito: { valor: numeroFinito(datos.en_transito) },
+  };
+}
+
+/** B4 T16A (KPI-compras punto 8): la nota corta bajo las tarjetas de Recepciones; reemplaza la tarjeta «Regla de Separación». */
+export const NOTA_RECEPCIONES = 'La recepción física suma stock; la recepción logística solo registra el evento.';

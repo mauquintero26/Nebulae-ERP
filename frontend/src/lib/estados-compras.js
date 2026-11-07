@@ -682,6 +682,121 @@ export const COLUMNAS_RECEPCION = congelar([
   columna('canceladas', 'Canceladas', 'rose', GRUPOS_RECEPCION.canceladas, true),
 ]);
 
+// ─── Recepciones: la lista y el tablero solo para ver (B4 T16A: TABLA-compras punto 9, KANBAN-logistica punto 5) ────
+
+/**
+ * Las vistas de GET /compras/recepciones (RP41): las claves de GRUPOS_RECEPCION y 'todas' (los cuatro estados). Las
+ * pestañas Por confirmar · Confirmadas · Canceladas · Todas. Inmutable.
+ * @type {Readonly<Record<'por_confirmar' | 'confirmadas' | 'canceladas' | 'todas', ReadonlyArray<string>>>}
+ */
+export const VISTAS_RECEPCION = congelar({
+  ...GRUPOS_RECEPCION,
+  todas: Object.values(GRUPOS_RECEPCION).flat(),
+});
+
+/**
+ * La insignia de un estado de recepción (ESTADOS_RECEPCION); uno desconocido sale humanizado en gris, nunca el código.
+ * @param {unknown} e
+ * @returns {Readonly<InfoEstado>}
+ */
+export function infoEstadoRecepcion(e) {
+  return infoDe(ESTADOS_RECEPCION, e);
+}
+
+const OPCION_DE_RECEPCION = congelar(Object.fromEntries(
+  Object.entries(ESTADOS_RECEPCION).map(([valor, info]) => [valor, { valor, etiqueta: info.label }]),
+));
+const OPCIONES_DE_VISTA_RECEPCION = congelar(Object.fromEntries(
+  Object.entries(VISTAS_RECEPCION).map(([vista, estados]) => [vista, congelar(estados.map((e) => OPCION_DE_RECEPCION[e]))]),
+));
+
+/**
+ * «Filtrar estado» de la lista de Recepciones: los estados de la pestaña `vista` con su etiqueta; sin pestaña, o una que
+ * no existe, los 4. La misma referencia para la misma vista. Inmutable.
+ * @param {unknown} vista
+ * @returns {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
+ */
+export function opcionesEstadosRecepcion(vista) {
+  return typeof vista === 'string' && tiene(OPCIONES_DE_VISTA_RECEPCION, vista)
+    ? OPCIONES_DE_VISTA_RECEPCION[vista]
+    : OPCIONES_DE_VISTA_RECEPCION.todas;
+}
+
+/**
+ * «Filtrar estado» en el tablero de Recepciones: una opción por columna, con su estado principal y el título de la
+ * columna (estadosDeColumnaLista la convierte en la columna entera). Inmutable.
+ * @type {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
+ */
+export const OPCIONES_ESTADOS_TABLERO_RECEPCION = congelar(COLUMNAS_RECEPCION.map((c) => ({ valor: c.estados[0], etiqueta: c.titulo })));
+
+/**
+ * La consulta de una columna del tablero de Recepciones en modo servidor (la query de GET /compras/recepciones): SIN vista,
+ * paso ni semáforo (Recepciones no tiene), los estados de la columna cruzados con el filtro de la pantalla
+ * (estadosDeColumnaLista), la búsqueda del MISMO estado, y el orden, el límite y el desplazamiento de la columna (el
+ * límite 0 de una plegada lo pone el hook). Sin estados en común, null: la columna queda vacía sin pedir.
+ * @param {import('./tabla.js').EstadoTabla | null | undefined} estado
+ * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
+ * @param {{orden?: string | null, limit?: number, offset?: number}} consulta
+ * @returns {string | null}
+ */
+export function consultaColumnaRecepcion(estado, columna, { orden, limit, offset }) {
+  const estados = estadosDeColumnaLista(columna, estado?.estados);
+  if (estados.length === 0) return null;
+  return queryListado(estado, { vista: null, semaforo: null, paso: null, estados, orden, limit, offset });
+}
+
+/**
+ * La tarjeta de una recepción en el tablero solo para ver (la forma de DatosTarjetaKanban): el número (sin él, ENINV-id),
+ * el proveedor (o 'Sin proveedor'), el PEC de origen (o 'Entrada manual'), la insignia del estado, el chip «Retraso N
+ * días» (dias_retraso de _gr_dict, solo si es mayor que 0), la bodega y el día (fecha de recepción o de creación) y, en
+ * «Por contar», la acción «Contar y confirmar» hacia el conteo.
+ * @param {any} r
+ * @returns {{numero: string, tipo: 'ENINV', titulo: string, subtitulo: string, monto: null, estado: Readonly<InfoEstado>,
+ *   chips: {texto: string, tono: string}[], tiempo: string, atrasada: boolean,
+ *   accionPrincipal: {texto: string, href: string, tono: string} | null}}
+ */
+export function tarjetaRecepcion(r) {
+  const retraso = numeroFinito(r?.dias_retraso);
+  const atrasada = retraso !== null && retraso > 0;
+  const dia = fechaCorta(r?.fecha_recepcion || r?.created_at);
+  const bodega = textoLimpio(r?.warehouse_name) ?? 'Sin bodega';
+  const porContar = grupoRecepcion(typeof r?.estado === 'string' ? r.estado.trim() : r?.estado) === 'por_confirmar';
+  return {
+    numero: textoLimpio(r?.numero) ?? `ENINV-${r?.id ?? ''}`,
+    tipo: 'ENINV',
+    titulo: textoLimpio(r?.supplier_name) ?? textoLimpio(r?.proveedor_nombre) ?? 'Sin proveedor',
+    subtitulo: textoLimpio(r?.pec_numero) ?? (r?.pec_id ? `PEC-${r.pec_id}` : 'Entrada manual'),
+    monto: null,
+    estado: infoEstadoRecepcion(r?.estado),
+    chips: atrasada ? [{ texto: `Retraso ${retraso} ${retraso === 1 ? 'día' : 'días'}`, tono: 'rose' }] : [],
+    tiempo: dia ? `${bodega} · ${dia}` : bodega,
+    atrasada,
+    accionPrincipal: porContar && r?.id != null
+      ? { texto: 'Contar y confirmar', href: `/dashboard/compras/recepciones/${r.id}`, tono: 'teal' }
+      : null,
+  };
+}
+
+/**
+ * Lo que dice la tabla de Recepciones cuando no hay filas, según lo que la deja vacía: un filtro de estados, una
+ * búsqueda o la pestaña (por confirmar, confirmadas, canceladas o cualquier otra).
+ * @param {Partial<import('./tabla.js').EstadoTabla> | null | undefined} estado
+ * @returns {{titulo: string, ayuda: string | null}}
+ */
+export function textoVacioRecepciones(estado) {
+  if (Array.isArray(estado?.estados) && estado.estados.length > 0) {
+    return { titulo: 'Ninguna recepción con esos estados. Ajusta el filtro.', ayuda: null };
+  }
+  const q = typeof estado?.q === 'string' ? estado.q.trim() : '';
+  if (q) return { titulo: `Sin resultados para «${q}»`, ayuda: 'Ajusta la búsqueda o el filtro de estados.' };
+  if (estado?.vista === 'por_confirmar') {
+    return { titulo: 'No hay recepciones por confirmar', ayuda: 'Las nuevas aparecen aquí hasta que se cuentan y se confirman.' };
+  }
+  if (estado?.vista === 'confirmadas') return { titulo: 'Aún no hay recepciones confirmadas', ayuda: null };
+  if (estado?.vista === 'canceladas') return { titulo: 'No hay recepciones canceladas', ayuda: null };
+  return { titulo: 'No hay recepciones en esta vista', ayuda: 'Usa «Recepcionar PEC» para iniciar la entrada física de un pedido.' };
+}
+
 // ─── Ítems de la lista de compras ───────────────────────────────────────────────
 
 /**
