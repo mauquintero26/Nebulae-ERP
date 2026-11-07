@@ -41,6 +41,7 @@ const RAICES = [
   'src/app/pedido',
   'src/components/ui', 'src/components/tabla', 'src/components/flujo', 'src/components/analisis', // B4 T4A (RP30): piezas comunes del Bloque 4
   'src/app/dashboard/compras/page.tsx', // B4 T14 (RP30): el Hub de Compras, sin sus dos confirm()
+  'src/app/dashboard/compras/pedidos/page.tsx', // B4 T15 (RP30): Pedidos de compra, sin sus 5 confirm() ni sus 2 alert()
 ];
 
 // alert( / confirm( / prompt(, sueltos o con window. / window?. / globalThis. / self. delante, que no sean parte de

@@ -17,9 +17,9 @@
 
 import { congelar, conteosDePasos, pasosConConteos } from './flujo.js';
 import { humanizarCodigo, tiene } from './estados-pedido.js';
-import { fechaLarga } from './fechas-colombia.js';
+import { diaColombia, fechaLarga } from './fechas-colombia.js';
 import { formatoEntero } from './kpis.js';
-import { GRUPOS_PEC, vistaPuedeVencer } from './estados-compras.js';
+import { GRUPOS_PEC, diaPec, vistaPuedeVencer } from './estados-compras.js';
 // B4 T14 r1 (m1; D41, D42): las cajas y «Con atraso» cambian la vista con accionPestana, como el Hub de Ventas.
 import { accionPestana, opcionesDeVista } from './tabla.js';
 
@@ -271,18 +271,22 @@ const SEMAFORO_VENCIDOS = 'vencidos';
  * la poda usa las opciones de Todos que pueden vencer (GRUPOS_PEC.vencibles; T8 r2b: no caer en una tabla vacía): el
  * filtro RECIBIDA y COMPLETADO de la caja Recibido se quita. En Kanban se poda con las opciones del tablero, y sin
  * opciones el filtro no se toca (cierre de T14).
+ * B4 T15 (aditivo): `extra.vistaTodos` es la pestaña «Todos» de la pantalla a la que se pasa ('vigentes' en Pedidos de
+ * compra, RP21); sin ella (el Hub), o si no es un texto con algo, 'todos', como antes.
  * @param {Partial<import('./tabla.js').EstadoTabla> | null | undefined} estado
  * @param {unknown} filtro  el FiltroSemaforo de BannerFlujo
  * @param {import('./tabla.js').OpcionesEstados | null | undefined} opciones  las del modo que se ve
+ * @param {{vistaTodos?: unknown} | null} [extra]
  * @returns {import('./tabla.js').AccionTabla}
  */
-export function accionSemaforoCompras(estado, filtro, opciones) {
+export function accionSemaforoCompras(estado, filtro, opciones, extra) {
   if (filtro !== 'atrasados') return { tipo: 'semaforo', valor: null };
   if (vistaPuedeVencer(estado?.vista)) return { tipo: 'semaforo', valor: SEMAFORO_VENCIDOS };
+  const vistaTodos = typeof extra?.vistaTodos === 'string' && extra.vistaTodos ? extra.vistaTodos : 'todos';
   const podar = estado?.modo === 'kanban' || opciones === null || opciones === undefined
     ? opciones
     : (/** @type {string | null} */ v) => opcionesDeVista(opciones, v).filter((o) => GRUPOS_PEC.vencibles.includes(o.valor));
-  const accion = accionPestana(/** @type {any} */ (estado), 'todos', podar);
+  const accion = accionPestana(/** @type {any} */ (estado), vistaTodos, podar);
   return /** @type {any} */ ({ tipo: 'cambiar', cambios: { ...comoCambios(accion), semaforo: SEMAFORO_VENCIDOS } });
 }
 
@@ -319,4 +323,91 @@ export function leerEnlaceHubCompras(search) {
   if (typeof search !== 'string' || !search) return { analisis: false };
   const tab = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search).get('tab');
   return { analisis: typeof tab === 'string' && tab.trim() === 'analisis' };
+}
+
+// ─── La lista de Pedidos de compra (B4 T15: FLUJO-compras punto 6; R9, R13, RP21, D42) ────────
+
+/**
+ * R13: «Ver análisis» de las listas de Compras (Pedidos de compra, Lista de compras y Traslados): la pestaña Análisis
+ * del Hub (la lee leerEnlaceHubCompras).
+ */
+export const ENLACE_VER_ANALISIS_COMPRAS = `${RUTA_HUB_COMPRAS}?tab=analisis`;
+
+/** RP21: las cajas de la franja que son una pestaña de Pedidos de compra (la clave de su vista de GET /compras/pedidos). */
+const VISTA_DE_PASO_PEDIDOS = congelar({ TRANSITO: 'en_transito', RECIBIDO: 'recibidos' });
+
+/** Las pestañas de Pedidos de compra (R9), con la clave de su vista: Todos es 'vigentes' (RP21). */
+const VISTAS_LISTA_PEDIDOS_COMPRA = congelar(['vigentes', 'activos', 'en_transito', 'recibidos', 'cancelados']);
+
+/**
+ * B4 T15 (RP21): la pestaña de Pedidos de compra que abre la caja `clave` de la franja: TRANSITO -> 'en_transito' y
+ * RECIBIDO -> 'recibidos' (están en la misma página). Otra clave: null.
+ * @param {unknown} clave
+ * @returns {'en_transito' | 'recibidos' | null}
+ */
+export function vistaDePasoPedidosCompra(clave) {
+  return typeof clave === 'string' && tiene(VISTA_DE_PASO_PEDIDOS, clave) ? /** @type {any} */ (VISTA_DE_PASO_PEDIDOS)[clave] : null;
+}
+
+/**
+ * B4 T15 (RP21): la pestaña que pide el enlace de Pedidos de compra (?tab=, del `location.search` que la pantalla lee en
+ * el navegador al montar): una de sus 5 vistas (vigentes, activos, en_transito, recibidos o cancelados), sin los espacios
+ * de los bordes. Un valor desconocido se ignora (null). El ?id del enlace profundo no se toca.
+ * @param {unknown} search
+ * @returns {string | null}
+ */
+export function leerEnlacePedidosCompra(search) {
+  if (typeof search !== 'string' || !search) return null;
+  const tab = (new URLSearchParams(search.startsWith('?') ? search.slice(1) : search).get('tab') ?? '').trim();
+  return VISTAS_LISTA_PEDIDOS_COMPRA.includes(tab) ? tab : null;
+}
+
+/**
+ * B4 T15 (FLUJO-compras punto 6; RP21, D36, D42): los pasos de la franja de Pedidos de compra: pasosConConteos de
+ * PASOS_FLUJO_COMPRAS con los conteos de GET /compras/flujo (conteosDePasos; sin datos, en null) y «Estás aquí» en Pedido
+ * de compra (actual 'PEC', sin href). En tránsito y Recibido están en esta misma página: sin href (la pantalla los
+ * despacha como su pestaña) y marcados (seleccionado) cuando `vista` es la suya. Lista de compras y Recepción en bodega
+ * llevan el href de su pantalla.
+ * @param {any} datos  res.data de /compras/flujo (null mientras carga)
+ * @param {string | null | undefined} vista  la pestaña que se ve (null en Kanban)
+ * @returns {PasoVista[]}
+ */
+export function pasosPedidosCompra(datos, vista) {
+  const pasos = pasosConConteos(PASOS_FLUJO_COMPRAS, conteosDePasos(datos), { actual: 'PEC', cargando: !datos });
+  return pasos.map((p) => {
+    if (p.esEste) return p;
+    const vistaDelPaso = vistaDePasoPedidosCompra(p.clave);
+    if (vistaDelPaso) return { ...p, seleccionado: vista === vistaDelPaso };
+    return p.ruta ? { ...p, href: p.ruta } : p;
+  });
+}
+
+const MS_DIA = 24 * 60 * 60 * 1000;
+/** Los milisegundos UTC de un 'AAAA-MM-DD' (para restar días de calendario sin zonas ni horas de verano). */
+const msDelDia = (dia) => {
+  const [anio, mes, d] = dia.split('-').map(Number);
+  return Date.UTC(anio, mes - 1, d);
+};
+
+/**
+ * B4 T15 (resolución 4: un día de calendario contra diaColombia()): cuánto falta para la ETA de una etapa del envío,
+ * para su tarjeta del TrackingPanel. El día es el que se guarda (diaPec, RP40: los 10 primeros caracteres, sin pasarlo a
+ * Colombia) y se compara con `hoy` (por defecto, el día de Colombia):
+ *  - después de hoy: '1 día restante' / 'N días restantes', tono 'azul';
+ *  - hoy: 'Vence hoy', tono 'ambar';
+ *  - antes de hoy: '1 día de atraso' / 'N días de atraso', tono 'rojo'.
+ * Sin ETA, o con algo que no es un día (o un `hoy` que no lo es): null.
+ * @param {unknown} eta
+ * @param {string} [hoy]  'AAAA-MM-DD'
+ * @returns {{texto: string, tono: 'azul' | 'ambar' | 'rojo'} | null}
+ */
+export function textoDiasEtapa(eta, hoy = diaColombia()) {
+  const dia = diaPec(eta);
+  const base = diaPec(hoy);
+  if (!dia || !base) return null;
+  const dias = Math.round((msDelDia(dia) - msDelDia(base)) / MS_DIA);
+  if (dias === 0) return { texto: 'Vence hoy', tono: 'ambar' };
+  const n = Math.abs(dias);
+  if (dias > 0) return { texto: `${formatoEntero(n)} ${n === 1 ? 'día restante' : 'días restantes'}`, tono: 'azul' };
+  return { texto: `${formatoEntero(n)} ${n === 1 ? 'día de atraso' : 'días de atraso'}`, tono: 'rojo' };
 }

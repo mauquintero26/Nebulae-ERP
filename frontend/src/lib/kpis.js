@@ -584,3 +584,31 @@ export function tarjetasHubCompras(datos) {
     },
   };
 }
+
+/**
+ * B4 T15 (KPI-compras punto 6; R7, R12, RP92): lo que pintan las 4 tarjetas de Pedidos de compra con `data` de GET
+ * /compras/stats?periodo=30d (T12; todos los PEC, no la página):
+ *  - activos (pec_activos): el número;
+ *  - en_transito (pec_en_transito): el número;
+ *  - vencidos (pec_vencidos): el número, en tono alerta si hay alguno;
+ *  - monto (pec_monto): monto_cop (lo de los vigentes) con la ayuda '12 pedidos vigentes'.
+ * Sin datos (cargando o con error), null. Cada número pasa por numeroFinito (lo que no es un número queda en null y
+ * Contador pinta la barra o «—», nunca 0).
+ * @param {any} datos
+ * @returns {{activos: {valor: number | null}, en_transito: {valor: number | null},
+ *   vencidos: {valor: number | null, tono: 'alerta' | 'normal'}, monto: {valor: number | null, ayuda: string | null}} | null}
+ */
+export function tarjetasPedidosCompra(datos) {
+  if (datos === null || typeof datos !== 'object' || Array.isArray(datos)) return null;
+  const vencidos = numeroFinito(datos.vencidos);
+  const vigentes = numeroFinito(datos.vigentes);
+  return {
+    activos: { valor: numeroFinito(datos.activos) },
+    en_transito: { valor: numeroFinito(datos.en_transito) },
+    vencidos: { valor: vencidos, tono: vencidos !== null && vencidos > 0 ? 'alerta' : 'normal' },
+    monto: {
+      valor: numeroFinito(datos.monto_cop),
+      ayuda: vigentes === null ? null : `${formatoEntero(vigentes)} ${vigentes === 1 ? 'pedido vigente' : 'pedidos vigentes'}`,
+    },
+  };
+}

@@ -559,4 +559,36 @@ console.log('--- TEST 16 (B4 T14, KPI-compras punto 5): tarjetasHubCompras con l
   assert.equal(CATALOGO_KPI.pec_activos.etiqueta, 'Pedidos de compra activos');
 }
 
+console.log('--- TEST 17 (B4 T15, KPI-compras punto 6): tarjetasPedidosCompra con lo de GET /compras/stats ---');
+{
+  const tarjetas = kpisLib.tarjetasPedidosCompra;
+  assert.equal(typeof tarjetas, 'function', 'tarjetasPedidosCompra existe');
+  const stats = { activos: 7, en_transito: 2, vencidos: 3, vigentes: 12, monto_cop: 4927538, recibidos: 5 };
+  assert.deepEqual(tarjetas(stats), {
+    activos: { valor: 7 },
+    en_transito: { valor: 2 },
+    vencidos: { valor: 3, tono: 'alerta' },
+    monto: { valor: 4927538, ayuda: '12 pedidos vigentes' },
+  });
+  // Sin vencidos, la tarjeta no va en alerta; «1 pedido vigente» en singular; el punto de miles.
+  assert.deepEqual(tarjetas({ ...stats, vencidos: 0 }).vencidos, { valor: 0, tono: 'normal' });
+  assert.equal(tarjetas({ ...stats, vigentes: 1 }).monto.ayuda, '1 pedido vigente');
+  assert.equal(tarjetas({ ...stats, vigentes: 1234 }).monto.ayuda, '1.234 pedidos vigentes');
+  assert.equal(tarjetas({ ...stats, vigentes: 0 }).monto.ayuda, '0 pedidos vigentes');
+  // Sin datos (todavía cargan o falló): null; lo que no es un número queda en null (Contador pinta la barra o «—»), nunca 0.
+  assert.equal(tarjetas(null), null);
+  assert.equal(tarjetas('x'), null);
+  assert.equal(tarjetas([1, 2]), null);
+  assert.deepEqual(tarjetas({ activos: '7', en_transito: null, vencidos: 'x', vigentes: undefined, monto_cop: '35000' }), {
+    activos: { valor: 7 },
+    en_transito: { valor: null },
+    vencidos: { valor: null, tono: 'normal' },
+    monto: { valor: 35000, ayuda: null },
+  });
+  // Los ids existen en el catálogo (la única fuente de nombres) y «Con entrega vencida» es mejor si baja.
+  for (const id of ['pec_activos', 'pec_en_transito', 'pec_vencidos', 'pec_monto']) assert.ok(CATALOGO_KPI[id], id);
+  assert.equal(CATALOGO_KPI.pec_vencidos.mejorSiSube, false);
+  assert.equal(etiquetaKpi('pec_monto'), 'Monto en compras');
+}
+
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

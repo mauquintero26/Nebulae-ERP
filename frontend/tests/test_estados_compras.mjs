@@ -619,6 +619,40 @@ console.log('--- TEST 24 (B4 T14 r1: I1, m10, m15): cancelar en serie y lo que h
   assert.equal(sinErr.error.message, 'PEC-1: Sin conexión');
 }
 
+console.log('--- TEST 25 (B4 T15, KANBAN-compras punto 6): tarjetaPedidoCompra, la tarjeta del tablero de Pedidos de compra ---');
+{
+  assert.equal(typeof ec.tarjetaPedidoCompra, 'function', 'tarjetaPedidoCompra existe');
+  const base = {
+    id: 1, numero: 'PEC-1', estado: 'EMITIDO', supplier_name: 'ACME', ven_numero: 'PVEN-9', total_cop: 1000,
+    fecha_entrega_estimada: '2026-11-03T00:00:00', is_overdue: true,
+  };
+  // Lo de tarjetaPec (T14: número, proveedor, PVEN, monto, estado, «Entrega …» y el «Vencido» del servidor) y, fuera de
+  // la bodega, sin acción principal.
+  assert.deepEqual(ec.tarjetaPedidoCompra(base), { ...ec.tarjetaPec(base), accionPrincipal: null });
+  // En bodega (la columna de trabajo de la bodega): «Recepcionar» lleva a Recepciones, donde se elige el PEC que llegó.
+  const recepcionar = { texto: 'Recepcionar', href: '/dashboard/compras/recepciones', tono: 'teal' };
+  const llego = ec.tarjetaPedidoCompra({ ...base, estado: 'RECIBIDO', is_overdue: false });
+  assert.deepEqual(llego.chips, []);
+  assert.deepEqual(llego.accionPrincipal, recepcionar);
+  // Recibido en parte: además, el chip «Falta por recibir».
+  const parcial = ec.tarjetaPedidoCompra({ ...base, estado: 'PARCIALMENTE_RECIBIDA', is_overdue: false });
+  assert.deepEqual(parcial.chips, [{ texto: 'Falta por recibir', tono: 'amber' }]);
+  assert.deepEqual(parcial.accionPrincipal, recepcionar);
+  assert.equal(parcial.estado.label, 'Recibido en parte');
+  // El chip «Vencido» sigue siendo el del servidor (nunca se recalcula) y va primero.
+  const raro = ec.tarjetaPedidoCompra({ ...base, estado: 'PARCIALMENTE_RECIBIDA', is_overdue: true });
+  assert.deepEqual(raro.chips.map((c) => c.texto), ['Vencido', 'Falta por recibir']);
+  // Recibido, cancelado, borrador o en tránsito: sin «Recepcionar».
+  for (const estado of ['RECIBIDA', 'COMPLETADO', 'CANCELADO', 'BORRADOR', 'EN_TRANSITO', 'ALGO_NUEVO']) {
+    assert.equal(ec.tarjetaPedidoCompra({ ...base, estado }).accionPrincipal, null, estado);
+  }
+  assert.deepEqual(ec.tarjetaPedidoCompra(null), { ...ec.tarjetaPec(null), accionPrincipal: null });
+  // Aditivo: la tarjeta del Hub (tarjetaPec) no cambia: sin acción principal ni el chip nuevo.
+  const hub = ec.tarjetaPec({ ...base, estado: 'PARCIALMENTE_RECIBIDA', is_overdue: false });
+  assert.ok(!('accionPrincipal' in hub));
+  assert.deepEqual(hub.chips, []);
+}
+
 console.log('--- TEST 23 (B4 T14): el Hub de Compras (compras/page.tsx) cablea las piezas y el servidor ---');
 {
   const hub = readFileSync(new URL('../src/app/dashboard/compras/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
@@ -695,6 +729,104 @@ console.log('--- TEST 23 (B4 T14): el Hub de Compras (compras/page.tsx) cablea l
   assert.match(hub, /\/ventas\/pedidos\?limit=200/);
   assert.match(hub, /Crear PEC Consolidado/);
   assert.match(hub, /Consolidado de PVEN: /);
+}
+
+console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) cablea las piezas y el servidor ---');
+{
+  const pag = readFileSync(new URL('../src/app/dashboard/compras/pedidos/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.ok(!/@ts-nocheck/.test(pag), 'la página se tipa');
+  // Carga del servidor (R5, C3, C4, D39, D40): el estado único, la lista con sus conteos, el tablero, la franja y las tarjetas.
+  assert.match(pag, /const ID_PEDIDOS = 'compras\.pedidos';/);
+  assert.match(pag, /const INICIAL_PEDIDOS = \{ vista: 'vigentes', orden: 'atencion' \};/, 'Todos = vigentes (RP21) y lo vencido primero (R8)');
+  assert.match(pag, /useEstadoTabla\(ID_PEDIDOS, INICIAL_PEDIDOS\)/);
+  assert.match(pag, /ruta: '\/compras\/pedidos', estado, conConteos: true, esperar: !listo, despachar,/);
+  assert.match(pag, /const EXTRA_TABLERO = \{ limit: 0 \};/, 'en Kanban la lista va sin filas (D39)');
+  assert.match(pag, /extra: enKanban \? EXTRA_TABLERO : extraDeLaLista/);
+  assert.match(pag, /const extraDeLaLista = useMemo\(\(\) => \(\{ orden: estado\.orden \|\| 'atencion' \}\), \[estado\.orden\]\);/,
+    'R8: sin orden (el tercer clic en un título) sigue lo vencido primero');
+  assert.match(pag, /consultaColumnaPec\(estado, columna, \{ orden, limit, offset \}\)/, 'la consulta de cada columna es la de la lib');
+  assert.match(pag, /pantalla: ID_PEDIDOS,\s*modo: 'servidor',\s*columnas: COLUMNAS_PEC,\s*activo: listo && enKanban,/);
+  assert.match(pag, /useResumenFlujo<DatosFlujo>\('\/compras\/flujo', recargaFlujo\)/);
+  assert.match(pag, /`\/compras\/stats\?periodo=\$\{PERIODO_KPI\}`/);
+  assert.ok(!/['"`]\/compras\/stats['"`]/.test(pag), 'ya no se pide /compras/stats sin período');
+  assert.ok(!/compras\/pedidos\?limit=200/.test(pag), 'ya no se cargan los 200 más recientes');
+  // La tabla (TABLA-compras punto 7; R26, D41): la estándar en el servidor, con sus 5 pestañas y la clave por id.
+  assert.match(pag, /<TablaEstandar\s+id=\{ID_PEDIDOS\}\s+modo="servidor"/);
+  for (const [id, etiqueta] of [['vigentes', 'Todos'], ['activos', 'Activos'], ['en_transito', 'En tránsito'], ['recibidos', 'Recibidos'],
+    ['cancelados', 'Cancelados']]) {
+    assert.match(pag, new RegExp(`\\{ id: '${id}', etiqueta: '${etiqueta}', conteo: conteos\\?\\.${id} \\?\\? null`), `pestaña ${etiqueta}`);
+  }
+  assert.ok(!/En Tr[aá]nsito'|'Analisis'|JSON\.stringify\(r\)/.test(pag), 'sin «En Tránsito», sin la pestaña Análisis ni la búsqueda en el navegador');
+  for (const id of ['comprador', 'compra', 'limite']) {
+    assert.match(pag, new RegExp(`\\{ id: '${id}', titulo: '[^']+', ancho: \\d+, ocultaPorDefecto: true`), `R26: ${id} oculta por defecto`);
+  }
+  assert.ok(!/id: 'total'/.test(pag), 'sin la columna Total, que repetía el Monto');
+  // El menú de fila (MenuFila) ofrece solo lo que acepta update_pec (R9, C15c): Emitir desde Borrador y cancelar con motivo.
+  assert.match(pag, /etiqueta: 'Marcar Emitido'[\s\S]{0,300}oculto: !transicionesPec\(p\.estado\)\.includes\('EMITIDO'\)/);
+  assert.match(pag, /etiqueta: 'Cancelar PEC'[\s\S]{0,200}oculto: !transicionesPec\(p\.estado\)\.includes\('CANCELADO'\)/);
+  assert.match(pag, /etiqueta: 'Eliminar definitivamente'[\s\S]{0,200}oculto: etapaPec\(p\.estado\) !== 'cancelado'/);
+  assert.match(pag, /<MenuFila items=\{items\} etiqueta=\{`Acciones de \$\{p\.numero\}`\} \/>/);
+  // El tablero (KANBAN-compras punto 6): las reglas de R9, la tarjeta con «Recepcionar» y D39.
+  assert.match(pag, /regla=\{reglaSoltarPec\}/);
+  assert.match(pag, /tarjetaDe=\{tarjetaPedidoCompra\}/);
+  assert.match(pag, /tablero\.recargar\(\[\.\.\.columnas\]\)/, 'D39: tras la acción, solo el origen y el destino');
+  assert.match(pag, /catch \(err\) \{\s*if \(recargarTrasError\(err\)\) recargarTrasCambio\(\);\s*throw err;\s*\}/,
+    'el tablero relanza el error del PATCH para deshacer y avisar');
+  // Cancelar (panel, menú, tablero y masiva) con un solo ModalMotivo, en serie y sin tragar errores (R9, RP30, RP93).
+  assert.match(pag, /<ModalMotivo[\s\S]{0,400}efectos=\{\[\.\.\.EFECTOS_CANCELAR_PEC\]\}/);
+  assert.match(pag, /estado: 'CANCELADO', motivo/, 'el PATCH lleva el motivo');
+  assert.match(pag, /const resultados = await cancelarPecsEnSerie\(pecs, \(p\) => _apiFetch\(/);
+  assert.match(pag, /const r = despuesDeCancelarPec\(pecs, resultados, omitidos\);/);
+  assert.match(pag, /if \(r\.recargarVentas\) setVueltaVentas\(\(n\) => n \+ 1\);/, 'lección I1 de T14: los PVEN vuelven a pedirse');
+  assert.match(pag, /setCancelacion\(\{ \.\.\.cancelacion, pecs: r\.pendientes, omitidos: \[\] \}\);\s*throw r\.error;/);
+  assert.ok(!/\.catch\(\(\) ?=> ?\{\}\)/.test(pag), 'ningún error se traga');
+  assert.ok(!/estado: ?'RECIBIDO'/.test(pag) && !/estado: ?'EN_TRANSITO'/.test(pag), 'ningún PATCH a mano a tránsito o recibido');
+  assert.ok(!/Object\.entries\(PEC_ESTADOS\)|PEC_ESTADOS/.test(pag), 'el botón Estado ya no ofrece todos los estados');
+  assert.match(pag, /const transiciones = transicionesPec\(detail\?\.estado\);/);
+  // «Eliminar definitivamente» con confirmar de useAvisos (RP30), en el panel y en el menú.
+  assert.equal((pag.match(/await confirmar\(\{/g) ?? []).length >= 3, true, 'el panel, el menú de fila y el casillero');
+  // Las tarjetas (KPI-compras punto 6; R12, RP92): las cuatro de /compras/stats, pulsables como sus vistas.
+  for (const kpi of ['pec_activos', 'pec_en_transito', 'pec_vencidos', 'pec_monto']) assert.match(pag, new RegExp(`kpi="${kpi}"`));
+  assert.match(pag, /const tarjetas = tarjetasPedidosCompra\(stats\?\.datos \?\? null\);/);
+  assert.match(pag, /kpi="pec_vencidos"[\s\S]{0,300}onClick=\{alternarVencidos\}/, 'RP92: la tarjeta de vencidos abre semaforo=vencidos');
+  assert.match(pag, /accionVistaEnLista\(estado, siguiente, opcionesEstadosPec\)/);
+  // La franja (FLUJO-compras punto 6; RP21, RP40, RP46, D42): «Estás aquí» en Pedido de compra, sin «No resueltos».
+  assert.match(pag, /titulo="Flujo de compras"/);
+  assert.match(pag, /regla=\{textoReglaCompras\(\)\}/);
+  assert.match(pag, /pasos=\{pasosPedidosCompra\(flujo\.datos, vistaActiva\)\}/);
+  assert.match(pag, /avisos=\{avisosFlujoCompras\(flujo\.datos\)\}/);
+  assert.match(pag, /vistaDePasoPedidosCompra\(clave\)/);
+  assert.match(pag, /const OPCIONES_SEMAFORO = \{ vistaTodos: INICIAL_PEDIDOS\.vista \};/);
+  assert.match(pag, /accionSemaforoCompras\(estado, f, enKanban \? OPCIONES_ESTADOS_TABLERO_PEC : opcionesEstadosPec, OPCIONES_SEMAFORO\)/);
+  assert.ok(!/noResueltos/.test(pag), 'Compras no pasa noResueltos');
+  assert.match(pag, /subtitle="Pedidos a proveedores y su seguimiento\."/);
+  assert.ok(!/Pipeline:|PEC con entrega vencida — Revisa el tracking/.test(pag), 'sin el subtítulo con códigos ni el aviso naranja suelto');
+  // RP21: ?tab= al montar con la guarda de window (y se quita de la URL, conservando ?id); ?id sigue abriendo el panel.
+  assert.match(pag, /const vista = leerEnlacePedidosCompra\(window\.location\.search\);/);
+  assert.match(pag, /router\.replace\(rutaSinParametro\(RUTA_PEDIDOS, window\.location\.search, 'tab'\), \{ scroll: false \}\)/);
+  assert.match(pag, /const idParam = searchParams\.get\('id'\);/);
+  // El panel del PEC (puntos de T15): la barra del tracking es PasosFlujo y las tarjetas dicen el estado en palabras.
+  assert.match(pag, /<PasosFlujo variante="barra" pasos=\{pasosDeTracking\(stages\)\}/);
+  assert.match(pag, /etiquetaEtapaTracking\(status\)/);
+  assert.match(pag, /const dias = textoDiasEtapa\(sd\.eta\);/);
+  assert.ok(!/stageColor|diasTexto|Math\.ceil\(\(new Date/.test(pag), 'sin la barra a mano ni la cuenta de días con el reloj local');
+  assert.match(pag, /fecha_entrega_estimada: infoForm\.fecha_entrega_estimada \|\| null/, '«Editar información» manda null en blanco, como el alta');
+  assert.ok(!/updated_by: ?localStorage/.test(pag), 'updated_by = autorActual() (sin sesión se omite)');
+  // Análisis (R2, R13): sin la pestaña ni el chat; el botón «Ver análisis» abre el del Hub.
+  assert.ok(!/\/ventas\/ai-chat|handleAskAI|aiQuestion|aiResponse|analyticsRange|chartType/.test(pag));
+  assert.match(pag, /href=\{ENLACE_VER_ANALISIS_COMPRAS\}/);
+  assert.match(pag, /Ver análisis/);
+  assert.ok(!/En construcci/.test(pag), 'R2: el aviso vive solo en AsistenteEnConstruccion.tsx');
+  // Se fueron los estados y los arreglos en memoria de antes (C4, C10).
+  assert.ok(!/getKanbanCol|handleDrop|handleDragStart|kpiCards|colorMap|filteredData|groupedByMonth|menuPos/.test(pag));
+  // B1 a B3 que se conservan (D27): el alta (con los PVEN pendientes), el seguimiento editable, la recepción desde el PEC,
+  // los enlaces a los PVEN y la configuración de las etapas.
+  assert.match(pag, /apiFetch\('\/ventas\/pedidos\?limit=200'\)/);
+  assert.match(pag, /<NuevoPecModal/);
+  assert.match(pag, /'\/compras\/pedidos\/' \+ pec\.id \+ '\/tracking'/);
+  assert.match(pag, /`\/compras\/pedidos\/\$\{pec\.id\}\/recepcionar`/);
+  assert.match(pag, /href=\{`\/dashboard\/ventas\/venta\?id=\$\{v\.id\}`\}/);
+  assert.match(pag, /<TrackingConfigModal/);
 }
 
 console.log('\nOK: test_estados_compras.mjs');

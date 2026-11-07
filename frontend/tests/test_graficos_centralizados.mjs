@@ -8,8 +8,8 @@
  *    (T5C borró los dos Análisis muertos, ventas/components/AnalisisVentas.tsx y compras/components/AnalisisCompras.tsx,
  *    y sus dos entradas.)
  * 2) R2: ningún archivo de src/app contiene '/ventas/ai-chat' (el endpoint no existe; los asistentes quedan «En
- *    construcción»), salvo la lista blanca temporal: compras/pedidos/page.tsx hasta T15 (T7 borró la de ventas/page.tsx)
- *    (src/app_mocks_backup no está dentro de src/app y tampoco se revisa).
+ *    construcción»). La lista blanca temporal quedó vacía: T7 borró la de ventas/page.tsx y T15 la de
+ *    compras/pedidos/page.tsx (src/app_mocks_backup no está dentro de src/app y tampoco se revisa).
  * 3) T5B: dentro de components/analisis, solo registro.ts (chart.js y el único ChartJS.register) y GraficoLinea,
  *    GraficoDona y GraficoBarras (react-chartjs-2 y los tipos de chart.js, con registrarGraficos() al cargarse) importan
  *    los gráficos; las piezas de T5C (PanelAnalisis y las demás) usan esos componentes.
@@ -41,10 +41,8 @@ const PERMITIDOS_GRAFICOS = [
   'src/app_mocks_backup/', // siempre
   'src/app/dashboard/finanzas/resumen/', // hasta T22
 ];
-// R2: lista blanca temporal de '/ventas/ai-chat' dentro de src/app.
-const PERMITIDOS_AI_CHAT = [
-  'src/app/dashboard/compras/pedidos/page.tsx', // hasta T15
-];
+// R2: lista blanca temporal de '/ventas/ai-chat' dentro de src/app (vacía desde T15).
+const PERMITIDOS_AI_CHAT = [];
 
 // import … from 'chart.js' | import 'chart.js' | import('chart.js') | require('chart.js'), con comillas simples, dobles
 // o invertidas, y la subruta opcional ('chart.js/auto'). No detecta 'chart.jsx' ni 'mi-chart.js'.

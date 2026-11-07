@@ -425,6 +425,24 @@ export function tarjetaPec(p) {
   };
 }
 
+/** B4 T15: la acción de las tarjetas de la columna En bodega: Recepciones, donde se elige el PEC que llegó. */
+const ACCION_RECEPCIONAR = congelar({ texto: 'Recepcionar', href: '/dashboard/compras/recepciones', tono: 'teal' });
+
+/**
+ * B4 T15 (KANBAN-compras punto 6): la tarjeta del tablero de Pedidos de compra: la de tarjetaPec (T14, la del Hub, que
+ * no cambia) más, en la columna En bodega (columnaPec), la acción principal «Recepcionar» (a Recepciones) y, si se
+ * recibió en parte (PARCIALMENTE_RECIBIDA), el chip «Falta por recibir» después del «Vencido» del servidor. En las demás
+ * columnas, sin acción principal.
+ * @param {any} p
+ * @returns {ReturnType<typeof tarjetaPec> & {accionPrincipal: {texto: string, href: string, tono: string} | null}}
+ */
+export function tarjetaPedidoCompra(p) {
+  const tarjeta = tarjetaPec(p);
+  const enBodega = columnaPec(p?.estado) === 'en_bodega';
+  const chips = p?.estado === 'PARCIALMENTE_RECIBIDA' ? [...tarjeta.chips, { texto: 'Falta por recibir', tono: 'amber' }] : tarjeta.chips;
+  return { ...tarjeta, chips, accionPrincipal: enBodega ? { ...ACCION_RECEPCIONAR } : null };
+}
+
 /**
  * B4 T14 (R9, C15c): de los PEC marcados para cancelar, cuáles se mandan (los que transicionesPec deja cancelar) y
  * cuáles se omiten sin llamar al servidor, con su motivo: los cancelados y los que ya llegaron a bodega o se recibieron
