@@ -977,7 +977,7 @@ console.log('--- TEST 22 (B4 T10): PasosFlujo parte las etiquetas de la barra en
   // Tracker) en lugar de montar una etiqueta sobre la siguiente. Sin la prop, el <li> de siempre (min-w-0).
   assert.ok(codigo.includes("className={vertical ? 'flex min-w-0 flex-col' : `flex ${partirEtiquetas ? PASO_PARTIDO : PASO_RECORTADO} items-start ${i < ultimo ? 'flex-auto' : 'flex-initial'}`}"),
     'el <li> elige su ancho mínimo con la prop');
-  // Solo el Status Tracker del pedido la pasa: la cadena, la franja y el panel rápido quedan como antes.
+  // La pasan los Status Tracker del pedido y de la cotización y los 4 pasos de la solicitud; la cadena, la franja y el panel rápido quedan como antes.
   const leerApp = (r) => readFileSync(new URL(`../src/${r}`, import.meta.url), 'utf8');
   assert.ok(!leerApp('components/flujo/CadenaDocumentos.tsx').includes('partirEtiquetas'));
   assert.ok(!leerApp('components/flujo/BannerFlujo.tsx').includes('partirEtiquetas'));

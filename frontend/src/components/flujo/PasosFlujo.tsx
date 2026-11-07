@@ -490,7 +490,7 @@ function PasosBarra({
               <span className={`flex min-w-0 max-w-full flex-col ${vertical ? 'items-start' : 'mt-1 items-center'}`}>
                 {lector ? <span className="sr-only">{`${lector}: `}</span> : null}
                 <span title={tituloPaso(paso)} className={`${partirEtiquetas ? ETIQUETA_PARTIDA : ETIQUETA_RECORTADA} text-[11px] font-bold ${LABEL_BARRA[estado]}`}>{paso.label}</span>
-                {/* Por debajo de @md el sublabel y los avisos no se ven (quedan en el title del label), pero el lector de
+                {/* Por debajo de @md el sublabel y los avisos no se ven (quedan en el title del label; salvo con estadoVisible, que los deja siempre a la vista: el Status Tracker de la cotización), pero el lector de
                     pantalla los lee. En compacto el sublabel (solo el número) siempre se ve (r1, M7), y la palabra de la
                     caja caída va aparte, sin recortarse (r2, M5). */}
                 {paso.sublabel || paso.etiquetaEstado ? (compacto ? (

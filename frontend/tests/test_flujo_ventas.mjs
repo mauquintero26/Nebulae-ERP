@@ -795,6 +795,9 @@ console.log('--- B4 T11 TEST 2: los detalles de la solicitud y la cotización us
   assert.ok(paso.includes('{ayuda || PASOS_SC[paso].ayuda}'), 'la ayuda del paso sigue igual');
   assert.ok(paso.includes('<RotateCcw size={12} /> Reiniciar solicitud') && paso.includes('onClick={onReiniciar}'), '«Reiniciar solicitud» no cambia');
   assert.ok(paso.includes('{paso >= 0 ? ('), 'un estado fuera de los pasos no dibuja la barra');
+  assert.ok(paso.includes('{puedeReiniciar && ('), '«Reiniciar solicitud» solo con puedeReiniciar');
+  assert.ok(paso.includes('disabled={reiniciando}'), '«Reiniciar solicitud» se deshabilita mientras se guarda');
+  assert.ok(sc.includes('<EstadoSolicitudPasos solicitud={solicitud} puedeReiniciar={puedeReiniciarSC} onReiniciar={reiniciarSolicitud} reiniciando={saving} ayuda={ayudaPasos} />'), 'la página llama a los pasos con todas sus props');
 
   // — Detalle de la cotización —
   assert.match(cot, /import \{ CadenaDocumentos, PasosFlujo \} from '@\/components\/flujo';/);
