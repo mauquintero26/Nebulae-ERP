@@ -585,6 +585,8 @@ console.log('--- TEST 17 (B4 T15, KPI-compras punto 6): tarjetasPedidosCompra co
     vencidos: { valor: null, tono: 'normal' },
     monto: { valor: 35000, ayuda: null },
   });
+  // El monto que no llegó o no es un número queda en null («—» o la barra gris), nunca $0 (numeroFinito, la política única).
+  for (const monto of [null, undefined, 'x', '', Number.NaN]) assert.equal(tarjetas({ ...stats, monto_cop: monto }).monto.valor, null, String(monto));
   // Los ids existen en el catálogo (la única fuente de nombres) y «Con entrega vencida» es mejor si baja.
   for (const id of ['pec_activos', 'pec_en_transito', 'pec_vencidos', 'pec_monto']) assert.ok(CATALOGO_KPI[id], id);
   assert.equal(CATALOGO_KPI.pec_vencidos.mejorSiSube, false);

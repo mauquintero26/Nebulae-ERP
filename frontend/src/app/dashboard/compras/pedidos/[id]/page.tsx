@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import type { ComponentType } from 'react';
+import type { ComponentType, CSSProperties } from 'react';
 import {
   ArrowLeft, Edit2, MessageSquare,
   MapPin, Clock,
@@ -74,20 +74,20 @@ function Dato({ etiqueta, valor, icono, tono = 'normal' }: {
  * (Nombre / Atributos, Destino, Cant., Precio unit., Estado interno y Total neto). Una constante (estable, D40).
  */
 const COLUMNAS_PRODUCTOS: ColumnaTabla<LineaPec>[] = [
-  { id: 'nombre', titulo: 'Nombre / Atributos', ancho: 240, flexible: true, anchoMax: 960, titleCelda: (l) => l.nombre,
+  { id: 'nombre', titulo: 'Nombre / Atributos', ancho: 160, flexible: true, anchoMax: 960, titleCelda: (l) => l.nombre,
     celda: (l) => (
       <span className="block leading-tight">
         <span className="block truncate text-sm font-bold text-slate-800">{l.nombre}</span>
         {l.variante && <span className="block truncate text-xs text-slate-500">{l.variante}</span>}
       </span>
     ) },
-  { id: 'destino', titulo: 'Destino', ancho: 120, celda: (l) => <span className="text-sm font-medium text-slate-600">{l.destino}</span> },
-  { id: 'cantidad', titulo: 'Cant.', ancho: 72, alinear: 'centro', celda: (l) => <span className="font-bold text-slate-700">{l.cantidad}</span> },
-  { id: 'precio', titulo: 'Precio unit.', ancho: 120, alinear: 'derecha', titleCelda: (l) => fCOP(l.precio),
+  { id: 'destino', titulo: 'Destino', ancho: 104, celda: (l) => <span className="text-sm font-medium text-slate-600">{l.destino}</span> },
+  { id: 'cantidad', titulo: 'Cant.', ancho: 64, alinear: 'centro', celda: (l) => <span className="font-bold text-slate-700">{l.cantidad}</span> },
+  { id: 'precio', titulo: 'Precio unit.', ancho: 112, alinear: 'derecha', titleCelda: (l) => fCOP(l.precio),
     celda: (l) => <span className="whitespace-nowrap text-sm font-medium text-slate-700">{fCOP(l.precio)}</span> },
-  { id: 'estado', titulo: 'Estado interno', ancho: 152, titleCelda: (l) => l.estado,
+  { id: 'estado', titulo: 'Estado interno', ancho: 120, titleCelda: (l) => l.estado,
     celda: (l) => <Badge tone="warning">{l.estado}</Badge> },
-  { id: 'total', titulo: 'Total neto', ancho: 132, alinear: 'derecha', titleCelda: (l) => fCOP(l.total),
+  { id: 'total', titulo: 'Total neto', ancho: 120, alinear: 'derecha', titleCelda: (l) => fCOP(l.total),
     celda: (l) => <span className="whitespace-nowrap font-black text-slate-800">{fCOP(l.total)}</span> },
 ];
 
@@ -96,11 +96,11 @@ const COLUMNAS_PRODUCTOS: ColumnaTabla<LineaPec>[] = [
  * Colombia), qué pasó (con el ícono de su acción y, si cambió el estado, «antes → después» con sus etiquetas, C10) y quién.
  */
 const COLUMNAS_ACTIVIDADES: ColumnaTabla<RenglonActividad>[] = [
-  { id: 'cuando', titulo: 'Fecha', ancho: 128, titleCelda: (r) => fechaHoraLarga(r.cuando) || textoInstante(r.cuando),
+  { id: 'cuando', titulo: 'Fecha', ancho: 120, titleCelda: (r) => fechaHoraLarga(r.cuando) || textoInstante(r.cuando),
     celda: (r) => (
       <span className="block whitespace-normal text-xs leading-tight text-slate-600">{fechaHoraLarga(r.cuando) || textoInstante(r.cuando)}</span>
     ) },
-  { id: 'que', titulo: 'Qué pasó', ancho: 180, flexible: true, titleCelda: (r) => [r.descripcion, r.cambio].filter(Boolean).join(' · '),
+  { id: 'que', titulo: 'Qué pasó', ancho: 168, flexible: true, titleCelda: (r) => [r.descripcion, r.cambio].filter(Boolean).join(' · '),
     celda: (r) => {
       const estilo = ACTIVITY_STYLE[r.action] || DEFAULT_ACTIVITY_STYLE;
       const Icono = estilo.icon;
@@ -114,7 +114,7 @@ const COLUMNAS_ACTIVIDADES: ColumnaTabla<RenglonActividad>[] = [
         </span>
       );
     } },
-  { id: 'quien', titulo: 'Quién', ancho: 112, titleCelda: (r) => r.quien,
+  { id: 'quien', titulo: 'Quién', ancho: 100, titleCelda: (r) => r.quien,
     celda: (r) => <span className="block truncate text-xs font-medium text-slate-600">{r.quien}</span> },
 ];
 
@@ -263,14 +263,14 @@ export default function PedidoCompraDetallePage() {
     <div className="w-full h-full bg-white flex flex-col overflow-hidden">
 
       {/* Top Action Bar */}
-      <div className="bg-white px-6 py-4 border-b border-slate-200 flex items-center justify-between z-20 shadow-sm shrink-0">
-        <div className="flex items-center gap-4">
-          <Link href="/dashboard/compras/pedidos" className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 transition-colors">
+      <div className="bg-white px-4 sm:px-6 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 z-20 shadow-sm shrink-0">
+        <div className="flex min-w-0 items-center gap-4">
+          <Link href="/dashboard/compras/pedidos" aria-label="Volver a Pedidos de compra" className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 transition-colors">
             <ArrowLeft size={20} />
           </Link>
-          <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-black text-slate-800">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <h1 className="text-xl sm:text-2xl font-black text-slate-800">
                 {isNew ? 'Nuevo Pedido de Compra' : (pedido?.numero || String(params.id).toUpperCase())}
               </h1>
               {/* C10: la etiqueta y el color de estados-compras.js; «Vencido» lo manda el servidor (RP40). */}
@@ -295,23 +295,25 @@ export default function PedidoCompraDetallePage() {
         )}
       </div>
 
-      {/* Main Content Layout (Split Pane) */}
-      <div className="flex-1 flex flex-row overflow-hidden">
+      {/* Main Content Layout (Split Pane). B4 T15 (banco, R26): desde xl (1280 px) el panel de la Actividad va al lado y
+          se ajusta con el asa, como antes; por debajo va debajo de la información, a todo el ancho (con 450 px fijos al lado,
+          a 1024 px con el menú abierto la información quedaba en 250 px y a 375 px la página se corría de lado). */}
+      <div className="flex-1 flex flex-col xl:flex-row overflow-y-auto xl:overflow-hidden">
 
         {/* BLOQUE 1: Informacion del Pedido de Compra */}
-        <div className="flex-1 overflow-y-auto px-8 py-8 custom-scrollbar bg-white relative">
+        <div className="xl:flex-1 xl:overflow-y-auto px-4 sm:px-8 py-8 custom-scrollbar bg-white relative min-w-0">
 
           {ultimaRecepcion && (
             <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 mb-8 flex items-center justify-between shadow-sm animate-in fade-in slide-in-from-top-4 max-w-6xl mx-auto">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-emerald-600 shadow-sm"><PackageCheck size={20}/></div>
                 <div>
-                  <h3 className="font-black text-emerald-900">Mercancia Entregada. Recepcion {ultimaRecepcion.numero} Generada.</h3>
-                  <p className="text-sm text-emerald-700">El departamento de inventario debe realizar el conteo de la recepcion.</p>
+                  <h3 className="font-black text-emerald-900">Mercancía entregada. Recepción {ultimaRecepcion.numero} generada.</h3>
+                  <p className="text-sm text-emerald-700">El departamento de inventario debe realizar el conteo de la recepción.</p>
                 </div>
               </div>
               <Link href={`/dashboard/compras/recepciones/${ultimaRecepcion.id}`} className="bg-emerald-600 text-white px-4 py-2 rounded-lg font-bold text-sm shadow-sm hover:bg-emerald-700 transition-colors">
-                Ver Recepcion (Inventario)
+                Ver recepción (Inventario)
               </Link>
             </div>
           )}
@@ -321,13 +323,13 @@ export default function PedidoCompraDetallePage() {
             {/* Cabecera del Pedido */}
             <div>
               <h2 className="text-xl font-black text-slate-800 mb-6 flex items-center gap-2">
-                <FileText className="text-emerald-600" size={24} /> Informacion de Compra
+                <FileText className="text-emerald-600" size={24} /> Información de compra
               </h2>
 
               {/* B4 T15 (H13): texto de solo lectura (antes, campos con defaultValue que no guardaban). Se fueron la dirección
                   y el teléfono del proveedor: el PEC no los trae y siempre salían vacíos. La entrega es un día de negocio
                   (RP40) y va en rojo si el servidor dice que está vencida. */}
-              <div className="grid grid-cols-4 gap-6 bg-slate-50 border border-slate-200 rounded-2xl p-6">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 sm:gap-6 bg-slate-50 border border-slate-200 rounded-2xl p-4 sm:p-6">
                 <div className="col-span-2"><Dato etiqueta="Proveedor" valor={isNew ? null : pedido?.supplier_name} /></div>
                 <div className="col-span-2"><Dato etiqueta="Ref. proveedor (factura / cotización)" valor={isNew ? null : pedido?.supplier_ref} /></div>
                 <div className="col-span-2"><Dato etiqueta="Fecha de compra" valor={isNew ? null : textoInstante(pedido?.fecha_compra)} /></div>
@@ -341,13 +343,13 @@ export default function PedidoCompraDetallePage() {
             {/* Bloque Logistico (Rutas y Tracking) */}
             <div>
               <h2 className="text-xl font-black text-slate-800 mb-6 flex items-center gap-2">
-                <Truck className="text-blue-600" size={24} /> Logistica y Tracking
+                <Truck className="text-blue-600" size={24} /> Logística y tracking
               </h2>
 
               <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
 
                 {/* B4 T15 (H13): texto de solo lectura; se fue el botón de rastrear la guía, que no hacía nada. */}
-                <div className="grid grid-cols-3 gap-6 mb-8">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6 mb-8">
                   <Dato etiqueta="Ubicación de entrega final" icono={MapPin}
                     valor={isNew ? null : (pedido?.warehouse_id ? `Bodega #${pedido.warehouse_id}` : 'Sin bodega asignada')} />
                   <Dato etiqueta="Carrier / Transportadora" valor={isNew ? null : pedido?.carrier} />
@@ -402,12 +404,13 @@ export default function PedidoCompraDetallePage() {
         {/* Resizer Handle */}
         <div
           onMouseDown={handleMouseDown}
-          className="w-1.5 bg-slate-200 hover:bg-emerald-500 cursor-col-resize shrink-0 transition-colors z-30"
+          className="hidden xl:block w-1.5 bg-slate-200 hover:bg-emerald-500 cursor-col-resize shrink-0 transition-colors z-30"
           title="Arrastrar para ajustar panel de actividades"
         />
 
-        {/* BLOQUE 2: Actividades y Bitacora (Historial) */}
-        <div style={{ width: rightWidth }} className="bg-white flex flex-col overflow-hidden shrink-0 shadow-[-10px_0_15px_-10px_rgba(0,0,0,0.05)]">
+        {/* BLOQUE 2: Actividades y Bitacora (Historial); el ancho del asa solo desde xl (la variable --ancho-actividad). */}
+        <div style={{ '--ancho-actividad': `${rightWidth}px` } as CSSProperties}
+          className="bg-white flex flex-col xl:overflow-hidden shrink-0 w-full xl:w-[var(--ancho-actividad)] border-t border-slate-200 xl:border-t-0 shadow-[-10px_0_15px_-10px_rgba(0,0,0,0.05)]">
 
           <div className="p-5 border-b border-slate-200 bg-slate-800 flex items-center justify-between shadow-sm z-10 shrink-0">
             <h3 className="font-black text-white flex items-center gap-2 text-lg">
@@ -417,7 +420,7 @@ export default function PedidoCompraDetallePage() {
 
           {/* B4 T15 (H13): se fueron «Nota», la caja de texto y «Enviar», que no guardaban nada. La Actividad es la tabla
               estándar en modo simple (TABLA-compras punto 12), con su fecha y hora de Colombia y los estados con su nombre. */}
-          <div className="flex-1 overflow-y-auto p-6 custom-scrollbar bg-slate-50">
+          <div className="xl:flex-1 xl:overflow-y-auto p-4 sm:p-6 custom-scrollbar bg-slate-50">
             <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">Línea temporal</h4>
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
               <TablaEstandar id="compras.pec.actividades" modo="simple" columnas={COLUMNAS_ACTIVIDADES} preferencias={prefsActividades}
