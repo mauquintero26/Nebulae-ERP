@@ -660,6 +660,12 @@ console.log('--- TEST 23 (B4 T14): el Hub de Compras (compras/page.tsx) cablea l
   assert.ok(!/\.catch\(\(\) => \[\]\)/.test(hub), 'el error de /ventas/pedidos no se traga');
   assert.match(hub, /No se pudieron cargar los pedidos de venta\./);
   assert.match(hub, /errorVentas=\{ventas\.error\}/);
+  // Cierre T14 (re-revisión r1): el panel decide con el error, el catch lo guarda y un éxito lo limpia.
+  assert.match(hub, /\{errorVentas \? \(/, 'el panel muestra el error cuando lo hay');
+  assert.match(hub, /\.catch\(\(err: unknown\) => \{ if \(vigente\) setVentas\(\(v\) => \(\{ filas: v\.filas, error: err \}\)\); \}\)/,
+    'el catch de /ventas/pedidos guarda el error');
+  assert.match(hub, /if \(vigente\) setVentas\(\{ filas: Array\.isArray\(r\)[^\n]*, error: null \}\); \}\)/,
+    'un éxito limpia el error');
   // T14 r1 (m11, m12, m13): foco de la barra masiva, nombres del panel, «Pago y logística» y el respaldo de F. compra.
   assert.match(hub, /const FOCO_OSCURO = '[^']*focus-visible:outline-white';/);
   assert.equal((hub.match(/\$\{FOCO_OSCURO\}/g) ?? []).length, 2, 'los dos botones de la barra masiva');
@@ -667,7 +673,8 @@ console.log('--- TEST 23 (B4 T14): el Hub de Compras (compras/page.tsx) cablea l
   assert.match(hub, /aria-label="Cerrar el panel"/);
   assert.match(hub, /Pago y logística/);
   assert.ok(!/Pago & Logistica/.test(hub));
-  assert.match(hub, /'Fecha de creación \(sin fecha de compra\)'/);
+  assert.match(hub, /titleCelda: \(p\) => \(p\.fecha_compra \? textoInstante\(p\.fecha_compra\)\s*: p\.created_at \? 'Fecha de creación \(sin fecha de compra\)' : 'Sin fecha de compra'\)/,
+    'm13: el title dice «Fecha de creación» solo cuando falta la fecha de compra');
   assert.ok(!/estado: ?'RECIBIDO'/.test(hub) && !/estado: ?'EN_TRANSITO'/.test(hub), 'ningún PATCH a mano a tránsito o recibido');
   assert.match(hub, /transicionesPec\(/, 'el panel y el menú solo ofrecen lo que acepta el servidor');
   // Franja (D42, RP46): sin «No resueltos» y con el aviso de recepciones; sin «Ajustar tiempos» (R9).

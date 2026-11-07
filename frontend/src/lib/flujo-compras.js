@@ -19,9 +19,9 @@ import { congelar, conteosDePasos, pasosConConteos } from './flujo.js';
 import { humanizarCodigo, tiene } from './estados-pedido.js';
 import { fechaLarga } from './fechas-colombia.js';
 import { formatoEntero } from './kpis.js';
-import { vistaPuedeVencer } from './estados-compras.js';
+import { GRUPOS_PEC, vistaPuedeVencer } from './estados-compras.js';
 // B4 T14 r1 (m1; D41, D42): las cajas y «Con atraso» cambian la vista con accionPestana, como el Hub de Ventas.
-import { accionPestana } from './tabla.js';
+import { accionPestana, opcionesDeVista } from './tabla.js';
 
 export { esPecVencido, pasoFlujoPec } from './estados-compras.js';
 
@@ -214,7 +214,8 @@ const comoCambios = (accion) => (accion.tipo === 'cambiar' ? { ...accion.cambios
  * compra y En tránsito abren su pestaña con accionPestana (con las opciones de la Lista: lo filtrado que vale en la
  * pestaña nueva se conserva y lo que no, se poda), como las cajas del Hub de Ventas. Recibido abre «Acciones tomadas» y,
  * además, filtra los estados de su etapa (RECIBIDA y COMPLETADO): /compras/pedidos no acepta `paso`. Tocar la caja
- * marcada vuelve a Todos (R6; Recibido suelta además los estados de su etapa). El semáforo no se toca. En Kanban la caja
+ * marcada vuelve a Todos (R6; Recibido suelta además los estados de su etapa). El semáforo no se toca, salvo en una caja
+ * cuyos estados nunca vencen (Recibido): ahí se apaga, porque si no la tabla queda vacía (cierre de T14). En Kanban la caja
  * abre su pestaña en Lista (como las tarjetas de T10). Lista de compras, Recepción en bodega o una clave desconocida:
  * null (son enlaces).
  * @param {Partial<import('./tabla.js').EstadoTabla> | null | undefined} estado
@@ -234,7 +235,9 @@ export function accionPasoHubCompras(estado, clave, opciones) {
       ? { tipo: 'cambiar', cambios: { vista: 'todos', estados: [] } }
       : accionPestana(e, 'todos', opciones);
   } else if (filtro.estados.length > 0) {
+    const nuncaVencen = !filtro.estados.some((x) => GRUPOS_PEC.vencibles.includes(x));
     accion = { tipo: 'cambiar', cambios: { vista: filtro.vista, estados: [...filtro.estados] } };
+    if (nuncaVencen && filtroSemaforoCompras(estado) === 'atrasados') accion.cambios.semaforo = null;
   } else {
     accion = accionPestana(e, filtro.vista, opciones);
   }
@@ -264,7 +267,10 @@ const SEMAFORO_VENCIDOS = 'vencidos';
  * B4 T14 (RP40); r1 (m1; D41, D42): lo que despacha un botón del semáforo de la franja del Hub. «Ver todo» quita el
  * filtro; «Con atraso» pone semaforo=vencidos (la regla del servidor: emitido o en tránsito con la entrega pasada) sin
  * cambiar de pestaña ni podar el filtro, como el Hub de Ventas. Solo si la vista activa no puede tener atrasos (en
- * bodega, acciones tomadas) pasa a Todos con accionPestana (como Pedidos de venta, T10), en la misma acción.
+ * bodega, acciones tomadas) pasa a Todos con accionPestana (como Pedidos de venta, T10), en la misma acción. En Lista,
+ * la poda usa las opciones de Todos que pueden vencer (GRUPOS_PEC.vencibles; T8 r2b: no caer en una tabla vacía): el
+ * filtro RECIBIDA y COMPLETADO de la caja Recibido se quita. En Kanban se poda con las opciones del tablero, y sin
+ * opciones el filtro no se toca (cierre de T14).
  * @param {Partial<import('./tabla.js').EstadoTabla> | null | undefined} estado
  * @param {unknown} filtro  el FiltroSemaforo de BannerFlujo
  * @param {import('./tabla.js').OpcionesEstados | null | undefined} opciones  las del modo que se ve
@@ -273,7 +279,10 @@ const SEMAFORO_VENCIDOS = 'vencidos';
 export function accionSemaforoCompras(estado, filtro, opciones) {
   if (filtro !== 'atrasados') return { tipo: 'semaforo', valor: null };
   if (vistaPuedeVencer(estado?.vista)) return { tipo: 'semaforo', valor: SEMAFORO_VENCIDOS };
-  const accion = accionPestana(/** @type {any} */ (estado), 'todos', opciones);
+  const podar = estado?.modo === 'kanban' || opciones === null || opciones === undefined
+    ? opciones
+    : (/** @type {string | null} */ v) => opcionesDeVista(opciones, v).filter((o) => GRUPOS_PEC.vencibles.includes(o.valor));
+  const accion = accionPestana(/** @type {any} */ (estado), 'todos', podar);
   return /** @type {any} */ ({ tipo: 'cambiar', cambios: { ...comoCambios(accion), semaforo: SEMAFORO_VENCIDOS } });
 }
 

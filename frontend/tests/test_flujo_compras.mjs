@@ -298,7 +298,11 @@ console.log('--- TEST 12 (B4 T14): pasoHubComprasDe y accionPasoHubCompras: toca
   assert.deepEqual(accion({ vista: 'todos' }, 'RECIBIDO'),
     { tipo: 'cambiar', cambios: { vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'] } });
   assert.deepEqual(accion({ vista: 'todos', semaforo: 'vencidos' }, 'RECIBIDO'),
-    { tipo: 'cambiar', cambios: { vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'] } }, 'el semáforo no se toca');
+    { tipo: 'cambiar', cambios: { vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'], semaforo: null } },
+    'cierre T14: Recibido apaga «Con atraso» (sus estados nunca vencen; si no, la tabla queda vacía)');
+  assert.deepEqual(accion({ vista: 'pedidos', modo: 'kanban', semaforo: 'vencidos' }, 'RECIBIDO'),
+    { tipo: 'cambiar', cambios: { vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'], semaforo: null, modo: 'lista' } },
+    'también desde Kanban');
   assert.deepEqual(accion({ vista: 'todos', semaforo: 'vencidos' }, 'PEC'), { tipo: 'vista', valor: 'pedidos' });
   // Tocar la caja marcada vuelve a Todos (R6) con accionPestana; Recibido suelta además los estados de su etapa.
   assert.deepEqual(accion({ vista: 'pedidos', estados: ['EMITIDO'] }, 'PEC'), { tipo: 'vista', valor: 'todos' });
@@ -323,8 +327,19 @@ console.log('--- TEST 13 (B4 T14): accionSemaforoCompras, «Con atraso» = semaf
   assert.deepEqual(accion({ vista: 'pedidos' }, 'atrasados'), { tipo: 'semaforo', valor: 'vencidos' });
   assert.deepEqual(accion({ vista: 'todos', estados: ['BORRADOR', 'EMITIDO'] }, 'atrasados'), { tipo: 'semaforo', valor: 'vencidos' });
   assert.deepEqual(accion({ vista: 'en_bodega' }, 'atrasados'), { tipo: 'cambiar', cambios: { vista: 'todos', semaforo: 'vencidos' } });
+  // Cierre T14 (re-revisión r1): en Lista, la poda usa las opciones de Todos que pueden vencer (T8 r2b: no caer en
+  // una tabla vacía); la caja Recibido pone RECIBIDA y COMPLETADO, que nunca vencen.
   assert.deepEqual(accion({ vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'] }, 'atrasados'),
-    { tipo: 'cambiar', cambios: { vista: 'todos', semaforo: 'vencidos' } }, 'accionPestana conserva lo que vale en Todos');
+    { tipo: 'cambiar', cambios: { vista: 'todos', estados: [], semaforo: 'vencidos' } }, 'poda lo que nunca vence');
+  assert.deepEqual(accion({ vista: 'en_bodega', estados: ['RECIBIDO'] }, 'atrasados'),
+    { tipo: 'cambiar', cambios: { vista: 'todos', estados: [], semaforo: 'vencidos' } });
+  // En Kanban se poda con las opciones del tablero (T8 r2b): el filtro del tablero se queda.
+  const tablero = [{ valor: 'RECIBIDA', etiqueta: 'Recibido' }, { valor: 'EMITIDO', etiqueta: 'Emitido' }];
+  assert.deepEqual(fc.accionSemaforoCompras(estadoTablaInicial({ vista: 'acciones_tomadas', modo: 'kanban', estados: ['RECIBIDA'] }),
+    'atrasados', tablero), { tipo: 'cambiar', cambios: { vista: 'todos', semaforo: 'vencidos' } }, 'en Kanban el filtro del tablero se queda');
+  // Sin opciones (la barra sin filtro), el filtro no se toca.
+  assert.deepEqual(fc.accionSemaforoCompras(estadoTablaInicial({ vista: 'en_bodega', estados: ['RECIBIDO'] }), 'atrasados', null),
+    { tipo: 'cambiar', cambios: { vista: 'todos', semaforo: 'vencidos' } });
   assert.deepEqual(accion({ vista: 'acciones_tomadas', estados: ['CANCELADO'] }, 'atrasados'),
     { tipo: 'cambiar', cambios: { vista: 'todos', estados: [], semaforo: 'vencidos' } }, 'y poda lo que no');
   // El filtro de la franja: 'vencidos' del estado es 'atrasados' para BannerFlujo.
