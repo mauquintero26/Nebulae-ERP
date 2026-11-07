@@ -21,6 +21,9 @@ import { diaColombia } from '../src/lib/fechas-colombia.js';
 // B4 T14: lo nuevo del Hub de Compras por el espacio de nombres, para que la falta de una función no tape los demás rojos.
 import * as ec from '../src/lib/estados-compras.js';
 import { estadoTablaInicial } from '../src/lib/tabla.js';
+// T14 r1: la regla de la columna con filtro (kanban.js) y los textos de error (avisos.js).
+import * as kanbanLib from '../src/lib/kanban.js';
+import { textoDeError } from '../src/lib/avisos.js';
 
 // R9 / ETIQUETAS_ESTADO['PEC'] (textos_actividad.py, T1C), en el orden de las etapas.
 const ETIQUETAS_PEC = [
@@ -366,6 +369,13 @@ console.log('--- TEST 15: JS puro (sin React ni DOM) y congelar importado, no co
   assert.ok(/import \{[^}]*\bcongelar\b[^}]*\} from '\.\/estados-pedido\.js'/.test(fuente), 'congelar sale de estados-pedido.js');
   assert.ok(!/function congelar\(/.test(fuente), 'congelar no se copia');
   assert.ok(!/esPecAtrasado/.test(fuente), 'RP28/RP93: no se crea esPecAtrasado');
+  // T14 r1 (m6): el día de entrega sale de diaPec en los dos lados (la celda y la regla de vencido), sin repetir la regla.
+  assert.match(fuente, /export function esPecVencido\(p, hoy = diaColombia\(\)\) \{\s*const dia = diaPec\(p\?\.fecha_entrega_estimada\);/);
+  assert.equal((fuente.match(/\.slice\(0, 10\)/g) ?? []).length, 1, 'la extracción del día, una sola vez (en diaPec)');
+  // T14 r1 (m7): el número del servidor es numeroFinito de kpis.js (una sola política), sin copia local.
+  assert.match(fuente, /import \{[^}]*\bnumeroFinito\b[^}]*\} from '\.\/kpis\.js'/);
+  assert.match(fuente, /monto: numeroFinito\(p\?\.total_cop\),/);
+  assert.ok(!/const montoDe\b/.test(fuente), 'sin montoDe');
 }
 
 console.log('--- TEST 16 (B4 T14): VISTAS_PEC, el espejo de las vistas de /compras/pedidos (core/estados_compras.py) ---');
@@ -414,13 +424,16 @@ console.log('--- TEST 17 (B4 T14): las opciones de «Filtrar estado» por pesta�
 console.log('--- TEST 18 (B4 T14): la consulta de cada columna del tablero del Hub en modo servidor (R11, C4, D39) ---');
 {
   const [borrador, emitido, , enBodega, , cancelado] = COLUMNAS_PEC;
-  assert.equal(typeof ec.estadosDeColumnaPec, 'function', 'estadosDeColumnaPec existe');
+  // T14 r1 (m4, m14): la regla es estadosDeColumnaLista de kanban.js (la misma de Ventas); estados-compras.js no tiene copia.
+  const deColumna = /** @type {any} */ (kanbanLib).estadosDeColumnaLista;
+  assert.equal(typeof deColumna, 'function', 'estadosDeColumnaLista está en kanban.js');
+  assert.equal(/** @type {any} */ (ec).estadosDeColumnaPec, undefined, 'sin la copia estadosDeColumnaPec');
   // Sin filtro, los de la columna; con su estado principal, la columna entera; si no, el cruce; sin cruce, [].
-  assert.deepEqual(ec.estadosDeColumnaPec(emitido, []), ['EMITIDO', 'ENVIADO']);
-  assert.deepEqual(ec.estadosDeColumnaPec(emitido, null), ['EMITIDO', 'ENVIADO']);
-  assert.deepEqual(ec.estadosDeColumnaPec(emitido, ['EMITIDO']), ['EMITIDO', 'ENVIADO']);
-  assert.deepEqual(ec.estadosDeColumnaPec(emitido, ['ENVIADO', 'BORRADOR']), ['ENVIADO']);
-  assert.deepEqual(ec.estadosDeColumnaPec(enBodega, ['EMITIDO']), []);
+  assert.deepEqual(deColumna(emitido, []), ['EMITIDO', 'ENVIADO']);
+  assert.deepEqual(deColumna(emitido, null), ['EMITIDO', 'ENVIADO']);
+  assert.deepEqual(deColumna(emitido, ['EMITIDO']), ['EMITIDO', 'ENVIADO']);
+  assert.deepEqual(deColumna(emitido, ['ENVIADO', 'BORRADOR']), ['ENVIADO']);
+  assert.deepEqual(deColumna(enBodega, ['EMITIDO']), []);
   assert.equal(typeof ec.consultaColumnaPec, 'function', 'consultaColumnaPec existe');
   const estado = estadoTablaInicial({
     vista: 'en_transito', modo: 'kanban', semaforo: 'vencidos', paso: 'PEC', q: '  ana ', estados: ['EMITIDO'],
@@ -542,6 +555,70 @@ console.log('--- TEST 22 (B4 T14): los separadores por mes cuando la tabla va po
   assert.equal(ec.tituloMesPec('2026-13'), 'Sin fecha de compra');
 }
 
+console.log('--- TEST 24 (B4 T14 r1: I1, m10, m15): cancelar en serie y lo que hace la pantalla después ---');
+{
+  assert.equal(typeof ec.cancelarPecsEnSerie, 'function', 'cancelarPecsEnSerie existe');
+  assert.equal(typeof ec.despuesDeCancelarPec, 'function', 'despuesDeCancelarPec existe');
+  const pecs = [{ id: 1, numero: 'PEC-1', estado: 'EMITIDO' }, { id: 2, numero: 'PEC-2', estado: 'EN_TRANSITO' },
+    { id: 3, numero: 'PEC-3', estado: 'BORRADOR' }];
+  const conflicto = Object.assign(new Error('PEC-2 tiene 1 recepción(es) en bodega: no se puede cancelar.'), { status: 409 });
+  const invalido = Object.assign(new Error('Indica el motivo de la cancelación (mínimo 5 caracteres).'), { status: 422 });
+  // En serie (R9): nunca dos PATCH en vuelo, en el orden de la lista; cada falla guarda el MISMO error y su texto.
+  let enVuelo = 0;
+  let maximo = 0;
+  const orden = [];
+  const resultados = await ec.cancelarPecsEnSerie(pecs, async (p) => {
+    enVuelo += 1;
+    maximo = Math.max(maximo, enVuelo);
+    orden.push(p.id);
+    await new Promise((r) => setTimeout(r, 5));
+    enVuelo -= 1;
+    if (p.id === 2) throw conflicto;
+    if (p.id === 3) throw invalido;
+  });
+  assert.equal(maximo, 1, 'nunca dos en vuelo');
+  assert.deepEqual(orden, [1, 2, 3]);
+  assert.deepEqual(resultados.map((r) => [r.id, r.numero, r.ok]), [[1, 'PEC-1', true], [2, 'PEC-2', false], [3, 'PEC-3', false]]);
+  assert.equal(resultados[1].err, conflicto, 'el mismo error');
+  assert.equal(resultados[1].error, textoDeError(conflicto));
+  assert.equal(resultados[2].error, textoDeError(invalido));
+  assert.deepEqual(await ec.cancelarPecsEnSerie(null, async () => {}), []);
+
+  const omitidos = [{ id: 9, numero: 'PEC-9', motivo: 'ya está cancelado' }];
+  const ok = (p) => ({ id: p.id, numero: p.numero, ok: true });
+  // Todos bien: salen de la selección (también los omitidos), sin pendientes ni error; se recargan la lista y los pedidos
+  // de venta del panel de consolidación (I1: sus PVEN vuelven a Pendiente de compra).
+  assert.deepEqual(ec.despuesDeCancelarPec(pecs, pecs.map(ok), omitidos), {
+    fuera: ['1', '2', '3', '9'], pendientes: [], recargar: true, recargarVentas: true, recargarDetalle: false,
+    mensajeOk: '3 pedidos de compra cancelados. Se omitió PEC-9: ya está cancelado.', error: null,
+  });
+  // Mezcla: el 409 pide recargar (recargarTrasError); quedan los que fallaron, con una línea por PEC en el error.
+  const mezcla = ec.despuesDeCancelarPec(pecs, resultados, omitidos);
+  assert.deepEqual(mezcla.fuera, ['1', '9']);
+  assert.deepEqual(mezcla.pendientes, [pecs[1], pecs[2]]);
+  assert.deepEqual([mezcla.recargar, mezcla.recargarVentas, mezcla.recargarDetalle], [true, true, true]);
+  assert.equal(mezcla.mensajeOk, '1 pedido de compra cancelado');
+  assert.ok(mezcla.error instanceof Error);
+  assert.equal(mezcla.error.message, `${textoDeError(conflicto)}\nPEC-3: ${textoDeError(invalido)}`);
+  // Todos mal con un 422: nada sale de la selección, no se recarga (el dato no cambió), ningún aviso de éxito.
+  const malos = [pecs[0], pecs[2]].map((p) => ({ id: p.id, numero: p.numero, ok: false, error: textoDeError(invalido), err: invalido }));
+  const todosMal = ec.despuesDeCancelarPec([pecs[0], pecs[2]], malos, []);
+  assert.deepEqual(todosMal.fuera, []);
+  assert.deepEqual(todosMal.pendientes, [pecs[0], pecs[2]]);
+  assert.deepEqual([todosMal.recargar, todosMal.recargarVentas, todosMal.recargarDetalle, todosMal.mensajeOk], [false, false, false, null]);
+  assert.equal(todosMal.error.message, `PEC-1: ${textoDeError(invalido)}\nPEC-3: ${textoDeError(invalido)}`);
+  // Uno solo con el 409: se relanza el MISMO error (el modal muestra el detail del servidor) y se recarga, también el
+  // detalle del panel abierto (m10); los PVEN no, porque no se canceló nada.
+  const uno = ec.despuesDeCancelarPec([pecs[1]], [resultados[1]], []);
+  assert.equal(uno.error, conflicto);
+  assert.deepEqual([uno.recargar, uno.recargarVentas, uno.recargarDetalle, uno.mensajeOk], [true, false, true, null]);
+  assert.deepEqual(uno.pendientes, [pecs[1]]);
+  // Uno solo sin el objeto del error: un Error con su texto (nunca resuelve en silencio).
+  const sinErr = ec.despuesDeCancelarPec([pecs[0]], [{ id: 1, numero: 'PEC-1', ok: false, error: 'Sin conexión' }], []);
+  assert.ok(sinErr.error instanceof Error);
+  assert.equal(sinErr.error.message, 'PEC-1: Sin conexión');
+}
+
 console.log('--- TEST 23 (B4 T14): el Hub de Compras (compras/page.tsx) cablea las piezas y el servidor ---');
 {
   const hub = readFileSync(new URL('../src/app/dashboard/compras/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
@@ -566,7 +643,31 @@ console.log('--- TEST 23 (B4 T14): el Hub de Compras (compras/page.tsx) cablea l
   assert.match(hub, /tablero\.recargar\(\[\.\.\.columnas\]\)/, 'D39: tras la acción, solo el origen y el destino');
   assert.match(hub, /<ModalMotivo[\s\S]{0,400}efectos=\{\[\.\.\.EFECTOS_CANCELAR_PEC\]\}/);
   assert.match(hub, /estado: 'CANCELADO', motivo/, 'el PATCH lleva el motivo');
-  assert.match(hub, /recargarTrasError\(/);
+  // T14 r1 (m15): la página solo ejecuta lo que deciden cancelarPecsEnSerie y despuesDeCancelarPec.
+  assert.match(hub, /const resultados = await cancelarPecsEnSerie\(pecs, \(p\) => _apiFetch\(/);
+  assert.match(hub, /const r = despuesDeCancelarPec\(pecs, resultados, omitidos\);/);
+  assert.match(hub, /if \(r\.recargar\) \{\s*if \(columnas\) tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*\}/);
+  assert.match(hub, /if \(r\.recargarVentas\) setVueltaVentas\(\(n\) => n \+ 1\);/, 'I1: los PVEN del panel se vuelven a pedir');
+  assert.match(hub, /if \(desdePanel && r\.recargarDetalle\) setVueltaDetalle\(\(n\) => n \+ 1\);/, 'm10: y el detalle del panel');
+  assert.match(hub, /\}, \[pec && pec\.id, vueltaDetalle\]\);/, 'el panel relee su detalle con vueltaDetalle');
+  assert.match(hub, /setCancelacion\(\{ \.\.\.cancelacion, pecs: r\.pendientes, omitidos: \[\] \}\);\s*throw r\.error;/);
+  assert.match(hub, /catch \(err\) \{\s*if \(recargarTrasError\(err\)\) recargarTrasCambio\(\);\s*throw err;\s*\}/,
+    'el tablero relanza el error del PATCH para deshacer y avisar');
+  // T14 r1 (m1): las cajas y «Con atraso» con las opciones de la Lista (accionPestana adentro).
+  assert.match(hub, /accionPasoHubCompras\(estado, clave, opcionesEstadosPec\)/);
+  assert.match(hub, /accionSemaforoCompras\(estado, f, enKanban \? OPCIONES_ESTADOS_TABLERO_PEC : opcionesEstadosPec\)/);
+  // T14 r1 (m9): si fallan los pedidos de venta del panel, se dice (no «No hay PVEN…») y se puede reintentar.
+  assert.ok(!/\.catch\(\(\) => \[\]\)/.test(hub), 'el error de /ventas/pedidos no se traga');
+  assert.match(hub, /No se pudieron cargar los pedidos de venta\./);
+  assert.match(hub, /errorVentas=\{ventas\.error\}/);
+  // T14 r1 (m11, m12, m13): foco de la barra masiva, nombres del panel, «Pago y logística» y el respaldo de F. compra.
+  assert.match(hub, /const FOCO_OSCURO = '[^']*focus-visible:outline-white';/);
+  assert.equal((hub.match(/\$\{FOCO_OSCURO\}/g) ?? []).length, 2, 'los dos botones de la barra masiva');
+  assert.match(hub, /aria-label=\{`Acciones de \$\{/);
+  assert.match(hub, /aria-label="Cerrar el panel"/);
+  assert.match(hub, /Pago y logística/);
+  assert.ok(!/Pago & Logistica/.test(hub));
+  assert.match(hub, /'Fecha de creación \(sin fecha de compra\)'/);
   assert.ok(!/estado: ?'RECIBIDO'/.test(hub) && !/estado: ?'EN_TRANSITO'/.test(hub), 'ningún PATCH a mano a tránsito o recibido');
   assert.match(hub, /transicionesPec\(/, 'el panel y el menú solo ofrecen lo que acepta el servidor');
   // Franja (D42, RP46): sin «No resueltos» y con el aviso de recepciones; sin «Ajustar tiempos» (R9).

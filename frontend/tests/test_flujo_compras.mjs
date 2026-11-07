@@ -18,7 +18,7 @@ import { pasosConConteos } from '../src/lib/flujo.js';
 import { fechaLarga } from '../src/lib/fechas-colombia.js';
 // B4 T14: lo del Hub de Compras por el espacio de nombres (su falta no tapa los demás rojos).
 import * as fc from '../src/lib/flujo-compras.js';
-import { estadoTablaInicial } from '../src/lib/tabla.js';
+import { accionPestana, estadoTablaInicial } from '../src/lib/tabla.js';
 
 const estados = (pasos) => pasos.map((p) => p.estado);
 
@@ -278,41 +278,55 @@ console.log('--- TEST 12 (B4 T14): pasoHubComprasDe y accionPasoHubCompras: toca
   assert.equal(de({ vista: 'pedidos', modo: 'kanban' }), null);
 
   assert.equal(typeof fc.accionPasoHubCompras, 'function', 'accionPasoHubCompras existe');
-  const accion = (parcial, clave) => fc.accionPasoHubCompras(estadoTablaInicial(parcial), clave);
+  // T14 r1 (m1; D41, D42): la vista cambia con accionPestana (con las opciones de la Lista), como T7; solo la caja Recibido
+  // agrega los estados de su etapa (el endpoint no acepta `paso`). No toca el semáforo.
+  const opciones = estadosCompras.opcionesEstadosPec;
+  const accion = (parcial, clave) => fc.accionPasoHubCompras(estadoTablaInicial(parcial), clave, opciones);
   assert.equal(accion({ vista: 'todos' }, 'LISTA'), null, 'Lista de compras es un enlace');
   assert.equal(accion({ vista: 'todos' }, 'RECEPCION'), null, 'Recepción en bodega es un enlace');
   assert.equal(accion({ vista: 'todos' }, 'OTRO'), null);
-  assert.deepEqual(accion({ vista: 'todos', estados: ['EMITIDO'] }, 'PEC'), { tipo: 'cambiar', cambios: { vista: 'pedidos', estados: [] } });
-  assert.deepEqual(accion({ vista: 'todos' }, 'TRANSITO'), { tipo: 'cambiar', cambios: { vista: 'en_transito', estados: [] } });
+  // Un filtro que vale en la pestaña nueva se conserva (EMITIDO en Pedidos de compra); uno que no, se poda.
+  assert.deepEqual(accion({ vista: 'todos', estados: ['EMITIDO'] }, 'PEC'), { tipo: 'vista', valor: 'pedidos' });
+  assert.deepEqual(accion({ vista: 'todos', estados: ['EN_TRANSITO', 'EMITIDO'] }, 'PEC'),
+    { tipo: 'cambiar', cambios: { vista: 'pedidos', estados: ['EMITIDO'] } });
+  assert.deepEqual(accion({ vista: 'todos' }, 'TRANSITO'), { tipo: 'vista', valor: 'en_transito' });
+  for (const [parcial, clave, vista] of [[{ vista: 'todos', estados: ['EMITIDO'] }, 'PEC', 'pedidos'],
+    [{ vista: 'no_resueltos', estados: ['RECIBIDO', 'EN_TRANSITO'] }, 'TRANSITO', 'en_transito']]) {
+    const e = estadoTablaInicial(parcial);
+    assert.deepEqual(fc.accionPasoHubCompras(e, clave, opciones), accionPestana(e, vista, opciones), `${clave}: la de accionPestana`);
+  }
   assert.deepEqual(accion({ vista: 'todos' }, 'RECIBIDO'),
     { tipo: 'cambiar', cambios: { vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'] } });
-  // Recibido nunca va vencido: con «Con atraso» puesto, la caja lo quita (si no, la tabla quedaría vacía sin razón).
   assert.deepEqual(accion({ vista: 'todos', semaforo: 'vencidos' }, 'RECIBIDO'),
-    { tipo: 'cambiar', cambios: { vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'], semaforo: null } });
-  assert.deepEqual(accion({ vista: 'todos', semaforo: 'vencidos' }, 'PEC'), { tipo: 'cambiar', cambios: { vista: 'pedidos', estados: [] } });
-  // Tocar la caja marcada vuelve a Todos (R6: tocarlo otra vez quita el filtro).
-  assert.deepEqual(accion({ vista: 'pedidos' }, 'PEC'), { tipo: 'cambiar', cambios: { vista: 'todos', estados: [] } });
+    { tipo: 'cambiar', cambios: { vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'] } }, 'el semáforo no se toca');
+  assert.deepEqual(accion({ vista: 'todos', semaforo: 'vencidos' }, 'PEC'), { tipo: 'vista', valor: 'pedidos' });
+  // Tocar la caja marcada vuelve a Todos (R6) con accionPestana; Recibido suelta además los estados de su etapa.
+  assert.deepEqual(accion({ vista: 'pedidos', estados: ['EMITIDO'] }, 'PEC'), { tipo: 'vista', valor: 'todos' });
   assert.deepEqual(accion({ vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'] }, 'RECIBIDO'),
     { tipo: 'cambiar', cambios: { vista: 'todos', estados: [] } });
-  // En Kanban abre su pestaña en Lista (como las tarjetas de T10).
-  assert.deepEqual(accion({ vista: 'pedidos', modo: 'kanban' }, 'TRANSITO'),
+  // En Kanban abre su pestaña en Lista (como las tarjetas de T10), con la poda de la Lista.
+  assert.deepEqual(accion({ vista: 'pedidos', modo: 'kanban' }, 'TRANSITO'), { tipo: 'cambiar', cambios: { vista: 'en_transito', modo: 'lista' } });
+  assert.deepEqual(accion({ vista: 'pedidos', modo: 'kanban', estados: ['EMITIDO'] }, 'TRANSITO'),
     { tipo: 'cambiar', cambios: { vista: 'en_transito', estados: [], modo: 'lista' } });
-  assert.deepEqual(accion({ vista: 'pedidos', modo: 'kanban' }, 'PEC'),
-    { tipo: 'cambiar', cambios: { vista: 'pedidos', estados: [], modo: 'lista' } });
+  assert.deepEqual(accion({ vista: 'pedidos', modo: 'kanban' }, 'RECIBIDO'),
+    { tipo: 'cambiar', cambios: { vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'], modo: 'lista' } });
 }
 
 console.log('--- TEST 13 (B4 T14): accionSemaforoCompras, «Con atraso» = semaforo=vencidos en el servidor (RP40) ---');
 {
   assert.equal(typeof fc.accionSemaforoCompras, 'function', 'accionSemaforoCompras existe');
-  const accion = (parcial, f) => fc.accionSemaforoCompras(estadoTablaInicial(parcial), f);
+  // T14 r1 (m1): «Con atraso» no cambia de pestaña ni poda el filtro (como T7); solo si la vista activa no puede tener
+  // atrasos (en bodega, acciones tomadas) pasa a Todos con accionPestana (como T10) y pone el semáforo.
+  const opciones = estadosCompras.opcionesEstadosPec;
+  const accion = (parcial, f) => fc.accionSemaforoCompras(estadoTablaInicial(parcial), f, opciones);
   assert.deepEqual(accion({ vista: 'pedidos', semaforo: 'vencidos' }, 'todos'), { tipo: 'semaforo', valor: null });
-  assert.deepEqual(accion({ vista: 'pedidos' }, 'atrasados'), { tipo: 'cambiar', cambios: { semaforo: 'vencidos' } });
-  // Desde una pestaña que nunca vence (en bodega, acciones tomadas), a Todos; los estados que no vencen se quitan.
+  assert.deepEqual(accion({ vista: 'pedidos' }, 'atrasados'), { tipo: 'semaforo', valor: 'vencidos' });
+  assert.deepEqual(accion({ vista: 'todos', estados: ['BORRADOR', 'EMITIDO'] }, 'atrasados'), { tipo: 'semaforo', valor: 'vencidos' });
+  assert.deepEqual(accion({ vista: 'en_bodega' }, 'atrasados'), { tipo: 'cambiar', cambios: { vista: 'todos', semaforo: 'vencidos' } });
   assert.deepEqual(accion({ vista: 'acciones_tomadas', estados: ['RECIBIDA', 'COMPLETADO'] }, 'atrasados'),
-    { tipo: 'cambiar', cambios: { semaforo: 'vencidos', vista: 'todos', estados: [] } });
-  assert.deepEqual(accion({ vista: 'en_bodega' }, 'atrasados'), { tipo: 'cambiar', cambios: { semaforo: 'vencidos', vista: 'todos' } });
-  assert.deepEqual(accion({ vista: 'todos', estados: ['BORRADOR', 'EMITIDO'] }, 'atrasados'),
-    { tipo: 'cambiar', cambios: { semaforo: 'vencidos', estados: ['EMITIDO'] } });
+    { tipo: 'cambiar', cambios: { vista: 'todos', semaforo: 'vencidos' } }, 'accionPestana conserva lo que vale en Todos');
+  assert.deepEqual(accion({ vista: 'acciones_tomadas', estados: ['CANCELADO'] }, 'atrasados'),
+    { tipo: 'cambiar', cambios: { vista: 'todos', estados: [], semaforo: 'vencidos' } }, 'y poda lo que no');
   // El filtro de la franja: 'vencidos' del estado es 'atrasados' para BannerFlujo.
   assert.equal(typeof fc.filtroSemaforoCompras, 'function', 'filtroSemaforoCompras existe');
   assert.equal(fc.filtroSemaforoCompras(estadoTablaInicial({ semaforo: 'vencidos' })), 'atrasados');

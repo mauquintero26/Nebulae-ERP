@@ -532,13 +532,25 @@ console.log('--- TEST 16 (B4 T14, KPI-compras punto 5): tarjetasHubCompras con l
   // Sin datos (todavía cargan o falló): null; un valor que no es un número no se vuelve 0.
   assert.equal(tarjetas(null), null);
   assert.equal(tarjetas('x'), null);
-  const raros = tarjetas({ activos: '7', en_transito: null, vencidos: undefined, recibidos: Number.NaN, cumplimiento_pct: null });
+  // T14 r1 (m7): un número del servidor es numeroFinito (la política única): un texto numérico como '7' vale 7 (un Decimal
+  // del API llega así); lo que no es un número queda en null.
+  const raros = tarjetas({ activos: '7', en_transito: null, vencidos: undefined, recibidos: Number.NaN, cumplimiento_pct: 'x',
+    flujo: { comprado_cop: { actual: '4927538', anterior: '' } } });
   assert.deepEqual(raros, {
-    activos: { valor: null, ayuda: null, tono: 'normal' },
+    activos: { valor: 7, ayuda: null, tono: 'normal' },
     en_transito: { valor: null },
     cumplimiento: { valor: null, ayuda: null },
-    comprado: { valor: null, variacion: { actual: null, anterior: null }, ayuda: REGLA },
+    comprado: { valor: 4927538, variacion: { actual: 4927538, anterior: null }, ayuda: REGLA },
   });
+  assert.equal(tarjetas({ ...stats, vencidos: '2', recibidos: '1' }).activos.ayuda, '2 con entrega vencida');
+  assert.equal(tarjetas({ ...stats, vencidos: '2', recibidos: '1' }).cumplimiento.ayuda, '1 recibido de 8');
+  // numeroFinito, exportado (lo usan también estados-compras.js y la tarjeta del tablero).
+  const numero = kpisLib.numeroFinito;
+  assert.equal(typeof numero, 'function', 'numeroFinito exportado');
+  for (const [v, esperado] of [[7, 7], ['7', 7], [' 35000 ', 35000], [-2.5, -2.5], ['', null], ['  ', null], ['x', null], [null, null],
+    [undefined, null], [Number.NaN, null], [Infinity, null], [true, null], [{}, null]]) {
+    assert.equal(numero(v), esperado, `numeroFinito(${String(v)})`);
+  }
   // Sin pedidos emitidos ni recibidos, el cumplimiento no tiene base: sin ayuda (nunca «0 recibidos de 0»).
   assert.equal(tarjetas({ ...stats, activos: 0, recibidos: 0, cumplimiento_pct: null }).cumplimiento.ayuda, null);
   // El catálogo trae los nombres (CATALOGO_KPI, la única fuente) y «Comprado» es neutro (variación gris, R7).

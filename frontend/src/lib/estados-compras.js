@@ -19,9 +19,10 @@
  *  - COLUMNAS_PEC / columnaPec / reglaSoltarPec: el tablero del Hub de Compras y de Pedidos de compra (una columna por
  *    etapa; Recibido y Cancelado plegadas). pasoFlujoPec: el paso del diagrama del flujo de Compras.
  *  - B4 T14 (las listas del Hub y de Pedidos de compra): VISTAS_PEC (espejo de las vistas de T12), opcionesEstadosPec y
- *    OPCIONES_ESTADOS_TABLERO_PEC (el filtro de estados), estadosDeColumnaPec y consultaColumnaPec (el tablero en modo
- *    servidor), vistaPuedeVencer, diaPec (el día de una fecha de negocio), tarjetaPec, repartirCancelacionPec y
- *    resumenCancelacionPec (la cancelación masiva) y ordenPorFechaDeCompra, grupoMesPec y tituloMesPec (los separadores).
+ *    OPCIONES_ESTADOS_TABLERO_PEC (el filtro de estados), consultaColumnaPec (el tablero en modo servidor, con
+ *    estadosDeColumnaLista de kanban.js), vistaPuedeVencer, diaPec (el día de una fecha de negocio), tarjetaPec,
+ *    repartirCancelacionPec, resumenCancelacionPec, cancelarPecsEnSerie y despuesDeCancelarPec (cancelar con motivo,
+ *    T14 r1) y ordenPorFechaDeCompra, grupoMesPec y tituloMesPec (los separadores).
  * Recepciones (ESTADOS_RECEPCION, GRUPOS_RECEPCION, grupoRecepcion, COLUMNAS_RECEPCION), ítems de la lista de compras
  * (ESTADOS_ITEM_LISTA, COLUMNAS_LISTA; DESCARTADO no se muestra), traslados (ESTADOS_TRASLADO, COLUMNAS_TRASLADO,
  * GRUPOS_OPERACION, grupoOperacion) y estado del stock (ESTADOS_STOCK, COLUMNAS_STOCK; RP53).
@@ -35,6 +36,11 @@ import { congelar, humanizarCodigo, tiene } from './estados-pedido.js';
 import { diaColombia, fechaCorta, fechaSolo, instante } from './fechas-colombia.js';
 // B4 T14: la consulta de cada columna del tablero de Compras (consultaColumnaPec) sale de la misma queryListado.
 import { queryListado } from './tabla.js';
+// B4 T14 r1: la regla de la columna con filtro (m4, la misma de Ventas), el número del servidor (m7) y la regla de
+// recarga y el texto de los errores (m15).
+import { estadosDeColumnaLista } from './kanban.js';
+import { numeroFinito } from './kpis.js';
+import { recargarTrasError, textoDeError } from './avisos.js';
 
 /**
  * @typedef {{ bg: string, text: string, border: string }} ClasesEstado
@@ -147,10 +153,8 @@ const FECHA_DE_CALENDARIO = /^\d{4}-\d{2}-\d{2}$/;
  * @returns {boolean}
  */
 export function esPecVencido(p, hoy = diaColombia()) {
-  const fecha = p?.fecha_entrega_estimada;
-  if (typeof fecha !== 'string') return false;
-  const dia = fecha.trim().slice(0, 10);
-  if (!FECHA_DE_CALENDARIO.test(dia) || !fechaSolo(dia)) return false;
+  const dia = diaPec(p?.fecha_entrega_estimada);
+  if (!dia) return false;
   const etapa = etapaPec(p?.estado);
   return (etapa === 'emitido' || etapa === 'en_transito') && dia < hoy;
 }
@@ -348,34 +352,20 @@ export function opcionesEstadosPec(vista) {
 export const OPCIONES_ESTADOS_TABLERO_PEC = congelar(COLUMNAS_PEC.map((c) => ({ valor: c.estados[0], etiqueta: c.titulo })));
 
 /**
- * B4 T14 (R5, R11): los estados que pide una columna del tablero de PEC: los de la columna cruzados con el filtro de
- * estados de la pantalla, en el orden de la columna; sin filtro, los de la columna; si el filtro trae el estado
- * principal de la columna (OPCIONES_ESTADOS_TABLERO_PEC), la columna entera. Sin ninguno en común, [] (no se pide).
- * Es la regla de estadosDeColumnaLista de kanban-ventas.js para las columnas de Compras. Una copia nueva.
- * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
- * @param {ReadonlyArray<string> | null | undefined} filtro
- * @returns {string[]}
- */
-export function estadosDeColumnaPec(columna, filtro) {
-  const propios = Array.isArray(columna?.estados) ? columna.estados : [];
-  if (!Array.isArray(filtro) || filtro.length === 0) return [...propios];
-  if (propios.length > 0 && filtro.includes(propios[0])) return [...propios];
-  return propios.filter((e) => filtro.includes(e));
-}
-
-/**
  * B4 T14 (R11, C4, D39): la consulta de una columna del tablero del Hub de Compras en modo servidor (la query de GET
  * /compras/pedidos, con queryListado): SIN vista (todos los PEC: la vista 'todos' son los vigentes y dejaría vacía la
  * columna Cancelado) ni paso (el endpoint no lo tiene), los estados de la columna cruzados con el filtro de la pantalla
- * (estadosDeColumnaPec), la búsqueda y el semáforo del MISMO estado, y el orden, el límite y el desplazamiento de la
- * columna (el límite 0 de una plegada lo pone el hook). Sin estados en común, null: la columna queda vacía sin pedir.
+ * (estadosDeColumnaLista de kanban.js, la misma regla de Ventas: con el estado principal de la columna,
+ * OPCIONES_ESTADOS_TABLERO_PEC, la columna entera), la búsqueda y el semáforo del MISMO estado, y el orden, el límite y
+ * el desplazamiento de la columna (el límite 0 de una plegada lo pone el hook). Sin estados en común, null: la columna
+ * queda vacía sin pedir.
  * @param {import('./tabla.js').EstadoTabla | null | undefined} estado
  * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
  * @param {{orden?: string | null, limit?: number, offset?: number}} consulta
  * @returns {string | null}
  */
 export function consultaColumnaPec(estado, columna, { orden, limit, offset }) {
-  const estados = estadosDeColumnaPec(columna, estado?.estados);
+  const estados = estadosDeColumnaLista(columna, estado?.estados);
   if (estados.length === 0) return null;
   return queryListado(estado, { vista: null, paso: null, estados, orden, limit, offset });
 }
@@ -407,12 +397,6 @@ export function diaPec(valor) {
 
 /** Un texto con algo, sin los espacios de los bordes; si no, null. */
 const textoLimpio = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
-/** Un monto del servidor (número o texto numérico), o null; nunca un 0 inventado. */
-const montoDe = (v) => {
-  if (v === null || v === undefined || (typeof v === 'string' && !v.trim())) return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-};
 const esObjeto = (v) => v !== null && typeof v === 'object';
 
 /**
@@ -433,7 +417,7 @@ export function tarjetaPec(p) {
     tipo: 'PEC',
     titulo: textoLimpio(p?.supplier_name) ?? 'Sin proveedor',
     subtitulo: textoLimpio(p?.ven_numero),
-    monto: montoDe(p?.total_cop),
+    monto: numeroFinito(p?.total_cop),
     estado: infoEstadoPec(p?.estado),
     chips: vencido ? [{ texto: 'Vencido', tono: 'rose' }] : [],
     tiempo: dia ? `Entrega ${fechaCorta(dia)}` : null,
@@ -493,6 +477,72 @@ export function resumenCancelacionPec(resultados, omitidos = []) {
     mensaje += `. ${validos.length === 1 ? 'Se omitió' : 'Se omitieron'} ${detalle}.`;
   }
   return { exitosos, fallidos, mensaje, tipo: fallidos.length === 0 && exitosos > 0 ? 'ok' : 'err' };
+}
+
+/**
+ * B4 T14 r1 (m15; R9: «la masiva va en serie»): cancela los PEC UNO POR UNO con `cancelarUno(pec)` (el PATCH de la
+ * pantalla, que lleva el motivo): espera cada uno antes del siguiente (nunca dos en vuelo) y en el orden de la lista. No
+ * corta en una falla: cada resultado dice {id, numero, ok} y, si falló, el error tal cual (`err`, para relanzarlo) y su
+ * texto (`error`, textoDeError). Lo que no es un arreglo da [].
+ * @param {any[] | null | undefined} pecs
+ * @param {(pec: any) => Promise<unknown>} cancelarUno
+ * @returns {Promise<{id: unknown, numero: string, ok: boolean, error?: string, err?: unknown}[]>}
+ */
+export async function cancelarPecsEnSerie(pecs, cancelarUno) {
+  const resultados = [];
+  for (const p of Array.isArray(pecs) ? pecs : []) {
+    try {
+      await cancelarUno(p);
+      resultados.push({ id: p?.id, numero: p?.numero, ok: true });
+    } catch (err) {
+      resultados.push({ id: p?.id, numero: p?.numero, ok: false, error: textoDeError(err), err });
+    }
+  }
+  return resultados;
+}
+
+/**
+ * B4 T14 r1 (I1, m10, m15): lo que hace la pantalla después de cancelar en serie (cancelarPecsEnSerie), para que la
+ * página solo lo ejecute:
+ *  - fuera: las claves que salen de la selección (lo cancelado y lo omitido); lo que falló sigue marcado;
+ *  - pendientes: los PEC que fallaron (se quedan en la ventana del motivo para reintentar con lo escrito);
+ *  - recargar: la lista, la franja, las tarjetas y del tablero el origen y el destino, si se canceló algo o si una falla
+ *    lo pide (recargarTrasError: un 409, un 400 o la red; un 422 no);
+ *  - recargarVentas (I1): si se canceló algo, los pedidos de venta del panel de consolidación (los vinculados vuelven a
+ *    Pendiente de compra);
+ *  - recargarDetalle (m10): si una falla pide recargar, el detalle del panel abierto también;
+ *  - mensajeOk: el aviso de lo cancelado (con los omitidos solo si no hubo fallas: con fallas quedan en la ventana);
+ *  - error: null si nada falló; con un solo PEC, el MISMO error (el modal muestra el detail del servidor); con varios,
+ *    un Error con una línea por PEC (resumenCancelacionPec). Nunca se resuelve en silencio con una falla.
+ * @param {any[] | null | undefined} pecs
+ * @param {{id: unknown, numero?: string, ok: boolean, error?: string, err?: unknown}[] | null | undefined} resultados
+ * @param {{id: unknown, numero?: string, motivo?: string}[]} [omitidos]
+ * @returns {{fuera: string[], pendientes: any[], recargar: boolean, recargarVentas: boolean, recargarDetalle: boolean,
+ *   mensajeOk: string | null, error: unknown}}
+ */
+export function despuesDeCancelarPec(pecs, resultados, omitidos = []) {
+  const lista = (Array.isArray(resultados) ? resultados : []).filter(esObjeto);
+  const omitidosValidos = (Array.isArray(omitidos) ? omitidos : []).filter(esObjeto);
+  const cancelados = lista.filter((r) => r.ok);
+  const fallidos = lista.filter((r) => !r.ok);
+  const idsFallidos = new Set(fallidos.map((r) => r.id));
+  const recargarDetalle = fallidos.some((r) => recargarTrasError(r.err));
+  let error = null;
+  if (fallidos.length > 0) {
+    const resumen = resumenCancelacionPec(fallidos, []);
+    error = lista.length === 1 && fallidos[0].err instanceof Error
+      ? fallidos[0].err
+      : new Error(resumen.fallidos.map((f) => f.texto).join('\n'));
+  }
+  return {
+    fuera: [...cancelados, ...omitidosValidos].map((r) => String(r.id)),
+    pendientes: (Array.isArray(pecs) ? pecs : []).filter((p) => esObjeto(p) && idsFallidos.has(p.id)),
+    recargar: cancelados.length > 0 || recargarDetalle,
+    recargarVentas: cancelados.length > 0,
+    recargarDetalle,
+    mensajeOk: cancelados.length > 0 ? resumenCancelacionPec(cancelados, fallidos.length === 0 ? omitidosValidos : []).mensaje : null,
+    error,
+  };
 }
 
 /**

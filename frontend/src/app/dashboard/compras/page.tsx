@@ -36,6 +36,7 @@ import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, consultaColumnaPec, diaPec, grupoMesPec, infoEstadoPec,
   opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec, repartirCancelacionPec, resumenCancelacionPec, tarjetaPec,
+  cancelarPecsEnSerie, despuesDeCancelarPec,
   tituloMesPec, transicionesPec,
 } from '@/lib/estados-compras';
 import {
@@ -119,9 +120,16 @@ type PropsPanelPec = {
   onToast: (msg: unknown, tipo?: 'ok' | 'error') => void;
   /** B4 T14 (R9, C15c): cancelar abre el ModalMotivo de la página (el mismo del menú de fila, del tablero y de la masiva). */
   onCancelar: (pec: FilaPec) => void;
+  /** B4 T14 r1 (m9): el error de GET /ventas/pedidos (la lista de consolidación), y volver a pedirla. */
+  errorVentas: unknown;
+  onReintentarVentas: () => void;
+  /** B4 T14 r1 (m10): sube cuando la página pide releer el detalle (cancelar falló y el servidor pide recargar). */
+  vueltaDetalle: number;
 };
 
-function PecDetailPanel({ pec, pedidosVenta, onClose, onUpdate, onToast, onCancelar }: PropsPanelPec) {
+function PecDetailPanel({
+  pec, pedidosVenta, onClose, onUpdate, onToast, onCancelar, errorVentas, onReintentarVentas, vueltaDetalle,
+}: PropsPanelPec) {
   const [detail, setDetail] = useState<FilaPec | null>(pec);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [tab, setTab] = useState('info');
@@ -139,7 +147,8 @@ function PecDetailPanel({ pec, pedidosVenta, onClose, onUpdate, onToast, onCance
     catch (e) { onToast(e, 'error'); }
     finally { setLoadingDetail(false); }
   };
-  useEffect(() => { if (pec) loadFull(); }, [pec && pec.id]);
+  // B4 T14 r1 (m10): también cuando la página lo pide (vueltaDetalle), para que el panel no quede con el estado viejo.
+  useEffect(() => { if (pec) loadFull(); }, [pec && pec.id, vueltaDetalle]);
 
   // B4 T14 (KANBAN-compras punto 7; R9, C15c): el botón Estado solo ofrece lo que acepta update_pec (transicionesPec):
   // emitir un borrador (PATCH) o cancelar, que abre el ModalMotivo de la página con su motivo. En tránsito y Recibido
@@ -208,7 +217,7 @@ function PecDetailPanel({ pec, pedidosVenta, onClose, onUpdate, onToast, onCance
           </div>
           <div className="flex items-center gap-2">
             <div className="relative">
-              <button onClick={()=>setMenuOpen(m=>!m)} className="p-2 hover:bg-gray-100 rounded-xl text-gray-500"><MoreHorizontal size={20}/></button>
+              <button onClick={()=>setMenuOpen(m=>!m)} aria-label={`Acciones de ${(detail && detail.numero) || pec.numero}`} aria-expanded={menuOpen} className="p-2 hover:bg-gray-100 rounded-xl text-gray-500"><MoreHorizontal size={20}/></button>
               {menuOpen && (
                 <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-2xl shadow-2xl py-2 w-52 z-10">
                   {/* B4 T14 (R9): «Cambiar Estado» y «Cancelar PEC» solo si el servidor los acepta (transicionesPec). */}
@@ -225,7 +234,7 @@ function PecDetailPanel({ pec, pedidosVenta, onClose, onUpdate, onToast, onCance
                 </div>
               )}
             </div>
-            <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-xl text-gray-500"><X size={20}/></button>
+            <button onClick={onClose} aria-label="Cerrar el panel" className="p-2 hover:bg-gray-200 rounded-xl text-gray-500"><X size={20}/></button>
           </div>
         </div>
 
@@ -261,7 +270,7 @@ function PecDetailPanel({ pec, pedidosVenta, onClose, onUpdate, onToast, onCance
               <div className="flex justify-between py-1"><span className="text-gray-500 text-sm">Total COP</span><span className="font-black text-gray-900">{fCOP(detail && detail.total_cop)}</span></div>
             </div>
             <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
-              <p className="text-xs font-black text-gray-400 uppercase mb-3">Pago & Logistica</p>
+              <p className="text-xs font-black text-gray-400 uppercase mb-3">Pago y logística</p>
               <div className="grid grid-cols-2 gap-3 text-xs text-gray-600">
                 {[['Modalidad',(detail&&detail.modalidad_pago)||'-'],['Carrier',(detail&&detail.carrier)||'-'],['Tracking',(detail&&detail.tracking_number)||'-']].map(function(r,i){return(
                   <div key={i}><span className="block text-gray-400 font-black uppercase mb-0.5">{r[0]}</span>{r[1]}</div>
@@ -349,7 +358,16 @@ function PecDetailPanel({ pec, pedidosVenta, onClose, onUpdate, onToast, onCance
                   </div>
                 </div>
                 <div className="max-h-[320px] overflow-y-auto divide-y divide-gray-100">
-                  {filteredPvens.length === 0 && (
+                  {/* B4 T14 r1 (m9): si GET /ventas/pedidos falló, se dice (no «No hay PVEN…») y se puede reintentar. */}
+                  {errorVentas ? (
+                    <div className="py-8 text-center space-y-3">
+                      <p role="alert" className="text-sm font-bold text-rose-700">No se pudieron cargar los pedidos de venta.</p>
+                      <button type="button" onClick={onReintentarVentas}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-700">
+                        <RefreshCw size={13} aria-hidden="true"/> Reintentar
+                      </button>
+                    </div>
+                  ) : filteredPvens.length === 0 && (
                     <div className="py-10 text-center"><Package size={28} className="mx-auto mb-2 text-gray-300"/><p className="text-gray-400 text-sm">No hay PVEN en estado Pendiente Compra</p></div>
                   )}
                   {filteredPvens.map(function(p){ return (
@@ -438,6 +456,8 @@ type Cancelacion = {
 // en Kanban. Sin tamaño de letra: cada uso pone el suyo.
 const CHIP = 'inline-block max-w-full truncate rounded-full border px-1.5 py-0.5 font-bold leading-tight';
 const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-700';
+/** T14 r1 (m11): el foco de los botones de la barra masiva (fondo slate-900). */
+const FOCO_OSCURO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white';
 // D41: la fila vencida en el tono opaco filaAlerta, con la marca rosa a la izquierda del Hub de Ventas (la de antes era un
 // borde rojo y un tinte translúcido, que dejaba ver lo de debajo de las columnas fijas).
 const MARCA_VENCIDO = '[&>td:first-child]:shadow-[inset_3px_0_0_var(--color-rose-500)]';
@@ -526,8 +546,11 @@ const COLUMNAS_TABLA_HUB: ColumnaTabla<FilaPec>[] = [
     celda: (p) => <span className="block truncate text-xs text-slate-600">{p.created_by || '—'}</span> },
   { id: 'monto', titulo: 'Monto', ancho: 108, alinear: 'derecha', ordenable: 'monto', titleCelda: (p) => fCOP(p.total_cop),
     celda: (p) => <span className="block truncate text-xs font-black text-slate-900">{fCOP(p.total_cop)}</span> },
+  // T14 r1 (m13): sin fecha de compra, la celda muestra la de creación (como antes) y su title lo dice; el separador por
+  // mes la pone en «Sin fecha de compra» (el servidor ordena por fecha_compra).
   { id: 'compra', titulo: 'F. compra', ancho: 96, ocultaPorDefecto: true, ordenable: 'compra',
-    titleCelda: (p) => textoInstante(p.fecha_compra || p.created_at),
+    titleCelda: (p) => (p.fecha_compra ? textoInstante(p.fecha_compra)
+      : p.created_at ? 'Fecha de creación (sin fecha de compra)' : 'Sin fecha de compra'),
     celda: (p) => <span className="text-xs text-slate-600">{textoInstante(p.fecha_compra || p.created_at)}</span> },
   { id: 'entrega', titulo: 'Entrega est.', ancho: 104, ordenable: 'entrega',
     titleCelda: (p) => `${textoDia(p.fecha_entrega_estimada)}${p.is_overdue ? ' · Vencido' : ''}`, celda: (p) => <CeldaEntrega p={p} /> },
@@ -640,14 +663,19 @@ export default function ComprasHub() {
   const tarjetas = tarjetasHubCompras(stats?.datos ?? null);
 
   // B1 a B3 (queda igual): los pedidos de venta del panel de consolidación (sus PENDIENTE_COMPRA se filtran en el panel).
-  const [pedidosVenta, setPedidosVenta] = useState<FilaVenta[]>([]);
+  // T14 r1 (m9): si el GET falla, el error queda en el estado (el panel lo dice con «Reintentar») y la lista de antes se
+  // conserva; nunca se presenta como una lista vacía.
+  const [ventas, setVentas] = useState<{ filas: FilaVenta[]; error: unknown }>({ filas: [], error: null });
   const [vueltaVentas, setVueltaVentas] = useState(0);
   useEffect(() => {
     let vigente = true;
-    apiFetch('/ventas/pedidos?limit=200').catch(() => [])
-      .then((r) => { if (vigente) setPedidosVenta(Array.isArray(r) ? r : (r && Array.isArray(r.data) ? r.data : [])); });
+    apiFetch('/ventas/pedidos?limit=200')
+      .then((r) => { if (vigente) setVentas({ filas: Array.isArray(r) ? r : (r && Array.isArray(r.data) ? r.data : []), error: null }); })
+      .catch((err: unknown) => { if (vigente) setVentas((v) => ({ filas: v.filas, error: err })); });
     return () => { vigente = false; };
   }, [vueltaVentas]);
+  // m10: releer el detalle del panel abierto cuando cancelar desde él falla y el servidor pide recargar.
+  const [vueltaDetalle, setVueltaDetalle] = useState(0);
 
   // «Actualizar»: la tabla, el tablero, la franja, las tarjetas y los pedidos de venta del panel. Ninguna recarga vacía lo
   // que se ve: los hooks conservan lo último. Después de un cambio de estado, lo que ese cambio mueve (la lista con sus
@@ -683,41 +711,32 @@ export default function ComprasHub() {
     setCancelacion({ pecs: cancelables, omitidos, columnas: opciones.columnas ?? null, desdePanel: Boolean(opciones.desdePanel) });
   }, [avisar]);
 
-  // En serie, con el mismo motivo para todos. Lo cancelado y lo omitido sale de la selección; lo que falló sigue marcado
-  // y queda en la ventana con el mensaje del servidor de cada uno y lo escrito (se reintenta con el mismo motivo). Si un
-  // PATCH falla, la regla única recargarTrasError decide si recargar (un 409: el pedido cambió en otro lado) y el error
-  // sigue (throw) para que ModalMotivo lo muestre; con un solo pedido, el error tal cual.
+  // T14 r1 (m15): en serie, con el mismo motivo para todos (cancelarPecsEnSerie), y lo que sigue lo decide
+  // despuesDeCancelarPec (estados-compras.js, con sus casos): qué sale de la selección, qué queda en la ventana, cuándo
+  // recargar (la regla única recargarTrasError), los pedidos de venta del panel (I1) y su detalle (m10), y qué error se
+  // relanza para que ModalMotivo muestre el mensaje del servidor y conserve lo escrito (con un solo pedido, el mismo).
   async function cancelarConMotivo(motivo: string) {
     if (!cancelacion) return;
     const { pecs, omitidos, columnas, desdePanel } = cancelacion;
     const autor = autorActual();
-    const resultados: { id: number; numero: string; ok: boolean; error?: string; err?: unknown }[] = [];
-    for (const p of pecs) {
-      try {
-        await _apiFetch(`/compras/pedidos/${p.id}`, {
-          method: 'PATCH', body: JSON.stringify({ estado: 'CANCELADO', motivo, updated_by: autor }),
-        });
-        resultados.push({ id: p.id, numero: p.numero, ok: true });
-      } catch (err) {
-        resultados.push({ id: p.id, numero: p.numero, ok: false, error: textoDeError(err), err });
-      }
-    }
-    const cancelados = resultados.filter((r) => r.ok);
-    const fallidos = resultados.filter((r) => !r.ok);
-    const fuera = new Set([...cancelados.map((r) => String(r.id)), ...omitidos.map((o) => String(o.id))]);
-    if (fuera.size > 0) setSeleccion((s) => s.filter((c) => !fuera.has(String(c))));
-    if (cancelados.length > 0 || fallidos.some((r) => recargarTrasError(r.err))) {
+    const resultados = await cancelarPecsEnSerie(pecs, (p) => _apiFetch(`/compras/pedidos/${p.id}`, {
+      method: 'PATCH', body: JSON.stringify({ estado: 'CANCELADO', motivo, updated_by: autor }),
+    }));
+    const r = despuesDeCancelarPec(pecs, resultados, omitidos);
+    if (r.fuera.length > 0) setSeleccion((s) => s.filter((c) => !r.fuera.includes(String(c))));
+    if (r.recargar) {
       if (columnas) tablero.recargar([...columnas]);
       recargarTrasCambio();
     }
-    if (cancelados.length > 0) {
-      avisar(resumenCancelacionPec(cancelados, fallidos.length === 0 ? omitidos : []).mensaje, { tono: 'ok' });
+    if (r.recargarVentas) setVueltaVentas((n) => n + 1);
+    if (r.mensajeOk) avisar(r.mensajeOk, { tono: 'ok' });
+    if (r.error === null) {
       if (desdePanel) setSelectedPec(null);
+      return;
     }
-    if (fallidos.length === 0) return;
-    setCancelacion({ ...cancelacion, pecs: pecs.filter((p) => fallidos.some((f) => f.id === p.id)), omitidos: [] });
-    if (pecs.length === 1) throw fallidos[0].err;
-    throw new Error(resumenCancelacionPec(fallidos, []).fallidos.map((f) => f.texto).join('\n'));
+    if (desdePanel && r.recargarDetalle) setVueltaDetalle((n) => n + 1);
+    setCancelacion({ ...cancelacion, pecs: r.pendientes, omitidos: [] });
+    throw r.error;
   }
 
   // ── B4 T14, bloque 2: la tabla (TABLA-compras punto 6; R5, R26, D40, D41) ──
@@ -816,14 +835,15 @@ export default function ComprasHub() {
 
   // ── B4 T14, bloque 6: la franja del flujo (FLUJO-compras punto 5; R5, R9, C3, RP40, RP46, D42) ──
   // «Con atraso» es semaforo=vencidos en el servidor (accionSemaforoCompras); tocar Pedido de compra, En tránsito o
-  // Recibido pone su pestaña y su etapa en el estado único (accionPasoHubCompras) y tocarla otra vez lo quita; Lista de
-  // compras y Recepción en bodega son enlaces. Desde Análisis, vuelven a los documentos.
+  // Recibido abre su pestaña con accionPestana (T14 r1, m1; D41, D42) y Recibido filtra además su etapa
+  // (accionPasoHubCompras); tocarla otra vez lo quita. Lista de compras y Recepción en bodega son enlaces. Desde Análisis,
+  // vuelven a los documentos.
   const alFiltrarSemaforo = (f: FiltroSemaforo) => {
-    despachar(accionSemaforoCompras(estado, f));
+    despachar(accionSemaforoCompras(estado, f, enKanban ? OPCIONES_ESTADOS_TABLERO_PEC : opcionesEstadosPec));
     if (enAnalisis) cambiarSeccion(false);
   };
   const elegirPaso = (clave: string) => {
-    const accion = accionPasoHubCompras(estado, clave);
+    const accion = accionPasoHubCompras(estado, clave, opcionesEstadosPec);
     if (accion) despachar(accion);
     if (enAnalisis) cambiarSeccion(false);
   };
@@ -835,7 +855,10 @@ export default function ComprasHub() {
       {selectedPec && (
         <PecDetailPanel
           pec={selectedPec}
-          pedidosVenta={pedidosVenta}
+          pedidosVenta={ventas.filas}
+          errorVentas={ventas.error}
+          onReintentarVentas={() => setVueltaVentas((n) => n + 1)}
+          vueltaDetalle={vueltaDetalle}
           onClose={()=>setSelectedPec(null)}
           onUpdate={recargarTodo}
           onToast={showToast}
@@ -991,13 +1014,14 @@ export default function ComprasHub() {
         {/* La barra masiva (la selección es de la página de la tabla, así que solo en Lista): cancelar con un motivo. */}
         {seleccion.length > 0 && !enAnalisis && !enKanban && (
           <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-4 z-40 border border-slate-700">
-            <span className="font-bold text-sm bg-slate-800 px-3 py-1 rounded-full">{seleccion.length} seleccionados</span>
+            <span className="font-bold text-sm bg-slate-800 px-3 py-1 rounded-full">{seleccion.length} {seleccion.length === 1 ? 'seleccionado' : 'seleccionados'}</span>
+            {/* T14 r1 (m11): sobre el fondo oscuro, un foco blanco que se vea (el anillo del navegador apenas contrasta). */}
             <button type="button" onClick={() => pedirCancelacion(filasSeleccionadas())}
-              className="bg-rose-500/20 text-rose-300 hover:bg-rose-500/40 px-3 py-1.5 rounded-xl flex items-center gap-2 text-xs font-bold transition-colors">
+              className={`bg-rose-500/20 text-rose-300 hover:bg-rose-500/40 px-3 py-1.5 rounded-xl flex items-center gap-2 text-xs font-bold transition-colors ${FOCO_OSCURO}`}>
               <Trash2 size={14} aria-hidden="true"/> Cancelar seleccionados
             </button>
             <button type="button" onClick={() => setSeleccion([])} aria-label="Quitar la selección" title="Quitar la selección"
-              className="p-1.5 text-slate-400 hover:text-white"><X size={14} aria-hidden="true"/></button>
+              className={`rounded-lg p-1.5 text-slate-400 hover:text-white ${FOCO_OSCURO}`}><X size={14} aria-hidden="true"/></button>
           </div>
         )}
       </div>

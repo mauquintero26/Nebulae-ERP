@@ -19,7 +19,9 @@ import { congelar, conteosDePasos, pasosConConteos } from './flujo.js';
 import { humanizarCodigo, tiene } from './estados-pedido.js';
 import { fechaLarga } from './fechas-colombia.js';
 import { formatoEntero } from './kpis.js';
-import { GRUPOS_PEC, vistaPuedeVencer } from './estados-compras.js';
+import { vistaPuedeVencer } from './estados-compras.js';
+// B4 T14 r1 (m1; D41, D42): las cajas y «Con atraso» cambian la vista con accionPestana, como el Hub de Ventas.
+import { accionPestana } from './tabla.js';
 
 export { esPecVencido, pasoFlujoPec } from './estados-compras.js';
 
@@ -204,26 +206,39 @@ export function pasoHubComprasDe(estado) {
   return null;
 }
 
+/** Una acción de la tabla como {campo: valor}, para sumarle campos en una sola acción {tipo: 'cambiar'}. */
+const comoCambios = (accion) => (accion.tipo === 'cambiar' ? { ...accion.cambios } : { [accion.tipo]: accion.valor });
+
 /**
- * B4 T14 (clic_en_hub, R5, C3): lo que despacha el clic en una caja de la franja del Hub. Pedido de compra, En tránsito y
- * Recibido ponen su pestaña y los estados de su etapa (FILTRO_DE_PASO); tocar la caja marcada vuelve a Todos (R6). Si
- * la pestaña nueva nunca vence (Recibido), se quita «Con atraso»: la tabla no queda vacía sin una razón a la vista. En
- * Kanban la caja abre su pestaña en Lista (como las tarjetas de T10). Lista de compras, Recepción en bodega o una clave
- * desconocida: null (son enlaces).
+ * B4 T14 (clic_en_hub, R5, C3); r1 (m1; D41, D42): lo que despacha el clic en una caja de la franja del Hub. Pedido de
+ * compra y En tránsito abren su pestaña con accionPestana (con las opciones de la Lista: lo filtrado que vale en la
+ * pestaña nueva se conserva y lo que no, se poda), como las cajas del Hub de Ventas. Recibido abre «Acciones tomadas» y,
+ * además, filtra los estados de su etapa (RECIBIDA y COMPLETADO): /compras/pedidos no acepta `paso`. Tocar la caja
+ * marcada vuelve a Todos (R6; Recibido suelta además los estados de su etapa). El semáforo no se toca. En Kanban la caja
+ * abre su pestaña en Lista (como las tarjetas de T10). Lista de compras, Recepción en bodega o una clave desconocida:
+ * null (son enlaces).
  * @param {Partial<import('./tabla.js').EstadoTabla> | null | undefined} estado
  * @param {unknown} clave
+ * @param {import('./tabla.js').OpcionesEstados | null | undefined} opciones  las de la Lista (opcionesEstadosPec)
  * @returns {import('./tabla.js').AccionTabla | null}
  */
-export function accionPasoHubCompras(estado, clave) {
+export function accionPasoHubCompras(estado, clave, opciones) {
   if (typeof clave !== 'string' || !tiene(FILTRO_DE_PASO, clave)) return null;
+  const e = /** @type {any} */ (estado);
   const enKanban = estado?.modo === 'kanban';
-  if (!enKanban && pasoHubComprasDe(estado) === clave) return { tipo: 'cambiar', cambios: { vista: 'todos', estados: [] } };
   const filtro = /** @type {{vista: string, estados: ReadonlyArray<string>}} */ (/** @type {any} */ (FILTRO_DE_PASO)[clave]);
-  /** @type {Record<string, unknown>} */
-  const cambios = { vista: filtro.vista, estados: [...filtro.estados] };
-  if (estado?.semaforo && !vistaPuedeVencer(filtro.vista)) cambios.semaforo = null;
-  if (enKanban) cambios.modo = 'lista';
-  return { tipo: 'cambiar', cambios };
+  /** @type {any} */
+  let accion;
+  if (!enKanban && pasoHubComprasDe(estado) === clave) {
+    accion = filtro.estados.length > 0
+      ? { tipo: 'cambiar', cambios: { vista: 'todos', estados: [] } }
+      : accionPestana(e, 'todos', opciones);
+  } else if (filtro.estados.length > 0) {
+    accion = { tipo: 'cambiar', cambios: { vista: filtro.vista, estados: [...filtro.estados] } };
+  } else {
+    accion = accionPestana(e, filtro.vista, opciones);
+  }
+  return enKanban ? { tipo: 'cambiar', cambios: { ...comoCambios(accion), modo: 'lista' } } : accion;
 }
 
 /**
@@ -246,23 +261,20 @@ export function pasosHubCompras(datos, estado) {
 const SEMAFORO_VENCIDOS = 'vencidos';
 
 /**
- * B4 T14 (RP40): lo que despacha un botón del semáforo de la franja del Hub. «Ver todo» quita el filtro; «Con atraso»
- * pone semaforo=vencidos (la regla del servidor: emitido o en tránsito con la entrega pasada). Desde una pestaña que
- * nunca vence (en bodega, acciones tomadas) pasa a Todos, y los estados filtrados que no pueden vencer se quitan: si no,
- * la tabla quedaría vacía sin una razón a la vista.
+ * B4 T14 (RP40); r1 (m1; D41, D42): lo que despacha un botón del semáforo de la franja del Hub. «Ver todo» quita el
+ * filtro; «Con atraso» pone semaforo=vencidos (la regla del servidor: emitido o en tránsito con la entrega pasada) sin
+ * cambiar de pestaña ni podar el filtro, como el Hub de Ventas. Solo si la vista activa no puede tener atrasos (en
+ * bodega, acciones tomadas) pasa a Todos con accionPestana (como Pedidos de venta, T10), en la misma acción.
  * @param {Partial<import('./tabla.js').EstadoTabla> | null | undefined} estado
  * @param {unknown} filtro  el FiltroSemaforo de BannerFlujo
+ * @param {import('./tabla.js').OpcionesEstados | null | undefined} opciones  las del modo que se ve
  * @returns {import('./tabla.js').AccionTabla}
  */
-export function accionSemaforoCompras(estado, filtro) {
+export function accionSemaforoCompras(estado, filtro, opciones) {
   if (filtro !== 'atrasados') return { tipo: 'semaforo', valor: null };
-  const actuales = Array.isArray(estado?.estados) ? estado.estados : [];
-  const quedan = actuales.filter((e) => GRUPOS_PEC.vencibles.includes(e));
-  /** @type {Record<string, unknown>} */
-  const cambios = { semaforo: SEMAFORO_VENCIDOS };
-  if (!vistaPuedeVencer(estado?.vista)) cambios.vista = 'todos';
-  if (quedan.length !== actuales.length) cambios.estados = quedan;
-  return { tipo: 'cambiar', cambios };
+  if (vistaPuedeVencer(estado?.vista)) return { tipo: 'semaforo', valor: SEMAFORO_VENCIDOS };
+  const accion = accionPestana(/** @type {any} */ (estado), 'todos', opciones);
+  return /** @type {any} */ ({ tipo: 'cambiar', cambios: { ...comoCambios(accion), semaforo: SEMAFORO_VENCIDOS } });
 }
 
 /**

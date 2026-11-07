@@ -1022,3 +1022,21 @@ export function altoTablero(altoVentana, arriba, { minimo = ALTO_MINIMO_TABLERO,
   const libre = Math.floor(altoVentana - arriba - margen);
   return Number.isFinite(libre) ? Math.max(minimo, libre) : minimo;
 }
+
+/**
+ * B4 T8 (KANBAN-ventas-listas punto 7, R5); B4 T14 r1 (m4 y m14) la sube aquí desde kanban-ventas.js, que la re-exporta:
+ * una sola regla para los tableros de Ventas y de Compras. Los estados que pide una columna de un tablero en modo servidor:
+ * los de la columna cruzados con el filtro de estados de la pantalla (estado.estados), en el orden de la columna; sin
+ * filtro, los de la columna. Sin ninguno en común, [] (la pantalla no pide esa columna). Una copia nueva.
+ * T8 r1 (m3): si el filtro trae el estado principal de la columna (el primero: la opción de esa columna en el filtro del
+ * tablero), la columna entera, también los heredados: marcar la columna en el filtro muestra lo mismo que sin filtro.
+ * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
+ * @param {ReadonlyArray<string> | null | undefined} filtro
+ * @returns {string[]}
+ */
+export function estadosDeColumnaLista(columna, filtro) {
+  const propios = Array.isArray(columna?.estados) ? columna.estados : [];
+  if (!Array.isArray(filtro) || filtro.length === 0) return [...propios];
+  if (propios.length > 0 && filtro.includes(propios[0])) return [...propios];
+  return propios.filter((e) => filtro.includes(e));
+}
