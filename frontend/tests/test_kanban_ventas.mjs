@@ -24,7 +24,7 @@ import {
 // B4 T7: lo nuevo por el espacio de nombres, para que su falta no tape los demás rojos.
 import * as kv from '../src/lib/kanban-ventas.js';
 import { columnaHub, accionSiguienteDocumento, RUTA_HUB_VENTAS } from '../src/lib/hub-ventas.js';
-import { ESTADOS_PEDIDO, transicionesPedido, infoEstadoPedido } from '../src/lib/estados-pedido.js';
+import { ESTADOS_PEDIDO, transicionesPedido, infoEstadoPedido, grupoPedido } from '../src/lib/estados-pedido.js';
 import { ESTADOS_SC, infoEstadoSolicitud } from '../src/lib/estados-solicitud.js';
 import { ESTADOS_COTIZACION, infoEstadoCotizacion } from '../src/lib/estados-cotizacion.js';
 import { MAXIMO_ESTADOS, estadoTablaInicial, queryListado } from '../src/lib/tabla.js';
@@ -1043,6 +1043,33 @@ console.log('--- B4 T10 TEST M: opcionesEstadosPedidos — el filtro de estados 
   // Las de Solicitudes y Cotizaciones no cambian.
   assert.deepEqual(kv.opcionesEstadosCotizaciones('rechazadas').map((o) => o.valor), ['RECHAZADA']);
   assert.deepEqual(kv.opcionesEstadosSolicitudes('canceladas').map((o) => o.valor), ['CANCELADA']);
+  // r1 (m5): los estados heredados vuelven al filtro (B1: «y, al final, cualquier otro que traigan los pedidos»): los de
+  // resumen.por_estado de la MISMA respuesta de /ventas/pedidos que no están en la lista base y cuyo grupo (grupoPedido)
+  // es el de la pestaña; en Todos, los de cualquier grupo. Con la etiqueta de infoEstadoPedido, en el orden de
+  // ESTADOS_PEDIDO, después de los de siempre. Uno sin grupo (desconocido) no entra: el servidor rechaza filtrar por él
+  // (_estados_de_lista: 422 «El estado «x» no existe en VEN.»). Un conteo que no es un número positivo, tampoco.
+  const porEstado = { EN_PROCESO: 3, DISPONIBLE: 4, PARCIALMENTE_DISPONIBLE: 1, PAGADO: 2, ESTADO_RARO: 1, BORRADOR: 0 };
+  const con = (vista, pe = porEstado) => kv.opcionesEstadosPedidos(vista, pe).map((o) => [o.valor, o.etiqueta]);
+  assert.deepEqual(con('en_proceso'), [['EN_PROCESO', 'En proceso'], ['EN_TRANSITO', 'En tránsito'], ['PAGADO', 'Pagado'],
+    ['PARCIALMENTE_DISPONIBLE', 'Parcialmente disponible']]);
+  assert.deepEqual(con('listo_entrega'), [['LISTO_ENTREGA', 'Listo para entrega'], ['DISPONIBLE', 'Disponible']]);
+  assert.deepEqual(con('todos').slice(0, 9), etiquetas('todos'), 'primero los de siempre');
+  assert.deepEqual(con('todos').slice(9), [['PAGADO', 'Pagado'], ['PARCIALMENTE_DISPONIBLE', 'Parcialmente disponible'], ['DISPONIBLE', 'Disponible']]);
+  assert.deepEqual(con('cancelado', { DEVUELTO_TOTAL: 2, CANCELADO: 1 }), etiquetas('cancelado'), 'los de la base no se repiten');
+  assert.deepEqual(con('pend_compra', { BORRADOR: 1, CONFIRMADO: 2, PAGADO: 5 }).slice(2), [['BORRADOR', 'Borrador'], ['CONFIRMADO', 'Confirmado']],
+    'solo los de su grupo');
+  // Sin heredados de la pestaña, la misma referencia de siempre (BarraTabla la llama en cada render).
+  assert.equal(kv.opcionesEstadosPedidos('facturado', porEstado), kv.opcionesEstadosPedidos('facturado'));
+  assert.equal(kv.opcionesEstadosPedidos('facturado', { FACTURADO: 4 }), kv.opcionesEstadosPedidos('facturado'));
+  for (const nada of [null, undefined, [], 'PAGADO', 5, { PAGADO: 'dos' }, { PAGADO: -1 }, { PAGADO: 0 }]) {
+    assert.equal(kv.opcionesEstadosPedidos('en_proceso', nada), kv.opcionesEstadosPedidos('en_proceso'), JSON.stringify(nada));
+  }
+  assert.deepEqual(kv.opcionesEstadosPedidos('otra', porEstado), [], 'otra vista: nada');
+  assert.ok(!kv.opcionesEstadosPedidos('todos', porEstado).some((o) => o.valor === 'ESTADO_RARO'), 'el desconocido no');
+  assert.ok(Object.isFrozen(kv.opcionesEstadosPedidos('en_proceso', porEstado)) && Object.isFrozen(kv.opcionesEstadosPedidos('en_proceso', porEstado)[2]));
+  // Los 18 estados que conoce el servidor (ETIQUETAS_ESTADO['VEN']) son los de ESTADOS_PEDIDO y todos tienen grupo.
+  assert.equal(Object.keys(ESTADOS_PEDIDO).length, 18);
+  for (const e of Object.keys(ESTADOS_PEDIDO)) assert.ok(grupoPedido(e), e);
 }
 
 console.log('--- B4 T10 TEST N: consultaColumnaPedido — la consulta de cada columna del tablero de Pedidos ---');
@@ -1192,9 +1219,14 @@ console.log('--- B4 T10 TEST P: las acciones del tablero de Pedidos — mover de
   // de la lista no, así que ahí el saldo a favor sale de lo pagado (total − saldo) y la orden de pago se dice con «si».
   const BORRADOR = 'La cotización COT-21 volverá a Borrador para que puedas ajustarla, reenviarla al cliente y crear otro pedido.';
   const SALDO = 'El dinero ya pagado queda como saldo a favor de la cotización y pasa al pedido nuevo si la vuelves a convertir.';
+  // r1 (m2): en la fila, total − saldo cuenta también los AJUSTE_AUTORIZADO y los CONVERSION_COTIZACION viejos (el detalle
+  // y el servidor no): la frase va en condicional, como la de la PXP, y así nunca afirma un saldo a favor que no hay.
+  const SALDO_FILA = 'Si el pedido tiene pagos verificados, ese dinero queda como saldo a favor de la cotización y pasa al pedido nuevo.';
   assert.equal(kv.EFECTO_CANCELAR_PEDIDO, 'El pedido queda Cancelado y no se puede reabrir.');
   const fila = { id: 40, numero: 'PVEN-40', estado: 'EN_PROCESO', cot_numero: 'COT-21', total_cop: 1000000, saldo_cop: 400000, pxp_id: 7, pxp_numero: 'PXP-7' };
-  assert.deepEqual(kv.efectosCancelarPedido(fila), [kv.EFECTO_CANCELAR_PEDIDO, BORRADOR, SALDO, 'Si la orden de pago PXP-7 sigue pendiente, también se cancela.']);
+  assert.deepEqual(kv.efectosCancelarPedido(fila), [kv.EFECTO_CANCELAR_PEDIDO, BORRADOR, SALDO_FILA, 'Si la orden de pago PXP-7 sigue pendiente, también se cancela.']);
+  assert.equal(kv.avisoSaldoAFavorAlCancelarPedido(fila), SALDO_FILA, 'la fila: en condicional');
+  assert.notEqual(kv.avisoSaldoAFavorAlCancelarPedido(fila), SALDO, 'la fila no afirma lo del detalle');
   assert.deepEqual(kv.efectosCancelarPedido({ ...fila, cot_numero: null, pxp_id: null, pxp_numero: null }), [kv.EFECTO_CANCELAR_PEDIDO]);
   assert.deepEqual(kv.efectosCancelarPedido({ ...fila, saldo_cop: 1000000, pxp_numero: null }), [kv.EFECTO_CANCELAR_PEDIDO, BORRADOR], 'nada pagado');
   assert.equal(kv.avisoSaldoAFavorAlCancelarPedido({ ...fila, cot_numero: '' }), null, 'sin cotización no hay a dónde pasarlo');
@@ -1234,8 +1266,14 @@ console.log('--- B4 T10 TEST Q: el cableado del tablero de Pedidos (C9, C15, R11
   assert.match(codigo, /const tarjetaDePedido = \(p: FilaPedido\) => tarjetaPedido\(p\);/);
   // C9: la suma de cada columna es el resumen de H47 de su consulta (resumenColumnaPedido; Cancelado no).
   assert.match(lista, /\(clave: string, d: DatosColumnaKanban<FilaPedido>\) => resumenColumnaPedido\(clave, d\.resumen\)/);
-  // 'cambio': el PATCH del estado con el autor; el tablero recarga su origen y su destino, aquí lo demás.
-  assert.match(lista, /async function cambiarDesdeTablero\(p: FilaPedido, resultado: \{ estado: string \}\) \{\s*await apiFetch\(`\/ventas\/pedidos\/\$\{p\.id\}`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ estado: resultado\.estado, updated_by: autorActual\(\) \}\),\s*\}\);\s*recargarTrasCambio\(\);\s*\}/);
+  // 'cambio': el PATCH del estado con el autor; el tablero recarga su origen y su destino, aquí lo demás. r1 (m4): si el
+  // PATCH falla, también se recarga lo demás con la regla de recargarTrasError (un 409: el pedido cambió en otro lado) y
+  // el error sigue (el tablero deshace y recarga su origen y su destino, D39: aquí no se llama a tablero.recargar).
+  assert.match(lista, /async function cambiarDesdeTablero\(p: FilaPedido, resultado: \{ estado: string \}\) \{\s*try \{\s*await apiFetch\(`\/ventas\/pedidos\/\$\{p\.id\}`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ estado: resultado\.estado, updated_by: autorActual\(\) \}\),\s*\}\);\s*\} catch \(err\) \{\s*if \(recargarTrasError\(err\)\) recargarTrasCambio\(\);\s*throw err;\s*\}\s*recargarTrasCambio\(\);\s*\}/);
+  {
+    const cambiar = lista.slice(lista.indexOf('async function cambiarDesdeTablero('), lista.indexOf('\n  }\n', lista.indexOf('async function cambiarDesdeTablero(')));
+    assert.ok(cambiar.length > 100 && !cambiar.includes('tablero.recargar'), 'el arrastre no recarga el tablero a mano (lo hace deshacer)');
+  }
   // 'facturar' (N2): confirmar() con confirmacionFacturarPedido → PATCH FACTURADO; 'cancelar': ModalMotivo.
   assert.match(lista, /if \(resultado\.accion === 'cancelar'\) setCancelando\(\{ pedido: p, columnas: \[origen, destino\] \}\);\s*else if \(resultado\.accion === 'facturar'\) void facturarDesdeTablero\(p, \[origen, destino\]\);/);
   const facturar = lista.slice(lista.indexOf('async function facturarDesdeTablero('), lista.indexOf('\n  }\n', lista.indexOf('async function facturarDesdeTablero(')));

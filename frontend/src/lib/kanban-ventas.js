@@ -1026,17 +1026,38 @@ const OPCIONES_PEDIDO_POR_VISTA = congelar({
   todos: congelar(COLUMNAS_PEDIDO.flatMap((c) => ESTADOS_FILTRO_PEDIDO.filter((e) => c.estados.includes(e))).map(opcionPedido)),
 });
 
+/** El orden de los estados de pedido (el de ESTADOS_PEDIDO): los heredados del filtro van en ese orden. */
+const ORDEN_ESTADO_PEDIDO = congelar(Object.fromEntries(Object.keys(ESTADOS_PEDIDO).map((e, i) => [e, i])));
+
 /**
  * B4 T10 (TABLA-listas-ventas punto 7, H15): las opciones del filtro de estados (FiltroEstados de BarraTabla) de la
  * pestaña `vista` de Pedidos de venta, con los nombres de estados-pedido.js: Pend. Compra → Pendiente de compra y
  * Pendiente de pago; En Proceso → En proceso y En tránsito; Listo Entrega, Entregado y Facturado → el suyo; Cancelado →
- * Cancelado y Devuelto; Todos → los nueve. Los heredados de fase4 y de la tienda no se ofrecen (como en el Hub). Otra
- * vista, []. Inmutables y la misma referencia en cada llamada.
+ * Cancelado y Devuelto; Todos → los nueve. Otra vista, [].
+ * r1 (m5; B1: «y, al final, cualquier otro que traigan los pedidos»): con `porEstado` (el resumen.por_estado de la
+ * MISMA respuesta de GET /ventas/pedidos, H47), al final van los estados heredados que traen los pedidos (un conteo
+ * positivo) y que no están en la lista base, si su grupo (grupoPedido) es el de la pestaña; en Todos, los de cualquier
+ * grupo. Con la etiqueta de infoEstadoPedido, en el orden de ESTADOS_PEDIDO. Uno sin grupo (desconocido) no entra: el
+ * servidor rechaza filtrar por él (_estados_de_lista: 422). Sin heredados, la lista base: inmutable y la misma
+ * referencia en cada llamada; con ellos, una lista nueva, también inmutable.
  * @param {string | null | undefined} vista
+ * @param {Record<string, unknown> | null} [porEstado]
  * @returns {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
  */
-export function opcionesEstadosPedidos(vista) {
-  return typeof vista === 'string' && tiene(OPCIONES_PEDIDO_POR_VISTA, vista) ? OPCIONES_PEDIDO_POR_VISTA[vista] : SIN_OPCIONES;
+export function opcionesEstadosPedidos(vista, porEstado = null) {
+  if (typeof vista !== 'string' || !tiene(OPCIONES_PEDIDO_POR_VISTA, vista)) return SIN_OPCIONES;
+  const base = OPCIONES_PEDIDO_POR_VISTA[vista];
+  if (porEstado === null || typeof porEstado !== 'object' || Array.isArray(porEstado)) return base;
+  const enLaBase = new Set(base.map((o) => o.valor));
+  const heredados = Object.keys(porEstado).filter((e) => {
+    const n = Number(porEstado[e]);
+    if (!Number.isFinite(n) || n <= 0 || enLaBase.has(e)) return false;
+    const grupo = grupoPedido(e);
+    return grupo !== null && (vista === 'todos' || CLAVE_GRUPO_PEDIDO[grupo] === vista);
+  });
+  if (heredados.length === 0) return base;
+  heredados.sort((a, b) => ORDEN_ESTADO_PEDIDO[a] - ORDEN_ESTADO_PEDIDO[b]);
+  return congelar([...base, ...heredados.map(opcionPedido)]);
 }
 
 /**
@@ -1162,17 +1183,23 @@ export function avisoCotizacionAlCancelarPedido(pedido) {
 
 /**
  * B4 T10 (B7, R6): lo pagado no se pierde al cancelar: queda como saldo a favor de la cotización (la frase del modal del
- * detalle). Sin cotización no hay a dónde pasarlo: null. Con lo pagado del detalle (`pagos`, saldoAFavorAlCancelar) o,
- * en una fila de la lista (que no trae `pagos`), con lo pagado según el pedido (total − saldo, en pesos enteros).
+ * detalle). Sin cotización no hay a dónde pasarlo: null. Con lo pagado del detalle (`pagos`, saldoAFavorAlCancelar), la
+ * frase del detalle. En una fila de la lista (que no trae `pagos`), si total − saldo (en pesos enteros) es positivo,
+ * r1 (m2): la frase va en condicional, como la de la orden de pago: total − saldo cuenta también los AJUSTE_AUTORIZADO
+ * y los CONVERSION_COTIZACION viejos, que el detalle y el servidor no pasan a saldo a favor, así que la fila no lo afirma.
  * @param {any} pedido
  * @returns {string | null}
  */
 export function avisoSaldoAFavorAlCancelarPedido(pedido) {
   if (!textoLimpio(pedido?.cot_numero)) return null;
-  const pagado = Array.isArray(pedido?.pagos)
-    ? saldoAFavorAlCancelar(pedido)
-    : redondearPeso(pedido?.total_cop) - redondearPeso(pedido?.saldo_cop);
-  return pagado > 0 ? 'El dinero ya pagado queda como saldo a favor de la cotización y pasa al pedido nuevo si la vuelves a convertir.' : null;
+  if (Array.isArray(pedido?.pagos)) {
+    return saldoAFavorAlCancelar(pedido) > 0
+      ? 'El dinero ya pagado queda como saldo a favor de la cotización y pasa al pedido nuevo si la vuelves a convertir.'
+      : null;
+  }
+  return redondearPeso(pedido?.total_cop) - redondearPeso(pedido?.saldo_cop) > 0
+    ? 'Si el pedido tiene pagos verificados, ese dinero queda como saldo a favor de la cotización y pasa al pedido nuevo.'
+    : null;
 }
 
 /**

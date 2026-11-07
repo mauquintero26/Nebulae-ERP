@@ -971,12 +971,19 @@ console.log('--- TEST 22 (B4 T10): PasosFlujo parte las etiquetas de la barra en
   assert.ok(codigo.includes("className={`flex ${partirEtiquetas ? PASO_PARTIDO : PASO_RECORTADO} rounded-lg ${vertical ? 'items-start gap-2 text-left' : 'flex-col items-center text-center'}"),
     'el elemento del paso elige su ancho mínimo con la prop');
   assert.match(codigo, /function PasosBarra\(\{\n {2}pasos, vertical, etiqueta, onSeleccionar, compacto, partirEtiquetas = false,\n\}/, 'PasosBarra: por defecto false');
+  // r1 (m6): con la prop, el <li> de cada paso tampoco se angosta por debajo de su paso (min-w-min). Si la columna se
+  // achica (el panel de Actividad llega a 800 px), la barra se desplaza dentro de su caja (overflow-x-auto en el Status
+  // Tracker) en lugar de montar una etiqueta sobre la siguiente. Sin la prop, el <li> de siempre (min-w-0).
+  assert.ok(codigo.includes("className={vertical ? 'flex min-w-0 flex-col' : `flex ${partirEtiquetas ? PASO_PARTIDO : PASO_RECORTADO} items-start ${i < ultimo ? 'flex-auto' : 'flex-initial'}`}"),
+    'el <li> elige su ancho mínimo con la prop');
   // Solo el Status Tracker del pedido la pasa: la cadena, la franja y el panel rápido quedan como antes.
   const leerApp = (r) => readFileSync(new URL(`../src/${r}`, import.meta.url), 'utf8');
   assert.ok(!leerApp('components/flujo/CadenaDocumentos.tsx').includes('partirEtiquetas'));
   assert.ok(!leerApp('components/flujo/BannerFlujo.tsx').includes('partirEtiquetas'));
   assert.ok(!leerApp('app/dashboard/ventas/page.tsx').includes('partirEtiquetas'));
   assert.match(leerApp('app/dashboard/ventas/venta/[id]/page.tsx'), /<PasosFlujo variante="barra" pasos=\{pasosPedido\} etiqueta="Pasos del pedido" partirEtiquetas \/>/);
+  assert.match(leerApp('app/dashboard/ventas/venta/[id]/page.tsx'), /<div className="[^"]*\boverflow-x-auto\b[^"]*">\s*<PasosFlujo variante="barra" pasos=\{pasosPedido\} etiqueta="Pasos del pedido" partirEtiquetas \/>/,
+    'el Status Tracker se desplaza si la barra no cabe');
 }
 
 console.log('\nOK: test_flujo.mjs');

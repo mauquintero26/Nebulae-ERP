@@ -491,9 +491,11 @@ function PedidoVentaDetalleContent() {
               T11 (V5): cada paso es su propia columna con un conector entre pasos y la etiqueta va centrada bajo su
               círculo; a 1024 px (con el panel de Actividad abierto) las cinco no caben en una línea: partirEtiquetas las
               parte en dos en lugar de recortarlas, y la barra usa todo el ancho de la columna (sin el px-6 que pedía la
-              línea de antes), así ninguna palabra se corta por la mitad (banco de T10). */}
+              línea de antes), así ninguna palabra se corta por la mitad (banco de T10). r1 (m6): si la columna se
+              angosta más (el panel de Actividad llega a 800 px), cada paso conserva su ancho mínimo y la barra se
+              desplaza aquí dentro (overflow-x-auto) en lugar de montar una etiqueta sobre otra. */}
           {stepIndex >= 0 && (
-            <div className="bg-white py-6 border-b border-slate-100 mb-8">
+            <div className="bg-white py-6 border-b border-slate-100 mb-8 overflow-x-auto">
               <PasosFlujo variante="barra" pasos={pasosPedido} etiqueta="Pasos del pedido" partirEtiquetas />
             </div>
           )}
@@ -638,8 +640,8 @@ function PedidoVentaDetalleContent() {
               <LineaEnlaceCliente enlace={pedido?.enlace_cliente} estado={estadoActual} />
               {/* U24: el total y tres recuadros grandes (anticipo requerido, pagado verificado y saldo), la barra de lo
                   pagado y el aviso del anticipo pendiente (R4). N1: lo pagado sale del libro de pagos (total - saldo); el
-                  requerido, del % guardado en el pedido (60 sin snapshot). @container: los recuadros se apilan cuando la
-                  tarjeta mide menos de 448 px. */}
+                  requerido, del % guardado en el pedido (60 sin snapshot). B4 T10 r1 (m7): los recuadros son la
+                  FranjaKpis de abajo, y es ella la que decide sus columnas por su propio ancho (clasesFranja). */}
               <div className="@container bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
                 <div>
                   <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Total del pedido</p>

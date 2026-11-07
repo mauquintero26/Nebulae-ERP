@@ -255,27 +255,30 @@ function CeldaAcciones({ p }: { p: FilaPedido }) {
  * (estables, D40); sus celdas piden a la pantalla lo suyo por AccionesLista. Exportadas para el esqueleto del Suspense.
  * R26 (medido en el banco de T10): a 1024 px con el menú abierto la caja de la tabla deja 704 px con su barra vertical.
  * Con Cliente en 152 (RP85) y Acciones en el mínimo de la tabla (64, ANCHO_MIN) las columnas sumaban 732 y la tabla corría
- * 28 px. Acciones queda en los 56 del diseño (anchoMin: 56; el menú ⋯ cabe) y Cliente nace en 132: 40 + 132 + 132 + 112 +
- * 104 + 128 + 56 = 704. Como es la flexible, toma lo que sobra en pantallas anchas.
+ * 28 px. r1 (m1): con Acciones en 56 su encabezado salía «Ac…» en todos los anchos; queda en 88, como en T9, y se lee
+ * completo. Cliente baja a su piso de R26 (120) y Estado a 120 (como T8 y T9; recorta las mismas insignias que 128). Pedido
+ * / Origen se queda en 132: el número del pedido mide 105 px (+ 24 de relleno) y en 120 se recortaba en todas las filas.
+ * Lo que falta sale de los montos: Total 108 y Saldo 96 (caben hasta $99.999.999: 81 y 67 px medidos). 40 + 132 + 120 +
+ * 108 + 96 + 120 + 88 = 704. Cliente es la flexible: toma lo que sobra en pantallas anchas.
  */
 export const COLUMNAS_TABLA_PEDIDOS: ColumnaTabla<FilaPedido>[] = [
   { id: 'numero', titulo: 'Pedido / Origen', ancho: 132, clave: true, fija: 'izquierda', ordenable: 'numero', titleCelda: tituloNumero,
     celda: (p) => <CeldaNumero p={p} /> },
-  { id: 'cliente', titulo: 'Cliente', ancho: 132, flexible: true, ordenable: 'cliente', titleCelda: (p) => p.customer_name || '-',
+  { id: 'cliente', titulo: 'Cliente', ancho: 120, flexible: true, ordenable: 'cliente', titleCelda: (p) => p.customer_name || '-',
     celda: (p) => <span className="block truncate text-xs font-bold text-slate-800">{p.customer_name || '-'}</span> },
-  { id: 'total', titulo: 'Total', ancho: 112, alinear: 'derecha', ordenable: 'total', titleCelda: (p) => fCOP(p.total_cop),
+  { id: 'total', titulo: 'Total', ancho: 108, alinear: 'derecha', ordenable: 'total', titleCelda: (p) => fCOP(p.total_cop),
     celda: (p) => <span className="block truncate text-xs font-black text-slate-800">{fCOP(p.total_cop)}</span> },
   { id: 'anticipo', titulo: 'Anticipo', ancho: 104, alinear: 'derecha', ocultaPorDefecto: true, ordenable: 'anticipo',
     titleCelda: (p) => fCOP(p.anticipo_cop),
     celda: (p) => <span className="block truncate text-xs font-bold text-emerald-700">{fCOP(p.anticipo_cop)}</span> },
-  { id: 'saldo', titulo: 'Saldo', ancho: 104, alinear: 'derecha', ordenable: 'saldo',
+  { id: 'saldo', titulo: 'Saldo', ancho: 96, alinear: 'derecha', ordenable: 'saldo',
     titleCelda: (p) => { const s = saldoVisiblePedido(p); return s === null ? 'Sin saldo: el pedido no suma dinero (H47)' : fCOP(s); },
     celda: (p) => <CeldaSaldo p={p} /> },
   { id: 'entrega', titulo: 'Entrega est.', ancho: 104, ocultaPorDefecto: true, ordenable: 'entrega',
     titleCelda: (p) => fechaSolo(p.fecha_entrega_estimada) || 'Sin fecha de entrega', celda: (p) => <CeldaEntrega p={p} /> },
-  { id: 'estado', titulo: 'Estado', ancho: 128, clave: true, ordenable: 'estado', titleCelda: tituloEstado,
+  { id: 'estado', titulo: 'Estado', ancho: 120, clave: true, ordenable: 'estado', titleCelda: tituloEstado,
     celda: (p) => <CeldaEstado p={p} /> },
-  { id: 'acciones', titulo: 'Acciones', ancho: 56, anchoMin: 56, clave: true, fija: 'derecha', celda: (p) => <CeldaAcciones p={p} /> },
+  { id: 'acciones', titulo: 'Acciones', ancho: 88, clave: true, fija: 'derecha', celda: (p) => <CeldaAcciones p={p} /> },
 ];
 
 /**
@@ -431,6 +434,13 @@ export default function VentaClient() {
   // sola vez, ya con la pestaña del enlace), y queda anotada en enlacePendiente. Con listo, si el modo es Kanban,
   // accionVistaEnLista pasa a Lista con la poda de la Lista. Las dos refs se consumen una vez (StrictMode no repite el
   // enlace) y el segundo efecto es de layout: el tablero no llega a pintarse antes de pasar a Lista.
+  // r1 (m5): las opciones del filtro de la Lista suman los estados heredados que traen los pedidos (resumen.por_estado
+  // de la MISMA respuesta, H47; opcionesEstadosPedidos). Una sola función, estable mientras no llega otra respuesta: la
+  // barra y la poda de las pestañas, del conmutador, del semáforo y del enlace usan la misma.
+  const porEstado = listado.resumen?.por_estado ?? null;
+  const opcionesDeLaLista = useCallback(
+    (vista: string | null) => opcionesEstadosPedidos(vista, porEstado), [porEstado],
+  );
   const enlaceLeido = useRef(false);
   const enlacePendiente = useRef<string | null>(null);
   useEffect(() => {
@@ -439,15 +449,15 @@ export default function VentaClient() {
     const vista = leerEnlacePedidos(window.location.search);
     if (!vista) return;
     enlacePendiente.current = vista;
-    despachar(accionPestana(estado, vista, opcionesEstadosPedidos));
+    despachar(accionPestana(estado, vista, opcionesDeLaLista));
     router.replace(rutaSinParametro(RUTA_LISTA_PEDIDOS, window.location.search, 'tab'), { scroll: false });
-  }, [estado, despachar, router]);
+  }, [estado, despachar, router, opcionesDeLaLista]);
   useLayoutEffect(() => {
     const vista = enlacePendiente.current;
     if (!listo || vista === null) return;
     enlacePendiente.current = null;
-    if (estado.modo === 'kanban') despachar(accionVistaEnLista(estado, vista, opcionesEstadosPedidos));
-  }, [listo, estado, despachar]);
+    if (estado.modo === 'kanban') despachar(accionVistaEnLista(estado, vista, opcionesDeLaLista));
+  }, [listo, estado, despachar, opcionesDeLaLista]);
 
   // ── B4 T10, bloque 2: pestañas y búsqueda (TABLA-listas-ventas punto 7; R5, RP21, RP26, D40, D41; H15, H17) ──
   const pestanas = pestanasDeLaLista(listado.conteos as ConteosPedidos | null);
@@ -464,9 +474,9 @@ export default function VentaClient() {
   const alCambiarBarra = useCallback((accion: AccionTabla) => {
     if (accion.tipo === 'modo') {
       const modo = String(accion.valor);
-      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesEstadosPedidos));
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesDeLaLista));
     } else despachar(accion);
-  }, [estado, despachar]);
+  }, [estado, despachar, opcionesDeLaLista]);
   // m8 de T8: el «vacío» de la lista solo cambia con la búsqueda. Sin búsqueda, de dónde salen los pedidos (H47).
   const vacioLista = useMemo(() => {
     const q = estado.q.trim();
@@ -515,11 +525,18 @@ export default function VentaClient() {
   // (Entregas elige la bodega); Facturado solo desde Entregado, con confirmación; Cancelado pide el motivo; un pedido
   // entregado o cancelado no vuelve atrás. Lo que no se puede queda bloqueado con su motivo ANTES de soltar.
   // 'cambio': el PATCH del estado. El tablero mueve la tarjeta y, si el servidor la rechaza, la devuelve con su mensaje;
-  // recarga su origen y su destino (D39) y aquí se recargan las pestañas, la franja y las tarjetas.
+  // recarga su origen y su destino (D39) y aquí se recargan las pestañas, la franja y las tarjetas. r1 (m4): si el PATCH
+  // falla, también, con la regla de recargarTrasError (un 409: el pedido cambió en otro lado), y el error sigue para que
+  // el tablero deshaga (eso ya recarga su origen y su destino: aquí no se llama a tablero.recargar).
   async function cambiarDesdeTablero(p: FilaPedido, resultado: { estado: string }) {
-    await apiFetch(`/ventas/pedidos/${p.id}`, {
-      method: 'PATCH', body: JSON.stringify({ estado: resultado.estado, updated_by: autorActual() }),
-    });
+    try {
+      await apiFetch(`/ventas/pedidos/${p.id}`, {
+        method: 'PATCH', body: JSON.stringify({ estado: resultado.estado, updated_by: autorActual() }),
+      });
+    } catch (err) {
+      if (recargarTrasError(err)) recargarTrasCambio();
+      throw err;
+    }
     recargarTrasCambio();
   }
   // 'accion' 'facturar' (N2): confirmar() con el texto del panel rápido del Hub → PATCH {estado: 'FACTURADO'}; 'cancelar':
@@ -595,7 +612,7 @@ export default function VentaClient() {
   const vistaActiva = enKanban ? null : estado.vista;
   const elegirVista = (vista: string) => {
     const siguiente = enKanban ? vista : (alternarSeleccion(estado.vista, vista) ?? INICIAL_PEDIDOS.vista);
-    despachar(accionVistaEnLista(estado, siguiente, opcionesEstadosPedidos));
+    despachar(accionVistaEnLista(estado, siguiente, opcionesDeLaLista));
   };
 
   // ── B4 T10, bloque 6: la franja del flujo (FLUJO-ventas-pantallas D; R8, C3, D42, RP21, RP90) ──
@@ -609,7 +626,7 @@ export default function VentaClient() {
   // Kanban (r2b de T8), con la poda de las opciones del modo que se ve.
   const alFiltrarSemaforo = (f: FiltroSemaforo) => {
     if (f !== 'todos' && VISTAS_SIN_ATRASO.includes(estado.vista ?? '')) {
-      despachar(accionPestana(estado, INICIAL_PEDIDOS.vista, enKanban ? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesEstadosPedidos));
+      despachar(accionPestana(estado, INICIAL_PEDIDOS.vista, enKanban ? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesDeLaLista));
     }
     despachar({ tipo: 'semaforo', valor: f === 'todos' ? null : f });
   };
@@ -683,7 +700,7 @@ export default function VentaClient() {
                 pestanas={enKanban ? undefined : pestanas}
                 estadoConteos={estadoConteos}
                 placeholder="Buscar por número, cliente, asesor, solicitud, cotización o producto…"
-                opcionesEstados={enKanban ? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesEstadosPedidos}
+                opcionesEstados={enKanban ? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesDeLaLista}
                 ajustes={{ columnas: COLUMNAS_TABLA_PEDIDOS, preferencias: prefs, anchoRef: anchoTablaRef }}
                 kanbanDisponible
                 pantallaCompleta={enKanban ? undefined : { completa, alternar }}

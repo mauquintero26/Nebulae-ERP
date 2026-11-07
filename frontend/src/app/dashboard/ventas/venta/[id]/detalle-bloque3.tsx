@@ -203,7 +203,7 @@ export function TablaProductosPedido({ pedido }: { pedido: PedidoBloque3 | null 
   // sobra (a 1440 px con el menú abierto la caja mide 697).
   const columnas = useMemo<ColumnaTabla<FilaProductoPedido>[]>(() => [
     { id: 'producto', titulo: 'Producto', ancho: 152, flexible: true, titleCelda: (f) => f.producto,
-      celda: (f) => <span className="block truncate font-bold text-slate-800 text-sm">{f.producto}</span> },
+      celda: (f) => <span className="block whitespace-normal break-words leading-tight font-bold text-slate-800 text-sm">{f.producto}</span> },
     { id: 'cantidad', titulo: 'Cant.', ancho: 64, alinear: 'centro',
       celda: (f) => <span className="text-sm font-bold text-slate-700">{f.cantidad}</span> },
     { id: 'unitario', titulo: 'P. unit. sin IVA', ancho: 128, alinear: 'derecha', titleCelda: (f) => formatoPesos(f.unitario),

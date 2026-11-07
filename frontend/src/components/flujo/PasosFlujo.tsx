@@ -459,7 +459,9 @@ function PasosBarra({
           <li
             key={`${paso.clave}-${i}`}
             // r1 (C2): cada paso parte de su contenido (flex-auto) y el último también puede achicarse (flex-initial).
-            className={vertical ? 'flex min-w-0 flex-col' : `flex min-w-0 items-start ${i < ultimo ? 'flex-auto' : 'flex-initial'}`}
+            // B4 T10 r1 (m6): con partirEtiquetas, el <li> tampoco se angosta por debajo de su paso (min-w-min): si no
+            // cabe, la barra se desplaza en su caja en lugar de montar una etiqueta sobre otra. Sin la prop, min-w-0.
+            className={vertical ? 'flex min-w-0 flex-col' : `flex ${partirEtiquetas ? PASO_PARTIDO : PASO_RECORTADO} items-start ${i < ultimo ? 'flex-auto' : 'flex-initial'}`}
           >
             <ElementoPaso
               paso={paso}

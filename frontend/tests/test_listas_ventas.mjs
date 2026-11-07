@@ -1233,7 +1233,7 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   assert.match(lista, /actions=\{<AccionesCabecera onActualizar=\{recargarLista\} actualizando=\{actualizando\} \/>\}/);
   // RP21: ?tab= al montar, con window.location en el efecto, una sola vez, como un clic en la pestaña; después se quita.
   // r1 (I1): la vista queda anotada en enlacePendiente (el modo guardado todavía no se conoce; ver el bloque de I1).
-  assert.match(lista, /const vista = leerEnlacePedidos\(window\.location\.search\);\s*if \(!vista\) return;\s*enlacePendiente\.current = vista;\s*despachar\(accionPestana\(estado, vista, opcionesEstadosPedidos\)\);\s*router\.replace\(rutaSinParametro\(RUTA_LISTA_PEDIDOS, window\.location\.search, 'tab'\), \{ scroll: false \}\);/);
+  assert.match(lista, /const vista = leerEnlacePedidos\(window\.location\.search\);\s*if \(!vista\) return;\s*enlacePendiente\.current = vista;\s*despachar\(accionPestana\(estado, vista, opcionesDeLaLista\)\);\s*router\.replace\(rutaSinParametro\(RUTA_LISTA_PEDIDOS, window\.location\.search, 'tab'\), \{ scroll: false \}\);/);
   assert.match(lista, /if \(enlaceLeido\.current\) return;\s*enlaceLeido\.current = true;/);
   // Lo de B1 que se queda: la redirección de ?id=.
   assert.match(lista, /router\.replace\(`\/dashboard\/ventas\/venta\/\$\{numId\}`\)/);
@@ -1252,9 +1252,13 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   // Los conteos de las pestañas son los de la MISMA llamada de la lista (con_conteos).
   assert.match(lista, /const pestanas = pestanasDeLaLista\(listado\.conteos as ConteosPedidos \| null\);/);
   assert.match(lista, /<BarraTabla\s+estado=\{estado\}\s+onEstado=\{alCambiarBarra\}\s+pestanas=\{enKanban \? undefined : pestanas\}/);
-  assert.match(lista, /opcionesEstados=\{enKanban \? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesEstadosPedidos\}/);
+  assert.match(lista, /opcionesEstados=\{enKanban \? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesDeLaLista\}/);
+  // r1 (m5): las opciones de la Lista llevan los heredados de resumen.por_estado de la MISMA respuesta (H47), en una
+  // función estable; la barra, la poda de las pestañas, del conmutador, del semáforo y del enlace usan la misma.
+  assert.match(lista, /const porEstado = listado\.resumen\?\.por_estado \?\? null;\s*const opcionesDeLaLista = useCallback\(\s*\(vista: string \| null\) => opcionesEstadosPedidos\(vista, porEstado\), \[porEstado\],\s*\);/);
+  assert.equal((lista.match(/opcionesEstadosPedidos/g) ?? []).length, 1, 'la pantalla usa las opciones con los heredados');
   assert.match(lista, /kanbanDisponible\n/);
-  assert.match(lista, /if \(accion\.tipo === 'modo'\) \{\s*const modo = String\(accion\.valor\);\s*despachar\(accionModo\(estado, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesEstadosPedidos\)\);\s*\} else despachar\(accion\);/);
+  assert.match(lista, /if \(accion\.tipo === 'modo'\) \{\s*const modo = String\(accion\.valor\);\s*despachar\(accionModo\(estado, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesDeLaLista\)\);\s*\} else despachar\(accion\);/);
   assert.match(lista, /const vacioLista = useMemo\(\(\) => \{[\s\S]*?Los pedidos se crean al convertir una cotización confirmada por el cliente\.[\s\S]*?\}, \[estado\.q\]\);/);
   assert.match(lista, /vacio=\{vacioLista\}/);
 
@@ -1269,15 +1273,21 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   assert.deepEqual(ids.map(([id, titulo]) => [id, titulo]), [['numero', 'Pedido / Origen'], ['cliente', 'Cliente'], ['total', 'Total'],
     ['anticipo', 'Anticipo'], ['saldo', 'Saldo'], ['entrega', 'Entrega est.'], ['estado', 'Estado'], ['acciones', 'Acciones']]);
   const ancho = Object.fromEntries(ids.map(([id, , a]) => [id, a]));
-  assert.deepEqual([ancho.numero, ancho.total, ancho.anticipo, ancho.saldo, ancho.entrega, ancho.estado, ancho.acciones], [132, 112, 104, 104, 104, 128, 56]);
+  assert.deepEqual([ancho.numero, ancho.total, ancho.anticipo, ancho.saldo, ancho.entrega, ancho.estado, ancho.acciones], [132, 108, 104, 96, 104, 120, 88]);
   assert.ok(ancho.cliente >= 120 && ancho.cliente <= 152, `Cliente entre 120 y 152 (RP85, R26): ${ancho.cliente}`);
-  // R26 (banco de T10): a 1024 px con el menú abierto la caja de la tabla deja 704 px (con su barra vertical). Acciones
-  // conserva los 56 del diseño (sin anchoMin la tabla la sube a ANCHO_MIN, 64) y Cliente nace en 132: con la casilla
-  // (ANCHO_SELECCION) las columnas por defecto suman 704 y caben sin correr la tabla.
-  assert.equal(ancho.cliente, 132, 'Cliente nace en 132 (medido en el banco)');
-  assert.match(columnas, /\{ id: 'acciones', titulo: 'Acciones', ancho: 56, anchoMin: 56, /);
+  // R26 (banco de T10): a 1024 px con el menú abierto la caja de la tabla deja 704 px (con su barra vertical).
+  // r1 (m1): el encabezado de Acciones se lee completo, como en T9 (88 px; con 56 salía «Ac…» en todos los anchos).
+  // Cliente baja a su piso de R26 (120) y Estado a 120. Pedido / Origen se queda en 132: el número del pedido mide 105 px
+  // (banco de r1) más los 24 del relleno, y en 120 se recortaba en todas las filas. Lo que falta sale de los montos: Total
+  // 108 y Saldo 96 (caben hasta $99.999.999, 81 y 67 px medidos). Con la casilla (ANCHO_SELECCION) las columnas por
+  // defecto suman 704 y caben sin correr la tabla.
+  assert.ok(ancho.numero - 24 >= 105, 'el número del pedido cabe sin recortarse');
+  assert.ok(ancho.total - 24 >= 81 && ancho.saldo - 24 >= 67, 'los montos de hasta $99.999.999 caben');
+  assert.equal(ancho.cliente, 120, 'Cliente en 120, su piso (medido en el banco)');
+  assert.match(columnas, /\{ id: 'acciones', titulo: 'Acciones', ancho: 88, clave: true, fija: 'derecha', /);
+  assert.ok(!columnas.includes('anchoMin'), 'sin anchoMin: 88 ya pasa el mínimo de la tabla');
   const { ANCHO_SELECCION, ANCHO_MIN } = await import('../src/lib/tabla.js');
-  assert.ok(ancho.acciones < ANCHO_MIN, 'sin su anchoMin, Acciones subiría al mínimo de la tabla');
+  assert.ok(ancho.acciones >= ANCHO_MIN && ancho.acciones >= 88, 'Acciones con el ancho de T9');
   const visibles = ids.filter(([id]) => !['anticipo', 'entrega'].includes(id)).reduce((s, [, , a]) => s + a, ANCHO_SELECCION);
   assert.ok(visibles <= 704, `las columnas por defecto suman ${visibles} px: caben en los 704 de la caja a 1024 px`);
   assert.match(columnas, /\{ id: 'numero', [^\n]*clave: true, fija: 'izquierda'/);
@@ -1321,7 +1331,7 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   assert.match(lista, /<TarjetaKpi kpi="pven_saldo_por_cobrar" valor=\{tarjetas\?\.saldo_por_cobrar\.valor \?\? null\} ayuda=\{tarjetas\?\.saldo_por_cobrar\.ayuda \?\? undefined\}\s*variacion=\{\{ actual: tarjetas\?\.saldo_por_cobrar\.valor \?\? null, anterior: null, es_foto: true \}\} \/>/);
   assert.match(lista, /<FranjaKpis estado=\{estadoKpis\} titulo="Pedidos de venta">/);
   // r1 (I1): en Kanban abre esa pestaña en Lista con accionVistaEnLista (la misma acción del enlace ?tab=).
-  assert.match(lista, /const siguiente = enKanban \? vista : \(alternarSeleccion\(estado\.vista, vista\) \?\? INICIAL_PEDIDOS\.vista\);\s*despachar\(accionVistaEnLista\(estado, siguiente, opcionesEstadosPedidos\)\);\s*\};/);
+  assert.match(lista, /const siguiente = enKanban \? vista : \(alternarSeleccion\(estado\.vista, vista\) \?\? INICIAL_PEDIDOS\.vista\);\s*despachar\(accionVistaEnLista\(estado, siguiente, opcionesDeLaLista\)\);\s*\};/);
 
   // Bloque 6 (D42, RP21, RP90): la franja con «Estás aquí» en Pedido de venta, Entregado y Facturado como pestañas y los
   // atrasados del paso PVEN; sin noResueltos.
@@ -1334,7 +1344,7 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   assert.match(lista, /const filtroSemaforo: FiltroSemaforo = estado\.semaforo === 'atrasados' \? 'atrasados' : 'todos';/);
   assert.ok(!lista.includes('noResueltos'), 'sin la clave noResueltos');
   assert.match(codigo, /const VISTAS_SIN_ATRASO = \['entregado', 'facturado', 'cancelado'\];/);
-  assert.match(lista, /const alFiltrarSemaforo = \(f: FiltroSemaforo\) => \{\s*if \(f !== 'todos' && VISTAS_SIN_ATRASO\.includes\(estado\.vista \?\? ''\)\) \{\s*despachar\(accionPestana\(estado, INICIAL_PEDIDOS\.vista, enKanban \? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesEstadosPedidos\)\);\s*\}\s*despachar\(\{ tipo: 'semaforo', valor: f === 'todos' \? null : f \}\);\s*\};/);
+  assert.match(lista, /const alFiltrarSemaforo = \(f: FiltroSemaforo\) => \{\s*if \(f !== 'todos' && VISTAS_SIN_ATRASO\.includes\(estado\.vista \?\? ''\)\) \{\s*despachar\(accionPestana\(estado, INICIAL_PEDIDOS\.vista, enKanban \? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesDeLaLista\)\);\s*\}\s*despachar\(\{ tipo: 'semaforo', valor: f === 'todos' \? null : f \}\);\s*\};/);
   {
     const { estadoTablaInicial, reducirEstadoTabla, accionPestana, accionModo } = await import('../src/lib/tabla.js');
     const { opcionesEstadosPedidos, OPCIONES_ESTADOS_TABLERO_PEDIDO } = await import('../src/lib/kanban-ventas.js');
@@ -1405,7 +1415,7 @@ console.log('--- B4 T10 r1 (I1): ?tab= con Kanban guardado abre esa pestaña en 
   const codigo = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
   const lista = codigo.slice(codigo.indexOf('export default function VentaClient('));
   assert.match(lista, /const enlacePendiente = useRef<string \| null>\(null\);/);
-  assert.match(lista, /useLayoutEffect\(\(\) => \{\s*const vista = enlacePendiente\.current;\s*if \(!listo \|\| vista === null\) return;\s*enlacePendiente\.current = null;\s*if \(estado\.modo === 'kanban'\) despachar\(accionVistaEnLista\(estado, vista, opcionesEstadosPedidos\)\);\s*\}, \[listo, estado, despachar\]\);/);
+  assert.match(lista, /useLayoutEffect\(\(\) => \{\s*const vista = enlacePendiente\.current;\s*if \(!listo \|\| vista === null\) return;\s*enlacePendiente\.current = null;\s*if \(estado\.modo === 'kanban'\) despachar\(accionVistaEnLista\(estado, vista, opcionesDeLaLista\)\);\s*\}, \[listo, estado, despachar, opcionesDeLaLista\]\);/);
   assert.ok(lista.indexOf('enlacePendiente.current = vista;') < lista.indexOf('useLayoutEffect(() => {\n    const vista = enlacePendiente.current;'),
     'primero se anota, después se consume');
   // elegirVista usa la misma acción: el enlace y el clic dan lo mismo.
@@ -1464,7 +1474,8 @@ console.log('--- B4 T10: el cableado del detalle del pedido (FLUJO-documentos 5,
   assert.ok(codigo.includes('const pasosPedido = pasosConProgreso(STEPS, stepIndex);'));
   // Banco de T10: a 1024 px las cinco etiquetas no caben en una línea: partirEtiquetas las parte (V5 del B2), y la barra
   // usa todo el ancho de la columna (py-6, sin el p-6 de la línea de antes): así ninguna palabra se corta por la mitad.
-  assert.match(codigo, /\{stepIndex >= 0 && \(\s*<div className="bg-white py-6 border-b border-slate-100 mb-8">\s*<PasosFlujo variante="barra" pasos=\{pasosPedido\} etiqueta="Pasos del pedido" partirEtiquetas \/>/);
+  // r1 (m6): si aun así no cabe (el panel de Actividad en 800 px), la barra se desplaza dentro (overflow-x-auto).
+  assert.match(codigo, /\{stepIndex >= 0 && \(\s*<div className="bg-white py-6 border-b border-slate-100 mb-8 overflow-x-auto">\s*<PasosFlujo variante="barra" pasos=\{pasosPedido\} etiqueta="Pasos del pedido" partirEtiquetas \/>/);
   assert.match(codigo, /\{stepIndex >= 0 && STEPS\[stepIndex\]\?\.key !== estadoActual && \(\s*<p [^>]*>Estado actual: \{estadoCfg\.label\}<\/p>/);
   assert.ok(codigo.includes('Este pedido fue devuelto totalmente.') && codigo.includes('Este pedido de venta fue cancelado.'));
   {
@@ -1521,6 +1532,9 @@ console.log('--- B4 T10: el cableado del detalle del pedido (FLUJO-documentos 5,
   const sumaProductos = anchosProductos.reduce((s, [, a]) => s + a, 0);
   assert.ok(sumaProductos <= 576, `las columnas de productos suman ${sumaProductos} px: caben desde @xl (576)`);
   assert.match(bloque3, /\{ id: 'producto', titulo: 'Producto', ancho: \d+, flexible: true,/, 'Producto es la flexible');
+  // r1 (m3): el nombre del producto se lee completo, partido en varias líneas como en B3 (break-words), con su title.
+  assert.match(bloque3, /\{ id: 'producto', titulo: 'Producto', ancho: \d+, flexible: true, titleCelda: \(f\) => f\.producto,\s*celda: \(f\) => <span className="block whitespace-normal break-words leading-tight font-bold text-slate-800 text-sm">\{f\.producto\}<\/span> \}/);
+  assert.ok(!/\{ id: 'producto'[^\n]*\n[^\n]*truncate/.test(bloque3), 'sin recortar el nombre');
   // Las columnas son estables (D40) y siguen a `discriminado` (el título «Total con IVA» o «Total»), con su único
   // usePreferenciasTabla.
   assert.match(bloque3, /const columnas = useMemo<ColumnaTabla<FilaProductoPedido>\[\]>\(\(\) => \[[\s\S]*?\], \[discriminado\]\);\s*const prefs = usePreferenciasTabla\('ventas\.pedido\.productos', columnas\);/);
