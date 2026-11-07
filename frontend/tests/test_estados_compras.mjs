@@ -1200,6 +1200,7 @@ console.log('--- TEST 31 (B4 T16A): Tránsito (compras/transito/page.tsx) cablea
   assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(pag.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')), 'sin diálogos nativos');
   assert.match(pag, /apiFetch\(`\/compras\/pedidos\/\$\{p\.id\}\/tracking`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ stage, status, user_name: autorActual\(\) \}\)/);
   assert.match(pag, /avisarError\(err, `No se pudo actualizar \$\{p\.numero\}`\)/, 'updateTracking ya no se traga el error');
+  assert.match(pag, /recargar = recargarTrasError\(err\);[\s\S]*?finally \{[\s\S]*?\}\s*if \(recargar\) recargarTodo\(\);/, 'el botón: con la regla única, un 409 recarga y un 500 no');
 
   // Lo que HACE arrastrar (cambiarDesdeTablero): completa la etapa que manda la regla; si falla, recarga con la regla única
   // recargarTrasError y relanza el error para que el tablero devuelva la tarjeta y avise.
@@ -1341,7 +1342,7 @@ console.log('--- TEST 33 (B4 T16A, TABLA-compras punto 12; RP30): el conteo de u
   }
   assert.match(cont, /const isEditable = data\?\.estado === 'BORRADOR';/, 'solo un BORRADOR se cuenta');
   assert.match(cont, /if \(!isEditable\) return;\s*setItems\(prev => prev\.map\(\(it, i\) => \(i === idx \? \{ \.\.\.it, qty_recibida: val \} : it\)\)\);/, 'el conteo sigue editable solo en BORRADOR');
-  assert.match(cont, /disabled=\{!control\?\.editable\}/, 'el campo se apaga cuando no es editable');
+  assert.equal((cont.match(/disabled=\{!control\?\.editable\}/g) ?? []).length, 2, 'los dos campos (cantidad y observaciones) se apagan cuando no es editable');
   assert.match(cont, /onChange=\{\(e\) => control\?\.actualizar\(l\.idx, parseInt\(e\.target\.value\) \|\| 0\)\}/, 'y escribe en la línea de esa fila');
   assert.match(cont, /aria-label=\{`Cantidad recibida de \$\{l\.nombre\}`\}/);
   // Lo de B1 a B3 sigue: guardar el borrador, cerrar y validar (guarda antes de confirmar), la bodega y el exceso.

@@ -73,17 +73,17 @@ function CeldaObservaciones({ l }: { l: LineaConteo }) {
  * (editable), Diferencia y Observaciones. Una constante (estable): las celdas editables leen la página por ConteoContext.
  */
 const COLUMNAS_CONTEO: ColumnaTabla<LineaConteo>[] = [
-  { id: 'producto', titulo: 'Producto (Referencia PEC)', ancho: 150, flexible: true, anchoMax: 960, clave: true, titleCelda: (l) => l.nombre,
+  { id: 'producto', titulo: 'Producto (Referencia PEC)', ancho: 130, flexible: true, anchoMax: 960, clave: true, titleCelda: (l) => l.nombre,
     celda: (l) => (
       <span className="block leading-tight">
         <span className="block truncate text-sm font-bold text-slate-800">{l.nombre}</span>
         {l.sku_id && <span className="block truncate text-xs text-slate-500">SKU {l.sku_id}</span>}
       </span>
     ) },
-  { id: 'esperada', titulo: 'Cant. Esperada', ancho: 96, alinear: 'centro', celda: (l) => <span className="font-black text-slate-600">{l.qty_esperada}</span> },
-  { id: 'recibida', titulo: 'Cant. Recibida', ancho: 104, alinear: 'centro', clave: true, celda: (l) => <CeldaRecibida l={l} /> },
-  { id: 'diferencia', titulo: 'Diferencia', ancho: 88, alinear: 'centro', celda: (l) => <CeldaDiferencia l={l} /> },
-  { id: 'observaciones', titulo: 'Observaciones Físicas', ancho: 128, celda: (l) => <CeldaObservaciones l={l} /> },
+  { id: 'esperada', titulo: 'Cant. Esperada', ancho: 88, alinear: 'centro', celda: (l) => <span className="font-black text-slate-600">{l.qty_esperada}</span> },
+  { id: 'recibida', titulo: 'Cant. Recibida', ancho: 100, alinear: 'centro', clave: true, celda: (l) => <CeldaRecibida l={l} /> },
+  { id: 'diferencia', titulo: 'Diferencia', ancho: 84, alinear: 'centro', celda: (l) => <CeldaDiferencia l={l} /> },
+  { id: 'observaciones', titulo: 'Observaciones Físicas', ancho: 120, celda: (l) => <CeldaObservaciones l={l} /> },
 ];
 
 // GoodsReceipt.estado reales (ver _gr_dict / confirmar_recepcion en erp_compras.py):

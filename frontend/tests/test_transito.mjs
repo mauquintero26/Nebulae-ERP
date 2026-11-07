@@ -172,6 +172,19 @@ console.log('--- TEST 9 (B4 T16A): textoEntregaTransito, «Entrega en N días» 
   assert.equal(t('2026-11-04', false), 'Debía llegar hace 3 días', 'pasada y sin marca del servidor: se dice sin alarma');
   // Sin fecha, o una que no es un día: null.
   for (const f of [null, undefined, '', 'x', '2026-13-45']) assert.equal(t(f, false), null, String(f));
+  // El valor por defecto de hoy es el día de Colombia (reloj fijo, como m10 a de T15): a las 02:00 UTC del 08/11 son las 21:00 del
+  // 07/11 en Colombia, así que una entrega guardada el 07/11 es «hoy» y no «hace 1 día».
+  const DateReal = globalThis.Date;
+  const fijo = DateReal.parse('2026-11-08T02:00:00Z');
+  class DateFijo extends DateReal {
+    constructor(...args) { super(...(args.length ? args : [fijo])); }
+    static now() { return fijo; }
+  }
+  globalThis.Date = DateFijo;
+  try {
+    assert.equal(tr.textoEntregaTransito({ fecha_entrega_estimada: '2026-11-07T00:00:00', is_overdue: false }), 'Entrega hoy');
+    assert.equal(tr.textoEntregaTransito({ fecha_entrega_estimada: '2026-11-06T00:00:00', is_overdue: true }), 'Vencido hace 1 día');
+  } finally { globalThis.Date = DateReal; }
 }
 
 console.log('--- TEST 10 (B4 T16A): tarjetaTransito, la tarjeta del tablero de etapas (chips, tiempo y botón) ---');
