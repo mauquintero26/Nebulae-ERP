@@ -24,8 +24,18 @@ logger = logging.getLogger(__name__)
 
 from app.db.database import get_db, SessionLocal
 from app.models.users import User
-from app.models.catalog import Product, ProductSKU
+from app.models.catalog import Category, Product, ProductSKU
 from app.models.inventory import Warehouse, InventoryLevel, InventoryOperation, InventoryMovement
+# B4 T13: las existencias, sus totales y el Análisis salen de core (R10, R13); los validadores genéricos de las listas son
+# los de T6B (erp_ventas.py), como en erp_compras.py: se importan, no se copian (para la revisión final: deberían vivir en
+# core/listados.py). erp_ventas no importa este módulo al cargarse, así que no hay ciclo.
+from app.api.v1.erp_ventas import _parametro_de_lista, _sin_caracteres_de_control
+from app.core import analisis_inventario as ai
+from app.core.analisis import dinero, validar_top
+from app.core.existencias import ESTADOS_STOCK, POR, consulta_existencias, disponibilidad_sku, resumen_existencias
+from app.core.listados import (MAX_OFFSET, contar_por_vista, filtrar_por_estados, leer_lista, leer_orden, paginar,
+                               respuesta as respuesta_de_lista, texto_busqueda)
+from app.core.periodos import resolver_periodo
 from app.models.fase1b import InventoryOwnerBalance, InventoryReservation, SaleOrderLineErp
 from app.models.fase3 import InventoryQuarantine
 from app.api.dependencies import (
@@ -262,12 +272,30 @@ def _mark_failed_external(
 # 1. KARDEX INMUTABLE E IDEMPOTENTE
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _direcciones_del_kardex(direction) -> list:
+    """B4 T13 (R11, RP9, D46): las direcciones del CSV de get_kardex, en mayúsculas (como hoy: 'in' es IN) y sin
+    repetidas. 422 con más de 20 («Puedes filtrar por 20 estados como máximo.»), con un carácter de control
+    (MENSAJE_CONTROL) o con un valor que no es de DIRECCIONES_KARDEX: «La dirección «x» no existe en el Kardex.» (el
+    valor recibido, recortado a 40)."""
+    try:
+        recibidas = leer_lista(direction)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    direcciones = []
+    for valor in recibidas:
+        if valor.upper() not in ai.DIRECCIONES_KARDEX:
+            raise HTTPException(422, f"La dirección «{valor:.40}» no existe en el Kardex.")
+        if valor.upper() not in direcciones:
+            direcciones.append(valor.upper())
+    return direcciones
+
+
 @router.get("/kardex", response_model=dict)
 def get_kardex(
     sku_id: Optional[int] = Query(None, description="Filtrar por SKU"),
     warehouse_id: Optional[int] = Query(None, description="Filtrar por Bodega"),
     owner: Optional[str] = Query(None, description="Filtrar por propietario: NEBULAE o MAU"),
-    direction: Optional[str] = Query(None, description="IN | OUT | ADJUST_IN | ADJUST_OUT | TRANSFER_IN | TRANSFER_OUT | QUARANTINE"),
+    direction: Optional[str] = Query(None, description="Una o varias, en CSV: IN | OUT | ADJUST_IN | ADJUST_OUT | TRANSFER_IN | TRANSFER_OUT | QUARANTINE | SCRAP | RETURN_IN"),
     start_date: Optional[datetime.date] = Query(None, description="Fecha inicial"),
     end_date: Optional[datetime.date] = Query(None, description="Fecha final"),
     limit: int = Query(50, ge=1, le=500),
@@ -275,7 +303,12 @@ def get_kardex(
     user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db),
 ):
-    """Consulta el historial de movimientos (Kárdex) inmutable con filtros y paginación."""
+    """Consulta el historial de movimientos (Kárdex) inmutable con filtros y paginación.
+
+    B4 T13 (KANBAN-resto, R11, RP54): direction acepta una lista en CSV (leer_lista), cada valor en mayúsculas y de los
+    que escribe el sistema (analisis_inventario.DIRECCIONES_KARDEX); con un solo valor la consulta es la de hoy (la
+    igualdad). La respuesta {status, data: {total, limit, offset, items}} no cambia y no hay `q`."""
+    direcciones = _direcciones_del_kardex(direction)
     query = (
         select(
             InventoryMovement.id,
@@ -308,8 +341,7 @@ def get_kardex(
         query = query.where(InventoryMovement.warehouse_id == warehouse_id)
     if owner:
         query = query.where(InventoryMovement.owner == owner.strip().upper())
-    if direction:
-        query = query.where(InventoryMovement.direction == direction.strip().upper())
+    query = filtrar_por_estados(query, InventoryMovement.direction, direcciones)
     if start_date:
         query = query.where(InventoryMovement.created_at >= datetime.datetime.combine(start_date, datetime.time.min))
     if end_date:
@@ -359,95 +391,23 @@ def get_kardex(
 
 def _calculate_sku_availability(db: Session, sku_id: int, warehouse_id: int) -> dict:
     """
-    Calcula la disponibilidad física vendible, reservas y cuarentena de un SKU en una bodega:
+    Calcula la disponibilidad física vendible, reservas y cuarentena de un SKU en una bodega.
+
+    B4 T13 (R10, C11, RP50, RP80): delega en core/existencias.disponibilidad_sku, la regla única de las existencias que
+    también usan /inventory/stock-tabla, /inventory/stats y /inventory/analisis. Conserva las nueve claves de siempre, en
+    Decimal:
     - stock_vendible_fisico = InventoryLevel.quantity (físico vendible, NUNCA incluye cuarentena)
-    - stock_reservado = SUM(InventoryReservation.quantity_reserved) activos
+    - stock_reservado = SUM(InventoryReservation.quantity_reserved) activas y no vencidas
     - stock_disponible = max(0, stock_vendible_fisico - stock_reservado)
-    - stock_cuarentena = SUM(InventoryQuarantine.quantity) activos
+    - stock_cuarentena = SUM(InventoryQuarantine.quantity) activas
     - stock_total_bajo_custodia = stock_vendible_fisico + stock_cuarentena
-    - balance_nebulae = SUM(InventoryOwnerBalance) para NEBULAE
-    - balance_mau = SUM(InventoryOwnerBalance) para MAU
+    - stock_fisico = stock_vendible_fisico (compatibilidad)
+    - stock_en_transito = Σ(pedido − recibido) de las líneas de los PEC en la etapa activos de R9 (emitido, en tránsito y
+      en bodega; core/estados_compras.GRUPOS_PEC['activos']), del SKU y sin bodega: el mismo número en cada bodega. Antes
+      filtraba CONFIRMADA, ENVIADA, PARCIALMENTE_ENVIADA y PARCIALMENTE_RECIBIDA, que el PEC no usa (casi siempre 0).
+    - balance_nebulae y balance_mau = SUM(InventoryOwnerBalance) de cada dueño
     """
-    now = _now()
-
-    # 1. Stock físico vendible en bodega
-    level = db.execute(
-        select(InventoryLevel)
-        .where(InventoryLevel.sku_id == sku_id, InventoryLevel.warehouse_id == warehouse_id)
-    ).scalar_one_or_none()
-    stock_vendible_fisico = Decimal(str(level.quantity)) if level and level.quantity is not None else Decimal("0.00")
-
-    # 2. Reservas activas (no expiradas)
-    res_sum = db.execute(
-        select(func.coalesce(func.sum(InventoryReservation.quantity_reserved), 0))
-        .where(
-            InventoryReservation.sku_id == sku_id,
-            InventoryReservation.warehouse_id == warehouse_id,
-            InventoryReservation.status == "ACTIVE",
-            or_(InventoryReservation.expires_at == None, InventoryReservation.expires_at > now),
-        )
-    ).scalar() or 0
-    stock_reservado = Decimal(str(res_sum))
-
-    # 3. Cuarentena activa (defectuosos/dañados en custodia)
-    quar_sum = db.execute(
-        select(func.coalesce(func.sum(InventoryQuarantine.quantity), 0))
-        .where(
-            InventoryQuarantine.sku_id == sku_id,
-            InventoryQuarantine.warehouse_id == warehouse_id,
-            InventoryQuarantine.status == "ACTIVO",
-        )
-    ).scalar() or 0
-    stock_cuarentena = Decimal(str(quar_sum))
-
-    # 4. Stock disponible derivado: físico vendible menos reservas activas
-    # REGLA ESTRICTA: NO restar stock_cuarentena porque las unidades en cuarentena
-    # nunca fueron incorporadas a InventoryLevel.
-    stock_disponible = max(Decimal("0.00"), stock_vendible_fisico - stock_reservado)
-
-    # 5. Stock total bajo custodia (vendible + cuarentena)
-    stock_total_bajo_custodia = stock_vendible_fisico + stock_cuarentena
-
-    # 6. Balances por propietario
-    neb_bal = db.execute(
-        select(func.coalesce(func.sum(InventoryOwnerBalance.quantity), 0))
-        .where(
-            InventoryOwnerBalance.sku_id == sku_id,
-            InventoryOwnerBalance.warehouse_id == warehouse_id,
-            InventoryOwnerBalance.owner == "NEBULAE",
-        )
-    ).scalar() or 0
-
-    mau_bal = db.execute(
-        select(func.coalesce(func.sum(InventoryOwnerBalance.quantity), 0))
-        .where(
-            InventoryOwnerBalance.sku_id == sku_id,
-            InventoryOwnerBalance.warehouse_id == warehouse_id,
-            InventoryOwnerBalance.owner == "MAU",
-        )
-    ).scalar() or 0
-
-    # 7. Mercancía en tránsito hacia esta bodega
-    transit_sum = db.execute(text("""
-        SELECT COALESCE(SUM(pol.quantity_ordered - pol.quantity_received), 0)
-        FROM purchase_order_lines pol
-        JOIN purchase_orders_full p ON p.id = pol.pec_id
-        WHERE pol.sku_id = :sku
-          AND p.estado IN ('CONFIRMADA', 'ENVIADA', 'PARCIALMENTE_ENVIADA', 'PARCIALMENTE_RECIBIDA')
-          AND (pol.quantity_ordered > pol.quantity_received)
-    """), {"sku": sku_id}).scalar() or 0
-
-    return {
-        "stock_vendible_fisico": stock_vendible_fisico,
-        "stock_reservado": stock_reservado,
-        "stock_disponible": stock_disponible,
-        "stock_cuarentena": stock_cuarentena,
-        "stock_total_bajo_custodia": stock_total_bajo_custodia,
-        "stock_fisico": stock_vendible_fisico,  # compatibilidad
-        "stock_en_transito": Decimal(str(transit_sum)),
-        "balance_nebulae": Decimal(str(neb_bal)),
-        "balance_mau": Decimal(str(mau_bal)),
-    }
+    return disponibilidad_sku(db, sku_id, warehouse_id)
 
 
 @router.get("/disponibilidad/{sku_id}", response_model=dict)
@@ -542,6 +502,162 @@ def get_inventory_stock_summary(
             "items": items
         }
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2b. B4 T13: EXISTENCIAS REALES EN LA TABLA ESTÁNDAR, INDICADORES Y ANÁLISIS
+# (TABLA-inventario 1, KPI-inventario 1 y ANALISIS-inventario 2; R5, R10, R13, R21; C8, C11; RP50, RP51, RP52)
+# Todo sale de core/existencias.py (T1C). Estas rutas no declaran response_model: sus Decimal salen como números.
+# ─────────────────────────────────────────────────────────────────────────────
+
+ORDENES_STOCK = ("producto", "sku", "categoria", "fisico", "reservado", "disponible", "transito", "precio",
+                 "valorizacion")
+ORDEN_STOCK_POR_DEFECTO = "producto"
+POR_DEFECTO = "sku"
+SIN_FILTRO_STOCK = "todos"   # D46: 'todos' es «sin filtro», como vista=todos y semaforo=todos
+MENSAJE_POR = "No se puede agrupar por «{:.40}»: usa sku o bodega."
+MENSAJE_ESTADO_STOCK = "El estado de stock «{:.40}» no existe: usa agotado, bajo_minimo o abastecido."
+MENSAJE_BODEGA = "La bodega «{}» no existe."
+MENSAJE_CATEGORIA = "La categoría «{}» no existe."
+
+
+def _opcion_de_stock(valor, opciones, mensaje) -> Optional[str]:
+    """Un parámetro de negocio (R21): 422 con MENSAJE_CONTROL si trae un carácter de control y, si no es una de
+    `opciones`, con `mensaje` (el valor recortado a 40). None si no vino o vino en blanco."""
+    return _parametro_de_lista(_sin_caracteres_de_control(valor), opciones, mensaje)
+
+
+def _exigir_que_exista(db: Session, modelo, id_, mensaje: str) -> None:
+    """Un id que llega como filtro y no existe responde 422 en español (no una lista vacía que parezca real)."""
+    if id_ is not None and db.get(modelo, id_) is None:
+        raise HTTPException(422, mensaje.format(id_))
+
+
+def _ordenes_stock(e) -> dict:
+    """Las órdenes permitidas de leer_orden (D34) sobre las columnas de consulta_existencias."""
+    return {"producto": e.c.producto, "sku": e.c.sku, "categoria": e.c.categoria, "fisico": e.c.fisico,
+            "reservado": e.c.reservado, "disponible": e.c.disponible, "transito": e.c.en_transito,
+            "precio": e.c.precio, "valorizacion": e.c.valorizacion}
+
+
+def _conteos_stock(e) -> dict:
+    """con_conteos (R10, RP52): todos, agotados, bajo_minimo, abastecidos (el estado_stock de cada fila) y con_fisico
+    (físico > 0, lo mismo que incluir_sin_stock=false)."""
+    return {"todos": None, "agotados": e.c.estado_stock == ESTADOS_STOCK[0],
+            "bajo_minimo": e.c.estado_stock == ESTADOS_STOCK[1], "abastecidos": e.c.estado_stock == ESTADOS_STOCK[2],
+            "con_fisico": e.c.fisico > 0}
+
+
+def _resumen_stock(db: Session, warehouse_id, categoria_id, texto) -> dict:
+    """con_resumen (R10, RP50): por REFERENCIA (consulta_existencias por='sku', sea cual sea `por`), con la búsqueda, la
+    bodega y la categoría, sin estado_stock ni incluir_sin_stock y sin las referencias con rastrear_inventario = false
+    (la regla de los totales de resumen_existencias): valorizacion_cop (Σ físico × costo, al peso), skus, bajo_minimo,
+    agotados y disponibilidad_pct (disponibles / físicas × 100 con 1 decimal; None sin físicas). UNA consulta."""
+    s = consulta_existencias(db, por="sku", warehouse_id=warehouse_id, categoria_id=categoria_id,
+                             q=texto).subquery("resumen_stock")
+    contar = lambda estado: func.count(s.c.sku_id).filter(s.c.estado_stock == estado)  # noqa: E731
+    skus, valor, bajo, agotados, fisicas, disponibles = (
+        db.query(func.count(s.c.sku_id), func.coalesce(func.sum(s.c.valorizacion), 0), contar(ESTADOS_STOCK[1]),
+                 contar(ESTADOS_STOCK[0]), func.coalesce(func.sum(s.c.fisico), 0),
+                 func.coalesce(func.sum(s.c.disponible), 0))
+        .filter(s.c.rastrear_inventario.is_(True)).one())
+    return {"valorizacion_cop": dinero(valor), "skus": int(skus), "bajo_minimo": int(bajo),
+            "agotados": int(agotados),
+            "disponibilidad_pct": round(float(disponibles) / float(fisicas) * 100, 1) if fisicas else None}
+
+
+@router.get("/stock-tabla")
+def get_stock_tabla(
+    por: Optional[str] = None,
+    q: Optional[str] = None,
+    warehouse_id: Optional[int] = None,
+    categoria_id: Optional[int] = None,
+    estado_stock: Optional[str] = None,
+    incluir_sin_stock: bool = True,
+    orden: Optional[str] = None,
+    con_conteos: bool = False,
+    con_resumen: bool = False,
+    limit: int = Query(50, ge=0, le=200),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """Las existencias reales en la tabla estándar (TABLA-inventario 1, R10): una fila por SKU (por=sku, por defecto,
+    con las bodegas sumadas) o por SKU y bodega (por=bodega), con las columnas de consulta_existencias (sku_id, sku,
+    producto, categoria, bodega, fisico, reservado, disponible, cuarentena, en_transito, precio, costo, valorizacion,
+    minimo, estado_stock, warehouse_id y rastrear_inventario). El tránsito es el del SKU: con por=bodega cada fila trae el
+    del SKU y nada lo suma dos veces (RP50).
+    - q: el SKU o el nombre del producto; warehouse_id y categoria_id (si no existen, 422).
+    - estado_stock: agotado | bajo_minimo | abastecido, con el disponible de la fila y el mínimo de la referencia (RP52 a;
+      no hay `umbral`, R10); 'todos' o en blanco no filtra. incluir_sin_stock=false deja solo físico > 0 (RP52 c).
+    - orden: [-]producto | sku | categoria | fisico | reservado | disponible | transito | precio | valorizacion (por
+      defecto producto); desempate sku_id desc y, con por=bodega, warehouse_id desc.
+    - con_conteos (con q y los filtros, sin estado_stock ni incluir_sin_stock) y con_resumen (_resumen_stock).
+    limit = Query(50, ge=0, le=200) (0 = solo el total) y offset hasta MAX_OFFSET."""
+    por = _opcion_de_stock(por, POR, MENSAJE_POR) or POR_DEFECTO
+    estado = _opcion_de_stock(estado_stock, ESTADOS_STOCK + (SIN_FILTRO_STOCK,), MENSAJE_ESTADO_STOCK)
+    estado = None if estado == SIN_FILTRO_STOCK else estado
+    try:
+        texto = texto_busqueda(q, None)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    e = consulta_existencias(db, por=por, warehouse_id=warehouse_id, categoria_id=categoria_id,
+                             q=texto).subquery("stock_tabla")
+    orden_sql = leer_orden(orden, _ordenes_stock(e), ORDEN_STOCK_POR_DEFECTO, id_lista=e.c.sku_id)
+    if por == "bodega":
+        orden_sql.append(e.c.warehouse_id.desc())
+    _exigir_que_exista(db, Warehouse, warehouse_id, MENSAJE_BODEGA)
+    _exigir_que_exista(db, Category, categoria_id, MENSAJE_CATEGORIA)
+
+    base = db.query(e)
+    filtrado = base
+    if estado:
+        filtrado = filtrado.filter(e.c.estado_stock == estado)
+    if not incluir_sin_stock:
+        filtrado = filtrado.filter(e.c.fisico > 0)
+    conteos = contar_por_vista(base, _conteos_stock(e)) if con_conteos else None
+    resumen = _resumen_stock(db, warehouse_id, categoria_id, texto) if con_resumen else None
+    total, filas = paginar(filtrado.order_by(*orden_sql), limit, offset)
+    return respuesta_de_lista(total, [dict(f._mapping) for f in filas], conteos=conteos, resumen=resumen)
+
+
+@router.get("/stats")
+def get_inventory_stats(
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """Los indicadores de Inventario (KPI-inventario 1, R10): data = resumen_existencias (skus_total, unidades_fisicas,
+    unidades_reservadas, unidades_disponibles, unidades_en_transito, valor_inventario_cop, skus_sin_costo, skus_agotados,
+    skus_bajo_minimo, skus_abastecidos y disponibilidad_pct, por referencia y sin rastrear_inventario = false) + bodegas
+    (COUNT de warehouses). Dos consultas agregadas. El «un solo mínimo» (PATCH /inventory/config) no se hace."""
+    data = resumen_existencias(db)
+    data["bodegas"] = int(db.scalar(select(func.count(Warehouse.id))) or 0)
+    return {"status": "success", "data": data}
+
+
+@router.get("/analisis")
+def get_inventory_analisis(
+    periodo: Optional[str] = None,
+    desde: Optional[str] = None,
+    hasta: Optional[str] = None,
+    top: Optional[str] = None,
+    bodega: Optional[int] = None,
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """El Análisis de Inventario con el contrato único de core/analisis.py (core/analisis_inventario.analisis_inventario,
+    ANALISIS-inventario 2). periodo: 7d, 30d (por defecto), 90d, mes, 12m o personalizado (con desde y hasta
+    'AAAA-MM-DD'); top: 5 (por defecto), 10 o 25; bodega: un warehouse_id (si no existe, 422). Los parámetros de negocio
+    se declaran como texto y se validan aquí (R21): un valor que no sirve responde 422 con su texto en español (RP9). Los
+    errores del cálculo (analisis.ErrorDeContrato) no se convierten en 422: llegan como 500. No usa
+    _calculate_sku_availability: todo es agregado."""
+    try:
+        p = resolver_periodo(periodo, desde, hasta)
+        top = validar_top(top if isinstance(top, str) and top.strip() else ai.TOP_POR_DEFECTO)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    _exigir_que_exista(db, Warehouse, bodega, MENSAJE_BODEGA)
+    return ai.analisis_inventario(db, p, top, bodega=bodega)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
