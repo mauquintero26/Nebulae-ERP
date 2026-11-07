@@ -21,7 +21,9 @@ from app.models.erp_documents import ActivityLog, GoodsReceipt, PurchaseOrderFul
 from tests.usuarios_de_prueba import compras_token  # noqa: F401 (fixture por nombre, RP79)
 
 RUTA = "/api/v1/compras/pedidos"
-CONTROL = "La búsqueda no puede llevar caracteres de control."
+# r1 (m6): el estado y el motivo del PATCH tienen su propio texto (no es una búsqueda).
+CONTROL_ESTADO = "El estado no puede llevar caracteres de control."
+CONTROL_MOTIVO = "El motivo no puede llevar caracteres de control."
 EN_TRANSITO_A_MANO = "'En tránsito' lo marca el seguimiento del envío (Mercancía en tránsito)."
 RECIBIDO_A_MANO = "'Recibido' lo marca la recepción en bodega (Recepciones)."
 SOLO_BORRADOR = "Solo un pedido en Borrador se puede marcar como Emitido."
@@ -168,7 +170,7 @@ def test_emitido_no_vuelve_a_borrador_ni_pasa_a_otro_estado(app_client, db, admi
     # Lo que no es un texto, o un texto en blanco, tampoco es un estado (antes un null llegaba a la columna NOT NULL).
     for valor, nombre in ((None, ""), ("", ""), ("   ", ""), (123, "123"), (["EMITIDO"], "['EMITIDO']")):
         assert _error(app_client, admin_token, pec, estado=valor) == _no_valido(nombre), valor
-    assert _error(app_client, admin_token, pec, estado="EMI\x00TIDO") == CONTROL
+    assert _error(app_client, admin_token, pec, estado="EMI\x00TIDO") == CONTROL_ESTADO
     assert _estado(db, pec) == "EMITIDO"
 
 
@@ -188,7 +190,7 @@ def test_cancelar_exige_motivo(app_client, db, admin_token):
     pven = f.pven("EN_PROCESO", pec)
     for body in ({}, {"motivo": "abc"}, {"motivo": "  abcd   "}, {"motivo": None}, {"motivo": "    "}):
         assert _error(app_client, admin_token, pec, estado="CANCELADO", **body) == MOTIVO, body
-    assert _error(app_client, admin_token, pec, estado="CANCELADO", motivo="Sin stock\x00") == CONTROL
+    assert _error(app_client, admin_token, pec, estado="CANCELADO", motivo="Sin stock\x00") == CONTROL_MOTIVO
     assert _estado(db, pec) == "EMITIDO" and _logs(db, pec) == []
     resp = _patch(app_client, admin_token, pec, estado="CANCELADO", motivo="  El proveedor no tiene stock ",
                   updated_by="tester")
@@ -366,3 +368,78 @@ def test_el_seguimiento_no_reabre_recibidos_ni_cancelados(app_client, db, admin_
         assert [s["status"] for s in data["tracking_stages"]] == ["COMPLETADO"] * 3, estado
         assert _estado(db, fila) == estado, estado
         assert _logs(db, fila) == [], estado
+
+
+# ─── r1 (m1): los avisos de las etapas del seguimiento llevan tildes (D36) ──────────────────────────────────────────
+
+def test_los_avisos_de_las_etapas_llevan_tildes():
+    """Los cuatro mensajes de _stage_alert, por igualdad: con ETA (atrasada y en plazo) y sin ETA (confirmación atrasada
+    y en plazo). pasosDeTracking de lib/flujo-compras.js los muestra tal cual."""
+    from app.api.v1.erp_compras import _stage_alert
+    ahora = datetime.utcnow()
+    eta_vieja = ahora - timedelta(days=5, hours=1)
+    atrasada = _stage_alert({"status": "EN_PROCESO", "eta": eta_vieja.isoformat(), "alert_overdue_days": 1}, None)
+    assert atrasada["nivel"] == "atrasado"
+    assert atrasada["mensaje"] == f"Entrega atrasada por 5 día(s) (ETA {eta_vieja:%d/%m/%Y})"
+    eta_futura = ahora + timedelta(days=10, hours=1)
+    en_plazo = _stage_alert({"status": "EN_PROCESO", "eta": eta_futura.isoformat(), "alert_overdue_days": 1}, None)
+    assert en_plazo["nivel"] == "ok" and en_plazo["dias_restantes"] == 11
+    assert en_plazo["mensaje"] == f"ETA {eta_futura:%d/%m/%Y} · 11 día(s) para confirmación atrasada"
+    sin_confirmar = _stage_alert({"status": "PENDIENTE", "alert_confirm_days": 2},
+                                 (ahora - timedelta(days=10, hours=1)).isoformat())
+    assert sin_confirmar["nivel"] == "atrasado"
+    assert sin_confirmar["mensaje"] == "Confirmación pendiente atrasada por 8 día(s)"
+    por_confirmar = _stage_alert({"status": "PENDIENTE", "alert_confirm_days": 5}, (ahora + timedelta(hours=1)).isoformat())
+    assert por_confirmar["nivel"] == "ok" and por_confirmar["dias_restantes"] == 5
+    assert por_confirmar["mensaje"] == "5 día(s) para confirmar esta etapa"
+    assert _stage_alert({"status": "COMPLETADO", "eta": eta_vieja.isoformat(), "alert_overdue_days": 1}, None) is None
+
+
+# ─── r1 (m6, m7): ningún campo del PATCH da 500 después de guardar ────────────────────────────────────────────────
+
+AUTOR_NO_TEXTO = "El nombre de quien hace el cambio debe ser un texto."
+AUTOR_CONTROL = "El nombre de quien hace el cambio no puede llevar caracteres de control."
+AUTOR_LARGO = "El nombre de quien hace el cambio no puede pasar de 150 caracteres."
+NOTAS_NO_TEXTO = "Las notas deben ser un texto."
+NOTAS_CONTROL = "Las notas no pueden llevar caracteres de control."
+FECHA_INVALIDA = "La fecha de entrega estimada no es válida: usa el formato AAAA-MM-DD."
+
+
+def test_updated_by_notas_y_fecha_se_validan_antes_de_guardar(app_client, db, admin_token, contador_sql):
+    """m7: updated_by llega a ActivityLog.user_name (String(150)) DESPUÉS del commit del estado; con más de 150
+    caracteres o un NUL respondía 500 y el CANCELADO quedaba guardado sin Actividad y sin desvincular el PVEN. Ahora se
+    valida antes de tocar nada, igual que las notas con un carácter de control y una fecha de entrega que no se lee."""
+    f = _Fabrica(db)
+    pec = f.pec("EMITIDO")
+    pven = f.pven("EN_PROCESO", pec)
+    casos = [
+        ({"updated_by": 123}, AUTOR_NO_TEXTO),
+        ({"updated_by": ["Ana"]}, AUTOR_NO_TEXTO),
+        ({"updated_by": "A" * 151}, AUTOR_LARGO),
+        ({"updated_by": "Ana\x00"}, AUTOR_CONTROL),
+        ({"notas": "nota\x00"}, NOTAS_CONTROL),
+        ({"notas": {"a": 1}}, NOTAS_NO_TEXTO),
+        ({"fecha_entrega_estimada": "no-es-una-fecha"}, FECHA_INVALIDA),
+        ({"fecha_entrega_estimada": "2026-02-30"}, FECHA_INVALIDA),
+        ({"fecha_entrega_estimada": ""}, FECHA_INVALIDA),
+        ({"fecha_entrega_estimada": 20261204}, FECHA_INVALIDA),
+    ]
+    with contador_sql.ventana() as v:
+        for extra, texto in casos:
+            for base in ({}, {"estado": "CANCELADO", "motivo": "El proveedor no responde"}):
+                assert _error(app_client, admin_token, pec, **base, **extra) == texto, (base, extra)
+    assert v.commits == 0
+    assert not [x for x in v.sentencias if x.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))]
+    db.expire_all()
+    assert _estado(db, pec) == "EMITIDO" and _logs(db, pec) == []
+    assert db.query(SaleOrder.pec_id).filter(SaleOrder.id == pven.id).scalar() == pec.id
+    # Lo que sí vale sigue pasando: 150 caracteres, un tabulador en las notas y la fecha con hora o con Z.
+    for extra in ({"updated_by": "A" * 150}, {"notas": "línea 1\tlínea 2\nlínea 3"},
+                  {"fecha_entrega_estimada": "2026-12-05T10:00:00"}, {"fecha_entrega_estimada": "2026-12-06T10:00:00Z"},
+                  {"fecha_entrega_estimada": None}, {"notas": None}, {"updated_by": None}):
+        resp = _patch(app_client, admin_token, pec, **extra)
+        assert resp.status_code == 200, (extra, resp.text)
+    resp = _patch(app_client, admin_token, pec, estado="CANCELADO", motivo="El proveedor no responde",
+                  updated_by="A" * 150)
+    assert resp.status_code == 200, resp.text
+    assert [l.user_name for l in _logs(db, pec)] == ["A" * 150]

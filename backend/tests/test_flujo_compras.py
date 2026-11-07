@@ -141,6 +141,9 @@ def test_recepciones_por_confirmar(app_client, db, admin_token):
     assert otra["pasos"]["RECEPCION"]["recepciones_por_confirmar"] == recepcion["recepciones_por_confirmar"]
     # El número del paso es la etapa en_bodega (los PEC), no las recepciones.
     assert otra["pasos"]["RECEPCION"]["total"] == antes["pasos"]["RECEPCION"]["total"]
+    # r1 (m10): el aviso del flujo y la tarjeta de /compras/stats salen del mismo grupo (GRUPOS_RECEPCION).
+    stats = app_client.get("/api/v1/compras/stats", headers=_auth(admin_token)).json()["data"]
+    assert stats["recepciones"]["por_confirmar"] == otra["pasos"]["RECEPCION"]["recepciones_por_confirmar"]
 
 
 # ─── 4) La Lista de compras se lee sin escribir (RP42) ───────────────────────────────────────────────────────────────
@@ -220,16 +223,19 @@ def test_mas_antiguo_dias(db):
     for estado in ("EMITIDO", "EN_TRANSITO", "RECIBIDO", "RECIBIDA"):
         f.pec(estado, None, compra=viejo)
     original = _load_lista_compras(db)
-    _save_lista_compras(db, original + [{"id": 10 ** 9, "pven_id": None, "producto": "Viejo", "estado": "PENDIENTE",
-                                         "fecha": "1990-01-01T10:00:00", "cantidad": 1}], commit=False)
-    ahora = datetime(2026, 11, 6, 15, 0)
-    data = resumen_flujo_compras(db, ahora)
-    esperado = math.floor((ahora - viejo).total_seconds() / 86400)
-    for paso in ("LISTA", "PEC", "TRANSITO", "RECEPCION"):
-        assert data["pasos"][paso]["mas_antiguo_dias"] == esperado, paso
-    assert data["pasos"]["RECIBIDO"]["mas_antiguo_dias"] is None
-    assert data["generado_at"] == "2026-11-06T15:00:00Z"
-    _save_lista_compras(db, original, commit=False)
+    try:
+        _save_lista_compras(db, original + [{"id": 10 ** 9, "pven_id": None, "producto": "Viejo",
+                                             "estado": "PENDIENTE", "fecha": "1990-01-01T10:00:00", "cantidad": 1}],
+                            commit=False)
+        ahora = datetime(2026, 11, 6, 15, 0)
+        data = resumen_flujo_compras(db, ahora)
+        esperado = math.floor((ahora - viejo).total_seconds() / 86400)
+        for paso in ("LISTA", "PEC", "TRANSITO", "RECEPCION"):
+            assert data["pasos"][paso]["mas_antiguo_dias"] == esperado, paso
+        assert data["pasos"]["RECIBIDO"]["mas_antiguo_dias"] is None
+        assert data["generado_at"] == "2026-11-06T15:00:00Z"
+    finally:   # r1 (m15): el JSON de web_builder_config se restaura aunque falle una aserción
+        _save_lista_compras(db, original, commit=False)
 
 
 def test_consultas_constantes(app_client, db, admin_token, contador_sql):

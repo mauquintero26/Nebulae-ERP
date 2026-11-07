@@ -136,6 +136,8 @@ def test_list_pec_vistas_atencion_semaforo_y_resumen(app_client, db, admin_token
     assert set(ids(vista="en_bodega")) == {p["parcial"].id}
     # RP40: solo emitido y en tránsito con la entrega pasada; semaforo=todos es sin filtro (D46).
     assert set(ids(semaforo="vencidos")) == {p["hace5"].id, p["hace1"].id}
+    # r1 (m3): 'atrasados' (el valor de la franja compartida y de las listas de Ventas) es sinónimo de 'vencidos'.
+    assert set(ids(semaforo="atrasados")) == {p["hace5"].id, p["hace1"].id}
     assert len(ids(semaforo="todos")) == 6
     assert len(ids()) == 6
     # El dict: is_overdue solo para emitido y en tránsito (un RECIBIDA con la fecha vieja ya no es vencido).
@@ -232,12 +234,25 @@ def test_list_pec_orden_exacto_de_cada_campo_y_su_inverso(app_client, db, admin_
     # Empate: el desempate es el id desc.
     d = f.pec("EMITIDO", _dia(1), total=100, supplier_name=f"A {s}")
     assert _ids(_get(app_client, admin_token, RUTA_PEC, q=s, orden="monto"))[:2] == [d.id, b.id]
+    # r1 (m12): un estado desconocido (CONFIRMADA, un heredado) se ordena en el lugar de EMITIDO, como lo cuentan las
+    # vistas, /stats y /flujo; con el mismo lugar, el id desc.
+    g = _Fabrica(db)
+    borrador = g.pec("BORRADOR")
+    emitido = g.pec("EMITIDO")
+    heredado = g.pec("CONFIRMADA")
+    transito = g.pec("EN_TRANSITO")
+    cancelado = g.pec("CANCELADO")
+    assert _ids(_get(app_client, admin_token, RUTA_PEC, q=g.sufijo, orden="estado")) == [
+        borrador.id, heredado.id, emitido.id, transito.id, cancelado.id]
+    assert _ids(_get(app_client, admin_token, RUTA_PEC, q=g.sufijo, orden="-estado")) == [
+        cancelado.id, transito.id, heredado.id, emitido.id, borrador.id]
 
 
 def test_atencion_desempata_por_created_at_y_por_id(app_client, db, admin_token):
     """Dentro de los vencidos, el más atrasado arriba; con el mismo día de entrega, el creado más reciente; con el mismo
-    created_at, el id mayor. Un BORRADOR con la entrega pasada no es vencido (RP40), pero espera su entrega: va con los
-    que vienen, por su fecha."""
+    created_at, el id mayor. r1 (m13): un BORRADOR con la entrega pasada no es vencido (RP40) y su día de orden es hoy
+    (greatest(día, hoy)): empata con lo que vence hoy y desempata created_at desc, así que no tapa lo de hoy; después va
+    lo de mañana y lo que viene."""
     f = _Fabrica(db)
     mismo = _ahora() - timedelta(days=1)
     v1 = f.pec("EMITIDO", _dia(-2, hora=23), creado=mismo)
@@ -245,10 +260,11 @@ def test_atencion_desempata_por_created_at_y_por_id(app_client, db, admin_token)
     v3 = f.pec("EN_TRANSITO", _dia(-2, hora=5), creado=mismo - timedelta(hours=1))
     borrador = f.pec("BORRADOR", _dia(-7))
     hoy = f.pec("EMITIDO", datetime.combine(_hoy(), time(0, 0)))   # vence hoy: todavía no está vencido (RP40)
+    manana = f.pec("EMITIDO", _dia(1))
     futuro = f.pec("PENDIENTE_ENTREGA", _dia(4))
     sin_fecha = f.pec("EMITIDO", None)
     assert _ids(_get(app_client, admin_token, RUTA_PEC, q=f.sufijo, orden="atencion")) == [
-        v2.id, v1.id, v3.id, borrador.id, hoy.id, futuro.id, sin_fecha.id]
+        v2.id, v1.id, v3.id, hoy.id, borrador.id, manana.id, futuro.id, sin_fecha.id]
     assert set(_ids(_get(app_client, admin_token, RUTA_PEC, q=f.sufijo, semaforo="vencidos"))) == {v1.id, v2.id, v3.id}
 
 
@@ -341,10 +357,10 @@ def _items_de_prueba(sufijo, desde_id):
                 "proveedor": proveedor, "pec_id": None, "pec_numero": None, "estado": estado, "fecha": fecha,
                 "notas": "", "created_by": "tester"}
     return [
-        item(1, f"Cuna {sufijo}", "PENDIENTE", "2026-01-03T10:00:00", f"Beta {sufijo}", "PVEN-B"),
-        item(2, f"Andadera {sufijo}", "EN_PEDIDO", "2026-01-01T10:00:00", "", "PVEN-C"),
+        item(1, f"Cuna {sufijo}", "PENDIENTE", "2026-01-03T10:00:00", f"Beta {sufijo}", f"PVB{sufijo}"),
+        item(2, f"Andadera {sufijo}", "EN_PEDIDO", "2026-01-01T10:00:00", "", f"PVC{sufijo}"),
         item(3, f"Bañera {sufijo}", "RECIBIDO", "2026-01-04T10:00:00", f"Alfa {sufijo}", None),
-        item(4, f"Coche {sufijo}", "PENDIENTE", "2026-01-02T10:00:00", f"Alfa {sufijo}", "PVEN-A"),
+        item(4, f"Coche {sufijo}", "PENDIENTE", "2026-01-02T10:00:00", f"Alfa {sufijo}", f"PVA{sufijo}"),
         item(5, f"Descartado {sufijo}", "DESCARTADO", "2026-01-05T10:00:00", "", None),
     ]
 
@@ -385,6 +401,18 @@ def test_lista_compras_offset_total_orden_y_conteos(app_client, db, admin_token)
         assert _get(app_client, admin_token, RUTA_LISTA, search=s)["total"] == 4
         assert _ids(_get(app_client, admin_token, RUTA_LISTA, q=f"Cuna {s}")) == [i[1]]
         assert _ids(_get(app_client, admin_token, RUTA_LISTA, q=f"Beta {s}")) == [i[1]]
+        assert _ids(_get(app_client, admin_token, RUTA_LISTA, q=f"PVB{s}")) == [i[1]]   # r1 (m14): por el PVEN
+        # r1 (m4): estados en CSV (los de ESTADOS_ITEM_LISTA), como manda la tabla estándar; los conteos no lo usan.
+        assert _ids(lista(estados="PENDIENTE,RECIBIDO")) == [i[4], i[3], i[1]]
+        assert lista(estados="PENDIENTE,RECIBIDO")["total"] == 3
+        assert _ids(lista(estados="RECIBIDO", estado="PENDIENTE")) == []
+        assert lista(estados="EN_PEDIDO", con_conteos=1)["conteos"] == {"todos": 4, "PENDIENTE": 2, "EN_PEDIDO": 1,
+                                                                       "RECIBIDO": 1}
+        for malo in ("DESCARTADO", "PENDIENTE,FOO", "x" * 300):
+            esperado = f"El estado «{malo.split(',')[-1][:40]}» no existe en la Lista de compras."
+            assert _error(app_client, admin_token, RUTA_LISTA, estados=malo) == esperado, malo
+        assert _error(app_client, admin_token, RUTA_LISTA, estados=",".join(f"E{n}" for n in range(21))) == (
+            "Puedes filtrar por 20 estados como máximo.")
     finally:
         _save_lista_compras(db, original)
 
@@ -408,7 +436,7 @@ def test_lista_compras_solo_sincroniza_con_offset_cero(app_client, db, admin_tok
         assert not [x for x in v.sentencias if x.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))]
         db.expire_all()
         assert _load_lista_compras(db) == antes
-        assert cuerpo["total"] >= 0
+        assert f"Producto {s}" not in [it["producto"] for it in cuerpo["data"]]   # r1 (m15): sin sincronizar
         cuerpo = _get(app_client, admin_token, RUTA_LISTA, q=s)
         assert [it["producto"] for it in cuerpo["data"]] == [f"Producto {s}"]
         db.expire_all()
@@ -451,8 +479,9 @@ def test_errores_en_espanol(app_client, admin_token):
         "La vista «analisis» no existe en Pedidos de compra.")
     assert _error(app_client, admin_token, RUTA_PEC, vista="x" * 300) == (
         f"La vista «{'x' * 40}» no existe en Pedidos de compra.")
-    assert _error(app_client, admin_token, RUTA_PEC, semaforo="atrasados") == (
-        "El filtro del semáforo «atrasados» no existe: usa vencidos.")
+    # r1 (m3): 'atrasados' es sinónimo de 'vencidos'; 'no_resueltos' (que /compras/flujo sí manda) no es un filtro.
+    assert _error(app_client, admin_token, RUTA_PEC, semaforo="no_resueltos") == (
+        "El filtro del semáforo «no_resueltos» no existe: usa vencidos.")
     assert _error(app_client, admin_token, RUTA_PEC, semaforo="\x00") == CONTROL
     assert _error(app_client, admin_token, RUTA_PEC, orden="pec") == "No se puede ordenar por «pec»."
     assert _error(app_client, admin_token, RUTA_REC, vista="pendientes") == (
@@ -517,7 +546,7 @@ def test_las_rutas_declaran_los_parametros_nuevos(app_client, admin_token):
                     "con_resumen", "limit", "offset"}, 50),
         RUTA_REC: ({"estado", "pec_id", "search", "q", "estados", "vista", "orden", "con_conteos", "limit",
                     "offset"}, 50),
-        RUTA_LISTA: ({"estado", "search", "q", "proveedor", "fecha_desde", "fecha_hasta", "orden", "con_conteos",
+        RUTA_LISTA: ({"estado", "estados", "search", "q", "proveedor", "fecha_desde", "fecha_hasta", "orden", "con_conteos",
                       "limit", "offset"}, 200),
     }
     for ruta, (nombres, defecto) in esperados.items():
@@ -629,3 +658,72 @@ def test_sin_los_parametros_nuevos_cada_lista_responde_como_hoy(app_client, db, 
             assert set(_get(app_client, admin_token, RUTA_LISTA, **params)) == {"status", "data", "total"}
     finally:
         _save_lista_compras(db, original)
+
+
+# ─── r1 (m5): la Lista de compras valida antes de escribir ─────────────────────────────────────────────────────────
+
+def test_lista_compras_valida_antes_de_sincronizar(app_client, db, admin_token, contador_sql):
+    """Un 422 de negocio no tiene efectos (R21): con offset 0, un orden, unos estados o una búsqueda que no valen
+    responden 422 SIN llamar a _sincronizar_pvens_pendientes_a_lista (que escribe en web_builder_config)."""
+    from app.api.v1.erp_compras import _load_lista_compras, _save_lista_compras
+    original = _load_lista_compras(db)
+    s = uuid.uuid4().hex[:8].upper()
+    try:
+        app_client.get(RUTA_LISTA, params={"limit": 0}, headers=_auth(admin_token))   # lo pendiente de antes, ya
+        ven = SaleOrder(numero=f"PV-V{s}", customer_name=f"Cliente {s}", estado="PENDIENTE_COMPRA",
+                        productos=[{"product_name": f"Producto {s}", "qty": 1}])
+        db.add(ven)
+        db.commit()
+        antes = _load_lista_compras(db)
+        casos = (({"orden": "hackeo"}, "No se puede ordenar por «hackeo»."),
+                 ({"orden": "-atencion"}, "No se puede ordenar por «-atencion»."),
+                 ({"estados": "FOO"}, "El estado «FOO» no existe en la Lista de compras."),
+                 ({"q": "cu\x00na"}, CONTROL),
+                 ({"estados": "PENDIENTE\x00"}, CONTROL))
+        for params, texto in casos:
+            with contador_sql.ventana() as v:
+                assert _error(app_client, admin_token, RUTA_LISTA, offset=0, **params) == texto, params
+            assert v.commits == 0, params
+            assert not [x for x in v.sentencias if x.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))]
+            db.expire_all()
+            assert _load_lista_compras(db) == antes, params
+        assert not any(it.get("pven_id") == ven.id for it in antes)
+    finally:
+        _save_lista_compras(db, original)
+
+
+# ─── r1 (m3): 'atrasados' es 'vencidos', y cuadra con el semáforo de /compras/flujo ───────────────────────────────
+
+def test_semaforo_atrasados_cuadra_con_el_flujo(app_client, db, admin_token):
+    """PARIDAD: el semaforo.atrasados de /compras/flujo es el total de GET /compras/pedidos?semaforo=atrasados (y de
+    semaforo=vencidos y de conteos.vencidos), antes y después de crear vencidos propios."""
+    f = _Fabrica(db)
+
+    def flujo():
+        return _get(app_client, admin_token, "/api/v1/compras/flujo")["data"]["semaforo"]["atrasados"]
+
+    def lista(**params):
+        return _get(app_client, admin_token, RUTA_PEC, limit=0, **params)
+
+    for paso in ("antes", "después"):
+        atrasados = flujo()
+        assert lista(semaforo="atrasados")["total"] == lista(semaforo="vencidos")["total"] == atrasados, paso
+        assert lista(con_conteos=1)["conteos"]["vencidos"] == atrasados, paso
+        if paso == "antes":
+            antes = atrasados
+            vencidos = {f.pec("EMITIDO", _dia(-2)).id, f.pec("EN_TRANSITO", _dia(-1)).id, f.pec("CONFIRMADA", _dia(-4)).id}
+            for estado in ("RECIBIDA", "RECIBIDO", "BORRADOR", "CANCELADO"):
+                f.pec(estado, _dia(-3))
+            f.pec("EMITIDO", _dia(1))
+    assert atrasados - antes == 3
+    assert set(_ids(_get(app_client, admin_token, RUTA_PEC, q=f.sufijo, semaforo="atrasados"))) == vencidos
+
+
+# ─── r1 (m8): el recorte a 40 caracteres del 422 de los estados ─────────────────────────────────────────────────────
+
+def test_el_estado_largo_se_recorta_a_40_caracteres(app_client, admin_token):
+    largo = "E" * 300
+    for ruta, sigla in ((RUTA_PEC, "PEC"), (RUTA_REC, "ENINV")):
+        for clave in ("estados", "estado"):
+            assert _error(app_client, admin_token, ruta, **{clave: largo}) == (
+                f"El estado «{'E' * 40}» no existe en {sigla}."), (ruta, clave)

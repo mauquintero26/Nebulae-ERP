@@ -10,7 +10,7 @@ Recepciones de Inventario (ENINV)
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
-from sqlalchemy import text, func, case, cast, Date
+from sqlalchemy import text, func, and_, case, cast, Date
 from typing import Optional
 from types import MappingProxyType
 from app.db.database import get_db
@@ -49,8 +49,8 @@ from app.api.v1.erp_logistica import (
 from app.core import analisis_compras as ac
 from app.core.analisis import validar_top
 from app.core.estados_compras import (
-    ESTADOS_ITEM_LISTA, ESTADOS_PEC, ESTADOS_PEC_MANUALES, ESTADOS_POR_FLUJO, ETAPAS_PEC, GRUPOS_RECEPCION, VISTAS_PEC,
-    cond_estados_pec, cond_vencido, destinos_pec_permitidos, es_vencido, etapa_pec,
+    ESTADOS_ITEM_LISTA, ESTADOS_PEC, ESTADOS_PEC_MANUALES, ESTADOS_POR_FLUJO, ETAPA_POR_DEFECTO, ETAPAS_PEC,
+    GRUPOS_RECEPCION, VISTAS_PEC, cond_estados_pec, cond_vencido, destinos_pec_permitidos, es_vencido, etapa_pec,
 )
 from app.core.fechas import hoy_colombia
 from app.core.flujo_compras import resumen_flujo_compras
@@ -259,7 +259,8 @@ def _gr_dict(g: GoodsReceipt, db: Session) -> dict:
             # creacion (utcnow()+timedelta), asi que restar datetimes crudos corria el
             # limite de tolerancia una cantidad de horas arbitraria (mismo bug que
             # FECHA_ENTREGA_MODIFICADA, Round final de la revision de rama completa).
-            limite_con_tolerancia = pec_ref.fecha_entrega_estimada.date() + datetime.timedelta(days=1)
+            limite_con_tolerancia = (pec_ref.fecha_entrega_estimada.date()
+                                     + datetime.timedelta(days=ac.TOLERANCIA_A_TIEMPO_DIAS))   # B4 T12 r1 (m11)
             delta = (g.fecha_recepcion.date() - limite_con_tolerancia).days
             if delta > 0:
                 dias_retraso = delta
@@ -623,26 +624,33 @@ def update_tracking_config(tipo_envio: str, body: dict,
 # parámetros nuevos cada lista responde lo mismo que hoy (la Lista de compras suma 'total').
 
 _SIN_FILTRO = "todos"                   # D46: semaforo=todos es «sin filtro»
-SEMAFOROS_PEC = ("vencidos",)
+# r1 (m3): 'atrasados' es sinónimo de 'vencidos': es el valor de la franja compartida (BannerFlujo, lib/flujo.js) y de
+# las listas de Ventas, y el que /compras/flujo responde en semaforo.atrasados. 'vencidos' se queda (R5).
+SEMAFOROS_PEC = ("vencidos", "atrasados")
 VISTAS_RECEPCION = (*GRUPOS_RECEPCION, "todas")   # RP41: los grupos de recepción y «todas»
-# Los estados que existen en cada lista (D46): los de textos_actividad.ETIQUETAS_ESTADO, la fuente única de los nombres.
+# Los estados que existen en cada lista (D46): los de textos_actividad.ETIQUETAS_ESTADO, la fuente única de los nombres;
+# r1 (m4): y los de un ítem de la Lista de compras (ESTADOS_ITEM_LISTA; DESCARTADO no se muestra).
 _ESTADOS_DE_COMPRAS = MappingProxyType({"PEC": tuple(ETIQUETAS_ESTADO["PEC"]),
-                                        "ENINV": tuple(ETIQUETAS_ESTADO["ENINV"])})
-# 'atencion': lo que todavía espera su entrega (borrador, emitido y en tránsito) se ordena por su día de entrega.
-_ESTADOS_POR_ENTREGAR = tuple(e for etapa in ("borrador", "emitido", "en_transito") for e in ETAPAS_PEC[etapa])
+                                        "ENINV": tuple(ETIQUETAS_ESTADO["ENINV"]),
+                                        "LISTA": tuple(ESTADOS_ITEM_LISTA)})
+_NOMBRE_DE_LA_LISTA = MappingProxyType({"PEC": "PEC", "ENINV": "ENINV", "LISTA": "la Lista de compras"})
+# r1 (m10): UNA constante para lo que todavía espera su entrega (borrador, emitido y en tránsito). La usan el orden
+# 'atencion' y update_tracking (RP45: el seguimiento solo mueve el estado de un PEC de estas etapas).
+_ETAPAS_POR_ENTREGAR = ("borrador", "emitido", "en_transito")
+_ESTADOS_POR_ENTREGAR = tuple(e for etapa in _ETAPAS_POR_ENTREGAR for e in ETAPAS_PEC[etapa])
 
 
 def _estados_de_compras(entidad: str, valor) -> list:
-    """Los estados del CSV (leer_lista: sin repetidos ni vacíos), cada uno de los conocidos de `entidad` (PEC o ENINV,
-    D46). 422 con más de 20, con un carácter de control o con un estado que no existe: «El estado «x» no existe en
-    PEC|ENINV.» (el molde de T6A y T6B; el valor que se repite va recortado a 40 caracteres)."""
+    """Los estados del CSV (leer_lista: sin repetidos ni vacíos), cada uno de los conocidos de `entidad` (PEC, ENINV o
+    LISTA, D46). 422 con más de 20, con un carácter de control o con un estado que no existe: «El estado «x» no existe
+    en PEC|ENINV|la Lista de compras.» (el molde de T6A y T6B; el valor que se repite va recortado a 40 caracteres)."""
     try:
         lista = leer_lista(valor)
     except ValueError as e:
         raise HTTPException(422, str(e))
     for estado in lista:
         if estado not in _ESTADOS_DE_COMPRAS[entidad]:
-            raise HTTPException(422, f"El estado «{estado:.40}» no existe en {entidad}.")
+            raise HTTPException(422, f"El estado «{estado:.40}» no existe en {_NOMBRE_DE_LA_LISTA[entidad]}.")
     return lista
 
 
@@ -664,20 +672,25 @@ def _condicion_vista_pec(vista):
 
 def _ordenes_pec(hoy) -> dict:
     """Las órdenes permitidas de leer_orden (D34) para los PEC:
-    - 'atencion' (R8): los vencidos primero; luego, lo que todavía espera su entrega (borrador, emitido y en tránsito)
-      por su día de entrega, el más temprano arriba (así, el más atrasado de los vencidos va primero y después la
-      entrega más cercana); después lo que ya no espera una entrega (en bodega, recibido o cancelado) o no tiene fecha; y
-      en cada grupo created_at desc. El desempate final es el id desc.
+    - 'atencion' (R8): los vencidos primero, por su día de entrega (el más atrasado arriba); luego lo que todavía espera
+      su entrega (borrador, emitido y en tránsito) por greatest(día de entrega, hoy) (r1, m13: un borrador con la
+      entrega pasada, que create_pec deja así con utcnow() + N días, empata con lo que vence hoy en vez de taparlo), la
+      entrega más cercana arriba; después lo que ya no espera una entrega (en bodega, recibido o cancelado) o no tiene
+      fecha; y en cada grupo created_at desc. El desempate final es el id desc.
     - 'reciente' (el orden de hoy: created_at desc) y 'sin_movimiento' (expresiones_tiempo).
     - los campos: numero, proveedor, comprador (created_by), monto (total_cop), compra (fecha_compra), entrega
-      (fecha_entrega_estimada), limite (fecha_alerta) y estado (su posición en el flujo: ESTADOS_PEC)."""
+      (fecha_entrega_estimada), limite (fecha_alerta) y estado (su posición en el flujo: ESTADOS_PEC; r1, m12: un estado
+      desconocido va en el lugar de EMITIDO, como lo cuentan las vistas, /stats y /flujo)."""
     pec = PurchaseOrderFull
+    entrega = cast(pec.fecha_entrega_estimada, Date)
+    vencido = _vencido_pec(hoy)
+    por_entregar = and_(cond_estados_pec(pec.estado, _ESTADOS_POR_ENTREGAR), pec.fecha_entrega_estimada.isnot(None))
     atencion = [
-        case((_vencido_pec(hoy), 0), else_=1).asc(),
-        case((cond_estados_pec(pec.estado, _ESTADOS_POR_ENTREGAR), cast(pec.fecha_entrega_estimada, Date))
-             ).asc().nulls_last(),
+        case((vencido, 0), else_=1).asc(),
+        case((vencido, entrega), (por_entregar, func.greatest(entrega, hoy))).asc().nulls_last(),
         pec.created_at.desc().nulls_last(),
     ]
+    posicion = {estado: i for i, estado in enumerate(ESTADOS_PEC)}
     return {
         "atencion": atencion,
         "reciente": expresiones_tiempo(pec.created_at, pec.updated_at, "reciente", id_lista=pec.id),
@@ -689,7 +702,7 @@ def _ordenes_pec(hoy) -> dict:
         "compra": pec.fecha_compra,
         "entrega": pec.fecha_entrega_estimada,
         "limite": pec.fecha_alerta,
-        "estado": orden_por_lista(pec.estado, ESTADOS_PEC),
+        "estado": case(posicion, value=pec.estado, else_=posicion[ETAPAS_PEC[ETAPA_POR_DEFECTO][0]]),
     }
 
 
@@ -723,7 +736,8 @@ def list_pec(
 ):
     """La lista de Pedidos de compra (B4 T12; ver el bloque de arriba). vista: las de VISTAS_PEC (todos = vigentes,
     vigentes, activos, borradores, pedidos, en_transito, en_bodega, recibidos, cancelados, no_resueltos,
-    acciones_tomadas y transito_logistica; sin vista, todos los PEC como hoy). semaforo: vencidos (RP40). La búsqueda:
+    acciones_tomadas y transito_logistica; sin vista, todos los PEC como hoy). semaforo: vencidos o atrasados, que es lo
+    mismo (RP40; r1, m3). La búsqueda:
     número, proveedor, PVEN, productos y comprador (created_by). orden: atencion, reciente (por defecto), sin_movimiento
     o [-]numero, proveedor, comprador, monto, compra, entrega, limite o estado. con_conteos = cada vista + vencidos;
     con_resumen = {capital_cop, activos, en_transito, en_bodega, vencidos, recibidos, cumplimiento_pct}, los dos con la
@@ -753,7 +767,7 @@ def list_pec(
     filtrado = filtrar_por_estados(filtrar_por_estados(base, pec.estado, lista_estado), pec.estado, lista_estados)
     if vista:
         filtrado = filtrado.filter(_condicion_vista_pec(vista))
-    if semaforo == "vencidos":
+    if semaforo in SEMAFOROS_PEC:   # vencidos o su sinónimo atrasados (r1, m3)
         filtrado = filtrado.filter(_vencido_pec(hoy))
 
     conteos = None
@@ -811,7 +825,7 @@ def create_pec(body: CrearPecBody, user: User = Depends(require_roles(*ROLE_ADMI
         if precio <= 0:
             nombre_prod = prod.get("nombre") or prod.get("producto_nombre") or prod.get("name") or prod.get("product_name") or "producto"
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=422,
                 detail=f"El producto '{nombre_prod}' no tiene precio definido. Ingresa un precio antes de crear el pedido de compra.",
             )
     pec = PurchaseOrderFull(
@@ -945,19 +959,63 @@ _DONDE_SE_HACE = MappingProxyType({
 _ETAPAS_DE_LA_RECEPCION = ("en_bodega", "recibido")
 
 
-def _texto_sin_control(valor) -> None:
-    """422 con MENSAJE_CONTROL si `valor` (un texto) trae un carácter de control (D46: un NUL no llega a la base)."""
+# r1 (m6, m7): los textos de los campos del PATCH (no son una búsqueda) y el largo de ActivityLog.user_name.
+CONTROL_ESTADO = "El estado no puede llevar caracteres de control."
+CONTROL_MOTIVO = "El motivo no puede llevar caracteres de control."
+AUTOR_NO_TEXTO = "El nombre de quien hace el cambio debe ser un texto."
+AUTOR_CONTROL = "El nombre de quien hace el cambio no puede llevar caracteres de control."
+MAX_AUTOR = 150   # ActivityLog.user_name es String(150)
+AUTOR_LARGO = f"El nombre de quien hace el cambio no puede pasar de {MAX_AUTOR} caracteres."
+NOTAS_NO_TEXTO = "Las notas deben ser un texto."
+NOTAS_CONTROL = "Las notas no pueden llevar caracteres de control."
+FECHA_INVALIDA = "La fecha de entrega estimada no es válida: usa el formato AAAA-MM-DD."
+
+
+def _sin_control_en(valor, mensaje: str) -> None:
+    """422 con `mensaje` (el del campo) si el texto `valor` trae un carácter de control. La detección es la de
+    texto_busqueda de core/listados.py (D46: un tabulador o un salto de línea en medio no cuentan): aquí solo cambia el
+    texto del 422."""
     try:
         texto_busqueda(valor, None)
-    except ValueError as e:
-        raise HTTPException(422, str(e))
+    except ValueError:
+        raise HTTPException(422, mensaje)
+
+
+def _es_fecha(texto: str) -> bool:
+    try:
+        datetime.datetime.fromisoformat(texto.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
+
+
+def _validar_campos_libres_pec(body: dict) -> None:
+    """r1 (m7): los campos libres del PATCH que podían dar 500 DESPUÉS del commit del estado (y dejar un CANCELADO sin
+    Actividad ni _desvincular_pec_cancelado): updated_by (va a ActivityLog.user_name, String(150)), notas y
+    fecha_entrega_estimada. Un null en cualquiera sigue valiendo, como hoy."""
+    autor = body.get("updated_by")
+    if autor is not None:
+        if not isinstance(autor, str):
+            raise HTTPException(422, AUTOR_NO_TEXTO)
+        _sin_control_en(autor, AUTOR_CONTROL)
+        if len(autor) > MAX_AUTOR:
+            raise HTTPException(422, AUTOR_LARGO)
+    notas = body.get("notas")
+    if notas is not None:
+        if not isinstance(notas, str):
+            raise HTTPException(422, NOTAS_NO_TEXTO)
+        _sin_control_en(notas, NOTAS_CONTROL)
+    fecha = body.get("fecha_entrega_estimada")
+    if fecha is not None and not (isinstance(fecha, str) and _es_fecha(fecha)):
+        raise HTTPException(422, FECHA_INVALIDA)
 
 
 def _validar_transicion_pec(db: Session, p: PurchaseOrderFull, body: dict) -> Optional[str]:
     """Valida el cambio de estado de PATCH /pedidos/{id} ANTES de tocar nada (RP97: antes del bloque de productos, que
-    borra purchase_order_lines). Solo actúa si body trae 'estado' y es distinto del actual (sin espacios en los bordes).
-    Devuelve el motivo recortado (o None) para la Actividad. Errores, en este orden:
-    - un carácter de control en el estado -> 422 MENSAJE_CONTROL;
+    borra purchase_order_lines). Primero los campos libres (_validar_campos_libres_pec, r1 m7: updated_by, notas y
+    fecha_entrega_estimada); el resto solo actúa si body trae 'estado' y es distinto del actual (sin espacios en los
+    bordes). Devuelve el motivo recortado (o None) para la Actividad. Errores, en este orden:
+    - un carácter de control en el estado -> 422 «El estado no puede llevar caracteres de control.» (r1, m6);
     - un destino que pone el flujo -> 422 «'En tránsito' lo marca el seguimiento del envío (Mercancía en tránsito).» o
       «'Recibido' lo marca la recepción en bodega (Recepciones).»;
     - otro destino que no es manual (BORRADOR, ENVIADO, uno desconocido, un valor que no es texto) -> 422 ««X» no es un
@@ -967,15 +1025,16 @@ def _validar_transicion_pec(db: Session, p: PurchaseOrderFull, body: dict) -> Op
     - EMITIDO desde algo distinto de BORRADOR -> 422 «Solo un pedido en Borrador se puede marcar como Emitido.»;
     - CANCELADO con recepciones que no están canceladas (RP44) -> 409 «{numero} tiene N recepción(es) en bodega: no se
       puede cancelar.»;
-    - un carácter de control en el motivo -> 422 MENSAJE_CONTROL;
+    - un carácter de control en el motivo -> 422 «El motivo no puede llevar caracteres de control.» (r1, m6);
     - CANCELADO con un motivo de menos de 5 caracteres -> 422 «Indica el motivo de la cancelación (mínimo 5
       caracteres).»."""
+    _validar_campos_libres_pec(body)
     if "estado" not in body:
         return None
     valor = body["estado"]
     destino = None
     if isinstance(valor, str):
-        _texto_sin_control(valor)
+        _sin_control_en(valor, CONTROL_ESTADO)
         destino = valor.strip()
     if destino == p.estado:
         return None
@@ -996,10 +1055,11 @@ def _validar_transicion_pec(db: Session, p: PurchaseOrderFull, body: dict) -> Op
     motivo = str(motivo).strip() if motivo is not None else ""
     if destino == "CANCELADO":
         n = (db.query(func.count(GoodsReceipt.id))
-             .filter(GoodsReceipt.pec_id == p.id, GoodsReceipt.estado != "CANCELADA").scalar())
+             .filter(GoodsReceipt.pec_id == p.id, GoodsReceipt.estado.notin_(GRUPOS_RECEPCION["canceladas"]))
+             .scalar())
         if n:
             raise HTTPException(409, f"{p.numero} tiene {n} recepción(es) en bodega: no se puede cancelar.")
-    _texto_sin_control(motivo)
+    _sin_control_en(motivo, CONTROL_MOTIVO)
     if destino == "CANCELADO" and len(motivo) < MIN_MOTIVO_CANCELACION:
         raise HTTPException(422, f"Indica el motivo de la cancelación (mínimo {MIN_MOTIVO_CANCELACION} caracteres).")
     return motivo or None
@@ -1046,8 +1106,8 @@ def update_pec(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE
         if n_recepciones and int(n_recepciones) > 0:
             raise HTTPException(
                 409,
-                f"La PEC {p.numero} ya tiene {n_recepciones} recepcion(es) asociada(s). "
-                "Los cambios estructurales en productos no estan permitidos cuando hay recepciones activas. "
+                f"La PEC {p.numero} ya tiene {n_recepciones} recepción(es) asociada(s). "
+                "Los cambios estructurales en productos no están permitidos cuando hay recepciones activas. "
                 "Cancela las recepciones pendientes antes de modificar los productos."
             )
         nuevos_prods = body["productos"]  # lista de {sku_id, qty, nombre, ...}
@@ -1122,17 +1182,13 @@ def delete_pec(pec_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROL
         raise HTTPException(422, f"Solo se pueden eliminar PEC cancelados. {p.numero} esta en estado {p.estado} -- cancelalo primero.")
     n_recepciones = db.query(GoodsReceipt).filter(GoodsReceipt.pec_id == pec_id).count()
     if n_recepciones > 0:
-        raise HTTPException(422, f"{p.numero} tiene {n_recepciones} recepcion(es) asociada(s) y no se puede eliminar.")
+        raise HTTPException(422, f"{p.numero} tiene {n_recepciones} recepción(es) asociada(s) y no se puede eliminar.")
     # Defensivo: por si quedo algo sin desvincular de antes de cancelar.
     _desvincular_pec_cancelado(db, p.id, p.numero, None)
     numero = p.numero
     db.delete(p)
     db.commit()
     return {"status": "success", "message": f"PEC {numero} eliminado"}
-
-
-# B4 T12 (RP45): las etapas del PEC cuyo estado todavía lo mueve el seguimiento del envío.
-_ETAPAS_QUE_AVANZA_EL_SEGUIMIENTO = ("borrador", "emitido", "en_transito")
 
 
 @router.patch("/pedidos/{pec_id}/tracking")
@@ -1187,9 +1243,9 @@ def update_tracking(pec_id: int, body: ActualizarTrackingBody,
             break
     if not matched:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail=f"La etapa '{stage_name}' no existe en el tracking de {p.numero}. "
-                   f"Etapas validas: {', '.join(s['stage'] for s in stages)}",
+                   f"Etapas válidas: {', '.join(s['stage'] for s in stages)}",
         )
     p.tracking_stages = stages
     flag_modified(p, "tracking_stages")
@@ -1200,7 +1256,7 @@ def update_tracking(pec_id: int, body: ActualizarTrackingBody,
     # no saca un PEC de «Recibidos» ni reabre uno cancelado. La guarda de orden de las etapas (H14) sigue fuera.
     last_stage = stages[-1] if stages else {}
     if last_stage.get("status") == "COMPLETADO":
-        if etapa_pec(p.estado) in _ETAPAS_QUE_AVANZA_EL_SEGUIMIENTO:
+        if etapa_pec(p.estado) in _ETAPAS_POR_ENTREGAR:
             old_e = p.estado
             p.estado = "RECIBIDO"
             _log(db, "PEC", p.id, p.numero, "ESTADO_CHANGED",
@@ -1525,8 +1581,8 @@ def _dias_retraso_sql():
     de 1 día), solo si es > 0; NULL si llegó a tiempo, si su PEC no tiene fecha prometida o si no tiene PEC (una
     subconsulta correlacionada: la lista sigue siendo solo de goods_receipts)."""
     gr, pec = GoodsReceipt, PurchaseOrderFull
-    dias = cast(gr.fecha_recepcion, Date) - (cast(pec.fecha_entrega_estimada, Date) + ac.TOLERANCIA_A_TIEMPO_DIAS)
-    return (select(case((dias > 0, dias))).where(pec.id == gr.pec_id).correlate(gr).scalar_subquery())
+    # r1 (m11): la regla vive en analisis_compras.expr_dias_retraso (la misma del Análisis).
+    return select(ac.expr_dias_retraso(gr, pec)).where(pec.id == gr.pec_id).correlate(gr).scalar_subquery()
 
 
 def _ordenes_recepcion() -> dict:
@@ -3314,15 +3370,18 @@ _CAMPO_DE_ORDEN_LISTA = MappingProxyType({"fecha": "fecha", "producto": "product
 _BUSQUEDA_LISTA = ("producto", "pven_numero", "pec_numero", "notas", "proveedor")
 
 
-def _filtrar_lista(items: list, estado, like, proveedor, fecha_desde, fecha_hasta) -> list:
-    """El filtro de hoy de list_lista_compras: sin `estado` no salen los DESCARTADO; con él, solo ese estado. `like` es el
-    texto de la búsqueda en minúsculas (producto, PVEN, PEC, notas y proveedor)."""
+def _filtrar_lista(items: list, estado, estados, like, proveedor, fecha_desde, fecha_hasta) -> list:
+    """El filtro de hoy de list_lista_compras: sin `estado` no salen los DESCARTADO; con él, solo ese estado. r1 (m4):
+    `estados` (la lista ya validada de ESTADOS_ITEM_LISTA) deja solo esos. `like` es el texto de la búsqueda en
+    minúsculas (producto, PVEN, PEC, notas y proveedor)."""
     filtrados = []
     for it in items:
         if estado:
             if it.get("estado") != estado:
                 continue
         elif it.get("estado") == "DESCARTADO":
+            continue
+        if estados and it.get("estado") not in estados:
             continue
         if proveedor and proveedor.lower() not in (it.get("proveedor") or "").lower():
             continue
@@ -3338,11 +3397,12 @@ def _filtrar_lista(items: list, estado, like, proveedor, fecha_desde, fecha_hast
 
 
 def _ordenar_lista(items: list, orden) -> list:
-    """Los ítems en el orden pedido (validar_orden con ORDENES_LISTA: el 422 «No se puede ordenar por «x».» de R5)."""
+    """Los ítems en el orden pedido: `orden` es el (campo, descendente) que ya validó validar_orden (r1, m5: antes de
+    sincronizar), o None para el orden de hoy (id desc)."""
     por_id = sorted(items, key=lambda x: x.get("id", 0), reverse=True)   # el orden de hoy y el desempate
-    if not (orden or "").strip():
+    if orden is None:
         return por_id
-    campo, descendente = validar_orden(orden, ORDENES_LISTA, ORDENES_LISTA[0])
+    campo, descendente = orden
     if campo == "estado":
         posicion = {e: i for i, e in enumerate(ESTADOS_ITEM_LISTA)}
         clave = lambda it: posicion.get(it.get("estado"), len(posicion))   # noqa: E731
@@ -3357,6 +3417,7 @@ def _ordenar_lista(items: list, orden) -> list:
 @router.get("/lista-compras")
 def list_lista_compras(
     estado: Optional[str] = None,
+    estados: Optional[str] = None,
     search: Optional[str] = None,
     q: Optional[str] = None,
     proveedor: Optional[str] = None,
@@ -3370,22 +3431,27 @@ def list_lista_compras(
     db: Session = Depends(get_db)
 ):
     """La Lista de compras (B4 T12). q (D32; search es su alias) busca en el producto, el PVEN, el PEC, las notas y el
-    proveedor. orden: ver ORDENES_LISTA. total = todo lo filtrado; con_conteos = {todos, PENDIENTE, EN_PEDIDO,
-    RECIBIDO} sobre lo filtrado SIN el estado. Solo la primera página (offset 0) sincroniza los PVEN pendientes de
-    compra con la Lista (_sincronizar_pvens_pendientes_a_lista escribe): las demás la leen tal cual."""
+    proveedor. estados (r1, m4): CSV de ESTADOS_ITEM_LISTA, el que manda la tabla estándar; `estado` sigue como hoy.
+    orden: ver ORDENES_LISTA. total = todo lo filtrado; con_conteos = {todos, PENDIENTE, EN_PEDIDO, RECIBIDO} sobre lo
+    filtrado SIN el estado ni los estados. Todo se valida ANTES de leer la Lista (r1, m5: un 422 no escribe). Solo la
+    primera página (offset 0) sincroniza los PVEN pendientes de compra con la Lista (_sincronizar_pvens_pendientes_a_lista
+    escribe): las demás la leen tal cual."""
     try:
         texto = texto_busqueda(q, search)   # D46: un carácter de control da 422
     except ValueError as e:
         raise HTTPException(422, str(e))
     like = texto.lower() if texto else None
+    lista_estados = _estados_de_compras("LISTA", estados)
+    clave_orden = validar_orden(orden, ORDENES_LISTA, ORDENES_LISTA[0]) if (orden or "").strip() else None
     if offset == 0:
         items = _sincronizar_pvens_pendientes_a_lista(db)
     else:
         items = _sin_items_de_pedidos_cancelados(db, _load_lista_compras(db))
-    filtrados = _ordenar_lista(_filtrar_lista(items, estado, like, proveedor, fecha_desde, fecha_hasta), orden)
+    filtrados = _ordenar_lista(_filtrar_lista(items, estado, lista_estados, like, proveedor, fecha_desde, fecha_hasta),
+                               clave_orden)
     conteos = None
     if con_conteos:
-        sin_estado = _filtrar_lista(items, None, like, proveedor, fecha_desde, fecha_hasta)
+        sin_estado = _filtrar_lista(items, None, None, like, proveedor, fecha_desde, fecha_hasta)
         conteos = {"todos": len(sin_estado),
                    **{e: sum(1 for it in sin_estado if it.get("estado") == e) for e in ESTADOS_ITEM_LISTA}}
     pagina = filtrados[offset:offset + limit] if limit else []

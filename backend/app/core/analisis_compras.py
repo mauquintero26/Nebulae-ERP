@@ -16,8 +16,9 @@ flujo), el resumen de GET /compras/pedidos y el Análisis:
 - % entregas a tiempo: las recepciones confirmadas (COMPLETADA y COMPLETADA_LOGISTICA, GRUPOS_RECEPCION) con
   fecha_recepcion en el período cuyo pedido de compra tiene fecha de entrega estimada. Es a tiempo si el día de la
   recepción es ≤ el prometido + TOLERANCIA_A_TIEMPO_DIAS (1). Los dos días se toman con .date() (cast a date), sin pasarlos
-  a hora de Colombia, IGUAL que _gr_dict de erp_compras.py, para que el Hub y la Mesa de Recepciones no se contradigan:
-  si se corrige _gr_dict, hay que corregir esto también. Una recepción sin pedido de compra no tiene fecha prometida.
+  a hora de Colombia, IGUAL que _gr_dict de erp_compras.py, para que el Hub y la Mesa de Recepciones no se contradigan
+  (r1, m11: la regla vive en expr_limite_a_tiempo y expr_dias_retraso, y _gr_dict usa la misma constante; si se corrige
+  _gr_dict, hay que corregir esto también). Una recepción sin pedido de compra no tiene fecha prometida.
 - Días promedio de entrega: día de la recepción − día del pedido de compra (fecha_de_compra), con 1 decimal y nunca
   negativo; solo las recepciones confirmadas del período con pedido de compra.
 - Los días de los períodos son de Colombia (los bordes del Periodo de core/periodos.py y las cubetas de expr_cubeta,
@@ -34,17 +35,19 @@ from decimal import Decimal
 from sqlalchemy import Date, and_, case, cast, func, or_
 from sqlalchemy.orm import Session
 
-from app.core.analisis import (claves_cubetas, dinero, expr_cubeta, kpi, rellenar, respuesta, segmentos, validar_top,
-                               variacion_pct)
-from app.core.estados_compras import ETAPAS_PEC, GRUPOS_RECEPCION, cond_vencido, etapa_pec
-from app.core.fechas import iso_z
-from app.core.periodos import Periodo, contar_en, en_rango, sumar_en
+from app.core.analisis import dinero, expr_cubeta, kpi, respuesta, validar_top, variacion_pct
+# r1 (m17): las piezas del contrato que ya existen se importan, no se copian. _pct, _cantidad, _dona, _movimiento,
+# _linea y _barras_por_fecha (que usan el mismo _enteros) son las de analisis_ventas.py (privadas, como D-9; para la
+# revisión final: deberían vivir en core/analisis.py) y _ventanas, la de core/periodos.py.
+from app.core.analisis_ventas import _barras_por_fecha, _cantidad, _dona, _linea, _movimiento, _pct
+from app.core.estados_compras import ETAPAS_PEC, GRUPOS_PEC, GRUPOS_RECEPCION, cond_vencido, en_estados_pec, etapa_pec
+from app.core.periodos import Periodo, _ventanas, contar_en, sumar_en
 from app.core.textos_actividad import etiqueta_estado
 from app.models.erp_documents import GoodsReceipt, PurchaseOrderFull
 
 TOP_POR_DEFECTO = 5
 MAX_MOVIMIENTOS = 8           # MAX_MOVIMIENTOS de lib/analisis.js
-ESTADOS_SIN_DINERO_PEC = ("BORRADOR", "CANCELADO")   # RP43: no suman a «Comprado»
+ESTADOS_SIN_DINERO_PEC = ETAPAS_PEC["borrador"] + ETAPAS_PEC["cancelado"]   # RP43: no suman a «Comprado»
 ESTADOS_RECEPCION_CONFIRMADA = GRUPOS_RECEPCION["confirmadas"]   # COMPLETADA y COMPLETADA_LOGISTICA
 TOLERANCIA_A_TIEMPO_DIAS = 1  # la de _gr_dict (erp_compras.py): llegar un día después de lo prometido es a tiempo
 SIN_PROVEEDOR = "Sin proveedor"
@@ -76,24 +79,27 @@ def cifras_pec(q, hoy) -> dict:
     por estado: total, por_estado, borradores, activos, en_transito, en_bodega, recibidos, cancelados, vigentes,
     vencidos (cond_vencido con `hoy`, el día de hoy en Colombia), monto_cop (Σ total_cop de los vigentes),
     monto_por_recibir_cop (Σ total_cop de los activos) y cumplimiento_pct. Cada estado va a su etapa con etapa_pec (un
-    estado desconocido cuenta como emitido, la misma regla de cond_estados_pec). Los montos, en pesos enteros."""
+    estado desconocido cuenta como emitido, la misma regla de cond_estados_pec); activos y vigentes son los de
+    GRUPOS_PEC (en_estados_pec). Los montos, en pesos enteros."""
     pec = PurchaseOrderFull
     filas = (q.order_by(None).enable_eagerloads(False)
              .with_entities(pec.estado, func.count(pec.id), func.coalesce(func.sum(pec.total_cop), 0),
                             func.count(pec.id).filter(cond_vencido(pec.estado, pec.fecha_entrega_estimada, hoy)))
              .group_by(pec.estado).all())
-    por_estado, cuantos, montos, vencidos = {}, {e: 0 for e in ETAPAS_PEC}, {e: Decimal(0) for e in ETAPAS_PEC}, 0
+    por_estado, cuantos, vencidos = {}, {e: 0 for e in ETAPAS_PEC}, 0
+    grupos = {g: [0, Decimal(0)] for g in ("activos", "vigentes")}   # [cuántos, monto]
     for estado, n, monto, n_vencidos in filas:
-        etapa = etapa_pec(estado)
-        por_estado[estado] = int(n)
-        cuantos[etapa] += int(n)
-        montos[etapa] += Decimal(monto or 0)
+        n, monto = int(n), Decimal(monto or 0)
+        por_estado[estado] = n
+        cuantos[etapa_pec(estado)] += n
+        for grupo, acumulado in grupos.items():
+            if en_estados_pec(estado, GRUPOS_PEC[grupo]):
+                acumulado[0] += n
+                acumulado[1] += monto
         vencidos += int(n_vencidos or 0)
-    activas = ("emitido", "en_transito", "en_bodega")
-    activos = sum(cuantos[e] for e in activas)
-    total = sum(cuantos.values())
+    activos, vigentes = grupos["activos"][0], grupos["vigentes"][0]
     return {
-        "total": total,
+        "total": sum(cuantos.values()),
         "por_estado": por_estado,
         "borradores": cuantos["borrador"],
         "activos": activos,
@@ -101,10 +107,10 @@ def cifras_pec(q, hoy) -> dict:
         "en_bodega": cuantos["en_bodega"],
         "recibidos": cuantos["recibido"],
         "cancelados": cuantos["cancelado"],
-        "vigentes": total - cuantos["cancelado"],
+        "vigentes": vigentes,
         "vencidos": vencidos,
-        "monto_cop": dinero(sum((m for e, m in montos.items() if e != "cancelado"), Decimal(0))),
-        "monto_por_recibir_cop": dinero(sum((montos[e] for e in activas), Decimal(0))),
+        "monto_cop": dinero(grupos["vigentes"][1]),
+        "monto_por_recibir_cop": dinero(grupos["activos"][1]),
         "cumplimiento_pct": cumplimiento_pct(cuantos["recibido"], activos),
     }
 
@@ -138,31 +144,10 @@ def flujo_compras(db: Session, periodo: Periodo) -> dict:
 
 # ─── Piezas del Análisis ──────────────────────────────────────────────────────────────────────────────────────────
 
-def _ventanas(col, periodo: Periodo):
-    return (en_rango(col, periodo.inicio_utc, periodo.fin_utc),
-            en_rango(col, periodo.anterior_inicio_utc, periodo.anterior_fin_utc))
-
-
-def _pct(parte, total):
-    """El % con 1 decimal; None si no hay total."""
-    if not total:
-        return None
-    return round(float(parte) / float(total) * 100, 1)
-
-
 def _texto_pct(valor) -> str:
     """'66,7 %' y '100 %' (el formato de porcentaje de R7: coma decimal y un espacio antes de %)."""
     texto = f"{valor:.1f}".replace(".", ",")
     return f"{texto[:-2] if texto.endswith(',0') else texto} %"
-
-
-def _cantidad(n, singular, plural) -> str:
-    return f"{n} {singular if n == 1 else plural}"
-
-
-def _enteros(valores):
-    """Los valores de una serie (rellenar da float) como int cuando no tienen decimales: pesos y conteos enteros."""
-    return [int(v) if float(v).is_integer() else v for v in valores]
 
 
 def _nombre_proveedor(pec=PurchaseOrderFull):
@@ -195,19 +180,33 @@ def _recepciones(db: Session):
             .filter(gr.estado.in_(ESTADOS_RECEPCION_CONFIRMADA)))
 
 
+def expr_limite_a_tiempo(pec=PurchaseOrderFull):
+    """El último día a tiempo de una entrega, en SQL: el día prometido (cast a date, como el .date() de _gr_dict) +
+    TOLERANCIA_A_TIEMPO_DIAS. r1 (m11): la regla del retraso vive aquí; la usan el Análisis, el orden 'retraso' de
+    GET /compras/recepciones y, con la misma constante, _gr_dict."""
+    return cast(pec.fecha_entrega_estimada, Date) + TOLERANCIA_A_TIEMPO_DIAS
+
+
+def expr_dias_retraso(gr=GoodsReceipt, pec=PurchaseOrderFull):
+    """El dias_retraso de _gr_dict en SQL: día de la recepción − expr_limite_a_tiempo, solo si es > 0; NULL si llegó a
+    tiempo, si el PEC no tiene fecha prometida o si la recepción no tiene fecha."""
+    dias = cast(gr.fecha_recepcion, Date) - expr_limite_a_tiempo(pec)
+    return case((dias > 0, dias))
+
+
 def _reglas_de_entrega():
     """(a tiempo, con retraso, sin fecha prometida, días de entrega, días de retraso) de una recepción, en SQL (ver el
-    docstring del módulo: .date() de los dos lados, como _gr_dict)."""
+    docstring del módulo: .date() de los dos lados, como _gr_dict). Los días de entrega nunca son negativos; sin la
+    fecha del PEC no hay días (el promedio filtra con fecha_de_compra, r1 m9: GREATEST ignora el NULL)."""
     gr, pec = GoodsReceipt, PurchaseOrderFull
     dia_recepcion = cast(gr.fecha_recepcion, Date)
-    limite = cast(pec.fecha_entrega_estimada, Date) + TOLERANCIA_A_TIEMPO_DIAS
+    limite = expr_limite_a_tiempo(pec)
     con_fecha = pec.fecha_entrega_estimada.isnot(None)
     a_tiempo = and_(con_fecha, dia_recepcion <= limite)
     tarde = and_(con_fecha, dia_recepcion > limite)
     sin_fecha = pec.fecha_entrega_estimada.is_(None)
     dias_entrega = func.greatest(dia_recepcion - cast(fecha_de_compra(pec), Date), 0)
-    dias_retraso = case((tarde, dia_recepcion - limite))
-    return a_tiempo, tarde, sin_fecha, dias_entrega, dias_retraso
+    return a_tiempo, tarde, sin_fecha, dias_entrega, expr_dias_retraso(gr, pec)
 
 
 def _kpis_de_entregas(db: Session, periodo: Periodo) -> dict:
@@ -220,35 +219,13 @@ def _kpis_de_entregas(db: Session, periodo: Periodo) -> dict:
     for ventana in (actual, anterior):
         columnas += [func.count(gr.id).filter(and_(ventana, con_fecha)),
                      func.count(gr.id).filter(and_(ventana, a_tiempo)),
-                     func.avg(dias_entrega).filter(and_(ventana, pec.id.isnot(None)))]
+                     func.avg(dias_entrega).filter(and_(ventana, fecha_de_compra(pec).isnot(None)))]
     columnas.append(func.count(gr.id).filter(and_(actual, sin_fecha)))
     fila = _recepciones(db).filter(or_(actual, anterior)).with_entities(*columnas).one()
     dias = [None if v is None else round(float(v), 1) for v in (fila[2], fila[5])]
     return {"a_tiempo_pct": {"actual": _pct(fila[1], fila[0]), "anterior": _pct(fila[4], fila[3])},
             "dias": {"actual": dias[0], "anterior": dias[1]},
             "sin_fecha": int(fila[6] or 0)}
-
-
-def _linea(periodo: Periodo, actual: dict, anterior: dict, total, total_anterior) -> dict:
-    return {
-        "titulo": "Compras en el tiempo",
-        "formato": "pesos",
-        "fechas": [dia.isoformat() for dia in claves_cubetas(periodo)],
-        "series": [
-            {"clave": "actual", "etiqueta": "Comprado", "valores": _enteros(rellenar(actual, periodo)),
-             "es_anterior": False},
-            {"clave": "anterior", "etiqueta": "Período anterior",
-             "valores": _enteros(rellenar(anterior, periodo, anterior=True)), "es_anterior": True},
-        ],
-        "total": total,
-        "total_anterior": total_anterior,
-        "variacion_pct": variacion_pct(total, total_anterior),
-    }
-
-
-def _dona(clave, titulo, formato, filas) -> dict:
-    return {"clave": clave, "titulo": titulo, "formato": formato, "total": sum(int(f[2]) for f in filas),
-            "segmentos": segmentos(filas)}
 
 
 def _dona_por_proveedor(db: Session, periodo: Periodo) -> dict:
@@ -290,19 +267,12 @@ def _barras_de_entregas(db: Session, periodo: Periodo) -> dict:
     for dia, *cuantos in filas:
         for i, n in enumerate(cuantos):
             por_serie[i][dia] = int(n or 0)
-    series = (("a_tiempo", "A tiempo", "positivo"), ("con_retraso", "Con retraso", "neutro"),
-              ("sin_fecha", "Sin fecha prometida", "neutro"))
-    return {"titulo": "Recepciones a tiempo y con retraso", "formato": "entero", "eje": "fechas",
-            "etiquetas": [dia.isoformat() for dia in claves_cubetas(periodo)],
-            "series": [{"clave": clave, "etiqueta": etiqueta, "valores": _enteros(rellenar(por_serie[i], periodo)),
-                        "tono": tono} for i, (clave, etiqueta, tono) in enumerate(series)],
-            "apiladas": True}
-
-
-def _movimiento(tipo, numero, titulo, detalle, fecha, monto, estado_etiqueta, doc_tipo, doc_id) -> dict:
-    return {"tipo": tipo, "numero": numero, "titulo": titulo, "detalle": detalle, "fecha": iso_z(fecha),
-            "monto": None if monto is None else dinero(monto), "formato": None if monto is None else "pesos",
-            "signo": None, "estado_etiqueta": estado_etiqueta, "doc_tipo": doc_tipo, "doc_id": doc_id}
+    barras = _barras_por_fecha("Recepciones a tiempo y con retraso", "entero", periodo,
+                               [("a_tiempo", "A tiempo", por_serie[0], "positivo"),
+                                ("con_retraso", "Con retraso", por_serie[1], "neutro"),
+                                ("sin_fecha", "Sin fecha prometida", por_serie[2], "neutro")])
+    barras["apiladas"] = True   # la de Ventas no apila; aquí van una encima de otra
+    return barras
 
 
 def _movimientos(db: Session, periodo: Periodo) -> list:
@@ -322,13 +292,14 @@ def _movimientos(db: Session, periodo: Periodo) -> list:
                                                                   _nombre_proveedor()),
                                   gr.estado, gr.fecha_recepcion, dias_retraso)
                    .order_by(gr.fecha_recepcion.desc().nulls_last(), gr.id.desc()).limit(MAX_MOVIMIENTOS).all())
-    filas = [(cuando, _movimiento("PEC", numero, "Pedido de compra", proveedor, cuando, total,
+    # El _movimiento de analisis_ventas.py, sin signo (ni las compras ni las recepciones son una entrada o una salida).
+    filas = [(cuando, _movimiento("PEC", numero, "Pedido de compra", proveedor, cuando, total, None,
                                   etiqueta_estado("PEC", estado), "PEC", id_))
              for id_, numero, proveedor, estado, total, cuando in compras]
     for id_, numero, proveedor, estado, cuando, retraso in recepciones:
         detalle = proveedor if not retraso else (
             f"{proveedor} · llegó {_cantidad(int(retraso), 'día', 'días')} tarde")
-        filas.append((cuando, _movimiento("ENINV", numero, "Recepción", detalle, cuando, None,
+        filas.append((cuando, _movimiento("ENINV", numero, "Recepción", detalle, cuando, None, None,
                                           etiqueta_estado("ENINV", estado), "ENINV", id_)))
     filas.sort(key=lambda f: f[0], reverse=True)
     return [m for _, m in filas[:MAX_MOVIMIENTOS]]
@@ -409,7 +380,7 @@ def analisis_compras(db: Session, periodo: Periodo, top=TOP_POR_DEFECTO) -> dict
     return respuesta(
         periodo,
         kpis=kpis,
-        linea=_linea(periodo, actual, anterior, comprado, comprado_ant),
+        linea=_linea("Compras en el tiempo", "pesos", periodo, actual, anterior, "Comprado", comprado, comprado_ant),
         donas=[_dona_por_proveedor(db, periodo), _dona_por_estado(db, periodo)],
         barras=_barras_de_entregas(db, periodo),
         movimientos={"titulo": "Últimas compras y recepciones", "filas": _movimientos(db, periodo)},

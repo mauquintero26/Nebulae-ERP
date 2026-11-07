@@ -32,15 +32,18 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.analisis_compras import fecha_de_compra
-from app.core.estados_compras import PASOS_FLUJO_COMPRAS, cond_vencido, paso_flujo_pec
+from app.core.estados_compras import (ESTADOS_ITEM_LISTA, GRUPOS_RECEPCION, PASOS_FLUJO_COMPRAS, cond_vencido,
+                                      paso_flujo_pec)
 from app.core.fechas import ahora_utc, hoy_colombia, iso_z
 from app.models.erp_documents import GoodsReceipt, PurchaseOrderFull
 
 CRITERIO_ATRASO = "fecha_entrega"
 PASOS_CON_ATRASO = ("PEC", "TRANSITO")
 PASOS_SIN_ANTIGUEDAD = ("RECIBIDO",)
-ESTADO_ITEM_POR_COMPRAR = "PENDIENTE"
-ESTADO_RECEPCION_POR_CONFIRMAR = "BORRADOR"
+# r1 (m10): los hechos de estado salen de core/estados_compras.py. 'PENDIENTE' es el primero de ESTADOS_ITEM_LISTA (el
+# ítem que todavía hay que comprar) y las recepciones por confirmar son el grupo 'por_confirmar' (el de /compras/stats).
+ESTADO_ITEM_POR_COMPRAR = tuple(ESTADOS_ITEM_LISTA)[0]
+ESTADOS_RECEPCION_POR_CONFIRMAR = GRUPOS_RECEPCION["por_confirmar"]
 
 
 def _dias_desde(ahora: datetime, desde) -> int | None:
@@ -96,7 +99,7 @@ def resumen_flujo_compras(db: Session, ahora: datetime | None = None) -> dict:
         if minimo is not None and (a["minimo"] is None or minimo < a["minimo"]):
             a["minimo"] = minimo
     por_confirmar = (db.query(func.count(GoodsReceipt.id))
-                     .filter(GoodsReceipt.estado == ESTADO_RECEPCION_POR_CONFIRMAR).scalar())
+                     .filter(GoodsReceipt.estado.in_(ESTADOS_RECEPCION_POR_CONFIRMAR)).scalar())
     for paso, a in acumulado.items():
         pasos[paso] = {
             "total": a["total"],

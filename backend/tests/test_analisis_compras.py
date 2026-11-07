@@ -171,6 +171,7 @@ def test_dias_promedio(app_client, db, admin_token):
     pec = f.pec(datetime(2001, 1, 1, 22, 0), entrega=datetime(2001, 1, 3))
     f.recepcion(datetime(2001, 1, 4, 1, 0), pec)
     f.recepcion(datetime(2001, 1, 6, 23, 0), pec)
+    f.recepcion(datetime(2001, 1, 5, 10, 0), None)   # r1 (m9): una recepción sin PEC no entra en el promedio
     k = _kpis(_analisis(app_client, admin_token))["dias_promedio_entrega"]
     assert (k["valor"], k["formato"], k["mejor"]) == (4.0, "dias", "baja")
     sin_recepciones = _kpis(_analisis(app_client, admin_token, desde="2001-01-07"))["dias_promedio_entrega"]
@@ -194,7 +195,8 @@ def test_ranking_proveedores(app_client, db, admin_token):
     f.recepcion(datetime(2001, 1, 2, 10, 0), b)
     f.pec(dia, 450_000, proveedor=f"C {s}")
     f.pec(dia, 99_000_000, proveedor=f"C {s}", estado="BORRADOR")
-    f.pec(dia, 300_000, proveedor=f"D {s}")
+    d = f.pec(dia, 300_000, proveedor=f"D {s}", entrega=datetime(2001, 1, 2))
+    f.recepcion(datetime(2001, 1, 9, 10, 0), d)      # r1 (m14): todas tarde, 0 % a tiempo
     f.pec(dia, 100_000, proveedor="")
     f.pec(dia, 50_000, proveedor=f"F {s}")
     data = _analisis(app_client, admin_token, top="5")
@@ -207,7 +209,7 @@ def test_ranking_proveedores(app_client, db, admin_token):
         (1, f"A {s}", 600_000, 2, "2 pedidos · 66,7 % a tiempo", round(600_000 / total * 100, 1)),
         (2, f"B {s}", 500_000, 1, "1 pedido · 100 % a tiempo", round(500_000 / total * 100, 1)),
         (3, f"C {s}", 450_000, 1, "1 pedido", round(450_000 / total * 100, 1)),
-        (4, f"D {s}", 300_000, 1, "1 pedido", round(300_000 / total * 100, 1)),
+        (4, f"D {s}", 300_000, 1, "1 pedido · 0 % a tiempo", round(300_000 / total * 100, 1)),
         (5, "Sin proveedor", 100_000, 1, "1 pedido", round(100_000 / total * 100, 1)),
     ]
     dona = next(d for d in data["donas"] if d["clave"] == "proveedor")
@@ -334,3 +336,28 @@ def test_la_funcion_valida_el_top(db):
     from app.core.periodos import resolver_periodo
     with pytest.raises(ValueError, match="El ranking solo puede mostrar 5, 10 o 25."):
         analisis_compras(db, resolver_periodo("30d"), 7)
+
+
+# ─── r1 (m9, m14): días nunca negativos y el proveedor por su ficha ───────────────────────────────────────────────
+
+def test_dias_promedio_nunca_es_negativo(app_client, db, admin_token):
+    """Una recepción anterior a su pedido de compra (un dato mal cargado) cuenta 0 días, no un número negativo."""
+    f = _Fabrica(db)
+    pec = f.pec(datetime(2001, 1, 6, 10, 0), entrega=datetime(2001, 1, 8))
+    f.recepcion(datetime(2001, 1, 3, 10, 0), pec)
+    assert _kpis(_analisis(app_client, admin_token))["dias_promedio_entrega"]["valor"] == 0.0
+
+
+def test_ranking_y_dona_agrupan_por_la_ficha_del_proveedor(app_client, db, admin_token, supplier):
+    """Dos pedidos de compra del mismo proveedor (supplier_id) con el nombre escrito distinto son UN proveedor en el
+    ranking y en la dona; sin ficha, se agrupa por el nombre escrito."""
+    f = _Fabrica(db)
+    dia = datetime(2001, 1, 2, 10, 0)
+    f.pec(dia, 400_000, proveedor=f"Nombre viejo {f.sufijo}", supplier_id=supplier.id)
+    f.pec(dia, 100_000, proveedor=f"Nombre nuevo {f.sufijo}", supplier_id=supplier.id)
+    f.pec(dia, 50_000, proveedor=f"Sin ficha {f.sufijo}")
+    data = _analisis(app_client, admin_token)
+    filas = [(r["valor"], r["cantidad"]) for r in data["ranking"]["filas"]]
+    assert filas == [(500_000, 2), (50_000, 1)]
+    dona = next(d for d in data["donas"] if d["clave"] == "proveedor")
+    assert sorted(s["valor"] for s in dona["segmentos"]) == [50_000, 500_000]
