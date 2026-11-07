@@ -958,8 +958,9 @@ console.log('--- TEST 22 (B4 T10): PasosFlujo parte las etiquetas de la barra en
   const fuente = readFileSync(new URL('../src/components/flujo/PasosFlujo.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const codigo = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   assert.match(codigo, /\n {2}partirEtiquetas\?: boolean;\n/, 'la prop nueva, opcional');
-  assert.match(codigo, /mostrarAntiguedad = false, mostrarAyuda = false, estadoConteos, partirEtiquetas = false,\n\}: PropsPasosFlujo\)/, 'por defecto false');
-  assert.match(codigo, /<PasosBarra pasos=\{pasos\} vertical=\{vertical\} etiqueta=\{etiqueta\} onSeleccionar=\{onSeleccionar\} compacto=\{compacto\} partirEtiquetas=\{partirEtiquetas\} \/>/);
+  // B4 T11: estadoVisible se suma a la misma línea (TEST 23); la de partirEtiquetas no cambia.
+  assert.match(codigo, /mostrarAntiguedad = false, mostrarAyuda = false, estadoConteos, partirEtiquetas = false, estadoVisible = false,\n\}: PropsPasosFlujo\)/, 'por defecto false');
+  assert.match(codigo, /<PasosBarra pasos=\{pasos\} vertical=\{vertical\} etiqueta=\{etiqueta\} onSeleccionar=\{onSeleccionar\} compacto=\{compacto\} partirEtiquetas=\{partirEtiquetas\} estadoVisible=\{estadoVisible\} \/>/);
   assert.match(codigo, /const ETIQUETA_RECORTADA = 'max-w-full truncate';/, 'sin la prop: la de antes');
   assert.match(codigo, /const ETIQUETA_PARTIDA = 'max-w-full whitespace-normal break-words leading-tight';/, 'con la prop: en varias líneas');
   assert.ok(codigo.includes('<span title={tituloPaso(paso)} className={`${partirEtiquetas ? ETIQUETA_PARTIDA : ETIQUETA_RECORTADA} text-[11px] font-bold ${LABEL_BARRA[estado]}`}>{paso.label}</span>'),
@@ -970,7 +971,7 @@ console.log('--- TEST 22 (B4 T10): PasosFlujo parte las etiquetas de la barra en
   assert.match(codigo, /const PASO_PARTIDO = 'min-w-min';/);
   assert.ok(codigo.includes("className={`flex ${partirEtiquetas ? PASO_PARTIDO : PASO_RECORTADO} rounded-lg ${vertical ? 'items-start gap-2 text-left' : 'flex-col items-center text-center'}"),
     'el elemento del paso elige su ancho mínimo con la prop');
-  assert.match(codigo, /function PasosBarra\(\{\n {2}pasos, vertical, etiqueta, onSeleccionar, compacto, partirEtiquetas = false,\n\}/, 'PasosBarra: por defecto false');
+  assert.match(codigo, /function PasosBarra\(\{\n {2}pasos, vertical, etiqueta, onSeleccionar, compacto, partirEtiquetas = false, estadoVisible = false,\n\}/, 'PasosBarra: por defecto false');
   // r1 (m6): con la prop, el <li> de cada paso tampoco se angosta por debajo de su paso (min-w-min). Si la columna se
   // achica (el panel de Actividad llega a 800 px), la barra se desplaza dentro de su caja (overflow-x-auto en el Status
   // Tracker) en lugar de montar una etiqueta sobre la siguiente. Sin la prop, el <li> de siempre (min-w-0).
@@ -984,6 +985,32 @@ console.log('--- TEST 22 (B4 T10): PasosFlujo parte las etiquetas de la barra en
   assert.match(leerApp('app/dashboard/ventas/venta/[id]/page.tsx'), /<PasosFlujo variante="barra" pasos=\{pasosPedido\} etiqueta="Pasos del pedido" partirEtiquetas \/>/);
   assert.match(leerApp('app/dashboard/ventas/venta/[id]/page.tsx'), /<div className="[^"]*\boverflow-x-auto\b[^"]*">\s*<PasosFlujo variante="barra" pasos=\{pasosPedido\} etiqueta="Pasos del pedido" partirEtiquetas \/>/,
     'el Status Tracker se desplaza si la barra no cabe');
+}
+
+console.log('--- TEST 23 (B4 T11): PasosFlujo muestra la palabra y los avisos de un paso siempre con estadoVisible (aditivo) ---');
+{
+  // El Status Tracker de la cotización (376 px a 1024 px con el panel de Actividad abierto, por debajo de @md del contenedor)
+  // tiene que mostrar «Rechazada» (rojo) y «Vencida» (ámbar) aunque no quepa el sublabel: con la prop el span deja de ser
+  // sr-only por debajo de @md. Sin ella, la barra es la de siempre (la cadena, el pedido, el panel rápido y los 4 pasos de la
+  // solicitud: sus pasos no traen sublabel ni avisos).
+  const fuente = readFileSync(new URL('../src/components/flujo/PasosFlujo.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.match(codigo, /\n {2}estadoVisible\?: boolean;\n/, 'la prop nueva, opcional');
+  assert.match(codigo, /const ESTADO_OCULTO_ANGOSTO = 'sr-only @md\/flujo:not-sr-only @md\/flujo:block @md\/flujo:max-w-full';/, 'sin la prop: la de antes');
+  assert.match(codigo, /const ESTADO_SIEMPRE = 'block max-w-full';/, 'con la prop: siempre a la vista');
+  assert.equal(codigo.split('estadoVisible ? ESTADO_SIEMPRE : ESTADO_OCULTO_ANGOSTO').length - 1, 2, 'el sublabel y los avisos eligen su clase con la prop');
+  assert.match(codigo, /<span className=\{estadoVisible \? ESTADO_SIEMPRE : ESTADO_OCULTO_ANGOSTO\}>\s*<LineaSublabel paso=\{paso\} vertical=\{vertical\} \/>/, 'el sublabel');
+  assert.match(codigo, /<span className=\{estadoVisible \? ESTADO_SIEMPRE : ESTADO_OCULTO_ANGOSTO\}>\s*<AvisosDelPaso avisos=\{paso\.avisos\} pequeno/, 'los avisos');
+  assert.match(codigo, /function PasosBarra\(\{\n {2}pasos, vertical, etiqueta, onSeleccionar, compacto, partirEtiquetas = false, estadoVisible = false,\n\}: Required<Pick<PropsPasosFlujo, 'pasos' \| 'etiqueta'>> & \{[^}]*estadoVisible\?: boolean;/, 'PasosBarra recibe la prop');
+  assert.ok(!/sr-only @md\/flujo:not-sr-only/.test(codigo.replace("const ESTADO_OCULTO_ANGOSTO = 'sr-only @md/flujo:not-sr-only @md/flujo:block @md/flujo:max-w-full';", '')),
+    'esa clase vive solo en la constante: ningún otro sitio la copia');
+  // Solo el Status Tracker de la cotización la pasa.
+  const leerApp = (r) => readFileSync(new URL(`../src/${r}`, import.meta.url), 'utf8');
+  for (const otro of ['components/flujo/CadenaDocumentos.tsx', 'components/flujo/BannerFlujo.tsx', 'app/dashboard/ventas/page.tsx',
+    'app/dashboard/ventas/venta/[id]/page.tsx', 'app/dashboard/ventas/solicitud/[id]/estado-solicitud.tsx']) {
+    assert.ok(!leerApp(otro).includes('estadoVisible'), `${otro} no la pasa`);
+  }
+  assert.match(leerApp('app/dashboard/ventas/cotizacion/[id]/page.tsx'), /<PasosFlujo variante="barra" pasos=\{pasosCot\} etiqueta="Pasos de la cotización" partirEtiquetas estadoVisible \/>/);
 }
 
 console.log('\nOK: test_flujo.mjs');

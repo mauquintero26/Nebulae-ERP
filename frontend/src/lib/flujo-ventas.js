@@ -14,7 +14,7 @@
  *  - tabHubDePaso(clave): la vista del Hub de cada paso (RP21).
  *  - cadenaVentas(doc, tipo, opciones): la barra Solicitud → Cotización → Pedido de venta (→ Compra) del detalle de un
  *    documento y del panel rápido del Hub. Su ayudante contextoFlujo es interno: no se exporta (RP67).
- *  - PASOS_COTIZACION y pasoCotizacion(estado): los 3 pasos propios de la cotización (RP87).
+ *  - PASOS_COTIZACION, pasoCotizacion(estado) y anotarPasosCotizacion(pasos, p) (T11): los 3 pasos propios de la cotización (RP87).
  *  - B4 T7, rutas y textos del Hub: leerEnlaceHub(search) (?paso= y ?tab=analisis&foco=), chipsFiltroHub(estado) (los
  *    chips «Paso: …» y «Con atraso» que quitan el filtro) y pasoTrasPestana(paso, vista) (la pestaña de otro tipo quita
  *    el paso).
@@ -645,4 +645,30 @@ export function pasoCotizacion(estado) {
     default:
       return { indice: 0 };
   }
+}
+
+/**
+ * B4 T11 (RP87): la palabra y el aviso de pasoCotizacion en los pasos que pinta PasosFlujo. pasosConProgreso solo recibe
+ * `canceladoEn`; sin esto la barra de la cotización perdería el «Rechazada» (rojo) y el «Vencida» (ámbar) que el
+ * stepper de antes decía en el estado de la cabecera.
+ *  - p.etiqueta (RECHAZADA) pasa a `etiquetaEstado` del paso p.canceladoEn (el 'cancelado');
+ *  - p.aviso (VENCIDA) pasa a `avisos` del paso p.indice (el 'actual');
+ *  - un índice fuera de rango, o un p sin etiqueta ni aviso (o null), deja los pasos como llegaron.
+ * Devuelve pasos nuevos; no muta los recibidos.
+ * @param {ReadonlyArray<PasoVista> | null | undefined} pasos  los de pasosConProgreso(PASOS_COTIZACION, …)
+ * @param {PasoCotizacion | null | undefined} p  el de pasoCotizacion(estado)
+ * @returns {PasoVista[]}
+ */
+export function anotarPasosCotizacion(pasos, p) {
+  const lista = Array.isArray(pasos) ? pasos : [];
+  return lista.map((paso, i) => {
+    const conEtiqueta = Boolean(p?.etiqueta) && i === p.canceladoEn;
+    const conAviso = Boolean(p?.aviso) && i === p.indice;
+    if (!conEtiqueta && !conAviso) return paso;
+    return {
+      ...paso,
+      ...(conEtiqueta ? { etiquetaEstado: p.etiqueta } : {}),
+      ...(conAviso ? { avisos: [{ ...p.aviso }] } : {}),
+    };
+  });
 }

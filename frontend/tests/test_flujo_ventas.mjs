@@ -721,4 +721,108 @@ console.log('--- B4 T10 TEST 2: vistaDePasoPedido y leerEnlacePedidos — Entreg
   for (const c of COLUMNAS_PEDIDO) assert.equal(fv.leerEnlacePedidos(`?tab=${c.clave}`), c.clave, c.clave);
 }
 
+console.log('--- B4 T11 TEST 1: anotarPasosCotizacion — «Rechazada» en rojo y «Vencida» en ámbar en la barra de la cotización (RP87) ---');
+{
+  // pasoCotizacion trae la etiqueta (RECHAZADA) y el aviso (VENCIDA), pero pasosConProgreso solo recibe canceladoEn:
+  // anotarPasosCotizacion los pone en el paso que corresponde, con las dos vías que PasosFlujo ya pinta (etiquetaEstado en
+  // rojo, avisos como chip). Los demás estados quedan como los dejó pasosConProgreso.
+  const sola = (estado) => {
+    const p = pasoCotizacion(estado);
+    return pasosConProgreso(PASOS_COTIZACION, p.indice, { canceladoEn: p.canceladoEn });
+  };
+  const barra = (estado) => fv.anotarPasosCotizacion(sola(estado), pasoCotizacion(estado));
+  const rechazada = barra('RECHAZADA');
+  assert.deepEqual(estados(rechazada), ['hecho', 'cancelado', 'pendiente']);
+  assert.equal(rechazada[1].etiquetaEstado, 'Rechazada', 'la palabra va en el paso caído');
+  assert.equal(rechazada[0].etiquetaEstado, undefined);
+  assert.equal(rechazada[2].etiquetaEstado, undefined);
+  assert.ok(rechazada.every((x) => !x.avisos), 'sin avisos');
+  const vencida = barra('VENCIDA');
+  assert.deepEqual(estados(vencida), ['hecho', 'actual', 'pendiente']);
+  assert.deepEqual(vencida[1].avisos, [{ texto: 'Vencida', tono: 'ambar' }], 'el chip ámbar en el paso donde quedó');
+  assert.ok(vencida.every((x) => !x.etiquetaEstado), 'sin etiquetaEstado');
+  assert.equal(vencida[0].avisos, undefined);
+  assert.equal(vencida[2].avisos, undefined);
+  // Los demás estados (y los raros) no cambian nada: igual a pasosConProgreso.
+  for (const estado of ['BORRADOR', 'ENVIADA', 'PENDIENTE_CONFIRMACION', 'CONFIRMADA', 'ALGO_NUEVO', '', null, undefined]) {
+    assert.deepEqual(barra(estado), sola(estado), String(estado));
+  }
+  // No muta lo que recibe, y el aviso del resultado es una copia.
+  const base = pasosConProgreso(PASOS_COTIZACION, 1, { canceladoEn: 1 });
+  const copia = JSON.parse(JSON.stringify(base));
+  const pv = pasoCotizacion('VENCIDA');
+  const salida = fv.anotarPasosCotizacion(base, pv);
+  assert.deepEqual(base, copia, 'la entrada intacta');
+  assert.notEqual(salida[1].avisos[0], pv.aviso, 'el aviso se copia');
+  // Cada cosa va en SU paso: la palabra en el canceladoEn y el aviso en el indice, aunque no coincidan.
+  const tres = sola('BORRADOR');
+  const suelto = fv.anotarPasosCotizacion(tres, { indice: 0, canceladoEn: 2, etiqueta: 'Rechazada', aviso: { texto: 'Vencida', tono: 'ambar' } });
+  assert.deepEqual(suelto.map((x) => x.etiquetaEstado), [undefined, undefined, 'Rechazada']);
+  assert.deepEqual(suelto.map((x) => x.avisos), [[{ texto: 'Vencida', tono: 'ambar' }], undefined, undefined]);
+  // Bordes: sin pasos, sin p, un índice fuera de rango.
+  assert.deepEqual(fv.anotarPasosCotizacion([], pasoCotizacion('VENCIDA')), []);
+  assert.deepEqual(fv.anotarPasosCotizacion(null, pasoCotizacion('RECHAZADA')), []);
+  assert.deepEqual(fv.anotarPasosCotizacion(sola('BORRADOR'), null), sola('BORRADOR'));
+  assert.deepEqual(fv.anotarPasosCotizacion(sola('BORRADOR'), { indice: 9, etiqueta: 'X', canceladoEn: 9, aviso: { texto: 'Y', tono: 'ambar' } }), sola('BORRADOR'));
+}
+
+console.log('--- B4 T11 TEST 2: los detalles de la solicitud y la cotización usan la pieza común (FLUJO-documentos puntos 3 y 4; RP4, RP17, RP87) ---');
+{
+  const leer = (ruta) => readFileSync(new URL(ruta, import.meta.url), 'utf8');
+  const sc = leer('../src/app/dashboard/ventas/solicitud/[id]/page.tsx');
+  const paso = leer('../src/app/dashboard/ventas/solicitud/[id]/estado-solicitud.tsx');
+  const cot = leer('../src/app/dashboard/ventas/cotizacion/[id]/page.tsx');
+  const barra = leer('../src/components/flujo/PasosFlujo.tsx');
+  const CONTENEDOR = 'bg-white px-6 py-2 border-b border-slate-200 shrink-0';
+
+  // — Detalle de la solicitud —
+  assert.match(sc, /import \{ CadenaDocumentos \} from '@\/components\/flujo';/);
+  assert.match(sc, /\{!isSoporte && \(\s*<div className="bg-white px-6 py-2 border-b border-slate-200 shrink-0">\s*<CadenaDocumentos doc=\{solicitud\} tipo="SC" \/>\s*<\/div>\s*\)\}/,
+    'la cadena de la SC, sin barra en Soporte Técnico y con el contenedor del pedido');
+  assert.ok(sc.indexOf('<CadenaDocumentos doc={solicitud} tipo="SC" />') < sc.indexOf('{/* Main Content Layout (Split Pane) */}'), 'fuera del panel dividido');
+  assert.ok(!sc.includes('pipelineStep'), 'pipelineStep se fue (quedó sin uso)');
+  assert.ok(!sc.includes('Pedido de Venta\'].map'), 'el «Progreso del Flujo» hecho a mano se fue');
+  // RP17: «Reiniciar solicitud» usa el texto de kanban-ventas.js; el de línea se fue.
+  assert.match(sc, /import \{ confirmacionReiniciarSolicitud \} from '@\/lib\/kanban-ventas';/);
+  assert.ok(sc.includes('if (!(await confirmar(confirmacionReiniciarSolicitud(solicitud)))) return;'), 'RP17');
+  assert.ok(!sc.includes('La solicitud vuelve a'), 'el texto en línea se fue');
+  assert.ok(!/const destino = infoEstadoSolicitud/.test(sc), 'el destino en línea se fue');
+  // RP4: la SC sigue leyendo ESTADOS del molde de siempre.
+  assert.ok(sc.includes('ESTADOS as ESTADOS_COT'), 'RP4: ESTADOS_COT se importa igual');
+  // — Los 4 pasos de la solicitud (estado-solicitud.tsx) —
+  assert.ok(paso.includes('<PasosFlujo variante="barra" pasos={pasosConProgreso(PASOS_SC, paso)} etiqueta="Estado de la solicitud" partirEtiquetas />'), 'los 4 pasos con la pieza común');
+  assert.ok(!/<ol\b/.test(paso), 'ya no hay un <ol> hecho a mano');
+  assert.ok(paso.includes('{ayuda || PASOS_SC[paso].ayuda}'), 'la ayuda del paso sigue igual');
+  assert.ok(paso.includes('<RotateCcw size={12} /> Reiniciar solicitud') && paso.includes('onClick={onReiniciar}'), '«Reiniciar solicitud» no cambia');
+  assert.ok(paso.includes('{paso >= 0 ? ('), 'un estado fuera de los pasos no dibuja la barra');
+
+  // — Detalle de la cotización —
+  assert.match(cot, /import \{ CadenaDocumentos, PasosFlujo \} from '@\/components\/flujo';/);
+  assert.match(cot, /\{!isNew && cotizacion && \(\s*<div className="bg-white px-6 py-2 border-b border-slate-200 shrink-0">\s*<CadenaDocumentos doc=\{cotizacion\} tipo="COT" \/>\s*<\/div>\s*\)\}/,
+    'la cadena de la COT, solo con la cotización cargada y con el contenedor del pedido');
+  const iCadena = cot.indexOf('<CadenaDocumentos doc={cotizacion} tipo="COT" />');
+  const iPanel = cot.indexOf('{/* Main Content Layout (Split Pane) */}');
+  assert.ok(iCadena > 0 && iCadena < iPanel, 'entre el encabezado y el panel dividido (fuera de él, H37)');
+  assert.ok(CONTENEDOR && cot.includes(CONTENEDOR) && sc.includes(CONTENEDOR), 'el mismo contenedor en los dos detalles');
+  // RP87: el lugar de pasoCotizacion, sin stepIndex; la palabra y el aviso con anotarPasosCotizacion.
+  assert.ok(cot.includes('const pasoCot = pasoCotizacion(estadoActual);'));
+  assert.ok(cot.includes('pasosConProgreso(PASOS_COTIZACION, pasoCot.indice, { canceladoEn: pasoCot.canceladoEn })'), 'RP87');
+  assert.ok(cot.includes('anotarPasosCotizacion(pasosConProgreso(PASOS_COTIZACION, pasoCot.indice, { canceladoEn: pasoCot.canceladoEn }), pasoCot)'), '«Rechazada» y «Vencida» no se pierden');
+  assert.ok(!/\bstepIndex\b/.test(cot), 'stepIndex se fue');
+  assert.match(cot, /\{!isNew && cotizacion && \(\s*<div className="bg-white py-6 border-b border-slate-100 mb-8 overflow-x-auto">\s*<PasosFlujo variante="barra" pasos=\{pasosCot\} etiqueta="Pasos de la cotización" partirEtiquetas estadoVisible \/>\s*<\/div>\s*\)\}/,
+    'el Status Tracker, en el mismo lugar y con la misma condición');
+  assert.ok(!/\bCircle\b/.test(cot.replace(/CheckCircle2|AlertCircle/g, '')), 'Circle se fue de los imports');
+  // RP4: la COT sigue leyendo ESTADOS (el hex y Object.entries).
+  assert.ok(cot.includes('ESTADOS as ESTADOS_COT'), 'RP4: ESTADOS_COT se importa igual');
+  assert.ok(cot.includes('Object.entries(ESTADOS_COT)'), 'RP4: Object.entries sigue');
+  assert.ok(cot.includes('estadoCfg.bg') && cot.includes('estadoCfg.color'), 'RP4: la cabecera sigue con el hex');
+  // La pieza común pinta las dos vías que usa la COT: la palabra del paso caído (rojo) y los avisos (chip ámbar).
+  assert.ok(barra.includes('{paso.sublabel || paso.etiquetaEstado ? (compacto') && barra.includes('{paso.etiquetaEstado ? ('), 'PasosFlujo pinta la etiquetaEstado en la barra');
+  assert.ok(barra.includes('{paso.avisos?.length ? (') && barra.includes('<AvisosDelPaso avisos={paso.avisos} pequeno'), 'PasosFlujo pinta los avisos en la barra');
+  // Una sola cadena por detalle (nada duplicado dentro del panel).
+  assert.equal(sc.split('<CadenaDocumentos').length - 1, 1, 'una sola cadena en la SC');
+  assert.equal(cot.split('<CadenaDocumentos').length - 1, 1, 'una sola cadena en la COT');
+  assert.equal(cot.split('<PasosFlujo').length - 1, 1, 'una sola barra de pasos en la COT');
+}
+
 console.log('\nOK: test_flujo_ventas.mjs');

@@ -79,6 +79,14 @@ export type PropsPasosFlujo = {
    * la barra es la de siempre (la etiqueta se recorta, con el nombre completo en su title).
    */
   partirEtiquetas?: boolean;
+  /**
+   * B4 T11: 'barra': el sublabel, la palabra de un paso caído (etiquetaEstado: «Rechazada», en rojo) y los avisos de un
+   * paso («Vencida», chip ámbar) se ven siempre, también cuando el contenedor mide menos de @md (28 rem). El Status
+   * Tracker de la cotización mide 376 px a 1024 px con el panel de Actividad abierto: sin esto, el «Rechazada» y el
+   * «Vencida» quedarían solo en el title. Por defecto false: la barra es la de siempre (por debajo de @md, solo el
+   * lector de pantalla los lee).
+   */
+  estadoVisible?: boolean;
 };
 
 type Icono = ComponentType<{ size?: number; className?: string; strokeWidth?: number }>;
@@ -135,6 +143,12 @@ const ETIQUETA_RECORTADA = 'max-w-full truncate';
 const ETIQUETA_PARTIDA = 'max-w-full whitespace-normal break-words leading-tight';
 const PASO_RECORTADO = 'min-w-0';
 const PASO_PARTIDO = 'min-w-min';
+/**
+ * B4 T11: el sublabel y los avisos de un paso de la barra: por defecto solo desde @md del contenedor (por debajo, sr-only:
+ * quedan en el title y los lee el lector de pantalla) o, con estadoVisible, siempre a la vista.
+ */
+const ESTADO_OCULTO_ANGOSTO = 'sr-only @md/flujo:not-sr-only @md/flujo:block @md/flujo:max-w-full';
+const ESTADO_SIEMPRE = 'block max-w-full';
 
 /** El color del label de la barra por estado. */
 const LABEL_BARRA: Record<EstadoPaso, string> = {
@@ -427,12 +441,13 @@ function PasosBanner({
 }
 
 function PasosBarra({
-  pasos, vertical, etiqueta, onSeleccionar, compacto, partirEtiquetas = false,
+  pasos, vertical, etiqueta, onSeleccionar, compacto, partirEtiquetas = false, estadoVisible = false,
 }: Required<Pick<PropsPasosFlujo, 'pasos' | 'etiqueta'>> & {
   vertical: boolean;
   onSeleccionar?: (clave: string) => void;
   compacto: boolean;
   partirEtiquetas?: boolean;
+  estadoVisible?: boolean;
 }) {
   const marcado = indicePasoActual(pasos);
   const ultimo = pasos.length - 1;
@@ -481,12 +496,12 @@ function PasosBarra({
                 {paso.sublabel || paso.etiquetaEstado ? (compacto ? (
                   <LineaSublabel paso={paso} vertical={vertical} />
                 ) : (
-                  <span className="sr-only @md/flujo:not-sr-only @md/flujo:block @md/flujo:max-w-full">
+                  <span className={estadoVisible ? ESTADO_SIEMPRE : ESTADO_OCULTO_ANGOSTO}>
                     <LineaSublabel paso={paso} vertical={vertical} />
                   </span>
                 )) : null}
                 {paso.avisos?.length ? (
-                  <span className="sr-only @md/flujo:not-sr-only @md/flujo:block @md/flujo:max-w-full">
+                  <span className={estadoVisible ? ESTADO_SIEMPRE : ESTADO_OCULTO_ANGOSTO}>
                     <AvisosDelPaso avisos={paso.avisos} pequeno clases={`mt-0.5 flex w-full min-w-0 ${vertical ? '' : 'justify-center'}`} />
                   </span>
                 ) : null}
@@ -525,7 +540,7 @@ function PasosMini({ pasos, etiqueta }: { pasos: ReadonlyArray<PasoVista>; etiqu
 /** Los pasos de un flujo. Ver arriba. */
 export function PasosFlujo({
   pasos, variante = 'barra', orientacion = 'horizontal', etiqueta, onSeleccionar, compacto = false,
-  mostrarAntiguedad = false, mostrarAyuda = false, estadoConteos, partirEtiquetas = false,
+  mostrarAntiguedad = false, mostrarAyuda = false, estadoConteos, partirEtiquetas = false, estadoVisible = false,
 }: PropsPasosFlujo) {
   if (!Array.isArray(pasos) || pasos.length === 0) return null;
   const vertical = orientacion === 'vertical';
@@ -544,5 +559,5 @@ export function PasosFlujo({
       />
     );
   }
-  return <PasosBarra pasos={pasos} vertical={vertical} etiqueta={etiqueta} onSeleccionar={onSeleccionar} compacto={compacto} partirEtiquetas={partirEtiquetas} />;
+  return <PasosBarra pasos={pasos} vertical={vertical} etiqueta={etiqueta} onSeleccionar={onSeleccionar} compacto={compacto} partirEtiquetas={partirEtiquetas} estadoVisible={estadoVisible} />;
 }

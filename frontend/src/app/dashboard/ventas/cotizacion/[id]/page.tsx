@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import {
-  ArrowRight, Send, FileText, CheckCircle2, Circle,
+  ArrowRight, Send, FileText, CheckCircle2,
   MessageSquare, Calculator, Search, RefreshCw, Package, Trash2, RotateCcw,
   AlertCircle, AlertTriangle, XCircle, X, Activity, Sparkles
 } from 'lucide-react';
@@ -19,6 +19,9 @@ import {
 import type { AnulacionConfirmacion } from '../cotizacion-client';
 import { NextStepCard, EnlaceConfirmacionModal, CambiosDeActividad, CabeceraActividad, returnToSeguro, getUsuarioActual, BotonVolver } from '../../flujo';
 import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
+import { CadenaDocumentos, PasosFlujo } from '@/components/flujo';
+import { pasosConProgreso } from '@/lib/flujo';
+import { PASOS_COTIZACION, pasoCotizacion, anotarPasosCotizacion } from '@/lib/flujo-ventas';
 import { situacionPedidoCotizacion, avisoSolicitudTrasRechazo } from '@/lib/listas-ventas';
 import {
   resumenAnticipoCotizacion, formatoPct, propagacionRecotizacion, puedeGestionarCotizacion, notaAnticipoPorLinea,
@@ -234,10 +237,11 @@ function CotizacionDetalleContent() {
 
   const estadoActual = cotizacion?.estado || 'BORRADOR';
   const estadoCfg = ESTADOS_COT[estadoActual] || {label: estadoActual, color:'#7c3aed', bg:'#f5f3ff', border:'#ddd6fe'};
-  // 0 = Borrador/Valorizando, 1 = Cotizado al cliente (o rechazada/vencida en ese punto), 2 = Confirmada (venta generada)
-  const stepIndex = estadoActual === 'CONFIRMADA' ? 2
-    : ['ENVIADA', 'PENDIENTE_CONFIRMACION', 'RECHAZADA', 'VENCIDA'].includes(estadoActual) ? 1
-    : 0;
+  // B4 T11 (RP87): los 3 pasos propios con la pieza común. pasoCotizacion da el lugar (0 Borrador, 1 Cotizado al cliente
+  // —también rechazada o vencida en ese punto—, 2 Confirmada) y anotarPasosCotizacion les suma el «Rechazada» (rojo) y el
+  // «Vencida» (ámbar) que pasosConProgreso no recibe.
+  const pasoCot = pasoCotizacion(estadoActual);
+  const pasosCot = anotarPasosCotizacion(pasosConProgreso(PASOS_COTIZACION, pasoCot.indice, { canceladoEn: pasoCot.canceladoEn }), pasoCot);
 
   const productos = cotizacion?.productos || [];
   // H46: solo un pedido vigente es "venta generada" (los cancelados no). Con todos cancelados, confirmacion_vigente
@@ -857,52 +861,31 @@ function CotizacionDetalleContent() {
         </div>
       </div>
 
+      {/* B4 T11 (FLUJO-documentos punto 4; RP87, D36, D42): la barra Solicitud → Cotización → Pedido de venta de esta
+          cotización, con «Estás aquí» en la cotización y un enlace (con return_to) en las demás. Va fuera del panel dividido
+          (H37: no compite con el ancho del @container de la izquierda) y con el mismo contenedor del detalle del pedido y
+          el de la solicitud. Solo cuando la cotización existe. */}
+      {!isNew && cotizacion && (
+        <div className="bg-white px-6 py-2 border-b border-slate-200 shrink-0">
+          <CadenaDocumentos doc={cotizacion} tipo="COT" />
+        </div>
+      )}
+
       {/* Main Content Layout (Split Pane) */}
       <div className="flex-1 flex flex-row overflow-hidden">
 
         {/* BLOQUE 1: Informacion de la Cotizacion (Formulario sin limites) */}
         <div className="flex-1 overflow-y-auto px-8 py-8 custom-scrollbar bg-white relative">
 
-          {/* Status Tracker */}
+          {/* Status Tracker -- B4 T11 (FLUJO-documentos punto 4; RP87): los 3 pasos propios con la pieza común
+              (PasosFlujo 'barra': los mismos círculos, colores y ✓ que la cadena de arriba), en el mismo lugar y con la
+              misma condición. «Rechazada» sale en rojo en el paso caído y «Vencida» en ámbar en su paso (anotarPasosCotizacion).
+              partirEtiquetas: las etiquetas se parten en dos líneas en lugar de recortarse, estadoVisible: el «Rechazada» y el «Vencida» se ven
+              también con la barra angosta (376 px a 1024 px), y si la columna se angosta
+              (el panel de Actividad llega a 800 px) la barra se desplaza aquí dentro (overflow-x-auto), como en el pedido. */}
           {!isNew && cotizacion && (
-            <div className="bg-white p-6 border-b border-slate-100 mb-8 flex justify-between relative">
-              <div className="absolute top-1/2 left-10 right-10 h-1 bg-slate-100 -translate-y-1/2 z-0" />
-
-              <div className={`absolute top-1/2 left-10 h-1 transition-all duration-500 z-0 ${
-                stepIndex === 2 ? 'bg-emerald-500 right-10' :
-                stepIndex === 1 ? 'bg-blue-500 right-1/2' :
-                'bg-slate-300 right-[80%]'
-              }`} />
-
-              <div className="relative z-10 flex flex-col items-center gap-2">
-                <div className={`w-8 h-8 rounded-full text-white flex items-center justify-center font-bold shadow-md ${
-                  stepIndex >= 1 ? 'bg-blue-600 shadow-blue-200' : 'bg-slate-800 shadow-slate-200'
-                }`}><CheckCircle2 size={16} /></div>
-                <span className="text-xs font-bold text-slate-800">Borrador (Valorizando)</span>
-              </div>
-
-              <div className="relative z-10 flex flex-col items-center gap-2">
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold transition-colors ${
-                  stepIndex === 2 ? 'bg-emerald-500 text-white shadow-md shadow-emerald-200' :
-                  stepIndex === 1 ? 'bg-blue-600 text-white shadow-md shadow-blue-200' :
-                  'bg-white border-2 border-slate-200 text-slate-300'
-                }`}>
-                  {stepIndex === 2 ? <CheckCircle2 size={16} /> : <Circle size={16} fill={stepIndex === 1 ? 'currentColor' : 'transparent'} />}
-                </div>
-                <span className={`text-xs font-bold ${
-                  stepIndex === 2 ? 'text-emerald-700' :
-                  stepIndex === 1 ? 'text-blue-700' : 'text-slate-400'
-                }`}>Cotizado al Cliente</span>
-              </div>
-
-              <div className="relative z-10 flex flex-col items-center gap-2">
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold transition-colors ${
-                  stepIndex === 2 ? 'bg-emerald-500 text-white shadow-md shadow-emerald-200' : 'bg-white border-2 border-slate-200 text-slate-300'
-                }`}>
-                  {stepIndex === 2 ? <CheckCircle2 size={16} /> : <Circle size={16} />}
-                </div>
-                <span className={`text-xs font-bold ${stepIndex === 2 ? 'text-emerald-700' : 'text-slate-400'}`}>Confirmado (Venta)</span>
-              </div>
+            <div className="bg-white py-6 border-b border-slate-100 mb-8 overflow-x-auto">
+              <PasosFlujo variante="barra" pasos={pasosCot} etiqueta="Pasos de la cotización" partirEtiquetas estadoVisible />
             </div>
           )}
 

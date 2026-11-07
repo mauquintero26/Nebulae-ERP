@@ -52,6 +52,8 @@ import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas
 import { cotizacionesVigentes, cotizacionesRechazadas, pasosParaCancelarSolicitud } from '@/lib/listas-ventas';
 import { infoEstadoPedido, humanizarCodigo } from '@/lib/estados-pedido';
 import { CambiosDeActividad, CabeceraActividad } from '../../flujo';
+import { CadenaDocumentos } from '@/components/flujo';
+import { confirmacionReiniciarSolicitud } from '@/lib/kanban-ventas';
 import { ProductosSolicitud } from './productos-solicitud';
 import {
   NextStepCard, EnlaceConfirmacionModal, esAsesorElegible, getUsuarioActual, type UsuarioActual,
@@ -447,13 +449,8 @@ function SolicitudDetalleContent() {
   // Solicitud". El 409 de R10 (cotización o pedido activos) sale con su mensaje en un aviso.
   async function reiniciarSolicitud() {
     if (!solicitud) return;
-    const destino = infoEstadoSolicitud(solicitud.advisor_user_id ? 'ASIGNADA' : 'BORRADOR').label;
-    if (!(await confirmar({
-      titulo: 'Reiniciar solicitud',
-      mensaje: `La solicitud vuelve a ${destino}: se anula el enlace que se le envió al cliente y su confirmación, y habrá que enviársela de nuevo.`,
-      textoConfirmar: 'Reiniciar solicitud',
-      peligro: true,
-    }))) return;
+    // B4 T11 (RP17): el texto de la confirmación es el de kanban-ventas.js (una sola fuente con la lista y el Hub).
+    if (!(await confirmar(confirmacionReiniciarSolicitud(solicitud)))) return;
     setSaving(true);
     try {
       await apiFetch(`/ventas/solicitudes/${solicitud.id}`, { method: 'PATCH', body: JSON.stringify({ estado: 'BORRADOR', updated_by: currentUser }) });
@@ -737,9 +734,6 @@ function SolicitudDetalleContent() {
   // U15: 'Reiniciar solicitud' (el único estado a mano) solo en Pendiente por confirmación o Confirmada, sin cotización
   // activa ni pedido vigente (con ellos el servidor responde 409, R10); nunca en Cancelada ni en Soporte.
   const puedeReiniciarSC = puedeReiniciar(solicitud, { cotizacionesActivas, pedidosVigentes });
-  const pipelineStep = pedidosVigentes.length > 0 ? 3
-    : cotizacionesActivas.some((c: any) => c.estado === 'CONFIRMADA') ? 2
-    : cotizacionesActivas.length > 0 ? 1 : 0;
   // Sin productos no hay nada que el cliente confirme ni que cotizar: el backend no deja
   // enviarla ni crear la cotizacion. Se editan aqui mientras la SC no tenga cotizacion.
   const productosSC = solicitud?.productos || [];
@@ -1123,22 +1117,13 @@ function SolicitudDetalleContent() {
         <p role="alert" className="px-6 py-2 bg-rose-50 border-b border-rose-200 text-xs font-bold text-rose-700 break-words shrink-0">{editError}</p>
       )}
 
-      {/* Progreso del Flujo -- SC -> COT -> PVEN (no aplica a Soporte Tecnico, que tiene su propio ciclo) */}
+      {/* B4 T11 (FLUJO-documentos punto 3; RP87, D36, D42): la barra Solicitud → Cotización → Pedido de venta de esta
+          solicitud (antes «Progreso del Flujo»), con «Estás aquí» en la solicitud y un enlace (con return_to) en las demás.
+          Va fuera del panel dividido y con el mismo contenedor del detalle del pedido. Soporte Técnico, que tiene su
+          propio ciclo, sigue sin barra. */}
       {!isSoporte && (
-        <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex-shrink-0">
-          <div className="flex items-center max-w-md">
-            {['Solicitud', 'Cotización', 'Pedido de Venta'].map((label, i) => (
-              <div key={label} className="flex items-center flex-1 last:flex-none">
-                <div className="flex flex-col items-center gap-1">
-                  <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-black ${i < pipelineStep ? 'bg-emerald-500 text-white' : i === pipelineStep ? 'bg-indigo-600 text-white' : 'bg-white border-2 border-slate-200 text-slate-300'}`}>
-                    {i < pipelineStep ? '✓' : i + 1}
-                  </div>
-                  <span className={`text-[10px] font-bold whitespace-nowrap ${i <= pipelineStep ? 'text-slate-700' : 'text-slate-300'}`}>{label}</span>
-                </div>
-                {i < 2 && <div className={`flex-1 h-0.5 mx-2 ${i < pipelineStep ? 'bg-emerald-400' : 'bg-slate-200'}`} />}
-              </div>
-            ))}
-          </div>
+        <div className="bg-white px-6 py-2 border-b border-slate-200 shrink-0">
+          <CadenaDocumentos doc={solicitud} tipo="SC" />
         </div>
       )}
 
