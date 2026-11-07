@@ -22,6 +22,21 @@ import { accionPestana, estadoTablaInicial } from '../src/lib/tabla.js';
 
 const estados = (pasos) => pasos.map((p) => p.estado);
 
+/**
+ * T15 r1 (m10 a): corre `fn` con el reloj fijo en `iso` (Date sin argumentos y Date.now() dan ese instante) y deja el
+ * Date de verdad al salir, también si `fn` falla.
+ */
+function conRelojFijo(iso, fn) {
+  const DateReal = globalThis.Date;
+  const fijo = DateReal.parse(iso);
+  class DateFijo extends DateReal {
+    constructor(...args) { super(...(args.length ? args : [fijo])); }
+    static now() { return fijo; }
+  }
+  globalThis.Date = DateFijo;
+  try { fn(); } finally { globalThis.Date = DateReal; }
+}
+
 /** Una etapa como la guarda el servidor (create_pec y update_tracking de erp_compras.py, con su `alert`). */
 const etapa = (stage, label, status, extra = {}) => ({
   stage, label, status, timestamp: null, eta: null, carrier: null, tracking_number: null, tracking_history: [],
@@ -464,6 +479,57 @@ console.log('--- TEST 17 (B4 T15): textoDiasEtapa, los días que faltan para la 
   // Sin hoy, el de Colombia (diaColombia): el mismo resultado que pasándolo.
   const manana = new Date(Date.now() + 36 * 3600 * 1000).toISOString().slice(0, 10);
   assert.deepEqual(fc.textoDiasEtapa(manana), fc.textoDiasEtapa(manana, diaColombia()));
+  // T15 r1 (m10 a): con un reloj fijo a las 2026-11-08T02:00:00Z, que son las 21:00 del 07/11 en Colombia, «hoy» es el 07
+  // (el día UTC ya sería el 08): un valor por defecto con el día UTC falla aquí a cualquier hora en que corra la prueba.
+  conRelojFijo('2026-11-08T02:00:00Z', () => {
+    assert.deepEqual(fc.textoDiasEtapa('2026-11-07'), { texto: 'Vence hoy', tono: 'ambar' }, 'el día de Colombia, no el UTC');
+    assert.deepEqual(fc.textoDiasEtapa('2026-11-08'), { texto: '1 día restante', tono: 'azul' });
+    assert.deepEqual(fc.textoDiasEtapa('2026-11-06'), { texto: '1 día de atraso', tono: 'rojo' });
+  });
+}
+
+console.log('--- TEST 18 (B4 T15 r1, m4 y m14): el seguimiento de un PEC cancelado es de solo lectura (una sola regla) ---');
+{
+  assert.equal(typeof fc.seguimientoCerrado, 'function', 'seguimientoCerrado existe');
+  assert.equal(fc.seguimientoCerrado('CANCELADO'), true);
+  for (const e of ['BORRADOR', 'EMITIDO', 'ENVIADO', 'EN_TRANSITO', 'PENDIENTE_ENTREGA', 'RECIBIDO', 'PARCIALMENTE_RECIBIDA',
+    'RECIBIDA', 'COMPLETADO', 'ALGO_NUEVO', '', null, undefined]) {
+    assert.equal(fc.seguimientoCerrado(e), false, String(e));
+  }
+  // Es la etapa de estados-compras.js (no otra lista de estados).
+  for (const e of Object.keys(estadosCompras.ESTADOS_PEC)) {
+    assert.equal(fc.seguimientoCerrado(e), estadosCompras.etapaPec(e) === 'cancelado', e);
+  }
+  assert.equal(fc.TEXTO_SEGUIMIENTO_CERRADO, 'Pedido de compra cancelado: su envío ya no se sigue.');
+}
+
+console.log('--- TEST 19 (B4 T15 r1, m2 y m6): avisoTarjetaEtapa, UNA regla para la tarjeta de cada etapa del envío ---');
+{
+  assert.equal(typeof fc.avisoTarjetaEtapa, 'function', 'avisoTarjetaEtapa existe');
+  const HOY = '2026-11-07';
+  const aviso = (extra) => fc.avisoTarjetaEtapa(etapa('PROVEEDOR_BODEGA', 'Proveedor -> Bodega', 'EN_PROCESO', extra), HOY);
+  // Con el aviso del servidor, ese y solo ese: rojo si va atrasada; con 'ok', neutro (gris, como la barra: RP28, D36).
+  assert.deepEqual(aviso({ eta: '2026-11-05', alert: { nivel: 'atrasado', mensaje: 'Entrega atrasada por 2 día(s)', dias_restantes: -2 } }),
+    { texto: 'Entrega atrasada por 2 día(s)', tono: 'rojo', fuente: 'servidor' });
+  assert.deepEqual(aviso({ eta: '2026-11-05', alert: { nivel: 'ok', mensaje: 'ETA 05/11/2026 · 0 día(s) para confirmación atrasada', dias_restantes: 0 } }),
+    { texto: 'ETA 05/11/2026 · 0 día(s) para confirmación atrasada', tono: 'gris', fuente: 'servidor' },
+    'el ejemplo de m6: ya no sale al lado «2 días de atraso»');
+  assert.deepEqual(aviso({ eta: '2026-11-10', alert: { nivel: 'ok', mensaje: '  ' } }),
+    { texto: '3 días restantes', tono: 'azul', fuente: 'dias' }, 'un aviso sin mensaje cuenta como sin aviso');
+  // Sin aviso del servidor, los días que faltan para la ETA (textoDiasEtapa, el día de calendario de Colombia).
+  assert.deepEqual(aviso({ eta: '2026-11-10' }), { texto: '3 días restantes', tono: 'azul', fuente: 'dias' });
+  assert.deepEqual(aviso({ eta: '2026-11-07' }), { texto: 'Vence hoy', tono: 'ambar', fuente: 'dias' });
+  assert.deepEqual(aviso({ eta: '2026-11-01' }), { texto: '6 días de atraso', tono: 'rojo', fuente: 'dias' });
+  assert.equal(aviso({ eta: null }), null, 'sin aviso ni ETA, nada');
+  // Una etapa completada o cancelada no lleva aviso (como la barra, r1 de T3B).
+  for (const status of ['COMPLETADO', 'CANCELADO']) {
+    assert.equal(fc.avisoTarjetaEtapa(etapa('X', 'X', status, { eta: '2026-11-01', alert: { nivel: 'atrasado', mensaje: 'Atrasada' } }), HOY), null, status);
+  }
+  for (const raro of [null, undefined, 5, 'x']) assert.equal(fc.avisoTarjetaEtapa(raro, HOY), null, String(raro));
+  // El valor por defecto de hoy es el día de Colombia (reloj fijo, m10 a).
+  conRelojFijo('2026-11-08T02:00:00Z', () => {
+    assert.deepEqual(fc.avisoTarjetaEtapa(etapa('X', 'X', 'EN_PROCESO', { eta: '2026-11-07' })), { texto: 'Vence hoy', tono: 'ambar', fuente: 'dias' });
+  });
 }
 
 console.log('\nOK: test_flujo_compras.mjs');

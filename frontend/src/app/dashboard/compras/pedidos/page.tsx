@@ -41,8 +41,9 @@ import {
   repartirCancelacionPec, resumenCancelacionPec, tarjetaPedidoCompra, tituloMesPec, transicionesPec,
 } from '@/lib/estados-compras';
 import {
-  ENLACE_VER_ANALISIS_COMPRAS, accionSemaforoCompras, avisosFlujoCompras, etiquetaEtapaTracking, filtroSemaforoCompras,
-  leerEnlacePedidosCompra, pasosDeTracking, pasosPedidosCompra, textoDiasEtapa, textoReglaCompras, vistaDePasoPedidosCompra,
+  ENLACE_VER_ANALISIS_COMPRAS, TEXTO_SEGUIMIENTO_CERRADO, accionSemaforoCompras, avisoTarjetaEtapa, avisosFlujoCompras,
+  etiquetaEtapaTracking, filtroSemaforoCompras, leerEnlacePedidosCompra, pasosDeTracking, pasosPedidosCompra, seguimientoCerrado,
+  textoReglaCompras, vistaDePasoPedidosCompra,
 } from '@/lib/flujo-compras';
 // B4 T15 r1 (m3, m11): las columnas, las celdas y los formatos que comparte con el Hub de Compras.
 import { claseDeFilaPec, columnasPec, fCOP, textoDia, textoInstante, titulosDeOrdenPec } from '../columnas-pec';
@@ -72,7 +73,7 @@ const autorActual = () => {
  */
 type AvisoPantalla = (msg: unknown, tipo?: 'ok' | 'error') => void;
 
-/** Los tonos de textoDiasEtapa (en -700: se leen sobre el fondo de la tarjeta de la etapa). */
+/** Los tonos de los días de avisoTarjetaEtapa (en -700: se leen sobre el fondo de la tarjeta de la etapa). */
 const CLASE_DIAS_ETAPA: Record<string, string> = { azul: 'text-blue-700', ambar: 'text-amber-700', rojo: 'text-rose-700' };
 
 /* ================================================================
@@ -345,6 +346,8 @@ function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; on
   const casilleroTimer = useRef<any>(null);
 
   const stages: any[] = pec.tracking_stages || [];
+  // T15 r1 (m4, m14): con el PEC cancelado, el seguimiento es de solo lectura (seguimientoCerrado, la regla del detalle).
+  const cerrado = seguimientoCerrado(pec.estado);
 
   async function updateStage(stageName: string, status: string) {
     setUpdating(stageName);
@@ -406,18 +409,25 @@ function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; on
         <NewCasilleroModal onClose={()=>setShowNewCasillero(false)} onSave={(c:any)=>{setCasilleroId(c.id);setCasilleroSearch(c.name);setCasilleroResults([]);setShowNewCasillero(false);}}/>
       )}
       {/* B4 T15 (FLUJO-compras punto 6; RP28): las etapas reales del envío (3 si es directo, 4 por casillero, en el orden del
-          arreglo) en la barra estándar, con la en curso resaltada; el aviso va en rojo solo si la etapa va atrasada. */}
-      <div className="mb-6">
-        <PasosFlujo variante="barra" pasos={pasosDeTracking(stages)} etiqueta={`Etapas del envío de ${pec.numero || 'este pedido'}`} />
-      </div>
+          arreglo) en la barra estándar, con la en curso resaltada; el aviso va en rojo solo si la etapa va atrasada.
+          T15 r1 (m4, m14): un PEC cancelado no sigue su envío (seguimientoCerrado, la regla del detalle): sin la barra y
+          con las tarjetas de solo lectura (sin editar, «En proceso», «Completado» ni «Revertir»). */}
+      {cerrado ? (
+        <p className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">{TEXTO_SEGUIMIENTO_CERRADO}</p>
+      ) : (
+        <div className="mb-6">
+          <PasosFlujo variante="barra" pasos={pasosDeTracking(stages)} etiqueta={`Etapas del envío de ${pec.numero || 'este pedido'}`} />
+        </div>
+      )}
 
       {/* Stage cards */}
       {stages.map((sd) => {
         const status = sd.status || 'PENDIENTE';
         const history: any[] = sd.tracking_history || [];
-        const isEditing = editStage === sd.stage;
-        // Resolución 4: la ETA es un día de calendario, contra el día de Colombia (antes, la hora del navegador).
-        const dias = textoDiasEtapa(sd.eta);
+        const isEditing = !cerrado && editStage === sd.stage;
+        // T15 r1 (m2, m6): UNA regla por tarjeta (avisoTarjetaEtapa): el aviso del servidor si lo hay (rojo si va
+        // atrasada, neutro si no) o, si no, los días que faltan para la ETA (el día de calendario de Colombia).
+        const aviso = cerrado ? null : avisoTarjetaEtapa(sd);
         return (
           <div key={sd.stage} className={'rounded-2xl border p-4 transition-all ' + (status==='COMPLETADO'?'border-emerald-200 bg-emerald-50':status==='EN_PROCESO'?'border-blue-200 bg-blue-50':'border-gray-200 bg-white')}>
             <div className="flex items-center justify-between mb-2">
@@ -428,25 +438,28 @@ function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; on
               <div className="flex items-center gap-2">
                 {/* RP28: el estado de la etapa en palabras (Pendiente, En curso, Completada, Cancelada), nunca el código. */}
                 <span className={'text-xs font-black px-2 py-1 rounded-full ' + (status==='COMPLETADO'?'bg-emerald-100 text-emerald-700':status==='EN_PROCESO'?'bg-blue-100 text-blue-700':'bg-gray-100 text-gray-600')}>{etiquetaEtapaTracking(status)}</span>
-                <button onClick={()=>openEdit(sd)} aria-label={`Editar la etapa ${sd.label || ''}`} className="p-1.5 hover:bg-white rounded-lg border border-gray-200 text-gray-500"><Edit2 size={12}/></button>
+                {!cerrado && (
+                  <button onClick={()=>openEdit(sd)} aria-label={`Editar la etapa ${sd.label || ''}`} className="p-1.5 hover:bg-white rounded-lg border border-gray-200 text-gray-500"><Edit2 size={12}/></button>
+                )}
               </div>
             </div>
 
-            {/* ETA / carrier / casillero / timer */}
+            {/* ETA / carrier / casillero / guía (T15 r1, m13: la guía vigente, como la barra de antes) / días */}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500 mb-1">
               {sd.eta && <span className="flex items-center gap-1"><Clock size={11}/> ETA: <strong className="text-gray-700">{textoDia(sd.eta)}</strong></span>}
               {sd.carrier && <span>Carrier: <strong className="text-gray-700">{sd.carrier}</strong></span>}
               {sd.casillero_nombre && <span className="flex items-center gap-1"><MapPin size={11}/> {sd.casillero_nombre}</span>}
-              {dias && status !== 'COMPLETADO' && <span className={'font-bold ' + CLASE_DIAS_ETAPA[dias.tono]}>{dias.texto}</span>}
+              {sd.tracking_number && <span>Guía: <strong className="text-indigo-700">{sd.tracking_number}</strong></span>}
+              {aviso?.fuente === 'dias' && <span className={'font-bold ' + CLASE_DIAS_ETAPA[aviso.tono]}>{aviso.texto}</span>}
             </div>
-            {sd.alert && status !== 'COMPLETADO' && (
-              sd.alert.nivel === 'atrasado' ? (
+            {aviso?.fuente === 'servidor' && (
+              aviso.tono === 'rojo' ? (
                 <div className="mb-2 px-3 py-1.5 bg-red-50 border border-red-200 rounded-lg text-xs font-bold text-red-700 flex items-center gap-1.5">
-                  <AlertTriangle size={12}/> {sd.alert.mensaje}
+                  <AlertTriangle size={12}/> {aviso.texto}
                 </div>
               ) : (
-                <div className="mb-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-lg text-xs font-bold text-blue-700 flex items-center gap-1.5">
-                  <Clock size={12}/> {sd.alert.mensaje}
+                <div className="mb-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-600 flex items-center gap-1.5">
+                  <Clock size={12}/> {aviso.texto}
                 </div>
               )
             )}

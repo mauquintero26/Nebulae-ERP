@@ -37,8 +37,8 @@ import {
   tituloMesPec, transicionesPec,
 } from '@/lib/estados-compras';
 import {
-  RUTA_HUB_COMPRAS, accionPasoHubCompras, accionSemaforoCompras, avisosFlujoCompras, etiquetaEtapaTracking,
-  filtroSemaforoCompras, leerEnlaceHubCompras, pasosDeTracking, pasosHubCompras, textoReglaCompras,
+  RUTA_HUB_COMPRAS, TEXTO_SEGUIMIENTO_CERRADO, accionPasoHubCompras, accionSemaforoCompras, avisosFlujoCompras, etiquetaEtapaTracking,
+  filtroSemaforoCompras, leerEnlaceHubCompras, pasosDeTracking, pasosHubCompras, seguimientoCerrado, textoReglaCompras,
 } from '@/lib/flujo-compras';
 // B4 T15 r1 (m3, m11): las columnas, las celdas y los formatos que comparte con Pedidos de compra.
 import { claseDeFilaPec, columnasPec, fCOP, textoDia, textoInstante, titulosDeOrdenPec } from './columnas-pec';
@@ -302,9 +302,15 @@ function PecDetailPanel({
                     <p className="text-xs font-black text-gray-400 uppercase mb-4">Tracking</p>
                     {/* B4 T14 (FLUJO-compras punto 5; RP28): las etapas reales del envío (3 si es directo, 4 por casillero) en una
                         barra, con la en curso resaltada; el aviso va en rojo solo si la etapa va atrasada. */}
-                    <div className="mb-4">
-                      <PasosFlujo variante="barra" pasos={pasosDeTracking(detail.tracking_stages)} etiqueta={`Etapas del envío de ${detail.numero || pec.numero}`} />
-                    </div>
+                    {/* T15 r1 (m4, m14): un PEC cancelado no sigue su envío (seguimientoCerrado, la regla del detalle y de
+                        Pedidos de compra): sin la barra; las etapas quedan de solo lectura, como siempre en este panel. */}
+                    {seguimientoCerrado(detail.estado) ? (
+                      <p className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">{TEXTO_SEGUIMIENTO_CERRADO}</p>
+                    ) : (
+                      <div className="mb-4">
+                        <PasosFlujo variante="barra" pasos={pasosDeTracking(detail.tracking_stages)} etiqueta={`Etapas del envío de ${detail.numero || pec.numero}`} />
+                      </div>
+                    )}
                     <div className="space-y-3">
                       {detail.tracking_stages.map(function(stage,i){ return (
                         <div key={i} className={'flex items-center gap-3 p-3 rounded-xl border ' + (stage.status==='COMPLETADO'?'bg-emerald-50 border-emerald-200':stage.status==='EN_PROCESO'?'bg-blue-50 border-blue-200':'bg-gray-50 border-gray-200')}>

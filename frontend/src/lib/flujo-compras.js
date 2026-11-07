@@ -19,7 +19,7 @@ import { congelar, conteosDePasos, pasosConConteos } from './flujo.js';
 import { humanizarCodigo, tiene } from './estados-pedido.js';
 import { diaColombia, fechaLarga } from './fechas-colombia.js';
 import { formatoEntero } from './kpis.js';
-import { GRUPOS_PEC, diaPec, vistaPuedeVencer } from './estados-compras.js';
+import { GRUPOS_PEC, diaPec, etapaPec, vistaPuedeVencer } from './estados-compras.js';
 // B4 T14 r1 (m1; D41, D42): las cajas y «Con atraso» cambian la vista con accionPestana, como el Hub de Ventas.
 import { accionPestana, opcionesDeVista } from './tabla.js';
 
@@ -410,4 +410,40 @@ export function textoDiasEtapa(eta, hoy = diaColombia()) {
   const n = Math.abs(dias);
   if (dias > 0) return { texto: `${formatoEntero(n)} ${n === 1 ? 'día restante' : 'días restantes'}`, tono: 'azul' };
   return { texto: `${formatoEntero(n)} ${n === 1 ? 'día de atraso' : 'días de atraso'}`, tono: 'rojo' };
+}
+
+// ─── El seguimiento del envío en las pantallas (B4 T15 r1: m2, m4, m6 y m14) ────────
+
+/** El texto de un seguimiento cerrado (el panel de la lista, el del Hub y el detalle dicen lo mismo). */
+export const TEXTO_SEGUIMIENTO_CERRADO = 'Pedido de compra cancelado: su envío ya no se sigue.';
+
+/**
+ * B4 T15 r1 (m4, m14): el seguimiento del envío de un PEC cancelado es de solo lectura en todas las pantallas (los dos
+ * paneles y el detalle): sin la barra de pasos, sin «En proceso», «Completado», «Revertir» ni «Avanzar etapa». Es la
+ * etapa de estados-compras.js (etapaPec): solo CANCELADO.
+ * @param {unknown} estado  el estado del PEC
+ * @returns {boolean}
+ */
+export function seguimientoCerrado(estado) {
+  return etapaPec(estado) === 'cancelado';
+}
+
+/**
+ * B4 T15 r1 (m2, m6): el aviso de la tarjeta de una etapa del envío, con UNA sola regla:
+ *  - completada o cancelada: ninguno (como la barra);
+ *  - con el aviso del servidor (`alert` con mensaje, _stage_alert): ese, en rojo si va atrasada y en el tono neutro
+ *    ('gris', el de la barra: RP28, D36) si no; fuente 'servidor';
+ *  - sin él: los días que faltan para la ETA (textoDiasEtapa, el día de calendario de Colombia); fuente 'dias'.
+ * Lo que no es una etapa, o sin aviso ni ETA: null.
+ * @param {EtapaTracking | null | undefined} stage
+ * @param {string} [hoy]  'AAAA-MM-DD' (por defecto, diaColombia())
+ * @returns {{texto: string, tono: 'rojo' | 'gris' | 'azul' | 'ambar', fuente: 'servidor' | 'dias'} | null}
+ */
+export function avisoTarjetaEtapa(stage, hoy = diaColombia()) {
+  if (stage === null || typeof stage !== 'object') return null;
+  if (ETAPAS_CERRADAS.includes(/** @type {any} */ (stage.status))) return null;
+  const mensaje = textoNoVacio(stage.alert?.mensaje);
+  if (mensaje) return { texto: mensaje, tono: stage.alert?.nivel === 'atrasado' ? 'rojo' : 'gris', fuente: 'servidor' };
+  const dias = textoDiasEtapa(stage.eta, hoy);
+  return dias ? { ...dias, fuente: 'dias' } : null;
 }

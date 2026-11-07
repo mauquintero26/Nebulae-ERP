@@ -772,6 +772,8 @@ console.log('--- TEST 23 (B4 T14): el Hub de Compras (compras/page.tsx) cablea l
   assert.ok(!/function CeldaNumero|const MARCA_VENCIDO|id: 'proveedor'/.test(hub), 'el Hub ya no tiene su copia de las columnas');
   assert.ok(!/estado: ?'RECIBIDO'/.test(hub) && !/estado: ?'EN_TRANSITO'/.test(hub), 'ningún PATCH a mano a tránsito o recibido');
   assert.match(hub, /transicionesPec\(/, 'el panel y el menú solo ofrecen lo que acepta el servidor');
+  // T15 r1 (m4, m14): con el PEC cancelado, el panel no pinta la barra del seguimiento (seguimientoCerrado).
+  assert.match(hub, /\{seguimientoCerrado\(detail\.estado\) \? \([\s\S]{0,200}\{TEXTO_SEGUIMIENTO_CERRADO\}[\s\S]{0,160}<PasosFlujo variante="barra"/);
   // Franja (D42, RP46): sin «No resueltos» y con el aviso de recepciones; sin «Ajustar tiempos» (R9).
   assert.match(hub, /titulo="Flujo de compras"/);
   assert.match(hub, /regla=\{textoReglaCompras\(\)\}/);
@@ -884,7 +886,16 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
   // El panel del PEC (puntos de T15): la barra del tracking es PasosFlujo y las tarjetas dicen el estado en palabras.
   assert.match(pag, /<PasosFlujo variante="barra" pasos=\{pasosDeTracking\(stages\)\}/);
   assert.match(pag, /etiquetaEtapaTracking\(status\)/);
-  assert.match(pag, /const dias = textoDiasEtapa\(sd\.eta\);/);
+  // T15 r1 (m2, m6, m13; D27): la tarjeta de cada etapa pinta UNA regla (avisoTarjetaEtapa: el aviso del servidor, rojo o
+  // neutro, o los días a la ETA) y la guía vigente; antes esta línea pedía `const dias = textoDiasEtapa(sd.eta);`.
+  assert.match(pag, /const aviso = cerrado \? null : avisoTarjetaEtapa\(sd\);/);
+  assert.ok(!/textoDiasEtapa\(sd\.eta\)|sd\.alert\.nivel|bg-blue-50 border border-blue-200 rounded-lg/.test(pag), 'sin la segunda regla ni el aviso «ok» en azul');
+  assert.match(pag, /\{sd\.tracking_number && <span>Guía: <strong[^>]*>\{sd\.tracking_number\}<\/strong><\/span>\}/, 'm13: la guía vigente');
+  // T15 r1 (m4, m14): con el PEC cancelado el TrackingPanel es de solo lectura (seguimientoCerrado, la regla del detalle).
+  assert.match(pag, /const cerrado = seguimientoCerrado\(pec\.estado\);/);
+  assert.match(pag, /\{cerrado \? \([\s\S]{0,200}\{TEXTO_SEGUIMIENTO_CERRADO\}[\s\S]{0,120}\) : \([\s\S]{0,120}<PasosFlujo variante="barra" pasos=\{pasosDeTracking\(stages\)\}/);
+  assert.match(pag, /const isEditing = !cerrado && editStage === sd\.stage;/);
+  assert.match(pag, /\{!cerrado && \(\s*<button onClick=\{\(\)=>openEdit\(sd\)\}/, 'sin editar las etapas de un cancelado');
   assert.ok(!/stageColor|diasTexto|Math\.ceil\(\(new Date/.test(pag), 'sin la barra a mano ni la cuenta de días con el reloj local');
   assert.match(pag, /fecha_entrega_estimada: infoForm\.fecha_entrega_estimada \|\| null/, '«Editar información» manda null en blanco, como el alta');
   assert.ok(!/updated_by: ?localStorage/.test(pag), 'updated_by = autorActual() (sin sesión se omite)');
@@ -911,7 +922,9 @@ console.log('--- TEST 27 (B4 T15): el detalle de un PEC (compras/pedidos/[id]/pa
   assert.ok(!/STAGE_NODES|ESTADO_LABELS/.test(det), 'sin la barra fija de 4 nodos ni otra tabla de etiquetas (C10)');
   assert.match(det, /<PasosFlujo variante="barra" pasos=\{pasosDeTracking\(stages\)\}/, '3 etapas si es directo, 4 por casillero');
   assert.match(det, /const completedCount = stages\.filter\(\(s\) => s\?\.status === 'COMPLETADO'\)\.length;/);
-  assert.match(det, /const cancelado = etapaPec\(estadoActual\) === 'cancelado';/, 'cancelado: sin barra ni «Avanzar etapa»');
+  // T15 r1 (m4, m14; D27): la misma regla de los paneles (antes `etapaPec(estadoActual) === 'cancelado'` aquí).
+  assert.match(det, /const cancelado = seguimientoCerrado\(estadoActual\);/, 'cancelado: sin barra ni «Avanzar etapa»');
+  assert.match(det, /\{TEXTO_SEGUIMIENTO_CERRADO\}/);
   assert.match(det, /infoEstadoPec\(estadoActual\)/);
   assert.match(det, /<TablaEstandar id="compras\.pec\.productos" modo="simple"/);
   assert.match(det, /<TablaEstandar id="compras\.pec\.actividades" modo="simple"/);

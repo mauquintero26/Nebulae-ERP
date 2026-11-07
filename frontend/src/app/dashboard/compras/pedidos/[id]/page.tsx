@@ -17,8 +17,8 @@ import { Badge, Button, ContenidoEnlace, useAvisos } from '@/components/ui';
 import { TablaEstandar, usePreferenciasTabla } from '@/components/tabla';
 import type { ColumnaTabla } from '@/components/tabla';
 import { PasosFlujo } from '@/components/flujo';
-import { diaPec, etapaPec, infoEstadoPec } from '@/lib/estados-compras';
-import { pasosDeTracking } from '@/lib/flujo-compras';
+import { diaPec, infoEstadoPec } from '@/lib/estados-compras';
+import { TEXTO_SEGUIMIENTO_CERRADO, pasosDeTracking, seguimientoCerrado } from '@/lib/flujo-compras';
 import { fechaCorta, fechaHoraLarga } from '@/lib/fechas-colombia';
 import { formatoPesos } from '@/lib/pesos';
 
@@ -198,7 +198,8 @@ export default function PedidoCompraDetallePage() {
   const estadoActual = pedido?.estado || 'BORRADOR';
   const infoEstado = infoEstadoPec(estadoActual);
   // Un PEC cancelado no sigue su envío: la barra y «Avanzar etapa» no se pintan (como la barra del pedido de venta, T10).
-  const cancelado = etapaPec(estadoActual) === 'cancelado';
+  // T15 r1 (m4, m14): la misma regla de los dos paneles (seguimientoCerrado).
+  const cancelado = seguimientoCerrado(estadoActual);
   const recepciones: any[] = pedido?.recepciones || [];
   const ultimaRecepcion = recepciones.length > 0 ? recepciones[recepciones.length - 1] : null;
   const productos: any[] = Array.isArray(pedido?.productos) ? pedido.productos : [];
@@ -367,7 +368,7 @@ export default function PedidoCompraDetallePage() {
                     )}
                   </div>
                   {cancelado ? (
-                    <p className="text-sm text-slate-600">Pedido de compra cancelado: su envío ya no se sigue.</p>
+                    <p className="text-sm text-slate-600">{TEXTO_SEGUIMIENTO_CERRADO}</p>
                   ) : stages.length > 0 ? (
                     <div className="max-w-3xl mx-auto">
                       <PasosFlujo variante="barra" pasos={pasosDeTracking(stages)} etiqueta={`Etapas del envío de ${pedido?.numero || 'este pedido'}`} />
