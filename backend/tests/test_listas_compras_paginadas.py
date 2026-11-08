@@ -304,6 +304,13 @@ def test_recepciones_busqueda_vistas_estados_y_conteos(app_client, db, admin_tok
     assert set(ids(q=f.bodega.lower())) == todas
     assert set(ids(q=pec.numero)) == todas
     assert ids(q=borrador.numero) == [borrador.id]
+    # T20 r1 (Parte D1): se busca también por el nombre de un producto de sus líneas, como list_pec.
+    con_producto = f.recepcion("BORRADOR", pec, productos=[{"product_name": f"Cuna Zeta {s}", "qty": 1}])
+    assert ids(q=f"cuna zeta {s}") == [con_producto.id]
+    assert ids(search=f"Cuna Zeta {s}") == [con_producto.id]
+    assert ids(q="Zzz-no-existe-" + s) == []
+    db.delete(con_producto)
+    db.commit()
     # Las vistas son los grupos de recepción (RP41); sin vista, todas como hoy.
     assert ids(q=s, vista="por_confirmar") == [borrador.id]
     assert set(ids(q=s, vista="confirmadas")) == {completada.id, logistica.id}
@@ -413,6 +420,33 @@ def test_lista_compras_offset_total_orden_y_conteos(app_client, db, admin_token)
             assert _error(app_client, admin_token, RUTA_LISTA, estados=malo) == esperado, malo
         assert _error(app_client, admin_token, RUTA_LISTA, estados=",".join(f"E{n}" for n in range(21))) == (
             "Puedes filtrar por 20 estados como máximo.")
+    finally:
+        _save_lista_compras(db, original)
+
+
+def test_lista_compras_filtra_fechas_por_el_dia_de_colombia(app_client, db, admin_token):
+    """T20 r1 (Parte D2): `fecha` de un ítem es un instante UTC; el filtro compara con días de Colombia. Un ítem a las 03:00
+    UTC del día 6 es del día 5 en Colombia; a las 05:00 UTC del 6 ya es el 6."""
+    from app.api.v1.erp_compras import _load_lista_compras, _save_lista_compras
+    original = _load_lista_compras(db)
+    s = uuid.uuid4().hex[:8].upper()
+    desde = max([it.get("id", 0) for it in original if isinstance(it.get("id"), int)], default=0) + 1000
+
+    def item(n, fecha):
+        return {"id": desde + n, "pven_id": None, "pven_numero": None, "producto": f"Borde {n} {s}", "cantidad": 1,
+                "proveedor": "", "pec_id": None, "pec_numero": None, "estado": "PENDIENTE", "fecha": fecha,
+                "notas": "", "created_by": "tester"}
+    try:
+        _save_lista_compras(db, original + [item(1, "2026-01-06T03:00:00"), item(2, "2026-01-06T05:00:00"),
+                                            item(3, "2026-01-05T04:59:00Z"), item(4, "2026-01-05")])
+        i = {n: desde + n for n in range(1, 5)}
+
+        def ids(**params):
+            return sorted(_ids(_get(app_client, admin_token, RUTA_LISTA, q=s, **params)))
+        assert ids(fecha_desde="2026-01-05", fecha_hasta="2026-01-05") == sorted([i[1], i[4]])   # 03:00 UTC del 6 = día 5
+        assert ids(fecha_desde="2026-01-06", fecha_hasta="2026-01-06") == [i[2]]
+        assert ids(fecha_hasta="2026-01-04") == [i[3]]                                           # 04:59 UTC del 5 = día 4
+        assert ids(fecha_desde="2026-01-06") == [i[2]]
     finally:
         _save_lista_compras(db, original)
 

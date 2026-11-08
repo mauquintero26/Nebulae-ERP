@@ -17,11 +17,20 @@ abandoned carts, web builder config, image management
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Body
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import text, func
+from sqlalchemy import and_, bindparam, case, cast, func, or_, text
+from sqlalchemy.dialects.postgresql import JSONB
 from typing import Optional
 from app.db.database import get_db
 from app.core import clientes
 from app.core.busqueda import productos_ilike
+from app.core.estados_pedido import ESTADOS_VEN_SIN_DINERO
+from app.core.fechas import ahora_utc, hoy_colombia
+from app.core.listados import (MAX_OFFSET, expresiones_tiempo, filtrar_por_estados, leer_lista, leer_orden,
+                               orden_por_lista, paginar, texto_busqueda, validar_orden)
+from app.core.periodos import inicio_del_dia_utc, resolver_periodo
+from app.core.textos_filtro import mensaje_control
+from app.core.textos_actividad import ETIQUETAS_ESTADO
+from app.api.v1.erp_ventas import _FLUJO_DE_ESTADOS   # el flujo de los pedidos (las pestañas), una sola definición
 from app.models.erp_documents import SaleOrder, ActivityLog
 from app.models.customers import Customer
 import datetime
@@ -278,42 +287,158 @@ def _serialize_catalogo_item_huerfano(r) -> dict:
     }
 
 
-def _list_catalogo_canonico(db: Session, search, categoria, publicado, limit: int) -> dict:
-    q = db.query(ProductSKU).join(Product, ProductSKU.product_id == Product.id)
-    if search:
-        like = f"%{search}%"
-        q = q.filter(ProductSKU.sku.ilike(like) | Product.name.ilike(like) | Product.description.ilike(like))
-    if categoria:
-        q = q.join(Category, Product.category_id == Category.id).filter(Category.name.ilike(f"%{categoria}%"))
-    if publicado is not None:
-        q = q.outerjoin(ProductWebListing, ProductWebListing.sku_id == ProductSKU.id)
-        if publicado:
-            q = q.filter((ProductWebListing.publicado_web == True) | (ProductWebListing.id.is_(None)))
-        else:
-            q = q.filter(ProductWebListing.publicado_web == False)
+# ─── B4 T20: el catálogo paginado (RP56 y su ajuste; H16, R5, R21) ──────────────────────────────────────────────────────
+# El catálogo junta dos fuentes (los SKU del ERP y la tabla ecommerce_products). Para paginarlo, las dos ramas arman una
+# subconsulta UNION ALL con UNA fila por producto y las columnas de orden (nombre, sku, categoria, precio y stock);
+# ORDER BY, OFFSET y LIMIT van en ella y total = COUNT(*) de la misma. Las filas de la página se serializan como hoy.
+# Excepción: la rama heredada SIN offset ni orden (la que llama la tienda pública) responde como BASE, con la doble
+# fuente y un total que no es exacto (_catalogo_heredado_de_hoy); la subconsulta paginada es la de offset u orden.
+# La columna de orden `stock` es la misma cifra que se serializa (_get_real_sellable_stock(owner='NEBULAE'): el saldo de
+# NEBULAE menos sus reservas ACTIVE, mínimo 0, como subconsulta SQL) para los productos con SKU; para los huérfanos,
+# ecommerce_products.stock_disponible. El orden recibido nunca llega al SQL: solo elige una columna de la lista blanca.
+ORDENES_CATALOGO = {"nombre": "u.nombre", "sku": "u.sku", "categoria": "u.categoria", "stock": "u.stock",
+                    "precio": "u.precio"}
+# Cada subconsulta lleva dos grupos, en el orden de hoy: GRUPO_PRIMERO (0) y GRUPO_SEGUNDO (1).
+#   rama canónica: 0 = los SKU del ERP, 1 = los huérfanos de ecommerce_products;
+#   rama heredada: 0 = las filas de ecommerce_products, 1 = los SKU del ERP que no están allí.
+GRUPO_PRIMERO, GRUPO_SEGUNDO = 0, 1
 
-    total = q.count()
-    data = [_serialize_catalogo_item_canonico(db, s) for s in q.order_by(Product.name, ProductSKU.id).limit(limit).all()]
 
-    where_clauses = ["(sku IS NULL OR NOT EXISTS (SELECT 1 FROM product_skus ps WHERE ps.sku = ecommerce_products.sku))"]
-    params: dict = {"limit": limit}
+def _texto_o_422(*valores, nombre=None):
+    """El primer texto no vacío entre `valores` (q gana sobre search, RP8), sin espacios en los bordes; None si no hay.
+    Un carácter de control da 422 (un NUL llegaría al SQL y daría un 500): con `nombre`, «El filtro «x» no puede llevar
+    caracteres de control.»; sin él, el texto de listados.texto_busqueda (la búsqueda)."""
+    try:
+        return texto_busqueda(valores[0], valores[1] if len(valores) > 1 else None)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=mensaje_control(nombre) if nombre else str(e))
+
+
+def _orden_del_catalogo(orden) -> str:
+    """El ORDER BY de la subconsulta del catálogo. Sin `orden`, el de hoy: primero los SKU y luego los de
+    ecommerce_products, cada grupo por nombre. Con `orden` (nombre, sku, categoria, stock o precio, con o sin '-'): esa
+    columna con los nulos al final y el desempate (grupo, id de la fila desc); otro valor, 422."""
+    if not (orden or "").strip():
+        return "u.grupo ASC, u.nombre ASC, u.fila_id ASC"
+    campo, descendente = validar_orden(orden, ORDENES_CATALOGO, "nombre")
+    return f"{ORDENES_CATALOGO[campo]} {'DESC' if descendente else 'ASC'} NULLS LAST, u.grupo ASC, u.fila_id DESC"
+
+
+def _stock_vendible_sql(sku_id: str) -> str:
+    return (f"GREATEST(COALESCE((SELECT SUM(b.quantity) FROM inventory_owner_balances b "
+            f"WHERE b.sku_id = {sku_id} AND b.owner = 'NEBULAE'), 0) - "
+            f"COALESCE((SELECT SUM(r.quantity_reserved) FROM inventory_reservations r "
+            f"WHERE r.sku_id = {sku_id} AND r.owner = 'NEBULAE' AND r.status = 'ACTIVE'), 0), 0)")
+
+
+def _filtros_de_ecommerce_products(alias: str, search, categoria, publicado, params: dict) -> list:
+    """Los filtros de hoy sobre ecommerce_products (nombre, sku y descripción; categoría; publicado_web)."""
+    donde = []
     if search:
-        where_clauses.append("(nombre ILIKE :s OR sku ILIKE :s OR descripcion ILIKE :s)")
+        donde.append(f"({alias}.nombre ILIKE :s OR {alias}.sku ILIKE :s OR {alias}.descripcion ILIKE :s)")
         params["s"] = f"%{search}%"
     if categoria:
-        where_clauses.append("categoria ILIKE :c")
+        donde.append(f"{alias}.categoria ILIKE :c")
         params["c"] = f"%{categoria}%"
     if publicado is not None:
-        where_clauses.append("publicado_web = :pub")
+        donde.append(f"{alias}.publicado_web = :pub")
         params["pub"] = publicado
-    where_sql = "WHERE " + " AND ".join(where_clauses)
-    rows = db.execute(text(
-        f"SELECT {_HUERFANO_SELECT_COLS} FROM ecommerce_products {where_sql} ORDER BY nombre LIMIT :limit"
-    ), params).fetchall()
-    for r in rows:
-        data.append(_serialize_catalogo_item_huerfano(r))
-        total += 1
+    return donde
 
+
+def _con_donde(donde: list) -> str:
+    return ("WHERE " + " AND ".join(donde)) if donde else ""
+
+
+def _union_catalogo_canonico(search, categoria, publicado) -> tuple:
+    """(SQL, parámetros) de la subconsulta de la rama canónica: los SKU del ERP (con los filtros de hoy: SKU, nombre o
+    descripción; categoría; publicado en su ficha web) y los huérfanos de ecommerce_products (sin SKU en el ERP)."""
+    params: dict = {}
+    sku = []
+    if search:
+        sku.append("(ps.sku ILIKE :s OR pr.name ILIKE :s OR pr.description ILIKE :s)")
+    if categoria:
+        sku.append("ca.name ILIKE :c")
+    if publicado is True:
+        sku.append("(pwl.publicado_web = TRUE OR pwl.id IS NULL)")
+    elif publicado is False:
+        sku.append("pwl.publicado_web = FALSE")
+    huerfano = ["(ep.sku IS NULL OR NOT EXISTS (SELECT 1 FROM product_skus x WHERE x.sku = ep.sku))"]
+    huerfano += _filtros_de_ecommerce_products("ep", search, categoria, publicado, params)
+    if search:
+        params["s"] = f"%{search}%"
+    if categoria:
+        params["c"] = f"%{categoria}%"
+    sql = (
+        f"SELECT {GRUPO_PRIMERO} AS grupo, ps.id AS fila_id, pr.name AS nombre, ps.sku AS sku, ca.name AS categoria, "
+        f"COALESCE(ps.sale_price, 0) AS precio, {_stock_vendible_sql('ps.id')} AS stock "
+        f"FROM product_skus ps JOIN products pr ON pr.id = ps.product_id "
+        f"LEFT JOIN categories ca ON ca.id = pr.category_id "
+        f"LEFT JOIN product_web_listings pwl ON pwl.sku_id = ps.id {_con_donde(sku)} "
+        f"UNION ALL "
+        f"SELECT {GRUPO_SEGUNDO}, ep.id, ep.nombre, ep.sku, ep.categoria, COALESCE(ep.precio_venta, 0), "
+        f"COALESCE(ep.stock_disponible, 0) FROM ecommerce_products ep {_con_donde(huerfano)}"
+    )
+    return sql, params
+
+
+def _union_catalogo_heredado(search, categoria, publicado) -> tuple:
+    """(SQL, parámetros) de la subconsulta PAGINADA de la rama heredada (con offset u orden): las filas de ecommerce_products
+    (con los filtros de hoy; su stock es el real si el SKU existe en el ERP) y los SKU del ERP que no tienen espejo allí
+    (filtrados solo por la búsqueda: SKU o nombre). Un producto, una fila; es otro universo que _catalogo_heredado_de_hoy."""
+    params: dict = {}
+    ep = _filtros_de_ecommerce_products("ep", search, categoria, publicado, params)
+    extra = ["NOT EXISTS (SELECT 1 FROM ecommerce_products e2 WHERE e2.sku = ps.sku)"]
+    if search:
+        extra.append("(ps.sku ILIKE :s OR pr.name ILIKE :s)")
+    sql = (
+        f"SELECT {GRUPO_PRIMERO} AS grupo, ep.id AS fila_id, ep.nombre AS nombre, ep.sku AS sku, ep.categoria AS categoria, "
+        f"COALESCE(ep.precio_venta, 0) AS precio, "
+        f"CASE WHEN ps.id IS NOT NULL THEN {_stock_vendible_sql('ps.id')} ELSE COALESCE(ep.stock_disponible, 0) END "
+        f"AS stock FROM ecommerce_products ep LEFT JOIN product_skus ps ON ps.sku = ep.sku {_con_donde(ep)} "
+        f"UNION ALL "
+        f"SELECT {GRUPO_SEGUNDO}, ps.id, pr.name, ps.sku, ca.name, COALESCE(ps.sale_price, 0), "
+        f"{_stock_vendible_sql('ps.id')} FROM product_skus ps JOIN products pr ON pr.id = ps.product_id "
+        f"LEFT JOIN categories ca ON ca.id = pr.category_id {_con_donde(extra)}"
+    )
+    return sql, params
+
+
+def _pagina_del_catalogo(db: Session, union: str, params: dict, orden_sql: str, limit, offset) -> tuple:
+    """(total, [(grupo, id de la fila)]) de la página: total = COUNT(*) de la subconsulta; ORDER BY, LIMIT y OFFSET en
+    ella. Con limit=0 no se trae ninguna fila."""
+    total = int(db.execute(text(f"SELECT COUNT(*) FROM ({union}) u"), params).scalar() or 0)
+    if limit == 0:
+        return total, []
+    consulta = f"SELECT u.grupo, u.fila_id FROM ({union}) u ORDER BY {orden_sql} LIMIT :lim OFFSET :off"
+    filas = db.execute(text(consulta), {**params, "lim": limit, "off": offset}).fetchall()
+    return total, [(int(g), int(i)) for g, i in filas]
+
+
+def _filas_de_ecommerce_products(db: Session, ids) -> dict:
+    """{id: fila} de ecommerce_products con las columnas de _HUERFANO_SELECT_COLS (una consulta)."""
+    ids = list(ids)
+    if not ids:
+        return {}
+    consulta = text(f"SELECT {_HUERFANO_SELECT_COLS} FROM ecommerce_products WHERE id IN :ids").bindparams(
+        bindparam("ids", expanding=True))
+    return {r[0]: r for r in db.execute(consulta, {"ids": ids}).fetchall()}
+
+
+def _skus_por_id(db: Session, ids) -> dict:
+    ids = list(ids)
+    if not ids:
+        return {}
+    return {s.id: s for s in db.query(ProductSKU).filter(ProductSKU.id.in_(ids)).all()}
+
+
+def _list_catalogo_canonico(db: Session, search, categoria, publicado, limit: int, offset: int = 0, orden=None) -> dict:
+    union, params = _union_catalogo_canonico(search, categoria, publicado)
+    total, claves = _pagina_del_catalogo(db, union, params, _orden_del_catalogo(orden), limit, offset)
+    skus = _skus_por_id(db, (i for g, i in claves if g == GRUPO_PRIMERO))
+    huerfanos = _filas_de_ecommerce_products(db, (i for g, i in claves if g == GRUPO_SEGUNDO))
+    data = [_serialize_catalogo_item_canonico(db, skus[i]) if g == GRUPO_PRIMERO else _serialize_catalogo_item_huerfano(huerfanos[i])
+            for g, i in claves if (skus if g == GRUPO_PRIMERO else huerfanos).get(i) is not None]
     return {"status": "success", "total": total, "data": data}
 
 
@@ -476,15 +601,40 @@ def _count_publicados_canonico(db: Session) -> int:
 # --- ECOMMERCE STATS ---
 @router.get("/stats")
 def get_ecommerce_stats(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
+    """Las cifras de la tienda en HORA DE COLOMBIA (B4 T20, KPI-otros punto 5; RP1/D1, RP102): hoy, ayer, este mes y el mismo
+    tramo del mes pasado. «Hoy» es hoy_colombia() y «este mes» y su comparación son resolver_periodo('mes') (del día 1 a
+    hoy contra el mismo tramo del mes anterior, recortado a su fin); «ayer» es hoy − 1 día. Los bordes son las 00:00 de
+    Colombia en UTC sin zona (como created_at). web_orders_* cuenta todos los pedidos WEB; revenue_* no suma los de
+    ESTADOS_VEN_SIN_DINERO (CANCELADO y DEVUELTO_TOTAL). Las claves *_ayer y *_mes_anterior son nuevas y van al final."""
     _ensure_ecommerce_tables(db)
-    today = datetime.date.today()
-    start_today = datetime.datetime.combine(today, datetime.time.min)
-    start_month = datetime.datetime.combine(today.replace(day=1), datetime.time.min)
+    ahora = ahora_utc()
+    hoy = hoy_colombia(ahora)
+    inicio_hoy, inicio_manana = inicio_del_dia_utc(hoy), inicio_del_dia_utc(hoy + datetime.timedelta(days=1))
+    inicio_ayer = inicio_del_dia_utc(hoy - datetime.timedelta(days=1))
+    mes = resolver_periodo("mes", ahora_utc=ahora)
 
-    web_orders_today = db.query(SaleOrder).filter(SaleOrder.canal_venta == 'WEB', SaleOrder.created_at >= start_today).count()
-    web_orders_month = db.query(SaleOrder).filter(SaleOrder.canal_venta == 'WEB', SaleOrder.created_at >= start_month).count()
-    rev_today = float(db.query(func.sum(SaleOrder.total_cop)).filter(SaleOrder.canal_venta == 'WEB', SaleOrder.created_at >= start_today, SaleOrder.estado != 'CANCELADO').scalar() or 0)
-    rev_month = float(db.query(func.sum(SaleOrder.total_cop)).filter(SaleOrder.canal_venta == 'WEB', SaleOrder.created_at >= start_month, SaleOrder.estado != 'CANCELADO').scalar() or 0)
+    pedido = SaleOrder
+
+    def ventana(inicio, fin):
+        return and_(pedido.created_at >= inicio, pedido.created_at < fin)
+
+    v_hoy, v_ayer = ventana(inicio_hoy, inicio_manana), ventana(inicio_ayer, inicio_hoy)
+    v_mes, v_anterior = ventana(mes.inicio_utc, mes.fin_utc), ventana(mes.anterior_inicio_utc, mes.anterior_fin_utc)
+    con_dinero = pedido.estado.notin_(ESTADOS_VEN_SIN_DINERO)
+
+    def cuantos(v):
+        return func.count(pedido.id).filter(v)
+
+    def dinero(v):
+        return func.coalesce(func.sum(pedido.total_cop).filter(v, con_dinero), 0)
+
+    fila = (db.query(pedido).filter(pedido.canal_venta == 'WEB', or_(v_hoy, v_ayer, v_mes, v_anterior))
+            .with_entities(cuantos(v_hoy), cuantos(v_mes), dinero(v_hoy), dinero(v_mes), cuantos(v_ayer), dinero(v_ayer),
+                           cuantos(v_anterior), dinero(v_anterior)).one())
+    web_orders_today, web_orders_month = int(fila[0] or 0), int(fila[1] or 0)
+    rev_today, rev_month = float(fila[2] or 0), float(fila[3] or 0)
+    web_orders_ayer, rev_ayer = int(fila[4] or 0), float(fila[5] or 0)
+    web_orders_mes_anterior, rev_mes_anterior = int(fila[6] or 0), float(fila[7] or 0)
 
     try:
         cr = db.execute(text("SELECT COUNT(*), COALESCE(SUM(total_cop),0) FROM web_carts WHERE estado='ABANDONADO'")).fetchone()
@@ -507,19 +657,67 @@ def get_ecommerce_stats(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_AS
     recent = db.query(SaleOrder).filter(SaleOrder.canal_venta == 'WEB').order_by(SaleOrder.created_at.desc()).limit(10).all()
     orders_data = [{"id": o.id, "numero": o.pweb_numero or o.numero, "customer_name": o.customer_name or "Cliente Web", "customer_email": o.customer_email or "", "total_cop": float(o.total_cop or 0), "estado": o.estado, "created_at": o.created_at.isoformat() if o.created_at else None, "productos_count": len(o.productos or [])} for o in recent]
 
-    return {"status": "success", "data": {"web_orders_today": web_orders_today, "web_orders_month": web_orders_month, "revenue_today": rev_today, "revenue_month": rev_month, "carritos_abandonados_count": carritos_count, "carritos_abandonados_valor": carritos_valor, "productos_publicados": prod_pub, "conversion_pct": conversion, "recent_orders": orders_data}}
+    return {"status": "success", "data": {"web_orders_today": web_orders_today, "web_orders_month": web_orders_month, "revenue_today": rev_today, "revenue_month": rev_month, "carritos_abandonados_count": carritos_count, "carritos_abandonados_valor": carritos_valor, "productos_publicados": prod_pub, "conversion_pct": conversion, "recent_orders": orders_data, "revenue_ayer": rev_ayer, "web_orders_ayer": web_orders_ayer, "revenue_mes_anterior": rev_mes_anterior, "web_orders_mes_anterior": web_orders_mes_anterior}}
 
 
 # --- WEB ORDERS ---
+# B4 T20 (KANBAN-resto punto 1, TABLA-otros punto 2, R5, R21; RP8, RP9): los estados reales del pedido (los de
+# ETIQUETAS_ESTADO['VEN']: PENDIENTE_PAGO y PAGADO de la tienda y los demás), el orden por columna y la paginación.
+ESTADOS_PEDIDO_WEB = tuple(ETIQUETAS_ESTADO["VEN"])      # los estados que existen
+FLUJO_PEDIDO_WEB = _FLUJO_DE_ESTADOS["VEN"]              # y su orden: el de las pestañas de Ventas (orden=estado)
+ERROR_ESTADO_WEB = "El estado «{:.40}» no existe en los pedidos de la tienda."
+
+
+def _estados_de_pedidos_web(valor) -> list:
+    """Los estados del CSV (leer_lista: sin repetidos ni vacíos), cada uno de los conocidos del pedido. 422 con más de 20,
+    con un carácter de control o con un estado que no existe."""
+    try:
+        lista = leer_lista(valor)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=mensaje_control("estados") if "control" in str(e) else str(e))
+    for estado in lista:
+        if estado not in ESTADOS_PEDIDO_WEB:
+            raise HTTPException(status_code=422, detail=ERROR_ESTADO_WEB.format(estado))
+    return lista
+
+
+def _ordenes_de_pedidos_web() -> dict:
+    """La lista blanca de `orden` de list_web_orders (leer_orden): lo que se ve en cada columna de la tabla, más 'reciente'
+    (created_at desc, el de hoy y el defecto) y 'sin_movimiento'. 'items' es el largo de la lista de productos (0 si no es
+    una lista); 'estado' va por su lugar en el flujo, no alfabéticamente."""
+    pedido = SaleOrder
+    productos = cast(pedido.productos, JSONB)
+    return {
+        "reciente": expresiones_tiempo(pedido.created_at, pedido.updated_at, "reciente", id_lista=pedido.id),
+        "sin_movimiento": expresiones_tiempo(pedido.created_at, pedido.updated_at, "sin_movimiento", id_lista=pedido.id),
+        "fecha": pedido.created_at,
+        "numero": func.coalesce(pedido.pweb_numero, pedido.numero),
+        "cliente": func.coalesce(func.nullif(pedido.customer_name, ""), "Cliente Web"),
+        "total": func.coalesce(pedido.total_cop, 0),
+        "items": case((func.jsonb_typeof(productos) == "array", func.jsonb_array_length(productos)), else_=0),
+        "estado": orden_por_lista(pedido.estado, FLUJO_PEDIDO_WEB),
+    }
+
+
 @router.get("/pedidos")
-def list_web_orders(estado: Optional[str] = None, search: Optional[str] = None, limit: int = Query(50, le=200), offset: int = 0, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *ROLE_FINANZAS, *ROLE_BODEGA)), db: Session = Depends(get_db)):
-    q = db.query(SaleOrder).filter(SaleOrder.canal_venta == 'WEB')
-    if estado: q = q.filter(SaleOrder.estado == estado)
-    if search:
-        like = f"%{search}%"
-        q = q.filter(SaleOrder.pweb_numero.ilike(like) | SaleOrder.customer_name.ilike(like) | SaleOrder.customer_email.ilike(like) | productos_ilike(SaleOrder.productos, like))
-    total = q.count()
-    items = q.order_by(SaleOrder.created_at.desc()).offset(offset).limit(limit).all()
+def list_web_orders(estado: Optional[str] = None, estados: Optional[str] = None, search: Optional[str] = None, q: Optional[str] = None, orden: Optional[str] = None, limit: int = Query(50, ge=0, le=200), offset: int = Query(0, ge=0, le=MAX_OFFSET), user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *ROLE_FINANZAS, *ROLE_BODEGA)), db: Session = Depends(get_db)):
+    """Los pedidos de la tienda (canal WEB). `estados` es el filtro nuevo (CSV, máximo 20, cada uno un estado del pedido);
+    `estado` sigue igual que hoy (un valor, por igualdad, sin validar que exista: el
+    Dashboard y la pantalla de hoy lo mandan con nombres que no son de este pedido y reciben una lista vacía; solo un carácter
+    de control da 422). `q` busca (`search` es su alias) en el número web, el cliente, el
+    correo y los productos. `orden`: [-]numero, cliente, total, items, estado o fecha, más reciente (created_at desc, por
+    defecto) y sin_movimiento. limit=0 devuelve solo el total."""
+    estado = _texto_o_422(estado, nombre="estado") if estado is not None and estado.strip() else None
+    lista_estados = _estados_de_pedidos_web(estados)
+    texto = _texto_o_422(q, search)
+    orden_sql = leer_orden(orden, _ordenes_de_pedidos_web(), "reciente", id_lista=SaleOrder.id)
+    consulta = db.query(SaleOrder).filter(SaleOrder.canal_venta == 'WEB')
+    if estado: consulta = consulta.filter(SaleOrder.estado == estado)
+    consulta = filtrar_por_estados(consulta, SaleOrder.estado, lista_estados)
+    if texto:
+        like = f"%{texto}%"
+        consulta = consulta.filter(SaleOrder.pweb_numero.ilike(like) | SaleOrder.customer_name.ilike(like) | SaleOrder.customer_email.ilike(like) | productos_ilike(SaleOrder.productos, like))
+    total, items = paginar(consulta.order_by(*orden_sql), limit, offset)
     data = [{"id": o.id, "numero": o.pweb_numero or o.numero, "pven_numero": o.numero, "customer_name": o.customer_name or "Cliente Web", "customer_email": o.customer_email or "", "customer_phone": o.customer_phone or "", "total_cop": float(o.total_cop or 0), "estado": o.estado, "canal_venta": o.canal_venta, "productos": o.productos or [], "created_at": o.created_at.isoformat() if o.created_at else None} for o in items]
     return {"status": "success", "total": total, "data": data}
 
@@ -1036,112 +1234,161 @@ def recuperar_carrito(cart_id: int, body: dict, user: User = Depends(require_rol
 
 
 # --- CATALOGO DIGITAL ---
-@router.get("/catalogo")
-def list_catalogo(search: Optional[str] = None, categoria: Optional[str] = None, publicado: Optional[bool] = None, limit: int = Query(100, le=500), db: Session = Depends(get_db)):
-    _ensure_ecommerce_tables(db)
-    if _lectura_canonica():
-        return _list_catalogo_canonico(db, search, categoria, publicado, limit)
-    where_clauses = []
-    params: dict = {"limit": limit}
+def _serialize_catalogo_item_heredado(db: Session, r) -> dict:
+    """Una fila de ecommerce_products como la sirve la rama heredada: con el stock real si su SKU existe en el ERP."""
+    sku_code = r[3]
+    stock_disp = float(r[15] or 0)
+    if sku_code:
+        sku_record = db.query(ProductSKU).filter(ProductSKU.sku == sku_code).first()
+        if sku_record:
+            real_stock = _get_real_sellable_stock(db, sku_record.id, owner="NEBULAE")
+            stock_disp = float(real_stock)
+
+    modalidad = "ENTREGA_INMEDIATA" if stock_disp > 0 else "POR_PEDIDO"
+    is_low = stock_disp <= (r[16] or 5)
+
+    return {
+        "id": r[0],
+        "nombre": r[1],
+        "descripcion": r[2],
+        "sku": r[3],
+        "precio_venta": float(r[4] or 0),
+        "precio_comparacion": float(r[5] or 0),
+        "descuento_pct": float(r[6] or 0),
+        "impuesto_pct": float(r[7] or 0),
+        "categoria": r[8],
+        "sub_categoria": r[9],
+        "marca": r[10],
+        "tipo_producto": r[11],
+        "imagenes": r[12] or [],
+        "atributos": r[13] or [],
+        "variantes": r[14] or [],
+        "stock_disponible": stock_disp,
+        "modalidad_disponible": modalidad,
+        "alerta_stock_minimo": r[16] or 5,
+        "publicado_web": r[17],
+        "rastrear_inventario": r[18],
+        "seo_titulo": r[19],
+        "created_at": r[20].isoformat() if r[20] else None,
+        "updated_at": r[21].isoformat() if r[21] else None,
+        "is_low_stock": is_low,
+    }
+
+
+def _serialize_catalogo_item_sku_heredado(db: Session, canon_sku: ProductSKU) -> dict:
+    """Un SKU del ERP que no está en ecommerce_products, como lo sirve la rama heredada."""
+    prod = canon_sku.product
+    real_stock = float(_get_real_sellable_stock(db, canon_sku.id, owner="NEBULAE"))
+    modalidad = "ENTREGA_INMEDIATA" if real_stock > 0 else "POR_PEDIDO"
+    return {
+        "id": canon_sku.id,
+        "nombre": prod.name if prod else canon_sku.sku,
+        "descripcion": getattr(prod, "description", "") or "",
+        "sku": canon_sku.sku,
+        "precio_venta": float(canon_sku.sale_price or 0),
+        "precio_comparacion": float(canon_sku.sale_price or 0),
+        "descuento_pct": 0.0,
+        "impuesto_pct": 0.0,
+        "categoria": getattr(getattr(prod, "category", None), "name", "") if prod else "",
+        "sub_categoria": "",
+        "marca": getattr(getattr(prod, "brand", None), "name", "") if prod else "",
+        "tipo_producto": "Fisico",
+        "imagenes": [],
+        "atributos": [],
+        "variantes": [],
+        "stock_disponible": real_stock,
+        "modalidad_disponible": modalidad,
+        "alerta_stock_minimo": 5,
+        "publicado_web": True,
+        "rastrear_inventario": True,
+        "seo_titulo": prod.name if prod else canon_sku.sku,
+        "created_at": canon_sku.created_at.isoformat() if hasattr(canon_sku, "created_at") and canon_sku.created_at else None,
+        "updated_at": canon_sku.updated_at.isoformat() if hasattr(canon_sku, "updated_at") and canon_sku.updated_at else None,
+        "is_low_stock": real_stock <= 5,
+    }
+
+
+def _filas_heredadas_de_hoy(db: Session, search, categoria, publicado, limit: int) -> tuple:
+    """Lo que BASE ya tenía dentro de su try: las filas de ecommerce_products (con sus filtros, por nombre, con su LIMIT) y
+    su total. Devuelve (filas, total, params, filtros del espejo) para armar los SKU del ERP."""
+    params: dict = {}
+    ep = _filtros_de_ecommerce_products("ep", search, categoria, publicado, params)
+    espejo = _filtros_de_ecommerce_products("e2", search, categoria, publicado, params)
+    filas = db.execute(text(f"SELECT {_HUERFANO_SELECT_COLS} FROM ecommerce_products ep {_con_donde(ep)} "
+                            f"ORDER BY ep.nombre, ep.id LIMIT :lim"), {**params, "lim": limit}).fetchall()
+    total = int(db.execute(text(f"SELECT COUNT(*) FROM ecommerce_products ep {_con_donde(ep)}"), params).scalar() or 0)
+    return filas, total, params, espejo
+
+
+def _skus_heredados_de_base(db: Session, search, limit: int) -> list:
+    """Los SKU del ERP de la rama heredada de hoy: la MISMA consulta de BASE, sin ORDER BY (el orden es el que dé PostgreSQL,
+    como en BASE; no está definido) y con el LIMIT antes de cualquier descarte: `db.query(ProductSKU).join(Product)` con el
+    filtro de la búsqueda (SKU o nombre)."""
+    sku_q = db.query(ProductSKU).join(Product, ProductSKU.product_id == Product.id)
     if search:
-        where_clauses.append("(nombre ILIKE :s OR sku ILIKE :s OR descripcion ILIKE :s)")
-        params["s"] = f"%{search}%"
-    if categoria:
-        where_clauses.append("categoria ILIKE :c")
-        params["c"] = f"%{categoria}%"
-    if publicado is not None:
-        where_clauses.append("publicado_web = :pub")
-        params["pub"] = publicado
-    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+        like = f"%{search}%"
+        sku_q = sku_q.filter(ProductSKU.sku.ilike(like) | Product.name.ilike(like))
+    return sku_q.limit(limit).all()
+
+
+def _skus_con_espejo_que_pasa(db: Session, skus: list, params: dict, espejo: list) -> set:
+    """Lo ÚNICO nuevo de la rama de hoy (ruling de r1): de los SKU ya traídos, los que tienen en ecommerce_products un espejo que
+    pasa los mismos filtros (categoría, publicado y búsqueda). Una consulta; el descarte se hace en Python, sin cambiar el orden."""
+    codigos = [k.sku for k in skus if k.sku]
+    if not codigos:
+        return set()
+    donde = "".join(" AND " + c for c in espejo)
+    consulta = text(f"SELECT e2.sku FROM ecommerce_products e2 WHERE e2.sku IN :skus{donde}").bindparams(
+        bindparam("skus", expanding=True))
+    return {r[0] for r in db.execute(consulta, {**params, "skus": codigos}).fetchall()}
+
+
+def _catalogo_heredado_de_hoy(db: Session, search, categoria, publicado, limit: int) -> dict:
+    """La rama heredada SIN offset ni orden, como la llama hoy la tienda pública (store/catalogo y store/categoria con
+    publicado=true&limit=50): doble fuente, cada una con su LIMIT. Primero las filas de ecommerce_products (por nombre) y
+    detrás los SKU del ERP, traídos con la misma consulta de BASE (sin ORDER BY: el mismo orden de BASE, no está definido).
+    total = las filas de ecommerce_products + los SKU devueltos: NO es exacto, como en BASE.
+    Única diferencia con BASE, por el ruling de r1: BASE descartaba un SKU si su espejo estaba entre las filas ya devueltas
+    (limitadas); aquí se descarta si el espejo pasa los filtros, aunque haya quedado fuera por el LIMIT de ecommerce_products.
+    El try de BASE (un error responde `{status: success, data: [], error}`) envuelve las consultas y la serialización de las
+    filas de ecommerce_products y de los SKU, que son código de BASE; solo queda fuera _skus_con_espejo_que_pasa, que es nuevo."""
     try:
-        rows = db.execute(text(f"SELECT id, nombre, descripcion, sku, precio_venta, precio_comparacion, descuento_pct, impuesto_pct, categoria, sub_categoria, marca, tipo_producto, imagenes, atributos, variantes, stock_disponible, alerta_stock_minimo, publicado_web, rastrear_inventario, seo_titulo, created_at, updated_at FROM ecommerce_products {where_sql} ORDER BY nombre LIMIT :limit"), params).fetchall()
-        total = int(db.execute(text(f"SELECT COUNT(*) FROM ecommerce_products {where_sql}"), {k:v for k,v in params.items() if k!="limit"}).scalar() or 0)
-        data = []
-        seen_skus = set()
-        for r in rows:
-            sku_code = r[3]
-            stock_disp = float(r[15] or 0)
-            if sku_code:
-                seen_skus.add(sku_code)
-                sku_record = db.query(ProductSKU).filter(ProductSKU.sku == sku_code).first()
-                if sku_record:
-                    real_stock = _get_real_sellable_stock(db, sku_record.id, owner="NEBULAE")
-                    stock_disp = float(real_stock)
-
-            modalidad = "ENTREGA_INMEDIATA" if stock_disp > 0 else "POR_PEDIDO"
-            is_low = stock_disp <= (r[16] or 5)
-
-            data.append({
-                "id": r[0],
-                "nombre": r[1],
-                "descripcion": r[2],
-                "sku": r[3],
-                "precio_venta": float(r[4] or 0),
-                "precio_comparacion": float(r[5] or 0),
-                "descuento_pct": float(r[6] or 0),
-                "impuesto_pct": float(r[7] or 0),
-                "categoria": r[8],
-                "sub_categoria": r[9],
-                "marca": r[10],
-                "tipo_producto": r[11],
-                "imagenes": r[12] or [],
-                "atributos": r[13] or [],
-                "variantes": r[14] or [],
-                "stock_disponible": stock_disp,
-                "modalidad_disponible": modalidad,
-                "alerta_stock_minimo": r[16] or 5,
-                "publicado_web": r[17],
-                "rastrear_inventario": r[18],
-                "seo_titulo": r[19],
-                "created_at": r[20].isoformat() if r[20] else None,
-                "updated_at": r[21].isoformat() if r[21] else None,
-                "is_low_stock": is_low,
-            })
-
-        # Incluir SKUs canonicos del ERP no presentes en ecommerce_products
-        sku_q = db.query(ProductSKU).join(Product, ProductSKU.product_id == Product.id)
-        if search:
-            like = f"%{search}%"
-            sku_q = sku_q.filter(
-                ProductSKU.sku.ilike(like) | Product.name.ilike(like)
-            )
-        for canon_sku in sku_q.limit(limit).all():
-            if canon_sku.sku not in seen_skus:
-                prod = canon_sku.product
-                real_stock = float(_get_real_sellable_stock(db, canon_sku.id, owner="NEBULAE"))
-                modalidad = "ENTREGA_INMEDIATA" if real_stock > 0 else "POR_PEDIDO"
-                data.append({
-                    "id": canon_sku.id,
-                    "nombre": prod.name if prod else canon_sku.sku,
-                    "descripcion": getattr(prod, "description", "") or "",
-                    "sku": canon_sku.sku,
-                    "precio_venta": float(canon_sku.sale_price or 0),
-                    "precio_comparacion": float(canon_sku.sale_price or 0),
-                    "descuento_pct": 0.0,
-                    "impuesto_pct": 0.0,
-                    "categoria": getattr(getattr(prod, "category", None), "name", "") if prod else "",
-                    "sub_categoria": "",
-                    "marca": getattr(getattr(prod, "brand", None), "name", "") if prod else "",
-                    "tipo_producto": "Fisico",
-                    "imagenes": [],
-                    "atributos": [],
-                    "variantes": [],
-                    "stock_disponible": real_stock,
-                    "modalidad_disponible": modalidad,
-                    "alerta_stock_minimo": 5,
-                    "publicado_web": True,
-                    "rastrear_inventario": True,
-                    "seo_titulo": prod.name if prod else canon_sku.sku,
-                    "created_at": canon_sku.created_at.isoformat() if hasattr(canon_sku, "created_at") and canon_sku.created_at else None,
-                    "updated_at": canon_sku.updated_at.isoformat() if hasattr(canon_sku, "updated_at") and canon_sku.updated_at else None,
-                    "is_low_stock": real_stock <= 5,
-                })
-                seen_skus.add(canon_sku.sku)
-                total += 1
-
-        return {"status": "success", "total": total, "data": data}
+        filas, total, params, espejo = _filas_heredadas_de_hoy(db, search, categoria, publicado, limit)
+        data = [_serialize_catalogo_item_heredado(db, r) for r in filas]
+        skus = _skus_heredados_de_base(db, search, limit)
     except Exception as e:
         return {"status": "success", "total": 0, "data": [], "error": str(e)}
+    con_espejo = _skus_con_espejo_que_pasa(db, skus, params, espejo)
+    try:
+        propios = [_serialize_catalogo_item_sku_heredado(db, k) for k in skus if k.sku not in con_espejo]
+    except Exception as e:
+        return {"status": "success", "total": 0, "data": [], "error": str(e)}
+    return {"status": "success", "total": total + len(propios), "data": data + propios}
+
+
+@router.get("/catalogo")
+def list_catalogo(search: Optional[str] = None, q: Optional[str] = None, categoria: Optional[str] = None, publicado: Optional[bool] = None, orden: Optional[str] = None, limit: int = Query(100, ge=0, le=500), offset: Optional[int] = Query(None, ge=0, le=MAX_OFFSET), db: Session = Depends(get_db)):
+    """El catálogo (público: la tienda lo lee sin sesión). B4 T20 (RP56): `offset` y `orden` ([-]nombre, sku, categoria, stock
+    o precio) paginan con `total` exacto (un producto por fila, sin contar dos veces el espejo de un SKU). `q` busca
+    (`search` es su alias). limit=0 devuelve solo el total. Las filas son las de siempre (H16).
+    - Rama canónica (CATALOGO_LECTURA=canonico): siempre paginada (sin offset es 0).
+    - Rama heredada (la de hoy por defecto): SIN offset ni orden responde como BASE (doble fuente, cada una con su LIMIT, total NO
+      exacto; es lo que llama la tienda pública; para el total exacto con limit=0 hay que mandar offset=0); CON offset u orden pagina exacto sobre una fila por producto."""
+    texto = _texto_o_422(q, search)
+    categoria = _texto_o_422(categoria, nombre="categoria")
+    orden_sql = _orden_del_catalogo(orden)
+    _ensure_ecommerce_tables(db)
+    if _lectura_canonica():
+        return _list_catalogo_canonico(db, texto, categoria, publicado, limit, offset or 0, orden)
+    if offset is None and not (orden or "").strip():
+        return _catalogo_heredado_de_hoy(db, texto, categoria, publicado, limit)
+    union, params = _union_catalogo_heredado(texto, categoria, publicado)
+    total, claves = _pagina_del_catalogo(db, union, params, orden_sql, limit, offset or 0)
+    filas = _filas_de_ecommerce_products(db, (i for g, i in claves if g == GRUPO_PRIMERO))
+    skus = _skus_por_id(db, (i for g, i in claves if g == GRUPO_SEGUNDO))
+    data = [_serialize_catalogo_item_heredado(db, filas[i]) if g == GRUPO_PRIMERO else _serialize_catalogo_item_sku_heredado(db, skus[i])
+            for g, i in claves if (filas if g == GRUPO_PRIMERO else skus).get(i) is not None]
+    return {"status": "success", "total": total, "data": data}
 
 @router.get("/catalogo/{product_id}")
 def get_catalogo_product(product_id: int, db: Session = Depends(get_db)):

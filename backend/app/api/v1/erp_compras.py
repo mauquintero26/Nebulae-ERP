@@ -53,7 +53,7 @@ from app.core.estados_compras import (
     ESTADOS_ITEM_LISTA, ESTADOS_PEC, ESTADOS_PEC_MANUALES, ESTADOS_POR_FLUJO, ETAPA_POR_DEFECTO, ETAPAS_PEC,
     GRUPOS_RECEPCION, VISTAS_PEC, cond_estados_pec, cond_vencido, destinos_pec_permitidos, es_vencido, etapa_pec,
 )
-from app.core.fechas import hoy_colombia
+from app.core.fechas import a_colombia, hoy_colombia
 from app.core.flujo_compras import resumen_flujo_compras
 from app.core.listados import (
     MAX_OFFSET, contar_por_vista, expresiones_tiempo, filtrar_por_estados, leer_lista, leer_orden, orden_por_lista,
@@ -1702,8 +1702,8 @@ def list_recepciones(
     user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db)
 ):
-    """Las recepciones de mercancía (B4 T12; ver el bloque de list_pec). La búsqueda: número, número del PEC, proveedor y
-    bodega. vista (RP41): por_confirmar (BORRADOR), confirmadas (COMPLETADA y COMPLETADA_LOGISTICA), canceladas
+    """Las recepciones de mercancía (B4 T12; ver el bloque de list_pec). La búsqueda: número, número del PEC, proveedor,
+    bodega y productos. vista (RP41): por_confirmar (BORRADOR), confirmadas (COMPLETADA y COMPLETADA_LOGISTICA), canceladas
     (CANCELADA) o todas; sin vista, todas como hoy. estados: los de ETIQUETAS_ESTADO['ENINV']. orden: reciente (por
     defecto), sin_movimiento o [-]numero, pec, proveedor, bodega, fecha, estado o retraso. con_conteos = {por_confirmar,
     confirmadas, canceladas, todas}, con la búsqueda y pec_id, sin vista ni estado(s)."""
@@ -1719,7 +1719,7 @@ def list_recepciones(
         base = base.filter(gr.pec_id == pec_id)
     if like:
         base = base.filter(gr.numero.ilike(like) | gr.pec_numero.ilike(like) | gr.supplier_name.ilike(like)
-                           | gr.warehouse_name.ilike(like))
+                           | gr.warehouse_name.ilike(like) | productos_ilike(gr.productos, like))
     filtrado = filtrar_por_estados(filtrar_por_estados(base, gr.estado, lista_estado), gr.estado, lista_estados)
     condicion = _condicion_vista_recepcion(vista) if vista else None
     if condicion is not None:
@@ -3454,6 +3454,21 @@ _CAMPO_DE_ORDEN_LISTA = MappingProxyType({"fecha": "fecha", "producto": "product
 _BUSQUEDA_LISTA = ("producto", "pven_numero", "pec_numero", "notas", "proveedor")
 
 
+def _dia_colombia_del_item(valor) -> str:
+    """El día de Colombia ('AAAA-MM-DD') del instante `valor` de un ítem de la Lista de compras (UTC sin zona, o con Z; una
+    fecha sin hora es ese mismo día). '' si no hay fecha o no se lee. Usa core/fechas, sin restar horas a mano."""
+    texto = (valor or "").strip() if isinstance(valor, str) else ""
+    if not texto:
+        return ""
+    try:
+        if len(texto) <= 10:
+            return datetime.date.fromisoformat(texto).isoformat()
+        instante = datetime.datetime.fromisoformat(texto.replace("Z", "+00:00"))
+        return a_colombia(instante).date().isoformat()
+    except ValueError:
+        return texto[:10]
+
+
 def _filtrar_lista(items: list, estado, estados, like, proveedor, fecha_desde, fecha_hasta) -> list:
     """El filtro de hoy de list_lista_compras: sin `estado` no salen los DESCARTADO; con él, solo ese estado. r1 (m4):
     `estados` (la lista ya validada de ESTADOS_ITEM_LISTA) deja solo esos. `like` es el texto de la búsqueda en
@@ -3471,7 +3486,7 @@ def _filtrar_lista(items: list, estado, estados, like, proveedor, fecha_desde, f
             continue
         if like and not any(like in str(it.get(campo) or "").lower() for campo in _BUSQUEDA_LISTA):
             continue
-        fecha = (it.get("fecha") or "")[:10]
+        fecha = _dia_colombia_del_item(it.get("fecha"))
         if fecha_desde and fecha and fecha < fecha_desde:
             continue
         if fecha_hasta and fecha and fecha > fecha_hasta:
