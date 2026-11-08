@@ -22,15 +22,15 @@ import { CHIP, titulosDeOrdenPec } from '../../compras/columnas-pec';
 
 import { apiFetch } from '@/lib/api';
 import { dependenciasTablero, estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
-import { formatoDecimal, tarjetasAjustes } from '@/lib/kpis';
+import { formatoDecimal, lecturaDeCarga, tarjetasAjustes } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { fechaLarga } from '@/lib/fechas-colombia';
 import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
 import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
-  COLUMNAS_AJUSTE, CONSULTAS_TOTALES_AJUSTE, bodegaDeAjuste, cantidadDeAjuste, consultaAjustes, consultaColumnaAjuste, direccionDeAjuste,
-  infoDireccionAjuste, motivoDeAjuste, nombreBodega, numeroAjuste, pestanasAjustes, skuDeAjuste, tarjetaAjuste, textoFechaAjuste,
-  textoVacioAjustes,
+  COLUMNAS_AJUSTE, MOTIVOS_AJUSTE, bodegaDeAjuste, cantidadDeAjuste, consultaAjustes, consultaColumnaAjuste, direccionDeAjuste,
+  consultasTotalesAjuste, infoDireccionAjuste, motivoDeAjuste, nombreBodega, numeroAjuste, pestanasAjustes, skuDeAjuste, tarjetaAjuste, textoFechaAjuste,
+  textoVacioAjustes, vistaDeTarjetaAjuste,
 } from '@/lib/estados-compras';
 
 /** Un movimiento de una operación de inventario (InventoryMovementResponse): los nombres son los del servidor. */
@@ -55,8 +55,7 @@ const INICIAL_AJUSTES = { vista: 'todos' };
 const RUTA_OPERACIONES = '/inventory/operations';
 /** El motivo de un tablero solo para ver (R11, KANBAN-resto). */
 const TEXTO_SOLO_VER = 'Este tablero es para ver: la dirección de un ajuste sale de su primer movimiento y no se cambia arrastrando tarjetas.';
-const MOTIVOS = ['Conteo fisico', 'Merma', 'Sobrante', 'Correccion de error', 'Dano en bodega', 'Vencimiento', 'Otro'];
-const FORM_VACIO: FormAjuste = { tipo: 'ENTRADA', sku_id: null, product_name: '', warehouse_id: '', qty: 1, motivo: 'Conteo fisico', notas: '' };
+const FORM_VACIO: FormAjuste = { tipo: 'ENTRADA', sku_id: null, product_name: '', warehouse_id: '', qty: 1, motivo: MOTIVOS_AJUSTE[0], notas: '' };
 
 /** Las bodegas de la pantalla (null mientras llegan o si fallaron: las celdas dicen «Bodega #id»). */
 const BodegasAjuste = React.createContext<ReadonlyArray<OpcionCatalogo> | null>(null);
@@ -124,7 +123,7 @@ const COLUMNAS_TABLA_AJUSTES: ColumnaTabla<FilaAjuste>[] = [
 const TITULOS_ORDEN_AJUSTES = titulosDeOrdenPec(COLUMNAS_TABLA_AJUSTES);
 
 /** Los totales de las pestañas y las tarjetas: tres consultas con limit=0 (RP96); si una falla, las tres «—» y «Reintentar». */
-type TotalesAjustes = { vuelta: number; totales: { todos: number; entradas: number; salidas: number } | null; error: unknown };
+type TotalesAjustes = { vuelta: string; totales: { todos: number; entradas: number; salidas: number } | null; error: unknown };
 
 /* ================================================================
    MAIN PAGE — AjustesPage (B4 T19)
@@ -163,22 +162,25 @@ export default function AjustesPage() {
   // Las bodegas (GET /inventory/warehouses): los nombres de la tabla y el selector del ajuste. Si fallan, se dice con «Reintentar».
   const { catalogo: bodegas, recargar: recargarBodegas } = useCatalogo('/inventory/warehouses');
 
-  // Los totales (RP96): tres consultas con limit=0 (todos, direccion=entrada y direccion=salida), sin la búsqueda. Las pestañas y las
-  // tarjetas leen ESTOS mismos números. Mientras no llegan, 'cargando' (nunca 0); si fallan, «—» y «Reintentar».
+  // Los totales (RP96): tres consultas con limit=0 (todos, direccion=entrada y direccion=salida) con la BÚSQUEDA del estado (R5, m1).
+  // Las pestañas y las tarjetas leen ESTOS mismos números. La primera carga va en 'cargando' (nunca 0); una recarga (o una búsqueda
+  // nueva) conserva el último valor atenuado ('actualizando', I3); si fallan, «—» y «Reintentar».
   const [vueltaTotales, setVueltaTotales] = useState(0);
   const [cargados, setCargados] = useState<TotalesAjustes | null>(null);
+  const qTotales = estado.q.trim();
+  const claveTotales = `${vueltaTotales}|${qTotales}`;
   useEffect(() => {
     const control = new AbortController();
+    const consultas = consultasTotalesAjuste(qTotales);
     const total = async (consulta: string) => normalizarRespuesta(await apiFetch(`${RUTA_OPERACIONES}?${consulta}`, { signal: control.signal })).total;
-    Promise.all([total(CONSULTAS_TOTALES_AJUSTE.todos), total(CONSULTAS_TOTALES_AJUSTE.entradas), total(CONSULTAS_TOTALES_AJUSTE.salidas)])
-      .then(([todos, entradas, salidas]) => setCargados({ vuelta: vueltaTotales, totales: { todos, entradas, salidas }, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setCargados({ vuelta: vueltaTotales, totales: null, error: err }); });
+    Promise.all([total(consultas.todos), total(consultas.entradas), total(consultas.salidas)])
+      .then(([todos, entradas, salidas]) => setCargados({ vuelta: claveTotales, totales: { todos, entradas, salidas }, error: null }))
+      .catch((err: unknown) => { if (!control.signal.aborted) setCargados({ vuelta: claveTotales, totales: null, error: err }); });
     return () => control.abort();
-  }, [vueltaTotales]);
-  const cargandoTotales = cargados?.vuelta !== vueltaTotales;
+  }, [claveTotales, qTotales]);
+  const { datos: totales, cargando: cargandoTotales } = lecturaDeCarga(cargados && { vuelta: cargados.vuelta, datos: cargados.totales, error: cargados.error }, claveTotales);
   const errorTotales = cargandoTotales ? null : (cargados?.error ?? null);
   const estadoKpis = useEstadoKpi(cargandoTotales, errorTotales);
-  const totales = cargandoTotales ? null : (cargados?.totales ?? null);
   const tarjetas = tarjetasAjustes(totales);
 
   // «Actualizar» y lo que sigue a crear un ajuste: la tabla, el tablero, los totales y las bodegas. Ninguna recarga vacía lo que se ve.
@@ -226,7 +228,8 @@ export default function AjustesPage() {
   // Total, Entradas y Salidas abren su pestaña (D41: como un clic en ella; tocar la activa vuelve a Todos). En Kanban abren esa
   // pestaña en Lista. La diferencia neta es informativa (no equivale a una vista).
   const vistaActiva = enKanban ? null : estado.vista;
-  const elegirVista = (vista: string) => {
+  const elegirVista = (kpi: 'aju_total' | 'aju_entradas' | 'aju_salidas') => {
+    const vista = vistaDeTarjetaAjuste(kpi) ?? 'todos';
     const siguiente = vistaActiva === vista ? 'todos' : vista;
     despachar(accionVistaEnLista(estado, siguiente, null));
   };
@@ -308,11 +311,11 @@ export default function AjustesPage() {
             pestaña; la diferencia neta (entradas − salidas, con signo) es informativa. */}
         <FranjaKpis estado={estadoKpis} titulo="Ajustes">
           <TarjetaKpi kpi="aju_total" valor={tarjetas.total.valor}
-            activo={vistaActiva === 'todos'} onClick={() => elegirVista('todos')} />
+            activo={vistaActiva === vistaDeTarjetaAjuste('aju_total')} onClick={() => elegirVista('aju_total')} />
           <TarjetaKpi kpi="aju_entradas" valor={tarjetas.entradas.valor}
-            activo={vistaActiva === 'entradas'} onClick={() => elegirVista('entradas')} />
+            activo={vistaActiva === vistaDeTarjetaAjuste('aju_entradas')} onClick={() => elegirVista('aju_entradas')} />
           <TarjetaKpi kpi="aju_salidas" valor={tarjetas.salidas.valor}
-            activo={vistaActiva === 'salidas'} onClick={() => elegirVista('salidas')} />
+            activo={vistaActiva === vistaDeTarjetaAjuste('aju_salidas')} onClick={() => elegirVista('aju_salidas')} />
           <TarjetaKpi kpi="aju_neto" formato="texto" valor={tarjetas.neto.texto} ayuda={tarjetas.neto.ayuda} />
         </FranjaKpis>
         {errorTotales != null && (
@@ -490,7 +493,7 @@ export default function AjustesPage() {
                 <label htmlFor="ajuste-motivo" className="block text-xs font-black text-slate-500 uppercase mb-1.5">Motivo *</label>
                 <select id="ajuste-motivo" required value={form.motivo} onChange={(e) => setForm((f) => ({ ...f, motivo: e.target.value }))}
                   className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none">
-                  {MOTIVOS.map((m) => <option key={m}>{m}</option>)}
+                  {MOTIVOS_AJUSTE.map((m) => <option key={m}>{m}</option>)}
                 </select>
               </div>
             </div>

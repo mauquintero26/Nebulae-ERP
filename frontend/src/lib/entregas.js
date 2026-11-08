@@ -18,7 +18,7 @@
 import { congelar, ESTADOS_PEDIDO, ESTADOS_PEDIDO_SIN_DINERO, infoEstadoPedido, pasoPedido, transicionesPedido } from './estados-pedido.js';
 import { definirColumnas, estadosDeColumnaLista, TEXTO_SOLO_VER } from './kanban.js';
 import { estadoDeTarjeta, motivoTransicionPedido } from './kanban-ventas.js';
-import { alertaEntregaPedido } from './listas-ventas.js';
+import { alertaEntregaPedido, diaDeNegocio } from './listas-ventas.js';
 import { formatoPesos, redondearPeso } from './pesos.js';
 import { normalizarRol } from './chatter.js';
 import { enlaceDocumento } from './analisis.js';
@@ -192,14 +192,15 @@ export function consultaColumnaEntrega(estado, columna, { orden, limit, offset }
 }
 
 /**
- * El conteo de una pestaña: los estados y el saldo de su columna, SIN búsqueda ni filtro (son los de todos los pedidos de esa
- * columna) y con limit=0 (el servidor devuelve solo el total). La tarjeta Despachados usa este MISMO número (R12, I1 de T18).
+ * El conteo de una pestaña: los estados y el saldo de su columna, con la BÚSQUEDA del estado (R5; no sus estados ni su pestaña) y con limit=0 (el servidor devuelve solo el total). La tarjeta Despachados usa este MISMO número (R12, I1 de T18).
  * @param {{estados: ReadonlyArray<string>, saldo?: FiltroSaldo | null}} columna
+ * @param {{q?: string} | null | undefined} estado
  * @returns {string}
  */
-export function consultaConteoEntrega(columna) {
+export function consultaConteoEntrega(columna, estado) {
+  const q = typeof estado?.q === 'string' ? estado.q.trim() : '';
   return queryListado(null, {
-    vista: null, semaforo: null, paso: null, q: null, estados: [...columna.estados], orden: null, limit: 0, offset: 0,
+    vista: null, semaforo: null, paso: null, q: q || null, estados: [...columna.estados], orden: null, limit: 0, offset: 0,
     saldo: columna.saldo ?? null,
   });
 }
@@ -260,6 +261,16 @@ export function infoCobroEntrega(p) {
 }
 
 /**
+ * La entrega estimada del pedido ('20 nov 2026'; sin fecha, '—'). Es una FECHA DE NEGOCIO ('2026-11-20T00:00:00'): se toma su día
+ * (diaDeNegocio) y no se pasa a otra zona, o saldría un día antes (B4 T9 r1 I2). La usan la tarjeta y la columna «Entrega est.».
+ * @param {any} p
+ * @returns {string}
+ */
+export function textoEntregaEstimada(p) {
+  return fechaCorta(diaDeNegocio(p?.fecha_entrega_estimada)) || '—';
+}
+
+/**
  * La tarjeta del tablero de Entregas (KANBAN-logistica punto 4): el PVEN, el cliente, los ítems, el total, el estado y el chip
  * «Saldo $X» (o «Pagado»). El recordatorio por WhatsApp va en el menú ⋯ de la tarjeta (recordatorioSaldo), no aquí.
  * @param {any} p
@@ -268,7 +279,7 @@ export function infoCobroEntrega(p) {
 export function tarjetaEntrega(p) {
   const n = Array.isArray(p?.productos) ? p.productos.length : 0;
   const saldo = saldoDe(p);
-  const entrega = fechaCorta(p?.fecha_entrega_estimada);
+  const entrega = textoEntregaEstimada(p);
   return {
     numero: String(p?.numero ?? p?.id ?? ''),
     tipo: 'PVEN',
@@ -279,7 +290,7 @@ export function tarjetaEntrega(p) {
     chips: [saldo > 0
       ? { texto: `Saldo ${formatoPesos(redondearPeso(saldo))}`, tono: 'amber' }
       : { texto: 'Pagado', tono: 'emerald' }],
-    tiempo: entrega ? `Entrega ${entrega}` : null,
+    tiempo: entrega !== '—' ? `Entrega ${entrega}` : null,
     atrasada: alertaEntregaPedido(p) === 'vencida',
     accionPrincipal: null,
   };
@@ -425,4 +436,30 @@ export function confirmacionDespacho(pedido, nombreBodega) {
     mensaje: 'El pedido pasa a Entregado y, si tiene productos de catálogo, se descuenta su stock de la bodega elegida.',
     efectos, textoConfirmar: 'Despachar', peligro: false,
   };
+}
+
+/**
+ * La ÚNICA regla de «se puede despachar este pedido» (fila, tablero y Drawer; B4 T19 r1, m3, m10, m17): el rol despacha (ADMIN,
+ * ASESOR, BODEGA) y el pedido está en «Listo para despachar», en «Listo pero falta saldo» (la confirmación avisa del cobro) o es un
+ * PARCIALMENTE_ENTREGADO que se termina de entregar (como en BASE); y transicionesPedido deja pasar a ENTREGADO. Nunca desde
+ * «Esperando mercancía», ni un pedido ya despachado, cancelado o devuelto.
+ * @param {any} pedido
+ * @param {string | null | undefined} rol
+ * @returns {boolean}
+ */
+export function puedeDespacharPedido(pedido, rol) {
+  if (!pedido || typeof pedido !== 'object' || !puedeDespachar(rol)) return false;
+  const columna = columnaEntrega(pedido);
+  const sePuede = columna === 'listo' || columna === 'falta_saldo' || pedido.estado === 'PARCIALMENTE_ENTREGADO';
+  return sePuede && transicionesPedido(pedido.estado).includes('ENTREGADO');
+}
+
+/** «Marcar Saldo Cobrado» (PATCH saldo_cop): solo ADMIN y ASESOR; el servidor le responde 403 a Bodega y a los demás (RP23). */
+export function puedeCobrarSaldo(rol) {
+  return ['ADMIN', 'ASESOR'].includes(normalizarRol(rol));
+}
+
+/** La pestaña que abre una tarjeta de Entregas (la única pulsable es la de Despachados); las demás son informativas: null. */
+export function vistaDeTarjetaEntrega(kpi) {
+  return kpi === 'ent_despachados' ? 'despachado' : null;
 }

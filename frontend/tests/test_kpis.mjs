@@ -842,4 +842,23 @@ console.log('--- TEST 22 (B4 T19; KPI-inventario punto 9, RP96): tarjetasAjustes
   assert.equal(etiquetaKpi('rec_total'), 'Total de recepciones');
 }
 
+console.log('--- TEST 23 (B4 T19 r1, I3): una recarga conserva el último valor (actualizando), solo la primera carga va en cargando ---');
+{
+  const l = kpisLib.lecturaDeCarga;
+  assert.equal(typeof l, 'function', 'lecturaDeCarga existe');
+  // Antes de la primera respuesta: sin datos y cargando.
+  assert.deepEqual(l(null, 0), { datos: null, cargando: true });
+  // Llegó la vuelta 0: datos y listo.
+  assert.deepEqual(l({ vuelta: 0, datos: { n: 5 }, error: null }, 0), { datos: { n: 5 }, cargando: false });
+  // Se pidió la vuelta 1 (Actualizar, despachar, crear): se CONSERVA el último valor mientras llega (nunca null -> «—»).
+  assert.deepEqual(l({ vuelta: 0, datos: { n: 5 }, error: null }, 1), { datos: { n: 5 }, cargando: true });
+  // Un error de la última vuelta no deja datos viejos (la tarjeta dice «—» y Reintentar).
+  assert.deepEqual(l({ vuelta: 1, datos: null, error: new Error('x') }, 1), { datos: null, cargando: false });
+  // Recargando tras un error: sin datos que conservar.
+  assert.deepEqual(l({ vuelta: 1, datos: null, error: new Error('x') }, 2), { datos: null, cargando: true });
+  // Con el estado de la tarjeta: la recarga es 'actualizando', la primera 'cargando'.
+  assert.equal(kpisLib.estadoKpi({ loading: true, yaCargo: true }), 'actualizando');
+  assert.equal(kpisLib.estadoKpi({ loading: true, yaCargo: false }), 'cargando');
+}
+
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { ArrowLeftRight, ChevronRight, Eye, Package, RefreshCw } from 'lucide-react';
 // B4 T19: Traslados Internos de Inventario 100 % sobre el servidor (R5, C3, C4): la tabla estándar con las columnas COMPARTIDAS con
 // Compras (compras/columnas-traslado.tsx), la Fecha REAL del traslado (antes era la de creación, que la tabla no tiene), las pestañas
@@ -15,7 +16,7 @@ import type { ItemMenuFila } from '@/components/ui';
 import {
   BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
 } from '@/components/tabla';
-import type { AccionTabla, PestanaTabla } from '@/components/tabla';
+import type { AccionTabla } from '@/components/tabla';
 import { INV_NAV } from '../inv-nav';
 import { AvisoReintentar, CONTENEDOR, FOCOS, useCatalogo } from '../piezas-inventario';
 import { BodegasTraslado, CeldaEstadoTraslado, columnasTraslado, titulosDeOrdenTraslado } from '../../compras/columnas-traslado';
@@ -23,14 +24,15 @@ import type { FilaColumnasTraslado } from '../../compras/columnas-traslado';
 
 import { apiFetch } from '@/lib/api';
 import { accionModo, estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
-import { tarjetasTraslados } from '@/lib/kpis';
+import { lecturaDeCarga, tarjetasTraslados } from '@/lib/kpis';
 import { textoDeError } from '@/lib/avisos';
 import { fechaLarga } from '@/lib/fechas-colombia';
 import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
 import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
-  COLUMNAS_TRASLADO, OPCIONES_ESTADOS_TABLERO_TRASLADO, avisoTope200, conteosTraslado, consultaTableroTraslados, consultaTraslados,
-  nombreBodega, numeroTraslado, opcionesEstadosTraslado, tarjetaTraslado, textoVacioTraslados,
+  COLUMNAS_TRASLADO, OPCIONES_ESTADOS_TABLERO_TRASLADO, RUTA_CONTEOS_TRASLADOS, avisoTope200, columnaDeTraslado, conteosTraslado,
+  consultaTableroTraslados, consultaTraslados, fechaDeTraslado, nombreBodega, numeroTraslado, opcionesEstadosTraslado, pestanasTraslado,
+  tarjetaTraslado, textoVacioTraslados, vistaDeTarjetaTraslado,
 } from '@/lib/estados-compras';
 
 /** Una fila de GET /inventory/operations?operation_type=TRANSFER (InventoryOperationResponse + `fecha`, T13). */
@@ -41,18 +43,19 @@ const ID_TRASLADOS = 'inventario.traslados';
 /** Como la pantalla de hoy: se ven todos; las pestañas separan lo que sigue en proceso. */
 const INICIAL_TRASLADOS = { vista: 'todos' };
 const RUTA_OPERACIONES = '/inventory/operations';
-/** Los conteos de TODOS los traslados (sin búsqueda ni filtros) para las tarjetas: solo el total y los conteos, sin filas. */
-const RUTA_CONTEOS = `${RUTA_OPERACIONES}?operation_type=TRANSFER&limit=0&con_conteos=1`;
 /** El motivo de un tablero solo para ver (R11, KANBAN-logistica punto 5). */
 const TEXTO_SOLO_VER = 'Este tablero es para ver: los traslados no cambian de estado desde aquí.';
 
 /** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
-const AccionesFila = React.createContext<{ abrir: (t: FilaTraslado) => void } | null>(null);
+const AccionesFila = React.createContext<{ abrir: (t: FilaTraslado) => void; gestionar: (t: FilaTraslado) => void } | null>(null);
 
 /** Acciones (R11): el menú ⋯ (MenuFila: clic y portal) con «Ver detalle», que abre el Drawer. Lleva el número en su nombre. */
 function CeldaAcciones({ t }: { t: FilaTraslado }) {
   const acciones = React.useContext(AccionesFila);
-  const items: ItemMenuFila[] = [{ etiqueta: 'Ver detalle', icono: Eye, onClick: () => acciones?.abrir(t) }];
+  const items: ItemMenuFila[] = [
+    { etiqueta: 'Ver detalle', icono: Eye, onClick: () => acciones?.abrir(t) },
+    { etiqueta: 'Gestionar en Compras', icono: ChevronRight, onClick: () => acciones?.gestionar(t) },
+  ];
   return (
     <span className="flex items-center justify-end">
       <MenuFila items={items} etiqueta={`Acciones de ${numeroTraslado(t)}`} />
@@ -64,29 +67,17 @@ function CeldaAcciones({ t }: { t: FilaTraslado }) {
  * B4 T19, la tabla (TABLA-inventario punto 11; R26, D41): las columnas de columnas-traslado.tsx (compartidas con Compras › Traslados)
  * con la celda de Acciones de esta pantalla. Una constante (estable, D40). Todas se ven por defecto (720 px).
  */
-const COLUMNAS_TABLA_TRASLADOS = columnasTraslado<FilaTraslado>((t) => <CeldaAcciones t={t} />);
+/** R26 (m9): la celda de Acciones lleva solo el ⋯; 104+130+130+88+92+96+56 = 696 px contra los 704 de la caja a 1024 px con el menú abierto. */
+const ANCHO_ACCIONES_TRASLADOS = 56;
+const COLUMNAS_TABLA_TRASLADOS = columnasTraslado<FilaTraslado>((t) => <CeldaAcciones t={t} />, ANCHO_ACCIONES_TRASLADOS);
 /** {campo de orden: título}, para el chip «Orden: Fecha ↓», solo de las columnas que se ordenan. */
 const TITULOS_ORDEN_TRASLADOS = titulosDeOrdenTraslado(COLUMNAS_TABLA_TRASLADOS);
-
-/** Las pestañas (sin emojis): En proceso · Completados · Cancelados · Todos, con los conteos del servidor (null mientras cargan: barra gris). */
-function pestanasDeTraslados(conteos: unknown): PestanaTabla[] {
-  const c = conteosTraslado(conteos);
-  return [
-    { id: 'en_proceso', etiqueta: 'En proceso', conteo: c.en_proceso },
-    { id: 'completadas', etiqueta: 'Completados', conteo: c.completadas },
-    { id: 'canceladas', etiqueta: 'Cancelados', conteo: c.canceladas },
-    { id: 'todos', etiqueta: 'Todos', conteo: c.todos },
-  ];
-}
-
-/** El estado del traslado que el tablero muestra en cada columna, y el día en que se hizo. */
-const columnaDeTraslado = (t: FilaTraslado) => t.status;
-const fechaDeTraslado = (t: FilaTraslado) => t.fecha;
 
 /* ================================================================
    MAIN PAGE — InventarioTrasladosPage (B4 T19)
    ================================================================ */
 export default function InventarioTrasladosPage() {
+  const router = useRouter();
   // ── bloque 1: la carga del servidor (TABLA-inventario punto 11; R5, C3, C4; D39, D40) ──
   // El estado ÚNICO de la pantalla: las pestañas, la búsqueda, el filtro de estados, las tarjetas, la tabla y el tablero despachan a
   // él. El modo (Lista o Kanban) se guarda en vista:inventario.traslados.
@@ -122,15 +113,16 @@ export default function InventarioTrasladosPage() {
   const [totales, setTotales] = useState<{ vuelta: number; conteos: unknown; error: unknown } | null>(null);
   useEffect(() => {
     const control = new AbortController();
-    apiFetch(RUTA_CONTEOS, { signal: control.signal })
+    apiFetch(RUTA_CONTEOS_TRASLADOS, { signal: control.signal })
       .then((r: unknown) => setTotales({ vuelta: vueltaConteos, conteos: normalizarRespuesta(r).conteos, error: null }))
       .catch((err: unknown) => { if (!control.signal.aborted) setTotales({ vuelta: vueltaConteos, conteos: null, error: err }); });
     return () => control.abort();
   }, [vueltaConteos]);
-  const cargandoTotales = totales?.vuelta !== vueltaConteos;
+  // I3 (r1): una recarga conserva el último valor (actualizando); solo la primera carga va en cargando.
+  const { datos: conteosTotales, cargando: cargandoTotales } = lecturaDeCarga(totales && { vuelta: totales.vuelta, datos: totales.conteos, error: totales.error }, vueltaConteos);
   const errorTotales = cargandoTotales ? null : (totales?.error ?? null);
   const estadoKpis = useEstadoKpi(cargandoTotales, errorTotales);
-  const tarjetas = tarjetasTraslados(conteosTraslado(totales?.conteos ?? null), bodegas ? bodegas.length : null);
+  const tarjetas = tarjetasTraslados(conteosTraslado(conteosTotales), bodegas ? bodegas.length : null);
 
   // «Actualizar»: la tabla con sus conteos, el tablero, las tarjetas y las bodegas. Ninguna recarga vacía lo que se ve.
   const { recargar: recargarListado } = listado;
@@ -143,7 +135,9 @@ export default function InventarioTrasladosPage() {
   }, [recargarListado, recargarCompleta, recargarBodegas]);
 
   const abrir = useCallback((t: FilaTraslado) => setSelected(t), []);
-  const accionesFila = useMemo(() => ({ abrir }), [abrir]);
+  // m24 (regresión): el «Ver en Compras» que la fila tenía en BASE.
+  const gestionar = useCallback((t: FilaTraslado) => router.push(`/dashboard/compras/traslados?id=${t.id}`), [router]);
+  const accionesFila = useMemo(() => ({ abrir, gestionar }), [abrir, gestionar]);
 
   // ── bloque 2: la tabla (TABLA-inventario punto 11; R5, R26, D40, D41) ──
   const prefs = usePreferenciasTabla(ID_TRASLADOS, COLUMNAS_TABLA_TRASLADOS);
@@ -152,7 +146,7 @@ export default function InventarioTrasladosPage() {
   const { capa, claseTarjeta, refTarjeta, completa: pantallaCompleta, alternar, salir } = usePantallaCompleta();
   // Pasar a Kanban sale de la pantalla completa (el conmutador sigue a la vista y el tablero no queda tapado).
   useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
-  const pestanas = pestanasDeTraslados(listado.conteos);
+  const pestanas = pestanasTraslado(listado.conteos);
   // m2 de T8: el conmutador Lista / Kanban poda los estados con las opciones del modo nuevo, con la regla de accionPestana.
   const alCambiarBarra = useCallback((accion: AccionTabla) => {
     if (accion.tipo === 'modo') {
@@ -213,7 +207,8 @@ export default function InventarioTrasladosPage() {
   // En proceso, Completados y Total abren su pestaña (D41: como un clic en ella; tocar la activa vuelve a Todos). En Kanban abren esa
   // pestaña en Lista. Bodegas es informativa.
   const vistaActiva = enKanban ? null : estado.vista;
-  const elegirVista = (vista: string) => {
+  const elegirVista = (kpi: 'tras_en_proceso' | 'tras_completados' | 'tras_total') => {
+    const vista = vistaDeTarjetaTraslado(kpi) ?? 'todos';
     const siguiente = vistaActiva === vista ? 'todos' : vista;
     despachar(accionVistaEnLista(estado, siguiente, opcionesEstadosTraslado));
   };
@@ -247,12 +242,12 @@ export default function InventarioTrasladosPage() {
             abren su pestaña; Bodegas es informativa. */}
         <FranjaKpis estado={estadoKpis} titulo="Traslados">
           <TarjetaKpi kpi="tras_en_proceso" valor={tarjetas.en_proceso.valor}
-            activo={vistaActiva === 'en_proceso'} onClick={() => elegirVista('en_proceso')} />
+            activo={vistaActiva === vistaDeTarjetaTraslado('tras_en_proceso')} onClick={() => elegirVista('tras_en_proceso')} />
           <TarjetaKpi kpi="tras_completados" valor={tarjetas.completados.valor}
-            activo={vistaActiva === 'completadas'} onClick={() => elegirVista('completadas')} />
+            activo={vistaActiva === vistaDeTarjetaTraslado('tras_completados')} onClick={() => elegirVista('tras_completados')} />
           <TarjetaKpi kpi="bodegas" valor={tarjetas.bodegas.valor} estado={estadoBodegas} />
           <TarjetaKpi kpi="tras_total" valor={tarjetas.total.valor}
-            activo={vistaActiva === 'todos'} onClick={() => elegirVista('todos')} />
+            activo={vistaActiva === vistaDeTarjetaTraslado('tras_total')} onClick={() => elegirVista('tras_total')} />
         </FranjaKpis>
         {errorTotales != null && (
           <AvisoReintentar error={errorTotales} fallo="No se pudieron cargar los indicadores de traslados" onReintentar={() => setVueltaConteos((n) => n + 1)} />

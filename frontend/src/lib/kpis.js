@@ -872,3 +872,17 @@ export function totalRecepciones(datos) {
   const rec = datos.recepciones;
   return rec !== null && typeof rec === 'object' ? numeroFinito(rec.total) : null;
 }
+
+/**
+ * B4 T19 r1 (I3): lo que una pantalla pinta de una fuente que se pide otra vez (Actualizar, despachar, crear): `cargado` es lo
+ * último que llegó ({vuelta, datos, error}) y `vuelta` la que se acaba de pedir. Mientras llega, se CONSERVA el último valor
+ * (`datos`) y `cargando` es true: useEstadoKpi lo vuelve 'actualizando' (atenuado), no «—» (el signo del error) ni la barra gris
+ * de la primera carga. Un error no deja datos viejos.
+ * @template T
+ * @param {{vuelta: number | string, datos: T | null, error: unknown} | null | undefined} cargado
+ * @param {number | string} vuelta
+ * @returns {{datos: T | null, cargando: boolean}}
+ */
+export function lecturaDeCarga(cargado, vuelta) {
+  return { datos: cargado?.datos ?? null, cargando: cargado?.vuelta !== vuelta };
+}

@@ -188,9 +188,12 @@ console.log('--- TEST 6 (T19): la consulta de una COLUMNA del tablero (modo serv
   assert.equal(ent.consultaColumnaEntrega(estadoE({ estados: ['ENTREGADO'] }), COL('esperando'), { orden: null, limit: 25, offset: 0 }), null);
   // Los conteos de las pestañas: estados + saldo de cada columna, SIN búsqueda ni filtro y con limit=0 (solo el total).
   assert.equal(typeof ent.consultaConteoEntrega, 'function');
-  assert.equal(ent.consultaConteoEntrega(COL('falta_saldo')),
+  assert.equal(ent.consultaConteoEntrega(COL('falta_saldo'), estadoE()),
     'estados=LISTO_ENTREGA,DISPONIBLE,PENDIENTE_SALDO,LISTO_PARA_ENTREGA&limit=0&offset=0&saldo=pendiente');
-  assert.equal(ent.consultaConteoEntrega(COL('despachado')), 'estados=ENTREGADO,PARCIALMENTE_ENTREGADO,FACTURADO&limit=0&offset=0');
+  assert.equal(ent.consultaConteoEntrega(COL('despachado'), estadoE()), 'estados=ENTREGADO,PARCIALMENTE_ENTREGADO,FACTURADO&limit=0&offset=0');
+  // r1 (m1, m13, m22): los conteos siguen la BÚSQUEDA del estado (R5), no sus estados ni su pestaña.
+  assert.equal(ent.consultaConteoEntrega(COL('listo'), estadoE({ q: ' oso ', estados: ['DISPONIBLE'] })),
+    'q=oso&estados=LISTO_ENTREGA,DISPONIBLE,PENDIENTE_SALDO,LISTO_PARA_ENTREGA&limit=0&offset=0&saldo=pagado');
 }
 
 console.log('--- TEST 7 (T19, lección I1 de T18): las pestañas y la tarjeta Despachados salen de los MISMOS conteos ---');
@@ -262,7 +265,7 @@ console.log('--- TEST 9 (T19, RP23): lo que pregunta confirmar() de useAvisos an
 console.log('--- TEST 10 (T19): la tarjeta del tablero, el cobro, el recordatorio de WhatsApp y los textos ---');
 {
   const ped = { id: 12, numero: 'PVEN-12', customer_name: 'Ana Pérez', customer_phone: '300 123 4567', telefono_whatsapp: null,
-    total_cop: 1000000, saldo_cop: 400000, estado: 'LISTO_ENTREGA', productos: [{ qty: 1 }, { qty: 2 }], fecha_entrega_estimada: '2026-11-20' };
+    total_cop: 1000000, saldo_cop: 400000, estado: 'LISTO_ENTREGA', productos: [{ qty: 1 }, { qty: 2 }], fecha_entrega_estimada: '2026-11-20T00:00:00' };
   const t = ent.tarjetaEntrega(ped);
   assert.equal(t.numero, 'PVEN-12');
   assert.equal(t.tipo, 'PVEN');
@@ -272,6 +275,9 @@ console.log('--- TEST 10 (T19): la tarjeta del tablero, el cobro, el recordatori
   assert.equal(t.estado.label, 'Listo para entrega');
   assert.deepEqual(t.chips, [{ texto: 'Saldo $400.000', tono: 'amber' }]);
   assert.equal(t.accionPrincipal, null);
+  assert.equal(t.tiempo, 'Entrega 20 nov 2026', 'fecha de negocio: el día del API, no un instante (T9 r1 I2)');
+  assert.equal(ent.textoEntregaEstimada(ped), '20 nov 2026');
+  assert.equal(ent.textoEntregaEstimada({}), '—');
   assert.deepEqual(ent.tarjetaEntrega({ ...ped, saldo_cop: 0 }).chips, [{ texto: 'Pagado', tono: 'emerald' }]);
   assert.deepEqual(ent.tarjetaEntrega({ ...ped, saldo_cop: -3000 }).chips, [{ texto: 'Pagado', tono: 'emerald' }], 'a favor: pagado');
   assert.equal(ent.tarjetaEntrega({ ...ped, customer_name: ' ', productos: [{}] }).titulo, 'Cliente sin nombre');
@@ -318,6 +324,33 @@ console.log('--- TEST 11 (T19): «Filtrar estado» de la tabla (los estados de l
   ]);
   // Los valores del tablero son el estado principal de cada columna (estadosDeColumnaLista abre la columna entera con él).
   for (const o of ent.OPCIONES_ESTADOS_TABLERO_ENTREGA) assert.ok(COLUMNAS_ENTREGA.some((c) => c.estados[0] === o.valor), o.valor);
+}
+
+console.log('--- TEST 12 (T19 r1): una sola regla para despachar (fila, tablero y Drawer), cobrar el saldo y la tarjeta que abre cada pestaña ---');
+{
+  const p = (estado, saldo = 0) => ({ id: 1, numero: 'PVEN-1', estado, saldo_cop: saldo });
+  // m3, m10, m17: despachar desde «Listo para despachar», desde «falta saldo» (con la alerta) y terminar un PARCIALMENTE_ENTREGADO; nunca desde
+  // «Esperando mercancía», ni un ya despachado, cancelado o devuelto.
+  const casos = [
+    ['LISTO_ENTREGA', 0, true], ['LISTO_ENTREGA', 5000, true], ['DISPONIBLE', 0, true], ['PENDIENTE_SALDO', 100, true],
+    ['LISTO_PARA_ENTREGA', 0, true], ['PARCIALMENTE_ENTREGADO', 0, true],
+    ['EN_TRANSITO', 0, false], ['PENDIENTE_COMPRA', 0, false], ['EN_PROCESO', 0, false], ['CONFIRMADO', 0, false], ['PAGADO', 0, false],
+    ['ENTREGADO', 0, false], ['FACTURADO', 0, false], ['CANCELADO', 0, false], ['DEVUELTO_TOTAL', 0, false],
+  ];
+  for (const [estado, saldo, esperado] of casos) {
+    for (const rol of ['ADMIN', 'ASESOR', 'BODEGA']) assert.equal(ent.puedeDespacharPedido(p(estado, saldo), rol), esperado, `${estado} ${rol}`);
+    for (const rol of ['FINANZAS', 'COMPRAS', '', null]) assert.equal(ent.puedeDespacharPedido(p(estado, saldo), rol), false, `${estado} ${rol}`);
+  }
+  assert.equal(ent.puedeDespacharPedido(null, 'ADMIN'), false);
+  // m6, m12, m21: «Marcar Saldo Cobrado» (PATCH saldo_cop) solo ADMIN y ASESOR; Bodega recibe 403.
+  for (const rol of ['ADMIN', 'ASESOR', 'Vendedor', ' admin ']) assert.equal(ent.puedeCobrarSaldo(rol), true, rol);
+  for (const rol of ['BODEGA', 'FINANZAS', 'COMPRAS', 'CONSULTA', '', null, undefined]) assert.equal(ent.puedeCobrarSaldo(rol), false, String(rol));
+  // I4: qué pestaña abre cada tarjeta (una función pura con sus casos; los mutantes de la página mueren aquí).
+  assert.equal(ent.vistaDeTarjetaEntrega('ent_despachados'), 'despachado');
+  assert.equal(ent.vistaDeTarjetaEntrega('pven_en_curso'), null, 'informativa');
+  assert.equal(ent.vistaDeTarjetaEntrega('ent_saldo'), null, 'informativa');
+  assert.equal(ent.vistaDeTarjetaEntrega('otra'), null);
+  assert.equal(ent.COLUMNAS_ENTREGA.some((c) => c.clave === ent.vistaDeTarjetaEntrega('ent_despachados')), true, 'la vista existe');
 }
 
 console.log('OK test_entregas');

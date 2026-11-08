@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { ArrowUpFromLine, Eye, MessageCircle, Package, RefreshCw, Truck } from 'lucide-react';
 // B4 T19: Entregas (Cola de Despacho) 100 % sobre el servidor (R5, R15, C3, C4, C19). Las pestañas SON las columnas del tablero
@@ -25,16 +25,17 @@ import { getUsuarioActual } from '../../ventas/flujo';
 
 import { apiFetch } from '@/lib/api';
 import { accionModo, dependenciasTablero, estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
+import { lecturaDeCarga } from '@/lib/kpis';
 import { recargarTrasError } from '@/lib/avisos';
 import { infoEstadoPedido } from '@/lib/estados-pedido';
 import { abrirWhatsApp, waUrl } from '@/lib/whatsapp';
 import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
 import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
-  COLUMNAS_ENTREGA, NOTA_ENTREGAS, OPCIONES_ESTADOS_TABLERO_ENTREGA, VISTA_DE_TRABAJO_ENTREGA, columnaEntrega, confirmacionDespacho,
+  COLUMNAS_ENTREGA, NOTA_ENTREGAS, OPCIONES_ESTADOS_TABLERO_ENTREGA, VISTA_DE_TRABAJO_ENTREGA, confirmacionDespacho,
   consultaColumnaEntrega, consultaConteoEntrega, consultaEntregas, cuerpoDespacho, infoCobroEntrega, mensajeFaltaBodega, opcionesEstadosEntrega,
-  pestanasEntrega, puedeDespachar, recordatorioSaldo, reglaSoltarEntrega, resumenColumnaEntrega, saldoEntrega, tarjetaEntrega,
-  tarjetasEntregas, textoVacioEntregas,
+  pestanasEntrega, puedeCobrarSaldo, puedeDespacharPedido, recordatorioSaldo, reglaSoltarEntrega, resumenColumnaEntrega, saldoEntrega,
+  tarjetaEntrega, tarjetasEntregas, textoEntregaEstimada, textoVacioEntregas, vistaDeTarjetaEntrega,
 } from '@/lib/entregas';
 
 /** Una línea del pedido (productos de _ven_dict: JSON; los nombres son los del servidor). */
@@ -82,7 +83,7 @@ function CeldaCobro({ p }: { p: FilaPedido }) {
 function CeldaAcciones({ p }: { p: FilaPedido }) {
   const acciones = useContext(AccionesFila);
   const numero = p.numero ?? `#${p.id}`;
-  const puede = acciones ? puedeDespachar(acciones.rol) && columnaEntrega(p) === 'listo' : false;
+  const puede = acciones ? puedeDespacharPedido(p, acciones.rol) : false;
   const recordatorio = recordatorioSaldo(p);
   const items: ItemMenuFila[] = [
     { etiqueta: 'Ver detalle', icono: Eye, onClick: () => acciones?.abrir(p) },
@@ -95,6 +96,12 @@ function CeldaAcciones({ p }: { p: FilaPedido }) {
         className={`rounded-lg p-1.5 text-rose-700 transition-colors hover:bg-rose-50 ${FOCOS.indigo}`}>
         <Eye size={14} aria-hidden="true" />
       </button>
+      {recordatorio && (
+        <button type="button" onClick={() => abrirWhatsApp(recordatorio.url)} aria-label={`Recordar el saldo de ${numero} por WhatsApp`} title="Recordar el saldo por WhatsApp"
+          className={`rounded-lg p-1.5 text-emerald-800 transition-colors hover:bg-emerald-50 ${FOCOS.indigo}`}>
+          <MessageCircle size={14} aria-hidden="true" />
+        </button>
+      )}
       {puede && (
         <button type="button" onClick={() => acciones?.abrir(p)} aria-label={`Despachar el pedido ${numero}`} title="Despachar"
           className={`rounded-lg p-1.5 text-emerald-700 transition-colors hover:bg-emerald-50 ${FOCOS.indigo}`}>
@@ -122,7 +129,12 @@ const COLUMNAS_TABLA_ENTREGAS: ColumnaTabla<FilaPedido>[] = [
       </span>
     ) },
   { id: 'cliente', titulo: 'Cliente', ancho: 120, flexible: true, ordenable: 'cliente', titleCelda: (p) => p.customer_name || 'Cliente sin nombre',
-    celda: (p) => <span className="block truncate text-xs font-bold text-slate-800">{p.customer_name || 'Cliente sin nombre'}</span> },
+    celda: (p) => (
+      <span className="flex min-w-0 flex-col leading-tight">
+        <span className="truncate text-xs font-bold text-slate-800">{p.customer_name || 'Cliente sin nombre'}</span>
+        {p.customer_phone && <span className="truncate font-mono text-[10px] text-slate-500">{p.customer_phone}</span>}
+      </span>
+    ) },
   { id: 'items', titulo: 'Ítems', ancho: 64, alinear: 'centro', ocultaPorDefecto: true,
     celda: (p) => <span className="text-xs font-semibold text-slate-700">{(p.productos ?? []).length || '—'}</span> },
   { id: 'total', titulo: 'Total', ancho: 100, alinear: 'derecha', ordenable: 'total', titleCelda: (p) => pesos(p.total_cop),
@@ -132,14 +144,21 @@ const COLUMNAS_TABLA_ENTREGAS: ColumnaTabla<FilaPedido>[] = [
   { id: 'cobro', titulo: 'Cobro', ancho: 116, ocultaPorDefecto: true, celda: (p) => <CeldaCobro p={p} /> },
   { id: 'estado', titulo: 'Estado', ancho: 124, clave: true, ordenable: 'estado', titleCelda: (p) => infoEstadoPedido(p.estado).label, celda: (p) => <CeldaEstado p={p} /> },
   { id: 'entrega', titulo: 'Entrega est.', ancho: 100, ocultaPorDefecto: true, ordenable: 'entrega',
-    celda: (p) => <span className="text-xs text-slate-600">{p.fecha_entrega_estimada ? p.fecha_entrega_estimada.slice(0, 10) : '—'}</span> },
+    titleCelda: (p) => textoEntregaEstimada(p),
+    celda: (p) => <span className="text-xs text-slate-600">{textoEntregaEstimada(p)}</span> },
   { id: 'acciones', titulo: 'Acciones', ancho: 112, clave: true, fija: 'derecha', celda: (p) => <CeldaAcciones p={p} /> },
 ];
 /** {campo de orden: título}, para el chip «Orden: Total ↓», solo de las columnas que se ordenan. */
 const TITULOS_ORDEN_ENTREGAS = titulosDeOrdenPec(COLUMNAS_TABLA_ENTREGAS);
 
-type ConteosCargados = { vuelta: number; conteos: Record<ClaveColumna, number> | null; error: unknown };
+type ConteosCargados = { vuelta: string; conteos: Record<ClaveColumna, number> | null; error: unknown };
 type StatsCargadas = { vuelta: number; kpis: unknown; error: unknown };
+
+/** El rol viene de localStorage: se relee al montar y cuando otra pestaña lo cambie. */
+const suscribirRol = (alCambiar: () => void) => {
+  window.addEventListener('storage', alCambiar);
+  return () => window.removeEventListener('storage', alCambiar);
+};
 
 /* ================================================================
    MAIN PAGE — EntregasPage (B4 T19)
@@ -147,7 +166,9 @@ type StatsCargadas = { vuelta: number; kpis: unknown; error: unknown };
 export default function EntregasPage() {
   const { avisar, avisarError, confirmar } = useAvisos();
   // El rol que despacha: ADMIN, ASESOR y BODEGA (R15); los demás roles solo ven (reglaSoltarEntrega los deja en «solo ver»).
-  const [rol] = useState(() => getUsuarioActual().role);
+  // m14: el rol se lee DESPUÉS de montar (useSyncExternalStore: '' en el servidor y en la hidratación, el real en el cliente); sin rol no
+  // se pintan los botones que dependen de él.
+  const rol = useSyncExternalStore(suscribirRol, () => getUsuarioActual().role, () => '');
 
   // ── bloque 1: la carga del servidor (TABLA-inventario punto 10; R5, C3, C4, C19; D39, D40) ──
   // El estado ÚNICO de la pantalla: las pestañas (= las columnas), la búsqueda, el filtro de estados, la tarjeta, la tabla y el tablero
@@ -182,27 +203,30 @@ export default function EntregasPage() {
     },
   });
 
-  // Los conteos de las pestañas (consultaConteoEntrega: estados + saldo, limit=0, sin búsqueda). La tarjeta Despachados lee el MISMO
-  // número que su pestaña. Mientras no llegan, 'cargando' (nunca 0); si fallan, «—» y «Reintentar».
+  // Los conteos de las pestañas (consultaConteoEntrega: estados + saldo con la BÚSQUEDA del estado, limit=0; R5). La tarjeta Despachados
+  // lee el MISMO número que su pestaña. La primera carga va en 'cargando' (nunca 0); una recarga o una búsqueda nueva conserva el último
+  // valor atenuado ('actualizando', I3); si fallan, «—» y «Reintentar».
   const [vueltaConteos, setVueltaConteos] = useState(0);
   const [cargadosConteos, setCargadosConteos] = useState<ConteosCargados | null>(null);
+  const qConteos = estado.q.trim();
+  const claveConteos = `${vueltaConteos}|${qConteos}`;
   useEffect(() => {
     const control = new AbortController();
     const total = async (clave: ClaveColumna) => {
       const columna = COLUMNAS_ENTREGA.find((c) => c.clave === clave)!;
-      return normalizarRespuesta(await apiFetch(`${RUTA_PEDIDOS}?${consultaConteoEntrega(columna)}`, { signal: control.signal })).total;
+      return normalizarRespuesta(await apiFetch(`${RUTA_PEDIDOS}?${consultaConteoEntrega(columna, { q: qConteos })}`, { signal: control.signal })).total;
     };
     Promise.all([total('esperando'), total('falta_saldo'), total('listo'), total('despachado')])
       .then(([esperando, falta_saldo, listoN, despachado]) => setCargadosConteos({
-        vuelta: vueltaConteos, conteos: { esperando, falta_saldo, listo: listoN, despachado }, error: null,
+        vuelta: claveConteos, conteos: { esperando, falta_saldo, listo: listoN, despachado }, error: null,
       }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setCargadosConteos({ vuelta: vueltaConteos, conteos: null, error: err }); });
+      .catch((err: unknown) => { if (!control.signal.aborted) setCargadosConteos({ vuelta: claveConteos, conteos: null, error: err }); });
     return () => control.abort();
-  }, [vueltaConteos]);
-  const cargandoConteos = cargadosConteos?.vuelta !== vueltaConteos;
+  }, [claveConteos, qConteos]);
+  const { datos: conteos, cargando: cargandoConteos } = lecturaDeCarga(
+    cargadosConteos && { vuelta: cargadosConteos.vuelta, datos: cargadosConteos.conteos, error: cargadosConteos.error }, claveConteos);
   const errorConteos = cargandoConteos ? null : (cargadosConteos?.error ?? null);
   const estadoConteos = useEstadoKpi(cargandoConteos, errorConteos);
-  const conteos = cargandoConteos ? null : (cargadosConteos?.conteos ?? null);
 
   // Las tarjetas «Pedidos en curso» y «Saldo antes de despachar» (KPI-inventario punto 8): GET /ventas/stats, sin respaldo local.
   const [vueltaStats, setVueltaStats] = useState(0);
@@ -214,10 +238,10 @@ export default function EntregasPage() {
       .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, kpis: null, error: err }); });
     return () => control.abort();
   }, [vueltaStats]);
-  const cargandoStats = stats?.vuelta !== vueltaStats;
+  const { datos: kpisStats, cargando: cargandoStats } = lecturaDeCarga(stats && { vuelta: stats.vuelta, datos: stats.kpis, error: stats.error }, vueltaStats);
   const errorStats = cargandoStats ? null : (stats?.error ?? null);
   const estadoStats = useEstadoKpi(cargandoStats, errorStats);
-  const tarjetas = tarjetasEntregas(cargandoStats ? null : (stats?.kpis ?? null), conteos);
+  const tarjetas = tarjetasEntregas(kpisStats, conteos);
 
   // Las bodegas del despacho (GET /inventory/warehouses): con error, se dice con «Reintentar»; nunca una lista vacía falsa.
   const { catalogo: bodegas, recargar: recargarBodegas } = useCatalogo('/inventory/warehouses');
@@ -234,7 +258,7 @@ export default function EntregasPage() {
     recargarTablero(columnas);
     setVueltaConteos((n) => n + 1);
     setVueltaStats((n) => n + 1);
-  }, [recargarListado, recargarTablero]);
+  }, [recargarListado, recargarTablero, setVueltaConteos, setVueltaStats]);
 
   const abrir = useCallback((p: FilaPedido) => { setDesdeTablero(null); setSelected(p); }, []);
   const accionesFila = useMemo(() => ({ abrir, rol }), [abrir, rol]);
@@ -292,7 +316,8 @@ export default function EntregasPage() {
     try {
       await apiFetch(`${RUTA_PEDIDOS}/${p.id}`, { method: 'PATCH', body: JSON.stringify({ estado: resultado.estado }) });
     } catch (err) {
-      if (recargarTrasError(err)) recargarTodo();
+      // D39: el tablero ya deshace y recarga el origen y el destino; aquí solo se refrescan las pestañas y las tarjetas.
+      if (recargarTrasError(err)) { setVueltaConteos((n) => n + 1); setVueltaStats((n) => n + 1); }
       throw err;
     }
     setVueltaConteos((n) => n + 1);
@@ -339,7 +364,11 @@ export default function EntregasPage() {
     total: listado.total,
     estadoTotal: estadoDelTotal({ total: listado.total, cargando: listado.cargandoInicial, recargando: listado.recargando, error: listado.error }),
   };
-  const tarjetaDe = useCallback((p: FilaPedido) => tarjetaEntrega(p), []);
+  // m2: el botón de WhatsApp (recordatorio del saldo) visible en la tarjeta, armado aquí (accionPrincipal no arma clics desde lib).
+  const tarjetaDe = useCallback((p: FilaPedido) => {
+    const r = recordatorioSaldo(p);
+    return { ...tarjetaEntrega(p), accionPrincipal: r ? { texto: 'Recordar el saldo por WhatsApp', onClick: () => abrirWhatsApp(r.url), tono: 'emerald' } : null };
+  }, []);
   const resumenColumna = useCallback((clave: string, datos: { resumen?: unknown }) => {
     const texto = resumenColumnaEntrega(clave, datos.resumen);
     return texto ? <span className="text-[11px] font-semibold text-slate-600">{texto}</span> : null;
@@ -350,11 +379,11 @@ export default function EntregasPage() {
   // clic vuelve a la de trabajo. «Pedidos en curso» y «Saldo antes de despachar» son informativas (no son una pestaña).
   const vistaActiva = enKanban ? null : estado.vista;
   const elegirDespachados = () => {
-    const siguiente = vistaActiva === 'despachado' ? INICIAL_ENTREGAS.vista : 'despachado';
+    const vista = vistaDeTarjetaEntrega('ent_despachados') ?? INICIAL_ENTREGAS.vista;
+    const siguiente = vistaActiva === vista ? INICIAL_ENTREGAS.vista : vista;
     despachar(accionVistaEnLista(estado, siguiente, opcionesEstadosEntrega));
   };
   const actualizando = listado.recargando || (cargandoConteos && cargadosConteos !== null) || (cargandoStats && stats !== null);
-  const despachado = selected ? columnaEntrega(selected) === 'despachado' : false;
   const tel = selected ? (selected.telefono_whatsapp || selected.customer_phone || '') : '';
   const urlTel = selected ? waUrl(tel, '') : null;
 
@@ -387,7 +416,7 @@ export default function EntregasPage() {
           <TarjetaKpi kpi="pven_en_curso" valor={tarjetas.en_curso.valor} ayuda="Por despachar" />
           <TarjetaKpi kpi="ent_saldo" valor={tarjetas.saldo.valor} ayuda="Según la forma de pago de cada pedido" />
           <TarjetaKpi kpi="ent_despachados" valor={tarjetas.despachados.valor} estado={estadoConteos}
-            activo={vistaActiva === 'despachado'} onClick={elegirDespachados} />
+            activo={vistaActiva === vistaDeTarjetaEntrega('ent_despachados')} onClick={elegirDespachados} />
         </FranjaKpis>
         {errorStats != null && (
           <AvisoReintentar error={errorStats} fallo="No se pudieron cargar los indicadores de pedidos" onReintentar={() => setVueltaStats((n) => n + 1)} />
@@ -484,7 +513,7 @@ export default function EntregasPage() {
           footer={(
             <>
               <Button variant="secondary" onClick={() => { setSelected(null); setDesdeTablero(null); }}>Cerrar</Button>
-              {!despachado && columnaEntrega(selected) !== null && puedeDespachar(rol) && (
+              {puedeDespacharPedido(selected, rol) && (
                 <Button color="rose" icon={Truck} loading={updating} onClick={() => handleDespachar(selected)}>
                   Autorizar Salida y Despachar Pedido
                 </Button>
@@ -538,7 +567,7 @@ export default function EntregasPage() {
                     El cliente pagó de más: hay un crédito a favor de <strong>{pesos(Math.abs(saldo))}</strong> pendiente de coordinar (reembolso o abono a otro pedido).
                   </p>
                 )}
-                {tieneSaldo && (
+                {tieneSaldo && puedeCobrarSaldo(rol) && (
                   <div className="mt-3 flex items-center justify-between gap-3">
                     <p className="text-[11px] text-amber-900 leading-tight">El cliente debe cancelar el saldo antes del despacho.</p>
                     <Button size="sm" color="emerald" loading={updating} onClick={() => handleRegistrarCobroSaldo(selected)}>
@@ -577,7 +606,7 @@ export default function EntregasPage() {
           </div>
 
           {/* Bodega de salida: siempre con Bodega (RP23); con ADMIN y ASESOR, si hay líneas de catálogo (con sku_id). */}
-          {!despachado && puedeDespachar(rol) && (
+          {puedeDespacharPedido(selected, rol) && (
             <div>
               <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-2.5">Bodega de Despacho</h4>
               <select aria-label="Bodega de despacho" value={warehouseId} disabled={!bodegas.filas}

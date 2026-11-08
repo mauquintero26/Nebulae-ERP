@@ -1811,14 +1811,25 @@ export const COLUMNAS_AJUSTE = congelar([
 ]);
 
 /**
+ * El PRIMER movimiento de una operación: el de menor id (_primera_direccion del backend, ORDER BY id ASC; la relación no garantiza
+ * el orden del arreglo). Sin ids, el primero del arreglo; sin movimientos, null.
+ * @param {any} a
+ * @returns {any}
+ */
+export function primerMovimiento(a) {
+  const movs = Array.isArray(a?.movements) ? a.movements.filter((m) => m && typeof m === 'object') : [];
+  if (movs.length === 0) return null;
+  return movs.reduce((menor, m) => (typeof m.id === 'number' && (typeof menor.id !== 'number' || m.id < menor.id) ? m : menor), movs[0]);
+}
+
+/**
  * La dirección de un ajuste, 'entrada' o 'salida': la de su PRIMER movimiento según GRUPOS_AJUSTE (igual que el filtro `direccion`
  * de GET /inventory/operations, RP96). Sin movimientos o con otra dirección (cuarentena, pérdida, devolución), null.
  * @param {any} a
  * @returns {'entrada' | 'salida' | null}
  */
 export function direccionDeAjuste(a) {
-  const primero = Array.isArray(a?.movements) ? a.movements[0] : null;
-  const d = typeof primero?.direction === 'string' ? primero.direction : '';
+  const d = typeof primerMovimiento(a)?.direction === 'string' ? primerMovimiento(a).direction : '';
   if (GRUPOS_AJUSTE.entrada.includes(d)) return 'entrada';
   if (GRUPOS_AJUSTE.salida.includes(d)) return 'salida';
   return null;
@@ -1856,13 +1867,12 @@ export function bodegaDeAjuste(a) {
 
 /** La cantidad del primer movimiento del ajuste; sin movimientos o sin número, null (la celda dice «—», nunca 0). */
 export function cantidadDeAjuste(a) {
-  const primero = Array.isArray(a?.movements) ? a.movements[0] : null;
-  return numeroFinito(primero?.quantity);
+  return numeroFinito(primerMovimiento(a)?.quantity);
 }
 
 /** El producto del ajuste: «SKU #9» (la operación no trae el nombre, solo el id del SKU); sin movimientos, '—'. */
 export function skuDeAjuste(a) {
-  const primero = Array.isArray(a?.movements) ? a.movements[0] : null;
+  const primero = primerMovimiento(a);
   return primero?.sku_id === null || primero?.sku_id === undefined ? '—' : `SKU #${primero.sku_id}`;
 }
 
@@ -1903,18 +1913,20 @@ export function consultaColumnaAjuste(estado, columna, { limit, offset }) {
   });
 }
 
-const consultaTotalAjustes = (direccion) => queryListado(null, {
-  vista: null, semaforo: null, paso: null, q: null, estados: null, orden: null, limit: 0, offset: 0, operation_type: 'ADJUSTMENT', direccion,
+const consultaTotalAjustes = (q, direccion) => queryListado(null, {
+  vista: null, semaforo: null, paso: null, q: q || null, estados: null, orden: null, limit: 0, offset: 0, operation_type: 'ADJUSTMENT', direccion,
 });
 
 /**
  * Las tres consultas de los totales (limit=0: solo el total) de las pestañas y las tarjetas (RP96): todos los ajustes, los de
- * entrada y los de salida, sin búsqueda. Inmutable.
- * @type {Readonly<{todos: string, entradas: string, salidas: string}>}
+ * entrada y los de salida, con la BÚSQUEDA `q` (R5; sin pestaña ni estados).
+ * @param {string | null | undefined} q
+ * @returns {{todos: string, entradas: string, salidas: string}}
  */
-export const CONSULTAS_TOTALES_AJUSTE = congelar({
-  todos: consultaTotalAjustes(null), entradas: consultaTotalAjustes('entrada'), salidas: consultaTotalAjustes('salida'),
-});
+export function consultasTotalesAjuste(q) {
+  const texto = typeof q === 'string' ? q.trim() : '';
+  return { todos: consultaTotalAjustes(texto, null), entradas: consultaTotalAjustes(texto, 'entrada'), salidas: consultaTotalAjustes(texto, 'salida') };
+}
 
 /**
  * Las pestañas de Ajustes con los totales de CONSULTAS_TOTALES_AJUSTE ({todos, entradas, salidas}); lo que no llega queda en null
@@ -1971,3 +1983,62 @@ export function tarjetaAjuste(a, bodegas) {
     accionPrincipal: null,
   };
 }
+
+/** La pestaña que abre cada tarjeta de Recepciones (null: informativa). */
+export function vistaDeTarjetaRecepcion(kpi) {
+  return ({ rec_por_confirmar: 'por_confirmar', rec_confirmadas: 'confirmadas', rec_total: 'todas' })[kpi] ?? null;
+}
+/** La pestaña que abre cada tarjeta de Traslados (null: informativa). */
+export function vistaDeTarjetaTraslado(kpi) {
+  return ({ tras_en_proceso: 'en_proceso', tras_completados: 'completadas', tras_total: 'todos' })[kpi] ?? null;
+}
+/** La pestaña que abre cada tarjeta de Ajustes (null: informativa). */
+export function vistaDeTarjetaAjuste(kpi) {
+  return ({ aju_total: 'todos', aju_entradas: 'entradas', aju_salidas: 'salidas' })[kpi] ?? null;
+}
+
+/**
+ * Las pestañas de Recepciones (RP41, D6; Compras e Inventario las comparten): Por confirmar · Confirmadas · Canceladas · Todas con los
+ * conteos de con_conteos ({por_confirmar, confirmadas, canceladas, todas}); null mientras cargan (la barra gris, nunca 0). Por
+ * confirmar va en ámbar si hay alguna.
+ * @param {any} conteos
+ */
+export function pestanasRecepcion(conteos) {
+  const c = objetoPlano(conteos) ?? {};
+  const n = (k) => numeroFinito(c[k]);
+  return [
+    { id: 'por_confirmar', etiqueta: 'Por confirmar', conteo: n('por_confirmar'), alerta: (n('por_confirmar') ?? 0) > 0 },
+    { id: 'confirmadas', etiqueta: 'Confirmadas', conteo: n('confirmadas') },
+    { id: 'canceladas', etiqueta: 'Canceladas', conteo: n('canceladas') },
+    { id: 'todas', etiqueta: 'Todas', conteo: n('todas') },
+  ];
+}
+/** D39: en Kanban la lista de Recepciones va sin filas (limit=0); los conteos siguen al día y las filas las piden las columnas. */
+export const EXTRA_TABLERO_RECEPCION = congelar({ limit: 0 });
+
+/**
+ * Las pestañas de Traslados (En proceso · Completados · Cancelados · Todos) con los conteos de GET /inventory/operations?con_conteos=1.
+ * @param {any} conteos
+ */
+export function pestanasTraslado(conteos) {
+  const c = conteosTraslado(conteos);
+  return [
+    { id: 'en_proceso', etiqueta: 'En proceso', conteo: c.en_proceso },
+    { id: 'completadas', etiqueta: 'Completados', conteo: c.completadas },
+    { id: 'canceladas', etiqueta: 'Cancelados', conteo: c.canceladas },
+    { id: 'todos', etiqueta: 'Todos', conteo: c.todos },
+  ];
+}
+/** Los conteos de TODOS los traslados (sin búsqueda ni filtros) para las tarjetas: solo el total y los conteos, sin filas. */
+export const RUTA_CONTEOS_TRASLADOS = '/inventory/operations?operation_type=TRANSFER&limit=0&con_conteos=1';
+/** La columna del tablero de Traslados (su estado) y el día en que se hizo (la fecha real). */
+export const columnaDeTraslado = (t) => t?.status;
+export const fechaDeTraslado = (t) => t?.fecha;
+
+/** '1 día', '3 días'. */
+export function textoDiasRetraso(n) {
+  return `${n} ${n === 1 ? 'día' : 'días'}`;
+}
+
+/** Los motivos de un ajuste (el formulario, la columna Motivo y las tarjetas). */
+export const MOTIVOS_AJUSTE = congelar(['Conteo físico', 'Merma', 'Sobrante', 'Corrección de error', 'Daño en bodega', 'Vencimiento', 'Otro']);

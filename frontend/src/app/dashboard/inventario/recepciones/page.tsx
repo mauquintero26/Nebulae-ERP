@@ -16,7 +16,7 @@ import type { ItemMenuFila } from '@/components/ui';
 import {
   BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
 } from '@/components/tabla';
-import type { AccionTabla, PestanaTabla } from '@/components/tabla';
+import type { AccionTabla } from '@/components/tabla';
 import { INV_NAV } from '../inv-nav';
 import { AvisoReintentar, CONTENEDOR, FOCOS, useCatalogo } from '../piezas-inventario';
 import {
@@ -27,32 +27,27 @@ import type { FilaColumnasRecepcion } from '../../compras/columnas-recepcion';
 
 import { apiFetch } from '@/lib/api';
 import { accionModo, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta } from '@/lib/tabla';
-import { PERIODO_KPI, NOTA_RECEPCIONES, formatoDecimal, tarjetasRecepciones, totalRecepciones } from '@/lib/kpis';
+import { PERIODO_KPI, NOTA_RECEPCIONES, formatoDecimal, lecturaDeCarga, tarjetasRecepciones, totalRecepciones } from '@/lib/kpis';
 import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
 import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
-  COLUMNAS_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, consultaColumnaRecepcion, opcionesEstadosRecepcion, tarjetaRecepcion,
-  textoVacioRecepciones,
+  COLUMNAS_RECEPCION, EXTRA_TABLERO_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, consultaColumnaRecepcion, opcionesEstadosRecepcion,
+  pestanasRecepcion, tarjetaRecepcion, textoDiasRetraso, textoVacioRecepciones, vistaDeTarjetaRecepcion,
 } from '@/lib/estados-compras';
 
 /** Una línea de la recepción (productos de _gr_dict: JSON; los nombres son los de la recepción de Compras). */
 type LineaRecepcion = { product_name?: string | null; sku_id?: number | null; qty_esperada?: number | null; qty?: number | null; qty_recibida?: number | null };
 /** Una fila de GET /compras/recepciones (el _gr_dict de T12). dias_retraso es del servidor. */
 type FilaRecepcion = FilaColumnasRecepcion & { warehouse_id?: number | null; notas?: string | null };
-/** `conteos` de GET /compras/recepciones con con_conteos=1 (T12): cada vista, con la búsqueda (R5). */
-type ConteosRecepcion = Partial<Record<'por_confirmar' | 'confirmadas' | 'canceladas' | 'todas', number>>;
-
 /** El id de la pantalla: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26). */
 const ID_RECEPCIONES = 'inventario.recepciones';
 /** Como la pantalla de hoy (Recientes): se ven todas; las pestañas separan lo que falta confirmar. */
 const INICIAL_RECEPCIONES = { vista: 'todas' };
-/** D39: en Kanban la lista va sin filas (limit=0); los conteos siguen al día y las filas las piden las columnas. */
-const EXTRA_TABLERO = { limit: 0 };
 /** El motivo de un tablero solo para ver (R11, KANBAN-logistica punto 5). */
 const TEXTO_SOLO_VER = 'Este tablero es para ver: las recepciones se confirman contando la mercancía, en Compras.';
 
 /** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
-const AccionesFila = React.createContext<{ abrir: (r: FilaRecepcion) => void; abrirEnCompras: (r: FilaRecepcion) => void } | null>(null);
+const AccionesFila = React.createContext<{ abrir: (r: FilaRecepcion) => void; abrirEnCompras: (r: FilaRecepcion) => void; abrirPec: (r: FilaRecepcion) => void } | null>(null);
 
 /**
  * Acciones (R11): el enlace «Abrir en Compras» (donde se cuenta y se confirma) y el menú ⋯ (MenuFila: clic y portal) con «Ver
@@ -64,6 +59,7 @@ function CeldaAcciones({ r }: { r: FilaRecepcion }) {
   const items: ItemMenuFila[] = [
     { etiqueta: 'Ver detalle', icono: Eye, onClick: () => acciones?.abrir(r) },
     { etiqueta: 'Abrir en Compras', icono: ClipboardList, onClick: () => acciones?.abrirEnCompras(r) },
+    { etiqueta: 'Abrir el pedido de compra', icono: Package, onClick: () => acciones?.abrirPec(r), oculto: !r.pec_id },
   ];
   return (
     <span className="flex items-center justify-end gap-0.5">
@@ -84,19 +80,6 @@ const COLUMNAS_TABLA_RECEPCIONES = columnasRecepcion<FilaRecepcion>((r) => <Celd
 /** {campo de orden: título}, para el chip «Orden: Fecha ↓», solo de las columnas que se ordenan. */
 const TITULOS_ORDEN_RECEPCIONES = titulosDeOrdenRecepcion(COLUMNAS_TABLA_RECEPCIONES);
 
-/**
- * Las pestañas (RP41, D6, sin emojis): las vistas de GET /compras/recepciones, con los conteos del servidor (con la búsqueda; null
- * mientras cargan: la barra gris, nunca 0). Por confirmar va en ámbar si hay alguna.
- */
-function pestanasDeRecepciones(conteos: ConteosRecepcion | null): PestanaTabla[] {
-  return [
-    { id: 'por_confirmar', etiqueta: 'Por confirmar', conteo: conteos?.por_confirmar ?? null, alerta: (conteos?.por_confirmar ?? 0) > 0 },
-    { id: 'confirmadas', etiqueta: 'Confirmadas', conteo: conteos?.confirmadas ?? null },
-    { id: 'canceladas', etiqueta: 'Canceladas', conteo: conteos?.canceladas ?? null },
-    { id: 'todas', etiqueta: 'Todas', conteo: conteos?.todas ?? null },
-  ];
-}
-
 /** Las unidades de una línea: lo recibido y lo esperado; sin dato, 0 como en el Drawer de hoy. */
 const unidades = (n: number | null | undefined) => formatoDecimal(n ?? 0);
 
@@ -115,7 +98,7 @@ export default function InventarioRecepcionesPage() {
   // GET /compras/recepciones con vista, estados, q, orden, limit y offset del estado, más los conteos de las pestañas en la MISMA
   // llamada. esperar: !listo (D40): el esqueleto, nunca «vacío». En Kanban, sin filas. Sin orden, el del servidor (la más reciente).
   const listado = useListado<FilaRecepcion>({
-    ruta: '/compras/recepciones', estado, conConteos: true, esperar: !listo, despachar, extra: enKanban ? EXTRA_TABLERO : null,
+    ruta: '/compras/recepciones', estado, conConteos: true, esperar: !listo, despachar, extra: enKanban ? EXTRA_TABLERO_RECEPCION : null,
   });
   // m5 de T8: mientras la última respuesta sea la de Kanban (sin filas) y la tabla ya pida su página, la tabla está cargando y el total
   // en 'cargando': nunca «No hay recepciones…» con el total de la otra consulta.
@@ -123,7 +106,7 @@ export default function InventarioRecepcionesPage() {
   const llegadaAhora = llegadaDeListado(llegada, listado.crudo, enKanban);
   if (llegadaAhora !== llegada) setLlegada(llegadaAhora);
   const sinPagina = !enKanban && llegadaAhora.sinFilas && !listado.error;
-  const conteos = listado.conteos as ConteosRecepcion | null;
+  const conteos = listado.conteos;
   const estadoConteos = useEstadoKpi(listado.cargandoInicial || listado.recargando, listado.error);
 
   // El tablero solo para ver, en modo servidor (R11, C4, D39): una consulta por columna (consultaColumnaRecepcion: los estados de la
@@ -153,11 +136,12 @@ export default function InventarioRecepcionesPage() {
       .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
     return () => control.abort();
   }, [vueltaStats]);
-  const cargandoStats = stats?.vuelta !== vueltaStats;
+  // I3 (r1): una recarga conserva el último valor (actualizando); solo la primera carga va en cargando.
+  const { datos: datosStats, cargando: cargandoStats } = lecturaDeCarga(stats, vueltaStats);
   const errorStats = cargandoStats ? null : (stats?.error ?? null);
   const estadoKpis = useEstadoKpi(cargandoStats, errorStats);
-  const tarjetas = tarjetasRecepciones(stats?.datos ?? null);
-  const totalRec = totalRecepciones(stats?.datos ?? null);
+  const tarjetas = tarjetasRecepciones(datosStats);
+  const totalRec = totalRecepciones(datosStats);
   // Las bodegas (GET /inventory/warehouses): la tarjeta «Bodegas». Si falla, se dice con «Reintentar» (nunca un 0).
   const { catalogo: bodegas, recargar: recargarBodegas } = useCatalogo('/inventory/warehouses');
   const errorBodegas = bodegas.filas === null ? bodegas.error : null;
@@ -175,7 +159,9 @@ export default function InventarioRecepcionesPage() {
 
   const abrir = useCallback((r: FilaRecepcion) => setSelectedItem(r), []);
   const abrirEnCompras = useCallback((r: FilaRecepcion) => router.push(`/dashboard/compras/recepciones/${r.id}`), [router]);
-  const accionesFila = useMemo(() => ({ abrir, abrirEnCompras }), [abrir, abrirEnCompras]);
+  // m18 (regresión): el enlace al PEC de origen que tenía la pantalla (compras/pedidos?id= lo atiende).
+  const abrirPec = useCallback((r: FilaRecepcion) => router.push(`/dashboard/compras/pedidos?id=${r.pec_id}`), [router]);
+  const accionesFila = useMemo(() => ({ abrir, abrirEnCompras, abrirPec }), [abrir, abrirEnCompras, abrirPec]);
 
   // ── bloque 2: la tabla (TABLA-inventario punto 9; R5, R26, D40, D41) ──
   const prefs = usePreferenciasTabla(ID_RECEPCIONES, COLUMNAS_TABLA_RECEPCIONES);
@@ -184,7 +170,7 @@ export default function InventarioRecepcionesPage() {
   const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
   // Pasar a Kanban sale de la pantalla completa (el conmutador sigue a la vista y el tablero no queda tapado).
   useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
-  const pestanas = pestanasDeRecepciones(conteos);
+  const pestanas = pestanasRecepcion(conteos);
   // m2 de T8: el conmutador Lista / Kanban poda los estados con las opciones del modo nuevo (las columnas del tablero, o las de la
   // pestaña en Lista), con la regla de accionPestana (accionModo); lo demás de la barra va directo.
   const alCambiarBarra = useCallback((accion: AccionTabla) => {
@@ -216,7 +202,8 @@ export default function InventarioRecepcionesPage() {
   // rec_por_confirmar abre «Por confirmar», rec_confirmadas «Confirmadas» y rec_total «Todas» (D41: como un clic en la pestaña; tocar la
   // activa vuelve a Todas). En Kanban abren esa pestaña en Lista (accionVistaEnLista). Bodegas es informativa.
   const vistaActiva = enKanban ? null : estado.vista;
-  const elegirVista = (vista: string) => {
+  const elegirVista = (kpi: 'rec_por_confirmar' | 'rec_confirmadas' | 'rec_total') => {
+    const vista = vistaDeTarjetaRecepcion(kpi) ?? 'todas';
     const siguiente = vistaActiva === vista ? 'todas' : vista;
     despachar(accionVistaEnLista(estado, siguiente, opcionesEstadosRecepcion));
   };
@@ -250,12 +237,12 @@ export default function InventarioRecepcionesPage() {
             pestaña; Bodegas es informativa. */}
         <FranjaKpis estado={estadoKpis} titulo="Entradas" nota={NOTA_RECEPCIONES}>
           <TarjetaKpi kpi="rec_por_confirmar" valor={tarjetas?.por_confirmar.valor ?? null}
-            activo={vistaActiva === 'por_confirmar'} onClick={() => elegirVista('por_confirmar')} />
+            activo={vistaActiva === vistaDeTarjetaRecepcion('rec_por_confirmar')} onClick={() => elegirVista('rec_por_confirmar')} />
           <TarjetaKpi kpi="rec_confirmadas" valor={tarjetas?.confirmadas.valor ?? null}
-            activo={vistaActiva === 'confirmadas'} onClick={() => elegirVista('confirmadas')} />
+            activo={vistaActiva === vistaDeTarjetaRecepcion('rec_confirmadas')} onClick={() => elegirVista('rec_confirmadas')} />
           <TarjetaKpi kpi="bodegas" valor={bodegas.filas ? bodegas.filas.length : null} estado={estadoBodegas} />
           <TarjetaKpi kpi="rec_total" valor={totalRec}
-            activo={vistaActiva === 'todas'} onClick={() => elegirVista('todas')} />
+            activo={vistaActiva === vistaDeTarjetaRecepcion('rec_total')} onClick={() => elegirVista('rec_total')} />
         </FranjaKpis>
         {errorStats != null && (
           <AvisoReintentar error={errorStats} fallo="No se pudieron cargar los indicadores de recepciones" onReintentar={() => setVueltaStats((n) => n + 1)} />
@@ -360,7 +347,7 @@ export default function InventarioRecepcionesPage() {
               ['Proveedor', proveedorDeRecepcion(selectedItem)],
               ['Bodega', selectedItem.warehouse_name || '—'],
               ['Fecha', textoFechaRecepcion(selectedItem)],
-              ...(retrasoDeRecepcion(selectedItem) > 0 ? [['Retraso', `${retrasoDeRecepcion(selectedItem)} días`]] : []),
+              ...(retrasoDeRecepcion(selectedItem) > 0 ? [['Retraso', textoDiasRetraso(retrasoDeRecepcion(selectedItem))]] : []),
             ] as [string, string][]).map(([titulo, valor]) => (
               <div key={titulo} className="bg-slate-50 rounded-xl p-3">
                 <p className="text-xs text-slate-500 mb-1">{titulo}</p>
@@ -368,6 +355,12 @@ export default function InventarioRecepcionesPage() {
               </div>
             ))}
           </div>
+          {selectedItem.pec_id ? (
+            <Link href={`/dashboard/compras/pedidos?id=${selectedItem.pec_id}`}
+              className={`inline-flex items-center gap-1.5 text-sm font-bold text-purple-700 hover:underline ${FOCOS.indigo}`}>
+              <Package size={14} aria-hidden="true" /> Ver el pedido de compra {pecDeRecepcion(selectedItem)}
+            </Link>
+          ) : null}
           {lineas.length > 0 && (
             <div>
               <p className="text-xs font-black text-slate-500 uppercase mb-2">Productos Recibidos</p>

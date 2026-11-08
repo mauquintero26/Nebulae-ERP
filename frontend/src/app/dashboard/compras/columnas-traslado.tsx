@@ -63,8 +63,9 @@ export function CeldaBodega({ id }: { id: number | null | undefined }) {
  * Las 7 columnas de una tabla de traslados, con la celda de Acciones de la pantalla (Compras lleva «Ver detalle»; Inventario,
  * lo suyo). La pantalla la llama una sola vez, como constante del módulo (estable, D40).
  * @param celdaAcciones lo que pinta la celda de Acciones de una fila
+ * @param anchoAcciones T19 r1 (m9, R26): el ancho de Acciones (80 por defecto; Inventario solo lleva el ⋯ y pasa 56: 696 px contra 704)
  */
-export function columnasTraslado<T extends FilaColumnasTraslado>(celdaAcciones: (t: T) => ReactNode): ColumnaTabla<T>[] {
+export function columnasTraslado<T extends FilaColumnasTraslado>(celdaAcciones: (t: T) => ReactNode, anchoAcciones = 80): ColumnaTabla<T>[] {
   return [
     { id: 'numero', titulo: 'Traslado #', ancho: 104, clave: true, fija: 'izquierda', ordenable: 'id', titleCelda: (t) => numeroTraslado(t),
       celda: (t) => <span className="block truncate text-xs font-black text-orange-700">{numeroTraslado(t)}</span> },
@@ -76,6 +77,6 @@ export function columnasTraslado<T extends FilaColumnasTraslado>(celdaAcciones: 
       celda: (t) => <span className="text-xs text-slate-600">{textoFechaTraslado(t)}</span> },
     { id: 'estado', titulo: 'Estado', ancho: 96, clave: true, ordenable: 'status', titleCelda: (t) => infoEstadoTraslado(t.status).label,
       celda: (t) => <CeldaEstadoTraslado t={t} /> },
-    { id: 'acciones', titulo: 'Acciones', ancho: 80, clave: true, fija: 'derecha', celda: celdaAcciones },
+    { id: 'acciones', titulo: 'Acciones', ancho: anchoAcciones, clave: true, fija: 'derecha', celda: celdaAcciones },
   ];
 }

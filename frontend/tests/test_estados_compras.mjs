@@ -1734,7 +1734,8 @@ console.log('--- TEST 40 (B4 T16B): Traslados (compras/traslados/page.tsx) y col
   for (const nombre of ['columnasTraslado', 'titulosDeOrdenTraslado', 'CeldaEstadoTraslado', 'CeldaBodega', 'BodegasTraslado']) {
     assert.match(col, new RegExp(`export (?:function|const) ${nombre}\\b`), `exporta ${nombre}`);
   }
-  assert.match(col, /export function columnasTraslado<T extends FilaColumnasTraslado>\(celdaAcciones: \(t: T\) => ReactNode\)/, 'la celda de Acciones es de cada pantalla');
+  assert.match(col, /export function columnasTraslado<T extends FilaColumnasTraslado>\(celdaAcciones: \(t: T\) => ReactNode, anchoAcciones = 80\)/, 'la celda de Acciones es de cada pantalla (T19 r1: y su ancho, 80 por defecto)');
+  assert.match(col, /id: 'acciones', titulo: 'Acciones', ancho: anchoAcciones,/, 'el ancho de Acciones es el parametro');
   for (const [id, titulo] of [['numero', 'Traslado #'], ['origen', 'Origen'], ['destino', 'Destino'], ['productos', 'Productos'], ['fecha', 'Fecha'], ['estado', 'Estado'], ['acciones', 'Acciones']]) {
     assert.match(col, new RegExp(`\\{ id: '${id}', titulo: '${titulo}'`), `columna ${titulo}`);
   }
@@ -2723,7 +2724,7 @@ console.log('--- TEST 46 (B4 T19; TABLA-inventario punto 11, KANBAN-resto, KPI-i
   assert.equal(ec.consultaColumnaAjuste(e({ vista: 'entradas' }), ec.COLUMNAS_AJUSTE[0], { limit: 0, offset: 0 }),
     'orden=-fecha&limit=0&offset=0&operation_type=ADJUSTMENT&direccion=entrada', 'la pestaña no viaja; la plegada pide limit=0');
   // Los totales de las tres cifras (pestañas y tarjetas): limit=0 y la dirección, sin búsqueda (RP96).
-  assert.deepEqual(ec.CONSULTAS_TOTALES_AJUSTE, {
+  assert.deepEqual(ec.consultasTotalesAjuste(''), {
     todos: 'limit=0&offset=0&operation_type=ADJUSTMENT',
     entradas: 'limit=0&offset=0&operation_type=ADJUSTMENT&direccion=entrada',
     salidas: 'limit=0&offset=0&operation_type=ADJUSTMENT&direccion=salida',
@@ -2758,7 +2759,9 @@ console.log('--- TEST 47 (B4 T19): Recepciones, Traslados y Ajustes de Inventari
     sinDefectos(nombre, f);
     trae(f, 'useEstadoTabla(', `${nombre}: el estado único`);
     trae(f, 'esperar: !listo', `${nombre}: espera las preferencias (esqueleto, nunca vacío)`);
-    trae(f, 'AvisoReintentar', `${nombre}: la fuente de tarjetas que falla dice el error con Reintentar`);
+    assert.ok(/<AvisoReintentar error=\{error\w+\}/.test(f), `${nombre}: la fuente de tarjetas que falla dice el error con Reintentar (el uso, no el import)`);
+    assert.ok(!/\? null : \(?\w+\?\.(datos|kpis|conteos|totales)/.test(sinComentarios(f)), `${nombre}: una recarga no borra el último valor (I3)`);
+    trae(f, 'lecturaDeCarga(', `${nombre}: lee el último valor con lecturaDeCarga`);
     trae(f, 'etiqueta={`Acciones de ${', `${nombre}: las acciones llevan el número en su nombre`);
     assert.ok(/soloLectura=\{TEXTO_SOLO_VER\}/.test(f), `${nombre}: tablero solo para ver`);
     for (const q of ['regla=', 'onCambio=', 'onAccion=']) noTrae(etiquetaJsx(f, '<TableroKanban'), q, `${nombre}: el tablero no mueve (${q})`);
@@ -2769,19 +2772,38 @@ console.log('--- TEST 47 (B4 T19): Recepciones, Traslados y Ajustes de Inventari
   trae(rec, 'columnasRecepcion<FilaRecepcion>(', 'Recepciones arma las columnas compartidas');
   noTrae(sinComentarios(rec), 'CONFIRMADA', 'Recepciones ya no pregunta por un estado que no existe');
   trae(rec, '/compras/stats?periodo=${PERIODO_KPI}', 'Recepciones: los mismos números que Compras');
-  for (const k of ['rec_por_confirmar', 'rec_confirmadas', 'rec_total']) trae(tarjetaKpi(rec, k), 'onClick=', `${k} abre su pestaña`);
+  // I4: cada tarjeta pulsable abre SU pestaña: el onClick y el anillo piden el mismo id de tarjeta (el mapa tarjeta -> pestaña es de lib y está probado).
+  for (const k of ['rec_por_confirmar', 'rec_confirmadas', 'rec_total']) {
+    trae(tarjetaKpi(rec, k), `onClick={() => elegirVista('${k}')}`, `${k} abre su pestaña`);
+    trae(tarjetaKpi(rec, k), `activo={vistaActiva === vistaDeTarjetaRecepcion('${k}')}`, `${k} se marca con SU pestaña`);
+  }
+  trae(rec, 'pestanasRecepcion(conteos)', 'Recepciones importa las pestañas compartidas');
+  noTrae(sinComentarios(rec), 'pestanasDeRecepciones', 'sin la copia local de las pestañas');
   noTrae(tarjetaKpi(rec, 'bodegas'), 'onClick=', 'Bodegas es informativa');
   trae(rec, 'despachar(accionVistaEnLista(estado, siguiente, opcionesEstadosRecepcion))', 'las tarjetas despachan al estado único');
   // Traslados: columnas y bodegas compartidas, la fecha real, tarjetas de los conteos del servidor.
   trae(tra, 'columnasTraslado<FilaTraslado>(', 'Traslados arma las columnas compartidas');
+  for (const k of ['tras_en_proceso', 'tras_completados', 'tras_total']) {
+    trae(tarjetaKpi(tra, k), `onClick={() => elegirVista('${k}')}`, `${k} abre su pestaña`);
+    trae(tarjetaKpi(tra, k), `activo={vistaActiva === vistaDeTarjetaTraslado('${k}')}`, `${k} se marca con SU pestaña`);
+  }
+  trae(tra, 'pestanasTraslado(listado.conteos)', 'Traslados importa las pestañas compartidas');
+  noTrae(sinComentarios(tra), 'pestanasDeTraslados', 'sin la copia local de las pestañas');
+  noTrae(sinComentarios(tra), 'const RUTA_CONTEOS =', 'sin la copia local de la ruta de conteos');
+  trae(tra, 'gestionar', 'Traslados conserva el enlace a Compras en la fila');
   trae(tra, '<BodegasTraslado.Provider value={bodegas}>', 'Traslados envuelve la tabla en el Provider');
   trae(tra, 'fechaLarga(selected.fecha)', 'Traslados: la fecha real en el Drawer');
   noTrae(sinComentarios(tra), 'created_at', 'Traslados ya no lee created_at (no existe en la operación)');
-  trae(tra, 'tarjetasTraslados(conteosTraslado(totales?.conteos ?? null)', 'Traslados: tarjetas de los conteos');
+  trae(tra, 'tarjetasTraslados(conteosTraslado(conteosTotales)', 'Traslados: tarjetas de los conteos');
   noTrae(tarjetaKpi(tra, 'bodegas'), 'onClick=', 'Bodegas es informativa');
   // Ajustes: la dirección del servidor, los totales de las pestañas = tarjetas, sin alert(), fecha real.
   trae(aju, 'consultaAjustes(estado)', 'Ajustes: la pestaña viaja como direccion');
-  trae(aju, 'CONSULTAS_TOTALES_AJUSTE.entradas', 'Ajustes: totales con limit=0');
+  trae(aju, 'consultasTotalesAjuste(qTotales)', 'Ajustes: totales con limit=0 y la búsqueda');
+  for (const k of ['aju_total', 'aju_entradas', 'aju_salidas']) {
+    trae(tarjetaKpi(aju, k), `onClick={() => elegirVista('${k}')}`, `${k} abre su pestaña`);
+    trae(tarjetaKpi(aju, k), `activo={vistaActiva === vistaDeTarjetaAjuste('${k}')}`, `${k} se marca con SU pestaña`);
+  }
+  trae(aju, 'MOTIVOS_AJUSTE.map(', 'Ajustes: los motivos con tildes salen de lib');
   trae(aju, 'pestanasAjustes(totales)', 'Ajustes: las pestañas salen de los mismos totales');
   trae(aju, 'tarjetasAjustes(totales)', 'Ajustes: las tarjetas salen de los mismos totales');
   noTrae(tarjetaKpi(aju, 'aju_neto'), 'onClick=', 'la diferencia neta es informativa');
@@ -2819,7 +2841,18 @@ console.log('--- TEST 48 (B4 T19; KANBAN-logistica 4, KPI-inventario 8; R15, RP2
   trae(e, "saldo_cop: 0,\n          notas: pedido.notas ? `${pedido.notas} | Saldo 40% cobrado y verificado` : 'Saldo 40% verificado',", 'Registrar cobro de saldo: el PATCH de siempre');
   // Pestañas = columnas, los mismos conteos que la tarjeta Despachados.
   trae(e, 'pestanasEntrega(conteos)', 'las pestañas salen de los conteos');
-  trae(e, 'tarjetasEntregas(cargandoStats ? null : (stats?.kpis ?? null), conteos)', 'la tarjeta Despachados lee los MISMOS conteos');
+  trae(e, 'tarjetasEntregas(kpisStats, conteos)', 'la tarjeta Despachados lee los MISMOS conteos que las pestañas');
+  trae(e, 'pestanasEntrega(conteos)', 'las pestañas leen los mismos conteos');
+  trae(e, 'consultaConteoEntrega(columna, { q: qConteos })', 'los conteos siguen la búsqueda (m1)');
+  // m3, m10, m17: UNA regla para despachar (la fila, el Drawer y su selector de bodega); m6: cobrar el saldo solo ADMIN y ASESOR; m14: el rol tras montar.
+  trae(e, 'puedeDespacharPedido(p, acciones.rol)', 'la fila usa la regla única');
+  assert.equal(e.split('puedeDespacharPedido(selected, rol)').length - 1, 2, 'el botón y el selector del Drawer usan la regla única');
+  trae(e, 'tieneSaldo && puedeCobrarSaldo(rol)', 'Marcar Saldo Cobrado solo a quien el servidor se lo permite');
+  trae(e, "useSyncExternalStore(suscribirRol, () => getUsuarioActual().role, () => '')", 'el rol se lee después de montar');
+  noTrae(sinComentarios(e), 'useState(() => getUsuarioActual()', 'el rol no se lee en el inicializador');
+  trae(e, 'if (recargarTrasError(err)) { setVueltaConteos((n) => n + 1); setVueltaStats((n) => n + 1); }', 'si el PATCH del tablero falla: solo pestañas y tarjetas (D39)');
+  trae(e, 'textoEntregaEstimada(p)', 'la entrega estimada es una fecha de negocio');
+  noTrae(sinComentarios(e), 'slice(0, 10)', 'sin el ISO crudo');
   trae(e, 'extra: extraDeLaLista', 'la tabla pide estados + saldo de la pestaña');
   const t = (id) => { const i = e.indexOf(`<TarjetaKpi kpi="${id}"`); assert.ok(i >= 0, id); return e.slice(i, e.indexOf('/>', i) + 2); };
   noTrae(t('pven_en_curso'), 'onClick=', 'pven_en_curso es informativa');
@@ -2849,6 +2882,46 @@ console.log('--- TEST 48 (B4 T19; KANBAN-logistica 4, KPI-inventario 8; R15, RP2
     assert.deepEqual(llamadas, [['/ventas/pedidos?q=oso&estados=LISTO_ENTREGA,DISPONIBLE,PENDIENTE_SALDO,LISTO_PARA_ENTREGA&orden=atencion&limit=25&offset=0&saldo=pendiente', { signal: 'S' }]]);
     assert.deepEqual([r.filas, r.total], [[{ id: 3 }], 1]);
   }
+}
+
+console.log('--- TEST 49 (B4 T19 r1): la tarjeta que abre cada pestaña, las pestañas compartidas, el movimiento de menor id y los textos ---');
+{
+  // I4: el mapa tarjeta -> pestaña de cada pantalla es de lib y se prueba entero (un mutante que cambie un destino muere aquí).
+  assert.deepEqual(['rec_por_confirmar', 'rec_confirmadas', 'rec_total', 'bodegas'].map(ec.vistaDeTarjetaRecepcion), ['por_confirmar', 'confirmadas', 'todas', null]);
+  assert.deepEqual(['tras_en_proceso', 'tras_completados', 'tras_total', 'bodegas'].map(ec.vistaDeTarjetaTraslado), ['en_proceso', 'completadas', 'todos', null]);
+  assert.deepEqual(['aju_total', 'aju_entradas', 'aju_salidas', 'aju_neto'].map(ec.vistaDeTarjetaAjuste), ['todos', 'entradas', 'salidas', null]);
+  // Cada vista que abre una tarjeta existe como pestaña de su pantalla, y la pestaña y la tarjeta leen el mismo conteo.
+  const claves = (pestanas) => pestanas.map((p) => p.id);
+  for (const k of ['rec_por_confirmar', 'rec_confirmadas', 'rec_total']) assert.ok(claves(ec.pestanasRecepcion(null)).includes(ec.vistaDeTarjetaRecepcion(k)), k);
+  for (const k of ['tras_en_proceso', 'tras_completados', 'tras_total']) assert.ok(claves(ec.pestanasTraslado(null)).includes(ec.vistaDeTarjetaTraslado(k)), k);
+  for (const k of ['aju_total', 'aju_entradas', 'aju_salidas']) assert.ok(claves(ec.pestanasAjustes(null)).includes(ec.vistaDeTarjetaAjuste(k)), k);
+  // m16: las pestañas viven en lib (Inventario las importa): los ids, las etiquetas y el ámbar de Por confirmar (RP41, D6).
+  assert.deepEqual(ec.pestanasRecepcion({ por_confirmar: 3, confirmadas: 20, canceladas: 1, todas: 24 }).map((p) => [p.id, p.etiqueta, p.conteo, p.alerta ?? false]), [
+    ['por_confirmar', 'Por confirmar', 3, true], ['confirmadas', 'Confirmadas', 20, false], ['canceladas', 'Canceladas', 1, false], ['todas', 'Todas', 24, false]]);
+  assert.deepEqual(ec.pestanasRecepcion(null).map((p) => p.conteo), [null, null, null, null]);
+  assert.deepEqual(ec.pestanasTraslado({ todos: 9, DRAFT: 1, READY: 2, DONE: 5, CANCELLED: 1 }).map((p) => [p.id, p.etiqueta, p.conteo]), [
+    ['en_proceso', 'En proceso', 3], ['completadas', 'Completados', 5], ['canceladas', 'Cancelados', 1], ['todos', 'Todos', 9]]);
+  assert.equal(ec.columnaDeTraslado({ status: 'DONE' }), 'DONE');
+  assert.equal(ec.fechaDeTraslado({ fecha: '2026-11-03T15:00:00Z' }), '2026-11-03T15:00:00Z');
+  assert.equal(ec.RUTA_CONTEOS_TRASLADOS, '/inventory/operations?operation_type=TRANSFER&limit=0&con_conteos=1');
+  assert.deepEqual(ec.EXTRA_TABLERO_RECEPCION, { limit: 0 });
+  // m20: la dirección sale del movimiento de MENOR id (_primera_direccion del backend), no del primero del arreglo.
+  const ajuste = { movements: [{ id: 9, sku_id: 2, quantity: 1, direction: 'IN' }, { id: 4, sku_id: 7, quantity: 6, direction: 'ADJUST_OUT' }] };
+  assert.equal(ec.direccionDeAjuste(ajuste), 'salida');
+  assert.equal(ec.cantidadDeAjuste(ajuste), 6);
+  assert.equal(ec.skuDeAjuste(ajuste), 'SKU #7');
+  assert.equal(ec.direccionDeAjuste({ movements: [{ direction: 'OUT' }, { direction: 'IN' }] }), 'salida', 'sin ids: el primero');
+  // Los totales de las pestañas de Ajustes siguen la búsqueda (m1, m13, m22).
+  assert.deepEqual(ec.consultasTotalesAjuste(' merma '), {
+    todos: 'q=merma&limit=0&offset=0&operation_type=ADJUSTMENT',
+    entradas: 'q=merma&limit=0&offset=0&operation_type=ADJUSTMENT&direccion=entrada',
+    salidas: 'q=merma&limit=0&offset=0&operation_type=ADJUSTMENT&direccion=salida',
+  });
+  assert.equal(ec.consultasTotalesAjuste('').todos, 'limit=0&offset=0&operation_type=ADJUSTMENT');
+  // m15: textos en singular y con tildes.
+  assert.equal(ec.textoDiasRetraso(1), '1 día');
+  assert.equal(ec.textoDiasRetraso(3), '3 días');
+  assert.deepEqual(ec.MOTIVOS_AJUSTE, ['Conteo físico', 'Merma', 'Sobrante', 'Corrección de error', 'Daño en bodega', 'Vencimiento', 'Otro']);
 }
 
 console.log('\nOK: test_estados_compras.mjs');
