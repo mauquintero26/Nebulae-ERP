@@ -1,15 +1,22 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import column, exists, or_, select, table, text
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
 from app.db.database import get_db
-from app.models.catalog import Brand, Category, Product, ProductSKU, Attribute, AttributeValue
+from app.models.catalog import Brand, Category, Product, ProductSKU, ProductWebListing, Attribute, AttributeValue
 from app.models.inventory import Warehouse, InventoryLevel
 from app.schemas import catalog as schemas
 from app.api.dependencies import require_roles, ALL_ERP_ROLES
 from app.core.iva import normalizar_tarifa_iva
+# B4 T13 (TABLA-inventario 2): la bandera de lectura de TD-03 (ecommerce._lectura_canonica), los parámetros de lista de
+# core/listados.py y el validador de la búsqueda de T6B (erp_ventas.py), que se importa, no se copia. Ni ecommerce ni
+# erp_ventas importan este módulo, así que no hay ciclo.
+from app.api.v1.ecommerce import _lectura_canonica
+from app.api.v1.erp_ventas import _busqueda_de_lista
+from app.core.listados import MAX_OFFSET, leer_orden, paginar, respuesta as respuesta_de_lista
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -214,18 +221,104 @@ def create_product(product: schemas.ProductCreate, db: Session = Depends(get_db)
         logger.warning("No se pudo crear el producto (%s)", type(e).__name__)
         raise HTTPException(status_code=400, detail=MENSAJE_NO_SE_PUDO_CREAR)
 
+# --- B4 T13 (TABLA-inventario 2; R5, R21; RP8, RP9, RP47, RP48, RP49, RP91, D34): la lista de productos ---
+LIMITE_PRODUCTOS_POR_DEFECTO = 50     # con offset y sin limit (la tabla estándar pide 25 o 50)
+MAX_LIMITE_PRODUCTOS = 200
+ORDEN_PRODUCTOS_POR_DEFECTO = "nombre"
+MENSAJE_LIMITE_PRODUCTOS = "El límite de la página debe estar entre 0 y 200."
+MENSAJE_PRODUCTO = "El producto «{}» no existe."
+# El catálogo legacy de TD-03: una tabla de SQL crudo (sin modelo) que ecommerce.py crea al primer uso.
+_ECOMMERCE_PRODUCTS = table("ecommerce_products", column("sku"), column("publicado_web"))
+
+
+def _ordenes_productos() -> dict:
+    """Las órdenes permitidas de leer_orden (D34): nombre, creado (el id: products no tiene created_at) y tipo."""
+    return {"nombre": Product.name, "creado": Product.id, "tipo": Product.type}
+
+
+def _productos_publicados(db: Session, ids) -> set:
+    """Los ids de `ids` con algún SKU publicado, según la bandera de TD-03 (RP91, ecommerce._lectura_canonica()):
+    canónico -> algún ProductWebListing.publicado_web verdadero; legacy -> algún ecommerce_products.publicado_web de sus SKU
+    (por el código del SKU; si la tabla todavía no existe, ninguno). Una consulta para toda la lista (legacy: dos)."""
+    if not ids:
+        return set()
+    if _lectura_canonica():
+        consulta = (select(ProductSKU.product_id).join(ProductWebListing, ProductWebListing.sku_id == ProductSKU.id)
+                    .where(ProductSKU.product_id.in_(ids), ProductWebListing.publicado_web.is_(True)))
+    else:
+        if db.execute(text("SELECT to_regclass('ecommerce_products')")).scalar() is None:
+            return set()
+        legacy = _ECOMMERCE_PRODUCTS
+        consulta = (select(ProductSKU.product_id).join(legacy, legacy.c.sku == ProductSKU.sku)
+                    .where(ProductSKU.product_id.in_(ids), legacy.c.publicado_web.is_(True)))
+    return set(db.execute(consulta.distinct()).scalars())
+
+
+def _producto_dict(p, publicados: set) -> dict:
+    """ProductResponse (como hoy) + precio_venta (el menor sale_price de sus SKU), costo (el menor cost_price no nulo) y
+    publicado (RP91). Los SKU son los que ya carga ProductResponse: no hay una consulta más por producto."""
+    fila = schemas.ProductResponse.model_validate(p).model_dump()
+    precios = [s.sale_price for s in p.skus if s.sale_price is not None]
+    costos = [s.cost_price for s in p.skus if s.cost_price is not None]
+    fila.update(precio_venta=min(precios) if precios else None, costo=min(costos) if costos else None,
+                publicado=p.id in publicados)
+    return fila
+
+
 @router.get("/products")
-def list_products(brand_id: Optional[int] = None, category_id: Optional[int] = None, necesita_revision: Optional[bool] = None, db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
+def list_products(brand_id: Optional[int] = None, category_id: Optional[int] = None, necesita_revision: Optional[bool] = None,
+                  q: Optional[str] = None, search: Optional[str] = None, id: Optional[int] = None,
+                  sin_tarifa_iva: Optional[bool] = None, orden: Optional[str] = None, limit: Optional[int] = None,
+                  offset: Optional[int] = Query(None, ge=0, le=MAX_OFFSET),
+                  db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
+    """Los productos del catálogo. brand_id, category_id y necesita_revision filtran como hoy. B4 T13 (TABLA-inventario 2):
+    - q (search es su alias, RP8): el nombre, la descripción o el código de alguno de sus SKU.
+    - id (RP49): solo ese producto (si no existe, 422). sin_tarifa_iva (RP48): true = sin tarifa de IVA (tarifa_iva IS
+      NULL, la regla de sinTarifaIva de lib/iva.js); false = con tarifa.
+    - orden: [-]nombre | creado | tipo (leer_orden; desempate id desc). Sin orden ni offset no se ordena, como hoy.
+    - Pagina SOLO con offset (RP47): entonces responde {status, total, data}, con limit de 0 a 200 validado a mano (422,
+      R21; sin limit, 50) y orden por nombre si no viene otro. Sin offset devuelve TODO, como hoy, aunque llegue limit
+      (los selectores y las pantallas que mandan limit=300).
+    Cada producto suma precio_venta, costo y publicado (_producto_dict, RP91)."""
+    like = _busqueda_de_lista(q, search)
+    paginada = offset is not None
+    limite = None
+    if paginada:
+        limite = LIMITE_PRODUCTOS_POR_DEFECTO if limit is None else limit
+        if not 0 <= limite <= MAX_LIMITE_PRODUCTOS:
+            raise HTTPException(status_code=422, detail=MENSAJE_LIMITE_PRODUCTOS)
+    orden_sql = None
+    if orden is not None or paginada:
+        orden_sql = leer_orden(orden, _ordenes_productos(), ORDEN_PRODUCTOS_POR_DEFECTO, id_lista=Product.id)
+    if id is not None and db.get(Product, id) is None:
+        raise HTTPException(status_code=422, detail=MENSAJE_PRODUCTO.format(id))
+
     query = db.query(Product)
+    if id is not None:
+        query = query.filter(Product.id == id)
     if brand_id:
         query = query.filter(Product.brand_id == brand_id)
     if category_id:
         query = query.filter(Product.category_id == category_id)
     if necesita_revision is not None:
         query = query.filter(Product.necesita_revision == necesita_revision)
+    if sin_tarifa_iva is not None:
+        query = query.filter(Product.tarifa_iva.is_(None) if sin_tarifa_iva else Product.tarifa_iva.isnot(None))
+    if like:
+        query = query.filter(or_(Product.name.ilike(like), Product.description.ilike(like),
+                                 exists().where(ProductSKU.product_id == Product.id, ProductSKU.sku.ilike(like))))
+    if orden_sql:
+        query = query.order_by(*orden_sql)
 
-    products = query.all()
-    return {"status": "success", "data": [schemas.ProductResponse.model_validate(p).model_dump() for p in products]}
+    if paginada:
+        total, products = paginar(query, limite, offset)
+    else:
+        products = query.all()
+    publicados = _productos_publicados(db, [p.id for p in products])
+    data = [_producto_dict(p, publicados) for p in products]
+    if paginada:
+        return respuesta_de_lista(total, data)
+    return {"status": "success", "data": data}
 
 @router.patch("/products/{product_id}")
 def update_product(product_id: int, body: schemas.ProductUpdate, db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):

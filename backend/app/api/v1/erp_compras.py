@@ -38,6 +38,7 @@ from app.api.dependencies import (
 )
 from app.models.users import User
 import datetime
+import re
 import uuid
 import logging
 from app.api.v1.erp_logistica import (
@@ -744,7 +745,7 @@ def list_pec(
     búsqueda y supplier_id, sin vista, estado(s) ni semáforo."""
     vista = _opcion(vista, tuple(VISTAS_PEC), "La vista «{:.40}» no existe en Pedidos de compra.")
     semaforo = _opcion(semaforo, SEMAFOROS_PEC + (_SIN_FILTRO,),
-                       "El filtro del semáforo «{:.40}» no existe: usa vencidos.")
+                       "El filtro del semáforo «{:.40}» no existe: usa vencidos o atrasados.")
     semaforo = None if semaforo == _SIN_FILTRO else semaforo
     lista_estado = _estados_de_compras("PEC", estado)
     lista_estados = _estados_de_compras("PEC", estados)
@@ -981,33 +982,111 @@ def _sin_control_en(valor, mensaje: str) -> None:
         raise HTTPException(422, mensaje)
 
 
-def _es_fecha(texto: str) -> bool:
+FECHA_ALERTA_INVALIDA = "La fecha de alerta no es válida: usa el formato AAAA-MM-DD."
+FECHA_COMPRA_INVALIDA = "La fecha de compra no es válida: usa el formato AAAA-MM-DD."
+MAX_SUPPLIER_REF = 100   # PurchaseOrderFull.supplier_ref es String(100)
+REF_NO_TEXTO = "La referencia del proveedor debe ser un texto."
+REF_CONTROL = "La referencia del proveedor no puede llevar caracteres de control."
+REF_LARGO = f"La referencia del proveedor no puede pasar de {MAX_SUPPLIER_REF} caracteres."
+ETAPAS_NO_LISTA = "Las etapas del seguimiento deben ser una lista de etapas."
+ETAPA_NO_OBJETO = "Cada etapa del seguimiento debe ser un objeto con sus campos."
+ETAPA_DIAS_INVALIDOS = "Los días de alerta de una etapa del seguimiento deben ser un número entre 0 y 36500."
+ETAPA_FECHA_INVALIDA = "La fecha de una etapa del seguimiento no es válida: usa el formato AAAA-MM-DD, sin zona horaria."
+_MAX_DIAS_ALERTA = 36500
+_PREFIJO_FECHA = re.compile(r"^\d{4}-\d{2}-\d{2}")
+
+
+def _fecha_leida(valor, mensaje: str):
+    """La fecha del PATCH ya leída: None si viene null o en blanco (borra el valor, como texto_busqueda); si no, el
+    datetime naive (en UTC si traía zona) que se guarda, el MISMO que se validó (r2, m3). Solo AAAA-MM-DD con hora
+    opcional (las fechas ISO por semana, «2026-W49-5», no valen). Cualquier otra cosa, 422 con `mensaje`."""
+    if valor is None:
+        return None
+    if not isinstance(valor, str):
+        raise HTTPException(422, mensaje)
+    texto = valor.strip()
+    if not texto:
+        return None
+    if not _PREFIJO_FECHA.match(texto):
+        raise HTTPException(422, mensaje)
     try:
-        datetime.datetime.fromisoformat(texto.strip().replace("Z", "+00:00"))
+        leida = datetime.datetime.fromisoformat(texto.replace("Z", "+00:00"))
     except ValueError:
-        return False
-    return True
+        raise HTTPException(422, mensaje)
+    if leida.tzinfo is not None:
+        leida = leida.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    return leida
+
+
+_CAMPOS_FECHA_PEC = (("fecha_entrega_estimada", FECHA_INVALIDA), ("fecha_alerta", FECHA_ALERTA_INVALIDA),
+                     ("fecha_compra", FECHA_COMPRA_INVALIDA))
+
+
+def _validar_autor(valor) -> None:
+    """422 si el nombre de quien hace el cambio (va a ActivityLog.user_name, String(150)) no es un texto, trae un
+    carácter de control o pasa de 150. None vale."""
+    if valor is None:
+        return
+    if not isinstance(valor, str):
+        raise HTTPException(422, AUTOR_NO_TEXTO)
+    _sin_control_en(valor, AUTOR_CONTROL)
+    if len(valor) > MAX_AUTOR:
+        raise HTTPException(422, AUTOR_LARGO)
+
+
+def _validar_etapas(etapas) -> None:
+    """Lo que lee _annotate_stage_alerts / _stage_alert de cada etapa: que sea un dict; alert_overdue_days y
+    alert_confirm_days, un número (no bool) entre 0 y 36500 o ausentes; eta y timestamp, si traen valor, un texto sin
+    zona horaria (o uno que no se lee, que _parse_dt ignora)."""
+    if etapas is None:
+        return
+    if not isinstance(etapas, list):
+        raise HTTPException(422, ETAPAS_NO_LISTA)
+    for etapa in etapas:
+        if not isinstance(etapa, dict):
+            raise HTTPException(422, ETAPA_NO_OBJETO)
+        for campo in ("alert_overdue_days", "alert_confirm_days"):
+            dias = etapa.get(campo)
+            if dias is None:
+                continue
+            if (isinstance(dias, bool) or not isinstance(dias, (int, float))
+                    or not (0 <= dias <= _MAX_DIAS_ALERTA)):
+                raise HTTPException(422, ETAPA_DIAS_INVALIDOS)
+        for campo in ("eta", "timestamp"):
+            valor = etapa.get(campo)
+            if not valor:
+                continue
+            if not isinstance(valor, str):
+                raise HTTPException(422, ETAPA_FECHA_INVALIDA)
+            leida = _parse_dt(valor)
+            if leida is not None and leida.tzinfo is not None:
+                raise HTTPException(422, ETAPA_FECHA_INVALIDA)
 
 
 def _validar_campos_libres_pec(body: dict) -> None:
-    """r1 (m7): los campos libres del PATCH que podían dar 500 DESPUÉS del commit del estado (y dejar un CANCELADO sin
-    Actividad ni _desvincular_pec_cancelado): updated_by (va a ActivityLog.user_name, String(150)), notas y
-    fecha_entrega_estimada. Un null en cualquiera sigue valiendo, como hoy."""
-    autor = body.get("updated_by")
-    if autor is not None:
-        if not isinstance(autor, str):
-            raise HTTPException(422, AUTOR_NO_TEXTO)
-        _sin_control_en(autor, AUTOR_CONTROL)
-        if len(autor) > MAX_AUTOR:
-            raise HTTPException(422, AUTOR_LARGO)
+    """r1 (m7) y r2 (m3, m6): los campos libres del PATCH que podían dar 500 (o dejar el PEC roto) DESPUÉS de guardar,
+    todos antes de cualquier escritura: updated_by (va a ActivityLog.user_name), notas, las fechas
+    fecha_entrega_estimada, fecha_alerta y fecha_compra (en blanco = null; ver _fecha_leida), supplier_ref (texto,
+    sin control, hasta 100) y tracking_stages (una lista de etapas que _annotate_stage_alerts pueda leer). Un null en
+    cualquiera sigue valiendo, como hoy."""
+    _validar_autor(body.get("updated_by"))
     notas = body.get("notas")
     if notas is not None:
         if not isinstance(notas, str):
             raise HTTPException(422, NOTAS_NO_TEXTO)
         _sin_control_en(notas, NOTAS_CONTROL)
-    fecha = body.get("fecha_entrega_estimada")
-    if fecha is not None and not (isinstance(fecha, str) and _es_fecha(fecha)):
-        raise HTTPException(422, FECHA_INVALIDA)
+    for campo, mensaje in _CAMPOS_FECHA_PEC:
+        if campo in body:
+            _fecha_leida(body[campo], mensaje)
+    ref = body.get("supplier_ref")
+    if ref is not None:
+        if not isinstance(ref, str):
+            raise HTTPException(422, REF_NO_TEXTO)
+        _sin_control_en(ref, REF_CONTROL)
+        if len(ref) > MAX_SUPPLIER_REF:
+            raise HTTPException(422, REF_LARGO)
+    if "tracking_stages" in body:
+        _validar_etapas(body["tracking_stages"])
 
 
 def _validar_transicion_pec(db: Session, p: PurchaseOrderFull, body: dict) -> Optional[str]:
@@ -1095,6 +1174,8 @@ def update_pec(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE
     motivo = _validar_transicion_pec(db, p, body)
     if isinstance(body.get("estado"), str):
         body = {**body, "estado": body["estado"].strip()}
+    # r2 (m3): se guarda la fecha ya leída (la que se validó), no el texto crudo que PostgreSQL leería con su parser.
+    body = {**body, **{c: _fecha_leida(body[c], m) for c, m in _CAMPOS_FECHA_PEC if c in body}}
     old_estado = p.estado
     fecha_vieja = p.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
     # Si el payload trae productos, aplicar logica normalizada
@@ -1179,7 +1260,8 @@ def delete_pec(pec_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROL
     if not p:
         raise HTTPException(404, "Pedido de compra no encontrado")
     if p.estado != "CANCELADO":
-        raise HTTPException(422, f"Solo se pueden eliminar PEC cancelados. {p.numero} esta en estado {p.estado} -- cancelalo primero.")
+        raise HTTPException(422, f"Solo se pueden eliminar pedidos de compra cancelados. {p.numero} está en "
+                                 f"{etiqueta_estado('PEC', p.estado)}: cancélalo primero.")
     n_recepciones = db.query(GoodsReceipt).filter(GoodsReceipt.pec_id == pec_id).count()
     if n_recepciones > 0:
         raise HTTPException(422, f"{p.numero} tiene {n_recepciones} recepción(es) asociada(s) y no se puede eliminar.")
@@ -1199,7 +1281,9 @@ def update_tracking(pec_id: int, body: ActualizarTrackingBody,
 
     Frontend sends 'stage' and 'status' fields; ActualizarTrackingBody maps them via aliases.
 
+    r2 (m5): user_name (va a ActivityLog.user_name) se valida antes de escribir, como el updated_by del PATCH.
     """
+    _validar_autor(body.user_name)
     p = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec_id).first()
     if not p:
         raise HTTPException(404, "Pedido de compra no encontrado")
@@ -1269,7 +1353,7 @@ def update_tracking(pec_id: int, body: ActualizarTrackingBody,
     db.commit()
     db.refresh(p)
     _log(db, "PEC", p.id, p.numero, "TRACKING_UPDATED",
-         f"Etapa {stage_name} -> {new_status}" + (f" | Guia: {tracking_num}" if tracking_num else ""),
+         f"Etapa {stage_name} -> {etiqueta_estado('PEC', new_status)}" + (f" | Guía: {tracking_num}" if tracking_num else ""),
          user_name=body.user_name)
     return {"status": "success", "data": _pec_dict(p)}
 

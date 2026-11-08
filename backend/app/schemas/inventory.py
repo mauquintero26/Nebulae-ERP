@@ -65,4 +65,8 @@ class InventoryOperationCreate(InventoryOperationBase):
 class InventoryOperationResponse(InventoryOperationBase):
     id: int
     movements: List[InventoryMovementResponse] = []
+    # B4 T13 (TABLA-compras 5): inventory_operations no tiene created_at; la fecha de una operación es la de su primer
+    # movimiento, MIN(InventoryMovement.created_at), en ISO con Z (fechas.iso_z). None si no tiene movimientos. La llenan
+    # GET y POST /inventory/operations.
+    fecha: Optional[str] = None
     model_config = {"from_attributes": True}

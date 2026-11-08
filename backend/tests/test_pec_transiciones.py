@@ -403,6 +403,15 @@ AUTOR_LARGO = "El nombre de quien hace el cambio no puede pasar de 150 caractere
 NOTAS_NO_TEXTO = "Las notas deben ser un texto."
 NOTAS_CONTROL = "Las notas no pueden llevar caracteres de control."
 FECHA_INVALIDA = "La fecha de entrega estimada no es válida: usa el formato AAAA-MM-DD."
+FECHA_ALERTA_INVALIDA = "La fecha de alerta no es válida: usa el formato AAAA-MM-DD."
+FECHA_COMPRA_INVALIDA = "La fecha de compra no es válida: usa el formato AAAA-MM-DD."
+REF_NO_TEXTO = "La referencia del proveedor debe ser un texto."
+REF_CONTROL = "La referencia del proveedor no puede llevar caracteres de control."
+REF_LARGO = "La referencia del proveedor no puede pasar de 100 caracteres."
+ETAPAS_NO_LISTA = "Las etapas del seguimiento deben ser una lista de etapas."
+ETAPA_NO_OBJETO = "Cada etapa del seguimiento debe ser un objeto con sus campos."
+ETAPA_DIAS_INVALIDOS = "Los días de alerta de una etapa del seguimiento deben ser un número entre 0 y 36500."
+ETAPA_FECHA_INVALIDA = "La fecha de una etapa del seguimiento no es válida: usa el formato AAAA-MM-DD, sin zona horaria."
 
 
 def test_updated_by_notas_y_fecha_se_validan_antes_de_guardar(app_client, db, admin_token, contador_sql):
@@ -421,7 +430,24 @@ def test_updated_by_notas_y_fecha_se_validan_antes_de_guardar(app_client, db, ad
         ({"notas": {"a": 1}}, NOTAS_NO_TEXTO),
         ({"fecha_entrega_estimada": "no-es-una-fecha"}, FECHA_INVALIDA),
         ({"fecha_entrega_estimada": "2026-02-30"}, FECHA_INVALIDA),
-        ({"fecha_entrega_estimada": ""}, FECHA_INVALIDA),
+        ({"fecha_entrega_estimada": "2026-W49-5"}, FECHA_INVALIDA),
+        ({"fecha_entrega_estimada": "2026W495"}, FECHA_INVALIDA),
+        ({"fecha_entrega_estimada": "2026-W49"}, FECHA_INVALIDA),
+        ({"fecha_alerta": "no-es-una-fecha"}, FECHA_ALERTA_INVALIDA),
+        ({"fecha_alerta": "2026-W49-5"}, FECHA_ALERTA_INVALIDA),
+        ({"fecha_alerta": 5}, FECHA_ALERTA_INVALIDA),
+        ({"fecha_compra": "2026-13-01"}, FECHA_COMPRA_INVALIDA),
+        ({"fecha_compra": "2026W495"}, FECHA_COMPRA_INVALIDA),
+        ({"supplier_ref": 7}, REF_NO_TEXTO),
+        ({"supplier_ref": "R" * 101}, REF_LARGO),
+        ({"supplier_ref": "ref\x00"}, REF_CONTROL),
+        ({"tracking_stages": "x"}, ETAPAS_NO_LISTA),
+        ({"tracking_stages": ["x"]}, ETAPA_NO_OBJETO),
+        ({"tracking_stages": [{"status": "PENDIENTE", "alert_overdue_days": "a"}]}, ETAPA_DIAS_INVALIDOS),
+        ({"tracking_stages": [{"status": "PENDIENTE", "alert_confirm_days": True}]}, ETAPA_DIAS_INVALIDOS),
+        ({"tracking_stages": [{"status": "PENDIENTE", "alert_overdue_days": 10 ** 12}]}, ETAPA_DIAS_INVALIDOS),
+        ({"tracking_stages": [{"status": "PENDIENTE", "eta": "2026-12-05T10:00:00+05:00"}]}, ETAPA_FECHA_INVALIDA),
+        ({"tracking_stages": [{"status": "COMPLETADO", "timestamp": 5}]}, ETAPA_FECHA_INVALIDA),
         ({"fecha_entrega_estimada": 20261204}, FECHA_INVALIDA),
     ]
     with contador_sql.ventana() as v:
@@ -443,3 +469,68 @@ def test_updated_by_notas_y_fecha_se_validan_antes_de_guardar(app_client, db, ad
                   updated_by="A" * 150)
     assert resp.status_code == 200, resp.text
     assert [l.user_name for l in _logs(db, pec)] == ["A" * 150]
+
+
+def test_fechas_en_blanco_borran_y_se_guarda_la_fecha_leida(app_client, db, admin_token):
+    """r2 (m2, m4, m3): el formulario «Editar información» manda '' si el PEC no tiene fecha; '' o solo espacios = null
+    (200, la fecha queda en NULL). Con valor, se guarda la fecha leída (naive, en UTC si trae zona), no el texto."""
+    f = _Fabrica(db)
+    pec = f.pec("EMITIDO", fecha_alerta=datetime(2026, 12, 2))
+    for en_blanco in ("", "   "):
+        f2 = f.pec("EMITIDO")
+        resp = _patch(app_client, admin_token, f2, fecha_entrega_estimada=en_blanco, fecha_alerta=en_blanco,
+                      fecha_compra=en_blanco, notas="solo las notas")
+        assert resp.status_code == 200, (en_blanco, resp.text)
+        db.expire_all()
+        fila = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == f2.id).one()
+        assert (fila.fecha_entrega_estimada, fila.fecha_alerta, fila.fecha_compra, fila.notas) == (
+            None, None, None, "solo las notas"), en_blanco
+    resp = _patch(app_client, admin_token, pec, fecha_entrega_estimada="2026-12-06T23:30:00-05:00",
+                  fecha_alerta=" 2026-12-03 ", fecha_compra="2026-12-01T08:00:00Z")
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    fila = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec.id).one()
+    assert fila.fecha_entrega_estimada == datetime(2026, 12, 7, 4, 30)
+    assert (fila.fecha_alerta, fila.fecha_compra) == (datetime(2026, 12, 3), datetime(2026, 12, 1, 8, 0))
+    ok = [{"status": "PENDIENTE", "alert_overdue_days": 3, "alert_confirm_days": 1.5, "eta": "2026-12-05T10:00:00"}]
+    resp = _patch(app_client, admin_token, pec, supplier_ref="R" * 100, tracking_stages=ok)
+    assert resp.status_code == 200, resp.text
+
+
+def test_tracking_valida_el_autor_antes_de_escribir(app_client, db, admin_token, contador_sql):
+    """r2 (m5): user_name llega a ActivityLog.user_name (String(150)) DESPUÉS del commit; con 151 caracteres o un NUL
+    daba 500 con la etapa ya guardada. Ahora 422, 0 commits y la etapa sin cambios."""
+    f = _Fabrica(db)
+    etapas = [{"stage": "PROVEEDOR_CASILLERO", "status": "PENDIENTE", "timestamp": None}]
+    pec = f.pec("EMITIDO", tracking_stages=etapas)
+    with contador_sql.ventana() as v:
+        for autor, texto in (("A" * 151, AUTOR_LARGO), ("Ana\x00", AUTOR_CONTROL)):
+            resp = app_client.patch(f"{RUTA}/{pec.id}/tracking", headers=_auth(admin_token),
+                                    json={"stage": "PROVEEDOR_CASILLERO", "status": "EN_PROCESO", "user_name": autor})
+            assert (resp.status_code, resp.json()["detail"]) == (422, texto), autor
+    assert v.commits == 0
+    db.expire_all()
+    fila = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec.id).one()
+    assert [e["status"] for e in fila.tracking_stages] == ["PENDIENTE"] and fila.estado == "EMITIDO"
+    assert _logs(db, pec, "TRACKING_UPDATED") == []
+
+
+def test_eliminar_pedido_no_cancelado_dice_el_estado_con_su_etiqueta(app_client, db, admin_token):
+    """r2 (m10): el 422 de DELETE lleva «está», la etiqueta legible del estado y «cancélalo»."""
+    f = _Fabrica(db)
+    pec = f.pec("EN_TRANSITO")
+    resp = app_client.delete(f"{RUTA}/{pec.id}", headers=_auth(admin_token))
+    assert (resp.status_code, resp.json()["detail"]) == (422, (
+        f"Solo se pueden eliminar pedidos de compra cancelados. {pec.numero} está en En tránsito: cancélalo primero."))
+
+
+def test_tracking_deja_en_la_actividad_la_guia_con_tilde_y_etiquetas(app_client, db, admin_token):
+    """r2 (m10): «Etapa … -> {etiqueta} | Guía: …»."""
+    f = _Fabrica(db)
+    pec = f.pec("EMITIDO", tracking_stages=[{"stage": "PROVEEDOR_CASILLERO", "status": "PENDIENTE", "timestamp": None}])
+    resp = app_client.patch(f"{RUTA}/{pec.id}/tracking", headers=_auth(admin_token),
+                            json={"stage": "PROVEEDOR_CASILLERO", "status": "EN_PROCESO", "tracking_number": "ZX9",
+                                  "user_name": "Ana"})
+    assert resp.status_code == 200, resp.text
+    assert [l.description for l in _logs(db, pec, "TRACKING_UPDATED")] == [
+        "Etapa PROVEEDOR_CASILLERO -> En proceso | Guía: ZX9"]
