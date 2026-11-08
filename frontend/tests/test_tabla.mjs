@@ -2423,23 +2423,29 @@ console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5,
   assert.ok(fuente.includes("{ id: 'todos', etiqueta: 'Todos', conteo: conteos?.todos ?? null }"));
   assert.ok(fuente.includes("{ id: 'bajo_minimo', etiqueta: ESTADOS_STOCK.bajo_minimo.label, conteo: conteos?.bajo_minimo ?? null, alerta: (conteos?.bajo_minimo ?? 0) > 0 }"));
   assert.ok(fuente.includes("{ id: 'fisico', etiqueta: 'Existencias físicas', conteo: conteos?.con_fisico ?? null }"));
-  // Las columnas del diseño (anchos de TABLA-inventario punto 4), la fila es un par SKU y bodega, y el estado con la
-  // etiqueta y el tono de ESTADOS_STOCK (RP53: sin etiquetas locales). R26: lo que no cabe a 1024 va oculto por defecto.
+  // Las columnas del diseño (TABLA-inventario punto 4), la fila es un par SKU y bodega, y el estado con la etiqueta y el
+  // tono de ESTADOS_STOCK (RP53: sin etiquetas locales). R26: lo que no cabe a 1024 va oculto por defecto. Los anchos del
+  // diseño salvo Estado 124 (las etiquetas de RP53), Acciones 80 (en 64, el mínimo, el título se recorta) y Producto 140
+  // (la flexible baja primero): 40 + 112 + 140 + 120 + 88 + 124 + 80 = 704, medido en el banco.
   const columnas = fuente.match(/const COLUMNAS_HUB: ColumnaTabla<FilaStock>\[\] = \[[\s\S]*?\n\];/);
   assert.ok(columnas, 'COLUMNAS_HUB');
   const COLUMNAS = [
     ["id: 'sku', titulo: 'SKU', ancho: 112, clave: true, fija: 'izquierda', ordenable: true"],
-    ["id: 'producto', titulo: 'Producto', ancho: 180, clave: true, flexible: true, ordenable: true"],
+    ["id: 'producto', titulo: 'Producto', ancho: 140, clave: true, flexible: true, ordenable: true"],
     ["id: 'categoria', titulo: 'Categoría', ancho: 120, ocultaPorDefecto: true, ordenable: true"],
     ["id: 'bodega', titulo: 'Bodega', ancho: 120,"],
     ["id: 'fisico', titulo: 'Físico', ancho: 80, ocultaPorDefecto: true, alinear: 'derecha', ordenable: true"],
     ["id: 'reservado', titulo: 'Reservado', ancho: 88, ocultaPorDefecto: true, alinear: 'derecha', ordenable: true"],
     ["id: 'disponible', titulo: 'Disponible', ancho: 88, clave: true, alinear: 'derecha', ordenable: true"],
-    ["id: 'estado', titulo: 'Estado', ancho: 104, clave: true,"],
+    ["id: 'estado', titulo: 'Estado', ancho: 124, clave: true,"],
     ["id: 'precio', titulo: 'Precio', ancho: 104, ocultaPorDefecto: true, alinear: 'derecha', ordenable: true"],
     ["id: 'valorizacion', titulo: 'Valorización', ancho: 120, ocultaPorDefecto: true, alinear: 'derecha', ordenable: true"],
-    ["id: 'acciones', titulo: 'Acciones', ancho: 56, clave: true, fija: 'derecha',"],
+    ["id: 'acciones', titulo: 'Acciones', ancho: 80, clave: true, fija: 'derecha',"],
   ];
+  // Las visibles por defecto suman lo que deja la caja a 1024 px con el menú abierto (R26).
+  const visibles = [...columnas[0].matchAll(/\{ id: '(\w+)', titulo: '[^']+', ancho: (\d+),([^\n]*)/g)]
+    .filter((m) => !/ocultaPorDefecto: true/.test(m[3])).map((m) => Number(m[2]));
+  assert.equal(40 + visibles.reduce((a, b) => a + b, 0), 704, 'la casilla y las visibles por defecto: 704 px');
   assert.deepEqual([...columnas[0].matchAll(/\{ id: '(\w+)'/g)].map((m) => m[1]), COLUMNAS.map(([c]) => c.match(/id: '(\w+)'/)[1]), 'el orden');
   for (const [c] of COLUMNAS) assert.ok(columnas[0].includes(c), c);
   assert.ok(!/ordenable/.test(columnas[0].match(/\{ id: 'bodega'[^\n]*\n[^\n]*/)[0]) && !/ordenable/.test(columnas[0].match(/\{ id: 'estado'[^\n]*\n[^\n]*/)[0]),

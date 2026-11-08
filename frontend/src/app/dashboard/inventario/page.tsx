@@ -164,22 +164,27 @@ function CeldaAcciones({ f }: { f: FilaStock }) {
 }
 
 /**
- * La tabla (TABLA-inventario punto 4; R26, D41): las columnas y los anchos del diseño. SKU y Acciones fijas; Producto es
- * la flexible. Bodega y Estado no se ordenan (stock-tabla no los acepta); las demás, por su id, que es el campo de orden
- * del servidor. R26: a 1024 px con el menú abierto la caja deja 704 px (medido en T7 a T16); caben la casilla, SKU,
- * Producto, Bodega, Disponible, Estado y Acciones (40 + 112 + 180 + 120 + 88 + 104 + 56 = 700). Categoría, Físico,
- * Reservado, Precio y Valorización van ocultas por defecto (se muestran con «Ajustar tabla»). Sin columna de tránsito
- * (RP50). Una constante: estable (D40).
+ * La tabla (TABLA-inventario punto 4; R26, D41): las columnas del diseño. SKU y Acciones fijas; Producto es la flexible.
+ * Bodega y Estado no se ordenan (stock-tabla no los acepta); las demás, por su id, que es el campo de orden del servidor.
+ * Los anchos son los del diseño salvo tres, medidos en el banco (salidas-17/medidas.txt):
+ *  - Estado 124 (no 104): las etiquetas de RP53 son más largas que las del diseño («Bien abastecido» mide 98 px a 11 px;
+ *    «Óptimo» cabía en 104);
+ *  - Acciones 80 (no 56): el mínimo de TablaEstandar es 64 (ANCHO_MIN) y en 64 el título se recorta («Acci…»); 80 es el
+ *    de las Acciones del Hub de Compras (columnas-pec.tsx);
+ *  - Producto 140 (no 180): R26 baja primero la flexible (su piso es 120) y crece con el espacio que sobra.
+ * R26: a 1024 px con el menú abierto la caja deja 704 px (T7 a T16): 40 (la casilla) + 112 + 140 + 120 + 88 + 124 + 80 =
+ * 704. Categoría, Físico, Reservado, Precio y Valorización van ocultas por defecto (se muestran con «Ajustar tabla»). Sin
+ * columna de tránsito (RP50). Una constante: estable (D40).
  */
 const COLUMNAS_HUB: ColumnaTabla<FilaStock>[] = [
-  { id: 'sku', titulo: 'SKU', ancho: 112, clave: true, fija: 'izquierda', ordenable: true,
-    celda: (f) => <span className="block truncate font-mono text-xs font-black text-indigo-700">{f.sku}</span> },
-  { id: 'producto', titulo: 'Producto', ancho: 180, clave: true, flexible: true, ordenable: true,
+  { id: 'sku', titulo: 'SKU', ancho: 112, clave: true, fija: 'izquierda', ordenable: true, titleCelda: (f) => f.sku,
+    celda: (f) => <span className="block truncate font-mono text-[11px] font-bold text-indigo-700">{f.sku}</span> },
+  { id: 'producto', titulo: 'Producto', ancho: 140, clave: true, flexible: true, ordenable: true,
     titleCelda: (f) => [f.producto || 'Sin nombre', f.rastrear_inventario === false ? TEXTO_SIN_SEGUIMIENTO : null].filter(Boolean).join(' · '),
     celda: (f) => <CeldaProducto f={f} /> },
-  { id: 'categoria', titulo: 'Categoría', ancho: 120, ocultaPorDefecto: true, ordenable: true,
+  { id: 'categoria', titulo: 'Categoría', ancho: 120, ocultaPorDefecto: true, ordenable: true, titleCelda: (f) => f.categoria || 'Sin categoría',
     celda: (f) => <span className="block truncate text-xs text-slate-600">{f.categoria || '—'}</span> },
-  { id: 'bodega', titulo: 'Bodega', ancho: 120,
+  { id: 'bodega', titulo: 'Bodega', ancho: 120, titleCelda: (f) => f.bodega || 'Sin bodega',
     celda: (f) => <span className="block truncate text-xs font-semibold text-slate-700">{f.bodega || '—'}</span> },
   { id: 'fisico', titulo: 'Físico', ancho: 80, ocultaPorDefecto: true, alinear: 'derecha', ordenable: true,
     celda: (f) => <span className="text-xs font-bold text-slate-900">{cantidad(f.fisico)}</span> },
@@ -187,7 +192,7 @@ const COLUMNAS_HUB: ColumnaTabla<FilaStock>[] = [
     celda: (f) => <span className="text-xs font-bold text-amber-800">{cantidad(f.reservado)}</span> },
   { id: 'disponible', titulo: 'Disponible', ancho: 88, clave: true, alinear: 'derecha', ordenable: true,
     celda: (f) => <span className="text-xs font-black text-emerald-800">{cantidad(f.disponible)}</span> },
-  { id: 'estado', titulo: 'Estado', ancho: 104, clave: true,
+  { id: 'estado', titulo: 'Estado', ancho: 124, clave: true,
     titleCelda: (f) => infoStock(f.estado_stock)?.label ?? 'Sin estado', celda: (f) => <CeldaEstadoStock f={f} /> },
   { id: 'precio', titulo: 'Precio', ancho: 104, ocultaPorDefecto: true, alinear: 'derecha', ordenable: true,
     titleCelda: (f) => (numeroFinito(f.precio) === null ? 'Sin precio de venta' : pesos(f.precio)),
@@ -195,7 +200,7 @@ const COLUMNAS_HUB: ColumnaTabla<FilaStock>[] = [
   { id: 'valorizacion', titulo: 'Valorización', ancho: 120, ocultaPorDefecto: true, alinear: 'derecha', ordenable: true,
     titleCelda: (f) => (numeroFinito(f.valorizacion) === null ? 'Sin costo registrado' : `${pesos(f.valorizacion)} al costo`),
     celda: (f) => <span className="text-xs font-black text-slate-900">{pesos(f.valorizacion)}</span> },
-  { id: 'acciones', titulo: 'Acciones', ancho: 56, clave: true, fija: 'derecha', celda: (f) => <CeldaAcciones f={f} /> },
+  { id: 'acciones', titulo: 'Acciones', ancho: 80, clave: true, fija: 'derecha', celda: (f) => <CeldaAcciones f={f} /> },
 ];
 
 /**
@@ -631,13 +636,13 @@ export default function InventarioHub() {
                     )}
                     {/* R11: la vista Lista / Almacenes del Hub (no es el conmutador del tablero: el Hub no lleva tablero). */}
                     <div role="group" aria-label="Vista" className="inline-flex items-center gap-0.5 rounded-xl border border-slate-200 bg-white p-0.5">
-                      {([[false, 'Lista', List, 'Vista lista'], [true, 'Almacenes', LayoutGrid, 'Vista por bodegas']] as const).map(([valor, texto, Icono, titulo]) => (
-                        <button key={texto} type="button" aria-pressed={verAlmacenes === valor} onClick={() => elegirVista(valor)} title={titulo}
+                      {([[false, 'Lista', List], [true, 'Almacenes', LayoutGrid]] as const).map(([valor, texto, Icono]) => (
+                        <button key={texto} type="button" aria-pressed={verAlmacenes === valor} onClick={() => elegirVista(valor)}
+                          aria-label={`Vista ${texto}`} title={`Vista ${texto}`}
                           className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-bold transition-colors ${FOCO_VISIBLE} ${
                             verAlmacenes === valor ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>
                           <Icono size={14} aria-hidden="true" />
                           <span className="hidden md:inline">{texto}</span>
-                          <span className="sr-only md:hidden">{titulo}</span>
                         </button>
                       ))}
                     </div>
