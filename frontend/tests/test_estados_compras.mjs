@@ -2495,4 +2495,117 @@ console.log('--- TEST 44 (B4 T18, TABLA-inventario punto 8; KANBAN-resto; RP54):
   trae(k, 'CONTENEDOR', 'el contenedor con pb-24');
 }
 
+console.log('--- TEST 45 (B4 T18, TABLA-inventario punto 7; KANBAN-resto; RP47 a RP49): Productos cablea las piezas, el servidor, los filtros de B3-T8, el enlace y el tablero por categoría ---');
+{
+  const p = leerFuente('app/dashboard/inventario/productos/page.tsx');
+  // (El envoltorio apiFetch de la ficha, de B1 a B3, lee el cuerpo de un error con .json().catch(() => ({})): no traga el error.)
+  sinDefectos('Productos', p.replace(/async function apiFetch[\s\S]*?\n}\n/, ''), { sinAny: false });
+  const { normalizarRespuesta } = await import('../src/lib/tabla.js');
+  // RP47: el buscador filtra (q, no search), la página es del estado y /products recibe SIEMPRE limit y offset.
+  trae(p, 'const [estado, despachar, listo] = useEstadoTabla(ID_PRODUCTOS, INICIAL_PRODUCTOS);', 'el estado único');
+  trae(p, "ruta: '/products', estado, esperar: !listo, despachar, activo: !enKanban, extra: extraLista,", 'useListado sobre /products');
+  trae(p, 'const extraLista = useMemo(() => ({ ...extraProductos(filtros), vista: null }), [filtros]);', 'los filtros de la barra al servidor');
+  assert.ok(!/params\.set\('search'|limit=100|setProducts|setTotal/.test(sinComentarios(p)), 'ya no hay búsqueda en el navegador ni limit=100');
+  assert.ok(!/\.filter\(\s*sinTarifaIva\s*\)/.test(sinComentarios(p)), 'RP48: «Sin tarifa de IVA» ya no filtra en el navegador');
+  // B3-T8 (RP48): los dos filtros siguen, como filtros de la barra, y cada cambio vuelve a la página 1 en el mismo evento.
+  trae(p, 'aria-pressed={filtros.revision} onClick={() => cambiarFiltros({ revision: !filtros.revision })}', 'Requiere revisión');
+  trae(p, 'aria-pressed={filtros.sinTarifa} onClick={() => cambiarFiltros({ sinTarifa: !filtros.sinTarifa })}', 'Sin tarifa de IVA');
+  assert.match(p, /Requiere revisión\s*<\/button>/);
+  assert.match(p, /Sin tarifa de IVA\s*<\/button>/);
+  trae(p, 'setFiltros((f) => ({ ...f, ...cambio }));\n    despachar({ tipo: \'pagina\', valor: 1 });', 'cambiarFiltros cambia el filtro y la página a la vez');
+  assert.equal(p.split('setFiltros(').length - 1, 1, 'solo cambiarFiltros escribe los filtros');
+  // Lo de B3-T8 en la ficha se conserva: el selector de IVA, el guardado y la insignia de la tabla.
+  trae(p, 'id="producto-tarifa-iva"', 'B3-T8: el selector de IVA de la ficha');
+  trae(p, '{TARIFAS_IVA.map(t => <option key={t.codigo} value={t.codigo}>{t.etiqueta}</option>)}', 'B3-T8: las tarifas');
+  trae(p, 'tarifa_iva: form.tarifa_iva || null,', 'B3-T8: el guardado de la tarifa');
+  trae(p, "tarifa_iva: normalizarTarifaIva(p.tarifa_iva) ?? '',", 'B3-T8: la ficha lee la tarifa');
+  trae(p, "<Badge tone={sinTarifaIva(p) ? 'warning' : 'neutral'}>{etiquetaTarifaCatalogo(p.tarifa_iva)}</Badge>", 'B3-T8: la insignia de la tarifa en la tabla');
+  trae(p, "{p.necesita_revision && <Badge tone=\"warning\">Requiere revisión</Badge>}", 'B3-T8: la insignia de la revisión en la tabla');
+  trae(p, 'avisarError(err, \'No se pudo guardar el producto\');', 'B3-T8: el 422 de la tarifa se dice');
+  // Guardar vuelve a pedir lo que se ve (la lista y el tablero), no solo la lista.
+  const guardar = bloqueDesde(p, 'async function saveProduct(');
+  trae(guardar, 'recargarTodo();', 'guardar recarga');
+  const recargar = /const recargarTodo = useCallback\(\(\) => \{([\s\S]*?)\n  \}, \[/.exec(p)?.[1] ?? '';
+  for (const llamada of ['recargarListado();', 'recargarTablero();', 'recargarCategorias();', 'recargarMarcas();', 'recargarBodegas();']) trae(recargar, llamada, `recargarTodo ${llamada}`);
+  trae(p, 'const { recargar: recargarListado } = listado;', 'recarga la lista');
+  trae(p, 'const { recargar: recargarTablero } = tablero;', 'recarga el tablero');
+  // Los catálogos con su error (antes, tres .catch(() => {})).
+  trae(p, "useCatalogo('/categories')", 'categorías');
+  trae(p, "useCatalogo('/brands')", 'marcas');
+  trae(p, "useCatalogo('/inventory/warehouses')", 'bodegas');
+  for (const [catalogo, fallo, recargarX] of [['categorias', 'las categorías', 'recargarCategorias'], ['marcas', 'las marcas', 'recargarMarcas'], ['bodegas', 'las bodegas', 'recargarBodegas']]) {
+    trae(p, `<AvisoCatalogo catalogo={${catalogo}} fallo="No se pudieron cargar ${fallo}" onReintentar={${recargarX}} />`, `${catalogo}: el aviso con Reintentar`);
+  }
+  trae(p, 'if (!catalogo.error || catalogo.filas) return null;', 'AvisoCatalogo solo con error y sin datos');
+  trae(p, '<button type="button" onClick={onReintentar} className={`rounded font-bold underline ${FOCOS.purple}`}>Reintentar</button>', 'AvisoCatalogo: «Reintentar» vuelve a pedir');
+  trae(p, '{textoDeError(catalogo.error, fallo)}.{\' \'}', 'AvisoCatalogo dice el detalle del servidor');
+  // La tabla y la barra.
+  const tabla = etiquetaJsx(p, '<TablaEstandar');
+  for (const q of ['modo="servidor"', 'cargando={listado.cargandoInicial}', 'recargando={listado.recargando}', 'error={listado.error}', 'onReintentar={listado.recargar}',
+    'aviso={listado.avisoOrden}', 'filas={listado.filas}', 'total={listado.total}', 'estado={estado}', 'onEstado={despachar}', 'onFila={openEdit}', 'vacio={vacio}',
+    'preferencias={prefs}', 'anchoRef={anchoTablaRef}']) trae(tabla, q, `TablaEstandar ${q}`);
+  trae(p, '{!enKanban && (\n                <TablaEstandar', 'la tabla solo en Lista');
+  const barra = etiquetaJsx(p, '<BarraTabla');
+  for (const q of ['kanbanDisponible', 'pantallaCompleta={enKanban ? undefined : { completa, alternar }}', '{...totalDeLaBarra}', 'onEstado={despachar}']) trae(barra, q, `BarraTabla ${q}`);
+  trae(p, 'const totalDeLaBarra = enKanban ? {} : {', '«N resultados» solo en Lista');
+  trae(p, 'const texto = textoVacioProductos({ q: estado.q, revision: filtros.revision, sinTarifa: filtros.sinTarifa });', 'el vacío');
+  trae(p, '}, [estado.q, filtros.revision, filtros.sinTarifa]);', 'el vacío memoizado con lo que lo deja vacío');
+  trae(p, 'useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);', 'sale de la pantalla completa');
+  assert.equal(p.split('usePreferenciasTabla(').length - 1, 1, 'usePreferenciasTabla una sola vez (D40)');
+  // /products solo ordena por nombre, creado y tipo; Precio, Costo y Publicado son el dato del SKU (precio_venta, costo, publicado).
+  const cols = columnasDe(p, 'COLUMNAS_TABLA_PRODUCTOS');
+  assert.deepEqual(cols.map((c) => [c.id, c.ordenable]), [['producto', "'nombre'"], ['tipo', 'true'], ['categoria', null], ['precio', null], ['costo', null], ['publicado', null], ['activo', null]]);
+  assert.deepEqual(cols.filter((c) => c.oculta).map((c) => c.id), ['categoria'], 'ocultas por defecto (R26, medido a 1024 px)');
+  assert.equal(cols.filter((c) => c.flexible).length, 1);
+  trae(p, 'precioDeProducto(p)', 'Precio: precio_venta del SKU');
+  trae(p, 'costoDeProducto(p)', 'Costo: costo del SKU, 0 es sin costo (RP91)');
+  trae(p, 'p.publicado', 'E-Commerce: publicado');
+  assert.ok(!/p\.sale_price|p\.cost_price|p\.is_published/.test(p.slice(0, p.indexOf('function openEdit'))), 'la tabla no lee sale_price, cost_price ni is_published (/products no los trae)');
+  // RP49: el enlace ?id= (y ?sku=) pide el producto al servidor; la marca se pone cuando la respuesta LLEGÓ.
+  const efecto = /const enlaceAtendido = useRef[^\n]*\n([\s\S]*?)\}, \[idDeLaUrl, skuDeLaUrl, avisar, avisarError\]\);/.exec(p)?.[1] ?? '';
+  assert.match(efecto, /pedirEnlaceProducto\(enlaceAtendido\.current, idDeLaUrl, skuDeLaUrl\)/);
+  assert.match(efecto, /_apiFetch\(pedido\.ruta, \{ signal: control\.signal \}\)/);
+  assert.match(efecto, /llegadaEnlaceProducto\(pedido, normalizarRespuesta\(r\)\.filas\)/);
+  const antes = efecto.slice(0, efecto.indexOf('.then('));
+  assert.ok(!/enlaceAtendido\.current =/.test(antes), 'la marca no se pone antes del fetch');
+  assert.match(efecto, /enlaceAtendido\.current = llegada\.marca;/);
+  assert.match(efecto, /if \(llegada\.abrir\) openEdit\(llegada\.abrir\);\s*else avisar\(llegada\.texto \?\? 'No se encontró el producto\.', \{ tono: 'info' \}\);/);
+  assert.match(efecto, /\.catch\(\(err: unknown\) => \{ if \(!control\.signal\.aborted\) avisarError\(err, 'No se pudo abrir el producto'\); \}\);/);
+  assert.match(efecto, /return \(\) => control\.abort\(\);/);
+  trae(p, "if (searchParams.get('id') || searchParams.get('sku')) router.replace(pathname);", 'cerrar la ficha limpia el enlace (id y sku)');
+  // El tablero solo para ver, por categoría (12 como máximo, con su aviso), en modo servidor.
+  const hook = bloqueDesde(p, 'useTableroKanban<Producto>(');
+  for (const q of ['pantalla: ID_PRODUCTOS', "modo: 'servidor'", 'columnas: columnasTablero', 'activo: listo && enKanban && categorias.filas !== null', 'porColumna: estado.tamano',
+    'dependencias: [...dependenciasTablero(estado), filtros.revision, filtros.sinTarifa]']) trae(hook, q, `tablero ${q}`);
+  trae(p, 'const { columnas: columnasTablero, aviso: avisoCategorias } = useMemo(() => columnasProductos(categorias.filas), [categorias.filas]);', 'las columnas salen de /categories (máximo 12)');
+  const tablero = etiquetaJsx(p, '<TableroKanban');
+  for (const q of ['tablero={tablero}', 'soloLectura={TEXTO_SOLO_VER_PRODUCTOS}', 'tarjetaDe={tarjetaProducto}', 'onAbrir={openEdit}', 'aviso={avisoCategorias']) trae(tablero, q, `TableroKanban ${q}`);
+  for (const q of ['regla=', 'onCambio=', 'onAccion=', 'accionesTarjeta=']) noTrae(tablero, q, `el tablero es solo para ver (${q})`);
+  // Sin categorías no hay columnas: se dice (cargando, con error y «Reintentar», o vacío), nunca un tablero vacío falso.
+  trae(p, 'categorias.filas === null ? (\n                categorias.error ? (', 'cargando o con error');
+  trae(p, "{textoDeError(categorias.error, 'No se pudieron cargar las categorías')}", 'el error de las categorías en el tablero');
+  trae(p, '<button type="button" onClick={recargarCategorias}', '«Reintentar» las categorías');
+  trae(p, ') : columnasTablero.length === 0 ? (', 'sin categorías');
+  // La carga de cada columna se EJECUTA con dobles.
+  {
+    const llamadas = [];
+    const columna = ec.columnasProductos([{ id: 7, name: 'Peluches' }]).columnas[0];
+    const entorno = {
+      estado: estadoTablaInicial({ q: 'oso', tamano: 50, orden: '-nombre' }), filtros: { revision: true, sinTarifa: false },
+      consultaColumnaProducto: ec.consultaColumnaProducto, normalizarRespuesta,
+      _apiFetch: async (url, opciones) => { llamadas.push([url, opciones]); return { status: 'success', total: 3, data: [{ id: 5 }] }; },
+    };
+    const cargar = cargarDe(p)(entorno);
+    const respuesta = await cargar(columna, { offset: 25, limit: 25, orden: 'sin_movimiento', signal: 'SIGNAL' });
+    assert.deepEqual(llamadas, [['/products?q=oso&orden=-nombre&limit=25&offset=25&necesita_revision=1&category_id=7', { signal: 'SIGNAL' }]], 'la URL de la columna y la señal');
+    assert.deepEqual([respuesta.filas, respuesta.total], [[{ id: 5 }], 3], 'la respuesta paginada de /products');
+    llamadas.length = 0;
+    assert.deepEqual(await cargar({ estados: ['abc'] }, { offset: 0, limit: 25, signal: 'S' }), { filas: [], total: 0 });
+    assert.equal(llamadas.length, 0, 'una columna sin consulta no pide nada');
+    await cargar(columna, { offset: 0, limit: 0, signal: 'S' });
+    assert.match(llamadas[0][0], /limit=0&offset=0&/, 'una plegada pide limit=0 con offset=0 (sin offset, /products devuelve todo)');
+  }
+  trae(p, 'CONTENEDOR', 'el contenedor con pb-24');
+}
+
 console.log('\nOK: test_estados_compras.mjs');

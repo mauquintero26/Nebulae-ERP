@@ -1,15 +1,94 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
-  Package, Search, Filter, Plus, ChevronLeft, Save,
+  Package, Plus, ChevronLeft, Save,
   Globe, Tag, Layers, DollarSign, RefreshCw
 } from 'lucide-react';
+// B4 T18: Productos en la tabla estándar, en modo servidor (R5, R11; RP47 a RP49): el buscador por fin filtra (q), la página es de
+// 25 o 50 (antes, limit=100 y un total mal leído), «Requiere revisión» y «Sin tarifa de IVA» (B3-T8) son filtros de la barra
+// que van al servidor, el enlace ?id= pide /products?id= (antes solo buscaba en lo cargado) y el tablero solo para ver agrupa
+// por categoría (R11). La ficha (formulario, variantes, stock y E-Commerce) y el guardado son los de B1 a B3, sin cambios.
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
-import { SubNav, PageHeader, Badge, EmptyState, Button, useAvisos } from '@/components/ui';
+import { SubNav, PageHeader, Badge, Button, TableroKanban, useAvisos, useTableroKanban } from '@/components/ui';
+import {
+  BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
+} from '@/components/tabla';
+import type { ColumnaTabla } from '@/components/tabla';
 import { TARIFAS_IVA, etiquetaTarifaCatalogo, normalizarTarifaIva, sinTarifaIva } from '@/lib/iva';
+import { dependenciasTablero, estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
+import { textoDeError } from '@/lib/avisos';
+import {
+  TEXTO_SOLO_VER_PRODUCTOS, columnasProductos, consultaColumnaProducto, costoDeProducto, extraProductos, llegadaEnlaceProducto,
+  pedirEnlaceProducto, precioDeProducto, tarjetaProducto, textoVacioProductos,
+} from '@/lib/estados-compras';
 import { INV_NAV } from '../inv-nav';
+import { CONTENEDOR, FOCOS, pesos, useCatalogo } from '../piezas-inventario';
+
+/** Un producto de GET /products (ProductResponse + precio_venta, costo y publicado de T13, RP91). Los nombres son los del servidor. */
+type Producto = {
+  id: number;
+  name?: string | null;
+  type?: string | null;
+  tarifa_iva?: string | null;
+  necesita_revision?: boolean | null;
+  is_active?: boolean | null;
+  category?: { id: number; name?: string | null } | null;
+  skus?: { id: number; sku?: string | null }[] | null;
+  precio_venta?: number | string | null;
+  costo?: number | string | null;
+  publicado?: boolean | null;
+  // La ficha lee más campos del producto (descripción, marca, unidad…): se pasan tal cual a openEdit.
+  [campo: string]: unknown;
+};
+/** Los filtros extra de la barra (B3-T8, RP48): van al servidor como necesita_revision y sin_tarifa_iva. */
+type FiltrosProductos = { revision: boolean; sinTarifa: boolean };
+
+/** El id de la pantalla: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26). */
+const ID_PRODUCTOS = 'inventario.productos';
+const INICIAL_PRODUCTOS = {};
+const SIN_FILTROS: FiltrosProductos = { revision: false, sinTarifa: false };
+const BOTON_FILTRO = `rounded-xl border px-3 py-2 text-xs font-bold transition-colors ${FOCOS.purple}`;
+
+/**
+ * La tabla (TABLA-inventario punto 7; R26, D41): las columnas de hoy (Producto, Tipo, Precio venta, Costo, E-Commerce y
+ * Activo), con la insignia de la tarifa de IVA y la de «Requiere revisión» (B3-T8) bajo el nombre. Solo se ordena por lo que
+ * /products acepta (nombre, tipo). Precio y Costo son los de sus SKU (precio_venta y costo de T13): el costo 0 de quick-create
+ * es «sin costo» (RP91), como en las existencias. R26: a 1024 px con el menú abierto la caja deja 704 px; Categoría va oculta
+ * por defecto. Una constante: estable (D40).
+ */
+const COLUMNAS_TABLA_PRODUCTOS: ColumnaTabla<Producto>[] = [
+  { id: 'producto', titulo: 'Producto', ancho: 140, clave: true, flexible: true, ordenable: 'nombre', titleCelda: (p) => p.name || 'Sin nombre',
+    celda: (p) => (
+      <span className="flex min-w-0 flex-col items-start gap-1">
+        <span className="max-w-full truncate text-xs font-bold text-slate-800">{p.name || 'Sin nombre'}</span>
+        <span className="flex flex-wrap gap-1">
+          <Badge tone={sinTarifaIva(p) ? 'warning' : 'neutral'}>{etiquetaTarifaCatalogo(p.tarifa_iva)}</Badge>
+          {p.necesita_revision && <Badge tone="warning">Requiere revisión</Badge>}
+        </span>
+      </span>
+    ) },
+  { id: 'tipo', titulo: 'Tipo', ancho: 88, ordenable: true, titleCelda: (p) => p.type || 'Sin tipo',
+    celda: (p) => <Badge tone="neutral">{p.type || '—'}</Badge> },
+  { id: 'categoria', titulo: 'Categoría', ancho: 120, ocultaPorDefecto: true, titleCelda: (p) => p.category?.name || 'Sin categoría',
+    celda: (p) => <span className="block truncate text-xs text-slate-600">{p.category?.name || '—'}</span> },
+  { id: 'precio', titulo: 'Precio venta', ancho: 108, clave: true, alinear: 'derecha',
+    titleCelda: (p) => (precioDeProducto(p) === null ? 'Sin precio de venta' : `${pesos(precioDeProducto(p))} (el menor de sus SKU)`),
+    celda: (p) => <span className="text-xs font-bold text-slate-800">{precioDeProducto(p) === null ? '—' : pesos(precioDeProducto(p))}</span> },
+  { id: 'costo', titulo: 'Costo', ancho: 100, alinear: 'derecha',
+    titleCelda: (p) => (costoDeProducto(p) === null ? 'Sin costo registrado' : `${pesos(costoDeProducto(p))} (el menor de sus SKU)`),
+    celda: (p) => <span className="text-xs text-slate-600">{costoDeProducto(p) === null ? '—' : pesos(costoDeProducto(p))}</span> },
+  { id: 'publicado', titulo: 'E-Commerce', ancho: 128, alinear: 'centro', titleCelda: (p) => (p.publicado ? 'Publicado en la tienda web' : 'No publicado'),
+    celda: (p) => <Badge tone={p.publicado ? 'success' : 'neutral'} icon={Globe}>{p.publicado ? 'Publicado' : 'No publicado'}</Badge> },
+  { id: 'activo', titulo: 'Activo', ancho: 72, alinear: 'centro', titleCelda: (p) => (p.is_active ? 'Activo' : 'Inactivo'),
+    celda: (p) => (
+      <span className="inline-flex items-center">
+        <span aria-hidden="true" className={`inline-block h-2 w-2 rounded-full ${p.is_active ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+        <span className="sr-only">{p.is_active ? 'Activo' : 'Inactivo'}</span>
+      </span>
+    ) },
+];
 
 async function apiFetch(path: string, opts: RequestInit = {}) {
   const res = await _apiFetch(path, opts);
@@ -20,22 +99,24 @@ async function apiFetch(path: string, opts: RequestInit = {}) {
 
 const TABS = ['Informacion General', 'SKUs y Variantes', 'Stock', 'E-Commerce'];
 
+/** Bajo un selector de la ficha: si su catálogo falló sin nada antes, lo dice con el detalle del servidor y «Reintentar» (no una lista vacía falsa). */
+function AvisoCatalogo({ catalogo, fallo, onReintentar }: { catalogo: { filas: unknown[] | null; error: unknown }; fallo: string; onReintentar: () => void }) {
+  if (!catalogo.error || catalogo.filas) return null;
+  return (
+    <p role="alert" className="mt-1 text-xs font-semibold text-rose-800">
+      {textoDeError(catalogo.error, fallo)}.{' '}
+      <button type="button" onClick={onReintentar} className={`rounded font-bold underline ${FOCOS.purple}`}>Reintentar</button>
+    </p>
+  );
+}
+
 export default function ProductosPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
-  const [products, setProducts] = useState<any[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [soloRevision, setSoloRevision] = useState(false);
-  const [soloSinTarifa, setSoloSinTarifa] = useState(false);
   const { avisar, avisarError } = useAvisos();
   const [selectedProduct, setSelectedProduct] = useState<any | null>(null);
   const [activeTab, setActiveTab] = useState(TABS[0]);
-  const [categories, setCategories] = useState<any[]>([]);
-  const [brands, setBrands] = useState<any[]>([]);
-  const [warehouses, setWarehouses] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
 
   const [pasoVariantes, setPasoVariantes] = useState<'atributos' | 'combinaciones'>('atributos');
@@ -58,25 +139,82 @@ export default function ProductosPage() {
     is_published: false, ecommerce_category: '', low_stock_alert: 0,
   });
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams();
-      if (search) params.set('search', search);
-      if (soloRevision) params.set('necesita_revision', 'true');
-      const d = await apiFetch(`/products?${params}&limit=100`);
-      setProducts(Array.isArray(d) ? d : (d?.data ?? d?.products ?? []));
-      setTotal(d?.total ?? (Array.isArray(d) ? d.length : 0));
-    } catch { setProducts([]); }
-    finally { setLoading(false); }
-  }, [search, soloRevision]);
+  // ── B4 T18, bloque 1: la carga del servidor (TABLA-inventario punto 7; R5, RP47, RP48; D40) ──
+  // El estado ÚNICO de la pantalla (búsqueda q, orden, página y tamaño 25 o 50) y los filtros extra de la barra (B3-T8):
+  // «Requiere revisión» y «Sin tarifa de IVA» van al servidor (necesita_revision y sin_tarifa_iva); cada cambio vuelve a la
+  // página 1 en el mismo evento. El modo (Lista o Kanban) se guarda en vista:inventario.productos.
+  const [estado, despachar, listo] = useEstadoTabla(ID_PRODUCTOS, INICIAL_PRODUCTOS);
+  const enKanban = estado.modo === 'kanban';
+  const [filtros, setFiltros] = useState<FiltrosProductos>(SIN_FILTROS);
+  // Los catálogos de la ficha y del tablero, con su error y «Reintentar» (antes, tres .catch(() => {}) y listas vacías falsas).
+  const { catalogo: categorias, recargar: recargarCategorias } = useCatalogo('/categories');
+  const { catalogo: marcas, recargar: recargarMarcas } = useCatalogo('/brands');
+  const { catalogo: bodegas, recargar: recargarBodegas } = useCatalogo('/inventory/warehouses');
+  const categories = categorias.filas ?? [];
+  const brands = marcas.filas ?? [];
+  const warehouses = bodegas.filas ?? [];
+  const extraLista = useMemo(() => ({ ...extraProductos(filtros), vista: null }), [filtros]);
+  // GET /products con q, orden, limit y offset del estado: SIEMPRE limit y offset (sin offset, /products devuelve todo: RP47).
+  // esperar: !listo (D40): el esqueleto, nunca «vacío». En Kanban no pide la lista (activo: false, RP35).
+  const listado = useListado<Producto>({
+    ruta: '/products', estado, esperar: !listo, despachar, activo: !enKanban, extra: extraLista,
+  });
 
-  useEffect(() => {
-    load();
-    apiFetch('/categories').then(d => setCategories(Array.isArray(d) ? d : (d?.data ?? []))).catch(()=>{});
-    apiFetch('/brands').then(d => setBrands(Array.isArray(d) ? d : (d?.data ?? []))).catch(()=>{});
-    apiFetch('/inventory/warehouses').then(d => setWarehouses(Array.isArray(d) ? d : (d?.data ?? []))).catch(()=>{});
-  }, [load]);
+  // El tablero solo para ver, en modo servidor (R11, C4, D39): una columna por categoría de /categories (12 como máximo; el resto
+  // se ve en la lista, con su aviso). Una consulta por columna (consultaColumnaProducto: category_id, la búsqueda y el orden del
+  // MISMO estado, y los filtros de la barra). El orden del hook ('sin_movimiento') NO se manda: /products responde 422.
+  const { columnas: columnasTablero, aviso: avisoCategorias } = useMemo(() => columnasProductos(categorias.filas), [categorias.filas]);
+  const tablero = useTableroKanban<Producto>({
+    pantalla: ID_PRODUCTOS,
+    modo: 'servidor',
+    columnas: columnasTablero,
+    activo: listo && enKanban && categorias.filas !== null,
+    porColumna: estado.tamano,
+    dependencias: [...dependenciasTablero(estado), filtros.revision, filtros.sinTarifa],
+    cargar: async (columna, { offset, limit, signal }) => {
+      const consulta = consultaColumnaProducto(estado, columna, filtros, { limit, offset });
+      if (consulta === null) return { filas: [], total: 0 };
+      return normalizarRespuesta(await _apiFetch(`/products?${consulta}`, { signal }));
+    },
+  });
+
+  // «Actualizar» y lo que sigue a guardar: la lista, el tablero y los catálogos. Ninguna recarga vacía lo que se ve.
+  const { recargar: recargarListado } = listado;
+  const { recargar: recargarTablero } = tablero;
+  const recargarTodo = useCallback(() => {
+    recargarListado();
+    recargarTablero();
+    recargarCategorias();
+    recargarMarcas();
+    recargarBodegas();
+  }, [recargarListado, recargarTablero, recargarCategorias, recargarMarcas, recargarBodegas]);
+
+  // ── bloque 2: la tabla (R5, R26; D40, D41) ──
+  const prefs = usePreferenciasTabla(ID_PRODUCTOS, COLUMNAS_TABLA_PRODUCTOS);
+  const anchoTablaRef = useRef<number | null>(null);
+  // Desestructurado: con el objeto entero en ref={…}, react-hooks/refs marca «Cannot access refs during render».
+  const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
+  // Pasar a Kanban sale de la pantalla completa (el conmutador sigue a la vista y el tablero no queda tapado).
+  useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
+  const cambiarFiltros = useCallback((cambio: Partial<FiltrosProductos>) => {
+    setFiltros((f) => ({ ...f, ...cambio }));
+    despachar({ tipo: 'pagina', valor: 1 });
+  }, [despachar]);
+  // m8 de T15: el «vacío» memoizado dice qué lo deja vacío (la búsqueda, los filtros de la barra o nada).
+  const vacio = useMemo(() => {
+    const texto = textoVacioProductos({ q: estado.q, revision: filtros.revision, sinTarifa: filtros.sinTarifa });
+    return (
+      <div>
+        <p className="font-semibold text-slate-600">{texto.titulo}</p>
+        {texto.ayuda && <p className="mt-1 text-xs text-slate-500">{texto.ayuda}</p>}
+      </div>
+    );
+  }, [estado.q, filtros.revision, filtros.sinTarifa]);
+  // «N resultados» es el de la tabla; en Kanban cada columna trae su total (la barra no lo repite).
+  const totalDeLaBarra = enKanban ? {} : {
+    total: listado.total,
+    estadoTotal: estadoDelTotal({ total: listado.total, cargando: listado.cargandoInicial, recargando: listado.recargando, error: listado.error }),
+  };
 
   function generarCombinaciones() {
     const atributosValidos = atributosElegidos
@@ -184,7 +322,7 @@ export default function ProductosPage() {
       setCombinaciones([]);
       setAtributosElegidos([{ nombre: '', valores: '' }]);
       setPasoVariantes('atributos');
-      load();
+      recargarTodo();
     } catch (err) { avisarError(err, 'No se pudo guardar el producto'); } // p. ej. el 422 de la tarifa de IVA
     setSaving(false);
   }
@@ -230,110 +368,137 @@ export default function ProductosPage() {
 
   function closeProduct() {
     setSelectedProduct(null);
-    if (searchParams.get('id')) router.replace(pathname);
+    if (searchParams.get('id') || searchParams.get('sku')) router.replace(pathname);
   }
 
-  // Deep-link: Abastecimiento "Ver Producto" enlaza aqui con ?id=<product_id>
-  // para abrir directamente su ficha. load() trae hasta 100 productos sin
-  // filtro -- si el catalogo crece mas alla de eso, este match puede fallar
-  // para productos fuera de esa primera pagina.
+  // El enlace profundo (RP49): Abastecimiento enlaza con ?sku=<código> («Ver producto»; stock-tabla no trae el id del producto) y
+  // otras pantallas con ?id=<product_id>. Como la tabla ya pagina en el servidor, el producto se pide por /products?id= (o por
+  // su SKU) en lugar de buscarlo entre los cargados; si no existe o falla, se dice. La marca se pone cuando la respuesta LLEGÓ,
+  // nunca antes del fetch: si el efecto se aborta, queda libre y el siguiente render vuelve a pedir (pedirEnlaceProducto).
+  const idDeLaUrl = searchParams.get('id');
+  const skuDeLaUrl = searchParams.get('sku');
+  const enlaceAtendido = useRef<string | null>(null);
   useEffect(() => {
-    const idParam = searchParams.get('id');
-    if (!idParam || loading || selectedProduct) return;
-    const found = products.find(p => String(p.id) === idParam);
-    if (found) openEdit(found);
-  }, [searchParams, products, loading]);
-
-  // «Sin tarifa de IVA» filtra en el cliente lo que ya trajo load().
-  const visibles = soloSinTarifa ? products.filter(sinTarifaIva) : products;
+    const pedido = pedirEnlaceProducto(enlaceAtendido.current, idDeLaUrl, skuDeLaUrl);
+    if (pedido === null) return undefined;
+    const control = new AbortController();
+    _apiFetch(pedido.ruta, { signal: control.signal })
+      .then((r: unknown) => {
+        if (control.signal.aborted) return;
+        const llegada = llegadaEnlaceProducto(pedido, normalizarRespuesta(r).filas);
+        enlaceAtendido.current = llegada.marca;
+        if (llegada.abrir) openEdit(llegada.abrir);
+        else avisar(llegada.texto ?? 'No se encontró el producto.', { tono: 'info' });
+      })
+      .catch((err: unknown) => { if (!control.signal.aborted) avisarError(err, 'No se pudo abrir el producto'); });
+    return () => control.abort();
+  }, [idDeLaUrl, skuDeLaUrl, avisar, avisarError]);
 
   // ─── PRODUCT LIST ───
   if (!selectedProduct) {
     return (
-      <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
+      <div className="w-full bg-slate-50 min-h-full animate-in fade-in flex flex-col">
         <SubNav label="Inventario" items={INV_NAV} currentPath="/dashboard/inventario/productos" color="purple" />
 
-        <div className="p-8 max-w-[1600px] mx-auto space-y-6">
+        <div className={CONTENEDOR}>
           <PageHeader icon={Package} color="purple"
             title="Catalogo de Productos"
-            subtitle={`${total} productos • Sincronizado con E-commerce`}
-            actionLabel="Nuevo Producto" actionIcon={Plus} onAction={openNew} />
-
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
-            <div className="border-b border-slate-200 bg-slate-50/50 p-4 flex flex-wrap justify-between items-center gap-4">
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="relative flex items-center bg-white border border-slate-300 rounded-xl px-3 py-2 shadow-sm">
-                  <Search className="text-slate-400 mr-2" size={16} />
-                  <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-                    placeholder="Buscar por nombre, SKU, referencia..."
-                    className="bg-transparent text-sm outline-none w-72" />
-                  <button onClick={load} className="ml-2 text-slate-400"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /></button>
-                </div>
-                <button onClick={() => setSoloRevision(v => !v)}
-                  className={`px-3 py-2 rounded-xl text-xs font-bold border transition-colors ${soloRevision ? 'bg-amber-100 border-amber-300 text-amber-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
-                  Requiere revisión
+            subtitle="Catálogo sincronizado con E-commerce"
+            actions={(
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button type="button" onClick={recargarTodo}
+                  className={`flex items-center gap-1.5 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-bold text-xs shadow-sm transition-colors ${FOCOS.purple}`}>
+                  <RefreshCw size={13} aria-hidden="true" className={listado.recargando ? 'animate-spin' : ''} /> Actualizar
                 </button>
-                <button onClick={() => setSoloSinTarifa(v => !v)} aria-pressed={soloSinTarifa}
-                  className={`px-3 py-2 rounded-xl text-xs font-bold border transition-colors ${soloSinTarifa ? 'bg-amber-100 border-amber-300 text-amber-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
-                  Sin tarifa de IVA
+                <button type="button" onClick={openNew}
+                  className={`text-white px-6 py-3 rounded-xl font-bold shadow-md flex items-center gap-2 transition-colors bg-purple-700 hover:bg-purple-800 ${FOCOS.purple}`}>
+                  <Plus size={18} aria-hidden="true" /> Nuevo Producto
                 </button>
               </div>
-              <span className="text-sm text-slate-500">Total: <span className="font-bold text-slate-800">{soloSinTarifa ? visibles.length : total} productos</span></span>
-            </div>
+            )} />
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead className="bg-slate-50 border-b border-slate-200 text-[11px] font-black text-slate-500 uppercase tracking-wider">
-                  <tr>
-                    <th className="px-6 py-4">Producto</th>
-                    <th className="px-6 py-4">Tipo</th>
-                    <th className="px-6 py-4">Precio Venta</th>
-                    <th className="px-6 py-4">Costo</th>
-                    <th className="px-6 py-4 text-center">E-Commerce</th>
-                    <th className="px-6 py-4 text-center">Activo</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-sm">
-                  {loading ? (
-                    <tr><td colSpan={6} className="px-6 py-16 text-center">
-                      <RefreshCw size={24} className="animate-spin text-purple-400 mx-auto mb-2" />
-                      <span className="text-slate-400">Cargando productos...</span>
-                    </td></tr>
-                  ) : visibles.length === 0 ? (
-                    <tr><td colSpan={6}>
-                      <EmptyState icon={Package} message={soloSinTarifa && products.length > 0 ? 'Todos estos productos tienen tarifa de IVA.' : 'Sin productos. Crea el primero.'} />
-                    </td></tr>
-                  ) : visibles.map((p: any) => (
-                    <tr key={p.id} onClick={() => openEdit(p)}
-                      className="hover:bg-slate-50/80 transition-colors cursor-pointer">
-                      <td className="px-6 py-4">
-                        <div className="font-bold text-slate-800">{p.name}</div>
-                        {p.reference && <div className="text-xs text-slate-400">Ref: {p.reference}</div>}
-                        <div className="mt-1 flex flex-wrap gap-1.5">
-                          <Badge tone={sinTarifaIva(p) ? 'warning' : 'neutral'}>{etiquetaTarifaCatalogo(p.tarifa_iva)}</Badge>
-                          {p.necesita_revision && <Badge tone="warning">Requiere revisión</Badge>}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <Badge tone="neutral">{p.type}</Badge>
-                      </td>
-                      <td className="px-6 py-4 font-medium text-slate-800">
-                        {p.sale_price ? `$${Number(p.sale_price).toLocaleString('es-CO')}` : '-'}
-                      </td>
-                      <td className="px-6 py-4 text-slate-600">
-                        {p.cost_price ? `$${Number(p.cost_price).toLocaleString('es-CO')}` : '-'}
-                      </td>
-                      <td className="px-6 py-4 text-center">
-                        <Badge tone={p.is_published ? 'success' : 'neutral'} icon={Globe}>{p.is_published ? 'Publicado' : 'No publicado'}</Badge>
-                      </td>
-                      <td className="px-6 py-4 text-center">
-                        <span className={`w-2 h-2 rounded-full inline-block ${p.is_active ? 'bg-emerald-400' : 'bg-slate-300'}`} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          {/* B4 T18, bloques 2 y 3 (TABLA-inventario punto 7, KANBAN-resto): la barra con la búsqueda (q) y los filtros de B3-T8, y
+              la tabla estándar en el servidor, o el tablero solo para ver por categoría con el MISMO estado. */}
+          <div className="flex min-w-0 flex-col gap-4">
+            {capa}
+            <section ref={refTarjeta} className={claseTarjeta}>
+              <BarraTabla
+                estado={estado}
+                onEstado={despachar}
+                placeholder="Buscar por nombre, descripción o SKU…"
+                filtros={(
+                  <>
+                    <button type="button" aria-pressed={filtros.revision} onClick={() => cambiarFiltros({ revision: !filtros.revision })}
+                      className={`${BOTON_FILTRO} ${filtros.revision ? 'bg-amber-100 border-amber-300 text-amber-800' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                      Requiere revisión
+                    </button>
+                    <button type="button" aria-pressed={filtros.sinTarifa} onClick={() => cambiarFiltros({ sinTarifa: !filtros.sinTarifa })}
+                      className={`${BOTON_FILTRO} ${filtros.sinTarifa ? 'bg-amber-100 border-amber-300 text-amber-800' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                      Sin tarifa de IVA
+                    </button>
+                  </>
+                )}
+                ajustes={{ columnas: COLUMNAS_TABLA_PRODUCTOS, preferencias: prefs, anchoRef: anchoTablaRef }}
+                kanbanDisponible
+                pantallaCompleta={enKanban ? undefined : { completa, alternar }}
+                color="purple"
+                {...totalDeLaBarra}
+              />
+              {/* La tabla estándar en el servidor: la paginación (25 o 50) y el orden (nombre, tipo) son de la tabla; un clic en la
+                  fila abre la ficha. */}
+              {!enKanban && (
+                <TablaEstandar
+                  id={ID_PRODUCTOS}
+                  modo="servidor"
+                  columnas={COLUMNAS_TABLA_PRODUCTOS}
+                  preferencias={prefs}
+                  anchoRef={anchoTablaRef}
+                  estado={estado}
+                  onEstado={despachar}
+                  filas={listado.filas}
+                  total={listado.total}
+                  cargando={listado.cargandoInicial}
+                  recargando={listado.recargando}
+                  error={listado.error}
+                  onReintentar={listado.recargar}
+                  aviso={listado.avisoOrden}
+                  onFila={openEdit}
+                  vacio={vacio}
+                  etiqueta="Catálogo de productos"
+                />
+              )}
+            </section>
+            {enKanban ? (
+              /* KANBAN-resto: una columna por categoría (12 como máximo, con su aviso), solo para ver: sin regla, con su motivo. El
+                 clic abre la ficha. Sin las categorías no hay columnas: se dice (con «Reintentar» si fallaron). */
+              categorias.filas === null ? (
+                categorias.error ? (
+                  <div role="alert" className="flex flex-wrap items-center gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">
+                    {textoDeError(categorias.error, 'No se pudieron cargar las categorías')}
+                    <button type="button" onClick={recargarCategorias}
+                      className={`inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 ${FOCOS.purple}`}>
+                      <RefreshCw size={13} aria-hidden="true" /> Reintentar
+                    </button>
+                  </div>
+                ) : (
+                  <div role="status" aria-busy="true" className="rounded-2xl border border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-600">Cargando las categorías…</div>
+                )
+              ) : columnasTablero.length === 0 ? (
+                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-600">Todavía no hay categorías: crea una para ver el tablero.</div>
+              ) : (
+                <TableroKanban
+                  tablero={tablero}
+                  soloLectura={TEXTO_SOLO_VER_PRODUCTOS}
+                  tarjetaDe={tarjetaProducto}
+                  onAbrir={openEdit}
+                  color="purple"
+                  vacio="Sin productos en esta categoría"
+                  aviso={avisoCategorias
+                    ? <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-800">{avisoCategorias}</p>
+                    : undefined}
+                />
+              )
+            ) : null}
           </div>
         </div>
       </div>
@@ -422,6 +587,7 @@ export default function ProductosPage() {
                       </optgroup>
                     ))}
                   </select>
+                  <AvisoCatalogo catalogo={categorias} fallo="No se pudieron cargar las categorías" onReintentar={recargarCategorias} />
                 </div>
                 <div>
                   <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Marca</label>
@@ -430,6 +596,7 @@ export default function ProductosPage() {
                     <option value="">Seleccionar...</option>
                     {brands.map((b:any) => <option key={b.id} value={b.id}>{b.name}</option>)}
                   </select>
+                  <AvisoCatalogo catalogo={marcas} fallo="No se pudieron cargar las marcas" onReintentar={recargarMarcas} />
                 </div>
                 <div>
                   <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Referencia Interna</label>
@@ -568,6 +735,7 @@ export default function ProductosPage() {
                     <option value="">Seleccionar...</option>
                     {warehouses.map((w: any) => <option key={w.id} value={w.id}>{w.name}</option>)}
                   </select>
+                  <AvisoCatalogo catalogo={bodegas} fallo="No se pudieron cargar las bodegas" onReintentar={recargarBodegas} />
                 </div>
                 <table className="w-full text-sm">
                   <thead><tr className="text-xs text-slate-400 uppercase">
