@@ -43,17 +43,19 @@ TIPOS_GASTO = ("recurrente", "variable")
 ERROR_TIPO_GASTO = "El tipo debe ser recurrente o variable."
 
 
-def _texto_de_filtro(valor):
-    """El texto de un filtro sin espacios en los bordes (None si queda vacío); con un carácter de control, 422 con el texto
-    de listados.texto_busqueda (un NUL llegaría al SQL y daría un 500)."""
+def _texto_de_filtro(valor, nombre=None):
+    """El texto de un filtro sin espacios en los bordes (None si queda vacío); con un carácter de control, 422 (un NUL
+    llegaría al SQL y daría un 500): con `nombre`, «El filtro «x» no puede llevar caracteres de control.»; sin él, el texto
+    de listados.texto_busqueda (la búsqueda)."""
     try:
         return texto_busqueda(valor, None)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422,
+                            detail=f"El filtro «{nombre}» no puede llevar caracteres de control." if nombre else str(e))
 
 
 def _tipo_de_gasto(tipo):
-    tipo = _texto_de_filtro(tipo)
+    tipo = _texto_de_filtro(tipo, "tipo")
     if tipo is not None and tipo not in TIPOS_GASTO:
         raise HTTPException(status_code=422, detail=ERROR_TIPO_GASTO)
     return tipo
@@ -79,7 +81,7 @@ def list_expenses(
     db: Session = Depends(get_db)
 ):
     gasto = OperationalExpense
-    texto, categoria, tipo = _texto_de_filtro(q), _texto_de_filtro(categoria), _tipo_de_gasto(tipo)
+    texto, categoria, tipo = _texto_de_filtro(q), _texto_de_filtro(categoria, "categoria"), _tipo_de_gasto(tipo)
     orden_sql = leer_orden(orden, {
         "fecha": gasto.incurred_date, "categoria": gasto.category, "concepto": gasto.description,
         "tipo": gasto.is_recurring, "monto": gasto.amount,

@@ -22,6 +22,11 @@ from app.models.sales import SalesOrder
 from tests.usuarios_de_prueba import finanzas_token  # noqa: F401 (fixture por nombre)
 
 CONTROL = "La búsqueda no puede llevar caracteres de control."
+
+
+def control_de(nombre):
+    """T20 r1 (m11): el carácter de control en un filtro dice el nombre del parámetro."""
+    return f"El filtro «{nombre}» no puede llevar caracteres de control."
 MAX_ESTADOS = "Puedes filtrar por 20 estados como máximo."
 
 
@@ -177,7 +182,8 @@ def test_leads_errores_422_por_igualdad(app_client, db, admin_token):
         ({"orden": "valor;DROP TABLE x"}, "No se puede ordenar por «valor;DROP TABLE x»."),
         ({"q": "ca\x00sa"}, CONTROL),
         ({"search": "ca\x07sa"}, CONTROL),
-        ({"advisor_name": "lu\x00is"}, CONTROL),
+        ({"advisor_name": "lu\x00is"}, control_de("advisor_name")),
+        ({"perdidos": "so\x00lo"}, control_de("perdidos")),
     ]
     for params, texto in casos:
         assert _error(app_client, LEADS, admin_token, **params) == texto, params
@@ -222,8 +228,6 @@ class _Pedidos:
 def test_pedidos_web_orden_exacto(app_client, db, admin_token):
     t = _Pedidos(db)
     W1, W2, W3 = t.W1, t.W2, t.W3
-    flujo = tuple(ETIQUETAS_ESTADO["VEN"])
-    por_estado = sorted([(flujo.index(e), i) for i, e in ((W1, "PENDIENTE_PAGO"), (W2, "PAGADO"), (W3, "ENTREGADO"))])
     esperado = {
         None: [W1, W3, W2],                       # created_at desc, como hoy
         "fecha": [W2, W3, W1], "-fecha": [W1, W3, W2],
@@ -234,7 +238,7 @@ def test_pedidos_web_orden_exacto(app_client, db, admin_token):
         "total": [W3, W2, W1], "-total": [W1, W2, W3],
         "items": [W3, W1, W2],                    # 0 (sin productos), 1, 3
         "-items": [W2, W1, W3],
-        "estado": [i for _, i in por_estado], "-estado": [i for _, i in reversed(por_estado)],
+        "estado": [W1, W2, W3], "-estado": [W3, W2, W1],     # el flujo de los pedidos: PENDIENTE_PAGO, PAGADO, ENTREGADO
     }
     for orden, ids in esperado.items():
         params = {"search": t.s, **({"orden": orden} if orden else {})}
@@ -286,8 +290,8 @@ def test_pedidos_web_q_search_claves_y_errores(app_client, db, admin_token, vend
         ({"orden": "-ZZ"}, "No se puede ordenar por «-ZZ»."),
         ({"estados": ",".join(f"E{i}" for i in range(21))}, MAX_ESTADOS),
         ({"estados": "PAGADO,NOEXISTE"}, "El estado «NOEXISTE» no existe en los pedidos de la tienda."),
-        ({"estados": "PA\x00GADO"}, CONTROL),
-        ({"estado": "PA\x00GADO"}, CONTROL),
+        ({"estados": "PA\x00GADO"}, control_de("estados")),
+        ({"estado": "PA\x00GADO"}, control_de("estado")),
         ({"q": "a\x00b"}, CONTROL),
         ({"search": "a\x1bb"}, CONTROL),
     ]
@@ -409,7 +413,7 @@ def test_catalogo_paginacion_total_y_claves(app_client, db, warehouse, monkeypat
         pag2 = _ok(app_client, CATALOGO, search=t.s, orden="precio", limit=2, offset=1)
         assert _nombres(pag2) == completo[1:3] and pag2["total"] == 4, rama
         assert _ok(app_client, CATALOGO, search=t.s, orden="precio", offset=4)["data"] == [], rama
-        cero = _ok(app_client, CATALOGO, search=t.s, limit=0)
+        cero = _ok(app_client, CATALOGO, search=t.s, limit=0, offset=0)
         assert cero["data"] == [] and cero["total"] == 4, rama
         # q y search dan el mismo total
         assert _ok(app_client, CATALOGO, q=t.s)["total"] == _ok(app_client, CATALOGO, search=t.s)["total"] == 4, rama
@@ -445,16 +449,28 @@ def test_catalogo_filtros_de_hoy_y_errores(app_client, db, warehouse, monkeypatc
     assert sorted(_nombres(_ok(app_client, CATALOGO, search=t.s, publicado="true"))) == sorted(
         [n["auto"], n["nevera"], n["h1"]])
     monkeypatch.setenv("CATALOGO_LECTURA", "legacy")
-    # rama heredada: los SKU canonicos que no estan en ecommerce_products solo se filtran por la busqueda (como hoy)
-    assert _nombres(_ok(app_client, CATALOGO, search=t.s, categoria=f"Cat-B-{t.s}")) == [n["h1"], n["auto"]]
-    assert _nombres(_ok(app_client, CATALOGO, search=t.s, publicado="false")) == [n["h2"], n["auto"]]
+    # Rama heredada SIN offset ni orden (como llama hoy la tienda publica): la respuesta es la de BASE. Las filas de
+    # ecommerce_products con sus filtros y, detras, los SKU del ERP cuyo espejo NO pasa los mismos filtros (un SKU cuyo
+    # espejo quedo filtrado sale igual como fila del ERP); el que tiene espejo que pasa, no se repite. (T20 r1, I4)
+    assert _nombres(_ok(app_client, CATALOGO, search=t.s, categoria=f"Cat-B-{t.s}")) == [n["h1"], n["auto"], n["nevera"]]
+    cuerpo = _ok(app_client, CATALOGO, search=t.s, publicado="false")
+    assert _nombres(cuerpo) == [n["h2"], n["auto"], n["nevera"]] and cuerpo["total"] == 3   # el espejo de la nevera esta publicado
+    cuerpo = _ok(app_client, CATALOGO, search=t.s, publicado="true", limit=50)
+    assert _nombres(cuerpo) == [n["h1"], n["nevera"], n["auto"]] and cuerpo["total"] == 3   # la nevera una sola vez
+    cuerpo = _ok(app_client, CATALOGO, search=t.s)
+    assert _nombres(cuerpo) == [n["h1"], n["h2"], n["nevera"], n["auto"]] and cuerpo["total"] == 4
+    # cada fuente con su LIMIT, como BASE
+    assert _nombres(_ok(app_client, CATALOGO, search=t.s, limit=1)) == [n["h1"], n["auto"]]
+    # Rama heredada CON offset u orden: pagina exacto, una fila por producto (el espejo filtrado no reaparece como SKU).
+    cuerpo = _ok(app_client, CATALOGO, search=t.s, publicado="false", offset=0)
+    assert _nombres(cuerpo) == [n["h2"], n["auto"]] and cuerpo["total"] == 2
     for rama in _ramas(monkeypatch):
         casos = [
             ({"orden": "x"}, "No se puede ordenar por «x»."),
             ({"orden": "-ZZ"}, "No se puede ordenar por «-ZZ»."),
             ({"q": "a\x00b"}, CONTROL),
             ({"search": "a\x00b"}, CONTROL),
-            ({"categoria": "a\x00b"}, CONTROL),
+            ({"categoria": "a\x00b"}, control_de("categoria")),
         ]
         for params, texto in casos:
             assert _error(app_client, CATALOGO, None, **params) == texto, (rama, params)
@@ -566,11 +582,11 @@ def test_gastos_claves_errores_y_permisos(app_client, db, admin_token, vendedor_
     casos = [
         ({"tipo": "otro"}, "El tipo debe ser recurrente o variable."),
         ({"tipo": "RECURRENTE"}, "El tipo debe ser recurrente o variable."),
-        ({"tipo": "re\x00currente"}, CONTROL),
+        ({"tipo": "re\x00currente"}, control_de("tipo")),
         ({"orden": "x"}, "No se puede ordenar por «x»."),
         ({"orden": "-ZZ"}, "No se puede ordenar por «-ZZ»."),
         ({"q": "a\x00b"}, CONTROL),
-        ({"categoria": "a\x00b"}, CONTROL),
+        ({"categoria": "a\x00b"}, control_de("categoria")),
     ]
     for params, texto in casos:
         assert _error(app_client, GASTOS, admin_token, **params) == texto, params

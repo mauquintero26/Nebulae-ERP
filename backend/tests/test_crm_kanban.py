@@ -15,6 +15,7 @@ from app.models.sales import SalesOrder
 RUTA = "/api/v1/crm/leads"
 ERROR_PERDIDOS = "El filtro de perdidos «{}» no existe: usa excluir, incluir o solo."
 CONTROL = "La búsqueda no puede llevar caracteres de control."
+CONTROL_PERDIDOS = "El filtro «perdidos» no puede llevar caracteres de control."   # T20 r1 (m11)
 
 
 def _auth(token):
@@ -85,7 +86,7 @@ def test_leads_perdidos(app_client, db, admin_token, vendedor_token):
 
     casos = [("x", ERROR_PERDIDOS.format("x")), ("SOLO", ERROR_PERDIDOS.format("SOLO")),
              ("incluir,solo", ERROR_PERDIDOS.format("incluir,solo")),
-             ("z" * 2000, ERROR_PERDIDOS.format("z" * 40)), ("so\x00lo", CONTROL), ("\x07", CONTROL)]
+             ("z" * 2000, ERROR_PERDIDOS.format("z" * 40)), ("so\x00lo", CONTROL_PERDIDOS), ("\x07", CONTROL_PERDIDOS)]
     for valor, texto in casos:
         resp = app_client.get(RUTA, params={"search": sufijo, "perdidos": valor}, headers=_auth(admin_token))
         assert resp.status_code == 422, (valor, resp.status_code, resp.text)

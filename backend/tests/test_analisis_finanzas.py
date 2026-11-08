@@ -203,7 +203,7 @@ def test_dona_gastos_por_categoria(app_client, db, admin_token):
 # ─── 3) Flujo de caja ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 def test_flujo_de_caja(app_client, db, admin_token):
-    """Entradas positivas (el dinero recibido) y salidas negativas (gastos + devoluciones CONFIRMADO), por dia de Colombia."""
+    """Entradas positivas (el dinero recibido) y salidas negativas (gastos + devoluciones CONFIRMADO o TRASLADADO), por dia de Colombia."""
     f = _Fabrica(db)
     p = f.pven(datetime(2001, 1, 2, 15, 0), 1_000_000)
     f.pago(p, 300_000, date(2001, 1, 3))
@@ -211,6 +211,7 @@ def test_flujo_de_caja(app_client, db, admin_token):
     f.pago(p, 25_000, date(2001, 1, 5), tipo="DEVOLUCION")
     f.pago(p, 777_000, date(2001, 1, 5), tipo="DEVOLUCION", estado="REVERTIDO")      # no cuenta
     f.pago(p, 888_000, date(2001, 1, 6), tipo="DEVOLUCION", estado="ANULADO")        # no cuenta
+    f.pago(p, 10_000, date(2001, 1, 6), tipo="DEVOLUCION", estado="TRASLADADO")      # T20 r1 (I2): movio dinero, cuenta
     f.gasto(datetime(2001, 1, 5, 17, 0), 150_000)
     f.gasto(datetime(2001, 1, 3, 17, 0), 40_000)
     barras = _analisis(app_client, admin_token)["barras"]
@@ -220,7 +221,7 @@ def test_flujo_de_caja(app_client, db, admin_token):
     assert (entradas["etiqueta"], entradas["tono"]) == ("Entradas", "positivo")
     assert (salidas["etiqueta"], salidas["tono"]) == ("Salidas", "negativo")
     assert entradas["valores"] == [0, 0, 300_000, 0, 100_000, 0, 0, 0, 0, 0]
-    assert salidas["valores"] == [0, 0, -40_000, 0, -175_000, 0, 0, 0, 0, 0]
+    assert salidas["valores"] == [0, 0, -40_000, 0, -175_000, -10_000, 0, 0, 0, 0]
     assert [s["clave"] for s in barras["series"]] == ["entradas", "salidas"]
 
 
@@ -251,6 +252,21 @@ def test_movimientos_recientes(app_client, db, admin_token):
     assert len(_analisis(app_client, admin_token)["movimientos"]["filas"]) == 8
 
 
+def test_empates_del_ranking_y_de_los_movimientos(app_client, db, admin_token):
+    """T20 r1 (m9): a igual saldo manda el nombre; a igual instante, el id más nuevo primero."""
+    f = _Fabrica(db)
+    zeta, alfa = f.cliente("Zeta"), f.cliente("Alfa")
+    f.pven(datetime(2001, 1, 2), 900_000_000_000, saldo=800_000_000_000, cliente=zeta)
+    f.pven(datetime(2001, 1, 2), 900_000_000_000, saldo=800_000_000_000, cliente=alfa)
+    filas = [x["nombre"] for x in _analisis(app_client, admin_token)["ranking"]["filas"] if x["nombre"] in (zeta, alfa)]
+    assert filas == [alfa, zeta]
+    p = f.pven(datetime(2001, 1, 2, 15, 0), 1_000_000)
+    f.pago(p, 1_000, date(2001, 1, 3))
+    f.pago(p, 2_000, date(2001, 1, 3))      # mismo created_at: el id mayor primero
+    mov = _analisis(app_client, admin_token)["movimientos"]["filas"]
+    assert [m["monto"] for m in mov] == [2_000, 1_000]
+
+
 # ─── 4) Cartera: foto de hoy (RP59) ──────────────────────────────────────────────────────────────────────────────────
 
 def test_cartera_foto(app_client, db, admin_token):
@@ -272,8 +288,8 @@ def test_cartera_foto(app_client, db, admin_token):
             "Clientes con más saldo por cobrar", "Saldo", "pesos")
         assert all(set(x) == CLAVES_FILA_RANKING for x in ranking["filas"])
         filas = [x for x in ranking["filas"] if x["nombre"] in (a, b)]
-        assert [(x["nombre"], x["valor"], x["cantidad"]) for x in filas] == [(b, 11_000_000_000, 2), (a, 6_000_000_000, 3)]
-        assert filas[0]["detalle"] == "2 pedidos" and filas[1]["detalle"] == "3 pedidos"
+        assert [(x["nombre"], x["valor"], x["cantidad"]) for x in filas] == [(b, 11_000_000_000, 2), (a, 6_000_000_000, 2)]
+        assert filas[0]["detalle"] == "2 pedidos" and filas[1]["detalle"] == "2 pedidos"   # solo los que deben
         assert ranking["filas"][0]["posicion"] == 1
     stats = app_client.get("/api/v1/ventas/stats", headers=_auth(admin_token)).json()["data"]
     cartera = float(stats["kpis"]["pven_saldo_por_cobrar"])
@@ -281,6 +297,10 @@ def test_cartera_foto(app_client, db, admin_token):
     primero = ranking["filas"][0]
     assert primero["nombre"] == b and primero["pct"] == round(primero["valor"] / cartera * 100, 1)
     assert cartera >= 17_000_000_000
+    # T20 r1 (m3, RP59): la suma del ranking COMPLETO es el pven_saldo_por_cobrar de /ventas/stats, con los mismos datos
+    completo = _analisis(app_client, admin_token, top="25")["ranking"]["filas"]
+    assert len(completo) < 25, "la base trae demasiados deudores para comparar el ranking completo"
+    assert sum(x["valor"] for x in completo) == cartera
 
 
 # ─── 5) Permisos, errores y contrato ─────────────────────────────────────────────────────────────────────────────────

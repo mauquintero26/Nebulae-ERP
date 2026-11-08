@@ -143,6 +143,16 @@ def test_ganados_y_cierre(app_client, db, admin_token):
     assert _serie(data["linea"], "ganados")["valores"] == [0, 0, 1, 0, 0, 1, 0, 0, 0, 0]
 
 
+def test_empate_de_asesores_lo_decide_el_nombre(app_client, db, admin_token):
+    """T20 r1 (m9): a igual valor ganado, el nombre del asesor en orden alfabético."""
+    f = _Fabrica(db)
+    for asesor in ("Zoila", "Alma", "Mario"):
+        f.lead(datetime(2000, 11, 1), status="INVOICED", actualizado=datetime(2001, 1, 4, 15, 0), valor=700,
+               asesor=asesor)
+    filas = _analisis(app_client, admin_token)["ranking"]["filas"]
+    assert [(x["nombre"], x["valor"]) for x in filas] == [("Alma", 700), ("Mario", 700), ("Zoila", 700)]
+
+
 def test_asesores_con_mas_ventas_ganadas(app_client, db, admin_token):
     f = _Fabrica(db)
     for valor, asesor in ((300, "Ana"), (200, " Ana "), (900, "Luis"), (50, None), (60, "   ")):
@@ -218,7 +228,7 @@ def test_dona_por_etapa_con_color(app_client, db, admin_token):
 
 # ─── 4) Requieren atencion (7 dias fijos, RP73) ──────────────────────────────────────────────────────────────────────
 
-def test_atrasados_por_alert_days(app_client, db, admin_token):
+def test_atrasados_por_alert_days(app_client, db, admin_token, monkeypatch):
     """pipeline_stages no guarda alert_days: el umbral es 7. Un lead con 8 dias sin movimiento sale; uno con 6 no. Abiertos
     solamente, los 8 mas atrasados primero, con doc_tipo 'LEAD'."""
     f = _Fabrica(db)
@@ -232,8 +242,11 @@ def test_atrasados_por_alert_days(app_client, db, admin_token):
     ganado = f.lead(hace(30), status="INVOICED", actualizado=hace(30))
     perdido = f.lead(hace(30), status="CANCELLED", actualizado=hace(30))
     sin_fecha = f.lead(hace(30), actualizado=None)                          # sin updated_at: 0 dias
+    from app.api.v1 import crm
+    assert len(_analisis(app_client, admin_token)["movimientos"]["filas"]) <= 8           # el tope de siempre
+    monkeypatch.setattr(crm, "MAX_ATRASADOS", 10_000)     # m8: sin el LIMIT, lo que haya en erp_test no tapa mis filas
     mov = _analisis(app_client, admin_token)["movimientos"]
-    assert mov["titulo"] == "Requieren atención" and len(mov["filas"]) <= 8
+    assert mov["titulo"] == "Requieren atención"
     ids = [m["doc_id"] for m in mov["filas"]]
     assert ocho.id in ids and justo.id in ids and viejo.id in ids
     for fuera in (seis, casi, ganado, perdido, sin_fecha):
@@ -250,6 +263,12 @@ def test_atrasados_por_alert_days(app_client, db, admin_token):
     # el mismo resultado con cualquier periodo: es una foto de hoy
     ids_7d = [m["doc_id"] for m in _analisis(app_client, admin_token, periodo="7d")["movimientos"]["filas"]]
     assert ids_7d == ids
+    # m9: a igual updated_at, el id menor primero
+    igual = hace(40)
+    a1 = f.lead(igual, actualizado=igual)
+    a2 = f.lead(igual, actualizado=igual)
+    ids = [m["doc_id"] for m in _analisis(app_client, admin_token)["movimientos"]["filas"]]
+    assert ids.index(a1.id) + 1 == ids.index(a2.id)
 
 
 # ─── 5) Permisos, errores y contrato ───────────────────────────────────────────────────────────────────────────────────

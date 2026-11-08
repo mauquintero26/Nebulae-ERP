@@ -29,6 +29,7 @@ from app.core.listados import (MAX_OFFSET, expresiones_tiempo, filtrar_por_estad
                                orden_por_lista, paginar, texto_busqueda, validar_orden)
 from app.core.periodos import inicio_del_dia_utc, resolver_periodo
 from app.core.textos_actividad import ETIQUETAS_ESTADO
+from app.api.v1.erp_ventas import _FLUJO_DE_ESTADOS   # el flujo de los pedidos (las pestañas), una sola definición
 from app.models.erp_documents import SaleOrder, ActivityLog
 from app.models.customers import Customer
 import datetime
@@ -300,13 +301,18 @@ ORDENES_CATALOGO = {"nombre": "u.nombre", "sku": "u.sku", "categoria": "u.catego
 GRUPO_PRIMERO, GRUPO_SEGUNDO = 0, 1
 
 
-def _texto_o_422(*valores):
+def _control_de(nombre: str) -> str:
+    return f"El filtro «{nombre}» no puede llevar caracteres de control."
+
+
+def _texto_o_422(*valores, nombre=None):
     """El primer texto no vacío entre `valores` (q gana sobre search, RP8), sin espacios en los bordes; None si no hay.
-    Un carácter de control da 422 (texto_busqueda): un NUL llegaría al SQL y daría un 500."""
+    Un carácter de control da 422 (un NUL llegaría al SQL y daría un 500): con `nombre`, «El filtro «x» no puede llevar
+    caracteres de control.»; sin él, el texto de listados.texto_busqueda (la búsqueda)."""
     try:
         return texto_busqueda(valores[0], valores[1] if len(valores) > 1 else None)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=_control_de(nombre) if nombre else str(e))
 
 
 def _orden_del_catalogo(orden) -> str:
@@ -378,9 +384,9 @@ def _union_catalogo_canonico(search, categoria, publicado) -> tuple:
 
 
 def _union_catalogo_heredado(search, categoria, publicado) -> tuple:
-    """(SQL, parámetros) de la subconsulta de la rama heredada: las filas de ecommerce_products (con los filtros de hoy; su
-    stock es el real si el SKU existe en el ERP) y los SKU del ERP que no están allí (filtrados solo por la búsqueda:
-    SKU o nombre, como hoy)."""
+    """(SQL, parámetros) de la subconsulta PAGINADA de la rama heredada (con offset u orden): las filas de ecommerce_products
+    (con los filtros de hoy; su stock es el real si el SKU existe en el ERP) y los SKU del ERP que no tienen espejo allí
+    (filtrados solo por la búsqueda: SKU o nombre). Un producto, una fila; es otro universo que _catalogo_heredado_de_hoy."""
     params: dict = {}
     ep = _filtros_de_ecommerce_products("ep", search, categoria, publicado, params)
     extra = ["NOT EXISTS (SELECT 1 FROM ecommerce_products e2 WHERE e2.sku = ps.sku)"]
@@ -658,7 +664,8 @@ def get_ecommerce_stats(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_AS
 # --- WEB ORDERS ---
 # B4 T20 (KANBAN-resto punto 1, TABLA-otros punto 2, R5, R21; RP8, RP9): los estados reales del pedido (los de
 # ETIQUETAS_ESTADO['VEN']: PENDIENTE_PAGO y PAGADO de la tienda y los demás), el orden por columna y la paginación.
-ESTADOS_PEDIDO_WEB = tuple(ETIQUETAS_ESTADO["VEN"])
+ESTADOS_PEDIDO_WEB = tuple(ETIQUETAS_ESTADO["VEN"])      # los estados que existen
+FLUJO_PEDIDO_WEB = _FLUJO_DE_ESTADOS["VEN"]              # y su orden: el de las pestañas de Ventas (orden=estado)
 ERROR_ESTADO_WEB = "El estado «{:.40}» no existe en los pedidos de la tienda."
 
 
@@ -668,7 +675,7 @@ def _estados_de_pedidos_web(valor) -> list:
     try:
         lista = leer_lista(valor)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=_control_de("estados") if "control" in str(e) else str(e))
     for estado in lista:
         if estado not in ESTADOS_PEDIDO_WEB:
             raise HTTPException(status_code=422, detail=ERROR_ESTADO_WEB.format(estado))
@@ -689,7 +696,7 @@ def _ordenes_de_pedidos_web() -> dict:
         "cliente": func.coalesce(func.nullif(pedido.customer_name, ""), "Cliente Web"),
         "total": func.coalesce(pedido.total_cop, 0),
         "items": case((func.jsonb_typeof(productos) == "array", func.jsonb_array_length(productos)), else_=0),
-        "estado": orden_por_lista(pedido.estado, ESTADOS_PEDIDO_WEB),
+        "estado": orden_por_lista(pedido.estado, FLUJO_PEDIDO_WEB),
     }
 
 
@@ -701,7 +708,7 @@ def list_web_orders(estado: Optional[str] = None, estados: Optional[str] = None,
     de control da 422). `q` busca (`search` es su alias) en el número web, el cliente, el
     correo y los productos. `orden`: [-]numero, cliente, total, items, estado o fecha, más reciente (created_at desc, por
     defecto) y sin_movimiento. limit=0 devuelve solo el total."""
-    estado = _texto_o_422(estado) if estado is not None and estado.strip() else None
+    estado = _texto_o_422(estado, nombre="estado") if estado is not None and estado.strip() else None
     lista_estados = _estados_de_pedidos_web(estados)
     texto = _texto_o_422(q, search)
     orden_sql = leer_orden(orden, _ordenes_de_pedidos_web(), "reciente", id_lista=SaleOrder.id)
@@ -1302,27 +1309,55 @@ def _serialize_catalogo_item_sku_heredado(db: Session, canon_sku: ProductSKU) ->
     }
 
 
+def _catalogo_heredado_de_hoy(db: Session, search, categoria, publicado, limit: int) -> dict:
+    """La rama heredada SIN offset ni orden, como la llama hoy la tienda pública (store/catalogo y store/categoria con
+    publicado=true&limit=50): la respuesta es la de BASE. Cada fuente con su LIMIT: las filas de ecommerce_products (con sus
+    filtros, por nombre) y, detrás, los SKU del ERP filtrados por la búsqueda (SKU o nombre) cuyo espejo en
+    ecommerce_products NO pasa los mismos filtros (categoría, publicado y búsqueda): un SKU cuyo espejo quedó filtrado (por
+    ejemplo, despublicado) sale igual como fila del ERP. total = las filas de ecommerce_products + los SKU devueltos."""
+    params: dict = {}
+    ep = _filtros_de_ecommerce_products("ep", search, categoria, publicado, params)
+    espejo = _filtros_de_ecommerce_products("e2", search, categoria, publicado, params)
+    extra = [f"NOT EXISTS (SELECT 1 FROM ecommerce_products e2 WHERE e2.sku = ps.sku{''.join(' AND ' + c for c in espejo)})"]
+    if search:
+        extra.append("(ps.sku ILIKE :s OR pr.name ILIKE :s)")
+    filas = db.execute(text(f"SELECT {_HUERFANO_SELECT_COLS} FROM ecommerce_products ep {_con_donde(ep)} "
+                            f"ORDER BY ep.nombre, ep.id LIMIT :lim"), {**params, "lim": limit}).fetchall()
+    total = int(db.execute(text(f"SELECT COUNT(*) FROM ecommerce_products ep {_con_donde(ep)}"), params).scalar() or 0)
+    ids = db.execute(text(f"SELECT ps.id FROM product_skus ps JOIN products pr ON pr.id = ps.product_id "
+                          f"{_con_donde(extra)} ORDER BY pr.name, ps.id LIMIT :lim"), {**params, "lim": limit}).fetchall()
+    skus = _skus_por_id(db, [i[0] for i in ids])
+    data = [_serialize_catalogo_item_heredado(db, r) for r in filas]
+    data += [_serialize_catalogo_item_sku_heredado(db, skus[i[0]]) for i in ids if i[0] in skus]
+    return {"status": "success", "total": total + len(ids), "data": data}
+
+
 @router.get("/catalogo")
-def list_catalogo(search: Optional[str] = None, q: Optional[str] = None, categoria: Optional[str] = None, publicado: Optional[bool] = None, orden: Optional[str] = None, limit: int = Query(100, ge=0, le=500), offset: int = Query(0, ge=0, le=MAX_OFFSET), db: Session = Depends(get_db)):
-    """El catálogo (público: la tienda lo lee sin sesión). B4 T20 (RP56): paginado con `offset`, con `total` exacto (un
-    producto por fila, sin contar dos veces el espejo de un SKU) y `orden` ([-]nombre, sku, categoria, stock o precio; sin
-    él, el de hoy). `q` busca (`search` es su alias). limit=0 devuelve solo el total. Las filas son las de siempre (H16)."""
+def list_catalogo(search: Optional[str] = None, q: Optional[str] = None, categoria: Optional[str] = None, publicado: Optional[bool] = None, orden: Optional[str] = None, limit: int = Query(100, ge=0, le=500), offset: Optional[int] = Query(None, ge=0, le=MAX_OFFSET), db: Session = Depends(get_db)):
+    """El catálogo (público: la tienda lo lee sin sesión). B4 T20 (RP56): `offset` y `orden` ([-]nombre, sku, categoria, stock
+    o precio) paginan con `total` exacto (un producto por fila, sin contar dos veces el espejo de un SKU). `q` busca
+    (`search` es su alias). limit=0 devuelve solo el total. Las filas son las de siempre (H16).
+    - Rama canónica (CATALOGO_LECTURA=canonico): siempre paginada (sin offset es 0).
+    - Rama heredada (la de hoy por defecto): SIN offset ni orden responde como BASE (doble fuente, cada una con su LIMIT;
+      es lo que llama la tienda pública); CON offset u orden pagina exacto sobre una fila por producto."""
     texto = _texto_o_422(q, search)
-    categoria = _texto_o_422(categoria)
+    categoria = _texto_o_422(categoria, nombre="categoria")
     orden_sql = _orden_del_catalogo(orden)
     _ensure_ecommerce_tables(db)
     if _lectura_canonica():
-        return _list_catalogo_canonico(db, texto, categoria, publicado, limit, offset, orden)
-    try:
-        union, params = _union_catalogo_heredado(texto, categoria, publicado)
-        total, claves = _pagina_del_catalogo(db, union, params, orden_sql, limit, offset)
-        filas = _filas_de_ecommerce_products(db, (i for g, i in claves if g == GRUPO_PRIMERO))
-        skus = _skus_por_id(db, (i for g, i in claves if g == GRUPO_SEGUNDO))
-        data = [_serialize_catalogo_item_heredado(db, filas[i]) if g == GRUPO_PRIMERO else _serialize_catalogo_item_sku_heredado(db, skus[i])
-                for g, i in claves if (filas if g == GRUPO_PRIMERO else skus).get(i) is not None]
-        return {"status": "success", "total": total, "data": data}
-    except Exception as e:
-        return {"status": "success", "total": 0, "data": [], "error": str(e)}
+        return _list_catalogo_canonico(db, texto, categoria, publicado, limit, offset or 0, orden)
+    if offset is None and not (orden or "").strip():
+        try:
+            return _catalogo_heredado_de_hoy(db, texto, categoria, publicado, limit)
+        except Exception as e:     # lo viejo sigue igual: un error de la consulta heredada responde vacío con el texto
+            return {"status": "success", "total": 0, "data": [], "error": str(e)}
+    union, params = _union_catalogo_heredado(texto, categoria, publicado)
+    total, claves = _pagina_del_catalogo(db, union, params, orden_sql, limit, offset or 0)
+    filas = _filas_de_ecommerce_products(db, (i for g, i in claves if g == GRUPO_PRIMERO))
+    skus = _skus_por_id(db, (i for g, i in claves if g == GRUPO_SEGUNDO))
+    data = [_serialize_catalogo_item_heredado(db, filas[i]) if g == GRUPO_PRIMERO else _serialize_catalogo_item_sku_heredado(db, skus[i])
+            for g, i in claves if (filas if g == GRUPO_PRIMERO else skus).get(i) is not None]
+    return {"status": "success", "total": total, "data": data}
 
 @router.get("/catalogo/{product_id}")
 def get_catalogo_product(product_id: int, db: Session = Depends(get_db)):

@@ -21,7 +21,7 @@ cifra; si TD-05 cambia el libro de pagos, el ajuste se hace en pagos_recibidos_q
 - Movimientos recientes: pagos recibidos (+), gastos y devoluciones (−), los MAX_MOVIMIENTOS más recientes. La fecha de un
   pago o devolución es iso_z(created_at) (RP60); la de un gasto, iso_z(incurred_date).
 
-analisis_finanzas(db, periodo, top) arma el contrato único con analisis.respuesta y hace 11 consultas agregadas (GROUP BY,
+analisis_finanzas(db, periodo, top) arma el contrato único con analisis.respuesta y hace 12 consultas agregadas (GROUP BY,
 SUM y LIMIT) sea cual sea la cantidad de pedidos, pagos o gastos (R13, contador_sql).
 
 Errores: un top que no vale lanza ValueError (el endpoint responde 422 con str(e), R21); un error del contrato es
@@ -35,9 +35,10 @@ from sqlalchemy.orm import Session
 
 from app.core import resolucion_ventas as rv
 from app.core.analisis import claves_cubetas, dinero, expr_cubeta, kpi, rellenar, respuesta, validar_top, variacion_pct
-from app.core.analisis_ventas import (_barras_por_fecha, _cantidad, _dona, _enteros, _movimiento, _ranking,
-                                      expr_saldo_por_cobrar, pagos_recibidos_q, ventas_por_cubeta)
-from app.core.periodos import Periodo, _ventanas, en_rango, sumar_en
+from app.core.analisis_ventas import (ESTADOS_PAGO_RECIBIDO, _barras_por_fecha, _dona, _enteros, _movimiento, _ranking,
+                                      _top_clientes, expr_saldo_por_cobrar, pagos_recibidos_q, ventas_por_cubeta,
+                                      ventas_y_pedidos)
+from app.core.periodos import Periodo, _ventanas, en_rango
 from app.core.textos_actividad import TIPOS_PAGO
 from app.models.erp_documents import SaleOrder
 from app.models.expenses import OperationalExpense
@@ -46,7 +47,6 @@ from app.models.fase4 import SaleOrderPayment
 TOP_POR_DEFECTO = 5
 MAX_MOVIMIENTOS = 8     # MAX_MOVIMIENTOS de lib/analisis.js
 TIPO_PAGO_DEVOLUCION = "DEVOLUCION"
-ESTADO_PAGO_CONFIRMADO = "CONFIRMADO"
 SIN_METODO = "Sin método"
 SIN_CATEGORIA = "Sin categoría"
 
@@ -59,9 +59,9 @@ def _aviso_sin_costo(n: int) -> list[str]:
     return [f"{n} pedidos del período no tienen costo registrado: la utilidad sale más alta."]
 
 
-def _ventas_y_utilidad(db: Session, periodo: Periodo) -> dict:
-    """Ventas y margen (total_cop − total_cost_cop) de los pedidos con dinero (R7) de cada ventana, y cuántos pedidos del
-    período no tienen costo, en UNA consulta."""
+def _margen_y_sin_costo(db: Session, periodo: Periodo) -> dict:
+    """El margen (total_cop − total_cost_cop) de los pedidos con dinero (R7) de cada ventana, y cuántos pedidos del período
+    no tienen costo, en UNA consulta. Las ventas (Vendido) no se calculan aquí: son las de ventas_y_pedidos (m2, m7)."""
     pv = SaleOrder
     actual, anterior = _ventanas(pv.created_at, periodo)
     costo = func.coalesce(pv.total_cost_cop, 0)
@@ -71,47 +71,60 @@ def _ventas_y_utilidad(db: Session, periodo: Periodo) -> dict:
         return func.coalesce(func.sum(case((ventana, valor), else_=0)), 0)
 
     fila = (db.query(pv).filter(rv.f_pven_con_dinero(pv), or_(actual, anterior))
-            .with_entities(suma(total, actual), suma(total, anterior), suma(total - costo, actual),
-                           suma(total - costo, anterior), func.count(pv.id).filter(actual, costo == 0)).one())
-    return {"ventas": {"actual": fila[0], "anterior": fila[1]}, "margen": {"actual": fila[2], "anterior": fila[3]},
-            "sin_costo": int(fila[4] or 0)}
+            .with_entities(suma(total - costo, actual), suma(total - costo, anterior),
+                           func.count(pv.id).filter(actual, costo == 0)).one())
+    return {"margen": {"actual": fila[0], "anterior": fila[1]}, "sin_costo": int(fila[2] or 0)}
 
 
 def _por_cubeta_y_nombre(filas) -> tuple:
-    """({día de la cubeta: Σ}, {nombre: Σ}) de filas (cubeta, nombre, monto), con los montos al peso. Los nombres se
-    ordenan alfabéticamente: así un empate de la dona no depende del orden en que los entregó la base."""
-    por_cubeta, por_nombre = {}, {}
-    for cubeta, nombre, monto in sorted(filas, key=lambda f: ((f[1] or ""), f[0])):
+    """({día de la cubeta: Σ}, {nombre: Σ}, Σ actual, Σ anterior) de filas (cubeta, nombre, es_actual, monto), con los montos
+    al peso. Los nombres se ordenan alfabéticamente: así un empate de la dona no depende del orden en que los entregó la
+    base. Las filas del período anterior solo suman a su total (la cubeta y el nombre son los del período)."""
+    por_cubeta, por_nombre, total, total_anterior = {}, {}, 0, 0
+    for cubeta, nombre, es_actual, monto in sorted(filas, key=lambda f: ((f[1] or ""), f[0])):
+        if not es_actual:
+            total_anterior += monto
+            continue
+        total += monto
         por_cubeta[cubeta] = por_cubeta.get(cubeta, 0) + monto
         por_nombre[nombre] = por_nombre.get(nombre, 0) + monto
-    return ({dia: dinero(v) for dia, v in por_cubeta.items()}, {n: dinero(v) for n, v in por_nombre.items()})
+    return ({dia: dinero(v) for dia, v in por_cubeta.items()}, {n: dinero(v) for n, v in por_nombre.items()},
+            dinero(total), dinero(total_anterior))
 
 
 def _gastos_por_cubeta_y_categoria(db: Session, periodo: Periodo) -> tuple:
-    """({día: Σ gastos}, {categoría: Σ gastos}) del período, en UNA consulta agrupada por la cubeta de Colombia y la
-    categoría."""
+    """({día: Σ gastos}, {categoría: Σ gastos}, Σ del período, Σ del anterior), en UNA consulta agrupada por la cubeta de
+    Colombia, la categoría y la ventana (actual o anterior)."""
     g = OperationalExpense
+    actual, anterior = _ventanas(g.incurred_date, periodo)
     cubeta = expr_cubeta(g.incurred_date, periodo.granularidad)
     categoria = func.coalesce(func.nullif(func.btrim(g.category), ""), SIN_CATEGORIA)
-    filas = (db.query(g).filter(en_rango(g.incurred_date, periodo.inicio_utc, periodo.fin_utc))
-             .with_entities(cubeta, categoria, func.coalesce(func.sum(g.amount), 0)).group_by(cubeta, categoria).all())
+    es_actual = case((actual, 1), else_=0)
+    filas = (db.query(g).filter(or_(actual, anterior))
+             .with_entities(cubeta, categoria, es_actual, func.coalesce(func.sum(g.amount), 0))
+             .group_by(cubeta, categoria, es_actual).all())
     return _por_cubeta_y_nombre(filas)
 
 
 def _recibido_por_cubeta_y_medio(db: Session, periodo: Periodo) -> tuple:
-    """({día: Σ recibido}, {medio de pago: Σ recibido}) del período, con pagos_recibidos_q, en UNA consulta."""
+    """({día: Σ recibido}, {medio de pago: Σ recibido}, Σ del período, Σ del anterior), con pagos_recibidos_q, en UNA
+    consulta agrupada por la cubeta, el medio y la ventana."""
     pago = SaleOrderPayment
+    actual, anterior = _ventanas(pago.fecha, periodo)
     cubeta = expr_cubeta(pago.fecha, periodo.granularidad)
     medio = func.coalesce(func.nullif(func.btrim(pago.metodo_pago), ""), SIN_METODO)
-    filas = (pagos_recibidos_q(db, periodo.desde, periodo.hasta)
-             .with_entities(cubeta, medio, func.coalesce(func.sum(pago.monto), 0)).group_by(cubeta, medio).all())
+    es_actual = case((actual, 1), else_=0)
+    filas = (pagos_recibidos_q(db, periodo.anterior_desde, periodo.hasta).filter(or_(actual, anterior))
+             .with_entities(cubeta, medio, es_actual, func.coalesce(func.sum(pago.monto), 0))
+             .group_by(cubeta, medio, es_actual).all())
     return _por_cubeta_y_nombre(filas)
 
 
 def _devoluciones_q(db: Session, periodo: Periodo):
-    """Las devoluciones de dinero del período: pagos tipo DEVOLUCION en estado CONFIRMADO, por su fecha (días de Colombia)."""
+    """Las devoluciones de dinero del período: pagos tipo DEVOLUCION en estado CONFIRMADO o TRASLADADO
+    (ESTADOS_PAGO_RECIBIDO, el criterio de T6C r1: un saldo trasladado movió dinero), por su fecha (días de Colombia)."""
     pago = SaleOrderPayment
-    return db.query(pago).filter(pago.tipo == TIPO_PAGO_DEVOLUCION, pago.estado == ESTADO_PAGO_CONFIRMADO,
+    return db.query(pago).filter(pago.tipo == TIPO_PAGO_DEVOLUCION, pago.estado.in_(ESTADOS_PAGO_RECIBIDO),
                                  pago.fecha >= periodo.desde, pago.fecha <= periodo.hasta)
 
 
@@ -178,21 +191,17 @@ def _movimientos(db: Session, periodo: Periodo) -> list:
 
 
 def _ranking_de_cartera(db: Session, top: int) -> dict:
-    """«Clientes con más saldo por cobrar» (RP59): Σ max(0, saldo_cop) de los pedidos con dinero, por cliente
-    (COALESCE(customer_id, customer_name): la ficha si la tiene y, si no, el nombre escrito en el pedido), sin los que
-    no deben nada. El total (para el %) es la cartera completa: una función de ventana sobre todos los clientes, en la
-    misma consulta del ranking (GROUP BY, ORDER BY y LIMIT)."""
+    """«Clientes con más saldo por cobrar» (RP59): Σ max(0, saldo_cop) de los pedidos con dinero, por cliente. Usa
+    _top_clientes de analisis_ventas (la identidad del cliente es COALESCE(customer_id, customer_name), una sola regla) sobre
+    los pedidos con dinero que deben algo; el total del % es la cartera completa, la misma consulta escalar de
+    pven_saldo_por_cobrar de _foco_pven (y de /ventas/stats)."""
     pv = SaleOrder
-    sin_ficha = case((pv.customer_id.is_(None), pv.customer_name))
-    nombre = func.max(pv.customer_name)
-    valor = func.coalesce(func.sum(expr_saldo_por_cobrar(pv)), 0)
-    filas = (db.query(pv).filter(rv.f_pven_con_dinero(pv))
-             .with_entities(nombre, valor, func.count(pv.id), func.sum(valor).over())
-             .group_by(pv.customer_id, sin_ficha).having(valor > 0)
-             .order_by(valor.desc(), nombre.asc()).limit(top).all())
-    total = dinero(filas[0][3]) if filas else 0
+    saldo = func.coalesce(func.sum(expr_saldo_por_cobrar(pv)), 0)
+    con_dinero = db.query(pv).filter(rv.f_pven_con_dinero(pv))
+    filas = _top_clientes(con_dinero.filter(pv.saldo_cop > 0), pv, saldo, top)
+    total = dinero(con_dinero.order_by(None).with_entities(saldo).scalar())
     return _ranking("Clientes con más saldo por cobrar", "Saldo", "pesos",
-                    [(n, dinero(v), int(c)) for n, v, c, _ in filas], total, "pedido", "pedidos")
+                    [(n, dinero(v), c) for n, v, c in filas], total, "pedido", "pedidos")
 
 
 def analisis_finanzas(db: Session, periodo: Periodo, top=TOP_POR_DEFECTO) -> dict:
@@ -201,24 +210,22 @@ def analisis_finanzas(db: Session, periodo: Periodo, top=TOP_POR_DEFECTO) -> dic
     categoría» y «Dinero recibido por medio de pago», las barras «Flujo de caja», los «Movimientos recientes» y el
     ranking de cartera. `periodo` es un Periodo de core/periodos.py; `top` (5, 10 o 25) es el tamaño del ranking."""
     top = validar_top(top)
-    base = _ventas_y_utilidad(db, periodo)
-    recibido = sumar_en(pagos_recibidos_q(db, periodo.anterior_desde, periodo.hasta), SaleOrderPayment.fecha,
-                        SaleOrderPayment.monto, periodo)
-    gastos = sumar_en(db.query(OperationalExpense), OperationalExpense.incurred_date, OperationalExpense.amount, periodo)
-    gastos_por_dia, gastos_por_categoria = _gastos_por_cubeta_y_categoria(db, periodo)
-    recibido_por_dia, recibido_por_medio = _recibido_por_cubeta_y_medio(db, periodo)
+    vp = ventas_y_pedidos(db, periodo)
+    base = _margen_y_sin_costo(db, periodo)
+    gastos_por_dia, gastos_por_categoria, gastos_actual, gastos_anterior = _gastos_por_cubeta_y_categoria(db, periodo)
+    recibido_por_dia, recibido_por_medio, recibido_actual, recibido_anterior = _recibido_por_cubeta_y_medio(db, periodo)
     devoluciones = _devoluciones_por_cubeta(db, periodo)
     ventas_por_dia = ventas_por_cubeta(db, periodo)
 
-    ventas, ventas_ant = dinero(base["ventas"]["actual"]), dinero(base["ventas"]["anterior"])
-    utilidad = dinero(base["margen"]["actual"]) - dinero(gastos["actual"])
-    utilidad_ant = dinero(base["margen"]["anterior"]) - dinero(gastos["anterior"])
+    ventas, ventas_ant = dinero(vp["vendido"]["actual"]), dinero(vp["vendido"]["anterior"])
+    utilidad = dinero(base["margen"]["actual"]) - gastos_actual
+    utilidad_ant = dinero(base["margen"]["anterior"]) - gastos_anterior
     kpis = [
         kpi("ventas", "Ventas", ventas, ventas_ant, "pesos",
             ayuda="Pedidos creados en el período, sin cancelados ni devueltos."),
-        kpi("dinero_recibido", "Dinero recibido", recibido["actual"], recibido["anterior"], "pesos",
+        kpi("dinero_recibido", "Dinero recibido", recibido_actual, recibido_anterior, "pesos",
             ayuda="Pagos confirmados del período. No cuenta el saldo trasladado ni los pagos sin verificar."),
-        kpi("gastos", "Gastos", gastos["actual"], gastos["anterior"], "pesos", mejor="baja",
+        kpi("gastos", "Gastos", gastos_actual, gastos_anterior, "pesos", mejor="baja",
             ayuda="Gastos operativos del período, en pesos colombianos."),
         kpi("utilidad", "Utilidad estimada", utilidad, utilidad_ant, "pesos",
             ayuda="Lo vendido menos su costo, menos los gastos del período."),

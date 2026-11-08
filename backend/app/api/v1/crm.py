@@ -1332,18 +1332,20 @@ PERDIDOS_LEADS = ("excluir", "incluir", "solo")
 ERROR_PERDIDOS = "El filtro de perdidos «{:.40}» no existe: usa excluir, incluir o solo."
 
 
-def _texto_de_lead(valor):
+def _texto_de_lead(valor, nombre=None):
     """Un texto de búsqueda o de filtro (RP8): sin espacios en los bordes (None si queda vacío); con un carácter de
-    control, 422 con el texto de listados.texto_busqueda (un NUL llegaría al SQL y daría un 500)."""
+    control, 422 (un NUL llegaría al SQL y daría un 500): con `nombre`, «El filtro «x» no puede llevar caracteres de
+    control.»; sin él, el texto de listados.texto_busqueda (la búsqueda)."""
     try:
         return texto_busqueda(valor, None)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422,
+                            detail=f"El filtro «{nombre}» no puede llevar caracteres de control." if nombre else str(e))
 
 
 def _perdidos_de_lead(valor) -> str:
     """'excluir' (por defecto), 'incluir' o 'solo'; otro valor, 422 (R21, a mano: el manejador global daría un 400 técnico)."""
-    texto = _texto_de_lead(valor)
+    texto = _texto_de_lead(valor, "perdidos")
     if texto is None:
         return "excluir"
     if texto not in PERDIDOS_LEADS:
@@ -1396,7 +1398,7 @@ def get_leads(
     perdidos = _perdidos_de_lead(perdidos)
     texto = _texto_de_lead(q) or _texto_de_lead(search)
     if advisor_name is not None:
-        _texto_de_lead(advisor_name)      # solo el control de caracteres: el filtro sigue usando el texto tal cual
+        _texto_de_lead(advisor_name, "advisor_name")      # solo el control de caracteres: el filtro sigue usando el texto tal cual
     orden_sql = leer_orden(orden, _ordenes_de_leads(), "reciente", id_lista=SalesOrder.id)
 
     # ── Build base query with JOIN ──────────────────────────────────────────
