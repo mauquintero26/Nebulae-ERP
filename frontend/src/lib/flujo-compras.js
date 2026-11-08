@@ -456,7 +456,7 @@ export function avisoTarjetaEtapa(stage, hoy = diaColombia()) {
  * gris, nunca 0) y «Estás aquí» en la caja de la pantalla (sin href, D42). Las demás cajas son enlaces a su pantalla (su
  * `ruta`: la de Recibido abre Pedidos de compra en su pestaña, RP21).
  * @param {any} datos  res.data de /compras/flujo (null mientras carga)
- * @param {'TRANSITO' | 'RECEPCION'} actual
+ * @param {'LISTA' | 'TRANSITO' | 'RECEPCION'} actual
  * @returns {PasoVista[]}
  */
 export function pasosPantallaCompras(datos, actual) {

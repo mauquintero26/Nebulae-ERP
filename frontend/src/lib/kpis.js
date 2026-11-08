@@ -658,3 +658,42 @@ export function tarjetasRecepciones(datos) {
 
 /** B4 T16A (KPI-compras punto 8): la nota corta bajo las tarjetas de Recepciones; reemplaza la tarjeta «Regla de Separación». */
 export const NOTA_RECEPCIONES = 'La recepción física suma stock; la recepción logística solo registra el evento.';
+
+/**
+ * B4 T16B (KPI-compras punto 9): lo que pintan las 4 tarjetas de la Lista de compras con `data` de GET
+ * /compras/lista-compras/stats: ítems por comprar (pendientes), en pedido, recibidos y el total (sin los DESCARTADO). Cada
+ * número pasa por numeroFinito (lo que no es un número queda en null y Contador pinta la barra o «—», nunca 0). Sin datos
+ * (cargando o con error), null.
+ * @param {any} datos
+ * @returns {{pendientes: {valor: number | null}, en_pedido: {valor: number | null}, recibidos: {valor: number | null},
+ *   total: {valor: number | null}} | null}
+ */
+export function tarjetasLista(datos) {
+  if (datos === null || typeof datos !== 'object' || Array.isArray(datos)) return null;
+  return {
+    pendientes: { valor: numeroFinito(datos.pendientes) },
+    en_pedido: { valor: numeroFinito(datos.en_pedido) },
+    recibidos: { valor: numeroFinito(datos.recibidos) },
+    total: { valor: numeroFinito(datos.total) },
+  };
+}
+
+/**
+ * B4 T16B (KPI-compras punto 10): lo que pintan las 4 tarjetas de Traslados. Los números son los conteos POR GRUPO de
+ * conteosTraslado (estados-compras.js: en proceso = DRAFT + READY, grupoOperacion) de GET
+ * /inventory/operations?operation_type=TRANSFER&con_conteos=1 (todos los traslados, sin búsqueda ni filtros); las bodegas
+ * llegan por su cuenta. Lo que falta (o no es un número) queda en null: la barra gris o «—», nunca 0.
+ * @param {any} porGrupo  {en_proceso, completadas, canceladas, todos}
+ * @param {number | null | undefined} bodegas
+ * @returns {{en_proceso: {valor: number | null}, completados: {valor: number | null}, bodegas: {valor: number | null},
+ *   total: {valor: number | null}}}
+ */
+export function tarjetasTraslados(porGrupo, bodegas) {
+  const g = porGrupo !== null && typeof porGrupo === 'object' && !Array.isArray(porGrupo) ? porGrupo : {};
+  return {
+    en_proceso: { valor: numeroFinito(g.en_proceso) },
+    completados: { valor: numeroFinito(g.completadas) },
+    bodegas: { valor: numeroFinito(bodegas) },
+    total: { valor: numeroFinito(g.todos) },
+  };
+}

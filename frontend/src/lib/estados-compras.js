@@ -23,6 +23,11 @@
  *    estadosDeColumnaLista de kanban.js), vistaPuedeVencer, diaPec (el día de una fecha de negocio), tarjetaPec,
  *    repartirCancelacionPec, resumenCancelacionPec, cancelarPecsEnSerie y despuesDeCancelarPec (cancelar con motivo,
  *    T14 r1) y ordenPorFechaDeCompra, grupoMesPec y tituloMesPec (los separadores).
+ * B4 T16B (Lista de compras y Traslados): VISTAS_LISTA, infoEstadoItemLista, opcionesEstadosLista, consultaLista y
+ * consultaTableroLista (la tabla pagina en el servidor y el tablero es de modo cliente, hasta 200), esItemSeleccionable,
+ * destinoItemLista, tarjetaItemLista y textoVacioLista; VISTAS_TRASLADO (los grupos de operación), conteosTraslado,
+ * infoEstadoTraslado, opcionesEstadosTraslado, consultaTraslados, consultaTableroTraslados, numeroTraslado,
+ * productosDeTraslado, textoFechaTraslado (la fecha REAL: un instante), nombreBodega, tarjetaTraslado y textoVacioTraslados.
  * Recepciones (ESTADOS_RECEPCION, GRUPOS_RECEPCION, grupoRecepcion, COLUMNAS_RECEPCION), ítems de la lista de compras
  * (ESTADOS_ITEM_LISTA, COLUMNAS_LISTA; DESCARTADO no se muestra), traslados (ESTADOS_TRASLADO, COLUMNAS_TRASLADO,
  * GRUPOS_OPERACION, grupoOperacion) y estado del stock (ESTADOS_STOCK, COLUMNAS_STOCK; RP53).
@@ -885,6 +890,324 @@ export const GRUPOS_OPERACION = congelar({
  */
 export function grupoOperacion(estado) {
   return /** @type {any} */ (grupoDe(GRUPOS_OPERACION, estado));
+}
+
+// ─── La Lista de compras: la lista y el tablero solo para ver (B4 T16B: TABLA-compras punto 10, KANBAN-logistica punto 5) ────
+
+/**
+ * Los estados que pide una lista con pestañas (Lista de compras y Traslados) al servidor: los de la pestaña cruzados con el
+ * filtro de «Filtrar estado»; sin filtro, los de la pestaña (o ninguno si es «todos»: el servidor ya excluye lo que no se
+ * muestra). Un filtro que la pestaña no tiene no se puede armar desde la barra (accionPestana lo poda); si llega de una
+ * sesión restaurada, gana el filtro, para que lo que se pide sea lo que FiltroEstados muestra.
+ * @param {ReadonlyArray<string> | undefined} deLaVista  los estados de la pestaña; undefined si no existe (cuenta como «todos»)
+ * @param {boolean} esTodos
+ * @param {ReadonlyArray<string> | null | undefined} filtro
+ * @returns {string[] | null}
+ */
+function estadosDeLaConsulta(deLaVista, esTodos, filtro) {
+  const elegidos = Array.isArray(filtro) ? filtro : [];
+  if (elegidos.length === 0) return esTodos || !deLaVista ? null : [...deLaVista];
+  const cruce = deLaVista ? elegidos.filter((e) => deLaVista.includes(e)) : [];
+  return cruce.length > 0 ? cruce : [...elegidos];
+}
+
+/**
+ * Las vistas (pestañas) de la Lista de compras: las claves de los conteos de GET /compras/lista-compras (todos y cada
+ * estado que se muestra). DESCARTADO no está. Inmutable.
+ * @type {Readonly<Record<'todos' | 'PENDIENTE' | 'EN_PEDIDO' | 'RECIBIDO', ReadonlyArray<string>>>}
+ */
+export const VISTAS_LISTA = congelar({
+  todos: Object.keys(ESTADOS_ITEM_LISTA),
+  ...Object.fromEntries(Object.keys(ESTADOS_ITEM_LISTA).map((e) => [e, [e]])),
+});
+
+/**
+ * La insignia de un estado de la Lista de compras (ESTADOS_ITEM_LISTA); uno desconocido sale humanizado en gris.
+ * @param {unknown} e
+ * @returns {Readonly<InfoEstado>}
+ */
+export function infoEstadoItemLista(e) {
+  return infoDe(ESTADOS_ITEM_LISTA, e);
+}
+
+const OPCION_DE_ITEM_LISTA = congelar(Object.fromEntries(
+  Object.entries(ESTADOS_ITEM_LISTA).map(([valor, info]) => [valor, { valor, etiqueta: info.label }]),
+));
+const OPCIONES_DE_VISTA_LISTA = congelar(Object.fromEntries(
+  Object.entries(VISTAS_LISTA).map(([vista, estados]) => [vista, congelar(estados.map((e) => OPCION_DE_ITEM_LISTA[e]))]),
+));
+
+/**
+ * «Filtrar estado» de la Lista de compras: los estados de la pestaña `vista`; sin pestaña, o una que no existe, los 3. La
+ * misma referencia para la misma vista. Inmutable.
+ * @param {unknown} vista
+ * @returns {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
+ */
+export function opcionesEstadosLista(vista) {
+  return typeof vista === 'string' && tiene(OPCIONES_DE_VISTA_LISTA, vista) ? OPCIONES_DE_VISTA_LISTA[vista] : OPCIONES_DE_VISTA_LISTA.todos;
+}
+
+/**
+ * «Filtrar estado» en el tablero de la Lista de compras: una opción por columna. Inmutable.
+ * @type {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
+ */
+export const OPCIONES_ESTADOS_TABLERO_LISTA = congelar(COLUMNAS_LISTA.map((c) => ({ valor: c.estados[0], etiqueta: c.titulo })));
+
+/** El texto de un filtro extra, recortado; en blanco, null (queryListado lo omite). */
+const filtroDeTexto = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+/** Los filtros extra de la Lista de compras que no son del estado de la tabla: proveedor y rango de fechas (días de calendario). */
+function filtrosExtraLista(filtros) {
+  return {
+    proveedor: filtroDeTexto(filtros?.proveedor),
+    fecha_desde: filtroDeTexto(filtros?.desde),
+    fecha_hasta: filtroDeTexto(filtros?.hasta),
+  };
+}
+
+/**
+ * Lo que la TABLA de la Lista de compras le suma a la consulta de useListado (`extra`): GET /compras/lista-compras no tiene
+ * `vista`, así que la pestaña viaja como `estados` (cruzada con el filtro, estadosDeLaConsulta), más el proveedor y las
+ * fechas de los filtros extra de la barra. Las claves en null no se mandan.
+ * @param {import('./tabla.js').EstadoTabla | null | undefined} estado
+ * @param {{proveedor?: string | null, desde?: string | null, hasta?: string | null} | null} [filtros]
+ * @returns {{vista: null, estados: string[] | null, proveedor: string | null, fecha_desde: string | null, fecha_hasta: string | null}}
+ */
+export function consultaLista(estado, filtros = null) {
+  const vista = typeof estado?.vista === 'string' && tiene(VISTAS_LISTA, estado.vista) ? estado.vista : 'todos';
+  return { vista: null, estados: estadosDeLaConsulta(VISTAS_LISTA[vista], vista === 'todos', estado?.estados), ...filtrosExtraLista(filtros) };
+}
+
+/** El tope del tablero en modo cliente (C4, RP95): los 200 más recientes. */
+export const TOPE_TABLERO_COMPRAS = 200;
+
+/**
+ * Lo que el TABLERO de la Lista de compras (modo cliente) le suma a la consulta: los 200 más recientes de la primera página,
+ * sin pestaña (el tablero trae las tres columnas), con el filtro de estados, el proveedor y las fechas.
+ * @param {import('./tabla.js').EstadoTabla | null | undefined} estado
+ * @param {{proveedor?: string | null, desde?: string | null, hasta?: string | null} | null} [filtros]
+ */
+export function consultaTableroLista(estado, filtros = null) {
+  const elegidos = Array.isArray(estado?.estados) && estado.estados.length > 0 ? [...estado.estados] : null;
+  return { vista: null, estados: elegidos, ...filtrosExtraLista(filtros), orden: '-fecha', limit: TOPE_TABLERO_COMPRAS, offset: 0 };
+}
+
+/** Solo los ítems PENDIENTE se seleccionan para armar un pedido de compra (TABLA-compras punto 10). */
+export function esItemSeleccionable(it) {
+  return it?.estado === 'PENDIENTE';
+}
+
+/**
+ * A dónde lleva un ítem de la Lista (el clic de su tarjeta): el PEC vinculado y, sin PEC, el PVEN; sin ninguno, null.
+ * @param {any} it
+ * @returns {string | null}
+ */
+export function destinoItemLista(it) {
+  if (it?.pec_id) return `/dashboard/compras/pedidos?id=${it.pec_id}`;
+  if (it?.pven_id) return `/dashboard/ventas/venta?id=${it.pven_id}`;
+  return null;
+}
+
+/** '3 uds' o '1 ud'. */
+const textoUnidades = (n) => {
+  const cantidad = numeroFinito(n);
+  return cantidad === null ? null : `${cantidad} ${cantidad === 1 ? 'ud' : 'uds'}`;
+};
+
+/**
+ * La tarjeta de un ítem en el tablero solo para ver: el PVEN (o el PEC; sin ninguno, «Ítem id»), el producto, la cantidad y
+ * el proveedor, la insignia del estado, el PEC vinculado como chip, el día en que se agregó y, si hay a dónde ir, el enlace
+ * al pedido de compra o al de venta.
+ * @param {any} it
+ */
+export function tarjetaItemLista(it) {
+  const pven = textoLimpio(it?.pven_numero);
+  const pec = textoLimpio(it?.pec_numero);
+  const destino = destinoItemLista(it);
+  const aPec = Boolean(it?.pec_id);
+  return {
+    numero: pven ?? pec ?? `Ítem ${it?.id ?? ''}`.trim(),
+    tipo: pven ? 'PVEN' : pec ? 'PEC' : null,
+    titulo: textoLimpio(it?.producto) ?? 'Producto sin nombre',
+    subtitulo: [textoUnidades(it?.cantidad), textoLimpio(it?.proveedor) ?? 'Sin proveedor'].filter(Boolean).join(' · '),
+    monto: null,
+    estado: infoEstadoItemLista(it?.estado),
+    chips: pec ? [{ texto: pec, tono: 'purple' }] : [],
+    tiempo: fechaCorta(it?.fecha_creacion) || null,
+    atrasada: false,
+    accionPrincipal: destino
+      ? { texto: aPec ? 'Ver pedido de compra' : 'Ver pedido de venta', href: destino, tono: aPec ? 'purple' : 'emerald' }
+      : null,
+  };
+}
+
+/** Lo que dice la lista cuando no hay filas: depende de qué la deja vacía (filtro, búsqueda, proveedor o fechas, pestaña). */
+const AYUDA_FILTROS_LISTA = 'Ajusta la búsqueda, el proveedor, las fechas o el filtro de estados.';
+/**
+ * @param {Partial<import('./tabla.js').EstadoTabla> | null | undefined} estado
+ * @param {{proveedor?: string | null, desde?: string | null, hasta?: string | null} | null} [filtros]
+ * @returns {{titulo: string, ayuda: string | null}}
+ */
+export function textoVacioLista(estado, filtros = null) {
+  if (Array.isArray(estado?.estados) && estado.estados.length > 0) {
+    return { titulo: 'Ningún ítem con esos estados. Ajusta el filtro.', ayuda: null };
+  }
+  const q = typeof estado?.q === 'string' ? estado.q.trim() : '';
+  if (q) return { titulo: `Sin resultados para «${q}»`, ayuda: AYUDA_FILTROS_LISTA };
+  const extra = filtrosExtraLista(filtros);
+  if (extra.proveedor || extra.fecha_desde || extra.fecha_hasta) return { titulo: 'Sin resultados con esos filtros', ayuda: AYUDA_FILTROS_LISTA };
+  if (estado?.vista === 'PENDIENTE') {
+    return { titulo: 'No hay ítems pendientes de compra', ayuda: 'Los productos llegan desde los pedidos de venta en «Pendiente de compra».' };
+  }
+  if (estado?.vista === 'EN_PEDIDO') return { titulo: 'No hay ítems en pedido', ayuda: null };
+  if (estado?.vista === 'RECIBIDO') return { titulo: 'Aún no hay ítems recibidos', ayuda: null };
+  return { titulo: 'No hay productos en la lista', ayuda: 'Los productos se agregan desde los pedidos de venta en «Pendiente de compra».' };
+}
+
+// ─── Traslados: la lista y el tablero solo para ver (B4 T16B: TABLA-compras punto 11, KANBAN-logistica punto 5) ────
+
+/**
+ * Las vistas (pestañas) de Traslados: los grupos de operación (R9: en proceso, completadas y canceladas) y «todos». Inmutable.
+ * @type {Readonly<Record<'en_proceso' | 'completadas' | 'canceladas' | 'todos', ReadonlyArray<string>>>}
+ */
+export const VISTAS_TRASLADO = congelar({
+  ...GRUPOS_OPERACION,
+  todos: Object.values(GRUPOS_OPERACION).flat(),
+});
+
+/**
+ * Los conteos de cada pestaña de Traslados con los de GET /inventory/operations?con_conteos=1 ({todos, DRAFT, READY, DONE,
+ * CANCELLED}); lo que no llega (o no es un número) queda en null: la barra gris, nunca 0.
+ * @param {any} conteos
+ * @returns {{en_proceso: number | null, completadas: number | null, canceladas: number | null, todos: number | null}}
+ */
+export function conteosTraslado(conteos) {
+  const c = conteos !== null && typeof conteos === 'object' && !Array.isArray(conteos) ? conteos : {};
+  const suma = (estados) => {
+    const partes = estados.map((e) => numeroFinito(c[e]));
+    return partes.every((p) => p !== null) ? partes.reduce((a, b) => a + b, 0) : null;
+  };
+  return {
+    en_proceso: suma(GRUPOS_OPERACION.en_proceso),
+    completadas: suma(GRUPOS_OPERACION.completadas),
+    canceladas: suma(GRUPOS_OPERACION.canceladas),
+    todos: numeroFinito(c.todos),
+  };
+}
+
+/**
+ * La insignia de un estado de traslado (ESTADOS_TRASLADO); uno desconocido sale humanizado en gris.
+ * @param {unknown} e
+ * @returns {Readonly<InfoEstado>}
+ */
+export function infoEstadoTraslado(e) {
+  return infoDe(ESTADOS_TRASLADO, e);
+}
+
+const OPCION_DE_TRASLADO = congelar(Object.fromEntries(
+  Object.entries(ESTADOS_TRASLADO).map(([valor, info]) => [valor, { valor, etiqueta: info.label }]),
+));
+const OPCIONES_DE_VISTA_TRASLADO = congelar(Object.fromEntries(
+  Object.entries(VISTAS_TRASLADO).map(([vista, estados]) => [vista, congelar(estados.map((e) => OPCION_DE_TRASLADO[e]))]),
+));
+
+/**
+ * «Filtrar estado» de Traslados: los estados de la pestaña `vista`; sin pestaña, o una que no existe, los 4. La misma
+ * referencia para la misma vista. Inmutable.
+ * @param {unknown} vista
+ * @returns {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
+ */
+export function opcionesEstadosTraslado(vista) {
+  return typeof vista === 'string' && tiene(OPCIONES_DE_VISTA_TRASLADO, vista) ? OPCIONES_DE_VISTA_TRASLADO[vista] : OPCIONES_DE_VISTA_TRASLADO.todos;
+}
+
+/**
+ * «Filtrar estado» en el tablero de Traslados: una opción por columna. Inmutable.
+ * @type {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
+ */
+export const OPCIONES_ESTADOS_TABLERO_TRASLADO = congelar(COLUMNAS_TRASLADO.map((c) => ({ valor: c.estados[0], etiqueta: c.titulo })));
+
+/**
+ * Lo que la TABLA de Traslados le suma a la consulta de useListado (`extra`): solo traslados (operation_type) y, como
+ * GET /inventory/operations filtra con `status` (no con `estados` ni `vista`), la pestaña cruzada con el filtro.
+ * @param {import('./tabla.js').EstadoTabla | null | undefined} estado
+ * @returns {{operation_type: 'TRANSFER', vista: null, estados: null, status: string[] | null}}
+ */
+export function consultaTraslados(estado) {
+  const vista = typeof estado?.vista === 'string' && tiene(VISTAS_TRASLADO, estado.vista) ? estado.vista : 'todos';
+  return { operation_type: 'TRANSFER', vista: null, estados: null, status: estadosDeLaConsulta(VISTAS_TRASLADO[vista], vista === 'todos', estado?.estados) };
+}
+
+/**
+ * Lo que el TABLERO de Traslados (modo cliente) le suma a la consulta: los 200 más recientes de la primera página, sin
+ * pestaña (el tablero trae las cuatro columnas) y con el filtro de estados.
+ * @param {import('./tabla.js').EstadoTabla | null | undefined} estado
+ */
+export function consultaTableroTraslados(estado) {
+  const elegidos = Array.isArray(estado?.estados) && estado.estados.length > 0 ? [...estado.estados] : null;
+  return { operation_type: 'TRANSFER', vista: null, estados: null, status: elegidos, orden: '-fecha', limit: TOPE_TABLERO_COMPRAS, offset: 0 };
+}
+
+/** TRL-0012: el número de un traslado (el id con al menos 4 cifras, como _numero_operacion del servidor). */
+export function numeroTraslado(t) {
+  return `TRL-${String(t?.id ?? '').padStart(4, '0')}`;
+}
+
+/** Los productos de un traslado: sus salidas (cada producto tiene su salida y su entrada); sin dirección, cada movimiento. */
+export function productosDeTraslado(t) {
+  const movimientos = Array.isArray(t?.movements) ? t.movements : [];
+  return movimientos.filter((m) => m?.direction !== 'TRANSFER_IN').length;
+}
+
+/** La fecha REAL del traslado (`fecha`: el primer movimiento, un instante): su día en Colombia; sin movimientos, '—'. */
+export function textoFechaTraslado(t) {
+  return fechaCorta(t?.fecha) || '—';
+}
+
+/** El nombre de una bodega; sin id, '—'; si la lista no la trae, 'Bodega #id'. */
+export function nombreBodega(bodegas, id) {
+  if (!id) return '—';
+  const bodega = Array.isArray(bodegas) ? bodegas.find((b) => b?.id === id) : null;
+  return textoLimpio(bodega?.name) ?? `Bodega #${id}`;
+}
+
+/**
+ * La tarjeta de un traslado en el tablero solo para ver: el número, origen → destino, cuántos productos, la insignia del
+ * estado, la guía si la tiene y la fecha real.
+ * @param {any} t
+ * @param {ReadonlyArray<{id: number, name?: string}> | null | undefined} bodegas
+ */
+export function tarjetaTraslado(t, bodegas) {
+  const n = productosDeTraslado(t);
+  const guia = textoLimpio(t?.tracking_number);
+  return {
+    numero: numeroTraslado(t),
+    tipo: 'TRL',
+    titulo: `${nombreBodega(bodegas, t?.source_warehouse_id)} → ${nombreBodega(bodegas, t?.dest_warehouse_id)}`,
+    subtitulo: `${n} ${n === 1 ? 'producto' : 'productos'}`,
+    monto: null,
+    estado: infoEstadoTraslado(t?.status),
+    chips: guia ? [{ texto: `Guía ${guia}`, tono: 'slate' }] : [],
+    tiempo: fechaCorta(t?.fecha) || null,
+    atrasada: false,
+    accionPrincipal: null,
+  };
+}
+
+/**
+ * Lo que dice la tabla de Traslados cuando no hay filas.
+ * @param {Partial<import('./tabla.js').EstadoTabla> | null | undefined} estado
+ * @returns {{titulo: string, ayuda: string | null}}
+ */
+export function textoVacioTraslados(estado) {
+  if (Array.isArray(estado?.estados) && estado.estados.length > 0) {
+    return { titulo: 'Ningún traslado con esos estados. Ajusta el filtro.', ayuda: null };
+  }
+  const q = typeof estado?.q === 'string' ? estado.q.trim() : '';
+  if (q) return { titulo: `Sin resultados para «${q}»`, ayuda: 'Ajusta la búsqueda o el filtro de estados.' };
+  if (estado?.vista === 'en_proceso') return { titulo: 'No hay traslados en proceso', ayuda: 'Crea un traslado para mover mercancía entre bodegas.' };
+  if (estado?.vista === 'completadas') return { titulo: 'Aún no hay traslados completados', ayuda: null };
+  if (estado?.vista === 'canceladas') return { titulo: 'No hay traslados cancelados', ayuda: null };
+  return { titulo: 'Sin traslados internos registrados', ayuda: 'Crea un traslado para mover mercancía entre bodegas.' };
 }
 
 // ─── Estado del stock (RP53) ────────────────────────────────────────────────────

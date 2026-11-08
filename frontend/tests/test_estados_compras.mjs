@@ -20,7 +20,7 @@ import {
 import { diaColombia } from '../src/lib/fechas-colombia.js';
 // B4 T14: lo nuevo del Hub de Compras por el espacio de nombres, para que la falta de una función no tape los demás rojos.
 import * as ec from '../src/lib/estados-compras.js';
-import { estadoTablaInicial } from '../src/lib/tabla.js';
+import { estadoTablaInicial, queryListado } from '../src/lib/tabla.js';
 // T14 r1: la regla de la columna con filtro (kanban.js) y los textos de error (avisos.js).
 import * as kanbanLib from '../src/lib/kanban.js';
 import { textoDeError } from '../src/lib/avisos.js';
@@ -1454,6 +1454,192 @@ console.log('--- TEST 36 (B4 T16A r1): Drawer (m4, m10, m14), tildes (m11), come
   assert.ok(!/un 404 o un 409/.test(pag + tr + cont), 'm9: los comentarios dicen la regla real de recargarTrasError');
   assert.match(tr, /Sin nombre cae al correo del usuario/, 'm16: el comentario de autorActual dice lo que hace');
   assert.ok(!/el servidor usa el correo/.test(tr));
+}
+
+console.log('--- TEST 37 (B4 T16B, TABLA-compras punto 10, KANBAN-logistica punto 5; KPI-compras punto 9): Lista de compras, vistas, consulta y tablero solo para ver ---');
+{
+  // Las vistas (pestañas) son las claves de los conteos del servidor: todos, PENDIENTE, EN_PEDIDO y RECIBIDO.
+  assert.deepEqual(Object.keys(ec.VISTAS_LISTA ?? {}), ['todos', 'PENDIENTE', 'EN_PEDIDO', 'RECIBIDO']);
+  assert.deepEqual(ec.VISTAS_LISTA.todos, ['PENDIENTE', 'EN_PEDIDO', 'RECIBIDO'], 'DESCARTADO no se muestra');
+  for (const e of ['PENDIENTE', 'EN_PEDIDO', 'RECIBIDO']) assert.deepEqual(ec.VISTAS_LISTA[e], [e]);
+  assert.throws(() => { ec.VISTAS_LISTA.otra = []; }, TypeError, 'inmutable');
+
+  // La insignia: la de ESTADOS_ITEM_LISTA; un desconocido (DESCARTADO) sale humanizado en gris.
+  assert.equal(ec.infoEstadoItemLista('EN_PEDIDO').label, 'En pedido');
+  assert.equal(ec.infoEstadoItemLista(' PENDIENTE ').label, 'Pendiente');
+  assert.equal(ec.infoEstadoItemLista('DESCARTADO').label, 'Descartado');
+  assert.match(ec.infoEstadoItemLista('DESCARTADO').clases.bg, /gray/);
+
+  // «Filtrar estado»: los de la pestaña; sin pestaña o una rara, los 3. En el tablero, una opción por columna.
+  assert.deepEqual(ec.opcionesEstadosLista('EN_PEDIDO'), [{ valor: 'EN_PEDIDO', etiqueta: 'En pedido' }]);
+  for (const v of ['todos', null, undefined, 'rara', 'toString']) {
+    assert.deepEqual(ec.opcionesEstadosLista(v).map((o) => o.valor), ['PENDIENTE', 'EN_PEDIDO', 'RECIBIDO'], String(v));
+  }
+  assert.equal(ec.opcionesEstadosLista('RECIBIDO'), ec.opcionesEstadosLista('RECIBIDO'), 'la misma referencia');
+  assert.deepEqual(ec.OPCIONES_ESTADOS_TABLERO_LISTA,
+    [{ valor: 'PENDIENTE', etiqueta: 'Pendiente' }, { valor: 'EN_PEDIDO', etiqueta: 'En pedido' }, { valor: 'RECIBIDO', etiqueta: 'Recibido' }]);
+
+  // La consulta de la TABLA (extra de useListado): sin vista (el servidor no la tiene), los estados de la pestaña cruzados con
+  // el filtro, y el proveedor y las fechas de los filtros extra. «Todos» sin filtro no manda estados (el servidor excluye DESCARTADO).
+  const consulta = (parcial, filtros) => ec.consultaLista(estadoTablaInicial(parcial), filtros);
+  assert.deepEqual(consulta({ vista: 'todos' }), { vista: null, estados: null, proveedor: null, fecha_desde: null, fecha_hasta: null });
+  assert.deepEqual(consulta({ vista: 'PENDIENTE' }).estados, ['PENDIENTE']);
+  assert.deepEqual(consulta({ vista: 'todos', estados: ['RECIBIDO', 'PENDIENTE'] }).estados, ['RECIBIDO', 'PENDIENTE'], 'el filtro en Todos');
+  assert.deepEqual(consulta({ vista: 'todos' }, { proveedor: ' Acme ', desde: '2026-11-01', hasta: '2026-11-07' }),
+    { vista: null, estados: null, proveedor: 'Acme', fecha_desde: '2026-11-01', fecha_hasta: '2026-11-07' });
+  assert.deepEqual(consulta({ vista: 'RECIBIDO' }, { proveedor: '   ', desde: '', hasta: null }),
+    { vista: null, estados: ['RECIBIDO'], proveedor: null, fecha_desde: null, fecha_hasta: null }, 'lo vacío se omite');
+  // Una pestaña restaurada de otra sesión que no existe es «Todos». Un filtro que la pestaña no tiene (no se puede armar desde
+  // la barra: accionPestana lo poda): gana el filtro, para que lo que se pide sea lo que FiltroEstados muestra.
+  assert.equal(consulta({ vista: 'rara' }).estados, null);
+  assert.deepEqual(consulta({ vista: 'PENDIENTE', estados: ['RECIBIDO'] }).estados, ['RECIBIDO']);
+  // La URL que arma queryListado con eso: el orden de la tabla, la página y los filtros, sin vista=.
+  assert.equal(queryListado(estadoTablaInicial({ vista: 'EN_PEDIDO', q: 'cable', orden: '-fecha', pagina: 2 }),
+    ec.consultaLista(estadoTablaInicial({ vista: 'EN_PEDIDO', q: 'cable', orden: '-fecha', pagina: 2 }), { proveedor: 'Acme' })),
+  'q=cable&estados=EN_PEDIDO&orden=-fecha&limit=25&offset=25&proveedor=Acme');
+
+  // La consulta del TABLERO (modo cliente): sin vista, los 200 más recientes, el filtro de estados y los filtros extra.
+  const tablero = (parcial, filtros) => ec.consultaTableroLista(estadoTablaInicial(parcial), filtros);
+  assert.deepEqual(tablero({ modo: 'kanban', vista: 'PENDIENTE', orden: '-producto', pagina: 3, tamano: 50 }),
+    { vista: null, estados: null, proveedor: null, fecha_desde: null, fecha_hasta: null, orden: '-fecha', limit: 200, offset: 0 },
+    'la pestaña y el orden de la tabla no cuentan: el tablero trae las tres columnas');
+  assert.deepEqual(tablero({ modo: 'kanban', estados: ['PENDIENTE'] }, { proveedor: 'Acme' }).estados, ['PENDIENTE']);
+  assert.equal(tablero({ modo: 'kanban' }, { proveedor: 'Acme' }).proveedor, 'Acme');
+
+  // Cada estado de la Lista está en una sola columna y DESCARTADO en ninguna.
+  for (const e of Object.keys(ESTADOS_ITEM_LISTA)) assert.equal(COLUMNAS_LISTA.filter((c) => c.estados.includes(e)).length, 1, e);
+  assert.equal(COLUMNAS_LISTA.filter((c) => c.estados.includes('DESCARTADO')).length, 0);
+
+  // Solo se seleccionan los ítems PENDIENTE (TABLA-compras punto 10).
+  assert.equal(ec.esItemSeleccionable({ estado: 'PENDIENTE' }), true);
+  for (const e of ['EN_PEDIDO', 'RECIBIDO', 'DESCARTADO', undefined, null]) assert.equal(ec.esItemSeleccionable({ estado: e }), false, String(e));
+  assert.equal(ec.esItemSeleccionable(null), false);
+
+  // «Ver»: el clic abre el PEC vinculado y, sin PEC, el PVEN; sin ninguno, nada.
+  assert.equal(ec.destinoItemLista({ pec_id: 4, pven_id: 9 }), '/dashboard/compras/pedidos?id=4');
+  assert.equal(ec.destinoItemLista({ pec_id: null, pven_id: 9 }), '/dashboard/ventas/venta?id=9');
+  assert.equal(ec.destinoItemLista({}), null);
+  assert.equal(ec.destinoItemLista(null), null);
+
+  // La tarjeta del tablero solo para ver.
+  const it = { id: 5, producto: 'Cable USB-C', cantidad: 3, pven_id: 9, pven_numero: 'PVEN-20262799', proveedor: 'Acme', pec_id: 4,
+    pec_numero: 'PEC-12', estado: 'EN_PEDIDO', fecha_creacion: '2026-11-05T15:00:00Z' };
+  assert.deepEqual(ec.tarjetaItemLista(it), {
+    numero: 'PVEN-20262799', tipo: 'PVEN', titulo: 'Cable USB-C', subtitulo: '3 uds · Acme', monto: null,
+    estado: ec.infoEstadoItemLista('EN_PEDIDO'), chips: [{ texto: 'PEC-12', tono: 'purple' }], tiempo: '5 nov 2026', atrasada: false,
+    accionPrincipal: { texto: 'Ver pedido de compra', href: '/dashboard/compras/pedidos?id=4', tono: 'purple' },
+  });
+  const pend = ec.tarjetaItemLista({ id: 6, producto: 'Mouse', cantidad: 1, pven_id: 9, pven_numero: 'PVEN-1', estado: 'PENDIENTE' });
+  assert.equal(pend.subtitulo, '1 ud · Sin proveedor');
+  assert.deepEqual(pend.chips, []);
+  assert.equal(pend.tiempo, null);
+  assert.deepEqual(pend.accionPrincipal, { texto: 'Ver pedido de venta', href: '/dashboard/ventas/venta?id=9', tono: 'emerald' });
+  const suelto = ec.tarjetaItemLista({ id: 7, producto: '  ', cantidad: 'x', estado: 'RECIBIDO' });
+  assert.equal(suelto.numero, 'Ítem 7', 'sin PVEN ni PEC: Ítem id');
+  assert.equal(suelto.tipo, null);
+  assert.equal(suelto.titulo, 'Producto sin nombre');
+  assert.equal(suelto.subtitulo, 'Sin proveedor');
+  assert.equal(suelto.accionPrincipal, null);
+
+  // El «vacío» de la tabla dice qué lo causa (el filtro, la búsqueda, el proveedor o las fechas, la pestaña).
+  const vacio = (parcial, filtros) => ec.textoVacioLista(estadoTablaInicial(parcial), filtros);
+  assert.deepEqual(vacio({ estados: ['RECIBIDO'], q: 'x' }), { titulo: 'Ningún ítem con esos estados. Ajusta el filtro.', ayuda: null });
+  assert.deepEqual(vacio({ q: ' cable ' }), { titulo: 'Sin resultados para «cable»', ayuda: 'Ajusta la búsqueda, el proveedor, las fechas o el filtro de estados.' });
+  assert.deepEqual(vacio({}, { proveedor: 'Acme' }), { titulo: 'Sin resultados con esos filtros', ayuda: 'Ajusta la búsqueda, el proveedor, las fechas o el filtro de estados.' });
+  assert.deepEqual(vacio({}, { desde: '2026-11-01' }).titulo, 'Sin resultados con esos filtros');
+  assert.deepEqual(vacio({ vista: 'PENDIENTE' }), { titulo: 'No hay ítems pendientes de compra', ayuda: 'Los productos llegan desde los pedidos de venta en «Pendiente de compra».' });
+  assert.deepEqual(vacio({ vista: 'EN_PEDIDO' }), { titulo: 'No hay ítems en pedido', ayuda: null });
+  assert.deepEqual(vacio({ vista: 'RECIBIDO' }), { titulo: 'Aún no hay ítems recibidos', ayuda: null });
+  assert.deepEqual(vacio({ vista: 'todos' }), { titulo: 'No hay productos en la lista', ayuda: 'Los productos se agregan desde los pedidos de venta en «Pendiente de compra».' });
+  assert.equal(ec.textoVacioLista(null).titulo, 'No hay productos en la lista');
+}
+
+console.log('--- TEST 38 (B4 T16B, TABLA-compras punto 11, KANBAN-logistica punto 5; KPI-compras punto 10): Traslados, vistas, consulta, columnas y tablero solo para ver ---');
+{
+  // Las pestañas son los grupos de operación (R9) y «todos»: En proceso (DRAFT y READY), Completados y Cancelados.
+  assert.deepEqual(Object.keys(ec.VISTAS_TRASLADO ?? {}), ['en_proceso', 'completadas', 'canceladas', 'todos']);
+  for (const [grupo, estados] of Object.entries(GRUPOS_OPERACION)) assert.deepEqual(ec.VISTAS_TRASLADO[grupo], estados, `${grupo} es el grupo`);
+  assert.deepEqual(ec.VISTAS_TRASLADO.todos, ['DRAFT', 'READY', 'DONE', 'CANCELLED']);
+  assert.throws(() => { ec.VISTAS_TRASLADO.otra = []; }, TypeError, 'inmutable');
+
+  // Los conteos del servidor ({todos, DRAFT, READY, DONE, CANCELLED}) por pestaña; lo que no llega queda en null (la barra gris).
+  assert.deepEqual(ec.conteosTraslado({ todos: 9, DRAFT: 2, READY: 3, DONE: 3, CANCELLED: 1 }),
+    { en_proceso: 5, completadas: 3, canceladas: 1, todos: 9 });
+  assert.deepEqual(ec.conteosTraslado({ todos: 4, DRAFT: 0, READY: 1, DONE: 3, CANCELLED: 0 }).en_proceso, 1);
+  assert.deepEqual(ec.conteosTraslado({ todos: 4, DRAFT: 2, DONE: 2 }), { en_proceso: null, completadas: 2, canceladas: null, todos: 4 });
+  assert.deepEqual(ec.conteosTraslado({ todos: 4, DRAFT: '2', READY: '1', DONE: 'x' }), { en_proceso: 3, completadas: null, canceladas: null, todos: 4 });
+  for (const malo of [null, undefined, 'x', [1]]) assert.deepEqual(ec.conteosTraslado(malo), { en_proceso: null, completadas: null, canceladas: null, todos: null }, String(malo));
+
+  // La insignia (ESTADOS_TRASLADO) y el filtro de estados.
+  assert.equal(ec.infoEstadoTraslado('DONE').label, 'Hecho');
+  assert.equal(ec.infoEstadoTraslado(' READY ').label, 'Listo');
+  assert.equal(ec.infoEstadoTraslado('ALGO').label, 'Algo');
+  assert.deepEqual(ec.opcionesEstadosTraslado('en_proceso'), [{ valor: 'DRAFT', etiqueta: 'Borrador' }, { valor: 'READY', etiqueta: 'Listo' }]);
+  for (const v of ['todos', null, undefined, 'rara', 'toString']) {
+    assert.deepEqual(ec.opcionesEstadosTraslado(v).map((o) => o.valor), ['DRAFT', 'READY', 'DONE', 'CANCELLED'], String(v));
+  }
+  assert.equal(ec.opcionesEstadosTraslado('canceladas'), ec.opcionesEstadosTraslado('canceladas'));
+  assert.deepEqual(ec.OPCIONES_ESTADOS_TABLERO_TRASLADO,
+    [{ valor: 'DRAFT', etiqueta: 'Borrador' }, { valor: 'READY', etiqueta: 'Listo' }, { valor: 'DONE', etiqueta: 'Hecho' }, { valor: 'CANCELLED', etiqueta: 'Cancelado' }]);
+
+  // La consulta de la TABLA: solo traslados (operation_type), sin vista ni estados (el servidor usa status), los estados de la
+  // pestaña cruzados con el filtro. «Todos» sin filtro no manda status.
+  const consulta = (parcial) => ec.consultaTraslados(estadoTablaInicial(parcial));
+  assert.deepEqual(consulta({ vista: 'todos' }), { operation_type: 'TRANSFER', vista: null, estados: null, status: null });
+  assert.deepEqual(consulta({ vista: 'en_proceso' }), { operation_type: 'TRANSFER', vista: null, estados: null, status: ['DRAFT', 'READY'] });
+  assert.deepEqual(consulta({ vista: 'completadas' }).status, ['DONE']);
+  assert.deepEqual(consulta({ vista: 'todos', estados: ['DONE'] }).status, ['DONE']);
+  assert.deepEqual(consulta({ vista: 'en_proceso', estados: ['READY'] }).status, ['READY']);
+  assert.deepEqual(consulta({ vista: 'en_proceso', estados: ['DONE'] }).status, ['DONE'], 'gana el filtro (la barra lo poda al cambiar de pestaña)');
+  assert.equal(consulta({ vista: 'rara' }).status, null);
+  const estadoT = estadoTablaInicial({ vista: 'en_proceso', q: 'TRL-0012', orden: 'fecha', pagina: 3, tamano: 50 });
+  assert.equal(queryListado(estadoT, ec.consultaTraslados(estadoT)),
+    'q=TRL-0012&orden=fecha&limit=50&offset=100&operation_type=TRANSFER&status=DRAFT,READY');
+
+  // El TABLERO (modo cliente): todos los traslados que dejan la búsqueda y el filtro, los 200 más recientes.
+  const tab = ec.consultaTableroTraslados(estadoTablaInicial({ modo: 'kanban', vista: 'completadas', orden: 'status', pagina: 2, estados: ['DONE'] }));
+  assert.deepEqual(tab, { operation_type: 'TRANSFER', vista: null, estados: null, status: ['DONE'], orden: '-fecha', limit: 200, offset: 0 });
+  assert.equal(ec.consultaTableroTraslados(estadoTablaInicial({ modo: 'kanban', vista: 'completadas' })).status, null, 'la pestaña no cuenta en el tablero');
+
+  // Cada estado de traslado está en una sola columna y cada columna del tablero tiene su estado.
+  for (const e of Object.keys(ESTADOS_TRASLADO)) assert.equal(COLUMNAS_TRASLADO.filter((c) => c.estados.includes(e)).length, 1, e);
+
+  // Número, productos, fecha y bodegas de una fila.
+  assert.equal(ec.numeroTraslado({ id: 12 }), 'TRL-0012');
+  assert.equal(ec.numeroTraslado({ id: 12345 }), 'TRL-12345');
+  const t = { id: 12, status: 'READY', source_warehouse_id: 1, dest_warehouse_id: 2, fecha: '2026-11-05T15:00:00Z',
+    movements: [{ direction: 'TRANSFER_OUT', sku_id: 7, quantity: 2 }, { direction: 'TRANSFER_IN', sku_id: 7, quantity: 2 },
+      { direction: 'TRANSFER_OUT', sku_id: 8, quantity: 1 }, { direction: 'TRANSFER_IN', sku_id: 8, quantity: 1 }] };
+  assert.equal(ec.productosDeTraslado(t), 2, 'los productos son las salidas (el Drawer los lista igual)');
+  assert.equal(ec.productosDeTraslado({ id: 1 }), 0);
+  assert.equal(ec.productosDeTraslado({ movements: [{ sku_id: 1 }, { sku_id: 2 }] }), 2, 'sin dirección cuenta cada movimiento');
+  assert.equal(ec.textoFechaTraslado(t), '5 nov 2026');
+  assert.equal(ec.textoFechaTraslado({ id: 1 }), '—', 'sin movimientos no hay fecha');
+  assert.equal(ec.textoFechaTraslado({ fecha: '2026-11-08T02:00:00Z' }), '7 nov 2026', 'un instante: el día de Colombia');
+  const bodegas = [{ id: 1, name: 'Bodega A' }, { id: 2, name: 'Bodega B' }];
+  assert.equal(ec.nombreBodega(bodegas, 1), 'Bodega A');
+  assert.equal(ec.nombreBodega(bodegas, 9), 'Bodega #9');
+  assert.equal(ec.nombreBodega(bodegas, null), '—');
+  assert.equal(ec.nombreBodega(null, 1), 'Bodega #1');
+
+  // La tarjeta del tablero solo para ver.
+  assert.deepEqual(ec.tarjetaTraslado(t, bodegas), {
+    numero: 'TRL-0012', tipo: 'TRL', titulo: 'Bodega A → Bodega B', subtitulo: '2 productos', monto: null,
+    estado: ec.infoEstadoTraslado('READY'), chips: [], tiempo: '5 nov 2026', atrasada: false, accionPrincipal: null,
+  });
+  assert.equal(ec.tarjetaTraslado({ id: 3, status: 'DONE', movements: [{ direction: 'TRANSFER_OUT' }] }, []).subtitulo, '1 producto');
+  assert.deepEqual(ec.tarjetaTraslado({ id: 3, status: 'DRAFT', tracking_number: 'ABC1' }, bodegas).chips, [{ texto: 'Guía ABC1', tono: 'slate' }]);
+  assert.equal(ec.tarjetaTraslado({ id: 3, status: 'DRAFT' }, bodegas).tiempo, null);
+
+  // El «vacío» de la tabla.
+  const vacio = (parcial) => ec.textoVacioTraslados(estadoTablaInicial(parcial));
+  assert.deepEqual(vacio({ estados: ['DONE'] }), { titulo: 'Ningún traslado con esos estados. Ajusta el filtro.', ayuda: null });
+  assert.deepEqual(vacio({ q: ' bodega ' }), { titulo: 'Sin resultados para «bodega»', ayuda: 'Ajusta la búsqueda o el filtro de estados.' });
+  assert.deepEqual(vacio({ vista: 'en_proceso' }), { titulo: 'No hay traslados en proceso', ayuda: 'Crea un traslado para mover mercancía entre bodegas.' });
+  assert.deepEqual(vacio({ vista: 'completadas' }), { titulo: 'Aún no hay traslados completados', ayuda: null });
+  assert.deepEqual(vacio({ vista: 'canceladas' }), { titulo: 'No hay traslados cancelados', ayuda: null });
+  assert.deepEqual(vacio({ vista: 'todos' }), { titulo: 'Sin traslados internos registrados', ayuda: 'Crea un traslado para mover mercancía entre bodegas.' });
+  assert.equal(ec.textoVacioTraslados(null).titulo, 'Sin traslados internos registrados');
 }
 
 console.log('\nOK: test_estados_compras.mjs');

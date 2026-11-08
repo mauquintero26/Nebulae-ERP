@@ -555,4 +555,22 @@ console.log('--- TEST 20 (B4 T16A, FLUJO-compras puntos 8 y 9): la franja de Tr�
   assert.equal(cargando[2].esEste, true);
 }
 
+console.log('--- TEST 21 (B4 T16B, FLUJO-compras punto 10): la franja de la Lista de compras, con «Estás aquí» en Lista de compras ---');
+{
+  const sinHref = (pasos) => pasos.map((p) => Object.fromEntries(Object.entries(p).filter(([campo]) => campo !== 'href')));
+  const pasos = fc.pasosPantallaCompras(FLUJO, 'LISTA');
+  assert.deepEqual(pasos.map((p) => p.clave), ['LISTA', 'PEC', 'TRANSITO', 'RECEPCION', 'RECIBIDO']);
+  assert.deepEqual(pasos.map((p) => p.esEste), [true, false, false, false, false], 'Estás aquí en la primera caja');
+  assert.equal(pasos[0].estado, 'actual');
+  assert.equal(pasos[0].href ?? null, null, 'la caja de esta pantalla no lleva href (D42)');
+  assert.deepEqual(pasos.slice(1).map((p) => p.href), ['/dashboard/compras/pedidos', '/dashboard/compras/transito',
+    '/dashboard/compras/recepciones', '/dashboard/compras/pedidos?tab=recibidos']);
+  assert.deepEqual(pasos.map((p) => p.total), [4, 5, 3, 2, 9], 'los conteos de /compras/flujo');
+  assert.deepEqual(sinHref(pasos), sinHref(pasosConConteos(PASOS_FLUJO_COMPRAS, flujo.conteosDePasos(FLUJO), { actual: 'LISTA' })));
+  // Sin datos (cargando): la barra gris, nunca 0.
+  const cargando = fc.pasosPantallaCompras(null, 'LISTA');
+  assert.ok(cargando.every((p) => p.total === null && p.atrasados === null));
+  assert.equal(cargando[0].esEste, true);
+}
+
 console.log('\nOK: test_flujo_compras.mjs');

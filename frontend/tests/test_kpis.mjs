@@ -22,6 +22,7 @@ import { formatoPct } from '../src/lib/dinero-ventas.js';
 import { PERIODOS, infoVariacion } from '../src/lib/analisis.js';
 // B4 T14: las tarjetas del Hub de Compras por el espacio de nombres (su falta no tapa los demás rojos).
 import * as kpisLib from '../src/lib/kpis.js';
+import { conteosTraslado } from '../src/lib/estados-compras.js';
 
 const MENOS = '−';
 
@@ -629,6 +630,38 @@ console.log('--- TEST 18 (B4 T16A, KPI-compras puntos 7 y 8): tarjetasTransito y
   for (const id of ['pec_activos', 'pec_vencidos', 'pec_avance', 'pec_monto_por_recibir', 'rec_por_confirmar', 'rec_confirmadas', 'pec_en_transito']) {
     assert.ok(CATALOGO_KPI[id], id);
   }
+}
+
+console.log('--- TEST 19 (B4 T16B, KPI-compras puntos 9 y 10): tarjetasLista (lista-compras/stats) y tarjetasTraslados (con_conteos) ---');
+{
+  const lista = kpisLib.tarjetasLista;
+  assert.equal(typeof lista, 'function', 'tarjetasLista existe');
+  // Lista de compras: pendientes, en pedido, recibidos y total, tal como los cuenta /compras/lista-compras/stats.
+  assert.deepEqual(lista({ pendientes: 6, en_pedido: 4, recibidos: 12, total: 22 }), {
+    pendientes: { valor: 6 }, en_pedido: { valor: 4 }, recibidos: { valor: 12 }, total: { valor: 22 },
+  });
+  assert.deepEqual(lista({ pendientes: 0, en_pedido: 0, recibidos: 0, total: 0 }).pendientes, { valor: 0 }, 'un 0 del servidor es 0');
+  assert.deepEqual(lista({ pendientes: '5', en_pedido: 'x' }), {
+    pendientes: { valor: 5 }, en_pedido: { valor: null }, recibidos: { valor: null }, total: { valor: null },
+  }, 'lo que no es un número queda en null (barra gris o «—»), nunca 0');
+  for (const malo of [null, undefined, 'x', [1]]) assert.equal(lista(malo), null, String(malo));
+
+  // Traslados: los conteos por grupo (conteosTraslado: en proceso = DRAFT + READY), las bodegas y el total (todos).
+  const tras = kpisLib.tarjetasTraslados;
+  assert.equal(typeof tras, 'function', 'tarjetasTraslados existe');
+  const porGrupo = conteosTraslado({ todos: 10, DRAFT: 2, READY: 3, DONE: 4, CANCELLED: 1 });
+  assert.deepEqual(tras(porGrupo, 5), { en_proceso: { valor: 5 }, completados: { valor: 4 }, bodegas: { valor: 5 }, total: { valor: 10 } });
+  assert.deepEqual(tras(conteosTraslado({ todos: 0, DRAFT: 0, READY: 0, DONE: 0, CANCELLED: 0 }), 0),
+    { en_proceso: { valor: 0 }, completados: { valor: 0 }, bodegas: { valor: 0 }, total: { valor: 0 } }, 'un 0 del servidor es 0');
+  // Sin conteos (cargando o con error) o con una clave que falta: null; las bodegas llegan por su cuenta.
+  assert.deepEqual(tras(conteosTraslado(null), 3), { en_proceso: { valor: null }, completados: { valor: null }, bodegas: { valor: 3 }, total: { valor: null } });
+  assert.deepEqual(tras(conteosTraslado({ todos: 7, DRAFT: 1, DONE: 2 }), null), { en_proceso: { valor: null }, completados: { valor: 2 }, bodegas: { valor: null }, total: { valor: 7 } });
+  for (const malo of [null, undefined, 'x', [1], 4]) assert.equal(tras(malo, 1).en_proceso.valor, null, String(malo));
+  for (const id of ['lista_pendientes', 'lista_en_pedido', 'lista_recibidos', 'lista_total', 'tras_en_proceso', 'tras_completados', 'tras_total', 'bodegas']) {
+    assert.ok(CATALOGO_KPI[id], id);
+  }
+  assert.equal(etiquetaKpi('lista_pendientes'), 'Ítems por comprar');
+  assert.equal(etiquetaKpi('tras_en_proceso'), 'Traslados en proceso');
 }
 
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');
