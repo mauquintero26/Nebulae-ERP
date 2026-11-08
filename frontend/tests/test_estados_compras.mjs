@@ -2762,6 +2762,7 @@ console.log('--- TEST 47 (B4 T19): Recepciones, Traslados y Ajustes de Inventari
     assert.ok(/<AvisoReintentar error=\{error\w+\}/.test(f), `${nombre}: la fuente de tarjetas que falla dice el error con Reintentar (el uso, no el import)`);
     assert.ok(!/\? null : \(?\w+\?\.(datos|kpis|conteos|totales)/.test(sinComentarios(f)), `${nombre}: una recarga no borra el último valor (I3)`);
     trae(f, 'lecturaDeCarga(', `${nombre}: lee el último valor con lecturaDeCarga`);
+    assert.ok(!/cargando\w* \? null : (?!\(?\w+\?\.error)/.test(sinComentarios(f)), `${nombre}: ningún valor se pone en null mientras recarga`);
     trae(f, 'etiqueta={`Acciones de ${', `${nombre}: las acciones llevan el número en su nombre`);
     assert.ok(/soloLectura=\{TEXTO_SOLO_VER\}/.test(f), `${nombre}: tablero solo para ver`);
     for (const q of ['regla=', 'onCambio=', 'onAccion=']) noTrae(etiquetaJsx(f, '<TableroKanban'), q, `${nombre}: el tablero no mueve (${q})`);
