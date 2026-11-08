@@ -326,13 +326,15 @@ console.log('--- TEST 11 (T19): «Filtrar estado» de la tabla (los estados de l
   for (const o of ent.OPCIONES_ESTADOS_TABLERO_ENTREGA) assert.ok(COLUMNAS_ENTREGA.some((c) => c.estados[0] === o.valor), o.valor);
 }
 
-console.log('--- TEST 12 (T19 r1): una sola regla para despachar (fila, tablero y Drawer), cobrar el saldo y la tarjeta que abre cada pestaña ---');
+console.log('--- TEST 12 (T19 r1): una sola regla para despachar (fila, tablero y Drawer: la MISMA función), cobrar el saldo y la tarjeta que abre cada pestaña ---');
 {
   const p = (estado, saldo = 0) => ({ id: 1, numero: 'PVEN-1', estado, saldo_cop: saldo });
   // m3, m10, m17: despachar desde «Listo para despachar», desde «falta saldo» (con la alerta) y terminar un PARCIALMENTE_ENTREGADO; nunca desde
   // «Esperando mercancía», ni un ya despachado, cancelado o devuelto.
   const casos = [
-    ['LISTO_ENTREGA', 0, true], ['LISTO_ENTREGA', 5000, true], ['DISPONIBLE', 0, true], ['PENDIENTE_SALDO', 100, true],
+    ['LISTO_ENTREGA', 0, true], ['DISPONIBLE', 0, true],
+    // r2 (I3): con saldo pendiente NO se despacha (el brief y el tablero: «Falta cobrar el saldo»); se cobra primero.
+    ['LISTO_ENTREGA', 5000, false], ['PENDIENTE_SALDO', 100, false], ['LISTO_PARA_ENTREGA', 100, false], ['PARCIALMENTE_ENTREGADO', 100, false],
     ['LISTO_PARA_ENTREGA', 0, true], ['PARCIALMENTE_ENTREGADO', 0, true],
     ['EN_TRANSITO', 0, false], ['PENDIENTE_COMPRA', 0, false], ['EN_PROCESO', 0, false], ['CONFIRMADO', 0, false], ['PAGADO', 0, false],
     ['ENTREGADO', 0, false], ['FACTURADO', 0, false], ['CANCELADO', 0, false], ['DEVUELTO_TOTAL', 0, false],
@@ -342,6 +344,16 @@ console.log('--- TEST 12 (T19 r1): una sola regla para despachar (fila, tablero 
     for (const rol of ['FINANZAS', 'COMPRAS', '', null]) assert.equal(ent.puedeDespacharPedido(p(estado, saldo), rol), false, `${estado} ${rol}`);
   }
   assert.equal(ent.puedeDespacharPedido(null, 'ADMIN'), false);
+  // r2 (I3): el tablero usa la MISMA regla: soltar en Despachados es una acción exactamente cuando puedeDespacharPedido; el resto, bloqueado.
+  for (const [estado, saldo] of [...casos.map(([e, s]) => [e, s]), ['LISTO_ENTREGA', 1]]) {
+    for (const rol of ['ADMIN', 'ASESOR', 'BODEGA', 'FINANZAS', 'COMPRAS', '']) {
+      const ped = p(estado, saldo);
+      const origen = columnaEntrega(ped);
+      if (origen === null || origen === 'despachado') continue;
+      assert.equal(reglaSoltarEntrega(ped, origen, 'despachado', { rol }).tipo === 'accion', ent.puedeDespacharPedido(ped, rol), `tablero y fila coinciden: ${estado} saldo ${saldo} ${rol}`);
+    }
+  }
+  assert.match(reglaSoltarEntrega(p('LISTO_ENTREGA', 5000), 'falta_saldo', 'despachado', { rol: 'ADMIN' }).motivo, /Falta cobrar el saldo de \$5\.000/);
   // m6, m12, m21: «Marcar Saldo Cobrado» (PATCH saldo_cop) solo ADMIN y ASESOR; Bodega recibe 403.
   for (const rol of ['ADMIN', 'ASESOR', 'Vendedor', ' admin ']) assert.equal(ent.puedeCobrarSaldo(rol), true, rol);
   for (const rol of ['BODEGA', 'FINANZAS', 'COMPRAS', 'CONSULTA', '', null, undefined]) assert.equal(ent.puedeCobrarSaldo(rol), false, String(rol));

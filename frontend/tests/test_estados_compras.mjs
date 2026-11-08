@@ -2759,7 +2759,9 @@ console.log('--- TEST 47 (B4 T19): Recepciones, Traslados y Ajustes de Inventari
     sinDefectos(nombre, f);
     trae(f, 'useEstadoTabla(', `${nombre}: el estado único`);
     trae(f, 'esperar: !listo', `${nombre}: espera las preferencias (esqueleto, nunca vacío)`);
-    assert.ok(/<AvisoReintentar error=\{error\w+\}/.test(f), `${nombre}: la fuente de tarjetas que falla dice el error con Reintentar (el uso, no el import)`);
+    for (const err of ({ Recepciones: ['errorStats', 'errorBodegas'], Traslados: ['errorTotales', 'errorBodegas'], Ajustes: ['errorTotales'] })[nombre]) {
+      trae(f, `<AvisoReintentar error={${err}}`, `${nombre}: la fuente que falla dice SU error con Reintentar (${err}; el uso, no el import)`);
+    }
     assert.ok(!/\? null : \(?\w+\?\.(datos|kpis|conteos|totales)/.test(sinComentarios(f)), `${nombre}: una recarga no borra el último valor (I3)`);
     trae(f, 'lecturaDeCarga(', `${nombre}: lee el último valor con lecturaDeCarga`);
     assert.ok(!/cargando\w* \? null : (?!\(?\w+\?\.error)/.test(sinComentarios(f)), `${nombre}: ningún valor se pone en null mientras recarga`);
@@ -2779,6 +2781,10 @@ console.log('--- TEST 47 (B4 T19): Recepciones, Traslados y Ajustes de Inventari
     trae(tarjetaKpi(rec, k), `activo={vistaActiva === vistaDeTarjetaRecepcion('${k}')}`, `${k} se marca con SU pestaña`);
   }
   trae(rec, 'pestanasRecepcion(conteos)', 'Recepciones importa las pestañas compartidas');
+  // r2 (m6, m18): el enlace al PEC de origen, en el menú de la fila y en el Drawer.
+  trae(rec, "router.push(`/dashboard/compras/pedidos?id=${r.pec_id}`)", 'el menú abre el PEC');
+  trae(rec, "{ etiqueta: 'Abrir el pedido de compra', icono: Package, onClick: () => acciones?.abrirPec(r), oculto: !r.pec_id }", 'el ítem del menú sale solo con pec_id');
+  trae(rec, '<Link href={`/dashboard/compras/pedidos?id=${selectedItem.pec_id}`}', 'el Drawer enlaza al PEC');
   noTrae(sinComentarios(rec), 'pestanasDeRecepciones', 'sin la copia local de las pestañas');
   noTrae(tarjetaKpi(rec, 'bodegas'), 'onClick=', 'Bodegas es informativa');
   trae(rec, 'despachar(accionVistaEnLista(estado, siguiente, opcionesEstadosRecepcion))', 'las tarjetas despachan al estado único');
@@ -2844,6 +2850,20 @@ console.log('--- TEST 48 (B4 T19; KANBAN-logistica 4, KPI-inventario 8; R15, RP2
   trae(e, 'pestanasEntrega(conteos)', 'las pestañas salen de los conteos');
   trae(e, 'tarjetasEntregas(kpisStats, conteos)', 'la tarjeta Despachados lee los MISMOS conteos que las pestañas');
   trae(e, 'pestanasEntrega(conteos)', 'las pestañas leen los mismos conteos');
+  // r2 (I1): las anclas de TEST 47 también en Entregas (los mutantes M7 de página, M7b, M9 y M9b mueren aquí).
+  trae(e, "const vista = vistaDeTarjetaEntrega('ent_despachados') ?? INICIAL_ENTREGAS.vista;", 'elegirDespachados abre la pestaña de lib');
+  trae(e.slice(e.indexOf('<TarjetaKpi kpi="ent_despachados"'), e.indexOf('/>', e.indexOf('<TarjetaKpi kpi="ent_despachados"'))), "activo={vistaActiva === vistaDeTarjetaEntrega('ent_despachados')}", 'el anillo es el de SU pestaña');
+  for (const err of ['errorConteos', 'errorStats']) trae(e, `<AvisoReintentar error={${err}}`, `la fuente que falla dice SU error con Reintentar (${err})`);
+  trae(e, 'lecturaDeCarga(', 'Entregas lee el último valor con lecturaDeCarga');
+  assert.equal(e.split('lecturaDeCarga(').length - 1, 2, 'los conteos y las tarjetas');
+  assert.ok(!/cargando\w* \? null : (?!\(?\w+\?\.error)/.test(sinComentarios(e)), 'Entregas: ningún valor se pone en null mientras recarga');
+  assert.ok(/const errorConteos = cargandoConteos \? null : \(cargadosConteos\?\.error \?\? null\);/.test(e), 'el error de los conteos sale de su fuente');
+  assert.ok(/const errorStats = cargandoStats \? null : \(stats\?\.error \?\? null\);/.test(e), 'el error de las tarjetas sale de su fuente');
+  // r2 (m6): las regresiones repuestas y el WhatsApp visible llevan su prueba.
+  trae(e, '{p.customer_phone && <span', 'el teléfono bajo el cliente (m24)');
+  trae(e, "accionPrincipal: r ? { texto: 'Recordar el saldo por WhatsApp', onClick: () => abrirWhatsApp(r.url)", 'el botón de WhatsApp visible en la tarjeta (m2)');
+  trae(e, 'aria-label={`Recordar el saldo de ${numero} por WhatsApp`}', 'el botón de WhatsApp en la fila');
+  trae(e, 'puedeDespacharPedido(selected, rol) && (', 'el Drawer ofrece despachar solo con la regla única');
   trae(e, 'consultaConteoEntrega(columna, { q: qConteos })', 'los conteos siguen la búsqueda (m1)');
   // m3, m10, m17: UNA regla para despachar (la fila, el Drawer y su selector de bodega); m6: cobrar el saldo solo ADMIN y ASESOR; m14: el rol tras montar.
   trae(e, 'puedeDespacharPedido(p, acciones.rol)', 'la fila usa la regla única');

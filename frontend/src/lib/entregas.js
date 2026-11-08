@@ -128,7 +128,8 @@ export function reglaSoltarEntrega(pedido, origen, destino, { rol = null } = {})
       return { tipo: 'bloqueado', motivo: `Falta cobrar el saldo de ${formatoPesos(saldoDe(pedido))} antes de despachar.` };
     }
     if (desde !== 'listo') return { tipo: 'bloqueado', motivo: 'La mercancía todavía no está lista para entrega.' };
-    return transicionesPedido(estado).includes('ENTREGADO')
+    // r2 (I3): la MISMA regla de la fila y del Drawer.
+    return puedeDespacharPedido(pedido, rol)
       ? { tipo: 'accion', accion: 'despachar' } : { tipo: 'bloqueado', motivo: motivoN2('ENTREGADO') };
   }
   if (rolNormal === 'BODEGA') return { tipo: 'bloqueado', motivo: BODEGA_SOLO_DESPACHA };
@@ -439,18 +440,18 @@ export function confirmacionDespacho(pedido, nombreBodega) {
 }
 
 /**
- * La ÚNICA regla de «se puede despachar este pedido» (fila, tablero y Drawer; B4 T19 r1, m3, m10, m17): el rol despacha (ADMIN,
- * ASESOR, BODEGA) y el pedido está en «Listo para despachar», en «Listo pero falta saldo» (la confirmación avisa del cobro) o es un
- * PARCIALMENTE_ENTREGADO que se termina de entregar (como en BASE); y transicionesPedido deja pasar a ENTREGADO. Nunca desde
- * «Esperando mercancía», ni un pedido ya despachado, cancelado o devuelto.
+ * La ÚNICA regla de «se puede despachar este pedido» (la fila, el Drawer y el tablero: reglaSoltarEntrega la llama; B4 T19 r2, I3):
+ * el rol despacha (ADMIN, ASESOR, BODEGA) y el pedido está en «Listo para despachar» o es un PARCIALMENTE_ENTREGADO que se termina de
+ * entregar (como en BASE), SIN saldo por cobrar (el brief: «despachar solo desde Listo para despachar»; con saldo, primero se cobra); y
+ * transicionesPedido deja pasar a ENTREGADO. Nunca desde «Esperando mercancía» ni «Listo pero falta saldo», ni un pedido ya
+ * despachado, cancelado o devuelto.
  * @param {any} pedido
  * @param {string | null | undefined} rol
  * @returns {boolean}
  */
 export function puedeDespacharPedido(pedido, rol) {
   if (!pedido || typeof pedido !== 'object' || !puedeDespachar(rol)) return false;
-  const columna = columnaEntrega(pedido);
-  const sePuede = columna === 'listo' || columna === 'falta_saldo' || pedido.estado === 'PARCIALMENTE_ENTREGADO';
+  const sePuede = columnaEntrega(pedido) === 'listo' || (pedido.estado === 'PARCIALMENTE_ENTREGADO' && saldoDe(pedido) <= 0);
   return sePuede && transicionesPedido(pedido.estado).includes('ENTREGADO');
 }
 
