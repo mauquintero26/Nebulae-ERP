@@ -2432,7 +2432,7 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   trae(piezas, 'if (catalogo.error && !catalogo.filas) {', 'SelectorCatalogo: la rama del error');
   trae(piezas, 'role="alert"', 'SelectorCatalogo: el error se anuncia');
   trae(piezas, '{textoDeError(catalogo.error, fallo)}', 'SelectorCatalogo: el detalle del servidor tal cual');
-  trae(piezas, 'onClick={onReintentar}', 'SelectorCatalogo: «Reintentar» vuelve a pedir');
+  trae(piezas, '<button type="button" onClick={onReintentar} className={`rounded font-bold underline ${FOCOS[acento]}`}>Reintentar</button>', 'SelectorCatalogo: «Reintentar» vuelve a pedir');
   trae(piezas, 'disabled={!catalogo.filas}', 'SelectorCatalogo: deshabilitado mientras carga');
   trae(piezas, '<option value="">{catalogo.filas ? todas : cargando}</option>', 'SelectorCatalogo: «Cargando…» mientras carga');
   trae(piezas, "export const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';", 'el contenedor deja libre la esquina del botón de la IA (pb-24)');
