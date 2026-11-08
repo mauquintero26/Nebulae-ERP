@@ -1723,4 +1723,105 @@ console.log('--- TEST 39 (B4 T16B): la Lista de compras (compras/lista-compras/p
   assert.match(pag, /catch \(err\) \{ sinVincular\.push\(/, 'el vínculo ítem a ítem ya no se traga el error');
 }
 
+console.log('--- TEST 40 (B4 T16B): Traslados (compras/traslados/page.tsx) y columnas-traslado.tsx cablean las piezas, la tabla, el tablero solo para ver y el servidor ---');
+{
+  const col = readFileSync(new URL('../src/app/dashboard/compras/columnas-traslado.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const pag = readFileSync(new URL('../src/app/dashboard/compras/traslados/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = pag.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(!/@ts-nocheck/.test(pag), 'la página se tipa');
+  // columnas-traslado.tsx (T19 la importa): no es una ruta, no depende de ninguna page.tsx y exporta lo que las pantallas arman.
+  assert.ok(!/export default/.test(col) && !/from '\.{1,2}\/[^']*page'/.test(col), 'no es una ruta ni importa una page');
+  for (const nombre of ['columnasTraslado', 'titulosDeOrdenTraslado', 'CeldaEstadoTraslado', 'CeldaBodega', 'BodegasTraslado']) {
+    assert.match(col, new RegExp(`export (?:function|const) ${nombre}\\b`), `exporta ${nombre}`);
+  }
+  assert.match(col, /export function columnasTraslado<T extends FilaColumnasTraslado>\(celdaAcciones: \(t: T\) => ReactNode\)/, 'la celda de Acciones es de cada pantalla');
+  for (const [id, titulo] of [['numero', 'Traslado #'], ['origen', 'Origen'], ['destino', 'Destino'], ['productos', 'Productos'], ['fecha', 'Fecha'], ['estado', 'Estado'], ['acciones', 'Acciones']]) {
+    assert.match(col, new RegExp(`\\{ id: '${id}', titulo: '${titulo}'`), `columna ${titulo}`);
+  }
+  assert.match(col, /id: 'numero'[^\n]*clave: true, fija: 'izquierda'/);
+  assert.match(col, /id: 'origen'[^\n]*flexible: true/, 'una sola flexible: el origen');
+  assert.equal((col.match(/flexible: true/g) ?? []).length, 1);
+  assert.match(col, /id: 'acciones'[^\n]*fija: 'derecha'/);
+  assert.ok(!/ocultaPorDefecto/.test(col), 'las 7 columnas caben a 1024 px: ninguna va oculta');
+  const visibles = anchoVisible(col, 'export function columnasTraslado');
+  assert.ok(visibles > 0 && visibles <= 704, `R26: las columnas visibles suman ${visibles} px (caja de 704, sin casilla de selección)`);
+  // Las celdas de bodega leen el contexto (las columnas son una constante y no pueden depender de las bodegas, que llegan después).
+  assert.match(col, /nombreBodega\(useContext\(BodegasTraslado\), id\)/);
+  // La fecha es la REAL (el instante `fecha` de T13), no un created_at que la operación nunca tuvo.
+  assert.match(col, /textoFechaTraslado\(t\)/);
+  assert.ok(!/created_at/.test(col + codigo), 'la operación no tiene created_at: la fecha es `fecha`');
+
+  // Carga del servidor (R5, C3, C4, D39, D40).
+  assert.match(pag, /const ID_TRASLADOS = 'compras\.traslados';/);
+  assert.match(pag, /const INICIAL_TRASLADOS = \{ vista: 'en_proceso' \};/, 'la pestaña de trabajo sigue siendo En proceso');
+  assert.match(pag, /useEstadoTabla\(ID_TRASLADOS, INICIAL_TRASLADOS\)/);
+  const tabla = /useListado<FilaTraslado>\(\{\s*ruta: RUTA_OPERACIONES, estado, conConteos: true([^}]*)\}\);/.exec(pag)?.[1] ?? '';
+  for (const parte of [/esperar: !listo/, /\bdespachar\b/, /activo: !enKanban/, /extra: extraDeLaLista/]) assert.match(tabla, parte, `la tabla lleva ${parte}`);
+  assert.match(pag, /const extraDeLaLista = useMemo\(\(\) => consultaTraslados\(estado\), \[estado\]\);/, 'la pestaña viaja como status y solo traslados');
+  assert.match(pag, /useListado<FilaTraslado>\(\{\s*ruta: RUTA_OPERACIONES, estado, esperar: !listo, activo: enKanban, extra: extraDelTablero,?\s*\}\);/, 'el tablero pide su propia consulta, activa solo en Kanban');
+  assert.match(pag, /const extraDelTablero = useMemo\(\(\) => consultaTableroTraslados\(estado\), \[estado\]\);/);
+  assert.match(pag, /const RUTA_OPERACIONES = '\/inventory\/operations';/);
+  assert.match(pag, /`\$\{RUTA_OPERACIONES\}\?operation_type=TRANSFER&limit=0&con_conteos=1`/, 'las tarjetas cuentan TODOS los traslados: sin búsqueda ni filtros, sin filas');
+  assert.ok(!/limit=100/.test(codigo), 'ya no se cargan 100 y se pagina en el navegador');
+  assert.ok(!/\.catch\(\(\) => (\[\]|\{\}|null)\)/.test(codigo) && !/\.catch\(\(\)\s*=>\s*\{\s*\}\)/.test(codigo) && !/catch \{ setTraslados/.test(codigo), 'sin .catch que traga el error');
+  // Las bodegas: su error se dice con Reintentar (los nombres salen como «Bodega #N»), no se traga en silencio.
+  assert.match(pag, /apiFetch\('\/inventory\/warehouses', \{ signal: control\.signal \}\)/);
+  assert.match(pag, /errorBodegas != null && \(/);
+  assert.match(pag, /Los nombres salen como «Bodega #N»\./);
+  assert.match(pag, /<BodegasTraslado\.Provider value=\{bodegas\}>/);
+  // La tabla: estándar en el servidor, toda la fila abre el Drawer; las pestañas de los grupos de operación (R9) con los conteos del servidor.
+  assert.match(pag, /<TablaEstandar\s+id=\{ID_TRASLADOS\}\s+modo="servidor"/);
+  assert.match(pag, /onFila=\{abrir\}/, 'toda la fila abre el Drawer');
+  for (const [id, etiqueta, campo] of [['en_proceso', 'En proceso', 'en_proceso'], ['completadas', 'Completados', 'completadas'], ['canceladas', 'Cancelados', 'canceladas'], ['todos', 'Todos', 'todos']]) {
+    assert.match(pag, new RegExp(`\\{ id: '${id}', etiqueta: '${etiqueta}', conteo: c\\.${campo} \\}`), `pestaña ${etiqueta}`);
+  }
+  assert.match(pag, /const c = conteosTraslado\(conteos\);/);
+  assert.match(pag, /opcionesEstados=\{enKanban \? OPCIONES_ESTADOS_TABLERO_TRASLADO : opcionesEstadosTraslado\}/);
+  // «Ver detalle» y el ⋯ ya hacen algo: un MenuFila con «Ver detalle», que abre el Drawer.
+  assert.match(pag, /\{ etiqueta: 'Ver detalle', icono: Eye, onClick: \(\) => acciones\?\.abrir\(t\) \}/);
+  assert.match(pag, /<MenuFila items=\{items\} etiqueta=\{`Acciones de \$\{numeroTraslado\(t\)\}`\} \/>/);
+  assert.ok(!/MoreVertical|Ver Detalle/.test(codigo), 'sin el botón «Ver Detalle» ni el ⋮ que no tenían onClick');
+  // El tablero solo para ver (KANBAN-logistica punto 5): modo cliente, soloLectura con su motivo, sin regla ni onCambio.
+  const tablero = /useTableroKanban<FilaTraslado>\(\{([\s\S]*?)\n {2}\}\);/.exec(pag)?.[1] ?? '';
+  for (const parte of [/pantalla: ID_TRASLADOS/, /modo: 'cliente'/, /columnas: COLUMNAS_TRASLADO/, /activo: listo && enKanban\b/, /porColumna: estado\.tamano/, /items: itemsTablero/, /columnaDe: columnaDeTraslado/]) {
+    assert.match(tablero, parte, `useTableroKanban lleva ${parte}`);
+  }
+  const tab = /<TableroKanban([\s\S]*?)\/>/.exec(pag)?.[1] ?? '';
+  assert.match(pag, /const TEXTO_SOLO_VER = 'Este tablero es para ver: los traslados no cambian de estado desde aquí\.';/);
+  assert.match(tab, /soloLectura=\{TEXTO_SOLO_VER\}/);
+  assert.match(tab, /tarjetaDe=\{tarjetaDe\}/);
+  assert.match(tab, /onAbrir=\{abrir\}/, 'el clic abre el Drawer, como la fila');
+  assert.ok(!/regla=|onCambio=|onAccion=/.test(tab), 'sin regla: no se arrastra');
+  assert.match(pag, /tarjetaTraslado\(t, bodegas\)/);
+  // El aviso de los 200 (RP95) y el error del tablero con Reintentar.
+  assert.match(pag, /\(completa\.total \?\? 0\) > TOPE_TABLERO_COMPRAS/);
+  assert.match(pag, /Se muestran los 200 más recientes de \{completa\.total\} traslados/);
+  assert.match(pag, /completa\.error != null && completa\.filas\.length === 0\) \? null : completa\.filas/, 'con error y sin datos, el tablero no pinta el vacío');
+  assert.match(pag, /onClick=\{completa\.recargar\}[^>]*>Reintentar/);
+  // Las tarjetas (KPI-compras punto 10): tras_* y bodegas, con los conteos de todos los traslados.
+  for (const [kpi, vista] of [['tras_en_proceso', 'en_proceso'], ['tras_completados', 'completadas'], ['tras_total', 'todos']]) {
+    assert.match(pag, new RegExp(`<TarjetaKpi kpi="${kpi}"[^>]*\\n?[^>]*activo=\\{vistaActiva === '${vista}'\\} onClick=\\{\\(\\) => elegirVista\\('${vista}'\\)\\}`), kpi);
+  }
+  assert.match(pag, /<TarjetaKpi kpi="bodegas" valor=\{tarjetas\.bodegas\.valor\} estado=\{estadoBodegas\} \/>/, 'Bodegas es informativa y toma su propio estado');
+  assert.match(pag, /tarjetasTraslados\(conteosTraslado\(totales\?\.conteos \?\? null\), bodegas \? bodegas\.length : null\)/);
+  assert.match(pag, /despachar\(accionVistaEnLista\(estado, siguiente, opcionesEstadosTraslado\)\)/, 'como un clic en la pestaña (D41)');
+  // El enlace ?id= del HUB de Inventario: el traslado se pide al servidor por su número.
+  assert.match(pag, /q=\$\{encodeURIComponent\(numeroTraslado\(\{ id \}\)\)\}&limit=5/);
+  assert.match(pag, /find\(\(t\) => t\.id === id\)/);
+  assert.match(pag, /if \(searchParams\.get\('id'\)\) router\.replace\(pathname\)/, 'al cerrar el Drawer se quita ?id=');
+  // R2 y R13: fuera la IA simulada y su pestaña; queda «Ver análisis» hacia el Hub.
+  assert.ok(!/aiChat|aiAnalysis|aiLoading|aiInput|sendAIChat|handleAIAnalysis|Nebulae Analytics|activeTab|'Analisis'|Generar Análisis/.test(codigo), 'sin la IA simulada ni la pestaña Análisis');
+  assert.ok(!/ai-chat/.test(pag));
+  assert.match(pag, /<Link href=\{ENLACE_VER_ANALISIS_COMPRAS\}[\s\S]*?Ver análisis<\/ContenidoEnlace>/);
+  // Nada nativo (RP30) y lo conservado de B1 a B3: crear un traslado con sus avisos.
+  assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(codigo.replace(/\bconfirmar\(/g, 'x(')), 'sin diálogos nativos');
+  assert.match(pag, /avisar\('Selecciona bodega origen y destino', \{ tono: 'error' \}\)/);
+  assert.match(pag, /avisar\('Agrega al menos un producto', \{ tono: 'error' \}\)/);
+  assert.match(pag, /avisarError\(err, 'No se pudo crear el traslado'\)/);
+  for (const texto of ["operation_type: 'TRANSFER'", 'source_warehouse_id: parseInt(form.origen_id, 10)', 'dest_warehouse_id: parseInt(form.destino_id, 10)',
+    "movements: form.productos.map((p) => ({ sku_id: p.sku_id, quantity: Number(p.qty) }))", "'/crm/products/search?q='", 'Nuevo Traslado']) {
+    assert.ok(pag.includes(texto), `se conserva: ${texto}`);
+  }
+}
+
 console.log('\nOK: test_estados_compras.mjs');

@@ -1174,7 +1174,7 @@ export function nombreBodega(bodegas, id) {
  * La tarjeta de un traslado en el tablero solo para ver: el número, origen → destino, cuántos productos, la insignia del
  * estado, la guía si la tiene y la fecha real.
  * @param {any} t
- * @param {ReadonlyArray<{id: number, name?: string}> | null | undefined} bodegas
+ * @param {ReadonlyArray<{id: number, name?: string | null}> | null | undefined} bodegas
  */
 export function tarjetaTraslado(t, bodegas) {
   const n = productosDeTraslado(t);
