@@ -440,14 +440,14 @@ def test_catalogo_orden_de_hoy_sin_parametros_nuevos(app_client, db, warehouse, 
 
 
 def test_error_del_codigo_nuevo_del_catalogo_heredado_no_se_disfraza(app_client, db, warehouse, monkeypatch):
-    """T20 r2 (m5): el try heredado solo cubre la consulta de ecommerce_products; un error de los SKU del ERP es un 500."""
+    """T20 r2 (m5): el try heredado cubre el codigo de BASE; un error de lo nuevo (el descarte por espejo) es un 500."""
     from app.api.v1 import ecommerce
     t = _Catalogo(db, warehouse)
     monkeypatch.setenv("CATALOGO_LECTURA", "legacy")
 
     def roto(*args, **kwargs):
         raise RuntimeError("fallo del codigo nuevo")
-    monkeypatch.setattr(ecommerce, "_skus_heredados_de_hoy", roto)
+    monkeypatch.setattr(ecommerce, "_skus_con_espejo_que_pasa", roto)
     resp = app_client.get(CATALOGO, params={"search": t.s})
     assert resp.status_code == 500, resp.text
     assert "error" not in resp.text or "fallo del codigo nuevo" not in resp.text

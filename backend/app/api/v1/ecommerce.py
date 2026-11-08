@@ -1320,32 +1320,50 @@ def _filas_heredadas_de_hoy(db: Session, search, categoria, publicado, limit: in
     return filas, total, params, espejo
 
 
-def _skus_heredados_de_hoy(db: Session, params: dict, espejo: list, search, limit: int) -> list:
-    """Los SKU del ERP de la rama heredada de hoy, con la forma de BASE: PRIMERO el LIMIT sobre los SKU que filtra la
-    búsqueda (SKU o nombre) y DESPUÉS, por fuera, el NOT EXISTS de los que tienen un espejo en ecommerce_products que pasa los
-    mismos filtros (categoría, publicado y búsqueda). Ordenados por id."""
-    busqueda = ["(ps.sku ILIKE :s OR pr.name ILIKE :s)"] if search else []
-    primeros = (f"SELECT ps.id, ps.sku FROM product_skus ps JOIN products pr ON pr.id = ps.product_id "
-                f"{_con_donde(busqueda)} ORDER BY ps.id LIMIT :lim")
-    sin_espejo = "".join(" AND " + c for c in espejo)
-    consulta = (f"SELECT p.id FROM ({primeros}) p WHERE NOT EXISTS "
-                f"(SELECT 1 FROM ecommerce_products e2 WHERE e2.sku = p.sku{sin_espejo}) ORDER BY p.id")
-    return [r[0] for r in db.execute(text(consulta), {**params, "lim": limit}).fetchall()]
+def _skus_heredados_de_base(db: Session, search, limit: int) -> list:
+    """Los SKU del ERP de la rama heredada de hoy: la MISMA consulta de BASE, sin ORDER BY (el orden es el que dé PostgreSQL,
+    como en BASE; no está definido) y con el LIMIT antes de cualquier descarte: `db.query(ProductSKU).join(Product)` con el
+    filtro de la búsqueda (SKU o nombre)."""
+    sku_q = db.query(ProductSKU).join(Product, ProductSKU.product_id == Product.id)
+    if search:
+        like = f"%{search}%"
+        sku_q = sku_q.filter(ProductSKU.sku.ilike(like) | Product.name.ilike(like))
+    return sku_q.limit(limit).all()
 
 
-def _catalogo_heredado_de_hoy(db: Session, filas: list, total: int, ids: list) -> dict:
+def _skus_con_espejo_que_pasa(db: Session, skus: list, params: dict, espejo: list) -> set:
+    """Lo ÚNICO nuevo de la rama de hoy (ruling de r1): de los SKU ya traídos, los que tienen en ecommerce_products un espejo que
+    pasa los mismos filtros (categoría, publicado y búsqueda). Una consulta; el descarte se hace en Python, sin cambiar el orden."""
+    codigos = [k.sku for k in skus if k.sku]
+    if not codigos:
+        return set()
+    donde = "".join(" AND " + c for c in espejo)
+    consulta = text(f"SELECT e2.sku FROM ecommerce_products e2 WHERE e2.sku IN :skus{donde}").bindparams(
+        bindparam("skus", expanding=True))
+    return {r[0] for r in db.execute(consulta, {**params, "skus": codigos}).fetchall()}
+
+
+def _catalogo_heredado_de_hoy(db: Session, search, categoria, publicado, limit: int) -> dict:
     """La rama heredada SIN offset ni orden, como la llama hoy la tienda pública (store/catalogo y store/categoria con
     publicado=true&limit=50): doble fuente, cada una con su LIMIT. Primero las filas de ecommerce_products (por nombre) y
-    detrás los SKU del ERP (_skus_heredados_de_hoy); un SKU cuyo espejo quedó filtrado (por ejemplo, despublicado) sale igual
-    como fila del ERP. total = las filas de ecommerce_products + los SKU devueltos: NO es exacto, como en BASE.
-    El orden de los SKU del ERP es por id, que es el orden físico de BASE en la práctica (BASE no pedía ORDER BY).
+    detrás los SKU del ERP, traídos con la misma consulta de BASE (sin ORDER BY: el mismo orden de BASE, no está definido).
+    total = las filas de ecommerce_products + los SKU devueltos: NO es exacto, como en BASE.
     Única diferencia con BASE, por el ruling de r1: BASE descartaba un SKU si su espejo estaba entre las filas ya devueltas
-    (limitadas); aquí se descarta si el espejo pasa los filtros, aunque haya quedado fuera por el LIMIT de
-    ecommerce_products."""
-    skus = _skus_por_id(db, ids)
-    data = [_serialize_catalogo_item_heredado(db, r) for r in filas]
-    data += [_serialize_catalogo_item_sku_heredado(db, skus[i]) for i in ids if i in skus]
-    return {"status": "success", "total": total + len(ids), "data": data}
+    (limitadas); aquí se descarta si el espejo pasa los filtros, aunque haya quedado fuera por el LIMIT de ecommerce_products.
+    El try de BASE (un error responde `{status: success, data: [], error}`) envuelve las consultas y la serialización de las
+    filas de ecommerce_products y de los SKU, que son código de BASE; solo queda fuera _skus_con_espejo_que_pasa, que es nuevo."""
+    try:
+        filas, total, params, espejo = _filas_heredadas_de_hoy(db, search, categoria, publicado, limit)
+        data = [_serialize_catalogo_item_heredado(db, r) for r in filas]
+        skus = _skus_heredados_de_base(db, search, limit)
+    except Exception as e:
+        return {"status": "success", "total": 0, "data": [], "error": str(e)}
+    con_espejo = _skus_con_espejo_que_pasa(db, skus, params, espejo)
+    try:
+        propios = [_serialize_catalogo_item_sku_heredado(db, k) for k in skus if k.sku not in con_espejo]
+    except Exception as e:
+        return {"status": "success", "total": 0, "data": [], "error": str(e)}
+    return {"status": "success", "total": total + len(propios), "data": data + propios}
 
 
 @router.get("/catalogo")
@@ -1363,12 +1381,7 @@ def list_catalogo(search: Optional[str] = None, q: Optional[str] = None, categor
     if _lectura_canonica():
         return _list_catalogo_canonico(db, texto, categoria, publicado, limit, offset or 0, orden)
     if offset is None and not (orden or "").strip():
-        try:    # lo viejo sigue igual: un error de la consulta de ecommerce_products responde vacío con el texto
-            filas, total, params, espejo = _filas_heredadas_de_hoy(db, texto, categoria, publicado, limit)
-        except Exception as e:
-            return {"status": "success", "total": 0, "data": [], "error": str(e)}
-        ids = _skus_heredados_de_hoy(db, params, espejo, texto, limit)    # el código nuevo: sus errores no se disfrazan
-        return _catalogo_heredado_de_hoy(db, filas, total, ids)
+        return _catalogo_heredado_de_hoy(db, texto, categoria, publicado, limit)
     union, params = _union_catalogo_heredado(texto, categoria, publicado)
     total, claves = _pagina_del_catalogo(db, union, params, orden_sql, limit, offset or 0)
     filas = _filas_de_ecommerce_products(db, (i for g, i in claves if g == GRUPO_PRIMERO))
