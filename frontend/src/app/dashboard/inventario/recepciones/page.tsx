@@ -1,212 +1,395 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { ArrowDownToLine, ClipboardList, Eye, Package, RefreshCw } from 'lucide-react';
+// B4 T19: Entradas de Inventario (Recepciones) 100 % sobre el servidor (R5, C3, C4): la tabla estándar con las columnas COMPARTIDAS con
+// Compras (compras/columnas-recepcion.tsx) y las vistas reales (Por confirmar · Confirmadas · Canceladas · Todas; antes preguntaba por
+// 'CONFIRMADA', un estado que no existe), el tablero solo para ver en modo servidor y las tarjetas rec_* del MISMO /compras/stats
+// que Compras › Recepciones (los mismos números). Se conserva lo de B1 a B3: el Drawer con los productos recibidos y el enlace a
+// Compras. Esta pantalla no confirma: el conteo y la confirmación se hacen en Compras.
 import {
-  ArrowDownToLine, Activity, Package, CheckCircle2, Clock,
-  Search, X, RefreshCw, AlertCircle, Warehouse, ChevronRight
-} from 'lucide-react';
-import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
-import { SubNav, PageHeader, StatCard, Badge, Drawer, EmptyState } from '@/components/ui';
+  SubNav, PageHeader, Drawer, Button, MenuFila, FranjaKpis, TarjetaKpi, useEstadoKpi, TableroKanban, useTableroKanban,
+} from '@/components/ui';
+import type { ItemMenuFila } from '@/components/ui';
+import {
+  BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
+} from '@/components/tabla';
+import type { AccionTabla, PestanaTabla } from '@/components/tabla';
 import { INV_NAV } from '../inv-nav';
+import { AvisoReintentar, CONTENEDOR, FOCOS, useCatalogo } from '../piezas-inventario';
+import {
+  CeldaEstadoRecepcion, columnasRecepcion, esRecepcionPorConfirmar, numeroRecepcion, pecDeRecepcion, proveedorDeRecepcion,
+  retrasoDeRecepcion, textoFechaRecepcion, titulosDeOrdenRecepcion,
+} from '../../compras/columnas-recepcion';
+import type { FilaColumnasRecepcion } from '../../compras/columnas-recepcion';
 
-async function apiFetch(path: string, opts: RequestInit = {}) {
-  const res = await _apiFetch(path, opts);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || data.message || 'Error');
-  return data.data ?? data;
+import { apiFetch } from '@/lib/api';
+import { accionModo, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta } from '@/lib/tabla';
+import { PERIODO_KPI, NOTA_RECEPCIONES, formatoDecimal, tarjetasRecepciones, totalRecepciones } from '@/lib/kpis';
+import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
+import { accionVistaEnLista } from '@/lib/listas-ventas';
+import {
+  COLUMNAS_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, consultaColumnaRecepcion, opcionesEstadosRecepcion, tarjetaRecepcion,
+  textoVacioRecepciones,
+} from '@/lib/estados-compras';
+
+/** Una línea de la recepción (productos de _gr_dict: JSON; los nombres son los de la recepción de Compras). */
+type LineaRecepcion = { product_name?: string | null; sku_id?: number | null; qty_esperada?: number | null; qty?: number | null; qty_recibida?: number | null };
+/** Una fila de GET /compras/recepciones (el _gr_dict de T12). dias_retraso es del servidor. */
+type FilaRecepcion = FilaColumnasRecepcion & { warehouse_id?: number | null; notas?: string | null };
+/** `conteos` de GET /compras/recepciones con con_conteos=1 (T12): cada vista, con la búsqueda (R5). */
+type ConteosRecepcion = Partial<Record<'por_confirmar' | 'confirmadas' | 'canceladas' | 'todas', number>>;
+
+/** El id de la pantalla: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26). */
+const ID_RECEPCIONES = 'inventario.recepciones';
+/** Como la pantalla de hoy (Recientes): se ven todas; las pestañas separan lo que falta confirmar. */
+const INICIAL_RECEPCIONES = { vista: 'todas' };
+/** D39: en Kanban la lista va sin filas (limit=0); los conteos siguen al día y las filas las piden las columnas. */
+const EXTRA_TABLERO = { limit: 0 };
+/** El motivo de un tablero solo para ver (R11, KANBAN-logistica punto 5). */
+const TEXTO_SOLO_VER = 'Este tablero es para ver: las recepciones se confirman contando la mercancía, en Compras.';
+
+/** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
+const AccionesFila = React.createContext<{ abrir: (r: FilaRecepcion) => void; abrirEnCompras: (r: FilaRecepcion) => void } | null>(null);
+
+/**
+ * Acciones (R11): el enlace «Abrir en Compras» (donde se cuenta y se confirma) y el menú ⋯ (MenuFila: clic y portal) con «Ver
+ * detalle» y «Abrir en Compras». Todo lleva el número de la recepción en su nombre.
+ */
+function CeldaAcciones({ r }: { r: FilaRecepcion }) {
+  const acciones = useContext(AccionesFila);
+  const numero = numeroRecepcion(r);
+  const items: ItemMenuFila[] = [
+    { etiqueta: 'Ver detalle', icono: Eye, onClick: () => acciones?.abrir(r) },
+    { etiqueta: 'Abrir en Compras', icono: ClipboardList, onClick: () => acciones?.abrirEnCompras(r) },
+  ];
+  return (
+    <span className="flex items-center justify-end gap-0.5">
+      <Link href={`/dashboard/compras/recepciones/${r.id}`} aria-label={`Abrir ${numero} en Compras`} title="Abrir en Compras"
+        className={`rounded-lg p-1.5 text-orange-700 transition-colors hover:bg-orange-50 ${FOCOS.indigo}`}>
+        <ClipboardList size={14} aria-hidden="true" />
+      </Link>
+      <MenuFila items={items} etiqueta={`Acciones de ${numero}`} />
+    </span>
+  );
 }
 
-const fDate = (iso: string | null) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
+/**
+ * B4 T19, la tabla (TABLA-inventario punto 9; R26, D41): las columnas de columnas-recepcion.tsx (compartidas con Compras › Recepciones) con
+ * la celda de Acciones de esta pantalla. Una constante (estable, D40). Bodega, Ítems, Retraso y Stock van ocultas por defecto.
+ */
+const COLUMNAS_TABLA_RECEPCIONES = columnasRecepcion<FilaRecepcion>((r) => <CeldaAcciones r={r} />);
+/** {campo de orden: título}, para el chip «Orden: Fecha ↓», solo de las columnas que se ordenan. */
+const TITULOS_ORDEN_RECEPCIONES = titulosDeOrdenRecepcion(COLUMNAS_TABLA_RECEPCIONES);
 
+/**
+ * Las pestañas (RP41, D6, sin emojis): las vistas de GET /compras/recepciones, con los conteos del servidor (con la búsqueda; null
+ * mientras cargan: la barra gris, nunca 0). Por confirmar va en ámbar si hay alguna.
+ */
+function pestanasDeRecepciones(conteos: ConteosRecepcion | null): PestanaTabla[] {
+  return [
+    { id: 'por_confirmar', etiqueta: 'Por confirmar', conteo: conteos?.por_confirmar ?? null, alerta: (conteos?.por_confirmar ?? 0) > 0 },
+    { id: 'confirmadas', etiqueta: 'Confirmadas', conteo: conteos?.confirmadas ?? null },
+    { id: 'canceladas', etiqueta: 'Canceladas', conteo: conteos?.canceladas ?? null },
+    { id: 'todas', etiqueta: 'Todas', conteo: conteos?.todas ?? null },
+  ];
+}
+
+/** Las unidades de una línea: lo recibido y lo esperado; sin dato, 0 como en el Drawer de hoy. */
+const unidades = (n: number | null | undefined) => formatoDecimal(n ?? 0);
+
+/* ================================================================
+   MAIN PAGE — InventarioRecepcionesPage (B4 T19)
+   ================================================================ */
 export default function InventarioRecepcionesPage() {
-  const [recepciones, setRecepciones] = useState<any[]>([]);
-  const [warehouses, setWarehouses] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [activeTab, setActiveTab] = useState('Recientes');
-  const [selected, setSelected] = useState<any | null>(null);
+  const router = useRouter();
+  // ── bloque 1: la carga del servidor (TABLA-inventario punto 9; R5, C3, C4; D39, D40) ──
+  // El estado ÚNICO de la pantalla: las pestañas, la búsqueda, el filtro de estados, las tarjetas, la tabla y el tablero despachan a
+  // él. El modo (Lista o Kanban) se guarda en vista:inventario.recepciones.
+  const [estado, despachar, listo] = useEstadoTabla(ID_RECEPCIONES, INICIAL_RECEPCIONES);
+  const enKanban = estado.modo === 'kanban';
+  const [selectedItem, setSelectedItem] = useState<FilaRecepcion | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [r, w] = await Promise.all([
-        apiFetch('/compras/recepciones?limit=100').catch(() => []),
-        apiFetch('/inventory/warehouses').catch(() => []),
-      ]);
-      setRecepciones(Array.isArray(r) ? r : (r?.data ?? []));
-      setWarehouses(Array.isArray(w) ? w : (w?.data ?? []));
-    } catch { setRecepciones([]); }
-    finally { setLoading(false); }
-  }, []);
+  // GET /compras/recepciones con vista, estados, q, orden, limit y offset del estado, más los conteos de las pestañas en la MISMA
+  // llamada. esperar: !listo (D40): el esqueleto, nunca «vacío». En Kanban, sin filas. Sin orden, el del servidor (la más reciente).
+  const listado = useListado<FilaRecepcion>({
+    ruta: '/compras/recepciones', estado, conConteos: true, esperar: !listo, despachar, extra: enKanban ? EXTRA_TABLERO : null,
+  });
+  // m5 de T8: mientras la última respuesta sea la de Kanban (sin filas) y la tabla ya pida su página, la tabla está cargando y el total
+  // en 'cargando': nunca «No hay recepciones…» con el total de la otra consulta.
+  const [llegada, setLlegada] = useState(() => llegadaDeListado(null, null, false));
+  const llegadaAhora = llegadaDeListado(llegada, listado.crudo, enKanban);
+  if (llegadaAhora !== llegada) setLlegada(llegadaAhora);
+  const sinPagina = !enKanban && llegadaAhora.sinFilas && !listado.error;
+  const conteos = listado.conteos as ConteosRecepcion | null;
+  const estadoConteos = useEstadoKpi(listado.cargandoInicial || listado.recargando, listado.error);
 
-  useEffect(() => { load(); }, [load]);
-
-  const pendientes = recepciones.filter(r => r.estado !== 'COMPLETADA' && r.estado !== 'CONFIRMADA').length;
-  const completadas = recepciones.filter(r => r.estado === 'COMPLETADA' || r.estado === 'CONFIRMADA').length;
-  const stockActualizado = recepciones.filter(r => r.stock_actualizado).length;
-
-  const filtered = recepciones.filter(r => {
-    const ms = !search || JSON.stringify(r).toLowerCase().includes(search.toLowerCase());
-    if (!ms) return false;
-    if (activeTab === 'Por Confirmar') return r.estado !== 'COMPLETADA' && r.estado !== 'CONFIRMADA';
-    if (activeTab === 'Completadas') return r.estado === 'COMPLETADA' || r.estado === 'CONFIRMADA';
-    return true;
+  // El tablero solo para ver, en modo servidor (R11, C4, D39): una consulta por columna (consultaColumnaRecepcion: los estados de la
+  // columna cruzados con el filtro y la búsqueda del MISMO estado), porColumna = el tamaño de la tabla y limit=0 en las plegadas.
+  const tablero = useTableroKanban<FilaRecepcion>({
+    pantalla: ID_RECEPCIONES,
+    modo: 'servidor',
+    columnas: COLUMNAS_RECEPCION,
+    activo: listo && enKanban,
+    porColumna: estado.tamano,
+    dependencias: dependenciasTablero(estado),
+    cargar: async (columna, { offset, limit, orden, signal }) => {
+      const consulta = consultaColumnaRecepcion(estado, columna, { orden, limit, offset });
+      if (consulta === null) return { filas: [], total: 0 };
+      return normalizarRespuesta(await apiFetch(`/compras/recepciones?${consulta}`, { signal }));
+    },
   });
 
+  // Las tarjetas (KPI-inventario punto 7; R7, R12): GET /compras/stats?periodo=30d, el MISMO endpoint de Compras › Recepciones (los
+  // mismos números), sin respaldo local. Mientras no llega, 'cargando' (nunca 0); si falla, «—» y «Reintentar».
+  const [vueltaStats, setVueltaStats] = useState(0);
+  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
+  useEffect(() => {
+    const control = new AbortController();
+    apiFetch(`/compras/stats?periodo=${PERIODO_KPI}`, { signal: control.signal })
+      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
+      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
+    return () => control.abort();
+  }, [vueltaStats]);
+  const cargandoStats = stats?.vuelta !== vueltaStats;
+  const errorStats = cargandoStats ? null : (stats?.error ?? null);
+  const estadoKpis = useEstadoKpi(cargandoStats, errorStats);
+  const tarjetas = tarjetasRecepciones(stats?.datos ?? null);
+  const totalRec = totalRecepciones(stats?.datos ?? null);
+  // Las bodegas (GET /inventory/warehouses): la tarjeta «Bodegas». Si falla, se dice con «Reintentar» (nunca un 0).
+  const { catalogo: bodegas, recargar: recargarBodegas } = useCatalogo('/inventory/warehouses');
+  const errorBodegas = bodegas.filas === null ? bodegas.error : null;
+  const estadoBodegas = useEstadoKpi(bodegas.filas === null && bodegas.error == null, errorBodegas);
+
+  // «Actualizar»: la lista con sus conteos, el tablero, las tarjetas y las bodegas. Ninguna recarga vacía lo que se ve.
+  const { recargar: recargarListado } = listado;
+  const { recargar: recargarTablero } = tablero;
+  const recargarTodo = useCallback(() => {
+    recargarListado();
+    recargarTablero();
+    setVueltaStats((n) => n + 1);
+    recargarBodegas();
+  }, [recargarListado, recargarTablero, recargarBodegas]);
+
+  const abrir = useCallback((r: FilaRecepcion) => setSelectedItem(r), []);
+  const abrirEnCompras = useCallback((r: FilaRecepcion) => router.push(`/dashboard/compras/recepciones/${r.id}`), [router]);
+  const accionesFila = useMemo(() => ({ abrir, abrirEnCompras }), [abrir, abrirEnCompras]);
+
+  // ── bloque 2: la tabla (TABLA-inventario punto 9; R5, R26, D40, D41) ──
+  const prefs = usePreferenciasTabla(ID_RECEPCIONES, COLUMNAS_TABLA_RECEPCIONES);
+  const anchoTablaRef = useRef<number | null>(null);
+  // Desestructurado: con el objeto entero en ref={…}, react-hooks/refs marca «Cannot access refs during render».
+  const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
+  // Pasar a Kanban sale de la pantalla completa (el conmutador sigue a la vista y el tablero no queda tapado).
+  useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
+  const pestanas = pestanasDeRecepciones(conteos);
+  // m2 de T8: el conmutador Lista / Kanban poda los estados con las opciones del modo nuevo (las columnas del tablero, o las de la
+  // pestaña en Lista), con la regla de accionPestana (accionModo); lo demás de la barra va directo.
+  const alCambiarBarra = useCallback((accion: AccionTabla) => {
+    if (accion.tipo === 'modo') {
+      const modo = String(accion.valor);
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_RECEPCION : opcionesEstadosRecepcion));
+    } else despachar(accion);
+  }, [estado, despachar]);
+  // R8: ordenada por una columna, el chip «Orden: … · Más recientes» vuelve al orden del servidor.
+  const textoOrden = enKanban || !estado.orden || ordenEsAtencion(estado.orden) ? null : textoOrdenHub(estado.orden, TITULOS_ORDEN_RECEPCIONES);
+  const vacio = useMemo(() => {
+    const texto = textoVacioRecepciones({ vista: estado.vista, q: estado.q, estados: estado.estados });
+    return (
+      <div>
+        <p className="font-semibold text-slate-600">{texto.titulo}</p>
+        {texto.ayuda && <p className="mt-1 text-xs text-slate-500">{texto.ayuda}</p>}
+      </div>
+    );
+  }, [estado.vista, estado.q, estado.estados]);
+  // «N resultados» es el de la tabla; en Kanban cada columna trae su total (la barra no lo repite).
+  const totalDeLaBarra = enKanban ? {} : {
+    total: sinPagina ? null : listado.total,
+    estadoTotal: estadoDelTotal({
+      total: listado.total, cargando: listado.cargandoInicial || sinPagina, recargando: listado.recargando, error: listado.error,
+    }),
+  };
+
+  // ── bloque 4: las tarjetas (KPI-inventario punto 7; R5, R12) ──
+  // rec_por_confirmar abre «Por confirmar», rec_confirmadas «Confirmadas» y rec_total «Todas» (D41: como un clic en la pestaña; tocar la
+  // activa vuelve a Todas). En Kanban abren esa pestaña en Lista (accionVistaEnLista). Bodegas es informativa.
+  const vistaActiva = enKanban ? null : estado.vista;
+  const elegirVista = (vista: string) => {
+    const siguiente = vistaActiva === vista ? 'todas' : vista;
+    despachar(accionVistaEnLista(estado, siguiente, opcionesEstadosRecepcion));
+  };
+  const actualizando = listado.recargando || (cargandoStats && stats !== null);
+  const lineas = (selectedItem?.productos ?? []) as LineaRecepcion[];
+
+  /* ════════════════ RENDER ════════════════ */
   return (
     <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
       <SubNav label="Inventario" items={INV_NAV} currentPath="/dashboard/inventario/recepciones" color="orange" />
 
-      <div className="p-8 max-w-[1600px] mx-auto space-y-6">
+      <div className={CONTENEDOR}>
         <PageHeader icon={ArrowDownToLine} color="orange"
           title="Entradas de Inventario"
-          subtitle="Registro de mercancia que ingresa a las bodegas desde compras."
+          subtitle="Registro de mercancía que ingresa a las bodegas desde compras."
           actions={(
-            <Link href="/dashboard/compras/pedidos"
-              className="bg-orange-600 hover:bg-orange-700 text-white px-6 py-3 rounded-xl font-bold shadow-md transition-colors flex items-center gap-2">
-              <Package size={18} /> Ver Pedidos de Compra
-            </Link>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button type="button" onClick={recargarTodo}
+                className={`flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 text-xs font-bold shadow-sm transition-colors ${FOCOS.indigo}`}>
+                <RefreshCw size={13} aria-hidden="true" className={actualizando ? 'animate-spin' : ''} /> Actualizar
+              </button>
+              <Link href="/dashboard/compras/pedidos"
+                className={`bg-orange-600 hover:bg-orange-700 text-white px-6 py-3 rounded-xl font-bold shadow-md transition-colors flex items-center gap-2 ${FOCOS.indigo}`}>
+                <Package size={18} aria-hidden="true" /> Ver Pedidos de Compra
+              </Link>
+            </div>
           )} />
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-          <StatCard icon={Clock} color="amber" label="Por Confirmar" value={pendientes} hint="Stock aun no actualizado" onClick={() => setActiveTab('Por Confirmar')} />
-          <StatCard icon={CheckCircle2} color="emerald" label="Completadas" value={completadas} hint="Stock actualizado correctamente" onClick={() => setActiveTab('Completadas')} />
-          <StatCard icon={Warehouse} color="blue" label="Bodegas Activas" value={warehouses.length} hint="Puntos de almacenamiento" />
-          <StatCard variant="gradient" color="orange" icon={Activity} label="Total Entradas" value={recepciones.length} hint={`${stockActualizado} con stock confirmado`} />
-        </div>
+        {/* B4 T19 (KPI-inventario punto 7; R7, R12): las 4 tarjetas del MISMO /compras/stats de Compras › Recepciones y las bodegas:
+            mientras cargan, barras grises (nunca 0); con error, «—» y «Reintentar». Por confirmar, Confirmadas y el total abren su
+            pestaña; Bodegas es informativa. */}
+        <FranjaKpis estado={estadoKpis} titulo="Entradas" nota={NOTA_RECEPCIONES}>
+          <TarjetaKpi kpi="rec_por_confirmar" valor={tarjetas?.por_confirmar.valor ?? null}
+            activo={vistaActiva === 'por_confirmar'} onClick={() => elegirVista('por_confirmar')} />
+          <TarjetaKpi kpi="rec_confirmadas" valor={tarjetas?.confirmadas.valor ?? null}
+            activo={vistaActiva === 'confirmadas'} onClick={() => elegirVista('confirmadas')} />
+          <TarjetaKpi kpi="bodegas" valor={bodegas.filas ? bodegas.filas.length : null} estado={estadoBodegas} />
+          <TarjetaKpi kpi="rec_total" valor={totalRec}
+            activo={vistaActiva === 'todas'} onClick={() => elegirVista('todas')} />
+        </FranjaKpis>
+        {errorStats != null && (
+          <AvisoReintentar error={errorStats} fallo="No se pudieron cargar los indicadores de recepciones" onReintentar={() => setVueltaStats((n) => n + 1)} />
+        )}
+        {errorBodegas != null && (
+          <AvisoReintentar error={errorBodegas} fallo="No se pudieron cargar las bodegas" onReintentar={recargarBodegas} />
+        )}
 
-        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col overflow-hidden">
-          <div className="border-b border-slate-200 bg-slate-50/50 p-4 flex justify-between items-center gap-4">
-            <div className="flex gap-2">
-              {['Recientes', 'Por Confirmar', 'Completadas'].map(tab => (
-                <button key={tab} onClick={() => setActiveTab(tab)}
-                  className={`px-5 py-2.5 rounded-lg text-sm font-bold transition-all ${
-                    activeTab === tab
-                      ? tab === 'Por Confirmar' ? 'bg-amber-100 text-amber-800 shadow-sm border border-amber-200'
-                      : tab === 'Completadas'   ? 'bg-emerald-100 text-emerald-800 shadow-sm border border-emerald-200'
-                      :                             'bg-orange-100 text-orange-800 shadow-sm border border-orange-200'
-                      : 'text-slate-600 hover:bg-slate-100'
-                  }`}>
-                  {tab} ({tab === 'Por Confirmar' ? pendientes : tab === 'Completadas' ? completadas : recepciones.length})
-                </button>
-              ))}
-            </div>
-            <div className="relative flex items-center bg-white border border-slate-300 rounded-xl px-3 py-2 shadow-sm">
-              <Search className="text-slate-400 mr-2" size={16} />
-              <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-                placeholder="Buscar ENINV, PEC, producto..." className="bg-transparent text-sm outline-none w-60 text-slate-700" />
-              <button onClick={load} className="ml-2 text-slate-400"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /></button>
-            </div>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead className="bg-slate-50 border-b border-slate-200 text-[11px] font-black text-slate-500 uppercase tracking-wider">
-                <tr>
-                  <th className="px-6 py-4">ENINV #</th>
-                  <th className="px-6 py-4">PEC Origen</th>
-                  <th className="px-6 py-4">Proveedor</th>
-                  <th className="px-6 py-4">Bodega Destino</th>
-                  <th className="px-6 py-4">Productos</th>
-                  <th className="px-6 py-4">Fecha</th>
-                  <th className="px-6 py-4">Estado</th>
-                  <th className="px-6 py-4 text-center">Acciones</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-sm">
-                {loading ? (
-                  <tr><td colSpan={8} className="px-6 py-16 text-center">
-                    <RefreshCw size={24} className="animate-spin text-orange-400 mx-auto mb-2" />
-                    <span className="text-slate-400">Cargando entradas...</span>
-                  </td></tr>
-                ) : filtered.length === 0 ? (
-                  <tr><td colSpan={8}>
-                    <EmptyState icon={ArrowDownToLine} message="Sin entradas registradas" hint="Las entradas se generan al recepcionar un Pedido de Compra" />
-                  </td></tr>
-                ) : filtered.map((r: any) => (
-                  <tr key={r.id} onClick={() => setSelected(r)}
-                    className={`hover:bg-slate-50/80 transition-colors group cursor-pointer ${selected?.id === r.id ? 'bg-orange-50/30' : ''}`}>
-                    <td className="px-6 py-4 font-black text-orange-700">{r.numero}</td>
-                    <td className="px-6 py-4">
-                      {r.pec_numero ? (
-                        <Link href={`/dashboard/compras/pedidos?id=${r.pec_id}`} onClick={e => e.stopPropagation()}
-                          className="text-purple-600 font-bold hover:underline text-sm">{r.pec_numero}</Link>
-                      ) : <span className="text-slate-400 text-sm">-</span>}
-                    </td>
-                    <td className="px-6 py-4 font-medium text-slate-800">{r.supplier_name || '-'}</td>
-                    <td className="px-6 py-4 text-slate-600">{r.warehouse_name || '-'}</td>
-                    <td className="px-6 py-4 text-slate-600">{(r.productos || []).length} items</td>
-                    <td className="px-6 py-4 text-slate-600">{fDate(r.fecha_recepcion || r.created_at)}</td>
-                    <td className="px-6 py-4">
-                      {r.estado === 'COMPLETADA' || r.estado === 'CONFIRMADA' ? (
-                        <Badge tone="success" icon={CheckCircle2}>Confirmada</Badge>
-                      ) : (
-                        <Badge tone="warning" icon={Clock}>Pendiente</Badge>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 text-center">
-                      <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Link href={`/dashboard/compras/recepciones/${r.id}`} onClick={e => e.stopPropagation()}
-                          className="bg-orange-100 text-orange-700 hover:bg-orange-200 px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1">
-                          Ver en Compras <ChevronRight size={12} />
-                        </Link>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+        {/* B4 T19 (TABLA-inventario punto 9, KANBAN-logistica punto 5): la barra y la tabla estándar en el servidor, o el tablero solo
+            para ver en modo servidor, con el MISMO estado (pestaña, búsqueda y estados). En Kanban las pestañas no se ven (el tablero
+            muestra todas las recepciones por grupo). */}
+        <div className="flex min-w-0 flex-col gap-4">
+          {capa}
+          <AccionesFila.Provider value={accionesFila}>
+            <section ref={refTarjeta} className={claseTarjeta}>
+              <BarraTabla
+                estado={estado}
+                onEstado={alCambiarBarra}
+                pestanas={enKanban ? undefined : pestanas}
+                estadoConteos={estadoConteos}
+                placeholder="Buscar por recepción, PEC, proveedor, bodega o producto…"
+                opcionesEstados={enKanban ? OPCIONES_ESTADOS_TABLERO_RECEPCION : opcionesEstadosRecepcion}
+                filtros={textoOrden ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-600">
+                    {textoOrden}
+                    <span aria-hidden="true">·</span>
+                    <button type="button" onClick={() => despachar({ tipo: 'orden', valor: null })}
+                      className={`rounded font-bold text-orange-700 hover:underline ${FOCOS.indigo}`}>
+                      Más recientes
+                    </button>
+                  </span>
+                ) : undefined}
+                ajustes={{ columnas: COLUMNAS_TABLA_RECEPCIONES, preferencias: prefs, anchoRef: anchoTablaRef }}
+                kanbanDisponible
+                pantallaCompleta={enKanban ? undefined : { completa, alternar }}
+                color="orange"
+                {...totalDeLaBarra}
+              />
+              {/* La tabla estándar en el servidor: la paginación (25 o 50) y el orden son de la tabla; un clic en la fila abre el Drawer. */}
+              {!enKanban && (
+                <TablaEstandar
+                  id={ID_RECEPCIONES}
+                  modo="servidor"
+                  columnas={COLUMNAS_TABLA_RECEPCIONES}
+                  preferencias={prefs}
+                  anchoRef={anchoTablaRef}
+                  estado={estado}
+                  onEstado={despachar}
+                  filas={listado.filas}
+                  total={sinPagina ? null : listado.total}
+                  cargando={listado.cargandoInicial || sinPagina}
+                  recargando={listado.recargando}
+                  error={listado.error}
+                  onReintentar={listado.recargar}
+                  aviso={listado.avisoOrden}
+                  onFila={abrir}
+                  vacio={vacio}
+                  etiqueta="Entradas de inventario"
+                />
+              )}
+            </section>
+          </AccionesFila.Provider>
+          {enKanban ? (
+            /* KANBAN-logistica punto 5: Por contar · Confirmadas (plegada) · Canceladas (plegada), solo para ver: sin regla, con su
+               motivo. El clic abre el Drawer, como la fila; «Contar y confirmar» lleva al conteo en Compras. */
+            <TableroKanban
+              tablero={tablero}
+              soloLectura={TEXTO_SOLO_VER}
+              tarjetaDe={tarjetaRecepcion}
+              onAbrir={abrir}
+              color="orange"
+              vacio="Sin recepciones aquí"
+            />
+          ) : null}
         </div>
       </div>
 
-      {/* Drawer */}
-      {selected && (
+      {/* Drawer (B1 a B3): el detalle de la recepción y sus productos; el conteo y la confirmación se hacen en Compras. */}
+      {selectedItem && (
         <Drawer
-          onClose={() => setSelected(null)}
+          onClose={() => setSelectedItem(null)}
           header={(
             <div>
-              <h2 className="font-extrabold text-xl text-slate-900">{selected.numero}</h2>
-              <p className="text-xs text-slate-400">Entrada de Inventario</p>
-              <div className="mt-2">
-                <Badge tone={selected.estado === 'COMPLETADA' ? 'success' : 'warning'}>{selected.estado}</Badge>
-              </div>
+              <h2 className="font-extrabold text-xl text-slate-900">{numeroRecepcion(selectedItem)}</h2>
+              <p className="text-xs text-slate-500">Entrada de Inventario</p>
+              <div className="mt-2"><CeldaEstadoRecepcion r={selectedItem} /></div>
             </div>
+          )}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={() => setSelectedItem(null)}>Cerrar</Button>
+              <Link href={`/dashboard/compras/recepciones/${selectedItem.id}`}
+                className={`inline-flex items-center gap-2 rounded-xl border border-orange-200 bg-white px-4 py-2.5 text-sm font-bold text-orange-800 hover:bg-orange-50 ${FOCOS.indigo}`}>
+                <ClipboardList size={14} aria-hidden="true" /> {esRecepcionPorConfirmar(selectedItem) ? 'Contar y confirmar en Compras' : 'Abrir en Compras'}
+              </Link>
+            </>
           )}
         >
           <div className="grid grid-cols-2 gap-3">
-            {[
-              { label: 'PEC Origen', value: selected.pec_numero || '-' },
-              { label: 'Proveedor', value: selected.supplier_name || '-' },
-              { label: 'Bodega', value: selected.warehouse_name || '-' },
-              { label: 'Fecha', value: fDate(selected.fecha_recepcion || selected.created_at) },
-            ].map(({ label, value }) => (
-              <div key={label} className="bg-slate-50 rounded-xl p-3">
-                <p className="text-xs text-slate-400 mb-1">{label}</p>
-                <p className="font-bold text-sm text-slate-800">{value}</p>
+            {([
+              ['PEC Origen', pecDeRecepcion(selectedItem)],
+              ['Proveedor', proveedorDeRecepcion(selectedItem)],
+              ['Bodega', selectedItem.warehouse_name || '—'],
+              ['Fecha', textoFechaRecepcion(selectedItem)],
+              ...(retrasoDeRecepcion(selectedItem) > 0 ? [['Retraso', `${retrasoDeRecepcion(selectedItem)} días`]] : []),
+            ] as [string, string][]).map(([titulo, valor]) => (
+              <div key={titulo} className="bg-slate-50 rounded-xl p-3">
+                <p className="text-xs text-slate-500 mb-1">{titulo}</p>
+                <p className="font-bold text-sm text-slate-800">{valor}</p>
               </div>
             ))}
           </div>
-          {selected.productos?.length > 0 && (
+          {lineas.length > 0 && (
             <div>
-              <p className="text-xs font-black text-slate-400 uppercase mb-2">Productos Recibidos</p>
+              <p className="text-xs font-black text-slate-500 uppercase mb-2">Productos Recibidos</p>
               <div className="border border-slate-200 rounded-xl overflow-hidden">
                 <table className="w-full text-xs">
-                  <thead className="bg-slate-50"><tr className="text-slate-400 uppercase">
+                  <thead className="bg-slate-50"><tr className="text-slate-500 uppercase">
                     <th className="px-3 py-2 text-left">Producto</th>
                     <th className="px-3 py-2 text-right">Esperado</th>
                     <th className="px-3 py-2 text-right">Recibido</th>
                   </tr></thead>
                   <tbody>
-                    {selected.productos.map((p: any, i: number) => (
-                      <tr key={i} className="border-t border-slate-50">
-                        <td className="px-3 py-2 font-medium">{p.product_name || p.sku_id}</td>
-                        <td className="px-3 py-2 text-right">{p.qty_esperada || p.qty || 0}</td>
-                        <td className={`px-3 py-2 text-right font-bold ${p.qty_recibida < p.qty_esperada ? 'text-red-600' : 'text-emerald-600'}`}>
-                          {p.qty_recibida ?? p.qty ?? 0}
-                        </td>
-                      </tr>
-                    ))}
+                    {lineas.map((p, i) => {
+                      const esperado = p.qty_esperada ?? p.qty ?? 0;
+                      const recibido = p.qty_recibida ?? p.qty ?? 0;
+                      return (
+                        <tr key={i} className="border-t border-slate-50">
+                          <td className="px-3 py-2 font-medium">{p.product_name || (p.sku_id != null ? `SKU #${p.sku_id}` : 'Ítem de compra')}</td>
+                          <td className="px-3 py-2 text-right">{unidades(esperado)}</td>
+                          <td className={`px-3 py-2 text-right font-bold ${recibido < esperado ? 'text-red-700' : 'text-emerald-700'}`}>{unidades(recibido)}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
