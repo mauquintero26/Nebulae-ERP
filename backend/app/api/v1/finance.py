@@ -1,5 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
+from typing import Optional
 from app.db.database import get_db
 from app.models.expenses import OperationalExpense
 from app.models.sales import SalesOrder, SalesOrderLine
@@ -10,6 +12,10 @@ import datetime
 
 from app.models.users import User
 from app.api.dependencies import require_roles, ROLE_ADMIN, ROLE_FINANZAS, ALL_ERP_ROLES
+from app.core import analisis_finanzas as af
+from app.core.analisis import validar_top
+from app.core.listados import MAX_OFFSET, leer_orden, paginar, texto_busqueda
+from app.core.periodos import resolver_periodo
 
 router = APIRouter()
 
@@ -29,13 +35,91 @@ def create_expense(
     db.refresh(db_exp)
     return {"status": "success", "data": schemas.ExpenseResponse.model_validate(db_exp).model_dump()}
 
+# ─── B4 T20: la lista de Gastos (TABLA-otros punto 3, RP58, RP101) ───────────────────────────────────────────────────────
+# q busca (ILIKE) en la categoría y en la descripción (el «concepto»); categoria filtra la categoría por igualdad; tipo es
+# recurrente (is_recurring) o variable; orden es [-]fecha, categoria, concepto, tipo o monto (fecha desc por defecto);
+# limit es opcional (sin limit devuelve todo, como hoy); con_conteos = {categoría: n} con q y tipo, sin categoria.
+TIPOS_GASTO = ("recurrente", "variable")
+ERROR_TIPO_GASTO = "El tipo debe ser recurrente o variable."
+
+
+def _texto_de_filtro(valor):
+    """El texto de un filtro sin espacios en los bordes (None si queda vacío); con un carácter de control, 422 con el texto
+    de listados.texto_busqueda (un NUL llegaría al SQL y daría un 500)."""
+    try:
+        return texto_busqueda(valor, None)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+def _tipo_de_gasto(tipo):
+    tipo = _texto_de_filtro(tipo)
+    if tipo is not None and tipo not in TIPOS_GASTO:
+        raise HTTPException(status_code=422, detail=ERROR_TIPO_GASTO)
+    return tipo
+
+
+def _gasto_a_dict(gasto) -> dict:
+    """ExpenseResponse de siempre (category, description, amount, incurred_date, is_recurring, id), pero un gasto sin fecha
+    (la columna admite NULL) sale con incurred_date null en vez de romper la lista con un 500."""
+    return {"category": gasto.category, "description": gasto.description, "amount": gasto.amount,
+            "incurred_date": gasto.incurred_date, "is_recurring": bool(gasto.is_recurring), "id": gasto.id}
+
+
 @router.get("/expenses")
 def list_expenses(
+    q: Optional[str] = None,
+    tipo: Optional[str] = None,
+    categoria: Optional[str] = None,
+    orden: Optional[str] = None,
+    con_conteos: bool = False,
+    limit: Optional[int] = Query(None, ge=0, le=200),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
     user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_FINANZAS)),
     db: Session = Depends(get_db)
 ):
-    expenses = db.query(OperationalExpense).all()
-    return {"status": "success", "data": [schemas.ExpenseResponse.model_validate(e).model_dump() for e in expenses]}
+    gasto = OperationalExpense
+    texto, categoria, tipo = _texto_de_filtro(q), _texto_de_filtro(categoria), _tipo_de_gasto(tipo)
+    orden_sql = leer_orden(orden, {
+        "fecha": gasto.incurred_date, "categoria": gasto.category, "concepto": gasto.description,
+        "tipo": gasto.is_recurring, "monto": gasto.amount,
+    }, "-fecha", id_lista=gasto.id)
+
+    base = db.query(gasto)
+    if texto:
+        like = f"%{texto}%"
+        base = base.filter(gasto.category.ilike(like) | gasto.description.ilike(like))
+    if tipo:
+        base = base.filter(func.coalesce(gasto.is_recurring, False) == (tipo == "recurrente"))
+    filtrado = base.filter(gasto.category == categoria) if categoria else base
+
+    total, items = paginar(filtrado.order_by(*orden_sql), limit, offset)
+    cuerpo = {"status": "success", "data": [_gasto_a_dict(e) for e in items], "total": total}
+    if con_conteos:
+        filas = base.order_by(None).with_entities(gasto.category, func.count(gasto.id)).group_by(gasto.category).all()
+        cuerpo["conteos"] = {nombre: int(n) for nombre, n in filas}
+    return cuerpo
+
+
+@router.get("/analisis")
+def finanzas_analisis(
+    periodo: Optional[str] = None,
+    desde: Optional[str] = None,
+    hasta: Optional[str] = None,
+    top: Optional[str] = None,
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_FINANZAS)),
+    db: Session = Depends(get_db),
+):
+    """El Análisis de Finanzas con el contrato único de core/analisis.py (core/analisis_finanzas.analisis_finanzas), solo
+    para ADMIN y FINANZAS. periodo: 7d, 30d (por defecto), 90d, mes, 12m o personalizado (con desde y hasta
+    'AAAA-MM-DD'); top: 5 (por defecto), 10 o 25. Todo se declara como texto y se valida aquí (R21): un valor que no sirve
+    responde 422 con su texto en español (RP9). Los errores del cálculo no se convierten en 422: llegan como 500."""
+    try:
+        p = resolver_periodo(periodo, desde, hasta)
+        top = validar_top(top if isinstance(top, str) and top.strip() else af.TOP_POR_DEFECTO)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return af.analisis_finanzas(db, p, top)
 
 @router.get("/dashboard", response_model=dict)
 def get_dashboard(

@@ -14,12 +14,17 @@ from app.api.v1.schemas_fase5 import AgendaActivityCreate, AgendaActivityRespons
 
 from app.schemas import crm as schemas
 from app.core import cambios_documento, clientes
+from app.core import analisis as an
+from app.core.analisis_ventas import _cantidad, _conteos_por_cubeta, _enteros, _movimiento, _pct, _ranking
+from app.core.fechas import ahora_utc
+from app.core.listados import MAX_OFFSET, expresiones_tiempo, leer_orden, paginar, texto_busqueda
+from app.core.periodos import _ventanas, resolver_periodo
 from app.core.textos_actividad import (
     ETIQUETAS_ESTADO, RESOLUCIONES_DEVOLUCION, TIPOS_PAGO, etiqueta_estado, etiqueta_tipo_solicitud, nombre_de_usuario,
 )
 from app.core.ventas_dinero import pesos
 from app.core.iva import normalizar_tarifa_iva
-from sqlalchemy import case, func
+from sqlalchemy import case, func, or_
 from sqlalchemy.exc import DataError, IntegrityError
 import datetime, logging, time, threading
 from decimal import InvalidOperation
@@ -1318,46 +1323,309 @@ def _lead_to_dict(order, customer, stage, db=None) -> dict:
         "lead_product_sku_id": getattr(order, 'lead_product_sku_id', None),
         "lead_qty":          float(getattr(order, 'lead_qty', 1) or 1),
         "advisor_name":      getattr(order, 'advisor_name', None) or "",
+        # B4 T20 (KANBAN-crm punto 2): la solicitud de la que viene el lead (el chip «Con solicitud»).
+        "sc_id":             order.canonical_customer_request_id,
     }
+
+# B4 T20 (KANBAN-crm punto 1, TABLA-otros punto 1, R5, R21): los leads perdidos (CANCELLED) y el orden por columna.
+PERDIDOS_LEADS = ("excluir", "incluir", "solo")
+ERROR_PERDIDOS = "El filtro de perdidos «{:.40}» no existe: usa excluir, incluir o solo."
+
+
+def _texto_de_lead(valor):
+    """Un texto de búsqueda o de filtro (RP8): sin espacios en los bordes (None si queda vacío); con un carácter de
+    control, 422 con el texto de listados.texto_busqueda (un NUL llegaría al SQL y daría un 500)."""
+    try:
+        return texto_busqueda(valor, None)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+def _perdidos_de_lead(valor) -> str:
+    """'excluir' (por defecto), 'incluir' o 'solo'; otro valor, 422 (R21, a mano: el manejador global daría un 400 técnico)."""
+    texto = _texto_de_lead(valor)
+    if texto is None:
+        return "excluir"
+    if texto not in PERDIDOS_LEADS:
+        raise HTTPException(status_code=422, detail=ERROR_PERDIDOS.format(texto))
+    return texto
+
+
+def _ordenes_de_leads() -> dict:
+    """La lista blanca de `orden` de get_leads (leer_orden): lo que se ve en cada columna de la tabla, más 'reciente' (el
+    de hoy, por defecto) y 'sin_movimiento'. 'etapa' ordena por el nombre que se muestra (la etapa o, sin ella, la
+    etiqueta del status); 'dias' por los días sin movimiento (menos días primero; sin updated_at son 0)."""
+    lead = SalesOrder
+    nombre_etapa = func.coalesce(PipelineStage.name, case(STATUS_LABELS, value=lead.status, else_=lead.status))
+    sin_movimiento = -func.extract("epoch", func.coalesce(lead.updated_at, func.timezone("UTC", func.now())))
+    return {
+        "reciente": expresiones_tiempo(lead.created_at, lead.updated_at, "reciente", id_lista=lead.id),
+        "sin_movimiento": expresiones_tiempo(lead.created_at, lead.updated_at, "sin_movimiento", id_lista=lead.id),
+        "cliente": func.concat(Customer.first_name, " ", Customer.last_name),
+        "producto": lead.lead_product_name,
+        "etapa": nombre_etapa,
+        "valor": func.coalesce(lead.lead_value, 0),
+        "asesor": func.coalesce(lead.advisor_name, ""),
+        "dias": sin_movimiento,
+    }
+
 
 @router.get("/leads", response_model=dict)
 def get_leads(
     user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db),
-    limit: int = 500,
-    offset: int = 0,
+    limit: int = Query(500, ge=0, le=1000),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
     stage_id: int = None,
     search: str = None,
+    q: Optional[str] = None,
     customer_id: int = None,
     advisor_name: str = None,
+    orden: Optional[str] = None,
+    perdidos: Optional[str] = None,
 ):
     """
     Optimized: single JOIN query — O(1) DB round trips regardless of lead count.
     Supports filtering by customer_id and advisor_name for the omnichannel view.
+
+    B4 T20: `q` (y `search`, su alias, RP8) busca en el nombre del cliente, la descripción y el producto del lead.
+    `perdidos`: excluir (por defecto, lo de hoy: status != CANCELLED), incluir o solo (status == CANCELLED); otro valor,
+    422. `orden`: [-]cliente, producto, etapa, valor, asesor o dias, más reciente (por defecto: created_at desc) y
+    sin_movimiento. limit (500 por defecto, hasta 1000) con limit=0 devuelve solo el total; offset hasta MAX_OFFSET.
+    Cada lead trae también sc_id (la solicitud de la que viene).
     """
+    perdidos = _perdidos_de_lead(perdidos)
+    texto = _texto_de_lead(q) or _texto_de_lead(search)
+    if advisor_name is not None:
+        _texto_de_lead(advisor_name)      # solo el control de caracteres: el filtro sigue usando el texto tal cual
+    orden_sql = leer_orden(orden, _ordenes_de_leads(), "reciente", id_lista=SalesOrder.id)
+
     # ── Build base query with JOIN ──────────────────────────────────────────
-    q = (
+    q_leads = (
         db.query(SalesOrder, Customer, PipelineStage)
         .join(Customer, SalesOrder.customer_id == Customer.id)
         .outerjoin(PipelineStage, SalesOrder.pipeline_stage_id == PipelineStage.id)
-        .filter(SalesOrder.status != "CANCELLED")
     )
+    if perdidos == "excluir":
+        q_leads = q_leads.filter(SalesOrder.status != "CANCELLED")
+    elif perdidos == "solo":
+        q_leads = q_leads.filter(SalesOrder.status == "CANCELLED")
     if stage_id:
-        q = q.filter(SalesOrder.pipeline_stage_id == stage_id)
+        q_leads = q_leads.filter(SalesOrder.pipeline_stage_id == stage_id)
     if customer_id:
-        q = q.filter(SalesOrder.customer_id == customer_id)
+        q_leads = q_leads.filter(SalesOrder.customer_id == customer_id)
     if advisor_name:
-        q = q.filter(SalesOrder.advisor_name.ilike(f"%{advisor_name}%"))
-    if search:
-        pattern = f"%{search}%"
-        q = q.filter(
+        q_leads = q_leads.filter(SalesOrder.advisor_name.ilike(f"%{advisor_name}%"))
+    if texto:
+        pattern = f"%{texto}%"
+        q_leads = q_leads.filter(
             (Customer.first_name + " " + Customer.last_name).ilike(pattern)
             | SalesOrder.lead_description.ilike(pattern)
             | SalesOrder.lead_product_name.ilike(pattern)
         )
-    total = q.count()
-    rows = q.order_by(SalesOrder.created_at.desc()).offset(offset).limit(limit).all()
+    total, rows = paginar(q_leads.order_by(*orden_sql), limit, offset)
     leads = [_lead_to_dict(order, customer, stage) for order, customer, stage in rows]
     return {"status": "success", "data": leads, "total": total}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CRM — ANÁLISIS (B4 T20, ANALISIS-crm punto 1; R13, R21; RP9, RP29, RP73)
+# ══════════════════════════════════════════════════════════════════════════════
+# Los leads son sales_orders (SalesOrder, no SaleOrder). Abiertos: status distinto de INVOICED (ganado) y CANCELLED
+# (perdido). Ganado / perdido «en el período» se lee de updated_at (no hay historial de etapas: es una aproximación).
+# Todo se resuelve con consultas agregadas: 8 por llamada, sea cual sea la cantidad de leads (contador_sql).
+
+STATUS_LEAD_GANADO = "INVOICED"
+STATUS_LEAD_PERDIDO = "CANCELLED"
+STATUS_LEAD_CERRADOS = (STATUS_LEAD_GANADO, STATUS_LEAD_PERDIDO)
+DIAS_ALERTA_LEAD = 7        # pipeline_stages no guarda alert_days (RP73): 7 para todas las etapas
+MAX_ATRASADOS = 8           # los más atrasados de «Requieren atención» (MAX_MOVIMIENTOS de lib/analisis.js)
+TOP_ANALISIS_CRM = 5
+ORIGEN_POR_DEFECTO = "CRM"  # lo que _lead_to_dict muestra cuando el lead no trae lead_source
+
+
+def _etiqueta_de_status(status) -> str:
+    return STATUS_LABELS.get(status) or etiqueta_estado("LEGACY", status)
+
+
+def _etapas_de_los_abiertos(db: Session) -> tuple:
+    """([{clave, nombre, color, posicion, n, valor}], total del pipeline) de los leads abiertos de hoy, en el orden
+    del tablero. Un lead va en su etapa (pipeline_stage_id) y, sin etapa, en la primera que mapea a su status (RP73); si
+    ninguna lo mapea, en una categoría con la etiqueta de su status. Las etapas cerradas (Ganado y Perdido) solo salen si
+    tienen leads. Dos consultas: los abiertos agrupados por (etapa, status) y las etapas."""
+    lead = SalesOrder
+    filas = (db.query(lead).filter(lead.status.notin_(STATUS_LEAD_CERRADOS))
+             .with_entities(lead.pipeline_stage_id, lead.status, func.count(lead.id),
+                            func.coalesce(func.sum(lead.lead_value), 0))
+             .group_by(lead.pipeline_stage_id, lead.status).all())
+    etapas = db.query(PipelineStage).order_by(PipelineStage.position, PipelineStage.id).all()
+    por_id = {e.id: e for e in etapas}
+    por_status = {}
+    for e in etapas:
+        por_status.setdefault(e.maps_to_status, e)
+    grupos = {}
+    for etapa_id, status, cuantos, valor in filas:
+        etapa = por_id.get(etapa_id) or por_status.get(status)
+        clave = f"etapa:{etapa.id}" if etapa else f"status:{status}"
+        g = grupos.setdefault(clave, {"clave": clave, "nombre": etapa.name if etapa else _etiqueta_de_status(status),
+                                      "color": etapa.color if etapa else None,
+                                      "posicion": etapa.position if etapa else None, "n": 0, "valor": 0})
+        g["n"] += int(cuantos)
+        g["valor"] += valor
+    lista = []
+    for e in etapas:
+        clave = f"etapa:{e.id}"
+        if clave in grupos:
+            lista.append(grupos.pop(clave))
+        elif e.maps_to_status not in STATUS_LEAD_CERRADOS:
+            lista.append({"clave": clave, "nombre": e.name, "color": e.color, "posicion": e.position, "n": 0,
+                          "valor": 0})
+    lista += sorted(grupos.values(), key=lambda g: g["nombre"])      # los status que ninguna etapa mapea, al final
+    total = sum(g["valor"] for g in lista)
+    return lista, total
+
+
+def _dona_de_etapas(grupos) -> dict:
+    """«Leads abiertos por etapa» con el color de cada etapa (la clase de Tailwind de la etapa; el frontend la pasa a hex,
+    RP73). Todas las etapas con leads: nunca se juntan en «Otros», porque cada una tiene su color."""
+    filas = [(g["clave"], g["nombre"], g["n"], g["color"]) for g in grupos if g["n"]]
+    return {"clave": "etapa", "titulo": "Leads abiertos por etapa", "formato": "entero",
+            "total": sum(f[2] for f in filas),
+            "segmentos": an.segmentos(filas, maximo=max(len(filas), an.MAX_SEGMENTOS))}
+
+
+def _dona_de_origenes(db: Session) -> dict:
+    """«Por origen»: los leads abiertos por lead_source (CRM si no trae), en UNA consulta."""
+    lead = SalesOrder
+    origen = func.coalesce(func.nullif(func.btrim(lead.lead_source), ""), ORIGEN_POR_DEFECTO)
+    filas = (db.query(lead).filter(lead.status.notin_(STATUS_LEAD_CERRADOS))
+             .with_entities(origen, func.count(lead.id)).group_by(origen).all())
+    filas = sorted(((o, o, int(n)) for o, n in filas), key=lambda f: f[0])
+    return {"clave": "origen", "titulo": "Por origen", "formato": "entero", "total": sum(f[2] for f in filas),
+            "segmentos": an.segmentos(filas)}
+
+
+def _barras_valor_por_etapa(grupos) -> dict:
+    return {"titulo": "Valor por etapa", "formato": "pesos", "eje": "categorias",
+            "etiquetas": [g["nombre"] for g in grupos],
+            "series": [{"clave": "valor", "etiqueta": "Valor", "valores": [an.dinero(g["valor"]) for g in grupos],
+                        "tono": "neutro"}],
+            "apiladas": False}
+
+
+def _leads_que_requieren_atencion(db: Session) -> list:
+    """Los MAX_ATRASADOS leads abiertos con DIAS_ALERTA_LEAD días o más sin movimiento (updated_at; sin ella son 0 días),
+    el más atrasado primero. doc_tipo 'LEAD': el clic abre el lead. Una consulta con LIMIT."""
+    lead = SalesOrder
+    ahora = ahora_utc()
+    limite = ahora - datetime.timedelta(days=DIAS_ALERTA_LEAD)
+    filas = (db.query(lead).join(Customer, lead.customer_id == Customer.id)
+             .outerjoin(PipelineStage, lead.pipeline_stage_id == PipelineStage.id)
+             .filter(lead.status.notin_(STATUS_LEAD_CERRADOS), lead.updated_at.isnot(None), lead.updated_at <= limite)
+             .with_entities(lead.id, Customer.first_name, Customer.last_name, lead.status, PipelineStage.name,
+                            lead.lead_value, lead.updated_at)
+             .order_by(lead.updated_at.asc(), lead.id.asc()).limit(MAX_ATRASADOS).all())
+    movimientos = []
+    for id_, nombre, apellido, status, etapa, valor, actualizado in filas:
+        dias = (ahora - actualizado).days
+        movimientos.append(_movimiento(
+            "LEAD", f"LEAD-{id_}", f"{nombre or ''} {apellido or ''}".strip() or "Sin nombre",
+            f"{_cantidad(dias, 'día', 'días')} sin movimiento", actualizado, valor if valor else None, None,
+            etapa or _etiqueta_de_status(status), "LEAD", id_))
+    return movimientos
+
+
+def _asesores_con_mas_ganados(db: Session, periodo, top: int) -> dict:
+    """«Asesores con más ventas ganadas»: los leads ganados (INVOICED con updated_at en el período) por asesor
+    (advisor_name sin espacios; vacío -> 'Sin asesor'), por valor. El total (para el %) es el de todos los asesores: una
+    función de ventana en la misma consulta."""
+    lead = SalesOrder
+    asesor = func.coalesce(func.nullif(func.btrim(lead.advisor_name), ""), "Sin asesor")
+    valor = func.coalesce(func.sum(lead.lead_value), 0)
+    actual, _ = _ventanas(lead.updated_at, periodo)
+    filas = (db.query(lead).filter(lead.status == STATUS_LEAD_GANADO, actual)
+             .with_entities(asesor, valor, func.count(lead.id), func.sum(valor).over())
+             .group_by(asesor).order_by(valor.desc(), asesor.asc()).limit(top).all())
+    total = an.dinero(filas[0][3]) if filas else 0
+    return _ranking("Asesores con más ventas ganadas", "Valor ganado", "pesos",
+                    [(n, an.dinero(v), int(c)) for n, v, c, _ in filas], total, "lead ganado", "leads ganados")
+
+
+def _analisis_crm(db: Session, periodo, top=TOP_ANALISIS_CRM) -> dict:
+    """El cuerpo completo de GET /crm/analisis (analisis.respuesta, el contrato único): 4 indicadores (Leads nuevos, Valor
+    en el pipeline —foto de hoy—, Leads ganados y % de cierre, cada uno con su % contra el período anterior), la curva
+    de leads nuevos y ganados, las donas «Leads abiertos por etapa» (con el color de cada etapa) y «Por origen», las barras
+    «Valor por etapa», «Requieren atención» y el ranking de asesores. Viaja con los nombres y colores de las etapas: no
+    depende de /pipeline-stages/config, que solo lee el ADMIN. `periodo` es un Periodo; `top` (5, 10 o 25) el ranking."""
+    top = an.validar_top(top)
+    lead = SalesOrder
+    nuevo_a, nuevo_p = _ventanas(lead.created_at, periodo)
+    cierre_a, cierre_p = _ventanas(lead.updated_at, periodo)
+    ganado, perdido = lead.status == STATUS_LEAD_GANADO, lead.status == STATUS_LEAD_PERDIDO
+    fila = (db.query(lead).filter(or_(nuevo_a, nuevo_p, cierre_a, cierre_p))
+            .with_entities(func.count(lead.id).filter(nuevo_a), func.count(lead.id).filter(nuevo_p),
+                           func.count(lead.id).filter(cierre_a, ganado), func.count(lead.id).filter(cierre_p, ganado),
+                           func.count(lead.id).filter(cierre_a, perdido), func.count(lead.id).filter(cierre_p, perdido))
+            .one())
+    nuevos, nuevos_ant, ganados, ganados_ant, perdidos, perdidos_ant = (int(v or 0) for v in fila)
+    grupos, pipeline = _etapas_de_los_abiertos(db)
+
+    kpis = [
+        an.kpi("leads_nuevos", "Leads nuevos", nuevos, nuevos_ant, "entero", ayuda="Leads creados en el período."),
+        an.kpi("pipeline_valor", "Valor en el pipeline", pipeline, None, "pesos", es_foto=True,
+               ayuda="Valor de los leads abiertos hoy (ni ganados ni perdidos)."),
+        an.kpi("leads_ganados", "Leads ganados", ganados, ganados_ant, "entero",
+               ayuda="Leads ganados (facturados) en el período, según su última actualización."),
+        an.kpi("pct_cierre", "% de cierre", _pct(ganados, ganados + perdidos),
+               _pct(ganados_ant, ganados_ant + perdidos_ant), "porcentaje",
+               ayuda="Ganados entre ganados y perdidos del período."),
+    ]
+    por_dia_nuevos = _conteos_por_cubeta(db.query(lead), lead.created_at, lead.id, periodo)
+    por_dia_ganados = _conteos_por_cubeta(db.query(lead).filter(ganado), lead.updated_at, lead.id, periodo)
+    linea = {
+        "titulo": "Leads nuevos y ganados",
+        "formato": "entero",
+        "fechas": [dia.isoformat() for dia in an.claves_cubetas(periodo)],
+        "series": [
+            {"clave": "nuevos", "etiqueta": "Leads nuevos", "valores": _enteros(an.rellenar(por_dia_nuevos, periodo)),
+             "es_anterior": False},
+            {"clave": "ganados", "etiqueta": "Leads ganados",
+             "valores": _enteros(an.rellenar(por_dia_ganados, periodo)), "es_anterior": False},
+        ],
+        "total": nuevos,
+        "total_anterior": nuevos_ant,
+        "variacion_pct": an.variacion_pct(nuevos, nuevos_ant),
+    }
+    return an.respuesta(
+        periodo,
+        kpis=kpis,
+        linea=linea,
+        donas=[_dona_de_etapas(grupos), _dona_de_origenes(db)],
+        barras=_barras_valor_por_etapa(grupos),
+        movimientos={"titulo": "Requieren atención", "filas": _leads_que_requieren_atencion(db)},
+        ranking=_asesores_con_mas_ganados(db, periodo, top),
+        filtros={"top": top},
+    )
+
+
+@router.get("/analisis", response_model=dict)
+def crm_analisis(
+    periodo: Optional[str] = None,
+    desde: Optional[str] = None,
+    hasta: Optional[str] = None,
+    top: Optional[str] = None,
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+    db: Session = Depends(get_db),
+):
+    """El Análisis del CRM con el contrato único de core/analisis.py (_analisis_crm), para ADMIN y ASESOR. periodo: 7d,
+    30d (por defecto), 90d, mes, 12m o personalizado (con desde y hasta 'AAAA-MM-DD'); top: 5 (por defecto), 10 o 25. Todo
+    se declara como texto y se valida aquí (R21): un valor que no sirve responde 422 con su texto en español (RP9). Los
+    errores del cálculo no se convierten en 422: llegan como 500."""
+    try:
+        p = resolver_periodo(periodo, desde, hasta)
+        top = an.validar_top(top if isinstance(top, str) and top.strip() else TOP_ANALISIS_CRM)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return _analisis_crm(db, p, top)
 
 
 def _confirmar_o_enviar(db: Session, commit: bool) -> None:
@@ -1931,6 +2199,7 @@ def _lead_to_dict_v2(order, customer, stage, db=None) -> dict:
         "lead_product_sku_id": sku_id,
         "lead_qty":          float(getattr(order, 'lead_qty', 1) or 1),
         "advisor_name":      getattr(order, 'advisor_name', None) or "",
+        "sc_id":             order.canonical_customer_request_id,   # B4 T20 (RP103)
     }
 
 @router.get("/leads/v2", response_model=dict)
