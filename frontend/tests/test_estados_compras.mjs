@@ -1214,8 +1214,7 @@ console.log('--- TEST 31 (B4 T16A): Tránsito (compras/transito/page.tsx) cablea
   assert.match(pag, /reglaSoltarTransito\(p, origen, destino, \{ columnas: columnasTablero \}\)/);
   assert.match(pag, /regla=\{reglaTablero\}/);
   assert.match(pag, /onCambio=\{cambiarDesdeTablero\}/);
-  assert.match(pag, /\(completa\.total \?\? 0\) > TOPE_TABLERO/, 'el aviso de los 200 solo si total > 200');
-  assert.match(pag, /Se muestran los 200 más recientes de/);
+  assert.match(pag, /avisoTope200\(completa\.total, 'pedidos'\)/, 'el aviso de los 200 sale de la frase única (solo si total > 200)');
   assert.match(pag, /Reintentar/, 'si falla tracking-config, el tablero ofrece Reintentar');
   // Los diálogos nativos no existen (RP30) y el PATCH es el de /tracking.
   assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(pag.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')), 'sin diálogos nativos');
@@ -1523,7 +1522,7 @@ console.log('--- TEST 37 (B4 T16B, TABLA-compras punto 10, KANBAN-logistica punt
 
   // La tarjeta del tablero solo para ver.
   const it = { id: 5, producto: 'Cable USB-C', cantidad: 3, pven_id: 9, pven_numero: 'PVEN-20262799', proveedor: 'Acme', pec_id: 4,
-    pec_numero: 'PEC-12', estado: 'EN_PEDIDO', fecha_creacion: '2026-11-05T15:00:00Z' };
+    pec_numero: 'PEC-12', estado: 'EN_PEDIDO', fecha: '2026-11-05T15:00:00Z' };
   assert.deepEqual(ec.tarjetaItemLista(it), {
     numero: 'PVEN-20262799', tipo: 'PVEN', titulo: 'Cable USB-C', subtitulo: '3 uds · Acme', monto: null,
     estado: ec.infoEstadoItemLista('EN_PEDIDO'), chips: [{ texto: 'PEC-12', tono: 'purple' }], tiempo: '5 nov 2026', atrasada: false,
@@ -1696,8 +1695,7 @@ console.log('--- TEST 39 (B4 T16B): la Lista de compras (compras/lista-compras/p
   assert.ok(!/regla=|onCambio=|onAccion=/.test(tab), 'sin regla: no se arrastra');
   assert.match(pag, /const destino = destinoItemLista\(it\);\s*if \(destino\) router\.push\(destino\);/);
   // El aviso de los 200 (RP95): el tope es el de la consulta, el aviso sale solo si el total lo pasa y el error del tablero se dice con Reintentar.
-  assert.match(pag, /\(completa\.total \?\? 0\) > TOPE_TABLERO_COMPRAS/);
-  assert.match(pag, /Se muestran los 200 más recientes de \{completa\.total\} ítems/);
+  assert.match(pag, /avisoTope200\(completa\.total, 'ítems'\)/, 'el aviso de los 200 sale de la frase única');
   assert.match(pag, /completa\.error != null && completa\.filas\.length === 0\) \? null : completa\.filas/, 'con error y sin datos, el tablero no pinta el vacío');
   assert.match(pag, /onClick=\{completa\.recargar\}[^>]*>Reintentar/);
   // Las tarjetas (KPI-compras punto 9): las 4 de /lista-compras/stats, cada una abre su pestaña.
@@ -1717,7 +1715,7 @@ console.log('--- TEST 39 (B4 T16B): la Lista de compras (compras/lista-compras/p
   assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(codigo.replace(/\bconfirmar\(/g, 'x(')), 'sin diálogos nativos');
   assert.match(pag, /await confirmar\(\{ titulo: 'Eliminar ítem'/, 'eliminar pide confirmación con useAvisos');
   for (const texto of ["method: 'PATCH', body: JSON.stringify({ estado: 'RECIBIDO' })", "method: 'DELETE'", "estado: 'EN_PEDIDO', pec_id: pecObj.id, pec_numero: pecObj.numero", "apiFetch('/compras/pedidos', {",
-    "/compras/proveedores/search?q=", '`Desde Lista de Compras - ', 'Pendientes por Proveedor', 'Crear Pedido de Compra con seleccionados']) {
+    "/compras/proveedores/search?q=", '`Desde Lista de Compras - ', 'Crear Pedido de Compra con seleccionados']) {
     assert.ok(pag.includes(texto), `se conserva: ${texto}`);
   }
   assert.match(pag, /catch \(err\) \{ sinVincular\.push\(/, 'el vínculo ítem a ítem ya no se traga el error');
@@ -1796,8 +1794,7 @@ console.log('--- TEST 40 (B4 T16B): Traslados (compras/traslados/page.tsx) y col
   assert.ok(!/regla=|onCambio=|onAccion=/.test(tab), 'sin regla: no se arrastra');
   assert.match(pag, /tarjetaTraslado\(t, bodegas\)/);
   // El aviso de los 200 (RP95) y el error del tablero con Reintentar.
-  assert.match(pag, /\(completa\.total \?\? 0\) > TOPE_TABLERO_COMPRAS/);
-  assert.match(pag, /Se muestran los 200 más recientes de \{completa\.total\} traslados/);
+  assert.match(pag, /avisoTope200\(completa\.total, 'traslados'\)/, 'el aviso de los 200 sale de la frase única');
   assert.match(pag, /completa\.error != null && completa\.filas\.length === 0\) \? null : completa\.filas/, 'con error y sin datos, el tablero no pinta el vacío');
   assert.match(pag, /onClick=\{completa\.recargar\}[^>]*>Reintentar/);
   // Las tarjetas (KPI-compras punto 10): tras_* y bodegas, con los conteos de todos los traslados.
@@ -1809,7 +1806,7 @@ console.log('--- TEST 40 (B4 T16B): Traslados (compras/traslados/page.tsx) y col
   assert.match(pag, /despachar\(accionVistaEnLista\(estado, siguiente, opcionesEstadosTraslado\)\)/, 'como un clic en la pestaña (D41)');
   // El enlace ?id= del HUB de Inventario: el traslado se pide al servidor por su número.
   assert.match(pag, /q=\$\{encodeURIComponent\(numeroTraslado\(\{ id \}\)\)\}&limit=5`/, 'el traslado se pide por su número, con a lo sumo 5 filas');
-  assert.match(pag, /find\(\(t\) => t\.id === id\)/);
+  assert.match(pag, /llegadaEnlaceTraslado\(id, normalizarRespuesta\(r\)\.filas\)/, 'abre solo la fila cuyo número es exacto (m13)');
   assert.match(pag, /if \(searchParams\.get\('id'\)\) router\.replace\(pathname\)/, 'al cerrar el Drawer se quita ?id=');
   // R2 y R13: fuera la IA simulada y su pestaña; queda «Ver análisis» hacia el Hub.
   assert.ok(!/aiChat|aiAnalysis|aiLoading|aiInput|sendAIChat|handleAIAnalysis|Nebulae Analytics|activeTab|'Analisis'|Generar Análisis/.test(codigo), 'sin la IA simulada ni la pestaña Análisis');
@@ -1824,6 +1821,77 @@ console.log('--- TEST 40 (B4 T16B): Traslados (compras/traslados/page.tsx) y col
     "movements: form.productos.map((p) => ({ sku_id: p.sku_id, quantity: Number(p.qty) }))", "'/crm/products/search?q='", 'Nuevo Traslado']) {
     assert.ok(pag.includes(texto), `se conserva: ${texto}`);
   }
+}
+
+console.log('--- TEST 41 (B4 T16B r1): fecha del ítem, aviso de los 200, enlace ?id= de Traslados, textos ---');
+{
+  // I1 a I4: el ítem de la Lista trae `fecha` (no fecha_creacion): una fila con `fecha` y sin `fecha_creacion` da su día.
+  assert.equal(ec.tarjetaItemLista({ id: 1, producto: 'x', cantidad: 1, estado: 'PENDIENTE', fecha: '2026-11-05T15:00:00' }).tiempo, '5 nov 2026');
+  assert.equal(ec.tarjetaItemLista({ id: 1, producto: 'x', cantidad: 1, estado: 'PENDIENTE', fecha_creacion: '2026-11-05T15:00:00' }).tiempo, null, 'fecha_creacion no existe');
+
+  // m5: UNA frase para el tope de 200 del tablero en modo cliente.
+  assert.equal(ec.avisoTope200(230, 'ítems'), 'Se muestran los 200 más recientes de 230 ítems. Busca o filtra para ver el resto.');
+  assert.equal(ec.avisoTope200(1234, 'pedidos'), 'Se muestran los 200 más recientes de 1.234 pedidos. Busca o filtra para ver el resto.');
+  assert.equal(ec.avisoTope200(200, 'traslados'), null, 'con 200 no hay aviso');
+  assert.equal(ec.avisoTope200(null, 'traslados'), null);
+  assert.equal(ec.avisoTope200('x', 'traslados'), null);
+
+  // m11: «1 producto», «2 productos».
+  assert.equal(ec.textoProductos(1), '1 producto');
+  assert.equal(ec.textoProductos(2), '2 productos');
+  assert.equal(ec.textoProductos(0), '0 productos');
+
+  // I3, I5, m10, m13: el enlace ?id=. Se abre solo la fila cuyo número es EXACTAMENTE el pedido.
+  assert.equal(ec.filaDelEnlaceTraslado([{ id: 123 }, { id: 12 }], 12)?.id, 12);
+  assert.equal(ec.filaDelEnlaceTraslado([{ id: 123 }], 12), null, 'TRL-0012 no es TRL-0123');
+  assert.equal(ec.filaDelEnlaceTraslado([{ id: 12345 }], 1234), null, 'TRL-1234 no es TRL-12345');
+  assert.equal(ec.filaDelEnlaceTraslado(null, 12), null);
+  // Pedir: un id válido que todavía no se atendió; abortado (la marca sigue null) → vuelve a pedir; ya atendido → no repite.
+  assert.equal(ec.pedirEnlaceTraslado(null, '63'), 63);
+  assert.equal(ec.pedirEnlaceTraslado(null, null), null);
+  for (const malo of ['x', '0', '-3', '1.5', '']) assert.equal(ec.pedirEnlaceTraslado(null, malo), null, malo);
+  assert.equal(ec.pedirEnlaceTraslado('63', '63'), null, 'llegó: no repite');
+  assert.equal(ec.pedirEnlaceTraslado('63', '64'), 64, 'otro id: pide');
+  // Llegada: abre la exacta y marca; si no existe avisa UNA vez (la marca queda puesta, no repite).
+  const a = ec.llegadaEnlaceTraslado(63, [{ id: 630 }, { id: 63 }]);
+  assert.deepEqual([a.marca, a.abrir?.id, a.avisar], ['63', 63, false]);
+  const b = ec.llegadaEnlaceTraslado(63, [{ id: 630 }]);
+  assert.deepEqual([b.marca, b.abrir, b.avisar], ['63', null, true]);
+  assert.equal(ec.pedirEnlaceTraslado(b.marca, '63'), null, 'no existe: ya avisó, no vuelve a pedir ni a avisar');
+
+  const pag = readFileSync(new URL('../src/app/dashboard/compras/traslados/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const lis = readFileSync(new URL('../src/app/dashboard/compras/lista-compras/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const tra = readFileSync(new URL('../src/app/dashboard/compras/transito/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const col = readFileSync(new URL('../src/app/dashboard/compras/columnas-traslado.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // El ref solo se marca cuando el traslado llegó (en la llegada), nunca antes del fetch.
+  const efecto = /const idAbierto = useRef[^\n]*\n([\s\S]*?)\}, \[idDeLaUrl, avisar, avisarError\]\);/.exec(pag)?.[1] ?? '';
+  assert.match(efecto, /pedirEnlaceTraslado\(idAbierto\.current, idDeLaUrl\)/);
+  assert.match(efecto, /llegadaEnlaceTraslado\(id, normalizarRespuesta\(r\)\.filas/);
+  assert.match(efecto, /\.then\(/);
+  const antes = efecto.slice(0, efecto.indexOf('.then('));
+  assert.ok(!/idAbierto\.current =/.test(antes), 'la marca no se pone antes del fetch');
+  assert.match(efecto, /idAbierto\.current = llegada\.marca;/);
+  // m5, m11, m12, m14, m6, m7, m2: fuente.
+  for (const [nombre, f] of [['lista', lis], ['traslados', pag], ['tránsito', tra]]) {
+    assert.match(f, /avisoTope200\(/, `${nombre} usa la frase única`);
+    assert.ok(!/Se muestran los 200 más recientes de/.test(f), `${nombre} no la escribe a mano`);
+  }
+  assert.ok(!/por_proveedor|Pendientes por Proveedor/.test(lis), 'sin el bloque muerto «Pendientes por proveedor»');
+  assert.ok(!/producto\(s\)/.test(col), 'm11: el title de Productos conjuga');
+  assert.ok(!/Tracking<\/p>/.test(pag) && /Guía<\/p>/.test(pag), 'm11: «Guía», no «Tracking»');
+  assert.match(pag, /claseFila=\{claseFila\}/);
+  assert.match(pag, /selected\?\.id === t\.id \? TABLE\.filaInfo : null/, 'm14: la fila del Drawer abierto queda marcada (token opaco)');
+  assert.match(lis, /aria-expanded=\{verFechas \|\| hayFechas\}/, 'm7');
+  assert.match(lis, /const guardarProveedor = async \(\) => \{[\s\S]*?\n  \};/);
+  const guardar = /const guardarProveedor = async \(\) => \{([\s\S]*?)\n  \};/.exec(lis)?.[1] ?? '';
+  assert.ok(!/setEditando\(null\);\s*await cambiarItem/.test(guardar), 'm6: no se cierra antes de que el PATCH salga bien');
+  assert.match(guardar, /if \(await cambiarItem\([\s\S]*'No se pudo actualizar el proveedor'\)\) setEditando\(null\);/, 'm6: se cierra solo si salió bien');
+  assert.match(lis, /'pueden'/, 'm12: dice cuántos entran');
+  assert.match(lis, /\(pedibles === elegidos\s*\?/, 'm12: solo calla cuando todos los elegidos se pueden pedir');
+  assert.match(lis, /textoSeleccion\(seleccion\.length, itemsSeleccionados\.length\)/);
+  assert.match(lis, /itemsSeleccionados\.length/, 'm12: la barra usa los seleccionables de verdad');
+  assert.match(lis, /item\.fecha\b|it\.fecha\b/);
+  assert.ok(!/fecha_creacion/.test(lis), 'I1: la Lista lee `fecha`');
 }
 
 console.log('\nOK: test_estados_compras.mjs');

@@ -20,12 +20,12 @@ import { COMP_NAV } from '../comp-nav';
 
 import { apiFetch } from '@/lib/api';
 import { estadoDelTotal } from '@/lib/tabla';
-import { PERIODO_KPI, formatoEntero, tarjetasTransito } from '@/lib/kpis';
+import { PERIODO_KPI, tarjetasTransito } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 // Piezas genéricas que nacieron en las libs de Ventas (T7), como en el Hub de Compras (T14): el chip del orden.
 import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
 import { humanizarCodigo } from '@/lib/estados-pedido';
-import { infoEstadoPec, opcionesEstadosPec, textoVacioPec } from '@/lib/estados-compras';
+import { avisoTope200, infoEstadoPec, opcionesEstadosPec, textoVacioPec } from '@/lib/estados-compras';
 import {
   accionEtapaTransito, avanceTransito, avancePromedioTransito, columnaTransito, columnasDeEtapas, etapaActual,
   pendienteDeTransito, reglaSoltarTransito, soltarPendientes, tarjetaTransito, terminarPendiente, textoEntregaTransito, tonoEntregaTransito,
@@ -408,12 +408,12 @@ export default function TransitoPage() {
         : null,
     };
   }, [avanzar, pendiente]);
-  const hayMasDelTope = enKanban && !completa.cargandoInicial && (completa.total ?? 0) > TOPE_TABLERO;
+  const textoTope = enKanban && !completa.cargandoInicial ? avisoTope200(completa.total, 'pedidos') : null;
   const sinEtapas = enKanban && itemsTablero !== null && columnasTablero.length === 0;
   const errorConfig = !cargandoConfig && config?.error != null;
   // I2: si falla la carga del tablero, lo dice con «Reintentar» (con datos viejos, el mismo aviso encima); sin datos, items null.
   const errorTablero = enKanban && completa.error != null;
-  const avisoTablero = (hayMasDelTope || errorConfig || sinEtapas || errorTablero) ? (
+  const avisoTablero = (textoTope || errorConfig || sinEtapas || errorTablero) ? (
     <div className="flex flex-col gap-1">
       {errorTablero && (
         <p role="alert">
@@ -421,9 +421,7 @@ export default function TransitoPage() {
           <button type="button" onClick={completa.recargar} className={`rounded font-bold text-blue-700 underline ${FOCO_VISIBLE}`}>Reintentar</button>
         </p>
       )}
-      {hayMasDelTope && (
-        <p>Se muestran los 200 más recientes de {formatoEntero(completa.total)} pedidos. Busca o filtra para ver el resto.</p>
-      )}
+      {textoTope && <p>{textoTope}</p>}
       {errorConfig && (
         <p role="alert">
           {textoDeError(config?.error, 'No se pudieron cargar las etapas del envío')}. Las columnas salen de los pedidos.{' '}

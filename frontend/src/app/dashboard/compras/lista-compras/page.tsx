@@ -32,7 +32,7 @@ import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { TABLE } from '@/lib/design-system';
 import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
-  OPCIONES_ESTADOS_TABLERO_LISTA, COLUMNAS_LISTA, TOPE_TABLERO_COMPRAS, consultaLista, consultaTableroLista, destinoItemLista,
+  OPCIONES_ESTADOS_TABLERO_LISTA, COLUMNAS_LISTA, consultaLista, consultaTableroLista, avisoTope200, destinoItemLista,
   esItemSeleccionable, infoEstadoItemLista, opcionesEstadosLista, tarjetaItemLista, textoVacioLista,
 } from '@/lib/estados-compras';
 import { ENLACE_VER_ANALISIS_COMPRAS, avisosFlujoCompras, pasosPantallaCompras, textoReglaCompras } from '@/lib/flujo-compras';
@@ -49,7 +49,7 @@ type ItemLista = {
   proveedor?: string | null;
   pec_id?: number | null;
   pec_numero?: string | null;
-  fecha_creacion?: string | null;
+  fecha?: string | null;
   precio_unitario_cop?: number | string | null;
 };
 /** `conteos` de GET /compras/lista-compras con con_conteos=1 (T12): cada pestaña, con la búsqueda y los filtros extra (R5). */
@@ -72,6 +72,10 @@ const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 foc
 const FOCO_OSCURO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white';
 /** Las modalidades de pago del pedido de compra: [lo que se manda al servidor, lo que se ve]. */
 const MODALIDADES_PAGO = [['Contado', 'Contado'], ['Credito 30d', 'Crédito 30d'], ['Credito 60d', 'Crédito 60d'], ['Adelanto 50%', 'Adelanto 50%'], ['Contra entrega', 'Contra entrega']];
+/** m12: la barra dice los mismos ítems que usará «Crear Pedido de Compra»; si hay seleccionados que no entran, lo dice. */
+const textoSeleccion = (elegidos: number, pedibles: number) => (pedibles === elegidos
+  ? `${elegidos} ${elegidos === 1 ? 'seleccionado' : 'seleccionados'}`
+  : `${elegidos} ${elegidos === 1 ? 'seleccionado' : 'seleccionados'}; ${pedibles} se ${pedibles === 1 ? 'puede' : 'pueden'} pedir`);
 const CAMPO = 'border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200';
 const ETIQUETA_CAMPO = 'block text-xs font-black text-gray-500 uppercase mb-1';
 
@@ -151,8 +155,8 @@ const COLUMNAS_TABLA_LISTA: ColumnaTabla<ItemLista>[] = [
     ) : <span className="text-xs text-gray-400">—</span>) },
   { id: 'estado', titulo: 'Estado', ancho: 96, clave: true, ordenable: 'estado', titleCelda: (it) => infoEstadoItemLista(it.estado).label,
     celda: (it) => <CeldaEstadoItem it={it} /> },
-  { id: 'fecha', titulo: 'Fecha', ancho: 92, ocultaPorDefecto: true, ordenable: 'fecha', titleCelda: (it) => textoInstante(it.fecha_creacion),
-    celda: (it) => <span className="text-xs text-gray-600">{textoInstante(it.fecha_creacion)}</span> },
+  { id: 'fecha', titulo: 'Fecha', ancho: 92, ocultaPorDefecto: true, ordenable: 'fecha', titleCelda: (it) => textoInstante(it.fecha),
+    celda: (it) => <span className="text-xs text-gray-600">{textoInstante(it.fecha)}</span> },
   { id: 'acciones', titulo: 'Acciones', ancho: 80, clave: true, fija: 'derecha', celda: (it) => <CeldaAcciones it={it} /> },
 ];
 
@@ -171,7 +175,7 @@ function pestanasDeLista(conteos: ConteosLista | null): PestanaTabla[] {
 
 /** El ítem que el tablero muestra en cada columna: su estado. */
 const columnaDeItem = (it: ItemLista) => it.estado;
-const fechaDeItem = (it: ItemLista) => it.fecha_creacion;
+const fechaDeItem = (it: ItemLista) => it.fecha;
 
 function NewSupplierModal({ onSave, onClose }: { onSave: (s: Proveedor) => void; onClose: () => void }) {
   const { avisarError } = useAvisos();
@@ -292,16 +296,18 @@ export default function ListaComprasPage() {
 
   // ── bloque 6: cambiar un ítem (PATCH de estado y de proveedor, DELETE) ──
   // Si el servidor dice que no, su mensaje tal cual (avisarError). Un ítem con un cambio en camino no ofrece otro (ocupadoId).
-  const cambiarItem = useCallback(async (it: ItemLista, accion: () => Promise<string>, fallo: string) => {
+  const cambiarItem = useCallback(async (it: ItemLista, accion: () => Promise<string>, fallo: string): Promise<boolean> => {
     setOcupadoId(it.id);
     try {
       avisar(await accion(), { tono: 'ok' });
       setSeleccion((s) => s.filter((c) => String(c) !== String(it.id)));
       recargarTodo();
+      return true;
     } catch (err) {
       avisarError(err, fallo);
       // La regla única: con un 400, un 409 o sin respuesta (otro usuario ya cambió el ítem) se recarga lo que se ve; un 404 no.
       if (recargarTrasError(err)) recargarTodo();
+      return false;
     } finally {
       setOcupadoId(null);
     }
@@ -327,11 +333,11 @@ export default function ListaComprasPage() {
   const guardarProveedor = async () => {
     if (!editando) return;
     const it = editando;
-    setEditando(null);
-    await cambiarItem(it, async () => {
+    // m6: la ventana se cierra solo si el PATCH salió bien; si falla sigue abierta con lo escrito y el error a la vista.
+    if (await cambiarItem(it, async () => {
       await apiFetch(`/compras/lista-compras/${it.id}`, { method: 'PATCH', body: JSON.stringify({ proveedor: proveedorNuevo }) });
       return 'Proveedor actualizado';
-    }, 'No se pudo actualizar el proveedor');
+    }, 'No se pudo actualizar el proveedor')) setEditando(null);
   };
 
   const accionesFila = useMemo<AccionesFilaLista>(() => ({
@@ -493,9 +499,9 @@ export default function ListaComprasPage() {
     if (destino) router.push(destino);
     else avisar('Este ítem no tiene un pedido de venta ni un pedido de compra vinculado.', { tono: 'info' });
   }, [router, avisar]);
-  const hayMasDelTope = enKanban && !completa.cargandoInicial && (completa.total ?? 0) > TOPE_TABLERO_COMPRAS;
+  const textoTope = enKanban && !completa.cargandoInicial ? avisoTope200(completa.total, 'ítems') : null;
   const errorTablero = enKanban && completa.error != null;
-  const avisoTablero = (hayMasDelTope || errorTablero) ? (
+  const avisoTablero = (textoTope || errorTablero) ? (
     <div className="flex flex-col gap-1">
       {errorTablero && (
         <p role="alert">
@@ -503,7 +509,7 @@ export default function ListaComprasPage() {
           <button type="button" onClick={completa.recargar} className={`rounded font-bold text-purple-700 underline ${FOCO_VISIBLE}`}>Reintentar</button>
         </p>
       )}
-      {hayMasDelTope && <p>Se muestran los 200 más recientes de {completa.total} ítems. Busca o filtra para ver el resto.</p>}
+      {textoTope && <p>{textoTope}</p>}
     </div>
   ) : undefined;
 
@@ -592,7 +598,7 @@ export default function ListaComprasPage() {
                           className={`rounded text-gray-500 hover:text-gray-800 ${FOCO_VISIBLE}`}><X size={13} aria-hidden="true" /></button>
                       )}
                     </label>
-                    <button type="button" onClick={() => setVerFechas((v) => !v)} aria-expanded={verFechas}
+                    <button type="button" onClick={() => setVerFechas((v) => !v)} aria-expanded={verFechas || hayFechas}
                       className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold transition-colors ${FOCO_VISIBLE} ${
                         verFechas || hayFechas ? 'border-purple-300 bg-purple-50 text-purple-800' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
                       }`}>
@@ -662,28 +668,13 @@ export default function ListaComprasPage() {
           ) : null}
         </div>
 
-        {/* Pendientes por proveedor (B1 a B3): los botones que filtran la lista por proveedor, si el servidor los trae. */}
-        {!enKanban && Array.isArray((stats?.datos as { por_proveedor?: unknown } | null)?.por_proveedor)
-          && ((stats?.datos as { por_proveedor: { proveedor: string; count: number }[] }).por_proveedor).length > 0 && (
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
-            <h3 className="text-sm font-black text-gray-700 mb-4">Pendientes por Proveedor</h3>
-            <div className="flex flex-wrap gap-2">
-              {(stats?.datos as { por_proveedor: { proveedor: string; count: number }[] }).por_proveedor.map((p) => (
-                <button key={p.proveedor} type="button" onClick={() => filtrarProveedor(p.proveedor)}
-                  className={`flex items-center gap-2 px-4 py-2 bg-purple-50 border border-purple-200 rounded-xl text-sm font-bold text-purple-800 hover:bg-purple-100 ${FOCO_VISIBLE}`}>
-                  {p.proveedor} <span className="bg-purple-700 text-white px-2 py-0.5 rounded-full text-xs">{p.count}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Barra de selección: crear el pedido de compra con los ítems PENDIENTE elegidos (B1 a B3). La selección es de la página
           de la tabla, así que solo en Lista. */}
       {seleccion.length > 0 && !enKanban && (
         <div className="fixed bottom-8 left-1/2 z-40 flex -translate-x-1/2 items-center gap-4 rounded-2xl border border-slate-700 bg-slate-900 px-6 py-4 text-white shadow-2xl">
-          <span className="rounded-full bg-slate-800 px-3 py-1 text-sm font-bold">{seleccion.length} {seleccion.length === 1 ? 'seleccionado' : 'seleccionados'}</span>
+          <span className="rounded-full bg-slate-800 px-3 py-1 text-sm font-bold">{textoSeleccion(seleccion.length, itemsSeleccionados.length)}</span>
           <button type="button" onClick={() => openPecModal(itemsSeleccionados)} disabled={itemsSeleccionados.length === 0}
             className={`flex items-center gap-2 rounded-xl bg-purple-500/20 px-3 py-1.5 text-xs font-bold text-purple-200 transition-colors hover:bg-purple-500/40 disabled:opacity-50 ${FOCO_OSCURO}`}>
             <ShoppingCart size={14} aria-hidden="true" /> Crear Pedido de Compra con seleccionados

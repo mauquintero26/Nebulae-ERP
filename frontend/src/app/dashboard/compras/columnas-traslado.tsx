@@ -19,7 +19,7 @@ import { createContext, useContext } from 'react';
 import type { ReactNode } from 'react';
 import type { ColumnaTabla } from '@/components/tabla';
 import {
-  infoEstadoTraslado, nombreBodega, numeroTraslado, productosDeTraslado, textoFechaTraslado,
+  infoEstadoTraslado, nombreBodega, numeroTraslado, productosDeTraslado, textoFechaTraslado, textoProductos,
 } from '@/lib/estados-compras';
 import { CHIP, titulosDeOrdenPec } from './columnas-pec';
 
@@ -70,7 +70,7 @@ export function columnasTraslado<T extends FilaColumnasTraslado>(celdaAcciones: 
       celda: (t) => <span className="block truncate text-xs font-black text-orange-700">{numeroTraslado(t)}</span> },
     { id: 'origen', titulo: 'Origen', ancho: 130, flexible: true, ordenable: 'origen', celda: (t) => <CeldaBodega id={t.source_warehouse_id} /> },
     { id: 'destino', titulo: 'Destino', ancho: 130, ordenable: 'destino', celda: (t) => <CeldaBodega id={t.dest_warehouse_id} /> },
-    { id: 'productos', titulo: 'Productos', ancho: 88, alinear: 'centro', titleCelda: (t) => `${productosDeTraslado(t)} producto(s)`,
+    { id: 'productos', titulo: 'Productos', ancho: 88, alinear: 'centro', titleCelda: (t) => textoProductos(productosDeTraslado(t)),
       celda: (t) => <span className="text-xs font-bold text-slate-700">{productosDeTraslado(t)}</span> },
     { id: 'fecha', titulo: 'Fecha', ancho: 92, ordenable: 'fecha', titleCelda: (t) => textoFechaTraslado(t),
       celda: (t) => <span className="text-xs text-slate-600">{textoFechaTraslado(t)}</span> },

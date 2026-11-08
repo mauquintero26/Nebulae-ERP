@@ -28,10 +28,11 @@ import { accionModo, estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
 import { tarjetasTraslados } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { fechaLarga } from '@/lib/fechas-colombia';
+import { TABLE } from '@/lib/design-system';
 import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
 import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
-  COLUMNAS_TRASLADO, OPCIONES_ESTADOS_TABLERO_TRASLADO, TOPE_TABLERO_COMPRAS, conteosTraslado, consultaTableroTraslados,
+  COLUMNAS_TRASLADO, OPCIONES_ESTADOS_TABLERO_TRASLADO, avisoTope200, conteosTraslado, llegadaEnlaceTraslado, pedirEnlaceTraslado, consultaTableroTraslados,
   consultaTraslados, nombreBodega, numeroTraslado, opcionesEstadosTraslado, tarjetaTraslado, textoVacioTraslados,
 } from '@/lib/estados-compras';
 import { ENLACE_VER_ANALISIS_COMPRAS } from '@/lib/flujo-compras';
@@ -172,18 +173,20 @@ export default function TrasladosPage() {
   const idDeLaUrl = searchParams.get('id');
   const idAbierto = useRef<string | null>(null);
   useEffect(() => {
-    if (!idDeLaUrl || idAbierto.current === idDeLaUrl) return undefined;
-    const id = Number(idDeLaUrl);
-    if (!Number.isInteger(id) || id <= 0) return undefined;
-    idAbierto.current = idDeLaUrl;
+    // I3 e I5: la marca (idAbierto) se pone cuando la respuesta LLEGÓ, nunca antes del fetch: si el efecto se aborta, queda libre y el
+    // siguiente render vuelve a pedir. Las reglas viven en estados-compras.js (pedirEnlaceTraslado y llegadaEnlaceTraslado).
+    const id = pedirEnlaceTraslado(idAbierto.current, idDeLaUrl);
+    if (id === null) return undefined;
     const control = new AbortController();
     apiFetch(`${RUTA_OPERACIONES}?operation_type=TRANSFER&q=${encodeURIComponent(numeroTraslado({ id }))}&limit=5`, { signal: control.signal })
       .then((r: unknown) => {
-        const encontrada = (normalizarRespuesta(r).filas as FilaTraslado[]).find((t) => t.id === id);
-        if (encontrada) setSelected(encontrada);
+        if (control.signal.aborted) return;
+        const llegada = llegadaEnlaceTraslado(id, normalizarRespuesta(r).filas);
+        idAbierto.current = llegada.marca;
+        if (llegada.abrir) setSelected(llegada.abrir as FilaTraslado);
         else avisar(`No se encontró el traslado ${numeroTraslado({ id })}.`, { tono: 'info' });
       })
-      .catch((err: unknown) => { if (!control.signal.aborted) { idAbierto.current = null; avisarError(err, 'No se pudo abrir el traslado'); } });
+      .catch((err: unknown) => { if (!control.signal.aborted) avisarError(err, 'No se pudo abrir el traslado'); });
     return () => control.abort();
   }, [idDeLaUrl, avisar, avisarError]);
   const abrir = useCallback((t: FilaTraslado) => setSelected(t), []);
@@ -192,6 +195,8 @@ export default function TrasladosPage() {
     if (searchParams.get('id')) router.replace(pathname);
   }, [searchParams, router, pathname]);
   const accionesFila = useMemo(() => ({ abrir }), [abrir]);
+  // m14: la fila cuyo Drawer está abierto queda marcada (token opaco, D41; en BASE era un tinte translúcido).
+  const claseFila = useCallback((t: FilaTraslado) => (selected?.id === t.id ? TABLE.filaInfo : null), [selected?.id]);
 
   // ── crear un traslado (B1 a B3, sin cambios de comportamiento) ──
   const [showCreate, setShowCreate] = useState(false);
@@ -300,9 +305,9 @@ export default function TrasladosPage() {
     fechaMovimiento: fechaDeTraslado,
   });
   const tarjetaDe = useCallback((t: FilaTraslado) => tarjetaTraslado(t, bodegas), [bodegas]);
-  const hayMasDelTope = enKanban && !completa.cargandoInicial && (completa.total ?? 0) > TOPE_TABLERO_COMPRAS;
+  const textoTope = enKanban && !completa.cargandoInicial ? avisoTope200(completa.total, 'traslados') : null;
   const errorTablero = enKanban && completa.error != null;
-  const avisoTablero = (hayMasDelTope || errorTablero) ? (
+  const avisoTablero = (textoTope || errorTablero) ? (
     <div className="flex flex-col gap-1">
       {errorTablero && (
         <p role="alert">
@@ -310,7 +315,7 @@ export default function TrasladosPage() {
           <button type="button" onClick={completa.recargar} className={`rounded font-bold text-orange-700 underline ${FOCO_VISIBLE}`}>Reintentar</button>
         </p>
       )}
-      {hayMasDelTope && <p>Se muestran los 200 más recientes de {completa.total} traslados. Busca o filtra para ver el resto.</p>}
+      {textoTope && <p>{textoTope}</p>}
     </div>
   ) : undefined;
 
@@ -419,6 +424,7 @@ export default function TrasladosPage() {
                     onReintentar={listado.recargar}
                     aviso={listado.avisoOrden}
                     onFila={abrir}
+                    claseFila={claseFila}
                     vacio={vacio}
                     etiqueta="Traslados"
                   />
@@ -471,7 +477,7 @@ export default function TrasladosPage() {
           </div>
           {selected.tracking_number && (
             <div className="bg-slate-50 rounded-xl p-3">
-              <p className="text-xs text-slate-500 mb-1">Tracking</p>
+              <p className="text-xs text-slate-500 mb-1">Guía</p>
               <p className="font-mono text-sm font-bold">{selected.tracking_number}</p>
             </div>
           )}

@@ -44,7 +44,7 @@ import { queryListado } from './tabla.js';
 // B4 T14 r1: la regla de la columna con filtro (m4, la misma de Ventas), el número del servidor (m7) y la regla de
 // recarga y el texto de los errores (m15).
 import { estadosDeColumnaLista } from './kanban.js';
-import { numeroFinito } from './kpis.js';
+import { formatoEntero, numeroFinito } from './kpis.js';
 import { recargarTrasError, textoDeError } from './avisos.js';
 
 /**
@@ -1032,7 +1032,7 @@ export function tarjetaItemLista(it) {
     monto: null,
     estado: infoEstadoItemLista(it?.estado),
     chips: pec ? [{ texto: pec, tono: 'purple' }] : [],
-    tiempo: fechaCorta(it?.fecha_creacion) || null,
+    tiempo: fechaCorta(it?.fecha) || null,
     atrasada: false,
     accionPrincipal: destino
       ? { texto: aPec ? 'Ver pedido de compra' : 'Ver pedido de venta', href: destino, tono: aPec ? 'purple' : 'emerald' }
@@ -1183,7 +1183,7 @@ export function tarjetaTraslado(t, bodegas) {
     numero: numeroTraslado(t),
     tipo: 'TRL',
     titulo: `${nombreBodega(bodegas, t?.source_warehouse_id)} → ${nombreBodega(bodegas, t?.dest_warehouse_id)}`,
-    subtitulo: `${n} ${n === 1 ? 'producto' : 'productos'}`,
+    subtitulo: textoProductos(n),
     monto: null,
     estado: infoEstadoTraslado(t?.status),
     chips: guia ? [{ texto: `Guía ${guia}`, tono: 'slate' }] : [],
@@ -1208,6 +1208,62 @@ export function textoVacioTraslados(estado) {
   if (estado?.vista === 'completadas') return { titulo: 'Aún no hay traslados completados', ayuda: null };
   if (estado?.vista === 'canceladas') return { titulo: 'No hay traslados cancelados', ayuda: null };
   return { titulo: 'Sin traslados internos registrados', ayuda: 'Crea un traslado para mover mercancía entre bodegas.' };
+}
+
+// ─── T16B r1: aviso de los 200, textos y el enlace ?id= de Traslados ────────────────
+
+/**
+ * m5: la frase única del tablero en modo cliente cuando la consulta (de a lo sumo 200 filas) tiene más (RP95). null si no hay más
+ * de 200 o el total no es un número.
+ * @param {unknown} total
+ * @param {string} nombre  lo que se cuenta, en plural ('ítems', 'pedidos', 'traslados')
+ * @returns {string | null}
+ */
+export function avisoTope200(total, nombre) {
+  const n = numeroFinito(total);
+  if (n === null || n <= TOPE_TABLERO_COMPRAS) return null;
+  return `Se muestran los ${TOPE_TABLERO_COMPRAS} más recientes de ${formatoEntero(n)} ${nombre}. Busca o filtra para ver el resto.`;
+}
+
+/** '1 producto', '2 productos' (la tabla, la tarjeta y el Drawer dicen lo mismo). */
+export function textoProductos(n) {
+  return `${n} ${n === 1 ? 'producto' : 'productos'}`;
+}
+
+/**
+ * m13: de la respuesta de `q=TRL-0012` (que también encuentra notas y documentos) la fila cuyo número es EXACTAMENTE el pedido.
+ * @param {ReadonlyArray<any> | null | undefined} filas
+ * @param {number} id
+ */
+export function filaDelEnlaceTraslado(filas, id) {
+  const pedido = numeroTraslado({ id });
+  return (Array.isArray(filas) ? filas : []).find((t) => numeroTraslado(t) === pedido) ?? null;
+}
+
+/**
+ * I3 e I5: ¿hay que pedir el traslado del ?id=? `marca` es el id ya atendido (la respuesta llegó), no el que se pidió: un fetch
+ * abortado deja la marca como estaba y el siguiente render vuelve a pedir. Devuelve el id (entero positivo) o null.
+ * @param {string | null} marca
+ * @param {string | null | undefined} idDeLaUrl
+ * @returns {number | null}
+ */
+export function pedirEnlaceTraslado(marca, idDeLaUrl) {
+  if (typeof idDeLaUrl !== 'string' || !/^\d+$/.test(idDeLaUrl)) return null;
+  const id = Number(idDeLaUrl);
+  if (!Number.isInteger(id) || id <= 0 || marca === idDeLaUrl) return null;
+  return id;
+}
+
+/**
+ * Llegó la respuesta del traslado `id`: abre la fila exacta; si no existe avisa UNA vez. En los dos casos la marca queda en ese id
+ * (no se vuelve a pedir ni a avisar).
+ * @param {number} id
+ * @param {ReadonlyArray<any> | null | undefined} filas
+ * @returns {{marca: string, abrir: any | null, avisar: boolean}}
+ */
+export function llegadaEnlaceTraslado(id, filas) {
+  const abrir = filaDelEnlaceTraslado(filas, id);
+  return { marca: String(id), abrir, avisar: abrir === null };
 }
 
 // ─── Estado del stock (RP53) ────────────────────────────────────────────────────
