@@ -1,277 +1,404 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import Link from 'next/link';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowDownRight, ArrowRightLeft, ArrowUpRight, RefreshCw, Search, Warehouse, X } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+// B4 T18: el Kardex en la tabla estándar, en modo servidor (R5, R11): el estado único de la pantalla, UN solo pedido por cada
+// cambio de filtro (antes, el filtro y la página eran dos estados con dos efectos: cada filtro pedía dos veces), los errores
+// dichos (antes, catch(() => {}) y listas vacías falsas) y el tablero solo para ver Entradas · Salidas (RP54). El servidor
+// ordena siempre por fecha (más reciente primero) y no tiene `q`: la barra no lleva búsqueda libre sino los filtros del Kardex.
+import { Modal, PageHeader, SubNav, TableroKanban, useTableroKanban } from '@/components/ui';
 import {
-  ArrowRightLeft, Search, ArrowUpRight, ArrowDownRight, RefreshCw,
-  ChevronLeft, ChevronRight, X, Filter
-} from 'lucide-react';
-import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
-import { SubNav, PageHeader, EmptyState } from '@/components/ui';
+  BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
+} from '@/components/tabla';
+import type { ColumnaTabla } from '@/components/tabla';
+import { apiFetch } from '@/lib/api';
+import { estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
+import { textoDeError } from '@/lib/avisos';
+import { numeroFinito } from '@/lib/kpis';
+import {
+  COLUMNAS_KARDEX, DIRECCIONES_KARDEX, TEXTO_SOLO_VER_KARDEX, consultaColumnaKardex, direccionesDeColumnaKardex, extraKardex,
+  infoDireccionKardex, numeroMovimiento, tarjetaMovimiento, textoFechaMovimiento, textoVacioKardex,
+} from '@/lib/estados-compras';
 import { INV_NAV } from '../inv-nav';
+import { CONTENEDOR, FOCOS, SelectorCatalogo, cantidad, pesos, useCatalogo } from '../piezas-inventario';
+// El chip estándar de las tablas del bloque (columnas-pec.tsx, T15 r1): la misma forma que el estado de un PEC.
+import { CHIP } from '../../compras/columnas-pec';
 
-async function apiFetch(path: string, opts: RequestInit = {}) {
-  const res = await _apiFetch(path, opts);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || data.message || 'Error');
-  return data.data ?? data;
+/** Un movimiento de GET /inventory/kardex (KardexMovementItem, T13): los nombres son los del servidor. */
+type Movimiento = {
+  id: number;
+  operation_id?: number | null;
+  operation_type?: string | null;
+  source_document_type?: string | null;
+  source_document_numero?: string | null;
+  sku_id?: number | null;
+  sku?: string | null;
+  product_name?: string | null;
+  quantity?: number | string | null;
+  direction?: string | null;
+  owner?: string | null;
+  warehouse_id?: number | null;
+  warehouse_name?: string | null;
+  unit_cost_cop?: number | string | null;
+  created_at?: string | null;
+  created_by?: string | null;
+  idempotency_key?: string | null;
+};
+/** Los filtros extra de la barra, que van al servidor (extraKardex): el id del SKU elegido y los demás como texto ('' = todos). */
+type FiltrosKardex = { skuId: number | null; bodega: string; propietario: string; direccion: string; desde: string; hasta: string };
+/** Un resultado de GET /crm/products/search: el SKU y su texto. */
+type OpcionSku = { id: number; display?: string | null; product_name?: string | null };
+
+/** El id de la pantalla: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26). */
+const ID_KARDEX = 'inventario.kardex';
+const INICIAL_KARDEX = {};
+const RUTA_KARDEX = '/inventory/kardex';
+const SIN_FILTROS: FiltrosKardex = { skuId: null, bodega: '', propietario: '', direccion: '', desde: '', hasta: '' };
+/** El orden de la lista de direcciones (la del Kardex de hoy, más las dos que escribe el sistema y no estaban). */
+const ORDEN_DIRECCIONES = ['IN', 'OUT', 'TRANSFER_IN', 'TRANSFER_OUT', 'ADJUST_IN', 'ADJUST_OUT', 'QUARANTINE', 'SCRAP', 'RETURN_IN'];
+const ICONO_DIRECCION: Record<string, LucideIcon> = {
+  IN: ArrowDownRight, OUT: ArrowUpRight, TRANSFER_IN: RefreshCw, TRANSFER_OUT: RefreshCw, ADJUST_IN: ArrowDownRight,
+  ADJUST_OUT: ArrowUpRight, QUARANTINE: RefreshCw, SCRAP: ArrowUpRight, RETURN_IN: ArrowDownRight,
+};
+const CONTROL = `rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 ${FOCOS.indigo}`;
+
+/** Dirección: la insignia de DIRECCIONES_KARDEX (la distinción de color entre normales y ajustes es a propósito). */
+function CeldaDireccion({ m }: { m: Movimiento }) {
+  const info = infoDireccionKardex(m.direction);
+  const Icono = ICONO_DIRECCION[m.direction ?? ''] ?? RefreshCw;
+  return (
+    <span className={`${CHIP} text-[11px] ${info.clases.bg} ${info.clases.text} ${info.clases.border}`}>
+      <Icono size={12} aria-hidden="true" /> {info.label}
+    </span>
+  );
 }
 
-// direction real: IN | OUT | ADJUST_IN | ADJUST_OUT | TRANSFER_IN | TRANSFER_OUT | QUARANTINE (ver erp_inventario.py get_kardex)
-const DIRECTIONS = [
-  { value: '', label: 'Todas' },
-  { value: 'IN', label: 'Entrada' },
-  { value: 'OUT', label: 'Salida' },
-  { value: 'TRANSFER_IN', label: 'Traslado (entra)' },
-  { value: 'TRANSFER_OUT', label: 'Traslado (sale)' },
-  { value: 'ADJUST_IN', label: 'Ajuste (entrada)' },
-  { value: 'ADJUST_OUT', label: 'Ajuste (salida)' },
-  { value: 'QUARANTINE', label: 'Cuarentena' },
+/** Cant.: la cantidad con su signo (+ entra, − sale; ámbar si no tiene dirección). */
+function CeldaCantidad({ m }: { m: Movimiento }) {
+  const info = infoDireccionKardex(m.direction);
+  const n = numeroFinito(m.quantity);
+  return (
+    <span className={`text-xs font-black ${info.signo === '+' ? 'text-green-700' : info.signo === '-' ? 'text-red-700' : 'text-amber-700'}`}>
+      {n === null ? '—' : `${info.signo}${cantidad(Math.abs(n))}`}
+    </span>
+  );
+}
+
+/** Fecha: el día y la hora de Colombia (created_at es UTC sin zona: el navegador la leería en su zona, 5 horas corrida). */
+function CeldaFecha({ m }: { m: Movimiento }) {
+  const f = textoFechaMovimiento(m.created_at);
+  return (
+    <span className="flex flex-col leading-tight">
+      <span className="text-xs text-slate-700">{f.dia}</span>
+      {f.hora && <span className="text-[10px] text-slate-500">{f.hora}</span>}
+    </span>
+  );
+}
+
+/**
+ * La tabla (TABLA-inventario punto 8; R26, D41): las columnas de hoy. El servidor ordena siempre por fecha, la más reciente
+ * primero, y NO acepta `orden`: ninguna columna se ordena (un título que ordenara no haría nada). R26: a 1024 px con el menú
+ * abierto la caja deja 704 px: 92 + 124 + 120 + 92 + 64 + 100 + 104 = 696. «Documento origen» se titula «Documento» (con su
+ * title) para caber; Costo unit. y Usuario van ocultas por defecto (se muestran con «Ajustar tabla»). Una constante: estable (D40).
+ */
+const COLUMNAS_TABLA_KARDEX: ColumnaTabla<Movimiento>[] = [
+  { id: 'fecha', titulo: 'Fecha', ancho: 92, clave: true, fija: 'izquierda',
+    titleCelda: (m) => { const f = textoFechaMovimiento(m.created_at); return f.hora ? `${f.dia} ${f.hora}` : f.dia; },
+    celda: (m) => <CeldaFecha m={m} /> },
+  { id: 'direccion', titulo: 'Dirección', ancho: 124, clave: true, titleCelda: (m) => infoDireccionKardex(m.direction).label,
+    celda: (m) => <CeldaDireccion m={m} /> },
+  { id: 'producto', titulo: 'SKU / Producto', ancho: 120, clave: true, flexible: true,
+    titleCelda: (m) => [m.sku, m.product_name].filter(Boolean).join(' · ') || `SKU #${m.sku_id ?? ''}`,
+    celda: (m) => (
+      <span className="flex min-w-0 flex-col leading-tight">
+        <span className="truncate font-mono text-[11px] font-bold text-slate-700">{m.sku || `SKU #${m.sku_id ?? ''}`}</span>
+        <span className="truncate text-xs text-slate-600">{m.product_name || '—'}</span>
+      </span>
+    ) },
+  { id: 'bodega', titulo: 'Bodega', ancho: 92, titleCelda: (m) => m.warehouse_name || 'Sin bodega',
+    celda: (m) => <span className="block truncate text-xs text-slate-600">{m.warehouse_name || '—'}</span> },
+  { id: 'cantidad', titulo: 'Cant.', ancho: 64, alinear: 'derecha', clave: true, celda: (m) => <CeldaCantidad m={m} /> },
+  { id: 'propietario', titulo: 'Propietario', ancho: 100, titleCelda: (m) => m.owner || 'NEBULAE',
+    celda: (m) => <span className="block truncate text-xs font-bold text-slate-600">{m.owner || 'NEBULAE'}</span> },
+  { id: 'documento', titulo: 'Documento', ancho: 104, titleCelda: (m) => `Documento de origen: ${numeroMovimiento(m)}`,
+    celda: (m) => <span className="block truncate text-xs text-slate-600">{numeroMovimiento(m)}</span> },
+  { id: 'costo', titulo: 'Costo unit.', ancho: 96, ocultaPorDefecto: true, alinear: 'derecha',
+    titleCelda: (m) => (Number(m.unit_cost_cop) > 0 ? `${pesos(m.unit_cost_cop)} (el costo actual del SKU)` : 'Sin costo registrado'),
+    celda: (m) => <span className="text-xs text-slate-600">{Number(m.unit_cost_cop) > 0 ? pesos(m.unit_cost_cop) : '—'}</span> },
+  { id: 'usuario', titulo: 'Usuario', ancho: 100, ocultaPorDefecto: true, titleCelda: (m) => m.created_by || 'Sistema',
+    celda: (m) => <span className="block truncate text-xs font-bold text-slate-600">{m.created_by || 'Sistema'}</span> },
 ];
 
-// Paleta propia (no la de Badge/tones): la distincion de color entre IN/OUT
-// normales vs ADJUST_IN/OUT es semantica a proposito (ambar = fue un ajuste
-// manual, no un movimiento de flujo normal) y se pierde si se reduce a los
-// tonos genericos success/danger -- se mantiene el color, solo se unifica la
-// forma de la pastilla (rounded-full + borde) con el resto del proyecto.
-const DIR_STYLE: Record<string, { label: string; cls: string; icon: any }> = {
-  IN:            { label: 'Entrada',          cls: 'bg-green-50 text-green-700 border-green-200',   icon: ArrowDownRight },
-  OUT:           { label: 'Salida',           cls: 'bg-red-50 text-red-700 border-red-200',         icon: ArrowUpRight },
-  TRANSFER_IN:   { label: 'Traslado (entra)', cls: 'bg-blue-50 text-blue-700 border-blue-200',      icon: RefreshCw },
-  TRANSFER_OUT:  { label: 'Traslado (sale)',  cls: 'bg-blue-50 text-blue-700 border-blue-200',      icon: RefreshCw },
-  ADJUST_IN:     { label: 'Ajuste (entrada)', cls: 'bg-amber-50 text-amber-700 border-amber-200',   icon: ArrowDownRight },
-  ADJUST_OUT:    { label: 'Ajuste (salida)',  cls: 'bg-amber-50 text-amber-700 border-amber-200',   icon: ArrowUpRight },
-  QUARANTINE:    { label: 'Cuarentena',       cls: 'bg-purple-50 text-purple-700 border-purple-200', icon: RefreshCw },
-};
-
-const fDateTime = (iso: string | null) => iso ? new Date(iso).toLocaleString('es-CO', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-';
-const fCOP = (v: number | null) => v ? `$${Number(v).toLocaleString('es-CO')}` : '-';
+/** El detalle de un movimiento (un clic en la fila o en la tarjeta): todos sus datos, con Modal de components/ui. */
+function DetalleMovimiento({ m, onCerrar }: { m: Movimiento; onCerrar: () => void }) {
+  const info = infoDireccionKardex(m.direction);
+  const f = textoFechaMovimiento(m.created_at);
+  const n = numeroFinito(m.quantity);
+  const lineas: [string, string][] = [
+    ['Fecha', f.hora ? `${f.dia}, ${f.hora}` : f.dia],
+    ['Dirección', info.label],
+    ['Cantidad', n === null ? '—' : `${info.signo}${cantidad(Math.abs(n))}`],
+    ['SKU', m.sku || `SKU #${m.sku_id ?? ''}`],
+    ['Producto', m.product_name || '—'],
+    ['Bodega', m.warehouse_name || '—'],
+    ['Propietario', m.owner || 'NEBULAE'],
+    ['Documento de origen', numeroMovimiento(m)],
+    ['Costo actual del SKU', Number(m.unit_cost_cop) > 0 ? pesos(m.unit_cost_cop) : 'Sin costo registrado'],
+    ['Registrado por', m.created_by || 'Sistema'],
+  ];
+  return (
+    <Modal title={`Movimiento ${numeroMovimiento(m)}`} subtitle={[m.sku, m.product_name].filter(Boolean).join(' · ')} icon={ArrowRightLeft}
+      color="indigo" onClose={onCerrar} footer={(
+        <button type="button" onClick={onCerrar}
+          className={`rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white hover:bg-slate-800 ${FOCOS.indigo}`}>Cerrar</button>
+      )}>
+      <dl className="space-y-2 text-xs">
+        {lineas.map(([titulo, valor]) => (
+          <div key={titulo} className="flex justify-between gap-3 border-b border-slate-100 py-1.5 last:border-b-0">
+            <dt className="text-slate-600">{titulo}</dt>
+            <dd className="text-right font-bold text-slate-900">{valor}</dd>
+          </div>
+        ))}
+      </dl>
+    </Modal>
+  );
+}
 
 export default function KardexPage() {
-  const [items, setItems] = useState<any[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [warehouses, setWarehouses] = useState<any[]>([]);
+  // ── B4 T18, bloque 1: la carga del servidor (TABLA-inventario punto 8; R5, RP54; D40) ──
+  // El estado ÚNICO de la pantalla (página y tamaño: 25 o 50) y los filtros del Kardex (el SKU, la bodega, el propietario, la
+  // dirección y las fechas), que van al servidor. Un cambio de filtro cambia el filtro Y vuelve a la página 1 en el MISMO
+  // evento: la consulta cambia una sola vez (un solo pedido; antes, dos efectos pedían dos veces). El Kardex no tiene `q`.
+  const [estado, despachar, listo] = useEstadoTabla(ID_KARDEX, INICIAL_KARDEX);
+  const enKanban = estado.modo === 'kanban';
+  const [filtros, setFiltros] = useState<FiltrosKardex>(SIN_FILTROS);
+  const { catalogo: bodegas, recargar: recargarBodegas } = useCatalogo('/inventory/warehouses');
+  const extraLista = useMemo(() => ({ ...extraKardex(filtros), q: null, orden: null }), [filtros]);
+  // GET /inventory/kardex con limit y offset del estado; responde {data: {items, total}} (normalizarRespuesta, RP54). esperar:
+  // !listo (D40): el esqueleto, nunca «vacío». En Kanban no pide la lista (activo: false, RP35).
+  const listado = useListado<Movimiento>({
+    ruta: RUTA_KARDEX, estado, esperar: !listo, despachar, activo: !enKanban, extra: extraLista,
+  });
 
-  const [productSearch, setProductSearch] = useState('');
-  const [productResults, setProductResults] = useState<any[]>([]);
-  const [skuId, setSkuId] = useState<number | null>(null);
-  const [warehouseId, setWarehouseId] = useState('');
-  const [direction, setDirection] = useState('');
-  const [owner, setOwner] = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [page, setPage] = useState(0);
-  const pageSize = 25;
-  const productTimer = useRef<any>(null);
+  // El tablero solo para ver, en modo servidor (R11, C4, D39): una consulta por columna (consultaColumnaKardex: sus direcciones
+  // en CSV cruzadas con la dirección elegida, y los demás filtros). Recarga con cualquier filtro (dependencias). Sin q ni orden:
+  // el Kardex no los tiene.
+  const dependencias = [filtros.skuId, filtros.bodega, filtros.propietario, filtros.direccion, filtros.desde, filtros.hasta];
+  const tablero = useTableroKanban<Movimiento>({
+    pantalla: ID_KARDEX,
+    modo: 'servidor',
+    columnas: COLUMNAS_KARDEX,
+    activo: listo && enKanban,
+    porColumna: estado.tamano,
+    dependencias,
+    cargar: async (columna, { offset, limit, signal }) => {
+      const consulta = consultaColumnaKardex(estado, columna, filtros, { limit, offset });
+      if (consulta === null) return { filas: [], total: 0 };
+      return normalizarRespuesta(await apiFetch(`${RUTA_KARDEX}?${consulta}`, { signal }));
+    },
+  });
 
+  // «Actualizar»: la lista, el tablero y el selector. Ninguna recarga vacía lo que se ve.
+  const { recargar: recargarListado } = listado;
+  const { recargar: recargarTablero } = tablero;
+  const recargarTodo = useCallback(() => {
+    recargarListado();
+    recargarTablero();
+    recargarBodegas();
+  }, [recargarListado, recargarTablero, recargarBodegas]);
+
+  // ── bloque 2: los filtros y la tabla (R5, R26; D40, D41) ──
+  const cambiarFiltros = useCallback((cambio: Partial<FiltrosKardex>) => {
+    setFiltros((f) => ({ ...f, ...cambio }));
+    despachar({ tipo: 'pagina', valor: 1 });
+  }, [despachar]);
+  const hayFiltros = filtros.skuId !== null || Boolean(filtros.bodega || filtros.propietario || filtros.direccion || filtros.desde || filtros.hasta);
+  // La búsqueda del SKU: el texto que se escribe y lo que devuelve /crm/products/search (con su error, nunca una lista vacía
+  // falsa). Escribir de nuevo suelta el SKU elegido (el filtro cambia una sola vez).
+  const [skuTexto, setSkuTexto] = useState('');
+  const [skuBusqueda, setSkuBusqueda] = useState<{ texto: string; filas: OpcionSku[]; error: unknown } | null>(null);
+  const buscarSku = skuTexto.trim() !== '' && filtros.skuId === null;
   useEffect(() => {
-    apiFetch('/inventory/warehouses').then(d => setWarehouses(Array.isArray(d) ? d : (d?.data ?? []))).catch(() => {});
-  }, []);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams();
-      if (skuId) params.set('sku_id', String(skuId));
-      if (warehouseId) params.set('warehouse_id', warehouseId);
-      if (direction) params.set('direction', direction);
-      if (owner) params.set('owner', owner);
-      if (startDate) params.set('start_date', startDate);
-      if (endDate) params.set('end_date', endDate);
-      params.set('limit', String(pageSize));
-      params.set('offset', String(page * pageSize));
-      const d = await apiFetch('/inventory/kardex?' + params.toString());
-      setItems(d?.items ?? []);
-      setTotal(d?.total ?? 0);
-    } catch { setItems([]); setTotal(0); }
-    finally { setLoading(false); }
-  }, [skuId, warehouseId, direction, owner, startDate, endDate, page]);
-
-  useEffect(() => { load(); }, [load]);
-  useEffect(() => { setPage(0); }, [skuId, warehouseId, direction, owner, startDate, endDate]);
-
-  function onProductSearch(q: string) {
-    setProductSearch(q);
-    setSkuId(null);
-    clearTimeout(productTimer.current);
-    if (!q.trim()) { setProductResults([]); return; }
-    productTimer.current = setTimeout(async () => {
-      try {
-        const d = await apiFetch('/crm/products/search?q=' + encodeURIComponent(q));
-        setProductResults(Array.isArray(d) ? d : (d?.data ?? []));
-      } catch { setProductResults([]); }
+    if (!buscarSku) return undefined;
+    const control = new AbortController();
+    const pausa = setTimeout(() => {
+      apiFetch(`/crm/products/search?q=${encodeURIComponent(skuTexto)}`, { signal: control.signal })
+        .then((r: { data?: OpcionSku[] } | OpcionSku[] | null) => {
+          setSkuBusqueda({ texto: skuTexto, filas: Array.isArray(r) ? r : (r?.data ?? []), error: null });
+        })
+        .catch((err: unknown) => { if (!control.signal.aborted) setSkuBusqueda({ texto: skuTexto, filas: [], error: err }); });
     }, 300);
-  }
-
-  function clearFilters() {
-    setProductSearch(''); setSkuId(null); setProductResults([]);
-    setWarehouseId(''); setDirection(''); setOwner(''); setStartDate(''); setEndDate('');
-  }
-  const hasFilters = skuId || warehouseId || direction || owner || startDate || endDate;
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    return () => { clearTimeout(pausa); control.abort(); };
+  }, [buscarSku, skuTexto]);
+  const resultadosSku = buscarSku && skuBusqueda?.texto === skuTexto ? skuBusqueda : null;
+  const escribirSku = (texto: string) => {
+    setSkuTexto(texto);
+    if (filtros.skuId !== null) cambiarFiltros({ skuId: null });
+  };
+  const elegirSku = (o: OpcionSku) => {
+    setSkuTexto(o.display || o.product_name || `SKU #${o.id}`);
+    cambiarFiltros({ skuId: o.id });
+  };
+  const quitarFiltros = () => {
+    setSkuTexto('');
+    cambiarFiltros(SIN_FILTROS);
+  };
+  const prefs = usePreferenciasTabla(ID_KARDEX, COLUMNAS_TABLA_KARDEX);
+  const anchoTablaRef = useRef<number | null>(null);
+  // Desestructurado: con el objeto entero en ref={…}, react-hooks/refs marca «Cannot access refs during render».
+  const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
+  // Pasar a Kanban sale de la pantalla completa (el conmutador sigue a la vista y el tablero no queda tapado).
+  useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
+  const [detalle, setDetalle] = useState<Movimiento | null>(null);
+  const abrir = useCallback((m: Movimiento) => setDetalle(m), []);
+  // m8 de T15: el «vacío» memoizado dice qué lo deja vacío (los filtros o nada).
+  const vacio = useMemo(() => {
+    const texto = textoVacioKardex(hayFiltros);
+    return (
+      <div>
+        <p className="font-semibold text-slate-600">{texto.titulo}</p>
+        <p className="mt-1 text-xs text-slate-500">{texto.ayuda}</p>
+      </div>
+    );
+  }, [hayFiltros]);
+  // «N resultados» es el de la tabla; en Kanban cada columna trae su total (la barra no lo repite).
+  const totalDeLaBarra = enKanban ? {} : {
+    total: listado.total,
+    estadoTotal: estadoDelTotal({ total: listado.total, cargando: listado.cargandoInicial, recargando: listado.recargando, error: listado.error }),
+  };
+  // RP54: la cuarentena, la pérdida, la devolución y lo que no tiene dirección solo salen en la lista: con uno de esos filtros
+  // el tablero queda vacío, y lo dice.
+  const direccionSoloLista = filtros.direccion !== '' && COLUMNAS_KARDEX.every((c) => direccionesDeColumnaKardex(c, filtros.direccion).length === 0);
 
   return (
     <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
       <SubNav label="Inventario" items={INV_NAV} currentPath="/dashboard/inventario/kardex" color="emerald" />
 
-      <div className="p-8 max-w-[1600px] mx-auto space-y-6">
+      <div className={CONTENEDOR}>
         <PageHeader icon={ArrowRightLeft} color="emerald"
           title="Movimientos (Kardex)"
           subtitle="Historial inmutable de entradas, salidas, traslados y ajustes de inventario."
           actions={(
-            <button onClick={load} className="flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-bold text-sm shadow-sm transition-colors">
-              <RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> Actualizar
+            <button type="button" onClick={recargarTodo} className={`flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-bold text-sm shadow-sm transition-colors ${FOCOS.indigo}`}>
+              <RefreshCw size={16} aria-hidden="true" className={listado.recargando || tablero.cargandoInicial ? 'animate-spin' : ''} /> Actualizar
             </button>
           )} />
 
-        {/* Filters */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-wrap items-end gap-3">
-          <div className="relative">
-            <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Producto / SKU</label>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-              <input value={productSearch} onChange={e => onProductSearch(e.target.value)} placeholder="Buscar..."
-                className={`pl-8 pr-3 py-2 border rounded-xl text-sm outline-none w-52 ${skuId ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200'}`} />
-            </div>
-            {productResults.length > 0 && !skuId && (
-              <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl z-20 max-h-48 overflow-y-auto">
-                {productResults.map((p: any) => (
-                  <button key={p.id} type="button"
-                    onClick={() => { setSkuId(p.id); setProductSearch(p.display || p.product_name); setProductResults([]); }}
-                    className="w-full text-left px-3 py-2 hover:bg-emerald-50 text-xs border-b last:border-0 border-slate-50">
-                    {p.display || p.product_name}
-                  </button>
-                ))}
-              </div>
+        {/* B4 T18, bloques 2 y 3 (TABLA-inventario punto 8, KANBAN-resto): la barra con los filtros del Kardex (sin búsqueda
+            libre: el servidor no tiene `q`) y la tabla estándar en el servidor, o el tablero solo para ver Entradas · Salidas,
+            con los MISMOS filtros. */}
+        <div className="flex min-w-0 flex-col gap-4">
+          {capa}
+          <section ref={refTarjeta} className={claseTarjeta}>
+            <BarraTabla
+              estado={estado}
+              onEstado={despachar}
+              buscar={false}
+              filtros={(
+                <>
+                  <div className="relative">
+                    <label className="relative flex items-center">
+                      <Search size={14} aria-hidden="true" className="pointer-events-none absolute left-3 text-slate-500" />
+                      <input type="search" aria-label="Producto o SKU" placeholder="Producto / SKU…" value={skuTexto}
+                        onChange={(e) => escribirSku(e.target.value)}
+                        className={`w-44 py-2 pl-8 pr-3 text-xs font-bold ${CONTROL} ${filtros.skuId !== null ? 'border-emerald-400 bg-emerald-50' : ''}`} />
+                    </label>
+                    {buscarSku && resultadosSku !== null && (
+                      <div className="absolute left-0 top-full z-20 mt-1 max-h-48 w-64 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl">
+                        {resultadosSku.error ? (
+                          <p role="alert" className="px-3 py-2 text-xs font-semibold text-rose-800">
+                            {textoDeError(resultadosSku.error, 'No se pudo buscar el producto')}
+                          </p>
+                        ) : resultadosSku.filas.length === 0 ? (
+                          <p className="px-3 py-2 text-xs text-slate-600">Ningún producto coincide con «{skuTexto.trim()}».</p>
+                        ) : resultadosSku.filas.map((o) => (
+                          <button key={o.id} type="button" onClick={() => elegirSku(o)}
+                            className={`block w-full border-b border-slate-50 px-3 py-2 text-left text-xs text-slate-800 last:border-0 hover:bg-slate-50 ${FOCOS.indigo}`}>
+                            {o.display || o.product_name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <SelectorCatalogo etiqueta="Bodega" todas="Todas las bodegas" cargando="Cargando bodegas…"
+                    fallo="No se pudieron cargar las bodegas" catalogo={bodegas} valor={filtros.bodega}
+                    onCambiar={(bodega) => cambiarFiltros({ bodega })} onReintentar={recargarBodegas} icono={Warehouse} />
+                  <select aria-label="Dirección" value={filtros.direccion} onChange={(e) => cambiarFiltros({ direccion: e.target.value })} className={CONTROL}>
+                    <option value="">Todas las direcciones</option>
+                    {ORDEN_DIRECCIONES.map((d) => <option key={d} value={d}>{DIRECCIONES_KARDEX[d].label}</option>)}
+                  </select>
+                  <select aria-label="Propietario" value={filtros.propietario} onChange={(e) => cambiarFiltros({ propietario: e.target.value })} className={CONTROL}>
+                    <option value="">Todos los propietarios</option>
+                    <option value="NEBULAE">Nebulae</option>
+                    <option value="MAU">Mau</option>
+                  </select>
+                  <label className="inline-flex items-center gap-1 text-xs font-bold text-slate-600">
+                    Desde
+                    <input type="date" aria-label="Desde" value={filtros.desde} max={filtros.hasta || undefined}
+                      onChange={(e) => cambiarFiltros({ desde: e.target.value })} className={CONTROL} />
+                  </label>
+                  <label className="inline-flex items-center gap-1 text-xs font-bold text-slate-600">
+                    Hasta
+                    <input type="date" aria-label="Hasta" value={filtros.hasta} min={filtros.desde || undefined}
+                      onChange={(e) => cambiarFiltros({ hasta: e.target.value })} className={CONTROL} />
+                  </label>
+                  {hayFiltros && (
+                    <button type="button" onClick={quitarFiltros}
+                      className={`inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50 ${FOCOS.indigo}`}>
+                      <X size={13} aria-hidden="true" /> Quitar filtros
+                    </button>
+                  )}
+                </>
+              )}
+              ajustes={{ columnas: COLUMNAS_TABLA_KARDEX, preferencias: prefs, anchoRef: anchoTablaRef }}
+              kanbanDisponible
+              pantallaCompleta={enKanban ? undefined : { completa, alternar }}
+              color="indigo"
+              {...totalDeLaBarra}
+            />
+            {/* La tabla estándar en el servidor: la paginación (25 o 50) es de la tabla; un clic en la fila abre el detalle. */}
+            {!enKanban && (
+              <TablaEstandar
+                id={ID_KARDEX}
+                modo="servidor"
+                columnas={COLUMNAS_TABLA_KARDEX}
+                preferencias={prefs}
+                anchoRef={anchoTablaRef}
+                estado={estado}
+                onEstado={despachar}
+                filas={listado.filas}
+                total={listado.total}
+                cargando={listado.cargandoInicial}
+                recargando={listado.recargando}
+                error={listado.error}
+                onReintentar={listado.recargar}
+                aviso={listado.avisoOrden}
+                onFila={abrir}
+                vacio={vacio}
+                etiqueta="Movimientos del Kardex"
+              />
             )}
-          </div>
-          <div>
-            <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Bodega</label>
-            <select value={warehouseId} onChange={e => setWarehouseId(e.target.value)}
-              className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none bg-white">
-              <option value="">Todas</option>
-              {warehouses.map((w: any) => <option key={w.id} value={w.id}>{w.name}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Direccion</label>
-            <select value={direction} onChange={e => setDirection(e.target.value)}
-              className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none bg-white">
-              {DIRECTIONS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Propietario</label>
-            <select value={owner} onChange={e => setOwner(e.target.value)}
-              className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none bg-white">
-              <option value="">Todos</option>
-              <option value="NEBULAE">Nebulae</option>
-              <option value="MAU">Mau</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Desde</label>
-            <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
-              className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none" />
-          </div>
-          <div>
-            <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Hasta</label>
-            <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
-              className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none" />
-          </div>
-          {hasFilters && (
-            <button onClick={clearFilters} className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-slate-500 hover:text-red-600">
-              <X size={13} /> Limpiar
-            </button>
-          )}
-        </div>
-
-        {/* Tabla Kardex */}
-        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50/80 border-b border-slate-200 text-xs uppercase tracking-wider text-slate-500 font-bold">
-                  <th className="p-4 pl-6">Fecha</th>
-                  <th className="p-4">Direccion</th>
-                  <th className="p-4">SKU / Producto</th>
-                  <th className="p-4">Bodega</th>
-                  <th className="p-4 text-center">Cant.</th>
-                  <th className="p-4">Propietario</th>
-                  <th className="p-4">Documento Origen</th>
-                  <th className="p-4 text-right">Costo Unit.</th>
-                  <th className="p-4 pr-6">Usuario</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-sm">
-                {loading ? (
-                  <tr><td colSpan={9} className="p-16 text-center">
-                    <RefreshCw size={24} className="animate-spin text-emerald-400 mx-auto mb-2" />
-                    <span className="text-slate-400">Cargando kardex...</span>
-                  </td></tr>
-                ) : items.length === 0 ? (
-                  <tr><td colSpan={9}>
-                    <EmptyState icon={ArrowRightLeft} message={`Sin movimientos ${hasFilters ? 'para este filtro' : 'registrados'}`} />
-                  </td></tr>
-                ) : items.map((mov: any) => {
-                  const style = DIR_STYLE[mov.direction] || { label: mov.direction || '-', cls: 'bg-slate-100 text-slate-600', icon: RefreshCw };
-                  const Icon = style.icon;
-                  const isPositive = ['IN', 'TRANSFER_IN', 'ADJUST_IN'].includes(mov.direction);
-                  const isNegative = ['OUT', 'TRANSFER_OUT', 'ADJUST_OUT'].includes(mov.direction);
-                  return (
-                    <tr key={mov.id} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="p-4 pl-6 text-xs text-slate-500">{fDateTime(mov.created_at)}</td>
-                      <td className="p-4">
-                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border ${style.cls}`}>
-                          <Icon size={12} /> {style.label}
-                        </span>
-                      </td>
-                      <td className="p-4">
-                        <div className="font-bold text-slate-700 font-mono text-xs mb-0.5">{mov.sku || `SKU #${mov.sku_id}`}</div>
-                        <div className="text-slate-600 font-medium truncate max-w-[200px]">{mov.product_name || '-'}</div>
-                      </td>
-                      <td className="p-4 text-slate-600 text-xs">{mov.warehouse_name || '-'}</td>
-                      <td className="p-4">
-                        <div className={`text-center font-black ${isPositive ? 'text-green-600' : isNegative ? 'text-red-600' : 'text-amber-600'}`}>
-                          {isPositive ? '+' : isNegative ? '-' : ''}{mov.quantity}
-                        </div>
-                      </td>
-                      <td className="p-4">
-                        <span className="text-xs font-bold text-slate-500">{mov.owner || 'NEBULAE'}</span>
-                      </td>
-                      <td className="p-4 text-xs text-slate-500">
-                        {mov.source_document_numero || (mov.operation_type ? `${mov.operation_type} #${mov.operation_id}` : '-')}
-                      </td>
-                      <td className="p-4 text-right text-xs text-slate-600">{fCOP(mov.unit_cost_cop)}</td>
-                      <td className="p-4 pr-6">
-                        <div className="inline-flex items-center px-2 py-1 bg-slate-100 rounded-md text-xs font-bold text-slate-600 truncate max-w-[120px]">
-                          {mov.created_by || 'Sistema'}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Pagination */}
-          <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between text-sm text-slate-500">
-            <div>{total > 0 ? `Mostrando ${page * pageSize + 1} a ${Math.min((page + 1) * pageSize, total)} de ${total} movimientos` : 'Sin movimientos'}</div>
-            <div className="flex gap-1">
-              <button disabled={page === 0} onClick={() => setPage(p => p - 1)}
-                className="px-3 py-1.5 bg-white border border-slate-200 rounded-md hover:bg-slate-50 disabled:opacity-40 flex items-center gap-1 font-bold text-xs">
-                <ChevronLeft size={13} /> Anterior
-              </button>
-              <button disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}
-                className="px-3 py-1.5 bg-white border border-slate-200 rounded-md hover:bg-slate-50 disabled:opacity-40 flex items-center gap-1 font-bold text-xs">
-                Siguiente <ChevronRight size={13} />
-              </button>
-            </div>
-          </div>
+          </section>
+          {enKanban ? (
+            /* KANBAN-resto, RP54: Entradas · Salidas, solo para ver: sin regla, con su motivo. El clic abre el detalle. */
+            <TableroKanban
+              tablero={tablero}
+              soloLectura={TEXTO_SOLO_VER_KARDEX}
+              tarjetaDe={tarjetaMovimiento}
+              onAbrir={abrir}
+              color="indigo"
+              vacio="Sin movimientos aquí"
+              aviso={direccionSoloLista
+                ? <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-800">La dirección elegida solo se ve en la lista.</p>
+                : undefined}
+            />
+          ) : null}
         </div>
       </div>
+
+      {/* B4 T18, bloque 5: el detalle del movimiento (un clic en la fila o en la tarjeta). */}
+      {detalle && <DetalleMovimiento m={detalle} onCerrar={() => setDetalle(null)} />}
     </div>
   );
 }

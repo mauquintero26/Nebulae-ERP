@@ -2403,4 +2403,96 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   assert.ok(!/piezas-inventario/.test(leerFuente('app/dashboard/inventario/page.tsx')), 'el Hub de Inventario conserva sus piezas');
 }
 
+console.log('--- TEST 44 (B4 T18, TABLA-inventario punto 8; KANBAN-resto; RP54): el Kardex cablea las piezas, UN pedido por cambio de filtro, los errores y el tablero ---');
+{
+  const k = leerFuente('app/dashboard/inventario/kardex/page.tsx');
+  sinDefectos('Kardex', k);
+  const { normalizarRespuesta } = await import('../src/lib/tabla.js');
+  // R5 y D40: UN estado; la carga espera las preferencias y en Kanban no pide la lista. El Kardex no tiene q, conteos ni orden.
+  trae(k, 'const [estado, despachar, listo] = useEstadoTabla(ID_KARDEX, INICIAL_KARDEX);', 'el estado único');
+  trae(k, 'ruta: RUTA_KARDEX, estado, esperar: !listo, despachar, activo: !enKanban, extra: extraLista,', 'useListado');
+  trae(k, "const RUTA_KARDEX = '/inventory/kardex';", 'la ruta');
+  noTrae(k, 'conConteos', 'el Kardex no tiene conteos');
+  trae(k, 'const extraLista = useMemo(() => ({ ...extraKardex(filtros), q: null, orden: null }), [filtros]);', 'los filtros al servidor, sin q ni orden');
+  // La doble carga (el bug de hoy): el filtro y la página cambian EN EL MISMO evento, por UN solo camino.
+  trae(k, 'setFiltros((f) => ({ ...f, ...cambio }));\n    despachar({ tipo: \'pagina\', valor: 1 });', 'cambiarFiltros cambia el filtro y la página a la vez');
+  assert.equal(k.split('setFiltros(').length - 1, 1, 'solo cambiarFiltros escribe los filtros');
+  assert.ok(!/setPage|useState\(0\)|pageSize/.test(k), 'ya no hay una página aparte del estado único');
+  assert.equal(k.split('useEffect(').length - 1, 2, 'dos efectos: la búsqueda del SKU y salir de la pantalla completa (ninguno pide la lista)');
+  for (const filtro of ['bodega', 'direccion', 'propietario', 'desde', 'hasta']) {
+    trae(k, `cambiarFiltros({ ${filtro}`, `el filtro ${filtro} pasa por cambiarFiltros`);
+  }
+  trae(k, 'cambiarFiltros({ skuId: o.id });', 'elegir un SKU');
+  trae(k, 'if (filtros.skuId !== null) cambiarFiltros({ skuId: null });', 'escribir de nuevo suelta el SKU (una sola vez)');
+  trae(k, 'cambiarFiltros(SIN_FILTROS);', 'quitar los filtros');
+  // La búsqueda del SKU: con su error dicho, sin resultados viejos y limpia al salir.
+  trae(k, ".catch((err: unknown) => { if (!control.signal.aborted) setSkuBusqueda({ texto: skuTexto, filas: [], error: err }); });", 'la búsqueda del SKU dice su error');
+  trae(k, 'return () => { clearTimeout(pausa); control.abort(); };', 'la búsqueda se limpia');
+  trae(k, 'const resultadosSku = buscarSku && skuBusqueda?.texto === skuTexto ? skuBusqueda : null;', 'nunca resultados de otro texto');
+  trae(k, "{textoDeError(resultadosSku.error, 'No se pudo buscar el producto')}", 'el detalle del servidor tal cual');
+  trae(k, '{resultadosSku.error ? (', 'el error se ve en lugar de la lista');
+  trae(k, "useCatalogo('/inventory/warehouses')", 'las bodegas con su error y Reintentar');
+  trae(k, 'onReintentar={recargarBodegas}', 'Reintentar vuelve a pedir las bodegas');
+  // La tabla y la barra.
+  const tabla = etiquetaJsx(k, '<TablaEstandar');
+  for (const p of ['modo="servidor"', 'cargando={listado.cargandoInicial}', 'recargando={listado.recargando}', 'error={listado.error}', 'onReintentar={listado.recargar}',
+    'aviso={listado.avisoOrden}', 'filas={listado.filas}', 'total={listado.total}', 'estado={estado}', 'onEstado={despachar}', 'onFila={abrir}', 'vacio={vacio}',
+    'preferencias={prefs}', 'anchoRef={anchoTablaRef}']) trae(tabla, p, `TablaEstandar ${p}`);
+  trae(k, '{!enKanban && (\n              <TablaEstandar', 'la tabla solo en Lista');
+  const barra = etiquetaJsx(k, '<BarraTabla');
+  for (const p of ['buscar={false}', 'kanbanDisponible', 'pantallaCompleta={enKanban ? undefined : { completa, alternar }}', '{...totalDeLaBarra}']) trae(barra, p, `BarraTabla ${p}`);
+  noTrae(barra, 'pestanas=', 'el Kardex no tiene pestañas');
+  trae(k, 'const totalDeLaBarra = enKanban ? {} : {', '«N resultados» solo en Lista');
+  // El orden: el servidor ordena siempre por fecha y NO acepta `orden`: ninguna columna lo promete.
+  const cols = columnasDe(k, 'COLUMNAS_TABLA_KARDEX');
+  assert.deepEqual(cols.map((c) => c.id), ['fecha', 'direccion', 'producto', 'bodega', 'cantidad', 'propietario', 'documento', 'costo', 'usuario']);
+  assert.deepEqual(cols.filter((c) => c.ordenable !== null), [], 'get_kardex no tiene `orden`: ningún título ordena');
+  assert.deepEqual(cols.filter((c) => c.oculta).map((c) => c.id), ['costo', 'usuario'], 'ocultas por defecto (R26, medido a 1024 px)');
+  assert.equal(cols.filter((c) => c.flexible).length, 1);
+  // El día y la hora son de Colombia (created_at es UTC sin zona), no del navegador.
+  assert.ok(!/toLocale/.test(k), 'sin toLocaleString (el navegador leería el UTC sin zona 5 horas corrido)');
+  trae(k, 'textoFechaMovimiento(m.created_at)', 'la fecha de Colombia');
+  // Las direcciones del filtro son TODAS las del Kardex, y las columnas del tablero salen de la lib.
+  const lista = /const ORDEN_DIRECCIONES = \[([^\]]*)\]/.exec(k)?.[1] ?? '';
+  assert.deepEqual([...lista.matchAll(/'([A-Z_]+)'/g)].map((m) => m[1]).sort(), Object.keys(ec.DIRECCIONES_KARDEX).sort(), 'el filtro ofrece cada dirección');
+  trae(k, 'DIRECCIONES_KARDEX[d].label', 'la etiqueta de cada dirección');
+  // El tablero solo para ver, en modo servidor.
+  const hook = bloqueDesde(k, 'useTableroKanban<Movimiento>(');
+  for (const p of ['pantalla: ID_KARDEX', "modo: 'servidor'", 'columnas: COLUMNAS_KARDEX', 'activo: listo && enKanban', 'porColumna: estado.tamano', 'dependencias,']) trae(hook, p, `tablero ${p}`);
+  trae(k, 'const dependencias = [filtros.skuId, filtros.bodega, filtros.propietario, filtros.direccion, filtros.desde, filtros.hasta];', 'el tablero recarga con CADA filtro');
+  const tablero = etiquetaJsx(k, '<TableroKanban');
+  for (const p of ['tablero={tablero}', 'soloLectura={TEXTO_SOLO_VER_KARDEX}', 'tarjetaDe={tarjetaMovimiento}', 'onAbrir={abrir}']) trae(tablero, p, `TableroKanban ${p}`);
+  for (const p of ['regla=', 'onCambio=', 'onAccion=', 'accionesTarjeta=']) noTrae(tablero, p, `el tablero es solo para ver (${p})`);
+  trae(k, 'const direccionSoloLista = filtros.direccion !== \'\' && COLUMNAS_KARDEX.every((c) => direccionesDeColumnaKardex(c, filtros.direccion).length === 0);', 'avisa cuando el filtro de dirección deja vacío el tablero');
+  // La carga de cada columna se EJECUTA con dobles.
+  {
+    const llamadas = [];
+    const entorno = {
+      estado: estadoTablaInicial({ q: 'x', tamano: 50, pagina: 3, orden: '-fecha' }), RUTA_KARDEX: '/inventory/kardex',
+      filtros: { skuId: 12, bodega: '', propietario: '', direccion: '', desde: '', hasta: '' },
+      consultaColumnaKardex: ec.consultaColumnaKardex, normalizarRespuesta,
+      apiFetch: async (url, opciones) => { llamadas.push([url, opciones]); return { status: 'success', data: { total: 40, limit: 25, offset: 0, items: [{ id: 1 }] } }; },
+    };
+    const cargar = cargarDe(k)(entorno);
+    const respuesta = await cargar(ec.COLUMNAS_KARDEX[0], { offset: 25, limit: 25, orden: 'sin_movimiento', signal: 'SIGNAL' });
+    assert.deepEqual(llamadas, [['/inventory/kardex?limit=25&offset=25&sku_id=12&direction=IN,ADJUST_IN,TRANSFER_IN', { signal: 'SIGNAL' }]], 'la URL de la columna y la señal');
+    assert.deepEqual([respuesta.filas, respuesta.total], [[{ id: 1 }], 40], 'la respuesta {data: {items, total}} (RP54)');
+    llamadas.length = 0;
+    await cargar(ec.COLUMNAS_KARDEX[1], { offset: 0, limit: 0, signal: 'S' });
+    assert.match(llamadas[0][0], /^\/inventory\/kardex\?limit=1&/, 'una plegada pide limit=1 (get_kardex tiene limit >= 1)');
+    llamadas.length = 0;
+    const filtrado = cargarDe(k)({ ...entorno, filtros: { ...entorno.filtros, direccion: 'QUARANTINE' } });
+    assert.deepEqual(await filtrado(ec.COLUMNAS_KARDEX[0], { offset: 0, limit: 25, signal: 'S' }), { filas: [], total: 0 });
+    assert.equal(llamadas.length, 0, 'una dirección que no es de la columna no pide nada');
+  }
+  trae(k, 'const recargarTodo = useCallback(() => {\n    recargarListado();\n    recargarTablero();\n    recargarBodegas();\n  }, [recargarListado, recargarTablero, recargarBodegas]);', '«Actualizar» vuelve a pedir la lista, el tablero y las bodegas');
+  trae(k, '<button type="button" onClick={recargarTodo}', 'el botón Actualizar');
+  trae(k, 'const texto = textoVacioKardex(hayFiltros);', 'el vacío dice qué lo deja vacío');
+  trae(k, '}, [hayFiltros]);', 'el vacío memoizado');
+  trae(k, 'useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);', 'sale de la pantalla completa');
+  assert.equal(k.split('usePreferenciasTabla(').length - 1, 1, 'usePreferenciasTabla una sola vez (D40)');
+  trae(k, '{detalle && <DetalleMovimiento m={detalle} onCerrar={() => setDetalle(null)} />}', 'el detalle');
+  trae(k, 'CONTENEDOR', 'el contenedor con pb-24');
+}
+
 console.log('\nOK: test_estados_compras.mjs');
