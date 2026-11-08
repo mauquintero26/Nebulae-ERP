@@ -1679,7 +1679,7 @@ console.log('--- TEST 39 (B4 T16B): la Lista de compras (compras/lista-compras/p
     assert.match(pag, new RegExp(`\\{ id: '${id}', etiqueta: '${etiqueta}', conteo: conteos\\?\\.${id} \\?\\? null`), `pestaña ${etiqueta}`);
   }
   const visibles = anchoVisible(pag, 'const COLUMNAS_TABLA_LISTA');
-  assert.ok(visibles > 0 && visibles + 40 <= 704, `R26: las columnas visibles suman ${visibles} px más la casilla de 40 (caja de 704)`);
+  assert.ok(visibles > 0 && visibles + 40 <= 734, `R26: las columnas visibles suman ${visibles} px más la casilla de 40 (caja de 734 a 1024 con el menú abierto)`);
   assert.equal((pag.match(/flexible: true/g) ?? []).length, 1, 'una sola columna flexible');
   assert.match(pag, /id: 'fecha'[^\n]*ocultaPorDefecto: true/, 'Fecha va oculta por defecto');
   assert.match(pag, /aria-label=\{`Acciones de \$\{it\.producto\}`\}|etiqueta=\{`Acciones de \$\{it\.producto\}`\}/, 'las acciones llevan el producto en su nombre');
@@ -1721,6 +1721,8 @@ console.log('--- TEST 39 (B4 T16B): la Lista de compras (compras/lista-compras/p
     assert.ok(pag.includes(texto), `se conserva: ${texto}`);
   }
   assert.match(pag, /catch \(err\) \{ sinVincular\.push\(/, 'el vínculo ítem a ítem ya no se traga el error');
+  assert.match(pag, /avisarError\(err, fallo\);\s*\/\/[^\n]*\n\s*if \(recargarTrasError\(err\)\) recargarTodo\(\);/, 'un cambio que falla se dice y, con la regla única (400, 409 o sin respuesta), se recarga lo que se ve');
+  assert.match(pag, /avisarError\(err, 'No se pudo crear el pedido de compra'\);\s*if \(recargarTrasError\(err\)\) recargarTodo\(\);/);
 }
 
 console.log('--- TEST 40 (B4 T16B): Traslados (compras/traslados/page.tsx) y columnas-traslado.tsx cablean las piezas, la tabla, el tablero solo para ver y el servidor ---');
@@ -1744,7 +1746,7 @@ console.log('--- TEST 40 (B4 T16B): Traslados (compras/traslados/page.tsx) y col
   assert.match(col, /id: 'acciones'[^\n]*fija: 'derecha'/);
   assert.ok(!/ocultaPorDefecto/.test(col), 'las 7 columnas caben a 1024 px: ninguna va oculta');
   const visibles = anchoVisible(col, 'export function columnasTraslado');
-  assert.ok(visibles > 0 && visibles <= 704, `R26: las columnas visibles suman ${visibles} px (caja de 704, sin casilla de selección)`);
+  assert.ok(visibles > 0 && visibles <= 734, `R26: las columnas visibles suman ${visibles} px (caja de 734 a 1024 con el menú abierto, sin casilla de selección)`);
   // Las celdas de bodega leen el contexto (las columnas son una constante y no pueden depender de las bodegas, que llegan después).
   assert.match(col, /nombreBodega\(useContext\(BodegasTraslado\), id\)/);
   // La fecha es la REAL (el instante `fecha` de T13), no un created_at que la operación nunca tuvo.
@@ -1806,7 +1808,7 @@ console.log('--- TEST 40 (B4 T16B): Traslados (compras/traslados/page.tsx) y col
   assert.match(pag, /tarjetasTraslados\(conteosTraslado\(totales\?\.conteos \?\? null\), bodegas \? bodegas\.length : null\)/);
   assert.match(pag, /despachar\(accionVistaEnLista\(estado, siguiente, opcionesEstadosTraslado\)\)/, 'como un clic en la pestaña (D41)');
   // El enlace ?id= del HUB de Inventario: el traslado se pide al servidor por su número.
-  assert.match(pag, /q=\$\{encodeURIComponent\(numeroTraslado\(\{ id \}\)\)\}&limit=5/);
+  assert.match(pag, /q=\$\{encodeURIComponent\(numeroTraslado\(\{ id \}\)\)\}&limit=5`/, 'el traslado se pide por su número, con a lo sumo 5 filas');
   assert.match(pag, /find\(\(t\) => t\.id === id\)/);
   assert.match(pag, /if \(searchParams\.get\('id'\)\) router\.replace\(pathname\)/, 'al cerrar el Drawer se quita ?id=');
   // R2 y R13: fuera la IA simulada y su pestaña; queda «Ver análisis» hacia el Hub.
@@ -1817,7 +1819,7 @@ console.log('--- TEST 40 (B4 T16B): Traslados (compras/traslados/page.tsx) y col
   assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(codigo.replace(/\bconfirmar\(/g, 'x(')), 'sin diálogos nativos');
   assert.match(pag, /avisar\('Selecciona bodega origen y destino', \{ tono: 'error' \}\)/);
   assert.match(pag, /avisar\('Agrega al menos un producto', \{ tono: 'error' \}\)/);
-  assert.match(pag, /avisarError\(err, 'No se pudo crear el traslado'\)/);
+  assert.match(pag, /avisarError\(err, 'No se pudo crear el traslado'\);\s*\/\/[^\n]*\n\s*if \(recargarTrasError\(err\)\) recargarTodo\(\);/, 'si crear falla se dice y, con la regla única, se recarga');
   for (const texto of ["operation_type: 'TRANSFER'", 'source_warehouse_id: parseInt(form.origen_id, 10)', 'dest_warehouse_id: parseInt(form.destino_id, 10)',
     "movements: form.productos.map((p) => ({ sku_id: p.sku_id, quantity: Number(p.qty) }))", "'/crm/products/search?q='", 'Nuevo Traslado']) {
     assert.ok(pag.includes(texto), `se conserva: ${texto}`);

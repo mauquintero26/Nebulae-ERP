@@ -28,7 +28,7 @@ import { CHIP, textoInstante } from '../columnas-pec';
 import { apiFetch } from '@/lib/api';
 import { accionModo, estadoDelTotal } from '@/lib/tabla';
 import { tarjetasLista } from '@/lib/kpis';
-import { textoDeError } from '@/lib/avisos';
+import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { TABLE } from '@/lib/design-system';
 import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
@@ -119,40 +119,41 @@ function CeldaAcciones({ it }: { it: ItemLista }) {
 }
 
 /**
- * B4 T16B, la tabla (TABLA-compras punto 10; R26, D41). A 1024 px con el menú abierto la caja de la tabla deja 704 px
- * (medido en T7 a T16A); la casilla de selección toma 40, quedan 664: Producto 132 (la flexible) + Cant. 52 + PVEN 104 +
- * Proveedor 112 + PEC 100 + Estado 100 + Acciones 52 = 652. Fecha va oculta por defecto (se muestra con «Ajustar tabla»).
+ * B4 T16B, la tabla (TABLA-compras punto 10; R26, D41). A 1024 px con el menú abierto la caja de la tabla deja 734 px
+ * (medido en el banco de T16A y T16B: contenedor px-4); la casilla de selección toma 40: Producto 120 (la flexible, su piso) +
+ * Cant. 64 (el mínimo de una columna) + PVEN 120 (cabe «PVEN-20262799») + Proveedor 100 + PEC 104 + Estado 96 + Acciones 80 = 684,
+ * con la casilla 724. Fecha va oculta por defecto (se muestra con «Ajustar tabla»).
  * Una constante (estable, D40); las celdas solo dependen de la fila y del contexto.
  */
 const COLUMNAS_TABLA_LISTA: ColumnaTabla<ItemLista>[] = [
-  { id: 'producto', titulo: 'Producto', ancho: 132, clave: true, flexible: true, ordenable: 'producto', titleCelda: (it) => it.producto,
+  { id: 'producto', titulo: 'Producto', ancho: 120, clave: true, flexible: true, ordenable: 'producto', titleCelda: (it) => it.producto,
     celda: (it) => (
       <span className="flex min-w-0 flex-col leading-tight">
         <span className="block truncate text-xs font-bold text-gray-900">{it.producto}</span>
         {it.notas && <span className="block truncate text-[11px] text-gray-500">{it.notas}</span>}
       </span>
     ) },
-  { id: 'cantidad', titulo: 'Cant.', ancho: 52, alinear: 'centro', titleCelda: (it) => String(it.cantidad),
+  { id: 'cantidad', titulo: 'Cant.', ancho: 64, alinear: 'centro', titleCelda: (it) => String(it.cantidad),
     celda: (it) => <span className="text-xs font-black text-gray-700">{it.cantidad}</span> },
-  { id: 'pven', titulo: 'PVEN', ancho: 104, ordenable: 'pven', titleCelda: (it) => it.pven_numero ?? null,
+  { id: 'pven', titulo: 'PVEN', ancho: 120, ordenable: 'pven', titleCelda: (it) => it.pven_numero ?? null,
     celda: (it) => (it.pven_numero ? (
       <Link href={`/dashboard/ventas/venta?id=${it.pven_id}`}
         className={`block truncate rounded text-xs font-bold text-indigo-700 hover:underline ${FOCO_VISIBLE}`}>{it.pven_numero}</Link>
     ) : <span className="text-xs text-gray-400">—</span>) },
-  { id: 'proveedor', titulo: 'Proveedor', ancho: 112, ordenable: 'proveedor', titleCelda: (it) => it.proveedor ?? 'Sin asignar',
+  { id: 'proveedor', titulo: 'Proveedor', ancho: 100, ordenable: 'proveedor', titleCelda: (it) => it.proveedor ?? 'Sin asignar',
     celda: (it) => (it.proveedor
       ? <span className="block truncate text-xs text-gray-800">{it.proveedor}</span>
       : <span className="text-xs italic text-gray-500">Sin asignar</span>) },
-  { id: 'pec', titulo: 'PEC', ancho: 100, titleCelda: (it) => it.pec_numero ?? null,
+  { id: 'pec', titulo: 'PEC', ancho: 104, titleCelda: (it) => it.pec_numero ?? null,
     celda: (it) => (it.pec_numero ? (
       <Link href={`/dashboard/compras/pedidos?id=${it.pec_id}`}
         className={`block truncate rounded text-xs font-bold text-purple-700 hover:underline ${FOCO_VISIBLE}`}>{it.pec_numero}</Link>
     ) : <span className="text-xs text-gray-400">—</span>) },
-  { id: 'estado', titulo: 'Estado', ancho: 100, clave: true, ordenable: 'estado', titleCelda: (it) => infoEstadoItemLista(it.estado).label,
+  { id: 'estado', titulo: 'Estado', ancho: 96, clave: true, ordenable: 'estado', titleCelda: (it) => infoEstadoItemLista(it.estado).label,
     celda: (it) => <CeldaEstadoItem it={it} /> },
   { id: 'fecha', titulo: 'Fecha', ancho: 92, ocultaPorDefecto: true, ordenable: 'fecha', titleCelda: (it) => textoInstante(it.fecha_creacion),
     celda: (it) => <span className="text-xs text-gray-600">{textoInstante(it.fecha_creacion)}</span> },
-  { id: 'acciones', titulo: 'Acciones', ancho: 52, clave: true, fija: 'derecha', celda: (it) => <CeldaAcciones it={it} /> },
+  { id: 'acciones', titulo: 'Acciones', ancho: 80, clave: true, fija: 'derecha', celda: (it) => <CeldaAcciones it={it} /> },
 ];
 
 /** Una fila recibida se ve apagada (token opaco de TABLE, D41). */
@@ -299,6 +300,8 @@ export default function ListaComprasPage() {
       recargarTodo();
     } catch (err) {
       avisarError(err, fallo);
+      // La regla única: con un 400, un 409 o sin respuesta (otro usuario ya cambió el ítem) se recarga lo que se ve; un 404 no.
+      if (recargarTrasError(err)) recargarTodo();
     } finally {
       setOcupadoId(null);
     }
@@ -428,8 +431,10 @@ export default function ListaComprasPage() {
       setShowPecModal(false);
       setSeleccion([]);
       recargarTodo();
-    } catch (err) { avisarError(err, 'No se pudo crear el pedido de compra'); }
-    finally { setPecSaving(false); }
+    } catch (err) {
+      avisarError(err, 'No se pudo crear el pedido de compra');
+      if (recargarTrasError(err)) recargarTodo();
+    } finally { setPecSaving(false); }
   };
 
   // ── bloque 2: la tabla (TABLA-compras punto 10; R5, R26, D40, D41) ──
@@ -574,14 +579,14 @@ export default function ListaComprasPage() {
                 onEstado={alCambiarBarra}
                 pestanas={enKanban ? undefined : pestanas}
                 estadoConteos={estadoConteos}
-                placeholder="Buscar producto, PVEN, proveedor, PEC o notas…"
+                placeholder="Buscar producto, PVEN o proveedor…"
                 opcionesEstados={enKanban ? OPCIONES_ESTADOS_TABLERO_LISTA : opcionesEstadosLista}
                 filtros={(
                   <>
-                    <label className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 shadow-sm focus-within:ring-2 focus-within:ring-purple-200">
+                    <label className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 shadow-sm">
                       <User size={14} aria-hidden="true" className="shrink-0 text-gray-500" />
                       <input value={proveedorTexto} onChange={(e) => setProveedorTexto(e.target.value)} aria-label="Filtrar por proveedor"
-                        placeholder="Proveedor…" className="w-32 bg-transparent text-xs outline-none placeholder-gray-500" />
+                        placeholder="Proveedor…" className={`w-32 rounded bg-transparent text-xs placeholder-gray-500 ${FOCO_VISIBLE}`} />
                       {proveedorTexto && (
                         <button type="button" aria-label="Quitar el filtro de proveedor" onClick={() => filtrarProveedor('')}
                           className={`rounded text-gray-500 hover:text-gray-800 ${FOCO_VISIBLE}`}><X size={13} aria-hidden="true" /></button>

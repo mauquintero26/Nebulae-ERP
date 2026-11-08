@@ -8,8 +8,9 @@
  *
  * La tabla (R26, D41): Traslado # (clave, fija a la izquierda), Origen (la flexible), Destino, Productos, Fecha, Estado
  * (clave) y Acciones (fija a la derecha, solo el ⋯: «Ver detalle» pasó a MenuFila). Sin casilla de selección (los traslados
- * no se seleccionan). A 1024 px con el menú abierto la caja de la tabla deja 704 px (medido en T7 a T16A): Traslado # 104 +
- * Origen 130 (flexible, su piso es 120) + Destino 130 + Productos 76 + Fecha 92 + Estado 96 + Acciones 52 = 680.
+ * no se seleccionan). A 1024 px con el menú abierto la caja de la tabla deja 734 px (medido en el banco de T16A y T16B:
+ * contenedor px-4): Traslado # 104 + Origen 130 (flexible, su piso es 120) + Destino 130 + Productos 88 + Fecha 92 + Estado 96 +
+ * Acciones 80 (solo lleva el ⋯) = 720.
  * La Fecha es la REAL del traslado (`fecha`: el primer movimiento, un instante; antes salía siempre «-»).
  */
 'use client';
@@ -69,12 +70,12 @@ export function columnasTraslado<T extends FilaColumnasTraslado>(celdaAcciones: 
       celda: (t) => <span className="block truncate text-xs font-black text-orange-700">{numeroTraslado(t)}</span> },
     { id: 'origen', titulo: 'Origen', ancho: 130, flexible: true, ordenable: 'origen', celda: (t) => <CeldaBodega id={t.source_warehouse_id} /> },
     { id: 'destino', titulo: 'Destino', ancho: 130, ordenable: 'destino', celda: (t) => <CeldaBodega id={t.dest_warehouse_id} /> },
-    { id: 'productos', titulo: 'Productos', ancho: 76, alinear: 'centro', titleCelda: (t) => `${productosDeTraslado(t)} producto(s)`,
+    { id: 'productos', titulo: 'Productos', ancho: 88, alinear: 'centro', titleCelda: (t) => `${productosDeTraslado(t)} producto(s)`,
       celda: (t) => <span className="text-xs font-bold text-slate-700">{productosDeTraslado(t)}</span> },
     { id: 'fecha', titulo: 'Fecha', ancho: 92, ordenable: 'fecha', titleCelda: (t) => textoFechaTraslado(t),
       celda: (t) => <span className="text-xs text-slate-600">{textoFechaTraslado(t)}</span> },
     { id: 'estado', titulo: 'Estado', ancho: 96, clave: true, ordenable: 'status', titleCelda: (t) => infoEstadoTraslado(t.status).label,
       celda: (t) => <CeldaEstadoTraslado t={t} /> },
-    { id: 'acciones', titulo: 'Acciones', ancho: 52, clave: true, fija: 'derecha', celda: celdaAcciones },
+    { id: 'acciones', titulo: 'Acciones', ancho: 80, clave: true, fija: 'derecha', celda: celdaAcciones },
   ];
 }

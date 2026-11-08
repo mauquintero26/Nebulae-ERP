@@ -26,7 +26,7 @@ import type { BodegaTraslado, FilaColumnasTraslado } from '../columnas-traslado'
 import { apiFetch } from '@/lib/api';
 import { accionModo, estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
 import { tarjetasTraslados } from '@/lib/kpis';
-import { textoDeError } from '@/lib/avisos';
+import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { fechaLarga } from '@/lib/fechas-colombia';
 import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
 import { accionVistaEnLista } from '@/lib/listas-ventas';
@@ -73,7 +73,7 @@ function CeldaAcciones({ t }: { t: FilaTraslado }) {
 
 /**
  * B4 T16B, la tabla (TABLA-compras punto 11; R26, D41): las columnas de columnas-traslado.tsx (compartidas con Inventario ›
- * Traslados, T19) con la celda de Acciones de esta lista. Una constante (estable, D40). Todas se ven por defecto (680 px).
+ * Traslados, T19) con la celda de Acciones de esta lista. Una constante (estable, D40). Todas se ven por defecto (720 px).
  */
 const COLUMNAS_TABLA_TRASLADOS = columnasTraslado<FilaTraslado>((t) => <CeldaAcciones t={t} />);
 /** {campo de orden: título}, para el chip «Orden: Fecha ↓», solo de las columnas que se ordenan. */
@@ -244,6 +244,8 @@ export default function TrasladosPage() {
       recargarTodo();
     } catch (err) {
       avisarError(err, 'No se pudo crear el traslado');
+      // La regla única: con un 400, un 409 o sin respuesta se recarga lo que se ve; un 404 no.
+      if (recargarTrasError(err)) recargarTodo();
     }
     setSaving(false);
   }
@@ -380,7 +382,7 @@ export default function TrasladosPage() {
                   onEstado={alCambiarBarra}
                   pestanas={enKanban ? undefined : pestanas}
                   estadoConteos={estadoConteos}
-                  placeholder="Buscar por traslado (TRL-…), notas, guía o documento…"
+                  placeholder="Buscar traslado, notas o guía…"
                   opcionesEstados={enKanban ? OPCIONES_ESTADOS_TABLERO_TRASLADO : opcionesEstadosTraslado}
                   filtros={textoOrden ? (
                     <span className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-600">
