@@ -313,7 +313,7 @@ CLAVES_CATALOGO_CANONICO = ["id", "nombre", "descripcion", "sku", "precio_venta"
 
 class _Catalogo:
     """P1 (Nevera, stock 7: 10 - 3 reservadas; el saldo de MAU no cuenta) y P2 (Auto, stock 0) son canonicos. M1 es el
-    espejo de P1 en ecommerce_products (con stock_disponible 99 que NO debe mandar). H1 y H2 son huerfanos."""
+    espejo de P1 en ecommerce_products (con stock_disponible 3 que NO debe mandar). H1 y H2 son huerfanos."""
 
     def __init__(self, db, warehouse):
         self.s = s = uuid.uuid4().hex[:8]
@@ -351,7 +351,7 @@ class _Catalogo:
                 "VALUES (:n, :s, :c, :p, :st, :pub) RETURNING id"),
                 {"n": nombre, "s": sku, "c": categoria, "p": precio, "st": stock, "pub": publicado}).scalar()
 
-        self.m1 = ep(self.nevera, self.p1.sku, cat_a.name, 50, 99)
+        self.m1 = ep(self.nevera, self.p1.sku, cat_a.name, 50, 3)     # el espejo dice 3; el real (10 - 3 reservadas) es 7
         self.h1 = ep(f"Zz-{s}-Huerfano1", f"ORF-{s}-1", f"Cat-B-{s}", 30, 5)
         self.h2 = ep(f"Zz-{s}-Huerfano2", f"ORF-{s}-2", None, 40, 1, publicado=False)
         db.commit()
@@ -378,7 +378,7 @@ def test_catalogo_orden_exacto_en_las_dos_ramas(app_client, db, warehouse, monke
         "-nombre": [n["nevera"], n["h2"], n["h1"], n["auto"]],
         "precio": [n["auto"], n["h1"], n["h2"], n["nevera"]],              # 20, 30, 40, 50
         "-precio": [n["nevera"], n["h2"], n["h1"], n["auto"]],
-        "stock": [n["auto"], n["h2"], n["h1"], n["nevera"]],               # 0, 1, 5, 7 (el 99 del espejo NO manda)
+        "stock": [n["auto"], n["h2"], n["h1"], n["nevera"]],               # 0, 1, 5, 7 (el 3 del espejo NO manda: el real es 7)
         "-stock": [n["nevera"], n["h1"], n["h2"], n["auto"]],
         "sku": [n["h1"], n["h2"], n["nevera"], n["auto"]],                 # ORF-1, ORF-2, TST-1, TST-2
         "-sku": [n["auto"], n["nevera"], n["h2"], n["h1"]],
@@ -528,6 +528,15 @@ def test_gastos_paginacion_filtros_y_sin_limit(app_client, db, admin_token, fina
     todo = _ok(app_client, GASTOS, finanzas_token)
     assert len(todo["data"]) == todo["total"] >= 4
     assert len(_ok(app_client, GASTOS, admin_token, q=t.s)["data"]) == 4
+    # ni un tope de 50: con 55 gastos sin limit llegan los 55 (y con limit=200 siguen siendo 55)
+    m = uuid.uuid4().hex[:8]
+    db.add_all([OperationalExpense(category=f"Masivo-{m}", description=f"G{i}", amount=1 + i,
+                                   incurred_date=datetime(2001, 2, 1, 17), is_recurring=False) for i in range(55)])
+    db.commit()
+    masivo = _ok(app_client, GASTOS, admin_token, q=f"Masivo-{m}")
+    assert len(masivo["data"]) == masivo["total"] == 55
+    assert len(_ok(app_client, GASTOS, admin_token, q=f"Masivo-{m}", limit=200)["data"]) == 55
+    assert len(_ok(app_client, GASTOS, admin_token, q=f"Masivo-{m}", limit=50)["data"]) == 50
     # q busca en la categoria y en la descripcion (RP58), sin importar mayusculas
     assert _ids(_ok(app_client, GASTOS, admin_token, q=f"alquiler {t.s}")) == [E1]
     assert _ids(_ok(app_client, GASTOS, admin_token, q=t.servicios.upper())) == [E2, E4]

@@ -294,7 +294,10 @@ def _serialize_catalogo_item_huerfano(r) -> dict:
 # ecommerce_products.stock_disponible. El orden recibido nunca llega al SQL: solo elige una columna de la lista blanca.
 ORDENES_CATALOGO = {"nombre": "u.nombre", "sku": "u.sku", "categoria": "u.categoria", "stock": "u.stock",
                     "precio": "u.precio"}
-GRUPO_SKU, GRUPO_HUERFANO = 0, 1      # en el orden de hoy, primero los SKU y después los de ecommerce_products
+# Cada subconsulta lleva dos grupos, en el orden de hoy: GRUPO_PRIMERO (0) y GRUPO_SEGUNDO (1).
+#   rama canónica: 0 = los SKU del ERP, 1 = los huérfanos de ecommerce_products;
+#   rama heredada: 0 = las filas de ecommerce_products, 1 = los SKU del ERP que no están allí.
+GRUPO_PRIMERO, GRUPO_SEGUNDO = 0, 1
 
 
 def _texto_o_422(*valores):
@@ -362,13 +365,13 @@ def _union_catalogo_canonico(search, categoria, publicado) -> tuple:
     if categoria:
         params["c"] = f"%{categoria}%"
     sql = (
-        f"SELECT {GRUPO_SKU} AS grupo, ps.id AS fila_id, pr.name AS nombre, ps.sku AS sku, ca.name AS categoria, "
+        f"SELECT {GRUPO_PRIMERO} AS grupo, ps.id AS fila_id, pr.name AS nombre, ps.sku AS sku, ca.name AS categoria, "
         f"COALESCE(ps.sale_price, 0) AS precio, {_stock_vendible_sql('ps.id')} AS stock "
         f"FROM product_skus ps JOIN products pr ON pr.id = ps.product_id "
         f"LEFT JOIN categories ca ON ca.id = pr.category_id "
         f"LEFT JOIN product_web_listings pwl ON pwl.sku_id = ps.id {_con_donde(sku)} "
         f"UNION ALL "
-        f"SELECT {GRUPO_HUERFANO}, ep.id, ep.nombre, ep.sku, ep.categoria, COALESCE(ep.precio_venta, 0), "
+        f"SELECT {GRUPO_SEGUNDO}, ep.id, ep.nombre, ep.sku, ep.categoria, COALESCE(ep.precio_venta, 0), "
         f"COALESCE(ep.stock_disponible, 0) FROM ecommerce_products ep {_con_donde(huerfano)}"
     )
     return sql, params
@@ -384,12 +387,12 @@ def _union_catalogo_heredado(search, categoria, publicado) -> tuple:
     if search:
         extra.append("(ps.sku ILIKE :s OR pr.name ILIKE :s)")
     sql = (
-        f"SELECT {GRUPO_SKU} AS grupo, ep.id AS fila_id, ep.nombre AS nombre, ep.sku AS sku, ep.categoria AS categoria, "
+        f"SELECT {GRUPO_PRIMERO} AS grupo, ep.id AS fila_id, ep.nombre AS nombre, ep.sku AS sku, ep.categoria AS categoria, "
         f"COALESCE(ep.precio_venta, 0) AS precio, "
         f"CASE WHEN ps.id IS NOT NULL THEN {_stock_vendible_sql('ps.id')} ELSE COALESCE(ep.stock_disponible, 0) END "
         f"AS stock FROM ecommerce_products ep LEFT JOIN product_skus ps ON ps.sku = ep.sku {_con_donde(ep)} "
         f"UNION ALL "
-        f"SELECT {GRUPO_HUERFANO}, ps.id, pr.name, ps.sku, ca.name, COALESCE(ps.sale_price, 0), "
+        f"SELECT {GRUPO_SEGUNDO}, ps.id, pr.name, ps.sku, ca.name, COALESCE(ps.sale_price, 0), "
         f"{_stock_vendible_sql('ps.id')} FROM product_skus ps JOIN products pr ON pr.id = ps.product_id "
         f"LEFT JOIN categories ca ON ca.id = pr.category_id {_con_donde(extra)}"
     )
@@ -427,10 +430,10 @@ def _skus_por_id(db: Session, ids) -> dict:
 def _list_catalogo_canonico(db: Session, search, categoria, publicado, limit: int, offset: int = 0, orden=None) -> dict:
     union, params = _union_catalogo_canonico(search, categoria, publicado)
     total, claves = _pagina_del_catalogo(db, union, params, _orden_del_catalogo(orden), limit, offset)
-    skus = _skus_por_id(db, (i for g, i in claves if g == GRUPO_SKU))
-    huerfanos = _filas_de_ecommerce_products(db, (i for g, i in claves if g == GRUPO_HUERFANO))
-    data = [_serialize_catalogo_item_canonico(db, skus[i]) if g == GRUPO_SKU else _serialize_catalogo_item_huerfano(huerfanos[i])
-            for g, i in claves if (skus if g == GRUPO_SKU else huerfanos).get(i) is not None]
+    skus = _skus_por_id(db, (i for g, i in claves if g == GRUPO_PRIMERO))
+    huerfanos = _filas_de_ecommerce_products(db, (i for g, i in claves if g == GRUPO_SEGUNDO))
+    data = [_serialize_catalogo_item_canonico(db, skus[i]) if g == GRUPO_PRIMERO else _serialize_catalogo_item_huerfano(huerfanos[i])
+            for g, i in claves if (skus if g == GRUPO_PRIMERO else huerfanos).get(i) is not None]
     return {"status": "success", "total": total, "data": data}
 
 
@@ -1313,10 +1316,10 @@ def list_catalogo(search: Optional[str] = None, q: Optional[str] = None, categor
     try:
         union, params = _union_catalogo_heredado(texto, categoria, publicado)
         total, claves = _pagina_del_catalogo(db, union, params, orden_sql, limit, offset)
-        filas = _filas_de_ecommerce_products(db, (i for g, i in claves if g == GRUPO_SKU))
-        skus = _skus_por_id(db, (i for g, i in claves if g == GRUPO_HUERFANO))
-        data = [_serialize_catalogo_item_heredado(db, filas[i]) if g == GRUPO_SKU else _serialize_catalogo_item_sku_heredado(db, skus[i])
-                for g, i in claves if (filas if g == GRUPO_SKU else skus).get(i) is not None]
+        filas = _filas_de_ecommerce_products(db, (i for g, i in claves if g == GRUPO_PRIMERO))
+        skus = _skus_por_id(db, (i for g, i in claves if g == GRUPO_SEGUNDO))
+        data = [_serialize_catalogo_item_heredado(db, filas[i]) if g == GRUPO_PRIMERO else _serialize_catalogo_item_sku_heredado(db, skus[i])
+                for g, i in claves if (filas if g == GRUPO_PRIMERO else skus).get(i) is not None]
         return {"status": "success", "total": total, "data": data}
     except Exception as e:
         return {"status": "success", "total": 0, "data": [], "error": str(e)}
