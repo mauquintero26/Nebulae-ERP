@@ -16,6 +16,7 @@ from app.core import analisis_finanzas as af
 from app.core.analisis import validar_top
 from app.core.listados import MAX_OFFSET, leer_orden, paginar, texto_busqueda
 from app.core.periodos import resolver_periodo
+from app.core.textos_filtro import mensaje_control
 
 router = APIRouter()
 
@@ -51,7 +52,7 @@ def _texto_de_filtro(valor, nombre=None):
         return texto_busqueda(valor, None)
     except ValueError as e:
         raise HTTPException(status_code=422,
-                            detail=f"El filtro «{nombre}» no puede llevar caracteres de control." if nombre else str(e))
+                            detail=mensaje_control(nombre) if nombre else str(e))
 
 
 def _tipo_de_gasto(tipo):

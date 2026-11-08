@@ -273,6 +273,8 @@ def test_cartera_foto(app_client, db, admin_token):
     """El ranking cuenta un ENTREGADO que todavia debe y deja fuera CANCELADO y DEVUELTO_TOTAL; un saldo a favor
     (negativo) no resta; y el porcentaje de cada cliente es contra la cartera completa de /ventas/stats."""
     f = _Fabrica(db)
+    antes = float(app_client.get("/api/v1/ventas/stats", headers=_auth(admin_token)).json()["data"]["kpis"][
+        "pven_saldo_por_cobrar"])
     a, b = f.cliente("Deudora A"), f.cliente("Deudor B")
     f.pven(datetime(2001, 1, 2), 9_000_000_000, estado="ENTREGADO", saldo=5_000_000_000, cliente=a)
     f.pven(datetime(2001, 1, 2), 1_000_000_000, estado="PENDIENTE_COMPRA", saldo=1_000_000_000, cliente=a)
@@ -298,9 +300,9 @@ def test_cartera_foto(app_client, db, admin_token):
     assert primero["nombre"] == b and primero["pct"] == round(primero["valor"] / cartera * 100, 1)
     assert cartera >= 17_000_000_000
     # T20 r1 (m3, RP59): la suma del ranking COMPLETO es el pven_saldo_por_cobrar de /ventas/stats, con los mismos datos
+    # r2 (m4): sin depender de cuantos deudores trae erp_test: los clientes de la prueba suman exactamente lo que subio la cartera
     completo = _analisis(app_client, admin_token, top="25")["ranking"]["filas"]
-    assert len(completo) < 25, "la base trae demasiados deudores para comparar el ranking completo"
-    assert sum(x["valor"] for x in completo) == cartera
+    assert sum(x["valor"] for x in completo if x["nombre"] in (a, b)) == cartera - antes == 17_000_000_000
 
 
 # ─── 5) Permisos, errores y contrato ─────────────────────────────────────────────────────────────────────────────────

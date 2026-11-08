@@ -15,7 +15,7 @@ cifra; si TD-05 cambia el libro de pagos, el ajuste se hace en pagos_recibidos_q
 - Utilidad estimada = Σ (total_cop − total_cost_cop) de los pedidos con dinero del período, menos los gastos. Si algún
   pedido no tiene costo registrado (total_cost_cop = 0) la utilidad sale más alta y se avisa.
 - Flujo de caja: entradas = el dinero recibido; salidas = gastos + devoluciones (pagos tipo DEVOLUCION en estado
-  CONFIRMADO, por su fecha), como valores NEGATIVOS con tono 'negativo' (D44).
+  CONFIRMADO o TRASLADADO, por su fecha), como valores NEGATIVOS con tono 'negativo' (D44).
 - Clientes con más saldo por cobrar (RP59): una foto de hoy, Σ max(0, saldo_cop) de los pedidos fuera de
   ESTADOS_VEN_SIN_DINERO, por cliente; la suma de todo el ranking es el pven_saldo_por_cobrar de /ventas/stats.
 - Movimientos recientes: pagos recibidos (+), gastos y devoluciones (−), los MAX_MOVIMIENTOS más recientes. La fecha de un

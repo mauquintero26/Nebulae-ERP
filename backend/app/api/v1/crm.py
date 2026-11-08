@@ -17,6 +17,7 @@ from app.core import cambios_documento, clientes
 from app.core import analisis as an
 from app.core.analisis_ventas import _cantidad, _conteos_por_cubeta, _enteros, _movimiento, _pct, _ranking
 from app.core.fechas import ahora_utc
+from app.core.textos_filtro import mensaje_control
 from app.core.listados import MAX_OFFSET, expresiones_tiempo, leer_orden, paginar, texto_busqueda
 from app.core.periodos import _ventanas, resolver_periodo
 from app.core.textos_actividad import (
@@ -1340,7 +1341,7 @@ def _texto_de_lead(valor, nombre=None):
         return texto_busqueda(valor, None)
     except ValueError as e:
         raise HTTPException(status_code=422,
-                            detail=f"El filtro «{nombre}» no puede llevar caracteres de control." if nombre else str(e))
+                            detail=mensaje_control(nombre) if nombre else str(e))
 
 
 def _perdidos_de_lead(valor) -> str:

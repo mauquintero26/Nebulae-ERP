@@ -439,6 +439,20 @@ def test_catalogo_orden_de_hoy_sin_parametros_nuevos(app_client, db, warehouse, 
     assert _nombres(_ok(app_client, CATALOGO, search=t.s)) == [n["auto"], n["nevera"], n["h1"], n["h2"]]
 
 
+def test_error_del_codigo_nuevo_del_catalogo_heredado_no_se_disfraza(app_client, db, warehouse, monkeypatch):
+    """T20 r2 (m5): el try heredado solo cubre la consulta de ecommerce_products; un error de los SKU del ERP es un 500."""
+    from app.api.v1 import ecommerce
+    t = _Catalogo(db, warehouse)
+    monkeypatch.setenv("CATALOGO_LECTURA", "legacy")
+
+    def roto(*args, **kwargs):
+        raise RuntimeError("fallo del codigo nuevo")
+    monkeypatch.setattr(ecommerce, "_skus_heredados_de_hoy", roto)
+    resp = app_client.get(CATALOGO, params={"search": t.s})
+    assert resp.status_code == 500, resp.text
+    assert "error" not in resp.text or "fallo del codigo nuevo" not in resp.text
+
+
 def test_catalogo_filtros_de_hoy_y_errores(app_client, db, warehouse, monkeypatch):
     t = _Catalogo(db, warehouse)
     n = t.nombres
@@ -450,17 +464,23 @@ def test_catalogo_filtros_de_hoy_y_errores(app_client, db, warehouse, monkeypatc
         [n["auto"], n["nevera"], n["h1"]])
     monkeypatch.setenv("CATALOGO_LECTURA", "legacy")
     # Rama heredada SIN offset ni orden (como llama hoy la tienda publica): la respuesta es la de BASE. Las filas de
-    # ecommerce_products con sus filtros y, detras, los SKU del ERP cuyo espejo NO pasa los mismos filtros (un SKU cuyo
-    # espejo quedo filtrado sale igual como fila del ERP); el que tiene espejo que pasa, no se repite. (T20 r1, I4)
-    assert _nombres(_ok(app_client, CATALOGO, search=t.s, categoria=f"Cat-B-{t.s}")) == [n["h1"], n["auto"], n["nevera"]]
+    # ecommerce_products con sus filtros y, detras, los SKU del ERP (el LIMIT primero, ordenados por id, que es el orden
+    # fisico de BASE) cuyo espejo NO pasa los mismos filtros (un SKU cuyo espejo quedo filtrado sale igual como fila del
+    # ERP); el que tiene espejo que pasa, no se repite. La nevera (id menor) va antes que el auto aunque su nombre sea
+    # posterior: el orden NO es por nombre. (T20 r1 I4, r2)
+    assert _nombres(_ok(app_client, CATALOGO, search=t.s, categoria=f"Cat-B-{t.s}")) == [n["h1"], n["nevera"], n["auto"]]
     cuerpo = _ok(app_client, CATALOGO, search=t.s, publicado="false")
-    assert _nombres(cuerpo) == [n["h2"], n["auto"], n["nevera"]] and cuerpo["total"] == 3   # el espejo de la nevera esta publicado
+    assert _nombres(cuerpo) == [n["h2"], n["nevera"], n["auto"]] and cuerpo["total"] == 3   # el espejo de la nevera esta publicado
     cuerpo = _ok(app_client, CATALOGO, search=t.s, publicado="true", limit=50)
     assert _nombres(cuerpo) == [n["h1"], n["nevera"], n["auto"]] and cuerpo["total"] == 3   # la nevera una sola vez
     cuerpo = _ok(app_client, CATALOGO, search=t.s)
     assert _nombres(cuerpo) == [n["h1"], n["h2"], n["nevera"], n["auto"]] and cuerpo["total"] == 4
-    # cada fuente con su LIMIT, como BASE
-    assert _nombres(_ok(app_client, CATALOGO, search=t.s, limit=1)) == [n["h1"], n["auto"]]
+    # cada fuente con su LIMIT, y el LIMIT de los SKU ANTES del NOT EXISTS (como BASE): con limit=1 el unico SKU es la
+    # nevera (id menor), que se descarta porque su espejo pasa los filtros; el auto no entra a ocupar su lugar. (La unica
+    # diferencia con BASE, por el ruling de r1: BASE la habria devuelto porque su espejo quedo fuera del LIMIT de
+    # ecommerce_products.)
+    cuerpo = _ok(app_client, CATALOGO, search=t.s, limit=1)
+    assert _nombres(cuerpo) == [n["h1"]] and cuerpo["total"] == 3
     # Rama heredada CON offset u orden: pagina exacto, una fila por producto (el espejo filtrado no reaparece como SKU).
     cuerpo = _ok(app_client, CATALOGO, search=t.s, publicado="false", offset=0)
     assert _nombres(cuerpo) == [n["h2"], n["auto"]] and cuerpo["total"] == 2

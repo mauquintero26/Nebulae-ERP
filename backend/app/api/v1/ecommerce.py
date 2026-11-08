@@ -28,6 +28,7 @@ from app.core.fechas import ahora_utc, hoy_colombia
 from app.core.listados import (MAX_OFFSET, expresiones_tiempo, filtrar_por_estados, leer_lista, leer_orden,
                                orden_por_lista, paginar, texto_busqueda, validar_orden)
 from app.core.periodos import inicio_del_dia_utc, resolver_periodo
+from app.core.textos_filtro import mensaje_control
 from app.core.textos_actividad import ETIQUETAS_ESTADO
 from app.api.v1.erp_ventas import _FLUJO_DE_ESTADOS   # el flujo de los pedidos (las pestañas), una sola definición
 from app.models.erp_documents import SaleOrder, ActivityLog
@@ -290,6 +291,8 @@ def _serialize_catalogo_item_huerfano(r) -> dict:
 # El catálogo junta dos fuentes (los SKU del ERP y la tabla ecommerce_products). Para paginarlo, las dos ramas arman una
 # subconsulta UNION ALL con UNA fila por producto y las columnas de orden (nombre, sku, categoria, precio y stock);
 # ORDER BY, OFFSET y LIMIT van en ella y total = COUNT(*) de la misma. Las filas de la página se serializan como hoy.
+# Excepción: la rama heredada SIN offset ni orden (la que llama la tienda pública) responde como BASE, con la doble
+# fuente y un total que no es exacto (_catalogo_heredado_de_hoy); la subconsulta paginada es la de offset u orden.
 # La columna de orden `stock` es la misma cifra que se serializa (_get_real_sellable_stock(owner='NEBULAE'): el saldo de
 # NEBULAE menos sus reservas ACTIVE, mínimo 0, como subconsulta SQL) para los productos con SKU; para los huérfanos,
 # ecommerce_products.stock_disponible. El orden recibido nunca llega al SQL: solo elige una columna de la lista blanca.
@@ -301,10 +304,6 @@ ORDENES_CATALOGO = {"nombre": "u.nombre", "sku": "u.sku", "categoria": "u.catego
 GRUPO_PRIMERO, GRUPO_SEGUNDO = 0, 1
 
 
-def _control_de(nombre: str) -> str:
-    return f"El filtro «{nombre}» no puede llevar caracteres de control."
-
-
 def _texto_o_422(*valores, nombre=None):
     """El primer texto no vacío entre `valores` (q gana sobre search, RP8), sin espacios en los bordes; None si no hay.
     Un carácter de control da 422 (un NUL llegaría al SQL y daría un 500): con `nombre`, «El filtro «x» no puede llevar
@@ -312,7 +311,7 @@ def _texto_o_422(*valores, nombre=None):
     try:
         return texto_busqueda(valores[0], valores[1] if len(valores) > 1 else None)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=_control_de(nombre) if nombre else str(e))
+        raise HTTPException(status_code=422, detail=mensaje_control(nombre) if nombre else str(e))
 
 
 def _orden_del_catalogo(orden) -> str:
@@ -675,7 +674,7 @@ def _estados_de_pedidos_web(valor) -> list:
     try:
         lista = leer_lista(valor)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=_control_de("estados") if "control" in str(e) else str(e))
+        raise HTTPException(status_code=422, detail=mensaje_control("estados") if "control" in str(e) else str(e))
     for estado in lista:
         if estado not in ESTADOS_PEDIDO_WEB:
             raise HTTPException(status_code=422, detail=ERROR_ESTADO_WEB.format(estado))
@@ -1309,26 +1308,43 @@ def _serialize_catalogo_item_sku_heredado(db: Session, canon_sku: ProductSKU) ->
     }
 
 
-def _catalogo_heredado_de_hoy(db: Session, search, categoria, publicado, limit: int) -> dict:
-    """La rama heredada SIN offset ni orden, como la llama hoy la tienda pública (store/catalogo y store/categoria con
-    publicado=true&limit=50): la respuesta es la de BASE. Cada fuente con su LIMIT: las filas de ecommerce_products (con sus
-    filtros, por nombre) y, detrás, los SKU del ERP filtrados por la búsqueda (SKU o nombre) cuyo espejo en
-    ecommerce_products NO pasa los mismos filtros (categoría, publicado y búsqueda): un SKU cuyo espejo quedó filtrado (por
-    ejemplo, despublicado) sale igual como fila del ERP. total = las filas de ecommerce_products + los SKU devueltos."""
+def _filas_heredadas_de_hoy(db: Session, search, categoria, publicado, limit: int) -> tuple:
+    """Lo que BASE ya tenía dentro de su try: las filas de ecommerce_products (con sus filtros, por nombre, con su LIMIT) y
+    su total. Devuelve (filas, total, params, filtros del espejo) para armar los SKU del ERP."""
     params: dict = {}
     ep = _filtros_de_ecommerce_products("ep", search, categoria, publicado, params)
     espejo = _filtros_de_ecommerce_products("e2", search, categoria, publicado, params)
-    extra = [f"NOT EXISTS (SELECT 1 FROM ecommerce_products e2 WHERE e2.sku = ps.sku{''.join(' AND ' + c for c in espejo)})"]
-    if search:
-        extra.append("(ps.sku ILIKE :s OR pr.name ILIKE :s)")
     filas = db.execute(text(f"SELECT {_HUERFANO_SELECT_COLS} FROM ecommerce_products ep {_con_donde(ep)} "
                             f"ORDER BY ep.nombre, ep.id LIMIT :lim"), {**params, "lim": limit}).fetchall()
     total = int(db.execute(text(f"SELECT COUNT(*) FROM ecommerce_products ep {_con_donde(ep)}"), params).scalar() or 0)
-    ids = db.execute(text(f"SELECT ps.id FROM product_skus ps JOIN products pr ON pr.id = ps.product_id "
-                          f"{_con_donde(extra)} ORDER BY pr.name, ps.id LIMIT :lim"), {**params, "lim": limit}).fetchall()
-    skus = _skus_por_id(db, [i[0] for i in ids])
+    return filas, total, params, espejo
+
+
+def _skus_heredados_de_hoy(db: Session, params: dict, espejo: list, search, limit: int) -> list:
+    """Los SKU del ERP de la rama heredada de hoy, con la forma de BASE: PRIMERO el LIMIT sobre los SKU que filtra la
+    búsqueda (SKU o nombre) y DESPUÉS, por fuera, el NOT EXISTS de los que tienen un espejo en ecommerce_products que pasa los
+    mismos filtros (categoría, publicado y búsqueda). Ordenados por id."""
+    busqueda = ["(ps.sku ILIKE :s OR pr.name ILIKE :s)"] if search else []
+    primeros = (f"SELECT ps.id, ps.sku FROM product_skus ps JOIN products pr ON pr.id = ps.product_id "
+                f"{_con_donde(busqueda)} ORDER BY ps.id LIMIT :lim")
+    sin_espejo = "".join(" AND " + c for c in espejo)
+    consulta = (f"SELECT p.id FROM ({primeros}) p WHERE NOT EXISTS "
+                f"(SELECT 1 FROM ecommerce_products e2 WHERE e2.sku = p.sku{sin_espejo}) ORDER BY p.id")
+    return [r[0] for r in db.execute(text(consulta), {**params, "lim": limit}).fetchall()]
+
+
+def _catalogo_heredado_de_hoy(db: Session, filas: list, total: int, ids: list) -> dict:
+    """La rama heredada SIN offset ni orden, como la llama hoy la tienda pública (store/catalogo y store/categoria con
+    publicado=true&limit=50): doble fuente, cada una con su LIMIT. Primero las filas de ecommerce_products (por nombre) y
+    detrás los SKU del ERP (_skus_heredados_de_hoy); un SKU cuyo espejo quedó filtrado (por ejemplo, despublicado) sale igual
+    como fila del ERP. total = las filas de ecommerce_products + los SKU devueltos: NO es exacto, como en BASE.
+    El orden de los SKU del ERP es por id, que es el orden físico de BASE en la práctica (BASE no pedía ORDER BY).
+    Única diferencia con BASE, por el ruling de r1: BASE descartaba un SKU si su espejo estaba entre las filas ya devueltas
+    (limitadas); aquí se descarta si el espejo pasa los filtros, aunque haya quedado fuera por el LIMIT de
+    ecommerce_products."""
+    skus = _skus_por_id(db, ids)
     data = [_serialize_catalogo_item_heredado(db, r) for r in filas]
-    data += [_serialize_catalogo_item_sku_heredado(db, skus[i[0]]) for i in ids if i[0] in skus]
+    data += [_serialize_catalogo_item_sku_heredado(db, skus[i]) for i in ids if i in skus]
     return {"status": "success", "total": total + len(ids), "data": data}
 
 
@@ -1338,8 +1354,8 @@ def list_catalogo(search: Optional[str] = None, q: Optional[str] = None, categor
     o precio) paginan con `total` exacto (un producto por fila, sin contar dos veces el espejo de un SKU). `q` busca
     (`search` es su alias). limit=0 devuelve solo el total. Las filas son las de siempre (H16).
     - Rama canónica (CATALOGO_LECTURA=canonico): siempre paginada (sin offset es 0).
-    - Rama heredada (la de hoy por defecto): SIN offset ni orden responde como BASE (doble fuente, cada una con su LIMIT;
-      es lo que llama la tienda pública); CON offset u orden pagina exacto sobre una fila por producto."""
+    - Rama heredada (la de hoy por defecto): SIN offset ni orden responde como BASE (doble fuente, cada una con su LIMIT, total NO
+      exacto; es lo que llama la tienda pública; para el total exacto con limit=0 hay que mandar offset=0); CON offset u orden pagina exacto sobre una fila por producto."""
     texto = _texto_o_422(q, search)
     categoria = _texto_o_422(categoria, nombre="categoria")
     orden_sql = _orden_del_catalogo(orden)
@@ -1347,10 +1363,12 @@ def list_catalogo(search: Optional[str] = None, q: Optional[str] = None, categor
     if _lectura_canonica():
         return _list_catalogo_canonico(db, texto, categoria, publicado, limit, offset or 0, orden)
     if offset is None and not (orden or "").strip():
-        try:
-            return _catalogo_heredado_de_hoy(db, texto, categoria, publicado, limit)
-        except Exception as e:     # lo viejo sigue igual: un error de la consulta heredada responde vacío con el texto
+        try:    # lo viejo sigue igual: un error de la consulta de ecommerce_products responde vacío con el texto
+            filas, total, params, espejo = _filas_heredadas_de_hoy(db, texto, categoria, publicado, limit)
+        except Exception as e:
             return {"status": "success", "total": 0, "data": [], "error": str(e)}
+        ids = _skus_heredados_de_hoy(db, params, espejo, texto, limit)    # el código nuevo: sus errores no se disfrazan
+        return _catalogo_heredado_de_hoy(db, filas, total, ids)
     union, params = _union_catalogo_heredado(texto, categoria, publicado)
     total, claves = _pagina_del_catalogo(db, union, params, orden_sql, limit, offset or 0)
     filas = _filas_de_ecommerce_products(db, (i for g, i in claves if g == GRUPO_PRIMERO))
