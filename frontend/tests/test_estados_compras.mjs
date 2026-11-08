@@ -2747,4 +2747,108 @@ console.log('--- TEST 46 (B4 T19; TABLA-inventario punto 11, KANBAN-resto, KPI-i
   assert.equal(ec.tarjetaAjuste(aju(1, 'IN'), null).subtitulo, 'Bodega #3');
 }
 
+console.log('--- TEST 47 (B4 T19): Recepciones, Traslados y Ajustes de Inventario cablean las columnas compartidas, el servidor, las tarjetas y el tablero solo para ver ---');
+{
+  /** La etiqueta <TarjetaKpi kpi="id" …/> con sus líneas (hasta el primer `/>`). */
+  const tarjetaKpi = (f, id) => { const i = f.indexOf(`<TarjetaKpi kpi="${id}"`); assert.ok(i >= 0, id); return f.slice(i, f.indexOf('/>', i) + 2); };
+  const rec = leerFuente('app/dashboard/inventario/recepciones/page.tsx');
+  const tra = leerFuente('app/dashboard/inventario/traslados/page.tsx');
+  const aju = leerFuente('app/dashboard/inventario/ajustes/page.tsx');
+  for (const [nombre, f] of [['Recepciones', rec], ['Traslados', tra], ['Ajustes', aju]]) {
+    sinDefectos(nombre, f);
+    trae(f, 'useEstadoTabla(', `${nombre}: el estado único`);
+    trae(f, 'esperar: !listo', `${nombre}: espera las preferencias (esqueleto, nunca vacío)`);
+    trae(f, 'AvisoReintentar', `${nombre}: la fuente de tarjetas que falla dice el error con Reintentar`);
+    trae(f, 'etiqueta={`Acciones de ${', `${nombre}: las acciones llevan el número en su nombre`);
+    assert.ok(/soloLectura=\{TEXTO_SOLO_VER\}/.test(f), `${nombre}: tablero solo para ver`);
+    for (const q of ['regla=', 'onCambio=', 'onAccion=']) noTrae(etiquetaJsx(f, '<TableroKanban'), q, `${nombre}: el tablero no mueve (${q})`);
+    assert.ok(/const vacio = useMemo\(/.test(f), `${nombre}: el vacío memoizado`);
+  }
+  // Recepciones: las columnas compartidas y las vistas reales; nada de 'CONFIRMADA'; tarjetas del mismo /compras/stats.
+  trae(rec, "from '../../compras/columnas-recepcion'", 'Recepciones importa las columnas de Compras');
+  trae(rec, 'columnasRecepcion<FilaRecepcion>(', 'Recepciones arma las columnas compartidas');
+  noTrae(sinComentarios(rec), 'CONFIRMADA', 'Recepciones ya no pregunta por un estado que no existe');
+  trae(rec, '/compras/stats?periodo=${PERIODO_KPI}', 'Recepciones: los mismos números que Compras');
+  for (const k of ['rec_por_confirmar', 'rec_confirmadas', 'rec_total']) trae(tarjetaKpi(rec, k), 'onClick=', `${k} abre su pestaña`);
+  noTrae(tarjetaKpi(rec, 'bodegas'), 'onClick=', 'Bodegas es informativa');
+  trae(rec, 'despachar(accionVistaEnLista(estado, siguiente, opcionesEstadosRecepcion))', 'las tarjetas despachan al estado único');
+  // Traslados: columnas y bodegas compartidas, la fecha real, tarjetas de los conteos del servidor.
+  trae(tra, 'columnasTraslado<FilaTraslado>(', 'Traslados arma las columnas compartidas');
+  trae(tra, '<BodegasTraslado.Provider value={bodegas}>', 'Traslados envuelve la tabla en el Provider');
+  trae(tra, 'fechaLarga(selected.fecha)', 'Traslados: la fecha real en el Drawer');
+  noTrae(sinComentarios(tra), 'created_at', 'Traslados ya no lee created_at (no existe en la operación)');
+  trae(tra, 'tarjetasTraslados(conteosTraslado(totales?.conteos ?? null)', 'Traslados: tarjetas de los conteos');
+  noTrae(tarjetaKpi(tra, 'bodegas'), 'onClick=', 'Bodegas es informativa');
+  // Ajustes: la dirección del servidor, los totales de las pestañas = tarjetas, sin alert(), fecha real.
+  trae(aju, 'consultaAjustes(estado)', 'Ajustes: la pestaña viaja como direccion');
+  trae(aju, 'CONSULTAS_TOTALES_AJUSTE.entradas', 'Ajustes: totales con limit=0');
+  trae(aju, 'pestanasAjustes(totales)', 'Ajustes: las pestañas salen de los mismos totales');
+  trae(aju, 'tarjetasAjustes(totales)', 'Ajustes: las tarjetas salen de los mismos totales');
+  noTrae(tarjetaKpi(aju, 'aju_neto'), 'onClick=', 'la diferencia neta es informativa');
+  noTrae(sinComentarios(aju), 'variant="gradient"', 'Ajustes: sin gradient');
+  trae(aju, "avisar('Selecciona un producto de la lista', { tono: 'error' })", 'Ajustes: el alert pasó a avisar');
+  trae(aju, "avisarError(err, 'No se pudo registrar el ajuste')", 'Ajustes: el error del servidor tal cual');
+  trae(aju, 'if (recargarTrasError(err)) recargarTodo();', 'Ajustes: tras un error se recarga lo que se ve');
+  trae(aju, 'fechaLarga(selected.fecha)', 'Ajustes: la fecha real en el Drawer');
+  // La carga del tablero de Ajustes se EJECUTA con dobles: la URL lleva su dirección y la señal.
+  {
+    const llamadas = [];
+    const { normalizarRespuesta } = await import('../src/lib/tabla.js');
+    const cargar = cargarDe(aju)({
+      estado: estadoTablaInicial({ q: 'merma' }), consultaColumnaAjuste: ec.consultaColumnaAjuste, normalizarRespuesta, RUTA_OPERACIONES: '/inventory/operations',
+      apiFetch: async (url, o) => { llamadas.push([url, o]); return { status: 'success', total: 2, data: [{ id: 1 }] }; },
+    });
+    const r = await cargar(ec.COLUMNAS_AJUSTE[1], { offset: 0, limit: 25, signal: 'S' });
+    assert.deepEqual(llamadas, [['/inventory/operations?q=merma&orden=-fecha&limit=25&offset=0&operation_type=ADJUSTMENT&direccion=salida', { signal: 'S' }]]);
+    assert.deepEqual([r.filas, r.total], [[{ id: 1 }], 2]);
+  }
+}
+
+console.log('--- TEST 48 (B4 T19; KANBAN-logistica 4, KPI-inventario 8; R15, RP22, RP23): Entregas cablea las pestañas = columnas, el tablero con rol, el despacho y las tarjetas ---');
+{
+  const e = leerFuente('app/dashboard/inventario/entregas/page.tsx');
+  sinDefectos('Entregas', e);
+  // Sin diálogos nativos: el despacho confirma con useAvisos y los fallos se dicen y recargan.
+  trae(e, 'await confirmar(confirmacionDespacho(pedido, nombreBodega))', 'el despacho confirma con useAvisos');
+  trae(e, 'if (!(await confirmar(', 'sin confirmación no se despacha');
+  trae(e, 'JSON.stringify(cuerpoDespacho(pedido, { rol, warehouseId }))', 'el cuerpo del PATCH sale de cuerpoDespacho (RP23)');
+  noTrae(sinComentarios(e), 'fecha_entrega:', 'ya no manda fecha_entrega');
+  trae(e, "avisarError(err, 'No se pudo despachar el pedido');\n      // La regla única: con un 400, un 409 o sin respuesta se recarga lo que se ve; un 404 no.\n      if (recargarTrasError(err)) recargarTodo();", 'si el despacho falla: se avisa y se recarga (recargarTrasError)');
+  trae(e, 'recargarTodo(desdeTablero ? [desdeTablero.origen, desdeTablero.destino] : undefined);', 'tras despachar: la fila, origen, destino y tarjetas (D39)');
+  // «Registrar cobro de saldo»: su PATCH no se toca.
+  trae(e, "saldo_cop: 0,\n          notas: pedido.notas ? `${pedido.notas} | Saldo 40% cobrado y verificado` : 'Saldo 40% verificado',", 'Registrar cobro de saldo: el PATCH de siempre');
+  // Pestañas = columnas, los mismos conteos que la tarjeta Despachados.
+  trae(e, 'pestanasEntrega(conteos)', 'las pestañas salen de los conteos');
+  trae(e, 'tarjetasEntregas(cargandoStats ? null : (stats?.kpis ?? null), conteos)', 'la tarjeta Despachados lee los MISMOS conteos');
+  trae(e, 'extra: extraDeLaLista', 'la tabla pide estados + saldo de la pestaña');
+  const t = (id) => { const i = e.indexOf(`<TarjetaKpi kpi="${id}"`); assert.ok(i >= 0, id); return e.slice(i, e.indexOf('/>', i) + 2); };
+  noTrae(t('pven_en_curso'), 'onClick=', 'pven_en_curso es informativa');
+  noTrae(t('ent_saldo'), 'onClick=', 'ent_saldo es informativa');
+  trae(t('ent_despachados'), 'onClick={elegirDespachados}', 'ent_despachados abre su pestaña');
+  trae(e, 'nota={NOTA_ENTREGAS}', 'la nota reemplaza Protocolo 60/40');
+  noTrae(sinComentarios(e), 'Protocolo 60/40', 'sin la tarjeta de párrafo');
+  noTrae(sinComentarios(e), 'variant="gradient"', 'sin gradient');
+  // El tablero: modo servidor, regla con el rol, onCambio / onAccion.
+  trae(e, 'reglaSoltarEntrega(p, o, d, { rol })', 'la regla recibe el rol');
+  const tab = etiquetaJsx(e, '<TableroKanban');
+  for (const q of ['regla={reglaDelTablero}', 'onCambio={cambiarDesdeTablero}', 'onAccion={accionDesdeTablero}']) trae(tab, q, `TableroKanban ${q}`);
+  trae(e, "modo: 'servidor'", 'tablero en modo servidor');
+  // El nombre de campo real: nada de las claves viejas que el servidor no manda.
+  for (const viejo of ['cliente_telefono', 'cliente_nombre', 'direccion_envio', 'shipping_address', 'COMPLETADO']) noTrae(sinComentarios(e), viejo, `no lee ${viejo}`);
+  // La carga del tablero se EJECUTA: la URL lleva los estados y el saldo de la columna; la pestaña no viaja.
+  {
+    const llamadas = [];
+    const { normalizarRespuesta } = await import('../src/lib/tabla.js');
+    const ent = await import('../src/lib/entregas.js');
+    const cargar = cargarDe(e)({
+      estado: estadoTablaInicial({ vista: 'listo', q: 'oso' }), consultaColumnaEntrega: ent.consultaColumnaEntrega, normalizarRespuesta,
+      RUTA_PEDIDOS: '/ventas/pedidos',
+      apiFetch: async (url, o) => { llamadas.push([url, o]); return { status: 'success', total: 1, data: [{ id: 3 }] }; },
+    });
+    const r = await cargar(ent.COLUMNAS_ENTREGA[1], { offset: 0, limit: 25, orden: 'atencion', signal: 'S' });
+    assert.deepEqual(llamadas, [['/ventas/pedidos?q=oso&estados=LISTO_ENTREGA,DISPONIBLE,PENDIENTE_SALDO,LISTO_PARA_ENTREGA&orden=atencion&limit=25&offset=0&saldo=pendiente', { signal: 'S' }]]);
+    assert.deepEqual([r.filas, r.total], [[{ id: 3 }], 1]);
+  }
+}
+
 console.log('\nOK: test_estados_compras.mjs');

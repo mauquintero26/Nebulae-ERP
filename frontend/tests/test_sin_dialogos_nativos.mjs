@@ -50,6 +50,10 @@ const RAICES = [
   'src/app/dashboard/compras/lista-compras/page.tsx', // B4 T16B (RP30): la Lista de compras, sin su alert() ni su confirm()
   'src/app/dashboard/compras/traslados/page.tsx', // B4 T16B (RP30): Traslados, sin sus 3 alert()
   'src/app/dashboard/compras/columnas-traslado.tsx', // B4 T16B: las columnas compartidas con Inventario (T19)
+  'src/app/dashboard/inventario/entregas/page.tsx', // B4 T19 (RP30): Entregas, sin su window.confirm
+  'src/app/dashboard/inventario/ajustes/page.tsx', // B4 T19 (RP30): Ajustes, sin sus 2 alert()
+  'src/app/dashboard/inventario/recepciones/page.tsx', // B4 T19: Recepciones nace sin diálogos nativos
+  'src/app/dashboard/inventario/traslados/page.tsx', // B4 T19: Traslados nace sin diálogos nativos
 ];
 
 // alert( / confirm( / prompt(, sueltos o con window. / window?. / globalThis. / self. delante, que no sean parte de
