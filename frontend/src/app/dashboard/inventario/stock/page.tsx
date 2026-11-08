@@ -156,7 +156,7 @@ export default function StockPage() {
   };
 
   return (
-    <div className="w-full bg-slate-50 min-h-full animate-in fade-in flex flex-col">
+    <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
       <SubNav label="Inventario" items={INV_NAV} currentPath="/dashboard/inventario/stock" color="indigo" />
 
       <div className={CONTENEDOR}>

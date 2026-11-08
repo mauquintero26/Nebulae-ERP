@@ -397,7 +397,7 @@ export default function ProductosPage() {
   // ─── PRODUCT LIST ───
   if (!selectedProduct) {
     return (
-      <div className="w-full bg-slate-50 min-h-full animate-in fade-in flex flex-col">
+      <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
         <SubNav label="Inventario" items={INV_NAV} currentPath="/dashboard/inventario/productos" color="purple" />
 
         <div className={CONTENEDOR}>

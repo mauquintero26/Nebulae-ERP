@@ -1932,6 +1932,14 @@ console.log('--- TEST 42 (B4 T18; TABLA-inventario 5 a 8, KANBAN-resto; RP47 a R
   assert.equal(ec.pestanasExistencias({ agotados: '5' })[1].conteo, 5);
   assert.equal(ec.pestanasExistencias('x')[0].conteo, null);
 
+  // La alerta de agotados de Abastecimiento: cuatro estados, que ocupan el mismo alto (la alerta no empuja la página al llegar).
+  assert.equal(typeof ec.estadoAlertaAgotados, 'function', 'estadoAlertaAgotados existe');
+  for (const [kpi, agotados, esperado] of [
+    ['cargando', null, 'cargando'], ['cargando', 3, 'cargando'], ['error', 3, 'sin_dato'], ['error', null, 'sin_dato'],
+    ['listo', null, 'sin_dato'], ['listo', 'x', 'sin_dato'], ['listo', undefined, 'sin_dato'], ['listo', 0, 'ninguno'], ['listo', '0', 'ninguno'],
+    ['listo', 2, 'hay'], ['listo', '4', 'hay'], ['actualizando', 2, 'hay'], ['actualizando', 0, 'ninguno'], ['actualizando', null, 'sin_dato'],
+  ]) assert.equal(ec.estadoAlertaAgotados(kpi, agotados), esperado, `${kpi} · ${agotados} -> ${esperado}`);
+
   const estadoStock = estadoTablaInicial({ q: 'oso', tamano: 50, pagina: 3, orden: '-disponible', vista: 'agotado', estados: ['x'] });
   const bajo = COLUMNAS_STOCK[1];
   assert.equal(ec.consultaColumnaStock(estadoStock, bajo, { por: 'sku', categoria_id: '7' }, { limit: 25, offset: 0 }),
@@ -2373,8 +2381,19 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   trae(abasto, 'setVueltaCompras((n) => n + 1);', 'Abastecimiento: «Actualizar» vuelve a pedir compras');
   trae(abasto, 'const vistaActiva = enKanban ? null : estado.vista;', 'Abastecimiento: en Kanban ninguna tarjeta queda activa');
   trae(abasto, 'const elegirVista = (vista: string) => despachar(accionVistaEnLista(estado, vista, undefined));', 'Abastecimiento: la tarjeta es una pestaña (D41) y en Kanban abre la Lista');
-  trae(abasto, '{agotados !== null && agotados > 0 && (', 'Abastecimiento: la alerta solo con el número real');
   trae(abasto, "const agotados = tarjetas.agotados.valor;", 'Abastecimiento: el número de la alerta es el de /inventory/stats');
+  trae(abasto, 'const alerta = estadoAlertaAgotados(estadoKpis, agotados);', 'Abastecimiento: la alerta sale de su regla (estadoAlertaAgotados)');
+  for (const estadoAlerta of ['cargando', 'sin_dato', 'ninguno']) trae(abasto, `{alerta === '${estadoAlerta}' && (`, `Abastecimiento: la alerta ${estadoAlerta}`);
+  trae(abasto, "{alerta === 'hay' && agotados !== null && (", 'Abastecimiento: la alerta roja solo con agotados');
+  assert.equal(abasto.split('min-h-[4.1rem]').length - 1, 4, 'Abastecimiento: los cuatro estados de la alerta ocupan el mismo alto (CLS)');
+  assert.equal(abasto.split('className="min-h-[4.1rem] border-b border-slate-200 bg-slate-100 px-6 py-3">').length - 1, 2, 'Abastecimiento: cargando y sin dato, grises');
+  trae(abasto, 'className="min-h-[4.1rem] border-b border-emerald-200 bg-emerald-50 px-6 py-3">', 'Abastecimiento: sin agotados, con su alto y sin esconderse');
+  trae(abasto, 'className="min-h-[4.1rem] bg-red-50 border-b border-red-200 px-6 py-3 flex flex-wrap items-start gap-4 z-20">', 'Abastecimiento: la alerta roja, con su alto');
+  // El contenedor de cada pantalla NO es un flex en columna: dentro de <main> (overflow-y-auto) encogería el SubNav a 21 px.
+  for (const [nombre, f] of [['Stock', stock], ['Abastecimiento', abasto], ['Kardex', leerFuente('app/dashboard/inventario/kardex/page.tsx')],
+    ['Productos', leerFuente('app/dashboard/inventario/productos/page.tsx')]]) {
+    trae(f, '<div className="w-full bg-slate-50 min-h-full animate-in fade-in">', `${nombre}: el contenedor de la página`);
+  }
   trae(abasto, 'href={`/dashboard/inventario/productos?sku=${encodeURIComponent(f.sku)}`}', 'Abastecimiento: «Ver producto» por SKU (stock-tabla no trae el id del producto)');
   trae(abasto, "{f.estado_stock !== 'abastecido' && (", 'Abastecimiento: «Crear PEC» solo si falta stock');
   trae(abasto, 'aria-label={`Crear un pedido de compra para ${f.sku}`}', 'Abastecimiento: acciones con aria-label');

@@ -1324,6 +1324,22 @@ export const VISTAS_ABASTECIMIENTO = congelar({
 const objetoPlano = (v) => (esObjeto(v) && !Array.isArray(v) ? v : null);
 
 /**
+ * La alerta de agotados de Abastecimiento: qué dice según el estado de las tarjetas (estadoKpi de /inventory/stats) y el número
+ * de agotados. 'cargando' mientras llegan; 'sin_dato' si fallaron (aunque haya un número viejo: no se afirma nada) o no trajeron
+ * el número; 'hay' con más de 0 y 'ninguno' con 0. Los cuatro estados ocupan el MISMO alto en la pantalla: la alerta no empuja la
+ * página al llegar (CLS).
+ * @param {unknown} estadoKpi
+ * @param {unknown} agotados
+ * @returns {'cargando' | 'sin_dato' | 'hay' | 'ninguno'}
+ */
+export function estadoAlertaAgotados(estadoKpi, agotados) {
+  if (estadoKpi === 'cargando') return 'cargando';
+  const n = numeroFinito(agotados);
+  if (estadoKpi === 'error' || n === null) return 'sin_dato';
+  return n > 0 ? 'hay' : 'ninguno';
+}
+
+/**
  * Las pestañas de Stock (con «Todos») y de Abastecimiento (`conTodos: false`) con los `conteos` de stock-tabla
  * (con_conteos=1: todos, agotados, bajo_minimo, abastecidos). Cada una lee SU conteo; el que no llega (cargando o con
  * error) queda en null (la barra gris, nunca 0). Agotado y Bajo el mínimo van en alerta si hay alguna.

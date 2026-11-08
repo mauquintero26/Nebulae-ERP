@@ -17,8 +17,8 @@ import { AYUDA_MINIMO_INVENTARIO, formatoEntero, tarjetasAbastecimiento } from '
 import { dependenciasTablero, estadoDelTotal, extraPorVista, normalizarRespuesta } from '@/lib/tabla';
 import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
-  COLUMNAS_STOCK, TEXTO_SOLO_VER_STOCK, VISTAS_ABASTECIMIENTO, consultaColumnaStock, pestanasExistencias, tarjetaExistencia,
-  textoVacioStock,
+  COLUMNAS_STOCK, TEXTO_SOLO_VER_STOCK, VISTAS_ABASTECIMIENTO, consultaColumnaStock, estadoAlertaAgotados, pestanasExistencias,
+  tarjetaExistencia, textoVacioStock,
 } from '@/lib/estados-compras';
 import { INV_NAV } from '../inv-nav';
 import {
@@ -143,6 +143,7 @@ export default function AbastecimientoPage() {
   const estadoCompras = useEstadoKpi(cargandoCompras, cargandoCompras ? null : (compras?.error ?? null));
   const tarjetas = tarjetasAbastecimiento(stats?.datos ?? null, compras?.datos ?? null);
   const agotados = tarjetas.agotados.valor;
+  const alerta = estadoAlertaAgotados(estadoKpis, agotados);
 
   // «Actualizar»: la lista, el tablero, las dos fuentes de las tarjetas y el selector. Ninguna recarga vacía lo que se ve.
   const { recargar: recargarListado } = listado;
@@ -164,7 +165,7 @@ export default function AbastecimientoPage() {
   // Pasar a Kanban sale de la pantalla completa (el conmutador sigue a la vista y el tablero no queda tapado).
   useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
   const [detalle, setDetalle] = useState<FilaExistencia | null>(null);
-  const abrir = useCallback((f: FilaExistencia) => setDetalle(f), []);
+  const abrir = useCallback((f: FilaExistencia) => setDetalle(f), [setDetalle]);
   const pestanas = pestanasExistencias(conteos, { conTodos: false });
   const cambiarCategoria = useCallback((valor: string) => {
     setCategoria(valor);
@@ -199,9 +200,32 @@ export default function AbastecimientoPage() {
     <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
       <SubNav label="Inventario" items={INV_NAV} currentPath="/dashboard/inventario/abastecimiento" color="emerald" />
 
-      {/* Alerta si hay agotados: el número es el de /inventory/stats (real); mientras carga o si falla, no se afirma nada. */}
-      {agotados !== null && agotados > 0 && (
-        <div role="alert" className="bg-red-50 border-b border-red-200 px-6 py-3 flex flex-wrap items-start gap-4 z-20">
+      {/* La alerta de agotados: el número es el de /inventory/stats (real). Cuatro estados (estadoAlertaAgotados) con el MISMO alto
+          mínimo, para que al llegar el número no empuje la página (CLS): cargando (barras grises), sin dato (si falló no afirma
+          nada), con agotados (la alerta roja y «Crear PEC Urgente») y sin ninguno. */}
+      {alerta === 'cargando' && (
+        <div role="status" aria-busy="true" className="min-h-[4.1rem] border-b border-slate-200 bg-slate-100 px-6 py-3">
+          <span className="sr-only">Contando los productos agotados</span>
+          <div aria-hidden="true" className="space-y-2">
+            <div className="h-4 w-44 rounded bg-slate-200 motion-safe:animate-pulse" />
+            <div className="h-3 w-72 max-w-full rounded bg-slate-200 motion-safe:animate-pulse" />
+          </div>
+        </div>
+      )}
+      {alerta === 'sin_dato' && (
+        <div role="status" className="min-h-[4.1rem] border-b border-slate-200 bg-slate-100 px-6 py-3">
+          <h4 className="text-sm font-black text-slate-700">No se pudo verificar el stock crítico</h4>
+          <p className="mt-1 text-xs font-semibold text-slate-600">Las tarjetas dicen cuál indicador falló; usa «Actualizar» para volver a pedirlo.</p>
+        </div>
+      )}
+      {alerta === 'ninguno' && (
+        <div role="status" className="min-h-[4.1rem] border-b border-emerald-200 bg-emerald-50 px-6 py-3">
+          <h4 className="text-sm font-black text-emerald-800">Sin productos agotados</h4>
+          <p className="mt-1 text-xs font-semibold text-emerald-800">Ninguna referencia tiene el disponible en cero.</p>
+        </div>
+      )}
+      {alerta === 'hay' && agotados !== null && (
+        <div role="alert" className="min-h-[4.1rem] bg-red-50 border-b border-red-200 px-6 py-3 flex flex-wrap items-start gap-4 z-20">
           <AlertTriangle className="text-red-600 shrink-0 mt-0.5" size={20} aria-hidden="true" />
           <div className="min-w-[12rem] flex-1">
             <h4 className="text-sm font-black text-red-800">ALERTA DE STOCK CRÍTICO</h4>
