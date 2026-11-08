@@ -2365,6 +2365,8 @@ console.log('--- TEST 47 (B4 T17, TABLA-inventario punto 4; R5, RP52): la pesta�
   }
   assert.deepEqual(extraPorVista(null, VISTAS), { vista: null });
   assert.deepEqual(extraPorVista(conVista('x'), VISTAS, {}, 'fisico'), { incluir_sin_stock: false, vista: null }, 'otra vista por defecto');
+  // Una clave del prototipo no es una vista: va la de por defecto (con sus parámetros), no un mapa vacío.
+  assert.deepEqual(extraPorVista(conVista('toString'), VISTAS, {}, 'fisico'), { incluir_sin_stock: false, vista: null }, 'toString no es una vista');
   // Lo de la vista gana sobre `fijos` en la misma clave, y `vista` nunca se manda (aunque venga en fijos).
   assert.deepEqual(extraPorVista(conVista('bajo_minimo'), VISTAS, { estado_stock: 'agotado', vista: 'todos' }),
     { estado_stock: 'bajo_minimo', vista: null });
