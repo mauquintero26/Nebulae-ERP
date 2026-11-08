@@ -1955,6 +1955,13 @@ console.log('--- TEST 42 (B4 T18; TABLA-inventario 5 a 8, KANBAN-resto; RP47 a R
   assert.ok(!/sin_movimiento|reciente|vista|estados=/.test(ec.consultaColumnaStock(estadoStock, bajo, {}, { limit: 25, offset: 0 })),
     'stock-tabla da 422 con un orden de tiempo');
 
+  // m24: «Reservado» = hay unidades en bodega y nada disponible (todo comprometido); sin unidades no es reservado.
+  assert.equal(typeof ec.existenciaReservada, 'function', 'existenciaReservada existe');
+  for (const [f, esperado] of [[{ fisico: 5, disponible: 0 }, true], [{ fisico: '5', disponible: '0' }, true], [{ fisico: 0, disponible: 0 }, false],
+    [{ fisico: 5, disponible: 2 }, false], [{ fisico: 5, disponible: null }, false], [{ fisico: null, disponible: 0 }, false], [{}, false], [null, false]]) {
+    assert.equal(ec.existenciaReservada(f), esperado, JSON.stringify(f));
+  }
+
   const existencia = {
     sku_id: 1, sku: 'NEB-001', producto: 'Oso', categoria: 'Peluches', bodega: null, warehouse_id: null, fisico: 10, reservado: 4,
     disponible: 6, cuarentena: 0, en_transito: 5, precio: 12000, costo: 8000, valorizacion: 80000, minimo: 8,
@@ -2336,7 +2343,7 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   for (const [kpi, clave] of [['inv_fisico', 'fisico'], ['inv_reservado', 'reservado'], ['inv_disponible', 'disponible'], ['inv_en_transito', 'en_transito']]) {
     trae(stock, `<TarjetaKpi kpi="${kpi}" valor={tarjetas?.${clave}.valor ?? null} ayuda={tarjetas?.${clave}.ayuda} />`, `Stock: ${kpi} lee ${clave}`);
   }
-  noTrae(stock, 'onClick={() => elegirVista', 'Stock: las tarjetas no son botones');
+  assert.ok(!(/<FranjaKpis[\s\S]*?<\/FranjaKpis>/.exec(stock)?.[0] ?? '').includes('onClick'), 'Stock: las tarjetas no son botones');
   trae(stock, "const INICIAL_STOCK = { vista: 'todos' };", 'Stock: arranca en Todos');
   trae(stock, 'const pestanas = pestanasExistencias(conteos);', 'Stock: las 4 pestañas');
   trae(stock, 'const tarjetas = tarjetasStock(stats?.datos ?? null);', 'Stock: tarjetasStock');
@@ -2349,9 +2356,27 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   trae(abasto, "extraPorVista(estado, VISTAS_ABASTECIMIENTO, fijos, 'agotado')", 'Abastecimiento: la pestaña por defecto es Agotado');
   trae(abasto, 'const pestanas = pestanasExistencias(conteos, { conTodos: false });', 'Abastecimiento: sin «Todos» (RP53)');
   trae(abasto, 'const tarjetas = tarjetasAbastecimiento(stats?.datos ?? null, compras?.datos ?? null);', 'Abastecimiento: cada tarjeta con su fuente');
-  for (const [kpi, clave, vista] of [['inv_agotados', 'agotados', 'agotado'], ['inv_bajo_minimo', 'bajo_minimo', 'bajo_minimo'], ['inv_abastecidos', 'abastecidos', 'abastecido']]) {
-    trae(abasto, `<TarjetaKpi kpi="${kpi}" valor={tarjetas.${clave}.valor} ayuda={tarjetas.${clave}.ayuda}\n            activo={vistaActiva === '${vista}'} onClick={() => elegirVista('${vista}')} />`, `Abastecimiento: ${kpi} abre ${vista}`);
+  // T18 r1 (I1): las tres tarjetas de /inventory/stats son INFORMATIVAS (como inv_bajo_minimo del Hub, RP52 b): su número cuenta
+  // referencias con control de inventario y la pestaña cuenta filas (33 contra 36), así que no equivalen a una vista (R12).
+  for (const [kpi, clave] of [['inv_agotados', 'agotados'], ['inv_bajo_minimo', 'bajo_minimo'], ['inv_abastecidos', 'abastecidos']]) {
+    trae(abasto, `<TarjetaKpi kpi="${kpi}" valor={tarjetas.${clave}.valor} ayuda={tarjetas.${clave}.ayuda} />`, `Abastecimiento: ${kpi} informativa`);
   }
+  const franja = /<FranjaKpis[\s\S]*?<\/FranjaKpis>/.exec(abasto)?.[0] ?? '';
+  assert.equal((franja.match(/<TarjetaKpi\b/g) ?? []).length, 4, 'Abastecimiento: cuatro tarjetas');
+  for (const boton of ['onClick', 'activo=', 'elegirVista', 'aria-pressed']) assert.ok(!franja.includes(boton), `Abastecimiento: ninguna tarjeta es botón (${boton})`);
+  for (const boton of ['vistaActiva', 'elegirVista', 'accionVistaEnLista']) noTrae(abasto, boton, `Abastecimiento: ya no hay ${boton}`);
+  trae(abasto, 'Solo cuenta las referencias con control de inventario.', 'Abastecimiento: la alerta dice qué cuenta');
+  // m11: cuando una fuente falla, lo dice y ofrece «Reintentar» (solo esa fuente).
+  trae(abasto, "{estadoKpis === 'error' && (\n          <AvisoReintentar error={stats?.error} fallo=\"No se pudieron cargar los indicadores de existencias\" onReintentar={() => setVueltaStats((n) => n + 1)} />", 'Abastecimiento: stats caído, con Reintentar');
+  trae(abasto, "{estadoCompras === 'error' && (\n          <AvisoReintentar error={compras?.error} fallo=\"No se pudieron cargar los pedidos de compra activos\" onReintentar={() => setVueltaCompras((n) => n + 1)} />", 'Abastecimiento: compras caído, con Reintentar');
+  trae(abasto, "onClick={() => setVueltaStats((n) => n + 1)} className={`rounded font-bold underline ${FOCOS.indigo}`}>Reintentar</button>", 'Abastecimiento: la alerta «sin dato» ofrece Reintentar');
+  trae(stock, "{estadoKpis === 'error' && (\n          <AvisoReintentar error={stats?.error} fallo=\"No se pudieron cargar las tarjetas de existencias\" onReintentar={() => setVueltaStats((n) => n + 1)} />", 'Stock: stats caído, con Reintentar');
+  // m24: la insignia «Reservado» de BASE vuelve a la fila de Stock (hay unidades en bodega y nada disponible).
+  trae(stock, 'celda: (f) => <CeldaEstadoExistencia f={f} /> },', 'Stock: el estado lleva «Reservado»');
+  trae(stock, "existenciaReservada(f) ? ' · Reservado: hay unidades en bodega, todas comprometidas' : ''", 'Stock: el title dice Reservado');
+  trae(piezas, '{existenciaReservada(f) && <span className={`${CHIP} border-amber-200 bg-amber-100 text-[10px] text-amber-800`}>Reservado</span>}', 'piezas: la insignia Reservado, solo si existenciaReservada');
+  trae(piezas, 'onClick={onReintentar}\n        className={`inline-flex', 'piezas: AvisoReintentar vuelve a pedir');
+  trae(piezas, '{textoDeError(error, fallo)}', 'piezas: AvisoReintentar dice el detalle');
   trae(abasto, '<TarjetaKpi kpi="pec_activos" valor={tarjetas.pec_activos.valor} ayuda={tarjetas.pec_activos.ayuda} estado={estadoCompras} />', 'Abastecimiento: pec_activos con su estado y sin botón');
   trae(abasto, "apiFetch('/compras/stats', { signal: control.signal })", 'Abastecimiento: /compras/stats (RP94)');
   trae(abasto, '.then((r: { data?: unknown } | null) => setCompras({ vuelta: vueltaCompras, datos: r?.data ?? null, error: null }))', 'Abastecimiento: compras llega');
@@ -2359,8 +2384,6 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   trae(abasto, 'const cargandoCompras = compras?.vuelta !== vueltaCompras;', 'Abastecimiento: cargando compras');
   trae(abasto, 'const estadoCompras = useEstadoKpi(cargandoCompras, cargandoCompras ? null : (compras?.error ?? null));', 'Abastecimiento: el estado de pec_activos lleva el error');
   trae(abasto, 'setVueltaCompras((n) => n + 1);', 'Abastecimiento: «Actualizar» vuelve a pedir compras');
-  trae(abasto, 'const vistaActiva = enKanban ? null : estado.vista;', 'Abastecimiento: en Kanban ninguna tarjeta queda activa');
-  trae(abasto, 'const elegirVista = (vista: string) => despachar(accionVistaEnLista(estado, vista, undefined));', 'Abastecimiento: la tarjeta es una pestaña (D41) y en Kanban abre la Lista');
   trae(abasto, "const agotados = tarjetas.agotados.valor;", 'Abastecimiento: el número de la alerta es el de /inventory/stats');
   trae(abasto, 'const alerta = estadoAlertaAgotados(estadoKpis, agotados);', 'Abastecimiento: la alerta sale de su regla (estadoAlertaAgotados)');
   for (const estadoAlerta of ['cargando', 'sin_dato', 'ninguno']) trae(abasto, `{alerta === '${estadoAlerta}' && (`, `Abastecimiento: la alerta ${estadoAlerta}`);

@@ -1383,6 +1383,18 @@ export function consultaColumnaStock(estado, columna, fijos, { limit, offset }) 
   });
 }
 
+/**
+ * BASE mostraba «Reservado» (T18 r1, m24): una existencia con unidades en bodega y NADA disponible, porque todo está comprometido.
+ * Su estado de stock es «agotado»; esta marca dice que no es lo mismo que una referencia sin unidades.
+ * @param {any} f
+ * @returns {boolean}
+ */
+export function existenciaReservada(f) {
+  const fisico = numeroFinito(f?.fisico);
+  const disponible = numeroFinito(f?.disponible);
+  return fisico !== null && fisico > 0 && disponible === 0;
+}
+
 const TONO_CHIP_STOCK = congelar({ agotado: 'rose', bajo_minimo: 'amber', abastecido: 'emerald' });
 
 /**

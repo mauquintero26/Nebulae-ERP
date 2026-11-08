@@ -15,14 +15,13 @@ import type { ColumnaTabla } from '@/components/tabla';
 import { apiFetch } from '@/lib/api';
 import { AYUDA_MINIMO_INVENTARIO, formatoEntero, tarjetasAbastecimiento } from '@/lib/kpis';
 import { dependenciasTablero, estadoDelTotal, extraPorVista, normalizarRespuesta, textoVacioExistencias } from '@/lib/tabla';
-import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
   COLUMNAS_STOCK, TEXTO_SOLO_VER_STOCK, VISTAS_ABASTECIMIENTO, consultaColumnaStock, estadoAlertaAgotados, pestanasExistencias,
   tarjetaExistencia,
 } from '@/lib/estados-compras';
 import { INV_NAV } from '../inv-nav';
 import {
-  CONTENEDOR, CeldaEstadoStock, CeldaProducto, DetalleExistencia, FOCOS, SelectorCatalogo, cantidad, claseDeFilaExistencia,
+  AvisoReintentar, CONTENEDOR, CeldaEstadoStock, CeldaProducto, DetalleExistencia, FOCOS, SelectorCatalogo, cantidad, claseDeFilaExistencia,
   claveDeFilaExistencia, infoStock, useCatalogo,
 } from '../piezas-inventario';
 import type { ConteosStock, FilaExistencia } from '../piezas-inventario';
@@ -188,13 +187,10 @@ export default function AbastecimientoPage() {
     estadoTotal: estadoDelTotal({ total: listado.total, cargando: listado.cargandoInicial, recargando: listado.recargando, error: listado.error }),
   };
 
-  // ── bloque 4: las tarjetas pulsables (R5, R12) ──
-  // inv_agotados, inv_bajo_minimo e inv_abastecidos abren su pestaña como un clic en ella (D41); en Kanban, esa pestaña en
-  // Lista (accionVistaEnLista). No hay «Todos» que las apague: un segundo clic deja la misma pestaña. pec_activos no es una
-  // vista de esta tabla: informativa. (La tarjeta cuenta referencias de /inventory/stats, sin las que no llevan control de
-  // inventario; la pestaña cuenta las filas de la tabla.)
-  const vistaActiva = enKanban ? null : estado.vista;
-  const elegirVista = (vista: string) => despachar(accionVistaEnLista(estado, vista, undefined));
+  // ── bloque 4: las tarjetas (R12; T18 r1, I1) ──
+  // Las cuatro son INFORMATIVAS, como inv_bajo_minimo del Hub (RP52 b): «una tarjeta solo es botón si equivale a una vista» y
+  // aquí no hay una vista con el mismo número (la tarjeta cuenta referencias de /inventory/stats SIN las que no llevan control
+  // de inventario; la pestaña cuenta las filas de la tabla: 33 contra 36 en el banco). Las pestañas siguen ahí.
 
   return (
     <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
@@ -215,7 +211,10 @@ export default function AbastecimientoPage() {
       {alerta === 'sin_dato' && (
         <div role="status" className="min-h-[4.1rem] border-b border-slate-200 bg-slate-100 px-6 py-3">
           <h4 className="text-sm font-black text-slate-700">No se pudo verificar el stock crítico</h4>
-          <p className="mt-1 text-xs font-semibold text-slate-600">Las tarjetas dicen cuál indicador falló; usa «Actualizar» para volver a pedirlo.</p>
+          <p className="mt-1 text-xs font-semibold text-slate-600">
+            Las tarjetas dicen cuál indicador falló.{' '}
+            <button type="button" onClick={() => setVueltaStats((n) => n + 1)} className={`rounded font-bold underline ${FOCOS.indigo}`}>Reintentar</button>
+          </p>
         </div>
       )}
       {alerta === 'ninguno' && (
@@ -231,6 +230,7 @@ export default function AbastecimientoPage() {
             <h4 className="text-sm font-black text-red-800">ALERTA DE STOCK CRÍTICO</h4>
             <p className="text-xs font-bold text-red-700 mt-1">
               {formatoEntero(agotados)} {agotados === 1 ? 'producto con stock en cero' : 'productos con stock en cero'}. Se requiere pedido de compra urgente.
+              <span className="block font-semibold text-red-800">Solo cuenta las referencias con control de inventario.</span>
             </p>
           </div>
           <Link href="/dashboard/compras/pedidos" className={`bg-red-700 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-red-800 ${FOCOS.indigo}`}>
@@ -257,15 +257,18 @@ export default function AbastecimientoPage() {
           )} />
 
         {/* B4 T18, bloque 4 (KPI-inventario punto 6; R10, R12, RP94): Agotados, Bajo el mínimo y Bien abastecidos (de
-            /inventory/stats, pulsables: abren su pestaña) y Pedidos de compra activos (de /compras/stats). Cada fuente carga y
-            falla por separado: barras grises mientras cargan (nunca 0) y «—» si falla. Sin gradiente. */}
+            /inventory/stats) y Pedidos de compra activos (de /compras/stats), todas informativas. Cada fuente carga y falla por
+            separado: barras grises mientras cargan (nunca 0) y «—» si falla, con su aviso y «Reintentar» (m11). Sin gradiente. */}
+        {estadoKpis === 'error' && (
+          <AvisoReintentar error={stats?.error} fallo="No se pudieron cargar los indicadores de existencias" onReintentar={() => setVueltaStats((n) => n + 1)} />
+        )}
+        {estadoCompras === 'error' && (
+          <AvisoReintentar error={compras?.error} fallo="No se pudieron cargar los pedidos de compra activos" onReintentar={() => setVueltaCompras((n) => n + 1)} />
+        )}
         <FranjaKpis estado={estadoKpis} titulo="Abastecimiento" nota={AYUDA_MINIMO_INVENTARIO}>
-          <TarjetaKpi kpi="inv_agotados" valor={tarjetas.agotados.valor} ayuda={tarjetas.agotados.ayuda}
-            activo={vistaActiva === 'agotado'} onClick={() => elegirVista('agotado')} />
-          <TarjetaKpi kpi="inv_bajo_minimo" valor={tarjetas.bajo_minimo.valor} ayuda={tarjetas.bajo_minimo.ayuda}
-            activo={vistaActiva === 'bajo_minimo'} onClick={() => elegirVista('bajo_minimo')} />
-          <TarjetaKpi kpi="inv_abastecidos" valor={tarjetas.abastecidos.valor} ayuda={tarjetas.abastecidos.ayuda}
-            activo={vistaActiva === 'abastecido'} onClick={() => elegirVista('abastecido')} />
+          <TarjetaKpi kpi="inv_agotados" valor={tarjetas.agotados.valor} ayuda={tarjetas.agotados.ayuda} />
+          <TarjetaKpi kpi="inv_bajo_minimo" valor={tarjetas.bajo_minimo.valor} ayuda={tarjetas.bajo_minimo.ayuda} />
+          <TarjetaKpi kpi="inv_abastecidos" valor={tarjetas.abastecidos.valor} ayuda={tarjetas.abastecidos.ayuda} />
           <TarjetaKpi kpi="pec_activos" valor={tarjetas.pec_activos.valor} ayuda={tarjetas.pec_activos.ayuda} estado={estadoCompras} />
         </FranjaKpis>
 

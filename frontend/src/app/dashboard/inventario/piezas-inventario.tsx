@@ -11,7 +11,7 @@ import { TABLE } from '@/lib/design-system';
 import { formatoPesos } from '@/lib/pesos';
 import { tiene } from '@/lib/estados-pedido';
 import { formatoDecimal, numeroFinito } from '@/lib/kpis';
-import { ESTADOS_STOCK } from '@/lib/estados-compras';
+import { ESTADOS_STOCK, existenciaReservada } from '@/lib/estados-compras';
 import { textoDeError } from '@/lib/avisos';
 // El chip estándar de las tablas del bloque (columnas-pec.tsx, T15 r1): la misma forma que el estado de un PEC.
 import { CHIP } from '../compras/columnas-pec';
@@ -89,6 +89,35 @@ export function CeldaEstadoStock({ f }: { f: FilaExistencia }) {
   const info = infoStock(f.estado_stock);
   if (!info) return <span className="text-xs text-slate-500">—</span>;
   return <span className={`${CHIP} text-[11px] ${info.clases.bg} ${info.clases.text} ${info.clases.border}`}>{info.label}</span>;
+}
+
+/**
+ * Estado de la tabla de Stock (T18 r1, m24): la insignia de siempre y, debajo, «Reservado» si hay unidades en bodega y nada
+ * disponible (existenciaReservada): lo que BASE mostraba en lugar de «Agotado» para una referencia comprometida por completo.
+ */
+export function CeldaEstadoExistencia({ f }: { f: FilaExistencia }) {
+  return (
+    <span className="flex flex-col items-start gap-0.5">
+      <CeldaEstadoStock f={f} />
+      {existenciaReservada(f) && <span className={`${CHIP} border-amber-200 bg-amber-100 text-[10px] text-amber-800`}>Reservado</span>}
+    </span>
+  );
+}
+
+/**
+ * Una fuente de indicadores que falló (T18 r1, m11): lo dice con el detalle del servidor y ofrece «Reintentar» (que vuelve a pedir
+ * SOLO esa fuente), en lugar de dejar solo «—» en las tarjetas.
+ */
+export function AvisoReintentar({ error, fallo, onReintentar, acento = 'indigo' }: { error: unknown; fallo: string; onReintentar: () => void; acento?: AcentoFoco }) {
+  return (
+    <div role="alert" className="flex flex-wrap items-center gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">
+      {textoDeError(error, fallo)}
+      <button type="button" onClick={onReintentar}
+        className={`inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 ${FOCOS[acento]}`}>
+        Reintentar
+      </button>
+    </div>
+  );
 }
 
 /**

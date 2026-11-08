@@ -783,16 +783,16 @@ console.log('--- TEST 21 (B4 T18, KPI-inventario punto 5 y 6): las tarjetas de S
   const abasto = kpisLib.tarjetasAbastecimiento;
   assert.equal(typeof abasto, 'function', 'tarjetasAbastecimiento existe');
   assert.deepEqual(abasto(stats, { pec_activos: 5, pec_total: 99, activos: 7 }), {
-    agotados: { valor: 2, ayuda: 'Orden urgente requerida.' },
-    bajo_minimo: { valor: 3, ayuda: 'Lo disponible llegó al mínimo.' },
-    abastecidos: { valor: 1, ayuda: 'Lo disponible está sobre el mínimo.' },
+    agotados: { valor: 2, ayuda: 'Referencias con control de inventario sin disponible.' },
+    bajo_minimo: { valor: 3, ayuda: 'Referencias con control de inventario que llegaron al mínimo.' },
+    abastecidos: { valor: 1, ayuda: 'Referencias con control de inventario sobre el mínimo.' },
     pec_activos: { valor: 5, ayuda: 'Pedidos de compra en curso.' },
   }, 'pec_activos es la clave pec_activos (no pec_total ni activos)');
   // Las dos fuentes son independientes: si una falta (cargando o con error), solo SUS tarjetas quedan en null.
   assert.deepEqual(abasto(stats, null).pec_activos, { valor: null, ayuda: 'Pedidos de compra en curso.' });
   assert.equal(abasto(stats, null).agotados.valor, 2);
   assert.equal(abasto(null, { pec_activos: 5 }).pec_activos.valor, 5);
-  assert.deepEqual(abasto(null, { pec_activos: 5 }).agotados, { valor: null, ayuda: 'Orden urgente requerida.' });
+  assert.deepEqual(abasto(null, { pec_activos: 5 }).agotados, { valor: null, ayuda: 'Referencias con control de inventario sin disponible.' });
   assert.equal(abasto(null, null).bajo_minimo.valor, null);
   assert.equal(abasto(stats, { pec_activos: 0 }).pec_activos.valor, 0, 'un 0 del servidor es 0');
   assert.equal(abasto(stats, { pec_activos: 'x' }).pec_activos.valor, null);

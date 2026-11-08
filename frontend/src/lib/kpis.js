@@ -825,9 +825,9 @@ export function tarjetasAbastecimiento(stats, compras) {
   const s = datosDe(stats) ?? {};
   const c = datosDe(compras) ?? {};
   return {
-    agotados: { valor: numeroFinito(s.skus_agotados), ayuda: 'Orden urgente requerida.' },
-    bajo_minimo: { valor: numeroFinito(s.skus_bajo_minimo), ayuda: 'Lo disponible llegó al mínimo.' },
-    abastecidos: { valor: numeroFinito(s.skus_abastecidos), ayuda: 'Lo disponible está sobre el mínimo.' },
+    agotados: { valor: numeroFinito(s.skus_agotados), ayuda: 'Referencias con control de inventario sin disponible.' },
+    bajo_minimo: { valor: numeroFinito(s.skus_bajo_minimo), ayuda: 'Referencias con control de inventario que llegaron al mínimo.' },
+    abastecidos: { valor: numeroFinito(s.skus_abastecidos), ayuda: 'Referencias con control de inventario sobre el mínimo.' },
     pec_activos: { valor: numeroFinito(c.pec_activos), ayuda: 'Pedidos de compra en curso.' },
   };
 }
