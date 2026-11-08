@@ -1418,33 +1418,6 @@ export function tarjetaExistencia(f) {
   };
 }
 
-const FRASE_VACIO_STOCK = congelar({
-  agotado: 'Ninguna referencia está agotada',
-  bajo_minimo: 'Ninguna referencia está bajo el mínimo',
-  abastecido: 'Ninguna referencia está bien abastecida',
-});
-
-/**
- * Lo que dice la tabla de Stock y de Abastecimiento cuando no hay filas, según lo que la deja vacía: la búsqueda, la
- * pestaña (el estado del stock) y la categoría elegida (su NOMBRE, null si no hay filtro).
- * @param {{q?: string | null, vista?: string | null, categoria?: string | null} | null | undefined} filtro
- * @returns {{titulo: string, ayuda: string | null}}
- */
-export function textoVacioStock(filtro) {
-  const f = objetoPlano(filtro) ?? {};
-  const q = textoLimpio(f.q);
-  const categoria = textoLimpio(f.categoria);
-  const donde = categoria ? ` en la categoría «${categoria}»` : '';
-  const quita = categoria ? 'Quita el filtro de categoría para ver las demás.' : null;
-  if (q) return { titulo: `Ninguna existencia coincide con «${q}»${donde}.`, ayuda: 'Busca por el código del SKU o por el nombre del producto.' };
-  if (typeof f.vista === 'string' && tiene(FRASE_VACIO_STOCK, f.vista)) return { titulo: `${FRASE_VACIO_STOCK[f.vista]}${donde}.`, ayuda: quita };
-  if (categoria) return { titulo: `Ninguna existencia${donde}.`, ayuda: quita };
-  return {
-    titulo: 'Todavía no hay existencias en las bodegas.',
-    ayuda: 'Las existencias se registran al recibir mercancía en Recepciones o con un ajuste de inventario.',
-  };
-}
-
 // ─── Kardex ───
 
 const CLASES_VERDE = { bg: 'bg-green-50', text: 'text-green-700', border: 'border-green-200' };

@@ -6,29 +6,30 @@ import {
   AlertTriangle, Archive, ArrowLeft, ArrowUpRight, CheckCircle2, ChevronRight, Eye, Layers, LayoutGrid, List, Plus,
   RefreshCw, Warehouse,
 } from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
 // B4 T17: el Hub de Inventario con las existencias reales (R10, C11): la tabla estándar sobre /inventory/stock-tabla por
 // bodega con el estado único de la pantalla (R5), las tarjetas de /inventory/stats (R12) y la pestaña Análisis estándar
 // (R2, R13). Sin tablero (R11): conserva su vista Lista / Almacenes. El menú propio (SUB_MODULES) y el encabezado maestro
 // quedan como estaban (TABLA-inventario, riesgo 5: «es otro hallazgo»).
-import { FranjaKpis, Modal, TarjetaKpi, useEstadoKpi } from '@/components/ui';
+import { FranjaKpis, TarjetaKpi, useEstadoKpi } from '@/components/ui';
 import {
   BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
 } from '@/components/tabla';
 import type { ClaveFila, ColumnaTabla, Listado, PestanaTabla } from '@/components/tabla';
 import { PanelAnalisisPerezoso } from '@/components/analisis';
 import { apiFetch } from '@/lib/api';
-import { TABLE } from '@/lib/design-system';
-import { formatoPesos } from '@/lib/pesos';
-import { tiene } from '@/lib/estados-pedido';
 import { estadoDelTotal, extraPorVista, textoVacioExistencias } from '@/lib/tabla';
-import { AYUDA_MINIMO_INVENTARIO, formatoDecimal, numeroFinito, resumenAlmacenes, tarjetasHubInventario } from '@/lib/kpis';
+import { AYUDA_MINIMO_INVENTARIO, numeroFinito, resumenAlmacenes, tarjetasHubInventario } from '@/lib/kpis';
 import { ESTADOS_STOCK, TOPE_TABLERO_COMPRAS, avisoTope200 } from '@/lib/estados-compras';
 // ?tab=analisis: la lectura genérica que dejó T14 en flujo-compras.js (se reúsa, no se copia).
 import { leerEnlaceHubCompras } from '@/lib/flujo-compras';
 import { textoDeError } from '@/lib/avisos';
-// El chip estándar de las tablas del bloque (columnas-pec.tsx, T15 r1): la misma forma que el estado de un PEC.
-import { CHIP } from '../compras/columnas-pec';
+// T18 r1 (m10, m21): las piezas de una existencia (tipos, celdas, detalle, selector, formatos, clave y clase de fila, CONTENEDOR y
+// foco) son de piezas-inventario.tsx, fuente única de las cinco pantallas de existencias; el Hub las importa sin cambio visible.
+import {
+  CONTENEDOR, CeldaEstadoStock, CeldaProducto, DetalleExistencia, FOCOS, SelectorCatalogo, TEXTO_SIN_SEGUIMIENTO, cantidad,
+  claseDeFilaExistencia as claseDeFilaStock, claveDeFilaExistencia as claveDeFilaStock, infoStock, pesos,
+} from './piezas-inventario';
+import type { Catalogo, ConteosStock, FilaExistencia as FilaStock, OpcionCatalogo } from './piezas-inventario';
 
 const SUB_MODULES = [
   { name: 'Stock y Catálogo', path: '/dashboard/inventario/stock' },
@@ -44,37 +45,7 @@ const SUB_MODULES = [
    B4 T17 — las piezas del Hub (la tabla, sus celdas, los selectores, las bodegas, el detalle y el asistente)
    ============================================================ */
 
-/**
- * Una fila de GET /inventory/stock-tabla?por=bodega (T13): un SKU en una bodega, con los números de core/existencias.py
- * (R10): disponible = físico − reservado (nunca negativo), el estado con el disponible de la fila y el mínimo de la
- * referencia (RP52 a). en_transito es el del SKU, el mismo en cada bodega (RP50: no se suma por fila); valorizacion =
- * físico × costo, null sin costo.
- */
-type FilaStock = {
-  sku_id: number;
-  sku: string;
-  producto?: string | null;
-  categoria?: string | null;
-  bodega?: string | null;
-  warehouse_id?: number | null;
-  fisico?: number | null;
-  reservado?: number | null;
-  disponible?: number | null;
-  cuarentena?: number | null;
-  en_transito?: number | null;
-  precio?: number | null;
-  costo?: number | null;
-  valorizacion?: number | null;
-  minimo?: number | null;
-  estado_stock?: string | null;
-  rastrear_inventario?: boolean | null;
-};
-/** `conteos` de stock-tabla con con_conteos=1: filas (pares) con la búsqueda y los filtros, sin la pestaña (D-4 de T13). */
-type ConteosStock = Partial<Record<'todos' | 'agotados' | 'bajo_minimo' | 'abastecidos' | 'con_fisico', number>>;
-/** Una bodega de GET /inventory/warehouses o una categoría de GET /categories (las opciones de los selectores). */
-type OpcionCatalogo = { id: number; name: string };
-/** Un catálogo: filas null mientras carga; si falla, el error (y lo último que llegó bien, si había). */
-type Catalogo = { filas: OpcionCatalogo[] | null; error: unknown };
+// T18 r1 (m10): FilaStock (FilaExistencia), ConteosStock, OpcionCatalogo y Catalogo salen de piezas-inventario.tsx.
 /** Los filtros extra de la barra, que van al servidor: el id elegido como texto ('' = todas). */
 type FiltrosHub = { bodega: string; categoria: string };
 
@@ -93,9 +64,7 @@ const VISTAS_HUB = {
   fisico: { incluir_sin_stock: false },
 };
 const SIN_FILTROS: FiltrosHub = { bodega: '', categoria: '' };
-/** El contenedor de los Hubs del bloque (T7 a T16): pb-24 deja libre la esquina del botón de la IA. */
-const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
-const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
+const FOCO_VISIBLE = FOCOS.indigo; // el foco visible y el CONTENEDOR salen de piezas-inventario.tsx (T18 r1, m10)
 /** TABLA-inventario punto 4: Recepciones, Entregas y Traslados dejan de ser pestañas (no filtraban nada) y son enlaces. */
 const OPERACIONES = [
   { etiqueta: 'Recepciones', ruta: '/dashboard/inventario/recepciones' },
@@ -112,41 +81,7 @@ const ASISTENTE_INVENTARIO = {
     '¿Cuáles son los productos con mayor valor patrimonial?',
   ],
 };
-/** R10: una referencia con rastrear_inventario = false sale en la tabla, pero no suma en los totales. */
-const TEXTO_SIN_SEGUIMIENTO = 'No lleva control de inventario (su publicación tiene «rastrear inventario» apagado): no suma en los totales.';
-
-// H42: pesos enteros con punto de miles; lo que no llega, '—'. Las cantidades sin redondear ('2,5').
-const pesos = (v: unknown) => (numeroFinito(v) === null ? '—' : formatoPesos(v));
-const cantidad = (v: unknown) => formatoDecimal(v);
-/** RP53: la etiqueta, el tono y las clases de ESTADOS_STOCK (estados-compras.js); un estado desconocido, null. */
-const infoStock = (e: unknown) => (typeof e === 'string' && tiene(ESTADOS_STOCK, e) ? ESTADOS_STOCK[e as keyof typeof ESTADOS_STOCK] : null);
-/** La fila es un par SKU y bodega: la clave de la selección y de React. */
-const claveDeFilaStock = (f: FilaStock) => `${f.sku_id}-${f.warehouse_id ?? 'sin-bodega'}`;
-/**
- * D41: tonos opacos de TABLE. Agotada en filaAlerta, bajo el mínimo en filaAviso (antes un borde rojo y un tinte
- * translúcido) y la que no lleva control de inventario, apagada.
- */
-const claseDeFilaStock = (f: FilaStock) => (f.rastrear_inventario === false ? TABLE.filaApagada
-  : f.estado_stock === 'agotado' ? TABLE.filaAlerta : f.estado_stock === 'bajo_minimo' ? TABLE.filaAviso : null);
-
-/** Producto: el nombre y, si no lleva control de inventario, la marca «Sin seguimiento». */
-function CeldaProducto({ f }: { f: FilaStock }) {
-  return (
-    <span className="flex min-w-0 flex-col items-start gap-0.5 leading-tight">
-      <span className="max-w-full truncate text-xs font-bold text-slate-800">{f.producto || '—'}</span>
-      {f.rastrear_inventario === false && (
-        <span className={`${CHIP} border-slate-300 bg-slate-100 text-[10px] text-slate-700`}>Sin seguimiento</span>
-      )}
-    </span>
-  );
-}
-
-/** Estado: la insignia de ESTADOS_STOCK («Agotado», «Bajo el mínimo» o «Bien abastecido», con su tono). */
-function CeldaEstadoStock({ f }: { f: FilaStock }) {
-  const info = infoStock(f.estado_stock);
-  if (!info) return <span className="text-xs text-slate-500">—</span>;
-  return <span className={`${CHIP} text-[11px] ${info.clases.bg} ${info.clases.text} ${info.clases.border}`}>{info.label}</span>;
-}
+// T18 r1 (m10): pesos, cantidad, infoStock, la clave y la clase de la fila, CeldaProducto y CeldaEstadoStock salen de piezas-inventario.tsx.
 
 /** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
 type AccionesFilaHub = { abrir: (f: FilaStock) => void };
@@ -215,33 +150,7 @@ function pestanasDelHub(conteos: ConteosStock | null): PestanaTabla[] {
   ];
 }
 
-/**
- * Un selector de un catálogo (la bodega o la categoría de la barra, la bodega del Análisis). Mientras carga, deshabilitado
- * («Cargando…»); si falla sin nada antes, lo dice con el detalle del servidor y «Reintentar» (nunca una lista vacía).
- */
-function SelectorCatalogo({ etiqueta, todas, cargando, fallo, catalogo, valor, onCambiar, onReintentar, icono: Icono }: {
-  etiqueta: string; todas: string; cargando: string; fallo: string; catalogo: Catalogo; valor: string;
-  onCambiar: (valor: string) => void; onReintentar: () => void; icono: LucideIcon;
-}) {
-  if (catalogo.error && !catalogo.filas) {
-    return (
-      <span role="alert" className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800">
-        {textoDeError(catalogo.error, fallo)}
-        <button type="button" onClick={onReintentar} className={`rounded font-bold underline ${FOCO_VISIBLE}`}>Reintentar</button>
-      </span>
-    );
-  }
-  return (
-    <label className="inline-flex items-center gap-1.5">
-      <Icono size={14} aria-hidden="true" className="shrink-0 text-slate-500" />
-      <select aria-label={etiqueta} value={valor} disabled={!catalogo.filas} onChange={(e) => onCambiar(e.target.value)}
-        className={`max-w-[11rem] rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 disabled:text-slate-500 ${FOCO_VISIBLE}`}>
-        <option value="">{catalogo.filas ? todas : cargando}</option>
-        {(catalogo.filas ?? []).map((o) => <option key={o.id} value={String(o.id)}>{o.name}</option>)}
-      </select>
-    </label>
-  );
-}
+// T18 r1 (m10): SelectorCatalogo sale de piezas-inventario.tsx.
 
 /**
  * Las columnas de la vista Almacenes las decide el ancho del CONTENEDOR (container queries, como FranjaKpis), no el de
@@ -353,50 +262,7 @@ function VistaAlmacenes({ listado, vacio, onVer }: { listado: Listado<FilaStock>
   );
 }
 
-/**
- * El detalle de una existencia (un clic en la fila o el ojo): el mismo de antes, con Modal de components/ui y los datos
- * reales de la fila (antes, campos inventados y el estado con su código crudo).
- */
-function DetalleExistencia({ f, onCerrar }: { f: FilaStock; onCerrar: () => void }) {
-  const info = infoStock(f.estado_stock);
-  const lineas: [string, string][] = [
-    ['Cuarentena', cantidad(f.cuarentena)],
-    ['En tránsito (del SKU, en todas las bodegas)', cantidad(f.en_transito)],
-    ['Mínimo de la referencia', cantidad(f.minimo)],
-    ['Precio de venta', pesos(f.precio)],
-    ['Costo', pesos(f.costo)],
-    ['Valorización (físico × costo)', numeroFinito(f.valorizacion) === null ? 'Sin costo registrado' : pesos(f.valorizacion)],
-    ['Estado', info?.label ?? '—'],
-  ];
-  return (
-    <Modal title={f.producto || f.sku} subtitle={[f.sku, f.categoria, f.bodega].filter(Boolean).join(' · ')} icon={Archive}
-      color="indigo" onClose={onCerrar} footer={(
-        <button type="button" onClick={onCerrar}
-          className={`rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white hover:bg-slate-800 ${FOCO_VISIBLE}`}>Cerrar</button>
-      )}>
-      <div className="grid grid-cols-3 gap-3">
-        {([['Físico', f.fisico, 'border-slate-100 bg-slate-50 text-slate-900'], ['Reservado', f.reservado, 'border-amber-100 bg-amber-50 text-amber-800'],
-          ['Disponible', f.disponible, 'border-emerald-100 bg-emerald-50 text-emerald-800']] as const).map(([titulo, valor, clases]) => (
-          <div key={titulo} className={`rounded-xl border p-3 text-center ${clases}`}>
-            <span className="text-[10px] font-black uppercase">{titulo}</span>
-            <p className="text-xl font-black">{cantidad(valor)}</p>
-          </div>
-        ))}
-      </div>
-      <dl className="space-y-2 text-xs">
-        {lineas.map(([titulo, valor]) => (
-          <div key={titulo} className="flex justify-between gap-3 border-b border-slate-100 py-1.5 last:border-b-0">
-            <dt className="text-slate-600">{titulo}</dt>
-            <dd className="text-right font-bold text-slate-900">{valor}</dd>
-          </div>
-        ))}
-      </dl>
-      {f.rastrear_inventario === false && (
-        <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">{TEXTO_SIN_SEGUIMIENTO}</p>
-      )}
-    </Modal>
-  );
-}
+// T18 r1 (m10): DetalleExistencia sale de piezas-inventario.tsx.
 
 /* ============================================================
    MAIN COMPONENT — InventarioHub

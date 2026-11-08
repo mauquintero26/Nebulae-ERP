@@ -14,11 +14,11 @@ import {
 import type { ColumnaTabla } from '@/components/tabla';
 import { apiFetch } from '@/lib/api';
 import { AYUDA_MINIMO_INVENTARIO, formatoEntero, tarjetasAbastecimiento } from '@/lib/kpis';
-import { dependenciasTablero, estadoDelTotal, extraPorVista, normalizarRespuesta } from '@/lib/tabla';
+import { dependenciasTablero, estadoDelTotal, extraPorVista, normalizarRespuesta, textoVacioExistencias } from '@/lib/tabla';
 import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
   COLUMNAS_STOCK, TEXTO_SOLO_VER_STOCK, VISTAS_ABASTECIMIENTO, consultaColumnaStock, estadoAlertaAgotados, pestanasExistencias,
-  tarjetaExistencia, textoVacioStock,
+  tarjetaExistencia,
 } from '@/lib/estados-compras';
 import { INV_NAV } from '../inv-nav';
 import {
@@ -174,7 +174,7 @@ export default function AbastecimientoPage() {
   const nombreCategoria = categoria ? (categorias.filas?.find((c) => String(c.id) === categoria)?.name ?? `#${categoria}`) : null;
   // m8 de T15: el «vacío» memoizado dice qué lo deja vacío (la búsqueda, la pestaña o la categoría).
   const vacio = useMemo(() => {
-    const texto = textoVacioStock({ q: estado.q, vista: estado.vista, categoria: nombreCategoria });
+    const texto = textoVacioExistencias({ q: estado.q, vista: estado.vista, categoria: nombreCategoria, sinBodega: true });
     return (
       <div>
         <p className="font-semibold text-slate-600">{texto.titulo}</p>

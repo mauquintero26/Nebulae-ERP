@@ -2391,6 +2391,17 @@ console.log('--- TEST 47 (B4 T17, TABLA-inventario punto 4; R5, RP52): la pesta�
     { titulo: 'Ninguna referencia tiene unidades en bodega en la categoría «Coches».', ayuda: QUITA });
   assert.deepEqual(textoVacioExistencias({ vista: 'todos', bodega: 'Norte', categoria: 'Coches' }),
     { titulo: 'Ninguna existencia en la bodega «Norte» y en la categoría «Coches».', ayuda: QUITA });
+  // T18 r1 (m20): Stock y Abastecimiento usan ESTA misma función (sin copia): las pestañas «Agotado» y «Bien abastecido», y la ayuda
+  // solo de categoría cuando la pantalla no filtra por bodega (sinBodega).
+  assert.deepEqual(textoVacioExistencias({ vista: 'agotado' }), { titulo: 'Ninguna referencia está agotada.', ayuda: null });
+  assert.deepEqual(textoVacioExistencias({ vista: 'abastecido', categoria: 'Coches', sinBodega: true }),
+    { titulo: 'Ninguna referencia está bien abastecida en la categoría «Coches».', ayuda: 'Quita el filtro de categoría para ver las demás.' });
+  assert.deepEqual(textoVacioExistencias({ vista: 'agotado', categoria: 'Coches' }),
+    { titulo: 'Ninguna referencia está agotada en la categoría «Coches».', ayuda: QUITA }, 'sin sinBodega, la ayuda del Hub');
+  assert.deepEqual(textoVacioExistencias({ categoria: 'Coches', sinBodega: true }),
+    { titulo: 'Ninguna existencia en la categoría «Coches».', ayuda: 'Quita el filtro de categoría para ver las demás.' });
+  assert.deepEqual(textoVacioExistencias({ q: 'oso', categoria: 'Coches', sinBodega: true }),
+    { titulo: 'Ninguna existencia coincide con «oso» en la categoría «Coches».', ayuda: BUSCA });
   const base = { titulo: 'Todavía no hay existencias en las bodegas.', ayuda: 'Las existencias se registran al recibir mercancía en Recepciones o con un ajuste de inventario.' };
   assert.deepEqual(textoVacioExistencias({ vista: 'todos' }), base);
   for (const raro of [{}, null, undefined, { q: '   ', vista: 'x', bodega: '', categoria: null }]) {
@@ -2452,9 +2463,17 @@ console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5,
   for (const [c] of COLUMNAS) assert.ok(columnas[0].includes(c), c);
   assert.ok(!/ordenable/.test(columnas[0].match(/\{ id: 'bodega'[^\n]*\n[^\n]*/)[0]) && !/ordenable/.test(columnas[0].match(/\{ id: 'estado'[^\n]*\n[^\n]*/)[0]),
     'Bodega y Estado no se ordenan (stock-tabla no los acepta)');
-  assert.match(fuente, /const claveDeFilaStock = \(f: FilaStock\) => `\$\{f\.sku_id\}-\$\{f\.warehouse_id \?\? 'sin-bodega'\}`;/);
+  // T18 r1 (m10, D27): la clave de la fila, su clase y el estado ya no se escriben en el Hub: son de piezas-inventario.tsx
+  // (fuente única de las cinco pantallas de existencias), y las mismas reglas se amarran allí.
+  const piezas = readFileSync(new URL('../src/app/dashboard/inventario/piezas-inventario.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(fuente, /claseDeFilaExistencia as claseDeFilaStock, claveDeFilaExistencia as claveDeFilaStock/);
+  assert.match(fuente, /\} from '\.\/piezas-inventario';/);
+  assert.match(piezas, /export const claveDeFilaExistencia = \(f: FilaExistencia\) => `\$\{f\.sku_id\}-\$\{f\.warehouse_id \?\? 'sku'\}`;/);
   assert.match(fuente, /claveFila=\{claveDeFilaStock\}/);
-  assert.match(fuente, /tiene\(ESTADOS_STOCK, e\) \? ESTADOS_STOCK\[e as keyof typeof ESTADOS_STOCK\] : null/);
+  assert.match(piezas, /tiene\(ESTADOS_STOCK, e\) \? ESTADOS_STOCK\[e as keyof typeof ESTADOS_STOCK\] : null/);
+  for (const copia of ['function CeldaProducto', 'function CeldaEstadoStock', 'function SelectorCatalogo', 'function DetalleExistencia', 'const infoStock', 'const pesos', 'const CONTENEDOR']) {
+    assert.ok(!fuente.includes(copia), `el Hub ya no copia ${copia}`);
+  }
   // Valorización: '—' sin costo (R10), con su title; el tránsito no se suma por fila (no hay columna).
   assert.ok(columnas[0].includes("'Sin costo registrado'"));
   assert.ok(!/en_transito/.test(columnas[0]), 'sin columna de tránsito');

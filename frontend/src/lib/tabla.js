@@ -653,8 +653,10 @@ const textoLimpio = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() 
  * B4 T17 (TABLA-inventario punto 4; m8 de T15): el «vacío» de la tabla de existencias del Hub de Inventario dice qué lo
  * deja vacío, en este orden: la búsqueda (con la bodega y la categoría elegidas), la pestaña («Bajo el mínimo» o
  * «Existencias físicas», con lo mismo) o solo la bodega y la categoría; sin nada de eso, de dónde salen las existencias.
- * `bodega` y `categoria` son los NOMBRES de lo elegido (null si no hay filtro).
- * @param {{q?: string | null, vista?: string | null, bodega?: string | null, categoria?: string | null} | null | undefined} filtro
+ * `bodega` y `categoria` son los NOMBRES de lo elegido (null si no hay filtro). T18 r1 (m20): la comparten Stock y
+ * Abastecimiento (pestañas 'agotado' y 'abastecido' además de las del Hub); con `sinBodega` (esas pantallas no filtran por
+ * bodega) la ayuda habla solo de la categoría.
+ * @param {{q?: string | null, vista?: string | null, bodega?: string | null, categoria?: string | null, sinBodega?: boolean} | null | undefined} filtro
  * @returns {{titulo: string, ayuda: string | null}}
  */
 export function textoVacioExistencias(filtro) {
@@ -664,9 +666,11 @@ export function textoVacioExistencias(filtro) {
   const categoria = textoLimpio(f.categoria);
   const donde = [bodega && `en la bodega «${bodega}»`, categoria && `en la categoría «${categoria}»`].filter(Boolean).join(' y ');
   const conDonde = donde ? ` ${donde}` : '';
-  const quita = donde ? 'Quita el filtro de bodega o de categoría para ver las demás.' : null;
+  const quita = donde ? (f.sinBodega === true ? 'Quita el filtro de categoría para ver las demás.' : 'Quita el filtro de bodega o de categoría para ver las demás.') : null;
   if (q) return { titulo: `Ninguna existencia coincide con «${q}»${conDonde}.`, ayuda: 'Busca por el código del SKU o por el nombre del producto.' };
   if (f.vista === 'bajo_minimo') return { titulo: `Ninguna referencia está bajo el mínimo${conDonde}.`, ayuda: quita };
+  if (f.vista === 'agotado') return { titulo: `Ninguna referencia está agotada${conDonde}.`, ayuda: quita };
+  if (f.vista === 'abastecido') return { titulo: `Ninguna referencia está bien abastecida${conDonde}.`, ayuda: quita };
   if (f.vista === 'fisico') return { titulo: `Ninguna referencia tiene unidades en bodega${conDonde}.`, ayuda: quita };
   if (donde) return { titulo: `Ninguna existencia ${donde}.`, ayuda: quita };
   return {

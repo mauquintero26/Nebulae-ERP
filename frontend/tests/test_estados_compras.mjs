@@ -1900,7 +1900,7 @@ console.log('--- TEST 42 (B4 T18; TABLA-inventario 5 a 8, KANBAN-resto; RP47 a R
   const { etiquetaTarifaCatalogo } = await import('../src/lib/iva.js');
   const clavesDe = (cols) => cols.map((c) => c.clave);
   const NOMBRES = ['TEXTO_SOLO_VER_STOCK', 'TEXTO_SOLO_VER_KARDEX', 'TEXTO_SOLO_VER_PRODUCTOS', 'VISTAS_STOCK', 'VISTAS_ABASTECIMIENTO',
-    'pestanasExistencias', 'consultaColumnaStock', 'tarjetaExistencia', 'textoVacioStock', 'DIRECCIONES_KARDEX', 'infoDireccionKardex',
+    'pestanasExistencias', 'consultaColumnaStock', 'tarjetaExistencia', 'DIRECCIONES_KARDEX', 'infoDireccionKardex',
     'COLUMNAS_KARDEX', 'extraKardex', 'direccionesDeColumnaKardex', 'consultaColumnaKardex', 'numeroMovimiento', 'tarjetaMovimiento',
     'textoFechaMovimiento', 'textoVacioKardex', 'MAX_COLUMNAS_PRODUCTOS', 'columnasProductos', 'extraProductos',
     'consultaColumnaProducto', 'precioDeProducto', 'costoDeProducto', 'tarjetaProducto', 'textoVacioProductos',
@@ -1978,26 +1978,6 @@ console.log('--- TEST 42 (B4 T18; TABLA-inventario 5 a 8, KANBAN-resto; RP47 a R
   assert.equal(rara.estado, null, 'un estado desconocido no inventa insignia');
   assert.deepEqual(rara.chips.slice(0, 2), [{ texto: 'Disponible —', tono: 'slate' }, { texto: 'Físico —', tono: 'slate' }]);
   assert.equal(ec.tarjetaExistencia({ sku: 'X', disponible: 2.5, fisico: 3 }).chips[0].texto, 'Disponible 2,5', 'sin redondear');
-
-  assert.deepEqual(ec.textoVacioStock({}), {
-    titulo: 'Todavía no hay existencias en las bodegas.',
-    ayuda: 'Las existencias se registran al recibir mercancía en Recepciones o con un ajuste de inventario.',
-  });
-  assert.deepEqual(ec.textoVacioStock({ q: 'oso', categoria: 'Peluches' }), {
-    titulo: 'Ninguna existencia coincide con «oso» en la categoría «Peluches».',
-    ayuda: 'Busca por el código del SKU o por el nombre del producto.',
-  });
-  assert.equal(ec.textoVacioStock({ q: '  ', vista: 'agotado' }).titulo, 'Ninguna referencia está agotada.');
-  assert.equal(ec.textoVacioStock({ vista: 'bajo_minimo' }).titulo, 'Ninguna referencia está bajo el mínimo.');
-  assert.equal(ec.textoVacioStock({ vista: 'abastecido' }).titulo, 'Ninguna referencia está bien abastecida.');
-  assert.deepEqual(ec.textoVacioStock({ vista: 'agotado', categoria: 'Peluches' }), {
-    titulo: 'Ninguna referencia está agotada en la categoría «Peluches».',
-    ayuda: 'Quita el filtro de categoría para ver las demás.',
-  });
-  assert.deepEqual(ec.textoVacioStock({ categoria: 'Peluches' }), {
-    titulo: 'Ninguna existencia en la categoría «Peluches».', ayuda: 'Quita el filtro de categoría para ver las demás.',
-  });
-  assert.equal(ec.textoVacioStock(null).titulo, 'Todavía no hay existencias en las bodegas.');
 
   // ── Kardex: direcciones, columnas Entradas · Salidas (RP54) y la consulta de cada columna ──
   assert.deepEqual(Object.keys(ec.DIRECCIONES_KARDEX),
@@ -2330,7 +2310,7 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
     // Un cambio de categoría vuelve a la página 1 en el mismo evento (un solo pedido).
     trae(f, 'setCategoria(valor);\n    despachar({ tipo: \'pagina\', valor: 1 });', `${nombre}: la categoría vuelve a la página 1`);
     // El vacío memoizado dice qué lo deja vacío; la pantalla completa se cierra al pasar a Kanban.
-    trae(f, 'const texto = textoVacioStock({ q: estado.q, vista: estado.vista, categoria: nombreCategoria });', `${nombre}: el vacío`);
+    trae(f, 'const texto = textoVacioExistencias({ q: estado.q, vista: estado.vista, categoria: nombreCategoria, sinBodega: true });', `${nombre}: el vacío (UNA sola función, la del Hub: m20)`);
     trae(f, '}, [estado.q, estado.vista, nombreCategoria]);', `${nombre}: el vacío memoizado con lo que lo deja vacío`);
     trae(f, 'useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);', `${nombre}: sale de la pantalla completa`);
     trae(f, 'const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();', `${nombre}: desestructurado (react-hooks/refs)`);
@@ -2418,8 +2398,11 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   trae(piezas, "['Costo', numeroFinito(f.costo) !== null && Number(f.costo) > 0 ? pesos(f.costo) : 'Sin costo registrado'],", 'el detalle: un costo 0 es «sin costo» (RP91)');
   trae(piezas, 'focus-visible:outline-offset-2', 'el foco visible se ve también sobre fondos oscuros');
   sinDefectos('piezas-inventario', piezas);
-  // El Hub de T17 no se tocó.
-  assert.ok(!/piezas-inventario/.test(leerFuente('app/dashboard/inventario/page.tsx')), 'el Hub de Inventario conserva sus piezas');
+  // T18 r1 (m10, m21): el Hub de T17 IMPORTA las piezas de aquí y ya no las copia.
+  const hub = leerFuente('app/dashboard/inventario/page.tsx');
+  trae(hub, "} from './piezas-inventario';", 'el Hub importa de piezas-inventario.tsx');
+  for (const copia of ['function CeldaProducto', 'function CeldaEstadoStock', 'function SelectorCatalogo', 'function DetalleExistencia', 'const infoStock', 'const pesos', 'const CONTENEDOR']) noTrae(hub, copia, `el Hub ya no copia ${copia}`);
+  assert.ok(!/textoVacioStock/.test(sinComentarios(stock + abasto)) && !('textoVacioStock' in ec), 'textoVacioStock no existe: el vacío es textoVacioExistencias');
 }
 
 console.log('--- TEST 44 (B4 T18, TABLA-inventario punto 8; KANBAN-resto; RP54): el Kardex cablea las piezas, UN pedido por cambio de filtro, los errores y el tablero ---');
