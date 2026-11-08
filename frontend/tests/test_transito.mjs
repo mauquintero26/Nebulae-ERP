@@ -311,6 +311,9 @@ console.log('--- TEST 11 (B4 T16A r1): tonoEntregaTransito (m17) y los pendiente
   assert.deepEqual(tr.terminarPendiente(ya, 5, L, 'kanban'), ya, 'una foto que ya existe no se pisa');
   const quieta = [{ id: 5, fin: { filas: L, modo: 'lista', visto: false } }];
   assert.equal(tr.soltarPendientes(quieta, { filas: L, recargando: false, modo: 'lista' }), quieta, 'sin cambios: la misma lista');
+  // Filas nuevas en la activa, aunque nunca se viera recargar (llegaron entre dos renders): se suelta.
+  assert.deepEqual(tr.soltarPendientes(quieta, { filas: [{ id: 1 }], recargando: false, modo: 'lista' }), [], 'llegaron filas nuevas sin verse la recarga');
+  assert.deepEqual(tr.soltarPendientes(quieta, { filas: [{ id: 1 }], recargando: true, modo: 'lista' }), [], 'llegaron filas nuevas y ya recarga otra vez');
   // La tarjeta pendiente no trae botón.
   const p = conEstados('casillero', ['COMPLETADO', 'EN_PROCESO']);
   assert.deepEqual(tr.tarjetaTransito(p, { hoy: '2026-11-07', pendiente: true }).accionPrincipal, null);
