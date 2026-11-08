@@ -245,7 +245,16 @@ console.log('--- TEST 11 (B4 T16A r1): tonoEntregaTransito (m17) y los pendiente
   function pantalla(modoInicial) {
     const p = { entradas: [], modo: modoInicial, recargando: false, listas: { lista: [], kanban: [] } };
     const inactiva = () => (p.modo === 'kanban' ? 'lista' : 'kanban');
-    p.paso = () => { p.listas[inactiva()] = []; p.entradas = tr.soltarPendientes(p.entradas, { filas: p.listas[p.modo], recargando: p.recargando, modo: p.modo }); };
+    // Cierre de T16A: la página corre soltarPendientes en el render hasta que no cambia (setEnCurso vuelve a pintar), así que
+    // el arnés también itera hasta su punto fijo; si no, un mutante que suelta en el segundo render no se ve.
+    p.paso = () => {
+      p.listas[inactiva()] = [];
+      for (let i = 0; i < 10; i += 1) {
+        const s = tr.soltarPendientes(p.entradas, { filas: p.listas[p.modo], recargando: p.recargando, modo: p.modo });
+        if (s === p.entradas) break;
+        p.entradas = s;
+      }
+    };
     p.pendiente = () => tr.pendienteDeTransito(p.entradas, 5);
     p.inicia = () => { p.entradas = [{ id: 5, fin: null }]; };
     p.respondePatch = () => { p.entradas = tr.terminarPendiente(p.entradas, 5, p.listas[p.modo], p.modo); p.paso(); };

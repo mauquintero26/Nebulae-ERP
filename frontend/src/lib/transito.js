@@ -296,7 +296,7 @@ export function tonoEntregaTransito(pec, hoy = diaColombia()) {
  * I3 (r3): los cambios de etapa pendientes de la pantalla. Cada entrada es {id, fin}: `fin` es null mientras el PATCH va en
  * camino y, al terminar y pedir la recarga (terminarPendiente), {filas, modo, visto}: las filas de la lista ACTIVA (la tabla
  * en 'lista' o el tablero en 'kanban', la que se ve) en ese momento, ese modo y si ya se vio que esa lista recarga. La lista
- * inactiva no cuenta: nunca cargó y cambia de referencia con cada recarga. Ver soltarPendientes.
+ * inactiva no cuenta: no es la que se ve y, si nunca cargó, da un [] nuevo con cada recarga. Ver soltarPendientes.
  * @typedef {{filas: unknown, modo: string, visto: boolean}} FotoPendiente
  * @typedef {{id: unknown, fin: FotoPendiente | null}} EntradaPendiente
  */

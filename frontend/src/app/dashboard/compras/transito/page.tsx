@@ -279,8 +279,8 @@ export default function TransitoPage() {
   // I3: un pedido con un PATCH en camino (botón o arrastre), y hasta que llega la recarga, no ofrece Iniciar ni Completar: un
   // segundo clic no manda otro PATCH sobre la etapa vieja. Toda la regla vive en transito.js, con sus casos: pendienteDeTransito
   // dice si hay uno; terminarPendiente guarda la foto de la lista ACTIVA (y el modo) al resolver el PATCH; soltarPendientes lo suelta
-  // cuando ESA lista trae filas nuevas o termina de recargar (también si falla). La lista inactiva no cuenta: nunca cargó y cambia
-  // de referencia con cada recarga. Si el modo cambia dentro de la ventana, se toma la foto de la nueva lista activa.
+  // cuando ESA lista trae filas nuevas o termina de recargar (también si falla). La lista inactiva no cuenta: no es la que se ve y,
+  // si nunca cargó, da un [] nuevo con cada recarga. Si el modo cambia dentro de la ventana, se toma la foto de la nueva lista activa.
   const [enCurso, setEnCurso] = useState<{ id: number; fin: { filas: unknown; modo: string; visto: boolean } | null }[]>([]);
   const modo = enKanban ? 'kanban' : 'lista';
   const filasActivas = enKanban ? completa.filas : lista.filas;
