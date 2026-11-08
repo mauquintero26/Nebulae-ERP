@@ -8,7 +8,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import {
   TAMANOS_PAGINA, VERSION_PREFS, ANCHO_MIN, ANCHO_MAX, ANCHO_POR_DEFECTO, MODOS_TABLA,
   reconciliarColumnas, fijasDe, moverColumna, indiceDestino, limitarAncho, offsetsFijas, alternarOrden,
@@ -2251,6 +2251,97 @@ console.log('--- TEST 45 (B4 T8 r1, m5): llegadaDeListado — la tabla no pinta 
   // Una página que llega con la consulta con filas nunca se marca; null nunca es «sin filas».
   assert.deepEqual(llegadaDeListado(vacia, pagina, false), { crudo: pagina, sinFilas: false });
   assert.deepEqual(llegadaDeListado(conteos, null, true), { crudo: null, sinFilas: false });
+}
+
+console.log('--- TEST 46 (B4 T17, R14, C18 y RP55): el menú no enlaza las pantallas sin datos, y sus archivos siguen ---');
+{
+  const SRC = new URL('../src/', import.meta.url);
+  const leer = (ruta) => readFileSync(new URL(ruta, SRC), 'utf8').replace(/\r\n/g, '\n');
+  // Las rutas del menú en el orden en que se escriben (path: '…'), sin los comentarios.
+  const sinComentarios = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const rutas = (texto) => [...sinComentarios(texto).matchAll(/path:\s*'([^']+)'/g)].map((m) => m[1]);
+  // R14: Almacenes, Ubicaciones, Rutas, Compartido, Bodegas, Operaciones y Calendario de Inventario; Visitantes; Scrapper;
+  // Integraciones (con APIs y MCP); Historial, Proyecciones y Registro de Compras; Proyecciones de Ventas; Exportar día y
+  // Exportar rango. Una ruta que empieza por una de estas (integraciones/apis) también queda fuera.
+  const QUITADAS = [
+    '/dashboard/inventario/almacenes', '/dashboard/inventario/ubicaciones', '/dashboard/inventario/rutas',
+    '/dashboard/inventario/compartido', '/dashboard/inventario/bodegas', '/dashboard/inventario/operaciones',
+    '/dashboard/inventario/calendario', '/dashboard/marketing/visitantes', '/dashboard/scrapper', '/dashboard/integraciones',
+    '/dashboard/compras/historial', '/dashboard/compras/proyecciones', '/dashboard/compras/registro',
+    '/dashboard/ventas/proyecciones', '/dashboard/ventas/exportar-dia', '/dashboard/ventas/exportar-rango',
+  ];
+  const esQuitada = (r) => QUITADAS.some((q) => r === q || r.startsWith(`${q}/`) || r.startsWith(`${q}?`));
+
+  // Los cuatro *-nav.ts y SUB_MODULES del Hub de Inventario: exactamente lo que queda, en su orden.
+  const subModulos = leer('app/dashboard/inventario/page.tsx').match(/const SUB_MODULES = \[[\s\S]*?\n\];/);
+  assert.ok(subModulos, 'inventario/page.tsx declara SUB_MODULES');
+  const MENUS = {
+    'app/dashboard/inventario/inv-nav.ts': ['/dashboard/inventario/productos', '/dashboard/inventario/stock',
+      '/dashboard/inventario/kardex', '/dashboard/inventario/recepciones', '/dashboard/inventario/entregas',
+      '/dashboard/inventario/traslados', '/dashboard/inventario/ajustes', '/dashboard/inventario/abastecimiento'],
+    'app/dashboard/compras/comp-nav.ts': ['/dashboard/compras/lista-compras', '/dashboard/compras/pedidos',
+      '/dashboard/compras/transito', '/dashboard/compras/recepciones', '/dashboard/compras/traslados'],
+    // «Sincronización DB» no está en R14: se queda.
+    'app/dashboard/ventas/ven-nav.ts': ['/dashboard/ventas/solicitud', '/dashboard/ventas/cotizacion', '/dashboard/ventas/venta',
+      '/dashboard/ventas/sincronizacion'],
+    'app/dashboard/marketing/mkt-nav.ts': ['/dashboard/marketing/flujos', '/dashboard/marketing/historias',
+      '/dashboard/marketing/campanas'],
+  };
+  for (const [archivo, esperadas] of Object.entries(MENUS)) assert.deepEqual(rutas(leer(archivo)), esperadas, archivo);
+  assert.deepEqual(rutas(subModulos[0]), ['/dashboard/inventario/stock', '/dashboard/inventario/recepciones',
+    '/dashboard/inventario/entregas', '/dashboard/inventario/traslados', '/dashboard/inventario/ajustes',
+    '/dashboard/inventario/abastecimiento'], 'SUB_MODULES del Hub de Inventario');
+
+  // El Sidebar: lo que queda, en su orden; sin el ítem Integraciones ni el grupo Herramientas (Scrapper era su único
+  // enlace: un grupo vacío dejaría su título sin nada debajo). «Calendario» (/dashboard/calendario) no es el de Inventario.
+  const sidebar = leer('components/Sidebar.tsx');
+  assert.deepEqual(rutas(sidebar), [
+    '/dashboard', '/dashboard/agenda', '/dashboard/calendario',
+    '/dashboard/crm', '/dashboard/crm', '/dashboard/crm/calendario',
+    '/dashboard/asistente_omnicanal', '/dashboard/cotiza',
+    '/dashboard/ventas', '/dashboard/ventas/solicitud', '/dashboard/ventas/cotizacion', '/dashboard/ventas/venta',
+    '/dashboard/ventas/sincronizacion',
+    '/dashboard/compras', '/dashboard/compras/lista-compras', '/dashboard/compras/pedidos', '/dashboard/compras/transito',
+    '/dashboard/compras/recepciones', '/dashboard/compras/traslados',
+    '/dashboard/inventario', '/dashboard/inventario/stock', '/dashboard/inventario/categorias',
+    '/dashboard/inventario/recepciones', '/dashboard/inventario/entregas', '/dashboard/inventario/traslados',
+    '/dashboard/inventario/ajustes', '/dashboard/inventario/abastecimiento',
+    '/dashboard/finanzas/resumen', '/dashboard/finanzas/resumen', '/dashboard/finanzas/gastos',
+    '/dashboard/ecommerce', '/dashboard/ecommerce', '/dashboard/sitio-web',
+    '/dashboard/marketing', '/dashboard/marketing/flujos', '/dashboard/marketing/historias', '/dashboard/marketing/campanas',
+    '/dashboard/admin/empleados', '/dashboard/admin/ajustes', '/dashboard/admin/configuracion',
+  ], 'el Sidebar');
+  assert.deepEqual([...sinComentarios(sidebar).matchAll(/group:\s*'([^']+)'/g)].map((m) => m[1]),
+    ['Dashboards', 'Administrador'], 'los grupos del Sidebar (sin Herramientas)');
+  // RP55: el aviso de atrasados de Ventas (B2) sigue arriba del menú.
+  assert.equal((sinComentarios(sidebar).match(/<AlertasBadge\b/g) ?? []).length, 1, 'el Sidebar monta AlertasBadge');
+
+  // Ninguna otra pantalla enlaza a las quitadas (R14: «Ninguna tarea nueva agrega enlaces hacia esas pantallas»). Fuera
+  // de la cuenta: las pantallas quitadas mismas (se enlazan entre ellas y no se editan), app_mocks_backup y, hasta T23B,
+  // la portada de Marketing (RP55: su «Visitantes & Leads» es de T23B).
+  const PROPIAS = QUITADAS.map((q) => `app${q}`);
+  const HASTA_T23B = 'app/dashboard/marketing/page.tsx';
+  const enlazan = [];
+  const recorrer = (rel) => {
+    for (const nombre of readdirSync(new URL(rel || './', SRC))) {
+      const ruta = `${rel}${nombre}`;
+      if (statSync(new URL(ruta, SRC)).isDirectory()) {
+        if (ruta === 'app_mocks_backup' || PROPIAS.includes(ruta)) continue;
+        recorrer(`${ruta}/`);
+      } else if (/\.(tsx?|jsx?)$/.test(nombre) && ruta !== HASTA_T23B) {
+        const texto = sinComentarios(leer(ruta));
+        for (const m of texto.matchAll(/['"`](\/dashboard\/[^'"`\s]*)['"`]/g)) if (esQuitada(m[1])) enlazan.push(`${ruta}: ${m[1]}`);
+      }
+    }
+  };
+  recorrer('');
+  assert.deepEqual(enlazan, [], 'ninguna pantalla enlaza a las de R14');
+  // La portada de Marketing todavía la enlaza (T23B la quita): si ya no lo hace, esta excepción sobra.
+  assert.ok(/\/dashboard\/marketing\/visitantes/.test(leer(HASTA_T23B)), 'la excepción de T23B sigue haciendo falta');
+
+  // R14 y C18: los archivos no se borran (siguen respondiendo si alguien entra por URL), tampoco ResizableHeader.tsx.
+  for (const q of QUITADAS) assert.ok(existsSync(new URL(`app${q}/page.tsx`, SRC)), `${q} sigue existiendo`);
+  assert.ok(existsSync(new URL('components/ResizableHeader.tsx', SRC)), 'ResizableHeader.tsx no se borra');
 }
 
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');

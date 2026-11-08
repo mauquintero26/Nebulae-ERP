@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation';
 import { 
   LayoutDashboard, Users, CalendarDays, KanbanSquare,
   MessageSquare, ShoppingCart, TrendingUp, ShoppingBag, Archive,
-  Globe, Megaphone, Puzzle, Sparkles, Tag, ChevronDown, ChevronRight,
+  Megaphone, Sparkles, Tag, ChevronDown, ChevronRight,
   PanelLeftClose, PanelLeftOpen, LogOut, SlidersHorizontal, Settings, UserCircle2
 } from 'lucide-react';
 import { AlertasBadge } from '@/components/AlertasBadge';
@@ -48,10 +48,7 @@ export function Sidebar() {
           { name: '📝 Solicitud de Cliente', path: '/dashboard/ventas/solicitud' },
           { name: '📄 Cotización', path: '/dashboard/ventas/cotizacion' },
           { name: '💰 Pedido de Venta', path: '/dashboard/ventas/venta' },
-          { name: '📤 Subir venta de chat exportado/ dia vigente', path: '/dashboard/ventas/exportar-dia' },
-          { name: '📅 Subir venta de chat exportado/ Rango', path: '/dashboard/ventas/exportar-rango' },
-          { name: '🔄 Sincronización DB', path: '/dashboard/ventas/sincronizacion' },
-          { name: '📈 Proyecciones', path: '/dashboard/ventas/proyecciones' }
+          { name: '🔄 Sincronización DB', path: '/dashboard/ventas/sincronizacion' }
         ]
       },
       { 
@@ -63,9 +60,7 @@ export function Sidebar() {
           { name: '🛒 Pedido de Compra', path: '/dashboard/compras/pedidos' },
           { name: '🚚 Mercancía en Tránsito', path: '/dashboard/compras/transito' },
           { name: '📥 Recepciones', path: '/dashboard/compras/recepciones' },
-          { name: '🔄 Traslados Internos', path: '/dashboard/compras/traslados' },
-          { name: '📝 Registro (OCR/Manual)', path: '/dashboard/compras/registro' },
-          { name: '📈 Proyecciones', path: '/dashboard/compras/proyecciones' }
+          { name: '🔄 Traslados Internos', path: '/dashboard/compras/traslados' }
         ]
       },
       {
@@ -79,11 +74,7 @@ export function Sidebar() {
           { name: '📤 Entregas', path: '/dashboard/inventario/entregas' },
           { name: '🔄 Traslados Internos', path: '/dashboard/inventario/traslados' },
           { name: '⚖️ Ajustes de Inventario', path: '/dashboard/inventario/ajustes' },
-          { name: '🛒 Abastecimiento', path: '/dashboard/inventario/abastecimiento' },
-          { name: '🏢 Gestión de Almacenes', path: '/dashboard/inventario/almacenes' },
-          { name: '📍 Ubicaciones Físicas', path: '/dashboard/inventario/ubicaciones' },
-          { name: '🚚 Rutas', path: '/dashboard/inventario/rutas' },
-          { name: '🤝 Inventario Compartido', path: '/dashboard/inventario/compartido' }
+          { name: '🛒 Abastecimiento', path: '/dashboard/inventario/abastecimiento' }
         ]
       },
       { 
@@ -111,22 +102,11 @@ export function Sidebar() {
         subItems: [
           { name: '🌐 Flujos (Redes)', path: '/dashboard/marketing/flujos' },
           { name: '📸 Historias & Pubs', path: '/dashboard/marketing/historias' },
-          { name: '🎯 Campañas', path: '/dashboard/marketing/campanas' },
-          { name: '👥 Visitantes', path: '/dashboard/marketing/visitantes' }
-        ]
-      },
-      { 
-        name: 'Integraciones', 
-        path: '/dashboard/integraciones', 
-        icon: Puzzle,
-        subItems: [
-          { name: '🔌 APIs', path: '/dashboard/integraciones/apis' },
-          { name: '🤖 MCP Agents', path: '/dashboard/integraciones/mcp' }
+          { name: '🎯 Campañas', path: '/dashboard/marketing/campanas' }
         ]
       }
-    ]},
-    { group: 'Herramientas', items: [
-      { name: 'Scrapper', path: '/dashboard/scrapper', icon: Globe }
+      // B4 T17 (R14): Integraciones (APIs y MCP Agents) y el grupo Herramientas (su único enlace era Scrapper) salen del
+      // menú hasta que tengan datos. Sus pantallas no se borran: siguen respondiendo por URL.
     ]},
     { group: 'Administrador', items: [
       { name: 'Empleados & Roles', path: '/dashboard/admin/empleados', icon: Users },

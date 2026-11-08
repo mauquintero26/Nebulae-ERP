@@ -13,5 +13,4 @@ export const INV_NAV = [
   { name: 'Traslados',      path: '/dashboard/inventario/traslados' },
   { name: 'Ajustes',        path: '/dashboard/inventario/ajustes' },
   { name: 'Abastecimiento', path: '/dashboard/inventario/abastecimiento' },
-  { name: 'Bodegas',        path: '/dashboard/inventario/bodegas' },
 ];

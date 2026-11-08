@@ -10,6 +10,4 @@ export const COMP_NAV = [
   { name: 'Mercancia en Transito', path: '/dashboard/compras/transito' },
   { name: 'Recepciones (Entrada)', path: '/dashboard/compras/recepciones' },
   { name: 'Traslados Internos',    path: '/dashboard/compras/traslados' },
-  { name: 'Registro OCR/Manual',   path: '/dashboard/compras/registro' },
-  { name: 'Proyecciones',          path: '/dashboard/compras/proyecciones' },
 ];

@@ -31,9 +31,7 @@ const SUB_MODULES = [
   { name: 'Traslados',       path: '/dashboard/inventario/traslados' },
   { name: 'Ajustes',         path: '/dashboard/inventario/ajustes' },
   { name: 'Abastecimiento',  path: '/dashboard/inventario/abastecimiento' },
-  { name: 'Almacenes',       path: '/dashboard/inventario/almacenes' },
-  { name: 'Ubicaciones',     path: '/dashboard/inventario/ubicaciones' },
-  { name: 'Rutas',           path: '/dashboard/inventario/rutas' },
+  // B4 T17 (R14): Almacenes, Ubicaciones y Rutas salen del menú hasta tener datos (sus pantallas no se borran).
 ];
 
 function Toast({ msg, type, onClose }: { msg: string; type: string; onClose: () => void }) {
