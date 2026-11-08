@@ -697,3 +697,91 @@ export function tarjetasTraslados(porGrupo, bodegas) {
     total: { valor: numeroFinito(g.todos) },
   };
 }
+
+/** '3 referencias', '1 referencia': un número con su sustantivo en singular o plural (formatoDecimal: 2,5 no se redondea). */
+const conNombre = (n, uno, varios) => `${formatoDecimal(n)} ${n === 1 ? uno : varios}`;
+
+/**
+ * B4 T17 (KPI-inventario punto 4; R10, R12, RP52): lo que pintan las 4 tarjetas del Hub de Inventario con `data` de GET
+ * /inventory/stats (T13: resumen_existencias, todo el inventario, por referencia y sin las de rastrear_inventario =
+ * false):
+ *  - valorizacion (inv_valorizacion): valor_inventario_cop, con la ayuda '3 referencias sin costo' si skus_sin_costo > 0
+ *    (las cuenta todas; el aviso del Análisis cuenta solo las que tienen físico > 0, y las dos cifras no se ven juntas);
+ *  - skus (inv_skus): skus_total, con la ayuda '26 unidades en bodega' (unidades_fisicas);
+ *  - bajo_minimo (inv_bajo_minimo): skus_bajo_minimo, con la ayuda '2 agotados' (skus_agotados) y el tono alerta si hay
+ *    agotados o referencias bajo el mínimo (RP52 b: la tarjeta no es botón);
+ *  - disponibilidad (inv_disponibilidad): disponibilidad_pct, con la ayuda '4 comprometidas' (unidades_reservadas).
+ * Cada número pasa por numeroFinito (lo que no es un número queda en null: la barra gris o «—», nunca 0); una ayuda sin
+ * su número es null. Sin datos (cargando o con error), null.
+ * @param {any} datos
+ * @returns {{valorizacion: {valor: number | null, ayuda: string | null}, skus: {valor: number | null, ayuda: string | null},
+ *   bajo_minimo: {valor: number | null, ayuda: string | null, tono: 'alerta' | 'normal'},
+ *   disponibilidad: {valor: number | null, ayuda: string | null}} | null}
+ */
+export function tarjetasHubInventario(datos) {
+  if (datos === null || typeof datos !== 'object' || Array.isArray(datos)) return null;
+  const sinCosto = numeroFinito(datos.skus_sin_costo);
+  const fisicas = numeroFinito(datos.unidades_fisicas);
+  const bajo = numeroFinito(datos.skus_bajo_minimo);
+  const agotados = numeroFinito(datos.skus_agotados);
+  const reservadas = numeroFinito(datos.unidades_reservadas);
+  return {
+    valorizacion: {
+      valor: numeroFinito(datos.valor_inventario_cop),
+      ayuda: sinCosto !== null && sinCosto > 0 ? conNombre(sinCosto, 'referencia sin costo', 'referencias sin costo') : null,
+    },
+    skus: {
+      valor: numeroFinito(datos.skus_total),
+      ayuda: fisicas === null ? null : conNombre(fisicas, 'unidad en bodega', 'unidades en bodega'),
+    },
+    bajo_minimo: {
+      valor: bajo,
+      ayuda: agotados === null ? null : conNombre(agotados, 'agotado', 'agotados'),
+      tono: (agotados ?? 0) > 0 || (bajo ?? 0) > 0 ? 'alerta' : 'normal',
+    },
+    disponibilidad: {
+      valor: numeroFinito(datos.disponibilidad_pct),
+      ayuda: reservadas === null ? null : conNombre(reservadas, 'comprometida', 'comprometidas'),
+    },
+  };
+}
+
+/**
+ * B4 T17 (R10): la nota de la franja del Hub de Inventario. Dice dónde se define el mínimo de cada referencia: reemplaza
+ * el modal «Umbral», que no guardaba nada (/inventory/stock-tabla no tiene el parámetro umbral).
+ */
+export const AYUDA_MINIMO_INVENTARIO = 'Bajo el mínimo: lo disponible llegó al mínimo de la referencia. Ese mínimo es la «alerta de stock mínimo» de su publicación en E-Commerce; si no tiene, es 5.';
+
+/**
+ * B4 T17 (TABLA-inventario punto 4; R10, RP52 d): la vista «Almacenes» del Hub, una tarjeta por bodega sobre las filas de
+ * GET /inventory/stock-tabla?por=bodega (hasta 200, la misma consulta de la tabla: su pestaña, búsqueda, bodega y
+ * categoría). Por bodega (warehouse_id): referencias (filas), fisico (Σ), valor (Σ valorizacion de las que tienen costo;
+ * null si ninguna lo tiene), sin_costo (las que no) y en_riesgo (agotadas o bajo el mínimo). Como los totales de R10, no
+ * cuenta las referencias con rastrear_inventario = false. Una fila sin bodega (por=sku) o que no es un objeto se salta.
+ * Ordenadas por el nombre de la bodega (en español) y, si empatan, por el id.
+ * @param {ReadonlyArray<any> | null | undefined} filas
+ * @returns {{warehouse_id: number, bodega: string, referencias: number, fisico: number, valor: number | null,
+ *   sin_costo: number, en_riesgo: number}[]}
+ */
+export function resumenAlmacenes(filas) {
+  if (!Array.isArray(filas)) return [];
+  /** @type {Map<unknown, {warehouse_id: any, bodega: string, referencias: number, fisico: number, valor: number | null, sin_costo: number, en_riesgo: number}>} */
+  const porBodega = new Map();
+  for (const f of filas) {
+    if (f === null || typeof f !== 'object' || f.rastrear_inventario === false) continue;
+    if (f.warehouse_id === null || f.warehouse_id === undefined) continue;
+    let b = porBodega.get(f.warehouse_id);
+    if (!b) {
+      const nombre = typeof f.bodega === 'string' && f.bodega.trim() !== '' ? f.bodega.trim() : 'Sin nombre';
+      b = { warehouse_id: f.warehouse_id, bodega: nombre, referencias: 0, fisico: 0, valor: null, sin_costo: 0, en_riesgo: 0 };
+      porBodega.set(f.warehouse_id, b);
+    }
+    b.referencias += 1;
+    b.fisico += numeroFinito(f.fisico) ?? 0;
+    const valor = numeroFinito(f.valorizacion);
+    if (valor === null) b.sin_costo += 1;
+    else b.valor = (b.valor ?? 0) + valor;
+    if (f.estado_stock === 'agotado' || f.estado_stock === 'bajo_minimo') b.en_riesgo += 1;
+  }
+  return [...porBodega.values()].sort((a, b) => a.bodega.localeCompare(b.bodega, 'es') || (a.warehouse_id < b.warehouse_id ? -1 : a.warehouse_id > b.warehouse_id ? 1 : 0));
+}

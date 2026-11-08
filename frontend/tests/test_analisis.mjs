@@ -1393,6 +1393,59 @@ console.log('--- TEST 21 (T5C): el fuente de las siete piezas del panel (sin DOM
   assert.ok(retorno > 0 && !/\buse[A-Z]\w*\(/.test(panel.slice(retorno)), 'ningún hook después del return temprano');
 }
 
+console.log('--- TEST 23 (B4 T17, ANALISIS-inventario punto 3; R2, R13, RP69, D31, D45): la pestaña Análisis del Hub de Inventario ---');
+{
+  const crudo = readFileSync(new URL('../src/app/dashboard/inventario/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const fuente = crudo.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // D45: la pantalla importa PanelAnalisisPerezoso (nunca PanelAnalisis ni los gráficos) y lo pinta una sola vez.
+  assert.match(fuente, /import \{ PanelAnalisisPerezoso \} from '@\/components\/analisis';/);
+  assert.ok(!/PanelAnalisis['"\s]|from '@\/components\/analisis\/|chart\.js|react-chartjs-2/.test(fuente), 'sin el panel ni los gráficos directo');
+  const paneles = fuente.match(/<PanelAnalisisPerezoso[\s\S]*?\/>/g) ?? [];
+  assert.equal(paneles.length, 1, 'un solo panel');
+  const panel = paneles[0];
+  // La tabla de la sección 1 de la guía: modulo 'inventario', /inventory/analisis, acento teal y sin selector de foco
+  // (sin focos ni el campo Producto); mejorLinea explícito: el «mejor» que manda el servidor para «Valor del inventario».
+  for (const prop of ['modulo="inventario"', 'endpoint="/inventory/analisis"', 'acento="teal"', 'mejorLinea="sube"',
+    'params={paramsAnalisis}', 'controlesExtra={selectorBodegaAnalisis}', 'asistente={ASISTENTE_INVENTARIO}']) {
+    assert.ok(panel.includes(prop), prop);
+  }
+  assert.ok(!/focos=|focoInicial=|busquedaProducto|alCambiarFoco/.test(panel), 'sin foco ni producto');
+  // params {bodega}: el select propio, con las bodegas REALES de /inventory/warehouses (no las de relleno); '' = todas
+  // (lib/analisis.js no manda un valor vacío). El select no comparte el filtro de la tabla.
+  assert.match(fuente, /const paramsAnalisis = useMemo\(\(\) => \(\{ bodega: bodegaAnalisis \|\| null \}\), \[bodegaAnalisis\]\);/);
+  const selector = fuente.match(/const selectorBodegaAnalisis = \([\s\S]*?\n {2}\);/);
+  assert.ok(selector, 'el select de la bodega del Análisis');
+  for (const parte of ['catalogo={bodegas}', 'valor={bodegaAnalisis}', 'onCambiar={setBodegaAnalisis}', 'etiqueta="Bodega del análisis"']) {
+    assert.ok(selector[0].includes(parte), parte);
+  }
+  assert.ok(!/Bodega Principal|Bodega Norte|Punto de Venta Físico/.test(fuente), 'sin bodegas de relleno');
+  // RP69 con D31: el título y los ejemplos de hoy, sin códigos crudos ni emojis; el primero con la etiqueta de RP53.
+  const asistente = fuente.match(/const ASISTENTE_INVENTARIO = \{[\s\S]*?\n\};/);
+  assert.ok(asistente, 'ASISTENTE_INVENTARIO');
+  assert.match(asistente[0], /titulo: 'Nebulae AI Inventory Copilot'/);
+  assert.deepEqual([...asistente[0].matchAll(/^ {4}'([^']+)',?$/gm)].map((m) => m[1]), [
+    '¿Qué productos están bajo el mínimo o agotados?',
+    '¿Cuál es la valorización total del inventario?',
+    '¿Cómo están distribuidos los almacenes y bodegas?',
+    '¿Cuáles son los productos con mayor valor patrimonial?',
+  ]);
+  // R2: el chat simulado se fue (sin setTimeout ni respuestas) y la pantalla no escribe su propio «En construcción».
+  for (const viejo of ['aiChatHistory', 'aiQuery', 'aiLoading', 'handleAiQuestion', 'donutMode', 'topItemsLimit', 'setTimeout',
+    'En construcción', '/ventas/ai-chat', 'GPT-4o', 'Análisis Funcional', 'warehouseStats']) {
+    assert.ok(!fuente.includes(viejo), viejo);
+  }
+  // La pestaña aparte de BarraTabla (sin emoji); ?tab=analisis se lee al montar con la guarda de window; en Análisis la
+  // lista no pide nada (activo: false, RP35) y al volver a los documentos la URL se limpia.
+  assert.ok(fuente.includes("pestanaAparte={{ id: 'analisis', etiqueta: 'Análisis', activa: enAnalisis, onCambiar: alCambiarAparte }}"));
+  assert.match(fuente, /useState\(\(\) => leerEnlaceHubCompras\(typeof window === 'undefined' \? '' : window\.location\.search\)\.analisis\)/);
+  assert.match(fuente, /if \(!analisis && leerEnlaceHubCompras\(window\.location\.search\)\.analisis\) router\.replace\(RUTA_HUB\);/);
+  assert.match(fuente, /activo: !enAnalisis && !verAlmacenes, extra: extraDeLaLista/);
+  assert.match(fuente, /activo: !enAnalisis && verAlmacenes, extra: extraAlmacenes/);
+  // El panel va en lugar de la tabla y de las bodegas; las tarjetas del Hub no se ven en Análisis (allí van las suyas).
+  assert.match(fuente, /\{enAnalisis \? \(\s*<PanelAnalisisPerezoso/);
+  assert.match(fuente, /\{!enAnalisis && \(\s*<>\s*<FranjaKpis/);
+}
+
 console.log('✓ lib/analisis.js: períodos, consulta, variación, formato, ejes, fechas, colores, enlaces y contrato.');
 console.log('✓ T5B: lógica y fuente de las piezas de components/analisis.');
 console.log('✓ T5C: la lógica y el fuente del panel (preferencias, foco, producto, carga, errores, textos y piezas).');

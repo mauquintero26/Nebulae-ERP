@@ -625,6 +625,56 @@ export function normalizarRespuesta(d) {
   };
 }
 
+// ─── listas cuyo endpoint no tiene `vista` (B4 T17) ─────────────────────────────
+
+/**
+ * B4 T17 (TABLA-inventario punto 4; R5, RP52): lo que una lista le suma a la consulta (`extra` de useListado) cuando su
+ * endpoint no tiene `vista`, por ejemplo GET /inventory/stock-tabla: la pestaña del estado se traduce a sus parámetros
+ * propios (`vistas[vista]`; una vista que no es una clave PROPIA del mapa, o un estado sin vista, usa
+ * `vistas[porDefecto]`), `fijos` va siempre (por=bodega, los filtros de la pantalla…) y `vista` va en null para que
+ * queryListado no la mande (D23; tampoco si viene en `fijos`). Lo de la vista gana sobre `fijos` en la misma clave. No
+ * toca el mapa.
+ * @param {EstadoTabla | null | undefined} estado
+ * @param {Record<string, Record<string, unknown>> | null | undefined} vistas
+ * @param {Record<string, unknown> | null} [fijos]
+ * @param {string} [porDefecto]
+ * @returns {Record<string, unknown> & {vista: null}}
+ */
+export function extraPorVista(estado, vistas, fijos = {}, porDefecto = 'todos') {
+  const mapa = objeto(vistas) ? vistas : {};
+  const vista = typeof estado?.vista === 'string' && tiene(mapa, estado.vista) ? estado.vista : porDefecto;
+  const propios = tiene(mapa, vista) && objeto(mapa[vista]) ? mapa[vista] : {};
+  return { ...(objeto(fijos) ? fijos : {}), ...propios, vista: null };
+}
+
+const textoLimpio = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
+
+/**
+ * B4 T17 (TABLA-inventario punto 4; m8 de T15): el «vacío» de la tabla de existencias del Hub de Inventario dice qué lo
+ * deja vacío, en este orden: la búsqueda (con la bodega y la categoría elegidas), la pestaña («Bajo el mínimo» o
+ * «Existencias físicas», con lo mismo) o solo la bodega y la categoría; sin nada de eso, de dónde salen las existencias.
+ * `bodega` y `categoria` son los NOMBRES de lo elegido (null si no hay filtro).
+ * @param {{q?: string | null, vista?: string | null, bodega?: string | null, categoria?: string | null} | null | undefined} filtro
+ * @returns {{titulo: string, ayuda: string | null}}
+ */
+export function textoVacioExistencias(filtro) {
+  const f = objeto(filtro) ? /** @type {any} */ (filtro) : {};
+  const q = textoLimpio(f.q);
+  const bodega = textoLimpio(f.bodega);
+  const categoria = textoLimpio(f.categoria);
+  const donde = [bodega && `en la bodega «${bodega}»`, categoria && `en la categoría «${categoria}»`].filter(Boolean).join(' y ');
+  const conDonde = donde ? ` ${donde}` : '';
+  const quita = donde ? 'Quita el filtro de bodega o de categoría para ver las demás.' : null;
+  if (q) return { titulo: `Ninguna existencia coincide con «${q}»${conDonde}.`, ayuda: 'Busca por el código del SKU o por el nombre del producto.' };
+  if (f.vista === 'bajo_minimo') return { titulo: `Ninguna referencia está bajo el mínimo${conDonde}.`, ayuda: quita };
+  if (f.vista === 'fisico') return { titulo: `Ninguna referencia tiene unidades en bodega${conDonde}.`, ayuda: quita };
+  if (donde) return { titulo: `Ninguna existencia ${donde}.`, ayuda: quita };
+  return {
+    titulo: 'Todavía no hay existencias en las bodegas.',
+    ayuda: 'Las existencias se registran al recibir mercancía en Recepciones o con un ajuste de inventario.',
+  };
+}
+
 // ─── menú de fila (MenuFila, T4A) ───────────────────────────────────────────────
 
 /**

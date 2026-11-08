@@ -664,4 +664,85 @@ console.log('--- TEST 19 (B4 T16B, KPI-compras puntos 9 y 10): tarjetasLista (li
   assert.equal(etiquetaKpi('tras_en_proceso'), 'Traslados en proceso');
 }
 
+console.log('--- TEST 20 (B4 T17, KPI-inventario punto 4 y TABLA-inventario punto 4): las tarjetas y las bodegas del Hub de Inventario ---');
+{
+  const tarjetas = kpisLib.tarjetasHubInventario;
+  assert.equal(typeof tarjetas, 'function', 'tarjetasHubInventario existe');
+  // `data` de GET /inventory/stats (T13: resumen_existencias + bodegas), sin parámetros: todo el inventario, por referencia.
+  const stats = {
+    skus_total: 6, unidades_fisicas: 26, unidades_reservadas: 4, unidades_disponibles: 22, unidades_en_transito: 4,
+    valor_inventario_cop: 4927538, skus_sin_costo: 3, skus_agotados: 2, skus_bajo_minimo: 3, skus_abastecidos: 1,
+    disponibilidad_pct: 84.6, bodegas: 2,
+  };
+  assert.deepEqual(tarjetas(stats), {
+    valorizacion: { valor: 4927538, ayuda: '3 referencias sin costo' },
+    skus: { valor: 6, ayuda: '26 unidades en bodega' },
+    bajo_minimo: { valor: 3, ayuda: '2 agotados', tono: 'alerta' },
+    disponibilidad: { valor: 84.6, ayuda: '4 comprometidas' },
+  });
+  // Singular, miles con punto y la ayuda de la valorización solo si hay referencias sin costo (> 0).
+  const uno = tarjetas({ ...stats, skus_sin_costo: 1, unidades_fisicas: 1, skus_agotados: 1, unidades_reservadas: 1 });
+  assert.equal(uno.valorizacion.ayuda, '1 referencia sin costo');
+  assert.equal(uno.skus.ayuda, '1 unidad en bodega');
+  assert.equal(uno.bajo_minimo.ayuda, '1 agotado');
+  assert.equal(uno.disponibilidad.ayuda, '1 comprometida');
+  assert.equal(tarjetas({ ...stats, unidades_fisicas: 12345, unidades_reservadas: 2.5 }).skus.ayuda, '12.345 unidades en bodega');
+  assert.equal(tarjetas({ ...stats, unidades_reservadas: 2.5 }).disponibilidad.ayuda, '2,5 comprometidas', 'una cantidad con decimales no se redondea');
+  assert.equal(tarjetas({ ...stats, skus_sin_costo: 0 }).valorizacion.ayuda, null, 'sin referencias sin costo, sin ayuda');
+  // El tono: alerta si hay agotados O referencias bajo el mínimo; con las dos en 0, normal (y la ayuda dice 0 agotados).
+  assert.deepEqual(tarjetas({ ...stats, skus_agotados: 0, skus_bajo_minimo: 0 }).bajo_minimo, { valor: 0, ayuda: '0 agotados', tono: 'normal' });
+  assert.equal(tarjetas({ ...stats, skus_agotados: 1, skus_bajo_minimo: 0 }).bajo_minimo.tono, 'alerta', 'solo agotados');
+  assert.equal(tarjetas({ ...stats, skus_agotados: 0, skus_bajo_minimo: 2 }).bajo_minimo.tono, 'alerta', 'solo bajo el mínimo');
+  // Un Decimal del API llega como texto (numeroFinito); lo que no es un número queda en null (barra o «—»), nunca 0.
+  assert.deepEqual(tarjetas({ skus_total: '6', valor_inventario_cop: null, skus_sin_costo: 'x', unidades_fisicas: undefined,
+    skus_bajo_minimo: Number.NaN, skus_agotados: null, disponibilidad_pct: null, unidades_reservadas: '' }), {
+    valorizacion: { valor: null, ayuda: null },
+    skus: { valor: 6, ayuda: null },
+    bajo_minimo: { valor: null, ayuda: null, tono: 'normal' },
+    disponibilidad: { valor: null, ayuda: null },
+  });
+  for (const malo of [null, undefined, 'x', [1], 3]) assert.equal(tarjetas(malo), null, String(malo));
+  // Los cuatro ids del catálogo (la ÚNICA fuente de nombres); «Bajo el mínimo» es la etiqueta de RP53.
+  assert.equal(etiquetaKpi('inv_valorizacion'), 'Valor del inventario');
+  assert.equal(etiquetaKpi('inv_skus'), 'Referencias (SKU)');
+  assert.equal(etiquetaKpi('inv_bajo_minimo'), 'Bajo el mínimo');
+  assert.equal(etiquetaKpi('inv_disponibilidad'), 'Disponibilidad');
+  assert.equal(CATALOGO_KPI.inv_disponibilidad.formato, 'porcentaje');
+
+  // R10: dónde se define el mínimo (reemplaza el modal «Umbral», que no guardaba nada).
+  assert.equal(kpisLib.AYUDA_MINIMO_INVENTARIO,
+    'Bajo el mínimo: lo disponible llegó al mínimo de la referencia. Ese mínimo es la «alerta de stock mínimo» de su publicación en E-Commerce; si no tiene, es 5.');
+
+  // RP52 (d): la vista Almacenes agrupa por bodega las filas de GET /inventory/stock-tabla?por=bodega (hasta 200). Los
+  // totales no cuentan las referencias con rastrear_inventario = false (R10).
+  const almacenes = kpisLib.resumenAlmacenes;
+  assert.equal(typeof almacenes, 'function', 'resumenAlmacenes existe');
+  const filas = [
+    { sku_id: 1, warehouse_id: 10, bodega: 'Bodega Norte', fisico: 10, valorizacion: 100, estado_stock: 'abastecido', rastrear_inventario: true },
+    { sku_id: 1, warehouse_id: 20, bodega: 'Bodega Central', fisico: 3, valorizacion: 30, estado_stock: 'bajo_minimo', rastrear_inventario: true },
+    { sku_id: 2, warehouse_id: 10, bodega: 'Bodega Norte', fisico: '2', valorizacion: null, estado_stock: 'bajo_minimo', rastrear_inventario: true },
+    { sku_id: 3, warehouse_id: 10, bodega: 'Bodega Norte', fisico: 0, valorizacion: 0, estado_stock: 'agotado', rastrear_inventario: true },
+    { sku_id: 7, warehouse_id: 10, bodega: 'Bodega Norte', fisico: 7, valorizacion: 70, estado_stock: 'abastecido', rastrear_inventario: false },
+    { sku_id: 8, warehouse_id: 30, bodega: 'Ábside', fisico: 1, valorizacion: null, estado_stock: 'bajo_minimo', rastrear_inventario: true },
+    { sku_id: 9, warehouse_id: null, bodega: null, fisico: 4, valorizacion: 4, estado_stock: 'bajo_minimo', rastrear_inventario: true },
+  ];
+  assert.deepEqual(almacenes(filas), [
+    // Por nombre, en español (la tilde no la manda al final); sin costo en ninguna fila, el valor es null («—»).
+    { warehouse_id: 30, bodega: 'Ábside', referencias: 1, fisico: 1, valor: null, sin_costo: 1, en_riesgo: 1 },
+    { warehouse_id: 20, bodega: 'Bodega Central', referencias: 1, fisico: 3, valor: 30, sin_costo: 0, en_riesgo: 1 },
+    // G (rastrear_inventario = false) no suma; un 0 de valorización es un costo (0), no «sin costo».
+    { warehouse_id: 10, bodega: 'Bodega Norte', referencias: 3, fisico: 12, valor: 100, sin_costo: 1, en_riesgo: 2 },
+  ], 'la fila sin bodega (por=sku) no es de ninguna');
+  assert.deepEqual(almacenes([]), []);
+  for (const malo of [null, undefined, 'x', 4]) assert.deepEqual(almacenes(malo), [], String(malo));
+  assert.deepEqual(almacenes([null, 'x', { warehouse_id: 5, bodega: '', fisico: 'x', valorizacion: 'y', estado_stock: 'raro' }]), [
+    { warehouse_id: 5, bodega: 'Sin nombre', referencias: 1, fisico: 0, valor: null, sin_costo: 1, en_riesgo: 0 },
+  ], 'lo que no es una fila se salta; un número que no llega no suma');
+  // Mismo nombre en dos bodegas: el orden lo desempata el id.
+  assert.deepEqual(almacenes([
+    { warehouse_id: 9, bodega: 'Norte', fisico: 1, valorizacion: 1, estado_stock: 'abastecido' },
+    { warehouse_id: 4, bodega: 'Norte', fisico: 1, valorizacion: 1, estado_stock: 'abastecido' },
+  ]).map((b) => b.warehouse_id), [4, 9]);
+}
+
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

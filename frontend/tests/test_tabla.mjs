@@ -2344,6 +2344,149 @@ console.log('--- TEST 46 (B4 T17, R14, C18 y RP55): el menú no enlaza las panta
   assert.ok(existsSync(new URL('components/ResizableHeader.tsx', SRC)), 'ResizableHeader.tsx no se borra');
 }
 
+console.log('--- TEST 47 (B4 T17, TABLA-inventario punto 4; R5, RP52): la pestaña de un endpoint sin `vista` y el vacío de las existencias ---');
+{
+  const { extraPorVista, textoVacioExistencias } = TABLA;
+  assert.equal(typeof extraPorVista, 'function', 'extraPorVista existe');
+  // GET /inventory/stock-tabla no tiene `vista`: cada pestaña es un parámetro propio (RP52: «Bajo el mínimo» =
+  // estado_stock=bajo_minimo; «Existencias físicas» = incluir_sin_stock=false; «Todos», nada).
+  const VISTAS = { todos: {}, bajo_minimo: { estado_stock: 'bajo_minimo' }, fisico: { incluir_sin_stock: false } };
+  const congeladas = JSON.stringify(VISTAS);
+  const fijos = { por: 'bodega', warehouse_id: 3, categoria_id: null };
+  const conVista = (vista) => ({ ...ESTADO_TABLA_INICIAL, vista });
+  assert.deepEqual(extraPorVista(conVista('bajo_minimo'), VISTAS, fijos),
+    { por: 'bodega', warehouse_id: 3, categoria_id: null, estado_stock: 'bajo_minimo', vista: null });
+  assert.deepEqual(extraPorVista(conVista('fisico'), VISTAS, fijos),
+    { por: 'bodega', warehouse_id: 3, categoria_id: null, incluir_sin_stock: false, vista: null });
+  assert.deepEqual(extraPorVista(conVista('todos'), VISTAS, fijos), { por: 'bodega', warehouse_id: 3, categoria_id: null, vista: null });
+  // Una vista que no está en el mapa (o heredada del prototipo), o un estado sin vista, usa la de por defecto.
+  for (const vista of ['x', 'toString', '__proto__', null, undefined, 3]) {
+    assert.deepEqual(extraPorVista(conVista(vista), VISTAS, fijos), { por: 'bodega', warehouse_id: 3, categoria_id: null, vista: null }, String(vista));
+  }
+  assert.deepEqual(extraPorVista(null, VISTAS), { vista: null });
+  assert.deepEqual(extraPorVista(conVista('x'), VISTAS, {}, 'fisico'), { incluir_sin_stock: false, vista: null }, 'otra vista por defecto');
+  // Lo de la vista gana sobre `fijos` en la misma clave, y `vista` nunca se manda (aunque venga en fijos).
+  assert.deepEqual(extraPorVista(conVista('bajo_minimo'), VISTAS, { estado_stock: 'agotado', vista: 'todos' }),
+    { estado_stock: 'bajo_minimo', vista: null });
+  // Sin mapa o con fijos que no son un objeto: nada se rompe.
+  assert.deepEqual(extraPorVista(conVista('bajo_minimo'), null, null), { vista: null });
+  assert.equal(JSON.stringify(VISTAS), congeladas, 'no toca el mapa');
+  // Con queryListado (D23): vista no sale, los null se omiten, false va como 0 y lo nuevo va al final.
+  assert.equal(queryListado({ ...conVista('fisico'), q: 'cuna' }, extraPorVista(conVista('fisico'), VISTAS, { ...fijos, warehouse_id: null })),
+    'q=cuna&limit=25&offset=0&por=bodega&incluir_sin_stock=0');
+  assert.equal(queryListado({ ...conVista('bajo_minimo'), pagina: 2, orden: '-disponible' }, extraPorVista(conVista('bajo_minimo'), VISTAS, fijos)),
+    'orden=-disponible&limit=25&offset=25&por=bodega&warehouse_id=3&estado_stock=bajo_minimo');
+
+  // El vacío dice qué lo deja vacío (m8 de T15): la búsqueda, la pestaña o la bodega y la categoría; si no, de dónde salen.
+  assert.equal(typeof textoVacioExistencias, 'function', 'textoVacioExistencias existe');
+  const BUSCA = 'Busca por el código del SKU o por el nombre del producto.';
+  const QUITA = 'Quita el filtro de bodega o de categoría para ver las demás.';
+  assert.deepEqual(textoVacioExistencias({ q: '  cuna ', vista: 'todos' }), { titulo: 'Ninguna existencia coincide con «cuna».', ayuda: BUSCA });
+  assert.deepEqual(textoVacioExistencias({ q: 'cuna', vista: 'bajo_minimo', bodega: 'Bodega Norte' }),
+    { titulo: 'Ninguna existencia coincide con «cuna» en la bodega «Bodega Norte».', ayuda: BUSCA });
+  assert.deepEqual(textoVacioExistencias({ vista: 'bajo_minimo' }), { titulo: 'Ninguna referencia está bajo el mínimo.', ayuda: null });
+  assert.deepEqual(textoVacioExistencias({ vista: 'fisico', categoria: 'Coches' }),
+    { titulo: 'Ninguna referencia tiene unidades en bodega en la categoría «Coches».', ayuda: QUITA });
+  assert.deepEqual(textoVacioExistencias({ vista: 'todos', bodega: 'Norte', categoria: 'Coches' }),
+    { titulo: 'Ninguna existencia en la bodega «Norte» y en la categoría «Coches».', ayuda: QUITA });
+  const base = { titulo: 'Todavía no hay existencias en las bodegas.', ayuda: 'Las existencias se registran al recibir mercancía en Recepciones o con un ajuste de inventario.' };
+  assert.deepEqual(textoVacioExistencias({ vista: 'todos' }), base);
+  for (const raro of [{}, null, undefined, { q: '   ', vista: 'x', bodega: '', categoria: null }]) {
+    assert.deepEqual(textoVacioExistencias(raro), base, JSON.stringify(raro));
+  }
+}
+
+console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5, R10, R11, R12, RP47, RP52, RP53): el cableado del Hub de Inventario ---');
+{
+  const crudo = readFileSync(new URL('../src/app/dashboard/inventario/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const fuente = crudo.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // Sin los datos inventados, sin /products?limit=300 (RP47), sin las operaciones de los 14/8/5, sin el modal «Umbral»
+  // (R10) y sin las listas vacías falsas: la página se tipa.
+  assert.ok(!/@ts-nocheck/.test(crudo), 'sin @ts-nocheck');
+  for (const viejo of ['mappedProducts', '/products', '45000', 'minStockThreshold', 'showConfig', 'Umbral', '/inventory/operations',
+    'kpiCards', 'colorMap', 'criticosList', 'quickFilter', 'Stock_Critico', 'REORDEN', 'ÓPTIMO', 'Óptimo', 'Crítico']) {
+    assert.ok(!fuente.includes(viejo), viejo);
+  }
+  assert.ok(!/\.catch\(\(\) => (\[\]|\{\}|null)\)/.test(fuente), 'ningún error tragado como una lista vacía');
+  // R5: la tabla sobre /inventory/stock-tabla por bodega con el estado único; la pestaña viaja como su parámetro
+  // (RP52: «Bajo el mínimo» = estado_stock=bajo_minimo; «Existencias físicas» = incluir_sin_stock=false) y la bodega y la
+  // categoría van al servidor ('' = sin filtro, null no se manda).
+  assert.match(fuente, /const RUTA_STOCK = '\/inventory\/stock-tabla';/);
+  assert.match(fuente, /const VISTAS_HUB = \{\n {2}todos: \{\},\n {2}bajo_minimo: \{ estado_stock: 'bajo_minimo' \},\n {2}fisico: \{ incluir_sin_stock: false \},\n\};/);
+  assert.match(fuente, /extraPorVista\(estado, VISTAS_HUB, \{\n\s*por: 'bodega', warehouse_id: filtros\.bodega \|\| null, categoria_id: filtros\.categoria \|\| null,\n\s*\}\)/);
+  assert.match(fuente, /useEstadoTabla\(ID_HUB, INICIAL_HUB\)/);
+  assert.match(fuente, /const ID_HUB = 'inventario\.hub';/);
+  assert.match(fuente, /useListado<FilaStock>\(\{\n\s*ruta: RUTA_STOCK, estado, conConteos: true, esperar: !listo, despachar, activo: !enAnalisis && !verAlmacenes, extra: extraDeLaLista,\n\s*\}\)/);
+  // Cada cambio de un filtro extra vuelve a la página 1 y limpia la selección (R5).
+  assert.match(fuente, /const cambiarFiltros = useCallback\(\(cambio: Partial<FiltrosHub>\) => \{\n\s*setFiltros\(\(f\) => \(\{ \.\.\.f, \.\.\.cambio \}\)\);\n\s*setSeleccion\(\[\]\);\n\s*despachar\(\{ tipo: 'pagina', valor: 1 \}\);/);
+  // Las pestañas de RP53 con los conteos del servidor (null mientras cargan, nunca 0) y la etiqueta de ESTADOS_STOCK.
+  assert.ok(fuente.includes("{ id: 'todos', etiqueta: 'Todos', conteo: conteos?.todos ?? null }"));
+  assert.ok(fuente.includes("{ id: 'bajo_minimo', etiqueta: ESTADOS_STOCK.bajo_minimo.label, conteo: conteos?.bajo_minimo ?? null, alerta: (conteos?.bajo_minimo ?? 0) > 0 }"));
+  assert.ok(fuente.includes("{ id: 'fisico', etiqueta: 'Existencias físicas', conteo: conteos?.con_fisico ?? null }"));
+  // Las columnas del diseño (anchos de TABLA-inventario punto 4), la fila es un par SKU y bodega, y el estado con la
+  // etiqueta y el tono de ESTADOS_STOCK (RP53: sin etiquetas locales). R26: lo que no cabe a 1024 va oculto por defecto.
+  const columnas = fuente.match(/const COLUMNAS_HUB: ColumnaTabla<FilaStock>\[\] = \[[\s\S]*?\n\];/);
+  assert.ok(columnas, 'COLUMNAS_HUB');
+  const COLUMNAS = [
+    ["id: 'sku', titulo: 'SKU', ancho: 112, clave: true, fija: 'izquierda', ordenable: true"],
+    ["id: 'producto', titulo: 'Producto', ancho: 180, clave: true, flexible: true, ordenable: true"],
+    ["id: 'categoria', titulo: 'Categoría', ancho: 120, ocultaPorDefecto: true, ordenable: true"],
+    ["id: 'bodega', titulo: 'Bodega', ancho: 120,"],
+    ["id: 'fisico', titulo: 'Físico', ancho: 80, ocultaPorDefecto: true, alinear: 'derecha', ordenable: true"],
+    ["id: 'reservado', titulo: 'Reservado', ancho: 88, ocultaPorDefecto: true, alinear: 'derecha', ordenable: true"],
+    ["id: 'disponible', titulo: 'Disponible', ancho: 88, clave: true, alinear: 'derecha', ordenable: true"],
+    ["id: 'estado', titulo: 'Estado', ancho: 104, clave: true,"],
+    ["id: 'precio', titulo: 'Precio', ancho: 104, ocultaPorDefecto: true, alinear: 'derecha', ordenable: true"],
+    ["id: 'valorizacion', titulo: 'Valorización', ancho: 120, ocultaPorDefecto: true, alinear: 'derecha', ordenable: true"],
+    ["id: 'acciones', titulo: 'Acciones', ancho: 56, clave: true, fija: 'derecha',"],
+  ];
+  assert.deepEqual([...columnas[0].matchAll(/\{ id: '(\w+)'/g)].map((m) => m[1]), COLUMNAS.map(([c]) => c.match(/id: '(\w+)'/)[1]), 'el orden');
+  for (const [c] of COLUMNAS) assert.ok(columnas[0].includes(c), c);
+  assert.ok(!/ordenable/.test(columnas[0].match(/\{ id: 'bodega'[^\n]*\n[^\n]*/)[0]) && !/ordenable/.test(columnas[0].match(/\{ id: 'estado'[^\n]*\n[^\n]*/)[0]),
+    'Bodega y Estado no se ordenan (stock-tabla no los acepta)');
+  assert.match(fuente, /const claveDeFilaStock = \(f: FilaStock\) => `\$\{f\.sku_id\}-\$\{f\.warehouse_id \?\? 'sin-bodega'\}`;/);
+  assert.match(fuente, /claveFila=\{claveDeFilaStock\}/);
+  assert.match(fuente, /tiene\(ESTADOS_STOCK, e\) \? ESTADOS_STOCK\[e as keyof typeof ESTADOS_STOCK\] : null/);
+  // Valorización: '—' sin costo (R10), con su title; el tránsito no se suma por fila (no hay columna).
+  assert.ok(columnas[0].includes("'Sin costo registrado'"));
+  assert.ok(!/en_transito/.test(columnas[0]), 'sin columna de tránsito');
+  // La tabla estándar en el servidor con el estado único (D41) y el aviso del orden rechazado.
+  const tabla = fuente.match(/<TablaEstandar[\s\S]*?\/>/)[0];
+  for (const prop of ['id={ID_HUB}', 'modo="servidor"', 'columnas={COLUMNAS_HUB}', 'preferencias={prefs}', 'estado={estado}', 'onEstado={despachar}',
+    'filas={listado.filas}', 'cargando={listado.cargandoInicial}', 'error={listado.error}', 'onReintentar={listado.recargar}', 'aviso={listado.avisoOrden}',
+    'claseFila={claseDeFilaStock}', 'vacio={vacio}']) {
+    assert.ok(tabla.includes(prop), prop);
+  }
+  // R11: el Hub no lleva tablero; conserva su vista Lista / Almacenes. Almacenes = hasta 200 filas de la MISMA consulta
+  // (RP52 d), agrupadas en la lib y con el aviso de R11 si hay más.
+  assert.ok(!/kanbanDisponible|TableroKanban|useTableroKanban/.test(fuente), 'sin tablero');
+  assert.ok(fuente.includes('const extraAlmacenes = useMemo(() => ({ ...extraDeLaLista, limit: TOPE_TABLERO_COMPRAS, offset: 0 }), [extraDeLaLista]);'));
+  assert.ok(fuente.includes('resumenAlmacenes(listado.filas)') && fuente.includes("avisoTope200(listado.total, 'existencias')"));
+  // R12: las 4 tarjetas de /inventory/stats (tarjetasHubInventario), cada una una vez; inv_bajo_minimo NO es botón
+  // (RP52 b) y va en alerta con su tono; la nota dice dónde se define el mínimo (R10) y no hay nota de datos de ejemplo.
+  assert.match(fuente, /apiFetch\('\/inventory\/stats', \{ signal: control\.signal \}\)/);
+  assert.match(fuente, /const tarjetas = tarjetasHubInventario\(stats\?\.datos \?\? null\);/);
+  for (const id of ['inv_valorizacion', 'inv_skus', 'inv_bajo_minimo', 'inv_disponibilidad']) {
+    assert.equal((fuente.match(new RegExp(`<TarjetaKpi kpi="${id}"`, 'g')) ?? []).length, 1, id);
+  }
+  assert.equal((fuente.match(/<TarjetaKpi\b/g) ?? []).length, 4, 'cuatro tarjetas');
+  const bajo = fuente.match(/<TarjetaKpi kpi="inv_bajo_minimo"[\s\S]*?\/>/)[0];
+  assert.ok(!/onClick|activo=/.test(bajo) && bajo.includes("tono={tarjetas?.bajo_minimo.tono ?? 'normal'}"), 'inv_bajo_minimo no es botón');
+  assert.ok(!/onClick/.test(fuente.match(/<FranjaKpis[\s\S]*?<\/FranjaKpis>/)[0]), 'ninguna tarjeta es botón (no hay una vista con el mismo número)');
+  assert.ok(fuente.includes('nota={AYUDA_MINIMO_INVENTARIO}') && !/datos de ejemplo/i.test(fuente));
+  // Los catálogos de los selectores: sus errores se ven (con Reintentar), no se convierten en una lista vacía.
+  assert.match(fuente, /apiFetch\('\/inventory\/warehouses', \{ signal: control\.signal \}\)/);
+  assert.match(fuente, /apiFetch\('\/categories', \{ signal: control\.signal \}\)/);
+  assert.equal((fuente.match(/if \(!control\.signal\.aborted\) set(Bodegas|Categorias)\(\(c\) => \(\{ filas: c\.filas, error: err \}\)\)/g) ?? []).length, 2);
+  // Recepciones, Entregas y Traslados pasan de pestañas a enlaces a sus pantallas.
+  for (const ruta of ['/dashboard/inventario/recepciones', '/dashboard/inventario/entregas', '/dashboard/inventario/traslados']) {
+    assert.ok(fuente.includes(`ruta: '${ruta}'`), ruta);
+  }
+  // Las acciones llevan aria-label; el vacío se memoiza y dice qué filtro lo deja vacío.
+  assert.match(fuente, /aria-label=\{`Ver el detalle de \$\{f\.sku\}/);
+  assert.match(fuente, /const vacio = useMemo\(\(\) => \{\n\s*const texto = textoVacioExistencias\(\{ q: estado\.q, vista: estado\.vista, bodega: nombreBodega, categoria: nombreCategoria \}\);/);
+}
+
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');
 console.log('✓ T4C: sesión, estado armado, partes de columnas, URL de la lista, carga vigente, estado de la lista y modo cliente.');
 console.log('✓ T4C r1: orden rechazado, estados en la sesión, escrituras del usuario del render, esperar y vueltas.');
