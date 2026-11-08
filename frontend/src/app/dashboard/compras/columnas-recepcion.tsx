@@ -43,7 +43,7 @@ export type FilaColumnasRecepcion = {
 
 // m13: el número, el PEC de origen, el proveedor y «por confirmar» son UNA regla (estados-compras.js, con sus casos); aquí se
 // reexportan para las pantallas. El chip y los títulos de orden son los de columnas-pec.tsx (m6).
-// m6 (medido en el banco): «Entrada manual» necesita 90 px y la columna PEC origen (92 px, R26) deja 68: la tabla dice «Manual»
+// m6 (medido en el banco): «Entrada manual» necesita 99 px (medir-manual.cjs, salidas-16A-r3) y la columna PEC origen (92 px, R26) deja 68: la tabla dice «Manual»
 // (el title y el resto de las pantallas dicen «Entrada manual»).
 const pecCorto = (r: FilaColumnasRecepcion) => (esEntradaManual(r) ? 'Manual' : pecDeRecepcion(r));
 export { numeroRecepcion, pecDeRecepcion, proveedorDeRecepcion, esRecepcionPorConfirmar };

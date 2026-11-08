@@ -1447,7 +1447,7 @@ console.log('--- TEST 36 (B4 T16A r1): Drawer (m4, m10, m14), tildes (m11), come
   for (const viejo of ['Inspeccion y Calidad', 'Optimo (Sin danos', 'Recepcion no editable', 'Item de Compra', 'Conteo Fisico']) assert.ok(!cont.includes(viejo), `m11: sin «${viejo}»`);
   assert.ok(cont.includes('Inspección y Calidad') && cont.includes('Óptimo (Sin daños visibles)'));
   const colRec = readFileSync(new URL('../src/app/dashboard/compras/columnas-recepcion.tsx', import.meta.url), 'utf8');
-  assert.ok(colRec.includes("(esEntradaManual(r) ? 'Manual' : pecDeRecepcion(r))"), 'm6 y m7: «Entrada manual» no cabe en 92 px (medido: 90 contra 68): la tabla dice Manual, decidido por el dato');
+  assert.ok(colRec.includes("(esEntradaManual(r) ? 'Manual' : pecDeRecepcion(r))"), 'm6 y m7: «Entrada manual» no cabe en 92 px (medido: 99 contra 68): la tabla dice Manual, decidido por el dato');
   assert.ok(!colRec.includes("=== 'Entrada manual'"), 'm3: no se compara el texto');
   assert.ok(colRec.includes('titleCelda: (r) => pecDeRecepcion(r),'), 'm3: el title sigue diciendo «Entrada manual» (texto largo)');
   assert.ok(colRec.includes('{pecCorto(r)}</span>'), 'la celda pinta la forma corta');
