@@ -1790,3 +1790,184 @@ export function llegadaEnlaceProducto(pedido, filas) {
       : pedido.id !== null ? `No se encontró el producto #${pedido.id}.` : `No se encontró un producto con el SKU «${pedido.sku}».`,
   };
 }
+
+// ─── Ajustes de Inventario: la tabla, el tablero solo para ver y las tarjetas (B4 T19: TABLA-inventario punto 11, KANBAN-resto, KPI-inventario punto 9; RP96) ────
+
+/**
+ * Los grupos de dirección de un ajuste (RP96): los MISMOS del Kardex (una sola fuente, COLUMNAS_KARDEX): entrada = IN, ADJUST_IN y
+ * TRANSFER_IN; salida = OUT, ADJUST_OUT y TRANSFER_OUT. Inmutable.
+ * @type {Readonly<{entrada: ReadonlyArray<string>, salida: ReadonlyArray<string>}>}
+ */
+export const GRUPOS_AJUSTE = congelar({ entrada: [...COLUMNAS_KARDEX[0].estados], salida: [...COLUMNAS_KARDEX[1].estados] });
+
+/**
+ * El tablero solo para ver de Ajustes (R11): Entradas · Salidas. La clave de cada columna es la `direccion` que el servidor
+ * entiende (entrada | salida); no tiene estados que mover. Inmutable.
+ * @type {ReadonlyArray<Readonly<Columna>>}
+ */
+export const COLUMNAS_AJUSTE = congelar([
+  columna('entrada', 'Entradas', 'emerald', ['entrada']),
+  columna('salida', 'Salidas', 'rose', ['salida']),
+]);
+
+/**
+ * La dirección de un ajuste, 'entrada' o 'salida': la de su PRIMER movimiento según GRUPOS_AJUSTE (igual que el filtro `direccion`
+ * de GET /inventory/operations, RP96). Sin movimientos o con otra dirección (cuarentena, pérdida, devolución), null.
+ * @param {any} a
+ * @returns {'entrada' | 'salida' | null}
+ */
+export function direccionDeAjuste(a) {
+  const primero = Array.isArray(a?.movements) ? a.movements[0] : null;
+  const d = typeof primero?.direction === 'string' ? primero.direction : '';
+  if (GRUPOS_AJUSTE.entrada.includes(d)) return 'entrada';
+  if (GRUPOS_AJUSTE.salida.includes(d)) return 'salida';
+  return null;
+}
+
+const INFO_DIRECCION_AJUSTE = congelar({
+  entrada: congelar({ label: 'Entrada', signo: '+', clases: CLASES_VERDE }),
+  salida: congelar({ label: 'Salida', signo: '-', clases: CLASES_ROJO }),
+});
+const SIN_DIRECCION_AJUSTE = congelar({ label: 'Sin dirección', signo: '', clases: { ...GRIS } });
+
+/**
+ * La etiqueta, el signo y las clases de la dirección de un ajuste ('entrada' o 'salida'); sin ella, «Sin dirección» en gris.
+ * @param {unknown} direccion
+ * @returns {Readonly<{label: string, signo: '+' | '-' | '', clases: ClasesEstado}>}
+ */
+export function infoDireccionAjuste(direccion) {
+  return typeof direccion === 'string' && tiene(INFO_DIRECCION_AJUSTE, direccion) ? INFO_DIRECCION_AJUSTE[direccion] : SIN_DIRECCION_AJUSTE;
+}
+
+/** AJU-0012: el número de un ajuste (el id con al menos 4 cifras, como _numero_operacion del servidor). */
+export function numeroAjuste(a) {
+  return `AJU-${String(a?.id ?? '').padStart(4, '0')}`;
+}
+
+/** La fecha REAL del ajuste (`fecha`: el primer movimiento, un instante): su día en Colombia; sin movimientos, '—'. */
+export function textoFechaAjuste(a) {
+  return fechaCorta(a?.fecha) || '—';
+}
+
+/** La bodega del ajuste: la de destino y, si no, la de origen; sin ninguna, null. */
+export function bodegaDeAjuste(a) {
+  return a?.dest_warehouse_id ?? a?.source_warehouse_id ?? null;
+}
+
+/** La cantidad del primer movimiento del ajuste; sin movimientos o sin número, null (la celda dice «—», nunca 0). */
+export function cantidadDeAjuste(a) {
+  const primero = Array.isArray(a?.movements) ? a.movements[0] : null;
+  return numeroFinito(primero?.quantity);
+}
+
+/** El producto del ajuste: «SKU #9» (la operación no trae el nombre, solo el id del SKU); sin movimientos, '—'. */
+export function skuDeAjuste(a) {
+  const primero = Array.isArray(a?.movements) ? a.movements[0] : null;
+  return primero?.sku_id === null || primero?.sku_id === undefined ? '—' : `SKU #${primero.sku_id}`;
+}
+
+/** El motivo del ajuste (sus notas); sin ellas, '—'. */
+export function motivoDeAjuste(a) {
+  return textoLimpio(a?.notas) ?? '—';
+}
+
+/**
+ * Las vistas (pestañas) de Ajustes y el valor de `direccion` que pide cada una al servidor (RP96). Inmutable.
+ * @type {Readonly<Record<'todos' | 'entradas' | 'salidas', 'entrada' | 'salida' | null>>}
+ */
+export const VISTAS_AJUSTE = congelar({ todos: null, entradas: 'entrada', salidas: 'salida' });
+
+/**
+ * Lo que la TABLA de Ajustes le suma a la consulta de useListado (`extra`): solo ajustes (operation_type) y la pestaña como
+ * `direccion`. `vista` va en null (GET /inventory/operations no la tiene) y Ajustes no filtra por estado ni por semáforo.
+ * @param {import('./tabla.js').EstadoTabla | null | undefined} estado
+ * @returns {{operation_type: 'ADJUSTMENT', vista: null, semaforo: null, paso: null, estados: null, status: null, direccion: string | null}}
+ */
+export function consultaAjustes(estado) {
+  const vista = typeof estado?.vista === 'string' && tiene(VISTAS_AJUSTE, estado.vista) ? estado.vista : 'todos';
+  return { operation_type: 'ADJUSTMENT', vista: null, semaforo: null, paso: null, estados: null, status: null, direccion: VISTAS_AJUSTE[vista] };
+}
+
+/**
+ * La consulta de una columna del tablero de Ajustes en modo servidor: la `direccion` de la columna, la búsqueda del MISMO estado,
+ * los más recientes primero y el límite y el desplazamiento de la columna (limit=0 en la plegada). La pestaña no viaja.
+ * @param {import('./tabla.js').EstadoTabla} estado
+ * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
+ * @param {{limit: number, offset: number}} consulta
+ * @returns {string}
+ */
+export function consultaColumnaAjuste(estado, columna, { limit, offset }) {
+  return queryListado(estado, {
+    operation_type: 'ADJUSTMENT', vista: null, semaforo: null, paso: null, estados: null, orden: '-fecha',
+    direccion: columna?.estados?.[0] ?? null, limit, offset,
+  });
+}
+
+const consultaTotalAjustes = (direccion) => queryListado(null, {
+  vista: null, semaforo: null, paso: null, q: null, estados: null, orden: null, limit: 0, offset: 0, operation_type: 'ADJUSTMENT', direccion,
+});
+
+/**
+ * Las tres consultas de los totales (limit=0: solo el total) de las pestañas y las tarjetas (RP96): todos los ajustes, los de
+ * entrada y los de salida, sin búsqueda. Inmutable.
+ * @type {Readonly<{todos: string, entradas: string, salidas: string}>}
+ */
+export const CONSULTAS_TOTALES_AJUSTE = congelar({
+  todos: consultaTotalAjustes(null), entradas: consultaTotalAjustes('entrada'), salidas: consultaTotalAjustes('salida'),
+});
+
+/**
+ * Las pestañas de Ajustes con los totales de CONSULTAS_TOTALES_AJUSTE ({todos, entradas, salidas}); lo que no llega queda en null
+ * (la barra gris, nunca 0). Las tarjetas aju_* leen esos mismos totales.
+ * @param {any} totales
+ * @returns {{id: string, etiqueta: string, conteo: number | null}[]}
+ */
+export function pestanasAjustes(totales) {
+  const t = objetoPlano(totales) ?? {};
+  return [
+    { id: 'todos', etiqueta: 'Todos', conteo: numeroFinito(t.todos) },
+    { id: 'entradas', etiqueta: 'Entradas', conteo: numeroFinito(t.entradas) },
+    { id: 'salidas', etiqueta: 'Salidas', conteo: numeroFinito(t.salidas) },
+  ];
+}
+
+/**
+ * Lo que dice la tabla de Ajustes cuando no hay filas: la búsqueda o la pestaña.
+ * @param {Partial<import('./tabla.js').EstadoTabla> | null | undefined} estado
+ * @returns {{titulo: string, ayuda: string | null}}
+ */
+export function textoVacioAjustes(estado) {
+  const q = typeof estado?.q === 'string' ? estado.q.trim() : '';
+  if (q) return { titulo: `Sin resultados para «${q}»`, ayuda: 'Ajusta la búsqueda.' };
+  if (estado?.vista === 'entradas') return { titulo: 'No hay ajustes de entrada', ayuda: null };
+  if (estado?.vista === 'salidas') return { titulo: 'No hay ajustes de salida', ayuda: null };
+  return { titulo: 'Sin ajustes registrados', ayuda: 'Los ajustes corrigen diferencias de stock detectadas en un conteo físico.' };
+}
+
+/**
+ * La tarjeta de un ajuste en el tablero solo para ver: el número, el producto, la bodega, la dirección, la cantidad con su signo,
+ * el motivo y la fecha real.
+ * @param {any} a
+ * @param {ReadonlyArray<{id: number, name?: string | null}> | null | undefined} bodegas
+ */
+export function tarjetaAjuste(a, bodegas) {
+  const info = infoDireccionAjuste(direccionDeAjuste(a));
+  const n = cantidadDeAjuste(a);
+  const motivo = textoLimpio(a?.notas);
+  const fecha = textoFechaAjuste(a);
+  return {
+    numero: numeroAjuste(a),
+    tipo: 'AJU',
+    titulo: skuDeAjuste(a),
+    subtitulo: nombreBodega(bodegas, bodegaDeAjuste(a)),
+    monto: null,
+    estado: { label: info.label, clases: info.clases },
+    chips: [
+      { texto: n === null ? '—' : `${info.signo}${formatoDecimal(Math.abs(n))} ${Math.abs(n) === 1 ? 'unidad' : 'unidades'}`, tono: info.signo === '+' ? 'emerald' : info.signo === '-' ? 'rose' : 'slate' },
+      ...(motivo ? [{ texto: motivo, tono: 'slate' }] : []),
+    ],
+    tiempo: fecha === '—' ? null : fecha,
+    atrasada: false,
+    accionPrincipal: null,
+  };
+}

@@ -806,4 +806,40 @@ console.log('--- TEST 21 (B4 T18, KPI-inventario punto 5 y 6): las tarjetas de S
   assert.equal(etiquetaKpi('pec_activos'), 'Pedidos de compra activos');
 }
 
+console.log('--- TEST 22 (B4 T19; KPI-inventario punto 9, RP96): tarjetasAjustes y el total de Recepciones de Inventario ---');
+{
+  const aj = kpisLib.tarjetasAjustes;
+  assert.equal(typeof aj, 'function', 'tarjetasAjustes existe');
+  // aju_total, aju_entradas y aju_salidas son los TOTALES de tres consultas (limit=0); aju_neto = entradas − salidas, con signo.
+  assert.deepEqual(aj({ todos: 12, entradas: 7, salidas: 4 }), {
+    total: { valor: 12 }, entradas: { valor: 7 }, salidas: { valor: 4 },
+    neto: { valor: 3, texto: '+3', ayuda: '7 entradas contra 4 salidas' },
+  });
+  assert.deepEqual(aj({ todos: 5, entradas: 1, salidas: 4 }).neto, { valor: -3, texto: '-3', ayuda: '1 entrada contra 4 salidas' });
+  assert.deepEqual(aj({ todos: 5, entradas: 2, salidas: 2 }).neto, { valor: 0, texto: '0', ayuda: '2 entradas contra 2 salidas' });
+  assert.deepEqual(aj({ todos: 1, entradas: 0, salidas: 1 }).neto, { valor: -1, texto: '-1', ayuda: '0 entradas contra 1 salida' });
+  assert.equal(aj({ todos: 1100, entradas: 1100, salidas: 0 }).neto.texto, '+1.100', 'con punto de miles');
+  // Sin uno de los dos totales no hay neto (null, no entradas − 0): la barra gris o «—».
+  assert.deepEqual(aj({ todos: 5, entradas: 3 }).neto, { valor: null, texto: null, ayuda: null });
+  assert.deepEqual(aj({ todos: 5, salidas: 3 }).neto, { valor: null, texto: null, ayuda: null });
+  assert.deepEqual(aj({ todos: 5, entradas: '3', salidas: '1' }).neto.valor, 2, 'un número en texto vale');
+  // Sin datos: null en todo, nunca 0.
+  for (const malo of [null, undefined, 'x', 7, [1]]) {
+    assert.deepEqual(aj(malo), { total: { valor: null }, entradas: { valor: null }, salidas: { valor: null }, neto: { valor: null, texto: null, ayuda: null } }, String(malo));
+  }
+  assert.deepEqual(aj({ todos: 'x', entradas: -1, salidas: NaN }).total, { valor: null });
+  assert.equal(etiquetaKpi('aju_neto'), 'Diferencia neta');
+  assert.equal(etiquetaKpi('aju_total'), 'Total de ajustes');
+  // El total de Recepciones (rec_total): recepciones.total de /compras/stats, el mismo de la pestaña Todas.
+  const tr = kpisLib.totalRecepciones;
+  assert.equal(typeof tr, 'function', 'totalRecepciones existe');
+  assert.equal(tr({ recepciones: { por_confirmar: 6, confirmadas: 21, canceladas: 1, total: 28 } }), 28);
+  assert.equal(tr({ recepciones: { total: '9' } }), 9);
+  assert.equal(tr({ recepciones: {} }), null);
+  assert.equal(tr({}), null);
+  assert.equal(tr(null), null);
+  assert.equal(tr('x'), null);
+  assert.equal(etiquetaKpi('rec_total'), 'Total de recepciones');
+}
+
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

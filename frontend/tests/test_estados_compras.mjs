@@ -2668,4 +2668,83 @@ console.log('--- TEST 45 (B4 T18, TABLA-inventario punto 7; KANBAN-resto; RP47 a
   trae(p, 'CONTENEDOR', 'el contenedor con pb-24');
 }
 
+console.log('--- TEST 46 (B4 T19; TABLA-inventario punto 11, KANBAN-resto, KPI-inventario punto 9; RP96): lo puro de Ajustes ---');
+{
+  const aju = (id, direccion, extra = {}) => ({
+    id, operation_type: 'ADJUSTMENT', status: 'DONE', source_warehouse_id: null, dest_warehouse_id: 3, notas: 'Conteo fisico',
+    fecha: '2026-11-03T15:30:00Z', movements: direccion === undefined ? [] : [{ id: 1, sku_id: 9, quantity: 4, direction: direccion }], ...extra,
+  });
+  // La dirección de un ajuste es la de su PRIMER movimiento, con los grupos del Kardex (RP96): entrada = IN, ADJUST_IN y TRANSFER_IN;
+  // salida = OUT, ADJUST_OUT y TRANSFER_OUT. Cualquier otra, o sin movimientos, no es ninguna de las dos.
+  for (const d of ['IN', 'ADJUST_IN', 'TRANSFER_IN']) assert.equal(ec.direccionDeAjuste(aju(1, d)), 'entrada', d);
+  for (const d of ['OUT', 'ADJUST_OUT', 'TRANSFER_OUT']) assert.equal(ec.direccionDeAjuste(aju(1, d)), 'salida', d);
+  for (const d of ['QUARANTINE', 'SCRAP', 'RETURN_IN', null, '']) assert.equal(ec.direccionDeAjuste(aju(1, d)), null, String(d));
+  assert.equal(ec.direccionDeAjuste(aju(1)), null, 'sin movimientos');
+  assert.equal(ec.direccionDeAjuste({ movements: [{ direction: 'ADJUST_OUT' }, { direction: 'IN' }] }), 'salida', 'solo cuenta el primero');
+  assert.equal(ec.direccionDeAjuste(null), null);
+  // Los grupos son los del Kardex (una sola fuente): las columnas del tablero de Ajustes salen de COLUMNAS_KARDEX.
+  assert.deepEqual(ec.COLUMNAS_AJUSTE.map((c) => [c.clave, c.titulo, c.cerrada]), [['entrada', 'Entradas', false], ['salida', 'Salidas', false]]);
+  assert.deepEqual(ec.GRUPOS_AJUSTE, { entrada: [...ec.COLUMNAS_KARDEX[0].estados], salida: [...ec.COLUMNAS_KARDEX[1].estados] });
+  assert.ok(Object.isFrozen(ec.COLUMNAS_AJUSTE) && Object.isFrozen(ec.GRUPOS_AJUSTE));
+  // El número (AJU-0012 como _numero_operacion del servidor), la fecha real, la bodega, la cantidad y el producto.
+  assert.equal(ec.numeroAjuste({ id: 12 }), 'AJU-0012');
+  assert.equal(ec.numeroAjuste({ id: 12345 }), 'AJU-12345');
+  assert.equal(ec.textoFechaAjuste(aju(1, 'IN')), '3 nov 2026');
+  assert.equal(ec.textoFechaAjuste(aju(1, 'IN', { fecha: null })), '—');
+  assert.equal(ec.textoFechaAjuste(aju(1, 'IN', { fecha: '2026-11-04T03:00:00Z' })), '3 nov 2026', 'el día de Colombia, no el UTC');
+  assert.equal(ec.bodegaDeAjuste(aju(1, 'IN')), 3);
+  assert.equal(ec.bodegaDeAjuste(aju(1, 'OUT', { dest_warehouse_id: null, source_warehouse_id: 8 })), 8);
+  assert.equal(ec.bodegaDeAjuste(aju(1, 'OUT', { dest_warehouse_id: null })), null);
+  assert.equal(ec.cantidadDeAjuste(aju(1, 'IN')), 4);
+  assert.equal(ec.cantidadDeAjuste(aju(1)), null, 'sin movimientos: —, no 0');
+  assert.equal(ec.cantidadDeAjuste({ movements: [{ quantity: '2.5' }] }), 2.5);
+  assert.equal(ec.skuDeAjuste(aju(1, 'IN')), 'SKU #9');
+  assert.equal(ec.skuDeAjuste(aju(1)), '—');
+  assert.equal(ec.motivoDeAjuste(aju(1, 'IN')), 'Conteo fisico');
+  assert.equal(ec.motivoDeAjuste(aju(1, 'IN', { notas: '  ' })), '—');
+  // La insignia de la dirección: Entrada (verde), Salida (roja); sin dirección, gris, nunca el código.
+  assert.deepEqual(ec.infoDireccionAjuste('entrada').label, 'Entrada');
+  assert.deepEqual(ec.infoDireccionAjuste('salida').label, 'Salida');
+  assert.equal(ec.infoDireccionAjuste('entrada').signo, '+');
+  assert.equal(ec.infoDireccionAjuste('salida').signo, '-');
+  assert.equal(ec.infoDireccionAjuste(null).label, 'Sin dirección');
+  assert.notEqual(ec.infoDireccionAjuste('entrada').clases, ec.infoDireccionAjuste('salida').clases);
+
+  // Las vistas (pestañas): Todos · Entradas · Salidas, con el parámetro `direccion` del servidor. `vista` va en null (el endpoint no la tiene).
+  const e = (parcial = {}) => estadoTablaInicial({ vista: 'todos', ...parcial });
+  assert.deepEqual(ec.consultaAjustes(e()), { operation_type: 'ADJUSTMENT', vista: null, semaforo: null, paso: null, estados: null, status: null, direccion: null });
+  assert.equal(ec.consultaAjustes(e({ vista: 'entradas' })).direccion, 'entrada');
+  assert.equal(ec.consultaAjustes(e({ vista: 'salidas' })).direccion, 'salida');
+  assert.equal(ec.consultaAjustes(e({ vista: 'otra' })).direccion, null, 'una pestaña que no existe: Todos');
+  assert.equal(ec.consultaAjustes(e({ vista: 'entradas', estados: ['DONE'] })).estados, null, 'Ajustes no filtra por estado');
+  // El tablero en modo servidor: una consulta por columna con SU dirección, la búsqueda del MISMO estado y los más recientes primero.
+  assert.equal(ec.consultaColumnaAjuste(e({ q: 'merma' }), ec.COLUMNAS_AJUSTE[1], { limit: 25, offset: 0 }),
+    'q=merma&orden=-fecha&limit=25&offset=0&operation_type=ADJUSTMENT&direccion=salida');
+  assert.equal(ec.consultaColumnaAjuste(e({ vista: 'entradas' }), ec.COLUMNAS_AJUSTE[0], { limit: 0, offset: 0 }),
+    'orden=-fecha&limit=0&offset=0&operation_type=ADJUSTMENT&direccion=entrada', 'la pestaña no viaja; la plegada pide limit=0');
+  // Los totales de las tres cifras (pestañas y tarjetas): limit=0 y la dirección, sin búsqueda (RP96).
+  assert.deepEqual(ec.CONSULTAS_TOTALES_AJUSTE, {
+    todos: 'limit=0&offset=0&operation_type=ADJUSTMENT',
+    entradas: 'limit=0&offset=0&operation_type=ADJUSTMENT&direccion=entrada',
+    salidas: 'limit=0&offset=0&operation_type=ADJUSTMENT&direccion=salida',
+  });
+  // Las pestañas y las tarjetas salen de los MISMOS totales (I1 de T18).
+  const totales = { todos: 12, entradas: 7, salidas: 4 };
+  assert.deepEqual(ec.pestanasAjustes(totales).map((p) => [p.id, p.etiqueta, p.conteo]), [['todos', 'Todos', 12], ['entradas', 'Entradas', 7], ['salidas', 'Salidas', 4]]);
+  assert.deepEqual(ec.pestanasAjustes(null).map((p) => p.conteo), [null, null, null]);
+  assert.deepEqual(ec.pestanasAjustes({ todos: 'x', entradas: 2 }).map((p) => p.conteo), [null, 2, null]);
+  // Los vacíos dicen qué los deja vacíos.
+  assert.equal(ec.textoVacioAjustes({ vista: 'todos', q: 'zz' }).titulo, 'Sin resultados para «zz»');
+  assert.equal(ec.textoVacioAjustes({ vista: 'entradas', q: '' }).titulo, 'No hay ajustes de entrada');
+  assert.equal(ec.textoVacioAjustes({ vista: 'salidas', q: '' }).titulo, 'No hay ajustes de salida');
+  assert.equal(ec.textoVacioAjustes({ vista: 'todos', q: '' }).titulo, 'Sin ajustes registrados');
+  // La tarjeta del tablero: número, producto, bodega, la dirección, la cantidad con signo y la fecha real.
+  const t = ec.tarjetaAjuste(aju(12, 'ADJUST_OUT'), [{ id: 3, name: 'Bodega Norte' }]);
+  assert.deepEqual([t.numero, t.tipo, t.titulo, t.subtitulo, t.tiempo, t.monto, t.accionPrincipal], ['AJU-0012', 'AJU', 'SKU #9', 'Bodega Norte', '3 nov 2026', null, null]);
+  assert.equal(t.estado.label, 'Salida');
+  assert.deepEqual(t.chips, [{ texto: '-4 unidades', tono: 'rose' }, { texto: 'Conteo fisico', tono: 'slate' }]);
+  assert.deepEqual(ec.tarjetaAjuste(aju(1, 'IN', { movements: [{ sku_id: 9, quantity: 1, direction: 'IN' }], notas: null }), null).chips, [{ texto: '+1 unidad', tono: 'emerald' }]);
+  assert.equal(ec.tarjetaAjuste(aju(1, 'IN'), null).subtitulo, 'Bodega #3');
+}
+
 console.log('\nOK: test_estados_compras.mjs');

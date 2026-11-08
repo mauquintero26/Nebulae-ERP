@@ -831,3 +831,44 @@ export function tarjetasAbastecimiento(stats, compras) {
     pec_activos: { valor: numeroFinito(c.pec_activos), ayuda: 'Pedidos de compra en curso.' },
   };
 }
+
+/**
+ * B4 T19 (KPI-inventario punto 9; RP96): lo que pintan las 4 tarjetas de Ajustes con los TOTALES de tres consultas a GET
+ * /inventory/operations?operation_type=ADJUSTMENT&limit=0 (sin dirección, direccion=entrada y direccion=salida): los mismos números de
+ * las pestañas Todos, Entradas y Salidas. La diferencia neta es entradas − salidas (de ajustes, no de unidades), con signo y con
+ * su ayuda «7 entradas contra 4 salidas»; sin uno de los dos totales no hay neto (null, no entradas − 0). Lo que no es un número
+ * queda en null: la barra gris o «—», nunca 0.
+ * @param {any} totales  {todos, entradas, salidas}
+ * @returns {{total: {valor: number | null}, entradas: {valor: number | null}, salidas: {valor: number | null},
+ *   neto: {valor: number | null, texto: string | null, ayuda: string | null}}}
+ */
+export function tarjetasAjustes(totales) {
+  const t = totales !== null && typeof totales === 'object' && !Array.isArray(totales) ? totales : {};
+  const entradas = numeroFinito(t.entradas);
+  const salidas = numeroFinito(t.salidas);
+  const neto = entradas === null || salidas === null ? null : entradas - salidas;
+  return {
+    total: { valor: numeroFinito(t.todos) },
+    entradas: { valor: entradas },
+    salidas: { valor: salidas },
+    neto: neto === null || entradas === null || salidas === null
+      ? { valor: null, texto: null, ayuda: null }
+      : {
+        valor: neto,
+        texto: `${neto > 0 ? '+' : neto < 0 ? '-' : ''}${formatoEntero(Math.abs(neto))}`,
+        ayuda: `${conNombre(entradas, 'entrada', 'entradas')} contra ${conNombre(salidas, 'salida', 'salidas')}`,
+      },
+  };
+}
+
+/**
+ * B4 T19 (KPI-inventario punto 7): el total de Recepciones de Inventario (rec_total): `recepciones.total` de GET /compras/stats
+ * (T12), el mismo número que la pestaña Todas y que Compras › Recepciones. Sin un número, null.
+ * @param {any} datos
+ * @returns {number | null}
+ */
+export function totalRecepciones(datos) {
+  if (datos === null || typeof datos !== 'object' || Array.isArray(datos)) return null;
+  const rec = datos.recepciones;
+  return rec !== null && typeof rec === 'object' ? numeroFinito(rec.total) : null;
+}

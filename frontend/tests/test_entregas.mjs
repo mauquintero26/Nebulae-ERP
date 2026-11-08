@@ -141,4 +141,183 @@ console.log('--- TEST 4: reglaSoltarEntrega ---');
   }
 }
 
+// ─── B4 T19: lo puro de la pantalla Inventario › Entregas (las consultas, las pestañas, el despacho y la tarjeta) ──────────
+import * as ent from '../src/lib/entregas.js';
+import { estadoTablaInicial } from '../src/lib/tabla.js';
+
+const estadoE = (parcial = {}) => estadoTablaInicial({ vista: 'listo', ...parcial });
+const COL = (clave) => COLUMNAS_ENTREGA.find((c) => c.clave === clave);
+
+console.log('--- TEST 5 (T19): la consulta de la TABLA: la pestaña = la columna (estados + saldo), sin `vista` del servidor ---');
+{
+  assert.equal(typeof ent.consultaEntregas, 'function');
+  // Cada pestaña pide los estados y el saldo de SU columna; `vista` va en null (el servidor no tiene vista 'listo': 422) y el
+  // semáforo y el paso de una sesión restaurada no se mandan (Entregas no los tiene).
+  for (const c of COLUMNAS_ENTREGA) {
+    assert.deepEqual(ent.consultaEntregas(estadoE({ vista: c.clave })),
+      { vista: null, semaforo: null, paso: null, estados: [...c.estados], saldo: c.saldo }, c.clave);
+  }
+  // Una pestaña que no existe (una sesión vieja con 'todos') cae en la de trabajo: Listo para despachar.
+  assert.equal(ent.consultaEntregas(estadoE({ vista: 'todos' })).saldo, 'pagado');
+  assert.deepEqual(ent.consultaEntregas(estadoE({ vista: null })).estados, [...COL('listo').estados]);
+  // El filtro de estados: el cruce con la pestaña; un filtro que la pestaña no tiene gana (lo que pide es lo que FiltroEstados muestra).
+  assert.deepEqual(ent.consultaEntregas(estadoE({ vista: 'listo', estados: ['DISPONIBLE'] })).estados, ['DISPONIBLE']);
+  assert.deepEqual(ent.consultaEntregas(estadoE({ vista: 'listo', estados: ['ENTREGADO'] })).estados, ['ENTREGADO']);
+  // Nunca devuelve CANCELADO ni DEVUELTO_TOTAL desde una pestaña sin filtro.
+  for (const c of COLUMNAS_ENTREGA) {
+    const pedidos = ent.consultaEntregas(estadoE({ vista: c.clave })).estados;
+    assert.ok(!pedidos.includes('CANCELADO') && !pedidos.includes('DEVUELTO_TOTAL'), c.clave);
+  }
+}
+
+console.log('--- TEST 6 (T19): la consulta de una COLUMNA del tablero (modo servidor) y los conteos de las pestañas ---');
+{
+  const e = estadoE();
+  const q = ent.consultaColumnaEntrega(e, COL('listo'), { orden: 'atencion', limit: 25, offset: 0 });
+  assert.equal(q, 'estados=LISTO_ENTREGA,DISPONIBLE,PENDIENTE_SALDO,LISTO_PARA_ENTREGA&orden=atencion&limit=25&offset=0&saldo=pagado');
+  // La plegada pide limit=0 (el hook lo manda) y la de saldo, saldo=pendiente.
+  assert.equal(ent.consultaColumnaEntrega(e, COL('falta_saldo'), { orden: 'atencion', limit: 0, offset: 0 }),
+    'estados=LISTO_ENTREGA,DISPONIBLE,PENDIENTE_SALDO,LISTO_PARA_ENTREGA&orden=atencion&limit=0&offset=0&saldo=pendiente');
+  assert.equal(ent.consultaColumnaEntrega(e, COL('despachado'), { orden: 'reciente', limit: 0, offset: 0 }),
+    'estados=ENTREGADO,PARCIALMENTE_ENTREGADO,FACTURADO&orden=reciente&limit=0&offset=0');
+  // La búsqueda y el filtro de estados son los MISMOS del estado único; la pestaña NO viaja (el tablero trae las cuatro columnas).
+  const con = ent.consultaColumnaEntrega(estadoE({ q: 'oso', estados: ['ENTREGADO'] }), COL('despachado'), { orden: null, limit: 25, offset: 25 });
+  assert.equal(con, 'q=oso&estados=ENTREGADO,PARCIALMENTE_ENTREGADO,FACTURADO&limit=25&offset=25');
+  assert.ok(!/(^|&)vista=/.test(q) && !/(^|&)semaforo=/.test(q));
+  // Un filtro sin nada en común con la columna: no pide (null), la columna queda vacía.
+  assert.equal(ent.consultaColumnaEntrega(estadoE({ estados: ['ENTREGADO'] }), COL('esperando'), { orden: null, limit: 25, offset: 0 }), null);
+  // Los conteos de las pestañas: estados + saldo de cada columna, SIN búsqueda ni filtro y con limit=0 (solo el total).
+  assert.equal(typeof ent.consultaConteoEntrega, 'function');
+  assert.equal(ent.consultaConteoEntrega(COL('falta_saldo')),
+    'estados=LISTO_ENTREGA,DISPONIBLE,PENDIENTE_SALDO,LISTO_PARA_ENTREGA&limit=0&offset=0&saldo=pendiente');
+  assert.equal(ent.consultaConteoEntrega(COL('despachado')), 'estados=ENTREGADO,PARCIALMENTE_ENTREGADO,FACTURADO&limit=0&offset=0');
+}
+
+console.log('--- TEST 7 (T19, lección I1 de T18): las pestañas y la tarjeta Despachados salen de los MISMOS conteos ---');
+{
+  const conteos = { esperando: 4, falta_saldo: 2, listo: 7, despachado: 31 };
+  const pestanas = ent.pestanasEntrega(conteos);
+  assert.deepEqual(pestanas.map((p) => [p.id, p.etiqueta, p.conteo]), [
+    ['esperando', 'Esperando mercancía', 4], ['falta_saldo', 'Listo pero falta saldo', 2],
+    ['listo', 'Listo para despachar', 7], ['despachado', 'Despachados', 31],
+  ]);
+  assert.equal(pestanas.find((p) => p.id === 'falta_saldo').alerta, true, 'hay pedidos con saldo: ámbar');
+  assert.equal(ent.pestanasEntrega({ ...conteos, falta_saldo: 0 }).find((p) => p.id === 'falta_saldo').alerta, false);
+  // Mientras no llegan (o fallaron), null: la barra gris, nunca 0.
+  assert.deepEqual(ent.pestanasEntrega(null).map((p) => p.conteo), [null, null, null, null]);
+  assert.deepEqual(ent.pestanasEntrega({ esperando: 'x', listo: 3 }).map((p) => p.conteo), [null, null, 3, null]);
+  // Las tarjetas: la de Despachados es el conteo de su pestaña (ni 1 de diferencia), las otras dos son del servidor de ventas.
+  const kpis = { pven_en_curso: 11, pven_saldo_en_curso: 2500000 };
+  const t = ent.tarjetasEntregas(kpis, conteos);
+  assert.deepEqual(t, { en_curso: { valor: 11 }, saldo: { valor: 2500000 }, despachados: { valor: 31 } });
+  assert.equal(t.despachados.valor, ent.pestanasEntrega(conteos).find((p) => p.id === 'despachado').conteo);
+  // Sin datos: null, no 0.
+  assert.deepEqual(ent.tarjetasEntregas(null, null), { en_curso: { valor: null }, saldo: { valor: null }, despachados: { valor: null } });
+  assert.deepEqual(ent.tarjetasEntregas({ pven_en_curso: '3' }, { despachado: 'x' }),
+    { en_curso: { valor: 3 }, saldo: { valor: null }, despachados: { valor: null } });
+  assert.deepEqual(ent.tarjetasEntregas('x', 7), { en_curso: { valor: null }, saldo: { valor: null }, despachados: { valor: null } });
+}
+
+console.log('--- TEST 8 (T19, RP23): el cuerpo del despacho: Bodega manda EXACTAMENTE {estado, warehouse_id}; ADMIN y ASESOR lo de hoy sin fecha_entrega ---');
+{
+  const catalogo = { id: 5, numero: 'PVEN-5', notas: null, productos: [{ sku_id: 9, product_name: 'Oso', qty: 2 }] };
+  const libre = { id: 6, numero: 'PVEN-6', notas: 'Llamar antes', productos: [{ product_name: 'Servicio', qty: 1 }] };
+  assert.deepEqual(ent.cuerpoDespacho(catalogo, { rol: 'BODEGA', warehouseId: '3', hoy: '3/11/2026' }), { estado: 'ENTREGADO', warehouse_id: 3 });
+  assert.deepEqual(Object.keys(ent.cuerpoDespacho(catalogo, { rol: 'BODEGA', warehouseId: '3' })), ['estado', 'warehouse_id'], 'Bodega: ni notas ni fecha_entrega');
+  assert.deepEqual(Object.keys(ent.cuerpoDespacho(libre, { rol: ' bodega ', warehouseId: '4' })), ['estado', 'warehouse_id'], 'el rol se normaliza');
+  assert.deepEqual(ent.cuerpoDespacho(catalogo, { rol: 'ADMIN', warehouseId: '3', hoy: '3/11/2026' }),
+    { estado: 'ENTREGADO', warehouse_id: 3, notas: 'Despachado desde mesa de entregas' });
+  assert.deepEqual(ent.cuerpoDespacho(libre, { rol: 'ASESOR', warehouseId: '', hoy: '3/11/2026' }),
+    { estado: 'ENTREGADO', notas: 'Llamar antes | Despachado el 3/11/2026' }, 'sin bodega no manda warehouse_id (lineas libres)');
+  assert.ok(!('fecha_entrega' in ent.cuerpoDespacho(catalogo, { rol: 'ADMIN', warehouseId: '3' })), 'fecha_entrega no se guarda');
+  assert.ok(!('updated_by' in ent.cuerpoDespacho(catalogo, { rol: 'BODEGA', warehouseId: '3' })));
+  // La bodega: Bodega siempre; ADMIN y ASESOR solo con líneas de catálogo (sku_id), como hoy.
+  assert.equal(ent.bodegaObligatoria(libre, 'BODEGA'), true);
+  assert.equal(ent.bodegaObligatoria(libre, 'ADMIN'), false);
+  assert.equal(ent.bodegaObligatoria(catalogo, 'ASESOR'), true);
+  assert.equal(ent.bodegaObligatoria({ productos: null }, 'ADMIN'), false);
+  assert.equal(ent.mensajeFaltaBodega(catalogo, { rol: 'ADMIN', warehouseId: '' }), 'Selecciona la bodega de despacho antes de continuar');
+  assert.equal(ent.mensajeFaltaBodega(catalogo, { rol: 'ADMIN', warehouseId: '3' }), null);
+  assert.equal(ent.mensajeFaltaBodega(libre, { rol: 'ASESOR', warehouseId: '' }), null);
+  assert.equal(ent.mensajeFaltaBodega(libre, { rol: 'BODEGA', warehouseId: '' }), 'Selecciona la bodega de despacho antes de continuar');
+  // Quién despacha: ADMIN, ASESOR y BODEGA (el nombre viejo también); los demás solo ven.
+  for (const rol of ['ADMIN', 'ASESOR', 'BODEGA', 'Vendedor', ' admin ']) assert.equal(ent.puedeDespachar(rol), true, rol);
+  for (const rol of ['FINANZAS', 'COMPRAS', '', null, undefined]) assert.equal(ent.puedeDespachar(rol), false, String(rol));
+}
+
+console.log('--- TEST 9 (T19, RP23): lo que pregunta confirmar() de useAvisos antes de despachar (ya no window.confirm) ---');
+{
+  const c = ent.confirmacionDespacho({ numero: 'PVEN-5', customer_name: 'Ana', saldo_cop: 400000 }, 'Bodega Norte');
+  assert.equal(c.peligro, true, 'con saldo: botón de alerta');
+  assert.match(c.mensaje, /saldo pendiente de \$400\.000/);
+  assert.ok(!/40\s?%/.test(`${c.titulo} ${c.mensaje}`), 'sin el 40 % fijo');
+  assert.ok(c.efectos.includes('Bodega de salida: Bodega Norte') && c.efectos.includes('Cliente: Ana'));
+  const sin = ent.confirmacionDespacho({ numero: 'PVEN-6', customer_name: '', saldo_cop: 0 }, null);
+  assert.equal(sin.peligro, false);
+  assert.equal(sin.titulo, 'Despachar PVEN-6');
+  assert.deepEqual(sin.efectos, ['Cliente: Sin nombre']);
+  assert.equal(ent.confirmacionDespacho({ numero: 'P', saldo_cop: -5000 }, null).peligro, false, 'un crédito a favor no frena');
+}
+
+console.log('--- TEST 10 (T19): la tarjeta del tablero, el cobro, el recordatorio de WhatsApp y los textos ---');
+{
+  const ped = { id: 12, numero: 'PVEN-12', customer_name: 'Ana Pérez', customer_phone: '300 123 4567', telefono_whatsapp: null,
+    total_cop: 1000000, saldo_cop: 400000, estado: 'LISTO_ENTREGA', productos: [{ qty: 1 }, { qty: 2 }], fecha_entrega_estimada: '2026-11-20' };
+  const t = ent.tarjetaEntrega(ped);
+  assert.equal(t.numero, 'PVEN-12');
+  assert.equal(t.tipo, 'PVEN');
+  assert.equal(t.titulo, 'Ana Pérez');
+  assert.equal(t.subtitulo, '2 ítems');
+  assert.equal(t.monto, 1000000);
+  assert.equal(t.estado.label, 'Listo para entrega');
+  assert.deepEqual(t.chips, [{ texto: 'Saldo $400.000', tono: 'amber' }]);
+  assert.equal(t.accionPrincipal, null);
+  assert.deepEqual(ent.tarjetaEntrega({ ...ped, saldo_cop: 0 }).chips, [{ texto: 'Pagado', tono: 'emerald' }]);
+  assert.deepEqual(ent.tarjetaEntrega({ ...ped, saldo_cop: -3000 }).chips, [{ texto: 'Pagado', tono: 'emerald' }], 'a favor: pagado');
+  assert.equal(ent.tarjetaEntrega({ ...ped, customer_name: ' ', productos: [{}] }).titulo, 'Cliente sin nombre');
+  assert.equal(ent.tarjetaEntrega({ ...ped, productos: [{}] }).subtitulo, '1 ítem');
+  assert.equal(ent.tarjetaEntrega({ ...ped, productos: [] }).subtitulo, 'Sin ítems');
+  assert.equal(ent.tarjetaEntrega({ ...ped, productos: undefined }).subtitulo, 'Sin ítems');
+  // Cobro (la columna «Cobro» de la tabla y el Drawer): el mismo saldo.
+  assert.equal(ent.saldoEntrega(ped), 400000);
+  assert.equal(ent.saldoEntrega({ saldo_cop: '250000' }), 250000);
+  assert.equal(ent.saldoEntrega({ saldo_cop: null }), 0);
+  assert.equal(ent.infoCobroEntrega(ped).label, 'Cobro pendiente');
+  assert.equal(ent.infoCobroEntrega({ ...ped, saldo_cop: 0 }).label, 'Pagado');
+  assert.equal(ent.infoCobroEntrega({ ...ped, saldo_cop: -1 }).label, 'Pagado');
+  // El recordatorio: wa.me con el teléfono del pedido (telefono_whatsapp primero, luego customer_phone) solo si hay saldo.
+  const r = ent.recordatorioSaldo(ped);
+  assert.ok(r.url.startsWith('https://wa.me/573001234567?text='), r.url);
+  assert.ok(decodeURIComponent(r.url).includes('PVEN-12') && decodeURIComponent(r.url).includes('$400.000'));
+  assert.equal(ent.recordatorioSaldo({ ...ped, telefono_whatsapp: '+573159876543' }).url.slice(0, 29), 'https://wa.me/573159876543?te');
+  assert.equal(ent.recordatorioSaldo({ ...ped, saldo_cop: 0 }), null, 'sin saldo no hay recordatorio');
+  assert.equal(ent.recordatorioSaldo({ ...ped, customer_phone: '', telefono_whatsapp: null }), null, 'sin teléfono tampoco');
+  // El resumen de la columna bajo su título: la de saldo suma el SALDO, las demás el monto.
+  assert.equal(ent.resumenColumnaEntrega('falta_saldo', { monto_cop: 5000000, saldo_cop: 1250000 }), 'Saldo $1.250.000');
+  assert.equal(ent.resumenColumnaEntrega('listo', { monto_cop: 5000000, saldo_cop: 0 }), '$5.000.000');
+  assert.equal(ent.resumenColumnaEntrega('despachado', null), null);
+  assert.equal(ent.resumenColumnaEntrega('listo', { monto_cop: 'x' }), null);
+  // Los textos de la nota y del vacío (dicen qué lo vacía).
+  assert.equal(ent.NOTA_ENTREGAS, 'Si la mercancía llegó y falta el saldo, contacta al cliente antes de generar la guía.');
+  assert.equal(ent.textoVacioEntregas({ vista: 'listo', q: 'zzz', estados: [] }).titulo, 'Sin resultados para «zzz»');
+  assert.equal(ent.textoVacioEntregas({ vista: 'listo', q: '', estados: ['DISPONIBLE'] }).titulo, 'Ningún pedido con esos estados. Ajusta el filtro.');
+  assert.equal(ent.textoVacioEntregas({ vista: 'falta_saldo', q: '', estados: [] }).titulo, 'No hay pedidos con saldo por cobrar');
+  assert.equal(ent.textoVacioEntregas({ vista: 'listo', q: '', estados: [] }).titulo, 'No hay pedidos listos para despachar');
+  assert.equal(ent.textoVacioEntregas({ vista: 'despachado', q: '', estados: [] }).titulo, 'Aún no hay pedidos despachados');
+  assert.equal(ent.textoVacioEntregas({ vista: 'esperando', q: '', estados: [] }).titulo, 'No hay pedidos esperando mercancía');
+}
+
+console.log('--- TEST 11 (T19): «Filtrar estado» de la tabla (los estados de la pestaña) y del tablero (una opción por columna) ---');
+{
+  assert.deepEqual(ent.opcionesEstadosEntrega('listo').map((o) => o.valor), [...COL('listo').estados]);
+  assert.deepEqual(ent.opcionesEstadosEntrega('despachado').map((o) => o.etiqueta), ['Entregado', 'Entregado parcialmente', 'Facturado']);
+  assert.equal(ent.opcionesEstadosEntrega('listo'), ent.opcionesEstadosEntrega('listo'), 'la misma referencia');
+  assert.deepEqual(ent.opcionesEstadosEntrega('no_existe').map((o) => o.valor), [...COL('listo').estados], 'cae en la pestaña de trabajo');
+  assert.deepEqual(ent.OPCIONES_ESTADOS_TABLERO_ENTREGA.map((o) => [o.valor, o.etiqueta]), [
+    ['PENDIENTE_COMPRA', 'Esperando mercancía'], ['LISTO_ENTREGA', 'Listo para entrega'], ['ENTREGADO', 'Despachados'],
+  ]);
+  // Los valores del tablero son el estado principal de cada columna (estadosDeColumnaLista abre la columna entera con él).
+  for (const o of ent.OPCIONES_ESTADOS_TABLERO_ENTREGA) assert.ok(COLUMNAS_ENTREGA.some((c) => c.estados[0] === o.valor), o.valor);
+}
+
 console.log('OK test_entregas');
