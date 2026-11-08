@@ -215,4 +215,34 @@ console.log('--- TEST 10 (B4 T16A): tarjetaTransito, la tarjeta del tablero de e
   assert.equal(hecha.chips[0].texto, 'Casillero');
 }
 
+console.log('--- TEST 11 (B4 T16A r1): tonoEntregaTransito (m17) y los pendientes por id (I3) ---');
+{
+  // m17: «Entrega en N días» vuelve a ámbar con 3 días o menos (como en BASE); vencido en rojo; el resto, normal.
+  assert.equal(typeof tr.tonoEntregaTransito, 'function', 'tonoEntregaTransito existe');
+  const tono = (fecha, vencido) => tr.tonoEntregaTransito({ fecha_entrega_estimada: fecha, is_overdue: vencido }, '2026-11-07');
+  assert.equal(tono('2026-11-10', false), 'pronto', '3 días: ámbar');
+  assert.equal(tono('2026-11-07', false), 'pronto', 'hoy: ámbar');
+  assert.equal(tono('2026-11-11', false), 'normal', '4 días: normal');
+  assert.equal(tono('2026-11-04', true), 'vencido');
+  assert.equal(tono('2026-11-04', false), 'normal', 'pasada sin la marca del servidor: sin alarma');
+  assert.equal(tono(null, false), 'normal');
+
+  // I3: una tarjeta con un PATCH en camino (o con la recarga todavía sin llegar) no ofrece Iniciar ni Completar.
+  assert.equal(typeof tr.pendienteDeTransito, 'function', 'pendienteDeTransito existe');
+  const lista = [{ id: 1 }];
+  const completa = [{ id: 1 }];
+  assert.equal(tr.pendienteDeTransito([], 5, lista, completa), false);
+  assert.equal(tr.pendienteDeTransito([{ id: 5, fin: null }], 5, lista, completa), true, 'el PATCH va en camino');
+  assert.equal(tr.pendienteDeTransito([{ id: 5, fin: null }], 6, lista, completa), false, 'solo esa tarjeta');
+  const fin = { id: 5, fin: { lista, completa } };
+  assert.equal(tr.pendienteDeTransito([fin], 5, lista, completa), true, 'terminó el PATCH pero las filas son las viejas');
+  assert.equal(tr.pendienteDeTransito([fin], 5, [{ id: 1 }], completa), false, 'llegó la recarga de la tabla');
+  assert.equal(tr.pendienteDeTransito([fin], 5, lista, [{ id: 1 }]), false, 'llegó la recarga del tablero');
+  // La tarjeta pendiente no trae botón.
+  const p = conEstados('casillero', ['COMPLETADO', 'EN_PROCESO']);
+  assert.deepEqual(tr.tarjetaTransito(p, { hoy: '2026-11-07', pendiente: true }).accionPrincipal, null);
+  assert.equal(tr.tarjetaTransito(p, { hoy: '2026-11-07', pendiente: false }).accionPrincipal?.texto, 'Completar');
+  assert.equal(tr.tarjetaTransito(p, { hoy: '2026-11-07' }).accionPrincipal?.texto, 'Completar', 'sin la opción, como antes');
+}
+
 console.log('OK test_transito');

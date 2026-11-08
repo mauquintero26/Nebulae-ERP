@@ -745,6 +745,23 @@ export function consultaColumnaRecepcion(estado, columna, { orden, limit, offset
   return queryListado(estado, { vista: null, semaforo: null, paso: null, estados, orden, limit, offset });
 }
 
+/** El número de la recepción (en blanco no vale); sin él, ENINV-id. Una sola regla para la tabla, el Drawer y el tablero. */
+export function numeroRecepcion(r) {
+  return textoLimpio(r?.numero) ?? `ENINV-${r?.id ?? ''}`;
+}
+/** El PEC de origen: su número, PEC-id, o 'Entrada manual' (una entrada sin pedido de compra). */
+export function pecDeRecepcion(r) {
+  return textoLimpio(r?.pec_numero) ?? (r?.pec_id ? `PEC-${r.pec_id}` : 'Entrada manual');
+}
+/** El proveedor de la recepción; sin él, 'Sin proveedor'. */
+export function proveedorDeRecepcion(r) {
+  return textoLimpio(r?.supplier_name) ?? textoLimpio(r?.proveedor_nombre) ?? 'Sin proveedor';
+}
+/** Una recepción por confirmar (BORRADOR): la única que se cuenta y se confirma (grupoRecepcion, R9). */
+export function esRecepcionPorConfirmar(r) {
+  return grupoRecepcion(typeof r?.estado === 'string' ? r.estado.trim() : r?.estado) === 'por_confirmar';
+}
+
 /**
  * La tarjeta de una recepción en el tablero solo para ver (la forma de DatosTarjetaKanban): el número (sin él, ENINV-id),
  * el proveedor (o 'Sin proveedor'), el PEC de origen (o 'Entrada manual'), la insignia del estado, el chip «Retraso N
@@ -760,12 +777,12 @@ export function tarjetaRecepcion(r) {
   const atrasada = retraso !== null && retraso > 0;
   const dia = fechaCorta(r?.fecha_recepcion || r?.created_at);
   const bodega = textoLimpio(r?.warehouse_name) ?? 'Sin bodega';
-  const porContar = grupoRecepcion(typeof r?.estado === 'string' ? r.estado.trim() : r?.estado) === 'por_confirmar';
+  const porContar = esRecepcionPorConfirmar(r);
   return {
-    numero: textoLimpio(r?.numero) ?? `ENINV-${r?.id ?? ''}`,
+    numero: numeroRecepcion(r),
     tipo: 'ENINV',
-    titulo: textoLimpio(r?.supplier_name) ?? textoLimpio(r?.proveedor_nombre) ?? 'Sin proveedor',
-    subtitulo: textoLimpio(r?.pec_numero) ?? (r?.pec_id ? `PEC-${r.pec_id}` : 'Entrada manual'),
+    titulo: proveedorDeRecepcion(r),
+    subtitulo: pecDeRecepcion(r),
     monto: null,
     estado: infoEstadoRecepcion(r?.estado),
     chips: atrasada ? [{ texto: `Retraso ${retraso} ${retraso === 1 ? 'día' : 'días'}`, tono: 'rose' }] : [],

@@ -256,18 +256,49 @@ export function textoEntregaTransito(pec, hoy = diaColombia()) {
  * La tarjeta de un PEC en el tablero de etapas (la forma de DatosTarjetaKanban): la de tarjetaPec (número, proveedor,
  * PVEN, monto, estado y el chip «Vencido» del servidor) más el tipo de envío en un chip ('Directo', o 'Casillero': sin
  * tipo es por casillero, como el servidor), el tiempo de textoEntregaTransito y, de acción principal, el «Iniciar» o
- * «Completar» de la etapa actual (accionEtapaTransito; la pantalla le pone el onClick). Sin etapa por hacer, sin botón.
+ * «Completar» de la etapa actual (accionEtapaTransito; la pantalla le pone el onClick). Sin etapa por hacer, o con un cambio
+ * pendiente (`pendiente`, pendienteDeTransito), sin botón.
  * @param {any} pec
- * @param {{hoy?: string}} [opciones]
+ * @param {{hoy?: string, pendiente?: boolean}} [opciones]
  * @returns {ReturnType<typeof tarjetaPec> & {accionPrincipal: {texto: string, tono: string} | null}}
  */
-export function tarjetaTransito(pec, { hoy } = {}) {
+export function tarjetaTransito(pec, { hoy, pendiente = false } = {}) {
   const base = tarjetaPec(pec);
-  const accion = accionEtapaTransito(pec);
+  const accion = pendiente ? null : accionEtapaTransito(pec);
   return {
     ...base,
     chips: [...base.chips, { texto: pec?.tipo_envio === 'directo' ? 'Directo' : 'Casillero', tono: 'slate' }],
     tiempo: textoEntregaTransito(pec, hoy) ?? base.tiempo,
     accionPrincipal: accion ? { texto: accion.texto, tono: accion.status === 'COMPLETADO' ? 'emerald' : 'slate' } : null,
   };
+}
+
+/**
+ * El tono de «Entrega en N días» (m17, como en BASE: ámbar con 3 días o menos): 'vencido' si el servidor lo marca y el día
+ * ya pasó, 'pronto' de hoy a 3 días, y 'normal' en lo demás (también una fecha pasada sin la marca del servidor).
+ * @param {any} pec
+ * @param {string} [hoy]
+ * @returns {'vencido' | 'pronto' | 'normal'}
+ */
+export function tonoEntregaTransito(pec, hoy = diaColombia()) {
+  const dia = diaPec(pec?.fecha_entrega_estimada);
+  const base = diaPec(hoy);
+  if (!dia || !base) return 'normal';
+  const dias = diasEntre(base, dia);
+  if (dias < 0) return pec?.is_overdue === true ? 'vencido' : 'normal';
+  return dias <= 3 ? 'pronto' : 'normal';
+}
+
+/**
+ * I3: ¿esa tarjeta tiene un cambio de etapa pendiente? Cada entrada es {id, fin}: `fin` es null mientras el PATCH va en
+ * camino y, al terminar, las filas (de la tabla y del tablero) que había en ese momento. Sigue pendiente hasta que llega
+ * una recarga: cuando alguna de las dos listas ya no es esa misma, la etapa nueva está a la vista.
+ * @param {ReadonlyArray<{id: unknown, fin: {lista: unknown, completa: unknown} | null}>} entradas
+ * @param {unknown} id
+ * @param {unknown} lista  las filas de la tabla ahora
+ * @param {unknown} completa  las filas del tablero ahora
+ * @returns {boolean}
+ */
+export function pendienteDeTransito(entradas, id, lista, completa) {
+  return (Array.isArray(entradas) ? entradas : []).some((e) => e.id === id && (e.fin === null || (e.fin.lista === lista && e.fin.completa === completa)));
 }

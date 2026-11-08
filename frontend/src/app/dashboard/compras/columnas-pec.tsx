@@ -50,7 +50,7 @@ export type FilaColumnasPec = {
 
 // El chip estándar de las tablas del bloque con los tintes del tablero (CLASE_CHIP): la misma marca en Lista y en
 // Kanban. Sin tamaño de letra: cada uso pone el suyo.
-const CHIP = 'inline-block max-w-full truncate rounded-full border px-1.5 py-0.5 font-bold leading-tight';
+export const CHIP = 'inline-block max-w-full truncate rounded-full border px-1.5 py-0.5 font-bold leading-tight';
 // D41: la fila vencida en el tono opaco filaAlerta, con la marca rosa a la izquierda del Hub de Ventas (antes un borde
 // rojo y un tinte translúcido, que dejaba ver lo de debajo de las columnas fijas).
 const MARCA_VENCIDO = '[&>td:first-child]:shadow-[inset_3px_0_0_var(--color-rose-500)]';
@@ -80,6 +80,11 @@ export function CeldaEntrega({ p }: { p: FilaColumnasPec }) {
   return <span className={`text-xs ${p.is_overdue ? 'font-bold text-rose-700' : 'text-slate-700'}`}>{textoDia(p.fecha_entrega_estimada)}</span>;
 }
 
+/** Monto: pesos enteros con punto de miles (H42); lo que no es un monto positivo, '—'. */
+export function CeldaMonto({ monto }: { monto: unknown }) {
+  return <span className="block truncate text-xs font-black text-slate-900">{fCOP(monto)}</span>;
+}
+
 /**
  * Las 9 columnas de una tabla de pedidos de compra, con la celda de Acciones de la pantalla (su menú cambia: el Hub
  * lleva «Ver en Pedidos de compra»; Pedidos de compra, «Marcar Emitido» y «Eliminar definitivamente»). La pantalla la
@@ -98,7 +103,7 @@ export function columnasPec<T extends FilaColumnasPec>(celdaAcciones: (p: T) => 
       titleCelda: (p) => p.created_by || 'Sin comprador',
       celda: (p) => <span className="block truncate text-xs text-slate-600">{p.created_by || '—'}</span> },
     { id: 'monto', titulo: 'Monto', ancho: 108, alinear: 'derecha', ordenable: 'monto', titleCelda: (p) => fCOP(p.total_cop),
-      celda: (p) => <span className="block truncate text-xs font-black text-slate-900">{fCOP(p.total_cop)}</span> },
+      celda: (p) => <CeldaMonto monto={p.total_cop} /> },
     // T14 r1 (m13): sin fecha de compra, la celda muestra la de creación (como antes) y su title lo dice; el separador
     // por mes la pone en «Sin fecha de compra» (el servidor ordena por fecha_compra).
     { id: 'compra', titulo: 'F. compra', ancho: 96, ocultaPorDefecto: true, ordenable: 'compra',

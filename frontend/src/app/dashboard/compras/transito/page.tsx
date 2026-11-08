@@ -24,20 +24,21 @@ import { PERIODO_KPI, formatoEntero, tarjetasTransito } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 // Piezas genéricas que nacieron en las libs de Ventas (T7), como en el Hub de Compras (T14): el chip del orden.
 import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
-import { infoEstadoPec, opcionesEstadosPec, textoVacioPec } from '@/lib/estados-compras';
+import { humanizarCodigo } from '@/lib/estados-pedido';
+import { opcionesEstadosPec, textoVacioPec } from '@/lib/estados-compras';
 import {
   accionEtapaTransito, avanceTransito, avancePromedioTransito, columnaTransito, columnasDeEtapas, etapaActual,
-  reglaSoltarTransito, tarjetaTransito, textoEntregaTransito,
+  pendienteDeTransito, reglaSoltarTransito, tarjetaTransito, textoEntregaTransito, tonoEntregaTransito,
 } from '@/lib/transito';
 import {
-  accionSemaforoCompras, avisosFlujoCompras, etiquetaEtapaTracking, filtroSemaforoCompras, pasosDeTracking,
+  accionSemaforoCompras, avisoTarjetaEtapa, avisosFlujoCompras, etiquetaEtapaTracking, filtroSemaforoCompras, pasosDeTracking,
   pasosPantallaCompras, textoReglaCompras,
 } from '@/lib/flujo-compras';
 // Las columnas, la clase de la fila vencida y los formatos que comparte con el Hub y con Pedidos de compra.
-import { claseDeFilaPec, fCOP, textoDia, titulosDeOrdenPec } from '../columnas-pec';
+import { CeldaEntrega as CeldaDiaEntrega, CeldaEstado, CeldaMonto, claseDeFilaPec, fCOP, textoDia, titulosDeOrdenPec } from '../columnas-pec';
 import type { FilaColumnasPec } from '../columnas-pec';
 
-/** Quien hace el cambio (user_name: la Actividad del PEC dice su nombre). Sin sesión se omite y el servidor usa el correo. */
+/** Quien hace el cambio (user_name: la Actividad del PEC dice su nombre). Sin nombre cae al correo del usuario; solo si tampoco hay correo se omite y la Actividad queda sin autor (update_tracking guarda user_name tal cual). */
 const autorActual = () => {
   if (typeof window === 'undefined') return undefined;
   return localStorage.getItem('user_name') || localStorage.getItem('user_email') || undefined;
@@ -75,8 +76,8 @@ const conFlecha = (texto: string) => texto.trim().replace(/\s*->\s*/g, ' → ');
 /** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
 type AccionesFilaTransito = {
   avanzar: (p: FilaTransito, accion: { stage: string; status: string }) => void;
-  /** Los pedidos con un PATCH en camino (su botón muestra la carga: cada fila por su cuenta). */
-  enCurso: ReadonlyArray<number>;
+  /** I3: ¿ese pedido tiene un cambio de etapa en camino (o su recarga sin llegar)? Su botón muestra la carga: cada fila por su cuenta. */
+  pendiente: (id: number) => boolean;
 };
 const AccionesFila = React.createContext<AccionesFilaTransito | null>(null);
 
@@ -108,23 +109,28 @@ function CeldaCliente({ p }: { p: FilaTransito }) {
  */
 function CeldaEtapa({ p }: { p: FilaTransito }) {
   const etapa = etapaActual(p) as EtapaEnvio | null;
-  if (!etapa) {
-    const { label, clases } = infoEstadoPec(p.estado);
-    return <span className={`inline-block max-w-full truncate rounded-full border px-1.5 py-0.5 text-[11px] font-bold leading-tight ${clases.bg} ${clases.text} ${clases.border}`}>{label}</span>;
-  }
+  if (!etapa) return <CeldaEstado p={p} />;
   const enCurso = etapa.status === 'EN_PROCESO';
-  const titulo = conFlecha(etapa.label || etapa.stage || '');
-  const atrasada = etapa.alert?.nivel === 'atrasado' && etapa.alert.mensaje ? etapa.alert.mensaje : null;
+  const titulo = tituloDeEtapa(etapa);
+  // m5 y m7: el aviso es la regla única de la tarjeta de etapa (avisoTarjetaEtapa, RP28): rojo si va atrasada, gris si va a tiempo.
+  const aviso = avisoTarjetaEtapa(etapa);
   return (
     <span className="flex min-w-0 flex-col items-start gap-0.5 leading-tight">
       <span className="max-w-full truncate text-xs font-bold text-slate-700">{titulo}</span>
       <span className={`inline-block rounded-full border px-1.5 py-0.5 text-[10px] font-bold leading-tight ${
         enCurso ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-600'
       }`}>{etiquetaEtapaTracking(etapa.status)}</span>
-      {atrasada && <span className="max-w-full truncate text-[10px] font-bold text-rose-700">{atrasada}</span>}
+      {aviso && <span title={aviso.texto} className={`max-w-full truncate text-[10px] font-bold ${CLASE_AVISO[aviso.tono] ?? CLASE_AVISO.gris}`}>{aviso.texto}</span>}
     </span>
   );
 }
+
+/** El título de una etapa: su label con la flecha, o la clave humanizada (nunca el código crudo). */
+const tituloDeEtapa = (e: EtapaEnvio) => conFlecha(e.label || humanizarCodigo(e.stage || ''));
+/** Los colores del aviso de una etapa (en -700: se leen sobre el fondo de la celda). */
+const CLASE_AVISO: Record<string, string> = { rojo: 'text-rose-700', gris: 'text-slate-500', azul: 'text-blue-700', ambar: 'text-amber-700' };
+/** El tono de «Entrega en N días»: ámbar con 3 días o menos (m17), rojo si el servidor la marca vencida. */
+const CLASE_ENTREGA: Record<string, string> = { vencido: 'text-rose-700', pronto: 'text-amber-700', normal: 'text-slate-500' };
 
 /** Progreso: un punto por etapa del envío (PasosFlujo mini con pasosDeTracking) y «n de m». */
 function CeldaProgreso({ p }: { p: FilaTransito }) {
@@ -141,8 +147,8 @@ function CeldaEntrega({ p }: { p: FilaTransito }) {
   const texto = textoEntregaTransito(p);
   return (
     <span className="flex flex-col leading-tight">
-      <span className={`text-xs ${p.is_overdue ? 'font-bold text-rose-700' : 'text-slate-700'}`}>{textoDia(p.fecha_entrega_estimada)}</span>
-      {texto && <span className={`text-[11px] font-semibold ${p.is_overdue ? 'text-rose-700' : 'text-slate-500'}`}>{texto}</span>}
+      <CeldaDiaEntrega p={p} />
+      {texto && <span className={`text-[11px] font-semibold ${CLASE_ENTREGA[tonoEntregaTransito(p)]}`}>{texto}</span>}
     </span>
   );
 }
@@ -151,7 +157,7 @@ function CeldaEntrega({ p }: { p: FilaTransito }) {
 function CeldaAccion({ p }: { p: FilaTransito }) {
   const acciones = useContext(AccionesFila);
   const accion = accionEtapaTransito(p);
-  if (acciones?.enCurso.includes(p.id)) {
+  if (acciones?.pendiente(p.id)) {
     return <RefreshCw size={14} role="status" aria-label={`Actualizando ${p.numero}`} className="animate-spin text-blue-500" />;
   }
   if (!accion) return <span className="text-xs text-slate-400">—</span>;
@@ -182,14 +188,14 @@ const COLUMNAS_TABLA_TRANSITO: ColumnaTabla<FilaTransito>[] = [
   { id: 'tipo', titulo: 'Tipo', ancho: 80, ocultaPorDefecto: true,
     celda: (p) => <span className="text-xs font-bold text-slate-500">{p.tipo_envio === 'directo' ? 'Directo' : 'Casillero'}</span> },
   { id: 'etapa', titulo: 'Etapa actual', ancho: 124, clave: true,
-    titleCelda: (p) => { const e = etapaActual(p) as EtapaEnvio | null; return e ? conFlecha(e.label || e.stage || '') : infoEstadoPec(p.estado).label; },
+    titleCelda: (p) => { const e = etapaActual(p) as EtapaEnvio | null; return e ? tituloDeEtapa(e) : p.estado; },
     celda: (p) => <CeldaEtapa p={p} /> },
   { id: 'progreso', titulo: 'Progreso', ancho: 104, titleCelda: (p) => avanceTransito(p).texto, celda: (p) => <CeldaProgreso p={p} /> },
   { id: 'entrega', titulo: 'Entrega est.', ancho: 104, ordenable: 'entrega',
     titleCelda: (p) => [textoDia(p.fecha_entrega_estimada), textoEntregaTransito(p)].filter(Boolean).join(' · '),
     celda: (p) => <CeldaEntrega p={p} /> },
   { id: 'monto', titulo: 'Monto', ancho: 108, alinear: 'derecha', ordenable: 'monto', titleCelda: (p) => fCOP(p.total_cop),
-    celda: (p) => <span className="block truncate text-xs font-black text-slate-900">{fCOP(p.total_cop)}</span> },
+    celda: (p) => <CeldaMonto monto={p.total_cop} /> },
   { id: 'accion', titulo: 'Acción', ancho: 96, clave: true, fija: 'derecha', alinear: 'centro', celda: (p) => <CeldaAccion p={p} /> },
 ];
 /** {campo de orden: título}, para el chip «Orden: Monto ↓» (textoOrdenHub), solo de las columnas que se ordenan. */
@@ -269,13 +275,29 @@ export default function TransitoPage() {
   // ── bloque 6: avanzar una etapa (TABLA-compras punto 8; KANBAN-logistica punto 2) ──
   // El mismo PATCH /compras/pedidos/{id}/tracking del botón (Iniciar o Completar) y del arrastre a la etapa siguiente; queda en
   // la Actividad del PEC. Nada se traga: si falla, el mensaje del servidor tal cual (avisarError) y, con la regla única
-  // recargarTrasError (un 404 o un 409), se recarga lo que se ve.
-  const [enCurso, setEnCurso] = useState<number[]>([]);
+  // recargarTrasError (con un 400, un 409 o sin respuesta recarga; un 404 no), se recarga lo que se ve.
+  // I3: un pedido con un PATCH en camino (botón o arrastre), y hasta que llega la recarga, no ofrece Iniciar ni Completar: un
+  // segundo clic no manda otro PATCH sobre la etapa vieja. pendienteDeTransito (con sus casos) decide con las filas de la tabla y del tablero.
+  const [enCurso, setEnCurso] = useState<{ id: number; fin: { lista: unknown; completa: unknown } | null }[]>([]);
+  const filasAhora = useRef<{ lista: unknown; completa: unknown }>({ lista: lista.filas, completa: completa.filas });
+  useEffect(() => { filasAhora.current = { lista: lista.filas, completa: completa.filas }; }, [lista.filas, completa.filas]);
+  const pendiente = useCallback((id: number) => pendienteDeTransito(enCurso, id, lista.filas, completa.filas), [enCurso, lista.filas, completa.filas]);
+  const pendienteRef = useRef(pendiente);
+  useEffect(() => { pendienteRef.current = pendiente; }, [pendiente]);
+  const iniciarCambio = useCallback((id: number) => setEnCurso((l) => [...l.slice(-19), { id, fin: null }]), []);
+  // Terminó el PATCH y se pidió la recarga: sigue pendiente hasta que llegan filas nuevas.
+  const terminarCambio = useCallback((id: number) => {
+    const fin = { ...filasAhora.current };
+    setEnCurso((l) => l.map((e) => (e.id === id && e.fin === null ? { ...e, fin } : e)));
+  }, []);
+  // Falló sin recarga (un 404 o un 500): no hay nada que esperar.
+  const descartarCambio = useCallback((id: number) => setEnCurso((l) => l.filter((e) => !(e.id === id && e.fin === null))), []);
   const aplicarEtapa = useCallback((p: FilaTransito, stage: string, status: string) => apiFetch(`/compras/pedidos/${p.id}/tracking`, {
     method: 'PATCH', body: JSON.stringify({ stage, status, user_name: autorActual() }),
   }), []);
   const avanzar = useCallback(async (p: FilaTransito, accion: { stage: string; status: string }) => {
-    setEnCurso((l) => [...l, p.id]);
+    if (pendienteRef.current(p.id)) return;
+    iniciarCambio(p.id);
     let recargar = true;
     try {
       await aplicarEtapa(p, accion.stage, accion.status);
@@ -283,12 +305,13 @@ export default function TransitoPage() {
     } catch (err) {
       avisarError(err, `No se pudo actualizar ${p.numero}`);
       recargar = recargarTrasError(err);
-    } finally {
-      setEnCurso((l) => l.filter((id) => id !== p.id));
     }
-    if (recargar) recargarTodo();
-  }, [aplicarEtapa, avisar, avisarError, recargarTodo]);
-  const accionesFila = useMemo<AccionesFilaTransito>(() => ({ avanzar: (p, a) => { void avanzar(p, a); }, enCurso }), [avanzar, enCurso]);
+    if (recargar) {
+      recargarTodo();
+      terminarCambio(p.id);
+    } else descartarCambio(p.id);
+  }, [aplicarEtapa, avisar, avisarError, recargarTodo, iniciarCambio, terminarCambio, descartarCambio]);
+  const accionesFila = useMemo<AccionesFilaTransito>(() => ({ avanzar: (p, a) => { void avanzar(p, a); }, pendiente }), [avanzar, pendiente]);
 
   // ── bloque 2: la tabla (TABLA-compras punto 8; R5, R26, D40, D41) ──
   const prefs = usePreferenciasTabla(ID_TRANSITO, COLUMNAS_TABLA_TRANSITO);
@@ -321,8 +344,8 @@ export default function TransitoPage() {
   // las columnas de /compras/tracking-config (columnasDeEtapas; la de un PEC viejo con una etapa que ya no está se suma al
   // final). Mientras llegan la configuración o los pedidos, el tablero carga (items null). items estable: useMemo.
   const itemsTablero = useMemo<FilaTransito[] | null>(
-    () => (completa.cargandoInicial || cargandoConfig ? null : completa.filas),
-    [completa.cargandoInicial, completa.filas, cargandoConfig],
+    () => (completa.cargandoInicial || cargandoConfig || (completa.error != null && completa.filas.length === 0) ? null : completa.filas),
+    [completa.cargandoInicial, completa.filas, completa.error, cargandoConfig],
   );
   const columnasTablero = useMemo(
     () => [...columnasDeEtapas(config?.datos ?? null, { pedidos: completa.filas })],
@@ -349,18 +372,24 @@ export default function TransitoPage() {
   async function cambiarDesdeTablero(p: FilaTransito, resultado: { cuerpo?: { stage?: string } }) {
     const stage = resultado.cuerpo?.stage;
     if (typeof stage !== 'string' || !stage) throw new Error('No se pudo saber qué etapa completar.');
+    if (pendienteRef.current(p.id)) throw new Error('Ese pedido ya tiene un cambio de etapa en camino.');
+    iniciarCambio(p.id);
     try {
       await aplicarEtapa(p, stage, 'COMPLETADO');
     } catch (err) {
-      if (recargarTrasError(err)) recargarTodo();
+      if (recargarTrasError(err)) {
+        recargarTodo();
+        terminarCambio(p.id);
+      } else descartarCambio(p.id);
       throw err;
     }
     recargarTodo();
+    terminarCambio(p.id);
   }
   const abrirPedido = useCallback((p: FilaTransito) => router.push(`${RUTA_PEDIDOS}?id=${p.id}`), [router]);
   // La tarjeta: tarjetaTransito (chips «Vencido» y «Directo» o «Casillero», el tiempo y el botón de la etapa actual).
   const tarjetaDe = useCallback((p: FilaTransito): DatosTarjetaKanban => {
-    const tarjeta = tarjetaTransito(p);
+    const tarjeta = tarjetaTransito(p, { pendiente: pendiente(p.id) });
     const accion = accionEtapaTransito(p);
     return {
       ...tarjeta,
@@ -368,12 +397,20 @@ export default function TransitoPage() {
         ? { ...tarjeta.accionPrincipal, onClick: () => { void avanzar(p, accion); } }
         : null,
     };
-  }, [avanzar]);
+  }, [avanzar, pendiente]);
   const hayMasDelTope = enKanban && !completa.cargandoInicial && (completa.total ?? 0) > TOPE_TABLERO;
   const sinEtapas = enKanban && itemsTablero !== null && columnasTablero.length === 0;
   const errorConfig = !cargandoConfig && config?.error != null;
-  const avisoTablero = (hayMasDelTope || errorConfig || sinEtapas) ? (
+  // I2: si falla la carga del tablero, lo dice con «Reintentar» (con datos viejos, el mismo aviso encima); sin datos, items null.
+  const errorTablero = enKanban && completa.error != null;
+  const avisoTablero = (hayMasDelTope || errorConfig || sinEtapas || errorTablero) ? (
     <div className="flex flex-col gap-1">
+      {errorTablero && (
+        <p role="alert">
+          {textoDeError(completa.error, 'No se pudieron cargar los pedidos en tránsito')}.{' '}
+          <button type="button" onClick={completa.recargar} className={`rounded font-bold text-blue-700 underline ${FOCO_VISIBLE}`}>Reintentar</button>
+        </p>
+      )}
       {hayMasDelTope && (
         <p>Se muestran los 200 más recientes de {formatoEntero(completa.total)} pedidos. Busca o filtra para ver el resto.</p>
       )}
@@ -394,7 +431,7 @@ export default function TransitoPage() {
   const avance = useMemo(() => avancePromedioTransito(filasVisibles), [filasVisibles]);
   const tarjetas = tarjetasTransito(stats?.datos ?? null, avance);
   const errorLista = enKanban ? completa.error : lista.error;
-  const estadoAvance = errorLista ? 'error' : filasVisibles === null ? 'cargando' : undefined;
+  const estadoAvance = errorLista ? 'error' : filasVisibles === null ? 'cargando' : 'listo';
 
   // ── bloque 5: la franja del flujo (FLUJO-compras punto 8; R5, R9, C3, RP40, RP46, D42) ──
   // «Estás aquí» en En tránsito. «Con atraso» es semaforo=vencidos en el servidor, el mismo estado que «Solo vencidos» y la
