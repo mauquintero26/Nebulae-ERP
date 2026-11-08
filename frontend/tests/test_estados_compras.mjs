@@ -2441,7 +2441,8 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   sinDefectos('piezas-inventario', piezas);
   // T18 r1 (m10, m21): el Hub de T17 IMPORTA las piezas de aquí y ya no las copia.
   const hub = leerFuente('app/dashboard/inventario/page.tsx');
-  trae(hub, "} from './piezas-inventario';", 'el Hub importa de piezas-inventario.tsx');
+  assert.equal(hub.split("} from './piezas-inventario';").length - 1, 2, 'el Hub importa de piezas-inventario.tsx (los valores y los tipos)');
+  trae(hub, 'claseDeFilaExistencia as claseDeFilaStock, claveDeFilaExistencia as claveDeFilaStock', 'el Hub usa la clave y la clase de la fuente única');
   for (const copia of ['function CeldaProducto', 'function CeldaEstadoStock', 'function SelectorCatalogo', 'function DetalleExistencia', 'const infoStock', 'const pesos', 'const CONTENEDOR']) noTrae(hub, copia, `el Hub ya no copia ${copia}`);
   assert.ok(!/textoVacioStock/.test(sinComentarios(stock + abasto)) && !('textoVacioStock' in ec), 'textoVacioStock no existe: el vacío es textoVacioExistencias');
 }
