@@ -24,7 +24,7 @@ import {
   pedirEnlaceProducto, precioDeProducto, tarjetaProducto, textoVacioProductos,
 } from '@/lib/estados-compras';
 import { INV_NAV } from '../inv-nav';
-import { CONTENEDOR, FOCOS, pesos, useCatalogo } from '../piezas-inventario';
+import { CONTENEDOR, FOCOS, SelectorCatalogo, pesos, useCatalogo } from '../piezas-inventario';
 
 /** Un producto de GET /products (ProductResponse + precio_venta, costo y publicado de T13, RP91). Los nombres son los del servidor. */
 type Producto = {
@@ -42,13 +42,13 @@ type Producto = {
   // La ficha lee más campos del producto (descripción, marca, unidad…): se pasan tal cual a openEdit.
   [campo: string]: unknown;
 };
-/** Los filtros extra de la barra (B3-T8, RP48): van al servidor como necesita_revision y sin_tarifa_iva. */
-type FiltrosProductos = { revision: boolean; sinTarifa: boolean };
+/** Los filtros extra de la barra (B3-T8, RP48; T18 r1, m4): van al servidor como necesita_revision, sin_tarifa_iva y category_id. */
+type FiltrosProductos = { revision: boolean; sinTarifa: boolean; categoria: string };
 
 /** El id de la pantalla: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26). */
 const ID_PRODUCTOS = 'inventario.productos';
 const INICIAL_PRODUCTOS = {};
-const SIN_FILTROS: FiltrosProductos = { revision: false, sinTarifa: false };
+const SIN_FILTROS: FiltrosProductos = { revision: false, sinTarifa: false, categoria: '' };
 const BOTON_FILTRO = `rounded-xl border px-3 py-2 text-xs font-bold transition-colors ${FOCOS.purple}`;
 
 /**
@@ -170,7 +170,7 @@ export default function ProductosPage() {
     columnas: columnasTablero,
     activo: listo && enKanban && categorias.filas !== null,
     porColumna: estado.tamano,
-    dependencias: [...dependenciasTablero(estado), filtros.revision, filtros.sinTarifa],
+    dependencias: [...dependenciasTablero(estado), filtros.revision, filtros.sinTarifa, filtros.categoria],
     cargar: async (columna, { offset, limit, signal }) => {
       const consulta = consultaColumnaProducto(estado, columna, filtros, { limit, offset });
       if (consulta === null) return { filas: [], total: 0 };
@@ -201,15 +201,17 @@ export default function ProductosPage() {
     despachar({ tipo: 'pagina', valor: 1 });
   }, [despachar]);
   // m8 de T15: el «vacío» memoizado dice qué lo deja vacío (la búsqueda, los filtros de la barra o nada).
+  // El nombre de la categoría elegida, para el vacío (si el catálogo todavía no llegó, el id).
+  const nombreCategoria = filtros.categoria ? (categorias.filas?.find((c) => String(c.id) === filtros.categoria)?.name ?? `#${filtros.categoria}`) : null;
   const vacio = useMemo(() => {
-    const texto = textoVacioProductos({ q: estado.q, revision: filtros.revision, sinTarifa: filtros.sinTarifa });
+    const texto = textoVacioProductos({ q: estado.q, revision: filtros.revision, sinTarifa: filtros.sinTarifa, categoria: nombreCategoria });
     return (
       <div>
         <p className="font-semibold text-slate-600">{texto.titulo}</p>
         {texto.ayuda && <p className="mt-1 text-xs text-slate-500">{texto.ayuda}</p>}
       </div>
     );
-  }, [estado.q, filtros.revision, filtros.sinTarifa]);
+  }, [estado.q, filtros.revision, filtros.sinTarifa, nombreCategoria]);
   // «N resultados» es el de la tabla; en Kanban cada columna trae su total (la barra no lo repite).
   const totalDeLaBarra = enKanban ? {} : {
     total: listado.total,
@@ -355,13 +357,14 @@ export default function ProductosPage() {
       name: p.name || '', description: p.description || '', type: p.type || 'Fisico',
       base_currency: p.base_currency || 'COP', uom: p.uom || 'Unidad',
       brand_id: p.brand_id || '', category_id: p.category_id || '',
-      sale_price: p.sale_price || '', cost_price: p.cost_price || '', tarifa_iva: normalizarTarifaIva(p.tarifa_iva) ?? '',
+      // T18 r1 (m23): las claves REALES de /products (precio_venta, costo y publicado: el menor de sus SKU), no las viejas.
+      sale_price: p.precio_venta ?? '', cost_price: p.costo ?? '', tarifa_iva: normalizarTarifaIva(p.tarifa_iva) ?? '',
       reference: p.reference || '', track_inventory: p.track_inventory ?? true,
       auto_replenish: p.auto_replenish ?? false, is_active: p.is_active ?? true,
-      is_published: p.is_published ?? false, ecommerce_category: p.ecommerce_category || '',
+      is_published: p.publicado ?? false, ecommerce_category: p.ecommerce_category || '',
       low_stock_alert: p.low_stock_alert || 0,
     });
-    setIsPublished(p.is_published ?? false);
+    setIsPublished(p.publicado ?? false);
     setActiveTab(TABS[0]);
     setSelectedProduct(p);
   }
@@ -402,7 +405,7 @@ export default function ProductosPage() {
 
         <div className={CONTENEDOR}>
           <PageHeader icon={Package} color="purple"
-            title="Catalogo de Productos"
+            title="Catálogo de Productos"
             subtitle="Catálogo sincronizado con E-commerce"
             actions={(
               <div className="flex flex-wrap items-center gap-2.5">
@@ -436,6 +439,10 @@ export default function ProductosPage() {
                       className={`${BOTON_FILTRO} ${filtros.sinTarifa ? 'bg-amber-100 border-amber-300 text-amber-800' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
                       Sin tarifa de IVA
                     </button>
+                    {/* m4: sin esto, el aviso «N categorías más: usa la lista» no se podía seguir. */}
+                    <SelectorCatalogo etiqueta="Categoría" todas="Todas las categorías" cargando="Cargando categorías…"
+                      fallo="No se pudieron cargar las categorías" catalogo={categorias} valor={filtros.categoria}
+                      onCambiar={(categoria) => cambiarFiltros({ categoria })} onReintentar={recargarCategorias} icono={Layers} acento="purple" />
                   </>
                 )}
                 ajustes={{ columnas: COLUMNAS_TABLA_PRODUCTOS, preferencias: prefs, anchoRef: anchoTablaRef }}

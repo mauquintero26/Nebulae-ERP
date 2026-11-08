@@ -1629,14 +1629,15 @@ export function columnasProductos(categorias, max = MAX_COLUMNAS_PRODUCTOS) {
 }
 
 /**
- * Los filtros extra de la barra de Productos (B3-T8, RP48) como parámetros de GET /products: necesita_revision y
- * sin_tarifa_iva. Apagado = no se manda (sin_tarifa_iva=false pediría los que SÍ tienen tarifa).
- * @param {{revision?: boolean, sinTarifa?: boolean} | null | undefined} filtros
- * @returns {{necesita_revision: true | null, sin_tarifa_iva: true | null}}
+ * Los filtros extra de la barra de Productos (B3-T8, RP48; T18 r1, m4) como parámetros de GET /products: necesita_revision,
+ * sin_tarifa_iva y category_id (la categoría elegida, el id como texto). Apagado = no se manda (sin_tarifa_iva=false pediría
+ * los que SÍ tienen tarifa).
+ * @param {{revision?: boolean, sinTarifa?: boolean, categoria?: string} | null | undefined} filtros
+ * @returns {{necesita_revision: true | null, sin_tarifa_iva: true | null, category_id: string | null}}
  */
 export function extraProductos(filtros) {
   const f = objetoPlano(filtros) ?? {};
-  return { necesita_revision: f.revision ? true : null, sin_tarifa_iva: f.sinTarifa ? true : null };
+  return { necesita_revision: f.revision ? true : null, sin_tarifa_iva: f.sinTarifa ? true : null, category_id: textoLimpio(f.categoria) };
 }
 
 /**
@@ -1653,6 +1654,9 @@ export function extraProductos(filtros) {
 export function consultaColumnaProducto(estado, columna, filtros, { limit, offset }) {
   const clave = columna?.estados?.[0];
   if (typeof clave !== 'string' || !/^[1-9]\d*$/.test(clave)) return null;
+  // Con una categoría elegida en la barra, solo su columna trae productos: las demás quedan vacías sin pedir.
+  const elegida = textoLimpio(objetoPlano(filtros)?.categoria);
+  if (elegida !== null && elegida !== clave) return null;
   return queryListado(estado, {
     ...extraProductos(filtros),
     vista: null, semaforo: null, paso: null, estados: null,
@@ -1704,22 +1708,25 @@ export function tarjetaProducto(p) {
 
 /**
  * Lo que dice la tabla de Productos cuando no hay filas: la búsqueda, los filtros de la barra (revisión, IVA) o nada.
- * @param {{q?: string | null, revision?: boolean, sinTarifa?: boolean} | null | undefined} filtro
+ * @param {{q?: string | null, revision?: boolean, sinTarifa?: boolean, categoria?: string | null} | null | undefined} filtro
  * @returns {{titulo: string, ayuda: string | null}}
  */
 export function textoVacioProductos(filtro) {
   const f = objetoPlano(filtro) ?? {};
   const q = textoLimpio(f.q);
-  const quita = 'Quita los filtros de revisión o de IVA para ver más.';
+  const categoria = textoLimpio(f.categoria);
+  const donde = categoria ? ` en la categoría «${categoria}»` : '';
+  const quita = categoria ? 'Quita los filtros de revisión, de IVA o de categoría para ver más.' : 'Quita los filtros de revisión o de IVA para ver más.';
   if (q) {
     return {
-      titulo: `Ningún producto coincide con «${q}».`,
-      ayuda: f.revision || f.sinTarifa ? quita : 'Busca por el nombre, la descripción o el código del SKU.',
+      titulo: `Ningún producto coincide con «${q}»${donde}.`,
+      ayuda: f.revision || f.sinTarifa || categoria ? quita : 'Busca por el nombre, la descripción o el código del SKU.',
     };
   }
-  if (f.revision && f.sinTarifa) return { titulo: 'Ningún producto requiere revisión y está sin tarifa de IVA.', ayuda: quita };
-  if (f.revision) return { titulo: 'Ningún producto requiere revisión.', ayuda: null };
-  if (f.sinTarifa) return { titulo: 'Todos los productos tienen tarifa de IVA.', ayuda: null };
+  if (f.revision && f.sinTarifa) return { titulo: `Ningún producto requiere revisión y está sin tarifa de IVA${donde}.`, ayuda: quita };
+  if (f.revision) return { titulo: `Ningún producto requiere revisión${donde}.`, ayuda: categoria ? quita : null };
+  if (f.sinTarifa) return { titulo: categoria ? `Ningún producto sin tarifa de IVA${donde}.` : 'Todos los productos tienen tarifa de IVA.', ayuda: categoria ? quita : null };
+  if (categoria) return { titulo: `Ningún producto${donde}.`, ayuda: 'Quita el filtro de categoría para ver las demás.' };
   return { titulo: 'Sin productos. Crea el primero.', ayuda: 'Usa «Nuevo Producto» para crear el primero.' };
 }
 

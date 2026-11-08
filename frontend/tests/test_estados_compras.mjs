@@ -2088,10 +2088,22 @@ console.log('--- TEST 42 (B4 T18; TABLA-inventario 5 a 8, KANBAN-resto; RP47 a R
   for (const mala of [null, undefined, 'x', {}, 4]) assert.deepEqual(ec.columnasProductos(mala), { columnas: [], masCategorias: 0, aviso: null }, String(mala));
   assert.ok(new Set(quince.columnas.map((c) => c.tono)).size > 1, 'los tonos van variando');
 
-  assert.deepEqual(ec.extraProductos({ revision: true, sinTarifa: true }), { necesita_revision: true, sin_tarifa_iva: true });
-  assert.deepEqual(ec.extraProductos({ revision: false, sinTarifa: false }), { necesita_revision: null, sin_tarifa_iva: null },
+  assert.deepEqual(ec.extraProductos({ revision: true, sinTarifa: true, categoria: '7' }), { necesita_revision: true, sin_tarifa_iva: true, category_id: '7' }, 'm4: la categoría de la barra va como category_id');
+  assert.deepEqual(ec.extraProductos({ revision: false, sinTarifa: false, categoria: '  ' }), { necesita_revision: null, sin_tarifa_iva: null, category_id: null },
     'apagado = no se manda (sin_tarifa_iva=false pediría los que SÍ tienen tarifa)');
-  assert.deepEqual(ec.extraProductos(null), { necesita_revision: null, sin_tarifa_iva: null });
+  assert.deepEqual(ec.extraProductos(null), { necesita_revision: null, sin_tarifa_iva: null, category_id: null });
+  // m4: con una categoría elegida en la barra, la lista manda category_id y el tablero solo pide la columna de esa categoría.
+  const colOtra = ec.columnasProductos([{ id: 8, name: 'Otra' }]).columnas[0];
+  assert.equal(ec.consultaColumnaProducto(estadoTablaInicial({}), colOtra, { categoria: '7' }, { limit: 25, offset: 0 }), null, 'otra columna: vacía sin pedir');
+  assert.equal(ec.consultaColumnaProducto(estadoTablaInicial({}), ec.columnasProductos([{ id: 7, name: 'Peluches' }]).columnas[0], { categoria: '7' }, { limit: 25, offset: 0 }),
+    'limit=25&offset=0&category_id=7', 'la misma columna: pide, con UN category_id');
+  assert.equal(ec.consultaColumnaProducto(estadoTablaInicial({}), colOtra, { categoria: '' }, { limit: 25, offset: 0 }), 'limit=25&offset=0&category_id=8', 'sin categoría elegida: todas');
+  assert.deepEqual(ec.textoVacioProductos({ categoria: 'Peluches' }), { titulo: 'Ningún producto en la categoría «Peluches».', ayuda: 'Quita el filtro de categoría para ver las demás.' });
+  assert.deepEqual(ec.textoVacioProductos({ q: 'oso', categoria: 'Peluches' }), {
+    titulo: 'Ningún producto coincide con «oso» en la categoría «Peluches».', ayuda: 'Quita los filtros de revisión, de IVA o de categoría para ver más.',
+  });
+  assert.equal(ec.textoVacioProductos({ revision: true, categoria: 'Peluches' }).titulo, 'Ningún producto requiere revisión en la categoría «Peluches».');
+  assert.equal(ec.textoVacioProductos({ sinTarifa: true, categoria: 'Peluches' }).titulo, 'Ningún producto sin tarifa de IVA en la categoría «Peluches».');
   const estadoProd = estadoTablaInicial({ q: 'oso', orden: '-nombre', tamano: 50, pagina: 3, vista: 'x', estados: ['y'] });
   const colPeluches = ec.columnasProductos([{ id: 7, name: 'Peluches' }]).columnas[0];
   assert.equal(ec.consultaColumnaProducto(estadoProd, colPeluches, { revision: true, sinTarifa: false }, { limit: 25, offset: 0 }),
@@ -2573,8 +2585,19 @@ console.log('--- TEST 45 (B4 T18, TABLA-inventario punto 7; KANBAN-resto; RP47 a
   const barra = etiquetaJsx(p, '<BarraTabla');
   for (const q of ['kanbanDisponible', 'pantallaCompleta={enKanban ? undefined : { completa, alternar }}', '{...totalDeLaBarra}', 'onEstado={despachar}']) trae(barra, q, `BarraTabla ${q}`);
   trae(p, 'const totalDeLaBarra = enKanban ? {} : {', '«N resultados» solo en Lista');
-  trae(p, 'const texto = textoVacioProductos({ q: estado.q, revision: filtros.revision, sinTarifa: filtros.sinTarifa });', 'el vacío');
-  trae(p, '}, [estado.q, filtros.revision, filtros.sinTarifa]);', 'el vacío memoizado con lo que lo deja vacío');
+  trae(p, 'const texto = textoVacioProductos({ q: estado.q, revision: filtros.revision, sinTarifa: filtros.sinTarifa, categoria: nombreCategoria });', 'el vacío');
+  trae(p, '}, [estado.q, filtros.revision, filtros.sinTarifa, nombreCategoria]);', 'el vacío memoizado con lo que lo deja vacío');
+  // m4: la barra tiene el selector de categoría (category_id al servidor, página 1) para poder seguir el aviso «N categorías más».
+  trae(p, 'type FiltrosProductos = { revision: boolean; sinTarifa: boolean; categoria: string };', 'la categoría es un filtro de la barra');
+  trae(p, "const SIN_FILTROS: FiltrosProductos = { revision: false, sinTarifa: false, categoria: '' };", 'sin categoría al empezar');
+  trae(p, 'onCambiar={(categoria) => cambiarFiltros({ categoria })} onReintentar={recargarCategorias} icono={Layers} acento="purple" />', 'el selector de categoría de la barra, con Reintentar');
+  trae(p, 'catalogo={categorias} valor={filtros.categoria}', 'el selector lee el catálogo y el filtro');
+  // m23 (regresión de la ficha): abre con las claves REALES de /products, no con las viejas (sale_price, cost_price, is_published).
+  trae(p, "sale_price: p.precio_venta ?? '', cost_price: p.costo ?? '',", 'la ficha abre con el precio y el costo reales');
+  trae(p, "is_published: p.publicado ?? false,", 'la ficha abre con publicado');
+  trae(p, 'setIsPublished(p.publicado ?? false);', 'el interruptor de E-Commerce abre con publicado');
+  assert.ok(!/p\.sale_price|p\.cost_price|p\.is_published/.test(sinComentarios(p)), 'ninguna lectura de las claves viejas de /products');
+  trae(p, 'title="Catálogo de Productos"', 'el título con tilde');
   trae(p, 'useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);', 'sale de la pantalla completa');
   assert.equal(p.split('usePreferenciasTabla(').length - 1, 1, 'usePreferenciasTabla una sola vez (D40)');
   // /products solo ordena por nombre, creado y tipo; Precio, Costo y Publicado son el dato del SKU (precio_venta, costo, publicado).
@@ -2601,7 +2624,7 @@ console.log('--- TEST 45 (B4 T18, TABLA-inventario punto 7; KANBAN-resto; RP47 a
   // El tablero solo para ver, por categoría (12 como máximo, con su aviso), en modo servidor.
   const hook = bloqueDesde(p, 'useTableroKanban<Producto>(');
   for (const q of ['pantalla: ID_PRODUCTOS', "modo: 'servidor'", 'columnas: columnasTablero', 'activo: listo && enKanban && categorias.filas !== null', 'porColumna: estado.tamano',
-    'dependencias: [...dependenciasTablero(estado), filtros.revision, filtros.sinTarifa]']) trae(hook, q, `tablero ${q}`);
+    'dependencias: [...dependenciasTablero(estado), filtros.revision, filtros.sinTarifa, filtros.categoria]']) trae(hook, q, `tablero ${q}`);
   trae(p, 'const { columnas: columnasTablero, aviso: avisoCategorias } = useMemo(() => columnasProductos(categorias.filas), [categorias.filas]);', 'las columnas salen de /categories (máximo 12)');
   const tablero = etiquetaJsx(p, '<TableroKanban');
   for (const q of ['tablero={tablero}', 'soloLectura={TEXTO_SOLO_VER_PRODUCTOS}', 'tarjetaDe={tarjetaProducto}', 'onAbrir={openEdit}', 'aviso={avisoCategorias']) trae(tablero, q, `TableroKanban ${q}`);
