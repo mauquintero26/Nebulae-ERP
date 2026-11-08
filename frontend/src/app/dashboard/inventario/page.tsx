@@ -244,6 +244,18 @@ function SelectorCatalogo({ etiqueta, todas, cargando, fallo, catalogo, valor, o
 }
 
 /**
+ * Las columnas de la vista Almacenes las decide el ancho del CONTENEDOR (container queries, como FranjaKpis), no el de
+ * la pantalla: con el menú abierto, a 1024 px caben 2 tarjetas legibles y a 1440, 3 (antes, md/lg de la pantalla daban 3
+ * tarjetas de 229 px a 1024).
+ */
+const GRILLA_ALMACENES = 'grid grid-cols-1 gap-6 @xl:grid-cols-2 @4xl:grid-cols-3';
+const TARJETA_BODEGA = '@container/bodega space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-xs';
+/** Las dos cajas (existencias y valor) y el pie: en una tarjeta angosta (375 px) van una debajo de la otra. */
+const CAJAS_BODEGA = 'grid grid-cols-1 gap-3 border-t border-slate-100 pt-2 @[19rem]/bodega:grid-cols-2';
+const PIE_BODEGA = 'flex flex-col items-start gap-1 pt-2 text-xs font-bold @[19rem]/bodega:flex-row @[19rem]/bodega:items-center @[19rem]/bodega:justify-between';
+const BARRA_ESQUELETO = 'inline-block rounded bg-slate-100 motion-safe:animate-pulse';
+
+/**
  * La vista «Almacenes» (RP52 d): una tarjeta por bodega con hasta 200 filas de la MISMA consulta de la tabla (su pestaña,
  * búsqueda, bodega y categoría), agrupadas con resumenAlmacenes (lib/kpis.js; sin las referencias que no llevan control
  * de inventario, R10) y el aviso de R11 si hay más. «Ver artículos» filtra la tabla por esa bodega.
@@ -261,53 +273,69 @@ function VistaAlmacenes({ listado, vacio, onVer }: { listado: Listado<FilaStock>
     </div>
   ) : null;
   if (listado.cargandoInicial) {
+    // El esqueleto con la MISMA forma de la tarjeta cargada (las mismas cajas y alturas de línea): nada salta al llegar.
     return (
-      <div aria-busy="true" className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+      <div aria-busy="true" className="@container">
         <span className="sr-only">Cargando las bodegas</span>
-        {[0, 1, 2].map((i) => (
-          <div key={i} className="h-[214px] rounded-2xl border border-slate-200 bg-white p-6 shadow-xs">
-            <div className="h-12 w-2/3 rounded-xl bg-slate-100 motion-safe:animate-pulse" />
-            <div className="mt-6 grid grid-cols-2 gap-3">
-              <div className="h-16 rounded-xl bg-slate-100 motion-safe:animate-pulse" />
-              <div className="h-16 rounded-xl bg-slate-100 motion-safe:animate-pulse" />
+        <div className={GRILLA_ALMACENES}>
+          {[0, 1, 2].map((i) => (
+            <div key={i} aria-hidden="true" className={TARJETA_BODEGA}>
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="h-12 w-12 shrink-0 rounded-xl bg-slate-100 motion-safe:animate-pulse" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-base leading-tight"><span className={`w-2/3 ${BARRA_ESQUELETO}`}>&nbsp;</span></p>
+                  <p className="text-xs"><span className={`w-1/3 ${BARRA_ESQUELETO}`}>&nbsp;</span></p>
+                </div>
+              </div>
+              <div className={CAJAS_BODEGA}>
+                {['Existencias', 'Valor al costo'].map((titulo) => (
+                  <div key={titulo} className="rounded-xl bg-slate-50 p-3">
+                    <span className="block text-[10px] font-black uppercase text-slate-500">{titulo}</span>
+                    <p className="text-lg"><span className={`w-3/4 ${BARRA_ESQUELETO}`}>&nbsp;</span></p>
+                  </div>
+                ))}
+              </div>
+              <div className={PIE_BODEGA}>
+                <span className={`w-1/2 ${BARRA_ESQUELETO}`}>&nbsp;</span>
+                <span className={`w-1/4 ${BARRA_ESQUELETO}`}>&nbsp;</span>
+              </div>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
     );
   }
   return (
-    <div className="space-y-3" aria-busy={listado.recargando || undefined}>
+    <div className="@container space-y-3" aria-busy={listado.recargando || undefined}>
       {error}
       {aviso && <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-800">{aviso}</p>}
       {grupos.length === 0 ? (
         !listado.error && <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm">{vacio}</div>
       ) : (
-        <div className={`grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3 transition-opacity ${listado.recargando ? 'opacity-60' : ''}`}>
+        <div className={`${GRILLA_ALMACENES} transition-opacity ${listado.recargando ? 'opacity-60' : ''}`}>
           {grupos.map((b) => (
-            <article key={b.warehouse_id} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-xs">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-3">
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600">
-                    <Warehouse size={24} aria-hidden="true" />
-                  </div>
-                  <h3 className="min-w-0 truncate text-base font-black leading-tight text-slate-800" title={b.bodega}>{b.bodega}</h3>
+            <article key={b.warehouse_id} className={TARJETA_BODEGA}>
+              {/* El nombre con todo el ancho (con la cuenta a la derecha se recortaba «Bodega Nor…» a 1440 px). */}
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600">
+                  <Warehouse size={24} aria-hidden="true" />
                 </div>
-                <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-black text-slate-700">
-                  {b.referencias} {b.referencias === 1 ? 'referencia' : 'referencias'}
-                </span>
+                <div className="min-w-0">
+                  <h3 className="truncate text-base font-black leading-tight text-slate-800" title={b.bodega}>{b.bodega}</h3>
+                  <p className="text-xs font-semibold text-slate-600">{b.referencias} {b.referencias === 1 ? 'referencia' : 'referencias'}</p>
+                </div>
               </div>
-              <div className="grid grid-cols-2 gap-3 border-t border-slate-100 pt-2">
+              <div className={CAJAS_BODEGA}>
                 <div className="rounded-xl bg-slate-50 p-3">
-                  <span className="text-[10px] font-black uppercase text-slate-500">Existencias</span>
-                  <p className="text-lg font-black text-slate-900">{cantidad(b.fisico)} unid.</p>
+                  <span className="block text-[10px] font-black uppercase text-slate-500">Existencias</span>
+                  <p className="truncate text-lg font-black text-slate-900" title={`${cantidad(b.fisico)} unidades`}>{cantidad(b.fisico)} unid.</p>
                 </div>
                 <div className="rounded-xl bg-slate-50 p-3" title={b.sin_costo > 0 ? `${b.sin_costo} sin costo registrado` : undefined}>
-                  <span className="text-[10px] font-black uppercase text-slate-500">Valor al costo</span>
-                  <p className="truncate text-lg font-black text-indigo-700">{pesos(b.valor)}</p>
+                  <span className="block text-[10px] font-black uppercase text-slate-500">Valor al costo</span>
+                  <p className="truncate text-lg font-black text-indigo-700" title={pesos(b.valor)}>{pesos(b.valor)}</p>
                 </div>
               </div>
-              <div className="flex items-center justify-between gap-2 pt-2 text-xs font-bold">
+              <div className={PIE_BODEGA}>
                 <span className={`flex items-center gap-1 ${b.en_riesgo > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
                   {b.en_riesgo > 0 ? <AlertTriangle size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}
                   {b.en_riesgo > 0 ? `${b.en_riesgo} bajo el mínimo o agotadas` : 'Bien abastecida'}
