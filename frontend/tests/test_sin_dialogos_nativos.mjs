@@ -47,6 +47,7 @@ const RAICES = [
   'src/app/dashboard/compras/transito/page.tsx', // B4 T16A: Tránsito nace sin diálogos nativos
   'src/app/dashboard/compras/recepciones/page.tsx', // B4 T16A: Recepciones nace sin diálogos nativos
   'src/app/dashboard/compras/columnas-recepcion.tsx', // B4 T16A: las columnas compartidas con Inventario (T19)
+  'src/app/dashboard/compras/lista-compras/page.tsx', // B4 T16B (RP30): la Lista de compras, sin su alert() ni su confirm()
 ];
 
 // alert( / confirm( / prompt(, sueltos o con window. / window?. / globalThis. / self. delante, que no sean parte de

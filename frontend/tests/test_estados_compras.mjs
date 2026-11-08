@@ -1642,4 +1642,85 @@ console.log('--- TEST 38 (B4 T16B, TABLA-compras punto 11, KANBAN-logistica punt
   assert.equal(ec.textoVacioTraslados(null).titulo, 'Sin traslados internos registrados');
 }
 
+console.log('--- TEST 39 (B4 T16B): la Lista de compras (compras/lista-compras/page.tsx) cablea las piezas, la tabla, el tablero solo para ver y el servidor ---');
+{
+  const pag = readFileSync(new URL('../src/app/dashboard/compras/lista-compras/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = pag.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(!/@ts-nocheck/.test(pag), 'la página se tipa');
+  // Carga del servidor (R5, C3, C4, D39, D40): un estado, la tabla en el servidor y los filtros extra en la consulta.
+  assert.match(pag, /const ID_LISTA = 'compras\.lista';/);
+  assert.match(pag, /const INICIAL_LISTA = \{ vista: 'PENDIENTE' \};/, 'la pestaña de trabajo sigue siendo Pendiente');
+  assert.match(pag, /useEstadoTabla\(ID_LISTA, INICIAL_LISTA\)/);
+  const tabla = /useListado<ItemLista>\(\{\s*ruta: '\/compras\/lista-compras', estado, conConteos: true([^}]*)\}\);/.exec(pag)?.[1] ?? '';
+  for (const parte of [/esperar: !listo/, /\bdespachar\b/, /activo: !enKanban/, /extra: extraDeLaLista/]) assert.match(tabla, parte, `la tabla lleva ${parte}`);
+  assert.match(pag, /const extraDeLaLista = useMemo\(\(\) => consultaLista\(estado, filtros\), \[estado, filtros\]\);/, 'la pestaña viaja como estados y los filtros extra con ella');
+  const completa = /useListado<ItemLista>\(\{\s*ruta: '\/compras\/lista-compras', estado, esperar: !listo, activo: enKanban, extra: extraDelTablero,?\s*\}\);/.exec(pag);
+  assert.ok(completa, 'el tablero pide su propia consulta, activa solo en Kanban');
+  assert.match(pag, /const extraDelTablero = useMemo\(\(\) => consultaTableroLista\(estado, filtros\), \[estado, filtros\]\);/);
+  assert.match(pag, /useResumenFlujo<DatosFlujo>\('\/compras\/flujo', recargaFlujo\)/);
+  assert.match(pag, /apiFetch\('\/compras\/lista-compras\/stats', \{ signal: control\.signal \}\)/);
+  // Nada se traga: ya no hay .catch que vacíe el error ni la carga de 200 en el navegador.
+  assert.ok(!/\.catch\(\(\) => (\[\]|\{\}|null|\(\{[^)]*\}\))\)/.test(codigo) && !/\.catch\(\(\)\s*=>\s*\{\s*\}\)/.test(codigo), 'sin .catch que traga el error');
+  assert.ok(!/limit: '200'|new URLSearchParams/.test(codigo), 'ya no se pide limit=200 desde el navegador para la tabla');
+  // Los filtros extra (TABLA-compras punto 10): el proveedor con 300 ms y las fechas; cada cambio vuelve a la página 1 y limpia la selección.
+  const cambiar = /const cambiarFiltros = useCallback\(([\s\S]*?)\[despachar\]\);/.exec(pag)?.[1] ?? '';
+  assert.match(cambiar, /setFiltros\(\(f\) => \(\{ \.\.\.f, \.\.\.cambio \}\)\);/);
+  assert.match(cambiar, /setSeleccion\(\[\]\);/, 'limpia la selección');
+  assert.match(cambiar, /despachar\(\{ tipo: 'pagina', valor: 1 \}\);/, 'vuelve a la página 1');
+  assert.match(pag, /setTimeout\(\(\) => cambiarFiltros\(\{ proveedor: proveedorTexto\.trim\(\) \}\), 300\);/, 'el proveedor espera 300 ms (la búsqueda de la barra ya espera 300 ms)');
+  assert.match(pag, /cambiarFiltros\(\{ desde: e\.target\.value \}\)/);
+  assert.match(pag, /cambiarFiltros\(\{ hasta: e\.target\.value \}\)/);
+  assert.match(pag, /filtros=\{\(\s*<>/, 'proveedor y fechas son filtros extra de BarraTabla');
+  // La tabla estándar: pestañas del servidor, selección solo PENDIENTE y las columnas (R26: la casilla de 40 y las visibles caben en 704).
+  assert.match(pag, /<TablaEstandar\s+id=\{ID_LISTA\}\s+modo="servidor"/);
+  assert.match(pag, /seleccionable=\{esItemSeleccionable\}/, 'solo se seleccionan los PENDIENTE');
+  assert.match(pag, /opcionesEstados=\{enKanban \? OPCIONES_ESTADOS_TABLERO_LISTA : opcionesEstadosLista\}/);
+  for (const [id, etiqueta] of [['todos', 'Todos'], ['PENDIENTE', 'Pendiente'], ['EN_PEDIDO', 'En pedido'], ['RECIBIDO', 'Recibido']]) {
+    assert.match(pag, new RegExp(`\\{ id: '${id}', etiqueta: '${etiqueta}', conteo: conteos\\?\\.${id} \\?\\? null`), `pestaña ${etiqueta}`);
+  }
+  const visibles = anchoVisible(pag, 'const COLUMNAS_TABLA_LISTA');
+  assert.ok(visibles > 0 && visibles + 40 <= 704, `R26: las columnas visibles suman ${visibles} px más la casilla de 40 (caja de 704)`);
+  assert.equal((pag.match(/flexible: true/g) ?? []).length, 1, 'una sola columna flexible');
+  assert.match(pag, /id: 'fecha'[^\n]*ocultaPorDefecto: true/, 'Fecha va oculta por defecto');
+  assert.match(pag, /aria-label=\{`Acciones de \$\{it\.producto\}`\}|etiqueta=\{`Acciones de \$\{it\.producto\}`\}/, 'las acciones llevan el producto en su nombre');
+  // El tablero solo para ver (KANBAN-logistica punto 5): modo cliente, soloLectura con su motivo, sin regla ni onCambio.
+  const tablero = /useTableroKanban<ItemLista>\(\{([\s\S]*?)\n {2}\}\);/.exec(pag)?.[1] ?? '';
+  for (const parte of [/pantalla: ID_LISTA/, /modo: 'cliente'/, /columnas: COLUMNAS_LISTA/, /activo: listo && enKanban\b/, /porColumna: estado\.tamano/, /items: itemsTablero/, /columnaDe: columnaDeItem/]) {
+    assert.match(tablero, parte, `useTableroKanban lleva ${parte}`);
+  }
+  const tab = /<TableroKanban([\s\S]*?)\/>/.exec(pag)?.[1] ?? '';
+  assert.match(pag, /const TEXTO_SOLO_VER = 'Este tablero es para ver: pasa a En pedido al crear el pedido de compra y a Recibido con la recepción\.';/);
+  assert.match(tab, /soloLectura=\{TEXTO_SOLO_VER\}/);
+  assert.match(tab, /tarjetaDe=\{tarjetaItemLista\}/);
+  assert.match(tab, /onAbrir=\{abrirItem\}/, 'el clic abre el PEC o el PVEN');
+  assert.ok(!/regla=|onCambio=|onAccion=/.test(tab), 'sin regla: no se arrastra');
+  assert.match(pag, /const destino = destinoItemLista\(it\);\s*if \(destino\) router\.push\(destino\);/);
+  // El aviso de los 200 (RP95): el tope es el de la consulta, el aviso sale solo si el total lo pasa y el error del tablero se dice con Reintentar.
+  assert.match(pag, /\(completa\.total \?\? 0\) > TOPE_TABLERO_COMPRAS/);
+  assert.match(pag, /Se muestran los 200 más recientes de \{completa\.total\} ítems/);
+  assert.match(pag, /completa\.error != null && completa\.filas\.length === 0\) \? null : completa\.filas/, 'con error y sin datos, el tablero no pinta el vacío');
+  assert.match(pag, /onClick=\{completa\.recargar\}[^>]*>Reintentar/);
+  // Las tarjetas (KPI-compras punto 9): las 4 de /lista-compras/stats, cada una abre su pestaña.
+  for (const [kpi, vista] of [['lista_pendientes', 'PENDIENTE'], ['lista_en_pedido', 'EN_PEDIDO'], ['lista_recibidos', 'RECIBIDO'], ['lista_total', 'todos']]) {
+    assert.match(pag, new RegExp(`<TarjetaKpi kpi="${kpi}"[^>]*\\n?[^>]*activo=\\{vistaActiva === '${vista}'\\} onClick=\\{\\(\\) => elegirVista\\('${vista}'\\)\\}`), kpi);
+  }
+  assert.match(pag, /tarjetasLista\(stats\?\.datos \?\? null\)/);
+  assert.match(pag, /despachar\(accionVistaEnLista\(estado, siguiente, opcionesEstadosLista\)\)/, 'como un clic en la pestaña (D41)');
+  // La franja (FLUJO-compras punto 10): «Estás aquí» en Lista de compras, sin semáforo ni «No resueltos».
+  assert.match(pag, /pasos=\{pasosPantallaCompras\(flujo\.datos, 'LISTA'\)\}/);
+  assert.ok(!/semaforo=\{|noResueltos/.test(pag), 'la Lista no tiene semáforo ni «No resueltos»');
+  // R2 y R13: fuera la IA simulada y su pestaña; queda «Ver análisis» hacia el Hub.
+  assert.ok(!/aiChat|aiAnalysis|aiLoading|aiInput|sendAIChat|handleAIAnalysis|Nebulae Analytics|activeTab|'Analisis'|Generar Análisis/.test(codigo), 'sin la IA simulada ni la pestaña Análisis');
+  assert.ok(!/ai-chat/.test(pag));
+  assert.match(pag, /<Link href=\{ENLACE_VER_ANALISIS_COMPRAS\}[\s\S]*?Ver análisis<\/ContenidoEnlace>/);
+  // Nada nativo (RP30) y lo conservado de B1 a B3.
+  assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(codigo.replace(/\bconfirmar\(/g, 'x(')), 'sin diálogos nativos');
+  assert.match(pag, /await confirmar\(\{ titulo: 'Eliminar ítem'/, 'eliminar pide confirmación con useAvisos');
+  for (const texto of ["method: 'PATCH', body: JSON.stringify({ estado: 'RECIBIDO' })", "method: 'DELETE'", "estado: 'EN_PEDIDO', pec_id: pecObj.id, pec_numero: pecObj.numero", "apiFetch('/compras/pedidos', {",
+    "/compras/proveedores/search?q=", '`Desde Lista de Compras - ', 'Pendientes por Proveedor', 'Crear Pedido de Compra con seleccionados']) {
+    assert.ok(pag.includes(texto), `se conserva: ${texto}`);
+  }
+  assert.match(pag, /catch \(err\) \{ sinVincular\.push\(/, 'el vínculo ítem a ítem ya no se traga el error');
+}
+
 console.log('\nOK: test_estados_compras.mjs');

@@ -1,47 +1,194 @@
-// @ts-nocheck
 'use client';
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { usePathname, useRouter } from 'next/navigation';
 import {
-  ShoppingCart, Search, RefreshCw, X, Filter, Plus,
-  Package, Clock, CheckCircle2, AlertCircle, Trash2,
-  ChevronDown, ExternalLink, ShoppingBag,
-  Calendar, User, Edit2, Save, ListChecks, UserPlus
+  BarChart3, Calendar, CheckCircle2, Edit2, ExternalLink, ListChecks, Package, RefreshCw, ShoppingCart, Trash2, User, UserPlus, X,
 } from 'lucide-react';
-import { SubNav, PageHeader, StatCard, Badge, Modal, Toast, Button } from '@/components/ui';
+// B4 T16B: la Lista de compras 100 % sobre el servidor (R5, C3, C4): la tabla estándar con las pestañas Todos · Pendiente · En
+// pedido · Recibido, el tablero solo para ver en modo cliente (hasta 200), las tarjetas lista_* de /compras/lista-compras/stats,
+// la franja del flujo con «Estás aquí» en Lista de compras y «Ver análisis» en lugar de la IA simulada (R2, R13). Se conserva lo
+// de B1 a B3: la selección de ítems PENDIENTE para crear el pedido de compra (con precios y proveedor al vuelo), el PATCH de
+// estado y de proveedor, «Marcar recibido» (sigue como hoy, hueco H14), el DELETE y los enlaces al PVEN y al PEC.
+import {
+  SubNav, PageHeader, Modal, Button, ContenidoEnlace, MenuFila, useAvisos, FranjaKpis, TarjetaKpi, useEstadoKpi,
+  TableroKanban, useTableroKanban,
+} from '@/components/ui';
+import type { ItemMenuFila } from '@/components/ui';
+import {
+  BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
+} from '@/components/tabla';
+import type { AccionTabla, ClaveFila, ColumnaTabla, PestanaTabla } from '@/components/tabla';
+import { BannerFlujo, useResumenFlujo } from '@/components/flujo';
+import type { DatosFlujo } from '@/components/flujo';
 import { COMP_NAV } from '../comp-nav';
+import { CHIP, textoInstante } from '../columnas-pec';
 
-import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
-async function apiFetch(path: string, opts: any = {}) {
-  const res = await _apiFetch(path, opts);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || data.message || 'Error');
-  return data.data ?? data;
+import { apiFetch } from '@/lib/api';
+import { accionModo, estadoDelTotal } from '@/lib/tabla';
+import { tarjetasLista } from '@/lib/kpis';
+import { textoDeError } from '@/lib/avisos';
+import { TABLE } from '@/lib/design-system';
+import { accionVistaEnLista } from '@/lib/listas-ventas';
+import {
+  OPCIONES_ESTADOS_TABLERO_LISTA, COLUMNAS_LISTA, TOPE_TABLERO_COMPRAS, consultaLista, consultaTableroLista, destinoItemLista,
+  esItemSeleccionable, infoEstadoItemLista, opcionesEstadosLista, tarjetaItemLista, textoVacioLista,
+} from '@/lib/estados-compras';
+import { ENLACE_VER_ANALISIS_COMPRAS, avisosFlujoCompras, pasosPantallaCompras, textoReglaCompras } from '@/lib/flujo-compras';
+
+/** Un ítem de GET /compras/lista-compras (el JSON de la Lista; los DESCARTADO no salen). */
+type ItemLista = {
+  id: number;
+  producto: string;
+  cantidad: number;
+  estado: string;
+  notas?: string | null;
+  pven_id?: number | null;
+  pven_numero?: string | null;
+  proveedor?: string | null;
+  pec_id?: number | null;
+  pec_numero?: string | null;
+  fecha_creacion?: string | null;
+  precio_unitario_cop?: number | string | null;
+};
+/** `conteos` de GET /compras/lista-compras con con_conteos=1 (T12): cada pestaña, con la búsqueda y los filtros extra (R5). */
+type ConteosLista = Partial<Record<'todos' | 'PENDIENTE' | 'EN_PEDIDO' | 'RECIBIDO', number>>;
+/** Los filtros extra de la barra que no son del estado de la tabla: el proveedor y el rango de fechas (días de calendario). */
+type FiltrosLista = { proveedor: string; desde: string; hasta: string };
+type Proveedor = { id?: number; name: string };
+
+/** El id de la pantalla: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26). */
+const ID_LISTA = 'compras.lista';
+/** La pestaña de trabajo (como hoy): Pendiente. */
+const INICIAL_LISTA = { vista: 'PENDIENTE' };
+const SIN_FILTROS: FiltrosLista = { proveedor: '', desde: '', hasta: '' };
+/** El motivo de un tablero solo para ver (R11, KANBAN-logistica punto 5). */
+const TEXTO_SOLO_VER = 'Este tablero es para ver: pasa a En pedido al crear el pedido de compra y a Recibido con la recepción.';
+/** El contenedor de los Hubs y de las listas del bloque (T7 a T16A): pb-24 deja libre la esquina del botón de la IA. */
+const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
+const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-700';
+/** El foco sobre la barra oscura de la selección. */
+const FOCO_OSCURO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white';
+/** Las modalidades de pago del pedido de compra: [lo que se manda al servidor, lo que se ve]. */
+const MODALIDADES_PAGO = [['Contado', 'Contado'], ['Credito 30d', 'Crédito 30d'], ['Credito 60d', 'Crédito 60d'], ['Adelanto 50%', 'Adelanto 50%'], ['Contra entrega', 'Contra entrega']];
+const CAMPO = 'border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200';
+const ETIQUETA_CAMPO = 'block text-xs font-black text-gray-500 uppercase mb-1';
+
+/** El estado del ítem en las celdas (columna de estados-compras.js: un desconocido sale humanizado, nunca el código). */
+function CeldaEstadoItem({ it }: { it: ItemLista }) {
+  const { label, clases } = infoEstadoItemLista(it.estado);
+  return <span className={`${CHIP} text-[11px] ${clases.bg} ${clases.text} ${clases.border}`}>{label}</span>;
 }
 
-const fDate = (iso) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
-
-const ESTADO_STYLES = {
-  PENDIENTE: { tone: 'warning', label: 'Pendiente' },
-  EN_PEDIDO: { tone: 'info',    label: 'En Pedido' },
-  RECIBIDO:  { tone: 'success', label: 'Recibido' },
+/** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
+type AccionesFilaLista = {
+  marcarRecibido: (it: ItemLista) => void;
+  editarProveedor: (it: ItemLista) => void;
+  eliminar: (it: ItemLista) => void;
+  /** El ítem cuyo cambio está en camino: mientras tanto, el menú no ofrece otro (un segundo clic no manda otro PATCH). */
+  ocupadoId: number | null;
 };
+const AccionesFila = React.createContext<AccionesFilaLista | null>(null);
 
-function NewSupplierModal({onSave, onClose}) {
-  const [form, setForm] = useState({name:'',reference:'',contact_name:'',phone:'',email:'',address:'',city:'',country:'Colombia',payment_terms:'',notes:''});
+/**
+ * Acciones (R11): el menú ⋯ (MenuFila: clic y portal) con «Marcar como recibido» (como hoy, hueco H14), «Editar proveedor»
+ * (ya no dentro de la celda), los enlaces al PVEN y al PEC y «Eliminar». Antes eran botones que solo aparecían al pasar el
+ * mouse. Lleva el producto en su aria-label.
+ */
+function CeldaAcciones({ it }: { it: ItemLista }) {
+  const acciones = useContext(AccionesFila);
+  const ocupado = acciones?.ocupadoId != null;
+  const enCamino = ocupado ? 'Hay otro cambio en camino.' : undefined;
+  const pven = it.pven_id ? `/dashboard/ventas/venta?id=${it.pven_id}` : null;
+  const pec = it.pec_id ? `/dashboard/compras/pedidos?id=${it.pec_id}` : null;
+  const router = useRouter();
+  const items: ItemMenuFila[] = [
+    { etiqueta: 'Marcar como recibido', icono: CheckCircle2, onClick: () => acciones?.marcarRecibido(it), oculto: it.estado === 'RECIBIDO',
+      deshabilitado: ocupado, titulo: enCamino },
+    { etiqueta: 'Editar proveedor', icono: Edit2, onClick: () => acciones?.editarProveedor(it), deshabilitado: ocupado, titulo: enCamino },
+    { etiqueta: 'Ver pedido de venta', icono: ExternalLink, onClick: () => { if (pven) router.push(pven); }, oculto: !pven },
+    { etiqueta: 'Ver pedido de compra', icono: ExternalLink, onClick: () => { if (pec) router.push(pec); }, oculto: !pec },
+    { etiqueta: 'Eliminar', icono: Trash2, peligro: true, onClick: () => acciones?.eliminar(it), deshabilitado: ocupado, titulo: enCamino },
+  ];
+  return (
+    <span className="flex items-center justify-end">
+      <MenuFila items={items} etiqueta={`Acciones de ${it.producto}`} />
+    </span>
+  );
+}
+
+/**
+ * B4 T16B, la tabla (TABLA-compras punto 10; R26, D41). A 1024 px con el menú abierto la caja de la tabla deja 704 px
+ * (medido en T7 a T16A); la casilla de selección toma 40, quedan 664: Producto 132 (la flexible) + Cant. 52 + PVEN 104 +
+ * Proveedor 112 + PEC 100 + Estado 100 + Acciones 52 = 652. Fecha va oculta por defecto (se muestra con «Ajustar tabla»).
+ * Una constante (estable, D40); las celdas solo dependen de la fila y del contexto.
+ */
+const COLUMNAS_TABLA_LISTA: ColumnaTabla<ItemLista>[] = [
+  { id: 'producto', titulo: 'Producto', ancho: 132, clave: true, flexible: true, ordenable: 'producto', titleCelda: (it) => it.producto,
+    celda: (it) => (
+      <span className="flex min-w-0 flex-col leading-tight">
+        <span className="block truncate text-xs font-bold text-gray-900">{it.producto}</span>
+        {it.notas && <span className="block truncate text-[11px] text-gray-500">{it.notas}</span>}
+      </span>
+    ) },
+  { id: 'cantidad', titulo: 'Cant.', ancho: 52, alinear: 'centro', titleCelda: (it) => String(it.cantidad),
+    celda: (it) => <span className="text-xs font-black text-gray-700">{it.cantidad}</span> },
+  { id: 'pven', titulo: 'PVEN', ancho: 104, ordenable: 'pven', titleCelda: (it) => it.pven_numero ?? null,
+    celda: (it) => (it.pven_numero ? (
+      <Link href={`/dashboard/ventas/venta?id=${it.pven_id}`}
+        className={`block truncate rounded text-xs font-bold text-indigo-700 hover:underline ${FOCO_VISIBLE}`}>{it.pven_numero}</Link>
+    ) : <span className="text-xs text-gray-400">—</span>) },
+  { id: 'proveedor', titulo: 'Proveedor', ancho: 112, ordenable: 'proveedor', titleCelda: (it) => it.proveedor ?? 'Sin asignar',
+    celda: (it) => (it.proveedor
+      ? <span className="block truncate text-xs text-gray-800">{it.proveedor}</span>
+      : <span className="text-xs italic text-gray-500">Sin asignar</span>) },
+  { id: 'pec', titulo: 'PEC', ancho: 100, titleCelda: (it) => it.pec_numero ?? null,
+    celda: (it) => (it.pec_numero ? (
+      <Link href={`/dashboard/compras/pedidos?id=${it.pec_id}`}
+        className={`block truncate rounded text-xs font-bold text-purple-700 hover:underline ${FOCO_VISIBLE}`}>{it.pec_numero}</Link>
+    ) : <span className="text-xs text-gray-400">—</span>) },
+  { id: 'estado', titulo: 'Estado', ancho: 100, clave: true, ordenable: 'estado', titleCelda: (it) => infoEstadoItemLista(it.estado).label,
+    celda: (it) => <CeldaEstadoItem it={it} /> },
+  { id: 'fecha', titulo: 'Fecha', ancho: 92, ocultaPorDefecto: true, ordenable: 'fecha', titleCelda: (it) => textoInstante(it.fecha_creacion),
+    celda: (it) => <span className="text-xs text-gray-600">{textoInstante(it.fecha_creacion)}</span> },
+  { id: 'acciones', titulo: 'Acciones', ancho: 52, clave: true, fija: 'derecha', celda: (it) => <CeldaAcciones it={it} /> },
+];
+
+/** Una fila recibida se ve apagada (token opaco de TABLE, D41). */
+const claseDeFilaLista = (it: ItemLista) => (it.estado === 'RECIBIDO' ? TABLE.filaApagada : null);
+
+/** Las pestañas (sin emojis): Todos · Pendiente · En pedido · Recibido, con los conteos del servidor (null mientras cargan: barra gris). */
+function pestanasDeLista(conteos: ConteosLista | null): PestanaTabla[] {
+  return [
+    { id: 'todos', etiqueta: 'Todos', conteo: conteos?.todos ?? null },
+    { id: 'PENDIENTE', etiqueta: 'Pendiente', conteo: conteos?.PENDIENTE ?? null },
+    { id: 'EN_PEDIDO', etiqueta: 'En pedido', conteo: conteos?.EN_PEDIDO ?? null },
+    { id: 'RECIBIDO', etiqueta: 'Recibido', conteo: conteos?.RECIBIDO ?? null },
+  ];
+}
+
+/** El ítem que el tablero muestra en cada columna: su estado. */
+const columnaDeItem = (it: ItemLista) => it.estado;
+const fechaDeItem = (it: ItemLista) => it.fecha_creacion;
+
+function NewSupplierModal({ onSave, onClose }: { onSave: (s: Proveedor) => void; onClose: () => void }) {
+  const { avisarError } = useAvisos();
+  const [form, setForm] = useState({ name: '', reference: '', contact_name: '', phone: '', email: '', address: '', city: '', country: 'Colombia', payment_terms: '', notes: '' });
   const [saving, setSaving] = useState(false);
-  const set = (k,v) => setForm(f=>({...f,[k]:v}));
-  async function save(e) {
+  const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
+  async function save(e: React.FormEvent) {
     e.preventDefault();
     if (!form.name.trim()) return;
     setSaving(true);
-    try { const raw = await apiFetch('/compras/proveedores',{method:'POST',body:JSON.stringify(form)}); onSave(raw?.data ?? raw); }
-    catch(err) { alert('Error: '+err.message); }
+    try {
+      const raw = await apiFetch('/compras/proveedores', { method: 'POST', body: JSON.stringify(form) });
+      onSave(raw?.data ?? raw);
+    } catch (err) { avisarError(err, 'No se pudo crear el proveedor'); }
     setSaving(false);
   }
   return (
-    <Modal title="Nuevo Proveedor" subtitle="Agregar a la agenda de proveedores" color="purple" onClose={onClose}
+    <Modal title="Nuevo Proveedor" subtitle="Agregar a la agenda de proveedores" color="purple" capa="encima" onClose={onClose}
       footer={(
         <>
           <Button variant="secondary" onClick={onClose}>Cancelar</Button>
@@ -49,147 +196,195 @@ function NewSupplierModal({onSave, onClose}) {
         </>
       )}>
       <form id="new-supplier-form" onSubmit={save} className="grid grid-cols-2 gap-4">
-        <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Nombre *</label><input required value={form.name} onChange={e=>set('name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-        <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Referencia / NIT</label><input value={form.reference} onChange={e=>set('reference',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-        <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Contacto</label><input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-        <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Telefono</label><input value={form.phone} onChange={e=>set('phone',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-        <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Email</label><input type="email" value={form.email} onChange={e=>set('email',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-        <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Ciudad</label><input value={form.city} onChange={e=>set('city',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+        <div className="col-span-2"><label className={ETIQUETA_CAMPO}>Nombre *<input required value={form.name} onChange={(e) => set('name', e.target.value)} className={`${CAMPO} w-full mt-1 normal-case font-normal text-gray-900`} /></label></div>
+        <div><label className={ETIQUETA_CAMPO}>Referencia / NIT<input value={form.reference} onChange={(e) => set('reference', e.target.value)} className={`${CAMPO} w-full mt-1 normal-case font-normal text-gray-900`} /></label></div>
+        <div><label className={ETIQUETA_CAMPO}>Contacto<input value={form.contact_name} onChange={(e) => set('contact_name', e.target.value)} className={`${CAMPO} w-full mt-1 normal-case font-normal text-gray-900`} /></label></div>
+        <div><label className={ETIQUETA_CAMPO}>Teléfono<input value={form.phone} onChange={(e) => set('phone', e.target.value)} className={`${CAMPO} w-full mt-1 normal-case font-normal text-gray-900`} /></label></div>
+        <div><label className={ETIQUETA_CAMPO}>Email<input type="email" value={form.email} onChange={(e) => set('email', e.target.value)} className={`${CAMPO} w-full mt-1 normal-case font-normal text-gray-900`} /></label></div>
+        <div><label className={ETIQUETA_CAMPO}>Ciudad<input value={form.city} onChange={(e) => set('city', e.target.value)} className={`${CAMPO} w-full mt-1 normal-case font-normal text-gray-900`} /></label></div>
       </form>
     </Modal>
   );
 }
 
+/* ================================================================
+   MAIN PAGE — ListaComprasPage (B4 T16B)
+   ================================================================ */
 export default function ListaComprasPage() {
-  const [items, setItems]         = useState([]);
-  const [stats, setStats]         = useState({});
-  const [loading, setLoading]     = useState(true);
-  const [search, setSearch]       = useState('');
-  const [filterEstado, setFilterEstado] = useState('PENDIENTE');
-  const [filterProveedor, setFilterProveedor] = useState('');
-  const [fechaDesde, setFechaDesde] = useState('');
-  const [fechaHasta, setFechaHasta] = useState('');
-  const [showFilters, setShowFilters] = useState(false);
-  const [filterTab, setFilterTab] = useState('Pendiente');
-  const [activeTab, setActiveTab] = useState('Lista');
-  const [toast, setToast]         = useState(null);
+  const pathname = usePathname();
+  const router = useRouter();
+  const { avisar, avisarError, confirmar } = useAvisos();
 
-  // Pagination
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  // ── bloque 1: la carga del servidor (TABLA-compras punto 10; R5, C3, C4; D39, D40) ──
+  // El estado ÚNICO de la pantalla: las pestañas, la búsqueda (con el retardo de 300 ms de la barra), el filtro de estados, las
+  // tarjetas, la tabla y el tablero despachan a él. El proveedor y las fechas son filtros extra de la barra: cada cambio vuelve a la
+  // página 1 y limpia la selección. El modo (Lista o Kanban) se guarda en vista:compras.lista.
+  const [estado, despachar, listo] = useEstadoTabla(ID_LISTA, INICIAL_LISTA);
+  const enKanban = estado.modo === 'kanban';
+  const [filtros, setFiltros] = useState<FiltrosLista>(SIN_FILTROS);
+  const [seleccion, setSeleccion] = useState<ClaveFila[]>([]);
+  const [ocupadoId, setOcupadoId] = useState<number | null>(null);
 
-  // AI Analysis
-  const [aiAnalysis, setAiAnalysis] = useState('');
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiChat, setAiChat] = useState<any[]>([]);
-  const [aiInput, setAiInput] = useState('');
-  const [editingId, setEditingId] = useState(null);
-  const [editProveedor, setEditProveedor] = useState('');
-  const [showPecModal, setShowPecModal] = useState(false);
-  const [pecModalItems, setPecModalItems] = useState<any[]>([]);
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const [suppliers, setSuppliers] = useState([]);
-  const [supplierSearch, setSupplierSearch] = useState('');
-  const [selectedSupplier, setSelectedSupplier] = useState(null);
-  const [showNewSupplier, setShowNewSupplier] = useState(false);
-  const [pecForm, setPecForm]     = useState({ dias_entrega: 15, modalidad_pago: 'Contado', tipo_envio: 'casillero', notas: '' });
-  const [pecSaving, setPecSaving] = useState(false);
-  const supplierTimer = useRef(null);
+  // La tabla: la página (25 o 50) de GET /compras/lista-compras. La pestaña viaja como `estados` (el servidor no tiene `vista`),
+  // cruzada con el filtro (consultaLista). esperar: !listo (D40): el esqueleto, nunca «vacío». Los conteos de las pestañas vienen en
+  // la MISMA llamada (con la búsqueda y los filtros extra, sin la pestaña).
+  const extraDeLaLista = useMemo(() => consultaLista(estado, filtros), [estado, filtros]);
+  const listado = useListado<ItemLista>({
+    ruta: '/compras/lista-compras', estado, conConteos: true, esperar: !listo, despachar, activo: !enKanban, extra: extraDeLaLista,
+  });
+  const conteos = listado.conteos as ConteosLista | null;
+  const estadoConteos = useEstadoKpi(listado.cargandoInicial || listado.recargando, listado.error);
 
-  const showToast = (msg, type = 'ok') => {
-    setToast({msg,type}); setTimeout(()=>setToast(null), 3500);
+  // El tablero (modo cliente): los 200 más recientes con el mismo estado, otra consulta activa solo en Kanban (la tabla nunca se ve
+  // con las 200 filas del tablero). El endpoint de la Lista devuelve todo lo que se pida (C4).
+  const extraDelTablero = useMemo(() => consultaTableroLista(estado, filtros), [estado, filtros]);
+  const completa = useListado<ItemLista>({
+    ruta: '/compras/lista-compras', estado, esperar: !listo, activo: enKanban, extra: extraDelTablero,
+  });
+
+  // La franja del flujo (FLUJO-compras punto 10; R9, RP46, D36, D42): GET /compras/flujo; recargaFlujo sube con cada recarga.
+  const [recargaFlujo, setRecargaFlujo] = useState(0);
+  const flujo = useResumenFlujo<DatosFlujo>('/compras/flujo', recargaFlujo);
+
+  // Las tarjetas (KPI-compras punto 9; R7, R12): GET /compras/lista-compras/stats, sin respaldo local. Mientras no llega,
+  // 'cargando' (nunca 0); si falla, «—».
+  const [vueltaStats, setVueltaStats] = useState(0);
+  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
+  useEffect(() => {
+    const control = new AbortController();
+    apiFetch('/compras/lista-compras/stats', { signal: control.signal })
+      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
+      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
+    return () => control.abort();
+  }, [vueltaStats]);
+  const cargandoStats = stats?.vuelta !== vueltaStats;
+  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
+  const tarjetas = tarjetasLista(stats?.datos ?? null);
+
+  // «Actualizar» y lo que sigue a un cambio: la tabla con sus conteos, el tablero (el que no se ve se recarga al activarse), la
+  // franja y las tarjetas. Ninguna recarga vacía lo que se ve: los hooks conservan lo último.
+  const { recargar: recargarListado } = listado;
+  const { recargar: recargarCompleta } = completa;
+  const recargarTodo = useCallback(() => {
+    recargarListado();
+    recargarCompleta();
+    setRecargaFlujo((n) => n + 1);
+    setVueltaStats((n) => n + 1);
+  }, [recargarListado, recargarCompleta]);
+
+  // ── filtros extra de la barra: proveedor (con el retardo de 300 ms) y fechas ──
+  // Cada cambio vuelve a la página 1 y limpia la selección (R5).
+  const [proveedorTexto, setProveedorTexto] = useState('');
+  const [verFechas, setVerFechas] = useState(false);
+  const cambiarFiltros = useCallback((cambio: Partial<FiltrosLista>) => {
+    setFiltros((f) => ({ ...f, ...cambio }));
+    setSeleccion([]);
+    despachar({ tipo: 'pagina', valor: 1 });
+  }, [despachar]);
+  useEffect(() => {
+    if (proveedorTexto.trim() === filtros.proveedor) return undefined;
+    const espera = setTimeout(() => cambiarFiltros({ proveedor: proveedorTexto.trim() }), 300);
+    return () => clearTimeout(espera);
+  }, [proveedorTexto, filtros.proveedor, cambiarFiltros]);
+  const filtrarProveedor = (proveedor: string) => { setProveedorTexto(proveedor); cambiarFiltros({ proveedor }); };
+  const hayFechas = Boolean(filtros.desde || filtros.hasta);
+
+  // ── bloque 6: cambiar un ítem (PATCH de estado y de proveedor, DELETE) ──
+  // Si el servidor dice que no, su mensaje tal cual (avisarError). Un ítem con un cambio en camino no ofrece otro (ocupadoId).
+  const cambiarItem = useCallback(async (it: ItemLista, accion: () => Promise<string>, fallo: string) => {
+    setOcupadoId(it.id);
+    try {
+      avisar(await accion(), { tono: 'ok' });
+      setSeleccion((s) => s.filter((c) => String(c) !== String(it.id)));
+      recargarTodo();
+    } catch (err) {
+      avisarError(err, fallo);
+    } finally {
+      setOcupadoId(null);
+    }
+  }, [avisar, avisarError, recargarTodo]);
+  const marcarRecibido = useCallback((it: ItemLista) => {
+    void cambiarItem(it, async () => {
+      await apiFetch(`/compras/lista-compras/${it.id}`, { method: 'PATCH', body: JSON.stringify({ estado: 'RECIBIDO' }) });
+      return 'Marcado como recibido';
+    }, `No se pudo marcar «${it.producto}» como recibido`);
+  }, [cambiarItem]);
+  const eliminar = useCallback(async (it: ItemLista) => {
+    if (!(await confirmar({ titulo: 'Eliminar ítem', mensaje: `¿Eliminar «${it.producto}» de la lista de compras?`, textoConfirmar: 'Eliminar', peligro: true }))) return;
+    void cambiarItem(it, async () => {
+      await apiFetch(`/compras/lista-compras/${it.id}`, { method: 'DELETE' });
+      return 'Ítem eliminado';
+    }, `No se pudo eliminar «${it.producto}»`);
+  }, [confirmar, cambiarItem]);
+
+  // El proveedor se edita en una ventana (antes dentro de la celda, que ya no se arma con estado de la pantalla).
+  const [editando, setEditando] = useState<ItemLista | null>(null);
+  const [proveedorNuevo, setProveedorNuevo] = useState('');
+  const editarProveedor = useCallback((it: ItemLista) => { setEditando(it); setProveedorNuevo(it.proveedor ?? ''); }, []);
+  const guardarProveedor = async () => {
+    if (!editando) return;
+    const it = editando;
+    setEditando(null);
+    await cambiarItem(it, async () => {
+      await apiFetch(`/compras/lista-compras/${it.id}`, { method: 'PATCH', body: JSON.stringify({ proveedor: proveedorNuevo }) });
+      return 'Proveedor actualizado';
+    }, 'No se pudo actualizar el proveedor');
   };
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({ limit: '200' });
-      if (filterEstado) params.set('estado', filterEstado);
-      if (search) params.set('search', search);
-      if (filterProveedor) params.set('proveedor', filterProveedor);
-      if (fechaDesde) params.set('fecha_desde', fechaDesde);
-      if (fechaHasta) params.set('fecha_hasta', fechaHasta);
-      const [d, s] = await Promise.all([
-        apiFetch(`/compras/lista-compras?${params}`).catch(() => []),
-        apiFetch('/compras/lista-compras/stats').catch(() => ({})),
-      ]);
-      setItems(Array.isArray(d) ? d : (d?.data ?? []));
-      setStats(s?.data ?? s ?? {});
-    } catch (e) { showToast(e.message, 'err'); }
-    finally { setLoading(false); }
-  }, [filterEstado, search, filterProveedor, fechaDesde, fechaHasta]);
+  const accionesFila = useMemo<AccionesFilaLista>(() => ({
+    marcarRecibido, editarProveedor, eliminar: (it) => { void eliminar(it); }, ocupadoId,
+  }), [marcarRecibido, editarProveedor, eliminar, ocupadoId]);
 
-  useEffect(() => { load(); }, [load]);
+  // ── el pedido de compra desde la selección (B1 a B3, sin cambios de comportamiento) ──
+  const [showPecModal, setShowPecModal] = useState(false);
+  const [pecModalItems, setPecModalItems] = useState<ItemLista[]>([]);
+  const [suppliers, setSuppliers] = useState<Proveedor[]>([]);
+  const [supplierSearch, setSupplierSearch] = useState('');
+  const [selectedSupplier, setSelectedSupplier] = useState<Proveedor | null>(null);
+  const [showNewSupplier, setShowNewSupplier] = useState(false);
+  const [pecForm, setPecForm] = useState({ dias_entrega: 15, modalidad_pago: 'Contado', tipo_envio: 'casillero', notas: '' });
+  const [pecSaving, setPecSaving] = useState(false);
+  const supplierTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const onSupplierSearch = (q) => {
+  const onSupplierSearch = (q: string) => {
     setSupplierSearch(q);
     setSelectedSupplier(null);
     setShowNewSupplier(false);
     if (supplierTimer.current) clearTimeout(supplierTimer.current);
     if (!q.trim()) { setSuppliers([]); return; }
     supplierTimer.current = setTimeout(async () => {
-      const d = await apiFetch(`/compras/proveedores/search?q=${encodeURIComponent(q)}`).catch(() => ({ data: [] }));
-      const arr = Array.isArray(d) ? d : (d?.data ?? []);
-      setSuppliers(arr);
-      if (arr.length === 0) setShowNewSupplier(true);
+      try {
+        const d = await apiFetch(`/compras/proveedores/search?q=${encodeURIComponent(q)}`);
+        const arr: Proveedor[] = Array.isArray(d) ? d : (d?.data ?? []);
+        setSuppliers(arr);
+        if (arr.length === 0) setShowNewSupplier(true);
+      } catch (err) { avisarError(err, 'No se pudo buscar el proveedor'); }
     }, 300);
   };
 
-  const handleMarkEstado = async (id, estado) => {
-    try {
-      await apiFetch(`/compras/lista-compras/${id}`, { method: 'PATCH', body: JSON.stringify({ estado }) });
-      showToast(estado === 'RECIBIDO' ? 'Marcado como recibido' : 'Estado actualizado');
-      load();
-    } catch (e) { showToast(e.message, 'err'); }
-  };
-
-  const handleSaveProveedor = async (id) => {
-    try {
-      await apiFetch(`/compras/lista-compras/${id}`, { method: 'PATCH', body: JSON.stringify({ proveedor: editProveedor }) });
-      setEditingId(null);
-      showToast('Proveedor actualizado');
-      load();
-    } catch (e) { showToast(e.message, 'err'); }
-  };
-
-  const handleDelete = async (id) => {
-    if (!confirm('Eliminar este item de la lista?')) return;
-    try {
-      await apiFetch(`/compras/lista-compras/${id}`, { method: 'DELETE' });
-      showToast('Item eliminado');
-      load();
-    } catch (e) { showToast(e.message, 'err'); }
-  };
-
-  const toggleSelect = (id) => {
-    setSelectedIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  };
-  const toggleSelectAllPendientes = () => {
-    const pendientesIds = displayed.filter(it=>it.estado==='PENDIENTE').map(it=>it.id);
-    const allSelected = pendientesIds.length>0 && pendientesIds.every(id=>selectedIds.has(id));
-    setSelectedIds(allSelected ? new Set() : new Set(pendientesIds));
-  };
-
-  const openPecModal = (itemsToOrder) => {
-    setPecModalItems(itemsToOrder.map(it => ({...it, precio_unitario_cop: it.precio_unitario_cop || 0})));
+  // Los ítems seleccionados de la página que se ve (solo PENDIENTE: esItemSeleccionable).
+  const itemsSeleccionados = seleccion
+    .map((c) => listado.filas.find((f) => String(f.id) === String(c)))
+    .filter((f): f is ItemLista => Boolean(f) && esItemSeleccionable(f));
+  const openPecModal = (itemsToOrder: ItemLista[]) => {
+    setPecModalItems(itemsToOrder.map((it) => ({ ...it, precio_unitario_cop: it.precio_unitario_cop || 0 })));
     setSelectedSupplier(null);
     setSupplierSearch('');
     setSuppliers([]);
     setShowNewSupplier(false);
-    const pvens = [...new Set(itemsToOrder.map(it=>it.pven_numero).filter(Boolean))];
+    const pvens = [...new Set(itemsToOrder.map((it) => it.pven_numero).filter(Boolean))];
     setPecForm({ dias_entrega: 15, modalidad_pago: 'Contado', tipo_envio: 'casillero', notas: `Desde Lista de Compras - ${pvens.join(', ')}` });
     setShowPecModal(true);
   };
-
-  const setItemPrecio = (id, precio) => {
-    setPecModalItems(prev => prev.map(it => it.id === id ? {...it, precio_unitario_cop: precio} : it));
+  const setItemPrecio = (id: number, precio: string) => {
+    setPecModalItems((prev) => prev.map((it) => (it.id === id ? { ...it, precio_unitario_cop: precio } : it)));
   };
 
   const handleCrearPEC = async () => {
     if (!pecModalItems.length) return;
-    const sinPrecio = pecModalItems.find(it => !(Number(it.precio_unitario_cop) > 0));
+    const sinPrecio = pecModalItems.find((it) => !(Number(it.precio_unitario_cop) > 0));
     if (sinPrecio) {
-      showToast(`"${sinPrecio.producto}" no tiene precio. Ingresa un precio antes de crear el pedido de compra.`, 'err');
+      avisar(`«${sinPrecio.producto}» no tiene precio. Ingresa un precio antes de crear el pedido de compra.`, { tono: 'error' });
       return;
     }
     setPecSaving(true);
@@ -207,386 +402,341 @@ export default function ListaComprasPage() {
           modalidad_pago: pecForm.modalidad_pago,
           tipo_envio: pecForm.tipo_envio,
           notas: pecForm.notas,
-          productos: pecModalItems.map(it=>({ producto_nombre: it.producto, qty: it.cantidad, unit_price_cop: Number(it.precio_unitario_cop) })),
+          productos: pecModalItems.map((it) => ({ producto_nombre: it.producto, qty: it.cantidad, unit_price_cop: Number(it.precio_unitario_cop) })),
           subtotal_cop: totalCalc,
           total_cop: totalCalc,
           created_by: user,
         }),
       });
       const pecObj = pec?.data ?? pec;
-      // Vincula CADA item seleccionado (puede ser de distintos PVEN) a esta PEC;
-      // el PATCH ya se encarga de propagar pec_id/estado al Pedido de Venta de cada uno.
+      // Vincula CADA ítem seleccionado (puede ser de distintos PVEN) a este PEC; el PATCH ya se encarga de propagar pec_id/estado
+      // al Pedido de Venta de cada uno. Si alguno falla, el pedido de compra ya existe: se dice cuáles no quedaron vinculados.
+      const sinVincular: string[] = [];
       for (const it of pecModalItems) {
-        await apiFetch(`/compras/lista-compras/${it.id}`, {
-          method: 'PATCH',
-          body: JSON.stringify({ estado: 'EN_PEDIDO', pec_id: pecObj.id, pec_numero: pecObj.numero }),
-        }).catch(()=>{});
+        try {
+          await apiFetch(`/compras/lista-compras/${it.id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ estado: 'EN_PEDIDO', pec_id: pecObj.id, pec_numero: pecObj.numero }),
+          });
+        } catch (err) { sinVincular.push(`«${it.producto}» (${textoDeError(err)})`); }
       }
-      showToast(`PEC ${pecObj.numero || ''} creado con ${pecModalItems.length} producto(s)`);
+      if (sinVincular.length > 0) {
+        avisar(`PEC ${pecObj.numero || ''} creado, pero no se pudo vincular: ${sinVincular.join('; ')}.`, { tono: 'error' });
+      } else {
+        avisar(`PEC ${pecObj.numero || ''} creado con ${pecModalItems.length} producto(s)`, { tono: 'ok' });
+      }
       setShowPecModal(false);
-      setSelectedIds(new Set());
-      load();
-    } catch (e) { showToast(e.message, 'err'); }
+      setSeleccion([]);
+      recargarTodo();
+    } catch (err) { avisarError(err, 'No se pudo crear el pedido de compra'); }
     finally { setPecSaving(false); }
   };
 
-  const totalItems = items.length;
-  const displayed = items.slice((currentPage-1)*pageSize, currentPage*pageSize);
+  // ── bloque 2: la tabla (TABLA-compras punto 10; R5, R26, D40, D41) ──
+  const prefs = usePreferenciasTabla(ID_LISTA, COLUMNAS_TABLA_LISTA);
+  const anchoTablaRef = useRef<number | null>(null);
+  // Desestructurado: con el objeto entero en ref={…}, react-hooks/refs marca «Cannot access refs during render».
+  const { capa, claseTarjeta, refTarjeta, completa: pantallaCompleta, alternar, salir } = usePantallaCompleta();
+  // Pasar a Kanban sale de la pantalla completa (el conmutador sigue a la vista y el tablero no queda tapado).
+  useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
+  const pestanas = pestanasDeLista(conteos);
+  // m2 de T8: el conmutador Lista / Kanban poda los estados con las opciones del modo nuevo, con la regla de accionPestana.
+  const alCambiarBarra = useCallback((accion: AccionTabla) => {
+    if (accion.tipo === 'modo') {
+      const modo = String(accion.valor);
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_LISTA : opcionesEstadosLista));
+    } else despachar(accion);
+  }, [estado, despachar]);
+  const vacio = useMemo(() => {
+    const texto = textoVacioLista({ vista: estado.vista, q: estado.q, estados: estado.estados }, filtros);
+    return (
+      <div>
+        <p className="font-semibold text-slate-600">{texto.titulo}</p>
+        {texto.ayuda && <p className="mt-1 text-xs text-slate-500">{texto.ayuda}</p>}
+      </div>
+    );
+  }, [estado.vista, estado.q, estado.estados, filtros]);
+  // «N resultados» es el de la tabla; en Kanban cada columna trae su total (la barra no lo repite).
+  const totalDeLaBarra = enKanban ? {} : {
+    total: listado.total,
+    estadoTotal: estadoDelTotal({ total: listado.total, cargando: listado.cargandoInicial, recargando: listado.recargando, error: listado.error }),
+  };
+  const alSeleccionar = useCallback((claves: ClaveFila[]) => setSeleccion(claves), []);
+  const pieSeleccion = seleccion.length > 0
+    ? <span className="font-bold text-purple-700">{seleccion.length} {seleccion.length === 1 ? 'seleccionado' : 'seleccionados'}</span>
+    : null;
 
-  async function handleAIAnalysis() {
-    setAiLoading(true);
-    const summary = `Datos de Lista de Compras: ${items.length} registros. Top items: ${items.slice(0,3).map((r:any)=>r.producto||'item').join(', ')}.`;
-    setAiAnalysis(`📊 ANÁLISIS DE LISTA DE COMPRAS — ${new Date().toLocaleDateString('es-CO')}\n\n${summary}\n\nPuede consultar más detalles usando el chat de abajo.`);
-    setAiLoading(false);
-  }
+  // ── bloque 3: el tablero solo para ver (KANBAN-logistica punto 5; R11, C4, RP95) ──
+  // Modo cliente: los ítems de la consulta completa agrupados por su estado (columnaDeItem). Mientras llegan, el tablero carga
+  // (items null); items estable: useMemo. El clic abre el PEC vinculado o, sin PEC, el PVEN.
+  const itemsTablero = useMemo<ItemLista[] | null>(
+    () => (completa.cargandoInicial || (completa.error != null && completa.filas.length === 0) ? null : completa.filas),
+    [completa.cargandoInicial, completa.filas, completa.error],
+  );
+  const tablero = useTableroKanban<ItemLista>({
+    pantalla: ID_LISTA,
+    modo: 'cliente',
+    columnas: COLUMNAS_LISTA,
+    activo: listo && enKanban,
+    porColumna: estado.tamano,
+    items: itemsTablero,
+    columnaDe: columnaDeItem,
+    fechaMovimiento: fechaDeItem,
+  });
+  const abrirItem = useCallback((it: ItemLista) => {
+    const destino = destinoItemLista(it);
+    if (destino) router.push(destino);
+    else avisar('Este ítem no tiene un pedido de venta ni un pedido de compra vinculado.', { tono: 'info' });
+  }, [router, avisar]);
+  const hayMasDelTope = enKanban && !completa.cargandoInicial && (completa.total ?? 0) > TOPE_TABLERO_COMPRAS;
+  const errorTablero = enKanban && completa.error != null;
+  const avisoTablero = (hayMasDelTope || errorTablero) ? (
+    <div className="flex flex-col gap-1">
+      {errorTablero && (
+        <p role="alert">
+          {textoDeError(completa.error, 'No se pudo cargar la lista de compras')}.{' '}
+          <button type="button" onClick={completa.recargar} className={`rounded font-bold text-purple-700 underline ${FOCO_VISIBLE}`}>Reintentar</button>
+        </p>
+      )}
+      {hayMasDelTope && <p>Se muestran los 200 más recientes de {completa.total} ítems. Busca o filtra para ver el resto.</p>}
+    </div>
+  ) : undefined;
 
-  async function sendAIChat() {
-    if(!aiInput.trim()) return;
-    const msg=aiInput; setAiInput('');
-    setAiChat(h=>[...h,{role:'user',text:msg}]);
-    setAiChat(h=>[...h,{role:'ia',text:`Con base en los datos actuales: ${msg}. El análisis muestra ${items.length} registros disponibles.`}]);
-  }
+  // ── bloque 4: las tarjetas (KPI-compras punto 9; R5, R12) ──
+  // Cada una abre su pestaña (D41: como un clic en ella; tocar la activa vuelve a Todos). En Kanban abren esa pestaña en Lista.
+  const vistaActiva = enKanban ? null : estado.vista;
+  const elegirVista = (vista: string) => {
+    const siguiente = vistaActiva === vista ? 'todos' : vista;
+    despachar(accionVistaEnLista(estado, siguiente, opcionesEstadosLista));
+  };
+  const actualizando = listado.recargando || completa.recargando || flujo.cargando || (cargandoStats && stats !== null);
 
+  /* ════════════════ RENDER ════════════════ */
   return (
-    <div className="flex flex-col min-h-screen bg-gray-50">
-      <Toast toast={toast} onClose={()=>setToast(null)} />
+    <div className="min-h-screen bg-slate-50 flex flex-col">
 
-      <SubNav label="Hub de Compras" items={COMP_NAV} currentPath="/dashboard/compras/lista-compras" color="purple" hub={{ href: '/dashboard/compras' }} />
+      <SubNav label="Hub de Compras" items={COMP_NAV} currentPath={pathname} color="purple" hub={{ href: '/dashboard/compras' }} />
 
-      {/* Header */}
-      <div className="bg-white border-b border-gray-100 px-8 py-6">
+      {/* B4 T16B (FLUJO-compras punto 10; R9, RP42, D42): la franja con «Estás aquí» en Lista de compras. Sin semáforo (la lista
+          no tiene atraso propio) ni «No resueltos». Va directo bajo la barra de submódulos, sin otro padding. */}
+      <BannerFlujo
+        titulo="Flujo de compras"
+        idPreferencia={ID_LISTA}
+        regla={textoReglaCompras()}
+        pasos={pasosPantallaCompras(flujo.datos, 'LISTA')}
+        avisos={avisosFlujoCompras(flujo.datos)}
+        cargando={flujo.cargando}
+        error={flujo.error}
+        onReintentar={flujo.recargar}
+      />
+
+      <div className={CONTENEDOR}>
+
         <PageHeader icon={ListChecks} color="purple"
           title="Lista de Productos por Comprar"
           subtitle="Productos pendientes de compra desde Pedidos de Venta"
           actions={(
-            <button onClick={load} className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 font-semibold text-sm shadow-sm">
-              <RefreshCw size={14} className={loading?'animate-spin':''}/> Actualizar
-            </button>
-          )} />
-      </div>
-
-      {/* KPI Cards */}
-      <div className="px-8 py-5 bg-white border-b border-gray-100">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatCard icon={Clock} label="Pendientes" value={stats.pendientes ?? 0} color="amber" />
-          <StatCard icon={ShoppingCart} label="En Pedido" value={stats.en_pedido ?? 0} color="blue" />
-          <StatCard icon={CheckCircle2} label="Recibidos" value={stats.recibidos ?? 0} color="emerald" />
-          <StatCard icon={Package} label="Total Items" value={stats.total ?? 0} color="purple" />
-        </div>
-      </div>
-
-      {/* Tabs Row */}
-      <div className="px-8 pt-4 pb-0 bg-white flex items-center justify-between">
-        <div className="flex items-center gap-1">
-          {[
-            {tab:'Todos', estado:''},
-            {tab:'Pendiente', estado:'PENDIENTE'},
-            {tab:'En Pedido', estado:'EN_PEDIDO'},
-            {tab:'Recibido',  estado:'RECIBIDO'},
-          ].map(({tab,estado}) => (
-            <button key={tab} onClick={() => { setFilterTab(tab); setFilterEstado(estado); setCurrentPage(1); }}
-              className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all ${
-                filterTab===tab ? 'bg-purple-600 text-white shadow-sm' : 'text-gray-600 hover:text-purple-700 hover:bg-purple-50'
-              }`}>
-              {tab}
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-1">
-          {['Lista', 'Análisis'].map(tab => (
-            <button key={tab} onClick={() => setActiveTab(tab === 'Análisis' ? 'Analisis' : tab)}
-              className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
-                activeTab === (tab === 'Análisis' ? 'Analisis' : tab) ? 'bg-purple-600 text-white shadow-sm' : 'text-gray-600 hover:text-purple-700 hover:bg-purple-50'
-              }`}>
-              {tab}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Search + Filter Row */}
-      <div className="px-8 py-3 bg-white border-b border-gray-100 flex flex-wrap items-center gap-3">
-        <div className="flex items-center bg-white border border-gray-200 rounded-xl px-3 py-2 gap-2 flex-1 max-w-[400px] shadow-sm">
-          <Search size={14} className="text-gray-400 shrink-0"/>
-          <input value={search} onChange={e=>setSearch(e.target.value)}
-            placeholder="Buscar producto, PVEN, notas..."
-            className="text-sm bg-transparent outline-none flex-1 placeholder-gray-400"/>
-          {search && <button onClick={()=>setSearch('')}><X size={13} className="text-gray-400"/></button>}
-        </div>
-
-        <div className="flex items-center bg-white border border-gray-200 rounded-xl px-3 py-2 gap-2 shadow-sm">
-          <User size={14} className="text-gray-400 shrink-0"/>
-          <input value={filterProveedor} onChange={e=>setFilterProveedor(e.target.value)}
-            placeholder="Filtrar proveedor..." className="text-sm bg-transparent outline-none w-40 placeholder-gray-400"/>
-          {filterProveedor && <button onClick={()=>setFilterProveedor('')}><X size={13} className="text-gray-400"/></button>}
-        </div>
-
-        <button onClick={()=>setShowFilters(f=>!f)}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-semibold shadow-sm transition-colors ${
-            showFilters || fechaDesde || fechaHasta ? 'bg-purple-50 border-purple-300 text-purple-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
-          }`}>
-          <Calendar size={14}/> Fecha
-          {(fechaDesde||fechaHasta) && <span className="bg-purple-600 text-white text-[10px] px-1.5 py-0.5 rounded-full font-black">1</span>}
-        </button>
-
-        {showFilters && (
-          <>
-            <input type="date" value={fechaDesde} onChange={e=>setFechaDesde(e.target.value)}
-              className="border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none shadow-sm"/>
-            <span className="text-gray-400 text-sm">→</span>
-            <input type="date" value={fechaHasta} onChange={e=>setFechaHasta(e.target.value)}
-              className="border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none shadow-sm"/>
-            {(fechaDesde||fechaHasta) && (
-              <button onClick={()=>{setFechaDesde('');setFechaHasta('');}} className="text-red-500 text-xs font-bold hover:text-red-700">Limpiar</button>
-            )}
-          </>
-        )}
-        <span className="text-sm text-gray-400 font-medium ml-auto">{totalItems} registros</span>
-      </div>
-
-      {selectedIds.size > 0 && (
-        <div className="px-8 py-3 bg-purple-50 border-b border-purple-200 flex items-center gap-3">
-          <ListChecks size={16} className="text-purple-600"/>
-          <span className="text-sm font-bold text-purple-800">{selectedIds.size} producto(s) seleccionado(s)</span>
-          <Button size="sm" color="purple" icon={ShoppingCart} onClick={()=>openPecModal(items.filter(it=>selectedIds.has(it.id)))}>
-            Crear Pedido de Compra con seleccionados
-          </Button>
-          <button onClick={()=>setSelectedIds(new Set())} className="text-xs text-purple-500 hover:text-purple-700 font-bold">Cancelar seleccion</button>
-        </div>
-      )}
-
-      {activeTab === 'Lista' && (
-      <>
-      {/* Tabla */}
-      <div className="flex-1 px-8 py-4">
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="px-4 py-3.5 w-10">
-                  <input type="checkbox"
-                    checked={displayed.some(it=>it.estado==='PENDIENTE') && displayed.filter(it=>it.estado==='PENDIENTE').every(it=>selectedIds.has(it.id))}
-                    onChange={toggleSelectAllPendientes}
-                    className="rounded border-gray-300 text-purple-600"/>
-                </th>
-                <th className="px-4 py-3.5 text-xs font-black text-gray-400 uppercase tracking-wide">Producto</th>
-                <th className="px-4 py-3.5 text-xs font-black text-gray-400 uppercase tracking-wide text-center">Qty</th>
-                <th className="px-4 py-3.5 text-xs font-black text-gray-400 uppercase tracking-wide">PVEN</th>
-                <th className="px-4 py-3.5 text-xs font-black text-gray-400 uppercase tracking-wide">Proveedor</th>
-                <th className="px-4 py-3.5 text-xs font-black text-gray-400 uppercase tracking-wide">PEC</th>
-                <th className="px-4 py-3.5 text-xs font-black text-gray-400 uppercase tracking-wide">Estado</th>
-                <th className="px-4 py-3.5 text-xs font-black text-gray-400 uppercase tracking-wide">Fecha</th>
-                <th className="px-4 py-3.5 text-xs font-black text-gray-400 uppercase tracking-wide text-center">Acciones</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {loading && (
-                <tr><td colSpan={9} className="py-16 text-center">
-                  <RefreshCw size={24} className="animate-spin text-purple-400 mx-auto mb-2"/>
-                  <p className="text-gray-400 text-sm">Cargando...</p>
-                </td></tr>
-              )}
-              {!loading && displayed.length === 0 && (
-                <tr><td colSpan={9} className="py-16 text-center">
-                  <Package size={32} className="mx-auto mb-3 text-gray-300"/>
-                  <p className="text-gray-500 font-medium">No hay productos en la lista</p>
-                  <p className="text-gray-400 text-xs mt-1">Los productos se agregan desde Pedidos de Venta en estado Pendiente Compra</p>
-                </td></tr>
-              )}
-              {displayed.map((item) => {
-                const est = ESTADO_STYLES[item.estado] || ESTADO_STYLES.PENDIENTE;
-                return (
-                  <tr key={item.id} className={`hover:bg-gray-50 group transition-colors ${selectedIds.has(item.id)?'bg-purple-50/60':''}`}>
-                    <td className="px-4 py-3.5">
-                      {item.estado === 'PENDIENTE' && (
-                        <input type="checkbox" checked={selectedIds.has(item.id)} onChange={()=>toggleSelect(item.id)}
-                          className="rounded border-gray-300 text-purple-600"/>
-                      )}
-                    </td>
-                    <td className="px-4 py-3.5">
-                      <p className="font-bold text-gray-900 truncate max-w-[220px]" title={item.producto}>{item.producto}</p>
-                      {item.notas && <p className="text-xs text-gray-400 truncate max-w-[200px]">{item.notas}</p>}
-                    </td>
-                    <td className="px-4 py-3.5 text-center font-black text-gray-700">{item.cantidad}</td>
-                    <td className="px-4 py-3.5">
-                      {item.pven_numero ? (
-                        <Link href={`/dashboard/ventas/venta?id=${item.pven_id}`} className="text-indigo-600 font-bold hover:underline flex items-center gap-1 text-sm">
-                          {item.pven_numero}<ExternalLink size={11}/>
-                        </Link>
-                      ) : <span className="text-gray-400">-</span>}
-                    </td>
-                    <td className="px-4 py-3.5">
-                      {editingId === item.id ? (
-                        <div className="flex items-center gap-1">
-                          <input autoFocus value={editProveedor} onChange={e=>setEditProveedor(e.target.value)}
-                            className="border border-purple-300 rounded-lg px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-purple-200 w-28"/>
-                          <button onClick={()=>handleSaveProveedor(item.id)} className="text-purple-600"><Save size={13}/></button>
-                          <button onClick={()=>setEditingId(null)} className="text-gray-400"><X size={13}/></button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-1 group/prov">
-                          <span className="text-sm">{item.proveedor || <span className="text-gray-300 italic">Sin asignar</span>}</span>
-                          <button onClick={()=>{setEditingId(item.id);setEditProveedor(item.proveedor||'');}}
-                            className="opacity-0 group-hover/prov:opacity-100 text-gray-400 hover:text-purple-600">
-                            <Edit2 size={12}/>
-                          </button>
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3.5">
-                      {item.pec_numero ? (
-                        <Link href={`/dashboard/compras/pedidos?id=${item.pec_id}`} className="text-purple-600 font-bold hover:underline flex items-center gap-1 text-xs">
-                          {item.pec_numero}<ExternalLink size={10}/>
-                        </Link>
-                      ) : <span className="text-gray-300 text-xs">-</span>}
-                    </td>
-                    <td className="px-4 py-3.5">
-                      <Badge tone={est.tone}>{est.label}</Badge>
-                    </td>
-                    <td className="px-4 py-3.5 text-xs text-gray-500">{fDate(item.fecha_creacion)}</td>
-                    <td className="px-4 py-3.5">
-                      <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        {item.estado === 'PENDIENTE' && (
-                          <button onClick={()=>handleMarkEstado(item.id,'RECIBIDO')}
-                            className="p-1.5 rounded-lg border border-emerald-200 text-emerald-600 hover:bg-emerald-50" title="Marcar recibido">
-                            <CheckCircle2 size={13}/>
-                          </button>
-                        )}
-                        {item.estado === 'EN_PEDIDO' && (
-                          <button onClick={()=>handleMarkEstado(item.id,'RECIBIDO')}
-                            className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700">
-                            <CheckCircle2 size={11}/> Recibido
-                          </button>
-                        )}
-                        <button onClick={()=>handleDelete(item.id)}
-                          className="p-1.5 rounded-lg border border-red-200 text-red-500 hover:bg-red-50" title="Eliminar">
-                          <Trash2 size={13}/>
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {/* PAGINATION */}
-          {totalItems > 0 && (
-            <div className="border-t border-gray-100 px-6 py-3 flex items-center justify-between bg-gray-50/50">
-              <div className="flex items-center gap-3">
-                <span className="text-xs font-bold text-gray-400">{totalItems} registros</span>
-                <select value={pageSize} onChange={e=>{setPageSize(Number(e.target.value));setCurrentPage(1);}} className="text-xs border border-gray-200 rounded-lg px-2 py-1 font-bold text-gray-600 outline-none">
-                  <option value={25}>25 por página</option>
-                  <option value={50}>50 por página</option>
-                </select>
-              </div>
-              {Math.ceil(totalItems/pageSize) > 1 && (
-                <div className="flex items-center gap-1">
-                  <button disabled={currentPage===1} onClick={()=>setCurrentPage(1)} className="px-2 py-1 text-xs font-bold border border-gray-200 rounded-lg disabled:opacity-40 hover:bg-gray-100">«</button>
-                  <button disabled={currentPage===1} onClick={()=>setCurrentPage(p=>p-1)} className="px-2 py-1 text-xs font-bold border border-gray-200 rounded-lg disabled:opacity-40 hover:bg-gray-100">‹</button>
-                  {Array.from({length:Math.min(5,Math.ceil(totalItems/pageSize))},(_,i)=>{
-                    const tp=Math.ceil(totalItems/pageSize); let page=i+1;
-                    if(tp>5){const half=2;const start=Math.max(1,Math.min(currentPage-half,tp-4));page=start+i;}
-                    return <button key={page} onClick={()=>setCurrentPage(page)} className={`px-2.5 py-1 text-xs font-bold border rounded-lg ${currentPage===page?'bg-purple-600 text-white border-purple-600':'border-gray-200 hover:bg-gray-100'}`}>{page}</button>;
-                  })}
-                  <button disabled={currentPage===Math.ceil(totalItems/pageSize)} onClick={()=>setCurrentPage(p=>p+1)} className="px-2 py-1 text-xs font-bold border border-gray-200 rounded-lg disabled:opacity-40 hover:bg-gray-100">›</button>
-                  <button disabled={currentPage===Math.ceil(totalItems/pageSize)} onClick={()=>setCurrentPage(Math.ceil(totalItems/pageSize))} className="px-2 py-1 text-xs font-bold border border-gray-200 rounded-lg disabled:opacity-40 hover:bg-gray-100">»</button>
-                </div>
-              )}
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button type="button" onClick={recargarTodo}
+                className={`flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 font-semibold text-sm shadow-sm transition-colors ${FOCO_VISIBLE}`}>
+                <RefreshCw size={14} aria-hidden="true" className={actualizando ? 'animate-spin' : ''} /> Actualizar
+              </button>
+              {/* R13 (ANALISIS-compras punto 5): «Ver análisis» abre el Análisis del Hub de Compras (?tab=analisis). */}
+              <Link href={ENLACE_VER_ANALISIS_COMPRAS}
+                className={`flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-xl hover:bg-purple-50 hover:text-purple-800 hover:border-purple-200 font-semibold text-sm shadow-sm transition-colors ${FOCO_VISIBLE}`}>
+                <ContenidoEnlace icon={BarChart3}>Ver análisis</ContenidoEnlace>
+              </Link>
             </div>
-          )}
-        </div>
-      </div>
+          )} />
 
-      {/* Por proveedor */}
-      {stats.por_proveedor?.length > 0 && (
-        <div className="px-8 pb-8">
+        {/* B4 T16B (KPI-compras punto 9; R7, R12): las 4 tarjetas de /compras/lista-compras/stats: mientras cargan, barras
+            grises (nunca 0); con error, «—». Cada una abre su pestaña. */}
+        <FranjaKpis estado={estadoKpis} titulo="Lista de compras">
+          <TarjetaKpi kpi="lista_pendientes" valor={tarjetas?.pendientes.valor ?? null}
+            activo={vistaActiva === 'PENDIENTE'} onClick={() => elegirVista('PENDIENTE')} />
+          <TarjetaKpi kpi="lista_en_pedido" valor={tarjetas?.en_pedido.valor ?? null}
+            activo={vistaActiva === 'EN_PEDIDO'} onClick={() => elegirVista('EN_PEDIDO')} />
+          <TarjetaKpi kpi="lista_recibidos" valor={tarjetas?.recibidos.valor ?? null}
+            activo={vistaActiva === 'RECIBIDO'} onClick={() => elegirVista('RECIBIDO')} />
+          <TarjetaKpi kpi="lista_total" valor={tarjetas?.total.valor ?? null}
+            activo={vistaActiva === 'todos'} onClick={() => elegirVista('todos')} />
+        </FranjaKpis>
+
+        {/* B4 T16B (TABLA-compras punto 10, KANBAN-logistica punto 5): la barra y la tabla estándar en el servidor, o el tablero
+            solo para ver en modo cliente, con el MISMO estado (búsqueda y estados) y los mismos filtros extra. En Kanban las
+            pestañas no se ven (el tablero trae todas por columna). */}
+        <div className="flex min-w-0 flex-col gap-4">
+          {capa}
+          <AccionesFila.Provider value={accionesFila}>
+            <section ref={refTarjeta} className={claseTarjeta}>
+              <BarraTabla
+                estado={estado}
+                onEstado={alCambiarBarra}
+                pestanas={enKanban ? undefined : pestanas}
+                estadoConteos={estadoConteos}
+                placeholder="Buscar producto, PVEN, proveedor, PEC o notas…"
+                opcionesEstados={enKanban ? OPCIONES_ESTADOS_TABLERO_LISTA : opcionesEstadosLista}
+                filtros={(
+                  <>
+                    <label className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 shadow-sm focus-within:ring-2 focus-within:ring-purple-200">
+                      <User size={14} aria-hidden="true" className="shrink-0 text-gray-500" />
+                      <input value={proveedorTexto} onChange={(e) => setProveedorTexto(e.target.value)} aria-label="Filtrar por proveedor"
+                        placeholder="Proveedor…" className="w-32 bg-transparent text-xs outline-none placeholder-gray-500" />
+                      {proveedorTexto && (
+                        <button type="button" aria-label="Quitar el filtro de proveedor" onClick={() => filtrarProveedor('')}
+                          className={`rounded text-gray-500 hover:text-gray-800 ${FOCO_VISIBLE}`}><X size={13} aria-hidden="true" /></button>
+                      )}
+                    </label>
+                    <button type="button" onClick={() => setVerFechas((v) => !v)} aria-expanded={verFechas}
+                      className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold transition-colors ${FOCO_VISIBLE} ${
+                        verFechas || hayFechas ? 'border-purple-300 bg-purple-50 text-purple-800' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                      }`}>
+                      <Calendar size={14} aria-hidden="true" /> Fecha
+                      {hayFechas && <span className="rounded-full bg-purple-700 px-1.5 py-0.5 text-[10px] font-black text-white">1</span>}
+                    </button>
+                    {(verFechas || hayFechas) && (
+                      <>
+                        <input type="date" value={filtros.desde} onChange={(e) => cambiarFiltros({ desde: e.target.value })} aria-label="Desde"
+                          className={`rounded-xl border border-gray-200 px-3 py-2 text-xs shadow-sm outline-none ${FOCO_VISIBLE}`} />
+                        <span aria-hidden="true" className="text-sm text-gray-500">→</span>
+                        <input type="date" value={filtros.hasta} onChange={(e) => cambiarFiltros({ hasta: e.target.value })} aria-label="Hasta"
+                          className={`rounded-xl border border-gray-200 px-3 py-2 text-xs shadow-sm outline-none ${FOCO_VISIBLE}`} />
+                        {hayFechas && (
+                          <button type="button" onClick={() => cambiarFiltros({ desde: '', hasta: '' })}
+                            className={`rounded text-xs font-bold text-red-700 hover:underline ${FOCO_VISIBLE}`}>Limpiar fechas</button>
+                        )}
+                      </>
+                    )}
+                  </>
+                )}
+                ajustes={{ columnas: COLUMNAS_TABLA_LISTA, preferencias: prefs, anchoRef: anchoTablaRef }}
+                kanbanDisponible
+                pantallaCompleta={enKanban ? undefined : { completa: pantallaCompleta, alternar }}
+                color="purple"
+                {...totalDeLaBarra}
+              />
+              {/* La tabla estándar en el servidor: la paginación (25 o 50), el orden por columna y la selección de los PENDIENTE. */}
+              {!enKanban && (
+                <TablaEstandar
+                  id={ID_LISTA}
+                  modo="servidor"
+                  columnas={COLUMNAS_TABLA_LISTA}
+                  preferencias={prefs}
+                  anchoRef={anchoTablaRef}
+                  estado={estado}
+                  onEstado={despachar}
+                  filas={listado.filas}
+                  total={listado.total}
+                  cargando={listado.cargandoInicial}
+                  recargando={listado.recargando}
+                  error={listado.error}
+                  onReintentar={listado.recargar}
+                  aviso={listado.avisoOrden}
+                  claseFila={claseDeFilaLista}
+                  seleccion={seleccion}
+                  onSeleccion={alSeleccionar}
+                  seleccionable={esItemSeleccionable}
+                  pie={pieSeleccion}
+                  vacio={vacio}
+                  etiqueta="Lista de compras"
+                />
+              )}
+            </section>
+          </AccionesFila.Provider>
+          {enKanban ? (
+            /* KANBAN-logistica punto 5: Pendiente · En pedido · Recibido (plegada), solo para ver: sin regla, con su motivo. */
+            <TableroKanban
+              tablero={tablero}
+              soloLectura={TEXTO_SOLO_VER}
+              tarjetaDe={tarjetaItemLista}
+              onAbrir={abrirItem}
+              aviso={avisoTablero}
+              color="purple"
+              vacio="Sin ítems aquí"
+            />
+          ) : null}
+        </div>
+
+        {/* Pendientes por proveedor (B1 a B3): los botones que filtran la lista por proveedor, si el servidor los trae. */}
+        {!enKanban && Array.isArray((stats?.datos as { por_proveedor?: unknown } | null)?.por_proveedor)
+          && ((stats?.datos as { por_proveedor: { proveedor: string; count: number }[] }).por_proveedor).length > 0 && (
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
             <h3 className="text-sm font-black text-gray-700 mb-4">Pendientes por Proveedor</h3>
             <div className="flex flex-wrap gap-2">
-              {stats.por_proveedor.map((p, i) => (
-                <button key={i} onClick={()=>setFilterProveedor(p.proveedor)}
-                  className="flex items-center gap-2 px-4 py-2 bg-purple-50 border border-purple-200 rounded-xl text-sm font-bold text-purple-700 hover:bg-purple-100">
-                  {p.proveedor} <span className="bg-purple-600 text-white px-2 py-0.5 rounded-full text-xs">{p.count}</span>
+              {(stats?.datos as { por_proveedor: { proveedor: string; count: number }[] }).por_proveedor.map((p) => (
+                <button key={p.proveedor} type="button" onClick={() => filtrarProveedor(p.proveedor)}
+                  className={`flex items-center gap-2 px-4 py-2 bg-purple-50 border border-purple-200 rounded-xl text-sm font-bold text-purple-800 hover:bg-purple-100 ${FOCO_VISIBLE}`}>
+                  {p.proveedor} <span className="bg-purple-700 text-white px-2 py-0.5 rounded-full text-xs">{p.count}</span>
                 </button>
               ))}
             </div>
           </div>
+        )}
+      </div>
+
+      {/* Barra de selección: crear el pedido de compra con los ítems PENDIENTE elegidos (B1 a B3). La selección es de la página
+          de la tabla, así que solo en Lista. */}
+      {seleccion.length > 0 && !enKanban && (
+        <div className="fixed bottom-8 left-1/2 z-40 flex -translate-x-1/2 items-center gap-4 rounded-2xl border border-slate-700 bg-slate-900 px-6 py-4 text-white shadow-2xl">
+          <span className="rounded-full bg-slate-800 px-3 py-1 text-sm font-bold">{seleccion.length} {seleccion.length === 1 ? 'seleccionado' : 'seleccionados'}</span>
+          <button type="button" onClick={() => openPecModal(itemsSeleccionados)} disabled={itemsSeleccionados.length === 0}
+            className={`flex items-center gap-2 rounded-xl bg-purple-500/20 px-3 py-1.5 text-xs font-bold text-purple-200 transition-colors hover:bg-purple-500/40 disabled:opacity-50 ${FOCO_OSCURO}`}>
+            <ShoppingCart size={14} aria-hidden="true" /> Crear Pedido de Compra con seleccionados
+          </button>
+          <button type="button" onClick={() => setSeleccion([])} aria-label="Quitar la selección" title="Quitar la selección"
+            className={`rounded-lg p-1.5 text-slate-400 hover:text-white ${FOCO_OSCURO}`}><X size={14} aria-hidden="true" /></button>
         </div>
-      )}
-      </>
       )}
 
-      {activeTab === 'Analisis' && (
-        <div className="px-8 py-6 space-y-4">
-          <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl p-5 border border-blue-100">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="bg-blue-600 rounded-xl p-2 text-white font-black text-sm">AI</div>
-              <div>
-                <p className="font-extrabold text-blue-900">Análisis de Lista de Compras</p>
-                <p className="text-xs text-blue-500">Nebulae Analytics</p>
-              </div>
-              <button onClick={handleAIAnalysis} disabled={aiLoading} className="ml-auto bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl font-bold text-sm disabled:opacity-50 flex items-center gap-2">
-                {aiLoading ? <RefreshCw size={14} className="animate-spin"/> : null} Generar Análisis
-              </button>
-            </div>
-            {aiAnalysis && (
-              <pre className="text-sm text-slate-700 whitespace-pre-wrap bg-white/70 rounded-xl p-4 border border-blue-100 leading-relaxed">{aiAnalysis}</pre>
-            )}
-            {!aiAnalysis && !aiLoading && (
-              <p className="text-sm text-blue-700 italic text-center py-4">Haz clic en "Generar Análisis" para obtener insights sobre los datos actuales.</p>
-            )}
-          </div>
-          {/* Chat */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-4">
-            <p className="font-bold text-slate-700 text-sm mb-3">Consultar al Asistente</p>
-            <div className="space-y-2 max-h-40 overflow-y-auto mb-3">
-              {aiChat.map((m:any,i:number)=>(
-                <div key={i} className={`flex ${m.role==='user'?'justify-end':''}`}>
-                  <div className={`rounded-xl px-3 py-2 text-xs max-w-[80%] ${m.role==='user'?'bg-blue-600 text-white':'bg-slate-100 text-slate-700'}`}>{m.text}</div>
-                </div>
-              ))}
-            </div>
-            <div className="flex gap-2">
-              <input value={aiInput} onChange={e=>setAiInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&sendAIChat()} placeholder="Pregunta sobre los datos..." className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-blue-200"/>
-              <button onClick={sendAIChat} disabled={!aiInput.trim()} className="bg-blue-600 text-white px-3 py-2 rounded-xl text-xs font-bold disabled:opacity-50">Enviar</button>
-            </div>
-          </div>
-        </div>
+      {/* Editar el proveedor de un ítem */}
+      {editando && (
+        <Modal title="Editar proveedor" subtitle={editando.producto} color="purple" maxWidth="md" onClose={() => setEditando(null)}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={() => setEditando(null)}>Cancelar</Button>
+              <Button color="purple" icon={Package} onClick={guardarProveedor}>Guardar proveedor</Button>
+            </>
+          )}>
+          <label className={ETIQUETA_CAMPO}>Proveedor
+            <input autoFocus value={proveedorNuevo} onChange={(e) => setProveedorNuevo(e.target.value)} placeholder="Nombre del proveedor"
+              className={`${CAMPO} w-full mt-1 normal-case font-normal text-gray-900`} />
+          </label>
+        </Modal>
       )}
 
       {/* Modal Crear PEC */}
       {showPecModal && pecModalItems.length > 0 && (
         <Modal title="Crear Pedido de Compra" subtitle={`${pecModalItems.length} producto(s) seleccionado(s)`}
-          color="purple" maxWidth="md" onClose={()=>setShowPecModal(false)}
+          color="purple" maxWidth="md" onClose={() => setShowPecModal(false)}
           footer={(
             <>
-              <Button variant="secondary" onClick={()=>setShowPecModal(false)}>Cancelar</Button>
+              <Button variant="secondary" onClick={() => setShowPecModal(false)}>Cancelar</Button>
               <Button color="purple" icon={ShoppingCart} loading={pecSaving} onClick={handleCrearPEC}>Crear PEC</Button>
             </>
           )}>
           <div className="bg-gray-50 rounded-xl p-3 border border-gray-100 max-h-48 overflow-y-auto space-y-2">
-            {pecModalItems.map(it=>(
+            {pecModalItems.map((it) => (
               <div key={it.id} className="flex items-center justify-between gap-2 text-xs text-gray-700">
                 <div className="min-w-0">
-                  <p className="truncate">{it.producto} {it.pven_numero&&<span className="text-gray-400">· {it.pven_numero}</span>}</p>
-                  <p className="text-gray-400">× {it.cantidad}</p>
+                  <p className="truncate">{it.producto} {it.pven_numero && <span className="text-gray-500">· {it.pven_numero}</span>}</p>
+                  <p className="text-gray-500">× {it.cantidad}</p>
                 </div>
                 <div className="shrink-0 w-32">
-                  <input type="number" min="0" value={it.precio_unitario_cop||''} onChange={e=>setItemPrecio(it.id, e.target.value)}
-                    placeholder="Precio COP"
-                    className={'w-full border rounded-lg px-2 py-1.5 text-xs text-right outline-none focus:ring-2 focus:ring-purple-200 ' + (!(Number(it.precio_unitario_cop)>0)?'border-red-300 bg-red-50':'border-gray-200')}/>
+                  <input type="number" min="0" value={it.precio_unitario_cop || ''} onChange={(e) => setItemPrecio(it.id, e.target.value)}
+                    aria-label={`Precio de ${it.producto}`} placeholder="Precio COP"
+                    className={'w-full border rounded-lg px-2 py-1.5 text-xs text-right outline-none focus:ring-2 focus:ring-purple-200 ' + (!(Number(it.precio_unitario_cop) > 0) ? 'border-red-300 bg-red-50' : 'border-gray-200')} />
                 </div>
               </div>
             ))}
           </div>
           <div>
-            <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Proveedor</label>
-            <input value={supplierSearch} onChange={e=>onSupplierSearch(e.target.value)}
-              placeholder="Buscar proveedor..." className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
+            <label className={ETIQUETA_CAMPO} htmlFor="lista-proveedor-pec">Proveedor</label>
+            <input id="lista-proveedor-pec" value={supplierSearch} onChange={(e) => onSupplierSearch(e.target.value)}
+              placeholder="Buscar proveedor..." className={`${CAMPO} w-full`} />
             {suppliers.length > 0 && (
               <div className="border border-gray-200 rounded-xl shadow-lg mt-1 max-h-40 overflow-y-auto">
-                {suppliers.map(s => (
-                  <button key={s.id} onClick={()=>{setSelectedSupplier(s);setSupplierSearch(s.name);setSuppliers([]);}}
+                {suppliers.map((s) => (
+                  <button key={s.id} type="button" onClick={() => { setSelectedSupplier(s); setSupplierSearch(s.name); setSuppliers([]); }}
                     className="w-full text-left px-4 py-2.5 hover:bg-purple-50 text-sm font-medium border-b last:border-0">
                     {s.name}
                   </button>
@@ -594,47 +744,44 @@ export default function ListaComprasPage() {
               </div>
             )}
             {selectedSupplier && (
-              <p className="text-xs text-purple-700 font-bold mt-1">✓ {selectedSupplier.name} seleccionado</p>
+              <p className="text-xs text-purple-800 font-bold mt-1">✓ {selectedSupplier.name} seleccionado</p>
             )}
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Dias Entrega</label>
-              <input type="number" min="1" value={pecForm.dias_entrega} onChange={e=>setPecForm(f=>({...f,dias_entrega:Number(e.target.value)}))}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
+              <label className={ETIQUETA_CAMPO} htmlFor="lista-dias-entrega">Días de entrega</label>
+              <input id="lista-dias-entrega" type="number" min="1" value={pecForm.dias_entrega} onChange={(e) => setPecForm((f) => ({ ...f, dias_entrega: Number(e.target.value) }))}
+                className={`${CAMPO} w-full`} />
             </div>
             <div>
-              <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Modalidad</label>
-              <select value={pecForm.modalidad_pago} onChange={e=>setPecForm(f=>({...f,modalidad_pago:e.target.value}))}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200">
-                {['Contado','Credito 30d','Credito 60d','Adelanto 50%','Contra entrega'].map(p=><option key={p}>{p}</option>)}
+              <label className={ETIQUETA_CAMPO} htmlFor="lista-modalidad">Modalidad</label>
+              <select id="lista-modalidad" value={pecForm.modalidad_pago} onChange={(e) => setPecForm((f) => ({ ...f, modalidad_pago: e.target.value }))}
+                className={`${CAMPO} w-full`}>
+                {MODALIDADES_PAGO.map(([valor, etiqueta]) => <option key={valor} value={valor}>{etiqueta}</option>)}
               </select>
             </div>
             <div className="col-span-2">
-              <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Tipo de Envio</label>
-              <select value={pecForm.tipo_envio} onChange={e=>setPecForm(f=>({...f,tipo_envio:e.target.value}))}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200">
-                <option value="casillero">Via Casillero</option>
+              <label className={ETIQUETA_CAMPO} htmlFor="lista-tipo-envio">Tipo de envío</label>
+              <select id="lista-tipo-envio" value={pecForm.tipo_envio} onChange={(e) => setPecForm((f) => ({ ...f, tipo_envio: e.target.value }))}
+                className={`${CAMPO} w-full`}>
+                <option value="casillero">Vía casillero</option>
                 <option value="directo">Directo Colombia</option>
               </select>
             </div>
           </div>
           <div>
-            <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Notas</label>
-            <textarea value={pecForm.notas} onChange={e=>setPecForm(f=>({...f,notas:e.target.value}))}
-              rows={2} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none outline-none focus:ring-2 focus:ring-purple-200"/>
+            <label className={ETIQUETA_CAMPO} htmlFor="lista-notas-pec">Notas</label>
+            <textarea id="lista-notas-pec" value={pecForm.notas} onChange={(e) => setPecForm((f) => ({ ...f, notas: e.target.value }))}
+              rows={2} className={`${CAMPO} w-full resize-none`} />
           </div>
         </Modal>
       )}
 
-      {/* Nested modal: crear proveedor al vuelo desde el modal de PEC. Debe pintarse
-          DESPUES del modal de PEC en el DOM (mismo z-50 de <Modal>, empatan por
-          orden de pintado) para quedar encima -- antes usaba z-[110] vs z-[100]
-          explicito; ahora depende del orden de render. */}
+      {/* Nested modal: crear proveedor al vuelo desde el modal de PEC (capa="encima": queda sobre el modal de PEC). */}
       {showNewSupplier && (
         <NewSupplierModal
-          onSave={(s)=>{setSelectedSupplier(s);setSupplierSearch(s.name);setSuppliers([]);setShowNewSupplier(false);}}
-          onClose={()=>setShowNewSupplier(false)}
+          onSave={(s) => { setSelectedSupplier(s); setSupplierSearch(s.name); setSuppliers([]); setShowNewSupplier(false); }}
+          onClose={() => setShowNewSupplier(false)}
         />
       )}
     </div>
