@@ -235,30 +235,82 @@ console.log('--- TEST 11 (B4 T16A r1): tonoEntregaTransito (m17) y los pendiente
     assert.equal(t === 'vencido', texto.startsWith('Vencido'), fecha + ' vencido=' + vencido);
     assert.equal(t === 'pronto', /^(Entrega hoy|Entrega en [123] día)/.test(texto), fecha + ' pronto');
   }
-  // I3 (r2): los pendientes. Solo cuenta la lista ACTIVA; la inactiva (que nunca cargó) cambia de referencia con cada recarga.
-  assert.equal(typeof tr.pendienteDeTransito, 'function', 'pendienteDeTransito existe');
-  assert.equal(typeof tr.soltarPendientes, 'function', 'soltarPendientes existe');
+  // I3 (r3): los pendientes, con el flujo COMPUESTO de la pantalla: dos listas (la tabla y el tablero); la inactiva es un
+  // arreglo nuevo en cada paso (como en la pantalla: useListado la reemplaza con cada recarga). Solo cuenta la ACTIVA.
+  for (const f of ['pendienteDeTransito', 'soltarPendientes', 'terminarPendiente']) assert.equal(typeof tr[f], 'function', f + ' existe');
   assert.equal(tr.pendienteDeTransito([], 5), false);
   assert.equal(tr.pendienteDeTransito([{ id: 5, fin: null }], 5), true, 'el PATCH va en camino');
   assert.equal(tr.pendienteDeTransito([{ id: 5, fin: null }], 6), false, 'solo esa tarjeta');
-  const A = [{ id: 1 }];
-  const enCamino = [{ id: 5, fin: null }];
-  assert.equal(tr.soltarPendientes(enCamino, { filas: A, recargando: false }), enCamino, 'en camino no se toca');
-  const fin = [{ id: 5, fin: { filas: A, visto: false } }];
-  // Terminó el PATCH, la recarga aún no empezó a verse: sigue (la lista activa no cambió de referencia).
-  assert.equal(tr.soltarPendientes(fin, { filas: A, recargando: false }), fin, 'sin cambios: la misma lista');
-  // La recarga empieza: sigue, marcada como vista.
-  const vista = tr.soltarPendientes(fin, { filas: A, recargando: true });
-  assert.deepEqual(vista, [{ id: 5, fin: { filas: A, visto: true } }], 'recargando: sigue y se marca');
-  assert.equal(tr.soltarPendientes(vista, { filas: A, recargando: true }), vista, 'recargando otra vez: igual');
-  // Llega la recarga de la activa: filas nuevas, se suelta.
-  assert.deepEqual(tr.soltarPendientes(vista, { filas: [{ id: 1 }], recargando: false }), [], 'llegaron filas nuevas');
-  assert.deepEqual(tr.soltarPendientes(fin, { filas: [{ id: 1 }], recargando: false }), [], 'filas nuevas aunque no se viera recargar');
-  // m7: la recarga falla (termina sin filas nuevas): se suelta y vuelve el botón.
-  assert.deepEqual(tr.soltarPendientes(vista, { filas: A, recargando: false }), [], 'la recarga terminó sin filas nuevas (error): se suelta');
-  // Solo suelta lo suyo.
-  const mezcla = [{ id: 5, fin: { filas: A, visto: true } }, { id: 6, fin: null }];
-  assert.deepEqual(tr.soltarPendientes(mezcla, { filas: A, recargando: false }), [{ id: 6, fin: null }]);
+  assert.equal(tr.pendienteDeTransito([{ id: 5, fin: { filas: [], modo: 'lista', visto: false } }], 5), true, 'terminó el PATCH: sigue hasta la recarga');
+  function pantalla(modoInicial) {
+    const p = { entradas: [], modo: modoInicial, recargando: false, listas: { lista: [], kanban: [] } };
+    const inactiva = () => (p.modo === 'kanban' ? 'lista' : 'kanban');
+    p.paso = () => { p.listas[inactiva()] = []; p.entradas = tr.soltarPendientes(p.entradas, { filas: p.listas[p.modo], recargando: p.recargando, modo: p.modo }); };
+    p.pendiente = () => tr.pendienteDeTransito(p.entradas, 5);
+    p.inicia = () => { p.entradas = [{ id: 5, fin: null }]; };
+    p.respondePatch = () => { p.entradas = tr.terminarPendiente(p.entradas, 5, p.listas[p.modo], p.modo); p.paso(); };
+    p.empiezaRecarga = () => { p.recargando = true; p.paso(); };
+    p.llegan = () => { p.listas[p.modo] = [{ id: 1 }]; p.recargando = false; p.paso(); };
+    p.falla = () => { p.recargando = false; p.paso(); };
+    return p;
+  }
+  for (const modo of ['kanban', 'lista']) {
+    // Sin haber visitado la otra vista: el PATCH responde, la recarga empieza y la inactiva cambia: SIGUE hasta que llegan las filas.
+    const a1 = pantalla(modo);
+    a1.inicia();
+    assert.equal(a1.pendiente(), true, modo + ': en camino');
+    a1.respondePatch();
+    assert.equal(a1.pendiente(), true, modo + ': respondió el PATCH y la recarga no llegó: SIGUE');
+    a1.paso();
+    assert.equal(a1.pendiente(), true, modo + ': la inactiva cambia y la activa no: SIGUE');
+    a1.empiezaRecarga();
+    assert.equal(a1.pendiente(), true, modo + ': la activa recarga: SIGUE');
+    a1.paso();
+    assert.equal(a1.pendiente(), true, modo + ': sigue recargando: SIGUE');
+    a1.llegan();
+    assert.equal(a1.pendiente(), false, modo + ': llegaron filas nuevas a la activa: se suelta');
+    // La recarga falla (termina sin filas nuevas): se suelta y vuelve el botón (m7).
+    const a2 = pantalla(modo);
+    a2.inicia();
+    a2.respondePatch();
+    a2.empiezaRecarga();
+    assert.equal(a2.pendiente(), true, modo + ': recargando');
+    a2.falla();
+    assert.equal(a2.pendiente(), false, modo + ': la recarga falló: se suelta');
+  }
+  // m1/m4: el modo cambia dentro de la ventana: SIGUE hasta que la NUEVA activa recarga.
+  const m = pantalla('kanban');
+  m.listas.lista = [{ id: 9 }];
+  m.inicia();
+  m.respondePatch();
+  m.empiezaRecarga();
+  m.modo = 'lista';
+  m.recargando = true;
+  m.paso();
+  assert.equal(m.pendiente(), true, 'cambió el modo con la recarga en camino: SIGUE (la lista nueva recarga)');
+  m.paso();
+  assert.equal(m.pendiente(), true, 'sigue');
+  m.llegan();
+  assert.equal(m.pendiente(), false, 'llegó la recarga de la lista nueva: se suelta');
+  const m2 = pantalla('kanban');
+  m2.inicia();
+  m2.respondePatch();
+  m2.modo = 'lista';
+  m2.recargando = false;
+  m2.paso();
+  assert.equal(m2.pendiente(), true, 'cambió el modo sin que la nueva recargue todavía: SIGUE');
+  m2.recargando = true;
+  m2.paso();
+  m2.falla();
+  assert.equal(m2.pendiente(), false, 'la recarga de la nueva falló: se suelta');
+  // terminarPendiente solo toca la entrada que sigue en camino y guarda la lista activa con su modo.
+  const L = [{ id: 1 }];
+  assert.deepEqual(tr.terminarPendiente([{ id: 5, fin: null }, { id: 6, fin: null }], 5, L, 'kanban'),
+    [{ id: 5, fin: { filas: L, modo: 'kanban', visto: false } }, { id: 6, fin: null }]);
+  const ya = [{ id: 5, fin: { filas: [], modo: 'lista', visto: true } }];
+  assert.deepEqual(tr.terminarPendiente(ya, 5, L, 'kanban'), ya, 'una foto que ya existe no se pisa');
+  const quieta = [{ id: 5, fin: { filas: L, modo: 'lista', visto: false } }];
+  assert.equal(tr.soltarPendientes(quieta, { filas: L, recargando: false, modo: 'lista' }), quieta, 'sin cambios: la misma lista');
   // La tarjeta pendiente no trae botón.
   const p = conEstados('casillero', ['COMPLETADO', 'EN_PROCESO']);
   assert.deepEqual(tr.tarjetaTransito(p, { hoy: '2026-11-07', pendiente: true }).accionPrincipal, null);

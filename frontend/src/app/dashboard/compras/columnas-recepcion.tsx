@@ -14,7 +14,7 @@ import type { ReactNode } from 'react';
 import type { ColumnaTabla } from '@/components/tabla';
 import { fechaCorta } from '@/lib/fechas-colombia';
 import {
-  numeroRecepcion, pecDeRecepcion, proveedorDeRecepcion, esRecepcionPorConfirmar, infoEstadoRecepcion,
+  numeroRecepcion, pecDeRecepcion, proveedorDeRecepcion, esRecepcionPorConfirmar, esEntradaManual, infoEstadoRecepcion,
 } from '@/lib/estados-compras';
 import { numeroFinito } from '@/lib/kpis';
 import { CHIP, titulosDeOrdenPec } from './columnas-pec';
@@ -45,7 +45,7 @@ export type FilaColumnasRecepcion = {
 // reexportan para las pantallas. El chip y los títulos de orden son los de columnas-pec.tsx (m6).
 // m6 (medido en el banco): «Entrada manual» necesita 90 px y la columna PEC origen (92 px, R26) deja 68: la tabla dice «Manual»
 // (el title y el resto de las pantallas dicen «Entrada manual»).
-const pecCorto = (r: FilaColumnasRecepcion) => { const t = pecDeRecepcion(r); return t === 'Entrada manual' ? 'Manual' : t; };
+const pecCorto = (r: FilaColumnasRecepcion) => (esEntradaManual(r) ? 'Manual' : pecDeRecepcion(r));
 export { numeroRecepcion, pecDeRecepcion, proveedorDeRecepcion, esRecepcionPorConfirmar };
 export const titulosDeOrdenRecepcion = titulosDeOrdenPec;
 /** Las líneas de la recepción: las que trae la fila, o items_count; 0 si no hay datos (antes se pintaba 1). */

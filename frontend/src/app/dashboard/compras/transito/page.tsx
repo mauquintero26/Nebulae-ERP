@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { AlertCircle, Package, RefreshCw, Truck } from 'lucide-react';
@@ -28,7 +28,7 @@ import { humanizarCodigo } from '@/lib/estados-pedido';
 import { infoEstadoPec, opcionesEstadosPec, textoVacioPec } from '@/lib/estados-compras';
 import {
   accionEtapaTransito, avanceTransito, avancePromedioTransito, columnaTransito, columnasDeEtapas, etapaActual,
-  pendienteDeTransito, reglaSoltarTransito, soltarPendientes, tarjetaTransito, textoEntregaTransito, tonoEntregaTransito,
+  pendienteDeTransito, reglaSoltarTransito, soltarPendientes, tarjetaTransito, terminarPendiente, textoEntregaTransito, tonoEntregaTransito,
 } from '@/lib/transito';
 import {
   accionSemaforoCompras, avisoTarjetaEtapa, avisosFlujoCompras, etiquetaEtapaTracking, filtroSemaforoCompras, pasosDeTracking,
@@ -277,24 +277,28 @@ export default function TransitoPage() {
   // la Actividad del PEC. Nada se traga: si falla, el mensaje del servidor tal cual (avisarError) y, con la regla única
   // recargarTrasError (con un 400, un 409 o sin respuesta recarga; un 404 no), se recarga lo que se ve.
   // I3: un pedido con un PATCH en camino (botón o arrastre), y hasta que llega la recarga, no ofrece Iniciar ni Completar: un
-  // segundo clic no manda otro PATCH sobre la etapa vieja. pendienteDeTransito (con sus casos) decide con las filas de la tabla y del tablero.
-  // r2: solo cuenta la lista ACTIVA (la tabla o el tablero): la inactiva nunca cargó y cambia de referencia con cada recarga.
-  // Se suelta cuando llegan filas nuevas o cuando la recarga termina (con error o sin cambios): soltarPendientes (m7).
-  const [enCurso, setEnCurso] = useState<{ id: number; fin: { filas: unknown; visto: boolean } | null }[]>([]);
+  // segundo clic no manda otro PATCH sobre la etapa vieja. Toda la regla vive en transito.js, con sus casos: pendienteDeTransito
+  // dice si hay uno; terminarPendiente guarda la foto de la lista ACTIVA (y el modo) al resolver el PATCH; soltarPendientes lo suelta
+  // cuando ESA lista trae filas nuevas o termina de recargar (también si falla). La lista inactiva no cuenta: nunca cargó y cambia
+  // de referencia con cada recarga. Si el modo cambia dentro de la ventana, se toma la foto de la nueva lista activa.
+  const [enCurso, setEnCurso] = useState<{ id: number; fin: { filas: unknown; modo: string; visto: boolean } | null }[]>([]);
+  const modo = enKanban ? 'kanban' : 'lista';
   const filasActivas = enKanban ? completa.filas : lista.filas;
   const recargandoActiva = enKanban ? completa.recargando : lista.recargando;
-  const filasAhora = useRef<unknown>(filasActivas);
-  useEffect(() => { filasAhora.current = filasActivas; }, [filasActivas]);
-  const sueltos = soltarPendientes(enCurso, { filas: filasActivas, recargando: recargandoActiva });
+  // m5: la foto se lee en la continuación del PATCH (otra tarea del navegador); un efecto pasivo podría no haber corrido todavía
+  // y dejaría la referencia vieja. useLayoutEffect corre dentro del commit, antes de cualquier continuación posterior.
+  const filasAhora = useRef<{ filas: unknown; modo: string }>({ filas: filasActivas, modo });
+  useLayoutEffect(() => { filasAhora.current = { filas: filasActivas, modo }; }, [filasActivas, modo]);
+  const sueltos = soltarPendientes(enCurso, { filas: filasActivas, recargando: recargandoActiva, modo });
   if (sueltos !== enCurso) setEnCurso(sueltos);
   const pendiente = useCallback((id: number) => pendienteDeTransito(enCurso, id), [enCurso]);
   const pendienteRef = useRef(pendiente);
   useEffect(() => { pendienteRef.current = pendiente; }, [pendiente]);
   const iniciarCambio = useCallback((id: number) => setEnCurso((l) => [...l.slice(-19), { id, fin: null }]), []);
-  // Terminó el PATCH y se pidió la recarga: sigue pendiente hasta que llegan filas nuevas.
+  // Terminó el PATCH y se pidió la recarga: sigue pendiente hasta que la lista activa trae filas nuevas o termina de recargar.
   const terminarCambio = useCallback((id: number) => {
-    const fin = { filas: filasAhora.current, visto: false };
-    setEnCurso((l) => l.map((e) => (e.id === id && e.fin === null ? { ...e, fin } : e)));
+    const ahora = filasAhora.current;
+    setEnCurso((l) => terminarPendiente(l, id, ahora.filas, ahora.modo));
   }, []);
   // Falló sin recarga (un 404 o un 500): no hay nada que esperar.
   const descartarCambio = useCallback((id: number) => setEnCurso((l) => l.filter((e) => !(e.id === id && e.fin === null))), []);

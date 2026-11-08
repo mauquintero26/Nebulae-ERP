@@ -749,6 +749,10 @@ export function consultaColumnaRecepcion(estado, columna, { orden, limit, offset
 export function numeroRecepcion(r) {
   return textoLimpio(r?.numero) ?? `ENINV-${r?.id ?? ''}`;
 }
+/** Una entrada manual: sin número de PEC y sin id de PEC (decide el DATO, no el texto que se muestra). */
+export function esEntradaManual(r) {
+  return textoLimpio(r?.pec_numero) === null && !r?.pec_id;
+}
 /** El PEC de origen: su número, PEC-id, o 'Entrada manual' (una entrada sin pedido de compra). */
 export function pecDeRecepcion(r) {
   return textoLimpio(r?.pec_numero) ?? (r?.pec_id ? `PEC-${r.pec_id}` : 'Entrada manual');

@@ -293,11 +293,17 @@ export function tonoEntregaTransito(pec, hoy = diaColombia()) {
 }
 
 /**
- * I3 (r2): los cambios de etapa pendientes. Cada entrada es {id, fin}: `fin` es null mientras el PATCH va en camino y, al
- * terminar y pedir la recarga, {filas, visto}: las filas de la lista ACTIVA (la tabla o el tablero, la que se ve) en ese
- * momento y si ya se vio que esa lista recarga. La lista inactiva no cuenta: nunca cargó y cambia de referencia con cada
- * recarga. Ver soltarPendientes.
- * @param {ReadonlyArray<{id: unknown, fin: {filas: unknown, visto: boolean} | null}>} entradas
+ * I3 (r3): los cambios de etapa pendientes de la pantalla. Cada entrada es {id, fin}: `fin` es null mientras el PATCH va en
+ * camino y, al terminar y pedir la recarga (terminarPendiente), {filas, modo, visto}: las filas de la lista ACTIVA (la tabla
+ * en 'lista' o el tablero en 'kanban', la que se ve) en ese momento, ese modo y si ya se vio que esa lista recarga. La lista
+ * inactiva no cuenta: nunca cargó y cambia de referencia con cada recarga. Ver soltarPendientes.
+ * @typedef {{filas: unknown, modo: string, visto: boolean}} FotoPendiente
+ * @typedef {{id: unknown, fin: FotoPendiente | null}} EntradaPendiente
+ */
+
+/**
+ * ¿Ese pedido tiene un cambio pendiente (en camino, o con la recarga sin llegar)?
+ * @param {ReadonlyArray<EntradaPendiente>} entradas
  * @param {unknown} id
  * @returns {boolean}
  */
@@ -306,22 +312,44 @@ export function pendienteDeTransito(entradas, id) {
 }
 
 /**
- * I3 (r2): suelta los pendientes cuya recarga ya pasó, mirando SOLO la lista activa (`filas` y si `recargando`):
+ * I3 (r3): terminó el PATCH de `id` y se pidió la recarga: guarda la foto de la lista ACTIVA de ese momento (sus filas y el
+ * modo) para que soltarPendientes sepa cuándo llegó la recarga. Solo toca la entrada que sigue en camino (fin null).
+ * @template {EntradaPendiente} T
+ * @param {T[]} entradas
+ * @param {unknown} id
+ * @param {unknown} filasActivas  las filas de la lista que se ve ahora
+ * @param {string} modo  'lista' o 'kanban'
+ * @returns {T[]}
+ */
+export function terminarPendiente(entradas, id, filasActivas, modo) {
+  return entradas.map((e) => (e.id === id && e.fin === null ? { ...e, fin: { filas: filasActivas, modo, visto: false } } : e));
+}
+
+/**
+ * I3 (r3): suelta los pendientes cuya recarga ya pasó, mirando SOLO la lista activa (`filas`, si `recargando` y el `modo`):
+ *  - cambió el modo dentro de la ventana: se toma la foto de la NUEVA lista activa (visto si ya recarga) y el pendiente
+ *    sigue hasta que ESA lista termine de recargar (m1/m4);
  *  - llegaron filas nuevas (otra referencia): la etapa nueva está a la vista, se suelta;
  *  - la recarga empezó (recargando) y todavía no termina: sigue, marcada como vista;
  *  - la recarga ya se vio y terminó sin filas nuevas (falló, o no cambió nada): se suelta (m7), vuelve el botón con los datos que hay;
  *  - todavía no se vio ni empezar la recarga: sigue.
  * Lo que va en camino (fin null) no se toca. Devuelve la MISMA lista si nada cambia.
- * @template {{fin: {filas: unknown, visto: boolean} | null}} T
+ * @template {EntradaPendiente} T
  * @param {T[]} entradas
- * @param {{filas: unknown, recargando: boolean}} activa
+ * @param {{filas: unknown, recargando: boolean, modo: string}} activa
  * @returns {T[]}
  */
-export function soltarPendientes(entradas, { filas, recargando }) {
+export function soltarPendientes(entradas, { filas, recargando, modo }) {
   let cambio = false;
+  /** @type {any[]} */
   const salida = [];
   for (const e of entradas) {
     if (e.fin === null) { salida.push(e); continue; }
+    if (e.fin.modo !== modo) {
+      cambio = true;
+      salida.push({ ...e, fin: { filas, modo, visto: recargando } });
+      continue;
+    }
     if (filas !== e.fin.filas) { cambio = true; continue; }
     if (recargando) {
       if (e.fin.visto) salida.push(e);

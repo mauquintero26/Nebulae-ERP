@@ -1163,8 +1163,13 @@ console.log('--- TEST 31 (B4 T16A): Tránsito (compras/transito/page.tsx) cablea
   // I3 (r2): el pendiente se decide con la lista ACTIVA y se suelta con soltarPendientes (la inactiva cambia de referencia siempre).
   assert.match(pag, /const filasActivas = enKanban \? completa\.filas : lista\.filas;/);
   assert.match(pag, /const recargandoActiva = enKanban \? completa\.recargando : lista\.recargando;/);
-  assert.match(pag, /soltarPendientes\(enCurso, \{ filas: filasActivas, recargando: recargandoActiva \}\);\s*if \(sueltos !== enCurso\) setEnCurso\(sueltos\);/);
-  assert.match(pag, /const fin = \{ filas: filasAhora\.current, visto: false \};/, 'terminarCambio guarda solo la lista activa');
+  assert.match(pag, /soltarPendientes\(enCurso, \{ filas: filasActivas, recargando: recargandoActiva, modo \}\);\s*if \(sueltos !== enCurso\) setEnCurso\(sueltos\);/);
+  assert.match(pag, /const modo = enKanban \? 'kanban' : 'lista';/);
+  // Y1, Y2 y Y3 (r3): la foto es de la lista activa y su modo, y se actualiza sin esperar un efecto pasivo (m5).
+  assert.match(pag, /const filasAhora = useRef<\{ filas: unknown; modo: string \}>\(\{ filas: filasActivas, modo \}\);/, 'Y3: una sola foto, la de la lista activa');
+  assert.match(pag, /useLayoutEffect\(\(\) => \{ filasAhora\.current = \{ filas: filasActivas, modo \}; \}, \[filasActivas, modo\]\);/, 'Y2 y m5: la foto se actualiza dentro del commit (useLayoutEffect), no en un efecto pasivo');
+  assert.match(pag, /const ahora = filasAhora\.current;\s*setEnCurso\(\(l\) => terminarPendiente\(l, id, ahora\.filas, ahora\.modo\)\);/, 'Y1: terminarCambio guarda la foto de la activa con terminarPendiente (transito.js)');
+  assert.ok(!/lista\.filas, completa\.filas|\{ lista: lista/.test(pag), 'Y3: sin la foto de las dos listas');
   assert.match(pag, /useEffect\(\(\) => \{ pendienteRef\.current = pendiente; \}, \[pendiente\]\);/, 'X3: el guardián de los segundos clics lee el pendiente de ahora');
   assert.match(pag, /const CLASE_ENTREGA: Record<string, string> = \{ vencido: 'text-rose-700', pronto: 'text-amber-700', normal: 'text-slate-500' \};/, 'X2: el ámbar de «pronto»');
   assert.match(pag, /CLASE_ENTREGA\[tonoEntregaTransito\(p\)\]/, 'X2: la celda pinta el tono de la lib');
@@ -1390,6 +1395,14 @@ console.log('--- TEST 34 (B4 T16A r1, m13): la lógica de una recepción vive en
   assert.equal(ec.pecDeRecepcion({ pec_numero: 'PEC-3' }), 'PEC-3');
   assert.equal(ec.pecDeRecepcion({ pec_id: 4 }), 'PEC-4');
   assert.equal(ec.pecDeRecepcion({}), 'Entrada manual');
+  assert.equal(typeof ec.esEntradaManual, 'function', 'esEntradaManual existe');
+  assert.equal(ec.esEntradaManual({}), true);
+  assert.equal(ec.esEntradaManual({ pec_numero: '  ' }), true, 'un número en blanco no vale');
+  assert.equal(ec.esEntradaManual({ pec_numero: 'PEC-3' }), false);
+  assert.equal(ec.esEntradaManual({ pec_id: 4 }), false, 'con id de PEC no es manual');
+  for (const r of [{}, { pec_id: 4 }, { pec_numero: 'PEC-3' }, { pec_numero: ' ' }]) {
+    assert.equal(ec.esEntradaManual(r), ec.pecDeRecepcion(r) === 'Entrada manual', 'coherente con pecDeRecepcion');
+  }
   assert.equal(ec.proveedorDeRecepcion({ supplier_name: 'Acme' }), 'Acme');
   assert.equal(ec.proveedorDeRecepcion({ proveedor_nombre: 'Beta' }), 'Beta');
   assert.equal(ec.proveedorDeRecepcion({ supplier_name: '  ' }), 'Sin proveedor');
@@ -1434,7 +1447,9 @@ console.log('--- TEST 36 (B4 T16A r1): Drawer (m4, m10, m14), tildes (m11), come
   for (const viejo of ['Inspeccion y Calidad', 'Optimo (Sin danos', 'Recepcion no editable', 'Item de Compra', 'Conteo Fisico']) assert.ok(!cont.includes(viejo), `m11: sin «${viejo}»`);
   assert.ok(cont.includes('Inspección y Calidad') && cont.includes('Óptimo (Sin daños visibles)'));
   const colRec = readFileSync(new URL('../src/app/dashboard/compras/columnas-recepcion.tsx', import.meta.url), 'utf8');
-  assert.ok(colRec.includes("return t === 'Entrada manual' ? 'Manual' : t;"),'m6: «Entrada manual» no cabe en 92 px (medido: 90 contra 68): la tabla dice Manual');
+  assert.ok(colRec.includes("(esEntradaManual(r) ? 'Manual' : pecDeRecepcion(r))"), 'm6 y m7: «Entrada manual» no cabe en 92 px (medido: 90 contra 68): la tabla dice Manual, decidido por el dato');
+  assert.ok(!colRec.includes("=== 'Entrada manual'"), 'm3: no se compara el texto');
+  assert.ok(colRec.includes('titleCelda: (r) => pecDeRecepcion(r),'), 'm3: el title sigue diciendo «Entrada manual» (texto largo)');
   assert.ok(colRec.includes('{pecCorto(r)}</span>'), 'la celda pinta la forma corta');
   assert.ok(!/un 404 o un 409/.test(pag + tr + cont), 'm9: los comentarios dicen la regla real de recargarTrasError');
   assert.match(tr, /Sin nombre cae al correo del usuario/, 'm16: el comentario de autorActual dice lo que hace');
