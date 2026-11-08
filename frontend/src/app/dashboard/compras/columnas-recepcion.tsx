@@ -43,6 +43,9 @@ export type FilaColumnasRecepcion = {
 
 // m13: el número, el PEC de origen, el proveedor y «por confirmar» son UNA regla (estados-compras.js, con sus casos); aquí se
 // reexportan para las pantallas. El chip y los títulos de orden son los de columnas-pec.tsx (m6).
+// m6 (medido en el banco): «Entrada manual» necesita 90 px y la columna PEC origen (92 px, R26) deja 68: la tabla dice «Manual»
+// (el title y el resto de las pantallas dicen «Entrada manual»).
+const pecCorto = (r: FilaColumnasRecepcion) => { const t = pecDeRecepcion(r); return t === 'Entrada manual' ? 'Manual' : t; };
 export { numeroRecepcion, pecDeRecepcion, proveedorDeRecepcion, esRecepcionPorConfirmar };
 export const titulosDeOrdenRecepcion = titulosDeOrdenPec;
 /** Las líneas de la recepción: las que trae la fila, o items_count; 0 si no hay datos (antes se pintaba 1). */
@@ -84,7 +87,7 @@ export function columnasRecepcion<T extends FilaColumnasRecepcion>(celdaAcciones
       titleCelda: (r) => numeroRecepcion(r),
       celda: (r) => <span className="block truncate text-xs font-black text-teal-700">{numeroRecepcion(r)}</span> },
     { id: 'pec', titulo: 'PEC origen', ancho: 92, ordenable: 'pec', titleCelda: (r) => pecDeRecepcion(r),
-      celda: (r) => <span className="block truncate text-xs font-bold text-purple-700">{pecDeRecepcion(r)}</span> },
+      celda: (r) => <span className="block truncate text-xs font-bold text-purple-700">{pecCorto(r)}</span> },
     { id: 'proveedor', titulo: 'Proveedor', ancho: 120, flexible: true, ordenable: 'proveedor', titleCelda: (r) => proveedorDeRecepcion(r),
       celda: (r) => <span className="block truncate text-xs font-bold text-slate-800">{proveedorDeRecepcion(r)}</span> },
     { id: 'bodega', titulo: 'Bodega', ancho: 120, ocultaPorDefecto: true, ordenable: 'bodega', titleCelda: (r) => r.warehouse_name || 'Sin bodega',

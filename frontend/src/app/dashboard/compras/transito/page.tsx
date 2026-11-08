@@ -25,10 +25,10 @@ import { recargarTrasError, textoDeError } from '@/lib/avisos';
 // Piezas genéricas que nacieron en las libs de Ventas (T7), como en el Hub de Compras (T14): el chip del orden.
 import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
 import { humanizarCodigo } from '@/lib/estados-pedido';
-import { opcionesEstadosPec, textoVacioPec } from '@/lib/estados-compras';
+import { infoEstadoPec, opcionesEstadosPec, textoVacioPec } from '@/lib/estados-compras';
 import {
   accionEtapaTransito, avanceTransito, avancePromedioTransito, columnaTransito, columnasDeEtapas, etapaActual,
-  pendienteDeTransito, reglaSoltarTransito, tarjetaTransito, textoEntregaTransito, tonoEntregaTransito,
+  pendienteDeTransito, reglaSoltarTransito, soltarPendientes, tarjetaTransito, textoEntregaTransito, tonoEntregaTransito,
 } from '@/lib/transito';
 import {
   accionSemaforoCompras, avisoTarjetaEtapa, avisosFlujoCompras, etiquetaEtapaTracking, filtroSemaforoCompras, pasosDeTracking,
@@ -188,7 +188,7 @@ const COLUMNAS_TABLA_TRANSITO: ColumnaTabla<FilaTransito>[] = [
   { id: 'tipo', titulo: 'Tipo', ancho: 80, ocultaPorDefecto: true,
     celda: (p) => <span className="text-xs font-bold text-slate-500">{p.tipo_envio === 'directo' ? 'Directo' : 'Casillero'}</span> },
   { id: 'etapa', titulo: 'Etapa actual', ancho: 124, clave: true,
-    titleCelda: (p) => { const e = etapaActual(p) as EtapaEnvio | null; return e ? tituloDeEtapa(e) : p.estado; },
+    titleCelda: (p) => { const e = etapaActual(p) as EtapaEnvio | null; return e ? tituloDeEtapa(e) : infoEstadoPec(p.estado).label; },
     celda: (p) => <CeldaEtapa p={p} /> },
   { id: 'progreso', titulo: 'Progreso', ancho: 104, titleCelda: (p) => avanceTransito(p).texto, celda: (p) => <CeldaProgreso p={p} /> },
   { id: 'entrega', titulo: 'Entrega est.', ancho: 104, ordenable: 'entrega',
@@ -278,16 +278,22 @@ export default function TransitoPage() {
   // recargarTrasError (con un 400, un 409 o sin respuesta recarga; un 404 no), se recarga lo que se ve.
   // I3: un pedido con un PATCH en camino (botón o arrastre), y hasta que llega la recarga, no ofrece Iniciar ni Completar: un
   // segundo clic no manda otro PATCH sobre la etapa vieja. pendienteDeTransito (con sus casos) decide con las filas de la tabla y del tablero.
-  const [enCurso, setEnCurso] = useState<{ id: number; fin: { lista: unknown; completa: unknown } | null }[]>([]);
-  const filasAhora = useRef<{ lista: unknown; completa: unknown }>({ lista: lista.filas, completa: completa.filas });
-  useEffect(() => { filasAhora.current = { lista: lista.filas, completa: completa.filas }; }, [lista.filas, completa.filas]);
-  const pendiente = useCallback((id: number) => pendienteDeTransito(enCurso, id, lista.filas, completa.filas), [enCurso, lista.filas, completa.filas]);
+  // r2: solo cuenta la lista ACTIVA (la tabla o el tablero): la inactiva nunca cargó y cambia de referencia con cada recarga.
+  // Se suelta cuando llegan filas nuevas o cuando la recarga termina (con error o sin cambios): soltarPendientes (m7).
+  const [enCurso, setEnCurso] = useState<{ id: number; fin: { filas: unknown; visto: boolean } | null }[]>([]);
+  const filasActivas = enKanban ? completa.filas : lista.filas;
+  const recargandoActiva = enKanban ? completa.recargando : lista.recargando;
+  const filasAhora = useRef<unknown>(filasActivas);
+  useEffect(() => { filasAhora.current = filasActivas; }, [filasActivas]);
+  const sueltos = soltarPendientes(enCurso, { filas: filasActivas, recargando: recargandoActiva });
+  if (sueltos !== enCurso) setEnCurso(sueltos);
+  const pendiente = useCallback((id: number) => pendienteDeTransito(enCurso, id), [enCurso]);
   const pendienteRef = useRef(pendiente);
   useEffect(() => { pendienteRef.current = pendiente; }, [pendiente]);
   const iniciarCambio = useCallback((id: number) => setEnCurso((l) => [...l.slice(-19), { id, fin: null }]), []);
   // Terminó el PATCH y se pidió la recarga: sigue pendiente hasta que llegan filas nuevas.
   const terminarCambio = useCallback((id: number) => {
-    const fin = { ...filasAhora.current };
+    const fin = { filas: filasAhora.current, visto: false };
     setEnCurso((l) => l.map((e) => (e.id === id && e.fin === null ? { ...e, fin } : e)));
   }, []);
   // Falló sin recarga (un 404 o un 500): no hay nada que esperar.

@@ -231,6 +231,19 @@ function diasEntre(desde, hasta) {
 }
 const enDias = (n) => `${formatoEntero(n)} ${n === 1 ? 'día' : 'días'}`;
 
+function entregaDe(pec, hoy) {
+  const dia = diaPec(pec?.fecha_entrega_estimada);
+  const base = diaPec(hoy);
+  if (!dia || !base) return null;
+  const dias = diasEntre(base, dia);
+  if (dias < 0) {
+    return pec?.is_overdue === true
+      ? { texto: `Vencido hace ${enDias(-dias)}`, tono: 'vencido' }
+      : { texto: `Debía llegar hace ${enDias(-dias)}`, tono: 'normal' };
+  }
+  return { texto: dias === 0 ? 'Entrega hoy' : `Entrega en ${enDias(dias)}`, tono: dias <= 3 ? 'pronto' : 'normal' };
+}
+
 /**
  * Cuánto falta (o cuánto pasó) de la entrega estimada, para la tabla y la tarjeta (resolución 5: un día de calendario,
  * el que se guarda, diaPec, contra `hoy`, por defecto el de Colombia). «Vencido» lo manda el servidor (`is_overdue`, RP40):
@@ -244,12 +257,7 @@ const enDias = (n) => `${formatoEntero(n)} ${n === 1 ? 'día' : 'días'}`;
  * @returns {string | null}
  */
 export function textoEntregaTransito(pec, hoy = diaColombia()) {
-  const dia = diaPec(pec?.fecha_entrega_estimada);
-  const base = diaPec(hoy);
-  if (!dia || !base) return null;
-  const dias = diasEntre(base, dia);
-  if (dias < 0) return pec?.is_overdue === true ? `Vencido hace ${enDias(-dias)}` : `Debía llegar hace ${enDias(-dias)}`;
-  return dias === 0 ? 'Entrega hoy' : `Entrega en ${enDias(dias)}`;
+  return entregaDe(pec, hoy)?.texto ?? null;
 }
 
 /**
@@ -281,24 +289,47 @@ export function tarjetaTransito(pec, { hoy, pendiente = false } = {}) {
  * @returns {'vencido' | 'pronto' | 'normal'}
  */
 export function tonoEntregaTransito(pec, hoy = diaColombia()) {
-  const dia = diaPec(pec?.fecha_entrega_estimada);
-  const base = diaPec(hoy);
-  if (!dia || !base) return 'normal';
-  const dias = diasEntre(base, dia);
-  if (dias < 0) return pec?.is_overdue === true ? 'vencido' : 'normal';
-  return dias <= 3 ? 'pronto' : 'normal';
+  return entregaDe(pec, hoy)?.tono ?? 'normal';
 }
 
 /**
- * I3: ¿esa tarjeta tiene un cambio de etapa pendiente? Cada entrada es {id, fin}: `fin` es null mientras el PATCH va en
- * camino y, al terminar, las filas (de la tabla y del tablero) que había en ese momento. Sigue pendiente hasta que llega
- * una recarga: cuando alguna de las dos listas ya no es esa misma, la etapa nueva está a la vista.
- * @param {ReadonlyArray<{id: unknown, fin: {lista: unknown, completa: unknown} | null}>} entradas
+ * I3 (r2): los cambios de etapa pendientes. Cada entrada es {id, fin}: `fin` es null mientras el PATCH va en camino y, al
+ * terminar y pedir la recarga, {filas, visto}: las filas de la lista ACTIVA (la tabla o el tablero, la que se ve) en ese
+ * momento y si ya se vio que esa lista recarga. La lista inactiva no cuenta: nunca cargó y cambia de referencia con cada
+ * recarga. Ver soltarPendientes.
+ * @param {ReadonlyArray<{id: unknown, fin: {filas: unknown, visto: boolean} | null}>} entradas
  * @param {unknown} id
- * @param {unknown} lista  las filas de la tabla ahora
- * @param {unknown} completa  las filas del tablero ahora
  * @returns {boolean}
  */
-export function pendienteDeTransito(entradas, id, lista, completa) {
-  return (Array.isArray(entradas) ? entradas : []).some((e) => e.id === id && (e.fin === null || (e.fin.lista === lista && e.fin.completa === completa)));
+export function pendienteDeTransito(entradas, id) {
+  return (Array.isArray(entradas) ? entradas : []).some((e) => e.id === id);
+}
+
+/**
+ * I3 (r2): suelta los pendientes cuya recarga ya pasó, mirando SOLO la lista activa (`filas` y si `recargando`):
+ *  - llegaron filas nuevas (otra referencia): la etapa nueva está a la vista, se suelta;
+ *  - la recarga empezó (recargando) y todavía no termina: sigue, marcada como vista;
+ *  - la recarga ya se vio y terminó sin filas nuevas (falló, o no cambió nada): se suelta (m7), vuelve el botón con los datos que hay;
+ *  - todavía no se vio ni empezar la recarga: sigue.
+ * Lo que va en camino (fin null) no se toca. Devuelve la MISMA lista si nada cambia.
+ * @template {{fin: {filas: unknown, visto: boolean} | null}} T
+ * @param {T[]} entradas
+ * @param {{filas: unknown, recargando: boolean}} activa
+ * @returns {T[]}
+ */
+export function soltarPendientes(entradas, { filas, recargando }) {
+  let cambio = false;
+  const salida = [];
+  for (const e of entradas) {
+    if (e.fin === null) { salida.push(e); continue; }
+    if (filas !== e.fin.filas) { cambio = true; continue; }
+    if (recargando) {
+      if (e.fin.visto) salida.push(e);
+      else { cambio = true; salida.push({ ...e, fin: { ...e.fin, visto: true } }); }
+      continue;
+    }
+    if (e.fin.visto) { cambio = true; continue; }
+    salida.push(e);
+  }
+  return cambio ? salida : entradas;
 }

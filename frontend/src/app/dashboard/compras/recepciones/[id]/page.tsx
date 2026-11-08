@@ -349,7 +349,7 @@ export default function RecepcionDetallePage() {
                 <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-amber-600 shadow-sm"><AlertTriangle size={20}/></div>
                 <div>
                   <h3 className="font-black text-amber-900">Alerta de Discrepancia en Conteo Físico</h3>
-                  <p className="text-sm text-amber-700">Las cantidades ingresadas no coinciden con la Orden de Compra. Finanzas bloqueara el pago hasta resolverse.</p>
+                  <p className="text-sm text-amber-700">Las cantidades ingresadas no coinciden con la Orden de Compra. Finanzas bloqueará el pago hasta resolverse.</p>
                 </div>
               </div>
             </div>
@@ -360,7 +360,7 @@ export default function RecepcionDetallePage() {
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-emerald-600 shadow-sm"><ShieldCheck size={20}/></div>
                 <div>
-                  <h3 className="font-black text-emerald-900">Mercancia Recibida Satisfactoriamente</h3>
+                  <h3 className="font-black text-emerald-900">Mercancía Recibida Satisfactoriamente</h3>
                   <p className="text-sm text-emerald-700">
                     {data?.stock_actualizado
                       ? 'El stock ha sido ingresado al sistema. El Pedido de Compra (PEC) fue notificado.'

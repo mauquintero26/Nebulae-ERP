@@ -1158,7 +1158,16 @@ console.log('--- TEST 31 (B4 T16A): Tránsito (compras/transito/page.tsx) cablea
   assert.match(pag, /etiquetaEtapaTracking\(etapa\.status\)/, 'Etapa actual usa etiquetaEtapaTracking');
   assert.match(pag, /const aviso = avisoTarjetaEtapa\(etapa\);/, 'm5 y m7 (RP28): el aviso de la etapa es la regla única de flujo-compras.js, no una copia');
   assert.ok(!/alert\?\.nivel/.test(pag), 'y la página no rearma el nivel a mano');
-  assert.match(pag, /conFlecha\(e\.label || humanizarCodigo\(e\.stage || ''\)\)/, 'sin label, la clave humanizada (nunca el código crudo)');
+  assert.match(pag, /conFlecha\(e\.label \|\| humanizarCodigo\(e\.stage \|\| ''\)\)/, 'sin label, la clave humanizada (nunca el código crudo)');
+  assert.match(pag, /return e \? tituloDeEtapa\(e\) : infoEstadoPec\(p\.estado\)\.label; \}/, 'm2: sin etapa por hacer, el title dice el estado con su etiqueta, no el código');
+  // I3 (r2): el pendiente se decide con la lista ACTIVA y se suelta con soltarPendientes (la inactiva cambia de referencia siempre).
+  assert.match(pag, /const filasActivas = enKanban \? completa\.filas : lista\.filas;/);
+  assert.match(pag, /const recargandoActiva = enKanban \? completa\.recargando : lista\.recargando;/);
+  assert.match(pag, /soltarPendientes\(enCurso, \{ filas: filasActivas, recargando: recargandoActiva \}\);\s*if \(sueltos !== enCurso\) setEnCurso\(sueltos\);/);
+  assert.match(pag, /const fin = \{ filas: filasAhora\.current, visto: false \};/, 'terminarCambio guarda solo la lista activa');
+  assert.match(pag, /useEffect\(\(\) => \{ pendienteRef\.current = pendiente; \}, \[pendiente\]\);/, 'X3: el guardián de los segundos clics lee el pendiente de ahora');
+  assert.match(pag, /const CLASE_ENTREGA: Record<string, string> = \{ vencido: 'text-rose-700', pronto: 'text-amber-700', normal: 'text-slate-500' \};/, 'X2: el ámbar de «pronto»');
+  assert.match(pag, /CLASE_ENTREGA\[tonoEntregaTransito\(p\)\]/, 'X2: la celda pinta el tono de la lib');
   assert.match(pag, /import \{[^}]*CeldaEstado[^}]*CeldaMonto[^}]*\} from '\.\.\/columnas-pec';/, 'm6: las celdas de columnas-pec, no copias');
   assert.match(pag, /claseFila=\{claseDeFilaPec\}/, 'D41: la fila vencida en el tono opaco filaAlerta');
   assert.match(pag, /acciones\?\.pendiente\(p\.id\)/, 'cada fila carga por su cuenta (I3)');
@@ -1420,8 +1429,13 @@ console.log('--- TEST 36 (B4 T16A r1): Drawer (m4, m10, m14), tildes (m11), come
   assert.ok(!pag.includes('Bodega Principal Barranquilla'), 'm10: sin la bodega inventada');
   for (const texto of ['Mesa de Recepción', 'Recepción generada en Mesa de Entrada', 'Confirmado en mesa de recepción Nebulae']) assert.ok(pag.includes(texto), `m11: ${texto}`);
   for (const viejo of ["'Mesa de Recepcion'", 'Recepcion generada', 'mesa de recepcion Nebulae']) assert.ok(!pag.includes(viejo), `m11: sin «${viejo}»`);
+  assert.ok(cont.includes('Finanzas bloqueará el pago') && cont.includes('Mercancía Recibida Satisfactoriamente'), 'm4 y m10: tildes del conteo');
+  assert.ok(!cont.includes('bloqueara') && !cont.includes('Mercancia'));
   for (const viejo of ['Inspeccion y Calidad', 'Optimo (Sin danos', 'Recepcion no editable', 'Item de Compra', 'Conteo Fisico']) assert.ok(!cont.includes(viejo), `m11: sin «${viejo}»`);
   assert.ok(cont.includes('Inspección y Calidad') && cont.includes('Óptimo (Sin daños visibles)'));
+  const colRec = readFileSync(new URL('../src/app/dashboard/compras/columnas-recepcion.tsx', import.meta.url), 'utf8');
+  assert.ok(colRec.includes("return t === 'Entrada manual' ? 'Manual' : t;"),'m6: «Entrada manual» no cabe en 92 px (medido: 90 contra 68): la tabla dice Manual');
+  assert.ok(colRec.includes('{pecCorto(r)}</span>'), 'la celda pinta la forma corta');
   assert.ok(!/un 404 o un 409/.test(pag + tr + cont), 'm9: los comentarios dicen la regla real de recargarTrasError');
   assert.match(tr, /Sin nombre cae al correo del usuario/, 'm16: el comentario de autorActual dice lo que hace');
   assert.ok(!/el servidor usa el correo/.test(tr));

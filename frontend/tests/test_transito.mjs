@@ -227,17 +227,38 @@ console.log('--- TEST 11 (B4 T16A r1): tonoEntregaTransito (m17) y los pendiente
   assert.equal(tono('2026-11-04', false), 'normal', 'pasada sin la marca del servidor: sin alarma');
   assert.equal(tono(null, false), 'normal');
 
-  // I3: una tarjeta con un PATCH en camino (o con la recarga todavía sin llegar) no ofrece Iniciar ni Completar.
+  // m11: el texto y el tono salen de la misma decisión: coinciden en todo el borde.
+  for (const [fecha, vencido] of [['2026-11-03', true], ['2026-11-03', false], ['2026-11-06', false], ['2026-11-07', false], ['2026-11-08', false], ['2026-11-10', false], ['2026-11-11', false]]) {
+    const pec = { fecha_entrega_estimada: fecha, is_overdue: vencido };
+    const texto = tr.textoEntregaTransito(pec, '2026-11-07');
+    const t = tr.tonoEntregaTransito(pec, '2026-11-07');
+    assert.equal(t === 'vencido', texto.startsWith('Vencido'), fecha + ' vencido=' + vencido);
+    assert.equal(t === 'pronto', /^(Entrega hoy|Entrega en [123] día)/.test(texto), fecha + ' pronto');
+  }
+  // I3 (r2): los pendientes. Solo cuenta la lista ACTIVA; la inactiva (que nunca cargó) cambia de referencia con cada recarga.
   assert.equal(typeof tr.pendienteDeTransito, 'function', 'pendienteDeTransito existe');
-  const lista = [{ id: 1 }];
-  const completa = [{ id: 1 }];
-  assert.equal(tr.pendienteDeTransito([], 5, lista, completa), false);
-  assert.equal(tr.pendienteDeTransito([{ id: 5, fin: null }], 5, lista, completa), true, 'el PATCH va en camino');
-  assert.equal(tr.pendienteDeTransito([{ id: 5, fin: null }], 6, lista, completa), false, 'solo esa tarjeta');
-  const fin = { id: 5, fin: { lista, completa } };
-  assert.equal(tr.pendienteDeTransito([fin], 5, lista, completa), true, 'terminó el PATCH pero las filas son las viejas');
-  assert.equal(tr.pendienteDeTransito([fin], 5, [{ id: 1 }], completa), false, 'llegó la recarga de la tabla');
-  assert.equal(tr.pendienteDeTransito([fin], 5, lista, [{ id: 1 }]), false, 'llegó la recarga del tablero');
+  assert.equal(typeof tr.soltarPendientes, 'function', 'soltarPendientes existe');
+  assert.equal(tr.pendienteDeTransito([], 5), false);
+  assert.equal(tr.pendienteDeTransito([{ id: 5, fin: null }], 5), true, 'el PATCH va en camino');
+  assert.equal(tr.pendienteDeTransito([{ id: 5, fin: null }], 6), false, 'solo esa tarjeta');
+  const A = [{ id: 1 }];
+  const enCamino = [{ id: 5, fin: null }];
+  assert.equal(tr.soltarPendientes(enCamino, { filas: A, recargando: false }), enCamino, 'en camino no se toca');
+  const fin = [{ id: 5, fin: { filas: A, visto: false } }];
+  // Terminó el PATCH, la recarga aún no empezó a verse: sigue (la lista activa no cambió de referencia).
+  assert.equal(tr.soltarPendientes(fin, { filas: A, recargando: false }), fin, 'sin cambios: la misma lista');
+  // La recarga empieza: sigue, marcada como vista.
+  const vista = tr.soltarPendientes(fin, { filas: A, recargando: true });
+  assert.deepEqual(vista, [{ id: 5, fin: { filas: A, visto: true } }], 'recargando: sigue y se marca');
+  assert.equal(tr.soltarPendientes(vista, { filas: A, recargando: true }), vista, 'recargando otra vez: igual');
+  // Llega la recarga de la activa: filas nuevas, se suelta.
+  assert.deepEqual(tr.soltarPendientes(vista, { filas: [{ id: 1 }], recargando: false }), [], 'llegaron filas nuevas');
+  assert.deepEqual(tr.soltarPendientes(fin, { filas: [{ id: 1 }], recargando: false }), [], 'filas nuevas aunque no se viera recargar');
+  // m7: la recarga falla (termina sin filas nuevas): se suelta y vuelve el botón.
+  assert.deepEqual(tr.soltarPendientes(vista, { filas: A, recargando: false }), [], 'la recarga terminó sin filas nuevas (error): se suelta');
+  // Solo suelta lo suyo.
+  const mezcla = [{ id: 5, fin: { filas: A, visto: true } }, { id: 6, fin: null }];
+  assert.deepEqual(tr.soltarPendientes(mezcla, { filas: A, recargando: false }), [{ id: 6, fin: null }]);
   // La tarjeta pendiente no trae botón.
   const p = conEstados('casillero', ['COMPLETADO', 'EN_PROCESO']);
   assert.deepEqual(tr.tarjetaTransito(p, { hoy: '2026-11-07', pendiente: true }).accionPrincipal, null);
