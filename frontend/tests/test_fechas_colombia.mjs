@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fechaLarga, fechaSolo, fechaHoraCO, fechaHoraLarga, hace, diaColombia } from '../src/lib/fechas-colombia.js';
+import * as fechasLib from '../src/lib/fechas-colombia.js';
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
@@ -133,6 +134,18 @@ console.log('--- B4 T8: fechaCorta (las columnas de fecha de las tablas: «5 nov
   for (const v of ['2026-10-08', '2026-10-03T03:00:00Z', '2026-01-01T04:59:00Z']) {
     assert.equal(fechaCorta(v).split(' ')[0], fechaLarga(v).split(' ')[0], v);
   }
+}
+
+console.log('--- TEST (B4 T18 r1, m13): horaCO, la hora de Colombia con la regla única ---');
+{
+  assert.equal(typeof fechasLib.horaCO, 'function', 'horaCO existe');
+  assert.equal(fechasLib.horaCO('2026-10-04T03:00:00'), '10:00 p. m.', 'sin zona es UTC: las 3 a. m. UTC son las 10 p. m. del día anterior en Colombia');
+  assert.equal(fechasLib.horaCO('2026-10-04T15:05:00Z'), '10:05 a. m.');
+  assert.equal(fechasLib.horaCO('2026-10-04T17:00:00Z'), '12:00 p. m.', 'mediodía');
+  assert.equal(fechasLib.horaCO('2026-10-04T05:30:00Z'), '12:30 a. m.', 'medianoche');
+  assert.equal(fechasLib.horaCO(new Date('2026-10-04T14:00:00Z')), '9:00 a. m.');
+  for (const malo of [null, undefined, '', 'no es fecha', '2026-10-04', 5]) assert.equal(fechasLib.horaCO(malo), '', String(malo));
+  assert.ok(fechaHoraCO('2026-10-05T14:00:00Z').endsWith(fechasLib.horaCO('2026-10-05T14:00:00Z')), 'la misma hora que fechaHoraCO');
 }
 
 console.log('✓ Todas las pruebas de fechas de Colombia pasaron.');

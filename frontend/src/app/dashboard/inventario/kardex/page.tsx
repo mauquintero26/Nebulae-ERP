@@ -18,7 +18,7 @@ import { textoDeError } from '@/lib/avisos';
 import { numeroFinito } from '@/lib/kpis';
 import {
   COLUMNAS_KARDEX, DIRECCIONES_KARDEX, TEXTO_SOLO_VER_KARDEX, consultaColumnaKardex, direccionesDeColumnaKardex, extraKardex,
-  infoDireccionKardex, numeroMovimiento, tarjetaMovimiento, textoFechaMovimiento, textoVacioKardex,
+  etiquetaPropietario, infoDireccionKardex, numeroMovimiento, tarjetaMovimiento, textoFechaMovimiento, textoVacioKardex,
 } from '@/lib/estados-compras';
 import { INV_NAV } from '../inv-nav';
 import { CONTENEDOR, FOCOS, SelectorCatalogo, cantidad, pesos, useCatalogo } from '../piezas-inventario';
@@ -54,6 +54,8 @@ type OpcionSku = { id: number; display?: string | null; product_name?: string | 
 const ID_KARDEX = 'inventario.kardex';
 const INICIAL_KARDEX = {};
 const RUTA_KARDEX = '/inventory/kardex';
+/** m1: el servidor ordena SIEMPRE por fecha (get_kardex no tiene `orden`); la barra lo dice en lugar de un título que prometería ordenar. */
+const TEXTO_ORDEN_KARDEX = 'Del más reciente al más antiguo';
 const SIN_FILTROS: FiltrosKardex = { skuId: null, bodega: '', propietario: '', direccion: '', desde: '', hasta: '' };
 /** El orden de la lista de direcciones (la del Kardex de hoy, más las dos que escribe el sistema y no estaban). */
 const ORDEN_DIRECCIONES = ['IN', 'OUT', 'TRANSFER_IN', 'TRANSFER_OUT', 'ADJUST_IN', 'ADJUST_OUT', 'QUARANTINE', 'SCRAP', 'RETURN_IN'];
@@ -119,8 +121,8 @@ const COLUMNAS_TABLA_KARDEX: ColumnaTabla<Movimiento>[] = [
   { id: 'bodega', titulo: 'Bodega', ancho: 92, titleCelda: (m) => m.warehouse_name || 'Sin bodega',
     celda: (m) => <span className="block truncate text-xs text-slate-600">{m.warehouse_name || '—'}</span> },
   { id: 'cantidad', titulo: 'Cant.', ancho: 64, alinear: 'derecha', clave: true, celda: (m) => <CeldaCantidad m={m} /> },
-  { id: 'propietario', titulo: 'Propietario', ancho: 100, titleCelda: (m) => m.owner || 'NEBULAE',
-    celda: (m) => <span className="block truncate text-xs font-bold text-slate-600">{m.owner || 'NEBULAE'}</span> },
+  { id: 'propietario', titulo: 'Propietario', ancho: 100, titleCelda: (m) => etiquetaPropietario(m.owner),
+    celda: (m) => <span className="block truncate text-xs font-bold text-slate-600">{etiquetaPropietario(m.owner)}</span> },
   { id: 'documento', titulo: 'Documento', ancho: 104, titleCelda: (m) => `Documento de origen: ${numeroMovimiento(m)}`,
     celda: (m) => <span className="block truncate text-xs text-slate-600">{numeroMovimiento(m)}</span> },
   { id: 'costo', titulo: 'Costo unit.', ancho: 96, ocultaPorDefecto: true, alinear: 'derecha',
@@ -142,7 +144,7 @@ function DetalleMovimiento({ m, onCerrar }: { m: Movimiento; onCerrar: () => voi
     ['SKU', m.sku || `SKU #${m.sku_id ?? ''}`],
     ['Producto', m.product_name || '—'],
     ['Bodega', m.warehouse_name || '—'],
-    ['Propietario', m.owner || 'NEBULAE'],
+    ['Propietario', etiquetaPropietario(m.owner)],
     ['Documento de origen', numeroMovimiento(m)],
     ['Costo actual del SKU', Number(m.unit_cost_cop) > 0 ? pesos(m.unit_cost_cop) : 'Sin costo registrado'],
     ['Registrado por', m.created_by || 'Sistema'],
@@ -343,6 +345,10 @@ export default function KardexPage() {
                     <input type="date" aria-label="Hasta" value={filtros.hasta} min={filtros.desde || undefined}
                       onChange={(e) => cambiarFiltros({ hasta: e.target.value })} className={CONTROL} />
                   </label>
+                  <span className="inline-flex items-center rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs font-semibold text-slate-600"
+                    title="El Kardex no se reordena: el servidor lo entrega siempre por fecha">
+                    Orden: {TEXTO_ORDEN_KARDEX}
+                  </span>
                   {hayFiltros && (
                     <button type="button" onClick={quitarFiltros}
                       className={`inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50 ${FOCOS.indigo}`}>

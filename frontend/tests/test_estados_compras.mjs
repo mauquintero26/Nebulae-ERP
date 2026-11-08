@@ -2032,7 +2032,7 @@ console.log('--- TEST 42 (B4 T18; TABLA-inventario 5 a 8, KANBAN-resto; RP47 a R
   assert.equal(ec.consultaColumnaKardex(estadoKardex, salidas, { ...todos, direccion: 'IN' }, { limit: 25, offset: 0 }), null, 'sin direcciones en común, no se pide');
   assert.equal(ec.consultaColumnaKardex(estadoKardex, entradas, { ...todos, direccion: 'QUARANTINE' }, { limit: 25, offset: 0 }), null);
   assert.match(ec.consultaColumnaKardex(estadoKardex, entradas, todos, { limit: 0, offset: 0 }), /^limit=1&/,
-    'el Kardex pide limit >= 1: una columna plegada pide 1 en lugar de 0 (con 0 daría 422)');
+    'el Kardex pide limit >= 1: una columna plegada pide 1 en lugar de 0 (con 0 daría 400)');
   assert.match(ec.consultaColumnaKardex(estadoKardex, entradas, todos, { limit: 50, offset: 100 }), /^limit=50&offset=100&/);
 
   // El movimiento y su tarjeta: la forma de GET /inventory/kardex (KardexMovementItem).
@@ -2042,24 +2042,30 @@ console.log('--- TEST 42 (B4 T18; TABLA-inventario 5 a 8, KANBAN-resto; RP47 a R
     warehouse_name: 'Bodega Norte', unit_cost_cop: '8000.00', created_at: '2026-10-04T03:00:00', created_by: 'ana', idempotency_key: 'k',
   };
   assert.equal(ec.numeroMovimiento(movimiento), 'ENINV-5');
-  assert.equal(ec.numeroMovimiento({ ...movimiento, source_document_numero: '  ' }), 'RECEIPT #9');
-  assert.equal(ec.numeroMovimiento({ id: 3, operation_type: null, operation_id: null }), 'Movimiento #3');
-  assert.deepEqual(ec.textoFechaMovimiento('2026-10-04T03:00:00'), { dia: '3 oct 2026', hora: '22:00' }, 'sin zona = UTC; el día y la hora son de Colombia');
-  assert.deepEqual(ec.textoFechaMovimiento('2026-10-04T15:05:00Z'), { dia: '4 oct 2026', hora: '10:05' });
+  assert.equal(ec.numeroMovimiento({ ...movimiento, source_document_numero: '  ' }), 'Recepción n.º 9', 'm14: la etiqueta del tipo, nunca RECEIPT');
+  for (const [tipo, etiqueta] of [['DELIVERY', 'Entrega'], ['TRANSFER', 'Traslado'], ['PHYSICAL_INVENTORY', 'Inventario físico'], ['ADJUSTMENT', 'Ajuste'],
+    ['LOGISTIC_EVENT', 'Evento logístico'], ['SCRAP', 'Pérdida o destrucción']]) assert.equal(ec.etiquetaOperacion(tipo), etiqueta, tipo);
+  assert.equal(ec.etiquetaOperacion('OTRA_COSA'), humanizarCodigo('OTRA_COSA'), 'un tipo desconocido sale humanizado');
+  assert.equal(ec.etiquetaOperacion('toString'), humanizarCodigo('toString'), 'una clave del prototipo no es un tipo');
+  assert.equal(ec.numeroMovimiento({ operation_type: 'PHYSICAL_INVENTORY', operation_id: 3 }), 'Inventario físico n.º 3');
+  assert.deepEqual(['NEBULAE', 'nebulae', 'MAU', null, '', 'XYZ'].map((o) => ec.etiquetaPropietario(o)), ['Nebulae', 'Nebulae', 'Mau', 'Nebulae', 'Nebulae', humanizarCodigo('XYZ')]);
+  assert.equal(ec.numeroMovimiento({ id: 3, operation_type: null, operation_id: null }), 'Movimiento n.º 3');
+  assert.deepEqual(ec.textoFechaMovimiento('2026-10-04T03:00:00'), { dia: '3 oct 2026', hora: '10:00 p. m.' }, 'm13: la hora de fechas-colombia.js; sin zona = UTC; el día y la hora son de Colombia');
+  assert.deepEqual(ec.textoFechaMovimiento('2026-10-04T15:05:00Z'), { dia: '4 oct 2026', hora: '10:05 a. m.' });
   assert.deepEqual(ec.textoFechaMovimiento(null), { dia: '—', hora: '' });
   assert.deepEqual(ec.textoFechaMovimiento('no es fecha'), { dia: '—', hora: '' });
   assert.deepEqual(ec.tarjetaMovimiento(movimiento), {
     numero: 'ENINV-5', tipo: null, titulo: 'Oso', subtitulo: 'NEB-001 · Bodega Norte', monto: null,
     estado: { label: 'Entrada', clases: ec.DIRECCIONES_KARDEX.IN.clases },
-    chips: [{ texto: '+3', tono: 'emerald' }, { texto: 'NEBULAE', tono: 'slate' }],
-    tiempo: '3 oct 2026 · 22:00', atrasada: false, accionPrincipal: null,
+    chips: [{ texto: '+3', tono: 'emerald' }, { texto: 'Nebulae', tono: 'slate' }],
+    tiempo: '3 oct 2026 · 10:00 p. m.', atrasada: false, accionPrincipal: null,
   });
   const salida = ec.tarjetaMovimiento({ ...movimiento, direction: 'ADJUST_OUT', quantity: 2.5, owner: 'MAU', product_name: null, warehouse_name: null });
-  assert.deepEqual(salida.chips, [{ texto: '-2,5', tono: 'rose' }, { texto: 'MAU', tono: 'slate' }]);
+  assert.deepEqual(salida.chips, [{ texto: '-2,5', tono: 'rose' }, { texto: 'Mau', tono: 'slate' }]);
   assert.equal(salida.titulo, 'NEB-001');
   assert.equal(salida.subtitulo, 'NEB-001');
   assert.equal(ec.tarjetaMovimiento({ ...movimiento, direction: null }).chips[0].tono, 'amber', 'sin dirección no hay signo');
-  assert.equal(ec.tarjetaMovimiento({ ...movimiento, owner: null }).chips[1].texto, 'NEBULAE', 'sin propietario, Nebulae (como la tabla de hoy)');
+  assert.equal(ec.tarjetaMovimiento({ ...movimiento, owner: null }).chips[1].texto, 'Nebulae', 'sin propietario, Nebulae (como la tabla de hoy)');
   assert.equal(ec.tarjetaMovimiento({ ...movimiento, sku: null, product_name: null }).titulo, 'SKU #1');
   assert.deepEqual(ec.textoVacioKardex(true), { titulo: 'Ningún movimiento coincide con esos filtros.', ayuda: 'Quita algún filtro o amplía las fechas.' });
   assert.deepEqual(ec.textoVacioKardex(false), {
@@ -2484,6 +2490,11 @@ console.log('--- TEST 44 (B4 T18, TABLA-inventario punto 8; KANBAN-resto; RP54):
   const cols = columnasDe(k, 'COLUMNAS_TABLA_KARDEX');
   assert.deepEqual(cols.map((c) => c.id), ['fecha', 'direccion', 'producto', 'bodega', 'cantidad', 'propietario', 'documento', 'costo', 'usuario']);
   assert.deepEqual(cols.filter((c) => c.ordenable !== null), [], 'get_kardex no tiene `orden`: ningún título ordena');
+  // m1: la barra DICE el orden fijo.
+  trae(k, "const TEXTO_ORDEN_KARDEX = 'Del más reciente al más antiguo';", 'el texto del orden fijo');
+  trae(k, 'Orden: {TEXTO_ORDEN_KARDEX}', 'la barra dice el orden');
+  // m14: sin códigos crudos en la celda, la tarjeta ni el detalle (el propietario y el tipo de operación llevan su etiqueta).
+  assert.ok(!/m\.owner \|\| 'NEBULAE'/.test(k) && k.split('etiquetaPropietario(m.owner)').length - 1 === 3, 'el propietario con su etiqueta (celda, title y detalle)');
   assert.deepEqual(cols.filter((c) => c.oculta).map((c) => c.id), ['costo', 'usuario'], 'ocultas por defecto (R26, medido a 1024 px)');
   assert.equal(cols.filter((c) => c.flexible).length, 1);
   // El día y la hora son de Colombia (created_at es UTC sin zona), no del navegador.

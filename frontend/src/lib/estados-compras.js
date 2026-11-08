@@ -38,7 +38,7 @@
 
 // congelar: mutar estas tablas lanza TypeError (una sola función en todo el frontend; no se copia).
 import { congelar, humanizarCodigo, tiene } from './estados-pedido.js';
-import { diaColombia, fechaCorta, fechaSolo, instante } from './fechas-colombia.js';
+import { diaColombia, fechaCorta, fechaSolo, horaCO, instante } from './fechas-colombia.js';
 // B4 T14: la consulta de cada columna del tablero de Compras (consultaColumnaPec) sale de la misma queryListado.
 import { queryListado } from './tabla.js';
 // B4 T14 r1: la regla de la columna con filtro (m4, la misma de Ventas), el número del servidor (m7) y la regla de
@@ -1516,7 +1516,7 @@ export function direccionesDeColumnaKardex(columna, elegida) {
 /**
  * La consulta de una columna del tablero del Kardex en modo servidor: sus direcciones en CSV (direction) cruzadas con el filtro
  * de la barra, más los demás filtros. Sin q, orden, vista ni estados (el Kardex no los tiene; ordena siempre por fecha). Su
- * `limit` es de 1 como mínimo: get_kardex tiene limit >= 1, y una columna plegada (limit 0) daría 422. Sin direcciones en común,
+ * `limit` es de 1 como mínimo: get_kardex tiene limit >= 1, y una columna plegada (limit 0) daría 400 (el manejador global). Sin direcciones en común,
  * null: la columna queda vacía sin pedir.
  * @param {import('./tabla.js').EstadoTabla | null | undefined} estado
  * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
@@ -1534,19 +1534,36 @@ export function consultaColumnaKardex(estado, columna, filtros, { limit, offset 
   });
 }
 
-/** El número de un movimiento: su documento de origen, o «TIPO #operación», o «Movimiento #id». */
+/**
+ * Los tipos de operación de un movimiento (OPERATION_TYPES de models/inventory.py y las que escribe el sistema), con su etiqueta
+ * en español (T18 r1, m14: nunca «RECEIPT»). Inmutable.
+ */
+export const ETIQUETAS_OPERACION = congelar({
+  RECEIPT: 'Recepción', DELIVERY: 'Entrega', TRANSFER: 'Traslado', PHYSICAL_INVENTORY: 'Inventario físico', ADJUSTMENT: 'Ajuste',
+  LOGISTIC_EVENT: 'Evento logístico', SCRAP: 'Pérdida o destrucción',
+});
+/** La etiqueta de un tipo de operación; uno desconocido sale humanizado, nunca el código. */
+export function etiquetaOperacion(tipo) {
+  const t = textoLimpio(tipo);
+  return t !== null && tiene(ETIQUETAS_OPERACION, t) ? ETIQUETAS_OPERACION[t] : humanizarCodigo(t);
+}
+/** El propietario de un movimiento: «Nebulae», «Mau» (como el filtro) o, sin dato, «Nebulae» (como la tabla de hoy). */
+export function etiquetaPropietario(owner) {
+  const o = textoLimpio(owner)?.toUpperCase() ?? 'NEBULAE';
+  return o === 'NEBULAE' ? 'Nebulae' : o === 'MAU' ? 'Mau' : humanizarCodigo(o);
+}
+
+/** El número de un movimiento: su documento de origen, o «Recepción n.º 9» (la etiqueta del tipo y la operación), o «Movimiento n.º id». */
 export function numeroMovimiento(m) {
   const documento = textoLimpio(m?.source_document_numero);
   if (documento) return documento;
   const tipo = textoLimpio(m?.operation_type);
-  if (tipo && m?.operation_id !== null && m?.operation_id !== undefined) return `${tipo} #${m.operation_id}`;
-  return `Movimiento #${m?.id ?? ''}`;
+  if (tipo && m?.operation_id !== null && m?.operation_id !== undefined) return `${etiquetaOperacion(tipo)} n.º ${m.operation_id}`;
+  return `Movimiento n.º ${m?.id ?? ''}`;
 }
 
-const HORA_COLOMBIA = new Intl.DateTimeFormat('en-GB', { timeZone: 'America/Bogota', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
-
 /**
- * El día y la hora de un movimiento (created_at: un instante UTC sin zona) en Colombia: {dia: '3 oct 2026', hora: '22:00'};
+ * El día y la hora de un movimiento (created_at: un instante UTC sin zona) en Colombia: {dia: '3 oct 2026', hora: '10:00 p. m.'} (horaCO, la regla única de fechas-colombia.js);
  * lo que no se puede leer, {dia: '—', hora: ''}.
  * @param {unknown} iso
  * @returns {{dia: string, hora: string}}
@@ -1554,7 +1571,7 @@ const HORA_COLOMBIA = new Intl.DateTimeFormat('en-GB', { timeZone: 'America/Bogo
 export function textoFechaMovimiento(iso) {
   const fecha = instante(iso);
   if (!fecha) return { dia: '—', hora: '' };
-  return { dia: fechaCorta(fecha), hora: HORA_COLOMBIA.format(fecha) };
+  return { dia: fechaCorta(fecha), hora: horaCO(fecha) };
 }
 
 /**
@@ -1576,7 +1593,7 @@ export function tarjetaMovimiento(m) {
     estado: { label: info.label, clases: info.clases },
     chips: [
       { texto: cantidad === null ? '—' : `${info.signo}${formatoDecimal(Math.abs(cantidad))}`, tono: info.signo === '+' ? 'emerald' : info.signo === '-' ? 'rose' : 'amber' },
-      { texto: textoLimpio(m?.owner) ?? 'NEBULAE', tono: 'slate' },
+      { texto: etiquetaPropietario(m?.owner), tono: 'slate' },
     ],
     tiempo: fecha.hora ? `${fecha.dia} · ${fecha.hora}` : null,
     atrasada: false,

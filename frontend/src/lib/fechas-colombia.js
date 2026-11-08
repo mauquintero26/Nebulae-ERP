@@ -124,6 +124,17 @@ export function fechaSolo(valor) {
 }
 
 /**
+ * B4 T18 r1 (m13): solo la hora de Colombia de un instante, con la regla única de horaDePartes: '9:00 p. m.'. Un instante sin
+ * zona es UTC. Lo que no se puede leer (o una fecha sin hora) -> ''.
+ * @param {unknown} iso
+ * @returns {string}
+ */
+export function horaCO(iso) {
+  const fecha = instante(iso);
+  return fecha ? horaDePartes(partes(PARTES_COLOMBIA, fecha)) : '';
+}
+
+/**
  * 'lunes 5 de octubre, 9:00 a. m.' (U16-seguimiento): día de la semana, día, mes y hora de Colombia, sin el año. Solo
  * para instantes (Date o texto con hora; sin zona = UTC). Termina en 'a. m.' / 'p. m.': quien lo pone al final de una
  * frase no agrega otro punto. Una fecha sin hora o inválida -> ''.
