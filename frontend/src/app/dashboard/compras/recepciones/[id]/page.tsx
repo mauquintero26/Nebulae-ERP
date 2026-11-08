@@ -142,12 +142,12 @@ export default function RecepcionDetallePage() {
       setItems((d?.productos || []).map((p: any) => ({
         grl_id: p.grl_id,
         sku_id: p.sku_id,
-        nombre: p.nombre || p.product_name || p.descripcion || 'Item de Compra',
+        nombre: p.nombre || p.product_name || p.descripcion || 'Ítem de Compra',
         qty_esperada: Number(p.qty_esperada ?? p.qty ?? 0),
         qty_recibida: Number(p.qty_recibida ?? 0),
       })));
     } catch (err: any) {
-      setLoadError(err.message || 'No se pudo cargar la recepcion');
+      setLoadError(err.message || 'No se pudo cargar la recepción');
     }
     setLoading(false);
   }, [params.id]);
@@ -332,7 +332,7 @@ export default function RecepcionDetallePage() {
               </Button>
             </>
           ) : (
-            <span className="text-xs font-bold text-slate-400 px-3 py-2">Recepcion no editable en este estado</span>
+            <span className="text-xs font-bold text-slate-400 px-3 py-2">Recepción no editable en este estado</span>
           )}
         </div>
       </div>
@@ -340,7 +340,7 @@ export default function RecepcionDetallePage() {
       {/* Main Content Layout (Split Pane) */}
       <div className="flex-1 flex flex-col xl:flex-row overflow-y-auto xl:overflow-hidden">
 
-        {/* BLOQUE 1: Informacion de Recepcion (Formulario Principal) */}
+        {/* BLOQUE 1: Información de Recepción (Formulario Principal) */}
         <div className="xl:flex-1 xl:overflow-y-auto px-4 sm:px-8 py-8 custom-scrollbar bg-white relative min-w-0">
 
           {estado === 'BORRADOR' && hasDiscrepancy && (
@@ -348,7 +348,7 @@ export default function RecepcionDetallePage() {
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-amber-600 shadow-sm"><AlertTriangle size={20}/></div>
                 <div>
-                  <h3 className="font-black text-amber-900">Alerta de Discrepancia en Conteo Fisico</h3>
+                  <h3 className="font-black text-amber-900">Alerta de Discrepancia en Conteo Físico</h3>
                   <p className="text-sm text-amber-700">Las cantidades ingresadas no coinciden con la Orden de Compra. Finanzas bloqueara el pago hasta resolverse.</p>
                 </div>
               </div>
@@ -364,7 +364,7 @@ export default function RecepcionDetallePage() {
                   <p className="text-sm text-emerald-700">
                     {data?.stock_actualizado
                       ? 'El stock ha sido ingresado al sistema. El Pedido de Compra (PEC) fue notificado.'
-                      : 'Evento logistico registrado. Esta recepcion no actualizo stock disponible.'}
+                      : 'Evento logístico registrado. Esta recepción no actualizó stock disponible.'}
                   </p>
                 </div>
               </div>
@@ -433,7 +433,7 @@ export default function RecepcionDetallePage() {
             <div>
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
-                  <Box className="text-emerald-600" size={24} /> Conteo Fisico / Validacion
+                  <Box className="text-emerald-600" size={24} /> Conteo Físico / Validación
                 </h3>
                 <div className="flex gap-4">
                   <div className="text-sm">
@@ -477,7 +477,7 @@ export default function RecepcionDetallePage() {
 
           <div className="p-5 border-b border-slate-200 bg-slate-800 flex items-center justify-between shadow-sm z-10 shrink-0">
             <h3 className="font-black text-white flex items-center gap-2 text-lg">
-              <FileText className="text-slate-400" size={20} /> Inspeccion y Calidad
+              <FileText className="text-slate-400" size={20} /> Inspección y Calidad
             </h3>
           </div>
 
@@ -488,39 +488,39 @@ export default function RecepcionDetallePage() {
               <div className="space-y-2">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="radio" name="estado_carga" className="text-emerald-600 focus:ring-emerald-500" defaultChecked disabled={!isEditable} />
-                  <span className="text-sm font-bold text-slate-700">Optimo (Sin danos visibles)</span>
+                  <span className="text-sm font-bold text-slate-700">Óptimo (Sin daños visibles)</span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="radio" name="estado_carga" className="text-amber-600 focus:ring-amber-500" disabled={!isEditable} />
-                  <span className="text-sm font-bold text-slate-700">Danos Menores (Empaques golpeados)</span>
+                  <span className="text-sm font-bold text-slate-700">Daños Menores (Empaques golpeados)</span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="radio" name="estado_carga" className="text-rose-600 focus:ring-rose-500" disabled={!isEditable} />
-                  <span className="text-sm font-bold text-slate-700">Critico (Mercancia expuesta/rota)</span>
+                  <span className="text-sm font-bold text-slate-700">Crítico (Mercancía expuesta/rota)</span>
                 </label>
               </div>
             </div>
 
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
-              <label className="block text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">Notas de Recepcion</label>
+              <label className="block text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">Notas de Recepción</label>
               <textarea
                 rows={4}
                 value={nota}
                 disabled={!isEditable}
                 onChange={(e) => setNota(e.target.value)}
-                placeholder="Indique si el transportista dejo alguna novedad..."
+                placeholder="Indique si el transportista dejó alguna novedad..."
                 className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none resize-none disabled:bg-slate-100 disabled:text-slate-400"
               />
-              <p className="text-[10px] text-slate-400 mt-2">Se envia como nota al confirmar la recepcion.</p>
+              <p className="text-[10px] text-slate-400 mt-2">Se envía como nota al confirmar la recepción.</p>
             </div>
 
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
               <label className="block text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">Firma Responsable</label>
               <div className="h-24 bg-slate-50 border-2 border-dashed border-slate-300 rounded-lg flex items-center justify-center text-slate-400 font-medium">
-                Area para firma digital del bodeguero
+                Área para firma digital del bodeguero
               </div>
               <p className="text-xs text-slate-400 text-center mt-2">
-                {data?.confirmed_by ? `Confirmado por: ${data.confirmed_by}` : 'Aun sin confirmar'}
+                {data?.confirmed_by ? `Confirmado por: ${data.confirmed_by}` : 'Aún sin confirmar'}
               </p>
             </div>
 

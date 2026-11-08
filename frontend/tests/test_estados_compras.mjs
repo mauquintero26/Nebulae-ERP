@@ -1156,9 +1156,12 @@ console.log('--- TEST 31 (B4 T16A): Tránsito (compras/transito/page.tsx) cablea
   assert.match(pag, /<PasosFlujo variante="mini" pasos=\{pasosDeTracking\(p\.tracking_stages\)\}/, 'Progreso: un punto por etapa (pasosDeTracking)');
   assert.match(pag, /avanceTransito\(p\)\.texto/, 'y «n de m»');
   assert.match(pag, /etiquetaEtapaTracking\(etapa\.status\)/, 'Etapa actual usa etiquetaEtapaTracking');
-  assert.match(pag, /etapa\.alert\?\.nivel === 'atrasado'/, 'RP28: el rojo solo con nivel atrasado');
+  assert.match(pag, /const aviso = avisoTarjetaEtapa\(etapa\);/, 'm5 y m7 (RP28): el aviso de la etapa es la regla única de flujo-compras.js, no una copia');
+  assert.ok(!/alert\?\.nivel/.test(pag), 'y la página no rearma el nivel a mano');
+  assert.match(pag, /conFlecha\(e\.label || humanizarCodigo\(e\.stage || ''\)\)/, 'sin label, la clave humanizada (nunca el código crudo)');
+  assert.match(pag, /import \{[^}]*CeldaEstado[^}]*CeldaMonto[^}]*\} from '\.\.\/columnas-pec';/, 'm6: las celdas de columnas-pec, no copias');
   assert.match(pag, /claseFila=\{claseDeFilaPec\}/, 'D41: la fila vencida en el tono opaco filaAlerta');
-  assert.match(pag, /acciones\?\.enCurso\.includes\(p\.id\)/, 'cada fila carga por su cuenta');
+  assert.match(pag, /acciones\?\.pendiente\(p\.id\)/, 'cada fila carga por su cuenta (I3)');
   assert.match(pag, /aria-label=\{`\$\{accion\.texto\} la etapa actual de \$\{p\.numero\}`\}/, 'el botón lleva el número en su aria-label');
   // R26 (704 px a 1024): las visibles caben.
   const visibles = anchoVisible(pag, 'const COLUMNAS_TABLA_TRANSITO');
@@ -1181,7 +1184,7 @@ console.log('--- TEST 31 (B4 T16A): Tránsito (compras/transito/page.tsx) cablea
   for (const kpi of ['pec_activos', 'pec_vencidos', 'pec_avance', 'pec_monto_por_recibir']) assert.match(pag, new RegExp(`<TarjetaKpi kpi="${kpi}"`), kpi);
   assert.match(pag, /tarjetasTransito\(stats\?\.datos \?\? null, avance\)/);
   assert.match(pag, /avancePromedioTransito\(filasVisibles\)/, 'el avance es de las filas que se ven');
-  assert.match(pag, /const estadoAvance = errorLista \? 'error' : filasVisibles === null \? 'cargando' : undefined;/);
+  assert.match(pag, /const estadoAvance = errorLista \? 'error' : filasVisibles === null \? 'cargando' : 'listo';/, 'm8: el avance tiene su propio estado, no hereda el de /compras/stats');
   // El tablero (KANBAN-logistica punto 2; R11, C4): modo cliente con las etapas de la configuración y la regla de soltar.
   const tablero = /useTableroKanban<FilaTransito>\(\{([\s\S]*?)\n {2}\}\);/.exec(pag)?.[1] ?? '';
   for (const parte of [/pantalla: ID_TRANSITO/, /modo: 'cliente'/, /columnas: columnasTablero/, /activo: listo && enKanban\b/, /items: itemsTablero/,
@@ -1189,7 +1192,11 @@ console.log('--- TEST 31 (B4 T16A): Tránsito (compras/transito/page.tsx) cablea
     assert.match(tablero, parte, `useTableroKanban lleva ${parte}`);
   }
   assert.match(pag, /columnasDeEtapas\(config\?\.datos \?\? null, \{ pedidos: completa\.filas \}\)/, 'las columnas salen de tracking-config y de los pedidos');
-  assert.match(pag, /\(completa\.cargandoInicial \|\| cargandoConfig \? null : completa\.filas\)/, 'mientras cargan, items null (nunca un tablero vacío)');
+  assert.match(pag, /completa\.cargandoInicial \|\| cargandoConfig \|\| \(completa\.error != null && completa\.filas\.length === 0\) \? null : completa\.filas/, 'mientras cargan, o con error y sin datos, items null (nunca un tablero vacío; I2)');
+  assert.match(pag, /const errorTablero = enKanban && completa\.error != null;/, 'I2: el error del tablero se dice');
+  assert.match(pag, /\{errorTablero && \(\s*<p role="alert">\s*\{textoDeError\(completa\.error,[^]*?onClick=\{completa\.recargar\}[^]*?Reintentar/, 'I2: con role=alert, textoDeError y Reintentar (completa.recargar)');
+  assert.match(pag, /tarjetaTransito\(p, \{ pendiente: pendiente\(p\.id\) \}\)/, 'I3: la tarjeta pendiente no ofrece el botón');
+  assert.match(pag, /if \(pendienteRef\.current\(p\.id\)\) return;/, 'I3: un segundo clic no manda otro PATCH');
   assert.match(pag, /reglaSoltarTransito\(p, origen, destino, \{ columnas: columnasTablero \}\)/);
   assert.match(pag, /regla=\{reglaTablero\}/);
   assert.match(pag, /onCambio=\{cambiarDesdeTablero\}/);
@@ -1200,11 +1207,11 @@ console.log('--- TEST 31 (B4 T16A): Tránsito (compras/transito/page.tsx) cablea
   assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(pag.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')), 'sin diálogos nativos');
   assert.match(pag, /apiFetch\(`\/compras\/pedidos\/\$\{p\.id\}\/tracking`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ stage, status, user_name: autorActual\(\) \}\)/);
   assert.match(pag, /avisarError\(err, `No se pudo actualizar \$\{p\.numero\}`\)/, 'updateTracking ya no se traga el error');
-  assert.match(pag, /recargar = recargarTrasError\(err\);[\s\S]*?finally \{[\s\S]*?\}\s*if \(recargar\) recargarTodo\(\);/, 'el botón: con la regla única, un 409 recarga y un 500 no');
+  assert.match(pag, /recargar = recargarTrasError\(err\);\s*\}\s*if \(recargar\) \{\s*recargarTodo\(\);\s*terminarCambio\(p\.id\);\s*\} else descartarCambio\(p\.id\);/, 'el botón: con la regla única, un 409 recarga (y queda pendiente hasta la recarga) y un 500 no (y no queda pendiente)');
 
   // Lo que HACE arrastrar (cambiarDesdeTablero): completa la etapa que manda la regla; si falla, recarga con la regla única
   // recargarTrasError y relanza el error para que el tablero devuelva la tarjeta y avise.
-  const correr = async ({ cuerpo, falla }) => {
+  const correr = async ({ cuerpo, falla, pendiente = false }) => {
     const llamadas = [];
     const entorno = {
       aplicarEtapa: async (p, stage, status) => {
@@ -1213,21 +1220,29 @@ console.log('--- TEST 31 (B4 T16A): Tránsito (compras/transito/page.tsx) cablea
       },
       recargarTrasError: (err) => err.status === 409,
       recargarTodo: () => llamadas.push('recargar'),
+      pendienteRef: { current: () => Boolean(pendiente) },
+      iniciarCambio: () => llamadas.push('inicia'),
+      terminarCambio: () => llamadas.push('termina'),
+      descartarCambio: () => llamadas.push('descarta'),
     };
     let error = null;
     try { await funcionEjecutable(pag, 'async function cambiarDesdeTablero(')(entorno)({ id: 4 }, { cuerpo }); } catch (err) { error = err; }
     return { llamadas, error };
   };
-  assert.deepEqual((await correr({ cuerpo: { stage: 'PROVEEDOR_CASILLERO' } })).llamadas, ['PATCH 4 PROVEEDOR_CASILLERO COMPLETADO', 'recargar'], 'completa la etapa y recarga');
+  assert.deepEqual((await correr({ cuerpo: { stage: 'PROVEEDOR_CASILLERO' } })).llamadas, ['inicia', 'PATCH 4 PROVEEDOR_CASILLERO COMPLETADO', 'recargar', 'termina'], 'completa la etapa, recarga y queda pendiente hasta la recarga');
   const conflicto = await correr({ cuerpo: { stage: 'X' }, falla: 409 });
-  assert.deepEqual(conflicto.llamadas, ['PATCH 4 X COMPLETADO', 'recargar'], 'un 409 recarga');
+  assert.deepEqual(conflicto.llamadas, ['inicia', 'PATCH 4 X COMPLETADO', 'recargar', 'termina'], 'un 409 recarga');
   assert.equal(conflicto.error?.status, 409, 'y el error sigue (el tablero devuelve la tarjeta y avisa)');
   const otro = await correr({ cuerpo: { stage: 'X' }, falla: 500 });
-  assert.deepEqual(otro.llamadas, ['PATCH 4 X COMPLETADO'], 'un 500 no recarga');
+  assert.deepEqual(otro.llamadas, ['inicia', 'PATCH 4 X COMPLETADO', 'descarta'], 'un 500 no recarga y no deja la tarjeta pendiente para siempre');
   assert.equal(otro.error?.status, 500);
   const sinEtapa = await correr({ cuerpo: undefined });
   assert.deepEqual(sinEtapa.llamadas, [], 'sin etapa no se manda nada');
   assert.ok(sinEtapa.error instanceof Error);
+  // I3: con un cambio ya en camino sobre ese pedido, soltar otra vez no manda otro PATCH.
+  const doble = await correr({ cuerpo: { stage: 'X' }, pendiente: true });
+  assert.deepEqual(doble.llamadas, [], 'ya hay un cambio en camino: ningún PATCH');
+  assert.match(doble.error?.message ?? '', /ya tiene un cambio de etapa en camino/);
 }
 
 console.log('--- TEST 32 (B4 T16A): Recepciones (compras/recepciones/page.tsx) y columnas-recepcion.tsx cablean las piezas y el servidor ---');
@@ -1237,7 +1252,7 @@ console.log('--- TEST 32 (B4 T16A): Recepciones (compras/recepciones/page.tsx) y
   assert.ok(!/@ts-nocheck/.test(pag), 'la página se tipa');
   // columnas-recepcion.tsx (T19 la importa): no es una ruta, no depende de ninguna page.tsx y exporta lo que las pantallas arman.
   assert.ok(!/export default/.test(colRec) && !/from '\.{1,2}\/[^']*page'/.test(colRec) && !/'use client'/.test(colRec), 'no es una ruta ni importa una page');
-  for (const nombre of ['columnasRecepcion', 'titulosDeOrdenRecepcion', 'CeldaEstadoRecepcion', 'CeldaRetraso', 'CeldaStock', 'esPorConfirmar']) {
+  for (const nombre of ['columnasRecepcion', 'titulosDeOrdenRecepcion', 'CeldaEstadoRecepcion', 'CeldaRetraso', 'CeldaStock']) {
     assert.match(colRec, new RegExp(`export (?:function|const) ${nombre}\\b`), `exporta ${nombre}`);
   }
   assert.match(colRec, /export function columnasRecepcion<T extends FilaColumnasRecepcion>\(celdaAcciones: \(r: T\) => ReactNode\)/, 'la celda de Acciones es de cada pantalla');
@@ -1252,7 +1267,7 @@ console.log('--- TEST 32 (B4 T16A): Recepciones (compras/recepciones/page.tsx) y
   assert.match(colRec, /id: 'acciones'[^\n]*fija: 'derecha'/);
   const visibles = anchoVisible(colRec, 'export function columnasRecepcion');
   assert.ok(visibles > 0 && visibles <= 704, `R26: las columnas visibles suman ${visibles} px (caja de 704)`);
-  assert.match(colRec, /esPorConfirmar = \(r: \{ estado: string \}\) => grupoRecepcion\(/, 'por confirmar es el grupo de R9, no un estado inventado');
+  assert.match(colRec, /export { numeroRecepcion, pecDeRecepcion, proveedorDeRecepcion, esRecepcionPorConfirmar };/, 'por confirmar es la regla de la lib (grupoRecepcion, R9), no un estado inventado');
   assert.ok(!/'PENDIENTE'/.test(colRec) && !/'PENDIENTE'/.test(pag), 'PENDIENTE no existe como estado de recepción');
 
   // Carga del servidor (R5, C3, C4, D39, D40).
@@ -1287,7 +1302,7 @@ console.log('--- TEST 32 (B4 T16A): Recepciones (compras/recepciones/page.tsx) y
     assert.match(pag, new RegExp(`\\{ id: '${id}', etiqueta: '${etiqueta}', conteo: conteos\\?\\.${id} \\?\\? null`), `pestaña ${etiqueta}`);
   }
   const codigo = pag.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '');
-  assert.ok(!/'Pendientes'|'Completadas'|Regla de Separación|Mesa de Recepcion Activa|r\.estado === 'PENDIENTE'|!r\.stock_actualizado|row\.stock_actualizado/.test(codigo),
+  assert.ok(!/'Pendientes'|'Completadas'|Regla de Separación|Mesa de Recepci[oó]n Activa|r\.estado === 'PENDIENTE'|!r\.stock_actualizado|row\.stock_actualizado/.test(codigo),
     'sin las pestañas viejas, el estado que no existe ni la tarjeta/aviso de antes');
   assert.match(pag, /opcionesEstados=\{enKanban \? OPCIONES_ESTADOS_TABLERO_RECEPCION : opcionesEstadosRecepcion\}/);
   // «Abrir conteo» y Confirmar por fila: cada botón carga por su cuenta (confirmandoId) y se bloquea solo mientras otra confirmación va en camino.
@@ -1299,7 +1314,7 @@ console.log('--- TEST 32 (B4 T16A): Recepciones (compras/recepciones/page.tsx) y
   assert.match(pag, /aria-label=\{`Confirmar la recepción \$\{numero\}`\}/);
   assert.match(pag, /href=\{`\/dashboard\/compras\/recepciones\/\$\{r\.id\}`\}/, '«Abrir conteo» va a /compras/recepciones/[id]');
   assert.match(pag, /oculto: !porConfirmar/, 'Confirmar solo en una recepción por confirmar (BORRADOR), no en logísticas ni canceladas');
-  assert.match(pag, /avisarError\(err, `No se pudo confirmar \$\{numeroDeRecepcion\(r\)\}`\);\s*if \(recargarTrasError\(err\)\) recargarTodo\(\);/, 'un error se dice y, con la regla única, se recarga');
+  assert.match(pag, /avisarError\(err, `No se pudo confirmar \$\{numeroRecepcion\(r\)\}`\);\s*if \(recargarTrasError\(err\)\) recargarTodo\(\);/, 'un error se dice y, con la regla única, se recarga');
   // El Drawer conserva «Confirmar Entrada Física y Actualizar Stock» y suma «Abrir conteo».
   assert.match(pag, /Confirmar Entrada Física y Actualizar Stock/);
   assert.match(pag, /<ClipboardList size=\{14\} aria-hidden="true" \/> Abrir conteo/);
@@ -1346,7 +1361,7 @@ console.log('--- TEST 33 (B4 T16A, TABLA-compras punto 12; RP30): el conteo de u
   assert.match(cont, /onChange=\{\(e\) => control\?\.actualizar\(l\.idx, parseInt\(e\.target\.value\) \|\| 0\)\}/, 'y escribe en la línea de esa fila');
   assert.match(cont, /aria-label=\{`Cantidad recibida de \$\{l\.nombre\}`\}/);
   // Lo de B1 a B3 sigue: guardar el borrador, cerrar y validar (guarda antes de confirmar), la bodega y el exceso.
-  for (const texto of ['Guardar Borrador', 'Cerrar y Validar Conteo', 'Bodega Receptora', 'Alerta de Discrepancia en Conteo Fisico']) assert.ok(cont.includes(texto), texto);
+  for (const texto of ['Guardar Borrador', 'Cerrar y Validar Conteo', 'Bodega Receptora', 'Alerta de Discrepancia en Conteo Físico']) assert.ok(cont.includes(texto), texto);
   assert.match(cont, /const saved = await guardarConteo\(\);\s*if \(!saved\) \{ setConfirming\(false\); return; \}/, 'cerrar y validar guarda primero');
   assert.match(cont, /allow_excess: allowExcess/);
   assert.match(cont, /\/compras\/recepciones\/\$\{data\.id\}\/confirmar/);
@@ -1355,6 +1370,61 @@ console.log('--- TEST 33 (B4 T16A, TABLA-compras punto 12; RP30): el conteo de u
   for (const ruta of ['recepciones/[id]/page.tsx', 'transito/page.tsx', 'recepciones/page.tsx', 'columnas-recepcion.tsx']) {
     assert.ok(guardia.includes(`'src/app/dashboard/compras/${ruta}'`), `RAICES lleva ${ruta}`);
   }
+}
+
+console.log('--- TEST 34 (B4 T16A r1, m13): la lógica de una recepción vive en un solo lugar (estados-compras.js) ---');
+{
+  for (const f of ['numeroRecepcion', 'pecDeRecepcion', 'proveedorDeRecepcion', 'esRecepcionPorConfirmar']) assert.equal(typeof ec[f], 'function', f);
+  assert.equal(ec.numeroRecepcion({ id: 9 }), 'ENINV-9');
+  assert.equal(ec.numeroRecepcion({ id: 9, numero: '  ' }), 'ENINV-9', 'un número en blanco no vale');
+  assert.equal(ec.numeroRecepcion({ id: 9, numero: ' ENINV-1 ' }), 'ENINV-1');
+  assert.equal(ec.pecDeRecepcion({ pec_numero: 'PEC-3' }), 'PEC-3');
+  assert.equal(ec.pecDeRecepcion({ pec_id: 4 }), 'PEC-4');
+  assert.equal(ec.pecDeRecepcion({}), 'Entrada manual');
+  assert.equal(ec.proveedorDeRecepcion({ supplier_name: 'Acme' }), 'Acme');
+  assert.equal(ec.proveedorDeRecepcion({ proveedor_nombre: 'Beta' }), 'Beta');
+  assert.equal(ec.proveedorDeRecepcion({ supplier_name: '  ' }), 'Sin proveedor');
+  assert.equal(ec.esRecepcionPorConfirmar({ estado: 'BORRADOR' }), true);
+  assert.equal(ec.esRecepcionPorConfirmar({ estado: ' BORRADOR ' }), true);
+  for (const e of ['COMPLETADA', 'COMPLETADA_LOGISTICA', 'CANCELADA', 'PENDIENTE', null, undefined]) assert.equal(ec.esRecepcionPorConfirmar({ estado: e }), false, String(e));
+  // La tabla, el Drawer y el tablero dicen lo mismo del mismo campo.
+  const r = { id: 7, numero: ' ', supplier_name: ' ', estado: 'BORRADOR' };
+  const t = ec.tarjetaRecepcion(r);
+  assert.equal(t.numero, ec.numeroRecepcion(r));
+  assert.equal(t.titulo, ec.proveedorDeRecepcion(r));
+  assert.equal(t.subtitulo, ec.pecDeRecepcion(r));
+  assert.equal(t.accionPrincipal !== null, ec.esRecepcionPorConfirmar(r));
+  // columnas-recepcion.tsx no repite la lógica: usa las de la lib.
+  const col = readFileSync(new URL('../src/app/dashboard/compras/columnas-recepcion.tsx', import.meta.url), 'utf8');
+  assert.match(col, /numeroRecepcion, pecDeRecepcion, proveedorDeRecepcion, esRecepcionPorConfirmar/);
+  assert.ok(!/grupoRecepcion\(/.test(col) && !/`ENINV-\$\{/.test(col), 'sin la regla copiada');
+}
+
+console.log('--- TEST 35 (B4 T16A r1): Recepciones busca por producto; el selector pide primero lo que llegó (m15) ---');
+{
+  const pag = readFileSync(new URL('../src/app/dashboard/compras/recepciones/page.tsx', import.meta.url), 'utf8');
+  assert.match(pag, /placeholder="Buscar por recepción, PEC, proveedor, bodega o producto…"/, 'I1: la búsqueda por producto vuelve (la hace el servidor)');
+  assert.match(pag, /orden=-estado&limit=200/, 'm15: primero Recibido en parte y Llegó a bodega, luego lo que espera entrega');
+  assert.ok(!/orden=atencion/.test(pag));
+}
+
+console.log('--- TEST 36 (B4 T16A r1): Drawer (m4, m10, m14), tildes (m11), comentarios y autor (m9, m16) ---');
+{
+  const pag = readFileSync(new URL('../src/app/dashboard/compras/recepciones/page.tsx', import.meta.url), 'utf8');
+  const cont = readFileSync(new URL('../src/app/dashboard/compras/recepciones/[id]/page.tsx', import.meta.url), 'utf8');
+  const tr = readFileSync(new URL('../src/app/dashboard/compras/transito/page.tsx', import.meta.url), 'utf8');
+  assert.match(pag, /destino: 'CLIENTE', qty: 1, cantidad_recibida: 1 \}/, 'm4: la línea de respaldo del Drawer, como en BASE');
+  assert.ok(!/qty_recibida: 1/.test(pag), 'm4: sin qty_recibida en la línea de respaldo');
+  assert.match(pag, /<CeldaEstadoRecepcion r=\{selectedItem\} \/>/, 'm10 y m14: la insignia del Drawer usa el tono de su estado (una CANCELADA no sale en verde)');
+  assert.ok(!/Badge tone=\{esRecepcionPorConfirmar/.test(pag));
+  assert.ok(!pag.includes('Bodega Principal Barranquilla'), 'm10: sin la bodega inventada');
+  for (const texto of ['Mesa de Recepción', 'Recepción generada en Mesa de Entrada', 'Confirmado en mesa de recepción Nebulae']) assert.ok(pag.includes(texto), `m11: ${texto}`);
+  for (const viejo of ["'Mesa de Recepcion'", 'Recepcion generada', 'mesa de recepcion Nebulae']) assert.ok(!pag.includes(viejo), `m11: sin «${viejo}»`);
+  for (const viejo of ['Inspeccion y Calidad', 'Optimo (Sin danos', 'Recepcion no editable', 'Item de Compra', 'Conteo Fisico']) assert.ok(!cont.includes(viejo), `m11: sin «${viejo}»`);
+  assert.ok(cont.includes('Inspección y Calidad') && cont.includes('Óptimo (Sin daños visibles)'));
+  assert.ok(!/un 404 o un 409/.test(pag + tr + cont), 'm9: los comentarios dicen la regla real de recargarTrasError');
+  assert.match(tr, /Sin nombre cae al correo del usuario/, 'm16: el comentario de autorActual dice lo que hace');
+  assert.ok(!/el servidor usa el correo/.test(tr));
 }
 
 console.log('\nOK: test_estados_compras.mjs');

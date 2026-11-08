@@ -21,7 +21,7 @@ import { BannerFlujo, useResumenFlujo } from '@/components/flujo';
 import type { DatosFlujo } from '@/components/flujo';
 import { COMP_NAV } from '../comp-nav';
 import {
-  columnasRecepcion, esPorConfirmar, numeroDeRecepcion, pecDeRecepcion, titulosDeOrdenRecepcion,
+  CeldaEstadoRecepcion, columnasRecepcion, esRecepcionPorConfirmar, numeroRecepcion, pecDeRecepcion, titulosDeOrdenRecepcion,
 } from '../columnas-recepcion';
 import type { FilaColumnasRecepcion } from '../columnas-recepcion';
 
@@ -31,11 +31,10 @@ import { NOTA_RECEPCIONES, PERIODO_KPI, tarjetasRecepciones } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
 import { accionVistaEnLista } from '@/lib/listas-ventas';
-import { fechaCorta } from '@/lib/fechas-colombia';
-import { formatoPesos } from '@/lib/pesos';
+import { fCOP, textoDia } from '../columnas-pec';
 import {
-  COLUMNAS_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, consultaColumnaRecepcion, diaPec, infoEstadoPec,
-  infoEstadoRecepcion, opcionesEstadosRecepcion, tarjetaRecepcion, textoVacioRecepciones,
+  COLUMNAS_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, consultaColumnaRecepcion, infoEstadoPec,
+  opcionesEstadosRecepcion, tarjetaRecepcion, textoVacioRecepciones,
 } from '@/lib/estados-compras';
 import { avisosFlujoCompras, pasosPantallaCompras, textoReglaCompras } from '@/lib/flujo-compras';
 
@@ -43,7 +42,7 @@ import { avisosFlujoCompras, pasosPantallaCompras, textoReglaCompras } from '@/l
 type LineaRecepcion = {
   product_name?: string; nombre?: string; descripcion?: string; sku?: string; destino?: string;
   qty_esperada?: number; quantity_expected?: number; qty?: number; cantidad?: number;
-  qty_recibida?: number; quantity_received?: number;
+  qty_recibida?: number; quantity_received?: number; cantidad_recibida?: number;
 };
 /** Una fila de GET /compras/recepciones (el _gr_dict de T12). dias_retraso es del servidor. */
 type FilaRecepcion = FilaColumnasRecepcion & { warehouse_id?: number | null; notas?: string | null };
@@ -68,7 +67,6 @@ const ESTADOS_RECEPCIONABLES = 'EN_TRANSITO,PENDIENTE_ENTREGA,RECIBIDO,PARCIALME
 /** El contenedor de los Hubs y de las listas del bloque (T7 a T15): pb-24 deja libre la esquina del botón de la IA. */
 const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
 const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-700';
-const fCOP = (v: unknown) => (Number(v) > 0 ? formatoPesos(v) : '—');
 
 /** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
 type AccionesFilaRecepcion = {
@@ -89,8 +87,8 @@ const BOTON_FILA = `rounded-lg p-1.5 transition-colors ${FOCO_VISIBLE}`;
  */
 function CeldaAcciones({ r }: { r: FilaRecepcion }) {
   const acciones = useContext(AccionesFila);
-  const numero = numeroDeRecepcion(r);
-  const porConfirmar = esPorConfirmar(r);
+  const numero = numeroRecepcion(r);
+  const porConfirmar = esRecepcionPorConfirmar(r);
   const confirmando = acciones?.confirmandoId === r.id;
   const items: ItemMenuFila[] = [
     { etiqueta: 'Ver detalle', icono: Eye, onClick: () => acciones?.abrir(r) },
@@ -225,7 +223,7 @@ export default function RecepcionesPage() {
   useEffect(() => {
     if (!showPecModal) return undefined;
     const control = new AbortController();
-    apiFetch(`/compras/pedidos?estados=${ESTADOS_RECEPCIONABLES}&orden=atencion&limit=200`, { signal: control.signal })
+    apiFetch(`/compras/pedidos?estados=${ESTADOS_RECEPCIONABLES}&orden=-estado&limit=200`, { signal: control.signal })
       .then((r: unknown) => setPecs({ vuelta: vueltaPecs, filas: normalizarRespuesta(r).filas as PecPorRecepcionar[], error: null }))
       .catch((err: unknown) => { if (!control.signal.aborted) setPecs({ vuelta: vueltaPecs, filas: [], error: err }); });
     return () => control.abort();
@@ -238,10 +236,10 @@ export default function RecepcionesPage() {
   const handleCrearDesdePec = async (pecId: number) => {
     setCreatingFromPec(pecId);
     try {
-      const user = localStorage.getItem('user_name') || 'Mesa de Recepcion';
+      const user = localStorage.getItem('user_name') || 'Mesa de Recepción';
       const res = await apiFetch(`/compras/pedidos/${pecId}/recepcionar`, {
         method: 'POST',
-        body: JSON.stringify({ created_by: user, force_full: false, notas: 'Recepcion generada en Mesa de Entrada' }),
+        body: JSON.stringify({ created_by: user, force_full: false, notas: 'Recepción generada en Mesa de Entrada' }),
       });
       avisar('Recepción ENINV creada correctamente', { tono: 'ok' });
       setShowPecModal(false);
@@ -257,7 +255,7 @@ export default function RecepcionesPage() {
   };
 
   // Confirmar (la fila, el menú o el Drawer): cada botón carga por su cuenta (confirmandoId). Si el servidor dice que no, su
-  // mensaje tal cual; con la regla única recargarTrasError (un 404 o un 409), se recarga lo que se ve.
+  // mensaje tal cual; con la regla única recargarTrasError (recarga con un 400, un 409 o sin respuesta; un 404 no), se recarga lo que se ve.
   const handleConfirmarRecepcion = useCallback(async (r: FilaRecepcion) => {
     setConfirmandoId(r.id);
     try {
@@ -265,13 +263,13 @@ export default function RecepcionesPage() {
       const idempotencyKey = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `rec-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
       await apiFetch(`/compras/recepciones/${r.id}/confirmar`, {
         method: 'POST',
-        body: JSON.stringify({ idempotency_key: idempotencyKey, receipt_type: 'FISICA', user_name: user, notas: 'Confirmado en mesa de recepcion Nebulae' }),
+        body: JSON.stringify({ idempotency_key: idempotencyKey, receipt_type: 'FISICA', user_name: user, notas: 'Confirmado en mesa de recepción Nebulae' }),
       });
       avisar('Recepción confirmada y stock actualizado correctamente', { tono: 'ok' });
       setSelectedItem(null);
       recargarTodo();
     } catch (err) {
-      avisarError(err, `No se pudo confirmar ${numeroDeRecepcion(r)}`);
+      avisarError(err, `No se pudo confirmar ${numeroRecepcion(r)}`);
       if (recargarTrasError(err)) recargarTodo();
     } finally {
       setConfirmandoId(null);
@@ -333,7 +331,7 @@ export default function RecepcionesPage() {
       <SubNav label="Hub de Compras" items={COMP_NAV} currentPath={pathname} color="teal" hub={{ href: '/dashboard/compras' }} />
 
       {/* B4 T16A (FLUJO-compras punto 9; R9, RP46, D42): la franja con «Estás aquí» en Recepción en bodega y el aviso «N
-          recepciones por confirmar» reemplaza el banner ámbar «Mesa de Recepcion Activa». Sin semáforo (la recepción no
+          recepciones por confirmar» reemplaza el banner ámbar «Mesa de Recepción Activa». Sin semáforo (la recepción no
           tiene atraso propio) ni «No resueltos». Va directo bajo la barra de submódulos, sin otro padding. */}
       <BannerFlujo
         titulo="Flujo de compras"
@@ -388,7 +386,7 @@ export default function RecepcionesPage() {
                 onEstado={alCambiarBarra}
                 pestanas={enKanban ? undefined : pestanas}
                 estadoConteos={estadoConteos}
-                placeholder="Buscar por recepción, PEC, proveedor o bodega…"
+                placeholder="Buscar por recepción, PEC, proveedor, bodega o producto…"
                 opcionesEstados={enKanban ? OPCIONES_ESTADOS_TABLERO_RECEPCION : opcionesEstadosRecepcion}
                 filtros={textoOrden ? (
                   <span className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-600">
@@ -482,7 +480,7 @@ export default function RecepcionesPage() {
                       )}
                     </div>
                     <p className="text-xs font-semibold text-slate-700 mt-1">{pec.supplier_name || 'Proveedor'}</p>
-                    <p className="text-[11px] text-slate-500 mt-0.5">Entrega est.: {fechaCorta(diaPec(pec.fecha_entrega_estimada)) || '—'} · {fCOP(pec.total_cop)}</p>
+                    <p className="text-[11px] text-slate-500 mt-0.5">Entrega est.: {textoDia(pec.fecha_entrega_estimada)} · {fCOP(pec.total_cop)}</p>
                   </div>
                   <Button size="sm" color="teal" icon={PackageCheck} loading={creatingFromPec === pec.id} disabled={creatingFromPec !== null}
                     onClick={() => handleCrearDesdePec(pec.id)}>
@@ -502,10 +500,8 @@ export default function RecepcionesPage() {
           header={(
             <div>
               <div className="flex items-center gap-2.5">
-                <h2 className="text-xl font-black text-slate-800">{numeroDeRecepcion(selectedItem)}</h2>
-                <Badge tone={esPorConfirmar(selectedItem) ? 'warning' : 'success'}>
-                  {infoEstadoRecepcion(selectedItem.estado).label}
-                </Badge>
+                <h2 className="text-xl font-black text-slate-800">{numeroRecepcion(selectedItem)}</h2>
+                <CeldaEstadoRecepcion r={selectedItem} />
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
                 Inspección Física y Clasificación de Líneas en Mesa de Entrada
@@ -519,7 +515,7 @@ export default function RecepcionesPage() {
                 className={`inline-flex items-center gap-2 rounded-xl border border-teal-200 bg-white px-4 py-2.5 text-sm font-bold text-teal-800 hover:bg-teal-50 ${FOCO_VISIBLE}`}>
                 <ClipboardList size={14} aria-hidden="true" /> Abrir conteo
               </Link>
-              {esPorConfirmar(selectedItem) && (
+              {esRecepcionPorConfirmar(selectedItem) && (
                 <Button color="teal" icon={Check} loading={confirmandoId === selectedItem.id} disabled={confirmandoId !== null}
                   onClick={() => handleConfirmarRecepcion(selectedItem)}>
                   Confirmar Entrada Física y Actualizar Stock
@@ -535,7 +531,7 @@ export default function RecepcionesPage() {
             </div>
             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
               <p className="text-[10px] font-black text-slate-500 uppercase">Bodega de Destino</p>
-              <p className="font-bold text-sm text-slate-800 mt-0.5">{selectedItem.warehouse_name || 'Bodega Principal Barranquilla'}</p>
+              <p className="font-bold text-sm text-slate-800 mt-0.5">{selectedItem.warehouse_name || 'Sin bodega asignada'}</p>
             </div>
           </div>
 
@@ -575,7 +571,7 @@ export default function RecepcionesPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {((selectedItem.lineas || selectedItem.productos || [
-                    { nombre: 'Producto General', descripcion: selectedItem.notas || 'Lote general recibido', destino: 'CLIENTE', qty: 1, qty_recibida: 1 },
+                    { nombre: 'Producto General', descripcion: selectedItem.notas || 'Lote general recibido', destino: 'CLIENTE', qty: 1, cantidad_recibida: 1 },
                   ]) as LineaRecepcion[]).map((linea, idx) => {
                     const destino = (linea.destino || 'CLIENTE').toUpperCase();
                     return (

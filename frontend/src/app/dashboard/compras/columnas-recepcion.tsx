@@ -13,9 +13,11 @@
 import type { ReactNode } from 'react';
 import type { ColumnaTabla } from '@/components/tabla';
 import { fechaCorta } from '@/lib/fechas-colombia';
-import { campoOrden } from '@/lib/tabla';
-import { grupoRecepcion, infoEstadoRecepcion } from '@/lib/estados-compras';
+import {
+  numeroRecepcion, pecDeRecepcion, proveedorDeRecepcion, esRecepcionPorConfirmar, infoEstadoRecepcion,
+} from '@/lib/estados-compras';
 import { numeroFinito } from '@/lib/kpis';
+import { CHIP, titulosDeOrdenPec } from './columnas-pec';
 
 /**
  * Lo que leen las columnas de una fila de GET /compras/recepciones (el _gr_dict de T12). dias_retraso es del servidor
@@ -39,21 +41,14 @@ export type FilaColumnasRecepcion = {
   dias_retraso?: number | null;
 };
 
-// El chip estándar de las tablas del bloque (el de columnas-pec.tsx): la misma marca en Lista y en Kanban.
-const CHIP = 'inline-block max-w-full truncate rounded-full border px-1.5 py-0.5 font-bold leading-tight';
-
-/** El número de la recepción; sin él, ENINV-id (como siempre). */
-export const numeroDeRecepcion = (r: FilaColumnasRecepcion) => r.numero || `ENINV-${r.id}`;
-/** El PEC de origen: su número, PEC-id, o 'Manual' (una entrada sin pedido de compra). */
-export const pecDeRecepcion = (r: FilaColumnasRecepcion) => r.pec_numero || (r.pec_id ? `PEC-${r.pec_id}` : 'Manual');
-/** El proveedor de la recepción; sin él, 'Sin proveedor' (antes salía un «Proveedor Nebulae» inventado). */
-export const proveedorDeRecepcion = (r: FilaColumnasRecepcion) => r.supplier_name || r.proveedor_nombre || 'Sin proveedor';
+// m13: el número, el PEC de origen, el proveedor y «por confirmar» son UNA regla (estados-compras.js, con sus casos); aquí se
+// reexportan para las pantallas. El chip y los títulos de orden son los de columnas-pec.tsx (m6).
+export { numeroRecepcion, pecDeRecepcion, proveedorDeRecepcion, esRecepcionPorConfirmar };
+export const titulosDeOrdenRecepcion = titulosDeOrdenPec;
 /** Las líneas de la recepción: las que trae la fila, o items_count; 0 si no hay datos (antes se pintaba 1). */
 export const lineasDeRecepcion = (r: FilaColumnasRecepcion) => (r.lineas || r.productos || []).length || numeroFinito(r.items_count) || 0;
 /** El día de la recepción (la fecha de recepción o, sin ella, la de creación) en Colombia; sin fecha, '—'. */
 export const textoFechaRecepcion = (r: FilaColumnasRecepcion) => fechaCorta(r.fecha_recepcion || r.created_at) || '—';
-/** Una recepción por confirmar (BORRADOR): la única que se cuenta y se confirma (R9, grupoRecepcion). */
-export const esPorConfirmar = (r: { estado: string }) => grupoRecepcion(typeof r.estado === 'string' ? r.estado.trim() : r.estado) === 'por_confirmar';
 /** El retraso de la recepción en días (dias_retraso del servidor), o 0. */
 export const retrasoDeRecepcion = (r: FilaColumnasRecepcion) => Math.max(0, numeroFinito(r.dias_retraso) ?? 0);
 
@@ -73,7 +68,7 @@ export function CeldaRetraso({ r }: { r: FilaColumnasRecepcion }) {
 /** Stock: 'Sí' si la recepción actualizó el stock; 'Pendiente' si falta confirmarla; '—' en las demás. */
 export function CeldaStock({ r }: { r: FilaColumnasRecepcion }) {
   if (r.stock_actualizado) return <span className={`${CHIP} text-[11px] border-emerald-200 bg-emerald-50 text-emerald-700`}>Sí</span>;
-  if (esPorConfirmar(r)) return <span className={`${CHIP} text-[11px] border-slate-200 bg-slate-50 text-slate-600`}>Pendiente</span>;
+  if (esRecepcionPorConfirmar(r)) return <span className={`${CHIP} text-[11px] border-slate-200 bg-slate-50 text-slate-600`}>Pendiente</span>;
   return <span className="text-xs text-slate-400">—</span>;
 }
 
@@ -86,8 +81,8 @@ export function CeldaStock({ r }: { r: FilaColumnasRecepcion }) {
 export function columnasRecepcion<T extends FilaColumnasRecepcion>(celdaAcciones: (r: T) => ReactNode): ColumnaTabla<T>[] {
   return [
     { id: 'numero', titulo: 'Recepción #', ancho: 112, clave: true, fija: 'izquierda', ordenable: 'numero',
-      titleCelda: (r) => numeroDeRecepcion(r),
-      celda: (r) => <span className="block truncate text-xs font-black text-teal-700">{numeroDeRecepcion(r)}</span> },
+      titleCelda: (r) => numeroRecepcion(r),
+      celda: (r) => <span className="block truncate text-xs font-black text-teal-700">{numeroRecepcion(r)}</span> },
     { id: 'pec', titulo: 'PEC origen', ancho: 92, ordenable: 'pec', titleCelda: (r) => pecDeRecepcion(r),
       celda: (r) => <span className="block truncate text-xs font-bold text-purple-700">{pecDeRecepcion(r)}</span> },
     { id: 'proveedor', titulo: 'Proveedor', ancho: 120, flexible: true, ordenable: 'proveedor', titleCelda: (r) => proveedorDeRecepcion(r),
@@ -106,9 +101,4 @@ export function columnasRecepcion<T extends FilaColumnasRecepcion>(celdaAcciones
     { id: 'stock', titulo: 'Stock', ancho: 76, alinear: 'centro', ocultaPorDefecto: true, celda: (r) => <CeldaStock r={r} /> },
     { id: 'acciones', titulo: 'Acciones', ancho: 156, clave: true, fija: 'derecha', celda: celdaAcciones },
   ];
-}
-
-/** {campo de orden: título}, para el chip «Orden: Fecha ↓», solo de las columnas que se ordenan. */
-export function titulosDeOrdenRecepcion<T>(columnas: ReadonlyArray<ColumnaTabla<T>>): Record<string, string> {
-  return Object.fromEntries(columnas.flatMap((c) => { const campo = campoOrden(c); return campo ? [[campo, c.titulo]] : []; }));
 }
