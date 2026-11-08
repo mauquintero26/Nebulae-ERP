@@ -745,4 +745,65 @@ console.log('--- TEST 20 (B4 T17, KPI-inventario punto 4 y TABLA-inventario punt
   ]).map((b) => b.warehouse_id), [4, 9]);
 }
 
+console.log('--- TEST 21 (B4 T18, KPI-inventario punto 5 y 6): las tarjetas de Stock y de Abastecimiento ---');
+{
+  // `data` de GET /inventory/stats (T13: resumen_existencias + bodegas). Los nombres son los de test_inventario_stats.py.
+  const stats = {
+    skus_total: 6, unidades_fisicas: 26, unidades_reservadas: 4, unidades_disponibles: 22, unidades_en_transito: 9,
+    valor_inventario_cop: 4927538, skus_sin_costo: 3, skus_agotados: 2, skus_bajo_minimo: 3, skus_abastecidos: 1,
+    disponibilidad_pct: 84.6, bodegas: 2,
+  };
+  const stock = kpisLib.tarjetasStock;
+  assert.equal(typeof stock, 'function', 'tarjetasStock existe');
+  assert.deepEqual(stock(stats), {
+    fisico: { valor: 26, ayuda: 'Lo que hay físicamente en las bodegas.' },
+    reservado: { valor: 4, ayuda: 'Reservas activas que no han vencido.' },
+    disponible: { valor: 22, ayuda: 'Físico menos comprometido, nunca negativo.' },
+    en_transito: { valor: 9, ayuda: 'Pedido al proveedor y aún sin recibir.' },
+  });
+  // Cada tarjeta lee SU clave (un mutante que cruce dos da otro número). Un 0 del servidor es 0; un Decimal en texto vale;
+  // lo que no es un número queda en null (barra gris o «—»), nunca 0.
+  assert.deepEqual(stock({ unidades_fisicas: 0, unidades_reservadas: '2,5x', unidades_disponibles: '7.5', unidades_en_transito: null }), {
+    fisico: { valor: 0, ayuda: 'Lo que hay físicamente en las bodegas.' },
+    reservado: { valor: null, ayuda: 'Reservas activas que no han vencido.' },
+    disponible: { valor: 7.5, ayuda: 'Físico menos comprometido, nunca negativo.' },
+    en_transito: { valor: null, ayuda: 'Pedido al proveedor y aún sin recibir.' },
+  });
+  for (const malo of [null, undefined, 'x', [1], 3]) assert.equal(stock(malo), null, String(malo));
+  // Una clave que no llega queda en null (la barra o «—»), cada tarjeta por su cuenta: nunca 0.
+  assert.deepEqual(['fisico', 'reservado', 'disponible', 'en_transito'].map((k) => stock({})[k].valor), [null, null, null, null]);
+  assert.equal(stock({ unidades_disponibles: 0 }).disponible.valor, 0, 'un 0 del servidor es 0');
+  // Los ids del catálogo (la ÚNICA fuente de nombres).
+  assert.equal(etiquetaKpi('inv_fisico'), 'Unidades en bodega');
+  assert.equal(etiquetaKpi('inv_reservado'), 'Unidades comprometidas');
+  assert.equal(etiquetaKpi('inv_disponible'), 'Disponibles para vender');
+  assert.equal(etiquetaKpi('inv_en_transito'), 'Unidades en tránsito');
+
+  // Abastecimiento: tres tarjetas de /inventory/stats y pec_activos de /compras/stats (T12, RP94), cada una con su fuente.
+  const abasto = kpisLib.tarjetasAbastecimiento;
+  assert.equal(typeof abasto, 'function', 'tarjetasAbastecimiento existe');
+  assert.deepEqual(abasto(stats, { pec_activos: 5, pec_total: 99, activos: 7 }), {
+    agotados: { valor: 2, ayuda: 'Orden urgente requerida.' },
+    bajo_minimo: { valor: 3, ayuda: 'Lo disponible llegó al mínimo.' },
+    abastecidos: { valor: 1, ayuda: 'Lo disponible está sobre el mínimo.' },
+    pec_activos: { valor: 5, ayuda: 'Pedidos de compra en curso.' },
+  }, 'pec_activos es la clave pec_activos (no pec_total ni activos)');
+  // Las dos fuentes son independientes: si una falta (cargando o con error), solo SUS tarjetas quedan en null.
+  assert.deepEqual(abasto(stats, null).pec_activos, { valor: null, ayuda: 'Pedidos de compra en curso.' });
+  assert.equal(abasto(stats, null).agotados.valor, 2);
+  assert.equal(abasto(null, { pec_activos: 5 }).pec_activos.valor, 5);
+  assert.deepEqual(abasto(null, { pec_activos: 5 }).agotados, { valor: null, ayuda: 'Orden urgente requerida.' });
+  assert.equal(abasto(null, null).bajo_minimo.valor, null);
+  assert.equal(abasto(stats, { pec_activos: 0 }).pec_activos.valor, 0, 'un 0 del servidor es 0');
+  assert.equal(abasto(stats, { pec_activos: 'x' }).pec_activos.valor, null);
+  assert.equal(abasto({ skus_agotados: 0, skus_bajo_minimo: '4', skus_abastecidos: undefined }, {}).bajo_minimo.valor, 4);
+  assert.equal(abasto({ skus_agotados: 0 }, {}).agotados.valor, 0);
+  assert.equal(abasto({ skus_agotados: 0 }, {}).abastecidos.valor, null);
+  for (const malo of ['x', [1], 3]) assert.equal(abasto(malo, malo).agotados.valor, null, String(malo));
+  assert.equal(etiquetaKpi('inv_agotados'), 'Agotados');
+  assert.equal(etiquetaKpi('inv_bajo_minimo'), 'Bajo el mínimo');
+  assert.equal(etiquetaKpi('inv_abastecidos'), 'Bien abastecidos');
+  assert.equal(etiquetaKpi('pec_activos'), 'Pedidos de compra activos');
+}
+
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

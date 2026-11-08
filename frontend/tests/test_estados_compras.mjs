@@ -1894,4 +1894,513 @@ console.log('--- TEST 41 (B4 T16B r1): fecha del ítem, aviso de los 200, enlace
   assert.ok(!/fecha_creacion/.test(lis), 'I1: la Lista lee `fecha`');
 }
 
+console.log('--- TEST 42 (B4 T18; TABLA-inventario 5 a 8, KANBAN-resto; RP47 a RP49, RP53, RP54): lo puro de Stock, Abastecimiento, Kardex y Productos ---');
+{
+  const { humanizarCodigo } = await import('../src/lib/estados-pedido.js');
+  const { etiquetaTarifaCatalogo } = await import('../src/lib/iva.js');
+  const clavesDe = (cols) => cols.map((c) => c.clave);
+  const NOMBRES = ['TEXTO_SOLO_VER_STOCK', 'TEXTO_SOLO_VER_KARDEX', 'TEXTO_SOLO_VER_PRODUCTOS', 'VISTAS_STOCK', 'VISTAS_ABASTECIMIENTO',
+    'pestanasExistencias', 'consultaColumnaStock', 'tarjetaExistencia', 'textoVacioStock', 'DIRECCIONES_KARDEX', 'infoDireccionKardex',
+    'COLUMNAS_KARDEX', 'extraKardex', 'direccionesDeColumnaKardex', 'consultaColumnaKardex', 'numeroMovimiento', 'tarjetaMovimiento',
+    'textoFechaMovimiento', 'textoVacioKardex', 'MAX_COLUMNAS_PRODUCTOS', 'columnasProductos', 'extraProductos',
+    'consultaColumnaProducto', 'precioDeProducto', 'costoDeProducto', 'tarjetaProducto', 'textoVacioProductos',
+    'pedirEnlaceProducto', 'llegadaEnlaceProducto'];
+  for (const n of NOMBRES) assert.ok(ec[n] !== undefined, `${n} existe`);
+
+  // ── los textos de los tableros solo para ver (R11): el de Kardex es el de RP54, palabra por palabra ──
+  assert.equal(ec.TEXTO_SOLO_VER_KARDEX, 'Este tablero es para ver: los movimientos en cuarentena o sin dirección solo salen en la lista.');
+  assert.equal(ec.TEXTO_SOLO_VER_STOCK, 'Este tablero es para ver: el nivel de stock sale de las existencias de cada bodega y no se cambia arrastrando tarjetas.');
+  assert.equal(ec.TEXTO_SOLO_VER_PRODUCTOS, 'Este tablero es para ver: la categoría de un producto se cambia en su ficha.');
+
+  // ── Stock y Abastecimiento: las pestañas son el estado del stock (RP53), no `vista` del servidor ──
+  assert.deepEqual(ec.VISTAS_STOCK, {
+    todos: {}, agotado: { estado_stock: 'agotado' }, bajo_minimo: { estado_stock: 'bajo_minimo' }, abastecido: { estado_stock: 'abastecido' },
+  });
+  assert.deepEqual(Object.keys(ec.VISTAS_ABASTECIMIENTO), ['agotado', 'bajo_minimo', 'abastecido'], 'RP53: sin «Todos»');
+  assert.ok(Object.isFrozen(ec.VISTAS_STOCK) && Object.isFrozen(ec.VISTAS_ABASTECIMIENTO));
+  const conteos = { todos: 9, agotados: 2, bajo_minimo: 3, abastecidos: 4, con_fisico: 7 };
+  assert.deepEqual(ec.pestanasExistencias(conteos), [
+    { id: 'todos', etiqueta: 'Todos', conteo: 9, alerta: false },
+    { id: 'agotado', etiqueta: 'Agotado', conteo: 2, alerta: true },
+    { id: 'bajo_minimo', etiqueta: 'Bajo el mínimo', conteo: 3, alerta: true },
+    { id: 'abastecido', etiqueta: 'Bien abastecido', conteo: 4, alerta: false },
+  ], 'cada pestaña lee SU conteo (agotados, no agotado)');
+  assert.deepEqual(ec.pestanasExistencias(conteos, { conTodos: false }).map((p) => p.id), ['agotado', 'bajo_minimo', 'abastecido']);
+  assert.deepEqual(ec.pestanasExistencias(null).map((p) => p.conteo), [null, null, null, null], 'cargando: null (la barra gris), nunca 0');
+  assert.deepEqual(ec.pestanasExistencias({ agotados: 0, bajo_minimo: 0 }).map((p) => [p.conteo, p.alerta]),
+    [[null, false], [0, false], [0, false], [null, false]], 'un 0 del servidor es 0 y no alerta');
+  assert.equal(ec.pestanasExistencias({ agotados: '5' })[1].conteo, 5);
+  assert.equal(ec.pestanasExistencias('x')[0].conteo, null);
+
+  const estadoStock = estadoTablaInicial({ q: 'oso', tamano: 50, pagina: 3, orden: '-disponible', vista: 'agotado', estados: ['x'] });
+  const bajo = COLUMNAS_STOCK[1];
+  assert.equal(ec.consultaColumnaStock(estadoStock, bajo, { por: 'sku', categoria_id: '7' }, { limit: 25, offset: 0 }),
+    'q=oso&orden=-disponible&limit=25&offset=0&por=sku&categoria_id=7&estado_stock=bajo_minimo',
+    'sin vista ni estados (stock-tabla no los tiene), el estado de la columna, la búsqueda y el orden del MISMO estado, y limit y offset de la columna');
+  assert.equal(ec.consultaColumnaStock(estadoTablaInicial({}), COLUMNAS_STOCK[0], { por: 'sku' }, { limit: 0, offset: 0 }),
+    'limit=0&offset=0&por=sku&estado_stock=agotado', 'una plegada pide limit=0 (stock-tabla lo acepta)');
+  assert.equal(ec.consultaColumnaStock(estadoStock, COLUMNAS_STOCK[2], null, { limit: 25, offset: 25 }),
+    'q=oso&orden=-disponible&limit=25&offset=25&estado_stock=abastecido');
+  for (const mala of [null, undefined, {}, { estados: [] }, { estados: ['otro'] }, { estados: ['toString'] }]) {
+    assert.equal(ec.consultaColumnaStock(estadoStock, mala, {}, { limit: 25, offset: 0 }), null, JSON.stringify(mala));
+  }
+  assert.ok(!/sin_movimiento|reciente|vista|estados=/.test(ec.consultaColumnaStock(estadoStock, bajo, {}, { limit: 25, offset: 0 })),
+    'stock-tabla da 422 con un orden de tiempo');
+
+  const existencia = {
+    sku_id: 1, sku: 'NEB-001', producto: 'Oso', categoria: 'Peluches', bodega: null, warehouse_id: null, fisico: 10, reservado: 4,
+    disponible: 6, cuarentena: 0, en_transito: 5, precio: 12000, costo: 8000, valorizacion: 80000, minimo: 8,
+    estado_stock: 'bajo_minimo', rastrear_inventario: true,
+  };
+  assert.deepEqual(ec.tarjetaExistencia(existencia), {
+    numero: 'NEB-001', tipo: null, titulo: 'Oso', subtitulo: 'Peluches', monto: null,
+    estado: { label: 'Bajo el mínimo', clases: ESTADOS_STOCK.bajo_minimo.clases },
+    chips: [{ texto: 'Disponible 6', tono: 'amber' }, { texto: 'Físico 10', tono: 'slate' }, { texto: 'En tránsito 5', tono: 'blue' }],
+    tiempo: 'Reservado 4', atrasada: false, accionPrincipal: null,
+  });
+  const sinTransito = ec.tarjetaExistencia({ ...existencia, en_transito: 0, estado_stock: 'agotado', disponible: 0, bodega: 'Bodega Norte', reservado: 0 });
+  assert.deepEqual(sinTransito.chips, [{ texto: 'Disponible 0', tono: 'rose' }, { texto: 'Físico 10', tono: 'slate' }, { texto: 'Mínimo 8', tono: 'slate' }]);
+  assert.equal(sinTransito.subtitulo, 'Peluches · Bodega Norte');
+  assert.equal(sinTransito.tiempo, null, 'sin reservas, sin línea');
+  assert.equal(sinTransito.estado.label, 'Agotado');
+  assert.equal(ec.tarjetaExistencia({ ...existencia, estado_stock: 'abastecido' }).chips[0].tono, 'emerald');
+  assert.equal(ec.tarjetaExistencia({ ...existencia, rastrear_inventario: false }).tiempo, 'Sin control de inventario');
+  const rara = ec.tarjetaExistencia({ sku: 'X', estado_stock: 'raro', fisico: '2,5x', disponible: null });
+  assert.equal(rara.titulo, 'Sin nombre');
+  assert.equal(rara.estado, null, 'un estado desconocido no inventa insignia');
+  assert.deepEqual(rara.chips.slice(0, 2), [{ texto: 'Disponible —', tono: 'slate' }, { texto: 'Físico —', tono: 'slate' }]);
+  assert.equal(ec.tarjetaExistencia({ sku: 'X', disponible: 2.5, fisico: 3 }).chips[0].texto, 'Disponible 2,5', 'sin redondear');
+
+  assert.deepEqual(ec.textoVacioStock({}), {
+    titulo: 'Todavía no hay existencias en las bodegas.',
+    ayuda: 'Las existencias se registran al recibir mercancía en Recepciones o con un ajuste de inventario.',
+  });
+  assert.deepEqual(ec.textoVacioStock({ q: 'oso', categoria: 'Peluches' }), {
+    titulo: 'Ninguna existencia coincide con «oso» en la categoría «Peluches».',
+    ayuda: 'Busca por el código del SKU o por el nombre del producto.',
+  });
+  assert.equal(ec.textoVacioStock({ q: '  ', vista: 'agotado' }).titulo, 'Ninguna referencia está agotada.');
+  assert.equal(ec.textoVacioStock({ vista: 'bajo_minimo' }).titulo, 'Ninguna referencia está bajo el mínimo.');
+  assert.equal(ec.textoVacioStock({ vista: 'abastecido' }).titulo, 'Ninguna referencia está bien abastecida.');
+  assert.deepEqual(ec.textoVacioStock({ vista: 'agotado', categoria: 'Peluches' }), {
+    titulo: 'Ninguna referencia está agotada en la categoría «Peluches».',
+    ayuda: 'Quita el filtro de categoría para ver las demás.',
+  });
+  assert.deepEqual(ec.textoVacioStock({ categoria: 'Peluches' }), {
+    titulo: 'Ninguna existencia en la categoría «Peluches».', ayuda: 'Quita el filtro de categoría para ver las demás.',
+  });
+  assert.equal(ec.textoVacioStock(null).titulo, 'Todavía no hay existencias en las bodegas.');
+
+  // ── Kardex: direcciones, columnas Entradas · Salidas (RP54) y la consulta de cada columna ──
+  assert.deepEqual(Object.keys(ec.DIRECCIONES_KARDEX),
+    ['IN', 'OUT', 'TRANSFER_IN', 'TRANSFER_OUT', 'ADJUST_IN', 'ADJUST_OUT', 'QUARANTINE', 'SCRAP', 'RETURN_IN']);
+  assert.deepEqual(Object.entries(ec.DIRECCIONES_KARDEX).map(([k, v]) => [k, v.label, v.signo]), [
+    ['IN', 'Entrada', '+'], ['OUT', 'Salida', '-'], ['TRANSFER_IN', 'Traslado (entra)', '+'], ['TRANSFER_OUT', 'Traslado (sale)', '-'],
+    ['ADJUST_IN', 'Ajuste (entrada)', '+'], ['ADJUST_OUT', 'Ajuste (salida)', '-'], ['QUARANTINE', 'Cuarentena', ''],
+    ['SCRAP', 'Pérdida o destrucción', '-'], ['RETURN_IN', 'Devolución de cliente', '+'],
+  ]);
+  assert.ok(Object.isFrozen(ec.DIRECCIONES_KARDEX) && Object.isFrozen(ec.DIRECCIONES_KARDEX.IN));
+  assert.equal(ec.infoDireccionKardex('IN'), ec.DIRECCIONES_KARDEX.IN);
+  assert.deepEqual([ec.infoDireccionKardex(null).label, ec.infoDireccionKardex('').label, ec.infoDireccionKardex(null).signo], ['Sin dirección', 'Sin dirección', '']);
+  assert.equal(ec.infoDireccionKardex('PERDIDA_RARA').label, humanizarCodigo('PERDIDA_RARA'), 'una desconocida sale humanizada, nunca el código');
+  assert.equal(ec.infoDireccionKardex('toString').label, humanizarCodigo('toString'), 'una clave del prototipo no es una dirección');
+  assert.deepEqual(ec.COLUMNAS_KARDEX.map((c) => [c.clave, c.titulo, c.tono, c.cerrada, c.estados]), [
+    ['entradas', 'Entradas', 'emerald', false, ['IN', 'ADJUST_IN', 'TRANSFER_IN']],
+    ['salidas', 'Salidas', 'rose', false, ['OUT', 'ADJUST_OUT', 'TRANSFER_OUT']],
+  ]);
+  assert.doesNotThrow(() => kanbanLib.definirColumnas(ec.COLUMNAS_KARDEX));
+  const [entradas, salidas] = ec.COLUMNAS_KARDEX;
+  const todos = { skuId: 12, bodega: '2', propietario: '', direccion: '', desde: '2026-10-01', hasta: '' };
+  assert.deepEqual(ec.extraKardex({ skuId: 12, bodega: '2', propietario: 'MAU', direccion: 'IN', desde: '2026-10-01', hasta: '2026-10-31' }), {
+    sku_id: 12, warehouse_id: '2', owner: 'MAU', direction: 'IN', start_date: '2026-10-01', end_date: '2026-10-31',
+  });
+  assert.deepEqual(ec.extraKardex({ skuId: null, bodega: '', propietario: '', direccion: '', desde: '', hasta: '' }),
+    { sku_id: null, warehouse_id: null, owner: null, direction: null, start_date: null, end_date: null }, 'vacío = no se manda');
+  assert.deepEqual(ec.extraKardex(null), { sku_id: null, warehouse_id: null, owner: null, direction: null, start_date: null, end_date: null });
+  assert.deepEqual(ec.direccionesDeColumnaKardex(entradas, ''), ['IN', 'ADJUST_IN', 'TRANSFER_IN']);
+  assert.deepEqual(ec.direccionesDeColumnaKardex(entradas, null), ['IN', 'ADJUST_IN', 'TRANSFER_IN']);
+  assert.deepEqual(ec.direccionesDeColumnaKardex(entradas, 'IN'), ['IN']);
+  assert.deepEqual(ec.direccionesDeColumnaKardex(entradas, 'in'), ['IN'], 'el servidor las lee en mayúsculas');
+  assert.deepEqual(ec.direccionesDeColumnaKardex(salidas, 'IN'), [], 'la dirección elegida deja vacía la otra columna');
+  assert.deepEqual(ec.direccionesDeColumnaKardex(salidas, 'TRANSFER_OUT'), ['TRANSFER_OUT']);
+  for (const d of ['QUARANTINE', 'SCRAP', 'RETURN_IN']) {
+    assert.deepEqual([ec.direccionesDeColumnaKardex(entradas, d), ec.direccionesDeColumnaKardex(salidas, d)], [[], []], `${d} solo sale en la lista`);
+  }
+  assert.deepEqual(ec.direccionesDeColumnaKardex(null, ''), []);
+  assert.deepEqual(ec.direccionesDeColumnaKardex({}, ''), []);
+  const estadoKardex = estadoTablaInicial({ q: 'x', tamano: 50, pagina: 4, orden: '-fecha', vista: 'a', estados: ['b'] });
+  assert.equal(ec.consultaColumnaKardex(estadoKardex, entradas, todos, { limit: 25, offset: 0 }),
+    'limit=25&offset=0&sku_id=12&warehouse_id=2&direction=IN,ADJUST_IN,TRANSFER_IN&start_date=2026-10-01',
+    'direction en CSV; sin q, orden, vista ni estados (el Kardex no los tiene)');
+  assert.equal(ec.consultaColumnaKardex(estadoKardex, salidas, { ...todos, direccion: 'OUT', hasta: '2026-10-31' }, { limit: 25, offset: 25 }),
+    'limit=25&offset=25&sku_id=12&warehouse_id=2&direction=OUT&start_date=2026-10-01&end_date=2026-10-31');
+  assert.equal(ec.consultaColumnaKardex(estadoKardex, salidas, { ...todos, direccion: 'IN' }, { limit: 25, offset: 0 }), null, 'sin direcciones en común, no se pide');
+  assert.equal(ec.consultaColumnaKardex(estadoKardex, entradas, { ...todos, direccion: 'QUARANTINE' }, { limit: 25, offset: 0 }), null);
+  assert.match(ec.consultaColumnaKardex(estadoKardex, entradas, todos, { limit: 0, offset: 0 }), /^limit=1&/,
+    'el Kardex pide limit >= 1: una columna plegada pide 1 en lugar de 0 (con 0 daría 422)');
+  assert.match(ec.consultaColumnaKardex(estadoKardex, entradas, todos, { limit: 50, offset: 100 }), /^limit=50&offset=100&/);
+
+  // El movimiento y su tarjeta: la forma de GET /inventory/kardex (KardexMovementItem).
+  const movimiento = {
+    id: 41, operation_id: 9, operation_type: 'RECEIPT', source_document_type: 'ENINV', source_document_numero: 'ENINV-5',
+    sku_id: 1, sku: 'NEB-001', product_name: 'Oso', quantity: '3.0000', direction: 'IN', owner: 'NEBULAE', warehouse_id: 2,
+    warehouse_name: 'Bodega Norte', unit_cost_cop: '8000.00', created_at: '2026-10-04T03:00:00', created_by: 'ana', idempotency_key: 'k',
+  };
+  assert.equal(ec.numeroMovimiento(movimiento), 'ENINV-5');
+  assert.equal(ec.numeroMovimiento({ ...movimiento, source_document_numero: '  ' }), 'RECEIPT #9');
+  assert.equal(ec.numeroMovimiento({ id: 3, operation_type: null, operation_id: null }), 'Movimiento #3');
+  assert.deepEqual(ec.textoFechaMovimiento('2026-10-04T03:00:00'), { dia: '3 oct 2026', hora: '22:00' }, 'sin zona = UTC; el día y la hora son de Colombia');
+  assert.deepEqual(ec.textoFechaMovimiento('2026-10-04T15:05:00Z'), { dia: '4 oct 2026', hora: '10:05' });
+  assert.deepEqual(ec.textoFechaMovimiento(null), { dia: '—', hora: '' });
+  assert.deepEqual(ec.textoFechaMovimiento('no es fecha'), { dia: '—', hora: '' });
+  assert.deepEqual(ec.tarjetaMovimiento(movimiento), {
+    numero: 'ENINV-5', tipo: null, titulo: 'Oso', subtitulo: 'NEB-001 · Bodega Norte', monto: null,
+    estado: { label: 'Entrada', clases: ec.DIRECCIONES_KARDEX.IN.clases },
+    chips: [{ texto: '+3', tono: 'emerald' }, { texto: 'NEBULAE', tono: 'slate' }],
+    tiempo: '3 oct 2026 · 22:00', atrasada: false, accionPrincipal: null,
+  });
+  const salida = ec.tarjetaMovimiento({ ...movimiento, direction: 'ADJUST_OUT', quantity: 2.5, owner: 'MAU', product_name: null, warehouse_name: null });
+  assert.deepEqual(salida.chips, [{ texto: '-2,5', tono: 'rose' }, { texto: 'MAU', tono: 'slate' }]);
+  assert.equal(salida.titulo, 'NEB-001');
+  assert.equal(salida.subtitulo, 'NEB-001');
+  assert.equal(ec.tarjetaMovimiento({ ...movimiento, direction: null }).chips[0].tono, 'amber', 'sin dirección no hay signo');
+  assert.equal(ec.tarjetaMovimiento({ ...movimiento, owner: null }).chips[1].texto, 'NEBULAE', 'sin propietario, Nebulae (como la tabla de hoy)');
+  assert.equal(ec.tarjetaMovimiento({ ...movimiento, sku: null, product_name: null }).titulo, 'SKU #1');
+  assert.deepEqual(ec.textoVacioKardex(true), { titulo: 'Ningún movimiento coincide con esos filtros.', ayuda: 'Quita algún filtro o amplía las fechas.' });
+  assert.deepEqual(ec.textoVacioKardex(false), {
+    titulo: 'Todavía no hay movimientos en el Kardex.', ayuda: 'Se registran al recibir, despachar, trasladar o ajustar inventario.',
+  });
+
+  // ── Productos: columnas por categoría (máximo 12), consulta de cada columna y tarjeta ──
+  assert.equal(ec.MAX_COLUMNAS_PRODUCTOS, 12);
+  const tres = ec.columnasProductos([{ id: 5, name: 'Peluches' }, { id: 2, name: 'Ábaco' }, { id: 9, name: 'Muñecas' }]);
+  assert.deepEqual(tres.columnas.map((c) => [c.clave, c.titulo, c.estados, c.cerrada]),
+    [['cat-2', 'Ábaco', ['2'], false], ['cat-9', 'Muñecas', ['9'], false], ['cat-5', 'Peluches', ['5'], false]], 'por nombre, en español');
+  assert.deepEqual([tres.masCategorias, tres.aviso], [0, null]);
+  assert.doesNotThrow(() => kanbanLib.definirColumnas(tres.columnas));
+  const quince = ec.columnasProductos(Array.from({ length: 15 }, (_, i) => ({ id: i + 1, name: `Cat ${String(i + 1).padStart(2, '0')}` })));
+  assert.equal(quince.columnas.length, 12);
+  assert.deepEqual(clavesDe(quince.columnas).slice(0, 2), ['cat-1', 'cat-2']);
+  assert.deepEqual([quince.masCategorias, quince.aviso], [3, '3 categorías más: usa la lista']);
+  assert.doesNotThrow(() => kanbanLib.definirColumnas(quince.columnas));
+  assert.equal(new Set(quince.columnas.map((c) => c.clave)).size, 12);
+  const trece = ec.columnasProductos(Array.from({ length: 13 }, (_, i) => ({ id: i + 1, name: `C${String(i + 1).padStart(2, '0')}` })));
+  assert.deepEqual([trece.columnas.length, trece.masCategorias, trece.aviso], [12, 1, '1 categoría más: usa la lista']);
+  assert.equal(ec.columnasProductos(Array.from({ length: 12 }, (_, i) => ({ id: i + 1, name: `C${i}` }))).aviso, null, 'justo 12: sin aviso');
+  assert.equal(ec.columnasProductos(quince.columnas.map(() => ({ id: 1, name: 'Igual' }))).columnas.length, 1, 'un id repetido es una sola columna');
+  const sucias = ec.columnasProductos([null, 'x', { name: 'Sin id' }, { id: 'abc', name: 'Texto' }, { id: 4, name: '  ' }, { id: 6, name: 'Bien' }]);
+  assert.deepEqual(sucias.columnas.map((c) => [c.clave, c.titulo]), [['cat-6', 'Bien'], ['cat-4', 'Sin nombre']]);
+  for (const mala of [null, undefined, 'x', {}, 4]) assert.deepEqual(ec.columnasProductos(mala), { columnas: [], masCategorias: 0, aviso: null }, String(mala));
+  assert.ok(new Set(quince.columnas.map((c) => c.tono)).size > 1, 'los tonos van variando');
+
+  assert.deepEqual(ec.extraProductos({ revision: true, sinTarifa: true }), { necesita_revision: true, sin_tarifa_iva: true });
+  assert.deepEqual(ec.extraProductos({ revision: false, sinTarifa: false }), { necesita_revision: null, sin_tarifa_iva: null },
+    'apagado = no se manda (sin_tarifa_iva=false pediría los que SÍ tienen tarifa)');
+  assert.deepEqual(ec.extraProductos(null), { necesita_revision: null, sin_tarifa_iva: null });
+  const estadoProd = estadoTablaInicial({ q: 'oso', orden: '-nombre', tamano: 50, pagina: 3, vista: 'x', estados: ['y'] });
+  const colPeluches = ec.columnasProductos([{ id: 7, name: 'Peluches' }]).columnas[0];
+  assert.equal(ec.consultaColumnaProducto(estadoProd, colPeluches, { revision: true, sinTarifa: false }, { limit: 25, offset: 0 }),
+    'q=oso&orden=-nombre&limit=25&offset=0&necesita_revision=1&category_id=7',
+    'RP47: siempre limit y offset; q (no search); la categoría de la columna; sin vista ni estados');
+  assert.equal(ec.consultaColumnaProducto(estadoTablaInicial({}), colPeluches, null, { limit: 0, offset: 0 }),
+    'limit=0&offset=0&category_id=7', 'una plegada pide limit=0 con offset=0 (sin offset, /products devuelve todo)');
+  assert.equal(ec.consultaColumnaProducto(estadoTablaInicial({}), colPeluches, { revision: true, sinTarifa: true }, { limit: 25, offset: 50 }),
+    'limit=25&offset=50&necesita_revision=1&sin_tarifa_iva=1&category_id=7');
+  for (const mala of [null, undefined, {}, { estados: [] }, { estados: ['abc'] }, { estados: ['0'] }, { estados: ['-3'] }]) {
+    assert.equal(ec.consultaColumnaProducto(estadoProd, mala, {}, { limit: 25, offset: 0 }), null, JSON.stringify(mala));
+  }
+  assert.ok(!/sin_movimiento|reciente/.test(ec.consultaColumnaProducto(estadoProd, colPeluches, {}, { limit: 25, offset: 0 })), '/products da 422 con un orden de tiempo');
+
+  // precio_venta y costo son claves NUEVAS de /products (RP91): el costo $0 de quick-create es «sin costo», como en existencias.
+  assert.equal(ec.precioDeProducto({ precio_venta: 12000 }), 12000);
+  assert.equal(ec.precioDeProducto({ precio_venta: '12000.00' }), 12000);
+  assert.equal(ec.precioDeProducto({ sale_price: 5000 }), null, 'sale_price no es una clave de /products');
+  for (const sin of [{}, null, { precio_venta: null }, { precio_venta: 0 }, { precio_venta: 'x' }]) assert.equal(ec.precioDeProducto(sin), null, JSON.stringify(sin));
+  assert.equal(ec.costoDeProducto({ costo: 8000 }), 8000);
+  assert.equal(ec.costoDeProducto({ costo: '8000.00' }), 8000);
+  for (const sin of [{}, null, { costo: null }, { costo: 0 }, { costo: '0.00' }, { costo: -5 }, { cost_price: 9 }]) assert.equal(ec.costoDeProducto(sin), null, JSON.stringify(sin));
+
+  const producto = {
+    id: 3, name: 'Oso', type: 'Fisico', tarifa_iva: '19', necesita_revision: true, is_active: true, brand_id: 1, category_id: 7,
+    category: { id: 7, name: 'Peluches' }, skus: [{ id: 1, sku: 'NEB-001' }, { id: 2, sku: 'NEB-002' }], precio_venta: 12000, costo: 0, publicado: true,
+  };
+  assert.deepEqual(ec.tarjetaProducto(producto), {
+    numero: 'NEB-001', tipo: null, titulo: 'Oso', subtitulo: 'Peluches', monto: null,
+    estado: { label: 'Activo', clases: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200' } },
+    chips: [{ texto: 'Requiere revisión', tono: 'amber' }, { texto: etiquetaTarifaCatalogo('19'), tono: 'slate' }, { texto: 'Publicado', tono: 'emerald' }],
+    tiempo: 'Precio $12.000 · Costo —', atrasada: false, accionPrincipal: null,
+  });
+  const sinTarifa = ec.tarjetaProducto({ ...producto, tarifa_iva: null, necesita_revision: false, publicado: false, is_active: false, skus: [], costo: 8000, category: null });
+  assert.deepEqual(sinTarifa.chips, [{ texto: etiquetaTarifaCatalogo(null), tono: 'amber' }], 'sin tarifa, ámbar (como el Badge de hoy)');
+  assert.equal(sinTarifa.numero, 'PRD-3');
+  assert.equal(sinTarifa.subtitulo, null);
+  assert.deepEqual(sinTarifa.estado, { label: 'Inactivo', clases: { bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-200' } });
+  assert.equal(sinTarifa.tiempo, 'Precio $12.000 · Costo $8.000');
+  assert.equal(ec.tarjetaProducto({ id: 1, name: null }).titulo, 'Sin nombre');
+  assert.equal(ec.tarjetaProducto({ id: 1, precio_venta: null }).tiempo, 'Precio — · Costo —');
+  assert.deepEqual(ec.textoVacioProductos({ q: 'oso' }), { titulo: 'Ningún producto coincide con «oso».', ayuda: 'Busca por el nombre, la descripción o el código del SKU.' });
+  assert.equal(ec.textoVacioProductos({ q: 'oso', revision: true }).ayuda, 'Quita los filtros de revisión o de IVA para ver más.');
+  assert.equal(ec.textoVacioProductos({ revision: true }).titulo, 'Ningún producto requiere revisión.');
+  assert.equal(ec.textoVacioProductos({ sinTarifa: true }).titulo, 'Todos los productos tienen tarifa de IVA.');
+  assert.equal(ec.textoVacioProductos({ revision: true, sinTarifa: true }).titulo, 'Ningún producto requiere revisión y está sin tarifa de IVA.');
+  assert.deepEqual(ec.textoVacioProductos({}), { titulo: 'Sin productos. Crea el primero.', ayuda: 'Usa «Nuevo Producto» para crear el primero.' });
+  assert.equal(ec.textoVacioProductos(null).titulo, 'Sin productos. Crea el primero.');
+
+  // RP49: el enlace ?id= pide /products?id=N (la marca se pone cuando la respuesta LLEGÓ); ?sku= lo usa Abastecimiento, porque
+  // stock-tabla no trae el id del producto.
+  assert.deepEqual(ec.pedirEnlaceProducto(null, '5', null), { marca: 'id:5', ruta: '/products?id=5', id: 5, sku: null });
+  assert.equal(ec.pedirEnlaceProducto('id:5', '5', null), null, 'ya atendido: no vuelve a pedir');
+  assert.deepEqual(ec.pedirEnlaceProducto('id:4', '5', null)?.marca, 'id:5', 'otro id sí');
+  for (const mal of ['abc', '0', '-1', '5x', '', ' ', '1.5']) assert.equal(ec.pedirEnlaceProducto(null, mal, null), null, mal);
+  assert.equal(ec.pedirEnlaceProducto(null, null, null), null);
+  assert.equal(ec.pedirEnlaceProducto(null, undefined, undefined), null);
+  assert.deepEqual(ec.pedirEnlaceProducto(null, null, 'NEB 001/x'), {
+    marca: 'sku:NEB 001/x', ruta: '/products?q=NEB%20001%2Fx&limit=50&offset=0', id: null, sku: 'NEB 001/x',
+  });
+  assert.equal(ec.pedirEnlaceProducto('sku:NEB-001', null, 'NEB-001'), null);
+  assert.equal(ec.pedirEnlaceProducto(null, null, '   '), null);
+  assert.equal(ec.pedirEnlaceProducto(null, '5', 'NEB-001').marca, 'id:5', 'el id gana');
+  assert.equal(ec.pedirEnlaceProducto(null, 'abc', 'NEB-001').marca, 'sku:NEB-001', 'un id malo no tapa un SKU bueno');
+  const porId = ec.pedirEnlaceProducto(null, '3', null);
+  assert.deepEqual(ec.llegadaEnlaceProducto(porId, [{ id: 9 }, producto]), { marca: 'id:3', abrir: producto, avisar: false, texto: null });
+  assert.deepEqual(ec.llegadaEnlaceProducto(porId, [{ id: 9 }]), { marca: 'id:3', abrir: null, avisar: true, texto: 'No se encontró el producto #3.' });
+  assert.deepEqual(ec.llegadaEnlaceProducto(porId, null), { marca: 'id:3', abrir: null, avisar: true, texto: 'No se encontró el producto #3.' });
+  const porSku = ec.pedirEnlaceProducto(null, null, 'neb-002');
+  assert.equal(ec.llegadaEnlaceProducto(porSku, [{ id: 8, skus: [{ sku: 'NEB-0020' }] }, producto]).abrir, producto, 'el SKU EXACTO (sin mayúsculas), no el que lo contiene');
+  assert.deepEqual(ec.llegadaEnlaceProducto(porSku, [{ id: 8, skus: [{ sku: 'NEB-0020' }] }, { id: 7 }, null]), {
+    marca: 'sku:neb-002', abrir: null, avisar: true, texto: 'No se encontró un producto con el SKU «neb-002».',
+  });
+}
+
+// ── B4 T18: ayudas de las pruebas del cableado de Stock, Abastecimiento, Kardex y Productos ──
+const leerFuente = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+/** Que el fuente traiga ESE texto exacto (una condición, una prop, una llamada). */
+const trae = (fuente, texto, mensaje) => assert.ok(fuente.includes(texto), mensaje ?? `falta: ${texto}`);
+/** Que el fuente NO traiga ese texto. */
+const noTrae = (fuente, texto, mensaje) => assert.ok(!fuente.includes(texto), mensaje ?? `sobra: ${texto}`);
+/** El bloque `{…}` que empieza en la primera llave después de `desde` (con la llave de cierre que le corresponde), o ''. */
+function bloqueDesde(fuente, desde) {
+  const inicio = fuente.indexOf(desde);
+  if (inicio < 0) return '';
+  const abre = fuente.indexOf('{', inicio + desde.length - 1);
+  let nivel = 0;
+  for (let j = abre; j < fuente.length; j += 1) {
+    if (fuente[j] === '{') nivel += 1;
+    else if (fuente[j] === '}') { nivel -= 1; if (nivel === 0) return fuente.slice(abre, j + 1); }
+  }
+  return '';
+}
+/** El texto de una etiqueta JSX con las props en varias líneas: desde `desde` hasta el primer `/>` solo en su línea. */
+function etiquetaJsx(fuente, desde) {
+  const inicio = fuente.indexOf(desde);
+  if (inicio < 0) return '';
+  const fin = /\n\s*\/>/.exec(fuente.slice(inicio));
+  return fuente.slice(inicio, fin ? inicio + fin.index + fin[0].length : undefined);
+}
+/**
+ * La función `cargar: async (columna, {…}) => {…}` del tablero de una pantalla (el fuente), transpilada a JS y lista para
+ * ejecutarse con un entorno de dobles (estado, filtros, apiFetch…): la prueba mira lo que HACE, no cómo está escrita.
+ */
+function cargarDe(fuente) {
+  const marca = 'cargar: async (';
+  const inicio = fuente.indexOf(marca);
+  assert.ok(inicio >= 0, 'el tablero trae cargar');
+  const cuerpo = bloqueDesde(fuente, fuente.slice(inicio, fuente.indexOf('=> {', inicio) + 4));
+  assert.ok(cuerpo.length > 2, 'cargar cierra');
+  const flecha = fuente.slice(inicio + 'cargar: '.length, fuente.indexOf('=> {', inicio) + 3);
+  const js = tsLib.transpileModule(`(${flecha} ${cuerpo})`, { compilerOptions: { target: tsLib.ScriptTarget.ES2020 } })
+    .outputText.replace(/^"use strict";\s*/, '').trim().replace(/;$/, '');
+  return (entorno) => new Function('entorno', `with (entorno) { return ${js}; }`)(entorno);
+}
+/** Las columnas de una tabla (un arreglo `const COLUMNAS…: ColumnaTabla<…>[] = [ … ];`): por cada una, su id y si se ordena. */
+function columnasDe(fuente, nombre) {
+  const inicio = fuente.indexOf(`const ${nombre}: ColumnaTabla<`);
+  assert.ok(inicio >= 0, `${nombre} existe`);
+  const arreglo = fuente.slice(fuente.indexOf('= [', inicio), fuente.indexOf('\n];', inicio));
+  return arreglo.split(/\n {2}\{ id: '/).slice(1).map((trozo) => ({
+    id: trozo.slice(0, trozo.indexOf("'")),
+    ordenable: /ordenable: (true|'[a-z_]+')/.exec(trozo)?.[1] ?? null,
+    oculta: /ocultaPorDefecto: true/.test(trozo),
+    flexible: /flexible: true/.test(trozo),
+  }));
+}
+/** El fuente sin sus comentarios (los de arriba cuentan lo que había antes y lo nombran). */
+const sinComentarios = (fuente) => fuente.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+/** Lo que ninguna de las cuatro pantallas puede tener: errores tragados, diálogos nativos, datos de relleno. */
+function sinDefectos(nombre, original, { sinAny = true } = {}) {
+  // Sin los comentarios (los de arriba cuentan lo que había antes y lo nombran).
+  const fuente = sinComentarios(original);
+  assert.ok(!/\.catch\(\s*\(\s*\)\s*=>\s*(\[\s*\]|\{\s*\}|\(\s*\{\s*\}\s*\)|null)\s*\)/.test(fuente), `${nombre}: ningún error tragado como vacío`);
+  assert.ok(!/\.catch\(\s*\(\s*_?\w*\s*\)\s*=>\s*(\[\s*\]|\{\s*\})\s*\)/.test(fuente), `${nombre}: ningún catch con un vacío`);
+  assert.ok(!/(^|[^\w.$])(window\.)?(alert|confirm|prompt)\s*\(/.test(fuente), `${nombre}: sin diálogos nativos`);
+  assert.ok(!/@ts-nocheck/.test(fuente), `${nombre}: tipada`);
+  // La ficha de Productos (B1 a B3) trae sus `any` de siempre: ahí no se exige.
+  if (sinAny) assert.ok(!/\bany\[\]|: any\b/.test(fuente), `${nombre}: sin any`);
+}
+
+console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; KANBAN-resto): Stock y Abastecimiento cablean las piezas, el servidor, las tarjetas y el tablero ---');
+{
+  const stock = leerFuente('app/dashboard/inventario/stock/page.tsx');
+  const abasto = leerFuente('app/dashboard/inventario/abastecimiento/page.tsx');
+  const piezas = leerFuente('app/dashboard/inventario/piezas-inventario.tsx');
+  const WHITELIST_STOCK_TABLA = ['sku', 'producto', 'categoria', 'fisico', 'reservado', 'disponible', 'transito', 'precio', 'valorizacion'];
+
+  for (const [nombre, f, ID, INICIAL, vistas, tarjeta] of [
+    ['Stock', stock, 'ID_STOCK', 'INICIAL_STOCK', 'VISTAS_STOCK', 'tarjetasStock'],
+    ['Abastecimiento', abasto, 'ID_ABASTECIMIENTO', 'INICIAL_ABASTECIMIENTO', 'VISTAS_ABASTECIMIENTO', 'tarjetasAbastecimiento'],
+  ]) {
+    sinDefectos(nombre, f);
+    // R5 y D40: UN estado, la carga espera las preferencias (esqueleto, nunca «vacío») y en Kanban no pide la lista.
+    trae(f, `const [estado, despachar, listo] = useEstadoTabla(${ID}, ${INICIAL});`, `${nombre}: el estado único`);
+    trae(f, 'ruta: RUTA_STOCK, estado, conConteos: true, esperar: !listo, despachar, activo: !enKanban, extra: extraLista,', `${nombre}: useListado`);
+    trae(f, "const RUTA_STOCK = '/inventory/stock-tabla';", `${nombre}: stock-tabla (no /products)`);
+    assert.ok(!/apiFetch\(\s*['"`]\/products/.test(f), `${nombre}: ya no lee /products (RP47)`);
+    trae(f, "const FIJOS_" + (nombre === 'Stock' ? 'STOCK' : 'ABASTECIMIENTO') + " = { por: 'sku' };", `${nombre}: una fila por referencia`);
+    trae(f, 'categoria_id: categoria || null }), [categoria]);', `${nombre}: la categoría va al servidor`);
+    trae(f, `extraPorVista(estado, ${vistas}, fijos`, `${nombre}: la pestaña se traduce a estado_stock (stock-tabla no tiene vista)`);
+    trae(f, 'const enKanban = estado.modo === \'kanban\';', `${nombre}: el modo es del estado`);
+    // La tabla: estados de carga, error y reintento SIEMPRE conectados (nunca un vacío falso).
+    const tabla = etiquetaJsx(f, '<TablaEstandar');
+    for (const p of ['modo="servidor"', 'cargando={listado.cargandoInicial}', 'recargando={listado.recargando}', 'error={listado.error}',
+      'onReintentar={listado.recargar}', 'aviso={listado.avisoOrden}', 'filas={listado.filas}', 'total={listado.total}', 'estado={estado}',
+      'onEstado={despachar}', 'claveFila={claveDeFilaExistencia}', 'claseFila={claseDeFilaExistencia}', 'onFila={abrir}', 'vacio={vacio}',
+      'preferencias={prefs}', 'anchoRef={anchoTablaRef}']) trae(tabla, p, `${nombre}: TablaEstandar ${p}`);
+    trae(f, '{!enKanban && (\n              <TablaEstandar', `${nombre}: la tabla solo en Lista`);
+    trae(f, 'const estadoConteos = useEstadoKpi(listado.cargandoInicial || listado.recargando, listado.error);', `${nombre}: los conteos de las pestañas`);
+    // La barra: pestañas (ocultas en Kanban), conmutador, ajustes, pantalla completa, total.
+    const barra = etiquetaJsx(f, '<BarraTabla');
+    for (const p of ['pestanas={enKanban ? undefined : pestanas}', 'estadoConteos={estadoConteos}', 'kanbanDisponible', 'onEstado={despachar}',
+      'pantallaCompleta={enKanban ? undefined : { completa, alternar }}', '{...totalDeLaBarra}', 'color="indigo"']) trae(barra, p, `${nombre}: BarraTabla ${p}`);
+    trae(f, 'const totalDeLaBarra = enKanban ? {} : {', `${nombre}: «N resultados» solo en Lista`);
+    trae(f, 'estadoTotal: estadoDelTotal({ total: listado.total, cargando: listado.cargandoInicial, recargando: listado.recargando, error: listado.error }),', `${nombre}: estadoTotal`);
+    // El tablero solo para ver, en modo servidor, sin regla ni manejadores de cambio.
+    const hook = bloqueDesde(f, 'useTableroKanban<FilaExistencia>(');
+    for (const p of [`pantalla: ${ID}`, "modo: 'servidor'", 'columnas: COLUMNAS_STOCK', 'idDe: claveDeFilaExistencia', 'activo: listo && enKanban',
+      'porColumna: estado.tamano', 'dependencias: [...dependenciasTablero(estado), categoria]']) trae(hook, p, `${nombre}: tablero ${p}`);
+    const tablero = etiquetaJsx(f, '<TableroKanban');
+    for (const p of ['tablero={tablero}', 'soloLectura={TEXTO_SOLO_VER_STOCK}', 'tarjetaDe={tarjetaExistencia}', 'onAbrir={abrir}']) trae(tablero, p, `${nombre}: TableroKanban ${p}`);
+    for (const p of ['regla=', 'onCambio=', 'onAccion=', 'accionesTarjeta=']) noTrae(tablero, p, `${nombre}: el tablero es solo para ver (${p})`);
+    trae(f, '{enKanban ? (\n', `${nombre}: el tablero solo en Kanban`);
+    // La carga de cada columna se EJECUTA con dobles: la URL, la señal, la forma de la respuesta, la columna sin consulta y el
+    // orden del hook ('sin_movimiento'), que stock-tabla rechaza con 422, NO se manda.
+    {
+      const llamadas = [];
+      const entorno = {
+        estado: estadoTablaInicial({ q: 'oso', tamano: 50, orden: '-disponible' }), fijos: { por: 'sku', categoria_id: '7' },
+        RUTA_STOCK: '/inventory/stock-tabla', consultaColumnaStock: ec.consultaColumnaStock, normalizarRespuesta: (await import('../src/lib/tabla.js')).normalizarRespuesta,
+        apiFetch: async (url, opciones) => { llamadas.push([url, opciones]); return { status: 'success', total: 7, data: [{ sku_id: 1 }] }; },
+      };
+      const cargar = cargarDe(f)(entorno);
+      const respuesta = await cargar(COLUMNAS_STOCK[1], { offset: 25, limit: 25, orden: 'sin_movimiento', signal: 'SIGNAL' });
+      assert.deepEqual(llamadas, [[
+        '/inventory/stock-tabla?q=oso&orden=-disponible&limit=25&offset=25&por=sku&categoria_id=7&estado_stock=bajo_minimo', { signal: 'SIGNAL' },
+      ]], `${nombre}: la URL de la columna y la señal`);
+      assert.deepEqual([respuesta.filas, respuesta.total], [[{ sku_id: 1 }], 7], `${nombre}: la respuesta normalizada`);
+      llamadas.length = 0;
+      assert.deepEqual(await cargar({ estados: ['otro'] }, { offset: 0, limit: 25, signal: 'S' }), { filas: [], total: 0 });
+      assert.equal(llamadas.length, 0, `${nombre}: una columna sin consulta no pide nada`);
+    }
+    // Tarjetas (R12): de /inventory/stats, sin respaldo local; cargando = null (nunca 0); con error, «—».
+    trae(f, "apiFetch('/inventory/stats', { signal: control.signal })", `${nombre}: /inventory/stats`);
+    trae(f, '.then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))', `${nombre}: stats llega`);
+    trae(f, '.catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });', `${nombre}: stats falla y LO DICE`);
+    trae(f, 'const cargandoStats = stats?.vuelta !== vueltaStats;', `${nombre}: cargando mientras la vuelta no llegó`);
+    trae(f, 'const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));', `${nombre}: el estado de las tarjetas lleva el error`);
+    trae(f, '<FranjaKpis estado={estadoKpis}', `${nombre}: la franja lleva el estado`);
+    trae(f, 'nota={AYUDA_MINIMO_INVENTARIO}', `${nombre}: la nota del mínimo (R10)`);
+    trae(f, `import { AYUDA_MINIMO_INVENTARIO,`, `${nombre}: importa la nota`);
+    trae(f, `${tarjeta}(`, `${nombre}: ${tarjeta}`);
+    // Los selectores y el «Actualizar»: todo se vuelve a pedir.
+    trae(f, "const { catalogo: categorias, recargar: recargarCategorias } = useCatalogo('/categories');", `${nombre}: las categorías con error y Reintentar`);
+    trae(f, 'catalogo={categorias} valor={categoria}', `${nombre}: el selector de categoría`);
+    trae(f, 'onCambiar={cambiarCategoria} onReintentar={recargarCategorias}', `${nombre}: Reintentar vuelve a pedir`);
+    const recargar = /const recargarTodo = useCallback\(\(\) => \{([\s\S]*?)\n  \}, \[/.exec(f)?.[1] ?? '';
+    for (const llamada of ['recargarListado();', 'recargarTablero();', 'recargarCategorias();', 'setVueltaStats((n) => n + 1);']) trae(recargar, llamada, `${nombre}: «Actualizar» ${llamada}`);
+    trae(f, 'const { recargar: recargarListado } = listado;', `${nombre}: recarga la lista`);
+    trae(f, 'const { recargar: recargarTablero } = tablero;', `${nombre}: recarga el tablero`);
+    trae(f, '<button type="button" onClick={recargarTodo}', `${nombre}: el botón Actualizar`);
+    // Un cambio de categoría vuelve a la página 1 en el mismo evento (un solo pedido).
+    trae(f, 'setCategoria(valor);\n    despachar({ tipo: \'pagina\', valor: 1 });', `${nombre}: la categoría vuelve a la página 1`);
+    // El vacío memoizado dice qué lo deja vacío; la pantalla completa se cierra al pasar a Kanban.
+    trae(f, 'const texto = textoVacioStock({ q: estado.q, vista: estado.vista, categoria: nombreCategoria });', `${nombre}: el vacío`);
+    trae(f, '}, [estado.q, estado.vista, nombreCategoria]);', `${nombre}: el vacío memoizado con lo que lo deja vacío`);
+    trae(f, 'useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);', `${nombre}: sale de la pantalla completa`);
+    trae(f, 'const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();', `${nombre}: desestructurado (react-hooks/refs)`);
+    trae(f, '{detalle && <DetalleExistencia f={detalle} onCerrar={() => setDetalle(null)}', `${nombre}: el detalle`);
+    // R26: solo se ordena por lo que stock-tabla acepta (el orden desconocido es un 422).
+    const cols = columnasDe(f, nombre === 'Stock' ? 'COLUMNAS_TABLA_STOCK' : 'COLUMNAS_TABLA_ABASTECIMIENTO');
+    for (const c of cols) {
+      if (c.ordenable === null) continue;
+      assert.ok(c.ordenable === 'true' && WHITELIST_STOCK_TABLA.includes(c.id), `${nombre}: ${c.id} no se ordena en stock-tabla`);
+    }
+    assert.equal(cols.filter((c) => c.flexible).length, 1, `${nombre}: UNA columna flexible`);
+    for (const id of ['estado']) assert.equal(cols.find((c) => c.id === id)?.ordenable, null, `${nombre}: ${id} no se ordena`);
+    assert.ok(cols.find((c) => c.id === 'categoria')?.oculta, `${nombre}: Categoría oculta por defecto (R26)`);
+    // Cada tarjeta nombra SU clave (un cruce daría otro número) y ninguna escribe 0 ni «?».
+    assert.ok(!/(valor|datos|conteo|total)[\w.?]*\s*(\?\?|\|\|)\s*0\b|'\?'/.test(f), `${nombre}: nunca 0 ni «?» de relleno en una cifra`);
+    trae(f, '<section ref={refTarjeta} className={claseTarjeta}>', `${nombre}: la tarjeta de pantalla completa`);
+    trae(f, 'const prefs = usePreferenciasTabla(', `${nombre}: UNA instancia de preferencias`);
+    assert.equal(f.split('usePreferenciasTabla(').length - 1, 1, `${nombre}: usePreferenciasTabla una sola vez (D40)`);
+    trae(f, 'CONTENEDOR', `${nombre}: el contenedor con pb-24`);
+  }
+
+  // Stock: 4 tarjetas, cada una con su clave; ninguna es botón.
+  for (const [kpi, clave] of [['inv_fisico', 'fisico'], ['inv_reservado', 'reservado'], ['inv_disponible', 'disponible'], ['inv_en_transito', 'en_transito']]) {
+    trae(stock, `<TarjetaKpi kpi="${kpi}" valor={tarjetas?.${clave}.valor ?? null} ayuda={tarjetas?.${clave}.ayuda} />`, `Stock: ${kpi} lee ${clave}`);
+  }
+  noTrae(stock, 'onClick={() => elegirVista', 'Stock: las tarjetas no son botones');
+  trae(stock, "const INICIAL_STOCK = { vista: 'todos' };", 'Stock: arranca en Todos');
+  trae(stock, 'const pestanas = pestanasExistencias(conteos);', 'Stock: las 4 pestañas');
+  trae(stock, 'const tarjetas = tarjetasStock(stats?.datos ?? null);', 'Stock: tarjetasStock');
+  assert.deepEqual(columnasDe(stock, 'COLUMNAS_TABLA_STOCK').map((c) => c.id), ['sku', 'producto', 'categoria', 'fisico', 'reservado', 'disponible', 'transito', 'precio', 'estado']);
+  assert.deepEqual(columnasDe(stock, 'COLUMNAS_TABLA_STOCK').filter((c) => c.oculta).map((c) => c.id), ['categoria', 'precio'], 'Stock: ocultas por defecto (R26, medido a 1024 px)');
+
+  // Abastecimiento: pestañas RP53 (sin «Todos»), tarjetas pulsables que abren SU pestaña, pec_activos de /compras/stats con su
+  // propio estado (si falla, «—» solo esa), la alerta con el número real, «Ver producto» por SKU.
+  trae(abasto, "const INICIAL_ABASTECIMIENTO = { vista: 'agotado' };", 'Abastecimiento: arranca en Agotado');
+  trae(abasto, "extraPorVista(estado, VISTAS_ABASTECIMIENTO, fijos, 'agotado')", 'Abastecimiento: la pestaña por defecto es Agotado');
+  trae(abasto, 'const pestanas = pestanasExistencias(conteos, { conTodos: false });', 'Abastecimiento: sin «Todos» (RP53)');
+  trae(abasto, 'const tarjetas = tarjetasAbastecimiento(stats?.datos ?? null, compras?.datos ?? null);', 'Abastecimiento: cada tarjeta con su fuente');
+  for (const [kpi, clave, vista] of [['inv_agotados', 'agotados', 'agotado'], ['inv_bajo_minimo', 'bajo_minimo', 'bajo_minimo'], ['inv_abastecidos', 'abastecidos', 'abastecido']]) {
+    trae(abasto, `<TarjetaKpi kpi="${kpi}" valor={tarjetas.${clave}.valor} ayuda={tarjetas.${clave}.ayuda}\n            activo={vistaActiva === '${vista}'} onClick={() => elegirVista('${vista}')} />`, `Abastecimiento: ${kpi} abre ${vista}`);
+  }
+  trae(abasto, '<TarjetaKpi kpi="pec_activos" valor={tarjetas.pec_activos.valor} ayuda={tarjetas.pec_activos.ayuda} estado={estadoCompras} />', 'Abastecimiento: pec_activos con su estado y sin botón');
+  trae(abasto, "apiFetch('/compras/stats', { signal: control.signal })", 'Abastecimiento: /compras/stats (RP94)');
+  trae(abasto, '.then((r: { data?: unknown } | null) => setCompras({ vuelta: vueltaCompras, datos: r?.data ?? null, error: null }))', 'Abastecimiento: compras llega');
+  trae(abasto, '.catch((err: unknown) => { if (!control.signal.aborted) setCompras({ vuelta: vueltaCompras, datos: null, error: err }); });', 'Abastecimiento: compras falla y LO DICE');
+  trae(abasto, 'const cargandoCompras = compras?.vuelta !== vueltaCompras;', 'Abastecimiento: cargando compras');
+  trae(abasto, 'const estadoCompras = useEstadoKpi(cargandoCompras, cargandoCompras ? null : (compras?.error ?? null));', 'Abastecimiento: el estado de pec_activos lleva el error');
+  trae(abasto, 'setVueltaCompras((n) => n + 1);', 'Abastecimiento: «Actualizar» vuelve a pedir compras');
+  trae(abasto, 'const vistaActiva = enKanban ? null : estado.vista;', 'Abastecimiento: en Kanban ninguna tarjeta queda activa');
+  trae(abasto, 'const elegirVista = (vista: string) => despachar(accionVistaEnLista(estado, vista, undefined));', 'Abastecimiento: la tarjeta es una pestaña (D41) y en Kanban abre la Lista');
+  trae(abasto, '{agotados !== null && agotados > 0 && (', 'Abastecimiento: la alerta solo con el número real');
+  trae(abasto, "const agotados = tarjetas.agotados.valor;", 'Abastecimiento: el número de la alerta es el de /inventory/stats');
+  trae(abasto, 'href={`/dashboard/inventario/productos?sku=${encodeURIComponent(f.sku)}`}', 'Abastecimiento: «Ver producto» por SKU (stock-tabla no trae el id del producto)');
+  trae(abasto, "{f.estado_stock !== 'abastecido' && (", 'Abastecimiento: «Crear PEC» solo si falta stock');
+  trae(abasto, 'aria-label={`Crear un pedido de compra para ${f.sku}`}', 'Abastecimiento: acciones con aria-label');
+  trae(abasto, 'aria-label={`Ver el producto de ${f.sku}`}', 'Abastecimiento: acciones con aria-label');
+  noTrae(abasto, 'opacity-0 group-hover', 'Abastecimiento: las acciones no se esconden hasta el hover (teclado)');
+  noTrae(abasto, 'variant="gradient"', 'Abastecimiento: sin gradiente (KPI-inventario punto 6)');
+  assert.deepEqual(columnasDe(abasto, 'COLUMNAS_TABLA_ABASTECIMIENTO').map((c) => c.id), ['sku', 'producto', 'categoria', 'disponible', 'minimo', 'transito', 'estado', 'acciones']);
+  assert.equal(columnasDe(abasto, 'COLUMNAS_TABLA_ABASTECIMIENTO').find((c) => c.id === 'minimo')?.ordenable, null, 'el mínimo no se ordena en stock-tabla');
+
+  // piezas-inventario.tsx: el catálogo conserva el error y el selector lo dice con «Reintentar».
+  trae(piezas, ".catch((err: unknown) => { if (!control.signal.aborted) setCatalogo((c) => ({ filas: c.filas, error: err })); });", 'useCatalogo: el error se conserva');
+  trae(piezas, 'setCatalogo({ filas, error: null });', 'useCatalogo: llega bien');
+  trae(piezas, '}, [ruta, vuelta]);', 'useCatalogo: se vuelve a pedir con la vuelta');
+  trae(piezas, 'const recargar = useCallback(() => setVuelta((n) => n + 1), []);', 'useCatalogo: recargar sube la vuelta');
+  trae(piezas, 'if (catalogo.error && !catalogo.filas) {', 'SelectorCatalogo: la rama del error');
+  trae(piezas, 'role="alert"', 'SelectorCatalogo: el error se anuncia');
+  trae(piezas, '{textoDeError(catalogo.error, fallo)}', 'SelectorCatalogo: el detalle del servidor tal cual');
+  trae(piezas, 'onClick={onReintentar}', 'SelectorCatalogo: «Reintentar» vuelve a pedir');
+  trae(piezas, 'disabled={!catalogo.filas}', 'SelectorCatalogo: deshabilitado mientras carga');
+  trae(piezas, '<option value="">{catalogo.filas ? todas : cargando}</option>', 'SelectorCatalogo: «Cargando…» mientras carga');
+  trae(piezas, "export const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';", 'el contenedor deja libre la esquina del botón de la IA (pb-24)');
+  trae(piezas, "['Costo', numeroFinito(f.costo) !== null && Number(f.costo) > 0 ? pesos(f.costo) : 'Sin costo registrado'],", 'el detalle: un costo 0 es «sin costo» (RP91)');
+  trae(piezas, 'focus-visible:outline-offset-2', 'el foco visible se ve también sobre fondos oscuros');
+  sinDefectos('piezas-inventario', piezas);
+  // El Hub de T17 no se tocó.
+  assert.ok(!/piezas-inventario/.test(leerFuente('app/dashboard/inventario/page.tsx')), 'el Hub de Inventario conserva sus piezas');
+}
+
 console.log('\nOK: test_estados_compras.mjs');

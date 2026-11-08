@@ -44,8 +44,11 @@ import { queryListado } from './tabla.js';
 // B4 T14 r1: la regla de la columna con filtro (m4, la misma de Ventas), el número del servidor (m7) y la regla de
 // recarga y el texto de los errores (m15).
 import { estadosDeColumnaLista } from './kanban.js';
-import { formatoEntero, numeroFinito } from './kpis.js';
+import { formatoDecimal, formatoEntero, numeroFinito } from './kpis.js';
 import { recargarTrasError, textoDeError } from './avisos.js';
+// B4 T18 (Productos): el precio en pesos enteros y la etiqueta y la regla de la tarifa de IVA, de sus dueños.
+import { formatoPesos } from './pesos.js';
+import { etiquetaTarifaCatalogo, sinTarifaIva } from './iva.js';
 
 /**
  * @typedef {{ bg: string, text: string, border: string }} ClasesEstado
@@ -1289,3 +1292,476 @@ export const COLUMNAS_STOCK = congelar([
   columna('bajo_minimo', ESTADOS_STOCK.bajo_minimo.label, 'amber', ['bajo_minimo']),
   columna('abastecido', ESTADOS_STOCK.abastecido.label, 'emerald', ['abastecido']),
 ]);
+
+// ─── B4 T18: Stock, Abastecimiento, Kardex y Productos (TABLA-inventario 5 a 8, KANBAN-resto; R10, R11, RP47 a RP49, RP53, RP54) ───
+
+/** R11: el motivo del tablero solo para ver de Stock y de Abastecimiento. */
+export const TEXTO_SOLO_VER_STOCK = 'Este tablero es para ver: el nivel de stock sale de las existencias de cada bodega y no se cambia arrastrando tarjetas.';
+/** RP54: el motivo del tablero del Kardex, palabra por palabra. */
+export const TEXTO_SOLO_VER_KARDEX = 'Este tablero es para ver: los movimientos en cuarentena o sin dirección solo salen en la lista.';
+/** R11: el motivo del tablero de Productos. */
+export const TEXTO_SOLO_VER_PRODUCTOS = 'Este tablero es para ver: la categoría de un producto se cambia en su ficha.';
+
+/**
+ * Las pestañas de Stock y su parámetro de GET /inventory/stock-tabla, que no tiene `vista` (extraPorVista de tabla.js): el
+ * estado del stock (RP53). «Todos» no filtra. Inmutable.
+ * @type {Readonly<Record<'todos' | 'agotado' | 'bajo_minimo' | 'abastecido', Readonly<Record<string, unknown>>>>}
+ */
+export const VISTAS_STOCK = congelar({
+  todos: {},
+  agotado: { estado_stock: 'agotado' },
+  bajo_minimo: { estado_stock: 'bajo_minimo' },
+  abastecido: { estado_stock: 'abastecido' },
+});
+
+/** Las pestañas de Abastecimiento (RP53): las de Stock sin «Todos». Inmutable. */
+export const VISTAS_ABASTECIMIENTO = congelar({
+  agotado: VISTAS_STOCK.agotado,
+  bajo_minimo: VISTAS_STOCK.bajo_minimo,
+  abastecido: VISTAS_STOCK.abastecido,
+});
+
+const objetoPlano = (v) => (esObjeto(v) && !Array.isArray(v) ? v : null);
+
+/**
+ * Las pestañas de Stock (con «Todos») y de Abastecimiento (`conTodos: false`) con los `conteos` de stock-tabla
+ * (con_conteos=1: todos, agotados, bajo_minimo, abastecidos). Cada una lee SU conteo; el que no llega (cargando o con
+ * error) queda en null (la barra gris, nunca 0). Agotado y Bajo el mínimo van en alerta si hay alguna.
+ * @param {unknown} conteos
+ * @param {{conTodos?: boolean}} [opciones]
+ * @returns {{id: string, etiqueta: string, conteo: number | null, alerta: boolean}[]}
+ */
+export function pestanasExistencias(conteos, { conTodos = true } = {}) {
+  const c = objetoPlano(conteos) ?? {};
+  const pestana = (id, etiqueta, clave, alertar) => {
+    const conteo = numeroFinito(c[clave]);
+    return { id, etiqueta, conteo, alerta: alertar && (conteo ?? 0) > 0 };
+  };
+  return [
+    ...(conTodos ? [pestana('todos', 'Todos', 'todos', false)] : []),
+    pestana('agotado', ESTADOS_STOCK.agotado.label, 'agotados', true),
+    pestana('bajo_minimo', ESTADOS_STOCK.bajo_minimo.label, 'bajo_minimo', true),
+    pestana('abastecido', ESTADOS_STOCK.abastecido.label, 'abastecidos', false),
+  ];
+}
+
+/**
+ * La consulta de una columna del tablero de Stock y de Abastecimiento en modo servidor (la query de GET
+ * /inventory/stock-tabla): el estado de la columna (estado_stock), la búsqueda y el orden del MISMO estado, `fijos` (por=sku,
+ * la categoría…) y el límite y el desplazamiento de la columna (el 0 de una plegada lo pone el hook). Sin vista ni estados
+ * (stock-tabla no los tiene). NO recibe el `orden` del hook ('sin_movimiento' o 'reciente'): stock-tabla responde 422 a un
+ * orden de tiempo. Una columna que no es un estado del stock, null.
+ * @param {import('./tabla.js').EstadoTabla | null | undefined} estado
+ * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
+ * @param {Record<string, unknown> | null | undefined} fijos
+ * @param {{limit: number, offset: number}} consulta
+ * @returns {string | null}
+ */
+export function consultaColumnaStock(estado, columna, fijos, { limit, offset }) {
+  const clave = columna?.estados?.[0];
+  if (typeof clave !== 'string' || !tiene(ESTADOS_STOCK, clave)) return null;
+  return queryListado(estado, {
+    ...(objetoPlano(fijos) ?? {}),
+    vista: null, semaforo: null, paso: null, estados: null,
+    estado_stock: clave, limit, offset,
+  });
+}
+
+const TONO_CHIP_STOCK = congelar({ agotado: 'rose', bajo_minimo: 'amber', abastecido: 'emerald' });
+
+/**
+ * La tarjeta de una existencia (una fila de stock-tabla) en el tablero solo para ver: el SKU, el producto, la categoría (y
+ * la bodega si la fila es por bodega), la insignia del estado (ESTADOS_STOCK), Disponible · Físico · En tránsito (o el
+ * mínimo si nada viene en camino) y las reservas. Una referencia sin control de inventario lo dice.
+ * @param {any} f
+ */
+export function tarjetaExistencia(f) {
+  const estado = typeof f?.estado_stock === 'string' && tiene(ESTADOS_STOCK, f.estado_stock) ? f.estado_stock : null;
+  const transito = numeroFinito(f?.en_transito);
+  const reservado = numeroFinito(f?.reservado);
+  const tercero = transito !== null && transito > 0
+    ? { texto: `En tránsito ${formatoDecimal(transito)}`, tono: 'blue' }
+    : { texto: `Mínimo ${formatoDecimal(f?.minimo)}`, tono: 'slate' };
+  return {
+    numero: textoLimpio(f?.sku) ?? `SKU #${f?.sku_id ?? ''}`,
+    tipo: null,
+    titulo: textoLimpio(f?.producto) ?? 'Sin nombre',
+    subtitulo: [textoLimpio(f?.categoria), textoLimpio(f?.bodega)].filter(Boolean).join(' · ') || null,
+    monto: null,
+    estado: estado ? { label: ESTADOS_STOCK[estado].label, clases: ESTADOS_STOCK[estado].clases } : null,
+    chips: [
+      { texto: `Disponible ${formatoDecimal(f?.disponible)}`, tono: estado ? TONO_CHIP_STOCK[estado] : 'slate' },
+      { texto: `Físico ${formatoDecimal(f?.fisico)}`, tono: 'slate' },
+      tercero,
+    ],
+    tiempo: f?.rastrear_inventario === false
+      ? 'Sin control de inventario'
+      : reservado !== null && reservado > 0 ? `Reservado ${formatoDecimal(reservado)}` : null,
+    atrasada: false,
+    accionPrincipal: null,
+  };
+}
+
+const FRASE_VACIO_STOCK = congelar({
+  agotado: 'Ninguna referencia está agotada',
+  bajo_minimo: 'Ninguna referencia está bajo el mínimo',
+  abastecido: 'Ninguna referencia está bien abastecida',
+});
+
+/**
+ * Lo que dice la tabla de Stock y de Abastecimiento cuando no hay filas, según lo que la deja vacía: la búsqueda, la
+ * pestaña (el estado del stock) y la categoría elegida (su NOMBRE, null si no hay filtro).
+ * @param {{q?: string | null, vista?: string | null, categoria?: string | null} | null | undefined} filtro
+ * @returns {{titulo: string, ayuda: string | null}}
+ */
+export function textoVacioStock(filtro) {
+  const f = objetoPlano(filtro) ?? {};
+  const q = textoLimpio(f.q);
+  const categoria = textoLimpio(f.categoria);
+  const donde = categoria ? ` en la categoría «${categoria}»` : '';
+  const quita = categoria ? 'Quita el filtro de categoría para ver las demás.' : null;
+  if (q) return { titulo: `Ninguna existencia coincide con «${q}»${donde}.`, ayuda: 'Busca por el código del SKU o por el nombre del producto.' };
+  if (typeof f.vista === 'string' && tiene(FRASE_VACIO_STOCK, f.vista)) return { titulo: `${FRASE_VACIO_STOCK[f.vista]}${donde}.`, ayuda: quita };
+  if (categoria) return { titulo: `Ninguna existencia${donde}.`, ayuda: quita };
+  return {
+    titulo: 'Todavía no hay existencias en las bodegas.',
+    ayuda: 'Las existencias se registran al recibir mercancía en Recepciones o con un ajuste de inventario.',
+  };
+}
+
+// ─── Kardex ───
+
+const CLASES_VERDE = { bg: 'bg-green-50', text: 'text-green-700', border: 'border-green-200' };
+const CLASES_ROJO = { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200' };
+const CLASES_AZUL = { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' };
+const CLASES_AMBAR = { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' };
+const CLASES_MORADO = { bg: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-200' };
+
+/**
+ * Las direcciones de un movimiento del Kardex (las que escribe el sistema: DIRECCIONES_KARDEX de analisis_inventario.py),
+ * con su etiqueta, su signo ('+' entra, '-' sale, '' ninguno) y sus clases. La distinción de color entre IN/OUT normales
+ * y los ajustes es a propósito (ámbar = un ajuste manual). Inmutable.
+ * @type {Readonly<Record<string, Readonly<{label: string, signo: '+' | '-' | '', clases: ClasesEstado}>>>}
+ */
+export const DIRECCIONES_KARDEX = congelar({
+  IN: { label: 'Entrada', signo: '+', clases: CLASES_VERDE },
+  OUT: { label: 'Salida', signo: '-', clases: CLASES_ROJO },
+  TRANSFER_IN: { label: 'Traslado (entra)', signo: '+', clases: CLASES_AZUL },
+  TRANSFER_OUT: { label: 'Traslado (sale)', signo: '-', clases: CLASES_AZUL },
+  ADJUST_IN: { label: 'Ajuste (entrada)', signo: '+', clases: CLASES_AMBAR },
+  ADJUST_OUT: { label: 'Ajuste (salida)', signo: '-', clases: CLASES_AMBAR },
+  QUARANTINE: { label: 'Cuarentena', signo: '', clases: CLASES_MORADO },
+  SCRAP: { label: 'Pérdida o destrucción', signo: '-', clases: CLASES_ROJO },
+  RETURN_IN: { label: 'Devolución de cliente', signo: '+', clases: CLASES_VERDE },
+});
+
+const SIN_DIRECCION = congelar({ label: 'Sin dirección', signo: '', clases: { ...GRIS } });
+
+/**
+ * La etiqueta, el signo y las clases de la dirección de un movimiento. Sin dirección (un movimiento puede no tenerla),
+ * «Sin dirección»; una desconocida sale humanizada en gris, nunca el código.
+ * @param {unknown} d
+ * @returns {Readonly<{label: string, signo: '+' | '-' | '', clases: ClasesEstado}>}
+ */
+export function infoDireccionKardex(d) {
+  const codigo = typeof d === 'string' ? d.trim() : '';
+  if (codigo === '') return SIN_DIRECCION;
+  if (tiene(DIRECCIONES_KARDEX, codigo)) return DIRECCIONES_KARDEX[codigo];
+  return congelar({ label: humanizarCodigo(codigo), signo: '', clases: { ...GRIS } });
+}
+
+/**
+ * El tablero solo para ver del Kardex (R11, RP54): Entradas = IN, ADJUST_IN, TRANSFER_IN · Salidas = OUT, ADJUST_OUT,
+ * TRANSFER_OUT. La cuarentena, la pérdida, la devolución y los movimientos sin dirección solo salen en la lista.
+ * @type {ReadonlyArray<Readonly<Columna>>}
+ */
+export const COLUMNAS_KARDEX = congelar([
+  columna('entradas', 'Entradas', 'emerald', ['IN', 'ADJUST_IN', 'TRANSFER_IN']),
+  columna('salidas', 'Salidas', 'rose', ['OUT', 'ADJUST_OUT', 'TRANSFER_OUT']),
+]);
+
+/**
+ * Los filtros extra de la barra del Kardex como parámetros de GET /inventory/kardex (sku_id, warehouse_id, owner,
+ * direction, start_date y end_date; los bordes de fecha son días UTC desde antes). Lo vacío no se manda.
+ * @param {{skuId?: number | null, bodega?: string, propietario?: string, direccion?: string, desde?: string, hasta?: string} | null | undefined} filtros
+ * @returns {Record<string, unknown>}
+ */
+export function extraKardex(filtros) {
+  const f = objetoPlano(filtros) ?? {};
+  return {
+    sku_id: f.skuId ? f.skuId : null,
+    warehouse_id: f.bodega || null,
+    owner: f.propietario || null,
+    direction: f.direccion || null,
+    start_date: f.desde || null,
+    end_date: f.hasta || null,
+  };
+}
+
+/**
+ * Las direcciones que pide una columna del tablero: las suyas, o solo la que eligió el filtro «Dirección» si es una de
+ * ellas (el servidor las lee en mayúsculas); vacío si la dirección elegida no es de la columna (la columna queda vacía sin
+ * pedir).
+ * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
+ * @param {unknown} elegida
+ * @returns {string[]}
+ */
+export function direccionesDeColumnaKardex(columna, elegida) {
+  const propias = Array.isArray(columna?.estados) ? columna.estados : [];
+  const d = typeof elegida === 'string' ? elegida.trim().toUpperCase() : '';
+  return d === '' ? [...propias] : propias.filter((x) => x === d);
+}
+
+/**
+ * La consulta de una columna del tablero del Kardex en modo servidor: sus direcciones en CSV (direction) cruzadas con el filtro
+ * de la barra, más los demás filtros. Sin q, orden, vista ni estados (el Kardex no los tiene; ordena siempre por fecha). Su
+ * `limit` es de 1 como mínimo: get_kardex tiene limit >= 1, y una columna plegada (limit 0) daría 422. Sin direcciones en común,
+ * null: la columna queda vacía sin pedir.
+ * @param {import('./tabla.js').EstadoTabla | null | undefined} estado
+ * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
+ * @param {Parameters<typeof extraKardex>[0]} filtros
+ * @param {{limit: number, offset: number}} consulta
+ * @returns {string | null}
+ */
+export function consultaColumnaKardex(estado, columna, filtros, { limit, offset }) {
+  const direcciones = direccionesDeColumnaKardex(columna, filtros?.direccion);
+  if (direcciones.length === 0) return null;
+  return queryListado(estado, {
+    ...extraKardex(filtros),
+    vista: null, semaforo: null, paso: null, q: null, estados: null, orden: null,
+    direction: direcciones, limit: Math.max(1, Number(limit) || 1), offset,
+  });
+}
+
+/** El número de un movimiento: su documento de origen, o «TIPO #operación», o «Movimiento #id». */
+export function numeroMovimiento(m) {
+  const documento = textoLimpio(m?.source_document_numero);
+  if (documento) return documento;
+  const tipo = textoLimpio(m?.operation_type);
+  if (tipo && m?.operation_id !== null && m?.operation_id !== undefined) return `${tipo} #${m.operation_id}`;
+  return `Movimiento #${m?.id ?? ''}`;
+}
+
+const HORA_COLOMBIA = new Intl.DateTimeFormat('en-GB', { timeZone: 'America/Bogota', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+
+/**
+ * El día y la hora de un movimiento (created_at: un instante UTC sin zona) en Colombia: {dia: '3 oct 2026', hora: '22:00'};
+ * lo que no se puede leer, {dia: '—', hora: ''}.
+ * @param {unknown} iso
+ * @returns {{dia: string, hora: string}}
+ */
+export function textoFechaMovimiento(iso) {
+  const fecha = instante(iso);
+  if (!fecha) return { dia: '—', hora: '' };
+  return { dia: fechaCorta(fecha), hora: HORA_COLOMBIA.format(fecha) };
+}
+
+/**
+ * La tarjeta de un movimiento en el tablero solo para ver: el documento de origen, el producto, el SKU y la bodega, la
+ * insignia de la dirección, la cantidad con su signo, el propietario y el día y la hora.
+ * @param {any} m
+ */
+export function tarjetaMovimiento(m) {
+  const info = infoDireccionKardex(m?.direction);
+  const cantidad = numeroFinito(m?.quantity);
+  const sku = textoLimpio(m?.sku);
+  const fecha = textoFechaMovimiento(m?.created_at);
+  return {
+    numero: numeroMovimiento(m),
+    tipo: null,
+    titulo: textoLimpio(m?.product_name) ?? sku ?? `SKU #${m?.sku_id ?? ''}`,
+    subtitulo: [sku, textoLimpio(m?.warehouse_name)].filter(Boolean).join(' · ') || null,
+    monto: null,
+    estado: { label: info.label, clases: info.clases },
+    chips: [
+      { texto: cantidad === null ? '—' : `${info.signo}${formatoDecimal(Math.abs(cantidad))}`, tono: info.signo === '+' ? 'emerald' : info.signo === '-' ? 'rose' : 'amber' },
+      { texto: textoLimpio(m?.owner) ?? 'NEBULAE', tono: 'slate' },
+    ],
+    tiempo: fecha.hora ? `${fecha.dia} · ${fecha.hora}` : null,
+    atrasada: false,
+    accionPrincipal: null,
+  };
+}
+
+/**
+ * Lo que dice la tabla del Kardex cuando no hay filas: con filtros (el SKU, la bodega, el propietario, la dirección o las
+ * fechas) o sin ninguno.
+ * @param {boolean} hayFiltros
+ * @returns {{titulo: string, ayuda: string}}
+ */
+export function textoVacioKardex(hayFiltros) {
+  return hayFiltros
+    ? { titulo: 'Ningún movimiento coincide con esos filtros.', ayuda: 'Quita algún filtro o amplía las fechas.' }
+    : { titulo: 'Todavía no hay movimientos en el Kardex.', ayuda: 'Se registran al recibir, despachar, trasladar o ajustar inventario.' };
+}
+
+// ─── Productos ───
+
+/** R11: el tablero de Productos tiene a lo sumo 12 columnas; el resto de las categorías se ve en la lista. */
+export const MAX_COLUMNAS_PRODUCTOS = 12;
+const TONOS_PRODUCTOS = congelar(['indigo', 'emerald', 'amber', 'sky', 'rose', 'purple', 'teal', 'orange', 'blue', 'lime', 'pink', 'cyan']);
+
+/**
+ * Las columnas del tablero de Productos: una por categoría de GET /categories, por nombre (en español), a lo sumo `max`.
+ * `masCategorias` cuenta las que no caben y `aviso` es «N categorías más: usa la lista» (null si caben todas). Una fila sin
+ * un id entero positivo, o con un id repetido, no es una columna; sin nombre, «Sin nombre».
+ * @param {unknown} categorias
+ * @param {number} [max]
+ * @returns {{columnas: Columna[], masCategorias: number, aviso: string | null}}
+ */
+export function columnasProductos(categorias, max = MAX_COLUMNAS_PRODUCTOS) {
+  const vistas = new Set();
+  const lista = [];
+  for (const c of Array.isArray(categorias) ? categorias : []) {
+    if (!esObjeto(c) || !Number.isInteger(c.id) || c.id <= 0 || vistas.has(c.id)) continue;
+    vistas.add(c.id);
+    lista.push({ id: c.id, nombre: textoLimpio(c.name) ?? 'Sin nombre' });
+  }
+  lista.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es') || a.id - b.id);
+  const visibles = lista.slice(0, max);
+  const mas = lista.length - visibles.length;
+  return {
+    columnas: visibles.map((c, i) => columna(`cat-${c.id}`, c.nombre, TONOS_PRODUCTOS[i % TONOS_PRODUCTOS.length], [String(c.id)])),
+    masCategorias: mas,
+    aviso: mas > 0 ? `${mas} ${mas === 1 ? 'categoría' : 'categorías'} más: usa la lista` : null,
+  };
+}
+
+/**
+ * Los filtros extra de la barra de Productos (B3-T8, RP48) como parámetros de GET /products: necesita_revision y
+ * sin_tarifa_iva. Apagado = no se manda (sin_tarifa_iva=false pediría los que SÍ tienen tarifa).
+ * @param {{revision?: boolean, sinTarifa?: boolean} | null | undefined} filtros
+ * @returns {{necesita_revision: true | null, sin_tarifa_iva: true | null}}
+ */
+export function extraProductos(filtros) {
+  const f = objetoPlano(filtros) ?? {};
+  return { necesita_revision: f.revision ? true : null, sin_tarifa_iva: f.sinTarifa ? true : null };
+}
+
+/**
+ * La consulta de una columna del tablero de Productos en modo servidor (la query de GET /products): la categoría de la
+ * columna, la búsqueda (q) y el orden del MISMO estado, los filtros de la barra, y SIEMPRE limit y offset (sin offset,
+ * /products devuelve todo: RP47). Sin vista ni estados. NO recibe el `orden` del hook ('sin_movimiento' o 'reciente'):
+ * /products responde 422 a un orden de tiempo. Una columna que no es una categoría, null.
+ * @param {import('./tabla.js').EstadoTabla | null | undefined} estado
+ * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
+ * @param {Parameters<typeof extraProductos>[0]} filtros
+ * @param {{limit: number, offset: number}} consulta
+ * @returns {string | null}
+ */
+export function consultaColumnaProducto(estado, columna, filtros, { limit, offset }) {
+  const clave = columna?.estados?.[0];
+  if (typeof clave !== 'string' || !/^[1-9]\d*$/.test(clave)) return null;
+  return queryListado(estado, {
+    ...extraProductos(filtros),
+    vista: null, semaforo: null, paso: null, estados: null,
+    category_id: Number(clave), limit, offset,
+  });
+}
+
+/** El precio de venta de un producto (precio_venta de GET /products: el menor de sus SKU); sin precio, null. */
+export function precioDeProducto(p) {
+  const n = numeroFinito(p?.precio_venta);
+  return n !== null && n > 0 ? n : null;
+}
+
+/** El costo de un producto (costo de GET /products); 0 (el de quick-create) o menor es «sin costo», como en existencias (RP91). */
+export function costoDeProducto(p) {
+  const n = numeroFinito(p?.costo);
+  return n !== null && n > 0 ? n : null;
+}
+
+const CLASES_ACTIVO = congelar({ bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200' });
+const CLASES_INACTIVO = congelar({ bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-200' });
+
+/**
+ * La tarjeta de un producto en el tablero solo para ver: el primer SKU (o PRD-id), el nombre, la categoría, la insignia
+ * Activo o Inactivo, la revisión pendiente, la tarifa de IVA (ámbar si no tiene), si está publicado, y el precio y el costo.
+ * @param {any} p
+ */
+export function tarjetaProducto(p) {
+  const primerSku = Array.isArray(p?.skus) ? textoLimpio(p.skus[0]?.sku) : null;
+  const precio = precioDeProducto(p);
+  const costo = costoDeProducto(p);
+  return {
+    numero: primerSku ?? `PRD-${p?.id ?? ''}`,
+    tipo: null,
+    titulo: textoLimpio(p?.name) ?? 'Sin nombre',
+    subtitulo: textoLimpio(p?.category?.name),
+    monto: null,
+    estado: p?.is_active === false ? { label: 'Inactivo', clases: CLASES_INACTIVO } : { label: 'Activo', clases: CLASES_ACTIVO },
+    chips: [
+      ...(p?.necesita_revision ? [{ texto: 'Requiere revisión', tono: 'amber' }] : []),
+      { texto: etiquetaTarifaCatalogo(p?.tarifa_iva), tono: sinTarifaIva(p) ? 'amber' : 'slate' },
+      ...(p?.publicado ? [{ texto: 'Publicado', tono: 'emerald' }] : []),
+    ],
+    tiempo: `Precio ${precio === null ? '—' : formatoPesos(precio)} · Costo ${costo === null ? '—' : formatoPesos(costo)}`,
+    atrasada: false,
+    accionPrincipal: null,
+  };
+}
+
+/**
+ * Lo que dice la tabla de Productos cuando no hay filas: la búsqueda, los filtros de la barra (revisión, IVA) o nada.
+ * @param {{q?: string | null, revision?: boolean, sinTarifa?: boolean} | null | undefined} filtro
+ * @returns {{titulo: string, ayuda: string | null}}
+ */
+export function textoVacioProductos(filtro) {
+  const f = objetoPlano(filtro) ?? {};
+  const q = textoLimpio(f.q);
+  const quita = 'Quita los filtros de revisión o de IVA para ver más.';
+  if (q) {
+    return {
+      titulo: `Ningún producto coincide con «${q}».`,
+      ayuda: f.revision || f.sinTarifa ? quita : 'Busca por el nombre, la descripción o el código del SKU.',
+    };
+  }
+  if (f.revision && f.sinTarifa) return { titulo: 'Ningún producto requiere revisión y está sin tarifa de IVA.', ayuda: quita };
+  if (f.revision) return { titulo: 'Ningún producto requiere revisión.', ayuda: null };
+  if (f.sinTarifa) return { titulo: 'Todos los productos tienen tarifa de IVA.', ayuda: null };
+  return { titulo: 'Sin productos. Crea el primero.', ayuda: 'Usa «Nuevo Producto» para crear el primero.' };
+}
+
+/**
+ * RP49: ¿hay que pedir el producto del enlace? `?id=` pide /products?id=N y `?sku=` (el de Abastecimiento: stock-tabla no
+ * trae el id del producto) pide /products?q=SKU. `marca` es lo ya atendido (la respuesta llegó), no lo que se pidió: un fetch
+ * abortado deja la marca como estaba y el siguiente render vuelve a pedir. El id gana; uno que no es un entero positivo no
+ * tapa un SKU bueno. Sin nada que pedir, null.
+ * @param {string | null} marca
+ * @param {string | null | undefined} idDeLaUrl
+ * @param {string | null | undefined} skuDeLaUrl
+ * @returns {{marca: string, ruta: string, id: number | null, sku: string | null} | null}
+ */
+export function pedirEnlaceProducto(marca, idDeLaUrl, skuDeLaUrl) {
+  if (typeof idDeLaUrl === 'string' && /^[1-9]\d*$/.test(idDeLaUrl)) {
+    const nueva = `id:${idDeLaUrl}`;
+    return marca === nueva ? null : { marca: nueva, ruta: `/products?id=${idDeLaUrl}`, id: Number(idDeLaUrl), sku: null };
+  }
+  const sku = typeof skuDeLaUrl === 'string' ? skuDeLaUrl.trim() : '';
+  if (sku === '') return null;
+  const nueva = `sku:${sku}`;
+  return marca === nueva ? null : { marca: nueva, ruta: `/products?q=${encodeURIComponent(sku)}&limit=50&offset=0`, id: null, sku };
+}
+
+/**
+ * Llegó la respuesta del enlace: abre el producto exacto (por su id, o el que tiene ese SKU exacto, sin distinguir
+ * mayúsculas: `q` también encuentra los que lo contienen); si no está, avisa UNA vez. En los dos casos la marca queda en
+ * lo pedido (no se vuelve a pedir ni a avisar).
+ * @param {{marca: string, id: number | null, sku: string | null}} pedido
+ * @param {ReadonlyArray<any> | null | undefined} filas
+ * @returns {{marca: string, abrir: any | null, avisar: boolean, texto: string | null}}
+ */
+export function llegadaEnlaceProducto(pedido, filas) {
+  const lista = (Array.isArray(filas) ? filas : []).filter(esObjeto);
+  const buscado = (pedido.sku ?? '').toUpperCase();
+  const abrir = (pedido.id !== null
+    ? lista.find((p) => p.id === pedido.id)
+    : lista.find((p) => Array.isArray(p.skus) && p.skus.some((s) => typeof s?.sku === 'string' && s.sku.trim().toUpperCase() === buscado))) ?? null;
+  return {
+    marca: pedido.marca,
+    abrir,
+    avisar: abrir === null,
+    texto: abrir !== null ? null
+      : pedido.id !== null ? `No se encontró el producto #${pedido.id}.` : `No se encontró un producto con el SKU «${pedido.sku}».`,
+  };
+}

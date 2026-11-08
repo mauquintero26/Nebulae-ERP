@@ -1,196 +1,321 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { AlertTriangle, Eye, Layers, RefreshCw, ShoppingCart } from 'lucide-react';
+// B4 T18: Abastecimiento sobre las existencias REALES (R10): la tabla estándar de /inventory/stock-tabla (por=sku) con las
+// pestañas Agotado · Bajo el mínimo · Bien abastecido (RP53), el estado único (R5), las tarjetas de /inventory/stats y de
+// /compras/stats (pec_activos, RP94) y el tablero solo para ver (R11, modo servidor). Antes: /products?limit=200 con campos
+// que /products no trae (todo salía «Sin stock») y /compras/stats tragado con .catch(() => ({})) (la tarjeta decía «?»).
+import { FranjaKpis, PageHeader, SubNav, TableroKanban, TarjetaKpi, useEstadoKpi, useTableroKanban } from '@/components/ui';
 import {
-  ShoppingCart, Activity, AlertCircle, CheckCircle2,
-  Search, RefreshCw, Package, AlertTriangle
-} from 'lucide-react';
-import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
-import { SubNav, PageHeader, StatCard, Badge, EmptyState } from '@/components/ui';
+  BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
+} from '@/components/tabla';
+import type { ColumnaTabla } from '@/components/tabla';
+import { apiFetch } from '@/lib/api';
+import { AYUDA_MINIMO_INVENTARIO, formatoEntero, tarjetasAbastecimiento } from '@/lib/kpis';
+import { dependenciasTablero, estadoDelTotal, extraPorVista, normalizarRespuesta } from '@/lib/tabla';
+import { accionVistaEnLista } from '@/lib/listas-ventas';
+import {
+  COLUMNAS_STOCK, TEXTO_SOLO_VER_STOCK, VISTAS_ABASTECIMIENTO, consultaColumnaStock, pestanasExistencias, tarjetaExistencia,
+  textoVacioStock,
+} from '@/lib/estados-compras';
 import { INV_NAV } from '../inv-nav';
+import {
+  CONTENEDOR, CeldaEstadoStock, CeldaProducto, DetalleExistencia, FOCOS, SelectorCatalogo, cantidad, claseDeFilaExistencia,
+  claveDeFilaExistencia, infoStock, useCatalogo,
+} from '../piezas-inventario';
+import type { ConteosStock, FilaExistencia } from '../piezas-inventario';
 
-async function apiFetch(path: string, opts: RequestInit = {}) {
-  const res = await _apiFetch(path, opts);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || data.message || 'Error');
-  return data.data ?? data;
+/** El id de la pantalla: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26). */
+const ID_ABASTECIMIENTO = 'inventario.abastecimiento';
+/** RP53: la pestaña de trabajo es Agotado (lo más urgente); antes, «Bajo Minimo» incluía también los agotados. */
+const INICIAL_ABASTECIMIENTO = { vista: 'agotado' };
+const RUTA_STOCK = '/inventory/stock-tabla';
+/** Una fila por referencia, con las bodegas sumadas (el tránsito del SKU se cuenta una vez, RP50). */
+const FIJOS_ABASTECIMIENTO = { por: 'sku' };
+
+/** Acciones: «Crear un pedido de compra» (solo si falta stock) y «Ver el producto» (por su SKU: stock-tabla no trae el id). */
+function CeldaAcciones({ f }: { f: FilaExistencia }) {
+  return (
+    <span className="flex items-center justify-end gap-0.5">
+      {f.estado_stock !== 'abastecido' && (
+        <Link href="/dashboard/compras/pedidos" aria-label={`Crear un pedido de compra para ${f.sku}`} title="Crear PEC"
+          className={`rounded-lg p-1.5 text-emerald-700 transition-colors hover:bg-emerald-50 ${FOCOS.indigo}`}>
+          <ShoppingCart size={14} aria-hidden="true" />
+        </Link>
+      )}
+      <Link href={`/dashboard/inventario/productos?sku=${encodeURIComponent(f.sku)}`} aria-label={`Ver el producto de ${f.sku}`} title="Ver producto"
+        className={`rounded-lg p-1.5 text-indigo-600 transition-colors hover:bg-indigo-50 ${FOCOS.indigo}`}>
+        <Eye size={14} aria-hidden="true" />
+      </Link>
+    </span>
+  );
 }
 
+/**
+ * La tabla (TABLA-inventario punto 6; R26, D41): las columnas de hoy (Producto, Referencia, Categoría, Stock actual, Stock
+ * mínimo, Estado, Acciones) ahora con datos: «Stock actual» es lo DISPONIBLE (con el que se decide el estado) y el mínimo es el
+ * de cada referencia (R10). R26: a 1024 px con el menú abierto la caja deja 704 px; Categoría va oculta por defecto. Una
+ * constante: estable (D40).
+ */
+const COLUMNAS_TABLA_ABASTECIMIENTO: ColumnaTabla<FilaExistencia>[] = [
+  { id: 'sku', titulo: 'SKU', ancho: 104, clave: true, fija: 'izquierda', ordenable: true, titleCelda: (f) => f.sku,
+    celda: (f) => <span className="block truncate font-mono text-[11px] font-bold text-indigo-700">{f.sku}</span> },
+  { id: 'producto', titulo: 'Producto', ancho: 120, clave: true, flexible: true, ordenable: true,
+    titleCelda: (f) => f.producto || 'Sin nombre', celda: (f) => <CeldaProducto f={f} /> },
+  { id: 'categoria', titulo: 'Categoría', ancho: 120, ocultaPorDefecto: true, ordenable: true, titleCelda: (f) => f.categoria || 'Sin categoría',
+    celda: (f) => <span className="block truncate text-xs text-slate-600">{f.categoria || '—'}</span> },
+  { id: 'disponible', titulo: 'Disponible', ancho: 88, clave: true, alinear: 'derecha', ordenable: true,
+    celda: (f) => (
+      <span className={`text-sm font-black ${f.estado_stock === 'agotado' ? 'text-red-700' : f.estado_stock === 'bajo_minimo' ? 'text-amber-700' : 'text-slate-800'}`}>
+        {cantidad(f.disponible)}
+      </span>
+    ) },
+  { id: 'minimo', titulo: 'Mínimo', ancho: 80, alinear: 'derecha', titleCelda: () => 'Mínimo de la referencia (la alerta de stock mínimo de su publicación; 5 si no tiene)',
+    celda: (f) => <span className="text-xs font-medium text-slate-600">{cantidad(f.minimo)}</span> },
+  { id: 'transito', titulo: 'En tránsito', ancho: 92, alinear: 'derecha', ordenable: true,
+    titleCelda: (f) => ((f.en_transito ?? 0) > 0 ? `${cantidad(f.en_transito)} pedidas al proveedor y sin recibir` : 'Nada en camino'),
+    celda: (f) => <span className="text-xs font-medium text-blue-700">{(f.en_transito ?? 0) > 0 ? `+${cantidad(f.en_transito)}` : '—'}</span> },
+  { id: 'estado', titulo: 'Estado', ancho: 124, clave: true,
+    titleCelda: (f) => infoStock(f.estado_stock)?.label ?? 'Sin estado', celda: (f) => <CeldaEstadoStock f={f} /> },
+  { id: 'acciones', titulo: 'Acciones', ancho: 80, clave: true, fija: 'derecha', celda: (f) => <CeldaAcciones f={f} /> },
+];
+
 export default function AbastecimientoPage() {
-  const [products, setProducts] = useState<any[]>([]);
-  const [comprasStats, setComprasStats] = useState<any>({});
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [activeTab, setActiveTab] = useState('Bajo Minimo');
+  // ── B4 T18, bloque 1: la carga del servidor (TABLA-inventario punto 6; R5, R10, RP53; D40) ──
+  // El estado ÚNICO de la pantalla: las pestañas, las tarjetas pulsables, la búsqueda, la tabla y el tablero despachan a él;
+  // el modo (Lista o Kanban) se guarda en vista:inventario.abastecimiento. stock-tabla no tiene `vista`: la pestaña viaja como
+  // estado_stock (extraPorVista, RP53). La categoría es un filtro extra de la barra que va al servidor.
+  const [estado, despachar, listo] = useEstadoTabla(ID_ABASTECIMIENTO, INICIAL_ABASTECIMIENTO);
+  const enKanban = estado.modo === 'kanban';
+  const [categoria, setCategoria] = useState('');
+  const { catalogo: categorias, recargar: recargarCategorias } = useCatalogo('/categories');
+  const fijos = useMemo(() => ({ ...FIJOS_ABASTECIMIENTO, categoria_id: categoria || null }), [categoria]);
+  const extraLista = useMemo(() => extraPorVista(estado, VISTAS_ABASTECIMIENTO, fijos, 'agotado'), [estado, fijos]);
+  const listado = useListado<FilaExistencia>({
+    ruta: RUTA_STOCK, estado, conConteos: true, esperar: !listo, despachar, activo: !enKanban, extra: extraLista,
+  });
+  const conteos = listado.conteos as ConteosStock | null;
+  const estadoConteos = useEstadoKpi(listado.cargandoInicial || listado.recargando, listado.error);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [p, cs] = await Promise.all([
-        apiFetch('/products?limit=200').catch(() => []),
-        apiFetch('/compras/stats').catch(() => ({})),
-      ]);
-      setProducts(Array.isArray(p) ? p : (p?.data ?? p?.products ?? []));
-      setComprasStats(cs);
-    } catch { setProducts([]); }
-    finally { setLoading(false); }
-  }, []);
+  // El tablero solo para ver, en modo servidor (R11, C4, D39): el mismo de Stock (COLUMNAS_STOCK), con el MISMO estado. El orden
+  // del hook ('sin_movimiento') NO se manda: stock-tabla responde 422 a un orden de tiempo.
+  const tablero = useTableroKanban<FilaExistencia>({
+    pantalla: ID_ABASTECIMIENTO,
+    modo: 'servidor',
+    columnas: COLUMNAS_STOCK,
+    idDe: claveDeFilaExistencia,
+    activo: listo && enKanban,
+    porColumna: estado.tamano,
+    dependencias: [...dependenciasTablero(estado), categoria],
+    cargar: async (columna, { offset, limit, signal }) => {
+      const consulta = consultaColumnaStock(estado, columna, fijos, { limit, offset });
+      if (consulta === null) return { filas: [], total: 0 };
+      return normalizarRespuesta(await apiFetch(`${RUTA_STOCK}?${consulta}`, { signal }));
+    },
+  });
 
-  useEffect(() => { load(); }, [load]);
+  // Las tarjetas (KPI-inventario punto 6; R10, R12, RP94): tres de GET /inventory/stats y pec_activos de GET /compras/stats
+  // (T12), que cargan y fallan POR SEPARADO: la que falla dice «—» y las demás siguen. Sin respaldo local; mientras no llegan,
+  // 'cargando' (nunca 0 ni «?»).
+  const [vueltaStats, setVueltaStats] = useState(0);
+  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
+  useEffect(() => {
+    const control = new AbortController();
+    apiFetch('/inventory/stats', { signal: control.signal })
+      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
+      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
+    return () => control.abort();
+  }, [vueltaStats]);
+  const cargandoStats = stats?.vuelta !== vueltaStats;
+  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
+  const [vueltaCompras, setVueltaCompras] = useState(0);
+  const [compras, setCompras] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
+  useEffect(() => {
+    const control = new AbortController();
+    apiFetch('/compras/stats', { signal: control.signal })
+      .then((r: { data?: unknown } | null) => setCompras({ vuelta: vueltaCompras, datos: r?.data ?? null, error: null }))
+      .catch((err: unknown) => { if (!control.signal.aborted) setCompras({ vuelta: vueltaCompras, datos: null, error: err }); });
+    return () => control.abort();
+  }, [vueltaCompras]);
+  const cargandoCompras = compras?.vuelta !== vueltaCompras;
+  const estadoCompras = useEstadoKpi(cargandoCompras, cargandoCompras ? null : (compras?.error ?? null));
+  const tarjetas = tarjetasAbastecimiento(stats?.datos ?? null, compras?.datos ?? null);
+  const agotados = tarjetas.agotados.valor;
 
-  // Classify products by stock status
-  const getStatus = (p: any) => {
-    const stock = p.current_stock ?? p.quantity ?? 0;
-    const min = p.low_stock_alert ?? 0;
-    if (stock === 0) return 'SIN_STOCK';
-    if (min > 0 && stock < min) return 'BAJO_MINIMO';
-    return 'OK';
+  // «Actualizar»: la lista, el tablero, las dos fuentes de las tarjetas y el selector. Ninguna recarga vacía lo que se ve.
+  const { recargar: recargarListado } = listado;
+  const { recargar: recargarTablero } = tablero;
+  const recargarTodo = useCallback(() => {
+    recargarListado();
+    recargarTablero();
+    recargarCategorias();
+    setVueltaStats((n) => n + 1);
+    setVueltaCompras((n) => n + 1);
+  }, [recargarListado, recargarTablero, recargarCategorias]);
+  const actualizando = listado.recargando || (cargandoStats && stats !== null) || (cargandoCompras && compras !== null);
+
+  // ── bloque 2: la tabla (R5, R26; D40, D41) ──
+  const prefs = usePreferenciasTabla(ID_ABASTECIMIENTO, COLUMNAS_TABLA_ABASTECIMIENTO);
+  const anchoTablaRef = useRef<number | null>(null);
+  // Desestructurado: con el objeto entero en ref={…}, react-hooks/refs marca «Cannot access refs during render».
+  const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
+  // Pasar a Kanban sale de la pantalla completa (el conmutador sigue a la vista y el tablero no queda tapado).
+  useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
+  const [detalle, setDetalle] = useState<FilaExistencia | null>(null);
+  const abrir = useCallback((f: FilaExistencia) => setDetalle(f), []);
+  const pestanas = pestanasExistencias(conteos, { conTodos: false });
+  const cambiarCategoria = useCallback((valor: string) => {
+    setCategoria(valor);
+    despachar({ tipo: 'pagina', valor: 1 });
+  }, [despachar]);
+  const nombreCategoria = categoria ? (categorias.filas?.find((c) => String(c.id) === categoria)?.name ?? `#${categoria}`) : null;
+  // m8 de T15: el «vacío» memoizado dice qué lo deja vacío (la búsqueda, la pestaña o la categoría).
+  const vacio = useMemo(() => {
+    const texto = textoVacioStock({ q: estado.q, vista: estado.vista, categoria: nombreCategoria });
+    return (
+      <div>
+        <p className="font-semibold text-slate-600">{texto.titulo}</p>
+        {texto.ayuda && <p className="mt-1 text-xs text-slate-500">{texto.ayuda}</p>}
+      </div>
+    );
+  }, [estado.q, estado.vista, nombreCategoria]);
+  // «N resultados» es el de la tabla; en Kanban cada columna trae su total (la barra no lo repite).
+  const totalDeLaBarra = enKanban ? {} : {
+    total: listado.total,
+    estadoTotal: estadoDelTotal({ total: listado.total, cargando: listado.cargandoInicial, recargando: listado.recargando, error: listado.error }),
   };
 
-  const sinStock = products.filter(p => getStatus(p) === 'SIN_STOCK').length;
-  const bajoMin = products.filter(p => getStatus(p) === 'BAJO_MINIMO').length;
-  const ok = products.filter(p => getStatus(p) === 'OK').length;
-
-  const filtered = products.filter(p => {
-    const ms = !search || p.name?.toLowerCase().includes(search.toLowerCase()) || p.reference?.toLowerCase().includes(search.toLowerCase());
-    if (!ms) return false;
-    const st = getStatus(p);
-    if (activeTab === 'Urgente (0 stock)') return st === 'SIN_STOCK';
-    if (activeTab === 'Bajo Minimo') return st === 'BAJO_MINIMO' || st === 'SIN_STOCK';
-    if (activeTab === 'En Orden') return st === 'OK';
-    return true;
-  });
+  // ── bloque 4: las tarjetas pulsables (R5, R12) ──
+  // inv_agotados, inv_bajo_minimo e inv_abastecidos abren su pestaña como un clic en ella (D41); en Kanban, esa pestaña en
+  // Lista (accionVistaEnLista). No hay «Todos» que las apague: un segundo clic deja la misma pestaña. pec_activos no es una
+  // vista de esta tabla: informativa. (La tarjeta cuenta referencias de /inventory/stats, sin las que no llevan control de
+  // inventario; la pestaña cuenta las filas de la tabla.)
+  const vistaActiva = enKanban ? null : estado.vista;
+  const elegirVista = (vista: string) => despachar(accionVistaEnLista(estado, vista, undefined));
 
   return (
     <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
       <SubNav label="Inventario" items={INV_NAV} currentPath="/dashboard/inventario/abastecimiento" color="emerald" />
 
-      {/* Alert if there are critical stockouts */}
-      {sinStock > 0 && (
-        <div className="bg-red-50 border-b border-red-200 px-6 py-3 flex items-start gap-4 z-20">
-          <AlertTriangle className="text-red-600 shrink-0 mt-0.5" size={20} />
-          <div className="flex-1">
-            <h4 className="text-sm font-black text-red-800">ALERTA DE STOCK CRITICO</h4>
-            <p className="text-xs font-bold text-red-600 mt-1">{sinStock} producto(s) con stock en CERO. Se requiere pedido de compra urgente.</p>
+      {/* Alerta si hay agotados: el número es el de /inventory/stats (real); mientras carga o si falla, no se afirma nada. */}
+      {agotados !== null && agotados > 0 && (
+        <div role="alert" className="bg-red-50 border-b border-red-200 px-6 py-3 flex flex-wrap items-start gap-4 z-20">
+          <AlertTriangle className="text-red-600 shrink-0 mt-0.5" size={20} aria-hidden="true" />
+          <div className="min-w-[12rem] flex-1">
+            <h4 className="text-sm font-black text-red-800">ALERTA DE STOCK CRÍTICO</h4>
+            <p className="text-xs font-bold text-red-700 mt-1">
+              {formatoEntero(agotados)} {agotados === 1 ? 'producto con stock en cero' : 'productos con stock en cero'}. Se requiere pedido de compra urgente.
+            </p>
           </div>
-          <Link href="/dashboard/compras/pedidos" className="bg-red-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-red-700">
+          <Link href="/dashboard/compras/pedidos" className={`bg-red-700 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-red-800 ${FOCOS.indigo}`}>
             Crear PEC Urgente
           </Link>
         </div>
       )}
 
-      <div className="p-8 max-w-[1600px] mx-auto space-y-6">
+      <div className={CONTENEDOR}>
         <PageHeader icon={ShoppingCart} color="emerald"
           title="Abastecimiento"
-          subtitle="Productos que requieren reabastecimiento segun niveles de alerta."
+          subtitle="Productos que requieren reabastecimiento según el mínimo de cada referencia."
           actions={(
-            <Link href="/dashboard/compras/pedidos"
-              className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-xl font-bold shadow-md flex items-center gap-2">
-              <ShoppingCart size={18} /> Crear Pedido de Compra
-            </Link>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button type="button" onClick={recargarTodo}
+                className={`flex items-center gap-1.5 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-bold text-xs shadow-sm transition-colors ${FOCOS.indigo}`}>
+                <RefreshCw size={13} aria-hidden="true" className={actualizando ? 'animate-spin' : ''} /> Actualizar
+              </button>
+              <Link href="/dashboard/compras/pedidos"
+                className={`bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-3 rounded-xl font-bold shadow-md flex items-center gap-2 ${FOCOS.indigo}`}>
+                <ShoppingCart size={18} aria-hidden="true" /> Crear Pedido de Compra
+              </Link>
+            </div>
           )} />
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-          <StatCard icon={AlertCircle} color="red" label="Sin Stock (0)" value={sinStock} hint="Orden urgente requerida" onClick={() => setActiveTab('Urgente (0 stock)')} />
-          <StatCard icon={Package} color="amber" label="Bajo Minimo" value={bajoMin} hint="Menor al stock minimo configurado" onClick={() => setActiveTab('Bajo Minimo')} />
-          <StatCard icon={CheckCircle2} color="emerald" label="Bien Abastecidos" value={ok} hint="Stock sobre el minimo" onClick={() => setActiveTab('En Orden')} />
-          <StatCard variant="gradient" color="teal" icon={Activity} label="PEC Activos" value={comprasStats?.pec_activos ?? comprasStats?.pec_total ?? '?'} hint="Pedidos de compra en curso" />
-        </div>
+        {/* B4 T18, bloque 4 (KPI-inventario punto 6; R10, R12, RP94): Agotados, Bajo el mínimo y Bien abastecidos (de
+            /inventory/stats, pulsables: abren su pestaña) y Pedidos de compra activos (de /compras/stats). Cada fuente carga y
+            falla por separado: barras grises mientras cargan (nunca 0) y «—» si falla. Sin gradiente. */}
+        <FranjaKpis estado={estadoKpis} titulo="Abastecimiento" nota={AYUDA_MINIMO_INVENTARIO}>
+          <TarjetaKpi kpi="inv_agotados" valor={tarjetas.agotados.valor} ayuda={tarjetas.agotados.ayuda}
+            activo={vistaActiva === 'agotado'} onClick={() => elegirVista('agotado')} />
+          <TarjetaKpi kpi="inv_bajo_minimo" valor={tarjetas.bajo_minimo.valor} ayuda={tarjetas.bajo_minimo.ayuda}
+            activo={vistaActiva === 'bajo_minimo'} onClick={() => elegirVista('bajo_minimo')} />
+          <TarjetaKpi kpi="inv_abastecidos" valor={tarjetas.abastecidos.valor} ayuda={tarjetas.abastecidos.ayuda}
+            activo={vistaActiva === 'abastecido'} onClick={() => elegirVista('abastecido')} />
+          <TarjetaKpi kpi="pec_activos" valor={tarjetas.pec_activos.valor} ayuda={tarjetas.pec_activos.ayuda} estado={estadoCompras} />
+        </FranjaKpis>
 
-        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col overflow-hidden">
-          <div className="border-b border-slate-200 bg-slate-50/50 p-4 flex justify-between items-center gap-4">
-            <div className="flex gap-2">
-              {['Urgente (0 stock)', 'Bajo Minimo', 'En Orden'].map(tab => (
-                <button key={tab} onClick={() => setActiveTab(tab)}
-                  className={`px-5 py-2.5 rounded-lg text-sm font-bold transition-all ${
-                    activeTab === tab
-                      ? tab.includes('Urgente')    ? 'bg-red-100 text-red-800 shadow-sm border border-red-200'
-                      : tab === 'Bajo Minimo'       ? 'bg-amber-100 text-amber-800 shadow-sm border border-amber-200'
-                      :                                'bg-emerald-100 text-emerald-800 shadow-sm border border-emerald-200'
-                      : 'text-slate-600 hover:bg-slate-100'
-                  }`}>
-                  {tab} ({tab.includes('Urgente') ? sinStock : tab === 'Bajo Minimo' ? bajoMin : ok})
-                </button>
-              ))}
-            </div>
-            <div className="relative flex items-center bg-white border border-slate-300 rounded-xl px-3 py-2 shadow-sm">
-              <Search className="text-slate-400 mr-2" size={16} />
-              <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-                placeholder="Buscar producto..." className="bg-transparent text-sm outline-none w-52" />
-              <button onClick={load} className="ml-2 text-slate-400"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /></button>
-            </div>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead className="bg-slate-50 border-b border-slate-200 text-[11px] font-black text-slate-500 uppercase tracking-wider">
-                <tr>
-                  <th className="px-6 py-4">Producto</th>
-                  <th className="px-6 py-4">Referencia</th>
-                  <th className="px-6 py-4">Categoria</th>
-                  <th className="px-6 py-4 text-right">Stock Actual</th>
-                  <th className="px-6 py-4 text-right">Stock Minimo</th>
-                  <th className="px-6 py-4">Estado Abasto</th>
-                  <th className="px-6 py-4 text-center">Acciones</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-sm">
-                {loading ? (
-                  <tr><td colSpan={7} className="px-6 py-16 text-center">
-                    <RefreshCw size={24} className="animate-spin text-emerald-400 mx-auto mb-2" />
-                    <span className="text-slate-400">Cargando catalogo...</span>
-                  </td></tr>
-                ) : filtered.length === 0 ? (
-                  <tr><td colSpan={7}>
-                    <EmptyState icon={Package} message="Sin productos en esta categoria" />
-                  </td></tr>
-                ) : filtered.map((p: any) => {
-                  const stock = p.current_stock ?? p.quantity ?? 0;
-                  const min = p.low_stock_alert ?? 0;
-                  const status = getStatus(p);
-                  return (
-                    <tr key={p.id} className="hover:bg-slate-50/80 transition-colors group">
-                      <td className="px-6 py-4">
-                        <p className="font-bold text-slate-800">{p.name}</p>
-                        {p.type && <p className="text-xs text-slate-400">{p.type}</p>}
-                      </td>
-                      <td className="px-6 py-4 font-mono text-sm text-slate-600">{p.reference || '-'}</td>
-                      <td className="px-6 py-4 text-slate-600">{p.category_name || '-'}</td>
-                      <td className="px-6 py-4 text-right">
-                        <span className={`font-black text-lg ${
-                          status === 'SIN_STOCK' ? 'text-red-600'
-                          : status === 'BAJO_MINIMO' ? 'text-amber-600'
-                          : 'text-slate-800'
-                        }`}>{stock}</span>
-                      </td>
-                      <td className="px-6 py-4 text-right font-medium text-slate-500">{min || '-'}</td>
-                      <td className="px-6 py-4">
-                        {status === 'SIN_STOCK' ? <Badge tone="danger" icon={AlertCircle}>Sin Stock</Badge>
-                        : status === 'BAJO_MINIMO' ? <Badge tone="warning" icon={AlertTriangle}>Bajo Minimo</Badge>
-                        : <Badge tone="success" icon={CheckCircle2}>OK</Badge>}
-                      </td>
-                      <td className="px-6 py-4 text-center">
-                        <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                          {status !== 'OK' && (
-                            <Link href="/dashboard/compras/pedidos"
-                              className="bg-emerald-100 text-emerald-700 hover:bg-emerald-200 px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1">
-                              <ShoppingCart size={11} /> Crear PEC
-                            </Link>
-                          )}
-                          <Link href={`/dashboard/inventario/productos?id=${p.id}`}
-                            className="bg-slate-100 text-slate-700 hover:bg-slate-200 px-3 py-1.5 rounded text-xs font-bold">
-                            Ver Producto
-                          </Link>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+        {/* B4 T18, bloques 2 y 3 (TABLA-inventario punto 6, KANBAN-resto): la barra y la tabla estándar en el servidor, o el
+            tablero solo para ver en modo servidor, con el MISMO estado. En Kanban las pestañas no se ven (el tablero muestra
+            los tres niveles de stock). */}
+        <div className="flex min-w-0 flex-col gap-4">
+          {capa}
+          <section ref={refTarjeta} className={claseTarjeta}>
+            <BarraTabla
+              estado={estado}
+              onEstado={despachar}
+              pestanas={enKanban ? undefined : pestanas}
+              estadoConteos={estadoConteos}
+              placeholder="Buscar por SKU o producto…"
+              filtros={(
+                <>
+                  <SelectorCatalogo etiqueta="Categoría" todas="Todas las categorías" cargando="Cargando categorías…"
+                    fallo="No se pudieron cargar las categorías" catalogo={categorias} valor={categoria}
+                    onCambiar={cambiarCategoria} onReintentar={recargarCategorias} icono={Layers} />
+                  {categoria && (
+                    <button type="button" onClick={() => cambiarCategoria('')}
+                      className={`rounded-xl px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50 ${FOCOS.indigo}`}>
+                      Quitar filtro
+                    </button>
+                  )}
+                </>
+              )}
+              ajustes={{ columnas: COLUMNAS_TABLA_ABASTECIMIENTO, preferencias: prefs, anchoRef: anchoTablaRef }}
+              kanbanDisponible
+              pantallaCompleta={enKanban ? undefined : { completa, alternar }}
+              color="indigo"
+              {...totalDeLaBarra}
+            />
+            {!enKanban && (
+              <TablaEstandar
+                id={ID_ABASTECIMIENTO}
+                modo="servidor"
+                columnas={COLUMNAS_TABLA_ABASTECIMIENTO}
+                preferencias={prefs}
+                anchoRef={anchoTablaRef}
+                estado={estado}
+                onEstado={despachar}
+                filas={listado.filas}
+                total={listado.total}
+                cargando={listado.cargandoInicial}
+                recargando={listado.recargando}
+                error={listado.error}
+                onReintentar={listado.recargar}
+                aviso={listado.avisoOrden}
+                claveFila={claveDeFilaExistencia}
+                onFila={abrir}
+                claseFila={claseDeFilaExistencia}
+                vacio={vacio}
+                etiqueta="Abastecimiento por referencia"
+              />
+            )}
+          </section>
+          {enKanban ? (
+            /* KANBAN-resto: Agotado · Bajo el mínimo · Bien abastecido, solo para ver: sin regla, con su motivo. */
+            <TableroKanban
+              tablero={tablero}
+              soloLectura={TEXTO_SOLO_VER_STOCK}
+              tarjetaDe={tarjetaExistencia}
+              onAbrir={abrir}
+              color="indigo"
+              vacio="Sin referencias aquí"
+            />
+          ) : null}
         </div>
       </div>
+
+      {/* B4 T18, bloque 5: el detalle de la existencia (un clic en la fila o en la tarjeta). */}
+      {detalle && <DetalleExistencia f={detalle} onCerrar={() => setDetalle(null)} color="emerald" />}
     </div>
   );
 }

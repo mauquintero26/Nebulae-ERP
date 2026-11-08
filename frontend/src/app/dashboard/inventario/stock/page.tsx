@@ -1,123 +1,173 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { Info, Layers, RefreshCw, ShoppingCart } from 'lucide-react';
+// B4 T18: Stock con las existencias REALES (R10) en la tabla estándar sobre /inventory/stock-tabla (por=sku), el estado único
+// de la pantalla (R5), las tarjetas de /inventory/stats (R12) y el tablero solo para ver Agotado · Bajo el mínimo · Bien
+// abastecido (R11, en modo servidor). Antes: /products?limit=300 con campos que /products no trae (todo salía en 0 y Agotado).
+import { FranjaKpis, PageHeader, SubNav, TableroKanban, TarjetaKpi, useEstadoKpi, useTableroKanban } from '@/components/ui';
 import {
-  Layers, Search, AlertCircle, CheckCircle2,
-  RefreshCw, Package, Box, Truck,
-  Clock, Info, ShoppingCart
-} from 'lucide-react';
-import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
-import { SubNav, PageHeader, StatCard, Badge, EmptyState } from '@/components/ui';
+  BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
+} from '@/components/tabla';
+import type { ColumnaTabla } from '@/components/tabla';
+import { apiFetch } from '@/lib/api';
+import { AYUDA_MINIMO_INVENTARIO, tarjetasStock } from '@/lib/kpis';
+import { dependenciasTablero, estadoDelTotal, extraPorVista, normalizarRespuesta } from '@/lib/tabla';
+import {
+  COLUMNAS_STOCK, TEXTO_SOLO_VER_STOCK, VISTAS_STOCK, consultaColumnaStock, pestanasExistencias, tarjetaExistencia, textoVacioStock,
+} from '@/lib/estados-compras';
 import { INV_NAV } from '../inv-nav';
+import {
+  CONTENEDOR, CeldaEstadoStock, CeldaProducto, DetalleExistencia, FOCOS, SelectorCatalogo, cantidad, claseDeFilaExistencia,
+  claveDeFilaExistencia, infoStock, pesos, useCatalogo,
+} from '../piezas-inventario';
+import type { ConteosStock, FilaExistencia } from '../piezas-inventario';
 
-async function apiFetch(path: string, opts: RequestInit = {}) {
-  const res = await _apiFetch(path, opts);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || data.message || 'Error');
-  return data.data ?? data;
-}
+/** El id de la pantalla: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26). */
+const ID_STOCK = 'inventario.stock';
+const INICIAL_STOCK = { vista: 'todos' };
+const RUTA_STOCK = '/inventory/stock-tabla';
+/** Una fila por referencia, con las bodegas sumadas (el tránsito del SKU se cuenta una vez, RP50). */
+const FIJOS_STOCK = { por: 'sku' };
 
-const fCOP = (v: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0);
+/**
+ * La tabla (TABLA-inventario punto 5; R26, D41): las columnas de hoy (Producto, Categoría, Físico, Comprometido, Venta
+ * inmediata, En tránsito, Precio y Estado) ahora con datos; los títulos son los de R10 (Reservado, Disponible). SKU queda fijo y
+ * Producto es la flexible. R26: a 1024 px con el menú abierto la caja deja 704 px; Categoría y Precio van ocultas por defecto
+ * (se muestran con «Ajustar tabla»). Una constante: estable (D40).
+ */
+const COLUMNAS_TABLA_STOCK: ColumnaTabla<FilaExistencia>[] = [
+  { id: 'sku', titulo: 'SKU', ancho: 104, clave: true, fija: 'izquierda', ordenable: true, titleCelda: (f) => f.sku,
+    celda: (f) => <span className="block truncate font-mono text-[11px] font-bold text-indigo-700">{f.sku}</span> },
+  { id: 'producto', titulo: 'Producto', ancho: 120, clave: true, flexible: true, ordenable: true,
+    titleCelda: (f) => f.producto || 'Sin nombre', celda: (f) => <CeldaProducto f={f} /> },
+  { id: 'categoria', titulo: 'Categoría', ancho: 120, ocultaPorDefecto: true, ordenable: true, titleCelda: (f) => f.categoria || 'Sin categoría',
+    celda: (f) => <span className="block truncate text-xs text-slate-600">{f.categoria || '—'}</span> },
+  { id: 'fisico', titulo: 'Físico', ancho: 72, alinear: 'derecha', ordenable: true,
+    celda: (f) => <span className="text-xs font-bold text-slate-900">{cantidad(f.fisico)}</span> },
+  { id: 'reservado', titulo: 'Reservado', ancho: 88, alinear: 'derecha', ordenable: true,
+    celda: (f) => <span className="text-xs font-bold text-amber-800">{cantidad(f.reservado)}</span> },
+  { id: 'disponible', titulo: 'Disponible', ancho: 88, clave: true, alinear: 'derecha', ordenable: true,
+    celda: (f) => <span className="text-xs font-black text-emerald-800">{cantidad(f.disponible)}</span> },
+  { id: 'transito', titulo: 'En tránsito', ancho: 92, alinear: 'derecha', ordenable: true,
+    titleCelda: (f) => ((f.en_transito ?? 0) > 0 ? `${cantidad(f.en_transito)} pedidas al proveedor y sin recibir` : 'Nada en camino'),
+    celda: (f) => <span className="text-xs font-medium text-blue-700">{(f.en_transito ?? 0) > 0 ? `+${cantidad(f.en_transito)}` : '—'}</span> },
+  { id: 'precio', titulo: 'Precio', ancho: 104, ocultaPorDefecto: true, alinear: 'derecha', ordenable: true,
+    titleCelda: (f) => (f.precio == null ? 'Sin precio de venta' : pesos(f.precio)),
+    celda: (f) => <span className="text-xs text-slate-700">{pesos(f.precio)}</span> },
+  { id: 'estado', titulo: 'Estado', ancho: 124, clave: true,
+    titleCelda: (f) => infoStock(f.estado_stock)?.label ?? 'Sin estado', celda: (f) => <CeldaEstadoStock f={f} /> },
+];
 
 export default function StockPage() {
-  const [products, setProducts] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [filterCategory, setFilterCategory] = useState('all');
-  const [filterStatus, setFilterStatus] = useState<'all' | 'available' | 'low' | 'out'>('all');
+  // ── B4 T18, bloque 1: la carga del servidor (TABLA-inventario punto 5; R5, R10, RP47; D40) ──
+  // El estado ÚNICO de la pantalla: las pestañas, la búsqueda, la tabla y el tablero despachan a él; el modo (Lista o Kanban)
+  // se guarda en vista:inventario.stock. La categoría es un filtro extra de la barra que va al servidor (cada cambio vuelve a
+  // la página 1). stock-tabla no tiene `vista`: la pestaña viaja como estado_stock (extraPorVista, RP53).
+  const [estado, despachar, listo] = useEstadoTabla(ID_STOCK, INICIAL_STOCK);
+  const enKanban = estado.modo === 'kanban';
+  const [categoria, setCategoria] = useState('');
+  const { catalogo: categorias, recargar: recargarCategorias } = useCatalogo('/categories');
+  const fijos = useMemo(() => ({ ...FIJOS_STOCK, categoria_id: categoria || null }), [categoria]);
+  const extraLista = useMemo(() => extraPorVista(estado, VISTAS_STOCK, fijos), [estado, fijos]);
+  // GET /inventory/stock-tabla?por=sku con q, orden, limit y offset del estado y los conteos de las pestañas en la MISMA
+  // llamada. esperar: !listo (D40): el esqueleto, nunca «vacío». En Kanban no pide la lista (activo: false, RP35).
+  const listado = useListado<FilaExistencia>({
+    ruta: RUTA_STOCK, estado, conConteos: true, esperar: !listo, despachar, activo: !enKanban, extra: extraLista,
+  });
+  const conteos = listado.conteos as ConteosStock | null;
+  const estadoConteos = useEstadoKpi(listado.cargandoInicial || listado.recargando, listado.error);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await apiFetch('/products?limit=300').catch(() => []);
-      const prodList = Array.isArray(res) ? res : (res?.data ?? []);
-      setProducts(prodList);
-    } catch {
-      setProducts([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // El tablero solo para ver, en modo servidor (R11, C4, D39): una consulta por columna (consultaColumnaStock: el estado de
+  // la columna, la búsqueda y el orden del MISMO estado, y la categoría). El orden del hook ('sin_movimiento') NO se manda:
+  // stock-tabla responde 422 a un orden de tiempo. La fila no trae `id`: la clave es el par SKU y bodega.
+  const tablero = useTableroKanban<FilaExistencia>({
+    pantalla: ID_STOCK,
+    modo: 'servidor',
+    columnas: COLUMNAS_STOCK,
+    idDe: claveDeFilaExistencia,
+    activo: listo && enKanban,
+    porColumna: estado.tamano,
+    dependencias: [...dependenciasTablero(estado), categoria],
+    cargar: async (columna, { offset, limit, signal }) => {
+      const consulta = consultaColumnaStock(estado, columna, fijos, { limit, offset });
+      if (consulta === null) return { filas: [], total: 0 };
+      return normalizarRespuesta(await apiFetch(`${RUTA_STOCK}?${consulta}`, { signal }));
+    },
+  });
 
+  // Las tarjetas (KPI-inventario punto 5; R10, R12): GET /inventory/stats, todo el inventario por referencia, sin respaldo
+  // local. Mientras no llega, 'cargando' (nunca 0); si falla, «—».
+  const [vueltaStats, setVueltaStats] = useState(0);
+  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    const control = new AbortController();
+    apiFetch('/inventory/stats', { signal: control.signal })
+      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
+      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
+    return () => control.abort();
+  }, [vueltaStats]);
+  const cargandoStats = stats?.vuelta !== vueltaStats;
+  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
+  const tarjetas = tarjetasStock(stats?.datos ?? null);
 
-  // Transformar datos para la vista dual de inventario
-  const mappedItems = useMemo(() => {
-    return products.map((p: any) => {
-      const fisico = Number(p.total_stock || p.stock || 0);
-      // Comprometido estimado (reservas o asignaciones a pedidos con anticipo)
-      const comprometido = Number(p.reserved_stock || p.comprometido || 0);
-      // Disponible real = Físico - Comprometido (nunca menor a 0)
-      const disponible = Math.max(0, fisico - comprometido);
-      const enTransito = Number(p.in_transit_stock || p.en_transito || 0);
-      const minStock = Number(p.min_stock || 5);
+  // «Actualizar»: la lista, el tablero, las tarjetas y el selector. Ninguna recarga vacía lo que se ve.
+  const { recargar: recargarListado } = listado;
+  const { recargar: recargarTablero } = tablero;
+  const recargarTodo = useCallback(() => {
+    recargarListado();
+    recargarTablero();
+    recargarCategorias();
+    setVueltaStats((n) => n + 1);
+  }, [recargarListado, recargarTablero, recargarCategorias]);
+  const actualizando = listado.recargando || (cargandoStats && stats !== null);
 
-      let stockState: 'ok' | 'warning' | 'danger' = 'ok';
-      if (disponible === 0) stockState = 'danger';
-      else if (disponible <= minStock) stockState = 'warning';
-
-      return {
-        id: p.id,
-        sku: p.internal_ref || p.sku || `PRD-${p.id}`,
-        nombre: p.name || p.nombre || 'Producto sin nombre',
-        categoria: p.category_name || (p.category_id ? `Categoría #${p.category_id}` : 'General'),
-        precio_venta: Number(p.price || p.precio_venta || 0),
-        fisico,
-        comprometido,
-        disponible,
-        enTransito,
-        minStock,
-        stockState
-      };
-    });
-  }, [products]);
-
-  // Métricas globales
-  const totalFisico = mappedItems.reduce((acc, i) => acc + i.fisico, 0);
-  const totalComprometido = mappedItems.reduce((acc, i) => acc + i.comprometido, 0);
-  const totalDisponible = mappedItems.reduce((acc, i) => acc + i.disponible, 0);
-  const totalEnTransito = mappedItems.reduce((acc, i) => acc + i.enTransito, 0);
-
-  const categories = useMemo(() => {
-    const set = new Set<string>();
-    mappedItems.forEach(i => { if (i.categoria) set.add(i.categoria); });
-    return Array.from(set);
-  }, [mappedItems]);
-
-  const filteredItems = useMemo(() => {
-    return mappedItems.filter(item => {
-      const term = search.toLowerCase();
-      const matchSearch = !search ||
-        item.nombre.toLowerCase().includes(term) ||
-        item.sku.toLowerCase().includes(term);
-
-      if (!matchSearch) return false;
-      if (filterCategory !== 'all' && item.categoria !== filterCategory) return false;
-
-      if (filterStatus === 'available' && item.disponible <= 0) return false;
-      if (filterStatus === 'low' && item.stockState !== 'warning') return false;
-      if (filterStatus === 'out' && item.disponible > 0) return false;
-
-      return true;
-    });
-  }, [mappedItems, search, filterCategory, filterStatus]);
+  // ── bloque 2: la tabla (R5, R26; D40, D41) ──
+  const prefs = usePreferenciasTabla(ID_STOCK, COLUMNAS_TABLA_STOCK);
+  const anchoTablaRef = useRef<number | null>(null);
+  // Desestructurado: con el objeto entero en ref={…}, react-hooks/refs marca «Cannot access refs during render».
+  const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
+  // Pasar a Kanban sale de la pantalla completa (el conmutador sigue a la vista y el tablero no queda tapado).
+  useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
+  const [detalle, setDetalle] = useState<FilaExistencia | null>(null);
+  const abrir = useCallback((f: FilaExistencia) => setDetalle(f), []);
+  const pestanas = pestanasExistencias(conteos);
+  const cambiarCategoria = useCallback((valor: string) => {
+    setCategoria(valor);
+    despachar({ tipo: 'pagina', valor: 1 });
+  }, [despachar]);
+  // El nombre de lo elegido, para el vacío (si el catálogo todavía no llegó, el id).
+  const nombreCategoria = categoria ? (categorias.filas?.find((c) => String(c.id) === categoria)?.name ?? `#${categoria}`) : null;
+  // m8 de T15: el «vacío» memoizado dice qué lo deja vacío (la búsqueda, la pestaña o la categoría).
+  const vacio = useMemo(() => {
+    const texto = textoVacioStock({ q: estado.q, vista: estado.vista, categoria: nombreCategoria });
+    return (
+      <div>
+        <p className="font-semibold text-slate-600">{texto.titulo}</p>
+        {texto.ayuda && <p className="mt-1 text-xs text-slate-500">{texto.ayuda}</p>}
+      </div>
+    );
+  }, [estado.q, estado.vista, nombreCategoria]);
+  // «N resultados» es el de la tabla; en Kanban cada columna trae su total (la barra no lo repite).
+  const totalDeLaBarra = enKanban ? {} : {
+    total: listado.total,
+    estadoTotal: estadoDelTotal({ total: listado.total, cargando: listado.cargandoInicial, recargando: listado.recargando, error: listado.error }),
+  };
 
   return (
     <div className="w-full bg-slate-50 min-h-full animate-in fade-in flex flex-col">
       <SubNav label="Inventario" items={INV_NAV} currentPath="/dashboard/inventario/stock" color="indigo" />
 
-      <div className="p-8 max-w-[1600px] mx-auto space-y-6 flex-1 w-full">
+      <div className={CONTENEDOR}>
         <PageHeader icon={Layers} color="indigo"
           title="Vista Dual de Inventario"
           subtitle="Control simultáneo de Inventario Físico en Bodega vs. Disponible para Venta Inmediata."
           actions={(
             <div className="flex items-center gap-2.5">
-              <button onClick={loadData}
-                className="flex items-center gap-1.5 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-bold text-xs shadow-sm transition-colors">
-                <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Actualizar
+              <button type="button" onClick={recargarTodo}
+                className={`flex items-center gap-1.5 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-bold text-xs shadow-sm transition-colors ${FOCOS.indigo}`}>
+                <RefreshCw size={13} aria-hidden="true" className={actualizando ? 'animate-spin' : ''} /> Actualizar
               </button>
               <Link href="/dashboard/cotiza"
                 className="flex items-center gap-1.5 px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-bold text-xs shadow-sm transition-colors">
@@ -135,134 +185,89 @@ export default function StockPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard icon={Box} color="blue" label="Físico en Bodega" value={totalFisico} hint="Unidades presentes en estantería" />
-          <StatCard icon={Clock} color="amber" label="Comprometido" value={totalComprometido} hint="Preventas con anticipo recibido" />
-          <StatCard icon={CheckCircle2} color="emerald" label="Venta Inmediata" value={totalDisponible} hint="Libres de compromiso comercial" />
-          <StatCard icon={Truck} color="blue" label="En Tránsito" value={totalEnTransito} hint="Compradas en camino a bodega" />
-        </div>
+        {/* B4 T18, bloque 4 (KPI-inventario punto 5; R10, R12): las 4 tarjetas de /inventory/stats (todo el inventario, por
+            referencia): mientras cargan, barras grises (nunca 0); con error, «—». Ninguna es botón: no equivalen a una
+            pestaña. La nota dice dónde se define el mínimo (R10). Sin la nota de «datos de ejemplo»: la tabla ya es real. */}
+        <FranjaKpis estado={estadoKpis} titulo="Existencias" nota={AYUDA_MINIMO_INVENTARIO}>
+          <TarjetaKpi kpi="inv_fisico" valor={tarjetas?.fisico.valor ?? null} ayuda={tarjetas?.fisico.ayuda} />
+          <TarjetaKpi kpi="inv_reservado" valor={tarjetas?.reservado.valor ?? null} ayuda={tarjetas?.reservado.ayuda} />
+          <TarjetaKpi kpi="inv_disponible" valor={tarjetas?.disponible.valor ?? null} ayuda={tarjetas?.disponible.ayuda} />
+          <TarjetaKpi kpi="inv_en_transito" valor={tarjetas?.en_transito.valor ?? null} ayuda={tarjetas?.en_transito.ayuda} />
+        </FranjaKpis>
 
-        {/* Barra de Filtros y Búsqueda */}
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-2 w-full md:w-auto flex-1">
-            <div className="relative w-full md:w-80">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
-              <input
-                type="text"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Buscar por SKU o nombre de producto..."
-                className="pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500 outline-none w-full"
+        {/* B4 T18, bloques 2 y 3 (TABLA-inventario punto 5, KANBAN-resto): la barra y la tabla estándar en el servidor, o el
+            tablero solo para ver en modo servidor, con el MISMO estado (pestaña, búsqueda, orden y categoría). En Kanban las
+            pestañas no se ven (el tablero muestra los tres niveles de stock). */}
+        <div className="flex min-w-0 flex-col gap-4">
+          {capa}
+          <section ref={refTarjeta} className={claseTarjeta}>
+            <BarraTabla
+              estado={estado}
+              onEstado={despachar}
+              pestanas={enKanban ? undefined : pestanas}
+              estadoConteos={estadoConteos}
+              placeholder="Buscar por SKU o producto…"
+              filtros={(
+                <>
+                  <SelectorCatalogo etiqueta="Categoría" todas="Todas las categorías" cargando="Cargando categorías…"
+                    fallo="No se pudieron cargar las categorías" catalogo={categorias} valor={categoria}
+                    onCambiar={cambiarCategoria} onReintentar={recargarCategorias} icono={Layers} />
+                  {categoria && (
+                    <button type="button" onClick={() => cambiarCategoria('')}
+                      className={`rounded-xl px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50 ${FOCOS.indigo}`}>
+                      Quitar filtro
+                    </button>
+                  )}
+                </>
+              )}
+              ajustes={{ columnas: COLUMNAS_TABLA_STOCK, preferencias: prefs, anchoRef: anchoTablaRef }}
+              kanbanDisponible
+              pantallaCompleta={enKanban ? undefined : { completa, alternar }}
+              color="indigo"
+              {...totalDeLaBarra}
+            />
+            {/* La tabla estándar en el servidor: la paginación (25 o 50), el orden, y los tonos de la fila son de la tabla; un
+                clic en la fila abre el detalle. */}
+            {!enKanban && (
+              <TablaEstandar
+                id={ID_STOCK}
+                modo="servidor"
+                columnas={COLUMNAS_TABLA_STOCK}
+                preferencias={prefs}
+                anchoRef={anchoTablaRef}
+                estado={estado}
+                onEstado={despachar}
+                filas={listado.filas}
+                total={listado.total}
+                cargando={listado.cargandoInicial}
+                recargando={listado.recargando}
+                error={listado.error}
+                onReintentar={listado.recargar}
+                aviso={listado.avisoOrden}
+                claveFila={claveDeFilaExistencia}
+                onFila={abrir}
+                claseFila={claseDeFilaExistencia}
+                vacio={vacio}
+                etiqueta="Existencias por referencia"
               />
-            </div>
-
-            <select
-              value={filterCategory}
-              onChange={e => setFilterCategory(e.target.value)}
-              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 outline-none"
-            >
-              <option value="all">Todas las Categorías</option>
-              {categories.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-
-          <div className="flex items-center gap-2 w-full md:w-auto justify-end">
-            <div className="flex bg-slate-100 p-1 rounded-xl">
-              {(['all', 'available', 'low', 'out'] as const).map(st => (
-                <button
-                  key={st}
-                  onClick={() => setFilterStatus(st)}
-                  className={`px-3 py-1.5 text-[11px] font-bold rounded-lg transition-all ${
-                    filterStatus === st
-                      ? 'bg-white text-indigo-700 shadow-sm'
-                      : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  {st === 'all' ? 'Todos' : st === 'available' ? 'Disponible' : st === 'low' ? 'Bajo Stock' : 'Agotado'}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Tabla Dual de Stock */}
-        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50/80 border-b border-slate-200 text-[11px] uppercase tracking-wider text-slate-400 font-black">
-                  <th className="p-4 pl-6">Producto / Referencia</th>
-                  <th className="p-4">Categoría</th>
-                  <th className="p-4 text-center bg-slate-100/50">Físico Bodega</th>
-                  <th className="p-4 text-center bg-amber-50/40 text-amber-800">Comprometido</th>
-                  <th className="p-4 text-center bg-emerald-50/60 text-emerald-800 font-extrabold">Venta Inmediata</th>
-                  <th className="p-4 text-center">En Tránsito</th>
-                  <th className="p-4 text-right">Precio Venta</th>
-                  <th className="p-4 pr-6 text-center">Estado</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-xs">
-                {loading ? (
-                  <tr>
-                    <td colSpan={8} className="p-12 text-center text-slate-400">
-                      <RefreshCw size={24} className="animate-spin text-indigo-500 mx-auto mb-2" />
-                      Cargando stock actualizado...
-                    </td>
-                  </tr>
-                ) : filteredItems.length === 0 ? (
-                  <tr><td colSpan={8}>
-                    <EmptyState icon={Package} message="No se encontraron productos con los filtros seleccionados" />
-                  </td></tr>
-                ) : (
-                  filteredItems.map((item, idx) => (
-                    <tr key={item.id || idx} className="hover:bg-slate-50/60 transition-colors">
-                      <td className="p-4 pl-6">
-                        <div className="font-bold text-slate-800">{item.nombre}</div>
-                        <div className="text-[10px] font-mono text-slate-400 mt-0.5">{item.sku}</div>
-                      </td>
-                      <td className="p-4 text-slate-600 font-medium">
-                        {item.categoria}
-                      </td>
-                      <td className="p-4 text-center font-bold text-slate-700 bg-slate-50/40">
-                        {item.fisico}
-                      </td>
-                      <td className="p-4 text-center font-bold text-amber-700 bg-amber-50/20">
-                        {item.comprometido > 0 ? (
-                          <span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full text-[10px]">
-                            {item.comprometido}
-                          </span>
-                        ) : (
-                          <span className="text-slate-300">-</span>
-                        )}
-                      </td>
-                      <td className="p-4 text-center font-black bg-emerald-50/40">
-                        <span className={`text-sm ${item.disponible > 0 ? 'text-emerald-700' : 'text-red-500'}`}>
-                          {item.disponible}
-                        </span>
-                      </td>
-                      <td className="p-4 text-center font-medium text-blue-600">
-                        {item.enTransito > 0 ? `+${item.enTransito}` : '—'}
-                      </td>
-                      <td className="p-4 text-right font-bold text-slate-800">
-                        {item.precio_venta > 0 ? fCOP(item.precio_venta) : '-'}
-                      </td>
-                      <td className="p-4 pr-6 text-center">
-                        {item.disponible > 0 ? (
-                          <Badge tone="success" icon={CheckCircle2}>Disponible</Badge>
-                        ) : item.fisico > 0 ? (
-                          <Badge tone="warning" icon={Clock}>Reservado</Badge>
-                        ) : (
-                          <Badge tone="danger" icon={AlertCircle}>Agotado</Badge>
-                        )}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+            )}
+          </section>
+          {enKanban ? (
+            /* KANBAN-resto: Agotado · Bajo el mínimo · Bien abastecido, solo para ver: sin regla, con su motivo. El clic abre el detalle. */
+            <TableroKanban
+              tablero={tablero}
+              soloLectura={TEXTO_SOLO_VER_STOCK}
+              tarjetaDe={tarjetaExistencia}
+              onAbrir={abrir}
+              color="indigo"
+              vacio="Sin referencias aquí"
+            />
+          ) : null}
         </div>
       </div>
+
+      {/* B4 T18, bloque 5: el detalle de la existencia (un clic en la fila o en la tarjeta). */}
+      {detalle && <DetalleExistencia f={detalle} onCerrar={() => setDetalle(null)} />}
     </div>
   );
 }

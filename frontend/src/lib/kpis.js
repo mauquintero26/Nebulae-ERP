@@ -785,3 +785,49 @@ export function resumenAlmacenes(filas) {
   }
   return [...porBodega.values()].sort((a, b) => a.bodega.localeCompare(b.bodega, 'es') || (a.warehouse_id < b.warehouse_id ? -1 : a.warehouse_id > b.warehouse_id ? 1 : 0));
 }
+
+// ─── B4 T18: las tarjetas de Stock y de Abastecimiento (KPI-inventario puntos 5 y 6; R10, R12) ─────────────────────
+
+/** Un objeto de datos del servidor (no un arreglo ni un texto), o null. */
+const datosDe = (d) => (d !== null && typeof d === 'object' && !Array.isArray(d) ? d : null);
+
+/**
+ * B4 T18 (KPI-inventario punto 5): lo que pintan las 4 tarjetas de Stock con `data` de GET /inventory/stats (T13), todo el
+ * inventario sin las referencias de rastrear_inventario = false: fisico (unidades_fisicas), reservado (unidades_reservadas),
+ * disponible (unidades_disponibles) y en_transito (unidades_en_transito, una vez por SKU). Cada número pasa por numeroFinito
+ * (lo que no es un número queda en null: la barra gris o «—», nunca 0). Sin datos (cargando o con error), null.
+ * @param {any} datos
+ * @returns {{fisico: {valor: number | null, ayuda: string}, reservado: {valor: number | null, ayuda: string},
+ *   disponible: {valor: number | null, ayuda: string}, en_transito: {valor: number | null, ayuda: string}} | null}
+ */
+export function tarjetasStock(datos) {
+  const d = datosDe(datos);
+  if (d === null) return null;
+  return {
+    fisico: { valor: numeroFinito(d.unidades_fisicas), ayuda: 'Lo que hay físicamente en las bodegas.' },
+    reservado: { valor: numeroFinito(d.unidades_reservadas), ayuda: 'Reservas activas que no han vencido.' },
+    disponible: { valor: numeroFinito(d.unidades_disponibles), ayuda: 'Físico menos comprometido, nunca negativo.' },
+    en_transito: { valor: numeroFinito(d.unidades_en_transito), ayuda: 'Pedido al proveedor y aún sin recibir.' },
+  };
+}
+
+/**
+ * B4 T18 (KPI-inventario punto 6; RP94): las 4 tarjetas de Abastecimiento. Tres salen de `stats` (GET /inventory/stats):
+ * agotados (skus_agotados), bajo_minimo (skus_bajo_minimo) y abastecidos (skus_abastecidos), por referencia. La cuarta,
+ * pec_activos, sale de `compras` (GET /compras/stats, T12: pec_activos). Son dos fuentes que cargan y fallan por separado:
+ * si una falta (cargando o con error), SOLO sus tarjetas quedan en null (la barra gris o «—»).
+ * @param {any} stats
+ * @param {any} compras
+ * @returns {{agotados: {valor: number | null, ayuda: string}, bajo_minimo: {valor: number | null, ayuda: string},
+ *   abastecidos: {valor: number | null, ayuda: string}, pec_activos: {valor: number | null, ayuda: string}}}
+ */
+export function tarjetasAbastecimiento(stats, compras) {
+  const s = datosDe(stats) ?? {};
+  const c = datosDe(compras) ?? {};
+  return {
+    agotados: { valor: numeroFinito(s.skus_agotados), ayuda: 'Orden urgente requerida.' },
+    bajo_minimo: { valor: numeroFinito(s.skus_bajo_minimo), ayuda: 'Lo disponible llegó al mínimo.' },
+    abastecidos: { valor: numeroFinito(s.skus_abastecidos), ayuda: 'Lo disponible está sobre el mínimo.' },
+    pec_activos: { valor: numeroFinito(c.pec_activos), ayuda: 'Pedidos de compra en curso.' },
+  };
+}
