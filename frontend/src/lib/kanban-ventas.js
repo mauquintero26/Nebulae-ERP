@@ -1284,9 +1284,6 @@ export function efectosCancelarPedido(pedido) {
 
 // ─── B4 T23A: los pedidos web de E-Commerce (KANBAN-resto puntos 2 y 3; TABLA-otros punto 5; RP8, RP62) ─────────────────
 
-/** La pantalla de E-Commerce: el return_to de lo que abra el tablero de los pedidos web. */
-export const RUTA_ECOMMERCE = '/dashboard/ecommerce';
-
 /** GET de la lista de los pedidos web (canal WEB): la tabla y cada columna del tablero. */
 export const RUTA_PEDIDOS_WEB = '/ecommerce/pedidos';
 
@@ -1310,16 +1307,16 @@ export const OPCIONES_ESTADOS_PEDIDOS_WEB = congelar(COLUMNAS_PEDIDO.flatMap(
 
 /**
  * La tarjeta del tablero de los pedidos web: la de los pedidos de venta (tarjetaPedido: número, cliente, total, estado,
- * antigüedad) con el return_to de E-Commerce, el PVEN debajo del número PWEB (o «Pedido web» si no lo trae) y sin acción
- * propia: el clic abre el pedido en el panel de la pantalla (la acción de un pedido de venta, como «Gestionar compra» para
- * un Pendiente de pago, no es lo que se hace con un pedido de la tienda). La fila de GET /ecommerce/pedidos no trae asesor,
- * saldo ni atraso: no salen chips ni «Sin asignar».
+ * antigüedad), el PVEN debajo del número PWEB (o «Pedido web» si no lo trae) y sin acción propia (accionPrincipal null, así que
+ * no hay return_to que armar): el clic abre el pedido en el panel de la pantalla (la acción de un pedido de venta, como
+ * «Gestionar compra» para un Pendiente de pago, no es lo que se hace con un pedido de la tienda). La fila de GET
+ * /ecommerce/pedidos no trae asesor, saldo ni atraso: no salen chips ni «Sin asignar».
  * @param {any} fila
  * @param {{ahora?: number}} [opciones]
  * @returns {TarjetaVentas}
  */
 export function tarjetaPedidoWeb(fila, { ahora } = {}) {
-  const tarjeta = tarjetaPedido(fila, { ahora, returnTo: RUTA_ECOMMERCE });
+  const tarjeta = tarjetaPedido(fila, { ahora });
   return { ...tarjeta, subtitulo: textoLimpio(fila?.pven_numero) || 'Pedido web', accionPrincipal: null };
 }
 

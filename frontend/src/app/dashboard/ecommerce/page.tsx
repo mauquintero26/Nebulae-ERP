@@ -30,7 +30,7 @@ import {
 import { infoEstadoPedido } from '@/lib/estados-pedido';
 import { lecturaDeCarga, tarjetasTienda } from '@/lib/kpis';
 import { formatoPesos } from '@/lib/pesos';
-import { fechaCorta, fechaHoraLarga } from '@/lib/fechas-colombia';
+import { fechaCorta, fechaHoraLarga, horaCO } from '@/lib/fechas-colombia';
 import { recargarTrasError } from '@/lib/avisos';
 import { TABLE } from '@/lib/design-system';
 import { getUsuarioActual } from '../ventas/flujo';
@@ -40,7 +40,6 @@ import { CHIP } from '../compras/columnas-pec';
 // B4 T23A: los montos como en el resto del bloque ('$4.927.538'). Se fue PWEB_ESTADOS (nombres que no existen en los pedidos
 // reales: el filtro casi nunca encontraba nada): los estados son los de estados-pedido.js (OPCIONES_ESTADOS_PEDIDOS_WEB).
 const fCOP = formatoPesos;
-const fDateTime = (d: any) => d ? new Date(d).toLocaleString('es-CO', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-';
 
 /* =====================================================================
    MODAL PRODUCTO — Crear / Editar (Odoo-inspired, Nebulae design)
@@ -978,7 +977,7 @@ export default function EcommercePage() {
                       <p className="font-bold text-gray-800 text-xs truncate">{c.customer_email||'Anónimo'}</p>
                       <span className="text-xs font-black text-gray-700 shrink-0">{fCOP(c.total_cop ?? 0)}</span>
                     </div>
-                    <p className="text-[10px] text-gray-400 mb-2">{fDateTime(c.created_at)} · {(c.productos||[]).length} productos</p>
+                    <p className="text-[10px] text-gray-400 mb-2">{[fechaCorta(c.created_at), horaCO(c.created_at)].filter(Boolean).join(', ') || '-'} · {(c.productos||[]).length} productos</p>
                     {c.recuperacion_enviada ? (
                       <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-1 rounded-lg font-bold flex items-center gap-1"><Check size={10}/> Recuperación enviada ({c.recuperacion_descuento}% dto)</span>
                     ) : (

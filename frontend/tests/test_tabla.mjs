@@ -2865,9 +2865,14 @@ console.log('--- TEST T23A-b (B4 T23A; TABLA-otros punto 5, KANBAN-resto punto 3
   assert.match(codigo, /\{ etiqueta: 'Editar', icono: Edit2, onClick: \(\) => acciones\?\.editar\(p\) \},/);
   assert.match(codigo, /\{ etiqueta: 'Eliminar', icono: Trash2, peligro: true, onClick: \(\) => acciones\?\.eliminar\(p\) \},/);
   // El alta y la edición de productos, la publicación y los enlaces de los Bloques 1 a 3 siguen.
-  for (const sigue of ['function ProductModal(', "'Nuevo Producto'", "'Información General'", 'href="/store"', "'/ecommerce/pagos/config'", "'/ecommerce/envios/config'", 'recuperarCarrito(c.id,10)', 'recuperarCarrito(c.id,15)']) {
+  for (const sigue of ['function ProductModal(', "'Nuevo Producto'", '<Plus size={15}/> Nuevo Producto', "'Información General'", 'href="/store"', "'/ecommerce/pagos/config'", "'/ecommerce/envios/config'", 'recuperarCarrito(c.id,10)', 'recuperarCarrito(c.id,15)']) {
     assert.ok(fuente.includes(sigue), `sigue: ${sigue}`);
   }
+  // Las fechas del API son instantes UTC sin zona (el servidor manda created_at con isoformat): se leen con fechas-colombia.js (el día y la
+  // hora de Colombia), nunca con new Date(...) del navegador, que las toma como hora local.
+  assert.ok(!/new Date\(/.test(codigo.slice(codigo.indexOf('const AccionesPedidosWeb'))), 'sin new Date( en lo que se tocó');
+  assert.match(codigo, /celda: \(p\) => <span className="block truncate text-xs text-slate-500">\{fechaCorta\(p\.created_at\) \|\| '-'\}<\/span> \}/);
+  assert.match(codigo, /\{\[fechaCorta\(c\.created_at\), horaCO\(c\.created_at\)\]\.filter\(Boolean\)\.join\(', '\) \|\| '-'\} · /);
   // R26: a 1024 px los pedidos van a todo el ancho (los carritos, debajo) y solo desde 2xl en dos columnas; el contenedor es el de las listas.
   assert.match(codigo, /<div className=\{CONTENEDOR\}>/);
   assert.match(codigo, /className="flex min-w-0 flex-1 flex-col gap-6 2xl:flex-row"/);

@@ -1392,7 +1392,6 @@ console.log('--- B4 T23A TEST R: el filtro, la tarjeta y el permiso del tablero 
   // Las rutas y el orden de las columnas: GET /ecommerce/pedidos acepta reciente, sin_movimiento y [-]fecha|numero|cliente|total|
   // items|estado (no 'atencion', que es de Ventas: daría 422).
   assert.equal(kv.RUTA_PEDIDOS_WEB, '/ecommerce/pedidos');
-  assert.equal(kv.RUTA_ECOMMERCE, '/dashboard/ecommerce');
   assert.equal(kv.ORDEN_COLUMNA_PEDIDOS_WEB, 'reciente');
   // La consulta de cada columna es la de los pedidos de venta (consultaColumnaPedido, T10): estados en CSV y q, nunca estado= ni search=.
   const estadoWeb = estadoTablaInicial({ q: ' ana ', orden: '-fecha' });
