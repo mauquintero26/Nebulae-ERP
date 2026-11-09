@@ -2750,6 +2750,33 @@ console.log('--- TEST 51 (B4 T22 r1; I1 M2, m2, m12, m14, m15, m16, m17): conteo
   assert.deepEqual(TABLA.estadoTableroGastos({ clave: 'a', datos: null, error: falla }, 'b'), { tipo: 'cargando', error: null, actualizando: false });
 }
 
+console.log('--- TEST T23A (B4 T23A; TABLA-otros punto 5, H6, C13): faseDeLista — lo que pinta una lista que no es la tabla estándar ---');
+{
+  // La cuadrícula del catálogo y los carritos abandonados de E-Commerce: la primera carga es «cargando» (nunca «vacío»), un error
+  // se dice (con «Reintentar») aunque queden filas de antes, sin filas es «vacío» y con filas, «filas».
+  const falla = Object.assign(new Error('Error del servidor'), { status: 500 });
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: true, error: null, filas: [] }), 'cargando');
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: true, error: null, filas: null }), 'cargando');
+  // Cargando manda sobre un error viejo y sobre filas: la primera carga no pinta «vacío» ni un error de antes.
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: true, error: falla, filas: [] }), 'cargando');
+  // El error manda sobre las filas que se conservan: la lista dice que falló, no finge estar al día.
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: false, error: falla, filas: [{ id: 1 }] }), 'error');
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: false, error: falla, filas: [] }), 'error');
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: false, error: new Error('x'), filas: null }), 'error');
+  // Sin error: vacío o filas.
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: false, error: null, filas: [] }), 'vacio');
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: false, error: null, filas: null }), 'vacio');
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: false, error: undefined, filas: undefined }), 'vacio');
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: false, error: null, filas: [{ id: 1 }] }), 'filas');
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: false, filas: [{ id: 1 }, { id: 2 }] }), 'filas');
+  // Sin nada (la pantalla todavía no pidió): cargando no es; es vacío (la pantalla pasa cargandoInicial cuando espera).
+  assert.equal(TABLA.faseDeLista({}), 'vacio');
+  assert.equal(TABLA.faseDeLista(), 'vacio');
+  // Lo que no es un arreglo no cuenta como filas.
+  assert.equal(TABLA.faseDeLista({ filas: { length: 3 } }), 'vacio');
+  assert.equal(TABLA.faseDeLista({ filas: 'abc' }), 'vacio');
+}
+
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');
 console.log('✓ T4C: sesión, estado armado, partes de columnas, URL de la lista, carga vigente, estado de la lista y modo cliente.');
 console.log('✓ T4C r1: orden rechazado, estados en la sesión, escrituras del usuario del render, esperar y vueltas.');

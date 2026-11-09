@@ -2378,3 +2378,19 @@ export function estadoTableroGastos(conteos, clave) {
   if (error) return { tipo: 'error', error, actualizando: false };
   return { tipo: 'cargando', error: null, actualizando: false };
 }
+
+// ─── B4 T23A: una lista que no es la tabla estándar (la cuadrícula del catálogo y los carritos de E-Commerce) ────────────
+
+/**
+ * Qué pinta una lista hecha con tarjetas (no con TablaEstandar, que ya lo resuelve): 'cargando' mientras llega la primera
+ * respuesta (el esqueleto, nunca «vacío»: H6), 'error' si la última carga falló (se dice con «Reintentar», aunque queden
+ * filas de antes: no finge estar al día), 'vacio' si no hay filas y 'filas' si las hay. Lo que no es un arreglo no cuenta
+ * como filas. Es la ruta de error y de carga de esas listas, aparte de la pantalla para probarla (C13).
+ * @param {{cargandoInicial?: boolean, error?: unknown, filas?: unknown}} [lista]
+ * @returns {'cargando' | 'error' | 'vacio' | 'filas'}
+ */
+export function faseDeLista({ cargandoInicial = false, error = null, filas = null } = {}) {
+  if (cargandoInicial) return 'cargando';
+  if (error) return 'error';
+  return Array.isArray(filas) && filas.length > 0 ? 'filas' : 'vacio';
+}

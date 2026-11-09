@@ -1062,4 +1062,65 @@ console.log('--- TEST 26 (B4 T22 r1; I1, m3, m6, m11, m13): las rutas de error y
   assert.doesNotMatch(fuente, /const objetoPlano = /, 'un solo predicado de objeto (datosDe)');
 }
 
+console.log('--- TEST 27 (B4 T23A, KPI-otros punto 5; R7, R12, RP102): las tarjetas de la tienda y su comparación ---');
+{
+  // GET /ecommerce/stats (T20), `data`: revenue_today, revenue_ayer, web_orders_today, web_orders_ayer, revenue_month,
+  // revenue_mes_anterior, web_orders_month, web_orders_mes_anterior, carritos_abandonados_count, carritos_abandonados_valor,
+  // productos_publicados. Hoy contra ayer y el mes contra el mismo tramo del mes pasado (en hora de Colombia, del servidor).
+  const stats = {
+    revenue_today: 1200000, revenue_ayer: 1000000, web_orders_today: 3, web_orders_ayer: 2,
+    revenue_month: 8500000, revenue_mes_anterior: 10000000, web_orders_month: 21, web_orders_mes_anterior: 25,
+    carritos_abandonados_count: 4, carritos_abandonados_valor: 640000, productos_publicados: 58,
+  };
+  const t = kpisLib.tarjetasTienda(stats);
+  assert.deepEqual(t.web_ventas_hoy, {
+    valor: 1200000, variacion: { actual: 1200000, anterior: 1000000 }, textoPeriodo: 'vs ayer', ayuda: '3 pedidos web',
+  });
+  assert.deepEqual(t.web_ventas_mes, {
+    valor: 8500000, variacion: { actual: 8500000, anterior: 10000000 }, textoPeriodo: 'vs mes pasado', ayuda: '21 pedidos PWEB',
+  });
+  assert.deepEqual(t.carritos_abandonados, { valor: 4, tono: 'alerta', ayuda: '4 sin cerrar' });
+  assert.deepEqual(t.productos_publicados, { valor: 58 });
+  assert.equal(kpisLib.TEXTO_COMPARACION_TIENDA.hoy, 'vs ayer');
+  assert.equal(kpisLib.TEXTO_COMPARACION_TIENDA.mes, TEXTO_PERIODO.mes.comparado, '«vs mes pasado» es el de la clave mes');
+  assert.ok(Object.isFrozen(kpisLib.TEXTO_COMPARACION_TIENDA));
+  // El % lo calcula la tarjeta con variacionPct (la regla única): +20 % hoy y −15 % el mes.
+  assert.equal(textoVariacion(variacionPct(t.web_ventas_hoy.variacion.actual, t.web_ventas_hoy.variacion.anterior)), '+20 %');
+  assert.equal(textoVariacion(variacionPct(t.web_ventas_mes.variacion.actual, t.web_ventas_mes.variacion.anterior)), `${MENOS}15 %`);
+  // Los carritos solo alertan si hay alguno (> 0); con 0 no hay alerta y la ayuda dice 0.
+  assert.deepEqual(kpisLib.tarjetasTienda({ ...stats, carritos_abandonados_count: 0 }).carritos_abandonados, { valor: 0, tono: 'normal', ayuda: '0 sin cerrar' });
+  assert.equal(kpisLib.tarjetasTienda({ ...stats, carritos_abandonados_count: 1 }).carritos_abandonados.tono, 'alerta');
+  // Singular y miles.
+  assert.equal(kpisLib.tarjetasTienda({ ...stats, web_orders_today: 1 }).web_ventas_hoy.ayuda, '1 pedido web');
+  assert.equal(kpisLib.tarjetasTienda({ ...stats, web_orders_month: 1 }).web_ventas_mes.ayuda, '1 pedido PWEB');
+  assert.equal(kpisLib.tarjetasTienda({ ...stats, web_orders_month: 1200 }).web_ventas_mes.ayuda, '1.200 pedidos PWEB');
+  // Un servidor sin la comparación (anterior ausente o no numérico): sin variación, y el valor sigue.
+  for (const anterior of [undefined, null, 'x', NaN]) {
+    const sin = kpisLib.tarjetasTienda({ ...stats, revenue_ayer: anterior, revenue_mes_anterior: anterior });
+    assert.equal(sin.web_ventas_hoy.variacion, null, String(anterior));
+    assert.equal(sin.web_ventas_mes.variacion, null, String(anterior));
+    assert.equal(sin.web_ventas_hoy.valor, 1200000);
+  }
+  // Un anterior de 0 sí compara (la tarjeta lo dice «Nuevo»): el 0 es un número, no «no hay».
+  assert.deepEqual(kpisLib.tarjetasTienda({ ...stats, revenue_ayer: 0 }).web_ventas_hoy.variacion, { actual: 1200000, anterior: 0 });
+  // Cargando o con error no hay datos: ningún número se inventa (ni 0): valor null, sin ayuda, sin variación ni alerta.
+  const vacia = {
+    web_ventas_hoy: { valor: null, variacion: null, textoPeriodo: 'vs ayer', ayuda: null },
+    web_ventas_mes: { valor: null, variacion: null, textoPeriodo: 'vs mes pasado', ayuda: null },
+    carritos_abandonados: { valor: null, tono: 'normal', ayuda: null },
+    productos_publicados: { valor: null },
+  };
+  for (const nada of [null, undefined, {}, [], 'x', 7]) assert.deepEqual(kpisLib.tarjetasTienda(nada), vacia, JSON.stringify(nada));
+  // Un campo que no es número no se vuelve 0.
+  assert.equal(kpisLib.tarjetasTienda({ ...stats, revenue_today: 'abc' }).web_ventas_hoy.valor, null);
+  assert.equal(kpisLib.tarjetasTienda({ ...stats, productos_publicados: undefined }).productos_publicados.valor, null);
+  // Los nombres son los de CATALOGO_KPI (la única fuente): la pantalla pinta TarjetaKpi kpi="web_ventas_hoy", etc.
+  for (const id of ['web_ventas_hoy', 'web_ventas_mes', 'carritos_abandonados', 'productos_publicados']) assert.ok(id in CATALOGO_KPI, id);
+  assert.equal(CATALOGO_KPI.carritos_abandonados.mejorSiSube, false);
+  // El texto para lectores de pantalla de «vs ayer» (antes salía el genérico «frente al período anterior»).
+  assert.equal(frenteDeComparado('vs ayer'), 'frente a ayer');
+  assert.equal(frenteDeComparado(kpisLib.TEXTO_COMPARACION_TIENDA.mes), 'frente al mes pasado');
+  assert.equal(frenteDeComparado('vs el trimestre'), 'frente al período anterior', 'un texto propio: el genérico');
+}
+
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

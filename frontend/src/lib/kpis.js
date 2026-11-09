@@ -343,8 +343,16 @@ export const FRENTE_PERIODO = congelar({
 });
 
 /**
+ * B4 T23A (aditivo): los textos de comparación que no son un período de TEXTO_PERIODO (la Tienda compara «hoy» contra
+ * «ayer», que no es un tramo de 7 ni de 30 días) con su final para lectores de pantalla. Inmutable.
+ * @type {Readonly<Record<string, string>>}
+ */
+const FRENTE_PROPIO = congelar({ 'vs ayer': 'frente a ayer' });
+
+/**
  * El FRENTE_PERIODO del período cuyo texto comparado es `comparado` (el textoPeriodo de la tarjeta; por defecto, el de
- * PERIODO_KPI). Un texto propio da el genérico de lib/analisis.js, 'frente al período anterior'.
+ * PERIODO_KPI) o el de la comparación propia de la Tienda ('vs ayer'). Un texto propio da el genérico de lib/analisis.js,
+ * 'frente al período anterior'.
  * @param {string} [comparado]
  * @returns {string}
  */
@@ -352,6 +360,7 @@ export function frenteDeComparado(comparado = TEXTO_PERIODO[PERIODO_KPI].compara
   for (const [clave, textos] of Object.entries(TEXTO_PERIODO)) {
     if (textos.comparado === comparado) return FRENTE_PERIODO[/** @type {'30d' | '7d' | 'mes'} */ (clave)];
   }
+  if (typeof comparado === 'string' && Object.prototype.hasOwnProperty.call(FRENTE_PROPIO, comparado)) return FRENTE_PROPIO[comparado];
   return 'frente al período anterior';
 }
 
@@ -1041,4 +1050,65 @@ export function textoAvisoFuente(error, texto) {
   if (!error) return null;
   const mensaje = textoDeError(error, texto);
   return mensaje.endsWith('.') ? mensaje : `${mensaje}.`;
+}
+
+// ─── B4 T23A: las tarjetas de la tienda (KPI-otros punto 5; R7, R12, RP102) ──────────────────────────────────────
+
+/**
+ * Contra qué compara cada tarjeta de dinero de la Tienda: hoy contra ayer y el mes contra el mismo tramo del mes pasado
+ * (el servidor cuenta los dos en hora de Colombia). El del mes es el de la clave `mes` de TEXTO_PERIODO. Inmutable.
+ * @type {Readonly<{hoy: string, mes: string}>}
+ */
+export const TEXTO_COMPARACION_TIENDA = congelar({ hoy: 'vs ayer', mes: TEXTO_PERIODO.mes.comparado });
+
+/** «3 pedidos web», «1 pedido web»: el número con punto de miles y su nombre en singular o plural. */
+const pedidosDe = (n, uno, varios) => `${formatoEntero(n)} ${n === 1 ? uno : varios}`;
+
+/**
+ * B4 T23A (KPI-otros punto 5): lo que pintan las 4 tarjetas de la Tienda con `data` de GET /ecommerce/stats (T20), sin sumar ni
+ * restar nada en el navegador (RP102: revenue_* ya viene sin CANCELADO ni DEVUELTO_TOTAL):
+ *  - web_ventas_hoy: revenue_today contra revenue_ayer ('vs ayer'), con «N pedidos web»;
+ *  - web_ventas_mes: revenue_month contra revenue_mes_anterior ('vs mes pasado'), con «N pedidos PWEB»;
+ *  - carritos_abandonados: carritos_abandonados_count, en alerta si es mayor que 0, con «N sin cerrar»;
+ *  - productos_publicados: productos_publicados.
+ * `variacion` es {actual, anterior} y sale solo si los dos son números (el 0 sí es un número: la tarjeta dice «Nuevo»);
+ * el texto del % lo calcula la tarjeta con variacionPct. Lo que no es un número queda en null (la barra gris o «—», nunca 0);
+ * sin datos (cargando, con error o un cuerpo que no es un objeto), todo en null. Un objeto nuevo en cada llamada.
+ * @param {unknown} datos
+ * @returns {{
+ *   web_ventas_hoy: {valor: number | null, variacion: {actual: number, anterior: number} | null, textoPeriodo: string, ayuda: string | null},
+ *   web_ventas_mes: {valor: number | null, variacion: {actual: number, anterior: number} | null, textoPeriodo: string, ayuda: string | null},
+ *   carritos_abandonados: {valor: number | null, tono: 'normal' | 'alerta', ayuda: string | null},
+ *   productos_publicados: {valor: number | null}}}
+ */
+export function tarjetasTienda(datos) {
+  const s = /** @type {Record<string, unknown>} */ (datosDe(datos) ?? {});
+  const comparar = (actual, anterior) => {
+    const a = numeroFinito(actual);
+    const b = numeroFinito(anterior);
+    return a === null || b === null ? null : { actual: a, anterior: b };
+  };
+  const hoy = numeroFinito(s.web_orders_today);
+  const mes = numeroFinito(s.web_orders_month);
+  const carritos = numeroFinito(s.carritos_abandonados_count);
+  return {
+    web_ventas_hoy: {
+      valor: numeroFinito(s.revenue_today),
+      variacion: comparar(s.revenue_today, s.revenue_ayer),
+      textoPeriodo: TEXTO_COMPARACION_TIENDA.hoy,
+      ayuda: hoy === null ? null : pedidosDe(hoy, 'pedido web', 'pedidos web'),
+    },
+    web_ventas_mes: {
+      valor: numeroFinito(s.revenue_month),
+      variacion: comparar(s.revenue_month, s.revenue_mes_anterior),
+      textoPeriodo: TEXTO_COMPARACION_TIENDA.mes,
+      ayuda: mes === null ? null : pedidosDe(mes, 'pedido PWEB', 'pedidos PWEB'),
+    },
+    carritos_abandonados: {
+      valor: carritos,
+      tono: carritos !== null && carritos > 0 ? 'alerta' : 'normal',
+      ayuda: carritos === null ? null : `${formatoEntero(carritos)} sin cerrar`,
+    },
+    productos_publicados: { valor: numeroFinito(s.productos_publicados) },
+  };
 }

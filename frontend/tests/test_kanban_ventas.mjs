@@ -1359,4 +1359,97 @@ console.log('--- B4 T10 TEST Q: el cableado del tablero de Pedidos (C9, C15, R11
   assert.match(lista, /pantallaCompleta=\{enKanban \? undefined : \{ completa, alternar \}\}/);
 }
 
+console.log('--- B4 T23A TEST R: el filtro, la tarjeta y el permiso del tablero de los pedidos web (KANBAN-resto puntos 2 y 3; RP8, RP62) ---');
+{
+  // El filtro de estados de los pedidos web: los códigos de estados-pedido.js agrupados como COLUMNAS_PEDIDO (los operativos y
+  // los cerrados del pedido de venta) MÁS Pagado, que es el estado real de un pedido que la tienda ya cobró. PWEB_ESTADOS tenía
+  // nombres que no existen (PENDIENTE_DESPACHO, DESPACHADO): el filtro casi nunca encontraba nada.
+  const OPCIONES = kv.OPCIONES_ESTADOS_PEDIDOS_WEB;
+  assert.deepEqual(OPCIONES.map((o) => o.valor), [
+    'PENDIENTE_COMPRA', 'PENDIENTE_PAGO', 'EN_PROCESO', 'EN_TRANSITO', 'PAGADO', 'LISTO_ENTREGA', 'ENTREGADO', 'FACTURADO',
+    'CANCELADO', 'DEVUELTO_TOTAL',
+  ]);
+  for (const o of OPCIONES) {
+    assert.ok(Object.hasOwn(ESTADOS_PEDIDO, o.valor), `${o.valor} es un estado real de estados-pedido.js`);
+    assert.equal(o.etiqueta, infoEstadoPedido(o.valor).label, `${o.valor}: la etiqueta única del pedido`);
+    assert.ok(Object.isFrozen(o));
+  }
+  assert.ok(Object.isFrozen(OPCIONES));
+  assert.equal(OPCIONES.find((o) => o.valor === 'PAGADO').etiqueta, 'Pagado');
+  assert.equal(OPCIONES.find((o) => o.valor === 'PENDIENTE_PAGO').etiqueta, 'Pendiente de pago');
+  for (const viejo of ['PENDIENTE_DESPACHO', 'DESPACHADO']) assert.ok(!OPCIONES.some((o) => o.valor === viejo), viejo);
+  // Agrupados como las columnas: el índice de la columna de cada opción no baja.
+  const columnaDe = (e) => COLUMNAS_PEDIDO.findIndex((c) => c.estados.includes(e));
+  const indices = OPCIONES.map((o) => columnaDe(o.valor));
+  assert.ok(indices.every((i) => i >= 0), 'cada opción está en una columna');
+  assert.deepEqual([...indices].sort((a, b) => a - b), indices, 'agrupadas en el orden de las columnas');
+  // Los dos estados de la tienda caen en las columnas del diseño: Pendiente de pago en Pendiente de compra, Pagado en En proceso.
+  assert.equal(COLUMNAS_PEDIDO[columnaDe('PENDIENTE_PAGO')].clave, 'pend_compra');
+  assert.equal(COLUMNAS_PEDIDO[columnaDe('PAGADO')].clave, 'en_proceso');
+  // Y el filtro del tablero es el de los pedidos de venta (una opción por columna).
+  assert.equal(kv.OPCIONES_ESTADOS_TABLERO_PEDIDO.length, COLUMNAS_PEDIDO.length);
+
+  // Las rutas y el orden de las columnas: GET /ecommerce/pedidos acepta reciente, sin_movimiento y [-]fecha|numero|cliente|total|
+  // items|estado (no 'atencion', que es de Ventas: daría 422).
+  assert.equal(kv.RUTA_PEDIDOS_WEB, '/ecommerce/pedidos');
+  assert.equal(kv.RUTA_ECOMMERCE, '/dashboard/ecommerce');
+  assert.equal(kv.ORDEN_COLUMNA_PEDIDOS_WEB, 'reciente');
+  // La consulta de cada columna es la de los pedidos de venta (consultaColumnaPedido, T10): estados en CSV y q, nunca estado= ni search=.
+  const estadoWeb = estadoTablaInicial({ q: ' ana ', orden: '-fecha' });
+  const enProceso = COLUMNAS_PEDIDO.find((c) => c.clave === 'en_proceso');
+  const consulta = kv.consultaColumnaPedido(estadoWeb, enProceso, { orden: kv.ORDEN_COLUMNA_PEDIDOS_WEB, limit: 25, offset: 0 });
+  assert.ok(consulta.includes(`estados=${enProceso.estados.join(',')}`), consulta);
+  assert.ok(enProceso.estados.includes('PAGADO'));
+  assert.ok(consulta.includes('q=ana') && consulta.includes('orden=reciente') && consulta.includes('limit=25') && consulta.includes('offset=0'), consulta);
+  assert.ok(!/[?&]estado=|search=/.test(consulta), 'RP8');
+  // Con un filtro de estados que no toca la columna, no se pide nada.
+  assert.equal(kv.consultaColumnaPedido(estadoTablaInicial({ estados: ['CANCELADO'] }), enProceso, { orden: 'reciente', limit: 25, offset: 0 }), null);
+
+  // La tarjeta: la de los pedidos de venta, con el número PWEB, el PVEN debajo y sin acción que lleve a otra pantalla (el clic abre el
+  // pedido). La fila de GET /ecommerce/pedidos no trae advisor_name, saldo_cop ni resolucion: no se inventan chips ni «Sin asignar».
+  const fila = {
+    id: 55, numero: 'PWEB-20260012', pven_numero: 'PVEN-20262801', customer_name: 'Ana Pérez', customer_email: 'ana@correo.co',
+    customer_phone: '3001234567', total_cop: 350000, estado: 'PAGADO', canal_venta: 'WEB', productos: [{ nombre: 'Cuna', qty: 1, precio: 350000 }],
+    created_at: '2026-11-01T15:00:00',
+  };
+  const ahora = Date.parse('2026-11-03T15:00:00Z');
+  const t = kv.tarjetaPedidoWeb(fila, { ahora });
+  assert.equal(t.numero, 'PWEB-20260012');
+  assert.equal(t.tipo, 'PVEN');
+  assert.equal(t.titulo, 'Ana Pérez');
+  assert.equal(t.subtitulo, 'PVEN-20262801');
+  assert.equal(t.monto, 350000);
+  assert.equal(t.estado.label, 'Pagado');
+  assert.equal(t.estado.clases.bg, 'bg-lime-100');
+  assert.equal(t.tiempo, 'hace 2 días');
+  assert.equal(t.atrasada, false);
+  assert.deepEqual(t.chips, []);
+  assert.equal(t.accionPrincipal, null);
+  // Sin el PVEN, el subtítulo dice qué es; sin cliente, el de siempre; sin total, sin monto.
+  assert.equal(kv.tarjetaPedidoWeb({ ...fila, pven_numero: null }, { ahora }).subtitulo, 'Pedido web');
+  assert.equal(kv.tarjetaPedidoWeb({ ...fila, pven_numero: '  ' }, { ahora }).subtitulo, 'Pedido web');
+  assert.equal(kv.tarjetaPedidoWeb({ ...fila, customer_name: '' }, { ahora }).titulo, 'Cliente General');
+  assert.equal(kv.tarjetaPedidoWeb({ ...fila, total_cop: null }, { ahora }).monto, null);
+  // Un estado que no está en estados-pedido.js sale humanizado y en gris (nunca el código crudo).
+  const raro = kv.tarjetaPedidoWeb({ ...fila, estado: 'ESPERANDO_ALGO' }, { ahora });
+  assert.equal(raro.estado.label, 'Esperando algo');
+  assert.equal(raro.estado.clases.bg, 'bg-gray-100');
+  // No muta la fila.
+  assert.equal(fila.estado, 'PAGADO');
+  assert.equal(fila.pven_numero, 'PVEN-20262801');
+
+  // El permiso de mover (RP62): esAdminOAsesor (los nombres viejos y los espacios de los bordes incluidos); los demás roles
+  // ven el tablero sin moverlo, con el motivo escrito. El PATCH es solo de ADMIN y ASESOR (BODEGA solo despacha, en Entregas).
+  assert.equal(kv.TEXTO_SOLO_VER_PEDIDOS, 'Tu rol solo puede ver los pedidos');
+  for (const rol of ['ADMIN', 'Admin', ' admin ', 'ASESOR', 'asesor', 'Vendedor', 'VENDEDOR']) {
+    assert.equal(kv.soloLecturaPedidosWeb(rol), null, rol);
+  }
+  for (const rol of ['BODEGA', 'FINANZAS', 'COMPRAS', 'Finanzas', 'ERP_USER', '', '   ', null, undefined, 7]) {
+    assert.equal(kv.soloLecturaPedidosWeb(rol), 'Tu rol solo puede ver los pedidos', String(rol));
+  }
+  // Con ese motivo, reglaSoltarPedido sigue siendo la de siempre (la pantalla se lo da a TableroKanban en soloLectura).
+  assert.deepEqual(reglaSoltarPedido({ id: 1, estado: 'PAGADO' }, 'en_proceso', 'listo_entrega'), { tipo: 'cambio', estado: 'LISTO_ENTREGA' });
+  assert.deepEqual(reglaSoltarPedido({ id: 1, estado: 'PENDIENTE_PAGO' }, 'pend_compra', 'en_proceso'), { tipo: 'cambio', estado: 'EN_PROCESO' });
+}
+
 console.log('OK test_kanban_ventas');
