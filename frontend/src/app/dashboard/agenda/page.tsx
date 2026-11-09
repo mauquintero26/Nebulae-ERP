@@ -19,7 +19,8 @@ import { CambiosDeActividad } from '@/app/dashboard/ventas/flujo';
 import { itemDeTimelineCliente, proveedorDeServidor } from '@/lib/datos-cliente';
 import { fechaCorta } from '@/lib/fechas-colombia';
 // B4 T23B: la franja de indicadores estándar de la ficha del cliente y del proveedor (KPI-otros punto 3).
-import { FranjaKpis, TarjetaKpi, AvisoFuente } from '@/components/ui';
+import { FranjaKpis, TarjetaKpi } from '@/components/ui';
+import { AvisoFuente } from '@/components/ui/AvisoFuente';
 import { avisoDeFuente } from '@/lib/avisos';
 import { datosDeRespuesta, numeroFinito, tarjetasFichaCliente, tarjetasFichaProveedor } from '@/lib/kpis';
 import { resumenFichaCliente } from '@/lib/kpis-ventas';

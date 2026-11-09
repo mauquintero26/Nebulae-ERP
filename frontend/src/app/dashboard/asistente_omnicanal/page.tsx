@@ -7,7 +7,8 @@ import {
   Sparkles, Copy, Check, Search, X, FileText, Phone, MapPin, Layers
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
-import { AvisoFuente, useRolActual } from '@/components/ui';
+import { AvisoFuente } from '@/components/ui/AvisoFuente';
+import { useRolActual } from '@/components/ui/useRolActual';
 import { accesoAsistente } from '@/lib/roles';
 import { avisoDeFuente, textoDeError } from '@/lib/avisos';
 import { fichaRevenueAsistente } from '@/lib/kpis';

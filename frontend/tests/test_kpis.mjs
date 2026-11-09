@@ -1176,9 +1176,11 @@ console.log('--- TEST 28 (B4 T23A): el cableado de las tarjetas de la tienda en 
   assert.match(codigo, /\{acceso\.carritos && \(\s*<div className="order-2/);
   assert.match(codigo, /const actualizando = \(acceso\.indicadores && cargandoStats\) \|\| /);
   // 403 que llega igual: «—» con el motivo de permiso y sin «Reintentar».
-  assert.match(codigo, /const sinPermisoStats = avisoStats\?\.tipo === 'permiso' \? avisoStats\.texto : null;/);
-  assert.match(codigo, /<FranjaKpis estado=\{avisoStats\?\.tipo === 'permiso' \? 'listo' : estadoStats\} titulo="Indicadores de la tienda">/);
-  assert.match(codigo, /\{aviso\.reintentar && \(\s*<button type="button" onClick=\{onReintentar\}/);
+  assert.match(codigo, /const sinPermisoStats = motivoSinPermiso\(avisoStats\);/);
+  assert.match(codigo, /import \{ AvisoFuente \} from '@\/components\/ui\/AvisoFuente';/);
+  assert.match(codigo, /import \{ useRolActual \} from '@\/components\/ui\/useRolActual';/);
+  assert.ok(!/function AvisoFuente|suscribirRol|useSyncExternalStore/.test(codigo), 'sin la copia local del aviso ni del rol');
+  assert.match(codigo, /<FranjaKpis estado=\{estadoFranjaDeFuente\(avisoStats, estadoStats\)\} titulo="Indicadores de la tienda">/);
   assert.ok(!/AvisoReintentar/.test(codigo), 'ningún Reintentar fijo');
   // m16: «Los 50 más recientes de N».
   assert.match(codigo, /const textoLimite = textoLimiteCarritos\(datosStats\?\.carritos_abandonados_count, carritos === null \? null : carritos\.length\);/);
@@ -1331,13 +1333,21 @@ console.log('--- TEST 30 (B4 T23B): las piezas comunes: AvisoFuente y useRolActu
 {
   const fuente = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const index = readFileSync(new URL('../src/components/ui/index.ts', import.meta.url), 'utf8');
-  assert.ok(/export \* from '\.\/AvisoFuente';/.test(index), 'components/ui lo exporta');
+  assert.ok(!/AvisoFuente|useRolActual/.test(index), 'components/ui/index.ts vuelve a como estaba (R18): se importa directo');
+  for (const ruta of ['crm/calendario/page.tsx', 'marketing/page.tsx', 'marketing/campanas/page.tsx', 'agenda/page.tsx', 'asistente_omnicanal/page.tsx', 'ecommerce/page.tsx']) {
+    const pagina = readFileSync(new URL(`../src/app/dashboard/${ruta}`, import.meta.url), 'utf8');
+    assert.ok(/import \{ AvisoFuente \} from '@\/components\/ui\/AvisoFuente';/.test(pagina), `${ruta} importa AvisoFuente directo`);
+    assert.ok(!/AvisoFuente[^;]*from '@\/components\/ui';|useRolActual[^;]*from '@\/components\/ui';/.test(pagina), `${ruta} no los importa del barril`);
+  }
+  const hook = readFileSync(new URL('../src/components/ui/useRolActual.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.ok(!/useRolActual/.test(fuente), 'AvisoFuente.tsx ya no lleva el hook');
   // El rol: useSyncExternalStore con '' en el servidor y en la hidratación; nunca en el inicializador de useState.
-  assert.match(fuente, /return useSyncExternalStore\(suscribirRol, \(\) => localStorage\.getItem\('user_role'\) \|\| '', \(\) => ''\);/);
-  assert.ok(!/useState\([^)]*localStorage/.test(fuente), 'el rol no se lee en el inicializador de useState');
+  assert.match(hook, /return useSyncExternalStore\(suscribirRol, \(\) => localStorage\.getItem\('user_role'\) \|\| '', \(\) => ''\);/);
+  assert.ok(!/useState\([^)]*localStorage/.test(hook), 'el rol no se lee en el inicializador de useState');
   // El aviso: un 403 es de permiso (sin «Reintentar»); una falla lleva «Reintentar» solo si aviso.reintentar.
   assert.match(fuente, /\{aviso\.reintentar && \(\s*<button type="button" onClick=\{onReintentar\}/);
   assert.match(fuente, /const permiso = aviso\.tipo === 'permiso';/);
+  assert.match(fuente, /role=\{permiso \? 'status' : 'alert'\}/);
   assert.equal((fuente.match(/\n\s*Reintentar\n/g) ?? []).length, 1, 'un solo botón «Reintentar», el de aviso.reintentar');
 }
 

@@ -8,7 +8,9 @@ import {
   ChevronRight, Package
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
-import { SubNav, PageHeader, FranjaKpis, TarjetaKpi, AvisoFuente, useEstadoKpi, useRolActual } from '@/components/ui';
+import { SubNav, PageHeader, FranjaKpis, TarjetaKpi, useEstadoKpi } from '@/components/ui';
+import { AvisoFuente } from '@/components/ui/AvisoFuente';
+import { useRolActual } from '@/components/ui/useRolActual';
 import { CRM_NAV } from '../crm-nav';
 import { accesoSeguimientos } from '@/lib/roles';
 import { avisoDeFuente } from '@/lib/avisos';

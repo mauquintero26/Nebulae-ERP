@@ -7,7 +7,9 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
-import { PageHeader, FranjaKpis, TarjetaKpi, AvisoFuente, useEstadoKpi, useRolActual } from '@/components/ui';
+import { PageHeader, FranjaKpis, TarjetaKpi, useEstadoKpi } from '@/components/ui';
+import { AvisoFuente } from '@/components/ui/AvisoFuente';
+import { useRolActual } from '@/components/ui/useRolActual';
 import { accesoMarketing } from '@/lib/roles';
 import { avisoDeFuente } from '@/lib/avisos';
 import { datosDeRespuesta, lecturaDeFuente, tarjetasMarketing } from '@/lib/kpis';

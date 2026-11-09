@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useState, useEffect, useCallback, useMemo, useRef, createContext, useContext, useSyncExternalStore } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, createContext, useContext } from 'react';
 import Link from 'next/link';
 // B4 T23A: entran LayoutGrid («Cuadrícula») y List (la tabla del catálogo); se van Grid, Search, Filter y MoreHorizontal (la
 // búsqueda, el filtro y el menú ⋯ de las tablas hechas a mano) y el Toast propio (los avisos son los de useAvisos).
@@ -32,11 +32,13 @@ import {
 } from '@/lib/kanban-ventas';
 import { infoEstadoPedido } from '@/lib/estados-pedido';
 import { ordenPorDefecto } from '@/lib/kanban';
+import { AvisoFuente } from '@/components/ui/AvisoFuente';
+import { useRolActual } from '@/components/ui/useRolActual';
 import { lecturaDeFuente, tarjetasTienda, textoLimiteCarritos } from '@/lib/kpis';
 import { accesoTienda } from '@/lib/roles';
 import { formatoPesos } from '@/lib/pesos';
 import { fechaCorta, fechaHoraLarga, horaCO } from '@/lib/fechas-colombia';
-import { avisoDeFuente, recargarTrasError } from '@/lib/avisos';
+import { avisoDeFuente, estadoFranjaDeFuente, motivoSinPermiso, recargarTrasError } from '@/lib/avisos';
 import { TABLE } from '@/lib/design-system';
 import { getUsuarioActual } from '../ventas/flujo';
 import { CONTENEDOR, FOCOS } from '../inventario/piezas-inventario';
@@ -412,12 +414,6 @@ const FOCO_VISIBLE = FOCOS.purple;
 /** Quien hace el cambio desde el tablero (updated_by, como el Hub y los pedidos de venta). */
 const autorActual = () => { const u = getUsuarioActual(); return u.name || u.email || undefined; };
 
-/** El rol viene de localStorage: se lee después de montar y se relee cuando otra pestaña lo cambie (m14 de T19). */
-const suscribirRol = (alCambiar: () => void) => {
-  window.addEventListener('storage', alCambiar);
-  return () => window.removeEventListener('storage', alCambiar);
-};
-
 /** Lo que las celdas de los pedidos web le piden a la pantalla. */
 const AccionesPedidosWeb = createContext<{ abrir: (p: PedidoWeb) => void } | null>(null);
 /** Lo que las celdas del catálogo le piden a la pantalla. */
@@ -428,25 +424,6 @@ const AccionesCatalogo = createContext<{
   alternar: (p: ProductoCatalogo) => void;
   eliminar: (p: ProductoCatalogo) => void;
 } | null>(null);
-
-/**
- * r1 (I1, I2): el aviso de una fuente que falló (avisoDeFuente): una falla lleva el detalle del servidor y «Reintentar»; un 403 es un
- * tema de permiso y no ofrece «Reintentar» (volver a pedir no lo cambia).
- */
-function AvisoFuente({ aviso, onReintentar }: { aviso: NonNullable<ReturnType<typeof avisoDeFuente>>; onReintentar: () => void }) {
-  const permiso = aviso.tipo === 'permiso';
-  return (
-    <div role={permiso ? 'status' : 'alert'} className={`flex flex-wrap items-center gap-3 rounded-2xl border px-4 py-3 text-sm font-semibold ${permiso ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-rose-200 bg-rose-50 text-rose-800'}`}>
-      {aviso.texto}
-      {aviso.reintentar && (
-        <button type="button" onClick={onReintentar}
-          className={`inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 ${FOCO_VISIBLE}`}>
-          Reintentar
-        </button>
-      )}
-    </div>
-  );
-}
 
 /** #PWEB: el número web y, debajo, el del pedido de venta (PVEN). */
 function CeldaNumeroWeb({ p }: { p: PedidoWeb }) {
@@ -631,7 +608,7 @@ export default function EcommercePage() {
   // I1 e I2 (r1): lo que el rol puede pedir y hacer, de la lista exacta de require_roles de cada endpoint (accesoTienda). El rol se lee
   // DESPUÉS de montar (useSyncExternalStore: '' en el servidor y en la hidratación, y entonces no se pide nada y se pintan esqueletos).
   // La pantalla no pide lo que el rol no puede ver (daría un 403 fijo) ni muestra lo que no pidió.
-  const rol = useSyncExternalStore(suscribirRol, () => getUsuarioActual().role, () => '');
+  const rol = useRolActual();
   const acceso = accesoTienda(rol);
   const soloLectura = soloLecturaPedidosWeb(rol);
   const panelActivo = activeTab === 'Panel';
@@ -664,7 +641,7 @@ export default function EcommercePage() {
   const estadoStats = useEstadoKpi(cargandoStats, errorStats);
   const avisoStats = avisoDeFuente(errorStats, 'No se pudieron cargar los indicadores de la tienda');
   const tarjetas = tarjetasTienda(datosStats);
-  const sinPermisoStats = avisoStats?.tipo === 'permiso' ? avisoStats.texto : null;
+  const sinPermisoStats = motivoSinPermiso(avisoStats);
 
   // Los carritos abandonados (GET /ecommerce/carritos): lo mismo, con su error dicho en la lista y «Reintentar».
   const [vueltaCarritos, setVueltaCarritos] = useState(0);
@@ -974,7 +951,7 @@ export default function EcommercePage() {
         {acceso.indicadores && (
           <>
             {avisoStats && <AvisoFuente aviso={avisoStats} onReintentar={() => setVueltaStats((n) => n + 1)} />}
-            <FranjaKpis estado={avisoStats?.tipo === 'permiso' ? 'listo' : estadoStats} titulo="Indicadores de la tienda">
+            <FranjaKpis estado={estadoFranjaDeFuente(avisoStats, estadoStats)} titulo="Indicadores de la tienda">
               <TarjetaKpi kpi="web_ventas_hoy" valor={tarjetas.web_ventas_hoy.valor} variacion={tarjetas.web_ventas_hoy.variacion} textoPeriodo={tarjetas.web_ventas_hoy.textoPeriodo} ayuda={sinPermisoStats ?? tarjetas.web_ventas_hoy.ayuda ?? undefined} />
               <TarjetaKpi kpi="web_ventas_mes" valor={tarjetas.web_ventas_mes.valor} variacion={tarjetas.web_ventas_mes.variacion} textoPeriodo={tarjetas.web_ventas_mes.textoPeriodo} ayuda={sinPermisoStats ?? tarjetas.web_ventas_mes.ayuda ?? undefined} />
               <TarjetaKpi kpi="carritos_abandonados" valor={tarjetas.carritos_abandonados.valor} tono={tarjetas.carritos_abandonados.tono} ayuda={sinPermisoStats ?? tarjetas.carritos_abandonados.ayuda ?? undefined} />

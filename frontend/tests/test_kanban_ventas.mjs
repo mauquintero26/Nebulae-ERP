@@ -1520,8 +1520,8 @@ console.log('--- B4 T23A TEST S: el cableado del tablero y del filtro de los ped
   assert.ok(!/search=|pedidos\?(?:[^`'"]*&)?estado=|\$\{RUTA_PEDIDOS_WEB\}\?(?:[^`'"]*&)?estado=/.test(codigo), 'RP8');
   assert.match(codigo, /const tarjetaDeWeb = useCallback\(\(p: PedidoWeb\) => tarjetaPedidoWeb\(p, \{ soloLectura: soloLectura !== null \}\), \[soloLectura\]\);/);
   // El rol se lee DESPUÉS de montar (useSyncExternalStore: '' en el servidor y en la hidratación), una sola vez, nunca en un inicializador.
-  assert.match(pantalla, /const rol = useSyncExternalStore\(suscribirRol, \(\) => getUsuarioActual\(\)\.role, \(\) => ''\);\s*const acceso = accesoTienda\(rol\);\s*const soloLectura = soloLecturaPedidosWeb\(rol\);/);
-  assert.equal((codigo.match(/getUsuarioActual\(\)\.role/g) || []).length, 1, 'el rol se lee en un solo lugar');
+  assert.match(pantalla, /const rol = useRolActual\(\);\s*const acceso = accesoTienda\(rol\);\s*const soloLectura = soloLecturaPedidosWeb\(rol\);/);
+  assert.equal((codigo.match(/getUsuarioActual\(\)\.role/g) || []).length, 0, 'el rol se lee en un solo lugar: useRolActual');
   assert.ok(!/useState\([^)]*getUsuarioActual/.test(codigo), 'ni en el inicializador de un useState');
   assert.ok(!/esAdminOAsesor|'ADMIN'|'ASESOR'|'VENDEDOR'/.test(codigo), 'el permiso lo decide soloLecturaPedidosWeb (RP62), no la pantalla');
   // El tablero: las mismas reglas de los pedidos de venta y, sin permiso, solo para ver con su motivo; sus acciones de tarjeta

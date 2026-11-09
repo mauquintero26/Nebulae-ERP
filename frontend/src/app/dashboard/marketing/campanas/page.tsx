@@ -3,8 +3,10 @@ import { createContext, useContext, useState, useEffect, useCallback, useMemo, u
 import { Target, Plus, RefreshCw, Megaphone, CheckCircle2, Tag, Edit2, Trash2, PauseCircle, Play, Search, Copy } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import {
-  SubNav, PageHeader, Toast, Modal, Button, FranjaKpis, TarjetaKpi, AvisoFuente, useAvisos, useEstadoKpi, useRolActual,
+  SubNav, PageHeader, Toast, Modal, Button, FranjaKpis, TarjetaKpi, useAvisos, useEstadoKpi,
 } from '@/components/ui';
+import { AvisoFuente } from '@/components/ui/AvisoFuente';
+import { useRolActual } from '@/components/ui/useRolActual';
 import { BarraTabla, TablaEstandar, useEstadoTabla, useListadoCliente, usePreferenciasTabla } from '@/components/tabla';
 import type { ColumnaTabla } from '@/components/tabla';
 import { MKT_NAV } from '../mkt-nav';
