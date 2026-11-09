@@ -306,6 +306,20 @@ export function pasosDeLista(datos, actual) {
 }
 
 /**
+ * B4 T22 (FLUJO-ventas-pantallas E, RP104 b): los pasos del «Embudo Operativo de Ventas» del Dashboard General, con la
+ * respuesta de GET /ventas/flujo (`datos`; null mientras carga o si falló): los MISMOS números de la franja del Hub (el mismo
+ * endpoint, pasosConConteos y conteosDesdeResumen). Cada caja es un enlace al Hub ya filtrado por ese paso
+ * (`/dashboard/ventas?paso=<clave>`, lo que lee leerEnlaceHub), también mientras carga; ninguna es «Estás aquí» ni queda elegida,
+ * y sin avisos ni detalle: el embudo son los números y el atraso. Lo que no llega queda en null (la barra gris o «—», nunca 0).
+ * @param {any} datos
+ * @returns {PasoVista[]}
+ */
+export function pasosEmbudoDashboard(datos) {
+  const pasos = pasosConConteos(PASOS_FLUJO_VENTAS, conteosDesdeResumen(datos), { cargando: !datos });
+  return pasos.map((p) => ({ ...p, avisos: null, detalle: null, href: `${RUTA_HUB_VENTAS}?paso=${p.clave}` }));
+}
+
+/**
  * B4 T8 (R13, ANALISIS-ventas punto 7): el enlace del botón «Ver análisis» de una lista de Ventas: el Hub en su pestaña
  * Análisis, enfocado en `foco` ('sc', 'cot' o 'pven'; también 'hub'). Lo lee leerEnlaceHub. Un foco que no es de
  * FOCOS_VENTAS abre el Análisis sin foco. r1 (m4): con CLAVES_FOCO_VENTAS, las mismas que acepta leerEnlaceHub (sin

@@ -886,3 +886,98 @@ export function totalRecepciones(datos) {
 export function lecturaDeCarga(cargado, vuelta) {
   return { datos: cargado?.datos ?? null, cargando: cargado?.vuelta !== vuelta };
 }
+
+// ─── B4 T22: el Dashboard General (KPI-otros punto 1; R7, R12, RP104) ───────────────────────────────────────────
+
+/**
+ * Los períodos que ofrece el selector del Dashboard General (R7): Semana ('7d'), 30 días ('30d') y Mes ('mes'), sin «Hoy».
+ * Cada clave es una de TEXTO_PERIODO (su «vs …»). Inmutable.
+ * @type {ReadonlyArray<Readonly<{clave: '7d' | '30d' | 'mes', etiqueta: string}>>}
+ */
+export const PERIODOS_DASHBOARD = congelar([
+  congelar({ clave: '7d', etiqueta: 'Semana' }),
+  congelar({ clave: '30d', etiqueta: '30 días' }),
+  congelar({ clave: 'mes', etiqueta: 'Mes' }),
+]);
+
+/**
+ * El período del Dashboard General para `valor`: una de las claves de PERIODOS_DASHBOARD; cualquier otra cosa (hoy, 90d,
+ * vacío, lo que no es un texto) vuelve a PERIODO_KPI.
+ * @param {unknown} valor
+ * @returns {'7d' | '30d' | 'mes'}
+ */
+export function periodoDashboard(valor) {
+  const hallado = PERIODOS_DASHBOARD.find((p) => p.clave === valor);
+  return hallado ? hallado.clave : /** @type {'30d'} */ (PERIODO_KPI);
+}
+
+const objetoPlano = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/** {actual, anterior} de un indicador del bloque `flujo` de /ventas/stats ({actual, anterior, variacion_pct}); sin dato, en null. */
+function parDeFlujo(p) {
+  return { actual: numeroFinito(objetoPlano(p) ? p.actual : null), anterior: numeroFinito(objetoPlano(p) ? p.anterior : null) };
+}
+
+/**
+ * RP104 (a): lo que pinta cada una de las 4 tarjetas vitales del Dashboard General con `data` de GET /ventas/stats?periodo=
+ * (las mismas cifras del Hub de Ventas, R7) y los clientes de /crm/customers:
+ *  - vendido: flujo.vendido_cop.actual, con su variación contra el anterior;
+ *  - ticket: flujo.ticket_promedio_cop.actual, con su variación (NO pven_monto_vendido / pven_con_dinero);
+ *  - saldo: kpis.pven_saldo_por_cobrar (foto de hoy, sin variación);
+ *  - clientes: el total que llega.
+ * Cada fuente falla sola: lo que no llega es null (la tarjeta pinta la barra o «—», nunca 0); un 0 real se queda en 0.
+ * @param {any} datosVentas
+ * @param {unknown} totalClientes
+ * @returns {{vendido: {valor: number | null, variacion: {actual: number | null, anterior: number | null}},
+ *   ticket: {valor: number | null, variacion: {actual: number | null, anterior: number | null}},
+ *   saldo: {valor: number | null}, clientes: {valor: number | null}}}
+ */
+export function tarjetasVitalesDashboard(datosVentas, totalClientes) {
+  const flujo = objetoPlano(datosVentas) && objetoPlano(datosVentas.flujo) ? datosVentas.flujo : null;
+  const kpis = objetoPlano(datosVentas) && objetoPlano(datosVentas.kpis) ? datosVentas.kpis : null;
+  const vendido = parDeFlujo(flujo?.vendido_cop);
+  const ticket = parDeFlujo(flujo?.ticket_promedio_cop);
+  return {
+    vendido: { valor: vendido.actual, variacion: vendido },
+    ticket: { valor: ticket.actual, variacion: ticket },
+    saldo: { valor: numeroFinito(kpis?.pven_saldo_por_cobrar) },
+    clientes: { valor: numeroFinito(totalClientes) },
+  };
+}
+
+/**
+ * RP104 (b) y KPI-otros punto 1: la fila de inventario del Dashboard General con `data` de GET /inventory/stats (unidades en
+ * bodega, comprometidas, disponibles y en tránsito, tal cual: sin existencias inventadas ni un disponible calculado) y
+ * `pec_activos` de GET /compras/stats para la ayuda del tránsito («7 pedidos de compra activos»). Lo que no llega es null.
+ * @param {any} datosInventario
+ * @param {any} datosCompras
+ * @returns {{fisico: {valor: number | null}, reservado: {valor: number | null}, disponible: {valor: number | null},
+ *   en_transito: {valor: number | null, ayuda: string | null}}}
+ */
+export function tarjetasInventarioDashboard(datosInventario, datosCompras) {
+  const inv = objetoPlano(datosInventario) ? datosInventario : null;
+  const activos = numeroFinito(objetoPlano(datosCompras) ? datosCompras.pec_activos : null);
+  return {
+    fisico: { valor: numeroFinito(inv?.unidades_fisicas) },
+    reservado: { valor: numeroFinito(inv?.unidades_reservadas) },
+    disponible: { valor: numeroFinito(inv?.unidades_disponibles) },
+    en_transito: {
+      valor: numeroFinito(inv?.unidades_en_transito),
+      ayuda: activos === null ? null : conNombre(activos, 'pedido de compra activo', 'pedidos de compra activos'),
+    },
+  };
+}
+
+/**
+ * El radar del Dashboard General: los pedidos pendientes de compra de GET /ventas/stats (kpis.pven_pendiente_compra, el
+ * mismo número de la pestaña «Pendientes de compra» del Hub de Ventas). {tipo: 'alerta', n} si hay alguno, {tipo: 'ok'} si
+ * no hay ninguno y null si el dato no llegó (ni alerta ni «todo bien» sin saberlo).
+ * @param {any} datosVentas
+ * @returns {{tipo: 'alerta', n: number} | {tipo: 'ok'} | null}
+ */
+export function radarOperativo(datosVentas) {
+  const kpis = objetoPlano(datosVentas) && objetoPlano(datosVentas.kpis) ? datosVentas.kpis : null;
+  const n = numeroFinito(kpis?.pven_pendiente_compra);
+  if (n === null) return null;
+  return n > 0 ? { tipo: 'alerta', n } : { tipo: 'ok' };
+}

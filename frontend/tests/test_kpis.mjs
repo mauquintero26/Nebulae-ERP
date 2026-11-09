@@ -861,4 +861,129 @@ console.log('--- TEST 23 (B4 T19 r1, I3): una recarga conserva el último valor 
   assert.equal(kpisLib.estadoKpi({ loading: true, yaCargo: false }), 'cargando');
 }
 
+console.log('--- TEST 24 (B4 T22, KPI-otros punto 1; R7, R12, RP104 a y b): las tarjetas del Dashboard General ---');
+{
+  for (const n of ['PERIODOS_DASHBOARD', 'periodoDashboard', 'tarjetasVitalesDashboard', 'tarjetasInventarioDashboard', 'radarOperativo']) {
+    assert.ok(n in kpisLib, `lib/kpis.js exporta ${n}`);
+  }
+  // El selector: Semana ('7d'), 30 días ('30d') y Mes ('mes'); sin «Hoy»; cada clave tiene su texto «vs …» en TEXTO_PERIODO.
+  assert.deepEqual(kpisLib.PERIODOS_DASHBOARD.map((p) => [p.clave, p.etiqueta]), [['7d', 'Semana'], ['30d', '30 días'], ['mes', 'Mes']]);
+  assert.ok(Object.isFrozen(kpisLib.PERIODOS_DASHBOARD) && kpisLib.PERIODOS_DASHBOARD.every((p) => Object.isFrozen(p)));
+  for (const p of kpisLib.PERIODOS_DASHBOARD) assert.ok(p.clave in TEXTO_PERIODO, `${p.clave} tiene su texto de comparación`);
+  // El período por defecto es PERIODO_KPI; lo que el Dashboard no ofrece (hoy, 90d, basura) vuelve a él.
+  assert.deepEqual(['7d', '30d', 'mes'].map(kpisLib.periodoDashboard), ['7d', '30d', 'mes']);
+  for (const malo of ['Hoy', 'hoy', '90d', '12m', '', null, undefined, 7, {}]) assert.equal(kpisLib.periodoDashboard(malo), PERIODO_KPI, String(malo));
+
+  // Los cuatro vitales: vendido y ticket del bloque `flujo` de /ventas/stats (con su anterior para la variación), el saldo de
+  // kpis.pven_saldo_por_cobrar y los clientes. NUNCA pven_monto_vendido / pven_con_dinero (RP104 a).
+  const ventas = {
+    kpis: { pven_saldo_por_cobrar: 1250000, pven_monto_vendido: 999, pven_con_dinero: 3, pven_pendiente_compra: 3 },
+    flujo: {
+      vendido_cop: { actual: 9000000, anterior: 8000000, variacion_pct: 12.5 },
+      ticket_promedio_cop: { actual: 450000, anterior: null, variacion_pct: null },
+    },
+  };
+  const v = kpisLib.tarjetasVitalesDashboard(ventas, 321);
+  assert.deepEqual(v.vendido, { valor: 9000000, variacion: { actual: 9000000, anterior: 8000000 } });
+  assert.deepEqual(v.ticket, { valor: 450000, variacion: { actual: 450000, anterior: null } });
+  assert.deepEqual(v.saldo, { valor: 1250000 });
+  assert.deepEqual(v.clientes, { valor: 321 });
+  // Un número en texto (Numeric) vale; un cero REAL se queda en 0 (no es «sin dato»).
+  const ceros = kpisLib.tarjetasVitalesDashboard({ kpis: { pven_saldo_por_cobrar: '0' }, flujo: { vendido_cop: { actual: 0, anterior: 0 }, ticket_promedio_cop: { actual: 0, anterior: 0 } } }, 0);
+  assert.deepEqual([ceros.vendido.valor, ceros.ticket.valor, ceros.saldo.valor, ceros.clientes.valor], [0, 0, 0, 0]);
+  // Cada fuente falla sola: sin /ventas/stats, el dinero queda en null («—» o la barra, nunca 0) y los clientes siguen; y al revés.
+  for (const sinVentas of [null, undefined, {}, [], 'x']) {
+    const s = kpisLib.tarjetasVitalesDashboard(sinVentas, 5);
+    assert.deepEqual([s.vendido.valor, s.ticket.valor, s.saldo.valor, s.clientes.valor], [null, null, null, 5], String(sinVentas));
+    assert.deepEqual(s.vendido.variacion, { actual: null, anterior: null });
+  }
+  const sinClientes = kpisLib.tarjetasVitalesDashboard(ventas, null);
+  assert.equal(sinClientes.clientes.valor, null);
+  assert.equal(sinClientes.vendido.valor, 9000000);
+
+  // La fila del inventario: las unidades de /inventory/stats tal cual (sin existencias inventadas: lo que falta es null, nunca
+  // un 0 ni un físico − comprometido calculado) y «N pedidos de compra activos» de /compras/stats (pec_activos).
+  const inv = { unidades_fisicas: 1200, unidades_reservadas: 200, unidades_disponibles: 1000, unidades_en_transito: 340 };
+  const i = kpisLib.tarjetasInventarioDashboard(inv, { pec_activos: 7 });
+  assert.deepEqual(i.fisico, { valor: 1200 });
+  assert.deepEqual(i.reservado, { valor: 200 });
+  assert.deepEqual(i.disponible, { valor: 1000 });
+  assert.deepEqual(i.en_transito, { valor: 340, ayuda: '7 pedidos de compra activos' });
+  assert.equal(kpisLib.tarjetasInventarioDashboard(inv, { pec_activos: 1 }).en_transito.ayuda, '1 pedido de compra activo');
+  assert.equal(kpisLib.tarjetasInventarioDashboard(inv, { pec_activos: 0 }).en_transito.ayuda, '0 pedidos de compra activos');
+  assert.equal(kpisLib.tarjetasInventarioDashboard(inv, null).en_transito.ayuda, null, 'sin /compras/stats, sin ayuda (y el número sigue)');
+  assert.equal(kpisLib.tarjetasInventarioDashboard(inv, null).en_transito.valor, 340);
+  assert.equal(kpisLib.tarjetasInventarioDashboard(inv, { pec_activos: 'x' }).en_transito.ayuda, null);
+  for (const sinInv of [null, undefined, {}, []]) {
+    const s = kpisLib.tarjetasInventarioDashboard(sinInv, { pec_activos: 7 });
+    assert.deepEqual([s.fisico.valor, s.reservado.valor, s.disponible.valor, s.en_transito.valor], [null, null, null, null], String(sinInv));
+  }
+  const parcial = kpisLib.tarjetasInventarioDashboard({ unidades_fisicas: 50, unidades_reservadas: 10 }, null);
+  assert.equal(parcial.disponible.valor, null, 'el disponible no se calcula: es el del servidor');
+
+  // El radar: pedidos pendientes de compra de /ventas/stats (el mismo número de la pestaña del Hub). Sin dato, ni alerta ni «todo bien».
+  assert.deepEqual(kpisLib.radarOperativo(ventas), { tipo: 'alerta', n: 3 });
+  assert.deepEqual(kpisLib.radarOperativo({ kpis: { pven_pendiente_compra: 0 } }), { tipo: 'ok' });
+  for (const sin of [null, undefined, {}, { kpis: {} }, { kpis: { pven_pendiente_compra: null } }, { kpis: { pven_pendiente_compra: 'x' } }]) {
+    assert.equal(kpisLib.radarOperativo(sin), null, JSON.stringify(sin));
+  }
+}
+
+console.log('--- TEST 25 (B4 T22, KPI-otros punto 1 y FLUJO-ventas-pantallas E; R7, R12, RP104): el cableado del Dashboard General ---');
+{
+  const fuente = readFileSync(new URL('../src/app/dashboard/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // Las tarjetas leen los mismos endpoints que los Hubs, con el período elegido en ventas y compras.
+  assert.ok(fuente.includes('useFuente<DatosEndpoint>(`/ventas/stats?periodo=${periodo}`)'));
+  assert.ok(fuente.includes('useFuente<DatosEndpoint>(`/compras/stats?periodo=${periodo}`)'));
+  assert.ok(fuente.includes("useFuente<DatosEndpoint>('/inventory/stats')"));
+  assert.ok(fuente.includes("useFuente<unknown[]>('/crm/customers')"), 'se conserva /crm/customers para contar clientes');
+  // Sin los números de antes: ni la lista de 50 pedidos para el dinero, ni las existencias inventadas, ni el resumen de stock.
+  assert.doesNotMatch(fuente, /cifrasVentasDashboard|stock-summary|stock_vendible_fisico|Math\.max\(0, fisico|salesList\.length \* 4|toLocaleString\(\)/);
+  assert.doesNotMatch(fuente, /metrics\.|setMetrics|ESPERANDO_MERCANCIA|'COTIZADA'/);
+  // El dinero sale de lib/kpis.js (vendido y ticket del bloque flujo), no de una cuenta propia.
+  assert.ok(fuente.includes('tarjetasVitalesDashboard(ventas.datos, Array.isArray(clientes.datos) ? clientes.datos.length : null)'));
+  assert.ok(fuente.includes('tarjetasInventarioDashboard(inventario.datos, compras.datos)'));
+  assert.ok(fuente.includes('radarOperativo(ventas.datos)'));
+  // El selector: Semana, 30 días y Mes de PERIODOS_DASHBOARD; sin «Hoy» ni un timeRange que no hacía nada.
+  assert.ok(fuente.includes('PERIODOS_DASHBOARD.map((p) => ('));
+  assert.ok(fuente.includes('aria-pressed={periodo === p.clave}'));
+  assert.doesNotMatch(fuente, /'Hoy'|timeRange|setTimeRange/);
+  // El rótulo y el «vs …» de las tarjetas de dinero siguen al período (cambia el % al pasar de Semana a Mes).
+  assert.ok(fuente.includes("etiqueta={etiquetaKpi('vendido_periodo', periodo)} textoPeriodo={textoPeriodo}"));
+  assert.ok(fuente.includes("etiqueta={etiquetaKpi('ticket_promedio', periodo)} textoPeriodo={textoPeriodo}"));
+  assert.ok(fuente.includes('const textoPeriodo = TEXTO_PERIODO[periodo].comparado;'));
+  // R12: ninguna tarjeta del Dashboard es pulsable (ningún número equivale a una vista del Hub): sin onClick ni anillo.
+  for (const bloque of fuente.match(/<TarjetaKpi\b[\s\S]*?\/>/g) ?? []) assert.doesNotMatch(bloque, /onClick|activo=/, bloque.slice(0, 40));
+  assert.equal((fuente.match(/<TarjetaKpi\b/g) ?? []).length, 8, 'cuatro de inventario y cuatro vitales');
+  assert.equal((fuente.match(/<FranjaKpis\b/g) ?? []).length, 2);
+  assert.ok(fuente.includes('<TarjetaKpi kpi="clientes_total" estado={estadoClientes}'), 'los clientes tienen su propio estado');
+  // Mientras recargan: lecturaDeCarga conserva lo último (actualizando) y NO se vacía antes de pedir; un error no deja datos viejos.
+  assert.ok(fuente.includes('lecturaDeCarga(llego, clave)'));
+  assert.doesNotMatch(fuente, /setLlego\(null\)/);
+  assert.ok(fuente.includes('setLlego({ vuelta: clave, datos: null, error: err })'));
+  assert.ok(fuente.includes('useEstadoKpi(ventas.cargando, ventas.error)') && fuente.includes('useEstadoKpi(inventario.cargando, inventario.error)'));
+  // Cada fuente que falla lo dice con «Reintentar» (nunca 0 ni un vacío falso).
+  for (const f of ['inventario', 'compras', 'ventas', 'clientes']) {
+    assert.match(fuente, new RegExp(`<AvisoFuente error=\\{${f}\\.error\\} texto="[^"]+" onReintentar=\\{${f}\\.recargar\\} />`), `aviso de ${f}`);
+  }
+  assert.match(fuente, /<p role="alert"[\s\S]{0,300}Reintentar/);
+  // El embudo: PasosFlujo vertical con /ventas/flujo y los enlaces al Hub; su error con «Reintentar».
+  assert.ok(fuente.includes("useResumenFlujo('/ventas/flujo', 0)"));
+  assert.ok(fuente.includes('<PasosFlujo variante="banner" orientacion="vertical"'));
+  assert.ok(fuente.includes('pasosEmbudoDashboard(flujo.datos)'));
+  assert.ok(fuente.includes('estadoConteos={franjaEmbudo.estadoConteos}'));
+  assert.match(fuente, /franjaEmbudo\.conError && \([\s\S]{0,500}onClick=\{flujo\.recargar\}/);
+  // Los «Ver todos»: el embudo al Hub de Ventas, las Recientes de ventas a la lista de Pedidos y las de compras como estaban.
+  assert.ok(fuente.includes('<Link href="/dashboard/ventas" className="text-xs font-bold text-purple-700'));
+  assert.ok(fuente.includes('<Link href="/dashboard/ventas/venta" className="text-xs font-bold text-indigo-600'));
+  assert.ok(fuente.includes('<Link href="/dashboard/compras/pedidos" className="text-xs font-bold text-teal-600'));
+  assert.doesNotMatch(fuente, /\/dashboard\/ventas\/pedidos/, 'esa ruta no existe');
+  // Lo que no se toca: el Copilot y las listas «Recientes».
+  assert.ok(fuente.includes("apiFetch('/chat/copilot/query'"));
+  assert.ok(fuente.includes("apiFetch('/ventas/pedidos')") && fuente.includes("apiFetch('/compras/pedidos')"));
+  assert.ok(fuente.includes('recientes.pecsActivos.map(') && fuente.includes('recientes.pedidosRecientes.map('));
+  // Sin diálogos nativos (R14, C20).
+  assert.doesNotMatch(fuente, /\b(alert|confirm|prompt)\s*\(/);
+}
+
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');
