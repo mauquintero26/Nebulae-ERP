@@ -1424,6 +1424,7 @@ def get_leads(
             (Customer.first_name + " " + Customer.last_name).ilike(pattern)
             | SalesOrder.lead_description.ilike(pattern)
             | SalesOrder.lead_product_name.ilike(pattern)
+            | SalesOrder.advisor_name.ilike(pattern)        # T21 r1: una búsqueda que encuentra todo, también por asesor
         )
     total, rows = paginar(q_leads.order_by(*orden_sql), limit, offset)
     leads = [_lead_to_dict(order, customer, stage) for order, customer, stage in rows]

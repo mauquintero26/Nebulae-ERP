@@ -159,6 +159,23 @@ def test_leads_q_y_search_dan_el_mismo_total(app_client, db, admin_token):
     assert _ok(app_client, LEADS, admin_token, q=f"Zeta {t.sufijo}x")["total"] == 0
 
 
+def test_leads_q_encuentra_por_asesor(app_client, db, admin_token):
+    """T21 r1 (m1/m20): una sola búsqueda que encuentra todo. La Lista del CRM busca en el servidor y el Kanban en el
+    navegador; los dos tienen que encontrar un lead por el nombre de su asesor, como la Lista vieja (filteredLeads)."""
+    t = _Leads(db)
+    asesor = f"Asesora{t.sufijo}"
+    c = Customer(first_name="Dora", last_name=f"Z{t.sufijo}", email=f"dora-{t.sufijo}@t.nebulae")
+    db.add(c)
+    db.commit()
+    o = SalesOrder(customer_id=c.id, status="DRAFT", sale_type="ON_DEMAND", lead_value=50, lead_product_name="Omega",
+                   advisor_name=asesor)
+    db.add(o)
+    db.commit()
+    por_asesor = _ok(app_client, LEADS, admin_token, q=asesor)
+    assert por_asesor["total"] == 1 and _ids(por_asesor) == [o.id]
+    assert _ok(app_client, LEADS, admin_token, q=asesor.lower())["total"] == 1   # sin distinguir mayúsculas
+
+
 def test_leads_claves_de_hoy_y_sc_id_aditivo(app_client, db, admin_token):
     t = _Leads(db)
     cuerpo = _ok(app_client, LEADS, admin_token, search=t.sufijo)
