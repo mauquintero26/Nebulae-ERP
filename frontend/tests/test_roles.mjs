@@ -93,4 +93,30 @@ console.log('--- TEST 5: la fuente: una sola regla sobre normalizarRol ---');
   assert.match(sinColumnaAsesor('lib/seguimiento.js', COLUMNA_ASESOR), /['"]asesor['"]/i, 'solo en page.tsx');
 }
 
+// ── B4 T23A r1 (I1, I2, m15): accesoTienda(rol): lo que cada rol puede pedir y hacer en E-Commerce, de la lista EXACTA de
+// require_roles de cada endpoint de backend/app/api/v1/ecommerce.py (stats y carritos: ADMIN y ASESOR; pedidos: ADMIN, ASESOR,
+// FINANZAS y BODEGA; GET del catálogo: sin guardia de rol; POST, PATCH y DELETE del catálogo: solo ADMIN).
+console.log('--- T23A r1: accesoTienda ---');
+{
+  const roles = await import('../src/lib/roles.js');
+  const sin = { listo: true, indicadores: false, carritos: false, pedidos: false, catalogo: true, editarCatalogo: false };
+  assert.deepEqual(roles.accesoTienda('ADMIN'), { ...sin, indicadores: true, carritos: true, pedidos: true, editarCatalogo: true });
+  assert.deepEqual(roles.accesoTienda('ASESOR'), { ...sin, indicadores: true, carritos: true, pedidos: true });
+  assert.deepEqual(roles.accesoTienda('FINANZAS'), { ...sin, pedidos: true });
+  assert.deepEqual(roles.accesoTienda('BODEGA'), { ...sin, pedidos: true });
+  assert.deepEqual(roles.accesoTienda('COMPRAS'), sin);
+  assert.deepEqual(roles.accesoTienda('CONSULTA'), sin);
+  // Los nombres viejos y los espacios (normalize_role): Vendedor es ASESOR, Admin es ADMIN.
+  assert.deepEqual(roles.accesoTienda('Vendedor'), roles.accesoTienda('ASESOR'));
+  assert.deepEqual(roles.accesoTienda(' Admin '), roles.accesoTienda('ADMIN'));
+  // Durante la hidratación (rol vacío o que no es texto): nada listo y nada se pide.
+  for (const nada of ['', '   ', null, undefined, 7]) {
+    assert.deepEqual(roles.accesoTienda(nada), { listo: false, indicadores: false, carritos: false, pedidos: false, catalogo: false, editarCatalogo: false }, String(nada));
+  }
+  // Un rol desconocido está listo pero sin nada de lo restringido.
+  assert.deepEqual(roles.accesoTienda('INVENTADO'), sin);
+  // Inmutable: un objeto nuevo en cada llamada no compartido.
+  assert.notEqual(roles.accesoTienda('ADMIN'), roles.accesoTienda('ADMIN'));
+}
+
 console.log('OK test_roles.mjs');

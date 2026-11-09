@@ -327,4 +327,21 @@ console.log('--- TEST 13 (revisión final B3, F2: M45): las frases por defecto d
   assert.equal(textoDeDetalle('conflict', 409), 'conflict', 'solo la frase exacta');
 }
 
+// ── B4 T23A r1 (I1, I2): avisoDeFuente — el aviso de una fuente de una pantalla que falló.
+{
+  const av = await import('../src/lib/avisos.js');
+  const e403 = Object.assign(new Error("Rol 'BODEGA' (normalizado: 'BODEGA') no autorizado para esta operación. Roles requeridos: ADMIN, ASESOR"), { status: 403 });
+  const e500 = Object.assign(new Error('Error del servidor'), { status: 500 });
+  assert.equal(av.avisoDeFuente(null, 'No se pudo'), null);
+  assert.equal(av.avisoDeFuente(undefined, 'No se pudo'), null);
+  // 403: es un tema de permiso, sin «Reintentar» (volver a pedir no lo cambia) y nunca el 403 técnico de require_roles.
+  assert.deepEqual(av.avisoDeFuente(e403, 'No se pudieron cargar los indicadores'), { tipo: 'permiso', texto: 'No tienes permiso para ver esto.', reintentar: false });
+  // Cualquier otro error: la falla con el detalle del servidor y «Reintentar».
+  assert.deepEqual(av.avisoDeFuente(e500, 'No se pudieron cargar los indicadores'), { tipo: 'carga', texto: 'No se pudieron cargar los indicadores: Error del servidor', reintentar: true });
+  assert.equal(av.avisoDeFuente(Object.assign(new Error('x'), { status: 401 }), 'F').reintentar, true);
+  assert.equal(av.avisoDeFuente(Object.assign(new Error('x'), { status: 422 }), 'F').reintentar, true);
+  assert.equal(av.avisoDeFuente(new Error('sin status'), 'F').tipo, 'carga');
+  assert.equal(av.avisoDeFuente({ status: 403 }, 'F').tipo, 'permiso');
+}
+
 console.log('✓ Todas las pruebas de avisos pasaron.');

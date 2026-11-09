@@ -1131,13 +1131,14 @@ export const VISTA_TABLERO_PEDIDO = 'todos';
  * pedir nada). La respuesta trae el `resumen` de H47 de la columna (su suma, C9).
  * @param {import('./tabla.js').EstadoTabla} estado
  * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
- * @param {{orden: string | null, limit: number, offset: number}} consulta
+ * @param {{orden: string | null, limit: number, offset: number, vista?: string | null}} consulta  `vista`: por defecto
+ *   VISTA_TABLERO_PEDIDO; null la omite (B4 T23A r1, m17: la lista de pedidos web no tiene vistas; aditivo, las demás pantallas no cambian)
  * @returns {string | null}
  */
-export function consultaColumnaPedido(estado, columna, { orden, limit, offset }) {
+export function consultaColumnaPedido(estado, columna, { orden, limit, offset, vista = VISTA_TABLERO_PEDIDO }) {
   const estados = estadosDeColumnaLista(columna, estado?.estados);
   if (estados.length === 0) return null;
-  return queryListado(estado, { vista: VISTA_TABLERO_PEDIDO, estados, orden, limit, offset });
+  return queryListado(estado, { vista, estados, orden, limit, offset });
 }
 
 /** Un texto con algo, sin los espacios de los bordes; si no, ''. */
@@ -1287,12 +1288,8 @@ export function efectosCancelarPedido(pedido) {
 /** GET de la lista de los pedidos web (canal WEB): la tabla y cada columna del tablero. */
 export const RUTA_PEDIDOS_WEB = '/ecommerce/pedidos';
 
-/**
- * El orden de cada columna del tablero de los pedidos web: el más reciente primero. Es un orden que acepta GET
- * /ecommerce/pedidos (reciente, sin_movimiento y [-]fecha, numero, cliente, total, items, estado); 'atencion' es de las
- * listas de Ventas y daría 422 aquí (los pedidos web no traen resolución ni atraso).
- */
-export const ORDEN_COLUMNA_PEDIDOS_WEB = 'reciente';
+/** La pantalla de E-Commerce: el return_to de la acción de una tarjeta del tablero de los pedidos web (returnToSeguro la acepta). */
+export const RUTA_ECOMMERCE = '/dashboard/ecommerce';
 
 /**
  * Los estados que ofrece el filtro de los pedidos web: los del pedido de venta (los operativos y los cerrados, con la etiqueta
@@ -1307,17 +1304,19 @@ export const OPCIONES_ESTADOS_PEDIDOS_WEB = congelar(COLUMNAS_PEDIDO.flatMap(
 
 /**
  * La tarjeta del tablero de los pedidos web: la de los pedidos de venta (tarjetaPedido: número, cliente, total, estado,
- * antigüedad), el PVEN debajo del número PWEB (o «Pedido web» si no lo trae) y sin acción propia (accionPrincipal null, así que
- * no hay return_to que armar): el clic abre el pedido en el panel de la pantalla (la acción de un pedido de venta, como
- * «Gestionar compra» para un Pendiente de pago, no es lo que se hace con un pedido de la tienda). La fila de GET
- * /ecommerce/pedidos no trae asesor, saldo ni atraso: no salen chips ni «Sin asignar».
+ * antigüedad) con el PVEN debajo del número PWEB (o «Pedido web» si no lo trae). r1 (m4): un pedido web es un SaleOrder, así que
+ * la acción principal de un pedido de venta le aplica (Ver pedido, Despachar, Facturar), con return_to a E-Commerce; solo se anula
+ * en PENDIENTE_PAGO (el estado propio de la tienda: «Gestionar compra» no aplica a un pedido que espera el pago del cliente) y con
+ * `soloLectura` (un rol que no mueve pedidos no llega a esas pantallas). La fila de GET /ecommerce/pedidos no trae asesor, saldo
+ * ni atraso: no salen chips ni «Sin asignar».
  * @param {any} fila
- * @param {{ahora?: number}} [opciones]
+ * @param {{ahora?: number, soloLectura?: boolean}} [opciones]
  * @returns {TarjetaVentas}
  */
-export function tarjetaPedidoWeb(fila, { ahora } = {}) {
-  const tarjeta = tarjetaPedido(fila, { ahora });
-  return { ...tarjeta, subtitulo: textoLimpio(fila?.pven_numero) || 'Pedido web', accionPrincipal: null };
+export function tarjetaPedidoWeb(fila, { ahora, soloLectura = false } = {}) {
+  const tarjeta = tarjetaPedido(fila, { ahora, returnTo: RUTA_ECOMMERCE });
+  const sinAccion = soloLectura || fila?.estado === 'PENDIENTE_PAGO';
+  return { ...tarjeta, subtitulo: textoLimpio(fila?.pven_numero) || 'Pedido web', accionPrincipal: sinAccion ? null : tarjeta.accionPrincipal };
 }
 
 /** El motivo del tablero de los pedidos web para un rol que no puede moverlos. */

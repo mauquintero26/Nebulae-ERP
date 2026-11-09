@@ -1079,7 +1079,7 @@ console.log('--- TEST 27 (B4 T23A, KPI-otros punto 5; R7, R12, RP102): las tarje
   assert.deepEqual(t.web_ventas_mes, {
     valor: 8500000, variacion: { actual: 8500000, anterior: 10000000 }, textoPeriodo: 'vs mes pasado', ayuda: '21 pedidos PWEB',
   });
-  assert.deepEqual(t.carritos_abandonados, { valor: 4, tono: 'alerta', ayuda: '4 sin cerrar' });
+  assert.deepEqual(t.carritos_abandonados, { valor: 4, tono: 'alerta', ayuda: '$640.000 sin cerrar' });
   assert.deepEqual(t.productos_publicados, { valor: 58 });
   assert.equal(kpisLib.TEXTO_COMPARACION_TIENDA.hoy, 'vs ayer');
   assert.equal(kpisLib.TEXTO_COMPARACION_TIENDA.mes, TEXTO_PERIODO.mes.comparado, '«vs mes pasado» es el de la clave mes');
@@ -1088,7 +1088,9 @@ console.log('--- TEST 27 (B4 T23A, KPI-otros punto 5; R7, R12, RP102): las tarje
   assert.equal(textoVariacion(variacionPct(t.web_ventas_hoy.variacion.actual, t.web_ventas_hoy.variacion.anterior)), '+20 %');
   assert.equal(textoVariacion(variacionPct(t.web_ventas_mes.variacion.actual, t.web_ventas_mes.variacion.anterior)), `${MENOS}15 %`);
   // Los carritos solo alertan si hay alguno (> 0); con 0 no hay alerta y la ayuda dice 0.
-  assert.deepEqual(kpisLib.tarjetasTienda({ ...stats, carritos_abandonados_count: 0 }).carritos_abandonados, { valor: 0, tono: 'normal', ayuda: '0 sin cerrar' });
+  assert.deepEqual(kpisLib.tarjetasTienda({ ...stats, carritos_abandonados_count: 0, carritos_abandonados_valor: 0 }).carritos_abandonados, { valor: 0, tono: 'normal', ayuda: '$0 sin cerrar' });
+  // r1 (m1): la ayuda es el DINERO sin cerrar (la tarjeta ya dice cuántos); sin ese valor, null: nunca «$0» inventado.
+  for (const v of [undefined, null, 'x', NaN]) assert.deepEqual(kpisLib.tarjetasTienda({ ...stats, carritos_abandonados_valor: v }).carritos_abandonados, { valor: 4, tono: 'alerta', ayuda: null }, String(v));
   assert.equal(kpisLib.tarjetasTienda({ ...stats, carritos_abandonados_count: 1 }).carritos_abandonados.tono, 'alerta');
   // Singular y miles.
   assert.equal(kpisLib.tarjetasTienda({ ...stats, web_orders_today: 1 }).web_ventas_hoy.ayuda, '1 pedido web');
@@ -1117,6 +1119,13 @@ console.log('--- TEST 27 (B4 T23A, KPI-otros punto 5; R7, R12, RP102): las tarje
   // Los nombres son los de CATALOGO_KPI (la única fuente): la pantalla pinta TarjetaKpi kpi="web_ventas_hoy", etc.
   for (const id of ['web_ventas_hoy', 'web_ventas_mes', 'carritos_abandonados', 'productos_publicados']) assert.ok(id in CATALOGO_KPI, id);
   assert.equal(CATALOGO_KPI.carritos_abandonados.mejorSiSube, false);
+  // r1 (m16): GET /ecommerce/carritos trae como mucho 50 (LIMIT 50 del servidor): si la tarjeta cuenta más, la caja lo dice.
+  assert.equal(kpisLib.textoLimiteCarritos(120, 50), 'Los 50 más recientes de 120');
+  assert.equal(kpisLib.textoLimiteCarritos(1200, 50), 'Los 50 más recientes de 1.200');
+  assert.equal(kpisLib.textoLimiteCarritos(51, 50), 'Los 50 más recientes de 51');
+  for (const [total, llegaron] of [[50, 50], [4, 4], [3, 5], [null, 5], [undefined, 5], [120, null], [120, undefined], ['x', 5], [120, 0], [NaN, 5]]) {
+    assert.equal(kpisLib.textoLimiteCarritos(total, llegaron), null, `${total}, ${llegaron}`);
+  }
   // El texto para lectores de pantalla de «vs ayer» (antes salía el genérico «frente al período anterior»).
   assert.equal(frenteDeComparado('vs ayer'), 'frente a ayer');
   assert.equal(frenteDeComparado(kpisLib.TEXTO_COMPARACION_TIENDA.mes), 'frente al mes pasado');
@@ -1128,20 +1137,21 @@ console.log('--- TEST 28 (B4 T23A): el cableado de las tarjetas de la tienda en 
   const fuente = readFileSync(new URL('../src/app/dashboard/ecommerce/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const codigo = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
   // Las cuatro tarjetas por su nombre del catálogo, con la comparación del servidor; ninguna es botón (ninguna equivale a una vista).
-  assert.match(codigo, /<TarjetaKpi kpi="web_ventas_hoy" valor=\{tarjetas\.web_ventas_hoy\.valor\} variacion=\{tarjetas\.web_ventas_hoy\.variacion\} textoPeriodo=\{tarjetas\.web_ventas_hoy\.textoPeriodo\} ayuda=\{tarjetas\.web_ventas_hoy\.ayuda \?\? undefined\} \/>/);
-  assert.match(codigo, /<TarjetaKpi kpi="web_ventas_mes" valor=\{tarjetas\.web_ventas_mes\.valor\} variacion=\{tarjetas\.web_ventas_mes\.variacion\} textoPeriodo=\{tarjetas\.web_ventas_mes\.textoPeriodo\} ayuda=\{tarjetas\.web_ventas_mes\.ayuda \?\? undefined\} \/>/);
-  assert.match(codigo, /<TarjetaKpi kpi="carritos_abandonados" valor=\{tarjetas\.carritos_abandonados\.valor\} tono=\{tarjetas\.carritos_abandonados\.tono\} ayuda=\{tarjetas\.carritos_abandonados\.ayuda \?\? undefined\} \/>/);
-  assert.match(codigo, /<TarjetaKpi kpi="productos_publicados" valor=\{tarjetas\.productos_publicados\.valor\} \/>/);
+  assert.match(codigo, /<TarjetaKpi kpi="web_ventas_hoy" valor=\{tarjetas\.web_ventas_hoy\.valor\} variacion=\{tarjetas\.web_ventas_hoy\.variacion\} textoPeriodo=\{tarjetas\.web_ventas_hoy\.textoPeriodo\} ayuda=\{sinPermisoStats \?\? tarjetas\.web_ventas_hoy\.ayuda \?\? undefined\} \/>/);
+  assert.match(codigo, /<TarjetaKpi kpi="web_ventas_mes" valor=\{tarjetas\.web_ventas_mes\.valor\} variacion=\{tarjetas\.web_ventas_mes\.variacion\} textoPeriodo=\{tarjetas\.web_ventas_mes\.textoPeriodo\} ayuda=\{sinPermisoStats \?\? tarjetas\.web_ventas_mes\.ayuda \?\? undefined\} \/>/);
+  assert.match(codigo, /<TarjetaKpi kpi="carritos_abandonados" valor=\{tarjetas\.carritos_abandonados\.valor\} tono=\{tarjetas\.carritos_abandonados\.tono\} ayuda=\{sinPermisoStats \?\? tarjetas\.carritos_abandonados\.ayuda \?\? undefined\} \/>/);
+  assert.match(codigo, /<TarjetaKpi kpi="productos_publicados" valor=\{tarjetas\.productos_publicados\.valor\} ayuda=\{sinPermisoStats \?\? undefined\} \/>/);
   assert.ok(!/<TarjetaKpi[^>]*onClick/.test(codigo), 'ninguna tarjeta de la tienda es botón');
   // De dónde salen: GET /ecommerce/stats con su turno; mientras recarga se conserva el valor ('actualizando'); un error se dice.
   assert.match(codigo, /apiFetch\('\/ecommerce\/stats', \{ signal: control\.signal \}\)\s*\.then\(\(r: \{ data\?: Record<string, unknown> \} \| null\) => setStats\(\{ vuelta: vueltaStats, datos: r\?\.data \?\? null, error: null \}\)\)\s*\.catch\(\(err: unknown\) => \{ if \(!control\.signal\.aborted\) setStats\(\{ vuelta: vueltaStats, datos: null, error: err \}\); \}\);/);
-  assert.match(codigo, /const \{ datos: datosStats, cargando: cargandoStats \} = lecturaDeCarga\(stats, vueltaStats\);/);
-  assert.match(codigo, /const errorStats = cargandoStats \? null : \(stats\?\.error \?\? null\);/);
+  // r1 (m5): la lectura es la de lecturaDeFuente (lib/kpis.js), con el error de la vuelta vigente, no rehecha en línea.
+  assert.match(codigo, /const \{ datos: datosStats, cargando: cargandoStats, error: errorStats \} = lecturaDeFuente\(stats, vueltaStats\);/);
+  assert.ok(!/lecturaDeCarga\(/.test(codigo), 'sin la lectura rehecha en línea');
+  assert.match(codigo, /const avisoStats = avisoDeFuente\(errorStats, 'No se pudieron cargar los indicadores de la tienda'\);/);
   assert.match(codigo, /const estadoStats = useEstadoKpi\(cargandoStats, errorStats\);/);
   assert.match(codigo, /const tarjetas = tarjetasTienda\(datosStats\);/);
-  assert.match(codigo, /<FranjaKpis estado=\{estadoStats\} titulo="Indicadores de la tienda">/);
-  // Con error, lo dice (el detail del servidor, por AvisoReintentar) y ofrece Reintentar SOLO de esa fuente.
-  assert.match(codigo, /\{errorStats && \(\s*<AvisoReintentar error=\{errorStats\} fallo="No se pudieron cargar los indicadores de la tienda" onReintentar=\{\(\) => setVueltaStats\(\(n\) => n \+ 1\)\}/);
+  // Con error, lo dice (avisoDeFuente: el detail del servidor y «Reintentar» solo si reintentar sirve; un 403 es de permiso, sin «Reintentar»).
+  assert.match(codigo, /\{avisoStats && <AvisoFuente aviso=\{avisoStats\} onReintentar=\{\(\) => setVueltaStats\(\(n\) => n \+ 1\)\} \/>\}/);
   // Lo que cambia las cifras recarga las tarjetas: un pedido movido (cancelarlo resta ventas) y un producto publicado, ocultado,
   // eliminado o guardado (productos_publicados); «Actualizar» recarga todo.
   assert.match(codigo, /const recargarTrasCambio = useCallback\(\(\) => \{\s*recargarPedidos\(\);\s*setVueltaStats\(\(n\) => n \+ 1\);\s*\}, \[recargarPedidos\]\);/);
@@ -1151,13 +1161,31 @@ console.log('--- TEST 28 (B4 T23A): el cableado de las tarjetas de la tienda en 
   assert.match(codigo, /onClick=\{recargarTodo\}/);
   // Los carritos: lo mismo (primera carga en esqueleto, error con Reintentar, vacío y filas por faseDeLista).
   assert.match(codigo, /const faseCarritos = faseDeLista\(\{ cargandoInicial: cargandoCarritos && carritos === null, error: errorCarritos, filas: carritos \}\);/);
-  assert.match(codigo, /\{faseCarritos === 'error' && \(\s*<AvisoReintentar error=\{errorCarritos\} fallo="No se pudieron cargar los carritos abandonados" onReintentar=\{\(\) => setVueltaCarritos\(\(n\) => n \+ 1\)\}/);
+  assert.match(codigo, /\{faseCarritos === 'error' && avisoCarritos && \(\s*<AvisoFuente aviso=\{avisoCarritos\} onReintentar=\{\(\) => setVueltaCarritos\(\(n\) => n \+ 1\)\} \/>/);
   assert.match(codigo, /<Contador valor=\{carritos === null \? null : carritos\.length\} estado=\{estadoCarritos\} \/>/);
   // Se fueron el StatCard, el '...' del cargando, los números armados con || 0 y los catch mudos.
   assert.ok(!/StatCard/.test(codigo), 'sin StatCard');
   assert.ok(!/'\.\.\.'/.test(codigo), "sin el '...' del cargando");
   assert.ok(!/stats\.(revenue|web_orders|carritos|productos)/.test(codigo), 'ningún número se arma con || 0 en el navegador');
-  assert.ok(!/catch \{\}/.test(codigo), 'ninguna carga se traga su error');
+  // r1 (I1, I2): lo que el rol no puede leer no se pide ni se pinta (accesoTienda: la lista exacta de require_roles de cada endpoint).
+  assert.match(codigo, /const acceso = accesoTienda\(rol\);/);
+  assert.match(codigo, /if \(!acceso\.indicadores\) return;\s*const control = new AbortController\(\);\s*apiFetch\('\/ecommerce\/stats'/);
+  assert.match(codigo, /\}, \[vueltaStats, acceso\.indicadores\]\);/);
+  assert.match(codigo, /if \(!panelActivo \|\| !acceso\.carritos\) return;\s*const control = new AbortController\(\);\s*apiFetch\('\/ecommerce\/carritos\?estado=ABANDONADO'/);
+  assert.match(codigo, /\{acceso\.indicadores && \(\s*<>/);
+  assert.match(codigo, /\{acceso\.carritos && \(\s*<div className="order-2/);
+  assert.match(codigo, /const actualizando = \(acceso\.indicadores && cargandoStats\) \|\| /);
+  // 403 que llega igual: «—» con el motivo de permiso y sin «Reintentar».
+  assert.match(codigo, /const sinPermisoStats = avisoStats\?\.tipo === 'permiso' \? avisoStats\.texto : null;/);
+  assert.match(codigo, /<FranjaKpis estado=\{avisoStats\?\.tipo === 'permiso' \? 'listo' : estadoStats\} titulo="Indicadores de la tienda">/);
+  assert.match(codigo, /\{aviso\.reintentar && \(\s*<button type="button" onClick=\{onReintentar\}/);
+  assert.ok(!/AvisoReintentar/.test(codigo), 'ningún Reintentar fijo');
+  // m16: «Los 50 más recientes de N».
+  assert.match(codigo, /const textoLimite = textoLimiteCarritos\(datosStats\?\.carritos_abandonados_count, carritos === null \? null : carritos\.length\);/);
+  assert.match(codigo, /\{textoLimite && <p /);
+  // m10: solo las cargas de la tienda (la pestaña Pagos, con sus .catch(() => {}), está fuera de alcance).
+  const cargasTienda = codigo.slice(codigo.indexOf('const [vueltaStats'), codigo.indexOf('const [estadoPedidos'));
+  assert.ok(cargasTienda.length > 500 && !/catch \{\}|\.catch\(\(\) => \{\}\)/.test(cargasTienda), 'ninguna carga de la tienda se traga su error');
   assert.ok(!/catPublicados|catBajoStock/.test(codigo), 'los publicados salen del servidor, no de la página del catálogo');
 }
 

@@ -20,21 +20,26 @@ import {
   BarraTabla, Paginacion, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
 } from '@/components/tabla';
 import type { ColumnaTabla } from '@/components/tabla';
-import { accionModo, dependenciasTablero, estadoDelTotal, faseDeLista, normalizarRespuesta } from '@/lib/tabla';
+import {
+  RETARDO_BUSQUEDA_MS, accionModo, crearBusquedaConRetardo, dependenciasTablero, estadoDelTotal, faseDeLista, normalizarRespuesta,
+  textoVacioCatalogo, textoVacioPedidosWeb,
+} from '@/lib/tabla';
 import type { AccionTabla } from '@/lib/tabla';
 import {
-  COLUMNAS_PEDIDO, OPCIONES_ESTADOS_PEDIDOS_WEB, OPCIONES_ESTADOS_TABLERO_PEDIDO, ORDEN_COLUMNA_PEDIDOS_WEB, RUTA_PEDIDOS_WEB,
+  COLUMNAS_PEDIDO, OPCIONES_ESTADOS_PEDIDOS_WEB, OPCIONES_ESTADOS_TABLERO_PEDIDO, RUTA_PEDIDOS_WEB,
   accionesTarjetaPedido, confirmacionFacturarPedido, consultaColumnaPedido, efectosCancelarPedido, reglaSoltarPedido,
   soloLecturaPedidosWeb, tarjetaPedidoWeb,
 } from '@/lib/kanban-ventas';
 import { infoEstadoPedido } from '@/lib/estados-pedido';
-import { lecturaDeCarga, tarjetasTienda } from '@/lib/kpis';
+import { ordenPorDefecto } from '@/lib/kanban';
+import { lecturaDeFuente, tarjetasTienda, textoLimiteCarritos } from '@/lib/kpis';
+import { accesoTienda } from '@/lib/roles';
 import { formatoPesos } from '@/lib/pesos';
 import { fechaCorta, fechaHoraLarga, horaCO } from '@/lib/fechas-colombia';
-import { recargarTrasError } from '@/lib/avisos';
+import { avisoDeFuente, recargarTrasError } from '@/lib/avisos';
 import { TABLE } from '@/lib/design-system';
 import { getUsuarioActual } from '../ventas/flujo';
-import { AvisoReintentar, CONTENEDOR, FOCOS } from '../inventario/piezas-inventario';
+import { CONTENEDOR, FOCOS } from '../inventario/piezas-inventario';
 import { CHIP } from '../compras/columnas-pec';
 
 // B4 T23A: los montos como en el resto del bloque ('$4.927.538'). Se fue PWEB_ESTADOS (nombres que no existen en los pedidos
@@ -399,8 +404,10 @@ const ID_CATALOGO = 'ecommerce.catalogo';
 const INICIAL_PEDIDOS_WEB = { orden: '-fecha' };
 const INICIAL_CATALOGO = { orden: 'nombre' };
 const RUTA_CATALOGO = '/ecommerce/catalogo';
-/** Lo que se espera para que el filtro de categoría vuelva al servidor (como la búsqueda de BarraTabla: no recarga con cada tecla). */
-const RETARDO_CATEGORIA_MS = 300;
+/** I1 e I2 (r1): el motivo de lo que solo hace la Administración (POST, PATCH y DELETE del catálogo son de ADMIN). */
+const TITULO_SOLO_ADMIN = 'Solo la Administración edita el catálogo';
+/** I1 (r1): lo que ve un rol que el servidor no deja leer los pedidos (COMPRAS, CONSULTA): no es una falla, no hay «Reintentar». */
+const TEXTO_SIN_PEDIDOS = 'Tu rol no ve los pedidos de la tienda.';
 const FOCO_VISIBLE = FOCOS.purple;
 /** Quien hace el cambio desde el tablero (updated_by, como el Hub y los pedidos de venta). */
 const autorActual = () => { const u = getUsuarioActual(); return u.name || u.email || undefined; };
@@ -415,10 +422,31 @@ const suscribirRol = (alCambiar: () => void) => {
 const AccionesPedidosWeb = createContext<{ abrir: (p: PedidoWeb) => void } | null>(null);
 /** Lo que las celdas del catálogo le piden a la pantalla. */
 const AccionesCatalogo = createContext<{
+  /** m15: solo ADMIN escribe en el catálogo (accesoTienda.editarCatalogo). */
+  puedeEditar: boolean;
   editar: (p: ProductoCatalogo) => void;
   alternar: (p: ProductoCatalogo) => void;
   eliminar: (p: ProductoCatalogo) => void;
 } | null>(null);
+
+/**
+ * r1 (I1, I2): el aviso de una fuente que falló (avisoDeFuente): una falla lleva el detalle del servidor y «Reintentar»; un 403 es un
+ * tema de permiso y no ofrece «Reintentar» (volver a pedir no lo cambia).
+ */
+function AvisoFuente({ aviso, onReintentar }: { aviso: NonNullable<ReturnType<typeof avisoDeFuente>>; onReintentar: () => void }) {
+  const permiso = aviso.tipo === 'permiso';
+  return (
+    <div role={permiso ? 'status' : 'alert'} className={`flex flex-wrap items-center gap-3 rounded-2xl border px-4 py-3 text-sm font-semibold ${permiso ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-rose-200 bg-rose-50 text-rose-800'}`}>
+      {aviso.texto}
+      {aviso.reintentar && (
+        <button type="button" onClick={onReintentar}
+          className={`inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 ${FOCO_VISIBLE}`}>
+          Reintentar
+        </button>
+      )}
+    </div>
+  );
+}
 
 /** #PWEB: el número web y, debajo, el del pedido de venta (PVEN). */
 function CeldaNumeroWeb({ p }: { p: PedidoWeb }) {
@@ -470,7 +498,7 @@ const COLUMNAS_PEDIDOS_WEB: ColumnaTabla<PedidoWeb>[] = [
     titleCelda: (p) => [p.customer_name, p.customer_email].filter(Boolean).join(' · '), celda: (p) => <CeldaClienteWeb p={p} /> },
   { id: 'total', titulo: 'Total', ancho: 108, alinear: 'derecha', ordenable: 'total', titleCelda: (p) => fCOP(p.total_cop ?? 0),
     celda: (p) => <span className="block truncate text-xs font-black text-slate-800">{fCOP(p.total_cop ?? 0)}</span> },
-  { id: 'items', titulo: 'Items', ancho: 72, alinear: 'derecha', ocultaPorDefecto: true, ordenable: 'items',
+  { id: 'items', titulo: 'Ítems', ancho: 72, alinear: 'derecha', ocultaPorDefecto: true, ordenable: 'items',
     celda: (p) => <span className="text-xs text-slate-500">{(p.productos || []).length}</span> },
   { id: 'estado', titulo: 'Estado', ancho: 148, clave: true, ordenable: 'estado', titleCelda: (p) => infoEstadoPedido(p.estado).label,
     celda: (p) => <CeldaEstadoWeb p={p} /> },
@@ -478,9 +506,6 @@ const COLUMNAS_PEDIDOS_WEB: ColumnaTabla<PedidoWeb>[] = [
     celda: (p) => <span className="block truncate text-xs text-slate-500">{fechaCorta(p.created_at) || '-'}</span> },
   { id: 'acciones', titulo: 'Acciones', ancho: 88, clave: true, fija: 'derecha', celda: (p) => <CeldaAccionesWeb p={p} /> },
 ];
-
-/** La tarjeta del tablero de los pedidos web (tarjetaPedidoWeb: la de los pedidos de venta, con el PVEN debajo del número PWEB). */
-const tarjetaDePedidoWeb = (p: PedidoWeb) => tarjetaPedidoWeb(p);
 
 /** Producto: la imagen (o el ícono), el nombre y, debajo, la marca. */
 function CeldaProducto({ p }: { p: ProductoCatalogo }) {
@@ -521,10 +546,11 @@ function CeldaPrecio({ p }: { p: ProductoCatalogo }) {
 /** Tienda: el interruptor de publicado (con su foco visible); un clic aquí no abre la fila. */
 function CeldaTienda({ p }: { p: ProductoCatalogo }) {
   const acciones = useContext(AccionesCatalogo);
+  const puede = acciones?.puedeEditar === true;
   return (
-    <span className="flex justify-center">
-      <label className="relative inline-flex cursor-pointer items-center">
-        <input type="checkbox" className="peer sr-only" checked={p.publicado_web || false} onChange={() => acciones?.alternar(p)}
+    <span className="flex justify-center" title={puede ? undefined : TITULO_SOLO_ADMIN}>
+      <label className={`relative inline-flex items-center ${puede ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
+        <input type="checkbox" className="peer sr-only" checked={p.publicado_web || false} disabled={!puede} onChange={() => acciones?.alternar(p)}
           aria-label={`${p.publicado_web ? 'Ocultar' : 'Publicar'} ${p.nombre} en la tienda`} />
         <div className="h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-purple-600 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus-visible:ring-2 peer-focus-visible:ring-purple-700 peer-focus-visible:ring-offset-2"></div>
       </label>
@@ -535,6 +561,8 @@ function CeldaTienda({ p }: { p: ProductoCatalogo }) {
 /** Acciones: el menú ⋯ de la fila (MenuFila): Editar, Ocultar o Publicar y Eliminar (con confirmación de useAvisos). */
 function CeldaAccionesCatalogo({ p }: { p: ProductoCatalogo }) {
   const acciones = useContext(AccionesCatalogo);
+  // m15: sin permiso de escribir no hay menú (todo lo suyo es escritura): solo el motivo.
+  if (acciones?.puedeEditar !== true) return <span className="flex items-center justify-end text-xs text-slate-400" title={TITULO_SOLO_ADMIN}>—</span>;
   const items: ItemMenuFila[] = [
     { etiqueta: 'Editar', icono: Edit2, onClick: () => acciones?.editar(p) },
     { etiqueta: p.publicado_web ? 'Ocultar' : 'Publicar', icono: p.publicado_web ? ToggleLeft : ToggleRight, onClick: () => acciones?.alternar(p) },
@@ -568,15 +596,16 @@ const COLUMNAS_CATALOGO: ColumnaTabla<ProductoCatalogo>[] = [
 ];
 
 /** La cuadrícula del catálogo («Cuadrícula», LayoutGrid): la tarjeta de cada producto; un clic la abre para editar. */
-function TarjetaProductoCuadricula({ p, onEditar, onAlternar }: { p: ProductoCatalogo; onEditar: () => void; onAlternar: () => void }) {
+function TarjetaProductoCuadricula({ p, puedeEditar, onEditar, onAlternar }: { p: ProductoCatalogo; puedeEditar: boolean; onEditar: () => void; onAlternar: () => void }) {
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm hover:shadow-md transition-all cursor-pointer overflow-hidden" onClick={onEditar}>
+    <div className={`bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden ${puedeEditar ? 'cursor-pointer hover:shadow-md transition-all' : ''}`} onClick={puedeEditar ? onEditar : undefined}
+      title={puedeEditar ? undefined : TITULO_SOLO_ADMIN}>
       {p.imagenes?.[0] ? <img src={p.imagenes[0]} alt={p.nombre} className="w-full h-40 object-cover bg-gray-100"/> : <div className="w-full h-40 bg-gray-100 flex items-center justify-center"><Package size={32} className="text-gray-300"/></div>}
       <div className="p-4">
         <div className="flex items-start justify-between gap-2 mb-2">
           <p className="font-bold text-gray-900 text-sm leading-tight line-clamp-2">{p.nombre}</p>
-          <label className="shrink-0 relative inline-flex items-center cursor-pointer" onClick={e => e.stopPropagation()}>
-            <input type="checkbox" className="peer sr-only" checked={p.publicado_web || false} onChange={onAlternar}
+          <label className={`shrink-0 relative inline-flex items-center ${puedeEditar ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`} onClick={e => e.stopPropagation()}>
+            <input type="checkbox" className="peer sr-only" checked={p.publicado_web || false} disabled={!puedeEditar} onChange={onAlternar}
               aria-label={`${p.publicado_web ? 'Ocultar' : 'Publicar'} ${p.nombre} en la tienda`} />
             <div className="h-5 w-9 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:border after:bg-white after:transition-all after:content-[''] peer-checked:bg-purple-600 peer-checked:after:translate-x-full peer-focus-visible:ring-2 peer-focus-visible:ring-purple-700 peer-focus-visible:ring-offset-2"></div>
           </label>
@@ -599,6 +628,12 @@ export default function EcommercePage() {
   const { avisar, avisarError, confirmar } = useAvisos();
   const [activeTab, setActiveTab] = useState('Panel');
   const showToast = (msg: string, type = 'ok') => avisar(msg, { tono: type === 'ok' ? 'ok' : 'error' });
+  // I1 e I2 (r1): lo que el rol puede pedir y hacer, de la lista exacta de require_roles de cada endpoint (accesoTienda). El rol se lee
+  // DESPUÉS de montar (useSyncExternalStore: '' en el servidor y en la hidratación, y entonces no se pide nada y se pintan esqueletos).
+  // La pantalla no pide lo que el rol no puede ver (daría un 403 fijo) ni muestra lo que no pidió.
+  const rol = useSyncExternalStore(suscribirRol, () => getUsuarioActual().role, () => '');
+  const acceso = accesoTienda(rol);
+  const soloLectura = soloLecturaPedidosWeb(rol);
   const panelActivo = activeTab === 'Panel';
   const catalogoActivo = activeTab === 'Catálogo';
 
@@ -618,30 +653,34 @@ export default function EcommercePage() {
   const [vueltaStats, setVueltaStats] = useState(0);
   const [stats, setStats] = useState<Cargado<Record<string, unknown>> | null>(null);
   useEffect(() => {
+    if (!acceso.indicadores) return;
     const control = new AbortController();
     apiFetch('/ecommerce/stats', { signal: control.signal })
       .then((r: { data?: Record<string, unknown> } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
       .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
     return () => control.abort();
-  }, [vueltaStats]);
-  const { datos: datosStats, cargando: cargandoStats } = lecturaDeCarga(stats, vueltaStats);
-  const errorStats = cargandoStats ? null : (stats?.error ?? null);
+  }, [vueltaStats, acceso.indicadores]);
+  const { datos: datosStats, cargando: cargandoStats, error: errorStats } = lecturaDeFuente(stats, vueltaStats);
   const estadoStats = useEstadoKpi(cargandoStats, errorStats);
+  const avisoStats = avisoDeFuente(errorStats, 'No se pudieron cargar los indicadores de la tienda');
   const tarjetas = tarjetasTienda(datosStats);
+  const sinPermisoStats = avisoStats?.tipo === 'permiso' ? avisoStats.texto : null;
 
   // Los carritos abandonados (GET /ecommerce/carritos): lo mismo, con su error dicho en la lista y «Reintentar».
   const [vueltaCarritos, setVueltaCarritos] = useState(0);
   const [carritosCargados, setCarritosCargados] = useState<Cargado<CarritoAbandonado[]> | null>(null);
   useEffect(() => {
-    if (!panelActivo) return;
+    if (!panelActivo || !acceso.carritos) return;
     const control = new AbortController();
     apiFetch('/ecommerce/carritos?estado=ABANDONADO', { signal: control.signal })
       .then((d: { data?: CarritoAbandonado[] } | null) => setCarritosCargados({ vuelta: vueltaCarritos, datos: d?.data ?? [], error: null }))
       .catch((err: unknown) => { if (!control.signal.aborted) setCarritosCargados({ vuelta: vueltaCarritos, datos: null, error: err }); });
     return () => control.abort();
-  }, [panelActivo, vueltaCarritos]);
-  const { datos: carritos, cargando: cargandoCarritos } = lecturaDeCarga(carritosCargados, vueltaCarritos);
-  const errorCarritos = cargandoCarritos ? null : (carritosCargados?.error ?? null);
+  }, [panelActivo, vueltaCarritos, acceso.carritos]);
+  const { datos: carritos, cargando: cargandoCarritos, error: errorCarritos } = lecturaDeFuente(carritosCargados, vueltaCarritos);
+  const avisoCarritos = avisoDeFuente(errorCarritos, 'No se pudieron cargar los carritos abandonados');
+  // m16: la lista trae como mucho los 50 más recientes; si la tarjeta cuenta más, la caja lo dice (nunca dos números sin explicación).
+  const textoLimite = textoLimiteCarritos(datosStats?.carritos_abandonados_count, carritos === null ? null : carritos.length);
   const faseCarritos = faseDeLista({ cargandoInicial: cargandoCarritos && carritos === null, error: errorCarritos, filas: carritos });
   const estadoCarritos = useEstadoKpi(cargandoCarritos, errorCarritos);
 
@@ -653,25 +692,24 @@ export default function EcommercePage() {
   const [estadoPedidos, despacharPedidos, listoPedidos] = useEstadoTabla(ID_PEDIDOS_WEB, INICIAL_PEDIDOS_WEB);
   const enKanban = estadoPedidos.modo === 'kanban';
   const pedidos = useListado<PedidoWeb>({
-    ruta: RUTA_PEDIDOS_WEB, estado: estadoPedidos, esperar: !listoPedidos, despachar: despacharPedidos, activo: panelActivo && !enKanban,
+    ruta: RUTA_PEDIDOS_WEB, estado: estadoPedidos, esperar: !listoPedidos, despachar: despacharPedidos, activo: panelActivo && !enKanban && acceso.pedidos,
   });
 
   // ── B4 T23A, bloque 3: el tablero de los pedidos web (KANBAN-resto puntos 2 y 3; C4, R11; RP62, D39) ──
   // En modo servidor, con COLUMNAS_PEDIDO de los pedidos de venta y una consulta por columna (consultaColumnaPedido) con el MISMO
   // estado; las plegadas piden limit=0 (lo hace el hook). El rol se lee DESPUÉS de montar (useSyncExternalStore: '' en el servidor
   // y en la hidratación): sin ser ADMIN ni ASESOR el tablero queda solo para ver, con su motivo (soloLecturaPedidosWeb, RP62).
-  const rol = useSyncExternalStore(suscribirRol, () => getUsuarioActual().role, () => '');
-  const soloLectura = soloLecturaPedidosWeb(rol);
   const tablero = useTableroKanban<PedidoWeb>({
     pantalla: ID_PEDIDOS_WEB,
     modo: 'servidor',
     columnas: COLUMNAS_PEDIDO,
-    activo: listoPedidos && enKanban && panelActivo,
+    activo: listoPedidos && enKanban && panelActivo && acceso.pedidos,
     porColumna: estadoPedidos.tamano,
     dependencias: dependenciasTablero(estadoPedidos),
-    ordenDe: () => ORDEN_COLUMNA_PEDIDOS_WEB,
+    // D39: 'sin_movimiento' en las columnas abiertas y 'reciente' en las cerradas (ordenPorDefecto); /ecommerce/pedidos no acepta 'atencion'.
+    ordenDe: ordenPorDefecto,
     cargar: async (columna, { offset, limit, orden, signal }) => {
-      const consulta = consultaColumnaPedido(estadoPedidos, columna, { orden, limit, offset });
+      const consulta = consultaColumnaPedido(estadoPedidos, columna, { orden, limit, offset, vista: null });
       if (consulta === null) return { filas: [], total: 0 };
       return normalizarRespuesta(await apiFetch(`${RUTA_PEDIDOS_WEB}?${consulta}`, { signal }));
     },
@@ -707,15 +745,15 @@ export default function EcommercePage() {
     estadoTotal: estadoDelTotal({ total: pedidos.total, cargando: pedidos.cargandoInicial, recargando: pedidos.recargando, error: pedidos.error }),
   };
   const vacioPedidos = useMemo(() => {
-    const q = estadoPedidos.q.trim();
+    const { titulo, ayuda } = textoVacioPedidosWeb({ q: estadoPedidos.q, estados: estadoPedidos.estados });
     return (
       <div>
         <Globe size={32} className="mx-auto mb-3 opacity-30" aria-hidden="true" />
-        <p className="font-semibold text-slate-600">{q ? `Sin resultados para «${q}»` : estadoPedidos.estados.length > 0 ? 'Sin pedidos web en esos estados' : 'Sin pedidos web'}</p>
-        <p className="mt-1 text-xs text-slate-500">{q || estadoPedidos.estados.length > 0 ? 'Ajusta la búsqueda o el filtro de estados.' : 'Los pedidos PWEB-AAAA#### aparecerán aquí.'}</p>
+        <p className="font-semibold text-slate-600">{titulo}</p>
+        <p className="mt-1 text-xs text-slate-500">{ayuda}</p>
       </div>
     );
-  }, [estadoPedidos.q, estadoPedidos.estados.length]);
+  }, [estadoPedidos.q, estadoPedidos.estados]);
   const abrirPedido = useCallback((p: PedidoWeb) => setSelectedOrder(p), []);
   const accionesPedidos = useMemo(() => ({ abrir: abrirPedido }), [abrirPedido]);
 
@@ -790,6 +828,8 @@ export default function EcommercePage() {
     recargarTablero(['en_proceso']);
     recargarTrasCambio();
   }, [avisar, avisarError, recargarTablero, recargarTrasCambio]);
+  // r1 (m4): la acción principal de la tarjeta es la de los pedidos de venta (salvo PENDIENTE_PAGO); un rol de solo lectura no la lleva.
+  const tarjetaDeWeb = useCallback((p: PedidoWeb) => tarjetaPedidoWeb(p, { soloLectura: soloLectura !== null }), [soloLectura]);
   const accionesTarjeta = useCallback((p: PedidoWeb): ItemMenuFila[] => (soloLectura ? [] : accionesTarjetaPedido(p).map((a) => ({
     etiqueta: a.etiqueta, icono: a.estado === 'EN_TRANSITO' ? Truck : Package, onClick: () => { void marcarDesdeTablero(p, a.estado); },
   }))), [soloLectura, marcarDesdeTablero]);
@@ -802,16 +842,26 @@ export default function EcommercePage() {
   const [categoriaTexto, setCategoriaTexto] = useState('');
   const [categoria, setCategoria] = useState('');
   const categoriaAplicada = useRef('');
+  // El retardo es el de la búsqueda de BarraTabla (crearBusquedaConRetardo, RETARDO_BUSQUEDA_MS), creado al primer uso y cancelado al
+  // desmontar. La categoría no entra en useEstadoTabla (su reductor no admite un filtro extra): se anota para T24.
+  const busquedaCategoria = useRef<ReturnType<typeof crearBusquedaConRetardo> | null>(null);
+  const alEscribirCategoria = (texto: string) => {
+    setCategoriaTexto(texto);
+    busquedaCategoria.current ??= crearBusquedaConRetardo({
+      alBuscar: (buscado) => {
+        const nueva = buscado.trim();
+        if (nueva === categoriaAplicada.current) return;
+        categoriaAplicada.current = nueva;
+        setCategoria(nueva);
+        despacharCatalogo({ tipo: 'pagina', valor: 1 });
+      },
+    });
+    busquedaCategoria.current.escribir(texto);
+  };
   useEffect(() => {
-    const espera = setTimeout(() => {
-      const nueva = categoriaTexto.trim();
-      if (nueva === categoriaAplicada.current) return;
-      categoriaAplicada.current = nueva;
-      setCategoria(nueva);
-      despacharCatalogo({ tipo: 'pagina', valor: 1 });
-    }, RETARDO_CATEGORIA_MS);
-    return () => clearTimeout(espera);
-  }, [categoriaTexto, despacharCatalogo]);
+    const busquedas = busquedaCategoria;
+    return () => busquedas.current?.cancelar();
+  }, []);
   const catalogo = useListado<ProductoCatalogo>({
     ruta: RUTA_CATALOGO, estado: estadoCatalogo, extra: { categoria }, esperar: !listoCatalogo, despachar: despacharCatalogo, activo: catalogoActivo,
   });
@@ -823,18 +873,17 @@ export default function EcommercePage() {
     estadoTotal: estadoDelTotal({ total: catalogo.total, cargando: catalogo.cargandoInicial, recargando: catalogo.recargando, error: catalogo.error }),
   };
   const vacioCatalogo = useMemo(() => {
-    const q = estadoCatalogo.q.trim();
-    const filtrado = q !== '' || categoria !== '';
+    const { titulo, filtrado } = textoVacioCatalogo({ q: estadoCatalogo.q, categoria });
     return (
       <div>
         <Package size={32} className="mx-auto mb-3 opacity-30" aria-hidden="true" />
-        <p className="font-semibold text-slate-600">{filtrado ? 'Sin productos con esos filtros' : 'Sin productos'}</p>
-        {!filtrado && (
+        <p className="font-semibold text-slate-600">{titulo}</p>
+        {!filtrado && acceso.editarCatalogo && (
           <button type="button" onClick={() => setShowNewProduct(true)} className={`mt-3 rounded-xl bg-purple-600 px-4 py-2 text-sm font-bold text-white ${FOCO_VISIBLE}`}>+ Nuevo Producto</button>
         )}
       </div>
     );
-  }, [estadoCatalogo.q, categoria]);
+  }, [estadoCatalogo.q, categoria, acceso.editarCatalogo]);
 
   // Un cambio del catálogo (publicar, ocultar, eliminar o guardar un producto) mueve el catálogo y el «Productos publicados» de las tarjetas.
   const { recargar: recargarCatalogo } = catalogo;
@@ -860,7 +909,7 @@ export default function EcommercePage() {
       recargarTrasCatalogo();
     } catch (e) { avisarError(e, 'No se pudo eliminar el producto'); }
   }, [avisar, avisarError, confirmar, recargarTrasCatalogo]);
-  const accionesCatalogo = useMemo(() => ({ editar: setEditProduct, alternar: togglePublicado, eliminar: deleteProduct }), [togglePublicado, deleteProduct]);
+  const accionesCatalogo = useMemo(() => ({ puedeEditar: acceso.editarCatalogo, editar: setEditProduct, alternar: togglePublicado, eliminar: deleteProduct }), [acceso.editarCatalogo, togglePublicado, deleteProduct]);
 
   const recuperarCarrito = async (cartId: number, descuento = 10) => {
     try {
@@ -885,7 +934,7 @@ export default function EcommercePage() {
     recargarTablero();
     recargarCatalogo();
   }, [recargarPedidos, recargarTablero, recargarCatalogo]);
-  const actualizando = cargandoStats || pedidos.recargando || catalogo.recargando;
+  const actualizando = (acceso.indicadores && cargandoStats) || pedidos.recargando || catalogo.recargando;
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -908,7 +957,7 @@ export default function EcommercePage() {
               <Link href="/store" target="_blank" className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 font-semibold text-sm shadow-sm">
                 <Globe size={14}/> Ver Tienda
               </Link>
-              {activeTab === 'Catálogo' && (
+              {activeTab === 'Catálogo' && acceso.editarCatalogo && (
                 <button onClick={() => setShowNewProduct(true)} className="flex items-center gap-2 px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-sm shadow-sm">
                   <Plus size={15}/> Nuevo Producto
                 </button>
@@ -920,15 +969,19 @@ export default function EcommercePage() {
             primera vez, 'actualizando' al recargar y «—» con error (con su aviso y «Reintentar»). Ventas de hoy contra ayer y del
             mes contra el mismo tramo del mes pasado, en hora de Colombia (lo cuenta el servidor). Ninguna es botón: ninguna
             equivale a una vista. */}
-        {errorStats && (
-          <AvisoReintentar error={errorStats} fallo="No se pudieron cargar los indicadores de la tienda" onReintentar={() => setVueltaStats((n) => n + 1)} acento="purple" />
+        {/* r1 (I1, I2): solo ADMIN y ASESOR leen /ecommerce/stats; para los demás roles no se pide ni se pinta. Un 403 que llegue igual
+            es un tema de permiso: sin «Reintentar» y con «—» y el motivo en las tarjetas (no «No se pudo cargar»). */}
+        {acceso.indicadores && (
+          <>
+            {avisoStats && <AvisoFuente aviso={avisoStats} onReintentar={() => setVueltaStats((n) => n + 1)} />}
+            <FranjaKpis estado={avisoStats?.tipo === 'permiso' ? 'listo' : estadoStats} titulo="Indicadores de la tienda">
+              <TarjetaKpi kpi="web_ventas_hoy" valor={tarjetas.web_ventas_hoy.valor} variacion={tarjetas.web_ventas_hoy.variacion} textoPeriodo={tarjetas.web_ventas_hoy.textoPeriodo} ayuda={sinPermisoStats ?? tarjetas.web_ventas_hoy.ayuda ?? undefined} />
+              <TarjetaKpi kpi="web_ventas_mes" valor={tarjetas.web_ventas_mes.valor} variacion={tarjetas.web_ventas_mes.variacion} textoPeriodo={tarjetas.web_ventas_mes.textoPeriodo} ayuda={sinPermisoStats ?? tarjetas.web_ventas_mes.ayuda ?? undefined} />
+              <TarjetaKpi kpi="carritos_abandonados" valor={tarjetas.carritos_abandonados.valor} tono={tarjetas.carritos_abandonados.tono} ayuda={sinPermisoStats ?? tarjetas.carritos_abandonados.ayuda ?? undefined} />
+              <TarjetaKpi kpi="productos_publicados" valor={tarjetas.productos_publicados.valor} ayuda={sinPermisoStats ?? undefined} />
+            </FranjaKpis>
+          </>
         )}
-        <FranjaKpis estado={estadoStats} titulo="Indicadores de la tienda">
-          <TarjetaKpi kpi="web_ventas_hoy" valor={tarjetas.web_ventas_hoy.valor} variacion={tarjetas.web_ventas_hoy.variacion} textoPeriodo={tarjetas.web_ventas_hoy.textoPeriodo} ayuda={tarjetas.web_ventas_hoy.ayuda ?? undefined} />
-          <TarjetaKpi kpi="web_ventas_mes" valor={tarjetas.web_ventas_mes.valor} variacion={tarjetas.web_ventas_mes.variacion} textoPeriodo={tarjetas.web_ventas_mes.textoPeriodo} ayuda={tarjetas.web_ventas_mes.ayuda ?? undefined} />
-          <TarjetaKpi kpi="carritos_abandonados" valor={tarjetas.carritos_abandonados.valor} tono={tarjetas.carritos_abandonados.tono} ayuda={tarjetas.carritos_abandonados.ayuda ?? undefined} />
-          <TarjetaKpi kpi="productos_publicados" valor={tarjetas.productos_publicados.valor} />
-        </FranjaKpis>
 
         {/* TABS */}
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -956,19 +1009,21 @@ export default function EcommercePage() {
             menú abierto los pedidos van arriba y a todo el ancho (los carritos, debajo): R26; desde 2xl, los carritos a la izquierda. */}
         {activeTab === 'Panel' && (
           <div className="flex min-w-0 flex-1 flex-col gap-6 2xl:flex-row">
+            {acceso.carritos && (
             <div className="order-2 flex w-full shrink-0 flex-col overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm 2xl:order-1 2xl:w-80 2xl:self-start">
               <div className="p-5 border-b border-gray-100 bg-rose-50/50 flex items-center justify-between">
                 <h3 className="font-black text-gray-800 text-sm flex items-center gap-2"><AlertCircle className="text-rose-500" size={16}/> Recuperación de Carritos</h3>
                 <span className="bg-rose-100 text-rose-700 text-xs font-black px-2 py-0.5 rounded-full"><Contador valor={carritos === null ? null : carritos.length} estado={estadoCarritos} /></span>
               </div>
+              {textoLimite && <p className="border-b border-gray-100 px-5 py-2 text-[11px] font-semibold text-slate-500">{textoLimite}</p>}
               <div className="max-h-96 flex-1 overflow-y-auto p-4 space-y-3 2xl:max-h-[32rem]">
                 {faseCarritos === 'cargando' && (
                   <div role="status" aria-label="Cargando los carritos" className="space-y-3">
                     {[0, 1, 2].map((i) => <div key={i} aria-hidden="true" className="h-16 animate-pulse rounded-2xl bg-slate-100" />)}
                   </div>
                 )}
-                {faseCarritos === 'error' && (
-                  <AvisoReintentar error={errorCarritos} fallo="No se pudieron cargar los carritos abandonados" onReintentar={() => setVueltaCarritos((n) => n + 1)} acento="purple" />
+                {faseCarritos === 'error' && avisoCarritos && (
+                  <AvisoFuente aviso={avisoCarritos} onReintentar={() => setVueltaCarritos((n) => n + 1)} />
                 )}
                 {faseCarritos === 'vacio' && <div className="text-center py-10 text-gray-400"><ShoppingCart size={28} className="mx-auto mb-2 opacity-30"/><p className="text-sm">Sin carritos abandonados</p></div>}
                 {faseCarritos === 'filas' && (carritos ?? []).map((c) => (
@@ -990,11 +1045,16 @@ export default function EcommercePage() {
                 ))}
               </div>
             </div>
+            )}
 
             <div className="order-1 flex min-w-0 flex-1 flex-col gap-4 2xl:order-2">
               <h3 className="font-black text-gray-800 text-sm flex items-center gap-2"><ShoppingBag size={16} className="text-purple-600"/> Pedidos web (PWEB)</h3>
               {/* La barra (búsqueda al servidor con retardo, filtro de estados reales, «Ajustar tabla», Lista / Kanban y pantalla
                   completa) y la tabla estándar en el servidor, o el tablero con el MISMO estado. */}
+              {acceso.listo && !acceso.pedidos && (
+                <p role="status" className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600">{TEXTO_SIN_PEDIDOS}</p>
+              )}
+              {(!acceso.listo || acceso.pedidos) && (<>
               {capa}
               <AccionesPedidosWeb.Provider value={accionesPedidos}>
                 <section ref={refTarjeta} className={claseTarjeta}>
@@ -1038,7 +1098,7 @@ export default function EcommercePage() {
                 <TableroKanban
                   tablero={tablero}
                   regla={reglaSoltarPedido}
-                  tarjetaDe={tarjetaDePedidoWeb}
+                  tarjetaDe={tarjetaDeWeb}
                   onAbrir={abrirPedido}
                   onCambio={cambiarDesdeTablero}
                   onAccion={accionDesdeTablero}
@@ -1047,6 +1107,7 @@ export default function EcommercePage() {
                   color="purple"
                 />
               )}
+              </>)}
             </div>
           </div>
         )}
@@ -1073,7 +1134,7 @@ export default function EcommercePage() {
                 placeholder="Buscar producto, SKU…"
                 ajustes={vistaCatalogo === 'tabla' ? { columnas: COLUMNAS_CATALOGO, preferencias: prefsCatalogo, anchoRef: anchoCatalogoRef } : undefined}
                 filtros={(
-                  <input value={categoriaTexto} onChange={(e) => setCategoriaTexto(e.target.value)} maxLength={80} aria-label="Filtrar por categoría" placeholder="Filtrar categoría…"
+                  <input value={categoriaTexto} onChange={(e) => alEscribirCategoria(e.target.value)} maxLength={80} aria-label="Filtrar por categoría" placeholder="Filtrar categoría…"
                     className={`w-40 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 placeholder:font-normal ${FOCO_VISIBLE}`} />
                 )}
                 color="purple"
@@ -1095,7 +1156,7 @@ export default function EcommercePage() {
                   error={catalogo.error}
                   onReintentar={catalogo.recargar}
                   aviso={catalogo.avisoOrden}
-                  onFila={setEditProduct}
+                  onFila={acceso.editarCatalogo ? setEditProduct : undefined}
                   vacio={vacioCatalogo}
                   etiqueta="Catálogo de productos"
                 />
@@ -1107,13 +1168,13 @@ export default function EcommercePage() {
                     </div>
                   )}
                   {faseCatalogo === 'error' && (
-                    <AvisoReintentar error={catalogo.error} fallo="No se pudo cargar el catálogo" onReintentar={catalogo.recargar} acento="purple" />
+                    <AvisoFuente aviso={avisoDeFuente(catalogo.error, 'No se pudo cargar el catálogo')!} onReintentar={catalogo.recargar} />
                   )}
                   {faseCatalogo === 'vacio' && <div className="py-12 text-center text-gray-400">{vacioCatalogo}</div>}
                   {(faseCatalogo === 'filas' || (faseCatalogo === 'error' && catalogo.filas.length > 0)) && (
                     <div className={`grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 ${catalogo.recargando ? 'opacity-60' : ''}`}>
                       {catalogo.filas.map((p) => (
-                        <TarjetaProductoCuadricula key={p.id} p={p} onEditar={() => setEditProduct(p)} onAlternar={() => togglePublicado(p)} />
+                        <TarjetaProductoCuadricula key={p.id} p={p} puedeEditar={acceso.editarCatalogo} onEditar={() => setEditProduct(p)} onAlternar={() => togglePublicado(p)} />
                       ))}
                     </div>
                   )}

@@ -2777,6 +2777,21 @@ console.log('--- TEST T23A (B4 T23A; TABLA-otros punto 5, H6, C13): faseDeLista 
   assert.equal(TABLA.faseDeLista({ filas: 'abc' }), 'vacio');
 }
 
+console.log('--- TEST T23A r1 (m7): los textos de vacío de los pedidos web y del catálogo ---');
+{
+  assert.deepEqual(TABLA.textoVacioPedidosWeb({ q: '', estados: [] }), { titulo: 'Sin pedidos web', ayuda: 'Los pedidos PWEB-AAAA#### aparecerán aquí.' });
+  assert.deepEqual(TABLA.textoVacioPedidosWeb({ q: '  ana ', estados: [] }), { titulo: 'Sin resultados para «ana»', ayuda: 'Ajusta la búsqueda o el filtro de estados.' });
+  assert.deepEqual(TABLA.textoVacioPedidosWeb({ q: '', estados: ['PAGADO'] }), { titulo: 'Sin pedidos web en esos estados', ayuda: 'Ajusta la búsqueda o el filtro de estados.' });
+  assert.equal(TABLA.textoVacioPedidosWeb({ q: 'ana', estados: ['PAGADO'] }).titulo, 'Sin resultados para «ana»', 'la búsqueda manda');
+  for (const nada of [null, undefined, {}, 'x']) assert.equal(TABLA.textoVacioPedidosWeb(nada).titulo, 'Sin pedidos web', String(nada));
+  assert.equal(TABLA.textoVacioPedidosWeb({ q: '   ', estados: [] }).titulo, 'Sin pedidos web', 'solo espacios no es una búsqueda');
+  assert.deepEqual(TABLA.textoVacioCatalogo({ q: '', categoria: '' }), { titulo: 'Sin productos', filtrado: false });
+  assert.deepEqual(TABLA.textoVacioCatalogo({ q: 'coche', categoria: '' }), { titulo: 'Sin productos con esos filtros', filtrado: true });
+  assert.deepEqual(TABLA.textoVacioCatalogo({ q: '', categoria: 'Cunas' }), { titulo: 'Sin productos con esos filtros', filtrado: true });
+  for (const nada of [null, undefined, {}]) assert.deepEqual(TABLA.textoVacioCatalogo(nada), { titulo: 'Sin productos', filtrado: false }, String(nada));
+  assert.equal(TABLA.textoVacioCatalogo({ q: '  ', categoria: ' ' }).filtrado, false);
+}
+
 console.log('--- TEST T23A-b (B4 T23A; TABLA-otros punto 5, KANBAN-resto punto 3; R26, RP26, RP56, RP105): las tablas y la cuadrícula de E-Commerce ---');
 {
   const fuente = readFileSync(new URL('../src/app/dashboard/ecommerce/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
@@ -2795,6 +2810,7 @@ console.log('--- TEST T23A-b (B4 T23A; TABLA-otros punto 5, KANBAN-resto punto 3
   const pedidos = columnasDe(bloque('COLUMNAS_PEDIDOS_WEB'));
   const catalogo = columnasDe(bloque('COLUMNAS_CATALOGO'));
   assert.deepEqual(pedidos.map((c) => c.id), ['numero', 'cliente', 'total', 'items', 'estado', 'fecha', 'acciones']);
+  assert.match(bloque('COLUMNAS_PEDIDOS_WEB'), /\{ id: 'items', titulo: 'Ítems',/, "m9: el título lleva la tilde");
   assert.deepEqual(catalogo.map((c) => c.id), ['producto', 'sku', 'categoria', 'stock', 'precio', 'tienda', 'acciones']);
   // El orden de cada columna es uno de los que acepta el servidor (list_web_orders y list_catalogo: otro daría 422).
   const ORDEN_PEDIDOS = ['fecha', 'numero', 'cliente', 'total', 'items', 'estado'];
@@ -2834,11 +2850,17 @@ console.log('--- TEST T23A-b (B4 T23A; TABLA-otros punto 5, KANBAN-resto punto 3
   }
   assert.ok(/offset=25(&|$)/.test(TABLA.urlListado('/ecommerce/catalogo', TABLA.estadoTablaInicial({ pagina: 2 }), { extra: { categoria: '' } })));
   assert.ok(!/search=/.test(codigo), 'ninguna consulta de E-Commerce manda search=');
+  // r1 (m7): los vacíos salen de textoVacioPedidosWeb y textoVacioCatalogo (lib/tabla.js).
+  assert.match(pantalla, /textoVacioPedidosWeb\(\{ q: estadoPedidos\.q, estados: estadoPedidos\.estados \}\)/);
+  assert.match(pantalla, /textoVacioCatalogo\(\{ q: estadoCatalogo\.q, categoria \}\)/);
   // El filtro de categoría va al servidor con el retardo de la búsqueda y vuelve a la página 1 solo si cambió.
-  assert.match(codigo, /const RETARDO_CATEGORIA_MS = 300;/);
-  assert.match(pantalla, /const nueva = categoriaTexto\.trim\(\);\s*if \(nueva === categoriaAplicada\.current\) return;\s*categoriaAplicada\.current = nueva;\s*setCategoria\(nueva\);\s*despacharCatalogo\(\{ tipo: 'pagina', valor: 1 \}\);\s*\}, RETARDO_CATEGORIA_MS\);\s*return \(\) => clearTimeout\(espera\);/);
+  assert.ok(!/RETARDO_CATEGORIA_MS/.test(codigo), 'r1 (m6): el retardo es el de la búsqueda de BarraTabla (lib/tabla.js), no uno propio');
+  assert.match(pantalla, /busquedaCategoria\.current \?\?= crearBusquedaConRetardo\(\{\s*alBuscar: \(buscado\) => \{\s*const nueva = buscado\.trim\(\);\s*if \(nueva === categoriaAplicada\.current\) return;\s*categoriaAplicada\.current = nueva;\s*setCategoria\(nueva\);\s*despacharCatalogo\(\{ tipo: 'pagina', valor: 1 \}\);\s*\},\s*\}\);\s*busquedaCategoria\.current\.escribir\(texto\);/);
+  assert.match(pantalla, /return \(\) => busquedas\.current\?\.cancelar\(\);/);
+  assert.ok(!/setTimeout/.test(pantalla), 'sin un temporizador propio');
+  assert.equal(TABLA.RETARDO_BUSQUEDA_MS, 300);
   // La tabla del catálogo, con su error dicho (Reintentar), la fila que abre el producto y el vacío.
-  assert.match(pantalla, /<TablaEstandar\s+id=\{ID_CATALOGO\}\s+modo="servidor"\s+columnas=\{COLUMNAS_CATALOGO\}\s+preferencias=\{prefsCatalogo\}\s+anchoRef=\{anchoCatalogoRef\}\s+estado=\{estadoCatalogo\}\s+onEstado=\{despacharCatalogo\}\s+filas=\{catalogo\.filas\}\s+total=\{catalogo\.total\}\s+cargando=\{catalogo\.cargandoInicial\}\s+recargando=\{catalogo\.recargando\}\s+error=\{catalogo\.error\}\s+onReintentar=\{catalogo\.recargar\}\s+aviso=\{catalogo\.avisoOrden\}\s+onFila=\{setEditProduct\}/);
+  assert.match(pantalla, /<TablaEstandar\s+id=\{ID_CATALOGO\}\s+modo="servidor"\s+columnas=\{COLUMNAS_CATALOGO\}\s+preferencias=\{prefsCatalogo\}\s+anchoRef=\{anchoCatalogoRef\}\s+estado=\{estadoCatalogo\}\s+onEstado=\{despacharCatalogo\}\s+filas=\{catalogo\.filas\}\s+total=\{catalogo\.total\}\s+cargando=\{catalogo\.cargandoInicial\}\s+recargando=\{catalogo\.recargando\}\s+error=\{catalogo\.error\}\s+onReintentar=\{catalogo\.recargar\}\s+aviso=\{catalogo\.avisoOrden\}\s+onFila=\{acceso\.editarCatalogo \? setEditProduct : undefined\}/);
   assert.match(pantalla, /<TablaEstandar\s+id=\{ID_PEDIDOS_WEB\}\s+modo="servidor"\s+columnas=\{COLUMNAS_PEDIDOS_WEB\}\s+preferencias=\{prefsPedidos\}\s+anchoRef=\{anchoPedidosRef\}\s+estado=\{estadoPedidos\}\s+onEstado=\{despacharPedidos\}\s+filas=\{pedidos\.filas\}\s+total=\{pedidos\.total\}\s+cargando=\{pedidos\.cargandoInicial\}\s+recargando=\{pedidos\.recargando\}\s+error=\{pedidos\.error\}\s+onReintentar=\{pedidos\.recargar\}\s+aviso=\{pedidos\.avisoOrden\}\s+onFila=\{abrirPedido\}/);
   assert.match(pantalla, /const prefsPedidos = usePreferenciasTabla\(ID_PEDIDOS_WEB, COLUMNAS_PEDIDOS_WEB\);/);
   assert.match(pantalla, /const prefsCatalogo = usePreferenciasTabla\(ID_CATALOGO, COLUMNAS_CATALOGO\);/);
@@ -2853,7 +2875,7 @@ console.log('--- TEST T23A-b (B4 T23A; TABLA-otros punto 5, KANBAN-resto punto 3
   assert.ok(barraCatalogo.length > 100 && !/kanbanDisponible/.test(barraCatalogo), 'el catálogo no entrega un tablero');
   // La cuadrícula dice lo suyo: esqueleto en la primera carga, error con Reintentar (el de faseDeLista), vacío y la paginación del servidor.
   assert.match(pantalla, /const faseCatalogo = faseDeLista\(\{ cargandoInicial: catalogo\.cargandoInicial, error: catalogo\.error, filas: catalogo\.filas \}\);/);
-  assert.match(pantalla, /\{faseCatalogo === 'error' && \(\s*<AvisoReintentar error=\{catalogo\.error\} fallo="No se pudo cargar el catálogo" onReintentar=\{catalogo\.recargar\}/);
+  assert.match(pantalla, /\{faseCatalogo === 'error' && \(\s*<AvisoFuente aviso=\{avisoDeFuente\(catalogo\.error, 'No se pudo cargar el catálogo'\)!\} onReintentar=\{catalogo\.recargar\} \/>/);
   assert.match(pantalla, /\{faseCatalogo === 'cargando' && \(/);
   assert.match(pantalla, /\{faseCatalogo === 'vacio' && /);
   assert.match(pantalla, /<Paginacion pagina=\{estadoCatalogo\.pagina\} tamano=\{estadoCatalogo\.tamano\} total=\{catalogo\.total\}\s+onPagina=\{\(pagina\) => despacharCatalogo\(\{ tipo: 'pagina', valor: pagina \}\)\} onTamano=\{\(tamano\) => despacharCatalogo\(\{ tipo: 'tamano', valor: tamano \}\)\} \/>/);

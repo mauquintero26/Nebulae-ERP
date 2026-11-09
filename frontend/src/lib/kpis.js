@@ -1069,7 +1069,8 @@ const pedidosDe = (n, uno, varios) => `${formatoEntero(n)} ${n === 1 ? uno : var
  * restar nada en el navegador (RP102: revenue_* ya viene sin CANCELADO ni DEVUELTO_TOTAL):
  *  - web_ventas_hoy: revenue_today contra revenue_ayer ('vs ayer'), con «N pedidos web»;
  *  - web_ventas_mes: revenue_month contra revenue_mes_anterior ('vs mes pasado'), con «N pedidos PWEB»;
- *  - carritos_abandonados: carritos_abandonados_count, en alerta si es mayor que 0, con «N sin cerrar»;
+ *  - carritos_abandonados: carritos_abandonados_count, en alerta si es mayor que 0, con «$X sin cerrar» (carritos_abandonados_valor:
+ *    la tarjeta ya dice cuántos; sin ese valor, null: nunca «$0» inventado);
  *  - productos_publicados: productos_publicados.
  * `variacion` es {actual, anterior} y sale solo si los dos son números (el 0 sí es un número: la tarjeta dice «Nuevo»);
  * el texto del % lo calcula la tarjeta con variacionPct. Lo que no es un número queda en null (la barra gris o «—», nunca 0);
@@ -1091,6 +1092,7 @@ export function tarjetasTienda(datos) {
   const hoy = numeroFinito(s.web_orders_today);
   const mes = numeroFinito(s.web_orders_month);
   const carritos = numeroFinito(s.carritos_abandonados_count);
+  const enFuga = numeroFinito(s.carritos_abandonados_valor);
   return {
     web_ventas_hoy: {
       valor: numeroFinito(s.revenue_today),
@@ -1107,8 +1109,22 @@ export function tarjetasTienda(datos) {
     carritos_abandonados: {
       valor: carritos,
       tono: carritos !== null && carritos > 0 ? 'alerta' : 'normal',
-      ayuda: carritos === null ? null : `${formatoEntero(carritos)} sin cerrar`,
+      ayuda: enFuga === null ? null : `${formatoPesos(enFuga)} sin cerrar`,
     },
     productos_publicados: { valor: numeroFinito(s.productos_publicados) },
   };
+}
+
+/**
+ * B4 T23A r1 (m16): GET /ecommerce/carritos trae como mucho los 50 más recientes (LIMIT 50 del servidor); si la tarjeta cuenta más
+ * (`total`, carritos_abandonados_count), la caja lo dice: «Los 50 más recientes de 120». Sin los dos números, o si llegaron todos, null.
+ * @param {unknown} total
+ * @param {unknown} llegaron
+ * @returns {string | null}
+ */
+export function textoLimiteCarritos(total, llegaron) {
+  const t = numeroFinito(total);
+  const n = numeroFinito(llegaron);
+  if (t === null || n === null || n <= 0 || t <= n) return null;
+  return `Los ${formatoEntero(n)} más recientes de ${formatoEntero(t)}`;
 }

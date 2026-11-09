@@ -2394,3 +2394,30 @@ export function faseDeLista({ cargandoInicial = false, error = null, filas = nul
   if (error) return 'error';
   return Array.isArray(filas) && filas.length > 0 ? 'filas' : 'vacio';
 }
+
+/**
+ * B4 T23A r1 (m7): el «vacío» de la tabla de los pedidos web: con búsqueda, «Sin resultados para «x»»; con estados filtrados y sin
+ * búsqueda, «Sin pedidos web en esos estados»; sin nada, de dónde salen los pedidos. Solo espacios no es una búsqueda.
+ * @param {{q?: unknown, estados?: unknown} | null | undefined} filtro
+ * @returns {{titulo: string, ayuda: string}}
+ */
+export function textoVacioPedidosWeb(filtro) {
+  const f = objeto(filtro) ? /** @type {any} */ (filtro) : {};
+  const q = textoLimpio(f.q);
+  const conEstados = Array.isArray(f.estados) && f.estados.length > 0;
+  if (q) return { titulo: `Sin resultados para «${q}»`, ayuda: 'Ajusta la búsqueda o el filtro de estados.' };
+  if (conEstados) return { titulo: 'Sin pedidos web en esos estados', ayuda: 'Ajusta la búsqueda o el filtro de estados.' };
+  return { titulo: 'Sin pedidos web', ayuda: 'Los pedidos PWEB-AAAA#### aparecerán aquí.' };
+}
+
+/**
+ * B4 T23A r1 (m7): el «vacío» del catálogo: con búsqueda o categoría, «Sin productos con esos filtros» (filtrado: true); si no,
+ * «Sin productos» (la pantalla ofrece «+ Nuevo Producto»).
+ * @param {{q?: unknown, categoria?: unknown} | null | undefined} filtro
+ * @returns {{titulo: string, filtrado: boolean}}
+ */
+export function textoVacioCatalogo(filtro) {
+  const f = objeto(filtro) ? /** @type {any} */ (filtro) : {};
+  const filtrado = textoLimpio(f.q) !== null || textoLimpio(f.categoria) !== null;
+  return { titulo: filtrado ? 'Sin productos con esos filtros' : 'Sin productos', filtrado };
+}

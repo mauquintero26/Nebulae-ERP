@@ -31,7 +31,8 @@ import { MAXIMO_ESTADOS, estadoTablaInicial, queryListado } from '../src/lib/tab
 import { ACCIONES_BLOQUE3 } from '../src/lib/acciones-bloque3.js';
 import { RUTA_LISTA_SOLICITUDES, RUTA_LISTA_COTIZACIONES } from '../src/lib/cambios-cliente.js';
 import { enlaceDocumento } from '../src/lib/analisis.js';
-import { mapaDestinos, agruparEnColumnas, SIN_COLUMNA } from '../src/lib/kanban.js';
+import { mapaDestinos, agruparEnColumnas, SIN_COLUMNA, ordenPorDefecto } from '../src/lib/kanban.js';
+import { returnToSeguro } from '../src/lib/detalle-layout.js';
 
 const CON_PRODUCTOS = [{ product_name: 'Cuna' }];
 /** Una COT con algo que el cliente pueda confirmar: líneas y total (enviar_cotizacion_para_confirmacion da 400 sin ellos). */
@@ -1389,17 +1390,24 @@ console.log('--- B4 T23A TEST R: el filtro, la tarjeta y el permiso del tablero 
   // Y el filtro del tablero es el de los pedidos de venta (una opción por columna).
   assert.equal(kv.OPCIONES_ESTADOS_TABLERO_PEDIDO.length, COLUMNAS_PEDIDO.length);
 
-  // Las rutas y el orden de las columnas: GET /ecommerce/pedidos acepta reciente, sin_movimiento y [-]fecha|numero|cliente|total|
-  // items|estado (no 'atencion', que es de Ventas: daría 422).
+  // La ruta y el orden de las columnas: GET /ecommerce/pedidos acepta reciente, sin_movimiento y [-]fecha|numero|cliente|total|
+  // items|estado (no 'atencion', que es de Ventas: daría 422). r1 (m3, D39): ordenPorDefecto de kanban.js: sin_movimiento en las
+  // abiertas y reciente en las cerradas.
   assert.equal(kv.RUTA_PEDIDOS_WEB, '/ecommerce/pedidos');
-  assert.equal(kv.ORDEN_COLUMNA_PEDIDOS_WEB, 'reciente');
+  assert.equal(kv.ORDEN_COLUMNA_PEDIDOS_WEB, undefined, 'el orden lo da ordenPorDefecto, no una constante propia');
+  assert.equal(ordenPorDefecto({ cerrada: false }), 'sin_movimiento');
+  assert.equal(ordenPorDefecto({ cerrada: true }), 'reciente');
+  assert.deepEqual(COLUMNAS_PEDIDO.map((c) => ordenPorDefecto(c)), ['sin_movimiento', 'sin_movimiento', 'sin_movimiento', 'sin_movimiento', 'reciente', 'reciente']);
   // La consulta de cada columna es la de los pedidos de venta (consultaColumnaPedido, T10): estados en CSV y q, nunca estado= ni search=.
   const estadoWeb = estadoTablaInicial({ q: ' ana ', orden: '-fecha' });
   const enProceso = COLUMNAS_PEDIDO.find((c) => c.clave === 'en_proceso');
-  const consulta = kv.consultaColumnaPedido(estadoWeb, enProceso, { orden: kv.ORDEN_COLUMNA_PEDIDOS_WEB, limit: 25, offset: 0 });
+  const consulta = kv.consultaColumnaPedido(estadoWeb, enProceso, { orden: 'sin_movimiento', limit: 25, offset: 0, vista: null });
   assert.ok(consulta.includes(`estados=${enProceso.estados.join(',')}`), consulta);
+  // r1 (m17): la lista de pedidos web no tiene vistas: con vista: null se omite; sin ella, la consulta de Ventas no cambia (vista=todos).
+  assert.ok(!/(^|&)vista=/.test(consulta), consulta);
+  assert.ok(/(^|&)vista=todos(&|$)/.test(kv.consultaColumnaPedido(estadoWeb, enProceso, { orden: 'sin_movimiento', limit: 25, offset: 0 })));
   assert.ok(enProceso.estados.includes('PAGADO'));
-  assert.ok(consulta.includes('q=ana') && consulta.includes('orden=reciente') && consulta.includes('limit=25') && consulta.includes('offset=0'), consulta);
+  assert.ok(consulta.includes('q=ana') && consulta.includes('orden=sin_movimiento') && consulta.includes('limit=25') && consulta.includes('offset=0'), consulta);
   assert.ok(!/[?&]estado=|search=/.test(consulta), 'RP8');
   // Con un filtro de estados que no toca la columna, no se pide nada.
   assert.equal(kv.consultaColumnaPedido(estadoTablaInicial({ estados: ['CANCELADO'] }), enProceso, { orden: 'reciente', limit: 25, offset: 0 }), null);
@@ -1423,7 +1431,23 @@ console.log('--- B4 T23A TEST R: el filtro, la tarjeta y el permiso del tablero 
   assert.equal(t.tiempo, 'hace 2 días');
   assert.equal(t.atrasada, false);
   assert.deepEqual(t.chips, []);
-  assert.equal(t.accionPrincipal, null);
+  // r1 (m4): la acción de un pedido de venta aplica al pedido web (es un SaleOrder), con return_to a E-Commerce: Pagado → Ver pedido.
+  assert.deepEqual(t.accionPrincipal, { texto: 'Ver pedido', href: '/dashboard/ventas/venta/55?return_to=%2Fdashboard%2Fecommerce', tono: 'slate' });
+  const accion = (estado, opciones) => kv.tarjetaPedidoWeb({ ...fila, estado }, { ahora, ...opciones }).accionPrincipal;
+  // Solo PENDIENTE_PAGO (el estado propio de la tienda: «Gestionar compra» no aplica a un pedido que espera el pago del cliente) la anula.
+  assert.equal(accion('PENDIENTE_PAGO'), null);
+  assert.deepEqual(accion('EN_PROCESO'), { texto: 'Ver pedido', href: '/dashboard/ventas/venta/55?return_to=%2Fdashboard%2Fecommerce', tono: 'slate' });
+  assert.deepEqual(accion('EN_TRANSITO'), { texto: 'Ver pedido', href: '/dashboard/ventas/venta/55?return_to=%2Fdashboard%2Fecommerce', tono: 'slate' });
+  assert.deepEqual(accion('LISTO_ENTREGA'), { texto: 'Despachar', href: '/dashboard/inventario/entregas?return_to=%2Fdashboard%2Fecommerce', tono: 'indigo' });
+  assert.deepEqual(accion('ENTREGADO'), { texto: 'Facturar', href: '/dashboard/ventas/venta/55?return_to=%2Fdashboard%2Fecommerce', tono: 'emerald' });
+  assert.equal(accion('FACTURADO'), null);
+  assert.equal(accion('CANCELADO'), null);
+  // Para un rol de solo lectura, ninguna (llevaría a pantallas donde no puede actuar).
+  for (const e of ['PAGADO', 'EN_PROCESO', 'LISTO_ENTREGA', 'ENTREGADO']) assert.equal(accion(e, { soloLectura: true }), null, e);
+  assert.notEqual(accion('PAGADO', { soloLectura: false }), null);
+  // El return_to que arma es una ruta que returnToSeguro acepta.
+  assert.equal(kv.RUTA_ECOMMERCE, '/dashboard/ecommerce');
+  assert.equal(returnToSeguro(kv.RUTA_ECOMMERCE), '/dashboard/ecommerce');
   // Sin el PVEN, el subtítulo dice qué es; sin cliente, el de siempre; sin total, sin monto.
   assert.equal(kv.tarjetaPedidoWeb({ ...fila, pven_numero: null }, { ahora }).subtitulo, 'Pedido web');
   assert.equal(kv.tarjetaPedidoWeb({ ...fila, pven_numero: '  ' }, { ahora }).subtitulo, 'Pedido web');
@@ -1472,23 +1496,37 @@ console.log('--- B4 T23A TEST S: el cableado del tablero y del filtro de los ped
   // El conmutador poda los estados con las opciones del modo nuevo (accionModo).
   assert.match(pantalla, /despacharPedidos\(accionModo\(estadoPedidos, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_PEDIDO : OPCIONES_ESTADOS_PEDIDOS_WEB\)\);/);
   // La lista pide GET /ecommerce/pedidos con el estado, esperando las preferencias, y solo en su pestaña y fuera de Kanban.
-  assert.match(pantalla, /useListado<PedidoWeb>\(\{\s*ruta: RUTA_PEDIDOS_WEB, estado: estadoPedidos, esperar: !listoPedidos, despachar: despacharPedidos, activo: panelActivo && !enKanban,\s*\}\);/);
+  assert.match(pantalla, /useListado<PedidoWeb>\(\{\s*ruta: RUTA_PEDIDOS_WEB, estado: estadoPedidos, esperar: !listoPedidos, despachar: despacharPedidos, activo: panelActivo && !enKanban && acceso\.pedidos,\s*\}\);/);
   // El tablero en modo servidor con el MISMO id y estado (RP26, D39): consultaColumnaPedido y el orden de las columnas (reciente:
   // 'atencion' es de Ventas y daría 422 en /ecommerce/pedidos).
-  assert.match(pantalla, /pantalla: ID_PEDIDOS_WEB,\s*modo: 'servidor',\s*columnas: COLUMNAS_PEDIDO,\s*activo: listoPedidos && enKanban && panelActivo,\s*porColumna: estadoPedidos\.tamano,\s*dependencias: dependenciasTablero\(estadoPedidos\),\s*ordenDe: \(\) => ORDEN_COLUMNA_PEDIDOS_WEB,/);
-  assert.match(pantalla, /const consulta = consultaColumnaPedido\(estadoPedidos, columna, \{ orden, limit, offset \}\);\s*if \(consulta === null\) return \{ filas: \[\], total: 0 \};\s*return normalizarRespuesta\(await apiFetch\(`\$\{RUTA_PEDIDOS_WEB\}\?\$\{consulta\}`, \{ signal \}\)\);/);
+  assert.match(pantalla, /pantalla: ID_PEDIDOS_WEB,\s*modo: 'servidor',\s*columnas: COLUMNAS_PEDIDO,\s*activo: listoPedidos && enKanban && panelActivo && acceso\.pedidos,\s*porColumna: estadoPedidos\.tamano,\s*dependencias: dependenciasTablero\(estadoPedidos\),\s*ordenDe: ordenPorDefecto,/);
+  assert.match(pantalla, /const consulta = consultaColumnaPedido\(estadoPedidos, columna, \{ orden, limit, offset, vista: null \}\);\s*if \(consulta === null\) return \{ filas: \[\], total: 0 \};\s*return normalizarRespuesta\(await apiFetch\(`\$\{RUTA_PEDIDOS_WEB\}\?\$\{consulta\}`, \{ signal \}\)\);/);
   assert.ok(!/atencion/.test(pantalla), "ningún orden 'atencion' en los pedidos web");
+  assert.ok(!/ORDEN_COLUMNA_PEDIDOS_WEB/.test(codigo), 'el orden de las columnas es ordenPorDefecto (D39)');
+  // r1 (I1): un rol que el servidor no deja leer los pedidos (COMPRAS, CONSULTA) no los pide (ni la lista ni las columnas del tablero) y
+  // ve un texto neutro, sin «Reintentar»; mientras el rol no se conoce (acceso.listo false), el esqueleto, nunca ese texto.
+  assert.match(codigo, /const TEXTO_SIN_PEDIDOS = 'Tu rol no ve los pedidos de la tienda\.';/);
+  assert.match(pantalla, /\{acceso\.listo && !acceso\.pedidos && \(\s*<p role="status" [^>]*>\{TEXTO_SIN_PEDIDOS\}<\/p>\s*\)\}\s*\{\(!acceso\.listo \|\| acceso\.pedidos\) && \(<>/);
+  // m15: lo que escribe en el catálogo (interruptor, Editar, Ocultar/Publicar, Eliminar, la fila que edita y «Nuevo Producto») solo con editarCatalogo.
+  assert.match(codigo, /const TITULO_SOLO_ADMIN = 'Solo la Administración edita el catálogo';/);
+  assert.match(pantalla, /\{activeTab === 'Catálogo' && acceso\.editarCatalogo && \(\s*<button onClick=\{\(\) => setShowNewProduct\(true\)\}/);
+  assert.match(pantalla, /onFila=\{acceso\.editarCatalogo \? setEditProduct : undefined\}/);
+  assert.match(pantalla, /puedeEditar: acceso\.editarCatalogo, editar: setEditProduct, alternar: togglePublicado, eliminar: deleteProduct/);
+  assert.match(codigo, /disabled=\{!puede\} onChange=\{\(\) => acciones\?\.alternar\(p\)\}/);
+  assert.match(codigo, /if \(acciones\?\.puedeEditar !== true\) return <span [^>]*title=\{TITULO_SOLO_ADMIN\}>—<\/span>;/);
+  assert.match(codigo, /<TarjetaProductoCuadricula key=\{p\.id\} p=\{p\} puedeEditar=\{acceso\.editarCatalogo\}/);
+  assert.match(codigo, /\{!filtrado && acceso\.editarCatalogo && \(/);
   // RP8: ni estado= ni search= en ninguna consulta de los pedidos web.
   assert.ok(!/search=|pedidos\?(?:[^`'"]*&)?estado=|\$\{RUTA_PEDIDOS_WEB\}\?(?:[^`'"]*&)?estado=/.test(codigo), 'RP8');
-  assert.match(codigo, /const tarjetaDePedidoWeb = \(p: PedidoWeb\) => tarjetaPedidoWeb\(p\);/);
+  assert.match(codigo, /const tarjetaDeWeb = useCallback\(\(p: PedidoWeb\) => tarjetaPedidoWeb\(p, \{ soloLectura: soloLectura !== null \}\), \[soloLectura\]\);/);
   // El rol se lee DESPUÉS de montar (useSyncExternalStore: '' en el servidor y en la hidratación), una sola vez, nunca en un inicializador.
-  assert.match(pantalla, /const rol = useSyncExternalStore\(suscribirRol, \(\) => getUsuarioActual\(\)\.role, \(\) => ''\);\s*const soloLectura = soloLecturaPedidosWeb\(rol\);/);
+  assert.match(pantalla, /const rol = useSyncExternalStore\(suscribirRol, \(\) => getUsuarioActual\(\)\.role, \(\) => ''\);\s*const acceso = accesoTienda\(rol\);\s*const soloLectura = soloLecturaPedidosWeb\(rol\);/);
   assert.equal((codigo.match(/getUsuarioActual\(\)\.role/g) || []).length, 1, 'el rol se lee en un solo lugar');
   assert.ok(!/useState\([^)]*getUsuarioActual/.test(codigo), 'ni en el inicializador de un useState');
   assert.ok(!/esAdminOAsesor|'ADMIN'|'ASESOR'|'VENDEDOR'/.test(codigo), 'el permiso lo decide soloLecturaPedidosWeb (RP62), no la pantalla');
   // El tablero: las mismas reglas de los pedidos de venta y, sin permiso, solo para ver con su motivo; sus acciones de tarjeta
   // (que son PATCH) tampoco se ofrecen a un rol que no mueve pedidos.
-  assert.match(pantalla, /<TableroKanban\s+tablero=\{tablero\}\s+regla=\{reglaSoltarPedido\}\s+tarjetaDe=\{tarjetaDePedidoWeb\}\s+onAbrir=\{abrirPedido\}\s+onCambio=\{cambiarDesdeTablero\}\s+onAccion=\{accionDesdeTablero\}\s+accionesTarjeta=\{accionesTarjeta\}\s+soloLectura=\{soloLectura\}/);
+  assert.match(pantalla, /<TableroKanban\s+tablero=\{tablero\}\s+regla=\{reglaSoltarPedido\}\s+tarjetaDe=\{tarjetaDeWeb\}\s+onAbrir=\{abrirPedido\}\s+onCambio=\{cambiarDesdeTablero\}\s+onAccion=\{accionDesdeTablero\}\s+accionesTarjeta=\{accionesTarjeta\}\s+soloLectura=\{soloLectura\}/);
   assert.match(pantalla, /const accionesTarjeta = useCallback\(\(p: PedidoWeb\): ItemMenuFila\[\] => \(soloLectura \? \[\] : accionesTarjetaPedido\(p\)\.map\(/);
   assert.match(pantalla, /const abrirPedido = useCallback\(\(p: PedidoWeb\) => setSelectedOrder\(p\), \[\]\);/);
   // 'cambio': PATCH /ventas/pedidos/{id} con el autor; si falla, recargarTrasError y el error sigue (el tablero deshace y recarga su
