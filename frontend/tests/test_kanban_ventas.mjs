@@ -1452,4 +1452,81 @@ console.log('--- B4 T23A TEST R: el filtro, la tarjeta y el permiso del tablero 
   assert.deepEqual(reglaSoltarPedido({ id: 1, estado: 'PENDIENTE_PAGO' }, 'pend_compra', 'en_proceso'), { tipo: 'cambio', estado: 'EN_PROCESO' });
 }
 
+console.log('--- B4 T23A TEST S: el cableado del tablero y del filtro de los pedidos web en E-Commerce (C4, R11, RP8, RP26, RP30, RP62, D39; D27) ---');
+{
+  const fuente = readFileSync(new URL('../src/app/dashboard/ecommerce/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const pantalla = codigo.slice(codigo.indexOf('export default function EcommercePage('));
+  // Un estado ÚNICO con el MISMO id (RP26): useEstadoTabla es el único dueño de vista:ecommerce.pedidos; la barra pone el
+  // ConmutadorVista (kanbanDisponible); no se llama a useVistaGuardada ni se pinta otro conmutador.
+  assert.match(codigo, /const ID_PEDIDOS_WEB = 'ecommerce\.pedidos';/);
+  assert.match(pantalla, /const \[estadoPedidos, despacharPedidos, listoPedidos\] = useEstadoTabla\(ID_PEDIDOS_WEB, INICIAL_PEDIDOS_WEB\);/);
+  assert.match(pantalla, /const enKanban = estadoPedidos\.modo === 'kanban';/);
+  assert.ok(!/useVistaGuardada|<ConmutadorVista/.test(codigo), 'RP26: el modo es de useEstadoTabla');
+  assert.match(pantalla, /kanbanDisponible\s+pantallaCompleta=\{enKanban \? undefined : \{ completa, alternar \}\}/);
+  assert.match(pantalla, /useEffect\(\(\) => \{ if \(enKanban\) salir\(\); \}, \[enKanban, salir\]\);/);
+  // Sin PWEB_ESTADOS: la pastilla y el filtro son los de estados-pedido.js; el filtro de la lista ofrece Pagado y el del tablero, uno por columna.
+  assert.ok(!/PWEB_ESTADOS|PENDIENTE_DESPACHO|DESPACHADO/.test(codigo), 'sin los estados que no existen');
+  assert.match(pantalla, /opcionesEstados=\{enKanban \? OPCIONES_ESTADOS_TABLERO_PEDIDO : OPCIONES_ESTADOS_PEDIDOS_WEB\}/);
+  assert.match(codigo, /const info = infoEstadoPedido\(p\.estado\);\s*return <span className=\{`\$\{CHIP\} text-\[11px\] \$\{info\.clases\.bg\} \$\{info\.clases\.text\} \$\{info\.clases\.border\}`\}>\{info\.label\}<\/span>;/);
+  assert.match(pantalla, /\['Estado',infoEstadoPedido\(selectedOrder\.estado\)\.label\]/, 'el panel del pedido tampoco dice el código crudo');
+  // El conmutador poda los estados con las opciones del modo nuevo (accionModo).
+  assert.match(pantalla, /despacharPedidos\(accionModo\(estadoPedidos, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_PEDIDO : OPCIONES_ESTADOS_PEDIDOS_WEB\)\);/);
+  // La lista pide GET /ecommerce/pedidos con el estado, esperando las preferencias, y solo en su pestaña y fuera de Kanban.
+  assert.match(pantalla, /useListado<PedidoWeb>\(\{\s*ruta: RUTA_PEDIDOS_WEB, estado: estadoPedidos, esperar: !listoPedidos, despachar: despacharPedidos, activo: panelActivo && !enKanban,\s*\}\);/);
+  // El tablero en modo servidor con el MISMO id y estado (RP26, D39): consultaColumnaPedido y el orden de las columnas (reciente:
+  // 'atencion' es de Ventas y daría 422 en /ecommerce/pedidos).
+  assert.match(pantalla, /pantalla: ID_PEDIDOS_WEB,\s*modo: 'servidor',\s*columnas: COLUMNAS_PEDIDO,\s*activo: listoPedidos && enKanban && panelActivo,\s*porColumna: estadoPedidos\.tamano,\s*dependencias: dependenciasTablero\(estadoPedidos\),\s*ordenDe: \(\) => ORDEN_COLUMNA_PEDIDOS_WEB,/);
+  assert.match(pantalla, /const consulta = consultaColumnaPedido\(estadoPedidos, columna, \{ orden, limit, offset \}\);\s*if \(consulta === null\) return \{ filas: \[\], total: 0 \};\s*return normalizarRespuesta\(await apiFetch\(`\$\{RUTA_PEDIDOS_WEB\}\?\$\{consulta\}`, \{ signal \}\)\);/);
+  assert.ok(!/atencion/.test(pantalla), "ningún orden 'atencion' en los pedidos web");
+  // RP8: ni estado= ni search= en ninguna consulta de los pedidos web.
+  assert.ok(!/search=|pedidos\?(?:[^`'"]*&)?estado=|\$\{RUTA_PEDIDOS_WEB\}\?(?:[^`'"]*&)?estado=/.test(codigo), 'RP8');
+  assert.match(codigo, /const tarjetaDePedidoWeb = \(p: PedidoWeb\) => tarjetaPedidoWeb\(p\);/);
+  // El rol se lee DESPUÉS de montar (useSyncExternalStore: '' en el servidor y en la hidratación), una sola vez, nunca en un inicializador.
+  assert.match(pantalla, /const rol = useSyncExternalStore\(suscribirRol, \(\) => getUsuarioActual\(\)\.role, \(\) => ''\);\s*const soloLectura = soloLecturaPedidosWeb\(rol\);/);
+  assert.equal((codigo.match(/getUsuarioActual\(\)\.role/g) || []).length, 1, 'el rol se lee en un solo lugar');
+  assert.ok(!/useState\([^)]*getUsuarioActual/.test(codigo), 'ni en el inicializador de un useState');
+  assert.ok(!/esAdminOAsesor|'ADMIN'|'ASESOR'|'VENDEDOR'/.test(codigo), 'el permiso lo decide soloLecturaPedidosWeb (RP62), no la pantalla');
+  // El tablero: las mismas reglas de los pedidos de venta y, sin permiso, solo para ver con su motivo; sus acciones de tarjeta
+  // (que son PATCH) tampoco se ofrecen a un rol que no mueve pedidos.
+  assert.match(pantalla, /<TableroKanban\s+tablero=\{tablero\}\s+regla=\{reglaSoltarPedido\}\s+tarjetaDe=\{tarjetaDePedidoWeb\}\s+onAbrir=\{abrirPedido\}\s+onCambio=\{cambiarDesdeTablero\}\s+onAccion=\{accionDesdeTablero\}\s+accionesTarjeta=\{accionesTarjeta\}\s+soloLectura=\{soloLectura\}/);
+  assert.match(pantalla, /const accionesTarjeta = useCallback\(\(p: PedidoWeb\): ItemMenuFila\[\] => \(soloLectura \? \[\] : accionesTarjetaPedido\(p\)\.map\(/);
+  assert.match(pantalla, /const abrirPedido = useCallback\(\(p: PedidoWeb\) => setSelectedOrder\(p\), \[\]\);/);
+  // 'cambio': PATCH /ventas/pedidos/{id} con el autor; si falla, recargarTrasError y el error sigue (el tablero deshace y recarga su
+  // origen y su destino: aquí no se llama a tablero.recargar).
+  assert.match(pantalla, /async function cambiarDesdeTablero\(p: PedidoWeb, resultado: \{ estado: string \}\) \{\s*try \{\s*await apiFetch\(`\/ventas\/pedidos\/\$\{p\.id\}`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ estado: resultado\.estado, updated_by: autorActual\(\) \}\),\s*\}\);\s*\} catch \(err\) \{\s*if \(recargarTrasError\(err\)\) recargarTrasCambio\(\);\s*throw err;\s*\}\s*recargarTrasCambio\(\);\s*\}/);
+  {
+    const cambiar = pantalla.slice(pantalla.indexOf('async function cambiarDesdeTablero('), pantalla.indexOf('\n  }\n', pantalla.indexOf('async function cambiarDesdeTablero(')));
+    assert.ok(cambiar.length > 100 && !cambiar.includes('tablero.recargar'), 'el arrastre no recarga el tablero a mano (lo hace deshacer)');
+  }
+  // 'facturar' (N2): confirmar() con confirmacionFacturarPedido → PATCH FACTURADO; 'cancelar': ModalMotivo.
+  assert.match(pantalla, /if \(resultado\.accion === 'cancelar'\) setCancelando\(\{ pedido: p, columnas: \[origen, destino\] \}\);\s*else if \(resultado\.accion === 'facturar'\) void facturarDesdeTablero\(p, \[origen, destino\]\);/);
+  const facturar = pantalla.slice(pantalla.indexOf('async function facturarDesdeTablero('), pantalla.indexOf('\n  }\n', pantalla.indexOf('async function facturarDesdeTablero(')));
+  assert.match(facturar, /if \(!\(await confirmar\(confirmacionFacturarPedido\(p\)\)\)\) return;/);
+  assert.ok(facturar.indexOf('confirmar(') < facturar.indexOf("estado: 'FACTURADO'"), 'primero confirma');
+  assert.match(facturar, /if \(!recargarTrasError\(err\)\) return;\s*\}\s*tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*$/);
+  // 'cancelar' (N2, H45, H46): PATCH CANCELADO con el motivo; si falla, recargarTrasError (el origen y el destino del tablero y lo
+  // demás) y el error sigue (ModalMotivo lo muestra y conserva lo escrito); al terminar, solo el origen y el destino (D39).
+  const cancelar = pantalla.slice(pantalla.indexOf('async function cancelarConMotivo('), pantalla.indexOf('\n  }\n', pantalla.indexOf('async function cancelarConMotivo(')));
+  assert.match(cancelar, /JSON\.stringify\(\{ estado: 'CANCELADO', cancellation_reason: motivo, cancellation_authorized_by: autor, updated_by: autor \}\)/);
+  assert.match(cancelar, /\} catch \(err\) \{\s*if \(recargarTrasError\(err\)\) \{\s*tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*\}\s*throw err;\s*\}/);
+  assert.match(cancelar, /tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*$/);
+  assert.match(pantalla, /<ModalMotivo\s+titulo=\{`Cancelar \$\{cancelando\.pedido\.numero\}`\}\s+efectos=\{efectosCancelarPedido\(cancelando\.pedido\)\}[\s\S]*?onConfirmar=\{cancelarConMotivo\}\s+onCerrar=\{\(\) => setCancelando\(null\)\}/);
+  // «Marcar En tránsito» / «Marcar En proceso» (accionesTarjetaPedido): PATCH y, al terminar, la columna En proceso y lo demás.
+  const marcar = pantalla.slice(pantalla.indexOf('const marcarDesdeTablero'), pantalla.indexOf('\n  }, [', pantalla.indexOf('const marcarDesdeTablero')));
+  assert.match(marcar, /JSON\.stringify\(\{ estado: nuevo, updated_by: autorActual\(\) \}\)/);
+  assert.match(marcar, /if \(!recargarTrasError\(err\)\) return;\s*\}\s*recargarTablero\(\['en_proceso'\]\);\s*recargarTrasCambio\(\);\s*$/);
+  // El único PATCH al servidor de pedidos es el de Ventas (ADMIN y ASESOR): ninguna ruta propia de E-Commerce mueve un pedido.
+  assert.ok(!/\/ecommerce\/pedidos\/\$\{/.test(codigo), 'los pedidos se mueven por /ventas/pedidos/{id}');
+  // Nunca confirm(), alert() ni prompt() (RP30; test_sin_dialogos_nativos lo vigila con la ruta de este archivo en RAICES).
+  assert.ok(!/\b(confirm|alert|prompt)\(/.test(codigo.replace(/confirmar\(/g, '')), 'sin diálogos nativos');
+  const guardia = readFileSync(new URL('./test_sin_dialogos_nativos.mjs', import.meta.url), 'utf8');
+  assert.ok(guardia.includes("'src/app/dashboard/ecommerce/page.tsx'"), 'la ruta exacta está en RAICES (RP30)');
+  // Eliminar un producto: confirmar() con «¿Eliminar este producto?» ANTES del DELETE (antes, el confirm() nativo con mojibake).
+  const eliminar = pantalla.slice(pantalla.indexOf('const deleteProduct = useCallback('), pantalla.indexOf('\n  }, [', pantalla.indexOf('const deleteProduct = useCallback(')));
+  assert.match(eliminar, /if \(!\(await confirmar\(\{ titulo: 'Eliminar producto', mensaje: '¿Eliminar este producto\?', efectos: \[prod\.nombre\], textoConfirmar: 'Eliminar', peligro: true \}\)\)\) return;/);
+  assert.ok(eliminar.indexOf('confirmar(') < eliminar.indexOf("method: 'DELETE'"), 'primero confirma');
+  assert.ok(!/Â|Ã|â€/.test(eliminar), 'sin mojibake en lo que se tocó');
+}
+
 console.log('OK test_kanban_ventas');

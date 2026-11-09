@@ -1123,4 +1123,42 @@ console.log('--- TEST 27 (B4 T23A, KPI-otros punto 5; R7, R12, RP102): las tarje
   assert.equal(frenteDeComparado('vs el trimestre'), 'frente al período anterior', 'un texto propio: el genérico');
 }
 
+console.log('--- TEST 28 (B4 T23A): el cableado de las tarjetas de la tienda en ecommerce/page.tsx (R12, C13) ---');
+{
+  const fuente = readFileSync(new URL('../src/app/dashboard/ecommerce/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  // Las cuatro tarjetas por su nombre del catálogo, con la comparación del servidor; ninguna es botón (ninguna equivale a una vista).
+  assert.match(codigo, /<TarjetaKpi kpi="web_ventas_hoy" valor=\{tarjetas\.web_ventas_hoy\.valor\} variacion=\{tarjetas\.web_ventas_hoy\.variacion\} textoPeriodo=\{tarjetas\.web_ventas_hoy\.textoPeriodo\} ayuda=\{tarjetas\.web_ventas_hoy\.ayuda \?\? undefined\} \/>/);
+  assert.match(codigo, /<TarjetaKpi kpi="web_ventas_mes" valor=\{tarjetas\.web_ventas_mes\.valor\} variacion=\{tarjetas\.web_ventas_mes\.variacion\} textoPeriodo=\{tarjetas\.web_ventas_mes\.textoPeriodo\} ayuda=\{tarjetas\.web_ventas_mes\.ayuda \?\? undefined\} \/>/);
+  assert.match(codigo, /<TarjetaKpi kpi="carritos_abandonados" valor=\{tarjetas\.carritos_abandonados\.valor\} tono=\{tarjetas\.carritos_abandonados\.tono\} ayuda=\{tarjetas\.carritos_abandonados\.ayuda \?\? undefined\} \/>/);
+  assert.match(codigo, /<TarjetaKpi kpi="productos_publicados" valor=\{tarjetas\.productos_publicados\.valor\} \/>/);
+  assert.ok(!/<TarjetaKpi[^>]*onClick/.test(codigo), 'ninguna tarjeta de la tienda es botón');
+  // De dónde salen: GET /ecommerce/stats con su turno; mientras recarga se conserva el valor ('actualizando'); un error se dice.
+  assert.match(codigo, /apiFetch\('\/ecommerce\/stats', \{ signal: control\.signal \}\)\s*\.then\(\(r: \{ data\?: Record<string, unknown> \} \| null\) => setStats\(\{ vuelta: vueltaStats, datos: r\?\.data \?\? null, error: null \}\)\)\s*\.catch\(\(err: unknown\) => \{ if \(!control\.signal\.aborted\) setStats\(\{ vuelta: vueltaStats, datos: null, error: err \}\); \}\);/);
+  assert.match(codigo, /const \{ datos: datosStats, cargando: cargandoStats \} = lecturaDeCarga\(stats, vueltaStats\);/);
+  assert.match(codigo, /const errorStats = cargandoStats \? null : \(stats\?\.error \?\? null\);/);
+  assert.match(codigo, /const estadoStats = useEstadoKpi\(cargandoStats, errorStats\);/);
+  assert.match(codigo, /const tarjetas = tarjetasTienda\(datosStats\);/);
+  assert.match(codigo, /<FranjaKpis estado=\{estadoStats\} titulo="Indicadores de la tienda">/);
+  // Con error, lo dice (el detail del servidor, por AvisoReintentar) y ofrece Reintentar SOLO de esa fuente.
+  assert.match(codigo, /\{errorStats && \(\s*<AvisoReintentar error=\{errorStats\} fallo="No se pudieron cargar los indicadores de la tienda" onReintentar=\{\(\) => setVueltaStats\(\(n\) => n \+ 1\)\}/);
+  // Lo que cambia las cifras recarga las tarjetas: un pedido movido (cancelarlo resta ventas) y un producto publicado, ocultado,
+  // eliminado o guardado (productos_publicados); «Actualizar» recarga todo.
+  assert.match(codigo, /const recargarTrasCambio = useCallback\(\(\) => \{\s*recargarPedidos\(\);\s*setVueltaStats\(\(n\) => n \+ 1\);\s*\}, \[recargarPedidos\]\);/);
+  assert.match(codigo, /const recargarTrasCatalogo = useCallback\(\(\) => \{\s*recargarCatalogo\(\);\s*setVueltaStats\(\(n\) => n \+ 1\);\s*\}, \[recargarCatalogo\]\);/);
+  assert.match(codigo, /<ProductModal product=\{editProduct \|\| null\} onSave=\{recargarTrasCatalogo\}/);
+  assert.match(codigo, /const recargarTodo = useCallback\(\(\) => \{\s*setVueltaStats\(\(n\) => n \+ 1\);\s*setVueltaCarritos\(\(n\) => n \+ 1\);\s*recargarPedidos\(\);\s*recargarTablero\(\);\s*recargarCatalogo\(\);\s*\}/);
+  assert.match(codigo, /onClick=\{recargarTodo\}/);
+  // Los carritos: lo mismo (primera carga en esqueleto, error con Reintentar, vacío y filas por faseDeLista).
+  assert.match(codigo, /const faseCarritos = faseDeLista\(\{ cargandoInicial: cargandoCarritos && carritos === null, error: errorCarritos, filas: carritos \}\);/);
+  assert.match(codigo, /\{faseCarritos === 'error' && \(\s*<AvisoReintentar error=\{errorCarritos\} fallo="No se pudieron cargar los carritos abandonados" onReintentar=\{\(\) => setVueltaCarritos\(\(n\) => n \+ 1\)\}/);
+  assert.match(codigo, /<Contador valor=\{carritos === null \? null : carritos\.length\} estado=\{estadoCarritos\} \/>/);
+  // Se fueron el StatCard, el '...' del cargando, los números armados con || 0 y los catch mudos.
+  assert.ok(!/StatCard/.test(codigo), 'sin StatCard');
+  assert.ok(!/'\.\.\.'/.test(codigo), "sin el '...' del cargando");
+  assert.ok(!/stats\.(revenue|web_orders|carritos|productos)/.test(codigo), 'ningún número se arma con || 0 en el navegador');
+  assert.ok(!/catch \{\}/.test(codigo), 'ninguna carga se traga su error');
+  assert.ok(!/catPublicados|catBajoStock/.test(codigo), 'los publicados salen del servidor, no de la página del catálogo');
+}
+
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

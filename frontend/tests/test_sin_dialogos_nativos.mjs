@@ -58,6 +58,7 @@ const RAICES = [
   'src/app/dashboard/finanzas/resumen/page.tsx', // B4 T22: el Resumen de Finanzas nace sin diálogos nativos
   'src/app/dashboard/finanzas/gastos/page.tsx', // B4 T22: Gastos, sin los toast ni diálogos nativos
   'src/app/dashboard/page.tsx', // B4 T22: el Dashboard General, sin diálogos nativos
+  'src/app/dashboard/ecommerce/page.tsx', // B4 T23A (RP30): E-Commerce, sin el confirm() de «¿Eliminar este producto?»
 ];
 
 // alert( / confirm( / prompt(, sueltos o con window. / window?. / globalThis. / self. delante, que no sean parte de
