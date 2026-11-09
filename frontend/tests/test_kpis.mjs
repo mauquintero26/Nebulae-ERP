@@ -1569,7 +1569,7 @@ console.log('--- TEST 35 (B4 T23B, KPI-otros punto 6; H13, RP70): el Asistente o
   assert.match(codigo, /const loadCustomerContext = async \(customerIdentifier: \{[^}]*\}\) => \{\s*if \(!accesoRef\.current\) return;/);
   // m8: un error de la carga no deja «Sin cliente seleccionado» debajo del aviso (vistaContexto).
   assert.match(codigo, /const vista = vistaContexto\(loadingContext, errorContexto\?\.error, contextData\);/);
-  assert.match(codigo, /\{vista === 'error' && errorContexto && \(\(\) => \{/);
+  assert.match(codigo, /\{vista === 'error' && avisoContexto && \(/);
   assert.match(codigo, /\{vista === 'cargando' \? \(/);
   assert.match(codigo, /\) : vista === 'contexto' \? \(/);
   assert.match(codigo, /\) : vista === 'vacio' \? \(/);
@@ -1578,7 +1578,8 @@ console.log('--- TEST 35 (B4 T23B, KPI-otros punto 6; H13, RP70): el Asistente o
   assert.match(codigo, /<p role="alert" className="[^"]*">\{textoDeError\(errorBusqueda, 'No se pudo buscar clientes'\)\}<\/p>/);
   // m9: la tarjeta «Pedidos en curso» aclara que incluye los facturados.
   assert.match(codigo, /title=\{ficha\.mini\[1\]\.ayuda \?\? undefined\}/);
-  assert.match(codigo, /<AvisoFuente aviso=\{a\} onReintentar=\{\(\) => loadCustomerContext\(errorContexto\.pedido\)\} \/>/);
+  assert.match(codigo, /const avisoContexto = errorContexto \? avisoDeFuente\(errorContexto\.error, 'No se pudo cargar el perfil del cliente'\) : null;/);
+  assert.match(codigo, /<AvisoFuente aviso=\{avisoContexto\} onReintentar=\{\(\) => loadCustomerContext\(errorContexto!\.pedido\)\} \/>/);
 }
 
 console.log('--- TEST 36 (B4 T23B): ninguna de las cinco pantallas trae diálogos nativos, y Marketing ya no enlaza a Visitantes (RP30, RP55) ---');

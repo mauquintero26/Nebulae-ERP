@@ -87,6 +87,7 @@ export default function AsistenteOmnicanal() {
   const ficha = fichaRevenueAsistente(contextData?.revenue);
   // Qué muestra la columna (función pura): con un error de la carga no sale «Sin cliente seleccionado» debajo del aviso.
   const vista = vistaContexto(loadingContext, errorContexto?.error, contextData);
+  const avisoContexto = errorContexto ? avisoDeFuente(errorContexto.error, 'No se pudo cargar el perfil del cliente') : null;
 
   // Asesor por defecto = usuario logueado (mismo origen de dato que usa
   // solicitud-client.tsx), para que advisor_name no viaje vacio al backend.
@@ -458,10 +459,9 @@ export default function AsistenteOmnicanal() {
             {/* CUERPO DEL CONTEXTO (SCROLLABLE) */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
 
-              {vista === 'error' && errorContexto && (() => {
-                const a = avisoDeFuente(errorContexto.error, 'No se pudo cargar el perfil del cliente');
-                return a ? <AvisoFuente aviso={a} onReintentar={() => loadCustomerContext(errorContexto.pedido)} /> : null;
-              })()}
+              {vista === 'error' && avisoContexto && (
+                <AvisoFuente aviso={avisoContexto} onReintentar={() => loadCustomerContext(errorContexto!.pedido)} />
+              )}
 
               {vista === 'cargando' ? (
                 <div className="flex flex-col items-center justify-center py-16 text-slate-400 space-y-2">
