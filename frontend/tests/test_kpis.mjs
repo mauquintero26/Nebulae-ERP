@@ -1416,8 +1416,9 @@ console.log('--- TEST 32 (B4 T23B, KPI-otros punto 4; RP55, RP70): la portada de
     assert.match(codigo, new RegExp(`<TarjetaKpi kpi="${id}" valor=\\{t\\.${id}\\.valor\\} ayuda=\\{t\\.${id}\\.ayuda \\?\\? sinPermiso\\} />`), id);
   }
   // Un 403 que llega igual: «—» con el motivo de permiso en cada tarjeta y sin «Reintentar».
-  assert.match(codigo, /const sinPermiso = aviso\?\.tipo === 'permiso' \? aviso\.texto : undefined;/);
-  assert.match(codigo, /<FranjaKpis estado=\{aviso\?\.tipo === 'permiso' \? 'listo' : estado\} titulo="Indicadores de Marketing">/);
+  assert.match(codigo, /const sinPermiso = motivoSinPermiso\(aviso\) \?\? undefined;/);
+  assert.match(codigo, /<FranjaKpis estado=\{estadoFranjaDeFuente\(aviso, estado\)\} titulo="Indicadores de Marketing">/);
+  assert.match(codigo, /const reintentar = \(\) => setVuelta\(\(n\) => n \+ 1\);/);   // P7: «Reintentar» vuelve a pedir
   assert.match(codigo, /\{aviso && <AvisoFuente aviso=\{aviso\} onReintentar=\{reintentar\} \/>\}/);
   // Sin el '...' del cargando, la grilla fija de 4, el gradient, el .catch mudo ni StatCard; los porcentajes los da formatoValorKpi (en la lib).
   assert.ok(!/'\.\.\.'|grid-cols-4 gap-4|variant="gradient"|StatCard|\.catch\(\(\) => \{\}\)|stats\.[a-z_]+ \?\? 0|fCOP/.test(codigo), 'sin el «...», la grilla fija ni los números armados con ?? 0');
@@ -1446,7 +1447,9 @@ console.log('--- TEST 33 (B4 T23B, KPI-otros punto 4 y TABLA-otros punto 6; R11,
   assert.match(codigo, /const prefsLeads = usePreferenciasTabla\(ID_LEADS, COLUMNAS_LEADS\);/);
   assert.match(codigo, /const \[estadoTabla, despacharTabla, listoTabla\] = useEstadoTabla\(ID_LEADS\);/);
   assert.match(codigo, /const tablaLeads = useListadoCliente<LeadCampana>\(leads, estadoTabla, ACCESORES_LEADS\);/);
-  assert.match(codigo, /cargando=\{!listoTabla \|\| \(tablaLeads\.cargandoInicial && !errorLeads\)\}/);
+  assert.match(codigo, /const cargandoTabla = !listoTabla \|\| \(tablaLeads\.cargandoInicial && !errorLeads\);/);
+  assert.equal((codigo.match(/cargando: cargandoTabla|cargando=\{cargandoTabla\}/g) ?? []).length, 2, 'el cargando de la tabla se escribe una vez');
+  assert.equal((codigo.match(/recargando: lectura\.recargando|recargando=\{lectura\.recargando\}/g) ?? []).length, 2);
   assert.match(codigo, /error=\{errorLeads\} onReintentar=\{recargarLeads\}/);
   assert.match(codigo, /<BarraTabla estado=\{estadoTabla\} onEstado=\{despacharTabla\}/);
   assert.ok(!/<table|<thead|kanbanDisponible|TableroKanban/.test(codigo), 'sin <table> a mano ni tablero (R11)');
@@ -1454,16 +1457,27 @@ console.log('--- TEST 33 (B4 T23B, KPI-otros punto 4 y TABLA-otros punto 6; R11,
   assert.match(codigo, /humanizarCodigo\(l\.estado\)/);
   assert.match(codigo, /const elegirCampana = \(c: any\) => \{ setSelected\(c\); despacharTabla\(\{ tipo: 'limpiarFiltros' \}\); \};/);
   // Los leads de la campaña elegida: lo que llegó de otra no se ve (marca), y el error se dice con «Reintentar».
-  assert.match(codigo, /const delaCampana = lecturaLeads\.marca === String\(selected\?\.id \?\? ''\);/);
-  assert.match(codigo, /const leads = delaCampana \? lecturaLeads\.datos : null;/);
+  assert.match(codigo, /const lectura = lecturaLeadsCampana\(leadsCargados, claveLeads, String\(selected\?\.id \?\? ''\), pideLeads\);/);
+  assert.match(codigo, /const \{ leads, error: errorLeads \} = lectura;/);
+  assert.match(codigo, /const recargarLeads = useCallback\(\(\) => setVueltaLeads\(\(n\) => n \+ 1\), \[\]\);/);   // P8
+  assert.match(codigo, /\{!loading && !errorCampanas && filtered\.length===0 &&/);   // P9: un error no dice «Sin campañas»
+  assert.match(codigo, /const OPCIONES_ESTADO_LEAD = ESTADOS_LEAD\.map\(\(valor\) => \(\{ valor, etiqueta: humanizarCodigo\(valor\) \}\)\);/);   // m10: una sola fuente
+  assert.ok(!/etiqueta: 'Nuevo'|etiqueta: 'Contactado'/.test(codigo), 'las etiquetas del estado salen de humanizarCodigo');
+  assert.match(codigo, /\n\s*Pasar al CRM\n/);
+  assert.ok(!/Sync CRM/.test(codigo), 'sin el inglés');
+  // m11: las fechas de las campañas son días de calendario y su estado lleva etiqueta.
+  assert.match(codigo, /const fDate = \(d: any\) => d \? fechaCorta\(diaDeNegocio\(d\)\) : '-';/);
+  assert.ok(!/toLocaleDateString/.test(codigo));
+  assert.match(codigo, /\{humanizarCodigo\(c\.estado\)\}/);
+  assert.match(codigo, /\{humanizarCodigo\(selected\.estado\)\}/);
   assert.match(codigo, /\{avisoLeads && <AvisoFuente aviso=\{avisoLeads\} onReintentar=\{recargarLeads\} \/>\}/);
   assert.ok(!/const \[leads, setLeads\]|loadLeads|\.catch\(\(\) => \{\}\)|catch \{\}/.test(codigo), 'sin los leads sueltos de la campaña anterior ni los catch mudos');
   // Las Métricas: la franja estándar con los ids del catálogo; el ROI con su tono (bien si es positivo, alerta si es negativo).
   assert.match(codigo, /const tarjetasMetricas = tarjetasCampana\(selected, leads\);/);
   assert.match(codigo, /<TarjetaKpi kpi="leads_capturados" valor=\{tarjetasMetricas\.leads_capturados\.valor\} \/>/);
-  assert.match(codigo, /<TarjetaKpi kpi="leads_convertidos" valor=\{tarjetasMetricas\.leads_convertidos\.valor\} estado=\{estadoLeads\} \/>/);
-  assert.match(codigo, /<TarjetaKpi kpi="ventas_atribuidas" valor=\{tarjetasMetricas\.ventas_atribuidas\.valor\} \/>/);
-  assert.match(codigo, /<TarjetaKpi kpi="roi" valor=\{tarjetasMetricas\.roi\.valor\} tono=\{tarjetasMetricas\.roi\.tono\} ayuda=\{tarjetasMetricas\.roi\.ayuda \?\? undefined\} \/>/);
+  assert.match(codigo, /<TarjetaKpi kpi="leads_convertidos" valor=\{tarjetasMetricas\.leads_convertidos\.valor\} estado=\{lectura\.estado\} \/>/);
+  assert.match(codigo, /<TarjetaKpi kpi="ventas_atribuidas" valor=\{tarjetasMetricas\.ventas_atribuidas\.valor\} ayuda=\{tarjetasMetricas\.ventas_atribuidas\.ayuda\} estado=\{lectura\.estado\} \/>/);
+  assert.match(codigo, /<TarjetaKpi kpi="roi" formato="texto" valor=\{tarjetasMetricas\.roi\.texto\} tono=\{tarjetasMetricas\.roi\.tono\} ayuda=\{tarjetasMetricas\.roi\.ayuda \?\? undefined\} estado=\{lectura\.estado\} \/>/);
   assert.ok(!/StatCard|\+\$\{|toFixed\(0\)|Intl\.NumberFormat/.test(codigo), 'sin StatCard, el «+» fijo del ROI ni el formato de dinero propio');
   assert.match(codigo, /const fCOP = \(v: number\) => formatoPesos\(v \|\| 0\);/);
   // El botón flotante de la IA no tapa la última fila de la tabla de leads: el panel baja 96 px de más (medido en el banco a 1024 x 600).

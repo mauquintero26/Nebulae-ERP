@@ -11,7 +11,7 @@ import { PageHeader, FranjaKpis, TarjetaKpi, useEstadoKpi } from '@/components/u
 import { AvisoFuente } from '@/components/ui/AvisoFuente';
 import { useRolActual } from '@/components/ui/useRolActual';
 import { accesoMarketing } from '@/lib/roles';
-import { avisoDeFuente } from '@/lib/avisos';
+import { avisoDeFuente, estadoFranjaDeFuente, motivoSinPermiso } from '@/lib/avisos';
 import { datosDeRespuesta, lecturaDeFuente, tarjetasMarketing } from '@/lib/kpis';
 
 /** Lo último que llegó de /marketing/stats: la vuelta con la que se pidió, sus datos y su error (lecturaDeFuente). */
@@ -42,7 +42,7 @@ export default function MarketingDashboard() {
   const aviso = avisoDeFuente(error, 'No se pudieron cargar los indicadores de Marketing');
   const t = tarjetasMarketing(datos);
   const reintentar = () => setVuelta((n) => n + 1);
-  const sinPermiso = aviso?.tipo === 'permiso' ? aviso.texto : undefined;
+  const sinPermiso = motivoSinPermiso(aviso) ?? undefined;
 
   // «Visitantes & Leads» salió del menú (R14: su pantalla no tiene datos reales) y no se ofrece desde aquí (RP55).
   const MODULES = [
@@ -70,7 +70,7 @@ export default function MarketingDashboard() {
         ) : (
           <>
             {aviso && <AvisoFuente aviso={aviso} onReintentar={reintentar} />}
-            <FranjaKpis estado={aviso?.tipo === 'permiso' ? 'listo' : estado} titulo="Indicadores de Marketing">
+            <FranjaKpis estado={estadoFranjaDeFuente(aviso, estado)} titulo="Indicadores de Marketing">
               <TarjetaKpi kpi="camp_activas" valor={t.camp_activas.valor} ayuda={t.camp_activas.ayuda ?? sinPermiso} />
               <TarjetaKpi kpi="leads_capturados" valor={t.leads_capturados.valor} ayuda={t.leads_capturados.ayuda ?? sinPermiso} />
               <TarjetaKpi kpi="ventas_atribuidas" valor={t.ventas_atribuidas.valor} ayuda={t.ventas_atribuidas.ayuda ?? sinPermiso} />

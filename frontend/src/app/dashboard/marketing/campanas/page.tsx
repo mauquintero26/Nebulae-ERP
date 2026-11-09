@@ -3,7 +3,7 @@ import { createContext, useContext, useState, useEffect, useCallback, useMemo, u
 import { Target, Plus, RefreshCw, Megaphone, CheckCircle2, Tag, Edit2, Trash2, PauseCircle, Play, Search, Copy } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import {
-  SubNav, PageHeader, Toast, Modal, Button, FranjaKpis, TarjetaKpi, useAvisos, useEstadoKpi,
+  SubNav, PageHeader, Toast, Modal, Button, FranjaKpis, TarjetaKpi, useAvisos,
 } from '@/components/ui';
 import { AvisoFuente } from '@/components/ui/AvisoFuente';
 import { useRolActual } from '@/components/ui/useRolActual';
@@ -12,13 +12,16 @@ import type { ColumnaTabla } from '@/components/tabla';
 import { MKT_NAV } from '../mkt-nav';
 import { accesoMarketing } from '@/lib/roles';
 import { avisoDeFuente } from '@/lib/avisos';
-import { datosDeRespuesta, lecturaDeFuente, tarjetasCampana } from '@/lib/kpis';
+import { datosDeRespuesta, lecturaLeadsCampana, tarjetasCampana } from '@/lib/kpis';
+import { fechaCorta } from '@/lib/fechas-colombia';
+import { diaDeNegocio } from '@/lib/listas-ventas';
 import { humanizarCodigo } from '@/lib/estados-pedido';
 import { formatoPesos } from '@/lib/pesos';
 import { accesoresDeOrden, estadoDelTotal } from '@/lib/tabla';
 // B4 T23B: el dinero con el formato del catálogo (formatoPesos: '$1.062.523', sin el espacio duro de Intl).
 const fCOP = (v: number) => formatoPesos(v || 0);
-const fDate = (d: any) => d ? new Date(d).toLocaleDateString('es-CO', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
+// m11: la fecha de una campaña es un día de calendario (fechaCorta), no un instante que se corre a la víspera en Colombia.
+const fDate = (d: any) => d ? fechaCorta(diaDeNegocio(d)) : '-';
 
 const ESTADO_COLORS: Record<string, string> = {
   BORRADOR: 'bg-slate-100 text-slate-600',
@@ -43,10 +46,9 @@ type LeadsCargados = { vuelta: string; marca: string; datos: LeadCampana[] | nul
 const ID_LEADS = 'marketing.leads';
 /** Lo que las celdas de la tabla le piden a la pantalla (las columnas son una constante de módulo: D40). */
 const AccionesLeads = createContext<{ sincronizar: (id: number) => void; sincronizando: number | null }>({ sincronizar: () => {}, sincronizando: null });
-const OPCIONES_ESTADO_LEAD = [
-  { valor: 'NUEVO', etiqueta: 'Nuevo' }, { valor: 'CONTACTADO', etiqueta: 'Contactado' },
-  { valor: 'CONVERTIDO', etiqueta: 'Convertido' }, { valor: 'PERDIDO', etiqueta: 'Perdido' },
-];
+/** Los estados de un lead de campaña; la etiqueta de la celda, de la búsqueda y del filtro es UNA: humanizarCodigo. */
+const ESTADOS_LEAD = ['NUEVO', 'CONTACTADO', 'CONVERTIDO', 'PERDIDO'];
+const OPCIONES_ESTADO_LEAD = ESTADOS_LEAD.map((valor) => ({ valor, etiqueta: humanizarCodigo(valor) }));
 
 function CeldaCrmLead({ l }: { l: LeadCampana }) {
   const { sincronizar, sincronizando } = useContext(AccionesLeads);
@@ -54,7 +56,7 @@ function CeldaCrmLead({ l }: { l: LeadCampana }) {
   return (
     <button type="button" onClick={() => sincronizar(l.id)} disabled={sincronizando === l.id} title="Todavía no está en el CRM"
       className="text-[10px] px-2 py-1 bg-indigo-50 text-indigo-700 rounded-lg font-bold hover:bg-indigo-100 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600">
-      Sync CRM
+      Pasar al CRM
     </button>
   );
 }
@@ -132,12 +134,9 @@ export default function CampanasPage() {
       .catch((err: unknown) => { if (!control.signal.aborted) setLeadsCargados({ vuelta: claveLeads, marca, datos: null, error: err }); });
     return () => control.abort();
   }, [pideLeads, selected?.id, claveLeads]);
-  const lecturaLeads = lecturaDeFuente(leadsCargados, claveLeads);
-  const delaCampana = lecturaLeads.marca === String(selected?.id ?? '');
-  const leads = delaCampana ? lecturaLeads.datos : null;
-  const cargandoLeads = pideLeads && (lecturaLeads.cargando || !delaCampana);
-  const errorLeads = delaCampana ? lecturaLeads.error : null;
-  const estadoLeads = useEstadoKpi(cargandoLeads, errorLeads);
+  // La lectura es una función pura (lecturaLeadsCampana): lo de otra campaña no se ve y la recién elegida está 'cargando'.
+  const lectura = lecturaLeadsCampana(leadsCargados, claveLeads, String(selected?.id ?? ''), pideLeads);
+  const { leads, error: errorLeads } = lectura;
   const avisoLeads = avisoDeFuente(errorLeads, 'No se pudieron cargar los leads de la campaña');
   const recargarLeads = useCallback(() => setVueltaLeads((n) => n + 1), []);
 
@@ -146,6 +145,7 @@ export default function CampanasPage() {
   const prefsLeads = usePreferenciasTabla(ID_LEADS, COLUMNAS_LEADS);
   const anchoLeadsRef = useRef<number | null>(null);
   const tablaLeads = useListadoCliente<LeadCampana>(leads, estadoTabla, ACCESORES_LEADS);
+  const cargandoTabla = !listoTabla || (tablaLeads.cargandoInicial && !errorLeads);
   const elegirCampana = (c: any) => { setSelected(c); despacharTabla({ tipo: 'limpiarFiltros' }); };
 
   useEffect(() => { loadCampanas(); }, [loadCampanas]);
@@ -262,7 +262,7 @@ export default function CampanasPage() {
                     <p className="font-black text-slate-800 text-sm leading-tight">{c.nombre}</p>
                     <p className="text-[10px] text-emerald-600 font-bold mt-0.5">{c.numero}</p>
                   </div>
-                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${ESTADO_COLORS[c.estado]||'bg-gray-100 text-gray-500'}`}>{c.estado}</span>
+                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${ESTADO_COLORS[c.estado]||'bg-gray-100 text-gray-500'}`}>{humanizarCodigo(c.estado)}</span>
                 </div>
                 <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                   {(c.canales||[]).slice(0,3).map((ch:string)=>(<span key={ch} className="text-[9px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded font-bold">{ch}</span>))}
@@ -285,7 +285,7 @@ export default function CampanasPage() {
               <div>
                 <div className="flex items-center gap-2 mb-0.5">
                   <h2 className="text-xl font-black text-slate-800">{selected.nombre}</h2>
-                  <span className={`text-xs font-black px-2 py-0.5 rounded-full ${ESTADO_COLORS[selected.estado]||''}`}>{selected.estado}</span>
+                  <span className={`text-xs font-black px-2 py-0.5 rounded-full ${ESTADO_COLORS[selected.estado]||''}`}>{humanizarCodigo(selected.estado)}</span>
                 </div>
                 <p className="text-xs text-slate-400">{selected.numero} · {(selected.canales||[]).join(', ') || 'Sin canales'}</p>
               </div>
@@ -377,10 +377,10 @@ export default function CampanasPage() {
                       <BarraTabla estado={estadoTabla} onEstado={despacharTabla} placeholder="Buscar lead…" opcionesEstados={OPCIONES_ESTADO_LEAD}
                         ajustes={{ columnas: COLUMNAS_LEADS, preferencias: prefsLeads, anchoRef: anchoLeadsRef }} color="emerald"
                         total={tablaLeads.total}
-                        estadoTotal={estadoDelTotal({ total: tablaLeads.total, cargando: !listoTabla || (tablaLeads.cargandoInicial && !errorLeads), recargando: cargandoLeads && leads !== null, error: errorLeads })} />
+                        estadoTotal={estadoDelTotal({ total: tablaLeads.total, cargando: cargandoTabla, recargando: lectura.recargando, error: errorLeads })} />
                       <TablaEstandar<LeadCampana> id={ID_LEADS} modo="cliente" columnas={COLUMNAS_LEADS} preferencias={prefsLeads} anchoRef={anchoLeadsRef}
                         estado={estadoTabla} onEstado={despacharTabla} filas={tablaLeads.filas} total={tablaLeads.total}
-                        cargando={!listoTabla || (tablaLeads.cargandoInicial && !errorLeads)} recargando={cargandoLeads && leads !== null}
+                        cargando={cargandoTabla} recargando={lectura.recargando}
                         error={errorLeads} onReintentar={recargarLeads} etiqueta="Leads de la campaña"
                         vacio={estadoTabla.q || estadoTabla.estados.length ? 'Ningún lead coincide con la búsqueda o el estado elegido.' : 'Sin leads en esta campaña'} />
                     </section>
@@ -394,9 +394,9 @@ export default function CampanasPage() {
                   {avisoLeads && <AvisoFuente aviso={avisoLeads} onReintentar={recargarLeads} />}
                   <FranjaKpis titulo="Indicadores de la campaña">
                     <TarjetaKpi kpi="leads_capturados" valor={tarjetasMetricas.leads_capturados.valor} />
-                    <TarjetaKpi kpi="leads_convertidos" valor={tarjetasMetricas.leads_convertidos.valor} estado={estadoLeads} />
-                    <TarjetaKpi kpi="ventas_atribuidas" valor={tarjetasMetricas.ventas_atribuidas.valor} />
-                    <TarjetaKpi kpi="roi" valor={tarjetasMetricas.roi.valor} tono={tarjetasMetricas.roi.tono} ayuda={tarjetasMetricas.roi.ayuda ?? undefined} />
+                    <TarjetaKpi kpi="leads_convertidos" valor={tarjetasMetricas.leads_convertidos.valor} estado={lectura.estado} />
+                    <TarjetaKpi kpi="ventas_atribuidas" valor={tarjetasMetricas.ventas_atribuidas.valor} ayuda={tarjetasMetricas.ventas_atribuidas.ayuda} estado={lectura.estado} />
+                    <TarjetaKpi kpi="roi" formato="texto" valor={tarjetasMetricas.roi.texto} tono={tarjetasMetricas.roi.tono} ayuda={tarjetasMetricas.roi.ayuda ?? undefined} estado={lectura.estado} />
                   </FranjaKpis>
                   {/* Presupuesto progress */}
                   {selected.presupuesto_cop>0 && (

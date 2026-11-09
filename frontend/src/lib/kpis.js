@@ -1195,7 +1195,7 @@ export function formatoPorcentajeConSigno(n) {
  * @param {any} campana
  * @param {ReadonlyArray<any> | null | undefined} leads
  * @returns {{leads_capturados: {valor: number | null}, leads_convertidos: {valor: number | null},
- *   ventas_atribuidas: {valor: number | null, ayuda: string} | {valor: number | null},
+ *   ventas_atribuidas: {valor: number | null, ayuda: string},
  *   roi: {valor: number | null, texto: string | null, tono: 'normal' | 'alerta' | 'bien', ayuda: string | null}}}
  */
 export function tarjetasCampana(campana, leads) {
