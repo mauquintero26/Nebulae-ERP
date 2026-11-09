@@ -986,7 +986,11 @@ console.log('--- TEST 25 (B4 T22, KPI-otros punto 1 y FLUJO-ventas-pantallas E; 
   assert.ok(fuente.includes('{textoRadar(radar.n)}') && fuente.includes('<Link href={RUTA_RADAR}'));
   assert.doesNotMatch(fuente, /a la espera de la mercancía|Ver Tránsito Compras/);
   // m6: el aviso de una fuente caída sale de textoAvisoFuente (un solo punto).
-  assert.ok(fuente.includes('{textoAvisoFuente(error, texto)}'));
+  // I1 (M1, M4b, M10, m6): el aviso se pinta SOLO con error, la fuente devuelve el error de la lectura y el embudo lo muestra.
+  assert.ok(fuente.includes('  if (!error) return null;\n  return (\n    <p role="alert"'), 'AvisoFuente solo se pinta con error');
+  assert.ok(fuente.includes('      {textoAvisoFuente(error, texto)}\n'), 'un solo punto: lo pone textoAvisoFuente');
+  assert.ok(fuente.includes('return { ...lecturaDeFuente(llego, clave), recargar };'), 'useFuente devuelve el error de la lectura');
+  assert.ok(fuente.includes('{avisoEmbudo.visible && ('));
   assert.ok(fuente.includes('texto="No se pudieron contar los clientes"'));
   // m10: las «Recientes» dicen la etiqueta del estado, no el código.
   assert.ok(fuente.includes('{infoEstadoPec(pec.estado).label}') && fuente.includes('{infoEstadoPedido(ven.estado).label}'));
