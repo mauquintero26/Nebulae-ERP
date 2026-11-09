@@ -19,6 +19,7 @@ import { congelar, tiene } from './estados-pedido.js';
 import { HEX_CLASE_TAILWIND, hexDeClaseTailwind } from './analisis.js';
 import { definirColumnas } from './kanban.js';
 import { formatoPesos } from './pesos.js';
+import { filtrarFilas } from './tabla.js';
 
 /**
  * @typedef {import('./kanban.js').ResultadoSoltar} ResultadoSoltar
@@ -163,13 +164,17 @@ export function claveEtapaPerdido(stages) {
 
 /**
  * Los leads del tablero: los activos y, detrás, los perdidos cuyo id no está ya entre los activos (el activo gana).
+ * T21 r1 (m18): con `stages` y sin una etapa Perdido (CANCELLED), los perdidos no entran: no hay columna para ellos y
+ * columnaDeLead los pondría en una activa (la primera), sumando su valor.
  * @param {ReadonlyArray<any> | null | undefined} activos
  * @param {ReadonlyArray<any> | null | undefined} perdidos  los items de PerdidosCrm
+ * @param {ReadonlyArray<EtapaCrm> | {data?: ReadonlyArray<EtapaCrm>} | null} [stages]
  * @returns {any[]}
  */
-export function leadsDelTablero(activos, perdidos) {
+export function leadsDelTablero(activos, perdidos, stages) {
   const lista = Array.isArray(activos) ? [...activos] : [];
-  for (const lead of Array.isArray(perdidos) ? perdidos : []) {
+  const conPerdidos = stages === undefined || claveEtapaPerdido(stages) !== null;
+  for (const lead of conPerdidos && Array.isArray(perdidos) ? perdidos : []) {
     if (!lista.some((l) => mismoId(l?.id, lead?.id))) lista.push(lead);
   }
   return lista;
@@ -249,40 +254,46 @@ export function hayFiltroDeLeads({ q, etapa } = {}) {
   return textoDe(q) !== '' || etapaDe(etapa) !== '';
 }
 
+/** Dónde busca la barra en un lead (los mismos campos que q de get_leads, con el asesor: 6b83780). */
+const CAMPOS_BUSQUEDA_LEAD = congelar(['client', 'description', 'lead_product_name', 'advisor_name']);
+
 /**
- * Los leads del tablero con la búsqueda y la etapa de la barra (el mismo filtro que tenía el Kanban): q, recortada y sin
- * mayúsculas, en el cliente, la descripción, el producto y el asesor; etapa = el pipeline_stage_id exacto. Sin filtro
- * devuelve la MISMA lista (estable para useMemo).
+ * Los leads del tablero con la búsqueda y la etapa de la barra. T21 r1: la búsqueda es filtrarFilas de lib/tabla.js
+ * (sin tildes ni mayúsculas, palabra por palabra; m10) en el cliente, la descripción, el producto y el asesor; la etapa
+ * usa la MISMA regla que ubica cada lead en su columna, columnaDelTablero (m11 y m18): el lead sin etapa que está en la
+ * columna de su status no desaparece al elegirla, y un perdido está en Perdido. Sin filtro devuelve la MISMA lista
+ * (estable para useMemo).
  * @param {ReadonlyArray<any> | null | undefined} leads
  * @param {{q?: string | null, etapa?: string | number | null}} [filtro]
+ * @param {ReadonlyArray<EtapaCrm> | {data?: ReadonlyArray<EtapaCrm>} | null} [stages]
  * @returns {ReadonlyArray<any>}
  */
-export function filtrarLeads(leads, { q, etapa } = {}) {
+export function filtrarLeads(leads, { q, etapa } = {}, stages = null) {
   const lista = Array.isArray(leads) ? leads : [];
   const texto = textoDe(q);
   const conEtapa = etapaDe(etapa);
   if (!texto && !conEtapa) return lista;
-  const contiene = (v) => typeof v === 'string' && v.toLowerCase().includes(texto);
-  return lista.filter((l) => (!texto || contiene(l?.client) || contiene(l?.description) || contiene(l?.lead_product_name)
-    || contiene(l?.advisor_name))
-    && (!conEtapa || (l?.pipeline_stage_id !== null && l?.pipeline_stage_id !== undefined && String(l.pipeline_stage_id) === conEtapa)));
+  const porTexto = texto ? filtrarFilas(lista, q, CAMPOS_BUSQUEDA_LEAD) : lista;
+  return conEtapa ? porTexto.filter((l) => columnaDelTablero(l, stages) === conEtapa) : porTexto;
 }
 
 /**
- * La suma de value de los leads en cada columna (columnaDeLead: un lead sin etapa suma en la de su status), para la
- * suma de cada etapa del tablero. Toda etapa sale, con 0 si no tiene leads.
+ * La suma de value de los leads en cada columna (columnaDelTablero: un lead sin etapa suma en la de su status y un
+ * perdido en Perdido), para la suma de cada etapa del tablero. Toda etapa sale, con 0 si no tiene leads. T21 r1 (I1):
+ * sin leads (null: todavía cargan) devuelve null, para que ninguna columna diga «$0» mientras carga.
  * @param {ReadonlyArray<any> | null | undefined} leads
  * @param {ReadonlyArray<EtapaCrm> | {data?: ReadonlyArray<EtapaCrm>} | null | undefined} stages
- * @returns {Record<string, number>}
+ * @returns {Record<string, number> | null}
  */
 export function sumaPorEtapa(leads, stages) {
+  if (!Array.isArray(leads)) return null;
   const lista = etapasDe(stages);
   /** @type {Record<string, number>} */
   const sumas = {};
   for (const s of lista) sumas[String(s.id)] = 0;
   if (!lista.length) return sumas;
-  for (const lead of Array.isArray(leads) ? leads : []) {
-    const clave = columnaDeLead(lead, lista);
+  for (const lead of leads) {
+    const clave = columnaDelTablero(lead, lista);
     const valor = Number(lead?.value);
     if (clave !== null && Number.isFinite(valor)) sumas[clave] += valor;
   }
@@ -291,14 +302,16 @@ export function sumaPorEtapa(leads, stages) {
 
 /**
  * El resumen de una columna: formatoPesos de su suma (RP105). En Perdido, si se cargaron menos que su total (los 50
- * más recientes de N), la suma dice de cuántos es: «$X en los 50 más recientes» («en el más reciente» con 1).
+ * más recientes de N), la suma dice de cuántos es: «$X en los 50 más recientes» («en el más reciente» con 1). T21 r1
+ * (I1): sin sumas (los leads todavía cargan) devuelve null: la columna no pinta resumen, nunca «$0».
  * @param {string} clave
  * @param {Record<string, number> | null | undefined} sumas  de sumaPorEtapa
  * @param {{clavePerdido?: string | null, perdidos?: PerdidosCrm | null}} [opciones]
- * @returns {string}
+ * @returns {string | null}
  */
 export function textoResumenEtapa(clave, sumas, { clavePerdido = null, perdidos = null } = {}) {
-  const suma = formatoPesos(Number(sumas?.[clave]) || 0);
+  if (!sumas) return null;
+  const suma = formatoPesos(Number(sumas[clave]) || 0);
   const cargados = Array.isArray(perdidos?.items) ? perdidos.items.length : 0;
   const total = perdidos?.total;
   if (clave !== clavePerdido || typeof total !== 'number' || !(total > cargados)) return suma;
@@ -331,7 +344,8 @@ export function chipsDeLead(lead) {
   const chips = [];
   const sc = lead?.sc_id;
   if (sc !== null && sc !== undefined && String(sc).trim() !== '') chips.push({ texto: 'Con solicitud', tono: 'indigo' });
-  if (esLeadAtrasado(lead)) chips.push({ texto: 'Atrasado', tono: 'rose' });
+  // T21 r1 (m2): un lead cerrado (Ganado o Perdido) no está atrasado.
+  if (esLeadAtrasadoAbierto(lead)) chips.push({ texto: 'Atrasado', tono: 'rose' });
   return chips;
 }
 
@@ -368,4 +382,135 @@ export function textoVacioLeads(filtro = {}) {
   return hayFiltroDeLeads(filtro)
     ? 'Ningún lead coincide con la búsqueda o la etapa elegida.'
     : 'No hay leads. Crea uno con «Nuevo Lead».';
+}
+
+// ─── B4 T21 r1: lo que pidió la revisión r0 ────────────────────────────────────────────────────────────────────────
+
+/** Los status de un lead cerrado: Ganado (INVOICED) y Perdido (CANCELLED). */
+const STATUS_LEAD_CERRADO = congelar(['INVOICED', 'CANCELLED']);
+
+/**
+ * El lead está atrasado (esLeadAtrasado: 7 días o más) Y sigue abierto: un lead Ganado o Perdido no está atrasado (m2).
+ * Lo usan el chip «Atrasado», el borde de la tarjeta, la fila y la celda Días de la Lista y el orden del tablero.
+ * @param {any} lead
+ * @returns {boolean}
+ */
+export function esLeadAtrasadoAbierto(lead) {
+  return esLeadAtrasado(lead) && !STATUS_LEAD_CERRADO.includes(lead?.status);
+}
+
+/**
+ * La columna de un lead en el tablero (m11, m18): un perdido (status CANCELLED) va SIEMPRE a la columna Perdido, sea
+ * cual sea su pipeline_stage_id (es lo que cuenta /crm/leads?perdidos=solo); los demás, por columnaDeLead. Sin etapa
+ * Perdido manda columnaDeLead (y leadsDelTablero no mezcla los perdidos). Sin etapas: null.
+ * @param {any} lead
+ * @param {ReadonlyArray<EtapaCrm> | {data?: ReadonlyArray<EtapaCrm>} | null | undefined} stages
+ * @returns {string | null}
+ */
+export function columnaDelTablero(lead, stages) {
+  const perdido = esLeadPerdido(lead) ? claveEtapaPerdido(stages) : null;
+  return perdido ?? columnaDeLead(lead, stages);
+}
+
+/**
+ * Los parámetros propios de la Lista (I2): stage_id del select de etapa y, si esa etapa es la de Perdido,
+ * perdidos='solo' (get_leads deja fuera los CANCELLED por defecto: sin esto, la Lista con Perdido sale siempre vacía).
+ * 'all' o '' = todas las etapas (stage_id null). perdidos null no viaja en la consulta.
+ * @param {string | number | null | undefined} etapa  el valor del select
+ * @param {ReadonlyArray<EtapaCrm> | {data?: ReadonlyArray<EtapaCrm>} | null | undefined} stages
+ * @returns {{stage_id: string | null, perdidos: 'solo' | null}}
+ */
+export function extraListaLeads(etapa, stages) {
+  const id = etapaDe(etapa);
+  if (!id) return { stage_id: null, perdidos: null };
+  return { stage_id: id, perdidos: id === claveEtapaPerdido(stages) ? 'solo' : null };
+}
+
+/**
+ * Qué pinta la vista Kanban según la carga (m4, m9, m15, m19): 'esqueleto' (sin las preferencias, o sin etapas mientras
+ * cargan), 'error-etapas' (sin etapas ni caché y la carga terminó con error), 'sin-etapas' (no hay ninguna), 'error-leads'
+ * (los activos nunca llegaron y la carga terminó con error) o 'tablero'. Una falla de Perdido no tapa el tablero: la
+ * dice su columna (datosDelTablero). Una recarga que falla con datos tampoco: el tablero sigue, con su aviso.
+ * @param {{listo: boolean, etapasListas: boolean, errorEtapas: unknown, cargando: boolean, hayColumnas: boolean,
+ *   leadsListos: boolean, errorLeads: unknown}} estado
+ * @returns {'esqueleto' | 'error-etapas' | 'sin-etapas' | 'error-leads' | 'tablero'}
+ */
+export function vistaDelTablero({ listo, etapasListas, errorEtapas, cargando, hayColumnas, leadsListos, errorLeads }) {
+  if (!listo) return 'esqueleto';
+  if (!etapasListas) return errorEtapas && !cargando ? 'error-etapas' : 'esqueleto';
+  if (!hayColumnas) return 'sin-etapas';
+  if (!leadsListos && errorLeads && !cargando) return 'error-leads';
+  return 'tablero';
+}
+
+/**
+ * Los datos de las columnas con la falla de Perdido (m4, m9, m19): esa columna queda con su error (TableroKanban pinta
+ * «No se pudo cargar esta columna» y «Reintentar»; plegada, su contador dice «—») o, mientras reintenta, cargando. Las
+ * demás no cambian. Sin falla ni recarga (o sin esa columna) devuelve los MISMOS datos.
+ * @template D
+ * @param {Record<string, D>} datos  los de useTableroKanban
+ * @param {string | null} clave  la de Perdido
+ * @param {{error?: unknown, cargando?: boolean}} [estado]
+ * @returns {Record<string, D>}
+ */
+export function datosDelTablero(datos, clave, { error = null, cargando = false } = {}) {
+  if (!clave || !datos || !tiene(datos, clave) || (!error && !cargando)) return datos;
+  const columna = /** @type {any} */ (datos[clave]);
+  const marcada = cargando ? { ...columna, cargando: true, error: null } : { ...columna, cargando: false, error, cargaFallida: true };
+  return { ...datos, [clave]: marcada };
+}
+
+/**
+ * Qué se aplica de una carga de loadAll que acaba de llegar (m14): si salió otra carga después, nada (vigente false);
+ * si mientras iba cambió un lead en la pantalla (aplicarLead o quitarLead suben la versión), las etapas sí pero los
+ * leads no (conLeads false), para que una respuesta vieja no pise el cambio.
+ * @param {{turno: number, ultimoTurno: number, version: number, versionActual: number}} carga
+ * @returns {{vigente: boolean, conLeads: boolean}}
+ */
+export function respuestaDeCarga({ turno, ultimoTurno, version, versionActual }) {
+  const vigente = turno === ultimoTurno;
+  return { vigente, conLeads: vigente && version === versionActual };
+}
+
+/**
+ * El número de la barra en Kanban (m21, el «N leads» de la barra vieja): la suma de lo que cuentan las columnas, con
+ * el total propio donde lo hay (Perdido, RP61). Mientras los leads no llegaron (null), null (sin número, nunca 0).
+ * @param {ReadonlyArray<any> | null | undefined} items  los leads del tablero (ya filtrados)
+ * @param {ReadonlyArray<EtapaCrm> | {data?: ReadonlyArray<EtapaCrm>} | null | undefined} stages
+ * @param {Record<string, number> | undefined} totales  los de totalesDelTablero
+ * @returns {number | null}
+ */
+export function totalDelTablero(items, stages, totales) {
+  if (!Array.isArray(items)) return null;
+  /** @type {Record<string, number>} */
+  const porColumna = {};
+  for (const s of etapasDe(stages)) porColumna[String(s.id)] = 0;
+  for (const lead of items) {
+    const clave = columnaDelTablero(lead, stages);
+    if (clave !== null && tiene(porColumna, clave)) porColumna[clave] += 1;
+  }
+  let total = 0;
+  for (const [clave, n] of Object.entries(porColumna)) {
+    const propio = totales?.[clave];
+    total += typeof propio === 'number' && Number.isFinite(propio) ? propio : n;
+  }
+  return total;
+}
+
+/** Los campos de una etapa que manda GET /crm/pipeline-stages (crm.py _stage_to_dict). */
+const CAMPOS_ETAPA = congelar(['id', 'name', 'color', 'bg_color', 'position', 'maps_to_status']);
+
+/**
+ * Solo los campos de _stage_to_dict de una etapa (m22): al guardar una etapa en el panel, is_closed, alert_days,
+ * alert_message y pipeline_name (que solo existen en /config y no se guardan en la base) no entran en las etapas del
+ * tablero (si no, columnasDesdeEtapas plegaría una columna hasta la próxima recarga).
+ * @param {any} etapa
+ * @returns {Partial<EtapaCrm>}
+ */
+export function camposDeEtapa(etapa) {
+  /** @type {Record<string, unknown>} */
+  const campos = {};
+  if (!etapa || typeof etapa !== 'object') return campos;
+  for (const c of CAMPOS_ETAPA) if (tiene(etapa, c) && etapa[c] !== undefined) campos[c] = etapa[c];
+  return campos;
 }

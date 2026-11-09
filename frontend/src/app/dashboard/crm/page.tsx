@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } from 'react';
 import {
-  Plus, RefreshCw, ChevronDown, Trash2,
+  Plus, RefreshCw, X, ChevronDown, Trash2,
   GripVertical, ExternalLink, Settings, CheckCircle2,
   AlertCircle, User, Package, DollarSign, Clock,
   Edit3, ArrowRight, FileText, ShoppingCart, Receipt,
@@ -22,13 +22,16 @@ import {
 import { BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla } from '@/components/tabla';
 import { PanelAnalisisPerezoso } from '@/components/analisis';
 import {
-  COLOR_HEX, BG_HEX, columnasDesdeEtapas, columnaDeLead, esLeadAtrasado, reglaSoltarLead, claveEtapaPerdido,
+  COLOR_HEX, BG_HEX, columnasDesdeEtapas, reglaSoltarLead, claveEtapaPerdido,
   leadsDelTablero, conLeadActivo, conLeadPerdido, sinLead, sinLeadPerdido, filtrarLeads, sumaPorEtapa,
   textoResumenEtapa, totalesDelTablero, chipsDeLead, leadDeMovimiento, textoDiasLead, textoVacioLeads,
+  // T21 r1: lo que pidió la revisión r0.
+  esLeadAtrasadoAbierto, columnaDelTablero, extraListaLeads, vistaDelTablero, datosDelTablero, respuestaDeCarga,
+  totalDelTablero, camposDeEtapa, hayFiltroDeLeads,
 } from '@/lib/crm-etapas';
 import { estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
 import { formatoPesos } from '@/lib/pesos';
-import { textoDeError } from '@/lib/avisos';
+import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { TABLE } from '@/lib/design-system';
 import { CRM_NAV } from './crm-nav';
 
@@ -276,10 +279,11 @@ function columnasLeads(etapasPorId) {
     {
       id: 'dias', titulo: 'Días', ancho: 72, alinear: 'derecha', ordenable: 'dias', titleCelda: (l) => textoDiasLead(l),
       celda: (l) => {
-        const tarde = esLeadAtrasado(l);
+        // T21 r1 (m2): un lead cerrado (Ganado o Perdido) no está atrasado; (m16a) el lector de pantalla oye «Atrasado».
+        const tarde = esLeadAtrasadoAbierto(l);
         return (
           <span className={`inline-flex items-center gap-1 font-bold tabular-nums ${tarde ? 'text-red-700' : 'text-slate-600'}`}>
-            {tarde && <AlertTriangle size={12} aria-hidden="true"/>}{l.days}d
+            {tarde && <AlertTriangle size={12} aria-hidden="true"/>}{tarde && <span className="sr-only">Atrasado: </span>}{l.days}d
           </span>
         );
       },
@@ -288,8 +292,8 @@ function columnasLeads(etapasPorId) {
   ];
 }
 
-/** El tono opaco de la fila (D41): un lead atrasado, ámbar como el tinte de hoy. */
-const claseDeFilaLead = (l) => (esLeadAtrasado(l) ? TABLE.filaAviso : null);
+/** El tono opaco de la fila (D41): un lead atrasado y abierto (r1, m2), ámbar como el tinte de hoy. */
+const claseDeFilaLead = (l) => (esLeadAtrasadoAbierto(l) ? TABLE.filaAviso : null);
 
 /** El nombre de la tarjeta para el menú ⋯ («Acciones de …») y el anuncio del movimiento («… movido a …»). */
 const tarjetaDeLead = (l) => ({ numero: l.client || `Lead ${l.id}`, titulo: l.client || '' });
@@ -332,7 +336,7 @@ function ErrorCarga({ texto, onReintentar }) {
 // módulo para que React no la vuelva a montar en cada render (el ⋯ abierto no se cierra solo).
 // ══════════════════════════════════════════════════════════════════════════
 function LeadCard({ lead, stage, contexto }) {
-  const isStale = esLeadAtrasado(lead);
+  const isStale = esLeadAtrasadoAbierto(lead); // T21 r1 (m2): Ganado y Perdido no se marcan atrasados
   const stageColor = stage ? (COLOR_HEX[stage.color] || '#6366f1') : '#94a3b8';
   const stageBg = stage ? (BG_HEX[stage.bg_color] || '#f8fafc') : '#f8fafc';
   const chips = chipsDeLead(lead);
@@ -402,11 +406,13 @@ export default function CRMPage() {
   const [estado, despachar, listo] = useEstadoTabla(ID_LEADS, INICIAL_LEADS);
   const [enAnalisis, setEnAnalisis] = useState(false);
   const [filterStage, setFilterStage] = useState('all');
-  const { avisar, confirmar } = useAvisos();
+  const { avisar, avisarError, confirmar } = useAvisos();
   // Los perdidos (los 50 más recientes y el total real, RP61) y el estado de la carga del tablero.
   const [perdidos, setPerdidos] = useState(null);           // {items, total} | null (todavía no llegó)
   const [leadsListos, setLeadsListos] = useState(false);    // los activos llegaron al menos una vez
-  const [errorLeads, setErrorLeads] = useState(null);       // el error de la última carga de los leads
+  const [errorLeads, setErrorLeads] = useState(null);       // el error de la última carga de los activos
+  const [errorPerdidos, setErrorPerdidos] = useState(null); // r1 (m4, m9, m19): el de Perdido, aparte (lo dice su columna)
+  const [cargandoPerdidos, setCargandoPerdidos] = useState(false);
   const [etapasListas, setEtapasListas] = useState(false);  // hay etapas (del servidor o de la caché)
   const [errorEtapas, setErrorEtapas] = useState(null);     // el de la última carga de /crm/pipeline-stages
   const [selectedLead, setSelectedLead] = useState<any>(null);
@@ -475,7 +481,18 @@ export default function CRMPage() {
   // perdidos (los 50 más recientes y el total real) van en paralelo. Mientras recarga no se borra nada; si algo falla, su
   // error queda para «Reintentar» (nunca columnas vacías falsas). Fuera de la carga inicial también recarga la Lista.
   const recargarListaRef = useRef(() => {});
+  // T21 r1 (m14): el turno de cada carga y la versión de los leads (aplicarLead y quitarLead la suben). Una respuesta de
+  // una carga que ya no es la última no se aplica, y la de una carga que salió antes de un cambio no pisa los leads.
+  const turnoCarga = useRef(0);
+  // La versión es estado (aplicarLead y quitarLead la suben sin tocar refs: el Drawer los llama desde el render) y su
+  // copia en un ref es la que lee loadAll después del await.
+  const [versionDeLeads, setVersionDeLeads] = useState(0);
+  const versionLeads = useRef(0);
+  useEffect(() => { versionLeads.current = versionDeLeads; }, [versionDeLeads]);
+  const otraCargaRef = useRef(() => {});   // loadAll(false), puesto después de declararla (efecto de abajo)
   const loadAll = useCallback(async (showSpinner = true, opciones = {}) => {
+    const turno = ++turnoCarga.current;
+    const version = versionLeads.current;
     if (showSpinner) setLoading(true);
     const cached = getCachedStages();
     if (cached) {
@@ -489,6 +506,10 @@ export default function CRMPage() {
       _apiFetch('/crm/leads'),
       _apiFetch(RUTA_PERDIDOS),
     ]);
+    const { vigente, conLeads } = respuestaDeCarga({
+      turno, ultimoTurno: turnoCarga.current, version, versionActual: versionLeads.current,
+    });
+    if (!vigente) return;   // salió otra carga después: ella aplica todo y apaga el indicador
     if (etapas.status === 'fulfilled') {
       const arr = normalizarRespuesta(etapas.value).filas;
       setStages(arr);
@@ -497,17 +518,38 @@ export default function CRMPage() {
       setEtapasListas(true);
       setErrorEtapas(null);
     } else setErrorEtapas(etapas.reason);
+    // Un lead cambió mientras iba: estos leads son viejos. Se piden otra vez (la respuesta nueva ya trae el cambio).
+    if (!conLeads) { otraCargaRef.current(); return; }
     if (activos.status === 'fulfilled') {
       setLeads(normalizarRespuesta(activos.value).filas);
       setLeadsListos(true);
     }
+    setErrorLeads(activos.status === 'rejected' ? activos.reason : null);
+    // r1 (m4, m9, m19): si falla solo Perdido, el tablero sigue con los activos y la columna Perdido lo dice.
     if (perdidosRes.status === 'fulfilled') {
       const p = normalizarRespuesta(perdidosRes.value);
       setPerdidos({ items: p.filas, total: p.total });
+      setErrorPerdidos(null);
+    } else {
+      setPerdidos((prev) => prev ?? { items: [], total: null });
+      setErrorPerdidos(perdidosRes.reason);
     }
-    const fallo = [activos, perdidosRes].find((r) => r.status === 'rejected');
-    setErrorLeads(fallo ? fallo.reason : null);
-    if (showSpinner) setLoading(false);
+    setLoading(false);
+  }, []);
+  useEffect(() => { otraCargaRef.current = () => loadAll(false); }, [loadAll]);
+  // «Reintentar» de la columna Perdido: solo esa consulta.
+  const cargarPerdidos = useCallback(async () => {
+    const version = versionLeads.current;
+    setCargandoPerdidos(true);
+    try {
+      const p = normalizarRespuesta(await _apiFetch(RUTA_PERDIDOS));
+      if (version === versionLeads.current) setPerdidos({ items: p.filas, total: p.total });
+      setErrorPerdidos(null);
+    } catch (e) {
+      setErrorPerdidos(e);
+    } finally {
+      setCargandoPerdidos(false);
+    }
   }, []);
 
   // On mount: warmup pool, then load
@@ -523,7 +565,8 @@ export default function CRMPage() {
   const etapasPorId = useMemo(() => Object.fromEntries(stages.map((s) => [String(s.id), s])), [stages]);
   const columnasLista = useMemo(() => columnasLeads(etapasPorId), [etapasPorId]);
   const prefs = usePreferenciasTabla(ID_LEADS, columnasLista);
-  const extraLista = useMemo(() => ({ stage_id: filterStage === 'all' ? null : filterStage }), [filterStage]);
+  // r1 (I2): con la etapa Perdido, perdidos=solo (get_leads deja fuera los CANCELLED por defecto).
+  const extraLista = useMemo(() => extraListaLeads(filterStage, stages), [filterStage, stages]);
   const listado = useListado({
     ruta: '/crm/leads', estado, extra: extraLista, esperar: !listo, despachar, activo: estado.modo === 'lista' && !enAnalisis,
   });
@@ -538,15 +581,17 @@ export default function CRMPage() {
   // El tablero, en modo cliente (C4: /crm/leads devuelve todo, hasta 500): los activos y los perdidos con la búsqueda y la
   // etapa de la barra; null mientras no llegaron (sus columnas cargan, nunca «vacías»). Perdido cuenta su total real.
   const filtroTablero = useMemo(() => ({ q: estado.q, etapa: filterStage }), [estado.q, filterStage]);
+  // r1 (m11, m18): un perdido siempre va a Perdido (columnaDelTablero), el filtro de etapa usa esa misma regla y, sin
+  // etapa Perdido, los perdidos no se mezclan con los activos.
   const leadsTablero = useMemo(
-    () => (leadsListos && perdidos ? filtrarLeads(leadsDelTablero(leads, perdidos.items), filtroTablero) : null),
-    [leadsListos, perdidos, leads, filtroTablero],
+    () => (leadsListos && perdidos ? filtrarLeads(leadsDelTablero(leads, perdidos.items, stages), filtroTablero, stages) : null),
+    [leadsListos, perdidos, leads, filtroTablero, stages],
   );
   const columnasTablero = useMemo(() => columnasDesdeEtapas(stages), [stages]);
   const clavePerdido = useMemo(() => claveEtapaPerdido(stages), [stages]);
   const totalesTablero = useMemo(() => totalesDelTablero(stages, perdidos, filtroTablero), [stages, perdidos, filtroTablero]);
   const sumasTablero = useMemo(() => sumaPorEtapa(leadsTablero, stages), [leadsTablero, stages]);
-  const columnaDe = useCallback((l) => columnaDeLead(l, stages), [stages]);
+  const columnaDe = useCallback((l) => columnaDelTablero(l, stages), [stages]);
   const tablero = useTableroKanban({
     pantalla: ID_LEADS,
     modo: 'cliente',
@@ -555,19 +600,32 @@ export default function CRMPage() {
     porColumna: estado.tamano,
     items: leadsTablero,
     columnaDe,
-    esAtrasado: esLeadAtrasado,
+    esAtrasado: esLeadAtrasadoAbierto,
     totales: totalesTablero,
   });
+  // r1 (m4, m9, m19): si falló Perdido, su columna lo dice con «Reintentar» (que pide solo esa consulta); las demás siguen.
+  const datosVistos = datosDelTablero(tablero.datos, clavePerdido, { error: errorPerdidos, cargando: cargandoPerdidos });
+  const tableroVisto = datosVistos === tablero.datos ? tablero : {
+    ...tablero,
+    datos: datosVistos,
+    recargar: (claves) => {
+      if (!claves || claves.includes(clavePerdido)) cargarPerdidos();
+      tablero.recargar(claves);
+    },
+  };
 
   // Un lead que devolvió el servidor (crear, editar o mover) entra en su lista (activos o perdidos); la Lista, que es del
-  // servidor, se recarga. El tablero lo toma de sus items (D39: la pantalla no llama a tablero.recargar).
+  // servidor, se recarga. El tablero lo toma de sus items (D39: la pantalla no llama a tablero.recargar). r1 (m14): sube
+  // la versión de los leads, para que una carga que salió antes no pise el cambio.
   const aplicarLead = useCallback((lead) => {
     if (!lead || typeof lead !== 'object') return;
+    setVersionDeLeads((v) => v + 1);
     setLeads((prev) => conLeadActivo(prev, lead));
     setPerdidos((prev) => conLeadPerdido(prev, lead));
     recargarLista();
   }, [recargarLista]);
   const quitarLead = useCallback((id) => {
+    setVersionDeLeads((v) => v + 1);
     setLeads((prev) => sinLead(prev, id));
     setPerdidos((prev) => sinLeadPerdido(prev, id));
     recargarLista();
@@ -583,6 +641,11 @@ export default function CRMPage() {
   const elegirEtapa = (valor) => {
     setFilterStage(valor);
     despachar({ tipo: 'pagina', valor: 1 });
+  };
+  // r1 (m21): «Limpiar» de la barra vieja: borra a la vez la búsqueda y la etapa (limpiarFiltros vuelve a la página 1).
+  const limpiarFiltros = () => {
+    setFilterStage('all');
+    despachar({ tipo: 'limpiarFiltros' });
   };
   // Un movimiento de «Requieren atención» abre su lead; si no está cargado, se avisa (ANALISIS-crm punto 2).
   const abrirMovimiento = (fila) => {
@@ -758,10 +821,17 @@ export default function CRMPage() {
   // {pipeline_stage_id} de PATCH /crm/leads/{id}/stage; el servidor copia el status de la etapa. Si falla, lanza y la
   // tarjeta vuelve con el mensaje del servidor (useAvisos; el <Toaster/> ya está montado, RP105).
   async function moverDesdeTablero(lead, resultado) {
-    const updated = await apiFetch(`/crm/leads/${lead.id}/stage`, { method: 'PATCH', body: JSON.stringify(resultado.cuerpo) });
-    aplicarLead(updated);
-    if (selectedLead?.id === updated?.id) setSelectedLead(updated);
-    return updated;
+    try {
+      const updated = await apiFetch(`/crm/leads/${lead.id}/stage`, { method: 'PATCH', body: JSON.stringify(resultado.cuerpo) });
+      aplicarLead(updated);
+      if (selectedLead?.id === updated?.id) setSelectedLead(updated);
+      return updated;
+    } catch (err) {
+      // r1 (m17): la regla única (recargarTrasError): un 400, un 409 o un corte de red recargan los activos, Perdido y la
+      // Lista (en modo cliente el tablero no recarga solo). El tablero devuelve la tarjeta y avisa el detail.
+      if (recargarTrasError(err)) loadAll(false);
+      throw err;
+    }
   }
 
 
@@ -810,7 +880,8 @@ export default function CRMPage() {
     try {
       await apiFetch(`/crm/pipeline-stages/${s.id}/config`, { method: 'PUT',
         body: JSON.stringify(s) });
-      setStages(prev => prev.map(st => st.id === s.id ? { ...st, ...s } : st));
+      // B4 T21 r1 (m22): a las etapas del tablero solo entran los campos de /crm/pipeline-stages (no is_closed ni alertas).
+      setStages(prev => prev.map(st => st.id === s.id ? { ...st, ...camposDeEtapa(s) } : st));
       toast.success(`Etapa "${s.name}" guardada`);
     } catch (e) { toast.error(e.message); }
   }
@@ -820,12 +891,15 @@ export default function CRMPage() {
     setConfigStages(stages.map(s => ({ ...s })));
     setShowConfig(true);
     // B4 T21 (KANBAN-crm punto 3): /pipeline-stages/config queda para este panel del administrador (sus campos de
-    // alerta). Sus datos completan los de cada etapa sin pisar lo que ya está (ni lo que se escribe mientras llega);
-    // un 403 (asesor) o un error deja el panel con las etapas de /crm/pipeline-stages.
+    // alerta). Sus datos completan los de cada etapa sin pisar lo que ya está (ni lo que se escribe mientras llega).
+    // r1 (m13): un 403 (el asesor no lee /config) deja el panel con las etapas de /crm/pipeline-stages; otro error
+    // (un 500, sin red) se dice.
     apiFetch('/crm/pipeline-stages/config').then(d => {
       const deConfig = Object.fromEntries((Array.isArray(d) ? d : []).map(s => [s.id, s]));
       setConfigStages(prev => prev.map(s => ({ ...(deConfig[s.id] || {}), ...s })));
-    }).catch(() => {});
+    }).catch((err) => {
+      if (err?.status !== 403) avisarError(err, 'No se pudo cargar la configuración de las etapas');
+    });
   }
 
   // Build the edit form snapshot from a lead's CURRENT data (used both when
@@ -906,7 +980,7 @@ export default function CRMPage() {
       <div className="bg-white border-b border-slate-200 flex-shrink-0 px-6 py-4">
         <PageHeader icon={LayoutGrid} color="indigo"
           title="CRM Pipeline"
-          subtitle={leadsListos ? `${leads.length} leads · ${formatCOP(totalValue)} en pipeline`
+          subtitle={leadsListos ? `${leads.length} leads · ${formatoPesos(totalValue)} en pipeline`
             : errorLeads ? 'No se pudieron cargar los leads' : 'Cargando leads…'}
           actions={(
             <div className="flex items-center gap-2 flex-wrap">
@@ -949,13 +1023,23 @@ export default function CRMPage() {
               <BarraTabla
                 estado={estado}
                 onEstado={despachar}
-                placeholder={estado.modo === 'lista' ? 'Buscar por cliente, producto o descripción…' : 'Buscar por cliente, producto, asesor…'}
+                // r1 (m1, m20): un solo texto; q del servidor también busca por asesor (6b83780).
+                placeholder="Buscar por cliente, producto, asesor…"
                 filtros={(
-                  <select aria-label="Filtrar por etapa" value={filterStage} onChange={e => elegirEtapa(e.target.value)}
-                    className={`rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 ${FOCO_VISIBLE}`}>
-                    <option value="all">Todas las etapas</option>
-                    {stages.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
+                  <>
+                    <select aria-label="Filtrar por etapa" value={filterStage} onChange={e => elegirEtapa(e.target.value)}
+                      className={`rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 ${FOCO_VISIBLE}`}>
+                      <option value="all">Todas las etapas</option>
+                      {stages.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                    {/* r1 (m21): el «Limpiar» de la barra vieja: la búsqueda y la etapa a la vez. */}
+                    {hayFiltroDeLeads(filtroTablero) && (
+                      <button type="button" onClick={limpiarFiltros}
+                        className={`inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-100 hover:text-slate-800 ${FOCO_VISIBLE}`}>
+                        <X size={13} aria-hidden="true"/> Limpiar
+                      </button>
+                    )}
+                  </>
                 )}
                 ajustes={{ columnas: columnasLista, preferencias: prefs, anchoRef: anchoTablaRef }}
                 pantallaCompleta={estado.modo === 'lista' ? { completa, alternar } : undefined}
@@ -964,7 +1048,14 @@ export default function CRMPage() {
                   estadoTotal: estadoDelTotal({
                     total: listado.total, cargando: listado.cargandoInicial, recargando: listado.recargando, error: listado.error,
                   }),
-                } : {})}
+                } : {
+                  // r1 (m21): el «N leads» de la barra vieja en Kanban: lo que cuentan las columnas (Perdido, su total real).
+                  total: totalDelTablero(leadsTablero, stages, totalesTablero),
+                  estadoTotal: estadoDelTotal({
+                    total: totalDelTablero(leadsTablero, stages, totalesTablero), cargando: !leadsTablero, recargando: loading,
+                    error: leadsTablero ? null : errorLeads,
+                  }),
+                })}
               />
               {estado.modo === 'lista' && (
                 <AccionesLead.Provider value={{ abrir: openDetail, borrar: handleDeleteLead }}>
@@ -992,37 +1083,45 @@ export default function CRMPage() {
               )}
             </section>
             {estado.modo === 'kanban' && (() => {
-              // Mientras faltan las preferencias o las etapas: el esqueleto. Sin etapas por un error: el error con
-              // «Reintentar» (nunca columnas vacías falsas). Con etapas y sin leads todavía: cada columna carga.
-              if (!listo || (!etapasListas && (loading || !errorEtapas))) return <EsqueletoTablero/>;
-              if (!etapasListas) {
+              // Qué se pinta según la carga (vistaDelTablero, r1): el esqueleto mientras faltan las preferencias o las
+              // etapas; sin etapas o sin los activos por un error, el error con «Reintentar» (nunca columnas vacías
+              // falsas); si no, el tablero (sin leads todavía, cada columna carga; si falló Perdido, lo dice su columna).
+              const vista = vistaDelTablero({
+                listo, etapasListas, errorEtapas, cargando: loading, hayColumnas: columnasTablero.length > 0, leadsListos, errorLeads,
+              });
+              if (vista === 'esqueleto') return <EsqueletoTablero/>;
+              if (vista === 'error-etapas') {
                 return <ErrorCarga texto={textoDeError(errorEtapas, 'No se pudieron cargar las etapas del CRM')} onReintentar={() => loadAll()}/>;
               }
-              if (!columnasTablero.length) {
+              if (vista === 'sin-etapas') {
                 return (
                   <p className="rounded-2xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-600">
                     No hay etapas configuradas. Créalas en «Configurar CRM».
                   </p>
                 );
               }
-              if (!leadsTablero && errorLeads && !loading) {
+              if (vista === 'error-leads') {
                 return <ErrorCarga texto={textoDeError(errorLeads, 'No se pudieron cargar los leads')} onReintentar={() => loadAll()}/>;
               }
               const fallo = errorLeads || errorEtapas;
+              // Plegada, la columna Perdido solo muestra «—»: el aviso dice qué falló y deja reintentar.
+              const falloPerdido = errorPerdidos && !cargandoPerdidos && clavePerdido && tablero.plegadas.includes(clavePerdido);
               return (
                 <TableroKanban
-                  tablero={tablero}
+                  tablero={tableroVisto}
                   regla={reglaSoltarLead}
                   onCambio={moverDesdeTablero}
                   onAbrir={openDetail}
                   tarjetaDe={tarjetaDeLead}
                   renderTarjeta={(lead, contexto) => (
-                    <LeadCard lead={lead} stage={etapasPorId[columnaDeLead(lead, stages)]} contexto={contexto}/>
+                    <LeadCard lead={lead} stage={etapasPorId[columnaDelTablero(lead, stages)]} contexto={contexto}/>
                   )}
                   accionesTarjeta={(lead) => [
                     { etiqueta: 'Borrar', icono: Trash2, peligro: true, onClick: () => handleDeleteLead(lead) },
                   ]}
-                  resumenColumna={(clave) => textoResumenEtapa(clave, sumasTablero, { clavePerdido, perdidos })}
+                  // r1 (I1): mientras la columna carga (o no hay leads), sin resumen: nunca «$0».
+                  resumenColumna={(clave, d) => (d.cargando || d.error || !leadsTablero
+                    ? null : textoResumenEtapa(clave, sumasTablero, { clavePerdido, perdidos }))}
                   pieColumna={(clave) => (
                     <button type="button" onClick={() => {
                       setNlForm(f => ({...f, pipeline_stage_id: clave}));
@@ -1033,11 +1132,21 @@ export default function CRMPage() {
                   )}
                   color="indigo"
                   vacio="Sin leads aquí"
-                  aviso={fallo && leadsTablero ? (
-                    <p role="alert" className="text-rose-800">
-                      {textoDeError(fallo, 'No se pudo actualizar el CRM')}{' '}
-                      <button type="button" onClick={() => loadAll()} className={`rounded font-bold underline ${FOCO_VISIBLE}`}>Reintentar</button>
-                    </p>
+                  aviso={(fallo && leadsTablero) || falloPerdido ? (
+                    <div className="flex flex-col gap-1">
+                      {fallo && leadsTablero && (
+                        <p role="alert" className="text-rose-800">
+                          {textoDeError(fallo, 'No se pudo actualizar el CRM')}{' '}
+                          <button type="button" onClick={() => loadAll()} className={`rounded font-bold underline ${FOCO_VISIBLE}`}>Reintentar</button>
+                        </p>
+                      )}
+                      {falloPerdido && (
+                        <p role="alert" className="text-rose-800">
+                          {textoDeError(errorPerdidos, 'No se pudo cargar la columna Perdido')}{' '}
+                          <button type="button" onClick={cargarPerdidos} className={`rounded font-bold underline ${FOCO_VISIBLE}`}>Reintentar</button>
+                        </p>
+                      )}
+                    </div>
                   ) : undefined}
                 />
               );
