@@ -941,7 +941,8 @@ export default function CRMPage() {
           En Lista, la tabla estándar en el servidor; en Kanban, el tablero común en modo cliente con los mismos filtros.
           «Análisis» reemplaza las dos. */}
       {!enAnalisis && (
-        <div className="flex-1 min-h-0 overflow-y-auto p-5">
+        // pb-24 en Lista: al final de la tabla, la paginación y los ⋯ de las últimas filas no quedan bajo el botón de la IA.
+        <div className={`flex-1 min-h-0 overflow-y-auto p-5 ${estado.modo === 'lista' ? 'pb-24' : ''}`}>
           <div className="flex min-w-0 flex-col gap-4">
             {capa}
             <section ref={refTarjeta} className={claseTarjeta}>
