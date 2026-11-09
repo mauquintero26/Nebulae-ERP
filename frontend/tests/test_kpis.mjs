@@ -1546,11 +1546,12 @@ console.log('--- TEST 35 (B4 T23B, KPI-otros punto 6; H13, RP70): el Asistente o
   assert.match(codigo, /\{ficha\.mini\[2\]\.etiqueta\}/);
   assert.ok(!/formatCOP|\.split\(','\)|Revenue Total|Total Pedidos|Ticket Promedio|>Activos</.test(codigo), 'sin los nombres ni el formato viejos');
   // H13: el estado de cada pedido sale de infoEstadoPedido (sin EN_BODEGA ni DISPONIBLE_ENTREGA), también en la pestaña de cerrados.
-  assert.match(codigo, /const info = infoEstadoPedido\(estado\);/);
+  assert.match(codigo, /import \{ clasesDeEstadoPedido \} from '@\/lib\/estados-pedido';/);   // m33: la etiqueta sale de la lib (con su caso)
+  assert.ok(!/infoEstadoPedido|const clasesDeEstado =/.test(codigo), 'sin la copia local de la etiqueta');
   assert.ok(!/STATUS_BADGES|EN_BODEGA|DISPONIBLE_ENTREGA/.test(codigo), 'sin STATUS_BADGES ni los estados que no existen');
-  assert.match(codigo, /const badge = clasesDeEstado\(ord\.estado\);/);
+  assert.match(codigo, /const badge = clasesDeEstadoPedido\(ord\.estado\);/);
   assert.ok(!/>\s*Entregado\s*<\/span>/.test(codigo), 'los cerrados dicen su estado real, no un «Entregado» fijo');
-  assert.equal((codigo.match(/clasesDeEstado\(ord\.estado\)/g) ?? []).length, 3, 'las dos pestañas de pedidos usan clasesDeEstado');
+  assert.equal((codigo.match(/clasesDeEstadoPedido\(ord\.estado\)/g) ?? []).length, 3, 'las dos pestañas de pedidos usan clasesDeEstadoPedido');
   assert.equal((codigo.match(/formatoPesos\(ord\.total_cop\)/g) ?? []).length, 2);
   // Se conserva lo de B1 a B3: los tipos y la modalidad (SolicitudTipoYDetalle), el selector de cliente y la creación de la SC.
   assert.match(codigo, /import \{ SolicitudTipoYDetalle, type SolicitudTipoYDetalleHandle \} from '\.\.\/ventas\/solicitud\/solicitud-client';/);
@@ -1563,6 +1564,20 @@ console.log('--- TEST 35 (B4 T23B, KPI-otros punto 6; H13, RP70): el Asistente o
   assert.match(codigo, /\{acceso\.listo && !acceso\.contexto \? \(/);
   assert.match(codigo, /Tu rol no ve el contexto del cliente\./);
   assert.match(codigo, /setErrorContexto\(\{ error: err, pedido: customerIdentifier \}\);/);
+  // m8 y m14: sin permiso no se pide el contexto (tampoco desde el mensaje de Chatwoot, montado una sola vez: el acceso va por un ref).
+  assert.match(codigo, /accesoRef\.current = acceso\.contexto;/);
+  assert.match(codigo, /const loadCustomerContext = async \(customerIdentifier: \{[^}]*\}\) => \{\s*if \(!accesoRef\.current\) return;/);
+  // m8: un error de la carga no deja «Sin cliente seleccionado» debajo del aviso (vistaContexto).
+  assert.match(codigo, /const vista = vistaContexto\(loadingContext, errorContexto\?\.error, contextData\);/);
+  assert.match(codigo, /\{vista === 'error' && errorContexto && \(\(\) => \{/);
+  assert.match(codigo, /\{vista === 'cargando' \? \(/);
+  assert.match(codigo, /\) : vista === 'contexto' \? \(/);
+  assert.match(codigo, /\) : vista === 'vacio' \? \(/);
+  // P19 (m35): el error de la búsqueda se guarda y se dice.
+  assert.match(codigo, /setSearchResults\(\[\]\);\s*setErrorBusqueda\(err\);/);
+  assert.match(codigo, /<p role="alert" className="[^"]*">\{textoDeError\(errorBusqueda, 'No se pudo buscar clientes'\)\}<\/p>/);
+  // m9: la tarjeta «Pedidos en curso» aclara que incluye los facturados.
+  assert.match(codigo, /title=\{ficha\.mini\[1\]\.ayuda \?\? undefined\}/);
   assert.match(codigo, /<AvisoFuente aviso=\{a\} onReintentar=\{\(\) => loadCustomerContext\(errorContexto\.pedido\)\} \/>/);
 }
 

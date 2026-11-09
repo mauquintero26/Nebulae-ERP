@@ -11,8 +11,8 @@ import { AvisoFuente } from '@/components/ui/AvisoFuente';
 import { useRolActual } from '@/components/ui/useRolActual';
 import { accesoAsistente } from '@/lib/roles';
 import { avisoDeFuente, textoDeError } from '@/lib/avisos';
-import { fichaRevenueAsistente } from '@/lib/kpis';
-import { infoEstadoPedido } from '@/lib/estados-pedido';
+import { fichaRevenueAsistente, vistaContexto } from '@/lib/kpis';
+import { clasesDeEstadoPedido } from '@/lib/estados-pedido';
 import { formatoPesos } from '@/lib/pesos';
 // Mismo modal de cliente nuevo y el mismo bloque de Tipo/Modalidad/campos por
 // tipo que usa la Solicitud de Cliente real (/dashboard/ventas/solicitud) --
@@ -28,17 +28,13 @@ import { nombreCliente } from '@/lib/cliente-desde-busqueda';
 
 const CHATWOOT_URL = 'https://chatbot-crn-chatwoot.ionwxk.easypanel.host/app/accounts/1/conversations';
 
-/** B4 T23B (H13): el estado de un pedido sale de infoEstadoPedido (lib/estados-pedido.js), la única fuente: sin los EN_BODEGA ni
- * DISPONIBLE_ENTREGA que el servidor no manda, y un estado que no conoce sale humanizado en gris, nunca el código crudo. */
-const clasesDeEstado = (estado: unknown) => {
-  const info = infoEstadoPedido(estado);
-  return { etiqueta: info.label, clases: `${info.clases.bg} ${info.clases.text} ${info.clases.border}` };
-};
-
 export default function AsistenteOmnicanal() {
   // B4 T23B: la columna de contexto pide solo lo que el rol puede leer (accesoAsistente: /chat/search-customers y /customer-context son
   // de ADMIN y ASESOR); el rol se lee después de montar. Un error se dice, con «Reintentar» (un 403, sin él).
   const acceso = accesoAsistente(useRolActual());
+  // El mensaje de Chatwoot se escucha UNA vez (con el primer render): el acceso vigente se lee por un ref.
+  const accesoRef = useRef(false);
+  useEffect(() => { accesoRef.current = acceso.contexto; }, [acceso.contexto]);
   const [errorBusqueda, setErrorBusqueda] = useState<unknown>(null);
   const [errorContexto, setErrorContexto] = useState<{ error: unknown; pedido: { id?: number; phone?: string; email?: string; q?: string } } | null>(null);
   const [iframeKey, setIframeKey] = useState(0);
@@ -89,6 +85,8 @@ export default function AsistenteOmnicanal() {
   // La tarjeta oscura del cliente: los nombres y el formato del catálogo (fichaRevenueAsistente: Total comprado, Total de pedidos, Pedidos
   // en curso y Ticket promedio, con formatoPesos).
   const ficha = fichaRevenueAsistente(contextData?.revenue);
+  // Qué muestra la columna (función pura): con un error de la carga no sale «Sin cliente seleccionado» debajo del aviso.
+  const vista = vistaContexto(loadingContext, errorContexto?.error, contextData);
 
   // Asesor por defecto = usuario logueado (mismo origen de dato que usa
   // solicitud-client.tsx), para que advisor_name no viaje vacio al backend.
@@ -127,6 +125,7 @@ export default function AsistenteOmnicanal() {
 
   // Cargar contexto cuando se selecciona un cliente
   const loadCustomerContext = async (customerIdentifier: { id?: number; phone?: string; email?: string; q?: string }) => {
+    if (!accesoRef.current) return;
     setLoadingContext(true);
     try {
       const params = new URLSearchParams();
@@ -459,17 +458,17 @@ export default function AsistenteOmnicanal() {
             {/* CUERPO DEL CONTEXTO (SCROLLABLE) */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
 
-              {errorContexto && !loadingContext && (() => {
+              {vista === 'error' && errorContexto && (() => {
                 const a = avisoDeFuente(errorContexto.error, 'No se pudo cargar el perfil del cliente');
                 return a ? <AvisoFuente aviso={a} onReintentar={() => loadCustomerContext(errorContexto.pedido)} /> : null;
               })()}
 
-              {loadingContext ? (
+              {vista === 'cargando' ? (
                 <div className="flex flex-col items-center justify-center py-16 text-slate-400 space-y-2">
                   <RefreshCw size={24} className="animate-spin text-indigo-500" />
                   <span className="text-xs font-bold">Cargando perfil 360 del cliente...</span>
                 </div>
-              ) : contextData ? (
+              ) : vista === 'contexto' ? (
                 <>
                   {/* CARD DE REVENUE Y PERFIL FINANCIERO */}
                   <div className="p-4 bg-gradient-to-br from-indigo-900 via-slate-900 to-indigo-950 text-white rounded-2xl shadow-md relative overflow-hidden">
@@ -497,7 +496,7 @@ export default function AsistenteOmnicanal() {
                           <div className="text-sm font-bold text-white mt-0.5">{ficha.mini[0].texto}</div>
                         </div>
                         <div>
-                          <div className="text-[10px] text-slate-400">{ficha.mini[1].etiqueta}</div>
+                          <div className="text-[10px] text-slate-400" title={ficha.mini[1].ayuda ?? undefined}>{ficha.mini[1].etiqueta}</div>
                           <div className="text-sm font-bold text-amber-300 mt-0.5">{ficha.mini[1].texto}</div>
                         </div>
                         <div>
@@ -577,7 +576,7 @@ export default function AsistenteOmnicanal() {
                           </div>
                         ) : (
                           contextData.active_orders.map((ord: any) => {
-                            const badge = clasesDeEstado(ord.estado);
+                            const badge = clasesDeEstadoPedido(ord.estado);
                             return (
                               <div key={ord.id} className="p-3 bg-white border border-slate-200 rounded-xl shadow-xs space-y-2">
                                 <div className="flex items-center justify-between">
@@ -614,8 +613,8 @@ export default function AsistenteOmnicanal() {
                             <div key={ord.id} className="p-3 bg-white border border-slate-200 rounded-xl shadow-xs space-y-1.5">
                               <div className="flex items-center justify-between">
                                 <span className="text-xs font-bold text-slate-800">{ord.numero}</span>
-                                <span className={`text-[10px] px-2 py-0.5 border rounded-full font-bold ${clasesDeEstado(ord.estado).clases}`}>
-                                  {clasesDeEstado(ord.estado).etiqueta}
+                                <span className={`text-[10px] px-2 py-0.5 border rounded-full font-bold ${clasesDeEstadoPedido(ord.estado).clases}`}>
+                                  {clasesDeEstadoPedido(ord.estado).etiqueta}
                                 </span>
                               </div>
                               <div className="text-[11px] text-slate-500">{ord.productos_resumen}</div>
@@ -726,7 +725,7 @@ export default function AsistenteOmnicanal() {
 
                   </div>
                 </>
-              ) : (
+              ) : vista === 'vacio' ? (
                 /* ESTADO SIN CLIENTE SELECCIONADO */
                 <div className="flex flex-col items-center justify-center py-16 px-4 text-center space-y-3">
                   <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
@@ -739,7 +738,7 @@ export default function AsistenteOmnicanal() {
                     </p>
                   </div>
                 </div>
-              )}
+              ) : null}
 
             </div>
           </aside>
