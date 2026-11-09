@@ -1607,6 +1607,8 @@ console.log('--- TEST 37 (B4 T23B r1; I2, m6, m12, m31): las rutas de carga y de
   // La misma campaña que se vuelve a pedir: se conserva lo que se veía, atenuado.
   const c = k.lecturaLeadsCampana(llego('5:0', '5', L), '5:1', '5', true);
   assert.deepEqual(c, { leads: L, cargando: true, recargando: true, error: null, estado: 'actualizando' });
+  // Lo que llegó es de otra campaña aunque la vuelta coincida: sigue sin verse y sigue 'cargando' (mata el mutante de la revisión).
+  assert.deepEqual(k.lecturaLeadsCampana(llego('6:0', '5', L), '6:0', '6', true), { leads: null, cargando: true, recargando: false, error: null, estado: 'cargando' });
   // Un error de ESA campaña se dice; el de otra no.
   const e = new Error('x');
   assert.deepEqual(k.lecturaLeadsCampana(llego('5:0', '5', null, e), '5:0', '5', true), { leads: null, cargando: false, recargando: false, error: e, estado: 'error' });
