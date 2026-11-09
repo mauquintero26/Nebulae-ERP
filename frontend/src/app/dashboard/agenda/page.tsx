@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { CambiosDeActividad } from '@/app/dashboard/ventas/flujo';
 import { itemDeTimelineCliente, proveedorDeServidor } from '@/lib/datos-cliente';
+import { fechaCorta } from '@/lib/fechas-colombia';
 // B4 T23B: la franja de indicadores estándar de la ficha del cliente y del proveedor (KPI-otros punto 3).
 import { FranjaKpis, TarjetaKpi, AvisoFuente } from '@/components/ui';
 import { avisoDeFuente } from '@/lib/avisos';
@@ -910,7 +911,7 @@ export default function AgendaPage() {
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-400 mt-0.5">
-                      Fecha: {pec.fecha_pedido ? new Date(pec.fecha_pedido).toLocaleDateString('es-CO') : '-'}
+                      Fecha: {pec.fecha_compra ? fechaCorta(pec.fecha_compra) : '-'}
                     </p>
                   </div>
                   <div className="text-right">

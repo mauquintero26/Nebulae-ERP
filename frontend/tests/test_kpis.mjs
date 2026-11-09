@@ -1347,7 +1347,10 @@ console.log('--- TEST 31 (B4 T23B, KPI-otros punto 2; RP7, R12, C13): Seguimient
   // Las tarjetas: las 3 primeras etapas con el color de su clase (acento de tarjetasSeguimientos) y el total; pulsables, el número de su vista.
   assert.match(codigo, /const tarjetas = tarjetasSeguimientos\(leads, stages, filtro\);/);
   assert.match(codigo, /tarjetas\.etapas\.map\(\(e\) => \(\s*<TarjetaKpi key=\{e\.clave\} etiqueta=\{e\.nombre\} icono="Circle" color=\{e\.acento\} valor=\{e\.valor\} activo=\{e\.activa\}\s*onClick=\{\(\) => setActiveStage\(e\.activa \? 'all' : e\.clave\)\} \/>/);
-  assert.match(codigo, /<TarjetaKpi kpi="leads_total" valor=\{tarjetas\?\.total\.valor \?\? null\} ayuda=\{tarjetas\?\.total\.ayuda\}\s*activo=\{tarjetas\?\.total\.activa\} onClick=\{\(\) => setActiveStage\('all'\)\} \/>/);
+  assert.match(codigo, /<TarjetaKpi kpi="leads_total" valor=\{tarjetas\?\.total\.valor \?\? null\} ayuda=\{tarjetas\?\.total\.ayuda \?\? sinPermiso \?\? undefined\}\s*activo=\{tarjetas\?\.total\.activa\} onClick=\{\(\) => setActiveStage\('all'\)\} \/>/);
+  // Un 403 que llega igual: «—» con el motivo de permiso en la tarjeta y sin «Reintentar».
+  assert.match(codigo, /const sinPermiso = aviso\?\.tipo === 'permiso' \? aviso\.texto : null;/);
+  assert.match(codigo, /<FranjaKpis estado=\{aviso\?\.tipo === 'permiso' \? 'listo' : estadoKpi\}/);
   assert.ok(!/StatCard|variant="gradient"|backgroundColor: s\.color|stage\.color|s\.color \|\|/.test(codigo), 'sin StatCard ni el color-clase como CSS');
   // Una sola vista: la búsqueda, las pastillas, los grupos y las tarjetas usan filtrarSeguimiento (no JSON.stringify ni un filter propio).
   assert.match(codigo, /const filtrados = filtrarSeguimiento\(leads, stages, filtro\);/);
@@ -1373,8 +1376,10 @@ console.log('--- TEST 32 (B4 T23B, KPI-otros punto 4; RP55, RP70): la portada de
   assert.match(codigo, /const estado = useEstadoKpi\(cargando, error\);/);
   assert.match(codigo, /const t = tarjetasMarketing\(datos\);/);
   for (const id of ['camp_activas', 'leads_capturados', 'ventas_atribuidas', 'flujos_activos']) {
-    assert.match(codigo, new RegExp(`<TarjetaKpi kpi="${id}" valor=\\{t\\.${id}\\.valor\\} ayuda=\\{t\\.${id}\\.ayuda \\?\\? undefined\\} />`), id);
+    assert.match(codigo, new RegExp(`<TarjetaKpi kpi="${id}" valor=\\{t\\.${id}\\.valor\\} ayuda=\\{t\\.${id}\\.ayuda \\?\\? sinPermiso\\} />`), id);
   }
+  // Un 403 que llega igual: «—» con el motivo de permiso en cada tarjeta y sin «Reintentar».
+  assert.match(codigo, /const sinPermiso = aviso\?\.tipo === 'permiso' \? aviso\.texto : undefined;/);
   assert.match(codigo, /<FranjaKpis estado=\{aviso\?\.tipo === 'permiso' \? 'listo' : estado\} titulo="Indicadores de Marketing">/);
   assert.match(codigo, /\{aviso && <AvisoFuente aviso=\{aviso\} onReintentar=\{reintentar\} \/>\}/);
   // Sin el '...' del cargando, la grilla fija de 4, el gradient, el .catch mudo ni StatCard; los porcentajes los da formatoValorKpi (en la lib).
@@ -1424,6 +1429,8 @@ console.log('--- TEST 33 (B4 T23B, KPI-otros punto 4 y TABLA-otros punto 6; R11,
   assert.match(codigo, /<TarjetaKpi kpi="roi" valor=\{tarjetasMetricas\.roi\.valor\} tono=\{tarjetasMetricas\.roi\.tono\} ayuda=\{tarjetasMetricas\.roi\.ayuda \?\? undefined\} \/>/);
   assert.ok(!/StatCard|\+\$\{|toFixed\(0\)|Intl\.NumberFormat/.test(codigo), 'sin StatCard, el «+» fijo del ROI ni el formato de dinero propio');
   assert.match(codigo, /const fCOP = \(v: number\) => formatoPesos\(v \|\| 0\);/);
+  // El botón flotante de la IA no tapa la última fila de la tabla de leads: el panel baja 96 px de más (medido en el banco a 1024 x 600).
+  assert.match(codigo, /<div className="flex-1 overflow-y-auto p-6 pb-24">/);
 }
 
 console.log('--- TEST 34 (B4 T23B, KPI-otros punto 3; H13, RP66, RP70): la Agenda: la ficha del cliente, la del proveedor y los enlaces ---');
@@ -1448,6 +1455,9 @@ console.log('--- TEST 34 (B4 T23B, KPI-otros punto 3; H13, RP66, RP70): la Agend
   assert.match(codigo, /<TarjetaKpi kpi="prov_pedidos_compra" valor=\{tarjetasProveedor\.prov_pedidos_compra\.valor\}/);
   assert.ok(!/Moneda Habitual|Tiempo Entrega Estimado|Pedidos PEC Emitidos|supplierPecs\.length\} ordenes|selectedSupplier\.condiciones_pago \|\| 'Contado'\}/.test(codigo), 'sin las tarjetas viejas del proveedor');
   assert.match(codigo, /setSuppliers\(Array\.isArray\(list\) \? list\.map\(proveedorDeServidor\)\.filter\(Boolean\) : \[\]\);/);
+  // La fecha de cada pedido de compra es fecha_compra (_pec_dict no manda fecha_pedido), un día de calendario (fechaCorta), no un instante.
+  assert.match(codigo, /Fecha: \{pec\.fecha_compra \? fechaCorta\(pec\.fecha_compra\) : '-'\}/);
+  assert.ok(!/fecha_pedido/.test(codigo), 'sin la clave que el servidor no manda');
   assert.match(codigo, /apiFetch\(`\/compras\/pedidos\?supplier_id=\$\{sup\.id\}&limit=200`\)/);
   // H13 (RP66): los dos enlaces del Historial Comercial a rutas que existen.
   assert.match(codigo, /<Link href="\/dashboard\/ventas\/solicitud" className="[^"]*">Ver SC →<\/Link>/);

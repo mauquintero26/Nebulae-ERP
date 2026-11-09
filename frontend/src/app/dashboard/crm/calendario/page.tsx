@@ -55,6 +55,7 @@ export default function SeguimientosPage() {
   const leads = datos?.leads ?? null;
   const stages = datos?.stages ?? null;
   const reintentar = () => setVuelta((n) => n + 1);
+  const sinPermiso = aviso?.tipo === 'permiso' ? aviso.texto : null;
 
   // Una sola vista para las tarjetas, las pastillas y los grupos (filtrarSeguimiento): el número de cada una es el de lo que abre.
   const filtro = { q: search, etapa: activeStage };
@@ -114,7 +115,7 @@ export default function SeguimientosPage() {
                     onClick={() => setActiveStage(e.activa ? 'all' : e.clave)} />
                 ))
                 : cargando && [0, 1, 2].map((i) => <TarjetaKpi key={i} etiqueta="Etapa" icono="Circle" valor={null} />)}
-              <TarjetaKpi kpi="leads_total" valor={tarjetas?.total.valor ?? null} ayuda={tarjetas?.total.ayuda}
+              <TarjetaKpi kpi="leads_total" valor={tarjetas?.total.valor ?? null} ayuda={tarjetas?.total.ayuda ?? sinPermiso ?? undefined}
                 activo={tarjetas?.total.activa} onClick={() => setActiveStage('all')} />
             </FranjaKpis>
 

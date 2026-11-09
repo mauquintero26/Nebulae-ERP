@@ -40,6 +40,7 @@ export default function MarketingDashboard() {
   const aviso = avisoDeFuente(error, 'No se pudieron cargar los indicadores de Marketing');
   const t = tarjetasMarketing(datos);
   const reintentar = () => setVuelta((n) => n + 1);
+  const sinPermiso = aviso?.tipo === 'permiso' ? aviso.texto : undefined;
 
   // «Visitantes & Leads» salió del menú (R14: su pantalla no tiene datos reales) y no se ofrece desde aquí (RP55).
   const MODULES = [
@@ -68,10 +69,10 @@ export default function MarketingDashboard() {
           <>
             {aviso && <AvisoFuente aviso={aviso} onReintentar={reintentar} />}
             <FranjaKpis estado={aviso?.tipo === 'permiso' ? 'listo' : estado} titulo="Indicadores de Marketing">
-              <TarjetaKpi kpi="camp_activas" valor={t.camp_activas.valor} ayuda={t.camp_activas.ayuda ?? undefined} />
-              <TarjetaKpi kpi="leads_capturados" valor={t.leads_capturados.valor} ayuda={t.leads_capturados.ayuda ?? undefined} />
-              <TarjetaKpi kpi="ventas_atribuidas" valor={t.ventas_atribuidas.valor} ayuda={t.ventas_atribuidas.ayuda ?? undefined} />
-              <TarjetaKpi kpi="flujos_activos" valor={t.flujos_activos.valor} ayuda={t.flujos_activos.ayuda ?? undefined} />
+              <TarjetaKpi kpi="camp_activas" valor={t.camp_activas.valor} ayuda={t.camp_activas.ayuda ?? sinPermiso} />
+              <TarjetaKpi kpi="leads_capturados" valor={t.leads_capturados.valor} ayuda={t.leads_capturados.ayuda ?? sinPermiso} />
+              <TarjetaKpi kpi="ventas_atribuidas" valor={t.ventas_atribuidas.valor} ayuda={t.ventas_atribuidas.ayuda ?? sinPermiso} />
+              <TarjetaKpi kpi="flujos_activos" valor={t.flujos_activos.valor} ayuda={t.flujos_activos.ayuda ?? sinPermiso} />
             </FranjaKpis>
           </>
         )}
