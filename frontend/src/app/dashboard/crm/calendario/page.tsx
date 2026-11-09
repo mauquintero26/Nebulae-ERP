@@ -13,11 +13,11 @@ import { AvisoFuente } from '@/components/ui/AvisoFuente';
 import { useRolActual } from '@/components/ui/useRolActual';
 import { CRM_NAV } from '../crm-nav';
 import { accesoSeguimientos } from '@/lib/roles';
-import { avisoDeFuente } from '@/lib/avisos';
+import { avisoDeFuente, estadoFranjaDeFuente, motivoSinPermiso } from '@/lib/avisos';
 import { formatoEntero, lecturaDeFuente, textoLimiteCarritos } from '@/lib/kpis';
 import {
   datosDeSeguimiento, etapasDeSeguimiento, fichaDeLeadSeguimiento, filtrarSeguimiento, gruposDeSeguimiento, tarjetasSeguimientos,
-  textoVacioLeads,
+  textoVacioLeads, vistaSeguimiento,
 } from '@/lib/crm-etapas';
 
 /** Lo último que llegó de la carga (leads y etapas juntos): la vuelta con la que se pidió, sus datos y su error (lecturaDeFuente). */
@@ -57,7 +57,7 @@ export default function SeguimientosPage() {
   const leads = datos?.leads ?? null;
   const stages = datos?.stages ?? null;
   const reintentar = () => setVuelta((n) => n + 1);
-  const sinPermiso = aviso?.tipo === 'permiso' ? aviso.texto : null;
+  const sinPermiso = motivoSinPermiso(aviso);
 
   // Una sola vista para las tarjetas, las pastillas y los grupos (filtrarSeguimiento): el número de cada una es el de lo que abre.
   const filtro = { q: search, etapa: activeStage };
@@ -67,6 +67,8 @@ export default function SeguimientosPage() {
   const urgentes = tarjetasSeguimientos(leads, stages, {})?.total.urgentes ?? 0;
   const textoLimite = textoLimiteCarritos(datos?.total, leads === null ? null : leads.length);
   const hayEtapas = etapasDeSeguimiento(stages).length > 0;
+  // Qué se pinta (función pura): el esqueleto mientras llegan, el aviso si no llegaron, el vacío o los grupos.
+  const vista = vistaSeguimiento(leads, aviso, filtrados);
   const cuentaVista = (etapa: string) => (leads === null ? null : filtrarSeguimiento(leads, stages, { q: search, etapa }).length);
 
   return (
@@ -79,7 +81,7 @@ export default function SeguimientosPage() {
         <div className="bg-amber-50 border-b border-amber-200 px-6 py-3 flex items-center gap-4">
           <AlertCircle className="text-amber-600 shrink-0" size={18} />
           <p className="text-xs font-bold text-amber-700 flex-1">
-            {urgentes === 1 ? '1 lead lleva' : `${formatoEntero(urgentes)} leads llevan`} 7 días o más sin actividad: riesgo de perder oportunidades
+            De todos los leads, {urgentes === 1 ? '1 lleva' : `${formatoEntero(urgentes)} llevan`} 7 días o más sin actividad: riesgo de perder oportunidades
           </p>
         </div>
       )}
@@ -93,7 +95,7 @@ export default function SeguimientosPage() {
           actions={(
             <div className="flex gap-3">
               <button onClick={reintentar} disabled={!acceso.leads} className="bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm disabled:opacity-50">
-                <RefreshCw size={15} className={cargando ? 'animate-spin' : ''} /> Actualizar
+                <RefreshCw size={15} className={acceso.leads && cargando ? 'animate-spin' : ''} /> Actualizar
               </button>
               <Link href="/dashboard/crm"
                 className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl font-bold shadow-md flex items-center gap-2 text-sm">
@@ -109,8 +111,8 @@ export default function SeguimientosPage() {
             {aviso && <AvisoFuente aviso={aviso} onReintentar={reintentar} />}
 
             {/* KPI Cards: las 3 primeras etapas (color de su clase, pulsables: abren su etapa) y el total */}
-            <FranjaKpis estado={aviso?.tipo === 'permiso' ? 'listo' : estadoKpi} titulo="Indicadores de Seguimientos"
-              nota={textoLimite ? `${textoLimite} leads: afina la búsqueda o usa el Kanban.` : undefined}>
+            <FranjaKpis estado={estadoFranjaDeFuente(aviso, estadoKpi)} titulo="Indicadores de Seguimientos"
+              nota={textoLimite ? `${textoLimite}. La búsqueda solo filtra los cargados: para ver todos usa el Kanban.` : undefined}>
               {tarjetas
                 ? tarjetas.etapas.map((e) => (
                   <TarjetaKpi key={e.clave} etiqueta={e.nombre} icono="Circle" color={e.acento} valor={e.valor} activo={e.activa}
@@ -142,13 +144,11 @@ export default function SeguimientosPage() {
             </div>
 
             {/* Content */}
-            {leads === null ? (
-              aviso ? null : (
-                <div className="flex justify-center py-20" role="status" aria-label="Cargando leads">
-                  <RefreshCw size={28} className="animate-spin text-indigo-400" />
-                </div>
-              )
-            ) : filtrados.length === 0 ? (
+            {vista === 'esqueleto' ? (
+              <div className="flex justify-center py-20" role="status" aria-label="Cargando leads">
+                <RefreshCw size={28} className="animate-spin text-indigo-400" />
+              </div>
+            ) : vista === 'aviso' ? null : vista === 'vacio' ? (
               <div className="bg-white rounded-3xl border border-slate-200 p-20 text-center shadow-sm">
                 <Activity size={48} className="mx-auto mb-4 text-slate-200" />
                 <p className="text-slate-500 font-semibold">{textoVacioLeads({ q: search, etapa: activeStage })}</p>

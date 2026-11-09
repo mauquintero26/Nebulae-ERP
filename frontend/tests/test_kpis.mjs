@@ -1361,6 +1361,9 @@ console.log('--- TEST 31 (B4 T23B, KPI-otros punto 2; RP7, R12, C13): Seguimient
   assert.ok(!/_apiFetch|\.json\(\)|\.catch\(\(\) => \[\]\)|\bl\?\.leads|\bs\?\.stages/.test(codigo), 'sin el apiFetch local, el .json() ni los catch mudos');
   assert.match(codigo, /const \{ datos, cargando, error \} = lecturaDeFuente\(cargado, vuelta\);/);
   assert.match(codigo, /const estadoKpi = useEstadoKpi\(cargando, error\);/);
+  assert.match(codigo, /const leads = datos\?\.leads \?\? null;/);   // P1: sin datos NO es una lista vacía
+  assert.match(codigo, /const reintentar = \(\) => setVuelta\(\(n\) => n \+ 1\);/);   // P5: «Reintentar» vuelve a pedir
+  assert.match(codigo, /<RefreshCw size=\{15\} className=\{acceso\.leads && cargando \? 'animate-spin' : ''\} \/> Actualizar/);   // m7: sin acceso no gira
   // El rol: lo que no puede leer no se pide (accesoSeguimientos) y se dice sin «Reintentar».
   assert.match(codigo, /const acceso = accesoSeguimientos\(rol\);/);
   assert.match(codigo, /const rol = useRolActual\(\);/);
@@ -1373,8 +1376,8 @@ console.log('--- TEST 31 (B4 T23B, KPI-otros punto 2; RP7, R12, C13): Seguimient
   assert.match(codigo, /tarjetas\.etapas\.map\(\(e\) => \(\s*<TarjetaKpi key=\{e\.clave\} etiqueta=\{e\.nombre\} icono="Circle" color=\{e\.acento\} valor=\{e\.valor\} activo=\{e\.activa\}\s*onClick=\{\(\) => setActiveStage\(e\.activa \? 'all' : e\.clave\)\} \/>/);
   assert.match(codigo, /<TarjetaKpi kpi="leads_total" valor=\{tarjetas\?\.total\.valor \?\? null\} ayuda=\{tarjetas\?\.total\.ayuda \?\? sinPermiso \?\? undefined\}\s*activo=\{tarjetas\?\.total\.activa\} onClick=\{\(\) => setActiveStage\('all'\)\} \/>/);
   // Un 403 que llega igual: «—» con el motivo de permiso en la tarjeta y sin «Reintentar».
-  assert.match(codigo, /const sinPermiso = aviso\?\.tipo === 'permiso' \? aviso\.texto : null;/);
-  assert.match(codigo, /<FranjaKpis estado=\{aviso\?\.tipo === 'permiso' \? 'listo' : estadoKpi\}/);
+  assert.match(codigo, /const sinPermiso = motivoSinPermiso\(aviso\);/);
+  assert.match(codigo, /<FranjaKpis estado=\{estadoFranjaDeFuente\(aviso, estadoKpi\)\}/);
   assert.ok(!/StatCard|variant="gradient"|backgroundColor: s\.color|stage\.color|s\.color \|\|/.test(codigo), 'sin StatCard ni el color-clase como CSS');
   // Una sola vista: la búsqueda, las pastillas, los grupos y las tarjetas usan filtrarSeguimiento (no JSON.stringify ni un filter propio).
   assert.match(codigo, /const filtrados = filtrarSeguimiento\(leads, stages, filtro\);/);
@@ -1385,7 +1388,17 @@ console.log('--- TEST 31 (B4 T23B, KPI-otros punto 2; RP7, R12, C13): Seguimient
   assert.ok(!/customer_name|lead_value|customer_phone|customer_email|daysInStage|timeAgo|PIPELINE_/.test(codigo), 'sin los campos que el servidor no manda');
   // El vacío y la carga: nunca un vacío falso (textoVacioLeads, y el esqueleto mientras llega).
   assert.match(codigo, /textoVacioLeads\(\{ q: search, etapa: activeStage \}\)/);
-  assert.match(codigo, /\{leads === null \? \(\s*aviso \? null : \(/);
+  assert.match(codigo, /const vista = vistaSeguimiento\(leads, aviso, filtrados\);/);
+  assert.match(codigo, /\{vista === 'esqueleto' \? \(\s*<div className="flex justify-center py-20" role="status" aria-label="Cargando leads">/);
+  assert.match(codigo, /\) : vista === 'aviso' \? null : vista === 'vacio' \? \(/);
+  // P2, P3, P4 y P6: las pastillas (sin Perdido y con la búsqueda), el esqueleto de 4 tarjetas y los atrasados de TODOS los leads.
+  assert.match(codigo, /\{etapasDeSeguimiento\(stages\)\.map\(\(s: any\) => \(/);
+  assert.match(codigo, /filtrarSeguimiento\(leads, stages, \{ q: search, etapa \}\)\.length\);/);
+  assert.match(codigo, /: cargando && \[0, 1, 2\]\.map\(\(i\) => <TarjetaKpi key=\{i\} etiqueta="Etapa" icono="Circle" valor=\{null\} \/>\)\}/);
+  assert.match(codigo, /const urgentes = tarjetasSeguimientos\(leads, stages, \{\}\)\?\.total\.urgentes \?\? 0;/);
+  // m9: el aviso dice que cuenta TODOS los leads (la tarjeta cuenta los de la búsqueda); m15: la nota no promete una búsqueda en el servidor.
+  assert.match(codigo, /De todos los leads, \{urgentes === 1 \? '1 lleva' : `\$\{formatoEntero\(urgentes\)\} llevan`\} 7 días o más sin actividad/);
+  assert.match(codigo, /nota=\{textoLimite \? `\$\{textoLimite\}\. La búsqueda solo filtra los cargados: para ver todos usa el Kanban\.` : undefined\}/);
   // Más de los 1.000 que trae el servidor: lo dice la franja.
   assert.match(codigo, /const textoLimite = textoLimiteCarritos\(datos\?\.total, leads === null \? null : leads\.length\);/);
 }
