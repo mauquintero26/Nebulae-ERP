@@ -56,6 +56,7 @@ const RAICES = [
   'src/app/dashboard/inventario/traslados/page.tsx', // B4 T19: Traslados nace sin diálogos nativos
   'src/app/dashboard/crm/page.tsx', // B4 T21 (RP30): el CRM, sin sus 2 confirm() (borrar un lead y borrar una etapa)
   'src/app/dashboard/finanzas/resumen/page.tsx', // B4 T22: el Resumen de Finanzas nace sin diálogos nativos
+  'src/app/dashboard/finanzas/gastos/page.tsx', // B4 T22: Gastos, sin los toast ni diálogos nativos
 ];
 
 // alert( / confirm( / prompt(, sueltos o con window. / window?. / globalThis. / self. delante, que no sean parte de

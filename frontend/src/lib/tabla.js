@@ -50,7 +50,8 @@
 
 import { normalizarBusqueda } from './busqueda.js';
 import { congelar, tiene } from './estados-pedido.js';
-import { formatoEntero } from './kpis.js';
+import { formatoEntero, numeroFinito } from './kpis.js';
+import { diaColombia, fechaLarga } from './fechas-colombia.js';
 
 /**
  * @typedef {'izquierda' | 'derecha'} LadoFijo
@@ -2166,4 +2167,170 @@ export function posicionPanel({ boton, ancho, ventana, alinear = 'izquierda', ma
  */
 export function saleConEsc({ tecla, defaultPrevented = false, dialogoEncima = false }) {
   return tecla === 'Escape' && !defaultPrevented && !dialogoEncima;
+}
+
+// ─── B4 T22: Gastos (TABLA-otros punto 7, KANBAN-resto; R11, R16, RP57, RP58, RP104) ────────────────────────────
+
+/** R11: el tablero de Gastos tiene a lo sumo 12 columnas (una por categoría); el resto se ve en la lista. */
+export const MAX_COLUMNAS_GASTOS = 12;
+/** RP104 (e): el motivo del tablero de Gastos, palabra por palabra. */
+export const TEXTO_SOLO_VER_GASTOS = 'Este tablero es para ver: los gastos se agrupan por categoría.';
+
+const TONOS_GASTOS = congelar(['rose', 'indigo', 'amber', 'emerald', 'sky', 'purple', 'teal', 'orange', 'blue', 'lime', 'pink', 'cyan']);
+/** Los gastos de GET /finance/expenses se piden con este endpoint (el mismo para la lista, los conteos y cada columna). */
+const RUTA_GASTOS = '/finance/expenses';
+
+/**
+ * Las columnas del tablero solo para ver de Gastos: una por clave de `conteos` ({categoría: n}, GET /finance/expenses con
+ * con_conteos=1), por nombre (en español), a lo sumo `max` (12, R11). `estados[0]` es la categoría tal cual: es lo que se manda
+ * como `categoria` (igualdad en el servidor). `masCategorias` cuenta las que no caben y `aviso` es «N categorías más: usa la
+ * lista» (null si caben todas). No es una columna: una categoría sin nombre ni una cuyo conteo no es un número positivo, ni
+ * lo que no es un mapa.
+ * @param {unknown} conteos
+ * @param {number} [max]
+ * @returns {{columnas: Array<{clave: string, titulo: string, tono: string, estados: string[], cerrada: boolean}>,
+ *   masCategorias: number, aviso: string | null}}
+ */
+export function columnasGastos(conteos, max = MAX_COLUMNAS_GASTOS) {
+  const nombres = objeto(conteos)
+    ? Object.entries(conteos).filter(([nombre, n]) => nombre.trim() !== '' && (numeroFinito(n) ?? 0) > 0).map(([nombre]) => nombre)
+    : [];
+  nombres.sort((a, b) => a.localeCompare(b, 'es') || (a < b ? -1 : a > b ? 1 : 0));
+  const visibles = nombres.slice(0, max);
+  const mas = nombres.length - visibles.length;
+  return {
+    columnas: visibles.map((nombre, i) => ({
+      clave: `cat:${nombre}`, titulo: nombre, tono: TONOS_GASTOS[i % TONOS_GASTOS.length], estados: [nombre], cerrada: false,
+    })),
+    masCategorias: mas,
+    aviso: mas > 0 ? `${mas} ${mas === 1 ? 'categoría' : 'categorías'} más: usa la lista` : null,
+  };
+}
+
+/**
+ * Lo que la barra de Gastos le suma a la consulta de la lista (`extra` de useListado): la categoría elegida como `categoria`
+ * (igualdad; vacía no se manda) y sin `vista` (el endpoint no la tiene). Nunca `tipo` ni «concepto» con otro sentido (RP58).
+ * @param {{categoria?: string | null} | null | undefined} filtros
+ * @returns {{vista: null, categoria: string | null}}
+ */
+export function extraGastos(filtros) {
+  return { vista: null, categoria: textoLimpio(objeto(filtros) ? filtros.categoria : null) };
+}
+
+/**
+ * La consulta de una columna del tablero de Gastos en modo servidor (la query de GET /finance/expenses): la categoría de la
+ * columna, la búsqueda (q) y el orden del MISMO estado, y SIEMPRE limit y offset (sin limit, el endpoint devuelve todo). Sin
+ * vista, semáforo, paso ni estados. NO recibe el `orden` del hook ('sin_movimiento' o 'reciente'): el servidor responde 422 a
+ * un orden de tiempo. Con una categoría elegida en la barra solo trae su columna: las otras quedan vacías sin pedir (null);
+ * una columna que no es una categoría, también null.
+ * @param {EstadoTabla | null | undefined} estado
+ * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
+ * @param {{categoria?: string | null} | null | undefined} filtros
+ * @param {{limit: number, offset: number}} consulta
+ * @returns {string | null}
+ */
+export function consultaColumnaGasto(estado, columna, filtros, { limit, offset }) {
+  const categoria = textoLimpio(Array.isArray(columna?.estados) ? columna.estados[0] : null);
+  if (categoria === null) return null;
+  const elegida = textoLimpio(objeto(filtros) ? filtros.categoria : null);
+  if (elegida !== null && elegida !== categoria) return null;
+  return queryListado(estado, { vista: null, semaforo: null, paso: null, estados: null, categoria, limit, offset });
+}
+
+/**
+ * La URL de los conteos por categoría del tablero de Gastos: con_conteos=1 y limit=0 (solo los conteos, sin filas), con la
+ * búsqueda del estado y sin su orden, página ni categoría (el servidor cuenta con `q` y sin `categoria`).
+ * @param {EstadoTabla | null | undefined} estado
+ * @returns {string}
+ */
+export function urlConteosGastos(estado) {
+  return urlListado(RUTA_GASTOS, estado, {
+    extra: { vista: null, semaforo: null, paso: null, estados: null, orden: null, limit: 0, offset: 0 },
+    conConteos: true,
+  });
+}
+
+/**
+ * Las opciones del filtro de categoría de la barra de Gastos, de las claves de `conteos`: TODAS (sin el tope de 12 del
+ * tablero), por nombre. La elegida siempre está, aunque la búsqueda la deje sin gastos. Sin conteos todavía (cargando), null.
+ * @param {unknown} conteos
+ * @param {string | null | undefined} elegida
+ * @returns {Array<{id: string, name: string}> | null}
+ */
+export function categoriasDeConteos(conteos, elegida) {
+  if (!objeto(conteos)) return null;
+  const nombres = new Set(Object.keys(conteos).filter((n) => n.trim() !== ''));
+  const actual = textoLimpio(elegida);
+  if (actual !== null) nombres.add(actual);
+  return [...nombres]
+    .sort((a, b) => a.localeCompare(b, 'es') || (a < b ? -1 : a > b ? 1 : 0))
+    .map((nombre) => ({ id: nombre, name: nombre }));
+}
+
+/** «Recurrente» o «Variable» (is_recurring del gasto): lo que no viene es variable. */
+export function tipoDeGasto(g) {
+  return g?.is_recurring === true ? 'Recurrente' : 'Variable';
+}
+
+const CLASES_RECURRENTE = congelar({ bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' });
+const CLASES_VARIABLE = congelar({ bg: 'bg-amber-50', text: 'text-amber-800', border: 'border-amber-200' });
+
+/**
+ * La tarjeta de un gasto en el tablero solo para ver (los nombres de GET /finance/expenses: category, description, amount,
+ * incurred_date, is_recurring, id): EXP-<id>, el concepto como título (sin concepto, la categoría) con la categoría debajo,
+ * el monto (un Numeric en texto se lee como número), la insignia Recurrente o Variable y la fecha con el día de Colombia
+ * (RP57: la misma regla del Análisis; un gasto sin fecha, «Sin fecha»).
+ * @param {any} g
+ */
+export function tarjetaGasto(g) {
+  const concepto = textoLimpio(g?.description);
+  const categoria = textoLimpio(g?.category);
+  const fecha = fechaLarga(g?.incurred_date);
+  const recurrente = g?.is_recurring === true;
+  return {
+    numero: `EXP-${g?.id ?? ''}`,
+    tipo: null,
+    titulo: concepto ?? categoria ?? 'Sin concepto',
+    subtitulo: concepto ? categoria : null,
+    monto: numeroFinito(g?.amount),
+    estado: { label: tipoDeGasto(g), clases: recurrente ? CLASES_RECURRENTE : CLASES_VARIABLE },
+    chips: [],
+    tiempo: fecha || 'Sin fecha',
+    atrasada: false,
+    accionPrincipal: null,
+  };
+}
+
+/**
+ * RP57: la fecha que el formulario de Gastos manda en `incurred_date`: el día elegido ('AAAA-MM-DD') como mediodía de
+ * Colombia, `${día}T17:00:00Z`; con el campo vacío o con un texto que no es un día de calendario, el de hoy en Colombia
+ * (diaColombia). Así el gasto del 1 de noviembre no cae en octubre al leerse como instante (la tabla y el Análisis).
+ * @param {unknown} dia
+ * @param {Date | number} [ahora]
+ * @returns {string}
+ */
+export function fechaDeGasto(dia, ahora = new Date()) {
+  const texto = typeof dia === 'string' ? dia.trim() : '';
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(texto);
+  let valido = false;
+  if (m) {
+    const [anio, mes, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    const f = new Date(Date.UTC(anio, mes - 1, d));
+    valido = f.getUTCFullYear() === anio && f.getUTCMonth() === mes - 1 && f.getUTCDate() === d;
+  }
+  return `${valido ? texto : diaColombia(ahora)}T17:00:00Z`;
+}
+
+/**
+ * Lo que dice la tabla de Gastos cuando no hay filas: la búsqueda, la categoría elegida, las dos o ninguna.
+ * @param {{q?: string | null, categoria?: string | null} | null | undefined} filtro
+ * @returns {{titulo: string, ayuda: string | null}}
+ */
+export function textoVacioGastos(filtro) {
+  const q = textoLimpio(objeto(filtro) ? filtro.q : null);
+  const categoria = textoLimpio(objeto(filtro) ? filtro.categoria : null);
+  if (q && categoria) return { titulo: `Ningún gasto de «${categoria}» coincide con «${q}».`, ayuda: 'Cambia la búsqueda o quita la categoría.' };
+  if (q) return { titulo: `Ningún gasto coincide con «${q}».`, ayuda: 'Prueba con otra palabra de la categoría o del concepto.' };
+  if (categoria) return { titulo: `No hay gastos en la categoría «${categoria}».`, ayuda: 'Quita la categoría para ver todos.' };
+  return { titulo: 'Sin gastos registrados.', ayuda: 'Usa «Añadir Gasto» para registrar el primero.' };
 }
