@@ -12,6 +12,7 @@ import {
   // B4 T21: lo que la pantalla del CRM arma con las etapas y los leads (el tablero común en modo cliente).
   esLeadPerdido, claveEtapaPerdido, leadsDelTablero, conLeadActivo, conLeadPerdido, sinLead, sinLeadPerdido,
   filtrarLeads, hayFiltroDeLeads, sumaPorEtapa, textoResumenEtapa, totalesDelTablero, chipsDeLead, leadDeMovimiento,
+  textoDiasLead, textoVacioLeads,
 } from '../src/lib/crm-etapas.js';
 import { HEX_CLASE_TAILWIND } from '../src/lib/analisis.js';
 import { mapaDestinos } from '../src/lib/kanban.js';
@@ -229,6 +230,18 @@ console.log('--- TEST 10: chipsDeLead (KANBAN-crm punto 7) y leadDeMovimiento (A
   assert.equal(leadDeMovimiento({ doc_tipo: 'LEAD', doc_id: null }, cargados), null);
   assert.equal(leadDeMovimiento(null, cargados), null);
   assert.equal(leadDeMovimiento({ doc_tipo: 'LEAD', doc_id: 7 }, null), null);
+}
+
+console.log('--- TEST 11: los textos de la vista Lista (días y vacío) ---');
+{
+  assert.equal(textoDiasLead({ days: 8 }), '8 días sin movimiento');
+  assert.equal(textoDiasLead({ days: 1 }), '1 día sin movimiento', 'singular');
+  assert.equal(textoDiasLead({ days: 0 }), 'Movido hoy');
+  assert.equal(textoDiasLead({}), 'Movido hoy', 'sin days (sin updated_at) el servidor da 0');
+  assert.equal(textoVacioLeads({}), 'No hay leads. Crea uno con «Nuevo Lead».');
+  assert.equal(textoVacioLeads({ q: ' ', etapa: 'all' }), 'No hay leads. Crea uno con «Nuevo Lead».');
+  assert.equal(textoVacioLeads({ q: 'ana' }), 'Ningún lead coincide con la búsqueda o la etapa elegida.');
+  assert.equal(textoVacioLeads({ etapa: '3' }), 'Ningún lead coincide con la búsqueda o la etapa elegida.');
 }
 
 console.log('OK test_crm_etapas');

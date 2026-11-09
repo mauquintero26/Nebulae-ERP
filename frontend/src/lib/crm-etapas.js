@@ -346,3 +346,26 @@ export function leadDeMovimiento(fila, leads) {
   if (fila?.doc_tipo !== 'LEAD' || !Array.isArray(leads)) return null;
   return leads.find((l) => mismoId(l?.id, fila.doc_id)) ?? null;
 }
+
+/**
+ * El texto completo de los días de la vista Lista (el title de la celda «Días»): «8 días sin movimiento», «1 día sin
+ * movimiento» y, con 0 (o sin dato: el servidor da 0 sin updated_at), «Movido hoy».
+ * @param {any} lead
+ * @returns {string}
+ */
+export function textoDiasLead(lead) {
+  const dias = Number(lead?.days);
+  if (!Number.isFinite(dias) || dias <= 0) return 'Movido hoy';
+  return dias === 1 ? '1 día sin movimiento' : `${dias} días sin movimiento`;
+}
+
+/**
+ * Lo que dice la vista Lista sin filas: con una búsqueda o una etapa, que nada coincide; sin filtro, que no hay leads.
+ * @param {{q?: string | null, etapa?: string | number | null}} [filtro]
+ * @returns {string}
+ */
+export function textoVacioLeads(filtro = {}) {
+  return hayFiltroDeLeads(filtro)
+    ? 'Ningún lead coincide con la búsqueda o la etapa elegida.'
+    : 'No hay leads. Crea uno con «Nuevo Lead».';
+}

@@ -1,21 +1,35 @@
 // @ts-nocheck
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } from 'react';
 import {
-  Plus, Search, RefreshCw, X, ChevronDown, Trash2,
+  Plus, RefreshCw, ChevronDown, Trash2,
   GripVertical, ExternalLink, Settings, CheckCircle2,
   AlertCircle, User, Package, DollarSign, Clock,
   Edit3, ArrowRight, FileText, ShoppingCart, Receipt,
   Bell, Filter, BarChart3, List, Kanban, Save,
-  ChevronRight, AlertTriangle, LayoutGrid
+  ChevronRight, AlertTriangle, LayoutGrid, Loader2
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
-import { SubNav, PageHeader, Drawer, Modal, Button } from '@/components/ui';
+import {
+  SubNav, PageHeader, Drawer, Modal, Button, MenuFila, TableroKanban, useAvisos, useTableroKanban, CLASE_CHIP,
+} from '@/components/ui';
+// B4 T21: la tabla estándar (TABLA-otros punto 4), el tablero común (KANBAN-crm) y la pestaña Análisis (ANALISIS-crm).
+import { BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla } from '@/components/tabla';
+import { PanelAnalisisPerezoso } from '@/components/analisis';
+import {
+  COLOR_HEX, BG_HEX, columnasDesdeEtapas, columnaDeLead, esLeadAtrasado, reglaSoltarLead, claveEtapaPerdido,
+  leadsDelTablero, conLeadActivo, conLeadPerdido, sinLead, sinLeadPerdido, filtrarLeads, sumaPorEtapa,
+  textoResumenEtapa, totalesDelTablero, chipsDeLead, leadDeMovimiento, textoDiasLead, textoVacioLeads,
+} from '@/lib/crm-etapas';
+import { estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
+import { formatoPesos } from '@/lib/pesos';
+import { textoDeError } from '@/lib/avisos';
+import { TABLE } from '@/lib/design-system';
 import { CRM_NAV } from './crm-nav';
 
 async function apiFetch(path, opts = {}) {
@@ -26,18 +40,7 @@ async function apiFetch(path, opts = {}) {
 }
 
 // ─── Color helpers ─────────────────────────────────────────────────────────
-const COLOR_HEX: Record<string, string> = {
-  'bg-blue-500': '#3b82f6','bg-cyan-500': '#06b6d4','bg-indigo-500': '#6366f1',
-  'bg-emerald-500': '#10b981','bg-amber-500': '#f59e0b','bg-rose-500': '#f43f5e',
-  'bg-purple-500': '#a855f7','bg-slate-500': '#64748b','bg-green-500': '#22c55e',
-  'bg-teal-500': '#14b8a6','bg-orange-500': '#f97316','bg-pink-500': '#ec4899',
-};
-const BG_HEX: Record<string, string> = {
-  'bg-blue-50': '#eff6ff','bg-cyan-50': '#ecfeff','bg-indigo-50': '#eef2ff',
-  'bg-emerald-50': '#f0fdf4','bg-amber-50': '#fffbeb','bg-rose-50': '#fff1f2',
-  'bg-purple-50': '#faf5ff','bg-slate-50': '#f8fafc','bg-green-50': '#f0fdf4',
-  'bg-teal-50': '#f0fdfa','bg-orange-50': '#fff7ed','bg-pink-50': '#fdf2f8',
-};
+// B4 T21 (RP73): COLOR_HEX y BG_HEX vienen de lib/crm-etapas.js (de HEX_CLASE_TAILWIND, con el rojo de «Perdido»).
 const COLOR_OPTIONS = [
   { label:'Azul',    color:'bg-blue-500',    bg:'bg-blue-50'   },
   { label:'Cyan',    color:'bg-cyan-500',    bg:'bg-cyan-50'   },
@@ -185,26 +188,233 @@ function ProductAutocomplete({ query, showDropdown, suggestions, onQueryChange, 
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// B4 T21: la tabla estándar, el tablero común y la pestaña Análisis del CRM
+// ══════════════════════════════════════════════════════════════════════════
+/** El id de la pantalla: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26). */
+const ID_LEADS = 'crm.leads';
+/** La primera vez, Kanban (R4, RP26: vista:crm.leads guarda 'lista' o 'kanban'; «Análisis» no se guarda). */
+const INICIAL_LEADS = { modo: 'kanban' };
+/** La columna Perdido: los 50 más recientes y el total real (RP61). */
+const RUTA_PERDIDOS = '/crm/leads?perdidos=solo&limit=50&orden=dias';
+/** El selector de 3 vistas del encabezado, con los íconos de ConmutadorVista (KANBAN-crm punto 6). */
+const VISTAS_CRM = [
+  { id: 'kanban', etiqueta: 'Kanban', Icono: Kanban },
+  { id: 'lista', etiqueta: 'Lista', Icono: List },
+  { id: 'analisis', etiqueta: 'Análisis', Icono: BarChart3 },
+];
+/** El asistente «En construcción» de la pestaña Análisis (R2, RP69). */
+const ASISTENTE_CRM = {
+  titulo: 'Asistente del CRM',
+  ejemplos: ['¿Qué leads llevan más días sin movimiento?', '¿En qué etapa se quedan los leads?'],
+};
+const FOCO_VISIBLE = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300';
+
+/** «Abrir» y «Borrar» de la fila de la Lista: las columnas son estables (useMemo por las etapas) y leen esto del contexto. */
+const AccionesLead = createContext({ abrir: () => {}, borrar: () => {} });
+
+function MenuLead({ lead }) {
+  const { abrir, borrar } = useContext(AccionesLead);
+  return (
+    <MenuFila etiqueta={`Acciones de ${lead.client || 'este lead'}`} items={[
+      { etiqueta: 'Abrir', icono: ExternalLink, onClick: () => abrir(lead) },
+      { etiqueta: 'Borrar', icono: Trash2, peligro: true, onClick: () => borrar(lead) },
+    ]}/>
+  );
+}
+
+/** El punto de color y el nombre de la etapa (la del lead o, sin ella, la etiqueta de su status que manda el servidor). */
+function EtapaDelLead({ lead, etapa }) {
+  const color = etapa ? (COLOR_HEX[etapa.color] || '#94a3b8') : '#94a3b8';
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1.5 text-xs font-bold text-slate-700">
+      <span aria-hidden="true" className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }}/>
+      <span className="truncate">{etapa?.name || lead.stage_name || 'Sin etapa'}</span>
+    </span>
+  );
+}
+
+/**
+ * Las columnas de la vista Lista (TABLA-otros punto 4; R26): Cliente/Tipo 180 (clave, fija y flexible), Producto 160,
+ * Etapa 120 (clave, con su color), Valor 112, Asesor 120, Días 72 (en rojo si esLeadAtrasado: 7 días fijos, RP73) y
+ * Acciones 56 (fija, MenuFila con Abrir y Borrar). El orden es el de get_leads (cliente, producto, etapa, valor, asesor,
+ * dias). Producto sale oculta por defecto (R26: a 1024 px con el menú abierto la tabla cabe sin correrse).
+ */
+function columnasLeads(etapasPorId) {
+  return [
+    {
+      id: 'cliente', titulo: 'Cliente / Tipo', ancho: 180, clave: true, fija: 'izquierda', flexible: true, ordenable: 'cliente',
+      titleCelda: (l) => [l.client, l.solicitud_tipo || l.tag].filter(Boolean).join(' · '),
+      celda: (l) => (
+        <div className="min-w-0">
+          <p className="truncate text-sm font-bold text-slate-900">{l.client}</p>
+          <span className="inline-block max-w-full truncate rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
+            {l.solicitud_tipo || l.tag}
+          </span>
+        </div>
+      ),
+    },
+    {
+      id: 'producto', titulo: 'Producto', ancho: 160, ordenable: 'producto', ocultaPorDefecto: true,
+      titleCelda: (l) => l.lead_product_name || '',
+      celda: (l) => (l.lead_product_name ? (
+        <span className="flex min-w-0 items-center gap-1 text-slate-700">
+          <Package size={12} aria-hidden="true" className="shrink-0"/><span className="truncate">{l.lead_product_name}</span>
+        </span>
+      ) : '—'),
+    },
+    {
+      id: 'etapa', titulo: 'Etapa', ancho: 120, clave: true, ordenable: 'etapa',
+      titleCelda: (l) => etapasPorId[String(l.pipeline_stage_id)]?.name || l.stage_name || '',
+      celda: (l) => <EtapaDelLead lead={l} etapa={etapasPorId[String(l.pipeline_stage_id)]}/>,
+    },
+    {
+      id: 'valor', titulo: 'Valor', ancho: 112, alinear: 'derecha', ordenable: 'valor',
+      titleCelda: (l) => (l.value > 0 ? formatoPesos(l.value) : ''),
+      celda: (l) => <span className="font-semibold tabular-nums text-slate-800">{l.value > 0 ? formatoPesos(l.value) : '—'}</span>,
+    },
+    { id: 'asesor', titulo: 'Asesor', ancho: 120, ordenable: 'asesor', celda: (l) => l.advisor_name || '—' },
+    {
+      id: 'dias', titulo: 'Días', ancho: 72, alinear: 'derecha', ordenable: 'dias', titleCelda: (l) => textoDiasLead(l),
+      celda: (l) => {
+        const tarde = esLeadAtrasado(l);
+        return (
+          <span className={`inline-flex items-center gap-1 font-bold tabular-nums ${tarde ? 'text-red-700' : 'text-slate-600'}`}>
+            {tarde && <AlertTriangle size={12} aria-hidden="true"/>}{l.days}d
+          </span>
+        );
+      },
+    },
+    { id: 'acciones', titulo: 'Acciones', ancho: 56, fija: 'derecha', celda: (l) => <MenuLead lead={l}/> },
+  ];
+}
+
+/** El tono opaco de la fila (D41): un lead atrasado, ámbar como el tinte de hoy. */
+const claseDeFilaLead = (l) => (esLeadAtrasado(l) ? TABLE.filaAviso : null);
+
+/** El nombre de la tarjeta para el menú ⋯ («Acciones de …») y el anuncio del movimiento («… movido a …»). */
+const tarjetaDeLead = (l) => ({ numero: l.client || `Lead ${l.id}`, titulo: l.client || '' });
+
+/** El esqueleto del tablero mientras faltan las preferencias o las etapas (la forma de TableroKanban: nada salta). */
+function EsqueletoTablero() {
+  return (
+    <div aria-busy="true" aria-label="Cargando el tablero" className="flex min-h-[420px] w-full min-w-0 items-stretch gap-3 overflow-hidden pb-2">
+      {[0, 1, 2, 3].map((i) => (
+        <div key={i} className="flex w-[85vw] shrink-0 flex-col rounded-2xl border border-slate-200 bg-slate-50 sm:w-72">
+          <div className="shrink-0 border-b border-slate-200 px-3 pb-2 pt-3">
+            <div className="h-3.5 w-28 animate-pulse rounded bg-slate-200"/>
+            <div className="mt-2 h-3 w-16 animate-pulse rounded bg-slate-200"/>
+          </div>
+          <div className="space-y-2 p-2">
+            {[0, 1, 2].map((j) => <div key={j} className="h-20 animate-pulse rounded-xl border border-slate-200 bg-white"/>)}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Una carga del tablero que falló: el texto del servidor tal cual y «Reintentar» (nunca columnas vacías falsas). */
+function ErrorCarga({ texto, onReintentar }) {
+  return (
+    <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+      <p className="break-words font-semibold">{texto}</p>
+      <button type="button" onClick={onReintentar}
+        className={`mt-3 inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 ${FOCO_VISIBLE}`}>
+        <RefreshCw size={12} aria-hidden="true"/> Reintentar
+      </button>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// LEAD CARD — la tarjeta del tablero común (renderTarjeta; KANBAN-crm puntos 5 y 7). El arrastre, el clic que abre el
+// detalle y el menú ⋯ (Abrir, Mover a…, Borrar) son de TableroKanban: aquí no hay manejadores de puntero. Va en el
+// módulo para que React no la vuelva a montar en cada render (el ⋯ abierto no se cierra solo).
+// ══════════════════════════════════════════════════════════════════════════
+function LeadCard({ lead, stage, contexto }) {
+  const isStale = esLeadAtrasado(lead);
+  const stageColor = stage ? (COLOR_HEX[stage.color] || '#6366f1') : '#94a3b8';
+  const stageBg = stage ? (BG_HEX[stage.bg_color] || '#f8fafc') : '#f8fafc';
+  const chips = chipsDeLead(lead);
+  return (
+    <div aria-busy={contexto?.esperando || undefined}
+      className={`bg-white rounded-xl border hover:shadow-md transition-all group p-3
+        ${isStale ? 'border-rose-300' : 'border-slate-200 hover:border-indigo-200'}`}>
+      {/* Header row */}
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <GripVertical size={13} aria-hidden="true" className="text-slate-300 group-hover:text-slate-400 mt-0.5 flex-shrink-0 transition-colors"/>
+        <div className="flex-1 min-w-0">
+          {/* Tipo badge y chips «Con solicitud» y «Atrasado» */}
+          <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+            <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md truncate max-w-[140px]"
+              style={{ color: stageColor, backgroundColor: stageBg + 'cc' }}>
+              {lead.solicitud_tipo || lead.tag || 'Lead'}
+            </span>
+            {chips.map(c => (
+              <span key={c.texto} className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md border ${CLASE_CHIP[c.tono] ?? CLASE_CHIP.slate}`}>
+                {c.texto}
+              </span>
+            ))}
+            {contexto?.esperando && <Loader2 size={12} className="animate-spin text-slate-500" aria-label="Guardando el cambio"/>}
+          </div>
+          <p className="font-black text-slate-800 text-sm truncate leading-tight" title={lead.client}>{lead.client}</p>
+          {lead.lead_product_name && (
+            <p className="text-[11px] text-indigo-700 font-bold flex items-center gap-1 mt-0.5 truncate">
+              <Package size={9} aria-hidden="true"/> {lead.lead_product_name} {lead.lead_qty > 1 ? `x${lead.lead_qty}` : ''}
+            </p>
+          )}
+          {lead.description && (
+            <p className="text-[11px] text-slate-500 truncate mt-0.5">{lead.description}</p>
+          )}
+        </div>
+        {contexto?.menu}
+      </div>
+      <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-100">
+        <div className="flex items-center gap-2 min-w-0">
+          {lead.advisor_name && (
+            <span className="text-[10px] text-slate-600 flex items-center gap-0.5 font-medium truncate">
+              <User size={9} aria-hidden="true"/> {lead.advisor_name}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-bold text-slate-600 flex items-center gap-0.5" title={textoDiasLead(lead)}>
+            <Clock size={9} aria-hidden="true"/> {lead.days}d
+          </span>
+          {lead.value > 0 && (
+            <span className="text-[10px] font-black text-emerald-700 tabular-nums">{formatoPesos(lead.value)}</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 export default function CRMPage() {
   const router = useRouter();
   const [stages, setStages] = useState<any[]>([]);
   const [leads, setLeads]   = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeView, setActiveView] = useState('kanban');
-  const [search, setSearch] = useState('');
+  // B4 T21 (KANBAN-crm 6, RP26, D40): el modo Kanban / Lista es de useEstadoTabla (vista:crm.leads; la primera vez,
+  // Kanban), la búsqueda es estado.q y «Análisis» es un estado de la página que no se guarda. filterStage es el select
+  // de etapa de la barra (stage_id en el servidor).
+  const [estado, despachar, listo] = useEstadoTabla(ID_LEADS, INICIAL_LEADS);
+  const [enAnalisis, setEnAnalisis] = useState(false);
   const [filterStage, setFilterStage] = useState('all');
+  const { avisar, confirmar } = useAvisos();
+  // Los perdidos (los 50 más recientes y el total real, RP61) y el estado de la carga del tablero.
+  const [perdidos, setPerdidos] = useState(null);           // {items, total} | null (todavía no llegó)
+  const [leadsListos, setLeadsListos] = useState(false);    // los activos llegaron al menos una vez
+  const [errorLeads, setErrorLeads] = useState(null);       // el error de la última carga de los leads
+  const [etapasListas, setEtapasListas] = useState(false);  // hay etapas (del servidor o de la caché)
+  const [errorEtapas, setErrorEtapas] = useState(null);     // el de la última carga de /crm/pipeline-stages
   const [selectedLead, setSelectedLead] = useState<any>(null);
   const [editingLead, setEditingLead]   = useState(false);
   const [movingLead, setMovingLead]     = useState<any>(null);
   const [showNewLead, setShowNewLead]   = useState(false);
   const [showConfig, setShowConfig]     = useState(false);
   const [isSaving, setIsSaving]         = useState(false);
-
-  // ─── Pointer Drag & Drop state ─────────────────────────────────────────────
-  const [dragging, setDragging]               = useState(null); // { lead, x, y } | null
-  const [dragOverStageId, setDragOverStageId] = useState(null);
-  const dragRef = useRef({ started: false, startX: 0, startY: 0, lead: null });
-  const stageColumnRefs = useRef({}); // { [stageId]: HTMLDivElement } — for bounding rect detection
 
   // ─── New Lead form ─────────────────────────────────────────────────────
   const [nlForm, setNlForm] = useState({
@@ -260,45 +470,126 @@ export default function CRMPage() {
     } catch (e) { toast.error('Error cargando leads: ' + e.message); }
   }, []);
 
-  // Full load: stages (cache) + leads (fresh) in parallel
-  const loadAll = useCallback(async (showSpinner = true) => {
+  // B4 T21 (KANBAN-crm punto 3, RP61): las etapas salen de /crm/pipeline-stages (responde a todos los roles; /config
+  // queda solo para el panel del administrador), con la caché crm_stages_v1 de respaldo. Los activos (/crm/leads) y los
+  // perdidos (los 50 más recientes y el total real) van en paralelo. Mientras recarga no se borra nada; si algo falla, su
+  // error queda para «Reintentar» (nunca columnas vacías falsas). Fuera de la carga inicial también recarga la Lista.
+  const recargarListaRef = useRef(() => {});
+  const loadAll = useCallback(async (showSpinner = true, opciones = {}) => {
     if (showSpinner) setLoading(true);
-    try {
-      const cached = getCachedStages();
-      if (cached) {
-        // Serve stages from cache immediately, fetch leads in parallel
-        setStages(cached);
-        setConfigStages(cached);
-        const leadsData = await apiFetch('/crm/leads');
-        setLeads(Array.isArray(leadsData) ? leadsData : (leadsData?.data ?? []));
-        // Refresh stages in background (don't block)
-        apiFetch('/crm/pipeline-stages/config').then(d => {
-          const arr = Array.isArray(d) ? d : (d?.data ?? []);
-          if (arr.length) { setStages(arr); setConfigStages(arr); setCachedStages(arr); }
-        }).catch(() => {});
-      } else {
-        // No cache — fetch both in parallel
-        const [stagesRes, leadsRes] = await Promise.all([
-          apiFetch('/crm/pipeline-stages/config'),
-          apiFetch('/crm/leads'),
-        ]);
-        const stagesArr = Array.isArray(stagesRes) ? stagesRes : (stagesRes?.data ?? []);
-        const leadsArr  = Array.isArray(leadsRes)  ? leadsRes  : (leadsRes?.data  ?? []);
-        setStages(stagesArr);
-        setConfigStages(stagesArr);
-        setLeads(leadsArr);
-        setCachedStages(stagesArr);
-      }
-    } catch (e) { toast.error('Error cargando CRM: ' + e.message); }
-    finally { if (showSpinner) setLoading(false); }
+    const cached = getCachedStages();
+    if (cached) {
+      setStages(cached);
+      setConfigStages(cached);
+      setEtapasListas(true);
+    }
+    if (!opciones.inicial) recargarListaRef.current();
+    const [etapas, activos, perdidosRes] = await Promise.allSettled([
+      _apiFetch('/crm/pipeline-stages'),
+      _apiFetch('/crm/leads'),
+      _apiFetch(RUTA_PERDIDOS),
+    ]);
+    if (etapas.status === 'fulfilled') {
+      const arr = normalizarRespuesta(etapas.value).filas;
+      setStages(arr);
+      setConfigStages(arr);
+      setCachedStages(arr);
+      setEtapasListas(true);
+      setErrorEtapas(null);
+    } else setErrorEtapas(etapas.reason);
+    if (activos.status === 'fulfilled') {
+      setLeads(normalizarRespuesta(activos.value).filas);
+      setLeadsListos(true);
+    }
+    if (perdidosRes.status === 'fulfilled') {
+      const p = normalizarRespuesta(perdidosRes.value);
+      setPerdidos({ items: p.filas, total: p.total });
+    }
+    const fallo = [activos, perdidosRes].find((r) => r.status === 'rejected');
+    setErrorLeads(fallo ? fallo.reason : null);
+    if (showSpinner) setLoading(false);
   }, []);
 
   // On mount: warmup pool, then load
   useEffect(() => {
     // Fire warmup in background (don't await — just wakes the pool)
     apiFetch('/crm/warmup').catch(() => {});
-    loadAll();
+    loadAll(true, { inicial: true });
   }, [loadAll]);
+
+  // ═══ B4 T21: la Lista (TABLA-otros punto 4) y el tablero común (KANBAN-crm punto 5) ═════════════════════════════
+  // La Lista: TablaEstandar 'crm.leads' en el servidor (/crm/leads con q y el stage_id del select de etapa), activa solo
+  // en Lista (D40: esperar: !listo, nunca activo: listo).
+  const etapasPorId = useMemo(() => Object.fromEntries(stages.map((s) => [String(s.id), s])), [stages]);
+  const columnasLista = useMemo(() => columnasLeads(etapasPorId), [etapasPorId]);
+  const prefs = usePreferenciasTabla(ID_LEADS, columnasLista);
+  const extraLista = useMemo(() => ({ stage_id: filterStage === 'all' ? null : filterStage }), [filterStage]);
+  const listado = useListado({
+    ruta: '/crm/leads', estado, extra: extraLista, esperar: !listo, despachar, activo: estado.modo === 'lista' && !enAnalisis,
+  });
+  const recargarLista = listado.recargar;
+  useEffect(() => { recargarListaRef.current = recargarLista; }, [recargarLista]);
+  const anchoTablaRef = useRef(null);
+  // Desestructurado: con el objeto entero en ref={…}, react-hooks/refs marca «Cannot access refs during render».
+  const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
+  // Pasar a Kanban o a Análisis sale de la pantalla completa (el tablero y el panel no quedan tapados).
+  useEffect(() => { if (estado.modo === 'kanban' || enAnalisis) salir(); }, [estado.modo, enAnalisis, salir]);
+
+  // El tablero, en modo cliente (C4: /crm/leads devuelve todo, hasta 500): los activos y los perdidos con la búsqueda y la
+  // etapa de la barra; null mientras no llegaron (sus columnas cargan, nunca «vacías»). Perdido cuenta su total real.
+  const filtroTablero = useMemo(() => ({ q: estado.q, etapa: filterStage }), [estado.q, filterStage]);
+  const leadsTablero = useMemo(
+    () => (leadsListos && perdidos ? filtrarLeads(leadsDelTablero(leads, perdidos.items), filtroTablero) : null),
+    [leadsListos, perdidos, leads, filtroTablero],
+  );
+  const columnasTablero = useMemo(() => columnasDesdeEtapas(stages), [stages]);
+  const clavePerdido = useMemo(() => claveEtapaPerdido(stages), [stages]);
+  const totalesTablero = useMemo(() => totalesDelTablero(stages, perdidos, filtroTablero), [stages, perdidos, filtroTablero]);
+  const sumasTablero = useMemo(() => sumaPorEtapa(leadsTablero, stages), [leadsTablero, stages]);
+  const columnaDe = useCallback((l) => columnaDeLead(l, stages), [stages]);
+  const tablero = useTableroKanban({
+    pantalla: ID_LEADS,
+    modo: 'cliente',
+    columnas: columnasTablero,
+    activo: listo && estado.modo === 'kanban' && !enAnalisis,
+    porColumna: estado.tamano,
+    items: leadsTablero,
+    columnaDe,
+    esAtrasado: esLeadAtrasado,
+    totales: totalesTablero,
+  });
+
+  // Un lead que devolvió el servidor (crear, editar o mover) entra en su lista (activos o perdidos); la Lista, que es del
+  // servidor, se recarga. El tablero lo toma de sus items (D39: la pantalla no llama a tablero.recargar).
+  const aplicarLead = useCallback((lead) => {
+    if (!lead || typeof lead !== 'object') return;
+    setLeads((prev) => conLeadActivo(prev, lead));
+    setPerdidos((prev) => conLeadPerdido(prev, lead));
+    recargarLista();
+  }, [recargarLista]);
+  const quitarLead = useCallback((id) => {
+    setLeads((prev) => sinLead(prev, id));
+    setPerdidos((prev) => sinLeadPerdido(prev, id));
+    recargarLista();
+  }, [recargarLista]);
+
+  // El selector Kanban / Lista / Análisis del encabezado (KANBAN-crm punto 6, RP26).
+  const elegirVista = (id) => {
+    if (id === 'analisis') { setEnAnalisis(true); return; }
+    setEnAnalisis(false);
+    if (estado.modo !== id) despachar({ tipo: 'modo', valor: id });
+  };
+  // El select de etapa de la barra (stage_id en el servidor): vuelve a la página 1, como todo filtro (R5).
+  const elegirEtapa = (valor) => {
+    setFilterStage(valor);
+    despachar({ tipo: 'pagina', valor: 1 });
+  };
+  // Un movimiento de «Requieren atención» abre su lead; si no está cargado, se avisa (ANALISIS-crm punto 2).
+  const abrirMovimiento = (fila) => {
+    const lead = leadDeMovimiento(fila, leadsDelTablero(leads, perdidos?.items));
+    if (lead) openDetail(lead);
+    else avisar('Ábrelo desde el Kanban', { tono: 'info' });
+  };
 
   // Customer autocomplete search
   useEffect(() => {
@@ -319,20 +610,10 @@ export default function CRMPage() {
   }, [debouncedProd, showNewLead, editingLead]);
 
   // ═══ Helpers ═════════════════════════════════════════════════════════════
-  function getLeadsForStage(stage) {
-    return leads.filter(l => l.pipeline_stage_id === stage.id);
-  }
+  // B4 T21: el filtro del Kanban (filteredLeads) es filtrarLeads de lib/crm-etapas.js (arriba, en leadsTablero) y la
+  // Lista filtra en el servidor; getLeadsForStage era del Análisis viejo.
   const totalValue = leads.reduce((s, l) => s + (l.value || 0), 0);
   const isQuotacion = (tipo) => tipo?.toLowerCase().includes('cotizac');
-  const filteredLeads = leads.filter(l => {
-    const matchSearch = !search ||
-      l.client?.toLowerCase().includes(search.toLowerCase()) ||
-      l.description?.toLowerCase().includes(search.toLowerCase()) ||
-      l.lead_product_name?.toLowerCase().includes(search.toLowerCase()) ||
-      l.advisor_name?.toLowerCase().includes(search.toLowerCase());
-    const matchStage = filterStage === 'all' || l.pipeline_stage_id === Number(filterStage);
-    return matchSearch && matchStage;
-  });
 
   // ─── Select customer from autocomplete ────────────────────────────────
   function selectCustomer(c, isEdit=false) {
@@ -408,7 +689,7 @@ export default function CRMPage() {
         pipeline_stage_id: nlForm.pipeline_stage_id ? Number(nlForm.pipeline_stage_id) : null,
       };
       const saved = await apiFetch('/crm/leads', { method: 'POST', body: JSON.stringify(payload) });
-      setLeads(prev => [saved, ...prev]);
+      aplicarLead(saved); // B4 T21: activos o perdidos, y la Lista (del servidor) se recarga
       toast.success('Lead creado', { id: tid });
       setShowNewLead(false);
       setCustQuery(''); setProdQuery('');
@@ -437,7 +718,7 @@ export default function CRMPage() {
         pipeline_stage_id: editForm.pipeline_stage_id ? Number(editForm.pipeline_stage_id) : selectedLead.pipeline_stage_id,
       };
       const updated = await apiFetch(`/crm/leads/${selectedLead.id}`, { method: 'PATCH', body: JSON.stringify(payload) });
-      setLeads(prev => prev.map(l => l.id === updated.id ? updated : l));
+      aplicarLead(updated); // B4 T21: activos o perdidos, y la Lista (del servidor) se recarga
       setSelectedLead(updated);
       setEditingLead(false);
       toast.success('Lead actualizado', { id: tid });
@@ -447,10 +728,13 @@ export default function CRMPage() {
 
   // ═══ Delete Lead ══════════════════════════════════════════════════════════
   async function handleDeleteLead(lead) {
-    if (!confirm(`¿Eliminar el lead de "${lead.client}"?`)) return;
+    // B4 T21 (RP30): confirmar de useAvisos, no confirm() nativo; el mismo texto.
+    if (!(await confirmar({
+      titulo: 'Eliminar lead', mensaje: `¿Eliminar el lead de "${lead.client}"?`, textoConfirmar: 'Eliminar', peligro: true,
+    }))) return;
     try {
       await apiFetch(`/crm/leads/${lead.id}`, { method: 'DELETE' });
-      setLeads(prev => prev.filter(l => l.id !== lead.id));
+      quitarLead(lead.id); // B4 T21: sale de los activos o de Perdido, y la Lista se recarga
       if (selectedLead?.id === lead.id) setSelectedLead(null);
       toast.success('Lead eliminado');
     } catch (e) { toast.error(e.message); }
@@ -461,127 +745,23 @@ export default function CRMPage() {
     try {
       const updated = await apiFetch(`/crm/leads/${lead.id}/stage`, { method: 'PATCH',
         body: JSON.stringify({ pipeline_stage_id: stageId }) });
-      setLeads(prev => prev.map(l => l.id === updated.id ? updated : l));
+      aplicarLead(updated); // B4 T21: activos o perdidos (Perdido), y la Lista (del servidor) se recarga
       if (selectedLead?.id === updated.id) setSelectedLead(updated);
       setMovingLead(null);
       toast.success('Lead movido');
     } catch (e) { toast.error(e.message); }
   }
 
-  // ═══ Pointer Drag & Drop — Bounding Rect detection ════════════════════════
-  /** Find which stage column (by stored DOM refs) contains point (x, y) */
-  function getStageAtPoint(x, y) {
-    for (const [stageId, el] of Object.entries(stageColumnRefs.current)) {
-      if (!el) continue;
-      const rect = el.getBoundingClientRect();
-      if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
-        return Number(stageId);
-      }
-    }
-    return null;
-  }
-
-  function onCardPointerDown(e, lead) {
-    if (e.button !== 0) return; // left button / first touch only
-    // Do NOT setPointerCapture — we need free movement across columns
-    e.stopPropagation();
-    dragRef.current = {
-      started: false,
-      startX: e.clientX,
-      startY: e.clientY,
-      lead,
-      pointerId: e.pointerId,
-      cardEl: e.currentTarget,
-    };
-  }
-
-  function onCardPointerMove(e) {
-    const ref = dragRef.current;
-    if (!ref.lead) return;
-    const dx = e.clientX - ref.startX;
-    const dy = e.clientY - ref.startY;
-
-    if (!ref.started) {
-      if (Math.hypot(dx, dy) < 6) return; // 6px threshold
-      ref.started = true;
-      // Capture pointer on the DOCUMENT so we receive events even when outside card
-      try { ref.cardEl?.setPointerCapture(e.pointerId); } catch (_) {}
-      setDragging({ lead: ref.lead, x: e.clientX, y: e.clientY });
-    } else {
-      // Throttle: update clone position every frame
-      setDragging(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : null);
-    }
-
-    // Bounding rect detection — which column is under cursor?
-    const stageId = getStageAtPoint(e.clientX, e.clientY);
-    setDragOverStageId(stageId);
-    e.preventDefault();
-  }
-
-  async function onCardPointerUp(e) {
-    const ref = dragRef.current;
-    const wasDragging = ref.started;
-    const lead = ref.lead;
-
-    // Reset all state
-    dragRef.current = { started: false, startX: 0, startY: 0, lead: null, pointerId: null, cardEl: null };
-    setDragging(null);
-    setDragOverStageId(null);
-
-    if (!wasDragging) {
-      // Click (no meaningful movement) → open detail
-      if (lead) openDetail(lead);
-      return;
-    }
-
-    if (!lead) return;
-
-    // Bounding rect: find target stage at the drop point
-    const targetStageId = getStageAtPoint(e.clientX, e.clientY);
-
-    if (!targetStageId || lead.pipeline_stage_id === targetStageId) return;
-
-    // Get target stage info for status update
-    const targetStage = stages.find(s => s.id === targetStageId);
-    const stageName = targetStage?.name || '';
-    const newStatus = targetStage?.maps_to_status || lead.status;
-
-    // Optimistic update — move card visually & update status immediately
-    const originalStageId = lead.pipeline_stage_id;
-    const originalStatus = lead.status;
-    setLeads(prev => prev.map(l =>
-      l.id === lead.id
-        ? { ...l, pipeline_stage_id: targetStageId, status: newStatus, stage_name: stageName }
-        : l
-    ));
-    if (selectedLead?.id === lead.id) {
-      setSelectedLead(prev => prev ? { ...prev, pipeline_stage_id: targetStageId, status: newStatus, stage_name: stageName } : null);
-    }
-
-    try {
-      const updated = await apiFetch(`/crm/leads/${lead.id}/stage`, {
-        method: 'PATCH',
-        body: JSON.stringify({ pipeline_stage_id: targetStageId }),
-      });
-      // Sync with server response (authoritative)
-      setLeads(prev => prev.map(l => l.id === updated.id ? updated : l));
-      if (selectedLead?.id === updated.id) setSelectedLead(updated);
-      toast.success(`"${lead.client}" → ${stageName}`);
-    } catch (err) {
-      // Revert on failure
-      setLeads(prev => prev.map(l =>
-        l.id === lead.id
-          ? { ...l, pipeline_stage_id: originalStageId, status: originalStatus, stage_name: stages.find(s => s.id === originalStageId)?.name || '' }
-          : l
-      ));
-      toast.error('Error al mover lead: ' + err.message);
-    }
-  }
-
-  function onCardPointerCancel() {
-    dragRef.current = { started: false, startX: 0, startY: 0, lead: null, pointerId: null, cardEl: null };
-    setDragging(null);
-    setDragOverStageId(null);
+  // ═══ B4 T21 (KANBAN-crm punto 5): el cambio de etapa desde el tablero común ══════════════════════════════════════
+  // El arrastre, «Mover a…», el clon flotante y la vuelta de la tarjeta si el servidor falla son de TableroKanban
+  // (useTableroKanban en modo cliente). reglaSoltarLead es libre (también con solicitud, R11) y da el cuerpo
+  // {pipeline_stage_id} de PATCH /crm/leads/{id}/stage; el servidor copia el status de la etapa. Si falla, lanza y la
+  // tarjeta vuelve con el mensaje del servidor (useAvisos; el <Toaster/> ya está montado, RP105).
+  async function moverDesdeTablero(lead, resultado) {
+    const updated = await apiFetch(`/crm/leads/${lead.id}/stage`, { method: 'PATCH', body: JSON.stringify(resultado.cuerpo) });
+    aplicarLead(updated);
+    if (selectedLead?.id === updated?.id) setSelectedLead(updated);
+    return updated;
   }
 
 
@@ -613,7 +793,11 @@ export default function CRMPage() {
   }
 
   async function handleDeleteStage(stageId) {
-    if (!confirm('¿Eliminar esta etapa? Los leads en ella quedarán sin etapa asignada.')) return;
+    // B4 T21 (RP30): confirmar de useAvisos, no confirm() nativo; el mismo texto.
+    if (!(await confirmar({
+      titulo: 'Eliminar etapa', mensaje: '¿Eliminar esta etapa? Los leads en ella quedarán sin etapa asignada.',
+      textoConfirmar: 'Eliminar', peligro: true,
+    }))) return;
     try {
       await apiFetch(`/crm/pipeline-stages/${stageId}`, { method: 'DELETE' });
       setStages(prev => prev.filter(s => s.id !== stageId));
@@ -635,6 +819,13 @@ export default function CRMPage() {
   function openConfig() {
     setConfigStages(stages.map(s => ({ ...s })));
     setShowConfig(true);
+    // B4 T21 (KANBAN-crm punto 3): /pipeline-stages/config queda para este panel del administrador (sus campos de
+    // alerta). Sus datos completan los de cada etapa sin pisar lo que ya está (ni lo que se escribe mientras llega);
+    // un 403 (asesor) o un error deja el panel con las etapas de /crm/pipeline-stages.
+    apiFetch('/crm/pipeline-stages/config').then(d => {
+      const deConfig = Object.fromEntries((Array.isArray(d) ? d : []).map(s => [s.id, s]));
+      setConfigStages(prev => prev.map(s => ({ ...(deConfig[s.id] || {}), ...s })));
+    }).catch(() => {});
   }
 
   // Build the edit form snapshot from a lead's CURRENT data (used both when
@@ -665,78 +856,7 @@ export default function CRMPage() {
     setProdQuery(lead.lead_product_name || '');
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // LEAD CARD component (pointer-based drag & drop)
-  // ══════════════════════════════════════════════════════════════════════════
-  function LeadCard({ lead }) {
-    const stage = stages.find(s => s.id === lead.pipeline_stage_id);
-    const alertDays = stage?.alert_days || 7;
-    const isStale = lead.days >= alertDays;
-    const stageColor = stage ? (COLOR_HEX[stage.color] || '#6366f1') : '#94a3b8';
-    const stageBg = stage ? (BG_HEX[stage.bg_color] || '#f8fafc') : '#f8fafc';
-    const isDraggingThis = dragging?.lead?.id === lead.id;
-    return (
-      <div
-        onPointerDown={e => onCardPointerDown(e, lead)}
-        onPointerMove={onCardPointerMove}
-        onPointerUp={onCardPointerUp}
-        onPointerCancel={onCardPointerCancel}
-        className={`bg-white rounded-xl border cursor-grab active:cursor-grabbing hover:shadow-md transition-all group p-3 mb-2 select-none touch-none
-          ${isDraggingThis ? 'opacity-30 scale-95' : ''}
-          ${isStale && !isDraggingThis ? 'border-amber-300 shadow-amber-100/50 shadow-sm' : ''}
-          ${!isStale && !isDraggingThis ? 'border-slate-200 hover:border-indigo-200' : ''}`}>
-        {/* Header row */}
-        <div className="flex items-start justify-between gap-2 mb-2">
-          <GripVertical size={13} className="text-slate-300 group-hover:text-slate-400 mt-0.5 flex-shrink-0 transition-colors"/>
-          <div className="flex-1 min-w-0">
-            {/* Tipo badge */}
-            <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-              <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md truncate max-w-[140px]"
-                style={{ color: stageColor, backgroundColor: stageBg + 'cc' }}>
-                {lead.solicitud_tipo || lead.tag || 'Lead'}
-              </span>
-              {isStale && (
-                <span className="text-[9px] font-bold text-amber-600 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-md flex items-center gap-0.5">
-                  <AlertTriangle size={8}/> {lead.days}d
-                </span>
-              )}
-            </div>
-            <p className="font-black text-slate-800 text-sm truncate leading-tight">{lead.client}</p>
-            {lead.lead_product_name && (
-              <p className="text-[11px] text-indigo-600 font-bold flex items-center gap-1 mt-0.5 truncate">
-                <Package size={9}/> {lead.lead_product_name} {lead.lead_qty > 1 ? `x${lead.lead_qty}` : ''}
-              </p>
-            )}
-            {lead.description && (
-              <p className="text-[11px] text-slate-400 truncate mt-0.5">{lead.description}</p>
-            )}
-          </div>
-          <button onPointerDown={e => e.stopPropagation()}
-            onClick={e => { e.stopPropagation(); handleDeleteLead(lead); }}
-            className="opacity-0 group-hover:opacity-100 p-1 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-all flex-shrink-0">
-            <Trash2 size={13}/>
-          </button>
-        </div>
-        <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-100">
-          <div className="flex items-center gap-2">
-            {lead.advisor_name && (
-              <span className="text-[10px] text-slate-500 flex items-center gap-0.5 font-medium">
-                <User size={9}/> {lead.advisor_name}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold text-slate-500 flex items-center gap-0.5">
-              <Clock size={9}/> {lead.days}d
-            </span>
-            {lead.value > 0 && (
-              <span className="text-[10px] font-black text-emerald-600">{formatCOP(lead.value)}</span>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // B4 T21: LeadCard vive en el módulo (arriba, junto a la Lista) y TableroKanban la pinta con renderTarjeta.
 
   // Autocomplete fields are now module-scope components (see top of file) —
   // pass all state/handlers explicitly instead of via closures.
@@ -778,11 +898,7 @@ export default function CRMPage() {
   return (
     <div
       className="h-full w-full bg-slate-50 flex flex-col overflow-hidden"
-      onClick={() => { setShowCustDrop(false); setShowProdDrop(false); }}
-      onPointerMove={dragging ? onCardPointerMove : undefined}
-      onPointerUp={dragging ? onCardPointerUp : undefined}
-      onPointerLeave={dragging ? onCardPointerCancel : undefined}
-      style={dragging ? { userSelect: 'none', cursor: 'grabbing' } : undefined}>
+      onClick={() => { setShowCustDrop(false); setShowProdDrop(false); }}>
 
       <SubNav label="CRM" items={CRM_NAV} currentPath="/dashboard/crm" color="indigo" />
 
@@ -790,7 +906,8 @@ export default function CRMPage() {
       <div className="bg-white border-b border-slate-200 flex-shrink-0 px-6 py-4">
         <PageHeader icon={LayoutGrid} color="indigo"
           title="CRM Pipeline"
-          subtitle={`${leads.length} leads · ${formatCOP(totalValue)} en pipeline`}
+          subtitle={leadsListos ? `${leads.length} leads · ${formatCOP(totalValue)} en pipeline`
+            : errorLeads ? 'No se pudieron cargar los leads' : 'Cargando leads…'}
           actions={(
             <div className="flex items-center gap-2 flex-wrap">
               <button onClick={openConfig}
@@ -800,313 +917,145 @@ export default function CRMPage() {
               <button onClick={loadAll} className="p-2.5 rounded-xl border border-slate-200 text-slate-400 hover:bg-slate-50 transition-colors">
                 <RefreshCw size={17} className={loading ? 'animate-spin' : ''}/>
               </button>
-              {/* View switcher */}
-              <div className="flex bg-slate-100 rounded-xl p-1 gap-0.5">
-                {[['kanban','Kanban',<LayoutGrid size={14}/>],['lista','Lista',<List size={14}/>],['analisis','Análisis',<BarChart3 size={14}/>]].map(([v,l,icon]) => (
-                  <button key={v} onClick={() => setActiveView(v)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all
-                      ${activeView===v ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-                    {icon}{l}
-                  </button>
-                ))}
+              {/* View switcher (B4 T21, KANBAN-crm 6 y RP26): Kanban y Lista despachan el modo a useEstadoTabla
+                  (vista:crm.leads); Análisis es un estado de la página y no se guarda. */}
+              <div role="group" aria-label="Vista" className="flex bg-slate-100 rounded-xl p-1 gap-0.5">
+                {VISTAS_CRM.map(({ id, etiqueta, Icono }) => {
+                  const activa = id === 'analisis' ? enAnalisis : !enAnalisis && estado.modo === id;
+                  return (
+                    <button key={id} type="button" aria-pressed={activa} onClick={() => elegirVista(id)}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${FOCO_VISIBLE}
+                        ${activa ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}>
+                      <Icono size={14} aria-hidden="true"/>{etiqueta}
+                    </button>
+                  );
+                })}
               </div>
               <Button color="indigo" icon={Plus} onClick={() => setShowNewLead(true)}>Nuevo Lead</Button>
             </div>
           )} />
       </div>
 
-      {/* ── Toolbar: search + filter ── */}
-      <div className="flex items-center gap-3 px-6 py-3 bg-white border-b border-slate-100 flex-shrink-0">
-        <div className="relative flex-1 max-w-sm">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
-          <input value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Buscar por cliente, producto, asesor..."
-            className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-indigo-400"/>
-        </div>
-        <select value={filterStage} onChange={e => setFilterStage(e.target.value)}
-          className="border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-600 focus:outline-none focus:border-indigo-400 bg-white">
-          <option value="all">Todas las etapas</option>
-          {stages.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </select>
-        {(search || filterStage !== 'all') && (
-          <button onClick={() => { setSearch(''); setFilterStage('all'); }}
-            className="text-xs text-slate-400 hover:text-slate-700 flex items-center gap-1">
-            <X size={13}/> Limpiar
-          </button>
-        )}
-        <span className="text-xs text-slate-400 ml-auto">{filteredLeads.length} leads</span>
-      </div>
-
-      {/* ══ FLOATING DRAG CLONE ═══════════════════════════════════════════════ */}
-      {dragging && (
-        <div
-          style={{
-            position: 'fixed',
-            left: dragging.x - 144,
-            top:  dragging.y - 36,
-            width: 288,
-            zIndex: 9999,
-            pointerEvents: 'none',
-            transform: 'rotate(2deg) scale(1.04)',
-            opacity: 0.92,
-            filter: 'drop-shadow(0 12px 24px rgba(99,102,241,0.35))',
-          }}>
-          {/* Mini card clone */}
-          <div className="bg-white rounded-xl border-2 border-indigo-400 p-3 select-none">
-            <div className="flex items-center gap-2 mb-1">
-              <GripVertical size={13} className="text-indigo-400"/>
-              <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded-md truncate">
-                {dragging.lead.solicitud_tipo || 'Lead'}
-              </span>
-            </div>
-            <p className="font-black text-slate-800 text-sm truncate">{dragging.lead.client}</p>
-            {dragging.lead.lead_product_name && (
-              <p className="text-[11px] text-indigo-500 font-bold flex items-center gap-1 mt-0.5 truncate">
-                <Package size={9}/> {dragging.lead.lead_product_name}
-              </p>
-            )}
-            {dragging.lead.value > 0 && (
-              <p className="text-[10px] font-black text-emerald-600 mt-1">{formatCOP(dragging.lead.value)}</p>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ══ KANBAN VIEW ══════════════════════════════════════════════════════ */}
-      {activeView === 'kanban' && (
-        <div className="flex-1 overflow-x-auto overflow-y-hidden">
-          <div className="flex gap-4 p-5 h-full min-w-max">
-            {loading ? (
-              /* ── Kanban skeleton ─────────────────────────────────── */
-              Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="flex flex-col w-72 flex-shrink-0">
-                  {/* Column header skeleton */}
-                  <div className="flex items-center gap-2 mb-3 px-1">
-                    <div className="w-2.5 h-2.5 rounded-full bg-slate-200 animate-pulse"/>
-                    <div className="h-3.5 w-24 bg-slate-200 rounded animate-pulse"/>
-                    <div className="h-4 w-5 rounded-full bg-slate-200 animate-pulse ml-1"/>
-                  </div>
-                  {/* Card skeletons */}
-                  <div className="flex-1 rounded-2xl p-2 min-h-[200px] bg-slate-100/80 border border-slate-200/60">
-                    {Array.from({ length: i === 0 ? 3 : i === 1 ? 2 : 1 }).map((_, j) => (
-                      <div key={j} className="bg-white rounded-xl border border-slate-100 p-3 mb-2 shadow-sm">
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className="h-4 w-16 bg-slate-200 rounded-md animate-pulse"/>
-                        </div>
-                        <div className="h-3.5 w-full bg-slate-200 rounded animate-pulse mb-1.5"/>
-                        <div className="h-3 w-2/3 bg-slate-100 rounded animate-pulse mb-3"/>
-                        <div className="flex justify-between pt-2 border-t border-slate-50">
-                          <div className="h-2.5 w-12 bg-slate-100 rounded animate-pulse"/>
-                          <div className="h-2.5 w-16 bg-slate-100 rounded animate-pulse"/>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))
-            ) : (
-              stages.map(stage => {
-                const stageLeads = filteredLeads.filter(l => l.pipeline_stage_id === stage.id);
-                const stageColor = COLOR_HEX[stage.color] || '#6366f1';
-                const stageBg = BG_HEX[stage.bg_color] || '#f8fafc';
-                const stageTotal = stageLeads.reduce((s,l) => s+(l.value||0), 0);
-                const isDragTarget = dragOverStageId === stage.id;
-                const isDraggingAny = dragging !== null;
-                return (
-                  <div key={stage.id} className="flex flex-col w-72 flex-shrink-0">
-                    {/* Stage header */}
-                    <div className="flex items-center justify-between mb-3 px-1">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: stageColor }}/>
-                        <h3 className="font-black text-slate-700 text-sm">{stage.name}</h3>
-                        <span className="text-xs font-bold bg-slate-200 text-slate-600 w-5 h-5 rounded-full flex items-center justify-center">
-                          {stageLeads.length}
-                        </span>
-                      </div>
-                      {stageTotal > 0 && (
-                        <span className="text-[10px] font-bold text-slate-500">{formatCOP(stageTotal)}</span>
-                      )}
-                    </div>
-                    {/* Cards — Drop zone (ref registered for bounding rect detection) */}
-                    <div
-                      ref={el => { stageColumnRefs.current[stage.id] = el; }}
-                      className={`flex-1 overflow-y-auto rounded-2xl p-2 min-h-[200px] transition-all duration-150
-                        ${isDragTarget
-                          ? 'ring-2 ring-offset-2 scale-[1.01]'
-                          : isDraggingAny
-                          ? 'opacity-90'
-                          : ''}`}
-                      style={{
-                        backgroundColor: isDragTarget ? stageColor + '18' : stageBg + 'cc',
-                        border: isDragTarget ? `2px dashed ${stageColor}` : `1px solid ${stageColor}22`,
-                      }}>
-                      {stageLeads.map(lead => <LeadCard key={lead.id} lead={lead}/>)}
-                      {/* Drop indicator (empty or dragging) */}
-                      {(stageLeads.length === 0 || (isDragTarget && isDraggingAny)) && (
-                        <div className={`flex flex-col items-center justify-center h-20 rounded-xl transition-all
-                          ${isDragTarget ? 'border-2 border-dashed' : 'text-slate-300'}`}
-                          style={isDragTarget ? { borderColor: stageColor, color: stageColor } : {}}>
-                          {isDragTarget ? (
-                            <>
-                              <ArrowRight size={20} className="mb-1 animate-bounce"/>
-                              <p className="text-xs font-bold">Soltar aquí</p>
-                            </>
-                          ) : (
-                            <>
-                              <GripVertical size={20} className="mb-1"/>
-                              <p className="text-xs">Sin leads</p>
-                            </>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                    {/* Add button at bottom */}
-                    <button onClick={() => {
-                      setNlForm(f => ({...f, pipeline_stage_id: String(stage.id)}));
-                      setShowNewLead(true);
-                    }} className="mt-2 text-xs font-bold text-slate-400 hover:text-indigo-600 flex items-center gap-1 px-2 py-1.5 hover:bg-indigo-50 rounded-lg transition-colors">
-                      <Plus size={13}/> Agregar lead
-                    </button>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ══ LISTA VIEW ═══════════════════════════════════════════════════════ */}
-      {activeView === 'lista' && (
-        <div className="flex-1 overflow-y-auto bg-white rounded-2xl border border-slate-200 shadow-sm m-5">
-          {loading ? <div className="p-8 text-slate-400 flex items-center gap-3"><RefreshCw size={20} className="animate-spin"/>Cargando...</div> : (
-            <table className="w-full text-left">
-              <thead className="bg-slate-50 border-b border-slate-200 sticky top-0">
-                <tr>
-                  {['Cliente / Tipo','Producto','Etapa','Valor','Asesor','Días',''].map(h =>
-                    <th key={h} className="p-4 text-xs font-bold text-slate-500 uppercase tracking-wider">{h}</th>)}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredLeads.map(l => {
-                  const stage = stages.find(s => s.id === l.pipeline_stage_id);
-                  const staleAlert = stage && l.days >= (stage.alert_days || 7);
-                  return (
-                    <tr key={l.id} onClick={() => openDetail(l)}
-                      className={`hover:bg-slate-50 cursor-pointer transition-colors ${staleAlert ? 'bg-amber-50/30' : ''}`}>
-                      <td className="p-4">
-                        <p className="font-bold text-slate-900 text-sm">{l.client}</p>
-                        <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">
-                          {l.solicitud_tipo || l.tag}
-                        </span>
-                      </td>
-                      <td className="p-4 text-sm text-slate-600">
-                        {l.lead_product_name ? (
-                          <span className="flex items-center gap-1"><Package size={12}/>{l.lead_product_name}</span>
-                        ) : '—'}
-                      </td>
-                      <td className="p-4">
-                        {stage && <span className="text-xs font-bold px-2 py-1 rounded-md"
-                          style={{ color: COLOR_HEX[stage.color], backgroundColor: BG_HEX[stage.bg_color]||'#f8fafc' }}>
-                          {stage.name}
-                        </span>}
-                      </td>
-                      <td className="p-4 font-black text-slate-800 text-sm">{l.value>0?formatCOP(l.value):'—'}</td>
-                      <td className="p-4 text-sm text-slate-500">{l.advisor_name||'—'}</td>
-                      <td className="p-4">
-                        <span className={`flex items-center gap-1 text-sm font-bold ${staleAlert?'text-amber-600':'text-slate-400'}`}>
-                          {staleAlert && <AlertTriangle size={12}/>}{l.days}d
-                        </span>
-                      </td>
-                      <td className="p-4">
-                        <button onClick={e=>{e.stopPropagation();handleDeleteLead(l);}}
-                          className="p-1.5 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded"><Trash2 size={14}/></button>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {filteredLeads.length===0 && !loading && (
-                  <tr><td colSpan={7} className="text-center text-slate-400 py-12 text-sm">No hay leads. Crea uno con "Nuevo Lead".</td></tr>
+      {/* ══ B4 T21: la barra, la Lista y el Kanban (TABLA-otros 4, KANBAN-crm 3 y 5; R5, R11, D39, D40, D41) ═════════
+          Una sola barra para las dos vistas: la búsqueda es estado.q y el select de etapa (stage_id) va en `filtros`.
+          En Lista, la tabla estándar en el servidor; en Kanban, el tablero común en modo cliente con los mismos filtros.
+          «Análisis» reemplaza las dos. */}
+      {!enAnalisis && (
+        <div className="flex-1 min-h-0 overflow-y-auto p-5">
+          <div className="flex min-w-0 flex-col gap-4">
+            {capa}
+            <section ref={refTarjeta} className={claseTarjeta}>
+              <BarraTabla
+                estado={estado}
+                onEstado={despachar}
+                placeholder={estado.modo === 'lista' ? 'Buscar por cliente, producto o descripción…' : 'Buscar por cliente, producto, asesor…'}
+                filtros={(
+                  <select aria-label="Filtrar por etapa" value={filterStage} onChange={e => elegirEtapa(e.target.value)}
+                    className={`rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 ${FOCO_VISIBLE}`}>
+                    <option value="all">Todas las etapas</option>
+                    {stages.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
                 )}
-              </tbody>
-            </table>
-          )}
+                ajustes={{ columnas: columnasLista, preferencias: prefs, anchoRef: anchoTablaRef }}
+                pantallaCompleta={estado.modo === 'lista' ? { completa, alternar } : undefined}
+                {...(estado.modo === 'lista' ? {
+                  total: listado.total,
+                  estadoTotal: estadoDelTotal({
+                    total: listado.total, cargando: listado.cargandoInicial, recargando: listado.recargando, error: listado.error,
+                  }),
+                } : {})}
+              />
+              {estado.modo === 'lista' && (
+                <AccionesLead.Provider value={{ abrir: openDetail, borrar: handleDeleteLead }}>
+                  <TablaEstandar
+                    id={ID_LEADS}
+                    modo="servidor"
+                    columnas={columnasLista}
+                    preferencias={prefs}
+                    anchoRef={anchoTablaRef}
+                    estado={estado}
+                    onEstado={despachar}
+                    filas={listado.filas}
+                    total={listado.total}
+                    cargando={listado.cargandoInicial}
+                    recargando={listado.recargando}
+                    error={listado.error}
+                    onReintentar={listado.recargar}
+                    aviso={listado.avisoOrden}
+                    onFila={openDetail}
+                    claseFila={claseDeFilaLead}
+                    vacio={textoVacioLeads(filtroTablero)}
+                    etiqueta="Leads del CRM"
+                  />
+                </AccionesLead.Provider>
+              )}
+            </section>
+            {estado.modo === 'kanban' && (() => {
+              // Mientras faltan las preferencias o las etapas: el esqueleto. Sin etapas por un error: el error con
+              // «Reintentar» (nunca columnas vacías falsas). Con etapas y sin leads todavía: cada columna carga.
+              if (!listo || (!etapasListas && (loading || !errorEtapas))) return <EsqueletoTablero/>;
+              if (!etapasListas) {
+                return <ErrorCarga texto={textoDeError(errorEtapas, 'No se pudieron cargar las etapas del CRM')} onReintentar={() => loadAll()}/>;
+              }
+              if (!columnasTablero.length) {
+                return (
+                  <p className="rounded-2xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-600">
+                    No hay etapas configuradas. Créalas en «Configurar CRM».
+                  </p>
+                );
+              }
+              if (!leadsTablero && errorLeads && !loading) {
+                return <ErrorCarga texto={textoDeError(errorLeads, 'No se pudieron cargar los leads')} onReintentar={() => loadAll()}/>;
+              }
+              const fallo = errorLeads || errorEtapas;
+              return (
+                <TableroKanban
+                  tablero={tablero}
+                  regla={reglaSoltarLead}
+                  onCambio={moverDesdeTablero}
+                  onAbrir={openDetail}
+                  tarjetaDe={tarjetaDeLead}
+                  renderTarjeta={(lead, contexto) => (
+                    <LeadCard lead={lead} stage={etapasPorId[columnaDeLead(lead, stages)]} contexto={contexto}/>
+                  )}
+                  accionesTarjeta={(lead) => [
+                    { etiqueta: 'Borrar', icono: Trash2, peligro: true, onClick: () => handleDeleteLead(lead) },
+                  ]}
+                  resumenColumna={(clave) => textoResumenEtapa(clave, sumasTablero, { clavePerdido, perdidos })}
+                  pieColumna={(clave) => (
+                    <button type="button" onClick={() => {
+                      setNlForm(f => ({...f, pipeline_stage_id: clave}));
+                      setShowNewLead(true);
+                    }} className={`w-full text-xs font-bold text-slate-600 hover:text-indigo-700 flex items-center gap-1 px-2 py-1.5 hover:bg-indigo-50 rounded-lg transition-colors ${FOCO_VISIBLE}`}>
+                      <Plus size={13} aria-hidden="true"/> Agregar lead
+                    </button>
+                  )}
+                  color="indigo"
+                  vacio="Sin leads aquí"
+                  aviso={fallo && leadsTablero ? (
+                    <p role="alert" className="text-rose-800">
+                      {textoDeError(fallo, 'No se pudo actualizar el CRM')}{' '}
+                      <button type="button" onClick={() => loadAll()} className={`rounded font-bold underline ${FOCO_VISIBLE}`}>Reintentar</button>
+                    </p>
+                  ) : undefined}
+                />
+              );
+            })()}
+          </div>
         </div>
       )}
 
-      {/* ══ ANALISIS VIEW ════════════════════════════════════════════════════ */}
-      {activeView === 'analisis' && (
-        <div className="flex-1 overflow-y-auto p-5 space-y-5">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            {[
-              ['Leads Activos', leads.length, 'text-slate-800'],
-              ['Valor Total Pipeline', formatCOP(totalValue), 'text-purple-700'],
-              ['Etapas Configuradas', stages.length, 'text-indigo-700'],
-              ['Leads con Producto', leads.filter(l=>l.lead_product_name).length, 'text-emerald-700'],
-            ].map(([lbl, val, cls]) => (
-              <div key={lbl} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">{lbl}</p>
-                <p className={`text-2xl font-black ${cls}`}>{val}</p>
-              </div>
-            ))}
-          </div>
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-            <h3 className="font-bold text-slate-700 mb-4">Leads por etapa</h3>
-            <div className="space-y-3">
-              {stages.map(s => {
-                const count = getLeadsForStage(s).length;
-                const val = getLeadsForStage(s).reduce((sum, l) => sum+(l.value||0), 0);
-                const pct = leads.length > 0 ? Math.round((count/leads.length)*100) : 0;
-                const staleCount = getLeadsForStage(s).filter(l=>l.days>=(s.alert_days||7)).length;
-                return (
-                  <div key={s.id} className="flex items-center gap-3">
-                    <div className="w-32 text-sm font-bold text-slate-600 truncate">{s.name}</div>
-                    <div className="flex-1 bg-slate-100 rounded-full h-3 overflow-hidden">
-                      <div className="h-3 rounded-full transition-all" style={{ width:pct+'%', backgroundColor:COLOR_HEX[s.color]||'#94a3b8' }}/>
-                    </div>
-                    <div className="text-xs font-bold text-slate-600 w-6 text-right">{count}</div>
-                    {staleCount > 0 && (
-                      <div className="text-xs font-bold text-amber-600 flex items-center gap-0.5 w-16">
-                        <AlertTriangle size={10}/>{staleCount} atrasado{staleCount>1?'s':''}
-                      </div>
-                    )}
-                    <div className="text-xs font-bold text-slate-400 w-28 text-right hidden lg:block">{formatCOP(val)}</div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-          {/* Leads that need attention */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-            <h3 className="font-bold text-slate-700 mb-4 flex items-center gap-2">
-              <AlertTriangle size={16} className="text-amber-500"/> Leads que requieren atención
-            </h3>
-            <div className="divide-y divide-slate-100">
-              {leads.filter(l => {
-                const s = stages.find(st => st.id === l.pipeline_stage_id);
-                return s && l.days >= (s.alert_days||7);
-              }).slice(0,10).map(l => {
-                const s = stages.find(st => st.id === l.pipeline_stage_id);
-                return (
-                  <div key={l.id} onClick={() => openDetail(l)}
-                    className="py-3 flex items-center justify-between cursor-pointer hover:bg-amber-50/50 rounded-lg px-2 transition-colors">
-                    <div>
-                      <p className="font-bold text-slate-800 text-sm">{l.client}</p>
-                      <p className="text-xs text-slate-400">{l.solicitud_tipo} · {s?.name}</p>
-                    </div>
-                    <span className="text-xs font-bold text-amber-600 bg-amber-50 border border-amber-200 px-2 py-1 rounded-lg">
-                      {l.days}d sin movimiento
-                    </span>
-                  </div>
-                );
-              })}
-              {leads.filter(l => {
-                const s = stages.find(st => st.id === l.pipeline_stage_id);
-                return s && l.days >= (s.alert_days||7);
-              }).length === 0 && (
-                <p className="text-sm text-slate-400 text-center py-6">¡Todo al día! No hay leads atrasados.</p>
-              )}
-            </div>
-          </div>
+      {/* ══ ANALISIS VIEW (B4 T21, ANALISIS-crm punto 2; R2, R13, RP69, D45) ══════════════════════════════════════ */}
+      {enAnalisis && (
+        <div className="flex-1 min-h-0 overflow-y-auto p-5">
+          <PanelAnalisisPerezoso
+            modulo="crm"
+            endpoint="/crm/analisis"
+            acento="purple"
+            mejorLinea="sube"
+            alAbrirMovimiento={abrirMovimiento}
+            asistente={ASISTENTE_CRM}
+          />
         </div>
       )}
 
