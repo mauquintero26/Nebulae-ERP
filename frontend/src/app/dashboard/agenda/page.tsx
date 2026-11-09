@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   getCustomers, createCustomer, updateCustomer, deleteCustomer,
   createClienteSolicitud, getSolicitudTipos, getHeaders, API_URL, apiFetch
@@ -22,7 +22,11 @@ import { fechaCorta } from '@/lib/fechas-colombia';
 import { FranjaKpis, TarjetaKpi } from '@/components/ui';
 import { AvisoFuente } from '@/components/ui/AvisoFuente';
 import { avisoDeFuente } from '@/lib/avisos';
-import { datosDeRespuesta, numeroFinito, tarjetasFichaCliente, tarjetasFichaProveedor } from '@/lib/kpis';
+import {
+  datosDeRespuesta, esRespuestaVigente, estadoPedidosProveedor, pedidosDeProveedor, siguientePerfil, tarjetasFichaCliente,
+  tarjetasFichaProveedor,
+} from '@/lib/kpis';
+import { infoEstadoPec } from '@/lib/estados-compras';
 import { resumenFichaCliente } from '@/lib/kpis-ventas';
 
 function timeAgo(isoString: string) {
@@ -113,6 +117,9 @@ export default function AgendaPage() {
   // El total de GET /compras/pedidos?supplier_id= (la lista trae como mucho 200) y su error: el «Pedidos de compra» de la ficha.
   const [supplierPecsTotal, setSupplierPecsTotal] = useState<number | null>(null);
   const [supplierPecsError, setSupplierPecsError] = useState<unknown>(null);
+  // El cliente y el proveedor abiertos AHORA: una respuesta que llega tarde de otro no pisa lo que se ve (m12).
+  const vigenteCliente = useRef<number | null>(null);
+  const vigenteProveedor = useRef<number | null>(null);
   const [supplierModal, setSupplierModal] = useState<'NEW' | 'EDIT' | null>(null);
   const [deleteConfirmSupplier, setDeleteConfirmSupplier] = useState<any | null>(null);
   const [supplierForm, setSupplierForm] = useState({
@@ -156,12 +163,13 @@ export default function AgendaPage() {
   };
 
   const fetchProfile = async (realId: number) => {
+    vigenteCliente.current = realId;
     try {
       const json = await apiFetch(`/crm/customers/${realId}/profile-360`);
-      setPerfil({ id: realId, datos: datosDeRespuesta(json), error: null });
+      setPerfil((previo) => siguientePerfil(previo, realId, vigenteCliente.current, { datos: datosDeRespuesta(json) }));
     } catch (e) {
-      // Un error no borra el perfil del mismo cliente que ya se veía (queda con su aviso); el de otro cliente no cuenta.
-      setPerfil((previo) => ({ id: realId, datos: previo?.id === realId ? previo.datos : null, error: e }));
+      // siguientePerfil: una respuesta vieja se descarta y un error no borra el perfil del mismo cliente que ya se veía (queda con su aviso).
+      setPerfil((previo) => siguientePerfil(previo, realId, vigenteCliente.current, { error: e }));
     }
   };
 
@@ -169,8 +177,11 @@ export default function AgendaPage() {
   const fetchSuppliers = async () => {
     setLoadingSuppliers(true);
     try {
-      const res = await apiFetch('/compras/proveedores');
+      const res = await apiFetch('/compras/proveedores?limit=200');
       const list = res?.data || res || [];
+      // El servidor da 200 como máximo: si hay más, se dice (no se calla que la lista está cortada).
+      const faltan = Number(res?.total);
+      if (Array.isArray(list) && Number.isFinite(faltan) && faltan > list.length) toast.error(`Se muestran ${list.length} de ${faltan} proveedores`);
       setSuppliers(Array.isArray(list) ? list.map(proveedorDeServidor).filter(Boolean) : []);
     } catch (e) {
       console.error('Error cargando proveedores', e);
@@ -180,16 +191,19 @@ export default function AgendaPage() {
   };
 
   const openSupplier = async (sup: any) => {
+    vigenteProveedor.current = sup.id;
     setSelectedSupplier(sup);
     setSupplierPecs([]);
     setSupplierPecsTotal(null);
     setSupplierPecsError(null);
     try {
-      const res = await apiFetch(`/compras/pedidos?supplier_id=${sup.id}&limit=200`);
-      const items = Array.isArray(res?.data) ? res.data : [];
+      // pedidosDeProveedor lanza si no llega una lista: un error no se vuelve «0 pedidos».
+      const { items, total } = pedidosDeProveedor(await apiFetch(`/compras/pedidos?supplier_id=${sup.id}&limit=200`));
+      if (!esRespuestaVigente(sup.id, vigenteProveedor.current)) return;
       setSupplierPecs(items);
-      setSupplierPecsTotal(Math.max(numeroFinito(res?.total) ?? 0, items.length));
+      setSupplierPecsTotal(total);
     } catch (e) {
+      if (!esRespuestaVigente(sup.id, vigenteProveedor.current)) return;
       setSupplierPecs([]);
       setSupplierPecsError(e);
     }
@@ -205,6 +219,7 @@ export default function AgendaPage() {
     if (selectedClient && selectedClient !== 'NEW') {
       fetchProfile(selectedClient.realId);
     } else {
+      vigenteCliente.current = null;
       setPerfil(null);
     }
   }, [selectedClient]);
@@ -245,6 +260,7 @@ export default function AgendaPage() {
   }, [searchParams, customers]);
 
   const goBackSupplier = () => {
+    vigenteProveedor.current = null;
     setSelectedSupplier(null);
     setSupplierPecs([]);
     setSupplierPecsTotal(null);
@@ -624,7 +640,7 @@ export default function AgendaPage() {
 
                     <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
                       <span className="text-[11px] font-bold px-2 py-0.5 rounded-lg bg-teal-50 text-teal-700 border border-teal-100">
-                        {sup.condiciones_pago || 'Contado'} · {sup.moneda_default || 'COP'}
+                        {sup.condiciones_pago || 'Sin condiciones'}
                       </span>
                       <span className="text-xs font-bold text-teal-600 flex items-center gap-1 group-hover:translate-x-0.5 transition-transform">
                         Ficha 360 <ChevronRight size={14} />
@@ -797,6 +813,7 @@ export default function AgendaPage() {
     // ─── DETALLE PROVEEDOR (FICHA 360) ─────────────────────────────────────────
     const cleanPhone = (selectedSupplier.telefono || '').replace(/\D/g, '');
     const tarjetasProveedor = tarjetasFichaProveedor(selectedSupplier, supplierPecsTotal);
+    const pecs = estadoPedidosProveedor(supplierPecsError, supplierPecsTotal, supplierPecs);
 
     return (
       <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-6 overflow-y-auto animate-in fade-in">
@@ -875,7 +892,7 @@ export default function AgendaPage() {
           <FranjaKpis titulo="Indicadores del proveedor">
             <TarjetaKpi kpi="prov_condiciones_pago" valor={tarjetasProveedor.prov_condiciones_pago.valor} />
             <TarjetaKpi kpi="prov_pedidos_compra" valor={tarjetasProveedor.prov_pedidos_compra.valor}
-              estado={supplierPecsError ? 'error' : supplierPecsTotal === null ? 'cargando' : 'listo'} />
+              estado={pecs.estado} />
           </FranjaKpis>
         </div>
 
@@ -898,7 +915,7 @@ export default function AgendaPage() {
 
           {supplierPecs.length === 0 ? (
             <div className="py-12 text-center text-slate-400 text-xs">
-              {supplierPecsError ? 'No se pudieron cargar los pedidos de compra.' : supplierPecsTotal === null ? 'Cargando pedidos de compra…' : 'No hay pedidos de compra emitidos aún a este proveedor.'}
+              {pecs.texto ?? ''}
             </div>
           ) : (
             <div className="divide-y divide-slate-100">
@@ -908,7 +925,7 @@ export default function AgendaPage() {
                     <div className="flex items-center gap-2">
                       <span className="font-mono font-bold text-xs text-slate-800">{pec.numero}</span>
                       <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${STATUS_COLOR_MAP[pec.estado] || 'bg-slate-100 text-slate-600'}`}>
-                        {pec.estado}
+                        {infoEstadoPec(pec.estado).label}
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-400 mt-0.5">
@@ -1353,11 +1370,10 @@ export default function AgendaPage() {
         <div className="mb-6 space-y-3">
           {avisoPerfil && <AvisoFuente aviso={avisoPerfil} onReintentar={() => fetchProfile(selectedClient.realId)} />}
           <FranjaKpis estado={estadoFicha} titulo="Indicadores del cliente">
-            <TarjetaKpi kpi="pven_saldo_por_cobrar" valor={tarjetasCliente.pven_saldo_por_cobrar.valor} tono={tarjetasCliente.pven_saldo_por_cobrar.tono}
-              ayuda={tarjetasCliente.pven_saldo_por_cobrar.ayuda ?? undefined} />
-            <TarjetaKpi kpi="cli_total_comprado" valor={tarjetasCliente.cli_total_comprado.valor} ayuda={tarjetasCliente.cli_total_comprado.ayuda ?? undefined} />
-            <TarjetaKpi kpi="cli_total_pagado" valor={tarjetasCliente.cli_total_pagado.valor} ayuda={tarjetasCliente.cli_total_pagado.ayuda ?? undefined} />
-            <TarjetaKpi kpi="cli_cot_abiertas" valor={tarjetasCliente.cli_cot_abiertas.valor} ayuda={tarjetasCliente.cli_cot_abiertas.ayuda ?? undefined} />
+            <TarjetaKpi kpi="pven_saldo_por_cobrar" {...tarjetasCliente.pven_saldo_por_cobrar} />
+            <TarjetaKpi kpi="cli_total_comprado" {...tarjetasCliente.cli_total_comprado} />
+            <TarjetaKpi kpi="cli_total_pagado" {...tarjetasCliente.cli_total_pagado} />
+            <TarjetaKpi kpi="cli_cot_abiertas" {...tarjetasCliente.cli_cot_abiertas} />
           </FranjaKpis>
         </div>
       )}

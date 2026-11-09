@@ -1490,7 +1490,7 @@ console.log('--- TEST 34 (B4 T23B, KPI-otros punto 3; H13, RP66, RP70): la Agend
   // La ficha del cliente con las claves REALES de profile-360 (resumenFichaCliente) y con los ids del catálogo.
   assert.match(codigo, /const tarjetasCliente = tarjetasFichaCliente\(customer360 \? resumenFichaCliente\(customer360\) : null\);/);
   for (const id of ['pven_saldo_por_cobrar', 'cli_total_comprado', 'cli_total_pagado', 'cli_cot_abiertas']) {
-    assert.match(codigo, new RegExp(`<TarjetaKpi kpi="${id}" valor=\\{tarjetasCliente\\.${id}\\.valor\\}`), id);
+    assert.match(codigo, new RegExp(`<TarjetaKpi kpi="${id}" \\{\\.\\.\\.tarjetasCliente\\.${id}\\} />`), id);
   }
   assert.match(codigo, /<FranjaKpis estado=\{estadoFicha\} titulo="Indicadores del cliente">/);
   assert.ok(!/customer360\?\.(financials|quotations|saldo_pendiente_cop|ltv)|Total Comprado \(LTV\)|Saldo por Cobrar|Cotizaciones Vivas/.test(codigo), 'sin las claves que el servidor no manda ni los nombres viejos');
@@ -1499,13 +1499,29 @@ console.log('--- TEST 34 (B4 T23B, KPI-otros punto 3; H13, RP66, RP70): la Agend
   assert.match(codigo, /const estadoFicha = clienteActual !== null && perfilDelCliente === null \? 'cargando' : errorPerfil && !customer360 \? 'error' : 'listo';/);
   assert.match(codigo, /\{avisoPerfil && <AvisoFuente aviso=\{avisoPerfil\} onReintentar=\{\(\) => fetchProfile\(selectedClient\.realId\)\} \/>\}/);
   assert.match(codigo, /const json = await apiFetch\(`\/crm\/customers\/\$\{realId\}\/profile-360`\);/);
+  assert.match(codigo, /vigenteCliente\.current = realId;/);
+  assert.match(codigo, /setPerfil\(\(previo\) => siguientePerfil\(previo, realId, vigenteCliente\.current, \{ datos: datosDeRespuesta\(json\) \}\)\);/);
+  assert.match(codigo, /setPerfil\(\(previo\) => siguientePerfil\(previo, realId, vigenteCliente\.current, \{ error: e \}\)\);/);
+  assert.match(codigo, /\} else \{\s*vigenteCliente\.current = null;\s*setPerfil\(null\);/);
   assert.ok(!/console\.error\('Error perfil 360'/.test(codigo), 'el error del perfil no se traga');
   // La ficha del proveedor: lo que el servidor manda (payment_terms) y el total de sus pedidos de compra; sin «Contado» inventado.
   assert.match(codigo, /const tarjetasProveedor = tarjetasFichaProveedor\(selectedSupplier, supplierPecsTotal\);/);
   assert.match(codigo, /<TarjetaKpi kpi="prov_condiciones_pago" valor=\{tarjetasProveedor\.prov_condiciones_pago\.valor\} \/>/);
-  assert.match(codigo, /<TarjetaKpi kpi="prov_pedidos_compra" valor=\{tarjetasProveedor\.prov_pedidos_compra\.valor\}/);
+  assert.match(codigo, /<TarjetaKpi kpi="prov_pedidos_compra" valor=\{tarjetasProveedor\.prov_pedidos_compra\.valor\}\s*estado=\{pecs\.estado\} \/>/);
+  assert.match(codigo, /const pecs = estadoPedidosProveedor\(supplierPecsError, supplierPecsTotal, supplierPecs\);/);
+  assert.match(codigo, /\{pecs\.texto \?\? ''\}/);
+  assert.match(codigo, /const \{ items, total \} = pedidosDeProveedor\(await apiFetch/);
+  assert.match(codigo, /setSupplierPecs\(items\);\s*setSupplierPecsTotal\(total\);/);
+  assert.equal((codigo.match(/if \(!esRespuestaVigente\(sup\.id, vigenteProveedor\.current\)\) return;/g) ?? []).length, 2, 'una respuesta vieja del proveedor se descarta, en el éxito y en el error');
+  assert.match(codigo, /vigenteProveedor\.current = sup\.id;/);
+  assert.ok(!/Array\.isArray\(res\?\.data\) \? res\.data : \[\]/.test(codigo), 'una respuesta sin lista no es «0 pedidos»');
   assert.ok(!/Moneda Habitual|Tiempo Entrega Estimado|Pedidos PEC Emitidos|supplierPecs\.length\} ordenes|selectedSupplier\.condiciones_pago \|\| 'Contado'\}/.test(codigo), 'sin las tarjetas viejas del proveedor');
   assert.match(codigo, /setSuppliers\(Array\.isArray\(list\) \? list\.map\(proveedorDeServidor\)\.filter\(Boolean\) : \[\]\);/);
+  assert.match(codigo, /apiFetch\('\/compras\/proveedores\?limit=200'\)/);
+  assert.match(codigo, /Se muestran \$\{list\.length\} de \$\{faltan\} proveedores/);
+  assert.match(codigo, /\{sup\.condiciones_pago \|\| 'Sin condiciones'\}/);
+  assert.ok(!/\{sup\.moneda_default \|\| 'COP'\}|\{sup\.condiciones_pago \|\| 'Contado'\}/.test(codigo), 'la fila no inventa la moneda ni «Contado»');
+  assert.match(codigo, /\{infoEstadoPec\(pec\.estado\)\.label\}/);
   // La fecha de cada pedido de compra es fecha_compra (_pec_dict no manda fecha_pedido), un día de calendario (fechaCorta), no un instante.
   assert.match(codigo, /Fecha: \{pec\.fecha_compra \? fechaCorta\(pec\.fecha_compra\) : '-'\}/);
   assert.ok(!/fecha_pedido/.test(codigo), 'sin la clave que el servidor no manda');
