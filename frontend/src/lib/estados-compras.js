@@ -40,7 +40,7 @@
 import { congelar, humanizarCodigo, tiene } from './estados-pedido.js';
 import { diaColombia, fechaCorta, fechaSolo, horaCO, instante } from './fechas-colombia.js';
 // B4 T14: la consulta de cada columna del tablero de Compras (consultaColumnaPec) sale de la misma queryListado.
-import { queryListado } from './tabla.js';
+import { queryListado, recortarColumnas } from './tabla.js';
 // B4 T14 r1: la regla de la columna con filtro (m4, la misma de Ventas), el número del servidor (m7) y la regla de
 // recarga y el texto de los errores (m15).
 import { estadosDeColumnaLista } from './kanban.js';
@@ -1636,12 +1636,11 @@ export function columnasProductos(categorias, max = MAX_COLUMNAS_PRODUCTOS) {
     lista.push({ id: c.id, nombre: textoLimpio(c.name) ?? 'Sin nombre' });
   }
   lista.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es') || a.id - b.id);
-  const visibles = lista.slice(0, max);
-  const mas = lista.length - visibles.length;
+  const { visibles, mas, aviso } = recortarColumnas(lista, max);
   return {
     columnas: visibles.map((c, i) => columna(`cat-${c.id}`, c.nombre, TONOS_PRODUCTOS[i % TONOS_PRODUCTOS.length], [String(c.id)])),
     masCategorias: mas,
-    aviso: mas > 0 ? `${mas} ${mas === 1 ? 'categoría' : 'categorías'} más: usa la lista` : null,
+    aviso,
   };
 }
 

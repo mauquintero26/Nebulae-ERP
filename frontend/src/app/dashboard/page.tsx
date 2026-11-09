@@ -14,11 +14,12 @@ import { apiFetch } from '@/lib/api';
 import { FranjaKpis, TarjetaKpi, useEstadoKpi } from '@/components/ui';
 import { PasosFlujo, useResumenFlujo } from '@/components/flujo';
 import { estadoDeFranja } from '@/lib/flujo';
-import { textoDeError } from '@/lib/avisos';
-import { pasosEmbudoDashboard } from '@/lib/flujo-ventas';
+import { avisoEmbudoDashboard, pasosEmbudoDashboard } from '@/lib/flujo-ventas';
+import { infoEstadoPec } from '@/lib/estados-compras';
+import { infoEstadoPedido } from '@/lib/estados-pedido';
 import {
-  PERIODOS_DASHBOARD, TEXTO_PERIODO, etiquetaKpi, formatoEntero, lecturaDeCarga, periodoDashboard, radarOperativo,
-  tarjetasInventarioDashboard, tarjetasVitalesDashboard,
+  PERIODOS_DASHBOARD, RUTA_RADAR, TEXTO_PERIODO, datosDeRespuesta, etiquetaKpi, lecturaDeFuente, periodoDashboard, periodoVisto,
+  radarOperativo, tarjetasInventarioDashboard, tarjetasVitalesDashboard, textoAvisoFuente, textoRadar,
 } from '@/lib/kpis';
 
 function formatCOP(v: number | string | null | undefined) {
@@ -29,25 +30,23 @@ function formatCOP(v: number | string | null | undefined) {
 /**
  * Una fuente del Dashboard: GET `url` y su `data`. Cada fuente falla sola (las demás siguen). Mientras vuelve a pedirse
  * (Actualizar, otro período) se CONSERVA lo último que llegó y `cargando` es true: el número queda en 'actualizando', nunca en
- * 0 ni en la barra de la primera carga (lecturaDeCarga). Un error no deja datos viejos.
+ * 0 ni en la barra de la primera carga (lecturaDeFuente). Un error no deja datos viejos. `marca` es el período de los datos que
+ * se ven: el rótulo de la tarjeta sale de él, no del que se acaba de elegir.
  */
-function useFuente<T>(url: string) {
+function useFuente<T>(url: string, marca: string | null = null) {
   const [vuelta, setVuelta] = useState(0);
   const clave = `${url}|${vuelta}`;
-  const [llego, setLlego] = useState<{ vuelta: string; datos: T | null; error: unknown } | null>(null);
+  const [llego, setLlego] = useState<{ vuelta: string; datos: T | null; error: unknown; marca: string | null } | null>(null);
   useEffect(() => {
     const control = new AbortController();
+    // Una respuesta sin `data` es un error (datosDeRespuesta lanza y cae en el catch).
     apiFetch(url, { signal: control.signal })
-      .then((r: { data?: T } | null) => {
-        if (r?.data === null || r?.data === undefined || typeof r.data !== 'object') throw new Error('El servidor no devolvió datos.');
-        setLlego({ vuelta: clave, datos: r.data, error: null });
-      })
-      .catch((err: unknown) => { if (!control.signal.aborted) setLlego({ vuelta: clave, datos: null, error: err }); });
+      .then((r: unknown) => setLlego({ vuelta: clave, datos: datosDeRespuesta(r) as T, error: null, marca }))
+      .catch((err: unknown) => { if (!control.signal.aborted) setLlego({ vuelta: clave, datos: null, error: err, marca }); });
     return () => control.abort();
-  }, [url, clave]);
-  const { datos, cargando } = lecturaDeCarga(llego, clave);
+  }, [url, clave, marca]);
   const recargar = useCallback(() => setVuelta((n) => n + 1), []);
-  return { datos, cargando, error: cargando ? null : (llego?.error ?? null), recargar };
+  return { ...lecturaDeFuente(llego, clave), recargar };
 }
 
 /** Bajo una franja: si su fuente falló, lo dice con el detalle del servidor y «Reintentar» (nunca un 0 ni un vacío falso). */
@@ -55,7 +54,7 @@ function AvisoFuente({ error, texto, onReintentar }: { error: unknown; texto: st
   if (!error) return null;
   return (
     <p role="alert" className="flex flex-wrap items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
-      {textoDeError(error, texto)}.
+      {textoAvisoFuente(error, texto)}
       <button type="button" onClick={onReintentar}
         className="rounded font-bold underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700">
         Reintentar
@@ -74,8 +73,8 @@ export default function DashboardGeneral() {
   const [recientes, setRecientes] = useState({ pecsActivos: [] as any[], pedidosRecientes: [] as any[] });
 
   // ─── LAS FUENTES DE LAS TARJETAS (los mismos endpoints que los Hubs, R7) ──────────────────────────────────────────
-  const ventas = useFuente<DatosEndpoint>(`/ventas/stats?periodo=${periodo}`);
-  const compras = useFuente<DatosEndpoint>(`/compras/stats?periodo=${periodo}`);
+  const ventas = useFuente<DatosEndpoint>(`/ventas/stats?periodo=${periodo}`, periodo);
+  const compras = useFuente<DatosEndpoint>(`/compras/stats?periodo=${periodo}`, periodo);
   const inventario = useFuente<DatosEndpoint>('/inventory/stats');
   const clientes = useFuente<unknown[]>('/crm/customers');
   const flujo = useResumenFlujo('/ventas/flujo', 0);
@@ -85,11 +84,14 @@ export default function DashboardGeneral() {
   const vitales = tarjetasVitalesDashboard(ventas.datos, Array.isArray(clientes.datos) ? clientes.datos.length : null);
   const existencias = tarjetasInventarioDashboard(inventario.datos, compras.datos);
   const radar = radarOperativo(ventas.datos);
-  const textoPeriodo = TEXTO_PERIODO[periodo].comparado;
+  // m3 y m11: el rótulo y el «vs …» son los del período de los DATOS que se ven (el número viejo conserva su rótulo hasta que llega el nuevo).
+  const periodoDatos = periodoVisto(ventas.marca, periodo);
+  const textoPeriodo = TEXTO_PERIODO[periodoDatos].comparado;
   // El embudo: la caja con error o recargando dice «—» o se atenúa como en la franja del Hub (estadoDeFranja).
   const [huboErrorEmbudo, setHuboErrorEmbudo] = useState(false);
   const franjaEmbudo = estadoDeFranja({ cargando: flujo.cargando, error: flujo.error, huboError: huboErrorEmbudo });
   if (franjaEmbudo.conError !== huboErrorEmbudo) setHuboErrorEmbudo(franjaEmbudo.conError);
+  const avisoEmbudo = avisoEmbudoDashboard({ cargando: flujo.cargando, error: flujo.error, huboError: huboErrorEmbudo });
   const pasosEmbudo = useMemo(() => pasosEmbudoDashboard(flujo.datos), [flujo.datos]);
 
   // ─── COPILOTO IA ───────────────────────────────────────────────────────────
@@ -189,11 +191,11 @@ export default function DashboardGeneral() {
             </span>
             <AlertTriangle size={16} className="text-amber-200" />
             <p className="text-xs font-bold tracking-wide">
-              RADAR OPERATIVO: <span className="font-normal opacity-95">Hay {formatoEntero(radar.n)} {radar.n === 1 ? 'pedido de venta pendiente de compra' : 'pedidos de venta pendientes de compra'}, a la espera de la mercancía.</span>
+              RADAR OPERATIVO: <span className="font-normal opacity-95">{textoRadar(radar.n)}</span>
             </p>
           </div>
-          <Link href="/dashboard/compras/pedidos" className="text-xs font-bold underline hover:text-amber-100 flex items-center gap-1">
-            Ver Tránsito Compras <ChevronRight size={13} />
+          <Link href={RUTA_RADAR} className="text-xs font-bold underline hover:text-amber-100 flex items-center gap-1">
+            Ver pedidos <ChevronRight size={13} />
           </Link>
         </div>
       ) : (
@@ -206,12 +208,12 @@ export default function DashboardGeneral() {
                 : ventas.error
                   ? 'RADAR OPERATIVO: no se pudo calcular el estado de los pedidos.'
                   : 'RADAR OPERATIVO: calculando…'}
-              {ventas.error && (
+              {ventas.error ? (
                 <button type="button" onClick={ventas.recargar}
                   className="ml-2 rounded font-bold underline hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
                   Reintentar
                 </button>
-              )}
+              ) : null}
             </p>
           </div>
           <span className="text-[11px] font-mono text-slate-400 font-semibold">Nebulae Hub 2026</span>
@@ -373,16 +375,16 @@ export default function DashboardGeneral() {
         {/* 4. Los 4 KPIs Vitales del Negocio */}
         <div className="space-y-3">
           <FranjaKpis estado={estadoVentas} titulo="Indicadores vitales del negocio">
-            <TarjetaKpi kpi="vendido_periodo" etiqueta={etiquetaKpi('vendido_periodo', periodo)} textoPeriodo={textoPeriodo}
+            <TarjetaKpi kpi="vendido_periodo" etiqueta={etiquetaKpi('vendido_periodo', periodoDatos)} textoPeriodo={textoPeriodo}
               valor={vitales.vendido.valor} variacion={vitales.vendido.variacion} />
-            <TarjetaKpi kpi="ticket_promedio" etiqueta={etiquetaKpi('ticket_promedio', periodo)} textoPeriodo={textoPeriodo}
+            <TarjetaKpi kpi="ticket_promedio" etiqueta={etiquetaKpi('ticket_promedio', periodoDatos)} textoPeriodo={textoPeriodo}
               valor={vitales.ticket.valor} variacion={vitales.ticket.variacion} />
             <TarjetaKpi kpi="pven_saldo_por_cobrar" valor={vitales.saldo.valor}
               variacion={{ actual: vitales.saldo.valor, anterior: null, es_foto: true }} />
             <TarjetaKpi kpi="clientes_total" estado={estadoClientes} valor={vitales.clientes.valor} />
           </FranjaKpis>
           <AvisoFuente error={ventas.error} texto="No se pudieron cargar las cifras de ventas" onReintentar={ventas.recargar} />
-          <AvisoFuente error={clientes.error} texto="No se pudo contar los clientes" onReintentar={clientes.recargar} />
+          <AvisoFuente error={clientes.error} texto="No se pudieron contar los clientes" onReintentar={clientes.recargar} />
         </div>
 
         {/* 5. Embudo B2B & Radar Operativo */}
@@ -400,12 +402,12 @@ export default function DashboardGeneral() {
               </Link>
             </div>
             <div className="p-5 flex-1 flex flex-col gap-3 min-w-0">
-              {franjaEmbudo.conError && (
+              {avisoEmbudo.visible && (
                 <div role="alert" className="flex flex-wrap items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
-                  No se pudo cargar el embudo.
-                  <button type="button" onClick={flujo.recargar} aria-disabled={franjaEmbudo.reintentando}
+                  {avisoEmbudo.texto}
+                  <button type="button" onClick={() => { if (avisoEmbudo.puedeReintentar) flujo.recargar(); }} aria-disabled={avisoEmbudo.reintentando || undefined}
                     className="rounded font-bold underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700">
-                    {franjaEmbudo.reintentando ? 'Reintentando…' : 'Reintentar'}
+                    {avisoEmbudo.boton}
                   </button>
                 </div>
               )}
@@ -435,7 +437,7 @@ export default function DashboardGeneral() {
                       <p className="text-[10px] text-slate-400">Total: {formatCOP(pec.total_cop)}</p>
                     </div>
                     <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-teal-100 text-teal-800">
-                      {pec.estado}
+                      {infoEstadoPec(pec.estado).label}
                     </span>
                   </div>
                 ))
@@ -471,7 +473,7 @@ export default function DashboardGeneral() {
                     </div>
                     <div className="text-right">
                       <p className="text-xs font-black text-slate-800">{formatCOP(ven.total_cop)}</p>
-                      <span className="text-[9px] font-bold text-indigo-600">{ven.estado}</span>
+                      <span className="text-[9px] font-bold text-indigo-600">{infoEstadoPedido(ven.estado).label}</span>
                     </div>
                   </div>
                 ))

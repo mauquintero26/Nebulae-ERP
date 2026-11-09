@@ -25,6 +25,7 @@
  */
 
 import { congelar } from './estados-pedido.js';
+import { textoDeError } from './avisos.js';
 import { formatoPesos } from './pesos.js';
 
 /**
@@ -911,11 +912,9 @@ export function periodoDashboard(valor) {
   return hallado ? hallado.clave : /** @type {'30d'} */ (PERIODO_KPI);
 }
 
-const objetoPlano = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
-
 /** {actual, anterior} de un indicador del bloque `flujo` de /ventas/stats ({actual, anterior, variacion_pct}); sin dato, en null. */
 function parDeFlujo(p) {
-  return { actual: numeroFinito(objetoPlano(p) ? p.actual : null), anterior: numeroFinito(objetoPlano(p) ? p.anterior : null) };
+  return { actual: numeroFinito(datosDe(p) ? p.actual : null), anterior: numeroFinito(datosDe(p) ? p.anterior : null) };
 }
 
 /**
@@ -933,8 +932,8 @@ function parDeFlujo(p) {
  *   saldo: {valor: number | null}, clientes: {valor: number | null}}}
  */
 export function tarjetasVitalesDashboard(datosVentas, totalClientes) {
-  const flujo = objetoPlano(datosVentas) && objetoPlano(datosVentas.flujo) ? datosVentas.flujo : null;
-  const kpis = objetoPlano(datosVentas) && objetoPlano(datosVentas.kpis) ? datosVentas.kpis : null;
+  const flujo = datosDe(datosVentas) && datosDe(datosVentas.flujo) ? datosVentas.flujo : null;
+  const kpis = datosDe(datosVentas) && datosDe(datosVentas.kpis) ? datosVentas.kpis : null;
   const vendido = parDeFlujo(flujo?.vendido_cop);
   const ticket = parDeFlujo(flujo?.ticket_promedio_cop);
   return {
@@ -955,29 +954,91 @@ export function tarjetasVitalesDashboard(datosVentas, totalClientes) {
  *   en_transito: {valor: number | null, ayuda: string | null}}}
  */
 export function tarjetasInventarioDashboard(datosInventario, datosCompras) {
-  const inv = objetoPlano(datosInventario) ? datosInventario : null;
-  const activos = numeroFinito(objetoPlano(datosCompras) ? datosCompras.pec_activos : null);
+  const s = tarjetasStock(datosInventario);
+  const activos = numeroFinito(datosDe(datosCompras) ? datosCompras.pec_activos : null);
   return {
-    fisico: { valor: numeroFinito(inv?.unidades_fisicas) },
-    reservado: { valor: numeroFinito(inv?.unidades_reservadas) },
-    disponible: { valor: numeroFinito(inv?.unidades_disponibles) },
+    fisico: { valor: s?.fisico.valor ?? null },
+    reservado: { valor: s?.reservado.valor ?? null },
+    disponible: { valor: s?.disponible.valor ?? null },
     en_transito: {
-      valor: numeroFinito(inv?.unidades_en_transito),
+      valor: s?.en_transito.valor ?? null,
       ayuda: activos === null ? null : conNombre(activos, 'pedido de compra activo', 'pedidos de compra activos'),
     },
   };
 }
 
 /**
- * El radar del Dashboard General: los pedidos pendientes de compra de GET /ventas/stats (kpis.pven_pendiente_compra, el
- * mismo número de la pestaña «Pendientes de compra» del Hub de Ventas). {tipo: 'alerta', n} si hay alguno, {tipo: 'ok'} si
+ * El radar del Dashboard General: los pedidos de venta de la pestaña «Pend. Compra» de la lista de Pedidos de venta (GET
+ * /ventas/stats, kpis.pven_pendiente_compra: los estados de esa pestaña, no solo «esperando mercancía»). {tipo: 'alerta', n} si hay alguno, {tipo: 'ok'} si
  * no hay ninguno y null si el dato no llegó (ni alerta ni «todo bien» sin saberlo).
  * @param {any} datosVentas
  * @returns {{tipo: 'alerta', n: number} | {tipo: 'ok'} | null}
  */
 export function radarOperativo(datosVentas) {
-  const kpis = objetoPlano(datosVentas) && objetoPlano(datosVentas.kpis) ? datosVentas.kpis : null;
+  const kpis = datosDe(datosVentas) && datosDe(datosVentas.kpis) ? datosVentas.kpis : null;
   const n = numeroFinito(kpis?.pven_pendiente_compra);
   if (n === null) return null;
   return n > 0 ? { tipo: 'alerta', n } : { tipo: 'ok' };
+}
+
+/** El enlace del radar: la pestaña «Pend. Compra» de Pedidos de venta, la vista que tiene el número que cuenta el radar. */
+export const RUTA_RADAR = '/dashboard/ventas/venta?tab=pend_compra';
+
+/**
+ * La frase del radar: dice lo que cuenta su número (los pedidos de venta de la pestaña «Pend. Compra»).
+ * @param {number} n
+ * @returns {string}
+ */
+export function textoRadar(n) {
+  return `Hay ${formatoEntero(n)} ${n === 1 ? 'pedido de venta' : 'pedidos de venta'} en «Pend. Compra».`;
+}
+
+/**
+ * B4 T22 r1 (I1, M3): el `data` de la respuesta de un endpoint del Dashboard. Una respuesta sin un objeto en `data` es un
+ * ERROR (lanza), no un «listo» vacío.
+ * @param {any} respuesta
+ * @returns {any}
+ */
+export function datosDeRespuesta(respuesta) {
+  const d = datosDe(respuesta) ? respuesta.data : null;
+  // Un objeto o una lista (/crm/customers manda una lista en data); null, texto o número no son datos.
+  if (d === null || d === undefined || typeof d !== 'object') throw new Error('El servidor no devolvió datos.');
+  return d;
+}
+
+/**
+ * B4 T22 r1 (I1, M4; m3): lo que pinta el Dashboard de una fuente: lecturaDeCarga más el error de la vuelta VIGENTE (el de una
+ * vieja no se ve mientras se reintenta; un error no deja datos viejos) y la `marca` (el período) de los datos que se ven.
+ * @template T
+ * @param {{vuelta: number | string, datos: T | null, error: unknown, marca?: string | null} | null | undefined} llego
+ * @param {number | string} vuelta
+ * @returns {{datos: T | null, cargando: boolean, error: unknown, marca: string | null}}
+ */
+export function lecturaDeFuente(llego, vuelta) {
+  const { datos, cargando } = lecturaDeCarga(llego, vuelta);
+  return { datos, cargando, error: cargando ? null : (llego?.error ?? null), marca: llego?.marca ?? null };
+}
+
+/**
+ * B4 T22 r1 (m3, m11): el período del rótulo y del «vs …» de una tarjeta de dinero: el de los datos que se ven (`marca`), para
+ * que el número viejo no lleve el rótulo del período nuevo; sin datos todavía, el elegido.
+ * @param {string | null | undefined} marca
+ * @param {string} elegido
+ * @returns {'7d' | '30d' | 'mes'}
+ */
+export function periodoVisto(marca, elegido) {
+  return periodoDashboard(marca ?? elegido);
+}
+
+/**
+ * B4 T22 r1 (m6): el aviso de una fuente caída, 'No se pudieron cargar las existencias: Error del servidor.', con un solo
+ * punto al final aunque el mensaje ya lo traiga. Sin error, null.
+ * @param {unknown} error
+ * @param {string} texto
+ * @returns {string | null}
+ */
+export function textoAvisoFuente(error, texto) {
+  if (!error) return null;
+  const mensaje = textoDeError(error, texto);
+  return mensaje.endsWith('.') ? mensaje : `${mensaje}.`;
 }

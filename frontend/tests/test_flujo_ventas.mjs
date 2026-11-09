@@ -873,4 +873,20 @@ console.log('--- B4 T22 TEST 1: pasosEmbudoDashboard — el embudo del Dashboard
   assert.ok(Object.isFrozen(PASOS_FLUJO_VENTAS) && PASOS_FLUJO_VENTAS.every((p) => !('href' in p)));
 }
 
+console.log('--- B4 T22 r1 TEST 2: avisoEmbudoDashboard — cuándo el embudo ofrece «Reintentar» (I1 M10, m7) y el enlace del radar ---');
+{
+  assert.equal(typeof fv.avisoEmbudoDashboard, 'function');
+  // Sin error y sin carga: no hay aviso. La primera carga sin error tampoco.
+  assert.deepEqual(fv.avisoEmbudoDashboard({ cargando: false, error: null, huboError: false }), { visible: false, reintentando: false, puedeReintentar: false, boton: null, texto: null });
+  assert.equal(fv.avisoEmbudoDashboard({ cargando: true, error: null, huboError: false }).visible, false);
+  // Con error: se ve, dice qué pasó y «Reintentar» pide otra vez.
+  const conError = fv.avisoEmbudoDashboard({ cargando: false, error: new Error('x'), huboError: false });
+  assert.deepEqual(conError, { visible: true, reintentando: false, puedeReintentar: true, boton: 'Reintentar', texto: 'No se pudo cargar el embudo.' });
+  // Mientras se reintenta (la carga vuelve a salir tras un error): sigue visible, «Reintentando…» y NO vuelve a pedir (la guarda de BannerFlujo).
+  const reintentando = fv.avisoEmbudoDashboard({ cargando: true, error: null, huboError: true });
+  assert.deepEqual(reintentando, { visible: true, reintentando: true, puedeReintentar: false, boton: 'Reintentando…', texto: 'No se pudo cargar el embudo.' });
+  // El enlace del radar abre la pestaña de Pedidos que tiene ese número.
+  assert.equal(fv.leerEnlacePedidos('?tab=pend_compra'), 'pend_compra');
+}
+
 console.log('\nOK: test_flujo_ventas.mjs');

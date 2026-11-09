@@ -2181,6 +2181,20 @@ const TONOS_GASTOS = congelar(['rose', 'indigo', 'amber', 'emerald', 'sky', 'pur
 const RUTA_GASTOS = '/finance/expenses';
 
 /**
+ * El recorte de las columnas de un tablero por categoría (R11; Productos y Gastos): las `max` primeras y, si sobran, el aviso
+ * «N categorías más: usa la lista». Es el ÚNICO lugar de ese texto.
+ * @param {ReadonlyArray<string> | null | undefined} nombres
+ * @param {number} max
+ * @returns {{visibles: string[], mas: number, aviso: string | null}}
+ */
+export function recortarColumnas(nombres, max) {
+  const todas = Array.isArray(nombres) ? nombres : [];
+  const visibles = todas.slice(0, max);
+  const mas = todas.length - visibles.length;
+  return { visibles, mas, aviso: mas > 0 ? `${mas} ${mas === 1 ? 'categoría' : 'categorías'} más: usa la lista` : null };
+}
+
+/**
  * Las columnas del tablero solo para ver de Gastos: una por clave de `conteos` ({categoría: n}, GET /finance/expenses con
  * con_conteos=1), por nombre (en español), a lo sumo `max` (12, R11). `estados[0]` es la categoría tal cual: es lo que se manda
  * como `categoria` (igualdad en el servidor). `masCategorias` cuenta las que no caben y `aviso` es «N categorías más: usa la
@@ -2194,31 +2208,36 @@ const RUTA_GASTOS = '/finance/expenses';
  *   masCategorias: number, aviso: string | null}}
  */
 export function columnasGastos(conteos, max = MAX_COLUMNAS_GASTOS, elegida = null) {
+  // m15: la categoría de la columna es la MISMA que se manda (recortada: el servidor también la recorta); las claves que solo
+  // difieren en los espacios son una.
   let nombres = objeto(conteos)
-    ? Object.entries(conteos).filter(([nombre, n]) => nombre.trim() !== '' && (numeroFinito(n) ?? 0) > 0).map(([nombre]) => nombre)
+    ? [...new Set(Object.entries(conteos).filter(([nombre, n]) => nombre.trim() !== '' && (numeroFinito(n) ?? 0) > 0).map(([nombre]) => nombre.trim()))]
     : [];
   nombres.sort((a, b) => a.localeCompare(b, 'es') || (a < b ? -1 : a > b ? 1 : 0));
   const filtro = textoLimpio(elegida);
   if (filtro !== null) nombres = nombres.filter((nombre) => nombre === filtro);
-  const visibles = nombres.slice(0, max);
-  const mas = nombres.length - visibles.length;
+  const { visibles, mas, aviso } = recortarColumnas(nombres, max);
   return {
     columnas: visibles.map((nombre, i) => ({
       clave: `cat:${nombre}`, titulo: nombre, tono: TONOS_GASTOS[i % TONOS_GASTOS.length], estados: [nombre], cerrada: false,
     })),
     masCategorias: mas,
-    aviso: mas > 0 ? `${mas} ${mas === 1 ? 'categoría' : 'categorías'} más: usa la lista` : null,
+    aviso,
   };
 }
 
+/** m17: el filtro de tipo de Gastos (recurrente | variable, RP58); otro valor no se manda. */
+const tipoDeFiltro = (v) => (v === 'recurrente' || v === 'variable' ? v : null);
+
 /**
  * Lo que la barra de Gastos le suma a la consulta de la lista (`extra` de useListado): la categoría elegida como `categoria`
- * (igualdad; vacía no se manda) y sin `vista` (el endpoint no la tiene). Nunca `tipo` ni «concepto» con otro sentido (RP58).
- * @param {{categoria?: string | null} | null | undefined} filtros
- * @returns {{vista: null, categoria: string | null}}
+ * (igualdad; vacía no se manda), el tipo (recurrente | variable) y sin `vista` (el endpoint no la tiene).
+ * @param {{categoria?: string | null, tipo?: string | null} | null | undefined} filtros
+ * @returns {{vista: null, categoria: string | null, tipo: 'recurrente' | 'variable' | null}}
  */
 export function extraGastos(filtros) {
-  return { vista: null, categoria: textoLimpio(objeto(filtros) ? filtros.categoria : null) };
+  const f = objeto(filtros) ? filtros : {};
+  return { vista: null, categoria: textoLimpio(f.categoria), tipo: tipoDeFiltro(f.tipo) };
 }
 
 /**
@@ -2229,7 +2248,7 @@ export function extraGastos(filtros) {
  * una columna que no es una categoría, también null.
  * @param {EstadoTabla | null | undefined} estado
  * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
- * @param {{categoria?: string | null} | null | undefined} filtros
+ * @param {{categoria?: string | null, tipo?: string | null} | null | undefined} filtros
  * @param {{limit: number, offset: number}} consulta
  * @returns {string | null}
  */
@@ -2238,18 +2257,19 @@ export function consultaColumnaGasto(estado, columna, filtros, { limit, offset }
   if (categoria === null) return null;
   const elegida = textoLimpio(objeto(filtros) ? filtros.categoria : null);
   if (elegida !== null && elegida !== categoria) return null;
-  return queryListado(estado, { vista: null, semaforo: null, paso: null, estados: null, categoria, limit, offset });
+  return queryListado(estado, { vista: null, semaforo: null, paso: null, estados: null, categoria, limit, offset, tipo: tipoDeFiltro(objeto(filtros) ? filtros.tipo : null) });
 }
 
 /**
  * La URL de los conteos por categoría del tablero de Gastos: con_conteos=1 y limit=0 (solo los conteos, sin filas), con la
  * búsqueda del estado y sin su orden, página ni categoría (el servidor cuenta con `q` y sin `categoria`).
  * @param {EstadoTabla | null | undefined} estado
+ * @param {{tipo?: string | null} | null | undefined} [filtros] el tipo también filtra los conteos (RP58)
  * @returns {string}
  */
-export function urlConteosGastos(estado) {
+export function urlConteosGastos(estado, filtros = null) {
   return urlListado(RUTA_GASTOS, estado, {
-    extra: { vista: null, semaforo: null, paso: null, estados: null, orden: null, limit: 0, offset: 0 },
+    extra: { vista: null, semaforo: null, paso: null, estados: null, orden: null, limit: 0, offset: 0, tipo: tipoDeFiltro(objeto(filtros) ? filtros.tipo : null) },
     conConteos: true,
   });
 }
@@ -2263,7 +2283,7 @@ export function urlConteosGastos(estado) {
  */
 export function categoriasDeConteos(conteos, elegida) {
   if (!objeto(conteos)) return null;
-  const nombres = new Set(Object.keys(conteos).filter((n) => n.trim() !== ''));
+  const nombres = new Set(Object.keys(conteos).map((n) => n.trim()).filter((n) => n !== ''));
   const actual = textoLimpio(elegida);
   if (actual !== null) nombres.add(actual);
   return [...nombres]
@@ -2327,14 +2347,34 @@ export function fechaDeGasto(dia, ahora = new Date()) {
 
 /**
  * Lo que dice la tabla de Gastos cuando no hay filas: la búsqueda, la categoría elegida, las dos o ninguna.
- * @param {{q?: string | null, categoria?: string | null} | null | undefined} filtro
+ * @param {{q?: string | null, categoria?: string | null, tipo?: string | null} | null | undefined} filtro
  * @returns {{titulo: string, ayuda: string | null}}
  */
 export function textoVacioGastos(filtro) {
   const q = textoLimpio(objeto(filtro) ? filtro.q : null);
   const categoria = textoLimpio(objeto(filtro) ? filtro.categoria : null);
-  if (q && categoria) return { titulo: `Ningún gasto de «${categoria}» coincide con «${q}».`, ayuda: 'Cambia la búsqueda o quita la categoría.' };
-  if (q) return { titulo: `Ningún gasto coincide con «${q}».`, ayuda: 'Prueba con otra palabra de la categoría o del concepto.' };
-  if (categoria) return { titulo: `No hay gastos en la categoría «${categoria}».`, ayuda: 'Quita la categoría para ver todos.' };
+  const tipo = tipoDeFiltro(objeto(filtro) ? filtro.tipo : null);
+  const clase = tipo === 'recurrente' ? ' recurrentes' : tipo === 'variable' ? ' variables' : '';
+  if (q && categoria) return { titulo: `Ningún gasto${clase} de «${categoria}» coincide con «${q}».`, ayuda: 'Cambia la búsqueda o quita la categoría.' };
+  if (q) return { titulo: `Ningún gasto${clase} coincide con «${q}».`, ayuda: 'Prueba con otra palabra de la categoría o del concepto.' };
+  if (categoria) return { titulo: `No hay gastos${clase} en la categoría «${categoria}».`, ayuda: 'Quita la categoría para ver todos.' };
+  if (tipo) return { titulo: `No hay gastos${clase}.`, ayuda: 'Quita el tipo para ver todos.' };
   return { titulo: 'Sin gastos registrados.', ayuda: 'Usa «Añadir Gasto» para registrar el primero.' };
+}
+
+/**
+ * B4 T22 r1 (I1 M2; m12): qué muestra el tablero de Gastos con los conteos `{clave, datos, error}` y la `clave` de la consulta
+ * vigente. 'cargando' sin conteos; 'error' si la consulta vigente falló y no hay conteos viejos; 'listo' con conteos. Un error de
+ * la consulta vigente SE DICE (`error`) también cuando ya había conteos viejos (el tablero queda, con su aviso), y mientras llega
+ * otra consulta lo último queda `actualizando` sin el error de la anterior.
+ * @param {{clave: string, datos: Record<string, number> | null, error: unknown} | null | undefined} conteos
+ * @param {string} clave
+ * @returns {{tipo: 'cargando' | 'error' | 'listo', error: unknown, actualizando: boolean}}
+ */
+export function estadoTableroGastos(conteos, clave) {
+  const vigente = conteos?.clave === clave;
+  const error = vigente ? (conteos?.error ?? null) : null;
+  if ((conteos?.datos ?? null) !== null) return { tipo: 'listo', error, actualizando: !vigente };
+  if (error) return { tipo: 'error', error, actualizando: false };
+  return { tipo: 'cargando', error: null, actualizando: false };
 }

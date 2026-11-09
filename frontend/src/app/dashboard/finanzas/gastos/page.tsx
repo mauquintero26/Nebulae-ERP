@@ -13,10 +13,10 @@ import {
 } from '@/components/tabla';
 import type { ColumnaTabla } from '@/components/tabla';
 import { fechaLarga } from '@/lib/fechas-colombia';
-import { formatoPesos } from '@/lib/pesos';
+import { formatoPesos, redondearPeso } from '@/lib/pesos';
 import { textoDeError } from '@/lib/avisos';
 import {
-  MAX_COLUMNAS_GASTOS, TEXTO_SOLO_VER_GASTOS, categoriasDeConteos, columnasGastos, consultaColumnaGasto, dependenciasTablero, estadoDelTotal, extraGastos,
+  MAX_COLUMNAS_GASTOS, TEXTO_SOLO_VER_GASTOS, categoriasDeConteos, columnasGastos, consultaColumnaGasto, dependenciasTablero, estadoDelTotal, estadoTableroGastos, extraGastos,
   fechaDeGasto, normalizarRespuesta, tarjetaGasto, textoVacioGastos, tipoDeGasto, urlConteosGastos,
 } from '@/lib/tabla';
 // Las piezas del selector de categoría y el contenedor de las pantallas del bloque son las de Inventario (T18): no se copian.
@@ -70,7 +70,7 @@ const COLUMNAS_GASTOS: ColumnaTabla<Gasto>[] = [
 /** Un gasto no tiene ficha: la tarjeta del tablero no ofrece «Abrir» (renderTarjeta no pinta el menú), y esto solo cumple la firma. */
 const sinFicha = () => {};
 
-const BOTON_SECUNDARIO =`flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-bold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 ${FOCOS.indigo}`;
+const BOTON_SECUNDARIO = `flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-bold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 ${FOCOS.indigo}`;
 
 export default function GastosPage() {
   const { avisar, avisarError } = useAvisos();
@@ -84,7 +84,9 @@ export default function GastosPage() {
   const [estado, despachar, listo] = useEstadoTabla(ID_GASTOS, INICIAL_GASTOS);
   const enKanban = estado.modo === 'kanban';
   const [categoria, setCategoria] = useState('');
-  const filtros = useMemo(() => ({ categoria }), [categoria]);
+  // m17: el tipo (recurrente | variable) también va al servidor (RP58) y vuelve a la página 1.
+  const [tipo, setTipo] = useState('');
+  const filtros = useMemo(() => ({ categoria, tipo }), [categoria, tipo]);
   const extraLista = useMemo(() => extraGastos(filtros), [filtros]);
   // GET /finance/expenses con q, orden, limit y offset. esperar: !listo (D40): el esqueleto, nunca «vacío». En Kanban no pide la lista.
   const listado = useListado<Gasto>({
@@ -93,7 +95,7 @@ export default function GastosPage() {
 
   // Los conteos por categoría ({categoría: n}, con la búsqueda y sin la categoría): las columnas del tablero y las opciones del filtro.
   // Se piden aparte porque en Kanban la lista no se pide. Un error o una recarga no borran lo último que llegó.
-  const urlConteos = urlConteosGastos(estado);
+  const urlConteos = urlConteosGastos(estado, filtros);
   const [vueltaConteos, setVueltaConteos] = useState(0);
   const claveConteos = `${urlConteos}|${vueltaConteos}`;
   const [conteos, setConteos] = useState<ConteosCargados | null>(null);
@@ -106,11 +108,13 @@ export default function GastosPage() {
     return () => control.abort();
   }, [listo, urlConteos, claveConteos]);
   const recargandoConteos = listo && conteos?.clave !== claveConteos;
+  // I1 y m12: qué muestra el tablero (cargando, error o listo; un error SE DICE también con conteos viejos y lo viejo queda atenuado).
+  const estadoConteos = estadoTableroGastos(conteos, claveConteos);
   const recargarConteos = useCallback(() => setVueltaConteos((n) => n + 1), []);
-  // El selector de Inventario lee `id` solo como el valor del <option> (String(id)): aquí el id de una categoría es su nombre.
+  // El selector de Inventario pide ids numéricos: la opción es la posición en la lista (1, 2…) y la categoría elegida es su nombre.
   const catalogoCategorias = useMemo(
-    () => ({ filas: categoriasDeConteos(conteos?.datos ?? null, categoria), error: conteos?.error ?? null }) as unknown as Catalogo,
-    [conteos, categoria],
+    (): Catalogo => ({ filas: (categoriasDeConteos(conteos?.datos ?? null, categoria) ?? null)?.map((o, i) => ({ id: i + 1, name: o.name })) ?? null, error: estadoConteos.error }),
+    [conteos, categoria, estadoConteos.error],
   );
 
   // ── bloque G-3: el tablero solo para ver, en modo servidor (R11, C4, D39) ──
@@ -123,7 +127,7 @@ export default function GastosPage() {
     columnas: columnasTablero,
     activo: listo && enKanban && conteos?.datos != null && columnasTablero.length > 0,
     porColumna: estado.tamano,
-    dependencias: [...dependenciasTablero(estado), estado.orden, categoria],
+    dependencias: [...dependenciasTablero(estado), estado.orden, categoria, tipo],
     cargar: async (columna, { offset, limit, signal }) => {
       const consulta = consultaColumnaGasto(estado, columna, filtros, { limit, offset });
       if (consulta === null) return { filas: [], total: 0 };
@@ -147,20 +151,25 @@ export default function GastosPage() {
   const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
   // Pasar a Kanban sale de la pantalla completa (el conmutador sigue a la vista y el tablero no queda tapado).
   useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
+  const valorCategoria = String(catalogoCategorias.filas?.find((o) => o.name === categoria)?.id ?? '');
+  const cambiarTipo = useCallback((valor: string) => {
+    setTipo(valor);
+    despachar({ tipo: 'pagina', valor: 1 });
+  }, [despachar]);
   const cambiarCategoria = useCallback((valor: string) => {
     setCategoria(valor);
     despachar({ tipo: 'pagina', valor: 1 });
   }, [despachar]);
   // El «vacío» memoizado dice qué lo deja vacío (la búsqueda, la categoría o nada).
   const vacio = useMemo(() => {
-    const texto = textoVacioGastos({ q: estado.q, categoria });
+    const texto = textoVacioGastos({ q: estado.q, categoria, tipo });
     return (
       <div>
         <p className="font-semibold text-slate-600">{texto.titulo}</p>
         {texto.ayuda && <p className="mt-1 text-xs text-slate-500">{texto.ayuda}</p>}
       </div>
     );
-  }, [estado.q, categoria]);
+  }, [estado.q, categoria, tipo]);
   // «N resultados» es el de la tabla; en Kanban cada columna trae su total (la barra no lo repite).
   const totalDeLaBarra = enKanban ? {} : {
     total: listado.total,
@@ -177,7 +186,7 @@ export default function GastosPage() {
         body: JSON.stringify({
           category: form.category,
           description: form.description || null,
-          amount: parseFloat(form.amount),
+          amount: redondearPeso(parseFloat(form.amount)), // pesos enteros, sin centavos (R16)
           // RP57: el día elegido como mediodía de Colombia (sin fecha, hoy en Colombia): nunca medianoche UTC.
           incurred_date: fechaDeGasto(form.incurred_date),
           is_recurring: form.is_recurring,
@@ -224,9 +233,19 @@ export default function GastosPage() {
             onEstado={despachar}
             placeholder="Buscar por categoría o concepto…"
             filtros={(
+              <>
+              <label className="inline-flex items-center gap-1.5">
+                <select aria-label="Tipo" value={tipo} onChange={(e) => cambiarTipo(e.target.value)}
+                  className={`max-w-[11rem] rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 ${FOCOS.indigo}`}>
+                  <option value="">Todos los tipos</option>
+                  <option value="recurrente">Recurrentes</option>
+                  <option value="variable">Variables</option>
+                </select>
+              </label>
               <SelectorCatalogo etiqueta="Categoría" todas="Todas las categorías" cargando="Cargando categorías…"
-                fallo="No se pudieron cargar las categorías" catalogo={catalogoCategorias} valor={categoria}
-                onCambiar={cambiarCategoria} onReintentar={recargarConteos} icono={Layers} acento="indigo" />
+                fallo="No se pudieron cargar las categorías" catalogo={catalogoCategorias} valor={valorCategoria}
+                onCambiar={(valor) => cambiarCategoria(catalogoCategorias.filas?.find((o) => String(o.id) === valor)?.name ?? '')} onReintentar={recargarConteos} icono={Layers} acento="indigo" />
+              </>
             )}
             ajustes={{ columnas: COLUMNAS_GASTOS, preferencias: prefs, anchoRef: anchoTablaRef }}
             kanbanDisponible
@@ -255,13 +274,22 @@ export default function GastosPage() {
             />
           )}
         </section>
+        {estadoConteos.tipo === 'listo' && estadoConteos.error ? (
+          <div role="alert" className="flex flex-wrap items-center gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">
+            {textoDeError(estadoConteos.error, 'No se pudieron actualizar las categorías')} (se ven las últimas que llegaron)
+            <button type="button" onClick={recargarConteos}
+              className={`inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 ${FOCOS.indigo}`}>
+              <RefreshCw size={13} aria-hidden="true" /> Reintentar
+            </button>
+          </div>
+        ) : null}
         {enKanban ? (
           /* KANBAN-resto: una columna por categoría (12 como máximo, con su aviso), solo para ver: sin regla, con su motivo. Un gasto no
              tiene ficha: la tarjeta no ofrece «Abrir». Sin los conteos no hay columnas: se dice (con «Reintentar» si fallaron). */
-          conteos?.datos == null ? (
-            conteos?.error ? (
+          estadoConteos.tipo !== 'listo' ? (
+            estadoConteos.tipo === 'error' ? (
               <div role="alert" className="flex flex-wrap items-center gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">
-                {textoDeError(conteos.error, 'No se pudieron cargar las categorías')}
+                {textoDeError(estadoConteos.error, 'No se pudieron cargar las categorías')}
                 <button type="button" onClick={recargarConteos}
                   className={`inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 ${FOCOS.indigo}`}>
                   <RefreshCw size={13} aria-hidden="true" /> Reintentar
@@ -272,9 +300,10 @@ export default function GastosPage() {
             )
           ) : columnasTablero.length === 0 ? (
             <div className="rounded-2xl border border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-600">
-              {estado.q.trim() || categoria ? textoVacioGastos({ q: estado.q, categoria }).titulo : 'Todavía no hay gastos: registra el primero para ver el tablero.'}
+              {estado.q.trim() || categoria || tipo ? textoVacioGastos({ q: estado.q, categoria, tipo }).titulo : 'Todavía no hay gastos: registra el primero para ver el tablero.'}
             </div>
           ) : (
+            <div aria-busy={estadoConteos.actualizando || undefined} className={estadoConteos.actualizando ? 'opacity-60' : undefined}>
             <TableroKanban
               tablero={tablero}
               soloLectura={TEXTO_SOLO_VER_GASTOS}
@@ -287,6 +316,7 @@ export default function GastosPage() {
                 ? <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-800">{avisoCategorias}</p>
                 : undefined}
             />
+            </div>
           )
         ) : null}
       </div>
@@ -318,7 +348,7 @@ export default function GastosPage() {
               <div>
                 <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">Monto (COP) *</label>
                 <input type="number" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
-                  placeholder="0"className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-rose-500" />
+                  placeholder="0" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-rose-500" />
               </div>
               <div>
                 <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">Fecha</label>

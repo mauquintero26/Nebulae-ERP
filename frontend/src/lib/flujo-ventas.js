@@ -20,7 +20,7 @@
  *    el paso).
  */
 
-import { congelar, conteosDePasos, opcionesSemaforo, pasosConConteos } from './flujo.js';
+import { congelar, conteosDePasos, estadoDeFranja, opcionesSemaforo, pasosConConteos } from './flujo.js';
 import {
   ESTADOS_PEDIDO, esCotizacionActiva, esPedidoVigente, humanizarCodigo, infoEstadoPedido, tiene, PASOS_PEDIDO, grupoPedido,
 } from './estados-pedido.js';
@@ -685,4 +685,24 @@ export function anotarPasosCotizacion(pasos, p) {
       ...(conAviso ? { avisos: [{ ...p.aviso }] } : {}),
     };
   });
+}
+
+/**
+ * B4 T22 r1 (I1 M10, m7): el aviso del embudo del Dashboard con lo que trae useResumenFlujo (cargando, error) y `huboError` (lo
+ * que se vio en el render anterior, como BannerFlujo): con error, o reintentando después de uno, se ve «No se pudo cargar el
+ * embudo.» con «Reintentar»; mientras reintenta dice «Reintentando…» y NO vuelve a pedir (la guarda de BannerFlujo). La primera
+ * carga sin error no tiene aviso.
+ * @param {{cargando?: boolean, error?: unknown, huboError?: boolean}} estado
+ * @returns {{visible: boolean, reintentando: boolean, puedeReintentar: boolean, boton: string | null, texto: string | null}}
+ */
+export function avisoEmbudoDashboard({ cargando = false, error = null, huboError = false } = {}) {
+  const f = estadoDeFranja({ cargando, error, huboError });
+  if (!f.conError) return { visible: false, reintentando: false, puedeReintentar: false, boton: null, texto: null };
+  return {
+    visible: true,
+    reintentando: f.reintentando,
+    puedeReintentar: !f.reintentando,
+    boton: f.reintentando ? 'Reintentando…' : 'Reintentar',
+    texto: 'No se pudo cargar el embudo.',
+  };
 }
