@@ -20,6 +20,8 @@ import { HEX_CLASE_TAILWIND, hexDeClaseTailwind } from './analisis.js';
 import { definirColumnas } from './kanban.js';
 import { formatoPesos } from './pesos.js';
 import { filtrarFilas } from './tabla.js';
+import { acentoDesdeClase } from './kpis.js';
+import { hace } from './fechas-colombia.js';
 
 /**
  * @typedef {import('./kanban.js').ResultadoSoltar} ResultadoSoltar
@@ -513,4 +515,128 @@ export function camposDeEtapa(etapa) {
   if (!etapa || typeof etapa !== 'object') return campos;
   for (const c of CAMPOS_ETAPA) if (tiene(etapa, c) && etapa[c] !== undefined) campos[c] = etapa[c];
   return campos;
+}
+
+// ─── B4 T23B: Seguimientos del CRM (KPI-otros punto 2; RP7) ────────────────────────────────────────────────────────────
+
+/**
+ * Las etapas que muestra Seguimientos: todas menos Perdido (maps_to_status CANCELLED). GET /crm/leads deja fuera los
+ * perdidos (perdidos='excluir' por defecto), así que esa etapa saldría siempre vacía, y «0» sería falso.
+ * @param {ReadonlyArray<EtapaCrm> | {data?: ReadonlyArray<EtapaCrm>} | null | undefined} stages
+ * @returns {EtapaCrm[]}
+ */
+export function etapasDeSeguimiento(stages) {
+  return etapasDe(stages).filter((s) => s.maps_to_status !== 'CANCELLED');
+}
+
+/**
+ * La vista de Seguimientos para una búsqueda y una etapa: filtrarLeads (la búsqueda sin tildes en el cliente, la
+ * descripción, el producto y el asesor; la etapa con la regla de columnaDelTablero) y solo lo que tiene grupo en pantalla
+ * (un lead que cae en la etapa Perdido sin ser CANCELLED no se ve, y por eso no se cuenta). Las tarjetas, las pastillas y los
+ * grupos salen de ESTA función: el número de cada una es el de la vista que abre. Sin etapas, solo la búsqueda.
+ * @param {ReadonlyArray<any> | null | undefined} leads
+ * @param {ReadonlyArray<EtapaCrm> | {data?: ReadonlyArray<EtapaCrm>} | null | undefined} stages
+ * @param {{q?: string | null, etapa?: string | number | null}} [filtro]
+ * @returns {ReadonlyArray<any>}
+ */
+export function filtrarSeguimiento(leads, stages, { q, etapa } = {}) {
+  const lista = Array.isArray(leads) ? leads : [];
+  const visibles = new Set(etapasDeSeguimiento(stages).map((e) => String(e.id)));
+  if (visibles.size === 0) return filtrarLeads(lista, { q }, null);
+  return filtrarLeads(lista, { q, etapa }, stages).filter((l) => visibles.has(/** @type {string} */ (columnaDelTablero(l, stages))));
+}
+
+/**
+ * Las tarjetas de Seguimientos: las 3 primeras etapas (nombre de la etapa, color con acentoDesdeClase y el número de la vista
+ * que abren: la búsqueda más esa etapa) y el total (todas las etapas con la misma búsqueda, y de ellos los atrasados: 7 días o
+ * más sin actividad y abiertos). `activa` marca lo elegido ('' o 'all' es el total). Mientras los leads cargan (null), null:
+ * la pantalla pinta la barra gris, nunca 0.
+ * @param {ReadonlyArray<any> | null | undefined} leads
+ * @param {ReadonlyArray<EtapaCrm> | {data?: ReadonlyArray<EtapaCrm>} | null | undefined} stages
+ * @param {{q?: string | null, etapa?: string | number | null}} [filtro]
+ * @returns {{etapas: Array<{clave: string, nombre: string, acento: import('./kpis.js').ColorKpi, valor: number, activa: boolean}>,
+ *   total: {valor: number, urgentes: number, ayuda: string, activa: boolean}} | null}
+ */
+export function tarjetasSeguimientos(leads, stages, { q, etapa } = {}) {
+  if (!Array.isArray(leads)) return null;
+  const elegida = etapaDe(etapa);
+  const todos = filtrarSeguimiento(leads, stages, { q });
+  const urgentes = todos.filter(esLeadAtrasadoAbierto).length;
+  return {
+    etapas: etapasDeSeguimiento(stages).slice(0, 3).map((s) => {
+      const clave = String(s.id);
+      return {
+        clave,
+        nombre: typeof s.name === 'string' && s.name.trim() ? s.name.trim() : `Etapa ${s.id}`,
+        acento: acentoDesdeClase(s.color),
+        valor: filtrarSeguimiento(leads, stages, { q, etapa: clave }).length,
+        activa: elegida === clave,
+      };
+    }),
+    total: { valor: todos.length, urgentes, ayuda: `${urgentes} con ${DIAS_ALERTA_LEAD} días o más sin actividad`, activa: elegida === '' },
+  };
+}
+
+/**
+ * Los grupos de la lista de Seguimientos: uno por etapa (con su color en hex, que sí es un color; la clase de Tailwind de la
+ * etapa no lo es) y sus leads de la vista; con una etapa elegida, solo esa. Sin leads (null), [].
+ * @param {ReadonlyArray<any> | null | undefined} leads
+ * @param {ReadonlyArray<EtapaCrm> | {data?: ReadonlyArray<EtapaCrm>} | null | undefined} stages
+ * @param {{q?: string | null, etapa?: string | number | null}} [filtro]
+ * @returns {Array<{clave: string, nombre: string, colorHex: string, leads: ReadonlyArray<any>}>}
+ */
+export function gruposDeSeguimiento(leads, stages, { q, etapa } = {}) {
+  if (!Array.isArray(leads)) return [];
+  const elegida = etapaDe(etapa);
+  const visibles = etapasDeSeguimiento(stages);
+  const columnas = columnasDesdeEtapas(visibles);
+  return columnas
+    .filter((c) => elegida === '' || c.clave === elegida)
+    .map((c) => ({ clave: c.clave, nombre: c.titulo, colorHex: c.colorHex, leads: filtrarSeguimiento(leads, stages, { q, etapa: c.clave }) }));
+}
+
+/**
+ * Lo que dice la tarjeta de un lead de Seguimientos, con las claves que SÍ manda GET /crm/leads (_lead_to_dict): client, value,
+ * phone, email, description, lead_product_name, advisor_name, days y updated_at (sin zona: es UTC, hace() de fechas-colombia).
+ * `valor` es null sin dinero (sin pastilla) y `atrasado` no cuenta los leads cerrados (esLeadAtrasadoAbierto).
+ * @param {any} lead
+ * @returns {{nombre: string, producto: string, valor: string | null, telefono: string | null, correo: string | null,
+ *   descripcion: string, asesor: string, diasTexto: string, atrasado: boolean, hace: string}}
+ */
+export function fichaDeLeadSeguimiento(lead) {
+  const texto = (v) => (typeof v === 'string' ? v.trim() : '');
+  const dinero = Number(lead?.value);
+  return {
+    nombre: texto(lead?.client) || 'Sin nombre',
+    producto: texto(lead?.lead_product_name),
+    valor: Number.isFinite(dinero) && dinero > 0 ? formatoPesos(dinero) : null,
+    telefono: texto(lead?.phone) || null,
+    correo: texto(lead?.email) || null,
+    descripcion: texto(lead?.description),
+    asesor: texto(lead?.advisor_name),
+    diasTexto: textoDiasLead(lead),
+    atrasado: esLeadAtrasadoAbierto(lead),
+    hace: lead?.updated_at ? (hace(lead.updated_at) || 'Sin actividad') : 'Sin actividad',
+  };
+}
+
+/**
+ * B4 T23B (RP7): lo que Seguimientos toma de las dos respuestas, GET /crm/leads ({status, data, total}) y GET /crm/pipeline-stages
+ * ({status, data}), o de una lista tal cual (como las lee crm/page.tsx): {leads, stages, total}. `total` es el del servidor (los
+ * leads sin perder; nunca menos que los que llegaron). Una respuesta sin una lista en `data` NO es «sin leads»: es un error, y
+ * lanza Error('El servidor no devolvió datos.') para que la pantalla lo diga con «Reintentar».
+ * @param {any} respuestaLeads
+ * @param {any} respuestaEtapas
+ * @returns {{leads: any[], stages: any[], total: number}}
+ */
+export function datosDeSeguimiento(respuestaLeads, respuestaEtapas) {
+  const lista = (r) => {
+    const l = Array.isArray(r) ? r : r !== null && typeof r === 'object' ? r.data : null;
+    if (!Array.isArray(l)) throw new Error('El servidor no devolvió datos.');
+    return l;
+  };
+  const leads = lista(respuestaLeads);
+  const stages = lista(respuestaEtapas);
+  const total = Number(respuestaLeads?.total);
+  return { leads, stages, total: Number.isFinite(total) ? Math.max(total, leads.length) : leads.length };
 }

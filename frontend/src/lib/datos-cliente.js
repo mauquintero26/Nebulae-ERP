@@ -408,3 +408,26 @@ export function avisoNombreSinContacto(documento) {
     ? /** @type {{ nombre_cambio_sin_contacto?: unknown }} */ (documento).nombre_cambio_sin_contacto : undefined;
   return campo === true ? AVISO_NOMBRE_SIN_CONTACTO : null;
 }
+
+/**
+ * B4 T23B: el proveedor de GET /compras/proveedores (erp_compras.py _supplier_dict: name, contact_name, phone, address, country,
+ * payment_terms, email y city) con las claves que lee la Agenda (nombre, contacto_nombre, telefono, direccion, pais y
+ * condiciones_pago; email y city siguen como llegan). Se CONSERVAN las del servidor. Lo que el servidor no manda (la moneda y el
+ * tiempo de entrega, que Supplier no tiene) no se inventa. Sin proveedor (null o lo que no es un objeto), null.
+ * @param {any} s
+ * @returns {Record<string, any> | null}
+ */
+export function proveedorDeServidor(s) {
+  if (s === null || typeof s !== 'object' || Array.isArray(s)) return null;
+  const de = (nuevo, viejo) => (s[nuevo] !== undefined ? s[nuevo] : (s[viejo] ?? null));
+  return {
+    ...s,
+    nombre: de('nombre', 'name'),
+    contacto_nombre: de('contacto_nombre', 'contact_name'),
+    telefono: de('telefono', 'phone'),
+    direccion: de('direccion', 'address'),
+    ciudad: de('ciudad', 'city'),
+    pais: de('pais', 'country'),
+    condiciones_pago: de('condiciones_pago', 'payment_terms'),
+  };
+}

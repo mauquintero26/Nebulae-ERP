@@ -10,7 +10,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import {
   PERIODO_KPI, TEXTO_PERIODO, FORMATOS_KPI, COLORES_KPI, estadoKpi, variacionPct, textoVariacion, direccionVariacion,
@@ -1187,6 +1187,124 @@ console.log('--- TEST 28 (B4 T23A): el cableado de las tarjetas de la tienda en 
   const cargasTienda = codigo.slice(codigo.indexOf('const [vueltaStats'), codigo.indexOf('const [estadoPedidos'));
   assert.ok(cargasTienda.length > 500 && !/catch \{\}|\.catch\(\(\) => \{\}\)/.test(cargasTienda), 'ninguna carga de la tienda se traga su error');
   assert.ok(!/catPublicados|catBajoStock/.test(codigo), 'los publicados salen del servidor, no de la página del catálogo');
+}
+
+console.log('--- TEST 29 (B4 T23B, KPI-otros puntos 3, 4 y 6; RP70): las tarjetas de Marketing, de una campaña, de la ficha del cliente y del proveedor, y la tarjeta del Asistente ---');
+{
+  const k = await import('../src/lib/kpis.js');
+  const kv = await import('../src/lib/kpis-ventas.js');
+
+  // — Marketing: GET /marketing/stats (marketing.py marketing_stats), con los textos de RP70: «(45,2 %)» y «Retorno: 45,2 %».
+  const STATS = {
+    campanas_activas: 3, campanas_total: 12, leads_total: 250, leads_convertidos: 113, ventas_atribuidas_cop: 12500000,
+    presupuesto_total_cop: 8600000, roi_pct: 45.3, tasa_conversion_pct: 45.2, posts_hoy: 1, posts_total: 17, flujos_activos: 4,
+  };
+  const m = k.tarjetasMarketing(STATS);
+  assert.deepEqual(m, {
+    camp_activas: { valor: 3, ayuda: '12 campañas en total' },
+    leads_capturados: { valor: 250, ayuda: '113 convertidos (45,2 %)' },
+    ventas_atribuidas: { valor: 12500000, ayuda: 'Retorno: 45,3 %' },
+    flujos_activos: { valor: 4, ayuda: '17 posts publicados' },
+  });
+  // Singulares y un ROI negativo con su signo.
+  const uno = k.tarjetasMarketing({ ...STATS, campanas_total: 1, leads_convertidos: 1, posts_total: 1, roi_pct: -12.5 });
+  assert.equal(uno.camp_activas.ayuda, '1 campaña en total');
+  assert.equal(uno.leads_capturados.ayuda, '1 convertido (45,2 %)');
+  assert.equal(uno.flujos_activos.ayuda, '1 post publicado');
+  assert.equal(uno.ventas_atribuidas.ayuda, 'Retorno: -12,5 %');
+  // Sin presupuesto el servidor manda roi 0 (no hay retorno que medir): nunca un «Retorno: 0 %» falso.
+  assert.equal(k.tarjetasMarketing({ ...STATS, presupuesto_total_cop: 0, roi_pct: 0 }).ventas_atribuidas.ayuda, 'Retorno: sin presupuesto');
+  // Un 0 real se queda en 0; lo que no llega es null (la barra gris o «—»), nunca 0.
+  assert.equal(k.tarjetasMarketing({ ...STATS, campanas_activas: 0 }).camp_activas.valor, 0);
+  const vacio = { camp_activas: { valor: null, ayuda: null }, leads_capturados: { valor: null, ayuda: null }, ventas_atribuidas: { valor: null, ayuda: null }, flujos_activos: { valor: null, ayuda: null } };
+  assert.deepEqual(k.tarjetasMarketing(null), vacio);
+  assert.deepEqual(k.tarjetasMarketing({}), vacio);
+  assert.deepEqual(k.tarjetasMarketing([1]), vacio);
+  assert.equal(k.tarjetasMarketing({ ...STATS, tasa_conversion_pct: null }).leads_capturados.ayuda, '113 convertidos', 'sin la tasa, solo los convertidos');
+  assert.equal(k.tarjetasMarketing({ ...STATS, leads_convertidos: 'x' }).leads_capturados.ayuda, null);
+
+  // — Una campaña: la fila de GET /marketing/campanas (leads_count, ventas_cop de los CONVERTIDO, presupuesto_cop) y sus leads.
+  const CAMP = { id: 5, nombre: 'Black Friday', leads_count: 4, ventas_cop: 3000000, presupuesto_cop: 2000000 };
+  const LEADS = [{ id: 1, estado: 'CONVERTIDO' }, { id: 2, estado: 'NUEVO' }, { id: 3, estado: 'CONVERTIDO' }, { id: 4, estado: 'PERDIDO' }];
+  const c = k.tarjetasCampana(CAMP, LEADS);
+  assert.deepEqual(c, {
+    leads_capturados: { valor: 4 },
+    leads_convertidos: { valor: 2 },
+    ventas_atribuidas: { valor: 3000000 },
+    roi: { valor: 50, tono: 'bien', ayuda: null },
+  });
+  // El retorno es ventas / presupuesto - 100 (la misma fórmula del servidor): negativo = alerta; 0 = normal.
+  assert.deepEqual(k.tarjetasCampana({ ...CAMP, ventas_cop: 1000000 }, LEADS).roi, { valor: -50, tono: 'alerta', ayuda: null });
+  assert.deepEqual(k.tarjetasCampana({ ...CAMP, ventas_cop: 2000000 }, LEADS).roi, { valor: 0, tono: 'normal', ayuda: null });
+  // Sin presupuesto no hay retorno: «—» con su motivo, nunca «+NaN%» ni «0 %».
+  assert.deepEqual(k.tarjetasCampana({ ...CAMP, presupuesto_cop: 0 }, LEADS).roi, { valor: null, tono: 'normal', ayuda: 'Sin presupuesto' });
+  assert.deepEqual(k.tarjetasCampana({ ...CAMP, presupuesto_cop: null }, LEADS).roi.ayuda, 'Sin presupuesto');
+  // Mientras los leads cargan (null): los convertidos no se inventan (barra gris); los capturados salen de la fila de la campaña.
+  const sinLeads = k.tarjetasCampana(CAMP, null);
+  assert.equal(sinLeads.leads_convertidos.valor, null);
+  assert.equal(sinLeads.leads_capturados.valor, 4);
+  // Con los leads a la vista, los capturados son los que se ven (agregar uno actualiza el número sin recargar la lista).
+  assert.equal(k.tarjetasCampana(CAMP, [...LEADS, { id: 9, estado: 'NUEVO' }]).leads_capturados.valor, 5);
+  assert.equal(k.tarjetasCampana(CAMP, []).leads_convertidos.valor, 0, 'una campaña sin leads: ceros de verdad');
+  assert.deepEqual(k.tarjetasCampana(null, null).leads_capturados, { valor: null });
+
+  // — La ficha del cliente de la Agenda: resumenFichaCliente (kpis-ventas.js) con los ids del catálogo (RP70: cli_cot_abiertas).
+  const PERFIL = {
+    resumen_financiero: { total_comprado_cop: 1500000, total_pagado_cop: 600000, saldo_pendiente_cop: 900000, saldo_a_favor_cop: 0 },
+    pedidos: [{ estado: 'EN_PROCESO' }, { estado: 'CANCELADO' }, { estado: 'ENTREGADO' }],
+    cotizaciones: [{ estado: 'BORRADOR' }, { estado: 'CONFIRMADA' }, { estado: 'ENVIADA' }],
+    solicitudes: [{ estado: 'ASIGNADA' }, { estado: 'CONFIRMADA' }],
+  };
+  const f = k.tarjetasFichaCliente(kv.resumenFichaCliente(PERFIL));
+  assert.deepEqual(f, {
+    pven_saldo_por_cobrar: { valor: 900000, tono: 'alerta', ayuda: 'Cobro pendiente antes del despacho' },
+    cli_total_comprado: { valor: 1500000, ayuda: '2 pedidos' },
+    cli_total_pagado: { valor: 600000, ayuda: 'Pagos confirmados, menos devoluciones' },
+    cli_cot_abiertas: { valor: 2, ayuda: '1 solicitud activa' },
+  });
+  // Saldo en 0: tono bien y «Al día con pagos». Un pedido: «1 pedido».
+  const alDia = k.tarjetasFichaCliente(kv.resumenFichaCliente({ ...PERFIL, resumen_financiero: { ...PERFIL.resumen_financiero, saldo_pendiente_cop: 0 }, pedidos: [{ estado: 'ENTREGADO' }] }));
+  assert.deepEqual(alDia.pven_saldo_por_cobrar, { valor: 0, tono: 'bien', ayuda: 'Al día con pagos' });
+  assert.equal(alDia.cli_total_comprado.ayuda, '1 pedido');
+  // BODEGA y COMPRAS (resumen_financiero null): «—» con el motivo, y los conteos (que sí llegan) siguen.
+  const sinPermiso = k.tarjetasFichaCliente(kv.resumenFichaCliente({ ...PERFIL, resumen_financiero: null }));
+  assert.deepEqual(sinPermiso.pven_saldo_por_cobrar, { valor: null, tono: 'normal', ayuda: 'Sin permiso para ver montos' });
+  assert.deepEqual(sinPermiso.cli_total_comprado, { valor: null, ayuda: 'Sin permiso para ver montos' });
+  assert.deepEqual(sinPermiso.cli_total_pagado, { valor: null, ayuda: 'Sin permiso para ver montos' });
+  assert.equal(sinPermiso.cli_cot_abiertas.valor, 2);
+  // Mientras el perfil no llega (null): nada de ceros.
+  assert.deepEqual(k.tarjetasFichaCliente(null), {
+    pven_saldo_por_cobrar: { valor: null, tono: 'normal', ayuda: null },
+    cli_total_comprado: { valor: null, ayuda: null },
+    cli_total_pagado: { valor: null, ayuda: null },
+    cli_cot_abiertas: { valor: null, ayuda: null },
+  });
+
+  // — La ficha del proveedor: lo que el servidor SÍ manda (GET /compras/proveedores: payment_terms) y el total de GET /compras/pedidos?supplier_id=.
+  assert.deepEqual(k.tarjetasFichaProveedor({ payment_terms: '30 días' }, 7), {
+    prov_condiciones_pago: { valor: '30 días' },
+    prov_pedidos_compra: { valor: 7 },
+  });
+  assert.deepEqual(k.tarjetasFichaProveedor({ payment_terms: '  ' }, 0), { prov_condiciones_pago: { valor: null }, prov_pedidos_compra: { valor: 0 } }, 'sin condiciones, «—»: nunca «Contado» inventado');
+  assert.deepEqual(k.tarjetasFichaProveedor(null, null), { prov_condiciones_pago: { valor: null }, prov_pedidos_compra: { valor: null } });
+
+  // — La tarjeta oscura del Asistente: los nombres del catálogo (RP70) y formatoPesos, sin el .split(',')[0] de formatCOP.
+  const rev = { total_spent_cop: 4927538, total_orders_count: 6, active_orders_count: 2, avg_ticket_cop: 821256.33, segmento: 'Cliente Frecuente' };
+  assert.deepEqual(k.fichaRevenueAsistente(rev), {
+    total: { etiqueta: 'Total comprado', texto: '$4.927.538' },
+    mini: [
+      { etiqueta: 'Total de pedidos', texto: '6' },
+      { etiqueta: 'Pedidos en curso', texto: '2' },
+      { etiqueta: 'Ticket promedio', texto: '$821.256' },
+    ],
+  });
+  assert.equal(k.fichaRevenueAsistente(rev).total.etiqueta, k.CATALOGO_KPI.cli_total_comprado.etiqueta);
+  assert.deepEqual(k.fichaRevenueAsistente(rev).mini.slice(0, 2).map((x) => x.etiqueta), [k.CATALOGO_KPI.pven_total.etiqueta, k.CATALOGO_KPI.pven_en_curso.etiqueta]);
+  const sin = k.fichaRevenueAsistente({});
+  assert.equal(sin.total.texto, '—');
+  assert.deepEqual(sin.mini.map((x) => x.texto), ['—', '—', '—'], 'lo que no llega es «—», nunca $0');
+  assert.equal(k.fichaRevenueAsistente(null).total.texto, '—');
+  assert.equal(k.fichaRevenueAsistente({ ...rev, total_spent_cop: 0, total_orders_count: 0, active_orders_count: 0, avg_ticket_cop: 0 }).mini[2].texto, '$0', 'un cero real se dice');
 }
 
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

@@ -68,3 +68,39 @@ export function accesoTienda(rol) {
     editarCatalogo: esAdmin(rol),
   };
 }
+
+/**
+ * B4 T23B: lo que cada rol puede pedir en Seguimientos del CRM, de la lista EXACTA de require_roles de cada endpoint
+ * (backend/app/api/v1/crm.py): GET /crm/leads es de ADMIN y ASESOR (GET /crm/pipeline-stages es de todos los roles del ERP, pero
+ * sin leads la pantalla no tiene qué mostrar). `listo` es false con un rol vacío o que no es texto (la hidratación): nada se pide.
+ * @param {unknown} rol
+ * @returns {{listo: boolean, leads: boolean}}
+ */
+export function accesoSeguimientos(rol) {
+  if (normalizarRol(rol) === '') return { listo: false, leads: false };
+  return { listo: true, leads: esAdminOAsesor(rol) };
+}
+
+/**
+ * B4 T23B: lo que cada rol puede pedir y hacer en Marketing y en Campañas (backend/app/api/v1/marketing.py): /stats, /campanas, sus
+ * leads, lanzar, pausar y sincronizar con el CRM son de ADMIN y ASESOR (`ver`); borrar una campaña (DELETE /campanas/{id}) es solo de
+ * ADMIN. `listo` es false con un rol vacío o que no es texto: nada se pide.
+ * @param {unknown} rol
+ * @returns {{listo: boolean, ver: boolean, eliminarCampana: boolean}}
+ */
+export function accesoMarketing(rol) {
+  if (normalizarRol(rol) === '') return { listo: false, ver: false, eliminarCampana: false };
+  return { listo: true, ver: esAdminOAsesor(rol), eliminarCampana: esAdmin(rol) };
+}
+
+/**
+ * B4 T23B: lo que cada rol puede pedir en la columna de contexto del Asistente omnicanal (backend/app/api/v1/chat.py:
+ * /search-customers, /customer-context, /create-customer-request y /ai-copilot-suggest: ADMIN y ASESOR). `listo` es false con un rol
+ * vacío o que no es texto: nada se pide.
+ * @param {unknown} rol
+ * @returns {{listo: boolean, contexto: boolean}}
+ */
+export function accesoAsistente(rol) {
+  if (normalizarRol(rol) === '') return { listo: false, contexto: false };
+  return { listo: true, contexto: esAdminOAsesor(rol) };
+}

@@ -1128,3 +1128,159 @@ export function textoLimiteCarritos(total, llegaron) {
   if (t === null || n === null || n <= 0 || t <= n) return null;
   return `Los ${formatoEntero(n)} más recientes de ${formatoEntero(t)}`;
 }
+
+// ─── B4 T23B: Marketing, Campañas, la ficha de la Agenda y la tarjeta del Asistente (KPI-otros puntos 3, 4 y 6; RP70) ──────
+
+/** Un texto con su nombre en singular o plural: «1 campaña en total», «12 campañas en total». */
+const cuantos = (n, uno, varios) => `${formatoEntero(n)} ${n === 1 ? uno : varios}`;
+
+/**
+ * Lo que pintan las 4 tarjetas de Marketing con `data` de GET /marketing/stats (marketing.py marketing_stats):
+ *  - camp_activas: campanas_activas, con «N campañas en total» (campanas_total);
+ *  - leads_capturados: leads_total, con «N convertidos (45,2 %)» (leads_convertidos y tasa_conversion_pct, con formatoValorKpi);
+ *  - ventas_atribuidas: ventas_atribuidas_cop, con «Retorno: 45,3 %» (roi_pct) o «Retorno: sin presupuesto» (el servidor manda
+ *    roi 0 cuando presupuesto_total_cop es 0: ese 0 no es un retorno);
+ *  - flujos_activos: flujos_activos, con «N posts publicados» (posts_total).
+ * Lo que no llega (cargando, con error o sin la clave) es null: la barra gris o «—», nunca 0. Un 0 real se queda en 0.
+ * @param {unknown} datos
+ * @returns {{camp_activas: {valor: number | null, ayuda: string | null}, leads_capturados: {valor: number | null, ayuda: string | null},
+ *   ventas_atribuidas: {valor: number | null, ayuda: string | null}, flujos_activos: {valor: number | null, ayuda: string | null}}}
+ */
+export function tarjetasMarketing(datos) {
+  const s = /** @type {Record<string, unknown>} */ (datosDe(datos) ?? {});
+  const total = numeroFinito(s.campanas_total);
+  const convertidos = numeroFinito(s.leads_convertidos);
+  const tasa = numeroFinito(s.tasa_conversion_pct);
+  const roi = numeroFinito(s.roi_pct);
+  const presupuesto = numeroFinito(s.presupuesto_total_cop);
+  const posts = numeroFinito(s.posts_total);
+  /** @type {string | null} */
+  let retorno = null;
+  if (presupuesto !== null && presupuesto <= 0) retorno = 'Retorno: sin presupuesto';
+  else if (roi !== null) retorno = `Retorno: ${formatoValorKpi(roi, 'porcentaje')}`;
+  return {
+    camp_activas: { valor: numeroFinito(s.campanas_activas), ayuda: total === null ? null : cuantos(total, 'campaña en total', 'campañas en total') },
+    leads_capturados: {
+      valor: numeroFinito(s.leads_total),
+      ayuda: convertidos === null ? null
+        : `${cuantos(convertidos, 'convertido', 'convertidos')}${tasa === null ? '' : ` (${formatoValorKpi(tasa, 'porcentaje')})`}`,
+    },
+    ventas_atribuidas: { valor: numeroFinito(s.ventas_atribuidas_cop), ayuda: retorno },
+    flujos_activos: { valor: numeroFinito(s.flujos_activos), ayuda: posts === null ? null : cuantos(posts, 'post publicado', 'posts publicados') },
+  };
+}
+
+/**
+ * Lo que pintan las 4 tarjetas de la pestaña Métricas de una campaña: la fila de GET /marketing/campanas (leads_count, ventas_cop de
+ * los leads CONVERTIDO y presupuesto_cop) y sus leads (GET /marketing/campanas/{id}/leads; null mientras llegan):
+ *  - leads_capturados: los leads que se ven (si ya llegaron) o leads_count de la fila;
+ *  - leads_convertidos: los de estado CONVERTIDO entre los leads que llegaron (null sin ellos: no se inventa);
+ *  - ventas_atribuidas: ventas_cop;
+ *  - roi: ventas_cop / presupuesto_cop × 100 − 100 (la misma fórmula del servidor), con tono 'bien' si es mayor que 0 y 'alerta' si es
+ *    menor; sin presupuesto no hay retorno: valor null y la ayuda «Sin presupuesto».
+ * @param {any} campana
+ * @param {ReadonlyArray<any> | null | undefined} leads
+ * @returns {{leads_capturados: {valor: number | null}, leads_convertidos: {valor: number | null}, ventas_atribuidas: {valor: number | null},
+ *   roi: {valor: number | null, tono: 'normal' | 'alerta' | 'bien', ayuda: string | null}}}
+ */
+export function tarjetasCampana(campana, leads) {
+  const c = datosDe(campana) ?? {};
+  const llegaron = Array.isArray(leads);
+  const ventas = numeroFinito(c.ventas_cop);
+  const presupuesto = numeroFinito(c.presupuesto_cop);
+  const roi = ventas !== null && presupuesto !== null && presupuesto > 0 ? ventas / presupuesto * 100 - 100 : null;
+  return {
+    leads_capturados: { valor: llegaron ? leads.length : numeroFinito(c.leads_count) },
+    leads_convertidos: { valor: llegaron ? leads.filter((l) => l?.estado === 'CONVERTIDO').length : null },
+    ventas_atribuidas: { valor: ventas },
+    roi: roi === null
+      ? { valor: null, tono: 'normal', ayuda: ventas !== null && !(presupuesto !== null && presupuesto > 0) ? 'Sin presupuesto' : null }
+      : { valor: roi, tono: roi > 0 ? 'bien' : roi < 0 ? 'alerta' : 'normal', ayuda: null },
+  };
+}
+
+const SIN_PERMISO_MONTOS = 'Sin permiso para ver montos';
+
+/**
+ * Lo que pintan las 4 tarjetas de la ficha de un cliente en la Agenda, con lo que da resumenFichaCliente (lib/kpis-ventas.js, de
+ * GET /crm/customers/{id}/profile-360; null mientras el perfil llega):
+ *  - pven_saldo_por_cobrar: tono 'alerta' si hay saldo, 'bien' con «Al día con pagos» si es 0;
+ *  - cli_total_comprado: con «N pedidos» (los que cuentan en el total, sin cancelados);
+ *  - cli_total_pagado: con «Pagos confirmados, menos devoluciones» (así lo suma el servidor);
+ *  - cli_cot_abiertas (RP70): fuera de CONFIRMADA y RECHAZADA, con «N solicitudes activas».
+ * Sin permiso (resumen_financiero null: BODEGA y COMPRAS), los tres montos son null con la ayuda «Sin permiso para ver montos»; los
+ * conteos siguen. Sin perfil (null), todo null: la barra gris, nunca 0.
+ * @param {{sinPermiso: boolean, saldoPorCobrar: number | null, totalComprado: number | null, totalPagado: number | null,
+ *   pedidos: number, cotizacionesAbiertas: number, solicitudesActivas: number} | null | undefined} resumen
+ * @returns {{pven_saldo_por_cobrar: {valor: number | null, tono: 'normal' | 'alerta' | 'bien', ayuda: string | null},
+ *   cli_total_comprado: {valor: number | null, ayuda: string | null}, cli_total_pagado: {valor: number | null, ayuda: string | null},
+ *   cli_cot_abiertas: {valor: number | null, ayuda: string | null}}}
+ */
+export function tarjetasFichaCliente(resumen) {
+  if (!datosDe(resumen)) {
+    return {
+      pven_saldo_por_cobrar: { valor: null, tono: 'normal', ayuda: null },
+      cli_total_comprado: { valor: null, ayuda: null },
+      cli_total_pagado: { valor: null, ayuda: null },
+      cli_cot_abiertas: { valor: null, ayuda: null },
+    };
+  }
+  const r = /** @type {NonNullable<typeof resumen>} */ (resumen);
+  const saldo = r.sinPermiso ? null : numeroFinito(r.saldoPorCobrar);
+  return {
+    pven_saldo_por_cobrar: {
+      valor: saldo,
+      tono: saldo === null ? 'normal' : saldo > 0 ? 'alerta' : 'bien',
+      ayuda: r.sinPermiso ? SIN_PERMISO_MONTOS : saldo === null ? null : saldo > 0 ? 'Cobro pendiente antes del despacho' : 'Al día con pagos',
+    },
+    cli_total_comprado: { valor: r.sinPermiso ? null : numeroFinito(r.totalComprado), ayuda: r.sinPermiso ? SIN_PERMISO_MONTOS : cuantos(r.pedidos, 'pedido', 'pedidos') },
+    cli_total_pagado: { valor: r.sinPermiso ? null : numeroFinito(r.totalPagado), ayuda: r.sinPermiso ? SIN_PERMISO_MONTOS : 'Pagos confirmados, menos devoluciones' },
+    cli_cot_abiertas: { valor: numeroFinito(r.cotizacionesAbiertas), ayuda: cuantos(r.solicitudesActivas, 'solicitud activa', 'solicitudes activas') },
+  };
+}
+
+/**
+ * Lo que pintan las tarjetas de la ficha de un proveedor en la Agenda con lo que el servidor SÍ manda: payment_terms de
+ * GET /compras/proveedores (_supplier_dict; sin ese dato, null y la tarjeta dice «—»: nunca un «Contado» inventado) y el `total` de
+ * GET /compras/pedidos?supplier_id= (null si no llegó). Moneda y tiempo de entrega no existen en el modelo Supplier (prov_moneda y
+ * prov_tiempo_entrega del catálogo quedan sin usar hasta que el servidor los mande).
+ * @param {any} proveedor
+ * @param {unknown} totalPedidos
+ * @returns {{prov_condiciones_pago: {valor: string | null}, prov_pedidos_compra: {valor: number | null}}}
+ */
+export function tarjetasFichaProveedor(proveedor, totalPedidos) {
+  const terminos = typeof datosDe(proveedor)?.payment_terms === 'string' ? proveedor.payment_terms.trim() : '';
+  return {
+    prov_condiciones_pago: { valor: terminos || null },
+    prov_pedidos_compra: { valor: numeroFinito(totalPedidos) },
+  };
+}
+
+/**
+ * La etiqueta de un indicador sin su «({periodo})»: el ticket de un cliente no es de un período («Ticket promedio»). Un id que no
+ * está en CATALOGO_KPI lanza Error (como etiquetaKpi).
+ * @param {IdKpi} id
+ * @returns {string}
+ */
+function etiquetaSinPeriodo(id) {
+  return CATALOGO_KPI[id].etiqueta.replace(/\s*\(\{periodo\}\)$/, '');
+}
+
+/**
+ * La tarjeta oscura del cliente en el Asistente omnicanal con `revenue` de GET /chat/customer-context (chat.py: total_spent_cop,
+ * total_orders_count, active_orders_count y avg_ticket_cop): los nombres del catálogo (RP70: «Total comprado», «Total de pedidos»,
+ * «Pedidos en curso» y «Ticket promedio») y formatoPesos (montos completos, sin el .split(',')[0] de formatCOP). Lo que no llega es «—».
+ * @param {any} revenue
+ * @returns {{total: {etiqueta: string, texto: string}, mini: Array<{etiqueta: string, texto: string}>}}
+ */
+export function fichaRevenueAsistente(revenue) {
+  const r = datosDe(revenue) ?? {};
+  return {
+    total: { etiqueta: etiquetaSinPeriodo('cli_total_comprado'), texto: formatoValorKpi(r.total_spent_cop, 'pesos') },
+    mini: [
+      { etiqueta: etiquetaSinPeriodo('pven_total'), texto: formatoValorKpi(r.total_orders_count, 'numero') },
+      { etiqueta: etiquetaSinPeriodo('pven_en_curso'), texto: formatoValorKpi(r.active_orders_count, 'numero') },
+      { etiqueta: etiquetaSinPeriodo('ticket_promedio'), texto: formatoValorKpi(r.avg_ticket_cop, 'pesos') },
+    ],
+  };
+}

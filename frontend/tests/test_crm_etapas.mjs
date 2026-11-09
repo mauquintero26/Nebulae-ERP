@@ -16,6 +16,8 @@ import {
   // T21 r1: lo que pidió la revisión r0.
   esLeadAtrasadoAbierto, columnaDelTablero, extraListaLeads, vistaDelTablero, datosDelTablero, respuestaDeCarga,
   totalDelTablero, camposDeEtapa,
+  // B4 T23B: Seguimientos del CRM.
+  etapasDeSeguimiento, filtrarSeguimiento, tarjetasSeguimientos, gruposDeSeguimiento, fichaDeLeadSeguimiento,
 } from '../src/lib/crm-etapas.js';
 import { HEX_CLASE_TAILWIND } from '../src/lib/analisis.js';
 import { mapaDestinos } from '../src/lib/kanban.js';
@@ -348,6 +350,114 @@ console.log('--- TEST 12 (T21 r1): columna del tablero, Lista con Perdido, estad
   }), { id: 1, name: 'Nuevo', color: 'bg-blue-500', bg_color: 'bg-blue-50', position: 0, maps_to_status: 'DRAFT' });
   assert.deepEqual(camposDeEtapa({ id: 2, name: 'X', is_closed: true }), { id: 2, name: 'X' });
   assert.deepEqual(camposDeEtapa(null), {});
+}
+
+console.log('--- TEST 13 (B4 T23B, KPI-otros punto 2; RP7): Seguimientos: etapas, vista, tarjetas pulsables, grupos y ficha del lead ---');
+{
+  // La forma real de GET /crm/leads (crm.py _lead_to_dict): client, value, phone, email, description, lead_product_name,
+  // advisor_name, days, status, pipeline_stage_id, updated_at (sin zona).
+  const lead = (id, etapa, extra = {}) => ({
+    id, client: `Cliente ${id}`, customer_id: id, contact: '3001112233', email: `c${id}@x.co`, phone: '3001112233', city: 'Cali',
+    value: 0, description: '', status: 'DRAFT', pipeline_stage_id: etapa, days: 0, lead_product_name: '', advisor_name: '',
+    updated_at: '2026-11-01T10:00:00', sc_id: null, ...extra,
+  });
+  const LEADS = [
+    lead(1, 1, { client: 'Ana Pérez', days: 2 }), lead(2, 1, { client: 'Beatriz Gómez', days: 9 }),
+    lead(3, 2, { client: 'Carlos Ruiz', status: 'QUOTATION', days: 10, value: 1500000, lead_product_name: 'Cuna' }),
+    lead(4, 3, { client: 'Dora Gil', status: 'INVOICED', days: 30 }),
+    lead(5, null, { client: 'Eva Soto', status: 'QUOTATION', days: 1 }),
+  ];
+
+  // etapasDeSeguimiento: todas menos Perdido (GET /crm/leads deja fuera los CANCELLED: una columna Perdido saldría siempre vacía).
+  assert.deepEqual(etapasDeSeguimiento(ETAPAS).map((e) => e.name), ['Nuevo', 'Cotización', 'Ganado']);
+  assert.deepEqual(etapasDeSeguimiento({ status: 'success', data: ETAPAS }).map((e) => e.id), [1, 2, 3], 'también la respuesta entera');
+  assert.deepEqual(etapasDeSeguimiento(null), []);
+
+  // filtrarSeguimiento: la MISMA vista para las tarjetas, las pastillas y los grupos: la búsqueda (filtrarLeads) y la etapa.
+  assert.deepEqual(filtrarSeguimiento(LEADS, ETAPAS, {}).map((l) => l.id), [1, 2, 3, 4, 5]);
+  assert.deepEqual(filtrarSeguimiento(LEADS, ETAPAS, { etapa: '1' }).map((l) => l.id), [1, 2]);
+  // El lead sin etapa va a la columna de su status (Cotización), como en el tablero.
+  assert.deepEqual(filtrarSeguimiento(LEADS, ETAPAS, { etapa: '2' }).map((l) => l.id), [3, 5]);
+  assert.deepEqual(filtrarSeguimiento(LEADS, ETAPAS, { q: 'carlos' }).map((l) => l.id), [3]);
+  assert.deepEqual(filtrarSeguimiento(LEADS, ETAPAS, { q: 'CUNA', etapa: '2' }).map((l) => l.id), [3], 'busca en el producto, sin mayúsculas');
+  assert.deepEqual(filtrarSeguimiento(LEADS, ETAPAS, { etapa: 'all' }).map((l) => l.id), [1, 2, 3, 4, 5]);
+  // Un lead metido en la etapa Perdido sin ser CANCELLED no tiene grupo en Seguimientos: no cuenta (el número es el de lo que se ve).
+  assert.deepEqual(filtrarSeguimiento([lead(9, 4)], ETAPAS, {}), []);
+  assert.deepEqual(filtrarSeguimiento(null, ETAPAS, {}), [], 'sin leads, nada');
+
+  // tarjetasSeguimientos: las 3 primeras etapas (color con acentoDesdeClase, número de la MISMA vista que abren) + el total.
+  const t = tarjetasSeguimientos(LEADS, ETAPAS, {});
+  assert.deepEqual(t.etapas, [
+    { clave: '1', nombre: 'Nuevo', acento: 'blue', valor: 2, activa: false },
+    { clave: '2', nombre: 'Cotización', acento: 'amber', valor: 2, activa: false },
+    { clave: '3', nombre: 'Ganado', acento: 'emerald', valor: 1, activa: false },
+  ]);
+  // Atrasado y abierto: days >= 7 y ni Ganado ni Perdido (Beatriz 9 y Carlos 10; Dora, ganada con 30 días, no).
+  assert.deepEqual(t.total, { valor: 5, urgentes: 2, ayuda: '2 con 7 días o más sin actividad', activa: true });
+  // La búsqueda cambia los números de las tarjetas: cada una dice lo que abre.
+  const buscada = tarjetasSeguimientos(LEADS, ETAPAS, { q: 'cuna' });
+  assert.deepEqual(buscada.etapas.map((e) => e.valor), [0, 1, 0]);
+  assert.deepEqual(buscada.total, { valor: 1, urgentes: 1, ayuda: '1 con 7 días o más sin actividad', activa: true });
+  // La etapa elegida queda activa; el total ya no.
+  const elegida = tarjetasSeguimientos(LEADS, ETAPAS, { etapa: '2' });
+  assert.deepEqual(elegida.etapas.map((e) => e.activa), [false, true, false]);
+  assert.equal(elegida.total.activa, false);
+  assert.equal(elegida.total.valor, 5, 'el total es el de «Todas»: lo que abre la tarjeta, no la etapa elegida');
+  // Mientras cargan (null): nada, ni 0 (la pantalla pinta la barra gris).
+  assert.equal(tarjetasSeguimientos(null, ETAPAS, {}), null);
+  // Sin leads reales: ceros de verdad. Con una etapa de color raro: indigo.
+  assert.deepEqual(tarjetasSeguimientos([], ETAPAS, {}).etapas.map((e) => e.valor), [0, 0, 0]);
+  assert.equal(tarjetasSeguimientos([], [{ id: 7, name: 'X', color: '#abc' }], {}).etapas[0].acento, 'indigo');
+  assert.deepEqual(tarjetasSeguimientos([], [], {}).etapas, [], 'sin etapas, sin tarjetas de etapa');
+  // Ayuda con 0.
+  assert.equal(tarjetasSeguimientos([lead(1, 1)], ETAPAS, {}).total.ayuda, '0 con 7 días o más sin actividad');
+
+  // gruposDeSeguimiento: un grupo por etapa visible con su hex y sus leads; con una etapa elegida, solo esa.
+  const g = gruposDeSeguimiento(LEADS, ETAPAS, {});
+  assert.deepEqual(g.map((x) => [x.clave, x.nombre, x.colorHex, x.leads.map((l) => l.id)]), [
+    ['1', 'Nuevo', '#3b82f6', [1, 2]], ['2', 'Cotización', '#f59e0b', [3, 5]], ['3', 'Ganado', '#10b981', [4]],
+  ]);
+  assert.deepEqual(gruposDeSeguimiento(LEADS, ETAPAS, { etapa: '2' }).map((x) => x.clave), ['2']);
+  assert.deepEqual(gruposDeSeguimiento(LEADS, ETAPAS, { q: 'zzz' }).map((x) => x.leads.length), [0, 0, 0], 'todas las etapas, vacías');
+  assert.deepEqual(gruposDeSeguimiento(null, ETAPAS, {}), []);
+
+  // fichaDeLeadSeguimiento: SOLO las claves que manda el servidor (client, value, phone, email, lead_product_name, advisor_name).
+  const f = fichaDeLeadSeguimiento(LEADS[2]);
+  assert.equal(f.nombre, 'Carlos Ruiz');
+  assert.equal(f.producto, 'Cuna');
+  assert.equal(f.valor, '$1.500.000');
+  assert.equal(f.telefono, '3001112233');
+  assert.equal(f.correo, 'c3@x.co');
+  assert.equal(f.diasTexto, '10 días sin movimiento');
+  assert.equal(f.atrasado, true);
+  assert.equal(fichaDeLeadSeguimiento(lead(8, 1, { client: '  ', value: 0, phone: null, email: null })).nombre, 'Sin nombre');
+  assert.equal(fichaDeLeadSeguimiento(lead(8, 1, { value: 0 })).valor, null, 'sin valor, sin pastilla de dinero');
+  assert.equal(fichaDeLeadSeguimiento(lead(8, 1, { phone: null })).telefono, null);
+  assert.equal(fichaDeLeadSeguimiento(lead(8, 1, { updated_at: null })).hace, 'Sin actividad');
+  assert.equal(fichaDeLeadSeguimiento(lead(8, 1, { days: 40, status: 'INVOICED' })).atrasado, false, 'un lead ganado no está atrasado');
+  // El texto de «hace»: el instante sin zona es UTC (hace() de fechas-colombia), no hora local.
+  const hace3h = new Date(Date.now() - 3 * 3600 * 1000).toISOString().replace(/\.\d+Z$/, '');
+  assert.equal(fichaDeLeadSeguimiento(lead(8, 1, { updated_at: hace3h })).hace, 'hace 3 horas');
+  assert.equal(fichaDeLeadSeguimiento(null).nombre, 'Sin nombre');
+}
+
+console.log('--- TEST 14 (B4 T23B; RP7): datosDeSeguimiento: lo que llega de /crm/leads y /crm/pipeline-stages ---');
+{
+  const { datosDeSeguimiento } = await import('../src/lib/crm-etapas.js');
+  const L = [{ id: 1 }, { id: 2 }];
+  // El API responde {status, data, total} (crm.py): se lee `data` (antes la pantalla leía `leads` y `stages`, y salía vacía).
+  assert.deepEqual(datosDeSeguimiento({ status: 'success', data: L, total: 40 }, { status: 'success', data: ETAPAS }), { leads: L, stages: ETAPAS, total: 40 });
+  // Una lista tal cual (como lee crm/page.tsx) también; sin `total`, la cantidad que llegó.
+  assert.deepEqual(datosDeSeguimiento(L, ETAPAS), { leads: L, stages: ETAPAS, total: 2 });
+  assert.equal(datosDeSeguimiento({ data: L }, { data: [] }).total, 2);
+  // `total` nunca es menor que lo que llegó ni un valor que no es número.
+  assert.equal(datosDeSeguimiento({ data: L, total: 1 }, { data: [] }).total, 2);
+  assert.equal(datosDeSeguimiento({ data: L, total: 'x' }, { data: [] }).total, 2);
+  // Sin `data` es un ERROR (no un «sin leads» falso): lanza, y la pantalla lo dice con «Reintentar».
+  for (const mala of [null, undefined, {}, { status: 'success' }, { data: null }, { data: 'x' }, { data: { a: 1 } }, 7]) {
+    assert.throws(() => datosDeSeguimiento(mala, { data: [] }), /El servidor no devolvió datos\./, JSON.stringify(mala));
+    assert.throws(() => datosDeSeguimiento({ data: L }, mala), /El servidor no devolvió datos\./, JSON.stringify(mala));
+  }
 }
 
 console.log('OK test_crm_etapas');

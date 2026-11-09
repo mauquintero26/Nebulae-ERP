@@ -19,3 +19,5 @@ export * from './MenuFila';
 export * from './ModalMotivo';
 // Bloque 4, T4B: el tablero Kanban común (useTableroKanban, TableroKanban y TarjetaKanban).
 export * from './Kanban';
+// Bloque 4, T23B: el aviso de una fuente que falló (sin «Reintentar» si es un 403) y el rol leído después de montar.
+export * from './AvisoFuente';

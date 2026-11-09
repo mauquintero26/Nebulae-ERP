@@ -510,4 +510,34 @@ console.log('--- B3 T20b (parte B): «el nombre cambió pero el contacto no» en
   }
 }
 
+console.log('--- TEST T23B: proveedorDeServidor (la Agenda lee nombre, contacto_nombre, telefono, condiciones_pago…; el servidor manda name, contact_name, phone, payment_terms…) ---');
+{
+  const { proveedorDeServidor } = await import('../src/lib/datos-cliente.js');
+  // La forma real de GET /compras/proveedores (erp_compras.py _supplier_dict).
+  const real = {
+    id: 3, name: 'Textiles Andinos', reference: 'P-3', contact_name: 'Luis Mora', phone: '3001234567', email: 'l@ta.co', address: 'Cra 1',
+    city: 'Cali', country: 'Colombia', payment_terms: '30 días', is_active: true, notes: null, created_at: '2026-10-01T10:00:00',
+  };
+  const p = proveedorDeServidor(real);
+  assert.equal(p.nombre, 'Textiles Andinos');
+  assert.equal(p.contacto_nombre, 'Luis Mora');
+  assert.equal(p.telefono, '3001234567');
+  assert.equal(p.direccion, 'Cra 1');
+  assert.equal(p.pais, 'Colombia');
+  assert.equal(p.condiciones_pago, '30 días');
+  assert.equal(p.email, 'l@ta.co');
+  assert.equal(p.ciudad, 'Cali');
+  // Lo del servidor se conserva (payment_terms lo lee tarjetasFichaProveedor) y no se inventa lo que no existe.
+  assert.equal(p.payment_terms, '30 días');
+  assert.equal(p.id, 3);
+  assert.equal('moneda_default' in p, false, 'el servidor no manda la moneda: no se inventa');
+  assert.equal('tiempo_entrega_dias' in p, false, 'ni el tiempo de entrega');
+  // Sin dato, sin dato (nunca «Contado» ni «COP» por defecto).
+  assert.equal(proveedorDeServidor({ id: 4, name: 'X', payment_terms: null }).condiciones_pago, null);
+  assert.equal(proveedorDeServidor(null), null);
+  assert.equal(proveedorDeServidor('x'), null);
+  // Un proveedor que ya trae las claves de la pantalla (un alta local) las conserva.
+  assert.equal(proveedorDeServidor({ id: 9, nombre: 'Local', name: undefined }).nombre, 'Local');
+}
+
 console.log('OK test_datos_cliente');
