@@ -1252,7 +1252,7 @@ console.log('--- TEST 29 (B4 T23B, KPI-otros puntos 3, 4 y 6; RP70): las tarjeta
   const PERFIL = {
     resumen_financiero: { total_comprado_cop: 1500000, total_pagado_cop: 600000, saldo_pendiente_cop: 900000, saldo_a_favor_cop: 0 },
     pedidos: [{ estado: 'EN_PROCESO' }, { estado: 'CANCELADO' }, { estado: 'ENTREGADO' }],
-    cotizaciones: [{ estado: 'BORRADOR' }, { estado: 'CONFIRMADA' }, { estado: 'ENVIADA' }],
+    cotizaciones: [{ estado: 'BORRADOR' }, { estado: 'CONFIRMADA' }, { estado: 'ENVIADA' }, { estado: 'VENCIDA' }, { estado: 'RECHAZADA' }],
     solicitudes: [{ estado: 'ASIGNADA' }, { estado: 'CONFIRMADA' }],
   };
   const f = k.tarjetasFichaCliente(kv.resumenFichaCliente(PERFIL));
@@ -1260,7 +1260,7 @@ console.log('--- TEST 29 (B4 T23B, KPI-otros puntos 3, 4 y 6; RP70): las tarjeta
     pven_saldo_por_cobrar: { valor: 900000, tono: 'alerta', ayuda: 'Cobro pendiente antes del despacho' },
     cli_total_comprado: { valor: 1500000, ayuda: '2 pedidos' },
     cli_total_pagado: { valor: 600000, ayuda: 'Pagos confirmados, menos devoluciones' },
-    cli_cot_abiertas: { valor: 2, ayuda: '1 solicitud activa' },
+    cli_cot_abiertas: { valor: 3, ayuda: '1 solicitud activa' },
   });
   // Saldo en 0: tono bien y «Al día con pagos». Un pedido: «1 pedido».
   const alDia = k.tarjetasFichaCliente(kv.resumenFichaCliente({ ...PERFIL, resumen_financiero: { ...PERFIL.resumen_financiero, saldo_pendiente_cop: 0 }, pedidos: [{ estado: 'ENTREGADO' }] }));
@@ -1271,7 +1271,7 @@ console.log('--- TEST 29 (B4 T23B, KPI-otros puntos 3, 4 y 6; RP70): las tarjeta
   assert.deepEqual(sinPermiso.pven_saldo_por_cobrar, { valor: null, tono: 'normal', ayuda: 'Sin permiso para ver montos' });
   assert.deepEqual(sinPermiso.cli_total_comprado, { valor: null, ayuda: 'Sin permiso para ver montos' });
   assert.deepEqual(sinPermiso.cli_total_pagado, { valor: null, ayuda: 'Sin permiso para ver montos' });
-  assert.equal(sinPermiso.cli_cot_abiertas.valor, 2);
+  assert.equal(sinPermiso.cli_cot_abiertas.valor, 3);
   // Mientras el perfil no llega (null): nada de ceros.
   assert.deepEqual(k.tarjetasFichaCliente(null), {
     pven_saldo_por_cobrar: { valor: null, tono: 'normal', ayuda: null },
@@ -1305,6 +1305,199 @@ console.log('--- TEST 29 (B4 T23B, KPI-otros puntos 3, 4 y 6; RP70): las tarjeta
   assert.deepEqual(sin.mini.map((x) => x.texto), ['—', '—', '—'], 'lo que no llega es «—», nunca $0');
   assert.equal(k.fichaRevenueAsistente(null).total.texto, '—');
   assert.equal(k.fichaRevenueAsistente({ ...rev, total_spent_cop: 0, total_orders_count: 0, active_orders_count: 0, avg_ticket_cop: 0 }).mini[2].texto, '$0', 'un cero real se dice');
+}
+
+// ── B4 T23B: el cableado de las cinco pantallas (KPI-otros 2, 3, 4 y 6; TABLA-otros 6; H13; R12, C13; RP7, RP30, RP55, RP66, RP70) ──
+const paginaT23B = (ruta) => {
+  const fuente = readFileSync(new URL(`../src/app/dashboard/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  return fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+};
+
+console.log('--- TEST 30 (B4 T23B): las piezas comunes: AvisoFuente y useRolActual (el rol se lee después de montar) ---');
+{
+  const fuente = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const index = readFileSync(new URL('../src/components/ui/index.ts', import.meta.url), 'utf8');
+  assert.ok(/export \* from '\.\/AvisoFuente';/.test(index), 'components/ui lo exporta');
+  // El rol: useSyncExternalStore con '' en el servidor y en la hidratación; nunca en el inicializador de useState.
+  assert.match(fuente, /return useSyncExternalStore\(suscribirRol, \(\) => localStorage\.getItem\('user_role'\) \|\| '', \(\) => ''\);/);
+  assert.ok(!/useState\([^)]*localStorage/.test(fuente), 'el rol no se lee en el inicializador de useState');
+  // El aviso: un 403 es de permiso (sin «Reintentar»); una falla lleva «Reintentar» solo si aviso.reintentar.
+  assert.match(fuente, /\{aviso\.reintentar && \(\s*<button type="button" onClick=\{onReintentar\}/);
+  assert.match(fuente, /const permiso = aviso\.tipo === 'permiso';/);
+  assert.equal((fuente.match(/\n\s*Reintentar\n/g) ?? []).length, 1, 'un solo botón «Reintentar», el de aviso.reintentar');
+}
+
+console.log('--- TEST 31 (B4 T23B, KPI-otros punto 2; RP7, R12, C13): Seguimientos del CRM ---');
+{
+  const codigo = paginaT23B('crm/calendario/page.tsx');
+  // RP7: lee `data` (datosDeSeguimiento) con la carga de la pantalla y sin el apiFetch local que pedía .json() de un cuerpo ya leído.
+  assert.match(codigo, /apiFetch\('\/crm\/leads\?limit=1000', \{ signal: control\.signal \}\),\s*apiFetch\('\/crm\/pipeline-stages', \{ signal: control\.signal \}\),/);
+  assert.match(codigo, /\.then\(\(\[l, s\]\) => setCargado\(\{ vuelta, datos: datosDeSeguimiento\(l, s\), error: null \}\)\)/);
+  assert.match(codigo, /\.catch\(\(err: unknown\) => \{ if \(!control\.signal\.aborted\) setCargado\(\{ vuelta, datos: null, error: err \}\); \}\);/);
+  assert.ok(!/_apiFetch|\.json\(\)|\.catch\(\(\) => \[\]\)|\bl\?\.leads|\bs\?\.stages/.test(codigo), 'sin el apiFetch local, el .json() ni los catch mudos');
+  assert.match(codigo, /const \{ datos, cargando, error \} = lecturaDeFuente\(cargado, vuelta\);/);
+  assert.match(codigo, /const estadoKpi = useEstadoKpi\(cargando, error\);/);
+  // El rol: lo que no puede leer no se pide (accesoSeguimientos) y se dice sin «Reintentar».
+  assert.match(codigo, /const acceso = accesoSeguimientos\(rol\);/);
+  assert.match(codigo, /const rol = useRolActual\(\);/);
+  assert.match(codigo, /if \(!acceso\.leads\) return;\s*const control = new AbortController\(\);/);
+  assert.match(codigo, /\}, \[vuelta, acceso\.leads\]\);/);
+  assert.match(codigo, /\{acceso\.listo && !acceso\.leads \? \(/);
+  assert.match(codigo, /\{aviso && <AvisoFuente aviso=\{aviso\} onReintentar=\{reintentar\} \/>\}/);
+  // Las tarjetas: las 3 primeras etapas con el color de su clase (acento de tarjetasSeguimientos) y el total; pulsables, el número de su vista.
+  assert.match(codigo, /const tarjetas = tarjetasSeguimientos\(leads, stages, filtro\);/);
+  assert.match(codigo, /tarjetas\.etapas\.map\(\(e\) => \(\s*<TarjetaKpi key=\{e\.clave\} etiqueta=\{e\.nombre\} icono="Circle" color=\{e\.acento\} valor=\{e\.valor\} activo=\{e\.activa\}\s*onClick=\{\(\) => setActiveStage\(e\.activa \? 'all' : e\.clave\)\} \/>/);
+  assert.match(codigo, /<TarjetaKpi kpi="leads_total" valor=\{tarjetas\?\.total\.valor \?\? null\} ayuda=\{tarjetas\?\.total\.ayuda\}\s*activo=\{tarjetas\?\.total\.activa\} onClick=\{\(\) => setActiveStage\('all'\)\} \/>/);
+  assert.ok(!/StatCard|variant="gradient"|backgroundColor: s\.color|stage\.color|s\.color \|\|/.test(codigo), 'sin StatCard ni el color-clase como CSS');
+  // Una sola vista: la búsqueda, las pastillas, los grupos y las tarjetas usan filtrarSeguimiento (no JSON.stringify ni un filter propio).
+  assert.match(codigo, /const filtrados = filtrarSeguimiento\(leads, stages, filtro\);/);
+  assert.match(codigo, /const grupos = gruposDeSeguimiento\(leads, stages, filtro\);/);
+  assert.ok(!/JSON\.stringify|leads\.filter\(|filtered\.filter\(/.test(codigo), 'sin la búsqueda por JSON.stringify ni filtros propios');
+  // Los campos que SÍ manda el servidor (fichaDeLeadSeguimiento), no customer_name, lead_value, customer_phone ni customer_email.
+  assert.match(codigo, /const f = fichaDeLeadSeguimiento\(lead\);/);
+  assert.ok(!/customer_name|lead_value|customer_phone|customer_email|daysInStage|timeAgo|PIPELINE_/.test(codigo), 'sin los campos que el servidor no manda');
+  // El vacío y la carga: nunca un vacío falso (textoVacioLeads, y el esqueleto mientras llega).
+  assert.match(codigo, /textoVacioLeads\(\{ q: search, etapa: activeStage \}\)/);
+  assert.match(codigo, /\{leads === null \? \(\s*aviso \? null : \(/);
+  // Más de los 1.000 que trae el servidor: lo dice la franja.
+  assert.match(codigo, /const textoLimite = textoLimiteCarritos\(datos\?\.total, leads === null \? null : leads\.length\);/);
+}
+
+console.log('--- TEST 32 (B4 T23B, KPI-otros punto 4; RP55, RP70): la portada de Marketing ---');
+{
+  const codigo = paginaT23B('marketing/page.tsx');
+  assert.match(codigo, /apiFetch\('\/marketing\/stats', \{ signal: control\.signal \}\)\s*\.then\(\(r: unknown\) => setCargado\(\{ vuelta, datos: datosDeRespuesta\(r\), error: null \}\)\)/);
+  assert.match(codigo, /if \(!acceso\.ver\) return;\s*const control = new AbortController\(\);/);
+  assert.match(codigo, /const acceso = accesoMarketing\(useRolActual\(\)\);/);
+  assert.match(codigo, /const \{ datos, cargando, error \} = lecturaDeFuente\(cargado, vuelta\);/);
+  assert.match(codigo, /const estado = useEstadoKpi\(cargando, error\);/);
+  assert.match(codigo, /const t = tarjetasMarketing\(datos\);/);
+  for (const id of ['camp_activas', 'leads_capturados', 'ventas_atribuidas', 'flujos_activos']) {
+    assert.match(codigo, new RegExp(`<TarjetaKpi kpi="${id}" valor=\\{t\\.${id}\\.valor\\} ayuda=\\{t\\.${id}\\.ayuda \\?\\? undefined\\} />`), id);
+  }
+  assert.match(codigo, /<FranjaKpis estado=\{aviso\?\.tipo === 'permiso' \? 'listo' : estado\} titulo="Indicadores de Marketing">/);
+  assert.match(codigo, /\{aviso && <AvisoFuente aviso=\{aviso\} onReintentar=\{reintentar\} \/>\}/);
+  // Sin el '...' del cargando, la grilla fija de 4, el gradient, el .catch mudo ni StatCard; los porcentajes los da formatoValorKpi (en la lib).
+  assert.ok(!/'\.\.\.'|grid-cols-4 gap-4|variant="gradient"|StatCard|\.catch\(\(\) => \{\}\)|stats\.[a-z_]+ \?\? 0|fCOP/.test(codigo), 'sin el «...», la grilla fija ni los números armados con ?? 0');
+  // RP55: «Visitantes & Leads» ya no se ofrece (la pantalla no se edita, R14) y los textos llevan tilde.
+  assert.ok(!/visitantes|Visitantes/.test(codigo), 'Marketing no enlaza a Visitantes');
+  assert.ok(!/Campanas|Automatizacion|Disena|analitica|campanas multicanal|codigo de descuento/.test(codigo), 'los textos de la portada llevan tilde');
+  assert.match(codigo, /lg:grid-cols-3/);
+}
+
+console.log('--- TEST 33 (B4 T23B, KPI-otros punto 4 y TABLA-otros punto 6; R11, R26, RP30): Campañas ---');
+{
+  const codigo = paginaT23B('marketing/campanas/page.tsx');
+  // RP30: sin el confirm() nativo.
+  assert.ok(!/(^|[^\w.$])(window\.)?confirm\s*\(/.test(codigo), 'sin confirm() nativo');
+  assert.match(codigo, /await confirmar\(\{ titulo: 'Eliminar campaña', mensaje: '¿Eliminar esta campaña\? [^']*', textoConfirmar: 'Eliminar campaña', peligro: true \}\)/);
+  // El rol: lo que no puede leer no se pide; borrar es solo de ADMIN.
+  assert.match(codigo, /const acceso = accesoMarketing\(useRolActual\(\)\);/);
+  assert.match(codigo, /const verCampanas = acceso\.ver;\s*const loadCampanas = useCallback\(async \(\) => \{\s*if \(!verCampanas\) return;/);
+  assert.match(codigo, /const pideLeads = verCampanas && Boolean\(selected\?\.id\) && \(activeTab === 'leads' \|\| activeTab === 'metricas'\);/);
+  assert.match(codigo, /disabled=\{!acceso\.eliminarCampana\}/);
+  assert.match(codigo, /Solo la Administración elimina campañas/);
+  assert.match(codigo, /if \(acceso\.listo && !acceso\.ver\) \{/);
+  // Los leads de la campaña: UNA tabla estándar 'marketing.leads' en modo cliente, sin tablero (R11) y sin <table> a mano.
+  assert.match(codigo, /const ID_LEADS = 'marketing\.leads';/);
+  assert.match(codigo, /<TablaEstandar<LeadCampana> id=\{ID_LEADS\} modo="cliente" columnas=\{COLUMNAS_LEADS\} preferencias=\{prefsLeads\} anchoRef=\{anchoLeadsRef\}/);
+  assert.match(codigo, /const prefsLeads = usePreferenciasTabla\(ID_LEADS, COLUMNAS_LEADS\);/);
+  assert.match(codigo, /const \[estadoTabla, despacharTabla, listoTabla\] = useEstadoTabla\(ID_LEADS\);/);
+  assert.match(codigo, /const tablaLeads = useListadoCliente<LeadCampana>\(leads, estadoTabla, ACCESORES_LEADS\);/);
+  assert.match(codigo, /cargando=\{!listoTabla \|\| \(tablaLeads\.cargandoInicial && !errorLeads\)\}/);
+  assert.match(codigo, /error=\{errorLeads\} onReintentar=\{recargarLeads\}/);
+  assert.match(codigo, /<BarraTabla estado=\{estadoTabla\} onEstado=\{despacharTabla\}/);
+  assert.ok(!/<table|<thead|kanbanDisponible|TableroKanban/.test(codigo), 'sin <table> a mano ni tablero (R11)');
+  // El estado se dice con su etiqueta (humanizarCodigo), nunca el código crudo; elegir otra campaña limpia la tabla.
+  assert.match(codigo, /humanizarCodigo\(l\.estado\)/);
+  assert.match(codigo, /const elegirCampana = \(c: any\) => \{ setSelected\(c\); despacharTabla\(\{ tipo: 'limpiarFiltros' \}\); \};/);
+  // Los leads de la campaña elegida: lo que llegó de otra no se ve (marca), y el error se dice con «Reintentar».
+  assert.match(codigo, /const delaCampana = lecturaLeads\.marca === String\(selected\?\.id \?\? ''\);/);
+  assert.match(codigo, /const leads = delaCampana \? lecturaLeads\.datos : null;/);
+  assert.match(codigo, /\{avisoLeads && <AvisoFuente aviso=\{avisoLeads\} onReintentar=\{recargarLeads\} \/>\}/);
+  assert.ok(!/const \[leads, setLeads\]|loadLeads|\.catch\(\(\) => \{\}\)|catch \{\}/.test(codigo), 'sin los leads sueltos de la campaña anterior ni los catch mudos');
+  // Las Métricas: la franja estándar con los ids del catálogo; el ROI con su tono (bien si es positivo, alerta si es negativo).
+  assert.match(codigo, /const tarjetasMetricas = tarjetasCampana\(selected, leads\);/);
+  assert.match(codigo, /<TarjetaKpi kpi="leads_capturados" valor=\{tarjetasMetricas\.leads_capturados\.valor\} \/>/);
+  assert.match(codigo, /<TarjetaKpi kpi="leads_convertidos" valor=\{tarjetasMetricas\.leads_convertidos\.valor\} estado=\{estadoLeads\} \/>/);
+  assert.match(codigo, /<TarjetaKpi kpi="ventas_atribuidas" valor=\{tarjetasMetricas\.ventas_atribuidas\.valor\} \/>/);
+  assert.match(codigo, /<TarjetaKpi kpi="roi" valor=\{tarjetasMetricas\.roi\.valor\} tono=\{tarjetasMetricas\.roi\.tono\} ayuda=\{tarjetasMetricas\.roi\.ayuda \?\? undefined\} \/>/);
+  assert.ok(!/StatCard|\+\$\{|toFixed\(0\)|Intl\.NumberFormat/.test(codigo), 'sin StatCard, el «+» fijo del ROI ni el formato de dinero propio');
+  assert.match(codigo, /const fCOP = \(v: number\) => formatoPesos\(v \|\| 0\);/);
+}
+
+console.log('--- TEST 34 (B4 T23B, KPI-otros punto 3; H13, RP66, RP70): la Agenda: la ficha del cliente, la del proveedor y los enlaces ---');
+{
+  const codigo = paginaT23B('agenda/page.tsx');
+  // La ficha del cliente con las claves REALES de profile-360 (resumenFichaCliente) y con los ids del catálogo.
+  assert.match(codigo, /const tarjetasCliente = tarjetasFichaCliente\(customer360 \? resumenFichaCliente\(customer360\) : null\);/);
+  for (const id of ['pven_saldo_por_cobrar', 'cli_total_comprado', 'cli_total_pagado', 'cli_cot_abiertas']) {
+    assert.match(codigo, new RegExp(`<TarjetaKpi kpi="${id}" valor=\\{tarjetasCliente\\.${id}\\.valor\\}`), id);
+  }
+  assert.match(codigo, /<FranjaKpis estado=\{estadoFicha\} titulo="Indicadores del cliente">/);
+  assert.ok(!/customer360\?\.(financials|quotations|saldo_pendiente_cop|ltv)|Total Comprado \(LTV\)|Saldo por Cobrar|Cotizaciones Vivas/.test(codigo), 'sin las claves que el servidor no manda ni los nombres viejos');
+  // El perfil es de UN cliente (lo del anterior no se ve) y su error se dice con «Reintentar».
+  assert.match(codigo, /const perfilDelCliente = perfil !== null && perfil\.id === clienteActual \? perfil : null;/);
+  assert.match(codigo, /const estadoFicha = clienteActual !== null && perfilDelCliente === null \? 'cargando' : errorPerfil && !customer360 \? 'error' : 'listo';/);
+  assert.match(codigo, /\{avisoPerfil && <AvisoFuente aviso=\{avisoPerfil\} onReintentar=\{\(\) => fetchProfile\(selectedClient\.realId\)\} \/>\}/);
+  assert.match(codigo, /const json = await apiFetch\(`\/crm\/customers\/\$\{realId\}\/profile-360`\);/);
+  assert.ok(!/console\.error\('Error perfil 360'/.test(codigo), 'el error del perfil no se traga');
+  // La ficha del proveedor: lo que el servidor manda (payment_terms) y el total de sus pedidos de compra; sin «Contado» inventado.
+  assert.match(codigo, /const tarjetasProveedor = tarjetasFichaProveedor\(selectedSupplier, supplierPecsTotal\);/);
+  assert.match(codigo, /<TarjetaKpi kpi="prov_condiciones_pago" valor=\{tarjetasProveedor\.prov_condiciones_pago\.valor\} \/>/);
+  assert.match(codigo, /<TarjetaKpi kpi="prov_pedidos_compra" valor=\{tarjetasProveedor\.prov_pedidos_compra\.valor\}/);
+  assert.ok(!/Moneda Habitual|Tiempo Entrega Estimado|Pedidos PEC Emitidos|supplierPecs\.length\} ordenes|selectedSupplier\.condiciones_pago \|\| 'Contado'\}/.test(codigo), 'sin las tarjetas viejas del proveedor');
+  assert.match(codigo, /setSuppliers\(Array\.isArray\(list\) \? list\.map\(proveedorDeServidor\)\.filter\(Boolean\) : \[\]\);/);
+  assert.match(codigo, /apiFetch\(`\/compras\/pedidos\?supplier_id=\$\{sup\.id\}&limit=200`\)/);
+  // H13 (RP66): los dos enlaces del Historial Comercial a rutas que existen.
+  assert.match(codigo, /<Link href="\/dashboard\/ventas\/solicitud" className="[^"]*">Ver SC →<\/Link>/);
+  assert.match(codigo, /<Link href="\/dashboard\/ventas\/venta" className="[^"]*">Ver Pedido →<\/Link>/);
+  assert.ok(!/\/dashboard\/ventas\/solicitudes|\/dashboard\/ventas\/pedidos/.test(codigo), 'sin las rutas que no existen');
+  // Las rutas a las que apuntan existen en el árbol.
+  for (const ruta of ['ventas/solicitud/page.tsx', 'ventas/venta/page.tsx']) {
+    assert.ok(existsSync(new URL(`../src/app/dashboard/${ruta}`, import.meta.url)), `${ruta} existe`);
+  }
+}
+
+console.log('--- TEST 35 (B4 T23B, KPI-otros punto 6; H13, RP70): el Asistente omnicanal ---');
+{
+  const codigo = paginaT23B('asistente_omnicanal/page.tsx');
+  // Los nombres y el formato del catálogo: la tarjeta oscura sale de fichaRevenueAsistente (formatoPesos), sin formatCOP ni el split de la coma.
+  assert.match(codigo, /const ficha = fichaRevenueAsistente\(contextData\?\.revenue\);/);
+  assert.match(codigo, /\{ficha\.total\.etiqueta\}/);
+  assert.match(codigo, /\{ficha\.mini\[0\]\.texto\}/);
+  assert.match(codigo, /\{ficha\.mini\[2\]\.etiqueta\}/);
+  assert.ok(!/formatCOP|\.split\(','\)|Revenue Total|Total Pedidos|Ticket Promedio|>Activos</.test(codigo), 'sin los nombres ni el formato viejos');
+  // H13: el estado de cada pedido sale de infoEstadoPedido (sin EN_BODEGA ni DISPONIBLE_ENTREGA), también en la pestaña de cerrados.
+  assert.match(codigo, /const info = infoEstadoPedido\(estado\);/);
+  assert.ok(!/STATUS_BADGES|EN_BODEGA|DISPONIBLE_ENTREGA/.test(codigo), 'sin STATUS_BADGES ni los estados que no existen');
+  assert.match(codigo, /const badge = clasesDeEstado\(ord\.estado\);/);
+  assert.ok(!/>\s*Entregado\s*<\/span>/.test(codigo), 'los cerrados dicen su estado real, no un «Entregado» fijo');
+  assert.equal((codigo.match(/clasesDeEstado\(ord\.estado\)/g) ?? []).length, 3, 'las dos pestañas de pedidos usan clasesDeEstado');
+  assert.equal((codigo.match(/formatoPesos\(ord\.total_cop\)/g) ?? []).length, 2);
+  // Se conserva lo de B1 a B3: los tipos y la modalidad (SolicitudTipoYDetalle), el selector de cliente y la creación de la SC.
+  assert.match(codigo, /import \{ SolicitudTipoYDetalle, type SolicitudTipoYDetalleHandle \} from '\.\.\/ventas\/solicitud\/solicitud-client';/);
+  assert.match(codigo, /import \{ SelectorClienteSC \} from '\.\.\/ventas\/solicitud\/selector-cliente';/);
+  assert.match(codigo, /<SolicitudTipoYDetalle/);
+  assert.match(codigo, /apiFetch\('\/ventas\/solicitudes'/);
+  // El rol: la columna de contexto solo pide lo que el rol puede leer; un error se dice con «Reintentar» (un 403, sin él).
+  assert.match(codigo, /const acceso = accesoAsistente\(useRolActual\(\)\);/);
+  assert.match(codigo, /if \(!acceso\.contexto \|\| !searchQuery \|\| searchQuery\.trim\(\)\.length < 2\) \{/);
+  assert.match(codigo, /\{acceso\.listo && !acceso\.contexto \? \(/);
+  assert.match(codigo, /Tu rol no ve el contexto del cliente\./);
+  assert.match(codigo, /setErrorContexto\(\{ error: err, pedido: customerIdentifier \}\);/);
+  assert.match(codigo, /<AvisoFuente aviso=\{a\} onReintentar=\{\(\) => loadCustomerContext\(errorContexto\.pedido\)\} \/>/);
+}
+
+console.log('--- TEST 36 (B4 T23B): ninguna de las cinco pantallas trae diálogos nativos, y Marketing ya no enlaza a Visitantes (RP30, RP55) ---');
+{
+  const guarda = readFileSync(new URL('./test_sin_dialogos_nativos.mjs', import.meta.url), 'utf8');
+  for (const ruta of ['crm/calendario/page.tsx', 'agenda/page.tsx', 'marketing/page.tsx', 'marketing/campanas/page.tsx', 'asistente_omnicanal/page.tsx']) {
+    assert.ok(guarda.includes(`'src/app/dashboard/${ruta}'`), `${ruta} está en las RAICES de la guarda`);
+    assert.ok(!/(^|[^\w.$])(window\.)?(alert|confirm|prompt)\s*\(/.test(paginaT23B(ruta)), `${ruta}: sin alert(), confirm() ni prompt()`);
+  }
+  // La excepción HASTA_T23B de TEST 46 (test_tabla.mjs) se fue: Marketing cuenta como cualquier pantalla.
+  assert.ok(!readFileSync(new URL('./test_tabla.mjs', import.meta.url), 'utf8').includes('HASTA_T23B'), 'sin la excepción HASTA_T23B');
 }
 
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

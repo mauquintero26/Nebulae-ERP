@@ -2,35 +2,50 @@
 
 import { useState, useEffect } from 'react';
 import {
-  Megaphone, Network, Sparkles, Target, Users,
-  ArrowUpRight, BarChart3, TrendingUp, MousePointerClick,
-  RefreshCw, DollarSign, CheckCircle2
+  Megaphone, Network, Sparkles, Target,
+  ArrowUpRight, BarChart3, RefreshCw
 } from 'lucide-react';
 import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
-import { PageHeader, StatCard } from '@/components/ui';
+import { PageHeader, FranjaKpis, TarjetaKpi, AvisoFuente, useEstadoKpi, useRolActual } from '@/components/ui';
+import { accesoMarketing } from '@/lib/roles';
+import { avisoDeFuente } from '@/lib/avisos';
+import { datosDeRespuesta, lecturaDeFuente, tarjetasMarketing } from '@/lib/kpis';
 
-const fCOP = (v: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0);
+/** Lo último que llegó de /marketing/stats: la vuelta con la que se pidió, sus datos y su error (lecturaDeFuente). */
+type Cargado = { vuelta: number; datos: Record<string, unknown> | null; error: unknown };
+
+/** El texto de quien no puede ver los indicadores (todo /marketing es de ADMIN y ASESOR): neutro, sin «Reintentar». */
+const TEXTO_SIN_INDICADORES = 'Tu rol no ve los indicadores de Marketing.';
 
 export default function MarketingDashboard() {
-  const [stats, setStats] = useState<any>({});
-  const [loading, setLoading] = useState(true);
+  // B4 T23B: el rol se lee después de montar y no se pide lo que no puede leer (accesoMarketing: /marketing/stats es de ADMIN y ASESOR).
+  const acceso = accesoMarketing(useRolActual());
+  const [vuelta, setVuelta] = useState(0);
+  const [cargado, setCargado] = useState<Cargado | null>(null);
 
-  const loadStats = () => {
-    setLoading(true);
-    apiFetch('/marketing/stats')
-      .then(d => { setStats(d.data || {}); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  };
+  // GET /marketing/stats con su turno: la primera vez, 'cargando' (barras grises, nunca '...' ni 0); al recargar se conserva el último
+  // valor ('actualizando'); con error, «—» y el aviso con el detalle del servidor y «Reintentar» (un 403, sin «Reintentar»).
+  useEffect(() => {
+    if (!acceso.ver) return;
+    const control = new AbortController();
+    apiFetch('/marketing/stats', { signal: control.signal })
+      .then((r: unknown) => setCargado({ vuelta, datos: datosDeRespuesta(r), error: null }))
+      .catch((err: unknown) => { if (!control.signal.aborted) setCargado({ vuelta, datos: null, error: err }); });
+    return () => control.abort();
+  }, [vuelta, acceso.ver]);
 
-  useEffect(() => { loadStats(); }, []);
+  const { datos, cargando, error } = lecturaDeFuente(cargado, vuelta);
+  const estado = useEstadoKpi(cargando, error);
+  const aviso = avisoDeFuente(error, 'No se pudieron cargar los indicadores de Marketing');
+  const t = tarjetasMarketing(datos);
+  const reintentar = () => setVuelta((n) => n + 1);
 
+  // «Visitantes & Leads» salió del menú (R14: su pantalla no tiene datos reales) y no se ofrece desde aquí (RP55).
   const MODULES = [
-    { name: 'Flujos (Redes Sociales)', desc: 'Automatizacion por keyword: Instagram, WhatsApp, Facebook, Email.', path: '/dashboard/marketing/flujos', icon: Network, color: 'text-blue-600 bg-blue-50 border-blue-200' },
-    { name: 'Historias & Publicaciones', desc: 'Disena con preview de telefono, programa y publica en redes.', path: '/dashboard/marketing/historias', icon: Sparkles, color: 'text-purple-600 bg-purple-50 border-purple-200' },
-    { name: 'Campanas', path: '/dashboard/marketing/campanas', desc: 'Crea, lanza y mide campanas multicanal con codigo de descuento.', icon: Target, color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
-    { name: 'Visitantes & Leads', path: '/dashboard/marketing/visitantes', desc: 'Analitica de trafico web, paginas visitadas y etiquetado CRM.', icon: Users, color: 'text-amber-600 bg-amber-50 border-amber-200' },
+    { name: 'Flujos (Redes Sociales)', desc: 'Automatización por keyword: Instagram, WhatsApp, Facebook, Email.', path: '/dashboard/marketing/flujos', icon: Network, color: 'text-blue-600 bg-blue-50 border-blue-200' },
+    { name: 'Historias & Publicaciones', desc: 'Diseña con preview de teléfono, programa y publica en redes.', path: '/dashboard/marketing/historias', icon: Sparkles, color: 'text-purple-600 bg-purple-50 border-purple-200' },
+    { name: 'Campañas', path: '/dashboard/marketing/campanas', desc: 'Crea, lanza y mide campañas multicanal con código de descuento.', icon: Target, color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
   ];
 
   return (
@@ -38,34 +53,35 @@ export default function MarketingDashboard() {
       <div className="mb-10">
         <PageHeader icon={Megaphone} color="purple"
           title="Centro de Marketing & Crecimiento"
-          subtitle="Campanas multicanal · Flujos automaticos · Historias & Publicaciones · Leads & Conversion"
+          subtitle="Campañas multicanal · Flujos automáticos · Historias & Publicaciones · Leads & Conversión"
           actions={(
-            <button onClick={loadStats} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 font-semibold text-sm shadow-sm">
-              <RefreshCw size={14} className={loading ? 'animate-spin' : ''}/> Actualizar
+            <button onClick={reintentar} disabled={!acceso.ver} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 font-semibold text-sm shadow-sm disabled:opacity-50">
+              <RefreshCw size={14} className={acceso.ver && cargando ? 'animate-spin' : ''}/> Actualizar
             </button>
           )} />
       </div>
 
-      <div className="grid grid-cols-4 gap-4 mb-10">
-        <StatCard icon={Target} color="blue" label="Campanas Activas"
-          value={loading ? '...' : (stats.campanas_activas ?? 0)}
-          hint={loading ? '' : `${stats.campanas_total ?? 0} campanas totales`} />
-        <StatCard icon={Users} color="emerald" label="Leads Capturados"
-          value={loading ? '...' : (stats.leads_total ?? 0)}
-          hint={loading ? '' : `${stats.leads_convertidos ?? 0} convertidos (${stats.tasa_conversion_pct ?? 0}%)`} />
-        <StatCard icon={DollarSign} color="purple" label="Ventas Atribuidas"
-          value={loading ? '...' : fCOP(stats.ventas_atribuidas_cop ?? 0)}
-          hint={loading ? '' : `ROI: ${stats.roi_pct ?? 0}%`} />
-        <StatCard variant="gradient" color="purple" icon={Sparkles} label="Flujos Activos"
-          value={loading ? '...' : (stats.flujos_activos ?? 0)}
-          hint={loading ? '' : `${stats.posts_total ?? 0} posts publicados`} />
+      <div className="mb-10 space-y-4">
+        {acceso.listo && !acceso.ver ? (
+          <p role="status" className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600">{TEXTO_SIN_INDICADORES}</p>
+        ) : (
+          <>
+            {aviso && <AvisoFuente aviso={aviso} onReintentar={reintentar} />}
+            <FranjaKpis estado={aviso?.tipo === 'permiso' ? 'listo' : estado} titulo="Indicadores de Marketing">
+              <TarjetaKpi kpi="camp_activas" valor={t.camp_activas.valor} ayuda={t.camp_activas.ayuda ?? undefined} />
+              <TarjetaKpi kpi="leads_capturados" valor={t.leads_capturados.valor} ayuda={t.leads_capturados.ayuda ?? undefined} />
+              <TarjetaKpi kpi="ventas_atribuidas" valor={t.ventas_atribuidas.valor} ayuda={t.ventas_atribuidas.ayuda ?? undefined} />
+              <TarjetaKpi kpi="flujos_activos" valor={t.flujos_activos.valor} ayuda={t.flujos_activos.ayuda ?? undefined} />
+            </FranjaKpis>
+          </>
+        )}
       </div>
 
       <h2 className="text-xl font-black text-slate-800 mb-6 flex items-center gap-2">
         <BarChart3 className="text-slate-400" size={20} /> Entornos de Marketing
       </h2>
-      
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 pb-10">
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 pb-10">
         {MODULES.map((mod, idx) => (
           <Link key={idx} href={mod.path} className="group bg-white border border-slate-200 rounded-2xl p-6 hover:shadow-md hover:border-slate-300 transition-all cursor-pointer relative overflow-hidden flex flex-col">
             <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-5 border transition-transform group-hover:scale-110 ${mod.color}`}>

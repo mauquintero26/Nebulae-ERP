@@ -11,12 +11,17 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
   Search, Plus, Calendar, MessageSquare, Settings,
   User, DollarSign, ShoppingBag, MapPin, Activity,
-  Phone, Mail, X, ArrowRight, Trash2, CheckCircle2, ExternalLink,
-  MessageCircle, Clock, AlertTriangle, ChevronRight, FileText,
+  Phone, Mail, X, ArrowRight, Trash2, ExternalLink,
+  MessageCircle, Clock, ChevronRight, FileText,
   Truck, Building2, Globe, Edit2, ShieldAlert
 } from 'lucide-react';
 import { CambiosDeActividad } from '@/app/dashboard/ventas/flujo';
-import { itemDeTimelineCliente } from '@/lib/datos-cliente';
+import { itemDeTimelineCliente, proveedorDeServidor } from '@/lib/datos-cliente';
+// B4 T23B: la franja de indicadores estándar de la ficha del cliente y del proveedor (KPI-otros punto 3).
+import { FranjaKpis, TarjetaKpi, AvisoFuente } from '@/components/ui';
+import { avisoDeFuente } from '@/lib/avisos';
+import { datosDeRespuesta, numeroFinito, tarjetasFichaCliente, tarjetasFichaProveedor } from '@/lib/kpis';
+import { resumenFichaCliente } from '@/lib/kpis-ventas';
 
 function timeAgo(isoString: string) {
   if (!isoString) return 'Hoy';
@@ -88,7 +93,8 @@ export default function AgendaPage() {
     'Solicitud de Devolución / Garantía',
     'Solicitud de Soporte Técnico',
   ]);
-  const [customer360, setCustomer360] = useState<any>(null);
+  // B4 T23B: el perfil 360 con de QUIÉN es (id) y su error: el de otro cliente no se ve, y un error se dice (antes un console.error mudo).
+  const [perfil, setPerfil] = useState<{ id: number; datos: any | null; error: unknown } | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [agendaForm, setAgendaForm] = useState<any>({
@@ -102,6 +108,9 @@ export default function AgendaPage() {
   const [loadingSuppliers, setLoadingSuppliers] = useState(false);
   const [supplierSearch, setSupplierSearch] = useState('');
   const [supplierPecs, setSupplierPecs] = useState<any[]>([]);
+  // El total de GET /compras/pedidos?supplier_id= (la lista trae como mucho 200) y su error: el «Pedidos de compra» de la ficha.
+  const [supplierPecsTotal, setSupplierPecsTotal] = useState<number | null>(null);
+  const [supplierPecsError, setSupplierPecsError] = useState<unknown>(null);
   const [supplierModal, setSupplierModal] = useState<'NEW' | 'EDIT' | null>(null);
   const [deleteConfirmSupplier, setDeleteConfirmSupplier] = useState<any | null>(null);
   const [supplierForm, setSupplierForm] = useState({
@@ -146,13 +155,11 @@ export default function AgendaPage() {
 
   const fetchProfile = async (realId: number) => {
     try {
-      const res = await fetch(`${API_URL}/crm/customers/${realId}/profile-360`, { headers: getHeaders() });
-      const json = await res.json();
-      if (json.status === 'success') {
-        setCustomer360(json.data);
-      }
+      const json = await apiFetch(`/crm/customers/${realId}/profile-360`);
+      setPerfil({ id: realId, datos: datosDeRespuesta(json), error: null });
     } catch (e) {
-      console.error('Error perfil 360', e);
+      // Un error no borra el perfil del mismo cliente que ya se veía (queda con su aviso); el de otro cliente no cuenta.
+      setPerfil((previo) => ({ id: realId, datos: previo?.id === realId ? previo.datos : null, error: e }));
     }
   };
 
@@ -162,7 +169,7 @@ export default function AgendaPage() {
     try {
       const res = await apiFetch('/compras/proveedores');
       const list = res?.data || res || [];
-      setSuppliers(Array.isArray(list) ? list : []);
+      setSuppliers(Array.isArray(list) ? list.map(proveedorDeServidor).filter(Boolean) : []);
     } catch (e) {
       console.error('Error cargando proveedores', e);
     } finally {
@@ -172,11 +179,17 @@ export default function AgendaPage() {
 
   const openSupplier = async (sup: any) => {
     setSelectedSupplier(sup);
+    setSupplierPecs([]);
+    setSupplierPecsTotal(null);
+    setSupplierPecsError(null);
     try {
-      const res = await apiFetch(`/compras/pedidos?supplier_id=${sup.id}`);
-      setSupplierPecs(res?.data || res || []);
-    } catch {
+      const res = await apiFetch(`/compras/pedidos?supplier_id=${sup.id}&limit=200`);
+      const items = Array.isArray(res?.data) ? res.data : [];
+      setSupplierPecs(items);
+      setSupplierPecsTotal(Math.max(numeroFinito(res?.total) ?? 0, items.length));
+    } catch (e) {
       setSupplierPecs([]);
+      setSupplierPecsError(e);
     }
   };
 
@@ -190,9 +203,17 @@ export default function AgendaPage() {
     if (selectedClient && selectedClient !== 'NEW') {
       fetchProfile(selectedClient.realId);
     } else {
-      setCustomer360(null);
+      setPerfil(null);
     }
   }, [selectedClient]);
+
+  // Lo del perfil que se ve es el del cliente elegido (nunca el del anterior); sin él, la ficha está 'cargando' (barras grises, nunca 0).
+  const clienteActual: number | null = selectedClient && selectedClient !== 'NEW' ? selectedClient.realId : null;
+  const perfilDelCliente = perfil !== null && perfil.id === clienteActual ? perfil : null;
+  const customer360 = perfilDelCliente?.datos ?? null;
+  const errorPerfil = perfilDelCliente?.error ?? null;
+  const estadoFicha = clienteActual !== null && perfilDelCliente === null ? 'cargando' : errorPerfil && !customer360 ? 'error' : 'listo';
+  const avisoPerfil = avisoDeFuente(errorPerfil, 'No se pudo cargar la ficha del cliente');
 
   const openClient = (client: any) => {
     setSelectedClient(client);
@@ -208,7 +229,7 @@ export default function AgendaPage() {
 
   const goBack = () => {
     setSelectedClient(null);
-    setCustomer360(null);
+    setPerfil(null);
     if (searchParams.get('customer_id')) router.replace(pathname);
   };
 
@@ -224,6 +245,8 @@ export default function AgendaPage() {
   const goBackSupplier = () => {
     setSelectedSupplier(null);
     setSupplierPecs([]);
+    setSupplierPecsTotal(null);
+    setSupplierPecsError(null);
   };
 
   // ─── ACCIONES CLIENTES ─────────────────────────────────────────────────────
@@ -771,6 +794,7 @@ export default function AgendaPage() {
 
     // ─── DETALLE PROVEEDOR (FICHA 360) ─────────────────────────────────────────
     const cleanPhone = (selectedSupplier.telefono || '').replace(/\D/g, '');
+    const tarjetasProveedor = tarjetasFichaProveedor(selectedSupplier, supplierPecsTotal);
 
     return (
       <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-6 overflow-y-auto animate-in fade-in">
@@ -839,24 +863,18 @@ export default function AgendaPage() {
           </div>
         </div>
 
-        {/* KPIs Proveedor */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-          <div className="p-5 rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Condiciones de Pago</span>
-            <p className="text-lg font-black text-slate-800 mt-1">{selectedSupplier.condiciones_pago || 'Contado'}</p>
-          </div>
-          <div className="p-5 rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Moneda Habitual</span>
-            <p className="text-lg font-black text-teal-600 mt-1">{selectedSupplier.moneda_default || 'COP'}</p>
-          </div>
-          <div className="p-5 rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Tiempo Entrega Estimado</span>
-            <p className="text-lg font-black text-slate-800 mt-1">{selectedSupplier.tiempo_entrega_dias || 7} días</p>
-          </div>
-          <div className="p-5 rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Pedidos PEC Emitidos</span>
-            <p className="text-lg font-black text-indigo-600 mt-1">{supplierPecs.length} ordenes</p>
-          </div>
+        {/* KPIs Proveedor: las condiciones de pago (payment_terms) y el total de pedidos de compra del servidor. La moneda y el tiempo de
+            entrega no existen en el modelo de proveedor (no se inventan: prov_moneda y prov_tiempo_entrega del catálogo quedan sin usar). */}
+        <div className="mb-6 space-y-3">
+          {Boolean(supplierPecsError) && (() => {
+            const a = avisoDeFuente(supplierPecsError, 'No se pudieron cargar los pedidos de compra del proveedor');
+            return a ? <AvisoFuente aviso={a} onReintentar={() => openSupplier(selectedSupplier)} /> : null;
+          })()}
+          <FranjaKpis titulo="Indicadores del proveedor">
+            <TarjetaKpi kpi="prov_condiciones_pago" valor={tarjetasProveedor.prov_condiciones_pago.valor} />
+            <TarjetaKpi kpi="prov_pedidos_compra" valor={tarjetasProveedor.prov_pedidos_compra.valor}
+              estado={supplierPecsError ? 'error' : supplierPecsTotal === null ? 'cargando' : 'listo'} />
+          </FranjaKpis>
         </div>
 
         {/* Historial de Pedidos de Compra (PECs) */}
@@ -878,7 +896,7 @@ export default function AgendaPage() {
 
           {supplierPecs.length === 0 ? (
             <div className="py-12 text-center text-slate-400 text-xs">
-              No hay pedidos de compra emitidos aún a este proveedor.
+              {supplierPecsError ? 'No se pudieron cargar los pedidos de compra.' : supplierPecsTotal === null ? 'Cargando pedidos de compra…' : 'No hay pedidos de compra emitidos aún a este proveedor.'}
             </div>
           ) : (
             <div className="divide-y divide-slate-100">
@@ -1245,9 +1263,9 @@ export default function AgendaPage() {
   const clientData = isNew ? {} : selectedClient;
   const cleanPhone = (clientData.phone || '').replace(/\D/g, '');
 
-  const saldoPendiente = customer360?.financials?.saldo_pendiente_cop ?? customer360?.saldo_pendiente_cop ?? 0;
-  const totalComprado = customer360?.financials?.total_comprado_cop ?? customer360?.ltv ?? 0;
-  const totalPagado = customer360?.financials?.total_pagado_cop ?? 0;
+  // KPI-otros punto 3: las claves REALES de profile-360 (resumen_financiero, pedidos, cotizaciones y solicitudes; antes financials,
+  // quotations, sales_orders y customer_requests, que el servidor no manda: todo salía en 0 y «Al día con pagos»).
+  const tarjetasCliente = tarjetasFichaCliente(customer360 ? resumenFichaCliente(customer360) : null);
 
   return (
     <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-6 overflow-y-auto animate-in fade-in">
@@ -1330,35 +1348,15 @@ export default function AgendaPage() {
 
       {/* Financial KPI Banner */}
       {!isNew && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-          <div className={`p-5 rounded-2xl border shadow-sm ${saldoPendiente > 0 ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800'}`}>
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[11px] font-black uppercase tracking-wider">Saldo por Cobrar</span>
-              {saldoPendiente > 0 ? <AlertTriangle size={16} className="text-rose-600" /> : <CheckCircle2 size={16} className="text-emerald-600" />}
-            </div>
-            <p className="text-2xl font-black">{formatCOP(saldoPendiente)}</p>
-            <p className="text-[10px] opacity-75 mt-0.5">
-              {saldoPendiente > 0 ? 'Cobro pendiente antes del despacho' : 'Al día con pagos'}
-            </p>
-          </div>
-
-          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-            <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Total Comprado (LTV)</span>
-            <p className="text-2xl font-black text-slate-900 mt-1">{formatCOP(totalComprado)}</p>
-            <p className="text-[10px] text-slate-400 mt-0.5">{customer360?.sales_orders?.length || 0} pedidos históricos</p>
-          </div>
-
-          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-            <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Total Pagado</span>
-            <p className="text-2xl font-black text-emerald-600 mt-1">{formatCOP(totalPagado)}</p>
-            <p className="text-[10px] text-slate-400 mt-0.5">Anticipos + pagos registrados</p>
-          </div>
-
-          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-            <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Cotizaciones Vivas</span>
-            <p className="text-2xl font-black text-indigo-600 mt-1">{customer360?.quotations?.length || 0}</p>
-            <p className="text-[10px] text-slate-400 mt-0.5">{customer360?.customer_requests?.length || 0} solicitudes activas</p>
-          </div>
+        <div className="mb-6 space-y-3">
+          {avisoPerfil && <AvisoFuente aviso={avisoPerfil} onReintentar={() => fetchProfile(selectedClient.realId)} />}
+          <FranjaKpis estado={estadoFicha} titulo="Indicadores del cliente">
+            <TarjetaKpi kpi="pven_saldo_por_cobrar" valor={tarjetasCliente.pven_saldo_por_cobrar.valor} tono={tarjetasCliente.pven_saldo_por_cobrar.tono}
+              ayuda={tarjetasCliente.pven_saldo_por_cobrar.ayuda ?? undefined} />
+            <TarjetaKpi kpi="cli_total_comprado" valor={tarjetasCliente.cli_total_comprado.valor} ayuda={tarjetasCliente.cli_total_comprado.ayuda ?? undefined} />
+            <TarjetaKpi kpi="cli_total_pagado" valor={tarjetasCliente.cli_total_pagado.valor} ayuda={tarjetasCliente.cli_total_pagado.ayuda ?? undefined} />
+            <TarjetaKpi kpi="cli_cot_abiertas" valor={tarjetasCliente.cli_cot_abiertas.valor} ayuda={tarjetasCliente.cli_cot_abiertas.ayuda ?? undefined} />
+          </FranjaKpis>
         </div>
       )}
 
@@ -1510,7 +1508,7 @@ export default function AgendaPage() {
                         </div>
                         <p className="text-[11px] text-slate-400 mt-0.5">{sc.tipo_solicitud || 'Cotización'} · {timeAgo(sc.created_at)}</p>
                       </div>
-                      <Link href={`/dashboard/ventas/solicitudes`} className="text-xs font-bold text-indigo-600 hover:underline">Ver SC →</Link>
+                      <Link href="/dashboard/ventas/solicitud" className="text-xs font-bold text-indigo-600 hover:underline">Ver SC →</Link>
                     </div>
                   ))
                 )}
@@ -1533,7 +1531,7 @@ export default function AgendaPage() {
                         </div>
                         <p className="text-[11px] text-slate-400 mt-0.5">Total: {formatCOP(so.total_cop)} · Anticipo: {formatCOP(so.anticipo_cop)}</p>
                       </div>
-                      <Link href={`/dashboard/ventas/pedidos`} className="text-xs font-bold text-indigo-600 hover:underline">Ver Pedido →</Link>
+                      <Link href="/dashboard/ventas/venta" className="text-xs font-bold text-indigo-600 hover:underline">Ver Pedido →</Link>
                     </div>
                   ))
                 )}

@@ -59,6 +59,11 @@ const RAICES = [
   'src/app/dashboard/finanzas/gastos/page.tsx', // B4 T22: Gastos, sin los toast ni diálogos nativos
   'src/app/dashboard/page.tsx', // B4 T22: el Dashboard General, sin diálogos nativos
   'src/app/dashboard/ecommerce/page.tsx', // B4 T23A (RP30): E-Commerce, sin el confirm() de «¿Eliminar este producto?»
+  'src/app/dashboard/crm/calendario/page.tsx', // B4 T23B: Seguimientos del CRM, sin diálogos nativos
+  'src/app/dashboard/agenda/page.tsx', // B4 T23B: la Agenda, sin diálogos nativos
+  'src/app/dashboard/marketing/page.tsx', // B4 T23B: la portada de Marketing, sin diálogos nativos
+  'src/app/dashboard/marketing/campanas/page.tsx', // B4 T23B (RP30): Campañas, sin el confirm() de «¿Eliminar esta campaña?»
+  'src/app/dashboard/asistente_omnicanal/page.tsx', // B4 T23B: el Asistente omnicanal, sin diálogos nativos
 ];
 
 // alert( / confirm( / prompt(, sueltos o con window. / window?. / globalThis. / self. delante, que no sean parte de

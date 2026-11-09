@@ -2317,10 +2317,9 @@ console.log('--- TEST 46 (B4 T17, R14, C18 y RP55): el menú no enlaza las panta
   assert.equal((sinComentarios(sidebar).match(/<AlertasBadge\b/g) ?? []).length, 1, 'el Sidebar monta AlertasBadge');
 
   // Ninguna otra pantalla enlaza a las quitadas (R14: «Ninguna tarea nueva agrega enlaces hacia esas pantallas»). Fuera
-  // de la cuenta: las pantallas quitadas mismas (se enlazan entre ellas y no se editan), app_mocks_backup y, hasta T23B,
-  // la portada de Marketing (RP55: su «Visitantes & Leads» es de T23B).
+  // de la cuenta: las pantallas quitadas mismas (se enlazan entre ellas y no se editan) y app_mocks_backup. B4 T23B (RP55): la
+  // portada de Marketing ya no enlaza a Visitantes, así que su excepción se fue: cuenta como cualquier pantalla.
   const PROPIAS = QUITADAS.map((q) => `app${q}`);
-  const HASTA_T23B = 'app/dashboard/marketing/page.tsx';
   const enlazan = [];
   const recorrer = (rel) => {
     for (const nombre of readdirSync(new URL(rel || './', SRC))) {
@@ -2328,7 +2327,7 @@ console.log('--- TEST 46 (B4 T17, R14, C18 y RP55): el menú no enlaza las panta
       if (statSync(new URL(ruta, SRC)).isDirectory()) {
         if (ruta === 'app_mocks_backup' || PROPIAS.includes(ruta)) continue;
         recorrer(`${ruta}/`);
-      } else if (/\.(tsx?|jsx?)$/.test(nombre) && ruta !== HASTA_T23B) {
+      } else if (/\.(tsx?|jsx?)$/.test(nombre)) {
         const texto = sinComentarios(leer(ruta));
         for (const m of texto.matchAll(/['"`](\/dashboard\/[^'"`\s]*)['"`]/g)) if (esQuitada(m[1])) enlazan.push(`${ruta}: ${m[1]}`);
       }
@@ -2336,8 +2335,8 @@ console.log('--- TEST 46 (B4 T17, R14, C18 y RP55): el menú no enlaza las panta
   };
   recorrer('');
   assert.deepEqual(enlazan, [], 'ninguna pantalla enlaza a las de R14');
-  // La portada de Marketing todavía la enlaza (T23B la quita): si ya no lo hace, esta excepción sobra.
-  assert.ok(/\/dashboard\/marketing\/visitantes/.test(leer(HASTA_T23B)), 'la excepción de T23B sigue haciendo falta');
+  // B4 T23B (RP55): la portada de Marketing ya no ofrece «Visitantes & Leads» (la pantalla no se edita, R14).
+  assert.ok(!/\/dashboard\/marketing\/visitantes/.test(sinComentarios(leer('app/dashboard/marketing/page.tsx'))), 'Marketing no enlaza a Visitantes');
 
   // R14 y C18: los archivos no se borran (siguen respondiendo si alguien entra por URL), tampoco ResizableHeader.tsx.
   for (const q of QUITADAS) assert.ok(existsSync(new URL(`app${q}/page.tsx`, SRC)), `${q} sigue existiendo`);
