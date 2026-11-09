@@ -460,4 +460,46 @@ console.log('--- TEST 14 (B4 T23B; RP7): datosDeSeguimiento: lo que llega de /cr
   }
 }
 
+console.log('--- TEST 15 (B4 T23B r1; I3, I4, m20, m23, m24, m30): las 3 PRIMERAS etapas, sus colores, el valor «all», la ficha y qué se pinta ---');
+{
+  const lead = (id, etapa, extra = {}) => ({ id, client: `Cliente ${id}`, value: 0, status: 'DRAFT', pipeline_stage_id: etapa, days: 0, updated_at: '2026-11-01T10:00:00', ...extra });
+  // Cuatro etapas abiertas (+ Ganado y Perdido): «las 3 primeras» y «las 3 últimas» ya no dan lo mismo (I4). El color y el fondo son de
+  // familias distintas en Cotización: el acento sale del COLOR, no del fondo (m20).
+  const E5 = [
+    ETAPAS[0],
+    { id: 2, name: 'Cotización', color: 'bg-amber-500', bg_color: 'bg-slate-50', position: 1, maps_to_status: 'QUOTATION' },
+    { id: 5, name: 'Seguimiento', color: 'bg-purple-500', bg_color: 'bg-purple-50', position: 2.5 },
+    ETAPAS[2], ETAPAS[3],
+  ];
+  const L = [lead(1, 1), lead(2, 2), lead(3, 5), lead(4, 3, { status: 'INVOICED' })];
+  const t = tarjetasSeguimientos(L, E5, {});
+  assert.deepEqual(t.etapas.map((e) => e.nombre), ['Nuevo', 'Cotización', 'Seguimiento'], 'exactamente las 3 primeras, en orden');
+  assert.deepEqual(t.etapas.map((e) => e.acento), ['blue', 'amber', 'purple'], 'el acento sale del color de la etapa');
+  assert.deepEqual(t.etapas.map((e) => e.valor), [1, 1, 1]);
+  // El nombre vacío cae en «Etapa N» (m24).
+  assert.equal(tarjetasSeguimientos([], [{ id: 7, name: '  ', color: 'bg-blue-500' }], {}).etapas[0].nombre, 'Etapa 7');
+  // 'all' es lo que manda la página (activeStage = 'all'): el total queda activo y los grupos son todos (m30).
+  const todo = tarjetasSeguimientos(L, E5, { etapa: 'all' });
+  assert.equal(todo.total.activa, true);
+  assert.deepEqual(todo.etapas.map((e) => e.activa), [false, false, false]);
+  assert.deepEqual(gruposDeSeguimiento(L, E5, { etapa: 'all' }).map((g) => [g.clave, g.leads.map((l) => l.id)]), [['1', [1]], ['2', [2]], ['5', [3]], ['3', [4]]]);
+  assert.deepEqual(gruposDeSeguimiento(L, E5, { etapa: '5' }).map((g) => g.clave), ['5']);
+  // La ficha trae el asesor y la descripción (m23).
+  const f = fichaDeLeadSeguimiento(lead(9, 1, { advisor_name: 'Camila Ruiz', description: 'Quiere entrega rápida' }));
+  assert.equal(f.asesor, 'Camila Ruiz');
+  assert.equal(f.descripcion, 'Quiere entrega rápida');
+
+  // vistaSeguimiento (I3: cargando contra vacío): qué se pinta según lo que llegó, el aviso y la vista filtrada.
+  const { vistaSeguimiento } = await import('../src/lib/crm-etapas.js');
+  const aviso = { tipo: 'carga', texto: 'x', reintentar: true };
+  assert.equal(vistaSeguimiento(null, null), 'esqueleto', 'sin leads ni error: se espera, no «vacío»');
+  assert.equal(vistaSeguimiento(null, aviso), 'aviso', 'sin leads y con error: el aviso, no «vacío» ni el esqueleto');
+  assert.equal(vistaSeguimiento([], null), 'vacio', 'una lista vacía de verdad');
+  assert.equal(vistaSeguimiento(L, null), 'grupos');
+  assert.equal(vistaSeguimiento(L, aviso), 'grupos', 'con datos, un error de recarga no tapa la lista');
+  assert.equal(vistaSeguimiento(L, null, []), 'vacio', 'hay leads pero la búsqueda no encuentra ninguno');
+  assert.equal(vistaSeguimiento(L, null, [L[0]]), 'grupos');
+  assert.equal(vistaSeguimiento(undefined, null), 'esqueleto');
+}
+
 console.log('OK test_crm_etapas');

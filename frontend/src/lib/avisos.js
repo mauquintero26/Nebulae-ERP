@@ -271,3 +271,25 @@ export function avisoDeFuente(error, fallo) {
 
 /** El aviso de un 403 al leer una fuente de una pantalla. */
 export const MENSAJE_SIN_PERMISO_FUENTE = 'No tienes permiso para ver esto.';
+
+/**
+ * B4 T23B r1 (I2): el motivo de permiso de una fuente (el texto de avisoDeFuente cuando es un 403) o null: lo que la tarjeta dice en su
+ * ayuda cuando muestra «—». Una sola copia para Seguimientos, Marketing y E-Commerce.
+ * @param {{tipo: string, texto: string} | null | undefined} aviso
+ * @returns {string | null}
+ */
+export function motivoSinPermiso(aviso) {
+  return aviso?.tipo === 'permiso' ? aviso.texto : null;
+}
+
+/**
+ * B4 T23B r1 (I2): el estado de la franja de tarjetas de una fuente: con un 403 queda 'listo' («—» con el motivo en cada tarjeta, sin
+ * el «No se pudo cargar» de una falla); en otro caso, el estado que traía (estadoKpi).
+ * @template {string} T
+ * @param {{tipo: string} | null | undefined} aviso
+ * @param {T} estado
+ * @returns {T | 'listo'}
+ */
+export function estadoFranjaDeFuente(aviso, estado) {
+  return aviso?.tipo === 'permiso' ? 'listo' : estado;
+}

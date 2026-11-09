@@ -199,3 +199,14 @@ export function esPedidoVigente(e) {
 export function esCotizacionActiva(e) {
   return e !== 'RECHAZADA';
 }
+
+/**
+ * B4 T23B r1 (m33, H13): la etiqueta y las clases de color de una pastilla de estado de un pedido, de infoEstadoPedido (la única fuente: un
+ * estado que no conoce sale humanizado y en gris, nunca el código crudo).
+ * @param {unknown} e
+ * @returns {{etiqueta: string, clases: string}}
+ */
+export function clasesDeEstadoPedido(e) {
+  const info = infoEstadoPedido(e);
+  return { etiqueta: info.label, clases: `${info.clases.bg} ${info.clases.text} ${info.clases.border}` };
+}

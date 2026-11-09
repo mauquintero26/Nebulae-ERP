@@ -1171,31 +1171,47 @@ export function tarjetasMarketing(datos) {
 }
 
 /**
- * Lo que pintan las 4 tarjetas de la pestaña Métricas de una campaña: la fila de GET /marketing/campanas (leads_count, ventas_cop de
- * los leads CONVERTIDO y presupuesto_cop) y sus leads (GET /marketing/campanas/{id}/leads; null mientras llegan):
+ * Un porcentaje «con signo» (R7): «+45,3 %», «−8 %» (con el menos tipográfico) y «0 %»; lo que no es un número, null.
+ * @param {unknown} n
+ * @returns {string | null}
+ */
+export function formatoPorcentajeConSigno(n) {
+  const x = numeroFinito(n);
+  if (x === null) return null;
+  const texto = `${formatoDecimal(Math.abs(x))} %`;
+  const d = decimas(x);
+  return d === 0 ? '0 %' : `${x > 0 ? '+' : MENOS}${texto}`;
+}
+
+/**
+ * Lo que pintan las 4 tarjetas de la pestaña Métricas de una campaña: la fila de GET /marketing/campanas (leads_count y
+ * presupuesto_cop) y TODOS sus leads (GET /marketing/campanas/{id}/leads no tiene límite; null mientras llegan):
  *  - leads_capturados: los leads que se ven (si ya llegaron) o leads_count de la fila;
  *  - leads_convertidos: los de estado CONVERTIDO entre los leads que llegaron (null sin ellos: no se inventa);
- *  - ventas_atribuidas: ventas_cop;
- *  - roi: ventas_cop / presupuesto_cop × 100 − 100 (la misma fórmula del servidor), con tono 'bien' si es mayor que 0 y 'alerta' si es
- *    menor; sin presupuesto no hay retorno: valor null y la ayuda «Sin presupuesto».
+ *  - ventas_atribuidas (r1, m19): UNA definición, la de Marketing y la de la columna «Venta»: la suma de venta_atribuida_cop de los
+ *    leads, de cualquier estado (no el ventas_cop de la fila, que solo suma los CONVERTIDO); null sin los leads;
+ *  - roi: esas ventas / presupuesto_cop × 100 − 100 (la misma fórmula del servidor), con su `texto` con signo («+75 %») y el tono
+ *    'bien' si es mayor que 0 y 'alerta' si es menor; sin presupuesto no hay retorno: valor null y la ayuda «Sin presupuesto».
  * @param {any} campana
  * @param {ReadonlyArray<any> | null | undefined} leads
- * @returns {{leads_capturados: {valor: number | null}, leads_convertidos: {valor: number | null}, ventas_atribuidas: {valor: number | null},
- *   roi: {valor: number | null, tono: 'normal' | 'alerta' | 'bien', ayuda: string | null}}}
+ * @returns {{leads_capturados: {valor: number | null}, leads_convertidos: {valor: number | null},
+ *   ventas_atribuidas: {valor: number | null, ayuda: string} | {valor: number | null},
+ *   roi: {valor: number | null, texto: string | null, tono: 'normal' | 'alerta' | 'bien', ayuda: string | null}}}
  */
 export function tarjetasCampana(campana, leads) {
   const c = datosDe(campana) ?? {};
   const llegaron = Array.isArray(leads);
-  const ventas = numeroFinito(c.ventas_cop);
+  const ventas = llegaron ? leads.reduce((suma, l) => suma + (numeroFinito(l?.venta_atribuida_cop) ?? 0), 0) : null;
   const presupuesto = numeroFinito(c.presupuesto_cop);
-  const roi = ventas !== null && presupuesto !== null && presupuesto > 0 ? ventas / presupuesto * 100 - 100 : null;
+  const hayPresupuesto = presupuesto !== null && presupuesto > 0;
+  const roi = ventas !== null && hayPresupuesto ? ventas / presupuesto * 100 - 100 : null;
   return {
     leads_capturados: { valor: llegaron ? leads.length : numeroFinito(c.leads_count) },
     leads_convertidos: { valor: llegaron ? leads.filter((l) => l?.estado === 'CONVERTIDO').length : null },
-    ventas_atribuidas: { valor: ventas },
+    ventas_atribuidas: { valor: ventas, ayuda: 'Suma de la venta atribuida de sus leads' },
     roi: roi === null
-      ? { valor: null, tono: 'normal', ayuda: ventas !== null && !(presupuesto !== null && presupuesto > 0) ? 'Sin presupuesto' : null }
-      : { valor: roi, tono: roi > 0 ? 'bien' : roi < 0 ? 'alerta' : 'normal', ayuda: null },
+      ? { valor: null, texto: null, tono: 'normal', ayuda: ventas !== null && !hayPresupuesto ? 'Sin presupuesto' : null }
+      : { valor: roi, texto: formatoPorcentajeConSigno(roi), tono: roi > 0 ? 'bien' : roi < 0 ? 'alerta' : 'normal', ayuda: null },
   };
 }
 
@@ -1271,16 +1287,108 @@ function etiquetaSinPeriodo(id) {
  * total_orders_count, active_orders_count y avg_ticket_cop): los nombres del catálogo (RP70: «Total comprado», «Total de pedidos»,
  * «Pedidos en curso» y «Ticket promedio») y formatoPesos (montos completos, sin el .split(',')[0] de formatCOP). Lo que no llega es «—».
  * @param {any} revenue
- * @returns {{total: {etiqueta: string, texto: string}, mini: Array<{etiqueta: string, texto: string}>}}
+ * @returns {{total: {etiqueta: string, texto: string}, mini: Array<{etiqueta: string, texto: string, ayuda: string | null}>}}
  */
 export function fichaRevenueAsistente(revenue) {
   const r = datosDe(revenue) ?? {};
   return {
     total: { etiqueta: etiquetaSinPeriodo('cli_total_comprado'), texto: formatoValorKpi(r.total_spent_cop, 'pesos') },
     mini: [
-      { etiqueta: etiquetaSinPeriodo('pven_total'), texto: formatoValorKpi(r.total_orders_count, 'numero') },
-      { etiqueta: etiquetaSinPeriodo('pven_en_curso'), texto: formatoValorKpi(r.active_orders_count, 'numero') },
-      { etiqueta: etiquetaSinPeriodo('ticket_promedio'), texto: formatoValorKpi(r.avg_ticket_cop, 'pesos') },
+      { etiqueta: etiquetaSinPeriodo('pven_total'), texto: formatoValorKpi(r.total_orders_count, 'numero'), ayuda: null },
+      // chat.py cuenta como «en curso» todo lo que no es ENTREGADO, COMPLETADO ni cancelado, FACTURADO incluido.
+      { etiqueta: etiquetaSinPeriodo('pven_en_curso'), texto: formatoValorKpi(r.active_orders_count, 'numero'), ayuda: 'Incluye los facturados' },
+      { etiqueta: etiquetaSinPeriodo('ticket_promedio'), texto: formatoValorKpi(r.avg_ticket_cop, 'pesos'), ayuda: null },
     ],
   };
+}
+
+// ─── B4 T23B r1: las rutas de carga y de error de las pantallas, en funciones puras (I2) ───────────────────────────────────
+
+/**
+ * Lo que se ve de los leads de la campaña elegida. `cargados` es lo último que llegó ({vuelta, marca, datos, error}), `clave` la vuelta
+ * vigente (la campaña y el turno), `marcaElegida` el id de la campaña elegida y `pide` si la pestaña los usa. Lo que llegó de OTRA
+ * campaña no se ve; la campaña recién elegida está 'cargando' (la barra gris, no «—» atenuado de 'actualizando'); la misma que se
+ * vuelve a pedir conserva sus leads ('actualizando'). `estado` es el de la tarjeta de convertidos.
+ * @param {{vuelta: number | string, marca?: string | null, datos: any, error: unknown} | null | undefined} cargados
+ * @param {string} clave
+ * @param {string} marcaElegida
+ * @param {boolean} pide
+ * @returns {{leads: any, cargando: boolean, recargando: boolean, error: unknown, estado: EstadoKpi}}
+ */
+export function lecturaLeadsCampana(cargados, clave, marcaElegida, pide) {
+  const lectura = lecturaDeFuente(cargados, clave);
+  const delaCampana = lectura.marca === marcaElegida;
+  const leads = delaCampana ? lectura.datos : null;
+  const cargando = pide && (lectura.cargando || !delaCampana);
+  const error = delaCampana ? lectura.error : null;
+  const recargando = cargando && leads !== null;
+  /** @type {EstadoKpi} */
+  const estado = error ? 'error' : cargando ? (leads === null ? 'cargando' : 'actualizando') : 'listo';
+  return { leads, cargando, recargando, error, estado };
+}
+
+/**
+ * Una respuesta es vigente si es de lo que se está viendo (el cliente o el proveedor abierto): una vieja que llega tarde se descarta.
+ * @param {unknown} id
+ * @param {unknown} vigente
+ * @returns {boolean}
+ */
+export function esRespuestaVigente(id, vigente) {
+  return id !== null && id !== undefined && id === vigente;
+}
+
+/**
+ * El siguiente perfil 360 de la Agenda cuando llega una respuesta: una vieja (de un cliente que ya no es el abierto) deja el estado
+ * como estaba, porque si no la ficha del cliente abierto se quedaría en 'cargando' para siempre. Un error conserva los datos del
+ * MISMO cliente (queda con su aviso); sin datos previos o de otro cliente, queda sin datos.
+ * @param {{id: number, datos: any, error: unknown} | null} previo
+ * @param {number} id  el cliente de la respuesta
+ * @param {number | null} vigente  el cliente abierto ahora
+ * @param {{datos: any} | {error: unknown}} resultado
+ * @returns {{id: number, datos: any, error: unknown} | null}
+ */
+export function siguientePerfil(previo, id, vigente, resultado) {
+  if (!esRespuestaVigente(id, vigente)) return previo;
+  if ('error' in resultado) return { id, datos: previo?.id === id ? previo.datos : null, error: resultado.error };
+  return { id, datos: resultado.datos, error: null };
+}
+
+/**
+ * Los pedidos de compra de un proveedor de GET /compras/pedidos?supplier_id=: {items, total}. Una respuesta sin una lista en `data`
+ * lanza Error('El servidor no devolvió datos.') (nunca un «0 pedidos» falso); `total` no es menor que lo que llegó.
+ * @param {any} respuesta
+ * @returns {{items: any[], total: number}}
+ */
+export function pedidosDeProveedor(respuesta) {
+  const items = datosDe(respuesta) && Array.isArray(respuesta.data) ? respuesta.data : null;
+  if (items === null) throw new Error('El servidor no devolvió datos.');
+  return { items, total: Math.max(numeroFinito(respuesta.total) ?? 0, items.length) };
+}
+
+/**
+ * El estado de la tarjeta «Pedidos de compra» de la ficha del proveedor y el texto de su lista, con el error, el total y las filas:
+ * 'cargando' sin total ni error, 'error' con error, 'listo' en otro caso; la lista dice «No hay pedidos» solo con total 0.
+ * @param {unknown} error
+ * @param {number | null} total
+ * @param {ReadonlyArray<unknown>} items
+ * @returns {{estado: EstadoKpi, texto: string | null}}
+ */
+export function estadoPedidosProveedor(error, total, items) {
+  if (error) return { estado: 'error', texto: 'No se pudieron cargar los pedidos de compra.' };
+  if (total === null) return { estado: 'cargando', texto: 'Cargando pedidos de compra…' };
+  return { estado: 'listo', texto: total === 0 && items.length === 0 ? 'No hay pedidos de compra emitidos aún a este proveedor.' : null };
+}
+
+/**
+ * Qué muestra la columna de contexto del Asistente: 'cargando'; 'contexto' (si hay uno a la vista); 'error' (la carga falló: el aviso con
+ * «Reintentar», sin «Sin cliente seleccionado» debajo, porque el cliente sí se eligió); o 'vacio' (ninguno elegido).
+ * @param {boolean} cargando
+ * @param {unknown} error
+ * @param {unknown} contexto
+ * @returns {'cargando' | 'error' | 'contexto' | 'vacio'}
+ */
+export function vistaContexto(cargando, error, contexto) {
+  if (cargando) return 'cargando';
+  if (contexto) return 'contexto';
+  return error ? 'error' : 'vacio';
 }

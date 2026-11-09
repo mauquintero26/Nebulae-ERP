@@ -640,3 +640,17 @@ export function datosDeSeguimiento(respuestaLeads, respuestaEtapas) {
   const total = Number(respuestaLeads?.total);
   return { leads, stages, total: Number.isFinite(total) ? Math.max(total, leads.length) : leads.length };
 }
+
+/**
+ * B4 T23B r1 (I3): qué pinta Seguimientos con lo que llegó: 'esqueleto' (los leads todavía no llegan y no hay error: se espera, nunca «vacío»),
+ * 'aviso' (no llegaron y la carga falló: el aviso con «Reintentar»), 'vacio' (la vista filtrada no tiene leads: no hay ninguno o la búsqueda no
+ * encuentra) o 'grupos'. Con leads a la vista, un error de recarga no los tapa.
+ * @param {ReadonlyArray<any> | null | undefined} leads  los leads cargados (null mientras llegan)
+ * @param {unknown} aviso  el aviso de la carga (avisoDeFuente) o null
+ * @param {ReadonlyArray<any>} [filtrados]  la vista filtrada (por defecto, los leads)
+ * @returns {'esqueleto' | 'aviso' | 'vacio' | 'grupos'}
+ */
+export function vistaSeguimiento(leads, aviso, filtrados) {
+  if (!Array.isArray(leads)) return aviso ? 'aviso' : 'esqueleto';
+  return (filtrados ?? leads).length === 0 ? 'vacio' : 'grupos';
+}

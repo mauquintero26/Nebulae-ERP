@@ -538,6 +538,10 @@ console.log('--- TEST T23B: proveedorDeServidor (la Agenda lee nombre, contacto_
   assert.equal(proveedorDeServidor('x'), null);
   // Un proveedor que ya trae las claves de la pantalla (un alta local) las conserva.
   assert.equal(proveedorDeServidor({ id: 9, nombre: 'Local', name: undefined }).nombre, 'Local');
+  // Las claves de la pantalla mandan sobre las del servidor (precedencia), y un arreglo no es un proveedor (m26).
+  assert.equal(proveedorDeServidor({ id: 9, nombre: 'Local', name: 'Servidor' }).nombre, 'Local');
+  assert.equal(proveedorDeServidor([]), null);
+  assert.equal(proveedorDeServidor([{ name: 'x' }]), null);
 }
 
 console.log('OK test_datos_cliente');

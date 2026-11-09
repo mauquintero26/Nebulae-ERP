@@ -1223,29 +1223,43 @@ console.log('--- TEST 29 (B4 T23B, KPI-otros puntos 3, 4 y 6; RP70): las tarjeta
   assert.equal(k.tarjetasMarketing({ ...STATS, tasa_conversion_pct: null }).leads_capturados.ayuda, '113 convertidos', 'sin la tasa, solo los convertidos');
   assert.equal(k.tarjetasMarketing({ ...STATS, leads_convertidos: 'x' }).leads_capturados.ayuda, null);
 
-  // — Una campaña: la fila de GET /marketing/campanas (leads_count, ventas_cop de los CONVERTIDO, presupuesto_cop) y sus leads.
+  // — Una campaña: la fila de GET /marketing/campanas (leads_count, presupuesto_cop) y TODOS sus leads (GET /campanas/{id}/leads no tiene
+  // límite). r1 (m19): «Ventas atribuidas» tiene UNA definición, la de Marketing y la de la columna «Venta»: la suma de venta_atribuida_cop
+  // de los leads (de cualquier estado: un lead CONTACTADO con venta cuenta), no solo los CONVERTIDO de la fila.
   const CAMP = { id: 5, nombre: 'Black Friday', leads_count: 4, ventas_cop: 3000000, presupuesto_cop: 2000000 };
-  const LEADS = [{ id: 1, estado: 'CONVERTIDO' }, { id: 2, estado: 'NUEVO' }, { id: 3, estado: 'CONVERTIDO' }, { id: 4, estado: 'PERDIDO' }];
+  const LEADS = [
+    { id: 1, estado: 'CONVERTIDO', venta_atribuida_cop: 1000000 }, { id: 2, estado: 'NUEVO', venta_atribuida_cop: 0 },
+    { id: 3, estado: 'CONVERTIDO', venta_atribuida_cop: 2000000 }, { id: 4, estado: 'CONTACTADO', venta_atribuida_cop: 500000 },
+  ];
   const c = k.tarjetasCampana(CAMP, LEADS);
   assert.deepEqual(c, {
     leads_capturados: { valor: 4 },
     leads_convertidos: { valor: 2 },
-    ventas_atribuidas: { valor: 3000000 },
-    roi: { valor: 50, tono: 'bien', ayuda: null },
+    ventas_atribuidas: { valor: 3500000, ayuda: 'Suma de la venta atribuida de sus leads' },
+    roi: { valor: 75, texto: '+75 %', tono: 'bien', ayuda: null },
   });
-  // El retorno es ventas / presupuesto - 100 (la misma fórmula del servidor): negativo = alerta; 0 = normal.
-  assert.deepEqual(k.tarjetasCampana({ ...CAMP, ventas_cop: 1000000 }, LEADS).roi, { valor: -50, tono: 'alerta', ayuda: null });
-  assert.deepEqual(k.tarjetasCampana({ ...CAMP, ventas_cop: 2000000 }, LEADS).roi, { valor: 0, tono: 'normal', ayuda: null });
-  // Sin presupuesto no hay retorno: «—» con su motivo, nunca «+NaN%» ni «0 %».
-  assert.deepEqual(k.tarjetasCampana({ ...CAMP, presupuesto_cop: 0 }, LEADS).roi, { valor: null, tono: 'normal', ayuda: 'Sin presupuesto' });
+  // El retorno es ventas / presupuesto - 100: positivo «+», negativo con el menos tipográfico (R7), 0 sin signo; alerta si es negativo.
+  const conVentas = (n) => [{ id: 1, estado: 'CONVERTIDO', venta_atribuida_cop: n }];
+  assert.deepEqual(k.tarjetasCampana(CAMP, conVentas(1000000)).roi, { valor: -50, texto: '−50 %', tono: 'alerta', ayuda: null });
+  assert.deepEqual(k.tarjetasCampana(CAMP, conVentas(2000000)).roi, { valor: 0, texto: '0 %', tono: 'normal', ayuda: null });
+  assert.equal(k.tarjetasCampana({ ...CAMP, presupuesto_cop: 3000000 }, conVentas(3450000)).roi.texto, '+15 %');
+  assert.equal(k.tarjetasCampana(CAMP, conVentas(2600000)).roi.texto, '+30 %');
+  assert.equal(k.formatoPorcentajeConSigno(45.25), '+45,3 %');
+  assert.equal(k.formatoPorcentajeConSigno(-8), '−8 %');
+  assert.equal(k.formatoPorcentajeConSigno(null), null);
+  // Sin presupuesto no hay retorno: «—» con su motivo, nunca «+NaN%» ni «0 %». Con presupuesto pero sin ventas que contar, sin motivo.
+  assert.deepEqual(k.tarjetasCampana({ ...CAMP, presupuesto_cop: 0 }, LEADS).roi, { valor: null, texto: null, tono: 'normal', ayuda: 'Sin presupuesto' });
   assert.deepEqual(k.tarjetasCampana({ ...CAMP, presupuesto_cop: null }, LEADS).roi.ayuda, 'Sin presupuesto');
-  // Mientras los leads cargan (null): los convertidos no se inventan (barra gris); los capturados salen de la fila de la campaña.
+  assert.deepEqual(k.tarjetasCampana({ presupuesto_cop: 1000 }, null).roi, { valor: null, texto: null, tono: 'normal', ayuda: null }, 'sin leads todavía: ni retorno ni motivo');
+  // Mientras los leads cargan (null): ni convertidos ni ventas se inventan (barra gris); los capturados salen de la fila de la campaña.
   const sinLeads = k.tarjetasCampana(CAMP, null);
   assert.equal(sinLeads.leads_convertidos.valor, null);
+  assert.equal(sinLeads.ventas_atribuidas.valor, null);
   assert.equal(sinLeads.leads_capturados.valor, 4);
   // Con los leads a la vista, los capturados son los que se ven (agregar uno actualiza el número sin recargar la lista).
   assert.equal(k.tarjetasCampana(CAMP, [...LEADS, { id: 9, estado: 'NUEVO' }]).leads_capturados.valor, 5);
   assert.equal(k.tarjetasCampana(CAMP, []).leads_convertidos.valor, 0, 'una campaña sin leads: ceros de verdad');
+  assert.equal(k.tarjetasCampana(CAMP, []).ventas_atribuidas.valor, 0);
   assert.deepEqual(k.tarjetasCampana(null, null).leads_capturados, { valor: null });
 
   // — La ficha del cliente de la Agenda: resumenFichaCliente (kpis-ventas.js) con los ids del catálogo (RP70: cli_cot_abiertas).
@@ -1293,9 +1307,9 @@ console.log('--- TEST 29 (B4 T23B, KPI-otros puntos 3, 4 y 6; RP70): las tarjeta
   assert.deepEqual(k.fichaRevenueAsistente(rev), {
     total: { etiqueta: 'Total comprado', texto: '$4.927.538' },
     mini: [
-      { etiqueta: 'Total de pedidos', texto: '6' },
-      { etiqueta: 'Pedidos en curso', texto: '2' },
-      { etiqueta: 'Ticket promedio', texto: '$821.256' },
+      { etiqueta: 'Total de pedidos', texto: '6', ayuda: null },
+      { etiqueta: 'Pedidos en curso', texto: '2', ayuda: 'Incluye los facturados' },
+      { etiqueta: 'Ticket promedio', texto: '$821.256', ayuda: null },
     ],
   });
   assert.equal(k.fichaRevenueAsistente(rev).total.etiqueta, k.CATALOGO_KPI.cli_total_comprado.etiqueta);
@@ -1508,6 +1522,67 @@ console.log('--- TEST 36 (B4 T23B): ninguna de las cinco pantallas trae diálogo
   }
   // La excepción HASTA_T23B de TEST 46 (test_tabla.mjs) se fue: Marketing cuenta como cualquier pantalla.
   assert.ok(!readFileSync(new URL('./test_tabla.mjs', import.meta.url), 'utf8').includes('HASTA_T23B'), 'sin la excepción HASTA_T23B');
+}
+
+console.log('--- TEST 37 (B4 T23B r1; I2, m6, m12, m31): las rutas de carga y de error en funciones puras: leads de la campaña, perfil, pedidos del proveedor y contexto ---');
+{
+  const k = await import('../src/lib/kpis.js');
+  const L = [{ id: 1 }];
+  const llego = (clave, marca, datos, error = null) => ({ vuelta: clave, marca, datos, error });
+
+  // lecturaLeadsCampana(cargados, clave, marcaElegida, pide): lo de OTRA campaña no se ve y la recién elegida está 'cargando' (m6).
+  const a = k.lecturaLeadsCampana(llego('5:0', '5', L), '5:0', '5', true);
+  assert.deepEqual(a, { leads: L, cargando: false, recargando: false, error: null, estado: 'listo' });
+  // Se eligió la campaña 6: llegó lo de la 5. Ni sus leads ni 'actualizando': la barra gris de la primera carga.
+  const b = k.lecturaLeadsCampana(llego('5:0', '5', L), '6:0', '6', true);
+  assert.deepEqual(b, { leads: null, cargando: true, recargando: false, error: null, estado: 'cargando' });
+  // La misma campaña que se vuelve a pedir: se conserva lo que se veía, atenuado.
+  const c = k.lecturaLeadsCampana(llego('5:0', '5', L), '5:1', '5', true);
+  assert.deepEqual(c, { leads: L, cargando: true, recargando: true, error: null, estado: 'actualizando' });
+  // Un error de ESA campaña se dice; el de otra no.
+  const e = new Error('x');
+  assert.deepEqual(k.lecturaLeadsCampana(llego('5:0', '5', null, e), '5:0', '5', true), { leads: null, cargando: false, recargando: false, error: e, estado: 'error' });
+  assert.equal(k.lecturaLeadsCampana(llego('5:0', '5', null, e), '6:0', '6', true).error, null, 'el error de otra campaña no se ve');
+  // Sin pedir (otra pestaña) y sin nada que cargar: no hay carga en camino.
+  assert.deepEqual(k.lecturaLeadsCampana(null, '5:0', '5', false), { leads: null, cargando: false, recargando: false, error: null, estado: 'listo' });
+  assert.equal(k.lecturaLeadsCampana(null, '5:0', '5', true).estado, 'cargando');
+
+  // esRespuestaVigente y siguientePerfil(previo, id, vigente, resultado): una respuesta vieja no pisa la del cliente que se ve (m12).
+  assert.equal(k.esRespuestaVigente(3, 3), true);
+  assert.equal(k.esRespuestaVigente(3, 4), false);
+  assert.equal(k.esRespuestaVigente(3, null), false);
+  const previoB = { id: 4, datos: { x: 'B' }, error: null };
+  assert.equal(k.siguientePerfil(previoB, 3, 4, { datos: { x: 'A' } }), previoB, 'A llega tarde, después de B: se descarta');
+  assert.equal(k.siguientePerfil(null, 3, 4, { error: new Error('x') }), null, 'ni un error viejo');
+  assert.deepEqual(k.siguientePerfil(null, 4, 4, { datos: { x: 'B' } }), { id: 4, datos: { x: 'B' }, error: null });
+  // Un error del mismo cliente conserva lo que ya se veía (con su aviso); uno sin datos previos queda sin datos; el de otro cliente no cuenta.
+  const err = new Error('boom');
+  assert.deepEqual(k.siguientePerfil(previoB, 4, 4, { error: err }), { id: 4, datos: { x: 'B' }, error: err });
+  assert.deepEqual(k.siguientePerfil(null, 4, 4, { error: err }), { id: 4, datos: null, error: err });
+  assert.deepEqual(k.siguientePerfil({ id: 3, datos: { x: 'A' }, error: null }, 4, 4, { error: err }), { id: 4, datos: null, error: err });
+
+  // pedidosDeProveedor(res): lanza si no llega una lista (nada de convertir un error en «0»); el total nunca es menor que lo llegado.
+  assert.deepEqual(k.pedidosDeProveedor({ status: 'success', total: 230, data: [{ id: 1 }, { id: 2 }] }), { items: [{ id: 1 }, { id: 2 }], total: 230 });
+  assert.deepEqual(k.pedidosDeProveedor({ data: [{ id: 1 }, { id: 2 }], total: 1 }), { items: [{ id: 1 }, { id: 2 }], total: 2 });
+  assert.deepEqual(k.pedidosDeProveedor({ data: [] }), { items: [], total: 0 });
+  for (const mala of [null, undefined, {}, { data: null }, { data: 'x' }, { data: { a: 1 } }, 7]) {
+    assert.throws(() => k.pedidosDeProveedor(mala), /El servidor no devolvió datos\./, JSON.stringify(mala));
+  }
+
+  // estadoPedidosProveedor(error, total, items): el estado de la tarjeta «Pedidos de compra» y el texto de la lista.
+  assert.deepEqual(k.estadoPedidosProveedor(null, null, []), { estado: 'cargando', texto: 'Cargando pedidos de compra…' });
+  assert.deepEqual(k.estadoPedidosProveedor(new Error('x'), null, []), { estado: 'error', texto: 'No se pudieron cargar los pedidos de compra.' });
+  assert.deepEqual(k.estadoPedidosProveedor(null, 0, []), { estado: 'listo', texto: 'No hay pedidos de compra emitidos aún a este proveedor.' });
+  assert.deepEqual(k.estadoPedidosProveedor(null, 230, [{ id: 1 }]), { estado: 'listo', texto: null }, 'el total manda aunque llegó menos');
+  assert.equal(k.estadoPedidosProveedor(null, 3, []).texto, null, 'con pedidos en el total, nunca «No hay pedidos»');
+
+  // vistaContexto(cargando, error, contexto): el error no deja «Sin cliente seleccionado» debajo del aviso (m8).
+  assert.equal(k.vistaContexto(true, null, null), 'cargando');
+  assert.equal(k.vistaContexto(true, new Error('x'), null), 'cargando');
+  assert.equal(k.vistaContexto(false, new Error('x'), null), 'error');
+  assert.equal(k.vistaContexto(false, null, { customer: {} }), 'contexto');
+  assert.equal(k.vistaContexto(false, null, null), 'vacio');
+  assert.equal(k.vistaContexto(false, new Error('x'), { customer: {} }), 'contexto', 'con un contexto a la vista, un error viejo no lo tapa');
 }
 
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

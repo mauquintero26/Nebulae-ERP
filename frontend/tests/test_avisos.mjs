@@ -344,4 +344,20 @@ console.log('--- TEST 13 (revisión final B3, F2: M45): las frases por defecto d
   assert.equal(av.avisoDeFuente({ status: 403 }, 'F').tipo, 'permiso');
 }
 
+// B4 T23B r1 (I2): la regla del 403 en la franja, con una sola fuente (Seguimientos, Marketing y E-Commerce).
+{
+  const { motivoSinPermiso, estadoFranjaDeFuente, avisoDeFuente } = await import('../src/lib/avisos.js');
+  const permiso = avisoDeFuente({ status: 403 }, 'F');
+  const carga = avisoDeFuente(new Error('boom'), 'F');
+  assert.equal(motivoSinPermiso(permiso), 'No tienes permiso para ver esto.');
+  assert.equal(motivoSinPermiso(carga), null, 'una falla de carga no es de permiso');
+  assert.equal(motivoSinPermiso(null), null);
+  // Con un 403 la franja queda 'listo' («—» con el motivo); con otra falla o sin aviso, el estado que traía.
+  assert.equal(estadoFranjaDeFuente(permiso, 'error'), 'listo');
+  assert.equal(estadoFranjaDeFuente(permiso, 'cargando'), 'listo');
+  assert.equal(estadoFranjaDeFuente(carga, 'error'), 'error');
+  assert.equal(estadoFranjaDeFuente(null, 'cargando'), 'cargando');
+  assert.equal(estadoFranjaDeFuente(null, 'actualizando'), 'actualizando');
+}
+
 console.log('✓ Todas las pruebas de avisos pasaron.');
