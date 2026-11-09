@@ -16,7 +16,7 @@ import { fechaLarga } from '@/lib/fechas-colombia';
 import { formatoPesos } from '@/lib/pesos';
 import { textoDeError } from '@/lib/avisos';
 import {
-  TEXTO_SOLO_VER_GASTOS, categoriasDeConteos, columnasGastos, consultaColumnaGasto, dependenciasTablero, estadoDelTotal, extraGastos,
+  MAX_COLUMNAS_GASTOS, TEXTO_SOLO_VER_GASTOS, categoriasDeConteos, columnasGastos, consultaColumnaGasto, dependenciasTablero, estadoDelTotal, extraGastos,
   fechaDeGasto, normalizarRespuesta, tarjetaGasto, textoVacioGastos, tipoDeGasto, urlConteosGastos,
 } from '@/lib/tabla';
 // Las piezas del selector de categoría y el contenedor de las pantallas del bloque son las de Inventario (T18): no se copian.
@@ -116,7 +116,7 @@ export default function GastosPage() {
   // ── bloque G-3: el tablero solo para ver, en modo servidor (R11, C4, D39) ──
   // Una columna por categoría de `conteos` (12 como máximo; el resto se ve en la lista, con su aviso). Una consulta por columna
   // (consultaColumnaGasto: categoria, la búsqueda y el orden del MISMO estado). El orden del hook ('sin_movimiento') NO se manda.
-  const { columnas: columnasTablero, aviso: avisoCategorias } = useMemo(() => columnasGastos(conteos?.datos ?? null), [conteos]);
+  const { columnas: columnasTablero, aviso: avisoCategorias } = useMemo(() => columnasGastos(conteos?.datos ?? null, MAX_COLUMNAS_GASTOS, categoria), [conteos, categoria]);
   const tablero = useTableroKanban<Gasto>({
     pantalla: ID_GASTOS,
     modo: 'servidor',
@@ -272,7 +272,7 @@ export default function GastosPage() {
             )
           ) : columnasTablero.length === 0 ? (
             <div className="rounded-2xl border border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-600">
-              {estado.q.trim() ? textoVacioGastos({ q: estado.q, categoria: '' }).titulo : 'Todavía no hay gastos: registra el primero para ver el tablero.'}
+              {estado.q.trim() || categoria ? textoVacioGastos({ q: estado.q, categoria }).titulo : 'Todavía no hay gastos: registra el primero para ver el tablero.'}
             </div>
           ) : (
             <TableroKanban

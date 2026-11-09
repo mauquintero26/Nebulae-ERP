@@ -8,7 +8,7 @@ import { FIN_NAV } from '../fin-nav';
 // B4 T22 (ANALISIS-finanzas puntos 3 y 4; R2, R13, R16, R17, RP69): el Resumen de Finanzas con la pestaña Análisis estándar y
 // los datos reales de GET /finance/analisis (solo ADMIN y FINANZAS: a un rol sin permiso el panel le dice «No tienes permiso
 // para ver este análisis.»). Se fueron la cascada de cifras en dólares, los gráficos de ejemplo y las alertas fijas del «CFO
-// Virtual»: este queda como el asistente «En construcción» del panel (sin respuestas). chart.js solo entra por el panel.
+// Virtual»: este queda como la tarjeta del asistente que pinta el panel (sin respuestas). chart.js solo entra por el panel.
 
 /** RP69: el asistente de Finanzas es «CFO Virtual» (con V mayúscula, como lo vio el usuario). */
 const ASISTENTE_FINANZAS = {

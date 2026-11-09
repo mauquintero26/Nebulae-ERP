@@ -2548,6 +2548,17 @@ console.log('--- TEST 49 (B4 T22, TABLA-otros punto 7 y KANBAN-resto; R11, R16, 
   for (const malo of [null, undefined, [], 'x', 7]) {
     assert.deepEqual(TABLA.columnasGastos(malo), { columnas: [], masCategorias: 0, aviso: null }, String(malo));
   }
+  // Con una categoría elegida en la barra, el tablero muestra SOLO su columna (aunque no sea de las 12 primeras: así el aviso «N
+  // categorías más» se puede seguir también en Kanban), sin el aviso. Si la búsqueda la dejó sin gastos, no hay columnas.
+  const soloUna = TABLA.columnasGastos(quince, 12, 'Categoría 15');
+  assert.deepEqual(soloUna.columnas.map((c) => c.titulo), ['Categoría 15']);
+  assert.deepEqual(soloUna.columnas[0].estados, ['Categoría 15']);
+  assert.equal(soloUna.aviso, null);
+  assert.equal(soloUna.masCategorias, 0);
+  assert.deepEqual(TABLA.columnasGastos(quince, 12, ' Categoría 02 ').columnas.map((c) => c.titulo), ['Categoría 02'], 'recortada');
+  assert.deepEqual(TABLA.columnasGastos(quince, 12, 'Otra').columnas, [], 'una categoría sin gastos no es una columna');
+  assert.equal(TABLA.columnasGastos(quince, 12, '').columnas.length, 12, 'sin elegir: las 12 de siempre');
+  assert.equal(TABLA.columnasGastos(quince, 12, null).aviso, '3 categorías más: usa la lista');
 
   // extraGastos: el filtro de categoría de la barra va como `categoria` (igualdad); vacío no se manda; sin `vista`.
   assert.deepEqual(TABLA.extraGastos({ categoria: ' Nómina ' }), { vista: null, categoria: 'Nómina' });
@@ -2633,6 +2644,7 @@ console.log('--- TEST 50 (B4 T22, Gastos; R5, R11, R16, RP26, RP57, RP58): el ca
   // RP26: el id es 'finanzas.gastos' y el modo lo guarda useEstadoTabla (sin useVistaGuardada).
   assert.ok(fuente.includes("const ID_GASTOS = 'finanzas.gastos';"));
   assert.ok(fuente.includes('useEstadoTabla(ID_GASTOS, INICIAL_GASTOS)'));
+  assert.ok(fuente.includes("const INICIAL_GASTOS = { orden: '-fecha' };"), 'lo más nuevo primero, con un orden que el servidor acepta');
   assert.doesNotMatch(fuente, /useVistaGuardada/);
   assert.ok(fuente.includes('pantalla: ID_GASTOS,') && fuente.includes('id={ID_GASTOS}') && fuente.includes('usePreferenciasTabla(ID_GASTOS, COLUMNAS_GASTOS)'), 'el MISMO id en todo');
   // Modo servidor (R5): q, orden, limit y offset del estado, esperando las preferencias; en Kanban la lista no se pide.
@@ -2645,7 +2657,7 @@ console.log('--- TEST 50 (B4 T22, Gastos; R5, R11, R16, RP26, RP57, RP58): el ca
   assert.ok(fuente.includes('error={listado.error}') && fuente.includes('onReintentar={listado.recargar}'));
   // El tablero: solo para ver, con el motivo de RP104 (e), columnas de los conteos y su aviso.
   assert.ok(fuente.includes('soloLectura={TEXTO_SOLO_VER_GASTOS}'));
-  assert.ok(fuente.includes('columnasGastos(conteos?.datos ?? null)'));
+  assert.ok(fuente.includes('columnasGastos(conteos?.datos ?? null, MAX_COLUMNAS_GASTOS, categoria)'), 'con una categoría elegida, el tablero tiene su columna');
   assert.ok(fuente.includes('consultaColumnaGasto(estado, columna, filtros, { limit, offset })'));
   assert.ok(fuente.includes('aviso={avisoCategorias'));
   assert.doesNotMatch(fuente, /regla=\{|onCambio=\{/, 'un tablero solo para ver no tiene regla ni cambio');

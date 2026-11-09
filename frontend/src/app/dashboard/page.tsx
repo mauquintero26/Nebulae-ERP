@@ -175,7 +175,7 @@ export default function DashboardGeneral() {
   }).format(new Date());
 
   return (
-    <div className="w-full bg-slate-50 min-h-screen pb-16 animate-in fade-in custom-scrollbar">
+    <div className="w-full shrink-0 bg-slate-50 min-h-screen pb-24 animate-in fade-in custom-scrollbar">
       
       {/* 1. Radar de Alertas Operativas */}
       {/* El radar cuenta los pedidos pendientes de compra de /ventas/stats (el mismo número de la pestaña del Hub de Ventas), no
@@ -230,7 +230,8 @@ export default function DashboardGeneral() {
               <Calendar size={14} /> {currentDateStr}
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          {/* flex-wrap: con el menú abierto a 768 px, Actualizar y el selector bajan de renglón en lugar de correr la página. */}
+          <div className="flex flex-wrap items-center gap-3">
             <button
               onClick={loadDashboardData}
               className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 px-3.5 py-2 rounded-xl text-xs font-bold shadow-sm transition-all flex items-center gap-1.5"

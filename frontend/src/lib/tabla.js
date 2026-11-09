@@ -2185,17 +2185,21 @@ const RUTA_GASTOS = '/finance/expenses';
  * con_conteos=1), por nombre (en español), a lo sumo `max` (12, R11). `estados[0]` es la categoría tal cual: es lo que se manda
  * como `categoria` (igualdad en el servidor). `masCategorias` cuenta las que no caben y `aviso` es «N categorías más: usa la
  * lista» (null si caben todas). No es una columna: una categoría sin nombre ni una cuyo conteo no es un número positivo, ni
- * lo que no es un mapa.
+ * lo que no es un mapa. Con `elegida` (la categoría del filtro de la barra) el tablero tiene SOLO su columna, aunque no sea de
+ * las `max` primeras (así el aviso se puede seguir también en Kanban) y sin aviso; si no tiene gastos, sin columnas.
  * @param {unknown} conteos
  * @param {number} [max]
+ * @param {string | null} [elegida]
  * @returns {{columnas: Array<{clave: string, titulo: string, tono: string, estados: string[], cerrada: boolean}>,
  *   masCategorias: number, aviso: string | null}}
  */
-export function columnasGastos(conteos, max = MAX_COLUMNAS_GASTOS) {
-  const nombres = objeto(conteos)
+export function columnasGastos(conteos, max = MAX_COLUMNAS_GASTOS, elegida = null) {
+  let nombres = objeto(conteos)
     ? Object.entries(conteos).filter(([nombre, n]) => nombre.trim() !== '' && (numeroFinito(n) ?? 0) > 0).map(([nombre]) => nombre)
     : [];
   nombres.sort((a, b) => a.localeCompare(b, 'es') || (a < b ? -1 : a > b ? 1 : 0));
+  const filtro = textoLimpio(elegida);
+  if (filtro !== null) nombres = nombres.filter((nombre) => nombre === filtro);
   const visibles = nombres.slice(0, max);
   const mas = nombres.length - visibles.length;
   return {

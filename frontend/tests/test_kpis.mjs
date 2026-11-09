@@ -984,6 +984,10 @@ console.log('--- TEST 25 (B4 T22, KPI-otros punto 1 y FLUJO-ventas-pantallas E; 
   assert.ok(fuente.includes('recientes.pecsActivos.map(') && fuente.includes('recientes.pedidosRecientes.map('));
   // Sin diálogos nativos (R14, C20).
   assert.doesNotMatch(fuente, /\b(alert|confirm|prompt)\s*\(/);
+  // Medidas del banco (R26, R23): la raíz no se encoge dentro del <main> flex (shrink-0: su relleno de abajo es el que deja libre la
+  // esquina del botón de la IA, 96 px) y Actualizar con el selector bajan de renglón en lugar de correr la página a 768 px.
+  assert.ok(fuente.includes('className="w-full shrink-0 bg-slate-50 min-h-screen pb-24 '), 'la raíz: shrink-0 y pb-24');
+  assert.ok(fuente.includes('<div className="flex flex-wrap items-center gap-3">\n            <button\n              onClick={loadDashboardData}'), 'el encabezado envuelve');
 }
 
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

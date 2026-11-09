@@ -1446,6 +1446,29 @@ console.log('--- TEST 23 (B4 T17, ANALISIS-inventario punto 3; R2, R13, RP69, D3
   assert.match(fuente, /\{!enAnalisis && \(\s*<>\s*<FranjaKpis/);
 }
 
+console.log('--- TEST (B4 T22, ANALISIS-finanzas puntos 3 y 4; R2, R13, R16, R17, RP69): el cableado de Finanzas › Resumen ---');
+{
+  const fuente = readFileSync(new URL('../src/app/dashboard/finanzas/resumen/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // La pestaña estándar con los datos reales: el módulo, el endpoint, el acento y el «mejor» de la línea (las ventas: sube).
+  assert.match(fuente, /<PanelAnalisisPerezoso\s+modulo="finanzas"\s+endpoint="\/finance\/analisis"\s+acento="blue"\s+mejorLinea="sube"\s+asistente=\{ASISTENTE_FINANZAS\}\s*\/>/);
+  // R13: solo por components/analisis (el índice o el perezoso); ni chart.js ni react-chartjs-2 ni el PanelAnalisis directo.
+  assert.ok(fuente.includes("import { PanelAnalisisPerezoso } from '@/components/analisis';"));
+  assert.doesNotMatch(fuente, /^import .*(chart\.js|react-chartjs-2)/m);
+  assert.doesNotMatch(fuente, /import .*\bPanelAnalisis\b|from '@\/components\/analisis\/[A-Za-z]/);
+  // Se conservan SubNav y PageHeader.
+  assert.ok(fuente.includes('<SubNav label="Finanzas" items={FIN_NAV} currentPath="/dashboard/finanzas/resumen" color="blue" />'));
+  assert.match(fuente, /<PageHeader icon=\{Activity\} color="blue"/);
+  // R2 y RP69: el «CFO Virtual» es el asistente «En construcción» del panel, con V mayúscula y sus dos ejemplos; sin alertas fijas.
+  assert.ok(fuente.includes("titulo: 'CFO Virtual',"));
+  assert.ok(fuente.includes("ejemplos: ['¿Cuánto gasté este mes por categoría?', '¿Qué clientes me deben más?'],"));
+  assert.doesNotMatch(fuente, /En construcción/, 'el aviso vive solo en AsistenteEnConstruccion (R2)');
+  assert.doesNotMatch(fuente, /Anomalía|Proyección de Flujo|Rentabilidad por Categoría|Meta Ads|🤖|Cascada|\$45,200|Ingresos Brutos|USD/, 'sin las cifras ni las alertas de ejemplo');
+  // Sin cifras ni gráficos propios: ninguna llamada ni estado; la página solo monta el panel.
+  assert.doesNotMatch(fuente, /apiFetch|useState|useEffect|<Bar\b|<Doughnut\b/);
+  // R14: sin diálogos nativos.
+  assert.doesNotMatch(fuente, /\b(alert|confirm|prompt)\s*\(/);
+}
+
 console.log('✓ lib/analisis.js: períodos, consulta, variación, formato, ejes, fechas, colores, enlaces y contrato.');
 console.log('✓ T5B: lógica y fuente de las piezas de components/analisis.');
 console.log('✓ T5C: la lógica y el fuente del panel (preferencias, foco, producto, carga, errores, textos y piezas).');
