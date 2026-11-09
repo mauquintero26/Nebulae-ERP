@@ -461,7 +461,8 @@ function CeldaAccionesWeb({ p }: { p: PedidoWeb }) {
 /**
  * La tabla de los pedidos web (TABLA-otros punto 5; R26, D41): #PWEB / PVEN (clave), Cliente (la flexible), Total, Estado (clave),
  * Fecha y Acciones (fija a la derecha); Items sale oculta por defecto (R26: se muestra con «Ajustar tabla»). A 1024 px con el
- * menú abierto las visibles suman 672 px de los 704 de la caja. Constantes (estables, D40).
+ * menú abierto las visibles suman 700 px de los 704 de la caja (Estado en 148: «Pendiente de pago» se lee completo). Constantes
+ * (estables, D40).
  */
 const COLUMNAS_PEDIDOS_WEB: ColumnaTabla<PedidoWeb>[] = [
   { id: 'numero', titulo: 'Pedido web', ancho: 132, clave: true, fija: 'izquierda', ordenable: 'numero',
@@ -472,7 +473,7 @@ const COLUMNAS_PEDIDOS_WEB: ColumnaTabla<PedidoWeb>[] = [
     celda: (p) => <span className="block truncate text-xs font-black text-slate-800">{fCOP(p.total_cop ?? 0)}</span> },
   { id: 'items', titulo: 'Items', ancho: 72, alinear: 'derecha', ocultaPorDefecto: true, ordenable: 'items',
     celda: (p) => <span className="text-xs text-slate-500">{(p.productos || []).length}</span> },
-  { id: 'estado', titulo: 'Estado', ancho: 120, clave: true, ordenable: 'estado', titleCelda: (p) => infoEstadoPedido(p.estado).label,
+  { id: 'estado', titulo: 'Estado', ancho: 148, clave: true, ordenable: 'estado', titleCelda: (p) => infoEstadoPedido(p.estado).label,
     celda: (p) => <CeldaEstadoWeb p={p} /> },
   { id: 'fecha', titulo: 'Fecha', ancho: 104, ordenable: 'fecha', titleCelda: (p) => fechaHoraLarga(p.created_at) || 'Sin fecha',
     celda: (p) => <span className="block truncate text-xs text-slate-500">{fechaCorta(p.created_at) || '-'}</span> },
@@ -901,7 +902,7 @@ export default function EcommercePage() {
           title="E-Commerce Center"
           subtitle="Gestión de ventas web · PWEB-YYYY#### · Catálogo Digital"
           actions={(
-            <div className="flex items-center gap-2 mt-1">
+            <div className="flex flex-wrap items-center gap-2 mt-1">
               <button type="button" onClick={recargarTodo} className={`flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 font-semibold text-sm shadow-sm ${FOCO_VISIBLE}`}>
                 <RefreshCw size={14} aria-hidden="true" className={actualizando ? 'animate-spin' : ''}/> Actualizar
               </button>
@@ -1001,7 +1002,7 @@ export default function EcommercePage() {
                   <BarraTabla
                     estado={estadoPedidos}
                     onEstado={alCambiarBarra}
-                    placeholder="Buscar PWEB, cliente, correo o producto…"
+                    placeholder="Buscar PWEB, cliente o producto…"
                     opcionesEstados={enKanban ? OPCIONES_ESTADOS_TABLERO_PEDIDO : OPCIONES_ESTADOS_PEDIDOS_WEB}
                     ajustes={{ columnas: COLUMNAS_PEDIDOS_WEB, preferencias: prefsPedidos, anchoRef: anchoPedidosRef }}
                     kanbanDisponible
