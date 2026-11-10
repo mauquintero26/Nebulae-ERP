@@ -25,6 +25,7 @@
  */
 
 import { congelar } from './estados-pedido.js';
+import { textoDeError } from './avisos.js';
 import { formatoPesos } from './pesos.js';
 
 /**
@@ -342,8 +343,16 @@ export const FRENTE_PERIODO = congelar({
 });
 
 /**
+ * B4 T23A (aditivo): los textos de comparación que no son un período de TEXTO_PERIODO (la Tienda compara «hoy» contra
+ * «ayer», que no es un tramo de 7 ni de 30 días) con su final para lectores de pantalla. Inmutable.
+ * @type {Readonly<Record<string, string>>}
+ */
+const FRENTE_PROPIO = congelar({ 'vs ayer': 'frente a ayer' });
+
+/**
  * El FRENTE_PERIODO del período cuyo texto comparado es `comparado` (el textoPeriodo de la tarjeta; por defecto, el de
- * PERIODO_KPI). Un texto propio da el genérico de lib/analisis.js, 'frente al período anterior'.
+ * PERIODO_KPI) o el de la comparación propia de la Tienda ('vs ayer'). Un texto propio da el genérico de lib/analisis.js,
+ * 'frente al período anterior'.
  * @param {string} [comparado]
  * @returns {string}
  */
@@ -351,6 +360,7 @@ export function frenteDeComparado(comparado = TEXTO_PERIODO[PERIODO_KPI].compara
   for (const [clave, textos] of Object.entries(TEXTO_PERIODO)) {
     if (textos.comparado === comparado) return FRENTE_PERIODO[/** @type {'30d' | '7d' | 'mes'} */ (clave)];
   }
+  if (typeof comparado === 'string' && Object.prototype.hasOwnProperty.call(FRENTE_PROPIO, comparado)) return FRENTE_PROPIO[comparado];
   return 'frente al período anterior';
 }
 
@@ -885,4 +895,527 @@ export function totalRecepciones(datos) {
  */
 export function lecturaDeCarga(cargado, vuelta) {
   return { datos: cargado?.datos ?? null, cargando: cargado?.vuelta !== vuelta };
+}
+
+// ─── B4 T22: el Dashboard General (KPI-otros punto 1; R7, R12, RP104) ───────────────────────────────────────────
+
+/**
+ * Los períodos que ofrece el selector del Dashboard General (R7): Semana ('7d'), 30 días ('30d') y Mes ('mes'), sin «Hoy».
+ * Cada clave es una de TEXTO_PERIODO (su «vs …»). Inmutable.
+ * @type {ReadonlyArray<Readonly<{clave: '7d' | '30d' | 'mes', etiqueta: string}>>}
+ */
+export const PERIODOS_DASHBOARD = congelar([
+  congelar({ clave: '7d', etiqueta: 'Semana' }),
+  congelar({ clave: '30d', etiqueta: '30 días' }),
+  congelar({ clave: 'mes', etiqueta: 'Mes' }),
+]);
+
+/**
+ * El período del Dashboard General para `valor`: una de las claves de PERIODOS_DASHBOARD; cualquier otra cosa (hoy, 90d,
+ * vacío, lo que no es un texto) vuelve a PERIODO_KPI.
+ * @param {unknown} valor
+ * @returns {'7d' | '30d' | 'mes'}
+ */
+export function periodoDashboard(valor) {
+  const hallado = PERIODOS_DASHBOARD.find((p) => p.clave === valor);
+  return hallado ? hallado.clave : /** @type {'30d'} */ (PERIODO_KPI);
+}
+
+/** {actual, anterior} de un indicador del bloque `flujo` de /ventas/stats ({actual, anterior, variacion_pct}); sin dato, en null. */
+function parDeFlujo(p) {
+  return { actual: numeroFinito(datosDe(p) ? p.actual : null), anterior: numeroFinito(datosDe(p) ? p.anterior : null) };
+}
+
+/**
+ * RP104 (a): lo que pinta cada una de las 4 tarjetas vitales del Dashboard General con `data` de GET /ventas/stats?periodo=
+ * (las mismas cifras del Hub de Ventas, R7) y los clientes de /crm/customers:
+ *  - vendido: flujo.vendido_cop.actual, con su variación contra el anterior;
+ *  - ticket: flujo.ticket_promedio_cop.actual, con su variación (NO pven_monto_vendido / pven_con_dinero);
+ *  - saldo: kpis.pven_saldo_por_cobrar (foto de hoy, sin variación);
+ *  - clientes: el total que llega.
+ * Cada fuente falla sola: lo que no llega es null (la tarjeta pinta la barra o «—», nunca 0); un 0 real se queda en 0.
+ * @param {any} datosVentas
+ * @param {unknown} totalClientes
+ * @returns {{vendido: {valor: number | null, variacion: {actual: number | null, anterior: number | null}},
+ *   ticket: {valor: number | null, variacion: {actual: number | null, anterior: number | null}},
+ *   saldo: {valor: number | null}, clientes: {valor: number | null}}}
+ */
+export function tarjetasVitalesDashboard(datosVentas, totalClientes) {
+  const flujo = datosDe(datosVentas) && datosDe(datosVentas.flujo) ? datosVentas.flujo : null;
+  const kpis = datosDe(datosVentas) && datosDe(datosVentas.kpis) ? datosVentas.kpis : null;
+  const vendido = parDeFlujo(flujo?.vendido_cop);
+  const ticket = parDeFlujo(flujo?.ticket_promedio_cop);
+  return {
+    vendido: { valor: vendido.actual, variacion: vendido },
+    ticket: { valor: ticket.actual, variacion: ticket },
+    saldo: { valor: numeroFinito(kpis?.pven_saldo_por_cobrar) },
+    clientes: { valor: numeroFinito(totalClientes) },
+  };
+}
+
+/**
+ * RP104 (b) y KPI-otros punto 1: la fila de inventario del Dashboard General con `data` de GET /inventory/stats (unidades en
+ * bodega, comprometidas, disponibles y en tránsito, tal cual: sin existencias inventadas ni un disponible calculado) y
+ * `pec_activos` de GET /compras/stats para la ayuda del tránsito («7 pedidos de compra activos»). Lo que no llega es null.
+ * @param {any} datosInventario
+ * @param {any} datosCompras
+ * @returns {{fisico: {valor: number | null}, reservado: {valor: number | null}, disponible: {valor: number | null},
+ *   en_transito: {valor: number | null, ayuda: string | null}}}
+ */
+export function tarjetasInventarioDashboard(datosInventario, datosCompras) {
+  const s = tarjetasStock(datosInventario);
+  const activos = numeroFinito(datosDe(datosCompras) ? datosCompras.pec_activos : null);
+  return {
+    fisico: { valor: s?.fisico.valor ?? null },
+    reservado: { valor: s?.reservado.valor ?? null },
+    disponible: { valor: s?.disponible.valor ?? null },
+    en_transito: {
+      valor: s?.en_transito.valor ?? null,
+      ayuda: activos === null ? null : conNombre(activos, 'pedido de compra activo', 'pedidos de compra activos'),
+    },
+  };
+}
+
+/**
+ * El radar del Dashboard General: los pedidos de venta de la pestaña «Pend. Compra» de la lista de Pedidos de venta (GET
+ * /ventas/stats, kpis.pven_pendiente_compra: los estados de esa pestaña, no solo «esperando mercancía»). {tipo: 'alerta', n} si hay alguno, {tipo: 'ok'} si
+ * no hay ninguno y null si el dato no llegó (ni alerta ni «todo bien» sin saberlo).
+ * @param {any} datosVentas
+ * @returns {{tipo: 'alerta', n: number} | {tipo: 'ok'} | null}
+ */
+export function radarOperativo(datosVentas) {
+  const kpis = datosDe(datosVentas) && datosDe(datosVentas.kpis) ? datosVentas.kpis : null;
+  const n = numeroFinito(kpis?.pven_pendiente_compra);
+  if (n === null) return null;
+  return n > 0 ? { tipo: 'alerta', n } : { tipo: 'ok' };
+}
+
+/** El enlace del radar: la pestaña «Pend. Compra» de Pedidos de venta, la vista que tiene el número que cuenta el radar. */
+export const RUTA_RADAR = '/dashboard/ventas/venta?tab=pend_compra';
+
+/**
+ * La frase del radar: dice lo que cuenta su número (los pedidos de venta de la pestaña «Pend. Compra»).
+ * @param {number} n
+ * @returns {string}
+ */
+export function textoRadar(n) {
+  return `Hay ${formatoEntero(n)} ${n === 1 ? 'pedido de venta' : 'pedidos de venta'} en «Pend. Compra».`;
+}
+
+/**
+ * B4 T22 r1 (I1, M3): el `data` de la respuesta de un endpoint del Dashboard. Una respuesta sin un objeto en `data` es un
+ * ERROR (lanza), no un «listo» vacío.
+ * @param {any} respuesta
+ * @returns {any}
+ */
+export function datosDeRespuesta(respuesta) {
+  const d = datosDe(respuesta) ? respuesta.data : null;
+  // Un objeto o una lista (/crm/customers manda una lista en data); null, texto o número no son datos.
+  if (d === null || d === undefined || typeof d !== 'object') throw new Error('El servidor no devolvió datos.');
+  return d;
+}
+
+/**
+ * B4 T22 r1 (I1, M4; m3): lo que pinta el Dashboard de una fuente: lecturaDeCarga más el error de la vuelta VIGENTE (el de una
+ * vieja no se ve mientras se reintenta; un error no deja datos viejos) y la `marca` (el período) de los datos que se ven.
+ * @template T
+ * @param {{vuelta: number | string, datos: T | null, error: unknown, marca?: string | null} | null | undefined} llego
+ * @param {number | string} vuelta
+ * @returns {{datos: T | null, cargando: boolean, error: unknown, marca: string | null}}
+ */
+export function lecturaDeFuente(llego, vuelta) {
+  const { datos, cargando } = lecturaDeCarga(llego, vuelta);
+  return { datos, cargando, error: cargando ? null : (llego?.error ?? null), marca: llego?.marca ?? null };
+}
+
+/**
+ * B4 T22 r1 (m3, m11): el período del rótulo y del «vs …» de una tarjeta de dinero: el de los datos que se ven (`marca`), para
+ * que el número viejo no lleve el rótulo del período nuevo; sin datos todavía, el elegido.
+ * @param {string | null | undefined} marca
+ * @param {string} elegido
+ * @returns {'7d' | '30d' | 'mes'}
+ */
+export function periodoVisto(marca, elegido) {
+  return periodoDashboard(marca ?? elegido);
+}
+
+/**
+ * B4 T22 r1 (m6): el aviso de una fuente caída, 'No se pudieron cargar las existencias: Error del servidor.', con un solo
+ * punto al final aunque el mensaje ya lo traiga. Sin error, null.
+ * @param {unknown} error
+ * @param {string} texto
+ * @returns {string | null}
+ */
+export function textoAvisoFuente(error, texto) {
+  if (!error) return null;
+  const mensaje = textoDeError(error, texto);
+  return mensaje.endsWith('.') ? mensaje : `${mensaje}.`;
+}
+
+// ─── B4 T23A: las tarjetas de la tienda (KPI-otros punto 5; R7, R12, RP102) ──────────────────────────────────────
+
+/**
+ * Contra qué compara cada tarjeta de dinero de la Tienda: hoy contra ayer y el mes contra el mismo tramo del mes pasado
+ * (el servidor cuenta los dos en hora de Colombia). El del mes es el de la clave `mes` de TEXTO_PERIODO. Inmutable.
+ * @type {Readonly<{hoy: string, mes: string}>}
+ */
+export const TEXTO_COMPARACION_TIENDA = congelar({ hoy: 'vs ayer', mes: TEXTO_PERIODO.mes.comparado });
+
+/** «3 pedidos web», «1 pedido web»: el número con punto de miles y su nombre en singular o plural. */
+const pedidosDe = (n, uno, varios) => `${formatoEntero(n)} ${n === 1 ? uno : varios}`;
+
+/**
+ * B4 T23A (KPI-otros punto 5): lo que pintan las 4 tarjetas de la Tienda con `data` de GET /ecommerce/stats (T20), sin sumar ni
+ * restar nada en el navegador (RP102: revenue_* ya viene sin CANCELADO ni DEVUELTO_TOTAL):
+ *  - web_ventas_hoy: revenue_today contra revenue_ayer ('vs ayer'), con «N pedidos web»;
+ *  - web_ventas_mes: revenue_month contra revenue_mes_anterior ('vs mes pasado'), con «N pedidos PWEB»;
+ *  - carritos_abandonados: carritos_abandonados_count, en alerta si es mayor que 0, con «$X sin cerrar» (carritos_abandonados_valor:
+ *    la tarjeta ya dice cuántos; sin ese valor, null: nunca «$0» inventado);
+ *  - productos_publicados: productos_publicados.
+ * `variacion` es {actual, anterior} y sale solo si los dos son números (el 0 sí es un número: la tarjeta dice «Nuevo»);
+ * el texto del % lo calcula la tarjeta con variacionPct. Lo que no es un número queda en null (la barra gris o «—», nunca 0);
+ * sin datos (cargando, con error o un cuerpo que no es un objeto), todo en null. Un objeto nuevo en cada llamada.
+ * @param {unknown} datos
+ * @returns {{
+ *   web_ventas_hoy: {valor: number | null, variacion: {actual: number, anterior: number} | null, textoPeriodo: string, ayuda: string | null},
+ *   web_ventas_mes: {valor: number | null, variacion: {actual: number, anterior: number} | null, textoPeriodo: string, ayuda: string | null},
+ *   carritos_abandonados: {valor: number | null, tono: 'normal' | 'alerta', ayuda: string | null},
+ *   productos_publicados: {valor: number | null}}}
+ */
+export function tarjetasTienda(datos) {
+  const s = /** @type {Record<string, unknown>} */ (datosDe(datos) ?? {});
+  const comparar = (actual, anterior) => {
+    const a = numeroFinito(actual);
+    const b = numeroFinito(anterior);
+    return a === null || b === null ? null : { actual: a, anterior: b };
+  };
+  const hoy = numeroFinito(s.web_orders_today);
+  const mes = numeroFinito(s.web_orders_month);
+  const carritos = numeroFinito(s.carritos_abandonados_count);
+  const enFuga = numeroFinito(s.carritos_abandonados_valor);
+  return {
+    web_ventas_hoy: {
+      valor: numeroFinito(s.revenue_today),
+      variacion: comparar(s.revenue_today, s.revenue_ayer),
+      textoPeriodo: TEXTO_COMPARACION_TIENDA.hoy,
+      ayuda: hoy === null ? null : pedidosDe(hoy, 'pedido web', 'pedidos web'),
+    },
+    web_ventas_mes: {
+      valor: numeroFinito(s.revenue_month),
+      variacion: comparar(s.revenue_month, s.revenue_mes_anterior),
+      textoPeriodo: TEXTO_COMPARACION_TIENDA.mes,
+      ayuda: mes === null ? null : pedidosDe(mes, 'pedido PWEB', 'pedidos PWEB'),
+    },
+    carritos_abandonados: {
+      valor: carritos,
+      tono: carritos !== null && carritos > 0 ? 'alerta' : 'normal',
+      ayuda: enFuga === null ? null : `${formatoPesos(enFuga)} sin cerrar`,
+    },
+    productos_publicados: { valor: numeroFinito(s.productos_publicados) },
+  };
+}
+
+/**
+ * B4 T23A r1 (m16): GET /ecommerce/carritos trae como mucho los 50 más recientes (LIMIT 50 del servidor); si la tarjeta cuenta más
+ * (`total`, carritos_abandonados_count), la caja lo dice: «Los 50 más recientes de 120». Sin los dos números, o si llegaron todos, null.
+ * @param {unknown} total
+ * @param {unknown} llegaron
+ * @returns {string | null}
+ */
+export function textoLimiteCarritos(total, llegaron) {
+  const t = numeroFinito(total);
+  const n = numeroFinito(llegaron);
+  if (t === null || n === null || n <= 0 || t <= n) return null;
+  return `Los ${formatoEntero(n)} más recientes de ${formatoEntero(t)}`;
+}
+
+// ─── B4 T23B: Marketing, Campañas, la ficha de la Agenda y la tarjeta del Asistente (KPI-otros puntos 3, 4 y 6; RP70) ──────
+
+/** Un texto con su nombre en singular o plural: «1 campaña en total», «12 campañas en total». */
+const cuantos = (n, uno, varios) => `${formatoEntero(n)} ${n === 1 ? uno : varios}`;
+
+/**
+ * Lo que pintan las 4 tarjetas de Marketing con `data` de GET /marketing/stats (marketing.py marketing_stats):
+ *  - camp_activas: campanas_activas, con «N campañas en total» (campanas_total);
+ *  - leads_capturados: leads_total, con «N convertidos (45,2 %)» (leads_convertidos y tasa_conversion_pct, con formatoValorKpi);
+ *  - ventas_atribuidas: ventas_atribuidas_cop, con «Retorno: 45,3 %» (roi_pct) o «Retorno: sin presupuesto» (el servidor manda
+ *    roi 0 cuando presupuesto_total_cop es 0: ese 0 no es un retorno);
+ *  - flujos_activos: flujos_activos, con «N posts publicados» (posts_total).
+ * Lo que no llega (cargando, con error o sin la clave) es null: la barra gris o «—», nunca 0. Un 0 real se queda en 0.
+ * @param {unknown} datos
+ * @returns {{camp_activas: {valor: number | null, ayuda: string | null}, leads_capturados: {valor: number | null, ayuda: string | null},
+ *   ventas_atribuidas: {valor: number | null, ayuda: string | null}, flujos_activos: {valor: number | null, ayuda: string | null}}}
+ */
+export function tarjetasMarketing(datos) {
+  const s = /** @type {Record<string, unknown>} */ (datosDe(datos) ?? {});
+  const total = numeroFinito(s.campanas_total);
+  const convertidos = numeroFinito(s.leads_convertidos);
+  const tasa = numeroFinito(s.tasa_conversion_pct);
+  const roi = numeroFinito(s.roi_pct);
+  const presupuesto = numeroFinito(s.presupuesto_total_cop);
+  const posts = numeroFinito(s.posts_total);
+  /** @type {string | null} */
+  let retorno = null;
+  if (presupuesto !== null && presupuesto <= 0) retorno = 'Retorno: sin presupuesto';
+  else if (roi !== null) retorno = `Retorno: ${formatoValorKpi(roi, 'porcentaje')}`;
+  return {
+    camp_activas: { valor: numeroFinito(s.campanas_activas), ayuda: total === null ? null : cuantos(total, 'campaña en total', 'campañas en total') },
+    leads_capturados: {
+      valor: numeroFinito(s.leads_total),
+      ayuda: convertidos === null ? null
+        : `${cuantos(convertidos, 'convertido', 'convertidos')}${tasa === null ? '' : ` (${formatoValorKpi(tasa, 'porcentaje')})`}`,
+    },
+    ventas_atribuidas: { valor: numeroFinito(s.ventas_atribuidas_cop), ayuda: retorno },
+    flujos_activos: { valor: numeroFinito(s.flujos_activos), ayuda: posts === null ? null : cuantos(posts, 'post publicado', 'posts publicados') },
+  };
+}
+
+/**
+ * Un porcentaje «con signo» (R7): «+45,3 %», «−8 %» (con el menos tipográfico) y «0 %»; lo que no es un número, null.
+ * @param {unknown} n
+ * @returns {string | null}
+ */
+export function formatoPorcentajeConSigno(n) {
+  const x = numeroFinito(n);
+  if (x === null) return null;
+  const texto = `${formatoDecimal(Math.abs(x))} %`;
+  const d = decimas(x);
+  return d === 0 ? '0 %' : `${x > 0 ? '+' : MENOS}${texto}`;
+}
+
+/**
+ * Lo que pintan las 4 tarjetas de la pestaña Métricas de una campaña: la fila de GET /marketing/campanas (leads_count y
+ * presupuesto_cop) y TODOS sus leads (GET /marketing/campanas/{id}/leads no tiene límite; null mientras llegan):
+ *  - leads_capturados: los leads que se ven (si ya llegaron) o leads_count de la fila;
+ *  - leads_convertidos: los de estado CONVERTIDO entre los leads que llegaron (null sin ellos: no se inventa);
+ *  - ventas_atribuidas (r1, m19): UNA definición, la de Marketing y la de la columna «Venta»: la suma de venta_atribuida_cop de los
+ *    leads, de cualquier estado (no el ventas_cop de la fila, que solo suma los CONVERTIDO); null sin los leads;
+ *  - roi: esas ventas / presupuesto_cop × 100 − 100 (la misma fórmula del servidor), con su `texto` con signo («+75 %») y el tono
+ *    'bien' si es mayor que 0 y 'alerta' si es menor; sin presupuesto no hay retorno: valor null y la ayuda «Sin presupuesto».
+ * @param {any} campana
+ * @param {ReadonlyArray<any> | null | undefined} leads
+ * @returns {{leads_capturados: {valor: number | null}, leads_convertidos: {valor: number | null},
+ *   ventas_atribuidas: {valor: number | null, ayuda: string},
+ *   roi: {valor: number | null, texto: string | null, tono: 'normal' | 'alerta' | 'bien', ayuda: string | null}}}
+ */
+export function tarjetasCampana(campana, leads) {
+  const c = datosDe(campana) ?? {};
+  const llegaron = Array.isArray(leads);
+  const ventas = llegaron ? leads.reduce((suma, l) => suma + (numeroFinito(l?.venta_atribuida_cop) ?? 0), 0) : null;
+  const presupuesto = numeroFinito(c.presupuesto_cop);
+  const hayPresupuesto = presupuesto !== null && presupuesto > 0;
+  const roi = ventas !== null && hayPresupuesto ? ventas / presupuesto * 100 - 100 : null;
+  return {
+    leads_capturados: { valor: llegaron ? leads.length : numeroFinito(c.leads_count) },
+    leads_convertidos: { valor: llegaron ? leads.filter((l) => l?.estado === 'CONVERTIDO').length : null },
+    ventas_atribuidas: { valor: ventas, ayuda: 'Suma de la venta atribuida de sus leads' },
+    roi: roi === null
+      ? { valor: null, texto: null, tono: 'normal', ayuda: ventas !== null && !hayPresupuesto ? 'Sin presupuesto' : null }
+      : { valor: roi, texto: formatoPorcentajeConSigno(roi), tono: roi > 0 ? 'bien' : roi < 0 ? 'alerta' : 'normal', ayuda: null },
+  };
+}
+
+const SIN_PERMISO_MONTOS = 'Sin permiso para ver montos';
+
+/**
+ * Lo que pintan las 4 tarjetas de la ficha de un cliente en la Agenda, con lo que da resumenFichaCliente (lib/kpis-ventas.js, de
+ * GET /crm/customers/{id}/profile-360; null mientras el perfil llega):
+ *  - pven_saldo_por_cobrar: tono 'alerta' si hay saldo, 'bien' con «Al día con pagos» si es 0;
+ *  - cli_total_comprado: con «N pedidos» (los que cuentan en el total, sin cancelados);
+ *  - cli_total_pagado: con «Pagos confirmados, menos devoluciones» (así lo suma el servidor);
+ *  - cli_cot_abiertas (RP70): fuera de CONFIRMADA y RECHAZADA, con «N solicitudes activas».
+ * Sin permiso (resumen_financiero null: BODEGA y COMPRAS), los tres montos son null con la ayuda «Sin permiso para ver montos»; los
+ * conteos siguen. Sin perfil (null), todo null: la barra gris, nunca 0.
+ * @param {{sinPermiso: boolean, saldoPorCobrar: number | null, totalComprado: number | null, totalPagado: number | null,
+ *   pedidos: number, cotizacionesAbiertas: number, solicitudesActivas: number} | null | undefined} resumen
+ * @returns {{pven_saldo_por_cobrar: {valor: number | null, tono: 'normal' | 'alerta' | 'bien', ayuda: string | null},
+ *   cli_total_comprado: {valor: number | null, ayuda: string | null}, cli_total_pagado: {valor: number | null, ayuda: string | null},
+ *   cli_cot_abiertas: {valor: number | null, ayuda: string | null}}}
+ */
+export function tarjetasFichaCliente(resumen) {
+  if (!datosDe(resumen)) {
+    return {
+      pven_saldo_por_cobrar: { valor: null, tono: 'normal', ayuda: null },
+      cli_total_comprado: { valor: null, ayuda: null },
+      cli_total_pagado: { valor: null, ayuda: null },
+      cli_cot_abiertas: { valor: null, ayuda: null },
+    };
+  }
+  const r = /** @type {NonNullable<typeof resumen>} */ (resumen);
+  const saldo = r.sinPermiso ? null : numeroFinito(r.saldoPorCobrar);
+  return {
+    pven_saldo_por_cobrar: {
+      valor: saldo,
+      tono: saldo === null ? 'normal' : saldo > 0 ? 'alerta' : 'bien',
+      ayuda: r.sinPermiso ? SIN_PERMISO_MONTOS : saldo === null ? null : saldo > 0 ? 'Cobro pendiente antes del despacho' : 'Al día con pagos',
+    },
+    cli_total_comprado: { valor: r.sinPermiso ? null : numeroFinito(r.totalComprado), ayuda: r.sinPermiso ? SIN_PERMISO_MONTOS : cuantos(r.pedidos, 'pedido', 'pedidos') },
+    cli_total_pagado: { valor: r.sinPermiso ? null : numeroFinito(r.totalPagado), ayuda: r.sinPermiso ? SIN_PERMISO_MONTOS : 'Pagos confirmados, menos devoluciones' },
+    cli_cot_abiertas: { valor: numeroFinito(r.cotizacionesAbiertas), ayuda: cuantos(r.solicitudesActivas, 'solicitud activa', 'solicitudes activas') },
+  };
+}
+
+/**
+ * Lo que pintan las tarjetas de la ficha de un proveedor en la Agenda con lo que el servidor SÍ manda: payment_terms de
+ * GET /compras/proveedores (_supplier_dict; sin ese dato, null y la tarjeta dice «—»: nunca un «Contado» inventado) y el `total` de
+ * GET /compras/pedidos?supplier_id= (null si no llegó). Moneda y tiempo de entrega no existen en el modelo Supplier (prov_moneda y
+ * prov_tiempo_entrega del catálogo quedan sin usar hasta que el servidor los mande).
+ * @param {any} proveedor
+ * @param {unknown} totalPedidos
+ * @returns {{prov_condiciones_pago: {valor: string | null}, prov_pedidos_compra: {valor: number | null}}}
+ */
+export function tarjetasFichaProveedor(proveedor, totalPedidos) {
+  const terminos = typeof datosDe(proveedor)?.payment_terms === 'string' ? proveedor.payment_terms.trim() : '';
+  return {
+    prov_condiciones_pago: { valor: terminos || null },
+    prov_pedidos_compra: { valor: numeroFinito(totalPedidos) },
+  };
+}
+
+/**
+ * La etiqueta de un indicador sin su «({periodo})»: el ticket de un cliente no es de un período («Ticket promedio»). Un id que no
+ * está en CATALOGO_KPI lanza Error (como etiquetaKpi).
+ * @param {IdKpi} id
+ * @returns {string}
+ */
+function etiquetaSinPeriodo(id) {
+  return CATALOGO_KPI[id].etiqueta.replace(/\s*\(\{periodo\}\)$/, '');
+}
+
+/**
+ * La tarjeta oscura del cliente en el Asistente omnicanal con `revenue` de GET /chat/customer-context (chat.py: total_spent_cop,
+ * total_orders_count, active_orders_count y avg_ticket_cop): los nombres del catálogo (RP70: «Total comprado», «Total de pedidos»,
+ * «Pedidos en curso» y «Ticket promedio») y formatoPesos (montos completos, sin el .split(',')[0] de formatCOP). Lo que no llega es «—».
+ * @param {any} revenue
+ * @returns {{total: {etiqueta: string, texto: string}, mini: Array<{etiqueta: string, texto: string, ayuda: string | null}>}}
+ */
+export function fichaRevenueAsistente(revenue) {
+  const r = datosDe(revenue) ?? {};
+  return {
+    total: { etiqueta: etiquetaSinPeriodo('cli_total_comprado'), texto: formatoValorKpi(r.total_spent_cop, 'pesos') },
+    mini: [
+      { etiqueta: etiquetaSinPeriodo('pven_total'), texto: formatoValorKpi(r.total_orders_count, 'numero'), ayuda: null },
+      // chat.py cuenta como «en curso» todo lo que no es ENTREGADO, COMPLETADO ni cancelado, FACTURADO incluido.
+      { etiqueta: etiquetaSinPeriodo('pven_en_curso'), texto: formatoValorKpi(r.active_orders_count, 'numero'), ayuda: 'Incluye los facturados' },
+      { etiqueta: etiquetaSinPeriodo('ticket_promedio'), texto: formatoValorKpi(r.avg_ticket_cop, 'pesos'), ayuda: null },
+    ],
+  };
+}
+
+// ─── B4 T23B r1: las rutas de carga y de error de las pantallas, en funciones puras (I2) ───────────────────────────────────
+
+/**
+ * Lo que se ve de los leads de la campaña elegida. `cargados` es lo último que llegó ({vuelta, marca, datos, error}), `clave` la vuelta
+ * vigente (la campaña y el turno), `marcaElegida` el id de la campaña elegida y `pide` si la pestaña los usa. Lo que llegó de OTRA
+ * campaña no se ve; la campaña recién elegida está 'cargando' (la barra gris, no «—» atenuado de 'actualizando'); la misma que se
+ * vuelve a pedir conserva sus leads ('actualizando'). `estado` es el de la tarjeta de convertidos.
+ * @param {{vuelta: number | string, marca?: string | null, datos: any, error: unknown} | null | undefined} cargados
+ * @param {string} clave
+ * @param {string} marcaElegida
+ * @param {boolean} pide
+ * @returns {{leads: any, cargando: boolean, recargando: boolean, error: unknown, estado: EstadoKpi}}
+ */
+export function lecturaLeadsCampana(cargados, clave, marcaElegida, pide) {
+  const lectura = lecturaDeFuente(cargados, clave);
+  const delaCampana = lectura.marca === marcaElegida;
+  const leads = delaCampana ? lectura.datos : null;
+  const cargando = pide && (lectura.cargando || !delaCampana);
+  const error = delaCampana ? lectura.error : null;
+  const recargando = cargando && leads !== null;
+  /** @type {EstadoKpi} */
+  const estado = error ? 'error' : cargando ? (leads === null ? 'cargando' : 'actualizando') : 'listo';
+  return { leads, cargando, recargando, error, estado };
+}
+
+/**
+ * Una respuesta es vigente si es de lo que se está viendo (el cliente o el proveedor abierto): una vieja que llega tarde se descarta.
+ * @param {unknown} id
+ * @param {unknown} vigente
+ * @returns {boolean}
+ */
+export function esRespuestaVigente(id, vigente) {
+  return id !== null && id !== undefined && id === vigente;
+}
+
+/**
+ * El siguiente perfil 360 de la Agenda cuando llega una respuesta: una vieja (de un cliente que ya no es el abierto) deja el estado
+ * como estaba, porque si no la ficha del cliente abierto se quedaría en 'cargando' para siempre. Un error conserva los datos del
+ * MISMO cliente (queda con su aviso); sin datos previos o de otro cliente, queda sin datos.
+ * @param {{id: number, datos: any, error: unknown} | null} previo
+ * @param {number} id  el cliente de la respuesta
+ * @param {number | null} vigente  el cliente abierto ahora
+ * @param {{datos: any} | {error: unknown}} resultado
+ * @returns {{id: number, datos: any, error: unknown} | null}
+ */
+export function siguientePerfil(previo, id, vigente, resultado) {
+  if (!esRespuestaVigente(id, vigente)) return previo;
+  if ('error' in resultado) return { id, datos: previo?.id === id ? previo.datos : null, error: resultado.error };
+  return { id, datos: resultado.datos, error: null };
+}
+
+/**
+ * Los pedidos de compra de un proveedor de GET /compras/pedidos?supplier_id=: {items, total}. Una respuesta sin una lista en `data`
+ * lanza Error('El servidor no devolvió datos.') (nunca un «0 pedidos» falso); `total` no es menor que lo que llegó.
+ * @param {any} respuesta
+ * @returns {{items: any[], total: number}}
+ */
+export function pedidosDeProveedor(respuesta) {
+  const items = datosDe(respuesta) && Array.isArray(respuesta.data) ? respuesta.data : null;
+  if (items === null) throw new Error('El servidor no devolvió datos.');
+  return { items, total: Math.max(numeroFinito(respuesta.total) ?? 0, items.length) };
+}
+
+/**
+ * El estado de la tarjeta «Pedidos de compra» de la ficha del proveedor y el texto de su lista, con el error, el total y las filas:
+ * 'cargando' sin total ni error, 'error' con error, 'listo' en otro caso; la lista dice «No hay pedidos» solo con total 0.
+ * @param {unknown} error
+ * @param {number | null} total
+ * @param {ReadonlyArray<unknown>} items
+ * @returns {{estado: EstadoKpi, texto: string | null}}
+ */
+export function estadoPedidosProveedor(error, total, items) {
+  if (error) return { estado: 'error', texto: 'No se pudieron cargar los pedidos de compra.' };
+  if (total === null) return { estado: 'cargando', texto: 'Cargando pedidos de compra…' };
+  return { estado: 'listo', texto: total === 0 && items.length === 0 ? 'No hay pedidos de compra emitidos aún a este proveedor.' : null };
+}
+
+/**
+ * Qué muestra la columna de contexto del Asistente: 'cargando'; 'contexto' (si hay uno a la vista); 'error' (la carga falló: el aviso con
+ * «Reintentar», sin «Sin cliente seleccionado» debajo, porque el cliente sí se eligió); o 'vacio' (ninguno elegido).
+ * @param {boolean} cargando
+ * @param {unknown} error
+ * @param {unknown} contexto
+ * @param {boolean} [sinPermiso]  el rol no ve el contexto: 'sin-permiso' (nada de «Sin cliente seleccionado», que ofrece buscar)
+ * @returns {'cargando' | 'error' | 'contexto' | 'vacio' | 'sin-permiso'}
+ */
+export function vistaContexto(cargando, error, contexto, sinPermiso = false) {
+  if (sinPermiso) return 'sin-permiso';
+  if (cargando) return 'cargando';
+  if (contexto) return 'contexto';
+  return error ? 'error' : 'vacio';
+}
+
+/**
+ * El estado de la franja de la ficha de un cliente de la Agenda: 'cargando' si hay un cliente abierto y su perfil todavía no llega;
+ * 'error' si falló y no hay datos que mostrar; 'listo' en otro caso (con datos previos, un error deja la ficha con su aviso).
+ * @param {number | null} clienteActual
+ * @param {{datos: unknown, error: unknown} | null} perfil  el perfil del cliente abierto (null si no es el suyo)
+ * @returns {'cargando' | 'error' | 'listo'}
+ */
+export function estadoFichaCliente(clienteActual, perfil) {
+  if (clienteActual !== null && perfil === null) return 'cargando';
+  return perfil && perfil.error && !perfil.datos ? 'error' : 'listo';
+}
+
+/**
+ * La línea fija sobre la lista de proveedores cuando el servidor devolvió menos de los que hay (GET /compras/proveedores da 200 como
+ * máximo y ordena por nombre): «Se muestran los primeros 200 de 1.234 (por nombre)». Sin total, o si llegaron todos, null.
+ * @param {unknown} total
+ * @param {number} llegaron
+ * @returns {string | null}
+ */
+export function textoProveedoresCortados(total, llegaron) {
+  const t = numeroFinito(total);
+  if (t === null || llegaron <= 0 || t <= llegaron) return null;
+  return `Se muestran los primeros ${formatoEntero(llegaron)} de ${formatoEntero(t)} (por nombre)`;
 }

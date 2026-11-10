@@ -2317,10 +2317,9 @@ console.log('--- TEST 46 (B4 T17, R14, C18 y RP55): el menú no enlaza las panta
   assert.equal((sinComentarios(sidebar).match(/<AlertasBadge\b/g) ?? []).length, 1, 'el Sidebar monta AlertasBadge');
 
   // Ninguna otra pantalla enlaza a las quitadas (R14: «Ninguna tarea nueva agrega enlaces hacia esas pantallas»). Fuera
-  // de la cuenta: las pantallas quitadas mismas (se enlazan entre ellas y no se editan), app_mocks_backup y, hasta T23B,
-  // la portada de Marketing (RP55: su «Visitantes & Leads» es de T23B).
+  // de la cuenta: las pantallas quitadas mismas (se enlazan entre ellas y no se editan) y app_mocks_backup. B4 T23B (RP55): la
+  // portada de Marketing ya no enlaza a Visitantes, así que su excepción se fue: cuenta como cualquier pantalla.
   const PROPIAS = QUITADAS.map((q) => `app${q}`);
-  const HASTA_T23B = 'app/dashboard/marketing/page.tsx';
   const enlazan = [];
   const recorrer = (rel) => {
     for (const nombre of readdirSync(new URL(rel || './', SRC))) {
@@ -2328,7 +2327,7 @@ console.log('--- TEST 46 (B4 T17, R14, C18 y RP55): el menú no enlaza las panta
       if (statSync(new URL(ruta, SRC)).isDirectory()) {
         if (ruta === 'app_mocks_backup' || PROPIAS.includes(ruta)) continue;
         recorrer(`${ruta}/`);
-      } else if (/\.(tsx?|jsx?)$/.test(nombre) && ruta !== HASTA_T23B) {
+      } else if (/\.(tsx?|jsx?)$/.test(nombre)) {
         const texto = sinComentarios(leer(ruta));
         for (const m of texto.matchAll(/['"`](\/dashboard\/[^'"`\s]*)['"`]/g)) if (esQuitada(m[1])) enlazan.push(`${ruta}: ${m[1]}`);
       }
@@ -2336,8 +2335,8 @@ console.log('--- TEST 46 (B4 T17, R14, C18 y RP55): el menú no enlaza las panta
   };
   recorrer('');
   assert.deepEqual(enlazan, [], 'ninguna pantalla enlaza a las de R14');
-  // La portada de Marketing todavía la enlaza (T23B la quita): si ya no lo hace, esta excepción sobra.
-  assert.ok(/\/dashboard\/marketing\/visitantes/.test(leer(HASTA_T23B)), 'la excepción de T23B sigue haciendo falta');
+  // B4 T23B (RP55): la portada de Marketing ya no ofrece «Visitantes & Leads» (la pantalla no se edita, R14).
+  assert.ok(!/\/dashboard\/marketing\/visitantes/.test(sinComentarios(leer('app/dashboard/marketing/page.tsx'))), 'Marketing no enlaza a Visitantes');
 
   // R14 y C18: los archivos no se borran (siguen respondiendo si alguien entra por URL), tampoco ResizableHeader.tsx.
   for (const q of QUITADAS) assert.ok(existsSync(new URL(`app${q}/page.tsx`, SRC)), `${q} sigue existiendo`);
@@ -2512,6 +2511,392 @@ console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5,
   // Las acciones llevan aria-label; el vacío se memoiza y dice qué filtro lo deja vacío.
   assert.match(fuente, /aria-label=\{`Ver el detalle de \$\{f\.sku\}/);
   assert.match(fuente, /const vacio = useMemo\(\(\) => \{\n\s*const texto = textoVacioExistencias\(\{ q: estado\.q, vista: estado\.vista, bodega: nombreBodega, categoria: nombreCategoria \}\);/);
+}
+
+console.log('--- TEST 49 (B4 T22, TABLA-otros punto 7 y KANBAN-resto; R11, R16, RP57, RP58, RP104): la lógica de Gastos ---');
+{
+  const nombres = ['MAX_COLUMNAS_GASTOS', 'TEXTO_SOLO_VER_GASTOS', 'columnasGastos', 'extraGastos', 'consultaColumnaGasto', 'urlConteosGastos',
+    'categoriasDeConteos', 'tipoDeGasto', 'tarjetaGasto', 'fechaDeGasto', 'textoVacioGastos'];
+  for (const n of nombres) assert.ok(n in TABLA, `lib/tabla.js exporta ${n}`);
+
+  // R11 y RP104 (e): hasta 12 columnas y el motivo, palabra por palabra.
+  assert.equal(TABLA.MAX_COLUMNAS_GASTOS, 12);
+  assert.equal(TABLA.TEXTO_SOLO_VER_GASTOS, 'Este tablero es para ver: los gastos se agrupan por categoría.');
+
+  // columnasGastos: una columna por clave de `conteos` ({categoría: n}), por nombre (en español); estados[0] es la categoría
+  // que se manda como `categoria` (igualdad en el servidor).
+  const { columnas, masCategorias, aviso } = TABLA.columnasGastos({ 'Pauta Digital': 1, Nómina: 5, Arriendo: 2 });
+  assert.deepEqual(columnas.map((c) => c.titulo), ['Arriendo', 'Nómina', 'Pauta Digital']);
+  assert.deepEqual(columnas.map((c) => c.clave), ['cat:Arriendo', 'cat:Nómina', 'cat:Pauta Digital']);
+  assert.deepEqual(columnas.map((c) => c.estados), [['Arriendo'], ['Nómina'], ['Pauta Digital']]);
+  assert.ok(columnas.every((c) => c.cerrada === false && typeof c.tono === 'string'));
+  assert.equal(masCategorias, 0);
+  assert.equal(aviso, null);
+  // Más de 12: solo 12, y el aviso cuenta las que faltan («N categorías más: usa la lista», con el singular de 1).
+  const quince = Object.fromEntries(Array.from({ length: 15 }, (_, i) => [`Categoría ${String(i + 1).padStart(2, '0')}`, i + 1]));
+  const muchas = TABLA.columnasGastos(quince);
+  assert.equal(muchas.columnas.length, 12);
+  assert.equal(muchas.masCategorias, 3);
+  assert.equal(muchas.aviso, '3 categorías más: usa la lista');
+  assert.equal(muchas.columnas[11].titulo, 'Categoría 12', 'las 12 primeras por nombre');
+  const trece = TABLA.columnasGastos(Object.fromEntries(Array.from({ length: 13 }, (_, i) => [`C${String(i).padStart(2, '0')}`, 1])));
+  assert.equal(trece.aviso, '1 categoría más: usa la lista');
+  assert.equal(TABLA.columnasGastos(quince, 5).columnas.length, 5, 'el tope es un parámetro');
+  // Lo que no es una categoría con gastos no es una columna: sin nombre, n que no es un número positivo, y lo que no es un mapa.
+  assert.deepEqual(TABLA.columnasGastos({ '': 3, '   ': 2, Cero: 0, Negativo: -1, Texto: 'x', Nulo: null, NaNx: NaN, Bien: 4 }).columnas.map((c) => c.titulo), ['Bien']);
+  for (const malo of [null, undefined, [], 'x', 7]) {
+    assert.deepEqual(TABLA.columnasGastos(malo), { columnas: [], masCategorias: 0, aviso: null }, String(malo));
+  }
+  // Con una categoría elegida en la barra, el tablero muestra SOLO su columna (aunque no sea de las 12 primeras: así el aviso «N
+  // categorías más» se puede seguir también en Kanban), sin el aviso. Si la búsqueda la dejó sin gastos, no hay columnas.
+  const soloUna = TABLA.columnasGastos(quince, 12, 'Categoría 15');
+  assert.deepEqual(soloUna.columnas.map((c) => c.titulo), ['Categoría 15']);
+  assert.deepEqual(soloUna.columnas[0].estados, ['Categoría 15']);
+  assert.equal(soloUna.aviso, null);
+  assert.equal(soloUna.masCategorias, 0);
+  assert.deepEqual(TABLA.columnasGastos(quince, 12, ' Categoría 02 ').columnas.map((c) => c.titulo), ['Categoría 02'], 'recortada');
+  assert.deepEqual(TABLA.columnasGastos(quince, 12, 'Otra').columnas, [], 'una categoría sin gastos no es una columna');
+  assert.equal(TABLA.columnasGastos(quince, 12, '').columnas.length, 12, 'sin elegir: las 12 de siempre');
+  assert.equal(TABLA.columnasGastos(quince, 12, null).aviso, '3 categorías más: usa la lista');
+
+  // extraGastos: el filtro de categoría de la barra va como `categoria` (igualdad); vacío no se manda; sin `vista`.
+  assert.deepEqual(TABLA.extraGastos({ categoria: ' Nómina ' }), { vista: null, categoria: 'Nómina', tipo: null });
+  assert.deepEqual(TABLA.extraGastos({ categoria: '' }), { vista: null, categoria: null, tipo: null });
+  assert.deepEqual(TABLA.extraGastos(null), { vista: null, categoria: null, tipo: null });
+
+  // consultaColumnaGasto: la categoría de la columna, la búsqueda y el orden del MISMO estado, y SIEMPRE limit y offset. Sin
+  // vista, semáforo, paso ni estados; nunca `tipo` ni «concepto» con otro sentido (RP58).
+  const estado = estadoTablaInicial({ q: 'nom', orden: '-monto', pagina: 3, tamano: 50, vista: 'x', semaforo: 'atrasados', paso: 'SC', estados: ['A'] });
+  const colNomina = columnas[1];
+  assert.equal(TABLA.consultaColumnaGasto(estado, colNomina, { categoria: '' }, { limit: 50, offset: 0 }), 'q=nom&orden=-monto&limit=50&offset=0&categoria=N%C3%B3mina');
+  assert.equal(TABLA.consultaColumnaGasto(estado, colNomina, { categoria: '' }, { limit: 0, offset: 0 }), 'q=nom&orden=-monto&limit=0&offset=0&categoria=N%C3%B3mina', 'limit=0 (columna plegada) se manda');
+  assert.equal(TABLA.consultaColumnaGasto(estado, colNomina, null, { limit: 25, offset: 25 }), 'q=nom&orden=-monto&limit=25&offset=25&categoria=N%C3%B3mina');
+  // Con una categoría elegida en la barra solo trae su columna; las otras quedan vacías sin pedir (null).
+  assert.equal(TABLA.consultaColumnaGasto(estado, columnas[0], { categoria: 'Nómina' }, { limit: 25, offset: 0 }), null);
+  assert.equal(TABLA.consultaColumnaGasto(estado, colNomina, { categoria: 'Nómina' }, { limit: 25, offset: 0 }), 'q=nom&orden=-monto&limit=25&offset=0&categoria=N%C3%B3mina');
+  assert.equal(TABLA.consultaColumnaGasto(estado, { clave: 'x', titulo: 'x' }, {}, { limit: 25, offset: 0 }), null, 'una columna sin categoría');
+  assert.doesNotMatch(TABLA.consultaColumnaGasto(estadoTablaInicial({}), colNomina, {}, { limit: 25, offset: 0 }), /tipo=|vista=|estados=|paso=|semaforo=/);
+
+  // urlConteosGastos: con_conteos=1 y limit=0 (solo los conteos), la búsqueda sí, el orden y la categoría no.
+  assert.equal(TABLA.urlConteosGastos(estado), '/finance/expenses?q=nom&limit=0&offset=0&con_conteos=1');
+  assert.equal(TABLA.urlConteosGastos(estadoTablaInicial({})), '/finance/expenses?limit=0&offset=0&con_conteos=1');
+
+  // categoriasDeConteos: las opciones del filtro de la barra (TODAS las categorías, no solo las 12 del tablero); null mientras
+  // los conteos no llegan; la elegida siempre está (aunque la búsqueda la deje sin gastos).
+  assert.equal(TABLA.categoriasDeConteos(null, ''), null);
+  assert.deepEqual(TABLA.categoriasDeConteos({ Nómina: 5, Arriendo: 2 }, ''), [{ id: 'Arriendo', name: 'Arriendo' }, { id: 'Nómina', name: 'Nómina' }]);
+  assert.deepEqual(TABLA.categoriasDeConteos({ Nómina: 5 }, 'Arriendo').map((o) => o.id), ['Arriendo', 'Nómina']);
+  assert.equal(TABLA.categoriasDeConteos(quince, '').length, 15, 'sin el tope de 12');
+
+  // tipoDeGasto: «Recurrente» o «Variable» (is_recurring); lo que no viene es variable.
+  assert.deepEqual([true, false, null, undefined].map((v) => TABLA.tipoDeGasto({ is_recurring: v })), ['Recurrente', 'Variable', 'Variable', 'Variable']);
+
+  // tarjetaGasto (los nombres REALES de /finance/expenses: category, description, amount, incurred_date, is_recurring, id).
+  const gasto = { id: 7, category: 'Nómina', description: 'Quincena', amount: 1500000, incurred_date: '2026-11-11T17:00:00', is_recurring: true };
+  const t = TABLA.tarjetaGasto(gasto);
+  assert.equal(t.numero, 'EXP-7');
+  assert.equal(t.titulo, 'Quincena');
+  assert.equal(t.subtitulo, 'Nómina');
+  assert.equal(t.monto, 1500000);
+  assert.equal(t.estado.label, 'Recurrente');
+  assert.equal(t.tiempo, '11 de noviembre de 2026', 'RP57: el instante UTC pasa al día de Colombia (17:00 UTC = 12 m.)');
+  assert.equal(t.atrasada, false);
+  assert.equal(t.accionPrincipal, null);
+  // Sin concepto: la categoría es el título y no se repite como subtítulo. Un monto en texto (Numeric) se lee como número.
+  const sinConcepto = TABLA.tarjetaGasto({ id: 8, category: 'Arriendo', description: null, amount: '250000.00', incurred_date: null, is_recurring: false });
+  assert.equal(sinConcepto.titulo, 'Arriendo');
+  assert.equal(sinConcepto.subtitulo, null);
+  assert.equal(sinConcepto.monto, 250000);
+  assert.equal(sinConcepto.estado.label, 'Variable');
+  assert.equal(sinConcepto.tiempo, 'Sin fecha', 'un gasto sin fecha (incurred_date null) lo dice');
+  assert.equal(TABLA.tarjetaGasto({ id: 9, category: 'Otro', amount: 'x' }).monto, null);
+  // El día de Colombia, no el de UTC: un gasto viejo guardado a medianoche UTC cae el día anterior (RP57: se acepta, T24 lo cuenta).
+  assert.equal(TABLA.tarjetaGasto({ ...gasto, incurred_date: '2026-11-11T00:00:00' }).tiempo, '10 de noviembre de 2026');
+
+  // fechaDeGasto (RP57): el día del formulario como mediodía de Colombia (17:00 UTC); vacío o inválido, hoy en Colombia.
+  assert.equal(TABLA.fechaDeGasto('2026-11-11'), '2026-11-11T17:00:00Z');
+  assert.equal(TABLA.fechaDeGasto(' 2026-01-05 '), '2026-01-05T17:00:00Z');
+  // 03:30 UTC del 12 es el 11 en Colombia (10:30 p. m.): el «hoy» es el 11, no el 12 de UTC.
+  const ahora = new Date('2026-11-12T03:30:00Z');
+  for (const vacio of ['', '   ', null, undefined, 'abc', '2026-02-30', '11/11/2026']) {
+    assert.equal(TABLA.fechaDeGasto(vacio, ahora), '2026-11-11T17:00:00Z', `vacío o inválido (${String(vacio)}): hoy en Colombia`);
+  }
+  // El instante que se manda cae el MISMO día de Colombia en la tabla (la regla del Análisis): ida y vuelta.
+  assert.equal(TABLA.tarjetaGasto({ ...gasto, incurred_date: TABLA.fechaDeGasto('2026-11-01') }).tiempo, '1 de noviembre de 2026', 'el 1 de noviembre no cae en octubre');
+
+  // textoVacioGastos: qué deja vacía la tabla.
+  assert.deepEqual(TABLA.textoVacioGastos({ q: '', categoria: '' }), { titulo: 'Sin gastos registrados.', ayuda: 'Usa «Añadir Gasto» para registrar el primero.' });
+  assert.equal(TABLA.textoVacioGastos({ q: ' luz ', categoria: null }).titulo, 'Ningún gasto coincide con «luz».');
+  assert.equal(TABLA.textoVacioGastos({ q: '', categoria: 'Arriendo' }).titulo, 'No hay gastos en la categoría «Arriendo».');
+  assert.equal(TABLA.textoVacioGastos({ q: 'luz', categoria: 'Arriendo' }).titulo, 'Ningún gasto de «Arriendo» coincide con «luz».');
+  assert.equal(TABLA.textoVacioGastos(null).titulo, 'Sin gastos registrados.');
+}
+
+console.log('--- TEST 50 (B4 T22, Gastos; R5, R11, R16, RP26, RP57, RP58): el cableado de la pantalla de Gastos ---');
+{
+  const fuente = readFileSync(new URL('../src/app/dashboard/finanzas/gastos/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // R16 (moneda_gastos): pesos colombianos; ni la etiqueta ni el formato en dólares.
+  assert.ok(fuente.includes('titulo: \'Monto (COP)\''), 'la columna dice «Monto (COP)»');
+  assert.ok(fuente.includes('Monto (COP) *'), 'el campo del formulario dice «Monto (COP)»');
+  assert.doesNotMatch(fuente, /USD|en-US|Intl\.NumberFormat/, 'sin dólares');
+  assert.equal((fuente.match(/formatoPesos\(g\.amount\)/g) ?? []).length, 2, 'la celda y su title: formatoPesos');
+  // RP26: el id es 'finanzas.gastos' y el modo lo guarda useEstadoTabla (sin useVistaGuardada).
+  assert.ok(fuente.includes("const ID_GASTOS = 'finanzas.gastos';"));
+  assert.ok(fuente.includes('useEstadoTabla(ID_GASTOS, INICIAL_GASTOS)'));
+  assert.ok(fuente.includes("const INICIAL_GASTOS = { orden: '-fecha' };"), 'lo más nuevo primero, con un orden que el servidor acepta');
+  assert.doesNotMatch(fuente, /useVistaGuardada/);
+  assert.ok(fuente.includes('pantalla: ID_GASTOS,') && fuente.includes('id={ID_GASTOS}') && fuente.includes('usePreferenciasTabla(ID_GASTOS, COLUMNAS_GASTOS)'), 'el MISMO id en todo');
+  // Modo servidor (R5): q, orden, limit y offset del estado, esperando las preferencias; en Kanban la lista no se pide.
+  assert.ok(fuente.includes("ruta: '/finance/expenses', estado, esperar: !listo, despachar, activo: !enKanban, extra: extraLista"));
+  assert.ok(fuente.includes('modo="servidor"'));
+  // Ordena solo por lo que el servidor acepta (RP58): fecha, categoria, concepto, tipo y monto.
+  assert.deepEqual([...fuente.matchAll(/ordenable: '([a-z]+)'/g)].map((m) => m[1]), ['fecha', 'categoria', 'concepto', 'tipo', 'monto']);
+  // La carga, el error y el reintento de la tabla (nunca un vacío falso).
+  assert.ok(fuente.includes('cargando={listado.cargandoInicial}') && fuente.includes('recargando={listado.recargando}'));
+  assert.ok(fuente.includes('error={listado.error}') && fuente.includes('onReintentar={listado.recargar}'));
+  // El tablero: solo para ver, con el motivo de RP104 (e), columnas de los conteos y su aviso.
+  assert.ok(fuente.includes('soloLectura={TEXTO_SOLO_VER_GASTOS}'));
+  assert.ok(fuente.includes('columnasGastos(conteos?.datos ?? null, MAX_COLUMNAS_GASTOS, categoria)'), 'con una categoría elegida, el tablero tiene su columna');
+  assert.ok(fuente.includes('consultaColumnaGasto(estado, columna, filtros, { limit, offset })'));
+  assert.ok(fuente.includes('aviso={avisoCategorias'));
+  assert.doesNotMatch(fuente, /regla=\{|onCambio=\{/, 'un tablero solo para ver no tiene regla ni cambio');
+  // El tablero no arma nada sin conteos: la espera se dice y el error ofrece «Reintentar» (no un tablero vacío).
+  assert.ok(fuente.includes('Cargando las categorías…'));
+  assert.match(fuente, /textoDeError\(estadoConteos\.error, 'No se pudieron cargar las categorías'\)[\s\S]{0,400}onClick=\{recargarConteos\}[\s\S]{0,300}Reintentar/);
+  // I1 M2 y m12: el estado del tablero sale de estadoTableroGastos; el error con conteos viejos también se dice, con «Reintentar».
+  assert.ok(fuente.includes('const estadoConteos = estadoTableroGastos(conteos, claveConteos);'));
+  assert.ok(fuente.includes("estadoConteos.tipo !== 'listo' ? (") && fuente.includes("estadoConteos.tipo === 'error' ? ("));
+  assert.match(fuente, /estadoConteos\.tipo === 'listo' && estadoConteos\.error \? \(\s*<div role="alert"[\s\S]{0,600}onClick=\{recargarConteos\}/);
+  assert.ok(fuente.includes('aria-busy={estadoConteos.actualizando || undefined}'));
+  assert.ok(fuente.includes('error: estadoConteos.error }'));
+  // m17: el filtro de tipo va al servidor y vuelve a la página 1; los conteos lo llevan.
+  assert.match(fuente, /<select aria-label="Tipo" value=\{tipo\} onChange=\{\(e\) => cambiarTipo\(e\.target\.value\)\}/);
+  assert.match(fuente, /const cambiarTipo = useCallback\(\(valor: string\) => \{\n\s*setTipo\(valor\);\n\s*despachar\(\{ tipo: 'pagina', valor: 1 \}\);/);
+  assert.ok(fuente.includes('urlConteosGastos(estado, filtros)') && fuente.includes('const filtros = useMemo(() => ({ categoria, tipo }), [categoria, tipo]);'));
+  // m9: «Monto (COP)» se guarda en pesos enteros; m4: sin atributos pegados.
+  assert.ok(fuente.includes('amount: redondearPeso(parseFloat(form.amount)),'));
+  assert.doesNotMatch(fuente, /"[a-z]+="|=`flex|\w="[^"]*"[a-zA-Z]+=/);
+  assert.doesNotMatch(fuente, /as unknown as Catalogo/);
+  // Los conteos se piden con la búsqueda y se vuelven a pedir al guardar un gasto; un error conserva lo último que llegó.
+  assert.ok(fuente.includes('urlConteosGastos(estado, filtros)'));
+  assert.ok(fuente.includes('datos: c?.datos ?? null, error: err'), 'un error de los conteos no borra lo último que llegó');
+  assert.match(fuente, /recargarListado\(\);\n\s*recargarTablero\(\);\n\s*recargarConteos\(\);/);
+  // El filtro de categoría de la barra (para seguir el aviso, lección de T18): vuelve a la página 1 y va al servidor.
+  assert.match(fuente, /const cambiarCategoria = useCallback\(\(valor: string\) => \{\n\s*setCategoria\(valor\);\n\s*despachar\(\{ tipo: 'pagina', valor: 1 \}\);/);
+  assert.ok(fuente.includes('cambiarCategoria(catalogoCategorias.filas?.find((o) => String(o.id) === valor)?.name'));
+  assert.ok(fuente.includes('const extraLista = useMemo(() => extraGastos(filtros), [filtros]);'));
+  // RP57: el formulario manda el día como mediodía de Colombia, no medianoche UTC; el día de la tabla es fechaLarga.
+  assert.ok(fuente.includes('incurred_date: fechaDeGasto(form.incurred_date),'));
+  assert.doesNotMatch(fuente, /new Date\(form\.incurred_date\)|toISOString/);
+  assert.ok(fuente.includes('fechaLarga(g.incurred_date)'));
+  // R16 y C20: sin diálogos nativos ni toast suelto.
+  assert.doesNotMatch(fuente, /\b(alert|confirm|prompt)\s*\(|react-hot-toast/);
+  // Un gasto no tiene ficha: la tarjeta es la de TarjetaKanban sin menú «Abrir».
+  assert.ok(fuente.includes('renderTarjeta={(g) => <TarjetaKanban {...tarjetaGasto(g)} />}'));
+}
+
+console.log('--- TEST 51 (B4 T22 r1; I1 M2, m2, m12, m14, m15, m16, m17): conteos de Gastos, columnas comunes y filtro de tipo ---');
+{
+  for (const n of ['recortarColumnas', 'estadoTableroGastos']) assert.ok(n in TABLA, `lib/tabla.js exporta ${n}`);
+  // m2, m14 y m16: el recorte y el aviso «N categorías más: usa la lista» son UNO para Productos y Gastos.
+  const nombres = Array.from({ length: 15 }, (_, i) => `C${i}`);
+  const r = TABLA.recortarColumnas(nombres, 12);
+  assert.deepEqual([r.visibles.length, r.mas, r.aviso], [12, 3, '3 categorías más: usa la lista']);
+  assert.deepEqual(TABLA.recortarColumnas(nombres.slice(0, 13), 12).aviso, '1 categoría más: usa la lista');
+  assert.deepEqual(TABLA.recortarColumnas(nombres.slice(0, 12), 12), { visibles: nombres.slice(0, 12), mas: 0, aviso: null });
+  assert.deepEqual(TABLA.recortarColumnas([], 12), { visibles: [], mas: 0, aviso: null });
+  assert.deepEqual(TABLA.recortarColumnas(null, 12), { visibles: [], mas: 0, aviso: null });
+  // Productos y Gastos dicen lo mismo (el aviso de uno nunca queda atrás del otro).
+  const ec = await import('../src/lib/estados-compras.js');
+  const cats = Array.from({ length: 14 }, (_, i) => ({ id: i + 1, name: `Cat ${String(i).padStart(2, '0')}` }));
+  assert.equal(ec.columnasProductos(cats).aviso, TABLA.columnasGastos(Object.fromEntries(cats.map((c) => [c.name, 1]))).aviso);
+  const fuenteEc = readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(fuenteEc, /\$\{mas\} \$\{mas === 1/, 'el texto vive solo en lib/tabla.js');
+
+  // m15: la categoría de la columna y de la opción es la MISMA que se manda (recortada); una clave con espacios se junta con la limpia.
+  const sucio = TABLA.columnasGastos({ 'Arriendo ': 2, Arriendo: 3, ' Nómina': 1 });
+  assert.deepEqual(sucio.columnas.map((c) => c.titulo), ['Arriendo', 'Nómina']);
+  assert.deepEqual(sucio.columnas.map((c) => c.estados[0]), ['Arriendo', 'Nómina']);
+  assert.deepEqual(TABLA.categoriasDeConteos({ 'Arriendo ': 2, Arriendo: 3 }, '').map((o) => o.id), ['Arriendo']);
+  assert.deepEqual(TABLA.columnasGastos({ 'Arriendo ': 2 }, 12, 'Arriendo').columnas.map((c) => c.titulo), ['Arriendo']);
+
+  // m17: el filtro de tipo (recurrente | variable) va al servidor; otro valor no se manda.
+  assert.deepEqual(TABLA.extraGastos({ categoria: 'Nómina', tipo: 'recurrente' }), { vista: null, categoria: 'Nómina', tipo: 'recurrente' });
+  assert.deepEqual(TABLA.extraGastos({ categoria: '', tipo: 'variable' }), { vista: null, categoria: null, tipo: 'variable' });
+  assert.equal(TABLA.extraGastos({ tipo: 'otro' }).tipo, null);
+  assert.equal(TABLA.extraGastos({ tipo: '' }).tipo, null);
+  const est = estadoTablaInicial({ q: 'nom', orden: '-monto' });
+  const col = TABLA.columnasGastos({ Nómina: 2 }).columnas[0];
+  assert.equal(TABLA.consultaColumnaGasto(est, col, { tipo: 'variable' }, { limit: 25, offset: 0 }), 'q=nom&orden=-monto&limit=25&offset=0&categoria=N%C3%B3mina&tipo=variable');
+  assert.doesNotMatch(TABLA.consultaColumnaGasto(est, col, { tipo: 'x' }, { limit: 25, offset: 0 }), /tipo=/);
+  assert.equal(TABLA.urlConteosGastos(est, { tipo: 'recurrente' }), '/finance/expenses?q=nom&limit=0&offset=0&tipo=recurrente&con_conteos=1');
+  assert.equal(TABLA.urlConteosGastos(est, { tipo: '' }), '/finance/expenses?q=nom&limit=0&offset=0&con_conteos=1');
+  assert.equal(TABLA.textoVacioGastos({ q: '', categoria: '', tipo: 'recurrente' }).titulo, 'No hay gastos recurrentes.');
+  assert.equal(TABLA.textoVacioGastos({ q: '', categoria: 'Arriendo', tipo: 'variable' }).titulo, 'No hay gastos variables en la categoría «Arriendo».');
+
+  // I1 (M2) y m12: qué muestra el tablero según los conteos. Un error SE DICE también cuando ya había conteos viejos.
+  const falla = new Error('Error del servidor');
+  const datos = { Arriendo: 2 };
+  assert.deepEqual(TABLA.estadoTableroGastos(null, 'a'), { tipo: 'cargando', error: null, actualizando: false });
+  assert.deepEqual(TABLA.estadoTableroGastos({ clave: 'a', datos, error: null }, 'a'), { tipo: 'listo', error: null, actualizando: false });
+  assert.deepEqual(TABLA.estadoTableroGastos({ clave: 'a', datos: null, error: falla }, 'a'), { tipo: 'error', error: falla, actualizando: false });
+  // Con conteos viejos y un error de la consulta vigente: el tablero queda (listo) y el error se ve.
+  assert.deepEqual(TABLA.estadoTableroGastos({ clave: 'a', datos, error: falla }, 'a'), { tipo: 'listo', error: falla, actualizando: false });
+  // Otra búsqueda en camino: lo último atenuado (actualizando), sin el error de la consulta anterior.
+  assert.deepEqual(TABLA.estadoTableroGastos({ clave: 'a', datos, error: null }, 'b'), { tipo: 'listo', error: null, actualizando: true });
+  assert.deepEqual(TABLA.estadoTableroGastos({ clave: 'a', datos, error: falla }, 'b'), { tipo: 'listo', error: null, actualizando: true });
+  // Sin conteos y reintentando: «cargando», no el error viejo.
+  assert.deepEqual(TABLA.estadoTableroGastos({ clave: 'a', datos: null, error: falla }, 'b'), { tipo: 'cargando', error: null, actualizando: false });
+}
+
+console.log('--- TEST T23A (B4 T23A; TABLA-otros punto 5, H6, C13): faseDeLista — lo que pinta una lista que no es la tabla estándar ---');
+{
+  // La cuadrícula del catálogo y los carritos abandonados de E-Commerce: la primera carga es «cargando» (nunca «vacío»), un error
+  // se dice (con «Reintentar») aunque queden filas de antes, sin filas es «vacío» y con filas, «filas».
+  const falla = Object.assign(new Error('Error del servidor'), { status: 500 });
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: true, error: null, filas: [] }), 'cargando');
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: true, error: null, filas: null }), 'cargando');
+  // Cargando manda sobre un error viejo y sobre filas: la primera carga no pinta «vacío» ni un error de antes.
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: true, error: falla, filas: [] }), 'cargando');
+  // El error manda sobre las filas que se conservan: la lista dice que falló, no finge estar al día.
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: false, error: falla, filas: [{ id: 1 }] }), 'error');
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: false, error: falla, filas: [] }), 'error');
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: false, error: new Error('x'), filas: null }), 'error');
+  // Sin error: vacío o filas.
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: false, error: null, filas: [] }), 'vacio');
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: false, error: null, filas: null }), 'vacio');
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: false, error: undefined, filas: undefined }), 'vacio');
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: false, error: null, filas: [{ id: 1 }] }), 'filas');
+  assert.equal(TABLA.faseDeLista({ cargandoInicial: false, filas: [{ id: 1 }, { id: 2 }] }), 'filas');
+  // Sin nada (la pantalla todavía no pidió): cargando no es; es vacío (la pantalla pasa cargandoInicial cuando espera).
+  assert.equal(TABLA.faseDeLista({}), 'vacio');
+  assert.equal(TABLA.faseDeLista(), 'vacio');
+  // Lo que no es un arreglo no cuenta como filas.
+  assert.equal(TABLA.faseDeLista({ filas: { length: 3 } }), 'vacio');
+  assert.equal(TABLA.faseDeLista({ filas: 'abc' }), 'vacio');
+}
+
+console.log('--- TEST T23A r1 (m7): los textos de vacío de los pedidos web y del catálogo ---');
+{
+  assert.deepEqual(TABLA.textoVacioPedidosWeb({ q: '', estados: [] }), { titulo: 'Sin pedidos web', ayuda: 'Los pedidos PWEB-AAAA#### aparecerán aquí.' });
+  assert.deepEqual(TABLA.textoVacioPedidosWeb({ q: '  ana ', estados: [] }), { titulo: 'Sin resultados para «ana»', ayuda: 'Ajusta la búsqueda o el filtro de estados.' });
+  assert.deepEqual(TABLA.textoVacioPedidosWeb({ q: '', estados: ['PAGADO'] }), { titulo: 'Sin pedidos web en esos estados', ayuda: 'Ajusta la búsqueda o el filtro de estados.' });
+  assert.equal(TABLA.textoVacioPedidosWeb({ q: 'ana', estados: ['PAGADO'] }).titulo, 'Sin resultados para «ana»', 'la búsqueda manda');
+  for (const nada of [null, undefined, {}, 'x']) assert.equal(TABLA.textoVacioPedidosWeb(nada).titulo, 'Sin pedidos web', String(nada));
+  assert.equal(TABLA.textoVacioPedidosWeb({ q: '   ', estados: [] }).titulo, 'Sin pedidos web', 'solo espacios no es una búsqueda');
+  assert.deepEqual(TABLA.textoVacioCatalogo({ q: '', categoria: '' }), { titulo: 'Sin productos', filtrado: false });
+  assert.deepEqual(TABLA.textoVacioCatalogo({ q: 'coche', categoria: '' }), { titulo: 'Sin productos con esos filtros', filtrado: true });
+  assert.deepEqual(TABLA.textoVacioCatalogo({ q: '', categoria: 'Cunas' }), { titulo: 'Sin productos con esos filtros', filtrado: true });
+  for (const nada of [null, undefined, {}]) assert.deepEqual(TABLA.textoVacioCatalogo(nada), { titulo: 'Sin productos', filtrado: false }, String(nada));
+  assert.equal(TABLA.textoVacioCatalogo({ q: '  ', categoria: ' ' }).filtrado, false);
+}
+
+console.log('--- TEST T23A-b (B4 T23A; TABLA-otros punto 5, KANBAN-resto punto 3; R26, RP26, RP56, RP105): las tablas y la cuadrícula de E-Commerce ---');
+{
+  const fuente = readFileSync(new URL('../src/app/dashboard/ecommerce/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const pantalla = codigo.slice(codigo.indexOf('export default function EcommercePage('));
+  const bloque = (nombre) => {
+    const i = codigo.indexOf(`const ${nombre}: ColumnaTabla<`);
+    assert.ok(i >= 0, nombre);
+    return codigo.slice(i, codigo.indexOf('\n];', i));
+  };
+  /** Las columnas de un bloque: {id, ancho, oculta, flexible, fija, orden}. */
+  const columnasDe = (texto) => [...texto.matchAll(/\{ id: '(\w+)',([\s\S]*?)(?=\n  \{ id: |$)/g)].map((m) => ({
+    id: m[1], ancho: Number(/ancho: (\d+)/.exec(m[2])[1]), oculta: /ocultaPorDefecto: true/.test(m[2]), flexible: /flexible: true/.test(m[2]),
+    fija: (/fija: '(\w+)'/.exec(m[2]) || [])[1] ?? null, orden: (/ordenable: '(\w+)'/.exec(m[2]) || [])[1] ?? null,
+  }));
+  const pedidos = columnasDe(bloque('COLUMNAS_PEDIDOS_WEB'));
+  const catalogo = columnasDe(bloque('COLUMNAS_CATALOGO'));
+  assert.deepEqual(pedidos.map((c) => c.id), ['numero', 'cliente', 'total', 'items', 'estado', 'fecha', 'acciones']);
+  assert.match(bloque('COLUMNAS_PEDIDOS_WEB'), /\{ id: 'items', titulo: 'Ítems',/, "m9: el título lleva la tilde");
+  assert.deepEqual(catalogo.map((c) => c.id), ['producto', 'sku', 'categoria', 'stock', 'precio', 'tienda', 'acciones']);
+  // El orden de cada columna es uno de los que acepta el servidor (list_web_orders y list_catalogo: otro daría 422).
+  const ORDEN_PEDIDOS = ['fecha', 'numero', 'cliente', 'total', 'items', 'estado'];
+  const ORDEN_CATALOGO = ['nombre', 'sku', 'categoria', 'precio', 'stock'];
+  for (const c of pedidos) if (c.orden) assert.ok(ORDEN_PEDIDOS.includes(c.orden), `pedidos.${c.id}: ${c.orden}`);
+  for (const c of catalogo) if (c.orden) assert.ok(ORDEN_CATALOGO.includes(c.orden), `catálogo.${c.id}: ${c.orden}`);
+  assert.deepEqual(pedidos.filter((c) => c.orden).map((c) => c.orden), ['numero', 'cliente', 'total', 'items', 'estado', 'fecha']);
+  assert.deepEqual(catalogo.filter((c) => c.orden).map((c) => c.orden), ['nombre', 'sku', 'categoria', 'stock', 'precio']);
+  assert.match(codigo, /const INICIAL_PEDIDOS_WEB = \{ orden: '-fecha' \};/);
+  assert.match(codigo, /const INICIAL_CATALOGO = \{ orden: 'nombre' \};/);
+  // R26: a 1024 px con el menú abierto la caja deja 704 px; las columnas visibles por defecto caben, con UNA flexible y Acciones fija a la derecha.
+  for (const [nombre, cols] of [['pedidos', pedidos], ['catálogo', catalogo]]) {
+    const visibles = cols.filter((c) => !c.oculta).reduce((a, c) => a + c.ancho, 0);
+    assert.ok(visibles <= 704, `${nombre}: las visibles suman ${visibles} px`);
+    assert.equal(cols.filter((c) => c.flexible).length, 1, `${nombre}: una sola flexible`);
+    const acciones = cols.find((c) => c.id === 'acciones');
+    assert.equal(acciones.fija, 'derecha');
+    assert.ok(acciones.ancho >= 88, `${nombre}: Acciones se lee completo (${acciones.ancho} px)`);
+  }
+  assert.deepEqual(pedidos.filter((c) => c.oculta).map((c) => c.id), ['items']);
+  assert.deepEqual(catalogo.filter((c) => c.oculta).map((c) => c.id), ['categoria']);
+  assert.equal(pedidos.find((c) => c.flexible).id, 'cliente');
+  assert.equal(catalogo.find((c) => c.flexible).id, 'producto');
+
+  // El catálogo en el servidor: manda SIEMPRE offset (aunque sea 0) para que el servidor pagine exacto y dé el total real
+  // (sin offset ni orden responde como la tienda pública, con un total que no es exacto).
+  assert.match(codigo, /const RUTA_CATALOGO = '\/ecommerce\/catalogo';/);
+  assert.match(codigo, /const ID_CATALOGO = 'ecommerce\.catalogo';/);
+  assert.match(pantalla, /const \[estadoCatalogo, despacharCatalogo, listoCatalogo\] = useEstadoTabla\(ID_CATALOGO, INICIAL_CATALOGO\);/);
+  assert.match(pantalla, /useListado<ProductoCatalogo>\(\{\s*ruta: RUTA_CATALOGO, estado: estadoCatalogo, extra: \{ categoria \}, esperar: !listoCatalogo, despachar: despacharCatalogo, activo: catalogoActivo,\s*\}\);/);
+  for (const extra of [{ categoria: '' }, { categoria: 'Cunas' }]) {
+    const url = TABLA.urlListado('/ecommerce/catalogo', TABLA.estadoTablaInicial({ orden: 'nombre', q: ' coche ' }), { extra });
+    assert.ok(url.startsWith('/ecommerce/catalogo?'), url);
+    assert.ok(/[?&]offset=0(&|$)/.test(url) && /[?&]limit=25(&|$)/.test(url) && /[?&]orden=nombre(&|$)/.test(url) && /[?&]q=coche(&|$)/.test(url), url);
+    assert.ok(extra.categoria ? url.includes('categoria=Cunas') : !url.includes('categoria='), url);
+    assert.ok(!/search=|[?&]estado=/.test(url), 'RP8');
+  }
+  assert.ok(/offset=25(&|$)/.test(TABLA.urlListado('/ecommerce/catalogo', TABLA.estadoTablaInicial({ pagina: 2 }), { extra: { categoria: '' } })));
+  assert.ok(!/search=/.test(codigo), 'ninguna consulta de E-Commerce manda search=');
+  // r1 (m7): los vacíos salen de textoVacioPedidosWeb y textoVacioCatalogo (lib/tabla.js).
+  assert.match(pantalla, /textoVacioPedidosWeb\(\{ q: estadoPedidos\.q, estados: estadoPedidos\.estados \}\)/);
+  assert.match(pantalla, /textoVacioCatalogo\(\{ q: estadoCatalogo\.q, categoria \}\)/);
+  // El filtro de categoría va al servidor con el retardo de la búsqueda y vuelve a la página 1 solo si cambió.
+  assert.ok(!/RETARDO_CATEGORIA_MS/.test(codigo), 'r1 (m6): el retardo es el de la búsqueda de BarraTabla (lib/tabla.js), no uno propio');
+  assert.match(pantalla, /busquedaCategoria\.current \?\?= crearBusquedaConRetardo\(\{\s*alBuscar: \(buscado\) => \{\s*const nueva = buscado\.trim\(\);\s*if \(nueva === categoriaAplicada\.current\) return;\s*categoriaAplicada\.current = nueva;\s*setCategoria\(nueva\);\s*despacharCatalogo\(\{ tipo: 'pagina', valor: 1 \}\);\s*\},\s*\}\);\s*busquedaCategoria\.current\.escribir\(texto\);/);
+  assert.match(pantalla, /return \(\) => busquedas\.current\?\.cancelar\(\);/);
+  assert.ok(!/setTimeout/.test(pantalla), 'sin un temporizador propio');
+  assert.equal(TABLA.RETARDO_BUSQUEDA_MS, 300);
+  // La tabla del catálogo, con su error dicho (Reintentar), la fila que abre el producto y el vacío.
+  assert.match(pantalla, /<TablaEstandar\s+id=\{ID_CATALOGO\}\s+modo="servidor"\s+columnas=\{COLUMNAS_CATALOGO\}\s+preferencias=\{prefsCatalogo\}\s+anchoRef=\{anchoCatalogoRef\}\s+estado=\{estadoCatalogo\}\s+onEstado=\{despacharCatalogo\}\s+filas=\{catalogo\.filas\}\s+total=\{catalogo\.total\}\s+cargando=\{catalogo\.cargandoInicial\}\s+recargando=\{catalogo\.recargando\}\s+error=\{catalogo\.error\}\s+onReintentar=\{catalogo\.recargar\}\s+aviso=\{catalogo\.avisoOrden\}\s+onFila=\{acceso\.editarCatalogo \? setEditProduct : undefined\}/);
+  assert.match(pantalla, /<TablaEstandar\s+id=\{ID_PEDIDOS_WEB\}\s+modo="servidor"\s+columnas=\{COLUMNAS_PEDIDOS_WEB\}\s+preferencias=\{prefsPedidos\}\s+anchoRef=\{anchoPedidosRef\}\s+estado=\{estadoPedidos\}\s+onEstado=\{despacharPedidos\}\s+filas=\{pedidos\.filas\}\s+total=\{pedidos\.total\}\s+cargando=\{pedidos\.cargandoInicial\}\s+recargando=\{pedidos\.recargando\}\s+error=\{pedidos\.error\}\s+onReintentar=\{pedidos\.recargar\}\s+aviso=\{pedidos\.avisoOrden\}\s+onFila=\{abrirPedido\}/);
+  assert.match(pantalla, /const prefsPedidos = usePreferenciasTabla\(ID_PEDIDOS_WEB, COLUMNAS_PEDIDOS_WEB\);/);
+  assert.match(pantalla, /const prefsCatalogo = usePreferenciasTabla\(ID_CATALOGO, COLUMNAS_CATALOGO\);/);
+  assert.equal((codigo.match(/usePreferenciasTabla\(/g) || []).length, 2, 'una sola instancia por id (D40)');
+  // «Cuadrícula» (RP105): LayoutGrid, title «Vista en cuadrícula»; no es un Kanban y no escribe vista:; el catálogo no pone ConmutadorVista.
+  assert.match(codigo, /title="Vista en cuadrícula"/);
+  assert.match(codigo, /<LayoutGrid size=\{14\} aria-hidden="true" \/> Cuadrícula/);
+  assert.match(codigo, /onClick=\{\(\) => setVistaCatalogo\('cuadricula'\)\} aria-pressed=\{vistaCatalogo === 'cuadricula'\}/);
+  assert.ok(!/\bGrid\b|catViewMode|'tarjetas'|Tarjetas</.test(codigo), 'el botón viejo y «Tarjetas» no existen');
+  assert.match(pantalla, /ajustes=\{vistaCatalogo === 'tabla' \? \{ columnas: COLUMNAS_CATALOGO, preferencias: prefsCatalogo, anchoRef: anchoCatalogoRef \} : undefined\}/);
+  const barraCatalogo = pantalla.slice(pantalla.indexOf('estado={estadoCatalogo}\n                onEstado={despacharCatalogo}'), pantalla.indexOf('{...totalCatalogoBarra}'));
+  assert.ok(barraCatalogo.length > 100 && !/kanbanDisponible/.test(barraCatalogo), 'el catálogo no entrega un tablero');
+  // La cuadrícula dice lo suyo: esqueleto en la primera carga, error con Reintentar (el de faseDeLista), vacío y la paginación del servidor.
+  assert.match(pantalla, /const faseCatalogo = faseDeLista\(\{ cargandoInicial: catalogo\.cargandoInicial, error: catalogo\.error, filas: catalogo\.filas \}\);/);
+  assert.match(pantalla, /\{faseCatalogo === 'error' && \(\s*<AvisoFuente aviso=\{avisoDeFuente\(catalogo\.error, 'No se pudo cargar el catálogo'\)!\} onReintentar=\{catalogo\.recargar\} \/>/);
+  assert.match(pantalla, /\{faseCatalogo === 'cargando' && \(/);
+  assert.match(pantalla, /\{faseCatalogo === 'vacio' && /);
+  assert.match(pantalla, /<Paginacion pagina=\{estadoCatalogo\.pagina\} tamano=\{estadoCatalogo\.tamano\} total=\{catalogo\.total\}\s+onPagina=\{\(pagina\) => despacharCatalogo\(\{ tipo: 'pagina', valor: pagina \}\)\} onTamano=\{\(tamano\) => despacharCatalogo\(\{ tipo: 'tamano', valor: tamano \}\)\} \/>/);
+  // El stock de la fila es el que serializa el servidor (la misma cifra por la que se ordena, RP56): no se recalcula en el navegador.
+  assert.ok(!/stock_disponible\s*[-+*]|reduce\(/.test(codigo.slice(codigo.indexOf('function CeldaStock'), codigo.indexOf('function CeldaPrecio'))), 'el stock no se recalcula');
+  // Publicar, ocultar y eliminar recargan el catálogo y las tarjetas; el menú de la fila (MenuFila) ofrece Editar, Ocultar o Publicar y Eliminar.
+  assert.match(pantalla, /await apiFetch\(`\/ecommerce\/catalogo\/\$\{prod\.id\}`, \{ method: 'PATCH', body: JSON\.stringify\(\{ publicado_web: !prod\.publicado_web \}\) \}\);[\s\S]*?recargarTrasCatalogo\(\);/);
+  assert.match(pantalla, /await apiFetch\(`\/ecommerce\/catalogo\/\$\{prod\.id\}`, \{ method: 'DELETE' \}\);\s*avisar\('Producto eliminado', \{ tono: 'ok' \}\);\s*recargarTrasCatalogo\(\);/);
+  assert.match(codigo, /\{ etiqueta: 'Editar', icono: Edit2, onClick: \(\) => acciones\?\.editar\(p\) \},/);
+  assert.match(codigo, /\{ etiqueta: 'Eliminar', icono: Trash2, peligro: true, onClick: \(\) => acciones\?\.eliminar\(p\) \},/);
+  // El alta y la edición de productos, la publicación y los enlaces de los Bloques 1 a 3 siguen.
+  for (const sigue of ['function ProductModal(', "'Nuevo Producto'", '<Plus size={15}/> Nuevo Producto', "'Información General'", 'href="/store"', "'/ecommerce/pagos/config'", "'/ecommerce/envios/config'", 'recuperarCarrito(c.id,10)', 'recuperarCarrito(c.id,15)']) {
+    assert.ok(fuente.includes(sigue), `sigue: ${sigue}`);
+  }
+  // Las fechas del API son instantes UTC sin zona (el servidor manda created_at con isoformat): se leen con fechas-colombia.js (el día y la
+  // hora de Colombia), nunca con new Date(...) del navegador, que las toma como hora local.
+  assert.ok(!/new Date\(/.test(codigo.slice(codigo.indexOf('const AccionesPedidosWeb'))), 'sin new Date( en lo que se tocó');
+  assert.match(codigo, /celda: \(p\) => <span className="block truncate text-xs text-slate-500">\{fechaCorta\(p\.created_at\) \|\| '-'\}<\/span> \}/);
+  assert.match(codigo, /\{\[fechaCorta\(c\.created_at\), horaCO\(c\.created_at\)\]\.filter\(Boolean\)\.join\(', '\) \|\| '-'\} · /);
+  // R26: a 1024 px los pedidos van a todo el ancho (los carritos, debajo) y solo desde 2xl en dos columnas; el contenedor es el de las listas.
+  assert.match(codigo, /<div className=\{CONTENEDOR\}>/);
+  assert.match(codigo, /className="flex min-w-0 flex-1 flex-col gap-6 2xl:flex-row"/);
 }
 
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');

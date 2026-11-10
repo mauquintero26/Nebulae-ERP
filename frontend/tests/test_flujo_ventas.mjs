@@ -828,4 +828,65 @@ console.log('--- B4 T11 TEST 2: los detalles de la solicitud y la cotización us
   assert.equal(cot.split('<PasosFlujo').length - 1, 1, 'una sola barra de pasos en la COT');
 }
 
+console.log('--- B4 T22 TEST 1: pasosEmbudoDashboard — el embudo del Dashboard General con /ventas/flujo y enlaces al Hub filtrado (FLUJO-ventas-pantallas E) ---');
+{
+  assert.equal(typeof fv.pasosEmbudoDashboard, 'function', 'pasosEmbudoDashboard existe');
+  const datos = {
+    pasos: {
+      SC: { total: 4, atrasados: 1, mas_antiguo_dias: 6, por_estado: { NUEVA: 3 } },
+      COT: { total: 7, atrasados: 0, mas_antiguo_dias: 2, por_estado: {} },
+      PVEN: { total: 12, atrasados: 2, mas_antiguo_dias: 9, por_estado: {} },
+      ENTREGADO: { total: 3, atrasados: 0, mas_antiguo_dias: 1, por_estado: {} },
+      FACTURADO: { total: 40, atrasados: 0, mas_antiguo_dias: null, por_estado: {} },
+    },
+    cambios_cliente: { SC: 2 },
+    sin_respuesta: { COT: 1 },
+    semaforo: { atrasados: 3, no_resueltos: 5 },
+  };
+  const pasos = fv.pasosEmbudoDashboard(datos);
+  // Los mismos 5 pasos del Hub, en su orden, con SUS números (los de la franja del Hub: el mismo endpoint).
+  assert.deepEqual(pasos.map((p) => p.clave), CLAVES);
+  assert.deepEqual(pasos.map((p) => p.label), PASOS_FLUJO_VENTAS.map((p) => p.label));
+  assert.deepEqual(pasos.map((p) => p.total), [4, 7, 12, 3, 40]);
+  assert.deepEqual(pasos.map((p) => p.atrasados), [1, 0, 2, 0, 0]);
+  // Cada caja es un enlace al Hub ya filtrado por ese paso (nunca a /dashboard/ventas/pedidos, que no existe), y el Hub lo lee.
+  assert.deepEqual(pasos.map((p) => p.href), CLAVES.map((c) => `/dashboard/ventas?paso=${c}`));
+  for (const p of pasos) assert.equal(fv.leerEnlaceHub(`?paso=${p.clave}`).paso, p.clave, `${p.clave}: el Hub abre filtrado`);
+  // Ninguna es «Estás aquí» ni está elegida; sin avisos ni detalle (el embudo es solo los números).
+  for (const p of pasos) {
+    assert.equal(p.esEste, false, p.clave);
+    assert.equal(p.seleccionado, false, p.clave);
+    assert.ok(!p.avisos || p.avisos.length === 0, `${p.clave}: sin avisos`);
+    assert.ok(!p.detalle || p.detalle.length === 0, `${p.clave}: sin detalle`);
+  }
+  // Mientras carga (datos null) o si falló: totales null (la barra gris o «—», nunca 0) y los enlaces siguen.
+  for (const sin of [null, undefined]) {
+    const cargando = fv.pasosEmbudoDashboard(sin);
+    assert.deepEqual(cargando.map((p) => p.total), [null, null, null, null, null]);
+    assert.deepEqual(cargando.map((p) => p.atrasados), [null, null, null, null, null]);
+    assert.deepEqual(cargando.map((p) => p.href), CLAVES.map((c) => `/dashboard/ventas?paso=${c}`));
+  }
+  // Un paso que el servidor no manda queda en null, sin tapar los demás.
+  const sinCot = fv.pasosEmbudoDashboard({ pasos: { SC: { total: 4, atrasados: 0 } } });
+  assert.deepEqual(sinCot.map((p) => p.total), [4, null, null, null, null]);
+  // No toca la definición ni los datos.
+  assert.ok(Object.isFrozen(PASOS_FLUJO_VENTAS) && PASOS_FLUJO_VENTAS.every((p) => !('href' in p)));
+}
+
+console.log('--- B4 T22 r1 TEST 2: avisoEmbudoDashboard — cuándo el embudo ofrece «Reintentar» (I1 M10, m7) y el enlace del radar ---');
+{
+  assert.equal(typeof fv.avisoEmbudoDashboard, 'function');
+  // Sin error y sin carga: no hay aviso. La primera carga sin error tampoco.
+  assert.deepEqual(fv.avisoEmbudoDashboard({ cargando: false, error: null, huboError: false }), { visible: false, reintentando: false, puedeReintentar: false, boton: null, texto: null });
+  assert.equal(fv.avisoEmbudoDashboard({ cargando: true, error: null, huboError: false }).visible, false);
+  // Con error: se ve, dice qué pasó y «Reintentar» pide otra vez.
+  const conError = fv.avisoEmbudoDashboard({ cargando: false, error: new Error('x'), huboError: false });
+  assert.deepEqual(conError, { visible: true, reintentando: false, puedeReintentar: true, boton: 'Reintentar', texto: 'No se pudo cargar el embudo.' });
+  // Mientras se reintenta (la carga vuelve a salir tras un error): sigue visible, «Reintentando…» y NO vuelve a pedir (la guarda de BannerFlujo).
+  const reintentando = fv.avisoEmbudoDashboard({ cargando: true, error: null, huboError: true });
+  assert.deepEqual(reintentando, { visible: true, reintentando: true, puedeReintentar: false, boton: 'Reintentando…', texto: 'No se pudo cargar el embudo.' });
+  // El enlace del radar abre la pestaña de Pedidos que tiene ese número.
+  assert.equal(fv.leerEnlacePedidos('?tab=pend_compra'), 'pend_compra');
+}
+
 console.log('\nOK: test_flujo_ventas.mjs');

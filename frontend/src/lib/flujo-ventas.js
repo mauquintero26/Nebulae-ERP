@@ -20,7 +20,7 @@
  *    el paso).
  */
 
-import { congelar, conteosDePasos, opcionesSemaforo, pasosConConteos } from './flujo.js';
+import { congelar, conteosDePasos, estadoDeFranja, opcionesSemaforo, pasosConConteos } from './flujo.js';
 import {
   ESTADOS_PEDIDO, esCotizacionActiva, esPedidoVigente, humanizarCodigo, infoEstadoPedido, tiene, PASOS_PEDIDO, grupoPedido,
 } from './estados-pedido.js';
@@ -303,6 +303,20 @@ export function pasosDeLista(datos, actual) {
     if (!p.esEste) return { ...p, href: p.ruta };
     return { ...p, detalle: datos ? detalleDelPaso(/** @type {any} */ (conteos)[p.clave]?.porEstado, p.clave) : null };
   });
+}
+
+/**
+ * B4 T22 (FLUJO-ventas-pantallas E, RP104 b): los pasos del «Embudo Operativo de Ventas» del Dashboard General, con la
+ * respuesta de GET /ventas/flujo (`datos`; null mientras carga o si falló): los MISMOS números de la franja del Hub (el mismo
+ * endpoint, pasosConConteos y conteosDesdeResumen). Cada caja es un enlace al Hub ya filtrado por ese paso
+ * (`/dashboard/ventas?paso=<clave>`, lo que lee leerEnlaceHub), también mientras carga; ninguna es «Estás aquí» ni queda elegida,
+ * y sin avisos ni detalle: el embudo son los números y el atraso. Lo que no llega queda en null (la barra gris o «—», nunca 0).
+ * @param {any} datos
+ * @returns {PasoVista[]}
+ */
+export function pasosEmbudoDashboard(datos) {
+  const pasos = pasosConConteos(PASOS_FLUJO_VENTAS, conteosDesdeResumen(datos), { cargando: !datos });
+  return pasos.map((p) => ({ ...p, avisos: null, detalle: null, href: `${RUTA_HUB_VENTAS}?paso=${p.clave}` }));
 }
 
 /**
@@ -671,4 +685,24 @@ export function anotarPasosCotizacion(pasos, p) {
       ...(conAviso ? { avisos: [{ ...p.aviso }] } : {}),
     };
   });
+}
+
+/**
+ * B4 T22 r1 (I1 M10, m7): el aviso del embudo del Dashboard con lo que trae useResumenFlujo (cargando, error) y `huboError` (lo
+ * que se vio en el render anterior, como BannerFlujo): con error, o reintentando después de uno, se ve «No se pudo cargar el
+ * embudo.» con «Reintentar»; mientras reintenta dice «Reintentando…» y NO vuelve a pedir (la guarda de BannerFlujo). La primera
+ * carga sin error no tiene aviso.
+ * @param {{cargando?: boolean, error?: unknown, huboError?: boolean}} estado
+ * @returns {{visible: boolean, reintentando: boolean, puedeReintentar: boolean, boton: string | null, texto: string | null}}
+ */
+export function avisoEmbudoDashboard({ cargando = false, error = null, huboError = false } = {}) {
+  const f = estadoDeFranja({ cargando, error, huboError });
+  if (!f.conError) return { visible: false, reintentando: false, puedeReintentar: false, boton: null, texto: null };
+  return {
+    visible: true,
+    reintentando: f.reintentando,
+    puedeReintentar: !f.reintentando,
+    boton: f.reintentando ? 'Reintentando…' : 'Reintentar',
+    texto: 'No se pudo cargar el embudo.',
+  };
 }

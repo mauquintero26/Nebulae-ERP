@@ -254,3 +254,42 @@ export function agregarAviso(lista, aviso, max = 3) {
   const otros = lista.filter((a) => !(a.texto === aviso.texto && a.tono === aviso.tono));
   return [...otros, aviso].slice(-max);
 }
+
+/**
+ * B4 T23A r1 (I1, I2): el aviso de una fuente de una pantalla que falló (indicadores, carritos…): un 403 es un tema de permiso
+ * (MENSAJE_SIN_PERMISO_FUENTE, sin «Reintentar»: volver a pedir no lo cambia, y nunca el 403 técnico de require_roles); cualquier
+ * otro error es una falla con el detalle del servidor (textoDeError) y «Reintentar». Sin error, null.
+ * @param {unknown} error
+ * @param {string} fallo  el texto de la falla («No se pudieron cargar los indicadores»)
+ * @returns {{tipo: 'permiso' | 'carga', texto: string, reintentar: boolean} | null}
+ */
+export function avisoDeFuente(error, fallo) {
+  if (!error) return null;
+  if (/** @type {{status?: unknown}} */ (error).status === 403) return { tipo: 'permiso', texto: MENSAJE_SIN_PERMISO_FUENTE, reintentar: false };
+  return { tipo: 'carga', texto: textoDeError(error, fallo), reintentar: true };
+}
+
+/** El aviso de un 403 al leer una fuente de una pantalla. */
+export const MENSAJE_SIN_PERMISO_FUENTE = 'No tienes permiso para ver esto.';
+
+/**
+ * B4 T23B r1 (I2): el motivo de permiso de una fuente (el texto de avisoDeFuente cuando es un 403) o null: lo que la tarjeta dice en su
+ * ayuda cuando muestra «—». Una sola copia para Seguimientos, Marketing y E-Commerce.
+ * @param {{tipo: string, texto: string} | null | undefined} aviso
+ * @returns {string | null}
+ */
+export function motivoSinPermiso(aviso) {
+  return aviso?.tipo === 'permiso' ? aviso.texto : null;
+}
+
+/**
+ * B4 T23B r1 (I2): el estado de la franja de tarjetas de una fuente: con un 403 queda 'listo' («—» con el motivo en cada tarjeta, sin
+ * el «No se pudo cargar» de una falla); en otro caso, el estado que traía (estadoKpi).
+ * @template {string} T
+ * @param {{tipo: string} | null | undefined} aviso
+ * @param {T} estado
+ * @returns {T | 'listo'}
+ */
+export function estadoFranjaDeFuente(aviso, estado) {
+  return aviso?.tipo === 'permiso' ? 'listo' : estado;
+}

@@ -93,4 +93,58 @@ console.log('--- TEST 5: la fuente: una sola regla sobre normalizarRol ---');
   assert.match(sinColumnaAsesor('lib/seguimiento.js', COLUMNA_ASESOR), /['"]asesor['"]/i, 'solo en page.tsx');
 }
 
+// ── B4 T23A r1 (I1, I2, m15): accesoTienda(rol): lo que cada rol puede pedir y hacer en E-Commerce, de la lista EXACTA de
+// require_roles de cada endpoint de backend/app/api/v1/ecommerce.py (stats y carritos: ADMIN y ASESOR; pedidos: ADMIN, ASESOR,
+// FINANZAS y BODEGA; GET del catálogo: sin guardia de rol; POST, PATCH y DELETE del catálogo: solo ADMIN).
+console.log('--- T23A r1: accesoTienda ---');
+{
+  const roles = await import('../src/lib/roles.js');
+  const sin = { listo: true, indicadores: false, carritos: false, pedidos: false, catalogo: true, editarCatalogo: false };
+  assert.deepEqual(roles.accesoTienda('ADMIN'), { ...sin, indicadores: true, carritos: true, pedidos: true, editarCatalogo: true });
+  assert.deepEqual(roles.accesoTienda('ASESOR'), { ...sin, indicadores: true, carritos: true, pedidos: true });
+  assert.deepEqual(roles.accesoTienda('FINANZAS'), { ...sin, pedidos: true });
+  assert.deepEqual(roles.accesoTienda('BODEGA'), { ...sin, pedidos: true });
+  assert.deepEqual(roles.accesoTienda('COMPRAS'), sin);
+  assert.deepEqual(roles.accesoTienda('CONSULTA'), sin);
+  // Los nombres viejos y los espacios (normalize_role): Vendedor es ASESOR, Admin es ADMIN.
+  assert.deepEqual(roles.accesoTienda('Vendedor'), roles.accesoTienda('ASESOR'));
+  assert.deepEqual(roles.accesoTienda(' Admin '), roles.accesoTienda('ADMIN'));
+  // Durante la hidratación (rol vacío o que no es texto): nada listo y nada se pide.
+  for (const nada of ['', '   ', null, undefined, 7]) {
+    assert.deepEqual(roles.accesoTienda(nada), { listo: false, indicadores: false, carritos: false, pedidos: false, catalogo: false, editarCatalogo: false }, String(nada));
+  }
+  // Un rol desconocido está listo pero sin nada de lo restringido.
+  assert.deepEqual(roles.accesoTienda('INVENTADO'), sin);
+  // Inmutable: un objeto nuevo en cada llamada no compartido.
+  assert.notEqual(roles.accesoTienda('ADMIN'), roles.accesoTienda('ADMIN'));
+}
+
+// ── B4 T23B: lo que cada rol puede pedir en Seguimientos, Marketing y el Asistente omnicanal, de la lista EXACTA de require_roles de
+// cada endpoint: GET /crm/leads (crm.py:1378: ADMIN y ASESOR), todo /marketing/* (marketing.py: ADMIN y ASESOR, salvo el DELETE de
+// una campaña: solo ADMIN) y /chat/search-customers, /customer-context, /create-customer-request y /ai-copilot-suggest (chat.py: ADMIN
+// y ASESOR). Rol vacío (hidratación) o que no es texto: nada listo y nada se pide.
+console.log('--- T23B: accesoSeguimientos, accesoMarketing y accesoAsistente ---');
+{
+  const roles = await import('../src/lib/roles.js');
+  const nadie = ['', '   ', null, undefined, 7];
+  // Seguimientos
+  assert.deepEqual(roles.accesoSeguimientos('ADMIN'), { listo: true, leads: true });
+  assert.deepEqual(roles.accesoSeguimientos('ASESOR'), { listo: true, leads: true });
+  for (const r of ['FINANZAS', 'BODEGA', 'COMPRAS', 'CONSULTA', 'INVENTADO']) assert.deepEqual(roles.accesoSeguimientos(r), { listo: true, leads: false }, r);
+  assert.deepEqual(roles.accesoSeguimientos('Vendedor'), roles.accesoSeguimientos('ASESOR'));
+  for (const r of nadie) assert.deepEqual(roles.accesoSeguimientos(r), { listo: false, leads: false }, String(r));
+  // Marketing
+  assert.deepEqual(roles.accesoMarketing('ADMIN'), { listo: true, ver: true, eliminarCampana: true });
+  assert.deepEqual(roles.accesoMarketing('ASESOR'), { listo: true, ver: true, eliminarCampana: false });
+  for (const r of ['FINANZAS', 'BODEGA', 'COMPRAS', 'CONSULTA', 'INVENTADO']) assert.deepEqual(roles.accesoMarketing(r), { listo: true, ver: false, eliminarCampana: false }, r);
+  assert.deepEqual(roles.accesoMarketing(' Admin '), roles.accesoMarketing('ADMIN'));
+  for (const r of nadie) assert.deepEqual(roles.accesoMarketing(r), { listo: false, ver: false, eliminarCampana: false }, String(r));
+  // Asistente omnicanal
+  assert.deepEqual(roles.accesoAsistente('ADMIN'), { listo: true, contexto: true });
+  assert.deepEqual(roles.accesoAsistente('ASESOR'), { listo: true, contexto: true });
+  for (const r of ['FINANZAS', 'BODEGA', 'COMPRAS', 'CONSULTA', 'INVENTADO']) assert.deepEqual(roles.accesoAsistente(r), { listo: true, contexto: false }, r);
+  for (const r of nadie) assert.deepEqual(roles.accesoAsistente(r), { listo: false, contexto: false }, String(r));
+  assert.notEqual(roles.accesoMarketing('ADMIN'), roles.accesoMarketing('ADMIN'));
+}
+
 console.log('OK test_roles.mjs');

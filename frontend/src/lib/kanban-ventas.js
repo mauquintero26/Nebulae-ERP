@@ -62,6 +62,8 @@ import { enlaceDocumento } from './analisis.js';
 import { etiquetaTipoSolicitud } from './etiquetas-ventas.js';
 import { redondearPeso, formatoPesos } from './pesos.js';
 import { queryListado } from './tabla.js';
+// B4 T23A: el permiso de mover los pedidos web (RP62).
+import { esAdminOAsesor } from './roles.js';
 
 /**
  * @typedef {import('./kanban.js').ResultadoSoltar} ResultadoSoltar
@@ -1129,13 +1131,14 @@ export const VISTA_TABLERO_PEDIDO = 'todos';
  * pedir nada). La respuesta trae el `resumen` de H47 de la columna (su suma, C9).
  * @param {import('./tabla.js').EstadoTabla} estado
  * @param {{estados?: ReadonlyArray<string>} | null | undefined} columna
- * @param {{orden: string | null, limit: number, offset: number}} consulta
+ * @param {{orden: string | null, limit: number, offset: number, vista?: string | null}} consulta  `vista`: por defecto
+ *   VISTA_TABLERO_PEDIDO; null la omite (B4 T23A r1, m17: la lista de pedidos web no tiene vistas; aditivo, las demás pantallas no cambian)
  * @returns {string | null}
  */
-export function consultaColumnaPedido(estado, columna, { orden, limit, offset }) {
+export function consultaColumnaPedido(estado, columna, { orden, limit, offset, vista = VISTA_TABLERO_PEDIDO }) {
   const estados = estadosDeColumnaLista(columna, estado?.estados);
   if (estados.length === 0) return null;
-  return queryListado(estado, { vista: VISTA_TABLERO_PEDIDO, estados, orden, limit, offset });
+  return queryListado(estado, { vista, estados, orden, limit, offset });
 }
 
 /** Un texto con algo, sin los espacios de los bordes; si no, ''. */
@@ -1278,4 +1281,54 @@ export function avisoPxpAlCancelarPedido(pedido) {
 export function efectosCancelarPedido(pedido) {
   return [EFECTO_CANCELAR_PEDIDO, avisoCotizacionAlCancelarPedido(pedido), avisoSaldoAFavorAlCancelarPedido(pedido),
     avisoPxpAlCancelarPedido(pedido)].filter((e) => typeof e === 'string');
+}
+
+// ─── B4 T23A: los pedidos web de E-Commerce (KANBAN-resto puntos 2 y 3; TABLA-otros punto 5; RP8, RP62) ─────────────────
+
+/** GET de la lista de los pedidos web (canal WEB): la tabla y cada columna del tablero. */
+export const RUTA_PEDIDOS_WEB = '/ecommerce/pedidos';
+
+/** La pantalla de E-Commerce: el return_to de la acción de una tarjeta del tablero de los pedidos web (returnToSeguro la acepta). */
+export const RUTA_ECOMMERCE = '/dashboard/ecommerce';
+
+/**
+ * Los estados que ofrece el filtro de los pedidos web: los del pedido de venta (los operativos y los cerrados, con la etiqueta
+ * única de estados-pedido.js) más PAGADO, el estado real de un pedido que la tienda ya cobró (paso En proceso), agrupados en
+ * el orden de las columnas del tablero. Los PWEB_ESTADOS de la pantalla (PENDIENTE_DESPACHO, DESPACHADO…) no existen en los
+ * pedidos reales: por eso el filtro casi nunca encontraba nada. Inmutable.
+ * @type {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
+ */
+export const OPCIONES_ESTADOS_PEDIDOS_WEB = congelar(COLUMNAS_PEDIDO.flatMap(
+  (c) => [...ESTADOS_FILTRO_PEDIDO, 'PAGADO'].filter((e) => c.estados.includes(e)),
+).map(opcionPedido));
+
+/**
+ * La tarjeta del tablero de los pedidos web: la de los pedidos de venta (tarjetaPedido: número, cliente, total, estado,
+ * antigüedad) con el PVEN debajo del número PWEB (o «Pedido web» si no lo trae). r1 (m4): un pedido web es un SaleOrder, así que
+ * la acción principal de un pedido de venta le aplica (Ver pedido, Despachar, Facturar), con return_to a E-Commerce; solo se anula
+ * en PENDIENTE_PAGO (el estado propio de la tienda: «Gestionar compra» no aplica a un pedido que espera el pago del cliente) y con
+ * `soloLectura` (un rol que no mueve pedidos no llega a esas pantallas). La fila de GET /ecommerce/pedidos no trae asesor, saldo
+ * ni atraso: no salen chips ni «Sin asignar».
+ * @param {any} fila
+ * @param {{ahora?: number, soloLectura?: boolean}} [opciones]
+ * @returns {TarjetaVentas}
+ */
+export function tarjetaPedidoWeb(fila, { ahora, soloLectura = false } = {}) {
+  const tarjeta = tarjetaPedido(fila, { ahora, returnTo: RUTA_ECOMMERCE });
+  const sinAccion = soloLectura || fila?.estado === 'PENDIENTE_PAGO';
+  return { ...tarjeta, subtitulo: textoLimpio(fila?.pven_numero) || 'Pedido web', accionPrincipal: sinAccion ? null : tarjeta.accionPrincipal };
+}
+
+/** El motivo del tablero de los pedidos web para un rol que no puede moverlos. */
+export const TEXTO_SOLO_VER_PEDIDOS = 'Tu rol solo puede ver los pedidos';
+
+/**
+ * RP62: el motivo con el que el tablero de los pedidos web queda solo para ver, o null si el rol lo puede mover: solo ADMIN y
+ * ASESOR (esAdminOAsesor, con los nombres viejos y los espacios de los bordes). PATCH /ventas/pedidos/{id} es de esos dos roles;
+ * Finanzas y Bodega ven el tablero. Un rol vacío o que no es texto tampoco mueve (la pantalla lo lee después de montar).
+ * @param {unknown} rol
+ * @returns {string | null}
+ */
+export function soloLecturaPedidosWeb(rol) {
+  return esAdminOAsesor(rol) ? null : TEXTO_SOLO_VER_PEDIDOS;
 }

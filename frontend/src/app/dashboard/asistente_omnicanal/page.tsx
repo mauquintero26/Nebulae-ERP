@@ -7,6 +7,13 @@ import {
   Sparkles, Copy, Check, Search, X, FileText, Phone, MapPin, Layers
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
+import { AvisoFuente } from '@/components/ui/AvisoFuente';
+import { useRolActual } from '@/components/ui/useRolActual';
+import { accesoAsistente } from '@/lib/roles';
+import { avisoDeFuente, textoDeError } from '@/lib/avisos';
+import { fichaRevenueAsistente, vistaContexto } from '@/lib/kpis';
+import { clasesDeEstadoPedido } from '@/lib/estados-pedido';
+import { formatoPesos } from '@/lib/pesos';
 // Mismo modal de cliente nuevo y el mismo bloque de Tipo/Modalidad/campos por
 // tipo que usa la Solicitud de Cliente real (/dashboard/ventas/solicitud) --
 // se reutilizan tal cual para que "Crear Solicitud de Cliente" dispare
@@ -21,27 +28,15 @@ import { nombreCliente } from '@/lib/cliente-desde-busqueda';
 
 const CHATWOOT_URL = 'https://chatbot-crn-chatwoot.ionwxk.easypanel.host/app/accounts/1/conversations';
 
-const STATUS_BADGES: Record<string, { bg: string; text: string; label: string }> = {
-  PENDIENTE_COMPRA: { bg: 'bg-amber-50 border-amber-200 text-amber-700', text: 'text-amber-700', label: 'Pendiente Compra' },
-  EN_TRANSITO: { bg: 'bg-blue-50 border-blue-200 text-blue-700', text: 'text-blue-700', label: 'En Tránsito' },
-  EN_BODEGA: { bg: 'bg-purple-50 border-purple-200 text-purple-700', text: 'text-purple-700', label: 'En Bodega' },
-  DISPONIBLE_ENTREGA: { bg: 'bg-cyan-50 border-cyan-200 text-cyan-700', text: 'text-cyan-700', label: 'Disp. Entrega' },
-  FACTURADO: { bg: 'bg-emerald-50 border-emerald-200 text-emerald-700', text: 'text-emerald-700', label: 'Facturado' },
-  BORRADOR: { bg: 'bg-slate-100 border-slate-200 text-slate-700', text: 'text-slate-700', label: 'Borrador' },
-  ENTREGADO: { bg: 'bg-emerald-50 border-emerald-200 text-emerald-700', text: 'text-emerald-700', label: 'Entregado' },
-  COMPLETADO: { bg: 'bg-emerald-50 border-emerald-200 text-emerald-700', text: 'text-emerald-700', label: 'Completado' },
-  CANCELADO: { bg: 'bg-rose-50 border-rose-200 text-rose-700', text: 'text-rose-700', label: 'Cancelado' },
-};
-
-function formatCOP(val: number): string {
-  return new Intl.NumberFormat('es-CO', {
-    style: 'currency',
-    currency: 'COP',
-    maximumFractionDigits: 0,
-  }).format(val);
-}
-
 export default function AsistenteOmnicanal() {
+  // B4 T23B: la columna de contexto pide solo lo que el rol puede leer (accesoAsistente: /chat/search-customers y /customer-context son
+  // de ADMIN y ASESOR); el rol se lee después de montar. Un error se dice, con «Reintentar» (un 403, sin él).
+  const acceso = accesoAsistente(useRolActual());
+  // El mensaje de Chatwoot se escucha UNA vez (con el primer render): el acceso vigente se lee por un ref.
+  const accesoRef = useRef(false);
+  useEffect(() => { accesoRef.current = acceso.contexto; }, [acceso.contexto]);
+  const [errorBusqueda, setErrorBusqueda] = useState<unknown>(null);
+  const [errorContexto, setErrorContexto] = useState<{ error: unknown; pedido: { id?: number; phone?: string; email?: string; q?: string } } | null>(null);
   const [iframeKey, setIframeKey] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
@@ -87,6 +82,12 @@ export default function AsistenteOmnicanal() {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
   const handleRefresh = () => setIframeKey(k => k + 1);
+  // La tarjeta oscura del cliente: los nombres y el formato del catálogo (fichaRevenueAsistente: Total comprado, Total de pedidos, Pedidos
+  // en curso y Ticket promedio, con formatoPesos).
+  const ficha = fichaRevenueAsistente(contextData?.revenue);
+  // Qué muestra la columna (función pura): con un error de la carga no sale «Sin cliente seleccionado» debajo del aviso.
+  const vista = vistaContexto(loadingContext, errorContexto?.error, contextData, acceso.listo && !acceso.contexto);
+  const avisoContexto = errorContexto ? avisoDeFuente(errorContexto.error, 'No se pudo cargar el perfil del cliente') : null;
 
   // Asesor por defecto = usuario logueado (mismo origen de dato que usa
   // solicitud-client.tsx), para que advisor_name no viaje vacio al backend.
@@ -97,8 +98,9 @@ export default function AsistenteOmnicanal() {
 
   // Búsqueda de clientes con debouncing
   useEffect(() => {
-    if (!searchQuery || searchQuery.trim().length < 2) {
+    if (!acceso.contexto || !searchQuery || searchQuery.trim().length < 2) {
       setSearchResults([]);
+      setErrorBusqueda(null);
       return;
     }
 
@@ -108,19 +110,23 @@ export default function AsistenteOmnicanal() {
         const res = await apiFetch(`/chat/search-customers?q=${encodeURIComponent(searchQuery.trim())}`);
         if (res?.status === 'success') {
           setSearchResults(res.data || []);
+          setErrorBusqueda(null);
         }
       } catch (err) {
         console.error('Error buscando clientes:', err);
+        setSearchResults([]);
+        setErrorBusqueda(err);
       } finally {
         setIsSearching(false);
       }
     }, 280);
 
     return () => clearTimeout(timer);
-  }, [searchQuery]);
+  }, [searchQuery, acceso.contexto]);
 
   // Cargar contexto cuando se selecciona un cliente
   const loadCustomerContext = async (customerIdentifier: { id?: number; phone?: string; email?: string; q?: string }) => {
+    if (!accesoRef.current) return;
     setLoadingContext(true);
     try {
       const params = new URLSearchParams();
@@ -130,6 +136,7 @@ export default function AsistenteOmnicanal() {
       if (customerIdentifier.q) params.set('q', customerIdentifier.q);
 
       const res = await apiFetch(`/chat/customer-context?${params.toString()}`);
+      setErrorContexto(null);
       if (res?.status === 'success' && res.found) {
         setActiveCustomer(res.data.customer);
         setContextData(res.data);
@@ -140,6 +147,7 @@ export default function AsistenteOmnicanal() {
     } catch (err) {
       console.error('Error cargando contexto de cliente:', err);
       setContextData(null);
+      setErrorContexto({ error: err, pedido: customerIdentifier });
     } finally {
       setLoadingContext(false);
     }
@@ -395,6 +403,9 @@ export default function AsistenteOmnicanal() {
           <aside className="w-96 lg:w-[420px] h-full flex flex-col border-l border-slate-200 bg-white flex-shrink-0 z-10 shadow-lg">
             
             {/* Header de la Columna: Buscador de Cliente */}
+            {acceso.listo && !acceso.contexto ? (
+              <p role="status" className="m-4 rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600">Tu rol no ve el contexto del cliente.</p>
+            ) : (
             <div className="p-3.5 border-b border-slate-200 bg-slate-50/70">
               <div className="relative">
                 <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
@@ -412,6 +423,10 @@ export default function AsistenteOmnicanal() {
                   >
                     <X size={14} />
                   </button>
+                )}
+
+                {Boolean(errorBusqueda) && (
+                  <p role="alert" className="mt-1.5 text-[11px] font-semibold text-rose-700">{textoDeError(errorBusqueda, 'No se pudo buscar clientes')}</p>
                 )}
 
                 {/* Dropdown de Resultados de Búsqueda */}
@@ -439,16 +454,21 @@ export default function AsistenteOmnicanal() {
                 )}
               </div>
             </div>
+            )}
 
             {/* CUERPO DEL CONTEXTO (SCROLLABLE) */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
 
-              {loadingContext ? (
+              {vista === 'error' && avisoContexto && (
+                <AvisoFuente aviso={avisoContexto} onReintentar={() => loadCustomerContext(errorContexto!.pedido)} />
+              )}
+
+              {vista === 'cargando' ? (
                 <div className="flex flex-col items-center justify-center py-16 text-slate-400 space-y-2">
                   <RefreshCw size={24} className="animate-spin text-indigo-500" />
                   <span className="text-xs font-bold">Cargando perfil 360 del cliente...</span>
                 </div>
-              ) : contextData ? (
+              ) : vista === 'contexto' ? (
                 <>
                   {/* CARD DE REVENUE Y PERFIL FINANCIERO */}
                   <div className="p-4 bg-gradient-to-br from-indigo-900 via-slate-900 to-indigo-950 text-white rounded-2xl shadow-md relative overflow-hidden">
@@ -463,26 +483,27 @@ export default function AsistenteOmnicanal() {
                       </div>
 
                       <div className="mt-2">
-                        <div className="text-[11px] text-slate-300 font-medium">Revenue Total (Ventas)</div>
+                        <div className="text-[11px] text-slate-300 font-medium">{ficha.total.etiqueta}</div>
                         <div className="text-2xl font-black tracking-tight text-white mt-0.5">
-                          {formatCOP(contextData.revenue.total_spent_cop)}
+                          {ficha.total.texto}
                         </div>
                       </div>
 
                       {/* Mini métricas */}
                       <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-white/10 text-center">
                         <div>
-                          <div className="text-[10px] text-slate-400">Total Pedidos</div>
-                          <div className="text-sm font-bold text-white mt-0.5">{contextData.revenue.total_orders_count}</div>
+                          <div className="text-[10px] text-slate-400">{ficha.mini[0].etiqueta}</div>
+                          <div className="text-sm font-bold text-white mt-0.5">{ficha.mini[0].texto}</div>
                         </div>
                         <div>
-                          <div className="text-[10px] text-slate-400">Activos</div>
-                          <div className="text-sm font-bold text-amber-300 mt-0.5">{contextData.revenue.active_orders_count}</div>
+                          <div className="text-[10px] text-slate-400">{ficha.mini[1].etiqueta}</div>
+                          <div className="text-sm font-bold text-amber-300 mt-0.5">{ficha.mini[1].texto}</div>
+                          {ficha.mini[1].ayuda && <div className="text-[9px] leading-tight text-slate-400">{ficha.mini[1].ayuda}</div>}
                         </div>
                         <div>
-                          <div className="text-[10px] text-slate-400">Ticket Promedio</div>
+                          <div className="text-[10px] text-slate-400">{ficha.mini[2].etiqueta}</div>
                           <div className="text-xs font-bold text-emerald-300 mt-1">
-                            {formatCOP(contextData.revenue.avg_ticket_cop).split(',')[0]}
+                            {ficha.mini[2].texto}
                           </div>
                         </div>
                       </div>
@@ -556,13 +577,13 @@ export default function AsistenteOmnicanal() {
                           </div>
                         ) : (
                           contextData.active_orders.map((ord: any) => {
-                            const badge = STATUS_BADGES[ord.estado] || STATUS_BADGES.BORRADOR;
+                            const badge = clasesDeEstadoPedido(ord.estado);
                             return (
                               <div key={ord.id} className="p-3 bg-white border border-slate-200 rounded-xl shadow-xs space-y-2">
                                 <div className="flex items-center justify-between">
                                   <span className="text-xs font-black text-slate-800 tracking-tight">{ord.numero}</span>
-                                  <span className={`text-[10px] px-2 py-0.5 font-bold border rounded-full ${badge.bg}`}>
-                                    {badge.label}
+                                  <span className={`text-[10px] px-2 py-0.5 font-bold border rounded-full ${badge.clases}`}>
+                                    {badge.etiqueta}
                                   </span>
                                 </div>
                                 <div className="text-[11px] text-slate-600">
@@ -571,7 +592,7 @@ export default function AsistenteOmnicanal() {
                                 </div>
                                 <div className="flex items-center justify-between text-[11px] pt-1.5 border-t border-slate-100">
                                   <span className="text-slate-400">{ord.fecha}</span>
-                                  <span className="font-black text-slate-800">{formatCOP(ord.total_cop)}</span>
+                                  <span className="font-black text-slate-800">{formatoPesos(ord.total_cop)}</span>
                                 </div>
                               </div>
                             );
@@ -593,14 +614,14 @@ export default function AsistenteOmnicanal() {
                             <div key={ord.id} className="p-3 bg-white border border-slate-200 rounded-xl shadow-xs space-y-1.5">
                               <div className="flex items-center justify-between">
                                 <span className="text-xs font-bold text-slate-800">{ord.numero}</span>
-                                <span className="text-[10px] px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full font-bold">
-                                  Entregado
+                                <span className={`text-[10px] px-2 py-0.5 border rounded-full font-bold ${clasesDeEstadoPedido(ord.estado).clases}`}>
+                                  {clasesDeEstadoPedido(ord.estado).etiqueta}
                                 </span>
                               </div>
                               <div className="text-[11px] text-slate-500">{ord.productos_resumen}</div>
                               <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-100">
                                 <span className="text-slate-400">{ord.fecha}</span>
-                                <span className="font-bold text-slate-800">{formatCOP(ord.total_cop)}</span>
+                                <span className="font-bold text-slate-800">{formatoPesos(ord.total_cop)}</span>
                               </div>
                             </div>
                           ))
@@ -705,7 +726,7 @@ export default function AsistenteOmnicanal() {
 
                   </div>
                 </>
-              ) : (
+              ) : vista === 'vacio' ? (
                 /* ESTADO SIN CLIENTE SELECCIONADO */
                 <div className="flex flex-col items-center justify-center py-16 px-4 text-center space-y-3">
                   <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
@@ -718,7 +739,7 @@ export default function AsistenteOmnicanal() {
                     </p>
                   </div>
                 </div>
-              )}
+              ) : null}
 
             </div>
           </aside>

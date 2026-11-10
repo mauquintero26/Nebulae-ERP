@@ -3,10 +3,9 @@
  * Bloque 4, T3A (ANALISIS-base, R2 y R13): prueba guardián.
  * 1) R13: 'chart.js' y 'react-chartjs-2' (también sus subrutas, como 'chart.js/auto') solo se importan en
  *    src/components/analisis/. Recorre todo src/ y falla con archivo:línea fuera de la lista blanca:
- *    - siempre: ventas/proyecciones, compras/proyecciones y src/app_mocks_backup;
- *    - hasta T22: finanzas/resumen.
+ *    - siempre: ventas/proyecciones, compras/proyecciones y src/app_mocks_backup.
  *    (T5C borró los dos Análisis muertos, ventas/components/AnalisisVentas.tsx y compras/components/AnalisisCompras.tsx,
- *    y sus dos entradas.)
+ *    y sus dos entradas; T22 rehízo finanzas/resumen con la pestaña estándar y borró la suya.)
  * 2) R2: ningún archivo de src/app contiene '/ventas/ai-chat' (el endpoint no existe; los asistentes quedan «En
  *    construcción»). La lista blanca temporal quedó vacía: T7 borró la de ventas/page.tsx y T15 la de
  *    compras/pedidos/page.tsx (src/app_mocks_backup no está dentro de src/app y tampoco se revisa).
@@ -39,7 +38,6 @@ const PERMITIDOS_GRAFICOS = [
   'src/app/dashboard/ventas/proyecciones/', // siempre
   'src/app/dashboard/compras/proyecciones/', // siempre
   'src/app_mocks_backup/', // siempre
-  'src/app/dashboard/finanzas/resumen/', // hasta T22
 ];
 // R2: lista blanca temporal de '/ventas/ai-chat' dentro de src/app (vacía desde T15).
 const PERMITIDOS_AI_CHAT = [];

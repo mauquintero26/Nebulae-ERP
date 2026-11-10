@@ -1,11 +1,27 @@
 ﻿"use client";
-import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Target, Plus, RefreshCw, Megaphone, Users, DollarSign, TrendingUp, BarChart3, CheckCircle2, AlertCircle, X, Calendar, Globe, Mail, Phone, Tag, Send, Edit2, Trash2, Zap, PauseCircle, Play, ChevronRight, Filter, Search, Copy, ExternalLink } from 'lucide-react';
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Target, Plus, RefreshCw, Megaphone, CheckCircle2, Tag, Edit2, Trash2, PauseCircle, Play, Search, Copy } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
-import { SubNav, PageHeader, Toast, Modal, Button, StatCard } from '@/components/ui';
+import {
+  SubNav, PageHeader, Toast, Modal, Button, FranjaKpis, TarjetaKpi, useAvisos,
+} from '@/components/ui';
+import { AvisoFuente } from '@/components/ui/AvisoFuente';
+import { useRolActual } from '@/components/ui/useRolActual';
+import { BarraTabla, TablaEstandar, useEstadoTabla, useListadoCliente, usePreferenciasTabla } from '@/components/tabla';
+import type { ColumnaTabla } from '@/components/tabla';
 import { MKT_NAV } from '../mkt-nav';
-const fCOP = (v: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0);
-const fDate = (d: any) => d ? new Date(d).toLocaleDateString('es-CO', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
+import { accesoMarketing } from '@/lib/roles';
+import { avisoDeFuente } from '@/lib/avisos';
+import { datosDeRespuesta, lecturaLeadsCampana, tarjetasCampana } from '@/lib/kpis';
+import { fechaCorta } from '@/lib/fechas-colombia';
+import { diaDeNegocio } from '@/lib/listas-ventas';
+import { humanizarCodigo } from '@/lib/estados-pedido';
+import { formatoPesos } from '@/lib/pesos';
+import { accesoresDeOrden, estadoDelTotal } from '@/lib/tabla';
+// B4 T23B: el dinero con el formato del catálogo (formatoPesos: '$1.062.523', sin el espacio duro de Intl).
+const fCOP = (v: number) => formatoPesos(v || 0);
+// m11: la fecha de una campaña es un día de calendario (fechaCorta), no un instante que se corre a la víspera en Colombia.
+const fDate = (d: any) => d ? fechaCorta(diaDeNegocio(d)) : '-';
 
 const ESTADO_COLORS: Record<string, string> = {
   BORRADOR: 'bg-slate-100 text-slate-600',
@@ -17,8 +33,61 @@ const ESTADO_COLORS: Record<string, string> = {
 const CANALES_DISPONIBLES = ['Meta Ads','Instagram','TikTok','WhatsApp','Email','Google Ads','LinkedIn','Físico','YouTube','SMS'];
 const TIPOS_CAMPANA = ['OMNICANAL','EMAIL','META','TIKTOK','WHATSAPP','FISICA','GOOGLE'];
 
+/** Un lead de una campaña (GET /marketing/campanas/{id}/leads: campaign_leads). */
+type LeadCampana = {
+  id: number; lead_name: string | null; lead_email: string | null; source_channel: string | null; estado: string | null;
+  venta_atribuida_cop: number | null; crm_lead_id: number | null;
+};
+/** Lo último que llegó de los leads de UNA campaña: la vuelta con la que se pidió (la campaña y el turno), sus datos y su error. */
+type LeadsCargados = { vuelta: string; marca: string; datos: LeadCampana[] | null; error: unknown };
+
+/** B4 T23B: la tabla de leads de la campaña, estándar y en modo cliente (llegan completos), sin tablero (R11). El id es el mismo en
+ * useEstadoTabla, usePreferenciasTabla y TablaEstandar. */
+const ID_LEADS = 'marketing.leads';
+/** Lo que las celdas de la tabla le piden a la pantalla (las columnas son una constante de módulo: D40). */
+const AccionesLeads = createContext<{ sincronizar: (id: number) => void; sincronizando: number | null }>({ sincronizar: () => {}, sincronizando: null });
+/** Los estados de un lead de campaña; la etiqueta de la celda, de la búsqueda y del filtro es UNA: humanizarCodigo. */
+const ESTADOS_LEAD = ['NUEVO', 'CONTACTADO', 'CONVERTIDO', 'PERDIDO'];
+const OPCIONES_ESTADO_LEAD = ESTADOS_LEAD.map((valor) => ({ valor, etiqueta: humanizarCodigo(valor) }));
+
+function CeldaCrmLead({ l }: { l: LeadCampana }) {
+  const { sincronizar, sincronizando } = useContext(AccionesLeads);
+  if (l.crm_lead_id) return <span className="text-[10px] text-emerald-600 font-bold flex items-center gap-1"><CheckCircle2 size={10}/>CRM #{l.crm_lead_id}</span>;
+  return (
+    <button type="button" onClick={() => sincronizar(l.id)} disabled={sincronizando === l.id} title="Todavía no está en el CRM"
+      className="text-[10px] px-2 py-1 bg-indigo-50 text-indigo-700 rounded-lg font-bold hover:bg-indigo-100 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600">
+      Pasar al CRM
+    </button>
+  );
+}
+
+/** Las columnas (R26: a 1024 px con el menú abierto el panel de la campaña mide unos 430 px; Email y Canal salen ocultas, con «Ajustar tabla»). */
+const COLUMNAS_LEADS: ColumnaTabla<LeadCampana>[] = [
+  { id: 'nombre', titulo: 'Nombre', ancho: 120, anchoMin: 90, flexible: true, clave: true, ordenable: true, valorOrden: (l) => l.lead_name ?? '',
+    celda: (l) => <span className="font-semibold text-slate-800 text-xs">{l.lead_name || '-'}</span> },
+  { id: 'email', titulo: 'Email', ancho: 180, ordenable: true, ocultaPorDefecto: true, valorOrden: (l) => l.lead_email ?? '',
+    celda: (l) => <span className="text-xs text-slate-500">{l.lead_email || '-'}</span> },
+  { id: 'canal', titulo: 'Canal', ancho: 90, ordenable: true, ocultaPorDefecto: true, valorOrden: (l) => l.source_channel ?? '',
+    celda: (l) => <span className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded font-bold text-slate-600">{l.source_channel || '-'}</span> },
+  { id: 'estado', titulo: 'Estado', ancho: 100, ordenable: true, valorOrden: (l) => l.estado ?? '',
+    celda: (l) => <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${l.estado==='CONVERTIDO'?'bg-emerald-100 text-emerald-700':l.estado==='PERDIDO'?'bg-red-100 text-red-600':'bg-blue-100 text-blue-700'}`}>{humanizarCodigo(l.estado)}</span> },
+  { id: 'venta', titulo: 'Venta', ancho: 96, alinear: 'derecha', ordenable: true, valorOrden: (l) => Number(l.venta_atribuida_cop) || 0,
+    celda: (l) => <span className="text-xs font-bold text-emerald-600">{Number(l.venta_atribuida_cop) > 0 ? fCOP(Number(l.venta_atribuida_cop)) : '-'}</span> },
+  { id: 'crm', titulo: 'CRM', ancho: 104, celda: (l) => <CeldaCrmLead l={l} /> },
+];
+/** useListadoCliente (D40): sus accesores son una constante. */
+const ACCESORES_LEADS = {
+  busqueda: ['lead_name', 'lead_email', 'source_channel', (l: LeadCampana) => humanizarCodigo(l.estado)],
+  orden: accesoresDeOrden(COLUMNAS_LEADS),
+};
+
 export default function CampanasPage() {
+  // B4 T23B: el rol se lee después de montar y no se pide lo que no puede leer (accesoMarketing: todo /marketing es de ADMIN y ASESOR;
+  // borrar una campaña, solo de ADMIN).
+  const acceso = accesoMarketing(useRolActual());
+  const { confirmar } = useAvisos();
   const [campanas, setCampanas] = useState<any[]>([]);
+  const [errorCampanas, setErrorCampanas] = useState<unknown>(null);
   const [selected, setSelected] = useState<any>(null);
   const [activeTab, setActiveTab] = useState('resumen');
   const [loading, setLoading] = useState(true);
@@ -30,29 +99,57 @@ export default function CampanasPage() {
   const [form, setForm] = useState({ nombre:'', tipo:'OMNICANAL', estado:'BORRADOR', fecha_inicio:'', fecha_fin:'', presupuesto_cop:0, objetivo:'', canales:[] as string[], descripcion:'', codigo_descuento:'', descuento_pct:0 });
   const [editMode, setEditMode] = useState(false);
   // Leads tab
-  const [leads, setLeads] = useState<any[]>([]);
+  const [vueltaLeads, setVueltaLeads] = useState(0);
+  const [leadsCargados, setLeadsCargados] = useState<LeadsCargados | null>(null);
   const [showLeadForm, setShowLeadForm] = useState(false);
   const [leadForm, setLeadForm] = useState({ lead_name:'', lead_email:'', lead_phone:'', source_channel:'MANUAL', notas:'' });
   const [syncingLead, setSyncingLead] = useState<number|null>(null);
 
   const showToast = (msg: string, type='ok') => { setToast({msg,type}); setTimeout(()=>setToast(null),3500); };
   
+  const verCampanas = acceso.ver;
   const loadCampanas = useCallback(async () => {
+    if (!verCampanas) return;
     setLoading(true);
     try {
       const d = await apiFetch('/marketing/campanas?limit=200');
       setCampanas(d.data || []);
-      if (d.data?.length && !selected) setSelected(d.data[0]);
-    } catch { showToast('Error cargando campañas','error'); }
+      setErrorCampanas(null);
+      // Elegir la primera solo si no hay una elegida (sin depender de `selected`: no recarga la lista en cada clic).
+      if (d.data?.length) setSelected((s: any) => s ?? d.data[0]);
+    } catch (e) { setErrorCampanas(e); }
     setLoading(false);
-  }, [selected]);
-  
-  const loadLeads = useCallback(async (cid: number) => {
-    try { const d = await apiFetch(`/marketing/campanas/${cid}/leads`); setLeads(d.data || []); } catch {}
-  }, []);
-  
+  }, [verCampanas]);
+
+  // Los leads de la campaña elegida, para la pestaña Leads y para las Métricas (convertidos): uno por campaña y por turno. Lo que llegó
+  // de OTRA campaña no se ve (marca), y mientras se recarga la misma se conserva ('actualizando').
+  const claveLeads = `${selected?.id ?? ''}:${vueltaLeads}`;
+  const pideLeads = verCampanas && Boolean(selected?.id) && (activeTab === 'leads' || activeTab === 'metricas');
+  useEffect(() => {
+    if (!pideLeads) return;
+    const control = new AbortController();
+    const marca = String(selected.id);
+    apiFetch(`/marketing/campanas/${selected.id}/leads`, { signal: control.signal })
+      .then((d: unknown) => setLeadsCargados({ vuelta: claveLeads, marca, datos: datosDeRespuesta(d) as LeadCampana[], error: null }))
+      .catch((err: unknown) => { if (!control.signal.aborted) setLeadsCargados({ vuelta: claveLeads, marca, datos: null, error: err }); });
+    return () => control.abort();
+  }, [pideLeads, selected?.id, claveLeads]);
+  // La lectura es una función pura (lecturaLeadsCampana): lo de otra campaña no se ve y la recién elegida está 'cargando'.
+  const lectura = lecturaLeadsCampana(leadsCargados, claveLeads, String(selected?.id ?? ''), pideLeads);
+  const { leads, error: errorLeads } = lectura;
+  const avisoLeads = avisoDeFuente(errorLeads, 'No se pudieron cargar los leads de la campaña');
+  const recargarLeads = useCallback(() => setVueltaLeads((n) => n + 1), []);
+
+  // La tabla de leads (TablaEstandar «marketing.leads», modo cliente): un estado, las preferencias de columnas UNA vez y los accesores estables.
+  const [estadoTabla, despacharTabla, listoTabla] = useEstadoTabla(ID_LEADS);
+  const prefsLeads = usePreferenciasTabla(ID_LEADS, COLUMNAS_LEADS);
+  const anchoLeadsRef = useRef<number | null>(null);
+  const tablaLeads = useListadoCliente<LeadCampana>(leads, estadoTabla, ACCESORES_LEADS);
+  const cargandoTabla = !listoTabla || (tablaLeads.cargandoInicial && !errorLeads);
+  const elegirCampana = (c: any) => { setSelected(c); despacharTabla({ tipo: 'limpiarFiltros' }); };
+
   useEffect(() => { loadCampanas(); }, [loadCampanas]);
-  useEffect(() => { if (selected?.id && activeTab==='leads') loadLeads(selected.id); }, [selected, activeTab, loadLeads]);
+
 
   const saveCampana = async () => {
     try {
@@ -83,29 +180,40 @@ export default function CampanasPage() {
   };
   
   const deleteCampana = async (id:number) => {
-    if (!confirm('¿Eliminar esta campaña?')) return;
+    if (!(await confirmar({ titulo: 'Eliminar campaña', mensaje: '¿Eliminar esta campaña? Sus leads dejan de verse y no se puede deshacer.', textoConfirmar: 'Eliminar campaña', peligro: true }))) return;
     try { await apiFetch(`/marketing/campanas/${id}`, {method:'DELETE'}); showToast('Campaña eliminada'); loadCampanas(); if(selected?.id===id) setSelected(null); }
     catch(e:any) { showToast(e.message,'error'); }
   };
   
   const addLead = async () => {
     if (!selected) return;
-    try { await apiFetch(`/marketing/campanas/${selected.id}/leads`, {method:'POST', body:JSON.stringify(leadForm)}); showToast('Lead agregado'); setShowLeadForm(false); setLeadForm({lead_name:'',lead_email:'',lead_phone:'',source_channel:'MANUAL',notas:''}); loadLeads(selected.id); }
+    try { await apiFetch(`/marketing/campanas/${selected.id}/leads`, {method:'POST', body:JSON.stringify(leadForm)}); showToast('Lead agregado'); setShowLeadForm(false); setLeadForm({lead_name:'',lead_email:'',lead_phone:'',source_channel:'MANUAL',notas:''}); recargarLeads(); loadCampanas(); }
     catch(e:any) { showToast(e.message,'error'); }
   };
   
   const syncLeadToCRM = async (lead_id:number) => {
     setSyncingLead(lead_id);
-    try { const d = await apiFetch('/marketing/leads/crm-sync', {method:'POST', body:JSON.stringify({lead_id})}); showToast(`Lead sincronizado al CRM (ID: ${d.data.crm_lead_id})`); loadLeads(selected.id); }
+    try { const d = await apiFetch('/marketing/leads/crm-sync', {method:'POST', body:JSON.stringify({lead_id})}); showToast(`Lead sincronizado al CRM (ID: ${d.data.crm_lead_id})`); recargarLeads(); }
     catch(e:any) { showToast(e.message,'error'); }
     setSyncingLead(null);
   };
   
+  const tarjetasMetricas = tarjetasCampana(selected, leads);
+
   const filtered = useMemo(() => campanas.filter(c => {
     if (filtroEstado && c.estado !== filtroEstado) return false;
     if (search && !c.nombre.toLowerCase().includes(search.toLowerCase()) && !(c.numero||'').toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   }), [campanas, search, filtroEstado]);
+
+  if (acceso.listo && !acceso.ver) {
+    return (
+      <div className="w-full h-full bg-slate-50 flex flex-col overflow-hidden">
+        <SubNav label="Marketing" items={MKT_NAV} currentPath="/dashboard/marketing/campanas" color="emerald" hub={{ href: '/dashboard/marketing' }} />
+        <p role="status" className="m-6 rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600">Tu rol no ve las campañas de Marketing.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full h-full bg-slate-50 flex flex-col overflow-hidden">
@@ -139,21 +247,22 @@ export default function CampanasPage() {
             </div>
             <select value={filtroEstado} onChange={e=>setFiltroEstado(e.target.value)} className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-emerald-200 bg-white">
               <option value="">Todos los estados</option>
-              {Object.keys(ESTADO_COLORS).map(e=><option key={e}>{e}</option>)}
+              {Object.keys(ESTADO_COLORS).map(e=><option key={e} value={e}>{humanizarCodigo(e)}</option>)}
             </select>
           </div>
           {/* List */}
           <div className="flex-1 overflow-y-auto">
             {loading && <div className="text-center py-10 text-slate-400 text-sm">Cargando...</div>}
-            {!loading && filtered.length===0 && <div className="text-center py-10 text-slate-400 text-sm">Sin campañas</div>}
+            {Boolean(errorCampanas) && !loading && <div className="p-3">{(() => { const a = avisoDeFuente(errorCampanas, 'No se pudieron cargar las campañas'); return a ? <AvisoFuente aviso={a} onReintentar={loadCampanas} /> : null; })()}</div>}
+            {!loading && !errorCampanas && filtered.length===0 && <div className="text-center py-10 text-slate-400 text-sm">Sin campañas</div>}
             {filtered.map(c=>(
-              <div key={c.id} onClick={()=>setSelected(c)} className={`p-4 border-b border-slate-100 cursor-pointer hover:bg-emerald-50/30 transition-colors ${selected?.id===c.id?'bg-emerald-50 border-l-2 border-l-emerald-600':''}`}>
+              <div key={c.id} onClick={()=>elegirCampana(c)} className={`p-4 border-b border-slate-100 cursor-pointer hover:bg-emerald-50/30 transition-colors ${selected?.id===c.id?'bg-emerald-50 border-l-2 border-l-emerald-600':''}`}>
                 <div className="flex items-start justify-between mb-1.5">
                   <div>
                     <p className="font-black text-slate-800 text-sm leading-tight">{c.nombre}</p>
                     <p className="text-[10px] text-emerald-600 font-bold mt-0.5">{c.numero}</p>
                   </div>
-                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${ESTADO_COLORS[c.estado]||'bg-gray-100 text-gray-500'}`}>{c.estado}</span>
+                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${ESTADO_COLORS[c.estado]||'bg-gray-100 text-gray-500'}`}>{humanizarCodigo(c.estado)}</span>
                 </div>
                 <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                   {(c.canales||[]).slice(0,3).map((ch:string)=>(<span key={ch} className="text-[9px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded font-bold">{ch}</span>))}
@@ -176,7 +285,7 @@ export default function CampanasPage() {
               <div>
                 <div className="flex items-center gap-2 mb-0.5">
                   <h2 className="text-xl font-black text-slate-800">{selected.nombre}</h2>
-                  <span className={`text-xs font-black px-2 py-0.5 rounded-full ${ESTADO_COLORS[selected.estado]||''}`}>{selected.estado}</span>
+                  <span className={`text-xs font-black px-2 py-0.5 rounded-full ${ESTADO_COLORS[selected.estado]||''}`}>{humanizarCodigo(selected.estado)}</span>
                 </div>
                 <p className="text-xs text-slate-400">{selected.numero} · {(selected.canales||[]).join(', ') || 'Sin canales'}</p>
               </div>
@@ -193,7 +302,9 @@ export default function CampanasPage() {
                 <button onClick={()=>{setForm({nombre:selected.nombre,tipo:selected.tipo||'OMNICANAL',estado:selected.estado,fecha_inicio:selected.fecha_inicio?.split('T')[0]||'',fecha_fin:selected.fecha_fin?.split('T')[0]||'',presupuesto_cop:selected.presupuesto_cop||0,objetivo:selected.objetivo||'',canales:selected.canales||[],descripcion:selected.descripcion||'',codigo_descuento:selected.codigo_descuento||'',descuento_pct:selected.descuento_pct||0});setEditMode(true);setShowForm(true);}} className="flex items-center gap-1 px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-sm hover:bg-slate-50">
                   <Edit2 size={13}/>
                 </button>
-                <button onClick={()=>deleteCampana(selected.id)} className="p-2 bg-white border border-slate-200 rounded-xl hover:bg-red-50 text-red-500">
+                <button onClick={()=>deleteCampana(selected.id)} disabled={!acceso.eliminarCampana}
+                  title={acceso.eliminarCampana ? 'Eliminar campaña' : 'Solo la Administración elimina campañas'} aria-label="Eliminar campaña"
+                  className="p-2 bg-white border border-slate-200 rounded-xl hover:bg-red-50 text-red-500 disabled:opacity-40 disabled:hover:bg-white">
                   <Trash2 size={14}/>
                 </button>
               </div>
@@ -207,7 +318,7 @@ export default function CampanasPage() {
             </div>
             
             {/* Tab Content */}
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 overflow-y-auto p-6 pb-24">
               {/* RESUMEN TAB */}
               {activeTab==='resumen' && (
                 <div className="space-y-6">
@@ -241,7 +352,7 @@ export default function CampanasPage() {
               {activeTab==='leads' && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
-                    <p className="text-sm font-bold text-slate-500">{leads.length} leads en esta campaña</p>
+                    <p className="text-sm font-bold text-slate-500">{leads === null ? 'Leads de esta campaña' : `${leads.length} ${leads.length === 1 ? 'lead' : 'leads'} en esta campaña`}</p>
                     <button onClick={()=>setShowLeadForm(!showLeadForm)} className="flex items-center gap-1 px-4 py-2 bg-emerald-600 text-white rounded-xl font-bold text-sm hover:bg-emerald-700">
                       <Plus size={14}/> Agregar Lead
                     </button>
@@ -261,48 +372,41 @@ export default function CampanasPage() {
                       </div>
                     </div>
                   )}
-                  <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead><tr className="bg-slate-50 border-b border-slate-100">{['Nombre','Email','Canal','Estado','Venta','CRM','Acción'].map(h=><th key={h} className="text-left px-4 py-2.5 text-xs font-black text-slate-400 uppercase">{h}</th>)}</tr></thead>
-                      <tbody className="divide-y divide-slate-50">
-                        {leads.length===0 && <tr><td colSpan={7} className="text-center py-8 text-slate-400 text-sm">Sin leads en esta campaña</td></tr>}
-                        {leads.map((l:any)=>(
-                          <tr key={l.id} className="hover:bg-slate-50/80">
-                            <td className="px-4 py-3 font-semibold text-slate-800 text-xs">{l.lead_name||'-'}</td>
-                            <td className="px-4 py-3 text-xs text-slate-500">{l.lead_email||'-'}</td>
-                            <td className="px-4 py-3"><span className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded font-bold text-slate-600">{l.source_channel}</span></td>
-                            <td className="px-4 py-3"><span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${l.estado==='CONVERTIDO'?'bg-emerald-100 text-emerald-700':l.estado==='PERDIDO'?'bg-red-100 text-red-600':'bg-blue-100 text-blue-700'}`}>{l.estado}</span></td>
-                            <td className="px-4 py-3 text-xs font-bold text-emerald-600">{l.venta_atribuida_cop>0?fCOP(l.venta_atribuida_cop):'-'}</td>
-                            <td className="px-4 py-3">{l.crm_lead_id?<span className="text-[10px] text-emerald-600 font-bold flex items-center gap-1"><CheckCircle2 size={10}/>CRM #{l.crm_lead_id}</span>:<span className="text-[10px] text-slate-400">No sync</span>}</td>
-                            <td className="px-4 py-3">
-                              {!l.crm_lead_id && <button onClick={()=>syncLeadToCRM(l.id)} disabled={syncingLead===l.id} className="text-[10px] px-2 py-1 bg-indigo-50 text-indigo-700 rounded-lg font-bold hover:bg-indigo-100 disabled:opacity-50">Sync CRM</button>}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  <AccionesLeads.Provider value={{ sincronizar: syncLeadToCRM, sincronizando: syncingLead }}>
+                    <section aria-label="Leads de la campaña" className="flex min-w-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm">
+                      <BarraTabla estado={estadoTabla} onEstado={despacharTabla} placeholder="Buscar lead…" opcionesEstados={OPCIONES_ESTADO_LEAD}
+                        ajustes={{ columnas: COLUMNAS_LEADS, preferencias: prefsLeads, anchoRef: anchoLeadsRef }} color="emerald"
+                        total={tablaLeads.total}
+                        estadoTotal={estadoDelTotal({ total: tablaLeads.total, cargando: cargandoTabla, recargando: lectura.recargando, error: errorLeads })} />
+                      <TablaEstandar<LeadCampana> id={ID_LEADS} modo="cliente" columnas={COLUMNAS_LEADS} preferencias={prefsLeads} anchoRef={anchoLeadsRef}
+                        estado={estadoTabla} onEstado={despacharTabla} filas={tablaLeads.filas} total={tablaLeads.total}
+                        cargando={cargandoTabla} recargando={lectura.recargando}
+                        error={errorLeads} onReintentar={recargarLeads} etiqueta="Leads de la campaña"
+                        vacio={estadoTabla.q || estadoTabla.estados.length ? 'Ningún lead coincide con la búsqueda o el estado elegido.' : 'Sin leads en esta campaña'} />
+                    </section>
+                  </AccionesLeads.Provider>
                 </div>
               )}
-              
+
               {/* MÉTRICAS TAB */}
               {activeTab==='metricas' && (
                 <div className="space-y-5">
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <StatCard icon={Users} color="blue" label="Leads Totales" value={selected.leads_count||0} />
-                    <StatCard icon={CheckCircle2} color="emerald" label="Convertidos" value={leads.filter((l:any)=>l.estado==='CONVERTIDO').length} />
-                    <StatCard icon={DollarSign} color="purple" label="Ventas Atribuidas" value={fCOP(selected.ventas_cop||0)} />
-                    <StatCard icon={TrendingUp} color="amber" label="ROI" value={selected.presupuesto_cop>0?`+${(((selected.ventas_cop||0)/selected.presupuesto_cop)*100-100).toFixed(0)}%`:'N/A'} />
-                  </div>
+                  {avisoLeads && <AvisoFuente aviso={avisoLeads} onReintentar={recargarLeads} />}
+                  <FranjaKpis titulo="Indicadores de la campaña">
+                    <TarjetaKpi kpi="leads_capturados" valor={tarjetasMetricas.leads_capturados.valor} />
+                    <TarjetaKpi kpi="leads_convertidos" valor={tarjetasMetricas.leads_convertidos.valor} estado={lectura.estado} />
+                    <TarjetaKpi kpi="ventas_atribuidas" valor={tarjetasMetricas.ventas_atribuidas.valor} ayuda={tarjetasMetricas.ventas_atribuidas.ayuda} estado={lectura.estado} />
+                    <TarjetaKpi kpi="roi" formato="texto" valor={tarjetasMetricas.roi.texto} tono={tarjetasMetricas.roi.tono} ayuda={tarjetasMetricas.roi.ayuda ?? undefined} estado={lectura.estado} />
+                  </FranjaKpis>
                   {/* Presupuesto progress */}
                   {selected.presupuesto_cop>0 && (
                     <div className="bg-white rounded-2xl border border-slate-200 p-5">
                       <div className="flex justify-between mb-2">
                         <span className="text-sm font-bold text-slate-700">Progreso del Presupuesto</span>
-                        <span className="text-sm font-black text-emerald-600">{fCOP(selected.ventas_cop||0)} / {fCOP(selected.presupuesto_cop)}</span>
+                        <span className="text-sm font-black text-emerald-600">{lectura.estado === 'cargando' ? '—' : <>{fCOP(tarjetasMetricas.ventas_atribuidas.valor ?? 0)} / {fCOP(selected.presupuesto_cop)}</>}</span>
                       </div>
                       <div className="w-full bg-slate-100 rounded-full h-3">
-                        <div className="bg-emerald-500 h-3 rounded-full" style={{width:`${Math.min(100,((selected.ventas_cop||0)/selected.presupuesto_cop)*100)}%`}}/>
+                        {lectura.estado === 'cargando' ? <div className="h-3 w-full animate-pulse rounded-full bg-slate-200" aria-hidden="true" /> : <div className="bg-emerald-500 h-3 rounded-full" style={{width:`${Math.min(100, ((tarjetasMetricas.ventas_atribuidas.valor ?? 0) / selected.presupuesto_cop) * 100)}%`}}/>}
                       </div>
                     </div>
                   )}

@@ -1,44 +1,98 @@
 "use client";
 
-import { useState, useEffect, useCallback } from 'react';
-import { 
-  TrendingUp, AlertTriangle, Package, CheckCircle2, 
-  Clock, Truck, DollarSign, Users, Target, ArrowRight,
-  BrainCircuit, Sparkles, Activity, ShoppingCart, UserCheck,
-  Calendar, ChevronRight, BarChart3, Send, RefreshCw, Box,
-  Layers, Warehouse, ShieldAlert, ArrowUpRight
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  AlertTriangle, CheckCircle2, Truck, ChevronRight, ArrowRight,
+  BrainCircuit, Sparkles, Activity, ShoppingCart,
+  Calendar, BarChart3, Send, RefreshCw, Layers,
 } from 'lucide-react';
 import Link from 'next/link';
-import { apiFetch, API_URL } from '@/lib/api';
-import { cifrasVentasDashboard } from '@/lib/listas-ventas';
+import { apiFetch } from '@/lib/api';
+// B4 T22 (KPI-otros punto 1, FLUJO-ventas-pantallas E; R7, R12, RP104): las tarjetas leen los mismos endpoints que los Hubs
+// (/ventas/stats, /compras/stats e /inventory/stats), el embudo es PasosFlujo con /ventas/flujo y el selector es Semana,
+// 30 días o Mes. El Copilot (/chat/copilot/query) y las listas «Recientes» siguen como estaban.
+import { FranjaKpis, TarjetaKpi, useEstadoKpi } from '@/components/ui';
+import { PasosFlujo, useResumenFlujo } from '@/components/flujo';
+import { estadoDeFranja } from '@/lib/flujo';
+import { avisoEmbudoDashboard, pasosEmbudoDashboard } from '@/lib/flujo-ventas';
+import { infoEstadoPec } from '@/lib/estados-compras';
+import { infoEstadoPedido } from '@/lib/estados-pedido';
+import {
+  PERIODOS_DASHBOARD, RUTA_RADAR, TEXTO_PERIODO, datosDeRespuesta, etiquetaKpi, lecturaDeFuente, periodoDashboard, periodoVisto,
+  radarOperativo, tarjetasInventarioDashboard, tarjetasVitalesDashboard, textoAvisoFuente, textoRadar,
+} from '@/lib/kpis';
 
 function formatCOP(v: number | string | null | undefined) {
   const num = Number(v) || 0;
   return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(num);
 }
 
-export default function DashboardGeneral() {
-  const [timeRange, setTimeRange] = useState<'Hoy' | 'Semana' | 'Mes'>('Hoy');
-  const [loading, setLoading] = useState(true);
+/**
+ * Una fuente del Dashboard: GET `url` y su `data`. Cada fuente falla sola (las demás siguen). Mientras vuelve a pedirse
+ * (Actualizar, otro período) se CONSERVA lo último que llegó y `cargando` es true: el número queda en 'actualizando', nunca en
+ * 0 ni en la barra de la primera carga (lecturaDeFuente). Un error no deja datos viejos. `marca` es el período de los datos que
+ * se ven: el rótulo de la tarjeta sale de él, no del que se acaba de elegir.
+ */
+function useFuente<T>(url: string, marca: string | null = null) {
+  const [vuelta, setVuelta] = useState(0);
+  const clave = `${url}|${vuelta}`;
+  const [llego, setLlego] = useState<{ vuelta: string; datos: T | null; error: unknown; marca: string | null } | null>(null);
+  useEffect(() => {
+    const control = new AbortController();
+    // Una respuesta sin `data` es un error (datosDeRespuesta lanza y cae en el catch).
+    apiFetch(url, { signal: control.signal })
+      .then((r: unknown) => setLlego({ vuelta: clave, datos: datosDeRespuesta(r) as T, error: null, marca }))
+      .catch((err: unknown) => { if (!control.signal.aborted) setLlego({ vuelta: clave, datos: null, error: err, marca }); });
+    return () => control.abort();
+  }, [url, clave, marca]);
+  const recargar = useCallback(() => setVuelta((n) => n + 1), []);
+  return { ...lecturaDeFuente(llego, clave), recargar };
+}
 
-  // ─── MÉTRICAS REALES ───────────────────────────────────────────────────────
-  const [metrics, setMetrics] = useState({
-    totalVentas: 0,
-    ticketPromedio: 0,
-    cotizacionesVivas: 0,
-    pedidosAprobados: 0,
-    esperandoMercancia: 0,
-    pedidosDespachados: 0,
-    totalClientes: 0,
-    saldoPendienteCartera: 0,
-    // Flujo de Inventario
-    stockFisico: 0,
-    stockComprometido: 0,
-    stockDisponible: 0,
-    stockEnTransito: 0,
-    pecsActivos: [] as any[],
-    pedidosRecientes: [] as any[],
-  });
+/** Bajo una franja: si su fuente falló, lo dice con el detalle del servidor y «Reintentar» (nunca un 0 ni un vacío falso). */
+function AvisoFuente({ error, texto, onReintentar }: { error: unknown; texto: string; onReintentar: () => void }) {
+  if (!error) return null;
+  return (
+    <p role="alert" className="flex flex-wrap items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
+      {textoAvisoFuente(error, texto)}
+      <button type="button" onClick={onReintentar}
+        className="rounded font-bold underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700">
+        Reintentar
+      </button>
+    </p>
+  );
+}
+
+/** El `data` de cada endpoint (los nombres son los del servidor; las funciones de lib/kpis.js leen solo lo que necesitan). */
+type DatosEndpoint = Record<string, unknown>;
+
+export default function DashboardGeneral() {
+  const [periodo, setPeriodo] = useState<'7d' | '30d' | 'mes'>(periodoDashboard(null));
+  // Las «Recientes» (3 pedidos de compra y 3 de venta): siguen con sus llamadas de siempre.
+  const [loading, setLoading] = useState(true);
+  const [recientes, setRecientes] = useState({ pecsActivos: [] as any[], pedidosRecientes: [] as any[] });
+
+  // ─── LAS FUENTES DE LAS TARJETAS (los mismos endpoints que los Hubs, R7) ──────────────────────────────────────────
+  const ventas = useFuente<DatosEndpoint>(`/ventas/stats?periodo=${periodo}`, periodo);
+  const compras = useFuente<DatosEndpoint>(`/compras/stats?periodo=${periodo}`, periodo);
+  const inventario = useFuente<DatosEndpoint>('/inventory/stats');
+  const clientes = useFuente<unknown[]>('/crm/customers');
+  const flujo = useResumenFlujo('/ventas/flujo', 0);
+  const estadoVentas = useEstadoKpi(ventas.cargando, ventas.error);
+  const estadoInventario = useEstadoKpi(inventario.cargando, inventario.error);
+  const estadoClientes = useEstadoKpi(clientes.cargando, clientes.error);
+  const vitales = tarjetasVitalesDashboard(ventas.datos, Array.isArray(clientes.datos) ? clientes.datos.length : null);
+  const existencias = tarjetasInventarioDashboard(inventario.datos, compras.datos);
+  const radar = radarOperativo(ventas.datos);
+  // m3 y m11: el rótulo y el «vs …» son los del período de los DATOS que se ven (el número viejo conserva su rótulo hasta que llega el nuevo).
+  const periodoDatos = periodoVisto(ventas.marca, periodo);
+  const textoPeriodo = TEXTO_PERIODO[periodoDatos].comparado;
+  // El embudo: la caja con error o recargando dice «—» o se atenúa como en la franja del Hub (estadoDeFranja).
+  const [huboErrorEmbudo, setHuboErrorEmbudo] = useState(false);
+  const franjaEmbudo = estadoDeFranja({ cargando: flujo.cargando, error: flujo.error, huboError: huboErrorEmbudo });
+  if (franjaEmbudo.conError !== huboErrorEmbudo) setHuboErrorEmbudo(franjaEmbudo.conError);
+  const avisoEmbudo = avisoEmbudoDashboard({ cargando: flujo.cargando, error: flujo.error, huboError: huboErrorEmbudo });
+  const pasosEmbudo = useMemo(() => pasosEmbudoDashboard(flujo.datos), [flujo.datos]);
 
   // ─── COPILOTO IA ───────────────────────────────────────────────────────────
   const [aiQuestion, setAiQuestion] = useState('');
@@ -49,82 +103,41 @@ export default function DashboardGeneral() {
     timestamp: string;
   } | null>(null);
 
-  // ─── CARGA DE DATOS REALES ─────────────────────────────────────────────────
-  const loadDashboardData = useCallback(async () => {
+  // ─── LAS «RECIENTES» (sin cambios: 3 pedidos de compra y 3 de venta) ───────────────────────────────────────────────
+  const loadRecientes = useCallback(async () => {
     setLoading(true);
     try {
-      // 1. Cargar pedidos de venta
       const salesRes = await apiFetch('/ventas/pedidos').catch(() => []);
       const salesList = Array.isArray(salesRes) ? salesRes : (salesRes?.data || []);
-
-      // 2. Cargar compras / PECs
       const purchasesRes = await apiFetch('/compras/pedidos').catch(() => []);
       const purchasesList = Array.isArray(purchasesRes) ? purchasesRes : (purchasesRes?.data || []);
-
-      // 3. Cargar resumen de stock / inventario
-      const invRes = await apiFetch('/inventory/stock-summary').catch(() => null);
-      const invData = invRes?.data || [];
-
-      // 4. Clientes
-      const custRes = await apiFetch('/crm/customers').catch(() => []);
-      const custList = Array.isArray(custRes) ? custRes : (custRes?.data || []);
-
-      // Cálculos de Ventas. A4 (H47): ventas, ticket y cartera con el resumen del API de pedidos (todos los
-      // pedidos), sin cancelados ni devueltos por completo; la cartera es el saldo de cada pedido.
-      const cifrasVentas = cifrasVentasDashboard(salesRes);
-
-      const aprobados = salesList.filter((s: any) => ['CONFIRMADA', 'APROBADA', 'PAGADA', 'EN_PROCESO'].includes(s.estado)).length;
-      const esperando = salesList.filter((s: any) => ['PENDIENTE_COMPRA', 'ESPERANDO_MERCANCIA', 'EN_TRANSITO'].includes(s.estado)).length;
-      const despachados = salesList.filter((s: any) => ['ENTREGADO', 'DESPACHADO'].includes(s.estado)).length;
-      const cotizaciones = salesList.filter((s: any) => ['COTIZADA', 'BORRADOR', 'DRAFT'].includes(s.estado)).length;
-
-      // Cálculos de Inventario
-      let fisico = 0;
-      let comprometido = 0;
-      let disponible = 0;
-      let transito = 0;
-
-      if (Array.isArray(invData) && invData.length > 0) {
-        invData.forEach((item: any) => {
-          fisico += Number(item.stock_vendible_fisico || item.quantity_real || 0);
-          comprometido += Number(item.stock_reservado || item.quantity_reserved || 0);
-          transito += Number(item.stock_en_transito || 0);
-        });
-        disponible = Math.max(0, fisico - comprometido);
-      } else {
-        // Fallback heurístico inteligente si no hay stock agregado en tabla intermedia
-        fisico = salesList.length * 4 + 24;
-        comprometido = esperando * 2 + 5;
-        disponible = Math.max(0, fisico - comprometido);
-        transito = purchasesList.length * 10 + 15;
-      }
-
-      setMetrics({
-        totalVentas: cifrasVentas.ventas,
-        ticketPromedio: cifrasVentas.ticket,
-        cotizacionesVivas: cotizaciones,
-        pedidosAprobados: aprobados,
-        esperandoMercancia: esperando,
-        pedidosDespachados: despachados,
-        totalClientes: custList.length,
-        saldoPendienteCartera: cifrasVentas.cartera,
-        stockFisico: fisico,
-        stockComprometido: comprometido,
-        stockDisponible: disponible,
-        stockEnTransito: transito,
-        pecsActivos: purchasesList.slice(0, 3),
-        pedidosRecientes: salesList.slice(0, 3),
-      });
+      setRecientes({ pecsActivos: purchasesList.slice(0, 3), pedidosRecientes: salesList.slice(0, 3) });
     } catch (e) {
-      console.error('Error cargando métricas dashboard', e);
+      console.error('Error cargando los pedidos recientes del dashboard', e);
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    loadDashboardData();
-  }, [loadDashboardData]);
+    loadRecientes();
+  }, [loadRecientes]);
+
+  // «Actualizar»: las recientes y todas las fuentes de las tarjetas (ninguna vacía lo que se ve mientras llega la nueva).
+  const { recargar: recargarVentas } = ventas;
+  const { recargar: recargarCompras } = compras;
+  const { recargar: recargarInventario } = inventario;
+  const { recargar: recargarClientes } = clientes;
+  const { recargar: recargarFlujo } = flujo;
+  const loadDashboardData = useCallback(() => {
+    loadRecientes();
+    recargarVentas();
+    recargarCompras();
+    recargarInventario();
+    recargarClientes();
+    recargarFlujo();
+  }, [loadRecientes, recargarVentas, recargarCompras, recargarInventario, recargarClientes, recargarFlujo]);
+  const recargando = loading || ventas.cargando || compras.cargando || inventario.cargando || clientes.cargando || flujo.cargando;
 
   // ─── CONSULTA AL COPILOTO IA ───────────────────────────────────────────────
   const handleAskAI = async (customPrompt?: string) => {
@@ -164,10 +177,12 @@ export default function DashboardGeneral() {
   }).format(new Date());
 
   return (
-    <div className="w-full bg-slate-50 min-h-screen pb-16 animate-in fade-in custom-scrollbar">
+    <div className="w-full shrink-0 bg-slate-50 min-h-screen pb-24 animate-in fade-in custom-scrollbar">
       
       {/* 1. Radar de Alertas Operativas */}
-      {metrics.esperandoMercancia > 0 ? (
+      {/* El radar cuenta los pedidos pendientes de compra de /ventas/stats (el mismo número de la pestaña del Hub de Ventas), no
+          los de la lista de «Recientes». Sin el dato (cargando o con error) no dice ni «alerta» ni «todo bien». */}
+      {radar?.tipo === 'alerta' ? (
         <div className="bg-amber-600 text-white px-6 py-2.5 flex items-center justify-between shadow-sm shrink-0 relative z-20">
           <div className="flex items-center gap-3">
             <span className="flex h-2.5 w-2.5 relative">
@@ -176,19 +191,29 @@ export default function DashboardGeneral() {
             </span>
             <AlertTriangle size={16} className="text-amber-200" />
             <p className="text-xs font-bold tracking-wide">
-              RADAR OPERATIVO: <span className="font-normal opacity-95">Hay {metrics.esperandoMercancia} pedidos de venta en preventa esperando arribo o recepción física de mercancía.</span>
+              RADAR OPERATIVO: <span className="font-normal opacity-95">{textoRadar(radar.n)}</span>
             </p>
           </div>
-          <Link href="/dashboard/compras/pedidos" className="text-xs font-bold underline hover:text-amber-100 flex items-center gap-1">
-            Ver Tránsito Compras <ChevronRight size={13} />
+          <Link href={RUTA_RADAR} className="text-xs font-bold underline hover:text-amber-100 flex items-center gap-1">
+            Ver pedidos <ChevronRight size={13} />
           </Link>
         </div>
       ) : (
-        <div className="bg-slate-900 text-white px-6 py-2 flex items-center justify-between shadow-sm shrink-0 relative z-20">
+        <div className="bg-slate-900 text-white px-6 py-2.5 flex items-center justify-between shadow-sm shrink-0 relative z-20">
           <div className="flex items-center gap-2.5">
-            <CheckCircle2 size={14} className="text-emerald-400" />
-            <p className="text-xs font-medium text-slate-300">
-              SISTEMA OPERATIVO: Flujo de inventario y pedidos sincronizados sin bloqueos de despacho.
+            {radar?.tipo === 'ok' ? <CheckCircle2 size={14} className="text-emerald-400" /> : <AlertTriangle size={14} className="text-slate-400" />}
+            <p className="text-xs font-medium text-slate-300" role={ventas.error ? 'alert' : undefined}>
+              {radar?.tipo === 'ok'
+                ? 'SISTEMA OPERATIVO: Flujo de inventario y pedidos sincronizados sin bloqueos de despacho.'
+                : ventas.error
+                  ? 'RADAR OPERATIVO: no se pudo calcular el estado de los pedidos.'
+                  : 'RADAR OPERATIVO: calculando…'}
+              {ventas.error ? (
+                <button type="button" onClick={ventas.recargar}
+                  className="ml-2 rounded font-bold underline hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
+                  Reintentar
+                </button>
+              ) : null}
             </p>
           </div>
           <span className="text-[11px] font-mono text-slate-400 font-semibold">Nebulae Hub 2026</span>
@@ -207,23 +232,28 @@ export default function DashboardGeneral() {
               <Calendar size={14} /> {currentDateStr}
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          {/* flex-wrap: con el menú abierto a 768 px, Actualizar y el selector bajan de renglón en lugar de correr la página. */}
+          <div className="flex flex-wrap items-center gap-3">
             <button
               onClick={loadDashboardData}
               className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 px-3.5 py-2 rounded-xl text-xs font-bold shadow-sm transition-all flex items-center gap-1.5"
             >
-              <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Actualizar
+              <RefreshCw size={13} className={recargando ? 'animate-spin' : ''} /> Actualizar
             </button>
-            <div className="flex bg-white border border-slate-200 rounded-xl p-1 shadow-sm">
-              {(['Hoy', 'Semana', 'Mes'] as const).map((t) => (
-                <button 
-                  key={t}
-                  onClick={() => setTimeRange(t)}
-                  className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                    timeRange === t ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
+            {/* R7: Semana ('7d'), 30 días ('30d') y Mes ('mes'); el período se manda a /ventas/stats y a /compras/stats y cambia la
+                comparación (el % de las tarjetas de dinero). Se quitó «Hoy», que no hacía nada. */}
+            <div role="group" aria-label="Período de las tarjetas" className="flex bg-white border border-slate-200 rounded-xl p-1 shadow-sm">
+              {PERIODOS_DASHBOARD.map((p) => (
+                <button
+                  key={p.clave}
+                  type="button"
+                  aria-pressed={periodo === p.clave}
+                  onClick={() => setPeriodo(p.clave)}
+                  className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700 ${
+                    periodo === p.clave ? 'bg-slate-800 text-white shadow' : 'text-slate-600 hover:text-slate-800 hover:bg-slate-50'
                   }`}
                 >
-                  {t}
+                  {p.etiqueta}
                 </button>
               ))}
             </div>
@@ -330,179 +360,59 @@ export default function DashboardGeneral() {
             </Link>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* 1. Físico en Bodega */}
-            <div className="bg-gradient-to-b from-slate-50 to-white rounded-2xl p-5 border border-slate-200 relative group hover:border-purple-300 transition-all">
-              <div className="flex items-center justify-between mb-3">
-                <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center font-bold">
-                  <Warehouse size={20} />
-                </div>
-                <span className="text-[10px] font-black uppercase tracking-wider text-purple-700 bg-purple-50 px-2 py-0.5 rounded-full border border-purple-200">
-                  Paso 1
-                </span>
-              </div>
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Físico en Bodega</p>
-              <h3 className="text-2xl font-black text-slate-800">{metrics.stockFisico.toLocaleString()} <span className="text-xs font-medium text-slate-400">ud</span></h3>
-              <p className="text-[11px] text-slate-500 mt-2 leading-tight">
-                Existencias reales verificadas en almacenes principales.
-              </p>
-              <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center text-[11px]">
-                <span className="text-slate-400 font-medium">Capacidad</span>
-                <span className="font-bold text-purple-600">Almacén Central</span>
-              </div>
-            </div>
-
-            {/* 2. Comprometido en Preventa */}
-            <div className="bg-gradient-to-b from-amber-50/40 to-white rounded-2xl p-5 border border-amber-200 relative group hover:border-amber-400 transition-all">
-              <div className="flex items-center justify-between mb-3">
-                <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center font-bold">
-                  <Clock size={20} />
-                </div>
-                <span className="text-[10px] font-black uppercase tracking-wider text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
-                  Paso 2
-                </span>
-              </div>
-              <p className="text-xs font-bold text-amber-700 uppercase tracking-wider mb-1">Comprometido (Anticipos)</p>
-              <h3 className="text-2xl font-black text-slate-800">{metrics.stockComprometido.toLocaleString()} <span className="text-xs font-medium text-slate-400">ud</span></h3>
-              <p className="text-[11px] text-slate-500 mt-2 leading-tight">
-                Reservado con anticipo confirmado para pedidos de venta activos.
-              </p>
-              <div className="mt-4 pt-3 border-t border-amber-100 flex justify-between items-center text-[11px]">
-                <span className="text-slate-400 font-medium">Preventas</span>
-                <span className="font-bold text-amber-700">{metrics.esperandoMercancia} pedidos en espera</span>
-              </div>
-            </div>
-
-            {/* 3. Venta Inmediata (Libre) */}
-            <div className="bg-gradient-to-b from-emerald-50/40 to-white rounded-2xl p-5 border border-emerald-200 relative group hover:border-emerald-400 transition-all">
-              <div className="flex items-center justify-between mb-3">
-                <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
-                  <CheckCircle2 size={20} />
-                </div>
-                <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                  Paso 3
-                </span>
-              </div>
-              <p className="text-xs font-bold text-emerald-700 uppercase tracking-wider mb-1">Disponible Venta Inmediata</p>
-              <h3 className="text-2xl font-black text-emerald-600">{metrics.stockDisponible.toLocaleString()} <span className="text-xs font-medium text-slate-400">ud</span></h3>
-              <p className="text-[11px] text-slate-500 mt-2 leading-tight">
-                Libre de compromiso para facturación y despacho el mismo día.
-              </p>
-              <div className="mt-4 pt-3 border-t border-emerald-100 flex justify-between items-center text-[11px]">
-                <span className="text-slate-400 font-medium">Margen Libre</span>
-                <span className="font-bold text-emerald-600">100% Despachable</span>
-              </div>
-            </div>
-
-            {/* 4. En Tránsito Internacional */}
-            <div className="bg-gradient-to-b from-blue-50/40 to-white rounded-2xl p-5 border border-blue-200 relative group hover:border-blue-400 transition-all">
-              <div className="flex items-center justify-between mb-3">
-                <div className="w-10 h-10 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold">
-                  <Truck size={20} />
-                </div>
-                <span className="text-[10px] font-black uppercase tracking-wider text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
-                  Paso 4
-                </span>
-              </div>
-              <p className="text-xs font-bold text-blue-700 uppercase tracking-wider mb-1">En Tránsito (Compras PEC)</p>
-              <h3 className="text-2xl font-black text-slate-800">{metrics.stockEnTransito.toLocaleString()} <span className="text-xs font-medium text-slate-400">ud</span></h3>
-              <p className="text-[11px] text-slate-500 mt-2 leading-tight">
-                Mercancía en aduana o en ruta marítima/aérea hacia bodega.
-              </p>
-              <div className="mt-4 pt-3 border-t border-blue-100 flex justify-between items-center text-[11px]">
-                <span className="text-slate-400 font-medium">Órdenes PEC</span>
-                <span className="font-bold text-blue-600">{metrics.pecsActivos.length} activas</span>
-              </div>
-            </div>
-          </div>
+          <FranjaKpis estado={estadoInventario} titulo="Flujo del inventario">
+            <TarjetaKpi kpi="inv_fisico" valor={existencias.fisico.valor} />
+            <TarjetaKpi kpi="inv_reservado" valor={existencias.reservado.valor} />
+            <TarjetaKpi kpi="inv_disponible" valor={existencias.disponible.valor} />
+            <TarjetaKpi kpi="inv_en_transito" valor={existencias.en_transito.valor} ayuda={existencias.en_transito.ayuda ?? undefined} />
+          </FranjaKpis>
+          <AvisoFuente error={inventario.error} texto="No se pudieron cargar las existencias" onReintentar={inventario.recargar} />
+          {!inventario.error && compras.error ? (
+            <AvisoFuente error={compras.error} texto="No se pudieron cargar los pedidos de compra activos" onReintentar={compras.recargar} />
+          ) : null}
         </div>
 
         {/* 4. Los 4 KPIs Vitales del Negocio */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm relative overflow-hidden group hover:border-emerald-300 hover:shadow-md transition-all">
-            <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 mb-4 group-hover:scale-105 transition-transform">
-              <DollarSign size={24} />
-            </div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Ingresos Totales Registrados</p>
-            <h2 className="text-2xl font-black text-slate-800">{formatCOP(metrics.totalVentas)}</h2>
-            <p className="text-xs font-bold text-emerald-600 mt-2 flex items-center gap-1">
-              <TrendingUp size={14}/> Pedidos de Venta en el Hub
-            </p>
-          </div>
-
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm relative overflow-hidden group hover:border-blue-300 hover:shadow-md transition-all">
-            <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 mb-4 group-hover:scale-105 transition-transform">
-              <ShoppingCart size={24} />
-            </div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Ticket Promedio</p>
-            <h2 className="text-2xl font-black text-slate-800">{formatCOP(metrics.ticketPromedio)}</h2>
-            <p className="text-xs font-bold text-blue-600 mt-2 flex items-center gap-1">
-              Por orden consolidada
-            </p>
-          </div>
-
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm relative overflow-hidden group hover:border-rose-300 hover:shadow-md transition-all">
-            <div className="w-12 h-12 rounded-xl bg-rose-50 flex items-center justify-center text-rose-600 mb-4 group-hover:scale-105 transition-transform">
-              <AlertTriangle size={24} />
-            </div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Saldo Pendiente por Cobrar</p>
-            <h2 className="text-2xl font-black text-rose-700">{formatCOP(metrics.saldoPendienteCartera)}</h2>
-            <p className="text-xs font-bold text-rose-600 mt-2 flex items-center gap-1">
-              Cobro previo a entrega
-            </p>
-          </div>
-
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm relative overflow-hidden group hover:border-indigo-300 hover:shadow-md transition-all">
-            <div className="w-12 h-12 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600 mb-4 group-hover:scale-105 transition-transform">
-              <Users size={24} />
-            </div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Clientes en Base de Datos</p>
-            <h2 className="text-2xl font-black text-slate-800">{metrics.totalClientes}</h2>
-            <p className="text-xs font-bold text-indigo-600 mt-2 flex items-center gap-1">
-              <UserCheck size={14}/> Ficha 360 y CRM Activos
-            </p>
-          </div>
+        <div className="space-y-3">
+          <FranjaKpis estado={estadoVentas} titulo="Indicadores vitales del negocio">
+            <TarjetaKpi kpi="vendido_periodo" etiqueta={etiquetaKpi('vendido_periodo', periodoDatos)} textoPeriodo={textoPeriodo}
+              valor={vitales.vendido.valor} variacion={vitales.vendido.variacion} />
+            <TarjetaKpi kpi="ticket_promedio" etiqueta={etiquetaKpi('ticket_promedio', periodoDatos)} textoPeriodo={textoPeriodo}
+              valor={vitales.ticket.valor} variacion={vitales.ticket.variacion} />
+            <TarjetaKpi kpi="pven_saldo_por_cobrar" valor={vitales.saldo.valor}
+              variacion={{ actual: vitales.saldo.valor, anterior: null, es_foto: true }} />
+            <TarjetaKpi kpi="clientes_total" estado={estadoClientes} valor={vitales.clientes.valor} />
+          </FranjaKpis>
+          <AvisoFuente error={ventas.error} texto="No se pudieron cargar las cifras de ventas" onReintentar={ventas.recargar} />
+          <AvisoFuente error={clientes.error} texto="No se pudieron contar los clientes" onReintentar={clientes.recargar} />
         </div>
 
         {/* 5. Embudo B2B & Radar Operativo */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           
-          {/* Embudo de Pedidos */}
-          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col">
+          {/* Embudo de Pedidos: PasosFlujo con /ventas/flujo (los mismos números de la franja del Hub); cada caja abre el Hub
+              ya filtrado por ese paso (FLUJO-ventas-pantallas E). */}
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col min-w-0">
             <div className="p-5 border-b border-slate-100 flex justify-between items-center">
               <h3 className="font-black text-slate-800 flex items-center gap-2">
                 <BarChart3 className="text-purple-600" size={18} /> Embudo Operativo de Ventas
               </h3>
-              <Link href="/dashboard/ventas/pedidos" className="text-xs font-bold text-purple-600 hover:underline flex items-center">
+              <Link href="/dashboard/ventas" className="text-xs font-bold text-purple-700 hover:underline flex items-center">
                 Ver todos <ChevronRight size={14}/>
               </Link>
             </div>
-            <div className="p-5 flex-1 flex flex-col gap-3">
-              <div className="bg-slate-50 rounded-xl p-3 flex justify-between items-center border border-slate-100">
-                <span className="text-sm font-bold text-slate-600">1. Cotizaciones Activas</span>
-                <span className="bg-indigo-100 text-indigo-800 font-black text-sm px-3 py-1 rounded-lg">
-                  {metrics.cotizacionesVivas}
-                </span>
-              </div>
-              <div className="bg-slate-50 rounded-xl p-3 flex justify-between items-center border border-slate-100 ml-4">
-                <span className="text-sm font-bold text-slate-600">2. Aprobadas / Con Anticipo</span>
-                <span className="bg-emerald-100 text-emerald-800 font-black text-sm px-3 py-1 rounded-lg">
-                  {metrics.pedidosAprobados}
-                </span>
-              </div>
-              <div className="bg-slate-50 rounded-xl p-3 flex justify-between items-center border border-amber-200 ml-8 relative overflow-hidden">
-                <div className="absolute left-0 top-0 bottom-0 w-1 bg-amber-400"></div>
-                <span className="text-sm font-bold text-amber-700">3. Esperando Mercancía</span>
-                <span className="bg-amber-100 text-amber-800 font-black text-sm px-3 py-1 rounded-lg">
-                  {metrics.esperandoMercancia}
-                </span>
-              </div>
-              <div className="bg-slate-50 rounded-xl p-3 flex justify-between items-center border border-slate-100 ml-12">
-                <span className="text-sm font-bold text-slate-600">4. Despachadas / Entregadas</span>
-                <span className="bg-purple-100 text-purple-800 font-black text-sm px-3 py-1 rounded-lg">
-                  {metrics.pedidosDespachados}
-                </span>
-              </div>
+            <div className="p-5 flex-1 flex flex-col gap-3 min-w-0">
+              {avisoEmbudo.visible && (
+                <div role="alert" className="flex flex-wrap items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
+                  {avisoEmbudo.texto}
+                  <button type="button" onClick={() => { if (avisoEmbudo.puedeReintentar) flujo.recargar(); }} aria-disabled={avisoEmbudo.reintentando || undefined}
+                    className="rounded font-bold underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700">
+                    {avisoEmbudo.boton}
+                  </button>
+                </div>
+              )}
+              <PasosFlujo variante="banner" orientacion="vertical" etiqueta="Embudo operativo de ventas"
+                pasos={pasosEmbudo} estadoConteos={franjaEmbudo.estadoConteos} />
             </div>
           </div>
 
@@ -517,17 +427,17 @@ export default function DashboardGeneral() {
               </Link>
             </div>
             <div className="p-5 flex-1 flex flex-col justify-between space-y-3">
-              {metrics.pecsActivos.length === 0 ? (
+              {recientes.pecsActivos.length === 0 ? (
                 <p className="text-xs text-slate-400 text-center py-6">Sin pedidos de compra recientes</p>
               ) : (
-                metrics.pecsActivos.map((pec: any) => (
+                recientes.pecsActivos.map((pec: any) => (
                   <div key={pec.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between">
                     <div>
                       <p className="font-bold text-xs text-slate-800">{pec.numero}</p>
                       <p className="text-[10px] text-slate-400">Total: {formatCOP(pec.total_cop)}</p>
                     </div>
                     <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-teal-100 text-teal-800">
-                      {pec.estado}
+                      {infoEstadoPec(pec.estado).label}
                     </span>
                   </div>
                 ))
@@ -547,15 +457,15 @@ export default function DashboardGeneral() {
               <h3 className="font-black text-slate-800 flex items-center gap-2">
                 <ShoppingCart className="text-indigo-600" size={18} /> Pedidos de Venta Recientes
               </h3>
-              <Link href="/dashboard/ventas/pedidos" className="text-xs font-bold text-indigo-600 hover:underline flex items-center">
+              <Link href="/dashboard/ventas/venta" className="text-xs font-bold text-indigo-600 hover:underline flex items-center">
                 Ver todos <ChevronRight size={14}/>
               </Link>
             </div>
             <div className="p-5 flex-1 flex flex-col justify-between space-y-3">
-              {metrics.pedidosRecientes.length === 0 ? (
+              {recientes.pedidosRecientes.length === 0 ? (
                 <p className="text-xs text-slate-400 text-center py-6">Sin pedidos de venta recientes</p>
               ) : (
-                metrics.pedidosRecientes.map((ven: any) => (
+                recientes.pedidosRecientes.map((ven: any) => (
                   <div key={ven.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between">
                     <div>
                       <p className="font-bold text-xs text-slate-800">{ven.numero}</p>
@@ -563,7 +473,7 @@ export default function DashboardGeneral() {
                     </div>
                     <div className="text-right">
                       <p className="text-xs font-black text-slate-800">{formatCOP(ven.total_cop)}</p>
-                      <span className="text-[9px] font-bold text-indigo-600">{ven.estado}</span>
+                      <span className="text-[9px] font-bold text-indigo-600">{infoEstadoPedido(ven.estado).label}</span>
                     </div>
                   </div>
                 ))

@@ -226,4 +226,15 @@ console.log('--- B4 T2 TEST 11: congelar está exportado y congela todos los niv
   assert.ok(Object.hasOwn(estadosPedido, 'ESTADOS_PEDIDO_SIN_DINERO'));
 }
 
+// B4 T23B r1 (m33, H13): la etiqueta y las clases de un estado de pedido para una pastilla (la fuente es infoEstadoPedido).
+{
+  const { clasesDeEstadoPedido } = estadosPedido;
+  assert.deepEqual(clasesDeEstadoPedido('FACTURADO'), { etiqueta: 'Facturado', clases: 'bg-green-100 text-green-700 border-green-200' });
+  assert.deepEqual(clasesDeEstadoPedido('PENDIENTE_COMPRA'), { etiqueta: 'Pendiente de compra', clases: 'bg-orange-100 text-orange-700 border-orange-200' });
+  // Un estado que no existe sale humanizado y en gris, nunca el código crudo ni EN_BODEGA/DISPONIBLE_ENTREGA con colores propios.
+  assert.deepEqual(clasesDeEstadoPedido('EN_BODEGA'), { etiqueta: 'En bodega', clases: 'bg-gray-100 text-gray-700 border-gray-200' });
+  assert.equal(clasesDeEstadoPedido('COMPLETADO').etiqueta, 'Completado');
+  assert.equal(clasesDeEstadoPedido(null).etiqueta, '');
+}
+
 console.log('\nOK: test_estados_pedido.mjs');
