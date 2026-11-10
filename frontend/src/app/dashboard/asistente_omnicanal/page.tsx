@@ -86,7 +86,7 @@ export default function AsistenteOmnicanal() {
   // en curso y Ticket promedio, con formatoPesos).
   const ficha = fichaRevenueAsistente(contextData?.revenue);
   // Qué muestra la columna (función pura): con un error de la carga no sale «Sin cliente seleccionado» debajo del aviso.
-  const vista = vistaContexto(loadingContext, errorContexto?.error, contextData);
+  const vista = vistaContexto(loadingContext, errorContexto?.error, contextData, acceso.listo && !acceso.contexto);
   const avisoContexto = errorContexto ? avisoDeFuente(errorContexto.error, 'No se pudo cargar el perfil del cliente') : null;
 
   // Asesor por defecto = usuario logueado (mismo origen de dato que usa
@@ -496,8 +496,9 @@ export default function AsistenteOmnicanal() {
                           <div className="text-sm font-bold text-white mt-0.5">{ficha.mini[0].texto}</div>
                         </div>
                         <div>
-                          <div className="text-[10px] text-slate-400" title={ficha.mini[1].ayuda ?? undefined}>{ficha.mini[1].etiqueta}</div>
+                          <div className="text-[10px] text-slate-400">{ficha.mini[1].etiqueta}</div>
                           <div className="text-sm font-bold text-amber-300 mt-0.5">{ficha.mini[1].texto}</div>
+                          {ficha.mini[1].ayuda && <div className="text-[9px] leading-tight text-slate-400">{ficha.mini[1].ayuda}</div>}
                         </div>
                         <div>
                           <div className="text-[10px] text-slate-400">{ficha.mini[2].etiqueta}</div>

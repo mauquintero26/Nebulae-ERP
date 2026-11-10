@@ -1249,6 +1249,8 @@ console.log('--- TEST 29 (B4 T23B, KPI-otros puntos 3, 4 y 6; RP70): las tarjeta
   assert.equal(k.formatoPorcentajeConSigno(45.25), '+45,3 %');
   assert.equal(k.formatoPorcentajeConSigno(-8), '−8 %');
   assert.equal(k.formatoPorcentajeConSigno(null), null);
+  assert.equal(k.formatoPorcentajeConSigno(0.04), '0 %', 'lo que redondea a cero no lleva signo (B29)');
+  assert.equal(k.formatoPorcentajeConSigno(-0.04), '0 %');
   // Sin presupuesto no hay retorno: «—» con su motivo, nunca «+NaN%» ni «0 %». Con presupuesto pero sin ventas que contar, sin motivo.
   assert.deepEqual(k.tarjetasCampana({ ...CAMP, presupuesto_cop: 0 }, LEADS).roi, { valor: null, texto: null, tono: 'normal', ayuda: 'Sin presupuesto' });
   assert.deepEqual(k.tarjetasCampana({ ...CAMP, presupuesto_cop: null }, LEADS).roi.ayuda, 'Sin presupuesto');
@@ -1482,6 +1484,13 @@ console.log('--- TEST 33 (B4 T23B, KPI-otros punto 4 y TABLA-otros punto 6; R11,
   assert.match(codigo, /const fCOP = \(v: number\) => formatoPesos\(v \|\| 0\);/);
   // El botón flotante de la IA no tapa la última fila de la tabla de leads: el panel baja 96 px de más (medido en el banco a 1024 x 600).
   assert.match(codigo, /<div className="flex-1 overflow-y-auto p-6 pb-24">/);
+  // m1: la barra del presupuesto usa la MISMA cifra que la tarjeta y el ROI, y queda gris mientras carga.
+  assert.match(codigo, /\{fCOP\(tarjetasMetricas\.ventas_atribuidas\.valor \?\? 0\)\} \/ \{fCOP\(selected\.presupuesto_cop\)\}/);
+  assert.match(codigo, /width:`\$\{Math\.min\(100, \(\(tarjetasMetricas\.ventas_atribuidas\.valor \?\? 0\) \/ selected\.presupuesto_cop\) \* 100\)\}%`/);
+  assert.match(codigo, /lectura\.estado === 'cargando' \? <div className="h-3 w-full animate-pulse rounded-full bg-slate-200" aria-hidden="true" \/> : /);
+  assert.ok(!/selected\.ventas_cop/.test(codigo.replace(/c\.ventas_cop/g, '')), 'ninguna cifra de ventas de la pestaña sale de la fila');
+  // m7: el filtro de estado de la lista dice la etiqueta, no el código.
+  assert.match(codigo, /<option key=\{e\} value=\{e\}>\{humanizarCodigo\(e\)\}<\/option>/);
 }
 
 console.log('--- TEST 34 (B4 T23B, KPI-otros punto 3; H13, RP66, RP70): la Agenda: la ficha del cliente, la del proveedor y los enlaces ---');
@@ -1496,10 +1505,16 @@ console.log('--- TEST 34 (B4 T23B, KPI-otros punto 3; H13, RP66, RP70): la Agend
   assert.ok(!/customer360\?\.(financials|quotations|saldo_pendiente_cop|ltv)|Total Comprado \(LTV\)|Saldo por Cobrar|Cotizaciones Vivas/.test(codigo), 'sin las claves que el servidor no manda ni los nombres viejos');
   // El perfil es de UN cliente (lo del anterior no se ve) y su error se dice con «Reintentar».
   assert.match(codigo, /const perfilDelCliente = perfil !== null && perfil\.id === clienteActual \? perfil : null;/);
-  assert.match(codigo, /const estadoFicha = clienteActual !== null && perfilDelCliente === null \? 'cargando' : errorPerfil && !customer360 \? 'error' : 'listo';/);
+  assert.match(codigo, /const estadoFicha = estadoFichaCliente\(clienteActual, perfilDelCliente\);/);
+  // m5: la línea fija de los proveedores que faltan sale de textoProveedoresCortados (no de un toast).
+  assert.match(codigo, /const \[totalProveedores, setTotalProveedores\] = useState<number \| null>\(null\);/);
+  assert.match(codigo, /setTotalProveedores\(numeroFinito\(res\?\.total\)\);/);
+  assert.match(codigo, /const textoCortados = textoProveedoresCortados\(totalProveedores, suppliers\.length\);/);
+  assert.match(codigo, /\{textoCortados && <p className="[^"]*">\{textoCortados\}<\/p>\}/);
+  assert.ok(!/toast\.error\(`Se muestran|faltan/.test(codigo), 'sin el toast ni la variable que guardaba el total');
   assert.match(codigo, /\{avisoPerfil && <AvisoFuente aviso=\{avisoPerfil\} onReintentar=\{\(\) => fetchProfile\(selectedClient\.realId\)\} \/>\}/);
   assert.match(codigo, /const json = await apiFetch\(`\/crm\/customers\/\$\{realId\}\/profile-360`\);/);
-  assert.match(codigo, /vigenteCliente\.current = realId;/);
+  assert.match(codigo, /const fetchProfile = async \(realId: number\) => \{\s*vigenteCliente\.current = realId;\s*try \{/);   // B8: se marca ANTES de pedir
   assert.match(codigo, /setPerfil\(\(previo\) => siguientePerfil\(previo, realId, vigenteCliente\.current, \{ datos: datosDeRespuesta\(json\) \}\)\);/);
   assert.match(codigo, /setPerfil\(\(previo\) => siguientePerfil\(previo, realId, vigenteCliente\.current, \{ error: e \}\)\);/);
   assert.match(codigo, /\} else \{\s*vigenteCliente\.current = null;\s*setPerfil\(null\);/);
@@ -1513,12 +1528,12 @@ console.log('--- TEST 34 (B4 T23B, KPI-otros punto 3; H13, RP66, RP70): la Agend
   assert.match(codigo, /const \{ items, total \} = pedidosDeProveedor\(await apiFetch/);
   assert.match(codigo, /setSupplierPecs\(items\);\s*setSupplierPecsTotal\(total\);/);
   assert.equal((codigo.match(/if \(!esRespuestaVigente\(sup\.id, vigenteProveedor\.current\)\) return;/g) ?? []).length, 2, 'una respuesta vieja del proveedor se descarta, en el éxito y en el error');
-  assert.match(codigo, /vigenteProveedor\.current = sup\.id;/);
+  assert.match(codigo, /const openSupplier = async \(sup: any\) => \{\s*vigenteProveedor\.current = sup\.id;/);   // B9
+  assert.match(codigo, /if \(!esRespuestaVigente\(sup\.id, vigenteProveedor\.current\)\) return;\s*setSupplierPecs\(\[\]\);\s*setSupplierPecsError\(e\);/);   // B10
   assert.ok(!/Array\.isArray\(res\?\.data\) \? res\.data : \[\]/.test(codigo), 'una respuesta sin lista no es «0 pedidos»');
   assert.ok(!/Moneda Habitual|Tiempo Entrega Estimado|Pedidos PEC Emitidos|supplierPecs\.length\} ordenes|selectedSupplier\.condiciones_pago \|\| 'Contado'\}/.test(codigo), 'sin las tarjetas viejas del proveedor');
   assert.match(codigo, /setSuppliers\(Array\.isArray\(list\) \? list\.map\(proveedorDeServidor\)\.filter\(Boolean\) : \[\]\);/);
   assert.match(codigo, /apiFetch\('\/compras\/proveedores\?limit=200'\)/);
-  assert.match(codigo, /Se muestran \$\{list\.length\} de \$\{faltan\} proveedores/);
   assert.match(codigo, /\{sup\.condiciones_pago \|\| 'Sin condiciones'\}/);
   assert.ok(!/\{sup\.moneda_default \|\| 'COP'\}|\{sup\.condiciones_pago \|\| 'Contado'\}/.test(codigo), 'la fila no inventa la moneda ni «Contado»');
   assert.match(codigo, /\{infoEstadoPec\(pec\.estado\)\.label\}/);
@@ -1565,10 +1580,11 @@ console.log('--- TEST 35 (B4 T23B, KPI-otros punto 6; H13, RP70): el Asistente o
   assert.match(codigo, /Tu rol no ve el contexto del cliente\./);
   assert.match(codigo, /setErrorContexto\(\{ error: err, pedido: customerIdentifier \}\);/);
   // m8 y m14: sin permiso no se pide el contexto (tampoco desde el mensaje de Chatwoot, montado una sola vez: el acceso va por un ref).
-  assert.match(codigo, /accesoRef\.current = acceso\.contexto;/);
+  assert.match(codigo, /const accesoRef = useRef\(false\);\s*useEffect\(\(\) => \{ accesoRef\.current = acceso\.contexto; \}, \[acceso\.contexto\]\);/);   // B22
+  assert.match(codigo, /setContextData\(null\);\s*setErrorContexto\(\{ error: err, pedido: customerIdentifier \}\);/);   // B24
   assert.match(codigo, /const loadCustomerContext = async \(customerIdentifier: \{[^}]*\}\) => \{\s*if \(!accesoRef\.current\) return;/);
   // m8: un error de la carga no deja «Sin cliente seleccionado» debajo del aviso (vistaContexto).
-  assert.match(codigo, /const vista = vistaContexto\(loadingContext, errorContexto\?\.error, contextData\);/);
+  assert.match(codigo, /const vista = vistaContexto\(loadingContext, errorContexto\?\.error, contextData, acceso\.listo && !acceso\.contexto\);/);
   assert.match(codigo, /\{vista === 'error' && avisoContexto && \(/);
   assert.match(codigo, /\{vista === 'cargando' \? \(/);
   assert.match(codigo, /\) : vista === 'contexto' \? \(/);
@@ -1577,7 +1593,7 @@ console.log('--- TEST 35 (B4 T23B, KPI-otros punto 6; H13, RP70): el Asistente o
   assert.match(codigo, /setSearchResults\(\[\]\);\s*setErrorBusqueda\(err\);/);
   assert.match(codigo, /<p role="alert" className="[^"]*">\{textoDeError\(errorBusqueda, 'No se pudo buscar clientes'\)\}<\/p>/);
   // m9: la tarjeta «Pedidos en curso» aclara que incluye los facturados.
-  assert.match(codigo, /title=\{ficha\.mini\[1\]\.ayuda \?\? undefined\}/);
+  assert.match(codigo, /\{ficha\.mini\[1\]\.ayuda && <div className="text-\[9px\] leading-tight text-slate-400">\{ficha\.mini\[1\]\.ayuda\}<\/div>\}/);
   assert.match(codigo, /const avisoContexto = errorContexto \? avisoDeFuente\(errorContexto\.error, 'No se pudo cargar el perfil del cliente'\) : null;/);
   assert.match(codigo, /<AvisoFuente aviso=\{avisoContexto\} onReintentar=\{\(\) => loadCustomerContext\(errorContexto!\.pedido\)\} \/>/);
 }
@@ -1654,6 +1670,30 @@ console.log('--- TEST 37 (B4 T23B r1; I2, m6, m12, m31): las rutas de carga y de
   assert.equal(k.vistaContexto(false, null, { customer: {} }), 'contexto');
   assert.equal(k.vistaContexto(false, null, null), 'vacio');
   assert.equal(k.vistaContexto(false, new Error('x'), { customer: {} }), 'contexto', 'con un contexto a la vista, un error viejo no lo tapa');
+  // m4: un rol que no ve el contexto no ve «Sin cliente seleccionado» (ni nada que ofrezca buscar).
+  assert.equal(k.vistaContexto(false, null, null, true), 'sin-permiso');
+  assert.equal(k.vistaContexto(true, null, null, true), 'sin-permiso');
+  assert.equal(k.vistaContexto(false, null, null, false), 'vacio');
+
+  // m11 (B17): el error de OTRA campaña no se ve aunque la vuelta coincida; la lectura sigue 'cargando'.
+  const eOtra = new Error('otra');
+  assert.deepEqual(k.lecturaLeadsCampana(llego('6:0', '5', null, eOtra), '6:0', '6', true), { leads: null, cargando: true, recargando: false, error: null, estado: 'cargando' });
+
+  // m6: el estado de la ficha del cliente de la Agenda (estadoFichaCliente).
+  assert.equal(k.estadoFichaCliente(7, null), 'cargando');
+  assert.equal(k.estadoFichaCliente(7, { datos: null, error: new Error('x') }), 'error');
+  assert.equal(k.estadoFichaCliente(7, { datos: { a: 1 }, error: new Error('x') }), 'listo', 'un error con datos previos deja la ficha con su aviso');
+  assert.equal(k.estadoFichaCliente(7, { datos: { a: 1 }, error: null }), 'listo');
+  assert.equal(k.estadoFichaCliente(null, null), 'listo', 'sin cliente abierto no hay nada que cargar');
+
+  // m5 y m10: la línea fija de los proveedores que faltan (el servidor da 200 como máximo y ordena por nombre).
+  assert.equal(k.textoProveedoresCortados(1234, 200), 'Se muestran los primeros 200 de 1.234 (por nombre)');
+  assert.equal(k.textoProveedoresCortados(230, 200), 'Se muestran los primeros 200 de 230 (por nombre)');
+  assert.equal(k.textoProveedoresCortados(200, 200), null, 'llegaron todos');
+  assert.equal(k.textoProveedoresCortados(50, 200), null);
+  assert.equal(k.textoProveedoresCortados(undefined, 200), null, 'sin total no se inventa');
+  assert.equal(k.textoProveedoresCortados('x', 3), null);
+  assert.equal(k.textoProveedoresCortados(5, 0), null, 'sin filas no hay lista que cortar');
 }
 
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

@@ -247,7 +247,7 @@ export default function CampanasPage() {
             </div>
             <select value={filtroEstado} onChange={e=>setFiltroEstado(e.target.value)} className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-emerald-200 bg-white">
               <option value="">Todos los estados</option>
-              {Object.keys(ESTADO_COLORS).map(e=><option key={e}>{e}</option>)}
+              {Object.keys(ESTADO_COLORS).map(e=><option key={e} value={e}>{humanizarCodigo(e)}</option>)}
             </select>
           </div>
           {/* List */}
@@ -403,10 +403,10 @@ export default function CampanasPage() {
                     <div className="bg-white rounded-2xl border border-slate-200 p-5">
                       <div className="flex justify-between mb-2">
                         <span className="text-sm font-bold text-slate-700">Progreso del Presupuesto</span>
-                        <span className="text-sm font-black text-emerald-600">{fCOP(selected.ventas_cop||0)} / {fCOP(selected.presupuesto_cop)}</span>
+                        <span className="text-sm font-black text-emerald-600">{lectura.estado === 'cargando' ? '—' : <>{fCOP(tarjetasMetricas.ventas_atribuidas.valor ?? 0)} / {fCOP(selected.presupuesto_cop)}</>}</span>
                       </div>
                       <div className="w-full bg-slate-100 rounded-full h-3">
-                        <div className="bg-emerald-500 h-3 rounded-full" style={{width:`${Math.min(100,((selected.ventas_cop||0)/selected.presupuesto_cop)*100)}%`}}/>
+                        {lectura.estado === 'cargando' ? <div className="h-3 w-full animate-pulse rounded-full bg-slate-200" aria-hidden="true" /> : <div className="bg-emerald-500 h-3 rounded-full" style={{width:`${Math.min(100, ((tarjetasMetricas.ventas_atribuidas.valor ?? 0) / selected.presupuesto_cop) * 100)}%`}}/>}
                       </div>
                     </div>
                   )}

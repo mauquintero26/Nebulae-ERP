@@ -1385,10 +1385,37 @@ export function estadoPedidosProveedor(error, total, items) {
  * @param {boolean} cargando
  * @param {unknown} error
  * @param {unknown} contexto
- * @returns {'cargando' | 'error' | 'contexto' | 'vacio'}
+ * @param {boolean} [sinPermiso]  el rol no ve el contexto: 'sin-permiso' (nada de «Sin cliente seleccionado», que ofrece buscar)
+ * @returns {'cargando' | 'error' | 'contexto' | 'vacio' | 'sin-permiso'}
  */
-export function vistaContexto(cargando, error, contexto) {
+export function vistaContexto(cargando, error, contexto, sinPermiso = false) {
+  if (sinPermiso) return 'sin-permiso';
   if (cargando) return 'cargando';
   if (contexto) return 'contexto';
   return error ? 'error' : 'vacio';
+}
+
+/**
+ * El estado de la franja de la ficha de un cliente de la Agenda: 'cargando' si hay un cliente abierto y su perfil todavía no llega;
+ * 'error' si falló y no hay datos que mostrar; 'listo' en otro caso (con datos previos, un error deja la ficha con su aviso).
+ * @param {number | null} clienteActual
+ * @param {{datos: unknown, error: unknown} | null} perfil  el perfil del cliente abierto (null si no es el suyo)
+ * @returns {'cargando' | 'error' | 'listo'}
+ */
+export function estadoFichaCliente(clienteActual, perfil) {
+  if (clienteActual !== null && perfil === null) return 'cargando';
+  return perfil && perfil.error && !perfil.datos ? 'error' : 'listo';
+}
+
+/**
+ * La línea fija sobre la lista de proveedores cuando el servidor devolvió menos de los que hay (GET /compras/proveedores da 200 como
+ * máximo y ordena por nombre): «Se muestran los primeros 200 de 1.234 (por nombre)». Sin total, o si llegaron todos, null.
+ * @param {unknown} total
+ * @param {number} llegaron
+ * @returns {string | null}
+ */
+export function textoProveedoresCortados(total, llegaron) {
+  const t = numeroFinito(total);
+  if (t === null || llegaron <= 0 || t <= llegaron) return null;
+  return `Se muestran los primeros ${formatoEntero(llegaron)} de ${formatoEntero(t)} (por nombre)`;
 }

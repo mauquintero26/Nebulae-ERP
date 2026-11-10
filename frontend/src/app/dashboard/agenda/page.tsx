@@ -23,8 +23,8 @@ import { FranjaKpis, TarjetaKpi } from '@/components/ui';
 import { AvisoFuente } from '@/components/ui/AvisoFuente';
 import { avisoDeFuente } from '@/lib/avisos';
 import {
-  datosDeRespuesta, esRespuestaVigente, estadoPedidosProveedor, pedidosDeProveedor, siguientePerfil, tarjetasFichaCliente,
-  tarjetasFichaProveedor,
+  datosDeRespuesta, esRespuestaVigente, estadoFichaCliente, estadoPedidosProveedor, numeroFinito, pedidosDeProveedor, siguientePerfil,
+  tarjetasFichaCliente, tarjetasFichaProveedor, textoProveedoresCortados,
 } from '@/lib/kpis';
 import { infoEstadoPec } from '@/lib/estados-compras';
 import { resumenFichaCliente } from '@/lib/kpis-ventas';
@@ -110,6 +110,8 @@ export default function AgendaPage() {
 
   // ─── ESTADOS DE PROVEEDORES ───────────────────────────────────────────────
   const [suppliers, setSuppliers] = useState<any[]>([]);
+  // El total de proveedores del servidor (da 200 como máximo): si hay más, una línea fija sobre la lista lo dice.
+  const [totalProveedores, setTotalProveedores] = useState<number | null>(null);
   const [selectedSupplier, setSelectedSupplier] = useState<any | null>(null);
   const [loadingSuppliers, setLoadingSuppliers] = useState(false);
   const [supplierSearch, setSupplierSearch] = useState('');
@@ -179,9 +181,7 @@ export default function AgendaPage() {
     try {
       const res = await apiFetch('/compras/proveedores?limit=200');
       const list = res?.data || res || [];
-      // El servidor da 200 como máximo: si hay más, se dice (no se calla que la lista está cortada).
-      const faltan = Number(res?.total);
-      if (Array.isArray(list) && Number.isFinite(faltan) && faltan > list.length) toast.error(`Se muestran ${list.length} de ${faltan} proveedores`);
+      setTotalProveedores(numeroFinito(res?.total));
       setSuppliers(Array.isArray(list) ? list.map(proveedorDeServidor).filter(Boolean) : []);
     } catch (e) {
       console.error('Error cargando proveedores', e);
@@ -229,7 +229,8 @@ export default function AgendaPage() {
   const perfilDelCliente = perfil !== null && perfil.id === clienteActual ? perfil : null;
   const customer360 = perfilDelCliente?.datos ?? null;
   const errorPerfil = perfilDelCliente?.error ?? null;
-  const estadoFicha = clienteActual !== null && perfilDelCliente === null ? 'cargando' : errorPerfil && !customer360 ? 'error' : 'listo';
+  const estadoFicha = estadoFichaCliente(clienteActual, perfilDelCliente);
+  const textoCortados = textoProveedoresCortados(totalProveedores, suppliers.length);
   const avisoPerfil = avisoDeFuente(errorPerfil, 'No se pudo cargar la ficha del cliente');
 
   const openClient = (client: any) => {
@@ -560,6 +561,7 @@ export default function AgendaPage() {
             </span>
           </div>
 
+          {textoCortados && <p className="mb-3 text-xs font-semibold text-slate-500">{textoCortados}</p>}
           {/* Grid Proveedores */}
           {loadingSuppliers ? (
             <div className="py-20 text-center text-slate-400 text-sm">Cargando proveedores...</div>
