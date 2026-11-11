@@ -4816,7 +4816,8 @@ def enviar_pedido_al_cliente(ven_id: int, body: dict = Body(default_factory=dict
             "whatsapp": wa_res}
 
 
-def _descontar_inventario_despacho(db: Session, v: SaleOrder, warehouse_id, user_label: Optional[str] = None) -> None:
+def _descontar_inventario_despacho(db: Session, v: SaleOrder, warehouse_id, user_label: Optional[str] = None,
+                                   bodega_validada: Optional[int] = None) -> None:
     """Al despachar un PVEN (estado -> ENTREGADO), descuenta stock fisico real
     de las lineas de v.productos que tengan sku_id vinculado a catalogo (lineas
     de texto libre / es_libre no mueven inventario, no hay nada que descontar).
@@ -4826,7 +4827,10 @@ def _descontar_inventario_despacho(db: Session, v: SaleOrder, warehouse_id, user
 
     Las unidades que las entregas de fase4 ya entregaron (quantity_delivered de las lineas del pedido, que ya
     descontaron su inventario) no se descuentan otra vez: un pedido Entregado parcialmente que se marca Entregado
-    solo descuenta lo que faltaba, y nada si ya se entrego todo (entonces tampoco pide bodega)."""
+    solo descuenta lo que faltaba, y nada si ya se entrego todo (entonces tampoco pide bodega).
+
+    B4 T24 r1 (m2): bodega_validada es el id que ya validó el despacho de BODEGA (_bodega_del_despacho, con el texto de
+    RP23): con él no se lee otra vez la bodega. Sin él (ADMIN y ASESOR), _bodega como antes."""
     from app.models.fase1b import SaleOrderLineErp
     ya_entregado = {}
     for sku_entregado, cantidad in (db.query(SaleOrderLineErp.sku_id, func.sum(SaleOrderLineErp.quantity_delivered))
@@ -4845,9 +4849,12 @@ def _descontar_inventario_despacho(db: Session, v: SaleOrder, warehouse_id, user
             lineas.append((sku_id, qty - entregado))
     if not lineas:
         return
-    if not warehouse_id:
-        raise HTTPException(422, "Debes indicar la bodega de despacho para descontar el inventario de este pedido")
-    warehouse_id = _bodega(db, warehouse_id, _LA_BODEGA_NO_EXISTE)[0]   # r1 (M12) y B4 T24 (B5): 422 antes de escribir
+    if bodega_validada is not None:
+        warehouse_id = bodega_validada
+    else:
+        if not warehouse_id:
+            raise HTTPException(422, "Debes indicar la bodega de despacho para descontar el inventario de este pedido")
+        warehouse_id = _bodega(db, warehouse_id, _LA_BODEGA_NO_EXISTE)[0]   # r1 (M12) y B4 T24 (B5): 422 antes de escribir
     now = datetime.datetime.utcnow()
     owner = "NEBULAE"
 
@@ -5044,7 +5051,9 @@ def update_pedido(ven_id: int, body: dict,
     # B4 T6B (R15, RP23): BODEGA solo despacha (ENTREGADO con la bodega de salida, _bodega_del_despacho, antes de leer
     # nada). Su body queda en {estado, warehouse_id, updated_by}: el autor sale de la sesion, no del updated_by que
     # mando. Desde ahi sigue el camino de siempre (la transicion de TRANSICIONES_VEN_PATCH, el descuento de inventario y
-    # la Actividad); ADMIN y ASESOR siguen igual.
+    # la Actividad), con dos reglas de B4 T24: (FINAL-m35) solo desde _ESTADOS_DESDE_LOS_QUE_BODEGA_DESPACHA, si no 422
+    # «La mercancía todavía no está lista para entrega.»; y (r1, m2) el descuento recibe la bodega ya validada. ADMIN y
+    # ASESOR siguen igual.
     bodega_de_salida = None
     if normalize_role(user.role) == "BODEGA":
         bodega_de_salida = _bodega_del_despacho(db, body)
@@ -5176,7 +5185,8 @@ def update_pedido(ven_id: int, body: dict,
             InventoryOperation.source_document_type == "PVEN",
             InventoryOperation.source_document_id == v.id).first() is not None
         if not ya_despachado:
-            _descontar_inventario_despacho(db, v, body.get("warehouse_id"), getattr(user, "email", None))
+            _descontar_inventario_despacho(db, v, body.get("warehouse_id"), getattr(user, "email", None),
+                                           bodega_validada=bodega_de_salida[0] if bodega_de_salida else None)
     if cancela:
         # H45 (R12): la orden de pago pendiente se cancela en el mismo commit que el pedido y el pedido deja de
         # apuntar a ella. Va ANTES del commit; la cotizacion se reabre despues (tiene su propio commit/rollback).

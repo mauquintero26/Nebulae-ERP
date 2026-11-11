@@ -4,7 +4,10 @@ PATCH /api/v1/ventas/pedidos/{id} acepta el rol BODEGA SOLO para pasar el pedido
 - BODEGA manda exactamente {estado: 'ENTREGADO', warehouse_id}; updated_by se ignora (no da 403) y el autor sale de la
   sesion (nombre_de_usuario). Otra clave u otro estado -> 403 «Bodega solo puede marcar el pedido como despachado.».
 - Sin warehouse_id, o con una bodega que no existe -> 422 «Elige la bodega de salida.», antes de leer el pedido y sus
-  lineas. La transicion sigue las reglas del Bloque 1 (TRANSICIONES_VEN_PATCH).
+  lineas. La transicion sigue las reglas del Bloque 1 (TRANSICIONES_VEN_PATCH) y, desde B4 T24 (FINAL-m35), BODEGA solo
+  despacha desde los estados de la pestaña «Listo Entrega» (_ESTADOS_DESDE_LOS_QUE_BODEGA_DESPACHA): si no, 422 «La
+  mercancía todavía no está lista para entrega.». B4 T24 r1 (m2): esa bodega ya validada pasa al descuento del
+  inventario (una sola lectura).
 - La Actividad dice quien despacho y desde que bodega: «Estado cambiado a Entregado (despachado desde {bodega})».
 - ADMIN y ASESOR siguen igual; BODEGA sigue sin poder usar los demas endpoints que cambian documentos de Ventas.
 - r1 (M12): con ADMIN y ASESOR, una bodega que no es un entero da 422 «Elige la bodega de salida.» y una que no existe,
@@ -411,3 +414,24 @@ def test_un_pedido_ya_descontado_dice_desde_que_bodega_lo_despacho_bodega(app_cl
         assert len(_operaciones(db, ven.id)) == 1
         db.refresh(nivel)
         assert nivel.quantity == Decimal("10")
+
+
+
+def test_bodega_lee_la_bodega_de_salida_una_sola_vez(app_client, db, bodega_token, sku, contador_sql):
+    """B4 T24 r1 (m2): con BODEGA, la bodega que ya validó _bodega_del_despacho (con el texto de RP23) pasa al descuento
+    del inventario: una sola lectura de warehouses (antes dos, y la segunda con «La bodega elegida no existe.»)."""
+    import re
+    bodega, nivel = _bodega_con_stock(db, sku, 10)
+    ven = _ven(db, productos=[{"product_name": "Taladro", "qty": 3, "sku_id": sku.id}])
+    ven_id, bodega_id = ven.id, bodega.id
+    with contador_sql.ventana() as v:
+        resp = _patch(app_client, bodega_token, ven_id, {"estado": "ENTREGADO", "warehouse_id": bodega_id})
+    assert resp.status_code == 200, resp.text
+    lecturas = [s for s in v.sentencias
+                if s.lstrip().upper().startswith("SELECT") and re.search(r"\bFROM warehouses\b", s)]
+    assert len(lecturas) == 1, lecturas
+    db.expire_all()
+    db.refresh(nivel)
+    assert nivel.quantity == Decimal("7")
+    [op] = _operaciones(db, ven_id)
+    assert op.source_warehouse_id == bodega_id
