@@ -37,6 +37,14 @@ def _filas_visibles_desde_otra_conexion(tabla, id_):
 
 
 # ---- monkeypatch -----------------------------------------------------------------------------------
+def test_tablas_vigila_las_de_t13_y_t20():
+    """B4 T24 (B23): «Base intacta» también vigila ecommerce_products, operational_expenses, pipeline_stages y
+    sale_order_payments, donde escriben pruebas de T13 y T20 (la transacción las revierte; si una fila se escapara, el
+    runner lo diría). El runner corre como __main__: se lee su TABLAS sin importarlo otra vez."""
+    tablas = set(sys.modules["__main__"].TABLAS)
+    assert {"ecommerce_products", "operational_expenses", "pipeline_stages", "sale_order_payments"} <= tablas
+
+
 def test_monkeypatch_1_parchea_durante_la_prueba(monkeypatch):
     monkeypatch.setattr(_ESTE_MODULO, "_CENTINELA", "parchado")
     monkeypatch.setenv("RUNNER_FIXTURES_VARIABLE", "1")

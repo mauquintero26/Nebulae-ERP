@@ -166,7 +166,9 @@ TABLAS = ["customer_requests", "sales_quotations", "sale_orders", "purchase_orde
           "product_web_listings",
           # B4 T1B r1: lo que escribe confirmar una recepcion (erp_compras.py:1811ss), que D13 dejo correr
           "idempotency_requests", "goods_receipt_lines", "goods_receipt_line_allocations", "procurement_allocations",
-          "inventory_owner_balances"]
+          "inventory_owner_balances",
+          # B4 T24 (B23): donde escriben las pruebas de T13 y T20 (catálogo de la tienda, gastos, etapas del CRM y pagos)
+          "ecommerce_products", "operational_expenses", "pipeline_stages", "sale_order_payments"]
 MODULOS_CON_SESSIONLOCAL = (dbmod, m_compras, m_inv, m_f4)
 
 
