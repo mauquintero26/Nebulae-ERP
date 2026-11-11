@@ -1068,6 +1068,22 @@ console.log('--- TEST T24 (B4 T24, paquete f1): el tablero común ---');
   assert.match(codigoKanban, /title=\{ocupada \? 'Espera a que termine el cambio de una tarjeta de esta columna\.' : d\.cargaFallida && ofreceReintentar\(d\.error\) \? 'Reintenta esta columna para ver más\.' : undefined\}/);
 }
 
+console.log('--- TEST T24-F14 (B4 T24, F14): el menú se arma al abrirlo y el modo cliente se memoriza ---');
+{
+  const fuente = readFileSync(new URL('../src/components/ui/Kanban.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const menuFila = readFileSync(new URL('../src/components/ui/MenuFila.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // MenuFila (aditivo): items puede ser una función que se llama al abrir (mapaDestinos solo para el menú abierto).
+  assert.match(menuFila, /items: ItemMenuFila\[\] \| \(\(\) => ItemMenuFila\[\]\);/);
+  assert.match(menuFila, /const perezoso = typeof items === 'function';\s*const visibles = \(perezoso \? \(abierto \? items\(\) : \[\]\) : items\)\.filter\(\(item\) => !item\.oculto\);/);
+  assert.match(menuFila, /if \(!perezoso && !visibles\.length\) return null;/);
+  // El tablero: el menú de cada tarjeta se arma al abrirlo, con el menuDe de ese render (las tarjetas se repintan con el tablero).
+  assert.match(fuente, /const menu = \(\) => menuDe\(item, origen\);/);
+  assert.match(fuente, /const menuDe = \(item: T, origen: string\): ItemMenuFila\[\] => \{\s*const pendiente = tablero\.pendientes\.has\(String\(idTarjeta\(item\)\)\);/);
+  assert.ok(!/menuDe\(item, origen, pendiente\)/.test(fuente), 'ya no se arma en cada render');
+  // El modo cliente: tableroCliente memorizado (no reagrupa hasta 500 leads en cada render).
+  assert.match(fuente, /const baseCliente = useMemo\(\s*\(\) => \(modo === 'cliente'\s*\? tableroCliente\(items, columnas, \{ columnaDe, esAtrasado, fechaMovimiento, porColumna, cortes: cortesVigentes, totales \}\)\s*: null\),/);
+}
+
 console.log('--- TEST T24-b (B4 T24: F11, F12, F13, F15, F16, F17, F19, F20, F21 y F22): el tablero común ---');
 {
   const fuenteKanban = readFileSync(new URL('../src/components/ui/Kanban.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');

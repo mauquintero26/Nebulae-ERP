@@ -521,10 +521,17 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
 
   // ── lo que ve la pantalla ──
   const cortesVigentes = cortes.clave === claveCortes ? cortes.valores : SIN_CORTES;
+  // B4 T24 (F14): el modo cliente agrupa una vez por cambio de sus entradas (no reagrupa hasta 500 leads en cada render).
+  const baseCliente = useMemo(
+    () => (modo === 'cliente'
+      ? tableroCliente(items, columnas, { columnaDe, esAtrasado, fechaMovimiento, porColumna, cortes: cortesVigentes, totales })
+      : null),
+    [modo, items, columnas, columnaDe, esAtrasado, fechaMovimiento, porColumna, cortesVigentes, totales],
+  );
   let datos: Record<string, DatosColumnaKanban<T>>;
   let cargandoInicial: boolean;
-  if (modo === 'cliente') {
-    let t = tableroCliente(items, columnas, { columnaDe, esAtrasado, fechaMovimiento, porColumna, cortes: cortesVigentes, totales });
+  if (modo === 'cliente' && baseCliente) {
+    let t = baseCliente;
     for (const m of movimientos) {
       if (m.base !== items || !t[m.origen] || !t[m.destino]) continue;
       t = moverTarjeta(t, m.id, m.origen, m.destino, m.cambios, { idDe: m.idDe }).tablero as typeof t;
@@ -588,7 +595,8 @@ export type DatosTarjetaKanban = {
 
 export type PropsTarjetaKanban = DatosTarjetaKanban & {
   /** El menú ⋯ (MenuFila). */
-  menu?: ItemMenuFila[];
+  /** B4 T24 (F14): o una función que arma el menú al abrirlo (MenuFila la llama entonces). */
+  menu?: ItemMenuFila[] | (() => ItemMenuFila[]);
   /** El número es un botón que abre el documento (teclado). */
   onAbrir?: () => void;
   /** Espera al servidor: spinner. */
@@ -699,7 +707,7 @@ export function TarjetaKanban({
             <Loader2 size={12} className="shrink-0 animate-spin text-slate-500" aria-label="Guardando el cambio" />
           )}
         </div>
-        {menu && menu.length > 0 && <MenuFila items={menu} etiqueta={`Acciones de ${numero}`} />}
+        {menu && (typeof menu === 'function' || menu.length > 0) && <MenuFila items={menu} etiqueta={`Acciones de ${numero}`} />}
       </div>
       <p className="mt-1 truncate text-sm font-semibold text-slate-800" title={titulo}>{titulo}</p>
       {subtitulo && <p className="truncate text-slate-500" title={subtitulo}>{subtitulo}</p>}
@@ -1201,7 +1209,10 @@ export function TableroKanban<T = unknown>({
   };
 
   // ── piezas ──
-  const menuDe = (item: T, origen: string, pendiente: boolean): ItemMenuFila[] => {
+  // B4 T24 (F14): el menú de una tarjeta se arma al abrirlo (MenuFila llama a la función), con el estado de ese render (las tarjetas
+  // se repintan con el tablero): antes se armaba en cada render para todas las tarjetas (mapaDestinos por columna y por tarjeta).
+  const menuDe = (item: T, origen: string): ItemMenuFila[] => {
+    const pendiente = tablero.pendientes.has(String(idTarjeta(item)));
     const lista: ItemMenuFila[] = [{ etiqueta: 'Abrir', icono: ExternalLink, onClick: () => onAbrir(item) }];
     if (!soloVer) {
       const destinos = mapaDestinos(item, origen, columnas, reglaEfectiva, opcionesSoltar);
@@ -1233,7 +1244,7 @@ export function TableroKanban<T = unknown>({
     const datos = datosDe(item);
     const pendiente = tablero.pendientes.has(clave);
     const arrastrando = arrastre?.clave === clave;
-    const menu = menuDe(item, origen, pendiente);
+    const menu = () => menuDe(item, origen);
     const movible = !soloVer && !pendiente && !bloqueoDeColumna(tablero.datos[origen]);
     return (
       <div

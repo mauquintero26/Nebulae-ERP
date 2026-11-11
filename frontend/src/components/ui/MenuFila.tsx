@@ -46,7 +46,8 @@ function enfocar(item: HTMLElement | null | undefined) {
 export function MenuFila({
   items, etiqueta = 'Acciones',
 }: {
-  items: ItemMenuFila[];
+  /** B4 T24 (F14, aditivo): también una función que se llama al abrir (el tablero arma el menú de una tarjeta solo cuando se abre). */
+  items: ItemMenuFila[] | (() => ItemMenuFila[]);
   /** El nombre del botón ⋯ (aria-label y title). */
   etiqueta?: string;
 }) {
@@ -54,7 +55,8 @@ export function MenuFila({
   const boton = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const idMenu = useId();
-  const visibles = items.filter((item) => !item.oculto);
+  const perezoso = typeof items === 'function';
+  const visibles = (perezoso ? (abierto ? items() : []) : items).filter((item) => !item.oculto);
 
   const cerrar = useCallback((devolverFoco: boolean) => {
     setAbierto(false);
@@ -108,7 +110,7 @@ export function MenuFila({
     };
   }, [abierto, cerrar]);
 
-  if (!visibles.length) return null;
+  if (!perezoso && !visibles.length) return null;
 
   const elegir = (item: ItemMenuFila) => {
     if (item.deshabilitado) return;
