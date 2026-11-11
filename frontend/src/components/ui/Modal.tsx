@@ -17,7 +17,7 @@ import { FOCO, FOCO_DENTRO } from '@/lib/design-system';
  * bloquearCierre o con cierreExterno={false} (aditivo: la que solo se cierra con sus botones). */
 export function Modal({
   title, subtitle, icon: Icon, color = 'amber', onClose, children, footer,
-  maxWidth = 'lg', capa = 'base', role = 'dialog', describedBy, bloquearCierre = false, cierreExterno = true,
+  maxWidth = 'lg', capa = 'base', role = 'dialog', describedBy, bloquearCierre = false, cierreExterno = true, sinCerrar = false,
 }: {
   title: string;
   subtitle?: string;
@@ -36,6 +36,8 @@ export function Modal({
   bloquearCierre?: boolean;
   /** B4 T24 (F40): false para que Esc y el clic en el fondo no la cierren (por defecto, sí). */
   cierreExterno?: boolean;
+  /** B4 T24 r3 (m6): true para no mostrar la X (aditivo): una ventana cuyo cierre decidiría por el usuario sale solo por sus botones. */
+  sinCerrar?: boolean;
 }) {
   const accent = ACCENTS[color];
   const widthCls = { md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-xl', '3xl': 'max-w-3xl', '4xl': 'max-w-4xl' }[maxWidth];
@@ -61,7 +63,9 @@ export function Modal({
             </h3>
             {subtitle && <p className="text-xs text-slate-500 mt-0.5">{subtitle}</p>}
           </div>
-          <button onClick={onClose} disabled={bloquearCierre} aria-label="Cerrar" className={`p-2 text-slate-400 hover:bg-slate-100 rounded-full disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent ${FOCO}`}><X size={20} /></button>
+          {!sinCerrar && (
+            <button onClick={onClose} disabled={bloquearCierre} aria-label="Cerrar" className={`p-2 text-slate-400 hover:bg-slate-100 rounded-full disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent ${FOCO}`}><X size={20} /></button>
+          )}
         </div>
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
           {children}

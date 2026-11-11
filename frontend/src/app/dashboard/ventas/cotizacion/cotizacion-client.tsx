@@ -528,9 +528,9 @@ export function PropagarPvenConfirm({ pven, totalAnterior, totalNuevo, onConfirm
   // B3.1 r1 (B): «antes» es el total del pedido; si ya difiere del de la COT, una nota en vez del total nuevo y del crédito.
   const { antes, nuevo, pagado: yaPagado, credito: creditoAFavor, nota } = resumenPropagacionPedido(pven, totalAnterior, totalNuevo);
   return (
-    // B4 T24 r2 (C5): su cierre ES una de sus dos decisiones (onCancel guarda la cotización con un PATCH): solo sus botones, y nada
-    // mientras guarda.
-    <Modal cierreExterno={false} bloquearCierre={saving} title="Actualizar Pedido de Venta" icon={RotateCcw} color="indigo" maxWidth="md" onClose={onCancel}
+    // B4 T24 r2 (C5) y r3 (m6): su cierre ES una de sus dos decisiones (onCancel guarda la cotización con un PATCH): solo sus botones
+    // (sin la X: la calculadora no conserva lo editado), y nada mientras guarda.
+    <Modal cierreExterno={false} bloquearCierre={saving} sinCerrar title="Actualizar Pedido de Venta" icon={RotateCcw} color="indigo" maxWidth="md" onClose={onCancel}
       footer={(
         <div className="flex flex-col w-full gap-2">
           <Button color="indigo" disabled={saving} onClick={onConfirm}>Sí, actualizar también el pedido</Button>

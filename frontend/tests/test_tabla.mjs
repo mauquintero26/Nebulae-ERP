@@ -3250,7 +3250,12 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
   assert.match(leer('components/ui/ModalMotivo.tsx'), /<Modal\s+cierreExterno=\{false\}/, 'ModalMotivo');
   // r2 (C5): «Actualizar Pedido de Venta» escribe al cerrarse (onCancel = commitCalcSave(..., false, false), un PATCH): no es una
   // confirmación para F40. Sin cierre de fuera y bloqueada mientras guarda (un Esc repetido mandaba un segundo PATCH).
-  assert.match(leer('app/dashboard/ventas/cotizacion/cotizacion-client.tsx'), /<Modal cierreExterno=\{false\} bloquearCierre=\{saving\} title="Actualizar Pedido de Venta"/);
+  // r3 (m6): y sin la X: la calculadora no conserva lo editado (se desmonta antes de esta ventana y vuelve a leer la cotización), así que
+  // la X no puede «volver»; con la prop aditiva sinCerrar de Modal, las únicas salidas son los dos botones.
+  assert.match(leer('app/dashboard/ventas/cotizacion/cotizacion-client.tsx'), /<Modal cierreExterno=\{false\} bloquearCierre=\{saving\} sinCerrar title="Actualizar Pedido de Venta"/);
+  const modalTsx = leer('components/ui/Modal.tsx');
+  assert.match(modalTsx, /sinCerrar\?: boolean;/);
+  assert.match(modalTsx, /\{!sinCerrar && \(\s*<button onClick=\{onClose\} disabled=\{bloquearCierre\} aria-label="Cerrar"/);
   // r2 (m18): el Drawer tiene nombre accesible (etiqueta → aria-label, aditivo) y los 11 lo reciben de su pantalla.
   assert.match(drawer, /etiqueta\?: string;/);
   assert.match(drawer, /ref=\{refPanel\} tabIndex=\{-1\} role="dialog" aria-modal="true" data-capa="" aria-label=\{etiqueta\}/); // r3 (m10, D27): con data-capa
