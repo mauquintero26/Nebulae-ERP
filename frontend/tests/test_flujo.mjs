@@ -949,9 +949,10 @@ console.log('--- TEST 21 (B4 T9 r1, m6): BannerFlujo reserva el renglón de los 
   for (const ruta of ['app/dashboard/ventas/page.tsx', 'app/dashboard/ventas/solicitud/solicitud-client.tsx', 'app/dashboard/ventas/solicitud/CargandoSolicitudes.tsx']) {
     assert.ok(!readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').includes('reservarAvisos'), `${ruta} no la pasa`);
   }
-  // Cotizaciones la pasa mientras su lista no respondió, y su esqueleto también (la misma geometría, A2).
+  // Cotizaciones la pasa mientras su lista no respondió, y su esqueleto también (la misma geometría, A2). B4 T24 f2 (B14-f, D27): con
+  // data.cotizaciones de /ventas/flujo, solo si habrá avisos (reservaAvisosCotizaciones; sin la clave, como antes).
   const cot = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/cotizacion-client.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-  assert.match(cot, /const avisosPendientes = listado\.crudo === null && listado\.error === null;/);
+  assert.match(cot, /const avisosPendientes = reservaAvisosCotizaciones\(flujo\.datos, listado\.crudo === null && listado\.error === null\);/);
   assert.match(cot, /avisos=\{avisosFlujo\}\s*reservarAvisos=\{avisosPendientes\}\s*cargando=\{flujo\.cargando\}/);
   const carga = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/CargandoCotizaciones.tsx', import.meta.url), 'utf8');
   assert.match(carga, /pasos=\{pasosDeLista\(null, 'COT'\)\}\s*reservarAvisos\s*cargando/);

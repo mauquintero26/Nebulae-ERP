@@ -58,7 +58,7 @@ import {
 } from '@/lib/tabla';
 import type { AccionTabla } from '@/lib/tabla';
 import { alternarPaso } from '@/lib/flujo';
-import { avisosCotizaciones, enlaceVerAnalisis, pasosDeLista, textoRegla } from '@/lib/flujo-ventas';
+import { avisosCotizaciones, enlaceVerAnalisis, pasosDeLista, reservaAvisosCotizaciones, textoRegla } from '@/lib/flujo-ventas';
 import {
   COLUMNAS_COT, OPCIONES_ESTADOS_TABLERO_COT, chipsDocumentoVentas, consultaColumnaCOT, estadoDeTarjeta,
   opcionesEstadosCotizaciones, reglaSoltarCotizacion, tarjetaCotizacion,
@@ -1268,7 +1268,9 @@ export default function CotizacionClient() {
   // r1 (m6, CLS): los avisos salen de la lista, no de /ventas/flujo. Hasta que la lista responda (o falle), la franja
   // reserva su renglón (reservarAvisos): al llegar «N sin precio» o «N vencen en 7 días» no empujan las cajas ni lo de
   // abajo. Una recarga conserva lo último (el hook no vacía lo que se ve).
-  const avisosPendientes = listado.crudo === null && listado.error === null;
+  // B4 T24 f2 (B14-f): con data.cotizaciones de /ventas/flujo (B14-b) se sabe antes si habrá avisos: el renglón se reserva solo si
+  // alguno es > 0 (sin avisos no aparece ni desaparece); sin esa clave o mientras /ventas/flujo carga, como antes.
+  const avisosPendientes = reservaAvisosCotizaciones(flujo.datos, listado.crudo === null && listado.error === null);
   const filtroSemaforo: FiltroSemaforo = estado.semaforo === 'atrasados' ? 'atrasados' : 'todos';
   // «Con atraso» pone semaforo=atrasados en el estado único (la tabla y el tablero lo mandan al servidor) y vuelve a la
   // página 1; «Ver todo» lo quita. Rechazadas nunca va atrasada: desde ahí abre Activas, también en Kanban (r2b de T8),

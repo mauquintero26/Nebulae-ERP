@@ -653,6 +653,28 @@ console.log('--- B4 T8 TEST 3: avisoVencidas — el chip ámbar «N vencidas» d
   for (const n of [0, -2, null, undefined, NaN, 'x', '']) assert.equal(fv.avisoVencidas(n), null, String(n));
 }
 
+console.log('--- B4 T24 f2 (B14-f): reservaAvisosCotizaciones — la franja de Cotizaciones reserva el renglón de los avisos solo si /ventas/flujo dice que habrá ---');
+{
+  assert.equal(typeof fv.reservaAvisosCotizaciones, 'function', 'reservaAvisosCotizaciones existe');
+  // B14-b (contrato aditivo de GET /ventas/flujo): data.cotizaciones = {sin_calc, vencen_pronto}, las mismas condiciones del resumen de
+  // /ventas/cotizaciones. Mientras la lista carga, reserva solo si alguno es > 0.
+  const conClave = (sin_calc, vencen_pronto) => ({ pasos: {}, cotizaciones: { sin_calc, vencen_pronto } });
+  assert.equal(fv.reservaAvisosCotizaciones(conClave(2, 0), true), true, 'N sin precio: reserva');
+  assert.equal(fv.reservaAvisosCotizaciones(conClave(0, 3), true), true, 'N vencen: reserva');
+  assert.equal(fv.reservaAvisosCotizaciones(conClave(0, 0), true), false, 'sin avisos: no reserva (el CLS sin avisos)');
+  for (const raro of [-1, null, 'dos', NaN]) assert.equal(fv.reservaAvisosCotizaciones(conClave(raro, 0), true), false, String(raro));
+  // Respaldo: sin la clave (un backend de antes de B14-b) o mientras /ventas/flujo carga (datos null), reserva como antes.
+  for (const sinClave of [null, undefined, {}, { pasos: {} }, { cotizaciones: null }, { cotizaciones: [1] }]) {
+    assert.equal(fv.reservaAvisosCotizaciones(sinClave, true), true, `respaldo: ${JSON.stringify(sinClave)}`);
+  }
+  // Con la lista ya respondida (o fallada) no se reserva: los avisos son los de su resumen (avisosCotizaciones).
+  for (const datos of [conClave(2, 1), conClave(0, 0), null]) assert.equal(fv.reservaAvisosCotizaciones(datos, false), false);
+  // Los avisos que se reservan son los que pintará la lista: la misma regla (cantidadPositiva) en las dos.
+  for (const [s, v] of [[2, 0], [0, 3], [0, 0], [1, 1]]) {
+    assert.equal(fv.reservaAvisosCotizaciones(conClave(s, v), true), fv.avisosCotizaciones({ sin_calc: s, vencen_pronto: v }).length > 0, `${s}/${v}`);
+  }
+}
+
 console.log('--- B4 T9 TEST 1: avisosCotizaciones — los chips «N sin precio» y «N vencen en 7 días» de la franja de Cotizaciones ---');
 {
   // FLUJO-ventas-pantallas C.1 (RP19 (3), RP89): lo que decía el aviso ámbar de la lista pasa a la franja, con el resumen

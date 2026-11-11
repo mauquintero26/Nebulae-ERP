@@ -387,6 +387,23 @@ export function avisosCotizaciones(resumen) {
   return avisos;
 }
 
+/**
+ * B4 T24 f2 (B14-f): si la franja de Cotizaciones reserva el renglón de sus avisos (reservarAvisos de BannerFlujo) mientras su lista
+ * carga (`listaPendiente`). Los avisos llegan con la lista, pero GET /ventas/flujo (B14-b, aditivo) ya trae data.cotizaciones =
+ * {sin_calc, vencen_pronto}, con las mismas condiciones del resumen de /ventas/cotizaciones: se reserva solo si alguno es un número
+ * positivo (la misma regla de avisosCotizaciones), así que sin avisos el renglón no aparece y desaparece (CLS). Respaldo: sin esa clave
+ * (un backend de antes de B14-b) o mientras /ventas/flujo carga, reserva como antes. Con la lista ya respondida (o fallada), false.
+ * @param {unknown} datosFlujo  el `data` de /ventas/flujo (useResumenFlujo), o null mientras carga
+ * @param {boolean} listaPendiente
+ * @returns {boolean}
+ */
+export function reservaAvisosCotizaciones(datosFlujo, listaPendiente) {
+  if (!listaPendiente) return false;
+  const cotizaciones = esObjeto(datosFlujo) ? /** @type {any} */ (datosFlujo).cotizaciones : undefined;
+  if (!esObjeto(cotizaciones)) return true;
+  return avisosCotizaciones(cotizaciones).length > 0;
+}
+
 // ─── B4 T10: la franja de la lista de Pedidos de venta ──────────────────────────
 
 /** RP21: las cajas de la franja que son una pestaña de la lista de Pedidos (la clave de su vista de GET /ventas/pedidos). */
