@@ -1167,8 +1167,8 @@ console.log('--- TEST 28 (B4 T23A): el cableado de las tarjetas de la tienda en 
   assert.match(codigo, /onClick=\{recargarTodo\}/);
   // Los carritos: lo mismo (primera carga en esqueleto, error con Reintentar, vacío y filas por faseDeLista).
   assert.match(codigo, /const faseCarritos = faseDeLista\(\{ cargandoInicial: cargandoCarritos && carritos === null, error: errorCarritos, filas: carritos \}\);/);
-  assert.match(codigo, /\{faseCarritos === 'error' && avisoCarritos && \(\s*<AvisoFuente aviso=\{avisoCarritos\} onReintentar=\{\(\) => setVueltaCarritos\(\(n\) => n \+ 1\)\} \/>/);
-  assert.match(codigo, /<Contador valor=\{carritos === null \? null : carritos\.length\} estado=\{estadoCarritos\} \/>/);
+  assert.match(codigo, /\{faseCaja === 'error' && avisoCarritos && \(\s*<AvisoFuente aviso=\{avisoCarritos\} onReintentar=\{\(\) => setVueltaCarritos\(\(n\) => n \+ 1\)\} \/>/);
+  assert.match(codigo, /<Contador valor=\{carritos === null \? null : carritos\.length\} estado=\{estadoCaja\} \/>/); // F104 (D27): estadoCaja = estadoCarritos con el rol ya leído
   // Se fueron el StatCard, el '...' del cargando, los números armados con || 0 y los catch mudos.
   assert.ok(!/StatCard/.test(codigo), 'sin StatCard');
   assert.ok(!/'\.\.\.'/.test(codigo), "sin el '...' del cargando");
@@ -1178,15 +1178,16 @@ console.log('--- TEST 28 (B4 T23A): el cableado de las tarjetas de la tienda en 
   assert.match(codigo, /if \(!acceso\.indicadores\) return;\s*const control = new AbortController\(\);\s*apiFetch\('\/ecommerce\/stats'/);
   assert.match(codigo, /\}, \[vueltaStats, acceso\.indicadores\]\);/);
   assert.match(codigo, /if \(!panelActivo \|\| !acceso\.carritos\) return;\s*const control = new AbortController\(\);\s*apiFetch\('\/ecommerce\/carritos\?estado=ABANDONADO'/);
-  assert.match(codigo, /\{acceso\.indicadores && \(\s*<>/);
-  assert.match(codigo, /\{acceso\.carritos && \(\s*<div className="order-2/);
+  // B4 T24 (F104, D27): también mientras el rol no se conoce (la franja en cargando y la caja en esqueleto).
+  assert.match(codigo, /\{\(acceso\.indicadores \|\| !acceso\.listo\) && \(\s*<>/);
+  assert.match(codigo, /\{\(acceso\.carritos \|\| !acceso\.listo\) && \(\s*<div className="order-2/);
   assert.match(codigo, /const actualizando = \(acceso\.indicadores && cargandoStats\) \|\| /);
   // 403 que llega igual: «—» con el motivo de permiso y sin «Reintentar».
   assert.match(codigo, /const sinPermisoStats = motivoSinPermiso\(avisoStats\);/);
   assert.match(codigo, /import \{ AvisoFuente \} from '@\/components\/ui\/AvisoFuente';/);
   assert.match(codigo, /import \{ useRolActual \} from '@\/components\/ui\/useRolActual';/);
   assert.ok(!/function AvisoFuente|suscribirRol|useSyncExternalStore/.test(codigo), 'sin la copia local del aviso ni del rol');
-  assert.match(codigo, /<FranjaKpis estado=\{estadoFranjaDeFuente\(avisoStats, estadoStats\)\} titulo="Indicadores de la tienda">/);
+  assert.match(codigo, /<FranjaKpis estado=\{acceso\.listo \? estadoFranjaDeFuente\(avisoStats, estadoStats\) : 'cargando'\} titulo="Indicadores de la tienda">/); // F104 (D27)
   assert.ok(!/AvisoReintentar/.test(codigo), 'ningún Reintentar fijo');
   // m16: «Los 50 más recientes de N».
   assert.match(codigo, /const textoLimite = textoLimiteCarritos\(datosStats\?\.carritos_abandonados_count, carritos === null \? null : carritos\.length\);/);

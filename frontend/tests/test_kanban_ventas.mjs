@@ -1498,7 +1498,17 @@ console.log('--- B4 T23A TEST S: el cableado del tablero y del filtro de los ped
   // El conmutador poda los estados con las opciones del modo nuevo (accionModo).
   assert.match(pantalla, /despacharPedidos\(accionModo\(estadoPedidos, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_PEDIDO : OPCIONES_ESTADOS_PEDIDOS_WEB\)\);/);
   // La lista pide GET /ecommerce/pedidos con el estado, esperando las preferencias, y solo en su pestaña y fuera de Kanban.
-  assert.match(pantalla, /useListado<PedidoWeb>\(\{\s*ruta: RUTA_PEDIDOS_WEB, estado: estadoPedidos, esperar: !listoPedidos, despachar: despacharPedidos, activo: panelActivo && !enKanban && acceso\.pedidos,\s*\}\);/);
+  // B4 T24 (F104, D27): mientras el rol no se conoce (acceso.listo false) la tabla espera (el esqueleto), no «Sin pedidos web».
+  assert.match(pantalla, /useListado<PedidoWeb>\(\{\s*ruta: RUTA_PEDIDOS_WEB, estado: estadoPedidos, esperar: !listoPedidos \|\| !acceso\.listo, despachar: despacharPedidos,\s*activo: panelActivo && !enKanban && \(acceso\.pedidos \|\| !acceso\.listo\),\s*\}\);/);
+  // F104: con rol '' la franja está en 'cargando' y la caja de carritos en esqueleto (nunca vacías ni «—» falsos); el catálogo no
+  // depende del rol (GET /catalogo no tiene guardia): accesoTienda ya no lleva `catalogo`.
+  assert.match(pantalla, /\{\(acceso\.indicadores \|\| !acceso\.listo\) && \(/);
+  assert.match(pantalla, /<FranjaKpis estado=\{acceso\.listo \? estadoFranjaDeFuente\(avisoStats, estadoStats\) : 'cargando'\} titulo="Indicadores de la tienda">/);
+  assert.match(pantalla, /\{\(acceso\.carritos \|\| !acceso\.listo\) && \(/);
+  assert.match(pantalla, /const faseCaja = acceso\.listo \? faseCarritos : 'cargando';\s*const estadoCaja = acceso\.listo \? estadoCarritos : 'cargando';/);
+  assert.match(pantalla, /<Contador valor=\{carritos === null \? null : carritos\.length\} estado=\{estadoCaja\} \/>/);
+  for (const fase of ['cargando', 'error', 'vacio', 'filas']) assert.ok(pantalla.includes(`{faseCaja === '${fase}'`), fase);
+  assert.ok(!/acceso\.catalogo/.test(pantalla));
   // El tablero en modo servidor con el MISMO id y estado (RP26, D39): consultaColumnaPedido y el orden de las columnas (reciente:
   // 'atencion' es de Ventas y daría 422 en /ecommerce/pedidos).
   assert.match(pantalla, /pantalla: ID_PEDIDOS_WEB,\s*modo: 'servidor',\s*columnas: COLUMNAS_PEDIDO,\s*activo: listoPedidos && enKanban && panelActivo && acceso\.pedidos,\s*porColumna: estadoPedidos\.tamano,\s*dependencias: dependenciasTablero\(estadoPedidos\),\s*ordenDe: ordenPorDefecto,/);

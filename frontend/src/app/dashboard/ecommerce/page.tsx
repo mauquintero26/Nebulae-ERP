@@ -666,6 +666,9 @@ export default function EcommercePage() {
   const textoLimite = textoLimiteCarritos(datosStats?.carritos_abandonados_count, carritos === null ? null : carritos.length);
   const faseCarritos = faseDeLista({ cargandoInicial: cargandoCarritos && carritos === null, error: errorCarritos, filas: carritos });
   const estadoCarritos = useEstadoKpi(cargandoCarritos, errorCarritos);
+  // B4 T24 (F104): mientras el rol no se conoce, la caja de carritos en esqueleto (nunca «Sin carritos» ni un «—» falso).
+  const faseCaja = acceso.listo ? faseCarritos : 'cargando';
+  const estadoCaja = acceso.listo ? estadoCarritos : 'cargando';
 
   // ── B4 T23A, bloque 1: la carga del servidor de los pedidos web (TABLA-otros punto 5; R5; RP8, RP26, D39, D40) ──
   // Un estado ÚNICO: la búsqueda, el filtro de estados, el orden y la página de la tabla y del tablero. El modo (Lista o
@@ -674,8 +677,10 @@ export default function EcommercePage() {
   // «vacío». En Kanban no se pide la lista: cada columna del tablero hace su consulta.
   const [estadoPedidos, despacharPedidos, listoPedidos] = useEstadoTabla(ID_PEDIDOS_WEB, INICIAL_PEDIDOS_WEB);
   const enKanban = estadoPedidos.modo === 'kanban';
+  // B4 T24 (F104): mientras el rol no se conoce, la tabla espera (el esqueleto), nunca «Sin pedidos web».
   const pedidos = useListado<PedidoWeb>({
-    ruta: RUTA_PEDIDOS_WEB, estado: estadoPedidos, esperar: !listoPedidos, despachar: despacharPedidos, activo: panelActivo && !enKanban && acceso.pedidos,
+    ruta: RUTA_PEDIDOS_WEB, estado: estadoPedidos, esperar: !listoPedidos || !acceso.listo, despachar: despacharPedidos,
+    activo: panelActivo && !enKanban && (acceso.pedidos || !acceso.listo),
   });
 
   // ── B4 T23A, bloque 3: el tablero de los pedidos web (KANBAN-resto puntos 2 y 3; C4, R11; RP62, D39) ──
@@ -968,10 +973,11 @@ export default function EcommercePage() {
             equivale a una vista. */}
         {/* r1 (I1, I2): solo ADMIN y ASESOR leen /ecommerce/stats; para los demás roles no se pide ni se pinta. Un 403 que llegue igual
             es un tema de permiso: sin «Reintentar» y con «—» y el motivo en las tarjetas (no «No se pudo cargar»). */}
-        {acceso.indicadores && (
+        {/* B4 T24 (F104): mientras el rol no se conoce, la franja en 'cargando' (después, solo para quien lee /stats). */}
+        {(acceso.indicadores || !acceso.listo) && (
           <>
             {avisoStats && <AvisoFuente aviso={avisoStats} onReintentar={() => setVueltaStats((n) => n + 1)} />}
-            <FranjaKpis estado={estadoFranjaDeFuente(avisoStats, estadoStats)} titulo="Indicadores de la tienda">
+            <FranjaKpis estado={acceso.listo ? estadoFranjaDeFuente(avisoStats, estadoStats) : 'cargando'} titulo="Indicadores de la tienda">
               <TarjetaKpi kpi="web_ventas_hoy" valor={tarjetas.web_ventas_hoy.valor} variacion={tarjetas.web_ventas_hoy.variacion} textoPeriodo={tarjetas.web_ventas_hoy.textoPeriodo} ayuda={sinPermisoStats ?? tarjetas.web_ventas_hoy.ayuda ?? undefined} />
               <TarjetaKpi kpi="web_ventas_mes" valor={tarjetas.web_ventas_mes.valor} variacion={tarjetas.web_ventas_mes.variacion} textoPeriodo={tarjetas.web_ventas_mes.textoPeriodo} ayuda={sinPermisoStats ?? tarjetas.web_ventas_mes.ayuda ?? undefined} />
               <TarjetaKpi kpi="carritos_abandonados" valor={tarjetas.carritos_abandonados.valor} tono={tarjetas.carritos_abandonados.tono} ayuda={sinPermisoStats ?? tarjetas.carritos_abandonados.ayuda ?? undefined} />
@@ -1006,24 +1012,24 @@ export default function EcommercePage() {
             menú abierto los pedidos van arriba y a todo el ancho (los carritos, debajo): R26; desde 2xl, los carritos a la izquierda. */}
         {activeTab === 'Panel' && (
           <div className="flex min-w-0 flex-1 flex-col gap-6 2xl:flex-row">
-            {acceso.carritos && (
+            {(acceso.carritos || !acceso.listo) && (
             <div className="order-2 flex w-full shrink-0 flex-col overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm 2xl:order-1 2xl:w-80 2xl:self-start">
               <div className="p-5 border-b border-gray-100 bg-rose-50/50 flex items-center justify-between">
                 <h3 className="font-black text-gray-800 text-sm flex items-center gap-2"><AlertCircle className="text-rose-500" size={16}/> Recuperación de Carritos</h3>
-                <span className="bg-rose-100 text-rose-700 text-xs font-black px-2 py-0.5 rounded-full"><Contador valor={carritos === null ? null : carritos.length} estado={estadoCarritos} /></span>
+                <span className="bg-rose-100 text-rose-700 text-xs font-black px-2 py-0.5 rounded-full"><Contador valor={carritos === null ? null : carritos.length} estado={estadoCaja} /></span>
               </div>
               {textoLimite && <p className="border-b border-gray-100 px-5 py-2 text-[11px] font-semibold text-slate-500">{textoLimite}</p>}
               <div className="max-h-96 flex-1 overflow-y-auto p-4 space-y-3 2xl:max-h-[32rem]">
-                {faseCarritos === 'cargando' && (
+                {faseCaja === 'cargando' && (
                   <div role="status" aria-label="Cargando los carritos" className="space-y-3">
                     {[0, 1, 2].map((i) => <div key={i} aria-hidden="true" className="h-16 animate-pulse rounded-2xl bg-slate-100" />)}
                   </div>
                 )}
-                {faseCarritos === 'error' && avisoCarritos && (
+                {faseCaja === 'error' && avisoCarritos && (
                   <AvisoFuente aviso={avisoCarritos} onReintentar={() => setVueltaCarritos((n) => n + 1)} />
                 )}
-                {faseCarritos === 'vacio' && <div className="text-center py-10 text-gray-400"><ShoppingCart size={28} className="mx-auto mb-2 opacity-30"/><p className="text-sm">Sin carritos abandonados</p></div>}
-                {faseCarritos === 'filas' && (carritos ?? []).map((c) => (
+                {faseCaja === 'vacio' && <div className="text-center py-10 text-gray-400"><ShoppingCart size={28} className="mx-auto mb-2 opacity-30"/><p className="text-sm">Sin carritos abandonados</p></div>}
+                {faseCaja === 'filas' && (carritos ?? []).map((c) => (
                   <div key={c.id} className="border border-gray-100 p-4 rounded-2xl hover:shadow-md transition-shadow">
                     <div className="flex justify-between items-start mb-1">
                       <p className="font-bold text-gray-800 text-xs truncate">{c.customer_email||'Anónimo'}</p>

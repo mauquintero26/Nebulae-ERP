@@ -59,24 +59,21 @@ export function puedeCrearOrdenDePago(rol) {
  * endpoint de backend/app/api/v1/ecommerce.py (la seguridad real es la del servidor; esto evita pedir lo que da un 403 fijo):
  *  - indicadores (GET /stats) y carritos (GET /carritos): ADMIN y ASESOR;
  *  - pedidos (GET /pedidos): ADMIN, ASESOR, FINANZAS y BODEGA;
- *  - catalogo (GET /catalogo): sin guardia de rol, todos;
- *  - editarCatalogo (POST, PATCH y DELETE del catálogo): solo ADMIN.
+ *  - editarCatalogo (POST, PATCH y DELETE del catálogo): solo ADMIN (GET /catalogo no tiene guardia de rol: B4 T24, F104, sin campo).
  * `listo` es false con un rol vacío o que no es texto (la hidratación: el rol se lee después de montar): entonces nada se
  * pide ni se ofrece. Un objeto nuevo en cada llamada.
  * @param {unknown} rol
- * @returns {{listo: boolean, indicadores: boolean, carritos: boolean, pedidos: boolean, catalogo: boolean, editarCatalogo: boolean,
- *   pagosConfig: boolean}}
+ * @returns {{listo: boolean, indicadores: boolean, carritos: boolean, pedidos: boolean, editarCatalogo: boolean, pagosConfig: boolean}}
  */
 export function accesoTienda(rol) {
   const r = normalizarRol(rol);
-  if (r === '') return { listo: false, indicadores: false, carritos: false, pedidos: false, catalogo: false, editarCatalogo: false, pagosConfig: false };
+  if (r === '') return { listo: false, indicadores: false, carritos: false, pedidos: false, editarCatalogo: false, pagosConfig: false };
   const adminOAsesor = esAdminOAsesor(rol);
   return {
     listo: true,
     indicadores: adminOAsesor,
     carritos: adminOAsesor,
     pedidos: adminOAsesor || r === 'FINANZAS' || r === 'BODEGA',
-    catalogo: true,
     editarCatalogo: esAdmin(rol),
     // B4 T24 (FINAL-m21): GET y PATCH /ecommerce/pagos/config y /envios/config, solo ADMIN (la pestaña Pagos).
     pagosConfig: esAdmin(rol),

@@ -100,7 +100,8 @@ console.log('--- T23A r1: accesoTienda ---');
 {
   const roles = await import('../src/lib/roles.js');
   // B4 T24 (FINAL-m21, D27): con pagosConfig (la pestaña Pagos, solo ADMIN), aditivo.
-  const sin = { listo: true, indicadores: false, carritos: false, pedidos: false, catalogo: true, editarCatalogo: false, pagosConfig: false };
+  // B4 T24 (F104, D27): sin `catalogo` (GET /catalogo no tiene guardia de rol y ninguna pantalla lo leía).
+  const sin = { listo: true, indicadores: false, carritos: false, pedidos: false, editarCatalogo: false, pagosConfig: false };
   assert.deepEqual(roles.accesoTienda('ADMIN'), { ...sin, indicadores: true, carritos: true, pedidos: true, editarCatalogo: true, pagosConfig: true });
   assert.deepEqual(roles.accesoTienda('ASESOR'), { ...sin, indicadores: true, carritos: true, pedidos: true });
   assert.deepEqual(roles.accesoTienda('FINANZAS'), { ...sin, pedidos: true });
@@ -112,7 +113,7 @@ console.log('--- T23A r1: accesoTienda ---');
   assert.deepEqual(roles.accesoTienda(' Admin '), roles.accesoTienda('ADMIN'));
   // Durante la hidratación (rol vacío o que no es texto): nada listo y nada se pide.
   for (const nada of ['', '   ', null, undefined, 7]) {
-    assert.deepEqual(roles.accesoTienda(nada), { listo: false, indicadores: false, carritos: false, pedidos: false, catalogo: false, editarCatalogo: false, pagosConfig: false }, String(nada));
+    assert.deepEqual(roles.accesoTienda(nada), { listo: false, indicadores: false, carritos: false, pedidos: false, editarCatalogo: false, pagosConfig: false }, String(nada));
   }
   // Un rol desconocido está listo pero sin nada de lo restringido.
   assert.deepEqual(roles.accesoTienda('INVENTADO'), sin);
