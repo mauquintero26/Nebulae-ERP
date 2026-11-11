@@ -576,13 +576,16 @@ export default function AgendaPage() {
             <div className="bg-white rounded-3xl p-12 text-center border border-slate-200 shadow-sm max-w-lg mx-auto">
               <Building2 className="text-slate-300 mx-auto mb-3" size={48} />
               <h3 className="font-black text-slate-800 text-lg">Sin proveedores registrados</h3>
-              <p className="text-xs text-slate-500 mt-1 mb-6">Crea el primer proveedor para gestionar compras y pedidos PEC.</p>
+              {/* B4 T24 r1 (C3): la quinta entrada a «Nuevo proveedor», también solo con accesoProv.editar. */}
+              {accesoProv.editar && <p className="text-xs text-slate-500 mt-1 mb-6">Crea el primer proveedor para gestionar compras y pedidos PEC.</p>}
+              {accesoProv.editar && (
               <button
                 onClick={openNewSupplier}
                 className="bg-teal-600 hover:bg-teal-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-md"
               >
                 + Registrar Proveedor
               </button>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

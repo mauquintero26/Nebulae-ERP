@@ -1752,6 +1752,12 @@ console.log('--- TEST T24-c (B4 T24, F108): la Agenda ofrece Nuevo, Editar y Eli
   assert.match(c, /\{accesoProv\.editar && \(\s*<button\s+onClick=\{\(e\) => \{\s*e\.stopPropagation\(\);\s*setDeleteConfirmSupplier\(sup\);/);
   assert.match(c, /\{accesoProv\.editar && \(\s*<>\s*<button\s+onClick=\{\(\) => openEditSupplier\(selectedSupplier\)\}/);
   assert.equal((c.match(/setDeleteConfirmSupplier\((sup|selectedSupplier)\)/g) ?? []).length, 2, 'los dos «Eliminar Proveedor»');
+  // r1 (C3): las CINCO entradas: cada onClick={openNewSupplier} (el encabezado y el vacío) va dentro de accesoProv.editar.
+  const nuevos = [...c.matchAll(/onClick=\{openNewSupplier\}/g)];
+  assert.equal(nuevos.length, 2, 'el encabezado y el vacío');
+  for (const m of nuevos) assert.match(c.slice(Math.max(0, m.index - 120), m.index), /\{accesoProv\.editar && \(\s*<button\s+$/, 'dentro de accesoProv.editar');
+  // Sin permiso, el vacío dice solo «Sin proveedores registrados» (sin invitar a crear).
+  assert.match(c, /\{accesoProv\.editar && <p className="text-xs text-slate-500 mt-1 mb-6">Crea el primer proveedor para gestionar compras y pedidos PEC\.<\/p>\}/);
 }
 
 console.log('--- TEST T24-d (B4 T24: F3 y F4): etiquetaKpi con tiene() y el comentario del redondeo ---');
