@@ -56,7 +56,7 @@ def create_warehouse(warehouse: schemas.WarehouseCreate, db: Session = Depends(g
 
 @router.get("/warehouses")
 def list_warehouses(db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
-    warehouses = db.query(Warehouse).all()
+    warehouses = db.query(Warehouse).order_by(Warehouse.name, Warehouse.id).all()   # B4 T24 (F87-b): por nombre
     return {"status": "success", "data": [schemas.WarehouseResponse.model_validate(w).model_dump() for w in warehouses]}
 
 def _apply_inventory_level(db: Session, sku_id: int, warehouse_id: Optional[int], delta: Decimal):
@@ -208,10 +208,27 @@ def _ordenes_operacion() -> dict:
             "origen": _nombre_bodega(op.source_warehouse_id), "destino": _nombre_bodega(op.dest_warehouse_id)}
 
 
+MENSAJE_ID_OPERACION = "El id de la operación debe ser un número entero positivo."
+_MAX_ID_OPERACION = 2 ** 31 - 1   # inventory_operations.id es Integer
+
+
+def _id_de_operacion(valor) -> Optional[int]:
+    """B4 T24 (F74-b): el parámetro id de /operations (el enlace ?id= de Compras › Traslados), validado a mano (R21): None si
+    no vino o está en blanco; un entero entre 1 y 2**31-1 (sin espacios en los bordes); cualquier otra cosa, 422
+    MENSAJE_ID_OPERACION."""
+    if valor is None or not valor.strip():
+        return None
+    texto = valor.strip()
+    if not texto.isascii() or not texto.isdigit() or not 0 < int(texto) <= _MAX_ID_OPERACION:
+        raise HTTPException(422, MENSAJE_ID_OPERACION)
+    return int(texto)
+
+
 @router.get("/operations")
 def list_inventory_operations(
         operation_type: Optional[str] = None,
         warehouse_id: Optional[int] = None,
+        id: Optional[str] = None,
         q: Optional[str] = None,
         search: Optional[str] = None,
         status: Optional[str] = None,
@@ -234,6 +251,8 @@ def list_inventory_operations(
     Cada fila suma «fecha» = MIN(InventoryMovement.created_at) con Z (la tabla no tiene created_at). Sin los parámetros
     nuevos la respuesta es la de hoy más esa clave."""
     like = _busqueda_de_lista(q, search)
+    id_exacto = _id_de_operacion(id)
+    operation_type = _sin_caracteres_de_control(operation_type)  # B4 T24 (FINAL-m7): un NUL daba 500; ahora 422 (D46)
     estados = _estados_de_operacion(status)
     sentido = _parametro_de_lista(_sin_caracteres_de_control(direccion), tuple(DIRECCIONES_OPERACION),
                                   MENSAJE_DIRECCION)
@@ -245,8 +264,11 @@ def list_inventory_operations(
         base = base.filter(op.operation_type == operation_type)
     if warehouse_id:
         base = base.filter((op.source_warehouse_id == warehouse_id) | (op.dest_warehouse_id == warehouse_id))
+    if id_exacto is not None:
+        base = base.filter(op.id == id_exacto)
     if like:
-        base = base.filter(or_(_numero_operacion().ilike(like), cast(op.id, String).ilike(like), op.notas.ilike(like),
+        # B4 T24 (B34): sin cast(op.id, String): el número de la operación (TRL-0012) siempre contiene el id.
+        base = base.filter(or_(_numero_operacion().ilike(like), op.notas.ilike(like),
                                op.source_document_numero.ilike(like), op.tracking_number.ilike(like)))
     filtrado = filtrar_por_estados(base, op.status, estados)
     if sentido:

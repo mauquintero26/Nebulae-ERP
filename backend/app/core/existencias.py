@@ -163,7 +163,7 @@ def consulta_existencias(db: Session, por="sku", warehouse_id=None, categoria_id
     return consulta
 
 
-def resumen_existencias(db: Session, warehouse_id=None, *, ahora=None) -> dict:
+def resumen_existencias(db: Session, warehouse_id=None, *, categoria_id=None, q=None, ahora=None) -> dict:
     """Los totales de las existencias por SKU (consulta_existencias por='sku', en UNA consulta), sin las referencias con
     rastrear_inventario = false:
     {skus_total, unidades_fisicas, unidades_reservadas, unidades_disponibles, unidades_en_transito (una vez por SKU),
@@ -171,8 +171,10 @@ def resumen_existencias(db: Session, warehouse_id=None, *, ahora=None) -> dict:
      ≤ 0: un costo 0 o negativo cuenta como sin costo (quick-create guarda 0)), skus_agotados, skus_bajo_minimo,
      skus_abastecidos, disponibilidad_pct (disponibles / fisicas × 100 con 1 decimal; None sin fisicas)}.
     Las unidades van en Decimal (como disponibilidad_sku); los conteos y el valor, en int. Con warehouse_id solo cuentan
-    las existencias de esa bodega (el transito no tiene bodega: es el de cada SKU)."""
-    e = consulta_existencias(db, por="sku", warehouse_id=warehouse_id, ahora=ahora).subquery("existencias")
+    las existencias de esa bodega (el transito no tiene bodega: es el de cada SKU). B4 T24 (B36): categoria_id y q filtran
+    como en consulta_existencias (los usa el resumen de GET /inventory/stock-tabla, que antes copiaba esta agregacion)."""
+    e = consulta_existencias(db, por="sku", warehouse_id=warehouse_id, categoria_id=categoria_id, q=q,
+                             ahora=ahora).subquery("existencias")
     c = e.c
 
     def contar(condicion):

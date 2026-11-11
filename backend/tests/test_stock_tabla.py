@@ -242,6 +242,17 @@ def test_conteos_y_resumen(app_client, db, admin_token, product, warehouse):
     # sobre físicas 13+2+0+2+9+0 = 26 -> 84,6 %.
     assert cuerpo["resumen"] == {"valorizacion_cop": 153, "skus": 6, "bajo_minimo": 3, "agotados": 2,
                                  "disponibilidad_pct": 84.6}
+    # B4 T24 (B36): el resumen ES resumen_existencias con la búsqueda y la categoría (solo cambian los nombres).
+    x = resumen_existencias(db, q=e.s)
+    assert (x["valor_inventario_cop"], x["skus_total"], x["skus_bajo_minimo"], x["skus_agotados"],
+            x["disponibilidad_pct"]) == (153, 6, 3, 2, 84.6)
+    from app.models.catalog import Category
+    otra = Category(name=f"Otra-{e.s}")
+    db.add(otra)
+    db.commit()
+    assert resumen_existencias(db, q=e.s, categoria_id=otra.id)["skus_total"] == 0
+    assert _get(app_client, admin_token, q=e.s, categoria_id=otra.id, con_resumen="true", limit=0)["resumen"] == {
+        "valorizacion_cop": 0, "skus": 0, "bajo_minimo": 0, "agotados": 0, "disponibilidad_pct": None}
     # Por bodega los conteos cuentan filas (pares): A-w1 abastecido, A-w2 bajo, B, D y E bajo, C agotado, G abastecido.
     por_bodega = _get(app_client, admin_token, q=e.s, por="bodega", con_conteos="true", con_resumen="true", limit=0)
     assert por_bodega["conteos"] == {"todos": 7, "agotados": 1, "bajo_minimo": 4, "abastecidos": 2, "con_fisico": 6}
@@ -282,6 +293,13 @@ def test_consultas_no_dependen_de_cuantas_referencias(app_client, db, admin_toke
 
 # ─── Errores, permisos y parámetros ──────────────────────────────────────────────────────────────────────────────────
 
+def test_ordenes_stock_ya_no_esta():
+    """B4 T24 (B38): ORDENES_STOCK figuraba como la lista de órdenes de /stock-tabla pero nadie la usaba (las órdenes reales
+    son las claves de _ordenes_stock): se borró."""
+    from app.api.v1 import erp_inventario
+    assert not hasattr(erp_inventario, "ORDENES_STOCK")
+
+
 def test_errores_en_espanol(app_client, admin_token):
     """R21 y D46: cada 422 con su texto exacto, por igualdad."""
     from app.core.listados import MAX_OFFSET
@@ -310,7 +328,9 @@ def test_errores_en_espanol(app_client, admin_token):
         resp = app_client.get(RUTA, params=params, headers=_auth(admin_token))
         assert resp.status_code == 400 and resp.json()["message"] == MENSAJE_DATOS_INVALIDOS, (params, resp.text)
     # Un tabulador en medio de la búsqueda no es un error; en blanco no filtra.
-    assert _get(app_client, admin_token, q="T13\tA", limit=0)["total"] >= 0
+    # B4 T24 (B35): el tabulador pasa a un espacio (D46): el total es el de «T13 A», no solo «no es negativo».
+    assert _get(app_client, admin_token, q="T13\tA", limit=0)["total"] == _get(app_client, admin_token, q="T13 A",
+                                                                                 limit=0)["total"]
     assert _get(app_client, admin_token, q="   ", limit=0)["total"] == _get(app_client, admin_token, limit=0)["total"]
 
 

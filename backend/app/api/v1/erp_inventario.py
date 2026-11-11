@@ -31,11 +31,11 @@ from app.models.inventory import Warehouse, InventoryLevel, InventoryOperation, 
 # core/listados.py). erp_ventas no importa este módulo al cargarse, así que no hay ciclo.
 from app.api.v1.erp_ventas import _parametro_de_lista, _sin_caracteres_de_control
 from app.core import analisis_inventario as ai
-from app.core.analisis import dinero, validar_top
+from app.core.analisis import validar_top
 from app.core.existencias import ESTADOS_STOCK, POR, consulta_existencias, disponibilidad_sku, resumen_existencias
 from app.core.listados import (MAX_OFFSET, contar_por_vista, filtrar_por_estados, leer_lista, leer_orden, paginar,
                                respuesta as respuesta_de_lista, texto_busqueda)
-from app.core.periodos import resolver_periodo
+from app.core.periodos import inicio_del_dia_utc, resolver_periodo
 from app.models.fase1b import InventoryOwnerBalance, InventoryReservation, SaleOrderLineErp
 from app.models.fase3 import InventoryQuarantine
 from app.api.dependencies import (
@@ -290,6 +290,12 @@ def _direcciones_del_kardex(direction) -> list:
     return direcciones
 
 
+def _inicio_del_dia_co(dia: datetime.date) -> datetime.datetime:
+    """B4 T24 (A3-b): las 00:00 de `dia` en Colombia como instante UTC con zona (periodos.inicio_del_dia_utc), para
+    comparar con una columna timestamptz sin depender de la zona de la sesión."""
+    return inicio_del_dia_utc(dia).replace(tzinfo=datetime.timezone.utc)
+
+
 @router.get("/kardex", response_model=dict)
 def get_kardex(
     sku_id: Optional[int] = Query(None, description="Filtrar por SKU"),
@@ -299,7 +305,7 @@ def get_kardex(
     start_date: Optional[datetime.date] = Query(None, description="Fecha inicial"),
     end_date: Optional[datetime.date] = Query(None, description="Fecha final"),
     limit: int = Query(50, ge=1, le=500),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=MAX_OFFSET),
     user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db),
 ):
@@ -309,6 +315,7 @@ def get_kardex(
     que escribe el sistema (analisis_inventario.DIRECCIONES_KARDEX); con un solo valor la consulta es la de hoy (la
     igualdad). La respuesta {status, data: {total, limit, offset, items}} no cambia y no hay `q`."""
     direcciones = _direcciones_del_kardex(direction)
+    owner = _sin_caracteres_de_control(owner)  # B4 T24 (FINAL-m7): un NUL llegaba al SQL (500); ahora 422 (D46, R21)
     query = (
         select(
             InventoryMovement.id,
@@ -342,10 +349,13 @@ def get_kardex(
     if owner:
         query = query.where(InventoryMovement.owner == owner.strip().upper())
     query = filtrar_por_estados(query, InventoryMovement.direction, direcciones)
+    # B4 T24 (A3-b): start_date y end_date son días de Colombia (los que muestra la tabla), no días UTC: un movimiento del
+    # día D a las 21:00 de Colombia (02:00 UTC de D+1) sale con «Hasta D» y no con «Desde D+1». created_at es timestamptz:
+    # los bordes van con zona UTC (como periodos.en_rango); el fin es el inicio del día siguiente, excluido.
     if start_date:
-        query = query.where(InventoryMovement.created_at >= datetime.datetime.combine(start_date, datetime.time.min))
-    if end_date:
-        query = query.where(InventoryMovement.created_at <= datetime.datetime.combine(end_date, datetime.time.max))
+        query = query.where(InventoryMovement.created_at >= _inicio_del_dia_co(start_date))
+    if end_date and end_date < datetime.date.max:
+        query = query.where(InventoryMovement.created_at < _inicio_del_dia_co(end_date + datetime.timedelta(days=1)))
 
     total = db.execute(select(func.count()).select_from(query.subquery())).scalar() or 0
     query = query.order_by(InventoryMovement.created_at.desc(), InventoryMovement.id.desc()).limit(limit).offset(offset)
@@ -510,9 +520,7 @@ def get_inventory_stock_summary(
 # Todo sale de core/existencias.py (T1C). Estas rutas no declaran response_model: sus Decimal salen como números.
 # ─────────────────────────────────────────────────────────────────────────────
 
-ORDENES_STOCK = ("producto", "sku", "categoria", "fisico", "reservado", "disponible", "transito", "precio",
-                 "valorizacion")
-ORDEN_STOCK_POR_DEFECTO = "producto"
+ORDEN_STOCK_POR_DEFECTO = "producto"   # las órdenes permitidas son las claves de _ordenes_stock (B4 T24, B38)
 POR_DEFECTO = "sku"
 SIN_FILTRO_STOCK = "todos"   # D46: 'todos' es «sin filtro», como vista=todos y semaforo=todos
 MENSAJE_POR = "No se puede agrupar por «{:.40}»: usa sku o bodega."
@@ -552,18 +560,12 @@ def _resumen_stock(db: Session, warehouse_id, categoria_id, texto) -> dict:
     """con_resumen (R10, RP50): por REFERENCIA (consulta_existencias por='sku', sea cual sea `por`), con la búsqueda, la
     bodega y la categoría, sin estado_stock ni incluir_sin_stock y sin las referencias con rastrear_inventario = false
     (la regla de los totales de resumen_existencias): valorizacion_cop (Σ físico × costo, al peso), skus, bajo_minimo,
-    agotados y disponibilidad_pct (disponibles / físicas × 100 con 1 decimal; None sin físicas). UNA consulta."""
-    s = consulta_existencias(db, por="sku", warehouse_id=warehouse_id, categoria_id=categoria_id,
-                             q=texto).subquery("resumen_stock")
-    contar = lambda estado: func.count(s.c.sku_id).filter(s.c.estado_stock == estado)  # noqa: E731
-    skus, valor, bajo, agotados, fisicas, disponibles = (
-        db.query(func.count(s.c.sku_id), func.coalesce(func.sum(s.c.valorizacion), 0), contar(ESTADOS_STOCK[1]),
-                 contar(ESTADOS_STOCK[0]), func.coalesce(func.sum(s.c.fisico), 0),
-                 func.coalesce(func.sum(s.c.disponible), 0))
-        .filter(s.c.rastrear_inventario.is_(True)).one())
-    return {"valorizacion_cop": dinero(valor), "skus": int(skus), "bajo_minimo": int(bajo),
-            "agotados": int(agotados),
-            "disponibilidad_pct": round(float(disponibles) / float(fisicas) * 100, 1) if fisicas else None}
+    agotados y disponibilidad_pct (disponibles / físicas × 100 con 1 decimal; None sin físicas). UNA consulta.
+    B4 T24 (B36): es resumen_existencias (core/existencias.py) con la categoría y la búsqueda: aquí solo se renombran las
+    claves (antes copiaba la misma agregación, el filtro, el redondeo y el porcentaje)."""
+    r = resumen_existencias(db, warehouse_id=warehouse_id, categoria_id=categoria_id, q=texto)
+    return {"valorizacion_cop": r["valor_inventario_cop"], "skus": r["skus_total"], "bajo_minimo": r["skus_bajo_minimo"],
+            "agotados": r["skus_agotados"], "disponibilidad_pct": r["disponibilidad_pct"]}
 
 
 @router.get("/stock-tabla")

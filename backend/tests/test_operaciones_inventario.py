@@ -219,6 +219,7 @@ def test_errores_en_espanol(app_client, admin_token):
         ({"orden": "-reciente"}, "No se puede ordenar por «-reciente»."),
         ({"q": "\x00"}, CONTROL),
         ({"search": "tra\x00slado"}, CONTROL),
+        ({"operation_type": "TRANS\x00FER"}, CONTROL),   # B4 T24 (FINAL-m7): antes un 500
     ]
     for params, texto in casos:
         assert _error(app_client, admin_token, **params) == texto, params
@@ -237,7 +238,7 @@ def test_permisos_y_parametros_declarados(app_client, vendedor_token, compras_to
     caminos = app.openapi()["paths"]
     parametros = {p["name"]: p for p in caminos[RUTA]["get"]["parameters"]}
     assert set(parametros) == {"operation_type", "warehouse_id", "q", "search", "status", "direccion", "orden",
-                               "con_conteos", "limit", "offset"}
+                               "con_conteos", "limit", "offset", "id"}   # B4 T24 (F74-b): id exacto
     limite = parametros["limit"]["schema"]
     assert (limite["default"], limite["minimum"], limite["maximum"]) == (100, 0, 200)
     assert parametros["offset"]["schema"]["maximum"] == MAX_OFFSET
@@ -373,6 +374,36 @@ def test_kardex_con_un_solo_valor_responde_como_hoy(app_client, db, admin_token,
         assert [m["id"] for m in nuevo["data"]["items"]] == [m["id"] for m in esperado["data"]["items"]], params
 
 
+def test_kardex_filtra_por_dias_de_colombia(app_client, db, admin_token, sku, warehouse):
+    """B4 T24 (A3-b): start_date y end_date son días de Colombia (UTC-5), los que muestra la tabla. Un movimiento del 7 de
+    noviembre a las 21:00 de Colombia (02:00 UTC del 8) sale con «Hasta 7 nov» y no con «Desde 8 nov»."""
+    from datetime import date
+    op = _guardar(db, InventoryOperation(operation_type="ADJUSTMENT", status="DONE"))
+    instantes = {
+        "6 nov 22:00 co": _utc(2026, 11, 7, 3, 0),
+        "7 nov 00:00 co": _utc(2026, 11, 7, 5, 0),
+        "7 nov 21:00 co": _utc(2026, 11, 8, 2, 0),
+        "7 nov 23:59 co": _utc(2026, 11, 8, 4, 59, 59),
+        "8 nov 00:00 co": _utc(2026, 11, 8, 5, 0),
+    }
+    ids = {}
+    for nombre, instante in instantes.items():
+        ids[nombre] = _guardar(db, InventoryMovement(operation_id=op.id, sku_id=sku.id, quantity=1, direction="IN",
+                                                     warehouse_id=warehouse.id, created_at=instante, owner="NEBULAE")).id
+
+    def vistos(**params):
+        cuerpo = _get(app_client, admin_token, RUTA_KARDEX, sku_id=sku.id, limit=50, **params)["data"]
+        return {n for n, i in ids.items() if i in {m["id"] for m in cuerpo["items"]}}
+
+    dia_7 = {"7 nov 00:00 co", "7 nov 21:00 co", "7 nov 23:59 co"}
+    assert vistos(start_date="2026-11-07", end_date="2026-11-07") == dia_7
+    assert vistos(end_date="2026-11-07") == dia_7 | {"6 nov 22:00 co"}
+    assert vistos(start_date="2026-11-08") == {"8 nov 00:00 co"}
+    assert vistos(start_date="2026-11-07") == dia_7 | {"8 nov 00:00 co"}
+    assert vistos(end_date="2026-11-06") == {"6 nov 22:00 co"}
+    assert vistos(end_date=str(date.max)) == set(instantes)   # sin desbordar al sumar un día
+
+
 def test_kardex_errores(app_client, admin_token):
     muchos = ",".join(["IN", "OUT", "ADJUST_IN", "ADJUST_OUT", "TRANSFER_IN", "TRANSFER_OUT", "QUARANTINE", "SCRAP",
                        "RETURN_IN"] + [f"X{i}" for i in range(12)])
@@ -382,6 +413,15 @@ def test_kardex_errores(app_client, admin_token):
         ({"direction": "x" * 300}, f"La dirección «{'x' * 40}» no existe en el Kardex."),
         ({"direction": muchos}, "Puedes filtrar por 20 estados como máximo."),
         ({"direction": "I\x00N"}, CONTROL),
+        ({"owner": "NEBU\x00LAE"}, CONTROL),   # B4 T24 (FINAL-m7): antes un 500
     ]
     for params, texto in casos:
         assert _error(app_client, admin_token, RUTA_KARDEX, **params) == texto, params
+    # B4 T24 (FINAL-m7): offset hasta MAX_OFFSET, como las demás listas (10**19 llegaba a PostgreSQL y daba 500).
+    from app.core.listados import MAX_OFFSET
+    from main import MENSAJE_DATOS_INVALIDOS
+    for offset in (MAX_OFFSET + 1, 10 ** 19):
+        resp = app_client.get(RUTA_KARDEX, params={"offset": offset}, headers=_auth(admin_token))
+        assert resp.status_code == 400 and resp.json()["message"] == MENSAJE_DATOS_INVALIDOS, (offset, resp.text)
+    assert app_client.get(RUTA_KARDEX, params={"offset": MAX_OFFSET, "limit": 1},
+                          headers=_auth(admin_token)).status_code == 200

@@ -16,7 +16,8 @@ from app.core.iva import normalizar_tarifa_iva
 # erp_ventas importan este módulo, así que no hay ciclo.
 from app.api.v1.ecommerce import _lectura_canonica
 from app.api.v1.erp_ventas import _busqueda_de_lista
-from app.core.listados import MAX_OFFSET, leer_orden, paginar, respuesta as respuesta_de_lista
+from app.core.listados import MAX_OFFSET, leer_orden, paginar, respuesta as respuesta_de_lista, texto_busqueda
+from app.core.textos_filtro import mensaje_control
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -71,7 +72,9 @@ def create_category(category: schemas.CategoryCreate, db: Session = Depends(get_
 
 @router.get("/categories")
 def list_categories(db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
-    categories = db.query(Category).all()
+    # B4 T24 (F87-b): por nombre (y id), no en el orden que dé PostgreSQL: el selector de categoría del Hub de Inventario
+    # las lista tal cual llegan.
+    categories = db.query(Category).order_by(Category.name, Category.id).all()
     return {"status": "success", "data": [schemas.CategoryResponse.model_validate(c).model_dump() for c in categories]}
 
 def _es_descendiente(db: Session, categoria_id: int, posible_ancestro_id: int) -> bool:
@@ -265,14 +268,29 @@ def _producto_dict(p, publicados: set) -> dict:
     return fila
 
 
+def _sku_exacto(valor) -> Optional[str]:
+    """B4 T24 (B40-b): el código del parámetro sku de /products sin espacios en los bordes (None si no vino o está en
+    blanco). Un carácter de control (un NUL llegaría al SQL y daría 500) -> 422 «El filtro «sku» no puede llevar
+    caracteres de control.» (R21, D46)."""
+    if valor is None:
+        return None
+    try:
+        return texto_busqueda(valor, None)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=mensaje_control("sku"))
+
+
 @router.get("/products")
 def list_products(brand_id: Optional[int] = None, category_id: Optional[int] = None, necesita_revision: Optional[bool] = None,
                   q: Optional[str] = None, search: Optional[str] = None, id: Optional[int] = None,
+                  sku: Optional[str] = None,
                   sin_tarifa_iva: Optional[bool] = None, orden: Optional[str] = None, limit: Optional[int] = None,
                   offset: Optional[int] = Query(None, ge=0, le=MAX_OFFSET),
                   db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
     """Los productos del catálogo. brand_id, category_id y necesita_revision filtran como hoy. B4 T13 (TABLA-inventario 2):
     - q (search es su alias, RP8): el nombre, la descripción o el código de alguno de sus SKU.
+    - B4 T24 (B40-b): sku = el producto que tiene ese código de SKU exacto (sin espacios en los bordes, distinguiendo
+      mayúsculas, como lo guarda el catálogo); si ninguno lo tiene, la lista vacía. Un carácter de control, 422.
     - id (RP49): solo ese producto (si no existe, 422). sin_tarifa_iva (RP48): true = sin tarifa de IVA (tarifa_iva IS
       NULL, la regla de sinTarifaIva de lib/iva.js); false = con tarifa.
     - orden: [-]nombre | creado | tipo (leer_orden; desempate id desc). Sin orden ni offset no se ordena, como hoy.
@@ -281,6 +299,7 @@ def list_products(brand_id: Optional[int] = None, category_id: Optional[int] = N
       (los selectores y las pantallas que mandan limit=300).
     Cada producto suma precio_venta, costo y publicado (_producto_dict, RP91)."""
     like = _busqueda_de_lista(q, search)
+    sku_exacto = _sku_exacto(sku)
     paginada = offset is not None
     limite = None
     if paginada:
@@ -307,6 +326,8 @@ def list_products(brand_id: Optional[int] = None, category_id: Optional[int] = N
     if like:
         query = query.filter(or_(Product.name.ilike(like), Product.description.ilike(like),
                                  exists().where(ProductSKU.product_id == Product.id, ProductSKU.sku.ilike(like))))
+    if sku_exacto:
+        query = query.filter(exists().where(ProductSKU.product_id == Product.id, ProductSKU.sku == sku_exacto))
     if orden_sql:
         query = query.order_by(*orden_sql)
 

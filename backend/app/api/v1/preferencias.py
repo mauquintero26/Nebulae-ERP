@@ -21,6 +21,7 @@ from sqlalchemy.dialects.postgresql import insert as insert_pg
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user
+from app.core.listados import MENSAJE_CONTROL, texto_busqueda
 from app.db.database import get_db
 from app.models.preferencias import UNICO_USUARIO_CLAVE, PreferenciaUsuario
 from app.models.users import User
@@ -89,6 +90,12 @@ def _leer_valor(body: Any) -> Any:
 
 @router.get("")
 def ver_preferencias(prefijo: str = "", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # B4 T24 (FINAL-m7 + FINAL-m3): un carácter de control en el prefijo (un NUL llegaba al bind de startswith y daba 500)
+    # -> 422 con el texto de D46. El filtro sigue usando el prefijo tal cual llegó.
+    try:
+        texto_busqueda(prefijo, None)
+    except ValueError:
+        raise HTTPException(422, MENSAJE_CONTROL)
     q = db.query(PreferenciaUsuario.clave, PreferenciaUsuario.valor).filter(PreferenciaUsuario.user_id == user.id)
     if prefijo:
         q = q.filter(PreferenciaUsuario.clave.startswith(prefijo, autoescape=True))

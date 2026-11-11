@@ -253,6 +253,15 @@ def test_valor_con_mas_de_32_niveles_anidados_da_422_sin_guardar(app_client, db,
 
 # ─── 401 sin token ──────────────────────────────────────────────────────────────────────────────────────────
 
+def test_prefijo_con_un_caracter_de_control_da_422(app_client, vendedor_token):
+    """B4 T24 (FINAL-m7 + FINAL-m3): ?prefijo=%00 llegaba al bind de startswith y daba 500. Ahora 422 con el texto de D46;
+    un prefijo normal sigue igual."""
+    for prefijo in ("\x00", "tabla:\x00", "\x07"):   # \x1c a \x1f no: D46 los toma como un espacio
+        r = _get(app_client, vendedor_token, prefijo=prefijo)
+        assert (r.status_code, r.json()) == (422, {"detail": "La búsqueda no puede llevar caracteres de control."}), prefijo
+    assert _get(app_client, vendedor_token, prefijo="tabla:").status_code == 200
+
+
 def test_sin_token_da_401(app_client):
     assert app_client.get(URL).status_code == 401
     assert app_client.get(URL, params={"prefijo": "tabla:"}).status_code == 401

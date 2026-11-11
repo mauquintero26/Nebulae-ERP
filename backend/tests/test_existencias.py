@@ -228,6 +228,37 @@ def test_resumen_existencias_por_bodega(db, product, warehouse):
 
 # ─── disponibilidad_sku (RP80, D17) ──────────────────────────────────────────────────────────────────────────────────
 
+def _hoy_disponibilidad(db, sku_id, warehouse_id):
+    """B4 T24 (B37): copia congelada de _calculate_sku_availability de 16d11a0 (antes de que T13 la delegara en
+    disponibilidad_sku), sin el tránsito (RP50 lo cambió a propósito: va por TRANSITO, abajo). Así la prueba compara la
+    regla nueva con la de antes, no la función consigo misma."""
+    from datetime import datetime
+    from sqlalchemy import func, or_, select
+    now = datetime.utcnow()
+    level = db.execute(select(InventoryLevel).where(InventoryLevel.sku_id == sku_id,
+                                                    InventoryLevel.warehouse_id == warehouse_id)).scalar_one_or_none()
+    fisico = Decimal(str(level.quantity)) if level and level.quantity is not None else Decimal("0.00")
+    reservado = Decimal(str(db.execute(
+        select(func.coalesce(func.sum(InventoryReservation.quantity_reserved), 0)).where(
+            InventoryReservation.sku_id == sku_id, InventoryReservation.warehouse_id == warehouse_id,
+            InventoryReservation.status == "ACTIVE",
+            or_(InventoryReservation.expires_at == None, InventoryReservation.expires_at > now))  # noqa: E711
+    ).scalar() or 0))
+    cuarentena = Decimal(str(db.execute(
+        select(func.coalesce(func.sum(InventoryQuarantine.quantity), 0)).where(
+            InventoryQuarantine.sku_id == sku_id, InventoryQuarantine.warehouse_id == warehouse_id,
+            InventoryQuarantine.status == "ACTIVO")).scalar() or 0))
+
+    def balance(owner):
+        return Decimal(str(db.execute(select(func.coalesce(func.sum(InventoryOwnerBalance.quantity), 0)).where(
+            InventoryOwnerBalance.sku_id == sku_id, InventoryOwnerBalance.warehouse_id == warehouse_id,
+            InventoryOwnerBalance.owner == owner)).scalar() or 0))
+    return {"stock_vendible_fisico": fisico, "stock_reservado": reservado,
+            "stock_disponible": max(Decimal("0.00"), fisico - reservado), "stock_cuarentena": cuarentena,
+            "stock_total_bajo_custodia": fisico + cuarentena, "stock_fisico": fisico,
+            "balance_nebulae": balance("NEBULAE"), "balance_mau": balance("MAU")}
+
+
 def test_disponibilidad_sku_trae_las_nueve_claves_de_calculate_sku_availability(db, product, warehouse):
     from app.api.v1.erp_inventario import _calculate_sku_availability
     from app.core.existencias import disponibilidad_sku
@@ -236,18 +267,19 @@ def test_disponibilidad_sku_trae_las_nueve_claves_de_calculate_sku_availability(
              (e["e"], e["w1"])]
     for sku, bodega in casos:
         nuevo = disponibilidad_sku(db, sku.id, bodega.id)
-        hoy = _calculate_sku_availability(db, sku.id, bodega.id)
-        assert set(nuevo) == set(hoy) == CLAVES_DISPONIBILIDAD
+        assert set(nuevo) == set(_calculate_sku_availability(db, sku.id, bodega.id)) == CLAVES_DISPONIBILIDAD
         assert all(isinstance(v, Decimal) for v in nuevo.values()), nuevo
-        for clave in CLAVES_DISPONIBILIDAD - {"stock_en_transito"}:
-            assert nuevo[clave] == hoy[clave], (sku.sku, bodega.name, clave, nuevo[clave], hoy[clave])
+        antes = _hoy_disponibilidad(db, sku.id, bodega.id)   # B4 T24 (B37): contra la copia congelada
+        assert set(antes) == CLAVES_DISPONIBILIDAD - {"stock_en_transito"}
+        for clave, valor in antes.items():
+            assert nuevo[clave] == valor, (sku.sku, bodega.name, clave, nuevo[clave], valor)
     a1 = disponibilidad_sku(db, e["a"].id, e["w1"].id)
     assert (a1["stock_vendible_fisico"], a1["stock_reservado"], a1["stock_disponible"]) == (10, 4, 6)
     assert (a1["balance_nebulae"], a1["balance_mau"]) == (6, 4)
     assert disponibilidad_sku(db, e["a"].id, e["w2"].id)["stock_total_bajo_custodia"] == 4
     # Transito con la regla de R9 (etapa activos: emitido, en transito y en bodega, con el desconocido como emitido; no el
-    # cancelado, el recibido ni el borrador). _calculate_sku_availability todavia filtra otra lista de estados (la de hoy:
-    # CONFIRMADA, ENVIADA, PARCIALMENTE_ENVIADA y PARCIALMENTE_RECIBIDA); se alinea en T13 (RP50).
+    # cancelado, el recibido ni el borrador). RP50 (T13) la cambio a proposito frente a la lista de estados de antes, por
+    # eso la copia congelada no lo trae: se comprueba aqui.
     for k in ("a", "b", "c", "e"):
         assert disponibilidad_sku(db, e[k].id, e["w1"].id)["stock_en_transito"] == TRANSITO[k], k
     assert disponibilidad_sku(db, e["a"].id, e["w2"].id)["stock_en_transito"] == 4

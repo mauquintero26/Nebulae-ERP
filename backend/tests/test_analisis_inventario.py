@@ -379,6 +379,25 @@ def test_consultas_constantes(app_client, db, admin_token, product, contador_sql
 
 # ─── 9) Claves exactas, movimientos, permisos y errores ─────────────────────────────────────────────────────────────
 
+def test_una_bodega_sin_existencias_da_la_forma_vacia(app_client, db, admin_token):
+    """B4 T24 (B35): el Análisis de una bodega sin referencias ni movimientos: las cifras en cero (la de la foto sin
+    anterior), las series en cero y las donas, los movimientos, el ranking y los avisos vacíos (antes solo se miraba el
+    200)."""
+    import uuid
+    from app.models.inventory import Warehouse
+    vacia = Warehouse(name=f"Vacia-{uuid.uuid4().hex[:6]}", location_type="Central")
+    db.add(vacia)
+    db.commit()
+    data = _analisis(app_client, admin_token, bodega=vacia.id)
+    assert set(data) == CLAVES_ANALISIS
+    k = _kpis(data)
+    assert [(k[c]["valor"], k[c]["anterior"]) for c in KPIS] == [(0, 0), (0, 0), (0, 0), (0, None)]
+    assert all(v == 0 for s in data["linea"]["series"] for v in s["valores"])
+    assert all(v == 0 for s in data["barras"]["series"] for v in s["valores"])
+    assert [d["segmentos"] for d in data["donas"]] == [[] for _ in data["donas"]]
+    assert (data["movimientos"]["filas"], data["ranking"]["filas"], data["avisos"]) == ([], [], [])
+
+
 def test_claves_exactas(app_client, db, admin_token, product):
     f = _Fabrica(db, product)
     a = f.sku(costo=1_000, nivel=2)
