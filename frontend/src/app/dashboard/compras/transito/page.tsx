@@ -22,11 +22,9 @@ import { FOCOS } from '@/lib/design-system';
 import { accesoCompras } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
 import { apiFetch } from '@/lib/api';
-import { estadoDelTotal } from '@/lib/tabla';
+import { estadoDelTotal, ordenEsAtencion, textoOrdenHub } from '@/lib/tabla';
 import { PERIODO_KPI, tarjetasTransito } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
-// Piezas genéricas que nacieron en las libs de Ventas (T7), como en el Hub de Compras (T14): el chip del orden.
-import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
 import { humanizarCodigo } from '@/lib/estados-pedido';
 import { avisoTope200, infoEstadoPec, opcionesEstadosPec, textoVacioPec } from '@/lib/estados-compras';
 import {

@@ -27,12 +27,12 @@ import { accesoCompras } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
 import { apiFetch as _apiFetch } from '@/lib/api';
 import type { OpcionesApiFetch } from '@/lib/api';
-import { accionModo, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta } from '@/lib/tabla';
+import {
+  accionModo, accionVistaEnLista, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta, ordenEsAtencion,
+  textoOrdenHub,
+} from '@/lib/tabla';
 import { PERIODO_KPI, tarjetasHubCompras } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
-// Dos piezas genéricas que nacieron en las libs de Ventas (T7 y T10): el chip del orden y la vista desde Kanban.
-import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
-import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, consultaColumnaPec, grupoMesPec, infoEstadoPec,
   opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec, repartirCancelacionPec, resumenCancelacionPec, tarjetaPec,

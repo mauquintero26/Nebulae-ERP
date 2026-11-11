@@ -24,13 +24,11 @@ import {
 import type { BodegaTraslado, FilaColumnasTraslado } from '../columnas-traslado';
 
 import { apiFetch } from '@/lib/api';
-import { accionModo, estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
+import { accionModo, accionVistaEnLista, estadoDelTotal, normalizarRespuesta, ordenEsAtencion, textoOrdenHub } from '@/lib/tabla';
 import { tarjetasTraslados } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { fechaLarga } from '@/lib/fechas-colombia';
 import { FOCOS, TABLE } from '@/lib/design-system';
-import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
-import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
   COLUMNAS_TRASLADO, OPCIONES_ESTADOS_TABLERO_TRASLADO, avisoTope200, conteosTraslado, llegadaEnlaceTraslado, pedirEnlaceTraslado, consultaTableroTraslados,
   consultaTraslados, nombreBodega, numeroTraslado, opcionesEstadosTraslado, tarjetaTraslado, textoVacioTraslados,

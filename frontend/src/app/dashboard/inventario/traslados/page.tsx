@@ -23,12 +23,10 @@ import { BodegasTraslado, CeldaEstadoTraslado, columnasTraslado, titulosDeOrdenT
 import type { FilaColumnasTraslado } from '../../compras/columnas-traslado';
 
 import { apiFetch } from '@/lib/api';
-import { accionModo, estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
+import { accionModo, accionVistaEnLista, estadoDelTotal, normalizarRespuesta, ordenEsAtencion, textoOrdenHub } from '@/lib/tabla';
 import { lecturaDeCarga, tarjetasTraslados } from '@/lib/kpis';
 import { textoDeError } from '@/lib/avisos';
 import { fechaLarga } from '@/lib/fechas-colombia';
-import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
-import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
   COLUMNAS_TRASLADO, OPCIONES_ESTADOS_TABLERO_TRASLADO, RUTA_CONTEOS_TRASLADOS, avisoTope200, columnaDeTraslado, conteosTraslado,
   consultaTableroTraslados, consultaTraslados, fechaDeTraslado, nombreBodega, numeroTraslado, opcionesEstadosTraslado, pestanasTraslado,

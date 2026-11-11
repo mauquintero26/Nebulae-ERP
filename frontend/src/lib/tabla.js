@@ -49,7 +49,7 @@
  */
 
 import { normalizarBusqueda } from './busqueda.js';
-import { congelar, tiene } from './estados-pedido.js';
+import { congelar, humanizarCodigo, tiene } from './estados-pedido.js';
 import { formatoEntero, numeroFinito } from './kpis.js';
 import { diaColombia, fechaLarga } from './fechas-colombia.js';
 
@@ -2570,4 +2570,66 @@ export function textoVacioCatalogo(filtro) {
   const f = objeto(filtro) ? /** @type {any} */ (filtro) : {};
   const filtrado = textoLimpio(f.q) !== null || textoLimpio(f.categoria) !== null;
   return { titulo: filtrado ? 'Sin productos con esos filtros' : 'Sin productos', filtrado };
+}
+
+// ─── B4 T24 (F9): lo genérico que Compras e Inventario tomaban de las libs de Ventas ─────────────────────────
+
+/**
+ * La tabla del Hub va en el orden del semáforo («Atención primero», R6 y R8): sin orden (el que deja alternarOrden al
+ * tercer clic) o con 'atencion'. Con él se ven los separadores y no el chip del orden.
+ * @param {string | null | undefined} orden
+ * @returns {boolean}
+ */
+export function ordenEsAtencion(orden) {
+  return orden === null || orden === undefined || orden === '' || orden === 'atencion';
+}
+
+/**
+ * El chip del orden de la tabla del Hub (R6, orden_clic_columna): 'Orden: Monto ↓' (descendente, con '-') u
+ * 'Orden: Monto ↑'; junto a él va el botón «Atención primero». Con el orden de atención, null (no hay chip). `titulos`
+ * es {campo: título de la columna}; un campo sin título sale humanizado (nunca el código crudo).
+ * B4 T7 r1 (m4): `inversos` son los campos de las columnas con ordenInverso (lib/tabla.js), cuya flecha dice lo que ve
+ * el usuario: 'Antigüedad ↑' es '-creado' (la más nueva primero) y 'Antigüedad ↓' es 'creado'.
+ * @param {string | null | undefined} orden
+ * @param {Readonly<Record<string, string>>} [titulos]
+ * @param {{inversos?: ReadonlyArray<string | null> | null}} [opciones]
+ * @returns {string | null}
+ */
+export function textoOrdenHub(orden, titulos = {}, { inversos = [] } = {}) {
+  if (ordenEsAtencion(orden) || typeof orden !== 'string') return null;
+  const desc = orden.startsWith('-');
+  const campo = desc ? orden.slice(1) : orden;
+  const propio = titulos && tiene(titulos, campo) && typeof titulos[campo] === 'string' && titulos[campo].trim()
+    ? titulos[campo].trim() : humanizarCodigo(campo);
+  const abajo = (inversos ?? []).includes(campo) ? !desc : desc;
+  return `Orden: ${propio} ${abajo ? '↓' : '↑'}`;
+}
+
+/**
+ * B1 (R8): la misma ruta sin el parametro `nombre` y con los demas intactos (p. ej. quitar ?accion=cancelar tras abrir
+ * el modal de cancelacion, conservando return_to). `query` es lo que da useSearchParams() o su texto.
+ * @returns {string}
+ */
+export function rutaSinParametro(ruta, query, nombre) {
+  const q = new URLSearchParams(query ? query.toString() : '');
+  q.delete(nombre);
+  const resto = q.toString();
+  return resto ? `${ruta}?${resto}` : ruta;
+}
+
+/**
+ * B4 T10 r1 (I1): la acción de abrir la pestaña `vista` de una lista que tiene tablero, también desde Kanban (el enlace
+ * ?tab= y elegirVista de Pedidos de venta): en Lista, accionPestana tal cual; en Kanban, la misma vista y la poda de
+ * accionPestana con `opciones` (las de la LISTA, que es el destino) más {modo: 'lista'}, en una sola acción
+ * {tipo: 'cambiar'}, porque el tablero muestra todas las vistas (pide vista=todos). No toca `estado`.
+ * @param {EstadoTabla} estado
+ * @param {string} vista
+ * @param {OpcionesEstados | null | undefined} opciones
+ * @returns {AccionTabla}
+ */
+export function accionVistaEnLista(estado, vista, opciones) {
+  const accion = /** @type {any} */ (accionPestana(estado, vista, opciones));
+  if (estado?.modo !== 'kanban') return accion;
+  const cambios = accion.tipo === 'cambiar' ? accion.cambios : { vista: accion.valor };
+  return { tipo: 'cambiar', cambios: { ...cambios, modo: 'lista' } };
 }

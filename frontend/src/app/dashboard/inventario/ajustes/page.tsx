@@ -21,12 +21,10 @@ import type { OpcionCatalogo } from '../piezas-inventario';
 import { CHIP, titulosDeOrdenPec } from '../../compras/columnas-pec';
 
 import { apiFetch } from '@/lib/api';
-import { dependenciasTablero, estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
+import { accionVistaEnLista, dependenciasTablero, estadoDelTotal, normalizarRespuesta, ordenEsAtencion, textoOrdenHub } from '@/lib/tabla';
 import { formatoDecimal, lecturaDeCarga, tarjetasAjustes } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { fechaLarga } from '@/lib/fechas-colombia';
-import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
-import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
   COLUMNAS_AJUSTE, MOTIVOS_AJUSTE, bodegaDeAjuste, cantidadDeAjuste, consultaAjustes, consultaColumnaAjuste, direccionDeAjuste,
   consultasTotalesAjuste, infoDireccionAjuste, motivoDeAjuste, nombreBodega, numeroAjuste, pestanasAjustes, skuDeAjuste, tarjetaAjuste, textoFechaAjuste,

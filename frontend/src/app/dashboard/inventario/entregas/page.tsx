@@ -24,13 +24,13 @@ import { CHIP, titulosDeOrdenPec } from '../../compras/columnas-pec';
 import { getUsuarioActual } from '../../ventas/flujo';
 
 import { apiFetch } from '@/lib/api';
-import { accionModo, dependenciasTablero, estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
+import {
+  accionModo, accionVistaEnLista, dependenciasTablero, estadoDelTotal, normalizarRespuesta, ordenEsAtencion, textoOrdenHub,
+} from '@/lib/tabla';
 import { lecturaDeCarga } from '@/lib/kpis';
 import { recargarTrasError } from '@/lib/avisos';
 import { infoEstadoPedido } from '@/lib/estados-pedido';
 import { abrirWhatsApp, waUrl } from '@/lib/whatsapp';
-import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
-import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
   COLUMNAS_ENTREGA, NOTA_ENTREGAS, OPCIONES_ESTADOS_TABLERO_ENTREGA, VISTA_DE_TRABAJO_ENTREGA, confirmacionDespacho,
   consultaColumnaEntrega, consultaConteoEntrega, consultaEntregas, cuerpoDespacho, infoCobroEntrega, mensajeFaltaBodega, opcionesEstadosEntrega,

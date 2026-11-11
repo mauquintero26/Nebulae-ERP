@@ -21,7 +21,9 @@ import { redondearPeso, formatoPesos } from './pesos.js';
 import { diaColombia, diaDeNegocio, fechaSolo, sumarDias } from './fechas-colombia.js';
 import { TEXTO_PAPELERA_SIN_FECHA } from './estados-solicitud.js';
 import { normalizarTarifaIva, TARIFA_IVA_POR_DEFECTO } from './iva.js';
-import { accionPestana } from './tabla.js';
+import { accionPestana, accionVistaEnLista, rutaSinParametro } from './tabla.js';
+/** B4 T24 (F9): viven en lib/tabla.js (Compras e Inventario las toman de ahí); se reexportan. */
+export { accionVistaEnLista, rutaSinParametro };
 
 /**
  * Dias de alerta de `clave` (alerta_sc_dias, alerta_cot_dias, alerta_ven_dias) en la configuracion. Acepta la
@@ -267,17 +269,6 @@ export function hintTotalPedidos(k) {
     + (k.total > k.cargados ? ` · se ven los ${k.cargados} más recientes` : '');
 }
 
-/**
- * B1 (R8): la misma ruta sin el parametro `nombre` y con los demas intactos (p. ej. quitar ?accion=cancelar tras abrir
- * el modal de cancelacion, conservando return_to). `query` es lo que da useSearchParams() o su texto.
- * @returns {string}
- */
-export function rutaSinParametro(ruta, query, nombre) {
-  const q = new URLSearchParams(query ? query.toString() : '');
-  q.delete(nombre);
-  const resto = q.toString();
-  return resto ? `${ruta}?${resto}` : ruta;
-}
 
 /**
  * A4 (H47): ventas, cartera pendiente y ticket promedio del Dashboard General con la regla de la lista de pedidos
@@ -715,22 +706,6 @@ export function alertaEntregaPedido(p, ahora = Date.now()) {
   return fechaPorVencer(p.fecha_entrega_estimada, 7, ahora) ? 'por_vencer' : null;
 }
 
-/**
- * B4 T10 r1 (I1): la acción de abrir la pestaña `vista` de una lista que tiene tablero, también desde Kanban (el enlace
- * ?tab= y elegirVista de Pedidos de venta): en Lista, accionPestana tal cual; en Kanban, la misma vista y la poda de
- * accionPestana con `opciones` (las de la LISTA, que es el destino) más {modo: 'lista'}, en una sola acción
- * {tipo: 'cambiar'}, porque el tablero muestra todas las vistas (pide vista=todos). No toca `estado`.
- * @param {import('./tabla.js').EstadoTabla} estado
- * @param {string} vista
- * @param {import('./tabla.js').OpcionesEstados | null | undefined} opciones
- * @returns {import('./tabla.js').AccionTabla}
- */
-export function accionVistaEnLista(estado, vista, opciones) {
-  const accion = /** @type {any} */ (accionPestana(estado, vista, opciones));
-  if (estado?.modo !== 'kanban') return accion;
-  const cambios = accion.tipo === 'cambiar' ? accion.cambios : { vista: accion.valor };
-  return { tipo: 'cambiar', cambios: { ...cambios, modo: 'lista' } };
-}
 
 const SEPARACION_MENU_FILA = 4; // px entre el botón «⋮» y su menú
 const MARGEN_MENU_FILA = 8; // px que el menú deja libres contra los bordes de la ventana

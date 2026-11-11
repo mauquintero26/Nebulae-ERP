@@ -30,16 +30,13 @@ import { useRolActual } from '@/components/ui/useRolActual';
 import { apiFetch as _apiFetch } from '@/lib/api';
 import type { OpcionesApiFetch } from '@/lib/api';
 import {
-  accionModo, accionPestana, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta,
+  accionModo, accionPestana, accionVistaEnLista, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta,
+  ordenEsAtencion, rutaSinParametro, textoOrdenHub,
 } from '@/lib/tabla';
 import { PERIODO_KPI, tarjetasPedidosCompra } from '@/lib/kpis';
 // T15 r1 (m7): la etiqueta del estado del pedido de venta (el chip del alta), nunca el código.
 import { infoEstadoPedido } from '@/lib/estados-pedido';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
-// Piezas genéricas que nacieron en las libs de Ventas (T7 y T10), como en el Hub de Compras (T14): el chip del orden, la
-// pestaña desde Kanban y la ruta sin un parámetro.
-import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
-import { accionVistaEnLista, rutaSinParametro } from '@/lib/listas-ventas';
 import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, cancelarPecsEnSerie, consultaColumnaPec,
   despuesDeCancelarPec, etapaPec, grupoMesPec, infoEstadoPec, opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec,

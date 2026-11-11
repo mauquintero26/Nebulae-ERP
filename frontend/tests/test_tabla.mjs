@@ -3309,6 +3309,25 @@ console.log('--- TEST T24-j (B4 T24: F34, F35, F36 y F10): el margen de la fila 
   assert.match(t, /@template T\n \* @param \{ReadonlyArray<T> \| null \| undefined\} nombres\n \* @param \{number\} max\n \* @returns \{\{visibles: T\[\], mas: number, aviso: string \| null\}\}\n \*\/\nexport function recortarColumnas/);
 }
 
+console.log('--- TEST T24-F9 (B4 T24, F9): Compras e Inventario no importan lo genérico de las libs de Ventas ---');
+{
+  const hv = await import('../src/lib/hub-ventas.js');
+  const lv = await import('../src/lib/listas-ventas.js');
+  // Las cuatro viven en lib/tabla.js (sus casos siguen en test_hub_ventas.mjs y test_listas_ventas.mjs, por la reexportación).
+  for (const nombre of ['ordenEsAtencion', 'textoOrdenHub', 'accionVistaEnLista', 'rutaSinParametro']) assert.equal(typeof TABLA[nombre], 'function', nombre);
+  assert.equal(hv.ordenEsAtencion, TABLA.ordenEsAtencion, 'hub-ventas la reexporta (la misma función)');
+  assert.equal(hv.textoOrdenHub, TABLA.textoOrdenHub);
+  assert.equal(lv.accionVistaEnLista, TABLA.accionVistaEnLista);
+  assert.equal(lv.rutaSinParametro, TABLA.rutaSinParametro);
+  assert.equal(TABLA.rutaSinParametro('/x', '?a=1&tab=b', 'tab'), '/x?a=1');
+  assert.equal(TABLA.textoOrdenHub('-monto', { monto: 'Monto' }), 'Orden: Monto ↓');
+  const PANTALLAS = ['app/dashboard/compras/lista-compras/page.tsx', 'app/dashboard/compras/page.tsx', 'app/dashboard/compras/pedidos/page.tsx', 'app/dashboard/compras/recepciones/page.tsx', 'app/dashboard/compras/transito/page.tsx', 'app/dashboard/compras/traslados/page.tsx', 'app/dashboard/inventario/ajustes/page.tsx', 'app/dashboard/inventario/entregas/page.tsx', 'app/dashboard/inventario/recepciones/page.tsx', 'app/dashboard/inventario/traslados/page.tsx'];
+  for (const ruta of PANTALLAS) {
+    const f = readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8');
+    assert.ok(!/from '@\/lib\/(?:hub-ventas|listas-ventas)'/.test(f), `${ruta}: sin las libs de Ventas`);
+  }
+}
+
 console.log('--- TEST T24-k0 (B4 T24 r1, m36): los comentarios — el JSDoc del reductor, las notas de FINAL-m29 y PasosFlujo ---');
 {
   const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');

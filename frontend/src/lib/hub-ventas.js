@@ -21,6 +21,7 @@ import {
   ESTADOS_PEDIDO, ESTADOS_PEDIDO_MANUALES, ESTADOS_PEDIDO_CERRADOS, infoEstadoPedido, pasoPedido, transicionesPedido,
   esPedidoVigente, esCotizacionActiva, congelar, humanizarCodigo, tiene,
 } from './estados-pedido.js';
+import { ordenEsAtencion, textoOrdenHub } from './tabla.js';
 
 // ─── N3: cancelar documentos ────────────────────────────────────────────────────
 
@@ -540,36 +541,9 @@ export function scConCotDeFilas(filas) {
   return ids;
 }
 
-/**
- * La tabla del Hub va en el orden del semáforo («Atención primero», R6 y R8): sin orden (el que deja alternarOrden al
- * tercer clic) o con 'atencion'. Con él se ven los separadores y no el chip del orden.
- * @param {string | null | undefined} orden
- * @returns {boolean}
- */
-export function ordenEsAtencion(orden) {
-  return orden === null || orden === undefined || orden === '' || orden === 'atencion';
-}
 
-/**
- * El chip del orden de la tabla del Hub (R6, orden_clic_columna): 'Orden: Monto ↓' (descendente, con '-') u
- * 'Orden: Monto ↑'; junto a él va el botón «Atención primero». Con el orden de atención, null (no hay chip). `titulos`
- * es {campo: título de la columna}; un campo sin título sale humanizado (nunca el código crudo).
- * B4 T7 r1 (m4): `inversos` son los campos de las columnas con ordenInverso (lib/tabla.js), cuya flecha dice lo que ve
- * el usuario: 'Antigüedad ↑' es '-creado' (la más nueva primero) y 'Antigüedad ↓' es 'creado'.
- * @param {string | null | undefined} orden
- * @param {Readonly<Record<string, string>>} [titulos]
- * @param {{inversos?: ReadonlyArray<string | null> | null}} [opciones]
- * @returns {string | null}
- */
-export function textoOrdenHub(orden, titulos = {}, { inversos = [] } = {}) {
-  if (ordenEsAtencion(orden) || typeof orden !== 'string') return null;
-  const desc = orden.startsWith('-');
-  const campo = desc ? orden.slice(1) : orden;
-  const propio = titulos && tiene(titulos, campo) && typeof titulos[campo] === 'string' && titulos[campo].trim()
-    ? titulos[campo].trim() : humanizarCodigo(campo);
-  const abajo = (inversos ?? []).includes(campo) ? !desc : desc;
-  return `Orden: ${propio} ${abajo ? '↓' : '↑'}`;
-}
+/** B4 T24 (F9): ordenEsAtencion y textoOrdenHub viven en lib/tabla.js (Compras e Inventario las toman de ahí). */
+export { ordenEsAtencion, textoOrdenHub };
 
 /**
  * B4 T7 r1 (I1): el foco del enlace (?foco= de «Ver análisis») que el Hub le pasa a la pestaña Análisis como

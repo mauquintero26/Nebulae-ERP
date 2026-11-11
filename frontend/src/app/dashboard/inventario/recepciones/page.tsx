@@ -26,10 +26,11 @@ import {
 import type { FilaColumnasRecepcion } from '../../compras/columnas-recepcion';
 
 import { apiFetch } from '@/lib/api';
-import { accionModo, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta } from '@/lib/tabla';
+import {
+  accionModo, accionVistaEnLista, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta, ordenEsAtencion,
+  textoOrdenHub,
+} from '@/lib/tabla';
 import { PERIODO_KPI, NOTA_RECEPCIONES, formatoDecimal, lecturaDeCarga, tarjetasRecepciones, totalRecepciones } from '@/lib/kpis';
-import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
-import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
   COLUMNAS_RECEPCION, EXTRA_TABLERO_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, consultaColumnaRecepcion, opcionesEstadosRecepcion,
   pestanasRecepcion, tarjetaRecepcion, textoDiasRetraso, textoVacioRecepciones, vistaDeTarjetaRecepcion,

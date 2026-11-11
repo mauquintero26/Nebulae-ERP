@@ -26,11 +26,10 @@ import { COMP_NAV } from '../comp-nav';
 import { CHIP, textoInstante } from '../columnas-pec';
 
 import { apiFetch } from '@/lib/api';
-import { accionModo, estadoDelTotal } from '@/lib/tabla';
+import { accionModo, accionVistaEnLista, estadoDelTotal } from '@/lib/tabla';
 import { tarjetasLista } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { FOCOS, TABLE } from '@/lib/design-system';
-import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
   OPCIONES_ESTADOS_TABLERO_LISTA, COLUMNAS_LISTA, consultaLista, consultaTableroLista, avisoTope200, destinoItemLista,
   esItemSeleccionable, infoEstadoItemLista, opcionesEstadosLista, tarjetaItemLista, textoVacioLista,

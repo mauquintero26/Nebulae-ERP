@@ -27,11 +27,12 @@ import type { FilaColumnasRecepcion } from '../columnas-recepcion';
 
 import { FOCOS } from '@/lib/design-system';
 import { apiFetch } from '@/lib/api';
-import { accionModo, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta } from '@/lib/tabla';
+import {
+  accionModo, accionVistaEnLista, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta, ordenEsAtencion,
+  textoOrdenHub,
+} from '@/lib/tabla';
 import { NOTA_RECEPCIONES, PERIODO_KPI, tarjetasRecepciones } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
-import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
-import { accionVistaEnLista } from '@/lib/listas-ventas';
 import { fCOP, textoDia } from '../columnas-pec';
 import {
   COLUMNAS_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, consultaColumnaRecepcion, infoEstadoPec,
