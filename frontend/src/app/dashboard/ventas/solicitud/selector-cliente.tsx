@@ -49,8 +49,9 @@ export function NewClientModal({ onSave, onClose, textoInicial }: {
 
   if (typeof document === 'undefined') return null;
   return createPortal(
-    // C9 (ronda 1): Escape cierra el alta si no está guardando, sin llegar a la ventana de la solicitud (stopPropagation).
-    <div onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); if (!saving) onClose(); } }}>
+    // C9 (ronda 1) y B4 T24 r2 (m5, m16): el Esc no llega a la ventana de la solicitud (stopPropagation) y ya no cierra el alta: tiene
+    // campos (F40, C2), así que se cierra solo con sus botones.
+    <div onKeyDown={e => { if (e.key === 'Escape') e.stopPropagation(); }}>
     <Modal cierreExterno={false} title="Nuevo cliente" subtitle="Completa los datos del cliente nuevo para continuar." icon={UserPlus} color="indigo"
       capa="encima"
       // Mientras guarda no se cierra (ni la X ni 'Cancelar'): el resultado siempre llega a una ventana abierta.

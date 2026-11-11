@@ -2904,7 +2904,8 @@ console.log('--- TEST 48 (B4 T19; KANBAN-logistica 4, KPI-inventario 8; R15, RP2
   trae(e, 'consultaConteoEntrega(columna, { q: qConteos })', 'los conteos siguen la búsqueda (m1)');
   // m3, m10, m17: UNA regla para despachar (la fila, el Drawer y su selector de bodega); m6: cobrar el saldo solo ADMIN y ASESOR; m14: el rol tras montar.
   trae(e, 'puedeDespacharPedido(p, acciones.rol)', 'la fila usa la regla única');
-  assert.equal(e.split('puedeDespacharPedido(selected, rol)').length - 1, 2, 'el botón y el selector del Drawer usan la regla única');
+  // B4 T24 r2 (m15 c, D27): y el cierre del Drawer (cierreExterno={!puedeDespacharPedido(selected, rol)}).
+  assert.equal(e.split('puedeDespacharPedido(selected, rol)').length - 1, 3, 'el botón, el selector y el cierre del Drawer usan la regla única');
   trae(e, 'tieneSaldo && puedeCobrarSaldo(rol)', 'Marcar Saldo Cobrado solo a quien el servidor se lo permite');
   // B4 T24 (F46, D27): con useRolActual (la pieza común; '' en el servidor y en la hidratación).
   trae(e, 'const rol = useRolActual();', 'el rol se lee después de montar');

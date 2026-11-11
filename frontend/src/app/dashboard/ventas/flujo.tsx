@@ -177,7 +177,7 @@ export function EnlaceConfirmacionModal({ documento, link, color = 'indigo', cor
   }
 
   return (
-    <Modal cierreExterno={false}
+    <Modal
       title={textos.titulo}
       subtitle={textos.subtitulo}
       icon={Link2}

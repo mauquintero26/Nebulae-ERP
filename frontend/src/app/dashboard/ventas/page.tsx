@@ -514,7 +514,8 @@ function ConfigPanel({alertDias,configCargada,onSave,onClose}:{alertDias:any,con
     </div>
   );
   return (
-    <Drawer cierreExterno={false} onClose={onClose} maxWidth="md" header={(
+    // B4 T24 r2 (m4, m15 b): para quien edita, solo sus botones y nada mientras guarda; en solo lectura, Esc y el fondo.
+    <Drawer cierreExterno={soloLectura} bloquearCierre={saving} onClose={onClose} maxWidth="md" header={(
       <div className="flex items-center gap-3">
         <div className="bg-indigo-600 text-white p-2.5 rounded-xl shadow-md"><Settings size={20}/></div>
         <div><h2 className="font-black text-slate-800 text-lg">Configuración de HUB Ventas</h2><p className="text-xs text-slate-500">Parámetros de resolución, alertas y automatizaciones</p></div>

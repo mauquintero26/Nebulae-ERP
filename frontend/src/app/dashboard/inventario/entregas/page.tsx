@@ -493,7 +493,7 @@ export default function EntregasPage() {
 
       {/* DRAWER LATERAL DE DESPACHO Y COBRO (B1 a B3) */}
       {selected && (
-        <Drawer cierreExterno={false}
+        <Drawer cierreExterno={!puedeDespacharPedido(selected, rol)}
           onClose={() => { setSelected(null); setDesdeTablero(null); }}
           header={(
             <div>
