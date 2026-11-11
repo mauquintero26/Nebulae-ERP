@@ -856,7 +856,7 @@ def _get_authorized_ecommerce_warehouses(db: Session):
     return whs, def_wh
 
 @router.post("/pedidos", status_code=201)
-def create_web_order(body: dict, db: Session = Depends(get_db)):
+def create_web_order(body: dict, user: Optional[User] = Depends(get_optional_current_user), db: Session = Depends(get_db)):
     """
     Creacion segura, consistente y pesimista de pedidos desde ecommerce:
     - Calculo de precios, descuentos y totales 100% en el backend.
@@ -867,6 +867,9 @@ def create_web_order(body: dict, db: Session = Depends(get_db)):
     - Secuencias seguras PostgreSQL (seq_pweb y seq_ven).
     - Idempotencia con huella canonica: replay 200 vs conflicto divergente 409.
     - B2.1 D5: correo del cliente con formato valido (422 si no), antes de escribir nada, y recortado.
+    - B4 T24 r2 (m7): sin sesión ERP, un SKU que la tienda ya no muestra (la regla de C1: tiene espejo en
+      ecommerce_products y ninguno está publicado, _espejo_despublicado) da 409 en español, antes de escribir nada. Un SKU
+      sin espejo sigue como hoy (la regla de BASE). Con sesión, como hoy.
     """
     # B2.1 D5: el resto de la funcion lee body["customer_email"] (huella, cliente y pedido): ya va recortado.
     body["customer_email"] = _correo_de_la_tienda(body.get("customer_email"))
@@ -926,6 +929,8 @@ def create_web_order(body: dict, db: Session = Depends(get_db)):
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Producto SKU '{sku_code or sku_id}' no encontrado en el catalogo."
             )
+        if user is None and _espejo_despublicado(db, sku.sku):   # B4 T24 r2 (m7): la regla de C1
+            raise HTTPException(status.HTTP_409_CONFLICT, f"El producto {sku.sku} ya no está disponible en la tienda.")
 
         db_price = Decimal(str(sku.sale_price or sku.price or 0))
 
@@ -1645,6 +1650,16 @@ def web_builder_chat(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
 
 
 # --- PAGOS CONFIG ---
+# B4 T24 r2 (m6): los secretos de cada pasarela. El GET los devuelve como <campo>_masked (los 4 últimos caracteres) y sin
+# el valor; en el PATCH, uno ausente, vacío o igual a su máscara no cambia (la pantalla devuelve lo que recibió).
+_SECRETOS_DE_PAGO = (("stripe", "secret_key"), ("stripe", "webhook_secret"), ("mercadopago", "access_token"))
+
+
+def _enmascarar(valor) -> str:
+    valor = str(valor or "")
+    return ("*" * max(0, len(valor) - 4) + valor[-4:]) if valor else ""
+
+
 @router.get("/pagos/config")
 def get_payment_config(user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     """B4 T24 r1 (m13): un error sube como 500 (como B48), en vez de responder Stripe y Mercado Pago desactivados: la pantalla
@@ -1653,10 +1668,10 @@ def get_payment_config(user: User = Depends(require_roles(*ROLE_ADMIN)), db: Ses
     row = db.execute(text("SELECT config_value FROM web_builder_config WHERE config_key='payment_gateways'")).fetchone()
     if row and row[0]:
         config = dict(row[0])
-        for gw, sk_field in [("stripe","secret_key"),("mercadopago","access_token")]:
+        for gw, sk_field in _SECRETOS_DE_PAGO:   # r2 (m6): también stripe.webhook_secret
             if gw in config:
                 sk = config[gw].get(sk_field,"")
-                config[gw][f"{sk_field}_masked"] = ("*"*max(0,len(sk)-4)+sk[-4:]) if sk else ""
+                config[gw][f"{sk_field}_masked"] = _enmascarar(sk)
                 config[gw].pop(sk_field, None)
         return {"status": "success", "data": config}
     return {"status": "success", "data": {"stripe": {"enabled": False, "publishable_key": "", "webhook_secret": ""}, "mercadopago": {"enabled": False, "public_key": ""}}}
@@ -1670,7 +1685,15 @@ def update_payment_config(body: dict, user: User = Depends(require_roles(*ROLE_A
         if gateway in ["stripe","mercadopago"]:
             if gateway not in existing_data:
                 existing_data[gateway] = {}
-            existing_data[gateway].update(config)
+            actual = existing_data[gateway]
+            # B4 T24 r2 (m6): las claves *_masked las arma el GET (no se guardan) y un secreto vacío, null o igual a su
+            # máscara significa «no cambiar» (antes un vacío lo borraba).
+            nuevo = {k: v for k, v in config.items() if not str(k).endswith("_masked")}
+            for gw, campo in _SECRETOS_DE_PAGO:
+                if gw == gateway and campo in nuevo and (nuevo[campo] in (None, "")
+                                                         or nuevo[campo] == _enmascarar(actual.get(campo))):
+                    nuevo.pop(campo)
+            actual.update(nuevo)
     db.execute(text("INSERT INTO web_builder_config (config_key, config_value, updated_at) VALUES ('payment_gateways', CAST(:v AS jsonb), NOW()) ON CONFLICT (config_key) DO UPDATE SET config_value=CAST(:v AS jsonb), updated_at=NOW()"), {"v": json_mod.dumps(existing_data)})
     db.commit()
     return {"status": "success"}

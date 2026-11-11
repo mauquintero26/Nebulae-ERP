@@ -63,3 +63,55 @@ def test_un_error_de_la_configuracion_de_pagos_o_envios_sube(app_client, admin_t
             _falla_si(m, clave)
             resp = app_client.get(ruta, headers=_auth(admin_token))
         assert (resp.status_code, resp.json()) == (500, ERROR_500), (ruta, resp.text)
+
+
+
+# ─── B4 T24 r2 (m6): los secretos de las pasarelas no salen en el GET ni se borran con lo que el GET devuelve ─────────
+
+def test_la_configuracion_de_pagos_no_devuelve_ni_borra_los_secretos(app_client, db, admin_token):
+    """r2 (m6): GET /ecommerce/pagos/config devolvía stripe.webhook_secret en claro (secret_key y access_token ya iban
+    enmascarados). Ahora los tres salen como <campo>_masked, sin el valor. En el PATCH, un secreto ausente, vacío o igual a
+    su máscara significa «no cambiar» (antes un vacío lo borraba), y las claves *_masked que la pantalla devuelve no se
+    guardan. Un valor nuevo sí lo cambia."""
+    import json
+    from sqlalchemy import text
+    guardado = {"stripe": {"enabled": True, "publishable_key": "pk_test_1", "secret_key": "sk_test_abcd1234",
+                           "webhook_secret": "whsec_wxyz9876"},
+                "mercadopago": {"enabled": False, "public_key": "APP_USR-p", "access_token": "APP_USR-tok5555"}}
+    db.execute(text("INSERT INTO web_builder_config (config_key, config_value, updated_at) VALUES ('payment_gateways', "
+                    "CAST(:v AS jsonb), NOW()) ON CONFLICT (config_key) DO UPDATE SET config_value = CAST(:v AS jsonb)"),
+               {"v": json.dumps(guardado)})
+    db.commit()
+
+    def leer():
+        db.expire_all()
+        return db.execute(text("SELECT config_value FROM web_builder_config WHERE config_key = 'payment_gateways'")).scalar()
+
+    resp = app_client.get("/api/v1/ecommerce/pagos/config", headers=_auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    for secreto in ("sk_test_abcd1234", "whsec_wxyz9876", "APP_USR-tok5555"):
+        assert secreto not in resp.text, secreto
+    assert ("secret_key" in data["stripe"], "webhook_secret" in data["stripe"], "access_token" in data["mercadopago"]) == (
+        False, False, False)
+    assert (data["stripe"]["secret_key_masked"], data["stripe"]["webhook_secret_masked"],
+            data["mercadopago"]["access_token_masked"]) == ("*" * 12 + "1234", "*" * 10 + "9876", "*" * 11 + "5555")
+    # La pantalla manda de vuelta lo que recibió (sin los secretos, con los *_masked) y un cambio.
+    vuelta = {**data, "stripe": {**data["stripe"], "publishable_key": "pk_test_2"}}
+    assert app_client.patch("/api/v1/ecommerce/pagos/config", headers=_auth(admin_token), json=vuelta).status_code == 200
+    ahora = leer()
+    assert (ahora["stripe"]["secret_key"], ahora["stripe"]["webhook_secret"], ahora["mercadopago"]["access_token"]) == (
+        "sk_test_abcd1234", "whsec_wxyz9876", "APP_USR-tok5555")
+    assert ahora["stripe"]["publishable_key"] == "pk_test_2"
+    assert not [k for gw in ahora.values() for k in gw if k.endswith("_masked")], ahora
+    # Vacío, null o la máscara: no cambian.
+    cuerpo = {"stripe": {"secret_key": "", "webhook_secret": data["stripe"]["webhook_secret_masked"]},
+              "mercadopago": {"access_token": None}}
+    assert app_client.patch("/api/v1/ecommerce/pagos/config", headers=_auth(admin_token), json=cuerpo).status_code == 200
+    ahora = leer()
+    assert (ahora["stripe"]["secret_key"], ahora["stripe"]["webhook_secret"], ahora["mercadopago"]["access_token"]) == (
+        "sk_test_abcd1234", "whsec_wxyz9876", "APP_USR-tok5555")
+    # Un valor nuevo, sí.
+    assert app_client.patch("/api/v1/ecommerce/pagos/config", headers=_auth(admin_token),
+                            json={"stripe": {"webhook_secret": "whsec_nuevo0000"}}).status_code == 200
+    assert leer()["stripe"]["webhook_secret"] == "whsec_nuevo0000"

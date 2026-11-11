@@ -255,3 +255,35 @@ def test_un_error_del_catalogo_no_le_muestra_el_sql_al_anonimo(app_client, db, w
                                                      "error": "No se pudo cargar el catálogo."})
     resp = app_client.get(CATALOGO, params={"search": t.s}, headers=_auth(admin_token))
     assert resp.json()["error"] == "SELECT secreto FROM tabla WHERE x = 1"
+
+
+
+# ─── B4 T24 r2 (m7): el checkout anónimo no vende lo que la tienda ya no muestra ──────────────────────────────────────
+
+def _pedido_web(app_client, sku=None, codigo=None):
+    linea = {"quantity": 1, "modalidad": "POR_PEDIDO", **({"sku_id": sku.id} if sku is not None else {"sku": codigo})}
+    return app_client.post("/api/v1/ecommerce/pedidos", json={
+        "idempotency_key": f"r2-m7-{uuid.uuid4().hex}", "customer_email": f"r2m7-{uuid.uuid4().hex[:8]}@test.nebulae",
+        "customer_name": "Ana Tienda", "customer_phone": "3001234567", "productos": [linea],
+        "direccion_entrega": "Calle 1 #2-3"})
+
+
+def test_el_checkout_anonimo_rechaza_un_sku_que_la_tienda_ya_no_muestra(app_client, db, warehouse, contador_sql):
+    """r2 (m7): POST /ecommerce/pedidos sin sesión resolvía cualquier SKU por sku_id o por código sin mirar la publicación:
+    un producto despublicado (que tras C1 ya no sale en la lista ni en el detalle) se podía pedir igual. Ahora la misma
+    regla de C1: un SKU con espejo en ecommerce_products y ninguno publicado da 409 en español, sin escribir. Un SKU sin
+    espejo sigue como hoy (la regla de BASE)."""
+    t = _Catalogo(db, warehouse)
+    _despublicar_la_nevera(db, t)
+    nevera, codigo = t.p1.id, t.p1.sku
+    antes = db.query(SaleOrder).count()
+    texto = f"El producto {codigo} ya no está disponible en la tienda."
+    for por in ({"sku": t.p1}, {"codigo": codigo}):
+        with contador_sql.ventana() as v:
+            resp = _pedido_web(app_client, **por)
+        assert (resp.status_code, resp.json()) == (409, {"detail": texto}), por
+        assert not [s for s in v.sentencias if s.lstrip().upper().startswith(("INSERT", "UPDATE"))], por
+    db.expire_all()
+    assert db.query(SaleOrder).count() == antes and nevera
+    resp = _pedido_web(app_client, sku=t.p2)   # sin espejo: como hoy
+    assert resp.status_code == 201, resp.text
