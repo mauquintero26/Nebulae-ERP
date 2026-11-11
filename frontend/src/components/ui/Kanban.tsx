@@ -21,7 +21,7 @@ import type {
 import { FOCO, FOCO_DENTRO, FOCOS } from '@/lib/design-system';
 import { formatoPesos } from '@/lib/pesos';
 import { ofreceReintentar, textoDeError } from '@/lib/avisos';
-import { ESPERA_PREFERENCIAS_MS, listoConTope } from '@/lib/tabla';
+import { esperarPreferencias, listoConTope } from '@/lib/tabla';
 import { useAvisos } from './Avisos';
 import { Contador } from './Contador';
 import { MenuFila } from './MenuFila';
@@ -146,7 +146,7 @@ export type TableroKanbanEstado<T> = {
   /** Pliega o abre una columna (sin `plegada`, alterna) y lo recuerda en kanban:<pantalla>. */
   plegar: (clave: string, plegada?: boolean) => void;
   plegadas: ReadonlyArray<string>;
-  /** Ya se leyeron las plegadas guardadas (B4 T24, F18: o venció ESPERA_PREFERENCIAS_MS). Antes, nada se pide y se pinta el esqueleto. */
+  /** Ya se leyeron las plegadas guardadas (B4 T24, F18: o venció el tope de esperarPreferencias). Antes, nada se pide y se pinta el esqueleto. */
   listo: boolean;
   idDe: (item: T) => Id;
   /**
@@ -197,7 +197,7 @@ const SIN_MOVIMIENTOS: ReadonlyArray<never> = [];
  */
 export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>): TableroKanbanEstado<T> {
   const {
-    pantalla, modo, columnas: crudas, idDe = idPorDefecto, activo = true, porColumna = 25, cargar, dependencias,
+    pantalla, modo, columnas: crudas, idDe = idPorDefecto, activo, porColumna, cargar, dependencias,
     ordenDe, esperaMs = 0, items, columnaDe, esAtrasado, fechaMovimiento, totales,
   } = opciones;
 
@@ -212,12 +212,11 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
   });
   const plegadas = useMemo(() => resolverPlegadas(guardadas, columnas), [guardadas, columnas]);
   // B4 T24 (F18): nada se pide (y TableroKanban pinta el esqueleto) hasta leer lo guardado; con el tope de las preferencias de la tabla
-  // (ESPERA_PREFERENCIAS_MS), para no esperar para siempre si la precarga no termina.
+  // (esperarPreferencias de lib/tabla.js, r1 m42: el mismo de useEstadoTabla), para no esperar para siempre si la precarga no termina.
   const [vencioEspera, setVencioEspera] = useState(false);
   useEffect(() => {
     if (listo) return undefined;
-    const espera = window.setTimeout(() => setVencioEspera(true), ESPERA_PREFERENCIAS_MS);
-    return () => window.clearTimeout(espera);
+    return esperarPreferencias({ alVencer: () => setVencioEspera(true) });
   }, [listo]);
   const listoTablero = listoConTope(listo, vencioEspera);
 
@@ -963,12 +962,13 @@ export function TableroKanban<T = unknown>({
       observador?.disconnect();
       window.cancelAnimationFrame(cuadro);
     };
-  }, [ajustarAlto]);
+    // r1 (m13): con tablero.listo, porque el esqueleto de F18 sale sin el `contenedor`: al pasar a listo, el efecto vuelve a correr.
+  }, [ajustarAlto, tablero.listo]);
 
   // El aviso y el banner de solo para ver corren el tablero hacia abajo o hacia arriba.
   useLayoutEffect(() => {
     ajustarAlto();
-  }, [aviso, soloVer, ajustarAlto]);
+  }, [aviso, soloVer, ajustarAlto, tablero.listo]);
 
   // T4B r1: después de «Mover a…» el foco va a la tarjeta en su columna nueva (o al encabezado de la columna si ahí no
   // se ve) y, al plegar o abrir, al botón que la abre o la pliega. Se intenta después de cada render hasta que aparece,

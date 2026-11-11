@@ -636,7 +636,7 @@ console.log('--- TEST 14 (T4B r1): ninguna tarjeta perdida, «Ver más» sin sal
     /for \(const \{ control \} of Object\.values\(vivos\)\) control\.abort\(\);[\s\S]{0,500}?lanzadas\.current = \{\};\s*ultimasDeps\.current = null;/);
   assert.match(fuente, /columnasPorLanzar\(/);
   // Punto 5: el alto se recalcula con el aviso y el banner, y con el contenedor desplazable y el propio tablero.
-  assert.match(fuente, /useLayoutEffect\(\(\) => \{\s*ajustarAlto\(\);\s*\}, \[aviso, soloVer, ajustarAlto\]\);/);
+  assert.match(fuente, /useLayoutEffect\(\(\) => \{\s*ajustarAlto\(\);\s*\}, \[aviso, soloVer, ajustarAlto, tablero\.listo\]\);/); // r1 (m13, D27)
   assert.match(fuente, /observador\.observe\(desplazable\);/);
   assert.match(fuente, /observador\.observe\(envoltura\.current\);/);
   assert.match(fuente, /esDesplazable\(/);
@@ -1133,16 +1133,23 @@ console.log('--- TEST T24-b (B4 T24: F11, F12, F13, F15, F16, F17, F19, F20, F21
 
   // F18: hasta leer las plegadas guardadas (o el tope de ESPERA_PREFERENCIAS_MS, como la tabla: listoConTope) no se pide nada y se
   // pintan columnas con esqueleto (antes salían con las plegadas por defecto y se volvían a pedir al llegar lo guardado).
-  assert.match(c, /import \{ ESPERA_PREFERENCIAS_MS, listoConTope \} from '@\/lib\/tabla';/);
+  // r1 (m42): el tope es esperarPreferencias de lib/tabla.js (el mismo de useEstadoTabla y PanelAnalisis), no un setTimeout a mano.
+  assert.match(c, /import \{ esperarPreferencias, listoConTope \} from '@\/lib\/tabla';/);
   assert.match(c, /const listoTablero = listoConTope\(listo, vencioEspera\);/);
-  assert.match(c, /window\.setTimeout\(\(\) => setVencioEspera\(true\), ESPERA_PREFERENCIAS_MS\)/);
+  assert.match(c, /useEffect\(\(\) => \{\s*if \(listo\) return undefined;\s*return esperarPreferencias\(\{ alVencer: \(\) => setVencioEspera\(true\) \}\);\s*\}, \[listo\]\);/);
+  assert.ok(!/window\.setTimeout\(\(\) => setVencioEspera/.test(c), 'sin el setTimeout a mano');
   assert.match(c, /if \(modo !== 'servidor' \|\| !activo \|\| !listoTablero\) \{/);
   assert.match(c, /plegadas, listo: listoTablero, idDe, pendientes,/);
   assert.match(c, /if \(!tablero\.listo\) \{\s*return \(\s*<div aria-busy="true"/);
+  // r1 (m13): el esqueleto sale antes del `contenedor`; al pasar a listo, los dos efectos del alto vuelven a correr (tablero.listo en
+  // sus dependencias): si no, el tablero quedaba sin alto, sin oyente de resize y sin ResizeObserver hasta volver a montarse.
+  assert.match(c, /if \(envoltura\.current\) observador\.observe\(envoltura\.current\);[\s\S]{0,300}\}, \[ajustarAlto, tablero\.listo\]\);/);
+  assert.match(c, /useLayoutEffect\(\(\) => \{\s*ajustarAlto\(\);\s*\}, \[aviso, soloVer, ajustarAlto, tablero\.listo\]\);/);
 
-  // F19: activo y porColumna son obligatorios (tsc se los exige a las pantallas).
+  // F19: activo y porColumna son obligatorios (tsc se los exige a las pantallas). r1 (m38): sin los valores por defecto muertos.
   assert.match(fuenteKanban, /\n {2}activo: boolean;\n/);
   assert.match(fuenteKanban, /\n {2}porColumna: number;\n/);
+  assert.match(c, /pantalla, modo, columnas: crudas, idDe = idPorDefecto, activo, porColumna, cargar, dependencias,/);
 
   // F20: una columna bloqueada atenúa solo su cuerpo (la cabecera, el candado y el motivo se leen); «Ver más» en -700.
   assert.ok(!/opacity-50'/.test(c.slice(c.indexOf('const clasesMarca'), c.indexOf('if (tablero.plegadas.includes(c.clave))'))), 'la sección no se atenúa entera');
