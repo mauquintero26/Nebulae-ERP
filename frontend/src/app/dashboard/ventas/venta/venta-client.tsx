@@ -52,7 +52,7 @@ import { useRolActual } from '@/components/ui/useRolActual';
 // B4 T24 f2 (F45): el cargador compartido de los resúmenes de las tarjetas.
 import { useResumen } from '@/components/ui/useResumen';
 import { VEN_NAV } from '../ven-nav';
-import { getUsuarioActual, puedeCrearOrdenDePago } from '../flujo';
+import { puedeCrearOrdenDePago } from '../flujo';
 // B4 T24 f2 (F47): las acciones del tablero, las mismas de E-Commerce.
 import { useAccionesTableroPedidos } from '../acciones-tablero-pedidos';
 
@@ -166,6 +166,8 @@ type AccionesFilaPedido = {
   crearPxp: (p: FilaPedido) => void;
   creandoPxp: number | null;
   puedePxpRol: boolean;
+  /** B4 T24 f2 r1 (m14): el rol cancela pedidos (PATCH a CANCELADO: ADMIN y ASESOR, accesoTableroVentas). */
+  mover: boolean;
 };
 const AccionesLista = createContext<AccionesFilaPedido | null>(null);
 
@@ -243,7 +245,7 @@ function CeldaAcciones({ p }: { p: FilaPedido }) {
     { etiqueta: 'Crear PXP', icono: DollarSign, onClick: () => acciones?.crearPxp(p), oculto: !puedePxp,
       deshabilitado: acciones?.creandoPxp === p.id },
     { etiqueta: 'Cancelar pedido', icono: X, peligro: true, onClick: () => acciones?.ir(`/dashboard/ventas/venta/${p.id}?accion=cancelar`),
-      oculto: !transicionesPedido(p.estado).includes('CANCELADO') },
+      oculto: !acciones?.mover || !transicionesPedido(p.estado).includes('CANCELADO') },
   ];
   return (
     <span className="flex items-center justify-end">
@@ -525,10 +527,11 @@ export default function VentaClient() {
       setCreandoPxp(null);
     }
   }, [avisar, recargarListado]);
-  const puedePxpRol = puedeCrearOrdenDePago(getUsuarioActual().role);
+  // B4 T24 f2 r1 (m18): el rol leído después de montar (el de la tarjeta y del tablero), no getUsuarioActual().role en el render.
+  const puedePxpRol = puedeCrearOrdenDePago(rol);
   const accionesFila = useMemo<AccionesFilaPedido>(() => ({
-    abrir: abrirPedido, ir: (ruta) => router.push(ruta), crearPxp, creandoPxp, puedePxpRol,
-  }), [abrirPedido, router, crearPxp, creandoPxp, puedePxpRol]);
+    abrir: abrirPedido, ir: (ruta) => router.push(ruta), crearPxp, creandoPxp, puedePxpRol, mover: accesoTablero.mover,
+  }), [abrirPedido, router, crearPxp, creandoPxp, puedePxpRol, accesoTablero.mover]);
   // La selección de las filas (la de B1): «Seleccionar todo» marca la página; TablaEstandar la limpia al cambiar de
   // página, pestaña, búsqueda, filtro u orden.
   const [seleccion, setSeleccion] = useState<ClaveFila[]>([]);

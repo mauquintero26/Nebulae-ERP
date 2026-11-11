@@ -1277,7 +1277,18 @@ console.log('--- B4 T24 f2 (m8 de la revisión r0 de f1): el Hub ofrece cancelar
     assert.deepEqual(hv.opcionesPanelPedido(estado, true), opcionesEstadoPVEN(estado), `${estado}: con permiso, lo de siempre`);
     const sin = hv.opcionesPanelPedido(estado, false);
     assert.deepEqual(sin, { mover: [], despachar: opcionesEstadoPVEN(estado).despachar, cancelar: false, facturar: false }, `${estado}: sin permiso`);
+    // r1 (m13 + m37, D27): con el tercer parámetro (si el rol despacha: puedeAccionPedido('despachar')), el enlace solo para quien
+    // despacha; sin él (aditivo), como antes.
+    assert.deepEqual(hv.opcionesPanelPedido(estado, false, true), sin, `${estado}: BODEGA conserva el enlace`);
+    assert.deepEqual(hv.opcionesPanelPedido(estado, false, false), { mover: [], despachar: false, cancelar: false, facturar: false }, `${estado}: FINANZAS, COMPRAS y CONSULTA`);
+    assert.deepEqual(hv.opcionesPanelPedido(estado, true, true), opcionesEstadoPVEN(estado), `${estado}: ADMIN y ASESOR`);
   }
+  // Por rol, con las piezas de la pantalla: el panel de un pedido listo para entrega.
+  const { accesoTableroVentas, puedeAccionPedido } = await import('../src/lib/roles.js');
+  const panel = (rol) => hv.opcionesPanelPedido('LISTO_ENTREGA', accesoTableroVentas(rol).mover, puedeAccionPedido('despachar', rol));
+  assert.equal(panel('BODEGA').despachar, true, 'BODEGA: «Despachar en Entregas →»');
+  for (const rol of ['FINANZAS', 'COMPRAS', 'CONSULTA']) assert.deepEqual(panel(rol), { mover: [], despachar: false, cancelar: false, facturar: false }, rol);
+  assert.deepEqual(panel('ASESOR'), opcionesEstadoPVEN('LISTO_ENTREGA'));
   const sinComentarios = (t) => t.replace(/\r\n/g, '\n').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
   const hub = sinComentarios(readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8'));
   // La fila: «Cancelar documento» (POST /solicitudes/{id}/cancelar y PATCH de COT y PVEN: ADMIN y ASESOR) solo con mover.
@@ -1288,7 +1299,8 @@ console.log('--- B4 T24 f2 (m8 de la revisión r0 de f1): el Hub ofrece cancelar
   // Sin permiso, sin casillas (la barra masiva ya no sale: FINAL-m38).
   assert.match(hub, /seleccion=\{accesoTablero\.mover \? seleccion : undefined\}\s*onSeleccion=\{accesoTablero\.mover \? alSeleccionar : undefined\}/);
   // El panel rápido: los botones de estado, Facturado y Cancelar salen de opcionesPanelPedido con el permiso.
-  assert.match(hub, /const op = opcionesPanelPedido\(quickDetailDoc\.estado, accesoTablero\.mover\);/);
+  // r1 (m13 + m37, D27): con quién despacha; sin nada que el rol pueda hacer, la sección no se pinta.
+  assert.match(hub, /const op = opcionesPanelPedido\(quickDetailDoc\.estado, accesoTablero\.mover, puedeAccionPedido\('despachar', rol\)\);\s*if \(!accesoTablero\.mover && !op\.despachar\) return null;/);
   assert.ok(!/opcionesEstadoPVEN\(quickDetailDoc\.estado\)/.test(hub), 'el panel ya no ofrece lo que el rol no puede');
 }
 
@@ -1488,6 +1500,23 @@ console.log('--- B4 T24 f2 r1 (duda 2 + m15): claveAccionSiguienteSC, claveAccio
     assert.equal(hv.claveAccionSiguienteSC(nada), null, String(nada));
     assert.equal(hv.claveAccionSiguienteCOT(nada), null, String(nada));
   }
+}
+
+console.log('--- B4 T24 f2 r1 (m18, m19 + m37): el Hub lee el rol después de montar y no ofrece lo que da 403 ---');
+{
+  const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // m18: nada de getUsuarioActual().role en el render; useRolActual (después de montar) en el Hub, el ConfigPanel y el panel de notas.
+  assert.ok(!/getUsuarioActual\(\)\.role/.test(hub), 'sin getUsuarioActual().role');
+  assert.match(hub, /const soloLectura = !esAdmin\(useRolActual\(\)\);/, 'el ConfigPanel');
+  assert.match(hub, /const accionAjustar = esAdmin\(rol\)/, '«Ajustar tiempos»');
+  // m19: «Nueva Solicitud» (POST /solicitudes: ADMIN y ASESOR) solo con mover.
+  assert.match(hub, /\{accesoTablero\.mover && \(\s*<Link href="\/dashboard\/ventas\/solicitud\?new=1" aria-label="Nueva solicitud"/);
+  // m19 + m37: el compositor de notas (POST …/actividad: ADMIN, ASESOR y COMPRAS) con accesoNotasVentas, sin una lista propia.
+  assert.match(hub, /const notas = accesoNotasVentas\(useRolActual\(\)\);/);
+  assert.match(hub, /\{detail\?\.id && notas\.anotar && \(\s*<div className="pb-5 border-b border-slate-100">\s*<ComposerChatter compacto/);
+  assert.match(hub, /import \{[^}]*\baccesoNotasVentas\b[^}]*\} from '@\/lib\/roles';/);
+  assert.match(hub, /import \{[^}]*\bpuedeAccionPedido\b[^}]*\} from '@\/lib\/roles';/);
 }
 
 console.log('OK test_hub_ventas.mjs');

@@ -71,7 +71,8 @@ console.log('--- TEST 5: la fuente: una sola regla sobre normalizarRol ---');
   assert.ok(/export \{ esAdminOAsesor as puedeGestionarCotizacion \} from '\.\/roles\.js';/.test(leer('lib/dinero-ventas.js')),
     'dinero-ventas.js');
   const hub = leer('app/dashboard/ventas/page.tsx');
-  assert.ok(hub.includes('const soloLectura = !esAdmin(getUsuarioActual().role);'), 'el ConfigPanel del Hub usa esAdmin');
+  // B4 T24 f2 r1 (m18, D27): con el rol leído después de montar (useRolActual), no getUsuarioActual().role en el render.
+  assert.ok(hub.includes('const soloLectura = !esAdmin(useRolActual());'), 'el ConfigPanel del Hub usa esAdmin');
   // B4 T7 (D27) y r1 (m10 y m13): la tabla estándar del Hub tiene la columna del asesor del documento (su id, su título
   // y su campo de orden del servidor): no es un rol. La excepción vale SOLO en page.tsx y quita SOLO ese literal exacto,
   // una vez; en los otros cinco archivos la guarda queda como en 372f71c, y cualquier otro 'asesor' o 'admin' de
@@ -81,7 +82,7 @@ console.log('--- TEST 5: la fuente: una sola regla sobre normalizarRol ---');
   assert.equal(hub.split(COLUMNA_ASESOR).length - 1, 1, 'la columna del asesor del Hub, una sola vez');
   const sinColumnaAsesor = (ruta, fuente) => (ruta === PAGINA_HUB ? fuente.replace(COLUMNA_ASESOR, '{') : fuente);
   // Y el Hub decide «Ajustar tiempos» con la misma regla (RP34).
-  assert.ok(hub.includes('const accionAjustar = esAdmin(getUsuarioActual().role)'), '«Ajustar tiempos» usa esAdmin');
+  assert.ok(hub.includes('const accionAjustar = esAdmin(rol)'), '«Ajustar tiempos» usa esAdmin (m18, D27: con el rol de useRolActual)');
   for (const ruta of ['app/dashboard/ventas/flujo.tsx', PAGINA_HUB, 'lib/seguimiento.js',
     'lib/nombre-para-mostrar.js', 'lib/dinero-ventas.js', 'lib/envio-whatsapp.js']) {
     assert.doesNotMatch(sinColumnaAsesor(ruta, codigo(leer(ruta))), /['"](admin|asesor|vendedor|finanzas)['"]/i, `${ruta}: sin un rol escrito a mano`);
@@ -336,6 +337,37 @@ console.log('--- B4 T24 f2 r1 (duda 2 + m15 + m16): puedeAccionDocumento — qui
     assert.ok(i >= 0, `${metodo} ${rutaApi} existe`);
     const roles = ventas.slice(i, i + 600).match(/require_roles\(([^)]*)\)/)?.[1];
     assert.equal(roles, '*ROLE_ADMIN, *ROLE_ASESOR', `${metodo} ${rutaApi}: ADMIN y ASESOR`);
+  }
+}
+
+console.log('--- B4 T24 f2 r1 (m17, m19 + m37): puedeDespachar (una sola copia) y accesoNotasVentas, con el require_roles real ---');
+{
+  const roles = await import('../src/lib/roles.js');
+  const ent = await import('../src/lib/entregas.js');
+  const TODOS = ['ADMIN', 'ASESOR', 'FINANZAS', 'COMPRAS', 'BODEGA', 'CONSULTA'];
+  // m17: quién despacha vive en roles.js (la de la duda 3); entregas.js la reexporta con su nombre de hoy (aditivo; f3 avisado).
+  assert.equal(typeof roles.puedeDespachar, 'function', 'puedeDespachar en roles.js');
+  for (const rol of TODOS) {
+    assert.equal(roles.puedeDespachar(rol), ['ADMIN', 'ASESOR', 'BODEGA'].includes(rol), rol);
+    assert.equal(roles.puedeDespachar(rol), roles.puedeAccionPedido('despachar', rol), `${rol}: la misma regla de la tarjeta`);
+  }
+  for (const rol of RAROS) assert.equal(roles.puedeDespachar(rol), false, JSON.stringify(rol));
+  assert.equal(ent.puedeDespachar, roles.puedeDespachar, 'entregas.js reexporta la MISMA función');
+  const entregas = readFileSync(new URL('../src/lib/entregas.js', import.meta.url), 'utf8');
+  assert.ok(!/\[\s*'ADMIN',\s*'ASESOR',\s*'BODEGA'\s*\]/.test(entregas), 'sin la lista de roles escrita a mano en entregas.js');
+  assert.match(entregas, /export \{ puedeDespachar \};/);
+  assert.ok(!/from '\.\/entregas\.js'/.test(readFileSync(new URL('../src/lib/roles.js', import.meta.url), 'utf8')), 'roles.js no importa entregas.js (sería circular)');
+  // m19 + m37: las notas de un documento de Ventas (POST /solicitudes|cotizaciones|pedidos/{id}/actividad): ADMIN, ASESOR y COMPRAS.
+  assert.equal(typeof roles.accesoNotasVentas, 'function', 'accesoNotasVentas existe');
+  for (const rol of TODOS) {
+    assert.deepEqual(roles.accesoNotasVentas(rol), { listo: true, anotar: ['ADMIN', 'ASESOR', 'COMPRAS'].includes(rol) }, rol);
+  }
+  for (const rol of RAROS) assert.deepEqual(roles.accesoNotasVentas(rol), { listo: false, anotar: false }, JSON.stringify(rol));
+  const ventas = readFileSync(new URL('../../backend/app/api/v1/erp_ventas.py', import.meta.url), 'utf8');
+  for (const rutaApi of ['/solicitudes/{sc_id}/actividad', '/cotizaciones/{cot_id}/actividad', '/pedidos/{ven_id}/actividad']) {
+    const i = ventas.indexOf(`@router.post("${rutaApi}"`);
+    assert.ok(i >= 0, rutaApi);
+    assert.equal(ventas.slice(i, i + 400).match(/require_roles\(([^)]*)\)/)?.[1], '*ROLE_ADMIN, *ROLE_ASESOR, *ROLE_COMPRAS', rutaApi);
   }
 }
 

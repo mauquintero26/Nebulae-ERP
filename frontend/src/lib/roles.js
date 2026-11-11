@@ -78,6 +78,29 @@ export function puedeAccionPedido(clave, rol) {
   return clave === 'ver';
 }
 
+/**
+ * B4 T24 f2 r1 (m17): quién despacha (PATCH /ventas/pedidos/{id} a ENTREGADO con la bodega, desde Entregas): ADMIN, ASESOR y BODEGA.
+ * La regla ÚNICA: la de puedeAccionPedido('despachar'), la tarjeta de Pedidos, el panel rápido del Hub y Entregas (entregas.js la
+ * reexporta con este nombre; no importa entregas.js, que sería circular).
+ * @param {unknown} rol
+ * @returns {boolean}
+ */
+export function puedeDespachar(rol) {
+  return puedeAccionPedido('despachar', rol);
+}
+
+/**
+ * B4 T24 f2 r1 (m19 + m37): las notas de un documento de Ventas (el compositor del Chatter del Hub: POST
+ * /ventas/solicitudes|cotizaciones|pedidos/{id}/actividad de erp_ventas.py, leído en solo lectura): ADMIN, ASESOR y COMPRAS. Con un
+ * rol vacío (todavía se lee, después de montar), nada listo ni ofrecido. Un objeto nuevo en cada llamada.
+ * @param {unknown} rol
+ * @returns {{listo: boolean, anotar: boolean}}
+ */
+export function accesoNotasVentas(rol) {
+  if (normalizarRol(rol) === '') return { listo: false, anotar: false };
+  return { listo: true, anotar: esAdminOAsesor(rol) || esAdminOCompras(rol) };
+}
+
 /** B4 T24 f2 r1 (duda 2 + m15): las ramas de la próxima acción de la SC y de la COT que CAMBIAN algo (ADMIN y ASESOR). */
 const ACCIONES_SC = ['agregar_productos', 'asignar', 'enviar_confirmacion', 'cotizar', 'reiniciar_o_cotizar'];
 const ACCIONES_COT = ['completar_precios', 'enviar_al_cliente', 'crear_pedido'];

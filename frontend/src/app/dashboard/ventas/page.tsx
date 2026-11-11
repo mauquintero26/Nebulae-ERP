@@ -66,7 +66,7 @@ import { accionBloque3 } from '@/lib/acciones-bloque3';
 import { abreWhatsAppLocal, MENSAJE_WHATSAPP_SIN_GUARDAR, banderaReenvio } from '@/lib/envio-whatsapp';
 import { configSeguimientoInicial, errorConfigSeguimiento } from '@/lib/seguimiento';
 // Revisión final B3 (F2): la regla de rol (M12) y la nota ámbar en la ventana de envío del tablero (M47).
-import { accesoTableroVentas, esAdmin } from '@/lib/roles';
+import { accesoNotasVentas, accesoTableroVentas, esAdmin, puedeAccionPedido } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
 // B4 T24 f2 (F45): el cargador compartido de los resúmenes de las tarjetas.
 import { useResumen } from '@/components/ui/useResumen';
@@ -347,6 +347,7 @@ const INVERSOS_ORDEN_HUB = COLUMNAS_TABLA_HUB.filter((c) => c.ordenInverso).map(
 // onNotaGuardada: una nota que reinicia el atraso del documento (un contacto con el cliente) recarga el Hub en silencio
 // (sin el spinner de página) para que su alerta roja desaparezca; el panel sigue abierto con su borrador.
 function ActivitiesPanel({row,onClose,onNotaGuardada}:{row:any,onClose:()=>void,onNotaGuardada:()=>void}) {
+  const notas = accesoNotasVentas(useRolActual());
   const [detail, setDetail] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [errorCarga, setErrorCarga] = useState<string|null>(null);
@@ -407,7 +408,8 @@ function ActivitiesPanel({row,onClose,onNotaGuardada}:{row:any,onClose:()=>void,
         </div>
       ):(
         <>
-          {detail?.id&&(
+          {/* B4 T24 f2 r1 (m19 + m37): el compositor solo para quien anota (POST …/actividad: ADMIN, ASESOR y COMPRAS). */}
+          {detail?.id && notas.anotar && (
             <div className="pb-5 border-b border-slate-100">
               <ComposerChatter compacto tipoDoc={row.tipo} doc={detail} onRegistrado={notaRegistrada}/>
             </div>
@@ -444,7 +446,8 @@ function ActivitiesPanel({row,onClose,onNotaGuardada}:{row:any,onClose:()=>void,
 /* ── Config Panel ── */
 function ConfigPanel({alertDias,configCargada,onSave,onClose}:{alertDias:any,configCargada:boolean,onSave:(cfg:any)=>void,onClose:()=>void}) {
   // N8: todos leen los valores reales; solo un administrador los cambia (la seguridad real es el 403 del PATCH).
-  const soloLectura = !esAdmin(getUsuarioActual().role);
+  // B4 T24 f2 r1 (m18): el rol leído después de montar (useRolActual), no getUsuarioActual().role en el render.
+  const soloLectura = !esAdmin(useRolActual());
   const { avisarError } = useAvisos();
   const [error, setError] = useState('');
   // F2 (M15): el campo que falló (aria-invalid y ligado al error del pie, que tiene este id).
@@ -1047,7 +1050,7 @@ export default function VentasHub() {
   }, [estado, despachar]);
   // RP34 y D27(a): «Ajustar tiempos» solo para un administrador (esAdmin, el mismo esAdministrador de flujo.tsx), apagado y
   // con el porqué mientras no se leyó /ventas/config, igual que el botón «Configuración» de arriba.
-  const accionAjustar = esAdmin(getUsuarioActual().role)
+  const accionAjustar = esAdmin(rol)
     ? { label: 'Ajustar tiempos', onClick: () => setShowConfig(true), deshabilitado: !configCargada, titulo: configCargada ? undefined : AVISO_CONFIG_SIN_LEER }
     : null;
 
@@ -1123,10 +1126,13 @@ export default function VentasHub() {
             <div className="flex flex-wrap items-center gap-2.5">
               {/* H9: directo a la lista con ?new=1 (abre el formulario y limpia la URL, U9), sin pasar por
                   /solicitud/nueva; «Abriendo…» apenas se hace clic. */}
-              <Link href="/dashboard/ventas/solicitud?new=1" aria-label="Nueva solicitud"
-                className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all">
-                <ContenidoEnlace icon={Plus}>Nueva Solicitud</ContenidoEnlace>
-              </Link>
+              {/* B4 T24 f2 r1 (m19): crear una solicitud (POST /solicitudes) es de ADMIN y ASESOR. */}
+              {accesoTablero.mover && (
+                <Link href="/dashboard/ventas/solicitud?new=1" aria-label="Nueva solicitud"
+                  className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all">
+                  <ContenidoEnlace icon={Plus}>Nueva Solicitud</ContenidoEnlace>
+                </Link>
+              )}
               <button onClick={() => loadData()}
                 className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-semibold text-xs shadow-xs transition-colors">
                 <RefreshCw size={13} className={listado.recargando || flujo.cargando || cargandoStats ? 'animate-spin' : ''}/> Actualizar
@@ -1404,7 +1410,8 @@ export default function VentasHub() {
             {quickDetailDoc.tipo === 'VEN' && (() => {
               // B4 T24 f2 (m8 de la revisión r0 de f1): con el permiso del rol (PATCH /ventas/pedidos: ADMIN y ASESOR). Sin él,
               // solo el enlace a Entregas, si aplica; si no hay nada, la sección no se pinta.
-              const op = opcionesPanelPedido(quickDetailDoc.estado, accesoTablero.mover);
+              // r1 (m13 + m37): «Despachar en Entregas →» solo para quien despacha (BODEGA lo conserva).
+              const op = opcionesPanelPedido(quickDetailDoc.estado, accesoTablero.mover, puedeAccionPedido('despachar', rol));
               if (!accesoTablero.mover && !op.despachar) return null;
               const sinOpciones = op.mover.length === 0 && !op.despachar && !op.cancelar && !op.facturar;
               return (

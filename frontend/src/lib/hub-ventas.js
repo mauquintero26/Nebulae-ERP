@@ -159,14 +159,17 @@ export function opcionesEstadoPVEN(estado) {
  * B4 T24 f2 (m8 de la revisión r0 de f1): lo que el panel rápido del Hub ofrece para un pedido con el permiso del rol (`mover`:
  * accesoTableroVentas, el require_roles de PATCH /ventas/pedidos/{id}: ADMIN y ASESOR). Con permiso, opcionesEstadoPVEN; sin él,
  * nada que mande un PATCH (ni estados, ni Facturado, ni Cancelar) y solo «Despachar en Entregas», que es un enlace (Entregas decide:
- * BODEGA despacha).
+ * BODEGA despacha). B4 T24 f2 r1 (m13 + m37, aditivo): `despacha` (puedeAccionPedido('despachar', rol): ADMIN, ASESOR y BODEGA)
+ * deja el enlace solo a quien despacha; sin pasarlo, como antes.
  * @param {unknown} estado
  * @param {boolean} mover
+ * @param {boolean} [despacha]
  * @returns {{mover: string[], despachar: boolean, cancelar: boolean, facturar: boolean}}
  */
-export function opcionesPanelPedido(estado, mover) {
+export function opcionesPanelPedido(estado, mover, despacha = true) {
   const op = opcionesEstadoPVEN(estado);
-  return mover ? op : { mover: [], despachar: op.despachar, cancelar: false, facturar: false };
+  if (mover && despacha) return op;
+  return mover ? { ...op, despachar: false } : { mover: [], despachar: op.despachar && despacha, cancelar: false, facturar: false };
 }
 
 /**

@@ -23,6 +23,8 @@ import { RUTA_ENTREGAS } from './hub-ventas.js';
 import { alertaEntregaPedido } from './listas-ventas.js';
 import { formatoPesos, redondearPeso } from './pesos.js';
 import { normalizarRol } from './chatter.js';
+// B4 T24 f2 r1 (m17): quién despacha vive una sola vez en roles.js; aquí se reexporta con su nombre de hoy (f3, avisado).
+import { puedeDespachar } from './roles.js';
 import { enlaceDocumento } from './analisis.js';
 import { queryListado } from './tabla.js';
 import { numeroFinito } from './kpis.js';
@@ -86,8 +88,8 @@ export function columnaEntrega(p) {
 
 const BODEGA_SOLO_DESPACHA = 'Bodega solo puede marcar el pedido como despachado.';
 
-/** Los roles que mueven tarjetas en Entregas (R15); los demás solo ven el tablero. */
-const ROLES_QUE_MUEVEN = congelar(['ADMIN', 'ASESOR', 'BODEGA']);
+/** B4 T24 f2 r1 (m17): quién despacha desde Entregas (R15): ADMIN, ASESOR y BODEGA; la regla única es la de roles.js. */
+export { puedeDespachar };
 
 /**
  * Qué pasa al soltar un pedido de la columna `origen` en `destino` (claves de COLUMNAS_ENTREGA), con la forma de
@@ -119,7 +121,8 @@ export function reglaSoltarEntrega(pedido, origen, destino, { rol = null } = {})
   const desde = columnaEntrega(pedido) ?? origen;
   if (desde === destino) return { tipo: 'ninguno' };
   const rolNormal = normalizarRol(rol);
-  if (!ROLES_QUE_MUEVEN.includes(rolNormal)) return { tipo: 'bloqueado', motivo: TEXTO_SOLO_VER };
+  // Los roles que mueven tarjetas en Entregas (R15): los que despachan (puedeDespachar); los demás solo ven el tablero.
+  if (!puedeDespachar(rol)) return { tipo: 'bloqueado', motivo: TEXTO_SOLO_VER };
   const motivoN2 = (hacia) => motivoTransicionPedido(estado, hacia) ?? 'Un pedido despachado no vuelve atrás desde Entregas.';
   if (desde === 'despachado') {
     return { tipo: 'bloqueado', motivo: motivoN2(destino === 'esperando' ? 'EN_PROCESO' : 'LISTO_ENTREGA') };
@@ -375,11 +378,6 @@ export const OPCIONES_ESTADOS_TABLERO_ENTREGA = congelar([
 ]);
 
 // ─── el despacho (RP23): Bodega manda lo mínimo; ADMIN y ASESOR, lo de hoy sin fecha_entrega ─────────────────────────────
-
-/** Quién despacha desde Entregas: ADMIN, ASESOR y BODEGA (R15); los demás roles solo ven. */
-export function puedeDespachar(rol) {
-  return ROLES_QUE_MUEVEN.includes(normalizarRol(rol));
-}
 
 /** ¿El despacho exige elegir la bodega? Siempre con Bodega (RP23); con ADMIN y ASESOR, solo si el pedido tiene líneas de catálogo. */
 export function bodegaObligatoria(pedido, rol) {

@@ -1250,6 +1250,18 @@ export function tarjetaPedido(fila, { ahora, returnTo = RUTA_LISTA_PEDIDOS, rol 
   return { ...tarjeta, subtitulo: origen || tarjeta.subtitulo, chips: chips.slice(0, MAX_CHIPS) };
 }
 
+/**
+ * B4 T24 f2 r1 (m14): si se ofrece cancelar un pedido (el botón del detalle y la ventana de ?accion=cancelar): el servidor acepta
+ * CANCELADO desde su estado (transicionesPedido) y el rol es ADMIN o ASESOR (PATCH /ventas/pedidos/{id} a CANCELADO; BODEGA solo
+ * pone ENTREGADO).
+ * @param {unknown} estado
+ * @param {unknown} rol
+ * @returns {boolean}
+ */
+export function puedeCancelarPedido(estado, rol) {
+  return transicionesPedido(estado).includes('CANCELADO') && esAdminOAsesor(rol);
+}
+
 /** Los cambios de estado que se ofrecen dentro de la columna En proceso, en este orden. */
 const CAMBIOS_EN_PROCESO = congelar([
   { estado: 'EN_TRANSITO', etiqueta: 'Marcar En tránsito' },

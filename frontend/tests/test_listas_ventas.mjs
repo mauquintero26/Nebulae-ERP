@@ -1217,9 +1217,11 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   assert.match(acciones, /const puedePxp = Boolean\(acciones\?\.puedePxpRol\) && pedidoAdmitePxp\(p\);/);
   assert.match(acciones, /\{ etiqueta: 'Ver detalle', icono: FileCheck, onClick: \(\) => acciones\?\.abrir\(p\) \}/);
   assert.match(acciones, /\{ etiqueta: 'Crear PXP', [^\n]*oculto: !puedePxp,\s*deshabilitado: acciones\?\.creandoPxp === p\.id \}/);
-  assert.match(acciones, /\{ etiqueta: 'Cancelar pedido', icono: X, peligro: true, onClick: \(\) => acciones\?\.ir\(`\/dashboard\/ventas\/venta\/\$\{p\.id\}\?accion=cancelar`\),\s*oculto: !transicionesPedido\(p\.estado\)\.includes\('CANCELADO'\) \}/);
+  // B4 T24 f2 r1 (m14, D27): «Cancelar pedido» (PATCH a CANCELADO: ADMIN y ASESOR) solo con mover; sin él, el ⋯ no lo ofrece.
+  assert.match(acciones, /\{ etiqueta: 'Cancelar pedido', icono: X, peligro: true, onClick: \(\) => acciones\?\.ir\(`\/dashboard\/ventas\/venta\/\$\{p\.id\}\?accion=cancelar`\),\s*oculto: !acciones\?\.mover \|\| !transicionesPedido\(p\.estado\)\.includes\('CANCELADO'\) \}/);
   assert.match(acciones, /<MenuFila items=\{items\} etiqueta=\{`Acciones de \$\{p\.numero\}`\} \/>/);
-  assert.match(lista, /const puedePxpRol = puedeCrearOrdenDePago\(getUsuarioActual\(\)\.role\);/);
+  // B4 T24 f2 r1 (m18, D27): con el rol leído después de montar (useRolActual), el mismo de la tarjeta y del tablero.
+  assert.match(lista, /const puedePxpRol = puedeCrearOrdenDePago\(rol\);/);
   assert.match(lista, /apiFetch\(`\/ventas\/pedidos\/\$\{p\.id\}\/crear-pxp`, \{ method: 'POST', body: JSON\.stringify\(\{\}\) \}\);/);
 
   // Bloque 5 (RP19 (2), D5): las 4 tarjetas con los kpis; el total y Pendientes de compra son sus pestañas.
@@ -1537,6 +1539,33 @@ console.log('--- B4 T24 (FINAL-m32): las ventanas de motivo en lote (Hub y Solic
   assert.ok(sc.includes("if(cancelTarget.length===0||!motivoValido(cancelRazon)){showToast(`El motivo es obligatorio (mínimo ${MINIMO_MOTIVO} caracteres)`,'err');return;}"));
   assert.match(sc, /disabled=\{!motivoValido\(cancelRazon\)\}/);
   assert.ok(sc.includes('{!motivoValido(cancelRazon)&&<p className="text-xs text-red-500 mt-1">El motivo es obligatorio. Mínimo {MINIMO_MOTIVO} caracteres (llevas {largoDelMotivo(cancelRazon)}).</p>}'));
+}
+
+console.log('--- B4 T24 f2 r1 (m14, m18): Pedidos de venta y su detalle ofrecen cancelar solo a quien puede, con el rol después de montar ---');
+{
+  const leer = (r) => readFileSync(new URL(`../src/app/dashboard/ventas/${r}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const lista = leer('venta/venta-client.tsx');
+  assert.match(lista, /type AccionesFilaPedido = \{[\s\S]*?\bmover: boolean;[\s\S]*?\};/);
+  assert.match(lista, /const accionesFila = useMemo<AccionesFilaPedido>\(\(\) => \(\{\s*abrir: abrirPedido, ir: \(ruta\) => router\.push\(ruta\), crearPxp, creandoPxp, puedePxpRol, mover: accesoTablero\.mover,\s*\}\), \[abrirPedido, router, crearPxp, creandoPxp, puedePxpRol, accesoTablero\.mover\]\);/);
+  assert.ok(!/getUsuarioActual\(\)\.role/.test(lista), 'Pedidos sin getUsuarioActual().role');
+  // El detalle (venta/[id], R17): el botón y la ventana de ?accion=cancelar con puedeCancelarPedido (el estado y el rol).
+  const detalle = leer('venta/[id]/page.tsx');
+  assert.match(detalle, /const rol = useRolActual\(\);/);
+  assert.match(detalle, /const puedeCancelar = puedeCancelarPedido\(estadoActual, rol\);/);
+  assert.match(detalle, /\{showCancelModal && puedeCancelar && \(\s*<Modal cierreExterno=\{false\} title="Cancelar Pedido de Venta"/, 'la ventana del enlace ?accion=cancelar, también con el rol');
+  assert.match(detalle, /const puedePxp = puedeCrearOrdenDePago\(rol\) && pedidoAdmitePxp\(pedido\);/);
+  assert.ok(!/getUsuarioActual\(\)\.role/.test(detalle), 'el detalle sin getUsuarioActual().role');
+  // La regla, en la lib: el servidor acepta cancelar desde ese estado (transicionesPedido) y el rol es ADMIN o ASESOR.
+  const { puedeCancelarPedido } = await import('../src/lib/kanban-ventas.js');
+  const { transicionesPedido, ESTADOS_PEDIDO } = await import('../src/lib/estados-pedido.js');
+  assert.equal(typeof puedeCancelarPedido, 'function', 'puedeCancelarPedido existe');
+  for (const estado of [...Object.keys(ESTADOS_PEDIDO), 'ALGO_NUEVO']) {
+    for (const rol of ['ADMIN', 'ASESOR', 'FINANZAS', 'COMPRAS', 'BODEGA', 'CONSULTA', '', null]) {
+      const esperado = transicionesPedido(estado).includes('CANCELADO') && (rol === 'ADMIN' || rol === 'ASESOR');
+      assert.equal(puedeCancelarPedido(estado, rol), esperado, `${estado} ${rol}`);
+    }
+  }
 }
 
 console.log('OK test_listas_ventas.mjs');

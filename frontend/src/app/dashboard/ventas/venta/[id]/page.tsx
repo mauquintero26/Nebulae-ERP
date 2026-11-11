@@ -22,10 +22,12 @@ import {
 } from '@/lib/kanban-ventas';
 import { textoDeError, recargarTrasError } from '@/lib/avisos';
 import { NewSupplierModal } from '../venta-client';
-import { CambiosDeActividad, CabeceraActividad, getUsuarioActual, puedeCrearOrdenDePago, returnToSeguro, BotonVolver, EnlaceConfirmacionModal } from '../../flujo';
+import { CambiosDeActividad, CabeceraActividad, puedeCrearOrdenDePago, returnToSeguro, BotonVolver, EnlaceConfirmacionModal } from '../../flujo';
 import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
 // B4 T24 f2 (F44-a): la reserva del botón flotante de la IA en las columnas de la derecha (IA, Actividad y Chatter), que se desplazan bajo él.
 import { RESERVA_BOTON_IA } from '@/lib/design-system';
+import { useRolActual } from '@/components/ui/useRolActual';
+import { puedeCancelarPedido } from '@/lib/kanban-ventas';
 import { ChannelModal } from '../../cotizacion/cotizacion-client';
 import { useEnvioAlCliente, LineaEnlaceCliente, TablaProductosPedido } from './detalle-bloque3';
 import { formatoPesos } from '@/lib/pesos';
@@ -99,6 +101,8 @@ function PedidoVentaDetalleContent() {
   const [showNewSupplier, setShowNewSupplier] = useState(false);
   const [listaSaving, setListaSaving] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
+  // B4 T24 f2 r1 (m14, m18): el rol leído después de montar.
+  const rol = useRolActual();
   const [cancelRazon, setCancelRazon] = useState('');
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState('');
@@ -206,12 +210,13 @@ function PedidoVentaDetalleContent() {
   // antes de stepIndex 'hecho', el suyo 'actual' y los siguientes 'pendiente'; los pinta PasosFlujo (la pieza común).
   const pasosPedido = pasosConProgreso(STEPS, stepIndex);
   // N2: solo se ofrece lo que el servidor acepta por PATCH desde el estado actual.
-  const puedeCancelar = transicionesPedido(estadoActual).includes('CANCELADO');
+  // B4 T24 f2 r1 (m14): cancelar (PATCH a CANCELADO) es de ADMIN y ASESOR; el botón y la ventana de ?accion=cancelar, con el rol.
+  const puedeCancelar = puedeCancelarPedido(estadoActual, rol);
   const opcionesEstado = ESTADOS_PEDIDO_MANUALES.filter(k => transicionesPedido(estadoActual).includes(k));
   const estadoSoloLectura = ESTADOS_PEDIDO_CERRADOS.includes(estadoActual) || opcionesEstado.length === 0;
   // H44+N6 / H45: la orden de pago vigente (o la ultima cancelada) y si se puede crear otra.
   const { vigente: pxpVigente, cancelada: pxpCancelada } = pxpsDelPedido(pedido);
-  const puedePxp = puedeCrearOrdenDePago(getUsuarioActual().role) && pedidoAdmitePxp(pedido);
+  const puedePxp = puedeCrearOrdenDePago(rol) && pedidoAdmitePxp(pedido);
 
   async function handleCrearPxp() {
     if (!pedido?.id) return;
@@ -987,7 +992,7 @@ function PedidoVentaDetalleContent() {
           onClose={() => setShowNewSupplier(false)}
         />
       )}
-      {showCancelModal && (
+      {showCancelModal && puedeCancelar && (
         <Modal cierreExterno={false} title="Cancelar Pedido de Venta" icon={AlertCircle} color="red" maxWidth="md"
           // Mientras se cancela no se cierra (ni la X ni 'Volver'): el resultado siempre llega a una ventana abierta.
           onClose={() => { if (!cancelling) setShowCancelModal(false); }} bloquearCierre={cancelling}
