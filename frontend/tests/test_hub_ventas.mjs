@@ -310,7 +310,8 @@ console.log('--- B4 T7 (RP86 y D28): la recarga del Hub sin perder lo que había
   const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.equal(typeof hv.fusionarCargaHub, 'undefined', 'RP86: fusionarCargaHub ya no existe');
   assert.equal(typeof hv.AVISOS_CARGA_HUB, 'undefined', 'RP86: AVISOS_CARGA_HUB ya no existe');
-  assert.match(hub, /const listado = useListado<FilaHub>\(\{\s*ruta: '\/ventas\/hub\/documentos', estado, conConteos: true, esperar: !listo, despachar, activo: !enAnalisis,\s*\}\);/,
+  // B4 T24 f2 (FINAL-m8, D27): con extra (limit=0 en Kanban, EXTRA_TABLERO).
+  assert.match(hub, /const listado = useListado<FilaHub>\(\{\s*ruta: '\/ventas\/hub\/documentos', estado, conConteos: true, esperar: !listo, despachar, activo: !enAnalisis,\s*extra: enKanban \? EXTRA_TABLERO : null,\s*\}\);/,
     'la tabla carga con useListado (RP35, RP68, D40)');
   assert.ok(!/\b(cargaRef|ultimaCarga|fusionarCargaHub)\b/.test(hub), 'sin la carga en memoria de antes');
   const uso = readFileSync(new URL('../src/components/tabla/useListado.ts', import.meta.url), 'utf8');
@@ -1223,6 +1224,48 @@ console.log('--- B4 T7 r1b (duda 3): el contenedor del Hub reserva el lugar del 
   assert.ok(ia.includes('fixed bottom-6 right-6 w-14 h-14'), 'el botón mide lo que la reserva supone (24 + 56 = 80 px < 96)');
   const tabla = readFileSync(new URL('../src/lib/design-system.ts', import.meta.url), 'utf8');
   assert.ok(tabla.includes('[&_[data-pie-tabla]]:pr-20'), 'en la pantalla completa, el pr-20 del pie (D41)');
+}
+
+console.log('--- B4 T24 f2 (FINAL-m8, FINAL-m9, FINAL-m28): el Hub en Kanban sin la página de la tabla, el error del tablero y una sola insignia ---');
+{
+  const sinComentarios = (t) => t.replace(/\r\n/g, '\n').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const hub = sinComentarios(readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8'));
+  // FINAL-m8: en Kanban la tabla no pide filas (limit=0, EXTRA_TABLERO, como Solicitudes, Cotizaciones y Pedidos): las pestañas y el
+  // total siguen llegando (con_conteos) y scConCot ya trae las tarjetas del tablero (RP36). Al volver a Lista, mientras la última
+  // respuesta sea la de Kanban, la tabla está cargando y el total en 'cargando' (llegadaDeListado): nunca «No hay documentos».
+  assert.match(hub, /^const EXTRA_TABLERO = \{ limit: 0 \};$/m);
+  assert.match(hub, /const enKanban = estado\.modo === 'kanban';/);
+  assert.match(hub, /activo: !enAnalisis,\s*extra: enKanban \? EXTRA_TABLERO : null,\s*\}\);/);
+  assert.match(hub, /const \[llegada, setLlegada\] = useState\(\(\) => llegadaDeListado\(null, null, false\)\);\s*const llegadaAhora = llegadaDeListado\(llegada, listado\.crudo, enKanban\);\s*if \(llegadaAhora !== llegada\) setLlegada\(llegadaAhora\);\s*const sinPagina = !enKanban && llegadaAhora\.sinFilas && !listado\.error;/);
+  assert.match(hub, /total=\{sinPagina \? null : listado\.total\}\s*cargando=\{listado\.cargandoInicial \|\| sinPagina\}/, 'la tabla');
+  assert.match(hub, /total=\{sinPagina \? null : listado\.total\}\s*estadoTotal=\{estadoDelTotal\(\{\s*total: listado\.total, cargando: listado\.cargandoInicial \|\| sinPagina, recargando: listado\.recargando, error: listado\.error,\s*\}\)\}/, 'la barra');
+  // FINAL-m9: si el PATCH de un cambio desde el tablero falla, el Hub y Cotizaciones aplican la regla única recargarTrasError (las
+  // pestañas y la franja, no el tablero: D39) y el error sigue para que el tablero deshaga. Como Pedidos desde T10 r1 (m4).
+  assert.match(hub, /import \{[^}]*\brecargarTrasError\b[^}]*\} from '@\/lib\/avisos';/);
+  assert.match(hub, /async function cambiarDesdeTablero\(fila: FilaHub, resultado: \{ estado: string \}\) \{\s*const ruta = fila\.tipo === 'SC' \? 'solicitudes' : fila\.tipo === 'COT' \? 'cotizaciones' : 'pedidos';\s*try \{\s*await apiFetch\(`\/ventas\/\$\{ruta\}\/\$\{fila\.id\}`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ estado: resultado\.estado, updated_by: autorActual\(\) \}\),\s*\}\);\s*\} catch \(err\) \{\s*if \(recargarTrasError\(err\)\) \{ recargarListado\(\); setRecargaFlujo\(\(n\) => n \+ 1\); \}\s*throw err;\s*\}\s*recargarListado\(\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*\}/);
+  const cot = sinComentarios(readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/cotizacion-client.tsx', import.meta.url), 'utf8'));
+  assert.match(cot, /async function cambiarDesdeTablero\(cot: FilaCOT, resultado: \{ estado: string \}\) \{\s*try \{\s*await apiFetch\(`\/ventas\/cotizaciones\/\$\{cot\.id\}`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ estado: resultado\.estado, updated_by: autorActual\(\) \}\),\s*\}\);\s*\} catch \(err\) \{\s*if \(recargarTrasError\(err\)\) \{ recargarListado\(\); setRecargaFlujo\(\(n\) => n \+ 1\); \}\s*throw err;\s*\}\s*recargarListado\(\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*\}/);
+  for (const [nombre, codigo] of [['Hub', hub], ['Cotizaciones', cot]]) {
+    const cambiar = codigo.slice(codigo.indexOf('async function cambiarDesdeTablero('), codigo.indexOf('\n  }\n', codigo.indexOf('async function cambiarDesdeTablero(')));
+    assert.ok(cambiar.length > 100 && !/tablero\.recargar|recargarTablero/.test(cambiar), `${nombre}: el arrastre no recarga el tablero a mano (D39: lo hace deshacer)`);
+  }
+  // La regla (F8): un 409 (otra cotización activa, N7), un 400, un 422 o la red cortada recargan; un 500 o un 403, no.
+  const { recargarTrasError } = await import('../src/lib/avisos.js');
+  for (const s of [400, 409, 422]) assert.equal(recargarTrasError(Object.assign(new Error('x'), { status: s })), true, String(s));
+  for (const s of [403, 500]) assert.equal(recargarTrasError(Object.assign(new Error('x'), { status: s })), false, String(s));
+  // FINAL-m28: el panel rápido pinta el estado con la MISMA InsigniaEstado de la tabla (estadoDeTarjeta de lib/kanban-ventas.js, la
+  // fuente única: GC:11), sin un mapa de colores propio ni otra búsqueda de la etiqueta.
+  assert.ok(!/\bgetEstadoClass\b|\betiquetaEstado\b/.test(hub), 'sin getEstadoClass ni etiquetaEstado');
+  assert.ok(!/\b(?:BORRADOR|EN_TRANSITO|LISTO_ENTREGA|FACTURADO|CANCELADO|CONFIRMADA|RECHAZADA|PENDIENTE_COMPRA)\s*:\s*['"`]bg-/.test(hub), 'sin un mapa local de estados a clases');
+  assert.ok(!/ESTADOS as ESTADOS_COT|import \{ ESTADOS_SC \}/.test(hub), 'sin las tablas de las listas para la etiqueta');
+  assert.match(hub, /<h2 className="text-lg font-black text-slate-900">\{quickDetailDoc\.numero\}<\/h2>\s*<InsigniaEstado tipo=\{quickDetailDoc\.tipo\} estado=\{quickDetailDoc\.estado\} \/>/);
+  assert.match(hub, /Este pedido está \{estadoDeTarjeta\('VEN', quickDetailDoc\.estado\)\.label\}; su estado ya no se cambia desde aquí\./);
+  // La insignia es la de la tabla: estadoDeTarjeta, con las clases de la tabla del tipo (o los hex de la SC).
+  assert.match(hub, /function InsigniaEstado\(\{ tipo, estado \}: \{ tipo: FilaHub\['tipo'\]; estado: unknown \}\) \{\s*const e = estadoDeTarjeta\(tipo, estado\);/);
+  const { estadoDeTarjeta } = await import('../src/lib/kanban-ventas.js');
+  assert.equal(estadoDeTarjeta('VEN', 'EN_TRANSITO').clases.bg, 'bg-sky-100', 'VEN EN_TRANSITO: sky, en la tabla y en el panel');
+  assert.equal(estadoDeTarjeta('COT', 'VENCIDA').label, 'Vencida');
+  assert.equal(estadoDeTarjeta('VEN', 'LISTO_PARA_ENTREGA').label, 'Listo para entrega');
 }
 
 console.log('--- B4 T24 (FINAL-C3): los tres Hubs leen el enlace DESPUÉS del commit (useLayoutEffect de montaje), nunca en el render ---');

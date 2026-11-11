@@ -979,8 +979,9 @@ console.log('--- B4 T9 TEST L: el cableado del tablero de Cotizaciones (C15, RP1
   assert.equal(reglaSoltarCotizacion({ id: 4, estado: 'PENDIENTE_CONFIRMACION' }, 'esperando', 'borrador').motivo,
     'Ábrela para re-cotizar; te pedirá la razón.', 'C15(a)');
   assert.match(codigo, /const tarjetaDeCOT = \(cot: FilaCOT\) => tarjetaCotizacion\(cot\);/);
-  // 'cambio': el PATCH del estado con el autor; el tablero recarga su origen y su destino, aquí las tarjetas y la franja.
-  assert.match(lista, /async function cambiarDesdeTablero\(cot: FilaCOT, resultado: \{ estado: string \}\) \{\s*await apiFetch\(`\/ventas\/cotizaciones\/\$\{cot\.id\}`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ estado: resultado\.estado, updated_by: autorActual\(\) \}\),\s*\}\);\s*recargarListado\(\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*\}/);
+  // 'cambio': el PATCH del estado con el autor; el tablero recarga su origen y su destino, aquí las tarjetas y la franja. B4 T24 f2
+  // (FINAL-m9, D27): si el PATCH falla, también con la regla única recargarTrasError, y el error sigue (el tablero deshace).
+  assert.match(lista, /async function cambiarDesdeTablero\(cot: FilaCOT, resultado: \{ estado: string \}\) \{\s*try \{\s*await apiFetch\(`\/ventas\/cotizaciones\/\$\{cot\.id\}`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ estado: resultado\.estado, updated_by: autorActual\(\) \}\),\s*\}\);\s*\} catch \(err\) \{\s*if \(recargarTrasError\(err\)\) \{ recargarListado\(\); setRecargaFlujo\(\(n\) => n \+ 1\); \}\s*throw err;\s*\}\s*recargarListado\(\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*\}/);
   // 'rechazar': ModalMotivo → PATCH RECHAZADA y la nota «Motivo del rechazo: …» en la Actividad (N3); al terminar, del
   // tablero solo su origen y su destino (D39).
   assert.match(lista, /if \(resultado\.accion === 'rechazar'\) setRechazando\(\{ cot, columnas: \[origen, destino\] \}\);/);

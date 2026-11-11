@@ -1195,10 +1195,17 @@ export default function CotizacionClient() {
   // 'cambio' (Rechazada → Borrador, Borrador → Vencida…): el PATCH del estado. El tablero mueve la tarjeta y, si el
   // servidor la rechaza (N7: el 409 de otra activa), la devuelve con su mensaje; recarga su origen y su destino (D39) y
   // aquí se recargan las tarjetas de arriba y la franja.
+  // B4 T24 f2 (FINAL-m9): si el PATCH falla (el 409 N7 de otra activa, un 400, un 422 o la red cortada), también con la regla única
+  // recargarTrasError, y el error sigue para que el tablero deshaga.
   async function cambiarDesdeTablero(cot: FilaCOT, resultado: { estado: string }) {
-    await apiFetch(`/ventas/cotizaciones/${cot.id}`, {
-      method: 'PATCH', body: JSON.stringify({ estado: resultado.estado, updated_by: autorActual() }),
-    });
+    try {
+      await apiFetch(`/ventas/cotizaciones/${cot.id}`, {
+        method: 'PATCH', body: JSON.stringify({ estado: resultado.estado, updated_by: autorActual() }),
+      });
+    } catch (err) {
+      if (recargarTrasError(err)) { recargarListado(); setRecargaFlujo((n) => n + 1); }
+      throw err;
+    }
     recargarListado();
     setRecargaFlujo((n) => n + 1);
   }

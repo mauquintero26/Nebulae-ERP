@@ -22,7 +22,9 @@ import { BannerFlujo, CadenaDocumentos, useResumenFlujo } from '@/components/flu
 import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
 import { PanelAnalisisPerezoso } from '@/components/analisis';
 import { FOCOS, TABLE } from '@/lib/design-system';
-import { accionPestana, campoOrden, dependenciasTablero, estadoDelTotal, normalizarRespuesta, queryListado } from '@/lib/tabla';
+import {
+  accionPestana, campoOrden, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta, queryListado,
+} from '@/lib/tabla';
 import { alternarPaso, pasosConConteos } from '@/lib/flujo';
 import {
   PASOS_FLUJO_VENTAS, chipsFiltroHub, conteosDesdeResumen, inicioDelEnlaceHub, leerEnlaceHub, pasoTrasPestana, tabHubDePaso,
@@ -34,17 +36,15 @@ import {
 } from '@/lib/kanban-ventas';
 import { PERIODO_KPI } from '@/lib/kpis';
 import { FOCOS_VENTAS } from '@/lib/analisis';
-import { textoDeError, esErrorDeValidacion } from '@/lib/avisos';
+import { textoDeError, esErrorDeValidacion, recargarTrasError } from '@/lib/avisos';
 // B4 T24 (FINAL-m32): la regla del motivo de ModalMotivo también en la ventana de la cancelación en lote.
 import { MINIMO_MOTIVO, motivoValido } from '@/lib/kanban';
 import { VEN_NAV } from './ven-nav';
 import { CambiosDeActividad, EnlaceConfirmacionModal, getUsuarioActual } from './flujo';
-import { ChannelModal, ESTADOS as ESTADOS_COT } from './cotizacion/cotizacion-client';
+import { ChannelModal } from './cotizacion/cotizacion-client';
 import { useEstadoEnvioWhatsApp } from './cotizacion/estado-envio-whatsapp';
-import { ESTADOS_SC } from './solicitud/solicitud-client';
 import { ComposerChatter, EtiquetaChatter } from './chatter';
 import { agregarActividad, esEntradaChatter, motivoTelefono, textoSinTelefono } from '@/lib/chatter';
-import { infoEstadoPedido } from '@/lib/estados-pedido';
 import {
   ordenParaCancelar, motivoNoCancelable, resumenLote, ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN,
   repartirCambioEstadoPVEN, comoUTC, textoAntiguedad, notaReiniciaAtraso, conDetalleDelEnvio, accionSiguienteDocumento,
@@ -77,14 +77,6 @@ const fCOP  = (v: any) => formatoPesos(v);
 const fDate = (iso: any) => iso ? new Date(comoUTC(iso)).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
 const fTime = (iso: any) => iso ? new Date(comoUTC(iso)).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}) : '';
 
-// N10: el estado siempre con su etiqueta (pedido: estados-pedido.js; COT y SC: sus tablas), nunca el código crudo; una
-// clave desconocida sale humanizada. B4 T7: el filtro de estados ya no la usa (opcionesEstadosHub, agrupado por tipo).
-const etiquetaEstado = (tipo: string, e: string): string => {
-  if (tipo === 'VEN') return infoEstadoPedido(e).label;
-  const propia = tipo === 'COT' ? ESTADOS_COT[e]?.label : tipo === 'SC' ? ESTADOS_SC[e]?.label : undefined;
-  return propia || ESTADOS_SC[e]?.label || ESTADOS_COT[e]?.label || infoEstadoPedido(e).label;
-};
-
 // H3 y R26 (B4 T7): el color del botón de la próxima acción (el tono de accionSiguienteDocumento).
 const TONO_ACCION: Record<string,string> = {
   indigo:  'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200',
@@ -109,24 +101,6 @@ const EFECTO_CANCELACION: Record<string,string> = {
 
 // Autor de los cambios hechos desde el Hub (Actividad); sin sesión, el servidor usa el correo del usuario.
 const autorActual = () => { const u = getUsuarioActual(); return u.name || u.email || undefined; };
-
-const getEstadoClass = (e: string) => ({
-  BORRADOR: 'bg-slate-100 text-slate-700 border-slate-200',
-  PENDIENTE_CONFIRMACION: 'bg-amber-100 text-amber-800 border-amber-200',
-  EN_GESTION: 'bg-blue-100 text-blue-800 border-blue-200',
-  CONFIRMADA: 'bg-emerald-100 text-emerald-700 border-emerald-200',
-  ENVIADA: 'bg-sky-100 text-sky-700 border-sky-200',
-  PENDIENTE_COMPRA: 'bg-orange-100 text-orange-700 border-orange-200',
-  PENDIENTE_PAGO: 'bg-amber-100 text-amber-800 border-amber-200',
-  EN_PROCESO: 'bg-purple-100 text-purple-700 border-purple-200',
-  EN_TRANSITO: 'bg-indigo-100 text-indigo-700 border-indigo-200',
-  LISTO_ENTREGA: 'bg-teal-100 text-teal-700 border-teal-200',
-  ENTREGADO: 'bg-emerald-100 text-emerald-800 border-emerald-200',
-  FACTURADO: 'bg-green-100 text-green-800 border-green-200',
-  CANCELADO: 'bg-rose-100 text-rose-700 border-rose-200',
-  CANCELADA: 'bg-rose-100 text-rose-700 border-rose-200',
-  RECHAZADA: 'bg-rose-100 text-rose-700 border-rose-200',
-} as Record<string,string>)[e] || 'bg-gray-100 text-gray-700 border-gray-200';
 
 const getTipoClass = (t: string) => ({
   SC: 'bg-indigo-100 text-indigo-700 border-indigo-200',
@@ -186,6 +160,8 @@ type ConteosHub = { pestanas?: Partial<Record<string, number>>; grupos?: Partial
 /** El id de la pantalla: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26). */
 const ID_HUB = 'ventas.hub';
 const INICIAL_HUB = { vista: 'todos', orden: 'atencion' };
+/** B4 T24 f2 (FINAL-m8): en Kanban la tabla no pide filas (limit=0), como Solicitudes, Cotizaciones y Pedidos (m6 de T8). */
+const EXTRA_TABLERO = { limit: 0 };
 const claveDeFila = (f: FilaHub) => `${f.tipo}|${f.id}`;
 // U1: con el orden de atención, un separador por resolución. D41: los tintes translúcidos de antes (dejaban ver lo de
 // debajo de las columnas fijas) pasan a los tonos opacos más parecidos: las atrasadas a filaAlerta y, B4 T7 r1 (m3 y
@@ -632,9 +608,20 @@ export default function VentasHub() {
   // ── B4 T7, carga (R6, C4): cada parte pide lo suyo al servidor ──
   // La tabla (RP35 y RP68: sin conResumen ni extra.semaforo; el semáforo va en estado.semaforo). En la pestaña Análisis
   // no pide nada (activo: false, RP35) y nunca se manda vista=analisis. esperar: !listo (D40): el esqueleto, nunca vacío.
+  // B4 T24 f2 (FINAL-m8): en Kanban, sin filas (EXTRA_TABLERO, limit=0): nadie las usa (la tabla no se pinta y la barra masiva
+  // es de la Lista) y es el endpoint más caro del bloque (A5, R28). Las pestañas y el total siguen llegando (con_conteos), y
+  // scConCot ya trae las tarjetas del tablero (RP36).
+  const enKanban = estado.modo === 'kanban';
   const listado = useListado<FilaHub>({
     ruta: '/ventas/hub/documentos', estado, conConteos: true, esperar: !listo, despachar, activo: !enAnalisis,
+    extra: enKanban ? EXTRA_TABLERO : null,
   });
+  // m5 de T8 (llegadaDeListado): al volver a Lista, mientras la última respuesta sea la de Kanban (sin filas), la tabla está
+  // cargando y el total en 'cargando': nunca «No hay documentos en esta vista» con el total de la otra consulta.
+  const [llegada, setLlegada] = useState(() => llegadaDeListado(null, null, false));
+  const llegadaAhora = llegadaDeListado(llegada, listado.crudo, enKanban);
+  if (llegadaAhora !== llegada) setLlegada(llegadaAhora);
+  const sinPagina = !enKanban && llegadaAhora.sinFilas && !listado.error;
   const conteos = listado.conteos as ConteosHub | null;
   const estadoConteos = useEstadoKpi(listado.cargandoInicial || listado.recargando, listado.error);
 
@@ -846,11 +833,19 @@ export default function VentasHub() {
   // 'cambio': el PATCH del estado. El tablero mueve la tarjeta y, si el servidor la rechaza (R10: el 409 de una SC con
   // documentos activos), la devuelve con su mensaje. No se devuelve el documento: el PATCH no trae la resolución ni el
   // tipo de la fila, y el tablero recarga el origen y el destino (D39). Las pestañas y el flujo se recargan aquí.
+  // B4 T24 f2 (FINAL-m9): si el PATCH falla, también, con la regla única recargarTrasError (un 409: el documento cambió en otro
+  // lado; un 400, un 422 o la red cortada), como Pedidos; el error sigue para que el tablero deshaga (eso ya recarga su origen
+  // y su destino: aquí no se llama a tablero.recargar).
   async function cambiarDesdeTablero(fila: FilaHub, resultado: { estado: string }) {
     const ruta = fila.tipo === 'SC' ? 'solicitudes' : fila.tipo === 'COT' ? 'cotizaciones' : 'pedidos';
-    await apiFetch(`/ventas/${ruta}/${fila.id}`, {
-      method: 'PATCH', body: JSON.stringify({ estado: resultado.estado, updated_by: autorActual() }),
-    });
+    try {
+      await apiFetch(`/ventas/${ruta}/${fila.id}`, {
+        method: 'PATCH', body: JSON.stringify({ estado: resultado.estado, updated_by: autorActual() }),
+      });
+    } catch (err) {
+      if (recargarTrasError(err)) { recargarListado(); setRecargaFlujo((n) => n + 1); }
+      throw err;
+    }
     recargarListado();
     setRecargaFlujo((n) => n + 1);
   }
@@ -1204,9 +1199,9 @@ export default function VentasHub() {
               ajustes={{ columnas: COLUMNAS_TABLA_HUB, preferencias: prefs, anchoRef: anchoTablaRef }}
               kanbanDisponible
               pantallaCompleta={estado.modo === 'lista' ? { completa, alternar } : undefined}
-              total={listado.total}
+              total={sinPagina ? null : listado.total}
               estadoTotal={estadoDelTotal({
-                total: listado.total, cargando: listado.cargandoInicial, recargando: listado.recargando, error: listado.error,
+                total: listado.total, cargando: listado.cargandoInicial || sinPagina, recargando: listado.recargando, error: listado.error,
               })}
             />
             {!enAnalisis && estado.modo === 'lista' && (
@@ -1220,8 +1215,8 @@ export default function VentasHub() {
                   estado={estado}
                   onEstado={despachar}
                   filas={listado.filas}
-                  total={listado.total}
-                  cargando={listado.cargandoInicial}
+                  total={sinPagina ? null : listado.total}
+                  cargando={listado.cargandoInicial || sinPagina}
                   recargando={listado.recargando}
                   error={listado.error}
                   onReintentar={listado.recargar}
@@ -1319,9 +1314,8 @@ export default function VentasHub() {
                   </span>
                   <div>
                     <h2 className="text-lg font-black text-slate-900">{quickDetailDoc.numero}</h2>
-                    <span className={`px-2 py-0.5 rounded-md text-[10px] font-black border ${getEstadoClass(quickDetailDoc.estado)}`}>
-                      {etiquetaEstado(quickDetailDoc.tipo, quickDetailDoc.estado)}
-                    </span>
+                    {/* B4 T24 f2 (FINAL-m28): la MISMA insignia de la tabla y del tablero (estadoDeTarjeta, la fuente única de los estados). */}
+                    <InsigniaEstado tipo={quickDetailDoc.tipo} estado={quickDetailDoc.estado} />
                   </div>
                 </div>
                 <button onClick={()=>setQuickDetailDoc(null)} className="p-2 hover:bg-slate-200 rounded-xl text-slate-500"><X size={18}/></button>
@@ -1446,7 +1440,7 @@ export default function VentasHub() {
                       )}
                       {sinOpciones && (
                         <p className="text-xs text-slate-500">
-                          Este pedido está {etiquetaEstado('VEN', quickDetailDoc.estado)}; su estado ya no se cambia desde aquí.
+                          Este pedido está {estadoDeTarjeta('VEN', quickDetailDoc.estado).label}; su estado ya no se cambia desde aquí.
                         </p>
                       )}
                     </div>
