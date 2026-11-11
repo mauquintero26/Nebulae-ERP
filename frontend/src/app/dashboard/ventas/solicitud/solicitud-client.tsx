@@ -465,7 +465,7 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
 });
 
 // ── B4 T8: las piezas de la lista (TABLA-listas-ventas, KANBAN-ventas-listas, KPI-ventas y FLUJO-ventas-pantallas) ──
-// T11 (V2) armó aquí RowMenu (el menú «⋮» con posición fija, posicionMenuFila y recortesDe): lo reemplaza MenuFila de
+// T11 (V2) armó aquí RowMenu (el menú «⋮» con su posición fija y sus recortes): lo reemplaza MenuFila de
 // components/ui (R11: el ÚNICO menú ⋯, en un portal con posición fija, que se cierra con un clic afuera, Esc, un scroll o
 // un cambio de tamaño). Las opciones y su lógica son las mismas (CeldaAcciones).
 

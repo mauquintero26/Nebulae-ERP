@@ -13,10 +13,10 @@
 import assert from 'node:assert/strict';
 import {
   diasAlerta, pedidoVigente, soloPedidosCancelados, ultimoPedidoCancelado, pestanaCotizacion, situacionPedidoCotizacion,
-  ESTADOS_PEDIDO_SIN_DINERO, pedidoSumaDinero, resumenPedidos, kpisPedidos, hintTotalPedidos, opcionesFiltroEstado,
-  generoCotizacion, cotizacionesVigentes, cotizacionesRechazadas, esperaCotizacion, contadoresSolicitudes,
-  tasaConversionCotizacion, superaDiasAlerta, resumenCancelacionSolicitudes, estadoEnPapelera, pasosParaCancelarSolicitud,
-  repartirCancelacionSolicitudes, cifrasVentasDashboard, rutaSinParametro, esSolicitudActiva, pestanaDeSolicitud,
+  ESTADOS_PEDIDO_SIN_DINERO, pedidoSumaDinero, resumenPedidos,
+  generoCotizacion, cotizacionesVigentes, cotizacionesRechazadas, esperaCotizacion,
+  superaDiasAlerta, resumenCancelacionSolicitudes, estadoEnPapelera, pasosParaCancelarSolicitud,
+  repartirCancelacionSolicitudes, rutaSinParametro, esSolicitudActiva,
   pistaActivasSolicitudes, valorConfig, enteroConfig, DIAS_VALIDEZ_COTIZACION, configLeida, cuerpoGuardarConfig,
   tarifaIvaDeConfig, AVISO_CONFIG_SIN_LEER,
 } from '../src/lib/listas-ventas.js';
@@ -132,50 +132,6 @@ console.log('--- H47 TEST 6: resumenPedidos no suma el dinero de cancelados ni d
   assert.equal(pedidoSumaDinero(null), false);
 }
 
-console.log('--- H47 TEST 7: kpisPedidos usa el resumen del servidor y, si no viene, el del navegador ---');
-{
-  const cargados = [
-    { estado: 'PENDIENTE_COMPRA', total_cop: 1000, saldo_cop: 400, anticipo_cop: 600 },
-    { estado: 'CANCELADO', total_cop: 9000, saldo_cop: 9000, anticipo_cop: 0 },
-  ];
-  const servidor = {
-    total: 250, monto_cop: 5000000, saldo_cop: 1200000, anticipo_cop: 3800000,
-    por_estado: { PENDIENTE_COMPRA: 10, EN_PROCESO: 5, ENTREGADO: 200, FACTURADO: 20, CANCELADO: 12, DEVUELTO_TOTAL: 3 },
-  };
-  const k = kpisPedidos(servidor, cargados);
-  assert.equal(k.total, 250);
-  assert.equal(k.monto, 5000000);
-  assert.equal(k.saldo, 1200000);
-  assert.equal(k.anticipo, 3800000);
-  assert.equal(k.pCompra, 10);
-  assert.equal(k.cancelados, 15, 'cancelados y devueltos, como la pestaña Cancelado');
-  assert.equal(k.activos, 15, 'total menos entregados, facturados, cancelados y devueltos');
-  assert.equal(k.cargados, 2);
-  assert.equal(hintTotalPedidos(k), '15 activos · 15 cancelados · se ven los 2 más recientes');
-
-  const sinServidor = kpisPedidos(null, cargados);
-  assert.equal(sinServidor.total, 2);
-  assert.equal(sinServidor.monto, 1000, 'el cancelado no suma');
-  assert.equal(sinServidor.saldo, 400);
-  assert.equal(sinServidor.activos, 1);
-  assert.equal(hintTotalPedidos(sinServidor), '1 activos · 1 cancelados');
-
-  const vacio = kpisPedidos(null, undefined);
-  assert.equal(vacio.total, 0);
-  assert.equal(hintTotalPedidos(vacio), '0 activos');
-}
-
-console.log('--- N10 TEST 8: opcionesFiltroEstado (lista base + los estados que traen los datos, sin repetir) ---');
-{
-  const base = opcionesFiltroEstado([]);
-  assert.deepEqual(base, ['PENDIENTE_COMPRA', 'PENDIENTE_PAGO', 'EN_PROCESO', 'EN_TRANSITO', 'LISTO_ENTREGA',
-    'ENTREGADO', 'FACTURADO', 'CANCELADO']);
-  const conRaros = opcionesFiltroEstado([{ estado: 'PENDIENTE_SALDO' }, { estado: 'EN_PROCESO' }, null,
-    { estado: 'DEVUELTO_TOTAL' }, { estado: 'PENDIENTE_SALDO' }, { estado: '' }]);
-  assert.deepEqual(conRaros.slice(-2), ['PENDIENTE_SALDO', 'DEVUELTO_TOTAL']);
-  assert.equal(conRaros.length, base.length + 2);
-}
-
 console.log('--- H46 / N1 TEST 9: situacionPedidoCotizacion (crear pedido, reabrir o ya convertida) ---');
 {
   // Convertida: tiene pedido vigente (la conversion consumio la confirmacion).
@@ -242,51 +198,6 @@ console.log('--- H32 TEST 2: esperaCotizacion (confirmada y sin cotizacion en ju
   assert.equal(esperaCotizacion({ estado: 'CONFIRMADA', cotizaciones: [{ estado: 'BORRADOR' }] }), false);
   assert.equal(esperaCotizacion({ estado: 'ASIGNADA', cotizaciones: [] }), false);
   assert.equal(esperaCotizacion(null), false);
-}
-
-console.log('--- H32 TEST 3: contadoresSolicitudes (tarjetas Confirmadas y Total) ---');
-{
-  const lista = [
-    { estado: 'CONFIRMADA', cotizaciones: [] },                                  // espera cotizacion
-    { estado: 'COTIZADA', cotizaciones: [{ estado: 'BORRADOR' }] },               // genero
-    { estado: 'ASIGNADA', cotizaciones: [{ estado: 'RECHAZADA' }] },              // genero (rechazada)
-    { estado: 'CANCELADA' },
-  ];
-  const c = contadoresSolicitudes(lista, 4);
-  assert.equal(c.total, 4);
-  assert.equal(c.totalConf, 1);
-  assert.equal(c.conCot, 2);
-  assert.equal(c.esperanCot, 1);
-  assert.equal(c.hintConfirmadas, '1 esperan cotización');
-  assert.equal(c.hintTotal, '2 generaron cotización');
-
-  // El servidor tiene mas solicitudes que las cargadas (tope de 200): se dice cuantas se ven.
-  assert.equal(contadoresSolicitudes(lista, 350).hintTotal, '2 generaron cotización · se ven las 4 más recientes de 350');
-  assert.equal(contadoresSolicitudes(lista, null).hintTotal, '2 generaron cotización');
-
-  assert.equal(contadoresSolicitudes([{ estado: 'ASIGNADA' }], 1).hintConfirmadas, 'Sin confirmadas');
-  assert.equal(contadoresSolicitudes([{ estado: 'CONFIRMADA', cotizaciones: [{ estado: 'CONFIRMADA' }] }], 1).hintConfirmadas, 'Todas con cotización');
-  const vacio = contadoresSolicitudes(null, null);
-  assert.equal(vacio.total, 0);
-  assert.equal(vacio.hintConfirmadas, 'Sin confirmadas');
-}
-
-console.log('--- H32 TEST 4: tasa de conversion solo con solicitudes de cotizacion de producto (decision del usuario) ---');
-{
-  const lista = [
-    { tipo_solicitud: 'Cotizacion de Producto', cotizaciones: [{ estado: 'BORRADOR' }] },
-    { tipo_solicitud: 'Cotizacion de Producto', cotizaciones: [{ estado: 'RECHAZADA' }] },
-    { cotizaciones: [] },                                                           // sin tipo: cotizacion de producto
-    { tipo_solicitud: 'Cotizacion de Producto', cotizaciones: [] },
-    { tipo_solicitud: 'Soporte Tecnico' },                                          // nunca se cotiza: no cuenta
-    { tipo_solicitud: 'Devolucion de Producto' },
-  ];
-  const t = tasaConversionCotizacion(lista);
-  assert.equal(t.total, 4);
-  assert.equal(t.conCot, 2);
-  assert.equal(t.pct, 50);
-  assert.deepEqual(tasaConversionCotizacion([{ tipo_solicitud: 'Soporte Tecnico' }]), { total: 0, conCot: 0, pct: 0 });
-  assert.deepEqual(tasaConversionCotizacion(null), { total: 0, conCot: 0, pct: 0 });
 }
 
 console.log('--- N8 TEST 5: superaDiasAlerta lee las fechas del API como UTC ---');
@@ -404,48 +315,32 @@ console.log('--- T7 TEST 7d (ronda 1, C12): esSolicitudActiva, un solo predicado
   assert.equal(lista.filter(esSolicitudActiva).length, 3);
 }
 
-console.log('--- T7 TEST 7e (ronda 2): pestanaDeSolicitud — cada SC cae en exactamente una pestaña ---');
+console.log('--- T7 TEST 7e (ronda 2) y B4 T24 f2 (F48, D27): esSolicitudActiva en todos los estados y tipos (sin pestanaDeSolicitud) ---');
 {
-  const PESTANAS = ['Activas', 'Confirmadas', 'Canceladas', 'Soporte'];
+  // F48 (D27): pestanaDeSolicitud solo la usaban sus pruebas (las pestañas son vistas del servidor desde B4 T8); su regla queda en
+  // esSolicitudActiva, su único consumidor real (kpis-ventas.js). La protección es la misma: Soporte (por tipo o por su estado
+  // propio N/A_SOPORTE), Confirmadas y Canceladas no son activas; lo demás (heredados y una fila sin estado), sí.
   const sc = (estado, tipo = 'Cotizacion de Producto') => ({ estado, tipo_solicitud: tipo });
-  // Orden: Soporte (por tipo o por su estado propio) -> Confirmadas -> Canceladas -> Activas.
-  const esperado = {
-    BORRADOR: 'Activas', ASIGNADA: 'Activas', PENDIENTE_CONFIRMACION: 'Activas', CONFIRMADA: 'Confirmadas',
-    CANCELADA: 'Canceladas', 'N/A_SOPORTE': 'Soporte',
-    COTIZADA: 'Activas', EN_ESPERA_CONFIRMACION: 'Activas', RECHAZADA: 'Activas', VENCIDA: 'Activas',
+  const ACTIVA = {
+    BORRADOR: true, ASIGNADA: true, PENDIENTE_CONFIRMACION: true, CONFIRMADA: false, CANCELADA: false, 'N/A_SOPORTE': false,
+    COTIZADA: true, EN_ESPERA_CONFIRMACION: true, RECHAZADA: true, VENCIDA: true,
   };
-  assert.deepEqual(Object.keys(esperado).sort(), Object.keys(ESTADOS_SC).sort(), 'cubre todos los estados de ESTADOS_SC');
-  for (const [estado, pestana] of Object.entries(esperado)) {
-    assert.equal(pestanaDeSolicitud(sc(estado)), pestana, estado);
-    // Un ticket de Soporte va a 'Soporte' tenga el estado que tenga (también Cancelada: antes salía en dos pestañas).
-    assert.equal(pestanaDeSolicitud(sc(estado, 'Soporte Tecnico')), 'Soporte', `Soporte en ${estado}`);
+  assert.deepEqual(Object.keys(ACTIVA).sort(), Object.keys(ESTADOS_SC).sort(), 'cubre todos los estados de ESTADOS_SC');
+  for (const [estado, activa] of Object.entries(ACTIVA)) {
+    assert.equal(esSolicitudActiva(sc(estado)), activa, estado);
+    assert.equal(esSolicitudActiva(sc(estado, 'Soporte Tecnico')), false, `Soporte en ${estado}`);
   }
-  // Un ticket al que se le corrigió el tipo en el detalle conserva N/A_SOPORTE: antes no salía en ninguna pestaña.
-  assert.equal(pestanaDeSolicitud(sc('N/A_SOPORTE', 'Seguimiento')), 'Soporte');
-  // Sin estado no está confirmada ni cancelada: sale en 'Activas' (no se pierde).
-  assert.equal(pestanaDeSolicitud({ tipo_solicitud: 'Cotizacion de Producto' }), 'Activas');
-  assert.equal(pestanaDeSolicitud({}), 'Activas');
-  for (const nada of [null, undefined, 'x', 3]) {
-    assert.equal(pestanaDeSolicitud(nada), null);
-    assert.equal(esSolicitudActiva(nada), false);
+  assert.equal(esSolicitudActiva(sc('N/A_SOPORTE', 'Seguimiento')), false, 'un ticket con el tipo corregido sigue en Soporte');
+  assert.equal(esSolicitudActiva({ tipo_solicitud: 'Cotizacion de Producto' }), true, 'sin estado: activa (no se pierde)');
+  assert.equal(esSolicitudActiva({}), true);
+  for (const nada of [null, undefined, 'x', 3]) assert.equal(esSolicitudActiva(nada), false);
+  // Las funciones retiradas ya no existen (F48): las tarjetas, los filtros y el menú ⋯ son del servidor y de MenuFila (posicionMenu,
+  // probada en test_tabla.mjs).
+  for (const n of ['kpisPedidos', 'hintTotalPedidos', 'cifrasVentasDashboard', 'opcionesFiltroEstado', 'contadoresSolicitudes',
+    'tasaConversionCotizacion', 'pestanaDeSolicitud', 'posicionMenuFila', 'botonALaVista', 'recortesDeAncestros']) {
+    assert.equal(typeof listas[n], 'undefined', `${n} se retiró`);
   }
-  // esSolicitudActiva es exactamente "su pestaña es Activas".
-  for (const estado of Object.keys(esperado)) {
-    for (const tipo of ['Cotizacion de Producto', 'Soporte Tecnico', 'Seguimiento']) {
-      assert.equal(esSolicitudActiva(sc(estado, tipo)), pestanaDeSolicitud(sc(estado, tipo)) === 'Activas');
-    }
-  }
-  // Con el filtro de la página (una pestaña = las filas cuya pestanaDeSolicitud es esa), los 4 contadores suman el total:
-  // ninguna fila falta ni se repite.
-  const filas = [
-    ...Object.keys(esperado).map((e) => sc(e)), ...Object.keys(esperado).map((e) => sc(e, 'Soporte Tecnico')),
-    sc('N/A_SOPORTE', 'Seguimiento'), { tipo_solicitud: 'Nuevo Lead' }, {},
-  ];
-  const conteos = PESTANAS.map((t) => filas.filter((s) => pestanaDeSolicitud(s) === t).length);
-  assert.equal(conteos.reduce((a, b) => a + b, 0), filas.length);
-  assert.deepEqual(conteos, [9, 1, 1, 12]);
 }
-
 console.log('--- N4 TEST 7b (revision T11): repartirCancelacionSolicitudes omite las que ya estan en la Papelera y las de soporte ---');
 {
   const filas = [
@@ -510,31 +405,6 @@ console.log('--- B1 / R8 TEST: tras abrir la cancelacion, la URL queda sin ?acci
     `${ruta}?return_to=%2Fdashboard%2Fventas`);
   assert.equal(rutaSinParametro(ruta, 'return_to=%2Fx', 'accion'), `${ruta}?return_to=%2Fx`);
   for (const vacio of [null, undefined, '']) assert.equal(rutaSinParametro(ruta, vacio, 'accion'), ruta);
-}
-
-console.log('--- A4 / H47 TEST: cifras de ventas del Dashboard General sin cancelados ni devueltos ---');
-{
-  // Con el resumen del servidor (todos los pedidos, no solo la pagina de 50).
-  const respuesta = {
-    total: 4,
-    resumen: { monto_cop: 3000, saldo_cop: 700, anticipo_cop: 900,
-      por_estado: { EN_PROCESO: 2, CANCELADO: 1, DEVUELTO_TOTAL: 1 } },
-    data: [{ estado: 'EN_PROCESO', total_cop: 1000, saldo_cop: 100, anticipo_cop: 900 }],
-  };
-  assert.deepEqual(cifrasVentasDashboard(respuesta), { ventas: 3000, cartera: 700, ticket: 1500 });
-  // Sin resumen: la misma regla en el navegador. La cartera es el saldo (con abonos), no total - anticipo.
-  const cargados = [
-    { estado: 'EN_PROCESO', total_cop: 1000, saldo_cop: 100, anticipo_cop: 400 },
-    { estado: 'PENDIENTE_PAGO', total_cop: 2001, saldo_cop: 2001, anticipo_cop: 0 },
-    { estado: 'CANCELADO', total_cop: 5000, saldo_cop: 5000, anticipo_cop: 0 },
-    { estado: 'DEVUELTO_TOTAL', total_cop: 7000, saldo_cop: 0, anticipo_cop: 7000 },
-  ];
-  assert.deepEqual(cifrasVentasDashboard({ data: cargados }), { ventas: 3001, cartera: 2101, ticket: 1501 });
-  assert.deepEqual(cifrasVentasDashboard(cargados), { ventas: 3001, cartera: 2101, ticket: 1501 });
-  assert.deepEqual(cifrasVentasDashboard({ data: [cargados[2]] }), { ventas: 0, cartera: 0, ticket: 0 });
-  for (const nulo of [null, undefined, {}, []]) {
-    assert.deepEqual(cifrasVentasDashboard(nulo), { ventas: 0, cartera: 0, ticket: 0 });
-  }
 }
 
 console.log('--- T11 (V7): la tarjeta ACTIVAS no contradice al banner de vencidas ---');
@@ -680,17 +550,14 @@ console.log('--- B4 T8 TEST 1: tarjetasSolicitudes — las 4 tarjetas de Solicit
   assert.equal(listas.tarjetasSolicitudes({ ...resumen, sin_atender: 1, vencidas: 0 }).activas.tono, 'alerta', 'solo sin atender');
   assert.equal(listas.tarjetasSolicitudes({ ...resumen, sin_atender: -2, vencidas: 'x' }).activas.tono, 'normal', 'lo que no es un número');
   assert.equal(listas.tarjetasSolicitudes(resumen).activas.ayuda, pistaActivasSolicitudes(2, 1));
-  // Confirmadas, con la regla de H32 de contadoresSolicitudes (la misma frase).
+  // Confirmadas, con la regla de H32 (B4 T24 f2, F48, D27: la frase, sin contadoresSolicitudes, que se retiró).
   assert.equal(listas.tarjetasSolicitudes({ ...resumen, confirmadas: 0, esperan_cot: 0 }).confirmadas.ayuda, 'Sin confirmadas');
   assert.equal(listas.tarjetasSolicitudes({ ...resumen, esperan_cot: 0 }).confirmadas.ayuda, 'Todas con cotización');
-  assert.equal(listas.pistaConfirmadasSolicitudes(1, 1), contadoresSolicitudes([{ estado: 'CONFIRMADA', cotizaciones: [] }], 1).hintConfirmadas);
+  assert.equal(listas.pistaConfirmadasSolicitudes(1, 1), '1 esperan cotización');
   assert.equal(listas.pistaConfirmadasSolicitudes(0, 0), 'Sin confirmadas');
   assert.equal(listas.pistaConfirmadasSolicitudes(2, 0), 'Todas con cotización');
   assert.equal(listas.pistaTotalSolicitudes(4), '4 generaron cotización');
   assert.equal(listas.pistaTotalSolicitudes(null), '0 generaron cotización');
-  // contadoresSolicitudes no cambia (usa las mismas frases).
-  assert.equal(contadoresSolicitudes([{ estado: 'CONFIRMADA', cotizaciones: [] }], 350).hintTotal,
-    `${listas.pistaTotalSolicitudes(0)} · se ven las 1 más recientes de 350`);
   // Sin resumen (cargando o con error): null, la franja pinta las barras grises o «—» (nunca 0).
   for (const nada of [null, undefined, 'x', 3, []]) assert.equal(listas.tarjetasSolicitudes(nada), null, String(nada));
   // Un número que falta o no sirve queda en null (la tarjeta dice «—»), no en 0.

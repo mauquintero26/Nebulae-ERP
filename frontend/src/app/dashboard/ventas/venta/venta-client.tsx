@@ -14,9 +14,8 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { apiFetch } from '@/lib/api';
 import { formatoPesos } from '@/lib/pesos';
 import { transicionesPedido } from '@/lib/estados-pedido';
-// B4 T10: la lista ya no cuenta ni filtra en el navegador (kpisPedidos, opcionesFiltroEstado, grupoPedido y la búsqueda
-// con coincideProducto): las vistas, los conteos y las tarjetas son del servidor (T6B y T6C). Lo de cada fila sigue
-// saliendo de las librerías.
+// B4 T10: la lista ya no cuenta ni filtra en el navegador (grupoPedido y la búsqueda con coincideProducto): las vistas,
+// los conteos y las tarjetas son del servidor (T6B y T6C). Lo de cada fila sigue saliendo de las librerías.
 import {
   tarjetasPedidos, saldoVisiblePedido, alertaEntregaPedido, diaDeNegocio, rutaSinParametro, accionVistaEnLista,
 } from '@/lib/listas-ventas';

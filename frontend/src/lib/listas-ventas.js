@@ -5,16 +5,16 @@
  *  - N8: diasAlerta, los dias de alerta guardados en Configuracion.
  *  - COT-LISTA: pedidoVigente / soloPedidosCancelados / pestanaCotizacion de una cotizacion (con su `pedidos_venta`
  *    ligero de la lista o completo del detalle). H46: ultimoPedidoCancelado.
- *  - H47: resumenPedidos / kpisPedidos de la lista de pedidos (el dinero no suma cancelados ni devueltos).
- *  - N10: opcionesFiltroEstado del filtro de estado de la lista de pedidos.
- *  - H32 / N4 / N7 (Solicitudes): generoCotizacion / cotizacionesVigentes / contadoresSolicitudes / tasaConversionCotizacion
- *    de la lista, superaDiasAlerta (N8), resumenCancelacionSolicitudes, estadoEnPapelera y pasosParaCancelarSolicitud.
- *  - T11 (ronda visual): pistaActivasSolicitudes (tarjeta ACTIVAS, V7), posicionMenuFila (menú «⋮» de la fila, V2) y
- *    botonALaVista (ronda 1: el menú se cierra si su botón sale de la vista); recortesDeAncestros (revisión final: la
- *    parte pura de recortesDe de solicitud-client.tsx).
+ *  - H47: resumenPedidos de la lista de pedidos (el dinero no suma cancelados ni devueltos).
+ *  - H32 / N4 / N7 (Solicitudes): generoCotizacion / cotizacionesVigentes de la lista, superaDiasAlerta (N8),
+ *    resumenCancelacionSolicitudes, estadoEnPapelera y pasosParaCancelarSolicitud.
+ *  - B4 T24 f2 (F48): se retiraron kpisPedidos, hintTotalPedidos, cifrasVentasDashboard, opcionesFiltroEstado,
+ *    contadoresSolicitudes, tasaConversionCotizacion, pestanaDeSolicitud, posicionMenuFila, botonALaVista y
+ *    recortesDeAncestros: solo las usaban sus pruebas (las tarjetas, los filtros y el menú ⋯ son del servidor y de MenuFila).
+ *  - T11 (ronda visual): pistaActivasSolicitudes (tarjeta ACTIVAS, V7).
  */
 import {
-  ESTADOS_PEDIDO_CERRADOS, ESTADOS_PEDIDO_SIN_DINERO, grupoPedido, esCotizacionActiva, esPedidoVigente,
+  ESTADOS_PEDIDO_CERRADOS, ESTADOS_PEDIDO_SIN_DINERO, esCotizacionActiva, esPedidoVigente,
 } from './estados-pedido.js';
 import { comoUTC, esSoporte } from './hub-ventas.js';
 import { redondearPeso, formatoPesos } from './pesos.js';
@@ -204,7 +204,7 @@ export function pestanaCotizacion(cot) {
 
 /**
  * Pedidos cuyo dinero no cuenta (ni vendido ni por cobrar). B4 T2 (RP14): la constante vive en estados-pedido.js y aquí
- * solo se reexporta (la usan pedidoSumaDinero y cifrasVentasDashboard con su nombre local).
+ * solo se reexporta (la usa pedidoSumaDinero con su nombre local).
  */
 export { ESTADOS_PEDIDO_SIN_DINERO };
 
@@ -238,80 +238,8 @@ export function resumenPedidos(pedidos) {
   return r;
 }
 
-/**
- * Cifras de las tarjetas de Pedidos de Venta: del resumen del servidor (todos los pedidos del filtro, sin el tope de
- * 200) o, si no vino, del navegador sobre los cargados. `activos` = total menos los cerrados (entregados, facturados,
- * cancelados y devueltos); `cargados` = cuantos trajo la lista.
- */
-export function kpisPedidos(resumenServidor, pedidos) {
-  const r = esObjeto(resumenServidor) ? resumenServidor : resumenPedidos(pedidos);
-  const pe = esObjeto(r.por_estado) ? r.por_estado : {};
-  const total = Number(r.total) || 0;
-  const cerrados = ESTADOS_PEDIDO_CERRADOS.reduce((s, e) => s + (Number(pe[e]) || 0), 0);
-  return {
-    total,
-    monto: Number(r.monto_cop) || 0,
-    saldo: Number(r.saldo_cop) || 0,
-    anticipo: Number(r.anticipo_cop) || 0,
-    pCompra: Number(pe.PENDIENTE_COMPRA) || 0,
-    // Los de la pestaña 'Cancelado' (cancelados y devueltos por completo).
-    cancelados: Object.keys(pe).filter((e) => grupoPedido(e) === 'Cancelado').reduce((s, e) => s + (Number(pe[e]) || 0), 0),
-    activos: Math.max(0, total - cerrados),
-    cargados: Array.isArray(pedidos) ? pedidos.length : 0,
-    porEstado: pe,
-  };
-}
-
-/** Pista de la tarjeta 'Total Pedidos': '15 activos · 12 cancelados · se ven los 200 más recientes'. */
-export function hintTotalPedidos(k) {
-  return `${k.activos} activos`
-    + (k.cancelados > 0 ? ` · ${k.cancelados} cancelados` : '')
-    + (k.total > k.cargados ? ` · se ven los ${k.cargados} más recientes` : '');
-}
-
-
-/**
- * A4 (H47): ventas, cartera pendiente y ticket promedio del Dashboard General con la regla de la lista de pedidos
- * (kpisPedidos): el resumen de GET /ventas/pedidos (todos los pedidos, no solo la pagina) o, si no vino,
- * resumenPedidos sobre los cargados. Ni las ventas ni la cartera suman pedidos cancelados o devueltos por completo; la
- * cartera es el saldo de cada pedido (lo que falta cobrar, abonos incluidos), no total - anticipo. El ticket reparte
- * las ventas entre los pedidos que suman dinero. Acepta la respuesta del API o la lista de pedidos.
- * @returns {{ventas: number, cartera: number, ticket: number}}
- */
-export function cifrasVentasDashboard(respuesta) {
-  const pedidos = Array.isArray(respuesta) ? respuesta : (Array.isArray(respuesta?.data) ? respuesta.data : []);
-  const k = kpisPedidos(esObjeto(respuesta?.resumen) ? respuesta.resumen : null, pedidos);
-  let conDinero = 0;
-  for (const [estado, n] of Object.entries(k.porEstado)) {
-    if (!ESTADOS_PEDIDO_SIN_DINERO.includes(estado)) conDinero += Number(n) || 0;
-  }
-  const ventas = redondearPeso(k.monto);
-  return { ventas, cartera: redondearPeso(k.saldo), ticket: conDinero > 0 ? Math.round(ventas / conDinero) : 0 };
-}
-
-// ─── N10: filtro de estado de la lista de pedidos ────────────────────────────────────────────────────
-
-const FILTRO_ESTADOS_BASE = Object.freeze(['PENDIENTE_COMPRA', 'PENDIENTE_PAGO', 'EN_PROCESO', 'EN_TRANSITO',
-  'LISTO_ENTREGA', 'ENTREGADO', 'FACTURADO', 'CANCELADO']);
-
-/**
- * Estados que ofrece 'Filtrar Estado': los habituales y, al final, cualquier otro que traigan los pedidos cargados
- * (p. ej. PENDIENTE_SALDO de fase4), sin repetir. La pantalla los muestra con su etiqueta (infoEstadoPedido).
- * @returns {string[]}
- */
-export function opcionesFiltroEstado(pedidos) {
-  const opciones = [...FILTRO_ESTADOS_BASE];
-  for (const p of Array.isArray(pedidos) ? pedidos : []) {
-    const e = esObjeto(p) && typeof p.estado === 'string' ? p.estado.trim() : '';
-    if (e && !opciones.includes(e)) opciones.push(e);
-  }
-  return opciones;
-}
 
 // ─── H32 / N4 / N7: lista y detalle de Solicitudes ───────────────────────────────────────────────────
-
-/** Tipo de las solicitudes que se cotizan (las de soporte o devolucion nunca generan cotizacion). */
-const TIPO_SC_COTIZABLE = 'Cotizacion de Producto';
 
 const cotizacionesDe = (sc) => (Array.isArray(sc?.cotizaciones) ? sc.cotizaciones.filter(esObjeto) : []);
 
@@ -336,37 +264,6 @@ export function cotizacionesRechazadas(sc) {
 /** H32: espera cotización = está CONFIRMADA (el cliente ya confirmó) y no tiene ninguna cotización en juego. */
 export function esperaCotizacion(sc) {
   return sc?.estado === 'CONFIRMADA' && cotizacionesVigentes(sc).length === 0;
-}
-
-/**
- * H32: cifras de las tarjetas de la lista de Solicitudes. `totalServidor` es el total que informa el servidor (la lista
- * trae como mucho 200): si es mayor que lo cargado, la tarjeta Total dice cuántas se ven.
- * @param {any[] | null | undefined} solicitudes
- * @param {number | null} [totalServidor]
- * @returns {{total: number, totalConf: number, conCot: number, esperanCot: number, hintConfirmadas: string, hintTotal: string}}
- */
-export function contadoresSolicitudes(solicitudes, totalServidor = null) {
-  const lista = (Array.isArray(solicitudes) ? solicitudes : []).filter(esObjeto);
-  const totalConf = lista.filter((s) => s.estado === 'CONFIRMADA').length;
-  const conCot = lista.filter(generoCotizacion).length;
-  const esperanCot = lista.filter(esperaCotizacion).length;
-  // B4 T8: las frases son las de pistaConfirmadasSolicitudes y pistaTotalSolicitudes (las de las tarjetas del servidor).
-  const hintConfirmadas = pistaConfirmadasSolicitudes(totalConf, esperanCot);
-  const hayMas = Number.isFinite(totalServidor) && totalServidor > lista.length;
-  const hintTotal = pistaTotalSolicitudes(conCot) + (hayMas ? ` · se ven las ${lista.length} más recientes de ${totalServidor}` : '');
-  return { total: lista.length, totalConf, conCot, esperanCot, hintConfirmadas, hintTotal };
-}
-
-/**
- * H32 (decisión del usuario): la tasa de conversión se calcula solo con las solicitudes de tipo 'Cotizacion de Producto'
- * (sin tipo cuenta como tal): las de soporte, devolución o seguimiento nunca se cotizan y bajarían la tasa sin motivo.
- * @returns {{total: number, conCot: number, pct: number}} pct de 0 a 100 (sin redondear)
- */
-export function tasaConversionCotizacion(solicitudes) {
-  const lista = (Array.isArray(solicitudes) ? solicitudes : []).filter(esObjeto)
-    .filter((s) => (s.tipo_solicitud || TIPO_SC_COTIZABLE) === TIPO_SC_COTIZABLE);
-  const conCot = lista.filter(generoCotizacion).length;
-  return { total: lista.length, conCot, pct: lista.length > 0 ? (conCot / lista.length) * 100 : 0 };
 }
 
 /**
@@ -484,31 +381,16 @@ export function avisoSolicitudTrasRechazo(cot) {
 }
 
 /**
- * T7 ronda 2: la pestaña de la lista de solicitudes en la que cae una fila. Cada solicitud cae en exactamente una, en
- * este orden: Soporte Técnico (por tipo o por su estado propio N/A_SOPORTE, también si se le corrigió el tipo en el
- * detalle) -> 'Soporte'; CONFIRMADA -> 'Confirmadas'; CANCELADA -> 'Canceladas'; lo demás (incluidos los estados
- * heredados, hasta que T12 los ajuste, y una fila sin estado) -> 'Activas'. null si no es una fila. Lo usan el filtro de
- * las 4 pestañas y sus contadores.
- * @param {any} sc
- * @returns {'Soporte' | 'Confirmadas' | 'Canceladas' | 'Activas' | null}
- */
-export function pestanaDeSolicitud(sc) {
-  if (!esObjeto(sc)) return null;
-  if (esSoporte(sc)) return 'Soporte';
-  if (sc.estado === 'CONFIRMADA') return 'Confirmadas';
-  if (sc.estado === 'CANCELADA') return 'Canceladas';
-  return 'Activas';
-}
-
-/**
- * T7 ronda 1 (C12): una solicitud "activa" de la lista = su pestaña es 'Activas' (no es Soporte ni está Confirmada o
- * Cancelada; los heredados cuentan). Un solo predicado para la pestaña, su contador, las vencidas y el diagnóstico de la
- * IA: la misma página no da dos números distintos. null -> false.
+ * T7 ronda 1 (C12): una solicitud "activa" de la lista = su pestaña es 'Activas': no es de Soporte Técnico (por tipo o por
+ * su estado propio N/A_SOPORTE, también si se le corrigió el tipo en el detalle) ni está Confirmada o Cancelada; los
+ * heredados y una fila sin estado cuentan. Un solo predicado para la pestaña, su contador, las vencidas y el diagnóstico de
+ * la IA: la misma página no da dos números distintos. null -> false. B4 T24 f2 (F48): sin pestanaDeSolicitud, que solo
+ * usaban sus pruebas.
  * @param {any} sc
  * @returns {boolean}
  */
 export function esSolicitudActiva(sc) {
-  return pestanaDeSolicitud(sc) === 'Activas';
+  return esObjeto(sc) && !esSoporte(sc) && sc.estado !== 'CONFIRMADA' && sc.estado !== 'CANCELADA';
 }
 
 /** Un conteo valido (entero >= 0) o 0. */
@@ -533,7 +415,7 @@ export function pistaActivasSolicitudes(sinAtender, vencidas) {
 }
 
 /**
- * H32 (B4 T8: sacada de contadoresSolicitudes, la misma frase): la ayuda de la tarjeta de las solicitudes confirmadas:
+ * H32 (B4 T8): la ayuda de la tarjeta de las solicitudes confirmadas (la frase de H32):
  * 'Sin confirmadas', 'N esperan cotización' o 'Todas con cotización'.
  * @param {number} confirmadas
  * @param {number} esperanCot
@@ -546,7 +428,7 @@ export function pistaConfirmadasSolicitudes(confirmadas, esperanCot) {
 }
 
 /**
- * H32 (B4 T8: sacada de contadoresSolicitudes): la ayuda de la tarjeta del total de solicitudes, 'N generaron
+ * H32 (B4 T8): la ayuda de la tarjeta del total de solicitudes, 'N generaron
  * cotización' (las que tienen al menos una COT, en cualquier estado).
  * @param {number} conCot
  * @returns {string}
@@ -706,69 +588,6 @@ export function alertaEntregaPedido(p, ahora = Date.now()) {
   return fechaPorVencer(p.fecha_entrega_estimada, 7, ahora) ? 'por_vencer' : null;
 }
 
-
-const SEPARACION_MENU_FILA = 4; // px entre el botón «⋮» y su menú
-const MARGEN_MENU_FILA = 8; // px que el menú deja libres contra los bordes de la ventana
-
-/**
- * T11 (V2): dónde abrir el menú «⋮» de una fila con position: fixed, para que el contenedor con overflow de la tabla no
- * lo corte. Se alinea al borde derecho del botón y se abre hacia abajo; si abajo no cabe y arriba hay más lugar, hacia
- * arriba. Nunca se sale de la ventana (margen de 8 px). Coordenadas de la ventana (getBoundingClientRect), en px
- * enteros.
- * @param {{top: number, bottom: number, right: number}} boton  el rectángulo del botón «⋮»
- * @param {{ancho: number, alto: number}} menu  el tamaño del menú
- * @param {{ancho: number, alto: number}} ventana  window.innerWidth / innerHeight
- * @returns {{top: number, left: number}}
- */
-export function posicionMenuFila(boton, menu, ventana) {
-  const abajo = boton.bottom + SEPARACION_MENU_FILA;
-  const espacioAbajo = ventana.alto - MARGEN_MENU_FILA - abajo;
-  const espacioArriba = boton.top - SEPARACION_MENU_FILA - MARGEN_MENU_FILA;
-  const deseado = menu.alto <= espacioAbajo || espacioAbajo >= espacioArriba
-    ? abajo
-    : boton.top - SEPARACION_MENU_FILA - menu.alto;
-  const dentro = (valor, maximo) => Math.min(Math.max(valor, MARGEN_MENU_FILA), Math.max(MARGEN_MENU_FILA, maximo));
-  return {
-    top: Math.round(dentro(deseado, ventana.alto - MARGEN_MENU_FILA - menu.alto)),
-    left: Math.round(dentro(boton.right - menu.ancho, ventana.ancho - MARGEN_MENU_FILA - menu.ancho)),
-  };
-}
-
-/**
- * T11 ronda 1 (5): si el botón «⋮» sigue a la vista: el centro de su rectángulo está dentro de cada recorte (la ventana y
- * los contenedores con overflow que lo contienen, todos en coordenadas de la ventana). Si al desplazar sale de la vista,
- * su menú (fixed) se cierra en vez de quedar flotando pegado al borde. Sin rectángulo: false; sin recortes: true.
- * @param {{top: number, bottom: number, left: number, right: number} | null | undefined} boton
- * @param {{top: number, bottom: number, left: number, right: number}[]} recortes
- * @returns {boolean}
- */
-export function botonALaVista(boton, recortes) {
-  if (!boton) return false;
-  const x = (boton.left + boton.right) / 2;
-  const y = (boton.top + boton.bottom) / 2;
-  return (recortes || []).every((r) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
-}
-
-/**
- * Revisión final (F11, M2): lo que recorta al botón «⋮» (la parte pura de recortesDe de solicitud-client.tsx): la ventana
- * ({top: 0, left: 0, right: ancho, bottom: alto}) y el rectángulo de cada ancestro cuyo overflow, en algún eje, no es
- * 'visible' (auto, hidden, scroll o clip: la tabla con overflow-x-auto, la tarjeta con overflow-hidden, el <main> que se
- * desplaza). Cada ancestro llega como {overflowX, overflowY, rect} (getComputedStyle y getBoundingClientRect); de rect
- * solo se toman top, left, right y bottom, y una entrada sin rect se ignora.
- * @param {{ancho: number, alto: number}} ventana
- * @param {({overflowX?: string, overflowY?: string, rect?: {top: number, left: number, right: number, bottom: number}} | null)[] | null | undefined} ancestros
- * @returns {{top: number, left: number, right: number, bottom: number}[]}
- */
-export function recortesDeAncestros(ventana, ancestros) {
-  const recortes = [{ top: 0, left: 0, right: ventana.ancho, bottom: ventana.alto }];
-  for (const a of Array.isArray(ancestros) ? ancestros : []) {
-    if (!a || !a.rect) continue;
-    if (a.overflowX === 'visible' && a.overflowY === 'visible') continue;
-    const { top, left, right, bottom } = a.rect;
-    recortes.push({ top, left, right, bottom });
-  }
-  return recortes;
-}
 
 /**
  * N4: de las solicitudes marcadas para cancelar, cuáles se cancelan con POST /cancelar y cuáles se omiten (sin llamar al
