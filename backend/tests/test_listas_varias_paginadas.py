@@ -473,11 +473,12 @@ def test_error_del_codigo_nuevo_del_catalogo_heredado_no_se_disfraza(app_client,
     assert "error" not in resp.text or "fallo del codigo nuevo" not in resp.text
 
 
-def test_un_error_del_codigo_de_base_responde_como_base(app_client, db, warehouse, monkeypatch):
+def test_un_error_del_codigo_de_base_responde_como_base(app_client, db, warehouse, monkeypatch, admin_token):
     """B4 T24 (B43): el try de BASE en la rama heredada sin offset ni orden: si falla cualquiera de las funciones que son
     código de BASE (las filas de ecommerce_products, su serialización, los SKU del ERP o la serialización de estos), la
     respuesta es la de BASE: 200 {status: success, total: 0, data: [], error}. (Lo nuevo, _skus_con_espejo_que_pasa, da
-    500: test_error_del_codigo_nuevo_del_catalogo_heredado_no_se_disfraza.)"""
+    500: test_error_del_codigo_nuevo_del_catalogo_heredado_no_se_disfraza.) B4 T24 r1 (m10): con sesión ERP, con el
+    str(e) de BASE; sin sesión, con un texto genérico (str(e) trae el SQL y sus parámetros)."""
     from app.api.v1 import ecommerce
     t = _Catalogo(db, warehouse)
     monkeypatch.setenv("CATALOGO_LECTURA", "legacy")
@@ -488,9 +489,10 @@ def test_un_error_del_codigo_de_base_responde_como_base(app_client, db, warehous
         def roto(*args, **kwargs):
             raise RuntimeError(f"fallo de BASE en {nombre}")
         monkeypatch.setattr(ecommerce, nombre, roto)
-        resp = app_client.get(CATALOGO, params={"search": t.s})
-        assert (resp.status_code, resp.json()) == (200, {"status": "success", "total": 0, "data": [],
-                                                         "error": f"fallo de BASE en {nombre}"}), nombre
+        for token, error in ((admin_token, f"fallo de BASE en {nombre}"), (None, "No se pudo cargar el catálogo.")):
+            resp = _obtener(app_client, CATALOGO, token, search=t.s)
+            assert (resp.status_code, resp.json()) == (200, {"status": "success", "total": 0, "data": [],
+                                                             "error": error}), (nombre, token is not None)
         monkeypatch.setattr(ecommerce, nombre, real)
 
 

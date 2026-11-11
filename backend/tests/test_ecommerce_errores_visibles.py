@@ -49,3 +49,17 @@ def test_un_error_de_los_publicados_sube(app_client, admin_token, monkeypatch):
     _falla_si(monkeypatch, "FROM ecommerce_products WHERE publicado_web=TRUE")
     resp = app_client.get(STATS, headers=_auth(admin_token))
     assert (resp.status_code, resp.json()) == (500, ERROR_500), resp.text
+
+
+def test_un_error_de_la_configuracion_de_pagos_o_envios_sube(app_client, admin_token, monkeypatch):
+    """B4 T24 r1 (m13): GET /ecommerce/pagos/config y /envios/config ya no responden los valores fijos («Stripe
+    desactivado», las tarifas por defecto) cuando falla su consulta: un error que se ve como configuración puede terminar
+    guardado encima de la real. Sube el 500; sin error, como hoy."""
+    for ruta in ("/api/v1/ecommerce/pagos/config", "/api/v1/ecommerce/envios/config"):
+        assert app_client.get(ruta, headers=_auth(admin_token)).status_code == 200, ruta
+    for ruta, clave in (("/api/v1/ecommerce/pagos/config", "config_key='payment_gateways'"),
+                        ("/api/v1/ecommerce/envios/config", "config_key='shipping'")):
+        with monkeypatch.context() as m:
+            _falla_si(m, clave)
+            resp = app_client.get(ruta, headers=_auth(admin_token))
+        assert (resp.status_code, resp.json()) == (500, ERROR_500), (ruta, resp.text)

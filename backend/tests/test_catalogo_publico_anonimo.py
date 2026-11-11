@@ -169,3 +169,89 @@ def test_lista_anonima_solo_trae_publicados_y_con_sesion_trae_todo(app_client, d
         # un token que no es de un usuario ERP vale como sin sesión
         resp = _obtener(app_client, CATALOGO, "no-es-un-token", search=t.s, orden="nombre")
         assert resp.status_code == 200 and n["h2"] not in _nombres(resp.json()), rama
+
+
+
+# ─── B4 T24 r1 (C1, m14): un producto despublicado no se cuela por su espejo ni por el respaldo del detalle ────────────
+
+def _despublicar_la_nevera(db, t):
+    """La nevera (p1) despublicada como se ve en cada rama: su espejo m1 de ecommerce_products con publicado_web = false
+    (la rama heredada lee de ahí) y su ficha web ProductWebListing despublicada (la canónica lee de ahí)."""
+    db.execute(text("UPDATE ecommerce_products SET publicado_web = FALSE WHERE id = :i"), {"i": t.m1})
+    db.add(ProductWebListing(sku_id=t.p1.id, publicado_web=False))
+    db.commit()
+
+
+def test_un_sku_con_espejo_despublicado_no_sale_sin_sesion(app_client, db, warehouse, monkeypatch, admin_token):
+    """r1 (C1): en la rama heredada sin offset (la de la tienda en producción), el SKU cuyo espejo está despublicado
+    volvía a salir como fila propia con publicado_web: True. Sin sesión, un SKU con CUALQUIER espejo se descarta (el espejo
+    publicado sale como su propia fila). Con sesión, como hoy (con publicado=true el SKU sale como fila del ERP, BASE)."""
+    t = _Catalogo(db, warehouse)
+    n = t.nombres
+    _despublicar_la_nevera(db, t)
+    for rama in _ramas(monkeypatch):
+        for params in ({}, {"publicado": "true", "limit": 50}, {"publicado": "true", "limit": 3}, {"orden": "nombre"},
+                       {"offset": 0}):
+            anonima = _nombres(_ok(app_client, CATALOGO, search=t.s, **params))
+            assert n["nevera"] not in anonima, (rama, params, anonima)
+            assert n["auto"] in anonima and n["h1"] in anonima, (rama, params, anonima)
+        con_sesion = _nombres(_ok(app_client, CATALOGO, admin_token, search=t.s, orden="nombre"))
+        assert n["nevera"] in con_sesion, (rama, con_sesion)
+
+
+def test_el_espejo_publicado_sigue_saliendo_una_vez_sin_sesion(app_client, db, warehouse, monkeypatch):
+    """r1 (C1): con el espejo publicado, la nevera sale UNA vez sin sesión: como la fila de ecommerce_products (heredada)
+    o como el SKU (canónica)."""
+    t = _Catalogo(db, warehouse)
+    for rama in _ramas(monkeypatch):
+        nombres = _nombres(_ok(app_client, CATALOGO, search=t.s, publicado="true", limit=50))
+        assert nombres.count(t.nombres["nevera"]) == 1, (rama, nombres)
+
+
+def test_el_respaldo_del_detalle_no_sirve_un_despublicado_sin_sesion(app_client, db, warehouse, monkeypatch,
+                                                                     admin_token):
+    """r1 (C1): GET /catalogo/{id} de la rama heredada, cuando el id no es de ecommerce_products, responde el Product con ese
+    id. Sin sesión ya no responde uno cuyo SKU tiene el espejo despublicado: el mismo 404 que la ficha despublicada. Uno sin
+    espejo, o con el espejo publicado, sigue respondiendo; con sesión, como hoy."""
+    t = _Catalogo(db, warehouse)
+    monkeypatch.setenv("CATALOGO_LECTURA", "legacy")
+    nevera, auto = t.p1.product_id, t.p2.product_id
+    ocupados = {r[0] for r in db.execute(text("SELECT id FROM ecommerce_products WHERE id IN (:a, :b)"),
+                                         {"a": nevera, "b": auto})}
+    assert not ocupados, "el id del producto coincide con una fila de ecommerce_products: la prueba no mira el respaldo"
+    assert _detalle(app_client, nevera).status_code == 200     # espejo publicado
+    _despublicar_la_nevera(db, t)
+    resp = _detalle(app_client, nevera)
+    assert (resp.status_code, resp.json()) == (404, {"detail": "Producto no encontrado"})
+    assert _detalle(app_client, nevera, admin_token).status_code == 200
+    assert _detalle(app_client, auto).status_code == 200       # sin espejo
+
+
+def test_una_ficha_web_despublicada_no_sale_sin_sesion_en_la_canonica(app_client, db, warehouse, monkeypatch,
+                                                                       admin_token):
+    """r1 (m14): en la rama canónica, un SKU con su ProductWebListing despublicado no sale en la lista anónima y sí con
+    sesión."""
+    t = _Catalogo(db, warehouse)
+    db.add(ProductWebListing(sku_id=t.p2.id, publicado_web=False))
+    db.commit()
+    monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
+    for params in ({}, {"publicado": "true"}, {"orden": "nombre"}, {"offset": 0}):
+        assert t.nombres["auto"] not in _nombres(_ok(app_client, CATALOGO, search=t.s, **params)), params
+    assert t.nombres["auto"] in _nombres(_ok(app_client, CATALOGO, admin_token, search=t.s, orden="nombre"))
+
+
+def test_un_error_del_catalogo_no_le_muestra_el_sql_al_anonimo(app_client, db, warehouse, monkeypatch, admin_token):
+    """r1 (m10): con un error del código de BASE, el anónimo ya no recibe str(e) (trae el SQL y sus parámetros): recibe un
+    texto genérico. Con sesión sigue la paridad con BASE (str(e))."""
+    from app.api.v1 import ecommerce
+    t = _Catalogo(db, warehouse)
+    monkeypatch.setenv("CATALOGO_LECTURA", "legacy")
+
+    def roto(*args, **kwargs):
+        raise RuntimeError("SELECT secreto FROM tabla WHERE x = 1")
+    monkeypatch.setattr(ecommerce, "_filas_heredadas_de_hoy", roto)
+    resp = app_client.get(CATALOGO, params={"search": t.s})
+    assert (resp.status_code, resp.json()) == (200, {"status": "success", "total": 0, "data": [],
+                                                     "error": "No se pudo cargar el catálogo."})
+    resp = app_client.get(CATALOGO, params={"search": t.s}, headers=_auth(admin_token))
+    assert resp.json()["error"] == "SELECT secreto FROM tabla WHERE x = 1"

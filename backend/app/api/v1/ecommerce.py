@@ -1377,7 +1377,11 @@ def _skus_con_espejo_que_pasa(db: Session, skus: list, params: dict, espejo: lis
     return {r[0] for r in db.execute(consulta, {**params, "skus": codigos}).fetchall()}
 
 
-def _catalogo_heredado_de_hoy(db: Session, search, categoria, publicado, limit: int) -> dict:
+# B4 T24 r1 (m10): lo que ve el anónimo cuando falla el código de BASE (str(e) trae el SQL y sus parámetros).
+ERROR_CATALOGO_PUBLICO = "No se pudo cargar el catálogo."
+
+
+def _catalogo_heredado_de_hoy(db: Session, search, categoria, publicado, limit: int, anonimo: bool = False) -> dict:
     """La rama heredada SIN offset ni orden, como la llama hoy la tienda pública (store/catalogo y store/categoria con
     publicado=true&limit=50): doble fuente, cada una con su LIMIT. Primero las filas de ecommerce_products (por nombre) y
     detrás los SKU del ERP, traídos con la misma consulta de BASE (sin ORDER BY: el mismo orden de BASE, no está definido).
@@ -1385,18 +1389,23 @@ def _catalogo_heredado_de_hoy(db: Session, search, categoria, publicado, limit: 
     Única diferencia con BASE, por el ruling de r1: BASE descartaba un SKU si su espejo estaba entre las filas ya devueltas
     (limitadas); aquí se descarta si el espejo pasa los filtros, aunque haya quedado fuera por el LIMIT de ecommerce_products.
     El try de BASE (un error responde `{status: success, data: [], error}`) envuelve las consultas y la serialización de las
-    filas de ecommerce_products y de los SKU, que son código de BASE; solo queda fuera _skus_con_espejo_que_pasa, que es nuevo."""
+    filas de ecommerce_products y de los SKU, que son código de BASE; solo queda fuera _skus_con_espejo_que_pasa, que es nuevo.
+    B4 T24 r1, solo para el anónimo (la tienda): (C1) se descarta el SKU con CUALQUIER espejo en ecommerce_products, sin
+    mirar los filtros (el espejo publicado sale como su propia fila; uno despublicado ya no se cuela como el SKU con
+    publicado_web: True), como la rama con offset (NOT EXISTS); y (m10) el error es ERROR_CATALOGO_PUBLICO, no str(e)."""
+    def _error(e):
+        return {"status": "success", "total": 0, "data": [], "error": ERROR_CATALOGO_PUBLICO if anonimo else str(e)}
     try:
         filas, total, params, espejo = _filas_heredadas_de_hoy(db, search, categoria, publicado, limit)
         data = [_serialize_catalogo_item_heredado(db, r) for r in filas]
         skus = _skus_heredados_de_base(db, search, limit)
     except Exception as e:
-        return {"status": "success", "total": 0, "data": [], "error": str(e)}
-    con_espejo = _skus_con_espejo_que_pasa(db, skus, params, espejo)
+        return _error(e)
+    con_espejo = _skus_con_espejo_que_pasa(db, skus, {}, []) if anonimo else _skus_con_espejo_que_pasa(db, skus, params, espejo)
     try:
         propios = [_serialize_catalogo_item_sku_heredado(db, k) for k in skus if k.sku not in con_espejo]
     except Exception as e:
-        return {"status": "success", "total": 0, "data": [], "error": str(e)}
+        return _error(e)
     return {"status": "success", "total": total + len(propios), "data": data + propios}
 
 
@@ -1409,7 +1418,8 @@ def list_catalogo(search: Optional[str] = None, q: Optional[str] = None, categor
     - Rama heredada (la de hoy por defecto): SIN offset ni orden responde como BASE (doble fuente, cada una con su LIMIT, total NO
       exacto; es lo que llama la tienda pública; para el total exacto con limit=0 hay que mandar offset=0); CON offset u orden pagina exacto sobre una fila por producto.
     - B4 T24 (FINAL-C1): sin sesión ERP solo se listan los publicados (publicado=false sin sesión no trae nada). Con sesión,
-      como hoy: la pantalla de E-Commerce necesita los despublicados para el interruptor de publicar."""
+      como hoy: la pantalla de E-Commerce necesita los despublicados para el interruptor de publicar. r1: en la rama heredada
+      sin offset, el SKU con un espejo despublicado tampoco sale (_catalogo_heredado_de_hoy)."""
     texto = _texto_o_422(q, search)
     categoria = _texto_o_422(categoria, nombre="categoria")
     orden_sql = _orden_del_catalogo(orden)
@@ -1421,7 +1431,7 @@ def list_catalogo(search: Optional[str] = None, q: Optional[str] = None, categor
     if _lectura_canonica():
         return _list_catalogo_canonico(db, texto, categoria, publicado, limit, offset or 0, orden)
     if offset is None and not (orden or "").strip():
-        return _catalogo_heredado_de_hoy(db, texto, categoria, publicado, limit)
+        return _catalogo_heredado_de_hoy(db, texto, categoria, publicado, limit, anonimo=user is None)
     union, params = _union_catalogo_heredado(texto, categoria, publicado)
     total, claves = _pagina_del_catalogo(db, union, params, orden_sql, limit, offset or 0)
     filas = _filas_de_ecommerce_products(db, (i for g, i in claves if g == GRUPO_PRIMERO))
@@ -1430,10 +1440,22 @@ def list_catalogo(search: Optional[str] = None, q: Optional[str] = None, categor
             for g, i in claves if (filas if g == GRUPO_PRIMERO else skus).get(i) is not None]
     return {"status": "success", "total": total, "data": data}
 
+def _espejo_despublicado(db: Session, sku) -> bool:
+    """B4 T24 r1 (C1): True si el SKU tiene espejo en ecommerce_products (misma columna sku) y ninguno está publicado. Sin
+    espejo, False: la rama heredada lista ese SKU como publicado (como en BASE)."""
+    if not sku:
+        return False
+    publicado = db.execute(text("SELECT bool_or(publicado_web IS TRUE) FROM ecommerce_products WHERE sku = :s"),
+                           {"s": sku}).scalar()
+    return publicado is False
+
+
 @router.get("/catalogo/{product_id}")
 def get_catalogo_product(product_id: int, user: Optional[User] = Depends(get_optional_current_user), db: Session = Depends(get_db)):
     """El detalle (público: la tienda lo lee sin sesión). B4 T24 (FINAL-C1): sin sesión ERP no trae notas_internas,
-    created_by, codigo_aduana ni total_vendido, y un producto despublicado da 404 (_detalle_segun_sesion)."""
+    created_by, codigo_aduana ni total_vendido, y un producto despublicado da 404 (_detalle_segun_sesion). r1: también el
+    respaldo por Product.id (cuando el id no es de ecommerce_products) da ese 404 sin sesión si el SKU que responde tiene
+    espejo en ecommerce_products y ninguno está publicado (_espejo_despublicado). Sin espejo, como hoy."""
     _ensure_ecommerce_tables(db)
     if _lectura_canonica():
         return _get_catalogo_product_canonico(db, product_id, con_sesion=user is not None)
@@ -1442,6 +1464,8 @@ def get_catalogo_product(product_id: int, user: Optional[User] = Depends(get_opt
         prod = db.query(Product).filter(Product.id == product_id).first()
         if prod:
             sku_first = prod.skus[0] if prod.skus else None
+            if user is None and sku_first is not None and _espejo_despublicado(db, sku_first.sku):
+                raise HTTPException(404, "Producto no encontrado")
             stock_disp = float(_get_real_sellable_stock(db, sku_first.id, owner="NEBULAE")) if sku_first else 0.0
             return {
                 "status": "success",
@@ -1623,19 +1647,18 @@ def web_builder_chat(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
 # --- PAGOS CONFIG ---
 @router.get("/pagos/config")
 def get_payment_config(user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
+    """B4 T24 r1 (m13): un error sube como 500 (como B48), en vez de responder Stripe y Mercado Pago desactivados: la pantalla
+    avisaba «desactivado» y un «Guardar» lo dejaba escrito encima de la configuración real. Sin fila, los valores de siempre."""
     _ensure_ecommerce_tables(db)
-    try:
-        row = db.execute(text("SELECT config_value FROM web_builder_config WHERE config_key='payment_gateways'")).fetchone()
-        if row and row[0]:
-            config = dict(row[0])
-            for gw, sk_field in [("stripe","secret_key"),("mercadopago","access_token")]:
-                if gw in config:
-                    sk = config[gw].get(sk_field,"")
-                    config[gw][f"{sk_field}_masked"] = ("*"*max(0,len(sk)-4)+sk[-4:]) if sk else ""
-                    config[gw].pop(sk_field, None)
-            return {"status": "success", "data": config}
-    except Exception:
-        pass
+    row = db.execute(text("SELECT config_value FROM web_builder_config WHERE config_key='payment_gateways'")).fetchone()
+    if row and row[0]:
+        config = dict(row[0])
+        for gw, sk_field in [("stripe","secret_key"),("mercadopago","access_token")]:
+            if gw in config:
+                sk = config[gw].get(sk_field,"")
+                config[gw][f"{sk_field}_masked"] = ("*"*max(0,len(sk)-4)+sk[-4:]) if sk else ""
+                config[gw].pop(sk_field, None)
+        return {"status": "success", "data": config}
     return {"status": "success", "data": {"stripe": {"enabled": False, "publishable_key": "", "webhook_secret": ""}, "mercadopago": {"enabled": False, "public_key": ""}}}
 
 @router.patch("/pagos/config")
@@ -1654,13 +1677,12 @@ def update_payment_config(body: dict, user: User = Depends(require_roles(*ROLE_A
 
 @router.get("/envios/config")
 def get_shipping_config(user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
+    """B4 T24 r1 (m13): un error sube como 500 (como B48), en vez de responder las tarifas por defecto. Sin fila, las de
+    siempre."""
     _ensure_ecommerce_tables(db)
-    try:
-        row = db.execute(text("SELECT config_value FROM web_builder_config WHERE config_key='shipping'")).fetchone()
-        if row and row[0]:
-            return {"status": "success", "data": row[0]}
-    except Exception:
-        pass
+    row = db.execute(text("SELECT config_value FROM web_builder_config WHERE config_key='shipping'")).fetchone()
+    if row and row[0]:
+        return {"status": "success", "data": row[0]}
     return {"status": "success", "data": {"envio_local": {"enabled": True, "tarifa": 12000}, "envio_nacional": {"enabled": True, "tarifa": 25000}, "envio_gratis_desde": 200000, "zonas": []}}
 
 @router.patch("/envios/config")
