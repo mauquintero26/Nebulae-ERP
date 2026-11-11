@@ -1114,3 +1114,72 @@ def test_la_recepcion_desde_el_pedido_la_firma_la_sesion(app_client, db, admin_t
                                            ActivityLog.action == "RECEPCION_CREATED").all()
     assert [l.user_name for l in eninv] == [yo] and [l.user_name for l in del_pec] == [yo]
     assert db.query(GoodsReceipt.created_by).filter(GoodsReceipt.id == gr_id).scalar() == "Otra Persona"
+
+
+
+# ─── Cierre de r2 (m11 ruling, m3 + m14 ruling) ────────────────────────────────────────────────────────────────────
+
+def test_la_actividad_de_recepciones_y_lista_la_firma_la_sesion(app_client, db, admin_token, user_admin, pec_10u,
+                                                                warehouse, eninv_5u, inv_level_zero):
+    """Cierre de r2 (ruling de m11, la regla de autoría de FINAL-m2): los renglones de Actividad de Compras que firmaba un
+    nombre que manda el navegador los firma la sesión (nombre_de_usuario); ese nombre queda solo como dato:
+    - POST /compras/recepciones (create_recepcion): el ENINV CREATED (body.created_by);
+    - PATCH /compras/recepciones/{id} (update_recepcion): el ESTADO_CHANGED (body.updated_by);
+    - POST /compras/recepciones/{id}/confirmar (confirmar_recepcion): los renglones de la recepción y del PEC
+      (body.user_name; sigue como dato en confirmed_by);
+    - POST /compras/lista-compras (add_to_lista_compras): el SENT_TO_LISTA_COMPRAS del PVEN (body.created_by; sigue en
+      el ítem de la Lista)."""
+    yo = nombre_de_usuario(user_admin)
+
+    def firmas(tipo, ident, accion=None):
+        db.expire_all()
+        q = db.query(ActivityLog.user_name).filter(ActivityLog.entity_type == tipo, ActivityLog.entity_id == ident)
+        if accion:
+            q = q.filter(ActivityLog.action == accion)
+        return [r[0] for r in q.order_by(ActivityLog.id)]
+
+    pec_id, pec_numero, eninv_id = pec_10u.id, pec_10u.numero, eninv_5u.id
+    resp = app_client.post(RECEPCIONES, headers=_auth(admin_token),
+                           json={"pec_id": pec_id, "pec_numero": pec_numero, "productos": [], "created_by": "Otra Persona"})
+    assert resp.status_code == 201, resp.text
+    nueva = resp.json()["data"]["id"]
+    assert firmas("ENINV", nueva, "CREATED") == [yo]
+    assert db.query(GoodsReceipt.created_by).filter(GoodsReceipt.id == nueva).scalar() == "Otra Persona"
+    resp = app_client.patch(f"{RECEPCIONES}/{nueva}", headers=_auth(admin_token),
+                            json={"estado": "EN_REVISION", "updated_by": "Otra Persona"})
+    assert resp.status_code == 200, resp.text
+    assert firmas("ENINV", nueva, "ESTADO_CHANGED") == [yo]
+    resp = app_client.post(f"{RECEPCIONES}/{eninv_id}/confirmar", headers=_auth(admin_token),
+                           json={"idempotency_key": f"r2-m11-{uuid.uuid4().hex}", "receipt_type": "FISICA",
+                                 "user_name": "Otra Persona"})
+    assert resp.status_code == 200, resp.text
+    de_la_recepcion = firmas("ENINV", eninv_id)
+    assert de_la_recepcion and set(de_la_recepcion) == {yo}, de_la_recepcion
+    assert yo in firmas("PEC", pec_id) and "Otra Persona" not in firmas("PEC", pec_id)
+    ven = _Fabrica(db).pven("PENDIENTE_COMPRA")
+    resp = app_client.post("/api/v1/compras/lista-compras", headers=_auth(admin_token),
+                           json={"pven_id": ven.id, "pven_numero": ven.numero, "producto": "Taladro", "cantidad": 1,
+                                 "created_by": "Otra Persona"})
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["data"][0]["created_by"] == "Otra Persona"
+    assert firmas("VEN", ven.id, "SENT_TO_LISTA_COMPRAS") == [yo]
+
+
+def test_un_dia_de_alerta_legado_invalido_no_tumba_la_lista(app_client, db, admin_token):
+    """Cierre de r2 (ruling de m3 + m14): _stage_alert trata un OverflowError, TypeError o ValueError de UNA etapa (un
+    alert_*_days enorme o en texto, guardado antes de A2 o de m21) como «sin alerta» para esa etapa: un solo valor no
+    tumba GET /compras/pedidos para todos. Las demás etapas siguen con su aviso."""
+    f = _Fabrica(db)
+    etapas = [{"stage": "E0", "status": "EN_PROCESO", "timestamp": None, "eta": "2026-12-01", "alert_overdue_days": 10 ** 9},
+              {"stage": "E1", "status": "EN_PROCESO", "timestamp": None, "eta": "2026-12-01", "alert_overdue_days": "3"},
+              {"stage": "E2", "status": "PENDIENTE", "timestamp": None, "eta": None, "alert_confirm_days": 10 ** 9},
+              {"stage": "E3", "status": "PENDIENTE", "timestamp": None, "eta": None, "alert_confirm_days": [1]},
+              {"stage": "E4", "status": "EN_PROCESO", "timestamp": None, "eta": "2026-12-01", "alert_overdue_days": 3}]
+    pec = f.pec("EMITIDO", tracking_stages=etapas)
+    resp = app_client.get(RUTA, headers=_auth(admin_token), params={"q": pec.numero})
+    assert resp.status_code == 200, resp.text
+    [fila] = [p for p in resp.json()["data"] if p["id"] == pec.id]
+    alertas = [s["alert"] for s in fila["tracking_stages"]]
+    assert alertas[:4] == [None, None, None, None], alertas
+    assert alertas[4] and "ETA 01/12/2026" in alertas[4]["mensaje"], alertas
+    assert app_client.get(f"{RUTA}/{pec.id}", headers=_auth(admin_token)).status_code == 200

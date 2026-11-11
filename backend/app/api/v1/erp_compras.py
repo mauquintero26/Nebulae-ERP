@@ -174,6 +174,16 @@ def _parse_dt(v):
 
 
 def _stage_alert(stage: dict, base_date) -> Optional[dict]:
+    """La alerta de UNA etapa (ver _alerta_de_etapa). B4 T24, cierre de r2 (ruling de m3 + m14): un OverflowError,
+    TypeError o ValueError de esa etapa (un alert_*_days enorme o en texto, guardado antes de A2 o de m21) es «sin alerta»
+    para ESA etapa: un solo valor no tumba GET /compras/pedidos para todos."""
+    try:
+        return _alerta_de_etapa(stage, base_date)
+    except (OverflowError, TypeError, ValueError):
+        return None
+
+
+def _alerta_de_etapa(stage: dict, base_date) -> Optional[dict]:
     """Timer/alerta calculada en vivo para UNA etapa (no se guarda en BD).
 
     Antes solo devolvia algo cuando la etapa YA estaba vencida (alerta
@@ -2001,7 +2011,7 @@ def create_recepcion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
     db.refresh(gr)
     _log(db, "ENINV", gr.id, gr.numero, "CREATED",
          f"Recepcion {gr.numero} creada con {len(productos_gr)} lineas normalizadas",
-         new_estado="BORRADOR", user_name=body.get("created_by"))
+         new_estado="BORRADOR", user_name=nombre_de_usuario(user))   # cierre de r2 (m11): created_by queda como dato
     return {"status": "success", "data": _gr_dict(gr, db)}
 
 
@@ -2271,7 +2281,7 @@ def update_recepcion(eninv_id: int, body: dict, user: User = Depends(require_rol
         _log(db, "ENINV", g.id, g.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {g.estado}",
              old_estado=old_estado, new_estado=g.estado,
-             user_name=body.get("updated_by"))
+             user_name=nombre_de_usuario(user))   # cierre de r2 (m11): updated_by ya no firma
     return {"status": "success", "data": _gr_dict(g, db)}
 
 
@@ -2594,7 +2604,8 @@ def confirmar_recepcion(
     client_key   = body.idempotency_key
     receipt_type = body.receipt_type
     allow_excess = body.allow_excess
-    user_label   = body.user_name or str(user.id)
+    user_label   = body.user_name or str(user.id)   # dato (confirmed_by, created_by de los movimientos, el envío)
+    autor        = nombre_de_usuario(user)            # cierre de r2 (m11): firma los renglones de la Actividad
     # Hash del payload para detectar cambios en reintentos
     body_for_hash = {"receipt_type": receipt_type, "eninv_id": eninv_id}
     req_hash = hashlib.sha256(
@@ -2834,7 +2845,7 @@ def confirmar_recepcion(
                     f"Normalizacion legacy: {n_legacy} lineas creadas desde JSON snapshot. "
                     "source=LEGACY. quantity_received preservado del JSON si existia."
                 ),
-                user_name     = user_label,
+                user_name     = autor,
             ))
             db.flush()
             # Re-leer con lock
@@ -3073,7 +3084,7 @@ def confirmar_recepcion(
                                             entity_numero=so.numero if so else "",
                                             action="MERCANCIA_DISPONIBLE",
                                             description=f"{take} unidad(es) de SKU {grl.sku_id} recibidas y reservadas en Barranquilla según {g.numero}.",
-                                            user_name=user_label,
+                                            user_name=autor,
                                         ))
                     if rem_recv > 0:
                         owner_increments[(grl.sku_id, "NEBULAE")] = owner_increments.get((grl.sku_id, "NEBULAE"), Decimal("0.00")) + rem_recv
@@ -3365,7 +3376,7 @@ def confirmar_recepcion(
             ),
             old_estado    = "BORRADOR",
             new_estado    = g.estado,
-            user_name     = user_label,
+            user_name     = autor,
             extra_data    = {
                 "receipt_type": receipt_type,
                 "sku_increments": sku_increments,
@@ -3380,7 +3391,7 @@ def confirmar_recepcion(
                 action        = "RECEPCION_CONFIRMADA",
                 description   = f"ENINV {g.numero} confirmada. Estado derivado: {pec_estado_nuevo}.",
                 new_estado    = pec_estado_nuevo,
-                user_name     = user_label,
+                user_name     = autor,
             ))
 
         # ─── PREPARAR RESPUESTA JSON ──────────────────────────────────────────
@@ -3862,7 +3873,7 @@ def add_to_lista_compras(
         nombres = ", ".join(it["producto"] for it in added)
         _log(db, "VEN", pven_id, pven_numero, "SENT_TO_LISTA_COMPRAS",
              f"Enviado a Lista de Compras: {nombres}",
-             user_name=created_by)
+             user_name=nombre_de_usuario(user))   # cierre de r2 (m11): created_by queda en el ítem
     return {"status": "success", "data": added}
 
 
