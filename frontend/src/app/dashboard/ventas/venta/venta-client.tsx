@@ -4,15 +4,16 @@ export const dynamic = 'force-dynamic';
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, createContext, useContext } from 'react';
 import Link from 'next/link';
 // B4 T10: se fueron Search, MoreHorizontal, FileText y Package de la lista hecha a mano (la búsqueda, el ⋯ propio, las
-// StatCard y la pestaña Análisis); entran BarChart3 («Ver análisis») y Truck/Package de «Marcar En tránsito / En proceso».
+// StatCard y la pestaña Análisis); entra BarChart3 («Ver análisis»). B4 T24 f2 (F47): Truck y Package de «Marcar En tránsito / En
+// proceso» pasan con sus acciones a acciones-tablero-pedidos.ts.
 import {
-  RefreshCw, X, FileCheck, AlertCircle, ShoppingCart, DollarSign, UserPlus, BarChart3, Truck, Package,
+  RefreshCw, X, FileCheck, AlertCircle, ShoppingCart, DollarSign, UserPlus, BarChart3,
 } from 'lucide-react';
 import { useSearchParams, useRouter } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
 import { formatoPesos } from '@/lib/pesos';
-import { infoEstadoPedido, transicionesPedido } from '@/lib/estados-pedido';
+import { transicionesPedido } from '@/lib/estados-pedido';
 // B4 T10: la lista ya no cuenta ni filtra en el navegador (kpisPedidos, opcionesFiltroEstado, grupoPedido y la búsqueda
 // con coincideProducto): las vistas, los conteos y las tarjetas son del servidor (T6B y T6C). Lo de cada fila sigue
 // saliendo de las librerías.
@@ -38,9 +39,9 @@ import type { AccionTabla } from '@/lib/tabla';
 import { alternarPaso } from '@/lib/flujo';
 import { enlaceVerAnalisis, leerEnlacePedidos, pasosDePedidos, textoRegla, vistaDePasoPedido } from '@/lib/flujo-ventas';
 import {
-  COLUMNAS_PEDIDO, OPCIONES_ESTADOS_TABLERO_PEDIDO, RUTA_LISTA_PEDIDOS, accionesTarjetaPedido, chipsDocumentoVentas,
-  confirmacionFacturarPedido, consultaColumnaPedido, efectosCancelarPedido, estadoDeTarjeta, estadosConsultaPedidos,
-  opcionesEstadosPedidos, porEstadoVisto, reglaSoltarPedido, resumenColumnaPedido, tarjetaPedido,
+  COLUMNAS_PEDIDO, OPCIONES_ESTADOS_TABLERO_PEDIDO, RUTA_LISTA_PEDIDOS, chipsDocumentoVentas, consultaColumnaPedido,
+  efectosCancelarPedido, estadoDeTarjeta, estadosConsultaPedidos, opcionesEstadosPedidos, porEstadoVisto, reglaSoltarPedido,
+  resumenColumnaPedido, tarjetaPedido,
 } from '@/lib/kanban-ventas';
 import type { PorEstadoVisto } from '@/lib/kanban-ventas';
 import { fechaCorta, fechaSolo } from '@/lib/fechas-colombia';
@@ -51,6 +52,8 @@ import { accesoTableroVentas } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
 import { VEN_NAV } from '../ven-nav';
 import { getUsuarioActual, puedeCrearOrdenDePago } from '../flujo';
+// B4 T24 f2 (F47): las acciones del tablero, las mismas de E-Commerce.
+import { useAccionesTableroPedidos } from '../acciones-tablero-pedidos';
 
 export function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClose:()=>void}) {
   const [form, setForm] = useState({name:'',reference:'',contact_name:'',phone:'',email:'',address:'',city:'',country:'Colombia',payment_terms:'',notes:''});
@@ -128,8 +131,6 @@ type FilaPedido = {
 
 /** `conteos` de con_conteos=1: las pestañas (con la búsqueda; sin vista, estados ni semáforo, R5). */
 type ConteosPedidos = Partial<Record<'todos' | 'pend_compra' | 'en_proceso' | 'listo_entrega' | 'entregado' | 'facturado' | 'cancelado', number>>;
-/** D39: las columnas del tablero de una acción desde una tarjeta: [origen, destino]. */
-type ColumnasDeTarjeta = readonly [string, string];
 /** Lo que la lista lee de GET /ventas/stats?periodo=30d (T6C): los kpis de las tarjetas (RP19 (2), D5). */
 type StatsPedidos = { kpis?: Record<string, unknown> | null };
 
@@ -155,8 +156,6 @@ const FOCO_VISIBLE = FOCOS.indigo;
 // D41: el tono opaco filaAlerta para la fila atrasada (la resolución del servidor, R8) y la marca rosa a la izquierda del Hub.
 const MARCA_ATRASO = '[&>td:first-child]:shadow-[inset_3px_0_0_var(--color-rose-500)]';
 const claseDeFila = (p: FilaPedido) => (p.resolucion === 'ATRASADO' ? `${TABLE.filaAlerta} ${MARCA_ATRASO}` : null);
-/** Quien hace el cambio desde el tablero (updated_by, como el Hub). */
-const autorActual = () => { const u = getUsuarioActual(); return u.name || u.email || undefined; };
 
 /** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
 type AccionesFilaPedido = {
@@ -326,8 +325,9 @@ const tarjetaDePedido = (p: FilaPedido) => tarjetaPedido(p);
 
 export default function VentaClient() {
   const router = useRouter();
-  // H49 (T1B): avisos del sistema y confirmar() (nunca confirm, alert ni prompt).
-  const { avisar, avisarError, confirmar } = useAvisos();
+  // H49 (T1B): avisos del sistema (nunca confirm, alert ni prompt). B4 T24 f2 (F47): confirmar() y avisarError() del tablero los usa
+  // useAccionesTableroPedidos.
+  const { avisar } = useAvisos();
 
   // ── B4 T10, bloque 1: la carga del servidor (TABLA-listas-ventas punto 7; R5, R8, C3, C4, C9; RP8, RP19, RP26, D5, D39, D40) ──
   // Ya no hay arreglos en memoria (antes, los 200 más recientes, filtrados, contados y sumados en el navegador). El estado
@@ -522,6 +522,7 @@ export default function VentaClient() {
     } catch (err) {
       // Los de error pasan por textoDeError (sin conexión, '[object Object]', 'Error: ' repetido).
       avisar(textoDeError(err), { tono: 'error' });
+      // La regla única (recargarTrasError): un 400, un 409, un 422 (F8) o la red cortada recargan la lista; un 403 o un 500, no.
       if (recargarTrasError(err)) recargarListado();
     } finally {
       setCreandoPxp(null);
@@ -543,81 +544,12 @@ export default function VentaClient() {
   // reglaSoltarPedido (T3C): libre entre Pendiente de compra, En proceso y Listo para entrega; a Entregado no se arrastra
   // (Entregas elige la bodega); Facturado solo desde Entregado, con confirmación; Cancelado pide el motivo; un pedido
   // entregado o cancelado no vuelve atrás. Lo que no se puede queda bloqueado con su motivo ANTES de soltar.
-  // 'cambio': el PATCH del estado. El tablero mueve la tarjeta y, si el servidor la rechaza, la devuelve con su mensaje;
-  // recarga su origen y su destino (D39) y aquí se recargan las pestañas, la franja y las tarjetas. r1 (m4): si el PATCH
-  // falla, también, con la regla de recargarTrasError (un 409: el pedido cambió en otro lado), y el error sigue para que
-  // el tablero deshaga (eso ya recarga su origen y su destino: aquí no se llama a tablero.recargar).
-  async function cambiarDesdeTablero(p: FilaPedido, resultado: { estado: string }) {
-    try {
-      await apiFetch(`/ventas/pedidos/${p.id}`, {
-        method: 'PATCH', body: JSON.stringify({ estado: resultado.estado, updated_by: autorActual() }),
-      });
-    } catch (err) {
-      if (recargarTrasError(err)) recargarTrasCambio();
-      throw err;
-    }
-    recargarTrasCambio();
-  }
-  // 'accion' 'facturar' (N2): confirmar() con el texto del panel rápido del Hub → PATCH {estado: 'FACTURADO'}; 'cancelar':
-  // ModalMotivo. Al terminar, del tablero solo su origen y su destino (D39).
-  const [cancelando, setCancelando] = useState<{ pedido: FilaPedido; columnas: ColumnasDeTarjeta } | null>(null);
-  async function facturarDesdeTablero(p: FilaPedido, columnas: ColumnasDeTarjeta) {
-    if (!(await confirmar(confirmacionFacturarPedido(p)))) return;
-    try {
-      await apiFetch(`/ventas/pedidos/${p.id}`, { method: 'PATCH', body: JSON.stringify({ estado: 'FACTURADO', updated_by: autorActual() }) });
-      avisar(`${p.numero} quedó Facturado`, { tono: 'ok' });
-    } catch (err) {
-      avisarError(err, `No se pudo facturar ${p.numero}`);
-      // r1 de T9 (m1) y B4 T24 r1 (m16): un 400, un 409, un 422 (F8) o la red cortada recargan (recargarTrasError); un 500, no.
-      if (!recargarTrasError(err)) return;
-    }
-    tablero.recargar([...columnas]);
-    recargarTrasCambio();
-  }
-  function accionDesdeTablero(p: FilaPedido, resultado: { accion: string }, origen: string, destino: string) {
-    if (resultado.accion === 'cancelar') setCancelando({ pedido: p, columnas: [origen, destino] });
-    else if (resultado.accion === 'facturar') void facturarDesdeTablero(p, [origen, destino]);
-  }
-  // 'cancelar' (N2, H45, H46): ModalMotivo (5 letras o más) → PATCH {estado: 'CANCELADO', cancellation_reason} (el
-  // servidor deja el motivo en la Actividad, «Motivo de cancelación», anula la PXP pendiente y reabre la cotización). Si
-  // el PATCH falla, con la regla única recargarTrasError se recargan el origen y el destino del tablero, las pestañas, la
-  // franja y las tarjetas, y el error sigue (throw) para que ModalMotivo lo muestre y conserve lo escrito.
-  async function cancelarConMotivo(motivo: string) {
-    if (!cancelando) return;
-    const { pedido, columnas } = cancelando;
-    const autor = autorActual();
-    try {
-      await apiFetch(`/ventas/pedidos/${pedido.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ estado: 'CANCELADO', cancellation_reason: motivo, cancellation_authorized_by: autor, updated_by: autor }),
-      });
-    } catch (err) {
-      if (recargarTrasError(err)) {
-        tablero.recargar([...columnas]);
-        recargarTrasCambio();
-      }
-      throw err;
-    }
-    avisar(`${pedido.numero} cancelado`, { tono: 'ok' });
-    tablero.recargar([...columnas]);
-    recargarTrasCambio();
-  }
-  // accionesTarjeta: «Marcar En tránsito» y «Marcar En proceso» sin salir de la columna En proceso (accionesTarjetaPedido:
-  // solo lo que acepta el PATCH). Al terminar, esa columna y lo que mueve el cambio.
-  const marcarDesdeTablero = useCallback(async (p: FilaPedido, nuevo: string) => {
-    try {
-      await apiFetch(`/ventas/pedidos/${p.id}`, { method: 'PATCH', body: JSON.stringify({ estado: nuevo, updated_by: autorActual() }) });
-      avisar(`${p.numero} pasó a ${infoEstadoPedido(nuevo).label}`, { tono: 'ok' });
-    } catch (err) {
-      avisarError(err, `No se pudo cambiar el estado de ${p.numero}`);
-      if (!recargarTrasError(err)) return;
-    }
-    recargarTablero(['en_proceso']);
-    recargarTrasCambio();
-  }, [avisar, avisarError, recargarTablero, recargarTrasCambio]);
-  const accionesTarjeta = useCallback((p: FilaPedido): ItemMenuFila[] => (accesoTablero.mover ? accionesTarjetaPedido(p) : []).map((a) => ({
-    etiqueta: a.etiqueta, icono: a.estado === 'EN_TRANSITO' ? Truck : Package, onClick: () => { void marcarDesdeTablero(p, a.estado); },
-  })), [marcarDesdeTablero, accesoTablero.mover]);
+  // B4 T24 f2 (F47): lo que pasa al soltar ('cambio', 'facturar' y 'cancelar') y «Marcar En tránsito / En proceso» del ⋯ son las
+  // MISMAS acciones de E-Commerce: useAccionesTableroPedidos (la regla de error y de recarga, en accionesTableroPedidos de
+  // lib/kanban-ventas.js, con sus casos). Solo quien mueve (accesoTablero.mover) ve las acciones del ⋯.
+  const {
+    cambiarDesdeTablero, accionDesdeTablero, accionesTarjeta, cancelando, cancelarConMotivo, cerrarCancelacion,
+  } = useAccionesTableroPedidos<FilaPedido>({ tablero, recargarTrasCambio, mover: accesoTablero.mover });
   // C9: la suma de H47 de cada columna (el resumen de su consulta) debajo del título, salvo en Cancelado.
   const resumenColumna = useCallback(
     (clave: string, d: DatosColumnaKanban<FilaPedido>) => resumenColumnaPedido(clave, d.resumen), [],
@@ -786,7 +718,7 @@ export default function VentaClient() {
           textoConfirmar="Cancelar pedido"
           placeholder="Ej: Cliente desistió de la compra, error en el pedido, etc."
           onConfirmar={cancelarConMotivo}
-          onCerrar={() => setCancelando(null)}
+          onCerrar={cerrarCancelacion}
         />
       )}
     </div>

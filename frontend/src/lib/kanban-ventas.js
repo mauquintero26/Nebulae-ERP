@@ -65,6 +65,8 @@ import { redondearPeso, formatoPesos } from './pesos.js';
 import { queryListado } from './tabla.js';
 // B4 T23A: el permiso de mover los pedidos web (RP62).
 import { esAdminOAsesor } from './roles.js';
+// B4 T24 f2 (F47): la regla única de la recarga tras un error, para las acciones del tablero de pedidos.
+import { recargarTrasError } from './avisos.js';
 
 /**
  * @typedef {import('./kanban.js').ResultadoSoltar} ResultadoSoltar
@@ -1248,6 +1250,92 @@ export function confirmacionFacturarPedido(pedido) {
     titulo: numero ? `Marcar ${numero} como Facturado` : 'Marcar como Facturado',
     mensaje: 'Después de esto el estado del pedido ya no se puede cambiar.',
     textoConfirmar: 'Marcar como Facturado',
+  };
+}
+
+/**
+ * @typedef {{
+ *   apiFetch: (ruta: string, opciones: {method: string, body: string}) => Promise<unknown>,
+ *   autor: () => string | undefined,
+ *   confirmar: (opciones: {titulo: string, mensaje: string, textoConfirmar: string}) => Promise<boolean>,
+ *   avisar: (texto: string, opciones?: {tono?: 'ok' | 'error' | 'info'}) => void,
+ *   avisarError: (err: unknown, prefijo?: string) => void,
+ *   recargarTablero: (columnas: string[]) => void,
+ *   recargarTrasCambio: () => void,
+ * }} DependenciasTableroPedidos
+ *   B4 T24 f2 (F47): lo que las acciones del tablero de pedidos necesitan de la pantalla (y que la prueba cambia por dobles).
+ */
+
+/**
+ * B4 T24 f2 (F47): las acciones del tablero de pedidos (Pedidos de venta y E-Commerce: los dos mueven por PATCH /ventas/pedidos/{id}),
+ * sin React, para que su regla de error y de recarga se pruebe con un apiFetch falso (test_kanban_ventas.mjs). La pantalla las usa por
+ * useAccionesTableroPedidos (app/dashboard/ventas/acciones-tablero-pedidos.ts). En las cuatro, una falla con recargarTrasError (un 409:
+ * el pedido cambió en otro lado; un 400, un 422 o la red cortada) recarga; un 403 o un 500, no:
+ *  - cambiar (arrastre): PATCH {estado}; bien o con la regla, lo que mueve el cambio (recargarTrasCambio). El error sigue (throw) para
+ *    que el tablero deshaga, y eso ya recarga su origen y su destino: aquí no se recarga el tablero (D39);
+ *  - facturar: confirmar(confirmacionFacturarPedido) y PATCH FACTURADO; bien, el aviso; mal, avisarError. Bien o con la regla, el
+ *    origen y el destino del tablero y lo demás;
+ *  - cancelar (ModalMotivo): PATCH CANCELADO con el motivo y quién autoriza. Mal: con la regla, el origen, el destino y lo demás, y el
+ *    error sigue (ModalMotivo lo muestra y conserva lo escrito). Bien: el aviso, el origen, el destino y lo demás;
+ *  - marcar («Marcar En tránsito / En proceso»): PATCH {estado}; bien, el aviso; mal, avisarError. Bien o con la regla, la columna
+ *    En proceso y lo demás.
+ * @param {DependenciasTableroPedidos} dependencias
+ */
+export function accionesTableroPedidos({ apiFetch, autor, confirmar, avisar, avisarError, recargarTablero, recargarTrasCambio }) {
+  /** @param {{id: unknown}} p @param {Record<string, unknown>} cuerpo */
+  const patch = (p, cuerpo) => apiFetch(`/ventas/pedidos/${p.id}`, { method: 'PATCH', body: JSON.stringify(cuerpo) });
+  return {
+    /** @param {{id: unknown, numero?: string | null}} p @param {string} estado */
+    async cambiar(p, estado) {
+      try {
+        await patch(p, { estado, updated_by: autor() });
+      } catch (err) {
+        if (recargarTrasError(err)) recargarTrasCambio();
+        throw err;
+      }
+      recargarTrasCambio();
+    },
+    /** @param {{id: unknown, numero?: string | null}} p @param {ReadonlyArray<string>} columnas */
+    async facturar(p, columnas) {
+      if (!(await confirmar(confirmacionFacturarPedido(p)))) return;
+      try {
+        await patch(p, { estado: 'FACTURADO', updated_by: autor() });
+        avisar(`${p.numero} quedó Facturado`, { tono: 'ok' });
+      } catch (err) {
+        avisarError(err, `No se pudo facturar ${p.numero}`);
+        if (!recargarTrasError(err)) return;
+      }
+      recargarTablero([...columnas]);
+      recargarTrasCambio();
+    },
+    /** @param {{id: unknown, numero?: string | null}} p @param {string} motivo @param {ReadonlyArray<string>} columnas */
+    async cancelar(p, motivo, columnas) {
+      const quien = autor();
+      try {
+        await patch(p, { estado: 'CANCELADO', cancellation_reason: motivo, cancellation_authorized_by: quien, updated_by: quien });
+      } catch (err) {
+        if (recargarTrasError(err)) {
+          recargarTablero([...columnas]);
+          recargarTrasCambio();
+        }
+        throw err;
+      }
+      avisar(`${p.numero} cancelado`, { tono: 'ok' });
+      recargarTablero([...columnas]);
+      recargarTrasCambio();
+    },
+    /** @param {{id: unknown, numero?: string | null}} p @param {string} nuevo */
+    async marcar(p, nuevo) {
+      try {
+        await patch(p, { estado: nuevo, updated_by: autor() });
+        avisar(`${p.numero} pasó a ${infoEstadoPedido(nuevo).label}`, { tono: 'ok' });
+      } catch (err) {
+        avisarError(err, `No se pudo cambiar el estado de ${p.numero}`);
+        if (!recargarTrasError(err)) return;
+      }
+      recargarTablero(['en_proceso']);
+      recargarTrasCambio();
+    },
   };
 }
 

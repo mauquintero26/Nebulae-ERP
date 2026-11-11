@@ -1169,6 +1169,137 @@ console.log('--- B4 T24 f2 (F2): «Listo para entrega» es una sola opción del 
   assert.match(venta, /ruta: '\/ventas\/pedidos', estado, conConteos: true, esperar: !listo, despachar,\s*extra: enKanban \? EXTRA_TABLERO : extraDeLaLista,/);
 }
 
+console.log('--- B4 T24 f2 (F47): accionesTableroPedidos — las acciones del tablero de Pedidos y E-Commerce, ejecutadas con un apiFetch falso ---');
+{
+  assert.equal(typeof kv.accionesTableroPedidos, 'function', 'accionesTableroPedidos existe');
+  const conStatus = (status) => Object.assign(new Error(`error ${status}`), { status });
+  const sinRed = () => Object.assign(new TypeError('Failed to fetch'), {});
+  /** Un entorno con dobles: el apiFetch responde con `respuesta` (un Error se lanza) y todo lo demás se anota. */
+  const entorno = ({ respuesta = { status: 'success' }, confirma = true } = {}) => {
+    const notas = { peticiones: [], tablero: [], trasCambio: 0, avisos: [], errores: [], confirmaciones: [] };
+    const acciones = kv.accionesTableroPedidos({
+      apiFetch: async (ruta, opciones) => {
+        notas.peticiones.push([ruta, opciones?.method, JSON.parse(opciones?.body ?? 'null')]);
+        if (respuesta instanceof Error) throw respuesta;
+        return respuesta;
+      },
+      autor: () => 'Ana Asesora',
+      confirmar: async (o) => { notas.confirmaciones.push(o); return confirma; },
+      avisar: (texto, o) => notas.avisos.push([texto, o?.tono]),
+      avisarError: (err, prefijo) => notas.errores.push([err?.status ?? null, prefijo]),
+      recargarTablero: (columnas) => notas.tablero.push([...columnas]),
+      recargarTrasCambio: () => { notas.trasCambio += 1; },
+    });
+    return { acciones, notas };
+  };
+  const P = { id: 7, numero: 'PVEN-7', estado: 'EN_PROCESO' };
+  const FALLAS_QUE_RECARGAN = [conStatus(409), conStatus(400), conStatus(422), sinRed()];
+  const FALLAS_QUE_NO = [conStatus(500), conStatus(403)];
+
+  // cambiar (arrastre): PATCH con el autor; bien → lo demás se recarga (el tablero mueve la tarjeta y recarga su origen y su destino).
+  {
+    const { acciones, notas } = entorno();
+    await acciones.cambiar(P, 'LISTO_ENTREGA');
+    assert.deepEqual(notas.peticiones, [['/ventas/pedidos/7', 'PATCH', { estado: 'LISTO_ENTREGA', updated_by: 'Ana Asesora' }]]);
+    assert.equal(notas.trasCambio, 1);
+    assert.deepEqual(notas.tablero, [], 'D39: el arrastre no recarga el tablero a mano');
+  }
+  // Falla: el error sigue (el tablero deshace); un 409, un 400, un 422 o la red cortada recargan lo demás; un 500 o un 403, no.
+  for (const falla of [...FALLAS_QUE_RECARGAN, ...FALLAS_QUE_NO]) {
+    const { acciones, notas } = entorno({ respuesta: falla });
+    await assert.rejects(acciones.cambiar(P, 'LISTO_ENTREGA'), (e) => e === falla, `cambiar ${falla.status ?? 'red'}: el error sigue`);
+    assert.equal(notas.trasCambio, FALLAS_QUE_RECARGAN.includes(falla) ? 1 : 0, `cambiar ${falla.status ?? 'red'}`);
+    assert.deepEqual(notas.tablero, [], 'deshacer ya recarga el origen y el destino');
+  }
+
+  // facturar: primero confirma (confirmacionFacturarPedido); sin confirmar, no manda nada.
+  {
+    const { acciones, notas } = entorno({ confirma: false });
+    await acciones.facturar({ ...P, estado: 'ENTREGADO' }, ['entregado', 'facturado']);
+    assert.deepEqual(notas.confirmaciones, [kv.confirmacionFacturarPedido({ ...P, estado: 'ENTREGADO' })]);
+    assert.deepEqual(notas.peticiones, [], 'sin confirmar, ningún PATCH');
+    assert.equal(notas.trasCambio, 0);
+  }
+  {
+    const { acciones, notas } = entorno();
+    await acciones.facturar({ ...P, estado: 'ENTREGADO' }, ['entregado', 'facturado']);
+    assert.deepEqual(notas.peticiones, [['/ventas/pedidos/7', 'PATCH', { estado: 'FACTURADO', updated_by: 'Ana Asesora' }]]);
+    assert.deepEqual(notas.avisos, [['PVEN-7 quedó Facturado', 'ok']]);
+    assert.deepEqual(notas.tablero, [['entregado', 'facturado']], 'el origen y el destino');
+    assert.equal(notas.trasCambio, 1);
+  }
+  for (const falla of [...FALLAS_QUE_RECARGAN, ...FALLAS_QUE_NO]) {
+    const { acciones, notas } = entorno({ respuesta: falla });
+    await acciones.facturar({ ...P, estado: 'ENTREGADO' }, ['entregado', 'facturado']); // no lanza: avisa
+    assert.deepEqual(notas.errores, [[falla.status ?? null, 'No se pudo facturar PVEN-7']]);
+    assert.deepEqual(notas.avisos, []);
+    const recarga = FALLAS_QUE_RECARGAN.includes(falla);
+    assert.deepEqual(notas.tablero, recarga ? [['entregado', 'facturado']] : [], `facturar ${falla.status ?? 'red'}`);
+    assert.equal(notas.trasCambio, recarga ? 1 : 0);
+  }
+
+  // cancelar (ModalMotivo): PATCH CANCELADO con el motivo y quién autoriza; bien → aviso y el origen y el destino.
+  {
+    const { acciones, notas } = entorno();
+    await acciones.cancelar(P, 'El cliente desistió', ['en_proceso', 'cancelado']);
+    assert.deepEqual(notas.peticiones, [['/ventas/pedidos/7', 'PATCH', {
+      estado: 'CANCELADO', cancellation_reason: 'El cliente desistió', cancellation_authorized_by: 'Ana Asesora', updated_by: 'Ana Asesora',
+    }]]);
+    assert.deepEqual(notas.avisos, [['PVEN-7 cancelado', 'ok']]);
+    assert.deepEqual(notas.tablero, [['en_proceso', 'cancelado']]);
+    assert.equal(notas.trasCambio, 1);
+  }
+  // Falla: el error sigue (ModalMotivo lo muestra y conserva lo escrito); con la regla, el origen, el destino y lo demás.
+  for (const falla of [...FALLAS_QUE_RECARGAN, ...FALLAS_QUE_NO]) {
+    const { acciones, notas } = entorno({ respuesta: falla });
+    await assert.rejects(acciones.cancelar(P, 'El cliente desistió', ['en_proceso', 'cancelado']), (e) => e === falla);
+    const recarga = FALLAS_QUE_RECARGAN.includes(falla);
+    assert.deepEqual(notas.tablero, recarga ? [['en_proceso', 'cancelado']] : [], `cancelar ${falla.status ?? 'red'}`);
+    assert.equal(notas.trasCambio, recarga ? 1 : 0);
+    assert.deepEqual(notas.avisos, [], 'sin «cancelado» si falló');
+  }
+
+  // marcar («Marcar En tránsito / En proceso»): PATCH y, al terminar, la columna En proceso y lo demás.
+  {
+    const { acciones, notas } = entorno();
+    await acciones.marcar(P, 'EN_TRANSITO');
+    assert.deepEqual(notas.peticiones, [['/ventas/pedidos/7', 'PATCH', { estado: 'EN_TRANSITO', updated_by: 'Ana Asesora' }]]);
+    assert.deepEqual(notas.avisos, [['PVEN-7 pasó a En tránsito', 'ok']]);
+    assert.deepEqual(notas.tablero, [['en_proceso']]);
+    assert.equal(notas.trasCambio, 1);
+  }
+  for (const falla of [...FALLAS_QUE_RECARGAN, ...FALLAS_QUE_NO]) {
+    const { acciones, notas } = entorno({ respuesta: falla });
+    await acciones.marcar(P, 'EN_TRANSITO');
+    assert.deepEqual(notas.errores, [[falla.status ?? null, 'No se pudo cambiar el estado de PVEN-7']]);
+    const recarga = FALLAS_QUE_RECARGAN.includes(falla);
+    assert.deepEqual(notas.tablero, recarga ? [['en_proceso']] : [], `marcar ${falla.status ?? 'red'}`);
+    assert.equal(notas.trasCambio, recarga ? 1 : 0);
+  }
+
+  // El cableado: Pedidos de venta y E-Commerce usan el MISMO hook (useAccionesTableroPedidos), sin su copia de las funciones.
+  const sinComentarios = (t) => t.replace(/\r\n/g, '\n').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const hook = sinComentarios(readFileSync(new URL('../src/app/dashboard/ventas/acciones-tablero-pedidos.ts', import.meta.url), 'utf8'));
+  assert.match(hook, /export function useAccionesTableroPedidos</);
+  assert.match(hook, /accionesTableroPedidos\(\{\s*apiFetch, autor: autorActual, confirmar, avisar, avisarError, recargarTablero, recargarTrasCambio,\s*\}\)/);
+  assert.match(hook, /if \(resultado\.accion === 'cancelar'\) setCancelando\(\{ pedido: p, columnas: \[origen, destino\] \}\);\s*else if \(resultado\.accion === 'facturar'\) void acciones\.facturar\(p, \[origen, destino\]\);/);
+  assert.match(hook, /\(mover \? accionesTarjetaPedido\(p\) : \[\]\)\.map\(\(a\) => \(\{\s*etiqueta: a\.etiqueta, icono: a\.estado === 'EN_TRANSITO' \? Truck : Package, onClick: \(\) => \{ void acciones\.marcar\(p, a\.estado\); \},/);
+  const PANTALLAS = {
+    'ventas/venta/venta-client.tsx': /useAccionesTableroPedidos<FilaPedido>\(\{ tablero, recargarTrasCambio, mover: accesoTablero\.mover \}\)/,
+    'ecommerce/page.tsx': /useAccionesTableroPedidos<PedidoWeb>\(\{ tablero, recargarTrasCambio, mover: soloLectura === null \}\)/,
+  };
+  for (const [ruta, uso] of Object.entries(PANTALLAS)) {
+    const codigo = sinComentarios(readFileSync(new URL(`../src/app/dashboard/${ruta}`, import.meta.url), 'utf8'));
+    assert.match(codigo, uso, `${ruta}: usa el hook`);
+    for (const copia of ['async function cambiarDesdeTablero(', 'async function facturarDesdeTablero(', 'async function cancelarConMotivo(',
+      'const marcarDesdeTablero', 'function accionDesdeTablero(']) {
+      assert.ok(!codigo.includes(copia), `${ruta}: sin su copia de ${copia}`);
+    }
+    assert.match(codigo, /onCambio=\{cambiarDesdeTablero\}\s+onAccion=\{accionDesdeTablero\}\s+accionesTarjeta=\{accionesTarjeta\}/, `${ruta}: el tablero`);
+    assert.match(codigo, /onConfirmar=\{cancelarConMotivo\}\s+onCerrar=\{cerrarCancelacion\}/, `${ruta}: ModalMotivo`);
+  }
+}
+
 console.log('--- B4 T10 TEST N: consultaColumnaPedido — la consulta de cada columna del tablero de Pedidos ---');
 {
   const estado = estadoTablaInicial({ vista: 'cancelado', q: ' cuna ', semaforo: 'atrasados', estados: [], orden: 'cliente', pagina: 3, tamano: 50 });
@@ -1363,33 +1494,15 @@ console.log('--- B4 T10 TEST Q: el cableado del tablero de Pedidos (C9, C15, R11
   assert.match(codigo, /const tarjetaDePedido = \(p: FilaPedido\) => tarjetaPedido\(p\);/);
   // C9: la suma de cada columna es el resumen de H47 de su consulta (resumenColumnaPedido; Cancelado no).
   assert.match(lista, /\(clave: string, d: DatosColumnaKanban<FilaPedido>\) => resumenColumnaPedido\(clave, d\.resumen\)/);
-  // 'cambio': el PATCH del estado con el autor; el tablero recarga su origen y su destino, aquí lo demás. r1 (m4): si el
-  // PATCH falla, también se recarga lo demás con la regla de recargarTrasError (un 409: el pedido cambió en otro lado) y
-  // el error sigue (el tablero deshace y recarga su origen y su destino, D39: aquí no se llama a tablero.recargar).
-  assert.match(lista, /async function cambiarDesdeTablero\(p: FilaPedido, resultado: \{ estado: string \}\) \{\s*try \{\s*await apiFetch\(`\/ventas\/pedidos\/\$\{p\.id\}`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ estado: resultado\.estado, updated_by: autorActual\(\) \}\),\s*\}\);\s*\} catch \(err\) \{\s*if \(recargarTrasError\(err\)\) recargarTrasCambio\(\);\s*throw err;\s*\}\s*recargarTrasCambio\(\);\s*\}/);
-  {
-    const cambiar = lista.slice(lista.indexOf('async function cambiarDesdeTablero('), lista.indexOf('\n  }\n', lista.indexOf('async function cambiarDesdeTablero(')));
-    assert.ok(cambiar.length > 100 && !cambiar.includes('tablero.recargar'), 'el arrastre no recarga el tablero a mano (lo hace deshacer)');
-  }
-  // 'facturar' (N2): confirmar() con confirmacionFacturarPedido → PATCH FACTURADO; 'cancelar': ModalMotivo.
-  assert.match(lista, /if \(resultado\.accion === 'cancelar'\) setCancelando\(\{ pedido: p, columnas: \[origen, destino\] \}\);\s*else if \(resultado\.accion === 'facturar'\) void facturarDesdeTablero\(p, \[origen, destino\]\);/);
-  const facturar = lista.slice(lista.indexOf('async function facturarDesdeTablero('), lista.indexOf('\n  }\n', lista.indexOf('async function facturarDesdeTablero(')));
-  assert.match(facturar, /if \(!\(await confirmar\(confirmacionFacturarPedido\(p\)\)\)\) return;/);
-  assert.ok(facturar.indexOf('confirmar(') < facturar.indexOf("estado: 'FACTURADO'"), 'primero confirma');
-  assert.match(facturar, /if \(!recargarTrasError\(err\)\) return;\s*\}\s*tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*$/);
-  // 'cancelar' (N2, H45, H46): PATCH CANCELADO con el motivo; si falla, recargarTrasError y el error sigue (ModalMotivo lo
-  // muestra y conserva lo escrito); al terminar, solo el origen y el destino del tablero (D39).
-  const cancelar = lista.slice(lista.indexOf('async function cancelarConMotivo('), lista.indexOf('\n  }\n', lista.indexOf('async function cancelarConMotivo(')));
-  assert.match(cancelar, /JSON\.stringify\(\{ estado: 'CANCELADO', cancellation_reason: motivo, cancellation_authorized_by: autor, updated_by: autor \}\)/);
-  assert.match(cancelar, /\} catch \(err\) \{\s*if \(recargarTrasError\(err\)\) \{\s*tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*\}\s*throw err;\s*\}/);
-  assert.match(cancelar, /tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*$/);
-  assert.match(lista, /<ModalMotivo\s+titulo=\{`Cancelar \$\{cancelando\.pedido\.numero\}`\}\s+efectos=\{efectosCancelarPedido\(cancelando\.pedido\)\}[\s\S]*?onConfirmar=\{cancelarConMotivo\}\s+onCerrar=\{\(\) => setCancelando\(null\)\}/);
-  // accionesTarjeta: accionesTarjetaPedido; al terminar, la columna En proceso y lo que mueve el cambio.
-  // B4 T24 (FINAL-m38, D27): las acciones solo para quien mueve (accesoTablero.mover).
-  assert.match(lista, /\(accesoTablero\.mover \? accionesTarjetaPedido\(p\) : \[\]\)\.map\(\(a\) => \(\{\s*etiqueta: a\.etiqueta, [^\n]*onClick: \(\) => \{ void marcarDesdeTablero\(p, a\.estado\); \},/);
-  const marcar = lista.slice(lista.indexOf('const marcarDesdeTablero'), lista.indexOf('\n  }, [', lista.indexOf('const marcarDesdeTablero')));
-  assert.match(marcar, /JSON\.stringify\(\{ estado: nuevo, updated_by: autorActual\(\) \}\)/);
-  assert.match(marcar, /if \(!recargarTrasError\(err\)\) return;\s*\}\s*recargarTablero\(\['en_proceso'\]\);\s*recargarTrasCambio\(\);\s*$/);
+  // B4 T24 f2 (F47, D27): 'cambio', 'facturar' (confirmar con confirmacionFacturarPedido antes del PATCH), 'cancelar' (ModalMotivo) y
+  // «Marcar En tránsito / En proceso» ya no son funciones de la pantalla: son accionesTableroPedidos (lib/kanban-ventas.js), que el
+  // bloque «B4 T24 f2 (F47)» EJECUTA con un apiFetch falso (el PATCH y su cuerpo, el aviso, la regla recargarTrasError con 409, 400,
+  // 422, la red cortada, 403 y 500, el error que sigue y qué columnas del tablero se recargan: D39). Aquí, el cableado: el hook, y solo
+  // quien mueve (accesoTablero.mover) ve las acciones del ⋯ (FINAL-m38).
+  assert.match(lista, /const \{\s*cambiarDesdeTablero, accionDesdeTablero, accionesTarjeta, cancelando, cancelarConMotivo, cerrarCancelacion,\s*\} = useAccionesTableroPedidos<FilaPedido>\(\{ tablero, recargarTrasCambio, mover: accesoTablero\.mover \}\);/);
+  assert.match(lista, /<ModalMotivo\s+titulo=\{`Cancelar \$\{cancelando\.pedido\.numero\}`\}\s+efectos=\{efectosCancelarPedido\(cancelando\.pedido\)\}[\s\S]*?onConfirmar=\{cancelarConMotivo\}\s+onCerrar=\{cerrarCancelacion\}/);
+  assert.match(lista, /const recargarTrasCambio = useCallback\(\(\) => \{\s*recargarListado\(\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*setVueltaStats\(\(n\) => n \+ 1\);\s*\}, \[recargarListado\]\);/,
+    'lo que mueve un cambio: las pestañas, la franja y las tarjetas (del tablero, solo el origen y el destino)');
   // La regla del tablero (T3C) da 'facturar' y 'cancelar', las dos que maneja la pantalla, y bloquea Entregado.
   assert.deepEqual(reglaSoltarPedido({ id: 1, estado: 'ENTREGADO' }, 'entregado', 'facturado'), { tipo: 'accion', accion: 'facturar' });
   assert.deepEqual(reglaSoltarPedido({ id: 1, estado: 'EN_PROCESO' }, 'en_proceso', 'cancelado'), { tipo: 'accion', accion: 'cancelar' });
@@ -1578,32 +1691,18 @@ console.log('--- B4 T23A TEST S: el cableado del tablero y del filtro de los ped
   // El tablero: las mismas reglas de los pedidos de venta y, sin permiso, solo para ver con su motivo; sus acciones de tarjeta
   // (que son PATCH) tampoco se ofrecen a un rol que no mueve pedidos.
   assert.match(pantalla, /<TableroKanban\s+tablero=\{tablero\}\s+regla=\{reglaSoltarPedido\}\s+tarjetaDe=\{tarjetaDeWeb\}\s+onAbrir=\{abrirPedido\}\s+onCambio=\{cambiarDesdeTablero\}\s+onAccion=\{accionDesdeTablero\}\s+accionesTarjeta=\{accionesTarjeta\}\s+soloLectura=\{soloLectura\}/);
-  assert.match(pantalla, /const accionesTarjeta = useCallback\(\(p: PedidoWeb\): ItemMenuFila\[\] => \(soloLectura \? \[\] : accionesTarjetaPedido\(p\)\.map\(/);
+  // B4 T24 f2 (F47, D27): las acciones de la tarjeta y del tablero salen del hook compartido; un rol de solo lectura no las ve.
+  assert.match(pantalla, /\} = useAccionesTableroPedidos<PedidoWeb>\(\{ tablero, recargarTrasCambio, mover: soloLectura === null \}\);/);
   assert.match(pantalla, /const abrirPedido = useCallback\(\(p: PedidoWeb\) => setSelectedOrder\(p\), \[\]\);/);
-  // 'cambio': PATCH /ventas/pedidos/{id} con el autor; si falla, recargarTrasError y el error sigue (el tablero deshace y recarga su
-  // origen y su destino: aquí no se llama a tablero.recargar).
-  assert.match(pantalla, /async function cambiarDesdeTablero\(p: PedidoWeb, resultado: \{ estado: string \}\) \{\s*try \{\s*await apiFetch\(`\/ventas\/pedidos\/\$\{p\.id\}`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ estado: resultado\.estado, updated_by: autorActual\(\) \}\),\s*\}\);\s*\} catch \(err\) \{\s*if \(recargarTrasError\(err\)\) recargarTrasCambio\(\);\s*throw err;\s*\}\s*recargarTrasCambio\(\);\s*\}/);
+  // B4 T24 f2 (F47, D27): 'cambio', 'facturar', 'cancelar' y «Marcar En tránsito / En proceso» son accionesTableroPedidos (la regla
+  // de error y de recarga, ejecutada con un apiFetch falso en el bloque «B4 T24 f2 (F47)»): las mismas de Pedidos de venta.
+  assert.match(pantalla, /<ModalMotivo\s+titulo=\{`Cancelar \$\{cancelando\.pedido\.numero\}`\}\s+efectos=\{efectosCancelarPedido\(cancelando\.pedido\)\}[\s\S]*?onConfirmar=\{cancelarConMotivo\}\s+onCerrar=\{cerrarCancelacion\}/);
   {
-    const cambiar = pantalla.slice(pantalla.indexOf('async function cambiarDesdeTablero('), pantalla.indexOf('\n  }\n', pantalla.indexOf('async function cambiarDesdeTablero(')));
-    assert.ok(cambiar.length > 100 && !cambiar.includes('tablero.recargar'), 'el arrastre no recarga el tablero a mano (lo hace deshacer)');
+    const hook = readFileSync(new URL('../src/app/dashboard/ventas/acciones-tablero-pedidos.ts', import.meta.url), 'utf8');
+    assert.ok(!/\/ecommerce\/pedidos\/\$\{/.test(hook), 'el hook mueve por /ventas/pedidos/{id} (accionesTableroPedidos)');
+    const lib = readFileSync(new URL('../src/lib/kanban-ventas.js', import.meta.url), 'utf8');
+    assert.ok(lib.includes("apiFetch(`/ventas/pedidos/${p.id}`, { method: 'PATCH', body: JSON.stringify(cuerpo) })"), 'el único PATCH de la lib');
   }
-  // 'facturar' (N2): confirmar() con confirmacionFacturarPedido → PATCH FACTURADO; 'cancelar': ModalMotivo.
-  assert.match(pantalla, /if \(resultado\.accion === 'cancelar'\) setCancelando\(\{ pedido: p, columnas: \[origen, destino\] \}\);\s*else if \(resultado\.accion === 'facturar'\) void facturarDesdeTablero\(p, \[origen, destino\]\);/);
-  const facturar = pantalla.slice(pantalla.indexOf('async function facturarDesdeTablero('), pantalla.indexOf('\n  }\n', pantalla.indexOf('async function facturarDesdeTablero(')));
-  assert.match(facturar, /if \(!\(await confirmar\(confirmacionFacturarPedido\(p\)\)\)\) return;/);
-  assert.ok(facturar.indexOf('confirmar(') < facturar.indexOf("estado: 'FACTURADO'"), 'primero confirma');
-  assert.match(facturar, /if \(!recargarTrasError\(err\)\) return;\s*\}\s*tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*$/);
-  // 'cancelar' (N2, H45, H46): PATCH CANCELADO con el motivo; si falla, recargarTrasError (el origen y el destino del tablero y lo
-  // demás) y el error sigue (ModalMotivo lo muestra y conserva lo escrito); al terminar, solo el origen y el destino (D39).
-  const cancelar = pantalla.slice(pantalla.indexOf('async function cancelarConMotivo('), pantalla.indexOf('\n  }\n', pantalla.indexOf('async function cancelarConMotivo(')));
-  assert.match(cancelar, /JSON\.stringify\(\{ estado: 'CANCELADO', cancellation_reason: motivo, cancellation_authorized_by: autor, updated_by: autor \}\)/);
-  assert.match(cancelar, /\} catch \(err\) \{\s*if \(recargarTrasError\(err\)\) \{\s*tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*\}\s*throw err;\s*\}/);
-  assert.match(cancelar, /tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*$/);
-  assert.match(pantalla, /<ModalMotivo\s+titulo=\{`Cancelar \$\{cancelando\.pedido\.numero\}`\}\s+efectos=\{efectosCancelarPedido\(cancelando\.pedido\)\}[\s\S]*?onConfirmar=\{cancelarConMotivo\}\s+onCerrar=\{\(\) => setCancelando\(null\)\}/);
-  // «Marcar En tránsito» / «Marcar En proceso» (accionesTarjetaPedido): PATCH y, al terminar, la columna En proceso y lo demás.
-  const marcar = pantalla.slice(pantalla.indexOf('const marcarDesdeTablero'), pantalla.indexOf('\n  }, [', pantalla.indexOf('const marcarDesdeTablero')));
-  assert.match(marcar, /JSON\.stringify\(\{ estado: nuevo, updated_by: autorActual\(\) \}\)/);
-  assert.match(marcar, /if \(!recargarTrasError\(err\)\) return;\s*\}\s*recargarTablero\(\['en_proceso'\]\);\s*recargarTrasCambio\(\);\s*$/);
   // El único PATCH al servidor de pedidos es el de Ventas (ADMIN y ASESOR): ninguna ruta propia de E-Commerce mueve un pedido.
   assert.ok(!/\/ecommerce\/pedidos\/\$\{/.test(codigo), 'los pedidos se mueven por /ventas/pedidos/{id}');
   // Nunca confirm(), alert() ni prompt() (RP30; test_sin_dialogos_nativos lo vigila con la ruta de este archivo en RAICES).
@@ -1695,7 +1794,9 @@ console.log('--- B4 T24 (FINAL-m31 y FINAL-m38): los tableros de Ventas solo se 
   // Solicitudes: «Cancelar seleccionadas» (POST /solicitudes/{id}/cancelar, ADMIN y ASESOR) solo para quien mueve.
   assert.ok(sin(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx')).includes("{checked.size>0 && modoEfectivo === 'lista' && !enPapelera && accesoTablero.mover && ("));
   // Pedidos de venta: las acciones del ⋯ de la tarjeta (los mismos PATCH de estado) solo para quien mueve.
-  assert.match(sin(leer('app/dashboard/ventas/venta/venta-client.tsx')), /const accionesTarjeta = useCallback\(\(p: FilaPedido\): ItemMenuFila\[\] => \(accesoTablero\.mover \? accionesTarjetaPedido\(p\) : \[\]\)\.map\(/);
+  // B4 T24 f2 (F47, D27): el ⋯ de la tarjeta sale de useAccionesTableroPedidos, con `mover` = accesoTablero.mover.
+  assert.match(sin(leer('app/dashboard/ventas/venta/venta-client.tsx')), /useAccionesTableroPedidos<FilaPedido>\(\{ tablero, recargarTrasCambio, mover: accesoTablero\.mover \}\)/);
+  assert.match(sin(leer('app/dashboard/ventas/acciones-tablero-pedidos.ts')), /const accionesTarjeta = useCallback\(\(p: P\): ItemMenuFila\[\] => \(mover \? accionesTarjetaPedido\(p\) : \[\]\)\.map\(/);
 }
 
 console.log('OK test_kanban_ventas');

@@ -27,8 +27,7 @@ import {
 import type { AccionTabla } from '@/lib/tabla';
 import {
   COLUMNAS_PEDIDO, OPCIONES_ESTADOS_PEDIDOS_WEB, OPCIONES_ESTADOS_TABLERO_PEDIDO, RUTA_PEDIDOS_WEB,
-  accionesTarjetaPedido, confirmacionFacturarPedido, consultaColumnaPedido, efectosCancelarPedido, reglaSoltarPedido,
-  soloLecturaPedidosWeb, tarjetaPedidoWeb,
+  consultaColumnaPedido, efectosCancelarPedido, reglaSoltarPedido, soloLecturaPedidosWeb, tarjetaPedidoWeb,
 } from '@/lib/kanban-ventas';
 import { infoEstadoPedido } from '@/lib/estados-pedido';
 import { ordenPorDefecto } from '@/lib/kanban';
@@ -38,9 +37,10 @@ import { cuerpoConfigPagos, fuenteGuardable, lecturaDeFuente, tarjetasTienda, te
 import { accesoTienda } from '@/lib/roles';
 import { formatoPesos } from '@/lib/pesos';
 import { fechaCorta, fechaHoraLarga, horaCO } from '@/lib/fechas-colombia';
-import { avisoDeFuente, estadoFranjaDeFuente, motivoSinPermiso, recargarTrasError } from '@/lib/avisos';
+import { avisoDeFuente, estadoFranjaDeFuente, motivoSinPermiso } from '@/lib/avisos';
 import { CAJA_SIN_PERMISO, FOCOS, TABLE } from '@/lib/design-system';
-import { getUsuarioActual } from '../ventas/flujo';
+// B4 T24 f2 (F47): las acciones del tablero de pedidos, las mismas de Pedidos de venta.
+import { useAccionesTableroPedidos } from '../ventas/acciones-tablero-pedidos';
 import { CONTENEDOR } from '../inventario/piezas-inventario';
 import { CHIP } from '../compras/columnas-pec';
 
@@ -411,8 +411,6 @@ const TITULO_SOLO_ADMIN = 'Solo la Administración edita el catálogo';
 /** I1 (r1): lo que ve un rol que el servidor no deja leer los pedidos (COMPRAS, CONSULTA): no es una falla, no hay «Reintentar». */
 const TEXTO_SIN_PEDIDOS = 'Tu rol no ve los pedidos de la tienda.';
 const FOCO_VISIBLE = FOCOS.purple;
-/** Quien hace el cambio desde el tablero (updated_by, como el Hub y los pedidos de venta). */
-const autorActual = () => { const u = getUsuarioActual(); return u.name || u.email || undefined; };
 
 /** Lo que las celdas de los pedidos web le piden a la pantalla. */
 const AccionesPedidosWeb = createContext<{ abrir: (p: PedidoWeb) => void } | null>(null);
@@ -748,79 +746,14 @@ export default function EcommercePage() {
   // ── bloque 3, las acciones del tablero (N2; C15, R11; D39) ──
   // reglaSoltarPedido (T3C): libre entre Pendiente de compra, En proceso y Listo para entrega; a Entregado no se arrastra
   // (Entregas elige la bodega); Facturado solo desde Entregado, con confirmación; Cancelado pide el motivo. 'cambio': PATCH
-  // /ventas/pedidos/{id} (ADMIN y ASESOR). Si falla, con recargarTrasError (un 409: el pedido cambió en otro lado) se recarga
-  // lo demás y el error sigue para que el tablero deshaga (eso ya recarga su origen y su destino).
-  async function cambiarDesdeTablero(p: PedidoWeb, resultado: { estado: string }) {
-    try {
-      await apiFetch(`/ventas/pedidos/${p.id}`, {
-        method: 'PATCH', body: JSON.stringify({ estado: resultado.estado, updated_by: autorActual() }),
-      });
-    } catch (err) {
-      if (recargarTrasError(err)) recargarTrasCambio();
-      throw err;
-    }
-    recargarTrasCambio();
-  }
-  // 'accion' 'facturar': confirmar() de useAvisos → PATCH {estado: 'FACTURADO'}; 'cancelar': ModalMotivo. Al terminar, del tablero
-  // solo su origen y su destino.
-  const [cancelando, setCancelando] = useState<{ pedido: PedidoWeb; columnas: readonly [string, string] } | null>(null);
-  async function facturarDesdeTablero(p: PedidoWeb, columnas: readonly [string, string]) {
-    if (!(await confirmar(confirmacionFacturarPedido(p)))) return;
-    try {
-      await apiFetch(`/ventas/pedidos/${p.id}`, { method: 'PATCH', body: JSON.stringify({ estado: 'FACTURADO', updated_by: autorActual() }) });
-      avisar(`${p.numero} quedó Facturado`, { tono: 'ok' });
-    } catch (err) {
-      avisarError(err, `No se pudo facturar ${p.numero}`);
-      if (!recargarTrasError(err)) return;
-    }
-    tablero.recargar([...columnas]);
-    recargarTrasCambio();
-  }
-  function accionDesdeTablero(p: PedidoWeb, resultado: { accion: string }, origen: string, destino: string) {
-    if (resultado.accion === 'cancelar') setCancelando({ pedido: p, columnas: [origen, destino] });
-    else if (resultado.accion === 'facturar') void facturarDesdeTablero(p, [origen, destino]);
-  }
-  // 'cancelar' (N2, H45, H46): ModalMotivo (5 letras o más) → PATCH {estado: 'CANCELADO', cancellation_reason} (el servidor deja
-  // el motivo en la Actividad). Si falla, con recargarTrasError se recargan el origen y el destino del tablero y lo demás, y el
-  // error sigue (throw) para que ModalMotivo lo muestre y conserve lo escrito.
-  async function cancelarConMotivo(motivo: string) {
-    if (!cancelando) return;
-    const { pedido, columnas } = cancelando;
-    const autor = autorActual();
-    try {
-      await apiFetch(`/ventas/pedidos/${pedido.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ estado: 'CANCELADO', cancellation_reason: motivo, cancellation_authorized_by: autor, updated_by: autor }),
-      });
-    } catch (err) {
-      if (recargarTrasError(err)) {
-        tablero.recargar([...columnas]);
-        recargarTrasCambio();
-      }
-      throw err;
-    }
-    avisar(`${pedido.numero} cancelado`, { tono: 'ok' });
-    tablero.recargar([...columnas]);
-    recargarTrasCambio();
-  }
-  // accionesTarjeta: «Marcar En tránsito» y «Marcar En proceso» sin salir de la columna En proceso (accionesTarjetaPedido: solo lo
-  // que acepta el PATCH). Un rol que no mueve pedidos (soloLectura) no las ve: darían 403.
-  const marcarDesdeTablero = useCallback(async (p: PedidoWeb, nuevo: string) => {
-    try {
-      await apiFetch(`/ventas/pedidos/${p.id}`, { method: 'PATCH', body: JSON.stringify({ estado: nuevo, updated_by: autorActual() }) });
-      avisar(`${p.numero} pasó a ${infoEstadoPedido(nuevo).label}`, { tono: 'ok' });
-    } catch (err) {
-      avisarError(err, `No se pudo cambiar el estado de ${p.numero}`);
-      if (!recargarTrasError(err)) return;
-    }
-    recargarTablero(['en_proceso']);
-    recargarTrasCambio();
-  }, [avisar, avisarError, recargarTablero, recargarTrasCambio]);
+  // /ventas/pedidos/{id} (ADMIN y ASESOR). B4 T24 f2 (F47): las MISMAS acciones de Pedidos de venta (useAccionesTableroPedidos: la
+  // regla de error y de recarga vive en accionesTableroPedidos de lib/kanban-ventas.js, con sus casos). Un rol que no mueve pedidos
+  // (soloLectura) no ve las acciones del ⋯: darían 403.
+  const {
+    cambiarDesdeTablero, accionDesdeTablero, accionesTarjeta, cancelando, cancelarConMotivo, cerrarCancelacion,
+  } = useAccionesTableroPedidos<PedidoWeb>({ tablero, recargarTrasCambio, mover: soloLectura === null });
   // r1 (m4): la acción principal de la tarjeta es la de los pedidos de venta (salvo PENDIENTE_PAGO); un rol de solo lectura no la lleva.
   const tarjetaDeWeb = useCallback((p: PedidoWeb) => tarjetaPedidoWeb(p, { soloLectura: soloLectura !== null }), [soloLectura]);
-  const accionesTarjeta = useCallback((p: PedidoWeb): ItemMenuFila[] => (soloLectura ? [] : accionesTarjetaPedido(p).map((a) => ({
-    etiqueta: a.etiqueta, icono: a.estado === 'EN_TRANSITO' ? Truck : Package, onClick: () => { void marcarDesdeTablero(p, a.estado); },
-  }))), [soloLectura, marcarDesdeTablero]);
 
   // ── B4 T23A, bloque 4: el catálogo en la tabla estándar del servidor (TABLA-otros punto 5; RP56) ──
   // Mismo patrón. GET /ecommerce/catalogo manda SIEMPRE offset (aunque sea 0: queryListado) para que el servidor pagine exacto y
@@ -1123,7 +1056,7 @@ export default function EcommercePage() {
             textoConfirmar="Cancelar pedido"
             placeholder="Ej: Cliente desistió de la compra, error en el pedido, etc."
             onConfirmar={cancelarConMotivo}
-            onCerrar={() => setCancelando(null)}
+            onCerrar={cerrarCancelacion}
           />
         )}
 
