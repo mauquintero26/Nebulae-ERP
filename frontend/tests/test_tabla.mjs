@@ -2982,7 +2982,8 @@ console.log('--- TEST T24-FOCO (B4 T24: FINAL-C6, FINAL-m25 y F41): el foco visi
   const piezasInv = leer('app/dashboard/inventario/piezas-inventario.tsx');
   // r1 (m25, m40): FOCOS viene de '@/lib/design-system' (un solo import, con el tipo) y no hay ninguna const FOCOS.
   assert.ok(!/\bconst FOCOS\s*=/.test(piezasInv), 'piezas-inventario: sin su copia de FOCOS');
-  assert.match(piezasInv, /^import \{ FOCOS, TABLE, type AcentoFoco \} from '@\/lib\/design-system';$/m);
+  // F44-a (D27): con RESERVA_BOTON_IA, en el mismo import.
+  assert.match(piezasInv, /^import \{ FOCOS, RESERVA_BOTON_IA, TABLE, type AcentoFoco \} from '@\/lib\/design-system';\r?$/m);
   assert.equal((piezasInv.match(/from '@\/lib\/design-system'/g) ?? []).length, 1, 'un solo import de design-system');
   assert.match(piezasInv, /^export \{ FOCOS \};$/m, 'piezas-inventario reexporta el FOCOS común (lo usan las pantallas de Inventario)');
   for (const ruta of ['app/dashboard/ecommerce/page.tsx', 'app/dashboard/finanzas/gastos/page.tsx']) {
@@ -3208,6 +3209,24 @@ console.log('--- TEST T24-g (B4 T24: F42, F43 y F44): el aviso del menú, el enc
   const ds = leer('lib/design-system.ts');
   const completa = /^\s+tarjetaCompleta:\s+'([^']*)'/m.exec(ds)?.[1] ?? '';
   assert.ok(completa.includes('[&_[data-pie-tabla]]:pr-20') && completa.includes('[&_[data-pie-tabla]]:min-h-[4.5rem]'), completa);
+  // F44 (a), ruling del controlador: la reserva inferior para el botón de la IA es un token (RESERVA_BOTON_IA) en los contenedores que se
+  // desplazan solos (h-full overflow-y-auto, no el <main> del layout): Gastos (por CONTENEDOR), Agenda (sus cuatro vistas), el CRM
+  // (Lista y Análisis; el tablero se mide al alto de la ventana) y Campañas. El botón no se mueve.
+  assert.match(ds, /export const RESERVA_BOTON_IA = 'pb-24';/);
+  const piezas = leer('app/dashboard/inventario/piezas-inventario.tsx');
+  assert.match(piezas, /export const CONTENEDOR = `flex-1 flex flex-col px-4 xl:px-8 pt-6 \$\{RESERVA_BOTON_IA\} max-w-\[1600px\] mx-auto w-full min-w-0 gap-6`;/);
+  const USOS = { 'app/dashboard/agenda/page.tsx': 4, 'app/dashboard/crm/page.tsx': 1 /* + la de Lista, abajo */, 'app/dashboard/marketing/campanas/page.tsx': 1,
+    'app/dashboard/inventario/piezas-inventario.tsx': 1 };
+  for (const [ruta, n] of Object.entries(USOS)) {
+    const f = leer(ruta);
+    assert.match(f, /import \{[^}]*\bRESERVA_BOTON_IA\b[^}]*\} from '@\/lib\/design-system';/, `${ruta}: importa el token`);
+    assert.equal((f.match(/\$\{RESERVA_BOTON_IA\}/g) ?? []).length, n, ruta);
+  }
+  assert.ok(!/p-6 overflow-y-auto animate-in fade-in"/.test(leer('app/dashboard/agenda/page.tsx')), 'Agenda: ninguna vista sin la reserva');
+  const crm = leer('app/dashboard/crm/page.tsx');
+  assert.match(crm, /<div className=\{`flex-1 min-h-0 overflow-y-auto p-5 \$\{estado\.modo === 'lista' \? RESERVA_BOTON_IA : ''\}`\}>/);
+  assert.match(crm, /<div className=\{`flex-1 min-h-0 overflow-y-auto p-5 \$\{RESERVA_BOTON_IA\}`\}>\s*<PanelAnalisisPerezoso/);
+  assert.match(leer('components/GlobalAIChat.tsx'), /className="fixed bottom-6 right-6 w-14 h-14 /, 'el botón no se mueve');
 }
 
 console.log('--- TEST T24-h (B4 T24, FINAL-m11): accionModo traduce el filtro de estados entre la columna del tablero y los estados de la lista ---');

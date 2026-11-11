@@ -1490,7 +1490,8 @@ console.log('--- TEST 33 (B4 T23B, KPI-otros punto 4 y TABLA-otros punto 6; R11,
   assert.ok(!/StatCard|\+\$\{|toFixed\(0\)|Intl\.NumberFormat/.test(codigo), 'sin StatCard, el «+» fijo del ROI ni el formato de dinero propio');
   assert.match(codigo, /const fCOP = \(v: number\) => formatoPesos\(v \|\| 0\);/);
   // El botón flotante de la IA no tapa la última fila de la tabla de leads: el panel baja 96 px de más (medido en el banco a 1024 x 600).
-  assert.match(codigo, /<div className="flex-1 overflow-y-auto p-6 pb-24">/);
+  // B4 T24 (F44-a, D27): la reserva es el token RESERVA_BOTON_IA (pb-24).
+  assert.match(codigo, /<div className=\{`flex-1 overflow-y-auto p-6 \$\{RESERVA_BOTON_IA\}`\}>/);
   // m1: la barra del presupuesto usa la MISMA cifra que la tarjeta y el ROI, y queda gris mientras carga.
   assert.match(codigo, /\{fCOP\(tarjetasMetricas\.ventas_atribuidas\.valor \?\? 0\)\} \/ \{fCOP\(selected\.presupuesto_cop\)\}/);
   assert.match(codigo, /width:`\$\{Math\.min\(100, \(\(tarjetasMetricas\.ventas_atribuidas\.valor \?\? 0\) \/ selected\.presupuesto_cop\) \* 100\)\}%`/);

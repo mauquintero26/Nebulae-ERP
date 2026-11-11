@@ -34,7 +34,7 @@ import { formatoPesos } from '@/lib/pesos';
 import { ofreceReintentar, recargarTrasError, textoDeError } from '@/lib/avisos';
 import { accesoCrm, TEXTO_SIN_LEADS } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
-import { CAJA_SIN_PERMISO, FOCOS, TABLE } from '@/lib/design-system';
+import { CAJA_SIN_PERMISO, FOCOS, RESERVA_BOTON_IA, TABLE } from '@/lib/design-system';
 import { CRM_NAV } from './crm-nav';
 
 async function apiFetch(path, opts = {}) {
@@ -1044,8 +1044,9 @@ export default function CRMPage() {
           En Lista, la tabla estándar en el servidor; en Kanban, el tablero común en modo cliente con los mismos filtros.
           «Análisis» reemplaza las dos. */}
       {acceso.leads && !enAnalisis && (
-        // pb-24 en Lista: al final de la tabla, la paginación y los ⋯ de las últimas filas no quedan bajo el botón de la IA.
-        <div className={`flex-1 min-h-0 overflow-y-auto p-5 ${estado.modo === 'lista' ? 'pb-24' : ''}`}>
+        // La reserva del botón de la IA en Lista (F44-a): al final de la tabla, la paginación y los ⋯ de las últimas filas no quedan
+        // bajo el botón. En Kanban no: el tablero se mide al alto de la ventana (altoEnContenedor) y la reserva lo haría desplazar.
+        <div className={`flex-1 min-h-0 overflow-y-auto p-5 ${estado.modo === 'lista' ? RESERVA_BOTON_IA : ''}`}>
           <div className="flex min-w-0 flex-col gap-4">
             {capa}
             <section ref={refTarjeta} className={claseTarjeta}>
@@ -1191,7 +1192,7 @@ export default function CRMPage() {
 
       {/* ══ ANALISIS VIEW (B4 T21, ANALISIS-crm punto 2; R2, R13, RP69, D45) ══════════════════════════════════════ */}
       {acceso.leads && enAnalisis && (
-        <div className="flex-1 min-h-0 overflow-y-auto p-5">
+        <div className={`flex-1 min-h-0 overflow-y-auto p-5 ${RESERVA_BOTON_IA}`}>
           <PanelAnalisisPerezoso
             modulo="crm"
             endpoint="/crm/analisis"

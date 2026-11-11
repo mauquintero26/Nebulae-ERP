@@ -129,6 +129,13 @@ export const FOCO_DENTRO = 'outline-indigo-700 focus-visible:outline-2 focus-vis
  */
 export const FOCO_CAMPO = 'outline-indigo-700 focus:outline-2 focus:outline-offset-2 focus:outline-indigo-700 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-indigo-700';
 
+/**
+ * B4 T24 (F44-a, ruling del controlador): la reserva inferior para el botón flotante de la IA (GlobalAIChat: fixed bottom-6 right-6
+ * h-14, los 80 px de abajo de la ventana; pb-24 = 96 px, con 16 de aire), en los contenedores que se desplazan solos (h-full
+ * overflow-y-auto): así, con la página al fondo, la última fila queda a la vista sobre el botón. El botón no se mueve.
+ */
+export const RESERVA_BOTON_IA = 'pb-24';
+
 /** B4 T24 r1 (m30): la caja del texto neutro de un rol sin permiso («Tu rol no ve …», role=status): una sola copia. */
 export const CAJA_SIN_PERMISO = 'rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600';
 

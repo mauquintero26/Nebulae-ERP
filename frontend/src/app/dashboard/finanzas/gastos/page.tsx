@@ -217,7 +217,7 @@ export default function GastosPage() {
     <div className="w-full h-full overflow-y-auto animate-in fade-in duration-500 custom-scrollbar bg-slate-50">
       <SubNav label="Finanzas" items={FIN_NAV} currentPath="/dashboard/finanzas/gastos" color="rose" />
 
-      {/* pb-24 (CONTENEDOR) deja libre, con la página al fondo, la esquina del botón flotante de la IA. */}
+      {/* RESERVA_BOTON_IA (pb-24, en CONTENEDOR; F44-a) deja libre, con la página al fondo, la esquina del botón flotante de la IA. */}
       <div className={CONTENEDOR}>
 
       {/* Header */}

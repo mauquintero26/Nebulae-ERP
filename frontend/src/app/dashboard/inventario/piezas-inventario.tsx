@@ -7,7 +7,7 @@ import type { LucideIcon } from 'lucide-react';
 // su page.tsx (una página de Next no puede exportar más que su componente); aquí no se tocan.
 import { Modal } from '@/components/ui';
 import { apiFetch } from '@/lib/api';
-import { FOCOS, TABLE, type AcentoFoco } from '@/lib/design-system';
+import { FOCOS, RESERVA_BOTON_IA, TABLE, type AcentoFoco } from '@/lib/design-system';
 import { formatoPesos } from '@/lib/pesos';
 import { tiene } from '@/lib/estados-pedido';
 import { formatoDecimal, numeroFinito } from '@/lib/kpis';
@@ -47,8 +47,8 @@ export type OpcionCatalogo = { id: number; name: string; parent_id?: number | nu
 /** Un catálogo: filas null mientras carga; si falla, el error (y lo último que llegó bien, si había). */
 export type Catalogo = { filas: OpcionCatalogo[] | null; error: unknown };
 
-/** El contenedor de los Hubs y de las listas del bloque (T7 a T17): pb-24 deja libre la esquina del botón de la IA. */
-export const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
+/** El contenedor de los Hubs y de las listas del bloque (T7 a T17): RESERVA_BOTON_IA (pb-24, F44-a) deja libre la esquina del botón de la IA. */
+export const CONTENEDOR = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;
 /**
  * B4 T24 (FINAL-m25): el foco visible es el token común de design-system.ts (una sola copia); se reexporta para quien lo
  * importa de aquí.

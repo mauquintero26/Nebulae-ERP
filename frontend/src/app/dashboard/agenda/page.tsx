@@ -23,6 +23,7 @@ import { FranjaKpis, TarjetaKpi } from '@/components/ui';
 import { AvisoFuente } from '@/components/ui/AvisoFuente';
 import { avisoDeFuente } from '@/lib/avisos';
 import { accesoProveedores } from '@/lib/roles';
+import { RESERVA_BOTON_IA } from '@/lib/design-system';
 import { useRolActual } from '@/components/ui/useRolActual';
 import {
   datosDeRespuesta, esRespuestaVigente, estadoFichaCliente, estadoPedidosProveedor, numeroFinito, pedidosDeProveedor, siguientePerfil,
@@ -514,7 +515,7 @@ export default function AgendaPage() {
   if (mainTab === 'proveedores') {
     if (!selectedSupplier) {
       return (
-        <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-6 overflow-y-auto animate-in fade-in">
+        <div className={`h-full w-full bg-[#f8f9fa] flex flex-col p-6 ${RESERVA_BOTON_IA} overflow-y-auto animate-in fade-in`}>
           {/* Top Switcher Tab Bar */}
           <div className="flex items-center bg-white p-1.5 rounded-2xl border border-slate-200 shadow-sm w-fit mb-6">
             <button
@@ -830,7 +831,7 @@ export default function AgendaPage() {
     const pecs = estadoPedidosProveedor(supplierPecsError, supplierPecsTotal, supplierPecs);
 
     return (
-      <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-6 overflow-y-auto animate-in fade-in">
+      <div className={`h-full w-full bg-[#f8f9fa] flex flex-col p-6 ${RESERVA_BOTON_IA} overflow-y-auto animate-in fade-in`}>
         {/* Back Button */}
         <div className="mb-4">
           <button
@@ -1121,7 +1122,7 @@ export default function AgendaPage() {
   // ═══════════════════════════════════════════════════════════════════════════
   if (!selectedClient) {
     return (
-      <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-6 overflow-y-auto animate-in fade-in">
+      <div className={`h-full w-full bg-[#f8f9fa] flex flex-col p-6 ${RESERVA_BOTON_IA} overflow-y-auto animate-in fade-in`}>
         {/* Top Switcher Tab Bar */}
         <div className="flex items-center bg-white p-1.5 rounded-2xl border border-slate-200 shadow-sm w-fit mb-6">
           <button
@@ -1305,7 +1306,7 @@ export default function AgendaPage() {
   const tarjetasCliente = tarjetasFichaCliente(customer360 ? resumenFichaCliente(customer360) : null);
 
   return (
-    <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-6 overflow-y-auto animate-in fade-in">
+    <div className={`h-full w-full bg-[#f8f9fa] flex flex-col p-6 ${RESERVA_BOTON_IA} overflow-y-auto animate-in fade-in`}>
       {/* Back Button & Header */}
       <div className="mb-4">
         <button

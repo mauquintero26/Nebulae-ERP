@@ -17,7 +17,7 @@ import { textoDiaCorto } from '@/lib/fechas-colombia';
 import { humanizarCodigo } from '@/lib/estados-pedido';
 import { formatoPesos } from '@/lib/pesos';
 import { accesoresDeOrden, estadoDelTotal } from '@/lib/tabla';
-import { CAJA_SIN_PERMISO } from '@/lib/design-system';
+import { CAJA_SIN_PERMISO, RESERVA_BOTON_IA } from '@/lib/design-system';
 // B4 T23B: el dinero con el formato del catálogo (formatoPesos: '$1.062.523', sin el espacio duro de Intl).
 const fCOP = (v: number) => formatoPesos(v || 0);
 // m11: la fecha de una campaña es un día de calendario (fechaCorta), no un instante que se corre a la víspera en Colombia.
@@ -319,7 +319,7 @@ export default function CampanasPage() {
             </div>
             
             {/* Tab Content */}
-            <div className="flex-1 overflow-y-auto p-6 pb-24">
+            <div className={`flex-1 overflow-y-auto p-6 ${RESERVA_BOTON_IA}`}>
               {/* RESUMEN TAB */}
               {activeTab==='resumen' && (
                 <div className="space-y-6">
