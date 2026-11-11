@@ -28,7 +28,7 @@ import { accionModo, estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
 import { tarjetasTraslados } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { fechaLarga } from '@/lib/fechas-colombia';
-import { TABLE } from '@/lib/design-system';
+import { FOCOS, TABLE } from '@/lib/design-system';
 import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
 import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
@@ -56,7 +56,7 @@ const RUTA_CONTEOS = `${RUTA_OPERACIONES}?operation_type=TRANSFER&limit=0&con_co
 const TEXTO_SOLO_VER = 'Este tablero es para ver: los traslados no cambian de estado desde aquí.';
 /** El contenedor de los Hubs y de las listas del bloque (T7 a T16A): pb-24 deja libre la esquina del botón de la IA. */
 const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
-const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-700';
+const FOCO_VISIBLE = FOCOS.orange;
 
 /** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
 const AccionesFila = React.createContext<{ abrir: (t: FilaTraslado) => void } | null>(null);

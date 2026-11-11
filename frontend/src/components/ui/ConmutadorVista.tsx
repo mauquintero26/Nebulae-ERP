@@ -3,6 +3,7 @@
 import { Kanban, List } from 'lucide-react';
 import { ACCENTS, type AccentColor } from './colors';
 import { usePreferencia } from './usePreferencia';
+import { FOCO } from '@/lib/design-system';
 import { esModoTabla } from '@/lib/tabla';
 import type { ModoTabla } from '@/lib/tabla';
 
@@ -16,7 +17,7 @@ import type { ModoTabla } from '@/lib/tabla';
  */
 export type ModoVista = ModoTabla;
 
-const BASE = 'inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300';
+const BASE = `inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-bold transition-colors ${FOCO}`;
 const INACTIVO = 'border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-800';
 
 export function ConmutadorVista({

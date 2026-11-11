@@ -1,6 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
+import { FOCO } from '@/lib/design-system';
 import { formatoEntero } from '@/lib/kpis';
 import { TAMANOS_PAGINA, paginaValida, rangoPaginas, textoRango, totalPaginas } from '@/lib/tabla';
 
@@ -12,7 +13,7 @@ import { TAMANOS_PAGINA, paginaValida, rangoPaginas, textoRango, totalPaginas } 
  * tamaño vuelve a la página 1). Sin onTamano no hay select; con una sola página, sin botones.
  */
 
-const BOTON = 'inline-flex h-7 min-w-[1.75rem] items-center justify-center rounded-lg px-1.5 text-xs font-bold tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 disabled:cursor-not-allowed disabled:opacity-40';
+const BOTON = `inline-flex h-7 min-w-[1.75rem] items-center justify-center rounded-lg px-1.5 text-xs font-bold tabular-nums transition-colors ${FOCO} disabled:cursor-not-allowed disabled:opacity-40`;
 const INACTIVO = 'text-slate-600 hover:bg-slate-100';
 const ACTIVO = 'bg-indigo-600 text-white';
 
@@ -53,7 +54,7 @@ export function Paginacion({
           aria-label="Filas por página"
           value={tamano}
           onChange={(e) => onTamano(Number(e.target.value))}
-          className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
+          className={`rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 ${FOCO}`}
         >
           {TAMANOS_PAGINA.map((t) => (
             <option key={t} value={t}>{`${t} por página`}</option>

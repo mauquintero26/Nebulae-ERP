@@ -1,4 +1,5 @@
 'use client';
+import { FOCOS } from '@/lib/design-system';
 import React, { useState, useEffect, useCallback, useContext, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -450,9 +451,9 @@ type Cancelacion = {
   desdePanel: boolean;
 };
 
-const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-700';
+const FOCO_VISIBLE = FOCOS.purple;
 /** T14 r1 (m11): el foco de los botones de la barra masiva (fondo slate-900). */
-const FOCO_OSCURO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white';
+const FOCO_OSCURO = FOCOS.blanco;
 
 /** RP69: el asistente de hoy del Hub de Compras, con su título y sus ejemplos (sin códigos crudos ni emojis). */
 const ASISTENTE_COMPRAS = {

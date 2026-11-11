@@ -92,6 +92,37 @@ export const getActivityColor = (action: string) =>
 
 // ─── CLASES DE COMPONENTES REUTILIZABLES ─────────────────────────────
 
+/**
+ * El foco visible de la app (B4 T24: FINAL-m25, FINAL-C6 y F41), UNA sola copia: piezas compartidas y pantallas lo importan.
+ * Un outline de 2 px, separado 2 px del control y en el tono -700 de su acento: ≥ 3:1 sobre el blanco, rose-50 e indigo-50
+ * (WCAG 1.4.11; el ring -300 de antes daba ≈2:1), no depende del fondo del control y sobrevive a forced-colors (un box-shadow
+ * no). El `outline-<tono>-700` sin variante fija el color antes del foco: con transition-colors el outline no pasa por el color
+ * del texto. NUNCA junto a `outline-none` en el mismo elemento: en Tailwind v4 apaga también el outline del foco. `blanco` es
+ * para los controles sobre un fondo oscuro (la barra de acciones masivas). Clases literales: Tailwind no ve las armadas.
+ */
+export const FOCOS = {
+  indigo:  'outline-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700',
+  purple:  'outline-purple-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-700',
+  teal:    'outline-teal-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-700',
+  blue:    'outline-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700',
+  emerald: 'outline-emerald-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700',
+  orange:  'outline-orange-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-700',
+  amber:   'outline-amber-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700',
+  rose:    'outline-rose-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-700',
+  red:     'outline-red-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-700',
+  slate:   'outline-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700',
+  blanco:  'outline-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white',
+} as const;
+export type AcentoFoco = keyof typeof FOCOS;
+/** El foco de las piezas compartidas (tabla, barra, paginación, tablero, menú ⋯): el índigo. */
+export const FOCO = FOCOS.indigo;
+/**
+ * El mismo outline hacia ADENTRO (-outline-offset-2), para lo que llena el ancho de una caja que corta lo de afuera: la fila
+ * pulsable de la tabla estándar (FINAL-C6; su caja tiene barra propia), la tarjeta y la columna plegada del tablero y los ítems
+ * del menú ⋯. No depende del fondo: se ve igual sobre filaAlerta (rose-50), una fila seleccionada (indigo-50) o el hover.
+ */
+export const FOCO_DENTRO = 'outline-indigo-700 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-indigo-700';
+
 /** Nav pills del sub-módulo (sticky top) */
 export const NAV = {
   wrapper: 'bg-white border-b border-gray-200 px-6 py-2 flex items-center gap-1 sticky top-0 z-30 shadow-sm overflow-x-auto',
@@ -172,7 +203,7 @@ export const TABLE = {
   encabezadoCasilla: 'sticky left-0 top-0 z-30 h-10 border-b border-slate-200 bg-slate-50 text-center align-middle',
   encabezadoInterior: 'flex h-full min-w-0 items-center gap-1',
   encabezadoArrastrado: 'opacity-40',
-  titulo:           'flex min-w-0 flex-1 items-center gap-1 rounded text-left outline-none focus-visible:ring-2 focus-visible:ring-indigo-300',
+  titulo:           `flex min-w-0 flex-1 items-center gap-1 rounded text-left ${FOCO}`,
   tituloOrdenable:  'cursor-pointer hover:text-slate-800',
   flechaOrden:      'shrink-0 text-indigo-600',
   asa:              'absolute right-0 top-0 z-10 h-full w-2 cursor-col-resize touch-none before:absolute before:inset-y-0 before:left-0 before:right-0 pointer-coarse:before:-left-4 after:absolute after:bottom-2 after:right-0 after:top-2 after:w-px after:bg-slate-200 hover:after:w-0.5 hover:after:bg-blue-500',
@@ -180,7 +211,11 @@ export const TABLE = {
   fila:             'group transition-colors',
   filaFondo:        'bg-white',
   filaHover:        'hover:bg-slate-50',
-  filaClic:         'cursor-pointer outline-none focus-visible:bg-indigo-50',
+  filaClic:         `cursor-pointer ${FOCO_DENTRO}`,
+  // FINAL-C6: el outline de la fila queda DEBAJO de las columnas fijas (sticky, z-10, fondo opaco; medido en el banco): las celdas de
+  // una fila pulsable repiten la línea con un box-shadow interior (arriba y abajo; el borde izquierdo en la primera y el derecho en la
+  // última), solo con la fila enfocada desde el teclado. El outline de la fila se queda para forced-colors (que quita las sombras).
+  celdaFoco:        'group-focus-visible:shadow-[inset_0_2px_0_0_var(--color-indigo-700),inset_0_-2px_0_0_var(--color-indigo-700)] group-focus-visible:first:shadow-[inset_2px_0_0_0_var(--color-indigo-700),inset_0_2px_0_0_var(--color-indigo-700),inset_0_-2px_0_0_var(--color-indigo-700)] group-focus-visible:last:shadow-[inset_-2px_0_0_0_var(--color-indigo-700),inset_0_2px_0_0_var(--color-indigo-700),inset_0_-2px_0_0_var(--color-indigo-700)]',
   filaSeleccionada: 'bg-indigo-50 hover:bg-indigo-100',
   // Tonos opacos para claseFila (las columnas fijas heredan el fondo: un /NN dejaría ver lo de debajo).
   filaAlerta:       'bg-rose-50 hover:bg-rose-100',
@@ -199,7 +234,7 @@ export const TABLE = {
   mensajeFijo:      'sticky left-3 max-w-full',
   vacio:            'border-b border-slate-100 px-3 py-10 text-center text-sm text-slate-500',
   error:            'border-b border-rose-100 bg-rose-50 px-3 py-6 text-center text-sm font-semibold text-rose-700',
-  botonReintentar:  'ml-3 inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-100',
+  botonReintentar:  `ml-3 inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-100 ${FOCOS.rose}`,
   aviso:            'flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-800',
   // Recargando: las filas atenuadas y una barra fina arriba.
   recarga:          'pointer-events-none absolute inset-x-0 top-0 z-40 h-0.5 animate-pulse bg-indigo-500',

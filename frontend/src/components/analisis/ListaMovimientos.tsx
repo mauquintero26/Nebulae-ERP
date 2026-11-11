@@ -1,5 +1,6 @@
 'use client';
 
+import { FOCO } from '@/lib/design-system';
 import { useId } from 'react';
 import Link from 'next/link';
 import {
@@ -46,7 +47,6 @@ const ICONOS: Record<string, LucideIcon> = {
 };
 
 const TARJETA = 'min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-xs';
-const FOCO = 'outline-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
 const FILA = '-mx-2 flex w-[calc(100%+1rem)] min-w-0 items-start gap-3 rounded-xl px-2 py-2 text-left';
 const TONO_MONTO = { positivo: 'text-emerald-700', negativo: 'text-rose-700', neutro: 'text-slate-900' } as const;
 

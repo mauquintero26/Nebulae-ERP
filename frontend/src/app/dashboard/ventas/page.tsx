@@ -1,4 +1,5 @@
 'use client';
+import { FOCOS } from '@/lib/design-system';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import {
@@ -209,7 +210,7 @@ const ASISTENTE_VENTAS = {
 // los tintes por tono son los del tablero (CLASE_CHIP de components/ui/Kanban.tsx, m7a: el mismo chip sale igual en
 // Lista y en Kanban) y la base no lleva tamaño de letra: cada uso pone el suyo (m9b).
 const CHIP = 'inline-block max-w-full truncate rounded-full border px-1 py-0.5 font-bold leading-tight tracking-tight';
-const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
+const FOCO_VISIBLE = FOCOS.indigo;
 
 /**
  * Los dos apartados del Hub. Análisis es un estado de la página, no una vista de la tabla (RP35, RP21). B4 T7 r1 (A3):

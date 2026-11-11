@@ -445,32 +445,33 @@ console.log('--- TEST 13 (B4 T7 r1b): el esqueleto de TarjetaKpi tiene la forma 
   assert.ok(!fuente.includes('block h-7 w-24') && !fuente.includes('animate-pulse mt-2'), 'sin las barras de antes');
 }
 
-console.log('--- TEST 14 (B4 T8 r1, A1): una tarjeta pulsable y activa muestra el foco distinto de su anillo de «activa» ---');
+console.log('--- TEST 14 (B4 T8 r1, A1; B4 T24, FINAL-m25): una tarjeta pulsable y activa muestra el foco distinto de su anillo de «activa» ---');
 {
   const fuente = readFileSync(new URL('../src/components/ui/TarjetaKpi.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-  const mapa = (nombre) => {
-    const cuerpo = new RegExp(`const ${nombre}: Record<ColorKpi, string> = \\{([\\s\\S]*?)\\n\\};`).exec(fuente)?.[1] ?? '';
-    return Object.fromEntries([...cuerpo.matchAll(/(\w+): '([^']*)'/g)].map((m) => [m[1], m[2].split(/\s+/)]));
-  };
-  const anillo = mapa('ANILLO');
-  const foco = mapa('FOCO');
-  const focoActiva = mapa('FOCO_ACTIVA');
+  const ds = readFileSync(new URL('../src/lib/design-system.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const cuerpo = /const ANILLO: Record<ColorKpi, string> = \{([\s\S]*?)\n\};/.exec(fuente)?.[1] ?? '';
+  const anillo = Object.fromEntries([...cuerpo.matchAll(/(\w+): '([^']*)'/g)].map((m) => [m[1], m[2].split(/\s+/)]));
+  const focos = Object.fromEntries([.../export const FOCOS = \{([\s\S]*?)\n\} as const;/.exec(ds)[1].matchAll(/^\s+(\w+):\s+'([^']*)',$/gm)]
+    .map((m) => [m[1], m[2].split(/\s+/)]));
   const colores = Object.keys(anillo);
   assert.ok(colores.length >= 10, 'los colores del anillo');
-  assert.deepEqual(Object.keys(focoActiva).sort(), [...colores].sort(), 'FOCO_ACTIVA tiene un foco por cada color');
+  // B4 T24 (FINAL-m25, D27): el foco es el token común FOCOS[color] (outline -700 separado 2 px), activa o no. Ya no hay mapas
+  // FOCO (ring -300 de ≈2:1) ni FOCO_ACTIVA en la tarjeta.
+  assert.ok(!/const FOCO(_ACTIVA)?: Record/.test(fuente), 'sin los mapas de foco propios');
   for (const c of colores) {
-    const anilloActiva = anillo[c].find((x) => /^ring-[a-z]+-\d+$/.test(x));
-    // Con foco y activa: un anillo separado de la tarjeta (ring-offset-2) y de otro tono que el de «activa».
-    assert.ok(focoActiva[c].includes('focus-visible:ring-offset-2'), `${c}: el foco de la activa va separado`);
-    const tonoFoco = focoActiva[c].find((x) => /^focus-visible:ring-[a-z]+-\d+$/.test(x))?.replace('focus-visible:', '');
-    assert.ok(tonoFoco && tonoFoco !== anilloActiva, `${c}: el foco de la activa no es el anillo ${anilloActiva}`);
-    // Sin foco nada cambia: el anillo de «activa» y el foco de las demás son los de siempre.
+    assert.ok(focos[c], `${c}: FOCOS tiene el color`);
+    const tonoAnillo = anillo[c].find((x) => /^ring-[a-z]+-\d+$/.test(x))?.replace('ring-', '');
+    const tonoFoco = focos[c].find((x) => /^focus-visible:outline-(?!offset)[a-z]+-\d+$/.test(x))?.replace('focus-visible:outline-', '');
+    // Con foco y activa: un outline separado de la tarjeta (por fuera del anillo) y de otro tono que el de «activa».
+    assert.ok(focos[c].includes('focus-visible:outline-offset-2'), `${c}: el foco va separado`);
+    assert.ok(tonoFoco && tonoFoco !== tonoAnillo && tonoFoco.endsWith('-700'), `${c}: el foco (${tonoFoco}) no es el anillo ${tonoAnillo}`);
+    // Sin foco nada cambia: el anillo de «activa» no depende del foco, y el token solo pinta con el foco (outline-2).
     assert.ok(!anillo[c].some((x) => x.startsWith('focus-visible:')), `${c}: el anillo de activa no depende del foco`);
-    assert.ok(foco[c].every((x) => x.startsWith('focus-visible:')) && !foco[c].includes('focus-visible:ring-offset-2'), `${c}: FOCO igual`);
-    assert.ok(focoActiva[c].every((x) => x.startsWith('focus-visible:')), `${c}: FOCO_ACTIVA solo actúa con el foco`);
+    assert.ok(focos[c].filter((x) => !x.startsWith('focus-visible:')).every((x) => /^outline-[a-z]+-\d+$/.test(x)), `${c}: sin foco, solo el color`);
   }
-  // El botón usa FOCO_ACTIVA solo cuando está activo.
-  assert.match(fuente, /focus-visible:outline-none focus-visible:ring-2 \$\{activo \? FOCO_ACTIVA\[colorFinal\] : FOCO\[colorFinal\]\}/);
+  // El botón usa el token, igual activo o no.
+  assert.match(fuente, /cursor-pointer transition-colors\$\{hover\} \$\{FOCOS\[colorFinal\]\}`\}/);
+  assert.match(fuente, /import \{ FOCOS \} from '@\/lib\/design-system';/);
 }
 
 console.log('--- TEST 15 (B4 T8 r2, p1): activa y en alerta, un solo color de borde: el de ANILLO ---');
@@ -506,7 +507,7 @@ console.log('--- TEST 15 (B4 T8 r2, p1): activa y en alerta, un solo color de bo
   // Pulsable: el hover tampoco le cambia el borde a la activa (solo a las demás).
   assert.equal(componer(true, 'alerta', 'indigo', ANILLO).hover, '', 'activa: sin hover de borde');
   assert.equal(componer(false, 'alerta', 'indigo', ANILLO).hover, ' hover:border-slate-300', 'no activa: el hover de siempre');
-  assert.match(fuente, /cursor-pointer transition-colors\$\{hover\} focus-visible:outline-none focus-visible:ring-2 /, 'el botón usa ese hover');
+  assert.match(fuente, /cursor-pointer transition-colors\$\{hover\} \$\{FOCOS\[colorFinal\]\}/, 'el botón usa ese hover (B4 T24, D27: con el foco común)');
   assert.equal((fuente.match(/hover:border-slate-300/g) ?? []).length, 1, 'un solo hover de borde');
   assert.match(fuente, /alerta: 'text-rose-700',/, 'la ayuda en alerta sigue en rosa');
 }

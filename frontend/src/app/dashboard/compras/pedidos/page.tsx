@@ -1,4 +1,5 @@
 'use client';
+import { FOCOS } from '@/lib/design-system';
 import React, { useState, useEffect, useLayoutEffect, useCallback, useContext, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams, useRouter } from 'next/navigation';
@@ -1424,9 +1425,9 @@ const RUTA_PEDIDOS = '/dashboard/compras/pedidos';
 /** El contenedor de los Hubs y de las listas del bloque (T7 a T14): pb-24 deja libre la esquina del botón de la IA. */
 const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
 
-const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-700';
+const FOCO_VISIBLE = FOCOS.purple;
 /** El foco de los botones de la barra masiva (fondo slate-900), como en el Hub (m11 de T14). */
-const FOCO_OSCURO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white';
+const FOCO_OSCURO = FOCOS.blanco;
 
 /** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
 type AccionesFilaPedidos = {

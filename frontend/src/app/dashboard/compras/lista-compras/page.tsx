@@ -29,7 +29,7 @@ import { apiFetch } from '@/lib/api';
 import { accionModo, estadoDelTotal } from '@/lib/tabla';
 import { tarjetasLista } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
-import { TABLE } from '@/lib/design-system';
+import { FOCOS, TABLE } from '@/lib/design-system';
 import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
   OPCIONES_ESTADOS_TABLERO_LISTA, COLUMNAS_LISTA, consultaLista, consultaTableroLista, avisoTope200, destinoItemLista,
@@ -67,9 +67,9 @@ const SIN_FILTROS: FiltrosLista = { proveedor: '', desde: '', hasta: '' };
 const TEXTO_SOLO_VER = 'Este tablero es para ver: pasa a En pedido al crear el pedido de compra y a Recibido con la recepción.';
 /** El contenedor de los Hubs y de las listas del bloque (T7 a T16A): pb-24 deja libre la esquina del botón de la IA. */
 const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
-const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-700';
+const FOCO_VISIBLE = FOCOS.purple;
 /** El foco sobre la barra oscura de la selección. */
-const FOCO_OSCURO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white';
+const FOCO_OSCURO = FOCOS.blanco;
 /** Las modalidades de pago del pedido de compra: [lo que se manda al servidor, lo que se ve]. */
 const MODALIDADES_PAGO = [['Contado', 'Contado'], ['Credito 30d', 'Crédito 30d'], ['Credito 60d', 'Crédito 60d'], ['Adelanto 50%', 'Adelanto 50%'], ['Contra entrega', 'Contra entrega']];
 /** m12: la barra dice los mismos ítems que usará «Crear Pedido de Compra»; si hay seleccionados que no entran, lo dice. */
@@ -608,10 +608,10 @@ export default function ListaComprasPage() {
                     {(verFechas || hayFechas) && (
                       <>
                         <input type="date" value={filtros.desde} onChange={(e) => cambiarFiltros({ desde: e.target.value })} aria-label="Desde"
-                          className={`rounded-xl border border-gray-200 px-3 py-2 text-xs shadow-sm outline-none ${FOCO_VISIBLE}`} />
+                          className={`rounded-xl border border-gray-200 px-3 py-2 text-xs shadow-sm ${FOCO_VISIBLE}`} />
                         <span aria-hidden="true" className="text-sm text-gray-500">→</span>
                         <input type="date" value={filtros.hasta} onChange={(e) => cambiarFiltros({ hasta: e.target.value })} aria-label="Hasta"
-                          className={`rounded-xl border border-gray-200 px-3 py-2 text-xs shadow-sm outline-none ${FOCO_VISIBLE}`} />
+                          className={`rounded-xl border border-gray-200 px-3 py-2 text-xs shadow-sm ${FOCO_VISIBLE}`} />
                         {hayFechas && (
                           <button type="button" onClick={() => cambiarFiltros({ desde: '', hasta: '' })}
                             className={`rounded text-xs font-bold text-red-700 hover:underline ${FOCO_VISIBLE}`}>Limpiar fechas</button>

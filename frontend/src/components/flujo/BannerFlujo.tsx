@@ -1,5 +1,6 @@
 'use client';
 
+import { FOCO } from '@/lib/design-system';
 import { useEffect, useId, useRef, useState } from 'react';
 import {
   AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, CircleDashed, HelpCircle, RotateCw, SlidersHorizontal,
@@ -97,8 +98,8 @@ const ICONO_SEMAFORO = { gris: CircleDashed, rojo: AlertTriangle, verde: CheckCi
 const COLOR_SEMAFORO = { gris: 'text-slate-400', rojo: 'text-rose-600', verde: 'text-emerald-600' } as const;
 const TEXTO_SEMAFORO = { gris: 'text-slate-500', rojo: 'text-rose-700', verde: 'text-emerald-700' } as const;
 
-/** r1 (C1, M10): el foco es un outline, distinto de cualquier anillo de estado y visible en forced-colors. */
-const FOCO = 'outline-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
+// r1 (C1, M10): el foco es un outline (no un box-shadow), distinto de cualquier anillo de estado y visible en forced-colors; desde
+// B4 T24 (FINAL-m25), el FOCO común de design-system.ts.
 const BOTON = `inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-800 ${FOCO}`;
 
 /**

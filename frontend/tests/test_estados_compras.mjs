@@ -778,7 +778,8 @@ console.log('--- TEST 23 (B4 T14): el Hub de Compras (compras/page.tsx) cablea l
   assert.match(hub, /if \(vigente\) setVentas\(\{ filas: Array\.isArray\(r\)[^\n]*, error: null \}\); \}\)/,
     'un éxito limpia el error');
   // T14 r1 (m11, m12, m13): foco de la barra masiva, nombres del panel, «Pago y logística» y el respaldo de F. compra.
-  assert.match(hub, /const FOCO_OSCURO = '[^']*focus-visible:outline-white';/);
+  // B4 T24 (FINAL-m25, D27): el foco blanco común de design-system.ts (FOCOS.blanco: outline-white separado 2 px).
+  assert.match(hub, /const FOCO_OSCURO = FOCOS\.blanco;/);
   assert.equal((hub.match(/\$\{FOCO_OSCURO\}/g) ?? []).length, 2, 'los dos botones de la barra masiva');
   assert.match(hub, /aria-label=\{`Acciones de \$\{/);
   assert.match(hub, /aria-label="Cerrar el panel"/);
@@ -2438,7 +2439,8 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   trae(piezas, '<option value="">{catalogo.filas ? todas : cargando}</option>', 'SelectorCatalogo: «Cargando…» mientras carga');
   trae(piezas, "export const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';", 'el contenedor deja libre la esquina del botón de la IA (pb-24)');
   trae(piezas, "['Costo', numeroFinito(f.costo) !== null && Number(f.costo) > 0 ? pesos(f.costo) : 'Sin costo registrado'],", 'el detalle: un costo 0 es «sin costo» (RP91)');
-  trae(piezas, 'focus-visible:outline-offset-2', 'el foco visible se ve también sobre fondos oscuros');
+  // B4 T24 (FINAL-m25, D27): FOCOS es el común de design-system.ts (outline-offset-2: se ve también sobre fondos oscuros).
+  trae(piezas, 'export { FOCOS };', 'el foco visible es el común y se ve también sobre fondos oscuros');
   sinDefectos('piezas-inventario', piezas);
   // T18 r1 (m10, m21): el Hub de T17 IMPORTA las piezas de aquí y ya no las copia.
   const hub = leerFuente('app/dashboard/inventario/page.tsx');

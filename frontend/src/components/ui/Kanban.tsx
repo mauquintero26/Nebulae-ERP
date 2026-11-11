@@ -17,6 +17,7 @@ import {
 import type {
   ColumnaKanban, ConsultaColumna, DatosColumna, Destino, PendienteMovimiento, ReglaSoltar, ResultadoSoltar,
 } from '@/lib/kanban';
+import { FOCO, FOCO_DENTRO } from '@/lib/design-system';
 import { formatoPesos } from '@/lib/pesos';
 import { textoDeError } from '@/lib/avisos';
 import { useAvisos } from './Avisos';
@@ -637,7 +638,7 @@ export function TarjetaKanban({
                 onAbrir();
               }}
               title={`Abrir ${numero}`}
-              className="min-w-0 truncate rounded font-bold text-slate-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
+              className={`min-w-0 truncate rounded font-bold text-slate-800 hover:underline ${FOCO}`}
             >
               {numero}
             </button>
@@ -1172,7 +1173,7 @@ export function TableroKanban<T = unknown>({
         onPointerUp={alLevantar}
         onPointerCancel={alCancelarPuntero}
         onLostPointerCapture={alPerderCaptura}
-        className={`select-none touch-auto rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 sm:touch-pan-y ${movible ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${arrastrando ? 'opacity-40' : ''} ${pendiente ? 'opacity-70' : ''}`}
+        className={`select-none touch-auto rounded-xl ${FOCO_DENTRO} sm:touch-pan-y ${movible ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${arrastrando ? 'opacity-40' : ''} ${pendiente ? 'opacity-70' : ''}`}
       >
         {contenidoTarjeta(
           item,
@@ -1231,7 +1232,7 @@ export function TableroKanban<T = unknown>({
             data-encabezado
             aria-expanded={false}
             title={motivo ?? `Abrir la columna ${c.titulo}`}
-            className="flex h-full w-full flex-col items-center gap-2 rounded-2xl px-1 py-3 text-xs font-bold text-slate-600 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+            className={`flex h-full w-full flex-col items-center gap-2 rounded-2xl px-1 py-3 text-xs font-bold text-slate-600 hover:bg-white ${FOCO_DENTRO}`}
           >
             <span aria-hidden="true" className={`h-2.5 w-2.5 shrink-0 rounded-full ${tono.punto}`} />
             <Contador valor={d?.total} estado={estado} />
@@ -1262,7 +1263,7 @@ export function TableroKanban<T = unknown>({
             <h3
               tabIndex={-1}
               data-encabezado
-              className="min-w-0 flex-1 truncate rounded text-sm font-bold text-slate-800 outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
+              className={`min-w-0 flex-1 truncate rounded text-sm font-bold text-slate-800 ${FOCO_DENTRO}`}
               title={c.ayuda ?? c.titulo}
             >
               {c.titulo}
@@ -1274,7 +1275,7 @@ export function TableroKanban<T = unknown>({
               data-plegar="plegar"
               aria-label={`Plegar la columna ${c.titulo}`}
               title={`Plegar la columna ${c.titulo}`}
-              className="shrink-0 rounded-md p-1 text-slate-500 hover:bg-white hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+              className={`shrink-0 rounded-md p-1 text-slate-500 hover:bg-white hover:text-slate-700 ${FOCO}`}
             >
               <ChevronsRightLeft size={14} aria-hidden="true" />
             </button>

@@ -318,7 +318,7 @@ function CuerpoTablaBase<T>({
             className={`${TABLE.fila} ${fondo} ${onFila ? TABLE.filaClic : ''}`}
           >
             {seleccionActiva && (
-              <td className={TABLE.celdaCasilla} style={casillaQuieta ? undefined : CASILLA_SUELTA}>
+              <td className={`${TABLE.celdaCasilla} ${onFila ? TABLE.celdaFoco : ''}`} style={casillaQuieta ? undefined : CASILLA_SUELTA}>
                 <input
                   type="checkbox"
                   aria-label="Seleccionar esta fila"
@@ -339,7 +339,7 @@ function CuerpoTablaBase<T>({
                   key={v}
                   title={titulo ?? undefined}
                   style={estiloFija(v, fijas, offsets)}
-                  className={`${TABLE.celda} ${fijas[v] ? TABLE.celdaFija : ''} ${clasesFija(v, fijas, visibles)} ${ALINEAR[col.alinear ?? 'izquierda']}`}
+                  className={`${TABLE.celda} ${fijas[v] ? TABLE.celdaFija : ''} ${clasesFija(v, fijas, visibles)} ${ALINEAR[col.alinear ?? 'izquierda']} ${onFila ? TABLE.celdaFoco : ''}`}
                 >
                   <span data-celda={v} className={TABLE.contenido}>{contenido}</span>
                 </td>

@@ -7,6 +7,7 @@ import { ConmutadorVista } from '@/components/ui/ConmutadorVista';
 import { Contador } from '@/components/ui/Contador';
 import { ACCENTS } from '@/components/ui/colors';
 import type { AccentColor } from '@/components/ui/colors';
+import { FOCO } from '@/lib/design-system';
 import type { EstadoKpi } from '@/lib/kpis';
 import { pestanaConTecla } from '@/lib/pestanas';
 import {
@@ -120,8 +121,8 @@ export type PropsBarraTabla = PropsBaseBarraTabla
 const PASTILLA_ACTIVA = 'bg-white/25 text-white';
 const PASTILLA_ALERTA = 'bg-rose-100 text-rose-700';
 const PASTILLA = 'bg-slate-200/70 text-slate-600';
-const BOTON = 'inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300';
-const PESTANA = 'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 py-1.5 text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300';
+const BOTON = `inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50 ${FOCO}`;
+const PESTANA = `inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 py-1.5 text-xs font-bold transition-colors ${FOCO}`;
 const PESTANA_INACTIVA = 'border-transparent text-slate-600 hover:bg-slate-100';
 
 export function BarraTabla({
@@ -207,7 +208,7 @@ export function BarraTabla({
   return (
     <div className="flex flex-col gap-3 border-b border-slate-100 px-4 py-3">
       {(pestanas && pestanas.length > 0) || pestanaAparte ? (
-        <div ref={filaPestanas} role="tablist" aria-label="Pestañas" onKeyDown={teclaPestanas} className="-mx-1 flex min-w-0 items-center gap-1 overflow-x-auto px-1 pb-0.5">
+        <div ref={filaPestanas} role="tablist" aria-label="Pestañas" onKeyDown={teclaPestanas} className="-m-1 flex min-w-0 items-center gap-1 overflow-x-auto p-1">
           {pestanas?.map((p) => {
             const activa = !aparteActiva && p.id === estado.vista;
             // B4 T7 r2 (I-r1): con la aparte activa y sin conteo, sin pastilla: no hay nada cargando (RP35).
@@ -282,7 +283,7 @@ export function BarraTabla({
                   e.preventDefault();
                   retardo().ya(busqueda.texto);
                 }}
-                className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-8 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 [&::-webkit-search-cancel-button]:hidden"
+                className={`w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-8 text-sm text-slate-700 placeholder:text-slate-400 ${FOCO} [&::-webkit-search-cancel-button]:hidden`}
               />
               {busqueda.texto !== '' && (
                 <button
@@ -293,7 +294,7 @@ export function BarraTabla({
                     limpiarBusqueda();
                     entrada.current?.focus();
                   }}
-                  className="absolute right-2 inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                  className={`absolute right-2 inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600 ${FOCO}`}
                 >
                   <X size={14} aria-hidden="true" />
                 </button>

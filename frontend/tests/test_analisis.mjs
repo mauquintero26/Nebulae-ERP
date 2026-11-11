@@ -607,6 +607,8 @@ console.log('--- TEST 18 (T5B): el fuente de las ocho piezas de components/anali
   };
   const fuentes = Object.fromEntries(Object.keys(PIEZAS).map((n) => [n, leer(n)]));
   const FOCO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
+  // B4 T24 (FINAL-m25, D27): el foco literal o el FOCO común de design-system.ts (que es ese mismo texto, test_tabla.mjs).
+  const usaFoco = (fuente, c) => c.includes(FOCO) || (c.includes('${FOCO}') && /import \{[^}]*\bFOCO\b[^}]*\} from '@\/lib\/design-system';/.test(fuente));
   for (const [archivo, exportado] of Object.entries(PIEZAS)) {
     const fuente = fuentes[archivo];
     const c = codigo(fuente);
@@ -618,7 +620,7 @@ console.log('--- TEST 18 (T5B): el fuente de las ocho piezas de components/anali
       `${archivo}: pieza de presentación (el período, el top y los datos son de PanelAnalisis, T5C)`);
     assert.ok(!/outline-none/.test(c), `${archivo}: nunca outline-none`);
     // Lo que puede tomar el foco usa el outline de focus-visible.
-    if (/<button\b|<Link\b/.test(c)) assert.ok(c.includes(FOCO), `${archivo}: foco visible con outline`);
+    if (/<button\b|<Link\b/.test(c)) assert.ok(usaFoco(fuente, c), `${archivo}: foco visible con outline`);
     // Un texto recortado lleva su title en la misma etiqueta.
     for (const linea of c.split('\n').filter((l) => /className=[^>]*\btruncate\b/.test(l))) {
       assert.ok(/\btitle=/.test(linea), `${archivo}: truncate sin title: ${linea.trim()}`);
@@ -1222,6 +1224,8 @@ console.log('--- TEST 21 (T5C): el fuente de las siete piezas del panel (sin DOM
   };
   const fuentes = Object.fromEntries(Object.keys(PIEZAS).map((n) => [n, leer(n)]));
   const FOCO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
+  // B4 T24 (FINAL-m25, D27): el foco literal o el FOCO común de design-system.ts (que es ese mismo texto, test_tabla.mjs).
+  const usaFoco = (fuente, c) => c.includes(FOCO) || (c.includes('${FOCO}') && /import \{[^}]*\bFOCO\b[^}]*\} from '@\/lib\/design-system';/.test(fuente));
   for (const [archivo, exporta] of Object.entries(PIEZAS)) {
     const fuente = fuentes[archivo];
     const c = codigo(fuente);
@@ -1235,7 +1239,7 @@ console.log('--- TEST 21 (T5C): el fuente de las siete piezas del panel (sin DOM
     assert.equal(/usePreferencia/.test(c), archivo === 'PanelAnalisis.tsx', `${archivo}: solo PanelAnalisis recuerda (analisis:<modulo>)`);
     assert.ok(!c.includes('/ventas/ai-chat'), `${archivo}: R2, ningún endpoint de IA`);
     // Lo que toma el foco usa el outline de focus-visible (los controles deshabilitados del asistente no lo toman).
-    if (archivo !== 'AsistenteEnConstruccion.tsx' && /<button\b|<Link\b|<input\b|<select\b/.test(c)) assert.ok(c.includes(FOCO), `${archivo}: foco visible`);
+    if (archivo !== 'AsistenteEnConstruccion.tsx' && /<button\b|<Link\b|<input\b|<select\b/.test(c)) assert.ok(usaFoco(fuente, c), `${archivo}: foco visible`);
     for (const linea of c.split('\n').filter((l) => /className=[^>]*\btruncate\b/.test(l))) {
       assert.ok(/\btitle=/.test(linea), `${archivo}: truncate sin title: ${linea.trim()}`);
     }

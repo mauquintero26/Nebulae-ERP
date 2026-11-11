@@ -7,6 +7,7 @@ import {
   ShoppingCart, SlidersHorizontal, Sparkles, Target, TrendingDown, TrendingUp, Truck, Users, Wallet, Warehouse, XCircle,
 } from 'lucide-react';
 import { ACCENTS, type AccentColor } from './colors';
+import { FOCOS } from '@/lib/design-system';
 import {
   CARGA_INICIAL, CATALOGO_KPI, PERIODO_KPI, TEXTO_PERIODO, avanzarCarga, clasesFranja, estadoKpi, etiquetaKpi,
   frenteDeComparado, mejorComoTexto, tamanoValor, textoValorTarjeta,
@@ -87,33 +88,9 @@ const ANILLO: Record<ColorKpi, string> = {
   red: 'ring-2 ring-red-300 border-red-300',
   slate: 'ring-2 ring-slate-300 border-slate-300',
 };
-const FOCO: Record<ColorKpi, string> = {
-  amber: 'focus-visible:ring-amber-300',
-  rose: 'focus-visible:ring-rose-300',
-  orange: 'focus-visible:ring-orange-300',
-  indigo: 'focus-visible:ring-indigo-300',
-  purple: 'focus-visible:ring-purple-300',
-  emerald: 'focus-visible:ring-emerald-300',
-  blue: 'focus-visible:ring-blue-300',
-  teal: 'focus-visible:ring-teal-300',
-  red: 'focus-visible:ring-red-300',
-  slate: 'focus-visible:ring-slate-300',
-};
-// B4 T8 r1 (A1): el foco de una tarjeta pulsable y ACTIVA. Su anillo de «activa» (ANILLO) es el mismo ring-2 -300 del foco
-// de las demás: enfocada no cambiaba. Con el foco del teclado, el anillo va separado de la tarjeta (ring-offset-2, el
-// blanco entre los dos) y en el tono -600. Sin el foco, la activa se ve igual que siempre.
-const FOCO_ACTIVA: Record<ColorKpi, string> = {
-  amber: 'focus-visible:ring-amber-600 focus-visible:ring-offset-2',
-  rose: 'focus-visible:ring-rose-600 focus-visible:ring-offset-2',
-  orange: 'focus-visible:ring-orange-600 focus-visible:ring-offset-2',
-  indigo: 'focus-visible:ring-indigo-600 focus-visible:ring-offset-2',
-  purple: 'focus-visible:ring-purple-600 focus-visible:ring-offset-2',
-  emerald: 'focus-visible:ring-emerald-600 focus-visible:ring-offset-2',
-  blue: 'focus-visible:ring-blue-600 focus-visible:ring-offset-2',
-  teal: 'focus-visible:ring-teal-600 focus-visible:ring-offset-2',
-  red: 'focus-visible:ring-red-600 focus-visible:ring-offset-2',
-  slate: 'focus-visible:ring-slate-600 focus-visible:ring-offset-2',
-};
+// B4 T24 (FINAL-m25): el foco de la tarjeta pulsable es el token común FOCOS[color] de design-system.ts (outline -700 separado
+// 2 px, ≥ 3:1). Va por FUERA del anillo de «activa» (ANILLO, ring-2 -300 pegado al borde) y en otro tono: activa o no, el foco
+// se distingue (antes, FOCO era el mismo ring -300 de ≈2:1 y FOCO_ACTIVA un ring -600 separado).
 // T5C r1 (M6 y M22): tonos de 4,5:1 o más sobre el blanco y sobre el fondo de 'alerta' (emerald-700, rose-700 y
 // slate-600, como ChipVariacion); antes emerald-600 daba 3,67:1.
 const TONO_CHIP = { bien: 'text-emerald-700', mal: 'text-rose-700', neutro: 'text-slate-600' } as const;
@@ -253,7 +230,7 @@ export function TarjetaKpi({
         onClick={onClick}
         aria-pressed={activo}
         title={tituloFinal}
-        className={`${clases} text-left cursor-pointer transition-colors${hover} focus-visible:outline-none focus-visible:ring-2 ${activo ? FOCO_ACTIVA[colorFinal] : FOCO[colorFinal]}`}
+        className={`${clases} text-left cursor-pointer transition-colors${hover} ${FOCOS[colorFinal]}`}
       >
         {contenido}
       </button>

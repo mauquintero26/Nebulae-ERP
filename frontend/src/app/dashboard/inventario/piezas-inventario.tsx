@@ -7,7 +7,8 @@ import type { LucideIcon } from 'lucide-react';
 // su page.tsx (una página de Next no puede exportar más que su componente); aquí no se tocan.
 import { Modal } from '@/components/ui';
 import { apiFetch } from '@/lib/api';
-import { TABLE } from '@/lib/design-system';
+import { FOCOS, TABLE } from '@/lib/design-system';
+import type { AcentoFoco } from '@/lib/design-system';
 import { formatoPesos } from '@/lib/pesos';
 import { tiene } from '@/lib/estados-pedido';
 import { formatoDecimal, numeroFinito } from '@/lib/kpis';
@@ -49,12 +50,9 @@ export type Catalogo = { filas: OpcionCatalogo[] | null; error: unknown };
 
 /** El contenedor de los Hubs y de las listas del bloque (T7 a T17): pb-24 deja libre la esquina del botón de la IA. */
 export const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
-/** El foco visible de cada acento (clases literales: Tailwind no ve las armadas), con outline-offset para que se vea sobre fondos oscuros. */
-export const FOCOS = {
-  indigo: 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700',
-  purple: 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-700',
-} as const;
-export type AcentoFoco = keyof typeof FOCOS;
+/** B4 T24 (FINAL-m25): el foco visible es el token común de design-system.ts (una sola copia); se reexporta para quien lo importa de aquí. */
+export { FOCOS };
+export type { AcentoFoco };
 
 // H42: pesos enteros con punto de miles; lo que no llega, '—'. Las cantidades sin redondear ('2,5').
 export const pesos = (v: unknown) => (numeroFinito(v) === null ? '—' : formatoPesos(v));

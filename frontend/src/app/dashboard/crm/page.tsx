@@ -1,6 +1,7 @@
 // @ts-nocheck
 "use client";
 
+import { FOCOS } from '@/lib/design-system';
 import { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } from 'react';
 import {
   Plus, RefreshCw, X, ChevronDown, Trash2,
@@ -210,7 +211,7 @@ const ASISTENTE_CRM = {
   titulo: 'Asistente del CRM',
   ejemplos: ['¿Qué leads llevan más días sin movimiento?', '¿En qué etapa se quedan los leads?'],
 };
-const FOCO_VISIBLE = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300';
+const FOCO_VISIBLE = FOCOS.purple;
 
 /** «Abrir» y «Borrar» de la fila de la Lista: las columnas son estables (useMemo por las etapas) y leen esto del contexto. */
 const AccionesLead = createContext({ abrir: () => {}, borrar: () => {} });

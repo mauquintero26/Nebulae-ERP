@@ -3,6 +3,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronDown, ListFilter } from 'lucide-react';
 import { Contador } from '@/components/ui/Contador';
+import { FOCO } from '@/lib/design-system';
 import { alternarEstado, opcionesConMarcados, posicionPanel } from '@/lib/tabla';
 import type { OpcionEstado } from '@/lib/tabla';
 
@@ -106,7 +107,7 @@ export function FiltroEstados({
         aria-expanded={abierto}
         aria-controls={abierto ? idPanel : undefined}
         onClick={() => setAbierto((a) => !a)}
-        className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 ${
+        className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition-colors ${FOCO} ${
           seleccion.length ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
         }`}
       >

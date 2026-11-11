@@ -1,5 +1,6 @@
 'use client';
 
+import { FOCO } from '@/lib/design-system';
 import Link from 'next/link';
 import type { ComponentType, FocusEvent, ReactNode } from 'react';
 import {
@@ -168,8 +169,8 @@ const PUNTO: Record<EstadoPaso, string> = {
   neutro: 'bg-slate-200',
 };
 
-/** r1 (C1, M10): el foco es un outline (no un box-shadow): se distingue del anillo de la selección y no lo borra forced-colors. */
-const FOCO = 'outline-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
+// r1 (C1, M10): el foco es un outline (no un box-shadow), distinto de cualquier anillo de estado y visible en forced-colors; desde
+// B4 T24 (FINAL-m25), el FOCO común de design-system.ts.
 
 /**
  * Las cajas de la franja. ADAPTABLE: pastilla por debajo de @2xl de la franja y caja desde @2xl (r1, C3: flex-1, del alto

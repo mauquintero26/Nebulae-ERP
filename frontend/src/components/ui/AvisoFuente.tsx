@@ -1,6 +1,7 @@
 'use client';
 
 import { avisoDeFuente } from '@/lib/avisos';
+import { FOCOS } from '@/lib/design-system';
 
 /**
  * B4 T23B: el aviso de una fuente de una pantalla que falló (lib/avisos.js avisoDeFuente): una falla lleva el detalle del servidor y
@@ -14,7 +15,7 @@ export function AvisoFuente({ aviso, onReintentar }: { aviso: NonNullable<Return
       {aviso.texto}
       {aviso.reintentar && (
         <button type="button" onClick={onReintentar}
-          className="inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-600 focus-visible:ring-offset-2">
+          className={`inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 ${FOCOS.rose}`}>
           Reintentar
         </button>
       )}

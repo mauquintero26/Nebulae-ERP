@@ -2029,7 +2029,8 @@ console.log('--- TEST 39 (B4 T7 r1, A2): fijasActivas — en una caja angosta la
   assert.match(t, /const SIN_FIJAS: Record<string, LadoFijo> = Object\.freeze\(\{\}\);/);
   assert.match(t, /const CASILLA_SUELTA: CSSProperties = \{ left: 'auto' \};/);
   assert.match(t, /<th scope="col" className=\{TABLE\.encabezadoCasilla\} style=\{quietas \? undefined : CASILLA_SUELTA\}>/);
-  assert.match(t, /<td className=\{TABLE\.celdaCasilla\} style=\{casillaQuieta \? undefined : CASILLA_SUELTA\}>/);
+  // B4 T24 (FINAL-C6, D27): con la línea del foco de una fila pulsable (celdaFoco).
+  assert.match(t, /<td className=\{`\$\{TABLE\.celdaCasilla\} \$\{onFila \? TABLE\.celdaFoco : ''\}`\} style=\{casillaQuieta \? undefined : CASILLA_SUELTA\}>/);
   assert.match(t, /style=\{estiloFija\(v, fijasQuietas, geometria\.offsets\)\}\s*className=\{`\$\{TABLE\.encabezado\} \$\{fijasQuietas\[v\] \? TABLE\.encabezadoFijo : ''\} \$\{clasesFija\(v, fijasQuietas, visibles\)\}/);
   assert.match(t, /fijas=\{fijasQuietas\}\s*offsets=\{geometria\.offsets\}/);
   assert.match(t, /casillaQuieta=\{quietas\}/);
@@ -2897,6 +2898,79 @@ console.log('--- TEST T23A-b (B4 T23A; TABLA-otros punto 5, KANBAN-resto punto 3
   // R26: a 1024 px los pedidos van a todo el ancho (los carritos, debajo) y solo desde 2xl en dos columnas; el contenedor es el de las listas.
   assert.match(codigo, /<div className=\{CONTENEDOR\}>/);
   assert.match(codigo, /className="flex min-w-0 flex-1 flex-col gap-6 2xl:flex-row"/);
+}
+
+console.log('--- TEST T24-FOCO (B4 T24: FINAL-C6, FINAL-m25 y F41): el foco visible, un solo token de design-system.ts ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = (texto) => texto.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const ds = leer('lib/design-system.ts');
+  // El token: un outline de 2 px separado 2 px, en el -700 del acento (≥ 3:1 sobre blanco, rose-50 e indigo-50), con el color fijado
+  // antes del foco; `blanco` para los fondos oscuros. Un acento por clave, sin ring ni outline-none.
+  const bloque = /export const FOCOS = \{([\s\S]*?)\n\} as const;/.exec(ds);
+  assert.ok(bloque, 'design-system.ts exporta FOCOS');
+  const focos = Object.fromEntries([...bloque[1].matchAll(/^\s+([a-z]+):\s+'([^']*)',$/gm)].map((m) => [m[1], m[2]]));
+  const ACENTOS = ['indigo', 'purple', 'teal', 'blue', 'emerald', 'orange', 'amber', 'rose', 'red', 'slate'];
+  assert.deepEqual(Object.keys(focos), [...ACENTOS, 'blanco']);
+  for (const a of ACENTOS) {
+    assert.equal(focos[a], `outline-${a}-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-${a}-700`, a);
+  }
+  assert.equal(focos.blanco, 'outline-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white');
+  assert.match(ds, /^export const FOCO = FOCOS\.indigo;$/m, 'FOCO es el índigo');
+  assert.match(ds, /^export const FOCO_DENTRO = 'outline-indigo-700 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-indigo-700';$/m,
+    'FINAL-C6: la fila, hacia adentro');
+  assert.ok(ds.indexOf('export const FOCOS') < ds.indexOf('export const TABLE'), 'FOCOS va antes de TABLE (lo usa)');
+  // FINAL-C6: la fila pulsable y el título ordenable usan el token; ni un fondo como foco (≈1,1:1 y nulo sobre una seleccionada),
+  // ni ring -300, ni outline-none (en Tailwind v4 apaga el outline del foco).
+  const tabla = /export const TABLE = \{([\s\S]*?)\n\};/.exec(ds)[1];
+  const linea = (clave) => new RegExp(`^\\s+${clave}:\\s+(.*),$`, 'm').exec(tabla)?.[1] ?? '';
+  assert.equal(linea('filaClic'), '`cursor-pointer ${FOCO_DENTRO}`');
+  assert.equal(linea('titulo'), '`flex min-w-0 flex-1 items-center gap-1 rounded text-left ${FOCO}`');
+  // Las columnas fijas (sticky, z-10, fondo opaco) tapan el outline de la fila (medido en el banco): las celdas de una fila pulsable
+  // repiten la línea por dentro con un box-shadow (arriba y abajo, y los bordes de la primera y la última), solo con el foco del teclado.
+  assert.equal(linea('celdaFoco'), "'group-focus-visible:shadow-[inset_0_2px_0_0_var(--color-indigo-700),inset_0_-2px_0_0_var(--color-indigo-700)] group-focus-visible:first:shadow-[inset_2px_0_0_0_var(--color-indigo-700),inset_0_2px_0_0_var(--color-indigo-700),inset_0_-2px_0_0_var(--color-indigo-700)] group-focus-visible:last:shadow-[inset_-2px_0_0_0_var(--color-indigo-700),inset_0_2px_0_0_var(--color-indigo-700),inset_0_-2px_0_0_var(--color-indigo-700)]'");
+  const tablaEstandar = codigo(leer('components/tabla/TablaEstandar.tsx'));
+  assert.equal((tablaEstandar.match(/\$\{onFila \? TABLE\.celdaFoco : ''\}/g) ?? []).length, 2, 'la casilla y cada celda de una fila pulsable');
+  assert.match(tablaEstandar, /className=\{`\$\{TABLE\.fila\} \$\{fondo\} \$\{onFila \? TABLE\.filaClic : ''\}`\}/, 'la fila pulsable lleva filaClic');
+  // Las piezas compartidas: el token, sin anillos -100/-300 de foco y sin outline-none.
+  const PIEZAS = ['components/tabla/BarraTabla.tsx', 'components/tabla/FiltroEstados.tsx', 'components/tabla/MenuAjustes.tsx',
+    'components/tabla/Paginacion.tsx', 'components/ui/Kanban.tsx', 'components/ui/MenuFila.tsx', 'components/ui/ConmutadorVista.tsx',
+    'components/ui/TarjetaKpi.tsx', 'components/ui/AvisoFuente.tsx'];
+  for (const ruta of PIEZAS) {
+    const c = codigo(leer(ruta));
+    assert.match(c, /import \{[^}]*\bFOCOS?\b[^}]*\} from '@\/lib\/design-system';/, `${ruta}: importa el token`);
+    assert.ok(!/focus(?:-visible)?:ring-[a-z]+-[123]00\b/.test(c), `${ruta}: sin anillo de foco -100/-300`);
+    assert.ok(!/\boutline-none\b/.test(c), `${ruta}: sin outline-none`);
+  }
+  // El input «Buscar» de BarraTabla (C18 reportaba outline:none): el token, no el ring-indigo-100.
+  assert.match(codigo(leer('components/tabla/BarraTabla.tsx')), /placeholder:text-slate-400 \$\{FOCO\}/);
+  // Una sola copia: las pantallas y components/analisis y components/flujo no escriben su propio foco; lo toman de FOCOS.
+  const COPIAS = {
+    'app/dashboard/ventas/page.tsx': 'indigo', 'app/dashboard/ventas/solicitud/solicitud-client.tsx': 'indigo',
+    'app/dashboard/ventas/cotizacion/cotizacion-client.tsx': 'indigo', 'app/dashboard/ventas/venta/venta-client.tsx': 'indigo',
+    'app/dashboard/compras/page.tsx': 'purple', 'app/dashboard/compras/pedidos/page.tsx': 'purple',
+    'app/dashboard/compras/lista-compras/page.tsx': 'purple', 'app/dashboard/compras/recepciones/page.tsx': 'teal',
+    'app/dashboard/compras/recepciones/[id]/page.tsx': 'emerald', 'app/dashboard/compras/transito/page.tsx': 'blue',
+    'app/dashboard/compras/traslados/page.tsx': 'orange', 'app/dashboard/crm/page.tsx': 'purple',
+    'app/dashboard/ecommerce/page.tsx': 'purple', 'app/dashboard/inventario/page.tsx': 'indigo',
+  };
+  for (const [ruta, acento] of Object.entries(COPIAS)) {
+    const f = leer(ruta);
+    assert.equal((f.match(/^const FOCO_VISIBLE = [^;]*;/gm) ?? []).join(), `const FOCO_VISIBLE = FOCOS.${acento};`, ruta);
+    assert.match(f, /import \{[^}]*\bFOCOS\b[^}]*\} from '@\/lib\/design-system';|import \{[^}]*\bFOCOS\b[^}]*\} from '\.\.?\/[^']*piezas-inventario';/, `${ruta}: importa FOCOS`);
+  }
+  for (const ruta of ['app/dashboard/compras/page.tsx', 'app/dashboard/compras/pedidos/page.tsx', 'app/dashboard/compras/lista-compras/page.tsx']) {
+    assert.match(leer(ruta), /^const FOCO_OSCURO = FOCOS\.blanco;$/m, `${ruta}: el foco sobre la barra oscura`);
+  }
+  for (const ruta of ['components/analisis/GraficoDona.tsx', 'components/analisis/ListaMovimientos.tsx', 'components/analisis/PanelAnalisis.tsx',
+    'components/analisis/RankingTop.tsx', 'components/analisis/SelectorPeriodo.tsx', 'components/flujo/BannerFlujo.tsx', 'components/flujo/PasosFlujo.tsx']) {
+    const f = leer(ruta);
+    assert.ok(!/^const FOCO = '/m.test(f), `${ruta}: sin su copia de FOCO`);
+    assert.match(f, /import \{[^}]*\bFOCO\b[^}]*\} from '@\/lib\/design-system';/, `${ruta}: importa FOCO`);
+  }
+  const piezasInv = leer('app/dashboard/inventario/piezas-inventario.tsx');
+  assert.ok(!/export const FOCOS = \{/.test(piezasInv), 'piezas-inventario: sin su copia de FOCOS');
+  assert.match(piezasInv, /^export \{ FOCOS \};$/m, 'piezas-inventario reexporta el FOCOS común');
 }
 
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');

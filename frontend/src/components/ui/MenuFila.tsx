@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Ellipsis } from 'lucide-react';
+import { FOCO, FOCO_DENTRO } from '@/lib/design-system';
 import { posicionMenu } from '@/lib/tabla';
 
 /**
@@ -159,7 +160,7 @@ export function MenuFila({
             setAbierto(true);
           }
         }}
-        className="inline-flex items-center justify-center rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 aria-expanded:bg-slate-100 aria-expanded:text-slate-700"
+        className={`inline-flex items-center justify-center rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 ${FOCO} aria-expanded:bg-slate-100 aria-expanded:text-slate-700`}
       >
         <Ellipsis size={16} aria-hidden="true" />
       </button>
@@ -185,7 +186,7 @@ export function MenuFila({
                 // T4B r2: con el motivo a la vista (segunda línea), sin el mismo texto en title: no se lee dos veces.
                 title={item.deshabilitado && item.titulo ? undefined : item.titulo}
                 onClick={() => elegir(item)}
-                className={`group flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold outline-none aria-disabled:cursor-not-allowed ${
+                className={`group flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold ${FOCO_DENTRO} aria-disabled:cursor-not-allowed ${
                   item.peligro ? 'text-rose-600 hover:bg-rose-50 focus:bg-rose-50' : 'text-slate-700 hover:bg-slate-50 focus:bg-slate-100'
                 }`}
               >

@@ -1,5 +1,6 @@
 'use client';
 
+import { FOCOS } from '@/lib/design-system';
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -68,7 +69,7 @@ const EXTRA_TABLERO = { orden: 'reciente', limit: TOPE_TABLERO, offset: 0 };
 const RUTA_PEDIDOS = '/dashboard/compras/pedidos';
 /** El contenedor de los Hubs y de las listas del bloque (T7 a T15): pb-24 deja libre la esquina del botón de la IA. */
 const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
-const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700';
+const FOCO_VISIBLE = FOCOS.blue;
 
 /** La flecha bonita de los labels de las etapas: 'Proveedor -> Casillero' -> 'Proveedor → Casillero'. */
 const conFlecha = (texto: string) => texto.trim().replace(/\s*->\s*/g, ' → ');

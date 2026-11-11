@@ -691,9 +691,16 @@ console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuent
   // r1 (C1, M10): el foco es un outline, distinto del anillo de la selección.
   // El color va también en reposo: transition-colors anima outline-color, y sin él el outline aparecería negro y se
   // iría volviendo índigo.
-  const FOCO_R1 = "const FOCO = 'outline-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';";
-  assert.ok(pasos.includes(FOCO_R1), 'PasosFlujo: FOCO');
-  assert.ok(codigo(fuentes['BannerFlujo.tsx']).includes(FOCO_R1), 'BannerFlujo: el mismo FOCO');
+  // B4 T24 (FINAL-m25, D27): ese FOCO es ahora el token común de design-system.ts (una sola copia), con el mismo texto.
+  const ds = readFileSync(new URL('../src/lib/design-system.ts', import.meta.url), 'utf8');
+  assert.ok(ds.includes("  indigo:  'outline-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700',"), 'FOCOS.indigo');
+  assert.match(ds, /^export const FOCO = FOCOS\.indigo;\r?$/m, 'FOCO es FOCOS.indigo');
+  for (const nombre of ['PasosFlujo.tsx', 'BannerFlujo.tsx']) {
+    const f = fuentes[nombre];
+    assert.ok(!/^const FOCO = /m.test(f), `${nombre}: sin su copia de FOCO`);
+    assert.match(f, /^import \{ FOCO \} from '@\/lib\/design-system';\r?$/m, `${nombre}: importa FOCO`);
+    assert.ok(codigo(f).includes('${FOCO}'), `${nombre}: usa FOCO`);
+  }
   // r1 (M9 y M6): <nav> solo si hay enlaces; si no, un <ol aria-label>. El contenedor lleva w-full.
   assert.match(pasos, /if \(conNav\) \{\s*return \(\s*<nav aria-label=\{etiqueta\} className="w-full min-w-0">\s*<ol className=\{clases\}>\{children\}<\/ol>/);
   assert.match(pasos, /<div className="w-full min-w-0">\s*<ol aria-label=\{etiqueta\} className=\{clases\}>\{children\}<\/ol>/);

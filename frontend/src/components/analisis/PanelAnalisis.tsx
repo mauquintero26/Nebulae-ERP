@@ -1,5 +1,6 @@
 'use client';
 
+import { FOCO } from '@/lib/design-system';
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Lock, RefreshCw, Search } from 'lucide-react';
 import type { AccentColor } from '@/components/ui/colors';
@@ -104,7 +105,6 @@ export type PropsPanelAnalisis = {
 };
 
 const G = GRILLA_ANALISIS;
-const FOCO = 'outline-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
 const PILDORA = `inline-flex items-center whitespace-nowrap rounded-full border px-3 py-1 text-xs font-bold transition-colors ${FOCO}`;
 const PILDORA_ACTIVA = 'border-slate-900 bg-slate-900 text-white';
 const PILDORA_INACTIVA = 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50';

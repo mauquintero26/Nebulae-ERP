@@ -611,7 +611,7 @@ export default function EntregasPage() {
               <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-2.5">Bodega de Despacho</h4>
               <select aria-label="Bodega de despacho" value={warehouseId} disabled={!bodegas.filas}
                 onChange={(e) => setBodegaElegida(e.target.value)}
-                className={`w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none disabled:text-slate-500 ${FOCOS.indigo}`}>
+                className={`w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm disabled:text-slate-500 ${FOCOS.indigo}`}>
                 <option value="">{bodegas.filas ? 'Seleccionar...' : (bodegas.error ? 'No se pudieron cargar' : 'Cargando bodegas…')}</option>
                 {(bodegas.filas ?? []).map((w) => <option key={w.id} value={String(w.id)}>{w.name}</option>)}
               </select>

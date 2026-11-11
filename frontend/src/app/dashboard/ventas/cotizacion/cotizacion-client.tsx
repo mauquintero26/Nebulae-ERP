@@ -1,5 +1,6 @@
 'use client';
 
+import { FOCOS } from '@/lib/design-system';
 import { useState, useEffect, useCallback, useRef, useMemo, useId, createContext, useContext, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useSearchParams, useRouter } from 'next/navigation';
@@ -869,7 +870,7 @@ const EXTRA_TABLERO = { limit: 0 };
 // Los chips: los tintes del tablero (CLASE_CHIP de components/ui/Kanban.tsx), el chip estándar de las tablas del B4 (m12
 // de T8): la misma marca sale igual en Lista y en Kanban. Sin tamaño de letra: cada uso pone el suyo.
 const CHIP = 'inline-block max-w-full truncate rounded-full border px-1.5 py-0.5 font-bold leading-tight';
-const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
+const FOCO_VISIBLE = FOCOS.indigo;
 // D41: el tono opaco filaAlerta para la fila atrasada (la resolución del servidor, R8) y la marca rosa a la izquierda del Hub.
 const MARCA_ATRASO = '[&>td:first-child]:shadow-[inset_3px_0_0_var(--color-rose-500)]';
 const claseDeFila = (cot: FilaCOT) => (cot.resolucion === 'ATRASADO' ? `${TABLE.filaAlerta} ${MARCA_ATRASO}` : null);

@@ -1,5 +1,6 @@
 'use client';
 
+import { FOCOS } from '@/lib/design-system';
 import {
   useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, forwardRef, useImperativeHandle, createContext, useContext,
 } from 'react';
@@ -561,7 +562,7 @@ const VACIO_PAPELERA = (
 // Los chips: los tintes del tablero (CLASE_CHIP de components/ui/Kanban.tsx), así la misma marca sale igual en Lista y en
 // Kanban (como el Hub, T7 r1 m7a). Sin tamaño de letra: cada uso pone el suyo.
 const CHIP = 'inline-block max-w-full truncate rounded-full border px-1.5 py-0.5 font-bold leading-tight';
-const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
+const FOCO_VISIBLE = FOCOS.indigo;
 // D41: el tono opaco filaAlerta para la fila atrasada (la resolución del servidor, R8; antes un rosa translúcido solo en
 // las Nuevas sin atender) y la marca rosa a la izquierda del Hub (una sombra en la primera celda, no un tinte).
 const MARCA_ATRASO = '[&>td:first-child]:shadow-[inset_3px_0_0_var(--color-rose-500)]';
