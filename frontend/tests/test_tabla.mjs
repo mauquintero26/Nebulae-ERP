@@ -3053,7 +3053,18 @@ console.log('--- TEST T24-d (B4 T24, FINAL-m21): la pestaña Pagos de E-Commerce
   assert.match(c, /\{activeTab === 'Pagos' && acceso\.pagosConfig && \(/);
   // Los GET solo con permiso, con su error guardado (nada de .catch(() => {})) y la lectura de lecturaDeFuente.
   assert.match(c, /if \(activeTab !== 'Pagos' \|\| !acceso\.pagosConfig\) return undefined;/);
-  assert.ok(!/config'\)\.then\([^\n]*\.catch\(\(\) => \{\}\)/.test(c), 'sin tragarse el error del GET');
+  // r1 (C6): el efecto entero, en orden: la guarda, los dos GET con su .then (error: null) y su .catch que GUARDA el error (nada de
+  // tragarlo), y la limpieza que aborta.
+  const ini = c.indexOf("if (activeTab !== 'Pagos' || !acceso.pagosConfig) return undefined;");
+  const fin = c.indexOf('}, [activeTab, acceso.pagosConfig, vueltaConfig]);');
+  assert.ok(ini > 0 && fin > ini, 'el efecto de la configuración');
+  const efecto = c.slice(ini, fin);
+  for (const [fuente, set] of [['pagos', 'setCargaPagos'], ['envios', 'setCargaEnvios']]) {
+    assert.match(efecto, new RegExp(`apiFetch\\('/ecommerce/${fuente}/config', \\{ signal: control\\.signal \\}\\)\\s*\\.then\\([^]*?${set}\\(\\{ vuelta: vueltaConfig, datos: d\\?\\.data \\?\\? null, error: null \\}\\);\\s*\\}\\)\\s*\\.catch\\(\\(err: unknown\\) => \\{ if \\(!control\\.signal\\.aborted\\) ${set}\\(\\{ vuelta: vueltaConfig, datos: null, error: err \\}\\); \\}\\);`), fuente);
+  }
+  assert.ok(efecto.indexOf("'/ecommerce/pagos/config'") < efecto.indexOf("'/ecommerce/envios/config'"));
+  assert.match(efecto, /return \(\) => control\.abort\(\);\s*$/);
+  assert.ok(!/\.catch\(\(\) => \{\}\)/.test(efecto), 'sin tragarse el error del GET');
   assert.match(c, /const lecturaPagos = lecturaDeFuente\(cargaPagos, vueltaConfig\);/);
   assert.match(c, /const lecturaEnvios = lecturaDeFuente\(cargaEnvios, vueltaConfig\);/);
   // Si falla, se dice (AvisoFuente) y no hay formulario ni «Guardar»; mientras carga, tampoco (fuenteGuardable, test_kpis.mjs).
