@@ -6,6 +6,12 @@ cual. La unica diferencia permitida es la del ruling de r1: a BASE se le quita c
 ecommerce_products pasa los filtros pero quedo fuera del LIMIT de ecommerce_products. Despues de crear los datos se
 actualiza un SKU (su fila fisica pasa al final), para que el orden fisico deje de coincidir con el orden por id.
 
+B4 T24 (FINAL-C1): sin sesion ERP la lista solo trae los publicados. La tienda llama sin sesion con publicado=true, asi que su
+respuesta sigue siendo la de BASE; sin sesion y sin publicado, es la de BASE con publicado=true (y con publicado=false, nada).
+Con sesion ERP (la pantalla de E-Commerce), la de BASE tal cual. Se comparan las dos.
+B4 T24 (B44): la grilla completa (4 categorias x 3 publicado x 7 limits) va solo con search=t.s; sin busqueda (que recorre
+el catalogo entero de la base compartida, dos veces por llamada) solo con los limits 0, 3 y 50.
+
 Se corre SOLO con el runner de ROLLBACK (python tests/rollback_runner.py test_paridad_catalogo_heredado).
 """
 from sqlalchemy import text
@@ -106,52 +112,119 @@ def _base_con_ruling(db, search, categoria, publicado, limit):
 
 
 def _desordenar(db, t):
-    """Pasa al final del heap el SKU de menor id: el orden fisico (el de BASE, sin ORDER BY) deja de ser el orden por id."""
+    """Pasa al final del heap el SKU de menor id: el orden fisico (el de BASE, sin ORDER BY) deja de ser el orden por id.
+    B4 T24 (B42): comprueba que de verdad quedo desordenado (la consulta de BASE con la busqueda trae primero p2): si el
+    UPDATE dejara el orden fisico igual al orden por id, estas pruebas dejarian de distinguir un «ORDER BY ps.id»."""
     db.execute(text("UPDATE product_skus SET cost_price = cost_price + 0 WHERE id = :i"), {"i": t.p1.id})
     db.execute(text("UPDATE product_skus SET cost_price = cost_price + 0 WHERE id = :i"), {"i": t.p2.id})
     db.execute(text("UPDATE product_skus SET cost_price = cost_price + 0 WHERE id = :i"), {"i": t.p1.id})
     db.commit()
+    sku_q = db.query(ProductSKU).join(Product, ProductSKU.product_id == Product.id)   # la consulta de BASE
+    orden = [k.id for k in sku_q.filter(ProductSKU.sku.ilike(f"%{t.s}%") | Product.name.ilike(f"%{t.s}%")).all()]
+    assert orden == [t.p2.id, t.p1.id], (
+        f"_desordenar no desordeno el heap (BASE devuelve {orden}, se esperaba [p2={t.p2.id}, p1={t.p1.id}]): la prueba ya "
+        "no distingue el orden fisico del orden por id")
 
 
-def test_la_tienda_es_igual_a_base_en_orden_exacto(app_client, db, warehouse, monkeypatch):
-    """publicado=true&limit=50 (store/catalogo y store/categoria) y limit=3, antes y despues de desordenar el heap."""
+class _Esperado:
+    """Lo que debe responder la rama heredada sin offset ni orden: BASE con el ruling de r1 (_base_con_ruling); sin sesion
+    ERP, con publicado=true (FINAL-C1), y nada si se pidio publicado=false. B44: cada BASE se calcula UNA vez (cada
+    consulta a la base compartida tarda ~0,1 s y BASE hace varias por SKU) y la llamada sin sesion reusa la de
+    publicado=true."""
+
+    def __init__(self, db):
+        self.db = db
+        self.ya = {}
+
+    def __call__(self, search, categoria, publicado, limit, con_sesion):
+        if not con_sesion:
+            if publicado is False:
+                return {"status": "success", "total": 0, "data": []}
+            publicado = True
+        clave = (search, categoria, publicado, limit)
+        if clave not in self.ya:
+            self.ya[clave] = _base_con_ruling(self.db, search, categoria, publicado, limit)
+        return self.ya[clave]
+
+
+def _params(search, categoria, publicado, limit):
+    params = {}
+    if search is not None:
+        params["search"] = search
+    if categoria is not None:
+        params["categoria"] = categoria
+    if publicado is not None:
+        params["publicado"] = "true" if publicado else "false"
+    if limit is not None:
+        params["limit"] = limit
+    return params
+
+
+def test_la_tienda_es_igual_a_base_en_orden_exacto(app_client, db, warehouse, monkeypatch, admin_token):
+    """publicado=true&limit=50 (store/catalogo y store/categoria) y limit=3, antes y despues de desordenar el heap; sin sesion
+    (la tienda) y con sesion ERP."""
     monkeypatch.setenv("CATALOGO_LECTURA", "legacy")
     t = _Catalogo(db, warehouse)
     for fase in ("heap en orden", "heap desordenado"):
         if fase == "heap desordenado":
             _desordenar(db, t)
+        esperado = _Esperado(db)   # el heap cambio: BASE se calcula otra vez
         for params in ({"publicado": "true", "limit": 50}, {"publicado": "true", "limit": 3}, {"limit": 3}, {"limit": 500}):
-            nuevo = _ok(app_client, CATALOGO, **params)
-            esperado = _base_con_ruling(db, None, None, True if params.get("publicado") else None, params["limit"])
-            assert nuevo == esperado, (fase, params, nuevo["total"], esperado["total"],
+            for token in (None, admin_token):
+                if token is None and params["limit"] == 500:
+                    continue  # B44: sin sesion basta con las llamadas de la tienda
+                nuevo = _ok(app_client, CATALOGO, token, **params)
+                base = esperado(None, None, True if params.get("publicado") else None, params["limit"],
+                                con_sesion=token is not None)
+                assert nuevo == base, (fase, params, token is not None, nuevo["total"], base["total"],
                                        [(x["id"], x["sku"]) for x in nuevo["data"]][:8],
-                                       [(x["id"], x["sku"]) for x in esperado["data"]][:8])
+                                       [(x["id"], x["sku"]) for x in base["data"]][:8])
 
 
-def test_toda_diferencia_con_base_es_la_del_ruling(app_client, db, warehouse, monkeypatch):
-    """Con y sin busqueda, categorias, publicado y limits: lo nuevo es EXACTAMENTE BASE menos los SKU del ERP cuyo espejo
-    pasa los filtros. Con el heap desordenado."""
+def test_toda_diferencia_con_base_es_la_del_ruling(app_client, db, warehouse, monkeypatch, admin_token):
+    """Con y sin busqueda, categorias, publicado y limits: lo nuevo es EXACTAMENTE BASE menos los SKU del ERP cuyo espejo pasa
+    los filtros. Con el heap desordenado.
+    - Con sesion ERP (B44): la grilla completa (4 categorias x 3 publicado x 7 limits) con search=t.s; sin busqueda (que
+      recorre el catalogo entero de la base compartida) solo los limits 0, 3 y 50.
+    - Sin sesion (FINAL-C1): con search=t.s, publicado ausente o false (con true es la misma llamada que con sesion), las 4
+      categorias y los limits ausente, 0, 1, 3 y 50: BASE con publicado=true, o nada con publicado=false."""
     monkeypatch.setenv("CATALOGO_LECTURA", "legacy")
     t = _Catalogo(db, warehouse)
     _desordenar(db, t)
-    n, inexplicadas = 0, []
-    for search in (t.s, None):
-        for categoria in (None, f"Cat-A-{t.s}", f"Cat-B-{t.s}", "cat-b"):
-            for publicado in (None, True, False):
-                for limit in (None, 0, 1, 2, 3, 50, 500):
-                    params = {}
-                    if search is not None:
-                        params["search"] = search
-                    if categoria is not None:
-                        params["categoria"] = categoria
-                    if publicado is not None:
-                        params["publicado"] = "true" if publicado else "false"
-                    if limit is not None:
-                        params["limit"] = limit
-                    nuevo = _ok(app_client, CATALOGO, **params)
-                    esperado = _base_con_ruling(db, search, categoria, publicado, 100 if limit is None else limit)
-                    n += 1
-                    if nuevo != esperado:
-                        inexplicadas.append((params, nuevo["total"], esperado["total"]))
-    assert n == 168
+    esperado = _Esperado(db)
+    categorias = (None, f"Cat-A-{t.s}", f"Cat-B-{t.s}", "cat-b")
+    casos = [(search, categoria, publicado, limit, admin_token)
+             for search, limits in ((t.s, (None, 0, 1, 2, 3, 50, 500)), (None, (0, 3, 50)))
+             for categoria in categorias for publicado in (None, True, False) for limit in limits]
+    casos += [(t.s, categoria, publicado, limit, None)
+              for categoria in categorias for publicado in (None, False) for limit in (None, 0, 1, 3, 50)]
+    assert len(casos) == 4 * 3 * 7 + 4 * 3 * 3 + 4 * 2 * 5
+    inexplicadas = []
+    for search, categoria, publicado, limit, token in casos:
+        params = _params(search, categoria, publicado, limit)
+        nuevo = _ok(app_client, CATALOGO, token, **params)
+        base = esperado(search, categoria, publicado, 100 if limit is None else limit, con_sesion=token is not None)
+        if nuevo != base:
+            inexplicadas.append((params, token is not None, nuevo["total"], base["total"]))
     assert not inexplicadas, inexplicadas[:10]
+
+
+def test_empates_de_nombre_en_el_orden_de_base(app_client, db, warehouse, monkeypatch, admin_token):
+    """B4 T24 (B41): BASE ordena las filas de ecommerce_products SOLO por nombre (ORDER BY nombre LIMIT): con nombres
+    repetidos el orden de los empates es el que da PostgreSQL. Tres filas con el mismo nombre y la primera actualizada (pasa
+    al final del heap): con limit 1, 2 y 50, con sesion y sin ella, lo nuevo es BASE (antes, con el desempate por id, no)."""
+    import uuid
+    monkeypatch.setenv("CATALOGO_LECTURA", "legacy")
+    s = uuid.uuid4().hex[:8]
+    ids = [db.execute(text("INSERT INTO ecommerce_products (nombre, sku, publicado_web) VALUES (:n, :s, TRUE) RETURNING id"),
+                      {"n": f"Zz-{s}-Empate", "s": f"EMP-{s}-{i}"}).scalar() for i in range(3)]
+    db.commit()
+    db.execute(text("UPDATE ecommerce_products SET precio_venta = precio_venta WHERE id = :i"), {"i": ids[0]})
+    db.commit()
+    esperado = _Esperado(db)
+    for limit in (1, 2, 50):
+        for token in (admin_token, None):
+            nuevo = _ok(app_client, CATALOGO, token, search=s, publicado="true", limit=limit)
+            base = esperado(s, None, True, limit, con_sesion=token is not None)
+            assert nuevo == base, (limit, token is not None, [x["id"] for x in nuevo["data"]],
+                                   [x["id"] for x in base["data"]], ids)

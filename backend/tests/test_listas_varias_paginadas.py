@@ -323,6 +323,9 @@ def test_pedidos_web_q_search_claves_y_errores(app_client, db, admin_token, vend
 
 
 # ═══ 3) E-Commerce: GET /ecommerce/catalogo (publico) ═══════════════════════════════════════════════════════════════
+# B4 T24 (FINAL-C1): sin sesion ERP la lista solo trae los publicados. Estas pruebas fijan lo de hoy, que sigue igual CON
+# sesion ERP (la pantalla de E-Commerce lista con token), asi que llaman con admin_token; lo anonimo esta en
+# test_catalogo_publico_anonimo.py.
 
 CATALOGO = "/api/v1/ecommerce/catalogo"
 CLAVES_CATALOGO_CANONICO = ["id", "nombre", "descripcion", "sku", "precio_venta", "precio_comparacion", "descuento_pct",
@@ -391,7 +394,7 @@ def _ramas(monkeypatch):
         yield rama
 
 
-def test_catalogo_orden_exacto_en_las_dos_ramas(app_client, db, warehouse, monkeypatch):
+def test_catalogo_orden_exacto_en_las_dos_ramas(app_client, db, warehouse, monkeypatch, admin_token):
     t = _Catalogo(db, warehouse)
     n = t.nombres
     esperado = {
@@ -407,35 +410,35 @@ def test_catalogo_orden_exacto_en_las_dos_ramas(app_client, db, warehouse, monke
     }
     for rama in _ramas(monkeypatch):
         for orden, nombres in esperado.items():
-            cuerpo = _ok(app_client, CATALOGO, search=t.s, orden=orden)
+            cuerpo = _ok(app_client, CATALOGO, admin_token, search=t.s, orden=orden)
             assert _nombres(cuerpo) == nombres, (rama, orden, _nombres(cuerpo))
             assert cuerpo["total"] == 4, (rama, orden)
         # la cifra que se ordena es la que se muestra
-        por_nombre = {x["nombre"]: x for x in _ok(app_client, CATALOGO, search=t.s)["data"]}
+        por_nombre = {x["nombre"]: x for x in _ok(app_client, CATALOGO, admin_token, search=t.s)["data"]}
         assert por_nombre[n["nevera"]]["stock_disponible"] == 7.0, rama
         assert por_nombre[n["auto"]]["stock_disponible"] == 0.0 and por_nombre[n["h1"]]["stock_disponible"] == 5.0, rama
 
 
-def test_catalogo_paginacion_total_y_claves(app_client, db, warehouse, monkeypatch):
+def test_catalogo_paginacion_total_y_claves(app_client, db, warehouse, monkeypatch, admin_token):
     t = _Catalogo(db, warehouse)
     for rama in _ramas(monkeypatch):
-        completo = _nombres(_ok(app_client, CATALOGO, search=t.s, orden="precio"))
+        completo = _nombres(_ok(app_client, CATALOGO, admin_token, search=t.s, orden="precio"))
         assert len(completo) == 4 and len(set(completo)) == 4, rama      # total = canonicos + huerfanos, sin espejo doble
         vistos = []
         for offset in range(4):
-            pag = _ok(app_client, CATALOGO, search=t.s, orden="precio", limit=1, offset=offset)
+            pag = _ok(app_client, CATALOGO, admin_token, search=t.s, orden="precio", limit=1, offset=offset)
             assert pag["total"] == 4 and len(pag["data"]) == 1, (rama, offset)
             vistos += _nombres(pag)
         assert vistos == completo, rama                                    # dos paginas de tamano 1 no repiten ninguna
-        pag2 = _ok(app_client, CATALOGO, search=t.s, orden="precio", limit=2, offset=1)
+        pag2 = _ok(app_client, CATALOGO, admin_token, search=t.s, orden="precio", limit=2, offset=1)
         assert _nombres(pag2) == completo[1:3] and pag2["total"] == 4, rama
-        assert _ok(app_client, CATALOGO, search=t.s, orden="precio", offset=4)["data"] == [], rama
-        cero = _ok(app_client, CATALOGO, search=t.s, limit=0, offset=0)
+        assert _ok(app_client, CATALOGO, admin_token, search=t.s, orden="precio", offset=4)["data"] == [], rama
+        cero = _ok(app_client, CATALOGO, admin_token, search=t.s, limit=0, offset=0)
         assert cero["data"] == [] and cero["total"] == 4, rama
         # q y search dan el mismo total
-        assert _ok(app_client, CATALOGO, q=t.s)["total"] == _ok(app_client, CATALOGO, search=t.s)["total"] == 4, rama
+        assert _ok(app_client, CATALOGO, admin_token, q=t.s)["total"] == _ok(app_client, CATALOGO, admin_token, search=t.s)["total"] == 4, rama
         # H16: las claves de cada fila no cambian, ni su orden, ni la de la respuesta
-        cuerpo = _ok(app_client, CATALOGO, search=t.s)
+        cuerpo = _ok(app_client, CATALOGO, admin_token, search=t.s)
         assert list(cuerpo) == ["status", "total", "data"], rama
         for fila in cuerpo["data"]:
             assert list(fila) == CLAVES_CATALOGO_CANONICO, (rama, list(fila))
@@ -445,15 +448,15 @@ def test_catalogo_paginacion_total_y_claves(app_client, db, warehouse, monkeypat
             assert por_nombre[t.nombres["h1"]]["id"] == -t.h1                  # el huerfano canonico lleva el id negativo
 
 
-def test_catalogo_orden_de_hoy_sin_parametros_nuevos(app_client, db, warehouse, monkeypatch):
+def test_catalogo_orden_de_hoy_sin_parametros_nuevos(app_client, db, warehouse, monkeypatch, admin_token):
     """Sin `orden`, el orden de hoy: en la rama heredada primero los de ecommerce_products por nombre y luego los SKU
     canonicos que no estan alli; en la canonica primero los SKU por nombre y luego los huerfanos por nombre."""
     t = _Catalogo(db, warehouse)
     n = t.nombres
     monkeypatch.setenv("CATALOGO_LECTURA", "legacy")
-    assert _nombres(_ok(app_client, CATALOGO, search=t.s)) == [n["h1"], n["h2"], n["nevera"], n["auto"]]
+    assert _nombres(_ok(app_client, CATALOGO, admin_token, search=t.s)) == [n["h1"], n["h2"], n["nevera"], n["auto"]]
     monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
-    assert _nombres(_ok(app_client, CATALOGO, search=t.s)) == [n["auto"], n["nevera"], n["h1"], n["h2"]]
+    assert _nombres(_ok(app_client, CATALOGO, admin_token, search=t.s)) == [n["auto"], n["nevera"], n["h1"], n["h2"]]
 
 
 def test_error_del_codigo_nuevo_del_catalogo_heredado_no_se_disfraza(app_client, db, warehouse, monkeypatch):
@@ -470,36 +473,76 @@ def test_error_del_codigo_nuevo_del_catalogo_heredado_no_se_disfraza(app_client,
     assert "error" not in resp.text or "fallo del codigo nuevo" not in resp.text
 
 
-def test_catalogo_filtros_de_hoy_y_errores(app_client, db, warehouse, monkeypatch):
+def test_un_error_del_codigo_de_base_responde_como_base(app_client, db, warehouse, monkeypatch):
+    """B4 T24 (B43): el try de BASE en la rama heredada sin offset ni orden: si falla cualquiera de las funciones que son
+    código de BASE (las filas de ecommerce_products, su serialización, los SKU del ERP o la serialización de estos), la
+    respuesta es la de BASE: 200 {status: success, total: 0, data: [], error}. (Lo nuevo, _skus_con_espejo_que_pasa, da
+    500: test_error_del_codigo_nuevo_del_catalogo_heredado_no_se_disfraza.)"""
+    from app.api.v1 import ecommerce
+    t = _Catalogo(db, warehouse)
+    monkeypatch.setenv("CATALOGO_LECTURA", "legacy")
+    for nombre in ("_filas_heredadas_de_hoy", "_serialize_catalogo_item_heredado", "_skus_heredados_de_base",
+                   "_serialize_catalogo_item_sku_heredado"):
+        real = getattr(ecommerce, nombre)
+
+        def roto(*args, **kwargs):
+            raise RuntimeError(f"fallo de BASE en {nombre}")
+        monkeypatch.setattr(ecommerce, nombre, roto)
+        resp = app_client.get(CATALOGO, params={"search": t.s})
+        assert (resp.status_code, resp.json()) == (200, {"status": "success", "total": 0, "data": [],
+                                                         "error": f"fallo de BASE en {nombre}"}), nombre
+        monkeypatch.setattr(ecommerce, nombre, real)
+
+
+def test_catalogo_filtros_de_hoy_y_errores(app_client, db, warehouse, monkeypatch, admin_token):
     t = _Catalogo(db, warehouse)
     n = t.nombres
     monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
-    assert _nombres(_ok(app_client, CATALOGO, search=t.s, categoria=f"Cat-B-{t.s}")) == [n["h1"]]
-    assert _nombres(_ok(app_client, CATALOGO, search=t.s, categoria=f"Cat-A-{t.s}")) == [n["nevera"]]
-    assert _nombres(_ok(app_client, CATALOGO, search=t.s, publicado="false")) == [n["h2"]]
-    assert sorted(_nombres(_ok(app_client, CATALOGO, search=t.s, publicado="true"))) == sorted(
+    assert _nombres(_ok(app_client, CATALOGO, admin_token, search=t.s, categoria=f"Cat-B-{t.s}")) == [n["h1"]]
+    assert _nombres(_ok(app_client, CATALOGO, admin_token, search=t.s, categoria=f"Cat-A-{t.s}")) == [n["nevera"]]
+    assert _nombres(_ok(app_client, CATALOGO, admin_token, search=t.s, publicado="false")) == [n["h2"]]
+    assert sorted(_nombres(_ok(app_client, CATALOGO, admin_token, search=t.s, publicado="true"))) == sorted(
         [n["auto"], n["nevera"], n["h1"]])
     monkeypatch.setenv("CATALOGO_LECTURA", "legacy")
     # Rama heredada SIN offset ni orden (como llama hoy la tienda publica): la respuesta es la de BASE. Las filas de
-    # ecommerce_products con sus filtros y, detras, los SKU del ERP (el LIMIT primero, ordenados por id, que es el orden
-    # fisico de BASE) cuyo espejo NO pasa los mismos filtros (un SKU cuyo espejo quedo filtrado sale igual como fila del
-    # ERP); el que tiene espejo que pasa, no se repite. La nevera (id menor) va antes que el auto aunque su nombre sea
-    # posterior: el orden NO es por nombre. (T20 r1 I4, r2)
-    assert _nombres(_ok(app_client, CATALOGO, search=t.s, categoria=f"Cat-B-{t.s}")) == [n["h1"], n["nevera"], n["auto"]]
-    cuerpo = _ok(app_client, CATALOGO, search=t.s, publicado="false")
-    assert _nombres(cuerpo) == [n["h2"], n["nevera"], n["auto"]] and cuerpo["total"] == 3   # el espejo de la nevera esta publicado
-    cuerpo = _ok(app_client, CATALOGO, search=t.s, publicado="true", limit=50)
-    assert _nombres(cuerpo) == [n["h1"], n["nevera"], n["auto"]] and cuerpo["total"] == 3   # la nevera una sola vez
-    cuerpo = _ok(app_client, CATALOGO, search=t.s)
-    assert _nombres(cuerpo) == [n["h1"], n["h2"], n["nevera"], n["auto"]] and cuerpo["total"] == 4
-    # cada fuente con su LIMIT, y el LIMIT de los SKU ANTES del NOT EXISTS (como BASE): con limit=1 el unico SKU es la
-    # nevera (id menor), que se descarta porque su espejo pasa los filtros; el auto no entra a ocupar su lugar. (La unica
-    # diferencia con BASE, por el ruling de r1: BASE la habria devuelto porque su espejo quedo fuera del LIMIT de
-    # ecommerce_products.)
-    cuerpo = _ok(app_client, CATALOGO, search=t.s, limit=1)
-    assert _nombres(cuerpo) == [n["h1"]] and cuerpo["total"] == 3
+    # ecommerce_products con sus filtros (por nombre) y, detras, los SKU del ERP (el LIMIT primero, en el orden que da
+    # PostgreSQL sin ORDER BY, como BASE) cuyo espejo NO pasa los mismos filtros (un SKU cuyo espejo quedo filtrado sale
+    # igual como fila del ERP); el que tiene espejo que pasa, no se repite. (T20 r1 I4, r2)
+    # B4 T24 (B41): el orden de los SKU del ERP NO esta definido (el orden fisico del heap, que cambia con el espacio libre
+    # de la base compartida): antes se afirmaba «la nevera antes que el auto» y la prueba fallaba a veces. Ahora la
+    # respuesta se compara con BASE (_base_con_ruling, que corre la misma consulta) y los nombres de los SKU, sin orden.
+    from tests.test_paridad_catalogo_heredado import _base_con_ruling
+
+    def como_base(categoria=None, publicado=None, limit=100):
+        params = {"search": t.s, "limit": limit}
+        if categoria is not None:
+            params["categoria"] = categoria
+        if publicado is not None:
+            params["publicado"] = "true" if publicado else "false"
+        cuerpo = _ok(app_client, CATALOGO, admin_token, **params)
+        assert cuerpo == _base_con_ruling(db, t.s, categoria, publicado, limit), (categoria, publicado, limit)
+        return cuerpo
+
+    def partes(cuerpo, n_ep):
+        nombres = _nombres(cuerpo)
+        return nombres[:n_ep], sorted(nombres[n_ep:])
+
+    cuerpo = como_base(categoria=f"Cat-B-{t.s}")
+    assert partes(cuerpo, 1) == ([n["h1"]], sorted([n["nevera"], n["auto"]]))
+    cuerpo = como_base(publicado=False)
+    assert partes(cuerpo, 1) == ([n["h2"]], sorted([n["nevera"], n["auto"]])) and cuerpo["total"] == 3   # el espejo de la nevera esta publicado
+    cuerpo = como_base(publicado=True, limit=50)
+    assert partes(cuerpo, 2) == ([n["h1"], n["nevera"]], [n["auto"]]) and cuerpo["total"] == 3   # la nevera una sola vez
+    cuerpo = como_base()
+    assert partes(cuerpo, 3) == ([n["h1"], n["h2"], n["nevera"]], [n["auto"]]) and cuerpo["total"] == 4
+    # cada fuente con su LIMIT, y el LIMIT de los SKU ANTES del NOT EXISTS (como BASE): con limit=1 el unico SKU es el
+    # primero que de PostgreSQL; si es la nevera se descarta porque su espejo pasa los filtros y el auto no entra a ocupar
+    # su lugar. (La unica diferencia con BASE, por el ruling de r1: BASE la habria devuelto porque su espejo quedo fuera
+    # del LIMIT de ecommerce_products.)
+    cuerpo = como_base(limit=1)
+    assert _nombres(cuerpo)[0] == n["h1"] and _nombres(cuerpo)[1:] in ([], [n["auto"]])
     # Rama heredada CON offset u orden: pagina exacto, una fila por producto (el espejo filtrado no reaparece como SKU).
-    cuerpo = _ok(app_client, CATALOGO, search=t.s, publicado="false", offset=0)
+    cuerpo = _ok(app_client, CATALOGO, admin_token, search=t.s, publicado="false", offset=0)
     assert _nombres(cuerpo) == [n["h2"], n["auto"]] and cuerpo["total"] == 2
     for rama in _ramas(monkeypatch):
         casos = [
@@ -513,7 +556,7 @@ def test_catalogo_filtros_de_hoy_y_errores(app_client, db, warehouse, monkeypatc
             assert _error(app_client, CATALOGO, None, **params) == texto, (rama, params)
         for params in ({"limit": 501}, {"limit": -1}, {"offset": -1}, {"offset": 1_000_001}, {"limit": "x"}):
             assert _obtener(app_client, CATALOGO, None, **params).status_code == 400, (rama, params)
-        assert _ok(app_client, CATALOGO, limit=500, search=t.s)["total"] == 4, rama
+        assert _ok(app_client, CATALOGO, admin_token, limit=500, search=t.s)["total"] == 4, rama
 
 
 # ═══ 4) Finanzas: GET /finance/expenses ═════════════════════════════════════════════════════════════════════════════

@@ -1,5 +1,6 @@
 from app.models.users import User
-from app.api.dependencies import require_roles, ROLE_ADMIN, ROLE_FINANZAS, ROLE_ASESOR, ROLE_BODEGA, ALL_ERP_ROLES
+from app.api.dependencies import (get_optional_current_user, require_roles, ROLE_ADMIN, ROLE_FINANZAS, ROLE_ASESOR,
+                                  ROLE_BODEGA, ALL_ERP_ROLES)
 import hashlib
 
 from decimal import Decimal
@@ -325,6 +326,9 @@ def _orden_del_catalogo(orden) -> str:
 
 
 def _stock_vendible_sql(sku_id: str) -> str:
+    """El stock vendible de NEBULAE en SQL (para ordenar y paginar el catálogo): saldo del propietario menos sus reservas
+    ACTIVE, mínimo 0. B4 T24 (B46): es la MISMA regla de _get_real_sellable_stock (RP56 manda tenerla en los dos lados):
+    si se cambia una, hay que cambiar la otra."""
     return (f"GREATEST(COALESCE((SELECT SUM(b.quantity) FROM inventory_owner_balances b "
             f"WHERE b.sku_id = {sku_id} AND b.owner = 'NEBULAE'), 0) - "
             f"COALESCE((SELECT SUM(r.quantity_reserved) FROM inventory_reservations r "
@@ -455,7 +459,43 @@ def _serialize_catalogo_item_detalle_canonico(db: Session, canon_sku: ProductSKU
     return base
 
 
-def _get_catalogo_product_canonico(db: Session, product_id: int) -> dict:
+# B4 T24 (FINAL-C1): el detalle público (la tienda lo lee sin token) no le muestra a un visitante sin sesión ERP lo que es
+# solo del ERP. total_vendido tampoco: la tienda no lo usa, y su cálculo leía los pedidos WEB.
+_CLAVES_SOLO_DEL_ERP = ("notas_internas", "created_by", "codigo_aduana")
+
+
+def _total_vendido_web(db: Session, sku, nombre):
+    """Las unidades vendidas por la tienda de un producto, con la regla de hoy pero en UNA consulta agregada (antes se
+    cargaban todos los pedidos WEB con .all() y se sumaba en Python): pedidos WEB no cancelados; cada línea cuenta si su sku
+    es el del producto (también si los dos faltan, como hoy) o si su nombre es el mismo sin mayúsculas; vale `qty` o, si la
+    línea no trae esa clave, `cantidad` (0 si tampoco). Un pedido sin lista de productos no suma."""
+    valor = db.execute(text(
+        "SELECT SUM(CASE WHEN jsonb_typeof(e.v) = 'object' AND jsonb_exists(e.v, 'qty') THEN (e.v->>'qty')::numeric "
+        "ELSE COALESCE((e.v->>'cantidad')::numeric, 0) END) "
+        "FROM sale_orders so CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(so.productos::jsonb) = 'array' "
+        "THEN so.productos::jsonb ELSE '[]'::jsonb END) AS e(v) "
+        "WHERE so.canal_venta = 'WEB' AND so.estado != 'CANCELADO' "
+        "AND ((e.v->>'sku') IS NOT DISTINCT FROM :sku OR lower(COALESCE(e.v->>'nombre', '')) = lower(:nombre))"),
+        {"sku": sku, "nombre": nombre or ""}).scalar()
+    if valor is None:
+        return 0
+    return int(valor) if valor == int(valor) else float(valor)
+
+
+def _detalle_segun_sesion(db: Session, data: dict, con_sesion: bool) -> dict:
+    """FINAL-C1: con sesión ERP, el detalle de hoy más total_vendido. Sin sesión, un producto despublicado da 404 (la lista
+    sin sesión tampoco lo trae) y se quitan las claves solo del ERP; no hay total_vendido ni consulta de pedidos."""
+    if con_sesion:
+        data["total_vendido"] = _total_vendido_web(db, data.get("sku"), data.get("nombre"))
+        return data
+    if data.get("publicado_web") is not True:
+        raise HTTPException(404, "Producto no encontrado")
+    for clave in _CLAVES_SOLO_DEL_ERP:
+        data.pop(clave, None)
+    return data
+
+
+def _get_catalogo_product_canonico(db: Session, product_id: int, con_sesion: bool = True) -> dict:
     if product_id > 0:
         canon_sku = db.query(ProductSKU).filter(ProductSKU.id == product_id).first()
         if not canon_sku:
@@ -472,10 +512,7 @@ def _get_catalogo_product_canonico(db: Session, product_id: int) -> dict:
             if data.get(k) and hasattr(data[k], "isoformat"):
                 data[k] = data[k].isoformat()
 
-    ventas_prod = db.query(SaleOrder).filter(SaleOrder.canal_venta=='WEB', SaleOrder.estado!='CANCELADO').all()
-    total_vendido = sum(p.get("qty", p.get("cantidad", 0)) for o in ventas_prod for p in (o.productos or []) if p.get("sku") == data.get("sku") or p.get("nombre","").lower() == (data.get("nombre") or "").lower())
-    data["total_vendido"] = total_vendido
-    return {"status": "success", "data": data}
+    return {"status": "success", "data": _detalle_segun_sesion(db, data, con_sesion)}
 
 def _get_categorias_web_canonico(db: Session) -> dict:
     rows = (
@@ -636,20 +673,15 @@ def get_ecommerce_stats(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_AS
     web_orders_ayer, rev_ayer = int(fila[4] or 0), float(fila[5] or 0)
     web_orders_mes_anterior, rev_mes_anterior = int(fila[6] or 0), float(fila[7] or 0)
 
-    try:
-        cr = db.execute(text("SELECT COUNT(*), COALESCE(SUM(total_cop),0) FROM web_carts WHERE estado='ABANDONADO'")).fetchone()
-        carritos_count, carritos_valor = int(cr[0] or 0), float(cr[1] or 0)
-    except Exception:
-        carritos_count, carritos_valor = 0, 0
+    # B4 T24 (B48): si una de estas consultas falla, el error sube (500) y la pantalla muestra su estado de error; antes la
+    # tarjeta decía 0 carritos o 0 publicados como si fuera cierto.
+    cr = db.execute(text("SELECT COUNT(*), COALESCE(SUM(total_cop),0) FROM web_carts WHERE estado='ABANDONADO'")).fetchone()
+    carritos_count, carritos_valor = int(cr[0] or 0), float(cr[1] or 0)
 
-    try:
-        if _lectura_canonica():
-            prod_pub = _count_publicados_canonico(db)
-        else:
-            prod_pub = int(db.execute(text("SELECT COUNT(*) FROM ecommerce_products WHERE publicado_web=TRUE")).scalar() or 0)
-    except Exception:
-        db.rollback()
-        prod_pub = 0
+    if _lectura_canonica():
+        prod_pub = _count_publicados_canonico(db)
+    else:
+        prod_pub = int(db.execute(text("SELECT COUNT(*) FROM ecommerce_products WHERE publicado_web=TRUE")).scalar() or 0)
 
     total_carts = carritos_count + web_orders_today
     conversion = round((web_orders_today / total_carts * 100), 1) if total_carts > 0 else 0.0
@@ -725,6 +757,7 @@ def list_web_orders(estado: Optional[str] = None, estados: Optional[str] = None,
 
 def _get_real_sellable_stock(db: Session, sku_id: int, warehouse_id: Optional[int] = None, owner: str = "NEBULAE") -> Decimal:
     """
+    B4 T24 (B46): la misma regla vive en SQL en _stock_vendible_sql (RP56): si se cambia una, hay que cambiar la otra.
     Calcula la disponibilidad vendible real:
     disponible = stock_fisico_owner - reservas_activas_owner - cuarentena_owner.
     Nunca publica inventario reservado, en cuarentena, perdido o de otro propietario.
@@ -1204,11 +1237,10 @@ def create_web_order(body: dict, db: Session = Depends(get_db)):
 @router.get("/carritos")
 def list_carritos(estado: str = "ABANDONADO", user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
-    try:
-        rows = db.execute(text("SELECT id, session_id, customer_email, customer_name, productos, total_cop, estado, recuperacion_enviada, recuperacion_descuento, created_at FROM web_carts WHERE estado=:e ORDER BY created_at DESC LIMIT 50"), {"e": estado}).fetchall()
-        return {"status": "success", "data": [{"id": r[0], "session_id": r[1], "customer_email": r[2], "customer_name": r[3], "productos": r[4] or [], "total_cop": float(r[5] or 0), "estado": r[6], "recuperacion_enviada": r[7], "recuperacion_descuento": float(r[8] or 0), "created_at": r[9].isoformat() if r[9] else None} for r in rows]}
-    except Exception:
-        return {"status": "success", "data": []}
+    # B4 T24 (B48): un error de la consulta sube (500): antes se convertía en data: [] y la pantalla decía «Sin carritos
+    # abandonados».
+    rows = db.execute(text("SELECT id, session_id, customer_email, customer_name, productos, total_cop, estado, recuperacion_enviada, recuperacion_descuento, created_at FROM web_carts WHERE estado=:e ORDER BY created_at DESC LIMIT 50"), {"e": estado}).fetchall()
+    return {"status": "success", "data": [{"id": r[0], "session_id": r[1], "customer_email": r[2], "customer_name": r[3], "productos": r[4] or [], "total_cop": float(r[5] or 0), "estado": r[6], "recuperacion_enviada": r[7], "recuperacion_descuento": float(r[8] or 0), "created_at": r[9].isoformat() if r[9] else None} for r in rows]}
 
 @router.post("/carritos")
 def save_cart(body: dict, db: Session = Depends(get_db)):
@@ -1314,8 +1346,10 @@ def _filas_heredadas_de_hoy(db: Session, search, categoria, publicado, limit: in
     params: dict = {}
     ep = _filtros_de_ecommerce_products("ep", search, categoria, publicado, params)
     espejo = _filtros_de_ecommerce_products("e2", search, categoria, publicado, params)
+    # B4 T24 (B41): el ORDER BY literal de BASE (solo por nombre): con nombres repetidos el orden de los empates es el que
+    # da PostgreSQL, el mismo que daba BASE (con el desempate por id, limit=1 devolvía otra fila).
     filas = db.execute(text(f"SELECT {_HUERFANO_SELECT_COLS} FROM ecommerce_products ep {_con_donde(ep)} "
-                            f"ORDER BY ep.nombre, ep.id LIMIT :lim"), {**params, "lim": limit}).fetchall()
+                            f"ORDER BY ep.nombre LIMIT :lim"), {**params, "lim": limit}).fetchall()
     total = int(db.execute(text(f"SELECT COUNT(*) FROM ecommerce_products ep {_con_donde(ep)}"), params).scalar() or 0)
     return filas, total, params, espejo
 
@@ -1367,17 +1401,23 @@ def _catalogo_heredado_de_hoy(db: Session, search, categoria, publicado, limit: 
 
 
 @router.get("/catalogo")
-def list_catalogo(search: Optional[str] = None, q: Optional[str] = None, categoria: Optional[str] = None, publicado: Optional[bool] = None, orden: Optional[str] = None, limit: int = Query(100, ge=0, le=500), offset: Optional[int] = Query(None, ge=0, le=MAX_OFFSET), db: Session = Depends(get_db)):
+def list_catalogo(search: Optional[str] = None, q: Optional[str] = None, categoria: Optional[str] = None, publicado: Optional[bool] = None, orden: Optional[str] = None, limit: int = Query(100, ge=0, le=500), offset: Optional[int] = Query(None, ge=0, le=MAX_OFFSET), user: Optional[User] = Depends(get_optional_current_user), db: Session = Depends(get_db)):
     """El catálogo (público: la tienda lo lee sin sesión). B4 T20 (RP56): `offset` y `orden` ([-]nombre, sku, categoria, stock
     o precio) paginan con `total` exacto (un producto por fila, sin contar dos veces el espejo de un SKU). `q` busca
     (`search` es su alias). limit=0 devuelve solo el total. Las filas son las de siempre (H16).
     - Rama canónica (CATALOGO_LECTURA=canonico): siempre paginada (sin offset es 0).
     - Rama heredada (la de hoy por defecto): SIN offset ni orden responde como BASE (doble fuente, cada una con su LIMIT, total NO
-      exacto; es lo que llama la tienda pública; para el total exacto con limit=0 hay que mandar offset=0); CON offset u orden pagina exacto sobre una fila por producto."""
+      exacto; es lo que llama la tienda pública; para el total exacto con limit=0 hay que mandar offset=0); CON offset u orden pagina exacto sobre una fila por producto.
+    - B4 T24 (FINAL-C1): sin sesión ERP solo se listan los publicados (publicado=false sin sesión no trae nada). Con sesión,
+      como hoy: la pantalla de E-Commerce necesita los despublicados para el interruptor de publicar."""
     texto = _texto_o_422(q, search)
     categoria = _texto_o_422(categoria, nombre="categoria")
     orden_sql = _orden_del_catalogo(orden)
     _ensure_ecommerce_tables(db)
+    if user is None:
+        if publicado is False:
+            return {"status": "success", "total": 0, "data": []}
+        publicado = True
     if _lectura_canonica():
         return _list_catalogo_canonico(db, texto, categoria, publicado, limit, offset or 0, orden)
     if offset is None and not (orden or "").strip():
@@ -1391,10 +1431,12 @@ def list_catalogo(search: Optional[str] = None, q: Optional[str] = None, categor
     return {"status": "success", "total": total, "data": data}
 
 @router.get("/catalogo/{product_id}")
-def get_catalogo_product(product_id: int, db: Session = Depends(get_db)):
+def get_catalogo_product(product_id: int, user: Optional[User] = Depends(get_optional_current_user), db: Session = Depends(get_db)):
+    """El detalle (público: la tienda lo lee sin sesión). B4 T24 (FINAL-C1): sin sesión ERP no trae notas_internas,
+    created_by, codigo_aduana ni total_vendido, y un producto despublicado da 404 (_detalle_segun_sesion)."""
     _ensure_ecommerce_tables(db)
     if _lectura_canonica():
-        return _get_catalogo_product_canonico(db, product_id)
+        return _get_catalogo_product_canonico(db, product_id, con_sesion=user is not None)
     row = db.execute(text("SELECT * FROM ecommerce_products WHERE id=:id"), {"id": product_id}).fetchone()
     if not row:
         prod = db.query(Product).filter(Product.id == product_id).first()
@@ -1419,11 +1461,7 @@ def get_catalogo_product(product_id: int, db: Session = Depends(get_db)):
             }
         raise HTTPException(404, "Producto no encontrado")
     keys = ["id","nombre","descripcion","descripcion_larga","sku","precio_venta","precio_comparacion","descuento_pct","impuesto_pct","categoria","sub_categoria","marca","tipo_producto","imagenes","atributos","variantes","stock_disponible","alerta_stock_minimo","publicado_web","rastrear_inventario","codigo_aduana","peso_kg","notas_internas","seo_titulo","seo_descripcion","seo_keywords","created_at","updated_at","created_by"]
-    data = dict(zip(keys, row))
-    # Sales analytics for this product
-    ventas_prod = db.query(SaleOrder).filter(SaleOrder.canal_venta=='WEB', SaleOrder.estado!='CANCELADO').all()
-    total_vendido = sum(p.get("qty", p.get("cantidad", 0)) for o in ventas_prod for p in (o.productos or []) if p.get("sku") == data.get("sku") or p.get("nombre","").lower() == (data.get("nombre") or "").lower())
-    data["total_vendido"] = total_vendido
+    data = _detalle_segun_sesion(db, dict(zip(keys, row)), user is not None)
     for k in ["created_at","updated_at"]:
         if data.get(k) and hasattr(data[k],"isoformat"):
             data[k] = data[k].isoformat()
