@@ -3185,14 +3185,18 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
   // r2 (m8): un Esc con el foco en el <body> (un clic en una zona no enfocable del panel) cuenta como de dentro.
   assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, dentro: false, enBody: true }), true);
   assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, dentro: false, enBody: false }), false);
-  // r2 (C1 = C3 = C7): Tab se atrapa solo en la capa de arriba, sin re-autenticación pendiente y con el foco que no está en otro diálogo
-  // modal fuera de la pila (la ventana de re-ingreso de SessionKeeper, z-[100]).
+  // r2 (C1 = C3 = C7) y r3 (m10, m1, m5): una sola regla. La capa de arriba atrapa Tab solo si el foco está dentro de su panel, en el
+  // <body> o en un panel de la pila (data-capa); con el foco en otro elemento fuera de la pila (el Copilot, un aviso, la ventana de
+  // re-ingreso) o con una re-autenticación pendiente, deja actuar al navegador.
   const { atrapaTab } = TABLA;
-  assert.equal(atrapaTab({ arriba: true }), true);
-  assert.equal(atrapaTab({ arriba: false }), false, 'una capa de abajo');
-  assert.equal(atrapaTab({ arriba: true, reautenticando: true }), false, 'con la ventana de re-ingreso');
-  assert.equal(atrapaTab({ arriba: true, focoEnOtroDialogo: true }), false, 'el foco en otro [aria-modal] que no es de la pila');
-  assert.equal(atrapaTab({ arriba: true, reautenticando: false, focoEnOtroDialogo: false }), true);
+  assert.equal(atrapaTab({ arriba: true, foco: 'panel' }), true, 'dentro de su panel');
+  assert.equal(atrapaTab({ arriba: true, foco: 'body' }), true, 'en el <body> (un clic en una zona que no se enfoca)');
+  assert.equal(atrapaTab({ arriba: true, foco: 'pila' }), true, 'en otra capa de la pila: vuelve a la de arriba');
+  assert.equal(atrapaTab({ arriba: true, foco: 'fuera' }), false, 'el Copilot o un aviso: fuera de la pila');
+  assert.equal(atrapaTab({ arriba: true, foco: 'fuera', reautenticando: true }), false, 'la ventana de re-ingreso');
+  assert.equal(atrapaTab({ arriba: true, foco: 'panel', reautenticando: true }), false, 'con la re-autenticación pendiente');
+  assert.equal(atrapaTab({ arriba: false, foco: 'panel' }), false, 'una capa de abajo');
+  assert.equal(atrapaTab({ arriba: true }), false, 'sin saber dónde está el foco, no');
   // El hook usa la lib: la pila, el foco que entra y vuelve, Tab y la re-autenticación.
   const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const hook = leer('components/ui/useCierreVentana.ts');
@@ -3202,17 +3206,22 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
     '(panel.querySelector<HTMLElement>(ENFOCABLES) ?? panel).focus({ preventScroll: true });', 'enBody: e.target === document.body,']) {
     assert.ok(hook.includes(n), n);
   }
-  // r2 (C1, banco): la ventana de re-ingreso (fuera de la pila) atrapa su propio Tab con la misma regla pura: Tab y Mayús+Tab recorren
-  // Usuario, Contraseña, Salir y Continuar sin salir a la página de atrás.
+  // r3 (m13): un solo ayudante de Tab (atraparTab: contenedor, evento y ENFOCABLES) para la pila y para la ventana de re-ingreso.
+  assert.match(hook, /export const ENFOCABLES = 'a\[href\], button:not\(\[disabled\]\), input:not\(\[disabled\]\), select:not\(\[disabled\]\), textarea:not\(\[disabled\]\), \[tabindex\]:not\(\[tabindex="-1"\]\)';/);
+  assert.match(hook, /export function atraparTab\(contenedor: HTMLElement, e: \{ shiftKey: boolean; preventDefault: \(\) => void \}\) \{\s*const lista = \[\.\.\.contenedor\.querySelectorAll<HTMLElement>\(ENFOCABLES\)\]\.filter\(\(el\) => el\.getClientRects\(\)\.length > 0\);\s*const destino = siguienteFocoAtrapado\(lista\.indexOf\(document\.activeElement as HTMLElement\), lista\.length, e\.shiftKey\);\s*if \(destino === null\) return;\s*e\.preventDefault\(\);\s*if \(destino >= 0\) lista\[destino\]\.focus\(\);\s*\}/);
+  // r2 (C1, m12) y r3 (m10): la rama Tab sale con atrapaTab (arriba, la re-autenticación y DÓNDE está el foco) y usa el ayudante.
+  assert.match(hook, /if \(e\.key === 'Tab'\) \{\s*if \(!panel \|\| !atrapaTab\(\{ arriba, reautenticando: hayReautenticacionPendiente\(\), foco: lugarDelFoco\(panel\) \}\)\) return;\s*atraparTab\(panel, e\);\s*return;\s*\}/);
+  assert.match(hook, /const lugarDelFoco = \(panel: HTMLElement\): LugarDelFoco => \{\s*const activo = document\.activeElement;\s*if \(!activo \|\| activo === document\.body\) return 'body';\s*if \(panel\.contains\(activo\)\) return 'panel';\s*return activo\.closest\('\[data-capa\]'\) \? 'pila' : 'fuera';\s*\};/);
+  // Los paneles de la pila se marcan con data-capa (Modal y Drawer).
+  assert.match(leer('components/ui/Modal.tsx'), /aria-describedby=\{describedBy\}\s+data-capa=""/);
+  assert.match(leer('components/ui/Drawer.tsx'), /role="dialog" aria-modal="true" data-capa=""/);
+  // r2 (C1, banco), r3 (m13 y m4): la ventana de re-ingreso (fuera de la pila) atrapa su Tab con el MISMO ayudante, desde un oyente en
+  // window en captura mientras está abierta: también con el foco en el <body> (un clic en el fondo oscuro).
   const sesion = leer('components/SessionKeeper.tsx');
-  assert.match(sesion, /import \{ siguienteFocoAtrapado \} from '@\/lib\/tabla';/);
-  assert.match(sesion, /role="dialog"\s+aria-modal="true"\s+aria-labelledby="sesion-cerrada-titulo"\s+onKeyDown=\{alTeclearVentana\}/);
-  assert.match(sesion, /const destino = siguienteFocoAtrapado\(lista\.indexOf\(document\.activeElement as HTMLElement\), lista\.length, e\.shiftKey\);\s*if \(destino === null\) return;\s*e\.preventDefault\(\);\s*if \(destino >= 0\) lista\[destino\]\.focus\(\);/);
-  // r2 (C1, m12): la rama Tab sale con atrapaTab (arriba, la re-autenticación y el foco en otro diálogo modal) y hace el preventDefault
-  // ANTES de mover el foco.
-  assert.match(hook, /if \(e\.key === 'Tab'\) \{\s*if \(!panel \|\| !atrapaTab\(\{ arriba, reautenticando: hayReautenticacionPendiente\(\), focoEnOtroDialogo: focoEnOtroDialogo\(panel\) \}\)\) return;/);
-  assert.match(hook, /e\.preventDefault\(\);\s*if \(destino >= 0\) lista\[destino\]\.focus\(\);/);
-  assert.match(hook, /const focoEnOtroDialogo = \(panel: HTMLElement\) => \{\s*const activo = document\.activeElement;\s*return activo instanceof Element && !panel\.contains\(activo\) && activo\.closest\('\[aria-modal="true"\]'\) !== null;\s*\};/);
+  assert.match(sesion, /import \{ atraparTab \} from '@\/components\/ui\/useCierreVentana';/);
+  assert.match(sesion, /useEffect\(\(\) => \{\s*if \(!abierto\) return undefined;\s*const alTeclear = \(e: KeyboardEvent\) => \{\s*if \(e\.key === 'Tab' && refVentana\.current\) atraparTab\(refVentana\.current, e\);\s*\};\s*window\.addEventListener\('keydown', alTeclear, true\);\s*return \(\) => window\.removeEventListener\('keydown', alTeclear, true\);\s*\}, \[abierto\]\);/);
+  assert.match(sesion, /ref=\{refVentana\}\s+className="fixed inset-0 z-\[100\]/);
+  assert.ok(!/querySelectorAll|onKeyDown=\{alTeclearVentana\}/.test(sesion), 'sin su copia del Tab ni su selector propio');
   assert.match(hook, /document\.removeEventListener\('keydown', alTeclear\);\s*capas = cerrarCapa\(capas, capa\);/);
   assert.match(leer('components/ui/Modal.tsx'), /ref=\{refPanel\}\s+tabIndex=\{-1\}/);
   const drawer = leer('components/ui/Drawer.tsx');
@@ -3244,7 +3253,7 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
   assert.match(leer('app/dashboard/ventas/cotizacion/cotizacion-client.tsx'), /<Modal cierreExterno=\{false\} bloquearCierre=\{saving\} title="Actualizar Pedido de Venta"/);
   // r2 (m18): el Drawer tiene nombre accesible (etiqueta → aria-label, aditivo) y los 11 lo reciben de su pantalla.
   assert.match(drawer, /etiqueta\?: string;/);
-  assert.match(drawer, /ref=\{refPanel\} tabIndex=\{-1\} role="dialog" aria-modal="true" aria-label=\{etiqueta\}/);
+  assert.match(drawer, /ref=\{refPanel\} tabIndex=\{-1\} role="dialog" aria-modal="true" data-capa="" aria-label=\{etiqueta\}/); // r3 (m10, D27): con data-capa
   const ETIQUETAS = {"app/dashboard/compras/recepciones/page.tsx": ["Detalle de la recepción"], "app/dashboard/compras/traslados/page.tsx": ["Detalle del traslado"], "app/dashboard/crm/page.tsx": ["Detalle del lead", "Configurar CRM"], "app/dashboard/ecommerce/page.tsx": ["Detalle del pedido web"], "app/dashboard/inventario/ajustes/page.tsx": ["Detalle del ajuste"], "app/dashboard/inventario/entregas/page.tsx": ["Despacho del pedido"], "app/dashboard/inventario/recepciones/page.tsx": ["Detalle de la recepción"], "app/dashboard/inventario/traslados/page.tsx": ["Detalle del traslado"], "app/dashboard/ventas/page.tsx": ["Detalle del documento", "Configuración del Hub de Ventas"]};
   let drawers = 0;
   for (const [ruta, etiquetas] of Object.entries(ETIQUETAS)) {

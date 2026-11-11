@@ -51,6 +51,7 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={tituloId}
         aria-describedby={describedBy}
+        data-capa=""
         className={`bg-white rounded-3xl shadow-2xl w-full ${widthCls} max-h-[90vh] overflow-hidden flex flex-col ${FOCO_DENTRO}`}
       >
         <div className={`px-6 py-5 border-b flex justify-between items-center bg-gradient-to-r ${accent.modalGradient}`}>

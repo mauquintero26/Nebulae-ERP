@@ -6,7 +6,7 @@ import { Lock, LogOut } from 'lucide-react';
 import { getToken, login, pedirReautenticacion, registrarReautenticacion, renovarSesion } from '@/lib/api';
 import { estadoSesion, leerPayload, tokenSirveParaReintentar } from '@/lib/session';
 import { Button } from '@/components/ui/Button';
-import { siguienteFocoAtrapado } from '@/lib/tabla';
+import { atraparTab } from '@/components/ui/useCierreVentana';
 
 // Uso real del usuario: solo clics, teclas, rueda y toques (las consultas automaticas no cuentan).
 const EVENTOS_DE_USO = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const;
@@ -193,27 +193,28 @@ export function SessionKeeper() {
     router.replace('/login?reason=session-expired');
   };
 
-  if (!abierto) return null;
+  // B4 T24 r2 (C1) y r3 (m13, m4): Tab y Mayús+Tab quedan dentro de la ventana de re-ingreso (no está en la pila de Modal y Drawer, que
+  // la deja pasar), con el ayudante único atraparTab. Un oyente en window, en captura, mientras está abierta: también con el foco en el
+  // <body> (un clic en el fondo oscuro), que va al primero o al último, como VentanaConfirmacion en Avisos.
+  const refVentana = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!abierto) return undefined;
+    const alTeclear = (e: KeyboardEvent) => {
+      if (e.key === 'Tab' && refVentana.current) atraparTab(refVentana.current, e);
+    };
+    window.addEventListener('keydown', alTeclear, true);
+    return () => window.removeEventListener('keydown', alTeclear, true);
+  }, [abierto]);
 
-  // B4 T24 r2 (C1): Tab y Mayús+Tab quedan dentro de la ventana de re-ingreso (la regla de las capas, siguienteFocoAtrapado de
-  // lib/tabla.js): no está en la pila de Modal y Drawer, que ahora la deja pasar, y sin esto el foco salía a la página de atrás.
-  const alTeclearVentana = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== 'Tab') return;
-    const lista = [...e.currentTarget.querySelectorAll<HTMLElement>('input:not([disabled]), button:not([disabled]), a[href]')]
-      .filter((el) => el.getClientRects().length > 0);
-    const destino = siguienteFocoAtrapado(lista.indexOf(document.activeElement as HTMLElement), lista.length, e.shiftKey);
-    if (destino === null) return;
-    e.preventDefault();
-    if (destino >= 0) lista[destino].focus();
-  };
+  if (!abierto) return null;
 
   return (
     <div
+      ref={refVentana}
       className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="sesion-cerrada-titulo"
-      onKeyDown={alTeclearVentana}
     >
       <form onSubmit={continuar} className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col">
         <div className="px-6 py-5 border-b bg-gradient-to-r from-purple-50 to-white">

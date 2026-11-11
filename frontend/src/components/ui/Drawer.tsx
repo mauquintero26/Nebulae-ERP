@@ -27,7 +27,7 @@ export function Drawer({
   const { alPresionar, alSoltar, refPanel } = useCierreVentana(onClose, bloquearCierre || !cierreExterno);
   return (
     <div onPointerDown={alPresionar} onClick={alSoltar} className="fixed inset-0 z-40 flex justify-end bg-slate-900/40 backdrop-blur-sm animate-in fade-in">
-      <div ref={refPanel} tabIndex={-1} role="dialog" aria-modal="true" aria-label={etiqueta} className={`w-full ${widthCls} bg-white h-full shadow-2xl border-l border-slate-200 flex flex-col ${FOCO_DENTRO}`}>
+      <div ref={refPanel} tabIndex={-1} role="dialog" aria-modal="true" data-capa="" aria-label={etiqueta} className={`w-full ${widthCls} bg-white h-full shadow-2xl border-l border-slate-200 flex flex-col ${FOCO_DENTRO}`}>
         <div className="px-6 py-5 border-b border-slate-200 flex items-start justify-between bg-slate-50/70">
           {header}
           <button type="button" onClick={onClose} disabled={bloquearCierre} aria-label="Cerrar" className={`p-2 text-slate-400 hover:bg-slate-100 rounded-full shrink-0 disabled:opacity-40 ${FOCO}`}>

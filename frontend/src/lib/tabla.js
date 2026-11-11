@@ -2278,14 +2278,15 @@ export function cierraConEsc({ tecla, arriba, defaultPrevented = false, bloquead
 }
 
 /**
- * B4 T24 r2 (C1 = C3 = C7): si la capa atrapa un Tab. Solo la de arriba, sin una re-autenticación pendiente (la ventana de re-ingreso
- * de SessionKeeper, z-[100], no está en la pila: como el Esc y como Avisos) y sin el foco en OTRO diálogo modal fuera de la pila; si no,
- * un Tab en «Usuario» o «Contraseña» saltaría a la X de la ventana de abajo.
- * @param {{arriba: boolean, reautenticando?: boolean, focoEnOtroDialogo?: boolean}} entrada
+ * B4 T24 r2 (C1 = C3 = C7) y r3 (m10, una sola regla): si la capa atrapa un Tab. Solo la de arriba, sin una re-autenticación pendiente
+ * (como el Esc y como Avisos), y solo si el foco está dentro de su panel ('panel'), en el <body> ('body': un clic en una zona que no se
+ * enfoca) o en un panel de la pila ('pila', data-capa). Con el foco en otro elemento fuera de la pila ('fuera': el Copilot, un aviso, la
+ * ventana de re-ingreso de SessionKeeper), deja actuar al navegador: si no, le quitaría el foco.
+ * @param {{arriba: boolean, reautenticando?: boolean, foco?: 'panel' | 'body' | 'pila' | 'fuera'}} entrada
  * @returns {boolean}
  */
-export function atrapaTab({ arriba, reautenticando = false, focoEnOtroDialogo = false }) {
-  return Boolean(arriba) && !reautenticando && !focoEnOtroDialogo;
+export function atrapaTab({ arriba, reautenticando = false, foco }) {
+  return Boolean(arriba) && !reautenticando && (foco === 'panel' || foco === 'body' || foco === 'pila');
 }
 
 /**

@@ -8,12 +8,29 @@ import { abrirCapa, atrapaTab, cerrarCapa, cierraConClicFuera, cierraConEsc, esC
 /** Las capas abiertas (Modal y Drawer), de abajo arriba (abrirCapa, cerrarCapa y esCapaDeArriba de lib/tabla.js). */
 let capas: ReadonlyArray<number> = [];
 let siguienteCapa = 0;
-/** r2 (C1): el foco está fuera del panel y dentro de OTRO diálogo modal (la ventana de re-ingreso de SessionKeeper, fuera de la pila). */
-const focoEnOtroDialogo = (panel: HTMLElement) => {
+type LugarDelFoco = 'panel' | 'body' | 'pila' | 'fuera';
+/** r3 (m10): dónde está el foco respecto de la capa: su panel, el <body>, otro panel de la pila (data-capa) o fuera de la pila. */
+const lugarDelFoco = (panel: HTMLElement): LugarDelFoco => {
   const activo = document.activeElement;
-  return activo instanceof Element && !panel.contains(activo) && activo.closest('[aria-modal="true"]') !== null;
+  if (!activo || activo === document.body) return 'body';
+  if (panel.contains(activo)) return 'panel';
+  return activo.closest('[data-capa]') ? 'pila' : 'fuera';
 };
-const ENFOCABLES = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+/** Los controles que reciben el foco con Tab (la pila de capas y la ventana de re-ingreso, r3 m13: un solo selector). */
+export const ENFOCABLES = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * r3 (m13): el ayudante ÚNICO de Tab atrapado en `contenedor` (los controles visibles de ENFOCABLES y siguienteFocoAtrapado de
+ * lib/tabla.js): el de la pila de capas y el de la ventana de re-ingreso (SessionKeeper). Con el foco fuera del contenedor va al primero
+ * (o al último con Mayús).
+ */
+export function atraparTab(contenedor: HTMLElement, e: { shiftKey: boolean; preventDefault: () => void }) {
+  const lista = [...contenedor.querySelectorAll<HTMLElement>(ENFOCABLES)].filter((el) => el.getClientRects().length > 0);
+  const destino = siguienteFocoAtrapado(lista.indexOf(document.activeElement as HTMLElement), lista.length, e.shiftKey);
+  if (destino === null) return;
+  e.preventDefault();
+  if (destino >= 0) lista[destino].focus();
+}
 
 /**
  * B4 T24 (F40) y r1 (m12, m18, m29): el cierre y el foco de una ventana (Modal) o un panel lateral (Drawer). La regla es de lib/tabla.js
@@ -46,12 +63,8 @@ export function useCierreVentana(onClose: () => void, bloqueado: boolean) {
     const alTeclear = (e: KeyboardEvent) => {
       const arriba = esCapaDeArriba(capas, capa);
       if (e.key === 'Tab') {
-        if (!panel || !atrapaTab({ arriba, reautenticando: hayReautenticacionPendiente(), focoEnOtroDialogo: focoEnOtroDialogo(panel) })) return;
-        const lista = [...panel.querySelectorAll<HTMLElement>(ENFOCABLES)].filter((el) => el.getClientRects().length > 0);
-        const destino = siguienteFocoAtrapado(lista.indexOf(document.activeElement as HTMLElement), lista.length, e.shiftKey);
-        if (destino === null) return;
-        e.preventDefault();
-        if (destino >= 0) lista[destino].focus();
+        if (!panel || !atrapaTab({ arriba, reautenticando: hayReautenticacionPendiente(), foco: lugarDelFoco(panel) })) return;
+        atraparTab(panel, e);
         return;
       }
       if (!cierraConEsc({
