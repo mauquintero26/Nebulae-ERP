@@ -389,6 +389,14 @@ console.log('--- TEST T24-a: ofreceReintentar ---');
   for (const e of [{ status: 403 }, { status: 500 }, { status: 422 }, new Error('x'), errorDeRespuesta(403, {})]) {
     assert.equal(ofreceReintentar(e), avisoDeFuente(e, 'F').reintentar, JSON.stringify(e));
   }
+  // r1 (m10, m34): la regla «403 → sin Reintentar» escrita UNA vez: avisoDeFuente la toma de ofreceReintentar.
+  const { readFileSync } = await import('node:fs');
+  const fuente = readFileSync(new URL('../src/lib/avisos.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const cuerpo = (nombre) => fuente.slice(fuente.indexOf(`export function ${nombre}(`), fuente.indexOf('\n}\n', fuente.indexOf(`export function ${nombre}(`)));
+  assert.match(cuerpo('avisoDeFuente'), /ofreceReintentar\(error\)/, 'avisoDeFuente usa ofreceReintentar');
+  assert.ok(!/403/.test(cuerpo('avisoDeFuente')), 'avisoDeFuente no repite el 403');
+  assert.equal((fuente.match(/\.status (?:!|=)== 403/g) ?? []).length, 1, 'una sola comparación con el 403, en ofreceReintentar');
 }
 
 console.log('✓ Todas las pruebas de avisos pasaron.');

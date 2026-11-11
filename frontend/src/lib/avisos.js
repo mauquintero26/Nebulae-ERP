@@ -268,7 +268,8 @@ export function agregarAviso(lista, aviso, max = 3) {
  */
 export function avisoDeFuente(error, fallo) {
   if (!error) return null;
-  if (/** @type {{status?: unknown}} */ (error).status === 403) return { tipo: 'permiso', texto: MENSAJE_SIN_PERMISO_FUENTE, reintentar: false };
+  // r1 (m10, m34): la regla del 403 vive en ofreceReintentar (una sola copia).
+  if (!ofreceReintentar(error)) return { tipo: 'permiso', texto: MENSAJE_SIN_PERMISO_FUENTE, reintentar: false };
   return { tipo: 'carga', texto: textoDeError(error, fallo), reintentar: true };
 }
 
@@ -277,9 +278,9 @@ export const MENSAJE_SIN_PERMISO_FUENTE = 'No tienes permiso para ver esto.';
 
 /**
  * B4 T24 (FINAL-m37, FINAL-C5 y F106): si una carga que falló ofrece «Reintentar». Un 403 no: es un tema de permiso y volver a pedir no
- * lo cambia. Cualquier otro error sí (también uno sin status: la red). Sin error, no hay nada que reintentar. Es la misma respuesta que
- * avisoDeFuente(...).reintentar, para quien no pinta un aviso de fuente: TablaEstandar, las columnas del tablero, SelectorCatalogo y las
- * cajas de error de las pantallas.
+ * lo cambia. Cualquier otro error sí (también uno sin status: la red). Sin error, no hay nada que reintentar. avisoDeFuente la usa (r1,
+ * m10 y m34: la regla escrita una vez), y también quien no pinta un aviso de fuente: TablaEstandar, las columnas del tablero,
+ * SelectorCatalogo y las cajas de error de las pantallas.
  * @param {unknown} error
  * @returns {boolean}
  */
