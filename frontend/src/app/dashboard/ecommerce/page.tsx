@@ -34,7 +34,7 @@ import { infoEstadoPedido } from '@/lib/estados-pedido';
 import { ordenPorDefecto } from '@/lib/kanban';
 import { AvisoFuente } from '@/components/ui/AvisoFuente';
 import { useRolActual } from '@/components/ui/useRolActual';
-import { fuenteGuardable, lecturaDeFuente, tarjetasTienda, textoLimiteCarritos } from '@/lib/kpis';
+import { cuerpoConfigPagos, fuenteGuardable, lecturaDeFuente, tarjetasTienda, textoLimiteCarritos } from '@/lib/kpis';
 import { accesoTienda } from '@/lib/roles';
 import { formatoPesos } from '@/lib/pesos';
 import { fechaCorta, fechaHoraLarga, horaCO } from '@/lib/fechas-colombia';
@@ -1210,12 +1210,12 @@ export default function EcommercePage() {
                     </div>
                     <div className="space-y-2">
                       {gw.fields.map(field => (
-                        <div key={field.k}><label className="block text-xs font-black text-gray-400 uppercase mb-1">{field.l}</label><input type={field.pw?'password':'text'} value={payConfig[gw.key]?.[field.k]||''} onChange={e => setPayConfig((c: any) => ({...c,[gw.key]:{...c[gw.key],[field.k]:e.target.value}}))} placeholder={field.ph} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200 font-mono text-xs"/></div>
+                        <div key={field.k}><label className="block text-xs font-black text-gray-400 uppercase mb-1">{field.l}</label><input type={field.pw?'password':'text'} value={payConfig[gw.key]?.[field.k]||''} onChange={e => setPayConfig((c: any) => ({...c,[gw.key]:{...c[gw.key],[field.k]:e.target.value}}))} placeholder={payConfig[gw.key]?.[`${field.k}_masked`] || field.ph} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200 font-mono text-xs"/></div>
                       ))}
                     </div>
                   </div>
                 ))}
-                <button onClick={async()=>{setSavingPay(true);try{await apiFetch('/ecommerce/pagos/config',{method:'PATCH',body:JSON.stringify(payConfig)});showToast('Configuración guardada','ok');}catch(e:any){showToast(e.message,'error');}setSavingPay(false);}} disabled={savingPay || !fuenteGuardable(lecturaPagos)} className="w-full flex items-center justify-center gap-2 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-sm disabled:opacity-50">
+                <button onClick={async()=>{setSavingPay(true);try{await apiFetch('/ecommerce/pagos/config',{method:'PATCH',body:JSON.stringify(cuerpoConfigPagos(payConfig))});showToast('Configuración guardada','ok');}catch(e:any){showToast(e.message,'error');}setSavingPay(false);}} disabled={savingPay || !fuenteGuardable(lecturaPagos)} className="w-full flex items-center justify-center gap-2 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-sm disabled:opacity-50">
                   {savingPay?<RefreshCw size={14} className="animate-spin"/>:<Check size={14}/>} Guardar Pagos
                 </button>
               </div>

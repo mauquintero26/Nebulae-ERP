@@ -1719,6 +1719,32 @@ console.log('--- TEST T24 (B4 T24, FINAL-m21): fuenteGuardable — un formulario
   assert.equal(fuenteGuardable(undefined), false);
 }
 
+console.log('--- TEST T24-e (B4 T24 r1, m11): cuerpoConfigPagos — un secreto vacío no borra el guardado ni se reenvían los *_masked ---');
+{
+  const { cuerpoConfigPagos, SECRETOS_PAGOS } = kpisLib;
+  // update_payment_config (ecommerce.py) MEZCLA el cuerpo de cada pasarela sobre lo guardado: un secret_key '' lo borraría, y un
+  // *_masked se guardaría como un dato. El GET no devuelve los secretos (los quita y manda *_masked).
+  assert.deepEqual(SECRETOS_PAGOS, { stripe: ['secret_key'], mercadopago: ['access_token'] });
+  const leido = {
+    stripe: { enabled: true, publishable_key: 'pk_1', secret_key: '', secret_key_masked: '****1234', webhook_secret: 'whsec_9' },
+    mercadopago: { enabled: false, public_key: 'APP_1', access_token: '   ', access_token_masked: '****9876' },
+    otro: { x: 1 },
+  };
+  assert.deepEqual(cuerpoConfigPagos(leido), {
+    stripe: { enabled: true, publishable_key: 'pk_1', webhook_secret: 'whsec_9' },
+    mercadopago: { enabled: false, public_key: 'APP_1' },
+  }, 'vacío = no cambiar; sin *_masked ni pasarelas que el servidor no conoce');
+  // Un secreto nuevo, escrito, sí va.
+  assert.deepEqual(cuerpoConfigPagos({ stripe: { secret_key: 'sk_nuevo' } }), { stripe: { secret_key: 'sk_nuevo' } });
+  assert.deepEqual(cuerpoConfigPagos(null), {});
+  assert.notEqual(cuerpoConfigPagos(leido).stripe, leido.stripe, 'no muta lo leído');
+  // La pantalla manda ese cuerpo y muestra el enmascarado como marcador del campo vacío.
+  const pantalla = readFileSync(new URL('../src/app/dashboard/ecommerce/page.tsx', import.meta.url), 'utf8');
+  assert.ok(pantalla.includes("body:JSON.stringify(cuerpoConfigPagos(payConfig))"), 'Guardar Pagos manda cuerpoConfigPagos');
+  assert.ok(!pantalla.includes('JSON.stringify(payConfig)'), 'nunca el estado crudo');
+  assert.ok(pantalla.includes("placeholder={payConfig[gw.key]?.[`${field.k}_masked`] || field.ph}"), 'el enmascarado como marcador');
+}
+
 console.log('--- TEST T24-b (B4 T24, FINAL-m23): el Copilot del Dashboard, solo para quien lo puede consultar, sin emojis y con el 403 dicho ---');
 {
   const fuente = readFileSync(new URL('../src/app/dashboard/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');

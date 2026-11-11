@@ -1031,6 +1031,29 @@ export function lecturaDeFuente(llego, vuelta) {
   return { datos, cargando, error: cargando ? null : (llego?.error ?? null), marca: llego?.marca ?? null };
 }
 
+/** B4 T24 r1 (m11): los secretos de cada pasarela que GET /ecommerce/pagos/config no devuelve (manda `<campo>_masked`). */
+export const SECRETOS_PAGOS = Object.freeze({ stripe: Object.freeze(['secret_key']), mercadopago: Object.freeze(['access_token']) });
+
+/**
+ * B4 T24 r1 (m11): el cuerpo de PATCH /ecommerce/pagos/config a partir del formulario. update_payment_config MEZCLA cada pasarela sobre
+ * lo guardado: un secreto vacío (el GET no lo devuelve) borraría el guardado, y un `*_masked` se guardaría como un dato. Por eso: solo
+ * las pasarelas que el servidor conoce (stripe y mercadopago), sin los `*_masked` y sin los secretos vacíos (vacío = no cambiar). No
+ * muta lo que recibe.
+ * @param {Record<string, any> | null | undefined} config
+ * @returns {Record<string, Record<string, unknown>>}
+ */
+export function cuerpoConfigPagos(config) {
+  /** @type {Record<string, Record<string, unknown>>} */
+  const cuerpo = {};
+  for (const [pasarela, secretos] of Object.entries(SECRETOS_PAGOS)) {
+    const datos = config?.[pasarela];
+    if (!datos || typeof datos !== 'object') continue;
+    cuerpo[pasarela] = Object.fromEntries(Object.entries(datos).filter(([clave, valor]) => !clave.endsWith('_masked')
+      && !(secretos.includes(clave) && (typeof valor !== 'string' || !valor.trim()))));
+  }
+  return cuerpo;
+}
+
 /**
  * B4 T24 (FINAL-m21): si un formulario cargado de una fuente (lecturaDeFuente) se puede guardar: solo con lo que LLEGÓ en la vuelta
  * vigente, sin error. Mientras carga, si falló o si no llegaron datos, no: los valores por defecto del estado de la pantalla no son lo
