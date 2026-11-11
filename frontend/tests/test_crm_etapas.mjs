@@ -502,4 +502,41 @@ console.log('--- TEST 15 (B4 T23B r1; I3, I4, m20, m23, m24, m30): las 3 PRIMERA
   assert.equal(vistaSeguimiento(undefined, null), 'esqueleto');
 }
 
+console.log('--- TEST 16 (B4 T24, FINAL-m37 y F96): la sonda de cableado del CRM — pide y ofrece solo lo que el rol puede (accesoCrm) ---');
+{
+  const { readFileSync } = await import('node:fs');
+  const fuente = readFileSync(new URL('../src/app/dashboard/crm/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const c = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // El rol después de montar (useRolActual, fuera del inicializador de useState) y el acceso de lib/roles.js (casos en test_roles.mjs).
+  assert.match(c, /import \{ useRolActual \} from '@\/components\/ui\/useRolActual';/);
+  assert.match(c, /import \{ accesoCrm \} from '@\/lib\/roles';/);
+  assert.match(c, /const rol = useRolActual\(\);\s*const acceso = accesoCrm\(rol\);/);
+  assert.ok(!/useState\([^)]*useRolActual|esAdmin\(|esAdminOAsesor\(|'ADMIN'|'ASESOR'/.test(c), 'la pantalla no decide el rol a mano');
+  // Al montar: sin leads no se pide nada; /crm/warmup (solo ADMIN) solo con acceso.warmup.
+  assert.match(c, /useEffect\(\(\) => \{\s*if \(!acceso\.leads\) return;\s*if \(acceso\.warmup\) apiFetch\('\/crm\/warmup'\)\.catch\(\(\) => \{\}\);\s*loadAll\(true, \{ inicial: true \}\);\s*\}, \[loadAll, acceso\.leads, acceso\.warmup\]\);/);
+  assert.equal((c.match(/'\/crm\/warmup'/g) ?? []).length, 1, 'un solo warmup');
+  // La Lista y el tablero no piden sin permiso; con el rol vacío, esperan.
+  assert.match(c, /esperar: !listo \|\| !acceso\.listo, despachar, activo: estado\.modo === 'lista' && !enAnalisis && acceso\.leads,/);
+  assert.match(c, /activo: listo && acceso\.leads && estado\.modo === 'kanban' && !enAnalisis,/);
+  // El texto neutro (igual que Seguimientos) en lugar de la barra, la Lista, el tablero y el Análisis.
+  assert.match(c, /const TEXTO_SIN_LEADS = 'Tu rol no ve los leads del CRM\.';/);
+  assert.match(c, /\{acceso\.listo && !acceso\.leads && \(\s*<p role="status"[^>]*>\{TEXTO_SIN_LEADS\}<\/p>\s*\)\}/);
+  assert.match(c, /\{acceso\.leads && !enAnalisis && \(/);
+  assert.match(c, /\{acceso\.leads && enAnalisis && \(/);
+  // Las altas, «Configurar CRM» y «Borrar» solo con su permiso (F96: delete_lead y /pipeline-stages/config son de ADMIN).
+  assert.match(c, /actions=\{acceso\.leads \? \(/);
+  assert.match(c, /\{acceso\.config && \(\s*<button onClick=\{openConfig\}/);
+  assert.match(c, /\{acceso\.crear && <Button color="indigo" icon=\{Plus\} onClick=\{\(\) => setShowNewLead\(true\)\}>Nuevo Lead<\/Button>\}/);
+  assert.match(c, /pieColumna=\{acceso\.crear \? \(clave\) => \(/);
+  assert.match(c, /\{ etiqueta: 'Borrar', icono: Trash2, peligro: true, oculto: !puedeBorrar, onClick: \(\) => borrar\(lead\) \},/);
+  assert.match(c, /<AccionesLead\.Provider value=\{\{ abrir: openDetail, borrar: handleDeleteLead, puedeBorrar: acceso\.borrar \}\}>/);
+  assert.match(c, /\{ etiqueta: 'Borrar', icono: Trash2, peligro: true, oculto: !acceso\.borrar, onClick: \(\) => handleDeleteLead\(lead\) \},/);
+  assert.match(c, /\{acceso\.borrar && \(\s*<button onClick=\{\(\) => handleDeleteLead\(selectedLead\)\}/, '«Eliminar Lead» del panel, solo con permiso');
+  assert.equal((c.match(/handleDeleteLead\(/g) ?? []).length, 3, 'la Lista, el tablero y el panel: los tres miran acceso.borrar');
+  // ErrorCarga: «Reintentar» solo si el error lo permite (un 403 no; ofreceReintentar = avisoDeFuente(...).reintentar).
+  assert.match(c, /\{onReintentar && \(\s*<button type="button" onClick=\{onReintentar\}/);
+  assert.match(c, /<ErrorCarga texto=\{textoDeError\(errorEtapas, 'No se pudieron cargar las etapas del CRM'\)\} onReintentar=\{ofreceReintentar\(errorEtapas\) \? \(\) => loadAll\(\) : undefined\}\/>/);
+  assert.match(c, /<ErrorCarga texto=\{textoDeError\(errorLeads, 'No se pudieron cargar los leads'\)\} onReintentar=\{ofreceReintentar\(errorLeads\) \? \(\) => loadAll\(\) : undefined\}\/>/);
+}
+
 console.log('OK test_crm_etapas');

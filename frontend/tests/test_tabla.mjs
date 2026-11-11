@@ -2952,7 +2952,7 @@ console.log('--- TEST T24-FOCO (B4 T24: FINAL-C6, FINAL-m25 y F41): el foco visi
     'app/dashboard/compras/page.tsx': 'purple', 'app/dashboard/compras/pedidos/page.tsx': 'purple',
     'app/dashboard/compras/lista-compras/page.tsx': 'purple', 'app/dashboard/compras/recepciones/page.tsx': 'teal',
     'app/dashboard/compras/recepciones/[id]/page.tsx': 'emerald', 'app/dashboard/compras/transito/page.tsx': 'blue',
-    'app/dashboard/compras/traslados/page.tsx': 'orange', 'app/dashboard/crm/page.tsx': 'purple',
+    'app/dashboard/compras/traslados/page.tsx': 'orange', 'app/dashboard/crm/page.tsx': 'indigo',
     'app/dashboard/ecommerce/page.tsx': 'purple', 'app/dashboard/inventario/page.tsx': 'indigo',
   };
   for (const [ruta, acento] of Object.entries(COPIAS)) {

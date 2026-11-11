@@ -31,7 +31,9 @@ import {
 } from '@/lib/crm-etapas';
 import { estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
 import { formatoPesos } from '@/lib/pesos';
-import { recargarTrasError, textoDeError } from '@/lib/avisos';
+import { ofreceReintentar, recargarTrasError, textoDeError } from '@/lib/avisos';
+import { accesoCrm } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 import { FOCOS, TABLE } from '@/lib/design-system';
 import { CRM_NAV } from './crm-nav';
 
@@ -210,17 +212,22 @@ const ASISTENTE_CRM = {
   titulo: 'Asistente del CRM',
   ejemplos: ['¿Qué leads llevan más días sin movimiento?', '¿En qué etapa se quedan los leads?'],
 };
-const FOCO_VISIBLE = FOCOS.purple;
+const FOCO_VISIBLE = FOCOS.indigo;
+/** B4 T24 (FINAL-m37): lo que ve un rol sin permiso (GET /crm/leads es de ADMIN y ASESOR), igual que Seguimientos: neutro, sin «Reintentar». */
+const TEXTO_SIN_LEADS = 'Tu rol no ve los leads del CRM.';
 
-/** «Abrir» y «Borrar» de la fila de la Lista: las columnas son estables (useMemo por las etapas) y leen esto del contexto. */
-const AccionesLead = createContext({ abrir: () => {}, borrar: () => {} });
+/**
+ * «Abrir» y «Borrar» de la fila de la Lista: las columnas son estables (useMemo por las etapas) y leen esto del contexto. B4 T24 (F96):
+ * «Borrar» solo con puedeBorrar (DELETE /crm/leads/{id} es solo de ADMIN).
+ */
+const AccionesLead = createContext({ abrir: () => {}, borrar: () => {}, puedeBorrar: false });
 
 function MenuLead({ lead }) {
-  const { abrir, borrar } = useContext(AccionesLead);
+  const { abrir, borrar, puedeBorrar } = useContext(AccionesLead);
   return (
     <MenuFila etiqueta={`Acciones de ${lead.client || 'este lead'}`} items={[
       { etiqueta: 'Abrir', icono: ExternalLink, onClick: () => abrir(lead) },
-      { etiqueta: 'Borrar', icono: Trash2, peligro: true, onClick: () => borrar(lead) },
+      { etiqueta: 'Borrar', icono: Trash2, peligro: true, oculto: !puedeBorrar, onClick: () => borrar(lead) },
     ]}/>
   );
 }
@@ -317,15 +324,20 @@ function EsqueletoTablero() {
   );
 }
 
-/** Una carga del tablero que falló: el texto del servidor tal cual y «Reintentar» (nunca columnas vacías falsas). */
-function ErrorCarga({ texto, onReintentar }) {
+/**
+ * Una carga del tablero que falló: el texto del servidor tal cual y «Reintentar» (nunca columnas vacías falsas). B4 T24 (FINAL-m37):
+ * sin onReintentar (un 403: ofreceReintentar), sin el botón.
+ */
+function ErrorCarga({ texto, onReintentar }: { texto: string; onReintentar?: () => void }) {
   return (
     <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
       <p className="break-words font-semibold">{texto}</p>
-      <button type="button" onClick={onReintentar}
-        className={`mt-3 inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 ${FOCO_VISIBLE}`}>
-        <RefreshCw size={12} aria-hidden="true"/> Reintentar
-      </button>
+      {onReintentar && (
+        <button type="button" onClick={onReintentar}
+          className={`mt-3 inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 ${FOCO_VISIBLE}`}>
+          <RefreshCw size={12} aria-hidden="true"/> Reintentar
+        </button>
+      )}
     </div>
   );
 }
@@ -407,6 +419,11 @@ export default function CRMPage() {
   const [enAnalisis, setEnAnalisis] = useState(false);
   const [filterStage, setFilterStage] = useState('all');
   const { avisar, avisarError, confirmar } = useAvisos();
+  // B4 T24 (FINAL-m37 y F96): el rol después de montar (useRolActual) y lo que puede pedir y ofrecer (accesoCrm, lib/roles.js): sin
+  // leads no se pide nada (ni /crm/warmup, que es solo de ADMIN) y se pinta el texto neutro; las altas, «Configurar CRM» y «Borrar»
+  // solo con su permiso.
+  const rol = useRolActual();
+  const acceso = accesoCrm(rol);
   // Los perdidos (los 50 más recientes y el total real, RP61) y el estado de la carga del tablero.
   const [perdidos, setPerdidos] = useState(null);           // {items, total} | null (todavía no llegó)
   const [leadsListos, setLeadsListos] = useState(false);    // los activos llegaron al menos una vez
@@ -552,12 +569,12 @@ export default function CRMPage() {
     }
   }, []);
 
-  // On mount: warmup pool, then load
+  // On mount: warmup pool, then load. B4 T24 (FINAL-m37): solo con el permiso de leer los leads, y el warmup solo para ADMIN.
   useEffect(() => {
-    // Fire warmup in background (don't await — just wakes the pool)
-    apiFetch('/crm/warmup').catch(() => {});
+    if (!acceso.leads) return;
+    if (acceso.warmup) apiFetch('/crm/warmup').catch(() => {});
     loadAll(true, { inicial: true });
-  }, [loadAll]);
+  }, [loadAll, acceso.leads, acceso.warmup]);
 
   // ═══ B4 T21: la Lista (TABLA-otros punto 4) y el tablero común (KANBAN-crm punto 5) ═════════════════════════════
   // La Lista: TablaEstandar 'crm.leads' en el servidor (/crm/leads con q y el stage_id del select de etapa), activa solo
@@ -568,7 +585,7 @@ export default function CRMPage() {
   // r1 (I2): con la etapa Perdido, perdidos=solo (get_leads deja fuera los CANCELLED por defecto).
   const extraLista = useMemo(() => extraListaLeads(filterStage, stages), [filterStage, stages]);
   const listado = useListado({
-    ruta: '/crm/leads', estado, extra: extraLista, esperar: !listo, despachar, activo: estado.modo === 'lista' && !enAnalisis,
+    ruta: '/crm/leads', estado, extra: extraLista, esperar: !listo || !acceso.listo, despachar, activo: estado.modo === 'lista' && !enAnalisis && acceso.leads,
   });
   const recargarLista = listado.recargar;
   useEffect(() => { recargarListaRef.current = recargarLista; }, [recargarLista]);
@@ -596,7 +613,7 @@ export default function CRMPage() {
     pantalla: ID_LEADS,
     modo: 'cliente',
     columnas: columnasTablero,
-    activo: listo && estado.modo === 'kanban' && !enAnalisis,
+    activo: listo && acceso.leads && estado.modo === 'kanban' && !enAnalisis,
     porColumna: estado.tamano,
     items: leadsTablero,
     columnaDe,
@@ -982,12 +999,14 @@ export default function CRMPage() {
           title="CRM Pipeline"
           subtitle={leadsListos ? `${leads.length} leads · ${formatoPesos(totalValue)} en pipeline`
             : errorLeads ? 'No se pudieron cargar los leads' : 'Cargando leads…'}
-          actions={(
+          actions={acceso.leads ? (
             <div className="flex items-center gap-2 flex-wrap">
+              {acceso.config && (
               <button onClick={openConfig}
                 className="p-2.5 rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-indigo-600 transition-colors" title="Configurar CRM">
                 <Settings size={17}/>
               </button>
+              )}
               <button onClick={loadAll} className="p-2.5 rounded-xl border border-slate-200 text-slate-400 hover:bg-slate-50 transition-colors">
                 <RefreshCw size={17} className={loading ? 'animate-spin' : ''}/>
               </button>
@@ -1005,16 +1024,20 @@ export default function CRMPage() {
                   );
                 })}
               </div>
-              <Button color="indigo" icon={Plus} onClick={() => setShowNewLead(true)}>Nuevo Lead</Button>
+              {acceso.crear && <Button color="indigo" icon={Plus} onClick={() => setShowNewLead(true)}>Nuevo Lead</Button>}
             </div>
-          )} />
+          ) : undefined} />
       </div>
+
+      {acceso.listo && !acceso.leads && (
+        <p role="status" className="m-5 rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600">{TEXTO_SIN_LEADS}</p>
+      )}
 
       {/* ══ B4 T21: la barra, la Lista y el Kanban (TABLA-otros 4, KANBAN-crm 3 y 5; R5, R11, D39, D40, D41) ═════════
           Una sola barra para las dos vistas: la búsqueda es estado.q y el select de etapa (stage_id) va en `filtros`.
           En Lista, la tabla estándar en el servidor; en Kanban, el tablero común en modo cliente con los mismos filtros.
           «Análisis» reemplaza las dos. */}
-      {!enAnalisis && (
+      {acceso.leads && !enAnalisis && (
         // pb-24 en Lista: al final de la tabla, la paginación y los ⋯ de las últimas filas no quedan bajo el botón de la IA.
         <div className={`flex-1 min-h-0 overflow-y-auto p-5 ${estado.modo === 'lista' ? 'pb-24' : ''}`}>
           <div className="flex min-w-0 flex-col gap-4">
@@ -1058,7 +1081,7 @@ export default function CRMPage() {
                 })}
               />
               {estado.modo === 'lista' && (
-                <AccionesLead.Provider value={{ abrir: openDetail, borrar: handleDeleteLead }}>
+                <AccionesLead.Provider value={{ abrir: openDetail, borrar: handleDeleteLead, puedeBorrar: acceso.borrar }}>
                   <TablaEstandar
                     id={ID_LEADS}
                     modo="servidor"
@@ -1091,7 +1114,7 @@ export default function CRMPage() {
               });
               if (vista === 'esqueleto') return <EsqueletoTablero/>;
               if (vista === 'error-etapas') {
-                return <ErrorCarga texto={textoDeError(errorEtapas, 'No se pudieron cargar las etapas del CRM')} onReintentar={() => loadAll()}/>;
+                return <ErrorCarga texto={textoDeError(errorEtapas, 'No se pudieron cargar las etapas del CRM')} onReintentar={ofreceReintentar(errorEtapas) ? () => loadAll() : undefined}/>;
               }
               if (vista === 'sin-etapas') {
                 return (
@@ -1101,7 +1124,7 @@ export default function CRMPage() {
                 );
               }
               if (vista === 'error-leads') {
-                return <ErrorCarga texto={textoDeError(errorLeads, 'No se pudieron cargar los leads')} onReintentar={() => loadAll()}/>;
+                return <ErrorCarga texto={textoDeError(errorLeads, 'No se pudieron cargar los leads')} onReintentar={ofreceReintentar(errorLeads) ? () => loadAll() : undefined}/>;
               }
               const fallo = errorLeads || errorEtapas;
               // Plegada, la columna Perdido solo muestra «—»: el aviso dice qué falló y deja reintentar.
@@ -1117,19 +1140,19 @@ export default function CRMPage() {
                     <LeadCard lead={lead} stage={etapasPorId[columnaDelTablero(lead, stages)]} contexto={contexto}/>
                   )}
                   accionesTarjeta={(lead) => [
-                    { etiqueta: 'Borrar', icono: Trash2, peligro: true, onClick: () => handleDeleteLead(lead) },
+                    { etiqueta: 'Borrar', icono: Trash2, peligro: true, oculto: !acceso.borrar, onClick: () => handleDeleteLead(lead) },
                   ]}
                   // r1 (I1): mientras la columna carga (o no hay leads), sin resumen: nunca «$0».
                   resumenColumna={(clave, d) => (d.cargando || d.error || !leadsTablero
                     ? null : textoResumenEtapa(clave, sumasTablero, { clavePerdido, perdidos }))}
-                  pieColumna={(clave) => (
+                  pieColumna={acceso.crear ? (clave) => (
                     <button type="button" onClick={() => {
                       setNlForm(f => ({...f, pipeline_stage_id: clave}));
                       setShowNewLead(true);
                     }} className={`w-full text-xs font-bold text-slate-600 hover:text-indigo-700 flex items-center gap-1 px-2 py-1.5 hover:bg-indigo-50 rounded-lg transition-colors ${FOCO_VISIBLE}`}>
                       <Plus size={13} aria-hidden="true"/> Agregar lead
                     </button>
-                  )}
+                  ) : undefined}
                   color="indigo"
                   vacio="Sin leads aquí"
                   aviso={(fallo && leadsTablero) || falloPerdido ? (
@@ -1156,7 +1179,7 @@ export default function CRMPage() {
       )}
 
       {/* ══ ANALISIS VIEW (B4 T21, ANALISIS-crm punto 2; R2, R13, RP69, D45) ══════════════════════════════════════ */}
-      {enAnalisis && (
+      {acceso.leads && enAnalisis && (
         <div className="flex-1 min-h-0 overflow-y-auto p-5">
           <PanelAnalisisPerezoso
             modulo="crm"
@@ -1379,10 +1402,12 @@ export default function CRMPage() {
                             className="flex items-center justify-center gap-1.5 py-2 bg-slate-50 border border-slate-200 text-slate-600 rounded-xl text-xs font-bold hover:bg-slate-100">
                             <User size={13}/> Ver en Agenda
                           </Link>
+                          {acceso.borrar && (
                           <button onClick={() => handleDeleteLead(selectedLead)}
                             className="flex items-center justify-center gap-1.5 py-2 bg-rose-50 border border-rose-200 text-rose-600 rounded-xl text-xs font-bold hover:bg-rose-100">
                             <Trash2 size={13}/> Eliminar Lead
                           </button>
+                          )}
                         </div>
                       </div>
                     )}
