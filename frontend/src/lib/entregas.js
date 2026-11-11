@@ -267,7 +267,8 @@ export function infoCobroEntrega(p) {
  * @param {any} p
  * @returns {string}
  */
-export function textoEntregaEstimada(p) {
+/* B4 T24 (FINAL-m29): antes textoEntregaEstimada, el mismo nombre que la de lib/documento-comercial.js con otro contrato. */
+export function textoEntregaTablero(p) {
   return fechaCorta(diaDeNegocio(p?.fecha_entrega_estimada)) || '—';
 }
 
@@ -280,7 +281,7 @@ export function textoEntregaEstimada(p) {
 export function tarjetaEntrega(p) {
   const n = Array.isArray(p?.productos) ? p.productos.length : 0;
   const saldo = saldoDe(p);
-  const entrega = textoEntregaEstimada(p);
+  const entrega = textoEntregaTablero(p);
   return {
     numero: String(p?.numero ?? p?.id ?? ''),
     tipo: 'PVEN',

@@ -1335,7 +1335,7 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   assert.match(lista, /<TarjetaKpi kpi="pven_saldo_por_cobrar" valor=\{tarjetas\?\.saldo_por_cobrar\.valor \?\? null\} ayuda=\{tarjetas\?\.saldo_por_cobrar\.ayuda \?\? undefined\}\s*variacion=\{\{ actual: tarjetas\?\.saldo_por_cobrar\.valor \?\? null, anterior: null, es_foto: true \}\} \/>/);
   assert.match(lista, /<FranjaKpis estado=\{estadoKpis\} titulo="Pedidos de venta">/);
   // r1 (I1): en Kanban abre esa pestaña en Lista con accionVistaEnLista (la misma acción del enlace ?tab=).
-  assert.match(lista, /const siguiente = enKanban \? vista : \(alternarSeleccion\(estado\.vista, vista\) \?\? INICIAL_PEDIDOS\.vista\);\s*despachar\(accionVistaEnLista\(estado, siguiente, opcionesDeLaLista\)\);\s*\};/);
+  assert.match(lista, /const siguiente = enKanban \? vista : \(alternarPaso\(estado\.vista, vista\) \?\? INICIAL_PEDIDOS\.vista\);\s*despachar\(accionVistaEnLista\(estado, siguiente, opcionesDeLaLista\)\);\s*\};/);
 
   // Bloque 6 (D42, RP21, RP90): la franja con «Estás aquí» en Pedido de venta, Entregado y Facturado como pestañas y los
   // atrasados del paso PVEN; sin noResueltos.

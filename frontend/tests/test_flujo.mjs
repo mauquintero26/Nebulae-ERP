@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  congelar, pasosConProgreso, pasosConConteos, conteosDePasos, textoConteo, textoAtraso, alternarSeleccion,
+  congelar, pasosConProgreso, pasosConConteos, conteosDePasos, textoConteo, textoAtraso, alternarPaso,
   resumenSemaforo,
 } from '../src/lib/flujo.js';
 import { congelar as congelarDePedido, PASOS_PEDIDO } from '../src/lib/estados-pedido.js';
@@ -196,11 +196,11 @@ console.log('--- TEST 7: textoAtraso ---');
   assert.equal(textoAtraso(1500), '1.500 con atraso');
 }
 
-console.log('--- TEST 8: alternarSeleccion ---');
+console.log('--- TEST 8: alternarPaso ---');
 {
-  assert.equal(alternarSeleccion('COT', 'COT'), null);
-  assert.equal(alternarSeleccion(null, 'COT'), 'COT');
-  assert.equal(alternarSeleccion('SC', 'COT'), 'COT');
+  assert.equal(alternarPaso('COT', 'COT'), null);
+  assert.equal(alternarPaso(null, 'COT'), 'COT');
+  assert.equal(alternarPaso('SC', 'COT'), 'COT');
 }
 
 console.log('--- TEST 9: resumenSemaforo (RP67: error -> gris y «—»; D21) ---');
@@ -303,20 +303,20 @@ console.log('--- TEST 12 (T5A; R6, RP67 y cruce C9 de la verificación): opcione
   }
 }
 
-console.log('--- TEST 13 (T5A): textoDetalle (solo en el paso esEste) y textoAntiguedad (solo con mostrarAntiguedad) ---');
+console.log('--- TEST 13 (T5A): textoDetalle (solo en el paso esEste) y textoMasAntiguo (solo con mostrarAntiguedad) ---');
 {
   assert.equal(F.textoDetalle([{ label: 'Nueva', n: 1 }, { label: 'Asignada', n: 2 }]), 'Nueva 1 · Asignada 2');
   assert.equal(F.textoDetalle([{ label: 'Confirmada', n: 1234 }]), 'Confirmada 1.234');
   // Lo que no tiene etiqueta o número se salta; nada da ''.
   assert.equal(F.textoDetalle([{ label: 'Nueva', n: null }, { n: 3 }, null, { label: 'Asignada', n: 0 }]), 'Asignada 0');
   for (const nada of [null, undefined, [], 'x', {}]) assert.equal(F.textoDetalle(/** @type {any} */ (nada)), '');
-  assert.equal(F.textoAntiguedad(6), 'El más antiguo: 6 días');
-  assert.equal(F.textoAntiguedad(1), 'El más antiguo: 1 día');
-  assert.equal(F.textoAntiguedad(0), 'El más antiguo: 0 días');
-  assert.equal(F.textoAntiguedad(1200), 'El más antiguo: 1.200 días');
-  assert.equal(F.textoAntiguedad(1.4), 'El más antiguo: 1 día', 'redondeado, y el plural sale del redondeado');
-  assert.equal(F.textoAntiguedad(1.6), 'El más antiguo: 2 días', 'r1 (M16): se redondea, no se trunca');
-  for (const nada of [null, undefined, NaN, -1, '6']) assert.equal(F.textoAntiguedad(/** @type {any} */ (nada)), '');
+  assert.equal(F.textoMasAntiguo(6), 'El más antiguo: 6 días');
+  assert.equal(F.textoMasAntiguo(1), 'El más antiguo: 1 día');
+  assert.equal(F.textoMasAntiguo(0), 'El más antiguo: 0 días');
+  assert.equal(F.textoMasAntiguo(1200), 'El más antiguo: 1.200 días');
+  assert.equal(F.textoMasAntiguo(1.4), 'El más antiguo: 1 día', 'redondeado, y el plural sale del redondeado');
+  assert.equal(F.textoMasAntiguo(1.6), 'El más antiguo: 2 días', 'r1 (M16): se redondea, no se trunca');
+  for (const nada of [null, undefined, NaN, -1, '6']) assert.equal(F.textoMasAntiguo(/** @type {any} */ (nada)), '');
 }
 
 console.log('--- TEST 14 (T5A): textos de la barra y de los puntos — tituloPaso, textoEstadoPaso, tituloPunto e indicePasoActual ---');
@@ -658,7 +658,7 @@ console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuent
   const pasos = codigo(fuentes['PasosFlujo.tsx']);
   assert.match(pasos, /import \{ Contador \} from '@\/components\/ui\/Contador';/);
   assert.ok(!/estadoDeConteo|from '@\/lib\/tabla'/.test(pasos), 'el estado de cada número es estadoNumeroFranja (lib/flujo.js)');
-  for (const n of ['indicePasoActual', 'textoAntiguedad', 'chipAtraso', 'textoDetalle', 'textoEstadoPaso', 'tituloPaso', 'tituloPunto',
+  for (const n of ['indicePasoActual', 'textoMasAntiguo', 'chipAtraso', 'textoDetalle', 'textoEstadoPaso', 'tituloPaso', 'tituloPunto',
     'estadoNumeroFranja', 'conectorHecho', 'hayEnlaces']) {
     assert.match(pasos, new RegExp(`\\b${n}\\(`), `PasosFlujo usa ${n}`);
   }
@@ -742,7 +742,7 @@ console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuent
   assert.match(pasos, /<span aria-hidden="true">\{chip\.corto\}<\/span>\s*<span className="sr-only">\{chip\.largo\}<\/span>/, 'compacto: siempre corto');
   assert.match(pasos, /<span aria-hidden="true" className="@2xl\/flujo:hidden">\{chip\.corto\}<\/span>\s*<span className="sr-only @2xl\/flujo:not-sr-only">\{chip\.largo\}<\/span>/);
   assert.match(pasos, /const detalle = paso\.esEste \? textoDetalle\(paso\.detalle\) : '';/, 'el detalle solo en el esEste');
-  assert.match(pasos, /const antiguedad = mostrarAntiguedad \? textoAntiguedad\(paso\.masAntiguoDias\) : '';/);
+  assert.match(pasos, /const antiguedad = mostrarAntiguedad \? textoMasAntiguo\(paso\.masAntiguoDias\) : '';/);
   assert.match(pasos, /const ayuda = mostrarAyuda && paso\.ayuda \? paso\.ayuda : '';/);
   assert.match(pasos, /variante = 'barra'/, "por defecto 'barra'");
   assert.match(pasos, /mostrarAntiguedad = false/, 'flujo_contenido_caja: sin antigüedad por defecto');

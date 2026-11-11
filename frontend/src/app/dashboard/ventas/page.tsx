@@ -23,7 +23,7 @@ import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
 import { PanelAnalisisPerezoso } from '@/components/analisis';
 import { FOCOS, TABLE } from '@/lib/design-system';
 import { accionPestana, campoOrden, dependenciasTablero, estadoDelTotal, normalizarRespuesta, queryListado } from '@/lib/tabla';
-import { alternarSeleccion, pasosConConteos } from '@/lib/flujo';
+import { alternarPaso, pasosConConteos } from '@/lib/flujo';
 import {
   PASOS_FLUJO_VENTAS, chipsFiltroHub, conteosDesdeResumen, leerEnlaceHub, pasoTrasPestana, tabHubDePaso, textoRegla,
 } from '@/lib/flujo-ventas';
@@ -1006,7 +1006,7 @@ export default function VentasHub() {
     if (enAnalisis) cambiarSeccion('documentos');
   };
   const elegirPaso = (clave: string) => {
-    const paso = alternarSeleccion(estado.paso, clave);
+    const paso = alternarPaso(estado.paso, clave);
     despachar({ tipo: 'paso', valor: paso });
     const vista = paso ? tabHubDePaso(paso) : null;
     if (vista) despachar(accionPestana(estado, vista, opcionesEstadosHub));

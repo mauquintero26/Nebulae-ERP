@@ -35,7 +35,7 @@ import {
   accionModo, accionPestana, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta,
 } from '@/lib/tabla';
 import type { AccionTabla } from '@/lib/tabla';
-import { alternarSeleccion } from '@/lib/flujo';
+import { alternarPaso } from '@/lib/flujo';
 import { enlaceVerAnalisis, leerEnlacePedidos, pasosDePedidos, textoRegla, vistaDePasoPedido } from '@/lib/flujo-ventas';
 import {
   COLUMNAS_PEDIDO, OPCIONES_ESTADOS_TABLERO_PEDIDO, RUTA_LISTA_PEDIDOS, accionesTarjetaPedido, chipsDocumentoVentas,
@@ -620,11 +620,11 @@ export default function VentaClient() {
   // ── B4 T10, bloque 5: las tarjetas (KPI-ventas punto 9; R12, RP19 (2), D5) ──
   const tarjetas = tarjetasPedidos(stats?.datos?.kpis ?? null);
   // En Lista son pestañas (D41: accionPestana, como un clic en la pestaña); tocar la activa vuelve a Todos (la de siempre,
-  // alternarSeleccion). En Kanban abren esa pestaña en Lista (accionVistaEnLista, la misma acción del enlace ?tab=). El
+  // alternarPaso). En Kanban abren esa pestaña en Lista (accionVistaEnLista, la misma acción del enlace ?tab=). El
   // monto vendido y el saldo no tienen una vista: no son botones.
   const vistaActiva = enKanban ? null : estado.vista;
   const elegirVista = (vista: string) => {
-    const siguiente = enKanban ? vista : (alternarSeleccion(estado.vista, vista) ?? INICIAL_PEDIDOS.vista);
+    const siguiente = enKanban ? vista : (alternarPaso(estado.vista, vista) ?? INICIAL_PEDIDOS.vista);
     despachar(accionVistaEnLista(estado, siguiente, opcionesDeLaLista));
   };
 

@@ -2881,7 +2881,7 @@ console.log('--- TEST 48 (B4 T19; KANBAN-logistica 4, KPI-inventario 8; R15, RP2
   trae(e, "useSyncExternalStore(suscribirRol, () => getUsuarioActual().role, () => '')", 'el rol se lee después de montar');
   noTrae(sinComentarios(e), 'useState(() => getUsuarioActual()', 'el rol no se lee en el inicializador');
   trae(e, 'if (recargarTrasError(err)) { setVueltaConteos((n) => n + 1); setVueltaStats((n) => n + 1); }', 'si el PATCH del tablero falla: solo pestañas y tarjetas (D39)');
-  trae(e, 'textoEntregaEstimada(p)', 'la entrega estimada es una fecha de negocio');
+  trae(e, 'textoEntregaTablero(p)', 'la entrega estimada es una fecha de negocio');
   noTrae(sinComentarios(e), 'slice(0, 10)', 'sin el ISO crudo');
   trae(e, 'extra: extraDeLaLista', 'la tabla pide estados + saldo de la pestaña');
   const t = (id) => { const i = e.indexOf(`<TarjetaKpi kpi="${id}"`); assert.ok(i >= 0, id); return e.slice(i, e.indexOf('/>', i) + 2); };

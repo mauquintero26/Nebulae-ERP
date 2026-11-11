@@ -35,7 +35,7 @@ import {
   COLUMNAS_ENTREGA, NOTA_ENTREGAS, OPCIONES_ESTADOS_TABLERO_ENTREGA, VISTA_DE_TRABAJO_ENTREGA, confirmacionDespacho,
   consultaColumnaEntrega, consultaConteoEntrega, consultaEntregas, cuerpoDespacho, infoCobroEntrega, mensajeFaltaBodega, opcionesEstadosEntrega,
   pestanasEntrega, puedeCobrarSaldo, puedeDespacharPedido, recordatorioSaldo, reglaSoltarEntrega, resumenColumnaEntrega, saldoEntrega,
-  tarjetaEntrega, tarjetasEntregas, textoEntregaEstimada, textoVacioEntregas, vistaDeTarjetaEntrega,
+  tarjetaEntrega, tarjetasEntregas, textoEntregaTablero, textoVacioEntregas, vistaDeTarjetaEntrega,
 } from '@/lib/entregas';
 
 /** Una línea del pedido (productos de _ven_dict: JSON; los nombres son los del servidor). */
@@ -144,8 +144,8 @@ const COLUMNAS_TABLA_ENTREGAS: ColumnaTabla<FilaPedido>[] = [
   { id: 'cobro', titulo: 'Cobro', ancho: 116, ocultaPorDefecto: true, celda: (p) => <CeldaCobro p={p} /> },
   { id: 'estado', titulo: 'Estado', ancho: 124, clave: true, ordenable: 'estado', titleCelda: (p) => infoEstadoPedido(p.estado).label, celda: (p) => <CeldaEstado p={p} /> },
   { id: 'entrega', titulo: 'Entrega est.', ancho: 100, ocultaPorDefecto: true, ordenable: 'entrega',
-    titleCelda: (p) => textoEntregaEstimada(p),
-    celda: (p) => <span className="text-xs text-slate-600">{textoEntregaEstimada(p)}</span> },
+    titleCelda: (p) => textoEntregaTablero(p),
+    celda: (p) => <span className="text-xs text-slate-600">{textoEntregaTablero(p)}</span> },
   { id: 'acciones', titulo: 'Acciones', ancho: 112, clave: true, fija: 'derecha', celda: (p) => <CeldaAcciones p={p} /> },
 ];
 /** {campo de orden: título}, para el chip «Orden: Total ↓», solo de las columnas que se ordenan. */

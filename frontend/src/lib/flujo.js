@@ -11,7 +11,7 @@
  *    la forma de pasosConConteos (camelCase).
  *  - pasosConConteos: la franja (los números por paso, el actual y el elegido).
  *  - El chequeo de claves es tiene() de estados-pedido.js (sin copia propia).
- *  - textoConteo, textoAtraso, alternarSeleccion y resumenSemaforo: los textos y el clic de la franja.
+ *  - textoConteo, textoAtraso, alternarPaso y resumenSemaforo: los textos y el clic de la franja.
  * No lee ni escribe ningún almacenamiento (R4): el modo compacto de la franja lo guarda BannerFlujo con
  * usePreferencia('flujo:<id>') (T5A). La regla de atraso NO vive aquí: Ventas la trae del servidor (resolucion_ventas.py,
  * espejo en hub-ventas.js) y Compras usa esPecVencido de estados-compras.js.
@@ -210,7 +210,8 @@ export function textoAtraso(n) {
  * @param {T} clave
  * @returns {T | null}
  */
-export function alternarSeleccion(actual, clave) {
+/* B4 T24 (FINAL-m29): antes alternarSeleccion, el mismo nombre que la de lib/tabla.js con otro contrato. */
+export function alternarPaso(actual, clave) {
   return actual === clave ? null : clave;
 }
 
@@ -325,7 +326,8 @@ export function textoDetalle(detalle) {
  * @param {unknown} dias
  * @returns {string}
  */
-export function textoAntiguedad(dias) {
+/* B4 T24 (FINAL-m29): antes textoAntiguedad, el mismo nombre que la de lib/hub-ventas.js con otro texto. */
+export function textoMasAntiguo(dias) {
   const n = numeroONulo(dias);
   if (n === null || n < 0) return '';
   const r = Math.round(n);

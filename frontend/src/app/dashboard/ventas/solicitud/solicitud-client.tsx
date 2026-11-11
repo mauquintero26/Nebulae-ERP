@@ -27,7 +27,7 @@ import {
   accesoresDeOrden, accionModo, accionPestana, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta,
 } from '@/lib/tabla';
 import type { AccionTabla } from '@/lib/tabla';
-import { alternarSeleccion } from '@/lib/flujo';
+import { alternarPaso } from '@/lib/flujo';
 import { avisoVencidas, enlaceVerAnalisis, pasosDeLista, textoRegla } from '@/lib/flujo-ventas';
 import {
   COLUMNAS_SC, OPCIONES_ESTADOS_TABLERO_SC, chipsDocumentoVentas, confirmacionReiniciarSolicitud, consultaColumnaSC,
@@ -1476,10 +1476,10 @@ export default function SolicitudClient() {
   // ── B4 T8, bloque 5: las tarjetas (KPI-ventas punto 7; R12, RP19) ──
   const tarjetas = tarjetasSolicitudes(listado.resumen);
   // En Lista son las pestañas (D41: accionPestana, como un clic en la pestaña); tocar la activa vuelve a Activas (la de
-  // siempre, alternarSeleccion). En Kanban abren esa pestaña en Lista: el tablero muestra todas.
+  // siempre, alternarPaso). En Kanban abren esa pestaña en Lista: el tablero muestra todas.
   const vistaActiva = modoEfectivo === 'lista' ? estado.vista : null;
   const elegirVista = (vista: string) => {
-    const siguiente = modoEfectivo === 'lista' ? (alternarSeleccion(estado.vista, vista) ?? INICIAL_SC.vista) : vista;
+    const siguiente = modoEfectivo === 'lista' ? (alternarPaso(estado.vista, vista) ?? INICIAL_SC.vista) : vista;
     despachar(accionPestana(estado, siguiente, opcionesEstadosSolicitudes));
     if (modoEfectivo === 'kanban') despachar({ tipo: 'modo', valor: 'lista' });
   };

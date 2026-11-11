@@ -3210,6 +3210,26 @@ console.log('--- TEST T24-j (B4 T24: F34, F35, F36 y F10): el margen de la fila 
   assert.match(t, /@template T\n \* @param \{ReadonlyArray<T> \| null \| undefined\} nombres\n \* @param \{number\} max\n \* @returns \{\{visibles: T\[\], mas: number, aviso: string \| null\}\}\n \*\/\nexport function recortarColumnas/);
 }
 
+console.log('--- TEST T24-k (B4 T24, FINAL-m29): dos módulos de src/lib no exportan el mismo nombre ---');
+{
+  const dir = new URL('../src/lib/', import.meta.url);
+  const vistos = new Map();
+  for (const archivo of readdirSync(dir).filter((f) => /\.(js|ts)$/.test(f))) {
+    const fuente = readFileSync(new URL(archivo, dir), 'utf8');
+    for (const [, nombre] of fuente.matchAll(/^export (?:async )?(?:function\*?|const|let|class)\s+([A-Za-z_$][\w$]*)/gm)) {
+      vistos.set(nombre, [...(vistos.get(nombre) ?? []), archivo]);
+    }
+  }
+  const repetidos = [...vistos].filter(([, archivos]) => archivos.length > 1).map(([n, a]) => `${n}: ${a.join(', ')}`);
+  assert.deepEqual(repetidos, [], 'un autoimport elegiría el equivocado');
+  // Los nombres nuevos: alternarPaso y textoMasAntiguo (flujo.js), textoEntregaTablero (entregas.js).
+  const flujo = await import('../src/lib/flujo.js');
+  assert.equal(flujo.alternarPaso('COT', 'COT'), null);
+  assert.equal(flujo.textoMasAntiguo(6), 'El más antiguo: 6 días');
+  const entregas = await import('../src/lib/entregas.js');
+  assert.equal(entregas.textoEntregaTablero({}), '—');
+}
+
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');
 console.log('✓ T4C: sesión, estado armado, partes de columnas, URL de la lista, carga vigente, estado de la lista y modo cliente.');
 console.log('✓ T4C r1: orden rechazado, estados en la sesión, escrituras del usuario del render, esperar y vueltas.');

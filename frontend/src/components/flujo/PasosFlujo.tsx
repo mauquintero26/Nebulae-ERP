@@ -9,7 +9,7 @@ import {
 import { Contador } from '@/components/ui/Contador';
 import type { EstadoKpi } from '@/lib/kpis';
 import {
-  avisosVisibles, chipAtraso, conectorHecho, estadoNumeroFranja, hayEnlaces, indicePasoActual, textoAntiguedad,
+  avisosVisibles, chipAtraso, conectorHecho, estadoNumeroFranja, hayEnlaces, indicePasoActual, textoMasAntiguo,
   textoDetalle, textoEstadoPaso, tituloPaso, tituloPunto,
 } from '@/lib/flujo';
 import type { ClaveIcono, EstadoPaso, OrientacionFlujo, PasoVista, TonoAviso, TonoPaso, VarianteFlujo } from './tipos';
@@ -60,7 +60,7 @@ export type PropsPasosFlujo = {
   orientacion?: OrientacionFlujo;
   /** El aria-label de la lista de pasos. */
   etiqueta: string;
-  /** El clic en una caja sin href (y que no es esEste): la pantalla pone o quita ese filtro (alternarSeleccion). */
+  /** El clic en una caja sin href (y que no es esEste): la pantalla pone o quita ese filtro (alternarPaso). */
   onSeleccionar?: (clave: string) => void;
   /** 'banner': pastillas en una sola línea. 'barra': círculos de 22 px (el panel rápido). */
   compacto?: boolean;
@@ -374,7 +374,7 @@ function PasosBanner({
         const Icon = paso.icono ? ICONOS[paso.icono] : null;
         const chip = chipAtraso(paso.atrasados, { estadoConteos });
         const detalle = paso.esEste ? textoDetalle(paso.detalle) : '';
-        const antiguedad = mostrarAntiguedad ? textoAntiguedad(paso.masAntiguoDias) : '';
+        const antiguedad = mostrarAntiguedad ? textoMasAntiguo(paso.masAntiguoDias) : '';
         const interactiva = Boolean(paso.href) || Boolean(onSeleccionar && !paso.esEste);
         const ayuda = mostrarAyuda && paso.ayuda ? paso.ayuda : '';
         const clases = `${compacto ? CAJA_PASTILLA : CAJA_ADAPTABLE} ${coloresCaja(paso, interactiva, Boolean(chip), compacto)}`;

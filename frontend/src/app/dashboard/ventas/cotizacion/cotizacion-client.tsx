@@ -57,7 +57,7 @@ import {
   accionModo, accionPestana, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta,
 } from '@/lib/tabla';
 import type { AccionTabla } from '@/lib/tabla';
-import { alternarSeleccion } from '@/lib/flujo';
+import { alternarPaso } from '@/lib/flujo';
 import { avisosCotizaciones, enlaceVerAnalisis, pasosDeLista, textoRegla } from '@/lib/flujo-ventas';
 import {
   COLUMNAS_COT, OPCIONES_ESTADOS_TABLERO_COT, chipsDocumentoVentas, consultaColumnaCOT, estadoDeTarjeta,
@@ -1238,11 +1238,11 @@ export default function CotizacionClient() {
   // ── B4 T9, bloque 5: las tarjetas (KPI-ventas punto 8; R12, RP19) ──
   const tarjetas = tarjetasCotizaciones(listado.resumen);
   // En Lista son las pestañas (D41: accionPestana, como un clic en la pestaña); tocar la activa vuelve a Activas (la de
-  // siempre, alternarSeleccion). En Kanban abren esa pestaña en Lista: el tablero muestra todas. Monto confirmado suma las
+  // siempre, alternarPaso). En Kanban abren esa pestaña en Lista: el tablero muestra todas. Monto confirmado suma las
   // Confirmadas: abre esa pestaña. El total no tiene una vista: no es un botón (RP19 (5)).
   const vistaActiva = enKanban ? null : estado.vista;
   const elegirVista = (vista: string) => {
-    const siguiente = enKanban ? vista : (alternarSeleccion(estado.vista, vista) ?? INICIAL_COT.vista);
+    const siguiente = enKanban ? vista : (alternarPaso(estado.vista, vista) ?? INICIAL_COT.vista);
     despachar(accionPestana(estado, siguiente, opcionesEstadosCotizaciones));
     if (enKanban) despachar({ tipo: 'modo', valor: 'lista' });
   };
