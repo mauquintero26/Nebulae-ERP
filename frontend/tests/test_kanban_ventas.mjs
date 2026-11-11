@@ -1573,9 +1573,11 @@ console.log('--- B4 T24 (FINAL-m31 y FINAL-m38): los tableros de Ventas solo se 
   const { accesoTableroVentas, TEXTO_TABLERO_SOLO_VER } = await import('../src/lib/roles.js');
   // Un caso por rol, igual que soloLecturaPedidosWeb (RP62): ADMIN y ASESOR mueven; los demás ven el tablero con el motivo.
   for (const rol of ['ADMIN', 'ASESOR', 'admin', 'Vendedor', ' asesor ']) assert.equal(accesoTableroVentas(rol).soloLectura, null, rol);
-  for (const rol of ['FINANZAS', 'BODEGA', 'COMPRAS', 'CONSULTA', 'INVENTADO', '', null, undefined]) {
+  for (const rol of ['FINANZAS', 'BODEGA', 'COMPRAS', 'CONSULTA', 'INVENTADO']) {
     assert.equal(accesoTableroVentas(rol).soloLectura, TEXTO_TABLERO_SOLO_VER, String(rol));
   }
+  // r1 (m9 b): mientras se lee el rol, sin el aviso (soloLectura null) y sin mover.
+  for (const rol of ['', null, undefined]) assert.deepEqual([accesoTableroVentas(rol).soloLectura, accesoTableroVentas(rol).mover], [null, false], String(rol));
   const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const sin = (f) => f.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   const PANTALLAS = ['app/dashboard/ventas/page.tsx', 'app/dashboard/ventas/solicitud/solicitud-client.tsx',

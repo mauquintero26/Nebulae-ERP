@@ -2970,9 +2970,14 @@ console.log('--- B4 T24 (FINAL-m10, FINAL-m31 y FINAL-m38): los tableros y las a
     const a = accesoCompras(rol);
     assert.deepEqual([a.cambiarPec, a.tracking, a.soloLectura], [true, true, null], rol);
   }
-  for (const rol of ['ASESOR', 'FINANZAS', 'BODEGA', 'CONSULTA', 'INVENTADO', '', null]) {
+  for (const rol of ['ASESOR', 'FINANZAS', 'BODEGA', 'CONSULTA', 'INVENTADO']) {
     const a = accesoCompras(rol);
     assert.deepEqual([a.cambiarPec, a.tracking, a.soloLectura], [false, false, TEXTO_TABLERO_SOLO_VER], String(rol));
+  }
+  // r1 (m9 b): mientras se lee el rol, sin el aviso (soloLectura null) y sin cambiar nada.
+  for (const rol of ['', null]) {
+    const a = accesoCompras(rol);
+    assert.deepEqual([a.cambiarPec, a.tracking, a.soloLectura], [false, false, null], String(rol));
   }
   const sin = (f) => f.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   const hub = sin(leerFuente('app/dashboard/compras/page.tsx'));
