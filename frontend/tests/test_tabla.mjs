@@ -2940,7 +2940,9 @@ console.log('--- TEST T24-FOCO (B4 T24: FINAL-C6, FINAL-m25 y F41): el foco visi
   // Las piezas compartidas: el token, sin anillos -100/-300 de foco y sin outline-none.
   const PIEZAS = ['components/tabla/BarraTabla.tsx', 'components/tabla/FiltroEstados.tsx', 'components/tabla/MenuAjustes.tsx',
     'components/tabla/Paginacion.tsx', 'components/ui/Kanban.tsx', 'components/ui/MenuFila.tsx', 'components/ui/ConmutadorVista.tsx',
-    'components/ui/TarjetaKpi.tsx', 'components/ui/AvisoFuente.tsx'];
+    'components/ui/TarjetaKpi.tsx', 'components/ui/AvisoFuente.tsx',
+    // Medido en el banco (Tab real): el botón «Contraer Menú» del menú lateral tenía focus:outline-none (0:1).
+    'components/Sidebar.tsx'];
   for (const ruta of PIEZAS) {
     const c = codigo(leer(ruta));
     assert.match(c, /import \{[^}]*\bFOCOS?\b[^}]*\} from '@\/lib\/design-system';/, `${ruta}: importa el token`);
