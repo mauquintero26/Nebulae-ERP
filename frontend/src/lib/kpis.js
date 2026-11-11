@@ -306,16 +306,19 @@ export function textoContador(valor, estado) {
 /**
  * El color de tarjeta de una clase de Tailwind ('bg-blue-500' -> 'blue', también text-, border-, ring-, from- y
  * to-). Un color que no es de COLORES_KPI, un '#hex' o nada dan `respaldo` ('indigo'). B4 T24 (F26): la única regla también para el
- * tono de las columnas de los tableros (con respaldo 'slate'): sin copias de «la familia de una clase».
+ * tono de las columnas de los tableros (con respaldo 'slate'): sin copias de «la familia de una clase». r2 (C8): `conjunto` (aditivo;
+ * por defecto COLORES_KPI) son los colores admitidos: el tablero pasa las claves de TONOS (CLAVES_TONOS_KANBAN de lib/kanban.js), así
+ * que slate queda solo para lo que el tablero no puede pintar.
  * @param {unknown} clase
- * @param {ColorKpi} [respaldo]
- * @returns {ColorKpi}
+ * @param {string} [respaldo]
+ * @param {ReadonlyArray<string>} [conjunto]
+ * @returns {any}
  */
-export function acentoDesdeClase(clase, respaldo = 'indigo') {
+export function acentoDesdeClase(clase, respaldo = 'indigo', conjunto = COLORES_KPI) {
   const texto = typeof clase === 'string' ? clase.trim() : '';
   const m = /^(?:bg|text|border|ring|from|to)-([a-z]+)-\d{2,3}$/.exec(texto);
   const color = m ? m[1] : texto;
-  return COLORES_KPI.includes(/** @type {ColorKpi} */ (color)) ? /** @type {ColorKpi} */ (color) : respaldo;
+  return conjunto.includes(color) ? color : respaldo;
 }
 
 // ─── lo que usan TarjetaKpi, Contador y useEstadoKpi (T4A) ──────────────────────

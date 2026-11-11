@@ -36,7 +36,7 @@
  * lucide-react, pero aquí no se pinta nada.
  */
 
-import { definirColumnas, estadosDeColumnaLista } from './kanban.js';
+import { CLAVES_TONOS_KANBAN, definirColumnas, estadosDeColumnaLista } from './kanban.js';
 import {
   congelar, ESTADOS_PEDIDO, PASOS_PEDIDO, TRANSICIONES_PEDIDO_PATCH, grupoPedido, transicionesPedido, esPedidoVigente,
   infoEstadoPedido, tiene, ESTADOS_PEDIDO_OPERATIVOS, ESTADOS_PEDIDO_CERRADOS,
@@ -190,8 +190,11 @@ function exigirDestino(claves, destino, tablero) {
   if (!claves.includes(destino)) throw new Error(`Columna del tablero ${tablero} desconocida: ${String(destino)}`);
 }
 
-/** B4 T24 (F26): el tono de una columna, de la clase de su estado: acentoDesdeClase de kpis.js (lo que no es de COLORES_KPI, slate). */
-const tonoDeClase = (clase) => acentoDesdeClase(clase, 'slate');
+/**
+ * B4 T24 (F26) y r2 (C8): el tono de una columna, de la clase de su estado: acentoDesdeClase de kpis.js con las claves de TONOS del
+ * tablero (CLAVES_TONOS_KANBAN): slate solo para lo que el tablero no pinta.
+ */
+const tonoDeClase = (clase) => acentoDesdeClase(clase, 'slate', CLAVES_TONOS_KANBAN);
 
 /** El pedido vigente de una cotización, con el texto del bloqueo y el enlace al pedido. */
 function bloqueoPorPedido(cot, returnTo) {

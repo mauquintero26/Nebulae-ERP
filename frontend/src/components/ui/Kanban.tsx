@@ -10,7 +10,7 @@ import {
   cancelarVerMas, columnaBajoPunto, columnaOcupada, columnasPorLanzar, consultaColumna, crearTopesDeEspera, crearTurnos,
   definirColumnas, deshacerMovimiento, esCopiaVieja, esDesplazable, esperarRecarga, estadoColumna, estadoDestino, firmaConsulta,
   idsPendientes, limiteDeRecarga, llegoRecarga, mapaDestinos, marcarRecibido, minimasTrasSoltar, moverTarjeta, opcionesMoverA,
-  paginaDeRespuesta,
+  paginaDeRespuesta, CLAVES_TONOS_KANBAN,
   plegadasValidas, quedanEnServidor, reemplazarTarjeta, reglaSegunManejadores, resolverPlegadas, resolverSoltar,
   siguienteAnuncio, soltarEsperasOcultas, subirVersiones, superaUmbral, tableroCliente, textoMovimiento, textoTotalColumna,
   velocidadAutodesplazamiento, vencerEspera,
@@ -806,7 +806,9 @@ export type PropsTableroKanban<T> = {
 type Tono = { punto: string; borde: string; fondo: string; texto: string; anillo: string };
 
 // Clases literales (el JIT de Tailwind no ve clases armadas): una por familia de color de las columnas.
-const TONOS: Record<string, Tono> = {
+type ClaveTonoKanban = typeof CLAVES_TONOS_KANBAN[number];
+// r2 (C8): las claves son CLAVES_TONOS_KANBAN de lib/kanban.js (una prueba fija que coinciden).
+const TONOS: Record<ClaveTonoKanban, Tono> = {
   slate: { punto: 'bg-slate-400', borde: 'border-slate-400', fondo: 'bg-slate-100', texto: 'text-slate-700', anillo: 'ring-slate-300' },
   gray: { punto: 'bg-gray-400', borde: 'border-gray-400', fondo: 'bg-gray-100', texto: 'text-gray-700', anillo: 'ring-gray-300' },
   red: { punto: 'bg-red-500', borde: 'border-red-400', fondo: 'bg-red-50', texto: 'text-red-700', anillo: 'ring-red-300' },
@@ -827,7 +829,7 @@ const TONOS: Record<string, Tono> = {
   pink: { punto: 'bg-pink-500', borde: 'border-pink-400', fondo: 'bg-pink-50', texto: 'text-pink-700', anillo: 'ring-pink-300' },
   rose: { punto: 'bg-rose-500', borde: 'border-rose-400', fondo: 'bg-rose-50', texto: 'text-rose-700', anillo: 'ring-rose-300' },
 };
-const tonoDe = (tono: string | undefined): Tono => TONOS[tono ?? 'slate'] ?? TONOS.slate;
+const tonoDe = (tono: string | undefined): Tono => TONOS[(tono ?? 'slate') as ClaveTonoKanban] ?? TONOS.slate;
 
 const VACIO_POR_DEFECTO = 'Sin documentos aquí';
 /** B4 T24 (F20): «Ver más» en el tono -700 del acento (≥ 4,5:1 en text-xs; el -600 de ACCENTS daba ≈3:1 con amber). */

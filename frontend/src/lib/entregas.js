@@ -47,8 +47,8 @@ const DESPACHADOS = congelar(['ENTREGADO', 'PARCIALMENTE_ENTREGADO', 'FACTURADO'
  * @type {ReadonlyArray<Readonly<ColumnaEntrega>>}
  */
 export const COLUMNAS_ENTREGA = /** @type {any} */ (definirColumnas([
-  // B4 T24 (F26): los tonos son de COLORES_KPI (antes 'sky', que no lo es).
-  { clave: 'esperando', titulo: 'Esperando mercancía', tono: 'blue',
+  // B4 T24 r2 (C8): sky, el color de BASE (el tablero lo pinta: CLAVES_TONOS_KANBAN).
+  { clave: 'esperando', titulo: 'Esperando mercancía', tono: 'sky',
     estados: Object.keys(ESTADOS_PEDIDO).filter((e) => columnaEntrega({ estado: e }) === 'esperando'), saldo: null },
   { clave: 'falta_saldo', titulo: 'Listo pero falta saldo', tono: 'amber', estados: [...PASO_LISTO], saldo: 'pendiente' },
   { clave: 'listo', titulo: 'Listo para despachar', tono: 'emerald', estados: [...PASO_LISTO], saldo: 'pagado' },

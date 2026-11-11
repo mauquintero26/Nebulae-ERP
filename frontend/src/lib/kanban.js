@@ -38,6 +38,13 @@ export const SIN_COLUMNA = '__sin_columna';
 /** El motivo de un tablero sin regla, si la pantalla no pasa su soloLectura (RP67). */
 export const TEXTO_SOLO_VER = 'Este tablero es solo para ver.';
 
+/**
+ * B4 T24 r2 (C8): las familias de color que el tablero sabe pintar (las claves de TONOS de components/ui/Kanban.tsx, con sus clases
+ * literales para el JIT de Tailwind; una prueba fija que son las mismas). El tono de una columna sale de acentoDesdeClase con este
+ * conjunto: slate solo para lo que no está. Inmutable.
+ */
+export const CLAVES_TONOS_KANBAN = congelar(['slate', 'gray', 'red', 'orange', 'amber', 'yellow', 'lime', 'green', 'emerald', 'teal', 'cyan', 'sky', 'blue', 'indigo', 'violet', 'purple', 'fuchsia', 'pink', 'rose']);
+
 const idPorDefecto = (item) => item?.id;
 
 // ─── columnas ───────────────────────────────────────────────────────────────────

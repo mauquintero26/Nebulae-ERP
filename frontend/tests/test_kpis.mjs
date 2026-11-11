@@ -198,6 +198,12 @@ console.log('--- TEST 9: acentoDesdeClase (KPI-otros) ---');
   assert.equal(acentoDesdeClase('bg-green-100', 'slate'), 'slate');
   assert.equal(acentoDesdeClase('bg-orange-100', 'slate'), 'orange');
   assert.equal(acentoDesdeClase(undefined, 'slate'), 'slate');
+  // r2 (C8): y el conjunto de colores admitidos (aditivo; por defecto COLORES_KPI): el tablero pasa las claves de TONOS.
+  const tonos = ['green', 'cyan', 'violet', 'sky', 'slate'];
+  assert.equal(acentoDesdeClase('bg-green-100', 'slate', tonos), 'green');
+  assert.equal(acentoDesdeClase('bg-cyan-500', 'slate', tonos), 'cyan');
+  assert.equal(acentoDesdeClase('bg-stone-100', 'slate', tonos), 'slate', 'lo que el tablero no pinta');
+  assert.equal(acentoDesdeClase('bg-cyan-500'), 'indigo', 'sin conjunto: COLORES_KPI, como siempre');
 }
 
 console.log('--- TEST 10: CATALOGO_KPI, etiquetaKpi e ICONOS_KPI ---');

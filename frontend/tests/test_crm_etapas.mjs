@@ -63,8 +63,8 @@ console.log('--- TEST 2: columnasDesdeEtapas ---');
   // La respuesta {status, data}, una clase desconocida y una etapa sin nombre.
   const raras = columnasDesdeEtapas({ status: 'success', data: [{ id: 9, name: ' ', color: 'bg-lime-500', maps_to_status: null }] });
   assert.deepEqual(raras.map((c) => [c.clave, c.titulo, c.colorHex, c.bgHex, c.tono, c.cerrada]),
-    // B4 T24 (F26, D27): el tono es acentoDesdeClase con respaldo slate (lime no es de COLORES_KPI).
-    [['9', 'Etapa 9', '#94a3b8', null, 'slate', false]], 'un color desconocido es gris y un fondo desconocido, null');
+    // B4 T24 (F26) y r2 (C8, D27): el tono es acentoDesdeClase con las claves de TONOS del tablero (lime sí se pinta).
+    [['9', 'Etapa 9', '#94a3b8', null, 'lime', false]], 'un color desconocido es gris y un fondo desconocido, null');
   assert.equal(columnasDesdeEtapas([{ id: 1, name: 'X', color: '#123456' }])[0].colorHex, '#123456', 'un hex va tal cual');
   assert.deepEqual(columnasDesdeEtapas([]), []);
   assert.deepEqual(columnasDesdeEtapas(null), []);

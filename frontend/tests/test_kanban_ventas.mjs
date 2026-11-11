@@ -367,8 +367,8 @@ console.log('--- TEST 10: COLUMNAS_PEDIDO: una por grupo y cada estado en una so
   assert.equal(de('EN_TRANSITO'), 'en_proceso');
   assert.equal(de('DEVUELTO_TOTAL'), 'cancelado');
   assert.deepEqual(agruparEnColumnas(codigos.map((estado) => ({ estado })), COLUMNAS_PEDIDO)[SIN_COLUMNA], []);
-  // B4 T24 (F26, D27): acentoDesdeClase (una sola función) con respaldo slate: el green de Facturado no es de COLORES_KPI.
-  assert.deepEqual(COLUMNAS_PEDIDO.map((c) => c.tono), ['orange', 'purple', 'teal', 'emerald', 'slate', 'red'],
+  // B4 T24 (F26) y r2 (C8, D27): acentoDesdeClase con las claves de TONOS del tablero: Facturado vuelve a green (el color de BASE).
+  assert.deepEqual(COLUMNAS_PEDIDO.map((c) => c.tono), ['orange', 'purple', 'teal', 'emerald', 'green', 'red'],
     'el color de ESTADOS_PEDIDO del estado clave');
 }
 
@@ -1578,25 +1578,35 @@ console.log('--- B4 T23A TEST S: el cableado del tablero y del filtro de los ped
   assert.ok(!/Â|Ã|â€/.test(eliminar), 'sin mojibake en lo que se tocó');
 }
 
-console.log('--- B4 T24 (F26): el tono de cada columna de los tableros es de COLORES_KPI (acentoDesdeClase, sin copias de «familia») ---');
+console.log('--- B4 T24 (F26) y r2 (C8): el tono de cada columna sale de acentoDesdeClase con las claves de TONOS del tablero ---');
 {
   const { readFileSync } = await import('node:fs');
-  const { COLORES_KPI } = await import('../src/lib/kpis.js');
+  const { CLAVES_TONOS_KANBAN: COLORES_KPI } = await import('../src/lib/kanban.js');
   const kv = await import('../src/lib/kanban-ventas.js');
   const { COLUMNAS_ENTREGA } = await import('../src/lib/entregas.js');
   const { columnasDesdeEtapas } = await import('../src/lib/crm-etapas.js');
   const crm = columnasDesdeEtapas([{ id: 1, name: 'a', color: 'bg-cyan-500' }, { id: 2, name: 'b', color: 'bg-pink-500' },
     { id: 3, name: 'c', color: 'bg-blue-500' }, { id: 4, name: 'd', color: '#123456' }]);
-  assert.deepEqual(crm.map((c) => c.tono), ['slate', 'slate', 'blue', 'slate'], 'el CRM: lo que no es de COLORES_KPI, slate');
+  const leerSrc = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // r2 (C8): una etapa cyan sale cyan en el tablero (como en el Drawer, COLOR_HEX); lo que no es una clase, slate.
+  assert.deepEqual(crm.map((c) => c.tono), ['cyan', 'pink', 'blue', 'slate'], 'el CRM: el color de su clase; un hex, slate');
   for (const [nombre, columnas] of [['COT', kv.COLUMNAS_COT], ['Hub', kv.COLUMNAS_HUB], ['PVEN', kv.COLUMNAS_PEDIDO], ['SC', kv.COLUMNAS_SC],
     ['Entregas', COLUMNAS_ENTREGA]]) {
     for (const c of columnas) assert.ok(COLORES_KPI.includes(c.tono), `${nombre} ${c.clave}: ${c.tono}`);
   }
   // SC: el tono sale del hex de ESTADOS_SC (la clase más cercana, claseTailwindCercana), no de una tabla a mano.
-  assert.deepEqual(kv.COLUMNAS_SC.map((c) => c.tono), ['slate', 'slate', 'amber', 'emerald', 'red']);
-  assert.deepEqual(kv.COLUMNAS_COT.map((c) => c.tono), ['slate', 'blue', 'emerald', 'slate', 'red']);
+  // r2 (C8): Asignada vuelve a cyan (distinta de Nueva) y Vencida a violet; «Esperando mercancía», a sky. Los colores de BASE.
+  assert.deepEqual(kv.COLUMNAS_SC.map((c) => c.tono), ['slate', 'cyan', 'amber', 'emerald', 'red']);
+  assert.deepEqual(kv.COLUMNAS_COT.map((c) => c.tono), ['slate', 'blue', 'emerald', 'violet', 'red']);
+  assert.equal(COLUMNAS_ENTREGA[0].tono, 'sky');
+  // Las claves de la lib son las de TONOS del tablero (las clases literales de Kanban.tsx).
+  const kanbanTsx = leerSrc('components/ui/Kanban.tsx');
+  const bloque = kanbanTsx.slice(kanbanTsx.indexOf('const TONOS: Record<ClaveTonoKanban, Tono> = {'), kanbanTsx.indexOf('};', kanbanTsx.indexOf('const TONOS')));
+  assert.deepEqual([...bloque.matchAll(/^\s+([a-z]+): \{ punto:/gm)].map((m) => m[1]), [...COLORES_KPI], 'TONOS y CLAVES_TONOS_KANBAN, las mismas');
   const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8');
   for (const ruta of ['lib/kanban-ventas.js', 'lib/crm-etapas.js']) assert.ok(!/const familia\b|TONO_SC\b/.test(leer(ruta)), `${ruta}: sin copia`);
+  assert.match(leer('lib/kanban-ventas.js'), /const tonoDeClase = \(clase\) => acentoDesdeClase\(clase, 'slate', CLAVES_TONOS_KANBAN\);/);
+  assert.match(leer('lib/crm-etapas.js'), /tono: acentoDesdeClase\(s\.color, 'slate', CLAVES_TONOS_KANBAN\),/);
 }
 
 console.log('--- B4 T24 (FINAL-m31 y FINAL-m38): los tableros de Ventas solo se mueven con el rol del PATCH de destino ---');
