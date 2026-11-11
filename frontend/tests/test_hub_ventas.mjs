@@ -376,8 +376,10 @@ console.log('--- B4 T7 r1 (A3): Análisis es la 7.ª pestaña de la barra (pesta
   assert.ok(barra > 0 && panel > barra, 'el panel va debajo de la barra');
   assert.match(codigo, /\{!enAnalisis && estado\.modo === 'lista' && \(\s*<AccionesFila\.Provider/, 'la tabla, solo en Documentos');
   assert.match(codigo, /\{enAnalisis \? \(\s*<PanelAnalisisPerezoso[\s\S]*?\/>\s*\) : estado\.modo === 'kanban' \? \(\s*(?:\/\/[^\n]*\n\s*)?!accesoTablero\.listo \? <EsqueletoTablero \/> : <TableroKanban/, 'el panel, en lugar del tablero (r2, m2, D27: el esqueleto con el rol vacío)');
-  // D-7: ?tab=analisis abre en Análisis y volver a Documentos limpia la URL con router.replace.
-  assert.match(codigo, /useState<SeccionHub>\(enlace\.analisis \? 'analisis' : 'documentos'\)/);
+  // D-7: ?tab=analisis abre en Análisis y volver a Documentos limpia la URL con router.replace. B4 T24 (FINAL-C3, D27): la
+  // sección arranca en Documentos y el useLayoutEffect de montaje la pasa a Análisis con la URL ya nueva (después del commit).
+  assert.match(codigo, /useState<SeccionHub>\('documentos'\)/);
+  assert.match(codigo, /if \(inicio\.seccion\) setSeccion\(inicio\.seccion\);/);
   assert.match(codigo, /if \(s === 'documentos' && leerEnlaceHub\(window\.location\.search\)\.analisis\) router\.replace\(RUTA_HUB_VENTAS\);/);
   // D-9: tocar un paso o el semáforo vuelve a Documentos.
   assert.equal((codigo.match(/if \(enAnalisis\) cambiarSeccion\('documentos'\);/g) ?? []).length, 2);
@@ -1161,8 +1163,10 @@ console.log('--- B4 T7 r1 (B): el foco del enlace, la fila de último recurso, l
   const codigo = hub.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
   // m1 (R2): el texto «En construcción» vive solo en AsistenteEnConstruccion.tsx, tampoco en los comentarios de la página.
   assert.ok(!hub.includes('En construcci'), 'm1: sin «En construcción» en page.tsx');
-  // I1: el foco del enlace en un estado propio, suelto al elegir un foco y al volver a los documentos.
-  assert.match(codigo, /const \[focoEnlace, setFocoEnlace\] = useState\(enlace\.foco\);/);
+  // I1: el foco del enlace en un estado propio, suelto al elegir un foco y al volver a los documentos. B4 T24 (FINAL-C3, D27):
+  // arranca en null y lo pone el useLayoutEffect de montaje con la URL nueva.
+  assert.match(codigo, /const \[focoEnlace, setFocoEnlace\] = useState<string \| null>\(null\);/);
+  assert.match(codigo, /if \(inicio\.foco\) setFocoEnlace\(inicio\.foco\);/);
   assert.match(codigo, /if \(s === 'documentos'\) setFocoEnlace\(\(f\) => focoEnlaceTras\(f, \{ tipo: 'documentos' \}\)\);/);
   assert.match(codigo,
     /const alCambiarFoco = useCallback\(\(foco: string\) => \{\s*setFocoEnlace\(\(f\) => focoEnlaceTras\(f, \{ tipo: 'elegir' \}\)\);\s*router\.replace\(`\$\{RUTA_HUB_VENTAS\}\?tab=analisis&foco=\$\{foco\}`\);\s*\}, \[router\]\);/);
@@ -1219,6 +1223,73 @@ console.log('--- B4 T7 r1b (duda 3): el contenedor del Hub reserva el lugar del 
   assert.ok(ia.includes('fixed bottom-6 right-6 w-14 h-14'), 'el botón mide lo que la reserva supone (24 + 56 = 80 px < 96)');
   const tabla = readFileSync(new URL('../src/lib/design-system.ts', import.meta.url), 'utf8');
   assert.ok(tabla.includes('[&_[data-pie-tabla]]:pr-20'), 'en la pantalla completa, el pr-20 del pie (D41)');
+}
+
+console.log('--- B4 T24 (FINAL-C3): los tres Hubs leen el enlace DESPUÉS del commit (useLayoutEffect de montaje), nunca en el render ---');
+{
+  // Next 16 cambia la URL de una navegación con <Link> en el useInsertionEffect de HistoryUpdater (app-router.js): el render
+  // de la página nueva (el inicializador de useState) todavía ve la URL de la ANTERIOR; un useLayoutEffect del mismo commit
+  // ya ve la nueva. Esta guarda fija ese orden: cada lectura de window.location.search de los tres Hubs va dentro de un
+  // useLayoutEffect, un useEffect o un manejador (useCallback), nunca en el cuerpo del render, en useState, useMemo ni useRef.
+  const sinComentarios = (t) => t.replace(/\r\n/g, '\n').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  /** Los nombres de las llamadas que envuelven la posición `i`, de adentro hacia afuera (los paréntesis sin cerrar). */
+  const llamadasQueEnvuelven = (codigo, i) => {
+    const cadena = [];
+    let abiertos = 0;
+    for (let k = i - 1; k >= 0; k--) {
+      const c = codigo[k];
+      if (c === ')') abiertos++;
+      else if (c === '(') {
+        if (abiertos > 0) { abiertos--; continue; }
+        const m = /([A-Za-z_$][\w$]*)\s*(?:<[^()]*>)?\s*$/.exec(codigo.slice(Math.max(0, k - 80), k));
+        cadena.push(m ? m[1] : '(');
+      }
+    }
+    return cadena;
+  };
+  const HOOK_DESPUES = ['useLayoutEffect', 'useEffect', 'useCallback'];
+  const HOOK_EN_RENDER = ['useState', 'useMemo', 'useRef', 'useSyncExternalStore'];
+  /** Las lecturas de la URL de una pantalla, cada una con el primer hook que la envuelve (o null: en el cuerpo del render). */
+  const lecturas = (codigo) => [...codigo.matchAll(/window\.location\.search/g)].map((m) => {
+    const hook = llamadasQueEnvuelven(codigo, m.index).find((n) => /^use[A-Z]/.test(n)) ?? null;
+    return hook;
+  });
+  // La guarda sí distingue: el patrón viejo (el inicializador de useState) y una lectura en el render fallan.
+  assert.deepEqual(lecturas("function P() {\n  const [enlace] = useState(() => leerEnlaceHub(typeof window === 'undefined' ? '' : window.location.search));\n}"), ['useState']);
+  assert.deepEqual(lecturas('function P() {\n  const x = leerEnlaceHub(window.location.search);\n  return x;\n}'), [null]);
+  assert.deepEqual(lecturas('function P() {\n  useLayoutEffect(() => {\n    if (leer(window.location.search).analisis) setA(true);\n  }, []);\n}'), ['useLayoutEffect']);
+  const PANTALLAS = {
+    ventas: { ruta: '../src/app/dashboard/ventas/page.tsx', lector: 'inicioDelEnlaceHub' },
+    compras: { ruta: '../src/app/dashboard/compras/page.tsx', lector: 'leerEnlaceHubCompras' },
+    inventario: { ruta: '../src/app/dashboard/inventario/page.tsx', lector: 'leerEnlaceHubCompras' },
+  };
+  for (const [nombre, { ruta, lector }] of Object.entries(PANTALLAS)) {
+    const codigo = sinComentarios(readFileSync(new URL(ruta, import.meta.url), 'utf8'));
+    const hooks = lecturas(codigo);
+    assert.ok(hooks.length >= 2, `${nombre}: lee la URL al montar y al volver a los documentos`);
+    for (const hook of hooks) {
+      assert.ok(HOOK_DESPUES.includes(hook) && !HOOK_EN_RENDER.includes(hook), `${nombre}: lectura de la URL dentro de ${hook} (debe ser después del commit)`);
+    }
+    // La lectura del montaje: un useLayoutEffect (antes de pintar: no se ve un cuadro con la sección equivocada).
+    const montaje = codigo.match(/useLayoutEffect\(\(\) => \{[\s\S]*?\n {2}\}, \[[^\]]*\]\);/g)?.find((b) => b.includes(`${lector}(window.location.search)`));
+    assert.ok(montaje, `${nombre}: el enlace se lee en un useLayoutEffect`);
+    assert.ok(!/useState(?:<[^>]*>)?\(\(\) => leerEnlace/.test(codigo), `${nombre}: sin el inicializador de useState que leía la URL anterior`);
+    assert.match(codigo, /import React, \{[^}]*\buseLayoutEffect\b[^}]*\} from 'react';/, `${nombre}: importa useLayoutEffect`);
+  }
+  // Ventas: la sección, el foco y el paso arrancan vacíos y los pone el montaje, una sola vez (StrictMode no lo repite).
+  const hub = sinComentarios(readFileSync(new URL(PANTALLAS.ventas.ruta, import.meta.url), 'utf8'));
+  assert.match(hub, /const \[seccion, setSeccion\] = useState<SeccionHub>\('documentos'\);/);
+  assert.match(hub, /const \[focoEnlace, setFocoEnlace\] = useState<string \| null>\(null\);/);
+  assert.match(hub,
+    /const enlaceLeido = useRef\(false\);\s*useLayoutEffect\(\(\) => \{\s*if \(enlaceLeido\.current\) return;\s*enlaceLeido\.current = true;\s*const inicio = inicioDelEnlaceHub\(window\.location\.search\);\s*if \(inicio\.seccion\) setSeccion\(inicio\.seccion\);\s*if \(inicio\.foco\) setFocoEnlace\(inicio\.foco\);\s*if \(!inicio\.paso\) return;\s*despachar\(\{ tipo: 'paso', valor: inicio\.paso \}\);\s*if \(inicio\.vista\) despachar\(accionPestana\(estado, inicio\.vista, opcionesEstadosHub\)\);\s*\}, \[estado, despachar\]\);/);
+  assert.ok(!/pasoDelEnlace|\benlace\.(paso|foco|analisis)\b/.test(hub), 'sin la foto del enlace tomada en el render');
+  // Compras e Inventario: Análisis arranca apagado y lo enciende el montaje si la URL NUEVA lo pide (al revés de antes: la
+  // URL vieja con ?tab=analisis, por ejemplo la del Hub de Ventas, ya no abre su Análisis desde el menú lateral).
+  for (const nombre of ['compras', 'inventario']) {
+    const codigo = sinComentarios(readFileSync(new URL(PANTALLAS[nombre].ruta, import.meta.url), 'utf8'));
+    assert.match(codigo, /const \[enAnalisis, setEnAnalisis\] = useState\(false\);/, nombre);
+    assert.match(codigo, /useLayoutEffect\(\(\) => \{\s*if \(leerEnlaceHubCompras\(window\.location\.search\)\.analisis\) setEnAnalisis\(true\);\s*\}, \[\]\);/, nombre);
+  }
 }
 
 console.log('OK test_hub_ventas.mjs');

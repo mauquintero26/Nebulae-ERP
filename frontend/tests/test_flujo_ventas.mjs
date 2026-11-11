@@ -505,6 +505,40 @@ console.log('--- B4 T7 TEST 1: leerEnlaceHub — ?paso= y ?tab=analisis&foco= de
   assert.ok(Object.isFrozen(fv.leerEnlaceHub('?paso=SC')));
 }
 
+console.log('--- B4 T24 (FINAL-C3): inicioDelEnlaceHub — lo que el Hub aplica al montar, del enlace leído DESPUÉS del commit ---');
+{
+  assert.equal(typeof fv.inicioDelEnlaceHub, 'function', 'inicioDelEnlaceHub existe');
+  const NADA = { seccion: null, foco: null, paso: null, vista: null };
+  // La URL de la página anterior (la que leía el inicializador de useState): sin el enlace, nada que aplicar.
+  for (const vieja of ['', '?', '?tab=documentos', '?foco=pven', undefined, null, 42]) {
+    assert.deepEqual(fv.inicioDelEnlaceHub(vieja), NADA, String(vieja));
+  }
+  // «Ver análisis» de Solicitudes, Cotizaciones y Pedidos (enlaceVerAnalisis): la sección Análisis con su foco.
+  for (const { clave } of FOCOS_VENTAS) {
+    assert.deepEqual(fv.inicioDelEnlaceHub(`?tab=analisis&foco=${clave}`), { ...NADA, seccion: 'analisis', foco: clave }, clave);
+  }
+  assert.deepEqual(fv.inicioDelEnlaceHub('?tab=analisis'), { ...NADA, seccion: 'analisis' });
+  assert.deepEqual(fv.inicioDelEnlaceHub('?tab=analisis&foco=otro'), { ...NADA, seccion: 'analisis' }, 'un foco desconocido no cuenta');
+  // Una caja del embudo del Dashboard (pasosEmbudoDashboard → ?paso=): el paso y la pestaña de su tipo (tabHubDePaso).
+  for (const clave of CLAVES) {
+    assert.deepEqual(fv.inicioDelEnlaceHub(`?paso=${clave}`), { ...NADA, paso: clave, vista: tabHubDePaso(clave) }, clave);
+  }
+  assert.equal(fv.inicioDelEnlaceHub('?paso=SC').vista, 'sc');
+  assert.equal(fv.inicioDelEnlaceHub('?paso=FACTURADO').vista, 'ven');
+  for (const malo of ['?paso=pven', '?paso=OTRO']) assert.deepEqual(fv.inicioDelEnlaceHub(malo), NADA, malo);
+  // Los dos a la vez: se aplican los dos.
+  assert.deepEqual(fv.inicioDelEnlaceHub('?paso=COT&tab=analisis&foco=cot'), { seccion: 'analisis', foco: 'cot', paso: 'COT', vista: 'cot' });
+  // Lo que escriben los orígenes reales se lee igual: el embudo del Dashboard y «Ver análisis» de las tres listas.
+  for (const p of fv.pasosEmbudoDashboard(null)) {
+    assert.equal(fv.inicioDelEnlaceHub(p.href.slice(p.href.indexOf('?'))).paso, p.clave, `${p.clave}: el embudo abre el Hub filtrado`);
+  }
+  for (const foco of ['sc', 'cot', 'pven']) {
+    const enlace = fv.enlaceVerAnalisis(foco);
+    assert.deepEqual(fv.inicioDelEnlaceHub(enlace.slice(enlace.indexOf('?'))), { ...NADA, seccion: 'analisis', foco }, foco);
+  }
+  assert.ok(Object.isFrozen(fv.inicioDelEnlaceHub('?paso=SC')));
+}
+
 console.log('--- B4 T7 TEST 2: chipsFiltroHub — los chips que quitan el filtro del paso y del semáforo (R6, clic_en_hub) ---');
 {
   assert.deepEqual(fv.chipsFiltroHub({ paso: 'COT', semaforo: null }), [{ campo: 'paso', texto: 'Paso: Cotización' }]);

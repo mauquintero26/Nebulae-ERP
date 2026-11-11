@@ -1466,10 +1466,14 @@ console.log('--- TEST 23 (B4 T17, ANALISIS-inventario punto 3; R2, R13, RP69, D3
     'En construcción', '/ventas/ai-chat', 'GPT-4o', 'Análisis Funcional', 'warehouseStats']) {
     assert.ok(!fuente.includes(viejo), viejo);
   }
-  // La pestaña aparte de BarraTabla (sin emoji); ?tab=analisis se lee al montar con la guarda de window; en Análisis la
-  // lista no pide nada (activo: false, RP35) y al volver a los documentos la URL se limpia.
+  // La pestaña aparte de BarraTabla (sin emoji); ?tab=analisis se lee al montar; en Análisis la lista no pide nada
+  // (activo: false, RP35) y al volver a los documentos la URL se limpia. B4 T24 (FINAL-C3, D27): ya no en el inicializador
+  // de useState (en una navegación con <Link> leía la URL de la página anterior), sino en un useLayoutEffect de montaje,
+  // después del commit; la guarda de orden de las tres pantallas está en test_hub_ventas.mjs.
   assert.ok(fuente.includes("pestanaAparte={{ id: 'analisis', etiqueta: 'Análisis', activa: enAnalisis, onCambiar: alCambiarAparte }}"));
-  assert.match(fuente, /useState\(\(\) => leerEnlaceHubCompras\(typeof window === 'undefined' \? '' : window\.location\.search\)\.analisis\)/);
+  assert.match(fuente, /const \[enAnalisis, setEnAnalisis\] = useState\(false\);/);
+  assert.match(fuente, /useLayoutEffect\(\(\) => \{\s*if \(leerEnlaceHubCompras\(window\.location\.search\)\.analisis\) setEnAnalisis\(true\);\s*\}, \[\]\);/);
+  assert.ok(!fuente.includes('useState(() => leerEnlaceHubCompras('), 'sin el inicializador que leía la URL anterior');
   assert.match(fuente, /if \(!analisis && leerEnlaceHubCompras\(window\.location\.search\)\.analisis\) router\.replace\(RUTA_HUB\);/);
   assert.match(fuente, /activo: !enAnalisis && !verAlmacenes, extra: extraDeLaLista/);
   assert.match(fuente, /activo: !enAnalisis && verAlmacenes, extra: extraAlmacenes/);

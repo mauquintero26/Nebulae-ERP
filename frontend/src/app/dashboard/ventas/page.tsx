@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import {
   MessageCircle, Trash2, X, RefreshCw, Bell, Settings, Activity, CheckCircle2, Zap, ToggleLeft, ToggleRight, Save,
@@ -25,7 +25,8 @@ import { FOCOS, TABLE } from '@/lib/design-system';
 import { accionPestana, campoOrden, dependenciasTablero, estadoDelTotal, normalizarRespuesta, queryListado } from '@/lib/tabla';
 import { alternarPaso, pasosConConteos } from '@/lib/flujo';
 import {
-  PASOS_FLUJO_VENTAS, chipsFiltroHub, conteosDesdeResumen, leerEnlaceHub, pasoTrasPestana, tabHubDePaso, textoRegla,
+  PASOS_FLUJO_VENTAS, chipsFiltroHub, conteosDesdeResumen, inicioDelEnlaceHub, leerEnlaceHub, pasoTrasPestana, tabHubDePaso,
+  textoRegla,
 } from '@/lib/flujo-ventas';
 import {
   COLUMNAS_HUB, chipsResolucionHub, confirmacionReiniciarSolicitud, estadoDeTarjeta, opcionesEstadosHub, reglaSoltarHub,
@@ -590,13 +591,14 @@ export default function VentasHub() {
   // B4 T24 (FINAL-m31 y FINAL-m38): el rol después de montar (useRolActual) decide si el tablero se mueve (accesoTableroVentas: el
   // require_roles del PATCH de destino); sin permiso, soloLectura (no se arrastra ni se ofrece «Mover a…») y sin acciones masivas.
   const accesoTablero = accesoTableroVentas(useRolActual());
-  // R6 y RP21: ?paso= y ?tab=analisis&foco= (leerEnlaceHub) salen de window.location al montar, sin useSearchParams (la
-  // página no necesita Suspense; AuthGuard la pinta solo en el navegador). Análisis es un estado de la página (RP35).
-  const [enlace] = useState(() => leerEnlaceHub(typeof window === 'undefined' ? '' : window.location.search));
-  const [seccion, setSeccion] = useState<SeccionHub>(enlace.analisis ? 'analisis' : 'documentos');
+  // R6 y RP21: ?paso= y ?tab=analisis&foco= salen de window.location, sin useSearchParams (la página no necesita Suspense).
+  // B4 T24 (FINAL-C3): la sección y el foco arrancan vacíos y los pone el useLayoutEffect de montaje (más abajo, junto al
+  // paso), DESPUÉS del commit: en el render, una navegación con <Link> todavía ve la URL de la página anterior.
+  // Análisis es un estado de la página (RP35).
+  const [seccion, setSeccion] = useState<SeccionHub>('documentos');
   // B4 T7 r1 (I1): el ?foco= de «Ver análisis» en un estado propio: vale hasta que el usuario elige un foco o vuelve a los
   // documentos (focoEnlaceTras); después la pestaña Análisis abre en lo guardado, no en el foco viejo del enlace.
-  const [focoEnlace, setFocoEnlace] = useState(enlace.foco);
+  const [focoEnlace, setFocoEnlace] = useState<string | null>(null);
   const enAnalisis = seccion === 'analisis';
   const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set());
   const [alertDias, setAlertDias]   = useState<any>({alerta_sc_dias:'2',alerta_cot_dias:'2',alerta_ven_dias:'2'});
@@ -1013,15 +1015,23 @@ export default function VentasHub() {
     if (vista) despachar(accionPestana(estado, vista, opcionesEstadosHub));
     if (enAnalisis) cambiarSeccion('documentos');
   };
-  // ?paso=<clave> (R6): el Hub abre filtrado por ese paso y en la pestaña de su tipo, una sola vez, como tocar la caja.
-  const pasoDelEnlace = useRef(enlace.paso);
-  useEffect(() => {
-    const paso = pasoDelEnlace.current;
-    if (!paso) return;
-    pasoDelEnlace.current = null;
-    despachar({ tipo: 'paso', valor: paso });
-    const vista = tabHubDePaso(paso);
-    if (vista) despachar(accionPestana(estado, vista, opcionesEstadosHub));
+  // B4 T24 (FINAL-C3): el enlace del Hub, una sola vez al montar (el ref: StrictMode no lo repite) y DESPUÉS del commit. Next
+  // 16 cambia la URL de una navegación con <Link> en el useInsertionEffect de HistoryUpdater; este useLayoutEffect corre en
+  // el mismo commit, después de eso y antes de pintar, así que lee la URL nueva y no se ve un cuadro con la sección vieja:
+  //  - ?tab=analisis&foco= («Ver análisis» de las listas): la pestaña Análisis con su foco;
+  //  - ?paso=<clave> (R6; una caja del embudo del Dashboard): el Hub filtrado por ese paso y en la pestaña de su tipo, como
+  //    tocar la caja.
+  const enlaceLeido = useRef(false);
+  useLayoutEffect(() => {
+    if (enlaceLeido.current) return;
+    enlaceLeido.current = true;
+    const inicio = inicioDelEnlaceHub(window.location.search);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- FINAL-C3: la URL de la navegación existe recién en el commit
+    if (inicio.seccion) setSeccion(inicio.seccion);
+    if (inicio.foco) setFocoEnlace(inicio.foco);
+    if (!inicio.paso) return;
+    despachar({ tipo: 'paso', valor: inicio.paso });
+    if (inicio.vista) despachar(accionPestana(estado, inicio.vista, opcionesEstadosHub));
   }, [estado, despachar]);
   // RP34 y D27(a): «Ajustar tiempos» solo para un administrador (esAdmin, el mismo esAdministrador de flujo.tsx), apagado y
   // con el porqué mientras no se leyó /ventas/config, igual que el botón «Configuración» de arriba.

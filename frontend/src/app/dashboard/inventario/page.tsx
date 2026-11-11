@@ -1,5 +1,5 @@
 'use client';
-import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
@@ -278,7 +278,15 @@ export default function InventarioHub() {
   const [estado, despachar, listo] = useEstadoTabla(ID_HUB, INICIAL_HUB);
   // R13: ?tab=analisis abre la pestaña Análisis; se lee de window.location al montar (AuthGuard pinta el dashboard solo en
   // el navegador). Análisis es un estado de la página, nunca una vista de la tabla (RP35).
-  const [enAnalisis, setEnAnalisis] = useState(() => leerEnlaceHubCompras(typeof window === 'undefined' ? '' : window.location.search).analisis);
+  // B4 T24 (FINAL-C3): Análisis arranca apagado y lo enciende el useLayoutEffect de montaje si la URL NUEVA lo pide. En una
+  // navegación con <Link>, Next 16 cambia la URL en el useInsertionEffect de HistoryUpdater, después del render: el
+  // inicializador de useState leía la URL de la página anterior (la del Hub de Ventas con ?tab=analisis abría este Análisis
+  // sin que nadie lo pidiera, y «Ver análisis» podía no abrirlo). Este efecto corre en el mismo commit, antes de pintar.
+  const [enAnalisis, setEnAnalisis] = useState(false);
+  useLayoutEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- FINAL-C3: la URL de la navegación existe recién en el commit
+    if (leerEnlaceHubCompras(window.location.search).analisis) setEnAnalisis(true);
+  }, []);
   // R11: sin tablero; la vista Lista / Almacenes es de la página (como antes, no se recuerda).
   const [verAlmacenes, setVerAlmacenes] = useState(false);
   const [filtros, setFiltros] = useState<FiltrosHub>(SIN_FILTROS);

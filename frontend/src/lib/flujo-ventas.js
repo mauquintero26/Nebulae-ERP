@@ -209,6 +209,28 @@ export function leerEnlaceHub(search) {
   });
 }
 
+/**
+ * B4 T24 (FINAL-C3): lo que el Hub aplica al montar, del enlace (leerEnlaceHub). La pantalla lo lee en un useLayoutEffect
+ * de montaje, DESPUÉS del commit: en una navegación con <Link>, Next 16 cambia la URL en el useInsertionEffect de
+ * HistoryUpdater (app-router.js), así que el render de la página nueva (el inicializador de useState) todavía ve la URL
+ * de la ANTERIOR, y un useLayoutEffect del mismo commit ya ve la nueva (y corre antes de pintar).
+ *  - seccion: 'analisis' con ?tab=analisis («Ver análisis» de las listas); si no, null (queda Documentos);
+ *  - foco: el ?foco= que vale con Análisis; si no, null;
+ *  - paso: el ?paso= que vale (una caja del embudo del Dashboard) y vista: la pestaña de su tipo (tabHubDePaso), o null.
+ * Lo que no es un texto da todo null. Inmutable.
+ * @param {unknown} search
+ * @returns {Readonly<{seccion: 'analisis' | null, foco: string | null, paso: ClavePasoVentas | null, vista: VistaHubDePaso | null}>}
+ */
+export function inicioDelEnlaceHub(search) {
+  const enlace = leerEnlaceHub(search);
+  return congelar({
+    seccion: enlace.analisis ? 'analisis' : null,
+    foco: enlace.foco,
+    paso: enlace.paso,
+    vista: enlace.paso ? tabHubDePaso(enlace.paso) : null,
+  });
+}
+
 /** Los textos de los botones del semáforo (opcionesSemaforo de flujo.js): la única fuente de «Con atraso» y «No resueltos». */
 const TEXTO_SEMAFORO = congelar(Object.fromEntries(
   opcionesSemaforo({ atrasados: null, noResueltos: null, filtro: 'todos' })
