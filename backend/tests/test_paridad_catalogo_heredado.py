@@ -202,7 +202,8 @@ def test_toda_diferencia_con_base_es_la_del_ruling(app_client, db, warehouse, mo
     los filtros. Con el heap desordenado.
     - Con sesion ERP (B44): la grilla completa (4 categorias x 3 publicado x 7 limits) con search=t.s; sin busqueda (que
       recorre el catalogo entero de la base compartida) solo los limits 0, 3 y 50.
-    - Sin sesion (FINAL-C1): con search=t.s, publicado ausente o false (con true es la misma llamada que con sesion), las 4
+    - Sin sesion (FINAL-C1): con search=t.s, publicado ausente o false (sin sesion, publicado ausente se fuerza a true en el
+      servidor: es la misma rama que publicado=true; r2, m2), las 4
       categorias y los limits ausente, 0, 1, 3 y 50: BASE con publicado=true, o nada con publicado=false. r1 (C1): sin
       sesion se quitan ademas los SKU con cualquier espejo (con Cat-B, p1 ya no sale: su espejo m1 es de Cat-A)."""
     monkeypatch.setenv("CATALOGO_LECTURA", "legacy")

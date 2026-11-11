@@ -56,6 +56,24 @@ def test_el_codigo_de_salida_falla_tambien_si_la_base_cambio():
     assert codigo(3, 1, {"sale_orders": (10, 11)}) == 1
 
 
+def test_cerrar_corrida_sale_con_1_si_la_base_cambio(monkeypatch):
+    """B4 T24 r2 (m13): _cerrar_corrida, la que da el código a sys.exit, devuelve 1 si un max(id) de TABLAS cambió y 0 si
+    no (con 0 fallas y 0 bloqueos). La salida va a un StringIO para que su «OJO» no ensucie la de esta corrida."""
+    import contextlib
+    import io
+    runner = sys.modules["__main__"]
+    antes = dict(runner.antes)
+    tabla = sorted(antes)[0]
+    monkeypatch.setattr(runner, "maximos", lambda: {**antes, tabla: (antes[tabla] or 0) + 1})
+    with contextlib.redirect_stdout(io.StringIO()) as salida:
+        codigo = runner._cerrar_corrida(0, 0)
+    assert codigo == 1 and "OJO, max(id) cambio" in salida.getvalue(), salida.getvalue()
+    monkeypatch.setattr(runner, "maximos", lambda: dict(antes))
+    with contextlib.redirect_stdout(io.StringIO()) as salida:
+        codigo = runner._cerrar_corrida(0, 0)
+    assert codigo == 0 and "Base intacta" in salida.getvalue(), salida.getvalue()
+
+
 def test_monkeypatch_1_parchea_durante_la_prueba(monkeypatch):
     monkeypatch.setattr(_ESTE_MODULO, "_CENTINELA", "parchado")
     monkeypatch.setenv("RUNNER_FIXTURES_VARIABLE", "1")
