@@ -15,7 +15,7 @@ class ExpenseCreate(ExpenseBase):
 
 class ExpenseResponse(ExpenseBase):
     id: int
-    incurred_date: datetime
+    incurred_date: Optional[datetime] = None   # B4 T24 (B47): la columna admite NULL; un gasto sin fecha no rompe la respuesta
     model_config = {"from_attributes": True}
 
 class DashboardResponse(BaseModel):
