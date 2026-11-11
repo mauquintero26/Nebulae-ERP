@@ -1,5 +1,7 @@
 'use client';
 import { FOCOS } from '@/lib/design-system';
+import { accesoCompras } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 import React, { useState, useEffect, useCallback, useContext, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -146,7 +148,9 @@ function PecDetailPanel({
   // B4 T14 (KANBAN-compras punto 7; R9, C15c): el botón Estado solo ofrece lo que acepta update_pec (transicionesPec):
   // emitir un borrador (PATCH) o cancelar, que abre el ModalMotivo de la página con su motivo. En tránsito y Recibido
   // los ponen el seguimiento y la recepción. Si el servidor dice que no, se ve su mensaje.
-  const transiciones = transicionesPec(detail?.estado);
+  // B4 T24 (FINAL-m10): «Cambiar Estado» y «Cancelar PEC» solo con el rol que hace el PATCH (accesoCompras).
+  const accesoPec = accesoCompras(useRolActual());
+  const transiciones = accesoPec.cambiarPec ? transicionesPec(detail?.estado) : [];
   const handleChangeEstado = async (est: string) => {
     setEditEstado(false);
     if (!pec) return;
@@ -476,11 +480,12 @@ const AccionesFila = React.createContext<AccionesFilaHub | null>(null);
  */
 function CeldaAcciones({ p }: { p: FilaPec }) {
   const acciones = useContext(AccionesFila);
+  const accesoPec = accesoCompras(useRolActual());
   const items: ItemMenuFila[] = [
     { etiqueta: 'Ver detalle', icono: Eye, onClick: () => acciones?.abrir(p) },
     { etiqueta: 'Ver en Pedidos de compra', icono: ExternalLink, onClick: () => acciones?.ir(`/dashboard/compras/pedidos?id=${p.id}`) },
     { etiqueta: 'Cancelar PEC', icono: Trash2, peligro: true, onClick: () => acciones?.cancelar([p]),
-      oculto: !transicionesPec(p.estado).includes('CANCELADO') },
+      oculto: !accesoPec.cambiarPec || !transicionesPec(p.estado).includes('CANCELADO') },
   ];
   return (
     <span className="flex items-center justify-end gap-0.5">
@@ -535,6 +540,9 @@ export default function ComprasHub() {
   // las tarjetas, la tabla y el tablero despachan a él. El modo (Lista o Kanban) se guarda en vista:compras.hub. Ya no
   // hay arreglos en memoria (antes, los 200 más recientes filtrados y contados en el navegador).
   const [estado, despachar, listo] = useEstadoTabla(ID_HUB, INICIAL_HUB);
+  // B4 T24 (FINAL-m10, m31 y m38): el rol después de montar (useRolActual) decide si se cambian los PEC (accesoCompras: PATCH y DELETE
+  // /compras/pedidos y PATCH /tracking son de ADMIN y COMPRAS); sin permiso, el tablero es solo para ver y no se ofrecen sus acciones.
+  const accesoPec = accesoCompras(useRolActual());
   const enKanban = estado.modo === 'kanban';
   // R13: ?tab=analisis («Ver análisis» de las listas de Compras) abre la pestaña Análisis; se lee de window.location al
   // montar (AuthGuard pinta el dashboard solo en el navegador, como el Hub de Ventas). Análisis es un estado de la
@@ -944,13 +952,14 @@ export default function ComprasHub() {
               onAbrir={abrir}
               onCambio={cambiarDesdeTablero}
               onAccion={accionDesdeTablero}
+              soloLectura={accesoPec.soloLectura}
               color="purple"
             />
           ) : null}
         </div>
 
         {/* La barra masiva (la selección es de la página de la tabla, así que solo en Lista): cancelar con un motivo. */}
-        {seleccion.length > 0 && !enAnalisis && !enKanban && (
+        {seleccion.length > 0 && !enAnalisis && !enKanban && accesoPec.cambiarPec && (
           <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-4 z-40 border border-slate-700">
             <span className="font-bold text-sm bg-slate-800 px-3 py-1 rounded-full">{seleccion.length} {seleccion.length === 1 ? 'seleccionado' : 'seleccionados'}</span>
             {/* T14 r1 (m11): sobre el fondo oscuro, un foco blanco que se vea (el anillo del navegador apenas contrasta). */}

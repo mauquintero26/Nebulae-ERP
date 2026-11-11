@@ -68,6 +68,8 @@ import { fechaCorta, fechaSolo } from '@/lib/fechas-colombia';
 import { enlaceDocumento } from '@/lib/analisis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { FOCOS, TABLE } from '@/lib/design-system';
+import { accesoTableroVentas } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 import { VEN_NAV } from '../ven-nav';
 import { getUsuarioActual } from '../flujo';
 
@@ -1072,6 +1074,9 @@ export default function CotizacionClient() {
   // vista:ventas.cotizaciones (RP26: este hook es su único dueño) y la pestaña, la página y la búsqueda en la sesión
   // (volver del detalle deja lo mismo).
   const [estado, despachar, listo] = useEstadoTabla(ID_COT, INICIAL_COT);
+  // B4 T24 (FINAL-m31 y FINAL-m38): el rol después de montar (useRolActual) decide si el tablero se mueve (accesoTableroVentas: el
+  // require_roles del PATCH de destino); sin permiso, soloLectura (no se arrastra ni se ofrece «Mover a…») y sin acciones masivas.
+  const accesoTablero = accesoTableroVentas(useRolActual());
   const enKanban = estado.modo === 'kanban';
 
   // La tabla (T6B): GET /ventas/cotizaciones con vista, estados, semáforo, q, orden, limit y offset del estado, más los
@@ -1375,6 +1380,7 @@ export default function CotizacionClient() {
               onAbrir={abrirCotizacion}
               onCambio={cambiarDesdeTablero}
               onAccion={accionDesdeTablero}
+              soloLectura={accesoTablero.soloLectura}
               color="amber"
             />
           )}

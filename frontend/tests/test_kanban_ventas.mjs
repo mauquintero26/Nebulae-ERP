@@ -1345,7 +1345,8 @@ console.log('--- B4 T10 TEST Q: el cableado del tablero de Pedidos (C9, C15, R11
   assert.match(cancelar, /tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*$/);
   assert.match(lista, /<ModalMotivo\s+titulo=\{`Cancelar \$\{cancelando\.pedido\.numero\}`\}\s+efectos=\{efectosCancelarPedido\(cancelando\.pedido\)\}[\s\S]*?onConfirmar=\{cancelarConMotivo\}\s+onCerrar=\{\(\) => setCancelando\(null\)\}/);
   // accionesTarjeta: accionesTarjetaPedido; al terminar, la columna En proceso y lo que mueve el cambio.
-  assert.match(lista, /accionesTarjetaPedido\(p\)\.map\(\(a\) => \(\{\s*etiqueta: a\.etiqueta, [^\n]*onClick: \(\) => \{ void marcarDesdeTablero\(p, a\.estado\); \},/);
+  // B4 T24 (FINAL-m38, D27): las acciones solo para quien mueve (accesoTablero.mover).
+  assert.match(lista, /\(accesoTablero\.mover \? accionesTarjetaPedido\(p\) : \[\]\)\.map\(\(a\) => \(\{\s*etiqueta: a\.etiqueta, [^\n]*onClick: \(\) => \{ void marcarDesdeTablero\(p, a\.estado\); \},/);
   const marcar = lista.slice(lista.indexOf('const marcarDesdeTablero'), lista.indexOf('\n  }, [', lista.indexOf('const marcarDesdeTablero')));
   assert.match(marcar, /JSON\.stringify\(\{ estado: nuevo, updated_by: autorActual\(\) \}\)/);
   assert.match(marcar, /if \(!recargarTrasError\(err\)\) return;\s*\}\s*recargarTablero\(\['en_proceso'\]\);\s*recargarTrasCambio\(\);\s*$/);
@@ -1564,6 +1565,35 @@ console.log('--- B4 T23A TEST S: el cableado del tablero y del filtro de los ped
   assert.match(eliminar, /if \(!\(await confirmar\(\{ titulo: 'Eliminar producto', mensaje: '¿Eliminar este producto\?', efectos: \[prod\.nombre\], textoConfirmar: 'Eliminar', peligro: true \}\)\)\) return;/);
   assert.ok(eliminar.indexOf('confirmar(') < eliminar.indexOf("method: 'DELETE'"), 'primero confirma');
   assert.ok(!/Â|Ã|â€/.test(eliminar), 'sin mojibake en lo que se tocó');
+}
+
+console.log('--- B4 T24 (FINAL-m31 y FINAL-m38): los tableros de Ventas solo se mueven con el rol del PATCH de destino ---');
+{
+  const { readFileSync } = await import('node:fs');
+  const { accesoTableroVentas, TEXTO_TABLERO_SOLO_VER } = await import('../src/lib/roles.js');
+  // Un caso por rol, igual que soloLecturaPedidosWeb (RP62): ADMIN y ASESOR mueven; los demás ven el tablero con el motivo.
+  for (const rol of ['ADMIN', 'ASESOR', 'admin', 'Vendedor', ' asesor ']) assert.equal(accesoTableroVentas(rol).soloLectura, null, rol);
+  for (const rol of ['FINANZAS', 'BODEGA', 'COMPRAS', 'CONSULTA', 'INVENTADO', '', null, undefined]) {
+    assert.equal(accesoTableroVentas(rol).soloLectura, TEXTO_TABLERO_SOLO_VER, String(rol));
+  }
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const sin = (f) => f.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const PANTALLAS = ['app/dashboard/ventas/page.tsx', 'app/dashboard/ventas/solicitud/solicitud-client.tsx',
+    'app/dashboard/ventas/cotizacion/cotizacion-client.tsx', 'app/dashboard/ventas/venta/venta-client.tsx'];
+  for (const ruta of PANTALLAS) {
+    const c = sin(leer(ruta));
+    assert.match(c, /import \{ useRolActual \} from '@\/components\/ui\/useRolActual';/, `${ruta}: useRolActual`);
+    assert.match(c, /import \{[^}]*\baccesoTableroVentas\b[^}]*\} from '@\/lib\/roles';/, `${ruta}: accesoTableroVentas`);
+    assert.match(c, /const accesoTablero = accesoTableroVentas\(useRolActual\(\)\);/, `${ruta}: el acceso del tablero`);
+    // El tablero recibe soloLectura (no se arrastra ni ofrece «Mover a…»), como E-Commerce.
+    assert.match(c, /<TableroKanban\s[^>]*soloLectura=\{accesoTablero\.soloLectura\}/, `${ruta}: soloLectura`);
+  }
+  // El Hub: la barra de acciones masivas (los mismos PATCH) solo para quien mueve.
+  assert.match(sin(leer('app/dashboard/ventas/page.tsx')), /\{selectedIds\.size>0 && !enAnalisis && estado\.modo === 'lista' && accesoTablero\.mover && \(/);
+  // Solicitudes: «Cancelar seleccionadas» (POST /solicitudes/{id}/cancelar, ADMIN y ASESOR) solo para quien mueve.
+  assert.ok(sin(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx')).includes("{checked.size>0 && modoEfectivo === 'lista' && !enPapelera && accesoTablero.mover && ("));
+  // Pedidos de venta: las acciones del ⋯ de la tarjeta (los mismos PATCH de estado) solo para quien mueve.
+  assert.match(sin(leer('app/dashboard/ventas/venta/venta-client.tsx')), /const accionesTarjeta = useCallback\(\(p: FilaPedido\): ItemMenuFila\[\] => \(accesoTablero\.mover \? accionesTarjetaPedido\(p\) : \[\]\)\.map\(/);
 }
 
 console.log('OK test_kanban_ventas');

@@ -36,6 +36,8 @@ import {
 import { textoDeError, recargarTrasError } from '@/lib/avisos';
 import { VEN_NAV } from '../ven-nav';
 import { FOCOS, PAGE_HEADER, TABLE } from '@/lib/design-system';
+import { accesoTableroVentas } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 import { esAdministrador, esAsesorElegible, getUsuarioActual } from '../flujo';
 import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas';
 import {
@@ -1033,6 +1035,9 @@ export default function SolicitudClient() {
   // la tabla y el tablero despachan a él. El modo (Lista o Kanban) se guarda en vista:ventas.solicitudes (RP26: este hook
   // es su único dueño) y la pestaña, la página y la búsqueda en la sesión (volver del detalle deja lo mismo).
   const [estado, despachar, listo] = useEstadoTabla(ID_SC, INICIAL_SC);
+  // B4 T24 (FINAL-m31 y FINAL-m38): el rol después de montar (useRolActual) decide si el tablero se mueve (accesoTableroVentas: el
+  // require_roles del PATCH de destino); sin permiso, soloLectura (no se arrastra ni se ofrece «Mover a…») y sin acciones masivas.
+  const accesoTablero = accesoTableroVentas(useRolActual());
   const enPapelera = estado.vista === 'papelera';
   // KANBAN-ventas-listas punto 7: Soporte y la Papelera no tienen tablero (ahí no aparece el botón y se ve la lista).
   const kanbanDisponible = !VISTAS_SIN_TABLERO.includes(estado.vista ?? '');
@@ -1653,6 +1658,7 @@ export default function SolicitudClient() {
               tarjetaDe={tarjetaDeSC}
               onAbrir={abrirSolicitud}
               onAccion={accionDesdeTablero}
+              soloLectura={accesoTablero.soloLectura}
               color="indigo"
             />
           )}
@@ -1662,7 +1668,7 @@ export default function SolicitudClient() {
       {/* N4 (barra masiva): solo cancela las marcadas (U15: ningún estado se pone a mano). B4 T8: la selección es de la
           página de la tabla («Seleccionar todo» marca la página), así que solo en Lista y fuera de la Papelera; va abajo y
           fija, como la del Hub, para no correr la lista al marcar una fila. */}
-      {checked.size>0 && modoEfectivo === 'lista' && !enPapelera && (
+      {checked.size>0 && modoEfectivo === 'lista' && !enPapelera && accesoTablero.mover && (
         <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-indigo-600 text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-4 z-40">
           <span className="font-bold text-sm">{checked.size} seleccionada(s)</span>
           <div className="flex gap-2">

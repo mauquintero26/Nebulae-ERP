@@ -1,5 +1,7 @@
 'use client';
 import { FOCOS } from '@/lib/design-system';
+import { accesoCompras } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 import React, { useState, useEffect, useLayoutEffect, useCallback, useContext, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams, useRouter } from 'next/navigation';
@@ -595,7 +597,9 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
   // B4 T15 (KANBAN-compras punto 6; R9, C15c): el botón Estado solo ofrece lo que acepta update_pec (transicionesPec):
   // emitir un borrador (PATCH) o cancelar, que abre el ModalMotivo de la página con su motivo. En tránsito y Recibido
   // los ponen el seguimiento y la recepción. Si el servidor dice que no, se ve su mensaje.
-  const transiciones = transicionesPec(detail?.estado);
+  // B4 T24 (FINAL-m10): «Estado», «Cancelar PEC» y «Eliminar definitivamente» solo con el rol del PATCH y el DELETE (accesoCompras).
+  const accesoPec = accesoCompras(useRolActual());
+  const transiciones = accesoPec.cambiarPec ? transicionesPec(detail?.estado) : [];
   const changeEstado = async (est: string) => {
     setEditEstado(false);
     if (est === 'CANCELADO') { onCancelar(detail ?? pec); return; }
@@ -700,7 +704,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
                       <button onClick={()=>{cancelPec();setMenuOpen(false);}} className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"><Trash2 size={13}/> Cancelar PEC</button>
                     </>
                   )}
-                  {etapaPec(detail?.estado) === 'cancelado' && (
+                  {accesoPec.cambiarPec && etapaPec(detail?.estado) === 'cancelado' && (
                     <>
                       <div className="border-t border-gray-100 my-1"/>
                       <button onClick={()=>{deletePec();setMenuOpen(false);}} className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"><Trash2 size={13}/> Eliminar definitivamente</button>
@@ -1445,14 +1449,15 @@ const AccionesFila = React.createContext<AccionesFilaPedidos | null>(null);
  */
 function CeldaAcciones({ p }: { p: FilaPec }) {
   const acciones = useContext(AccionesFila);
+  const accesoPec = accesoCompras(useRolActual());
   const items: ItemMenuFila[] = [
     { etiqueta: 'Ver detalle', icono: Eye, onClick: () => acciones?.abrir(p) },
     { etiqueta: 'Marcar Emitido', icono: Send, onClick: () => acciones?.emitir(p),
-      oculto: !transicionesPec(p.estado).includes('EMITIDO') },
+      oculto: !accesoPec.cambiarPec || !transicionesPec(p.estado).includes('EMITIDO') },
     { etiqueta: 'Cancelar PEC', icono: Trash2, peligro: true, onClick: () => acciones?.cancelar([p]),
-      oculto: !transicionesPec(p.estado).includes('CANCELADO') },
+      oculto: !accesoPec.cambiarPec || !transicionesPec(p.estado).includes('CANCELADO') },
     { etiqueta: 'Eliminar definitivamente', icono: Trash2, peligro: true, onClick: () => acciones?.eliminar(p),
-      oculto: etapaPec(p.estado) !== 'cancelado' },
+      oculto: !accesoPec.cambiarPec || etapaPec(p.estado) !== 'cancelado' },
   ];
   return (
     <span className="flex items-center justify-end gap-0.5">
@@ -1510,6 +1515,9 @@ export default function PedidosCompraPage() {
   // las tarjetas, la tabla y el tablero despachan a él. El modo (Lista o Kanban) se guarda en vista:compras.pedidos. Ya
   // no hay arreglos en memoria (antes, los 200 más recientes filtrados, contados y paginados en el navegador).
   const [estado, despachar, listo] = useEstadoTabla(ID_PEDIDOS, INICIAL_PEDIDOS);
+  // B4 T24 (FINAL-m10, m31 y m38): el rol después de montar (useRolActual) decide si se cambian los PEC (accesoCompras: PATCH y DELETE
+  // /compras/pedidos y PATCH /tracking son de ADMIN y COMPRAS); sin permiso, el tablero es solo para ver y no se ofrecen sus acciones.
+  const accesoPec = accesoCompras(useRolActual());
   const enKanban = estado.modo === 'kanban';
 
   // GET /compras/pedidos con vista, estados, semáforo, q, orden, limit y offset del estado, más los conteos de las
@@ -1962,13 +1970,14 @@ export default function PedidosCompraPage() {
               onAbrir={abrir}
               onCambio={cambiarDesdeTablero}
               onAccion={accionDesdeTablero}
+              soloLectura={accesoPec.soloLectura}
               color="purple"
             />
           ) : null}
         </div>
 
         {/* La barra masiva (la selección es de la página de la tabla, así que solo en Lista): cancelar con un motivo. */}
-        {seleccion.length > 0 && !enKanban && (
+        {seleccion.length > 0 && !enKanban && accesoPec.cambiarPec && (
           <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-4 z-40 border border-slate-700">
             <span className="font-bold text-sm bg-slate-800 px-3 py-1 rounded-full">{seleccion.length} {seleccion.length === 1 ? 'seleccionado' : 'seleccionados'}</span>
             <button type="button" onClick={() => pedirCancelacion(filasSeleccionadas())}

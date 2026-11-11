@@ -63,7 +63,8 @@ import { accionBloque3 } from '@/lib/acciones-bloque3';
 import { abreWhatsAppLocal, MENSAJE_WHATSAPP_SIN_GUARDAR, banderaReenvio } from '@/lib/envio-whatsapp';
 import { configSeguimientoInicial, errorConfigSeguimiento } from '@/lib/seguimiento';
 // Revisión final B3 (F2): la regla de rol (M12) y la nota ámbar en la ventana de envío del tablero (M47).
-import { esAdmin } from '@/lib/roles';
+import { accesoTableroVentas, esAdmin } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 import { AvisoNombreSinContacto } from './aviso-nombre-sin-contacto';
 import { normalizarTarifaIva, TARIFA_IVA_POR_DEFECTO } from '@/lib/iva';
 
@@ -585,6 +586,9 @@ export default function VentasHub() {
   // estados, el semáforo, las cajas del flujo, la tabla y el tablero despachan a él; el modo (Lista o Kanban) se guarda
   // en vista:ventas.hub. Ya no hay arreglos en memoria (C4): la tabla y el tablero piden a /ventas/hub/documentos.
   const [estado, despachar, listo] = useEstadoTabla(ID_HUB, INICIAL_HUB);
+  // B4 T24 (FINAL-m31 y FINAL-m38): el rol después de montar (useRolActual) decide si el tablero se mueve (accesoTableroVentas: el
+  // require_roles del PATCH de destino); sin permiso, soloLectura (no se arrastra ni se ofrece «Mover a…») y sin acciones masivas.
+  const accesoTablero = accesoTableroVentas(useRolActual());
   // R6 y RP21: ?paso= y ?tab=analisis&foco= (leerEnlaceHub) salen de window.location al montar, sin useSearchParams (la
   // página no necesita Suspense; AuthGuard la pinta solo en el navegador). Análisis es un estado de la página (RP35).
   const [enlace] = useState(() => leerEnlaceHub(typeof window === 'undefined' ? '' : window.location.search));
@@ -1251,13 +1255,14 @@ export default function VentasHub() {
               onAccion={accionDesdeTablero}
               accionesTarjeta={accionesTarjeta}
               resumenColumna={resumenColumna}
+              soloLectura={accesoTablero.soloLectura}
               color="indigo"
             />
           ) : null}
         </div>
 
         {/* Bulk action bar (N3 y N5): la selección es de la página de la tabla, así que solo en Lista. */}
-        {selectedIds.size>0 && !enAnalisis && estado.modo === 'lista' && (
+        {selectedIds.size>0 && !enAnalisis && estado.modo === 'lista' && accesoTablero.mover && (
           <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-6 py-3.5 rounded-2xl shadow-2xl flex items-center gap-4 z-40 border border-slate-700">
             <span className="font-bold text-xs bg-slate-800 px-3 py-1 rounded-full border border-slate-700">{selectedIds.size} seleccionados</span>
             {(() => {

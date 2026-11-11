@@ -47,6 +47,8 @@ import { fechaCorta, fechaSolo } from '@/lib/fechas-colombia';
 import { PERIODO_KPI } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { FOCOS, TABLE } from '@/lib/design-system';
+import { accesoTableroVentas } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 import { VEN_NAV } from '../ven-nav';
 import { getUsuarioActual, puedeCrearOrdenDePago } from '../flujo';
 
@@ -333,6 +335,9 @@ export default function VentaClient() {
   // tarjetas, la tabla y el tablero despachan a él. El modo (Lista o Kanban) se guarda en vista:ventas.pedidos (RP26:
   // este hook es su único dueño) y la pestaña, la página y la búsqueda en la sesión (volver del detalle deja lo mismo).
   const [estado, despachar, listo] = useEstadoTabla(ID_PEDIDOS, INICIAL_PEDIDOS);
+  // B4 T24 (FINAL-m31 y FINAL-m38): el rol después de montar (useRolActual) decide si el tablero se mueve (accesoTableroVentas: el
+  // require_roles del PATCH de destino); sin permiso, soloLectura (no se arrastra ni se ofrece «Mover a…») y sin acciones masivas.
+  const accesoTablero = accesoTableroVentas(useRolActual());
   const enKanban = estado.modo === 'kanban';
 
   // La tabla (T6B): GET /ventas/pedidos con vista, estados, semáforo, q, orden, limit y offset del estado, más los conteos
@@ -604,9 +609,9 @@ export default function VentaClient() {
     recargarTablero(['en_proceso']);
     recargarTrasCambio();
   }, [avisar, avisarError, recargarTablero, recargarTrasCambio]);
-  const accionesTarjeta = useCallback((p: FilaPedido): ItemMenuFila[] => accionesTarjetaPedido(p).map((a) => ({
+  const accionesTarjeta = useCallback((p: FilaPedido): ItemMenuFila[] => (accesoTablero.mover ? accionesTarjetaPedido(p) : []).map((a) => ({
     etiqueta: a.etiqueta, icono: a.estado === 'EN_TRANSITO' ? Truck : Package, onClick: () => { void marcarDesdeTablero(p, a.estado); },
-  })), [marcarDesdeTablero]);
+  })), [marcarDesdeTablero, accesoTablero.mover]);
   // C9: la suma de H47 de cada columna (el resumen de su consulta) debajo del título, salvo en Cancelado.
   const resumenColumna = useCallback(
     (clave: string, d: DatosColumnaKanban<FilaPedido>) => resumenColumnaPedido(clave, d.resumen), [],
@@ -758,6 +763,7 @@ export default function VentaClient() {
               onAccion={accionDesdeTablero}
               accionesTarjeta={accionesTarjeta}
               resumenColumna={resumenColumna}
+              soloLectura={accesoTablero.soloLectura}
               color="indigo"
             />
           )}

@@ -1,6 +1,8 @@
 'use client';
 
 import { FOCOS } from '@/lib/design-system';
+import { accesoCompras } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -79,6 +81,8 @@ type AccionesFilaTransito = {
   avanzar: (p: FilaTransito, accion: { stage: string; status: string }) => void;
   /** I3: ¿ese pedido tiene un cambio de etapa en camino (o su recarga sin llegar)? Su botón muestra la carga: cada fila por su cuenta. */
   pendiente: (id: number) => boolean;
+  /** B4 T24 (FINAL-m38): si el rol puede iniciar o completar una etapa (PATCH /tracking: ADMIN y COMPRAS, accesoCompras). */
+  puedeAvanzar: boolean;
 };
 const AccionesFila = React.createContext<AccionesFilaTransito | null>(null);
 
@@ -161,7 +165,7 @@ function CeldaAccion({ p }: { p: FilaTransito }) {
   if (acciones?.pendiente(p.id)) {
     return <RefreshCw size={14} role="status" aria-label={`Actualizando ${p.numero}`} className="animate-spin text-blue-500" />;
   }
-  if (!accion) return <span className="text-xs text-slate-400">—</span>;
+  if (!accion || !acciones?.puedeAvanzar) return <span className="text-xs text-slate-400">—</span>;
   const completar = accion.status === 'COMPLETADO';
   return (
     <button type="button" onClick={() => acciones?.avanzar(p, accion)} aria-label={`${accion.texto} la etapa actual de ${p.numero}`}
@@ -217,6 +221,9 @@ export default function TransitoPage() {
   // El estado ÚNICO de la pantalla: la búsqueda, el filtro de estados, «Solo vencidos» (semaforo=vencidos), la franja, las
   // tarjetas, la tabla y el tablero despachan a él. El modo (Lista o Kanban) se guarda en vista:compras.transito.
   const [estado, despachar, listo] = useEstadoTabla(ID_TRANSITO, INICIAL_TRANSITO);
+  // B4 T24 (FINAL-m10, m31 y m38): el rol después de montar (useRolActual) decide si se cambian los PEC (accesoCompras: PATCH y DELETE
+  // /compras/pedidos y PATCH /tracking son de ADMIN y COMPRAS); sin permiso, el tablero es solo para ver y no se ofrecen sus acciones.
+  const accesoPec = accesoCompras(useRolActual());
   const enKanban = estado.modo === 'kanban';
 
   // La tabla: la página (25 o 50) de GET /compras/pedidos?vista=transito_logistica. esperar: !listo (D40): el esqueleto, nunca
@@ -322,7 +329,9 @@ export default function TransitoPage() {
       terminarCambio(p.id);
     } else descartarCambio(p.id);
   }, [aplicarEtapa, avisar, avisarError, recargarTodo, iniciarCambio, terminarCambio, descartarCambio]);
-  const accionesFila = useMemo<AccionesFilaTransito>(() => ({ avanzar: (p, a) => { void avanzar(p, a); }, pendiente }), [avanzar, pendiente]);
+  const accionesFila = useMemo<AccionesFilaTransito>(() => ({
+    avanzar: (p, a) => { void avanzar(p, a); }, pendiente, puedeAvanzar: accesoPec.tracking,
+  }), [avanzar, pendiente, accesoPec.tracking]);
 
   // ── bloque 2: la tabla (TABLA-compras punto 8; R5, R26, D40, D41) ──
   const prefs = usePreferenciasTabla(ID_TRANSITO, COLUMNAS_TABLA_TRANSITO);
@@ -574,6 +583,7 @@ export default function TransitoPage() {
               onAbrir={abrirPedido}
               onCambio={cambiarDesdeTablero}
               aviso={avisoTablero}
+              soloLectura={accesoPec.soloLectura}
               color="blue"
               vacio="Sin pedidos en esta etapa"
             />

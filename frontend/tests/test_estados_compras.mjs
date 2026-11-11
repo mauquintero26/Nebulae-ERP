@@ -881,9 +881,10 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
   assert.ok(!/catch \{\s*\}|catch \{ setProdSearchResults\(\[\]\); \}/.test(pag), 'ningún error mudo');
   assert.equal((pag.match(/avisarError\(err, 'No se pudo buscar el (?:casillero|proveedor|producto)'\)/g) ?? []).length, 4, 'las cuatro búsquedas');
   // El menú de fila (MenuFila) ofrece solo lo que acepta update_pec (R9, C15c): Emitir desde Borrador y cancelar con motivo.
-  assert.match(pag, /etiqueta: 'Marcar Emitido'[\s\S]{0,300}oculto: !transicionesPec\(p\.estado\)\.includes\('EMITIDO'\)/);
-  assert.match(pag, /etiqueta: 'Cancelar PEC'[\s\S]{0,200}oculto: !transicionesPec\(p\.estado\)\.includes\('CANCELADO'\)/);
-  assert.match(pag, /etiqueta: 'Eliminar definitivamente'[\s\S]{0,200}oculto: etapaPec\(p\.estado\) !== 'cancelado'/);
+  // B4 T24 (FINAL-m10, D27): además, solo con el rol que hace el PATCH y el DELETE (accesoPec.cambiarPec).
+  assert.match(pag, /etiqueta: 'Marcar Emitido'[\s\S]{0,300}oculto: !accesoPec\.cambiarPec \|\| !transicionesPec\(p\.estado\)\.includes\('EMITIDO'\)/);
+  assert.match(pag, /etiqueta: 'Cancelar PEC'[\s\S]{0,200}oculto: !accesoPec\.cambiarPec \|\| !transicionesPec\(p\.estado\)\.includes\('CANCELADO'\)/);
+  assert.match(pag, /etiqueta: 'Eliminar definitivamente'[\s\S]{0,200}oculto: !accesoPec\.cambiarPec \|\| etapaPec\(p\.estado\) !== 'cancelado'/);
   assert.match(pag, /<MenuFila items=\{items\} etiqueta=\{`Acciones de \$\{p\.numero\}`\} \/>/);
   // El tablero (KANBAN-compras punto 6): las reglas de R9, la tarjeta con «Recepcionar» y D39.
   assert.match(pag, /regla=\{reglaSoltarPec\}/);
@@ -901,7 +902,8 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
   assert.ok(!/\.catch\(\(\) ?=> ?\{\}\)/.test(pag), 'ningún error se traga');
   assert.ok(!/estado: ?'RECIBIDO'/.test(pag) && !/estado: ?'EN_TRANSITO'/.test(pag), 'ningún PATCH a mano a tránsito o recibido');
   assert.ok(!/Object\.entries\(PEC_ESTADOS\)|PEC_ESTADOS/.test(pag), 'el botón Estado ya no ofrece todos los estados');
-  assert.match(pag, /const transiciones = transicionesPec\(detail\?\.estado\);/);
+  // B4 T24 (FINAL-m10, D27): sin el rol del PATCH, ninguna transición a mano.
+  assert.match(pag, /const transiciones = accesoPec\.cambiarPec \? transicionesPec\(detail\?\.estado\) : \[\];/);
   // «Eliminar definitivamente» con confirmar de useAvisos (RP30), en el panel y en el menú.
   assert.equal((pag.match(/await confirmar\(\{/g) ?? []).length >= 3, true, 'el panel, el menú de fila y el casillero');
   // Las tarjetas (KPI-compras punto 6; R12, RP92): las cuatro de /compras/stats, pulsables como sus vistas.
@@ -2945,6 +2947,42 @@ console.log('--- TEST 49 (B4 T19 r1): la tarjeta que abre cada pestaña, las pes
   assert.equal(ec.textoDiasRetraso(1), '1 día');
   assert.equal(ec.textoDiasRetraso(3), '3 días');
   assert.deepEqual(ec.MOTIVOS_AJUSTE, ['Conteo físico', 'Merma', 'Sobrante', 'Corrección de error', 'Daño en bodega', 'Vencimiento', 'Otro']);
+}
+
+console.log('--- B4 T24 (FINAL-m10, FINAL-m31 y FINAL-m38): los tableros y las acciones de los PEC solo con ADMIN y COMPRAS ---');
+{
+  const { accesoCompras, TEXTO_TABLERO_SOLO_VER } = await import('../src/lib/roles.js');
+  // Un caso por rol (PATCH y DELETE /compras/pedidos y PATCH /tracking: ADMIN y COMPRAS).
+  for (const rol of ['ADMIN', 'COMPRAS', 'compras', ' Admin ']) {
+    const a = accesoCompras(rol);
+    assert.deepEqual([a.cambiarPec, a.tracking, a.soloLectura], [true, true, null], rol);
+  }
+  for (const rol of ['ASESOR', 'FINANZAS', 'BODEGA', 'CONSULTA', 'INVENTADO', '', null]) {
+    const a = accesoCompras(rol);
+    assert.deepEqual([a.cambiarPec, a.tracking, a.soloLectura], [false, false, TEXTO_TABLERO_SOLO_VER], String(rol));
+  }
+  const sin = (f) => f.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const hub = sin(leerFuente('app/dashboard/compras/page.tsx'));
+  const pedidos = sin(leerFuente('app/dashboard/compras/pedidos/page.tsx'));
+  const transito = sin(leerFuente('app/dashboard/compras/transito/page.tsx'));
+  for (const [nombre, c] of [['Hub', hub], ['Pedidos', pedidos], ['Tránsito', transito]]) {
+    assert.match(c, /import \{ useRolActual \} from '@\/components\/ui\/useRolActual';/, `${nombre}: useRolActual`);
+    assert.match(c, /import \{[^}]*\baccesoCompras\b[^}]*\} from '@\/lib\/roles';/, `${nombre}: accesoCompras`);
+    assert.match(c, /const accesoPec = accesoCompras\(useRolActual\(\)\);/, `${nombre}: el acceso de la pantalla`);
+    assert.match(c, /<TableroKanban\s[^>]*soloLectura=\{accesoPec\.soloLectura\}/, `${nombre}: el tablero, solo para ver sin permiso`);
+  }
+  // m10: «Cambiar Estado» / «Estado», «Cancelar PEC» y «Marcar Emitido» salen de transicionesPec SOLO con cambiarPec (los dos paneles).
+  for (const [nombre, c] of [['Hub', hub], ['Pedidos', pedidos]]) {
+    assert.match(c, /const transiciones = accesoPec\.cambiarPec \? transicionesPec\(detail\?\.estado\) : \[\];/, `${nombre}: el panel`);
+    assert.match(c, /\{seleccion\.length > 0 && (?:!enAnalisis && )?!enKanban && accesoPec\.cambiarPec && \(/, `${nombre}: la barra masiva`);
+    assert.match(c, /oculto: !accesoPec\.cambiarPec \|\| !transicionesPec\(p\.estado\)\.includes\('CANCELADO'\) \}/, `${nombre}: «Cancelar PEC» de la fila`);
+  }
+  assert.match(pedidos, /oculto: !accesoPec\.cambiarPec \|\| !transicionesPec\(p\.estado\)\.includes\('EMITIDO'\) \}/, '«Marcar Emitido» de la fila');
+  assert.match(pedidos, /oculto: !accesoPec\.cambiarPec \|\| etapaPec\(p\.estado\) !== 'cancelado' \}/, '«Eliminar definitivamente» de la fila');
+  assert.match(pedidos, /\{accesoPec\.cambiarPec && etapaPec\(detail\?\.estado\) === 'cancelado' && \(/, '«Eliminar definitivamente» del panel');
+  // Tránsito: «Iniciar» y «Completar» de la fila (el mismo PATCH /tracking) solo con tracking.
+  assert.match(transito, /puedeAvanzar: accesoPec\.tracking/);
+  assert.match(transito, /if \(!accion \|\| !acciones\?\.puedeAvanzar\) return <span className="text-xs text-slate-400">—<\/span>;/);
 }
 
 console.log('\nOK: test_estados_compras.mjs');
