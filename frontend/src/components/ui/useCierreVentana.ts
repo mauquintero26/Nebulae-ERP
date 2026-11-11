@@ -3,11 +3,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MouseEvent, PointerEvent } from 'react';
 import { hayReautenticacionPendiente } from '@/lib/api';
-import { abrirCapa, cerrarCapa, cierraConClicFuera, cierraConEsc, esCapaDeArriba, siguienteFocoAtrapado } from '@/lib/tabla';
+import { abrirCapa, atrapaTab, cerrarCapa, cierraConClicFuera, cierraConEsc, esCapaDeArriba, siguienteFocoAtrapado } from '@/lib/tabla';
 
 /** Las capas abiertas (Modal y Drawer), de abajo arriba (abrirCapa, cerrarCapa y esCapaDeArriba de lib/tabla.js). */
 let capas: ReadonlyArray<number> = [];
 let siguienteCapa = 0;
+/** r2 (C1): el foco está fuera del panel y dentro de OTRO diálogo modal (la ventana de re-ingreso de SessionKeeper, fuera de la pila). */
+const focoEnOtroDialogo = (panel: HTMLElement) => {
+  const activo = document.activeElement;
+  return activo instanceof Element && !panel.contains(activo) && activo.closest('[aria-modal="true"]') !== null;
+};
 const ENFOCABLES = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
@@ -41,7 +46,7 @@ export function useCierreVentana(onClose: () => void, bloqueado: boolean) {
     const alTeclear = (e: KeyboardEvent) => {
       const arriba = esCapaDeArriba(capas, capa);
       if (e.key === 'Tab') {
-        if (!arriba || !panel) return;
+        if (!panel || !atrapaTab({ arriba, reautenticando: hayReautenticacionPendiente(), focoEnOtroDialogo: focoEnOtroDialogo(panel) })) return;
         const lista = [...panel.querySelectorAll<HTMLElement>(ENFOCABLES)].filter((el) => el.getClientRects().length > 0);
         const destino = siguienteFocoAtrapado(lista.indexOf(document.activeElement as HTMLElement), lista.length, e.shiftKey);
         if (destino === null) return;
@@ -52,6 +57,7 @@ export function useCierreVentana(onClose: () => void, bloqueado: boolean) {
       if (!cierraConEsc({
         tecla: e.key, arriba, defaultPrevented: e.defaultPrevented, bloqueado: bloqueo.current,
         reautenticando: hayReautenticacionPendiente(), dentro: !panel || panel.contains(e.target as Node),
+        enBody: e.target === document.body,
       })) return;
       e.preventDefault();
       cerrar.current();

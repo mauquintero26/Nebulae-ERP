@@ -2254,13 +2254,25 @@ export function saleConEsc({ tecla, defaultPrevented = false, dialogoEncima = fa
  * B4 T24 (F40): si un Esc cierra una ventana (Modal) o un panel lateral (Drawer): solo la capa de ARRIBA (una confirmación encima se
  * cierra primero), si nadie más lo atendió (defaultPrevented: un menú, el filtro, la búsqueda) y si no está guardando (bloqueado:
  * bloquearCierre).
+ * r2 (m8): un Esc con el foco en el <body> (`enBody`: un clic en una zona del panel que no se enfoca) cuenta como de dentro.
  * @param {{tecla: string, arriba: boolean, defaultPrevented?: boolean, bloqueado?: boolean, reautenticando?: boolean,
- *   dentro?: boolean}} entrada
+ *   dentro?: boolean, enBody?: boolean}} entrada
  * @returns {boolean}
  */
-export function cierraConEsc({ tecla, arriba, defaultPrevented = false, bloqueado = false, reautenticando = false, dentro = true }) {
+export function cierraConEsc({ tecla, arriba, defaultPrevented = false, bloqueado = false, reautenticando = false, dentro = true, enBody = false }) {
   // B4 T24 r1 (m12): tampoco con la ventana de re-ingreso abierta (no está en la pila) ni con un Esc de fuera del panel de esa capa.
-  return tecla === 'Escape' && arriba && !defaultPrevented && !bloqueado && !reautenticando && dentro;
+  return tecla === 'Escape' && arriba && !defaultPrevented && !bloqueado && !reautenticando && (dentro || enBody);
+}
+
+/**
+ * B4 T24 r2 (C1 = C3 = C7): si la capa atrapa un Tab. Solo la de arriba, sin una re-autenticación pendiente (la ventana de re-ingreso
+ * de SessionKeeper, z-[100], no está en la pila: como el Esc y como Avisos) y sin el foco en OTRO diálogo modal fuera de la pila; si no,
+ * un Tab en «Usuario» o «Contraseña» saltaría a la X de la ventana de abajo.
+ * @param {{arriba: boolean, reautenticando?: boolean, focoEnOtroDialogo?: boolean}} entrada
+ * @returns {boolean}
+ */
+export function atrapaTab({ arriba, reautenticando = false, focoEnOtroDialogo = false }) {
+  return Boolean(arriba) && !reautenticando && !focoEnOtroDialogo;
 }
 
 /**

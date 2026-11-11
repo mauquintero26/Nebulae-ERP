@@ -3169,13 +3169,31 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
   assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, reautenticando: true }), false);
   assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, dentro: false }), false);
   assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, dentro: true }), true);
+  // r2 (m8): un Esc con el foco en el <body> (un clic en una zona no enfocable del panel) cuenta como de dentro.
+  assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, dentro: false, enBody: true }), true);
+  assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, dentro: false, enBody: false }), false);
+  // r2 (C1 = C3 = C7): Tab se atrapa solo en la capa de arriba, sin re-autenticación pendiente y con el foco que no está en otro diálogo
+  // modal fuera de la pila (la ventana de re-ingreso de SessionKeeper, z-[100]).
+  const { atrapaTab } = TABLA;
+  assert.equal(atrapaTab({ arriba: true }), true);
+  assert.equal(atrapaTab({ arriba: false }), false, 'una capa de abajo');
+  assert.equal(atrapaTab({ arriba: true, reautenticando: true }), false, 'con la ventana de re-ingreso');
+  assert.equal(atrapaTab({ arriba: true, focoEnOtroDialogo: true }), false, 'el foco en otro [aria-modal] que no es de la pila');
+  assert.equal(atrapaTab({ arriba: true, reautenticando: false, focoEnOtroDialogo: false }), true);
   // El hook usa la lib: la pila, el foco que entra y vuelve, Tab y la re-autenticación.
   const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const hook = leer('components/ui/useCierreVentana.ts');
   for (const n of ['capas = abrirCapa(capas, capa);', 'const arriba = esCapaDeArriba(capas, capa);', 'reautenticando: hayReautenticacionPendiente()',
-    'dentro: !panel || panel.contains(e.target as Node)', 'siguienteFocoAtrapado(', "if (abridor && abridor.isConnected) abridor.focus({ preventScroll: true });"]) {
+    'dentro: !panel || panel.contains(e.target as Node)', 'siguienteFocoAtrapado(', "if (abridor && abridor.isConnected) abridor.focus({ preventScroll: true });",
+    // r2 (m12): el foco que entra al abrir; r2 (m8): el <body>.
+    '(panel.querySelector<HTMLElement>(ENFOCABLES) ?? panel).focus({ preventScroll: true });', 'enBody: e.target === document.body,']) {
     assert.ok(hook.includes(n), n);
   }
+  // r2 (C1, m12): la rama Tab sale con atrapaTab (arriba, la re-autenticación y el foco en otro diálogo modal) y hace el preventDefault
+  // ANTES de mover el foco.
+  assert.match(hook, /if \(e\.key === 'Tab'\) \{\s*if \(!panel \|\| !atrapaTab\(\{ arriba, reautenticando: hayReautenticacionPendiente\(\), focoEnOtroDialogo: focoEnOtroDialogo\(panel\) \}\)\) return;/);
+  assert.match(hook, /e\.preventDefault\(\);\s*if \(destino >= 0\) lista\[destino\]\.focus\(\);/);
+  assert.match(hook, /const focoEnOtroDialogo = \(panel: HTMLElement\) => \{\s*const activo = document\.activeElement;\s*return activo instanceof Element && !panel\.contains\(activo\) && activo\.closest\('\[aria-modal="true"\]'\) !== null;\s*\};/);
   assert.match(hook, /document\.removeEventListener\('keydown', alTeclear\);\s*capas = cerrarCapa\(capas, capa\);/);
   assert.match(leer('components/ui/Modal.tsx'), /ref=\{refPanel\}\s+tabIndex=\{-1\}/);
   const drawer = leer('components/ui/Drawer.tsx');
