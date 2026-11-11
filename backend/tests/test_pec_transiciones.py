@@ -478,6 +478,34 @@ def test_los_campos_libres_se_validan_antes_de_guardar(app_client, db, admin_tok
     assert [l.user_name for l in _logs(db, pec)] == [nombre_de_usuario(user_admin)]   # B4 T24 (FINAL-m2)
 
 
+def test_cada_fecha_se_lee_una_sola_vez(app_client, db, admin_token, monkeypatch):
+    """B4 T24 (B28): _fecha_leida corría dos veces por campo (el validador descartaba el datetime y update_pec lo volvía
+    a calcular). Ahora _validar_campos_libres_pec devuelve las fechas leídas y update_pec las guarda."""
+    from app.api.v1 import erp_compras
+    real, llamadas = erp_compras._fecha_leida, []
+
+    def contada(valor, mensaje):
+        llamadas.append(valor)
+        return real(valor, mensaje)
+    monkeypatch.setattr(erp_compras, "_fecha_leida", contada)
+    pec = _Fabrica(db).pec("EMITIDO")
+    resp = _patch(app_client, admin_token, pec, fecha_entrega_estimada="2026-12-09", fecha_alerta="2026-12-08",
+                  fecha_compra="")
+    assert resp.status_code == 200, resp.text
+    assert sorted(llamadas) == ["", "2026-12-08", "2026-12-09"]
+    db.expire_all()
+    fila = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec.id).one()
+    assert (fila.fecha_entrega_estimada, fila.fecha_alerta, fila.fecha_compra) == (
+        datetime(2026, 12, 9), datetime(2026, 12, 8), None)
+
+
+def test_los_largos_son_los_de_las_columnas():
+    """B4 T24 (B29): los topes del autor y de la referencia del proveedor salen de las columnas, no de una copia a mano."""
+    from app.api.v1 import erp_compras
+    assert erp_compras.MAX_AUTOR == ActivityLog.__table__.c.user_name.type.length == 150
+    assert erp_compras.MAX_SUPPLIER_REF == PurchaseOrderFull.__table__.c.supplier_ref.type.length == 100
+
+
 def test_fechas_en_blanco_borran_y_se_guarda_la_fecha_leida(app_client, db, admin_token):
     """r2 (m2, m4, m3): el formulario «Editar información» manda '' si el PEC no tiene fecha; '' o solo espacios = null
     (200, la fecha queda en NULL). Con valor, se guarda la fecha leída (naive, en UTC si trae zona), no el texto."""

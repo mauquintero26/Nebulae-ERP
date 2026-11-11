@@ -370,5 +370,9 @@ def flujo_ventas(user: User = Depends(require_roles(*ALL_ERP_ROLES)), db: Sessio
     """Los numeros del diagrama del flujo de Ventas sobre todos los documentos (FLUJO-ventas-datos; R8, C5, RP12): ver
     resumen_flujo_ventas. Con el rol ASESOR, cambios_cliente cuenta solo los suyos (como alertas_resumen). No escribe."""
     asesor_id = user.id if normalize_role(user.role) == "ASESOR" else None
-    resumen = rv.resumen_flujo_ventas(db, rv.leer_dias_alerta(db), ahora_utc(), asesor_id=asesor_id)
+    ahora = ahora_utc()
+    resumen = rv.resumen_flujo_ventas(db, rv.leer_dias_alerta(db), ahora, asesor_id=asesor_id)
+    # B4 T24 (B14-b, aditivo): los avisos de Cotizaciones («N sin precio» y «N vencen en 7 días»), para que la franja sepa
+    # desde la primera respuesta si reserva el renglón de avisos.
+    resumen["cotizaciones"] = rv.avisos_cotizaciones(db, ahora)
     return {"status": "success", "data": resumen}

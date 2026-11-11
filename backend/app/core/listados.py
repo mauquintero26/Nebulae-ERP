@@ -195,10 +195,12 @@ def orden_tiempo(q, creado, actualizado, orden, *, id_lista):
     return q.order_by(*expresiones_tiempo(creado, actualizado, orden, id_lista=id_lista))
 
 
-def orden_por_lista(col, lista):
+def orden_por_lista(col, lista, por_defecto=None):
     """CASE que ordena `col` por su posición en `lista` (un estado por su lugar en el flujo, no alfabéticamente). Lo que
-    no está en la lista va al final."""
-    return case({valor: i for i, valor in enumerate(lista)}, value=col, else_=len(lista))
+    no está en la lista va al final o, con `por_defecto` (un valor de `lista`), en el lugar de ese valor (B4 T24, B24: los
+    PEC, donde un estado desconocido cuenta como EMITIDO)."""
+    else_ = len(lista) if por_defecto is None else list(lista).index(por_defecto)
+    return case({valor: i for i, valor in enumerate(lista)}, value=col, else_=else_)
 
 
 def contar_por_vista(q, vistas: dict) -> dict:

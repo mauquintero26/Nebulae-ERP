@@ -60,6 +60,13 @@ GRUPOS_PEC = MappingProxyType({
     "vencibles": _estados_de("emitido", "en_transito"),
 })
 
+# B4 T24 (B19): dos grupos que vivían fuera de la fuente única (GRUPOS_PEC tiene espejo en el frontend y su prueba de
+# paridad, por eso van aparte): lo que todavía espera su entrega (el orden 'atencion' y update_tracking, RP45) y lo que no
+# suma dinero (RP43: «Comprado» sin borrador ni cancelado).
+ETAPAS_POR_ENTREGAR = ("borrador", "emitido", "en_transito")
+ESTADOS_POR_ENTREGAR = _estados_de(*ETAPAS_POR_ENTREGAR)
+ESTADOS_SIN_DINERO_PEC = _estados_de("borrador", "cancelado")
+
 # Las vistas de las listas de Compras (pestañas, tablero y parametro `vista`, T12). R9: «Todos (vigentes)»: 'todos' es
 # todo menos cancelado (con la regla del desconocido, que cuenta como emitido). Entre las pestañas de lista (R9), los
 # cancelados salen solo en 'cancelados'; acciones_tomadas los sigue trayendo (acción tomada + cerrados, brief).

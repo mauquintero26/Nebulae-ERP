@@ -2,7 +2,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import column, exists, or_, select, table, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
 from app.db.database import get_db
@@ -331,6 +331,10 @@ def list_products(brand_id: Optional[int] = None, category_id: Optional[int] = N
     if orden_sql:
         query = query.order_by(*orden_sql)
 
+    # B4 T24 (B21): la marca, la categoría, los SKU y sus atributos de todos los productos en consultas fijas (antes,
+    # varias por producto).
+    query = query.options(selectinload(Product.brand), selectinload(Product.category),
+                          selectinload(Product.skus).selectinload(ProductSKU.attribute_values))
     if paginada:
         total, products = paginar(query, limite, offset)
     else:

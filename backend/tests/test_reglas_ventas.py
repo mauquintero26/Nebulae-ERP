@@ -886,3 +886,42 @@ def test_vista_de_grupo_y_estados_de_vista():
     assert sorted(vistos) == sorted(GRUPOS_DE_GRUPO_PEDIDO)
     for vista in ("todos", "", None, "PEND_COMPRA"):
         assert estados_de_vista(vista) == (), vista
+
+
+
+def test_los_predicados_de_las_filas_viven_en_resolucion_ventas():
+    """B4 T24 (B3, el mínimo): los días completos y las banderas de documentos activos de las filas de las listas son de
+    resolucion_ventas (erp_ventas ya no tiene su copia de _dias_desde ni reescribe D16 con any(...))."""
+    import inspect
+    from datetime import datetime, timedelta, timezone
+    from app.api.v1 import erp_ventas
+    from app.core import resolucion_ventas as rv
+    ahora = datetime(2026, 11, 10, 12, 0)
+    assert rv.dias_completos(None, ahora) == 0
+    assert rv.dias_completos(ahora - timedelta(hours=47, minutes=59), ahora) == 1
+    assert rv.dias_completos(ahora - timedelta(days=2), ahora) == 2
+    assert rv.dias_completos(ahora + timedelta(days=3), ahora) == 0
+    # con zona se pasa a UTC: 08:00 de Colombia del 9 = 13:00 UTC, 23 horas antes de ahora (sin pasarla daría 1)
+    assert rv.dias_completos(datetime(2026, 11, 9, 8, 0, tzinfo=timezone(timedelta(hours=-5))), ahora) == 0
+    assert rv.sc_tiene_documentos_activos([{"estado": "RECHAZADA"}], [{"estado": "CANCELADO"}]) is False
+    assert rv.sc_tiene_documentos_activos([{"estado": "BORRADOR"}], []) is True
+    assert rv.sc_tiene_documentos_activos([], [{"estado": "EN_PROCESO"}]) is True
+    assert rv.cot_tiene_pedido_vigente([{"estado": "CANCELADO"}]) is False
+    assert rv.cot_tiene_pedido_vigente([{"estado": "CANCELADO"}, {"estado": "ENTREGADO"}]) is True
+    assert not hasattr(erp_ventas, "_dias_completos")
+    fuente = inspect.getsource(erp_ventas)
+    assert 'any(c["estado"] != "RECHAZADA"' not in fuente and 'any(p["estado"] != "CANCELADO"' not in fuente
+
+
+
+def test_los_validadores_de_las_listas_tienen_nombres_que_no_confunden():
+    """B4 T24 (B8): el validador de erp_ventas que devuelve el valor crudo (y lanza el 422) ya no se llama como el de
+    core/listados.py (que devuelve el texto limpio y lanza ValueError), y el del parámetro `estado` ya no difiere en una
+    letra del de `estados`."""
+    from app.api.v1 import erp_compras, erp_inventario, erp_ventas, inventory
+    from app.core import listados
+    assert not hasattr(erp_ventas, "_sin_caracteres_de_control") and hasattr(listados, "_sin_caracteres_de_control")
+    assert not hasattr(erp_ventas, "_estado_de_lista")
+    for modulo in (erp_compras, erp_inventario, inventory):
+        assert modulo._valor_sin_control is erp_ventas._valor_sin_control, modulo.__name__
+    assert erp_ventas._valor_sin_control("WEB") == "WEB" and erp_ventas._estado_compatible("SC", None) is None

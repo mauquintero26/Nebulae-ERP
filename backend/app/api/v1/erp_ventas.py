@@ -45,6 +45,7 @@ from app.core.textos_actividad import (
     etiqueta_estado, ETIQUETAS_ESTADO, PASOS_SC, nombre_de_usuario, autor_de_actividad,
 )
 from app.core.chatter import validar_nota, reinicia_atraso, puede_registrar, CONTACTO_SOLO_ASESOR
+from app.core.cancelacion import MIN_MOTIVO_CANCELACION, TEXTO_MOTIVO_CANCELACION
 from app.core.estados_pedido import (
     ESTADOS_VEN_DESTINOS, ESTADOS_VEN_SIN_DINERO, VISTA_DE_GRUPO, destinos_ven_permitidos, estados_de_vista,
 )
@@ -72,7 +73,6 @@ import functools
 import hashlib
 import json
 import logging
-import math
 import re
 import unicodedata
 from types import MappingProxyType
@@ -1785,18 +1785,21 @@ def _estados_de_lista(tipo: str, estados) -> list:
     return lista
 
 
-def _estado_de_lista(tipo: str, estado) -> Optional[str]:
+def _estado_compatible(tipo: str, estado) -> Optional[str]:
     """r1 (M10, M11): el parametro de compatibilidad 'estado' pasa por la misma validacion que 'estados' (D46): con un
     caracter de control, 422 «La búsqueda no puede llevar caracteres de control.» (antes un NUL llegaba al SQL y daba
     500), y con un estado que no es del tipo, 422 «El estado «x» no existe en SC|COT|VEN.». Devuelve el valor tal cual
-    llego: el filtro sigue siendo la igualdad de hoy (RP8; 'ASIGNADA,BORRADOR' no es un CSV y no trae nada)."""
+    llego: el filtro sigue siendo la igualdad de hoy (RP8; 'ASIGNADA,BORRADOR' no es un CSV y no trae nada).
+    B4 T24 (B8): se llamaba _estado_de_lista, a una letra de _estados_de_lista (que lee el CSV)."""
     _estados_de_lista(tipo, estado)
     return estado
 
 
-def _sin_caracteres_de_control(valor) -> Optional[str]:
+def _valor_sin_control(valor) -> Optional[str]:
     """r1 (M11): `valor` tal cual (canal_venta va por igualdad, como hoy), o 422 con el texto de D46 si trae un caracter
-    de control (texto_busqueda: NUL, C0, C1 o DEL; un tabulador en medio no es error)."""
+    de control (texto_busqueda: NUL, C0, C1 o DEL; un tabulador en medio no es error). B4 T24 (B8): se llamaba
+    _sin_caracteres_de_control, como la de core/listados.py, pero el contrato es otro (devuelve el valor crudo y lanza
+    HTTPException): texto_busqueda se reusa SOLO para el chequeo de los caracteres de control."""
     try:
         texto_busqueda(valor, None)
     except ValueError as e:
@@ -1864,16 +1867,6 @@ def _lista_con_rango(db: Session, modelo, tipo: str, filtrado, dias, ahora, orde
     return consulta, orden_sql
 
 
-def _dias_completos(desde, ahora) -> int:
-    """Dias completos (piso) desde `desde` hasta `ahora`; nunca negativo; 0 sin fecha. Es el _dias_desde de
-    resolucion_ventas en Python (greatest(0, floor(segundos / 86400)))."""
-    if desde is None:
-        return 0
-    if desde.tzinfo is not None:
-        desde = desde.astimezone(datetime.timezone.utc).replace(tzinfo=None)
-    return max(0, math.floor((ahora - desde).total_seconds() / 86400))
-
-
 def _marcas_de_fila(tipo: str, doc, dias, ahora, seguimiento: dict, **banderas) -> dict:
     """Lo que la fila agrega (R8, C14): tipo, resolucion (resolucion_ventas.clasificar con `dias` y `ahora`, los mismos
     del filtro del semaforo), dias_sin_mov (desde coalesce(updated_at, created_at)), dias_creado y seguimiento_estado
@@ -1882,8 +1875,8 @@ def _marcas_de_fila(tipo: str, doc, dias, ahora, seguimiento: dict, **banderas) 
     return {
         "tipo": tipo,
         "resolucion": rv.clasificar(tipo, doc.estado, horas, dias, **banderas),
-        "dias_sin_mov": _dias_completos(doc.updated_at if doc.updated_at is not None else doc.created_at, ahora),
-        "dias_creado": _dias_completos(doc.created_at, ahora),
+        "dias_sin_mov": rv.dias_completos(doc.updated_at if doc.updated_at is not None else doc.created_at, ahora),
+        "dias_creado": rv.dias_completos(doc.created_at, ahora),   # B4 T24 (B3): la regla vive en resolucion_ventas
         "seguimiento_estado": seguimiento.get(doc.id),
     }
 
@@ -1933,9 +1926,9 @@ def _filas_de_solicitudes(db: Session, items, dias, ahora) -> list:
     data = []
     for s in items:
         cots, pedidos = cots_por_sc.get(s.id, []), pedidos_por_sc.get(s.id, [])
-        # D16: documentos activos = una COT que no esta RECHAZADA o un pedido que no esta CANCELADO.
-        con_documentos = (any(c["estado"] != "RECHAZADA" for c in cots)
-                          or any(p["estado"] != "CANCELADO" for p in pedidos))
+        # D16: documentos activos = una COT que no esta RECHAZADA o un pedido que no esta CANCELADO (B4 T24, B3: el
+        # predicado vive en resolucion_ventas).
+        con_documentos = rv.sc_tiene_documentos_activos(cots, pedidos)
         data.append({**_sc_dict(s), "cotizaciones": cots, "pedidos_venta": pedidos,
                      **_marcas_de_fila("SC", s, dias, ahora, seguimiento, sc_con_cot_activa=con_documentos,
                                        confirmacion_vigente=s.gate1_confirmed_at is not None,
@@ -2018,7 +2011,7 @@ def list_solicitudes(
     vista = _parametro_de_lista(vista, VISTAS_SOLICITUDES, "La vista «{}» no existe en Solicitudes.")
     semaforo = _semaforo_de_lista(semaforo)
     lista_estados = _estados_de_lista("SC", estados)
-    estado = _estado_de_lista("SC", estado)
+    estado = _estado_compatible("SC", estado)
     like = _busqueda_de_lista(q, search)
     dias, ahora = leer_dias_alerta(db), ahora_utc()
 
@@ -3153,7 +3146,7 @@ def _filas_de_cotizaciones(db: Session, items, dias, ahora) -> list:
         pedidos = pvs_por_cot.get(c.id, [])
         data.append({**_cot_dict(c), "pedidos_venta": pedidos,
                      **_marcas_de_fila("COT", c, dias, ahora, seguimiento,
-                                       cot_con_pedido_vigente=any(p["estado"] != "CANCELADO" for p in pedidos),
+                                       cot_con_pedido_vigente=rv.cot_tiene_pedido_vigente(pedidos),
                                        confirmacion_vigente=c.gate2_confirmed_at is not None)})
     return data
 
@@ -3189,8 +3182,8 @@ def _resumen_cotizaciones(db: Session, extras, dias, ahora) -> dict:
         "con_pedido": rv.f_cot_con_pedido(cot),
         "rechazadas": cot.estado == "RECHAZADA",
         "total": None,
-        "sin_calc": and_(activa, or_(cot.total_cop.is_(None), cot.total_cop <= 0)),
-        "vencen_pronto": and_(activa, cot.valida_hasta >= hoy, cot.valida_hasta <= hoy + datetime.timedelta(days=7)),
+        "sin_calc": rv.f_cot_sin_calc(cot),            # B4 T24 (B14-b): las condiciones viven en resolucion_ventas
+        "vencen_pronto": rv.f_cot_vence_pronto(hoy, cot),
         "sin_atender": and_(activa, func.coalesce(cot.updated_at, cot.created_at) < limite),
     }
     columnas = [func.count() if c is None else func.count().filter(c) for c in condiciones.values()]
@@ -3231,7 +3224,7 @@ def list_cotizaciones(
     vista = _parametro_de_lista(vista, VISTAS_COTIZACIONES, "La vista «{}» no existe en Cotizaciones.")
     semaforo = _semaforo_de_lista(semaforo)
     lista_estados = _estados_de_lista("COT", estados)
-    estado = _estado_de_lista("COT", estado)
+    estado = _estado_compatible("COT", estado)
     like = _busqueda_de_lista(q, search)
     dias, ahora = leer_dias_alerta(db), ahora_utc()
 
@@ -4534,8 +4527,8 @@ def list_pedidos(
     semaforo = _semaforo_de_lista(semaforo)
     saldo = _parametro_de_lista(saldo, SALDOS_PEDIDOS, "El filtro de saldo «{}» no existe: usa pendiente o pagado.")
     lista_estados = _estados_de_lista("VEN", estados)
-    estado = _estado_de_lista("VEN", estado)
-    canal_venta = _sin_caracteres_de_control(canal_venta)
+    estado = _estado_compatible("VEN", estado)
+    canal_venta = _valor_sin_control(canal_venta)
     like = _busqueda_de_lista(q, search)
     dias, ahora = leer_dias_alerta(db), ahora_utc()
 
@@ -4854,7 +4847,7 @@ def _descontar_inventario_despacho(db: Session, v: SaleOrder, warehouse_id, user
         return
     if not warehouse_id:
         raise HTTPException(422, "Debes indicar la bodega de despacho para descontar el inventario de este pedido")
-    warehouse_id = _bodega_existente(db, warehouse_id)   # r1 (M12): 422 legible antes de escribir (antes, 500)
+    warehouse_id = _bodega(db, warehouse_id, _LA_BODEGA_NO_EXISTE)[0]   # r1 (M12) y B4 T24 (B5): 422 antes de escribir
     now = datetime.datetime.utcnow()
     owner = "NEBULAE"
 
@@ -5018,18 +5011,20 @@ def _id_de_bodega(valor) -> Optional[int]:
         return None
 
 
-def _bodega_existente(db: Session, valor) -> int:
-    """r1 (M12): la bodega de salida del despacho de ADMIN y ASESOR (_descontar_inventario_despacho), validada ANTES de
-    escribir. Un valor que no es el id de una bodega (texto, bool, decimal, lista...) -> 422 «Elige la bodega de
-    salida.» (el texto de BODEGA); un entero que no es una bodega (no existe, o fuera del Integer de warehouses.id) ->
-    422 «La bodega elegida no existe.». Antes los dos daban 500 (int() o la FK al hacer flush). Devuelve el id."""
+def _bodega(db: Session, valor, texto_no_existe: str) -> tuple:
+    """B4 T24 (B5): la bodega de salida de un despacho, validada ANTES de escribir, con UNA consulta. Un valor que no es el
+    id de una bodega (texto, bool, decimal, lista...) -> 422 «Elige la bodega de salida.»; un entero que no es una bodega
+    (no existe, o fuera del Integer de warehouses.id) -> 422 `texto_no_existe`. Devuelve (id, nombre). BODEGA la pide con
+    «Elige la bodega de salida.» (RP23, _bodega_del_despacho) y el descuento de inventario con «La bodega elegida no
+    existe.» (r1, M12: antes los dos daban 500, int() o la FK al hacer flush)."""
     warehouse_id = _id_de_bodega(valor)
     if warehouse_id is None:
         raise HTTPException(422, _ELIGE_LA_BODEGA)
-    if (not 0 < warehouse_id <= _MAX_ID_BODEGA
-            or db.query(Warehouse.id).filter(Warehouse.id == warehouse_id).first() is None):
-        raise HTTPException(422, _LA_BODEGA_NO_EXISTE)
-    return warehouse_id
+    fila = (db.query(Warehouse.id, Warehouse.name).filter(Warehouse.id == warehouse_id).first()
+            if 0 < warehouse_id <= _MAX_ID_BODEGA else None)
+    if fila is None:
+        raise HTTPException(422, texto_no_existe)
+    return fila.id, fila.name
 
 
 def _bodega_del_despacho(db: Session, body: dict) -> tuple:
@@ -5039,13 +5034,7 @@ def _bodega_del_despacho(db: Session, body: dict) -> tuple:
     salida.». Todo ANTES de leer el pedido y sus lineas (una consulta: la bodega). Devuelve (id, nombre) de la bodega."""
     if not set(body) <= _CLAVES_DEL_DESPACHO_BODEGA or body.get("estado") != "ENTREGADO":
         raise HTTPException(403, _SOLO_DESPACHO_BODEGA)
-    warehouse_id = _id_de_bodega(body.get("warehouse_id"))
-    if warehouse_id is None or not 0 < warehouse_id <= _MAX_ID_BODEGA:
-        raise HTTPException(422, _ELIGE_LA_BODEGA)
-    fila = db.query(Warehouse.id, Warehouse.name).filter(Warehouse.id == warehouse_id).first()
-    if fila is None:
-        raise HTTPException(422, _ELIGE_LA_BODEGA)
-    return fila.id, fila.name
+    return _bodega(db, body.get("warehouse_id"), _ELIGE_LA_BODEGA)
 
 
 @router.patch("/pedidos/{ven_id}")
@@ -5079,8 +5068,8 @@ def update_pedido(ven_id: int, body: dict,
     if cancela:
         # N2/H46 (R12: 422 en todas las rutas): cancelar exige el motivo.
         razon = str(body.get("cancellation_reason") or "").strip()
-        if len(razon) < 5:
-            raise HTTPException(422, "Indica el motivo de la cancelación (mínimo 5 caracteres).")
+        if len(razon) < MIN_MOTIVO_CANCELACION:   # B4 T24 (B17): la regla de core/cancelacion.py
+            raise HTTPException(422, TEXTO_MOTIVO_CANCELACION)
         body["cancellation_reason"] = razon
         if not body.get("cancelled_at"):
             body["cancelled_at"] = datetime.datetime.utcnow()
@@ -5471,7 +5460,7 @@ def ventas_analisis(
     cot o pven; top: 5 (por defecto), 10 o 25; producto: de 2 a 60 caracteres (RP69). Todo se declara como texto y se
     valida aqui (R21): un valor que no sirve responde 422 con su texto en español. Los errores del calculo no se
     convierten en 422: llegan como 500."""
-    # r1 (m5): un foco con un caracter de control da el 422 de D46 (MENSAJE_CONTROL, _sin_caracteres_de_control de T6B);
+    # r1 (m5): un foco con un caracter de control da el 422 de D46 (MENSAJE_CONTROL, _valor_sin_control de T6B);
     # si no, el de ERROR_FOCO repite el valor recortado a 40 caracteres.
     # B4 T24 (B12): _parametro_de_lista recibe el texto ya normalizado por texto_busqueda: un tabulador o un salto de
     # línea en medio sale como un espacio en el 422 («h ub»), no crudo.

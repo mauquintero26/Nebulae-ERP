@@ -454,3 +454,16 @@ def test_respuesta_solo_trae_conteos_y_resumen_si_se_pasan():
     assert respuesta(0, [], conteos={})["conteos"] == {}
     # Claves propias de un endpoint (por ejemplo los grupos del Hub) van tal cual.
     assert respuesta(1, [], grupos={"ATRASADO": 1})["grupos"] == {"ATRASADO": 1}
+
+
+
+def test_orden_por_lista_con_el_lugar_de_lo_desconocido():
+    """B4 T24 (B24): orden_por_lista(col, lista, por_defecto) pone lo que no está en la lista en el lugar de `por_defecto`
+    (los PEC: un estado desconocido cuenta como EMITIDO); sin él, al final, como hoy."""
+    from sqlalchemy.dialects import postgresql
+    from app.core.listados import orden_por_lista
+
+    def sql(expr):
+        return str(expr.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert sql(orden_por_lista(SaleOrder.estado, ["A", "B", "C"])).endswith("ELSE 3 END")
+    assert sql(orden_por_lista(SaleOrder.estado, ["A", "B", "C"], por_defecto="B")).endswith("ELSE 1 END")

@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import String, case, cast, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from app.db.database import get_db
 from app.models.inventory import ShippingMethod, InventoryOperation, InventoryMovement, InventoryLevel
 from app.schemas import inventory as schemas
@@ -12,7 +12,7 @@ from app.models.users import User
 # B4 T13 (TABLA-compras 5): los parámetros de lista de core/listados.py (R5, C8) y los validadores genéricos de T6B
 # (erp_ventas.py), como en erp_compras.py: se importan, no se copian (para la revisión final: deberían vivir en
 # core/listados.py). erp_ventas no importa este módulo al cargarse, así que no hay ciclo.
-from app.api.v1.erp_ventas import _busqueda_de_lista, _parametro_de_lista, _sin_caracteres_de_control
+from app.api.v1.erp_ventas import _busqueda_de_lista, _parametro_de_lista, _valor_sin_control
 from app.core.analisis_inventario import ENTRADAS_KARDEX, SALIDAS_KARDEX
 from app.core.estados_compras import GRUPOS_OPERACION
 from app.core.fechas import iso_z
@@ -252,9 +252,9 @@ def list_inventory_operations(
     nuevos la respuesta es la de hoy más esa clave."""
     like = _busqueda_de_lista(q, search)
     id_exacto = _id_de_operacion(id)
-    operation_type = _sin_caracteres_de_control(operation_type)  # B4 T24 (FINAL-m7): un NUL daba 500; ahora 422 (D46)
+    operation_type = _valor_sin_control(operation_type)  # B4 T24 (FINAL-m7): un NUL daba 500; ahora 422 (D46)
     estados = _estados_de_operacion(status)
-    sentido = _parametro_de_lista(_sin_caracteres_de_control(direccion), tuple(DIRECCIONES_OPERACION),
+    sentido = _parametro_de_lista(_valor_sin_control(direccion), tuple(DIRECCIONES_OPERACION),
                                   MENSAJE_DIRECCION)
     orden_sql = leer_orden(orden, _ordenes_operacion(), "-id", id_lista=InventoryOperation.id)
 
@@ -277,7 +277,8 @@ def list_inventory_operations(
     conteos = None
     if con_conteos:
         conteos = contar_por_vista(base, {"todos": None, **{e: op.status == e for e in ESTADOS_OPERACION}})
-    total, operations = paginar(filtrado.order_by(*orden_sql), limit, offset)
+    # B4 T24 (B21): los movimientos de las operaciones de la página en UNA consulta (selectinload), no uno por operación.
+    total, operations = paginar(filtrado.options(selectinload(op.movements)).order_by(*orden_sql), limit, offset)
     fechas = {}
     if operations:
         fechas = dict(db.query(InventoryMovement.operation_id, func.min(InventoryMovement.created_at))

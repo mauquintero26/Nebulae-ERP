@@ -175,7 +175,8 @@ def test_dias_de_alerta_en_la_respuesta(app_client, db, admin_token):
     assert d["dias_alerta"]["COT"] == 4
     assert set(d["dias_alerta"]) == {"SC", "COT", "VEN"}
     assert all(isinstance(v, int) for v in d["dias_alerta"].values())
-    assert set(d) == {"cambios_cliente", "sin_respuesta", "pasos", "semaforo", "dias_alerta", "generado_at"}
+    assert set(d) == {"cambios_cliente", "sin_respuesta", "pasos", "semaforo", "dias_alerta", "generado_at",
+                      "cotizaciones"}   # B4 T24 (B14-b): aditivo
     assert d["generado_at"].endswith("Z")
     assert set(d["cambios_cliente"]) == {"SC", "COT"} and set(d["sin_respuesta"]) == {"SC", "COT"}
     for paso in PASOS:
@@ -239,6 +240,28 @@ def test_una_sc_de_soporte_no_suma_en_ningun_paso(app_client, db, admin_token):
                                                               "FACTURADO": None}
     assert despues["semaforo"] == antes["semaforo"]
     assert alertas_despues["atrasados"] == alertas_antes["atrasados"]
+
+
+def test_el_flujo_trae_los_avisos_de_cotizaciones(app_client, db, admin_token):
+    """B4 T24 (B14-b): data.cotizaciones = {sin_calc, vencen_pronto}, las mismas cifras del resumen de GET
+    /ventas/cotizaciones (sobre todas las cotizaciones): una activa sin total suma a sin_calc y una activa que vence en 3
+    días suma a vencen_pronto; una rechazada o una confirmada no suman."""
+    from app.core.fechas import hoy_colombia
+    antes = _flujo(app_client, admin_token)["cotizaciones"]
+    assert set(antes) == {"sin_calc", "vencen_pronto"}
+    f = _Fabrica(db, _ahora())
+    hoy = hoy_colombia()
+    f.cot("BORRADOR", total_cop=None)
+    f.cot("ENVIADA", total_cop=1000, valida_hasta=hoy + timedelta(days=3))
+    f.cot("RECHAZADA", total_cop=None, valida_hasta=hoy + timedelta(days=1))
+    # confirmada de verdad (con gate2): una CONFIRMADA sin confirmación vigente ni pedido es «Activas» (f_cot_confirmada)
+    f.cot("CONFIRMADA", total_cop=0, valida_hasta=hoy + timedelta(days=2), gate2_confirmed_at=f.ahora)
+    despues = _flujo(app_client, admin_token)["cotizaciones"]
+    assert (despues["sin_calc"] - antes["sin_calc"], despues["vencen_pronto"] - antes["vencen_pronto"]) == (1, 1)
+    resp = app_client.get("/api/v1/ventas/cotizaciones", params={"con_resumen": 1, "limit": 0}, headers=_auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    resumen = resp.json()["resumen"]
+    assert (resumen["sin_calc"], resumen["vencen_pronto"]) == (despues["sin_calc"], despues["vencen_pronto"])
 
 
 def test_el_flujo_no_escribe(app_client, db, admin_token, contador_sql):

@@ -49,8 +49,10 @@ from app.api.v1.erp_logistica import (
 # B4 T12: listas, reglas del pedido de compra, indicadores, flujo y Análisis de Compras sobre el core del bloque.
 from app.core import analisis_compras as ac
 from app.core.analisis import validar_top
+from app.core.cancelacion import MIN_MOTIVO_CANCELACION, TEXTO_MOTIVO_CANCELACION
 from app.core.estados_compras import (
-    ESTADOS_ITEM_LISTA, ESTADOS_PEC, ESTADOS_PEC_MANUALES, ESTADOS_POR_FLUJO, ETAPA_POR_DEFECTO, ETAPAS_PEC,
+    ESTADOS_ITEM_LISTA, ESTADOS_PEC, ESTADOS_PEC_MANUALES, ESTADOS_POR_ENTREGAR, ESTADOS_POR_FLUJO, ETAPA_POR_DEFECTO,
+    ETAPAS_PEC, ETAPAS_POR_ENTREGAR,
     GRUPOS_RECEPCION, VISTAS_PEC, cond_estados_pec, cond_vencido, destinos_pec_permitidos, es_vencido, etapa_pec,
 )
 from app.core.fechas import a_colombia, hoy_colombia
@@ -63,7 +65,7 @@ from app.core.periodos import ERROR_PERIODO, PERIODOS_KPI, bloque_periodo, resol
 from app.core.textos_actividad import ETIQUETAS_ESTADO, etiqueta_estado, nombre_de_usuario
 # Los validadores genéricos de las listas de T6B (erp_ventas.py): se importan, no se copian (para la revisión final:
 # deberían vivir en core/listados.py). erp_ventas no importa este módulo al cargarse, así que no hay ciclo.
-from app.api.v1.erp_ventas import _busqueda_de_lista, _parametro_de_lista, _sin_caracteres_de_control
+from app.api.v1.erp_ventas import _busqueda_de_lista, _parametro_de_lista, _valor_sin_control
 
 logger = logging.getLogger(__name__)
 
@@ -254,7 +256,9 @@ def _gr_dict(g: GoodsReceipt, db: Session) -> dict:
     # with 1-day tolerance (receipt within 1 day of promised date is NOT late).
     dias_retraso = None
     if g.pec_id and g.fecha_recepcion:
-        pec_ref = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == g.pec_id).first()
+        # B4 T24 (B21): db.get usa el mapa de identidad: la lista de recepciones carga antes los PEC de la página (una
+        # consulta) y aquí ya no hay una consulta por recepción.
+        pec_ref = db.get(PurchaseOrderFull, g.pec_id)
         if pec_ref and pec_ref.fecha_entrega_estimada:
             # Comparar por .date() en ambos lados -- fecha_entrega_estimada lleva hora de
             # creacion (utcnow()+timedelta), asi que restar datetimes crudos corria el
@@ -639,8 +643,8 @@ _ESTADOS_DE_COMPRAS = MappingProxyType({"PEC": tuple(ETIQUETAS_ESTADO["PEC"]),
 _NOMBRE_DE_LA_LISTA = MappingProxyType({"PEC": "PEC", "ENINV": "ENINV", "LISTA": "la Lista de compras"})
 # r1 (m10): UNA constante para lo que todavía espera su entrega (borrador, emitido y en tránsito). La usan el orden
 # 'atencion' y update_tracking (RP45: el seguimiento solo mueve el estado de un PEC de estas etapas).
-_ETAPAS_POR_ENTREGAR = ("borrador", "emitido", "en_transito")
-_ESTADOS_POR_ENTREGAR = tuple(e for etapa in _ETAPAS_POR_ENTREGAR for e in ETAPAS_PEC[etapa])
+_ETAPAS_POR_ENTREGAR = ETAPAS_POR_ENTREGAR    # B4 T24 (B19): de core/estados_compras.py
+_ESTADOS_POR_ENTREGAR = ESTADOS_POR_ENTREGAR
 
 
 def _estados_de_compras(entidad: str, valor) -> list:
@@ -660,7 +664,7 @@ def _estados_de_compras(entidad: str, valor) -> list:
 def _opcion(valor, opciones, mensaje: str) -> Optional[str]:
     """Un parámetro de negocio (vista, semaforo): 422 con MENSAJE_CONTROL si trae un carácter de control y, si no es una
     de `opciones`, con `mensaje` (lleva «{:.40}»: el valor que se repite va recortado). None si no vino o vino en blanco."""
-    return _parametro_de_lista(_sin_caracteres_de_control(valor), opciones, mensaje)
+    return _parametro_de_lista(_valor_sin_control(valor), opciones, mensaje)
 
 
 def _vencido_pec(hoy):
@@ -693,7 +697,6 @@ def _ordenes_pec(hoy) -> dict:
         case((vencido, entrega), (por_entregar, func.greatest(entrega, hoy))).asc().nulls_last(),
         pec.created_at.desc().nulls_last(),
     ]
-    posicion = {estado: i for i, estado in enumerate(ESTADOS_PEC)}
     return {
         "atencion": atencion,
         "reciente": expresiones_tiempo(pec.created_at, pec.updated_at, "reciente", id_lista=pec.id),
@@ -705,7 +708,7 @@ def _ordenes_pec(hoy) -> dict:
         "compra": pec.fecha_compra,
         "entrega": pec.fecha_entrega_estimada,
         "limite": pec.fecha_alerta,
-        "estado": case(posicion, value=pec.estado, else_=posicion[ETAPAS_PEC[ETAPA_POR_DEFECTO][0]]),
+        "estado": orden_por_lista(pec.estado, ESTADOS_PEC, por_defecto=ETAPAS_PEC[ETAPA_POR_DEFECTO][0]),   # B24
     }
 
 
@@ -1010,7 +1013,6 @@ def _desvincular_pec_cancelado(db: Session, pec_id: int, pec_numero: str, user_n
 # core/estados_compras.py (ESTADOS_PEC_MANUALES, ESTADOS_POR_FLUJO y destinos_pec_permitidos), el espejo de
 # lib/estados-compras.js que usan los 8 puntos de las pantallas.
 
-MIN_MOTIVO_CANCELACION = 5
 _DONDE_SE_HACE = MappingProxyType({
     "seguimiento": "'En tránsito' lo marca el seguimiento del envío (Mercancía en tránsito).",
     "recepcion": "'Recibido' lo marca la recepción en bodega (Recepciones).",
@@ -1023,7 +1025,7 @@ CONTROL_ESTADO = "El estado no puede llevar caracteres de control."
 CONTROL_MOTIVO = "El motivo no puede llevar caracteres de control."
 AUTOR_NO_TEXTO = "El nombre de quien hace el cambio debe ser un texto."
 AUTOR_CONTROL = "El nombre de quien hace el cambio no puede llevar caracteres de control."
-MAX_AUTOR = 150   # ActivityLog.user_name es String(150)
+MAX_AUTOR = ActivityLog.__table__.c.user_name.type.length   # B4 T24 (B29): el largo de la columna (150)
 AUTOR_LARGO = f"El nombre de quien hace el cambio no puede pasar de {MAX_AUTOR} caracteres."
 NOTAS_NO_TEXTO = "Las notas deben ser un texto."
 NOTAS_CONTROL = "Las notas no pueden llevar caracteres de control."
@@ -1042,7 +1044,7 @@ def _sin_control_en(valor, mensaje: str) -> None:
 
 FECHA_ALERTA_INVALIDA = "La fecha de alerta no es válida: usa el formato AAAA-MM-DD."
 FECHA_COMPRA_INVALIDA = "La fecha de compra no es válida: usa el formato AAAA-MM-DD."
-MAX_SUPPLIER_REF = 100   # PurchaseOrderFull.supplier_ref es String(100)
+MAX_SUPPLIER_REF = PurchaseOrderFull.__table__.c.supplier_ref.type.length   # B4 T24 (B29): el largo de la columna (100)
 REF_NO_TEXTO = "La referencia del proveedor debe ser un texto."
 REF_CONTROL = "La referencia del proveedor no puede llevar caracteres de control."
 REF_LARGO = f"La referencia del proveedor no puede pasar de {MAX_SUPPLIER_REF} caracteres."
@@ -1090,16 +1092,24 @@ _CAMPOS_FECHA_PEC = (("fecha_entrega_estimada", FECHA_INVALIDA), ("fecha_alerta"
                      ("fecha_compra", FECHA_COMPRA_INVALIDA))
 
 
-def _validar_autor(valor) -> None:
-    """422 si el nombre de quien hace el cambio (va a ActivityLog.user_name, String(150)) no es un texto, trae un
-    carácter de control o pasa de 150. None vale."""
+def _validar_texto_corto(valor, maximo: int, no_texto: str, control: str, largo: str) -> None:
+    """B4 T24 (B29): 422 si `valor` no es un texto (`no_texto`), trae un carácter de control (`control`) o pasa de `maximo`
+    caracteres (`largo`). None vale. Lo usan el autor (ActivityLog.user_name) y la referencia del proveedor
+    (PurchaseOrderFull.supplier_ref), con el largo de su columna."""
     if valor is None:
         return
     if not isinstance(valor, str):
-        raise HTTPException(422, AUTOR_NO_TEXTO)
-    _sin_control_en(valor, AUTOR_CONTROL)
-    if len(valor) > MAX_AUTOR:
-        raise HTTPException(422, AUTOR_LARGO)
+        raise HTTPException(422, no_texto)
+    _sin_control_en(valor, control)
+    if len(valor) > maximo:
+        raise HTTPException(422, largo)
+
+
+def _validar_autor(valor) -> None:
+    """422 si el nombre de quien hace el cambio (ActivityLog.user_name, String(150)) no es un texto, trae un carácter de
+    control o pasa de 150. None vale. Desde B4 T24 (FINAL-m2) la Actividad la firma la sesión: el valor solo se guarda
+    como dato (el historial de la guía del seguimiento)."""
+    _validar_texto_corto(valor, MAX_AUTOR, AUTOR_NO_TEXTO, AUTOR_CONTROL, AUTOR_LARGO)
 
 
 def _validar_etapas(etapas) -> None:
@@ -1131,36 +1141,31 @@ def _validar_etapas(etapas) -> None:
                 raise HTTPException(422, ETAPA_FECHA_INVALIDA)
 
 
-def _validar_campos_libres_pec(body: dict) -> None:
+def _validar_campos_libres_pec(body: dict) -> dict:
     """r1 (m7) y r2 (m3, m6): los campos libres del PATCH que podían dar 500 (o dejar el PEC roto) DESPUÉS de guardar,
     todos antes de cualquier escritura: updated_by (va a ActivityLog.user_name), notas, las fechas
     fecha_entrega_estimada, fecha_alerta y fecha_compra (en blanco = null; ver _fecha_leida), supplier_ref (texto,
     sin control, hasta 100) y tracking_stages (una lista de etapas que _annotate_stage_alerts pueda leer). Un null en
-    cualquiera sigue valiendo, como hoy."""
+    cualquiera sigue valiendo, como hoy. B4 T24 (B28): devuelve {campo: fecha leída} de las fechas que trae el body, para
+    que update_pec guarde esas sin leerlas otra vez."""
     _validar_autor(body.get("updated_by"))
     notas = body.get("notas")
     if notas is not None:
         if not isinstance(notas, str):
             raise HTTPException(422, NOTAS_NO_TEXTO)
         _sin_control_en(notas, NOTAS_CONTROL)
-    for campo, mensaje in _CAMPOS_FECHA_PEC:
-        if campo in body:
-            _fecha_leida(body[campo], mensaje)
-    ref = body.get("supplier_ref")
-    if ref is not None:
-        if not isinstance(ref, str):
-            raise HTTPException(422, REF_NO_TEXTO)
-        _sin_control_en(ref, REF_CONTROL)
-        if len(ref) > MAX_SUPPLIER_REF:
-            raise HTTPException(422, REF_LARGO)
+    fechas = {campo: _fecha_leida(body[campo], mensaje) for campo, mensaje in _CAMPOS_FECHA_PEC if campo in body}
+    _validar_texto_corto(body.get("supplier_ref"), MAX_SUPPLIER_REF, REF_NO_TEXTO, REF_CONTROL, REF_LARGO)   # B29
     if "tracking_stages" in body:
         _validar_etapas(body["tracking_stages"])
+    return fechas
 
 
 def _validar_transicion_pec(db: Session, p: PurchaseOrderFull, body: dict) -> Optional[str]:
     """Valida el cambio de estado de PATCH /pedidos/{id} ANTES de tocar nada (RP97: antes del bloque de productos, que
-    borra purchase_order_lines). Primero los campos libres (_validar_campos_libres_pec: ver su docstring, que dice cuáles
-    son); el resto solo actúa si body trae 'estado' y es distinto del actual (sin espacios en los bordes). Devuelve el motivo recortado (o None) para la Actividad. Errores, en este orden:
+    borra purchase_order_lines). update_pec valida ANTES los campos libres (_validar_campos_libres_pec: ver su
+    docstring, que dice cuáles son; B4 T24, B28). Esto solo actúa si body trae 'estado' y es distinto del actual (sin
+    espacios en los bordes). Devuelve el motivo recortado (o None) para la Actividad. Errores, en este orden:
     - un carácter de control en el estado -> 422 «El estado no puede llevar caracteres de control.» (r1, m6);
     - un destino que pone el flujo -> 422 «'En tránsito' lo marca el seguimiento del envío (Mercancía en tránsito).» o
       «'Recibido' lo marca la recepción en bodega (Recepciones).»;
@@ -1174,7 +1179,6 @@ def _validar_transicion_pec(db: Session, p: PurchaseOrderFull, body: dict) -> Op
     - un carácter de control en el motivo -> 422 «El motivo no puede llevar caracteres de control.» (r1, m6);
     - CANCELADO con un motivo de menos de 5 caracteres -> 422 «Indica el motivo de la cancelación (mínimo 5
       caracteres).»."""
-    _validar_campos_libres_pec(body)
     if "estado" not in body:
         return None
     valor = body["estado"]
@@ -1206,8 +1210,8 @@ def _validar_transicion_pec(db: Session, p: PurchaseOrderFull, body: dict) -> Op
         if n:
             raise HTTPException(409, f"{p.numero} tiene {n} recepción(es) en bodega: no se puede cancelar.")
     _sin_control_en(motivo, CONTROL_MOTIVO)
-    if destino == "CANCELADO" and len(motivo) < MIN_MOTIVO_CANCELACION:
-        raise HTTPException(422, f"Indica el motivo de la cancelación (mínimo {MIN_MOTIVO_CANCELACION} caracteres).")
+    if destino == "CANCELADO" and len(motivo) < MIN_MOTIVO_CANCELACION:   # B4 T24 (B17): core/cancelacion.py
+        raise HTTPException(422, TEXTO_MOTIVO_CANCELACION)
     return motivo or None
 
 
@@ -1240,11 +1244,12 @@ def update_pec(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE
     p = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec_id).with_for_update().first()
     if not p:
         raise HTTPException(404, "Pedido de compra no encontrado")
+    fechas = _validar_campos_libres_pec(body)   # B4 T24 (B28): primero los campos libres, con las fechas leídas UNA vez
     motivo = _validar_transicion_pec(db, p, body)
     if isinstance(body.get("estado"), str):
         body = {**body, "estado": body["estado"].strip()}
     # r2 (m3): se guarda la fecha ya leída (la que se validó), no el texto crudo que PostgreSQL leería con su parser.
-    body = {**body, **{c: _fecha_leida(body[c], m) for c, m in _CAMPOS_FECHA_PEC if c in body}}
+    body = {**body, **fechas}
     old_estado = p.estado
     fecha_vieja = p.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
     # Si el payload trae productos, aplicar logica normalizada
@@ -1834,7 +1839,14 @@ def list_recepciones(
     if con_conteos:
         conteos = contar_por_vista(base, {v: _condicion_vista_recepcion(v) for v in VISTAS_RECEPCION})
     total, items = paginar(filtrado.order_by(*orden_sql), limit, offset)
-    return respuesta_de_lista(total, [_gr_dict(g, db) for g in items], conteos=conteos)
+    pec_ids = {g.pec_id for g in items if g.pec_id}
+    # B4 T24 (B21): los PEC de la página en UNA consulta; _gr_dict los toma del mapa de identidad (db.get). La lista se
+    # guarda en una variable mientras se arman las filas: el mapa de identidad guarda referencias débiles.
+    pecs_de_la_pagina = (db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id.in_(pec_ids)).all()
+                         if pec_ids else [])
+    data = [_gr_dict(g, db) for g in items]
+    del pecs_de_la_pagina
+    return respuesta_de_lista(total, data, conteos=conteos)
 
 
 @router.post("/recepciones", status_code=201)

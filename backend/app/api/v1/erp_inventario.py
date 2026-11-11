@@ -29,7 +29,7 @@ from app.models.inventory import Warehouse, InventoryLevel, InventoryOperation, 
 # B4 T13: las existencias, sus totales y el Análisis salen de core (R10, R13); los validadores genéricos de las listas son
 # los de T6B (erp_ventas.py), como en erp_compras.py: se importan, no se copian (para la revisión final: deberían vivir en
 # core/listados.py). erp_ventas no importa este módulo al cargarse, así que no hay ciclo.
-from app.api.v1.erp_ventas import _parametro_de_lista, _sin_caracteres_de_control
+from app.api.v1.erp_ventas import _parametro_de_lista, _valor_sin_control
 from app.core import analisis_inventario as ai
 from app.core.analisis import validar_top
 from app.core.existencias import ESTADOS_STOCK, POR, consulta_existencias, disponibilidad_sku, resumen_existencias
@@ -315,7 +315,7 @@ def get_kardex(
     que escribe el sistema (analisis_inventario.DIRECCIONES_KARDEX); con un solo valor la consulta es la de hoy (la
     igualdad). La respuesta {status, data: {total, limit, offset, items}} no cambia y no hay `q`."""
     direcciones = _direcciones_del_kardex(direction)
-    owner = _sin_caracteres_de_control(owner)  # B4 T24 (FINAL-m7): un NUL llegaba al SQL (500); ahora 422 (D46, R21)
+    owner = _valor_sin_control(owner)  # B4 T24 (FINAL-m7): un NUL llegaba al SQL (500); ahora 422 (D46, R21)
     query = (
         select(
             InventoryMovement.id,
@@ -532,7 +532,7 @@ MENSAJE_CATEGORIA = "La categoría «{}» no existe."
 def _opcion_de_stock(valor, opciones, mensaje) -> Optional[str]:
     """Un parámetro de negocio (R21): 422 con MENSAJE_CONTROL si trae un carácter de control y, si no es una de
     `opciones`, con `mensaje` (el valor recortado a 40). None si no vino o vino en blanco."""
-    return _parametro_de_lista(_sin_caracteres_de_control(valor), opciones, mensaje)
+    return _parametro_de_lista(_valor_sin_control(valor), opciones, mensaje)
 
 
 def _exigir_que_exista(db: Session, modelo, id_, mensaje: str) -> None:

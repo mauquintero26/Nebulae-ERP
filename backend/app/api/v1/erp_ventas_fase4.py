@@ -12,6 +12,7 @@ from decimal import Decimal
 import datetime
 import hashlib
 import json
+from app.core.cancelacion import MIN_MOTIVO_CANCELACION, TEXTO_MOTIVO_CANCELACION
 from app.core.fechas import ZONA_COLOMBIA
 import uuid
 
@@ -1364,8 +1365,8 @@ def cancel_sale_order(
     user_name = getattr(user, "email", str(getattr(user, "id", "system")))
     # N2/H46 (R12): mismo motivo obligatorio y mismo 422 que PATCH /ventas/pedidos/{id}.
     motivo = (body.motivo or "").strip()
-    if len(motivo) < 5:
-        raise HTTPException(status_code=422, detail="Indica el motivo de la cancelación (mínimo 5 caracteres).")
+    if len(motivo) < MIN_MOTIVO_CANCELACION:   # B4 T24 (B17): la regla de core/cancelacion.py
+        raise HTTPException(status_code=422, detail=TEXTO_MOTIVO_CANCELACION)
 
     so = db.execute(select(SaleOrder).where(SaleOrder.id == so_id).with_for_update()).scalar_one_or_none()
     if not so:

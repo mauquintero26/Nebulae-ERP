@@ -41,14 +41,15 @@ from app.core.analisis import dinero, expr_cubeta, expr_local, kpi, respuesta, v
 # _linea y _barras_por_fecha (que usan el mismo _enteros) son las de analisis_ventas.py (privadas, como D-9; para la
 # revisión final: deberían vivir en core/analisis.py) y _ventanas, la de core/periodos.py.
 from app.core.analisis_ventas import _barras_por_fecha, _cantidad, _dona, _linea, _movimiento, _pct
-from app.core.estados_compras import ETAPAS_PEC, GRUPOS_PEC, GRUPOS_RECEPCION, cond_vencido, en_estados_pec, etapa_pec
+# B4 T24 (B19): ESTADOS_SIN_DINERO_PEC (RP43: no suman a «Comprado») vive en la fuente única.
+from app.core.estados_compras import (ESTADOS_SIN_DINERO_PEC, ETAPAS_PEC, GRUPOS_PEC, GRUPOS_RECEPCION, cond_vencido,
+                                      en_estados_pec, etapa_pec)
 from app.core.periodos import Periodo, _ventanas, contar_en, sumar_en
 from app.core.textos_actividad import etiqueta_estado
 from app.models.erp_documents import GoodsReceipt, PurchaseOrderFull
 
 TOP_POR_DEFECTO = 5
 MAX_MOVIMIENTOS = 8           # MAX_MOVIMIENTOS de lib/analisis.js
-ESTADOS_SIN_DINERO_PEC = ETAPAS_PEC["borrador"] + ETAPAS_PEC["cancelado"]   # RP43: no suman a «Comprado»
 ESTADOS_RECEPCION_CONFIRMADA = GRUPOS_RECEPCION["confirmadas"]   # COMPLETADA y COMPLETADA_LOGISTICA
 TOLERANCIA_A_TIEMPO_DIAS = 1  # la de _gr_dict (erp_compras.py): llegar un día después de lo prometido es a tiempo
 SIN_PROVEEDOR = "Sin proveedor"

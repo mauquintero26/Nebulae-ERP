@@ -44,7 +44,7 @@ from sqlalchemy.orm import Session
 
 from app.core import admin_config
 from app.core.estados_pedido import ESTADOS_VEN_CERRADOS, ESTADOS_VEN_SIN_DINERO
-from app.core.fechas import ahora_utc, iso_z
+from app.core.fechas import ahora_utc, hoy_colombia, iso_z
 from app.core.seguimiento_confirmacion import AGOTADO, PENDIENTE
 from app.models.confirmation import SeguimientoConfirmacion
 from app.models.erp_documents import CustomerRequest, SaleOrder, SalesQuotation
@@ -176,6 +176,29 @@ def horas_desde_movimiento(updated_at, created_at, ahora=None):
     if t.tzinfo is not None:
         t = t.astimezone(timezone.utc).replace(tzinfo=None)
     return ((ahora if ahora is not None else ahora_utc()) - t).total_seconds() / 3600
+
+
+def dias_completos(desde, ahora) -> int:
+    """B4 T24 (B3): días completos (piso) desde `desde` hasta `ahora`, nunca negativo y 0 sin fecha: _dias_desde (SQL) en
+    Python, para las filas de las listas (antes una copia en erp_ventas). Una fecha con zona se pasa a UTC."""
+    if desde is None:
+        return 0
+    if desde.tzinfo is not None:
+        desde = desde.astimezone(timezone.utc).replace(tzinfo=None)
+    return max(0, math.floor((ahora - desde).total_seconds() / 86400))
+
+
+def sc_tiene_documentos_activos(cotizaciones, pedidos) -> bool:
+    """B4 T24 (B3): D16 para una fila de SC: tiene documentos activos si alguna cotización no está RECHAZADA o algún
+    pedido no está CANCELADO (`cotizaciones` y `pedidos`: dicts con 'estado', como las listas ligeras). Es la bandera
+    sc_con_cot_activa de clasificar."""
+    return (any(c["estado"] != "RECHAZADA" for c in cotizaciones)
+            or any(p["estado"] != "CANCELADO" for p in pedidos))
+
+
+def cot_tiene_pedido_vigente(pedidos) -> bool:
+    """B4 T24 (B3): la bandera cot_con_pedido_vigente de clasificar para una fila de COT: algún pedido no CANCELADO."""
+    return any(p["estado"] != "CANCELADO" for p in pedidos)
 
 
 def clasificar(tipo, estado, horas_sin_mov, dias_alerta, *, sc_con_cot_activa=False, cot_con_pedido_vigente=False,
@@ -512,6 +535,28 @@ def f_cot_confirmada(cot=SalesQuotation):
 def f_cot_activa(cot=SalesQuotation):
     """pestanaCotizacion(cot) === 'Activas': no RECHAZADA y no f_cot_confirmada (VENCIDA es activa)."""
     return and_(cot.estado != "RECHAZADA", ~f_cot_confirmada(cot))
+
+
+def f_cot_sin_calc(cot=SalesQuotation):
+    """B4 T24 (B14-b): una cotización activa sin total (total_cop NULL o ≤ 0): el aviso «N sin precio» (COT-LISTA)."""
+    return and_(f_cot_activa(cot), or_(cot.total_cop.is_(None), cot.total_cop <= 0))
+
+
+def f_cot_vence_pronto(hoy, cot=SalesQuotation):
+    """B4 T24 (B14-b): una cotización activa con valida_hasta entre `hoy` (el día de Colombia) y hoy + 7 días, los dos
+    incluidos (RP89): el aviso «N vencen en 7 días»."""
+    return and_(f_cot_activa(cot), cot.valida_hasta >= hoy, cot.valida_hasta <= hoy + timedelta(days=7))
+
+
+def avisos_cotizaciones(db: Session, ahora=None) -> dict:
+    """B4 T24 (B14-b): {'sin_calc', 'vencen_pronto'} sobre TODAS las cotizaciones, en UNA consulta: lo que GET /ventas/flujo
+    agrega para que la franja de Cotizaciones sepa desde la primera respuesta si reserva el renglón de avisos. Las mismas
+    condiciones que el resumen de GET /ventas/cotizaciones (f_cot_sin_calc y f_cot_vence_pronto)."""
+    hoy = hoy_colombia(ahora if ahora is not None else ahora_utc())
+    cot = SalesQuotation
+    sin_calc, vencen = db.execute(select(func.count().filter(f_cot_sin_calc(cot)),
+                                         func.count().filter(f_cot_vence_pronto(hoy, cot))).select_from(cot)).one()
+    return {"sin_calc": int(sin_calc or 0), "vencen_pronto": int(vencen or 0)}
 
 
 def f_cot_con_pedido(cot=SalesQuotation):

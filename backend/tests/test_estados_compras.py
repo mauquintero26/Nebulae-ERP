@@ -39,7 +39,14 @@ def test_cada_estado_del_pec_en_una_sola_etapa():
 
 
 def test_grupos_activos_vigentes_y_vencibles():
-    from app.core.estados_compras import GRUPOS_PEC
+    from app.core.estados_compras import ESTADOS_POR_ENTREGAR, ESTADOS_SIN_DINERO_PEC, GRUPOS_PEC
+    # B4 T24 (B19): los grupos que vivían en erp_compras y analisis_compras, ahora en la fuente única (y usados de allí).
+    assert set(ESTADOS_POR_ENTREGAR) == _estados("borrador", "emitido", "en_transito")
+    assert set(ESTADOS_SIN_DINERO_PEC) == _estados("borrador", "cancelado")
+    from app.api.v1 import erp_compras
+    from app.core import analisis_compras
+    assert erp_compras._ESTADOS_POR_ENTREGAR is ESTADOS_POR_ENTREGAR
+    assert analisis_compras.ESTADOS_SIN_DINERO_PEC is ESTADOS_SIN_DINERO_PEC
     assert set(GRUPOS_PEC) == {"activos", "vigentes", "vencibles"}
     assert set(GRUPOS_PEC["activos"]) == _estados("emitido", "en_transito", "en_bodega")
     assert set(GRUPOS_PEC["vigentes"]) == set(ESTADOS_R9) - {"CANCELADO"}
