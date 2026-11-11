@@ -1453,7 +1453,7 @@ export default function SolicitudClient() {
   // Las celdas (constantes, D40 y D41) piden a la pantalla lo suyo por AccionesLista. El valor del contexto es estable
   // (las celdas no se repintan con cada cambio de la página) y llama siempre a los manejadores del último render: la ref
   // se pone al día después de pintar y solo se lee en un clic.
-  const manejadores = useRef<AccionesFilaSC | null>(null);
+  const manejadores = useRef<Omit<AccionesFilaSC, 'mover'> | null>(null);
   useLayoutEffect(() => {
     manejadores.current = {
       abrir: abrirSolicitud,
