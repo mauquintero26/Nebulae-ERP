@@ -99,8 +99,9 @@ console.log('--- TEST 5: la fuente: una sola regla sobre normalizarRol ---');
 console.log('--- T23A r1: accesoTienda ---');
 {
   const roles = await import('../src/lib/roles.js');
-  const sin = { listo: true, indicadores: false, carritos: false, pedidos: false, catalogo: true, editarCatalogo: false };
-  assert.deepEqual(roles.accesoTienda('ADMIN'), { ...sin, indicadores: true, carritos: true, pedidos: true, editarCatalogo: true });
+  // B4 T24 (FINAL-m21, D27): con pagosConfig (la pestaña Pagos, solo ADMIN), aditivo.
+  const sin = { listo: true, indicadores: false, carritos: false, pedidos: false, catalogo: true, editarCatalogo: false, pagosConfig: false };
+  assert.deepEqual(roles.accesoTienda('ADMIN'), { ...sin, indicadores: true, carritos: true, pedidos: true, editarCatalogo: true, pagosConfig: true });
   assert.deepEqual(roles.accesoTienda('ASESOR'), { ...sin, indicadores: true, carritos: true, pedidos: true });
   assert.deepEqual(roles.accesoTienda('FINANZAS'), { ...sin, pedidos: true });
   assert.deepEqual(roles.accesoTienda('BODEGA'), { ...sin, pedidos: true });
@@ -111,7 +112,7 @@ console.log('--- T23A r1: accesoTienda ---');
   assert.deepEqual(roles.accesoTienda(' Admin '), roles.accesoTienda('ADMIN'));
   // Durante la hidratación (rol vacío o que no es texto): nada listo y nada se pide.
   for (const nada of ['', '   ', null, undefined, 7]) {
-    assert.deepEqual(roles.accesoTienda(nada), { listo: false, indicadores: false, carritos: false, pedidos: false, catalogo: false, editarCatalogo: false }, String(nada));
+    assert.deepEqual(roles.accesoTienda(nada), { listo: false, indicadores: false, carritos: false, pedidos: false, catalogo: false, editarCatalogo: false, pagosConfig: false }, String(nada));
   }
   // Un rol desconocido está listo pero sin nada de lo restringido.
   assert.deepEqual(roles.accesoTienda('INVENTADO'), sin);
@@ -145,6 +146,100 @@ console.log('--- T23B: accesoSeguimientos, accesoMarketing y accesoAsistente ---
   for (const r of ['FINANZAS', 'BODEGA', 'COMPRAS', 'CONSULTA', 'INVENTADO']) assert.deepEqual(roles.accesoAsistente(r), { listo: true, contexto: false }, r);
   for (const r of nadie) assert.deepEqual(roles.accesoAsistente(r), { listo: false, contexto: false }, String(r));
   assert.notEqual(roles.accesoMarketing('ADMIN'), roles.accesoMarketing('ADMIN'));
+}
+
+// ── B4 T24 (paquete f1: FINAL-C5, FINAL-m37 + F96, FINAL-m21, FINAL-m23, FINAL-m31, FINAL-m38, FINAL-m10 y F108): un acceso por pantalla,
+// de la lista EXACTA de require_roles de cada endpoint (comprobada en backend/app en el carril, solo lectura). Rol vacío (hidratación) o
+// que no es texto: nada listo y nada se pide ni se ofrece; un rol desconocido está listo pero sin nada de lo restringido.
+const TODOS = ['ADMIN', 'ASESOR', 'FINANZAS', 'BODEGA', 'COMPRAS', 'CONSULTA', 'INVENTADO'];
+const NADIE = ['', '   ', null, undefined, 7];
+console.log('--- T24 (FINAL-C5): accesoFinanzas ---');
+{
+  const roles = await import('../src/lib/roles.js');
+  // finance.py: GET y POST /finance/expenses (y /analisis, /dashboard…) son de ADMIN y FINANZAS.
+  for (const r of TODOS) assert.deepEqual(roles.accesoFinanzas(r), { listo: true, gastos: r === 'ADMIN' || r === 'FINANZAS' }, r);
+  assert.deepEqual(roles.accesoFinanzas('Finanzas'), roles.accesoFinanzas('FINANZAS'), 'el nombre viejo');
+  assert.deepEqual(roles.accesoFinanzas(' admin '), roles.accesoFinanzas('ADMIN'));
+  for (const r of NADIE) assert.deepEqual(roles.accesoFinanzas(r), { listo: false, gastos: false }, String(r));
+  assert.notEqual(roles.accesoFinanzas('ADMIN'), roles.accesoFinanzas('ADMIN'), 'un objeto nuevo');
+}
+
+console.log('--- T24 (FINAL-m37 y F96): accesoCrm ---');
+{
+  const roles = await import('../src/lib/roles.js');
+  // crm.py: GET /leads, GET /analisis, POST /leads y PATCH /leads/{id}/stage (y /v2, to-solicitud…): ADMIN y ASESOR; GET /warmup,
+  // DELETE /leads/{id} y GET/PUT /pipeline-stages/…/config: solo ADMIN.
+  const nada = { listo: true, leads: false, analisis: false, crear: false, mover: false, warmup: false, borrar: false, config: false };
+  assert.deepEqual(roles.accesoCrm('ADMIN'), { listo: true, leads: true, analisis: true, crear: true, mover: true, warmup: true, borrar: true, config: true });
+  assert.deepEqual(roles.accesoCrm('ASESOR'), { ...nada, leads: true, analisis: true, crear: true, mover: true });
+  assert.deepEqual(roles.accesoCrm('Vendedor'), roles.accesoCrm('ASESOR'), 'el nombre viejo del asesor');
+  for (const r of ['FINANZAS', 'BODEGA', 'COMPRAS', 'CONSULTA', 'INVENTADO']) assert.deepEqual(roles.accesoCrm(r), nada, r);
+  for (const r of NADIE) {
+    assert.deepEqual(roles.accesoCrm(r), { ...nada, listo: false }, String(r));
+  }
+}
+
+console.log('--- T24 (FINAL-m21): accesoTienda.pagosConfig ---');
+{
+  const roles = await import('../src/lib/roles.js');
+  // ecommerce.py: GET y PATCH /pagos/config y /envios/config son solo de ADMIN. Aditivo: lo demás de accesoTienda no cambia (T23A).
+  for (const r of TODOS) assert.equal(roles.accesoTienda(r).pagosConfig, r === 'ADMIN', r);
+  for (const r of NADIE) assert.equal(roles.accesoTienda(r).pagosConfig, false, String(r));
+  assert.equal(roles.accesoTienda(' Admin ').pagosConfig, true);
+}
+
+console.log('--- T24 (FINAL-m23): accesoCopilot ---');
+{
+  const roles = await import('../src/lib/roles.js');
+  // chat.py: POST /chat/copilot/query es de ADMIN, ASESOR y FINANZAS.
+  for (const r of TODOS) assert.deepEqual(roles.accesoCopilot(r), { listo: true, consultar: ['ADMIN', 'ASESOR', 'FINANZAS'].includes(r) }, r);
+  assert.deepEqual(roles.accesoCopilot('Vendedor'), { listo: true, consultar: true });
+  for (const r of NADIE) assert.deepEqual(roles.accesoCopilot(r), { listo: false, consultar: false }, String(r));
+}
+
+console.log('--- T24 (FINAL-m31 y FINAL-m38): accesoTableroVentas ---');
+{
+  const roles = await import('../src/lib/roles.js');
+  // erp_ventas.py: PATCH /solicitudes/{id} y /cotizaciones/{id}: ADMIN y ASESOR; PATCH /pedidos/{id}: ADMIN, ASESOR y BODEGA, pero BODEGA
+  // solo a ENTREGADO con la bodega (403 con otro estado): ese despacho es de Entregas; en los tableros de Ventas BODEGA solo ve.
+  const texto = roles.TEXTO_TABLERO_SOLO_VER;
+  assert.equal(texto, 'Tu rol solo puede ver este tablero');
+  for (const r of TODOS) {
+    const mueve = r === 'ADMIN' || r === 'ASESOR';
+    assert.deepEqual(roles.accesoTableroVentas(r), { listo: true, mover: mueve, soloLectura: mueve ? null : texto }, r);
+  }
+  assert.deepEqual(roles.accesoTableroVentas('Vendedor'), roles.accesoTableroVentas('ASESOR'));
+  // Mientras se lee el rol: nada listo y el tablero, solo para ver (nunca se ofrece mover a quien quizá no puede).
+  for (const r of NADIE) assert.deepEqual(roles.accesoTableroVentas(r), { listo: false, mover: false, soloLectura: texto }, String(r));
+}
+
+console.log('--- T24 (FINAL-m10, FINAL-m31 y FINAL-m38): accesoCompras ---');
+{
+  const roles = await import('../src/lib/roles.js');
+  // erp_compras.py: PATCH y DELETE /pedidos/{id} (cambiarPec: emitir, cancelar, eliminar, el arrastre) y PATCH /pedidos/{id}/tracking
+  // (tracking: las etapas de Tránsito): ADMIN y COMPRAS. GET /pedidos es de todos los roles del ERP.
+  const texto = roles.TEXTO_TABLERO_SOLO_VER;
+  for (const r of TODOS) {
+    const puede = r === 'ADMIN' || r === 'COMPRAS';
+    assert.deepEqual(roles.accesoCompras(r), { listo: true, cambiarPec: puede, tracking: puede, soloLectura: puede ? null : texto }, r);
+  }
+  assert.deepEqual(roles.accesoCompras(' compras '), roles.accesoCompras('COMPRAS'));
+  for (const r of NADIE) assert.deepEqual(roles.accesoCompras(r), { listo: false, cambiarPec: false, tracking: false, soloLectura: texto }, String(r));
+}
+
+console.log('--- T24 (F108): accesoProveedores ---');
+{
+  const roles = await import('../src/lib/roles.js');
+  // erp_compras.py: POST, PATCH y DELETE /compras/proveedores son de ADMIN y COMPRAS (el GET, de todos).
+  for (const r of TODOS) assert.deepEqual(roles.accesoProveedores(r), { listo: true, editar: r === 'ADMIN' || r === 'COMPRAS' }, r);
+  for (const r of NADIE) assert.deepEqual(roles.accesoProveedores(r), { listo: false, editar: false }, String(r));
+}
+
+console.log('--- T24 (FINAL-m31): puedeCobrarSaldo es esAdminOAsesor (una sola copia de la regla) ---');
+{
+  const roles = await import('../src/lib/roles.js');
+  const entregas = await import('../src/lib/entregas.js');
+  assert.equal(entregas.puedeCobrarSaldo, roles.esAdminOAsesor, 'entregas.js reexporta la MISMA función');
 }
 
 console.log('OK test_roles.mjs');

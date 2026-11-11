@@ -7,7 +7,7 @@ import type {
 import { createPortal } from 'react-dom';
 import { ArrowDown, ArrowUp, RotateCw, TriangleAlert } from 'lucide-react';
 import { TABLE } from '@/lib/design-system';
-import { textoDeError } from '@/lib/avisos';
+import { ofreceReintentar, textoDeError } from '@/lib/avisos';
 import { velocidadAutodesplazamiento } from '@/lib/kanban';
 import {
   ANCHO_SELECCION, RELLENO_CELDA, alternarSeleccion, alternarSeleccionPagina, anchoAlContenido,
@@ -76,7 +76,7 @@ import { Paginacion } from './Paginacion';
  * El cuerpo (CuerpoTabla, memoizado) no depende del arrastre: mover una columna no vuelve a pintar las celdas (r1, 6j).
  * Estados (vistaCuerpo): sin datos y cargando, 8 renglones esqueleto y el pie 'Cargando…'; recargando, las filas
  * atenuadas, una barra fina arriba y las casillas deshabilitadas; error, la fila 'No se pudo cargar la lista: <detalle>'
- * con 'Reintentar'; vacío, lo que traiga `vacio`. Si un filtro deja menos páginas, salta a la última que existe
+ * con 'Reintentar' (B4 T24: salvo con un 403, ofreceReintentar); vacío, lo que traiga `vacio`. Si un filtro deja menos páginas, salta a la última que existe
  * (paginaCorregida).
  * Selección: la casilla del encabezado marca solo la página visible (alternarSeleccionPagina) y la selección se limpia
  * cuando cambia la lista: página, pestaña, búsqueda, filtro, orden, tamaño o modo (firmaSeleccion; R5 y C3), y también
@@ -275,7 +275,8 @@ function CuerpoTablaBase<T>({
           <td colSpan={nColumnas} className={TABLE.error}>
             <div role="alert" className={TABLE.mensajeFijo} style={anchoMensaje}>
               {textoDeError(error, 'No se pudo cargar la lista')}
-              {onReintentar && (
+              {/* B4 T24 (FINAL-m37): un 403 no ofrece «Reintentar» (ofreceReintentar): volver a pedir no cambia el permiso. */}
+              {onReintentar && ofreceReintentar(error) && (
                 <button type="button" onClick={onReintentar} className={TABLE.botonReintentar}>
                   <RotateCw size={12} aria-hidden="true" />
                   Reintentar

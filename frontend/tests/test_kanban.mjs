@@ -1056,6 +1056,15 @@ console.log('--- TEST 16 (B4 T14 r1, m4 y m14): estadosDeColumnaLista vive en ka
   assert.ok(!/function estadosDeColumna/.test(sinComentarios('../src/lib/estados-compras.js')), 'estados-compras.js sin su copia');
 }
 
+console.log('--- TEST T24 (B4 T24, paquete f1): el tablero común ---');
+{
+  const fuenteKanban = readFileSync(new URL('../src/components/ui/Kanban.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigoKanban = fuenteKanban.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // F106: una columna con un 403 no ofrece «Reintentar» (la regla es ofreceReintentar de lib/avisos.js, con sus casos en test_avisos.mjs).
+  assert.match(codigoKanban, /import \{[^}]*\bofreceReintentar\b[^}]*\} from '@\/lib\/avisos';/);
+  assert.match(codigoKanban, /\{ofreceReintentar\(d\.error\) && \(\s*<button\s+type="button"\s+onClick=\{\(\) => tablero\.recargar\(\[c\.clave\]\)\}/);
+}
+
 console.log('✓ lib/kanban.js: columnas, reparto, orden, páginas, movimiento, reglas, destinos, arrastre y motivo.');
 console.log('✓ T4B: modo servidor y cliente, plegadas, turnos, deshacer, «Mover a…» y Kanban.tsx.');
 console.log('✓ T4B r1: deshacer sin perder tarjetas, «Ver más» quieto, StrictMode, alto, foco y anuncio.');

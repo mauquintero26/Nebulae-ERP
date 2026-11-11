@@ -53,11 +53,12 @@ export function puedeCrearOrdenDePago(rol) {
  * `listo` es false con un rol vacío o que no es texto (la hidratación: el rol se lee después de montar): entonces nada se
  * pide ni se ofrece. Un objeto nuevo en cada llamada.
  * @param {unknown} rol
- * @returns {{listo: boolean, indicadores: boolean, carritos: boolean, pedidos: boolean, catalogo: boolean, editarCatalogo: boolean}}
+ * @returns {{listo: boolean, indicadores: boolean, carritos: boolean, pedidos: boolean, catalogo: boolean, editarCatalogo: boolean,
+ *   pagosConfig: boolean}}
  */
 export function accesoTienda(rol) {
   const r = normalizarRol(rol);
-  if (r === '') return { listo: false, indicadores: false, carritos: false, pedidos: false, catalogo: false, editarCatalogo: false };
+  if (r === '') return { listo: false, indicadores: false, carritos: false, pedidos: false, catalogo: false, editarCatalogo: false, pagosConfig: false };
   const adminOAsesor = esAdminOAsesor(rol);
   return {
     listo: true,
@@ -66,6 +67,8 @@ export function accesoTienda(rol) {
     pedidos: adminOAsesor || r === 'FINANZAS' || r === 'BODEGA',
     catalogo: true,
     editarCatalogo: esAdmin(rol),
+    // B4 T24 (FINAL-m21): GET y PATCH /ecommerce/pagos/config y /envios/config, solo ADMIN (la pestaña Pagos).
+    pagosConfig: esAdmin(rol),
   };
 }
 
@@ -103,4 +106,86 @@ export function accesoMarketing(rol) {
 export function accesoAsistente(rol) {
   if (normalizarRol(rol) === '') return { listo: false, contexto: false };
   return { listo: true, contexto: esAdminOAsesor(rol) };
+}
+
+/** B4 T24: true si el rol (normalizado) es uno de `roles`. */
+const esUnoDe = (rol, ...roles) => roles.includes(normalizarRol(rol));
+
+/**
+ * B4 T24 (FINAL-C5): Finanzas › Control de Gastos (backend/app/api/v1/finance.py): GET y POST /finance/expenses son de ADMIN y FINANZAS
+ * (`gastos`: la lista, los conteos de categorías, el tablero y «Añadir Gasto»). `listo` es false con un rol vacío o que no es texto
+ * (la hidratación): nada se pide.
+ * @param {unknown} rol
+ * @returns {{listo: boolean, gastos: boolean}}
+ */
+export function accesoFinanzas(rol) {
+  if (normalizarRol(rol) === '') return { listo: false, gastos: false };
+  return { listo: true, gastos: esUnoDe(rol, 'ADMIN', 'FINANZAS') };
+}
+
+/**
+ * B4 T24 (FINAL-m37 y F96): el CRM (backend/app/api/v1/crm.py). De ADMIN y ASESOR: `leads` (GET /leads), `analisis` (GET /analisis),
+ * `crear` (POST /leads) y `mover` (PATCH /leads/{id}/stage, PATCH /leads/{id} y /v2, y pasar a solicitud, cotización o pedido). Solo de
+ * ADMIN: `warmup` (GET /warmup), `borrar` (DELETE /leads/{id}) y `config` (GET y PUT /pipeline-stages/…/config, «Configurar CRM»).
+ * `listo` es false con un rol vacío o que no es texto: nada se pide.
+ * @param {unknown} rol
+ * @returns {{listo: boolean, leads: boolean, analisis: boolean, crear: boolean, mover: boolean, warmup: boolean, borrar: boolean,
+ *   config: boolean}}
+ */
+export function accesoCrm(rol) {
+  const listo = normalizarRol(rol) !== '';
+  const adminOAsesor = esAdminOAsesor(rol);
+  const admin = esAdmin(rol);
+  return { listo, leads: adminOAsesor, analisis: adminOAsesor, crear: adminOAsesor, mover: adminOAsesor, warmup: admin, borrar: admin, config: admin };
+}
+
+/**
+ * B4 T24 (FINAL-m23): el Copilot del Dashboard (backend/app/api/v1/chat.py: POST /chat/copilot/query es de ADMIN, ASESOR y FINANZAS).
+ * @param {unknown} rol
+ * @returns {{listo: boolean, consultar: boolean}}
+ */
+export function accesoCopilot(rol) {
+  if (normalizarRol(rol) === '') return { listo: false, consultar: false };
+  return { listo: true, consultar: esUnoDe(rol, 'ADMIN', 'ASESOR', 'FINANZAS') };
+}
+
+/** B4 T24: el motivo de un tablero que el rol no puede mover (soloLectura de TableroKanban): no se arrastra ni se ofrece «Mover a…». */
+export const TEXTO_TABLERO_SOLO_VER = 'Tu rol solo puede ver este tablero';
+
+/**
+ * B4 T24 (FINAL-m31 y FINAL-m38): quién mueve las tarjetas de los tableros de Ventas (el Hub, Solicitudes, Cotizaciones y Pedidos de
+ * venta), con el require_roles del PATCH de destino (backend/app/api/v1/erp_ventas.py): PATCH /solicitudes/{id} y /cotizaciones/{id},
+ * ADMIN y ASESOR; PATCH /pedidos/{id}, ADMIN, ASESOR y BODEGA, pero BODEGA solo a ENTREGADO con la bodega (con otro estado, 403): ese
+ * despacho es de Entregas, y en estos tableros BODEGA solo ve. Las listas son de todos los roles del ERP. `soloLectura` es el motivo
+ * para TableroKanban (null si mueve). Con un rol vacío (la hidratación), nada listo y el tablero, solo para ver.
+ * @param {unknown} rol
+ * @returns {{listo: boolean, mover: boolean, soloLectura: string | null}}
+ */
+export function accesoTableroVentas(rol) {
+  const mover = esAdminOAsesor(rol);
+  return { listo: normalizarRol(rol) !== '', mover, soloLectura: mover ? null : TEXTO_TABLERO_SOLO_VER };
+}
+
+/**
+ * B4 T24 (FINAL-m10, FINAL-m31 y FINAL-m38): lo que cada rol puede hacer con los pedidos de compra (backend/app/api/v1/erp_compras.py):
+ * `cambiarPec` (PATCH y DELETE /pedidos/{id}: emitir, cancelar, eliminar, el arrastre del tablero y la barra masiva) y `tracking` (PATCH
+ * /pedidos/{id}/tracking: las etapas de Tránsito), los dos de ADMIN y COMPRAS. GET /pedidos es de todos los roles del ERP. `soloLectura`
+ * es el motivo para los tableros de PEC (null si los mueve). Con un rol vacío, nada listo y solo para ver.
+ * @param {unknown} rol
+ * @returns {{listo: boolean, cambiarPec: boolean, tracking: boolean, soloLectura: string | null}}
+ */
+export function accesoCompras(rol) {
+  const puede = esUnoDe(rol, 'ADMIN', 'COMPRAS');
+  return { listo: normalizarRol(rol) !== '', cambiarPec: puede, tracking: puede, soloLectura: puede ? null : TEXTO_TABLERO_SOLO_VER };
+}
+
+/**
+ * B4 T24 (F108): la Agenda de proveedores (backend/app/api/v1/erp_compras.py): POST, PATCH y DELETE /compras/proveedores (Nuevo, Editar
+ * y Eliminar proveedor) son de ADMIN y COMPRAS; el GET, de todos.
+ * @param {unknown} rol
+ * @returns {{listo: boolean, editar: boolean}}
+ */
+export function accesoProveedores(rol) {
+  if (normalizarRol(rol) === '') return { listo: false, editar: false };
+  return { listo: true, editar: esUnoDe(rol, 'ADMIN', 'COMPRAS') };
 }

@@ -455,10 +455,11 @@ export function puedeDespacharPedido(pedido, rol) {
   return sePuede && transicionesPedido(pedido.estado).includes('ENTREGADO');
 }
 
-/** «Marcar Saldo Cobrado» (PATCH saldo_cop): solo ADMIN y ASESOR; el servidor le responde 403 a Bodega y a los demás (RP23). */
-export function puedeCobrarSaldo(rol) {
-  return ['ADMIN', 'ASESOR'].includes(normalizarRol(rol));
-}
+/**
+ * «Marcar Saldo Cobrado» (PATCH saldo_cop): solo ADMIN y ASESOR; el servidor le responde 403 a Bodega y a los demás (RP23). B4 T24
+ * (FINAL-m31): es esAdminOAsesor de lib/roles.js, la una sola copia de las reglas de rol (reexportada con su nombre de siempre).
+ */
+export { esAdminOAsesor as puedeCobrarSaldo } from './roles.js';
 
 /** La pestaña que abre una tarjeta de Entregas (la única pulsable es la de Despachados); las demás son informativas: null. */
 export function vistaDeTarjetaEntrega(kpi) {

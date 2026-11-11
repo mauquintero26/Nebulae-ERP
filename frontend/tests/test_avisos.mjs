@@ -360,4 +360,27 @@ console.log('--- TEST 13 (revisión final B3, F2: M45): las frases por defecto d
   assert.equal(estadoFranjaDeFuente(null, 'actualizando'), 'actualizando');
 }
 
+// B4 T24 (FINAL-m37, FINAL-C5 y F106): ofreceReintentar — una carga que falló con un 403 nunca ofrece «Reintentar» (volver a pedir no
+// cambia el permiso). Es la regla de TablaEstandar, las columnas del tablero, SelectorCatalogo y las cajas de error de las pantallas.
+console.log('--- TEST T24-a: ofreceReintentar ---');
+{
+  const { ofreceReintentar, avisoDeFuente } = await import('../src/lib/avisos.js');
+  assert.equal(typeof ofreceReintentar, 'function');
+  assert.equal(ofreceReintentar(Object.assign(new Error('x'), { status: 403 })), false, '403');
+  assert.equal(ofreceReintentar({ status: 403 }), false, '403 sin Error');
+  assert.equal(ofreceReintentar(errorDeRespuesta(403, { detail: "Rol 'BODEGA' (normalizado: 'BODEGA') no autorizado para esta operación." })), false,
+    'el 403 real de require_roles');
+  for (const status of [400, 401, 404, 409, 422, 500, 502, undefined, null]) {
+    assert.equal(ofreceReintentar(Object.assign(new Error('x'), { status })), true, String(status));
+  }
+  assert.equal(ofreceReintentar(new TypeError('Failed to fetch')), true, 'sin red');
+  assert.equal(ofreceReintentar('texto'), true, 'un error que no es objeto');
+  // Sin error no hay nada que reintentar.
+  for (const nada of [null, undefined, false, 0, '']) assert.equal(ofreceReintentar(nada), false, String(nada));
+  // La misma respuesta que avisoDeFuente(...).reintentar.
+  for (const e of [{ status: 403 }, { status: 500 }, { status: 422 }, new Error('x'), errorDeRespuesta(403, {})]) {
+    assert.equal(ofreceReintentar(e), avisoDeFuente(e, 'F').reintentar, JSON.stringify(e));
+  }
+}
+
 console.log('✓ Todas las pruebas de avisos pasaron.');

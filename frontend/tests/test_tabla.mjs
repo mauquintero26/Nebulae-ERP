@@ -2973,6 +2973,17 @@ console.log('--- TEST T24-FOCO (B4 T24: FINAL-C6, FINAL-m25 y F41): el foco visi
   assert.match(piezasInv, /^export \{ FOCOS \};$/m, 'piezas-inventario reexporta el FOCOS común');
 }
 
+console.log('--- TEST T24-b (B4 T24: FINAL-m37, FINAL-C5 y F106): TablaEstandar no ofrece «Reintentar» con un 403 ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = (texto) => texto.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const t = codigo(leer('components/tabla/TablaEstandar.tsx'));
+  // La regla es ofreceReintentar (lib/avisos.js, con sus casos en test_avisos.mjs); la tabla solo la llama.
+  assert.match(t, /import \{[^}]*\bofreceReintentar\b[^}]*\} from '@\/lib\/avisos';/);
+  assert.match(t, /\{onReintentar && ofreceReintentar\(error\) && \(\s*<button type="button" onClick=\{onReintentar\} className=\{TABLE\.botonReintentar\}>/);
+  assert.equal((t.match(/>\s*Reintentar\s*</g) ?? []).length, 1, 'un solo «Reintentar» en la tabla');
+}
+
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');
 console.log('✓ T4C: sesión, estado armado, partes de columnas, URL de la lista, carga vigente, estado de la lista y modo cliente.');
 console.log('✓ T4C r1: orden rechazado, estados en la sesión, escrituras del usuario del render, esperar y vueltas.');

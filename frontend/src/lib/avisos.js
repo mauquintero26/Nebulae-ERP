@@ -273,6 +273,19 @@ export function avisoDeFuente(error, fallo) {
 export const MENSAJE_SIN_PERMISO_FUENTE = 'No tienes permiso para ver esto.';
 
 /**
+ * B4 T24 (FINAL-m37, FINAL-C5 y F106): si una carga que falló ofrece «Reintentar». Un 403 no: es un tema de permiso y volver a pedir no
+ * lo cambia. Cualquier otro error sí (también uno sin status: la red). Sin error, no hay nada que reintentar. Es la misma respuesta que
+ * avisoDeFuente(...).reintentar, para quien no pinta un aviso de fuente: TablaEstandar, las columnas del tablero, SelectorCatalogo y las
+ * cajas de error de las pantallas.
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+export function ofreceReintentar(error) {
+  if (!error) return false;
+  return /** @type {{status?: unknown}} */ (error).status !== 403;
+}
+
+/**
  * B4 T23B r1 (I2): el motivo de permiso de una fuente (el texto de avisoDeFuente cuando es un 403) o null: lo que la tarjeta dice en su
  * ayuda cuando muestra «—». Una sola copia para Seguimientos, Marketing y E-Commerce.
  * @param {{tipo: string, texto: string} | null | undefined} aviso

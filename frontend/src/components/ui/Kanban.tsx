@@ -17,9 +17,9 @@ import {
 import type {
   ColumnaKanban, ConsultaColumna, DatosColumna, Destino, PendienteMovimiento, ReglaSoltar, ResultadoSoltar,
 } from '@/lib/kanban';
-import { FOCO, FOCO_DENTRO } from '@/lib/design-system';
+import { FOCO, FOCO_DENTRO, FOCOS } from '@/lib/design-system';
 import { formatoPesos } from '@/lib/pesos';
-import { textoDeError } from '@/lib/avisos';
+import { ofreceReintentar, textoDeError } from '@/lib/avisos';
 import { useAvisos } from './Avisos';
 import { Contador } from './Contador';
 import { MenuFila } from './MenuFila';
@@ -1294,14 +1294,17 @@ export function TableroKanban<T = unknown>({
             <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">
               <p className="font-bold">No se pudo cargar esta columna.</p>
               <p className="mt-0.5 break-words">{textoDeError(d.error)}</p>
-              <button
-                type="button"
-                onClick={() => tablero.recargar([c.clave])}
-                className="mt-2 inline-flex items-center gap-1 font-bold underline underline-offset-2 hover:opacity-80"
-              >
-                <RotateCw size={12} aria-hidden="true" />
-                Reintentar
-              </button>
+              {/* B4 T24 (F106): una columna con un 403 no ofrece «Reintentar» (ofreceReintentar de lib/avisos.js). */}
+              {ofreceReintentar(d.error) && (
+                <button
+                  type="button"
+                  onClick={() => tablero.recargar([c.clave])}
+                  className={`mt-2 inline-flex items-center gap-1 rounded font-bold underline underline-offset-2 hover:opacity-80 ${FOCOS.rose}`}
+                >
+                  <RotateCw size={12} aria-hidden="true" />
+                  Reintentar
+                </button>
+              )}
             </div>
           )}
           {d?.cargando && sinTarjetas ? esqueleto : null}
