@@ -13,6 +13,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.db.database import get_db
+from app.core.estados_pedido import ESTADOS_VEN_CERRADOS
 import datetime, secrets, json
 from decimal import Decimal
 
@@ -1620,6 +1621,12 @@ def get_customer_context_for_chat(
 
     total_orders_count = len(active_orders) + len(closed_orders)
     avg_ticket = float(total_spent / total_orders_count) if total_orders_count > 0 else 0.0
+    # B4 T24 (B49-b): las tarjetas «Total de pedidos» y «Pedidos en curso» llevan los nombres del catálogo de KPI, así que
+    # sus cifras son las canónicas de Ventas: pven_total = todos los pedidos del cliente (los cancelados también, como
+    # /ventas/stats) y pven_en_curso = estado fuera de ESTADOS_VEN_CERRADOS (resolucion_ventas.f_pven_en_curso: sin
+    # entregados, facturados, cancelados ni devueltos). Las listas, el ticket promedio y el segmento no cambian.
+    pven_total = len(orders_rows)
+    pven_en_curso = sum(1 for o in orders_rows if (o["estado"] or "").upper() not in ESTADOS_VEN_CERRADOS)
 
     sc_rows = db.execute(text("""
         SELECT id, numero, estado, tipo_solicitud, advisor_name, fecha_solicitud, notas
@@ -1667,9 +1674,9 @@ def get_customer_context_for_chat(
             "customer": customer_data,
             "revenue": {
                 "total_spent_cop": float(total_spent),
-                "total_orders_count": total_orders_count,
+                "total_orders_count": pven_total,
                 "completed_orders_count": completed_orders_count,
-                "active_orders_count": len(active_orders),
+                "active_orders_count": pven_en_curso,
                 "avg_ticket_cop": avg_ticket,
                 "segmento": segmento,
             },

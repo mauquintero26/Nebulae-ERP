@@ -16,6 +16,7 @@ from app.schemas import crm as schemas
 from app.core import cambios_documento, clientes
 from app.core import analisis as an
 from app.core.analisis_ventas import _cantidad, _conteos_por_cubeta, _enteros, _movimiento, _pct, _ranking
+from app.core.estados_pedido import ESTADOS_VEN_SIN_DINERO
 from app.core.fechas import ahora_utc
 from app.core.textos_filtro import mensaje_control
 from app.core.listados import MAX_OFFSET, expresiones_tiempo, leer_orden, paginar, texto_busqueda
@@ -644,9 +645,13 @@ def get_customer_360_profile(
     for so in canonical_sos:
         t_cop = Decimal(str(so.total_cop or 0))
         s_cop = Decimal(str(so.saldo_cop or 0))
+        if so.estado not in ESTADOS_VEN_SIN_DINERO:
+            # B4 T24 (B50-b): el «Saldo por cobrar» (pven_saldo_por_cobrar) es el canónico de Ventas (erp_ventas
+            # pven_saldo_por_cobrar, analisis_ventas): Σ max(0, saldo) sin cancelados ni devueltos (H47). Un saldo
+            # negativo (crédito a favor) no resta lo que deben los demás pedidos.
+            saldo_pendiente_cop += max(s_cop, Decimal("0"))
         if so.estado != "CANCELADO":
             total_comprado_cop += t_cop
-            saldo_pendiente_cop += s_cop
             active_orders.append({
                 "id": so.id,
                 "numero": so.numero,
