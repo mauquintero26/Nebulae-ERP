@@ -21,7 +21,7 @@ import type { AccionTabla, ColumnaTabla, PestanaTabla } from '@/components/tabla
 import { BannerFlujo, CadenaDocumentos, useResumenFlujo } from '@/components/flujo';
 import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
 import { PanelAnalisisPerezoso } from '@/components/analisis';
-import { FOCOS, RESERVA_BOTON_IA, TABLE } from '@/lib/design-system';
+import { FOCO, FOCOS, RESERVA_BOTON_IA, TABLE } from '@/lib/design-system';
 import {
   accionPestana, campoOrden, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta, queryListado,
 } from '@/lib/tabla';
@@ -1307,168 +1307,163 @@ export default function VentasHub() {
         )}
 
         {/* UNIVERSAL DOCUMENT QUICK DETAIL PANEL (SC, COT, VEN) */}
-        {quickDetailDoc&&(
-          <>
-            <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-40" onClick={()=>setQuickDetailDoc(null)}/>
-            <div className="fixed top-0 bottom-0 right-0 z-50 bg-white shadow-2xl flex flex-col w-[600px] max-w-full border-l border-slate-200">
-              <div className="flex items-center justify-between px-6 py-5 border-b border-slate-100 bg-slate-50">
-                <div className="flex items-center gap-3">
-                  <span className={`px-2.5 py-1 rounded-full text-xs font-black border ${getTipoClass(quickDetailDoc.tipo)}`}>
-                    {getTipoLabel(quickDetailDoc.tipo)}
-                  </span>
-                  <div>
-                    <h2 className="text-lg font-black text-slate-900">{quickDetailDoc.numero}</h2>
-                    {/* B4 T24 f2 (FINAL-m28): la MISMA insignia de la tabla y del tablero (estadoDeTarjeta, la fuente única de los estados). */}
-                    <InsigniaEstado tipo={quickDetailDoc.tipo} estado={quickDetailDoc.estado} />
-                  </div>
-                </div>
-                <button onClick={()=>setQuickDetailDoc(null)} className="p-2 hover:bg-slate-200 rounded-xl text-slate-500"><X size={18}/></button>
-              </div>
-
-              {/* B4 T24 f2 (F44-a): el panel rápido llega al fondo de la ventana, bajo el botón de la IA: «Abrir en Módulo Detallado» queda a la vista. */}
-              <div className={`flex-1 overflow-y-auto p-6 space-y-6 ${RESERVA_BOTON_IA}`}>
-                {/* B4 T7 (FLUJO-documentos punto 6; RP74, D36, D42): la cadena de documentos, compacta (solo los números;
-                    las cajas caídas conservan su palabra). Las etiquetas salen de las tablas únicas de cada tipo (RP4). */}
-                <div className="min-w-0 bg-white rounded-2xl p-4 border border-slate-200 shadow-xs">
-                  <CadenaDocumentos doc={quickDetailDoc} tipo={quickDetailDoc.tipo} compacta/>
-                </div>
-
-                {/* Que se esta pidiendo -- tipo de solicitud + notas, solo aplica a SC */}
-                {quickDetailDoc.tipo === 'SC' && (quickDetailDoc.tipo_solicitud || quickDetailDoc.notas) && (
-                  <div className="bg-indigo-50 rounded-2xl p-4 border border-indigo-100 space-y-2">
-                    <p className="text-[10px] font-black text-indigo-400 uppercase tracking-wide">Qué se está pidiendo</p>
-                    {quickDetailDoc.tipo_solicitud && (
-                      <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-black bg-white text-indigo-700 border border-indigo-200">{etiquetaTipoSolicitud(quickDetailDoc.tipo_solicitud)}</span>
-                    )}
-                    {quickDetailDoc.notas && <p className="text-xs text-indigo-900 leading-relaxed">{quickDetailDoc.notas}</p>}
-                  </div>
-                )}
-
-                {/* Customer Card */}
-                <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-2">
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide">Información del Cliente</p>
-                  <p className="font-black text-slate-800 text-sm">{quickDetailDoc.customer_name || quickDetailDoc.cliente?.nombre || 'Cliente General'}</p>
-                  <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
-                    <div><span className="text-slate-400 block text-[10px]">Teléfono / WhatsApp:</span> {quickDetailDoc.customer_phone || quickDetailDoc.telefono || '-'}</div>
-                    <div><span className="text-slate-400 block text-[10px]">Email:</span> {quickDetailDoc.customer_email || quickDetailDoc.email || '-'}</div>
-                    <div className="col-span-2"><span className="text-slate-400 block text-[10px]">Dirección de Entrega:</span> {quickDetailDoc.customer_address || quickDetailDoc.direccion_entrega || 'Recoge en Tienda'}</div>
-                  </div>
-                </div>
-
-                {/* Financial Breakdown */}
-                <div className="bg-white rounded-2xl p-4 border border-slate-200 space-y-2 shadow-xs">
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide">Resumen Financiero</p>
-                  <div className="space-y-1.5 text-xs">
-                    <div className="flex justify-between text-slate-600">
-                      <span>Total Liquidado:</span>
-                      <span className="font-bold text-slate-900">{fCOP(quickDetailDoc.total_cop || quickDetailDoc.total || 0)}</span>
-                    </div>
-                    {quickDetailDoc.anticipo_cop !== undefined && (
-                      <div className="flex justify-between text-emerald-700">
-                        <span>Anticipo / Recaudo:</span>
-                        <span className="font-bold">{fCOP(quickDetailDoc.anticipo_cop)}</span>
-                      </div>
-                    )}
-                    {quickDetailDoc.saldo_cop !== undefined && (
-                      <div className="flex justify-between text-rose-600 font-bold border-t border-slate-100 pt-1">
-                        <span>Saldo Pendiente:</span>
-                        <span>{fCOP(quickDetailDoc.saldo_cop)}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Products items */}
-                {Array.isArray(quickDetailDoc.productos) && quickDetailDoc.productos.length > 0 && (
-                  <div className="bg-white rounded-2xl p-4 border border-slate-200 space-y-2 shadow-xs">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide">Partidas y Referencias</p>
-                    <div className="divide-y divide-slate-100">
-                      {quickDetailDoc.productos.map((item:any, idx:number)=>(
-                        <div key={idx} className="py-2 flex justify-between items-center text-xs">
-                          <div>
-                            <p className="font-bold text-slate-800">{item.product_name || item.nombre || item.producto_nombre || item.sku || `Ítem #${idx+1}`}</p>
-                            <p className="text-[10px] text-slate-400">Cant: {item.qty || item.cantidad || 1} {item.talla ? `· Talla: ${item.talla}` : ''}</p>
-                          </div>
-                          <span className="font-bold text-slate-700">{fCOP(item.unit_price_cop || item.precio_unitario || item.precio || 0)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* State Changer for VEN -- N2: solo lo que el servidor acepta desde el estado actual; nunca un botón
-                    directo a Entregado (va por Entregas) ni a Cancelado sin motivo (modal de N3). */}
-                {quickDetailDoc.tipo === 'VEN' && (() => {
-                  // B4 T24 f2 (m8 de la revisión r0 de f1): con el permiso del rol (PATCH /ventas/pedidos: ADMIN y ASESOR). Sin él,
-                  // solo el enlace a Entregas, si aplica; si no hay nada, la sección no se pinta.
-                  const op = opcionesPanelPedido(quickDetailDoc.estado, accesoTablero.mover);
-                  if (!accesoTablero.mover && !op.despachar) return null;
-                  const sinOpciones = op.mover.length === 0 && !op.despachar && !op.cancelar && !op.facturar;
-                  return (
-                    <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-2">
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide">Cambiar Estado Operativo</p>
-                      {op.mover.length > 0 && (
-                        <div className="flex flex-wrap gap-2">
-                          {op.mover.map(est => (
-                            <button key={est} onClick={() => cambiarEstadoPedido(quickDetailDoc, est)}
-                              className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-white text-slate-700 hover:bg-slate-100 border-slate-200">
-                              {ETIQUETA_ESTADO_VEN[est]}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      {(op.despachar || op.facturar || op.cancelar) && (
-                        <div className="flex flex-wrap items-center gap-2 pt-1">
-                          {op.despachar && (
-                            <Link href="/dashboard/inventario/entregas"
-                              className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-teal-50 text-teal-800 hover:bg-teal-100 border-teal-200">
-                              Despachar en Entregas →
-                            </Link>
-                          )}
-                          {op.facturar && (
-                            <button onClick={async () => {
-                              const doc = quickDetailDoc;
-                              // B4 T24 f2 (F53): la MISMA confirmación del tablero de Pedidos (confirmacionFacturarPedido).
-                              if (await confirmar(confirmacionFacturarPedido(doc))) cambiarEstadoPedido(doc, 'FACTURADO');
-                            }}
-                              className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-green-50 text-green-800 hover:bg-green-100 border-green-200">
-                              Marcar como Facturado
-                            </button>
-                          )}
-                          {op.cancelar && (
-                            <button onClick={() => abrirCancelacion([`VEN|${quickDetailDoc.id}`])}
-                              className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-white text-rose-600 hover:bg-rose-50 border-rose-200">
-                              Cancelar pedido
-                            </button>
-                          )}
-                        </div>
-                      )}
-                      {sinOpciones && (
-                        <p className="text-xs text-slate-500">
-                          Este pedido está {estadoDeTarjeta('VEN', quickDetailDoc.estado).label}; su estado ya no se cambia desde aquí.
-                        </p>
-                      )}
-                    </div>
-                  );
-                })()}
-
-                {/* Direct Action Link */}
-                <div className="pt-2">
-                  <button onClick={()=>{
-                    const q = quickDetailDoc;
-                    // H37: con return_to del Hub, el único botón de volver del detalle dice «Volver al Hub de Ventas». La SC
-                    // va directo a su detalle (/solicitud?id= montaba la lista entera solo para redirigir).
-                    if(q.tipo==='SC')  router.push(`/dashboard/ventas/solicitud/${q.id}?return_to=%2Fdashboard%2Fventas`);
-                    if(q.tipo==='COT') router.push(`/dashboard/ventas/cotizacion/${q.id}?return_to=%2Fdashboard%2Fventas`);
-                    if(q.tipo==='VEN') router.push(`/dashboard/ventas/venta/${q.id}?return_to=%2Fdashboard%2Fventas`);
-                  }}
-                  className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors">
-                    Abrir en Módulo Detallado <ArrowRight size={14}/>
-                  </button>
-                </div>
+        {/* B4 T24 f2 r1 (C3): el panel rápido es un Drawer: role="dialog" con aria-labelledby (su h2 con el número), el foco que entra al
+            abrir y vuelve a la fila al cerrar, Esc, el clic en el fondo, Tab atrapado y data-capa (useCierreVentana). Su ancho de 600 px y
+            la reserva del botón de la IA (F44-a: «Abrir en Módulo Detallado» queda a la vista) son props aditivas. Sin campos que
+            escribir, Esc y el fondo lo cierran (F40). */}
+        {quickDetailDoc && (
+          <Drawer idTitulo="drawer-panel-rapido-titulo" maxWidth="600" reservaBotonIA onClose={() => setQuickDetailDoc(null)} header={(
+            <div className="flex items-center gap-3">
+              <span className={`px-2.5 py-1 rounded-full text-xs font-black border ${getTipoClass(quickDetailDoc.tipo)}`}>
+                {getTipoLabel(quickDetailDoc.tipo)}
+              </span>
+              <div>
+                <h2 id="drawer-panel-rapido-titulo" className="text-lg font-black text-slate-900">{quickDetailDoc.numero}</h2>
+                {/* B4 T24 f2 (FINAL-m28): la MISMA insignia de la tabla y del tablero (estadoDeTarjeta, la fuente única de los estados). */}
+                <InsigniaEstado tipo={quickDetailDoc.tipo} estado={quickDetailDoc.estado} />
               </div>
             </div>
-          </>
+          )}>
+            {/* B4 T7 (FLUJO-documentos punto 6; RP74, D36, D42): la cadena de documentos, compacta (solo los números;
+                las cajas caídas conservan su palabra). Las etiquetas salen de las tablas únicas de cada tipo (RP4). */}
+            <div className="min-w-0 bg-white rounded-2xl p-4 border border-slate-200 shadow-xs">
+              <CadenaDocumentos doc={quickDetailDoc} tipo={quickDetailDoc.tipo} compacta/>
+            </div>
+
+            {/* Que se esta pidiendo -- tipo de solicitud + notas, solo aplica a SC */}
+            {quickDetailDoc.tipo === 'SC' && (quickDetailDoc.tipo_solicitud || quickDetailDoc.notas) && (
+              <div className="bg-indigo-50 rounded-2xl p-4 border border-indigo-100 space-y-2">
+                <p className="text-[10px] font-black text-indigo-400 uppercase tracking-wide">Qué se está pidiendo</p>
+                {quickDetailDoc.tipo_solicitud && (
+                  <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-black bg-white text-indigo-700 border border-indigo-200">{etiquetaTipoSolicitud(quickDetailDoc.tipo_solicitud)}</span>
+                )}
+                {quickDetailDoc.notas && <p className="text-xs text-indigo-900 leading-relaxed">{quickDetailDoc.notas}</p>}
+              </div>
+            )}
+
+            {/* Customer Card */}
+            <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-2">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide">Información del Cliente</p>
+              <p className="font-black text-slate-800 text-sm">{quickDetailDoc.customer_name || quickDetailDoc.cliente?.nombre || 'Cliente General'}</p>
+              <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
+                <div><span className="text-slate-400 block text-[10px]">Teléfono / WhatsApp:</span> {quickDetailDoc.customer_phone || quickDetailDoc.telefono || '-'}</div>
+                <div><span className="text-slate-400 block text-[10px]">Email:</span> {quickDetailDoc.customer_email || quickDetailDoc.email || '-'}</div>
+                <div className="col-span-2"><span className="text-slate-400 block text-[10px]">Dirección de Entrega:</span> {quickDetailDoc.customer_address || quickDetailDoc.direccion_entrega || 'Recoge en Tienda'}</div>
+              </div>
+            </div>
+
+            {/* Financial Breakdown */}
+            <div className="bg-white rounded-2xl p-4 border border-slate-200 space-y-2 shadow-xs">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide">Resumen Financiero</p>
+              <div className="space-y-1.5 text-xs">
+                <div className="flex justify-between text-slate-600">
+                  <span>Total Liquidado:</span>
+                  <span className="font-bold text-slate-900">{fCOP(quickDetailDoc.total_cop || quickDetailDoc.total || 0)}</span>
+                </div>
+                {quickDetailDoc.anticipo_cop !== undefined && (
+                  <div className="flex justify-between text-emerald-700">
+                    <span>Anticipo / Recaudo:</span>
+                    <span className="font-bold">{fCOP(quickDetailDoc.anticipo_cop)}</span>
+                  </div>
+                )}
+                {quickDetailDoc.saldo_cop !== undefined && (
+                  <div className="flex justify-between text-rose-600 font-bold border-t border-slate-100 pt-1">
+                    <span>Saldo Pendiente:</span>
+                    <span>{fCOP(quickDetailDoc.saldo_cop)}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Products items */}
+            {Array.isArray(quickDetailDoc.productos) && quickDetailDoc.productos.length > 0 && (
+              <div className="bg-white rounded-2xl p-4 border border-slate-200 space-y-2 shadow-xs">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide">Partidas y Referencias</p>
+                <div className="divide-y divide-slate-100">
+                  {quickDetailDoc.productos.map((item:any, idx:number)=>(
+                    <div key={idx} className="py-2 flex justify-between items-center text-xs">
+                      <div>
+                        <p className="font-bold text-slate-800">{item.product_name || item.nombre || item.producto_nombre || item.sku || `Ítem #${idx+1}`}</p>
+                        <p className="text-[10px] text-slate-400">Cant: {item.qty || item.cantidad || 1} {item.talla ? `· Talla: ${item.talla}` : ''}</p>
+                      </div>
+                      <span className="font-bold text-slate-700">{fCOP(item.unit_price_cop || item.precio_unitario || item.precio || 0)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* State Changer for VEN -- N2: solo lo que el servidor acepta desde el estado actual; nunca un botón
+                directo a Entregado (va por Entregas) ni a Cancelado sin motivo (modal de N3). */}
+            {quickDetailDoc.tipo === 'VEN' && (() => {
+              // B4 T24 f2 (m8 de la revisión r0 de f1): con el permiso del rol (PATCH /ventas/pedidos: ADMIN y ASESOR). Sin él,
+              // solo el enlace a Entregas, si aplica; si no hay nada, la sección no se pinta.
+              const op = opcionesPanelPedido(quickDetailDoc.estado, accesoTablero.mover);
+              if (!accesoTablero.mover && !op.despachar) return null;
+              const sinOpciones = op.mover.length === 0 && !op.despachar && !op.cancelar && !op.facturar;
+              return (
+                <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-2">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide">Cambiar Estado Operativo</p>
+                  {op.mover.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {op.mover.map(est => (
+                        <button type="button" key={est} onClick={() => cambiarEstadoPedido(quickDetailDoc, est)}
+                          className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-white text-slate-700 hover:bg-slate-100 border-slate-200 ${FOCO}`}>
+                          {ETIQUETA_ESTADO_VEN[est]}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {(op.despachar || op.facturar || op.cancelar) && (
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      {op.despachar && (
+                        <Link href="/dashboard/inventario/entregas"
+                          className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-teal-50 text-teal-800 hover:bg-teal-100 border-teal-200 ${FOCO}`}>
+                          Despachar en Entregas →
+                        </Link>
+                      )}
+                      {op.facturar && (
+                        <button type="button" onClick={async () => {
+                          const doc = quickDetailDoc;
+                          // B4 T24 f2 (F53): la MISMA confirmación del tablero de Pedidos (confirmacionFacturarPedido).
+                          if (await confirmar(confirmacionFacturarPedido(doc))) cambiarEstadoPedido(doc, 'FACTURADO');
+                        }}
+                          className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-green-50 text-green-800 hover:bg-green-100 border-green-200 ${FOCO}`}>
+                          Marcar como Facturado
+                        </button>
+                      )}
+                      {op.cancelar && (
+                        <button type="button" onClick={() => abrirCancelacion([`VEN|${quickDetailDoc.id}`])}
+                          className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-white text-rose-600 hover:bg-rose-50 border-rose-200 ${FOCO}`}>
+                          Cancelar pedido
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {sinOpciones && (
+                    <p className="text-xs text-slate-500">
+                      Este pedido está {estadoDeTarjeta('VEN', quickDetailDoc.estado).label}; su estado ya no se cambia desde aquí.
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Direct Action Link */}
+            <div className="pt-2">
+              <button type="button" onClick={()=>{
+                const q = quickDetailDoc;
+                // H37: con return_to del Hub, el único botón de volver del detalle dice «Volver al Hub de Ventas». La SC
+                // va directo a su detalle (/solicitud?id= montaba la lista entera solo para redirigir).
+                if(q.tipo==='SC')  router.push(`/dashboard/ventas/solicitud/${q.id}?return_to=%2Fdashboard%2Fventas`);
+                if(q.tipo==='COT') router.push(`/dashboard/ventas/cotizacion/${q.id}?return_to=%2Fdashboard%2Fventas`);
+                if(q.tipo==='VEN') router.push(`/dashboard/ventas/venta/${q.id}?return_to=%2Fdashboard%2Fventas`);
+              }}
+              className={`w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors ${FOCO}`}>
+                Abrir en Módulo Detallado <ArrowRight size={14}/>
+              </button>
+            </div>
+          </Drawer>
         )}
       </div>
 

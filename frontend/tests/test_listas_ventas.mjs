@@ -1474,7 +1474,9 @@ console.log('--- B4 T24 f2 (F44-a): las pantallas de Ventas reservan la esquina 
   const hub = leer('page.tsx');
   assert.ok(hub.includes('<div className={`flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`}>'), 'el Hub');
   // Lo que se desplaza bajo el botón (fixed bottom-6 right-6): el panel rápido del Hub y su panel de actividad (Drawer).
-  assert.ok(hub.includes('<div className={`flex-1 overflow-y-auto p-6 space-y-6 ${RESERVA_BOTON_IA}`}>'), 'el panel rápido');
+  // r1 (C3, D27): el panel rápido es un Drawer con la prop aditiva reservaBotonIA (el cuerpo que se desplaza lleva el token).
+  assert.ok(hub.includes('<Drawer idTitulo="drawer-panel-rapido-titulo" maxWidth="600" reservaBotonIA '), 'el panel rápido');
+  assert.ok(readFileSync(new URL('../src/components/ui/Drawer.tsx', import.meta.url), 'utf8').includes("space-y-6${reservaBotonIA ? ` ${RESERVA_BOTON_IA}` : ''}"), 'el cuerpo del Drawer');
   assert.ok(hub.includes('<div className={RESERVA_BOTON_IA}>'), 'el historial del panel de actividad');
   // Las columnas de la derecha de los tres detalles (IA, Actividad y Chatter): el contenedor que se desplaza lleva la reserva, y la
   // lista del Chatter ya no la repite (una sola, en el contenedor).

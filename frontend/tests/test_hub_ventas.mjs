@@ -1320,7 +1320,8 @@ console.log('--- B4 T24 f2 (FINAL-m8, FINAL-m9, FINAL-m28): el Hub en Kanban sin
   assert.ok(!/\bgetEstadoClass\b|\betiquetaEstado\b/.test(hub), 'sin getEstadoClass ni etiquetaEstado');
   assert.ok(!/\b(?:BORRADOR|EN_TRANSITO|LISTO_ENTREGA|FACTURADO|CANCELADO|CONFIRMADA|RECHAZADA|PENDIENTE_COMPRA)\s*:\s*['"`]bg-/.test(hub), 'sin un mapa local de estados a clases');
   assert.ok(!/ESTADOS as ESTADOS_COT|import \{ ESTADOS_SC \}/.test(hub), 'sin las tablas de las listas para la etiqueta');
-  assert.match(hub, /<h2 className="text-lg font-black text-slate-900">\{quickDetailDoc\.numero\}<\/h2>\s*<InsigniaEstado tipo=\{quickDetailDoc\.tipo\} estado=\{quickDetailDoc\.estado\} \/>/);
+  // r1 (C3, D27): el h2 lleva el id del título del Drawer (aria-labelledby).
+  assert.match(hub, /<h2 id="drawer-panel-rapido-titulo" className="text-lg font-black text-slate-900">\{quickDetailDoc\.numero\}<\/h2>\s*<InsigniaEstado tipo=\{quickDetailDoc\.tipo\} estado=\{quickDetailDoc\.estado\} \/>/);
   assert.match(hub, /Este pedido está \{estadoDeTarjeta\('VEN', quickDetailDoc\.estado\)\.label\}; su estado ya no se cambia desde aquí\./);
   // La insignia es la de la tabla: estadoDeTarjeta, con las clases de la tabla del tipo (o los hex de la SC).
   assert.match(hub, /function InsigniaEstado\(\{ tipo, estado \}: \{ tipo: FilaHub\['tipo'\]; estado: unknown \}\) \{\s*const e = estadoDeTarjeta\(tipo, estado\);/);
@@ -1395,6 +1396,27 @@ console.log('--- B4 T24 (FINAL-C3): los tres Hubs leen el enlace DESPUÉS del co
     assert.match(codigo, /const \[enAnalisis, setEnAnalisis\] = useState\(false\);/, nombre);
     assert.match(codigo, /useLayoutEffect\(\(\) => \{\s*if \(leerEnlaceHubCompras\(window\.location\.search\)\.analisis\) setEnAnalisis\(true\);\s*\}, \[\]\);/, nombre);
   }
+}
+
+console.log('--- B4 T24 f2 r1 (C3): el panel rápido del Hub es un Drawer (título, foco de ida y vuelta, Esc, la trampa de Tab y data-capa) ---');
+{
+  const crudo = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const hub = crudo.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // El Drawer trae role="dialog", aria-modal, data-capa y useCierreVentana (el foco entra al abrir y vuelve al cerrar, Esc, el clic en
+  // el fondo y Tab atrapado): T24-e y T24-e2 de test_tabla. Su ancho de 600 px y la reserva del botón de la IA son props aditivas.
+  assert.match(hub, /\{quickDetailDoc && \(\s*<Drawer idTitulo="drawer-panel-rapido-titulo" maxWidth="600" reservaBotonIA onClose=\{\(\) => setQuickDetailDoc\(null\)\} header=\{\(/);
+  assert.ok(!/fixed top-0 bottom-0 right-0/.test(hub), 'sin el panel lateral armado a mano');
+  assert.ok(!/backdrop-blur-xs z-40/.test(hub), 'sin su fondo a mano');
+  assert.equal((hub.match(/setQuickDetailDoc\(null\)/g) ?? []).length, 1, 'un solo cierre: el del Drawer (su X con aria-label, Esc y el fondo)');
+  // Sin campos que escribir (F40 de f1 r2): no lleva cierreExterno={false} ni bloquearCierre.
+  const panel = hub.slice(hub.indexOf('<Drawer idTitulo="drawer-panel-rapido-titulo"'), hub.indexOf('</Drawer>', hub.indexOf('<Drawer idTitulo="drawer-panel-rapido-titulo"')));
+  assert.ok(panel.length > 1000, 'el panel entero');
+  assert.ok(!/<(?:input|textarea|select)\b|ComposerChatter/.test(panel), 'el panel no tiene campos (si los tuviera, F40: cierreExterno={false} y bloquearCierre)');
+  // Cada control del panel lleva el token de foco (FOCO), no el anillo del navegador.
+  const controles = (panel.match(/<(?:button|Link)\b/g) ?? []).length;
+  assert.ok(controles >= 5, `los controles del panel (${controles})`);
+  assert.equal((panel.match(/\$\{FOCO\}/g) ?? []).length, controles, 'cada botón y enlace del panel con ${FOCO}');
+  assert.match(hub, /import \{[^}]*\bFOCO\b[^}]*\} from '@\/lib\/design-system';/);
 }
 
 console.log('OK test_hub_ventas.mjs');

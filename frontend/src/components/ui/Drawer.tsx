@@ -1,21 +1,24 @@
 'use client';
 import { X } from 'lucide-react';
 import { useCierreVentana } from './useCierreVentana';
-import { FOCO, FOCO_DENTRO } from '@/lib/design-system';
+import { FOCO, FOCO_DENTRO, RESERVA_BOTON_IA } from '@/lib/design-system';
 
 /** Panel lateral deslizante (detalle de un registro de una tabla). Mismo
  * ancho/blur/z-index en todo el proyecto; header y footer son slots libres
  * porque su contenido (badges de estado, botones de accion) varia bastante
  * de una pagina a otra. B4 T24 (F40): se cierra con Esc (si es la capa de arriba) y con un clic en el fondo (useCierreVentana),
- * salvo con cierreExterno={false}; la X lleva aria-label. */
+ * salvo con cierreExterno={false}; la X lleva aria-label. B4 T24 f2 r1 (C3): maxWidth '600' y reservaBotonIA, aditivas (el panel
+ * rápido del Hub). */
 export function Drawer({
   onClose, header, children, footer, maxWidth = 'lg', cierreExterno = true, bloquearCierre = false, etiqueta, idTitulo,
+  reservaBotonIA = false,
 }: {
   onClose: () => void;
   header: React.ReactNode;
   children: React.ReactNode;
   footer?: React.ReactNode;
-  maxWidth?: 'md' | 'lg';
+  /** B4 T24 f2 r1 (C3): '600', el ancho del panel rápido del Hub (600 px; a todo el ancho en un teléfono). Aditivo. */
+  maxWidth?: 'md' | 'lg' | '600';
   /** B4 T24 (F40): false para que Esc y el clic en el fondo no lo cierren (por defecto, sí). */
   cierreExterno?: boolean;
   /** B4 T24 r1 (C2): true mientras guarda: la X queda deshabilitada y nada lo cierra desde fuera (como bloquearCierre del Modal). */
@@ -24,8 +27,11 @@ export function Drawer({
   etiqueta?: string;
   /** B4 T24 r3 (m7): el id del título visible del encabezado (aria-labelledby): lo que se anuncia es lo que se ve. Gana sobre etiqueta. */
   idTitulo?: string;
+  /** B4 T24 f2 r1 (C3): true para que el cuerpo que se desplaza deje libre, al fondo, la esquina del botón de la IA (RESERVA_BOTON_IA,
+   * F44-a). Aditivo: por defecto, sin la reserva. */
+  reservaBotonIA?: boolean;
 }) {
-  const widthCls = maxWidth === 'md' ? 'max-w-md' : 'max-w-lg';
+  const widthCls = maxWidth === 'md' ? 'max-w-md' : maxWidth === '600' ? 'max-w-[600px]' : 'max-w-lg';
   const { alPresionar, alSoltar, refPanel } = useCierreVentana(onClose, bloquearCierre || !cierreExterno);
   return (
     <div onPointerDown={alPresionar} onClick={alSoltar} className="fixed inset-0 z-40 flex justify-end bg-slate-900/40 backdrop-blur-sm animate-in fade-in">
@@ -36,7 +42,7 @@ export function Drawer({
             <X size={18} />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        <div className={`flex-1 overflow-y-auto p-6 space-y-6${reservaBotonIA ? ` ${RESERVA_BOTON_IA}` : ''}`}>
           {children}
         </div>
         {footer && (
