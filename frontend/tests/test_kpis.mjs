@@ -1717,4 +1717,24 @@ console.log('--- TEST T24 (B4 T24, FINAL-m21): fuenteGuardable — un formulario
   assert.equal(fuenteGuardable(undefined), false);
 }
 
+console.log('--- TEST T24-b (B4 T24, FINAL-m23): el Copilot del Dashboard, solo para quien lo puede consultar, sin emojis y con el 403 dicho ---');
+{
+  const fuente = readFileSync(new URL('../src/app/dashboard/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const c = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // accesoCopilot (lib/roles.js, casos en test_roles.mjs) con useRolActual: el Copilot solo para ADMIN, ASESOR y FINANZAS.
+  assert.match(c, /import \{ useRolActual \} from '@\/components\/ui\/useRolActual';/);
+  assert.match(c, /import \{ accesoCopilot \} from '@\/lib\/roles';/);
+  assert.match(c, /const rol = useRolActual\(\);\s*const accesoIa = accesoCopilot\(rol\);/);
+  assert.match(c, /\{accesoIa\.consultar && \(\s*<div className="bg-gradient-to-r from-purple-950/);
+  assert.match(c, /if \(!q \|\| !accesoIa\.consultar\) return;/, 'tampoco se consulta por Enter sin permiso');
+  // Sin emojis en los botones de consulta rápida.
+  const rapidas = c.slice(c.indexOf('Consultas rápidas'), c.indexOf('].map((sug, idx)'));
+  assert.ok(rapidas.length > 0);
+  assert.ok(!/\p{Extended_Pictographic}/u.test(rapidas), 'sin emojis');
+  for (const t of ["label: 'Estado de inventario'", "label: 'Compras en tránsito'", "label: 'Cartera pendiente'", "label: 'Resumen de clientes'"]) assert.ok(rapidas.includes(t), t);
+  // El error dice la causa real (avisoDeFuente: un 403 es de permiso; lo demás, el detalle del servidor), no «Revisa la conectividad».
+  assert.ok(!c.includes('Revisa la conectividad del backend'), 'sin la causa falsa');
+  assert.match(c, /answer: avisoDeFuente\(err, 'No se pudo consultar el copiloto'\)!\.texto,/);
+}
+
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

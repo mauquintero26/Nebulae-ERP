@@ -8,6 +8,9 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
+import { avisoDeFuente } from '@/lib/avisos';
+import { accesoCopilot } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 // B4 T22 (KPI-otros punto 1, FLUJO-ventas-pantallas E; R7, R12, RP104): las tarjetas leen los mismos endpoints que los Hubs
 // (/ventas/stats, /compras/stats e /inventory/stats), el embudo es PasosFlujo con /ventas/flujo y el selector es Semana,
 // 30 días o Mes. El Copilot (/chat/copilot/query) y las listas «Recientes» siguen como estaban.
@@ -95,6 +98,9 @@ export default function DashboardGeneral() {
   const pasosEmbudo = useMemo(() => pasosEmbudoDashboard(flujo.datos), [flujo.datos]);
 
   // ─── COPILOTO IA ───────────────────────────────────────────────────────────
+  // B4 T24 (FINAL-m23): el rol después de montar (useRolActual) y si puede consultar el copiloto (accesoCopilot, lib/roles.js).
+  const rol = useRolActual();
+  const accesoIa = accesoCopilot(rol);
   const [aiQuestion, setAiQuestion] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResponse, setAiResponse] = useState<{
@@ -142,7 +148,7 @@ export default function DashboardGeneral() {
   // ─── CONSULTA AL COPILOTO IA ───────────────────────────────────────────────
   const handleAskAI = async (customPrompt?: string) => {
     const q = (customPrompt || aiQuestion).trim();
-    if (!q) return;
+    if (!q || !accesoIa.consultar) return;
 
     setAiLoading(true);
     try {
@@ -158,8 +164,9 @@ export default function DashboardGeneral() {
         });
       }
     } catch (err: any) {
+      // B4 T24 (FINAL-m23): la causa real (avisoDeFuente): un 403 es un tema de permiso; lo demás, el detalle del servidor.
       setAiResponse({
-        answer: 'No se pudo conectar con el motor de IA en este momento. Revisa la conectividad del backend.',
+        answer: avisoDeFuente(err, 'No se pudo consultar el copiloto')!.texto,
         source: 'Error',
         timestamp: new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }),
       });
@@ -260,7 +267,9 @@ export default function DashboardGeneral() {
           </div>
         </div>
 
-        {/* 2. COPILOTO IA INTERACTIVO (Box LLM Integrado a Nebulae) */}
+        {/* 2. COPILOTO IA INTERACTIVO (Box LLM Integrado a Nebulae). B4 T24 (FINAL-m23): solo para quien puede consultarlo
+            (POST /chat/copilot/query es de ADMIN, ASESOR y FINANZAS: accesoCopilot). */}
+        {accesoIa.consultar && (
         <div className="bg-gradient-to-r from-purple-950 via-indigo-950 to-slate-950 rounded-3xl p-1 shadow-xl relative overflow-hidden border border-purple-800/40">
           <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none">
             <BrainCircuit size={160} className="text-white" />
@@ -308,10 +317,10 @@ export default function DashboardGeneral() {
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-1">Consultas rápidas:</span>
                 {[
-                  { label: '📦 Estado de inventario', prompt: '¿Cómo está el inventario hoy entre físico, reservado y disponible?' },
-                  { label: '🚢 Compras en tránsito', prompt: '¿Cuáles compras o PECs están en tránsito hacia bodega?' },
-                  { label: '💰 Cartera pendiente', prompt: '¿Cuál es el saldo total pendiente de cobro en pedidos de venta?' },
-                  { label: '👥 Resumen de clientes', prompt: 'Dame un resumen del volumen de clientes y pedidos recientes' },
+                  { label: 'Estado de inventario', prompt: '¿Cómo está el inventario hoy entre físico, reservado y disponible?' },
+                  { label: 'Compras en tránsito', prompt: '¿Cuáles compras o PECs están en tránsito hacia bodega?' },
+                  { label: 'Cartera pendiente', prompt: '¿Cuál es el saldo total pendiente de cobro en pedidos de venta?' },
+                  { label: 'Resumen de clientes', prompt: 'Dame un resumen del volumen de clientes y pedidos recientes' },
                 ].map((sug, idx) => (
                   <button
                     key={idx}
@@ -340,6 +349,7 @@ export default function DashboardGeneral() {
             )}
           </div>
         </div>
+        )}
 
         {/* 3. FLUJO DEL INVENTARIO (ZONA CENTRAL MAESTRA NEBULAE) */}
         <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-6">
