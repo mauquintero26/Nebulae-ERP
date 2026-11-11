@@ -22,6 +22,8 @@ import { fechaCorta } from '@/lib/fechas-colombia';
 import { FranjaKpis, TarjetaKpi } from '@/components/ui';
 import { AvisoFuente } from '@/components/ui/AvisoFuente';
 import { avisoDeFuente } from '@/lib/avisos';
+import { accesoProveedores } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 import {
   datosDeRespuesta, esRespuestaVigente, estadoFichaCliente, estadoPedidosProveedor, numeroFinito, pedidosDeProveedor, siguientePerfil,
   tarjetasFichaCliente, tarjetasFichaProveedor, textoProveedoresCortados,
@@ -79,6 +81,9 @@ export default function AgendaPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
+  // B4 T24 (F108): Nuevo, Editar y Eliminar proveedor (POST, PATCH y DELETE /compras/proveedores) solo con accesoProveedores
+  // (ADMIN y COMPRAS); el rol se lee después de montar.
+  const accesoProv = accesoProveedores(useRolActual());
 
   // ─── PESTAÑA PRINCIPAL (Clientes vs Proveedores) ───────────────────────────
   const [mainTab, setMainTab] = useState<'clientes' | 'proveedores'>('clientes');
@@ -536,12 +541,14 @@ export default function AgendaPage() {
                 <p className="text-slate-500 text-xs mt-0.5">Gestión de fabricantes, distribuidores, condiciones comerciales y pedidos de compra.</p>
               </div>
             </div>
+            {accesoProv.editar && (
             <button
               onClick={openNewSupplier}
               className="bg-teal-600 hover:bg-teal-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-md transition-all flex items-center gap-2"
             >
               <Plus size={16} /> Nuevo Proveedor
             </button>
+            )}
           </div>
 
           {/* Search Bar */}
@@ -600,6 +607,7 @@ export default function AgendaPage() {
                             <span className="text-[11px] font-semibold text-slate-400">PROV-{String(sup.id).padStart(4, '0')}</span>
                           </div>
                         </div>
+                        {accesoProv.editar && (
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -610,6 +618,7 @@ export default function AgendaPage() {
                         >
                           <Trash2 size={14} />
                         </button>
+                        )}
                       </div>
 
                       <div className="space-y-1.5 text-xs text-slate-600 mt-2">
@@ -867,6 +876,8 @@ export default function AgendaPage() {
                   <Mail size={14} /> Correo
                 </a>
               )}
+              {accesoProv.editar && (
+              <>
               <button
                 onClick={() => openEditSupplier(selectedSupplier)}
                 className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-3.5 py-2 rounded-xl font-bold text-xs shadow-sm flex items-center gap-1.5 transition-colors"
@@ -880,6 +891,8 @@ export default function AgendaPage() {
               >
                 <Trash2 size={16} />
               </button>
+              </>
+              )}
             </div>
           </div>
         </div>

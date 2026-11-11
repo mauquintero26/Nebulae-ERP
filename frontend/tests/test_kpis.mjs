@@ -1737,4 +1737,19 @@ console.log('--- TEST T24-b (B4 T24, FINAL-m23): el Copilot del Dashboard, solo 
   assert.match(c, /answer: avisoDeFuente\(err, 'No se pudo consultar el copiloto'\)!\.texto,/);
 }
 
+console.log('--- TEST T24-c (B4 T24, F108): la Agenda ofrece Nuevo, Editar y Eliminar proveedor solo a ADMIN y COMPRAS ---');
+{
+  const fuente = readFileSync(new URL('../src/app/dashboard/agenda/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const c = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // accesoProveedores (lib/roles.js; casos en test_roles.mjs) con useRolActual.
+  assert.match(c, /import \{[^}]*\baccesoProveedores\b[^}]*\} from '@\/lib\/roles';/);
+  assert.match(c, /import \{ useRolActual \} from '@\/components\/ui\/useRolActual';/);
+  assert.match(c, /const accesoProv = accesoProveedores\(useRolActual\(\)\);/);
+  // Los cuatro botones (Nuevo, Eliminar de la tarjeta, Editar y Eliminar del detalle), dentro de accesoProv.editar.
+  assert.match(c, /\{accesoProv\.editar && \(\s*<button\s+onClick=\{openNewSupplier\}/);
+  assert.match(c, /\{accesoProv\.editar && \(\s*<button\s+onClick=\{\(e\) => \{\s*e\.stopPropagation\(\);\s*setDeleteConfirmSupplier\(sup\);/);
+  assert.match(c, /\{accesoProv\.editar && \(\s*<>\s*<button\s+onClick=\{\(\) => openEditSupplier\(selectedSupplier\)\}/);
+  assert.equal((c.match(/setDeleteConfirmSupplier\((sup|selectedSupplier)\)/g) ?? []).length, 2, 'los dos «Eliminar Proveedor»');
+}
+
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');
