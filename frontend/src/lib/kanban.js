@@ -43,6 +43,7 @@ export const TEXTO_SOLO_VER = 'Este tablero es solo para ver.';
  * literales para el JIT de Tailwind; una prueba fija que son las mismas). El tono de una columna sale de acentoDesdeClase con este
  * conjunto: slate solo para lo que no está. Inmutable.
  */
+/** @type {ReadonlyArray<'slate' | 'gray' | 'red' | 'orange' | 'amber' | 'yellow' | 'lime' | 'green' | 'emerald' | 'teal' | 'cyan' | 'sky' | 'blue' | 'indigo' | 'violet' | 'purple' | 'fuchsia' | 'pink' | 'rose'>} */
 export const CLAVES_TONOS_KANBAN = congelar(['slate', 'gray', 'red', 'orange', 'amber', 'yellow', 'lime', 'green', 'emerald', 'teal', 'cyan', 'sky', 'blue', 'indigo', 'violet', 'purple', 'fuchsia', 'pink', 'rose']);
 
 const idPorDefecto = (item) => item?.id;

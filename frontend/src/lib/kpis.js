@@ -26,7 +26,7 @@
  */
 
 import { congelar } from './estados-pedido.js';
-import { textoAvisoFuente, textoDeError } from './avisos.js';
+import { textoAvisoFuente } from './avisos.js';
 import { agruparMiles, formatoPesos } from './pesos.js';
 
 /**
@@ -309,16 +309,18 @@ export function textoContador(valor, estado) {
  * tono de las columnas de los tableros (con respaldo 'slate'): sin copias de «la familia de una clase». r2 (C8): `conjunto` (aditivo;
  * por defecto COLORES_KPI) son los colores admitidos: el tablero pasa las claves de TONOS (CLAVES_TONOS_KANBAN de lib/kanban.js), así
  * que slate queda solo para lo que el tablero no puede pintar.
+ * r3 (m2, m14): una plantilla: sin conjunto, ColorKpi como siempre; con CLAVES_TONOS_KANBAN, la unión de sus claves.
+ * @template {string} [C=ColorKpi]
  * @param {unknown} clase
  * @param {string} [respaldo]
- * @param {ReadonlyArray<string>} [conjunto]
- * @returns {any}
+ * @param {ReadonlyArray<C>} [conjunto]
+ * @returns {C}
  */
 export function acentoDesdeClase(clase, respaldo = 'indigo', conjunto = COLORES_KPI) {
   const texto = typeof clase === 'string' ? clase.trim() : '';
   const m = /^(?:bg|text|border|ring|from|to)-([a-z]+)-\d{2,3}$/.exec(texto);
   const color = m ? m[1] : texto;
-  return conjunto.includes(color) ? color : respaldo;
+  return /** @type {C} */ (conjunto.includes(/** @type {C} */ (color)) ? color : respaldo);
 }
 
 // ─── lo que usan TarjetaKpi, Contador y useEstadoKpi (T4A) ──────────────────────

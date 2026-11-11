@@ -1050,7 +1050,7 @@ export function guardarCambioColumnas(guardarParte, { definicion, cambio, sinGua
   if (!listo || (usuarioRender ?? null) !== (usuarioToken ?? null)) return false;
   // B4 T24 (F33): con la precarga fallida, una pieza compuesta (el mapa de anchos, {orden, ocultas}) se armaría sobre {} y
   // reemplazaría la guardada en el servidor: no se escribe. «Restablecer» no depende de lo guardado.
-  if (precargaFallida && /** @type {any} */ (cambio)?.tipo !== 'restablecer') return false;
+  if (avisoCambioColumnas({ precargaFallida, cambio })) return false;
   const actualizar = actualizadorColumnas(definicion, cambio, sinGuardar);
   let escribio = false;
   guardarParte((anterior) => {

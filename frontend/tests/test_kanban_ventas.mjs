@@ -1581,7 +1581,8 @@ console.log('--- B4 T23A TEST S: el cableado del tablero y del filtro de los ped
 console.log('--- B4 T24 (F26) y r2 (C8): el tono de cada columna sale de acentoDesdeClase con las claves de TONOS del tablero ---');
 {
   const { readFileSync } = await import('node:fs');
-  const { CLAVES_TONOS_KANBAN: COLORES_KPI } = await import('../src/lib/kanban.js');
+  // r3 (m14): el alias dice lo que es: las claves de TONOS del tablero.
+  const { CLAVES_TONOS_KANBAN: TONOS } = await import('../src/lib/kanban.js');
   const kv = await import('../src/lib/kanban-ventas.js');
   const { COLUMNAS_ENTREGA } = await import('../src/lib/entregas.js');
   const { columnasDesdeEtapas } = await import('../src/lib/crm-etapas.js');
@@ -1592,7 +1593,7 @@ console.log('--- B4 T24 (F26) y r2 (C8): el tono de cada columna sale de acentoD
   assert.deepEqual(crm.map((c) => c.tono), ['cyan', 'pink', 'blue', 'slate'], 'el CRM: el color de su clase; un hex, slate');
   for (const [nombre, columnas] of [['COT', kv.COLUMNAS_COT], ['Hub', kv.COLUMNAS_HUB], ['PVEN', kv.COLUMNAS_PEDIDO], ['SC', kv.COLUMNAS_SC],
     ['Entregas', COLUMNAS_ENTREGA]]) {
-    for (const c of columnas) assert.ok(COLORES_KPI.includes(c.tono), `${nombre} ${c.clave}: ${c.tono}`);
+    for (const c of columnas) assert.ok(TONOS.includes(c.tono), `${nombre} ${c.clave}: ${c.tono}`);
   }
   // SC: el tono sale del hex de ESTADOS_SC (la clase más cercana, claseTailwindCercana), no de una tabla a mano.
   // r2 (C8): Asignada vuelve a cyan (distinta de Nueva) y Vencida a violet; «Esperando mercancía», a sky. Los colores de BASE.
@@ -1602,7 +1603,10 @@ console.log('--- B4 T24 (F26) y r2 (C8): el tono de cada columna sale de acentoD
   // Las claves de la lib son las de TONOS del tablero (las clases literales de Kanban.tsx).
   const kanbanTsx = leerSrc('components/ui/Kanban.tsx');
   const bloque = kanbanTsx.slice(kanbanTsx.indexOf('const TONOS: Record<ClaveTonoKanban, Tono> = {'), kanbanTsx.indexOf('};', kanbanTsx.indexOf('const TONOS')));
-  assert.deepEqual([...bloque.matchAll(/^\s+([a-z]+): \{ punto:/gm)].map((m) => m[1]), [...COLORES_KPI], 'TONOS y CLAVES_TONOS_KANBAN, las mismas');
+  assert.deepEqual([...bloque.matchAll(/^\s+([a-z]+): \{ punto:/gm)].map((m) => m[1]), [...TONOS], 'TONOS y CLAVES_TONOS_KANBAN, las mismas');
+  // r3 (m2, m14): los tipos: CLAVES_TONOS_KANBAN como unión literal y acentoDesdeClase con plantilla (sin conjunto, ColorKpi).
+  assert.ok(leerSrc('lib/kanban.js').includes("/** @type {ReadonlyArray<'slate' | 'gray' | 'red' | 'orange' | 'amber' | 'yellow' | 'lime' | 'green' | 'emerald' | 'teal' | 'cyan' | 'sky' | 'blue' | 'indigo' | 'violet' | 'purple' | 'fuchsia' | 'pink' | 'rose'>} */"), 'la unión literal');
+  assert.match(leerSrc('lib/kpis.js'), /@template \{string\} \[C=ColorKpi\]\n \* @param \{unknown\} clase\n \* @param \{string\} \[respaldo\]\n \* @param \{ReadonlyArray<C>\} \[conjunto\]\n \* @returns \{C\}/);
   const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8');
   for (const ruta of ['lib/kanban-ventas.js', 'lib/crm-etapas.js']) assert.ok(!/const familia\b|TONO_SC\b/.test(leer(ruta)), `${ruta}: sin copia`);
   assert.match(leer('lib/kanban-ventas.js'), /const tonoDeClase = \(clase\) => acentoDesdeClase\(clase, 'slate', CLAVES_TONOS_KANBAN\);/);

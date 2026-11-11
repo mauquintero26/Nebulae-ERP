@@ -1111,12 +1111,16 @@ console.log('--- TEST 24 (T4C r1, puntos 3 y 4): sesionVigente, escriturasDeAcci
   // B4 T24 (F33): con la precarga fallida, una pieza compuesta (el mapa de anchos, {orden, ocultas}) se armaría sobre {} y reemplazaría
   // la guardada en el servidor: no se escribe. «Restablecer» no depende de lo guardado: sí.
   const antes = llamadas.length;
-  for (const cambio of [{ tipo: 'anchos', anchos: { cli: 310 } }, { tipo: 'ocultar', id: 'est' }, { tipo: 'mover', id: 'cli', hueco: 0 }]) {
+  // r3 (m12): también 'desplazar' (las flechas de «Ajustar tabla»): la misma regla que el aviso (avisoCambioColumnas).
+  for (const cambio of [{ tipo: 'anchos', anchos: { cli: 310 } }, { tipo: 'ocultar', id: 'est' }, { tipo: 'mover', id: 'cli', hueco: 0 },
+    { tipo: 'desplazar', id: 'cli', paso: 1 }]) {
     assert.equal(guardarCambioColumnas(guardarParte, { ...base, cambio, listo: true, usuarioRender: 7, usuarioToken: 7, precargaFallida: true }), false, cambio.tipo);
   }
   assert.equal(llamadas.length, antes, 'ni llama a guardarParte');
   guardarCambioColumnas(guardarParte, { ...base, cambio: { tipo: 'restablecer' }, listo: true, usuarioRender: 7, usuarioToken: 7, precargaFallida: true });
   assert.equal(llamadas.length, antes + 1, '«Restablecer» sí llega a guardarParte');
+  // r3 (m12): lo que no se escribe y lo que se avisa salen del MISMO predicado.
+  assert.match(readFileSync(new URL('../src/lib/tabla.js', import.meta.url), 'utf8'), /if \(avisoCambioColumnas\(\{ precargaFallida, cambio \}\)\) return false;/);
   // r2 (ruling de la duda 4): el intento de ocultar, mover o estirar con la precarga fallida se dice (avisoCambioColumnas, pura).
   const { avisoCambioColumnas, TEXTO_PRECARGA_FALLIDA_COLUMNAS } = TABLA;
   assert.equal(TEXTO_PRECARGA_FALLIDA_COLUMNAS, 'No se pudieron cargar tus preferencias de columnas; intenta de nuevo en un momento.');
