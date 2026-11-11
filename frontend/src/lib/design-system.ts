@@ -245,8 +245,11 @@ export const TABLE = {
   bordeFijaIzquierda: 'border-r border-r-slate-200',
   bordeFijaDerecha: 'border-l border-l-slate-200',
   contenido:        'inline-block max-w-full truncate align-middle',
-  /** B4 T24 r2 (m17): el contenido de la columna de acciones (fija a la derecha): sin truncate (su overflow cortaba el anillo de foco). */
-  contenidoAcciones: 'inline-flex max-w-full items-center align-middle',
+  /**
+   * B4 T24 r2 (m17) y r3 (m11): el contenido de la columna de acciones (fija a la derecha). Contiene lo que no cabe (overflow-hidden: no
+   * se sale de la tabla) con 4 px de aire para el anillo de foco (p-1, compensado con -m-1 y con el max-w: el ancho útil no cambia).
+   */
+  contenidoAcciones: 'inline-flex max-w-[calc(100%+0.5rem)] items-center overflow-hidden p-1 -m-1 align-middle',
   casilla:          'h-4 w-4 cursor-pointer accent-indigo-600 disabled:cursor-not-allowed disabled:opacity-40',
   // Separadores, vacío, error y aviso (el texto queda a la vista aunque la tabla se corra de lado).
   grupoCelda:       'h-8 border-b border-slate-200 bg-slate-100 px-3 text-xs font-bold text-slate-600',
