@@ -2183,7 +2183,8 @@ console.log('--- TEST 42 (B4 T7 r2, I-r1 y m-r1-a): la pastilla de una pestaña 
   assert.match(barra, /const estadoPastilla = estadoPastillaPestana\(p\.conteo, estadoConteos, \{ aparteActiva, sinConteo: p\.sinConteo \}\);/);
   assert.match(barra,
     // B4 T24 (FINAL-m27, D27): la alerta manda también con la pestaña activa, con su texto en title y sr-only.
-    /\{estadoPastilla !== 'oculto' && \(\s*<span title=\{textoAlerta \?\? undefined\} className=\{`inline-flex min-w-\[1\.25rem\] items-center justify-center rounded-full px-1\.5 py-px text-\[11px\] \$\{textoAlerta \? PASTILLA_ALERTA : activa \? PASTILLA_ACTIVA : PASTILLA\}`\}>\s*<Contador valor=\{p\.conteo\} estado=\{estadoPastilla\} \/>\s*<\/span>\s*\)\}/,
+    // B4 T24 r1 (m21, D27): con la alerta, además del color, el triángulo (aria-hidden: el texto ya va en title y sr-only).
+    /\{estadoPastilla !== 'oculto' && \(\s*<span title=\{textoAlerta \?\? undefined\} className=\{`inline-flex min-w-\[1\.25rem\] items-center justify-center rounded-full px-1\.5 py-px text-\[11px\] \$\{textoAlerta \? PASTILLA_ALERTA : activa \? PASTILLA_ACTIVA : PASTILLA\}`\}>\s*\{textoAlerta && <AlertTriangle size=\{10\} aria-hidden="true" className="mr-0\.5 shrink-0" \/>\}\s*<Contador valor=\{p\.conteo\} estado=\{estadoPastilla\} \/>\s*<\/span>\s*\)\}/,
     'sin pastilla, ni Contador ni la alerta rosa');
   assert.match(barra, /const filaPestanas = useRef<HTMLDivElement>\(null\);/);
   assert.match(barra, /<div ref=\{filaPestanas\} role="tablist"/);
@@ -3177,6 +3178,13 @@ console.log('--- TEST T24-f (B4 T24, FINAL-m27): la alerta de una pestaña se di
   // Las pantallas de Compras dicen cuántos vencidos (textoVencidosPec, lib/estados-compras.js, casos en test_estados_compras.mjs).
   assert.ok(leer('app/dashboard/compras/page.tsx').includes("alerta: textoVencidosPec(conteos?.vencidos) }"));
   assert.ok(leer('app/dashboard/compras/pedidos/page.tsx').includes("alerta: textoVencidosPec(conteos?.vencidos) }"));
+  // r1 (m21, WCAG 1.4.1): en una pestaña inactiva rose-100/rose-700 y slate-200/slate-600 tienen casi la misma luminancia: la alerta
+  // lleva además una señal que no es color (el triángulo, aria-hidden).
+  assert.match(barra, /import \{[^}]*\bAlertTriangle\b[^}]*\} from 'lucide-react';/);
+  assert.equal((barra.match(/\{textoAlerta && <AlertTriangle size=\{10\} aria-hidden="true" className="mr-0\.5 shrink-0" \/>\}/g) ?? []).length, 1);
+  // r1 (m17): la fila pulsable (tabIndex 0) se abre con Enter y con Espacio, sin desplazar la caja, y solo si la tecla es de la fila.
+  const tablaEstandar = leer('components/tabla/TablaEstandar.tsx');
+  assert.match(tablaEstandar, /const alTeclearFila = \(e: EventoTeclado<HTMLTableRowElement>, fila: T\) => \{\s*if \(onFila && \(e\.key === 'Enter' \|\| e\.key === ' '\) && e\.target === e\.currentTarget\) \{\s*e\.preventDefault\(\);\s*onFila\(fila\);\s*\}\s*\};/);
 }
 
 console.log('--- TEST T24-g (B4 T24: F42, F43 y F44): el aviso del menú, el encabezado y la paginación angostos y el botón de la IA en pantalla completa ---');

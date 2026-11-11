@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent as EventoTeclado, ReactNode, RefObject } from 'react';
-import { Maximize2, Minimize2, Search, X } from 'lucide-react';
+import { AlertTriangle, Maximize2, Minimize2, Search, X } from 'lucide-react';
 import { ConmutadorVista } from '@/components/ui/ConmutadorVista';
 import { Contador } from '@/components/ui/Contador';
 import { ACCENTS } from '@/components/ui/colors';
@@ -241,8 +241,10 @@ export function BarraTabla({
                 className={`${PESTANA} ${activa ? ACCENTS[color].navActive : PESTANA_INACTIVA}`}
               >
                 {p.etiqueta}
+                {/* B4 T24 r1 (m21): la alerta no es solo color (WCAG 1.4.1): el triángulo, sin nombre (el texto va en title y sr-only). */}
                 {estadoPastilla !== 'oculto' && (
                   <span title={textoAlerta ?? undefined} className={`inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 py-px text-[11px] ${textoAlerta ? PASTILLA_ALERTA : activa ? PASTILLA_ACTIVA : PASTILLA}`}>
+                    {textoAlerta && <AlertTriangle size={10} aria-hidden="true" className="mr-0.5 shrink-0" />}
                     <Contador valor={p.conteo} estado={estadoPastilla} />
                   </span>
                 )}

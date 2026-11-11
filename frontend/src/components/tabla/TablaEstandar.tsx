@@ -261,8 +261,9 @@ function CuerpoTablaBase<T>({
     if (window.getSelection()?.toString()) return;
     onFila(fila);
   };
+  // B4 T24 r1 (m17): Enter o Espacio (con preventDefault: el Espacio no desplaza la caja), solo si la tecla es de la fila.
   const alTeclearFila = (e: EventoTeclado<HTMLTableRowElement>, fila: T) => {
-    if (onFila && e.key === 'Enter' && e.target === e.currentTarget) {
+    if (onFila && (e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) {
       e.preventDefault();
       onFila(fila);
     }
