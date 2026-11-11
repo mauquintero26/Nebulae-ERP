@@ -34,7 +34,7 @@ import { infoEstadoPedido } from '@/lib/estados-pedido';
 import { ordenPorDefecto } from '@/lib/kanban';
 import { AvisoFuente } from '@/components/ui/AvisoFuente';
 import { useRolActual } from '@/components/ui/useRolActual';
-import { lecturaDeFuente, tarjetasTienda, textoLimiteCarritos } from '@/lib/kpis';
+import { fuenteGuardable, lecturaDeFuente, tarjetasTienda, textoLimiteCarritos } from '@/lib/kpis';
 import { accesoTienda } from '@/lib/roles';
 import { formatoPesos } from '@/lib/pesos';
 import { fechaCorta, fechaHoraLarga, horaCO } from '@/lib/fechas-colombia';
@@ -623,6 +623,12 @@ export default function EcommercePage() {
   const [shipConfig, setShipConfig] = useState<any>({ envio_local: { enabled: true, tarifa: 12000 }, envio_nacional: { enabled: true, tarifa: 25000 }, envio_gratis_desde: 200000 });
   const [savingPay, setSavingPay] = useState(false);
   const [savingShip, setSavingShip] = useState(false);
+  // B4 T24 (FINAL-m21): la configuración de pagos y envíos (GET y PATCH, solo ADMIN: acceso.pagosConfig). Lo que llegó (o su error)
+  // por vuelta, leído con lecturaDeFuente: sin los valores del servidor no hay formulario ni «Guardar» (fuenteGuardable), nunca los
+  // valores por defecto de arriba como si fueran los de la tienda.
+  const [vueltaConfig, setVueltaConfig] = useState(0);
+  const [cargaPagos, setCargaPagos] = useState<Cargado<Record<string, unknown>> | null>(null);
+  const [cargaEnvios, setCargaEnvios] = useState<Cargado<Record<string, unknown>> | null>(null);
 
   // ── B4 T23A, bloque 5: las tarjetas de la tienda (KPI-otros punto 5; R12, RP102) ──
   // GET /ecommerce/stats, sin respaldo local: mientras llega la primera vez, 'cargando' (barras grises, nunca 0); al recargar
@@ -897,11 +903,25 @@ export default function EcommercePage() {
   };
 
   useEffect(() => {
-    if (activeTab === 'Pagos') {
-      apiFetch('/ecommerce/pagos/config').then(d => setPayConfig(d.data || payConfig)).catch(() => {});
-      apiFetch('/ecommerce/envios/config').then(d => setShipConfig(d.data || shipConfig)).catch(() => {});
-    }
-  }, [activeTab]);
+    if (activeTab !== 'Pagos' || !acceso.pagosConfig) return undefined;
+    const control = new AbortController();
+    apiFetch('/ecommerce/pagos/config', { signal: control.signal })
+      .then((d: { data?: Record<string, unknown> } | null) => {
+        if (d?.data) setPayConfig(d.data);
+        setCargaPagos({ vuelta: vueltaConfig, datos: d?.data ?? null, error: null });
+      })
+      .catch((err: unknown) => { if (!control.signal.aborted) setCargaPagos({ vuelta: vueltaConfig, datos: null, error: err }); });
+    apiFetch('/ecommerce/envios/config', { signal: control.signal })
+      .then((d: { data?: Record<string, unknown> } | null) => {
+        if (d?.data) setShipConfig(d.data);
+        setCargaEnvios({ vuelta: vueltaConfig, datos: d?.data ?? null, error: null });
+      })
+      .catch((err: unknown) => { if (!control.signal.aborted) setCargaEnvios({ vuelta: vueltaConfig, datos: null, error: err }); });
+    return () => control.abort();
+  }, [activeTab, acceso.pagosConfig, vueltaConfig]);
+  const lecturaPagos = lecturaDeFuente(cargaPagos, vueltaConfig);
+  const lecturaEnvios = lecturaDeFuente(cargaEnvios, vueltaConfig);
+  const reintentarConfig = useCallback(() => setVueltaConfig((n) => n + 1), []);
 
   // «Actualizar»: las tarjetas, los carritos, los pedidos (la tabla y el tablero) y el catálogo. Ninguna recarga vacía lo que se ve.
   const recargarTodo = useCallback(() => {
@@ -963,7 +983,7 @@ export default function EcommercePage() {
         {/* TABS */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-xl p-1 shadow-sm overflow-x-auto">
-            {['Panel', 'Catálogo', 'Clientes Web', 'Pagos'].map(t => (
+            {['Panel', 'Catálogo', 'Clientes Web', ...(acceso.pagosConfig ? ['Pagos'] : [])].map(t => (
               <button key={t} type="button" onClick={() => setActiveTab(t)} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${FOCO_VISIBLE} ${activeTab === t ? 'bg-purple-600 text-white shadow' : 'text-gray-600 hover:text-purple-700 hover:bg-purple-50'}`}>{t}</button>
             ))}
           </div>
@@ -1168,12 +1188,18 @@ export default function EcommercePage() {
         )}
 
         {/* PAGOS */}
-        {activeTab === 'Pagos' && (
+        {activeTab === 'Pagos' && acceso.pagosConfig && (
           <div className="grid grid-cols-2 gap-6">
             <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
               <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><CreditCard size={16} className="text-purple-600"/> Pasarelas de Pago</h3>
+              {lecturaPagos.error ? (
+                <AvisoFuente aviso={avisoDeFuente(lecturaPagos.error, 'No se pudo cargar la configuración de pagos')!} onReintentar={reintentarConfig} />
+              ) : !fuenteGuardable(lecturaPagos) ? (
+                <p role="status" aria-busy="true" className="py-6 text-center text-sm text-slate-500">Cargando la configuración de pagos…</p>
+              ) : null}
+              {fuenteGuardable(lecturaPagos) ? (
               <div className="space-y-4">
-                {[{key:'stripe',label:'Stripe',sub:'Tarjetas de crÃ©dito, Apple Pay, Google Pay',fields:[{k:'publishable_key',l:'Publishable Key',ph:'pk_live_...'},{k:'secret_key',l:'Secret Key',ph:'sk_live_...',pw:true},{k:'webhook_secret',l:'Webhook Secret',ph:'whsec_...',pw:true}]},{key:'mercadopago',label:'MercadoPago',sub:'Efecty, PSE, tarjetas locales Colombia',fields:[{k:'public_key',l:'Public Key',ph:'APP_USR-...'},{k:'access_token',l:'Access Token',ph:'APP_USR-...',pw:true}]}].map(gw => (
+                {[{key:'stripe',label:'Stripe',sub:'Tarjetas de crédito, Apple Pay, Google Pay',fields:[{k:'publishable_key',l:'Publishable Key',ph:'pk_live_...'},{k:'secret_key',l:'Secret Key',ph:'sk_live_...',pw:true},{k:'webhook_secret',l:'Webhook Secret',ph:'whsec_...',pw:true}]},{key:'mercadopago',label:'MercadoPago',sub:'Efecty, PSE, tarjetas locales Colombia',fields:[{k:'public_key',l:'Public Key',ph:'APP_USR-...'},{k:'access_token',l:'Access Token',ph:'APP_USR-...',pw:true}]}].map(gw => (
                   <div key={gw.key} className={`border rounded-2xl p-5 ${payConfig[gw.key]?.enabled?'border-emerald-200 bg-emerald-50/30':'border-gray-200'}`}>
                     <div className="flex items-center justify-between mb-3">
                       <div><h4 className="font-bold text-gray-800">{gw.label}</h4><p className="text-xs text-gray-500">{gw.sub}</p></div>
@@ -1189,15 +1215,22 @@ export default function EcommercePage() {
                     </div>
                   </div>
                 ))}
-                <button onClick={async()=>{setSavingPay(true);try{await apiFetch('/ecommerce/pagos/config',{method:'PATCH',body:JSON.stringify(payConfig)});showToast('ConfiguraciÃ³n guardada','ok');}catch(e:any){showToast(e.message,'error');}setSavingPay(false);}} disabled={savingPay} className="w-full flex items-center justify-center gap-2 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-sm disabled:opacity-50">
+                <button onClick={async()=>{setSavingPay(true);try{await apiFetch('/ecommerce/pagos/config',{method:'PATCH',body:JSON.stringify(payConfig)});showToast('Configuración guardada','ok');}catch(e:any){showToast(e.message,'error');}setSavingPay(false);}} disabled={savingPay || !fuenteGuardable(lecturaPagos)} className="w-full flex items-center justify-center gap-2 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-sm disabled:opacity-50">
                   {savingPay?<RefreshCw size={14} className="animate-spin"/>:<Check size={14}/>} Guardar Pagos
                 </button>
               </div>
+              ) : null}
             </div>
             <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
-              <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Truck size={16} className="text-purple-600"/> ConfiguraciÃ³n de EnvÃ­os</h3>
+              <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Truck size={16} className="text-purple-600"/> Configuración de Envíos</h3>
+              {lecturaEnvios.error ? (
+                <AvisoFuente aviso={avisoDeFuente(lecturaEnvios.error, 'No se pudo cargar la configuración de envíos')!} onReintentar={reintentarConfig} />
+              ) : !fuenteGuardable(lecturaEnvios) ? (
+                <p role="status" aria-busy="true" className="py-6 text-center text-sm text-slate-500">Cargando la configuración de envíos…</p>
+              ) : null}
+              {fuenteGuardable(lecturaEnvios) ? (
               <div className="space-y-4">
-                {[{k:'envio_local',l:'EnvÃ­o Local'},{k:'envio_nacional',l:'EnvÃ­o Nacional'}].map(e => (
+                {[{k:'envio_local',l:'Envío Local'},{k:'envio_nacional',l:'Envío Nacional'}].map(e => (
                   <div key={e.k} className="border border-gray-200 rounded-2xl p-4">
                     <div className="flex items-center justify-between mb-3">
                       <h4 className="font-bold text-gray-800">{e.l}</h4>
@@ -1211,12 +1244,13 @@ export default function EcommercePage() {
                 ))}
                 <div className="bg-purple-50 border border-purple-100 rounded-2xl p-4 flex items-center gap-3">
                   <Tag size={16} className="text-purple-600 shrink-0"/>
-                  <div className="flex-1"><h4 className="font-bold text-purple-900 text-sm">EnvÃ­o Gratis desde</h4><div className="flex items-center gap-2 mt-1"><input type="number" value={shipConfig.envio_gratis_desde||200000} onChange={e => setShipConfig((c: any) => ({...c,envio_gratis_desde:Number(e.target.value)}))} className="border border-purple-200 bg-white rounded-xl px-3 py-1.5 text-sm font-bold w-32 outline-none"/><span className="text-xs text-purple-700">COP</span></div></div>
+                  <div className="flex-1"><h4 className="font-bold text-purple-900 text-sm">Envío Gratis desde</h4><div className="flex items-center gap-2 mt-1"><input type="number" value={shipConfig.envio_gratis_desde||200000} onChange={e => setShipConfig((c: any) => ({...c,envio_gratis_desde:Number(e.target.value)}))} className="border border-purple-200 bg-white rounded-xl px-3 py-1.5 text-sm font-bold w-32 outline-none"/><span className="text-xs text-purple-700">COP</span></div></div>
                 </div>
-                <button onClick={async()=>{setSavingShip(true);try{await apiFetch('/ecommerce/envios/config',{method:'PATCH',body:JSON.stringify(shipConfig)});showToast('EnvÃ­os guardados','ok');}catch(e:any){showToast(e.message,'error');}setSavingShip(false);}} disabled={savingShip} className="w-full flex items-center justify-center gap-2 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-sm disabled:opacity-50">
-                  {savingShip?<RefreshCw size={14} className="animate-spin"/>:<Check size={14}/>} Guardar EnvÃ­os
+                <button onClick={async()=>{setSavingShip(true);try{await apiFetch('/ecommerce/envios/config',{method:'PATCH',body:JSON.stringify(shipConfig)});showToast('Envíos guardados','ok');}catch(e:any){showToast(e.message,'error');}setSavingShip(false);}} disabled={savingShip || !fuenteGuardable(lecturaEnvios)} className="w-full flex items-center justify-center gap-2 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-sm disabled:opacity-50">
+                  {savingShip?<RefreshCw size={14} className="animate-spin"/>:<Check size={14}/>} Guardar Envíos
                 </button>
               </div>
+              ) : null}
             </div>
           </div>
         )}

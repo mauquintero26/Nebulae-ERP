@@ -3012,6 +3012,33 @@ console.log('--- TEST T24-c (B4 T24, FINAL-C5): Gastos pide y pinta solo lo que 
   assert.match(piezas, /\{ofreceReintentar\(catalogo\.error\) && <button type="button" onClick=\{onReintentar\}/);
 }
 
+console.log('--- TEST T24-d (B4 T24, FINAL-m21): la pestaña Pagos de E-Commerce, solo ADMIN y sin guardar los valores por defecto ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const fuente = leer('app/dashboard/ecommerce/page.tsx');
+  const c = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // La pestaña solo con acceso.pagosConfig (accesoTienda, casos en test_roles.mjs); el panel, igual.
+  assert.match(c, /\{\['Panel', 'Catálogo', 'Clientes Web', \.\.\.\(acceso\.pagosConfig \? \['Pagos'\] : \[\]\)\]\.map\(t => \(/);
+  assert.match(c, /\{activeTab === 'Pagos' && acceso\.pagosConfig && \(/);
+  // Los GET solo con permiso, con su error guardado (nada de .catch(() => {})) y la lectura de lecturaDeFuente.
+  assert.match(c, /if \(activeTab !== 'Pagos' \|\| !acceso\.pagosConfig\) return undefined;/);
+  assert.ok(!/config'\)\.then\([^\n]*\.catch\(\(\) => \{\}\)/.test(c), 'sin tragarse el error del GET');
+  assert.match(c, /const lecturaPagos = lecturaDeFuente\(cargaPagos, vueltaConfig\);/);
+  assert.match(c, /const lecturaEnvios = lecturaDeFuente\(cargaEnvios, vueltaConfig\);/);
+  // Si falla, se dice (AvisoFuente) y no hay formulario ni «Guardar»; mientras carga, tampoco (fuenteGuardable, test_kpis.mjs).
+  assert.match(c, /\{fuenteGuardable\(lecturaPagos\) \? \(/);
+  assert.match(c, /\{fuenteGuardable\(lecturaEnvios\) \? \(/);
+  assert.equal((c.match(/<AvisoFuente aviso=\{avisoDeFuente\(lectura(Pagos|Envios)\.error, 'No se pudo cargar la configuración de (pagos|envíos)'\)!\} onReintentar=\{reintentarConfig\} \/>/g) ?? []).length, 2);
+  assert.match(c, /disabled=\{savingPay \|\| !fuenteGuardable\(lecturaPagos\)\}/);
+  assert.match(c, /disabled=\{savingShip \|\| !fuenteGuardable\(lecturaEnvios\)\}/);
+  // Sin mojibake: las 7 líneas con tildes de verdad (el archivo conserva su BOM).
+  assert.ok(fuente.startsWith('\uFEFF'), 'el BOM sigue');
+  assert.ok(!/Ã[©³­]/.test(fuente), 'sin «Ã©», «Ã³» ni «Ã­»');
+  for (const t of ['Tarjetas de crédito, Apple Pay, Google Pay', 'Configuración de Envíos', "l:'Envío Local'", "l:'Envío Nacional'", 'Envío Gratis desde', 'Guardar Envíos', "showToast('Configuración guardada'", "showToast('Envíos guardados'"]) {
+    assert.ok(fuente.includes(t), t);
+  }
+}
+
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');
 console.log('✓ T4C: sesión, estado armado, partes de columnas, URL de la lista, carga vigente, estado de la lista y modo cliente.');
 console.log('✓ T4C r1: orden rechazado, estados en la sesión, escrituras del usuario del render, esperar y vueltas.');

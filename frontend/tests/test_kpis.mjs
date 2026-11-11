@@ -1697,4 +1697,24 @@ console.log('--- TEST 37 (B4 T23B r1; I2, m6, m12, m31): las rutas de carga y de
   assert.equal(k.textoProveedoresCortados(5, 0), null, 'sin filas no hay lista que cortar');
 }
 
+console.log('--- TEST T24 (B4 T24, FINAL-m21): fuenteGuardable — un formulario cargado de una fuente se guarda solo con lo que llegó ---');
+{
+  const { fuenteGuardable, lecturaDeFuente } = kpisLib;
+  assert.equal(typeof fuenteGuardable, 'function');
+  const llego = (datos, error = null, vuelta = 1) => lecturaDeFuente({ vuelta, datos, error }, 1);
+  // Llegó: se guarda (también una configuración vacía que mandó el servidor).
+  assert.equal(fuenteGuardable(llego({ envio_local: { enabled: true, tarifa: 9000 }, zonas: [] })), true);
+  assert.equal(fuenteGuardable(llego({})), true, 'un objeto vacío del servidor también es lo guardado');
+  // Cargando (nada llegó, o llegó de otra vuelta): no se guarda (los valores por defecto del estado NO son los de la tienda).
+  assert.equal(fuenteGuardable(lecturaDeFuente(null, 1)), false, 'todavía no llegó');
+  assert.equal(fuenteGuardable(llego({ a: 1 }, null, 0)), false, 'llegó la de otra vuelta: recargando');
+  // Falló: no se guarda (con «Guardar Envíos» se pisaría todo el JSON, también las zonas).
+  assert.equal(fuenteGuardable(llego(null, Object.assign(new Error('x'), { status: 500 }))), false, 'error');
+  assert.equal(fuenteGuardable(llego(null, { status: 403 })), false, '403');
+  // Sin datos y sin error (el servidor no mandó data): tampoco.
+  assert.equal(fuenteGuardable(llego(null)), false, 'sin datos');
+  assert.equal(fuenteGuardable(null), false);
+  assert.equal(fuenteGuardable(undefined), false);
+}
+
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

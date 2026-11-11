@@ -1029,6 +1029,17 @@ export function lecturaDeFuente(llego, vuelta) {
 }
 
 /**
+ * B4 T24 (FINAL-m21): si un formulario cargado de una fuente (lecturaDeFuente) se puede guardar: solo con lo que LLEGÓ en la vuelta
+ * vigente, sin error. Mientras carga, si falló o si no llegaron datos, no: los valores por defecto del estado de la pantalla no son lo
+ * guardado (la configuración de pagos y envíos de E-Commerce; «Guardar Envíos» reemplaza todo el JSON, también las zonas).
+ * @param {{datos: unknown, cargando: boolean, error: unknown} | null | undefined} lectura
+ * @returns {boolean}
+ */
+export function fuenteGuardable(lectura) {
+  return Boolean(lectura) && !lectura.cargando && !lectura.error && lectura.datos !== null && lectura.datos !== undefined;
+}
+
+/**
  * B4 T22 r1 (m3, m11): el período del rótulo y del «vs …» de una tarjeta de dinero: el de los datos que se ven (`marca`), para
  * que el número viejo no lleve el rótulo del período nuevo; sin datos todavía, el elegido.
  * @param {string | null | undefined} marca
