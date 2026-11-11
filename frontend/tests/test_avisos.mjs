@@ -407,7 +407,10 @@ console.log('--- TEST T24-b (B4 T24 r1, m16): los comentarios que citan la regla
   for (const ruta of ARCHIVOS) {
     const f = readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8');
     // Las líneas que LISTAN la regla (400 y 409); un ejemplo suelto («un 409: el pedido cambió») no es la regla.
-    for (const linea of f.split(/\r?\n/).filter((l) => /^\s*(?:\/\/|\*)/.test(l) && /\b400\b/.test(l) && /\b409\b/.test(l) && /recarg/.test(l))) {
+    const lineas = f.split(/\r?\n/).filter((l) => /^\s*(?:\/\/|\*)/.test(l) && /\b400\b/.test(l) && /\b409\b/.test(l) && /recarg/.test(l));
+    // r2 (m13): cada archivo tiene al menos una (si se borra el comentario de la regla, la sonda falla; mata RR-m16-borrar).
+    assert.ok(lineas.length >= 1, `${ruta}: el comentario de la regla`);
+    for (const linea of lineas) {
       assert.match(linea, /\b422\b/, `${ruta}: ${linea.trim()}`);
       assert.ok(!/\b422\b[^.;]*\bno\b/.test(linea), `${ruta}: el 422 SÍ recarga: ${linea.trim()}`);
     }
