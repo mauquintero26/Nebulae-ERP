@@ -1,7 +1,7 @@
 'use client';
 
 import {
-  useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, forwardRef, useImperativeHandle, createContext, useContext,
+  useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, forwardRef, useImperativeHandle, createContext, useContext, useId,
 } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -34,6 +34,8 @@ import {
   estadoDeTarjeta, opcionesEstadosSolicitudes, puedeReiniciarSC, reglaSoltarSC, tarjetaSolicitud,
 } from '@/lib/kanban-ventas';
 import { textoDeError, recargarTrasError } from '@/lib/avisos';
+// B4 T24 (FINAL-m32): la regla del motivo de ModalMotivo también en la ventana de la cancelación en lote.
+import { MINIMO_MOTIVO, largoDelMotivo, motivoValido } from '@/lib/kanban';
 import { VEN_NAV } from '../ven-nav';
 import { FOCOS, PAGE_HEADER, TABLE } from '@/lib/design-system';
 import { accesoTableroVentas } from '@/lib/roles';
@@ -978,7 +980,7 @@ export default function SolicitudClient() {
       await apiFetch(`/ventas/solicitudes/${id}/cancelar`, {
         method: 'POST',
         body: JSON.stringify({
-          razon: razonToSend.length >= 5 ? razonToSend : 'Enviada a la papelera (sin motivo registrado)',
+          razon: motivoValido(razonToSend) ? razonToSend : 'Enviada a la papelera (sin motivo registrado)',
           user_name: currentUser || 'asesor'
         })
       });
@@ -995,6 +997,8 @@ export default function SolicitudClient() {
   // N4: ids de las solicitudes a cancelar (una desde la fila o varias desde la barra masiva) y por que fallaron.
   const [cancelTarget,setCancelTarget]=useState<number[]>([]);
   const [cancelRazon,setCancelRazon]=useState('');
+  // B4 T24 (FINAL-m32): el id que une la etiqueta «Motivo de la cancelación» con su campo (nombre accesible).
+  const idMotivo = useId();
   const [cancelling,setCancelling]=useState(false);
   const [cancelErrores,setCancelErrores]=useState<string[]>([]);
   // Marcadas que no se envian a /cancelar (ya estan en la Papelera o son de Soporte): se informan, no se llaman.
@@ -1199,7 +1203,7 @@ export default function SolicitudClient() {
   // solo con ellas, para leerlas; las que se cancelaron salen de la lista.
   async function cancelWithReason() {
     const razon=cancelRazon.trim();
-    if(cancelTarget.length===0||razon.length<5){showToast('El motivo es obligatorio (mínimo 5 caracteres)','err');return;}
+    if(cancelTarget.length===0||!motivoValido(cancelRazon)){showToast(`El motivo es obligatorio (mínimo ${MINIMO_MOTIVO} caracteres)`,'err');return;}
     setCancelling(true);
     setCancelErrores([]);
     const resultados:{numero:string;ok:boolean;error?:string}[]=[];
@@ -1689,7 +1693,7 @@ export default function SolicitudClient() {
           footer={(
             <>
               <Button variant="secondary" disabled={cancelling} onClick={cerrarCancelacion}>No, mantener</Button>
-              <Button variant="danger" icon={Trash2} loading={cancelling} disabled={cancelRazon.trim().length<5} onClick={cancelWithReason}>{cancelTarget.length>1?'Cancelar solicitudes':'Cancelar SC'}</Button>
+              <Button variant="danger" icon={Trash2} loading={cancelling} disabled={!motivoValido(cancelRazon)} onClick={cancelWithReason}>{cancelTarget.length>1?'Cancelar solicitudes':'Cancelar SC'}</Button>
             </>
           )}>
           <div>
@@ -1699,8 +1703,9 @@ export default function SolicitudClient() {
                 No se enviarán: {cancelOmitidas.map(o=>`${o.numero} ${o.motivo}`).join('; ')}.
               </p>
             )}
-            <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Motivo de la cancelación *</label>
+            <label htmlFor={idMotivo} className="text-xs font-black text-slate-500 uppercase mb-2 block">Motivo de la cancelación *</label>
             <textarea
+              id={idMotivo}
               value={cancelRazon}
               onChange={e=>setCancelRazon(e.target.value)}
               rows={3}
@@ -1709,7 +1714,7 @@ export default function SolicitudClient() {
               className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-red-200 outline-none"
               autoFocus
             />
-            {cancelRazon.trim().length<5&&<p className="text-xs text-red-500 mt-1">El motivo es obligatorio. Mínimo 5 caracteres (llevas {cancelRazon.trim().length}).</p>}
+            {!motivoValido(cancelRazon)&&<p className="text-xs text-red-500 mt-1">El motivo es obligatorio. Mínimo {MINIMO_MOTIVO} caracteres (llevas {largoDelMotivo(cancelRazon)}).</p>}
             {cancelErrores.length>0&&(
               <div className="mt-3 bg-rose-50 border border-rose-200 rounded-xl p-3 space-y-1.5">
                 <p className="text-xs font-black text-rose-700">No se pudo cancelar:</p>

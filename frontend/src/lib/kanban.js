@@ -360,8 +360,21 @@ export function textoTotalColumna(n, total) {
   return formatoEntero(visibles);
 }
 
-/** Los caracteres mínimos del motivo de cancelar o rechazar desde un tablero (ModalMotivo, T4A). */
+/**
+ * Los caracteres mínimos del motivo de cancelar o rechazar desde un tablero (ModalMotivo, T4A). B4 T24 (FINAL-m32): también
+ * las ventanas de motivo de la cancelación en lote del Hub y de Solicitudes.
+ */
 export const MINIMO_MOTIVO = 5;
+
+/**
+ * B4 T24 (FINAL-m32): los caracteres del motivo sin los espacios del borde: la cuenta de motivoValido y el «llevas N» de
+ * las ventanas de motivo en lote. Caracteres, no unidades UTF-16, como len() del servidor. Lo que no es texto da 0.
+ * @param {unknown} texto
+ * @returns {number}
+ */
+export function largoDelMotivo(texto) {
+  return typeof texto === 'string' ? [...texto.trim()].length : 0;
+}
 
 /**
  * true si `texto` tiene `minimo` caracteres o más sin contar los espacios del borde (ModalMotivo: el botón de peligro
@@ -371,7 +384,7 @@ export const MINIMO_MOTIVO = 5;
  * @returns {boolean}
  */
 export function motivoValido(texto, minimo = MINIMO_MOTIVO) {
-  return typeof texto === 'string' && [...texto.trim()].length >= minimo;
+  return typeof texto === 'string' && largoDelMotivo(texto) >= minimo;
 }
 
 // ─── tablero común (T4B: useTableroKanban y TableroKanban de components/ui/Kanban.tsx) ──────────────

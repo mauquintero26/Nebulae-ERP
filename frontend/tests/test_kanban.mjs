@@ -262,6 +262,19 @@ console.log('--- TEST 11 (T4A): motivoValido (ModalMotivo: 5 caracteres o más, 
   for (const otro of [null, undefined, 12345, {}, ['abcde']]) assert.equal(motivoValido(otro), false, String(otro));
   assert.equal(motivoValido('abc', 3), true, 'el mínimo se puede cambiar');
   assert.equal(motivoValido('ab', 3), false);
+  // B4 T24 (FINAL-m32): largoDelMotivo, la cuenta que usa motivoValido y el «llevas N» de las ventanas de motivo en lote
+  // (Hub y Solicitudes): caracteres sin los espacios del borde; lo que no es texto da 0.
+  {
+    const { largoDelMotivo } = await import('../src/lib/kanban.js');
+    assert.equal(typeof largoDelMotivo, 'function', 'largoDelMotivo existe');
+    assert.equal(largoDelMotivo('  abcd  '), 4);
+    assert.equal(largoDelMotivo('😀😀😀😀'), 4, 'caracteres, no unidades UTF-16');
+    assert.equal(largoDelMotivo('a b c'), 5);
+    for (const otro of [null, undefined, 12345, {}, ['abcde']]) assert.equal(largoDelMotivo(otro), 0, String(otro));
+    for (const t of ['', 'abcd', 'abcde', ' 😀😀😀😀😀 ', '\n x \t']) {
+      assert.equal(motivoValido(t), largoDelMotivo(t) >= MINIMO_MOTIVO, `misma regla: ${JSON.stringify(t)}`);
+    }
+  }
   // T4A r1 (punto 5): si el servidor responde con error, el foco vuelve al campo (habilitado otra vez) y lo escrito
   // se conserva. Sin DOM en node: se fija sobre el fuente de ModalMotivo.tsx.
   const fuente = readFileSync(new URL('../src/components/ui/ModalMotivo.tsx', import.meta.url), 'utf8');

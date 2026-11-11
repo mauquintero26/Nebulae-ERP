@@ -35,6 +35,8 @@ import {
 import { PERIODO_KPI } from '@/lib/kpis';
 import { FOCOS_VENTAS } from '@/lib/analisis';
 import { textoDeError, esErrorDeValidacion } from '@/lib/avisos';
+// B4 T24 (FINAL-m32): la regla del motivo de ModalMotivo también en la ventana de la cancelación en lote.
+import { MINIMO_MOTIVO, motivoValido } from '@/lib/kanban';
 import { VEN_NAV } from './ven-nav';
 import { CambiosDeActividad, EnlaceConfirmacionModal, getUsuarioActual } from './flujo';
 import { ChannelModal, ESTADOS as ESTADOS_COT } from './cotizacion/cotizacion-client';
@@ -612,6 +614,8 @@ export default function VentasHub() {
   // N3: cancelación con motivo (modal) y resultado de un lote con fallos (banner; lo comparte N5).
   const [cancelacion, setCancelacion]             = useState<{ids:string[]}|null>(null);
   const [motivoCancelacion, setMotivoCancelacion] = useState('');
+  // B4 T24 (FINAL-m32): el id que une la etiqueta del motivo con su campo (nombre accesible).
+  const idMotivo = React.useId();
   const [cancelando, setCancelando]               = useState(false);
   const [resultadoLote, setResultadoLote]         = useState<{titulo:string, lineas:{numero:string,error:string}[]}|null>(null);
   // H27+H39: al arrastrar una SC o COT para enviarla se pregunta el canal y luego se muestra el enlace con el aviso del correo.
@@ -789,7 +793,7 @@ export default function VentasHub() {
 
   async function confirmarCancelacion(){
     const motivo = motivoCancelacion.trim();
-    if(!cancelacion || motivo.length < 5 || porCancelar.length === 0) return;
+    if(!cancelacion || !motivoValido(motivoCancelacion) || porCancelar.length === 0) return;
     setCancelando(true);
     setResultadoLote(null);
     const autor = autorActual();
@@ -1481,7 +1485,7 @@ export default function VentasHub() {
           footer={(
             <>
               <Button variant="secondary" disabled={cancelando} onClick={()=>setCancelacion(null)}>Volver</Button>
-              <Button variant="danger" loading={cancelando} disabled={motivoCancelacion.trim().length < 5 || porCancelar.length === 0} onClick={confirmarCancelacion}>
+              <Button variant="danger" loading={cancelando} disabled={!motivoValido(motivoCancelacion) || porCancelar.length === 0} onClick={confirmarCancelacion}>
                 {porCancelar.length === 1 ? 'Cancelar documento' : 'Cancelar documentos'}
               </Button>
             </>
@@ -1498,8 +1502,8 @@ export default function VentasHub() {
             ))}
           </ul>
           <div>
-            <label className="block text-xs font-bold text-slate-600 mb-1">Motivo (mínimo 5 caracteres)</label>
-            <textarea value={motivoCancelacion} onChange={e=>setMotivoCancelacion(e.target.value)} rows={3} disabled={cancelando}
+            <label htmlFor={idMotivo} className="block text-xs font-bold text-slate-600 mb-1">Motivo (mínimo {MINIMO_MOTIVO} caracteres)</label>
+            <textarea id={idMotivo} value={motivoCancelacion} onChange={e=>setMotivoCancelacion(e.target.value)} rows={3} disabled={cancelando}
               placeholder="Ej.: El cliente desistió de la compra"
               className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200 focus:border-rose-400"/>
           </div>

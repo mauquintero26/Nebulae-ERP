@@ -1547,4 +1547,29 @@ console.log('--- B4 T10: el cableado del detalle del pedido (FLUJO-documentos 5,
   assert.match(bloque3, /const columnas = useMemo<ColumnaTabla<FilaProductoPedido>\[\]>\(\(\) => \[[\s\S]*?\], \[discriminado\]\);\s*const prefs = usePreferenciasTabla\('ventas\.pedido\.productos', columnas\);/);
 }
 
+console.log('--- B4 T24 (FINAL-m32): las ventanas de motivo en lote (Hub y Solicitudes) usan la regla de ModalMotivo y nombran su campo ---');
+{
+  const sinComentarios = (t) => t.replace(/\r\n/g, '\n').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const hub = sinComentarios(readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8'));
+  const sc = sinComentarios(readFileSync(new URL('../src/app/dashboard/ventas/solicitud/solicitud-client.tsx', import.meta.url), 'utf8'));
+  for (const [nombre, codigo] of [['Hub', hub], ['Solicitudes', sc]]) {
+    // El mínimo y la cuenta salen de lib/kanban.js (MINIMO_MOTIVO, motivoValido y largoDelMotivo), no de un 5 a mano.
+    assert.match(codigo, /import \{[^}]*\bMINIMO_MOTIVO\b[^}]*\} from '@\/lib\/kanban';/, `${nombre}: importa MINIMO_MOTIVO`);
+    assert.match(codigo, /import \{[^}]*\bmotivoValido\b[^}]*\} from '@\/lib\/kanban';/, `${nombre}: importa motivoValido`);
+    assert.ok(!/(?:Motivo|Razon|motivo|razon)\w*\.trim\(\)\.length\s*<\s*5|razon\.length<5/.test(codigo), `${nombre}: sin un 5 a mano`);
+    // La etiqueta nombra el textarea (useId): el campo tiene nombre accesible.
+    assert.match(codigo, /const idMotivo = (?:React\.)?useId\(\);/, `${nombre}: el id del motivo sale de useId`);
+    assert.match(codigo, /<label htmlFor=\{idMotivo\}/, `${nombre}: la etiqueta va con htmlFor`);
+    assert.match(codigo, /<textarea\s+id=\{idMotivo\}/, `${nombre}: el textarea lleva el id`);
+  }
+  // Hub: el botón y la guarda con la misma regla; la etiqueta dice el mínimo de la lib.
+  assert.match(hub, /if\(!cancelacion \|\| !motivoValido\(motivoCancelacion\) \|\| porCancelar\.length === 0\) return;/);
+  assert.match(hub, /disabled=\{!motivoValido\(motivoCancelacion\) \|\| porCancelar\.length === 0\}/);
+  assert.ok(hub.includes('Motivo (mínimo {MINIMO_MOTIVO} caracteres)'));
+  // Solicitudes: la guarda, el botón y el «llevas N» (largoDelMotivo, la cuenta de motivoValido).
+  assert.ok(sc.includes("if(cancelTarget.length===0||!motivoValido(cancelRazon)){showToast(`El motivo es obligatorio (mínimo ${MINIMO_MOTIVO} caracteres)`,'err');return;}"));
+  assert.match(sc, /disabled=\{!motivoValido\(cancelRazon\)\}/);
+  assert.ok(sc.includes('{!motivoValido(cancelRazon)&&<p className="text-xs text-red-500 mt-1">El motivo es obligatorio. Mínimo {MINIMO_MOTIVO} caracteres (llevas {largoDelMotivo(cancelRazon)}).</p>}'));
+}
+
 console.log('OK test_listas_ventas.mjs');
