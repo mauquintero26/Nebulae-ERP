@@ -13,7 +13,7 @@
 import assert from 'node:assert/strict';
 import {
   diasAlerta, pedidoVigente, soloPedidosCancelados, ultimoPedidoCancelado, pestanaCotizacion, situacionPedidoCotizacion,
-  ESTADOS_PEDIDO_SIN_DINERO, pedidoSumaDinero, resumenPedidos,
+  ESTADOS_PEDIDO_SIN_DINERO, pedidoSumaDinero,
   generoCotizacion, cotizacionesVigentes, cotizacionesRechazadas, esperaCotizacion,
   superaDiasAlerta, resumenCancelacionSolicitudes, estadoEnPapelera, pasosParaCancelarSolicitud,
   repartirCancelacionSolicitudes, rutaSinParametro, esSolicitudActiva,
@@ -95,41 +95,16 @@ console.log('--- COT-LISTA TEST 5: pestanaCotizacion (la confirmada con pedido c
   assert.equal(pestanaCotizacion(null), 'Activas');
 }
 
-console.log('--- H47 TEST 6: resumenPedidos no suma el dinero de cancelados ni devueltos (como el servidor) ---');
+console.log('--- H47 TEST 6: pedidoSumaDinero no suma el dinero de cancelados ni devueltos (como el servidor) ---');
 {
+  // B4 T24 f2 r1 (C1, D27 ampliado): resumenPedidos se retiró con sus casos (ni frontend/src, ni backend/tests, ni backend/app la
+  // usan; el resumen de la lista es el del servidor, con_resumen). pedidoSumaDinero sigue: la usa saldoVisiblePedido.
   assert.deepEqual([...ESTADOS_PEDIDO_SIN_DINERO], ['CANCELADO', 'DEVUELTO_TOTAL']);
-  const r = resumenPedidos([
-    { estado: 'PENDIENTE_COMPRA', total_cop: '1000000.00', saldo_cop: 400000, anticipo_cop: 600000 },
-    { estado: 'CANCELADO', total_cop: 2000000, saldo_cop: 2000000 },
-    null,
-  ]);
-  assert.equal(r.monto_cop, 1000000);
-  assert.equal(r.saldo_cop, 400000);
-  assert.equal(r.anticipo_cop, 600000);
-  assert.equal(r.total, 2, 'cuenta los pedidos (las lineas null no)');
-  assert.deepEqual(r.por_estado, { PENDIENTE_COMPRA: 1, CANCELADO: 1 });
-
-  const conDevuelto = resumenPedidos([
-    { estado: 'ENTREGADO', total_cop: 500000, saldo_cop: 0, anticipo_cop: 500000 },
-    { estado: 'DEVUELTO_TOTAL', total_cop: 700000, saldo_cop: 100000, anticipo_cop: 600000 },
-    'no es un objeto',
-  ]);
-  assert.equal(conDevuelto.monto_cop, 500000);
-  assert.equal(conDevuelto.saldo_cop, 0);
-  assert.equal(conDevuelto.anticipo_cop, 500000);
-  assert.deepEqual(conDevuelto.por_estado, { ENTREGADO: 1, DEVUELTO_TOTAL: 1 });
-
-  const centavos = resumenPedidos([{ estado: 'EN_PROCESO', total_cop: 2786923.08, saldo_cop: 1062523.4, anticipo_cop: 1724399.68 }]);
-  assert.equal(centavos.monto_cop, 2786923, 'en pesos enteros');
-  assert.equal(centavos.saldo_cop, 1062523);
-
-  for (const vacio of [[], undefined, null]) {
-    assert.deepEqual(resumenPedidos(vacio), { total: 0, monto_cop: 0, saldo_cop: 0, anticipo_cop: 0, por_estado: {} });
-  }
   assert.equal(pedidoSumaDinero({ estado: 'CANCELADO' }), false);
   assert.equal(pedidoSumaDinero({ estado: 'DEVUELTO_TOTAL' }), false);
   assert.equal(pedidoSumaDinero({ estado: 'PENDIENTE_PAGO' }), true);
   assert.equal(pedidoSumaDinero(null), false);
+  assert.equal(pedidoSumaDinero('no es un objeto'), false);
 }
 
 console.log('--- H46 / N1 TEST 9: situacionPedidoCotizacion (crear pedido, reabrir o ya convertida) ---');
@@ -315,32 +290,81 @@ console.log('--- T7 TEST 7d (ronda 1, C12): esSolicitudActiva, un solo predicado
   assert.equal(lista.filter(esSolicitudActiva).length, 3);
 }
 
-console.log('--- T7 TEST 7e (ronda 2) y B4 T24 f2 (F48, D27): esSolicitudActiva en todos los estados y tipos (sin pestanaDeSolicitud) ---');
+console.log('--- T7 TEST 7e (ronda 2): pestanaDeSolicitud — cada SC cae en exactamente una pestaña ---');
 {
-  // F48 (D27): pestanaDeSolicitud solo la usaban sus pruebas (las pestañas son vistas del servidor desde B4 T8); su regla queda en
-  // esSolicitudActiva, su único consumidor real (kpis-ventas.js). La protección es la misma: Soporte (por tipo o por su estado
-  // propio N/A_SOPORTE), Confirmadas y Canceladas no son activas; lo demás (heredados y una fila sin estado), sí.
+  // B4 T24 f2 r1 (C1, m29): el bloque original vuelve tal cual; pestanaDeSolicitud es el espejo que llaman por node las
+  // pruebas de paridad del backend (test_listas_ventas_paginadas). Por el espacio de nombres, para que su falta no tape lo demás.
+  const { pestanaDeSolicitud } = listas;
+  assert.equal(typeof pestanaDeSolicitud, 'function', 'pestanaDeSolicitud existe (espejo de la paridad del backend)');
+  const PESTANAS = ['Activas', 'Confirmadas', 'Canceladas', 'Soporte'];
   const sc = (estado, tipo = 'Cotizacion de Producto') => ({ estado, tipo_solicitud: tipo });
-  const ACTIVA = {
-    BORRADOR: true, ASIGNADA: true, PENDIENTE_CONFIRMACION: true, CONFIRMADA: false, CANCELADA: false, 'N/A_SOPORTE': false,
-    COTIZADA: true, EN_ESPERA_CONFIRMACION: true, RECHAZADA: true, VENCIDA: true,
+  // Orden: Soporte (por tipo o por su estado propio) -> Confirmadas -> Canceladas -> Activas.
+  const esperado = {
+    BORRADOR: 'Activas', ASIGNADA: 'Activas', PENDIENTE_CONFIRMACION: 'Activas', CONFIRMADA: 'Confirmadas',
+    CANCELADA: 'Canceladas', 'N/A_SOPORTE': 'Soporte',
+    COTIZADA: 'Activas', EN_ESPERA_CONFIRMACION: 'Activas', RECHAZADA: 'Activas', VENCIDA: 'Activas',
   };
-  assert.deepEqual(Object.keys(ACTIVA).sort(), Object.keys(ESTADOS_SC).sort(), 'cubre todos los estados de ESTADOS_SC');
-  for (const [estado, activa] of Object.entries(ACTIVA)) {
-    assert.equal(esSolicitudActiva(sc(estado)), activa, estado);
-    assert.equal(esSolicitudActiva(sc(estado, 'Soporte Tecnico')), false, `Soporte en ${estado}`);
+  assert.deepEqual(Object.keys(esperado).sort(), Object.keys(ESTADOS_SC).sort(), 'cubre todos los estados de ESTADOS_SC');
+  for (const [estado, pestana] of Object.entries(esperado)) {
+    assert.equal(pestanaDeSolicitud(sc(estado)), pestana, estado);
+    // Un ticket de Soporte va a 'Soporte' tenga el estado que tenga (también Cancelada: antes salía en dos pestañas).
+    assert.equal(pestanaDeSolicitud(sc(estado, 'Soporte Tecnico')), 'Soporte', `Soporte en ${estado}`);
   }
-  assert.equal(esSolicitudActiva(sc('N/A_SOPORTE', 'Seguimiento')), false, 'un ticket con el tipo corregido sigue en Soporte');
-  assert.equal(esSolicitudActiva({ tipo_solicitud: 'Cotizacion de Producto' }), true, 'sin estado: activa (no se pierde)');
-  assert.equal(esSolicitudActiva({}), true);
-  for (const nada of [null, undefined, 'x', 3]) assert.equal(esSolicitudActiva(nada), false);
-  // Las funciones retiradas ya no existen (F48): las tarjetas, los filtros y el menú ⋯ son del servidor y de MenuFila (posicionMenu,
-  // probada en test_tabla.mjs).
+  // Un ticket al que se le corrigió el tipo en el detalle conserva N/A_SOPORTE: antes no salía en ninguna pestaña.
+  assert.equal(pestanaDeSolicitud(sc('N/A_SOPORTE', 'Seguimiento')), 'Soporte');
+  // Sin estado no está confirmada ni cancelada: sale en 'Activas' (no se pierde).
+  assert.equal(pestanaDeSolicitud({ tipo_solicitud: 'Cotizacion de Producto' }), 'Activas');
+  assert.equal(pestanaDeSolicitud({}), 'Activas');
+  for (const nada of [null, undefined, 'x', 3]) {
+    assert.equal(pestanaDeSolicitud(nada), null);
+    assert.equal(esSolicitudActiva(nada), false);
+  }
+  // esSolicitudActiva es exactamente "su pestaña es Activas".
+  for (const estado of Object.keys(esperado)) {
+    for (const tipo of ['Cotizacion de Producto', 'Soporte Tecnico', 'Seguimiento']) {
+      assert.equal(esSolicitudActiva(sc(estado, tipo)), pestanaDeSolicitud(sc(estado, tipo)) === 'Activas');
+    }
+  }
+  // Con el filtro de la página (una pestaña = las filas cuya pestanaDeSolicitud es esa), los 4 contadores suman el total:
+  // ninguna fila falta ni se repite.
+  const filas = [
+    ...Object.keys(esperado).map((e) => sc(e)), ...Object.keys(esperado).map((e) => sc(e, 'Soporte Tecnico')),
+    sc('N/A_SOPORTE', 'Seguimiento'), { tipo_solicitud: 'Nuevo Lead' }, {},
+  ];
+  const conteos = PESTANAS.map((t) => filas.filter((s) => pestanaDeSolicitud(s) === t).length);
+  assert.equal(conteos.reduce((a, b) => a + b, 0), filas.length);
+  assert.deepEqual(conteos, [9, 1, 1, 12]);
+}
+
+console.log('--- B4 T24 f2 r1 (C1, D27 ampliado): lo retirado ya no existe y lo que llaman por node las pruebas de paridad del backend, sí ---');
+{
+  // F48 retiró lo que no tenía consumidor; r1 (C1) devolvió pestanaDeSolicitud y conserva esperaCotizacion, que las pruebas de
+  // paridad del backend llaman por node. resumenPedidos se retira en r1 (sin consumidor en ningún lado).
   for (const n of ['kpisPedidos', 'hintTotalPedidos', 'cifrasVentasDashboard', 'opcionesFiltroEstado', 'contadoresSolicitudes',
-    'tasaConversionCotizacion', 'pestanaDeSolicitud', 'posicionMenuFila', 'botonALaVista', 'recortesDeAncestros']) {
+    'tasaConversionCotizacion', 'posicionMenuFila', 'botonALaVista', 'recortesDeAncestros', 'resumenPedidos']) {
     assert.equal(typeof listas[n], 'undefined', `${n} se retiró`);
   }
+  // D27 ampliado: cada `listas.X`, `hub.X` y `pedidos.X` del JS que esas pruebas corren con node existe en su lib (el mismo
+  // espacio de nombres que arma su _PREAMBULO). Una retirada futura que olvide el grep en backend/tests falla aquí.
+  const hubNs = await import('../src/lib/hub-ventas.js');
+  const pedidosNs = await import('../src/lib/estados-pedido.js');
+  const libs = { listas, hub: hubNs, pedidos: pedidosNs };
+  let vistos = 0;
+  for (const prueba of ['test_listas_ventas_paginadas.py', 'test_paridad_reglas_ventas.py']) {
+    const ruta = new URL(`../../backend/tests/${prueba}`, import.meta.url);
+    assert.ok(existsSync(ruta), `${prueba} existe en el checkout`);
+    const texto = readFileSync(ruta, 'utf8');
+    for (const [, ns, nombre] of texto.matchAll(/\b(listas|hub|pedidos)\.([A-Za-z_]\w*)/g)) {
+      assert.notEqual(typeof libs[ns][nombre], 'undefined', `${prueba}: ${ns}.${nombre} existe`);
+      vistos += 1;
+    }
+  }
+  assert.ok(vistos >= 30, `la sonda lee de verdad las dos pruebas (${vistos} usos)`);
+  for (const n of ['pestanaDeSolicitud', 'esperaCotizacion', 'esSolicitudActiva']) assert.equal(typeof listas[n], 'function', n);
+  // El comentario de backend/app/api/v1/erp_ventas.py que nombra pestanaDeSolicitud queda correcto (solo lectura).
+  assert.ok(readFileSync(new URL('../../backend/app/api/v1/erp_ventas.py', import.meta.url), 'utf8').includes('(pestanaDeSolicitud mira'));
 }
+
 console.log('--- N4 TEST 7b (revision T11): repartirCancelacionSolicitudes omite las que ya estan en la Papelera y las de soporte ---');
 {
   const filas = [

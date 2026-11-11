@@ -5,12 +5,15 @@
  *  - N8: diasAlerta, los dias de alerta guardados en Configuracion.
  *  - COT-LISTA: pedidoVigente / soloPedidosCancelados / pestanaCotizacion de una cotizacion (con su `pedidos_venta`
  *    ligero de la lista o completo del detalle). H46: ultimoPedidoCancelado.
- *  - H47: resumenPedidos de la lista de pedidos (el dinero no suma cancelados ni devueltos).
+ *  - H47: pedidoSumaDinero (el dinero de la lista no suma cancelados ni devueltos; la usa saldoVisiblePedido).
  *  - H32 / N4 / N7 (Solicitudes): generoCotizacion / cotizacionesVigentes de la lista, superaDiasAlerta (N8),
  *    resumenCancelacionSolicitudes, estadoEnPapelera y pasosParaCancelarSolicitud.
  *  - B4 T24 f2 (F48): se retiraron kpisPedidos, hintTotalPedidos, cifrasVentasDashboard, opcionesFiltroEstado,
- *    contadoresSolicitudes, tasaConversionCotizacion, pestanaDeSolicitud, posicionMenuFila, botonALaVista y
- *    recortesDeAncestros: solo las usaban sus pruebas (las tarjetas, los filtros y el menú ⋯ son del servidor y de MenuFila).
+ *    contadoresSolicitudes, tasaConversionCotizacion, posicionMenuFila, botonALaVista y recortesDeAncestros (y en r1,
+ *    resumenPedidos): no las usaba nadie fuera de sus pruebas, ni en frontend ni en backend (las tarjetas, los filtros y el
+ *    menú ⋯ son del servidor y de MenuFila). r1 (C1): pestanaDeSolicitud y esperaCotizacion se quedan, porque las pruebas de
+ *    paridad del backend (test_listas_ventas_paginadas, test_paridad_reglas_ventas) las llaman por node: antes de retirar
+ *    un export de aquí, grep también en backend/tests y backend/app (D27 ampliado).
  *  - T11 (ronda visual): pistaActivasSolicitudes (tarjeta ACTIVAS, V7).
  */
 import {
@@ -210,34 +213,10 @@ export { ESTADOS_PEDIDO_SIN_DINERO };
 
 const esObjeto = (v) => v !== null && typeof v === 'object';
 
-/** El pedido suma en los montos de la lista (no esta cancelado ni devuelto por completo). */
+/** El pedido suma en los montos de la lista (no esta cancelado ni devuelto por completo). La usa saldoVisiblePedido. */
 export function pedidoSumaDinero(p) {
   return esObjeto(p) && !ESTADOS_PEDIDO_SIN_DINERO.includes(p.estado);
 }
-
-/**
- * Resumen calculado en el navegador con la misma regla del servidor (si la respuesta no trae `resumen`): `total` y
- * `por_estado` cuentan todos los pedidos; monto, saldo y anticipo solo los que suman dinero, en pesos enteros. Las
- * lineas null o que no son objeto se ignoran.
- * @returns {{total: number, monto_cop: number, saldo_cop: number, anticipo_cop: number, por_estado: Record<string, number>}}
- */
-export function resumenPedidos(pedidos) {
-  const r = { total: 0, monto_cop: 0, saldo_cop: 0, anticipo_cop: 0, por_estado: {} };
-  for (const p of Array.isArray(pedidos) ? pedidos : []) {
-    if (!esObjeto(p)) continue;
-    r.total += 1;
-    r.por_estado[p.estado] = (r.por_estado[p.estado] || 0) + 1;
-    if (!pedidoSumaDinero(p)) continue;
-    r.monto_cop += Number(p.total_cop) || 0;
-    r.saldo_cop += Number(p.saldo_cop) || 0;
-    r.anticipo_cop += Number(p.anticipo_cop) || 0;
-  }
-  r.monto_cop = redondearPeso(r.monto_cop);
-  r.saldo_cop = redondearPeso(r.saldo_cop);
-  r.anticipo_cop = redondearPeso(r.anticipo_cop);
-  return r;
-}
-
 
 // ─── H32 / N4 / N7: lista y detalle de Solicitudes ───────────────────────────────────────────────────
 
@@ -261,7 +240,13 @@ export function cotizacionesRechazadas(sc) {
   return cotizacionesDe(sc).filter((c) => !esCotizacionActiva(c.estado));
 }
 
-/** H32: espera cotización = está CONFIRMADA (el cliente ya confirmó) y no tiene ninguna cotización en juego. */
+/**
+ * H32: espera cotización = está CONFIRMADA (el cliente ya confirmó) y no tiene ninguna cotización en juego. B4 T24 f2 r1 (C1):
+ * espejo de la paridad del backend (f_sc_espera_cot y esperan_cotizacion): la llaman por node test_listas_ventas_paginadas y
+ * test_paridad_reglas_ventas; no se retira sin cambiar esas pruebas.
+ * @param {any} sc
+ * @returns {boolean}
+ */
 export function esperaCotizacion(sc) {
   return sc?.estado === 'CONFIRMADA' && cotizacionesVigentes(sc).length === 0;
 }
@@ -381,16 +366,33 @@ export function avisoSolicitudTrasRechazo(cot) {
 }
 
 /**
- * T7 ronda 1 (C12): una solicitud "activa" de la lista = su pestaña es 'Activas': no es de Soporte Técnico (por tipo o por
- * su estado propio N/A_SOPORTE, también si se le corrigió el tipo en el detalle) ni está Confirmada o Cancelada; los
- * heredados y una fila sin estado cuentan. Un solo predicado para la pestaña, su contador, las vencidas y el diagnóstico de
- * la IA: la misma página no da dos números distintos. null -> false. B4 T24 f2 (F48): sin pestanaDeSolicitud, que solo
- * usaban sus pruebas.
+ * T7 ronda 2: la pestaña de la lista de solicitudes en la que cae una fila. Cada solicitud cae en exactamente una, en
+ * este orden: Soporte Técnico (por tipo o por su estado propio N/A_SOPORTE, también si se le corrigió el tipo en el
+ * detalle) -> 'Soporte'; CONFIRMADA -> 'Confirmadas'; CANCELADA -> 'Canceladas'; lo demás (incluidos los estados
+ * heredados y una fila sin estado) -> 'Activas'. null si no es una fila. B4 T24 f2 r1 (C1): las pestañas de la página son
+ * vistas del servidor desde B4 T8, pero esta función es el espejo de su regla en la paridad del backend
+ * (test_listas_ventas_paginadas la llama por node: activas, confirmadas, canceladas y el total sin Soporte; el comentario
+ * de erp_ventas.py la nombra). No se retira sin cambiar esa prueba.
+ * @param {any} sc
+ * @returns {'Soporte' | 'Confirmadas' | 'Canceladas' | 'Activas' | null}
+ */
+export function pestanaDeSolicitud(sc) {
+  if (!esObjeto(sc)) return null;
+  if (esSoporte(sc)) return 'Soporte';
+  if (sc.estado === 'CONFIRMADA') return 'Confirmadas';
+  if (sc.estado === 'CANCELADA') return 'Canceladas';
+  return 'Activas';
+}
+
+/**
+ * T7 ronda 1 (C12): una solicitud "activa" de la lista = su pestaña es 'Activas' (no es Soporte ni está Confirmada o
+ * Cancelada; los heredados cuentan). Un solo predicado para la pestaña, su contador, las vencidas y el diagnóstico de la
+ * IA: la misma página no da dos números distintos. null -> false.
  * @param {any} sc
  * @returns {boolean}
  */
 export function esSolicitudActiva(sc) {
-  return esObjeto(sc) && !esSoporte(sc) && sc.estado !== 'CONFIRMADA' && sc.estado !== 'CANCELADA';
+  return pestanaDeSolicitud(sc) === 'Activas';
 }
 
 /** Un conteo valido (entero >= 0) o 0. */
