@@ -953,14 +953,10 @@ console.log('--- TEST 21 (B4 T9 r1, m6): BannerFlujo reserva el renglón de los 
   // Sin avisos y con reservarAvisos: el mismo renglón, invisible y fuera del árbol accesible, con un chip del mismo alto.
   assert.match(codigo, new RegExp(`\\) : reservarAvisos \\? \\(\\s*<span aria-hidden="true" className="${FILA} invisible">\\s*<ChipAviso texto="Avisos" tono="gris" />\\s*</span>\\s*\\) : null\\}`),
     'el renglón reservado');
-  // Las demás pantallas no la pasan: su franja no cambia (el Hub). B4 T24 f2 (F51, D27): Solicitudes sí, mientras su lista carga (su
-  // aviso «N vencidas» llega con la lista: el CLS con avisos era 0,118 a 1024), y su esqueleto también (la misma geometría).
-  assert.ok(!readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8').includes('reservarAvisos'), 'el Hub no la pasa');
-  const sc = readFileSync(new URL('../src/app/dashboard/ventas/solicitud/solicitud-client.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-  assert.match(sc, /const avisosPendientes = listado\.crudo === null && listado\.error === null;/);
-  assert.match(sc, /avisos=\{avisosFlujo\}\s*reservarAvisos=\{avisosPendientes\}\s*cargando=\{flujo\.cargando\}/);
-  const cargaSC = readFileSync(new URL('../src/app/dashboard/ventas/solicitud/CargandoSolicitudes.tsx', import.meta.url), 'utf8');
-  assert.match(cargaSC, /pasos=\{pasosDeLista\(null, 'SC'\)\}\s*reservarAvisos\s*cargando/);
+  // Las demás pantallas no la pasan: su franja no cambia (el Hub, Solicitudes y su esqueleto).
+  for (const ruta of ['app/dashboard/ventas/page.tsx', 'app/dashboard/ventas/solicitud/solicitud-client.tsx', 'app/dashboard/ventas/solicitud/CargandoSolicitudes.tsx']) {
+    assert.ok(!readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').includes('reservarAvisos'), `${ruta} no la pasa`);
+  }
   // Cotizaciones la pasa mientras su lista no respondió, y su esqueleto también (la misma geometría, A2). B4 T24 f2 (B14-f, D27): con
   // data.cotizaciones de /ventas/flujo, solo si habrá avisos (reservaAvisosCotizaciones; sin la clave, como antes).
   const cot = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/cotizacion-client.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');

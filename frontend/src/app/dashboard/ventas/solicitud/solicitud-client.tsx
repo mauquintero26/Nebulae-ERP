@@ -1506,9 +1506,6 @@ export default function SolicitudClient() {
     const aviso = avisoVencidas(vencidasResumen);
     return aviso ? [aviso] : undefined;
   }, [vencidasResumen]);
-  // B4 T24 f2 (F51): el aviso llega con la lista, no con /ventas/flujo: mientras la lista no responde (o falla), la franja reserva
-  // su renglón (reservarAvisos de BannerFlujo, como Cotizaciones): al llegar «N vencidas» no empuja las cajas ni lo de abajo (CLS).
-  const avisosPendientes = listado.crudo === null && listado.error === null;
   const filtroSemaforo: FiltroSemaforo = estado.semaforo === 'atrasados' ? 'atrasados' : 'todos';
   // «Con atraso» pone semaforo=atrasados en el estado único (la tabla y el tablero lo mandan al servidor) y vuelve a la
   // página 1; «Ver todo» lo quita. Soporte queda fuera del semáforo (R8) y la Papelera y Canceladas (r1, m7) son de
@@ -1549,7 +1546,6 @@ export default function SolicitudClient() {
         semaforo={{ atrasados: atrasadosSC, filtro: filtroSemaforo, onFiltrar: alFiltrarSemaforo }}
         pasos={pasosFlujo}
         avisos={avisosFlujo}
-        reservarAvisos={avisosPendientes}
         cargando={flujo.cargando}
         error={flujo.error}
         onReintentar={flujo.recargar}

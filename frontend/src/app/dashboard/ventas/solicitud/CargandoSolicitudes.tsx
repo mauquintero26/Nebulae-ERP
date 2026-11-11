@@ -47,7 +47,6 @@ export function CargandoSolicitudes() {
           regla={textoRegla(undefined)}
           semaforo={{ atrasados: null, filtro: 'todos', onFiltrar: nada }}
           pasos={pasosDeLista(null, 'SC')}
-          reservarAvisos
           cargando
         />
       </div>
