@@ -256,7 +256,7 @@ export default function RecepcionesPage() {
   };
 
   // Confirmar (la fila, el menú o el Drawer): cada botón carga por su cuenta (confirmandoId). Si el servidor dice que no, su
-  // mensaje tal cual; con la regla única recargarTrasError (recarga con un 400, un 409 o sin respuesta; un 404 no), se recarga lo que se ve.
+  // mensaje tal cual; con la regla única recargarTrasError (recarga con un 400, un 409, un 422 (F8) o sin respuesta; un 404 o un 500 no), se recarga lo que se ve.
   const handleConfirmarRecepcion = useCallback(async (r: FilaRecepcion) => {
     setConfirmandoId(r.id);
     try {

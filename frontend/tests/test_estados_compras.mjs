@@ -1356,6 +1356,28 @@ console.log('--- TEST 32 (B4 T16A): Recepciones (compras/recepciones/page.tsx) y
   assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(pag.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')), 'sin diálogos nativos');
 }
 
+console.log('--- TEST 33-b (B4 T24 r1, m15): la recarga silenciosa del conteo de una recepción no pisa lo escrito ---');
+{
+  const { recargaReponeLineas } = await import('../src/lib/estados-compras.js');
+  // La carga completa (al abrir) siempre llena las líneas; la silenciosa, solo si ya no está por confirmar (otro la confirmó o la canceló).
+  assert.equal(recargaReponeLineas({ silencioso: false, recepcion: { estado: 'BORRADOR' } }), true, 'al abrir');
+  assert.equal(recargaReponeLineas({ recepcion: { estado: 'BORRADOR' } }), true, 'por defecto, completa');
+  assert.equal(recargaReponeLineas({ silencioso: true, recepcion: { estado: 'BORRADOR' } }), false, 'en BORRADOR, lo escrito queda');
+  assert.equal(recargaReponeLineas({ silencioso: true, recepcion: { estado: ' BORRADOR ' } }), false);
+  for (const estado of ['CONFIRMADA', 'CONFIRMADA_CON_DIFERENCIAS', 'CANCELADA']) {
+    assert.equal(recargaReponeLineas({ silencioso: true, recepcion: { estado } }), true, `${estado}: cambió en otro lado`);
+  }
+  assert.equal(recargaReponeLineas({ silencioso: true, recepcion: null }), true, 'sin datos: lo del servidor');
+  const cont = readFileSync(new URL('../src/app/dashboard/compras/recepciones/[id]/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(cont, /const loadRecepcion = useCallback\(async \(\{ silencioso = false \}: \{ silencioso\?: boolean \} = \{\}\) => \{/);
+  assert.match(cont, /if \(!silencioso\) \{ setLoading\(true\); setLoadError\(''\); \}/, 'la silenciosa no muestra el spinner');
+  assert.match(cont, /if \(recargaReponeLineas\(\{ silencioso, recepcion: d \}\)\) \{\s*setItems\(/);
+  assert.match(cont, /if \(!silencioso\) setLoadError\(err\.message \|\| 'No se pudo cargar la recepción'\);\s*else avisarError\(err, 'No se pudo recargar la recepción'\);/);
+  assert.match(cont, /if \(!silencioso\) setLoading\(false\);\s*\}, \[params\.id, avisarError\]\);/);
+  // Guardar el conteo (lo primero que hace validar) también recarga en silencio: el spinner vaciaba las observaciones antes de validar.
+  assert.match(cont, /productos: items\.map\(i => \(\{ grl_id: i\.grl_id, qty_recibida: Number\(i\.qty_recibida\) \|\| 0 \}\)\),\s*\}\),\s*\}\);\s*await loadRecepcion\(\{ silencioso: true \}\);/);
+}
+
 console.log('--- TEST 33 (B4 T16A, TABLA-compras punto 12; RP30): el conteo de una recepción (recepciones/[id]/page.tsx) en modo simple y sin diálogos nativos ---');
 {
   const cont = readFileSync(new URL('../src/app/dashboard/compras/recepciones/[id]/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
@@ -1368,7 +1390,9 @@ console.log('--- TEST 33 (B4 T16A, TABLA-compras punto 12; RP30): el conteo de u
   }
   assert.match(cont, /avisarError\(err, 'No se pudieron cargar las bodegas'\)/, 'la lista de bodegas ya no se traga el error');
   assert.ok(!/\.catch\(\(\) => \{\}\)/.test(cont) && !/\.catch\(\(\) => (\[\]|null)\)/.test(cont), 'ningún error se traga');
-  assert.match(cont, /if \(recargarTrasError\(err\)\) await loadRecepcion\(\);/, 'validar: un 409 recarga lo que se ve');
+  // r1 (m15): validar con un error que pide recargar (también un 422, F8) recarga EN SILENCIO: sin el spinner de página (que desmonta el
+  // conteo y vacía las «Observaciones Físicas») y sin volver a llenar las líneas mientras siga en BORRADOR (recargaReponeLineas).
+  assert.match(cont, /if \(recargarTrasError\(err\)\) await loadRecepcion\(\{ silencioso: true \}\);/, 'validar: un 409 o un 422 recarga en silencio');
   // La tabla (modo simple, D40): una instancia de preferencias, una tabla y los campos de conteo siguen editables.
   assert.match(cont, /const prefsConteo = usePreferenciasTabla\('compras\.recepcion\.conteo', COLUMNAS_CONTEO\);/);
   assert.match(cont, /<TablaEstandar id="compras\.recepcion\.conteo" modo="simple" columnas=\{COLUMNAS_CONTEO\} preferencias=\{prefsConteo\}/);
@@ -2852,7 +2876,7 @@ console.log('--- TEST 48 (B4 T19; KANBAN-logistica 4, KPI-inventario 8; R15, RP2
   trae(e, 'if (!(await confirmar(', 'sin confirmación no se despacha');
   trae(e, 'JSON.stringify(cuerpoDespacho(pedido, { rol, warehouseId }))', 'el cuerpo del PATCH sale de cuerpoDespacho (RP23)');
   noTrae(sinComentarios(e), 'fecha_entrega:', 'ya no manda fecha_entrega');
-  trae(e, "avisarError(err, 'No se pudo despachar el pedido');\n      // La regla única: con un 400, un 409 o sin respuesta se recarga lo que se ve; un 404 no.\n      if (recargarTrasError(err)) recargarTodo();", 'si el despacho falla: se avisa y se recarga (recargarTrasError)');
+  trae(e, "avisarError(err, 'No se pudo despachar el pedido');\n      // La regla única (recargarTrasError): con un 400, un 409, un 422 (F8) o sin respuesta se recarga lo que se ve; un 404 o un 500, no.\n      if (recargarTrasError(err)) recargarTodo();", 'si el despacho falla: se avisa y se recarga (recargarTrasError)');
   trae(e, 'recargarTodo(desdeTablero ? [desdeTablero.origen, desdeTablero.destino] : undefined);', 'tras despachar: la fila, origen, destino y tarjetas (D39)');
   // «Registrar cobro de saldo»: su PATCH no se toca.
   trae(e, "saldo_cop: 0,\n          notas: pedido.notas ? `${pedido.notas} | Saldo 40% cobrado y verificado` : 'Saldo 40% verificado',", 'Registrar cobro de saldo: el PATCH de siempre');

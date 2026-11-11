@@ -18,6 +18,7 @@ import { TablaEstandar, usePreferenciasTabla } from '@/components/tabla';
 import type { ColumnaTabla } from '@/components/tabla';
 import { fechaLarga } from '@/lib/fechas-colombia';
 import { recargarTrasError } from '@/lib/avisos';
+import { recargaReponeLineas } from '@/lib/estados-compras';
 
 // Un instante del API (la fecha de recepción) en el día de Colombia; lo vacío, '-'.
 const fDateLong = (iso: unknown) => fechaLarga(iso) || '-';
@@ -132,26 +133,30 @@ export default function RecepcionDetallePage() {
     setCurrentUser(localStorage.getItem('user_name') || localStorage.getItem('username') || '');
   }, []);
 
-  const loadRecepcion = useCallback(async () => {
+  // B4 T24 r1 (m15): la recarga silenciosa (tras guardar el conteo o tras un error que pide recargar, también un 422) no muestra el spinner
+  // de página, que desmontaba el conteo y vaciaba las «Observaciones Físicas», ni vuelve a llenar las líneas mientras siga en BORRADOR.
+  const loadRecepcion = useCallback(async ({ silencioso = false }: { silencioso?: boolean } = {}) => {
     if (!params.id) { setLoading(false); return; }
-    setLoading(true);
-    setLoadError('');
+    if (!silencioso) { setLoading(true); setLoadError(''); }
     try {
       const raw = await apiFetch(`/compras/recepciones/${params.id}`);
       const d = raw?.data ?? raw;
       setData(d);
-      setItems((d?.productos || []).map((p: any) => ({
-        grl_id: p.grl_id,
-        sku_id: p.sku_id,
-        nombre: p.nombre || p.product_name || p.descripcion || 'Ítem de Compra',
-        qty_esperada: Number(p.qty_esperada ?? p.qty ?? 0),
-        qty_recibida: Number(p.qty_recibida ?? 0),
-      })));
+      if (recargaReponeLineas({ silencioso, recepcion: d })) {
+        setItems((d?.productos || []).map((p: any) => ({
+          grl_id: p.grl_id,
+          sku_id: p.sku_id,
+          nombre: p.nombre || p.product_name || p.descripcion || 'Ítem de Compra',
+          qty_esperada: Number(p.qty_esperada ?? p.qty ?? 0),
+          qty_recibida: Number(p.qty_recibida ?? 0),
+        })));
+      }
     } catch (err: any) {
-      setLoadError(err.message || 'No se pudo cargar la recepción');
+      if (!silencioso) setLoadError(err.message || 'No se pudo cargar la recepción');
+      else avisarError(err, 'No se pudo recargar la recepción');
     }
-    setLoading(false);
-  }, [params.id]);
+    if (!silencioso) setLoading(false);
+  }, [params.id, avisarError]);
 
   useEffect(() => { loadRecepcion(); }, [loadRecepcion]);
 
@@ -238,7 +243,7 @@ export default function RecepcionDetallePage() {
           productos: items.map(i => ({ grl_id: i.grl_id, qty_recibida: Number(i.qty_recibida) || 0 })),
         }),
       });
-      await loadRecepcion();
+      await loadRecepcion({ silencioso: true });
       return true;
     } catch (err: unknown) {
       avisarError(err, 'Error al guardar el conteo');
@@ -271,8 +276,8 @@ export default function RecepcionDetallePage() {
       await loadRecepcion();
     } catch (err: unknown) {
       avisarError(err, 'Error al validar la recepción');
-      // Si la recepción cambió en otro lado (un 409, por ejemplo), se vuelve a pedir lo que se muestra (recargarTrasError).
-      if (recargarTrasError(err)) await loadRecepcion();
+      // Si la recepción cambió en otro lado (un 409 o un 422, F8: recargarTrasError), se vuelve a pedir en silencio lo que se muestra.
+      if (recargarTrasError(err)) await loadRecepcion({ silencioso: true });
     }
     setConfirming(false);
   }

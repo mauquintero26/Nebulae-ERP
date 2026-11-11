@@ -841,7 +841,7 @@ export default function CRMPage() {
       if (selectedLead?.id === updated?.id) setSelectedLead(updated);
       return updated;
     } catch (err) {
-      // r1 (m17): la regla única (recargarTrasError): un 400, un 409 o un corte de red recargan los activos, Perdido y la
+      // r1 (m17): la regla única (recargarTrasError): un 400, un 409, un 422 (F8) o un corte de red recargan los activos, Perdido y la
       // Lista (en modo cliente el tablero no recarga solo). El tablero devuelve la tarjeta y avisa el detail.
       if (recargarTrasError(err)) loadAll(false);
       throw err;

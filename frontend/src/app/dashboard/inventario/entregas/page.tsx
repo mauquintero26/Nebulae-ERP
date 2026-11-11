@@ -279,7 +279,7 @@ export default function EntregasPage() {
       setDesdeTablero(null);
     } catch (err) {
       avisarError(err, 'No se pudo despachar el pedido');
-      // La regla única: con un 400, un 409 o sin respuesta se recarga lo que se ve; un 404 no.
+      // La regla única (recargarTrasError): con un 400, un 409, un 422 (F8) o sin respuesta se recarga lo que se ve; un 404 o un 500, no.
       if (recargarTrasError(err)) recargarTodo();
     } finally {
       setUpdating(false);

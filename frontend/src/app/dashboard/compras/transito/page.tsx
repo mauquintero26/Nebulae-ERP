@@ -283,7 +283,7 @@ export default function TransitoPage() {
   // ── bloque 6: avanzar una etapa (TABLA-compras punto 8; KANBAN-logistica punto 2) ──
   // El mismo PATCH /compras/pedidos/{id}/tracking del botón (Iniciar o Completar) y del arrastre a la etapa siguiente; queda en
   // la Actividad del PEC. Nada se traga: si falla, el mensaje del servidor tal cual (avisarError) y, con la regla única
-  // recargarTrasError (con un 400, un 409 o sin respuesta recarga; un 404 no), se recarga lo que se ve.
+  // recargarTrasError (con un 400, un 409, un 422 (F8) o sin respuesta recarga; un 404 o un 500 no), se recarga lo que se ve.
   // I3: un pedido con un PATCH en camino (botón o arrastre), y hasta que llega la recarga, no ofrece Iniciar ni Completar: un
   // segundo clic no manda otro PATCH sobre la etapa vieja. Toda la regla vive en transito.js, con sus casos: pendienteDeTransito
   // dice si hay uno; terminarPendiente guarda la foto de la lista ACTIVA (y el modo) al resolver el PATCH; soltarPendientes lo suelta

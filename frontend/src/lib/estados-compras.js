@@ -786,6 +786,18 @@ export function esRecepcionPorConfirmar(r) {
 }
 
 /**
+ * B4 T24 r1 (m15): si una recarga del conteo vuelve a llenar las líneas con lo del servidor. La completa (al abrir), sí; la silenciosa
+ * (tras guardar el conteo, o tras un error que pide recargar: recargarTrasError, también un 422), solo si la recepción ya no está por
+ * confirmar (otro la confirmó o la canceló). Mientras siga en BORRADOR, las líneas y las «Observaciones Físicas» escritas (que no se
+ * guardan) quedan como están.
+ * @param {{silencioso?: boolean, recepcion: unknown}} entrada
+ * @returns {boolean}
+ */
+export function recargaReponeLineas({ silencioso = false, recepcion }) {
+  return !silencioso || !esRecepcionPorConfirmar(recepcion);
+}
+
+/**
  * La tarjeta de una recepción en el tablero solo para ver (la forma de DatosTarjetaKanban): el número (sin él, ENINV-id),
  * el proveedor (o 'Sin proveedor'), el PEC de origen (o 'Entrada manual'), la insignia del estado, el chip «Retraso N
  * días» (dias_retraso de _gr_dict, solo si es mayor que 0), la bodega y el día (fecha de recepción o de creación) y, en

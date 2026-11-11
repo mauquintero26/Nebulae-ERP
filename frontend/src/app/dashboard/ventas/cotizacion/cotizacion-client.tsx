@@ -1209,7 +1209,7 @@ export default function CotizacionClient() {
     const { cot, columnas } = rechazando;
     const autor = autorActual();
     // Si el servidor no la rechaza, ModalMotivo muestra su mensaje y conserva lo escrito. r1 (m1): con la regla única de
-    // recargarTrasError (un 400, un 409 o la red cortada: algo cambió en otro lado, o el rechazo pudo quedar hecho) se
+    // recargarTrasError (un 400, un 409, un 422 (F8) o la red cortada: algo cambió en otro lado, o el rechazo pudo quedar hecho) se
     // recargan la lista, el origen y el destino del tablero y la franja; el error sigue para que ModalMotivo lo muestre.
     try {
       await apiFetch(`/ventas/cotizaciones/${cot.id}`, { method: 'PATCH', body: JSON.stringify({ estado: 'RECHAZADA', updated_by: autor }) });

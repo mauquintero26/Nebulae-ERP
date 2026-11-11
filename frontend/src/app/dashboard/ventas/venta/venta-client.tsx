@@ -562,7 +562,7 @@ export default function VentaClient() {
       avisar(`${p.numero} quedó Facturado`, { tono: 'ok' });
     } catch (err) {
       avisarError(err, `No se pudo facturar ${p.numero}`);
-      // r1 de T9 (m1): un 400, un 409 o la red cortada recargan (algo cambió en otro lado); un 422 o un 500, no.
+      // r1 de T9 (m1) y B4 T24 r1 (m16): un 400, un 409, un 422 (F8) o la red cortada recargan (recargarTrasError); un 500, no.
       if (!recargarTrasError(err)) return;
     }
     tablero.recargar([...columnas]);

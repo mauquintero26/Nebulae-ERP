@@ -399,4 +399,18 @@ console.log('--- TEST T24-a: ofreceReintentar ---');
   assert.equal((fuente.match(/\.status (?:!|=)== 403/g) ?? []).length, 1, 'una sola comparación con el 403, en ofreceReintentar');
 }
 
+console.log('--- TEST T24-b (B4 T24 r1, m16): los comentarios que citan la regla de recarga incluyen el 422 (F8) ---');
+{
+  const { readFileSync } = await import('node:fs');
+  const ARCHIVOS = ['app/dashboard/ventas/venta/venta-client.tsx', 'app/dashboard/crm/page.tsx', 'app/dashboard/compras/transito/page.tsx', 'app/dashboard/compras/recepciones/page.tsx', 'app/dashboard/inventario/ajustes/page.tsx', 'app/dashboard/compras/pedidos/[id]/page.tsx', 'app/dashboard/compras/pedidos/page.tsx', 'app/dashboard/compras/lista-compras/page.tsx', 'app/dashboard/compras/traslados/page.tsx', 'app/dashboard/inventario/entregas/page.tsx', 'app/dashboard/ventas/cotizacion/cotizacion-client.tsx'];
+  for (const ruta of ARCHIVOS) {
+    const f = readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8');
+    // Las líneas que LISTAN la regla (400 y 409); un ejemplo suelto («un 409: el pedido cambió») no es la regla.
+    for (const linea of f.split(/\r?\n/).filter((l) => /^\s*(?:\/\/|\*)/.test(l) && /\b400\b/.test(l) && /\b409\b/.test(l) && /recarg/.test(l))) {
+      assert.match(linea, /\b422\b/, `${ruta}: ${linea.trim()}`);
+      assert.ok(!/\b422\b[^.;]*\bno\b/.test(linea), `${ruta}: el 422 SÍ recarga: ${linea.trim()}`);
+    }
+  }
+}
+
 console.log('✓ Todas las pruebas de avisos pasaron.');
