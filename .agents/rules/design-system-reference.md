@@ -11,7 +11,7 @@ Toda modificación visual DEBE importar los TOKENS de este archivo en lugar de e
 
 ```typescript
 import {
-  NAV, PAGE_HEADER, BTN, TABLE, BADGE, TABS_BAR, DETAIL_PANEL, ACTIVITY_TABS, getEstadoClass, getActivityColor,
+  NAV, PAGE_HEADER, BTN, TABLE, BADGE, TABS_BAR, DETAIL_PANEL, ACTIVITY_TABS, FOCO, FOCOS, getEstadoClass, getActivityColor,
 } from '@/lib/design-system';
 ```
 
@@ -42,7 +42,7 @@ NUNCA armes a mano lo que ya existe aquí. Cada pieza tiene un solo dueño; si t
 | Foco visible de un control | `FOCOS.<acento>` (outline -700 de 2 px, por fuera), `FOCO` (el índigo de las piezas compartidas), `FOCO_DENTRO` (hacia adentro: la fila pulsable, la tarjeta del tablero, los ítems del ⋯), `FOCO_CAMPO` (un campo que recibe el foco por dentro) y `TABLE.celdaFoco` (la línea en las celdas fijas de una fila pulsable). Nunca un ring -100/-300 ni `outline-none` junto al foco | `@/lib/design-system` |
 | El rol del usuario y lo que cada pantalla le deja hacer | `useRolActual()` (el rol leído DESPUÉS de montar; vacío mientras tanto: esqueleto, nada se pide) y los `accesoX(rol)` de `lib/roles.js` (`accesoTableroVentas`, `accesoCompras`, `accesoFinanzas`, `accesoCrm`, `accesoCopilot`, `accesoProveedores`, `accesoTienda`…), cada uno con el `require_roles` real del endpoint; `TEXTO_TABLERO_SOLO_VER` y `CAJA_SIN_PERMISO` para el texto neutro | `@/components/ui/useRolActual`, `@/lib/roles`, `@/lib/design-system` |
 | Una fuente de la pantalla que falló | `AvisoFuente` (con `avisoDeFuente(error, fallo)` de `lib/avisos.js`) o `AvisoDeError`; un 403 es de permiso y NUNCA ofrece «Reintentar» (`ofreceReintentar`; TablaEstandar y las columnas del tablero ya lo cumplen) | `@/components/ui/AvisoFuente`, `@/lib/avisos` |
-| Ventanas | `Modal` (`cierreExterno`, `bloquearCierre`, `sinCerrar`) y `Drawer` (`idTitulo`: su encabezado visible como nombre accesible; `cierreExterno`, `bloquearCierre`). Las dos son capas de `useCierreVentana`: Esc cierra solo la de arriba, el foco entra al abrir y vuelve al cerrar, y Tab queda atrapado por la regla única `atrapaTab` (`lib/tabla.js`) con `atraparTab`; el panel lleva `data-capa`. El foco que cae en la página de atrás vuelve a la capa de arriba; una superficie que va encima (el Copilot y la pila de avisos, con `data-superficie`, o la ventana de re-ingreso) queda libre (`lugarDelFocoDe`). Una ventana con algo editable, o una confirmación cuyo cierre escribe, pasa `cierreExterno={false}` | `@/components/ui` |
+| Ventanas | `Modal` (`cierreExterno`, `bloquearCierre`, `sinCerrar`) y `Drawer` (`idTitulo`: su encabezado visible como nombre accesible; `cierreExterno`, `bloquearCierre`). Las dos son capas de `useCierreVentana`: Esc cierra solo la de arriba, el foco entra al abrir y vuelve al cerrar, y Tab queda atrapado por la regla única `atrapaTab` (`lib/tabla.js`) con `atraparTab`; el panel lleva `data-capa`. El foco que cae en la página de atrás vuelve a la capa de arriba; una superficie que va encima (el Copilot y la pila de avisos, con `data-superficie`, o la ventana de re-ingreso) queda libre (`lugarDelFocoDe`); el foco que LLEGA detrás (Mayús+Tab desde el Copilot) vuelve en el acto (`recuperaFocoAlEntrar`, un `focusin` de la capa de arriba). **Todo portal (`createPortal`) lleva `data-superficie="…"` en su raíz** (MenuFila: `menu`; los fantasmas del arrastre: `arrastre`): un portal que nace dentro de una capa y no la lleva cuenta como «detrás» y la capa le quita el foco (un menú abierto dentro de una ventana lo perdería); test_tabla lo vigila. Una ventana con algo editable, o una confirmación cuyo cierre escribe, pasa `cierreExterno={false}` | `Modal` y `Drawer`: `@/components/ui`; `useCierreVentana` y `atraparTab`: `@/components/ui/useCierreVentana` (el index de ui no los reexporta); `atrapaTab`, `lugarDelFocoDe` y `recuperaFocoAlEntrar`: `@/lib/tabla` |
 | El botón flotante de la IA no tapa la última fila | `RESERVA_BOTON_IA` (pb-24) en el contenedor que se desplaza (`h-full overflow-y-auto`, o el contenedor de la lista); en pantalla completa, el pie de la tabla ya la reserva | `@/lib/design-system` |
 
 `StatCard` es un adaptador `@deprecated` de `TarjetaKpi`: en pantallas nuevas usa `TarjetaKpi`.
@@ -102,8 +102,8 @@ Las pantallas usan `SubNav` y `PageHeader` de `@/components/ui` (el color es un 
       </div>
     </div>
     <div className={PAGE_HEADER.actions}>
-      <button className={BTN.secondary}><RefreshCw size={14}/> Actualizar</button>
-      <button className={BTN.primary}><Plus size={15}/> Nueva Acción</button>
+      <button className={`${BTN.secondary} ${FOCO}`}><RefreshCw size={14}/> Actualizar</button>
+      <button className={`${BTN.primary} ${FOCO}`}><Plus size={15}/> Nueva Acción</button>
     </div>
   </div>
 </div>
@@ -570,7 +570,7 @@ export function VistaDeLeads() {
 ### Capturas: qué revisar
 
 - **Franja del flujo:** crece cuando llegan los datos (de unos 177 a 253 px en el Hub); es aceptado, pero mide el CLS a 1024 y 1440 px (si pasa de 0,1, avísalo). A 1024 px con el menú abierto las 5 cajas tienen que caber por encima de `@2xl`; a 1280 y 1366 px los chips de aviso se recortan (con `title`).
-- **Tabla:** a 1024 px con el menú abierto, las columnas clave sin correr la tabla. En pantalla completa el botón flotante de la IA asoma unos 14 px sobre el pie, aunque su esquina ya está reservada (`pr-20`); fuera de ella puede tapar el pie de una tabla al fondo de la página.
+- **Tabla:** a 1024 px con el menú abierto, las columnas clave sin correr la tabla. El botón flotante de la IA ya tiene su lugar: en pantalla completa, el pie de la tabla lo reserva (`TABLE.tarjetaCompleta`, con el pie de 4,5 rem); fuera de ella, el contenedor que se desplaza lleva `RESERVA_BOTON_IA`. Lo que queda por mirar en las capturas es que, con la página al fondo, la última fila (y el último control de la derecha) se vea sobre el botón, a 375 y a 1440 px.
 - **Kanban:** pasar a Kanban desde la pantalla completa deja el tablero a la vista.
 - **Análisis:** ver la sección 9 de `analisis-tab-standard.md`.
 
