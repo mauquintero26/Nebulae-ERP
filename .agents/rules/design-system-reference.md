@@ -38,6 +38,11 @@ NUNCA armes a mano lo que ya existe aquí. Cada pieza tiene un solo dueño; si t
 | Pasos de un documento | `CadenaDocumentos` y `PasosFlujo` | `@/components/flujo` |
 | Pestaña Análisis | `PanelAnalisisPerezoso` (ver `analisis-tab-standard.md`) | `@/components/analisis` |
 | Recordar algo del usuario, avisos y confirmaciones | `usePreferencia`, `usePreferenciaParte` y `useAvisos` (`avisar`, `avisarError`, `confirmar`) | `@/components/ui` |
+| Foco visible de un control | `FOCOS.<acento>` (outline -700 de 2 px, por fuera), `FOCO` (el índigo de las piezas compartidas), `FOCO_DENTRO` (hacia adentro: la fila pulsable, la tarjeta del tablero, los ítems del ⋯), `FOCO_CAMPO` (un campo que recibe el foco por dentro) y `TABLE.celdaFoco` (la línea en las celdas fijas de una fila pulsable). Nunca un ring -100/-300 ni `outline-none` junto al foco | `@/lib/design-system` |
+| El rol del usuario y lo que cada pantalla le deja hacer | `useRolActual()` (el rol leído DESPUÉS de montar; vacío mientras tanto: esqueleto, nada se pide) y los `accesoX(rol)` de `lib/roles.js` (`accesoTableroVentas`, `accesoCompras`, `accesoFinanzas`, `accesoCrm`, `accesoCopilot`, `accesoProveedores`, `accesoTienda`…), cada uno con el `require_roles` real del endpoint; `TEXTO_TABLERO_SOLO_VER` y `CAJA_SIN_PERMISO` para el texto neutro | `@/components/ui/useRolActual`, `@/lib/roles`, `@/lib/design-system` |
+| Una fuente de la pantalla que falló | `AvisoFuente` (con `avisoDeFuente(error, fallo)` de `lib/avisos.js`) o `AvisoDeError`; un 403 es de permiso y NUNCA ofrece «Reintentar» (`ofreceReintentar`; TablaEstandar y las columnas del tablero ya lo cumplen) | `@/components/ui/AvisoFuente`, `@/lib/avisos` |
+| Ventanas | `Modal` (`cierreExterno`, `bloquearCierre`, `sinCerrar`) y `Drawer` (`idTitulo`: su encabezado visible como nombre accesible; `cierreExterno`, `bloquearCierre`). Las dos son capas de `useCierreVentana`: Esc cierra solo la de arriba, el foco entra al abrir y vuelve al cerrar, y Tab queda atrapado por la regla única `atrapaTab` (`lib/tabla.js`) con `atraparTab`; el panel lleva `data-capa`. Una ventana con algo editable, o una confirmación cuyo cierre escribe, pasa `cierreExterno={false}` | `@/components/ui` |
+| El botón flotante de la IA no tapa la última fila | `RESERVA_BOTON_IA` (pb-24) en el contenedor que se desplaza (`h-full overflow-y-auto`, o el contenedor de la lista); en pantalla completa, el pie de la tabla ya la reserva | `@/lib/design-system` |
 
 `StatCard` es un adaptador `@deprecated` de `TarjetaKpi`: en pantallas nuevas usa `TarjetaKpi`.
 
@@ -126,7 +131,7 @@ UNA sola franja arriba, igual en Ventas, Compras y en las listas: el semáforo (
 import { BannerFlujo, useResumenFlujo } from '@/components/flujo';
 import type { FiltroSemaforo } from '@/components/flujo';
 import type { DespacharTabla, EstadoTabla, OpcionesEstados } from '@/components/tabla';
-import { alternarSeleccion, pasosConConteos } from '@/lib/flujo';
+import { alternarPaso, pasosConConteos } from '@/lib/flujo';
 import { PASOS_FLUJO_VENTAS, conteosDesdeResumen, tabHubDePaso, textoRegla } from '@/lib/flujo-ventas';
 import { accionPestana } from '@/lib/tabla';
 
@@ -155,7 +160,7 @@ export function FranjaFlujoVentas({ estado, despachar, recargaFlujo, opcionesEst
       error={flujo.error}
       onReintentar={flujo.recargar}
       onSeleccionarPaso={(clave) => {
-        const paso = alternarSeleccion(estado.paso, clave); // tocarlo otra vez lo quita
+        const paso = alternarPaso(estado.paso, clave); // tocarlo otra vez lo quita
         despachar({ tipo: 'paso', valor: paso });
         const vista = paso ? tabHubDePaso(paso) : null; // 'sc', 'cot' o 'ven'
         if (vista) despachar(accionPestana(estado, vista, opcionesEstados));
@@ -494,14 +499,22 @@ no como un selector propio encima de la tarjeta. Es una pestaña que no es una v
   `useTableroKanban`.
 - **Al activar la aparte se sale de la pantalla completa,** con el mismo efecto que al pasar a Kanban:
   `useEffect(() => { if (estado.modo === 'kanban' || enAnalisis) salir(); }, [estado.modo, enAnalisis, salir])`.
-- **`enAnalisis` arranca de `?tab=analisis`** (por ejemplo, `leerEnlaceHub(window.location.search).analisis` en Ventas).
-  Al volver a los documentos, la URL se limpia con `router.replace(<ruta del Hub>)` (D-7): recargar no reabre Análisis.
+- **`enAnalisis` arranca apagado y lo enciende `?tab=analisis`, leído DESPUÉS del commit** en un `useLayoutEffect` de
+  montaje (el ejemplo de abajo). Nunca en el inicializador de `useState` ni en el render: en una navegación con `<Link>`,
+  Next 16 cambia la URL en el `useInsertionEffect` de `HistoryUpdater`, así que el render todavía ve la URL de la página
+  ANTERIOR (FINAL-C3). Al volver a los documentos, la URL se limpia con `router.replace(<ruta del Hub>)` (D-7): recargar
+  no reabre Análisis. El Hub de Ventas aplica igual `?paso=` y `?foco=` (`inicioDelEnlaceHub` de `lib/flujo-ventas.js`).
 - **Al cambiar de apartado se limpia la selección** de la tabla.
 - `onCambiar` solo cambia algo si `activa !== enAnalisis`. Tocar otra vez la pestaña en la que ya se está no hace nada.
 
 ```tsx
-// Como en el Hub: sin window en el render del servidor.
-const [enAnalisis, setEnAnalisis] = useState(() => leerEnlaceHub(typeof window === 'undefined' ? '' : window.location.search).analisis);
+// Como en los Hubs (FINAL-C3): el enlace se lee después del commit, una vez, antes de pintar. La guarda de orden de
+// test_hub_ventas.mjs falla si una lectura de window.location.search queda en el render, useState, useMemo o useRef.
+const [enAnalisis, setEnAnalisis] = useState(false);
+useLayoutEffect(() => {
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- la URL de la navegación existe recién en el commit
+  if (leerEnlaceHub(window.location.search).analisis) setEnAnalisis(true);
+}, []);
 const cambiarApartado = useCallback((analisis: boolean) => {
   setEnAnalisis(analisis);
   setSeleccion(new Set());
@@ -550,7 +563,7 @@ export function VistaDeLeads() {
 ```
 
 - `ConmutadorVista` es el ÚNICO botón «Lista / Kanban» (controlado: recibe `modo` y `onCambiar`). Con `kanbanDisponible={false}` no pinta nada.
-- `MenuFila` es el ÚNICO menú ⋯ (filas y tarjetas). Ítems `{ etiqueta, icono?, onClick, peligro?, oculto?, deshabilitado?, titulo? }`; `ModalMotivo` es la ÚNICA ventana de motivo (ver el tablero).
+- `MenuFila` es el ÚNICO menú ⋯ (filas y tarjetas). Ítems `{ etiqueta, icono?, onClick, peligro?, oculto?, deshabilitado?, titulo? }`. `ModalMotivo` es la ventana de motivo de UN documento (ver el tablero); la cancelación en lote del Hub y de Solicitudes usa su propia ventana con la misma regla (`motivoValido` y `MINIMO_MOTIVO` de `lib/kanban.js`, y la etiqueta unida al campo con `useId`).
 - Preferencias del usuario: `usePreferencia(clave, porDefecto)` devuelve `[valor, guardar, listo]`; nada se escribe antes de `listo` y la clave es `tabla:`, `vista:`, `kanban:`, `flujo:` o `analisis:` más el id. `vista:<id>` la escribe un solo hook, `useEstadoTabla`: por eso en una pantalla con tabla no se usa `useVistaGuardada`.
 
 ### Capturas: qué revisar
@@ -644,7 +657,7 @@ Toda pestaña Análisis es `PanelAnalisisPerezoso` de `@/components/analisis`; l
 - NUNCA `alert()`, `confirm()` ni `prompt()` del navegador: los avisos y las confirmaciones van por `useAvisos()` y los motivos por `ModalMotivo` (`test_sin_dialogos_nativos.mjs` lo vigila).
 - NUNCA un cero ni un texto de «todo en orden» mientras algo carga: `Contador`, `TarjetaKpi` y el esqueleto de la tabla pintan barras grises; una cifra que no llegó es «—».
 - SIEMPRE los montos completos, en pesos enteros y con puntos de miles (`$1.062.523`, `formatoPesos` de `lib/pesos.js`); porcentajes `45,2 %`; fechas en hora de Colombia (`lib/fechas-colombia.js`).
-- SIEMPRE textos en español con tildes, estados con su etiqueta (nunca el código crudo) y sin emojis en pestañas ni botones. Todo control interactivo tiene foco visible.
+- SIEMPRE textos en español con tildes, estados con su etiqueta (nunca el código crudo) y sin emojis en pestañas ni botones. Todo control interactivo tiene foco visible, con el token común (`FOCOS.<acento>`, `FOCO`, `FOCO_DENTRO`; ver «Piezas compartidas»), nunca escrito a mano.
 
 ## Fuente de verdad — colores por módulo
 
