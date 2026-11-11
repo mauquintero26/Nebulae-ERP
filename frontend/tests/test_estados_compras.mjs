@@ -424,7 +424,9 @@ console.log('--- TEST 15: JS puro (sin React ni DOM) y congelar importado, no co
   assert.ok(!/esPecAtrasado/.test(fuente), 'RP28/RP93: no se crea esPecAtrasado');
   // T14 r1 (m6): el día de entrega sale de diaPec en los dos lados (la celda y la regla de vencido), sin repetir la regla.
   assert.match(fuente, /export function esPecVencido\(p, hoy = diaColombia\(\)\) \{\s*const dia = diaPec\(p\?\.fecha_entrega_estimada\);/);
-  assert.equal((fuente.match(/\.slice\(0, 10\)/g) ?? []).length, 1, 'la extracción del día, una sola vez (en diaPec)');
+  // B4 T24 (FINAL-m30, D27): diaPec es diaDeNegocio de fechas-colombia.js (la misma función): aquí no queda ninguna extracción del día.
+  assert.equal((fuente.match(/\.slice\(0, 10\)/g) ?? []).length, 0, 'la extracción del día vive en fechas-colombia.js');
+  assert.match(fuente, /import \{[^}]*\bdiaDeNegocio as diaPec\b[^}]*\} from '\.\/fechas-colombia\.js';/);
   // T14 r1 (m7): el número del servidor es numeroFinito de kpis.js (una sola política), sin copia local.
   assert.match(fuente, /import \{[^}]*\bnumeroFinito\b[^}]*\} from '\.\/kpis\.js'/);
   assert.match(fuente, /monto: numeroFinito\(p\?\.total_cop\),/);

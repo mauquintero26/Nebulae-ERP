@@ -21,7 +21,17 @@ export function redondearPeso(v) {
  */
 export function formatoPesos(v) {
   const n = redondearPeso(v);
-  return (n < 0 ? '-' : '') + '$' + String(Math.abs(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  return (n < 0 ? '-' : '') + '$' + agruparMiles(Math.abs(n));
+}
+
+/**
+ * B4 T24 (F3): los miles con punto de un entero sin signo ('1234567' -> '1.234.567'), a mano (ver formatoPesos). Una sola copia: la
+ * usan formatoPesos y formatoEntero/formatoDecimal de kpis.js.
+ * @param {number | string} entero
+ * @returns {string}
+ */
+export function agruparMiles(entero) {
+  return String(entero).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 }
 
 /**

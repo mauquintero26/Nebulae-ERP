@@ -13,8 +13,7 @@ import { MKT_NAV } from '../mkt-nav';
 import { accesoMarketing } from '@/lib/roles';
 import { avisoDeFuente } from '@/lib/avisos';
 import { datosDeRespuesta, lecturaLeadsCampana, tarjetasCampana } from '@/lib/kpis';
-import { fechaCorta } from '@/lib/fechas-colombia';
-import { diaDeNegocio } from '@/lib/listas-ventas';
+import { textoDiaCorto } from '@/lib/fechas-colombia';
 import { humanizarCodigo } from '@/lib/estados-pedido';
 import { formatoPesos } from '@/lib/pesos';
 import { accesoresDeOrden, estadoDelTotal } from '@/lib/tabla';
@@ -22,7 +21,8 @@ import { CAJA_SIN_PERMISO } from '@/lib/design-system';
 // B4 T23B: el dinero con el formato del catálogo (formatoPesos: '$1.062.523', sin el espacio duro de Intl).
 const fCOP = (v: number) => formatoPesos(v || 0);
 // m11: la fecha de una campaña es un día de calendario (fechaCorta), no un instante que se corre a la víspera en Colombia.
-const fDate = (d: any) => d ? fechaCorta(diaDeNegocio(d)) : '-';
+// B4 T24 (FINAL-m30): textoDiaCorto de fechas-colombia.js (el día corto o '—', como las demás pantallas).
+const fDate = (d: unknown) => textoDiaCorto(d);
 
 const ESTADO_COLORS: Record<string, string> = {
   BORRADOR: 'bg-slate-100 text-slate-600',

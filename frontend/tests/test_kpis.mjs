@@ -1469,7 +1469,8 @@ console.log('--- TEST 33 (B4 T23B, KPI-otros punto 4 y TABLA-otros punto 6; R11,
   assert.match(codigo, /\n\s*Pasar al CRM\n/);
   assert.ok(!/Sync CRM/.test(codigo), 'sin el inglés');
   // m11: las fechas de las campañas son días de calendario y su estado lleva etiqueta.
-  assert.match(codigo, /const fDate = \(d: any\) => d \? fechaCorta\(diaDeNegocio\(d\)\) : '-';/);
+  // B4 T24 (FINAL-m30, D27): textoDiaCorto de fechas-colombia.js (el día corto o '—').
+  assert.match(codigo, /const fDate = \(d: unknown\) => textoDiaCorto\(d\);/);
   assert.ok(!/toLocaleDateString/.test(codigo));
   assert.match(codigo, /\{humanizarCodigo\(c\.estado\)\}/);
   assert.match(codigo, /\{humanizarCodigo\(selected\.estado\)\}/);

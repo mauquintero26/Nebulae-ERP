@@ -18,14 +18,14 @@
 import { congelar, ESTADOS_PEDIDO, ESTADOS_PEDIDO_SIN_DINERO, infoEstadoPedido, pasoPedido, transicionesPedido } from './estados-pedido.js';
 import { definirColumnas, estadosDeColumnaLista, TEXTO_SOLO_VER } from './kanban.js';
 import { estadoDeTarjeta, motivoTransicionPedido } from './kanban-ventas.js';
-import { alertaEntregaPedido, diaDeNegocio } from './listas-ventas.js';
+import { alertaEntregaPedido } from './listas-ventas.js';
 import { formatoPesos, redondearPeso } from './pesos.js';
 import { normalizarRol } from './chatter.js';
 import { enlaceDocumento } from './analisis.js';
 import { queryListado } from './tabla.js';
 import { numeroFinito } from './kpis.js';
 import { waUrl } from './whatsapp.js';
-import { fechaCorta } from './fechas-colombia.js';
+import { textoDiaCorto } from './fechas-colombia.js';
 
 /**
  * @typedef {import('./kanban.js').ResultadoSoltar} ResultadoSoltar
@@ -269,7 +269,7 @@ export function infoCobroEntrega(p) {
  * @returns {string}
  */
 export function textoEntregaTablero(p) {
-  return fechaCorta(diaDeNegocio(p?.fecha_entrega_estimada)) || '—';
+  return textoDiaCorto(p?.fecha_entrega_estimada);
 }
 
 /**

@@ -17,9 +17,9 @@ import { CLASE_CHIP } from '@/components/ui';
 import type { ColumnaTabla } from '@/components/tabla';
 import { TABLE } from '@/lib/design-system';
 import { formatoPesos } from '@/lib/pesos';
-import { fechaCorta } from '@/lib/fechas-colombia';
+import { fechaCorta, textoDiaCorto } from '@/lib/fechas-colombia';
 import { campoOrden } from '@/lib/tabla';
-import { diaPec, infoEstadoPec } from '@/lib/estados-compras';
+import { infoEstadoPec } from '@/lib/estados-compras';
 
 // H42: pesos enteros con punto de miles; lo que no es un monto positivo se ve '—'.
 export const fCOP = (v: unknown) => (Number(v) > 0 ? formatoPesos(v) : '—');
@@ -27,7 +27,8 @@ export const fCOP = (v: unknown) => (Number(v) > 0 ? formatoPesos(v) : '—');
 // Colombia; un día de negocio (entrega estimada, límite de alerta, la ETA de una etapa) tal como se guarda (diaPec,
 // RP40), sin correrlo. Lo vacío, '—'.
 export const textoInstante = (v: unknown) => fechaCorta(v) || '—';
-export const textoDia = (v: unknown) => fechaCorta(diaPec(v)) || '—';
+// B4 T24 (FINAL-m30): textoDiaCorto de fechas-colombia.js (la misma función, con su nombre de siempre).
+export const textoDia = textoDiaCorto;
 
 /**
  * Lo que leen las columnas de una fila de GET /compras/pedidos (el _pec_dict de T12). is_overdue es la regla del

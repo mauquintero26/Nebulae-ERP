@@ -16,7 +16,7 @@ import { congelar, humanizarCodigo } from './estados-pedido.js';
 import { definirColumnas } from './kanban.js';
 // B4 T16A: el día de una fecha de negocio y la tarjeta de un PEC, el día de hoy y los números con su formato.
 import { diaPec, tarjetaPec } from './estados-compras.js';
-import { diaColombia } from './fechas-colombia.js';
+import { diaColombia, diasEntre } from './fechas-colombia.js';
 import { formatoDecimal, formatoEntero } from './kpis.js';
 
 /**
@@ -223,12 +223,6 @@ export function avancePromedioTransito(filas) {
   return `${formatoDecimal(promedio)}/${etapas > 0 ? formatoEntero(etapas) : '—'}`;
 }
 
-const MS_DIA = 24 * 60 * 60 * 1000;
-/** Los días de calendario de `desde` a `hasta` ('AAAA-MM-DD'): sin zonas ni horas de verano. */
-function diasEntre(desde, hasta) {
-  const ms = (dia) => { const [a, m, d] = dia.split('-').map(Number); return Date.UTC(a, m - 1, d); };
-  return Math.round((ms(hasta) - ms(desde)) / MS_DIA);
-}
 const enDias = (n) => `${formatoEntero(n)} ${n === 1 ? 'día' : 'días'}`;
 
 function entregaDe(pec, hoy) {

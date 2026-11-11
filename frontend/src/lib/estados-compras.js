@@ -38,7 +38,7 @@
 
 // congelar: mutar estas tablas lanza TypeError (una sola función en todo el frontend; no se copia).
 import { congelar, humanizarCodigo, tiene } from './estados-pedido.js';
-import { diaColombia, fechaCorta, fechaSolo, horaCO, instante } from './fechas-colombia.js';
+import { diaColombia, diaDeNegocio as diaPec, fechaCorta, fechaSolo, horaCO, instante } from './fechas-colombia.js';
 // B4 T14: la consulta de cada columna del tablero de Compras (consultaColumnaPec) sale de la misma queryListado.
 import { queryListado, recortarColumnas } from './tabla.js';
 // B4 T14 r1: la regla de la columna con filtro (m4, la misma de Ventas), el número del servidor (m7) y la regla de
@@ -392,16 +392,10 @@ export function vistaPuedeVencer(vista) {
 
 /**
  * B4 T14 (RP40, resolución 4 de T14): el día de una fecha de negocio del PEC (fecha_entrega_estimada, fecha_alerta) tal
- * como se guarda: sus 10 primeros caracteres, sin pasarla a Colombia, como esPecVencido. Un día que no existe o lo que
- * no empieza con una fecha: ''.
- * @param {unknown} valor
- * @returns {string}
+ * como se guarda, sin pasarla a Colombia, como esPecVencido. B4 T24 (FINAL-m30): es diaDeNegocio de fechas-colombia.js
+ * (la misma función), con su nombre de siempre.
  */
-export function diaPec(valor) {
-  if (typeof valor !== 'string') return '';
-  const dia = valor.trim().slice(0, 10);
-  return FECHA_DE_CALENDARIO.test(dia) && fechaSolo(dia) ? dia : '';
-}
+export { diaPec };
 
 /** Un texto con algo, sin los espacios de los bordes; si no, null. */
 const textoLimpio = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);

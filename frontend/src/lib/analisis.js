@@ -29,7 +29,7 @@
  */
 
 import { congelar, tiene } from './estados-pedido.js';
-import { diaColombia, hace } from './fechas-colombia.js';
+import { diaColombia, diaDeCalendario, hace } from './fechas-colombia.js';
 import { formatoPesos } from './pesos.js';
 import {
   variacionPct, textoVariacion, direccionVariacion, tonoDeDireccion, mejorDesde, formatoValorKpi, formatoEntero,
@@ -121,15 +121,8 @@ export const ERRORES_PERIODO = congelar({
 
 const FECHA = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-/** Los milisegundos UTC de un 'AAAA-MM-DD' que existe (no '2026-02-30'), o null. */
-function diaUTC(texto) {
-  const m = FECHA.exec(texto);
-  if (!m) return null;
-  const [anio, mes, dia] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  const t = Date.UTC(anio, mes - 1, dia);
-  const f = new Date(t);
-  return f.getUTCFullYear() === anio && f.getUTCMonth() === mes - 1 && f.getUTCDate() === dia ? t : null;
-}
+/** Los milisegundos UTC de un 'AAAA-MM-DD' que existe (no '2026-02-30'), o null: diaDeCalendario de fechas-colombia.js (F3). */
+const diaUTC = (texto) => diaDeCalendario(texto)?.getTime() ?? null;
 
 const vacio = (v) => v === null || v === undefined || (typeof v === 'string' && !v.trim());
 

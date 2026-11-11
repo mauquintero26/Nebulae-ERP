@@ -18,9 +18,9 @@ import { Badge, Button, ContenidoEnlace, useAvisos } from '@/components/ui';
 import { TablaEstandar, usePreferenciasTabla } from '@/components/tabla';
 import type { ColumnaTabla } from '@/components/tabla';
 import { PasosFlujo } from '@/components/flujo';
-import { diaPec, infoEstadoPec } from '@/lib/estados-compras';
+import { infoEstadoPec } from '@/lib/estados-compras';
 import { TEXTO_SEGUIMIENTO_CERRADO, pasosDeTracking, seguimientoCerrado } from '@/lib/flujo-compras';
-import { fechaCorta, fechaHoraLarga } from '@/lib/fechas-colombia';
+import { fechaCorta, fechaHoraLarga, textoDiaCorto } from '@/lib/fechas-colombia';
 import { formatoPesos } from '@/lib/pesos';
 import { recargarTrasError } from '@/lib/avisos';
 
@@ -38,7 +38,7 @@ const DEFAULT_ACTIVITY_STYLE = { icon: MessageSquare, color: 'text-slate-500 bg-
 // B4 T15 (resolución 4): un instante (fecha de compra, la Actividad) en Colombia; un día de negocio (la entrega estimada)
 // tal como se guarda (diaPec, RP40), sin correrlo. Lo vacío, '—'. Los montos en pesos enteros (H42).
 const textoInstante = (v: unknown) => fechaCorta(v) || '—';
-const textoDia = (v: unknown) => fechaCorta(diaPec(v)) || '—';
+const textoDia = textoDiaCorto;
 const fCOP = (v: unknown) => formatoPesos(Number(v) || 0);
 
 /** Una línea de productos del PEC (el JSON `productos`), con su posición como clave de la tabla. */

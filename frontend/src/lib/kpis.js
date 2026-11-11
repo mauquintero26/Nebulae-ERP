@@ -27,7 +27,7 @@
 
 import { congelar } from './estados-pedido.js';
 import { textoDeError } from './avisos.js';
-import { formatoPesos } from './pesos.js';
+import { agruparMiles, formatoPesos } from './pesos.js';
 
 /**
  * @typedef {'pesos' | 'numero' | 'porcentaje' | 'texto'} FormatoKpi
@@ -91,7 +91,7 @@ export function numeroFinito(v) {
   return null;
 }
 
-const agrupar = (entero) => String(entero).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+const agrupar = agruparMiles;
 
 /** Décimas enteras de |n| (toPrecision quita el ruido binario: 45.24 * 10). */
 const decimas = (n) => Math.round(Number((Math.abs(n) * 10).toPrecision(12)));

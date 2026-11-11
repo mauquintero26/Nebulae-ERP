@@ -18,7 +18,7 @@ import {
 } from './estados-pedido.js';
 import { comoUTC, esSoporte } from './hub-ventas.js';
 import { redondearPeso, formatoPesos } from './pesos.js';
-import { diaColombia, fechaSolo } from './fechas-colombia.js';
+import { diaColombia, diaDeNegocio, fechaSolo, sumarDias } from './fechas-colombia.js';
 import { TEXTO_PAPELERA_SIN_FECHA } from './estados-solicitud.js';
 import { normalizarTarifaIva, TARIFA_IVA_POR_DEFECTO } from './iva.js';
 import { accionPestana } from './tabla.js';
@@ -404,27 +404,9 @@ export function fechaVencida(iso, ahora = Date.now()) {
 }
 
 /** El inicio 'AAAA-MM-DD' de una fecha de negocio del API (con o sin la hora que le pone isoformat()). */
-const INICIO_DIA_DE_NEGOCIO = /^\s*(\d{4}-\d{2}-\d{2})/;
+/** B4 T24 (FINAL-m30): el día de una fecha de negocio vive en fechas-colombia.js; se reexporta (la misma función). */
+export { diaDeNegocio };
 
-/**
- * B4 T9 r1 (I2): el día de calendario 'AAAA-MM-DD' de una FECHA DE NEGOCIO del API (fecha_entrega_estimada:
- * '2026-11-10T00:00:00' -> '2026-11-10'): sus 10 primeros caracteres, sin pasarla a ninguna zona (la regla de la cabecera
- * de fechas-colombia.js, la F3 del B3 y erp_ventas.py: una fecha de negocio a las 00:00 no se corre de día). Un día que
- * no existe ('2026-02-30') o lo que no empieza con una fecha: ''.
- * @param {unknown} valor
- * @returns {string}
- */
-export function diaDeNegocio(valor) {
-  if (typeof valor !== 'string') return '';
-  const m = INICIO_DIA_DE_NEGOCIO.exec(valor);
-  return m && fechaSolo(m[1]) ? m[1] : '';
-}
-
-/** 'AAAA-MM-DD' + n días de calendario (en UTC, para que el día no cambie). */
-function sumarDias(dia, n) {
-  const [anio, mes, d] = dia.split('-').map(Number);
-  return new Date(Date.UTC(anio, mes - 1, d + n)).toISOString().slice(0, 10);
-}
 
 /**
  * B4 T9 r1 (I2): la fecha de negocio ya pasó: su día (diaDeNegocio) es anterior al día de HOY en Colombia (diaColombia de
