@@ -12,7 +12,7 @@ import type { EstadoKpi } from '@/lib/kpis';
 import { pestanaConTecla } from '@/lib/pestanas';
 import {
   accionPestana, crearBusquedaConRetardo, estadoDeConteo, estadoPastillaPestana, etiquetasDeEstados, idsDePestanas,
-  opcionesDeVista, pestanaEnfocable, scrollParaVer, sincronizarBusqueda, textoResultados, toquePestana,
+  opcionesDeVista, pestanaEnfocable, scrollParaVer, sincronizarBusqueda, textoAlertaPestana, textoResultados, toquePestana,
 } from '@/lib/tabla';
 import type { EstadoTabla, LocalBusqueda, OpcionesEstados } from '@/lib/tabla';
 import type { DespacharTabla } from './useEstadoTabla';
@@ -69,8 +69,11 @@ export type PestanaTabla = {
   etiqueta: string;
   /** null mientras carga: pastilla gris, nunca 0. */
   conteo: number | null;
-  /** La pastilla en rojo (por ejemplo, hay atrasados). */
-  alerta?: boolean;
+  /**
+   * La pastilla en rojo (por ejemplo, hay atrasados). B4 T24 (FINAL-m27, aditivo): un texto («Hay 3 vencidos») va en el title y en un
+   * sr-only (true dice «Requiere atención»); con la pestaña activa la pastilla sigue en rojo.
+   */
+  alerta?: boolean | string;
   /**
    * B4 T8: una pestaña de vista que no lleva número (la Papelera de Solicitudes, TABLA-listas-ventas punto 5): sin
    * pastilla ni Contador (estadoPastillaPestana da 'oculto'). Sin esta marca, todo como siempre.
@@ -213,6 +216,7 @@ export function BarraTabla({
             const activa = !aparteActiva && p.id === estado.vista;
             // B4 T7 r2 (I-r1): con la aparte activa y sin conteo, sin pastilla: no hay nada cargando (RP35).
             const estadoPastilla = estadoPastillaPestana(p.conteo, estadoConteos, { aparteActiva, sinConteo: p.sinConteo });
+            const textoAlerta = textoAlertaPestana(p.alerta);
             return (
               <button
                 key={p.id}
@@ -230,10 +234,11 @@ export function BarraTabla({
               >
                 {p.etiqueta}
                 {estadoPastilla !== 'oculto' && (
-                  <span className={`inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 py-px text-[11px] ${activa ? PASTILLA_ACTIVA : p.alerta ? PASTILLA_ALERTA : PASTILLA}`}>
+                  <span title={textoAlerta ?? undefined} className={`inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 py-px text-[11px] ${textoAlerta ? PASTILLA_ALERTA : activa ? PASTILLA_ACTIVA : PASTILLA}`}>
                     <Contador valor={p.conteo} estado={estadoPastilla} />
                   </span>
                 )}
+                {textoAlerta && <span className="sr-only">{` (${textoAlerta})`}</span>}
               </button>
             );
           })}

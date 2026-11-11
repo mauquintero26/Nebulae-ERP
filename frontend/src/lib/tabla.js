@@ -2190,6 +2190,17 @@ export function cierraConClicFuera({ inicioEnFondo, finEnFondo, bloqueado = fals
   return inicioEnFondo && finEnFondo && !bloqueado;
 }
 
+/**
+ * B4 T24 (FINAL-m27): el texto de la alerta de una pestaña de BarraTabla (para el title y el sr-only): un texto lleno tal cual (sin los
+ * espacios de los bordes); true, «Requiere atención»; lo demás, null (sin alerta). Así la alerta no es solo un color.
+ * @param {unknown} alerta
+ * @returns {string | null}
+ */
+export function textoAlertaPestana(alerta) {
+  if (alerta === true) return 'Requiere atención';
+  return typeof alerta === 'string' && alerta.trim() ? alerta.trim() : null;
+}
+
 // ─── B4 T22: Gastos (TABLA-otros punto 7, KANBAN-resto; R11, R16, RP57, RP58, RP104) ────────────────────────────
 
 /** R11: el tablero de Gastos tiene a lo sumo 12 columnas (una por categoría); el resto se ve en la lista. */

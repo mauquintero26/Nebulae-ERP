@@ -2181,7 +2181,8 @@ console.log('--- TEST 42 (B4 T7 r2, I-r1 y m-r1-a): la pastilla de una pestaña 
   // B4 T8: también con la marca sinConteo de la pestaña (TEST 43); la aparte sigue llegando igual.
   assert.match(barra, /const estadoPastilla = estadoPastillaPestana\(p\.conteo, estadoConteos, \{ aparteActiva, sinConteo: p\.sinConteo \}\);/);
   assert.match(barra,
-    /\{estadoPastilla !== 'oculto' && \(\s*<span className=\{`inline-flex min-w-\[1\.25rem\] items-center justify-center rounded-full px-1\.5 py-px text-\[11px\] \$\{activa \? PASTILLA_ACTIVA : p\.alerta \? PASTILLA_ALERTA : PASTILLA\}`\}>\s*<Contador valor=\{p\.conteo\} estado=\{estadoPastilla\} \/>\s*<\/span>\s*\)\}/,
+    // B4 T24 (FINAL-m27, D27): la alerta manda también con la pestaña activa, con su texto en title y sr-only.
+    /\{estadoPastilla !== 'oculto' && \(\s*<span title=\{textoAlerta \?\? undefined\} className=\{`inline-flex min-w-\[1\.25rem\] items-center justify-center rounded-full px-1\.5 py-px text-\[11px\] \$\{textoAlerta \? PASTILLA_ALERTA : activa \? PASTILLA_ACTIVA : PASTILLA\}`\}>\s*<Contador valor=\{p\.conteo\} estado=\{estadoPastilla\} \/>\s*<\/span>\s*\)\}/,
     'sin pastilla, ni Contador ni la alerta rosa');
   assert.match(barra, /const filaPestanas = useRef<HTMLDivElement>\(null\);/);
   assert.match(barra, /<div ref=\{filaPestanas\} role="tablist"/);
@@ -3065,6 +3066,23 @@ console.log('--- TEST T24-e (B4 T24, F40): el Modal y el Drawer se cierran con E
   assert.match(drawer, /const fondo = useCierreVentana\(onClose, !cierreExterno\);/);
   assert.match(drawer, /onPointerDown=\{fondo\.alPresionar\} onClick=\{fondo\.alSoltar\}/);
   assert.match(drawer, /<button type="button" onClick=\{onClose\} aria-label="Cerrar"/);
+}
+
+console.log('--- TEST T24-f (B4 T24, FINAL-m27): la alerta de una pestaña se dice con texto (no solo con el color) y no desaparece activa ---');
+{
+  const { textoAlertaPestana } = TABLA;
+  assert.equal(textoAlertaPestana('Hay 3 vencidos'), 'Hay 3 vencidos');
+  assert.equal(textoAlertaPestana('  Hay 1 vencido  '), 'Hay 1 vencido');
+  assert.equal(textoAlertaPestana(true), 'Requiere atención', 'sin texto, el genérico');
+  for (const nada of [false, undefined, null, '', '   ', 0]) assert.equal(textoAlertaPestana(nada), null, String(nada));
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const barra = leer('components/tabla/BarraTabla.tsx');
+  assert.match(barra, /alerta\?: boolean \| string;/, 'aditivo: un texto o true');
+  assert.match(barra, /const textoAlerta = textoAlertaPestana\(p\.alerta\);/);
+  assert.match(barra, /\{textoAlerta && <span className="sr-only">\{` \(\$\{textoAlerta\}\)`\}<\/span>\}/);
+  // Las pantallas de Compras dicen cuántos vencidos (textoVencidosPec, lib/estados-compras.js, casos en test_estados_compras.mjs).
+  assert.ok(leer('app/dashboard/compras/page.tsx').includes("alerta: textoVencidosPec(conteos?.vencidos) }"));
+  assert.ok(leer('app/dashboard/compras/pedidos/page.tsx').includes("alerta: textoVencidosPec(conteos?.vencidos) }"));
 }
 
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');

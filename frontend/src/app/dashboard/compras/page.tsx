@@ -37,7 +37,7 @@ import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, consultaColumnaPec, grupoMesPec, infoEstadoPec,
   opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec, repartirCancelacionPec, resumenCancelacionPec, tarjetaPec,
   cancelarPecsEnSerie, despuesDeCancelarPec, textoVacioPec,
-  tituloMesPec, transicionesPec,
+  textoVencidosPec, tituloMesPec, transicionesPec,
 } from '@/lib/estados-compras';
 import {
   RUTA_HUB_COMPRAS, TEXTO_SEGUIMIENTO_CERRADO, accionPasoHubCompras, accionSemaforoCompras, avisosFlujoCompras, etiquetaEtapaTracking,
@@ -514,7 +514,7 @@ const TITULOS_ORDEN_HUB = titulosDeOrdenPec(COLUMNAS_TABLA_HUB);
 function pestanasDelHub(conteos: ConteosPec | null): PestanaTabla[] {
   return [
     { id: 'todos', etiqueta: 'Todos', conteo: conteos?.todos ?? null },
-    { id: 'no_resueltos', etiqueta: 'No resueltos', conteo: conteos?.no_resueltos ?? null, alerta: (conteos?.vencidos ?? 0) > 0 },
+    { id: 'no_resueltos', etiqueta: 'No resueltos', conteo: conteos?.no_resueltos ?? null, alerta: textoVencidosPec(conteos?.vencidos) },
     { id: 'pedidos', etiqueta: 'Pedidos de compra', conteo: conteos?.pedidos ?? null },
     { id: 'en_transito', etiqueta: 'En tránsito', conteo: conteos?.en_transito ?? null },
     { id: 'en_bodega', etiqueta: 'Recepciones', conteo: conteos?.en_bodega ?? null },

@@ -550,6 +550,17 @@ export async function cancelarPecsEnSerie(pecs, cancelarUno) {
 }
 
 /**
+ * B4 T24 (FINAL-m27): la alerta de la pestaña que esconde los vencidos («No resueltos» del Hub, «Activos» de Pedidos de compra): «Hay N
+ * vencidos» (con su número, que la pestaña no muestra), o false sin vencidos.
+ * @param {unknown} vencidos
+ * @returns {string | false}
+ */
+export function textoVencidosPec(vencidos) {
+  if (typeof vencidos !== 'number' || !Number.isFinite(vencidos) || vencidos <= 0) return false;
+  return `Hay ${formatoEntero(vencidos)} ${vencidos === 1 ? 'vencido' : 'vencidos'}`;
+}
+
+/**
  * B4 T14 r1 (I1, m10, m15): lo que hace la pantalla después de cancelar en serie (cancelarPecsEnSerie), para que la
  * página solo lo ejecute:
  *  - fuera: las claves que salen de la selección (lo cancelado y lo omitido); lo que falló sigue marcado;

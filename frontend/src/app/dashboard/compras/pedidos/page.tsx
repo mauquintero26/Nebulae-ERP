@@ -43,7 +43,8 @@ import { accionVistaEnLista, rutaSinParametro } from '@/lib/listas-ventas';
 import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, cancelarPecsEnSerie, consultaColumnaPec,
   despuesDeCancelarPec, etapaPec, grupoMesPec, infoEstadoPec, opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec,
-  repartirCancelacionPec, resumenCancelacionPec, tarjetaPedidoCompra, textoVacioPec, tituloMesPec, transicionesPec,
+  repartirCancelacionPec, resumenCancelacionPec, tarjetaPedidoCompra, textoVacioPec, textoVencidosPec, tituloMesPec,
+  transicionesPec,
 } from '@/lib/estados-compras';
 import {
   ENLACE_VER_ANALISIS_COMPRAS, TEXTO_SEGUIMIENTO_CERRADO, accionSemaforoCompras, avisoTarjetaEtapa, avisosFlujoCompras,
@@ -1486,7 +1487,7 @@ const TITULOS_ORDEN_PEDIDOS = titulosDeOrdenPec(COLUMNAS_TABLA_PEDIDOS);
 function pestanasDePedidos(conteos: ConteosPec | null): PestanaTabla[] {
   return [
     { id: 'vigentes', etiqueta: 'Todos', conteo: conteos?.vigentes ?? null },
-    { id: 'activos', etiqueta: 'Activos', conteo: conteos?.activos ?? null, alerta: (conteos?.vencidos ?? 0) > 0 },
+    { id: 'activos', etiqueta: 'Activos', conteo: conteos?.activos ?? null, alerta: textoVencidosPec(conteos?.vencidos) },
     { id: 'en_transito', etiqueta: 'En tránsito', conteo: conteos?.en_transito ?? null },
     { id: 'recibidos', etiqueta: 'Recibidos', conteo: conteos?.recibidos ?? null },
     { id: 'cancelados', etiqueta: 'Cancelados', conteo: conteos?.cancelados ?? null },

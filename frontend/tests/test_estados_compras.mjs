@@ -2954,6 +2954,14 @@ console.log('--- TEST 49 (B4 T19 r1): la tarjeta que abre cada pestaña, las pes
   assert.deepEqual(ec.MOTIVOS_AJUSTE, ['Conteo físico', 'Merma', 'Sobrante', 'Corrección de error', 'Daño en bodega', 'Vencimiento', 'Otro']);
 }
 
+console.log('--- B4 T24 (FINAL-m27): textoVencidosPec, la alerta de la pestaña con su número ---');
+{
+  assert.equal(ec.textoVencidosPec(3), 'Hay 3 vencidos');
+  assert.equal(ec.textoVencidosPec(1), 'Hay 1 vencido');
+  assert.equal(ec.textoVencidosPec(1200), 'Hay 1.200 vencidos', 'con punto de miles');
+  for (const nada of [0, -1, null, undefined, NaN, '3']) assert.equal(ec.textoVencidosPec(nada), false, String(nada));
+}
+
 console.log('--- B4 T24 (FINAL-m10, FINAL-m31 y FINAL-m38): los tableros y las acciones de los PEC solo con ADMIN y COMPRAS ---');
 {
   const { accesoCompras, TEXTO_TABLERO_SOLO_VER } = await import('../src/lib/roles.js');
