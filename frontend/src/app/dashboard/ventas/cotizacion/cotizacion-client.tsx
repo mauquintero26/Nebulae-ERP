@@ -37,7 +37,7 @@ import {
 // B4 T9: la lista ya no cuenta en el navegador (diasAlerta, pestanaCotizacion): las vistas, los conteos y el resumen son
 // del servidor (T6B). Las marcas del pedido de cada fila (COT-LISTA) siguen saliendo de aquí. r1 (I1 e I2): la marca del
 // pedido y «Sin precio» con la regla de la tarjeta del tablero; la Entrega est. como día de calendario. r2 (p2): el chip
-// «Sin precio» es chipSinPrecio, el mismo objeto de la tarjeta.
+// «Sin precio» es chipSinPrecio, el mismo chip (texto y tono) de la tarjeta.
 import {
   pedidoVigente, tarjetasCotizaciones, marcaPedidoCotizacion, chipSinPrecio, diaDeNegocio, fechaNegocioVencida,
   fechaPorVencer, avisoSolicitudTrasRechazo,
@@ -919,7 +919,7 @@ function CeldaCliente({ cot }: { cot: FilaCOT }) {
 
 /** Total: el monto y, debajo, «Sin precio» si el total no es mayor que 0 (como antes, en cualquier estado). r1 (I1): la
  *  regla es cotizacionSinPrecio (listas-ventas.js), la misma del chip del tablero. r2 (p2): el chip (texto y tono) sale
- *  de chipSinPrecio, el mismo objeto de la tarjeta. */
+ *  de chipSinPrecio, el mismo chip (texto y tono) de la tarjeta. */
 function CeldaTotal({ cot }: { cot: FilaCOT }) {
   const chip = chipSinPrecio(cot);
   return (

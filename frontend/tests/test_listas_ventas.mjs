@@ -1478,6 +1478,16 @@ console.log('--- B4 T24 f2 (F44-a): las pantallas de Ventas reservan la esquina 
   assert.deepEqual(sueltos, [], 'sin pb-24 ni pb-20 literales en las pantallas de Ventas');
 }
 
+console.log('--- B4 T24 f2 (F52): los comentarios de Cotizaciones dicen que el chip de Total es el mismo chip, no el mismo objeto ---');
+{
+  // chipSinPrecio devuelve un objeto NUEVO en cada llamada (lo exige el caso de r2, p2): lo que comparten la tabla y la tarjeta es el
+  // chip (texto y tono).
+  const cot = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/cotizacion-client.tsx', import.meta.url), 'utf8');
+  assert.ok(!cot.includes('el mismo objeto de la tarjeta'), 'sin «el mismo objeto»');
+  assert.equal((cot.match(/el mismo chip \(texto y tono\) de la tarjeta/g) ?? []).length, 2, 'las dos líneas');
+  assert.notEqual(listas.chipSinPrecio({ estado: 'BORRADOR', total_cop: 0 }), listas.chipSinPrecio({ estado: 'BORRADOR', total_cop: 0 }));
+}
+
 console.log('--- B4 T24 (FINAL-m32): las ventanas de motivo en lote (Hub y Solicitudes) usan la regla de ModalMotivo y nombran su campo ---');
 {
   const sinComentarios = (t) => t.replace(/\r\n/g, '\n').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
