@@ -340,7 +340,8 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:Avis
    este archivo usaban nombres de etapa distintos, asi que el PATCH de
    las etapas 2/3/4 nunca encontraba coincidencia y no hacia nada).
    ================================================================ */
-function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; onToast:AvisoPantalla}) {
+// r1 (m2, m7): puedeEditar es accesoCompras.tracking (PATCH /pedidos/{id}/tracking: ADMIN y COMPRAS); sin él, las tarjetas solo se ven.
+function TrackingPanel({pec, onUpdate, onToast, puedeEditar}: {pec:any; onUpdate:()=>void; onToast:AvisoPantalla; puedeEditar: boolean}) {
   const [updating, setUpdating] = useState<string|null>(null);
   const [editStage, setEditStage] = useState<string|null>(null);
   const [guia, setGuia] = useState('');
@@ -434,7 +435,7 @@ function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; on
       {stages.map((sd) => {
         const status = sd.status || 'PENDIENTE';
         const history: any[] = sd.tracking_history || [];
-        const isEditing = !cerrado && editStage === sd.stage;
+        const isEditing = !cerrado && puedeEditar && editStage === sd.stage;
         // T15 r1 (m2, m6): UNA regla por tarjeta (avisoTarjetaEtapa): el aviso del servidor si lo hay (rojo si va
         // atrasada, neutro si no) o, si no, los días que faltan para la ETA (el día de calendario de Colombia).
         const aviso = cerrado ? null : avisoTarjetaEtapa(sd);
@@ -448,7 +449,7 @@ function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; on
               <div className="flex items-center gap-2">
                 {/* RP28: el estado de la etapa en palabras (Pendiente, En curso, Completada, Cancelada), nunca el código. */}
                 <span className={'text-xs font-black px-2 py-1 rounded-full ' + (status==='COMPLETADO'?'bg-emerald-100 text-emerald-700':status==='EN_PROCESO'?'bg-blue-100 text-blue-700':'bg-gray-100 text-gray-600')}>{etiquetaEtapaTracking(status)}</span>
-                {!cerrado && (
+                {!cerrado && puedeEditar && (
                   <button onClick={()=>openEdit(sd)} aria-label={`Editar la etapa ${sd.label || ''}`} className="p-1.5 hover:bg-white rounded-lg border border-gray-200 text-gray-500"><Edit2 size={12}/></button>
                 )}
               </div>
@@ -692,7 +693,10 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
             {transiciones.length > 0 && (
               <button onClick={()=>setEditEstado(x=>!x)} aria-expanded={editEstado} className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-50 border border-purple-200 text-purple-700 rounded-xl text-xs font-bold hover:bg-purple-100"><Edit2 size={12}/> Estado</button>
             )}
-            <button onClick={()=>setShowConfig(true)} title="Configurar etapas, alertas y casilleros" aria-label="Configurar etapas, alertas y casilleros" className="p-2 hover:bg-gray-100 rounded-xl text-gray-500"><Settings2 size={16}/></button>
+            {/* r1 (m2, m7): PUT /compras/tracking-config/{tipo} es de ADMIN y COMPRAS (el GET, de todos). */}
+            {accesoPec.cambiarPec && (
+              <button onClick={()=>setShowConfig(true)} title="Configurar etapas, alertas y casilleros" aria-label="Configurar etapas, alertas y casilleros" className="p-2 hover:bg-gray-100 rounded-xl text-gray-500"><Settings2 size={16}/></button>
+            )}
             <div className="relative">
               <button onClick={()=>setMenuOpen(m=>!m)} aria-label={`Acciones de ${detail?.numero || pec.numero}`} aria-expanded={menuOpen} className="p-2 hover:bg-gray-100 rounded-xl text-gray-500"><MoreHorizontal size={18}/></button>
               {menuOpen && (
@@ -755,10 +759,13 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
                 </p>
               </div>
             </div>
-            <button onClick={goToRecepcion} disabled={goingToRecepcion} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm hover:bg-emerald-700 transition-colors shrink-0 disabled:opacity-50 flex items-center gap-2">
-              {goingToRecepcion && <RefreshCw size={12} className="animate-spin"/>}
-              {detail?.recepciones?.length > 0 ? 'Ver recepción' : 'Hacer recepción'}
-            </button>
+            {/* r1 (m7): «Hacer recepción» crea la recepción (POST /pedidos/{id}/recepcionar: ADMIN y COMPRAS); «Ver recepción» solo navega. */}
+            {(detail?.recepciones?.length > 0 || accesoPec.cambiarPec) && (
+              <button onClick={goToRecepcion} disabled={goingToRecepcion} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm hover:bg-emerald-700 transition-colors shrink-0 disabled:opacity-50 flex items-center gap-2">
+                {goingToRecepcion && <RefreshCw size={12} className="animate-spin"/>}
+                {detail?.recepciones?.length > 0 ? 'Ver recepción' : 'Hacer recepción'}
+              </button>
+            )}
           </div>
         )}
 
@@ -814,7 +821,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
             {loading && <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600"/></div>}
 
             {!loading && tab === 'tracking' && (
-              <TrackingPanel pec={detail||pec} onUpdate={()=>{loadFull();onUpdate();}} onToast={onToast}/>
+              <TrackingPanel pec={detail||pec} puedeEditar={accesoPec.tracking} onUpdate={()=>{loadFull();onUpdate();}} onToast={onToast}/>
             )}
 
             {!loading && tab === 'productos' && (
@@ -870,9 +877,10 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
                 <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm">
                   <div className="flex items-center justify-between mb-4">
                     <p className="text-xs font-black text-gray-400 uppercase">Información del PEC</p>
-                    {!infoEdit ? (
+                    {/* r1 (m7): «Editar» guarda con PATCH /pedidos/{id} (ADMIN y COMPRAS). */}
+                    {!infoEdit ? (accesoPec.cambiarPec && (
                       <button onClick={openInfoEdit} className="flex items-center gap-1 text-xs font-bold text-purple-600 hover:text-purple-800"><Edit2 size={12}/> Editar</button>
-                    ) : (
+                    )) : (
                       <div className="flex gap-2">
                         <button onClick={()=>setInfoEdit(false)} disabled={savingInfo} className="text-xs font-bold text-gray-500 hover:text-gray-700 disabled:opacity-50">Cancelar</button>
                         <button onClick={saveInfo} disabled={savingInfo} className="flex items-center gap-1 text-xs font-bold text-white bg-purple-600 hover:bg-purple-700 px-3 py-1 rounded-lg disabled:opacity-50">
@@ -1440,6 +1448,8 @@ type AccionesFilaPedidos = {
   emitir: (p: FilaPec) => void;
   cancelar: (filas: FilaPec[]) => void;
   eliminar: (p: FilaPec) => void;
+  /** r1 (m35): si el rol cambia los PEC (accesoCompras). */
+  cambiarPec: boolean;
 };
 const AccionesFila = React.createContext<AccionesFilaPedidos | null>(null);
 
@@ -1450,15 +1460,16 @@ const AccionesFila = React.createContext<AccionesFilaPedidos | null>(null);
  */
 function CeldaAcciones({ p }: { p: FilaPec }) {
   const acciones = useContext(AccionesFila);
-  const accesoPec = accesoCompras(useRolActual());
+  // r1 (m35): el permiso llega por el contexto (como Tránsito con puedeAvanzar): sin leer el rol en cada fila.
+  const cambiarPec = acciones?.cambiarPec ?? false;
   const items: ItemMenuFila[] = [
     { etiqueta: 'Ver detalle', icono: Eye, onClick: () => acciones?.abrir(p) },
     { etiqueta: 'Marcar Emitido', icono: Send, onClick: () => acciones?.emitir(p),
-      oculto: !accesoPec.cambiarPec || !transicionesPec(p.estado).includes('EMITIDO') },
+      oculto: !cambiarPec || !transicionesPec(p.estado).includes('EMITIDO') },
     { etiqueta: 'Cancelar PEC', icono: Trash2, peligro: true, onClick: () => acciones?.cancelar([p]),
-      oculto: !accesoPec.cambiarPec || !transicionesPec(p.estado).includes('CANCELADO') },
+      oculto: !cambiarPec || !transicionesPec(p.estado).includes('CANCELADO') },
     { etiqueta: 'Eliminar definitivamente', icono: Trash2, peligro: true, onClick: () => acciones?.eliminar(p),
-      oculto: !accesoPec.cambiarPec || etapaPec(p.estado) !== 'cancelado' },
+      oculto: !cambiarPec || etapaPec(p.estado) !== 'cancelado' },
   ];
   return (
     <span className="flex items-center justify-end gap-0.5">
@@ -1729,7 +1740,8 @@ export default function PedidosCompraPage() {
   const abrir = useCallback((p: FilaPec) => setSelectedPec(p), []);
   const accionesFila = useMemo<AccionesFilaPedidos>(() => ({
     abrir, emitir: (p) => { void emitir(p); }, cancelar: (filas) => pedirCancelacion(filas), eliminar: (p) => { void eliminar(p); },
-  }), [abrir, emitir, pedirCancelacion, eliminar]);
+    cambiarPec: accesoPec.cambiarPec,
+  }), [abrir, emitir, pedirCancelacion, eliminar, accesoPec.cambiarPec]);
   const pestanas = pestanasDePedidos(conteos);
   // m2 de T8: el conmutador Lista / Kanban poda los estados con las opciones del modo nuevo (las columnas del tablero, o
   // las de la pestaña en Lista), con la regla de accionPestana (accionModo); lo demás de la barra va directo.
@@ -1880,7 +1892,8 @@ export default function PedidosCompraPage() {
                 className={`flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-purple-50 hover:text-purple-800 hover:border-purple-200 font-semibold text-sm shadow-sm transition-colors ${FOCO_VISIBLE}`}>
                 <ContenidoEnlace icon={BarChart3}>Ver análisis</ContenidoEnlace>
               </Link>
-              <Button color="purple" icon={Plus} onClick={()=>setShowNuevoPec(true)}>Nuevo PEC</Button>
+              {/* r1 (m7): POST /compras/pedidos es de ADMIN y COMPRAS. */}
+              {accesoPec.cambiarPec && <Button color="purple" icon={Plus} onClick={()=>setShowNuevoPec(true)}>Nuevo PEC</Button>}
             </div>
           )}
         />

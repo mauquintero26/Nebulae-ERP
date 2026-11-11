@@ -390,7 +390,8 @@ function PecDetailPanel({
                     </label>
                   ); })}
                 </div>
-                {selectedPvens.size > 0 && (
+                {/* r1 (m7): crear el PEC consolidado es POST /compras/pedidos (ADMIN y COMPRAS). */}
+                {selectedPvens.size > 0 && accesoPec.cambiarPec && (
                   <div className="p-4 border-t border-gray-100 bg-purple-50 flex items-center justify-between">
                     <span className="text-sm font-bold text-purple-800">{selectedPvens.size} PVEN seleccionado(s)</span>
                     <button onClick={handleConvertPvens} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-sm flex items-center gap-2">
@@ -471,7 +472,11 @@ const ASISTENTE_COMPRAS = {
 };
 
 /** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
-type AccionesFilaHub = { abrir: (p: FilaPec) => void; ir: (ruta: string) => void; cancelar: (filas: FilaPec[]) => void };
+type AccionesFilaHub = {
+  abrir: (p: FilaPec) => void; ir: (ruta: string) => void; cancelar: (filas: FilaPec[]) => void;
+  /** r1 (m35): si el rol cambia los PEC (accesoCompras). */
+  cambiarPec: boolean;
+};
 const AccionesFila = React.createContext<AccionesFilaHub | null>(null);
 
 /**
@@ -480,12 +485,13 @@ const AccionesFila = React.createContext<AccionesFilaHub | null>(null);
  */
 function CeldaAcciones({ p }: { p: FilaPec }) {
   const acciones = useContext(AccionesFila);
-  const accesoPec = accesoCompras(useRolActual());
+  // r1 (m35): el permiso llega por el contexto (como Tránsito con puedeAvanzar): sin leer el rol en cada fila.
+  const cambiarPec = acciones?.cambiarPec ?? false;
   const items: ItemMenuFila[] = [
     { etiqueta: 'Ver detalle', icono: Eye, onClick: () => acciones?.abrir(p) },
     { etiqueta: 'Ver en Pedidos de compra', icono: ExternalLink, onClick: () => acciones?.ir(`/dashboard/compras/pedidos?id=${p.id}`) },
     { etiqueta: 'Cancelar PEC', icono: Trash2, peligro: true, onClick: () => acciones?.cancelar([p]),
-      oculto: !accesoPec.cambiarPec || !transicionesPec(p.estado).includes('CANCELADO') },
+      oculto: !cambiarPec || !transicionesPec(p.estado).includes('CANCELADO') },
   ];
   return (
     <span className="flex items-center justify-end gap-0.5">
@@ -695,7 +701,8 @@ export default function ComprasHub() {
   const abrir = useCallback((p: FilaPec) => setSelectedPec(p), []);
   const accionesFila = useMemo<AccionesFilaHub>(() => ({
     abrir, ir: (ruta) => router.push(ruta), cancelar: (filas) => pedirCancelacion(filas),
-  }), [abrir, router, pedirCancelacion]);
+    cambiarPec: accesoPec.cambiarPec,
+  }), [abrir, router, pedirCancelacion, accesoPec.cambiarPec]);
   const pestanas = pestanasDelHub(conteos);
   // m2 de T8: el conmutador Lista / Kanban poda los estados con las opciones del modo nuevo (las columnas del tablero, o
   // las de la pestaña en Lista), con la regla de accionPestana (accionModo); lo demás de la barra va directo.

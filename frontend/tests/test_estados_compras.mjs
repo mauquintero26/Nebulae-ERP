@@ -886,10 +886,10 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
   assert.ok(!/catch \{\s*\}|catch \{ setProdSearchResults\(\[\]\); \}/.test(pag), 'ningún error mudo');
   assert.equal((pag.match(/avisarError\(err, 'No se pudo buscar el (?:casillero|proveedor|producto)'\)/g) ?? []).length, 4, 'las cuatro búsquedas');
   // El menú de fila (MenuFila) ofrece solo lo que acepta update_pec (R9, C15c): Emitir desde Borrador y cancelar con motivo.
-  // B4 T24 (FINAL-m10, D27): además, solo con el rol que hace el PATCH y el DELETE (accesoPec.cambiarPec).
-  assert.match(pag, /etiqueta: 'Marcar Emitido'[\s\S]{0,300}oculto: !accesoPec\.cambiarPec \|\| !transicionesPec\(p\.estado\)\.includes\('EMITIDO'\)/);
-  assert.match(pag, /etiqueta: 'Cancelar PEC'[\s\S]{0,200}oculto: !accesoPec\.cambiarPec \|\| !transicionesPec\(p\.estado\)\.includes\('CANCELADO'\)/);
-  assert.match(pag, /etiqueta: 'Eliminar definitivamente'[\s\S]{0,200}oculto: !accesoPec\.cambiarPec \|\| etapaPec\(p\.estado\) !== 'cancelado'/);
+  // B4 T24 (FINAL-m10, D27): además, solo con el rol que hace el PATCH y el DELETE (accesoPec.cambiarPec; r1, m35: la celda lo recibe por el contexto como cambiarPec).
+  assert.match(pag, /etiqueta: 'Marcar Emitido'[\s\S]{0,300}oculto: !cambiarPec \|\| !transicionesPec\(p\.estado\)\.includes\('EMITIDO'\)/);
+  assert.match(pag, /etiqueta: 'Cancelar PEC'[\s\S]{0,200}oculto: !cambiarPec \|\| !transicionesPec\(p\.estado\)\.includes\('CANCELADO'\)/);
+  assert.match(pag, /etiqueta: 'Eliminar definitivamente'[\s\S]{0,200}oculto: !cambiarPec \|\| etapaPec\(p\.estado\) !== 'cancelado'/);
   assert.match(pag, /<MenuFila items=\{items\} etiqueta=\{`Acciones de \$\{p\.numero\}`\} \/>/);
   // El tablero (KANBAN-compras punto 6): las reglas de R9, la tarjeta con «Recepcionar» y D39.
   assert.match(pag, /regla=\{reglaSoltarPec\}/);
@@ -942,8 +942,9 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
   // T15 r1 (m4, m14): con el PEC cancelado el TrackingPanel es de solo lectura (seguimientoCerrado, la regla del detalle).
   assert.match(pag, /const cerrado = seguimientoCerrado\(pec\.estado\);/);
   assert.match(pag, /\{cerrado \? \([\s\S]{0,200}\{TEXTO_SEGUIMIENTO_CERRADO\}[\s\S]{0,120}\) : \([\s\S]{0,120}<PasosFlujo variante="barra" pasos=\{pasosDeTracking\(stages\)\}/);
-  assert.match(pag, /const isEditing = !cerrado && editStage === sd\.stage;/);
-  assert.match(pag, /\{!cerrado && \(\s*<button onClick=\{\(\)=>openEdit\(sd\)\}/, 'sin editar las etapas de un cancelado');
+  // B4 T24 r1 (m2, D27): y solo con el rol del PATCH /tracking (puedeEditar).
+  assert.match(pag, /const isEditing = !cerrado && puedeEditar && editStage === sd\.stage;/);
+  assert.match(pag, /\{!cerrado && puedeEditar && \(\s*<button onClick=\{\(\)=>openEdit\(sd\)\}/, 'sin editar las etapas de un cancelado');
   assert.ok(!/stageColor|diasTexto|Math\.ceil\(\(new Date/.test(pag), 'sin la barra a mano ni la cuenta de días con el reloj local');
   assert.match(pag, /fecha_entrega_estimada: infoForm\.fecha_entrega_estimada \|\| null/, '«Editar información» manda null en blanco, como el alta');
   assert.ok(!/updated_by: ?localStorage/.test(pag), 'updated_by = autorActual() (sin sesión se omite)');
@@ -2993,10 +2994,28 @@ console.log('--- B4 T24 (FINAL-m10, FINAL-m31 y FINAL-m38): los tableros y las a
   for (const [nombre, c] of [['Hub', hub], ['Pedidos', pedidos]]) {
     assert.match(c, /const transiciones = accesoPec\.cambiarPec \? transicionesPec\(detail\?\.estado\) : \[\];/, `${nombre}: el panel`);
     assert.match(c, /\{seleccion\.length > 0 && (?:!enAnalisis && )?!enKanban && accesoPec\.cambiarPec && \(/, `${nombre}: la barra masiva`);
-    assert.match(c, /oculto: !accesoPec\.cambiarPec \|\| !transicionesPec\(p\.estado\)\.includes\('CANCELADO'\) \}/, `${nombre}: «Cancelar PEC» de la fila`);
+    assert.match(c, /oculto: !cambiarPec \|\| !transicionesPec\(p\.estado\)\.includes\('CANCELADO'\) \}/, `${nombre}: «Cancelar PEC» de la fila`);
+    // r1 (m35): la celda de acciones recibe el permiso por el contexto (como Tránsito con puedeAvanzar), sin leer el rol por fila.
+    const celda = c.slice(c.indexOf('function CeldaAcciones('), c.indexOf('\n}\n', c.indexOf('function CeldaAcciones(')));
+    assert.ok(!celda.includes('useRolActual'), `${nombre}: la celda no lee el rol`);
+    assert.match(celda, /const acciones = useContext\(AccionesFila\);\s*const cambiarPec = acciones\?\.cambiarPec \?\? false;/, `${nombre}: el permiso del contexto`);
+    assert.match(c, /cambiarPec: boolean;/, `${nombre}: el tipo del contexto`);
+    assert.match(c, /cambiarPec: accesoPec\.cambiarPec,/, `${nombre}: la página lo pasa`);
+    assert.equal((c.match(/accesoCompras\(useRolActual\(\)\)/g) ?? []).length, 2, `${nombre}: el panel y la página, no cada fila`);
   }
-  assert.match(pedidos, /oculto: !accesoPec\.cambiarPec \|\| !transicionesPec\(p\.estado\)\.includes\('EMITIDO'\) \}/, '«Marcar Emitido» de la fila');
-  assert.match(pedidos, /oculto: !accesoPec\.cambiarPec \|\| etapaPec\(p\.estado\) !== 'cancelado' \}/, '«Eliminar definitivamente» de la fila');
+  assert.match(pedidos, /oculto: !cambiarPec \|\| !transicionesPec\(p\.estado\)\.includes\('EMITIDO'\) \}/, '«Marcar Emitido» de la fila');
+  assert.match(pedidos, /oculto: !cambiarPec \|\| etapaPec\(p\.estado\) !== 'cancelado' \}/, '«Eliminar definitivamente» de la fila');
+  // r1 (m2, m7): el resto de las escrituras del PEC solo con el rol de su require_roles (erp_compras.py: PATCH /pedidos/{id}/tracking,
+  // PATCH /pedidos/{id}, POST /pedidos/{id}/recepcionar, PUT /tracking-config/{tipo} y POST /pedidos, todos de ADMIN y COMPRAS).
+  assert.match(pedidos, /function TrackingPanel\(\{pec, onUpdate, onToast, puedeEditar\}: \{pec:any; onUpdate:\(\)=>void; onToast:AvisoPantalla; puedeEditar: boolean\}\)/);
+  assert.match(pedidos, /const isEditing = !cerrado && puedeEditar && editStage === sd\.stage;/, 'sin permiso, la tarjeta no se edita');
+  assert.match(pedidos, /\{!cerrado && puedeEditar && \(\s*<button onClick=\{\(\)=>openEdit\(sd\)\}/, 'el lápiz de la etapa');
+  assert.match(pedidos, /<TrackingPanel pec=\{detail\|\|pec\} puedeEditar=\{accesoPec\.tracking\}/);
+  assert.match(pedidos, /\{accesoPec\.cambiarPec && \(\s*<button onClick=\{\(\)=>setShowConfig\(true\)\} title="Configurar etapas, alertas y casilleros"/, 'Configurar etapas (PUT /tracking-config)');
+  assert.match(pedidos, /\{\(detail\?\.recepciones\?\.length > 0 \|\| accesoPec\.cambiarPec\) && \(\s*<button onClick=\{goToRecepcion\}/, '«Hacer recepción» (POST /recepcionar); «Ver recepción» para todos');
+  assert.match(pedidos, /\{!infoEdit \? \(accesoPec\.cambiarPec && \(\s*<button onClick=\{openInfoEdit\}/, '«Editar» la información (PATCH /pedidos/{id})');
+  assert.match(pedidos, /\{accesoPec\.cambiarPec && <Button color="purple" icon=\{Plus\} onClick=\{\(\)=>setShowNuevoPec\(true\)\}>Nuevo PEC<\/Button>\}/, '«Nuevo PEC» (POST /pedidos)');
+  assert.match(hub, /\{selectedPvens\.size > 0 && accesoPec\.cambiarPec && \(/, '«Crear PEC Consolidado» (POST /pedidos)');
   assert.match(pedidos, /\{accesoPec\.cambiarPec && etapaPec\(detail\?\.estado\) === 'cancelado' && \(/, '«Eliminar definitivamente» del panel');
   // Tránsito: «Iniciar» y «Completar» de la fila (el mismo PATCH /tracking) solo con tracking.
   assert.match(transito, /puedeAvanzar: accesoPec\.tracking/);
