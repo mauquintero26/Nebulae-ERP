@@ -509,7 +509,7 @@ console.log('--- TEST 16 (B4 T24, FINAL-m37 y F96): la sonda de cableado del CRM
   const c = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   // El rol después de montar (useRolActual, fuera del inicializador de useState) y el acceso de lib/roles.js (casos en test_roles.mjs).
   assert.match(c, /import \{ useRolActual \} from '@\/components\/ui\/useRolActual';/);
-  assert.match(c, /import \{ accesoCrm \} from '@\/lib\/roles';/);
+  assert.match(c, /import \{ accesoCrm, TEXTO_SIN_LEADS \} from '@\/lib\/roles';/);
   assert.match(c, /const rol = useRolActual\(\);\s*const acceso = accesoCrm\(rol\);/);
   assert.ok(!/useState\([^)]*useRolActual|esAdmin\(|esAdminOAsesor\(|'ADMIN'|'ASESOR'/.test(c), 'la pantalla no decide el rol a mano');
   // Al montar: sin leads no se pide nada; /crm/warmup (solo ADMIN) solo con acceso.warmup.
@@ -519,7 +519,8 @@ console.log('--- TEST 16 (B4 T24, FINAL-m37 y F96): la sonda de cableado del CRM
   assert.match(c, /esperar: !listo \|\| !acceso\.listo, despachar, activo: estado\.modo === 'lista' && !enAnalisis && acceso\.leads,/);
   assert.match(c, /activo: listo && acceso\.leads && estado\.modo === 'kanban' && !enAnalisis,/);
   // El texto neutro (igual que Seguimientos) en lugar de la barra, la Lista, el tablero y el Análisis.
-  assert.match(c, /const TEXTO_SIN_LEADS = 'Tu rol no ve los leads del CRM\.';/);
+  // r1 (m30): el texto, una sola vez en lib/roles.js (lo usan el CRM y Seguimientos); la caja, el token CAJA_SIN_PERMISO.
+  assert.ok(!/const TEXTO_SIN_LEADS =/.test(c), 'sin copia local del texto');
   assert.match(c, /\{acceso\.listo && !acceso\.leads && \(\s*<p role="status"[^>]*>\{TEXTO_SIN_LEADS\}<\/p>\s*\)\}/);
   assert.match(c, /\{acceso\.leads && !enAnalisis && \(/);
   assert.match(c, /\{acceso\.leads && enAnalisis && \(/);
@@ -537,6 +538,31 @@ console.log('--- TEST 16 (B4 T24, FINAL-m37 y F96): la sonda de cableado del CRM
   assert.match(c, /\{onReintentar && \(\s*<button type="button" onClick=\{onReintentar\}/);
   assert.match(c, /<ErrorCarga texto=\{textoDeError\(errorEtapas, 'No se pudieron cargar las etapas del CRM'\)\} onReintentar=\{ofreceReintentar\(errorEtapas\) \? \(\) => loadAll\(\) : undefined\}\/>/);
   assert.match(c, /<ErrorCarga texto=\{textoDeError\(errorLeads, 'No se pudieron cargar los leads'\)\} onReintentar=\{ofreceReintentar\(errorLeads\) \? \(\) => loadAll\(\) : undefined\}\/>/);
+  // r1 (m1, m5, m43): sin permiso, el encabezado no dice «Cargando leads…» (loadAll no corre): sin subtítulo.
+  assert.match(c, /subtitle=\{acceso\.listo && !acceso\.leads \? undefined\s*: leadsListos \? `\$\{leads\.length\} leads · \$\{formatoPesos\(totalValue\)\} en pipeline`\s*: errorLeads \? 'No se pudieron cargar los leads' : 'Cargando leads…'\}/);
+  // r1 (m9 a): con el rol vacío (la hidratación), el esqueleto del tablero, no la pantalla en blanco.
+  assert.match(c, /\{!acceso\.listo && \(\s*<div className="flex-1 min-h-0 overflow-hidden p-5">\s*<EsqueletoTablero\/>\s*<\/div>\s*\)\}/);
+  // r1 (m6, m31): los dos «Reintentar» del aviso del tablero, solo si el error lo permite (un 403, no).
+  assert.match(c, /\{textoDeError\(fallo, 'No se pudo actualizar el CRM'\)\}\s*\{ofreceReintentar\(fallo\) && \(\s*<>\{' '\}<button type="button" onClick=\{\(\) => loadAll\(\)\}/);
+  assert.match(c, /\{textoDeError\(errorPerdidos, 'No se pudo cargar la columna Perdido'\)\}\s*\{ofreceReintentar\(errorPerdidos\) && \(\s*<>\{' '\}<button type="button" onClick=\{cargarPerdidos\}/);
+  assert.equal((c.match(/>Reintentar<\/button>/g) ?? []).length, 2, 'los dos del aviso, los dos con su guarda (ErrorCarga pinta el suyo con onReintentar)');
+  // r1 (m30): Seguimientos usa el mismo texto de la lib; las cajas neutras de f1, el token.
+  const { TEXTO_SIN_LEADS, accesoCrm } = await import('../src/lib/roles.js');
+  assert.equal(TEXTO_SIN_LEADS, 'Tu rol no ve los leads del CRM.');
+  assert.equal(typeof accesoCrm, 'function');
+  const leerSrc = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const ds = leerSrc('lib/design-system.ts');
+  assert.match(ds, /export const CAJA_SIN_PERMISO = 'rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600';/);
+  const seg = leerSrc('app/dashboard/crm/calendario/page.tsx');
+  assert.match(seg, /import \{[^}]*\bTEXTO_SIN_LEADS\b[^}]*\} from '@\/lib\/roles';/);
+  assert.ok(!/const TEXTO_SIN_LEADS =/.test(seg), 'Seguimientos: sin copia local');
+  const CAJAS = {'app/dashboard/crm/page.tsx': 'm-5 ', 'app/dashboard/crm/calendario/page.tsx': '', 'app/dashboard/finanzas/gastos/page.tsx': '', 'app/dashboard/ecommerce/page.tsx': '', 'app/dashboard/marketing/campanas/page.tsx': 'm-6 '};
+  for (const [ruta, margen] of Object.entries(CAJAS)) {
+    const f = leerSrc(ruta);
+    assert.ok(f.includes(`<p role="status" className={\`${margen}\${CAJA_SIN_PERMISO}\`}>`), `${ruta}: la caja con el token`);
+    assert.ok(!f.includes('rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600'), `${ruta}: sin la copia de la caja`);
+    assert.match(f, /import \{[^}]*\bCAJA_SIN_PERMISO\b[^}]*\} from '@\/lib\/design-system';/, `${ruta}: importa el token`);
+  }
 }
 
 console.log('OK test_crm_etapas');

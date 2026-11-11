@@ -12,7 +12,8 @@ import { SubNav, PageHeader, FranjaKpis, TarjetaKpi, useEstadoKpi } from '@/comp
 import { AvisoFuente } from '@/components/ui/AvisoFuente';
 import { useRolActual } from '@/components/ui/useRolActual';
 import { CRM_NAV } from '../crm-nav';
-import { accesoSeguimientos } from '@/lib/roles';
+import { accesoSeguimientos, TEXTO_SIN_LEADS } from '@/lib/roles';
+import { CAJA_SIN_PERMISO } from '@/lib/design-system';
 import { avisoDeFuente, estadoFranjaDeFuente, motivoSinPermiso } from '@/lib/avisos';
 import { formatoEntero, lecturaDeFuente, textoLimiteCarritos } from '@/lib/kpis';
 import {
@@ -22,9 +23,6 @@ import {
 
 /** Lo último que llegó de la carga (leads y etapas juntos): la vuelta con la que se pidió, sus datos y su error (lecturaDeFuente). */
 type Cargado = { vuelta: number; datos: { leads: any[]; stages: any[]; total: number } | null; error: unknown };
-
-/** El texto de quien no puede ver los leads (GET /crm/leads es de ADMIN y ASESOR): neutro, sin «Reintentar». */
-const TEXTO_SIN_LEADS = 'Tu rol no ve los leads del CRM.';
 
 export default function SeguimientosPage() {
   // B4 T23B: el rol se lee después de montar (useRolActual: '' hasta entonces, y no se pide nada) y la pantalla no pide lo que el rol no
@@ -105,7 +103,7 @@ export default function SeguimientosPage() {
           )} />
 
         {acceso.listo && !acceso.leads ? (
-          <p role="status" className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600">{TEXTO_SIN_LEADS}</p>
+          <p role="status" className={`${CAJA_SIN_PERMISO}`}>{TEXTO_SIN_LEADS}</p>
         ) : (
           <>
             {aviso && <AvisoFuente aviso={aviso} onReintentar={reintentar} />}

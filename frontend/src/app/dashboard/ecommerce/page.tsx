@@ -39,7 +39,7 @@ import { accesoTienda } from '@/lib/roles';
 import { formatoPesos } from '@/lib/pesos';
 import { fechaCorta, fechaHoraLarga, horaCO } from '@/lib/fechas-colombia';
 import { avisoDeFuente, estadoFranjaDeFuente, motivoSinPermiso, recargarTrasError } from '@/lib/avisos';
-import { FOCOS, TABLE } from '@/lib/design-system';
+import { CAJA_SIN_PERMISO, FOCOS, TABLE } from '@/lib/design-system';
 import { getUsuarioActual } from '../ventas/flujo';
 import { CONTENEDOR } from '../inventario/piezas-inventario';
 import { CHIP } from '../compras/columnas-pec';
@@ -1049,7 +1049,7 @@ export default function EcommercePage() {
               {/* La barra (búsqueda al servidor con retardo, filtro de estados reales, «Ajustar tabla», Lista / Kanban y pantalla
                   completa) y la tabla estándar en el servidor, o el tablero con el MISMO estado. */}
               {acceso.listo && !acceso.pedidos && (
-                <p role="status" className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600">{TEXTO_SIN_PEDIDOS}</p>
+                <p role="status" className={`${CAJA_SIN_PERMISO}`}>{TEXTO_SIN_PEDIDOS}</p>
               )}
               {(!acceso.listo || acceso.pedidos) && (<>
               {capa}

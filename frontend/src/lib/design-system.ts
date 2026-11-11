@@ -129,6 +129,9 @@ export const FOCO_DENTRO = 'outline-indigo-700 focus-visible:outline-2 focus-vis
  */
 export const FOCO_CAMPO = 'outline-indigo-700 focus:outline-2 focus:outline-offset-2 focus:outline-indigo-700 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-indigo-700';
 
+/** B4 T24 r1 (m30): la caja del texto neutro de un rol sin permiso («Tu rol no ve …», role=status): una sola copia. */
+export const CAJA_SIN_PERMISO = 'rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600';
+
 /** Nav pills del sub-módulo (sticky top) */
 export const NAV = {
   wrapper: 'bg-white border-b border-gray-200 px-6 py-2 flex items-center gap-1 sticky top-0 z-30 shadow-sm overflow-x-auto',

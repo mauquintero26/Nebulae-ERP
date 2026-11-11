@@ -23,7 +23,7 @@ import {
 } from '@/lib/tabla';
 // Las piezas del selector de categoría y el contenedor de las pantallas del bloque son las de Inventario (T18): no se copian.
 import { CONTENEDOR, SelectorCatalogo } from '../../inventario/piezas-inventario';
-import { FOCOS } from '@/lib/design-system';
+import { CAJA_SIN_PERMISO, FOCOS } from '@/lib/design-system';
 import type { Catalogo } from '../../inventario/piezas-inventario';
 import { FIN_NAV } from '../fin-nav';
 
@@ -236,7 +236,7 @@ export default function GastosPage() {
       {/* La barra con la búsqueda (q) y el filtro de categoría (para seguir el aviso «N categorías más»), y la tabla estándar en el
           servidor o el tablero solo para ver por categoría con el MISMO estado. */}
       {acceso.listo && !acceso.gastos ? (
-        <p role="status" className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600">{TEXTO_SIN_GASTOS}</p>
+        <p role="status" className={`${CAJA_SIN_PERMISO}`}>{TEXTO_SIN_GASTOS}</p>
       ) : (
       <div className="flex min-w-0 flex-col gap-4">
         {capa}

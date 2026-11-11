@@ -159,6 +159,9 @@ export function accesoCopilot(rol) {
   return { listo: true, consultar: esUnoDe(rol, 'ADMIN', 'ASESOR', 'FINANZAS') };
 }
 
+/** B4 T24 (FINAL-m37) y r1 (m30): lo que ve un rol sin GET /crm/leads (ADMIN y ASESOR) en el CRM y en Seguimientos: neutro, sin «Reintentar». */
+export const TEXTO_SIN_LEADS = 'Tu rol no ve los leads del CRM.';
+
 /** B4 T24: el motivo de un tablero que el rol no puede mover (soloLectura de TableroKanban): no se arrastra ni se ofrece «Mover a…». */
 export const TEXTO_TABLERO_SOLO_VER = 'Tu rol solo puede ver este tablero.';
 

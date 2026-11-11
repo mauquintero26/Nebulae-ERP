@@ -1402,7 +1402,7 @@ export function TableroKanban<T = unknown>({
                 if (!ocupada) tablero.verMas(c.clave);
               }}
               disabled={d.cargandoMas || d.cargando || ocupada || d.cargaFallida}
-              title={ocupada ? 'Espera a que termine el cambio de una tarjeta de esta columna.' : d.cargaFallida ? 'Reintenta esta columna para ver más.' : undefined}
+              title={ocupada ? 'Espera a que termine el cambio de una tarjeta de esta columna.' : d.cargaFallida && ofreceReintentar(d.error) ? 'Reintenta esta columna para ver más.' : undefined}
               className={`flex w-full items-center justify-center gap-1 rounded-xl border border-dashed border-slate-300 py-2 text-xs font-bold hover:bg-white disabled:opacity-60 ${TEXTO_VER_MAS[color]} ${FOCO}`}
             >
               {d.cargandoMas && <Loader2 size={12} aria-hidden="true" className="animate-spin" />}

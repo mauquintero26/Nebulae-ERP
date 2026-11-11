@@ -18,6 +18,7 @@ import { diaDeNegocio } from '@/lib/listas-ventas';
 import { humanizarCodigo } from '@/lib/estados-pedido';
 import { formatoPesos } from '@/lib/pesos';
 import { accesoresDeOrden, estadoDelTotal } from '@/lib/tabla';
+import { CAJA_SIN_PERMISO } from '@/lib/design-system';
 // B4 T23B: el dinero con el formato del catálogo (formatoPesos: '$1.062.523', sin el espacio duro de Intl).
 const fCOP = (v: number) => formatoPesos(v || 0);
 // m11: la fecha de una campaña es un día de calendario (fechaCorta), no un instante que se corre a la víspera en Colombia.
@@ -210,7 +211,7 @@ export default function CampanasPage() {
     return (
       <div className="w-full h-full bg-slate-50 flex flex-col overflow-hidden">
         <SubNav label="Marketing" items={MKT_NAV} currentPath="/dashboard/marketing/campanas" color="emerald" hub={{ href: '/dashboard/marketing' }} />
-        <p role="status" className="m-6 rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600">Tu rol no ve las campañas de Marketing.</p>
+        <p role="status" className={`m-6 ${CAJA_SIN_PERMISO}`}>Tu rol no ve las campañas de Marketing.</p>
       </div>
     );
   }

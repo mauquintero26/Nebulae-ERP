@@ -1064,6 +1064,8 @@ console.log('--- TEST T24 (B4 T24, paquete f1): el tablero común ---');
   // F106: una columna con un 403 no ofrece «Reintentar» (la regla es ofreceReintentar de lib/avisos.js, con sus casos en test_avisos.mjs).
   assert.match(codigoKanban, /import \{[^}]*\bofreceReintentar\b[^}]*\} from '@\/lib\/avisos';/);
   assert.match(codigoKanban, /\{ofreceReintentar\(d\.error\) && \(\s*<button\s+type="button"\s+onClick=\{\(\) => tablero\.recargar\(\[c\.clave\]\)\}/);
+  // r1 (m6): con un 403, «Ver más» no dice «Reintenta esta columna…» (ya no hay botón para reintentar).
+  assert.match(codigoKanban, /title=\{ocupada \? 'Espera a que termine el cambio de una tarjeta de esta columna\.' : d\.cargaFallida && ofreceReintentar\(d\.error\) \? 'Reintenta esta columna para ver más\.' : undefined\}/);
 }
 
 console.log('--- TEST T24-b (B4 T24: F11, F12, F13, F15, F16, F17, F19, F20, F21 y F22): el tablero común ---');

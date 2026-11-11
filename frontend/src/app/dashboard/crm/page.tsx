@@ -32,9 +32,9 @@ import {
 import { estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
 import { formatoPesos } from '@/lib/pesos';
 import { ofreceReintentar, recargarTrasError, textoDeError } from '@/lib/avisos';
-import { accesoCrm } from '@/lib/roles';
+import { accesoCrm, TEXTO_SIN_LEADS } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
-import { FOCOS, TABLE } from '@/lib/design-system';
+import { CAJA_SIN_PERMISO, FOCOS, TABLE } from '@/lib/design-system';
 import { CRM_NAV } from './crm-nav';
 
 async function apiFetch(path, opts = {}) {
@@ -213,8 +213,6 @@ const ASISTENTE_CRM = {
   ejemplos: ['¿Qué leads llevan más días sin movimiento?', '¿En qué etapa se quedan los leads?'],
 };
 const FOCO_VISIBLE = FOCOS.indigo;
-/** B4 T24 (FINAL-m37): lo que ve un rol sin permiso (GET /crm/leads es de ADMIN y ASESOR), igual que Seguimientos: neutro, sin «Reintentar». */
-const TEXTO_SIN_LEADS = 'Tu rol no ve los leads del CRM.';
 
 /**
  * «Abrir» y «Borrar» de la fila de la Lista: las columnas son estables (useMemo por las etapas) y leen esto del contexto. B4 T24 (F96):
@@ -996,7 +994,9 @@ export default function CRMPage() {
       <div className="bg-white border-b border-slate-200 flex-shrink-0 px-6 py-4">
         <PageHeader icon={LayoutGrid} color="indigo"
           title="CRM Pipeline"
-          subtitle={leadsListos ? `${leads.length} leads · ${formatoPesos(totalValue)} en pipeline`
+          // r1 (m1, m5, m43): sin permiso loadAll no corre: sin subtítulo (nunca «Cargando leads…» para siempre).
+          subtitle={acceso.listo && !acceso.leads ? undefined
+            : leadsListos ? `${leads.length} leads · ${formatoPesos(totalValue)} en pipeline`
             : errorLeads ? 'No se pudieron cargar los leads' : 'Cargando leads…'}
           actions={acceso.leads ? (
             <div className="flex items-center gap-2 flex-wrap">
@@ -1028,8 +1028,15 @@ export default function CRMPage() {
           ) : undefined} />
       </div>
 
+      {/* r1 (m9 a): mientras se lee el rol, el esqueleto del tablero (como Gastos), no la pantalla en blanco. */}
+      {!acceso.listo && (
+        <div className="flex-1 min-h-0 overflow-hidden p-5">
+          <EsqueletoTablero/>
+        </div>
+      )}
+
       {acceso.listo && !acceso.leads && (
-        <p role="status" className="m-5 rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600">{TEXTO_SIN_LEADS}</p>
+        <p role="status" className={`m-5 ${CAJA_SIN_PERMISO}`}>{TEXTO_SIN_LEADS}</p>
       )}
 
       {/* ══ B4 T21: la barra, la Lista y el Kanban (TABLA-otros 4, KANBAN-crm 3 y 5; R5, R11, D39, D40, D41) ═════════
@@ -1158,14 +1165,19 @@ export default function CRMPage() {
                     <div className="flex flex-col gap-1">
                       {fallo && leadsTablero && (
                         <p role="alert" className="text-rose-800">
-                          {textoDeError(fallo, 'No se pudo actualizar el CRM')}{' '}
-                          <button type="button" onClick={() => loadAll()} className={`rounded font-bold underline ${FOCO_VISIBLE}`}>Reintentar</button>
+                          {textoDeError(fallo, 'No se pudo actualizar el CRM')}
+                          {/* r1 (m6, m31): un 403 no ofrece «Reintentar» (ofreceReintentar). */}
+                          {ofreceReintentar(fallo) && (
+                            <>{' '}<button type="button" onClick={() => loadAll()} className={`rounded font-bold underline ${FOCO_VISIBLE}`}>Reintentar</button></>
+                          )}
                         </p>
                       )}
                       {falloPerdido && (
                         <p role="alert" className="text-rose-800">
-                          {textoDeError(errorPerdidos, 'No se pudo cargar la columna Perdido')}{' '}
-                          <button type="button" onClick={cargarPerdidos} className={`rounded font-bold underline ${FOCO_VISIBLE}`}>Reintentar</button>
+                          {textoDeError(errorPerdidos, 'No se pudo cargar la columna Perdido')}
+                          {ofreceReintentar(errorPerdidos) && (
+                            <>{' '}<button type="button" onClick={cargarPerdidos} className={`rounded font-bold underline ${FOCO_VISIBLE}`}>Reintentar</button></>
+                          )}
                         </p>
                       )}
                     </div>
