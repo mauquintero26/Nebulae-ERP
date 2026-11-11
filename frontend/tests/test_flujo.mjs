@@ -911,23 +911,31 @@ console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuent
   assert.ok(!/Sin resolver|Pendientes/.test(banner), 'cruce C9: el botón es «No resueltos» (sale de opcionesSemaforo)');
   assert.ok(!/partes/.test(banner.split('export function BannerFlujo')[1]), "R1: partes no se lee (solo 'todo')");
 
-  // useResumenFlujo: apiFetch con signal, el turno de crearCargaListado, abortar al desmontar o al cambiar.
+  // useResumenFlujo. B4 T24 f2 r1 (C2, D27): una sola implementación del cargador. useResumenFlujo es el envoltorio de useResumen
+  // (components/ui) con la regla del flujo (RESUMEN_DEL_FLUJO: sus textos y, con error, lo último bueno) y su forma pública de siempre
+  // ({datos, cargando, error, recargar}). Las protecciones de antes (apiFetch con signal, el turno de crearCargaListado, abortar al
+  // desmontar o al cambiar, r1 M12 el usuario del token, r1 M13 las vueltas, la clave y el efecto) siguen, sobre el cableado común.
   const hook = codigo(fuentes['useResumenFlujo.ts']);
-  assert.match(hook, /import \{ apiFetch \} from '@\/lib\/api';/);
-  assert.match(hook, /const pedirResumen = \(url: string, signal: AbortSignal\) => apiFetch\(url, \{ signal \}\);/);
-  assert.match(hook, /import \{ crearCargaListado \} from '@\/lib\/tabla';/);
-  assert.match(hook, /alLlegar: \(llegada\) => setResultado\(\(previo\) => aplicarLlegadaResumen\(previo, llegada\)\)/);
-  // r1 (M12): el usuario del token, como useListado (T4C r2); usuarioDeLaSesion sigue sin exportarse en el index de tabla.
-  assert.match(hook, /import \{ usuarioDeLaSesion \} from '@\/components\/tabla\/usuarioDeLaSesion';/);
+  assert.match(hook, /import \{ useResumen \} from '@\/components\/ui\/useResumen';/);
+  assert.match(hook, /import \{ RESUMEN_DEL_FLUJO \} from '@\/lib\/flujo';/);
+  assert.match(hook, /export function useResumenFlujo<T = DatosFlujo>\(ruta: string, recarga: number = 0\): ResumenFlujo<T> \{\s*const r = useResumen<T>\(ruta, recarga, RESUMEN_DEL_FLUJO\);\s*return useMemo\(\s*\(\) => \(\{ datos: r\.datos, cargando: r\.cargando, error: r\.error, recargar: r\.recargar \}\),\s*\[r\],\s*\);\s*\}/);
+  for (const copia of ['crearCargaListado', 'useEffect', 'useSyncExternalStore', 'usuarioDeLaSesion', 'apiFetch', 'estadoResumen']) {
+    assert.ok(!hook.includes(copia), `useResumenFlujo sin su copia del cargador: ${copia}`);
+  }
+  const comun = codigo(leer('components/ui/useResumen.ts'));
+  assert.match(comun, /import \{ apiFetch \} from '@\/lib\/api';/);
+  assert.match(comun, /const pedirResumen = \(url: string, signal: AbortSignal\) => apiFetch\(url, \{ signal \}\);/);
+  assert.match(comun, /import \{ crearCargaListado \} from '@\/lib\/tabla';/);
+  assert.match(comun, /alLlegar: \(llegada\) => setResultado\(\(previo\) => aplicarLlegadaResumen\(previo, llegada, regla\)\)/);
+  assert.match(comun, /import \{ usuarioDeLaSesion \} from '@\/components\/tabla\/usuarioDeLaSesion';/);
   assert.ok(!/usuarioDeLaSesion/.test(leer('components/tabla/index.ts')), 'el index de tabla no lo exporta');
-  assert.match(hook, /const usuario = usuarioDeLaSesion\(\);/);
-  // r1 (M13): las vueltas de la carga.
-  assert.match(hook, /const repeticion = useSyncExternalStore\(carga\.suscribir, carga\.repeticion, carga\.repeticion\);/);
-  assert.match(hook, /const clave = `\$\{version\}\|\$\{usuario \?\? ''\}\|\$\{recarga\}\|\$\{ruta\}`;/);
-  assert.match(hook, /useEffect\(\(\) => \{\s*carga\.cargar\(ruta, clave, \{ ruta, usuario \}\);\s*return \(\) => carga\.cancelar\(\);\s*\}, \[carga, ruta, clave, usuario\]\);/);
-  assert.match(hook, /const recargar = useCallback\(\(\) => setVersion\(\(v\) => v \+ 1\), \[\]\);/);
-  assert.match(hook, /const visto = estadoResumen\(resultado, \{ clave, ruta, usuario, repeticion \}\);/);
-  assert.match(hook, /recarga: number = 0/);
+  assert.match(comun, /const usuario = usuarioDeLaSesion\(\);/);
+  assert.match(comun, /const repeticion = useSyncExternalStore\(carga\.suscribir, carga\.repeticion, carga\.repeticion\);/);
+  assert.match(comun, /const clave = `\$\{version\}\|\$\{usuario \?\? ''\}\|\$\{recarga\}\|\$\{ruta\}`;/);
+  assert.match(comun, /useEffect\(\(\) => \{\s*carga\.cargar\(ruta, clave, \{ ruta, usuario \}\);\s*return \(\) => carga\.cancelar\(\);\s*\}, \[carga, ruta, clave, usuario\]\);/);
+  assert.match(comun, /const recargar = useCallback\(\(\) => setVersion\(\(v\) => v \+ 1\), \[\]\);/);
+  assert.match(comun, /const visto = estadoResumen\(resultado, \{ clave, ruta, usuario, repeticion \}\);/);
+  assert.match(comun, /recarga: number = 0, regla: ReglaResumen = RESUMEN_DE_TARJETAS/);
 }
 
 console.log('--- TEST 21 (B4 T9 r1, m6): BannerFlujo reserva el renglón de los avisos con reservarAvisos (aditivo) ---');
@@ -1103,11 +1111,29 @@ console.log('--- B4 T24 f2 (F45): useResumen — el cargador de resúmenes compa
   assert.equal(F.aplicarLlegadaResumen(previoFlujo, { marca: 'b', ok: false, error: e500, contexto: { ruta: RUTA } }, F.RESUMEN_DE_TARJETAS).datos, null);
   // El hook (components/ui/useResumen.ts) usa esas piezas, va con el usuario del token y expone si ofrecer «Reintentar».
   const hook = readFileSync(new URL('../src/components/ui/useResumen.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-  for (const parte of ['crearCargaListado({', 'aplicarLlegadaResumen(previo, llegada, RESUMEN_DE_TARJETAS)', 'estadoResumen(resultado, { clave, ruta, usuario, repeticion })',
+  // r1 (C2 y m31, D27): la regla es un parámetro (por defecto la de las tarjetas; useResumenFlujo pasa la del flujo), y la lista suma
+  // las tres líneas que producen la recarga y el cambio de usuario (como useAnalisis en test_analisis): sin `usuario` en la carga, o
+  // sin `clave` en las dependencias, «Actualizar» y la cuenta nueva no piden nada.
+  for (const parte of ['crearCargaListado({', 'aplicarLlegadaResumen(previo, llegada, regla)', 'estadoResumen(resultado, { clave, ruta, usuario, repeticion })',
     'const usuario = usuarioDeLaSesion();', 'const clave = `${version}|${usuario ?? \'\'}|${recarga}|${ruta}`;', 'ofreceReintentar: ofreceReintentar(visto.error)',
-    'return () => carga.cancelar();']) {
+    'return () => carga.cancelar();', 'regla: ReglaResumen = RESUMEN_DE_TARJETAS',
+    'carga.cargar(ruta, clave, { ruta, usuario });', '}, [carga, ruta, clave, usuario]);', 'const recargar = useCallback(() => setVersion((v) => v + 1), []);']) {
     assert.ok(hook.includes(parte), `useResumen: ${parte}`);
   }
+  // Una sola implementación del cargador de resúmenes en components/: solo useResumen.ts arma la carga con aplicarLlegadaResumen.
+  const { readdirSync, statSync } = await import('node:fs');
+  const { fileURLToPath } = await import('node:url');
+  const { join } = await import('node:path');
+  const conCargador = [];
+  const recorrer = (dir) => {
+    for (const n of readdirSync(dir)) {
+      const ruta = join(dir, n);
+      if (statSync(ruta).isDirectory()) recorrer(ruta);
+      else if (/\.tsx?$/.test(n) && readFileSync(ruta, 'utf8').includes('aplicarLlegadaResumen(')) conCargador.push(n);
+    }
+  };
+  recorrer(fileURLToPath(new URL('../src/components', import.meta.url)));
+  assert.deepEqual(conCargador, ['useResumen.ts'], 'una sola implementación del cargador (C2)');
   // Las copias de Ventas (el Hub y Pedidos de venta) usan el hook: sin su AbortController ni su vuelta a mano.
   for (const ruta of ['app/dashboard/ventas/page.tsx', 'app/dashboard/ventas/venta/venta-client.tsx']) {
     const f = readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');

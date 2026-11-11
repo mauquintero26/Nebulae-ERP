@@ -5,8 +5,8 @@ import { apiFetch } from '@/lib/api';
 import { ofreceReintentar } from '@/lib/avisos';
 import { crearCargaListado } from '@/lib/tabla';
 import { aplicarLlegadaResumen, estadoResumen, RESUMEN_DE_TARJETAS } from '@/lib/flujo';
-import type { ResultadoResumen } from '@/lib/flujo';
-// El usuario del token, como useListado y useResumenFlujo (interno de components/tabla: su index no lo exporta).
+import type { ReglaResumen, ResultadoResumen } from '@/lib/flujo';
+// El usuario del token, como useListado (interno de components/tabla: su index no lo exporta).
 import { usuarioDeLaSesion } from '@/components/tabla/usuarioDeLaSesion';
 
 /** Lo que devuelve useResumen. */
@@ -35,18 +35,21 @@ const pedirResumen = (url: string, signal: AbortSignal) => apiFetch(url, { signa
  *    tanto no se muestra nada de la anterior;
  *  - con error, sin los datos de antes (RESUMEN_DE_TARJETAS: las tarjetas dicen «—», C6) y, al reintentar, cargando sin el error viejo;
  *  - nunca un 0 mientras carga: datos null (las tarjetas pintan barras grises).
- * La lógica es pura (aplicarLlegadaResumen y estadoResumen de lib/flujo.js, la de useResumenFlujo, con la regla de las tarjetas), con
- * sus casos en test_flujo.mjs («B4 T24 f2 (F45)»): llega, falla, abortado, recarga, cambio de usuario y el 403.
+ * La lógica es pura (aplicarLlegadaResumen y estadoResumen de lib/flujo.js), con sus casos en test_flujo.mjs («B4 T24 f2 (F45)»):
+ * llega, falla, abortado, recarga, cambio de usuario (también a mitad de una carga) y el 403.
  * `recarga`: un número que la pantalla sube cuando cambió algo (por ejemplo, «Actualizar» o después de un cambio de estado).
+ * `regla` (r1, C2): la de la llegada (lib/flujo.js). Por defecto RESUMEN_DE_TARJETAS; useResumenFlujo (components/flujo) es este
+ * mismo hook con RESUMEN_DEL_FLUJO (sus textos y, con error, lo último bueno): una sola implementación del cargador. La regla es
+ * la del primer render (cada pantalla pasa una constante).
  */
-export function useResumen<T>(ruta: string, recarga: number = 0): Resumen<T> {
+export function useResumen<T>(ruta: string, recarga: number = 0, regla: ReglaResumen = RESUMEN_DE_TARJETAS): Resumen<T> {
   const [version, setVersion] = useState(0);
   const [resultado, setResultado] = useState<ResultadoResumen | null>(null);
   const [carga] = useState(() => crearCargaListado({
     pedir: pedirResumen,
-    alLlegar: (llegada) => setResultado((previo) => aplicarLlegadaResumen(previo, llegada, RESUMEN_DE_TARJETAS)),
+    alLlegar: (llegada) => setResultado((previo) => aplicarLlegadaResumen(previo, llegada, regla)),
   }));
-  // Volver a pedir una clave que ya llegó es otra vuelta de la carga: cargando hasta que llega (M13 de useResumenFlujo).
+  // Volver a pedir una clave que ya llegó es otra vuelta de la carga: cargando hasta que llega (r1 M13 de T5A).
   const repeticion = useSyncExternalStore(carga.suscribir, carga.repeticion, carga.repeticion);
   const usuario = usuarioDeLaSesion();
   const clave = `${version}|${usuario ?? ''}|${recarga}|${ruta}`;
