@@ -1,6 +1,5 @@
 'use client';
 
-import { FOCOS } from '@/lib/design-system';
 import { useState, useEffect, useCallback, useRef, useMemo, useId, createContext, useContext, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useSearchParams, useRouter } from 'next/navigation';
@@ -68,7 +67,7 @@ import { ESTADOS_COTIZACION } from '@/lib/estados-cotizacion';
 import { fechaCorta, fechaSolo } from '@/lib/fechas-colombia';
 import { enlaceDocumento } from '@/lib/analisis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
-import { TABLE } from '@/lib/design-system';
+import { FOCOS, TABLE } from '@/lib/design-system';
 import { VEN_NAV } from '../ven-nav';
 import { getUsuarioActual } from '../flujo';
 

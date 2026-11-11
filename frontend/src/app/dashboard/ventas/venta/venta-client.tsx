@@ -1,7 +1,6 @@
 'use client';
 
 export const dynamic = 'force-dynamic';
-import { FOCOS } from '@/lib/design-system';
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, createContext, useContext } from 'react';
 import Link from 'next/link';
 // B4 T10: se fueron Search, MoreHorizontal, FileText y Package de la lista hecha a mano (la búsqueda, el ⋯ propio, las
@@ -47,7 +46,7 @@ import type { PorEstadoVisto } from '@/lib/kanban-ventas';
 import { fechaCorta, fechaSolo } from '@/lib/fechas-colombia';
 import { PERIODO_KPI } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
-import { TABLE } from '@/lib/design-system';
+import { FOCOS, TABLE } from '@/lib/design-system';
 import { VEN_NAV } from '../ven-nav';
 import { getUsuarioActual, puedeCrearOrdenDePago } from '../flujo';
 

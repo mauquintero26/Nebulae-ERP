@@ -1,5 +1,4 @@
 'use client';
-import { FOCOS } from '@/lib/design-system';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import {
@@ -22,7 +21,7 @@ import type { AccionTabla, ColumnaTabla, PestanaTabla } from '@/components/tabla
 import { BannerFlujo, CadenaDocumentos, useResumenFlujo } from '@/components/flujo';
 import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
 import { PanelAnalisisPerezoso } from '@/components/analisis';
-import { TABLE } from '@/lib/design-system';
+import { FOCOS, TABLE } from '@/lib/design-system';
 import { accionPestana, campoOrden, dependenciasTablero, estadoDelTotal, normalizarRespuesta, queryListado } from '@/lib/tabla';
 import { alternarSeleccion, pasosConConteos } from '@/lib/flujo';
 import {

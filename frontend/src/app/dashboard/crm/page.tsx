@@ -1,7 +1,6 @@
 // @ts-nocheck
 "use client";
 
-import { FOCOS } from '@/lib/design-system';
 import { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } from 'react';
 import {
   Plus, RefreshCw, X, ChevronDown, Trash2,
@@ -33,7 +32,7 @@ import {
 import { estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
 import { formatoPesos } from '@/lib/pesos';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
-import { TABLE } from '@/lib/design-system';
+import { FOCOS, TABLE } from '@/lib/design-system';
 import { CRM_NAV } from './crm-nav';
 
 async function apiFetch(path, opts = {}) {

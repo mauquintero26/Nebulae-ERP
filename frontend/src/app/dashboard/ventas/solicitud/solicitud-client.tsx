@@ -1,6 +1,5 @@
 'use client';
 
-import { FOCOS } from '@/lib/design-system';
 import {
   useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, forwardRef, useImperativeHandle, createContext, useContext,
 } from 'react';
@@ -36,7 +35,7 @@ import {
 } from '@/lib/kanban-ventas';
 import { textoDeError, recargarTrasError } from '@/lib/avisos';
 import { VEN_NAV } from '../ven-nav';
-import { PAGE_HEADER, TABLE } from '@/lib/design-system';
+import { FOCOS, PAGE_HEADER, TABLE } from '@/lib/design-system';
 import { esAdministrador, esAsesorElegible, getUsuarioActual } from '../flujo';
 import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas';
 import {
