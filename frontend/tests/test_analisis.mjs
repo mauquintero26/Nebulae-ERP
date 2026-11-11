@@ -41,6 +41,23 @@ console.log('--- TEST 1: constantes (períodos, tops y focos de R13) ---');
   for (const c of [PERIODOS, PERIODO_POR_DEFECTO, TOPS, FOCOS_VENTAS, ERRORES_PERIODO]) assert.ok(Object.isFrozen(c));
 }
 
+console.log('--- TEST 1b (B4 T24, F5): la paridad con backend/app/core/periodos.py y analisis.py sale de sus archivos ---');
+{
+  const leerBack = (ruta) => readFileSync(new URL(`../../backend/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const periodos = leerBack('app/core/periodos.py');
+  assert.equal(Number(/^MAX_DIAS = (\d+)/m.exec(periodos)?.[1]), MAX_DIAS, 'MAX_DIAS');
+  const texto = (nombre) => new RegExp(`^ERROR_${nombre} = "([^"]+)"`, 'm').exec(periodos)?.[1];
+  assert.deepEqual(ERRORES_PERIODO, {
+    periodo: texto('PERIODO'), sin_fechas: texto('SIN_FECHAS'), formato: texto('FORMATO'), orden: texto('ORDEN'), futuro: texto('FUTURO'),
+    largo: texto('LARGO'),
+  }, 'los seis ERROR_* del backend');
+  assert.match(periodos, /^ERRORES = \(ERROR_PERIODO, ERROR_SIN_FECHAS, ERROR_FORMATO, ERROR_ORDEN, ERROR_FUTURO, ERROR_LARGO\)$/m, 'los seis, ni uno más');
+  const claves = /^PERIODOS = \(([^)]*)\)/m.exec(periodos)?.[1].split(',').map((c) => c.trim().replace(/"/g, ''));
+  assert.deepEqual(PERIODOS.map((p) => p.clave), claves, 'PERIODOS');
+  const tops = /^TOPS = \(([^)]*)\)/m.exec(leerBack('app/core/analisis.py'))?.[1].split(',').map((t) => Number(t.trim()));
+  assert.deepEqual([...TOPS], tops, 'TOPS');
+}
+
 console.log('--- TEST 2: validarPeriodo y errorPeriodo (los seis textos del servidor) ---');
 {
   // Los textos exactos de backend/app/core/periodos.py (ERRORES).

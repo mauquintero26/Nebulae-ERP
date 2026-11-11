@@ -16,13 +16,28 @@ import {
   crearPreferencias, normalizarUsuario, crearPreferenciasPorUsuario, vincularPreferencia,
   usuarioDelToken, usuarioDeSesion, servidorDeUsuario, crearPreferenciasDeSesion,
 } from '../src/lib/preferencias.js';
-import { validarPeriodo, PERIODO_POR_DEFECTO } from '../src/lib/analisis.js';
+import { FOCOS_VENTAS, PREFERENCIA_ANALISIS_POR_DEFECTO, leerPreferenciaAnalisis } from '../src/lib/analisis.js';
 import {
   actualizadorColumnas, reconciliarColumnas, guardarCambioColumnas, escriturasDeAccion, estadoTablaInicial, reducirEstadoTabla,
 } from '../src/lib/tabla.js';
 
-// Las MISMAS tres claves inválidas de backend/tests/test_preferencias_usuario.py (CLAVES_INVALIDAS, RP24).
+// Las MISMAS tres claves inválidas de backend/tests/test_preferencias_usuario.py (CLAVES_INVALIDAS, RP24). B4 T24 (F5): se comparan
+// con las del backend en TEST T24-F5.
 const CLAVES_INVALIDAS = ['pantalla:ventas', 'tabla:Ventas', 'tabla:' + 'a'.repeat(81)];
+
+console.log('--- TEST T24-F5 (B4 T24, F5): la paridad con el backend sale de sus archivos, no de una copia a mano ---');
+{
+  const { readFileSync } = await import('node:fs');
+  const leerBack = (ruta) => readFileSync(new URL(`../../backend/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const pref = leerBack('app/api/v1/preferencias.py');
+  assert.equal(/^CLAVE_VALIDA = re\.compile\(r"([^"]+)"\)/m.exec(pref)?.[1], CLAVE_VALIDA.source, 'CLAVE_VALIDA');
+  assert.equal(Number(/^LIMITE_BYTES = (\d+)/m.exec(pref)?.[1]), LIMITE_BYTES, 'LIMITE_BYTES');
+  assert.equal(Number(/^MAXIMO_NIVELES = (\d+)/m.exec(pref)?.[1]), MAXIMO_NIVELES, 'MAXIMO_NIVELES');
+  const pruebas = leerBack('tests/test_preferencias_usuario.py');
+  const m = /^CLAVES_INVALIDAS = \("([^"]+)", "([^"]+)", "([^"]+)" \+ "a" \* (\d+)\)/m.exec(pruebas);
+  assert.ok(m, 'CLAVES_INVALIDAS del backend');
+  assert.deepEqual(CLAVES_INVALIDAS, [m[1], m[2], m[3] + 'a'.repeat(Number(m[4]))], 'las tres claves inválidas');
+}
 
 // ─── dobles de prueba ───────────────────────────────────────────────────────────
 
@@ -420,17 +435,14 @@ console.log('--- TEST 14 (de flujo.js): flujo:<id> (franja compacta) ---');
 console.log('--- TEST 15 (de analisis.js): analisis:<modulo> (período, top y foco) ---');
 {
   const reloj = relojFalso();
-  const DEFECTO = { periodo: PERIODO_POR_DEFECTO, top: 5 };
-  // Lo que hace PanelAnalisis (T5C) con lo leído: un período que ya no vale vuelve al de por defecto.
-  const leerAnalisis = (prefs) => {
-    const v = prefs.leer('analisis:ventas', DEFECTO);
-    const periodo = validarPeriodo(v?.periodo, '2026-10-28') ?? PERIODO_POR_DEFECTO;
-    return { periodo, top: [5, 10, 25].includes(v?.top) ? v.top : 5 };
-  };
-  // Almacén vacío, JSON dañado y un getItem que lanza → {periodo: {clave: '30d'}, top: 5}.
+  // B4 T24 (F6): lo que hace PanelAnalisis con lo leído es leerPreferenciaAnalisis de lib/analisis.js (sus casos, en test_analisis.mjs):
+  // aquí solo se prueba que el almacenamiento le llega bien (antes la prueba copiaba la regla y no fallaba si la lib se rompía).
+  const leerAnalisis = (prefs) => leerPreferenciaAnalisis(prefs.leer('analisis:ventas', PREFERENCIA_ANALISIS_POR_DEFECTO),
+    { focos: FOCOS_VENTAS, hoy: '2026-10-28' });
+  // Almacén vacío, JSON dañado y un getItem que lanza → {periodo: {clave: '30d'}, top: 5, foco: 'hub'}.
   for (const almacen of [almacenFalso(), almacenFalso({ 'pref:7:analisis:ventas': '{"periodo":' }), almacenQueLanza()]) {
     assert.deepEqual(leerAnalisis(crearPreferencias({ usuarioId: 7, almacen, temporizador: reloj })), {
-      periodo: { clave: '30d' }, top: 5,
+      periodo: { clave: '30d' }, top: 5, foco: 'hub',
     });
   }
   // Con un personalizado válido, lo devuelve; uno que ya no vale (fecha futura) vuelve a 30 días.
@@ -438,9 +450,9 @@ console.log('--- TEST 15 (de analisis.js): analisis:<modulo> (período, top y fo
   const p = crearPreferencias({ usuarioId: 7, almacen, temporizador: reloj });
   const personalizado = { clave: 'personalizado', desde: '2026-09-01', hasta: '2026-09-30' };
   p.escribir('analisis:ventas', { periodo: personalizado, top: 10, foco: 'cot' });
-  assert.deepEqual(leerAnalisis(crearPreferencias({ usuarioId: 7, almacen, temporizador: reloj })), { periodo: personalizado, top: 10 });
+  assert.deepEqual(leerAnalisis(crearPreferencias({ usuarioId: 7, almacen, temporizador: reloj })), { periodo: personalizado, top: 10, foco: 'cot' });
   p.escribir('analisis:ventas', { periodo: { clave: 'personalizado', desde: '2026-10-01', hasta: '2026-12-31' }, top: 7 });
-  assert.deepEqual(leerAnalisis(p), { periodo: { clave: '30d' }, top: 5 });
+  assert.deepEqual(leerAnalisis(p), { periodo: { clave: '30d' }, top: 5, foco: 'hub' });
   // Guardar con un setItem que lanza no lanza nada.
   const conFalla = crearPreferencias({ usuarioId: 7, almacen: almacenQueLanza(), temporizador: reloj });
   assert.equal(conFalla.escribir('analisis:ventas', { periodo: { clave: '7d' }, top: 25 }), true);
