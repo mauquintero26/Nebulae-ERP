@@ -19,6 +19,8 @@ import { TablaEstandar, usePreferenciasTabla } from '@/components/tabla';
 import type { ColumnaTabla } from '@/components/tabla';
 import { PasosFlujo } from '@/components/flujo';
 import { infoEstadoPec } from '@/lib/estados-compras';
+import { accesoCompras } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 import { TEXTO_SEGUIMIENTO_CERRADO, pasosDeTracking, seguimientoCerrado } from '@/lib/flujo-compras';
 import { fechaCorta, fechaHoraLarga, textoDiaCorto } from '@/lib/fechas-colombia';
 import { formatoPesos } from '@/lib/pesos';
@@ -130,6 +132,8 @@ export default function PedidoCompraDetallePage() {
   const [currentUser, setCurrentUser] = useState('');
   const [advancing, setAdvancing] = useState(false);
   const { avisarError } = useAvisos();
+  // B4 T24 r2 (m6): «Avanzar etapa logística» es PATCH /pedidos/{id}/tracking (ADMIN y COMPRAS: accesoCompras.tracking).
+  const accesoPec = accesoCompras(useRolActual());
   // TABLA-compras punto 12 (D40, D41): un solo usePreferenciasTabla por tabla de detalle (las columnas se estiran, se
   // mueven y se recuerdan; sin paginación, orden ni selección).
   const prefsProductos = usePreferenciasTabla('compras.pec.productos', COLUMNAS_PRODUCTOS);
@@ -367,7 +371,7 @@ export default function PedidoCompraDetallePage() {
                 <div className="bg-slate-50 p-6 rounded-xl border border-slate-200">
                   <div className="flex justify-between items-center gap-3 mb-6">
                     <span className="text-sm font-bold text-slate-700">Progreso de la importación / ruta</span>
-                    {!isNew && !cancelado && completedCount < stages.length && (
+                    {!isNew && !cancelado && accesoPec.tracking && completedCount < stages.length && (
                       <Button size="sm" color="blue" icon={Truck} loading={advancing} onClick={avanzarTracking}>Avanzar etapa logística</Button>
                     )}
                   </div>

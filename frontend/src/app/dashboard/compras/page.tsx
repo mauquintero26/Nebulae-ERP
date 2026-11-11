@@ -850,10 +850,13 @@ export default function ComprasHub() {
           subtitle="Compras a proveedores, envíos en camino y recepción en bodega."
           actions={(
             <div className="flex flex-wrap items-center gap-2.5">
-              <Link href="/dashboard/compras/pedidos"
-                className="flex items-center gap-2 px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all">
-                <ContenidoEnlace icon={Plus}>Nuevo PEC</ContenidoEnlace>
-              </Link>
+              {/* B4 T24 r2 (m7): crear un PEC es POST /compras/pedidos (ADMIN y COMPRAS). */}
+              {accesoPec.cambiarPec && (
+                <Link href="/dashboard/compras/pedidos"
+                  className="flex items-center gap-2 px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all">
+                  <ContenidoEnlace icon={Plus}>Nuevo PEC</ContenidoEnlace>
+                </Link>
+              )}
               <button type="button" onClick={recargarTodo}
                 className={`flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-semibold text-xs shadow-xs transition-colors ${FOCO_VISIBLE}`}>
                 <RefreshCw size={13} aria-hidden="true" className={actualizando ? 'animate-spin' : ''}/> Actualizar

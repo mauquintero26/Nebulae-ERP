@@ -3054,6 +3054,18 @@ console.log('--- B4 T24 (FINAL-m10, FINAL-m31 y FINAL-m38): los tableros y las a
   assert.match(transito, /\}, \[avanzar, pendiente, accesoPec\.tracking\]\);/);
 }
 
+console.log('--- B4 T24 r2 (m6, m7): «Avanzar etapa logística» del detalle y el enlace «Nuevo PEC» del Hub, solo con su rol ---');
+{
+  // erp_compras.py:1276-1278: PATCH /pedidos/{id}/tracking es de ADMIN y COMPRAS (accesoCompras.tracking, casos en test_roles.mjs);
+  // POST /pedidos también (cambiarPec).
+  const det = readFileSync(new URL('../src/app/dashboard/compras/pedidos/[id]/page.tsx', import.meta.url), 'utf8');
+  assert.match(det, /import \{ accesoCompras \} from '@\/lib\/roles';/);
+  assert.match(det, /const accesoPec = accesoCompras\(useRolActual\(\)\);/);
+  assert.match(det, /\{!isNew && !cancelado && accesoPec\.tracking && completedCount < stages\.length && \(\s*<Button size="sm" color="blue" icon=\{Truck\} loading=\{advancing\} onClick=\{avanzarTracking\}>Avanzar etapa logística<\/Button>/);
+  const hub = readFileSync(new URL('../src/app/dashboard/compras/page.tsx', import.meta.url), 'utf8');
+  assert.match(hub, /\{accesoPec\.cambiarPec && \(\s*<Link href="\/dashboard\/compras\/pedidos"[^>]*>\s*<ContenidoEnlace icon=\{Plus\}>Nuevo PEC<\/ContenidoEnlace>/);
+}
+
 console.log('--- B4 T24 r2 (m2, m10): los tableros de PEC, el esqueleto mientras se lee el rol (accesoPec.listo false) ---');
 {
   for (const ruta of ['app/dashboard/compras/page.tsx', 'app/dashboard/compras/pedidos/page.tsx', 'app/dashboard/compras/transito/page.tsx']) {
