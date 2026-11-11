@@ -13,7 +13,7 @@ import { formatoPesos } from '@/lib/pesos';
 import { tiene } from '@/lib/estados-pedido';
 import { formatoDecimal, numeroFinito } from '@/lib/kpis';
 import { ESTADOS_STOCK, existenciaReservada } from '@/lib/estados-compras';
-import { textoDeError } from '@/lib/avisos';
+import { ofreceReintentar, textoDeError } from '@/lib/avisos';
 // El chip estándar de las tablas del bloque (columnas-pec.tsx, T15 r1): la misma forma que el estado de un PEC.
 import { CHIP } from '../compras/columnas-pec';
 
@@ -186,7 +186,7 @@ export function useCatalogo(ruta: string): { catalogo: Catalogo; recargar: () =>
 
 /**
  * Un selector de un catálogo (la bodega o la categoría de la barra). Mientras carga, deshabilitado («Cargando…»); si falla sin
- * nada antes, lo dice con el detalle del servidor y «Reintentar» (nunca una lista vacía).
+ * nada antes, lo dice con el detalle del servidor y «Reintentar», salvo con un 403 (nunca una lista vacía).
  */
 export function SelectorCatalogo({ etiqueta, todas, cargando, fallo, catalogo, valor, onCambiar, onReintentar, icono: Icono, acento = 'indigo' }: {
   etiqueta: string; todas: string; cargando: string; fallo: string; catalogo: Catalogo; valor: string;
@@ -196,7 +196,8 @@ export function SelectorCatalogo({ etiqueta, todas, cargando, fallo, catalogo, v
     return (
       <span role="alert" className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800">
         {textoDeError(catalogo.error, fallo)}
-        <button type="button" onClick={onReintentar} className={`rounded font-bold underline ${FOCOS[acento]}`}>Reintentar</button>
+        {/* B4 T24 (FINAL-C5): un 403 no ofrece «Reintentar» (ofreceReintentar de lib/avisos.js). */}
+        {ofreceReintentar(catalogo.error) && <button type="button" onClick={onReintentar} className={`rounded font-bold underline ${FOCOS[acento]}`}>Reintentar</button>}
       </span>
     );
   }

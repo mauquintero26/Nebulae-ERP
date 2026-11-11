@@ -14,7 +14,9 @@ import {
 import type { ColumnaTabla } from '@/components/tabla';
 import { fechaLarga } from '@/lib/fechas-colombia';
 import { formatoPesos, redondearPeso } from '@/lib/pesos';
-import { textoDeError } from '@/lib/avisos';
+import { ofreceReintentar, textoDeError } from '@/lib/avisos';
+import { accesoFinanzas } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 import {
   MAX_COLUMNAS_GASTOS, TEXTO_SOLO_VER_GASTOS, categoriasDeConteos, columnasGastos, consultaColumnaGasto, dependenciasTablero, estadoDelTotal, estadoTableroGastos, extraGastos,
   fechaDeGasto, normalizarRespuesta, tarjetaGasto, textoVacioGastos, tipoDeGasto, urlConteosGastos,
@@ -67,6 +69,9 @@ const COLUMNAS_GASTOS: ColumnaTabla<Gasto>[] = [
     celda: (g) => <span className="text-sm font-black text-slate-800">{formatoPesos(g.amount)}</span> },
 ];
 
+/** B4 T24 (FINAL-C5): lo que ve un rol sin permiso (GET /finance/expenses es de ADMIN y FINANZAS): un texto neutro, sin «Reintentar». */
+const TEXTO_SIN_GASTOS = 'Tu rol no ve los gastos.';
+
 /** Un gasto no tiene ficha: la tarjeta del tablero no ofrece «Abrir» (renderTarjeta no pinta el menú), y esto solo cumple la firma. */
 const sinFicha = () => {};
 
@@ -83,6 +88,10 @@ export default function GastosPage() {
   // (RP26). El filtro de categoría de la barra va al servidor como `categoria` y cada cambio vuelve a la página 1.
   const [estado, despachar, listo] = useEstadoTabla(ID_GASTOS, INICIAL_GASTOS);
   const enKanban = estado.modo === 'kanban';
+  // B4 T24 (FINAL-C5): el rol se lee después de montar (useRolActual) y decide qué se pide (accesoFinanzas, lib/roles.js): sin permiso
+  // no se pide la lista, ni los conteos, ni el tablero; con el rol vacío (la hidratación), se espera con el esqueleto.
+  const rol = useRolActual();
+  const acceso = accesoFinanzas(rol);
   const [categoria, setCategoria] = useState('');
   // m17: el tipo (recurrente | variable) también va al servidor (RP58) y vuelve a la página 1.
   const [tipo, setTipo] = useState('');
@@ -90,7 +99,7 @@ export default function GastosPage() {
   const extraLista = useMemo(() => extraGastos(filtros), [filtros]);
   // GET /finance/expenses con q, orden, limit y offset. esperar: !listo (D40): el esqueleto, nunca «vacío». En Kanban no pide la lista.
   const listado = useListado<Gasto>({
-    ruta: '/finance/expenses', estado, esperar: !listo, despachar, activo: !enKanban, extra: extraLista,
+    ruta: '/finance/expenses', estado, esperar: !listo || !acceso.listo, despachar, activo: !enKanban && acceso.gastos, extra: extraLista,
   });
 
   // Los conteos por categoría ({categoría: n}, con la búsqueda y sin la categoría): las columnas del tablero y las opciones del filtro.
@@ -100,13 +109,13 @@ export default function GastosPage() {
   const claveConteos = `${urlConteos}|${vueltaConteos}`;
   const [conteos, setConteos] = useState<ConteosCargados | null>(null);
   useEffect(() => {
-    if (!listo) return undefined;
+    if (!listo || !acceso.gastos) return undefined;
     const control = new AbortController();
     apiFetch(urlConteos, { signal: control.signal })
       .then((r: unknown) => setConteos({ clave: claveConteos, datos: normalizarRespuesta(r).conteos as Record<string, number> | null, error: null }))
       .catch((err: unknown) => { if (!control.signal.aborted) setConteos((c) => ({ clave: claveConteos, datos: c?.datos ?? null, error: err })); });
     return () => control.abort();
-  }, [listo, urlConteos, claveConteos]);
+  }, [listo, acceso.gastos, urlConteos, claveConteos]);
   const recargandoConteos = listo && conteos?.clave !== claveConteos;
   // I1 y m12: qué muestra el tablero (cargando, error o listo; un error SE DICE también con conteos viejos y lo viejo queda atenuado).
   const estadoConteos = estadoTableroGastos(conteos, claveConteos);
@@ -125,7 +134,7 @@ export default function GastosPage() {
     pantalla: ID_GASTOS,
     modo: 'servidor',
     columnas: columnasTablero,
-    activo: listo && enKanban && conteos?.datos != null && columnasTablero.length > 0,
+    activo: listo && acceso.gastos && enKanban && conteos?.datos != null && columnasTablero.length > 0,
     porColumna: estado.tamano,
     dependencias: [...dependenciasTablero(estado), estado.orden, categoria, tipo],
     cargar: async (columna, { offset, limit, signal }) => {
@@ -214,17 +223,20 @@ export default function GastosPage() {
       <PageHeader icon={CreditCard} color="rose"
         title="Control de Gastos (OPEX)"
         subtitle="Gestión de nómina, pauta, arriendos y otros gastos operativos."
-        actions={(
+        actions={acceso.gastos ? (
           <div className="flex flex-wrap items-center gap-2.5">
             <button type="button" onClick={recargarTodo} className={BOTON_SECUNDARIO}>
               <RefreshCw size={13} aria-hidden="true" className={listado.recargando || recargandoConteos ? 'animate-spin' : ''} /> Actualizar
             </button>
             <Button color="rose" icon={Plus} onClick={() => setShowModal(true)}>Añadir Gasto</Button>
           </div>
-        )} />
+        ) : undefined} />
 
       {/* La barra con la búsqueda (q) y el filtro de categoría (para seguir el aviso «N categorías más»), y la tabla estándar en el
           servidor o el tablero solo para ver por categoría con el MISMO estado. */}
+      {acceso.listo && !acceso.gastos ? (
+        <p role="status" className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600">{TEXTO_SIN_GASTOS}</p>
+      ) : (
       <div className="flex min-w-0 flex-col gap-4">
         {capa}
         <section ref={refTarjeta} className={claseTarjeta}>
@@ -277,10 +289,12 @@ export default function GastosPage() {
         {estadoConteos.tipo === 'listo' && estadoConteos.error ? (
           <div role="alert" className="flex flex-wrap items-center gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">
             {textoDeError(estadoConteos.error, 'No se pudieron actualizar las categorías')} (se ven las últimas que llegaron)
+            {ofreceReintentar(estadoConteos.error) && (
             <button type="button" onClick={recargarConteos}
               className={`inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 ${FOCOS.indigo}`}>
               <RefreshCw size={13} aria-hidden="true" /> Reintentar
             </button>
+            )}
           </div>
         ) : null}
         {enKanban ? (
@@ -290,10 +304,12 @@ export default function GastosPage() {
             estadoConteos.tipo === 'error' ? (
               <div role="alert" className="flex flex-wrap items-center gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">
                 {textoDeError(estadoConteos.error, 'No se pudieron cargar las categorías')}
+                {ofreceReintentar(estadoConteos.error) && (
                 <button type="button" onClick={recargarConteos}
                   className={`inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 ${FOCOS.indigo}`}>
                   <RefreshCw size={13} aria-hidden="true" /> Reintentar
                 </button>
+                )}
               </div>
             ) : (
               <div role="status" aria-busy="true" className="rounded-2xl border border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-600">Cargando las categorías…</div>
@@ -320,6 +336,7 @@ export default function GastosPage() {
           )
         ) : null}
       </div>
+      )}
 
       {/* Modal Añadir Gasto */}
       {showModal && (

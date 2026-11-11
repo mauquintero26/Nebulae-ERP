@@ -2648,7 +2648,8 @@ console.log('--- TEST 50 (B4 T22, Gastos; R5, R11, R16, RP26, RP57, RP58): el ca
   assert.doesNotMatch(fuente, /useVistaGuardada/);
   assert.ok(fuente.includes('pantalla: ID_GASTOS,') && fuente.includes('id={ID_GASTOS}') && fuente.includes('usePreferenciasTabla(ID_GASTOS, COLUMNAS_GASTOS)'), 'el MISMO id en todo');
   // Modo servidor (R5): q, orden, limit y offset del estado, esperando las preferencias; en Kanban la lista no se pide.
-  assert.ok(fuente.includes("ruta: '/finance/expenses', estado, esperar: !listo, despachar, activo: !enKanban, extra: extraLista"));
+  // B4 T24 (FINAL-C5, D27): además espera el rol y no pide sin permiso (accesoFinanzas, TEST T24-c).
+  assert.ok(fuente.includes("ruta: '/finance/expenses', estado, esperar: !listo || !acceso.listo, despachar, activo: !enKanban && acceso.gastos, extra: extraLista"));
   assert.ok(fuente.includes('modo="servidor"'));
   // Ordena solo por lo que el servidor acepta (RP58): fecha, categoria, concepto, tipo y monto.
   assert.deepEqual([...fuente.matchAll(/ordenable: '([a-z]+)'/g)].map((m) => m[1]), ['fecha', 'categoria', 'concepto', 'tipo', 'monto']);
@@ -2982,6 +2983,33 @@ console.log('--- TEST T24-b (B4 T24: FINAL-m37, FINAL-C5 y F106): TablaEstandar 
   assert.match(t, /import \{[^}]*\bofreceReintentar\b[^}]*\} from '@\/lib\/avisos';/);
   assert.match(t, /\{onReintentar && ofreceReintentar\(error\) && \(\s*<button type="button" onClick=\{onReintentar\} className=\{TABLE\.botonReintentar\}>/);
   assert.equal((t.match(/>\s*Reintentar\s*</g) ?? []).length, 1, 'un solo «Reintentar» en la tabla');
+}
+
+console.log('--- TEST T24-c (B4 T24, FINAL-C5): Gastos pide y pinta solo lo que el rol puede leer (accesoFinanzas, como T23A) ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = (texto) => texto.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const g = codigo(leer('app/dashboard/finanzas/gastos/page.tsx'));
+  // El rol con useRolActual (después de montar) y el acceso de lib/roles.js (casos en test_roles.mjs): la pantalla no decide el rol.
+  assert.match(g, /import \{ useRolActual \} from '@\/components\/ui\/useRolActual';/);
+  assert.match(g, /import \{ accesoFinanzas \} from '@\/lib\/roles';/);
+  assert.match(g, /const rol = useRolActual\(\);\s*const acceso = accesoFinanzas\(rol\);/);
+  assert.ok(!/'ADMIN'|'FINANZAS'|esAdmin\(/.test(g), 'sin un rol escrito a mano');
+  // Sin permiso no se pide nada: ni la lista (activo), ni los conteos (el efecto vuelve antes), ni el tablero; con rol '' se espera.
+  assert.match(g, /esperar: !listo \|\| !acceso\.listo, despachar, activo: !enKanban && acceso\.gastos,/);
+  assert.match(g, /useEffect\(\(\) => \{\s*if \(!listo \|\| !acceso\.gastos\) return undefined;\s*const control = new AbortController\(\);\s*apiFetch\(urlConteos/);
+  assert.match(g, /\}, \[listo, acceso\.gastos, urlConteos, claveConteos\]\);/);
+  assert.match(g, /activo: listo && acceso\.gastos && enKanban && conteos\?\.datos != null && columnasTablero\.length > 0,/);
+  // El texto neutro en lugar de la barra, la tabla y el tablero; «Añadir Gasto» y «Actualizar», solo con permiso.
+  assert.match(g, /const TEXTO_SIN_GASTOS = 'Tu rol no ve los gastos\.';/);
+  assert.match(g, /\{acceso\.listo && !acceso\.gastos \? \(\s*<p role="status"[^>]*>\{TEXTO_SIN_GASTOS\}<\/p>\s*\) : \(/);
+  assert.match(g, /actions=\{acceso\.gastos \? \(/);
+  assert.ok(g.indexOf('acceso.gastos ? (') < g.indexOf('Añadir Gasto') && g.indexOf('Añadir Gasto') < g.indexOf('<BarraTabla'), '«Añadir Gasto» dentro de la condición');
+  // Un 403 que llegue igual: sin «Reintentar» (ofreceReintentar) en las cajas del tablero; la tabla y el selector ya lo resuelven.
+  assert.equal((g.match(/\{ofreceReintentar\(estadoConteos\.error\) && \(\s*<button type="button" onClick=\{recargarConteos\}/g) ?? []).length, 2, 'las dos cajas rose');
+  // SelectorCatalogo (piezas de Inventario, aditivo): su «Reintentar» también mira ofreceReintentar.
+  const piezas = codigo(leer('app/dashboard/inventario/piezas-inventario.tsx'));
+  assert.match(piezas, /\{ofreceReintentar\(catalogo\.error\) && <button type="button" onClick=\{onReintentar\}/);
 }
 
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');
