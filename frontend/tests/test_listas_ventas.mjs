@@ -1211,7 +1211,7 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   // se contaba, filtraba o sumaba en el navegador.
   assert.match(codigo, /export const ID_PEDIDOS = 'ventas\.pedidos';/);
   assert.match(codigo, /export const INICIAL_PEDIDOS = \{ vista: 'todos', orden: 'atencion' \};/);
-  assert.match(lista, /const \[estado, despachar, listo\] = useEstadoTabla\(ID_PEDIDOS, INICIAL_PEDIDOS\);/);
+  assert.match(lista, /const \[estado, despachar, listo, modoListo\] = useEstadoTabla\(ID_PEDIDOS, INICIAL_PEDIDOS\);/); // F38 (D27)
   assert.match(lista, /ruta: '\/ventas\/pedidos', estado, conConteos: true, esperar: !listo, despachar,\s*extra: enKanban \? EXTRA_TABLERO : null,/);
   assert.match(codigo, /const EXTRA_TABLERO = \{ limit: 0 \};/);
   for (const viejo of ['limit=200', 'kpisPedidos', 'hintTotalPedidos', 'opcionesFiltroEstado', 'grupoPedido(', 'coincideProducto',
@@ -1419,7 +1419,10 @@ console.log('--- B4 T10 r1 (I1): ?tab= con Kanban guardado abre esa pestaña en 
   const codigo = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
   const lista = codigo.slice(codigo.indexOf('export default function VentaClient('));
   assert.match(lista, /const enlacePendiente = useRef<string \| null>\(null\);/);
-  assert.match(lista, /useLayoutEffect\(\(\) => \{\s*const vista = enlacePendiente\.current;\s*if \(!listo \|\| vista === null\) return;\s*enlacePendiente\.current = null;\s*if \(estado\.modo === 'kanban'\) despachar\(accionVistaEnLista\(estado, vista, opcionesDeLaLista\)\);\s*\}, \[listo, estado, despachar, opcionesDeLaLista\]\);/);
+  // B4 T24 (F38, D27): el enlace se consume con modoListo (el modo guardado leído de verdad), no con `listo`: si listo llega por el
+  // tope de 4 s y después llega 'kanban', la vista del enlace no queda escondida en el tablero.
+  assert.match(lista, /const \[estado, despachar, listo, modoListo\] = useEstadoTabla\(ID_PEDIDOS, INICIAL_PEDIDOS\);/);
+  assert.match(lista, /useLayoutEffect\(\(\) => \{\s*const vista = enlacePendiente\.current;\s*if \(!modoListo \|\| vista === null\) return;\s*enlacePendiente\.current = null;\s*if \(estado\.modo === 'kanban'\) despachar\(accionVistaEnLista\(estado, vista, opcionesDeLaLista\)\);\s*\}, \[modoListo, estado, despachar, opcionesDeLaLista\]\);/);
   assert.ok(lista.indexOf('enlacePendiente.current = vista;') < lista.indexOf('useLayoutEffect(() => {\n    const vista = enlacePendiente.current;'),
     'primero se anota, después se consume');
   // elegirVista usa la misma acción: el enlace y el clic dan lo mismo.

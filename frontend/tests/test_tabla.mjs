@@ -1026,7 +1026,9 @@ console.log('--- TEST 23 (T4C y r1, R4, RP8, RP26, RP35, D28 y D38): el fuente d
   assert.ok(estado.includes('const vinculosListos = modoListo && tablaListo;'));
   assert.ok(estado.includes('const [vencidoPara, setVencidoPara] = useState<number | null | undefined>(undefined);'));
   assert.match(estado, /useEffect\(\(\) => \{\s*if \(vinculosListos\) return undefined;\s*return esperarPreferencias\(\{ alVencer: \(\) => setVencidoPara\(usuario\) \}\);\s*\}, \[usuario, vinculosListos\]\);/);
-  assert.ok(estado.includes('return [estado, despachar, listoConTope(vinculosListos, vencidoPara === usuario)];'));
+  // B4 T24 (F38, D27): un cuarto elemento aditivo, modoListo (el modo guardado de verdad leído, no por el tope de espera).
+  assert.ok(estado.includes('return [estado, despachar, listoConTope(vinculosListos, vencidoPara === usuario), modoListo];'));
+  assert.ok(estado.includes('): [EstadoTabla, DespacharTabla, boolean, boolean] {'), 'el tipo, con el cuarto elemento');
   // Revisión de r2 (mutante H2): rechazoPorAtender recibe el usuario; sin él (usuario = null por defecto) el hook nunca
   // despacha la vuelta y la tabla queda en esqueleto.
   assert.ok(cuerpos.some((c) => c.includes('rechazoPorAtender(resultado, { orden, atendido, usuario })')),

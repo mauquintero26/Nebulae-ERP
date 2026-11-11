@@ -334,7 +334,7 @@ export default function VentaClient() {
   // ÚNICO de la lista: las pestañas, la búsqueda, el filtro de estados, el semáforo y las cajas de la franja, las
   // tarjetas, la tabla y el tablero despachan a él. El modo (Lista o Kanban) se guarda en vista:ventas.pedidos (RP26:
   // este hook es su único dueño) y la pestaña, la página y la búsqueda en la sesión (volver del detalle deja lo mismo).
-  const [estado, despachar, listo] = useEstadoTabla(ID_PEDIDOS, INICIAL_PEDIDOS);
+  const [estado, despachar, listo, modoListo] = useEstadoTabla(ID_PEDIDOS, INICIAL_PEDIDOS);
   // B4 T24 (FINAL-m31 y FINAL-m38): el rol después de montar (useRolActual) decide si el tablero se mueve (accesoTableroVentas: el
   // require_roles del PATCH de destino); sin permiso, soloLectura (no se arrastra ni se ofrece «Mover a…») y sin acciones masivas.
   const accesoTablero = accesoTableroVentas(useRolActual());
@@ -465,12 +465,14 @@ export default function VentaClient() {
     despachar(accionPestana(estado, vista, opcionesDeLaLista));
     router.replace(rutaSinParametro(RUTA_LISTA_PEDIDOS, window.location.search, 'tab'), { scroll: false });
   }, [estado, despachar, router, opcionesDeLaLista]);
+  // B4 T24 (F38): con modoListo (el modo guardado leído de verdad), no con `listo`, que también llega por el tope de 4 s: si después
+  // llegara 'kanban', la vista del enlace quedaría escondida en el tablero.
   useLayoutEffect(() => {
     const vista = enlacePendiente.current;
-    if (!listo || vista === null) return;
+    if (!modoListo || vista === null) return;
     enlacePendiente.current = null;
     if (estado.modo === 'kanban') despachar(accionVistaEnLista(estado, vista, opcionesDeLaLista));
-  }, [listo, estado, despachar, opcionesDeLaLista]);
+  }, [modoListo, estado, despachar, opcionesDeLaLista]);
 
   // ── B4 T10, bloque 2: pestañas y búsqueda (TABLA-listas-ventas punto 7; R5, RP21, RP26, D40, D41; H15, H17) ──
   const pestanas = pestanasDeLaLista(listado.conteos as ConteosPedidos | null);
