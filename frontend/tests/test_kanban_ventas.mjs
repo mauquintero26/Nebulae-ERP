@@ -994,9 +994,9 @@ console.log('--- B4 T9 TEST L: el cableado del tablero de Cotizaciones (C15, RP1
   assert.match(rechazar, /try \{\s*await apiFetch\(`\/ventas\/cotizaciones\/\$\{cot\.id\}`, \{ method: 'PATCH', body: JSON\.stringify\(\{ estado: 'RECHAZADA', updated_by: autor \}\) \}\);\s*\} catch \(err\) \{\s*if \(recargarTrasError\(err\)\) \{\s*recargarListado\(\);\s*tablero\.recargar\(\[\.\.\.columnas\]\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*\}\s*throw err;\s*\}/);
   assert.match(fuente, /import \{ recargarTrasError, textoDeError \} from '@\/lib\/avisos';/);
   {
-    // La regla: un 400, un 409 o la red cortada recargan; un 422 o un 500 no.
+    // La regla: un 400, un 409, un 422 (B4 T24, F8; D27) o la red cortada recargan; un 500 no.
     const { recargarTrasError } = await import('../src/lib/avisos.js');
-    assert.deepEqual([400, 409, undefined, 422, 500].map((status) => recargarTrasError({ status })), [true, true, true, false, false]);
+    assert.deepEqual([400, 409, undefined, 422, 500].map((status) => recargarTrasError({ status })), [true, true, true, true, false]);
   }
   assert.match(lista, /<ModalMotivo\s+titulo=\{`Rechazar \$\{rechazando\.cot\.numero\}`\}[\s\S]*?onConfirmar=\{rechazarConMotivo\}\s+onCerrar=\{\(\) => setRechazando\(null\)\}/);
   // Al pasar a Kanban se sale de la pantalla completa; la barra no la ofrece en Kanban.

@@ -653,12 +653,17 @@ console.log('--- TEST 24 (B4 T14 r1: I1, m10, m15): cancelar en serie y lo que h
   assert.equal(mezcla.mensajeOk, '1 pedido de compra cancelado');
   assert.ok(mezcla.error instanceof Error);
   assert.equal(mezcla.error.message, `${textoDeError(conflicto)}\nPEC-3: ${textoDeError(invalido)}`);
-  // Todos mal con un 422: nada sale de la selección, no se recarga (el dato no cambió), ningún aviso de éxito.
+  // Todos mal con un 422: nada sale de la selección y ningún aviso de éxito. B4 T24 (F8, D27): un 422 también pide recargar (la lista y el
+  // detalle; recargarTrasError lo cuenta sin mirar el detail); los PVEN no, porque no se canceló nada.
   const malos = [pecs[0], pecs[2]].map((p) => ({ id: p.id, numero: p.numero, ok: false, error: textoDeError(invalido), err: invalido }));
   const todosMal = ec.despuesDeCancelarPec([pecs[0], pecs[2]], malos, []);
   assert.deepEqual(todosMal.fuera, []);
   assert.deepEqual(todosMal.pendientes, [pecs[0], pecs[2]]);
-  assert.deepEqual([todosMal.recargar, todosMal.recargarVentas, todosMal.recargarDetalle, todosMal.mensajeOk], [false, false, false, null]);
+  assert.deepEqual([todosMal.recargar, todosMal.recargarVentas, todosMal.recargarDetalle, todosMal.mensajeOk], [true, false, true, null]);
+  // Un 500 sigue sin recargar (el dato no cambió).
+  const errorServidor = Object.assign(new Error('boom'), { status: 500 });
+  const con500 = ec.despuesDeCancelarPec([pecs[0]], [{ id: 1, numero: 'PEC-1', ok: false, error: 'boom', err: errorServidor }], []);
+  assert.deepEqual([con500.recargar, con500.recargarDetalle], [false, false]);
   assert.equal(todosMal.error.message, `PEC-1: ${textoDeError(invalido)}\nPEC-3: ${textoDeError(invalido)}`);
   // Uno solo con el 409: se relanza el MISMO error (el modal muestra el detail del servidor) y se recarga, también el
   // detalle del panel abierto (m10); los PVEN no, porque no se canceló nada.

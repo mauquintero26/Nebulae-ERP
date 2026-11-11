@@ -247,13 +247,21 @@ console.log('--- TEST 9: recargarTrasError (B2-T9A ronda 1: una sola regla para 
   assert.equal(recargarTrasError(new TypeError('Failed to fetch')), true, 'error de red sin status');
   assert.equal(recargarTrasError(null), true);
   assert.equal(recargarTrasError(undefined), true);
-  // 401 (SesionVencidaError de api.ts: status 401), 403, 404, 422 y 500 no recargan.
+  // 401 (SesionVencidaError de api.ts: status 401), 403, 404 y 500 no recargan.
   const sesionVencida = Object.assign(new Error('Tu sesión venció. Inicia sesión nuevamente para continuar.'),
     { name: 'SesionVencidaError', status: 401 });
   assert.equal(recargarTrasError(sesionVencida), false, 'SesionVencidaError');
-  for (const status of [401, 403, 404, 422, 500]) {
+  for (const status of [401, 403, 404, 500]) {
     assert.equal(recargarTrasError(errorDeRespuesta(status, {})), false, String(status));
   }
+  // B4 T24 (F8, ruling del controlador; D27): el 422 también recarga, SIN mirar el detail. El 422 de transición del PATCH de estado
+  // (_validar_transicion_pedido, erp_ventas.py) es el conflicto real del tablero de pedidos: recargar el origen y el destino no hace
+  // daño y es más robusto que comparar textos. Cualquier 422 (también uno de validación de campos o sin detail).
+  const transicion = errorDeRespuesta(422, { detail: 'No se puede pasar de ENTREGADO a EN_PROCESO.' });
+  assert.equal(recargarTrasError(transicion), true, 'el 422 de transición');
+  assert.equal(recargarTrasError(errorDeRespuesta(422, { detail: [{ type: 'missing', loc: ['body', 'motivo'], msg: 'Field required' }] })), true, 'un 422 de validación');
+  assert.equal(recargarTrasError(errorDeRespuesta(422, {})), true, 'un 422 sin detail');
+  assert.equal(recargarTrasError({ status: 422 }), true);
 }
 
 console.log('--- TEST 10 (revisión final, F2): el 403 técnico de require_roles se traduce ---');

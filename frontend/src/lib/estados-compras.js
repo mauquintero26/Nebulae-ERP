@@ -555,7 +555,7 @@ export async function cancelarPecsEnSerie(pecs, cancelarUno) {
  *  - fuera: las claves que salen de la selección (lo cancelado y lo omitido); lo que falló sigue marcado;
  *  - pendientes: los PEC que fallaron (se quedan en la ventana del motivo para reintentar con lo escrito);
  *  - recargar: la lista, la franja, las tarjetas y del tablero el origen y el destino, si se canceló algo o si una falla
- *    lo pide (recargarTrasError: un 409, un 400 o la red; un 422 no);
+ *    lo pide (recargarTrasError: un 409, un 400, un 422 (B4 T24, F8) o la red; un 500 no);
  *  - recargarVentas (I1): si se canceló algo, los pedidos de venta del panel de consolidación (los vinculados vuelven a
  *    Pendiente de compra);
  *  - recargarDetalle (m10): si una falla pide recargar, el detalle del panel abierto también;

@@ -186,16 +186,19 @@ export function errorDeRespuesta(status, body) {
 
 /**
  * Despues de una accion que fallo (guardar, re-cotizar, cambiar estado, enviar…): true si conviene recargar el
- * documento en silencio. Un 400 o un 409 (cambio en otra pantalla: ya tiene cotizacion, se confirmo, se cancelo…) o un
- * error sin status (la red se corto y la operacion pudo hacerse igual; tambien null o undefined). Un 401
- * (SesionVencidaError), 403, 404, 422 o 500 no recargan. La usan los detalles de la SC, la COT y el PVEN (B2-T8A, una
- * sola regla desde B2-T9A ronda 1).
+ * documento en silencio. Un 400 o un 409 (cambio en otra pantalla: ya tiene cotizacion, se confirmo, se cancelo…), un 422
+ * o un error sin status (la red se corto y la operacion pudo hacerse igual; tambien null o undefined). Un 401
+ * (SesionVencidaError), 403, 404 o 500 no recargan. La usan los detalles de la SC, la COT y el PVEN (B2-T8A, una
+ * sola regla desde B2-T9A ronda 1) y los tableros.
+ * B4 T24 (F8, ruling del controlador): el 422 cuenta SIN mirar el detail. El 422 de transición del PATCH de estado
+ * (_validar_transicion_pedido de erp_ventas.py) es el conflicto real del tablero de pedidos (el 409 solo sale con productos):
+ * recargar el origen y el destino no hace daño y es más robusto que comparar textos.
  * @param {unknown} err
  * @returns {boolean}
  */
 export function recargarTrasError(err) {
   const status = /** @type {{ status?: unknown } | null | undefined} */ (err)?.status;
-  return status === 400 || status === 409 || status === undefined || status === null;
+  return status === 400 || status === 409 || status === 422 || status === undefined || status === null;
 }
 
 /**
