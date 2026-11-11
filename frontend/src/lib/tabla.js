@@ -1022,6 +1022,19 @@ export function actualizadorColumnas(definicion, cambio, sinGuardar) {
   return (anterior) => (anterior === sinGuardar ? {} : (parteDeColumnas(definicion, anterior, cambio) ?? {}));
 }
 
+/** B4 T24 r2 (duda 4 de r1): el aviso de un cambio de columnas que no se escribe porque la precarga de preferencias falló. */
+export const TEXTO_PRECARGA_FALLIDA_COLUMNAS = 'No se pudieron cargar tus preferencias de columnas; intenta de nuevo en un momento.';
+
+/**
+ * B4 T24 r2: el aviso para el usuario de un cambio de columnas (ocultar, mover, desplazar o estirar) con la precarga fallida (F33: no
+ * se escribe la pieza compuesta), o null. «Restablecer» se escribe igual: sin aviso.
+ * @param {{precargaFallida: boolean, cambio: CambioColumnas | {tipo?: string}}} entrada
+ * @returns {string | null}
+ */
+export function avisoCambioColumnas({ precargaFallida, cambio }) {
+  return precargaFallida && /** @type {any} */ (cambio)?.tipo !== 'restablecer' ? TEXTO_PRECARGA_FALLIDA_COLUMNAS : null;
+}
+
 /**
  * Lo que hace cada operación de usePreferenciasTabla (T4C r1, puntos 3 y 6a): no escribe (false) antes de listo ni si
  * el usuario del token ya no es el usuario con que se pintó la pantalla (el gesto se hizo sobre la pantalla de otra

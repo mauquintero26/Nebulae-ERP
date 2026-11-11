@@ -1,9 +1,10 @@
 'use client';
 
 import { useCallback, useLayoutEffect, useMemo, useRef } from 'react';
-import { fijasDe, guardarCambioColumnas, reconciliarColumnas } from '@/lib/tabla';
+import { avisoCambioColumnas, fijasDe, guardarCambioColumnas, reconciliarColumnas } from '@/lib/tabla';
 import type { CambioColumnas, DefinicionColumna, LadoFijo } from '@/lib/tabla';
 import { usePreferenciaParte } from '@/components/ui/usePreferencia';
+import { useAvisos } from '@/components/ui/Avisos';
 import { usuarioDeLaSesion } from './usuarioDeLaSesion';
 
 /**
@@ -25,7 +26,7 @@ import { usuarioDeLaSesion } from './usuarioDeLaSesion';
  *    un solo usePreferenciasTabla por id en cada pantalla; la tabla y el menú de ajustes reciben su resultado por props.
  *  - B4 T24 (F33; antes, el límite conocido de r1, 6e): mientras la precarga esté fallida, una pieza compuesta ({orden,
  *    ocultas}, o el mapa de anchos) no se escribe (se armaría sobre {} y reemplazaría la guardada): la operación devuelve
- *    false y se vuelve a pedir la precarga. «Restablecer» sí se escribe.
+ *    false, se vuelve a pedir la precarga y se avisa (r2: TEXTO_PRECARGA_FALLIDA_COLUMNAS). «Restablecer» sí se escribe.
  *  - guardarAncho va al SOLTAR el borde (pointerup) o con el doble clic que ajusta al contenido; nunca en cada
  *    movimiento: durante el arrastre el ancho va al <col> por ref (T4D). guardarAnchos guarda varios a la vez
  *    ('Ajustar al ancho de la pantalla').
@@ -88,13 +89,18 @@ export function usePreferenciasTabla(id: string, columnas: ReadonlyArray<Definic
     actuales.current = { columnas, listo, usuario };
   });
 
+  const { avisar } = useAvisos();
   const aplicar = useCallback((cambio: CambioColumnas): boolean => {
     const ahora = actuales.current;
+    // B4 T24 r2: con la precarga fallida el cambio no se escribe (F33) y se dice (avisoCambioColumnas).
+    const fallida = precargaFallida();
+    const aviso = avisoCambioColumnas({ precargaFallida: fallida, cambio });
+    if (aviso) avisar(aviso, { tono: 'error' });
     return guardarCambioColumnas(guardarParte, {
       definicion: ahora.columnas, cambio, sinGuardar: SIN_GUARDAR, listo: ahora.listo,
-      usuarioRender: ahora.usuario, usuarioToken: usuarioDeLaSesion(), precargaFallida: precargaFallida(),
+      usuarioRender: ahora.usuario, usuarioToken: usuarioDeLaSesion(), precargaFallida: fallida,
     });
-  }, [guardarParte, precargaFallida]);
+  }, [guardarParte, precargaFallida, avisar]);
 
   const guardarAncho = useCallback(
     (columna: string, px: number) => aplicar({ tipo: 'anchos', anchos: { [columna]: px } }),

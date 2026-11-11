@@ -1117,10 +1117,20 @@ console.log('--- TEST 24 (T4C r1, puntos 3 y 4): sesionVigente, escriturasDeAcci
   assert.equal(llamadas.length, antes, 'ni llama a guardarParte');
   guardarCambioColumnas(guardarParte, { ...base, cambio: { tipo: 'restablecer' }, listo: true, usuarioRender: 7, usuarioToken: 7, precargaFallida: true });
   assert.equal(llamadas.length, antes + 1, '«Restablecer» sí llega a guardarParte');
+  // r2 (ruling de la duda 4): el intento de ocultar, mover o estirar con la precarga fallida se dice (avisoCambioColumnas, pura).
+  const { avisoCambioColumnas, TEXTO_PRECARGA_FALLIDA_COLUMNAS } = TABLA;
+  assert.equal(TEXTO_PRECARGA_FALLIDA_COLUMNAS, 'No se pudieron cargar tus preferencias de columnas; intenta de nuevo en un momento.');
+  for (const tipo of ['anchos', 'ocultar', 'mover', 'desplazar']) {
+    assert.equal(avisoCambioColumnas({ precargaFallida: true, cambio: { tipo } }), TEXTO_PRECARGA_FALLIDA_COLUMNAS, tipo);
+    assert.equal(avisoCambioColumnas({ precargaFallida: false, cambio: { tipo } }), null, `${tipo} sin falla`);
+  }
+  assert.equal(avisoCambioColumnas({ precargaFallida: true, cambio: { tipo: 'restablecer' } }), null, 'restablecer sí se escribe');
   // La pantalla lo cablea: usePreferenciaParte da precargaFallida (que vuelve a pedir la precarga) y usePreferenciasTabla la pasa.
   const usoPrefs = readFileSync(new URL('../src/components/tabla/usePreferenciasTabla.ts', import.meta.url), 'utf8');
   assert.match(usoPrefs, /const \[guardado, guardarParte, listo, precargaFallida\] = usePreferenciaParte<ColumnasGuardadas>\(/);
-  assert.match(usoPrefs, /usuarioRender: ahora\.usuario, usuarioToken: usuarioDeLaSesion\(\), precargaFallida: precargaFallida\(\),/);
+  assert.match(usoPrefs, /const fallida = precargaFallida\(\);\s*const aviso = avisoCambioColumnas\(\{ precargaFallida: fallida, cambio \}\);\s*if \(aviso\) avisar\(aviso, \{ tono: 'error' \}\);/);
+  assert.match(usoPrefs, /usuarioRender: ahora\.usuario, usuarioToken: usuarioDeLaSesion\(\), precargaFallida: fallida,/);
+  assert.match(usoPrefs, /import \{ useAvisos \} from '@\/components\/ui\/Avisos';/);
   const usoPref = readFileSync(new URL('../src/components/ui/usePreferencia.ts', import.meta.url), 'utf8');
   assert.match(usoPref, /\): \[T, GuardarParte<T>, boolean, \(\) => boolean\] \{/);
 }
