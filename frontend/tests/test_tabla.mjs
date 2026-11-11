@@ -1887,7 +1887,10 @@ console.log('--- TEST 37 (T4D r1): los cables de la ronda r1 en el fuente (gesto
     'r2: la zona táctil de 24 px queda dentro de su propio th (16 px hacia la izquierda) y la línea visible');
 
   // 2. El doble clic mide el ancho propio del contenido: un inline-block que se encoge (y trunca con su máximo).
-  assert.match(t, /<span data-celda=\{v\} className=\{TABLE\.contenido\}>\{contenido\}<\/span>/);
+  // B4 T24 r2 (m17, D27): la columna de acciones (fija a la derecha) no se recorta: su span no lleva el truncate de TABLE.contenido,
+  // que cortaba el anillo de foco del ojo (y antes, del ⋯).
+  assert.match(t, /<span data-celda=\{v\} className=\{fijas\[v\] === 'derecha' \? TABLE\.contenidoAcciones : TABLE\.contenido\}>\{contenido\}<\/span>/);
+  assert.match(readFileSync(new URL('../src/lib/design-system.ts', import.meta.url), 'utf8'), /contenidoAcciones: 'inline-flex max-w-full items-center align-middle',/);
   assert.equal(clase('contenido'), 'inline-block max-w-full truncate align-middle');
 
   // 3. La flexible: anchoAlSoltar con la base de las preferencias y el ancho pintado.

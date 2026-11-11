@@ -343,7 +343,8 @@ function CuerpoTablaBase<T>({
                   style={estiloFija(v, fijas, offsets)}
                   className={`${TABLE.celda} ${fijas[v] ? TABLE.celdaFija : ''} ${clasesFija(v, fijas, visibles)} ${ALINEAR[col.alinear ?? 'izquierda']} ${onFila ? TABLE.celdaFoco : ''}`}
                 >
-                  <span data-celda={v} className={TABLE.contenido}>{contenido}</span>
+                  {/* B4 T24 r2 (m17): la columna de acciones (fija a la derecha) sin el truncate, que recortaba el anillo de foco. */}
+                  <span data-celda={v} className={fijas[v] === 'derecha' ? TABLE.contenidoAcciones : TABLE.contenido}>{contenido}</span>
                 </td>
               );
             })}

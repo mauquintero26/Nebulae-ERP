@@ -245,6 +245,8 @@ export const TABLE = {
   bordeFijaIzquierda: 'border-r border-r-slate-200',
   bordeFijaDerecha: 'border-l border-l-slate-200',
   contenido:        'inline-block max-w-full truncate align-middle',
+  /** B4 T24 r2 (m17): el contenido de la columna de acciones (fija a la derecha): sin truncate (su overflow cortaba el anillo de foco). */
+  contenidoAcciones: 'inline-flex max-w-full items-center align-middle',
   casilla:          'h-4 w-4 cursor-pointer accent-indigo-600 disabled:cursor-not-allowed disabled:opacity-40',
   // Separadores, vacío, error y aviso (el texto queda a la vista aunque la tabla se corra de lado).
   grupoCelda:       'h-8 border-b border-slate-200 bg-slate-100 px-3 text-xs font-bold text-slate-600',
