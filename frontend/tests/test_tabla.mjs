@@ -3085,6 +3085,29 @@ console.log('--- TEST T24-f (B4 T24, FINAL-m27): la alerta de una pestaña se di
   assert.ok(leer('app/dashboard/compras/pedidos/page.tsx').includes("alerta: textoVencidosPec(conteos?.vencidos) }"));
 }
 
+console.log('--- TEST T24-g (B4 T24: F42, F43 y F44): el aviso del menú, el encabezado y la paginación angostos y el botón de la IA en pantalla completa ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = (texto) => texto.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // F42: el alto del aviso de atrasados queda reservado en el menú (que llegue no corre el menú: el CLS).
+  const badge = codigo(leer('components/AlertasBadge.tsx'));
+  assert.match(badge, /if \(!texto && pastillas\.length === 0\) return <div aria-hidden="true" className=\{RESERVA\} \/>;/);
+  assert.match(badge, /const RESERVA = 'min-h-\[3\.75rem\] shrink-0';/);
+  assert.match(badge, /<div className=\{`\$\{RESERVA\} space-y-2 px-3 pt-4`\}>/);
+  // F43: el título se achica y se parte en pantallas angostas; las acciones bajan cuando no caben; los botones de página se envuelven.
+  const encabezado = codigo(leer('components/ui/PageHeader.tsx'));
+  assert.match(encabezado, /<div className="flex flex-wrap items-center justify-between gap-4">/);
+  assert.match(encabezado, /<div className="min-w-0">/);
+  assert.match(encabezado, /<h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3">/);
+  assert.match(encabezado, /<span className="min-w-0 break-words">\{title\}<\/span>/);
+  assert.match(codigo(leer('components/tabla/Paginacion.tsx')), /<div className="flex flex-wrap items-center justify-end gap-0\.5">/);
+  // F44 (b): en pantalla completa el pie de la tabla es tan alto como la esquina del botón flotante de la IA (bottom-6 + h-14 = 80 px
+  // sobre el borde; la tarjeta está a 16 px): el botón queda dentro del pie (pr-20) y no tapa la última fila.
+  const ds = leer('lib/design-system.ts');
+  const completa = /^\s+tarjetaCompleta:\s+'([^']*)'/m.exec(ds)?.[1] ?? '';
+  assert.ok(completa.includes('[&_[data-pie-tabla]]:pr-20') && completa.includes('[&_[data-pie-tabla]]:min-h-[4.5rem]'), completa);
+}
+
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');
 console.log('✓ T4C: sesión, estado armado, partes de columnas, URL de la lista, carga vigente, estado de la lista y modo cliente.');
 console.log('✓ T4C r1: orden rechazado, estados en la sesión, escrituras del usuario del render, esperar y vueltas.');

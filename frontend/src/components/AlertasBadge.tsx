@@ -10,6 +10,12 @@ import { PastillaMenuLateral } from './PastillaMenuLateral';
 import { PastillasCambiosCliente } from './PastillaCambiosCliente';
 
 const ROJO = KPI_COLOR_MAP.red;
+/**
+ * B4 T24 (F42): el alto de una pastilla (pt-4 más py-2.5 y una línea) queda reservado siempre, también mientras llega la respuesta y
+ * sin atrasados: que aparezca el aviso no corre el menú (con el aviso en el mismo cuadro, el CLS subía a 0,106-0,117 en Productos y a
+ * 0,103 en Abastecimiento).
+ */
+const RESERVA = 'min-h-[3.75rem] shrink-0';
 
 /**
  * Aviso de documentos de Ventas atrasados (GET /ventas/alertas/resumen, cada 5 minutos). T11 (V1): es un elemento del
@@ -53,11 +59,11 @@ export function AlertasBadge({ colapsado = false }: { colapsado?: boolean }) {
 
   const texto = textoAtrasados(count);
   const pastillas = pastillasCambiosCliente(cambios);
-  if (!texto && pastillas.length === 0) return null;
+  if (!texto && pastillas.length === 0) return <div aria-hidden="true" className={RESERVA} />;
 
   // Sin atrasados no se pinta la roja; las de cambios del cliente salen igual.
   return (
-    <div className="px-3 pt-4 shrink-0 space-y-2">
+    <div className={`${RESERVA} space-y-2 px-3 pt-4`}>
       {texto && <PastillaMenuLateral
         onClick={() => router.push(RUTA_HUB_VENTAS)}
         texto={texto} cantidad={count} colapsado={colapsado} icono={AlertTriangle}

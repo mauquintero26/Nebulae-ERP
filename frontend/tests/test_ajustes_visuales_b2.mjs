@@ -81,7 +81,9 @@ console.log('--- V1 TEST 2: el aviso vive en el menú lateral, ya no flota sobre
   assert.ok(/textoAtrasados\(/.test(badge), 'el texto sale de textoAtrasados');
   // B3 T18 (H28-cambios punto 11, C22): las pastillas de cambios del cliente se muestran aunque no haya atrasados;
   // sin ninguna no se muestra nada (antes: «if (!texto) return null;») y, sin atrasados, la roja no se pinta (r1).
-  assert.ok(/if \(!texto && pastillas\.length === 0\) return null;/.test(badge), 'sin atrasados ni cambios no se muestra nada');
+  // B4 T24 (F42, D27): sin ninguna no se muestra NADA a la vista, pero el alto queda reservado (un div vacío aria-hidden): que el aviso
+  // llegue después no corre el menú.
+  assert.ok(/if \(!texto && pastillas\.length === 0\) return <div aria-hidden="true" className=\{RESERVA\} \/>;/.test(badge), 'sin atrasados ni cambios no se muestra nada (solo el alto reservado)');
   assert.ok(/\{texto && <PastillaMenuLateral\b/.test(badge), 'sin atrasados no se pinta la roja');
   assert.ok(badge.includes('router.push(RUTA_HUB_VENTAS)') && RUTA_HUB_VENTAS === '/dashboard/ventas', 'el clic lleva al Hub');
   assert.ok(/icono=\{AlertTriangle\}/.test(badge), 'con el ícono AlertTriangle');

@@ -62,7 +62,7 @@ export function Paginacion({
         </select>
       )}
       {paginas > 1 && (
-        <div className="flex items-center gap-0.5">
+        <div className="flex flex-wrap items-center justify-end gap-0.5">
           <BotonPagina etiqueta="Primera página" onClick={() => ir(1)} deshabilitado={actual <= 1}>«</BotonPagina>
           <BotonPagina etiqueta="Página anterior" onClick={() => ir(actual - 1)} deshabilitado={actual <= 1}>‹</BotonPagina>
           {rangoPaginas(actual, paginas).map((n) => (

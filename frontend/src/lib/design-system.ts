@@ -189,7 +189,8 @@ export const SEARCH_BAR = {
 export const TABLE = {
   // La tarjeta de la pantalla (la barra, la tabla y su paginación).
   tarjeta:          'flex min-w-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm',
-  tarjetaCompleta:  'fixed inset-4 z-40 flex min-w-0 flex-col overscroll-contain rounded-2xl border border-slate-200 bg-white shadow-2xl [&_[data-pie-tabla]]:pr-20',
+  // B4 T24 (F44): y el pie tan alto como la esquina del botón (bottom-6 + h-14 = 80 px; la tarjeta, a 16 px): no tapa la última fila.
+  tarjetaCompleta:  'fixed inset-4 z-40 flex min-w-0 flex-col overscroll-contain rounded-2xl border border-slate-200 bg-white shadow-2xl [&_[data-pie-tabla]]:pr-20 [&_[data-pie-tabla]]:min-h-[4.5rem]',
   capaCompleta:     'fixed inset-0 z-[39] touch-none overscroll-contain bg-slate-900/35',
   // El contenedor: la tabla tiene su propia barra vertical, hasta el alto de la pantalla (TABLA-base, riesgos).
   raiz:             'relative flex min-h-0 min-w-0 flex-1 flex-col',
