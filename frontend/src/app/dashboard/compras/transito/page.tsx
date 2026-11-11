@@ -413,11 +413,12 @@ export default function TransitoPage() {
     const accion = accionEtapaTransito(p);
     return {
       ...tarjeta,
-      accionPrincipal: tarjeta.accionPrincipal && accion
+      // B4 T24 r1 (C1): «Iniciar» y «Completar» (PATCH /tracking) solo con tracking, también en el tablero (soloLectura no la quita).
+      accionPrincipal: accesoPec.tracking && tarjeta.accionPrincipal && accion
         ? { ...tarjeta.accionPrincipal, onClick: () => { void avanzar(p, accion); } }
         : null,
     };
-  }, [avanzar, pendiente]);
+  }, [avanzar, pendiente, accesoPec.tracking]);
   const textoTope = enKanban && !completa.cargandoInicial ? avisoTope200(completa.total, 'pedidos') : null;
   const sinEtapas = enKanban && itemsTablero !== null && columnasTablero.length === 0;
   const errorConfig = !cargandoConfig && config?.error != null;

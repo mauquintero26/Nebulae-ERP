@@ -2996,6 +2996,9 @@ console.log('--- B4 T24 (FINAL-m10, FINAL-m31 y FINAL-m38): los tableros y las a
   // Tránsito: «Iniciar» y «Completar» de la fila (el mismo PATCH /tracking) solo con tracking.
   assert.match(transito, /puedeAvanzar: accesoPec\.tracking/);
   assert.match(transito, /if \(!accion \|\| !acciones\?\.puedeAvanzar\) return <span className="text-xs text-slate-400">—<\/span>;/);
+  // r1 (C1): en el Kanban, la acción principal de la tarjeta («Iniciar»/«Completar», el mismo PATCH /tracking) también solo con tracking.
+  assert.match(transito, /accionPrincipal: accesoPec\.tracking && tarjeta\.accionPrincipal && accion\n\s*\? \{ \.\.\.tarjeta\.accionPrincipal, onClick: \(\) => \{ void avanzar\(p, accion\); \} \}\n\s*: null,/);
+  assert.match(transito, /\}, \[avanzar, pendiente, accesoPec\.tracking\]\);/);
 }
 
 console.log('\nOK: test_estados_compras.mjs');
