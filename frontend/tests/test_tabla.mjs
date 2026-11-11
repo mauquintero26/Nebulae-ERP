@@ -3202,6 +3202,12 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
     '(panel.querySelector<HTMLElement>(ENFOCABLES) ?? panel).focus({ preventScroll: true });', 'enBody: e.target === document.body,']) {
     assert.ok(hook.includes(n), n);
   }
+  // r2 (C1, banco): la ventana de re-ingreso (fuera de la pila) atrapa su propio Tab con la misma regla pura: Tab y Mayús+Tab recorren
+  // Usuario, Contraseña, Salir y Continuar sin salir a la página de atrás.
+  const sesion = leer('components/SessionKeeper.tsx');
+  assert.match(sesion, /import \{ siguienteFocoAtrapado \} from '@\/lib\/tabla';/);
+  assert.match(sesion, /role="dialog"\s+aria-modal="true"\s+aria-labelledby="sesion-cerrada-titulo"\s+onKeyDown=\{alTeclearVentana\}/);
+  assert.match(sesion, /const destino = siguienteFocoAtrapado\(lista\.indexOf\(document\.activeElement as HTMLElement\), lista\.length, e\.shiftKey\);\s*if \(destino === null\) return;\s*e\.preventDefault\(\);\s*if \(destino >= 0\) lista\[destino\]\.focus\(\);/);
   // r2 (C1, m12): la rama Tab sale con atrapaTab (arriba, la re-autenticación y el foco en otro diálogo modal) y hace el preventDefault
   // ANTES de mover el foco.
   assert.match(hook, /if \(e\.key === 'Tab'\) \{\s*if \(!panel \|\| !atrapaTab\(\{ arriba, reautenticando: hayReautenticacionPendiente\(\), focoEnOtroDialogo: focoEnOtroDialogo\(panel\) \}\)\) return;/);
