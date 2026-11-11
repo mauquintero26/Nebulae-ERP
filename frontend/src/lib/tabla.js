@@ -2169,6 +2169,27 @@ export function saleConEsc({ tecla, defaultPrevented = false, dialogoEncima = fa
   return tecla === 'Escape' && !defaultPrevented && !dialogoEncima;
 }
 
+/**
+ * B4 T24 (F40): si un Esc cierra una ventana (Modal) o un panel lateral (Drawer): solo la capa de ARRIBA (una confirmación encima se
+ * cierra primero), si nadie más lo atendió (defaultPrevented: un menú, el filtro, la búsqueda) y si no está guardando (bloqueado:
+ * bloquearCierre).
+ * @param {{tecla: string, arriba: boolean, defaultPrevented?: boolean, bloqueado?: boolean}} entrada
+ * @returns {boolean}
+ */
+export function cierraConEsc({ tecla, arriba, defaultPrevented = false, bloqueado = false }) {
+  return tecla === 'Escape' && arriba && !defaultPrevented && !bloqueado;
+}
+
+/**
+ * B4 T24 (F40): si un clic en el fondo cierra la ventana: empezó Y terminó en la capa oscura (arrastrar desde un campo para
+ * seleccionar texto y soltar afuera no la cierra), salvo guardando.
+ * @param {{inicioEnFondo: boolean, finEnFondo: boolean, bloqueado?: boolean}} entrada
+ * @returns {boolean}
+ */
+export function cierraConClicFuera({ inicioEnFondo, finEnFondo, bloqueado = false }) {
+  return inicioEnFondo && finEnFondo && !bloqueado;
+}
+
 // ─── B4 T22: Gastos (TABLA-otros punto 7, KANBAN-resto; R11, R16, RP57, RP58, RP104) ────────────────────────────
 
 /** R11: el tablero de Gastos tiene a lo sumo 12 columnas (una por categoría); el resto se ve en la lista. */

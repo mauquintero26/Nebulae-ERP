@@ -2,6 +2,7 @@
 import { useId } from 'react';
 import { X } from 'lucide-react';
 import { ACCENTS, AccentColor } from './colors';
+import { useCierreVentana } from './useCierreVentana';
 
 /** Modal estandar: header con icono+titulo sobre degradado del acento, cuerpo
  * con scroll propio, footer opcional para los botones de accion. `maxWidth`
@@ -10,10 +11,12 @@ import { ACCENTS, AccentColor } from './colors';
  * `capa='encima'` (z-[60]) la pone sobre los modales de la pagina (z-50), p. ej.
  * las confirmaciones de useAvisos; el modal de sesion vencida (z-[100]) sigue encima.
  * `bloquearCierre` deshabilita la X (p. ej. mientras la ventana guarda); el onClose del llamador
- * tambien debe ignorar el cierre en ese momento. */
+ * tambien debe ignorar el cierre en ese momento.
+ * B4 T24 (F40): tambien se cierra con Esc (solo la de arriba) y con un clic en el fondo (useCierreVentana), salvo con
+ * bloquearCierre o con cierreExterno={false} (aditivo: la que solo se cierra con sus botones). */
 export function Modal({
   title, subtitle, icon: Icon, color = 'amber', onClose, children, footer,
-  maxWidth = 'lg', capa = 'base', role = 'dialog', describedBy, bloquearCierre = false,
+  maxWidth = 'lg', capa = 'base', role = 'dialog', describedBy, bloquearCierre = false, cierreExterno = true,
 }: {
   title: string;
   subtitle?: string;
@@ -30,13 +33,16 @@ export function Modal({
   describedBy?: string;
   /** true: la X queda deshabilitada (la ventana está guardando). */
   bloquearCierre?: boolean;
+  /** B4 T24 (F40): false para que Esc y el clic en el fondo no la cierren (por defecto, sí). */
+  cierreExterno?: boolean;
 }) {
   const accent = ACCENTS[color];
   const widthCls = { md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-xl', '3xl': 'max-w-3xl', '4xl': 'max-w-4xl' }[maxWidth];
   const capaCls = capa === 'encima' ? 'z-[60]' : 'z-50';
   const tituloId = useId();
+  const fondo = useCierreVentana(onClose, bloquearCierre || !cierreExterno);
   return (
-    <div className={`fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center ${capaCls} p-4`}>
+    <div onPointerDown={fondo.alPresionar} onClick={fondo.alSoltar} className={`fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center ${capaCls} p-4`}>
       <div
         role={role}
         aria-modal="true"

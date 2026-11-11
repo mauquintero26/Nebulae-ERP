@@ -3039,6 +3039,34 @@ console.log('--- TEST T24-d (B4 T24, FINAL-m21): la pestaña Pagos de E-Commerce
   }
 }
 
+console.log('--- TEST T24-e (B4 T24, F40): el Modal y el Drawer se cierran con Esc y con un clic en el fondo ---');
+{
+  const { cierraConEsc, cierraConClicFuera } = TABLA;
+  // Esc: solo la capa de arriba, si nadie más lo atendió y si no está guardando (bloquearCierre).
+  assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true }), true);
+  assert.equal(cierraConEsc({ tecla: 'Esc', arriba: true }), false, 'solo «Escape»');
+  assert.equal(cierraConEsc({ tecla: 'Enter', arriba: true }), false);
+  assert.equal(cierraConEsc({ tecla: 'Escape', arriba: false }), false, 'una confirmación encima se cierra primero');
+  assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, defaultPrevented: true }), false, 'un menú o un filtro ya lo atendió');
+  assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, bloqueado: true }), false, 'guardando: bloquearCierre');
+  // El fondo: el clic empezó y terminó en la capa oscura (arrastrar desde un campo para seleccionar no cierra).
+  assert.equal(cierraConClicFuera({ inicioEnFondo: true, finEnFondo: true }), true);
+  assert.equal(cierraConClicFuera({ inicioEnFondo: false, finEnFondo: true }), false, 'empezó dentro de la ventana');
+  assert.equal(cierraConClicFuera({ inicioEnFondo: true, finEnFondo: false }), false);
+  assert.equal(cierraConClicFuera({ inicioEnFondo: true, finEnFondo: true, bloqueado: true }), false, 'guardando');
+  // El cableado: un solo hook (useCierreVentana) en el Modal y el Drawer; la X del Drawer con su aria-label.
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const hook = leer('components/ui/useCierreVentana.ts');
+  for (const n of ['cierraConEsc(', 'cierraConClicFuera(', "document.addEventListener('keydown'", "document.removeEventListener('keydown'"]) assert.ok(hook.includes(n), n);
+  const modal = leer('components/ui/Modal.tsx');
+  assert.match(modal, /const fondo = useCierreVentana\(onClose, bloquearCierre \|\| !cierreExterno\);/);
+  assert.match(modal, /onPointerDown=\{fondo\.alPresionar\} onClick=\{fondo\.alSoltar\}/);
+  const drawer = leer('components/ui/Drawer.tsx');
+  assert.match(drawer, /const fondo = useCierreVentana\(onClose, !cierreExterno\);/);
+  assert.match(drawer, /onPointerDown=\{fondo\.alPresionar\} onClick=\{fondo\.alSoltar\}/);
+  assert.match(drawer, /<button type="button" onClick=\{onClose\} aria-label="Cerrar"/);
+}
+
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');
 console.log('✓ T4C: sesión, estado armado, partes de columnas, URL de la lista, carga vigente, estado de la lista y modo cliente.');
 console.log('✓ T4C r1: orden rechazado, estados en la sesión, escrituras del usuario del render, esperar y vueltas.');
