@@ -139,3 +139,15 @@ def test_lo_que_int_aceptaba_sin_perdida_sigue_valiendo(app_client, db, admin_to
         assert (resp.status_code, resp.json()) == (422, {"detail": _cantidad_invalida("recibida")}), crudo
         assert v.commits == 0, crudo
     assert _detalle(app_client, bodega_token, rec["id"])["productos"][0]["qty_recibida"] == 3
+
+
+
+def test_el_patch_en_lote_lee_la_recepcion_con_bloqueo(app_client, db, admin_token, pec_10u, sku, contador_sql):
+    """r2 (m5): update_recepcion (el PATCH en lote) lee la GoodsReceipt con FOR UPDATE antes de su guarda de BORRADOR, como
+    update_grl (m16): tras una confirmación, el PATCH que esperaba ve COMPLETADA y no reescribe las GRL."""
+    rec = _recepcion(app_client, admin_token, pec_10u, sku)
+    with contador_sql.ventana() as v:
+        resp = app_client.patch(f"{RECEPCIONES}/{rec['id']}", headers=_auth(admin_token), json={"notas": "r2 m5"})
+    assert resp.status_code == 200, resp.text
+    lecturas = [s for s in v.sentencias if s.lstrip().upper().startswith("SELECT") and "FROM goods_receipts" in s]
+    assert lecturas and "FOR UPDATE" in lecturas[0].upper(), lecturas[:1]

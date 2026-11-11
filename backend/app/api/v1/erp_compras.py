@@ -160,11 +160,17 @@ def _a_utc_sin_zona(leida):
 def _parse_dt(v):
     """La fecha de una etapa para restarla de utcnow() (_stage_alert): B4 T24, cierre de r1 (m34, ruling (a) + (b)), una
     con zona horaria sale en UTC sin zona. Así un eta con zona ya guardado (de antes de A2, o puesto en la fila) no tumba
-    GET /compras/pedidos con un TypeError. Una que no se lee, o que desborda al pasarla a UTC, es None (se ignora)."""
+    GET /compras/pedidos con un TypeError. Una que no se lee, o que desborda al pasarla a UTC, es None (se ignora).
+    r2 (m3 + m14, ruling): también None si el año, ya normalizado, queda fuera de ANIO_MINIMO..ANIO_MAXIMO, la cota de la
+    escritura (con zona o sin ella): un '9999-12-31' legado desbordaba al sumarle los días de alerta. Con la cota (2999)
+    y los 36500 días de alerta como máximo (_MAX_DIAS_ALERTA) el límite llega a 3099: no queda ningún OverflowError."""
     try:
-        return _a_utc_sin_zona(_fecha_iso(v))
+        leida = _a_utc_sin_zona(_fecha_iso(v))
     except OverflowError:
         return None
+    if leida is not None and not _anio_valido(leida):
+        return None
+    return leida
 
 
 def _stage_alert(stage: dict, base_date) -> Optional[dict]:
@@ -1017,8 +1023,11 @@ def get_pec(pec_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
 def _desvincular_pec_cancelado(db: Session, pec_id: int, pec_numero: str, user_name: str = None):
     """Al cancelar una PEC, desvincula los Pedidos de Venta y los items de la
     Lista de Compras que apuntaban a ella, para que vuelvan a mostrar la
-    eleccion "Pendiente de Compra" en vez de quedar apuntando a una PEC muerta."""
-    ventas = db.query(SaleOrder).filter(SaleOrder.pec_id == pec_id).all()
+    eleccion "Pendiente de Compra" en vez de quedar apuntando a una PEC muerta.
+    B4 T24 r2 (m4): los PVEN se leen con FOR UPDATE, en orden de id: en serie con un create_pec que los vincule a la vez
+    (en READ COMMITTED, tras la espera, PostgreSQL vuelve a evaluar pec_id y salta el que ya se vinculó a otro PEC).
+    Hacer la desvinculación en el mismo commit que el CANCELADO queda para el B5."""
+    ventas = db.query(SaleOrder).filter(SaleOrder.pec_id == pec_id).order_by(SaleOrder.id).with_for_update().all()
     for v in ventas:
         v.pec_id = None
         v.pec_numero = None
@@ -1142,27 +1151,34 @@ def _validar_texto_corto(valor, maximo: int, no_texto: str, control: str, largo:
 
 
 # B4 T24, cierre de r1 (m34 y el ruling de la duda 1): el eta (el de PATCH /tracking y el de cada etapa de PATCH
-# /pedidos) acepta la zona horaria; solo se acota el año (A2).
+# /pedidos) acepta la zona horaria; solo se acota el año (A2). r2 (m12): con zona se guarda el día de Colombia.
 ETA_SEGUIMIENTO_INVALIDA = (f"La fecha estimada de la etapa no es válida: usa el formato AAAA-MM-DD, con un año entre "
                             f"{ANIO_MINIMO} y {ANIO_MAXIMO}.")
 
 
 def _eta_del_seguimiento(valor):
     """B4 T24, cierre de r1 (m34, ruling (a) + (b); duda 1: la regla única del eta, también en las etapas de PATCH
-    /pedidos vía _validar_etapas): el eta que se guarda. Con zona horaria se acepta y se
-    guarda en UTC sin zona ('2026-12-01T00:00:00-05:00' -> '2026-12-01T05:00:00'); sin zona (el AAAA-MM-DD de la pantalla)
-    o uno que no se lee (_parse_dt lo ignora), tal cual, como hoy. El año, el del valor en UTC, entre ANIO_MINIMO y
-    ANIO_MAXIMO (A2): si no, o si el paso a UTC desborda, 422 ETA_SEGUIMIENTO_INVALIDA. None o '' no cambian nada."""
+    /pedidos vía _validar_etapas): el eta que se guarda. r2 (m12, ruling que corrige la parte (a) de m34): el eta es una
+    FECHA DE NEGOCIO. Con zona horaria se acepta y se guarda como el día de Colombia, en AAAA-MM-DD, el formato que manda la
+    pantalla ('2026-12-01T20:00:00-05:00' -> '2026-12-01'; '2026-12-01T03:00:00+00:00' -> '2026-11-30'): las pantallas
+    leen los 10 primeros caracteres, y con el instante en UTC uno de las 19:00-23:59 de Colombia se veía al día siguiente.
+    Se pierde la hora, que nadie usa. Sin zona (el AAAA-MM-DD de la pantalla) o uno que no se lee (_parse_dt lo ignora),
+    tal cual, como hoy. El año (del día de Colombia, o del valor sin zona) entre ANIO_MINIMO y ANIO_MAXIMO (A2): si no, o
+    si el paso a Colombia desborda, 422 ETA_SEGUIMIENTO_INVALIDA. None o '' no cambian nada."""
     leida = _fecha_iso(valor)
     if leida is None:
         return valor
+    if leida.tzinfo is None:
+        if not _anio_valido(leida):
+            raise HTTPException(422, ETA_SEGUIMIENTO_INVALIDA)
+        return valor
     try:
-        utc = _a_utc_sin_zona(leida)
+        dia = a_colombia(leida).date()
     except OverflowError:
         raise HTTPException(422, ETA_SEGUIMIENTO_INVALIDA)
-    if not _anio_valido(utc):
+    if not _anio_valido(dia):
         raise HTTPException(422, ETA_SEGUIMIENTO_INVALIDA)
-    return utc.isoformat() if leida.tzinfo is not None else valor
+    return dia.isoformat()
 
 
 def _validar_autor(valor) -> None:
@@ -1177,7 +1193,8 @@ def _validar_etapas(etapas) -> Optional[list]:
     alert_confirm_days, un número (no bool) entre 0 y 36500 o ausentes; timestamp, si trae valor, un texto sin zona horaria
     y con el año entre 1900 y 2999 (A2) (o uno que no se lee, que _parse_dt ignora). El eta, con el MISMO ayudante de PATCH
     /tracking (_eta_del_seguimiento; cierre de r1, ruling de la duda 1): con zona horaria se normaliza a UTC sin zona en
-    vez de dar 422; el año, entre 1900 y 2999; uno que no es texto, el mismo 422 (ETA_SEGUIMIENTO_INVALIDA).
+    vez de dar 422 (r2, m12: el día de Colombia); el año, entre 1900 y 2999; uno que no es texto, el mismo 422
+    (ETA_SEGUIMIENTO_INVALIDA).
     Devuelve las etapas (copias) con el eta ya normalizado, para guardarlas así; None si no vinieron."""
     if etapas is None:
         return None
@@ -1447,7 +1464,7 @@ def update_tracking(pec_id: int, body: ActualizarTrackingBody,
     r2 (m5): user_name se valida antes de escribir, como el updated_by del PATCH (desde B4 T24, FINAL-m2, solo queda en
     tracking_history: la Actividad la firma la sesión).
     B4 T24 (A2): el eta, con el año entre 1900 y 2999, antes de escribir. Cierre de r1 (m34): con zona horaria se acepta y
-    se guarda en UTC sin zona (_eta_del_seguimiento).
+    (r2, m12) se guarda como el día de Colombia (_eta_del_seguimiento).
     B4 T24 r1 (m15): el PEC se lee con FOR UPDATE, como en update_pec: un seguimiento y una cancelación a la vez quedan en
     serie y la guarda etapa_pec(p.estado) ve el CANCELADO (no lo pisa con RECIBIDO o EN_TRANSITO).
     """
@@ -1805,7 +1822,7 @@ def crear_recepcion_desde_pec(
         action        = "CREATED",
         description   = f"Recepcion {gr.numero} creada desde {p.numero} con {len(productos_recepcion)} lineas normalizadas",
         new_estado    = "BORRADOR",
-        user_name     = body.created_by,
+        user_name     = nombre_de_usuario(user),   # B4 T24 r2 (m11): la sesión; created_by queda como dato
     ))
     db.add(ActivityLog(
         entity_type   = "PEC",
@@ -1813,7 +1830,7 @@ def crear_recepcion_desde_pec(
         entity_numero = p.numero,
         action        = "RECEPCION_CREATED",
         description   = f"Recepcion {gr.numero} iniciada",
-        user_name     = body.created_by,
+        user_name     = nombre_de_usuario(user),   # B4 T24 r2 (m11)
     ))
     # Cierre 1: Regenerar snapshot con grl_id y po_line_id desde GRL creadas
     # recepcionar desde PEC tambien debe devolver grl_id en cada producto
@@ -2085,8 +2102,11 @@ def update_recepcion(eninv_id: int, body: dict, user: User = Depends(require_rol
 
     - El JSON g.productos NUNCA se actualiza directamente; solo desde GRL.
 
+    - B4 T24 r2 (m5): la recepción se lee con FOR UPDATE antes de la guarda de BORRADOR, como update_grl: tras una
+      confirmación, el PATCH que esperaba ve COMPLETADA y no reescribe las GRL.
+
     """
-    g = db.query(GoodsReceipt).filter(GoodsReceipt.id == eninv_id).first()
+    g = db.query(GoodsReceipt).filter(GoodsReceipt.id == eninv_id).with_for_update().first()
     if not g:
         raise HTTPException(404, "Recepcion no encontrada")
     old_estado = g.estado

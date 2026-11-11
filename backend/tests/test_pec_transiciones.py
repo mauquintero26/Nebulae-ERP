@@ -454,7 +454,7 @@ def test_los_campos_libres_se_validan_antes_de_guardar(app_client, db, admin_tok
         ({"tracking_stages": [{"status": "PENDIENTE", "alert_confirm_days": True}]}, ETAPA_DIAS_INVALIDOS),
         ({"tracking_stages": [{"status": "PENDIENTE", "alert_overdue_days": 10 ** 12}]}, ETAPA_DIAS_INVALIDOS),
         ({"tracking_stages": [{"status": "PENDIENTE", "alert_confirm_days": -1}]}, ETAPA_DIAS_INVALIDOS),   # B4 T24 (B26)
-        ({"tracking_stages": [{"status": "PENDIENTE", "eta": "2999-12-31T23:00:00-05:00"}]},   # cierre de r1 (duda 1)
+        ({"tracking_stages": [{"status": "PENDIENTE", "eta": "3000-01-01T10:00:00+00:00"}]},   # cierre de r1 (duda 1); r2
          ETA_SEGUIMIENTO_INVALIDA),
         ({"tracking_stages": [{"status": "PENDIENTE", "eta": 5}]}, ETA_SEGUIMIENTO_INVALIDA),
         ({"tracking_stages": [{"status": "COMPLETADO", "timestamp": "2026-12-05T10:00:00+05:00"}]},
@@ -980,25 +980,29 @@ def _alerta_en_la_lista(app_client, token, pec):
     return fila["tracking_stages"][0]["alert"]
 
 
-def test_el_eta_con_zona_se_acepta_y_se_guarda_en_utc_sin_zona(app_client, db, admin_token, contador_sql):
+def test_el_eta_con_zona_se_acepta_y_se_guarda_como_el_dia_de_colombia(app_client, db, admin_token, contador_sql):
     """m34: PATCH /tracking acepta un eta ISO con zona (antes de A2 se guardaba con la zona y tumbaba GET /compras/pedidos;
-    con A2, 422). Se guarda pasado a UTC sin zona, la convención de la API; el AAAA-MM-DD de la pantalla, igual que hoy.
-    La cota del año sigue (422, sin escribir), también cuando la zona la saca de rango o desborda."""
+    con A2, 422). r2 (m12, ruling): el eta es una FECHA DE NEGOCIO y se guarda como el día de Colombia, en AAAA-MM-DD,
+    el formato que manda la pantalla (las pantallas leen los 10 primeros caracteres: con el instante en UTC, uno de las
+    19:00-23:59 de Colombia se veía al día siguiente). El AAAA-MM-DD, igual que hoy. La cota del año sigue (422, sin
+    escribir), sobre ese día, también cuando la zona lo saca de rango o desborda."""
     f = _Fabrica(db)
     pec = f.pec("EMITIDO", tracking_stages=_etapa_con_alerta())
     ruta = f"{RUTA}/{pec.id}/tracking"
-    for eta, guardado in (("2026-12-01T00:00:00-05:00", "2026-12-01T05:00:00"),
-                          ("2026-12-01T00:00:00+00:00", "2026-12-01T00:00:00"),
-                          ("2026-12-01T10:30:00+05:30", "2026-12-01T05:00:00"),
-                          ("2026-12-01", "2026-12-01")):
+    for eta, guardado, dia in (("2026-12-01T00:00:00-05:00", "2026-12-01", "01/12/2026"),
+                               ("2026-12-01T20:00:00-05:00", "2026-12-01", "01/12/2026"),   # en UTC, el 2
+                               ("2026-12-01T03:00:00+00:00", "2026-11-30", "30/11/2026"),   # en Colombia, el 30
+                               ("2026-12-01T10:30:00+05:30", "2026-12-01", "01/12/2026"),
+                               ("2999-12-31T23:00:00-05:00", "2999-12-31", "31/12/2999"),   # en UTC, 3000
+                               ("2026-12-01", "2026-12-01", "01/12/2026")):
         resp = app_client.patch(ruta, headers=_auth(admin_token), json={"stage": "PROVEEDOR_CASILLERO",
                                                                         "status": "EN_PROCESO", "eta": eta})
         assert resp.status_code == 200, (eta, resp.text)
         assert resp.json()["data"]["tracking_stages"][0]["alert"] is not None, eta
         assert _eta_guardado(db, pec) == guardado, eta
         alerta = _alerta_en_la_lista(app_client, admin_token, pec)
-        assert alerta and "ETA 01/12/2026" in alerta["mensaje"], (eta, alerta)
-    for eta in ("2999-12-31T23:00:00-05:00", "9999-12-31T23:30:00-05:00", "0001-01-01T00:30:00+05:00", "1899-12-31"):
+        assert alerta and f"ETA {dia}" in alerta["mensaje"], (eta, alerta)
+    for eta in ("3000-01-01T10:00:00+00:00", "9999-12-31T23:30:00-05:00", "0001-01-01T00:30:00+05:00", "1899-12-31"):
         with contador_sql.ventana() as v:
             resp = app_client.patch(ruta, headers=_auth(admin_token), json={"stage": "PROVEEDOR_CASILLERO",
                                                                             "status": "EN_PROCESO", "eta": eta})
@@ -1024,7 +1028,8 @@ def test_un_eta_con_zona_ya_guardado_no_tumba_la_lista(app_client, db, admin_tok
 
 def test_las_etapas_del_patch_normalizan_el_eta_con_zona_como_el_seguimiento(app_client, db, admin_token):
     """Cierre de r1 (ruling de la duda 1): PATCH /compras/pedidos/{id} con tracking_stages usa el MISMO ayudante que PATCH
-    /tracking (_eta_del_seguimiento): un eta con zona horaria se guarda en UTC sin zona en vez de dar 422, y GET
+    /tracking (_eta_del_seguimiento): un eta con zona horaria se guarda (r2, m12) como el día de Colombia en vez de dar
+    422, y GET
     /compras/pedidos sigue respondiendo con su alerta. El resto de cada etapa se guarda tal cual; un eta sin zona, igual
     que hoy. El timestamp con zona sigue dando 422 (A2: lo pone el servidor)."""
     f = _Fabrica(db)
@@ -1036,7 +1041,76 @@ def test_las_etapas_del_patch_normalizan_el_eta_con_zona_como_el_seguimiento(app
     assert resp.status_code == 200, resp.text
     db.expire_all()
     guardadas = db.query(PurchaseOrderFull.tracking_stages).filter(PurchaseOrderFull.id == pec.id).scalar()
-    assert guardadas == [{**etapas[0], "eta": "2026-12-01T05:00:00"}, etapas[1]]
+    assert guardadas == [{**etapas[0], "eta": "2026-12-01"}, etapas[1]]
     alerta = _alerta_en_la_lista(app_client, admin_token, pec)
     assert alerta and "ETA 01/12/2026" in alerta["mensaje"], alerta
-    assert resp.json()["data"]["tracking_stages"][0]["eta"] == "2026-12-01T05:00:00"
+    assert resp.json()["data"]["tracking_stages"][0]["eta"] == "2026-12-01"
+
+
+
+# ─── B4 T24 r2 (m3 + m14, m4, m11) ──────────────────────────────────────────────────────────────────────────────────
+
+def test_las_fechas_legadas_fuera_de_la_cota_no_tumban_la_lista(app_client, db, admin_token):
+    """r2 (m3 + m14, ruling): _parse_dt devuelve None si el año, ya normalizado, queda fuera de 1900-2999 (la cota de la
+    escritura, con zona o sin ella), y _stage_alert lo trata como «sin fecha». Antes, un eta legado como
+    '9999-12-30T00:00:00-05:00' (no desborda al pasarlo a UTC) o '9999-12-31' desbordaba al sumarle los días de alerta, y
+    una fecha_compra 9999-12-31 al sumarle los de confirmación: GET /compras/pedidos daba 500 a todos."""
+    f = _Fabrica(db)
+    etapas = [{"stage": f"E{i}", "status": "EN_PROCESO", "timestamp": None, "eta": eta, "alert_overdue_days": 3,
+               "alert_confirm_days": 2}
+              for i, eta in enumerate(("9999-12-30T00:00:00-05:00", "9999-12-31", "1899-06-01"))]
+    con_etas = f.pec("EMITIDO", tracking_stages=etapas)
+    resp = app_client.get(RUTA, headers=_auth(admin_token), params={"q": con_etas.numero})
+    assert resp.status_code == 200, resp.text
+    [fila] = [p for p in resp.json()["data"] if p["id"] == con_etas.id]
+    alertas = [s["alert"] for s in fila["tracking_stages"]]
+    # Sin eta legible, la etapa cuenta como sin confirmar: el aviso de confirmación desde la fecha de compra.
+    assert all(a and "para confirmar esta etapa" in a["mensaje"] for a in alertas), alertas
+    compra_9999 = f.pec("EMITIDO", fecha_compra=datetime(9999, 12, 31),
+                        tracking_stages=[{"stage": "E", "status": "PENDIENTE", "timestamp": None, "eta": None,
+                                          "alert_confirm_days": 2}])
+    resp = app_client.get(RUTA, headers=_auth(admin_token), params={"q": compra_9999.numero})
+    assert resp.status_code == 200, resp.text
+    [fila] = [p for p in resp.json()["data"] if p["id"] == compra_9999.id]
+    assert fila["tracking_stages"][0]["alert"] is None
+    assert app_client.get(f"{RUTA}/{compra_9999.id}", headers=_auth(admin_token)).status_code == 200
+
+
+def test_la_cancelacion_desvincula_los_pven_con_bloqueo(app_client, db, admin_token, contador_sql):
+    """r2 (m4): _desvincular_pec_cancelado lee los PVEN del PEC con FOR UPDATE y ORDER BY sale_orders.id: en serie con un
+    create_pec que los vincule a la vez (en READ COMMITTED, tras la espera, PostgreSQL vuelve a evaluar pec_id y salta el
+    que ya se vinculó a otro PEC). Unir la desvinculación al commit del CANCELADO queda para el B5."""
+    f = _Fabrica(db)
+    pec = f.pec("EMITIDO")
+    a, b = f.pven("EN_PROCESO", pec=pec), f.pven("EN_PROCESO", pec=pec)
+    pec_id, ids = pec.id, (a.id, b.id)
+    db.refresh(pec)
+    with contador_sql.ventana() as v:
+        assert _patch(app_client, admin_token, pec, estado="CANCELADO", motivo="Ya no se necesita").status_code == 200
+    lecturas = [s for s in v.sentencias if s.lstrip().upper().startswith("SELECT") and "FROM sale_orders" in s
+                and "sale_orders.pec_id =" in s]
+    assert lecturas, v.sentencias
+    assert all("FOR UPDATE" in s.upper() and "ORDER BY sale_orders.id" in s for s in lecturas), lecturas
+    db.expire_all()
+    assert [(x.pec_id, x.estado) for x in db.query(SaleOrder).filter(SaleOrder.id.in_(ids)).order_by(SaleOrder.id)] == [
+        (None, "PENDIENTE_COMPRA"), (None, "PENDIENTE_COMPRA")]
+    assert _estado(db, pec) == "CANCELADO" and pec_id
+
+
+def test_la_recepcion_desde_el_pedido_la_firma_la_sesion(app_client, db, admin_token, user_admin, pec_10u, warehouse):
+    """r2 (m11): los dos renglones de Actividad de POST /compras/pedidos/{id}/recepcionar (el CREATED de la recepción y el
+    «Recepcion X iniciada» del PEC) los firma la sesión (nombre_de_usuario), como el CREATED del PEC (m1/m11/m20).
+    created_by queda solo como dato de la recepción."""
+    pec_id = pec_10u.id
+    resp = app_client.post(f"{RUTA}/{pec_id}/recepcionar", headers=_auth(admin_token),
+                           json={"warehouse_id": warehouse.id, "created_by": "Otra Persona"})
+    assert resp.status_code in (200, 201), resp.text
+    gr_id = resp.json()["data"]["id"]
+    db.expire_all()
+    yo = nombre_de_usuario(user_admin)
+    eninv = db.query(ActivityLog).filter(ActivityLog.entity_type == "ENINV", ActivityLog.entity_id == gr_id,
+                                         ActivityLog.action == "CREATED").all()
+    del_pec = db.query(ActivityLog).filter(ActivityLog.entity_type == "PEC", ActivityLog.entity_id == pec_id,
+                                           ActivityLog.action == "RECEPCION_CREATED").all()
+    assert [l.user_name for l in eninv] == [yo] and [l.user_name for l in del_pec] == [yo]
+    assert db.query(GoodsReceipt.created_by).filter(GoodsReceipt.id == gr_id).scalar() == "Otra Persona"
