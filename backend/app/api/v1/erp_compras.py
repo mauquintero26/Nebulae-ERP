@@ -1141,13 +1141,15 @@ def _validar_texto_corto(valor, maximo: int, no_texto: str, control: str, largo:
         raise HTTPException(422, largo)
 
 
-# B4 T24, cierre de r1 (m34): el eta de PATCH /tracking acepta la zona horaria; solo se acota el año (A2).
+# B4 T24, cierre de r1 (m34 y el ruling de la duda 1): el eta (el de PATCH /tracking y el de cada etapa de PATCH
+# /pedidos) acepta la zona horaria; solo se acota el año (A2).
 ETA_SEGUIMIENTO_INVALIDA = (f"La fecha estimada de la etapa no es válida: usa el formato AAAA-MM-DD, con un año entre "
                             f"{ANIO_MINIMO} y {ANIO_MAXIMO}.")
 
 
 def _eta_del_seguimiento(valor):
-    """B4 T24, cierre de r1 (m34, ruling (a) + (b)): el eta que guarda PATCH /tracking. Con zona horaria se acepta y se
+    """B4 T24, cierre de r1 (m34, ruling (a) + (b); duda 1: la regla única del eta, también en las etapas de PATCH
+    /pedidos vía _validar_etapas): el eta que se guarda. Con zona horaria se acepta y se
     guarda en UTC sin zona ('2026-12-01T00:00:00-05:00' -> '2026-12-01T05:00:00'); sin zona (el AAAA-MM-DD de la pantalla)
     o uno que no se lee (_parse_dt lo ignora), tal cual, como hoy. El año, el del valor en UTC, entre ANIO_MINIMO y
     ANIO_MAXIMO (A2): si no, o si el paso a UTC desborda, 422 ETA_SEGUIMIENTO_INVALIDA. None o '' no cambian nada."""
@@ -1170,15 +1172,18 @@ def _validar_autor(valor) -> None:
     _validar_texto_corto(valor, MAX_AUTOR, AUTOR_NO_TEXTO, AUTOR_CONTROL, AUTOR_LARGO)
 
 
-def _validar_etapas(etapas) -> None:
+def _validar_etapas(etapas) -> Optional[list]:
     """Lo que lee _annotate_stage_alerts / _stage_alert de cada etapa: que sea un dict; alert_overdue_days y
-    alert_confirm_days, un número (no bool) entre 0 y 36500 o ausentes; eta y timestamp, si traen valor, un texto sin
-    zona horaria y con el año entre 1900 y 2999 (A2) (o uno que no se lee, que _parse_dt ignora). El eta de PATCH
-    /tracking ya no pasa por aquí: acepta la zona (_eta_del_seguimiento, cierre de r1, m34)."""
+    alert_confirm_days, un número (no bool) entre 0 y 36500 o ausentes; timestamp, si trae valor, un texto sin zona horaria
+    y con el año entre 1900 y 2999 (A2) (o uno que no se lee, que _parse_dt ignora). El eta, con el MISMO ayudante de PATCH
+    /tracking (_eta_del_seguimiento; cierre de r1, ruling de la duda 1): con zona horaria se normaliza a UTC sin zona en
+    vez de dar 422; el año, entre 1900 y 2999; uno que no es texto, el mismo 422 (ETA_SEGUIMIENTO_INVALIDA).
+    Devuelve las etapas (copias) con el eta ya normalizado, para guardarlas así; None si no vinieron."""
     if etapas is None:
-        return
+        return None
     if not isinstance(etapas, list):
         raise HTTPException(422, ETAPAS_NO_LISTA)
+    normalizadas = []
     for etapa in etapas:
         if not isinstance(etapa, dict):
             raise HTTPException(422, ETAPA_NO_OBJETO)
@@ -1189,15 +1194,21 @@ def _validar_etapas(etapas) -> None:
             if (isinstance(dias, bool) or not isinstance(dias, (int, float))
                     or not (0 <= dias <= _MAX_DIAS_ALERTA)):
                 raise HTTPException(422, ETAPA_DIAS_INVALIDOS)
-        for campo in ("eta", "timestamp"):
-            valor = etapa.get(campo)
-            if not valor:
-                continue
+        etapa = dict(etapa)
+        eta = etapa.get("eta")
+        if eta:
+            if not isinstance(eta, str):
+                raise HTTPException(422, ETA_SEGUIMIENTO_INVALIDA)
+            etapa["eta"] = _eta_del_seguimiento(eta)
+        valor = etapa.get("timestamp")
+        if valor:
             if not isinstance(valor, str):
                 raise HTTPException(422, ETAPA_FECHA_INVALIDA)
-            leida = _fecha_iso(valor)   # tal como viene: aquí la zona horaria sigue dando 422 (A2)
+            leida = _fecha_iso(valor)   # tal como viene: en el timestamp (lo pone el servidor) la zona sigue dando 422 (A2)
             if leida is not None and (leida.tzinfo is not None or not _anio_valido(leida)):
                 raise HTTPException(422, ETAPA_FECHA_INVALIDA)
+        normalizadas.append(etapa)
+    return normalizadas
 
 
 def _validar_campos_libres_pec(body: dict) -> dict:
@@ -1216,7 +1227,8 @@ def _validar_campos_libres_pec(body: dict) -> dict:
     fechas = {campo: _fecha_leida(body[campo], mensaje) for campo, mensaje in _CAMPOS_FECHA_PEC if campo in body}
     _validar_texto_corto(body.get("supplier_ref"), MAX_SUPPLIER_REF, REF_NO_TEXTO, REF_CONTROL, REF_LARGO)   # B29
     if "tracking_stages" in body:
-        _validar_etapas(body["tracking_stages"])
+        # Cierre de r1 (duda 1): las etapas se guardan con el eta normalizado (update_pec mezcla esto en el body).
+        fechas["tracking_stages"] = _validar_etapas(body["tracking_stages"])
     return fechas
 
 

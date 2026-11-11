@@ -454,7 +454,9 @@ def test_los_campos_libres_se_validan_antes_de_guardar(app_client, db, admin_tok
         ({"tracking_stages": [{"status": "PENDIENTE", "alert_confirm_days": True}]}, ETAPA_DIAS_INVALIDOS),
         ({"tracking_stages": [{"status": "PENDIENTE", "alert_overdue_days": 10 ** 12}]}, ETAPA_DIAS_INVALIDOS),
         ({"tracking_stages": [{"status": "PENDIENTE", "alert_confirm_days": -1}]}, ETAPA_DIAS_INVALIDOS),   # B4 T24 (B26)
-        ({"tracking_stages": [{"status": "PENDIENTE", "eta": "2026-12-05T10:00:00+05:00"}]}, ETAPA_FECHA_INVALIDA),
+        ({"tracking_stages": [{"status": "PENDIENTE", "eta": "2999-12-31T23:00:00-05:00"}]},   # cierre de r1 (duda 1)
+         ETA_SEGUIMIENTO_INVALIDA),
+        ({"tracking_stages": [{"status": "PENDIENTE", "eta": 5}]}, ETA_SEGUIMIENTO_INVALIDA),
         ({"tracking_stages": [{"status": "COMPLETADO", "timestamp": "2026-12-05T10:00:00+05:00"}]},
          ETAPA_FECHA_INVALIDA),                                                                       # B4 T24 (B26)
         ({"tracking_stages": [{"status": "COMPLETADO", "timestamp": 5}]}, ETAPA_FECHA_INVALIDA),
@@ -894,9 +896,9 @@ def test_fechas_con_un_anio_fuera_de_rango_dan_422_sin_escribir(app_client, db, 
         ({"fecha_entrega_estimada": "9999-12-31"}, FECHA_INVALIDA),
         ({"fecha_alerta": "0999-06-01"}, FECHA_ALERTA_INVALIDA),
         ({"tracking_stages": [{"status": "PENDIENTE", "eta": "9999-12-31", "alert_overdue_days": 3}]},
-         ETAPA_FECHA_INVALIDA),
+         ETA_SEGUIMIENTO_INVALIDA),
         ({"tracking_stages": [{"status": "COMPLETADO", "timestamp": "1899-12-31T10:00:00"}]}, ETAPA_FECHA_INVALIDA),
-        ({"tracking_stages": [{"status": "PENDIENTE", "eta": "3000-01-01"}]}, ETAPA_FECHA_INVALIDA),
+        ({"tracking_stages": [{"status": "PENDIENTE", "eta": "3000-01-01"}]}, ETA_SEGUIMIENTO_INVALIDA),
     ]
     with contador_sql.ventana() as v:
         for extra, texto in casos:
@@ -1017,3 +1019,24 @@ def test_un_eta_con_zona_ya_guardado_no_tumba_la_lista(app_client, db, admin_tok
     assert resp.status_code == 200 and resp.json()["data"]["tracking_stages"][0]["alert"], resp.text
     desborda = f.pec("EMITIDO", tracking_stages=_etapa_con_alerta("9999-12-31T23:30:00-05:00"))
     assert _alerta_en_la_lista(app_client, admin_token, desborda) is not None   # cuenta como sin eta: la de confirmación
+
+
+
+def test_las_etapas_del_patch_normalizan_el_eta_con_zona_como_el_seguimiento(app_client, db, admin_token):
+    """Cierre de r1 (ruling de la duda 1): PATCH /compras/pedidos/{id} con tracking_stages usa el MISMO ayudante que PATCH
+    /tracking (_eta_del_seguimiento): un eta con zona horaria se guarda en UTC sin zona en vez de dar 422, y GET
+    /compras/pedidos sigue respondiendo con su alerta. El resto de cada etapa se guarda tal cual; un eta sin zona, igual
+    que hoy. El timestamp con zona sigue dando 422 (A2: lo pone el servidor)."""
+    f = _Fabrica(db)
+    pec = f.pec("EMITIDO")
+    etapas = [dict(_etapa_con_alerta("2026-12-01T00:00:00-05:00")[0]),
+              {"stage": "CASILLERO_BODEGA", "status": "PENDIENTE", "timestamp": None, "eta": "2026-12-05",
+               "alert_overdue_days": 2}]
+    resp = _patch(app_client, admin_token, pec, tracking_stages=etapas)
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    guardadas = db.query(PurchaseOrderFull.tracking_stages).filter(PurchaseOrderFull.id == pec.id).scalar()
+    assert guardadas == [{**etapas[0], "eta": "2026-12-01T05:00:00"}, etapas[1]]
+    alerta = _alerta_en_la_lista(app_client, admin_token, pec)
+    assert alerta and "ETA 01/12/2026" in alerta["mensaje"], alerta
+    assert resp.json()["data"]["tracking_stages"][0]["eta"] == "2026-12-01T05:00:00"
