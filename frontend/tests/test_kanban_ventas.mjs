@@ -1372,6 +1372,81 @@ console.log('--- B4 T10 TEST N: consultaColumnaPedido — la consulta de cada co
   assert.equal(params(kv.consultaColumnaSC(estado, COLUMNAS_SC[0], { orden: 'atencion', limit: 25, offset: 0 })).vista, 'todas_sin_soporte');
 }
 
+console.log('--- B4 T24 f2 (F24, F25): el motivo de un pedido entregado en parte y la etiqueta de un estado que no es de pedido ---');
+{
+  // F24: un pedido PARCIALMENTE_ENTREGADO que se suelta en «Entregado» ya no recibe «Se despacha desde Entregas…»: en Entregas está en
+  // «Despachados», donde todo movimiento queda bloqueado. Su entrega se completa desde el pedido («Abrir pedido»).
+  const parcial = reglaSoltarPedido({ id: 5, estado: 'PARCIALMENTE_ENTREGADO' }, 'listo_entrega', 'entregado');
+  assert.deepEqual(parcial, {
+    tipo: 'bloqueado', motivo: 'Está entregado en parte: la entrega se completa desde el pedido.',
+    enlace: { texto: 'Abrir pedido', href: enlaceDocumento('PVEN', 5, { returnTo: kv.RUTA_LISTA_PEDIDOS }) },
+  });
+  // Los demás de Listo para entrega siguen yendo a Entregas.
+  for (const estado of ['LISTO_ENTREGA', 'LISTO_PARA_ENTREGA', 'DISPONIBLE', 'PENDIENTE_SALDO']) {
+    const r = reglaSoltarPedido({ id: 6, estado }, 'listo_entrega', 'entregado');
+    assert.equal(r.enlace?.texto, 'Ir a Entregas', estado);
+  }
+  // F25: un destino que no es de pedido se nombra como el backend (_nombre_de_estado: VEN, después COT y después SC), con tilde.
+  assert.equal(kv.motivoTransicionPedido('EN_PROCESO', 'PENDIENTE_CONFIRMACION'),
+    '«Esperando confirmación del cliente» no es un estado válido para un Pedido de Venta.', 'la etiqueta de la COT (antes, «Pendiente confirmacion»)');
+  assert.equal(kv.motivoTransicionPedido('EN_PROCESO', 'VENCIDA'), '«Vencida» no es un estado válido para un Pedido de Venta.');
+  assert.equal(kv.motivoTransicionPedido('EN_PROCESO', 'ASIGNADA'), '«Asignada» no es un estado válido para un Pedido de Venta.', 'la de la SC');
+  assert.equal(kv.motivoTransicionPedido('EN_PROCESO', 'CANCELADA'), '«Cancelada» no es un estado válido para un Pedido de Venta.');
+  assert.equal(kv.motivoTransicionPedido('EN_PROCESO', ' PENDIENTE_CONFIRMACION '),
+    '«Esperando confirmación del cliente» no es un estado válido para un Pedido de Venta.', 'recortado, como el backend');
+  // Uno de pedido que no se pone por PATCH lleva la etiqueta del pedido (VEN primero); uno desconocido, humanizado.
+  assert.equal(kv.motivoTransicionPedido('EN_PROCESO', 'PENDIENTE_SALDO'), '«Pendiente de saldo» no es un estado válido para un Pedido de Venta.');
+  assert.equal(kv.motivoTransicionPedido('EN_PROCESO', 'ALGO_NUEVO'), '«Algo nuevo» no es un estado válido para un Pedido de Venta.');
+}
+
+console.log('--- B4 T24 f2 (F27, F28): una sola copia de tipoDocumento y de las rutas de Entregas y Recepciones; tienePreciosCot ---');
+{
+  const hv = await import('../src/lib/hub-ventas.js');
+  const leer = (ruta) => readFileSync(new URL(`../src/lib/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // F27: tipoDocumento vive en hub-ventas.js (exportada) y kanban-ventas.js la importa: sin su copia.
+  assert.equal(typeof hv.tipoDocumento, 'function');
+  for (const [t, e] of [['SC', 'SC'], ['COT', 'COT'], ['VEN', 'VEN'], ['PVEN', 'VEN']]) assert.equal(hv.tipoDocumento(t), e, t);
+  for (const malo of ['X', '', null, undefined, 'constructor']) assert.throws(() => hv.tipoDocumento(malo), /Tipo de documento no válido/);
+  const kanban = leer('kanban-ventas.js');
+  assert.match(kanban, /import \{[^}]*\btipoDocumento\b[^}]*\} from '\.\/hub-ventas\.js';/);
+  assert.ok(!/const TIPO_DOCUMENTO\b|function tipoDocumento\(/.test(kanban), 'kanban-ventas.js sin la copia');
+  assert.equal(kv.estadoDeTarjeta('PVEN', 'EN_PROCESO').label, 'En proceso', 'la tarjeta sigue aceptando PVEN');
+  assert.throws(() => kv.estadoDeTarjeta('X', 'EN_PROCESO'), /Tipo de documento no válido/);
+  // La ruta de Entregas: una sola (RUTA_ENTREGAS de hub-ventas.js, la de «Despachar»); el enlace del tablero (ENLACE_ENTREGAS) y
+  // entregas.js la importan. La de Recepciones: el enlace de estados-compras.js (ENLACE_RECEPCIONES), que transito.js importa.
+  assert.equal(hv.RUTA_ENTREGAS, '/dashboard/inventario/entregas');
+  assert.deepEqual(kv.ENLACE_ENTREGAS, { texto: 'Ir a Entregas', href: hv.RUTA_ENTREGAS });
+  const compras = await import('../src/lib/estados-compras.js');
+  assert.deepEqual(compras.ENLACE_RECEPCIONES, { texto: 'Ir a Recepciones', href: '/dashboard/compras/recepciones' });
+  assert.match(leer('entregas.js'), /import \{[^}]*\bRUTA_ENTREGAS\b[^}]*\} from '\.\/hub-ventas\.js';/);
+  assert.match(leer('transito.js'), /import \{[^}]*\bENLACE_RECEPCIONES\b[^}]*\} from '\.\/estados-compras\.js';/);
+  for (const ruta of ['kanban-ventas.js', 'entregas.js']) assert.ok(!leer(ruta).includes("'/dashboard/inventario/entregas'"), `${ruta}: sin la ruta a mano`);
+  assert.ok(!/const ENLACE_RECEPCIONES/.test(leer('transito.js')), 'transito.js sin su copia del enlace');
+  const transito = await import('../src/lib/transito.js');
+  assert.ok(transito, 'transito.js carga con el import nuevo');
+  // F28: tienePreciosCot, el predicado que usan accionSiguienteCOT («Completar precios») y el bloqueo de enviar del tablero: la regla ya
+  // no está atada al texto visible.
+  assert.equal(typeof hv.tienePreciosCot, 'function');
+  for (const [total, esperado] of [[1, true], [0, false], [-5, false], [null, false], ['abc', false], ['1200', true], [undefined, false]]) {
+    assert.equal(hv.tienePreciosCot({ total_cop: total }), esperado, String(total));
+  }
+  assert.equal(hv.tienePreciosCot(null), false);
+  for (const estado of ['BORRADOR', 'VENCIDA', 'ENVIADA']) {
+    for (const total of [0, 100, null]) {
+      const cot = { id: 3, estado, total_cop: total };
+      assert.equal(hv.accionSiguienteCOT(cot).texto === 'Completar precios', !hv.tienePreciosCot(cot), `${estado} ${total}`);
+    }
+  }
+  assert.ok(!kanban.includes("=== 'Completar precios'"), 'kanban-ventas.js no compara el texto de la interfaz');
+  assert.match(kanban, /\|\| !tienePreciosCot\(cot\)/);
+  // La regla del tablero no cambia: sin precios, «Calcula los precios antes de enviarla.»; con precios y productos, se envía.
+  const conProductos = { productos: [{ sku: 'A' }] };
+  assert.equal(reglaSoltarCotizacion({ id: 4, estado: 'BORRADOR', total_cop: 0, ...conProductos }, 'borrador', 'esperando', { puedeEnviar: true }).motivo,
+    'Calcula los precios antes de enviarla.');
+  assert.deepEqual(reglaSoltarCotizacion({ id: 4, estado: 'BORRADOR', total_cop: 10, ...conProductos }, 'borrador', 'esperando', { puedeEnviar: true }),
+    { tipo: 'accion', accion: 'enviar' });
+}
+
 console.log('--- B4 T10 TEST O: tarjetaPedido — la tarjeta del tablero de Pedidos (y el chip del saldo de la tabla) ---');
 {
   // KANBAN-ventas-listas punto 5 (D37, cruce C5): la de tarjetaHub (número, cliente, el total, el estado de

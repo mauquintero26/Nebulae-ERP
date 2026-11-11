@@ -18,6 +18,8 @@
 import { congelar, ESTADOS_PEDIDO, ESTADOS_PEDIDO_SIN_DINERO, infoEstadoPedido, pasoPedido, transicionesPedido } from './estados-pedido.js';
 import { definirColumnas, estadosDeColumnaLista, TEXTO_SOLO_VER } from './kanban.js';
 import { estadoDeTarjeta, motivoTransicionPedido } from './kanban-ventas.js';
+// B4 T24 f2 (F27): la ruta de Entregas, la única (a donde vuelve el pedido abierto desde un bloqueo).
+import { RUTA_ENTREGAS } from './hub-ventas.js';
 import { alertaEntregaPedido } from './listas-ventas.js';
 import { formatoPesos, redondearPeso } from './pesos.js';
 import { normalizarRol } from './chatter.js';
@@ -35,8 +37,6 @@ import { textoDiaCorto } from './fechas-colombia.js';
  *   saldo: FiltroSaldo | null, cerrada: boolean}} ColumnaEntrega
  */
 
-/** La ruta de Entregas: a donde vuelve el pedido abierto desde un bloqueo. */
-const RUTA_ENTREGAS = '/dashboard/inventario/entregas';
 
 const PASO_LISTO = congelar(['LISTO_ENTREGA', 'DISPONIBLE', 'PENDIENTE_SALDO', 'LISTO_PARA_ENTREGA']);
 const DESPACHADOS = congelar(['ENTREGADO', 'PARCIALMENTE_ENTREGADO', 'FACTURADO']);

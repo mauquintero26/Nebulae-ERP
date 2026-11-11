@@ -42,8 +42,8 @@ import {
   infoEstadoPedido, tiene, ESTADOS_PEDIDO_OPERATIVOS, ESTADOS_PEDIDO_CERRADOS,
 } from './estados-pedido.js';
 import {
-  RUTA_HUB_VENTAS, esSoporte, motivoNoCancelable, tieneProductos, accionSiguienteCOT, accionSiguienteDocumento, diasDesde,
-  textoAntiguedad, ETIQUETA_GRUPO, claveAccionSiguientePVEN,
+  RUTA_HUB_VENTAS, esSoporte, motivoNoCancelable, tieneProductos, accionSiguienteDocumento, diasDesde,
+  textoAntiguedad, ETIQUETA_GRUPO, claveAccionSiguientePVEN, tipoDocumento, tienePreciosCot, RUTA_ENTREGAS,
 } from './hub-ventas.js';
 import {
   ESTADOS_SC, PASOS_SC, ESTADOS_SC_HEREDADOS, ESTADOS_SC_CON_CONFIRMACION, infoEstadoSolicitud, puedeReiniciar,
@@ -126,9 +126,12 @@ const TEXTO = congelar({
   PASALA_BORRADOR: 'Primero pásala a Borrador para retomarla.',
   CALCULA_PRECIOS: 'Calcula los precios antes de enviarla.',
   ENTREGAS: 'Se despacha desde Entregas: ahí eliges la bodega y se descuenta el inventario.',
+  // B4 T24 f2 (F24): en Entregas un pedido entregado en parte está en «Despachados» (no se mueve): su entrega se completa desde él.
+  ENTREGA_PARCIAL: 'Está entregado en parte: la entrega se completa desde el pedido.',
 });
 
-const ENLACE_ENTREGAS = congelar({ texto: 'Ir a Entregas', href: '/dashboard/inventario/entregas' });
+/** B4 T24 f2 (F27): el enlace «Ir a Entregas» de los bloqueos, con la ruta única de hub-ventas.js (RUTA_ENTREGAS). */
+export const ENLACE_ENTREGAS = congelar({ texto: 'Ir a Entregas', href: RUTA_ENTREGAS });
 const TEXTO_ENLACE = congelar({ SC: 'Abrir solicitud', COT: 'Abrir cotización', PVEN: 'Abrir pedido' });
 
 // ─── piezas comunes ─────────────────────────────────────────────────────────────
@@ -165,15 +168,6 @@ function oracion(texto) {
   const t = String(texto ?? '').trim();
   const frase = t.charAt(0).toUpperCase() + t.slice(1);
   return /[.!?]$/.test(frase) ? frase : `${frase}.`;
-}
-
-/** Los tipos de documento; 'PVEN' es el mismo que 'VEN' (RP74, _ALIAS_ENTIDAD del backend). */
-const TIPO_DOCUMENTO = congelar({ SC: 'SC', COT: 'COT', VEN: 'VEN', PVEN: 'VEN' });
-
-/** 'SC', 'COT' o 'VEN'; otro tipo es un error de programación. */
-function tipoDocumento(tipo) {
-  if (typeof tipo === 'string' && tiene(TIPO_DOCUMENTO, tipo)) return TIPO_DOCUMENTO[tipo];
-  throw new Error(`Tipo de documento no válido: ${JSON.stringify(tipo ?? null)}`);
 }
 
 /**
@@ -226,11 +220,12 @@ const SC_CONFIRMADAS = congelar(['CONFIRMADA', ...ESTADOS_SC_HEREDADOS]);
 /**
  * T3C r1: la COT no tiene nada que el cliente pueda confirmar, y enviar_cotizacion_para_confirmacion responde 400: no
  * trae productos (la lista vacía o ausente, `not cot.productos`) o su total da «Completar precios» en la columna Acción
- * (accionSiguienteCOT: total_cop ≤ 0 o que no es un número). Para BORRADOR y la antigua ENVIADA.
+ * (tienePreciosCot de hub-ventas.js, B4 T24 f2 F28: total_cop ≤ 0 o que no es un número). Para BORRADOR y la antigua ENVIADA.
  */
 function sinPrecios(cot) {
+  // B4 T24 f2 (F28): el predicado de hub-ventas.js (el mismo de «Completar precios»), no el texto de la interfaz.
   return !Array.isArray(cot?.productos) || cot.productos.length === 0
-    || accionSiguienteCOT(cot)?.texto === 'Completar precios';
+    || !tienePreciosCot(cot);
 }
 
 /**
@@ -252,6 +247,21 @@ const DESTINOS_PEDIDO = congelar([...new Set(Object.values(TRANSICIONES_PEDIDO_P
 const etiquetaPedido = (e) => infoEstadoPedido(e).label;
 
 /**
+ * B4 T24 f2 (F25): el nombre de un estado que llega como destino de un PATCH de pedido, como _nombre_de_estado del backend: recortado,
+ * primero el del pedido, después el de la cotización y después el de la solicitud ('PENDIENTE_CONFIRMACION' -> 'Esperando
+ * confirmación del cliente'); si no es de ninguno, humanizado.
+ */
+function etiquetaDeDestino(e) {
+  const codigo = typeof e === 'string' ? e.trim() : e;
+  if (typeof codigo === 'string') {
+    if (tiene(ESTADOS_PEDIDO, codigo)) return ESTADOS_PEDIDO[codigo].label;
+    if (tiene(ESTADOS_COTIZACION, codigo)) return ESTADOS_COTIZACION[codigo].label;
+    if (tiene(ESTADOS_SC, codigo)) return ESTADOS_SC[codigo].label;
+  }
+  return etiquetaPedido(e);
+}
+
+/**
  * Por qué un pedido no puede pasar de `desde` a `hacia` por PATCH, con los textos de N2 sin el número
  * (_validar_transicion_pedido de backend/app/api/v1/erp_ventas.py, en su mismo orden), o null si el servidor lo acepta
  * (o es el mismo estado):
@@ -268,7 +278,7 @@ const etiquetaPedido = (e) => infoEstadoPedido(e).label;
 export function motivoTransicionPedido(desde, hacia) {
   if (hacia === null || hacia === undefined || hacia === desde) return null;
   if (typeof hacia !== 'string' || !DESTINOS_PEDIDO.includes(hacia)) {
-    return `«${etiquetaPedido(hacia)}» no es un estado válido para un Pedido de Venta.`;
+    return `«${etiquetaDeDestino(hacia)}» no es un estado válido para un Pedido de Venta.`;
   }
   const permitidos = transicionesPedido(desde);
   if (permitidos.includes(hacia)) return null;
@@ -661,6 +671,8 @@ export function reglaSoltarPedido(pedido, origen, destino) {
   if (origen === destino) return ninguno();
   const estado = pedido?.estado;
   if (destino === 'entregado') {
+    // B4 T24 f2 (F24): entregado en parte, su entrega se completa desde el pedido (en Entregas ya no se mueve).
+    if (estado === 'PARCIALMENTE_ENTREGADO') return bloqueado(TEXTO.ENTREGA_PARCIAL, enlaceAbrir('PVEN', pedido?.id, RUTA_LISTA_PEDIDOS));
     return transicionesPedido(estado).includes('ENTREGADO')
       ? bloqueado(TEXTO.ENTREGAS, ENLACE_ENTREGAS)
       : bloqueado(motivoTransicionPedido(estado, 'ENTREGADO') ?? TEXTO.ABRELA_CAMBIAR);

@@ -408,8 +408,13 @@ export function esAccionTomada(row, scConCot, opciones) {
 /** Los tipos de documento; 'PVEN' es el mismo que 'VEN' (_ALIAS_TIPO del backend). */
 const TIPO_DOCUMENTO = congelar({ SC: 'SC', COT: 'COT', VEN: 'VEN', PVEN: 'VEN' });
 
-/** 'SC', 'COT' o 'VEN' ('PVEN' -> 'VEN'); otro tipo es un error de programación (ValueError en Python). */
-function tipoDocumento(tipo) {
+/**
+ * 'SC', 'COT' o 'VEN' ('PVEN' -> 'VEN'); otro tipo es un error de programación (ValueError en Python). B4 T24 f2 (F27): exportada,
+ * la única (kanban-ventas.js la importa; antes tenía una copia textual).
+ * @param {unknown} tipo
+ * @returns {'SC' | 'COT' | 'VEN'}
+ */
+export function tipoDocumento(tipo) {
   if (typeof tipo === 'string' && tiene(TIPO_DOCUMENTO, tipo)) return TIPO_DOCUMENTO[tipo];
   throw new Error(`Tipo de documento no válido: ${JSON.stringify(tipo ?? null)}`);
 }
@@ -705,8 +710,7 @@ export function accionSiguienteCOT(cot, { returnTo } = {}) {
   const estado = cot?.estado;
   const enCot = conRegresoA(`/dashboard/ventas/cotizacion/${cot?.id}`, returnTo);
   if (estado === 'BORRADOR' || estado === 'VENCIDA' || estado === 'ENVIADA') {
-    const total = Number(cot?.total_cop);
-    return Number.isFinite(total) && total > 0
+    return tienePreciosCot(cot)
       ? { texto: 'Enviar al cliente', href: enCot, tono: 'indigo' }
       : { texto: 'Completar precios', href: enCot, tono: 'amber' };
   }
@@ -719,6 +723,20 @@ export function accionSiguienteCOT(cot, { returnTo } = {}) {
   }
   return null;
 }
+
+/**
+ * B4 T24 f2 (F28): si la cotización tiene sus precios calculados (total_cop, un número positivo). La regla de «Completar precios»
+ * de accionSiguienteCOT y del bloqueo de enviar del tablero (kanban-ventas.js), sin atarla a un texto de la interfaz.
+ * @param {any} cot
+ * @returns {boolean}
+ */
+export function tienePreciosCot(cot) {
+  const total = Number(cot?.total_cop);
+  return Number.isFinite(total) && total > 0;
+}
+
+/** B4 T24 f2 (F27): la ruta de Entregas (inventario), la única: la de «Despachar», el enlace del tablero de Pedidos y entregas.js. */
+export const RUTA_ENTREGAS = '/dashboard/inventario/entregas';
 
 const PVEN_SIN_ACCION = congelar(['CANCELADO', 'DEVUELTO_TOTAL', 'FACTURADO']);
 const PVEN_POR_FACTURAR = congelar(['ENTREGADO', 'PARCIALMENTE_ENTREGADO']);
@@ -748,7 +766,7 @@ export function accionSiguientePVEN(p, { returnTo } = {}) {
   if (clave === 'comprar') return { texto: 'Gestionar compra', href: conRegresoA('/dashboard/compras', returnTo), tono: 'amber' };
   if (clave === 'cobrar') return { texto: 'Cobrar saldo', href: enPedido, tono: 'amber' };
   if (clave === 'despachar') {
-    return { texto: 'Despachar', href: conRegresoA('/dashboard/inventario/entregas', returnTo), tono: 'indigo' };
+    return { texto: 'Despachar', href: conRegresoA(RUTA_ENTREGAS, returnTo), tono: 'indigo' };
   }
   return { texto: 'Ver pedido', href: enPedido, tono: 'slate' };
 }

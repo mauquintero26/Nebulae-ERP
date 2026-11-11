@@ -248,7 +248,8 @@ export function columnaPec(e) {
 }
 
 const ENLACE_TRANSITO = congelar({ texto: 'Ir a Mercancía en tránsito', href: '/dashboard/compras/transito' });
-const ENLACE_RECEPCIONES = congelar({ texto: 'Ir a Recepciones', href: '/dashboard/compras/recepciones' });
+/** B4 T24 f2 (F27): el enlace «Ir a Recepciones» de los bloqueos, el único (transito.js lo importa). */
+export const ENLACE_RECEPCIONES = congelar({ texto: 'Ir a Recepciones', href: '/dashboard/compras/recepciones' });
 
 /**
  * Qué pasa al soltar un PEC de la columna `origen` en la columna `destino` (claves de COLUMNAS_PEC), con la forma de
