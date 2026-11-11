@@ -6,9 +6,12 @@ cual. La unica diferencia permitida es la del ruling de r1: a BASE se le quita c
 ecommerce_products pasa los filtros pero quedo fuera del LIMIT de ecommerce_products. Despues de crear los datos se
 actualiza un SKU (su fila fisica pasa al final), para que el orden fisico deje de coincidir con el orden por id.
 
-B4 T24 (FINAL-C1): sin sesion ERP la lista solo trae los publicados. La tienda llama sin sesion con publicado=true, asi que su
-respuesta sigue siendo la de BASE; sin sesion y sin publicado, es la de BASE con publicado=true (y con publicado=false, nada).
-Con sesion ERP (la pantalla de E-Commerce), la de BASE tal cual. Se comparan las dos.
+B4 T24 (FINAL-C1): sin sesion ERP la lista solo trae los publicados. La tienda llama sin sesion con publicado=true; sin
+sesion y sin publicado, es lo mismo que con publicado=true (y con publicado=false, nada). Con sesion ERP (la pantalla de
+E-Commerce), la de BASE tal cual con el ruling de r1. Se comparan las dos.
+B4 T24 r1 (C1, ruling): sin sesion, a BASE (con publicado=true) se le quita cada SKU del ERP que tenga CUALQUIER espejo en
+ecommerce_products, sin mirar los filtros (un espejo despublicado o de otra categoria ya no deja salir el SKU como fila
+propia con publicado_web: True); el espejo publicado sale como su propia fila.
 B4 T24 (B44): la grilla completa (4 categorias x 3 publicado x 7 limits) va solo con search=t.s; sin busqueda (que recorre
 el catalogo entero de la base compartida, dos veces por llamada) solo con los limits 0, 3 y 50.
 
@@ -103,10 +106,19 @@ def _espejo_pasa(db, sku, search, categoria, publicado):
     return bool(db.execute(text(f"SELECT 1 FROM ecommerce_products WHERE {' AND '.join(donde)} LIMIT 1"), params).first())
 
 
-def _base_con_ruling(db, search, categoria, publicado, limit):
-    """BASE menos los SKU del ERP cuyo espejo pasa los filtros (la unica diferencia que manda el ruling de r1)."""
-    base, n_ep = _base_heredado(db, search, categoria, publicado, limit)
-    quitar = [x for x in base["data"][n_ep:] if _espejo_pasa(db, x["sku"], search, categoria, publicado)]
+def _tiene_espejo(db, sku):
+    """B4 T24 r1 (C1): el SKU tiene alguna fila en ecommerce_products (sin mirar filtros ni publicacion)."""
+    return bool(db.execute(text("SELECT 1 FROM ecommerce_products WHERE sku = :s LIMIT 1"), {"s": sku}).first())
+
+
+def _base_con_ruling(db, search, categoria, publicado, limit, anonimo=False, base_calculada=None):
+    """BASE menos los SKU del ERP cuyo espejo pasa los filtros (la unica diferencia que manda el ruling de r1). Sin sesion
+    (anonimo, r1 C1): menos los SKU del ERP con CUALQUIER espejo. base_calculada: (base, n_ep) ya calculados (B44)."""
+    base, n_ep = base_calculada or _base_heredado(db, search, categoria, publicado, limit)
+    if anonimo:
+        quitar = [x for x in base["data"][n_ep:] if _tiene_espejo(db, x["sku"])]
+    else:
+        quitar = [x for x in base["data"][n_ep:] if _espejo_pasa(db, x["sku"], search, categoria, publicado)]
     data = base["data"][:n_ep] + [x for x in base["data"][n_ep:] if x not in quitar]
     return {"status": "success", "total": base["total"] - len(quitar), "data": data}
 
@@ -128,12 +140,13 @@ def _desordenar(db, t):
 
 class _Esperado:
     """Lo que debe responder la rama heredada sin offset ni orden: BASE con el ruling de r1 (_base_con_ruling); sin sesion
-    ERP, con publicado=true (FINAL-C1), y nada si se pidio publicado=false. B44: cada BASE se calcula UNA vez (cada
-    consulta a la base compartida tarda ~0,1 s y BASE hace varias por SKU) y la llamada sin sesion reusa la de
-    publicado=true."""
+    ERP, con publicado=true (FINAL-C1) y sin los SKU con espejo (r1, C1), y nada si se pidio publicado=false. B44: cada
+    BASE se calcula UNA vez (cada consulta a la base compartida tarda ~0,1 s y BASE hace varias por SKU) y la llamada sin
+    sesion reusa la de publicado=true (solo cambia que se quita)."""
 
     def __init__(self, db):
         self.db = db
+        self.bases = {}
         self.ya = {}
 
     def __call__(self, search, categoria, publicado, limit, con_sesion):
@@ -142,9 +155,12 @@ class _Esperado:
                 return {"status": "success", "total": 0, "data": []}
             publicado = True
         clave = (search, categoria, publicado, limit)
-        if clave not in self.ya:
-            self.ya[clave] = _base_con_ruling(self.db, search, categoria, publicado, limit)
-        return self.ya[clave]
+        if clave not in self.bases:
+            self.bases[clave] = _base_heredado(self.db, search, categoria, publicado, limit)
+        if clave + (con_sesion,) not in self.ya:
+            self.ya[clave + (con_sesion,)] = _base_con_ruling(self.db, search, categoria, publicado, limit,
+                                                              anonimo=not con_sesion, base_calculada=self.bases[clave])
+        return self.ya[clave + (con_sesion,)]
 
 
 def _params(search, categoria, publicado, limit):
@@ -187,7 +203,8 @@ def test_toda_diferencia_con_base_es_la_del_ruling(app_client, db, warehouse, mo
     - Con sesion ERP (B44): la grilla completa (4 categorias x 3 publicado x 7 limits) con search=t.s; sin busqueda (que
       recorre el catalogo entero de la base compartida) solo los limits 0, 3 y 50.
     - Sin sesion (FINAL-C1): con search=t.s, publicado ausente o false (con true es la misma llamada que con sesion), las 4
-      categorias y los limits ausente, 0, 1, 3 y 50: BASE con publicado=true, o nada con publicado=false."""
+      categorias y los limits ausente, 0, 1, 3 y 50: BASE con publicado=true, o nada con publicado=false. r1 (C1): sin
+      sesion se quitan ademas los SKU con cualquier espejo (con Cat-B, p1 ya no sale: su espejo m1 es de Cat-A)."""
     monkeypatch.setenv("CATALOGO_LECTURA", "legacy")
     t = _Catalogo(db, warehouse)
     _desordenar(db, t)

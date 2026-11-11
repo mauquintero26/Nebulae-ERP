@@ -1079,9 +1079,13 @@ def test_atencion_y_atrasados_calculan_el_rango_una_vez(app_client, db, admin_to
     B4 T24 (B7): las senales principales son el conteo de recorridos de sale_orders y la columna en el ORDER BY; las del
     texto del EXPLAIN (Subquery Scan, el Filter y el Sort Key) dependen de su formato y se calibraron con PostgreSQL 17.11
     (la version de erp_test, SHOW server_version, 2026-11-10). El valor del filtro sale de rv.RANGO['ATRASADO'], no de un
-    0 escrito a mano."""
+    0 escrito a mano. B4 T24 r1 (m3): esas tres son secundarias: solo se afirman con el PostgreSQL 17 con que se calibraron
+    (otro formato de EXPLAIN no hace fallar la prueba); el conteo de recorridos y la columna en el ORDER BY son siempre
+    obligatorios."""
     import re
+    from sqlalchemy import text
     from app.core.resolucion_ventas import RANGO
+    formato_calibrado = int(db.execute(text("SHOW server_version_num")).scalar()) // 10000 == 17
     _dias_de_alerta(db)
     f = _Fabrica(db, _ahora())
     cliente = Customer(first_name="Rango", last_name=f.sufijo, email=f"rango-{f.sufijo.lower()}@test.nebulae")
@@ -1104,7 +1108,7 @@ def test_atencion_y_atrasados_calculan_el_rango_una_vez(app_client, db, admin_to
             assert len(re.findall(r"\bAS rango\b", sentencia)) == 1, (tipo, extra, sentencia)   # una sola vez
             if tipo in ("SC", "COT"):
                 assert len(re.findall(r" on public\.sale_orders(?:\s|$)", plan, re.M)) == 1, (tipo, extra, plan)
-            if extra:
+            if extra and formato_calibrado:   # secundarias (m3): dependen del formato del EXPLAIN
                 assert "Subquery Scan on rango_de_lista" in plan, (tipo, extra, plan)
                 assert any("Filter:" in linea and f"rango_de_lista.rango = {RANGO['ATRASADO']}" in linea
                            for linea in plan.splitlines()), (tipo, extra, plan)

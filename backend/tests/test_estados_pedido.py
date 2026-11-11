@@ -221,14 +221,20 @@ def test_grupo_pedido_es_grupoPedido_en_los_18_estados_y_un_desconocido():
 
 def test_el_motivo_de_cancelacion_tiene_una_sola_regla():
     """B4 T24 (B17): la cifra y el texto del motivo de cancelación viven en core/cancelacion.py y los tres caminos (PATCH
-    del pedido de venta, su cancelación de fase4 y el PATCH del pedido de compra) los importan; ninguno los copia."""
+    del pedido de venta, su cancelación de fase4 y el PATCH del pedido de compra) los importan; ninguno los copia.
+    r1 (m23): la cifra se comprueba en la fuente (un `is` entre dos 5 siempre es True: los enteros chicos son el mismo
+    objeto): cada módulo la importa de app.core.cancelacion y no la asigna."""
     import inspect
+    import re
     from app.api.v1 import erp_compras, erp_ventas, erp_ventas_fase4
     from app.core import cancelacion
     assert cancelacion.MIN_MOTIVO_CANCELACION == 5
     assert cancelacion.TEXTO_MOTIVO_CANCELACION == "Indica el motivo de la cancelación (mínimo 5 caracteres)."
     for modulo in (erp_compras, erp_ventas, erp_ventas_fase4):
-        assert modulo.MIN_MOTIVO_CANCELACION is cancelacion.MIN_MOTIVO_CANCELACION, modulo.__name__
         assert modulo.TEXTO_MOTIVO_CANCELACION is cancelacion.TEXTO_MOTIVO_CANCELACION, modulo.__name__
         fuente = inspect.getsource(modulo)
+        assert re.search(r"^from app\.core\.cancelacion import [^\n]*\bMIN_MOTIVO_CANCELACION\b", fuente, re.M), \
+            modulo.__name__
+        assert not re.search(r"^\s*MIN_MOTIVO_CANCELACION\s*=", fuente, re.M), modulo.__name__   # ninguna copia
+        assert modulo.MIN_MOTIVO_CANCELACION == cancelacion.MIN_MOTIVO_CANCELACION, modulo.__name__
         assert '"Indica el motivo de la cancelación' not in fuente, modulo.__name__   # ningún literal propio

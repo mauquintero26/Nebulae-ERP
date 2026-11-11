@@ -419,3 +419,13 @@ def test_dias_promedio_ignora_un_pedido_sin_fecha_de_compra(app_client, db, admi
     db.commit()
     f.recepcion(datetime(2001, 1, 4, 1, 0), sin_fecha)
     assert _kpis(_analisis(app_client, admin_token))["dias_promedio_entrega"]["valor"] == antes
+
+
+def test_dias_promedio_con_la_compra_de_noche_en_colombia(app_client, db, admin_token):
+    """B4 T24 r1 (m17): la otra mitad de FINAL-m6, el día de Colombia de la COMPRA. Compra a las 03:00 UTC del 2 de enero
+    (las 22:00 del 1 en Colombia) y recepción a una hora neutra (15:00 UTC del 4, las 10:00 en Colombia): 4 − 1 = 3 días.
+    Con el día UTC de la compra daba 4 − 2 = 2."""
+    f = _Fabrica(db)
+    pec = f.pec(datetime(2001, 1, 2, 3, 0), entrega=datetime(2001, 1, 6))
+    f.recepcion(datetime(2001, 1, 4, 15, 0), pec)
+    assert _kpis(_analisis(app_client, admin_token))["dias_promedio_entrega"]["valor"] == 3.0
