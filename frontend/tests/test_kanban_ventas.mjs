@@ -1131,6 +1131,44 @@ console.log('--- B4 T10 TEST M: opcionesEstadosPedidos — el filtro de estados 
   assert.ok(Object.isFrozen(visto0) && Object.isFrozen(visto0.porEstado));
 }
 
+console.log('--- B4 T24 f2 (F2): «Listo para entrega» es una sola opción del filtro, que manda LISTO_ENTREGA y el heredado LISTO_PARA_ENTREGA ---');
+{
+  // LISTO_ENTREGA y el heredado LISTO_PARA_ENTREGA tienen la misma etiqueta y el mismo grupo: el usuario no los distingue. El filtro
+  // ofrece una sola opción (la de la lista) y la consulta manda las dos claves (estadosConsultaPedidos → extra.estados de useListado).
+  const conHeredado = { LISTO_PARA_ENTREGA: 2, LISTO_ENTREGA: 1, DISPONIBLE: 1 };
+  assert.deepEqual(kv.opcionesEstadosPedidos('listo_entrega', conHeredado).map((o) => [o.valor, o.etiqueta]),
+    [['LISTO_ENTREGA', 'Listo para entrega'], ['DISPONIBLE', 'Disponible']], 'una sola «Listo para entrega»');
+  assert.equal(kv.opcionesEstadosPedidos('listo_entrega', { LISTO_PARA_ENTREGA: 3 }), kv.opcionesEstadosPedidos('listo_entrega'),
+    'solo el equivalente: la lista base, la misma referencia');
+  // En ninguna pestaña salen dos opciones con la misma etiqueta, aunque los pedidos traigan los 18 estados.
+  const todos18 = Object.fromEntries(Object.keys(ESTADOS_PEDIDO).map((e) => [e, 1]));
+  for (const vista of ['todos', ...COLUMNAS_PEDIDO.map((c) => c.clave)]) {
+    const etiquetas = kv.opcionesEstadosPedidos(vista, todos18).map((o) => o.etiqueta);
+    assert.equal(new Set(etiquetas).size, etiquetas.length, `${vista}: sin etiquetas repetidas (${etiquetas.join(' | ')})`);
+  }
+  assert.ok(!kv.opcionesEstadosPedidos('todos', todos18).some((o) => o.valor === 'LISTO_PARA_ENTREGA'), 'el heredado no tiene opción propia');
+  // La consulta: la opción manda las dos claves; sin equivalentes que sumar, null (la consulta de siempre).
+  assert.equal(typeof kv.estadosConsultaPedidos, 'function', 'estadosConsultaPedidos existe');
+  assert.deepEqual(kv.estadosConsultaPedidos(['LISTO_ENTREGA']), ['LISTO_ENTREGA', 'LISTO_PARA_ENTREGA']);
+  assert.deepEqual(kv.estadosConsultaPedidos(['EN_PROCESO', 'LISTO_ENTREGA']), ['EN_PROCESO', 'LISTO_ENTREGA', 'LISTO_PARA_ENTREGA']);
+  for (const nada of [['EN_PROCESO'], ['LISTO_ENTREGA', 'LISTO_PARA_ENTREGA'], [], null, undefined, 'LISTO_ENTREGA', [5]]) {
+    assert.equal(kv.estadosConsultaPedidos(nada), null, JSON.stringify(nada));
+  }
+  // Un solo par: ningún otro estado de la lista tiene un heredado con su misma etiqueta.
+  for (const e of Object.keys(ESTADOS_PEDIDO).filter((x) => x !== 'LISTO_ENTREGA')) {
+    assert.equal(kv.estadosConsultaPedidos([e]), null, e);
+  }
+  // Lo que llega al servidor: estados en CSV (queryListado con extra.estados, D23: pisa los del estado).
+  const estado = estadoTablaInicial({ vista: 'listo_entrega', estados: ['LISTO_ENTREGA'] });
+  assert.match(queryListado(estado, { estados: kv.estadosConsultaPedidos(estado.estados) }), /estados=LISTO_ENTREGA,LISTO_PARA_ENTREGA/);
+  // La etiqueta sigue igual en la tabla y el tablero (la de estados-pedido.js).
+  assert.equal(infoEstadoPedido('LISTO_PARA_ENTREGA').label, infoEstadoPedido('LISTO_ENTREGA').label);
+  // El cableado: la Lista de Pedidos manda los equivalentes en extra (en Kanban, el limit=0 de siempre).
+  const venta = readFileSync(new URL('../src/app/dashboard/ventas/venta/venta-client.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(venta, /const estadosConsulta = useMemo\(\(\) => estadosConsultaPedidos\(estado\.estados\), \[estado\.estados\]\);\s*const extraDeLaLista = useMemo\(\(\) => \(estadosConsulta \? \{ estados: estadosConsulta \} : null\), \[estadosConsulta\]\);/);
+  assert.match(venta, /ruta: '\/ventas\/pedidos', estado, conConteos: true, esperar: !listo, despachar,\s*extra: enKanban \? EXTRA_TABLERO : extraDeLaLista,/);
+}
+
 console.log('--- B4 T10 TEST N: consultaColumnaPedido — la consulta de cada columna del tablero de Pedidos ---');
 {
   const estado = estadoTablaInicial({ vista: 'cancelado', q: ' cuna ', semaforo: 'atrasados', estados: [], orden: 'cliente', pagina: 3, tamano: 50 });

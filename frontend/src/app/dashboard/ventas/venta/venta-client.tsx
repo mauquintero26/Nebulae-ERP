@@ -39,8 +39,8 @@ import { alternarPaso } from '@/lib/flujo';
 import { enlaceVerAnalisis, leerEnlacePedidos, pasosDePedidos, textoRegla, vistaDePasoPedido } from '@/lib/flujo-ventas';
 import {
   COLUMNAS_PEDIDO, OPCIONES_ESTADOS_TABLERO_PEDIDO, RUTA_LISTA_PEDIDOS, accionesTarjetaPedido, chipsDocumentoVentas,
-  confirmacionFacturarPedido, consultaColumnaPedido, efectosCancelarPedido, estadoDeTarjeta, opcionesEstadosPedidos,
-  porEstadoVisto, reglaSoltarPedido, resumenColumnaPedido, tarjetaPedido,
+  confirmacionFacturarPedido, consultaColumnaPedido, efectosCancelarPedido, estadoDeTarjeta, estadosConsultaPedidos,
+  opcionesEstadosPedidos, porEstadoVisto, reglaSoltarPedido, resumenColumnaPedido, tarjetaPedido,
 } from '@/lib/kanban-ventas';
 import type { PorEstadoVisto } from '@/lib/kanban-ventas';
 import { fechaCorta, fechaSolo } from '@/lib/fechas-colombia';
@@ -344,9 +344,13 @@ export default function VentaClient() {
   // de las pestañas en la MISMA llamada. esperar: !listo (D40): el esqueleto, nunca «vacío». En Kanban, sin filas
   // (EXTRA_TABLERO): las piden las columnas. Del resumen de H47 de esta respuesta solo se usa por_estado: los estados
   // heredados del filtro (r1 m5, r2 p1); las tarjetas leen /ventas/stats (D5) y cada columna del tablero trae el suyo (C9).
+  // B4 T24 f2 (F2): en Lista, el filtro manda también los heredados equivalentes de lo marcado («Listo para entrega» lleva
+  // LISTO_ENTREGA y LISTO_PARA_ENTREGA: una sola opción, estadosConsultaPedidos); sin nada que sumar, la consulta de siempre.
+  const estadosConsulta = useMemo(() => estadosConsultaPedidos(estado.estados), [estado.estados]);
+  const extraDeLaLista = useMemo(() => (estadosConsulta ? { estados: estadosConsulta } : null), [estadosConsulta]);
   const listado = useListado<FilaPedido>({
     ruta: '/ventas/pedidos', estado, conConteos: true, esperar: !listo, despachar,
-    extra: enKanban ? EXTRA_TABLERO : null,
+    extra: enKanban ? EXTRA_TABLERO : extraDeLaLista,
   });
   // m5 de T8: mientras la última respuesta sea la de Kanban (sin filas) y la tabla ya pida su página, la tabla está
   // cargando y el total en 'cargando': nunca «No hay pedidos en esta vista» con el total de la otra consulta.

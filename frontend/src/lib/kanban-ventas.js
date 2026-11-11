@@ -1022,6 +1022,20 @@ const OPCIONES_PEDIDO_POR_VISTA = congelar({
   todos: congelar(COLUMNAS_PEDIDO.flatMap((c) => ESTADOS_FILTRO_PEDIDO.filter((e) => c.estados.includes(e))).map(opcionPedido)),
 });
 
+/**
+ * B4 T24 f2 (F2): los heredados que el filtro trata como el estado de la lista con la MISMA etiqueta y el mismo grupo
+ * (grupoPedido): LISTO_PARA_ENTREGA («Listo para entrega») va con LISTO_ENTREGA. El usuario no distingue un estado heredado:
+ * una sola opción, que manda las dos claves (estadosConsultaPedidos). Inmutable.
+ * @type {Readonly<Record<string, ReadonlyArray<string>>>}
+ */
+const EQUIVALENTES_FILTRO_PEDIDO = congelar(Object.fromEntries(ESTADOS_FILTRO_PEDIDO
+  .map((e) => [e, Object.keys(ESTADOS_PEDIDO).filter((h) => !ESTADOS_FILTRO_PEDIDO.includes(h) && grupoPedido(h) === grupoPedido(e)
+    && infoEstadoPedido(h).label === infoEstadoPedido(e).label)])
+  .filter(([, heredados]) => heredados.length > 0)));
+
+/** Los heredados que ya van dentro de una opción de la lista (EQUIVALENTES_FILTRO_PEDIDO): no tienen opción propia. */
+const PLEGADOS_FILTRO_PEDIDO = congelar(Object.values(EQUIVALENTES_FILTRO_PEDIDO).flat());
+
 /** El orden de los estados de pedido (el de ESTADOS_PEDIDO): los heredados del filtro van en ese orden. */
 const ORDEN_ESTADO_PEDIDO = congelar(Object.fromEntries(Object.keys(ESTADOS_PEDIDO).map((e, i) => [e, i])));
 
@@ -1036,6 +1050,8 @@ const ORDEN_ESTADO_PEDIDO = congelar(Object.fromEntries(Object.keys(ESTADOS_PEDI
  * grupo. Con la etiqueta de infoEstadoPedido, en el orden de ESTADOS_PEDIDO. Uno sin grupo (desconocido) no entra: el
  * servidor rechaza filtrar por él (_estados_de_lista: 422). Sin heredados, la lista base: inmutable y la misma
  * referencia en cada llamada; con ellos, una lista nueva, también inmutable.
+ * B4 T24 f2 (F2): un heredado con la misma etiqueta y grupo que una opción de la lista (LISTO_PARA_ENTREGA) no sale aparte:
+ * va dentro de esa opción (estadosConsultaPedidos manda las dos claves). Nunca dos opciones con la misma etiqueta.
  * @param {string | null | undefined} vista
  * @param {Record<string, unknown> | null} [porEstado]
  * @returns {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
@@ -1047,13 +1063,28 @@ export function opcionesEstadosPedidos(vista, porEstado = null) {
   const enLaBase = new Set(base.map((o) => o.valor));
   const heredados = Object.keys(porEstado).filter((e) => {
     const n = Number(porEstado[e]);
-    if (!Number.isFinite(n) || n <= 0 || enLaBase.has(e)) return false;
+    if (!Number.isFinite(n) || n <= 0 || enLaBase.has(e) || PLEGADOS_FILTRO_PEDIDO.includes(e)) return false;
     const grupo = grupoPedido(e);
     return grupo !== null && (vista === 'todos' || CLAVE_GRUPO_PEDIDO[grupo] === vista);
   });
   if (heredados.length === 0) return base;
   heredados.sort((a, b) => ORDEN_ESTADO_PEDIDO[a] - ORDEN_ESTADO_PEDIDO[b]);
   return congelar([...base, ...heredados.map(opcionPedido)]);
+}
+
+/**
+ * B4 T24 f2 (F2): los estados que la Lista de Pedidos manda al servidor por su filtro: los marcados más los heredados equivalentes
+ * de cada uno (EQUIVALENTES_FILTRO_PEDIDO: la opción «Listo para entrega» manda LISTO_ENTREGA y LISTO_PARA_ENTREGA), sin
+ * repetir. Sin nada que sumar (o sin estados), null: la consulta va con los del estado, como siempre. La pantalla lo pasa en
+ * extra.estados de useListado (D23: pisa los del estado); la tabla y el tablero muestran la misma etiqueta para los dos.
+ * @param {unknown} estados
+ * @returns {string[] | null}
+ */
+export function estadosConsultaPedidos(estados) {
+  if (!Array.isArray(estados) || estados.length === 0) return null;
+  const suma = estados.flatMap((e) => (typeof e === 'string' && tiene(EQUIVALENTES_FILTRO_PEDIDO, e) ? EQUIVALENTES_FILTRO_PEDIDO[e] : []));
+  const nuevos = [...new Set(suma)].filter((h) => !estados.includes(h));
+  return nuevos.length > 0 ? [...estados, ...nuevos] : null;
 }
 
 /**

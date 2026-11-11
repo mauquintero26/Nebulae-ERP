@@ -1212,7 +1212,8 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   assert.match(codigo, /export const ID_PEDIDOS = 'ventas\.pedidos';/);
   assert.match(codigo, /export const INICIAL_PEDIDOS = \{ vista: 'todos', orden: 'atencion' \};/);
   assert.match(lista, /const \[estado, despachar, listo, modoListo\] = useEstadoTabla\(ID_PEDIDOS, INICIAL_PEDIDOS\);/); // F38 (D27)
-  assert.match(lista, /ruta: '\/ventas\/pedidos', estado, conConteos: true, esperar: !listo, despachar,\s*extra: enKanban \? EXTRA_TABLERO : null,/);
+  // B4 T24 f2 (F2, D27): en Lista, extra lleva los estados equivalentes del filtro (estadosConsultaPedidos) o null.
+  assert.match(lista, /ruta: '\/ventas\/pedidos', estado, conConteos: true, esperar: !listo, despachar,\s*extra: enKanban \? EXTRA_TABLERO : extraDeLaLista,/);
   assert.match(codigo, /const EXTRA_TABLERO = \{ limit: 0 \};/);
   for (const viejo of ['limit=200', 'kpisPedidos', 'hintTotalPedidos', 'opcionesFiltroEstado', 'grupoPedido(', 'coincideProducto',
     'useVistaGuardada', 'StatCard', "'Analisis'", 'filtered', 'setCurrentPage', 'MoreHorizontal', '<table']) {
