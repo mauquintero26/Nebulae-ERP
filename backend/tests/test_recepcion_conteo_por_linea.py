@@ -92,13 +92,15 @@ def test_el_patch_por_linea_lee_la_recepcion_con_bloqueo(app_client, db, admin_t
 def test_las_cantidades_de_la_linea_se_validan_con_422_en_espanol(app_client, db, admin_token, bodega_token, pec_10u,
                                                                   sku, contador_sql):
     """r1 (m16): quantity_received, quantity_rejected y quantity_quarantine pasaban por int() sin validar: un texto daba
-    500 y un negativo se guardaba. Ahora enteros (no bool) entre 0 y el tope de la columna (Numeric(10, 2): 99.999.999),
-    o null; si no, 422 en español y nada escrito. Un null en rechazada o cuarentena sigue siendo 0, como hoy."""
+    500 y un negativo se guardaba. Ahora, entre 0 y el tope de la columna (Numeric(10, 2): 99.999.999), o null; si no,
+    422 en español y nada escrito. Un null en rechazada o cuarentena sigue siendo 0, como hoy. Cierre de r1 (ruling): lo
+    que int() truncaba en silencio (2.5, «2.5») o no leía («3.0», NaN, inf) también da 422; lo que leía sin pérdida sigue
+    valiendo (test_lo_que_int_aceptaba_sin_perdida_sigue_valiendo)."""
     rec = _recepcion(app_client, admin_token, pec_10u, sku)
     ruta = f"{RECEPCIONES}/{rec['id']}/lineas/{rec['productos'][0]['grl_id']}"
     for campo, nombre in (("quantity_received", "recibida"), ("quantity_rejected", "rechazada"),
                           ("quantity_quarantine", "en cuarentena")):
-        for malo in ("tres", "3", -1, 2.5, True, 10 ** 8, [1], {"a": 1}):
+        for malo in ("tres", "2.5", "3.0", "-1", "", -1, 2.5, True, False, 10 ** 8, "100000000", 1e8, [1], {"a": 1}):
             with contador_sql.ventana() as v:
                 resp = app_client.patch(ruta, headers=_auth(bodega_token), json={campo: malo})
             assert (resp.status_code, resp.json()) == (422, {"detail": _cantidad_invalida(nombre)}), (campo, malo)
@@ -111,3 +113,29 @@ def test_las_cantidades_de_la_linea_se_validan_con_422_en_espanol(app_client, db
     assert resp.status_code == 200, resp.text
     primera = _detalle(app_client, bodega_token, rec["id"])["productos"][0]
     assert (primera["qty_recibida"], primera["qty_rechazada"], primera["qty_cuarentena"]) == (10 ** 8 - 1, 0, 0)
+
+
+
+def test_lo_que_int_aceptaba_sin_perdida_sigue_valiendo(app_client, db, admin_token, bodega_token, pec_10u, sku,
+                                                       contador_sql):
+    """Cierre de r1 (ruling de m16): m16 pedía validar (422 en vez de 500), no estrechar lo que ya funcionaba. int("3") y
+    int(3.0) daban 3 sin perder nada: siguen valiendo (un texto entero, con espacios o no, y un float entero). NaN e inf
+    (JSON los trae como números) dan 422 sin escribir, como 2.5."""
+    rec = _recepcion(app_client, admin_token, pec_10u, sku)
+    uno, dos = rec["productos"]
+    ruta = f"{RECEPCIONES}/{rec['id']}/lineas/{uno['grl_id']}"
+    resp = app_client.patch(ruta, headers=_auth(bodega_token),
+                            json={"quantity_received": "3", "quantity_rejected": " 1 ", "quantity_quarantine": 2.0})
+    assert resp.status_code == 200, resp.text
+    resp = app_client.patch(f"{RECEPCIONES}/{rec['id']}/lineas/{dos['grl_id']}", headers=_auth(bodega_token),
+                            json={"quantity_received": 4.0})
+    assert resp.status_code == 200, resp.text
+    productos = _detalle(app_client, bodega_token, rec["id"])["productos"]
+    assert [(p["qty_recibida"], p["qty_rechazada"], p["qty_cuarentena"]) for p in productos] == [(3, 1, 2), (4, 0, 0)]
+    cabecera = {**_auth(bodega_token), "Content-Type": "application/json"}
+    for crudo in ("NaN", "Infinity", "-Infinity"):
+        with contador_sql.ventana() as v:
+            resp = app_client.patch(ruta, headers=cabecera, content=f'{{"quantity_received": {crudo}}}')
+        assert (resp.status_code, resp.json()) == (422, {"detail": _cantidad_invalida("recibida")}), crudo
+        assert v.commits == 0, crudo
+    assert _detalle(app_client, bodega_token, rec["id"])["productos"][0]["qty_recibida"] == 3

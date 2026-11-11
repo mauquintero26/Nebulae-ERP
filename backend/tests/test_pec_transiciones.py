@@ -413,6 +413,9 @@ REF_LARGO = "La referencia del proveedor no puede pasar de 100 caracteres."
 ETAPAS_NO_LISTA = "Las etapas del seguimiento deben ser una lista de etapas."
 ETAPA_NO_OBJETO = "Cada etapa del seguimiento debe ser un objeto con sus campos."
 ETAPA_DIAS_INVALIDOS = "Los días de alerta de una etapa del seguimiento deben ser un número entre 0 y 36500."
+# Cierre de r1 (m34): el eta de PATCH /tracking acepta la zona horaria; solo se acota el año (A2).
+ETA_SEGUIMIENTO_INVALIDA = ("La fecha estimada de la etapa no es válida: usa el formato AAAA-MM-DD, con un año entre 1900 "
+                            "y 2999.")
 ETAPA_FECHA_INVALIDA = "La fecha de una etapa del seguimiento no es válida: usa el formato AAAA-MM-DD, sin zona horaria."
 
 
@@ -906,7 +909,7 @@ def test_fechas_con_un_anio_fuera_de_rango_dan_422_sin_escribir(app_client, db, 
         for eta in ("9999-12-31", "1899-01-01T00:00:00"):
             resp = app_client.patch(f"{RUTA}/{con_etapas.id}/tracking", headers=_auth(admin_token),
                                     json={"stage": "PROVEEDOR_CASILLERO", "status": "EN_PROCESO", "eta": eta})
-            assert (resp.status_code, resp.json()["detail"]) == (422, ETAPA_FECHA_INVALIDA), eta
+            assert (resp.status_code, resp.json()["detail"]) == (422, ETA_SEGUIMIENTO_INVALIDA), eta
     assert v.commits == 0
     # Los bordes valen y la lista sigue respondiendo con ellos.
     resp = _patch(app_client, admin_token, pec, fecha_compra="1900-01-01", fecha_entrega_estimada="2999-12-31",
@@ -953,3 +956,64 @@ def test_la_configuracion_del_seguimiento_valida_los_dias(app_client, db, admin_
     bien = [{"key": "UNO", "label": "Uno", "alert_confirm_days": 2, "alert_overdue_days": 1.5}]
     resp = app_client.put(ruta, headers=_auth(admin_token), json={"stages": bien})
     assert resp.status_code == 200, resp.text
+
+
+
+# ─── Cierre de r1 (m34, ruling (a) + (b)): el eta con zona se acepta y se guarda y se lee en UTC sin zona ────────────
+
+def _etapa_con_alerta(eta=None):
+    return [{"stage": "PROVEEDOR_CASILLERO", "label": "Proveedor -> Casillero", "status": "PENDIENTE", "timestamp": None,
+             "eta": eta, "alert_overdue_days": 3, "alert_confirm_days": 2}]
+
+
+def _eta_guardado(db, pec):
+    db.expire_all()
+    return db.query(PurchaseOrderFull.tracking_stages).filter(PurchaseOrderFull.id == pec.id).scalar()[0]["eta"]
+
+
+def _alerta_en_la_lista(app_client, token, pec):
+    resp = app_client.get(RUTA, headers=_auth(token), params={"q": pec.numero})
+    assert resp.status_code == 200, resp.text
+    [fila] = [p for p in resp.json()["data"] if p["id"] == pec.id]
+    return fila["tracking_stages"][0]["alert"]
+
+
+def test_el_eta_con_zona_se_acepta_y_se_guarda_en_utc_sin_zona(app_client, db, admin_token, contador_sql):
+    """m34: PATCH /tracking acepta un eta ISO con zona (antes de A2 se guardaba con la zona y tumbaba GET /compras/pedidos;
+    con A2, 422). Se guarda pasado a UTC sin zona, la convención de la API; el AAAA-MM-DD de la pantalla, igual que hoy.
+    La cota del año sigue (422, sin escribir), también cuando la zona la saca de rango o desborda."""
+    f = _Fabrica(db)
+    pec = f.pec("EMITIDO", tracking_stages=_etapa_con_alerta())
+    ruta = f"{RUTA}/{pec.id}/tracking"
+    for eta, guardado in (("2026-12-01T00:00:00-05:00", "2026-12-01T05:00:00"),
+                          ("2026-12-01T00:00:00+00:00", "2026-12-01T00:00:00"),
+                          ("2026-12-01T10:30:00+05:30", "2026-12-01T05:00:00"),
+                          ("2026-12-01", "2026-12-01")):
+        resp = app_client.patch(ruta, headers=_auth(admin_token), json={"stage": "PROVEEDOR_CASILLERO",
+                                                                        "status": "EN_PROCESO", "eta": eta})
+        assert resp.status_code == 200, (eta, resp.text)
+        assert resp.json()["data"]["tracking_stages"][0]["alert"] is not None, eta
+        assert _eta_guardado(db, pec) == guardado, eta
+        alerta = _alerta_en_la_lista(app_client, admin_token, pec)
+        assert alerta and "ETA 01/12/2026" in alerta["mensaje"], (eta, alerta)
+    for eta in ("2999-12-31T23:00:00-05:00", "9999-12-31T23:30:00-05:00", "0001-01-01T00:30:00+05:00", "1899-12-31"):
+        with contador_sql.ventana() as v:
+            resp = app_client.patch(ruta, headers=_auth(admin_token), json={"stage": "PROVEEDOR_CASILLERO",
+                                                                            "status": "EN_PROCESO", "eta": eta})
+        assert (resp.status_code, resp.json()) == (422, {"detail": ETA_SEGUIMIENTO_INVALIDA}), eta
+        assert v.commits == 0, eta
+    assert _eta_guardado(db, pec) == "2026-12-01"
+
+
+def test_un_eta_con_zona_ya_guardado_no_tumba_la_lista(app_client, db, admin_token):
+    """m34, caso legado: un eta con zona ya guardado en la fila (sin pasar por el PATCH, como los de antes de A2) hacía que
+    _stage_alert restara un datetime con zona de utcnow() (TypeError): GET /compras/pedidos daba 500 a todos. Al leer,
+    _parse_dt lo pasa a UTC sin zona y la alerta se calcula. Uno que desborda al pasarlo a UTC se ignora (sin alerta)."""
+    f = _Fabrica(db)
+    con_zona = f.pec("EMITIDO", tracking_stages=_etapa_con_alerta("2026-12-01T00:00:00-05:00"))
+    alerta = _alerta_en_la_lista(app_client, admin_token, con_zona)
+    assert alerta and "ETA 01/12/2026" in alerta["mensaje"], alerta
+    resp = app_client.get(f"{RUTA}/{con_zona.id}", headers=_auth(admin_token))
+    assert resp.status_code == 200 and resp.json()["data"]["tracking_stages"][0]["alert"], resp.text
+    desborda = f.pec("EMITIDO", tracking_stages=_etapa_con_alerta("9999-12-31T23:30:00-05:00"))
+    assert _alerta_en_la_lista(app_client, admin_token, desborda) is not None   # cuenta como sin eta: la de confirmación

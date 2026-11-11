@@ -137,7 +137,8 @@ def _casillero_dict(c: Casillero) -> dict:
     }
 
 
-def _parse_dt(v):
+def _fecha_iso(v):
+    """La fecha de una etapa tal como viene (con su zona horaria, si la trae), o None si no hay o no se lee."""
     if not v:
         return None
     if isinstance(v, datetime.datetime):
@@ -145,6 +146,24 @@ def _parse_dt(v):
     try:
         return datetime.datetime.fromisoformat(str(v).replace("Z", ""))
     except ValueError:
+        return None
+
+
+def _a_utc_sin_zona(leida):
+    """B4 T24, cierre de r1 (m34): un datetime con zona pasado a UTC sin zona (la convención de la API); uno sin zona, tal
+    cual. Lanza OverflowError si el paso a UTC se sale de los años que admite datetime."""
+    if leida is None or leida.tzinfo is None:
+        return leida
+    return leida.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+
+
+def _parse_dt(v):
+    """La fecha de una etapa para restarla de utcnow() (_stage_alert): B4 T24, cierre de r1 (m34, ruling (a) + (b)), una
+    con zona horaria sale en UTC sin zona. Así un eta con zona ya guardado (de antes de A2, o puesto en la fila) no tumba
+    GET /compras/pedidos con un TypeError. Una que no se lee, o que desborda al pasarla a UTC, es None (se ignora)."""
+    try:
+        return _a_utc_sin_zona(_fecha_iso(v))
+    except OverflowError:
         return None
 
 
@@ -1122,6 +1141,28 @@ def _validar_texto_corto(valor, maximo: int, no_texto: str, control: str, largo:
         raise HTTPException(422, largo)
 
 
+# B4 T24, cierre de r1 (m34): el eta de PATCH /tracking acepta la zona horaria; solo se acota el año (A2).
+ETA_SEGUIMIENTO_INVALIDA = (f"La fecha estimada de la etapa no es válida: usa el formato AAAA-MM-DD, con un año entre "
+                            f"{ANIO_MINIMO} y {ANIO_MAXIMO}.")
+
+
+def _eta_del_seguimiento(valor):
+    """B4 T24, cierre de r1 (m34, ruling (a) + (b)): el eta que guarda PATCH /tracking. Con zona horaria se acepta y se
+    guarda en UTC sin zona ('2026-12-01T00:00:00-05:00' -> '2026-12-01T05:00:00'); sin zona (el AAAA-MM-DD de la pantalla)
+    o uno que no se lee (_parse_dt lo ignora), tal cual, como hoy. El año, el del valor en UTC, entre ANIO_MINIMO y
+    ANIO_MAXIMO (A2): si no, o si el paso a UTC desborda, 422 ETA_SEGUIMIENTO_INVALIDA. None o '' no cambian nada."""
+    leida = _fecha_iso(valor)
+    if leida is None:
+        return valor
+    try:
+        utc = _a_utc_sin_zona(leida)
+    except OverflowError:
+        raise HTTPException(422, ETA_SEGUIMIENTO_INVALIDA)
+    if not _anio_valido(utc):
+        raise HTTPException(422, ETA_SEGUIMIENTO_INVALIDA)
+    return utc.isoformat() if leida.tzinfo is not None else valor
+
+
 def _validar_autor(valor) -> None:
     """422 si el nombre de quien hace el cambio (ActivityLog.user_name, String(150)) no es un texto, trae un carácter de
     control o pasa de 150. None vale. Desde B4 T24 (FINAL-m2) la Actividad la firma la sesión: el valor solo se guarda
@@ -1132,7 +1173,8 @@ def _validar_autor(valor) -> None:
 def _validar_etapas(etapas) -> None:
     """Lo que lee _annotate_stage_alerts / _stage_alert de cada etapa: que sea un dict; alert_overdue_days y
     alert_confirm_days, un número (no bool) entre 0 y 36500 o ausentes; eta y timestamp, si traen valor, un texto sin
-    zona horaria y con el año entre 1900 y 2999 (A2) (o uno que no se lee, que _parse_dt ignora)."""
+    zona horaria y con el año entre 1900 y 2999 (A2) (o uno que no se lee, que _parse_dt ignora). El eta de PATCH
+    /tracking ya no pasa por aquí: acepta la zona (_eta_del_seguimiento, cierre de r1, m34)."""
     if etapas is None:
         return
     if not isinstance(etapas, list):
@@ -1153,7 +1195,7 @@ def _validar_etapas(etapas) -> None:
                 continue
             if not isinstance(valor, str):
                 raise HTTPException(422, ETAPA_FECHA_INVALIDA)
-            leida = _parse_dt(valor)
+            leida = _fecha_iso(valor)   # tal como viene: aquí la zona horaria sigue dando 422 (A2)
             if leida is not None and (leida.tzinfo is not None or not _anio_valido(leida)):
                 raise HTTPException(422, ETAPA_FECHA_INVALIDA)
 
@@ -1392,12 +1434,13 @@ def update_tracking(pec_id: int, body: ActualizarTrackingBody,
 
     r2 (m5): user_name se valida antes de escribir, como el updated_by del PATCH (desde B4 T24, FINAL-m2, solo queda en
     tracking_history: la Actividad la firma la sesión).
-    B4 T24 (A2): el eta, con la regla de las etapas del PATCH (sin zona y con el año entre 1900 y 2999), antes de escribir.
+    B4 T24 (A2): el eta, con el año entre 1900 y 2999, antes de escribir. Cierre de r1 (m34): con zona horaria se acepta y
+    se guarda en UTC sin zona (_eta_del_seguimiento).
     B4 T24 r1 (m15): el PEC se lee con FOR UPDATE, como en update_pec: un seguimiento y una cancelación a la vez quedan en
     serie y la guarda etapa_pec(p.estado) ve el CANCELADO (no lo pisa con RECIBIDO o EN_TRANSITO).
     """
     _validar_autor(body.user_name)
-    _validar_etapas([{"eta": body.eta}])
+    eta = _eta_del_seguimiento(body.eta)
     p = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec_id).with_for_update().first()
     if not p:
         raise HTTPException(404, "Pedido de compra no encontrado")
@@ -1420,7 +1463,7 @@ def update_tracking(pec_id: int, body: ActualizarTrackingBody,
             stages[i]["timestamp"] = now
             stages[i]["notes"] = body.notes or s.get("notes")
             if body.eta is not None:
-                stages[i]["eta"] = body.eta
+                stages[i]["eta"] = eta
             if body.carrier is not None:
                 stages[i]["carrier"] = body.carrier
             if body.casillero_id is not None:
@@ -1977,16 +2020,36 @@ _TIPO_CANTIDAD_GRL = GoodsReceiptLine.__table__.c.quantity_received.type
 MAX_CANTIDAD_LINEA = 10 ** (_TIPO_CANTIDAD_GRL.precision - _TIPO_CANTIDAD_GRL.scale) - 1
 
 
+def _entero_sin_perdida(valor) -> Optional[int]:
+    """Cierre de r1 (ruling de m16): lo que int() aceptaba sin perder nada. Un int (no bool), un float entero (3.0) o un
+    texto entero ('3', ' 3 '). None para el resto: un bool, 2.5 o '2.5' (int() truncaba en silencio o fallaba), NaN, inf,
+    un texto que no es un número entero, una lista..."""
+    if isinstance(valor, bool):
+        return None
+    if isinstance(valor, int):
+        return valor
+    if isinstance(valor, float):
+        return int(valor) if valor.is_integer() else None
+    if isinstance(valor, str):
+        try:
+            return int(valor)
+        except ValueError:
+            return None
+    return None
+
+
 def _cantidad_de_linea(body: dict, campo: str, nombre: str):
-    """El valor de una cantidad del PATCH por línea: un entero (no bool) entre 0 y MAX_CANTIDAD_LINEA, o None; si no, 422
-    en español (antes, int() daba 500 con un texto y guardaba un negativo)."""
+    """El valor de una cantidad del PATCH por línea: un entero sin pérdida (_entero_sin_perdida) entre 0 y
+    MAX_CANTIDAD_LINEA, o None; si no, 422 en español (antes, int() daba 500 con un texto que no leía, truncaba 2.5 y
+    guardaba un negativo)."""
     valor = body[campo]
     if valor is None:
         return None
-    if isinstance(valor, bool) or not isinstance(valor, int) or not 0 <= valor <= MAX_CANTIDAD_LINEA:
+    entero = _entero_sin_perdida(valor)
+    if entero is None or not 0 <= entero <= MAX_CANTIDAD_LINEA:
         tope = f"{MAX_CANTIDAD_LINEA:,}".replace(",", ".")
         raise HTTPException(422, f"La cantidad {nombre} debe ser un número entero entre 0 y {tope}, o vacía.")
-    return valor
+    return entero
 
 
 @router.patch("/recepciones/{eninv_id}")
