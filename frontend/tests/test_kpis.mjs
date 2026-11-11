@@ -1752,4 +1752,24 @@ console.log('--- TEST T24-c (B4 T24, F108): la Agenda ofrece Nuevo, Editar y Eli
   assert.equal((c.match(/setDeleteConfirmSupplier\((sup|selectedSupplier)\)/g) ?? []).length, 2, 'los dos «Eliminar Proveedor»');
 }
 
+console.log('--- TEST T24-d (B4 T24: F3 y F4): etiquetaKpi con tiene() y el comentario del redondeo ---');
+{
+  const fuente = readFileSync(new URL('../src/lib/kpis.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const etiqueta = fuente.slice(fuente.indexOf('export function etiquetaKpi('), fuente.indexOf('\n}\n', fuente.indexOf('export function etiquetaKpi(')));
+  assert.ok(!etiqueta.includes('hasOwnProperty.call(CATALOGO_KPI'), 'F3: el catálogo con tiene()');
+  assert.match(etiqueta, /const definicion = tiene\(CATALOGO_KPI, id\) \? CATALOGO_KPI\[id\] : null;/);
+  const unId = Object.keys(kpisLib.CATALOGO_KPI)[0];
+  assert.equal(typeof kpisLib.etiquetaKpi(unId), 'string', 'un id del catálogo sigue dando su etiqueta');
+  assert.throws(() => kpisLib.etiquetaKpi('toString'), /Indicador desconocido/, 'un nombre del prototipo no es un indicador');
+  // F4: el redondeo de la mitad se aleja del cero en los dos signos (no «hacia arriba»).
+  assert.ok(!fuente.includes('redondea la mitad hacia arriba'), 'F4 (a)');
+  assert.equal((fuente.match(/la mitad se aleja del cero \(ROUND_HALF_UP\)/g) ?? []).length, 2);
+  // F4 (b): ninguna línea de JSDoc del diff de 896b7b3 pasa de 120 caracteres.
+  const prefs = readFileSync(new URL('../src/lib/preferencias.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  for (const linea of [fuente.split('\n').find((l) => l.includes('alejándose del cero en los dos sentidos')),
+    prefs.split('\n').find((l) => l.includes('(no toca el almacén ni hay PUT).'))]) {
+    assert.ok(linea && [...linea].length <= 120, `${[...(linea ?? '')].length}: ${linea}`);
+  }
+}
+
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

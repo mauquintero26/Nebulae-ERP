@@ -1879,16 +1879,19 @@ export function estadoPastillaPestana(conteo, estadoConteos, { aparteActiva = fa
  * vea el elemento [inicio, inicio + ancho), en coordenadas del contenido de la fila. Si ya se ve, el mismo; si queda a
  * la izquierda (o es más ancho que la fila), su inicio; si queda a la derecha, lo justo para ver su final. Nunca
  * negativo; con datos que no son números, el mismo scroll.
+ * B4 T24 (F34, aditivo): `margen` (el padding de la fila) también se deja a la vista de cada lado, para que el anillo de foco de
+ * la pestaña (el token FOCO: 2 px de separación y 2 de grosor) no se corte; volver a la primera da 0 y no el padding.
  * @param {{inicio: number, ancho: number}} elemento
- * @param {{scroll: number, visible: number}} fila
+ * @param {{scroll: number, visible: number, margen?: number}} fila
  * @returns {number}
  */
-export function scrollParaVer({ inicio, ancho }, { scroll, visible }) {
+export function scrollParaVer({ inicio, ancho }, { scroll, visible, margen = 0 }) {
   if (![inicio, ancho, scroll, visible].every((n) => typeof n === 'number' && Number.isFinite(n))) {
     return typeof scroll === 'number' && Number.isFinite(scroll) ? scroll : 0;
   }
-  if (inicio < scroll || ancho > visible) return Math.max(0, inicio);
-  if (inicio + ancho > scroll + visible) return Math.max(0, inicio + ancho - visible);
+  const m = typeof margen === 'number' && Number.isFinite(margen) && margen > 0 ? margen : 0;
+  if (inicio < scroll || ancho > visible) return Math.max(0, inicio - m);
+  if (inicio + ancho > scroll + visible) return Math.max(0, inicio + ancho + m - visible);
   return scroll;
 }
 
@@ -2274,10 +2277,12 @@ const RUTA_GASTOS = '/finance/expenses';
 
 /**
  * El recorte de las columnas de un tablero por categoría (R11; Productos y Gastos): las `max` primeras y, si sobran, el aviso
- * «N categorías más: usa la lista». Es el ÚNICO lugar de ese texto.
- * @param {ReadonlyArray<string> | null | undefined} nombres
+ * «N categorías más: usa la lista». Es el ÚNICO lugar de ese texto. B4 T24 (F10): los nombres pueden ser textos o los objetos
+ * {id, nombre} de columnasProductos (una plantilla).
+ * @template T
+ * @param {ReadonlyArray<T> | null | undefined} nombres
  * @param {number} max
- * @returns {{visibles: string[], mas: number, aviso: string | null}}
+ * @returns {{visibles: T[], mas: number, aviso: string | null}}
  */
 export function recortarColumnas(nombres, max) {
   const todas = Array.isArray(nombres) ? nombres : [];

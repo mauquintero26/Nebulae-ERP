@@ -2187,8 +2187,9 @@ console.log('--- TEST 42 (B4 T7 r2, I-r1 y m-r1-a): la pastilla de una pestaña 
     'sin pastilla, ni Contador ni la alerta rosa');
   assert.match(barra, /const filaPestanas = useRef<HTMLDivElement>\(null\);/);
   assert.match(barra, /<div ref=\{filaPestanas\} role="tablist"/);
+  // B4 T24 (F34, D27): con el margen de la fila (MARGEN_FILA_PESTANAS).
   assert.match(barra,
-    /useLayoutEffect\(\(\) => \{\s*const fila = filaPestanas\.current;\s*const boton = enfocable \? botonesPestana\.current\.get\(enfocable\) : undefined;\s*if \(!fila \|\| !boton\) return;\s*const caja = fila\.getBoundingClientRect\(\);\s*const r = boton\.getBoundingClientRect\(\);\s*fila\.scrollLeft = scrollParaVer\(\{ inicio: r\.left - caja\.left \+ fila\.scrollLeft, ancho: r\.width \}, \{ scroll: fila\.scrollLeft, visible: fila\.clientWidth \}\);\s*\}, \[enfocable\]\);/);
+    /useLayoutEffect\(\(\) => \{\s*const fila = filaPestanas\.current;\s*const boton = enfocable \? botonesPestana\.current\.get\(enfocable\) : undefined;\s*if \(!fila \|\| !boton\) return;\s*const caja = fila\.getBoundingClientRect\(\);\s*const r = boton\.getBoundingClientRect\(\);\s*fila\.scrollLeft = scrollParaVer\(\{ inicio: r\.left - caja\.left \+ fila\.scrollLeft, ancho: r\.width \}, \{ scroll: fila\.scrollLeft, visible: fila\.clientWidth, margen: MARGEN_FILA_PESTANAS \}\);\s*\}, \[enfocable\]\);/);
   assert.ok(!/scrollIntoView/.test(barra), 'sin scrollIntoView: la página no se mueve');
 }
 
@@ -3185,6 +3186,28 @@ console.log('--- TEST T24-i (B4 T24: F39 y FINAL-m19): los filtros extra van en 
   assert.match(crm, /const filterStage = estado\.filtros\?\.etapa \|\| 'all';/);
   assert.ok(!/const \[filterStage, setFilterStage\]/.test(crm));
   assert.match(crm, /despachar\(\{ tipo: 'filtro', clave: 'etapa', valor: valor === 'all' \? '' : valor \}\);/);
+}
+
+console.log('--- TEST T24-j (B4 T24: F34, F35, F36 y F10): el margen de la fila de pestañas y los JSDoc ---');
+{
+  const { scrollParaVer } = TABLA;
+  // F34: con el margen de la fila (su p-1: el anillo de foco del token FOCO, 2 px de separación y 2 de grosor, no se corta).
+  assert.equal(scrollParaVer({ inicio: 4, ancho: 60 }, { scroll: 433, visible: 343, margen: 4 }), 0, 'volver a «Todos»: scrollLeft 0, no 4');
+  assert.equal(scrollParaVer({ inicio: 4, ancho: 60 }, { scroll: 433, visible: 343 }), 4, 'sin margen, lo de antes (aditivo)');
+  assert.equal(scrollParaVer({ inicio: 500, ancho: 80 }, { scroll: 0, visible: 343, margen: 4 }), 500 + 80 + 4 - 343, 'a la derecha, con el margen');
+  assert.equal(scrollParaVer({ inicio: 100, ancho: 60 }, { scroll: 50, visible: 343, margen: 4 }), 50, 'ya se ve: el mismo');
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const barra = leer('components/tabla/BarraTabla.tsx');
+  assert.match(barra, /\{ scroll: fila\.scrollLeft, visible: fila\.clientWidth, margen: MARGEN_FILA_PESTANAS \}/);
+  assert.match(barra, /const MARGEN_FILA_PESTANAS = 4;/);
+  // F35 (aceptado con su comentario) y F36 (el JSDoc dice lo que hace la pastilla y el desplazamiento).
+  assert.ok(barra.includes('F35: si los conteos llegan después y ensanchan'), 'F35: la decisión, en el comentario');
+  assert.ok(barra.includes('r2 (I-r1): con la aparte activa, una de vista sin número no pinta su pastilla (estadoPastillaPestana)'));
+  assert.ok(barra.includes('r2 (m-r1-a): al montar y al cambiar la activa, la fila se desplaza con scrollLeft (scrollParaVer)'));
+  assert.ok(barra.includes('null: gris mientras carga; con la aparte activa, sin pastilla'));
+  // F10: recortarColumnas tipa los nombres con una plantilla (columnasProductos le pasa {id, nombre}).
+  const t = leer('lib/tabla.js');
+  assert.match(t, /@template T\n \* @param \{ReadonlyArray<T> \| null \| undefined\} nombres\n \* @param \{number\} max\n \* @returns \{\{visibles: T\[\], mas: number, aviso: string \| null\}\}\n \*\/\nexport function recortarColumnas/);
 }
 
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');

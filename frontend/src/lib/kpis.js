@@ -11,7 +11,8 @@
  *    lib/dinero-ventas.js ('12,5%', anticipos y Resumen Financiero) es otro formato y NO cambia (RP75).
  *  - Variación (RP27): '+12,5 %', '−8 %' (con el menos tipográfico), 'Nuevo' (el anterior es 0 y el actual no) o
  *    'Sin cambio'. Mismo cálculo que variacion_pct del servidor; el redondeo de la mitad puede diferir en 0,1 (JS
- *    redondea la mitad hacia arriba, Python al par). La pantalla siempre usa este cálculo, no el del servidor (RP27).
+ *    la mitad se aleja del cero (ROUND_HALF_UP), Python al par). La pantalla siempre usa este cálculo, no el del servidor
+ *    (RP27).
  *    La dirección de 'Nuevo' sale del signo del valor actual, y solo aquí (direccionVariacion; analisis.js la usa).
  *    Un solo vocabulario de tono: 'bien', 'mal' o 'neutro'. El «mejor» del servidor ('sube' | 'baja' | 'neutro')
  *    pasa a mejorSiSube con mejorDesde().
@@ -146,14 +147,15 @@ export function estadoKpi({ loading = false, yaCargo = false, error = null } = {
 
 /**
  * La variación de `actual` contra `anterior`. Mismo cálculo que variacion_pct del servidor; el redondeo de la mitad
- * puede diferir en 0,1 (JS redondea la mitad hacia arriba, Python al par). La pantalla siempre usa este cálculo, no
- * el del servidor (RP27).
+ * puede diferir en 0,1 (aquí la mitad se aleja del cero (ROUND_HALF_UP), Python al par). La pantalla siempre usa
+ * este cálculo, no el del servidor (RP27).
  *  - null si alguno no es un número finito (sin comparación);
  *  - {tipo: 'igual'} si los dos son 0;
  *  - {tipo: 'nuevo', signo} si el anterior es 0 y el actual no (RP27: distinto de 0); signo 1 o −1 es el del valor
  *    actual, del que sale la dirección (direccionVariacion);
  *  - si no, {tipo: 'pct', pct} con pct = (actual − anterior) / |anterior| × 100, redondeado a 1 decimal con la mitad
- *    alejándose del cero en los dos sentidos (ROUND_HALF_UP, como redondear_peso: +12,25 -> +12,3 y −12,25 -> −12,3;
+ *    alejándose del cero en los dos sentidos (ROUND_HALF_UP, como redondear_peso: +12,25 -> +12,3 y
+ *    −12,25 -> −12,3;
  *    sin −0), igual que formatoDecimal y el porcentaje de formatoValorKpi.
  * @param {unknown} actual
  * @param {unknown} anterior
@@ -524,9 +526,10 @@ export const CATALOGO_KPI = congelar(CATALOGO);
  * @returns {string}
  */
 export function etiquetaKpi(id, periodo = PERIODO_KPI) {
-  const definicion = Object.prototype.hasOwnProperty.call(CATALOGO_KPI, id) ? CATALOGO_KPI[id] : null;
-  if (!definicion) throw new Error(`Indicador desconocido: ${String(id)}`);
+  // B4 T24 (F3): una sola guarda, tiene(), también para el catálogo.
   const tiene = (tabla, clave) => typeof clave === 'string' && Object.prototype.hasOwnProperty.call(tabla, clave);
+  const definicion = tiene(CATALOGO_KPI, id) ? CATALOGO_KPI[id] : null;
+  if (!definicion) throw new Error(`Indicador desconocido: ${String(id)}`);
   const conocido = tiene(TEXTO_PERIODO, periodo) ? TEXTO_PERIODO[/** @type {'30d' | '7d' | 'mes'} */ (periodo)].etiqueta
     : tiene(ETIQUETAS_PERIODO, periodo) ? ETIQUETAS_PERIODO[/** @type {keyof typeof ETIQUETAS_PERIODO} */ (periodo)] : null;
   const texto = conocido ?? (typeof periodo === 'string' && periodo.trim() ? periodo.trim() : TEXTO_PERIODO[PERIODO_KPI].etiqueta);

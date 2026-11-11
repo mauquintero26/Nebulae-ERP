@@ -27,7 +27,8 @@ import type { ColumnaAjustes } from './MenuAjustes';
  * hace despacha al estado ÚNICO de la pantalla (`estado` y `onEstado` son el estado y el despachar de useEstadoTabla);
  * la lógica es de lib/tabla.js.
  *  - Pestañas [{id, etiqueta, conteo: number | null, alerta?}]: la activa es estado.vista. El número va en Contador
- *    (C13): un conteo null pinta la pastilla gris animada, nunca 0 ('—' si estadoConteos es 'error'; estadoDeConteo).
+ *    (C13): un conteo null: gris mientras carga; con la aparte activa, sin pastilla; nunca 0 ('—' si estadoConteos es 'error';
+ *    estadoDeConteo).
  *    Sin emojis. Con el teclado (r1, 6e: activación manual, WAI-ARIA), las flechas, Inicio y Fin mueven el foco
  *    (pestanaConTecla) y Enter o Espacio activan. Al cambiar de pestaña, los estados filtrados que la otra no tiene se
  *    quitan (accionPestana; las tarjetas y las cajas del flujo usan el mismo ayudante).
@@ -60,6 +61,9 @@ import type { ColumnaAjustes } from './MenuAjustes';
  *    - Las flechas, Inicio y Fin la incluyen (idsDePestanas) y el tabIndex sigue el patrón de siempre
  *      (pestanaEnfocable).
  *    - La pantalla pinta debajo lo suyo en lugar de la tabla o el tablero.
+ *    - r2 (I-r1): con la aparte activa, una de vista sin número no pinta su pastilla (estadoPastillaPestana).
+ *    - r2 (m-r1-a): al montar y al cambiar la activa, la fila se desplaza con scrollLeft (scrollParaVer), con el margen de su
+ *      padding (B4 T24, F34: MARGEN_FILA_PESTANAS) para que el anillo de foco no se corte.
  */
 
 export type { OpcionesEstados } from '@/lib/tabla';
@@ -121,6 +125,8 @@ type PropsBaseBarraTabla = {
 export type PropsBarraTabla = PropsBaseBarraTabla
   & ({ total?: undefined; estadoTotal?: never } | { total: number | null; estadoTotal: EstadoKpi });
 
+/** B4 T24 (F34): el padding de la fila de pestañas (p-1): scrollParaVer lo deja a la vista para que el anillo de foco no se corte. */
+const MARGEN_FILA_PESTANAS = 4;
 const PASTILLA_ACTIVA = 'bg-white/25 text-white';
 const PASTILLA_ALERTA = 'bg-rose-100 text-rose-700';
 const PASTILLA = 'bg-slate-200/70 text-slate-600';
@@ -191,7 +197,9 @@ export function BarraTabla({
     botonesPestana.current.get(siguiente)?.focus();
   };
   // B4 T7 r2 (m-r1-a): al montar y al cambiar la pestaña activa (la aparte incluida), la fila se desplaza para mostrarla
-  // (scrollParaVer). Solo la fila, con su scrollLeft: la ventana no se desplaza.
+  // (scrollParaVer). Solo la fila, con su scrollLeft: la ventana no se desplaza. B4 T24 (F35: si los conteos llegan después y ensanchan
+  // las pestañas, unos 20 px a 375, la activa restaurada puede quedar cortada; se acepta (cosmético y raro): el efecto no vuelve a
+  // correr con cada recarga de los conteos.
   const filaPestanas = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const fila = filaPestanas.current;
@@ -199,7 +207,7 @@ export function BarraTabla({
     if (!fila || !boton) return;
     const caja = fila.getBoundingClientRect();
     const r = boton.getBoundingClientRect();
-    fila.scrollLeft = scrollParaVer({ inicio: r.left - caja.left + fila.scrollLeft, ancho: r.width }, { scroll: fila.scrollLeft, visible: fila.clientWidth });
+    fila.scrollLeft = scrollParaVer({ inicio: r.left - caja.left + fila.scrollLeft, ancho: r.width }, { scroll: fila.scrollLeft, visible: fila.clientWidth, margen: MARGEN_FILA_PESTANAS });
   }, [enfocable]);
 
   const opciones = opcionesDeVista(opcionesEstados, estado.vista);
