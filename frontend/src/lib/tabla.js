@@ -1030,11 +1030,14 @@ export function actualizadorColumnas(definicion, cambio, sinGuardar) {
  * Si guardarParte descarta el guardado (un cambio de sesión que el hook no vio) y no llama al actualizador, false.
  * @param {(entrada: (anterior: any) => Record<string, unknown>) => void} guardarParte
  * @param {{definicion: ReadonlyArray<DefinicionColumna>, cambio: CambioColumnas, sinGuardar: object, listo: boolean,
- *   usuarioRender: number | null, usuarioToken: number | null}} opciones
+ *   usuarioRender: number | null, usuarioToken: number | null, precargaFallida?: boolean}} opciones
  * @returns {boolean}
  */
-export function guardarCambioColumnas(guardarParte, { definicion, cambio, sinGuardar, listo, usuarioRender, usuarioToken }) {
+export function guardarCambioColumnas(guardarParte, { definicion, cambio, sinGuardar, listo, usuarioRender, usuarioToken, precargaFallida = false }) {
   if (!listo || (usuarioRender ?? null) !== (usuarioToken ?? null)) return false;
+  // B4 T24 (F33): con la precarga fallida, una pieza compuesta (el mapa de anchos, {orden, ocultas}) se armaría sobre {} y
+  // reemplazaría la guardada en el servidor: no se escribe. «Restablecer» no depende de lo guardado.
+  if (precargaFallida && /** @type {any} */ (cambio)?.tipo !== 'restablecer') return false;
   const actualizar = actualizadorColumnas(definicion, cambio, sinGuardar);
   let escribio = false;
   guardarParte((anterior) => {

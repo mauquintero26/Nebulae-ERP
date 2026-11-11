@@ -1131,8 +1131,10 @@ console.log('--- TEST 26 (T4A r1, punto 2): con la precarga fallida, una parte n
   const reloj = relojFalso();
   const p = crearPreferencias({ usuarioId: 7, almacen, servidor, temporizador: reloj });
   await conAvisos(async () => {
+    assert.equal(p.precargaFallida(), false, 'B4 T24 (F33): antes de la primera precarga, no');
     assert.equal(await p.precargar(''), false);
     assert.equal(p.estaLista(), true, 'listo se resuelve también si el GET falló');
+    assert.equal(p.precargaFallida(), true, 'B4 T24 (F33): la precarga falló (las piezas compuestas no se arman sobre {})');
     // Primera parte: queda solo en memoria, sin PUT, y dispara UNA nueva precarga.
     assert.equal(p.escribirParte('tabla:x', { tamano: 50 }), true);
     assert.deepEqual(p.leer('tabla:x'), { orden: ['viejo'], tamano: 50 }, 'se ve en memoria');

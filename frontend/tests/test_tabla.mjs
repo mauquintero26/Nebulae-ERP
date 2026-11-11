@@ -1108,6 +1108,21 @@ console.log('--- TEST 24 (T4C r1, puntos 3 y 4): sesionVigente, escriturasDeAcci
   assert.deepEqual(llamadas.at(-1), {});
   // Si guardarParte descarta el guardado (cambio de sesión que el hook no vio) y no llama al actualizador: false.
   assert.equal(guardarCambioColumnas(() => {}, { ...base, listo: true, usuarioRender: 7, usuarioToken: 7 }), false);
+  // B4 T24 (F33): con la precarga fallida, una pieza compuesta (el mapa de anchos, {orden, ocultas}) se armaría sobre {} y reemplazaría
+  // la guardada en el servidor: no se escribe. «Restablecer» no depende de lo guardado: sí.
+  const antes = llamadas.length;
+  for (const cambio of [{ tipo: 'anchos', anchos: { cli: 310 } }, { tipo: 'ocultar', id: 'est' }, { tipo: 'mover', id: 'cli', hueco: 0 }]) {
+    assert.equal(guardarCambioColumnas(guardarParte, { ...base, cambio, listo: true, usuarioRender: 7, usuarioToken: 7, precargaFallida: true }), false, cambio.tipo);
+  }
+  assert.equal(llamadas.length, antes, 'ni llama a guardarParte');
+  guardarCambioColumnas(guardarParte, { ...base, cambio: { tipo: 'restablecer' }, listo: true, usuarioRender: 7, usuarioToken: 7, precargaFallida: true });
+  assert.equal(llamadas.length, antes + 1, '«Restablecer» sí llega a guardarParte');
+  // La pantalla lo cablea: usePreferenciaParte da precargaFallida (que vuelve a pedir la precarga) y usePreferenciasTabla la pasa.
+  const usoPrefs = readFileSync(new URL('../src/components/tabla/usePreferenciasTabla.ts', import.meta.url), 'utf8');
+  assert.match(usoPrefs, /const \[guardado, guardarParte, listo, precargaFallida\] = usePreferenciaParte<ColumnasGuardadas>\(/);
+  assert.match(usoPrefs, /usuarioRender: ahora\.usuario, usuarioToken: usuarioDeLaSesion\(\), precargaFallida: precargaFallida\(\),/);
+  const usoPref = readFileSync(new URL('../src/components/ui/usePreferencia.ts', import.meta.url), 'utf8');
+  assert.match(usoPref, /\): \[T, GuardarParte<T>, boolean, \(\) => boolean\] \{/);
 }
 
 console.log('--- TEST 25 (T4C r1, punto 1): un orden que el servidor rechaza vuelve al orden por defecto ---');

@@ -52,6 +52,7 @@ import { leerPayload } from './session.js';
  *   cerrar: () => void,
  *   listo: Promise<void>,
  *   estaLista: () => boolean,
+ *   precargaFallida: () => boolean,
  * }} Preferencias
  */
 
@@ -477,6 +478,9 @@ export function crearPreferencias({
     cerrar,
     listo,
     estaLista: () => lista,
+    // B4 T24 (F33): la última precarga('') falló y ninguna salió bien desde entonces (aditivo): quien arma una pieza compuesta
+    // sobre lo leído (usePreferenciasTabla) no la escribe, porque se armaría sobre {} y reemplazaría la del servidor.
+    precargaFallida: () => precargaFallo,
   };
 }
 
