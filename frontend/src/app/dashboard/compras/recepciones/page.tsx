@@ -498,7 +498,7 @@ export default function RecepcionesPage() {
 
       {/* DRAWER DETALLE DE RECEPCION Y SEPARACION POR DESTINO (B1 a B3) */}
       {selectedItem && (
-        <Drawer
+        <Drawer etiqueta="Detalle de la recepción"
           onClose={() => setSelectedItem(null)}
           header={(
             <div>

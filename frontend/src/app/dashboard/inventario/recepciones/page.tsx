@@ -323,7 +323,7 @@ export default function InventarioRecepcionesPage() {
 
       {/* Drawer (B1 a B3): el detalle de la recepción y sus productos; el conteo y la confirmación se hacen en Compras. */}
       {selectedItem && (
-        <Drawer
+        <Drawer etiqueta="Detalle de la recepción"
           onClose={() => setSelectedItem(null)}
           header={(
             <div>

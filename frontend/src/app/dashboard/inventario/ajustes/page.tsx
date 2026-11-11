@@ -394,7 +394,7 @@ export default function AjustesPage() {
 
       {/* Drawer (B1 a B3): el detalle del ajuste, con la fecha real. */}
       {selected && (
-        <Drawer
+        <Drawer etiqueta="Detalle del ajuste"
           onClose={() => setSelected(null)}
           header={(
             <div>

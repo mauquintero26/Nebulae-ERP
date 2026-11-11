@@ -1264,7 +1264,7 @@ export default function EcommercePage() {
 
       {/* Order Detail Slide-over */}
       {selectedOrder && (
-        <Drawer onClose={() => setSelectedOrder(null)} header={(
+        <Drawer etiqueta="Detalle del pedido web" onClose={() => setSelectedOrder(null)} header={(
           <div><h2 className="text-lg font-black text-gray-900">{selectedOrder.numero}</h2><p className="text-xs text-gray-500">{selectedOrder.pven_numero} · {selectedOrder.customer_name}</p></div>
         )}>
               <div className="grid grid-cols-2 gap-3">

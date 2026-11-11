@@ -329,7 +329,7 @@ export default function InventarioTrasladosPage() {
 
       {/* Drawer (B1 a B3): el detalle del traslado y su enlace a Compras, donde se gestiona. */}
       {selected && (
-        <Drawer onClose={() => setSelected(null)} header={(
+        <Drawer etiqueta="Detalle del traslado" onClose={() => setSelected(null)} header={(
           <div>
             <h2 className="font-extrabold text-slate-900 text-xl">{numeroTraslado(selected)}</h2>
             <p className="text-xs text-slate-500 mt-0.5">Traslado Interno</p>

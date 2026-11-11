@@ -398,7 +398,7 @@ function ActivitiesPanel({row,onClose,onNotaGuardada}:{row:any,onClose:()=>void,
   }
   const acts = detail?.actividades||[];
   return (
-    <Drawer onClose={onClose} header={(
+    <Drawer etiqueta="Detalle del documento" onClose={onClose} header={(
       <div>
         <div className="flex items-center gap-2">
           <span className={`px-2 py-0.5 rounded-full text-xs font-bold border ${getTipoClass(row.tipo)}`}>{row.tipo}</span>
@@ -515,7 +515,7 @@ function ConfigPanel({alertDias,configCargada,onSave,onClose}:{alertDias:any,con
   );
   return (
     // B4 T24 r2 (m4, m15 b): para quien edita, solo sus botones y nada mientras guarda; en solo lectura, Esc y el fondo.
-    <Drawer cierreExterno={soloLectura} bloquearCierre={saving} onClose={onClose} maxWidth="md" header={(
+    <Drawer etiqueta="Configuración del Hub de Ventas" cierreExterno={soloLectura} bloquearCierre={saving} onClose={onClose} maxWidth="md" header={(
       <div className="flex items-center gap-3">
         <div className="bg-indigo-600 text-white p-2.5 rounded-xl shadow-md"><Settings size={20}/></div>
         <div><h2 className="font-black text-slate-800 text-lg">Configuración de HUB Ventas</h2><p className="text-xs text-slate-500">Parámetros de resolución, alertas y automatizaciones</p></div>
