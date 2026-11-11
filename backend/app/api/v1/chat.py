@@ -13,7 +13,6 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.db.database import get_db
-from app.core.estados_pedido import ESTADOS_VEN_CERRADOS, ESTADOS_VEN_SIN_DINERO
 from app.core import resolucion_ventas as rv
 import datetime, secrets, json
 from decimal import Decimal
@@ -1507,10 +1506,6 @@ def search_customers_for_chat(
     return {"status": "success", "data": results}
 
 
-# B4 T24 r1 (m36): los cerrados que cuentan como venta (la pestaña «Entregados»): ENTREGADO y FACTURADO.
-_CERRADOS_CON_DINERO = tuple(e for e in ESTADOS_VEN_CERRADOS if e not in ESTADOS_VEN_SIN_DINERO)
-
-
 @router.get("/customer-context")
 def get_customer_context_for_chat(
     customer_id: Optional[int] = None,
@@ -1586,10 +1581,13 @@ def get_customer_context_for_chat(
 
     # B4 T24 r1 (m7 + m30 + m36): las pestañas y el ticket promedio con la MISMA regla que las tarjetas (B49-b). «En curso»
     # (Activos y active_orders_count) = rv.f_pven_en_curso en SQL (no una copia en Python: sin pasar a mayúsculas, como
-    # Ventas); Entregados = _CERRADOS_CON_DINERO (ENTREGADO y FACTURADO); CANCELADO y DEVUELTO_TOTAL no van en ninguna.
-    # total_spent y avg_ticket, sobre Activos + Entregados.
-    en_curso_ids = {r[0] for r in db.query(SaleOrder.id).filter(SaleOrder.customer_id == cid,
-                                                                 rv.f_pven_en_curso(SaleOrder))}
+    # Ventas); CANCELADO y DEVUELTO_TOTAL no van en ninguna. total_spent y avg_ticket, sobre Activos + Entregados.
+    # r2 (m10): las dos reglas salen de rv en la MISMA consulta (dos columnas): Activos = rv.f_pven_en_curso; Entregados =
+    # rv.f_pven_con_dinero y no en curso (hoy ENTREGADO y FACTURADO). Si la regla cambia en rv, el Asistente la sigue.
+    reglas = db.query(SaleOrder.id, rv.f_pven_en_curso(SaleOrder), rv.f_pven_con_dinero(SaleOrder)).filter(
+        SaleOrder.customer_id == cid).all()
+    en_curso_ids = {r[0] for r in reglas if r[1]}
+    con_dinero_ids = {r[0] for r in reglas if r[2]}
     active_orders = []
     closed_orders = []
     total_spent = Decimal("0.0")
@@ -1625,13 +1623,13 @@ def get_customer_context_for_chat(
         if o["id"] in en_curso_ids:
             active_orders.append(order_item)
             total_spent += tot
-        elif o["estado"] in _CERRADOS_CON_DINERO:
+        elif o["id"] in con_dinero_ids:
             closed_orders.append(order_item)
             total_spent += tot
             completed_orders_count += 1
 
-    total_orders_count = len(active_orders) + len(closed_orders)
-    avg_ticket = float(total_spent / total_orders_count) if total_orders_count > 0 else 0.0
+    pedidos_con_dinero = len(active_orders) + len(closed_orders)   # r2 (m9): antes total_orders_count
+    avg_ticket = float(total_spent / pedidos_con_dinero) if pedidos_con_dinero > 0 else 0.0
     # B4 T24 (B49-b): las tarjetas «Total de pedidos» y «Pedidos en curso» llevan los nombres del catálogo de KPI, así que
     # sus cifras son las canónicas de Ventas: pven_total = todos los pedidos del cliente (los cancelados también, como
     # /ventas/stats) y pven_en_curso = rv.f_pven_en_curso (r1: la misma consulta de los Activos de arriba).
@@ -1662,13 +1660,13 @@ def get_customer_context_for_chat(
         segmento = "Cliente VIP / Alto Valor"
     elif total_spent > 3000000:
         segmento = "Cliente Frecuente"
-    elif total_orders_count > 0:
+    elif pedidos_con_dinero > 0:
         segmento = "Cliente Recurrente"
     else:
         segmento = "Nuevo Prospecto / Sin compras"
 
     ai_bullet_points = [
-        f"Segmento: {segmento} con {total_orders_count} órdenes registradas.",
+        f"Segmento: {segmento} con {pven_total} órdenes registradas.",   # r2 (m9): el «Total de pedidos» de la tarjeta
     ]
     if active_orders:
         ai_bullet_points.append(f"Tiene {len(active_orders)} pedido(s) activo(s) ({active_orders[0]['numero']} en estado {active_orders[0]['estado']}).")

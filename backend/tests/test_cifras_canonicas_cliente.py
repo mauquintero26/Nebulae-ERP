@@ -79,3 +79,20 @@ def test_asistente_listas_y_ticket_con_la_regla_de_la_tarjeta(app_client, db, ad
     assert revenue["total_spent_cop"] == 2300.0                                      # Activos + Entregados
     assert abs(revenue["avg_ticket_cop"] - 2300 / 6) < 1e-9                          # sobre los mismos 6
     assert revenue["total_orders_count"] == 8
+    # r2 (m9): el resumen del Copiloto dice el mismo «Total de pedidos» de la tarjeta (antes, «con 6 órdenes»).
+    assert "con 8 órdenes registradas." in data["ai_insights"]["summary"], data["ai_insights"]["summary"]
+
+
+
+def test_perfil_360_total_comprado_con_la_regla_del_asistente(app_client, db, admin_token):
+    """r2 (m8, ruling): el «Total comprado» de la ficha del cliente (profile-360) y el del Asistente son la misma tarjeta
+    del catálogo (cli_total_comprado): los dos con rv.f_pven_con_dinero, sin cancelados ni devueltos. Antes profile-360
+    solo quitaba los cancelados (3.000 frente a 2.300 del Asistente con el cliente de m36)."""
+    cliente = _cliente_con_pedidos(db)
+    perfil = app_client.get(f"/api/v1/crm/customers/{cliente.id}/profile-360", headers=_auth(admin_token))
+    assert perfil.status_code == 200, perfil.text
+    asistente = app_client.get("/api/v1/chat/customer-context", params={"customer_id": cliente.id},
+                               headers=_auth(admin_token))
+    assert asistente.status_code == 200, asistente.text
+    total = perfil.json()["data"]["resumen_financiero"]["total_comprado_cop"]
+    assert total == asistente.json()["data"]["revenue"]["total_spent_cop"] == 1500.0   # 100+200+300+400+500

@@ -17,6 +17,7 @@ from app.core import cambios_documento, clientes
 from app.core import analisis as an
 from app.core.analisis_ventas import _cantidad, _conteos_por_cubeta, _enteros, _movimiento, _pct, _ranking
 from app.core.estados_pedido import ESTADOS_VEN_SIN_DINERO
+from app.core import resolucion_ventas as rv
 from app.core.fechas import ahora_utc
 from app.core.textos_filtro import mensaje_control
 from app.core.listados import MAX_OFFSET, expresiones_tiempo, leer_orden, paginar, texto_busqueda
@@ -642,6 +643,10 @@ def get_customer_360_profile(
 
     # Process canonical SaleOrders
     pedidos_data = []
+    # B4 T24 r2 (m8, ruling): el «Total comprado» (cli_total_comprado) es la misma tarjeta que la del Asistente: la regla de
+    # rv.f_pven_con_dinero (sin cancelados ni devueltos), en SQL, no una copia en Python.
+    con_dinero_ids = {r[0] for r in db.query(SaleOrder.id).filter(SaleOrder.customer_id == customer_id,
+                                                                  rv.f_pven_con_dinero(SaleOrder))}
     for so in canonical_sos:
         t_cop = Decimal(str(so.total_cop or 0))
         s_cop = Decimal(str(so.saldo_cop or 0))
@@ -650,8 +655,9 @@ def get_customer_360_profile(
             # pven_saldo_por_cobrar, analisis_ventas): Σ max(0, saldo) sin cancelados ni devueltos (H47). Un saldo
             # negativo (crédito a favor) no resta lo que deben los demás pedidos.
             saldo_pendiente_cop += max(s_cop, Decimal("0"))
-        if so.estado != "CANCELADO":
+        if so.id in con_dinero_ids:
             total_comprado_cop += t_cop
+        if so.estado != "CANCELADO":
             active_orders.append({
                 "id": so.id,
                 "numero": so.numero,
