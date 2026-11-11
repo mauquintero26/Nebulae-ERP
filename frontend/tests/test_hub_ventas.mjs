@@ -1205,9 +1205,9 @@ console.log('--- B4 T7 r1 (B): el foco del enlace, la fila de último recurso, l
   assert.match(codigo, /if \(dias === null\) return <span className="text-xs text-slate-400">—<\/span>;/);
   assert.match(codigo, /fila\.resolucion === 'ATRASADO' \? 'font-bold text-rose-600' : undefined/);
   assert.ok(!codigo.includes('Number(f.dias_creado) || 0'), 'm8: sin «hoy» para un dato que falta');
-  // m6: el valor del contexto es estable.
+  // m6: el valor del contexto es estable. B4 T24 f2 (m8 de la revisión r0 de f1, D27): con `mover`, que solo cambia con el rol.
   assert.match(codigo,
-    /const accionesFila = useMemo<AccionesFilaHub>\(\s*\(\) => \(\{ abrir: openDocDetail, actividad: setActRow, cancelar: abrirCancelacion \}\),\s*\[openDocDetail, abrirCancelacion\],\s*\);/);
+    /const accionesFila = useMemo<AccionesFilaHub>\(\s*\(\) => \(\{ abrir: openDocDetail, actividad: setActRow, cancelar: abrirCancelacion, mover: accesoTablero\.mover \}\),\s*\[openDocDetail, abrirCancelacion, accesoTablero\.mover\],\s*\);/);
   // m7: fuente única. (a) los chips con CLASE_CHIP de components/ui/Kanban.tsx; (b) los títulos del orden con
   // campoOrden y solo de las columnas que se ordenan (y las de orden inverso, aparte); (d) una sola sigla de tipo.
   assert.ok(!codigo.includes('CHIP_TONO'), 'm7a: sin CHIP_TONO');
@@ -1242,6 +1242,30 @@ console.log('--- B4 T7 r1b (duda 3): el contenedor del Hub reserva el lugar del 
   assert.ok(ia.includes('fixed bottom-6 right-6 w-14 h-14'), 'el botón mide lo que la reserva supone (24 + 56 = 80 px < 96)');
   const tabla = readFileSync(new URL('../src/lib/design-system.ts', import.meta.url), 'utf8');
   assert.ok(tabla.includes('[&_[data-pie-tabla]]:pr-20'), 'en la pantalla completa, el pr-20 del pie (D41)');
+}
+
+console.log('--- B4 T24 f2 (m8 de la revisión r0 de f1): el Hub ofrece cancelar y cambiar de estado solo a quien puede (require_roles) ---');
+{
+  // opcionesPanelPedido: lo que el panel rápido ofrece con el permiso del rol. PATCH /ventas/pedidos/{id} (estado, Facturado y
+  // Cancelado) es de ADMIN y ASESOR (accesoTableroVentas.mover; BODEGA solo pone ENTREGADO con la bodega, desde Entregas). Sin
+  // permiso queda «Despachar en Entregas» (un enlace: Entregas decide) y nada que mande un PATCH.
+  assert.equal(typeof hv.opcionesPanelPedido, 'function', 'opcionesPanelPedido existe');
+  for (const estado of [...Object.keys(ESTADOS_PEDIDO), 'ALGO_NUEVO']) {
+    assert.deepEqual(hv.opcionesPanelPedido(estado, true), opcionesEstadoPVEN(estado), `${estado}: con permiso, lo de siempre`);
+    const sin = hv.opcionesPanelPedido(estado, false);
+    assert.deepEqual(sin, { mover: [], despachar: opcionesEstadoPVEN(estado).despachar, cancelar: false, facturar: false }, `${estado}: sin permiso`);
+  }
+  const sinComentarios = (t) => t.replace(/\r\n/g, '\n').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const hub = sinComentarios(readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8'));
+  // La fila: «Cancelar documento» (POST /solicitudes/{id}/cancelar y PATCH de COT y PVEN: ADMIN y ASESOR) solo con mover.
+  assert.match(hub, /type AccionesFilaHub = \{ abrir: \(f: FilaHub\) => void; actividad: \(f: FilaHub\) => void; cancelar: \(ids: string\[\]\) => void; mover: boolean \};/);
+  assert.match(hub, /oculto: !acciones\?\.mover \|\| Boolean\(motivoNoCancelable\(fila\)\) \}/);
+  assert.match(hub, /\(\) => \(\{ abrir: openDocDetail, actividad: setActRow, cancelar: abrirCancelacion, mover: accesoTablero\.mover \}\),\s*\[openDocDetail, abrirCancelacion, accesoTablero\.mover\],/);
+  // Sin permiso, sin casillas (la barra masiva ya no sale: FINAL-m38).
+  assert.match(hub, /seleccion=\{accesoTablero\.mover \? seleccion : undefined\}\s*onSeleccion=\{accesoTablero\.mover \? alSeleccionar : undefined\}/);
+  // El panel rápido: los botones de estado, Facturado y Cancelar salen de opcionesPanelPedido con el permiso.
+  assert.match(hub, /const op = opcionesPanelPedido\(quickDetailDoc\.estado, accesoTablero\.mover\);/);
+  assert.ok(!/opcionesEstadoPVEN\(quickDetailDoc\.estado\)/.test(hub), 'el panel ya no ofrece lo que el rol no puede');
 }
 
 console.log('--- B4 T24 f2 (FINAL-m8, FINAL-m9, FINAL-m28): el Hub en Kanban sin la página de la tabla, el error del tablero y una sola insignia ---');

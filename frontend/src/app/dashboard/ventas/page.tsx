@@ -46,7 +46,7 @@ import { useEstadoEnvioWhatsApp } from './cotizacion/estado-envio-whatsapp';
 import { ComposerChatter, EtiquetaChatter } from './chatter';
 import { agregarActividad, esEntradaChatter, motivoTelefono, textoSinTelefono } from '@/lib/chatter';
 import {
-  ordenParaCancelar, motivoNoCancelable, resumenLote, ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN,
+  ordenParaCancelar, motivoNoCancelable, resumenLote, ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN, opcionesPanelPedido,
   repartirCambioEstadoPVEN, comoUTC, textoAntiguedad, notaReiniciaAtraso, conDetalleDelEnvio, accionSiguienteDocumento,
   tituloGrupo, scConCotDeFilas, ordenEsAtencion, textoOrdenHub, RUTA_HUB_VENTAS, cantidadPositiva, focoEnlaceTras,
   filaDelHub,
@@ -226,7 +226,8 @@ const tituloResolucion = (f: FilaHub) => {
  * Lo que las celdas de la tabla le piden a la pantalla (abrir el panel rápido, el chatter y la cancelación de N3). Va por
  * un contexto para que las columnas sean una constante del módulo (D40 y D41: estables; el cuerpo está memoizado).
  */
-type AccionesFilaHub = { abrir: (f: FilaHub) => void; actividad: (f: FilaHub) => void; cancelar: (ids: string[]) => void };
+// B4 T24 f2 (m8 de la revisión r0 de f1): `mover` (accesoTableroVentas) decide si la fila ofrece «Cancelar documento».
+type AccionesFilaHub = { abrir: (f: FilaHub) => void; actividad: (f: FilaHub) => void; cancelar: (ids: string[]) => void; mover: boolean };
 const AccionesFila = React.createContext<AccionesFilaHub | null>(null);
 
 /** Chatter: el panel de notas y actividad del documento (ActivitiesPanel). */
@@ -251,7 +252,8 @@ function CeldaAccion({ fila }: { fila: FilaHub }) {
     { etiqueta: 'Ver historial y chatter', icono: Activity, onClick: () => acciones?.actividad(fila) },
     { etiqueta: 'Abrir WhatsApp', icono: MessageCircle, onClick: () => abrirWhatsApp(urlWhatsApp), oculto: !urlWhatsApp },
     { etiqueta: 'Cancelar documento', icono: Trash2, peligro: true, onClick: () => acciones?.cancelar([claveDeFila(fila)]),
-      oculto: Boolean(motivoNoCancelable(fila)) },
+      // B4 T24 f2 (m8 de la revisión r0 de f1): cancelar es POST /solicitudes/{id}/cancelar o el PATCH de COT y PVEN (ADMIN y ASESOR).
+      oculto: !acciones?.mover || Boolean(motivoNoCancelable(fila)) },
   ];
   const clave = accion?.tono ?? 'slate';
   return (
@@ -936,8 +938,8 @@ export default function VentasHub() {
   // B4 T7 r1 (m6): un valor estable para el contexto (sus tres manejadores ya lo son): las celdas no se repintan con cada
   // cambio de la página.
   const accionesFila = useMemo<AccionesFilaHub>(
-    () => ({ abrir: openDocDetail, actividad: setActRow, cancelar: abrirCancelacion }),
-    [openDocDetail, abrirCancelacion],
+    () => ({ abrir: openDocDetail, actividad: setActRow, cancelar: abrirCancelacion, mover: accesoTablero.mover }),
+    [openDocDetail, abrirCancelacion, accesoTablero.mover],
   );
   // D40: un solo usePreferenciasTabla por id; la tabla y «Ajustar tabla» comparten su resultado y el ref del ancho.
   const prefs = usePreferenciasTabla(ID_HUB, COLUMNAS_TABLA_HUB);
@@ -1226,8 +1228,9 @@ export default function VentasHub() {
                   claseFila={claseDeFila}
                   grupoFila={atencion ? grupoDeFila : undefined}
                   tituloGrupo={tituloDeGrupo}
-                  seleccion={seleccion}
-                  onSeleccion={alSeleccionar}
+                  // B4 T24 f2 (m8 de la revisión r0 de f1): sin permiso de mover, sin casillas (la barra masiva tampoco sale).
+                  seleccion={accesoTablero.mover ? seleccion : undefined}
+                  onSeleccion={accesoTablero.mover ? alSeleccionar : undefined}
                   vacio={(
                     <div>
                       <p className="font-semibold text-slate-600">{estado.q.trim() ? `Sin resultados para «${estado.q.trim()}»` : 'No hay documentos en esta vista'}</p>
@@ -1394,7 +1397,10 @@ export default function VentasHub() {
                 {/* State Changer for VEN -- N2: solo lo que el servidor acepta desde el estado actual; nunca un botón
                     directo a Entregado (va por Entregas) ni a Cancelado sin motivo (modal de N3). */}
                 {quickDetailDoc.tipo === 'VEN' && (() => {
-                  const op = opcionesEstadoPVEN(quickDetailDoc.estado);
+                  // B4 T24 f2 (m8 de la revisión r0 de f1): con el permiso del rol (PATCH /ventas/pedidos: ADMIN y ASESOR). Sin él,
+                  // solo el enlace a Entregas, si aplica; si no hay nada, la sección no se pinta.
+                  const op = opcionesPanelPedido(quickDetailDoc.estado, accesoTablero.mover);
+                  if (!accesoTablero.mover && !op.despachar) return null;
                   const sinOpciones = op.mover.length === 0 && !op.despachar && !op.cancelar && !op.facturar;
                   return (
                     <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-2">

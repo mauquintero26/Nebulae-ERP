@@ -1548,6 +1548,25 @@ console.log('--- B4 T10: el cableado del detalle del pedido (FLUJO-documentos 5,
   assert.match(bloque3, /const columnas = useMemo<ColumnaTabla<FilaProductoPedido>\[\]>\(\(\) => \[[\s\S]*?\], \[discriminado\]\);\s*const prefs = usePreferenciasTabla\('ventas\.pedido\.productos', columnas\);/);
 }
 
+console.log('--- B4 T24 f2 (m8 de la revisión r0 de f1): la Lista de Solicitudes ofrece cancelar, reiniciar, la papelera y restaurar solo a quien puede ---');
+{
+  // POST /solicitudes/{id}/cancelar (cancelar y «Enviar a la papelera»), PATCH /solicitudes/{id} («Reiniciar») y POST
+  // /solicitudes/{id}/restaurar son de ADMIN y ASESOR (erp_ventas.py): accesoTableroVentas.mover. FINANZAS, COMPRAS, BODEGA y
+  // CONSULTA ven la fila con «Ver Detalle» y sin casillas.
+  const { accesoTableroVentas } = await import('../src/lib/roles.js');
+  for (const rol of ['ADMIN', 'ASESOR']) assert.equal(accesoTableroVentas(rol).mover, true, rol);
+  for (const rol of ['FINANZAS', 'COMPRAS', 'BODEGA', 'CONSULTA']) assert.equal(accesoTableroVentas(rol).mover, false, rol);
+  const sinComentarios = (t) => t.replace(/\r\n/g, '\n').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const lista = sinComentarios(readFileSync(new URL('../src/app/dashboard/ventas/solicitud/solicitud-client.tsx', import.meta.url), 'utf8'));
+  assert.match(lista, /type AccionesFilaSC = \{[\s\S]*?\bmover: boolean;\s*\};/);
+  const celda = lista.slice(lista.indexOf('function CeldaAcciones('), lista.indexOf('\n}\n', lista.indexOf('function CeldaAcciones(')));
+  assert.match(celda, /const conAcciones = acciones\?\.mover === true && !soporte && \(!cancelada \|\| !sc\.eliminada_at\);/);
+  const papelera = lista.slice(lista.indexOf('function CeldaAccionesPapelera('), lista.indexOf('\n}\n', lista.indexOf('function CeldaAccionesPapelera(')));
+  assert.match(papelera, /\{acciones\?\.mover && \(\s*<button type="button" onClick=\{\(\) => acciones\?\.restaurar\(sc\)\}/);
+  assert.match(lista, /const accionesFila = useMemo<AccionesFilaSC>\(\(\) => \(\{[\s\S]*?mover: accesoTablero\.mover,\s*\}\), \[accesoTablero\.mover\]\);/);
+  assert.match(lista, /seleccion=\{accesoTablero\.mover \? seleccion : undefined\}\s*onSeleccion=\{accesoTablero\.mover \? alSeleccionar : undefined\}/);
+}
+
 console.log('--- B4 T24 (FINAL-m32): las ventanas de motivo en lote (Hub y Solicitudes) usan la regla de ModalMotivo y nombran su campo ---');
 {
   const sinComentarios = (t) => t.replace(/\r\n/g, '\n').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');

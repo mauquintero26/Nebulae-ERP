@@ -580,6 +580,8 @@ type AccionesFilaSC = {
   reiniciar: (sc: FilaSC) => void;
   restaurar: (sc: FilaPapelera) => void;
   eliminar: (sc: FilaPapelera) => void;
+  /** B4 T24 f2 (m8 de la revisión r0 de f1): el rol cancela, reinicia, manda a la papelera y restaura (ADMIN y ASESOR, accesoTableroVentas). */
+  mover: boolean;
 };
 const AccionesLista = createContext<AccionesFilaSC | null>(null);
 
@@ -663,7 +665,9 @@ function CeldaAcciones({ sc }: { sc: FilaSC }) {
   const acciones = useContext(AccionesLista);
   const soporte = sc.tipo_solicitud === 'Soporte Tecnico';
   const cancelada = sc.estado === 'CANCELADA';
-  const conAcciones = !soporte && (!cancelada || !sc.eliminada_at);
+  // B4 T24 f2 (m8 de la revisión r0 de f1): cancelar y «Enviar a la papelera» (POST /solicitudes/{id}/cancelar) y «Reiniciar» (PATCH)
+  // son de ADMIN y ASESOR: sin ese permiso la fila queda con «Ver Detalle» y «Editar».
+  const conAcciones = acciones?.mover === true && !soporte && (!cancelada || !sc.eliminada_at);
   const destinoReinicio = infoEstadoSolicitud(sc.advisor_user_id ? 'ASIGNADA' : 'BORRADOR').label;
   const items: ItemMenuFila[] = [
     { etiqueta: 'Ver Detalle', icono: FileText, onClick: () => acciones?.abrir(sc) },
@@ -751,10 +755,13 @@ function CeldaAccionesPapelera({ sc }: { sc: FilaPapelera }) {
   const enPapelera = estadoEnPapelera(sc);
   return (
     <span className="flex items-center justify-end gap-1.5">
-      <button type="button" onClick={() => acciones?.restaurar(sc)} aria-label={`Restaurar ${sc.numero}`}
-        className={`bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2.5 py-1.5 rounded-lg text-xs font-bold border border-emerald-200 flex items-center gap-1 ${FOCO_VISIBLE}`}>
-        <RotateCcw size={11} aria-hidden="true" />Restaurar
-      </button>
+      {/* B4 T24 f2 (m8 de la revisión r0 de f1): POST /solicitudes/{id}/restaurar es de ADMIN y ASESOR. */}
+      {acciones?.mover && (
+        <button type="button" onClick={() => acciones?.restaurar(sc)} aria-label={`Restaurar ${sc.numero}`}
+          className={`bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2.5 py-1.5 rounded-lg text-xs font-bold border border-emerald-200 flex items-center gap-1 ${FOCO_VISIBLE}`}>
+          <RotateCcw size={11} aria-hidden="true" />Restaurar
+        </button>
+      )}
       {esAdministrador(getUsuarioActual().role)&&enPapelera.puedeEliminar&&(
         <button type="button" onClick={() => acciones?.eliminar(sc)} title="Eliminar permanentemente" aria-label={`Eliminar ${sc.numero} permanentemente`}
           className={`bg-red-50 hover:bg-red-100 text-red-600 p-1.5 rounded-lg border border-red-200 ${FOCO_VISIBLE}`}>
@@ -1464,7 +1471,8 @@ export default function SolicitudClient() {
     reiniciar: (sc) => manejadores.current?.reiniciar(sc),
     restaurar: (sc) => manejadores.current?.restaurar(sc),
     eliminar: (sc) => manejadores.current?.eliminar(sc),
-  }), []);
+    mover: accesoTablero.mover,
+  }), [accesoTablero.mover]);
 
   // ── B4 T8, bloque 4: el tablero (KANBAN-ventas-listas punto 7; C15, R11; RP16, RP17, D11, D39) ──
   // reglaSoltarSC sin puedeEnviar (D11): soltar para enviar queda bloqueado con «Ábrela para enviar.» y el enlace a la
@@ -1647,8 +1655,9 @@ export default function SolicitudClient() {
                   aviso={listado.avisoOrden}
                   onFila={abrirSolicitud}
                   claseFila={claseDeFila}
-                  seleccion={seleccion}
-                  onSeleccion={alSeleccionar}
+                  // B4 T24 f2 (m8 de la revisión r0 de f1): sin permiso de cancelar, sin casillas (la barra masiva tampoco sale).
+                  seleccion={accesoTablero.mover ? seleccion : undefined}
+                  onSeleccion={accesoTablero.mover ? alSeleccionar : undefined}
                   vacio={vacioLista}
                   etiqueta="Solicitudes de cliente"
                 />

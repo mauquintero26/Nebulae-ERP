@@ -156,6 +156,20 @@ export function opcionesEstadoPVEN(estado) {
 }
 
 /**
+ * B4 T24 f2 (m8 de la revisión r0 de f1): lo que el panel rápido del Hub ofrece para un pedido con el permiso del rol (`mover`:
+ * accesoTableroVentas, el require_roles de PATCH /ventas/pedidos/{id}: ADMIN y ASESOR). Con permiso, opcionesEstadoPVEN; sin él,
+ * nada que mande un PATCH (ni estados, ni Facturado, ni Cancelar) y solo «Despachar en Entregas», que es un enlace (Entregas decide:
+ * BODEGA despacha).
+ * @param {unknown} estado
+ * @param {boolean} mover
+ * @returns {{mover: string[], despachar: boolean, cancelar: boolean, facturar: boolean}}
+ */
+export function opcionesPanelPedido(estado, mover) {
+  const op = opcionesEstadoPVEN(estado);
+  return mover ? op : { mover: [], despachar: op.despachar, cancelar: false, facturar: false };
+}
+
+/**
  * Cambio masivo de estado (N5): separa los pedidos marcados en los que pueden pasar a `nuevo` desde el Hub (lo que
  * ofrece opcionesEstadoPVEN: un estado manual o Facturado desde Entregado) y los que se omiten sin enviarse, con el
  * motivo. `filas`: [{idStr, numero, estado}] (sin estado = la fila ya no esta en la lista).
