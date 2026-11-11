@@ -13,7 +13,7 @@ import {
 // la recepción y el alta conservan lo de B1 a B3.
 import {
   SubNav, PageHeader, Button, useAvisos, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila, ModalMotivo,
-  TableroKanban, useTableroKanban,
+  TableroKanban, EsqueletoTablero, useTableroKanban,
 } from '@/components/ui';
 import type { ItemMenuFila } from '@/components/ui';
 import {
@@ -1974,7 +1974,8 @@ export default function PedidosCompraPage() {
             /* KANBAN-compras punto 6: Borrador · Emitido · En tránsito · En bodega · Recibido (plegada) · Cancelado
                (plegada). Lo que no se puede queda bloqueado con su motivo y su enlace ANTES de soltar (reglaSoltarPec);
                en En bodega, «Recepcionar» (tarjetaPedidoCompra). */
-            <TableroKanban
+            // B4 T24 r2 (m2, m10): mientras se lee el rol, el esqueleto (sin acciones) en lugar del tablero.
+            !accesoPec.listo ? <EsqueletoTablero /> : <TableroKanban
               tablero={tablero}
               regla={reglaSoltarPec}
               tarjetaDe={tarjetaPedidoCompra}

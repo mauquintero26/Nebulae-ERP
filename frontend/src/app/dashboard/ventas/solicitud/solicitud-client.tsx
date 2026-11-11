@@ -13,7 +13,7 @@ import {
 import { apiFetch, getToken } from '@/lib/api';
 import {
   SubNav, PageHeader, Modal, Button, EmptyState, useAvisos, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila,
-  TableroKanban, useTableroKanban, CLASE_CHIP,
+  TableroKanban, EsqueletoTablero, useTableroKanban, CLASE_CHIP,
 } from '@/components/ui';
 import type { ItemMenuFila } from '@/components/ui';
 // B4 T8: la lista 100 % en el servidor con las piezas estándar (R5, R8, R11, R12, R13, R26; C3, C4, C13, C14, C15, C21).
@@ -1652,7 +1652,8 @@ export default function SolicitudClient() {
             </section>
           </AccionesLista.Provider>
           {modoEfectivo === 'kanban' && (
-            <TableroKanban
+            // B4 T24 r2 (m2, m10): mientras se lee el rol, el esqueleto (sin acciones) en lugar del tablero.
+            !accesoTablero.listo ? <EsqueletoTablero /> : <TableroKanban
               tablero={tablero}
               regla={reglaSoltarSC}
               tarjetaDe={tarjetaDeSC}

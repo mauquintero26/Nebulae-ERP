@@ -22,7 +22,7 @@ import {
 import { pedidoAdmitePxp } from '@/lib/dinero-ventas';
 import {
   SubNav, PageHeader, Button, Modal, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila, ModalMotivo,
-  TableroKanban, useTableroKanban, CLASE_CHIP, useAvisos,
+  TableroKanban, EsqueletoTablero, useTableroKanban, CLASE_CHIP, useAvisos,
 } from '@/components/ui';
 import type { DatosColumnaKanban, ItemMenuFila } from '@/components/ui';
 import {
@@ -756,7 +756,8 @@ export default function VentaClient() {
               Entregado · Facturado (plegada) · Cancelado (plegada), con la suma de cada columna. Lo que no se puede queda
               bloqueado con su motivo ANTES de soltar (reglaSoltarPedido). */}
           {enKanban && (
-            <TableroKanban
+            // B4 T24 r2 (m2, m10): mientras se lee el rol, el esqueleto (sin acciones) en lugar del tablero.
+            !accesoTablero.listo ? <EsqueletoTablero /> : <TableroKanban
               tablero={tablero}
               regla={reglaSoltarPedido}
               tarjetaDe={tarjetaDePedido}

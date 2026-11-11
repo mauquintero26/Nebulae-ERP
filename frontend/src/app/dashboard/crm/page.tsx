@@ -16,7 +16,7 @@ import { useRouter } from 'next/navigation';
 
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
 import {
-  SubNav, PageHeader, Drawer, Modal, Button, MenuFila, TableroKanban, useAvisos, useTableroKanban, CLASE_CHIP,
+  SubNav, PageHeader, Drawer, Modal, Button, MenuFila, TableroKanban, EsqueletoTablero, useAvisos, useTableroKanban, CLASE_CHIP,
 } from '@/components/ui';
 // B4 T21: la tabla estándar (TABLA-otros punto 4), el tablero común (KANBAN-crm) y la pestaña Análisis (ANALISIS-crm).
 import { BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla } from '@/components/tabla';
@@ -302,25 +302,6 @@ const claseDeFilaLead = (l) => (esLeadAtrasadoAbierto(l) ? TABLE.filaAviso : nul
 
 /** El nombre de la tarjeta para el menú ⋯ («Acciones de …») y el anuncio del movimiento («… movido a …»). */
 const tarjetaDeLead = (l) => ({ numero: l.client || `Lead ${l.id}`, titulo: l.client || '' });
-
-/** El esqueleto del tablero mientras faltan las preferencias o las etapas (la forma de TableroKanban: nada salta). */
-function EsqueletoTablero() {
-  return (
-    <div aria-busy="true" aria-label="Cargando el tablero" className="flex min-h-[420px] w-full min-w-0 items-stretch gap-3 overflow-hidden pb-2">
-      {[0, 1, 2, 3].map((i) => (
-        <div key={i} className="flex w-[85vw] shrink-0 flex-col rounded-2xl border border-slate-200 bg-slate-50 sm:w-72">
-          <div className="shrink-0 border-b border-slate-200 px-3 pb-2 pt-3">
-            <div className="h-3.5 w-28 animate-pulse rounded bg-slate-200"/>
-            <div className="mt-2 h-3 w-16 animate-pulse rounded bg-slate-200"/>
-          </div>
-          <div className="space-y-2 p-2">
-            {[0, 1, 2].map((j) => <div key={j} className="h-20 animate-pulse rounded-xl border border-slate-200 bg-white"/>)}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 /**
  * Una carga del tablero que falló: el texto del servidor tal cual y «Reintentar» (nunca columnas vacías falsas). B4 T24 (FINAL-m37):

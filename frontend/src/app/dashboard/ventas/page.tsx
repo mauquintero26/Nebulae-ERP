@@ -9,7 +9,7 @@ import { useRouter } from 'next/navigation';
 import { apiFetch } from '@/lib/api';
 import {
   SubNav, PageHeader, Drawer, Modal, Button, useAvisos, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila,
-  TableroKanban, useTableroKanban, CLASE_CHIP,
+  TableroKanban, EsqueletoTablero, useTableroKanban, CLASE_CHIP,
 } from '@/components/ui';
 import type { DatosColumnaKanban, ItemMenuFila } from '@/components/ui';
 // B4 T7: el Hub 100 % sobre el servidor (R6, C4): la tabla y el tablero estándar con el estado único de la pantalla
@@ -1247,7 +1247,8 @@ export default function VentasHub() {
               asistente={ASISTENTE_VENTAS}
             />
           ) : estado.modo === 'kanban' ? (
-            <TableroKanban
+            // B4 T24 r2 (m2, m10): mientras se lee el rol, el esqueleto (sin acciones) en lugar del tablero.
+            !accesoTablero.listo ? <EsqueletoTablero /> : <TableroKanban
               tablero={tablero}
               regla={reglaHub}
               tarjetaDe={tarjetaDeFila}

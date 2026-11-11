@@ -3054,4 +3054,13 @@ console.log('--- B4 T24 (FINAL-m10, FINAL-m31 y FINAL-m38): los tableros y las a
   assert.match(transito, /\}, \[avanzar, pendiente, accesoPec\.tracking\]\);/);
 }
 
+console.log('--- B4 T24 r2 (m2, m10): los tableros de PEC, el esqueleto mientras se lee el rol (accesoPec.listo false) ---');
+{
+  for (const ruta of ['app/dashboard/compras/page.tsx', 'app/dashboard/compras/pedidos/page.tsx', 'app/dashboard/compras/transito/page.tsx']) {
+    const f = readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8');
+    assert.match(f, /!accesoPec\.listo \? <EsqueletoTablero \/> : <TableroKanban/, `${ruta}: el esqueleto con el rol vacío`);
+    assert.match(f, /import \{[^}]*\bEsqueletoTablero\b[^}]*\} from '@\/components\/ui';/, `${ruta}: la pieza común`);
+  }
+}
+
 console.log('\nOK: test_estados_compras.mjs');

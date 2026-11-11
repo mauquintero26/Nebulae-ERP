@@ -170,8 +170,8 @@ export const TEXTO_TABLERO_SOLO_VER = 'Tu rol solo puede ver este tablero.';
  * venta), con el require_roles del PATCH de destino (backend/app/api/v1/erp_ventas.py): PATCH /solicitudes/{id} y /cotizaciones/{id},
  * ADMIN y ASESOR; PATCH /pedidos/{id}, ADMIN, ASESOR y BODEGA, pero BODEGA solo a ENTREGADO con la bodega (con otro estado, 403): ese
  * despacho es de Entregas, y en estos tableros BODEGA solo ve. Las listas son de todos los roles del ERP. `soloLectura` es el motivo
- * para TableroKanban (null si mueve). Con un rol vacío (la hidratación), nada listo, nada se mueve y soloLectura null (r1, m9: sin el
- * aviso mientras se lee el rol; el tablero espera además sus preferencias).
+ * para TableroKanban (null si mueve). Con un rol vacío (la hidratación), nada listo y soloLectura null (r1, m9: sin el aviso mientras se
+ * lee el rol); r2 (m2, m10): mientras !listo las pantallas pintan EsqueletoTablero en lugar del tablero (sin tarjetas ni acciones).
  * @param {unknown} rol
  * @returns {{listo: boolean, mover: boolean, soloLectura: string | null}}
  */
@@ -187,7 +187,8 @@ export function accesoTableroVentas(rol) {
  * MISMA lista, r1 m7: POST /pedidos «Nuevo PEC» y «Crear PEC Consolidado», POST /pedidos/{id}/recepcionar y PUT
  * /tracking-config) y `tracking` (PATCH /pedidos/{id}/tracking: las etapas de Tránsito), los dos de ADMIN y COMPRAS
  * (esAdminOCompras). GET /pedidos es de todos los roles del ERP. `soloLectura` es el motivo para los tableros de PEC (null si
- * los mueve). Con un rol vacío, nada listo y soloLectura null (r1, m9).
+ * los mueve). Con un rol vacío, nada listo y soloLectura null (r1, m9); mientras !listo las pantallas pintan EsqueletoTablero (r2, m2
+ * y m10).
  * @param {unknown} rol
  * @returns {{listo: boolean, cambiarPec: boolean, tracking: boolean, soloLectura: string | null}}
  */

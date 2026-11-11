@@ -884,6 +884,28 @@ type Seguimiento<T> = {
 };
 
 /**
+ * El esqueleto del tablero mientras faltan las preferencias, las etapas o el rol (la forma de TableroKanban: nada salta). B4 T24 r2
+ * (m2, m10): la pieza común (antes, local del CRM): las pantallas con tablero la pintan mientras !acceso.listo.
+ */
+export function EsqueletoTablero() {
+  return (
+    <div aria-busy="true" aria-label="Cargando el tablero" className="flex min-h-[420px] w-full min-w-0 items-stretch gap-3 overflow-hidden pb-2">
+      {[0, 1, 2, 3].map((i) => (
+        <div key={i} className="flex w-[85vw] shrink-0 flex-col rounded-2xl border border-slate-200 bg-slate-50 sm:w-72">
+          <div className="shrink-0 border-b border-slate-200 px-3 pb-2 pt-3">
+            <div className="h-3.5 w-28 animate-pulse rounded bg-slate-200"/>
+            <div className="mt-2 h-3 w-16 animate-pulse rounded bg-slate-200"/>
+          </div>
+          <div className="space-y-2 p-2">
+            {[0, 1, 2].map((j) => <div key={j} className="h-20 animate-pulse rounded-xl border border-slate-200 bg-white"/>)}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
  * El tablero (KANBAN-base b a g). Ver el comentario de arriba. Ocupa todo el ancho del contenido, sin una tarjeta que
  * lo encierre (U5), y se desplaza en horizontal dentro de su caja: la página no se corre (H8). Su alto es el alto libre
  * de la ventana, mínimo 420 px.

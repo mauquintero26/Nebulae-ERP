@@ -7,7 +7,7 @@ import { AlertCircle, Package, RefreshCw, Truck } from 'lucide-react';
 // B4 T16A: Mercancía en tránsito 100 % sobre el servidor (R5, C3, C4): la tabla estándar y el tablero de etapas con el
 // estado único de la pantalla, las tarjetas de /compras/stats y la franja del flujo con «Estás aquí» en En tránsito.
 import {
-  SubNav, PageHeader, useAvisos, FranjaKpis, TarjetaKpi, useEstadoKpi, TableroKanban, useTableroKanban,
+  SubNav, PageHeader, useAvisos, FranjaKpis, TarjetaKpi, useEstadoKpi, TableroKanban, EsqueletoTablero, useTableroKanban,
 } from '@/components/ui';
 import type { DatosTarjetaKanban } from '@/components/ui';
 import {
@@ -575,7 +575,8 @@ export default function TransitoPage() {
           {enKanban ? (
             /* KANBAN-logistica punto 2: una columna por etapa del envío. Arrastrar solo lleva a la etapa siguiente del mismo
                pedido y equivale a «Completar»; lo demás queda bloqueado con su motivo ANTES de soltar. */
-            <TableroKanban
+            // B4 T24 r2 (m2, m10): mientras se lee el rol, el esqueleto (sin acciones) en lugar del tablero.
+            !accesoPec.listo ? <EsqueletoTablero /> : <TableroKanban
               tablero={tablero}
               regla={reglaTablero}
               tarjetaDe={tarjetaDe}

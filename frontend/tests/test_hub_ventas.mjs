@@ -375,7 +375,7 @@ console.log('--- B4 T7 r1 (A3): Análisis es la 7.ª pestaña de la barra (pesta
   const panel = codigo.indexOf('<PanelAnalisisPerezoso');
   assert.ok(barra > 0 && panel > barra, 'el panel va debajo de la barra');
   assert.match(codigo, /\{!enAnalisis && estado\.modo === 'lista' && \(\s*<AccionesFila\.Provider/, 'la tabla, solo en Documentos');
-  assert.match(codigo, /\{enAnalisis \? \(\s*<PanelAnalisisPerezoso[\s\S]*?\/>\s*\) : estado\.modo === 'kanban' \? \(\s*<TableroKanban/, 'el panel, en lugar del tablero');
+  assert.match(codigo, /\{enAnalisis \? \(\s*<PanelAnalisisPerezoso[\s\S]*?\/>\s*\) : estado\.modo === 'kanban' \? \(\s*(?:\/\/[^\n]*\n\s*)?!accesoTablero\.listo \? <EsqueletoTablero \/> : <TableroKanban/, 'el panel, en lugar del tablero (r2, m2, D27: el esqueleto con el rol vacío)');
   // D-7: ?tab=analisis abre en Análisis y volver a Documentos limpia la URL con router.replace.
   assert.match(codigo, /useState<SeccionHub>\(enlace\.analisis \? 'analisis' : 'documentos'\)/);
   assert.match(codigo, /if \(s === 'documentos' && leerEnlaceHub\(window\.location\.search\)\.analisis\) router\.replace\(RUTA_HUB_VENTAS\);/);

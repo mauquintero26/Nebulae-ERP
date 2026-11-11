@@ -1609,6 +1609,20 @@ console.log('--- B4 T24 (F26) y r2 (C8): el tono de cada columna sale de acentoD
   assert.match(leer('lib/crm-etapas.js'), /tono: acentoDesdeClase\(s\.color, 'slate', CLAVES_TONOS_KANBAN\),/);
 }
 
+console.log('--- B4 T24 r2 (m2, m10): mientras se lee el rol (accesoTablero.listo false), el esqueleto en lugar del tablero ---');
+{
+  const { readFileSync } = await import('node:fs');
+  for (const ruta of ['app/dashboard/ventas/page.tsx', 'app/dashboard/ventas/solicitud/solicitud-client.tsx', 'app/dashboard/ventas/cotizacion/cotizacion-client.tsx', 'app/dashboard/ventas/venta/venta-client.tsx']) {
+    const f = readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8');
+    assert.match(f, /!accesoTablero\.listo \? <EsqueletoTablero \/> : <TableroKanban/, `${ruta}: el esqueleto con el rol vacío`);
+    assert.match(f, /import \{[^}]*\bEsqueletoTablero\b[^}]*\} from '@\/components\/ui';/, `${ruta}: la pieza común`);
+  }
+  // La pieza es la del tablero común (components/ui/Kanban.tsx), la misma del CRM.
+  const kanban = readFileSync(new URL('../src/components/ui/Kanban.tsx', import.meta.url), 'utf8');
+  assert.match(kanban, /export function EsqueletoTablero\(\) \{/);
+  assert.ok(!/function EsqueletoTablero\(/.test(readFileSync(new URL('../src/app/dashboard/crm/page.tsx', import.meta.url), 'utf8')), 'el CRM, sin su copia');
+}
+
 console.log('--- B4 T24 (FINAL-m31 y FINAL-m38): los tableros de Ventas solo se mueven con el rol del PATCH de destino ---');
 {
   const { readFileSync } = await import('node:fs');
