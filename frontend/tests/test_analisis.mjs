@@ -58,6 +58,16 @@ console.log('--- TEST 1b (B4 T24, F5): la paridad con backend/app/core/periodos.
   assert.deepEqual([...TOPS], tops, 'TOPS');
 }
 
+console.log('--- TEST 1c (B4 T24, F26): claseTailwindCercana — la clase de HEX_CLASE_TAILWIND más cercana a un hex ---');
+{
+  const { claseTailwindCercana } = analisis;
+  assert.equal(claseTailwindCercana('#ecfeff'), 'bg-cyan-50', 'exacta');
+  assert.equal(claseTailwindCercana('#f1f5f9'), 'bg-slate-50', 'la más cercana');
+  assert.equal(claseTailwindCercana('#f0fdf4'), 'bg-emerald-50', 'un empate: la primera de la tabla');
+  assert.equal(claseTailwindCercana(' #FEF2F2 '), 'bg-red-50');
+  for (const malo of ['', 'bg-red-50', null, '#12']) assert.equal(claseTailwindCercana(malo), null, String(malo));
+}
+
 console.log('--- TEST 2: validarPeriodo y errorPeriodo (los seis textos del servidor) ---');
 {
   // Los textos exactos de backend/app/core/periodos.py (ERRORES).

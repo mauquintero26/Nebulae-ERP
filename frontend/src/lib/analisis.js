@@ -442,6 +442,24 @@ export const HEX_CLASE_TAILWIND = congelar({
 });
 
 /**
+ * B4 T24 (F26): la clase de HEX_CLASE_TAILWIND más cercana a un '#hex' (distanciaColor; en un empate, la primera de la tabla), o null
+ * si no es un hex. Así un color guardado como hex (ESTADOS_SC) se lleva a una clase y a su acento con una regla, no con una tabla.
+ * @param {unknown} hex
+ * @returns {string | null}
+ */
+export function claseTailwindCercana(hex) {
+  const texto = typeof hex === 'string' ? hex.trim() : '';
+  if (!lab(texto)) return null;
+  let mejor = null;
+  let distancia = Infinity;
+  for (const [clase, valor] of Object.entries(HEX_CLASE_TAILWIND)) {
+    const d = distanciaColor(texto, valor);
+    if (d < distancia) { mejor = clase; distancia = d; }
+  }
+  return mejor;
+}
+
+/**
  * El hex de una clase de Tailwind de HEX_CLASE_TAILWIND ('bg-blue-500' -> '#3b82f6'); una desconocida da '#94a3b8'.
  * @param {unknown} clase
  * @returns {string}

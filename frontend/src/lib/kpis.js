@@ -305,15 +305,17 @@ export function textoContador(valor, estado) {
 
 /**
  * El color de tarjeta de una clase de Tailwind ('bg-blue-500' -> 'blue', también text-, border-, ring-, from- y
- * to-). Un color que no es de COLORES_KPI, un '#hex' o nada dan 'indigo'.
+ * to-). Un color que no es de COLORES_KPI, un '#hex' o nada dan `respaldo` ('indigo'). B4 T24 (F26): la única regla también para el
+ * tono de las columnas de los tableros (con respaldo 'slate'): sin copias de «la familia de una clase».
  * @param {unknown} clase
+ * @param {ColorKpi} [respaldo]
  * @returns {ColorKpi}
  */
-export function acentoDesdeClase(clase) {
+export function acentoDesdeClase(clase, respaldo = 'indigo') {
   const texto = typeof clase === 'string' ? clase.trim() : '';
   const m = /^(?:bg|text|border|ring|from|to)-([a-z]+)-\d{2,3}$/.exec(texto);
   const color = m ? m[1] : texto;
-  return COLORES_KPI.includes(/** @type {ColorKpi} */ (color)) ? /** @type {ColorKpi} */ (color) : 'indigo';
+  return COLORES_KPI.includes(/** @type {ColorKpi} */ (color)) ? /** @type {ColorKpi} */ (color) : respaldo;
 }
 
 // ─── lo que usan TarjetaKpi, Contador y useEstadoKpi (T4A) ──────────────────────

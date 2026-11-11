@@ -367,7 +367,8 @@ console.log('--- TEST 10: COLUMNAS_PEDIDO: una por grupo y cada estado en una so
   assert.equal(de('EN_TRANSITO'), 'en_proceso');
   assert.equal(de('DEVUELTO_TOTAL'), 'cancelado');
   assert.deepEqual(agruparEnColumnas(codigos.map((estado) => ({ estado })), COLUMNAS_PEDIDO)[SIN_COLUMNA], []);
-  assert.deepEqual(COLUMNAS_PEDIDO.map((c) => c.tono), ['orange', 'purple', 'teal', 'emerald', 'green', 'red'],
+  // B4 T24 (F26, D27): acentoDesdeClase (una sola función) con respaldo slate: el green de Facturado no es de COLORES_KPI.
+  assert.deepEqual(COLUMNAS_PEDIDO.map((c) => c.tono), ['orange', 'purple', 'teal', 'emerald', 'slate', 'red'],
     'el color de ESTADOS_PEDIDO del estado clave');
 }
 
@@ -1565,6 +1566,27 @@ console.log('--- B4 T23A TEST S: el cableado del tablero y del filtro de los ped
   assert.match(eliminar, /if \(!\(await confirmar\(\{ titulo: 'Eliminar producto', mensaje: '¿Eliminar este producto\?', efectos: \[prod\.nombre\], textoConfirmar: 'Eliminar', peligro: true \}\)\)\) return;/);
   assert.ok(eliminar.indexOf('confirmar(') < eliminar.indexOf("method: 'DELETE'"), 'primero confirma');
   assert.ok(!/Â|Ã|â€/.test(eliminar), 'sin mojibake en lo que se tocó');
+}
+
+console.log('--- B4 T24 (F26): el tono de cada columna de los tableros es de COLORES_KPI (acentoDesdeClase, sin copias de «familia») ---');
+{
+  const { readFileSync } = await import('node:fs');
+  const { COLORES_KPI } = await import('../src/lib/kpis.js');
+  const kv = await import('../src/lib/kanban-ventas.js');
+  const { COLUMNAS_ENTREGA } = await import('../src/lib/entregas.js');
+  const { columnasDesdeEtapas } = await import('../src/lib/crm-etapas.js');
+  const crm = columnasDesdeEtapas([{ id: 1, name: 'a', color: 'bg-cyan-500' }, { id: 2, name: 'b', color: 'bg-pink-500' },
+    { id: 3, name: 'c', color: 'bg-blue-500' }, { id: 4, name: 'd', color: '#123456' }]);
+  assert.deepEqual(crm.map((c) => c.tono), ['slate', 'slate', 'blue', 'slate'], 'el CRM: lo que no es de COLORES_KPI, slate');
+  for (const [nombre, columnas] of [['COT', kv.COLUMNAS_COT], ['Hub', kv.COLUMNAS_HUB], ['PVEN', kv.COLUMNAS_PEDIDO], ['SC', kv.COLUMNAS_SC],
+    ['Entregas', COLUMNAS_ENTREGA]]) {
+    for (const c of columnas) assert.ok(COLORES_KPI.includes(c.tono), `${nombre} ${c.clave}: ${c.tono}`);
+  }
+  // SC: el tono sale del hex de ESTADOS_SC (la clase más cercana, claseTailwindCercana), no de una tabla a mano.
+  assert.deepEqual(kv.COLUMNAS_SC.map((c) => c.tono), ['slate', 'slate', 'amber', 'emerald', 'red']);
+  assert.deepEqual(kv.COLUMNAS_COT.map((c) => c.tono), ['slate', 'blue', 'emerald', 'slate', 'red']);
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8');
+  for (const ruta of ['lib/kanban-ventas.js', 'lib/crm-etapas.js']) assert.ok(!/const familia\b|TONO_SC\b/.test(leer(ruta)), `${ruta}: sin copia`);
 }
 
 console.log('--- B4 T24 (FINAL-m31 y FINAL-m38): los tableros de Ventas solo se mueven con el rol del PATCH de destino ---');

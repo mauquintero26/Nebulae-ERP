@@ -58,7 +58,8 @@ import {
   avisoCambiosCliente, etiquetaChipCambios, RUTA_LISTA_SOLICITUDES, RUTA_LISTA_COTIZACIONES,
 } from './cambios-cliente.js';
 import { ACCIONES_BLOQUE3 } from './acciones-bloque3.js';
-import { enlaceDocumento } from './analisis.js';
+import { claseTailwindCercana, enlaceDocumento } from './analisis.js';
+import { acentoDesdeClase } from './kpis.js';
 import { etiquetaTipoSolicitud } from './etiquetas-ventas.js';
 import { redondearPeso, formatoPesos } from './pesos.js';
 import { queryListado } from './tabla.js';
@@ -189,8 +190,8 @@ function exigirDestino(claves, destino, tablero) {
   if (!claves.includes(destino)) throw new Error(`Columna del tablero ${tablero} desconocida: ${String(destino)}`);
 }
 
-/** La familia de color de una clase de Tailwind ('bg-orange-100' -> 'orange'). */
-const familia = (clase) => /^bg-([a-z]+)-\d+$/.exec(String(clase ?? ''))?.[1] ?? 'slate';
+/** B4 T24 (F26): el tono de una columna, de la clase de su estado: acentoDesdeClase de kpis.js (lo que no es de COLORES_KPI, slate). */
+const tonoDeClase = (clase) => acentoDesdeClase(clase, 'slate');
 
 /** El pedido vigente de una cotización, con el texto del bloqueo y el enlace al pedido. */
 function bloqueoPorPedido(cot, returnTo) {
@@ -628,7 +629,7 @@ export const COLUMNAS_PEDIDO = /** @type {any} */ (definirColumnas(GRUPOS_PEDIDO
   return {
     clave,
     titulo: info.label,
-    tono: familia(info.clases.bg),
+    tono: tonoDeClase(info.clases.bg),
     estados: Object.keys(ESTADOS_PEDIDO).filter((e) => grupoPedido(e) === grupo),
     cerrada: clave === 'facturado' || clave === 'cancelado',
     estadoDestino: DESTINO_COLUMNA_PEDIDO[clave],
@@ -673,7 +674,7 @@ export function reglaSoltarPedido(pedido, origen, destino) {
 
 /** Una columna de Cotizaciones con el título de su estado (o el que se le da) y el tono de su pastilla. */
 function columnaCot(clave, estados, titulo = infoEstadoCotizacion(estados[0]).label, cerrada = false) {
-  return { clave, titulo, tono: familia(infoEstadoCotizacion(estados[0]).clases.bg), estados, cerrada };
+  return { clave, titulo, tono: tonoDeClase(infoEstadoCotizacion(estados[0]).clases.bg), estados, cerrada };
 }
 
 /**
@@ -745,8 +746,8 @@ export function reglaSoltarCotizacion(cot, origen, destino, { puedeEnviar = fals
 
 /** La clave de cada paso de PASOS_SC en el tablero. */
 const CLAVE_PASO_SC = congelar({ BORRADOR: 'nueva', ASIGNADA: 'asignada', PENDIENTE_CONFIRMACION: 'pendiente', CONFIRMADA: 'confirmada' });
-/** El tono de cada columna: la familia de Tailwind de los hex de ESTADOS_SC (#64748b slate, #0e7490 cyan, …). */
-const TONO_SC = congelar({ BORRADOR: 'slate', ASIGNADA: 'cyan', PENDIENTE_CONFIRMACION: 'amber', CONFIRMADA: 'emerald', CANCELADA: 'red' });
+/** B4 T24 (F26): el tono de cada columna, del fondo hex de ESTADOS_SC: la clase más cercana (claseTailwindCercana) y su acento. */
+const tonoSc = (estado) => tonoDeClase(claseTailwindCercana(ESTADOS_SC[estado]?.bg));
 
 /**
  * El tablero de Solicitudes, con PASOS_SC de estados-solicitud.js: Nueva (BORRADOR) · Asignada · Pendiente por
@@ -759,11 +760,11 @@ export const COLUMNAS_SC = /** @type {any} */ (definirColumnas([
   ...PASOS_SC.map((p) => ({
     clave: CLAVE_PASO_SC[p.clave],
     titulo: p.label,
-    tono: TONO_SC[p.clave],
+    tono: tonoSc(p.clave),
     estados: p.clave === 'CONFIRMADA' ? [...SC_CONFIRMADAS] : [p.clave],
     ayuda: p.ayuda,
   })),
-  { clave: 'cancelada', titulo: ESTADOS_SC.CANCELADA.label, tono: TONO_SC.CANCELADA, estados: ['CANCELADA'], cerrada: true },
+  { clave: 'cancelada', titulo: ESTADOS_SC.CANCELADA.label, tono: tonoSc('CANCELADA'), estados: ['CANCELADA'], cerrada: true },
 ]));
 
 const CLAVES_SC = congelar(COLUMNAS_SC.map((c) => c.clave));

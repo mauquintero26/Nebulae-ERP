@@ -193,6 +193,11 @@ console.log('--- TEST 9: acentoDesdeClase (KPI-otros) ---');
   assert.equal(acentoDesdeClase(null), 'indigo');
   assert.equal(acentoDesdeClase('amber'), 'amber', 'un acento ya resuelto se queda');
   assert.deepEqual(COLORES_KPI, ['amber', 'rose', 'orange', 'indigo', 'purple', 'emerald', 'blue', 'teal', 'red', 'slate']);
+  // B4 T24 (F26): el respaldo es un parámetro (aditivo; por defecto 'indigo'): los tableros piden 'slate'.
+  assert.equal(acentoDesdeClase('bg-cyan-500', 'slate'), 'slate');
+  assert.equal(acentoDesdeClase('bg-green-100', 'slate'), 'slate');
+  assert.equal(acentoDesdeClase('bg-orange-100', 'slate'), 'orange');
+  assert.equal(acentoDesdeClase(undefined, 'slate'), 'slate');
 }
 
 console.log('--- TEST 10: CATALOGO_KPI, etiquetaKpi e ICONOS_KPI ---');
