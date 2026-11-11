@@ -21,6 +21,7 @@ SOLO_DESPACHO = "Bodega solo puede marcar el pedido como despachado."
 ELIGE_BODEGA = "Elige la bodega de salida."
 BODEGA_NO_EXISTE = "La bodega elegida no existe."
 FALTA_BODEGA = "Debes indicar la bodega de despacho para descontar el inventario de este pedido"
+NO_ESTA_LISTA = "La mercancía todavía no está lista para entrega."   # B4 T24 (FINAL-m35), el texto de Entregas
 
 
 def _auth(token):
@@ -107,13 +108,14 @@ def test_bodega_despacha_con_la_bodega_de_salida(app_client, db, bodega_token, s
 
 def test_bodega_despacha_sin_lineas_de_catalogo_y_desde_entregado_parcialmente(app_client, db, bodega_token):
     """La bodega es obligatoria para BODEGA aunque el pedido no tenga lineas de catalogo (no mueve inventario). Desde
-    PARCIALMENTE_ENTREGADO tambien se puede (TRANSICIONES_VEN_PATCH). warehouse_id puede llegar como texto."""
+    PARCIALMENTE_ENTREGADO tambien se puede (TRANSICIONES_VEN_PATCH). warehouse_id puede llegar como texto.
+    B4 T24 (FINAL-m35): solo desde los estados de la pestaña «Listo Entrega» (EN_PROCESO ya no: ver abajo)."""
     from app.models.inventory import Warehouse
     bodega = Warehouse(name=f"Bodega Sur {uuid.uuid4().hex[:6]}", location_type="Central")
     db.add(bodega)
     db.commit()
     for estado, valor in (("LISTO_ENTREGA", bodega.id), ("PARCIALMENTE_ENTREGADO", str(bodega.id)),
-                          ("DISPONIBLE", bodega.id), ("EN_PROCESO", bodega.id)):
+                          ("DISPONIBLE", bodega.id), ("PENDIENTE_SALDO", bodega.id), ("LISTO_PARA_ENTREGA", bodega.id)):
         ven = _ven(db, estado=estado, productos=[{"product_name": "Instalación", "qty": 1}])
         resp = _patch(app_client, bodega_token, ven.id, {"estado": "ENTREGADO", "warehouse_id": valor})
         assert resp.status_code == 200, (estado, resp.text)
@@ -155,6 +157,32 @@ def test_bodega_reenviar_entregado_no_hace_nada(app_client, db, bodega_token):
 
 
 # ─── Lo que Bodega NO puede hacer ────────────────────────────────────────────────────────────────────────────────────
+
+def test_bodega_no_despacha_si_la_mercancia_no_esta_lista(app_client, db, bodega_token, admin_token, sku, contador_sql):
+    """B4 T24 (FINAL-m35): BODEGA solo pone ENTREGADO desde los estados que ofrece la pantalla de despacho (la pestaña
+    «Listo Entrega»): desde PENDIENTE_PAGO, PENDIENTE_COMPRA, EN_PROCESO o EN_TRANSITO, 422 con el texto de Entregas, sin
+    descontar inventario ni escribir nada (0 commits). Sin la regla del saldo (ruling de T24): uno con saldo por cobrar en
+    Listo Entrega se despacha. ADMIN sigue igual (RP23)."""
+    bodega, nivel = _bodega_con_stock(db, sku, 10)
+    for estado in ("PENDIENTE_PAGO", "PENDIENTE_COMPRA", "EN_PROCESO", "EN_TRANSITO"):
+        ven = _ven(db, estado=estado, productos=[{"product_name": "Taladro", "qty": 3, "sku_id": sku.id}])
+        with contador_sql.ventana() as v:
+            resp = _patch(app_client, bodega_token, ven.id, {"estado": "ENTREGADO", "warehouse_id": bodega.id})
+        assert (resp.status_code, resp.json()) == (422, {"detail": NO_ESTA_LISTA}), estado
+        assert v.commits == 0, estado
+        db.expire_all()
+        db.refresh(ven)
+        db.refresh(nivel)
+        assert (ven.estado, nivel.quantity) == (estado, Decimal("10")), estado
+        assert _logs(db, ven.id) == [] and _operaciones(db, ven.id) == [], estado
+    con_saldo = _ven(db, estado="LISTO_ENTREGA", total_cop=1000, saldo_cop=400,
+                     productos=[{"product_name": "Taladro", "qty": 3, "sku_id": sku.id}])
+    resp = _patch(app_client, bodega_token, con_saldo.id, {"estado": "ENTREGADO", "warehouse_id": bodega.id})
+    assert resp.status_code == 200, resp.text
+    en_proceso = _ven(db, estado="EN_PROCESO", productos=[{"product_name": "Taladro", "qty": 1, "sku_id": sku.id}])
+    resp = _patch(app_client, admin_token, en_proceso.id, {"estado": "ENTREGADO", "warehouse_id": bodega.id})
+    assert resp.status_code == 200, resp.text
+
 
 def test_bodega_sin_bodega_valida_da_422_antes_de_leer_el_pedido(app_client, db, bodega_token, sku, contador_sql):
     """RP23: sin warehouse_id, o con una bodega que no existe, 422 «Elige la bodega de salida.», sin leer el pedido ni

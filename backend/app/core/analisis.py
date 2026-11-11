@@ -65,8 +65,9 @@ CLAVES_FILTROS = ("foco", "top", "producto", "bodega")
 # ─── validaciones y números ──────────────────────────────────────────────────────────────────────────────────
 
 def validar_top(top) -> int:
-    """El tamaño del ranking: 5, 10 o 25, como int o como texto de dígitos ('10' -> 10; R21 permite declarar top como
-    str). Otro valor (bool, None, un float, otro texto) -> ValueError('El ranking solo puede mostrar 5, 10 o 25.')."""
+    """El tamaño del ranking: 5, 10 o 25, como int o como uno de los textos '5', '10' o '25' (recortado; '05' no vale; R21
+    permite declarar top como str). Otro valor (bool, None, un float, otro texto) -> ValueError('El ranking solo puede
+    mostrar 5, 10 o 25.')."""
     if isinstance(top, str):  # se compara el texto antes de convertir: '1' × 5000 no llega a int()
         texto = top.strip()
         top = int(texto) if texto in {str(t) for t in TOPS} else None
@@ -124,7 +125,9 @@ def kpi(clave, etiqueta, valor, anterior=None, formato="entero", mejor="sube", e
 def segmentos(filas, maximo: int = MAX_SEGMENTOS) -> list[dict]:
     """Los segmentos de una dona. filas = [(clave, etiqueta, valor) o (clave, etiqueta, valor, color)]. Quita los ceros,
     ordena de mayor a menor, deja `maximo` y suma el resto en {clave: '_otros', etiqueta: 'Otros'}.
-    pct = round(valor / total × 100, 1)."""
+    pct = round(valor / total × 100, 1).
+    B4 T24 (FINAL-m5): con empates, por etiqueta y luego por clave: las filas suelen salir de un GROUP BY, que no garantiza
+    orden, y el orden (y qué segmentos caen en «Otros») cambiaba con el plan de PostgreSQL."""
     limpias = []
     for fila in filas:
         clave, etiqueta, valor = fila[0], fila[1], _numero(fila[2])
@@ -133,7 +136,7 @@ def segmentos(filas, maximo: int = MAX_SEGMENTOS) -> list[dict]:
             limpias.append((clave, etiqueta, valor, color))
     if not limpias:
         return []
-    limpias.sort(key=lambda f: f[2], reverse=True)
+    limpias.sort(key=lambda f: (-f[2], str(f[1]), str(f[0])))
     total = sum(f[2] for f in limpias)
     if len(limpias) > maximo:
         resto = sum(f[2] for f in limpias[maximo:])

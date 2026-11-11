@@ -205,6 +205,52 @@ def test_segmentos_con_otros():
     assert segmentos([("a", "A", 1), ("b", "B", 3)])[0]["pct"] == 75.0
 
 
+def test_las_constantes_viven_en_su_fuente():
+    """B4 T24 (B11, B20): ESTADO_PAGO_CONFIRMADO vive en core/ventas_dinero.py (analisis_ventas la importa, no la copia) y
+    la constante VENTANAS de analisis_compras, que nadie usaba, ya no está."""
+    from app.core import analisis_compras, analisis_ventas, ventas_dinero
+    assert ventas_dinero.ESTADO_PAGO_CONFIRMADO == "CONFIRMADO"
+    assert analisis_ventas.ESTADOS_PAGO_RECIBIDO == (ventas_dinero.ESTADO_PAGO_CONFIRMADO,
+                                                     ventas_dinero.ESTADO_PAGO_TRASLADADO)
+    assert "ESTADO_PAGO_CONFIRMADO =" not in open(analisis_ventas.__file__, encoding="utf-8").read()
+    assert not hasattr(analisis_compras, "VENTANAS")
+
+
+def test_segmentos_con_empates_ordenan_por_etiqueta_y_clave():
+    """B4 T24 (FINAL-m5): con empates el orden (y qué segmentos caen en «Otros») ya no depende del orden en que llegan
+    las filas (un GROUP BY no lo garantiza): por valor, luego por etiqueta y luego por clave."""
+    from app.core.analisis import segmentos
+    filas = [(f"k{c}", f"Estado {c}", 1) for c in "hgfedcba"] + [("z2", "Mismo", 1), ("z1", "Mismo", 1)]
+    for orden in (filas, list(reversed(filas))):
+        seg = segmentos(orden)
+        assert [s["clave"] for s in seg] == ["ka", "kb", "kc", "kd", "ke", "kf", "_otros"]
+        assert seg[-1]["valor"] == 4   # g, h y los dos «Mismo»
+    assert [s["clave"] for s in segmentos([("z2", "Mismo", 5), ("z1", "Mismo", 5), ("a", "A", 7)])] == ["a", "z1", "z2"]
+
+
+def test_top_clientes_desempata_por_la_ficha_del_cliente(db):
+    """B4 T24 (FINAL-m5): dos clientes distintos con el mismo nombre y el mismo valor: el de menor customer_id primero
+    (antes el orden lo daba el plan). Se distinguen por la cantidad de pedidos."""
+    import uuid
+    from sqlalchemy import func
+    from app.core.analisis_ventas import _top_clientes
+    from app.models.customers import Customer
+    from app.models.erp_documents import SaleOrder
+    s = uuid.uuid4().hex[:8].upper()
+    uno, dos = Customer(first_name="Mismo", last_name=s), Customer(first_name="Mismo", last_name=s)
+    db.add_all([uno, dos])
+    db.commit()
+    nombre = f"Mismo {s}"
+    db.add_all([SaleOrder(numero=f"PV-M5{s}{i}", customer_id=cid, customer_name=nombre, total_cop=total,
+                          estado="EN_PROCESO") for i, (cid, total) in enumerate(((dos.id, 50), (dos.id, 50),
+                                                                                  (uno.id, 100)))])
+    db.commit()
+    q = db.query(SaleOrder).filter(SaleOrder.customer_name == nombre)
+    valor = func.coalesce(func.sum(SaleOrder.total_cop), 0)
+    assert _top_clientes(q, SaleOrder, valor, 5) == [(nombre, 100, 1), (nombre, 100, 2)]
+    assert _top_clientes(q, SaleOrder, valor, 1) == [(nombre, 100, 1)]
+
+
 # ─── 11) respuesta: claves exactas ───────────────────────────────────────────────────────────────────────────
 
 def _bloques():

@@ -35,6 +35,7 @@ TIPOS_PAGO_INGRESO = ("ANTICIPO", "ABONO", "PAGO_TOTAL", "PAGO_SALDO")
 METODO_PAGO_TRASLADO = "TRASLADO"          # pago del pedido nuevo que trae el saldo a favor
 METODO_PAGO_SALDO_A_FAVOR = "SALDO_A_FAVOR"  # lo que queda a favor en el pedido cancelado si no cupo todo
 ESTADO_PAGO_TRASLADADO = "TRASLADADO"      # pago de origen cuyo dinero ya vive en otro pedido
+ESTADO_PAGO_CONFIRMADO = "CONFIRMADO"      # B4 T24 (B11): pago verificado (antes, una copia local en analisis_ventas)
 # Pago automatico que creaba la conversion antes de N1, sin que nadie lo verificara. NO es saldo a favor: no se
 # traslada ni descuenta lo que hay que verificar (los resuelve T14 con el usuario).
 METODO_PAGO_SIN_VERIFICAR = "CONVERSION_COTIZACION"

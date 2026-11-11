@@ -204,6 +204,8 @@ def en_rango(col, ini: datetime, fin: datetime):
       instantes: col >= el día de `ini` (hacia abajo) AND col < el día de `fin`, redondeado hacia ARRIBA si `fin` no es
       la medianoche de Colombia (r2: un fin a las 10:00 de hoy deja adentro el día de hoy). Con los bordes de un Periodo
       `fin` es el inicio del día siguiente, así que el último día del período queda adentro (r1).
+      B4 T24 (B1): con un corte a media jornada, dos ventanas contiguas cuentan el día del corte en las dos: para columnas
+      Date use bordes de medianoche (los de un Periodo).
     - Columna timestamptz: los bordes se mandan como UTC con zona, para no depender de la zona de la sesión.
     - Columna DateTime sin zona (UTC ingenuo): tal cual."""
     tipo = getattr(col, "type", None)

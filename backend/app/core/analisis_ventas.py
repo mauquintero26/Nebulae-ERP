@@ -43,8 +43,8 @@ from app.core.fechas import iso_z
 from app.core.listados import texto_busqueda
 from app.core.periodos import Periodo, contar_en, en_rango, sumar_en
 from app.core.textos_actividad import TIPOS_PAGO, etiqueta_estado, etiqueta_tipo_solicitud
-from app.core.ventas_dinero import (ESTADO_PAGO_TRASLADADO, METODO_PAGO_SALDO_A_FAVOR, METODO_PAGO_SIN_VERIFICAR,
-                                    METODO_PAGO_TRASLADO, TIPOS_PAGO_INGRESO)
+from app.core.ventas_dinero import (ESTADO_PAGO_CONFIRMADO, ESTADO_PAGO_TRASLADADO, METODO_PAGO_SALDO_A_FAVOR,
+                                    METODO_PAGO_SIN_VERIFICAR, METODO_PAGO_TRASLADO, TIPOS_PAGO_INGRESO)
 from app.models.catalog import Category, Product, ProductSKU
 from app.models.erp_documents import CustomerRequest, SaleOrder, SalesQuotation
 from app.models.fase1b import SaleOrderLineErp
@@ -64,7 +64,6 @@ AVISO_SIN_IVA = "Por categoría se suma el valor de los productos sin IVA; el to
 
 MAX_MOVIMIENTOS = 8    # MAX_MOVIMIENTOS de lib/analisis.js
 MAX_ASESORES = 8       # las barras «Solicitudes por asesor»: 8 y el resto en «Otros»
-ESTADO_PAGO_CONFIRMADO = "CONFIRMADO"   # core/ventas_dinero.py no tiene esta constante (solo ESTADO_PAGO_TRASLADADO)
 # r1 (I1, ruling de fixes-6C-r1, gana sobre la letra de RP60): un pago recibido está CONFIRMADO o TRASLADADO. Al reconvertir
 # la COT de un pedido cancelado, _trasladar_saldos_a_favor (erp_ventas_fase4) pasa los pagos de origen a TRASLADADO y crea
 # en el pedido nuevo un pago con método TRASLADO: el dinero entró una vez, con el pago de origen y en su fecha.
@@ -306,11 +305,14 @@ def _movimiento(tipo, numero, titulo, detalle, fecha, monto, signo, estado_etiqu
 def _top_clientes(q, modelo, valor, top) -> list:
     """[(nombre, valor, cantidad)] de los `top` clientes de `q`, agrupados por COALESCE(customer_id, customer_name): la
     ficha del cliente si la tiene y, si no, el nombre escrito en el documento. Una consulta con GROUP BY, ORDER BY y
-    LIMIT; desempate por nombre."""
+    LIMIT; desempate por nombre y, al final (B4 T24, FINAL-m5), por la clave del grupo (customer_id, sin ficha al
+    final): dos clientes distintos con el mismo nombre y el mismo valor ya no cambian de lugar entre consultas."""
     sin_ficha = case((modelo.customer_id.is_(None), modelo.customer_name))
     nombre = func.max(modelo.customer_name)
     filas = (q.order_by(None).with_entities(nombre, valor, func.count(modelo.id))
-             .group_by(modelo.customer_id, sin_ficha).order_by(valor.desc(), nombre.asc()).limit(top).all())
+             .group_by(modelo.customer_id, sin_ficha)
+             .order_by(valor.desc(), nombre.asc(), modelo.customer_id.asc().nulls_last(), sin_ficha.asc())
+             .limit(top).all())
     return [(n, v, int(c)) for n, v, c in filas]
 
 
@@ -436,6 +438,12 @@ def _foco_hub(db: Session, periodo: Periodo, top, producto) -> dict:
     }
 
 
+# B4 T24 (B13): desde T6C r1 el pago de origen (TRASLADADO) sí cuenta en su fecha; lo que no se cuenta otra vez es
+# el saldo que pasa al pedido nuevo (el pago de método TRASLADO).
+AYUDA_RECAUDADO = ("Pagos recibidos en el período, cada uno en su fecha; el saldo que pasa de un pedido cancelado a "
+                   "otro no se cuenta otra vez.")
+
+
 def _recaudado(db: Session, periodo: Periodo, like) -> dict:
     """{actual, anterior}: Σ monto de los pagos recibidos de cada ventana (por su fecha), en UNA consulta: el rango de
     pagos_recibidos_q va del primer día del anterior al último del actual (el anterior siempre va antes) y cada suma
@@ -485,7 +493,7 @@ def _foco_pven(db: Session, periodo: Periodo, top, producto) -> dict:
         kpi("pedidos_nuevos", "Pedidos", ped, ped_ant, "entero",
             ayuda="Pedidos creados en el período, sin cancelados ni devueltos."),
         kpi("recaudado", "Recaudado", recaudado["actual"], recaudado["anterior"], "pesos",
-            ayuda="Pagos recibidos en el período; el saldo trasladado de un pedido cancelado no cuenta."),
+            ayuda=AYUDA_RECAUDADO),
         kpi("pven_saldo_por_cobrar", "Saldo por cobrar", saldo, None, "pesos", "baja", es_foto=True,
             ayuda="Hoy: lo que deben los pedidos sin cancelados ni devueltos."),
     ]

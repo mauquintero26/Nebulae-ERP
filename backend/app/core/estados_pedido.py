@@ -26,7 +26,7 @@ ESTADOS_VEN_MANUALES = ("PENDIENTE_COMPRA", "EN_PROCESO", "EN_TRANSITO", "LISTO_
 
 # Pedidos cuyo dinero ya no cuenta como venta ni como cuenta por cobrar (H47): el cancelado (su saldo queda guardado,
 # no se suma) y el devuelto por completo (decision del usuario: tampoco suma). Los resumenes de dinero de Ventas
-# (lista de pedidos, /ventas/stats, /ventas/analytics) los excluyen con esta constante.
+# (lista de pedidos, /ventas/stats, /ventas/analisis) los excluyen con esta constante.
 ESTADOS_VEN_SIN_DINERO = ("CANCELADO", "DEVUELTO_TOTAL")
 
 # B4 T1C (KPI-ventas 1, FLUJO-ventas-datos): estados terminales, que no cuentan como pedidos en curso. Espejo de

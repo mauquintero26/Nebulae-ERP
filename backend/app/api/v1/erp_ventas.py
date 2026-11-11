@@ -4997,6 +4997,11 @@ def _motivo_con_credito(motivo, credito):
 _SOLO_DESPACHO_BODEGA = "Bodega solo puede marcar el pedido como despachado."
 _ELIGE_LA_BODEGA = "Elige la bodega de salida."
 _LA_BODEGA_NO_EXISTE = "La bodega elegida no existe."
+# B4 T24 (FINAL-m35): BODEGA solo despacha desde los estados que ofrece la pantalla de despacho: los de la pestaña
+# «Listo Entrega» (LISTO_ENTREGA, DISPONIBLE, PENDIENTE_SALDO, LISTO_PARA_ENTREGA y PARCIALMENTE_ENTREGADO). Sin la regla
+# del saldo: los clientes con crédito (B3.1) reciben con saldo pendiente y esa regla no está decidida (ruling de T24).
+_ESTADOS_DESDE_LOS_QUE_BODEGA_DESPACHA = frozenset(estados_de_vista(VISTA_DE_GRUPO["Listo Entrega"]))
+_NO_ESTA_LISTA = "La mercancía todavía no está lista para entrega."
 # Lo que BODEGA puede mandar: el estado, la bodega y updated_by, que se ignora (Entregas lo manda hoy; RP23).
 _CLAVES_DEL_DESPACHO_BODEGA = frozenset({"estado", "warehouse_id", "updated_by"})
 _MAX_ID_BODEGA = 2 ** 31 - 1   # warehouses.id es Integer: un id mas grande no existe (y no llega al SQL)
@@ -5065,6 +5070,11 @@ def update_pedido(ven_id: int, body: dict,
     fecha_vieja = v.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
     antes_log = cambios_documento.tomar_foto(v, "VEN")
     _validar_transicion_pedido(v, body.get("estado"))
+    if (bodega_de_salida is not None and v.estado != "ENTREGADO"
+            and v.estado not in _ESTADOS_DESDE_LOS_QUE_BODEGA_DESPACHA):
+        # B4 T24 (FINAL-m35): con el pedido ya bloqueado y antes de descontar el inventario; reenviar ENTREGADO sigue sin
+        # hacer nada (Bloque 1). ADMIN y ASESOR no cambian (RP23).
+        raise HTTPException(422, _NO_ESTA_LISTA)
     cancela = body.get("estado") == "CANCELADO" and old_estado != "CANCELADO"
     if cancela:
         # N2/H46 (R12: 422 en todas las rutas): cancelar exige el motivo.
@@ -5463,7 +5473,13 @@ def ventas_analisis(
     convierten en 422: llegan como 500."""
     # r1 (m5): un foco con un caracter de control da el 422 de D46 (MENSAJE_CONTROL, _sin_caracteres_de_control de T6B);
     # si no, el de ERROR_FOCO repite el valor recortado a 40 caracteres.
-    foco = _parametro_de_lista(_sin_caracteres_de_control(foco), av.FOCOS, av.ERROR_FOCO) or av.FOCO_POR_DEFECTO
+    # B4 T24 (B12): _parametro_de_lista recibe el texto ya normalizado por texto_busqueda: un tabulador o un salto de
+    # línea en medio sale como un espacio en el 422 («h ub»), no crudo.
+    try:
+        foco_normalizado = texto_busqueda(foco, None)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    foco = _parametro_de_lista(foco_normalizado, av.FOCOS, av.ERROR_FOCO) or av.FOCO_POR_DEFECTO
     try:
         p = resolver_periodo(periodo, desde, hasta)
         top = validar_top(top if isinstance(top, str) and top.strip() else av.TOP_POR_DEFECTO)

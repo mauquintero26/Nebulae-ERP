@@ -456,6 +456,9 @@ def test_foco_pven_recaudado(app_client, db, admin_token):
     assert [x["etiqueta"] for x in data["kpis"]] == ["Vendido", "Pedidos", "Recaudado", "Saldo por cobrar"]
     assert (k["recaudado"]["valor"], k["recaudado"]["anterior"], k["recaudado"]["formato"]) == (300_000, 40_000,
                                                                                                  "pesos")
+    # B4 T24 (B13): la ayuda dice lo que hace desde T6C r1 (el pago de origen cuenta en su fecha; el traslado no otra vez).
+    assert k["recaudado"]["ayuda"] == ("Pagos recibidos en el período, cada uno en su fecha; el saldo que pasa de un "
+                                       "pedido cancelado a otro no se cuenta otra vez.")
     saldo = k["pven_saldo_por_cobrar"]
     assert (saldo["valor"], saldo["anterior"], saldo["variacion_pct"], saldo["es_foto"], saldo["mejor"]) == (
         400_000, None, None, True, "baja")
@@ -621,6 +624,9 @@ def test_errores_422(app_client, admin_token):
         ({**VENTANA, "foco": "hub\x00"}, "La búsqueda no puede llevar caracteres de control."),
         ({**VENTANA, "foco": "\x07"}, "La búsqueda no puede llevar caracteres de control."),
         ({**VENTANA, "foco": "z" * 2000}, f"El foco «{'z' * 40}» no existe: usa hub, sc, cot o pven."),
+        # B4 T24 (B12): un tabulador o un salto de línea en medio sale normalizado (un espacio), no crudo.
+        ({**VENTANA, "foco": "h\tub"}, "El foco «h ub» no existe: usa hub, sc, cot o pven."),
+        ({**VENTANA, "foco": "s\nc"}, "El foco «s c» no existe: usa hub, sc, cot o pven."),
     ]
     for params, texto in casos:
         assert _error(app_client, admin_token, params) == texto, params

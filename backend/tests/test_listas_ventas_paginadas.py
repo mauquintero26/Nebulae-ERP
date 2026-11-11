@@ -574,6 +574,20 @@ def test_pven_atencion_semaforo_y_filas(app_client, db, admin_token):
     assert ids(orden="estado") == [nuevo.id, atrasado.id, listo.id, entregado.id]
     for orden in ("numero", "-numero", "cliente", "entrega", "-entrega", "creado", "sin_movimiento"):
         assert len(ids(orden=orden)) == 4, orden
+    # B4 T24 (B6): con el join de rango_de_lista (orden=atencion o semaforo=atrasados) se pagina con offset > 0 y el
+    # resumen de H47 sigue al filtro, no a la pagina; y una COT se encuentra por el numero de su pedido con atencion.
+    completo = ids(orden="atencion")
+    pagina = _lista(app_client, admin_token, "VEN", q=f.sufijo, orden="atencion", limit=2, offset=1)
+    assert [x["id"] for x in pagina["data"]] == completo[1:3] and pagina["total"] == 4
+    assert _lista(app_client, admin_token, "VEN", q=f.sufijo, orden="atencion", limit=2, offset=3)["data"][0]["id"] == (
+        completo[3])
+    todos = {"EN_PROCESO": 1, "PENDIENTE_COMPRA": 1, "LISTO_ENTREGA": 1, "ENTREGADO": 1}
+    for params in ({"orden": "atencion"}, {"orden": "atencion", "limit": 1, "offset": 2}):
+        r = _lista(app_client, admin_token, "VEN", q=f.sufijo, **params)
+        assert r["resumen"] == {"monto_cop": 1000, "saldo_cop": 650, "anticipo_cop": 350, "por_estado": todos}, params
+    r = _lista(app_client, admin_token, "VEN", q=f.sufijo, semaforo="atrasados", orden="atencion")
+    assert r["resumen"] == {"monto_cop": 100, "saldo_cop": 50, "anticipo_cop": 50, "por_estado": {"EN_PROCESO": 1}}
+    assert _ids(app_client, admin_token, "COT", q=atrasado.numero, orden="atencion") == [cot.id]
 
 
 # ─── 7) La regla de atraso de la fila es la del filtro (frontera estricta, reloj fijo) ───────────────────────────────
@@ -743,7 +757,9 @@ def _hoy_cotizaciones(db, estado=None, sc_id=None, search=None, limit=50, offset
 
 
 def _hoy_pedidos(db, estado=None, cot_id=None, canal_venta=None, search=None, limit=50, offset=0):
-    """Copia congelada de list_pedidos de aa45805 (antes de T6B), con el resumen de H47."""
+    """Copia congelada de list_pedidos de aa45805 (antes de T6B), con el resumen de H47. B4 T24 (B9): la UNICA diferencia
+    deliberada con la ruta de hoy es que el alias search tambien encuentra por el asesor de H4 (T6B r1, M5); esta copia no
+    lo hace y la prueba R5 pasa porque sus datos nunca coinciden con un asesor (el efecto visible va en V13)."""
     from sqlalchemy import case, func
     from app.api.v1.erp_ventas import _asesores_de_pedidos, _ven_dict
     from app.core.estados_pedido import ESTADOS_VEN_SIN_DINERO
@@ -796,7 +812,8 @@ def _como_hoy(app_client, db, token, tipo, hoy, **params):
 def test_sin_los_parametros_nuevos_cada_lista_responde_como_hoy(app_client, db, admin_token):
     """R5: con solo los parametros de hoy (search, estado, customer_id/sc_id/cot_id/canal_venta, limit, offset) cada lista
     responde lo mismo que la copia congelada de aa45805: los selectores, el Dashboard y el Asistente no cambian. Lo unico
-    nuevo son las claves que cada fila agrega (ADITIVAS)."""
+    nuevo son las claves que cada fila agrega (ADITIVAS). B4 T24 (B9): y que en /ventas/pedidos el alias search tambien
+    encuentra por el asesor de H4 (T6B r1, M5), una desviacion deliberada de R5 que estos datos no tocan."""
     f = _Fabrica(db, _ahora())
     cliente = Customer(first_name="Lista", last_name=f.sufijo, email=f"lv-{f.sufijo.lower()}@test.nebulae")
     db.add(cliente)
@@ -1058,8 +1075,13 @@ def test_atencion_y_atrasados_calculan_el_rango_una_vez(app_client, db, admin_to
       la subconsulta sigue siendo un «Subquery Scan» (no se aplano) y su filtro es la columna (rango = 0).
     Sin el semaforo PostgreSQL quita el Subquery Scan trivial y EXPLAIN muestra el texto del CASE en el Sort Key, pero
     es una referencia a la columna ya calculada: por eso se cuenta el SubPlan y no el texto del Sort Key. Se filtra por
-    customer_id, sc_id y cot_id (sin busqueda: la de COT tambien mira sale_orders)."""
+    customer_id, sc_id y cot_id (sin busqueda: la de COT tambien mira sale_orders).
+    B4 T24 (B7): las senales principales son el conteo de recorridos de sale_orders y la columna en el ORDER BY; las del
+    texto del EXPLAIN (Subquery Scan, el Filter y el Sort Key) dependen de su formato y se calibraron con PostgreSQL 17.11
+    (la version de erp_test, SHOW server_version, 2026-11-10). El valor del filtro sale de rv.RANGO['ATRASADO'], no de un
+    0 escrito a mano."""
     import re
+    from app.core.resolucion_ventas import RANGO
     _dias_de_alerta(db)
     f = _Fabrica(db, _ahora())
     cliente = Customer(first_name="Rango", last_name=f.sufijo, email=f"rango-{f.sufijo.lower()}@test.nebulae")
@@ -1084,7 +1106,7 @@ def test_atencion_y_atrasados_calculan_el_rango_una_vez(app_client, db, admin_to
                 assert len(re.findall(r" on public\.sale_orders(?:\s|$)", plan, re.M)) == 1, (tipo, extra, plan)
             if extra:
                 assert "Subquery Scan on rango_de_lista" in plan, (tipo, extra, plan)
-                assert any("Filter:" in linea and "rango_de_lista.rango = 0" in linea
+                assert any("Filter:" in linea and f"rango_de_lista.rango = {RANGO['ATRASADO']}" in linea
                            for linea in plan.splitlines()), (tipo, extra, plan)
                 clave = [linea for linea in plan.splitlines() if "Sort Key:" in linea]
                 assert clave and not any("CASE WHEN (CASE WHEN" in linea for linea in clave), (tipo, extra, plan)
@@ -1130,6 +1152,10 @@ def test_orden_por_asesor_y_cotizador_limpia_los_espacios(app_client, db, admin_
     blanco = f.sc("ASIGNADA", advisor_name="   ")
     nulo = f.sc("ASIGNADA", advisor_name=None)
     vacios = [nulo.id, blanco.id, vacio.id]
+    # B4 T24 (B4): la limpieza del Hub y la de las listas son dos copias: si se edita una sola, el orden por asesor de la
+    # lista y el del Hub se separan sin que nada falle. Mientras no se muevan a core, se amarran aquí.
+    from app.api.v1 import erp_ventas, ventas_hub
+    assert erp_ventas._ESPACIOS == ventas_hub._ESPACIOS
     assert _ids(app_client, admin_token, "SC", q=f.sufijo, orden="asesor") == [ana.id, beto.id] + vacios
     assert _ids(app_client, admin_token, "SC", q=f.sufijo, orden="-asesor") == [beto.id, ana.id] + vacios
 
