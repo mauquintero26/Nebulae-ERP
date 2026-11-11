@@ -448,9 +448,9 @@ export default function TrasladosPage() {
 
       {/* Drawer */}
       {selected && (
-        <Drawer etiqueta="Detalle del traslado" onClose={closeSelected} header={(
+        <Drawer idTitulo="drawer-traslado-titulo" onClose={closeSelected} header={(
           <div>
-            <h2 className="font-extrabold text-slate-900 text-xl">{numeroTraslado(selected)}</h2>
+            <h2 id="drawer-traslado-titulo" className="font-extrabold text-slate-900 text-xl">{numeroTraslado(selected)}</h2>
             <p className="text-xs text-slate-500 mt-0.5">Traslado Interno</p>
             <div className="mt-2"><CeldaEstadoTraslado t={selected} /></div>
           </div>

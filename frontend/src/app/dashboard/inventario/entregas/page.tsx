@@ -493,12 +493,12 @@ export default function EntregasPage() {
 
       {/* DRAWER LATERAL DE DESPACHO Y COBRO (B1 a B3) */}
       {selected && (
-        <Drawer etiqueta="Despacho del pedido" cierreExterno={!puedeDespacharPedido(selected, rol)}
+        <Drawer idTitulo="drawer-entrega-titulo" cierreExterno={!puedeDespacharPedido(selected, rol)}
           onClose={() => { setSelected(null); setDesdeTablero(null); }}
           header={(
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-xl font-black text-slate-800">{selected.numero}</h2>
+                <h2 id="drawer-entrega-titulo" className="text-xl font-black text-slate-800">{selected.numero}</h2>
                 <CeldaEstado p={selected} />
               </div>
               <p className="text-xs text-slate-500 mt-0.5">Control de Despacho y Verificación Financiera</p>

@@ -3250,7 +3250,7 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
   for (const [ruta, n] of Object.entries(ESPERADO)) {
     assert.equal((leer(ruta).match(/cierreExterno=\{false\}/g) ?? []).length, n, ruta);
   }
-  assert.match(leer('app/dashboard/crm/page.tsx'), /<Drawer etiqueta="Detalle del lead" cierreExterno=\{!editingLead\} bloquearCierre=\{isSaving\}/, 'el panel del lead en edición (r2, m18, D27: con su etiqueta)');
+  assert.match(leer('app/dashboard/crm/page.tsx'), /<Drawer idTitulo="drawer-lead-titulo" cierreExterno=\{!editingLead\} bloquearCierre=\{isSaving\}/, 'el panel del lead en edición (r3, m7, D27: con su título visible)');
   assert.match(leer('components/ui/ModalMotivo.tsx'), /<Modal\s+cierreExterno=\{false\}/, 'ModalMotivo');
   // r2 (C5): «Actualizar Pedido de Venta» escribe al cerrarse (onCancel = commitCalcSave(..., false, false), un PATCH): no es una
   // confirmación para F40. Sin cierre de fuera y bloqueada mientras guarda (un Esc repetido mandaba un segundo PATCH).
@@ -3260,18 +3260,26 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
   const modalTsx = leer('components/ui/Modal.tsx');
   assert.match(modalTsx, /sinCerrar\?: boolean;/);
   assert.match(modalTsx, /\{!sinCerrar && \(\s*<button onClick=\{onClose\} disabled=\{bloquearCierre\} aria-label="Cerrar"/);
-  // r2 (m18): el Drawer tiene nombre accesible (etiqueta → aria-label, aditivo) y los 11 lo reciben de su pantalla.
+  // r2 (m18) y r3 (m7): el Drawer tiene nombre accesible: idTitulo → aria-labelledby (lo que se ve en su encabezado: el número del
+  // documento o el título) o, sin encabezado con título, etiqueta → aria-label. Los 11 lo reciben de su pantalla.
   assert.match(drawer, /etiqueta\?: string;/);
-  assert.match(drawer, /ref=\{refPanel\} tabIndex=\{-1\} role="dialog" aria-modal="true" data-capa="" aria-label=\{etiqueta\}/); // r3 (m10, D27): con data-capa
-  const ETIQUETAS = {"app/dashboard/compras/recepciones/page.tsx": ["Detalle de la recepción"], "app/dashboard/compras/traslados/page.tsx": ["Detalle del traslado"], "app/dashboard/crm/page.tsx": ["Detalle del lead", "Configurar CRM"], "app/dashboard/ecommerce/page.tsx": ["Detalle del pedido web"], "app/dashboard/inventario/ajustes/page.tsx": ["Detalle del ajuste"], "app/dashboard/inventario/entregas/page.tsx": ["Despacho del pedido"], "app/dashboard/inventario/recepciones/page.tsx": ["Detalle de la recepción"], "app/dashboard/inventario/traslados/page.tsx": ["Detalle del traslado"], "app/dashboard/ventas/page.tsx": ["Detalle del documento", "Configuración del Hub de Ventas"]};
+  assert.match(drawer, /idTitulo\?: string;/);
+  assert.match(drawer, /ref=\{refPanel\} tabIndex=\{-1\} role="dialog" aria-modal="true" data-capa="" aria-labelledby=\{idTitulo\} aria-label=\{idTitulo \? undefined : etiqueta\}/);
+  const TITULOS = {"app/dashboard/compras/recepciones/page.tsx": ["drawer-recepcion-titulo"], "app/dashboard/compras/traslados/page.tsx": ["drawer-traslado-titulo"], "app/dashboard/crm/page.tsx": ["drawer-lead-titulo", "drawer-config-crm-titulo"], "app/dashboard/ecommerce/page.tsx": ["drawer-pedido-web-titulo"], "app/dashboard/inventario/ajustes/page.tsx": ["drawer-ajuste-titulo"], "app/dashboard/inventario/entregas/page.tsx": ["drawer-entrega-titulo"], "app/dashboard/inventario/recepciones/page.tsx": ["drawer-recepcion-titulo"], "app/dashboard/inventario/traslados/page.tsx": ["drawer-traslado-titulo"], "app/dashboard/ventas/page.tsx": ["drawer-documento-titulo", "drawer-config-hub-titulo"]};
   let drawers = 0;
-  for (const [ruta, etiquetas] of Object.entries(ETIQUETAS)) {
+  for (const [ruta, ids] of Object.entries(TITULOS)) {
     const f = leer(ruta);
-    assert.deepEqual([...f.matchAll(/<Drawer etiqueta="([^"]+)"/g)].map((m) => m[1]), etiquetas, ruta);
-    assert.equal((f.match(/<Drawer\b/g) ?? []).length, etiquetas.length, `${ruta}: todos con su etiqueta`);
-    drawers += etiquetas.length;
+    assert.deepEqual([...f.matchAll(/<Drawer idTitulo="([^"]+)"/g)].map((m) => m[1]), ids, ruta);
+    assert.equal((f.match(/<Drawer\b/g) ?? []).length, ids.length, `${ruta}: todos con su título`);
+    for (const id of ids) assert.equal(f.split(`id="${id}"`).length - 1, 1, `${ruta}: el encabezado visible lleva id="${id}"`);
+    drawers += ids.length;
   }
   assert.equal(drawers, 11, 'los 11 Drawer de la tabla de F40');
+  // r3 (m7): lo que se anuncia es lo que se ve.
+  assert.ok(leer('app/dashboard/ventas/page.tsx').includes('<h2 id="drawer-config-hub-titulo" className="font-black text-slate-800 text-lg">Configuración de HUB Ventas</h2>'));
+  assert.ok(leer('app/dashboard/crm/page.tsx').includes('<h2 id="drawer-config-crm-titulo" className="font-black text-slate-800 text-lg">Configuración CRM</h2>'));
+  // r3 (m8): la protección de «Nueva Solicitud de Cliente» detrás de «Nuevo cliente» es la pila más su cierreExterno={false}.
+  assert.match(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx'), /<Modal cierreExterno=\{false\} title="Nueva Solicitud de Cliente"/);
   // r2 (m5, m16): «Nuevo cliente» (selector-cliente.tsx) tiene campos: su envoltura solo para el Esc (stopPropagation), para que no
   // llegue a la ventana de la solicitud de atrás, y ya no lo cierra (ni descarta los campos).
   const selector = leer('app/dashboard/ventas/solicitud/selector-cliente.tsx');

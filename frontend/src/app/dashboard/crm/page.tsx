@@ -1189,7 +1189,7 @@ export default function CRMPage() {
       {selectedLead && (() => {
         const stage = stages.find(s => s.id === selectedLead.pipeline_stage_id);
         return (
-          <Drawer etiqueta="Detalle del lead" cierreExterno={!editingLead} bloquearCierre={isSaving} onClose={() => { setSelectedLead(null); setEditingLead(false); }} header={(
+          <Drawer idTitulo="drawer-lead-titulo" cierreExterno={!editingLead} bloquearCierre={isSaving} onClose={() => { setSelectedLead(null); setEditingLead(false); }} header={(
             <div className="flex-1 flex items-start justify-between gap-2 min-w-0">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1">
@@ -1199,7 +1199,7 @@ export default function CRMPage() {
                   </span>}
                   <span className="text-xs text-slate-400">{timeAgo(selectedLead.updated_at)}</span>
                 </div>
-                <h2 className="text-xl font-black text-slate-800">{selectedLead.client}</h2>
+                <h2 id="drawer-lead-titulo" className="text-xl font-black text-slate-800">{selectedLead.client}</h2>
                 <p className="text-sm text-indigo-600 font-bold mt-0.5">{selectedLead.solicitud_tipo || selectedLead.tag}</p>
               </div>
               <div className="flex items-center gap-2 ml-2">
@@ -1499,10 +1499,10 @@ export default function CRMPage() {
 
       {/* ══ PANEL — CONFIGURACIÓN CRM ══════════════════════════════════════ */}
       {showConfig && (
-        <Drawer etiqueta="Configurar CRM" cierreExterno={false} onClose={() => setShowConfig(false)} header={(
+        <Drawer idTitulo="drawer-config-crm-titulo" cierreExterno={false} onClose={() => setShowConfig(false)} header={(
           <div className="flex items-center gap-3">
             <div className="p-2 bg-slate-700 text-white rounded-xl"><Settings size={18}/></div>
-            <h2 className="font-black text-slate-800 text-lg">Configuración CRM</h2>
+            <h2 id="drawer-config-crm-titulo" className="font-black text-slate-800 text-lg">Configuración CRM</h2>
           </div>
         )}>
               {/* Pipeline stages management */}

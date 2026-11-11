@@ -394,11 +394,11 @@ export default function AjustesPage() {
 
       {/* Drawer (B1 a B3): el detalle del ajuste, con la fecha real. */}
       {selected && (
-        <Drawer etiqueta="Detalle del ajuste"
+        <Drawer idTitulo="drawer-ajuste-titulo"
           onClose={() => setSelected(null)}
           header={(
             <div>
-              <h2 className="font-extrabold text-xl text-slate-900">{numeroAjuste(selected)}</h2>
+              <h2 id="drawer-ajuste-titulo" className="font-extrabold text-xl text-slate-900">{numeroAjuste(selected)}</h2>
               <p className="text-xs text-slate-500">Ajuste de Inventario</p>
               <div className="mt-2">
                 <span className={`${CHIP} text-[11px] ${direccionSeleccionada.clases.bg} ${direccionSeleccionada.clases.text} ${direccionSeleccionada.clases.border}`}>

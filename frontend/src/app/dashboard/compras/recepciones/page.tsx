@@ -498,12 +498,12 @@ export default function RecepcionesPage() {
 
       {/* DRAWER DETALLE DE RECEPCION Y SEPARACION POR DESTINO (B1 a B3) */}
       {selectedItem && (
-        <Drawer etiqueta="Detalle de la recepción"
+        <Drawer idTitulo="drawer-recepcion-titulo"
           onClose={() => setSelectedItem(null)}
           header={(
             <div>
               <div className="flex items-center gap-2.5">
-                <h2 className="text-xl font-black text-slate-800">{numeroRecepcion(selectedItem)}</h2>
+                <h2 id="drawer-recepcion-titulo" className="text-xl font-black text-slate-800">{numeroRecepcion(selectedItem)}</h2>
                 <CeldaEstadoRecepcion r={selectedItem} />
               </div>
               <p className="text-xs text-slate-500 mt-0.5">

@@ -49,8 +49,9 @@ export function NewClientModal({ onSave, onClose, textoInicial }: {
 
   if (typeof document === 'undefined') return null;
   return createPortal(
-    // C9 (ronda 1) y B4 T24 r2 (m5, m16): el Esc no llega a la ventana de la solicitud (stopPropagation) y ya no cierra el alta: tiene
-    // campos (F40, C2), así que se cierra solo con sus botones.
+    // C9 (ronda 1) y B4 T24 r2-r3 (m5, m16, m8): el alta tiene campos (F40, C2): se cierra solo con sus botones. Lo que protege a la ventana
+    // de la solicitud de atrás es la pila de capas (solo la de arriba atiende el Esc) más su cierre solo con botones; el stopPropagation de
+    // aquí solo corta los oyentes de window y de React que estén por encima.
     <div onKeyDown={e => { if (e.key === 'Escape') e.stopPropagation(); }}>
     <Modal cierreExterno={false} title="Nuevo cliente" subtitle="Completa los datos del cliente nuevo para continuar." icon={UserPlus} color="indigo"
       capa="encima"

@@ -323,11 +323,11 @@ export default function InventarioRecepcionesPage() {
 
       {/* Drawer (B1 a B3): el detalle de la recepción y sus productos; el conteo y la confirmación se hacen en Compras. */}
       {selectedItem && (
-        <Drawer etiqueta="Detalle de la recepción"
+        <Drawer idTitulo="drawer-recepcion-titulo"
           onClose={() => setSelectedItem(null)}
           header={(
             <div>
-              <h2 className="font-extrabold text-xl text-slate-900">{numeroRecepcion(selectedItem)}</h2>
+              <h2 id="drawer-recepcion-titulo" className="font-extrabold text-xl text-slate-900">{numeroRecepcion(selectedItem)}</h2>
               <p className="text-xs text-slate-500">Entrada de Inventario</p>
               <div className="mt-2"><CeldaEstadoRecepcion r={selectedItem} /></div>
             </div>

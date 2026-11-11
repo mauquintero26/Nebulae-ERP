@@ -1264,8 +1264,8 @@ export default function EcommercePage() {
 
       {/* Order Detail Slide-over */}
       {selectedOrder && (
-        <Drawer etiqueta="Detalle del pedido web" onClose={() => setSelectedOrder(null)} header={(
-          <div><h2 className="text-lg font-black text-gray-900">{selectedOrder.numero}</h2><p className="text-xs text-gray-500">{selectedOrder.pven_numero} · {selectedOrder.customer_name}</p></div>
+        <Drawer idTitulo="drawer-pedido-web-titulo" onClose={() => setSelectedOrder(null)} header={(
+          <div><h2 id="drawer-pedido-web-titulo" className="text-lg font-black text-gray-900">{selectedOrder.numero}</h2><p className="text-xs text-gray-500">{selectedOrder.pven_numero} · {selectedOrder.customer_name}</p></div>
         )}>
               <div className="grid grid-cols-2 gap-3">
                 {[['Cliente',selectedOrder.customer_name],['Email',selectedOrder.customer_email],['Teléfono',selectedOrder.customer_phone||'-'],['Total',fCOP(selectedOrder.total_cop ?? 0)],['Fecha',fechaCorta(selectedOrder.created_at) || '-'],['Estado',infoEstadoPedido(selectedOrder.estado).label]].map(([l,v]) => (
