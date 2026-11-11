@@ -13,7 +13,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.db.database import get_db
-from app.core.estados_pedido import ESTADOS_VEN_CERRADOS
+from app.core.estados_pedido import ESTADOS_VEN_CERRADOS, ESTADOS_VEN_SIN_DINERO
+from app.core import resolucion_ventas as rv
 import datetime, secrets, json
 from decimal import Decimal
 
@@ -1506,6 +1507,10 @@ def search_customers_for_chat(
     return {"status": "success", "data": results}
 
 
+# B4 T24 r1 (m36): los cerrados que cuentan como venta (la pestaña «Entregados»): ENTREGADO y FACTURADO.
+_CERRADOS_CON_DINERO = tuple(e for e in ESTADOS_VEN_CERRADOS if e not in ESTADOS_VEN_SIN_DINERO)
+
+
 @router.get("/customer-context")
 def get_customer_context_for_chat(
     customer_id: Optional[int] = None,
@@ -1579,6 +1584,12 @@ def get_customer_context_for_chat(
         ORDER BY created_at DESC
     """), {"cid": cid}).mappings().all()
 
+    # B4 T24 r1 (m7 + m30 + m36): las pestañas y el ticket promedio con la MISMA regla que las tarjetas (B49-b). «En curso»
+    # (Activos y active_orders_count) = rv.f_pven_en_curso en SQL (no una copia en Python: sin pasar a mayúsculas, como
+    # Ventas); Entregados = _CERRADOS_CON_DINERO (ENTREGADO y FACTURADO); CANCELADO y DEVUELTO_TOTAL no van en ninguna.
+    # total_spent y avg_ticket, sobre Activos + Entregados.
+    en_curso_ids = {r[0] for r in db.query(SaleOrder.id).filter(SaleOrder.customer_id == cid,
+                                                                 rv.f_pven_en_curso(SaleOrder))}
     active_orders = []
     closed_orders = []
     total_spent = Decimal("0.0")
@@ -1611,22 +1622,21 @@ def get_customer_context_for_chat(
             "productos_resumen": ", ".join(prods_summary) if prods_summary else "Varios ítems",
         }
 
-        if estado in ("ENTREGADO", "COMPLETADO"):
+        if o["id"] in en_curso_ids:
+            active_orders.append(order_item)
+            total_spent += tot
+        elif o["estado"] in _CERRADOS_CON_DINERO:
             closed_orders.append(order_item)
             total_spent += tot
             completed_orders_count += 1
-        elif estado not in ("CANCELADO", "ANULADO"):
-            active_orders.append(order_item)
-            total_spent += tot
 
     total_orders_count = len(active_orders) + len(closed_orders)
     avg_ticket = float(total_spent / total_orders_count) if total_orders_count > 0 else 0.0
     # B4 T24 (B49-b): las tarjetas «Total de pedidos» y «Pedidos en curso» llevan los nombres del catálogo de KPI, así que
     # sus cifras son las canónicas de Ventas: pven_total = todos los pedidos del cliente (los cancelados también, como
-    # /ventas/stats) y pven_en_curso = estado fuera de ESTADOS_VEN_CERRADOS (resolucion_ventas.f_pven_en_curso: sin
-    # entregados, facturados, cancelados ni devueltos). Las listas, el ticket promedio y el segmento no cambian.
+    # /ventas/stats) y pven_en_curso = rv.f_pven_en_curso (r1: la misma consulta de los Activos de arriba).
     pven_total = len(orders_rows)
-    pven_en_curso = sum(1 for o in orders_rows if (o["estado"] or "").upper() not in ESTADOS_VEN_CERRADOS)
+    pven_en_curso = len(en_curso_ids)
 
     sc_rows = db.execute(text("""
         SELECT id, numero, estado, tipo_solicitud, advisor_name, fecha_solicitud, notas
