@@ -1105,16 +1105,21 @@ console.log('--- B4 T10 TEST M: opcionesEstadosPedidos — el filtro de estados 
   const sinPagado = kv.porEstadoVisto(visto1, enProceso, { EN_PROCESO: 4, EN_TRANSITO: 1, PARCIALMENTE_DISPONIBLE: 1 });
   assert.deepEqual(valores(sinPagado.porEstado), ['EN_PROCESO', 'EN_TRANSITO', 'PARCIALMENTE_DISPONIBLE']);
   assert.equal(kv.porEstadoVisto(visto0, enProceso, { ...completo }), visto0, 'la completa con lo mismo: la misma referencia');
-  // Otra vista, otra búsqueda u otro semáforo: empieza de nuevo, aunque la respuesta venga filtrada.
-  for (const otro of [{ vista: 'todos', estados: ['PAGADO'] }, { vista: 'en_proceso', q: 'ana', estados: ['PAGADO'] },
-    { vista: 'en_proceso', semaforo: 'atrasados', estados: ['PAGADO'] }]) {
+  // Otra búsqueda u otro semáforo: empieza de nuevo, aunque la respuesta venga filtrada. B4 T24 f2 (F30 a, D27): la vista ya no es
+  // parte de la clave (opcionesEstadosPedidos ya filtra por el grupo de la pestaña): al llegar a otra pestaña con un estado ya marcado,
+  // el panel conserva lo visto y suma lo nuevo (antes mostraba solo lo marcado hasta desmarcarlo).
+  for (const otro of [{ vista: 'en_proceso', q: 'ana', estados: ['PAGADO'] }, { vista: 'en_proceso', semaforo: 'atrasados', estados: ['PAGADO'] }]) {
     assert.deepEqual(Object.keys(kv.porEstadoVisto(visto1, estadoTablaInicial(otro), { PAGADO: 2 }).porEstado), ['PAGADO'], JSON.stringify(otro));
   }
-  // r3 (q1): otra vista con un estado marcado y una respuesta filtrada vacía: la clave nueva con {}, nunca lo visto en la
-  // otra vista.
-  const otraVacia = kv.porEstadoVisto(visto1, estadoTablaInicial({ vista: 'todos', estados: ['PAGADO'] }), {});
-  assert.notEqual(otraVacia, visto1, 'no devuelve lo de la otra vista');
-  assert.equal(otraVacia.clave, 'todos||');
+  assert.equal(kv.porEstadoVisto(visto1, estadoTablaInicial({ vista: 'todos', estados: ['PAGADO'] }), { PAGADO: 2 }), visto1,
+    'F30 a: otra pestaña con PAGADO marcado conserva lo visto (nada nuevo: la misma referencia)');
+  assert.deepEqual(valores(kv.porEstadoVisto(visto1, estadoTablaInicial({ vista: 'listo_entrega', estados: ['DISPONIBLE'] }), { DISPONIBLE: 1 }).porEstado),
+    ['EN_PROCESO', 'EN_TRANSITO', 'PAGADO', 'PARCIALMENTE_DISPONIBLE'], 'F30 a: suma lo de la otra pestaña sin perder lo visto');
+  // r3 (q1): otra búsqueda con un estado marcado y una respuesta filtrada vacía: la clave nueva con {}, nunca lo visto con la otra
+  // búsqueda (F30, D27: con una búsqueda, porque la vista ya no cambia la clave).
+  const otraVacia = kv.porEstadoVisto(visto1, estadoTablaInicial({ vista: 'todos', q: 'zzz', estados: ['PAGADO'] }), {});
+  assert.notEqual(otraVacia, visto1, 'no devuelve lo de la otra búsqueda');
+  assert.equal(otraVacia.clave, 'zzz|');
   assert.deepEqual(otraVacia.porEstado, {});
   // r3 (q2): la clave recorta la búsqueda, como dependenciasTablero y queryListado: «ana» y «ana » son la misma consulta.
   const conAna = kv.porEstadoVisto(null, estadoTablaInicial({ vista: 'en_proceso', q: 'ana' }), completo);
@@ -1122,10 +1127,16 @@ console.log('--- B4 T10 TEST M: opcionesEstadosPedidos — el filtro de estados 
     '«ana» y «ana »: la misma referencia');
   // La página, el orden y el filtro de estados no cambian lo visto.
   assert.equal(kv.porEstadoVisto(visto0, estadoTablaInicial({ vista: 'en_proceso', pagina: 3, orden: 'reciente', estados: ['EN_PROCESO'] }), { EN_PROCESO: 3 }), visto0);
-  // Sin respuesta vigente (cargando, recargando o con error): lo de la misma clave; de otra clave, nada todavía.
+  // Sin respuesta vigente (cargando, recargando o con error): lo de la misma clave. B4 T24 f2 (F30 b, D27): de otra clave, también lo
+  // previo, con SU clave vieja, hasta la primera respuesta de la nueva: una segunda acción durante el viaje al servidor (otra pestaña,
+  // el conmutador, una caja del flujo) poda con lo visto, no con la lista base, y no quita un heredado marcado.
   assert.equal(kv.porEstadoVisto(visto1, conPagado, null), visto1);
   assert.equal(kv.porEstadoVisto(null, enProceso, null), null);
-  assert.equal(kv.porEstadoVisto(visto1, estadoTablaInicial({ vista: 'todos' }), null).porEstado, null);
+  const enViaje = kv.porEstadoVisto(visto1, estadoTablaInicial({ vista: 'en_proceso', q: 'ana', estados: ['PAGADO'] }), null);
+  assert.equal(enViaje, visto1, 'F30 b: lo previo, con su clave vieja');
+  assert.ok(kv.opcionesEstadosPedidos('en_proceso', enViaje.porEstado).some((o) => o.valor === 'PAGADO'), 'F30 b: el heredado marcado no se poda');
+  // Y la primera respuesta de la clave nueva empieza de nuevo (la vieja no se mezcla con otra búsqueda).
+  assert.deepEqual(Object.keys(kv.porEstadoVisto(enViaje, estadoTablaInicial({ vista: 'en_proceso', q: 'ana' }), { EN_PROCESO: 1 }).porEstado), ['EN_PROCESO']);
   // Los conteos que no son positivos no cuentan; inmutable.
   assert.deepEqual(Object.keys(kv.porEstadoVisto(null, enProceso, { EN_PROCESO: 3, PAGADO: 0, DISPONIBLE: 'x' }).porEstado), ['EN_PROCESO']);
   assert.ok(Object.isFrozen(visto0) && Object.isFrozen(visto0.porEstado));

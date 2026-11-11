@@ -1103,7 +1103,7 @@ export function estadosConsultaPedidos(estados) {
 
 /**
  * @typedef {{clave: string, porEstado: Readonly<Record<string, number>> | null}} PorEstadoVisto
- *   r2 (p1): lo que porEstadoVisto lleva visto de resumen.por_estado en una vista, búsqueda y semáforo (`clave`).
+ *   r2 (p1): lo que porEstadoVisto lleva visto de resumen.por_estado en una búsqueda y un semáforo (`clave`; B4 T24 f2, F30: sin la vista).
  */
 
 /** Los conteos positivos de un por_estado (un objeto plano), o null si no lo es. */
@@ -1122,14 +1122,16 @@ function conteosPositivos(porEstado) {
  * B4 T10 r2 (p1): el por_estado con el que la Lista arma los heredados del filtro (opcionesEstadosPedidos). El servidor
  * calcula resumen.por_estado DESPUÉS del filtro de estados (filtrar_por_estados corre antes de _resumen_pedidos): con
  * un estado marcado, la respuesta ya no trae los heredados que no se marcaron y, leídos directo, salían del panel (nunca
- * se podían combinar dos). Por eso se guarda lo visto mientras no cambien la vista, la búsqueda ni el semáforo (`clave`;
- * la página, el orden y el filtro de estados no cuentan; r3 (q2): la búsqueda va recortada, como en dependenciasTablero
- * y queryListado, porque «ana» y «ana » son la misma consulta):
+ * se podían combinar dos). Por eso se guarda lo visto mientras no cambien la búsqueda ni el semáforo (`clave`; la página,
+ * el orden y el filtro de estados no cuentan; r3 (q2): la búsqueda va recortada, como en dependenciasTablero y
+ * queryListado, porque «ana» y «ana » son la misma consulta). B4 T24 f2 (F30 a): la vista tampoco cuenta: opcionesEstadosPedidos
+ * ya filtra por el grupo de la pestaña, así que al llegar a otra pestaña con un estado ya marcado el panel conserva lo visto.
  *  - una respuesta sin filtro de estados es la completa: reemplaza lo anterior (lo que ya no está, se va);
  *  - una filtrada suma los estados que no se habían visto;
  *  - con otra clave se empieza de nuevo con la respuesta, aunque venga filtrada;
- *  - sin respuesta vigente (`porEstado` null: cargando, recargando o con error) queda lo de la misma clave; de otra
- *    clave, {clave, porEstado: null}; sin nada antes, null.
+ *  - sin respuesta vigente (`porEstado` null: cargando, recargando o con error) queda lo previo (F30 b: también con otra
+ *    clave, con SU clave vieja, hasta la primera respuesta de la nueva: una segunda acción durante el viaje al servidor poda con
+ *    lo visto y no quita un heredado marcado); sin nada antes, null.
  * Solo los conteos positivos. Si nada cambia devuelve `previo` (la misma referencia: la pantalla no vuelve a pintar).
  * Inmutable. La pantalla lo guarda como estado derivado en el render (como llegadaDeListado), sin efectos.
  * @param {PorEstadoVisto | null} previo
@@ -1138,13 +1140,10 @@ function conteosPositivos(porEstado) {
  * @returns {PorEstadoVisto | null}
  */
 export function porEstadoVisto(previo, estado, porEstado) {
-  const clave = [estado?.vista ?? '', (estado?.q ?? '').trim(), estado?.semaforo ?? ''].join('|');
+  const clave = [(estado?.q ?? '').trim(), estado?.semaforo ?? ''].join('|');
   const mismo = previo !== null && previo !== undefined && previo.clave === clave;
   const llegado = conteosPositivos(porEstado);
-  if (llegado === null) {
-    if (mismo) return previo;
-    return previo ? congelar({ clave, porEstado: null }) : null;
-  }
+  if (llegado === null) return previo ?? null;
   const anterior = mismo ? previo.porEstado : null;
   const completo = !(Array.isArray(estado?.estados) && estado.estados.length > 0);
   if (anterior === null || completo) {

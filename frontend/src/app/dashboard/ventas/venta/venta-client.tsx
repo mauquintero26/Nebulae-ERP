@@ -444,8 +444,9 @@ export default function VentaClient() {
   // r1 (m5): las opciones del filtro de la Lista suman los estados heredados que traen los pedidos (resumen.por_estado,
   // H47; opcionesEstadosPedidos). Una sola función, estable mientras no cambia lo visto: la barra y la poda de las
   // pestañas, del conmutador, del semáforo y del enlace usan la misma. r2 (p1): el servidor calcula por_estado después
-  // del filtro de estados, así que no se lee directo: porEstadoVisto guarda la unión de lo visto en la misma vista,
-  // búsqueda y semáforo, solo de una respuesta vigente (ni cargando, ni recargando, ni con error). Es un estado derivado
+  // del filtro de estados, así que no se lee directo: porEstadoVisto guarda la unión de lo visto con la misma búsqueda y
+  // semáforo (B4 T24 f2, F30: la pestaña ya no cuenta, y durante un viaje al servidor queda lo visto), solo de una respuesta
+  // vigente (ni cargando, ni recargando, ni con error). Es un estado derivado
   // en el render, sin efectos (como llegadaDeListado): con la misma referencia no vuelve a pintar.
   const vigente = listado.cargandoInicial || listado.recargando || listado.error ? null : (listado.resumen?.por_estado ?? null);
   const [vistos, setVistos] = useState<PorEstadoVisto | null>(null);
