@@ -66,7 +66,7 @@ import { queryListado } from './tabla.js';
 // B4 T23A: el permiso de mover los pedidos web (RP62).
 import { esAdminOAsesor, puedeAccionDocumento } from './roles.js';
 // B4 T24 f2 (F47): la regla única de la recarga tras un error, para las acciones del tablero de pedidos.
-import { recargarTrasError } from './avisos.js';
+import { cambiarConRegla, recargarTrasError } from './avisos.js';
 
 /**
  * @typedef {import('./kanban.js').ResultadoSoltar} ResultadoSoltar
@@ -691,18 +691,21 @@ const CLAVES_PEDIDO = congelar(COLUMNAS_PEDIDO.map((c) => c.clave));
  *  - → Facturado: acción 'facturar' (la pantalla confirma), solo desde ENTREGADO;
  *  - → una de las tres primeras: cambio al estado de la columna, si transicionesPedido lo permite;
  *  - en cualquier otro caso, bloqueado con motivoTransicionPedido.
+ * B4 T24 f2 r1 (m3, aditivo): `returnTo` es el return_to de «Abrir pedido» (por defecto la lista de Pedidos; E-Commerce pasa la suya,
+ * reglaSoltarPedidoWeb).
  * @param {any} pedido
  * @param {string} origen
  * @param {string} destino
+ * @param {{returnTo?: string}} [opciones]
  * @returns {ResultadoSoltar}
  */
-export function reglaSoltarPedido(pedido, origen, destino) {
+export function reglaSoltarPedido(pedido, origen, destino, { returnTo = RUTA_LISTA_PEDIDOS } = {}) {
   exigirDestino(CLAVES_PEDIDO, destino, 'de pedidos');
   if (origen === destino) return ninguno();
   const estado = pedido?.estado;
   if (destino === 'entregado') {
     // B4 T24 f2 (F24): entregado en parte, su entrega se completa desde el pedido (en Entregas ya no se mueve).
-    if (estado === 'PARCIALMENTE_ENTREGADO') return bloqueado(TEXTO.ENTREGA_PARCIAL, enlaceAbrir('PVEN', pedido?.id, RUTA_LISTA_PEDIDOS));
+    if (estado === 'PARCIALMENTE_ENTREGADO') return bloqueado(TEXTO.ENTREGA_PARCIAL, enlaceAbrir('PVEN', pedido?.id, returnTo));
     return transicionesPedido(estado).includes('ENTREGADO')
       ? bloqueado(TEXTO.ENTREGAS, ENLACE_ENTREGAS)
       : bloqueado(motivoTransicionPedido(estado, 'ENTREGADO') ?? TEXTO.ABRELA_CAMBIAR);
@@ -1346,13 +1349,7 @@ export function accionesTableroPedidos({ apiFetch, autor, confirmar, avisar, avi
   return {
     /** @param {{id: unknown, numero?: string | null}} p @param {string} estado */
     async cambiar(p, estado) {
-      try {
-        await patch(p, { estado, updated_by: autor() });
-      } catch (err) {
-        if (recargarTrasError(err)) recargarTrasCambio();
-        throw err;
-      }
-      recargarTrasCambio();
+      await cambiarConRegla(() => patch(p, { estado, updated_by: autor() }), recargarTrasCambio);
     },
     /** @param {{id: unknown, numero?: string | null}} p @param {ReadonlyArray<string>} columnas */
     async facturar(p, columnas) {
@@ -1500,6 +1497,18 @@ export function tarjetaPedidoWeb(fila, { ahora, soloLectura = false, rol } = {})
   const tarjeta = tarjetaPedido(fila, { ahora, returnTo: RUTA_ECOMMERCE, rol });
   const sinAccion = soloLectura || fila?.estado === 'PENDIENTE_PAGO';
   return { ...tarjeta, subtitulo: textoLimpio(fila?.pven_numero) || 'Pedido web', accionPrincipal: sinAccion ? null : tarjeta.accionPrincipal };
+}
+
+/**
+ * B4 T24 f2 r1 (m3): la regla de soltar del tablero de E-Commerce: la de los pedidos de venta con «Abrir pedido» de vuelta a E-Commerce
+ * (como el return_to de sus tarjetas).
+ * @param {any} pedido
+ * @param {string} origen
+ * @param {string} destino
+ * @returns {ResultadoSoltar}
+ */
+export function reglaSoltarPedidoWeb(pedido, origen, destino) {
+  return reglaSoltarPedido(pedido, origen, destino, { returnTo: RUTA_ECOMMERCE });
 }
 
 /** El motivo del tablero de los pedidos web para un rol que no puede moverlos. */

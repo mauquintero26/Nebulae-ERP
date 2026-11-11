@@ -36,7 +36,7 @@ import {
 } from '@/lib/kanban-ventas';
 import { PERIODO_KPI } from '@/lib/kpis';
 import { FOCOS_VENTAS } from '@/lib/analisis';
-import { textoDeError, esErrorDeValidacion, recargarTrasError } from '@/lib/avisos';
+import { textoDeError, esErrorDeValidacion, cambiarConRegla } from '@/lib/avisos';
 // B4 T24 (FINAL-m32): la regla del motivo de ModalMotivo también en la ventana de la cancelación en lote.
 import { MINIMO_MOTIVO, motivoValido } from '@/lib/kanban';
 import { VEN_NAV } from './ven-nav';
@@ -49,7 +49,7 @@ import {
   ordenParaCancelar, motivoNoCancelable, resumenLote, ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN, opcionesPanelPedido,
   repartirCambioEstadoPVEN, comoUTC, textoAntiguedad, notaReiniciaAtraso, conDetalleDelEnvio,
   tituloGrupo, scConCotDeFilas, ordenEsAtencion, textoOrdenHub, RUTA_HUB_VENTAS, cantidadPositiva, focoEnlaceTras,
-  filaDelHub,
+  filaDelHub, RUTA_ENTREGAS,
 } from '@/lib/hub-ventas';
 import { waUrl, abrirWhatsApp } from '@/lib/whatsapp';
 import { correoDelCliente } from '@/lib/aviso-correo';
@@ -846,16 +846,13 @@ export default function VentasHub() {
   // y su destino: aquí no se llama a tablero.recargar).
   async function cambiarDesdeTablero(fila: FilaHub, resultado: { estado: string }) {
     const ruta = fila.tipo === 'SC' ? 'solicitudes' : fila.tipo === 'COT' ? 'cotizaciones' : 'pedidos';
-    try {
-      await apiFetch(`/ventas/${ruta}/${fila.id}`, {
+    // B4 T24 f2 r1 (m28): la ruta de error es el ayudante puro cambiarConRegla (avisos.js), el mismo de Cotizaciones y de Pedidos.
+    await cambiarConRegla(
+      () => apiFetch(`/ventas/${ruta}/${fila.id}`, {
         method: 'PATCH', body: JSON.stringify({ estado: resultado.estado, updated_by: autorActual() }),
-      });
-    } catch (err) {
-      if (recargarTrasError(err)) { recargarListado(); setRecargaFlujo((n) => n + 1); }
-      throw err;
-    }
-    recargarListado();
-    setRecargaFlujo((n) => n + 1);
+      }),
+      () => { recargarListado(); setRecargaFlujo((n) => n + 1); },
+    );
   }
 
   // 'accion' (D39): la pantalla abre su ventana y, al terminar, recarga el origen y el destino.
@@ -1430,7 +1427,7 @@ export default function VentasHub() {
                   {(op.despachar || op.facturar || op.cancelar) && (
                     <div className="flex flex-wrap items-center gap-2 pt-1">
                       {op.despachar && (
-                        <Link href="/dashboard/inventario/entregas"
+                        <Link href={RUTA_ENTREGAS}
                           className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-teal-50 text-teal-800 hover:bg-teal-100 border-teal-200 ${FOCO}`}>
                           Despachar en Entregas →
                         </Link>

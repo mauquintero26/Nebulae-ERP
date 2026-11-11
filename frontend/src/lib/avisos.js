@@ -202,6 +202,25 @@ export function recargarTrasError(err) {
 }
 
 /**
+ * B4 T24 f2 r1 (m28): la ruta de un cambio desde un tablero (el arrastre del Hub, de Cotizaciones y de los tableros de pedidos,
+ * accionesTableroPedidos): corre `cambio` (el PATCH) y después `recargar` (lo que la pantalla recarga: las pestañas, la franja…). Si
+ * falla, recarga solo con la regla de recargarTrasError (400, 409, 422 o la red cortada) y el MISMO error sigue (el tablero deshace la
+ * tarjeta y recarga su origen y su destino: D39, por eso aquí no se toca el tablero).
+ * @param {() => Promise<unknown>} cambio
+ * @param {() => void} recargar
+ * @returns {Promise<void>}
+ */
+export async function cambiarConRegla(cambio, recargar) {
+  try {
+    await cambio();
+  } catch (err) {
+    if (recargarTrasError(err)) recargar();
+    throw err;
+  }
+  recargar();
+}
+
+/**
  * B3 T16 r1: un 422 (el dato no es valido: el servidor dice cual). Esos errores van en linea, junto al campo o al
  * boton; los demas (sin permiso, sin conexion, 500…) van con avisarError.
  * @param {unknown} err

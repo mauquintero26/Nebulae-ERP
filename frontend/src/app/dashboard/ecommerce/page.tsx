@@ -27,7 +27,7 @@ import {
 import type { AccionTabla } from '@/lib/tabla';
 import {
   COLUMNAS_PEDIDO, OPCIONES_ESTADOS_PEDIDOS_WEB, OPCIONES_ESTADOS_TABLERO_PEDIDO, RUTA_PEDIDOS_WEB,
-  consultaColumnaPedido, efectosCancelarPedido, reglaSoltarPedido, soloLecturaPedidosWeb, tarjetaPedidoWeb,
+  consultaColumnaPedido, efectosCancelarPedido, reglaSoltarPedidoWeb, soloLecturaPedidosWeb, tarjetaPedidoWeb,
 } from '@/lib/kanban-ventas';
 import { infoEstadoPedido } from '@/lib/estados-pedido';
 import { ordenPorDefecto } from '@/lib/kanban';
@@ -1034,7 +1034,7 @@ export default function EcommercePage() {
               {enKanban && (
                 <TableroKanban
                   tablero={tablero}
-                  regla={reglaSoltarPedido}
+                  regla={reglaSoltarPedidoWeb}
                   tarjetaDe={tarjetaDeWeb}
                   onAbrir={abrirPedido}
                   onCambio={cambiarDesdeTablero}

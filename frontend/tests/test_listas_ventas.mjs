@@ -1623,4 +1623,19 @@ console.log('--- B4 T24 f2 r1 (m18, m19 + m37, m21): Solicitudes ofrece crear, e
   assert.match(lista, /\{esAdministrador\(rol\)&&<button onClick=\{vaciarVencidas\}/);
 }
 
+console.log('--- B4 T24 f2 r1 (m22): «Actualizar» de Pedidos gira con la regla de useEstadoKpi (no la primera carga), como en BASE ---');
+{
+  const lista = readFileSync(new URL('../src/app/dashboard/ventas/venta/venta-client.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(lista, /const actualizando = listado\.recargando \|\| flujo\.cargando \|\| estadoKpis === 'actualizando';/);
+  // La regla: 'actualizando' es una carga DESPUÉS de una que ya pasó (buena o con error); la primera es 'cargando'.
+  const { estadoKpi, avanzarCarga } = await import('../src/lib/kpis.js');
+  let marca = { vioCarga: false, yaCargo: false };
+  marca = avanzarCarga(marca, true);
+  assert.equal(estadoKpi({ loading: true, yaCargo: marca.yaCargo }), 'cargando', 'la primera carga no gira «Actualizar» por las tarjetas');
+  marca = avanzarCarga(marca, false);
+  assert.equal(estadoKpi({ loading: false, yaCargo: marca.yaCargo, error: new Error('x') }), 'error', 'un /ventas/stats fallido');
+  marca = avanzarCarga(marca, true);
+  assert.equal(estadoKpi({ loading: true, yaCargo: marca.yaCargo }), 'actualizando', 'la recarga después de un fallo sí gira (como BASE)');
+}
+
 console.log('OK test_listas_ventas.mjs');

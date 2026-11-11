@@ -312,7 +312,7 @@ export function textoContador(valor, estado) {
  * r3 (m2, m14): una plantilla: sin conjunto, ColorKpi como siempre; con CLAVES_TONOS_KANBAN, la unión de sus claves.
  * @template {string} [C=ColorKpi]
  * @param {unknown} clase
- * @param {C} [respaldo]
+ * @param {NoInfer<C>} [respaldo]
  * @param {ReadonlyArray<C>} [conjunto]
  * @returns {C}
  */

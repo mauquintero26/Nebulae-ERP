@@ -446,4 +446,32 @@ console.log('--- TEST T24-c (B4 T24, F46): un solo aviso de fuente — el texto,
   assert.ok(!/suscribirRol|useSyncExternalStore|getUsuarioActual/.test(entregas), 'Entregas: sin la copia del rol');
 }
 
+console.log('--- B4 T24 f2 r1 (m28): cambiarConRegla — la ruta de error del arrastre de los tableros, una sola, con la regla de recargarTrasError ---');
+{
+  const { cambiarConRegla } = await import('../src/lib/avisos.js');
+  assert.equal(typeof cambiarConRegla, 'function', 'cambiarConRegla existe');
+  const correr = async (resultado) => {
+    let recargas = 0;
+    let error = null;
+    let valor;
+    try {
+      valor = await cambiarConRegla(async () => { if (resultado instanceof Error) throw resultado; return resultado; }, () => { recargas += 1; });
+    } catch (e) { error = e; }
+    return { recargas, error, valor };
+  };
+  // Bien: recarga una vez y no hay error.
+  assert.deepEqual(await correr('ok'), { recargas: 1, error: null, valor: undefined });
+  // 400, 409, 422 o la red cortada: recarga (el dato cambió o no se sabe) y el error sigue (el tablero deshace).
+  for (const e of [errorDeRespuesta(400, { detail: 'x' }), errorDeRespuesta(409, { detail: 'x' }), errorDeRespuesta(422, { detail: 'x' }), new TypeError('Failed to fetch')]) {
+    const r = await correr(e);
+    assert.equal(r.recargas, 1, String(e.status));
+    assert.equal(r.error, e, 'el mismo error sigue');
+  }
+  // 403 o 500: no recarga (nada cambió) y el error sigue.
+  for (const e of [errorDeRespuesta(403, { detail: 'x' }), errorDeRespuesta(500, { detail: 'x' })]) {
+    const r = await correr(e);
+    assert.deepEqual([r.recargas, r.error], [0, e], String(e.status));
+  }
+}
+
 console.log('✓ Todas las pruebas de avisos pasaron.');

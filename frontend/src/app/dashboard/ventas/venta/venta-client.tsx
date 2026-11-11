@@ -590,7 +590,9 @@ export default function VentaClient() {
     const vista = vistaDePasoPedido(clave);
     if (vista) elegirVista(vista);
   };
-  const actualizando = listado.recargando || flujo.cargando || (cargandoStats && stats.datos !== null);
+  // B4 T24 f2 r1 (m22): el estado de useEstadoKpi distingue la primera carga ('cargando') de una recarga ('actualizando', también
+  // después de un /ventas/stats fallido): la semántica de BASE.
+  const actualizando = listado.recargando || flujo.cargando || estadoKpis === 'actualizando';
 
   return (
     <div className="w-full bg-slate-50 min-h-full flex flex-col">

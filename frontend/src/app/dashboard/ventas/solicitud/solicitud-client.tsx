@@ -865,14 +865,14 @@ export function IAPanelSC({sc,apiBase}:{sc:any;apiBase:string}) {
   const tipo=sc?.tipo_solicitud||'Cotizacion de Producto';
   const isTraz=['Seguimiento','Programar Entrega'].includes(tipo);
   const isDev=tipo==='Devolucion de Producto';
-  const label=isTraz?'Analisis de Trazabilidad':isDev?'Analisis de Devolucion':'Analisis de Solicitud';
+  const label=isTraz?'Análisis de trazabilidad':isDev?'Análisis de devolución':'Análisis de la solicitud';
   async function generar() {
     setLoading(true);
     try{
       const token=getToken();
       const res=await fetch(`${apiBase}/ventas/solicitudes/${sc.id}/ia-analisis`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`}});
       const d=await res.json().catch(()=>({}));
-      setAnalisis(d.data?.analisis||d.analisis||'Error al generar analisis.');
+      setAnalisis(d.data?.analisis||d.analisis||'Error al generar el análisis.');
     }catch(e:any){setAnalisis('Error: '+e.message);}
     setLoading(false);
   }
@@ -881,7 +881,7 @@ export function IAPanelSC({sc,apiBase}:{sc:any;apiBase:string}) {
     setSending(true);
     const userMsg=chat;setChat('');
     setChatHistory(h=>[...h,{role:'user',text:userMsg}]);
-    setChatHistory(h=>[...h,{role:'ia',text:`Con base en ${sc.numero} (${etiquetaTipoSolicitud(tipo)}):${(analisis||'Sin analisis previo.').slice(0,150)}... Puedo profundizar en cualquier aspecto.`}]);
+    setChatHistory(h=>[...h,{role:'ia',text:`Con base en ${sc.numero} (${etiquetaTipoSolicitud(tipo)}):${(analisis||'Sin análisis previo.').slice(0,150)}... Puedo profundizar en cualquier aspecto.`}]);
     setSending(false);
   }
   // T8B ronda 2: los enlaces del «Formato de Confirmación» con el criterio del detalle: WhatsApp solo con un teléfono que
@@ -901,12 +901,12 @@ export function IAPanelSC({sc,apiBase}:{sc:any;apiBase:string}) {
           {!analisis&&!loading&&(
             <div className="text-center py-4">
               <p className="text-xs text-indigo-700 mb-3 font-medium">
-                {isTraz?'Genera analisis de trazabilidad: estados, historial, proximos pasos.':
-                 isDev?'Verifica si la devolucion cumple condiciones de politica (30 dias, estado).':
-                 'Obtene un analisis completo de esta solicitud.'}
+                {isTraz?'Genera el análisis de trazabilidad: estados, historial y próximos pasos.':
+                 isDev?'Verifica si la devolución cumple las condiciones de la política (30 días, estado).':
+                 'Obtén un análisis completo de esta solicitud.'}
               </p>
               <button onClick={generar} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-xl font-bold text-sm shadow flex items-center gap-2 mx-auto">
-                Generar Analisis IA
+                Generar análisis con IA
               </button>
             </div>
           )}
@@ -920,11 +920,11 @@ export function IAPanelSC({sc,apiBase}:{sc:any;apiBase:string}) {
         </div>
         {sc?.tipo_solicitud==='Cotizacion de Producto'&&(
           <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
-            <p className="font-extrabold text-amber-800 text-sm mb-2">Formato de Confirmacion al Cliente</p>
+            <p className="font-extrabold text-amber-800 text-sm mb-2">Formato de confirmación al cliente</p>
             <div className="bg-white border border-amber-300 rounded-xl p-4 mb-3 shadow-sm">
               <div className="flex items-center gap-2 mb-3 border-b pb-2">
                 <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-black text-sm">N</div>
-                <div><p className="font-black text-slate-900 text-sm">Nebulae Kids</p><p className="text-[10px] text-slate-500">Solicitud de Confirmacion</p></div>
+                <div><p className="font-black text-slate-900 text-sm">Nebulae Kids</p><p className="text-[10px] text-slate-500">Solicitud de confirmación</p></div>
               </div>
               <p className="text-xs font-bold text-slate-700 mb-1">SC: <span className="text-indigo-700">{sc.numero}</span></p>
               <p className="text-xs text-slate-600 mb-0.5">Cliente: <strong>{sc.customer_name}</strong></p>

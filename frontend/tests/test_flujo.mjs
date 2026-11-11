@@ -1099,6 +1099,25 @@ console.log('--- B4 T24 f2 (F45): useResumen — el cargador de resúmenes compa
   llamadas[6].rechazar(e500);
   await tic();
   assert.deepEqual(ver(clave(3, 9, 2), 9), { datos: null, cargando: false, error: e500 }, 'su error, sin los datos de la otra cuenta');
+  // r1 (m23): la carrera: la carga del usuario 7 en camino, el cambio al 9 y la respuesta del 7 que llega tarde. La del 7 queda abortada,
+  // la del 9 en {datos: null, cargando: true} (nada de la otra cuenta) y, al llegar, los datos del 9.
+  {
+    const mano = aMano();
+    let visto = null;
+    const otra = crearCargaListado({ pedir: mano.pedir, alLlegar: (l) => { visto = F.aplicarLlegadaResumen(visto, l, F.RESUMEN_DE_TARJETAS); } });
+    const estado9 = () => F.estadoResumen(visto, { clave: clave(0, 9, 0), ruta: RUTA, usuario: 9 });
+    otra.cargar(RUTA, clave(0, 7, 0), { ruta: RUTA, usuario: 7 });
+    await tic();
+    otra.cargar(RUTA, clave(0, 9, 0), { ruta: RUTA, usuario: 9 });
+    await tic();
+    assert.equal(mano.llamadas[0].signal.aborted, true, 'la carga del 7, abortada');
+    mano.llamadas[0].resolver({ data: S1 });
+    await tic();
+    assert.deepEqual(estado9(), { datos: null, cargando: true, error: null }, 'la del 7 que llega tarde no se ve');
+    mano.llamadas[1].resolver({ data: S2 });
+    await tic();
+    assert.deepEqual(estado9(), { datos: S2, cargando: false, error: null }, 'los datos del 9');
+  }
   // El flujo sigue como estaba (aditivo: el tercer parámetro es opcional): sus textos y un error que conserva lo último bueno.
   const sinTexto = F.aplicarLlegadaResumen(null, { marca: 'k', ok: true, respuesta: { data: null }, contexto: { ruta: RUTA } });
   assert.match(sinTexto.error.message, /flujo/);

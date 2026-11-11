@@ -1248,16 +1248,16 @@ function CotizacionDetalleContent() {
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
                     <div className="bg-indigo-600 rounded-lg px-2 py-1 text-white font-black text-xs">AI</div>
-                    <div><p className="font-extrabold text-indigo-900 text-sm">Analisis de Cotizacion</p><p className="text-[10px] text-indigo-500">Nebulae Analytics</p></div>
+                    <div><p className="font-extrabold text-indigo-900 text-sm">Análisis de cotización</p><p className="text-[10px] text-indigo-500">Nebulae Analytics</p></div>
                   </div>
                   <Button size="sm" color="indigo" disabled={!cotizacion} onClick={()=>{
                     const prods = cotizacion?.productos || [];
                     const actividades = cotizacion?.actividades || [];
-                    const txt=`ANALISIS DE COTIZACION\n\nEstado: ${estadoCfg.label}\nTotal: ${fCOP(cotizacion?.total_cop)}\nSubtotal: ${fCOP(cotizacion?.subtotal_cop)}\nDescuento: ${Number(cotizacion?.descuento_pct)||0}%\n\nArticulos: ${prods.length} linea(s)\n${prods.map((p:any)=>`- ${p.product_name||'Producto'} x${p.qty||0} - ${fCOP((Number(p.unit_price_cop)||0)*(Number(p.qty)||0))}`).join('\n')}\n\nActividad: ${actividades.length} evento(s) registrados.`;
+                    const txt=`ANÁLISIS DE COTIZACIÓN\n\nEstado: ${estadoCfg.label}\nTotal: ${fCOP(cotizacion?.total_cop)}\nSubtotal: ${fCOP(cotizacion?.subtotal_cop)}\nDescuento: ${Number(cotizacion?.descuento_pct)||0}%\n\nArtículos: ${prods.length} línea(s)\n${prods.map((p:any)=>`- ${p.product_name||'Producto'} x${p.qty||0} - ${fCOP((Number(p.unit_price_cop)||0)*(Number(p.qty)||0))}`).join('\n')}\n\nActividad: ${actividades.length} evento(s) registrados.`;
                     setCotAnalisis(txt);
                   }}>Analizar</Button>
                 </div>
-                {!cotAnalisis&&<p className="text-xs text-indigo-700 italic text-center py-3">Genera un analisis con los precios, productos y estado de la cotizacion.</p>}
+                {!cotAnalisis&&<p className="text-xs text-indigo-700 italic text-center py-3">Genera un análisis con los precios, productos y estado de la cotización.</p>}
                 {cotAnalisis&&<pre className="text-xs text-slate-800 whitespace-pre-wrap font-medium leading-relaxed bg-white/70 rounded-xl p-3 border border-indigo-100 mt-2">{cotAnalisis}</pre>}
               </div>
             </div>

@@ -66,7 +66,7 @@ import {
 import { ESTADOS_COTIZACION } from '@/lib/estados-cotizacion';
 import { fechaCorta, fechaSolo } from '@/lib/fechas-colombia';
 import { enlaceDocumento } from '@/lib/analisis';
-import { recargarTrasError, textoDeError } from '@/lib/avisos';
+import { cambiarConRegla, recargarTrasError, textoDeError } from '@/lib/avisos';
 import { FOCOS, RESERVA_BOTON_IA, TABLE } from '@/lib/design-system';
 import { accesoTableroVentas } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
@@ -1201,16 +1201,13 @@ export default function CotizacionClient() {
   // B4 T24 f2 (FINAL-m9): si el PATCH falla (el 409 N7 de otra activa, un 400, un 422 o la red cortada), también con la regla única
   // recargarTrasError, y el error sigue para que el tablero deshaga.
   async function cambiarDesdeTablero(cot: FilaCOT, resultado: { estado: string }) {
-    try {
-      await apiFetch(`/ventas/cotizaciones/${cot.id}`, {
+    // B4 T24 f2 r1 (m28): la ruta de error, el ayudante puro cambiarConRegla (avisos.js).
+    await cambiarConRegla(
+      () => apiFetch(`/ventas/cotizaciones/${cot.id}`, {
         method: 'PATCH', body: JSON.stringify({ estado: resultado.estado, updated_by: autorActual() }),
-      });
-    } catch (err) {
-      if (recargarTrasError(err)) { recargarListado(); setRecargaFlujo((n) => n + 1); }
-      throw err;
-    }
-    recargarListado();
-    setRecargaFlujo((n) => n + 1);
+      }),
+      () => { recargarListado(); setRecargaFlujo((n) => n + 1); },
+    );
   }
   // 'accion' 'rechazar': ModalMotivo (5 letras o más) → PATCH {estado: 'RECHAZADA'} y la nota «Motivo del rechazo: …» en
   // la Actividad (N3). Al terminar, del tablero solo su origen y su destino (D39), más las tarjetas y la franja.
