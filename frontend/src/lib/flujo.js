@@ -500,13 +500,26 @@ export function estadoDeFranja({ cargando = false, error = null, huboError = fal
 }
 
 /**
- * B4 T24 f2 r1 (m20): si la franja (BannerFlujo) ofrece «Reintentar»: con un error que se arregla volviendo a pedir
- * (ofreceReintentar de avisos.js: un 403 nunca), o mientras reintenta (el hook ya no trae el error: el botón sigue, «Reintentando…»).
- * @param {{error?: unknown, reintentando?: boolean}} [estado]
+ * B4 T24 f2 r1 (m20) y r2 (m3 = m6): si la franja (BannerFlujo) ofrece «Reintentar»: con un error que se arregla volviendo a pedir
+ * (ofreceReintentar de avisos.js: un 403 nunca), o mientras reintenta (el hook ya no trae el error: el botón sigue, «Reintentando…»)
+ * SOLO si el error que se reintenta lo ofrecía (`ofrecible`, lo que la franja recuerda con ofrecibleDeLaFranja). Así un 403 seguido de
+ * una recarga de la pantalla no pinta «Reintentando…».
+ * @param {{error?: unknown, reintentando?: boolean, ofrecible?: boolean}} [estado]
  * @returns {boolean}
  */
-export function reintentarEnFranja({ error = null, reintentando = false } = {}) {
-  return Boolean(reintentando) || ofreceReintentar(error);
+export function reintentarEnFranja({ error = null, reintentando = false, ofrecible = false } = {}) {
+  return (Boolean(reintentando) && Boolean(ofrecible)) || ofreceReintentar(error);
+}
+
+/**
+ * B4 T24 f2 r2 (m3 = m6): lo que la franja recuerda del último error: si ofrecía «Reintentar». Cambia solo cuando llega un error (su
+ * ofreceReintentar); sin error (mientras recarga, o cuando sale bien) queda lo de antes.
+ * @param {boolean} previo
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+export function ofrecibleDeLaFranja(previo, error) {
+  return error ? ofreceReintentar(error) : Boolean(previo);
 }
 
 // ─── la carga del resumen (useResumenFlujo) ─────────────────────────────────────

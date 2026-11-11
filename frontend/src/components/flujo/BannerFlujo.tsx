@@ -8,7 +8,7 @@ import { Contador } from '@/components/ui/Contador';
 import { usePreferencia } from '@/components/ui/usePreferencia';
 import { FOCO } from '@/lib/design-system';
 import {
-  alternarFiltroSemaforo, estadoDeFranja, estadoNumeroFranja, opcionesSemaforo, reintentarEnFranja, semaforoDeFranja,
+  alternarFiltroSemaforo, estadoDeFranja, estadoNumeroFranja, ofrecibleDeLaFranja, opcionesSemaforo, reintentarEnFranja, semaforoDeFranja,
 } from '@/lib/flujo';
 import { ChipAviso, PasosFlujo } from './PasosFlujo';
 import type { AccionAjustar, AvisoFranja, PartesFranja, PasoVista, SemaforoFranja } from './tipos';
@@ -155,6 +155,10 @@ export function BannerFlujo({
   const [huboError, setHuboError] = useState(false);
   const f = estadoDeFranja({ cargando, error, huboError });
   if (f.conError !== huboError) setHuboError(f.conError);
+  // B4 T24 f2 r2 (m3 = m6): junto con huboError, si ese error ofrecía «Reintentar» (un 403, no): lo pide la rama «Reintentando…».
+  const [ofrecible, setOfrecible] = useState(false);
+  const ofrecibleAhora = ofrecibleDeLaFranja(ofrecible, error);
+  if (ofrecibleAhora !== ofrecible) setOfrecible(ofrecibleAhora);
 
   const resumen = semaforoDeFranja({ atrasados: semaforo?.atrasados ?? null, cargando: f.cargandoNumeros, error: f.conError });
   // B4 T7 r1 (A1): mientras carga, la fila del semáforo lleva los botones que tendrá con los datos. La pantalla que pasa
@@ -267,7 +271,7 @@ export function BannerFlujo({
           <AlertTriangle size={14} aria-hidden="true" className="shrink-0" />
           <span>No se pudieron cargar los números del flujo.</span>
           {/* B4 T24 f2 r1 (m20, aditivo): «Reintentar» solo con un error que se arregla volviendo a pedir (un 403, nunca). */}
-          {onReintentar && reintentarEnFranja({ error, reintentando: f.reintentando }) ? (
+          {onReintentar && reintentarEnFranja({ error, reintentando: f.reintentando, ofrecible: ofrecibleAhora }) ? (
             <button
               ref={reintentarRef}
               type="button"

@@ -1168,13 +1168,39 @@ console.log('--- B4 T24 f2 r1 (m20): la franja ofrece «Reintentar» solo con un
   assert.equal(F.reintentarEnFranja({ error: e500, reintentando: false }), true, 'un 500');
   assert.equal(F.reintentarEnFranja({ error: red, reintentando: false }), true, 'la red cortada');
   assert.equal(F.reintentarEnFranja({ error: e403, reintentando: false }), false, 'un 403 nunca ofrece Reintentar');
-  // Mientras reintenta, el hook ya no trae el error: el botón sigue («Reintentando…»), porque lo que se reintenta se pudo ofrecer.
-  assert.equal(F.reintentarEnFranja({ error: null, reintentando: true }), true, 'reintentando');
+  // r2 (m3 = m6, D27): mientras reintenta, el hook ya no trae el error: el botón sigue («Reintentando…») solo si el error que se reintenta
+  // lo ofrecía (`ofrecible`, que la franja recuerda junto con huboError: ofrecibleDeLaFranja). Un 403 seguido de una recarga de la
+  // pantalla (sube `recarga`, «Actualizar») no pinta «Reintentando…».
+  assert.equal(F.reintentarEnFranja({ error: null, reintentando: true, ofrecible: true }), true, 'reintentando un 500');
+  assert.equal(F.reintentarEnFranja({ error: null, reintentando: true, ofrecible: false }), false, 'recargando después de un 403');
+  assert.equal(F.reintentarEnFranja({ error: null, reintentando: true }), false, 'sin saber si se ofrecía, no');
+  assert.equal(typeof F.ofrecibleDeLaFranja, 'function', 'ofrecibleDeLaFranja existe');
+  assert.equal(F.ofrecibleDeLaFranja(false, e500), true, 'llega un 500: se ofrece');
+  assert.equal(F.ofrecibleDeLaFranja(true, e403), false, 'llega un 403: no se ofrece');
+  assert.equal(F.ofrecibleDeLaFranja(true, null), true, 'sin error nuevo, lo recordado');
+  assert.equal(F.ofrecibleDeLaFranja(false, null), false);
+  // La secuencia: 403 → la pantalla recarga (cargando, error null) → sin botón; 500 → «Reintentar» → reintentando → «Reintentando…».
+  {
+    let ofrecible = false;
+    ofrecible = F.ofrecibleDeLaFranja(ofrecible, e403);
+    const f403 = F.estadoDeFranja({ cargando: false, error: e403, huboError: false });
+    assert.equal(F.reintentarEnFranja({ error: e403, reintentando: f403.reintentando, ofrecible }), false, '403: sin botón');
+    ofrecible = F.ofrecibleDeLaFranja(ofrecible, null);
+    const recarga = F.estadoDeFranja({ cargando: true, error: null, huboError: true });
+    assert.equal(recarga.reintentando, true, 'la recarga cuenta como reintento para la franja');
+    assert.equal(F.reintentarEnFranja({ error: null, reintentando: recarga.reintentando, ofrecible }), false, '403 y una recarga de la pantalla: sin botón');
+    ofrecible = F.ofrecibleDeLaFranja(ofrecible, e500);
+    assert.equal(F.reintentarEnFranja({ error: e500, reintentando: false, ofrecible }), true, '500: Reintentar');
+    ofrecible = F.ofrecibleDeLaFranja(ofrecible, null);
+    assert.equal(F.reintentarEnFranja({ error: null, reintentando: true, ofrecible }), true, '500 y su reintento: «Reintentando…»');
+  }
   assert.equal(F.reintentarEnFranja({ error: null, reintentando: false }), false, 'sin error');
   assert.equal(F.reintentarEnFranja({}), false);
   // El cableado (aditivo, en la pieza): BannerFlujo pinta el botón solo si la pantalla da onReintentar Y el error lo admite.
   const banner = readFileSync(new URL('../src/components/flujo/BannerFlujo.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-  assert.match(banner, /\{onReintentar && reintentarEnFranja\(\{ error, reintentando: f\.reintentando \}\) \? \(/);
+  // r2 (m3 = m6, D27): con lo recordado de la llegada del error.
+  assert.match(banner, /const \[ofrecible, setOfrecible\] = useState\(false\);\s*const ofrecibleAhora = ofrecibleDeLaFranja\(ofrecible, error\);\s*if \(ofrecibleAhora !== ofrecible\) setOfrecible\(ofrecibleAhora\);/);
+  assert.match(banner, /\{onReintentar && reintentarEnFranja\(\{ error, reintentando: f\.reintentando, ofrecible: ofrecibleAhora \}\) \? \(/);
   assert.match(banner, /import \{[^}]*\breintentarEnFranja\b[^}]*\} from '@\/lib\/flujo';/);
 }
 
