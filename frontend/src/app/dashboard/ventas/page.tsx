@@ -68,6 +68,8 @@ import { configSeguimientoInicial, errorConfigSeguimiento } from '@/lib/seguimie
 // Revisión final B3 (F2): la regla de rol (M12) y la nota ámbar en la ventana de envío del tablero (M47).
 import { accesoTableroVentas, esAdmin } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
+// B4 T24 f2 (F45): el cargador compartido de los resúmenes de las tarjetas.
+import { useResumen } from '@/components/ui/useResumen';
 import { AvisoNombreSinContacto } from './aviso-nombre-sin-contacto';
 import { normalizarTarifaIva, TARIFA_IVA_POR_DEFECTO } from '@/lib/iva';
 
@@ -649,18 +651,13 @@ export default function VentasHub() {
   const flujo = useResumenFlujo<DatosFlujo>('/ventas/flujo', recargaFlujo);
 
   // Las tarjetas (R6, RP68): GET /ventas/stats?periodo=30d, sin respaldo local; si falla, «—» (C6, C13).
+  // B4 T24 f2 (F45): con useResumen (components/ui), el cargador compartido: aborta la anterior, descarta las viejas, va con el
+  // usuario del token y, con error, sin datos («—»).
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<{ vuelta: number; datos: StatsHub | null; error: unknown } | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    apiFetch(`/ventas/stats?periodo=${PERIODO_KPI}`, { signal: control.signal })
-      .then((r: { data?: StatsHub } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  const cargandoStats = stats?.vuelta !== vueltaStats;
-  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
-  const datosStats = stats?.datos ?? null;
+  const stats = useResumen<StatsHub>(`/ventas/stats?periodo=${PERIODO_KPI}`, vueltaStats);
+  const cargandoStats = stats.cargando;
+  const estadoKpis = useEstadoKpi(cargandoStats, stats.error);
+  const datosStats = stats.datos;
 
   // La configuración (ConfigPanel, B3-T10d): GET /ventas/config, como antes; configCargada abre el panel y «Ajustar
   // tiempos» (configLeida). Si falla, un aviso y lo que había en pantalla sigue.

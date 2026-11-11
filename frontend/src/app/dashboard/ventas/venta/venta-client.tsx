@@ -50,6 +50,8 @@ import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { FOCOS, RESERVA_BOTON_IA, TABLE } from '@/lib/design-system';
 import { accesoTableroVentas } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
+// B4 T24 f2 (F45): el cargador compartido de los resúmenes de las tarjetas.
+import { useResumen } from '@/components/ui/useResumen';
 import { VEN_NAV } from '../ven-nav';
 import { getUsuarioActual, puedeCrearOrdenDePago } from '../flujo';
 // B4 T24 f2 (F47): las acciones del tablero, las mismas de E-Commerce.
@@ -366,17 +368,11 @@ export default function VentaClient() {
 
   // Las tarjetas (RP19 (2), D5): los kpis de GET /ventas/stats?periodo=30d (la llamada del Hub: «Saldo por cobrar» es el
   // mismo número, R7), sin respaldo local. Mientras no llega, 'cargando' (barras grises, nunca 0); si falla, «—».
+  // B4 T24 f2 (F45): con useResumen (components/ui), el MISMO cargador del Hub (antes, una copia literal).
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<{ vuelta: number; datos: StatsPedidos | null; error: unknown } | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    apiFetch(`/ventas/stats?periodo=${PERIODO_KPI}`, { signal: control.signal })
-      .then((r: { data?: StatsPedidos } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  const cargandoStats = stats?.vuelta !== vueltaStats;
-  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
+  const stats = useResumen<StatsPedidos>(`/ventas/stats?periodo=${PERIODO_KPI}`, vueltaStats);
+  const cargandoStats = stats.cargando;
+  const estadoKpis = useEstadoKpi(cargandoStats, stats.error);
 
   // El tablero en modo servidor (R11, C4, D39): una consulta por columna (consultaColumnaPedido: vista=todos, los estados
   // de la columna cruzados con el filtro de la pantalla; sin ninguno en común la columna queda vacía sin pedir nada) con
@@ -564,7 +560,7 @@ export default function VentaClient() {
   );
 
   // ── B4 T10, bloque 5: las tarjetas (KPI-ventas punto 9; R12, RP19 (2), D5) ──
-  const tarjetas = tarjetasPedidos(stats?.datos?.kpis ?? null);
+  const tarjetas = tarjetasPedidos(stats.datos?.kpis ?? null);
   // En Lista son pestañas (D41: accionPestana, como un clic en la pestaña); tocar la activa vuelve a Todos (la de siempre,
   // alternarPaso). En Kanban abren esa pestaña en Lista (accionVistaEnLista, la misma acción del enlace ?tab=). El
   // monto vendido y el saldo no tienen una vista: no son botones.
@@ -593,7 +589,7 @@ export default function VentaClient() {
     const vista = vistaDePasoPedido(clave);
     if (vista) elegirVista(vista);
   };
-  const actualizando = listado.recargando || flujo.cargando || (cargandoStats && stats !== null);
+  const actualizando = listado.recargando || flujo.cargando || (cargandoStats && stats.datos !== null);
 
   return (
     <div className="w-full bg-slate-50 min-h-full flex flex-col">

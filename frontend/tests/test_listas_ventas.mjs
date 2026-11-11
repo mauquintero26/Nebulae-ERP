@@ -1226,9 +1226,10 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   assert.match(lista, /total=\{sinPagina \? null : listado\.total\}\s*cargando=\{listado\.cargandoInicial \|\| sinPagina\}/);
   assert.match(lista, /total: sinPagina \? null : listado\.total,\s*estadoTotal: estadoDelTotal\(\{\s*total: listado\.total, cargando: listado\.cargandoInicial \|\| sinPagina,/);
   // Las tarjetas (RP19 (2), D5): los kpis de /ventas/stats?periodo=30d, la llamada del Hub; 'cargando' hasta que llegan.
-  assert.match(lista, /apiFetch\(`\/ventas\/stats\?periodo=\$\{PERIODO_KPI\}`, \{ signal: control\.signal \}\)/);
-  assert.match(lista, /const cargandoStats = stats\?\.vuelta !== vueltaStats;\s*const estadoKpis = useEstadoKpi\(cargandoStats, cargandoStats \? null : \(stats\?\.error \?\? null\)\);/);
-  assert.match(lista, /const tarjetas = tarjetasPedidos\(stats\?\.datos\?\.kpis \?\? null\);/);
+  // B4 T24 f2 (F45, D27): con useResumen (components/ui), el cargador compartido; sus casos, en test_flujo.mjs.
+  assert.match(lista, /const stats = useResumen<StatsPedidos>\(`\/ventas\/stats\?periodo=\$\{PERIODO_KPI\}`, vueltaStats\);/);
+  assert.match(lista, /const cargandoStats = stats\.cargando;\s*const estadoKpis = useEstadoKpi\(cargandoStats, stats\.error\);/);
+  assert.match(lista, /const tarjetas = tarjetasPedidos\(stats\.datos\?\.kpis \?\? null\);/);
   // «Actualizar» recarga la tabla, el tablero, la franja y las tarjetas; tras un cambio, lo que el cambio mueve.
   assert.match(lista, /const recargarLista = useCallback\(\(\) => \{\s*recargarListado\(\);\s*recargarTablero\(\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*setVueltaStats\(\(n\) => n \+ 1\);\s*\}, \[recargarListado, recargarTablero\]\);/);
   assert.match(lista, /const recargarTrasCambio = useCallback\(\(\) => \{\s*recargarListado\(\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*setVueltaStats\(\(n\) => n \+ 1\);\s*\}, \[recargarListado\]\);/);

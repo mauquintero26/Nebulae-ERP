@@ -30,6 +30,7 @@ NUNCA armes a mano lo que ya existe aquí. Cada pieza tiene un solo dueño; si t
 | Barra de submódulos del Hub | `SubNav` | `@/components/ui` |
 | Encabezado de la página | `PageHeader` | `@/components/ui` |
 | Tarjetas de indicadores y números que cargan | `FranjaKpis`, `TarjetaKpi`, `useEstadoKpi` y `Contador` | `@/components/ui` |
+| El resumen que alimenta las tarjetas (`/ventas/stats`…) | `useResumen(ruta, recarga)` → `{ datos, error, cargando, recargar, ofreceReintentar }`: aborta la anterior, va con el usuario del token y, con error, sin datos («—»); un 403 no ofrece «Reintentar». Nunca un `useEffect` con su `AbortController` copiado | `@/components/ui/useResumen` |
 | Lista con tabla | `TablaEstandar` y `BarraTabla`, con el token `TABLE` | `@/components/tabla` |
 | El estado de una lista | `useEstadoTabla`, `usePreferenciasTabla`, `useListado` (o `useListadoCliente`) y `usePantallaCompleta` | `@/components/tabla` |
 | Tablero Kanban | `useTableroKanban`, `TableroKanban` y `TarjetaKanban` | `@/components/ui` |

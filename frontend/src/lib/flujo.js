@@ -522,23 +522,51 @@ const delMismo = (resultado, ruta, usuario) => Boolean(resultado) && resultado.r
  *    buenos de la MISMA ruta y del MISMO usuario (un error conserva lo último bueno; lo de otra ruta o de otra cuenta
  *    no se muestra, como useListado en T4C r2).
  * No muta lo que recibe.
+ * B4 T24 f2 (F45, aditivo): `regla` (por defecto la del flujo, RESUMEN_DEL_FLUJO) da los textos de respaldo y si un error conserva lo
+ * último bueno. useResumen (components/ui) pasa RESUMEN_DE_TARJETAS: sus textos y, con error, sin datos (las tarjetas dicen «—»).
  * @param {ResultadoResumen | null | undefined} previo
  * @param {{marca: string, ok: boolean, respuesta?: unknown, error?: unknown, repeticion?: number,
  *   contexto?: {ruta?: string | null, usuario?: number | null} | null}} llegada
+ * @param {ReglaResumen} [regla]
  * @returns {ResultadoResumen}
  */
-export function aplicarLlegadaResumen(previo, llegada) {
+export function aplicarLlegadaResumen(previo, llegada, regla = RESUMEN_DEL_FLUJO) {
   const ruta = llegada?.contexto?.ruta ?? null;
   const usuario = llegada?.contexto?.usuario ?? null;
-  const anteriores = delMismo(previo, ruta, usuario) ? /** @type {ResultadoResumen} */ (previo).datos : null;
+  const conserva = regla.conservarConError !== false && delMismo(previo, ruta, usuario);
+  const anteriores = conserva ? /** @type {ResultadoResumen} */ (previo).datos : null;
   const base = { clave: llegada.marca, ruta, usuario, repeticion: llegada.repeticion ?? 0 };
   if (llegada.ok) {
     const datos = /** @type {any} */ (llegada.respuesta)?.data;
     if (esMapa(datos)) return { ...base, datos, error: null };
-    return { ...base, datos: anteriores, error: new Error('La respuesta del flujo no trae datos.') };
+    return { ...base, datos: anteriores, error: new Error(regla.sinDatos) };
   }
-  return { ...base, datos: anteriores, error: llegada.error ?? new Error('No se pudieron cargar los números del flujo.') };
+  return { ...base, datos: anteriores, error: llegada.error ?? new Error(regla.sinError) };
 }
+
+/**
+ * @typedef {{sinDatos: string, sinError: string, conservarConError: boolean}} ReglaResumen
+ *   B4 T24 f2 (F45): cómo queda un resumen que no llegó: el texto de una respuesta sin un objeto en `data`, el de un error que no trae
+ *   ninguno y si el error conserva lo último bueno de la misma ruta y del mismo usuario.
+ */
+
+/** La regla de la franja del flujo (useResumenFlujo): sus textos de siempre y, con error, lo último bueno. Inmutable. */
+export const RESUMEN_DEL_FLUJO = congelar({
+  sinDatos: 'La respuesta del flujo no trae datos.',
+  sinError: 'No se pudieron cargar los números del flujo.',
+  conservarConError: true,
+});
+
+/**
+ * B4 T24 f2 (F45): la regla de los resúmenes de tarjetas (useResumen: /ventas/stats y, en f3, /compras/stats e /inventory/stats):
+ * con error, sin los datos de antes, como el cargador que reemplaza (C6: «—»; al reintentar, barras grises, nunca un número viejo).
+ * Inmutable.
+ */
+export const RESUMEN_DE_TARJETAS = congelar({
+  sinDatos: 'La respuesta del resumen no trae datos.',
+  sinError: 'No se pudo cargar el resumen.',
+  conservarConError: false,
+});
 
 /**
  * Lo que devuelve useResumenFlujo para la consulta `clave` de `ruta`, con `resultado` (lo último que llegó):

@@ -317,8 +317,11 @@ console.log('--- B4 T7 (RP86 y D28): la recarga del Hub sin perder lo que había
   const uso = readFileSync(new URL('../src/components/tabla/useListado.ts', import.meta.url), 'utf8');
   assert.ok(uso.includes('crearCargaListado({'), 'useListado: la carga que aborta la anterior y descarta las viejas (D28)');
   // Las tarjetas y la configuración, que siguen con su GET propio, tampoco pintan una respuesta vieja.
-  const stats = hub.slice(hub.indexOf("apiFetch(`/ventas/stats?periodo=${PERIODO_KPI}`"), hub.indexOf('}, [vueltaStats]);'));
-  assert.ok(stats.includes('{ signal: control.signal }') && stats.includes('return () => control.abort();'), 'stats: aborta la anterior');
+  // B4 T24 f2 (F45, D27): las tarjetas cargan con useResumen (components/ui), que aborta la anterior y descarta las viejas con la
+  // MISMA carga de useListado (crearCargaListado; sus casos, en test_flujo.mjs «B4 T24 f2 (F45)»).
+  assert.match(hub, /const stats = useResumen<StatsHub>\(`\/ventas\/stats\?periodo=\$\{PERIODO_KPI\}`, vueltaStats\);/, 'stats: con el hook');
+  const usoResumen = readFileSync(new URL('../src/components/ui/useResumen.ts', import.meta.url), 'utf8');
+  assert.ok(usoResumen.includes('crearCargaListado({') && usoResumen.includes('return () => carga.cancelar();'), 'stats: aborta la anterior');
   const cfg = hub.slice(hub.indexOf("apiFetch('/ventas/config')"), hub.indexOf('}, [vueltaConfig, avisar]);'));
   assert.match(cfg, /\.then\(\(cfg: unknown\) => \{\s*if \(!vigente\) return;/, 'config: una respuesta vieja no pinta');
   assert.match(cfg, /\.catch\(\(err: unknown\) => \{\s*if \(!vigente\) return;/, 'config: el error de una vieja no avisa');

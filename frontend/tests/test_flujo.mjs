@@ -1020,4 +1020,97 @@ console.log('--- TEST 23 (B4 T11): PasosFlujo muestra la palabra y los avisos de
   assert.match(leerApp('app/dashboard/ventas/cotizacion/[id]/page.tsx'), /<PasosFlujo variante="barra" pasos=\{pasosCot\} etiqueta="Pasos de la cotización" partirEtiquetas estadoVisible \/>/);
 }
 
+console.log('--- B4 T24 f2 (F45): useResumen — el cargador de resúmenes compartido (llega, falla, abortado, recarga, cambio de usuario y el 403) ---');
+{
+  // El hook de components/ui sin React: la carga de lib/tabla.js (crearCargaListado: aborta la anterior y descarta las viejas) y la
+  // llegada con la regla de un resumen de tarjetas (RESUMEN_DE_TARJETAS: sus textos, no los del flujo, y un error SIN los datos de
+  // antes: las tarjetas dicen «—», C6, como el cargador que reemplaza). La clave va con el usuario del token, como useListado.
+  assert.ok(F.RESUMEN_DE_TARJETAS && Object.isFrozen(F.RESUMEN_DE_TARJETAS), 'RESUMEN_DE_TARJETAS existe');
+  const RUTA = '/ventas/stats?periodo=30d';
+  const S1 = { kpis: { pven_saldo_por_cobrar: 500 } };
+  const S2 = { kpis: { pven_saldo_por_cobrar: 700 } };
+  const { llamadas, pedir } = aMano();
+  let resultado = null;
+  const carga = crearCargaListado({ pedir, alLlegar: (l) => { resultado = F.aplicarLlegadaResumen(resultado, l, F.RESUMEN_DE_TARJETAS); } });
+  const clave = (version, usuario, recarga) => `${version}|${usuario ?? ''}|${recarga}|${RUTA}`;
+  const ver = (k, usuario) => F.estadoResumen(resultado, { clave: k, ruta: RUTA, usuario });
+  // Llega: lee res.data (nunca 0 mientras carga: datos null).
+  assert.deepEqual(ver(clave(0, 7, 0), 7), { datos: null, cargando: true, error: null });
+  carga.cargar(RUTA, clave(0, 7, 0), { ruta: RUTA, usuario: 7 });
+  await tic();
+  llamadas[0].resolver({ status: 'success', data: S1 });
+  await tic();
+  assert.deepEqual(ver(clave(0, 7, 0), 7), { datos: S1, cargando: false, error: null }, 'llega');
+  // Recarga (la pantalla sube su vuelta): los datos siguen mientras llega la nueva.
+  assert.deepEqual(ver(clave(0, 7, 1), 7), { datos: S1, cargando: true, error: null }, 'recarga sin parpadeo');
+  // Abortado: una recarga que se adelanta aborta la anterior, y si la vieja llega igual se descarta.
+  carga.cargar(RUTA, clave(0, 7, 1), { ruta: RUTA, usuario: 7 });
+  await tic();
+  carga.cargar(RUTA, clave(0, 7, 2), { ruta: RUTA, usuario: 7 });
+  await tic();
+  assert.equal(llamadas[1].signal.aborted, true, 'abortado');
+  llamadas[2].resolver({ data: S2 });
+  await tic();
+  llamadas[1].resolver({ data: S1 });
+  await tic();
+  assert.deepEqual(ver(clave(0, 7, 2), 7), { datos: S2, cargando: false, error: null }, 'la vieja no pisa la nueva');
+  // Falla: el error, sin los datos de antes (las tarjetas dicen «—», C6); mientras se reintenta, sin el error viejo y sin datos (barras
+  // grises, nunca un número viejo). Un 500 ofrece «Reintentar»; un 403, no.
+  const e500 = Object.assign(new Error('Error del servidor'), { status: 500 });
+  carga.cargar(RUTA, clave(1, 7, 2), { ruta: RUTA, usuario: 7 });
+  await tic();
+  llamadas[3].rechazar(e500);
+  await tic();
+  const fallo = ver(clave(1, 7, 2), 7);
+  assert.deepEqual(fallo, { datos: null, cargando: false, error: e500 }, 'falla');
+  assert.deepEqual(ver(clave(2, 7, 2), 7), { datos: null, cargando: true, error: null }, 'reintenta: cargando, sin datos viejos');
+  const { ofreceReintentar } = await import('../src/lib/avisos.js');
+  assert.equal(ofreceReintentar(fallo.error), true, 'un 500 ofrece Reintentar');
+  assert.equal(ofreceReintentar(ver(clave(2, 7, 2), 7).error), false, 'mientras reintenta, nada que ofrecer');
+  const e403 = Object.assign(new Error('No tienes permiso para esta acción.'), { status: 403 });
+  carga.cargar(RUTA, clave(2, 7, 2), { ruta: RUTA, usuario: 7 });
+  await tic();
+  llamadas[4].rechazar(e403);
+  await tic();
+  assert.equal(ver(clave(2, 7, 2), 7).error, e403);
+  assert.equal(ofreceReintentar(ver(clave(2, 7, 2), 7).error), false, 'un 403 del resumen no ofrece Reintentar');
+  // Una respuesta sin un objeto en data es un error con el texto del resumen (no el del flujo).
+  carga.cargar(RUTA, clave(3, 7, 2), { ruta: RUTA, usuario: 7 });
+  await tic();
+  llamadas[5].resolver({ status: 'success', data: null });
+  await tic();
+  assert.equal(ver(clave(3, 7, 2), 7).error.message, F.RESUMEN_DE_TARJETAS.sinDatos);
+  assert.ok(!/flujo/i.test(F.RESUMEN_DE_TARJETAS.sinDatos + F.RESUMEN_DE_TARJETAS.sinError));
+  // Y un error sin objeto lleva el texto del resumen.
+  assert.equal(F.aplicarLlegadaResumen(null, { marca: 'k', ok: false, contexto: { ruta: RUTA } }, F.RESUMEN_DE_TARJETAS).error.message, F.RESUMEN_DE_TARJETAS.sinError);
+  // Cambio de usuario: lo de la cuenta anterior no se muestra (ni datos ni error) hasta que llega lo del usuario nuevo.
+  assert.deepEqual(ver(clave(3, 9, 2), 9), { datos: null, cargando: true, error: null }, 'otro usuario: nada de la anterior');
+  carga.cargar(RUTA, clave(3, 9, 2), { ruta: RUTA, usuario: 9 });
+  await tic();
+  llamadas[6].rechazar(e500);
+  await tic();
+  assert.deepEqual(ver(clave(3, 9, 2), 9), { datos: null, cargando: false, error: e500 }, 'su error, sin los datos de la otra cuenta');
+  // El flujo sigue como estaba (aditivo: el tercer parámetro es opcional): sus textos y un error que conserva lo último bueno.
+  const sinTexto = F.aplicarLlegadaResumen(null, { marca: 'k', ok: true, respuesta: { data: null }, contexto: { ruta: RUTA } });
+  assert.match(sinTexto.error.message, /flujo/);
+  const previoFlujo = { clave: 'a', ruta: RUTA, usuario: null, repeticion: 0, datos: S1, error: null };
+  assert.equal(F.aplicarLlegadaResumen(previoFlujo, { marca: 'b', ok: false, error: e500, contexto: { ruta: RUTA } }).datos, S1);
+  assert.equal(F.aplicarLlegadaResumen(previoFlujo, { marca: 'b', ok: false, error: e500, contexto: { ruta: RUTA } }, F.RESUMEN_DE_TARJETAS).datos, null);
+  // El hook (components/ui/useResumen.ts) usa esas piezas, va con el usuario del token y expone si ofrecer «Reintentar».
+  const hook = readFileSync(new URL('../src/components/ui/useResumen.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  for (const parte of ['crearCargaListado({', 'aplicarLlegadaResumen(previo, llegada, RESUMEN_DE_TARJETAS)', 'estadoResumen(resultado, { clave, ruta, usuario, repeticion })',
+    'const usuario = usuarioDeLaSesion();', 'const clave = `${version}|${usuario ?? \'\'}|${recarga}|${ruta}`;', 'ofreceReintentar: ofreceReintentar(visto.error)',
+    'return () => carga.cancelar();']) {
+    assert.ok(hook.includes(parte), `useResumen: ${parte}`);
+  }
+  // Las copias de Ventas (el Hub y Pedidos de venta) usan el hook: sin su AbortController ni su vuelta a mano.
+  for (const ruta of ['app/dashboard/ventas/page.tsx', 'app/dashboard/ventas/venta/venta-client.tsx']) {
+    const f = readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    assert.match(f, /import \{ useResumen \} from '@\/components\/ui\/useResumen';/, `${ruta}: importa el hook`);
+    assert.match(f, /const stats = useResumen<Stats\w+>\(`\/ventas\/stats\?periodo=\$\{PERIODO_KPI\}`, vueltaStats\);/, `${ruta}: el hook`);
+    assert.match(f, /const cargandoStats = stats\.cargando;\s*const estadoKpis = useEstadoKpi\(cargandoStats, stats\.error\);/, `${ruta}: el estado de las tarjetas`);
+    assert.ok(!/setStats\(|new AbortController\(\)/.test(f), `${ruta}: sin la copia del cargador`);
+  }
+}
+
 console.log('\nOK: test_flujo.mjs');
