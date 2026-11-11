@@ -3201,12 +3201,15 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
   assert.match(drawer, /const \{ alPresionar, alSoltar, refPanel \} = useCierreVentana\(onClose, bloquearCierre \|\| !cierreExterno\);/, 'C2: el Drawer con bloqueo mientras guarda');
   assert.match(drawer, /disabled=\{bloquearCierre\}/);
   // C2, C4 y m23: las ventanas con estado editable no se cierran desde fuera (la tabla está en el reporte).
-  const ESPERADO = {"app/dashboard/admin/empleados/page.tsx": 1, "app/dashboard/compras/lista-compras/page.tsx": 3, "app/dashboard/compras/traslados/page.tsx": 1, "app/dashboard/crm/page.tsx": 2, "app/dashboard/finanzas/gastos/page.tsx": 1, "app/dashboard/inventario/ajustes/page.tsx": 1, "app/dashboard/inventario/entregas/page.tsx": 1, "app/dashboard/marketing/campanas/page.tsx": 1, "app/dashboard/ventas/cotizacion/cotizacion-client.tsx": 3, "app/dashboard/ventas/flujo.tsx": 1, "app/dashboard/ventas/motivo-sin-confirmacion.tsx": 1, "app/dashboard/ventas/page.tsx": 2, "app/dashboard/ventas/solicitud/selector-cliente.tsx": 1, "app/dashboard/ventas/solicitud/solicitud-client.tsx": 2, "app/dashboard/ventas/solicitud/[id]/page.tsx": 1, "app/dashboard/ventas/venta/venta-client.tsx": 1, "app/dashboard/ventas/venta/[id]/page.tsx": 2};
+  const ESPERADO = {"app/dashboard/admin/empleados/page.tsx": 1, "app/dashboard/compras/lista-compras/page.tsx": 3, "app/dashboard/compras/traslados/page.tsx": 1, "app/dashboard/crm/page.tsx": 2, "app/dashboard/finanzas/gastos/page.tsx": 1, "app/dashboard/inventario/ajustes/page.tsx": 1, "app/dashboard/inventario/entregas/page.tsx": 1, "app/dashboard/marketing/campanas/page.tsx": 1, "app/dashboard/ventas/cotizacion/cotizacion-client.tsx": 4, "app/dashboard/ventas/flujo.tsx": 1, "app/dashboard/ventas/motivo-sin-confirmacion.tsx": 1, "app/dashboard/ventas/page.tsx": 2, "app/dashboard/ventas/solicitud/selector-cliente.tsx": 1, "app/dashboard/ventas/solicitud/solicitud-client.tsx": 2, "app/dashboard/ventas/solicitud/[id]/page.tsx": 1, "app/dashboard/ventas/venta/venta-client.tsx": 1, "app/dashboard/ventas/venta/[id]/page.tsx": 2};
   for (const [ruta, n] of Object.entries(ESPERADO)) {
     assert.equal((leer(ruta).match(/cierreExterno=\{false\}/g) ?? []).length, n, ruta);
   }
   assert.match(leer('app/dashboard/crm/page.tsx'), /<Drawer cierreExterno=\{!editingLead\} bloquearCierre=\{isSaving\}/, 'el panel del lead en edición');
   assert.match(leer('components/ui/ModalMotivo.tsx'), /<Modal\s+cierreExterno=\{false\}/, 'ModalMotivo');
+  // r2 (C5): «Actualizar Pedido de Venta» escribe al cerrarse (onCancel = commitCalcSave(..., false, false), un PATCH): no es una
+  // confirmación para F40. Sin cierre de fuera y bloqueada mientras guarda (un Esc repetido mandaba un segundo PATCH).
+  assert.match(leer('app/dashboard/ventas/cotizacion/cotizacion-client.tsx'), /<Modal cierreExterno=\{false\} bloquearCierre=\{saving\} title="Actualizar Pedido de Venta"/);
   // Las de solo lectura y las confirmaciones conservan Esc y el fondo.
   for (const ruta of ['app/dashboard/inventario/kardex/page.tsx', 'app/dashboard/inventario/traslados/page.tsx', 'components/ui/Avisos.tsx']) {
     assert.ok(!leer(ruta).includes('cierreExterno'), ruta);
