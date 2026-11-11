@@ -1893,19 +1893,42 @@ export function accionPestana(estado, vista, opciones) {
  * {tipo: 'cambiar', cambios: {modo, estados}} si las opciones del modo nuevo (las de la vista del estado) no tienen alguno
  * de los estados filtrados (el tablero ofrece sus columnas y la lista los estados de la pestaña: lo que no está se quita,
  * si no filtraría sin verse). Sin opciones (null o undefined), el filtro no se toca. La pantalla envuelve el onEstado de
- * la barra: onEstado(accionModo(estado, valor, opcionesDelModo(valor))).
+ * la barra: onEstado(accionModo(estado, valor, opcionesDelModo(valor))). B4 T24 (FINAL-m11, aditivo): con `columnas` (las del
+ * tablero), el filtro se traduce antes entre la columna y sus estados (traducirEstadosDeModo).
  * @param {EstadoTabla} estado
  * @param {string} modo
  * @param {OpcionesEstados | null | undefined} opciones
+ * @param {ReadonlyArray<{estados: ReadonlyArray<string>}> | null} [columnas]
  * @returns {AccionTabla}
  */
-export function accionModo(estado, modo, opciones) {
+export function accionModo(estado, modo, opciones, columnas = null) {
   const actuales = estado?.estados ?? [];
   if (opciones === null || opciones === undefined || !actuales.length) return { tipo: 'modo', valor: modo };
   const validos = new Set(opcionesDeVista(opciones, estado?.vista ?? null).map((o) => o.valor));
-  const quedan = actuales.filter((e) => validos.has(e));
-  if (quedan.length === actuales.length) return { tipo: 'modo', valor: modo };
+  // B4 T24 (FINAL-m11): con las columnas del tablero, el filtro cambia de significado entre los modos (traducirEstadosDeModo).
+  const quedan = traducirEstadosDeModo(actuales, modo, columnas).filter((e) => validos.has(e));
+  if (quedan.length === actuales.length && quedan.every((e, i) => e === actuales[i])) return { tipo: 'modo', valor: modo };
   return { tipo: 'cambiar', cambios: { modo, estados: quedan } };
+}
+
+/**
+ * B4 T24 (FINAL-m11): el filtro de estados al pasar de un modo al otro. En Kanban, la opción de una columna es su estado principal
+ * (estados[0]) y vale la columna entera («En bodega» = RECIBIDO + PARCIALMENTE_RECIBIDA); en Lista, cada estado es él solo. Hacia
+ * 'lista', el principal de una columna se expande a los estados de esa columna; hacia 'kanban', cada estado pasa al principal de su
+ * columna, sin repetir. Lo que no es de ninguna columna, y todo sin columnas, queda igual (accionModo poda después lo que la vista no
+ * tiene).
+ * @param {ReadonlyArray<string>} estados
+ * @param {string} modo
+ * @param {ReadonlyArray<{estados: ReadonlyArray<string>}> | null | undefined} columnas
+ * @returns {string[]}
+ */
+export function traducirEstadosDeModo(estados, modo, columnas) {
+  const lista = [...(estados ?? [])];
+  if (!Array.isArray(columnas) || !columnas.length) return lista;
+  const traducidos = modo === 'lista'
+    ? lista.flatMap((e) => columnas.find((c) => c.estados?.[0] === e)?.estados ?? [e])
+    : lista.map((e) => columnas.find((c) => c.estados?.includes(e))?.estados[0] ?? e);
+  return [...new Set(traducidos)];
 }
 
 /**

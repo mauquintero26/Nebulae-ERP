@@ -722,7 +722,7 @@ console.log('--- B4 T8 r1: el cableado de la lista de Solicitudes (A2, A3, m1, m
   assert.match(lista, /<TarjetaKpi kpi="sc_activas" [^>]*\btono=\{tarjetas\?\.activas\.tono\}/);
   // m2: la barra despacha por alCambiarBarra, que poda con accionModo y las opciones del modo NUEVO.
   assert.match(lista, /<BarraTabla\s+estado=\{estadoBarra\}\s+onEstado=\{alCambiarBarra\}/);
-  assert.match(lista, /if \(accion\.tipo === 'modo'\) \{\s*const modo = String\(accion\.valor\);\s*despachar\(accionModo\(estado, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_SC : opcionesEstadosSolicitudes\)\);\s*\} else despachar\(accion\);/);
+  assert.match(lista, /if \(accion\.tipo === 'modo'\) \{\s*const modo = String\(accion\.valor\);\s*despachar\(accionModo\(estado, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_SC : opcionesEstadosSolicitudes, COLUMNAS_SC\)\);\s*\} else despachar\(accion\);/);
   // m5: la marca de la llegada sin filas (la Papelera y Kanban), puesta al día en el render, y la tabla y el total en
   // «cargando» mientras falte la página.
   assert.match(lista, /const sinFilasAhora = enPapelera \|\| modoEfectivo === 'kanban';/);
@@ -985,7 +985,7 @@ console.log('--- B4 T9: el cableado de la lista de Cotizaciones con el servidor 
   assert.match(lista, /<BarraTabla\s+estado=\{estado\}\s+onEstado=\{alCambiarBarra\}\s+pestanas=\{enKanban \? undefined : pestanas\}/);
   assert.match(lista, /opcionesEstados=\{enKanban \? OPCIONES_ESTADOS_TABLERO_COT : opcionesEstadosCotizaciones\}/);
   assert.match(lista, /kanbanDisponible\n/);
-  assert.match(lista, /if \(accion\.tipo === 'modo'\) \{\s*const modo = String\(accion\.valor\);\s*despachar\(accionModo\(estado, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_COT : opcionesEstadosCotizaciones\)\);\s*\} else despachar\(accion\);/);
+  assert.match(lista, /if \(accion\.tipo === 'modo'\) \{\s*const modo = String\(accion\.valor\);\s*despachar\(accionModo\(estado, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_COT : opcionesEstadosCotizaciones, COLUMNAS_COT\)\);\s*\} else despachar\(accion\);/);
   // m8 de T8: el «vacío» memoizado (la búsqueda y la pestaña), con el enlace a Solicitudes en Activas.
   assert.match(lista, /const vacioLista = useMemo\(\(\) => \{[\s\S]*?Ir a Solicitudes para crear una COT[\s\S]*?\}, \[estado\.q, estado\.vista\]\);/);
   assert.match(lista, /vacio=\{vacioLista\}/);
@@ -1262,7 +1262,7 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   assert.equal((lista.match(/por_estado/g) ?? []).length, 1, 'por_estado se lee en un solo lugar (el vigente)');
   assert.equal((lista.match(/opcionesEstadosPedidos/g) ?? []).length, 1, 'la pantalla usa las opciones con los heredados');
   assert.match(lista, /kanbanDisponible\n/);
-  assert.match(lista, /if \(accion\.tipo === 'modo'\) \{\s*const modo = String\(accion\.valor\);\s*despachar\(accionModo\(estado, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesDeLaLista\)\);\s*\} else despachar\(accion\);/);
+  assert.match(lista, /if \(accion\.tipo === 'modo'\) \{\s*const modo = String\(accion\.valor\);\s*despachar\(accionModo\(estado, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesDeLaLista, COLUMNAS_PEDIDO\)\);\s*\} else despachar\(accion\);/);
   assert.match(lista, /const vacioLista = useMemo\(\(\) => \{[\s\S]*?Los pedidos se crean al convertir una cotización confirmada por el cliente\.[\s\S]*?\}, \[estado\.q\]\);/);
   assert.match(lista, /vacio=\{vacioLista\}/);
 

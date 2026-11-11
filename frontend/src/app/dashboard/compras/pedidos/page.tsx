@@ -1736,7 +1736,7 @@ export default function PedidosCompraPage() {
   const alCambiarBarra = useCallback((accion: AccionTabla) => {
     if (accion.tipo === 'modo') {
       const modo = String(accion.valor);
-      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEC : opcionesEstadosPec));
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEC : opcionesEstadosPec, COLUMNAS_PEC));
     } else despachar(accion);
   }, [estado, despachar]);
   // R8: ordenada por una columna, el chip «Orden: … · Atención primero» vuelve a lo vencido primero.

@@ -3108,6 +3108,43 @@ console.log('--- TEST T24-g (B4 T24: F42, F43 y F44): el aviso del menú, el enc
   assert.ok(completa.includes('[&_[data-pie-tabla]]:pr-20') && completa.includes('[&_[data-pie-tabla]]:min-h-[4.5rem]'), completa);
 }
 
+console.log('--- TEST T24-h (B4 T24, FINAL-m11): accionModo traduce el filtro de estados entre la columna del tablero y los estados de la lista ---');
+{
+  const { accionModo, traducirEstadosDeModo } = TABLA;
+  const { COLUMNAS_PEC, OPCIONES_ESTADOS_TABLERO_PEC, opcionesEstadosPec } = await import('../src/lib/estados-compras.js');
+  // Kanban → Lista: el estado principal de una columna es la columna entera (sus estados que la vista permite).
+  const enBodega = COLUMNAS_PEC.find((c) => c.estados.includes('PARCIALMENTE_RECIBIDA'));
+  assert.ok(enBodega && enBodega.estados[0] === 'RECIBIDO', 'En bodega = RECIBIDO + PARCIALMENTE_RECIBIDA');
+  assert.deepEqual(traducirEstadosDeModo(['RECIBIDO'], 'lista', COLUMNAS_PEC), enBodega.estados);
+  const deKanban = estadoTablaInicial({ vista: 'todos', modo: 'kanban', estados: ['RECIBIDO'] });
+  const validosLista = new Set(opcionesEstadosPec('todos').map((o) => o.valor));
+  const esperados = enBodega.estados.filter((e) => validosLista.has(e));
+  assert.deepEqual(accionModo(deKanban, 'lista', opcionesEstadosPec, COLUMNAS_PEC), { tipo: 'cambiar', cambios: { modo: 'lista', estados: esperados } });
+  // Lista → Kanban: cada estado de la lista pasa a la opción de su columna (sin repetir).
+  const deLista = estadoTablaInicial({ vista: 'todos', modo: 'lista', estados: ['PARCIALMENTE_RECIBIDA', 'RECIBIDO'] });
+  assert.deepEqual(traducirEstadosDeModo(['PARCIALMENTE_RECIBIDA', 'RECIBIDO'], 'kanban', COLUMNAS_PEC), ['RECIBIDO']);
+  assert.deepEqual(accionModo(deLista, 'kanban', OPCIONES_ESTADOS_TABLERO_PEC, COLUMNAS_PEC), { tipo: 'cambiar', cambios: { modo: 'kanban', estados: ['RECIBIDO'] } });
+  // Lo que no es de ninguna columna queda igual; sin columnas, como antes (aditivo).
+  assert.deepEqual(traducirEstadosDeModo(['X'], 'lista', COLUMNAS_PEC), ['X']);
+  assert.deepEqual(traducirEstadosDeModo(['RECIBIDO'], 'lista', null), ['RECIBIDO']);
+  assert.deepEqual(accionModo(deKanban, 'lista', opcionesEstadosPec), accionModo(deKanban, 'lista', opcionesEstadosPec, null), 'sin columnas, lo de TEST 44');
+  // Ida y vuelta: Kanban «En bodega» → Lista (la columna) → Kanban «En bodega».
+  const ida = reducirEstadoTabla(deKanban, accionModo(deKanban, 'lista', opcionesEstadosPec, COLUMNAS_PEC));
+  const vuelta = reducirEstadoTabla(ida, accionModo(ida, 'kanban', OPCIONES_ESTADOS_TABLERO_PEC, COLUMNAS_PEC));
+  assert.deepEqual(vuelta.estados, ['RECIBIDO']);
+  // Ventas, la misma mecánica (Pedidos de venta).
+  const { COLUMNAS_PEDIDO } = await import('../src/lib/kanban-ventas.js');
+  const conVarios = COLUMNAS_PEDIDO.find((c) => c.estados.length > 1);
+  if (conVarios) assert.deepEqual(traducirEstadosDeModo([conVarios.estados[0]], 'lista', COLUMNAS_PEDIDO), conVarios.estados);
+  // Las pantallas le pasan sus columnas.
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.ok(leer('app/dashboard/compras/page.tsx').includes("despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEC : opcionesEstadosPec, COLUMNAS_PEC));"), 'compras/page.tsx');
+  assert.ok(leer('app/dashboard/compras/pedidos/page.tsx').includes("despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEC : opcionesEstadosPec, COLUMNAS_PEC));"), 'compras/pedidos/page.tsx');
+  assert.ok(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx').includes("despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_SC : opcionesEstadosSolicitudes, COLUMNAS_SC));"), 'ventas/solicitud/solicitud-client.tsx');
+  assert.ok(leer('app/dashboard/ventas/cotizacion/cotizacion-client.tsx').includes("despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_COT : opcionesEstadosCotizaciones, COLUMNAS_COT));"), 'ventas/cotizacion/cotizacion-client.tsx');
+  assert.ok(leer('app/dashboard/ventas/venta/venta-client.tsx').includes("despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesDeLaLista, COLUMNAS_PEDIDO));"), 'ventas/venta/venta-client.tsx');
+}
+
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');
 console.log('✓ T4C: sesión, estado armado, partes de columnas, URL de la lista, carga vigente, estado de la lista y modo cliente.');
 console.log('✓ T4C r1: orden rechazado, estados en la sesión, escrituras del usuario del render, esperar y vueltas.');

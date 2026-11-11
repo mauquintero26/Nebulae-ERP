@@ -487,7 +487,7 @@ export default function VentaClient() {
   const alCambiarBarra = useCallback((accion: AccionTabla) => {
     if (accion.tipo === 'modo') {
       const modo = String(accion.valor);
-      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesDeLaLista));
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesDeLaLista, COLUMNAS_PEDIDO));
     } else despachar(accion);
   }, [estado, despachar, opcionesDeLaLista]);
   // m8 de T8: el «vacío» de la lista solo cambia con la búsqueda. Sin búsqueda, de dónde salen los pedidos (H47).

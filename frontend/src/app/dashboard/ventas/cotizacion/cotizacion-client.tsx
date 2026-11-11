@@ -1160,7 +1160,7 @@ export default function CotizacionClient() {
   const alCambiarBarra = useCallback((accion: AccionTabla) => {
     if (accion.tipo === 'modo') {
       const modo = String(accion.valor);
-      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_COT : opcionesEstadosCotizaciones));
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_COT : opcionesEstadosCotizaciones, COLUMNAS_COT));
     } else despachar(accion);
   }, [estado, despachar]);
   // m8 de T8: el «vacío» de la lista solo cambia con la búsqueda y la pestaña. En Activas, sin búsqueda, el enlace de
