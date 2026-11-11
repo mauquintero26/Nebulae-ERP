@@ -3101,12 +3101,65 @@ console.log('--- TEST T24-e (B4 T24, F40): el Modal y el Drawer se cierran con E
   const hook = leer('components/ui/useCierreVentana.ts');
   for (const n of ['cierraConEsc(', 'cierraConClicFuera(', "document.addEventListener('keydown'", "document.removeEventListener('keydown'"]) assert.ok(hook.includes(n), n);
   const modal = leer('components/ui/Modal.tsx');
-  assert.match(modal, /const fondo = useCierreVentana\(onClose, bloquearCierre \|\| !cierreExterno\);/);
-  assert.match(modal, /onPointerDown=\{fondo\.alPresionar\} onClick=\{fondo\.alSoltar\}/);
+  assert.match(modal, /const \{ alPresionar, alSoltar, refPanel \} = useCierreVentana\(onClose, bloquearCierre \|\| !cierreExterno\);/);
+  assert.match(modal, /onPointerDown=\{alPresionar\} onClick=\{alSoltar\}/);
   const drawer = leer('components/ui/Drawer.tsx');
-  assert.match(drawer, /const fondo = useCierreVentana\(onClose, !cierreExterno\);/);
-  assert.match(drawer, /onPointerDown=\{fondo\.alPresionar\} onClick=\{fondo\.alSoltar\}/);
-  assert.match(drawer, /<button type="button" onClick=\{onClose\} aria-label="Cerrar"/);
+  // r1 (C2): el Drawer suma bloquearCierre (abajo, T24-e2).
+  assert.match(drawer, /onPointerDown=\{alPresionar\} onClick=\{alSoltar\}/);
+  assert.match(drawer, /<button type="button" onClick=\{onClose\} disabled=\{bloquearCierre\} aria-label="Cerrar"/);
+}
+
+console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué ventanas se cierran desde fuera, la pila de capas y el foco ---');
+{
+  const { abrirCapa, cerrarCapa, esCapaDeArriba, siguienteFocoAtrapado, cierraConEsc } = TABLA;
+  // m29: la pila de capas, pura.
+  let capas = abrirCapa([], 'A');
+  assert.equal(esCapaDeArriba(capas, 'A'), true, 'A sola, arriba');
+  capas = abrirCapa(capas, 'B');
+  assert.deepEqual([esCapaDeArriba(capas, 'B'), esCapaDeArriba(capas, 'A')], [true, false], 'B encima de A');
+  const sinB = cerrarCapa(capas, 'B');
+  assert.equal(esCapaDeArriba(sinB, 'A'), true, 'cerrada B, A vuelve arriba');
+  const fueraDeOrden = cerrarCapa(capas, 'A');
+  assert.deepEqual(fueraDeOrden, ['B'], 'cerrar fuera de orden');
+  assert.equal(cerrarCapa(capas, 'Z'), capas, 'un id desconocido: la misma pila');
+  assert.equal(esCapaDeArriba(capas, 'Z'), false);
+  assert.equal(esCapaDeArriba([], 'A'), false);
+  assert.notEqual(abrirCapa(capas, 'C'), capas, 'una pila nueva');
+  // m18: Tab atrapado en la capa de arriba (el índice a enfocar, o null si el navegador sigue solo; -1 sin controles).
+  assert.equal(siguienteFocoAtrapado(2, 3, false), 0, 'del último, al primero');
+  assert.equal(siguienteFocoAtrapado(0, 3, true), 2, 'del primero hacia atrás, al último');
+  assert.equal(siguienteFocoAtrapado(-1, 3, false), 0, 'con el foco afuera, al primero');
+  assert.equal(siguienteFocoAtrapado(-1, 3, true), 2);
+  assert.equal(siguienteFocoAtrapado(1, 3, false), null, 'en el medio, el navegador');
+  assert.equal(siguienteFocoAtrapado(0, 0, false), -1, 'sin controles: quieto');
+  // m12: con la re-autenticación pendiente o un Esc de fuera del panel de esa capa, no se cierra.
+  assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, reautenticando: true }), false);
+  assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, dentro: false }), false);
+  assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, dentro: true }), true);
+  // El hook usa la lib: la pila, el foco que entra y vuelve, Tab y la re-autenticación.
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const hook = leer('components/ui/useCierreVentana.ts');
+  for (const n of ['capas = abrirCapa(capas, capa);', 'const arriba = esCapaDeArriba(capas, capa);', 'reautenticando: hayReautenticacionPendiente()',
+    'dentro: !panel || panel.contains(e.target as Node)', 'siguienteFocoAtrapado(', "if (abridor && abridor.isConnected) abridor.focus({ preventScroll: true });"]) {
+    assert.ok(hook.includes(n), n);
+  }
+  assert.match(hook, /document\.removeEventListener\('keydown', alTeclear\);\s*capas = cerrarCapa\(capas, capa\);/);
+  assert.match(leer('components/ui/Modal.tsx'), /ref=\{refPanel\}\s+tabIndex=\{-1\}/);
+  const drawer = leer('components/ui/Drawer.tsx');
+  assert.match(drawer, /ref=\{refPanel\} tabIndex=\{-1\} role="dialog" aria-modal="true"/);
+  assert.match(drawer, /const \{ alPresionar, alSoltar, refPanel \} = useCierreVentana\(onClose, bloquearCierre \|\| !cierreExterno\);/, 'C2: el Drawer con bloqueo mientras guarda');
+  assert.match(drawer, /disabled=\{bloquearCierre\}/);
+  // C2, C4 y m23: las ventanas con estado editable no se cierran desde fuera (la tabla está en el reporte).
+  const ESPERADO = {"app/dashboard/admin/empleados/page.tsx": 1, "app/dashboard/compras/lista-compras/page.tsx": 3, "app/dashboard/compras/traslados/page.tsx": 1, "app/dashboard/crm/page.tsx": 2, "app/dashboard/finanzas/gastos/page.tsx": 1, "app/dashboard/inventario/ajustes/page.tsx": 1, "app/dashboard/inventario/entregas/page.tsx": 1, "app/dashboard/marketing/campanas/page.tsx": 1, "app/dashboard/ventas/cotizacion/cotizacion-client.tsx": 3, "app/dashboard/ventas/flujo.tsx": 1, "app/dashboard/ventas/motivo-sin-confirmacion.tsx": 1, "app/dashboard/ventas/page.tsx": 2, "app/dashboard/ventas/solicitud/selector-cliente.tsx": 1, "app/dashboard/ventas/solicitud/solicitud-client.tsx": 2, "app/dashboard/ventas/solicitud/[id]/page.tsx": 1, "app/dashboard/ventas/venta/venta-client.tsx": 1, "app/dashboard/ventas/venta/[id]/page.tsx": 2};
+  for (const [ruta, n] of Object.entries(ESPERADO)) {
+    assert.equal((leer(ruta).match(/cierreExterno=\{false\}/g) ?? []).length, n, ruta);
+  }
+  assert.match(leer('app/dashboard/crm/page.tsx'), /<Drawer cierreExterno=\{!editingLead\} bloquearCierre=\{isSaving\}/, 'el panel del lead en edición');
+  assert.match(leer('components/ui/ModalMotivo.tsx'), /<Modal\s+cierreExterno=\{false\}/, 'ModalMotivo');
+  // Las de solo lectura y las confirmaciones conservan Esc y el fondo.
+  for (const ruta of ['app/dashboard/inventario/kardex/page.tsx', 'app/dashboard/inventario/traslados/page.tsx', 'components/ui/Avisos.tsx']) {
+    assert.ok(!leer(ruta).includes('cierreExterno'), ruta);
+  }
 }
 
 console.log('--- TEST T24-f (B4 T24, FINAL-m27): la alerta de una pestaña se dice con texto (no solo con el color) y no desaparece activa ---');

@@ -1195,7 +1195,7 @@ export default function CRMPage() {
       {selectedLead && (() => {
         const stage = stages.find(s => s.id === selectedLead.pipeline_stage_id);
         return (
-          <Drawer onClose={() => { setSelectedLead(null); setEditingLead(false); }} header={(
+          <Drawer cierreExterno={!editingLead} bloquearCierre={isSaving} onClose={() => { setSelectedLead(null); setEditingLead(false); }} header={(
             <div className="flex-1 flex items-start justify-between gap-2 min-w-0">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1">
@@ -1416,7 +1416,7 @@ export default function CRMPage() {
 
       {/* ══ MODAL — NUEVO LEAD ═════════════════════════════════════════════ */}
       {showNewLead && (
-        <Modal title="Nuevo Lead" icon={Plus} color="indigo" onClose={() => setShowNewLead(false)}
+        <Modal cierreExterno={false} title="Nuevo Lead" icon={Plus} color="indigo" onClose={() => setShowNewLead(false)}
           footer={(
             <>
               <Button variant="secondary" onClick={() => setShowNewLead(false)}>Cancelar</Button>
@@ -1505,7 +1505,7 @@ export default function CRMPage() {
 
       {/* ══ PANEL — CONFIGURACIÓN CRM ══════════════════════════════════════ */}
       {showConfig && (
-        <Drawer onClose={() => setShowConfig(false)} header={(
+        <Drawer cierreExterno={false} onClose={() => setShowConfig(false)} header={(
           <div className="flex items-center gap-3">
             <div className="p-2 bg-slate-700 text-white rounded-xl"><Settings size={18}/></div>
             <h2 className="font-black text-slate-800 text-lg">Configuración CRM</h2>

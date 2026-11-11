@@ -1521,7 +1521,7 @@ function SolicitudDetalleContent() {
         </Modal>
       )}
       {showCancelModal && pasosCancelar.length === 0 && (
-        <Modal title="Cancelar Solicitud" subtitle="La solicitud pasa a la Papelera. Podrás restaurarla desde allí." icon={Trash2} color="red" maxWidth="md"
+        <Modal cierreExterno={false} title="Cancelar Solicitud" subtitle="La solicitud pasa a la Papelera. Podrás restaurarla desde allí." icon={Trash2} color="red" maxWidth="md"
           // T1B: mientras cancela, la X queda deshabilitada y la ventana no se cierra.
           onClose={() => { if (!cancelling) setShowCancelModal(false); }}
           bloquearCierre={cancelling}

@@ -430,7 +430,7 @@ export default function AjustesPage() {
 
       {/* Create Modal (B1 a B3) */}
       {showCreate && (
-        <Modal title="Nuevo Ajuste de Inventario" icon={SlidersHorizontal} color="amber" onClose={() => setShowCreate(false)}
+        <Modal cierreExterno={false} title="Nuevo Ajuste de Inventario" icon={SlidersHorizontal} color="amber" onClose={() => setShowCreate(false)}
           footer={(
             <>
               <Button variant="secondary" onClick={() => setShowCreate(false)}>Cancelar</Button>

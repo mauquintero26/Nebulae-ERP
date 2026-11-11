@@ -912,7 +912,7 @@ function PedidoVentaDetalleContent() {
         </div>
       </div>
       {showPecModal && pedido && (
-        <Modal title="Crear Pedido de Compra" icon={ShoppingCart} color="purple"
+        <Modal cierreExterno={false} title="Crear Pedido de Compra" icon={ShoppingCart} color="purple"
           subtitle={`Vinculado a ${pedido.numero} — ${pedido.customer_name}`}
           // Mientras se crea el PEC no se cierra (ni la X ni 'Cancelar'): el resultado siempre llega a una ventana abierta.
           onClose={() => { if (!pecSaving) setShowPecModal(false); }} bloquearCierre={pecSaving}
@@ -986,7 +986,7 @@ function PedidoVentaDetalleContent() {
         />
       )}
       {showCancelModal && (
-        <Modal title="Cancelar Pedido de Venta" icon={AlertCircle} color="red" maxWidth="md"
+        <Modal cierreExterno={false} title="Cancelar Pedido de Venta" icon={AlertCircle} color="red" maxWidth="md"
           // Mientras se cancela no se cierra (ni la X ni 'Volver'): el resultado siempre llega a una ventana abierta.
           onClose={() => { if (!cancelling) setShowCancelModal(false); }} bloquearCierre={cancelling}
           footer={(

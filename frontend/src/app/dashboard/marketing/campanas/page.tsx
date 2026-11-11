@@ -452,7 +452,7 @@ export default function CampanasPage() {
       
       {/* MODAL / PANEL FORMULARIO */}
       {showForm && (
-        <Modal title={editMode?'Editar Campaña':'Nueva Campaña'} icon={Megaphone} color="emerald" maxWidth="xl"
+        <Modal cierreExterno={false} title={editMode?'Editar Campaña':'Nueva Campaña'} icon={Megaphone} color="emerald" maxWidth="xl"
           onClose={()=>setShowForm(false)}
           footer={(
             <>

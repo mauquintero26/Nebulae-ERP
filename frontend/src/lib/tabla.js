@@ -2236,11 +2236,61 @@ export function saleConEsc({ tecla, defaultPrevented = false, dialogoEncima = fa
  * B4 T24 (F40): si un Esc cierra una ventana (Modal) o un panel lateral (Drawer): solo la capa de ARRIBA (una confirmación encima se
  * cierra primero), si nadie más lo atendió (defaultPrevented: un menú, el filtro, la búsqueda) y si no está guardando (bloqueado:
  * bloquearCierre).
- * @param {{tecla: string, arriba: boolean, defaultPrevented?: boolean, bloqueado?: boolean}} entrada
+ * @param {{tecla: string, arriba: boolean, defaultPrevented?: boolean, bloqueado?: boolean, reautenticando?: boolean, dentro?: boolean}} entrada
  * @returns {boolean}
  */
-export function cierraConEsc({ tecla, arriba, defaultPrevented = false, bloqueado = false }) {
-  return tecla === 'Escape' && arriba && !defaultPrevented && !bloqueado;
+export function cierraConEsc({ tecla, arriba, defaultPrevented = false, bloqueado = false, reautenticando = false, dentro = true }) {
+  // B4 T24 r1 (m12): tampoco con la ventana de re-ingreso abierta (no está en la pila) ni con un Esc de fuera del panel de esa capa.
+  return tecla === 'Escape' && arriba && !defaultPrevented && !bloqueado && !reautenticando && dentro;
+}
+
+/**
+ * B4 T24 r1 (m29): la pila de capas abiertas (Modal y Drawer), de abajo arriba: una pila nueva con `id` encima.
+ * @template T
+ * @param {ReadonlyArray<T>} capas
+ * @param {T} id
+ * @returns {T[]}
+ */
+export function abrirCapa(capas, id) {
+  return [...(capas ?? []).filter((c) => c !== id), id];
+}
+
+/**
+ * B4 T24 r1 (m29): la pila sin `id` (también fuera de orden); un id que no está devuelve la MISMA pila.
+ * @template T
+ * @param {ReadonlyArray<T>} capas
+ * @param {T} id
+ * @returns {ReadonlyArray<T>}
+ */
+export function cerrarCapa(capas, id) {
+  return capas.includes(id) ? capas.filter((c) => c !== id) : capas;
+}
+
+/**
+ * B4 T24 r1 (m29): si `id` es la capa de arriba (la única que atiende Esc y atrapa Tab).
+ * @template T
+ * @param {ReadonlyArray<T>} capas
+ * @param {T} id
+ * @returns {boolean}
+ */
+export function esCapaDeArriba(capas, id) {
+  return capas.length > 0 && capas[capas.length - 1] === id;
+}
+
+/**
+ * B4 T24 r1 (m18): Tab atrapado en la capa de arriba. Con el foco en `indice` de `total` controles: el índice a enfocar al salir por un
+ * borde (o desde afuera: -1), null si el navegador sigue solo (en el medio), o -1 sin controles (el foco se queda).
+ * @param {number} indice
+ * @param {number} total
+ * @param {boolean} atras  Mayús+Tab
+ * @returns {number | null}
+ */
+export function siguienteFocoAtrapado(indice, total, atras) {
+  if (total <= 0) return -1;
+  if (indice < 0) return atras ? total - 1 : 0;
+  if (!atras && indice >= total - 1) return 0;
+  if (atras && indice <= 0) return total - 1;
+  return null;
 }
 
 /**

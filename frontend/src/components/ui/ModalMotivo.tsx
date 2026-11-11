@@ -68,6 +68,7 @@ export function ModalMotivo({
 
   return (
     <Modal
+      cierreExterno={false}
       capa="encima"
       role="alertdialog"
       color="red"

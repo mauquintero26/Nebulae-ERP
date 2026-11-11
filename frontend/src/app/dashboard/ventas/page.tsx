@@ -514,7 +514,7 @@ function ConfigPanel({alertDias,configCargada,onSave,onClose}:{alertDias:any,con
     </div>
   );
   return (
-    <Drawer onClose={onClose} maxWidth="md" header={(
+    <Drawer cierreExterno={false} onClose={onClose} maxWidth="md" header={(
       <div className="flex items-center gap-3">
         <div className="bg-indigo-600 text-white p-2.5 rounded-xl shadow-md"><Settings size={20}/></div>
         <div><h2 className="font-black text-slate-800 text-lg">Configuración de HUB Ventas</h2><p className="text-xs text-slate-500">Parámetros de resolución, alertas y automatizaciones</p></div>
@@ -1461,7 +1461,7 @@ export default function VentasHub() {
 
       {/* N3: cancelar documentos con motivo */}
       {cancelacion && (
-        <Modal
+        <Modal cierreExterno={false}
           title={filasCancelacion.length === 1 ? `Cancelar ${filasCancelacion[0].row?.numero || 'documento'}` : `Cancelar ${filasCancelacion.length} documentos`}
           subtitle="Revisa qué se va a cancelar e indica el motivo"
           icon={Trash2} color="rose" maxWidth="lg"

@@ -334,7 +334,7 @@ export function CalculadorModal({
     && validaPreciosAlGuardar(cuerpoDeGuardado(armarPayload(), referenciaGuardado()));
 
   return (
-    <Modal title="Calculadora de Cotización" subtitle={`${cot.numero} — ${cot.customer_name}`}
+    <Modal cierreExterno={false} title="Calculadora de Cotización" subtitle={`${cot.numero} — ${cot.customer_name}`}
       icon={Calculator} color="amber" maxWidth="4xl" onClose={onClose} bloquearCierre={saving}
       footer={anulacion ? (
         // H40 (R7): el servidor no guardó (409 ANULA_CONFIRMACION): qué cambió y la razón obligatoria antes de anular.
@@ -675,7 +675,7 @@ export function VerificarAnticipoModal({ cot, verificador, saving, error, onConf
   const ev = evaluarVerificacion(cuenta, form, hoy);
   const campo = 'w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400';
   return (
-    <Modal title="Verificar el pago del anticipo" subtitle={`${cot.numero} — ${cot.customer_name || ''}`}
+    <Modal cierreExterno={false} title="Verificar el pago del anticipo" subtitle={`${cot.numero} — ${cot.customer_name || ''}`}
       icon={DollarSign} color="emerald" maxWidth="lg" onClose={onCancel}
       footer={(
         <>
@@ -775,7 +775,7 @@ export function AjustarAnticipoModal({ cot, saving, error, onGuardar, onVolverMo
   const campo = 'w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400';
   const errorGuardado = error && <p className="text-xs text-red-600 font-bold bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>;
   return (
-    <Modal title="Ajustar anticipo" subtitle={`${cot.numero} — total ${fCOP(cot.total_cop)}`}
+    <Modal cierreExterno={false} title="Ajustar anticipo" subtitle={`${cot.numero} — total ${fCOP(cot.total_cop)}`}
       icon={DollarSign} color="amber" maxWidth="md" onClose={onCancel}
       footer={anulacion ? (
         <PanelAnularConfirmacion anulacion={anulacion} razon={razon} onRazon={setRazon} saving={saving}

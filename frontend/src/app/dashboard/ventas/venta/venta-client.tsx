@@ -68,7 +68,7 @@ export function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClo
     setSaving(false);
   }
   return (
-    <Modal title="Nuevo Proveedor" subtitle="Agregar a la agenda de proveedores" icon={UserPlus} color="purple"
+    <Modal cierreExterno={false} title="Nuevo Proveedor" subtitle="Agregar a la agenda de proveedores" icon={UserPlus} color="purple"
       // Mientras guarda no se cierra (ni la X ni 'Cancelar'): el resultado siempre llega a una ventana abierta.
       onClose={()=>{ if (!saving) onClose(); }} bloquearCierre={saving}
       footer={(

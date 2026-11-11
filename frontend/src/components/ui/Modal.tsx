@@ -3,7 +3,7 @@ import { useId } from 'react';
 import { X } from 'lucide-react';
 import { ACCENTS, AccentColor } from './colors';
 import { useCierreVentana } from './useCierreVentana';
-import { FOCO } from '@/lib/design-system';
+import { FOCO, FOCO_DENTRO } from '@/lib/design-system';
 
 /** Modal estandar: header con icono+titulo sobre degradado del acento, cuerpo
  * con scroll propio, footer opcional para los botones de accion. `maxWidth`
@@ -41,15 +41,17 @@ export function Modal({
   const widthCls = { md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-xl', '3xl': 'max-w-3xl', '4xl': 'max-w-4xl' }[maxWidth];
   const capaCls = capa === 'encima' ? 'z-[60]' : 'z-50';
   const tituloId = useId();
-  const fondo = useCierreVentana(onClose, bloquearCierre || !cierreExterno);
+  const { alPresionar, alSoltar, refPanel } = useCierreVentana(onClose, bloquearCierre || !cierreExterno);
   return (
-    <div onPointerDown={fondo.alPresionar} onClick={fondo.alSoltar} className={`fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center ${capaCls} p-4`}>
+    <div onPointerDown={alPresionar} onClick={alSoltar} className={`fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center ${capaCls} p-4`}>
       <div
+        ref={refPanel}
+        tabIndex={-1}
         role={role}
         aria-modal="true"
         aria-labelledby={tituloId}
         aria-describedby={describedBy}
-        className={`bg-white rounded-3xl shadow-2xl w-full ${widthCls} max-h-[90vh] overflow-hidden flex flex-col`}
+        className={`bg-white rounded-3xl shadow-2xl w-full ${widthCls} max-h-[90vh] overflow-hidden flex flex-col ${FOCO_DENTRO}`}
       >
         <div className={`px-6 py-5 border-b flex justify-between items-center bg-gradient-to-r ${accent.modalGradient}`}>
           <div>

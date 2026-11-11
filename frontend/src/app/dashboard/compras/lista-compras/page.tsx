@@ -193,7 +193,7 @@ function NewSupplierModal({ onSave, onClose }: { onSave: (s: Proveedor) => void;
     setSaving(false);
   }
   return (
-    <Modal title="Nuevo Proveedor" subtitle="Agregar a la agenda de proveedores" color="purple" capa="encima" onClose={onClose}
+    <Modal cierreExterno={false} title="Nuevo Proveedor" subtitle="Agregar a la agenda de proveedores" color="purple" capa="encima" onClose={onClose}
       footer={(
         <>
           <Button variant="secondary" onClick={onClose}>Cancelar</Button>
@@ -686,7 +686,7 @@ export default function ListaComprasPage() {
 
       {/* Editar el proveedor de un ítem */}
       {editando && (
-        <Modal title="Editar proveedor" subtitle={editando.producto} color="purple" maxWidth="md" onClose={() => setEditando(null)}
+        <Modal cierreExterno={false} title="Editar proveedor" subtitle={editando.producto} color="purple" maxWidth="md" onClose={() => setEditando(null)}
           footer={(
             <>
               <Button variant="secondary" onClick={() => setEditando(null)}>Cancelar</Button>
@@ -702,7 +702,7 @@ export default function ListaComprasPage() {
 
       {/* Modal Crear PEC */}
       {showPecModal && pecModalItems.length > 0 && (
-        <Modal title="Crear Pedido de Compra" subtitle={`${pecModalItems.length} producto(s) seleccionado(s)`}
+        <Modal cierreExterno={false} title="Crear Pedido de Compra" subtitle={`${pecModalItems.length} producto(s) seleccionado(s)`}
           color="purple" maxWidth="md" onClose={() => setShowPecModal(false)}
           footer={(
             <>

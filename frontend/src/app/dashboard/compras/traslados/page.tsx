@@ -507,7 +507,7 @@ export default function TrasladosPage() {
 
       {/* Create Modal */}
       {showCreate && (
-        <Modal title="Nuevo Traslado Interno" subtitle="Mover mercancía entre bodegas" icon={ArrowLeftRight} color="orange"
+        <Modal cierreExterno={false} title="Nuevo Traslado Interno" subtitle="Mover mercancía entre bodegas" icon={ArrowLeftRight} color="orange"
           onClose={() => setShowCreate(false)}
           footer={(
             <>

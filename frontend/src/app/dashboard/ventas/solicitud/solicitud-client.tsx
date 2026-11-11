@@ -1681,7 +1681,7 @@ export default function SolicitudClient() {
 
       {/* MODAL: MOTIVO DE CANCELACIÓN (N4: una o varias solicitudes; el servidor revisa que no tengan documentos activos) */}
       {showCancelModal&&(
-        <Modal title={cancelTarget.length>1?`Cancelar ${cancelTarget.length} solicitudes`:'Cancelar Solicitud'} subtitle="La solicitud pasa a la Papelera. No se puede cancelar si tiene una cotización o un pedido de venta activos." icon={Trash2} color="red" maxWidth="md"
+        <Modal cierreExterno={false} title={cancelTarget.length>1?`Cancelar ${cancelTarget.length} solicitudes`:'Cancelar Solicitud'} subtitle="La solicitud pasa a la Papelera. No se puede cancelar si tiene una cotización o un pedido de venta activos." icon={Trash2} color="red" maxWidth="md"
           // Mientras se cancela, la X y el fondo no cierran la ventana (igual que "No, mantener"): las fallidas y el
           // detalle del servidor siempre llegan a una ventana abierta; bloquearCierre deja la X deshabilitada a la vista.
           onClose={()=>{if(!cancelling) cerrarCancelacion();}} bloquearCierre={cancelling}
@@ -1721,7 +1721,7 @@ export default function SolicitudClient() {
 
       {/* CREATE MODAL */}
       {showCreate&&(
-        <Modal title="Nueva Solicitud de Cliente" subtitle="El número de la solicitud se asigna al crearla." icon={Plus} color="indigo" maxWidth="3xl"
+        <Modal cierreExterno={false} title="Nueva Solicitud de Cliente" subtitle="El número de la solicitud se asigna al crearla." icon={Plus} color="indigo" maxWidth="3xl"
           onClose={()=>{setShowCreate(false);resetCreateForm();}}
           footer={(
             <>

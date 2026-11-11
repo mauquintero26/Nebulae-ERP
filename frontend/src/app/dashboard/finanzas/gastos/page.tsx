@@ -341,7 +341,7 @@ export default function GastosPage() {
 
       {/* Modal Añadir Gasto */}
       {showModal && (
-        <Modal title="Añadir Gasto" icon={CreditCard} color="rose" onClose={() => setShowModal(false)}
+        <Modal cierreExterno={false} title="Añadir Gasto" icon={CreditCard} color="rose" onClose={() => setShowModal(false)}
           footer={(
             <>
               <Button variant="secondary" onClick={() => setShowModal(false)}>Cancelar</Button>
