@@ -99,6 +99,15 @@ ETIQUETAS_ESTADO = {
         "COMPLETADA_LOGISTICA": "Solo registro logístico",
         "CANCELADA": "Cancelada",
     },
+    # B4 T24 (B25): el estado de UNA etapa del envío de un PEC (validate_status de schemas_compras.py). ESPEJO de
+    # ETIQUETA_ETAPA_TRACKING de frontend/src/lib/flujo-compras.js (test_paridad_estados_compras compara los dos): la
+    # Actividad TRACKING_UPDATED dice lo mismo que los pasos del seguimiento.
+    "ETAPA_ENVIO": {
+        "PENDIENTE": "Pendiente",
+        "EN_PROCESO": "En curso",
+        "COMPLETADO": "Completada",
+        "CANCELADO": "Cancelada",
+    },
 }
 
 # T11 calidad (B1, ronda 1): como empieza el renglon de un pago en la Actividad del pedido, con el genero de su

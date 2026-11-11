@@ -113,6 +113,9 @@ class CrearPecBody(BaseModel):
     supplier_ref: Optional[str] = None
     ven_id: Optional[int] = None
     ven_numero: Optional[str] = None
+    # B4 T24 (FINAL-C7-b): los PVEN que consolida el PEC (aditivo; ven_id se conserva). Sin tipo de elemento a propósito:
+    # create_pec lo valida a mano (R21) y responde 422 en español, no el error técnico de Pydantic.
+    ven_ids: Optional[Any] = None
     modalidad_pago: Optional[str] = "Contado"
     metodo_pago: Optional[str] = None
     warehouse_id: Optional[int] = None

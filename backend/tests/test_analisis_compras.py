@@ -173,7 +173,9 @@ def test_dias_promedio(app_client, db, admin_token):
     f.recepcion(datetime(2001, 1, 6, 23, 0), pec)
     f.recepcion(datetime(2001, 1, 5, 10, 0), None)   # r1 (m9): una recepción sin PEC no entra en el promedio
     k = _kpis(_analisis(app_client, admin_token))["dias_promedio_entrega"]
-    assert (k["valor"], k["formato"], k["mejor"]) == (4.0, "dias", "baja")
+    # B4 T24 (FINAL-m6): los días son de Colombia: compra el 1 (17:00), recepciones el 3 (20:00) y el 6 (18:00):
+    # (2 + 5) / 2 = 3,5. Con el día UTC daba (3 + 5) / 2 = 4,0.
+    assert (k["valor"], k["formato"], k["mejor"]) == (3.5, "dias", "baja")
     sin_recepciones = _kpis(_analisis(app_client, admin_token, desde="2001-01-07"))["dias_promedio_entrega"]
     assert sin_recepciones["valor"] is None
 
@@ -361,6 +363,46 @@ def test_ranking_y_dona_agrupan_por_la_ficha_del_proveedor(app_client, db, admin
     assert filas == [(500_000, 2), (50_000, 1)]
     dona = next(d for d in data["donas"] if d["clave"] == "proveedor")
     assert sorted(s["valor"] for s in dona["segmentos"]) == [50_000, 500_000]
+
+
+def test_entregas_con_el_dia_de_colombia(app_client, db, admin_token):
+    """B4 T24 (FINAL-m6): % a tiempo, días promedio y el retraso usan el día de Colombia de la recepción y de la compra
+    (R7), como las barras. Una recepción confirmada a las 19:30 de Colombia del último día a tiempo (00:30 UTC del día
+    siguiente) es a tiempo; antes contaba como tardía. La fecha prometida sigue con .date() (RP40)."""
+    f = _Fabrica(db)
+    compra = datetime(2001, 1, 2, 12, 0)                 # 2 ene (07:00 en Colombia)
+    pec = f.pec(compra, entrega=datetime(2001, 1, 4))   # a tiempo hasta el 5 (tolerancia de 1 día)
+    rec = f.recepcion(datetime(2001, 1, 6, 0, 30), pec)  # 5 ene a las 19:30 en Colombia; 6 ene en UTC
+    kpis = _kpis(_analisis(app_client, admin_token))
+    assert kpis["entregas_a_tiempo_pct"]["valor"] == 100.0
+    assert kpis["dias_promedio_entrega"]["valor"] == 3.0   # 5 ene − 2 ene (en UTC daba 6 − 2 = 4)
+    resp = app_client.get(f"/api/v1/compras/recepciones/{rec.id}", headers=_auth(admin_token))
+    assert resp.status_code == 200 and resp.json()["data"]["dias_retraso"] is None, resp.text
+    tarde = f.recepcion(datetime(2001, 1, 7, 0, 30), f.pec(compra, entrega=datetime(2001, 1, 4)))   # 6 ene en Colombia
+    resp = app_client.get(f"/api/v1/compras/recepciones/{tarde.id}", headers=_auth(admin_token))
+    assert resp.json()["data"]["dias_retraso"] == 1, resp.text   # en UTC daba 2
+    # el orden 'retraso' de la lista usa la misma regla
+    resp = app_client.get("/api/v1/compras/recepciones", headers=_auth(admin_token),
+                          params={"q": f.sufijo, "orden": "-retraso", "vista": "todas"})
+    assert resp.status_code == 200, resp.text
+    assert [(r["id"], r["dias_retraso"]) for r in resp.json()["data"]] == [(tarde.id, 1), (rec.id, None)]
+
+
+def test_ranking_desempata_por_la_ficha_del_proveedor(app_client, db, admin_token):
+    """B4 T24 (FINAL-m5): dos proveedores distintos con el mismo nombre y el mismo dinero comprado: el de menor supplier_id
+    primero, en cada consulta (antes lo decidía el plan). Se distinguen por la cantidad de pedidos."""
+    from app.models.erp_documents import Supplier
+    f = _Fabrica(db)
+    nombre = f"Mismo {f.sufijo}"
+    uno = f._guardar(Supplier(name=nombre, country="Colombia", is_active=True))
+    dos = f._guardar(Supplier(name=nombre, country="Colombia", is_active=True))
+    dia = datetime(2001, 1, 2, 10, 0)
+    f.pec(dia, 50_000, proveedor=nombre, supplier_id=dos.id)
+    f.pec(dia, 50_000, proveedor=nombre, supplier_id=dos.id)
+    f.pec(dia, 100_000, proveedor=nombre, supplier_id=uno.id)
+    for top in (5, 10):
+        filas = [(r["nombre"], r["valor"], r["cantidad"]) for r in _analisis(app_client, admin_token, top=top)["ranking"]["filas"]]
+        assert filas == [(nombre, 100_000, 1), (nombre, 100_000, 2)], top
 
 
 def test_dias_promedio_ignora_un_pedido_sin_fecha_de_compra(app_client, db, admin_token):

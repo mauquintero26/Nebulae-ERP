@@ -15,12 +15,13 @@ flujo), el resumen de GET /compras/pedidos y el Análisis:
   recibidos sobre los emitidos»).
 - % entregas a tiempo: las recepciones confirmadas (COMPLETADA y COMPLETADA_LOGISTICA, GRUPOS_RECEPCION) con
   fecha_recepcion en el período cuyo pedido de compra tiene fecha de entrega estimada. Es a tiempo si el día de la
-  recepción es ≤ el prometido + TOLERANCIA_A_TIEMPO_DIAS (1). Los dos días se toman con .date() (cast a date), sin pasarlos
-  a hora de Colombia, IGUAL que _gr_dict de erp_compras.py, para que el Hub y la Mesa de Recepciones no se contradigan
-  (r1, m11: la regla vive en expr_limite_a_tiempo y expr_dias_retraso, y _gr_dict usa la misma constante; si se corrige
-  _gr_dict, hay que corregir esto también). Una recepción sin pedido de compra no tiene fecha prometida.
-- Días promedio de entrega: día de la recepción − día del pedido de compra (fecha_de_compra), con 1 decimal y nunca
-  negativo; solo las recepciones confirmadas del período con pedido de compra.
+  recepción es ≤ el prometido + TOLERANCIA_A_TIEMPO_DIAS (1). B4 T24 (FINAL-m6): el día de la recepción es el de
+  Colombia (dia_colombia, R7, como las barras); el prometido sigue con .date() (RP40). _gr_dict de erp_compras.py hace lo
+  mismo, para que el Hub y la Mesa de Recepciones no se contradigan (r1, m11: la regla vive en expr_limite_a_tiempo y
+  expr_dias_retraso, y _gr_dict usa la misma constante; si se cambia una, hay que cambiar la otra). Una recepción sin
+  pedido de compra no tiene fecha prometida.
+- Días promedio de entrega: día de la recepción − día del pedido de compra (fecha_de_compra), los dos de Colombia
+  (FINAL-m6), con 1 decimal y nunca negativo; solo las recepciones confirmadas del período con pedido de compra.
 - Los días de los períodos son de Colombia (los bordes del Periodo de core/periodos.py y las cubetas de expr_cubeta,
   ZONA_COLOMBIA, RP1). Los montos van en pesos enteros (analisis.dinero). Las fechas de los movimientos, con fechas.iso_z.
 
@@ -35,7 +36,7 @@ from decimal import Decimal
 from sqlalchemy import Date, and_, case, cast, func, or_
 from sqlalchemy.orm import Session
 
-from app.core.analisis import dinero, expr_cubeta, kpi, respuesta, validar_top, variacion_pct
+from app.core.analisis import dinero, expr_cubeta, expr_local, kpi, respuesta, validar_top, variacion_pct
 # r1 (m17): las piezas del contrato que ya existen se importan, no se copian. _pct, _cantidad, _dona, _movimiento,
 # _linea y _barras_por_fecha (que usan el mismo _enteros) son las de analisis_ventas.py (privadas, como D-9; para la
 # revisión final: deberían vivir en core/analisis.py) y _ventanas, la de core/periodos.py.
@@ -51,7 +52,6 @@ ESTADOS_SIN_DINERO_PEC = ETAPAS_PEC["borrador"] + ETAPAS_PEC["cancelado"]   # RP
 ESTADOS_RECEPCION_CONFIRMADA = GRUPOS_RECEPCION["confirmadas"]   # COMPLETADA y COMPLETADA_LOGISTICA
 TOLERANCIA_A_TIEMPO_DIAS = 1  # la de _gr_dict (erp_compras.py): llegar un día después de lo prometido es a tiempo
 SIN_PROVEEDOR = "Sin proveedor"
-VENTANAS = ("actual", "anterior")
 
 
 # ─── Las reglas que comparten /compras/stats, la lista de Pedidos de compra y el Análisis ───────────────────────────
@@ -187,25 +187,32 @@ def expr_limite_a_tiempo(pec=PurchaseOrderFull):
     return cast(pec.fecha_entrega_estimada, Date) + TOLERANCIA_A_TIEMPO_DIAS
 
 
+def dia_colombia(col):
+    """B4 T24 (FINAL-m6): el día de Colombia (R7, core/fechas) de un instante UTC guardado, en SQL. Las barras ya agrupan
+    por ese día (expr_cubeta); los KPI de entrega y el retraso tomaban el día UTC, y una recepción confirmada a las 20:00
+    de Colombia del último día a tiempo (01:00 UTC del siguiente) contaba como tardía."""
+    return cast(expr_local(col), Date)
+
+
 def expr_dias_retraso(gr=GoodsReceipt, pec=PurchaseOrderFull):
-    """El dias_retraso de _gr_dict en SQL: día de la recepción − expr_limite_a_tiempo, solo si es > 0; NULL si llegó a
-    tiempo, si el PEC no tiene fecha prometida o si la recepción no tiene fecha."""
-    dias = cast(gr.fecha_recepcion, Date) - expr_limite_a_tiempo(pec)
+    """El dias_retraso de _gr_dict en SQL: día (de Colombia, FINAL-m6) de la recepción − expr_limite_a_tiempo, solo si es
+    > 0; NULL si llegó a tiempo, si el PEC no tiene fecha prometida o si la recepción no tiene fecha."""
+    dias = dia_colombia(gr.fecha_recepcion) - expr_limite_a_tiempo(pec)
     return case((dias > 0, dias))
 
 
 def _reglas_de_entrega():
     """(a tiempo, con retraso, sin fecha prometida, días de entrega, días de retraso) de una recepción, en SQL (ver el
-    docstring del módulo: .date() de los dos lados, como _gr_dict). Los días de entrega nunca son negativos; sin la
+    docstring del módulo: el día de Colombia de la recepción, como _gr_dict). Los días de entrega nunca son negativos; sin la
     fecha del PEC no hay días (el promedio filtra con fecha_de_compra, r1 m9: GREATEST ignora el NULL)."""
     gr, pec = GoodsReceipt, PurchaseOrderFull
-    dia_recepcion = cast(gr.fecha_recepcion, Date)
+    dia_recepcion = dia_colombia(gr.fecha_recepcion)   # B4 T24 (FINAL-m6): el día de Colombia, como las barras
     limite = expr_limite_a_tiempo(pec)
     con_fecha = pec.fecha_entrega_estimada.isnot(None)
     a_tiempo = and_(con_fecha, dia_recepcion <= limite)
     tarde = and_(con_fecha, dia_recepcion > limite)
     sin_fecha = pec.fecha_entrega_estimada.is_(None)
-    dias_entrega = func.greatest(dia_recepcion - cast(fecha_de_compra(pec), Date), 0)
+    dias_entrega = func.greatest(dia_recepcion - dia_colombia(fecha_de_compra(pec)), 0)
     return a_tiempo, tarde, sin_fecha, dias_entrega, expr_dias_retraso(gr, pec)
 
 
@@ -315,9 +322,11 @@ def _ranking(db: Session, periodo: Periodo, top: int, total) -> dict:
     clave = _clave_proveedor()
     valor = func.coalesce(func.sum(pec.total_cop), 0)
     nombre = func.max(_nombre_proveedor())
+    # B4 T24 (FINAL-m5): desempate final por la clave del grupo (supplier_id, sin ficha al final).
     filas = (_comprados(db).filter(actual)
              .with_entities(*clave, nombre, valor, func.count(pec.id))
-             .group_by(*clave).order_by(valor.desc(), nombre.asc()).limit(top).all())
+             .group_by(*clave).order_by(valor.desc(), nombre.asc(), clave[0].asc().nulls_last(), clave[1].asc())
+             .limit(top).all())
     a_tiempo, _, _, _, _ = _reglas_de_entrega()
     actual_gr, _ = _ventanas(gr.fecha_recepcion, periodo)
     entregas = {_clave_de_fila(sid, n): (int(con_fecha), int(bien)) for sid, _, n, con_fecha, bien in (

@@ -465,7 +465,7 @@ def test_lista_compras_solo_sincroniza_con_offset_cero(app_client, db, admin_tok
         db.commit()
         antes = _load_lista_compras(db)
         with contador_sql.ventana() as v:
-            cuerpo = _get(app_client, admin_token, RUTA_LISTA, offset=1, limit=5)
+            _get(app_client, admin_token, RUTA_LISTA, offset=1, limit=5)
         assert v.commits == 0, v.commits
         assert not [x for x in v.sentencias if x.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))]
         db.expire_all()

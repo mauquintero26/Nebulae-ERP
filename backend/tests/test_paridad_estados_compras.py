@@ -45,6 +45,7 @@ console.log(JSON.stringify({
   etapa_de: Object.fromEntries(raros.map(e => [e, m.etapaPec(e)])),
   etapa_nulo: m.etapaPec(null),
   grupos: m.GRUPOS_PEC,
+  vistas: m.VISTAS_PEC,
   transiciones: m.TRANSICIONES_PEC_PATCH,
   transiciones_de: Object.fromEntries(raros.map(e => [e, m.transicionesPec(e)])),
   transiciones_nulo: m.transicionesPec(null),
@@ -107,6 +108,13 @@ def test_las_etiquetas_de_estados_pec_son_las_de_etiquetas_estado_pec():
 def test_grupos_pec_son_los_mismos():
     _, espejo = _espejo_frontend()
     assert espejo['grupos'] == {k: list(v) for k, v in ec.GRUPOS_PEC.items()}
+
+
+def test_vistas_pec_son_las_mismas():
+    """B4 T24 (B39): VISTAS_PEC de estados-compras.js era una copia a mano de core/estados_compras.py sin paridad."""
+    _, espejo = _espejo_frontend()
+    assert espejo['vistas'] == {k: list(v) for k, v in ec.VISTAS_PEC.items()}
+    assert list(espejo['vistas']) == list(ec.VISTAS_PEC), 'mismo orden de vistas'
 
 
 def test_transiciones_y_estados_manuales_son_los_mismos():

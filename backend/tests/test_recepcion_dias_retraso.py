@@ -25,7 +25,7 @@ def test_recepcion_a_tiempo_no_marca_retraso(app_client, db, admin_token):
         numero="PEC-TEST001",
         supplier_name="Proveedor Prueba",
         estado="RECIBIDO",
-        fecha_entrega_estimada=datetime.utcnow() - timedelta(days=1),
+        fecha_entrega_estimada=datetime(2026, 11, 3, 15, 0),   # B4 T24 (FINAL-m6): instantes fijos, sin depender de la hora
         tracking_stages=[],
         productos=[]
     )
@@ -37,7 +37,7 @@ def test_recepcion_a_tiempo_no_marca_retraso(app_client, db, admin_token):
         numero="ENINV-TEST001",
         pec_id=pec.id,
         pec_numero=pec.numero,
-        fecha_recepcion=datetime.utcnow(),  # llegó el mismo día + tolerancia
+        fecha_recepcion=datetime(2026, 11, 4, 15, 0),  # llegó el día siguiente: dentro de la tolerancia
         productos=[]
     )
     db.add(gr)
@@ -60,7 +60,7 @@ def test_recepcion_tardia_marca_dias_retraso(app_client, db, admin_token):
         numero="PEC-TEST002",
         supplier_name="Proveedor Prueba",
         estado="RECIBIDO",
-        fecha_entrega_estimada=datetime.utcnow() - timedelta(days=5),
+        fecha_entrega_estimada=datetime(2026, 11, 3, 15, 0),
         tracking_stages=[],
         productos=[]
     )
@@ -72,7 +72,7 @@ def test_recepcion_tardia_marca_dias_retraso(app_client, db, admin_token):
         numero="ENINV-TEST002",
         pec_id=pec.id,
         pec_numero=pec.numero,
-        fecha_recepcion=datetime.utcnow(),  # 5 días después del estimado (+1 tolerancia = 4 de retraso real)
+        fecha_recepcion=datetime(2026, 11, 8, 15, 0),  # 5 días después del estimado (+1 tolerancia = 4 de retraso real)
         productos=[]
     )
     db.add(gr)
@@ -82,3 +82,23 @@ def test_recepcion_tardia_marca_dias_retraso(app_client, db, admin_token):
     resp = app_client.get(f"/api/v1/compras/recepciones/{gr.id}", headers=auth(admin_token))
     assert resp.status_code == 200
     assert resp.json()["data"]["dias_retraso"] == 4
+
+
+def test_el_dia_de_la_recepcion_es_el_de_colombia(app_client, db, admin_token):
+    """B4 T24 (FINAL-m6): una recepción a las 00:30 UTC del 9 de noviembre es el 8 en Colombia (19:30): con lo prometido el
+    3 (+1 de tolerancia) son 4 días de retraso, no 5. La fecha prometida sigue con .date() (RP40)."""
+    from app.models.erp_documents import PurchaseOrderFull, GoodsReceipt
+    import uuid
+    s = uuid.uuid4().hex[:8].upper()
+    pec = PurchaseOrderFull(numero=f"PEC-M6{s}", supplier_name="Proveedor Prueba", estado="RECIBIDO",
+                            fecha_entrega_estimada=datetime(2026, 11, 3, 15, 0), tracking_stages=[], productos=[])
+    db.add(pec)
+    db.commit()
+    for cuando, esperado in ((datetime(2026, 11, 9, 0, 30), 4), (datetime(2026, 11, 9, 5, 0), 5),
+                             (datetime(2026, 11, 5, 4, 59), None)):
+        gr = GoodsReceipt(numero=f"ENINV-M6{s[:4]}{cuando:%d%H%M}", pec_id=pec.id, pec_numero=pec.numero,
+                          fecha_recepcion=cuando, productos=[])
+        db.add(gr)
+        db.commit()
+        resp = app_client.get(f"/api/v1/compras/recepciones/{gr.id}", headers=auth(admin_token))
+        assert resp.status_code == 200 and resp.json()["data"]["dias_retraso"] == esperado, (cuando, resp.text)

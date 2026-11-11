@@ -60,7 +60,7 @@ from app.core.listados import (
     paginar, respuesta as respuesta_de_lista, texto_busqueda, validar_orden,
 )
 from app.core.periodos import ERROR_PERIODO, PERIODOS_KPI, bloque_periodo, resolver_periodo
-from app.core.textos_actividad import ETIQUETAS_ESTADO, etiqueta_estado
+from app.core.textos_actividad import ETIQUETAS_ESTADO, etiqueta_estado, nombre_de_usuario
 # Los validadores genéricos de las listas de T6B (erp_ventas.py): se importan, no se copian (para la revisión final:
 # deberían vivir en core/listados.py). erp_ventas no importa este módulo al cargarse, así que no hay ciclo.
 from app.api.v1.erp_ventas import _busqueda_de_lista, _parametro_de_lista, _sin_caracteres_de_control
@@ -262,7 +262,9 @@ def _gr_dict(g: GoodsReceipt, db: Session) -> dict:
             # FECHA_ENTREGA_MODIFICADA, Round final de la revision de rama completa).
             limite_con_tolerancia = (pec_ref.fecha_entrega_estimada.date()
                                      + datetime.timedelta(days=ac.TOLERANCIA_A_TIEMPO_DIAS))   # B4 T12 r1 (m11)
-            delta = (g.fecha_recepcion.date() - limite_con_tolerancia).days
+            # B4 T24 (FINAL-m6): el día de Colombia de la recepción (como analisis_compras.expr_dias_retraso); la fecha
+            # prometida sigue con .date() (RP40).
+            delta = (a_colombia(g.fecha_recepcion).date() - limite_con_tolerancia).days
             if delta > 0:
                 dias_retraso = delta
 
@@ -780,15 +782,73 @@ def list_pec(
     return respuesta_de_lista(total, [_pec_dict(p) for p in items], conteos=conteos, resumen=resumen)
 
 
+# B4 T24 (FINAL-C7-b): consolidar varios PVEN en un PEC (ven_ids), todos en la transacción del alta.
+MAX_VEN_IDS = 50
+VEN_IDS_NO_VALIDOS = "Los pedidos de venta a vincular deben ser una lista de ids de pedido (números enteros)."
+VEN_IDS_DEMASIADOS = f"Puedes vincular {MAX_VEN_IDS} pedidos de venta como máximo en un pedido de compra."
+_MAX_ID_ENTERO = 2 ** 31 - 1
+
+
+def _pvens_a_vincular(db: Session, body: CrearPecBody) -> list:
+    """Los PVEN que create_pec vincula, en orden (body.ven_id primero, sin repetidos), ANTES de escribir nada.
+    - Sin ven_ids (o con []): solo body.ven_id, como hoy: si no existe no se vincula nada (y si ya tenía PEC, pasa al
+      nuevo).
+    - Con ven_ids (R21, a mano): una lista de enteros positivos, a lo sumo MAX_VEN_IDS; si no, 422. Cada PVEN de la unión se
+      lee con FOR UPDATE (por id) y debe existir y no tener PEC: si no, 409 y no se escribe nada."""
+    if body.ven_ids is None or body.ven_ids == []:
+        if not body.ven_id:
+            return []
+        ven = db.query(SaleOrder).filter(SaleOrder.id == body.ven_id).first()
+        return [ven] if ven else []
+    ids = body.ven_ids
+    if not isinstance(ids, list) or any(isinstance(x, bool) or not isinstance(x, int) or not 0 < x <= _MAX_ID_ENTERO
+                                        for x in ids):
+        raise HTTPException(422, VEN_IDS_NO_VALIDOS)
+    if len(ids) > MAX_VEN_IDS:
+        raise HTTPException(422, VEN_IDS_DEMASIADOS)
+    ids = list(dict.fromkeys(([body.ven_id] if body.ven_id else []) + ids))
+    filas = {v.id: v for v in db.query(SaleOrder).filter(SaleOrder.id.in_(ids)).order_by(SaleOrder.id)
+             .with_for_update().all()}
+    for i in ids:
+        ven = filas.get(i)
+        if ven is None:
+            raise HTTPException(409, f"No existe el pedido de venta con id {i}: no se creó el pedido de compra.")
+        if ven.pec_id:
+            raise HTTPException(409, f"El pedido de venta {ven.numero} ya está en el pedido de compra "
+                                     f"{ven.pec_numero or ven.pec_id}: no se creó el pedido de compra.")
+    return [filas[i] for i in ids]
+
+
+def _vincular_pven(db: Session, ven: SaleOrder, pec: PurchaseOrderFull, autor: str) -> None:
+    """El vínculo de un PVEN con el PEC nuevo, SIN commit (va en el del alta): pec_id y pec_numero, PENDIENTE_COMPRA ->
+    EN_PROCESO (como hoy con ven_id) y un renglón de la Actividad del PVEN con el número del PEC."""
+    viejo = ven.estado
+    ven.pec_id = pec.id
+    ven.pec_numero = pec.numero
+    if ven.estado == "PENDIENTE_COMPRA":
+        ven.estado = "EN_PROCESO"
+    ven.updated_at = datetime.datetime.utcnow()
+    if ven.estado != viejo:
+        db.add(ActivityLog(entity_type="VEN", entity_id=ven.id, entity_numero=ven.numero, action="ESTADO_CHANGED",
+                           description=f"Estado cambiado a {etiqueta_estado('VEN', ven.estado)} "
+                                       f"(pedido de compra {pec.numero})",
+                           old_estado=viejo, new_estado=ven.estado, user_name=autor))
+    else:
+        db.add(ActivityLog(entity_type="VEN", entity_id=ven.id, entity_numero=ven.numero, action="UPDATED",
+                           description=f"Vinculado al pedido de compra {pec.numero}", user_name=autor))
+
+
 @router.post("/pedidos", status_code=201)
 def create_pec(body: CrearPecBody, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
         db: Session = Depends(get_db)):
+    """Crea un pedido de compra. B4 T24 (FINAL-C7-b): con ven_ids consolida varios PVEN (COMPRAS no puede editar un PVEN,
+    así que el vínculo lo hace este endpoint): todos se vinculan en la MISMA transacción del alta, cada uno con su
+    Actividad (_pvens_a_vincular, _vincular_pven). El PEC guarda en ven_id y ven_numero el primero (la columna es corta)."""
+    pvens = _pvens_a_vincular(db, body)
     numero = _gen_numero(db, "PEC-", "seq_pec")
     entrega_est = None
-    if body.ven_id:
-        ven = db.query(SaleOrder).filter(SaleOrder.id == body.ven_id).first()
-        if ven and ven.fecha_entrega_estimada:
-            entrega_est = ven.fecha_entrega_estimada
+    if pvens and pvens[0].fecha_entrega_estimada:
+        entrega_est = pvens[0].fecha_entrega_estimada
     if entrega_est is None:
         # Sin ven_id, o el PVEN no tiene fecha propia todavia (caso raro): comportamiento actual
         entrega_est = datetime.datetime.utcnow() + datetime.timedelta(days=body.dias_entrega)
@@ -834,8 +894,9 @@ def create_pec(body: CrearPecBody, user: User = Depends(require_roles(*ROLE_ADMI
         supplier_id=body.supplier_id,
         supplier_name=supplier_name,
         supplier_ref=supplier_ref,
-        ven_id=body.ven_id,
-        ven_numero=body.ven_numero,
+        # Con ven_ids, el primero de la unión (y su número, de la base); sin ven_ids, lo del body como hoy.
+        ven_id=pvens[0].id if body.ven_ids and pvens else body.ven_id,
+        ven_numero=pvens[0].numero if body.ven_ids and pvens else body.ven_numero,
         modalidad_pago=body.modalidad_pago or "Contado",
         metodo_pago=body.metodo_pago,
         warehouse_id=body.warehouse_id,
@@ -875,20 +936,17 @@ def create_pec(body: CrearPecBody, user: User = Depends(require_roles(*ROLE_ADMI
                 source           = "NATIVE",
                 migration_batch_id = None,
             ))
+    # B4 T24 (FINAL-C7-b): el vínculo de cada PVEN y las Actividades van en el MISMO commit del alta (antes el del primer
+    # PVEN iba en un commit aparte y el de los demás dependía de un PATCH que COMPRAS no puede hacer).
+    autor = nombre_de_usuario(user)
+    for ven in pvens:
+        _vincular_pven(db, ven, pec, autor)
+    db.add(ActivityLog(entity_type="PEC", entity_id=pec.id, entity_numero=pec.numero, action="CREATED",
+                       description=f"Pedido de compra {pec.numero} creado. Entrega estimada: "
+                                   f"{entrega_est.strftime('%d/%m/%Y')}",
+                       new_estado="BORRADOR", user_name=body.created_by))
     db.commit()
     db.refresh(pec)
-    if body.ven_id:
-        ven = db.query(SaleOrder).filter(SaleOrder.id == body.ven_id).first()
-        if ven:
-            ven.pec_id = pec.id
-            ven.pec_numero = pec.numero
-            if ven.estado == "PENDIENTE_COMPRA":
-                ven.estado = "EN_PROCESO"
-            ven.updated_at = datetime.datetime.utcnow()
-            db.commit()
-    _log(db, "PEC", pec.id, pec.numero, "CREATED",
-         f"Pedido de compra {pec.numero} creado. Entrega estimada: {entrega_est.strftime('%d/%m/%Y')}",
-         new_estado="BORRADOR", user_name=body.created_by)
     return {"status": "success", "data": _pec_dict(pec)}
 
 
@@ -994,12 +1052,20 @@ ETAPA_DIAS_INVALIDOS = "Los días de alerta de una etapa del seguimiento deben s
 ETAPA_FECHA_INVALIDA = "La fecha de una etapa del seguimiento no es válida: usa el formato AAAA-MM-DD, sin zona horaria."
 _MAX_DIAS_ALERTA = 36500
 _PREFIJO_FECHA = re.compile(r"^\d{4}-\d{2}-\d{2}")
+# B4 T24 (A2): los años que se guardan. Con 9999, _stage_alert (fecha + hasta 36500 días de alerta) desbordaba al armar la
+# lista DESPUÉS del commit: el PATCH daba 500 y desde ahí toda página de GET /compras/pedidos con ese PEC también.
+ANIO_MINIMO, ANIO_MAXIMO = 1900, 2999
+
+
+def _anio_valido(leida: datetime.datetime) -> bool:
+    return ANIO_MINIMO <= leida.year <= ANIO_MAXIMO
 
 
 def _fecha_leida(valor, mensaje: str):
     """La fecha del PATCH ya leída: None si viene null o en blanco (borra el valor, como texto_busqueda); si no, el
     datetime naive (en UTC si traía zona) que se guarda, el MISMO que se validó (r2, m3). Solo AAAA-MM-DD con hora
-    opcional (las fechas ISO por semana, «2026-W49-5», no valen). Cualquier otra cosa, 422 con `mensaje`."""
+    opcional (las fechas ISO por semana, «2026-W49-5», no valen) y con el año entre 1900 y 2999 (A2). Cualquier otra
+    cosa, 422 con `mensaje`; también la que desborda al pasarla a UTC (A2: antes, un 500)."""
     if valor is None:
         return None
     if not isinstance(valor, str):
@@ -1011,10 +1077,12 @@ def _fecha_leida(valor, mensaje: str):
         raise HTTPException(422, mensaje)
     try:
         leida = datetime.datetime.fromisoformat(texto.replace("Z", "+00:00"))
-    except ValueError:
+        if leida.tzinfo is not None:
+            leida = leida.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    except (ValueError, OverflowError):
         raise HTTPException(422, mensaje)
-    if leida.tzinfo is not None:
-        leida = leida.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    if not _anio_valido(leida):
+        raise HTTPException(422, mensaje)
     return leida
 
 
@@ -1037,7 +1105,7 @@ def _validar_autor(valor) -> None:
 def _validar_etapas(etapas) -> None:
     """Lo que lee _annotate_stage_alerts / _stage_alert de cada etapa: que sea un dict; alert_overdue_days y
     alert_confirm_days, un número (no bool) entre 0 y 36500 o ausentes; eta y timestamp, si traen valor, un texto sin
-    zona horaria (o uno que no se lee, que _parse_dt ignora)."""
+    zona horaria y con el año entre 1900 y 2999 (A2) (o uno que no se lee, que _parse_dt ignora)."""
     if etapas is None:
         return
     if not isinstance(etapas, list):
@@ -1059,7 +1127,7 @@ def _validar_etapas(etapas) -> None:
             if not isinstance(valor, str):
                 raise HTTPException(422, ETAPA_FECHA_INVALIDA)
             leida = _parse_dt(valor)
-            if leida is not None and leida.tzinfo is not None:
+            if leida is not None and (leida.tzinfo is not None or not _anio_valido(leida)):
                 raise HTTPException(422, ETAPA_FECHA_INVALIDA)
 
 
@@ -1091,9 +1159,8 @@ def _validar_campos_libres_pec(body: dict) -> None:
 
 def _validar_transicion_pec(db: Session, p: PurchaseOrderFull, body: dict) -> Optional[str]:
     """Valida el cambio de estado de PATCH /pedidos/{id} ANTES de tocar nada (RP97: antes del bloque de productos, que
-    borra purchase_order_lines). Primero los campos libres (_validar_campos_libres_pec, r1 m7: updated_by, notas y
-    fecha_entrega_estimada); el resto solo actúa si body trae 'estado' y es distinto del actual (sin espacios en los
-    bordes). Devuelve el motivo recortado (o None) para la Actividad. Errores, en este orden:
+    borra purchase_order_lines). Primero los campos libres (_validar_campos_libres_pec: ver su docstring, que dice cuáles
+    son); el resto solo actúa si body trae 'estado' y es distinto del actual (sin espacios en los bordes). Devuelve el motivo recortado (o None) para la Actividad. Errores, en este orden:
     - un carácter de control en el estado -> 422 «El estado no puede llevar caracteres de control.» (r1, m6);
     - un destino que pone el flujo -> 422 «'En tránsito' lo marca el seguimiento del envío (Mercancía en tránsito).» o
       «'Recibido' lo marca la recepción en bodega (Recepciones).»;
@@ -1168,7 +1235,9 @@ def update_pec(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE
       '. Motivo: …') con updated_by o, si no viene, el correo de quien lo hizo.
 
     """
-    p = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec_id).first()
+    # B4 T24 (FINAL-C2): con FOR UPDATE, para que la cuenta de recepciones de la cancelación y una recepción creada al mismo
+    # tiempo (que también bloquea el PEC) queden en serie.
+    p = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec_id).with_for_update().first()
     if not p:
         raise HTTPException(404, "Pedido de compra no encontrado")
     motivo = _validar_transicion_pec(db, p, body)
@@ -1225,8 +1294,10 @@ def update_pec(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE
     p.updated_at = datetime.datetime.utcnow()
     db.commit()
     db.refresh(p)
+    # B4 T24 (FINAL-m2): la Actividad del PEC la firma quien tiene la sesión (nombre_de_usuario, como el despacho de BODEGA,
+    # RP23); updated_by se sigue validando (_validar_autor) pero ya no decide la autoría.
+    autor = nombre_de_usuario(user)
     if body.get("estado") and body["estado"] != old_estado:
-        autor = body.get("updated_by") or user.email
         _log(db, "PEC", p.id, p.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {etiqueta_estado('PEC', p.estado)}" + (f". Motivo: {motivo}" if motivo else ""),
              old_estado=old_estado, new_estado=p.estado,
@@ -1244,7 +1315,7 @@ def update_pec(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE
         _log(db, "PEC", p.id, p.numero, "FECHA_ENTREGA_MODIFICADA",
              f"Fecha de entrega modificada: {fecha_vieja.strftime('%d/%m/%Y')} -> "
              f"{p.fecha_entrega_estimada.strftime('%d/%m/%Y')} ({signo}{diff_dias} día{'s' if abs(diff_dias)!=1 else ''})",
-             user_name=body.get("updated_by"))
+             user_name=autor)
     return {"status": "success", "data": _pec_dict(p)}
 
 
@@ -1260,8 +1331,10 @@ def delete_pec(pec_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROL
     if not p:
         raise HTTPException(404, "Pedido de compra no encontrado")
     if p.estado != "CANCELADO":
-        raise HTTPException(422, f"Solo se pueden eliminar pedidos de compra cancelados. {p.numero} está en "
-                                 f"{etiqueta_estado('PEC', p.estado)}: cancélalo primero.")
+        # B4 T24 (B31): «está en estado «…»» y el consejo de cancelarlo solo si se puede cancelar (uno recibido no).
+        consejo = ": cancélalo primero." if "CANCELADO" in destinos_pec_permitidos(p.estado) else "."
+        raise HTTPException(422, f"Solo se pueden eliminar pedidos de compra cancelados. {p.numero} está en estado "
+                                 f"«{etiqueta_estado('PEC', p.estado)}»{consejo}")
     n_recepciones = db.query(GoodsReceipt).filter(GoodsReceipt.pec_id == pec_id).count()
     if n_recepciones > 0:
         raise HTTPException(422, f"{p.numero} tiene {n_recepciones} recepción(es) asociada(s) y no se puede eliminar.")
@@ -1273,6 +1346,19 @@ def delete_pec(pec_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROL
     return {"status": "success", "message": f"PEC {numero} eliminado"}
 
 
+def _nombre_de_etapa(db: Session, p: PurchaseOrderFull, stages: list, codigo: str) -> str:
+    """B4 T24 (B25): el nombre de una etapa del seguimiento para la Actividad: su `label` guardado en el PEC; si no tiene,
+    el de la configuración de su tipo de envío (_load_tracking_config); si tampoco, el código humanizado
+    («ALGO_NUEVO» -> «Algo nuevo»), nunca el código crudo."""
+    for s in stages:
+        if s.get("stage") == codigo and isinstance(s.get("label"), str) and s["label"].strip():
+            return s["label"].strip()
+    for s in _load_tracking_config(db).get(p.tipo_envio or "casillero") or []:
+        if isinstance(s, dict) and s.get("key") == codigo and isinstance(s.get("label"), str) and s["label"].strip():
+            return s["label"].strip()
+    return str(codigo).replace("_", " ").lower().capitalize()
+
+
 @router.patch("/pedidos/{pec_id}/tracking")
 def update_tracking(pec_id: int, body: ActualizarTrackingBody,
         user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
@@ -1282,8 +1368,10 @@ def update_tracking(pec_id: int, body: ActualizarTrackingBody,
     Frontend sends 'stage' and 'status' fields; ActualizarTrackingBody maps them via aliases.
 
     r2 (m5): user_name (va a ActivityLog.user_name) se valida antes de escribir, como el updated_by del PATCH.
+    B4 T24 (A2): el eta, con la regla de las etapas del PATCH (sin zona y con el año entre 1900 y 2999), antes de escribir.
     """
     _validar_autor(body.user_name)
+    _validar_etapas([{"eta": body.eta}])
     p = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec_id).first()
     if not p:
         raise HTTPException(404, "Pedido de compra no encontrado")
@@ -1346,15 +1434,20 @@ def update_tracking(pec_id: int, body: ActualizarTrackingBody,
             _log(db, "PEC", p.id, p.numero, "ESTADO_CHANGED",
                  "Llegó a bodega: se completaron todas las etapas del envío.",
                  old_estado=old_e, new_estado="RECIBIDO",
-                 user_name=body.user_name)
+                 user_name=nombre_de_usuario(user))
     elif any(s.get("status") == "EN_PROCESO" for s in stages):
         if p.estado in ("BORRADOR", "EMITIDO"):
             p.estado = "EN_TRANSITO"
     db.commit()
     db.refresh(p)
+    # B25: la etapa con su nombre (no el código) y su estado con la etiqueta de los pasos (ETAPA_ENVIO, espejo de
+    # ETIQUETA_ETAPA_TRACKING de lib/flujo-compras.js). El nombre va entre comillas angulares porque los de la
+    # configuración llevan su propia flecha («Proveedor -> Casillero»). FINAL-m2: firma la sesión, no body.user_name
+    # (que sigue en tracking_history como dato).
     _log(db, "PEC", p.id, p.numero, "TRACKING_UPDATED",
-         f"Etapa {stage_name} -> {etiqueta_estado('PEC', new_status)}" + (f" | Guía: {tracking_num}" if tracking_num else ""),
-         user_name=body.user_name)
+         f"Etapa «{_nombre_de_etapa(db, p, stages, stage_name)}»: {etiqueta_estado('ETAPA_ENVIO', new_status)}"
+         + (f" | Guía: {tracking_num}" if tracking_num else ""),
+         user_name=nombre_de_usuario(user))
     return {"status": "success", "data": _pec_dict(p)}
 
 
@@ -1425,6 +1518,16 @@ def compras_analisis(
     return ac.analisis_compras(db, p, top)
 
 
+def _pec_que_se_puede_recepcionar(db: Session, pec_id) -> Optional[PurchaseOrderFull]:
+    """B4 T24 (FINAL-C2 + FINAL-m1): el PEC de una recepción, leído con FOR UPDATE (en serie con la cancelación de update_pec,
+    que también lo bloquea antes de contar sus recepciones). Un PEC cancelado no se reabre por la recepción: 409 sin
+    escribir nada. Devuelve None si no existe (cada camino decide qué responde)."""
+    p = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec_id).with_for_update().first()
+    if p is not None and etapa_pec(p.estado) == "cancelado":
+        raise HTTPException(409, f"El pedido de compra {p.numero} está cancelado: no se puede recepcionar.")
+    return p
+
+
 @router.post("/pedidos/{pec_id}/recepcionar")
 def crear_recepcion_desde_pec(
     pec_id: int,
@@ -1440,8 +1543,10 @@ def crear_recepcion_desde_pec(
 
     salvo que body.force_full=True, en cuyo caso copia el total ordenado.
 
+    B4 T24 (FINAL-C2): el PEC se lee con FOR UPDATE y uno cancelado da 409 (_pec_que_se_puede_recepcionar).
+
     """
-    p = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec_id).first()
+    p = _pec_que_se_puede_recepcionar(db, pec_id)
     if not p:
         raise HTTPException(404, "Pedido de compra no encontrado")
     eninv_numero = _gen_numero(db, "ENINV-", "seq_eninv")
@@ -1735,6 +1840,8 @@ def list_recepciones(
 @router.post("/recepciones", status_code=201)
 def create_recepcion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
         db: Session = Depends(get_db)):
+    if body.get("pec_id") is not None:  # B4 T24 (FINAL-C2): con el PEC bloqueado; uno cancelado da 409
+        _pec_que_se_puede_recepcionar(db, body.get("pec_id"))
     numero = _gen_numero(db, "ENINV-", "seq_eninv")
     gr = GoodsReceipt(
         numero=numero,
@@ -1832,6 +1939,26 @@ def get_recepcion(eninv_id: int, user: User = Depends(require_roles(*ALL_ERP_ROL
     d = _gr_dict(g, db)
     d["actividades"] = [_log_dict(l) for l in logs]
     return {"status": "success", "data": d}
+
+
+def _snapshot_productos(gr_lines) -> list:
+    """El JSON g.productos de una recepción, regenerado desde sus GoodsReceiptLine (la fuente de verdad): el detalle de la
+    recepción (_gr_dict) lo devuelve tal cual y la pantalla arma las líneas con él. Lo usan el PATCH en lote
+    (update_recepcion), el alta y el retiro de líneas y, desde B4 T24 (FINAL-C4-b), el PATCH por línea (update_grl)."""
+    return [
+        {
+            "sku_id"        : grl.sku_id,
+            "nombre"        : grl.description or "",
+            "qty_esperada"  : int(grl.quantity_expected or 0),
+            "qty_recibida"  : int(grl.quantity_received) if grl.quantity_received is not None else None,
+            "qty_rechazada" : int(grl.quantity_rejected or 0),
+            "qty_cuarentena": int(grl.quantity_quarantine or 0),
+            "estado"        : "PENDIENTE" if grl.quantity_received is None else "PARCIAL",
+            "po_line_id"    : grl.po_line_id,
+            "grl_id"        : grl.id,
+        }
+        for grl in gr_lines
+    ]
 
 
 @router.patch("/recepciones/{eninv_id}")
@@ -1972,20 +2099,7 @@ def update_recepcion(eninv_id: int, body: dict, user: User = Depends(require_rol
                     user_name    = "system",
                 ))
             # Regenerar snapshot JSON desde GRL (GRL es fuente de verdad)
-            g.productos = [
-                {
-                    "sku_id"        : grl.sku_id,
-                    "nombre"        : grl.description or "",
-                    "qty_esperada"  : int(grl.quantity_expected or 0),
-                    "qty_recibida"  : int(grl.quantity_received) if grl.quantity_received is not None else None,
-                    "qty_rechazada" : int(grl.quantity_rejected or 0),
-                    "qty_cuarentena": int(grl.quantity_quarantine or 0),
-                    "estado"        : "PENDIENTE" if grl.quantity_received is None else "PARCIAL",
-                    "po_line_id"    : grl.po_line_id,
-                    "grl_id"        : grl.id,
-                }
-                for grl in gr_lines
-            ]
+            g.productos = _snapshot_productos(gr_lines)
         else:
             # No hay GRL: recepcion legacy.
             # Bloqueo 3: Primero normalizar (crear GRL), luego actualizar por ID.
@@ -2012,20 +2126,7 @@ def update_recepcion(eninv_id: int, body: dict, user: User = Depends(require_rol
                 .where(GoodsReceiptLine.gr_id == eninv_id)
                 .order_by(GoodsReceiptLine.id)
             ).scalars().all()
-            g.productos = [
-                {
-                    "sku_id"        : grl.sku_id,
-                    "nombre"        : grl.description or "",
-                    "qty_esperada"  : int(grl.quantity_expected or 0),
-                    "qty_recibida"  : int(grl.quantity_received) if grl.quantity_received is not None else None,
-                    "qty_rechazada" : int(grl.quantity_rejected or 0),
-                    "qty_cuarentena": int(grl.quantity_quarantine or 0),
-                    "estado"        : "PENDIENTE" if grl.quantity_received is None else "PARCIAL",
-                    "po_line_id"    : grl.po_line_id,
-                    "grl_id"        : grl.id,
-                }
-                for grl in new_grls
-            ]
+            g.productos = _snapshot_productos(new_grls)
     # Campos generales permitidos (excepto productos, ya consumido)
     allowed_non_prod = ["estado","warehouse_id","warehouse_name","carrier",
                         "tracking_number","operacion_tipo","notas"]
@@ -2122,20 +2223,7 @@ def add_grl(
         .where(GoodsReceiptLine.gr_id == eninv_id)
         .order_by(GoodsReceiptLine.id)
     ).scalars().all()
-    g.productos = [
-        {
-            "sku_id"        : grl.sku_id,
-            "nombre"        : grl.description or "",
-            "qty_esperada"  : int(grl.quantity_expected or 0),
-            "qty_recibida"  : int(grl.quantity_received) if grl.quantity_received is not None else None,
-            "qty_rechazada" : int(grl.quantity_rejected or 0),
-            "qty_cuarentena": int(grl.quantity_quarantine or 0),
-            "estado"        : "PENDIENTE" if grl.quantity_received is None else "PARCIAL",
-            "po_line_id"    : grl.po_line_id,
-            "grl_id"        : grl.id,
-        }
-        for grl in all_grls
-    ]
+    g.productos = _snapshot_productos(all_grls)
     db.commit()
     _log(db, "ENINV", eninv_id, g.numero, "LINE_ADDED",
          f"Línea agregada: SKU {sku_id_new}, qty_esperada={qty_esp_new}, grl_id={new_grl.id}",
@@ -2222,20 +2310,7 @@ def remove_grl(
         .where(GoodsReceiptLine.gr_id == eninv_id)
         .order_by(GoodsReceiptLine.id)
     ).scalars().all()
-    g.productos = [
-        {
-            "sku_id"        : rl.sku_id,
-            "nombre"        : rl.description or "",
-            "qty_esperada"  : int(rl.quantity_expected or 0),
-            "qty_recibida"  : int(rl.quantity_received) if rl.quantity_received is not None else None,
-            "qty_rechazada" : int(rl.quantity_rejected or 0),
-            "qty_cuarentena": int(rl.quantity_quarantine or 0),
-            "estado"        : "PENDIENTE" if rl.quantity_received is None else "PARCIAL",
-            "po_line_id"    : rl.po_line_id,
-            "grl_id"        : rl.id,
-        }
-        for rl in remaining_grls
-    ]
+    g.productos = _snapshot_productos(remaining_grls)
     db.commit()
     _log(db, "ENINV", eninv_id, g.numero, "LINE_REMOVED",
          f"Línea retirada: grl_id={grl_id_del}, SKU {grl_sku}, po_line_id={grl_pol}",
@@ -2271,6 +2346,9 @@ def update_grl(
 
     Solo funciona si la recepcion esta en BORRADOR.
 
+    B4 T24 (FINAL-C4-b): en la misma transacción regenera el JSON g.productos desde las GRL de la recepción, igual que el
+    PATCH en lote (_snapshot_productos): el detalle lee ese JSON y, sin esto, mostraba el conteo viejo al recargar.
+
     """
     gr = db.query(GoodsReceipt).filter(GoodsReceipt.id == eninv_id).first()
     if not gr:
@@ -2290,6 +2368,10 @@ def update_grl(
         grl.quantity_rejected = int(body["quantity_rejected"] or 0)
     if "quantity_quarantine" in body:
         grl.quantity_quarantine = int(body["quantity_quarantine"] or 0)
+    db.flush()
+    gr.productos = _snapshot_productos(db.execute(
+        select(GoodsReceiptLine).where(GoodsReceiptLine.gr_id == eninv_id).order_by(GoodsReceiptLine.id)
+    ).scalars().all())
     db.commit()
     db.refresh(grl)
     return {
@@ -2521,6 +2603,11 @@ def confirmar_recepcion(
         if g.estado == "CANCELADA":
             _mark_failed_external(client_key, execution_token, "ENINV cancelada", now)
             raise HTTPException(409, "Esta recepcion esta cancelada y no puede confirmarse.")
+        # B4 T24 (FINAL-C2): el PEC se bloquea aquí, ANTES de tocar el inventario; uno cancelado da 409 y nada se escribe
+        # (el except HTTPException de abajo revierte y marca la clave FAILED). Más abajo se vuelve a leer con FOR UPDATE
+        # para derivar su estado: es el mismo bloqueo.
+        if g.pec_id:
+            _pec_que_se_puede_recepcionar(db, g.pec_id)
 
         # ─── VALIDACIONES DE NEGOCIO ──────────────────────────────────────────
 
