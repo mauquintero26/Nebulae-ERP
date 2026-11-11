@@ -1249,6 +1249,21 @@ console.log('--- B4 T7 r1b (duda 3): el contenedor del Hub reserva el lugar del 
   assert.ok(tabla.includes('[&_[data-pie-tabla]]:pr-20'), 'en la pantalla completa, el pr-20 del pie (D41)');
 }
 
+console.log('--- B4 T24 f2 (F50, F53): el «vacío» del Hub memoizado y su confirmación de Facturado la de Pedidos ---');
+{
+  const sinComentarios = (t) => t.replace(/\r\n/g, '\n').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const hub = sinComentarios(readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8'));
+  // F50 (D41): el vacío se memoiza con la búsqueda (como la lista de SC, m8 de T8 r1): un JSX nuevo en cada render anulaba el memo de
+  // CuerpoTabla y repintaba todas las filas.
+  assert.match(hub, /const vacioHub = useMemo\(\(\) => \([\s\S]*?\), \[estado\.q\]\);/);
+  assert.match(hub, /vacio=\{vacioHub\}/);
+  assert.ok(!/vacio=\{\(/.test(hub), 'sin el JSX en línea');
+  // F53: el panel rápido confirma Facturado con confirmacionFacturarPedido (kanban-ventas.js), la MISMA del tablero de Pedidos.
+  assert.match(hub, /import \{[^}]*\bconfirmacionFacturarPedido\b[^}]*\} from '@\/lib\/kanban-ventas';/);
+  assert.match(hub, /if \(await confirmar\(confirmacionFacturarPedido\(doc\)\)\) cambiarEstadoPedido\(doc, 'FACTURADO'\);/);
+  assert.ok(!hub.includes("titulo: `Marcar ${doc.numero} como Facturado`"), 'sin el texto escrito a mano');
+}
+
 console.log('--- B4 T24 f2 (m8 de la revisión r0 de f1): el Hub ofrece cancelar y cambiar de estado solo a quien puede (require_roles) ---');
 {
   // opcionesPanelPedido: lo que el panel rápido ofrece con el permiso del rol. PATCH /ventas/pedidos/{id} (estado, Facturado y

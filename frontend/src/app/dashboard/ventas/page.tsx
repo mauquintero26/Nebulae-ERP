@@ -31,8 +31,8 @@ import {
   textoRegla,
 } from '@/lib/flujo-ventas';
 import {
-  COLUMNAS_HUB, chipsResolucionHub, confirmacionReiniciarSolicitud, estadoDeTarjeta, opcionesEstadosHub, reglaSoltarHub,
-  siglaDeTipo, tarjetaHub,
+  COLUMNAS_HUB, chipsResolucionHub, confirmacionFacturarPedido, confirmacionReiniciarSolicitud, estadoDeTarjeta, opcionesEstadosHub,
+  reglaSoltarHub, siglaDeTipo, tarjetaHub,
 } from '@/lib/kanban-ventas';
 import { PERIODO_KPI } from '@/lib/kpis';
 import { FOCOS_VENTAS } from '@/lib/analisis';
@@ -975,6 +975,14 @@ export default function VentasHub() {
   const chipsFiltro = chipsFiltroHub(estado);
   // N3/N5: la selección de la página (TablaEstandar la limpia al cambiar de página, de pestaña, de filtro o de orden).
   const seleccion = useMemo(() => Array.from(selectedIds), [selectedIds]);
+  // B4 T24 f2 (F50, D41): el «vacío» de la tabla solo cambia con la búsqueda (como la lista de SC, m8 de T8 r1): un JSX nuevo en cada
+  // render anulaba el memo de CuerpoTabla y repintaba todas las filas.
+  const vacioHub = useMemo(() => (
+    <div>
+      <p className="font-semibold text-slate-600">{estado.q.trim() ? `Sin resultados para «${estado.q.trim()}»` : 'No hay documentos en esta vista'}</p>
+      <p className="mt-1 text-xs text-slate-400">Prueba cambiando los filtros o agregando una nueva solicitud.</p>
+    </div>
+  ), [estado.q]);
   const alSeleccionar = useCallback((claves: (string | number)[]) => setSelectedIds(new Set(claves.map(String))), []);
 
   // ── B4 T7, Documentos / Análisis (RP35): Análisis es un estado de la página; nunca va en estado.vista ──
@@ -1229,12 +1237,7 @@ export default function VentasHub() {
                   // B4 T24 f2 (m8 de la revisión r0 de f1): sin permiso de mover, sin casillas (la barra masiva tampoco sale).
                   seleccion={accesoTablero.mover ? seleccion : undefined}
                   onSeleccion={accesoTablero.mover ? alSeleccionar : undefined}
-                  vacio={(
-                    <div>
-                      <p className="font-semibold text-slate-600">{estado.q.trim() ? `Sin resultados para «${estado.q.trim()}»` : 'No hay documentos en esta vista'}</p>
-                      <p className="mt-1 text-xs text-slate-400">Prueba cambiando los filtros o agregando una nueva solicitud.</p>
-                    </div>
-                  )}
+                  vacio={vacioHub}
                   etiqueta="Documentos del Hub de Ventas"
                 />
               </AccionesFila.Provider>
@@ -1425,11 +1428,8 @@ export default function VentasHub() {
                           {op.facturar && (
                             <button onClick={async () => {
                               const doc = quickDetailDoc;
-                              if (await confirmar({
-                                titulo: `Marcar ${doc.numero} como Facturado`,
-                                mensaje: 'Después de esto el estado del pedido ya no se puede cambiar.',
-                                textoConfirmar: 'Marcar como Facturado',
-                              })) cambiarEstadoPedido(doc, 'FACTURADO');
+                              // B4 T24 f2 (F53): la MISMA confirmación del tablero de Pedidos (confirmacionFacturarPedido).
+                              if (await confirmar(confirmacionFacturarPedido(doc))) cambiarEstadoPedido(doc, 'FACTURADO');
                             }}
                               className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-green-50 text-green-800 hover:bg-green-100 border-green-200">
                               Marcar como Facturado

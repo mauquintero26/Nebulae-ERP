@@ -1477,8 +1477,9 @@ console.log('--- B4 T10 TEST P: las acciones del tablero de Pedidos — mover de
   });
   assert.equal(kv.confirmacionFacturarPedido({ numero: '  ' }).titulo, 'Marcar como Facturado');
   assert.equal(kv.confirmacionFacturarPedido(null).titulo, 'Marcar como Facturado');
+  // B4 T24 f2 (F53, D27): el panel rápido del Hub ya no escribe el texto: usa la MISMA confirmacionFacturarPedido.
   const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8');
-  assert.ok(hub.includes(`mensaje: '${kv.confirmacionFacturarPedido({}).mensaje}'`), 'el mismo texto del panel rápido del Hub');
+  assert.ok(hub.includes('confirmar(confirmacionFacturarPedido(doc))'), 'el mismo texto del panel rápido del Hub');
 
   // cancelar (H45, H46): los efectos del ModalMotivo. Las frases del modal del detalle salen de aquí (una sola fuente):
   // la cotización que vuelve a Borrador, el saldo a favor y la orden de pago. El detalle trae `pagos` y `pxps`; la fila
