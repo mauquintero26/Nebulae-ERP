@@ -92,9 +92,11 @@ export default function GastosPage() {
   // no se pide la lista, ni los conteos, ni el tablero; con el rol vacío (la hidratación), se espera con el esqueleto.
   const rol = useRolActual();
   const acceso = accesoFinanzas(rol);
-  const [categoria, setCategoria] = useState('');
+  // B4 T24 (F39 y FINAL-m19): la categoría y el tipo son filtros del estado único (estado.filtros): vuelven con la sesión junto a la
+  // página, la búsqueda y el orden (antes eran useState y al volver se veía la página N sin el filtro).
+  const categoria = estado.filtros?.categoria ?? '';
   // m17: el tipo (recurrente | variable) también va al servidor (RP58) y vuelve a la página 1.
-  const [tipo, setTipo] = useState('');
+  const tipo = estado.filtros?.tipo ?? '';
   const filtros = useMemo(() => ({ categoria, tipo }), [categoria, tipo]);
   const extraLista = useMemo(() => extraGastos(filtros), [filtros]);
   // GET /finance/expenses con q, orden, limit y offset. esperar: !listo (D40): el esqueleto, nunca «vacío». En Kanban no pide la lista.
@@ -162,12 +164,10 @@ export default function GastosPage() {
   useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
   const valorCategoria = String(catalogoCategorias.filas?.find((o) => o.name === categoria)?.id ?? '');
   const cambiarTipo = useCallback((valor: string) => {
-    setTipo(valor);
-    despachar({ tipo: 'pagina', valor: 1 });
+    despachar({ tipo: 'filtro', clave: 'tipo', valor });
   }, [despachar]);
   const cambiarCategoria = useCallback((valor: string) => {
-    setCategoria(valor);
-    despachar({ tipo: 'pagina', valor: 1 });
+    despachar({ tipo: 'filtro', clave: 'categoria', valor });
   }, [despachar]);
   // El «vacío» memoizado dice qué lo deja vacío (la búsqueda, la categoría o nada).
   const vacio = useMemo(() => {

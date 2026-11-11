@@ -417,7 +417,8 @@ export default function CRMPage() {
   // de etapa de la barra (stage_id en el servidor).
   const [estado, despachar, listo] = useEstadoTabla(ID_LEADS, INICIAL_LEADS);
   const [enAnalisis, setEnAnalisis] = useState(false);
-  const [filterStage, setFilterStage] = useState('all');
+  // B4 T24 (F39 y FINAL-m19): la etapa es un filtro del estado único (estado.filtros.etapa): vuelve con la sesión (la Lista y el Kanban).
+  const filterStage = estado.filtros?.etapa || 'all';
   const { avisar, avisarError, confirmar } = useAvisos();
   // B4 T24 (FINAL-m37 y F96): el rol después de montar (useRolActual) y lo que puede pedir y ofrecer (accesoCrm, lib/roles.js): sin
   // leads no se pide nada (ni /crm/warmup, que es solo de ADMIN) y se pinta el texto neutro; las altas, «Configurar CRM» y «Borrar»
@@ -656,12 +657,10 @@ export default function CRMPage() {
   };
   // El select de etapa de la barra (stage_id en el servidor): vuelve a la página 1, como todo filtro (R5).
   const elegirEtapa = (valor) => {
-    setFilterStage(valor);
-    despachar({ tipo: 'pagina', valor: 1 });
+    despachar({ tipo: 'filtro', clave: 'etapa', valor: valor === 'all' ? '' : valor });
   };
   // r1 (m21): «Limpiar» de la barra vieja: borra a la vez la búsqueda y la etapa (limpiarFiltros vuelve a la página 1).
   const limpiarFiltros = () => {
-    setFilterStage('all');
     despachar({ tipo: 'limpiarFiltros' });
   };
   // Un movimiento de «Requieren atención» abre su lead; si no está cargado, se avisa (ANALISIS-crm punto 2).

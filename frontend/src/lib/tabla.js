@@ -60,13 +60,16 @@ import { diaColombia, fechaLarga } from './fechas-colombia.js';
  * @typedef {{orden: string[], anchos: Record<string, number>, ocultas: string[]}} ColumnasReconciliadas
  * @typedef {'lista' | 'kanban'} ModoTabla
  * @typedef {{vista: string | null, modo: ModoTabla, semaforo: string | null, paso: string | null, estados: string[],
- *   q: string, orden: string | null, pagina: number, tamano: number}} EstadoTabla
- * @typedef {{tipo: 'vista' | 'modo' | 'semaforo' | 'paso' | 'estados' | 'q' | 'busqueda' | 'orden' | 'pagina' | 'tamano',
- *   valor?: unknown} | {tipo: 'cambiar', cambios: Partial<Record<keyof EstadoTabla, unknown>>} | {tipo: 'limpiarFiltros'}
+ *   q: string, orden: string | null, pagina: number, tamano: number, filtros?: Record<string, string>}} EstadoTabla
+ *   B4 T24 (F39): `filtros` son los filtros extra de la pantalla (la categoría de Gastos, la etapa del CRM…), aditivo: sin ellos,
+ *   el estado de siempre.
+ * @typedef {{tipo: 'vista' | 'modo' | 'semaforo' | 'paso' | 'estados' | 'q' | 'busqueda' | 'orden' | 'pagina' | 'tamano'
+ *   | 'filtros', valor?: unknown} | {tipo: 'filtro', clave: string, valor: unknown}
+ *   | {tipo: 'cambiar', cambios: Partial<Record<keyof EstadoTabla, unknown>>} | {tipo: 'limpiarFiltros'}
  *   | {tipo: 'restablecerOrden', rechazado: string}} AccionTabla
  * @typedef {{filas: any[], total: number, conteos: Record<string, number> | null, resumen: Record<string, any> | null,
  *   crudo: unknown}} RespuestaListado
- * @typedef {'vista' | 'pagina' | 'q' | 'orden' | 'semaforo' | 'paso' | 'estados'} CampoSesionTabla
+ * @typedef {'vista' | 'pagina' | 'q' | 'orden' | 'semaforo' | 'paso' | 'estados' | 'filtros'} CampoSesionTabla
  * @typedef {Partial<Pick<EstadoTabla, CampoSesionTabla>>} SesionTabla
  * @typedef {{sesion: boolean, modo: boolean, tamano: boolean}} CambiosEstadoTabla
  * @typedef {{tipo: 'anchos', anchos: Record<string, number>} | {tipo: 'mover', id: string, hueco: number}
@@ -458,7 +461,25 @@ const NORMALIZAR = {
   orden: textoONulo,
   pagina: (v) => enteroPositivo(v, 1),
   tamano: (v) => (TAMANOS_PAGINA.includes(Number(v)) ? Number(v) : TAMANOS_PAGINA[0]),
+  filtros: filtrosDeTabla,
 };
+
+/**
+ * B4 T24 (F39): los filtros extra normalizados: {clave: texto} con claves y textos llenos (sin los espacios de los bordes), en orden de
+ * clave; lo demás se descarta. Algo que no es un objeto da {}.
+ * @param {unknown} v
+ * @returns {Record<string, string>}
+ */
+function filtrosDeTabla(v) {
+  /** @type {Record<string, string>} */
+  const filtros = {};
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return filtros;
+  for (const clave of Object.keys(v).sort()) {
+    const valor = /** @type {any} */ (v)[clave];
+    if (clave.trim() && typeof valor === 'string' && valor.trim()) filtros[clave] = valor.trim();
+  }
+  return filtros;
+}
 const CAMPOS = Object.keys(NORMALIZAR);
 
 /**
@@ -485,7 +506,15 @@ export function estadoTablaInicial(parcial = {}) {
   return /** @type {EstadoTabla} */ (estado);
 }
 
-const iguales = (a, b) => (Array.isArray(a) && Array.isArray(b) ? a.length === b.length && a.every((x, i) => x === b[i]) : a === b);
+/** Dos valores del estado iguales: los arreglos por sus elementos y (B4 T24, F39) los filtros por sus claves y valores. */
+const iguales = (a, b) => {
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((x, i) => x === b[i]);
+  if (a && b && typeof a === 'object' && typeof b === 'object' && !Array.isArray(a) && !Array.isArray(b)) {
+    const claves = Object.keys(a);
+    return claves.length === Object.keys(b).length && claves.every((k) => a[k] === b[k]);
+  }
+  return a === b;
+};
 
 /**
  * El reductor del estado único de la pantalla (useEstadoTabla, T4C). Las tarjetas pulsables, las cajas del flujo, los
@@ -512,7 +541,14 @@ export function reducirEstadoTabla(estado, accion) {
   if (CAMPOS.includes(tipo)) cambios = { [tipo]: /** @type {any} */ (accion).valor };
   else if (tipo === 'busqueda') cambios = { q: /** @type {any} */ (accion).valor };
   else if (tipo === 'cambiar') cambios = { .../** @type {any} */ (accion).cambios };
-  else if (tipo === 'limpiarFiltros') cambios = { semaforo: null, paso: null, estados: [], q: '' };
+  else if (tipo === 'filtro') {
+    // B4 T24 (F39): un filtro extra; se mezcla aquí con los vigentes (sin cierres viejos en la pantalla). Vacío, se quita.
+    const clave = /** @type {any} */ (accion).clave;
+    if (typeof clave !== 'string' || !clave.trim()) throw new Error('Un filtro de la tabla necesita su clave.');
+    cambios = { filtros: { ...(actual.filtros ?? {}), [clave]: /** @type {any} */ (accion).valor } };
+  } else if (tipo === 'limpiarFiltros') {
+    cambios = { semaforo: null, paso: null, estados: [], q: '', ...(actual.filtros ? { filtros: {} } : {}) };
+  }
   else if (tipo === 'restablecerOrden') {
     const rechazado = /** @type {any} */ (accion).rechazado;
     if (typeof rechazado !== 'string' || actual.orden !== rechazado) return actual;
@@ -708,10 +744,11 @@ export function posicionMenu(boton, menu, ventana, { margen = 8, separacion = 4 
  * Lo del estado de la pantalla que va en sessionStorage 'tabla-sesion:{id}' (R4, C2): el estado de la SESIÓN, para
  * volver a la misma pestaña, página, búsqueda y orden (y semáforo, paso y filtro de estados) al regresar de un
  * documento. T4C r1, punto 2: 'estados' también, porque la página N solo tiene sentido con el filtro con que se llegó a
- * ella. El modo (vista:<id>) y el tamaño (tabla:<id>) son preferencias del usuario (lib/preferencias.js). Inmutable.
+ * ella. El modo (vista:<id>) y el tamaño (tabla:<id>) son preferencias del usuario (lib/preferencias.js). B4 T24 (F39): y los
+ * filtros extra (`filtros`, solo si la pantalla los usa: sin ellos, el texto de siempre). Inmutable.
  * @type {ReadonlyArray<CampoSesionTabla>}
  */
-export const CAMPOS_SESION_TABLA = congelar(['vista', 'pagina', 'q', 'orden', 'semaforo', 'paso', 'estados']);
+export const CAMPOS_SESION_TABLA = congelar(['vista', 'pagina', 'q', 'orden', 'semaforo', 'paso', 'estados', 'filtros']);
 
 /** El máximo de valores de 'estados' que acepta el servidor (core/listados.py); más, en la sesión, no se restaura. */
 export const MAXIMO_ESTADOS = 20;

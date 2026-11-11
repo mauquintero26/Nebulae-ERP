@@ -441,7 +441,8 @@ const tic = () => new Promise((r) => setImmediate(r));
 
 console.log('--- TEST 16 (T4C y r1, R4 y C2): lo de la sesión (tabla-sesion:{id}): pestaña, página, búsqueda, orden, semáforo, paso y estados ---');
 {
-  assert.deepEqual(CAMPOS_SESION_TABLA, ['vista', 'pagina', 'q', 'orden', 'semaforo', 'paso', 'estados']);
+  // B4 T24 (F39, D27): y los filtros extra de la pantalla (aditivo: sin filtros, la sesión de siempre).
+  assert.deepEqual(CAMPOS_SESION_TABLA, ['vista', 'pagina', 'q', 'orden', 'semaforo', 'paso', 'estados', 'filtros']);
   assert.ok(Object.isFrozen(CAMPOS_SESION_TABLA));
   assert.equal(MAXIMO_ESTADOS, 20);
   assert.equal(claveSesionTabla('ventas.hub'), 'tabla-sesion:ventas.hub');
@@ -2674,7 +2675,8 @@ console.log('--- TEST 50 (B4 T22, Gastos; R5, R11, R16, RP26, RP57, RP58): el ca
   assert.ok(fuente.includes('error: estadoConteos.error }'));
   // m17: el filtro de tipo va al servidor y vuelve a la página 1; los conteos lo llevan.
   assert.match(fuente, /<select aria-label="Tipo" value=\{tipo\} onChange=\{\(e\) => cambiarTipo\(e\.target\.value\)\}/);
-  assert.match(fuente, /const cambiarTipo = useCallback\(\(valor: string\) => \{\n\s*setTipo\(valor\);\n\s*despachar\(\{ tipo: 'pagina', valor: 1 \}\);/);
+  // B4 T24 (F39 y FINAL-m19, D27): el tipo va en el estado único (filtro), que vuelve a la página 1 y se guarda con la sesión.
+  assert.match(fuente, /const cambiarTipo = useCallback\(\(valor: string\) => \{\n\s*despachar\(\{ tipo: 'filtro', clave: 'tipo', valor \}\);/);
   assert.ok(fuente.includes('urlConteosGastos(estado, filtros)') && fuente.includes('const filtros = useMemo(() => ({ categoria, tipo }), [categoria, tipo]);'));
   // m9: «Monto (COP)» se guarda en pesos enteros; m4: sin atributos pegados.
   assert.ok(fuente.includes('amount: redondearPeso(parseFloat(form.amount)),'));
@@ -2685,7 +2687,7 @@ console.log('--- TEST 50 (B4 T22, Gastos; R5, R11, R16, RP26, RP57, RP58): el ca
   assert.ok(fuente.includes('datos: c?.datos ?? null, error: err'), 'un error de los conteos no borra lo último que llegó');
   assert.match(fuente, /recargarListado\(\);\n\s*recargarTablero\(\);\n\s*recargarConteos\(\);/);
   // El filtro de categoría de la barra (para seguir el aviso, lección de T18): vuelve a la página 1 y va al servidor.
-  assert.match(fuente, /const cambiarCategoria = useCallback\(\(valor: string\) => \{\n\s*setCategoria\(valor\);\n\s*despachar\(\{ tipo: 'pagina', valor: 1 \}\);/);
+  assert.match(fuente, /const cambiarCategoria = useCallback\(\(valor: string\) => \{\n\s*despachar\(\{ tipo: 'filtro', clave: 'categoria', valor \}\);/);
   assert.ok(fuente.includes('cambiarCategoria(catalogoCategorias.filas?.find((o) => String(o.id) === valor)?.name'));
   assert.ok(fuente.includes('const extraLista = useMemo(() => extraGastos(filtros), [filtros]);'));
   // RP57: el formulario manda el día como mediodía de Colombia, no medianoche UTC; el día de la tabla es fechaLarga.
@@ -3143,6 +3145,46 @@ console.log('--- TEST T24-h (B4 T24, FINAL-m11): accionModo traduce el filtro de
   assert.ok(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx').includes("despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_SC : opcionesEstadosSolicitudes, COLUMNAS_SC));"), 'ventas/solicitud/solicitud-client.tsx');
   assert.ok(leer('app/dashboard/ventas/cotizacion/cotizacion-client.tsx').includes("despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_COT : opcionesEstadosCotizaciones, COLUMNAS_COT));"), 'ventas/cotizacion/cotizacion-client.tsx');
   assert.ok(leer('app/dashboard/ventas/venta/venta-client.tsx').includes("despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesDeLaLista, COLUMNAS_PEDIDO));"), 'ventas/venta/venta-client.tsx');
+}
+
+console.log('--- TEST T24-i (B4 T24: F39 y FINAL-m19): los filtros extra van en el estado único y se guardan con la sesión ---');
+{
+  const e = estadoTablaInicial({ vista: 'todos', pagina: 4 });
+  assert.ok(!('filtros' in e), 'aditivo: sin filtros, el estado de siempre');
+  // {tipo: 'filtro', clave, valor}: se mezcla en el reductor (sin cierres viejos) y, como todo filtro, vuelve a la página 1.
+  const conCat = reducirEstadoTabla(e, { tipo: 'filtro', clave: 'categoria', valor: 'Nómina' });
+  assert.deepEqual([conCat.filtros, conCat.pagina], [{ categoria: 'Nómina' }, 1]);
+  const conTipo = reducirEstadoTabla(conCat, { tipo: 'filtro', clave: 'tipo', valor: 'variable' });
+  assert.deepEqual(conTipo.filtros, { categoria: 'Nómina', tipo: 'variable' });
+  assert.deepEqual(reducirEstadoTabla(conTipo, { tipo: 'filtro', clave: 'categoria', valor: '' }).filtros, { tipo: 'variable' }, 'vacío: se quita');
+  assert.equal(reducirEstadoTabla(conTipo, { tipo: 'filtro', clave: 'tipo', valor: 'variable' }), conTipo, 'sin cambio: el mismo estado');
+  assert.equal(reducirEstadoTabla({ ...conTipo, pagina: 5 }, { tipo: 'pagina', valor: 6 }).filtros, conTipo.filtros, 'la página no los toca');
+  // Normalizados: textos sin bordes, sin vacíos ni lo que no es texto, en orden de clave.
+  assert.deepEqual(estadoTablaInicial({ filtros: { b: ' x ', a: 'y', c: 3, d: '  ', '': 'z' } }).filtros, { a: 'y', b: 'x' });
+  assert.deepEqual(estadoTablaInicial({ filtros: 'mal' }).filtros, {});
+  assert.throws(() => reducirEstadoTabla(e, { tipo: 'filtro', clave: '', valor: 'x' }), /filtro/);
+  // La sesión: se guardan y vuelven con la página N (antes la página N volvía sin el filtro que la definía).
+  const texto = textoSesionTabla({ ...conTipo, pagina: 3 }, 7);
+  assert.deepEqual(leerSesionTabla(texto, 7).filtros, { categoria: 'Nómina', tipo: 'variable' });
+  const vuelto = armarEstadoTabla({ vista: 'todos' }, { sesion: leerSesionTabla(texto, 7) });
+  assert.deepEqual([vuelto.filtros, vuelto.pagina], [{ categoria: 'Nómina', tipo: 'variable' }, 3]);
+  assert.deepEqual(leerSesionTabla(texto, 8), {}, 'de otra cuenta, nada');
+  assert.ok(!textoSesionTabla(e, 7).includes('filtros'), 'sin filtros, el texto de siempre');
+  assert.equal(cambiosEstadoTabla(e, conCat).sesion, true, 'cambiar un filtro escribe la sesión');
+  // «Limpiar» los quita (si había); sin filtros, como siempre.
+  assert.deepEqual(reducirEstadoTabla(conTipo, { tipo: 'limpiarFiltros' }).filtros, {});
+  assert.ok(!('filtros' in reducirEstadoTabla(e, { tipo: 'limpiarFiltros' })));
+  // Gastos (categoría y tipo) y el CRM (la etapa) leen sus filtros del estado único (FINAL-m19).
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const gastos = leer('app/dashboard/finanzas/gastos/page.tsx');
+  assert.match(gastos, /const categoria = estado\.filtros\?\.categoria \?\? '';\s*\n\s*(\/\/[^\n]*\n\s*)*const tipo = estado\.filtros\?\.tipo \?\? '';/);
+  assert.ok(!/useState\(''\);\s*\n\s*const filtros|const \[categoria, setCategoria\]|const \[tipo, setTipo\]/.test(gastos), 'sin el useState de antes');
+  assert.match(gastos, /const cambiarTipo = useCallback\(\(valor: string\) => \{\n\s*despachar\(\{ tipo: 'filtro', clave: 'tipo', valor \}\);/);
+  assert.match(gastos, /const cambiarCategoria = useCallback\(\(valor: string\) => \{\n\s*despachar\(\{ tipo: 'filtro', clave: 'categoria', valor \}\);/);
+  const crm = leer('app/dashboard/crm/page.tsx');
+  assert.match(crm, /const filterStage = estado\.filtros\?\.etapa \|\| 'all';/);
+  assert.ok(!/const \[filterStage, setFilterStage\]/.test(crm));
+  assert.match(crm, /despachar\(\{ tipo: 'filtro', clave: 'etapa', valor: valor === 'all' \? '' : valor \}\);/);
 }
 
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');
