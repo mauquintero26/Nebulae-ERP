@@ -1500,11 +1500,19 @@ console.log('--- B4 T24 f2 (F44-a): las pantallas de Ventas reservan la esquina 
     const p = join(dir, n);
     return statSync(p).isDirectory() ? recorrer(p) : /\.tsx?$/.test(n) ? [p] : [];
   });
-  const sueltos = recorrer(raiz.pathname.replace(/^\/([A-Za-z]:)/, '$1')).filter((p) => {
+  // r1 (m30): la ruta con fileURLToPath (un checkout con espacios o tildes no rompe la guarda).
+  const { fileURLToPath } = await import('node:url');
+  const sueltos = recorrer(fileURLToPath(raiz)).filter((p) => {
     const codigo = readFileSync(p, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '');
-    return /["'`\s]pb-(?:20|24)["'`\s]/.test(codigo);
+    return /["'`\s]pb-(?:10|20|24)["'`\s]/.test(codigo);
   });
-  assert.deepEqual(sueltos, [], 'sin pb-24 ni pb-20 literales en las pantallas de Ventas');
+  // r1 (m2): también el pb-10 de las páginas de Ventas que terminan con él (el botón ocupa 80 px: bottom-6 + h-14).
+  assert.deepEqual(sueltos, [], 'sin pb-24, pb-20 ni pb-10 literales en las pantallas de Ventas');
+  for (const pagina of ['sincronizacion', 'proyecciones', 'validacion-odoo', 'exportar-dia', 'exportar-rango']) {
+    const f = leer(`${pagina}/page.tsx`);
+    assert.ok(f.includes('<div className={`flex flex-col gap-6 w-full p-6 ${RESERVA_BOTON_IA}`}>'), `${pagina}: el contenedor con la reserva`);
+    assert.match(f, /^import \{ RESERVA_BOTON_IA \} from '@\/lib\/design-system';/m, `${pagina}: importa el token`);
+  }
 }
 
 console.log('--- B4 T24 f2 (F52): los comentarios de Cotizaciones dicen que el chip de Total es el mismo chip, no el mismo objeto ---');
