@@ -2306,6 +2306,17 @@ export function recuperaFocoAlEntrar({ arriba, reautenticando = false, foco }) {
 }
 
 /**
+ * B4 T24 f2 r2 (m5): si la limpieza de una capa devuelve el foco al control que la abrió: solo si el abridor sigue en el documento y el
+ * panel YA NO (se cerró de verdad). En el desmontaje que simula StrictMode en desarrollo (limpieza y vuelta a montar) el panel sigue
+ * conectado: no se toca el foco, y el autoFocus de adentro se conserva.
+ * @param {{abridorConectado?: boolean, panelConectado?: boolean}} estado
+ * @returns {boolean}
+ */
+export function devuelveFocoAlCerrar({ abridorConectado = false, panelConectado = false } = {}) {
+  return Boolean(abridorConectado) && !panelConectado;
+}
+
+/**
  * @typedef {'panel' | 'body' | 'pila' | 'encima' | 'detras'} LugarDelFoco
  *   B4 T24 f2 (m9): dónde está el foco respecto de una capa de la pila (Modal y Drawer).
  */

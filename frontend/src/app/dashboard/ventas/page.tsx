@@ -1079,9 +1079,6 @@ export default function VentasHub() {
   /* ════════════════ RENDER ════════════════ */
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
-      {actRow && <ActivitiesPanel key={`${actRow.tipo}|${actRow.id}`} row={actRow} onClose={()=>setActRow(null)} onNotaGuardada={()=>loadData({silencioso: true})}/>}
-      {showConfig && <ConfigPanel alertDias={alertDias} configCargada={configCargada} onSave={cfg=>{setAlertDias(cfg);setShowConfig(false);loadData();}} onClose={()=>setShowConfig(false)}/>}
-
       <SubNav label="Hub Ventas" items={VEN_NAV} currentPath="/dashboard/ventas" color="indigo" />
 
       {/* B4 T7 (FLUJO-ventas-pantallas A; R6, D42): la franja del flujo reemplaza el semáforo con emojis y sus botones
@@ -1476,6 +1473,12 @@ export default function VentasHub() {
           </Drawer>
         )}
       </div>
+
+      {/* B4 T24 f2 r2 (m4): los Drawer de la actividad y de la configuración (fixed z-40) van DESPUÉS de la tarjeta en pantalla completa y
+          de la barra masiva (las dos fixed z-40), como el panel rápido: así quedan encima (con el mismo z gana el orden del DOM) y el
+          foco de la capa no le quita el foco a una superficie que el usuario ve arriba. */}
+      {actRow && <ActivitiesPanel key={`${actRow.tipo}|${actRow.id}`} row={actRow} onClose={()=>setActRow(null)} onNotaGuardada={()=>loadData({silencioso: true})}/>}
+      {showConfig && <ConfigPanel alertDias={alertDias} configCargada={configCargada} onSave={cfg=>{setAlertDias(cfg);setShowConfig(false);loadData();}} onClose={()=>setShowConfig(false)}/>}
 
       {/* Ventanas que pueden abrirse desde el panel rápido (z-50): van después en el DOM para quedar encima. */}
 

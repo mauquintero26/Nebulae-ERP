@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MouseEvent, PointerEvent } from 'react';
 import { hayReautenticacionPendiente } from '@/lib/api';
 import {
-  abrirCapa, atrapaTab, cerrarCapa, cierraConClicFuera, cierraConEsc, esCapaDeArriba, lugarDelFocoDe, recuperaFocoAlEntrar,
+  abrirCapa, atrapaTab, cerrarCapa, cierraConClicFuera, cierraConEsc, devuelveFocoAlCerrar, esCapaDeArriba, lugarDelFocoDe, recuperaFocoAlEntrar,
   siguienteFocoAtrapado,
 } from '@/lib/tabla';
 
@@ -100,7 +100,11 @@ export function useCierreVentana(onClose: () => void, bloqueado: boolean) {
       document.removeEventListener('keydown', alTeclear);
       document.removeEventListener('focusin', alEnfocar);
       capas = cerrarCapa(capas, capa);
-      if (abridor && abridor.isConnected) abridor.focus({ preventScroll: true });
+      // B4 T24 f2 r2 (m5): solo al cerrar de verdad (el panel ya no está en el documento); el desmontaje simulado de StrictMode no pisa
+      // el autoFocus de adentro.
+      if (abridor && devuelveFocoAlCerrar({ abridorConectado: abridor.isConnected, panelConectado: Boolean(panel?.isConnected) })) {
+        abridor.focus({ preventScroll: true });
+      }
     };
   }, [abridor]);
 

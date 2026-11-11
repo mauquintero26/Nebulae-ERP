@@ -1282,6 +1282,8 @@ console.log('--- B4 T24 f2 (m8 de la revisión r0 de f1): el Hub ofrece cancelar
     assert.deepEqual(hv.opcionesPanelPedido(estado, false, true), sin, `${estado}: BODEGA conserva el enlace`);
     assert.deepEqual(hv.opcionesPanelPedido(estado, false, false), { mover: [], despachar: false, cancelar: false, facturar: false }, `${estado}: FINANZAS, COMPRAS y CONSULTA`);
     assert.deepEqual(hv.opcionesPanelPedido(estado, true, true), opcionesEstadoPVEN(estado), `${estado}: ADMIN y ASESOR`);
+    // r2 (m8): un rol que mueve pero no despacha (hoy no existe: ADMIN y ASESOR hacen las dos cosas) conserva sus botones sin el enlace.
+    assert.deepEqual(hv.opcionesPanelPedido(estado, true, false), { ...opcionesEstadoPVEN(estado), despachar: false }, `${estado}: mueve sin despachar`);
   }
   // Por rol, con las piezas de la pantalla: el panel de un pedido listo para entrega.
   const { accesoTableroVentas, puedeAccionPedido } = await import('../src/lib/roles.js');
@@ -1519,6 +1521,25 @@ console.log('--- B4 T24 f2 r1 (m18, m19 + m37): el Hub lee el rol después de mo
   assert.match(hub, /\{detail\?\.id && notas\.anotar && \(\s*<div className="pb-5 border-b border-slate-100">\s*<ComposerChatter compacto/);
   assert.match(hub, /import \{[^}]*\baccesoNotasVentas\b[^}]*\} from '@\/lib\/roles';/);
   assert.match(hub, /import \{[^}]*\bpuedeAccionPedido\b[^}]*\} from '@\/lib\/roles';/);
+}
+
+console.log('--- B4 T24 f2 r2 (m4): ActivitiesPanel y ConfigPanel van DESPUÉS de la tarjeta en pantalla completa y de la barra masiva ---');
+{
+  // Los Drawer (fixed z-40) se pintan encima de lo que va antes en el DOM con el mismo z-40: la tarjeta en pantalla completa
+  // (TABLE.tarjetaCompleta) y la barra de acciones masivas. Antes iban al principio y quedaban DEBAJO: el focusin de la capa (m9 de r1)
+  // le quitaba el foco al buscador y al select de la barra, que el usuario veía encima. Como el panel rápido, van después.
+  const crudo = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const pos = (texto) => {
+    assert.equal(crudo.split(texto).length - 1, 1, `una vez: ${texto}`);
+    return crudo.indexOf(texto);
+  };
+  const tarjeta = pos('<section ref={refTarjeta} className={claseTarjeta}>');
+  const barra = pos("{selectedIds.size>0 && !enAnalisis && estado.modo === 'lista' && accesoTablero.mover && (");
+  for (const panel of ['{actRow && <ActivitiesPanel', '{showConfig && <ConfigPanel']) {
+    const i = pos(panel);
+    assert.ok(i > tarjeta, `${panel}: después de la tarjeta en pantalla completa`);
+    assert.ok(i > barra, `${panel}: después de la barra masiva`);
+  }
 }
 
 console.log('OK test_hub_ventas.mjs');

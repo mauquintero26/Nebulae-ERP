@@ -3224,7 +3224,11 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
   const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const hook = leer('components/ui/useCierreVentana.ts');
   for (const n of ['capas = abrirCapa(capas, capa);', 'const arriba = esCapaDeArriba(capas, capa);', 'reautenticando: hayReautenticacionPendiente()',
-    'dentro: !panel || panel.contains(e.target as Node)', 'siguienteFocoAtrapado(', "if (abridor && abridor.isConnected) abridor.focus({ preventScroll: true });",
+    // B4 T24 f2 r2 (m5, D27): el foco vuelve al abridor al cerrar de verdad (devuelveFocoAlCerrar: el panel ya no está), no en el
+    // desmontaje simulado de StrictMode.
+    'dentro: !panel || panel.contains(e.target as Node)', 'siguienteFocoAtrapado(',
+    'if (abridor && devuelveFocoAlCerrar({ abridorConectado: abridor.isConnected, panelConectado: Boolean(panel?.isConnected) })) {',
+    'abridor.focus({ preventScroll: true });',
     // r2 (m12): el foco que entra al abrir; r2 (m8): el <body>.
     '(panel.querySelector<HTMLElement>(ENFOCABLES) ?? panel).focus({ preventScroll: true });', 'enBody: e.target === document.body,']) {
     assert.ok(hook.includes(n), n);
@@ -3615,7 +3619,8 @@ console.log('--- B4 T24 f2 r1 (m9 + m10, m38): el foco que LLEGA detrás vuelve 
   const hook = leer('components/ui/useCierreVentana.ts');
   assert.match(hook, /const alEnfocar = \(\) => \{\s*if \(!panel \|\| !recuperaFocoAlEntrar\(\{\s*arriba: esCapaDeArriba\(capas, capa\), reautenticando: hayReautenticacionPendiente\(\), foco: lugarDelFoco\(panel\),\s*\}\)\) return;\s*\(panel\.querySelector<HTMLElement>\(ENFOCABLES\) \?\? panel\)\.focus\(\{ preventScroll: true \}\);\s*\};/);
   assert.match(hook, /document\.addEventListener\('focusin', alEnfocar\);/);
-  assert.match(hook, /document\.removeEventListener\('keydown', alTeclear\);\s*document\.removeEventListener\('focusin', alEnfocar\);\s*capas = cerrarCapa\(capas, capa\);\s*if \(abridor && abridor\.isConnected\) abridor\.focus/);
+  // r2 (m5, D27): y después devuelve el foco solo al cerrar de verdad (devuelveFocoAlCerrar).
+  assert.match(hook, /document\.removeEventListener\('keydown', alTeclear\);\s*document\.removeEventListener\('focusin', alEnfocar\);\s*capas = cerrarCapa\(capas, capa\);(?:\s*\/\/[^\n]*)*\s*if \(abridor && devuelveFocoAlCerrar\(/);
   // m10 (requisito previo): todo portal de src (createPortal) se marca con data-superficie en su raíz: cuenta como «encima» (un menú
   // abierto dentro de una ventana no pierde el foco). Uno nuevo sin la marca falla aquí.
   const { readdirSync, statSync } = await import('node:fs');
@@ -3650,6 +3655,28 @@ console.log('--- B4 T24 f2 r1 (m9 + m10, m38): el foco que LLEGA detrás vuelve 
   const chat = leer('components/GlobalAIChat.tsx');
   assert.match(chat, /<button\s+data-superficie="copilot"\s+onClick=\{\(\) => setIsOpen\(true\)\}\s+aria-label="Abrir Nebulae Copilot"\s+className=\{`fixed bottom-6 right-6 [^`]*\$\{FOCO\}`\}/);
   assert.match(chat, /import \{ FOCO \} from '@\/lib\/design-system';/);
+}
+
+console.log('--- B4 T24 f2 r2 (m4, m5): las superficies fijas que van encima de una capa, marcadas; el foco vuelve al abridor solo al cerrar de verdad ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // m4: la búsqueda en frontend/src de superficies fijas sin data-capa ni data-superficie que se pintan ENCIMA de un Modal o un Drawer
+  // abierto (el reporte r2 tiene la tabla). Dos llevan su marca: el Toast (z-[100], con su botón, sobre los Modal de Empleados y
+  // Campañas) y la ventana de seguimiento de Compras › Pedidos (z-[95]; su «Eliminar casillero» abre confirmar(), z-[60]).
+  assert.match(leer('components/ui/Toast.tsx'), /<div data-superficie="avisos" className=\{`fixed bottom-6 right-6 z-\[100\]/);
+  assert.match(leer('app/dashboard/compras/pedidos/page.tsx'), /<div data-superficie="ventana" className="fixed inset-0 z-\[95\] flex items-center justify-center bg-slate-900\/60 backdrop-blur-sm p-4">/);
+  // m5: con StrictMode, React simula desmontar y volver a montar: la limpieza no debe devolver el foco al abridor (pisaría el autoFocus de
+  // adentro), solo al cerrar de verdad, cuando el panel ya no está en el documento.
+  const { devuelveFocoAlCerrar } = TABLA;
+  assert.equal(typeof devuelveFocoAlCerrar, 'function', 'devuelveFocoAlCerrar existe');
+  assert.equal(devuelveFocoAlCerrar({ abridorConectado: true, panelConectado: false }), true, 'se cerró de verdad: vuelve al abridor');
+  assert.equal(devuelveFocoAlCerrar({ abridorConectado: true, panelConectado: true }), false, 'el desmontaje simulado de StrictMode: no');
+  assert.equal(devuelveFocoAlCerrar({ abridorConectado: false, panelConectado: false }), false, 'el abridor ya no está');
+  assert.equal(devuelveFocoAlCerrar({ abridorConectado: false, panelConectado: true }), false);
+  assert.equal(devuelveFocoAlCerrar({}), false);
+  const hook = leer('components/ui/useCierreVentana.ts');
+  assert.match(hook, /if \(abridor && devuelveFocoAlCerrar\(\{ abridorConectado: abridor\.isConnected, panelConectado: Boolean\(panel\?\.isConnected\) \}\)\) \{\s*abridor\.focus\(\{ preventScroll: true \}\);\s*\}/);
+  assert.ok(!/if \(abridor && abridor\.isConnected\) abridor\.focus/.test(hook), 'sin la vuelta incondicional de antes');
 }
 
 console.log('✓ T4D: umbral, ancho al contenido, ajustar al ancho, geometría, destino, orden, cuerpo, grupos, selección, barra y el fuente de los componentes.');

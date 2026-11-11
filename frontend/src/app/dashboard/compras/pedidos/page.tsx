@@ -231,7 +231,9 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:Avis
   };
 
   return (
-    <div className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+    // B4 T24 f2 r2 (m4): esta ventana (z-[95]) va ENCIMA de confirmar() (z-[60]) que abre «Eliminar casillero»: data-superficie, para que
+    // la capa de la confirmación no le quite el foco.
+    <div data-superficie="ventana" className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
       {showNewCasillero && (
         <NewCasilleroModal onClose={()=>setShowNewCasillero(false)} onSave={()=>{setShowNewCasillero(false);loadCasilleros();}}/>
       )}
