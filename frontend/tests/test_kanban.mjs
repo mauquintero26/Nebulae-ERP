@@ -1148,9 +1148,11 @@ console.log('--- TEST T24-b (B4 T24: F11, F12, F13, F15, F16, F17, F19, F20, F21
   assert.match(c, /\$\{atenuada \? 'opacity-50' : ''\}/);
   assert.match(c, /const TEXTO_VER_MAS: Record<AccentColor, string> = \{/);
   assert.ok(!/ACCENTS\[color\]\.text/.test(c), '«Ver más» ya no usa el -600 del acento');
-  for (const acento of ['amber', 'rose', 'orange', 'indigo', 'purple', 'emerald', 'blue', 'teal', 'red']) {
-    assert.ok(fuenteKanban.includes(`  ${acento}: 'text-${acento}-700',`), `Ver más ${acento}`);
-  }
+  // El mapa TEXTO_VER_MAS mismo (otro mapa del archivo también tiene tonos -700): un tono por acento, todos -700.
+  const verMas = /const TEXTO_VER_MAS: Record<AccentColor, string> = \{([\s\S]*?)\n\};/.exec(fuenteKanban)?.[1] ?? '';
+  const tonos = Object.fromEntries([...verMas.matchAll(/^\s+(\w+): '([^']*)',$/gm)].map((m) => [m[1], m[2]]));
+  assert.deepEqual(Object.keys(tonos), ['amber', 'rose', 'orange', 'indigo', 'purple', 'emerald', 'blue', 'teal', 'red']);
+  for (const [acento, clase] of Object.entries(tonos)) assert.equal(clase, `text-${acento}-700`, `Ver más ${acento}`);
 
   // F21: el anuncio usa nombreDe(item) si la pantalla lo da (aditivo; renderTarjeta no expone un título).
   assert.match(fuenteKanban, /nombreDe\?: \(item: T\) => string;/);

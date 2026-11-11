@@ -1711,6 +1711,8 @@ console.log('--- TEST T24 (B4 T24, FINAL-m21): fuenteGuardable — un formulario
   // Falló: no se guarda (con «Guardar Envíos» se pisaría todo el JSON, también las zonas).
   assert.equal(fuenteGuardable(llego(null, Object.assign(new Error('x'), { status: 500 }))), false, 'error');
   assert.equal(fuenteGuardable(llego(null, { status: 403 })), false, '403');
+  // Con un error de la vuelta vigente no se guarda aunque haya datos (una regla, no la forma de lo que arma la pantalla).
+  assert.equal(fuenteGuardable(llego({ envio_local: { tarifa: 1 } }, new Error('x'))), false, 'datos con error');
   // Sin datos y sin error (el servidor no mandó data): tampoco.
   assert.equal(fuenteGuardable(llego(null)), false, 'sin datos');
   assert.equal(fuenteGuardable(null), false);
