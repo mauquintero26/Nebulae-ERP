@@ -45,6 +45,17 @@ def test_tablas_vigila_las_de_t13_y_t20():
     assert {"ecommerce_products", "operational_expenses", "pipeline_stages", "sale_order_payments"} <= tablas
 
 
+def test_el_codigo_de_salida_falla_tambien_si_la_base_cambio():
+    """B4 T24 r1 (m28-b, ruling): el runner sale con 1 si hubo fallas, bloqueos de Chatwoot o cambios en la base; antes una
+    base cambiada salía con 0 y solo el texto «OJO, max(id) cambio» la delataba."""
+    codigo = sys.modules["__main__"]._codigo_de_salida
+    assert codigo(0, 0, {}) == 0
+    assert codigo(1, 0, {}) == 1
+    assert codigo(0, 2, {}) == 1
+    assert codigo(0, 0, {"sale_orders": (10, 11)}) == 1
+    assert codigo(3, 1, {"sale_orders": (10, 11)}) == 1
+
+
 def test_monkeypatch_1_parchea_durante_la_prueba(monkeypatch):
     monkeypatch.setattr(_ESTE_MODULO, "_CENTINELA", "parchado")
     monkeypatch.setenv("RUNNER_FIXTURES_VARIABLE", "1")

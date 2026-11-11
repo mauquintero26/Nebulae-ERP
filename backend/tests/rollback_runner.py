@@ -526,8 +526,14 @@ def recolectar():
                     yield f"{cnombre}.{mnombre}", getattr(cls(), mnombre)
 
 
+def _codigo_de_salida(failed, bloqueos_chatwoot, cambios) -> int:
+    """B4 T24 r1 (m28-b, ruling del controlador): 1 si hubo fallas, bloqueos de Chatwoot o cambios en max(id) de TABLAS;
+    si no, 0 (antes una base cambiada salia con 0 y solo el texto la delataba)."""
+    return 1 if failed or bloqueos_chatwoot or cambios else 0
+
+
 def _cerrar_corrida(passed, failed):
-    """Las tres lineas finales; devuelve el codigo de salida."""
+    """Las tres lineas finales; devuelve el codigo de salida (_codigo_de_salida)."""
     despues = maximos()
     cambios = {t: (antes[t], despues[t]) for t in TABLAS if despues[t] != antes[t]}
     print(f"\n{passed} passed, {failed} failed")
@@ -538,7 +544,7 @@ def _cerrar_corrida(passed, failed):
     print(f"Chatwoot real bloqueado {bloqueos_chatwoot} veces"
           + ("" if not bloqueos_chatwoot else ": OJO, una prueba intento salir a Chatwoot o por urlopen (falla la corrida)"))
     print("Base intacta (max(id) sin cambios)." if not cambios else f"OJO, max(id) cambio en: {cambios}", flush=True)
-    return 1 if failed or bloqueos_chatwoot else 0
+    return _codigo_de_salida(failed, bloqueos_chatwoot, cambios)
 
 
 passed = failed = 0
