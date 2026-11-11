@@ -971,10 +971,10 @@ console.log('--- TEST 25 (B4 T22, KPI-otros punto 1 y FLUJO-ventas-pantallas E; 
   assert.ok(fuente.includes('setLlego({ vuelta: clave, datos: null, error: err, marca })'));
   assert.ok(fuente.includes('useEstadoKpi(ventas.cargando, ventas.error)') && fuente.includes('useEstadoKpi(inventario.cargando, inventario.error)'));
   // Cada fuente que falla lo dice con «Reintentar» (nunca 0 ni un vacío falso).
+  // B4 T24 (F46, D27): con la pieza común (AvisoDeError: avisoDeFuente y AvisoFuente; un 403 sin «Reintentar»).
   for (const f of ['inventario', 'compras', 'ventas', 'clientes']) {
-    assert.match(fuente, new RegExp(`<AvisoFuente error=\\{${f}\\.error\\} texto="[^"]+" onReintentar=\\{${f}\\.recargar\\} />`), `aviso de ${f}`);
+    assert.match(fuente, new RegExp(`<AvisoDeError error=\\{${f}\\.error\\} fallo="[^"]+" onReintentar=\\{${f}\\.recargar\\} acento="indigo" />`), `aviso de ${f}`);
   }
-  assert.match(fuente, /<p role="alert"[\s\S]{0,300}Reintentar/);
   // El embudo: PasosFlujo vertical con /ventas/flujo y los enlaces al Hub; su error con «Reintentar».
   assert.ok(fuente.includes("useResumenFlujo('/ventas/flujo', 0)"));
   assert.ok(fuente.includes('<PasosFlujo variante="banner" orientacion="vertical"'));
@@ -993,11 +993,11 @@ console.log('--- TEST 25 (B4 T22, KPI-otros punto 1 y FLUJO-ventas-pantallas E; 
   assert.doesNotMatch(fuente, /a la espera de la mercancía|Ver Tránsito Compras/);
   // m6: el aviso de una fuente caída sale de textoAvisoFuente (un solo punto).
   // I1 (M1, M4b, M10, m6): el aviso se pinta SOLO con error, la fuente devuelve el error de la lectura y el embudo lo muestra.
-  assert.ok(fuente.includes('  if (!error) return null;\n  return (\n    <p role="alert"'), 'AvisoFuente solo se pinta con error');
-  assert.ok(fuente.includes('      {textoAvisoFuente(error, texto)}\n'), 'un solo punto: lo pone textoAvisoFuente');
+  // B4 T24 (F46, D27): AvisoDeError se pinta solo con error y su texto es textoAvisoFuente (vía avisoDeFuente; test_avisos.mjs).
+  assert.ok(!/function AvisoFuente\b/.test(fuente), 'sin la copia local');
   assert.ok(fuente.includes('return { ...lecturaDeFuente(llego, clave), recargar };'), 'useFuente devuelve el error de la lectura');
   assert.ok(fuente.includes('{avisoEmbudo.visible && ('));
-  assert.ok(fuente.includes('texto="No se pudieron contar los clientes"'));
+  assert.ok(fuente.includes('fallo="No se pudieron contar los clientes"'), 'F46 (D27): la prop de AvisoDeError');
   // m10: las «Recientes» dicen la etiqueta del estado, no el código.
   assert.ok(fuente.includes('{infoEstadoPec(pec.estado).label}') && fuente.includes('{infoEstadoPedido(ven.estado).label}'));
   assert.doesNotMatch(fuente, /\{(pec|ven)\.estado\}/);

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { ArrowUpFromLine, Eye, MessageCircle, Package, RefreshCw, Truck } from 'lucide-react';
 // B4 T19: Entregas (Cola de Despacho) 100 % sobre el servidor (R5, R15, C3, C4, C19). Las pestañas SON las columnas del tablero
@@ -21,7 +21,7 @@ import type { AccionTabla, ColumnaTabla } from '@/components/tabla';
 import { INV_NAV } from '../inv-nav';
 import { AvisoReintentar, CONTENEDOR, FOCOS, pesos, useCatalogo } from '../piezas-inventario';
 import { CHIP, titulosDeOrdenPec } from '../../compras/columnas-pec';
-import { getUsuarioActual } from '../../ventas/flujo';
+import { useRolActual } from '@/components/ui/useRolActual';
 
 import { apiFetch } from '@/lib/api';
 import {
@@ -154,21 +154,15 @@ const TITULOS_ORDEN_ENTREGAS = titulosDeOrdenPec(COLUMNAS_TABLA_ENTREGAS);
 type ConteosCargados = { vuelta: string; conteos: Record<ClaveColumna, number> | null; error: unknown };
 type StatsCargadas = { vuelta: number; kpis: unknown; error: unknown };
 
-/** El rol viene de localStorage: se relee al montar y cuando otra pestaña lo cambie. */
-const suscribirRol = (alCambiar: () => void) => {
-  window.addEventListener('storage', alCambiar);
-  return () => window.removeEventListener('storage', alCambiar);
-};
-
 /* ================================================================
    MAIN PAGE — EntregasPage (B4 T19)
    ================================================================ */
 export default function EntregasPage() {
   const { avisar, avisarError, confirmar } = useAvisos();
   // El rol que despacha: ADMIN, ASESOR y BODEGA (R15); los demás roles solo ven (reglaSoltarEntrega los deja en «solo ver»).
-  // m14: el rol se lee DESPUÉS de montar (useSyncExternalStore: '' en el servidor y en la hidratación, el real en el cliente); sin rol no
+  // m14: el rol se lee DESPUÉS de montar (B4 T24, F46: useRolActual, la pieza común; '' en el servidor y en la hidratación); sin rol no
   // se pintan los botones que dependen de él.
-  const rol = useSyncExternalStore(suscribirRol, () => getUsuarioActual().role, () => '');
+  const rol = useRolActual();
 
   // ── bloque 1: la carga del servidor (TABLA-inventario punto 10; R5, C3, C4, C19; D39, D40) ──
   // El estado ÚNICO de la pantalla: las pestañas (= las columnas), la búsqueda, el filtro de estados, la tarjeta, la tabla y el tablero

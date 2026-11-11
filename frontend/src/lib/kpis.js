@@ -26,7 +26,7 @@
  */
 
 import { congelar } from './estados-pedido.js';
-import { textoDeError } from './avisos.js';
+import { textoAvisoFuente, textoDeError } from './avisos.js';
 import { agruparMiles, formatoPesos } from './pesos.js';
 
 /**
@@ -1078,18 +1078,8 @@ export function periodoVisto(marca, elegido) {
   return periodoDashboard(marca ?? elegido);
 }
 
-/**
- * B4 T22 r1 (m6): el aviso de una fuente caída, 'No se pudieron cargar las existencias: Error del servidor.', con un solo
- * punto al final aunque el mensaje ya lo traiga. Sin error, null.
- * @param {unknown} error
- * @param {string} texto
- * @returns {string | null}
- */
-export function textoAvisoFuente(error, texto) {
-  if (!error) return null;
-  const mensaje = textoDeError(error, texto);
-  return mensaje.endsWith('.') ? mensaje : `${mensaje}.`;
-}
+/** B4 T24 (F46): textoAvisoFuente vive en avisos.js (la usa avisoDeFuente); se reexporta (la misma función). */
+export { textoAvisoFuente };
 
 // ─── B4 T23A: las tarjetas de la tienda (KPI-otros punto 5; R7, R12, RP102) ──────────────────────────────────────
 

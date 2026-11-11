@@ -345,7 +345,8 @@ console.log('--- TEST 13 (revisión final B3, F2: M45): las frases por defecto d
   // 403: es un tema de permiso, sin «Reintentar» (volver a pedir no lo cambia) y nunca el 403 técnico de require_roles.
   assert.deepEqual(av.avisoDeFuente(e403, 'No se pudieron cargar los indicadores'), { tipo: 'permiso', texto: 'No tienes permiso para ver esto.', reintentar: false });
   // Cualquier otro error: la falla con el detalle del servidor y «Reintentar».
-  assert.deepEqual(av.avisoDeFuente(e500, 'No se pudieron cargar los indicadores'), { tipo: 'carga', texto: 'No se pudieron cargar los indicadores: Error del servidor', reintentar: true });
+  // B4 T24 (F46, D27): el texto de una falla es textoAvisoFuente (con su punto final, como el Dashboard).
+  assert.deepEqual(av.avisoDeFuente(e500, 'No se pudieron cargar los indicadores'), { tipo: 'carga', texto: 'No se pudieron cargar los indicadores: Error del servidor.', reintentar: true });
   assert.equal(av.avisoDeFuente(Object.assign(new Error('x'), { status: 401 }), 'F').reintentar, true);
   assert.equal(av.avisoDeFuente(Object.assign(new Error('x'), { status: 422 }), 'F').reintentar, true);
   assert.equal(av.avisoDeFuente(new Error('sin status'), 'F').tipo, 'carga');
@@ -411,6 +412,35 @@ console.log('--- TEST T24-b (B4 T24 r1, m16): los comentarios que citan la regla
       assert.ok(!/\b422\b[^.;]*\bno\b/.test(linea), `${ruta}: el 422 SÍ recarga: ${linea.trim()}`);
     }
   }
+}
+
+console.log('--- TEST T24-c (B4 T24, F46): un solo aviso de fuente — el texto, la regla y la pieza ---');
+{
+  const { readFileSync } = await import('node:fs');
+  const av = await import('../src/lib/avisos.js');
+  const kpis = await import('../src/lib/kpis.js');
+  // textoAvisoFuente vive en avisos.js (kpis.js la reexporta: la misma función) y avisoDeFuente la usa.
+  assert.equal(kpis.textoAvisoFuente, av.textoAvisoFuente);
+  assert.equal(av.textoAvisoFuente(new Error('Intenta de nuevo.'), 'No se pudo'), 'No se pudo: Intenta de nuevo.', 'sin doble punto');
+  assert.equal(av.avisoDeFuente(new Error('Intenta de nuevo.'), 'No se pudo').texto, 'No se pudo: Intenta de nuevo.');
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // La pieza: AvisoFuente (común), con un acento opcional, y AvisoDeError (error + texto de la falla → avisoDeFuente → AvisoFuente).
+  const pieza = leer('components/ui/AvisoFuente.tsx');
+  assert.match(pieza, /export function AvisoDeError\(\{ error, fallo, onReintentar, acento \}: \{ error: unknown; fallo: string; onReintentar: \(\) => void; acento\?: AcentoFoco \}\) \{\s*const aviso = avisoDeFuente\(error, fallo\);\s*return aviso \? <AvisoFuente aviso=\{aviso\} onReintentar=\{onReintentar\} acento=\{acento\} \/> : null;\s*\}/);
+  assert.match(pieza, /\$\{FOCOS\[acento\]\}/);
+  // AvisoReintentar (Inventario) delega en ella: con un 403, el aviso de permiso sin «Reintentar».
+  const piezas = leer('app/dashboard/inventario/piezas-inventario.tsx');
+  assert.match(piezas, /export function AvisoReintentar\(props: \{ error: unknown; fallo: string; onReintentar: \(\) => void; acento\?: AcentoFoco \}\) \{\s*return <AvisoDeError \{\.\.\.props\} \/>;\s*\}/);
+  // El Dashboard usa la pieza común (sin su AvisoFuente local).
+  const dash = leer('app/dashboard/page.tsx');
+  assert.ok(!/function AvisoFuente\b/.test(dash), 'Dashboard: sin la copia local');
+  assert.match(dash, /import \{ AvisoDeError \} from '@\/components\/ui\/AvisoFuente';/);
+  assert.equal((dash.match(/<AvisoDeError error=\{(?:inventario|compras|ventas|clientes)\.error\} fallo="[^"]+" onReintentar=\{(?:inventario|compras|ventas|clientes)\.recargar\} acento="indigo" \/>/g) ?? []).length, 4);
+  // Entregas lee el rol con useRolActual (sin su copia de suscribirRol).
+  const entregas = leer('app/dashboard/inventario/entregas/page.tsx');
+  assert.match(entregas, /import \{ useRolActual \} from '@\/components\/ui\/useRolActual';/);
+  assert.match(entregas, /const rol = useRolActual\(\);/);
+  assert.ok(!/suscribirRol|useSyncExternalStore|getUsuarioActual/.test(entregas), 'Entregas: sin la copia del rol');
 }
 
 console.log('✓ Todas las pruebas de avisos pasaron.');

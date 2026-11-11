@@ -2429,8 +2429,8 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   trae(stock, 'celda: (f) => <CeldaEstadoExistencia f={f} /> },', 'Stock: el estado lleva «Reservado»');
   trae(stock, "existenciaReservada(f) ? ' · Reservado: hay unidades en bodega, todas comprometidas' : ''", 'Stock: el title dice Reservado');
   trae(piezas, '{existenciaReservada(f) && <span className={`${CHIP} border-amber-200 bg-amber-100 text-[10px] text-amber-800`}>Reservado</span>}', 'piezas: la insignia Reservado, solo si existenciaReservada');
-  trae(piezas, 'onClick={onReintentar}\n        className={`inline-flex', 'piezas: AvisoReintentar vuelve a pedir');
-  trae(piezas, '{textoDeError(error, fallo)}', 'piezas: AvisoReintentar dice el detalle');
+  // B4 T24 (F46, D27): AvisoReintentar delega en la pieza común (AvisoDeError → AvisoFuente; casos en test_avisos.mjs).
+  trae(piezas, 'return <AvisoDeError {...props} />;', 'piezas: AvisoReintentar delega en la pieza común');
   trae(abasto, '<TarjetaKpi kpi="pec_activos" valor={tarjetas.pec_activos.valor} ayuda={tarjetas.pec_activos.ayuda} estado={estadoCompras} />', 'Abastecimiento: pec_activos con su estado y sin botón');
   trae(abasto, "apiFetch('/compras/stats', { signal: control.signal })", 'Abastecimiento: /compras/stats (RP94)');
   trae(abasto, '.then((r: { data?: unknown } | null) => setCompras({ vuelta: vueltaCompras, datos: r?.data ?? null, error: null }))', 'Abastecimiento: compras llega');
@@ -2906,7 +2906,8 @@ console.log('--- TEST 48 (B4 T19; KANBAN-logistica 4, KPI-inventario 8; R15, RP2
   trae(e, 'puedeDespacharPedido(p, acciones.rol)', 'la fila usa la regla única');
   assert.equal(e.split('puedeDespacharPedido(selected, rol)').length - 1, 2, 'el botón y el selector del Drawer usan la regla única');
   trae(e, 'tieneSaldo && puedeCobrarSaldo(rol)', 'Marcar Saldo Cobrado solo a quien el servidor se lo permite');
-  trae(e, "useSyncExternalStore(suscribirRol, () => getUsuarioActual().role, () => '')", 'el rol se lee después de montar');
+  // B4 T24 (F46, D27): con useRolActual (la pieza común; '' en el servidor y en la hidratación).
+  trae(e, 'const rol = useRolActual();', 'el rol se lee después de montar');
   noTrae(sinComentarios(e), 'useState(() => getUsuarioActual()', 'el rol no se lee en el inicializador');
   trae(e, 'if (recargarTrasError(err)) { setVueltaConteos((n) => n + 1); setVueltaStats((n) => n + 1); }', 'si el PATCH del tablero falla: solo pestañas y tarjetas (D39)');
   trae(e, 'textoEntregaTablero(p)', 'la entrega estimada es una fecha de negocio');

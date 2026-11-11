@@ -12,6 +12,7 @@ import { FOCOS } from '@/lib/design-system';
 import { avisoDeFuente } from '@/lib/avisos';
 import { accesoCopilot } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
+import { AvisoDeError } from '@/components/ui/AvisoFuente';
 // B4 T22 (KPI-otros punto 1, FLUJO-ventas-pantallas E; R7, R12, RP104): las tarjetas leen los mismos endpoints que los Hubs
 // (/ventas/stats, /compras/stats e /inventory/stats), el embudo es PasosFlujo con /ventas/flujo y el selector es Semana,
 // 30 días o Mes. El Copilot (/chat/copilot/query) y las listas «Recientes» siguen como estaban.
@@ -23,7 +24,7 @@ import { infoEstadoPec } from '@/lib/estados-compras';
 import { infoEstadoPedido } from '@/lib/estados-pedido';
 import {
   PERIODOS_DASHBOARD, RUTA_RADAR, TEXTO_PERIODO, datosDeRespuesta, etiquetaKpi, lecturaDeFuente, periodoDashboard, periodoVisto,
-  radarOperativo, tarjetasInventarioDashboard, tarjetasVitalesDashboard, textoAvisoFuente, textoRadar,
+  radarOperativo, tarjetasInventarioDashboard, tarjetasVitalesDashboard, textoRadar,
 } from '@/lib/kpis';
 
 function formatCOP(v: number | string | null | undefined) {
@@ -51,20 +52,6 @@ function useFuente<T>(url: string, marca: string | null = null) {
   }, [url, clave, marca]);
   const recargar = useCallback(() => setVuelta((n) => n + 1), []);
   return { ...lecturaDeFuente(llego, clave), recargar };
-}
-
-/** Bajo una franja: si su fuente falló, lo dice con el detalle del servidor y «Reintentar» (nunca un 0 ni un vacío falso). */
-function AvisoFuente({ error, texto, onReintentar }: { error: unknown; texto: string; onReintentar: () => void }) {
-  if (!error) return null;
-  return (
-    <p role="alert" className="flex flex-wrap items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
-      {textoAvisoFuente(error, texto)}
-      <button type="button" onClick={onReintentar}
-        className={`rounded font-bold underline ${FOCOS.indigo}`}>
-        Reintentar
-      </button>
-    </p>
-  );
 }
 
 /** El `data` de cada endpoint (los nombres son los del servidor; las funciones de lib/kpis.js leen solo lo que necesitan). */
@@ -377,9 +364,9 @@ export default function DashboardGeneral() {
             <TarjetaKpi kpi="inv_disponible" valor={existencias.disponible.valor} />
             <TarjetaKpi kpi="inv_en_transito" valor={existencias.en_transito.valor} ayuda={existencias.en_transito.ayuda ?? undefined} />
           </FranjaKpis>
-          <AvisoFuente error={inventario.error} texto="No se pudieron cargar las existencias" onReintentar={inventario.recargar} />
+          <AvisoDeError error={inventario.error} fallo="No se pudieron cargar las existencias" onReintentar={inventario.recargar} acento="indigo" />
           {!inventario.error && compras.error ? (
-            <AvisoFuente error={compras.error} texto="No se pudieron cargar los pedidos de compra activos" onReintentar={compras.recargar} />
+            <AvisoDeError error={compras.error} fallo="No se pudieron cargar los pedidos de compra activos" onReintentar={compras.recargar} acento="indigo" />
           ) : null}
         </div>
 
@@ -394,8 +381,8 @@ export default function DashboardGeneral() {
               variacion={{ actual: vitales.saldo.valor, anterior: null, es_foto: true }} />
             <TarjetaKpi kpi="clientes_total" estado={estadoClientes} valor={vitales.clientes.valor} />
           </FranjaKpis>
-          <AvisoFuente error={ventas.error} texto="No se pudieron cargar las cifras de ventas" onReintentar={ventas.recargar} />
-          <AvisoFuente error={clientes.error} texto="No se pudieron contar los clientes" onReintentar={clientes.recargar} />
+          <AvisoDeError error={ventas.error} fallo="No se pudieron cargar las cifras de ventas" onReintentar={ventas.recargar} acento="indigo" />
+          <AvisoDeError error={clientes.error} fallo="No se pudieron contar los clientes" onReintentar={clientes.recargar} acento="indigo" />
         </div>
 
         {/* 5. Embudo B2B & Radar Operativo */}

@@ -8,6 +8,7 @@ import type { LucideIcon } from 'lucide-react';
 import { Modal } from '@/components/ui';
 import { apiFetch } from '@/lib/api';
 import { FOCOS, RESERVA_BOTON_IA, TABLE, type AcentoFoco } from '@/lib/design-system';
+import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import { formatoPesos } from '@/lib/pesos';
 import { tiene } from '@/lib/estados-pedido';
 import { formatoDecimal, numeroFinito } from '@/lib/kpis';
@@ -106,18 +107,11 @@ export function CeldaEstadoExistencia({ f }: { f: FilaExistencia }) {
 
 /**
  * Una fuente de indicadores que falló (T18 r1, m11): lo dice con el detalle del servidor y ofrece «Reintentar» (que vuelve a pedir
- * SOLO esa fuente), en lugar de dejar solo «—» en las tarjetas.
+ * SOLO esa fuente), en lugar de dejar solo «—» en las tarjetas. B4 T24 (F46): delega en la pieza común (AvisoDeError → AvisoFuente),
+ * así que con un 403 dice el permiso sin «Reintentar».
  */
-export function AvisoReintentar({ error, fallo, onReintentar, acento = 'indigo' }: { error: unknown; fallo: string; onReintentar: () => void; acento?: AcentoFoco }) {
-  return (
-    <div role="alert" className="flex flex-wrap items-center gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">
-      {textoDeError(error, fallo)}
-      <button type="button" onClick={onReintentar}
-        className={`inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 ${FOCOS[acento]}`}>
-        Reintentar
-      </button>
-    </div>
-  );
+export function AvisoReintentar(props: { error: unknown; fallo: string; onReintentar: () => void; acento?: AcentoFoco }) {
+  return <AvisoDeError {...props} />;
 }
 
 /**
