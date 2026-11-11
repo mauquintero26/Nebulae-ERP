@@ -338,6 +338,24 @@ console.log('--- B4 T24 f2 r1 (duda 2 + m15 + m16): puedeAccionDocumento — qui
     const roles = ventas.slice(i, i + 600).match(/require_roles\(([^)]*)\)/)?.[1];
     assert.equal(roles, '*ROLE_ADMIN, *ROLE_ASESOR', `${metodo} ${rutaApi}: ADMIN y ASESOR`);
   }
+  // r2 (m2): también el de las claves de pedido, que se aplican SIEMPRE desde r1 (m16): «comprar» (create_pec de erp_compras.py: ADMIN
+  // y COMPRAS), «cobrar» (crear-pxp: ADMIN, FINANZAS y ASESOR) y «facturar»/«despachar» (PATCH /pedidos/{ven_id}: ADMIN, ASESOR y BODEGA,
+  // BODEGA solo a ENTREGADO, que es lo que hace «despachar»).
+  const compras = readFileSync(new URL('../../backend/app/api/v1/erp_compras.py', import.meta.url), 'utf8');
+  for (const [fuente, metodo, rutaApi, esperado, clave] of [
+    [compras, 'post', '/pedidos', '*ROLE_ADMIN, *ROLE_COMPRAS', 'comprar'],
+    [ventas, 'post', '/pedidos/{ven_id}/crear-pxp', '*ROLE_ADMIN, *ROLE_FINANZAS, *ROLE_ASESOR', 'cobrar'],
+    [ventas, 'patch', '/pedidos/{ven_id}', '*ROLE_ADMIN, *ROLE_ASESOR, *ROLE_BODEGA', 'facturar y despachar'],
+  ]) {
+    const i = fuente.indexOf(`@router.${metodo}("${rutaApi}"`);
+    assert.ok(i >= 0, `${metodo} ${rutaApi} existe`);
+    assert.equal(fuente.slice(i, i + 600).match(/require_roles\(([^)]*)\)/)?.[1], esperado, `${metodo} ${rutaApi} (${clave})`);
+  }
+  const permitidos = (clave) => ['ADMIN', 'ASESOR', 'FINANZAS', 'COMPRAS', 'BODEGA', 'CONSULTA'].filter((r) => puedeAccionDocumento('VEN', clave, r));
+  assert.deepEqual(permitidos('comprar'), ['ADMIN', 'COMPRAS'], 'la regla de «comprar» es la de create_pec');
+  assert.deepEqual(permitidos('cobrar'), ['ADMIN', 'ASESOR', 'FINANZAS'], 'la de «cobrar», la de crear-pxp');
+  assert.deepEqual(permitidos('despachar'), ['ADMIN', 'ASESOR', 'BODEGA'], 'la de «despachar», la del PATCH a ENTREGADO');
+  assert.deepEqual(permitidos('facturar'), ['ADMIN', 'ASESOR'], 'la de «facturar», la del PATCH sin BODEGA');
 }
 
 console.log('--- B4 T24 f2 r1 (m17, m19 + m37): puedeDespachar (una sola copia) y accesoNotasVentas, con el require_roles real ---');

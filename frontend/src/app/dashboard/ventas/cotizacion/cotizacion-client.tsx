@@ -1064,8 +1064,6 @@ export function AccionesCabecera({ onActualizar, actualizando }: { onActualizar:
   );
 }
 
-/** La tarjeta del tablero (KANBAN-ventas-listas punto 6, RP18, D4, D37 y el cruce C5): vuelve a esta lista. */
-
 // â”€â”€ Main Component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export default function CotizacionClient() {
   const router = useRouter();
@@ -1082,7 +1080,8 @@ export default function CotizacionClient() {
   // require_roles del PATCH de destino); sin permiso, soloLectura (no se arrastra ni se ofrece «Mover a…») y sin acciones masivas.
   const rol = useRolActual();
   const accesoTablero = accesoTableroVentas(rol);
-  // B4 T24 f2 r1 (duda 2 + m15): la tarjeta ofrece su acción solo si el rol puede hacerla (su require_roles); si no, «Abrir».
+  // La tarjeta del tablero (KANBAN-ventas-listas punto 6, RP18, D4, D37 y el cruce C5): vuelve a esta lista. B4 T24 f2 r1 (duda 2 +
+  // m15): ofrece su acción solo si el rol puede hacerla (su require_roles); si no, «Abrir».
   const tarjetaDeCOT = useCallback((cot: FilaCOT) => tarjetaCotizacion(cot, { rol }), [rol]);
   const enKanban = estado.modo === 'kanban';
 

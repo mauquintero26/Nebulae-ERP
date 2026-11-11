@@ -852,8 +852,6 @@ export function AccionesCabecera({ onActualizar, actualizando, onNueva }: { onAc
   );
 }
 
-/** La tarjeta del tablero (KANBAN-ventas-listas punto 7, RP15, RP18, D37 y el cruce C5): vuelve a esta lista. */
-
 
 // ── IA Panel SC ────────────────────────────────────────────────────────────────
 export function IAPanelSC({sc,apiBase}:{sc:any;apiBase:string}) {
@@ -1059,7 +1057,8 @@ export default function SolicitudClient() {
   // require_roles del PATCH de destino); sin permiso, soloLectura (no se arrastra ni se ofrece «Mover a…») y sin acciones masivas.
   const rol = useRolActual();
   const accesoTablero = accesoTableroVentas(rol);
-  // B4 T24 f2 r1 (duda 2 + m15): la tarjeta ofrece su acción solo si el rol puede hacerla (su require_roles); si no, «Abrir».
+  // La tarjeta del tablero (KANBAN-ventas-listas punto 7, RP15, RP18, D37 y el cruce C5): vuelve a esta lista. B4 T24 f2 r1 (duda 2 +
+  // m15): ofrece su acción solo si el rol puede hacerla (su require_roles); si no, «Abrir».
   const tarjetaDeSC = useCallback((sc: FilaSC) => tarjetaSolicitud(sc, { returnTo: RUTA_LISTA_SOLICITUDES, rol }), [rol]);
   const enPapelera = estado.vista === 'papelera';
   // KANBAN-ventas-listas punto 7: Soporte y la Papelera no tienen tablero (ahí no aparece el botón y se ve la lista).
