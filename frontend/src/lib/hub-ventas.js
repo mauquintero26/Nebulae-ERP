@@ -660,30 +660,77 @@ function conRegresoA(ruta, returnTo) {
  * @returns {{label: string, href: string, tono: string} | null}
  */
 export function accionSiguienteSC(row, ctx = {}) {
+  const { rama, pedido, cot } = decisionSC(row, ctx);
+  if (rama === null) return null;
+  const volver = (ruta) => conRegresoA(ruta, ctx.returnTo);
+  const { label, tono } = ACCION_SC[rama];
+  if (rama === 'ver_pedido') return { label, href: volver(`/dashboard/ventas/venta/${pedido.id}`), tono };
+  if (rama === 'ver_cotizacion') return { label, href: volver(`/dashboard/ventas/cotizacion/${cot.id}`), tono };
+  return { label, href: volver(`/dashboard/ventas/solicitud/${row?.id}`), tono };
+}
+
+/** B4 T24 f2 r1 (duda 2 + m15): el texto y el tono de cada rama de accionSiguienteSC. */
+const ACCION_SC = congelar({
+  ver_ticket: { label: 'Ver ticket', tono: 'slate' },
+  ver_pedido: { label: 'Ver pedido', tono: 'emerald' },
+  ver_cotizacion: { label: 'Ver cotización', tono: 'indigo' },
+  agregar_productos: { label: 'Agregar productos', tono: 'amber' },
+  cotizar: { label: 'Cotizar →', tono: 'emerald' },
+  reiniciar_o_cotizar: { label: 'Reiniciar o cotizar', tono: 'slate' },
+  esperando: { label: 'Esperando cliente', tono: 'blue' },
+  enviar_confirmacion: { label: 'Enviar para confirmación', tono: 'indigo' },
+  asignar: { label: 'Asignar asesor', tono: 'amber' },
+  ver_solicitud: { label: 'Ver solicitud', tono: 'slate' },
+});
+
+/**
+ * B4 T24 f2 r1 (duda 2 + m15): la decisión ÚNICA de accionSiguienteSC (la rama; el primer caso que aplica gana) y los documentos
+ * de su enlace. claveAccionSiguienteSC la da sin el texto de la interfaz.
+ * @param {any} row
+ * @param {{cotizaciones?: any[], pedidos?: any[]}} ctx
+ * @returns {{rama: ClaveAccionSC | null, pedido?: any, cot?: any}}
+ */
+function decisionSC(row, ctx) {
   const cotizaciones = ctx.cotizaciones || [];
   const pedidos = ctx.pedidos || [];
-  const volver = (ruta) => conRegresoA(ruta, ctx.returnTo);
-  const enSolicitud = volver(`/dashboard/ventas/solicitud/${row?.id}`);
   const estado = row?.estado;
-  if (esSoporte(row)) return { label: 'Ver ticket', href: enSolicitud, tono: 'slate' };
-  if (estado === 'CANCELADA') return null;
+  if (esSoporte(row)) return { rama: 'ver_ticket' };
+  if (estado === 'CANCELADA') return { rama: null };
   const pedido = masReciente(pedidos.filter((v) => v && esPedidoVigente(v.estado)));
-  if (pedido) return { label: 'Ver pedido', href: volver(`/dashboard/ventas/venta/${pedido.id}`), tono: 'emerald' };
+  if (pedido) return { rama: 'ver_pedido', pedido };
   // choque H3/N4: una COT VENCIDA cuenta como activa (esCotizacionActiva), igual que en el backend.
   const cot = masReciente(cotizaciones.filter((c) => c && esCotizacionActiva(c.estado)));
-  if (cot) return { label: 'Ver cotización', href: volver(`/dashboard/ventas/cotizacion/${cot.id}`), tono: 'indigo' };
+  if (cot) return { rama: 'ver_cotizacion', cot };
   if (!tieneProductos(row?.productos) && ['ASIGNADA', 'PENDIENTE_CONFIRMACION', 'CONFIRMADA'].includes(estado)) {
-    return { label: 'Agregar productos', href: enSolicitud, tono: 'amber' };
+    return { rama: 'agregar_productos' };
   }
   // R19 (U15): solo se cotiza con la confirmación del cliente vigente (confirmacion_vigente de _sc_dict: gate1 de la SC).
-  if (estado === 'CONFIRMADA' && row?.confirmacion_vigente === true) return { label: 'Cotizar →', href: enSolicitud, tono: 'emerald' };
+  if (estado === 'CONFIRMADA' && row?.confirmacion_vigente === true) return { rama: 'cotizar' };
   // R19 (enmienda T9B r1): una Confirmada cuya confirmación ya no vale no se envía (el servidor solo envía una Asignada
   // o reenvía una Pendiente por confirmación): en el detalle se reinicia o se cotiza sin esperar confirmación.
-  if (estado === 'CONFIRMADA') return { label: 'Reiniciar o cotizar', href: enSolicitud, tono: 'slate' };
-  if (estado === 'PENDIENTE_CONFIRMACION') return { label: 'Esperando cliente', href: enSolicitud, tono: 'blue' };
-  if (estado === 'ASIGNADA') return { label: 'Enviar para confirmación', href: enSolicitud, tono: 'indigo' };
-  if (estado === 'BORRADOR') return { label: 'Asignar asesor', href: enSolicitud, tono: 'amber' };
-  return { label: 'Ver solicitud', href: enSolicitud, tono: 'slate' };
+  if (estado === 'CONFIRMADA') return { rama: 'reiniciar_o_cotizar' };
+  if (estado === 'PENDIENTE_CONFIRMACION') return { rama: 'esperando' };
+  if (estado === 'ASIGNADA') return { rama: 'enviar_confirmacion' };
+  if (estado === 'BORRADOR') return { rama: 'asignar' };
+  return { rama: 'ver_solicitud' };
+}
+
+/**
+ * @typedef {'ver_ticket' | 'ver_pedido' | 'ver_cotizacion' | 'agregar_productos' | 'cotizar' | 'reiniciar_o_cotizar' | 'esperando'
+ *   | 'enviar_confirmacion' | 'asignar' | 'ver_solicitud'} ClaveAccionSC
+ * @typedef {'completar_precios' | 'enviar_al_cliente' | 'esperando' | 'ver_pedido' | 'crear_pedido'} ClaveAccionCOT
+ */
+
+/**
+ * B4 T24 f2 r1 (duda 2 + m15): QUÉ acción da accionSiguienteSC (la misma rama), sin el texto de la interfaz; null si no hay
+ * acción (cancelada) o si no es un objeto. Con ella, puedeAccionDocumento (lib/roles.js) dice si el rol puede hacerla.
+ * @param {any} row
+ * @param {{cotizaciones?: any[], pedidos?: any[]}} [ctx]
+ * @returns {ClaveAccionSC | null}
+ */
+export function claveAccionSiguienteSC(row, ctx = {}) {
+  if (!row || typeof row !== 'object') return null;
+  return decisionSC(row, ctx).rama;
 }
 
 // ─── B4 T2 (R26, RP15): la próxima acción de COT y PVEN y la de cualquier fila ──
@@ -707,21 +754,43 @@ const pedidoVigenteDe = (cot) => masReciente((Array.isArray(cot?.pedidos_venta) 
  * @returns {{texto: string, href: string | null, tono: string} | null}
  */
 export function accionSiguienteCOT(cot, { returnTo } = {}) {
-  const estado = cot?.estado;
+  const { rama, pedido } = decisionCOT(cot);
   const enCot = conRegresoA(`/dashboard/ventas/cotizacion/${cot?.id}`, returnTo);
+  if (rama === 'enviar_al_cliente') return { texto: 'Enviar al cliente', href: enCot, tono: 'indigo' };
+  if (rama === 'completar_precios') return { texto: 'Completar precios', href: enCot, tono: 'amber' };
+  if (rama === 'esperando') return { texto: 'Esperando al cliente', href: null, tono: 'blue' };
+  if (rama === 'ver_pedido') return { texto: 'Ver pedido', href: conRegresoA(`/dashboard/ventas/venta/${pedido.id}`, returnTo), tono: 'emerald' };
+  if (rama === 'crear_pedido') return { texto: 'Crear pedido', href: enCot, tono: 'emerald' };
+  return null;
+}
+
+/**
+ * B4 T24 f2 r1 (duda 2 + m15): la decisión ÚNICA de accionSiguienteCOT (la rama) y el pedido de su enlace.
+ * @param {any} cot
+ * @returns {{rama: ClaveAccionCOT | null, pedido?: any}}
+ */
+function decisionCOT(cot) {
+  const estado = cot?.estado;
   if (estado === 'BORRADOR' || estado === 'VENCIDA' || estado === 'ENVIADA') {
-    return tienePreciosCot(cot)
-      ? { texto: 'Enviar al cliente', href: enCot, tono: 'indigo' }
-      : { texto: 'Completar precios', href: enCot, tono: 'amber' };
+    return { rama: tienePreciosCot(cot) ? 'enviar_al_cliente' : 'completar_precios' };
   }
-  if (estado === 'PENDIENTE_CONFIRMACION') return { texto: 'Esperando al cliente', href: null, tono: 'blue' };
+  if (estado === 'PENDIENTE_CONFIRMACION') return { rama: 'esperando' };
   if (estado === 'CONFIRMADA') {
     const pedido = pedidoVigenteDe(cot);
-    return pedido
-      ? { texto: 'Ver pedido', href: conRegresoA(`/dashboard/ventas/venta/${pedido.id}`, returnTo), tono: 'emerald' }
-      : { texto: 'Crear pedido', href: enCot, tono: 'emerald' };
+    return pedido ? { rama: 'ver_pedido', pedido } : { rama: 'crear_pedido' };
   }
-  return null;
+  return { rama: null };
+}
+
+/**
+ * B4 T24 f2 r1 (duda 2 + m15): QUÉ acción da accionSiguienteCOT (la misma rama), sin el texto de la interfaz; null sin acción o si
+ * no es un objeto.
+ * @param {any} cot
+ * @returns {ClaveAccionCOT | null}
+ */
+export function claveAccionSiguienteCOT(cot) {
+  if (!cot || typeof cot !== 'object') return null;
+  return decisionCOT(cot).rama;
 }
 
 /**
@@ -807,6 +876,21 @@ export function accionSiguienteDocumento(fila, { returnTo } = {}) {
   }
   if (tipo === 'COT') return accionSiguienteCOT(fila, { returnTo });
   if (tipo === 'VEN' || tipo === 'PVEN') return accionSiguientePVEN(fila, { returnTo });
+  return null;
+}
+
+/**
+ * B4 T24 f2 r1 (duda 2 + m15): la clave de la próxima acción de cualquier fila (SC, COT, VEN o PVEN), la de accionSiguienteDocumento
+ * sin el texto: claveAccionSiguienteSC (con fila.cotizaciones y fila.pedidos_venta), claveAccionSiguienteCOT o
+ * claveAccionSiguientePVEN. Un tipo desconocido o algo que no es un objeto: null.
+ * @param {any} fila
+ * @returns {string | null}
+ */
+export function claveAccionSiguienteDocumento(fila) {
+  if (!fila || typeof fila !== 'object') return null;
+  if (fila.tipo === 'SC') return claveAccionSiguienteSC(fila, { cotizaciones: fila.cotizaciones, pedidos: fila.pedidos_venta });
+  if (fila.tipo === 'COT') return claveAccionSiguienteCOT(fila);
+  if (fila.tipo === 'VEN' || fila.tipo === 'PVEN') return claveAccionSiguientePVEN(fila);
   return null;
 }
 

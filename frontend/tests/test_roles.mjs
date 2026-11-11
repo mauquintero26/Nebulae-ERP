@@ -291,4 +291,52 @@ console.log('--- B4 T24 f2 (duda 3 de f1): puedeAccionPedido — quién hace la 
   for (const clave of [null, undefined, '', 'otra', 'constructor']) assert.equal(puedeAccionPedido(clave, 'ADMIN'), false, String(clave));
 }
 
+console.log('--- B4 T24 f2 r1 (duda 2 + m15 + m16): puedeAccionDocumento — quién hace la acción principal de una tarjeta, con el require_roles real ---');
+{
+  const { puedeAccionDocumento, puedeAccionPedido } = await import('../src/lib/roles.js');
+  assert.equal(typeof puedeAccionDocumento, 'function', 'puedeAccionDocumento existe');
+  const TODOS = ['ADMIN', 'ASESOR', 'FINANZAS', 'COMPRAS', 'BODEGA', 'CONSULTA'];
+  // backend/app/api/v1/erp_ventas.py (solo lectura, y lo vigila el final del bloque): las acciones de la SC y de la COT son de ADMIN
+  // y ASESOR; abrir (GET, ver o esperar) es de todos los roles del ERP.
+  const ESPERADO = {
+    SC: {
+      agregar_productos: ['ADMIN', 'ASESOR'], asignar: ['ADMIN', 'ASESOR'], enviar_confirmacion: ['ADMIN', 'ASESOR'], cotizar: ['ADMIN', 'ASESOR'],
+      reiniciar_o_cotizar: ['ADMIN', 'ASESOR'], ver_ticket: TODOS, ver_pedido: TODOS, ver_cotizacion: TODOS, esperando: TODOS, ver_solicitud: TODOS,
+    },
+    COT: {
+      completar_precios: ['ADMIN', 'ASESOR'], enviar_al_cliente: ['ADMIN', 'ASESOR'], crear_pedido: ['ADMIN', 'ASESOR'],
+      esperando: TODOS, ver_pedido: TODOS,
+    },
+  };
+  for (const [tipo, claves] of Object.entries(ESPERADO)) {
+    for (const [clave, roles] of Object.entries(claves)) {
+      for (const rol of TODOS) assert.equal(puedeAccionDocumento(tipo, clave, rol), roles.includes(rol), `${tipo} ${clave} ${rol}`);
+      assert.equal(puedeAccionDocumento(tipo, clave, ' vendedor '), roles.includes('ASESOR'), `${tipo} ${clave} Vendedor`);
+      for (const rol of RAROS) assert.equal(puedeAccionDocumento(tipo, clave, rol), false, `${tipo} ${clave} ${JSON.stringify(rol)}`);
+    }
+  }
+  // Un pedido: la regla de la duda 3 (puedeAccionPedido), con VEN y con PVEN. ASESOR no gestiona la compra (create_pec: ADMIN y COMPRAS).
+  for (const clave of ['facturar', 'cobrar', 'comprar', 'despachar', 'ver']) {
+    for (const rol of TODOS) {
+      assert.equal(puedeAccionDocumento('VEN', clave, rol), puedeAccionPedido(clave, rol), `VEN ${clave} ${rol}`);
+      assert.equal(puedeAccionDocumento('PVEN', clave, rol), puedeAccionPedido(clave, rol), `PVEN ${clave} ${rol}`);
+    }
+  }
+  assert.equal(puedeAccionDocumento('VEN', 'comprar', 'ASESOR'), false, 'm16: ASESOR no gestiona la compra');
+  // Una clave de otro tipo, un tipo desconocido o una clave rara: false.
+  for (const [tipo, clave] of [['SC', 'facturar'], ['COT', 'cotizar'], ['VEN', 'asignar'], ['OTRO', 'ver'], [null, 'ver'], ['SC', null], ['COT', 'constructor']]) {
+    assert.equal(puedeAccionDocumento(tipo, clave, 'ADMIN'), false, `${tipo} ${clave}`);
+  }
+  // El require_roles real de cada endpoint de esas acciones (backend/app, solo lectura): si cambia, esta prueba lo dice.
+  const ventas = readFileSync(new URL('../../backend/app/api/v1/erp_ventas.py', import.meta.url), 'utf8');
+  for (const [metodo, rutaApi] of [['patch', '/solicitudes/{sc_id}'], ['post', '/solicitudes/{sc_id}/enviar-confirmacion'],
+    ['post', '/solicitudes/{sc_id}/cotizar-sin-confirmacion'], ['post', '/cotizaciones'], ['patch', '/cotizaciones/{cot_id}'],
+    ['post', '/cotizaciones/{cot_id}/enviar-confirmacion'], ['post', '/cotizaciones/{cot_id}/confirmar']]) {
+    const i = ventas.indexOf(`@router.${metodo}("${rutaApi}"`);
+    assert.ok(i >= 0, `${metodo} ${rutaApi} existe`);
+    const roles = ventas.slice(i, i + 600).match(/require_roles\(([^)]*)\)/)?.[1];
+    assert.equal(roles, '*ROLE_ADMIN, *ROLE_ASESOR', `${metodo} ${rutaApi}: ADMIN y ASESOR`);
+  }
+}
+
 console.log('OK test_roles.mjs');

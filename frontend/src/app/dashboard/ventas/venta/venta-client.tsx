@@ -549,11 +549,9 @@ export default function VentaClient() {
   } = useAccionesTableroPedidos<FilaPedido>({ tablero, recargarTrasCambio, mover: accesoTablero.mover });
   // La tarjeta del tablero (KANBAN-ventas-listas punto 5, D37 y el cruce C5): vuelve a esta lista. B4 T24 f2 (duda 3 de f1): en solo
   // lectura, su acción principal queda solo si el rol puede hacerla (FINANZAS cobra, COMPRAS gestiona la compra, BODEGA despacha); si
-  // no, la tarjeta queda en «Abrir», como en E-Commerce (tarjetaPedido con rolSoloLectura).
-  const tarjetaDePedido = useCallback(
-    (p: FilaPedido) => tarjetaPedido(p, { rolSoloLectura: accesoTablero.soloLectura ? rol : null }),
-    [accesoTablero.soloLectura, rol],
-  );
+  // no, la tarjeta queda en «Abrir», como en E-Commerce. r1 (m16): con el rol SIEMPRE, no solo en solo lectura (ASESOR no gestiona
+  // la compra: create_pec es de ADMIN y COMPRAS).
+  const tarjetaDePedido = useCallback((p: FilaPedido) => tarjetaPedido(p, { rol }), [rol]);
   // C9: la suma de H47 de cada columna (el resumen de su consulta) debajo del título, salvo en Cancelado.
   const resumenColumna = useCallback(
     (clave: string, d: DatosColumnaKanban<FilaPedido>) => resumenColumnaPedido(clave, d.resumen), [],

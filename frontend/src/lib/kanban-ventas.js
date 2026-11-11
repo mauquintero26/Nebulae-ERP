@@ -43,7 +43,7 @@ import {
 } from './estados-pedido.js';
 import {
   RUTA_HUB_VENTAS, esSoporte, motivoNoCancelable, tieneProductos, accionSiguienteDocumento, diasDesde,
-  textoAntiguedad, ETIQUETA_GRUPO, claveAccionSiguientePVEN, tipoDocumento, tienePreciosCot, RUTA_ENTREGAS,
+  textoAntiguedad, ETIQUETA_GRUPO, tipoDocumento, tienePreciosCot, RUTA_ENTREGAS, claveAccionSiguienteDocumento,
 } from './hub-ventas.js';
 import {
   ESTADOS_SC, PASOS_SC, ESTADOS_SC_HEREDADOS, ESTADOS_SC_CON_CONFIRMACION, infoEstadoSolicitud, puedeReiniciar,
@@ -64,7 +64,7 @@ import { etiquetaTipoSolicitud } from './etiquetas-ventas.js';
 import { redondearPeso, formatoPesos } from './pesos.js';
 import { queryListado } from './tabla.js';
 // B4 T23A: el permiso de mover los pedidos web (RP62).
-import { esAdminOAsesor, puedeAccionPedido } from './roles.js';
+import { esAdminOAsesor, puedeAccionDocumento } from './roles.js';
 // B4 T24 f2 (F47): la regla única de la recarga tras un error, para las acciones del tablero de pedidos.
 import { recargarTrasError } from './avisos.js';
 
@@ -501,14 +501,15 @@ export function estadoDeTarjeta(tipo, estado) {
  *  - tiempo = la antigüedad de R5 ('hoy', 'hace N días') con dias_creado del servidor, o desde created_at;
  *  - atrasada = fila.resolucion === 'ATRASADO'; chips = chipsDocumentoVentas;
  *  - accionPrincipal = accionSiguienteDocumento de hub-ventas.js (D25: {texto, href, tono}; su href puede ser null, como
- *    «Esperando al cliente»), con return_to de `returnTo` (cruce C5: por defecto el Hub; T8 manda la ruta de su lista).
+ *    «Esperando al cliente»), con return_to de `returnTo` (cruce C5: por defecto el Hub; T8 manda la ruta de su lista). B4 T24
+ *    f2 r1 (duda 2 + m15): con `rol`, solo si el rol puede hacerla (accionConRol); si no, null: la tarjeta queda en «Abrir».
  * Un tipo que no es SC, COT, VEN o PVEN lanza Error.
  * @param {any} fila
- * @param {{ahora?: number, returnTo?: string}} [opciones]  `ahora`: el instante para la antigüedad cuando no viene
+ * @param {{ahora?: number, returnTo?: string, rol?: unknown}} [opciones]  `ahora`: el instante para la antigüedad cuando no viene
  *   dias_creado (pruebas)
  * @returns {TarjetaVentas}
  */
-export function tarjetaHub(fila, { ahora = Date.now(), returnTo } = {}) {
+export function tarjetaHub(fila, { ahora = Date.now(), returnTo, rol } = {}) {
   const tipo = tipoDocumento(fila?.tipo);
   const cliente = String(fila?.customer_name || fila?.cliente?.nombre || '').trim();
   const asesor = String(fila?.advisor_name || fila?.cotizador || fila?.asesor?.nombre || '').trim();
@@ -524,8 +525,37 @@ export function tarjetaHub(fila, { ahora = Date.now(), returnTo } = {}) {
     tiempo: textoAntiguedad(dias),
     atrasada: fila?.resolucion === 'ATRASADO',
     chips: chipsDocumentoVentas(fila, tipo),
-    accionPrincipal: accionSiguienteDocumento(fila, { returnTo }),
+    accionPrincipal: accionConRol(fila, accionSiguienteDocumento(fila, { returnTo }), rol),
   };
+}
+
+/**
+ * B4 T24 f2 r1 (duda 2 + m15 + m16): la acción si el rol puede hacerla en su pantalla (puedeAccionDocumento con
+ * claveAccionSiguienteDocumento: el require_roles de su endpoint); si no, null (la tarjeta queda en «Abrir»). Sin rol (undefined,
+ * una llamada que no lo pasa), la de siempre; con un rol vacío (todavía se lee, después de montar), null.
+ * @template A
+ * @param {any} fila
+ * @param {A | null} accion
+ * @param {unknown} rol
+ * @returns {A | null}
+ */
+function accionConRol(fila, accion, rol) {
+  if (rol === undefined || accion === null) return accion;
+  return puedeAccionDocumento(fila?.tipo, claveAccionSiguienteDocumento(fila), rol) ? accion : null;
+}
+
+/**
+ * B4 T24 f2 r1 (duda 2 + m15): la columna Acción de la Lista del Hub (CeldaAccion). La de accionSiguienteDocumento si el rol puede
+ * hacerla; si no, «Abrir» (el detalle del documento, con return_to al Hub o a `returnTo`); sin acción (una SC cancelada, una COT
+ * rechazada), null: la celda dice «—».
+ * @param {any} fila
+ * @param {{rol?: unknown, returnTo?: string}} [opciones]
+ * @returns {{texto: string, href: string | null, tono: string} | null}
+ */
+export function accionDeLaFilaHub(fila, { rol, returnTo } = {}) {
+  const accion = accionSiguienteDocumento(fila, { returnTo });
+  if (accion === null || accionConRol(fila, accion, rol) !== null) return accion;
+  return { texto: 'Abrir', href: enlaceDocumento(fila?.tipo, fila?.id, { returnTo: returnTo || RUTA_HUB_VENTAS }), tono: 'slate' };
 }
 
 /**
@@ -912,12 +942,13 @@ export function consultaColumnaSC(estado, columna, { orden, limit, offset }) {
  * la de tarjetaHub (número, cliente, estado, antigüedad, atraso, chipsDocumentoVentas y accionSiguienteDocumento) con el
  * return_to de la lista (`returnTo`, por defecto RUTA_LISTA_SOLICITUDES) y el subtítulo «asesor · tipo de solicitud»
  * (etiquetaTipoSolicitud; sin tipo, Cotización de producto, como la lista). La fila es una SC aunque no traiga `tipo`.
+ * B4 T24 f2 r1 (duda 2 + m15): con `rol`, la acción principal solo si el rol puede hacerla (accionConRol).
  * @param {any} fila
- * @param {{ahora?: number, returnTo?: string}} [opciones]
+ * @param {{ahora?: number, returnTo?: string, rol?: unknown}} [opciones]
  * @returns {TarjetaVentas}
  */
-export function tarjetaSolicitud(fila, { ahora, returnTo = RUTA_LISTA_SOLICITUDES } = {}) {
-  const tarjeta = tarjetaHub({ ...fila, tipo: 'SC' }, { ahora, returnTo });
+export function tarjetaSolicitud(fila, { ahora, returnTo = RUTA_LISTA_SOLICITUDES, rol } = {}) {
+  const tarjeta = tarjetaHub({ ...fila, tipo: 'SC' }, { ahora, returnTo, rol });
   const tipoSolicitud = etiquetaTipoSolicitud(fila?.tipo_solicitud || 'Cotizacion de Producto');
   return { ...tarjeta, subtitulo: `${tarjeta.subtitulo} · ${tipoSolicitud}` };
 }
@@ -1005,13 +1036,14 @@ export function consultaColumnaCOT(estado, columna, { orden, limit, offset }) {
  *  3. «Sin precio» (chipSinPrecio, el mismo de la columna Total);
  *  4. el resto de chipsDocumentoVentas: el atraso y el recordatorio.
  * tarjetaHub no cambia: las tarjetas del Hub no los llevan.
+ * B4 T24 f2 r1 (duda 2 + m15): con `rol`, la acción principal solo si el rol puede hacerla (accionConRol).
  * @param {any} fila
- * @param {{ahora?: number, returnTo?: string}} [opciones]
+ * @param {{ahora?: number, returnTo?: string, rol?: unknown}} [opciones]
  * @returns {TarjetaVentas}
  */
-export function tarjetaCotizacion(fila, { ahora, returnTo = RUTA_LISTA_COTIZACIONES } = {}) {
+export function tarjetaCotizacion(fila, { ahora, returnTo = RUTA_LISTA_COTIZACIONES, rol } = {}) {
   const cot = { ...fila, tipo: 'COT' };
-  const tarjeta = tarjetaHub(cot, { ahora, returnTo });
+  const tarjeta = tarjetaHub(cot, { ahora, returnTo, rol });
   const { atraso, recordatorio, cambios } = chipsDeLaFila(cot, 'COT');
   const chips = /** @type {ChipTarjeta[]} */ ([marcaPedidoCotizacion(cot), cambios, chipSinPrecio(cot), atraso, recordatorio].filter(Boolean));
   return { ...tarjeta, chips: chips.slice(0, MAX_CHIPS) };
@@ -1201,26 +1233,21 @@ const textoLimpio = (v) => (typeof v === 'string' ? v.trim() : '');
  *    la tabla) y después el atraso y el recordatorio (los de chipsDocumentoVentas; un pedido no tiene chip de cambios
  *    del cliente).
  * La fila es un pedido aunque no traiga `tipo`. tarjetaHub no cambia.
- * B4 T24 f2 (duda 3 de f1, aditivo): con `rolSoloLectura` (el rol, cuando el tablero es de solo lectura para él: accesoTableroVentas),
- * la acción principal queda solo si ese rol puede hacerla en su pantalla (puedeAccionPedido con claveAccionSiguientePVEN: FINANZAS
- * cobra el saldo, COMPRAS gestiona la compra, BODEGA despacha); si no, null: la tarjeta queda en «Abrir», como en E-Commerce. Sin
- * rolSoloLectura (null o sin pasar), la de siempre.
+ * B4 T24 f2 (duda 3 de f1) y r1 (m16): con `rol` (el de la sesión, SIEMPRE, no solo en solo lectura), la acción principal queda solo
+ * si ese rol puede hacerla en su pantalla (puedeAccionDocumento → puedeAccionPedido con la clave de claveAccionSiguientePVEN:
+ * FINANZAS cobra el saldo, COMPRAS gestiona la compra, BODEGA despacha, ASESOR no gestiona la compra); si no, null: la tarjeta queda
+ * en «Abrir», como en E-Commerce. Sin rol (sin pasar), la de siempre.
  * @param {any} fila
- * @param {{ahora?: number, returnTo?: string, rolSoloLectura?: string | null}} [opciones]
+ * @param {{ahora?: number, returnTo?: string, rol?: unknown}} [opciones]
  * @returns {TarjetaVentas}
  */
-export function tarjetaPedido(fila, { ahora, returnTo = RUTA_LISTA_PEDIDOS, rolSoloLectura = null } = {}) {
+export function tarjetaPedido(fila, { ahora, returnTo = RUTA_LISTA_PEDIDOS, rol } = {}) {
   const pedido = { ...fila, tipo: 'VEN' };
-  const tarjeta = tarjetaHub(pedido, { ahora, returnTo });
+  const tarjeta = tarjetaHub(pedido, { ahora, returnTo, rol });
   const origen = [textoLimpio(fila?.sc_numero), textoLimpio(fila?.cot_numero)].filter(Boolean).join(' · ');
   const { atraso, recordatorio } = chipsDeLaFila(pedido, 'VEN');
   const chips = /** @type {ChipTarjeta[]} */ ([chipSaldoPedido(pedido), atraso, recordatorio].filter(Boolean));
-  const conAccion = rolSoloLectura === null || rolSoloLectura === undefined
-    || puedeAccionPedido(claveAccionSiguientePVEN(pedido), rolSoloLectura);
-  return {
-    ...tarjeta, subtitulo: origen || tarjeta.subtitulo, chips: chips.slice(0, MAX_CHIPS),
-    accionPrincipal: conAccion ? tarjeta.accionPrincipal : null,
-  };
+  return { ...tarjeta, subtitulo: origen || tarjeta.subtitulo, chips: chips.slice(0, MAX_CHIPS) };
 }
 
 /** Los cambios de estado que se ofrecen dentro de la columna En proceso, en este orden. */
@@ -1452,12 +1479,13 @@ export const OPCIONES_ESTADOS_PEDIDOS_WEB = congelar(COLUMNAS_PEDIDO.flatMap(
  * en PENDIENTE_PAGO (el estado propio de la tienda: «Gestionar compra» no aplica a un pedido que espera el pago del cliente) y con
  * `soloLectura` (un rol que no mueve pedidos no llega a esas pantallas). La fila de GET /ecommerce/pedidos no trae asesor, saldo
  * ni atraso: no salen chips ni «Sin asignar».
+ * B4 T24 f2 r1 (duda 2): con `rol`, la regla de tarjetaPedido (ASESOR no gestiona la compra de un pedido web).
  * @param {any} fila
- * @param {{ahora?: number, soloLectura?: boolean}} [opciones]
+ * @param {{ahora?: number, soloLectura?: boolean, rol?: unknown}} [opciones]
  * @returns {TarjetaVentas}
  */
-export function tarjetaPedidoWeb(fila, { ahora, soloLectura = false } = {}) {
-  const tarjeta = tarjetaPedido(fila, { ahora, returnTo: RUTA_ECOMMERCE });
+export function tarjetaPedidoWeb(fila, { ahora, soloLectura = false, rol } = {}) {
+  const tarjeta = tarjetaPedido(fila, { ahora, returnTo: RUTA_ECOMMERCE, rol });
   const sinAccion = soloLectura || fila?.estado === 'PENDIENTE_PAGO';
   return { ...tarjeta, subtitulo: textoLimpio(fila?.pven_numero) || 'Pedido web', accionPrincipal: sinAccion ? null : tarjeta.accionPrincipal };
 }

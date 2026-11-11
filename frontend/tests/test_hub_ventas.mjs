@@ -284,7 +284,9 @@ console.log('--- T11 calidad E2+E3: los destinos del Hub llevan return_to del Hu
   assert.ok(!hub.includes('/dashboard/ventas/cotizacion?id='), 'el Hub no enlaza /dashboard/ventas/cotizacion?id=');
   // B4 T7 (D27, RP15): la columna Acción usa accionSiguienteDocumento (hub-ventas.js), que lleva a la COT con el
   // return_to del Hub (desdeElHub): la protección de «Aprobar Venta» pasó a la librería.
-  assert.ok(hub.includes('const accion = accionSiguienteDocumento(fila);'), 'la Acción del Hub sale de accionSiguienteDocumento');
+  // B4 T24 f2 r1 (duda 2 + m15, D27): la Acción sale de accionDeLaFilaHub, que es accionSiguienteDocumento con el rol (sin permiso,
+  // «Abrir»; su caso, en test_kanban_ventas).
+  assert.ok(hub.includes("const accion = accionDeLaFilaHub(fila, { rol: acciones?.rol ?? '' });"), 'la Acción del Hub sale de accionDeLaFilaHub');
   for (const estado of ['BORRADOR', 'ENVIADA', 'VENCIDA']) {
     for (const total_cop of [0, 250000]) {
       assert.equal(accionSiguienteDocumento({ tipo: 'COT', id: 12, estado, total_cop }).href,
@@ -1210,7 +1212,8 @@ console.log('--- B4 T7 r1 (B): el foco del enlace, la fila de último recurso, l
   assert.ok(!codigo.includes('Number(f.dias_creado) || 0'), 'm8: sin «hoy» para un dato que falta');
   // m6: el valor del contexto es estable. B4 T24 f2 (m8 de la revisión r0 de f1, D27): con `mover`, que solo cambia con el rol.
   assert.match(codigo,
-    /const accionesFila = useMemo<AccionesFilaHub>\(\s*\(\) => \(\{ abrir: openDocDetail, actividad: setActRow, cancelar: abrirCancelacion, mover: accesoTablero\.mover \}\),\s*\[openDocDetail, abrirCancelacion, accesoTablero\.mover\],\s*\);/);
+    // B4 T24 f2 r1 (duda 2 + m15, D27): el contexto lleva también el rol (la columna Acción).
+    /const accionesFila = useMemo<AccionesFilaHub>\(\s*\(\) => \(\{ abrir: openDocDetail, actividad: setActRow, cancelar: abrirCancelacion, mover: accesoTablero\.mover, rol \}\),\s*\[openDocDetail, abrirCancelacion, accesoTablero\.mover, rol\],\s*\);/);
   // m7: fuente única. (a) los chips con CLASE_CHIP de components/ui/Kanban.tsx; (b) los títulos del orden con
   // campoOrden y solo de las columnas que se ordenan (y las de orden inverso, aparte); (d) una sola sigla de tipo.
   assert.ok(!codigo.includes('CHIP_TONO'), 'm7a: sin CHIP_TONO');
@@ -1278,9 +1281,10 @@ console.log('--- B4 T24 f2 (m8 de la revisión r0 de f1): el Hub ofrece cancelar
   const sinComentarios = (t) => t.replace(/\r\n/g, '\n').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
   const hub = sinComentarios(readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8'));
   // La fila: «Cancelar documento» (POST /solicitudes/{id}/cancelar y PATCH de COT y PVEN: ADMIN y ASESOR) solo con mover.
-  assert.match(hub, /type AccionesFilaHub = \{ abrir: \(f: FilaHub\) => void; actividad: \(f: FilaHub\) => void; cancelar: \(ids: string\[\]\) => void; mover: boolean \};/);
+  // r1 (duda 2 + m15, D27): el contexto suma el rol (la columna Acción); `mover` sigue.
+  assert.match(hub, /type AccionesFilaHub = \{\s*abrir: \(f: FilaHub\) => void; actividad: \(f: FilaHub\) => void; cancelar: \(ids: string\[\]\) => void; mover: boolean; rol: string;\s*\};/);
   assert.match(hub, /oculto: !acciones\?\.mover \|\| Boolean\(motivoNoCancelable\(fila\)\) \}/);
-  assert.match(hub, /\(\) => \(\{ abrir: openDocDetail, actividad: setActRow, cancelar: abrirCancelacion, mover: accesoTablero\.mover \}\),\s*\[openDocDetail, abrirCancelacion, accesoTablero\.mover\],/);
+  assert.match(hub, /\(\) => \(\{ abrir: openDocDetail, actividad: setActRow, cancelar: abrirCancelacion, mover: accesoTablero\.mover, rol \}\),\s*\[openDocDetail, abrirCancelacion, accesoTablero\.mover, rol\],/);
   // Sin permiso, sin casillas (la barra masiva ya no sale: FINAL-m38).
   assert.match(hub, /seleccion=\{accesoTablero\.mover \? seleccion : undefined\}\s*onSeleccion=\{accesoTablero\.mover \? alSeleccionar : undefined\}/);
   // El panel rápido: los botones de estado, Facturado y Cancelar salen de opcionesPanelPedido con el permiso.
@@ -1417,6 +1421,73 @@ console.log('--- B4 T24 f2 r1 (C3): el panel rápido del Hub es un Drawer (títu
   assert.ok(controles >= 5, `los controles del panel (${controles})`);
   assert.equal((panel.match(/\$\{FOCO\}/g) ?? []).length, controles, 'cada botón y enlace del panel con ${FOCO}');
   assert.match(hub, /import \{[^}]*\bFOCO\b[^}]*\} from '@\/lib\/design-system';/);
+}
+
+console.log('--- B4 T24 f2 r1 (duda 2 + m15): claveAccionSiguienteSC, claveAccionSiguienteCOT y claveAccionSiguienteDocumento, sin el texto ---');
+{
+  for (const n of ['claveAccionSiguienteSC', 'claveAccionSiguienteCOT', 'claveAccionSiguienteDocumento']) assert.equal(typeof hv[n], 'function', `${n} existe`);
+  // La MISMA rama de accionSiguienteSC y accionSiguienteCOT (una sola decisión), con la clave que puedeAccionDocumento (lib/roles.js)
+  // cruza con el require_roles de su endpoint.
+  const TEXTO_SC = {
+    ver_ticket: 'Ver ticket', ver_pedido: 'Ver pedido', ver_cotizacion: 'Ver cotización', agregar_productos: 'Agregar productos',
+    cotizar: 'Cotizar →', reiniciar_o_cotizar: 'Reiniciar o cotizar', esperando: 'Esperando cliente',
+    enviar_confirmacion: 'Enviar para confirmación', asignar: 'Asignar asesor', ver_solicitud: 'Ver solicitud',
+  };
+  const sc = (estado, extra = {}) => ({ tipo: 'SC', id: 4, estado, tipo_solicitud: 'Cotizacion de Producto',
+    productos: [{ product_name: 'Tenis' }], cotizaciones: [], pedidos_venta: [], ...extra });
+  const ctx = (f) => ({ cotizaciones: f.cotizaciones, pedidos: f.pedidos_venta });
+  const CASOS_SC = [
+    [sc('BORRADOR', { tipo_solicitud: 'Soporte Tecnico' }), 'ver_ticket'], [sc('CANCELADA'), null],
+    [sc('CONFIRMADA', { pedidos_venta: [{ id: 3, estado: 'EN_PROCESO' }] }), 'ver_pedido'],
+    [sc('CONFIRMADA', { cotizaciones: [{ id: 5, estado: 'BORRADOR' }] }), 'ver_cotizacion'],
+    [sc('ASIGNADA', { productos: [] }), 'agregar_productos'], [sc('CONFIRMADA', { confirmacion_vigente: true }), 'cotizar'],
+    [sc('CONFIRMADA'), 'reiniciar_o_cotizar'], [sc('PENDIENTE_CONFIRMACION'), 'esperando'], [sc('ASIGNADA'), 'enviar_confirmacion'],
+    [sc('BORRADOR'), 'asignar'], [sc('COTIZADA'), 'ver_solicitud'],
+  ];
+  for (const [fila, clave] of CASOS_SC) {
+    assert.equal(hv.claveAccionSiguienteSC(fila, ctx(fila)), clave, `${fila.estado} → ${clave}`);
+    assert.equal(hv.claveAccionSiguienteDocumento(fila), clave, `la fila SC ${fila.estado}`);
+  }
+  // Toda la matriz: la clave dice el mismo texto que la acción (estados × productos × confirmación × soporte × documentos).
+  for (const estado of [...Object.keys(ESTADOS_SC), 'ALGO_NUEVO', null]) {
+    for (const extra of [{}, { productos: [] }, { confirmacion_vigente: true }, { tipo_solicitud: 'Soporte Tecnico' },
+      { cotizaciones: [{ id: 5, estado: 'RECHAZADA' }] }, { cotizaciones: [{ id: 5, estado: 'VENCIDA' }] },
+      { pedidos_venta: [{ id: 3, estado: 'CANCELADO' }] }, { pedidos_venta: [{ id: 3, estado: 'ENTREGADO' }] }]) {
+      const fila = sc(estado, extra);
+      const clave = hv.claveAccionSiguienteSC(fila, ctx(fila));
+      assert.equal(clave === null ? null : TEXTO_SC[clave], hv.accionSiguienteSC(fila, ctx(fila))?.label ?? null, `${estado} ${JSON.stringify(extra)}`);
+    }
+  }
+  const TEXTO_COT = {
+    completar_precios: 'Completar precios', enviar_al_cliente: 'Enviar al cliente', esperando: 'Esperando al cliente',
+    ver_pedido: 'Ver pedido', crear_pedido: 'Crear pedido',
+  };
+  const cot = (estado, extra = {}) => ({ tipo: 'COT', id: 6, estado, total_cop: 1000, pedidos_venta: [], ...extra });
+  const CASOS_COT = [
+    [cot('BORRADOR'), 'enviar_al_cliente'], [cot('BORRADOR', { total_cop: 0 }), 'completar_precios'], [cot('VENCIDA'), 'enviar_al_cliente'],
+    [cot('ENVIADA', { total_cop: null }), 'completar_precios'], [cot('PENDIENTE_CONFIRMACION'), 'esperando'],
+    [cot('CONFIRMADA', { pedidos_venta: [{ id: 2, estado: 'EN_PROCESO' }] }), 'ver_pedido'], [cot('CONFIRMADA'), 'crear_pedido'],
+    [cot('RECHAZADA'), null],
+  ];
+  for (const [fila, clave] of CASOS_COT) {
+    assert.equal(hv.claveAccionSiguienteCOT(fila), clave, `${fila.estado} → ${clave}`);
+    assert.equal(hv.claveAccionSiguienteDocumento(fila), clave, `la fila COT ${fila.estado}`);
+  }
+  for (const estado of [...Object.keys(ESTADOS_COTIZACION), 'ALGO_NUEVO', null]) {
+    for (const extra of [{}, { total_cop: 0 }, { pedidos_venta: [{ id: 2, estado: 'EN_PROCESO' }] }, { pedidos_venta: [{ id: 2, estado: 'CANCELADO' }] }]) {
+      const fila = cot(estado, extra);
+      const clave = hv.claveAccionSiguienteCOT(fila);
+      assert.equal(clave === null ? null : TEXTO_COT[clave], hv.accionSiguienteCOT(fila)?.texto ?? null, `${estado} ${JSON.stringify(extra)}`);
+    }
+  }
+  // Un pedido: la clave de siempre (claveAccionSiguientePVEN), con VEN y con PVEN; otra cosa: null.
+  assert.equal(hv.claveAccionSiguienteDocumento({ tipo: 'VEN', id: 1, estado: 'ENTREGADO' }), 'facturar');
+  assert.equal(hv.claveAccionSiguienteDocumento({ tipo: 'PVEN', id: 1, estado: 'PENDIENTE_COMPRA' }), 'comprar');
+  for (const nada of [null, undefined, 'SC-1', { tipo: 'OTRO', estado: 'BORRADOR' }, {}]) assert.equal(hv.claveAccionSiguienteDocumento(nada), null, JSON.stringify(nada));
+  for (const nada of [null, undefined, 3]) {
+    assert.equal(hv.claveAccionSiguienteSC(nada), null, String(nada));
+    assert.equal(hv.claveAccionSiguienteCOT(nada), null, String(nada));
+  }
 }
 
 console.log('OK test_hub_ventas.mjs');

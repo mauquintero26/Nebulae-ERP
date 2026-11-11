@@ -78,6 +78,38 @@ export function puedeAccionPedido(clave, rol) {
   return clave === 'ver';
 }
 
+/** B4 T24 f2 r1 (duda 2 + m15): las ramas de la próxima acción de la SC y de la COT que CAMBIAN algo (ADMIN y ASESOR). */
+const ACCIONES_SC = ['agregar_productos', 'asignar', 'enviar_confirmacion', 'cotizar', 'reiniciar_o_cotizar'];
+const ACCIONES_COT = ['completar_precios', 'enviar_al_cliente', 'crear_pedido'];
+/** Las que solo abren lo que se ve (GET): todos los roles del ERP. */
+const VER_SC = ['ver_ticket', 'ver_pedido', 'ver_cotizacion', 'esperando', 'ver_solicitud'];
+const VER_COT = ['esperando', 'ver_pedido'];
+
+/**
+ * B4 T24 f2 r1 (duda 2 + m15 + m16): quién puede hacer la acción principal de la tarjeta (o de la columna Acción) de un documento,
+ * con la clave de claveAccionSiguienteDocumento (hub-ventas.js) y el require_roles real (backend/app/api/v1/erp_ventas.py, leído en
+ * solo lectura; test_roles lo vigila):
+ *  - SC: «Agregar productos» y «Asignar asesor» (PATCH /solicitudes/{id}), «Enviar para confirmación» (POST
+ *    /solicitudes/{id}/enviar-confirmacion), «Cotizar →» (POST /cotizaciones) y «Reiniciar o cotizar» (el PATCH o POST
+ *    /solicitudes/{id}/cotizar-sin-confirmacion): ADMIN y ASESOR;
+ *  - COT: «Completar precios» (PATCH /cotizaciones/{id}), «Enviar al cliente» (POST /cotizaciones/{id}/enviar-confirmacion) y «Crear
+ *    pedido» (POST /cotizaciones/{id}/confirmar): ADMIN y ASESOR;
+ *  - abrir lo que se ve («Ver ticket», «Ver pedido», «Ver cotización», «Ver solicitud» y los «Esperando…»): todos los roles;
+ *  - VEN o PVEN: puedeAccionPedido (la duda 3).
+ * Otra clave, otro tipo o un rol vacío: false.
+ * @param {unknown} tipo
+ * @param {unknown} clave
+ * @param {unknown} rol
+ * @returns {boolean}
+ */
+export function puedeAccionDocumento(tipo, clave, rol) {
+  if (normalizarRol(rol) === '' || typeof clave !== 'string') return false;
+  if (tipo === 'VEN' || tipo === 'PVEN') return puedeAccionPedido(clave, rol);
+  const [acciones, ver] = tipo === 'SC' ? [ACCIONES_SC, VER_SC] : tipo === 'COT' ? [ACCIONES_COT, VER_COT] : [[], []];
+  if (acciones.includes(clave)) return esAdminOAsesor(rol);
+  return ver.includes(clave);
+}
+
 /**
  * B4 T23A r1 (I1, I2, m15): lo que cada rol puede pedir y hacer en E-Commerce, de la lista EXACTA de require_roles de cada
  * endpoint de backend/app/api/v1/ecommerce.py (la seguridad real es la del servidor; esto evita pedir lo que da un 403 fijo):

@@ -978,7 +978,8 @@ console.log('--- B4 T9 TEST L: el cableado del tablero de Cotizaciones (C15, RP1
   assert.equal(conRegla.motivo, 'Ábrela para enviar.');
   assert.equal(reglaSoltarCotizacion({ id: 4, estado: 'PENDIENTE_CONFIRMACION' }, 'esperando', 'borrador').motivo,
     'Ábrela para re-cotizar; te pedirá la razón.', 'C15(a)');
-  assert.match(codigo, /const tarjetaDeCOT = \(cot: FilaCOT\) => tarjetaCotizacion\(cot\);/);
+  // B4 T24 f2 r1 (duda 2 + m15, D27): la tarjeta, con el rol leído después de montar (el bloque de r1 lo prueba por rol).
+  assert.match(codigo, /const tarjetaDeCOT = useCallback\(\(cot: FilaCOT\) => tarjetaCotizacion\(cot, \{ rol \}\), \[rol\]\);/);
   // 'cambio': el PATCH del estado con el autor; el tablero recarga su origen y su destino, aquí las tarjetas y la franja. B4 T24 f2
   // (FINAL-m9, D27): si el PATCH falla, también con la regla única recargarTrasError, y el error sigue (el tablero deshace).
   assert.match(lista, /async function cambiarDesdeTablero\(cot: FilaCOT, resultado: \{ estado: string \}\) \{\s*try \{\s*await apiFetch\(`\/ventas\/cotizaciones\/\$\{cot\.id\}`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ estado: resultado\.estado, updated_by: autorActual\(\) \}\),\s*\}\);\s*\} catch \(err\) \{\s*if \(recargarTrasError\(err\)\) \{ recargarListado\(\); setRecargaFlujo\(\(n\) => n \+ 1\); \}\s*throw err;\s*\}\s*recargarListado\(\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*\}/);
@@ -1313,14 +1314,23 @@ console.log('--- B4 T24 f2 (F47): accionesTableroPedidos — las acciones del ta
 
 console.log('--- B4 T24 f2 (duda 3 de f1): en soloLectura, la acción principal de la tarjeta de un pedido queda en «Abrir», salvo la que el rol sí puede hacer ---');
 {
+  // r1 (m16, D27): la opción es `rol` y Pedidos la pasa SIEMPRE (no solo en solo lectura): ASESOR tampoco ve «Gestionar compra».
   const p = (estado, saldo = 0) => ({ id: 9, numero: 'PVEN-9', estado, saldo_cop: saldo, total_cop: 1000 });
-  const accion = (fila, rol) => kv.tarjetaPedido(fila, { ahora: 0, rolSoloLectura: rol }).accionPrincipal?.texto ?? null;
-  // Sin rolSoloLectura (ADMIN y ASESOR mueven), la de siempre.
+  const accion = (fila, rol) => kv.tarjetaPedido(fila, { ahora: 0, rol }).accionPrincipal?.texto ?? null;
+  // Sin rol (sin pasar), la de siempre.
   for (const [fila, texto] of [[p('ENTREGADO'), 'Facturar'], [p('LISTO_ENTREGA', 500), 'Cobrar saldo'], [p('PENDIENTE_COMPRA'), 'Gestionar compra'],
     [p('LISTO_ENTREGA'), 'Despachar'], [p('EN_PROCESO'), 'Ver pedido']]) {
     assert.equal(kv.tarjetaPedido(fila, { ahora: 0 }).accionPrincipal?.texto, texto, texto);
-    assert.equal(accion(fila, null), texto, `${texto} sin rolSoloLectura`);
+    assert.equal(accion(fila, undefined), texto, `${texto} sin rol`);
+    assert.equal(accion(fila, 'ADMIN'), texto, `${texto} con ADMIN`);
   }
+  // ASESOR (m16): factura, cobra y despacha, pero no gestiona la compra (create_pec: ADMIN y COMPRAS).
+  assert.equal(accion(p('PENDIENTE_COMPRA'), 'ASESOR'), null, 'ASESOR: «Abrir» en lugar de «Gestionar compra»');
+  for (const [fila, texto] of [[p('ENTREGADO'), 'Facturar'], [p('LISTO_ENTREGA', 500), 'Cobrar saldo'], [p('LISTO_ENTREGA'), 'Despachar']]) {
+    assert.equal(accion(fila, 'ASESOR'), texto, `ASESOR ${texto}`);
+  }
+  // Mientras se lee el rol (''): sin acción.
+  assert.equal(accion(p('ENTREGADO'), ''), null, 'sin rol leído todavía');
   // FINANZAS: cobra el saldo (crear-pxp), no factura ni gestiona la compra ni despacha.
   assert.equal(accion(p('LISTO_ENTREGA', 500), 'FINANZAS'), 'Cobrar saldo');
   assert.equal(accion(p('ENTREGADO'), 'FINANZAS'), null, 'FINANZAS no factura: queda «Abrir»');
@@ -1338,14 +1348,14 @@ console.log('--- B4 T24 f2 (duda 3 de f1): en soloLectura, la acción principal 
   for (const rol of ['FINANZAS', 'COMPRAS', 'BODEGA', 'CONSULTA']) assert.equal(accion(p('EN_PROCESO'), rol), 'Ver pedido', rol);
   // Lo demás de la tarjeta no cambia.
   const conAccion = kv.tarjetaPedido(p('ENTREGADO'), { ahora: 0 });
-  const sinAccion = kv.tarjetaPedido(p('ENTREGADO'), { ahora: 0, rolSoloLectura: 'CONSULTA' });
+  const sinAccion = kv.tarjetaPedido(p('ENTREGADO'), { ahora: 0, rol: 'CONSULTA' });
   assert.deepEqual({ ...sinAccion, accionPrincipal: conAccion.accionPrincipal }, conAccion);
   // E-Commerce sigue como estaba (su soloLectura quita la acción a todos los roles que no mueven).
   assert.equal(kv.tarjetaPedidoWeb(p('LISTO_ENTREGA', 500), { ahora: 0, soloLectura: true }).accionPrincipal, null);
-  // El cableado: Pedidos de venta pasa el rol solo cuando el tablero es de solo lectura.
+  // El cableado (r1, m16): Pedidos de venta pasa SIEMPRE el rol leído después de montar.
   const venta = readFileSync(new URL('../src/app/dashboard/ventas/venta/venta-client.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(venta, /const rol = useRolActual\(\);\s*const accesoTablero = accesoTableroVentas\(rol\);/);
-  assert.match(venta, /const tarjetaDePedido = useCallback\(\s*\(p: FilaPedido\) => tarjetaPedido\(p, \{ rolSoloLectura: accesoTablero\.soloLectura \? rol : null \}\),\s*\[accesoTablero\.soloLectura, rol\],\s*\);/);
+  assert.match(venta, /const tarjetaDePedido = useCallback\(\(p: FilaPedido\) => tarjetaPedido\(p, \{ rol \}\), \[rol\]\);/);
   assert.match(venta, /tarjetaDe=\{tarjetaDePedido\}/);
 }
 
@@ -1617,7 +1627,8 @@ console.log('--- B4 T10 TEST Q: el cableado del tablero de Pedidos (C9, C15, R11
   assert.ok(!/[?&]estado=|search=/.test(codigo), 'RP8');
   assert.match(lista, /<TableroKanban\s+tablero=\{tablero\}\s+regla=\{reglaSoltarPedido\}\s+tarjetaDe=\{tarjetaDePedido\}\s+onAbrir=\{abrirPedido\}\s+onCambio=\{cambiarDesdeTablero\}\s+onAccion=\{accionDesdeTablero\}\s+accionesTarjeta=\{accionesTarjeta\}\s+resumenColumna=\{resumenColumna\}/);
   // B4 T24 f2 (duda 3 de f1, D27): la tarjeta lleva el rol cuando el tablero es de solo lectura (bloque «duda 3»).
-  assert.match(codigo, /const tarjetaDePedido = useCallback\(\s*\(p: FilaPedido\) => tarjetaPedido\(p, \{ rolSoloLectura: accesoTablero\.soloLectura \? rol : null \}\),/);
+  // r1 (m16, D27): con el rol siempre.
+  assert.match(codigo, /const tarjetaDePedido = useCallback\(\(p: FilaPedido\) => tarjetaPedido\(p, \{ rol \}\), \[rol\]\);/);
   // C9: la suma de cada columna es el resumen de H47 de su consulta (resumenColumnaPedido; Cancelado no).
   assert.match(lista, /\(clave: string, d: DatosColumnaKanban<FilaPedido>\) => resumenColumnaPedido\(clave, d\.resumen\)/);
   // B4 T24 f2 (F47, D27): 'cambio', 'facturar' (confirmar con confirmacionFacturarPedido antes del PATCH), 'cancelar' (ModalMotivo) y
@@ -1808,7 +1819,8 @@ console.log('--- B4 T23A TEST S: el cableado del tablero y del filtro de los ped
   assert.match(codigo, /\{!filtrado && acceso\.editarCatalogo && \(/);
   // RP8: ni estado= ni search= en ninguna consulta de los pedidos web.
   assert.ok(!/search=|pedidos\?(?:[^`'"]*&)?estado=|\$\{RUTA_PEDIDOS_WEB\}\?(?:[^`'"]*&)?estado=/.test(codigo), 'RP8');
-  assert.match(codigo, /const tarjetaDeWeb = useCallback\(\(p: PedidoWeb\) => tarjetaPedidoWeb\(p, \{ soloLectura: soloLectura !== null \}\), \[soloLectura\]\);/);
+  // B4 T24 f2 r1 (duda 2, D27): con el rol (ASESOR no gestiona la compra); el soloLectura de siempre.
+  assert.match(codigo, /const tarjetaDeWeb = useCallback\(\(p: PedidoWeb\) => tarjetaPedidoWeb\(p, \{ soloLectura: soloLectura !== null, rol \}\), \[soloLectura, rol\]\);/);
   // El rol se lee DESPUÉS de montar (useSyncExternalStore: '' en el servidor y en la hidratación), una sola vez, nunca en un inicializador.
   assert.match(pantalla, /const rol = useRolActual\(\);\s*const acceso = accesoTienda\(rol\);\s*const soloLectura = soloLecturaPedidosWeb\(rol\);/);
   assert.equal((codigo.match(/getUsuarioActual\(\)\.role/g) || []).length, 0, 'el rol se lee en un solo lugar: useRolActual');
@@ -1924,6 +1936,81 @@ console.log('--- B4 T24 (FINAL-m31 y FINAL-m38): los tableros de Ventas solo se 
   // B4 T24 f2 (F47, D27): el ⋯ de la tarjeta sale de useAccionesTableroPedidos, con `mover` = accesoTablero.mover.
   assert.match(sin(leer('app/dashboard/ventas/venta/venta-client.tsx')), /useAccionesTableroPedidos<FilaPedido>\(\{ tablero, recargarTrasCambio, mover: accesoTablero\.mover \}\)/);
   assert.match(sin(leer('app/dashboard/ventas/acciones-tablero-pedidos.ts')), /const accionesTarjeta = useCallback\(\(p: P\): ItemMenuFila\[\] => \(mover \? accionesTarjetaPedido\(p\) : \[\]\)\.map\(/);
+}
+
+console.log('--- B4 T24 f2 r1 (duda 2 + m15 + m16): ninguna tarjeta ofrece como acción principal una acción cuyo endpoint no admite el rol ---');
+{
+  const TODOS = ['ADMIN', 'ASESOR', 'FINANZAS', 'COMPRAS', 'BODEGA', 'CONSULTA'];
+  const sc = (estado, extra = {}) => ({ tipo: 'SC', id: 4, numero: 'SC-4', estado, tipo_solicitud: 'Cotizacion de Producto',
+    productos: [{ product_name: 'Tenis' }], cotizaciones: [], pedidos_venta: [], ...extra });
+  const cot = (estado, extra = {}) => ({ tipo: 'COT', id: 6, numero: 'COT-6', estado, total_cop: 1000, pedidos_venta: [], ...extra });
+  const texto = (t) => t.accionPrincipal?.texto ?? null;
+  // Las acciones de la SC y de la COT (ADMIN y ASESOR) en el tablero del Hub, el de Solicitudes y el de Cotizaciones.
+  const ACCIONES = [
+    [sc('BORRADOR'), 'Asignar asesor'], [sc('ASIGNADA'), 'Enviar para confirmación'], [sc('CONFIRMADA', { confirmacion_vigente: true }), 'Cotizar →'],
+    [sc('ASIGNADA', { productos: [] }), 'Agregar productos'], [sc('CONFIRMADA'), 'Reiniciar o cotizar'],
+    [cot('BORRADOR', { total_cop: 0 }), 'Completar precios'], [cot('BORRADOR'), 'Enviar al cliente'], [cot('CONFIRMADA'), 'Crear pedido'],
+  ];
+  for (const [fila, accion] of ACCIONES) {
+    const delTipo = fila.tipo === 'SC' ? (o) => kv.tarjetaSolicitud(fila, o) : (o) => kv.tarjetaCotizacion(fila, o);
+    for (const rol of TODOS) {
+      const esperado = rol === 'ADMIN' || rol === 'ASESOR' ? accion : null;
+      assert.equal(texto(kv.tarjetaHub(fila, { ahora: 0, rol })), esperado, `Hub ${accion} ${rol}`);
+      assert.equal(texto(delTipo({ ahora: 0, rol })), esperado, `${fila.tipo} ${accion} ${rol}`);
+    }
+    // Sin rol (sin pasar): la de siempre; mientras se lee el rol (''): sin acción.
+    assert.equal(texto(kv.tarjetaHub(fila, { ahora: 0 })), accion, `${accion} sin rol`);
+    assert.equal(texto(kv.tarjetaHub(fila, { ahora: 0, rol: '' })), null, `${accion} sin rol leído`);
+  }
+  // Abrir lo que se ve (GET, todos los roles): se queda.
+  for (const [fila, accion] of [[sc('BORRADOR', { tipo_solicitud: 'Soporte Tecnico' }), 'Ver ticket'],
+    [sc('CONFIRMADA', { cotizaciones: [{ id: 5, estado: 'BORRADOR' }] }), 'Ver cotización'], [sc('PENDIENTE_CONFIRMACION'), 'Esperando cliente'],
+    [cot('PENDIENTE_CONFIRMACION'), 'Esperando al cliente'], [cot('CONFIRMADA', { pedidos_venta: [{ id: 2, estado: 'EN_PROCESO' }] }), 'Ver pedido'],
+    [{ tipo: 'VEN', id: 8, numero: 'PVEN-8', estado: 'EN_PROCESO' }, 'Ver pedido']]) {
+    for (const rol of TODOS) assert.equal(texto(kv.tarjetaHub(fila, { ahora: 0, rol })), accion, `${accion} ${rol}`);
+  }
+  // Un pedido en el Hub: la regla de la duda 3 (ASESOR no gestiona la compra).
+  const pend = { tipo: 'VEN', id: 8, numero: 'PVEN-8', estado: 'PENDIENTE_COMPRA' };
+  assert.equal(texto(kv.tarjetaHub(pend, { ahora: 0, rol: 'ASESOR' })), null);
+  assert.equal(texto(kv.tarjetaHub(pend, { ahora: 0, rol: 'COMPRAS' })), 'Gestionar compra');
+  // Lo demás de la tarjeta no cambia con el rol.
+  const conRol = kv.tarjetaHub(sc('BORRADOR'), { ahora: 0, rol: 'CONSULTA' });
+  assert.deepEqual({ ...conRol, accionPrincipal: kv.tarjetaHub(sc('BORRADOR'), { ahora: 0 }).accionPrincipal }, kv.tarjetaHub(sc('BORRADOR'), { ahora: 0 }));
+  // E-Commerce, el mismo principio: ASESOR no gestiona la compra de un pedido web; su soloLectura sigue.
+  const web = { id: 3, numero: 'PWEB-3', estado: 'PENDIENTE_COMPRA', pven_numero: 'PVEN-3' };
+  assert.equal(texto(kv.tarjetaPedidoWeb(web, { ahora: 0, rol: 'ASESOR' })), null, 'E-Commerce ASESOR');
+  assert.equal(texto(kv.tarjetaPedidoWeb(web, { ahora: 0, rol: 'ADMIN' })), 'Gestionar compra', 'E-Commerce ADMIN');
+  assert.equal(texto(kv.tarjetaPedidoWeb({ ...web, estado: 'ENTREGADO' }, { ahora: 0, soloLectura: true, rol: 'ADMIN' })), null);
+  // La columna Acción de la Lista del Hub (CeldaAccion): sin permiso, «Abrir» (el detalle, con return_to al Hub); sin acción, null («—»).
+  assert.equal(typeof kv.accionDeLaFilaHub, 'function', 'accionDeLaFilaHub existe');
+  assert.deepEqual(kv.accionDeLaFilaHub(sc('BORRADOR'), { rol: 'FINANZAS' }),
+    { texto: 'Abrir', href: '/dashboard/ventas/solicitud/4?return_to=%2Fdashboard%2Fventas', tono: 'slate' });
+  assert.deepEqual(kv.accionDeLaFilaHub(cot('BORRADOR'), { rol: 'CONSULTA' }),
+    { texto: 'Abrir', href: '/dashboard/ventas/cotizacion/6?return_to=%2Fdashboard%2Fventas', tono: 'slate' });
+  assert.deepEqual(kv.accionDeLaFilaHub(pend, { rol: 'ASESOR' }),
+    { texto: 'Abrir', href: '/dashboard/ventas/venta/8?return_to=%2Fdashboard%2Fventas', tono: 'slate' });
+  for (const fila of [sc('BORRADOR'), cot('BORRADOR'), pend]) {
+    assert.deepEqual(kv.accionDeLaFilaHub(fila, { rol: 'ADMIN' }), accionSiguienteDocumento(fila), `ADMIN ${fila.tipo}`);
+  }
+  assert.equal(kv.accionDeLaFilaHub(sc('CANCELADA'), { rol: 'FINANZAS' }), null, 'sin acción: «—», no «Abrir»');
+  assert.deepEqual(kv.accionDeLaFilaHub(sc('BORRADOR', { tipo_solicitud: 'Soporte Tecnico' }), { rol: 'FINANZAS' }).texto, 'Ver ticket');
+  // El cableado: cada pantalla pasa el rol leído después de montar (useRolActual).
+  const leer = (r) => readFileSync(new URL(`../src/${r}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const hub = leer('app/dashboard/ventas/page.tsx');
+  assert.match(hub, /const tarjetaDeFila = useCallback\(\(f: FilaHub\) => tarjetaHub\(f, \{ rol \}\), \[rol\]\);/, 'el tablero del Hub');
+  assert.ok(!/^const tarjetaDeFila = /m.test(hub), 'sin la tarjeta sin rol de nivel de módulo');
+  assert.match(hub, /const accion = accionDeLaFilaHub\(fila, \{ rol: acciones\?\.rol \?\? '' \}\);/, 'la columna Acción');
+  assert.match(hub, /type AccionesFilaHub = \{[^}]*\brol: string;\s*\};/);
+  assert.match(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx'),
+    /const tarjetaDeSC = useCallback\(\(sc: FilaSC\) => tarjetaSolicitud\(sc, \{ returnTo: RUTA_LISTA_SOLICITUDES, rol \}\), \[rol\]\);/, 'Solicitudes');
+  assert.match(leer('app/dashboard/ventas/cotizacion/cotizacion-client.tsx'),
+    /const tarjetaDeCOT = useCallback\(\(cot: FilaCOT\) => tarjetaCotizacion\(cot, \{ rol \}\), \[rol\]\);/, 'Cotizaciones');
+  assert.match(leer('app/dashboard/ecommerce/page.tsx'),
+    /const tarjetaDeWeb = useCallback\(\(p: PedidoWeb\) => tarjetaPedidoWeb\(p, \{ soloLectura: soloLectura !== null, rol \}\), \[soloLectura, rol\]\);/, 'E-Commerce');
+  for (const r of ['app/dashboard/ventas/page.tsx', 'app/dashboard/ventas/solicitud/solicitud-client.tsx', 'app/dashboard/ventas/cotizacion/cotizacion-client.tsx']) {
+    assert.match(leer(r), /const rol = useRolActual\(\);\s*const accesoTablero = accesoTableroVentas\(rol\);/, `${r}: el rol después de montar`);
+  }
 }
 
 console.log('OK test_kanban_ventas');

@@ -753,7 +753,8 @@ export default function EcommercePage() {
     cambiarDesdeTablero, accionDesdeTablero, accionesTarjeta, cancelando, cancelarConMotivo, cerrarCancelacion,
   } = useAccionesTableroPedidos<PedidoWeb>({ tablero, recargarTrasCambio, mover: soloLectura === null });
   // r1 (m4): la acción principal de la tarjeta es la de los pedidos de venta (salvo PENDIENTE_PAGO); un rol de solo lectura no la lleva.
-  const tarjetaDeWeb = useCallback((p: PedidoWeb) => tarjetaPedidoWeb(p, { soloLectura: soloLectura !== null }), [soloLectura]);
+  // B4 T24 f2 r1 (duda 2): con el rol, la regla de los pedidos de venta (ASESOR no gestiona la compra: create_pec, ADMIN y COMPRAS).
+  const tarjetaDeWeb = useCallback((p: PedidoWeb) => tarjetaPedidoWeb(p, { soloLectura: soloLectura !== null, rol }), [soloLectura, rol]);
 
   // ── B4 T23A, bloque 4: el catálogo en la tabla estándar del servidor (TABLA-otros punto 5; RP56) ──
   // Mismo patrón. GET /ecommerce/catalogo manda SIEMPRE offset (aunque sea 0: queryListado) para que el servidor pagine exacto y

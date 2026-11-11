@@ -32,7 +32,7 @@ import {
 } from '@/lib/flujo-ventas';
 import {
   COLUMNAS_HUB, chipsResolucionHub, confirmacionFacturarPedido, confirmacionReiniciarSolicitud, estadoDeTarjeta, opcionesEstadosHub,
-  reglaSoltarHub, siglaDeTipo, tarjetaHub,
+  reglaSoltarHub, siglaDeTipo, tarjetaHub, accionDeLaFilaHub,
 } from '@/lib/kanban-ventas';
 import { PERIODO_KPI } from '@/lib/kpis';
 import { FOCOS_VENTAS } from '@/lib/analisis';
@@ -47,7 +47,7 @@ import { ComposerChatter, EtiquetaChatter } from './chatter';
 import { agregarActividad, esEntradaChatter, motivoTelefono, textoSinTelefono } from '@/lib/chatter';
 import {
   ordenParaCancelar, motivoNoCancelable, resumenLote, ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN, opcionesPanelPedido,
-  repartirCambioEstadoPVEN, comoUTC, textoAntiguedad, notaReiniciaAtraso, conDetalleDelEnvio, accionSiguienteDocumento,
+  repartirCambioEstadoPVEN, comoUTC, textoAntiguedad, notaReiniciaAtraso, conDetalleDelEnvio,
   tituloGrupo, scConCotDeFilas, ordenEsAtencion, textoOrdenHub, RUTA_HUB_VENTAS, cantidadPositiva, focoEnlaceTras,
   filaDelHub,
 } from '@/lib/hub-ventas';
@@ -173,7 +173,6 @@ const MARCA_ATRASO = '[&>td:first-child]:shadow-[inset_3px_0_0_var(--color-rose-
 const grupoDeFila = (f: FilaHub) => f.resolucion ?? null;
 const claseDeFila = (f: FilaHub) => (f.resolucion === 'ATRASADO' ? `${TABLE.filaAlerta} ${MARCA_ATRASO}`
   : f.resolucion === 'NO_RESUELTO' ? TABLE.filaAviso : null);
-const tarjetaDeFila = (f: FilaHub) => tarjetaHub(f);
 const variacionDe = (p?: ParPeriodo | null) => ({ actual: p?.actual ?? null, anterior: p?.anterior ?? null });
 
 /** RP69 con su ajuste: cambia solo el primer ejemplo y se quita el emoji; los otros tres quedan como estaban. */
@@ -229,7 +228,10 @@ const tituloResolucion = (f: FilaHub) => {
  * un contexto para que las columnas sean una constante del módulo (D40 y D41: estables; el cuerpo está memoizado).
  */
 // B4 T24 f2 (m8 de la revisión r0 de f1): `mover` (accesoTableroVentas) decide si la fila ofrece «Cancelar documento».
-type AccionesFilaHub = { abrir: (f: FilaHub) => void; actividad: (f: FilaHub) => void; cancelar: (ids: string[]) => void; mover: boolean };
+// B4 T24 f2 r1 (duda 2 + m15, m18): el rol de la sesión, leído después de montar (useRolActual), llega a las celdas por el contexto.
+type AccionesFilaHub = {
+  abrir: (f: FilaHub) => void; actividad: (f: FilaHub) => void; cancelar: (ids: string[]) => void; mover: boolean; rol: string;
+};
 const AccionesFila = React.createContext<AccionesFilaHub | null>(null);
 
 /** Chatter: el panel de notas y actividad del documento (ActivitiesPanel). */
@@ -247,7 +249,8 @@ function BotonChatter({ fila }: { fila: FilaHub }) {
 /** Acción (R26, RP15): la próxima acción del documento (solo navega) y el menú ⋯ de N3 (MenuFila: clic y portal). */
 function CeldaAccion({ fila }: { fila: FilaHub }) {
   const acciones = React.useContext(AccionesFila);
-  const accion = accionSiguienteDocumento(fila);
+  // B4 T24 f2 r1 (duda 2 + m15): sin permiso para la acción (su require_roles), «Abrir» (el detalle); sin acción, «—».
+  const accion = accionDeLaFilaHub(fila, { rol: acciones?.rol ?? '' });
   const urlWhatsApp = waUrl(fila.customer_phone);
   const items: ItemMenuFila[] = [
     { etiqueta: 'Ver detalle completo', icono: ExternalLink, onClick: () => acciones?.abrir(fila) },
@@ -572,7 +575,10 @@ export default function VentasHub() {
   const [estado, despachar, listo] = useEstadoTabla(ID_HUB, INICIAL_HUB);
   // B4 T24 (FINAL-m31 y FINAL-m38): el rol después de montar (useRolActual) decide si el tablero se mueve (accesoTableroVentas: el
   // require_roles del PATCH de destino); sin permiso, soloLectura (no se arrastra ni se ofrece «Mover a…») y sin acciones masivas.
-  const accesoTablero = accesoTableroVentas(useRolActual());
+  const rol = useRolActual();
+  const accesoTablero = accesoTableroVentas(rol);
+  // B4 T24 f2 r1 (duda 2 + m15): la tarjeta del tablero ofrece su acción solo si el rol puede hacerla; si no, «Abrir».
+  const tarjetaDeFila = useCallback((f: FilaHub) => tarjetaHub(f, { rol }), [rol]);
   // R6 y RP21: ?paso= y ?tab=analisis&foco= salen de window.location, sin useSearchParams (la página no necesita Suspense).
   // B4 T24 (FINAL-C3): la sección y el foco arrancan vacíos y los pone el useLayoutEffect de montaje (más abajo, junto al
   // paso), DESPUÉS del commit: en el render, una navegación con <Link> todavía ve la URL de la página anterior.
@@ -935,8 +941,8 @@ export default function VentasHub() {
   // B4 T7 r1 (m6): un valor estable para el contexto (sus tres manejadores ya lo son): las celdas no se repintan con cada
   // cambio de la página.
   const accionesFila = useMemo<AccionesFilaHub>(
-    () => ({ abrir: openDocDetail, actividad: setActRow, cancelar: abrirCancelacion, mover: accesoTablero.mover }),
-    [openDocDetail, abrirCancelacion, accesoTablero.mover],
+    () => ({ abrir: openDocDetail, actividad: setActRow, cancelar: abrirCancelacion, mover: accesoTablero.mover, rol }),
+    [openDocDetail, abrirCancelacion, accesoTablero.mover, rol],
   );
   // D40: un solo usePreferenciasTabla por id; la tabla y «Ajustar tabla» comparten su resultado y el ref del ancho.
   const prefs = usePreferenciasTabla(ID_HUB, COLUMNAS_TABLA_HUB);
