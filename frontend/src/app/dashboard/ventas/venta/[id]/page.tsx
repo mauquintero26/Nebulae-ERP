@@ -24,6 +24,8 @@ import { textoDeError, recargarTrasError } from '@/lib/avisos';
 import { NewSupplierModal } from '../venta-client';
 import { CambiosDeActividad, CabeceraActividad, getUsuarioActual, puedeCrearOrdenDePago, returnToSeguro, BotonVolver, EnlaceConfirmacionModal } from '../../flujo';
 import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
+// B4 T24 f2 (F44-a): la reserva del botón flotante de la IA en las columnas de la derecha (IA, Actividad y Chatter), que se desplazan bajo él.
+import { RESERVA_BOTON_IA } from '@/lib/design-system';
 import { ChannelModal } from '../../cotizacion/cotizacion-client';
 import { useEnvioAlCliente, LineaEnlaceCliente, TablaProductosPedido } from './detalle-bloque3';
 import { formatoPesos } from '@/lib/pesos';
@@ -838,7 +840,7 @@ function PedidoVentaDetalleContent() {
           </div>
 
           {panelTab === 'ia' && (
-            <div className="flex-1 overflow-y-auto p-5 bg-slate-50/30 space-y-4">
+            <div className={`flex-1 overflow-y-auto p-5 bg-slate-50/30 space-y-4 ${RESERVA_BOTON_IA}`}>
               <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-2xl p-4 border border-indigo-100">
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
@@ -861,7 +863,7 @@ function PedidoVentaDetalleContent() {
             <>
               {/* U6+H22: la caja de notas y los botones de contacto se mudaron a la pestaña Chatter (ChatterDocumento:
                   nota interna, llamada, WhatsApp, correo y Nota externa). Aquí queda el enlace 'Escribir nota'. */}
-              <div className="flex-1 overflow-y-auto p-6 custom-scrollbar bg-white">
+              <div className={`flex-1 overflow-y-auto p-6 custom-scrollbar bg-white ${RESERVA_BOTON_IA}`}>
                 <div className="flex items-center justify-between gap-2 mb-6">
                   <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Línea Temporal</h4>
                   <button type="button" onClick={() => setPanelTab('chatter')}
@@ -904,7 +906,7 @@ function PedidoVentaDetalleContent() {
               nota guardada entra de una vez aquí y en la Actividad, sin el spinner de página; si el servidor no devuelve
               el renglón, recarga silenciosa. */}
           {panelTab === 'chatter' && (
-            <div className="flex-1 overflow-y-auto p-5 custom-scrollbar bg-white">
+            <div className={`flex-1 overflow-y-auto p-5 custom-scrollbar bg-white ${RESERVA_BOTON_IA}`}>
               <ChatterDocumento tipoDoc="VEN" doc={pedido}
                 onRegistrado={(log) => log ? setPedido((p: any) => agregarActividad(p, log, 'VEN')) : void loadPedido({ silencioso: true })} />
             </div>

@@ -19,6 +19,8 @@ import {
 import type { AnulacionConfirmacion } from '../cotizacion-client';
 import { NextStepCard, EnlaceConfirmacionModal, CambiosDeActividad, CabeceraActividad, returnToSeguro, getUsuarioActual, BotonVolver } from '../../flujo';
 import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
+// B4 T24 f2 (F44-a): la reserva del botón flotante de la IA en las columnas de la derecha (IA, Actividad y Chatter), que se desplazan bajo él.
+import { RESERVA_BOTON_IA } from '@/lib/design-system';
 import { CadenaDocumentos, PasosFlujo } from '@/components/flujo';
 import { pasosConProgreso } from '@/lib/flujo';
 import { PASOS_COTIZACION, pasoCotizacion, anotarPasosCotizacion } from '@/lib/flujo-ventas';
@@ -1241,7 +1243,7 @@ function CotizacionDetalleContent() {
 
           {/* IA Tab Content */}
           {cotPanelTab==='ia'&&(
-            <div className="flex-1 overflow-y-auto p-5 bg-slate-50/30 space-y-4">
+            <div className={`flex-1 overflow-y-auto p-5 bg-slate-50/30 space-y-4 ${RESERVA_BOTON_IA}`}>
               <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-2xl p-4 border border-indigo-100">
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
@@ -1266,7 +1268,7 @@ function CotizacionDetalleContent() {
               nota interna, llamada, WhatsApp, correo y Nota externa). Aquí queda el enlace 'Escribir nota'. */}
 
           {/* Timeline / Bitacora */}
-          <div className="flex-1 overflow-y-auto p-6 custom-scrollbar bg-white">
+          <div className={`flex-1 overflow-y-auto p-6 custom-scrollbar bg-white ${RESERVA_BOTON_IA}`}>
             <div className="flex items-center justify-between gap-2 mb-6">
               <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Línea Temporal</h4>
               <button type="button" onClick={() => setCotPanelTab('chatter')}
@@ -1331,7 +1333,7 @@ function CotizacionDetalleContent() {
               nota guardada entra de una vez aquí y en la Actividad, sin el spinner de página; si el servidor no devuelve
               el renglón, recarga silenciosa. */}
           {cotPanelTab === 'chatter' && (
-            <div className="flex-1 overflow-y-auto p-5 custom-scrollbar bg-white">
+            <div className={`flex-1 overflow-y-auto p-5 custom-scrollbar bg-white ${RESERVA_BOTON_IA}`}>
               <ChatterDocumento tipoDoc="COT" doc={cotizacion} onRegistrado={notaRegistrada} />
             </div>
           )}

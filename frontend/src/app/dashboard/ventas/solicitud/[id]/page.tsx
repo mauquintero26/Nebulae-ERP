@@ -17,6 +17,8 @@ import {
   TIPOS_SC, MODALIDADES_PAGO, fDate, fTime,
 } from '../solicitud-client';
 import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
+// B4 T24 f2 (F44-a): la reserva del botón flotante de la IA en las columnas de la derecha (IA, Actividad y Chatter), que se desplazan bajo él.
+import { RESERVA_BOTON_IA } from '@/lib/design-system';
 import {
   infoEstadoSolicitud, puedeReiniciar, puedeCotizarSinConfirmacion, ESTADOS_SC_SIN_CONFIRMAR,
   resumenCancelacion, pasoSolicitud, PASOS_SC, errorMotivoSinConfirmacion,
@@ -1391,7 +1393,7 @@ function SolicitudDetalleContent() {
             ))}
           </div>
 
-          <div className="flex-1 overflow-y-auto p-6 space-y-5">
+          <div className={`flex-1 overflow-y-auto p-6 space-y-5 ${RESERVA_BOTON_IA}`}>
             {panelTab === 'actividad' && (
               <>
                 {/* U12: arriba el siguiente paso (NextStepCard ya trae la etiqueta 'Siguiente paso') y el contacto. */}

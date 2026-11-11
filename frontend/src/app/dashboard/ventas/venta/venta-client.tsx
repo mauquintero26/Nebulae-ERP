@@ -47,7 +47,7 @@ import type { PorEstadoVisto } from '@/lib/kanban-ventas';
 import { fechaCorta, fechaSolo } from '@/lib/fechas-colombia';
 import { PERIODO_KPI } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
-import { FOCOS, TABLE } from '@/lib/design-system';
+import { FOCOS, RESERVA_BOTON_IA, TABLE } from '@/lib/design-system';
 import { accesoTableroVentas } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
 import { VEN_NAV } from '../ven-nav';
@@ -142,7 +142,8 @@ export const INICIAL_PEDIDOS = { vista: 'todos', orden: 'atencion' };
 /** El contenedor del Hub y de las otras listas (T7 a T9): pb-24 deja libre, con la página al fondo, la esquina del botón
  *  flotante de la IA; px-4 hasta xl: a 1024 px con el menú abierto las columnas clave caben (R26). El mismo en la
  *  pantalla y en su esqueleto del Suspense. */
-export const CONTENEDOR_LISTA = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
+// B4 T24 f2 (F44-a): la reserva del botón de la IA es el token RESERVA_BOTON_IA (pb-24) de design-system.ts.
+export const CONTENEDOR_LISTA = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;
 /** R8: un pedido entregado, facturado o cancelado está cerrado y nunca va atrasado: desde ahí, «Con atraso» abre Todos. */
 const VISTAS_SIN_ATRASO = ['entregado', 'facturado', 'cancelado'];
 /** D39 (m6 de T8): en Kanban la lista va sin filas (limit=0): los conteos siguen al día en una consulta barata; las filas

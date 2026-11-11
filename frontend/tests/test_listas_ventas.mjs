@@ -1094,7 +1094,8 @@ console.log('--- B4 T9: el cableado de la lista de Cotizaciones con el servidor 
   assert.match(cabecera, /<button type="button" onClick=\{onActualizar\}[^>]*>\s*<RefreshCw [^>]*className=\{actualizando \? 'animate-spin' : ''\}\/> Actualizar/);
   assert.match(cabecera, /<Link href=\{enlaceVerAnalisis\('cot'\)\}/);
   assert.match(cabecera, /<ContenidoEnlace icon=\{BarChart3\}>Ver análisis<\/ContenidoEnlace>/);
-  assert.match(codigo, /export const CONTENEDOR_LISTA = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-\[1600px\] mx-auto w-full min-w-0 gap-6';/);
+  // B4 T24 f2 (F44-a, D27): la reserva es el token RESERVA_BOTON_IA (pb-24).
+  assert.ok(codigo.includes('export const CONTENEDOR_LISTA = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;'));
   assert.ok(lista.includes('<div className={CONTENEDOR_LISTA}>'), 'la lista usa el contenedor');
   // Lo de los Bloques 1 a 3 que se queda: la redirección de ?id= y «Nueva desde SC».
   assert.match(lista, /router\.replace\(`\/dashboard\/ventas\/cotizacion\/\$\{numId\}`\)/);
@@ -1378,7 +1379,8 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   assert.match(cabecera, /<button type="button" onClick=\{onActualizar\}[^>]*>\s*<RefreshCw [^>]*className=\{actualizando \? 'animate-spin' : ''\}\/> Actualizar/);
   assert.match(cabecera, /<Link href=\{enlaceVerAnalisis\('pven'\)\}/);
   assert.match(cabecera, /<ContenidoEnlace icon=\{BarChart3\}>Ver análisis<\/ContenidoEnlace>/);
-  assert.match(codigo, /export const CONTENEDOR_LISTA = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-\[1600px\] mx-auto w-full min-w-0 gap-6';/);
+  // B4 T24 f2 (F44-a, D27): la reserva es el token RESERVA_BOTON_IA (pb-24).
+  assert.ok(codigo.includes('export const CONTENEDOR_LISTA = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;'));
   assert.ok(lista.includes('<div className={CONTENEDOR_LISTA}>'), 'la lista usa el contenedor');
   assert.match(lista, /subtitle="Pedidos confirmados por tus clientes"/);
   // Lo de los Bloques 1 a 3 que se queda: NewSupplierModal exportado (lo importa venta/[id]; F5 fija sus tildes).
@@ -1565,6 +1567,47 @@ console.log('--- B4 T24 f2 (m8 de la revisión r0 de f1): la Lista de Solicitude
   assert.match(papelera, /\{acciones\?\.mover && \(\s*<button type="button" onClick=\{\(\) => acciones\?\.restaurar\(sc\)\}/);
   assert.match(lista, /const accionesFila = useMemo<AccionesFilaSC>\(\(\) => \(\{[\s\S]*?mover: accesoTablero\.mover,\s*\}\), \[accesoTablero\.mover\]\);/);
   assert.match(lista, /seleccion=\{accesoTablero\.mover \? seleccion : undefined\}\s*onSeleccion=\{accesoTablero\.mover \? alSeleccionar : undefined\}/);
+}
+
+console.log('--- B4 T24 f2 (F44-a): las pantallas de Ventas reservan la esquina del botón de la IA con el token RESERVA_BOTON_IA ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/app/dashboard/ventas/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const CONTENEDOR = 'export const CONTENEDOR_LISTA = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;';
+  // Las tres copias de CONTENEDOR_LISTA (Solicitudes, Cotizaciones y Pedidos) y el contenedor del Hub, con el token (pb-24).
+  for (const ruta of ['solicitud/solicitud-client.tsx', 'cotizacion/cotizacion-client.tsx', 'venta/venta-client.tsx']) {
+    const f = leer(ruta);
+    assert.ok(f.includes(CONTENEDOR), `${ruta}: CONTENEDOR_LISTA con RESERVA_BOTON_IA`);
+    assert.match(f, /^import \{[^}]*\bRESERVA_BOTON_IA\b[^}]*\} from '@\/lib\/design-system';/m, `${ruta}: importa el token`);
+  }
+  const hub = leer('page.tsx');
+  assert.ok(hub.includes('<div className={`flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`}>'), 'el Hub');
+  // Lo que se desplaza bajo el botón (fixed bottom-6 right-6): el panel rápido del Hub y su panel de actividad (Drawer).
+  assert.ok(hub.includes('<div className={`flex-1 overflow-y-auto p-6 space-y-6 ${RESERVA_BOTON_IA}`}>'), 'el panel rápido');
+  assert.ok(hub.includes('<div className={RESERVA_BOTON_IA}>'), 'el historial del panel de actividad');
+  // Las columnas de la derecha de los tres detalles (IA, Actividad y Chatter): el contenedor que se desplaza lleva la reserva, y la
+  // lista del Chatter ya no la repite (una sola, en el contenedor).
+  const DETALLES = {
+    'venta/[id]/page.tsx': 3, 'cotizacion/[id]/page.tsx': 3, 'solicitud/[id]/page.tsx': 1,
+  };
+  for (const [ruta, n] of Object.entries(DETALLES)) {
+    const f = leer(ruta);
+    const conReserva = (f.match(/className=\{`flex-1 overflow-y-auto p-[56] [^`]*\$\{RESERVA_BOTON_IA\}[^`]*`\}/g) ?? []).length;
+    assert.equal(conReserva, n, `${ruta}: ${n} paneles de la derecha con la reserva`);
+  }
+  assert.ok(leer('chatter.tsx').includes('<div className="space-y-2">'), 'ListaChatter sin su pb-24 propio');
+  // Ningún pb-24 ni pb-20 escrito a mano en Ventas: la reserva es una sola (design-system.ts).
+  const { readdirSync, statSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const raiz = new URL('../src/app/dashboard/ventas/', import.meta.url);
+  const recorrer = (dir) => readdirSync(dir).flatMap((n) => {
+    const p = join(dir, n);
+    return statSync(p).isDirectory() ? recorrer(p) : /\.tsx?$/.test(n) ? [p] : [];
+  });
+  const sueltos = recorrer(raiz.pathname.replace(/^\/([A-Za-z]:)/, '$1')).filter((p) => {
+    const codigo = readFileSync(p, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '');
+    return /["'`\s]pb-(?:20|24)["'`\s]/.test(codigo);
+  });
+  assert.deepEqual(sueltos, [], 'sin pb-24 ni pb-20 literales en las pantallas de Ventas');
 }
 
 console.log('--- B4 T24 (FINAL-m32): las ventanas de motivo en lote (Hub y Solicitudes) usan la regla de ModalMotivo y nombran su campo ---');

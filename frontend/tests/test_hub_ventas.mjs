@@ -1236,7 +1236,9 @@ console.log('--- B4 T7 r1b (duda 3): el contenedor del Hub reserva el lugar del 
   // El botón de GlobalAIChat (fixed bottom-6 right-6 w-14 h-14) ocupa los 80 px de abajo de la ventana. Con pb-24
   // (96 px) en el contenedor del Hub, con la página al fondo, el pie de la tabla, el tablero y el panel de Análisis
   // quedan por encima. En la pantalla completa sigue el pr-20 del pie (D41).
-  assert.match(hub, /<div className="flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-\[1600px\] mx-auto w-full min-w-0 gap-6">/);
+  // B4 T24 f2 (F44-a, D27): con el token RESERVA_BOTON_IA (pb-24) de design-system.ts.
+  assert.ok(hub.includes('<div className={`flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`}>'));
+  assert.ok(readFileSync(new URL('../src/lib/design-system.ts', import.meta.url), 'utf8').includes("export const RESERVA_BOTON_IA = 'pb-24';"), 'el token es pb-24');
   assert.ok(!hub.includes('px-4 xl:px-8 py-6 max-w-[1600px]'), 'sin el py-6 de antes');
   const ia = readFileSync(new URL('../src/components/GlobalAIChat.tsx', import.meta.url), 'utf8');
   assert.ok(ia.includes('fixed bottom-6 right-6 w-14 h-14'), 'el botón mide lo que la reserva supone (24 + 56 = 80 px < 96)');

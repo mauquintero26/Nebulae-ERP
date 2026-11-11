@@ -67,7 +67,7 @@ import { ESTADOS_COTIZACION } from '@/lib/estados-cotizacion';
 import { fechaCorta, fechaSolo } from '@/lib/fechas-colombia';
 import { enlaceDocumento } from '@/lib/analisis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
-import { FOCOS, TABLE } from '@/lib/design-system';
+import { FOCOS, RESERVA_BOTON_IA, TABLE } from '@/lib/design-system';
 import { accesoTableroVentas } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
 import { VEN_NAV } from '../ven-nav';
@@ -865,7 +865,8 @@ export const INICIAL_COT = { vista: 'activas', orden: 'atencion' };
 /** El contenedor de la lista, el del Hub y el de Solicitudes (T7 y T8): pb-24 deja libre, con la página al fondo, la
  *  esquina del botón flotante de la IA; px-4 hasta xl: a 1024 px con el menú abierto las columnas clave caben (R26). El
  *  mismo en la pantalla y en su esqueleto del Suspense (r1, A2). */
-export const CONTENEDOR_LISTA = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
+// B4 T24 f2 (F44-a): la reserva del botón de la IA es el token RESERVA_BOTON_IA (pb-24) de design-system.ts.
+export const CONTENEDOR_LISTA = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;
 /** R8: una rechazada está cerrada y nunca va atrasada: desde Rechazadas, «Con atraso» abre Activas (m7 de T8). */
 const VISTAS_SIN_ATRASO = ['rechazadas'];
 /** D39 (m6 de T8): en Kanban la lista va sin filas (limit=0): las tarjetas siguen con su resumen en una consulta barata; las

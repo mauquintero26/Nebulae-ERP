@@ -21,7 +21,7 @@ import type { AccionTabla, ColumnaTabla, PestanaTabla } from '@/components/tabla
 import { BannerFlujo, CadenaDocumentos, useResumenFlujo } from '@/components/flujo';
 import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
 import { PanelAnalisisPerezoso } from '@/components/analisis';
-import { FOCOS, TABLE } from '@/lib/design-system';
+import { FOCOS, RESERVA_BOTON_IA, TABLE } from '@/lib/design-system';
 import {
   accionPestana, campoOrden, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta, queryListado,
 } from '@/lib/tabla';
@@ -407,8 +407,8 @@ function ActivitiesPanel({row,onClose,onNotaGuardada}:{row:any,onClose:()=>void,
               <ComposerChatter compacto tipoDoc={row.tipo} doc={detail} onRegistrado={notaRegistrada}/>
             </div>
           )}
-          {/* pb-20: la burbuja fija del asistente (bottom-6 right-6) no tapa el último renglón. */}
-          <div className="pb-20">
+          {/* B4 T24 f2 (F44-a): RESERVA_BOTON_IA (antes pb-20): la burbuja fija del asistente (bottom-6 right-6) no tapa el último renglón. */}
+          <div className={RESERVA_BOTON_IA}>
             <p className="text-xs font-black text-slate-400 uppercase mb-3 flex items-center gap-1"><Activity size={12}/> Historial de Acciones Tomadas</p>
             {acts.length===0?<p className="text-xs text-slate-400 italic">Sin actividad registrada</p>:(
               <div className="space-y-3 relative before:absolute before:left-2 before:top-0 before:bottom-0 before:w-0.5 before:bg-slate-100">
@@ -1099,7 +1099,8 @@ export default function VentasHub() {
       {/* B4 T7 r1b (D41): pb-24 deja libre, con la página al fondo, la esquina del botón flotante de la IA (GlobalAIChat:
           fixed bottom-6 de 56 px, 80 px en total): el pie de la tabla, el tablero y Análisis quedan por encima. En la
           pantalla completa la reserva es el pr-20 del pie. */}
-      <div className="flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6">
+      {/* B4 T24 f2 (F44-a): con el token RESERVA_BOTON_IA (pb-24) de design-system.ts. */}
+      <div className={`flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`}>
 
         {/* HEADER ROW */}
         <PageHeader
@@ -1324,7 +1325,8 @@ export default function VentasHub() {
                 <button onClick={()=>setQuickDetailDoc(null)} className="p-2 hover:bg-slate-200 rounded-xl text-slate-500"><X size={18}/></button>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {/* B4 T24 f2 (F44-a): el panel rápido llega al fondo de la ventana, bajo el botón de la IA: «Abrir en Módulo Detallado» queda a la vista. */}
+              <div className={`flex-1 overflow-y-auto p-6 space-y-6 ${RESERVA_BOTON_IA}`}>
                 {/* B4 T7 (FLUJO-documentos punto 6; RP74, D36, D42): la cadena de documentos, compacta (solo los números;
                     las cajas caídas conservan su palabra). Las etiquetas salen de las tablas únicas de cada tipo (RP4). */}
                 <div className="min-w-0 bg-white rounded-2xl p-4 border border-slate-200 shadow-xs">

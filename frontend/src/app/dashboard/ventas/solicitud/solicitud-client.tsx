@@ -37,7 +37,7 @@ import { textoDeError, recargarTrasError } from '@/lib/avisos';
 // B4 T24 (FINAL-m32): la regla del motivo de ModalMotivo también en la ventana de la cancelación en lote.
 import { MINIMO_MOTIVO, largoDelMotivo, motivoValido } from '@/lib/kanban';
 import { VEN_NAV } from '../ven-nav';
-import { FOCOS, PAGE_HEADER, TABLE } from '@/lib/design-system';
+import { FOCOS, PAGE_HEADER, RESERVA_BOTON_IA, TABLE } from '@/lib/design-system';
 import { accesoTableroVentas } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
 import { esAdministrador, esAsesorElegible, getUsuarioActual } from '../flujo';
@@ -534,7 +534,8 @@ const ID_PAPELERA = 'ventas.solicitudes.papelera';
 /** R8 (atencion_primero_listas = «Sí; con un clic en una columna ordenas como quieras»): primero lo atrasado. */
 export const INICIAL_SC = { vista: 'activas', orden: 'atencion' };
 /** B4 T8 r1 (A2): el contenedor de la lista (el del Hub, T7), el mismo en la pantalla y en su esqueleto del Suspense. */
-export const CONTENEDOR_LISTA = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
+// B4 T24 f2 (F44-a): la reserva del botón de la IA es el token RESERVA_BOTON_IA (pb-24) de design-system.ts.
+export const CONTENEDOR_LISTA = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;
 /** KANBAN-ventas-listas punto 7: los tickets de Soporte y la Papelera no van al tablero (se ven en lista). */
 const VISTAS_SIN_TABLERO = ['soporte', 'papelera'];
 /** R8 y r1 (m7): fuera del semáforo (Soporte) o de canceladas (la Papelera y Canceladas): «Con atraso» abre Activas. */
