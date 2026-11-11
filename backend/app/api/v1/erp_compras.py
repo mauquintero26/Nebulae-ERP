@@ -598,6 +598,9 @@ def update_tracking_config(tipo_envio: str, body: dict,
     stages = body.get("stages")
     if not isinstance(stages, list) or not stages:
         raise HTTPException(422, "Debes incluir al menos una etapa")
+    # B4 T24 r1 (m21): create_pec copia alert_confirm_days y alert_overdue_days a cada PEC nuevo y _stage_alert los lee al
+    # listar: la misma validación de las etapas del PATCH (_validar_etapas, 422), antes de guardar.
+    _validar_etapas(stages)
     keys = [s.get("key") for s in stages]
     if any(not k for k in keys):
         raise HTTPException(422, "Cada etapa debe tener una 'key'")
@@ -790,6 +793,9 @@ MAX_VEN_IDS = 50
 VEN_IDS_NO_VALIDOS = "Los pedidos de venta a vincular deben ser una lista de ids de pedido (números enteros)."
 VEN_IDS_DEMASIADOS = f"Puedes vincular {MAX_VEN_IDS} pedidos de venta como máximo en un pedido de compra."
 _MAX_ID_ENTERO = 2 ** 31 - 1
+# r1 (m12 + m19): lo que ofrecen las pantallas de consolidar (dashboard/compras/page.tsx y compras/pedidos/page.tsx
+# filtran p.estado === 'PENDIENTE_COMPRA'). COMPRAS no puede hacer PATCH de un PVEN: no debe vincular uno cerrado.
+ESTADOS_VEN_A_CONSOLIDAR = frozenset({"PENDIENTE_COMPRA"})
 
 
 def _pvens_a_vincular(db: Session, body: CrearPecBody) -> list:
@@ -797,11 +803,13 @@ def _pvens_a_vincular(db: Session, body: CrearPecBody) -> list:
     - Sin ven_ids (o con []): solo body.ven_id, como hoy: si no existe no se vincula nada (y si ya tenía PEC, pasa al
       nuevo).
     - Con ven_ids (R21, a mano): una lista de enteros positivos, a lo sumo MAX_VEN_IDS; si no, 422. Cada PVEN de la unión se
-      lee con FOR UPDATE (por id) y debe existir y no tener PEC: si no, 409 y no se escribe nada."""
+      lee con FOR UPDATE (por id) y debe existir, no tener PEC y (r1, m12 + m19) estar en ESTADOS_VEN_A_CONSOLIDAR, lo único
+      que ofrecen las pantallas de consolidar: si no, 409 y no se escribe nada.
+    - r1 (m19): el camino de solo ven_id también lee el PVEN con FOR UPDATE (en serie con una consolidación del mismo PVEN)."""
     if body.ven_ids is None or body.ven_ids == []:
         if not body.ven_id:
             return []
-        ven = db.query(SaleOrder).filter(SaleOrder.id == body.ven_id).first()
+        ven = db.query(SaleOrder).filter(SaleOrder.id == body.ven_id).with_for_update().first()
         return [ven] if ven else []
     ids = body.ven_ids
     if not isinstance(ids, list) or any(isinstance(x, bool) or not isinstance(x, int) or not 0 < x <= _MAX_ID_ENTERO
@@ -819,6 +827,9 @@ def _pvens_a_vincular(db: Session, body: CrearPecBody) -> list:
         if ven.pec_id:
             raise HTTPException(409, f"El pedido de venta {ven.numero} ya está en el pedido de compra "
                                      f"{ven.pec_numero or ven.pec_id}: no se creó el pedido de compra.")
+        if ven.estado not in ESTADOS_VEN_A_CONSOLIDAR:
+            raise HTTPException(409, f"El pedido de venta {ven.numero} está en «{etiqueta_estado('VEN', ven.estado)}»: "
+                                     "solo se consolidan pedidos pendientes de compra; no se creó el pedido de compra.")
     return [filas[i] for i in ids]
 
 
@@ -846,7 +857,9 @@ def create_pec(body: CrearPecBody, user: User = Depends(require_roles(*ROLE_ADMI
         db: Session = Depends(get_db)):
     """Crea un pedido de compra. B4 T24 (FINAL-C7-b): con ven_ids consolida varios PVEN (COMPRAS no puede editar un PVEN,
     así que el vínculo lo hace este endpoint): todos se vinculan en la MISMA transacción del alta, cada uno con su
-    Actividad (_pvens_a_vincular, _vincular_pven). El PEC guarda en ven_id y ven_numero el primero (la columna es corta)."""
+    Actividad (_pvens_a_vincular, _vincular_pven). El PEC guarda en ven_id y ven_numero el primero (la columna es corta).
+    r1 (m1 + m11 + m20): toda la Actividad del alta (el CREATED del PEC y los renglones de los PVEN) la firma la sesión
+    (nombre_de_usuario); body.created_by es solo el dato created_by del PEC."""
     pvens = _pvens_a_vincular(db, body)
     numero = _gen_numero(db, "PEC-", "seq_pec")
     entrega_est = None
@@ -944,10 +957,12 @@ def create_pec(body: CrearPecBody, user: User = Depends(require_roles(*ROLE_ADMI
     autor = nombre_de_usuario(user)
     for ven in pvens:
         _vincular_pven(db, ven, pec, autor)
+    # B4 T24 r1 (m1 + m11 + m20): el CREATED también lo firma la sesión (como los renglones de los PVEN de este commit);
+    # body.created_by queda solo como dato del PEC.
     db.add(ActivityLog(entity_type="PEC", entity_id=pec.id, entity_numero=pec.numero, action="CREATED",
                        description=f"Pedido de compra {pec.numero} creado. Entrega estimada: "
                                    f"{entrega_est.strftime('%d/%m/%Y')}",
-                       new_estado="BORRADOR", user_name=body.created_by))
+                       new_estado="BORRADOR", user_name=autor))
     db.commit()
     db.refresh(pec)
     return {"status": "success", "data": _pec_dict(pec)}
@@ -1143,7 +1158,7 @@ def _validar_etapas(etapas) -> None:
 
 def _validar_campos_libres_pec(body: dict) -> dict:
     """r1 (m7) y r2 (m3, m6): los campos libres del PATCH que podían dar 500 (o dejar el PEC roto) DESPUÉS de guardar,
-    todos antes de cualquier escritura: updated_by (va a ActivityLog.user_name), notas, las fechas
+    todos antes de cualquier escritura: updated_by (desde B4 T24, FINAL-m2, solo se valida), notas, las fechas
     fecha_entrega_estimada, fecha_alerta y fecha_compra (en blanco = null; ver _fecha_leida), supplier_ref (texto,
     sin control, hasta 100) y tracking_stages (una lista de etapas que _annotate_stage_alerts pueda leer). Un null en
     cualquiera sigue valiendo, como hoy. B4 T24 (B28): devuelve {campo: fecha leída} de las fechas que trae el body, para
@@ -1236,7 +1251,8 @@ def update_pec(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE
 
     - B4 T12: el estado solo cambia por el camino correcto (_validar_transicion_pec, antes de todo lo demás); con
       CANCELADO pide el motivo, que queda en la Actividad. La Actividad dice 'Estado cambiado a {etiqueta}' (más
-      '. Motivo: …') con updated_by o, si no viene, el correo de quien lo hizo.
+      '. Motivo: …'). B4 T24 (FINAL-m2, r1 m32): la firma la sesión (nombre_de_usuario(user)); updated_by se sigue
+      validando (_validar_autor) pero ya no decide la autoría.
 
     """
     # B4 T24 (FINAL-C2): con FOR UPDATE, para que la cuenta de recepciones de la cancelación y una recepción creada al mismo
@@ -1372,12 +1388,15 @@ def update_tracking(pec_id: int, body: ActualizarTrackingBody,
 
     Frontend sends 'stage' and 'status' fields; ActualizarTrackingBody maps them via aliases.
 
-    r2 (m5): user_name (va a ActivityLog.user_name) se valida antes de escribir, como el updated_by del PATCH.
+    r2 (m5): user_name se valida antes de escribir, como el updated_by del PATCH (desde B4 T24, FINAL-m2, solo queda en
+    tracking_history: la Actividad la firma la sesión).
     B4 T24 (A2): el eta, con la regla de las etapas del PATCH (sin zona y con el año entre 1900 y 2999), antes de escribir.
+    B4 T24 r1 (m15): el PEC se lee con FOR UPDATE, como en update_pec: un seguimiento y una cancelación a la vez quedan en
+    serie y la guarda etapa_pec(p.estado) ve el CANCELADO (no lo pisa con RECIBIDO o EN_TRANSITO).
     """
     _validar_autor(body.user_name)
     _validar_etapas([{"eta": body.eta}])
-    p = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec_id).first()
+    p = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec_id).with_for_update().first()
     if not p:
         raise HTTPException(404, "Pedido de compra no encontrado")
     stage_name = body.stage_name  # aliased from 'stage'

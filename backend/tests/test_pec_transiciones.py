@@ -500,8 +500,14 @@ def test_cada_fecha_se_lee_una_sola_vez(app_client, db, admin_token, monkeypatch
 
 
 def test_los_largos_son_los_de_las_columnas():
-    """B4 T24 (B29): los topes del autor y de la referencia del proveedor salen de las columnas, no de una copia a mano."""
+    """B4 T24 (B29): los topes del autor y de la referencia del proveedor salen de las columnas, no de una copia a mano.
+    r1 (m24): se comprueba en el código de erp_compras (la cifra sola también coincidía con la copia a mano de antes)."""
+    import inspect
+    import re
     from app.api.v1 import erp_compras
+    fuente = inspect.getsource(erp_compras)
+    assert re.search(r"^MAX_AUTOR = ActivityLog\.__table__\.c\.user_name\.type\.length\b", fuente, re.M)
+    assert re.search(r"^MAX_SUPPLIER_REF = PurchaseOrderFull\.__table__\.c\.supplier_ref\.type\.length\b", fuente, re.M)
     assert erp_compras.MAX_AUTOR == ActivityLog.__table__.c.user_name.type.length == 150
     assert erp_compras.MAX_SUPPLIER_REF == PurchaseOrderFull.__table__.c.supplier_ref.type.length == 100
 
@@ -613,7 +619,16 @@ def test_la_etapa_del_envio_espeja_los_pasos_del_frontend():
 
 def test_la_actividad_del_pec_la_firma_la_sesion(app_client, db, admin_token, user_admin, supplier):
     """B4 T24 (FINAL-m2): ni updated_by (PATCH) ni user_name (/tracking) cambian ActivityLog.user_name: firma quien tiene
-    la sesión (nombre_de_usuario), como el despacho de BODEGA (RP23)."""
+    la sesión (nombre_de_usuario), como el despacho de BODEGA (RP23). r1 (m1, m11, m20): tampoco el created_by del alta,
+    que queda solo como dato del PEC."""
+    resp = _crear_pec(app_client, admin_token, created_by="Otra Persona")
+    assert resp.status_code == 201, resp.text
+    creado = resp.json()["data"]
+    db.expire_all()
+    assert [(l.action, l.user_name) for l in db.query(ActivityLog).filter(
+        ActivityLog.entity_type == "PEC", ActivityLog.entity_id == creado["id"])] == [
+        ("CREATED", nombre_de_usuario(user_admin))]
+    assert db.query(PurchaseOrderFull.created_by).filter(PurchaseOrderFull.id == creado["id"]).scalar() == "Otra Persona"
     f = _Fabrica(db)
     pec = f.pec("EMITIDO", fecha_entrega_estimada=datetime(2026, 12, 1))
     resp = _patch(app_client, admin_token, pec, fecha_entrega_estimada="2026-12-05", updated_by="Otra Persona")
@@ -745,7 +760,7 @@ def _pecs_de_proveedor(db, nombre):
 
 
 def test_compras_consolida_varios_pven_y_quedan_vinculados_con_su_actividad(app_client, db, compras_token, contador_sql):
-    from app.models.users import User
+    from app.api.dependencies import usuario_de_token
     f = _Fabrica(db)
     a, b = f.pven("PENDIENTE_COMPRA"), f.pven("PENDIENTE_COMPRA")
     with contador_sql.ventana() as v:
@@ -753,7 +768,7 @@ def test_compras_consolida_varios_pven_y_quedan_vinculados_con_su_actividad(app_
     assert resp.status_code == 201, resp.text
     assert v.commits == 1   # el alta, los vínculos y las Actividades en un solo commit
     pec = resp.json()["data"]
-    autor = db.query(User.email).filter(User.role == "COMPRAS").order_by(User.id.desc()).first()[0]
+    autor = nombre_de_usuario(usuario_de_token(compras_token, db))   # B4 T24 r1 (m27): el usuario del token
     for ven in (a, b):
         fila = _pven(db, ven)
         assert (fila.pec_id, fila.pec_numero, fila.estado) == (pec["id"], pec["numero"], "EN_PROCESO")
@@ -765,16 +780,44 @@ def test_compras_consolida_varios_pven_y_quedan_vinculados_con_su_actividad(app_
 
 def test_ven_id_y_ven_ids_se_unen_sin_repetir_con_ven_id_primero(app_client, db, admin_token):
     f = _Fabrica(db)
-    a, b = f.pven("PENDIENTE_COMPRA"), f.pven("EN_PROCESO")
+    a, b = f.pven("PENDIENTE_COMPRA"), f.pven("PENDIENTE_COMPRA")
     resp = _crear_pec(app_client, admin_token, ven_id=b.id, ven_ids=[a.id, b.id, a.id])
     assert resp.status_code == 201, resp.text
     pec = resp.json()["data"]
     assert (pec["ven_id"], pec["ven_numero"]) == (b.id, b.numero)
     assert _pven(db, a).pec_id == _pven(db, b).pec_id == pec["id"]
-    assert _pven(db, b).estado == "EN_PROCESO"   # solo PENDIENTE_COMPRA pasa a En proceso
-    assert [(l.action, l.description) for l in _logs_pven(db, b)] == [
-        ("UPDATED", f"Vinculado al pedido de compra {pec['numero']}")]
-    assert len(_logs_pven(db, a)) == 1
+    assert len(_logs_pven(db, a)) == len(_logs_pven(db, b)) == 1
+
+
+def test_solo_se_consolidan_pven_pendientes_de_compra(app_client, db, compras_token, contador_sql):
+    """B4 T24 r1 (m12 + m19): con ven_ids, cada PVEN de la unión (ven_id incluido) tiene que estar en PENDIENTE_COMPRA, el
+    único estado que ofrecen las pantallas de consolidar (compras/page.tsx y compras/pedidos/page.tsx): si no, 409 en
+    español y no se escribe nada. COMPRAS no puede hacer PATCH de un PVEN, así que no podía vincular uno cerrado."""
+    from app.core.textos_actividad import etiqueta_estado
+    f = _Fabrica(db)
+    libre = f.pven("PENDIENTE_COMPRA")
+    for estado in ("EN_PROCESO", "CANCELADO", "ENTREGADO", "FACTURADO", "DEVUELTO_TOTAL"):
+        otro = f.pven(estado)
+        for cuerpo in ({"ven_ids": [libre.id, otro.id]}, {"ven_id": otro.id, "ven_ids": [libre.id]}):
+            nombre = f"Prov C7 {uuid.uuid4().hex[:6]}"
+            with contador_sql.ventana() as v:
+                resp = _crear_pec(app_client, compras_token, supplier_name=nombre, **cuerpo)
+            texto = (f"El pedido de venta {otro.numero} está en «{etiqueta_estado('VEN', estado)}»: solo se consolidan "
+                     "pedidos pendientes de compra; no se creó el pedido de compra.")
+            assert (resp.status_code, resp.json()) == (409, {"detail": texto}), (estado, cuerpo)
+            assert v.commits == 0 and _pecs_de_proveedor(db, nombre) == 0, (estado, cuerpo)
+        assert (_pven(db, otro).pec_id, _pven(db, otro).estado) == (None, estado)
+    assert (_pven(db, libre).pec_id, _logs_pven(db, libre)) == (None, [])
+
+
+def test_solo_ven_id_lee_el_pven_con_bloqueo(app_client, db, admin_token, contador_sql):
+    """B4 T24 r1 (m19): el camino de solo ven_id también lee el PVEN con FOR UPDATE (en serie con un ven_ids a la vez)."""
+    ven = _Fabrica(db).pven("PENDIENTE_COMPRA")
+    cuerpo = {"ven_id": ven.id, "ven_numero": ven.numero}
+    with contador_sql.ventana() as v:
+        assert _crear_pec(app_client, admin_token, **cuerpo).status_code == 201
+    lecturas = [s for s in v.sentencias if s.lstrip().upper().startswith("SELECT") and "FROM sale_orders" in s]
+    assert lecturas and "FOR UPDATE" in lecturas[0].upper(), lecturas[:1]
 
 
 def test_un_pven_con_pec_o_que_no_existe_da_409_sin_escribir(app_client, db, admin_token, contador_sql):
@@ -872,4 +915,41 @@ def test_fechas_con_un_anio_fuera_de_rango_dan_422_sin_escribir(app_client, db, 
     assert app_client.get(f"{RUTA}/{pec.id}", headers=_auth(admin_token)).status_code == 200
     resp = app_client.patch(f"{RUTA}/{con_etapas.id}/tracking", headers=_auth(admin_token),
                             json={"stage": "PROVEEDOR_CASILLERO", "status": "EN_PROCESO", "eta": "2999-12-31"})
+    assert resp.status_code == 200, resp.text
+
+
+
+# ─── B4 T24 r1 (m15, m21) ───────────────────────────────────────────────────────────────────────────────────────────
+
+def test_el_seguimiento_lee_el_pec_con_bloqueo(app_client, db, admin_token, contador_sql):
+    """r1 (m15): update_tracking lee el PEC con FOR UPDATE, como update_pec: un seguimiento y una cancelación a la vez
+    quedan en serie y la guarda de etapa_pec ve el CANCELADO."""
+    pec = _Fabrica(db).pec("EMITIDO", tracking_stages=[{"stage": "PROVEEDOR_CASILLERO", "status": "PENDIENTE",
+                                                          "timestamp": None}])
+    ruta = f"{RUTA}/{pec.id}/tracking"
+    with contador_sql.ventana() as v:
+        resp = app_client.patch(ruta, headers=_auth(admin_token), json={"stage": "PROVEEDOR_CASILLERO",
+                                                                        "status": "EN_PROCESO"})
+    assert resp.status_code == 200, resp.text
+    assert _lee_el_pec_con_bloqueo(v.sentencias)
+
+
+def test_la_configuracion_del_seguimiento_valida_los_dias(app_client, db, admin_token, contador_sql):
+    """r1 (m21): PUT /compras/tracking-config/{tipo} guardaba alert_confirm_days y alert_overdue_days sin validar, y
+    create_pec los copia a cada PEC nuevo: un 10**9 o un texto tumbaba GET /compras/pedidos (el 500 de A2 por otra puerta).
+    Ahora la misma validación de las etapas del PATCH (422, sin guardar)."""
+    ruta = "/api/v1/compras/tracking-config/casillero"
+    antes = app_client.get("/api/v1/compras/tracking-config", headers=_auth(admin_token)).json()
+    for dias in (10 ** 9, "3", -1, True):
+        etapas = [{"key": "UNO", "label": "Uno", "alert_confirm_days": dias, "alert_overdue_days": 1}]
+        with contador_sql.ventana() as v:
+            resp = app_client.put(ruta, headers=_auth(admin_token), json={"stages": etapas})
+        assert (resp.status_code, resp.json()) == (422, {"detail": ETAPA_DIAS_INVALIDOS}), dias
+        assert v.commits == 0 and not [s for s in v.sentencias if s.lstrip().upper().startswith(("INSERT", "UPDATE"))]
+    with contador_sql.ventana() as v:
+        resp = app_client.put(ruta, headers=_auth(admin_token), json={"stages": ["x"]})
+    assert (resp.status_code, resp.json()) == (422, {"detail": ETAPA_NO_OBJETO}) and v.commits == 0
+    assert app_client.get("/api/v1/compras/tracking-config", headers=_auth(admin_token)).json() == antes
+    bien = [{"key": "UNO", "label": "Uno", "alert_confirm_days": 2, "alert_overdue_days": 1.5}]
+    resp = app_client.put(ruta, headers=_auth(admin_token), json={"stages": bien})
     assert resp.status_code == 200, resp.text
