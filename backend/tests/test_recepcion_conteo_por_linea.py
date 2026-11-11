@@ -67,3 +67,47 @@ def test_con_la_recepcion_confirmada_sigue_el_422_sin_escribir(app_client, db, a
     assert v.commits == 0
     db.expire_all()
     assert db.query(GoodsReceipt.productos).filter(GoodsReceipt.id == rec["id"]).scalar() == rec["productos"]
+
+
+
+# ─── B4 T24 r1 (m16): el PATCH por línea bloquea la recepción y valida las cantidades a mano ─────────────────────────
+
+def _cantidad_invalida(nombre):
+    return f"La cantidad {nombre} debe ser un número entero entre 0 y 99.999.999, o vacía."
+
+
+def test_el_patch_por_linea_lee_la_recepcion_con_bloqueo(app_client, db, admin_token, bodega_token, pec_10u, sku,
+                                                         contador_sql):
+    """r1 (m16): update_grl lee la GoodsReceipt con FOR UPDATE ANTES de la guarda de BORRADOR: dos PATCH por línea de la
+    misma recepción (o uno y la confirmación) quedan en serie, y tras una confirmación sale el 422 de siempre."""
+    rec = _recepcion(app_client, admin_token, pec_10u, sku)
+    ruta = f"{RECEPCIONES}/{rec['id']}/lineas/{rec['productos'][0]['grl_id']}"
+    with contador_sql.ventana() as v:
+        resp = app_client.patch(ruta, headers=_auth(bodega_token), json={"quantity_received": 3})
+    assert resp.status_code == 200, resp.text
+    lecturas = [s for s in v.sentencias if s.lstrip().upper().startswith("SELECT") and "FROM goods_receipts" in s]
+    assert lecturas and "FOR UPDATE" in lecturas[0].upper(), lecturas[:1]
+
+
+def test_las_cantidades_de_la_linea_se_validan_con_422_en_espanol(app_client, db, admin_token, bodega_token, pec_10u,
+                                                                  sku, contador_sql):
+    """r1 (m16): quantity_received, quantity_rejected y quantity_quarantine pasaban por int() sin validar: un texto daba
+    500 y un negativo se guardaba. Ahora enteros (no bool) entre 0 y el tope de la columna (Numeric(10, 2): 99.999.999),
+    o null; si no, 422 en español y nada escrito. Un null en rechazada o cuarentena sigue siendo 0, como hoy."""
+    rec = _recepcion(app_client, admin_token, pec_10u, sku)
+    ruta = f"{RECEPCIONES}/{rec['id']}/lineas/{rec['productos'][0]['grl_id']}"
+    for campo, nombre in (("quantity_received", "recibida"), ("quantity_rejected", "rechazada"),
+                          ("quantity_quarantine", "en cuarentena")):
+        for malo in ("tres", "3", -1, 2.5, True, 10 ** 8, [1], {"a": 1}):
+            with contador_sql.ventana() as v:
+                resp = app_client.patch(ruta, headers=_auth(bodega_token), json={campo: malo})
+            assert (resp.status_code, resp.json()) == (422, {"detail": _cantidad_invalida(nombre)}), (campo, malo)
+            assert v.commits == 0 and not [s for s in v.sentencias
+                                           if s.lstrip().upper().startswith(("INSERT", "UPDATE"))], (campo, malo)
+    db.expire_all()
+    assert db.query(GoodsReceipt.productos).filter(GoodsReceipt.id == rec["id"]).scalar() == rec["productos"]
+    resp = app_client.patch(ruta, headers=_auth(bodega_token), json={"quantity_received": 10 ** 8 - 1,
+                                                                    "quantity_rejected": None, "quantity_quarantine": 0})
+    assert resp.status_code == 200, resp.text
+    primera = _detalle(app_client, bodega_token, rec["id"])["productos"][0]
+    assert (primera["qty_recibida"], primera["qty_rechazada"], primera["qty_cuarentena"]) == (10 ** 8 - 1, 0, 0)

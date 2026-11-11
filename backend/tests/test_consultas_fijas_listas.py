@@ -1,8 +1,8 @@
 """B4 T24 (B21): tres listas que hacían consultas por fila (N+1, de antes del bloque) ahora hacen un número fijo:
 - GET /inventory/operations: los movimientos de cada operación (selectinload);
 - GET /products: la marca, la categoría, los SKU y sus atributos de cada producto (selectinload);
-- GET /compras/recepciones: el PEC de cada recepción en _gr_dict (los PEC de la página se cargan una vez y _gr_dict los
-  toma del mapa de identidad).
+- GET /compras/recepciones: el PEC de cada recepción en _gr_dict (los PEC de la página se cargan una vez y, desde r1
+  m22, _gr_dict los recibe en un dict {pec_id: pec}).
 Cada prueba compara las consultas de una página de 3 filas con las de una de 30: deben ser las mismas.
 
 Se corre SOLO con el runner de ROLLBACK (python tests/rollback_runner.py test_consultas_fijas_listas).
@@ -10,7 +10,7 @@ Se corre SOLO con el runner de ROLLBACK (python tests/rollback_runner.py test_co
 import uuid
 from datetime import datetime
 
-from app.models.catalog import Attribute, AttributeValue, Product, ProductSKU
+from app.models.catalog import Attribute, AttributeValue, Brand, Category, Product, ProductSKU
 from app.models.erp_documents import GoodsReceipt, PurchaseOrderFull
 from app.models.inventory import InventoryMovement, InventoryOperation
 
@@ -44,14 +44,18 @@ def test_operaciones_con_consultas_fijas(app_client, db, admin_token, warehouse,
     assert c3 == c30, (c3, c30)
 
 
-def test_productos_con_consultas_fijas(app_client, db, admin_token, brand, category, contador_sql):
+def test_productos_con_consultas_fijas(app_client, db, admin_token, contador_sql):
+    """B4 T24 r1 (m18): cada producto con su propia marca y su propia categoría (y su propio atributo): con una sola
+    compartida, la carga perezosa many-to-one sale del mapa de identidad después de la primera y el conteo no veía que
+    faltara selectinload(Product.brand) o selectinload(Product.category)."""
     s = uuid.uuid4().hex[:8]
-    atributo = Attribute(name=f"Color-{s}")
-    db.add(atributo)
-    db.commit()
     for grupo, n in (("tres", 3), ("treinta", 30)):
         for i in range(n):
-            p = Product(brand_id=brand.id, category_id=category.id, name=f"{grupo}-{s}-{i}", type="Fisico",
+            marca, categoria = Brand(name=f"Marca-{grupo}-{s}-{i}"), Category(name=f"Cat-{grupo}-{s}-{i}")
+            atributo = Attribute(name=f"Color-{grupo}-{s}-{i}")
+            db.add_all([marca, categoria, atributo])
+            db.flush()
+            p = Product(brand_id=marca.id, category_id=categoria.id, name=f"{grupo}-{s}-{i}", type="Fisico",
                         base_currency="USD", uom="Ud")
             db.add(p)
             db.flush()
@@ -63,6 +67,7 @@ def test_productos_con_consultas_fijas(app_client, db, admin_token, brand, categ
     c30, d30 = _consultas(app_client, admin_token, contador_sql, "/api/v1/products", q=f"treinta-{s}")
     assert (len(d3), len(d30)) == (3, 30)
     assert all(len(p["skus"]) == 1 and len(p["skus"][0]["attribute_values"]) == 1 for p in d3 + d30)
+    assert len({p["brand_id"] for p in d30}) == len({p["category_id"] for p in d30}) == 30
     assert c3 == c30, (c3, c30)
 
 

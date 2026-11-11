@@ -250,15 +250,17 @@ def _pec_dict(p: PurchaseOrderFull) -> dict:
     }
 
 
-def _gr_dict(g: GoodsReceipt, db: Session) -> dict:
+def _gr_dict(g: GoodsReceipt, db: Session, pecs: Optional[dict] = None) -> dict:
+    """pecs (B4 T24 r1, m22): {pec_id: PurchaseOrderFull} ya cargados (la lista de recepciones los trae en una consulta);
+    sin él, o si el PEC no está, se lee con db.get (como el detalle)."""
 
     # Compute dias_retraso: compare actual fecha_recepcion against promised fecha_entrega_estimada
     # with 1-day tolerance (receipt within 1 day of promised date is NOT late).
     dias_retraso = None
     if g.pec_id and g.fecha_recepcion:
-        # B4 T24 (B21): db.get usa el mapa de identidad: la lista de recepciones carga antes los PEC de la página (una
-        # consulta) y aquí ya no hay una consulta por recepción.
-        pec_ref = db.get(PurchaseOrderFull, g.pec_id)
+        # B4 T24 (B21; r1 m22): con la lista, el PEC sale del dict de la página (no del mapa de identidad, que guarda
+        # referencias débiles): no hay una consulta por recepción.
+        pec_ref = pecs.get(g.pec_id) if pecs is not None and g.pec_id in pecs else db.get(PurchaseOrderFull, g.pec_id)
         if pec_ref and pec_ref.fecha_entrega_estimada:
             # Comparar por .date() en ambos lados -- fecha_entrega_estimada lleva hora de
             # creacion (utcnow()+timedelta), asi que restar datetimes crudos corria el
@@ -1765,20 +1767,9 @@ def crear_recepcion_desde_pec(
         .where(GoodsReceiptLine.gr_id == gr.id)
         .order_by(GoodsReceiptLine.id)
     ).scalars().all()
-    gr.productos = [
-        {
-            "sku_id"        : grl.sku_id,
-            "nombre"        : grl.description or "",
-            "qty_esperada"  : int(grl.quantity_expected or 0),
-            "qty_recibida"  : None,
-            "qty_rechazada" : 0,
-            "qty_cuarentena": 0,
-            "estado"        : "PENDIENTE",
-            "po_line_id"    : grl.po_line_id,
-            "grl_id"        : grl.id,
-        }
-        for grl in _grls_pec
-    ]
+    # B4 T24 r1 (m31): la misma forma del JSON que las ediciones (con las GRL recién creadas da qty_recibida None, 0, 0 y
+    # PENDIENTE, lo de antes).
+    gr.productos = _snapshot_productos(_grls_pec)
     db.commit()
     db.refresh(gr)
     return {"status": "success", "data": _gr_dict(gr, db)}
@@ -1859,12 +1850,10 @@ def list_recepciones(
         conteos = contar_por_vista(base, {v: _condicion_vista_recepcion(v) for v in VISTAS_RECEPCION})
     total, items = paginar(filtrado.order_by(*orden_sql), limit, offset)
     pec_ids = {g.pec_id for g in items if g.pec_id}
-    # B4 T24 (B21): los PEC de la página en UNA consulta; _gr_dict los toma del mapa de identidad (db.get). La lista se
-    # guarda en una variable mientras se arman las filas: el mapa de identidad guarda referencias débiles.
-    pecs_de_la_pagina = (db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id.in_(pec_ids)).all()
-                         if pec_ids else [])
-    data = [_gr_dict(g, db) for g in items]
-    del pecs_de_la_pagina
+    # B4 T24 (B21; r1 m22): los PEC de la página en UNA consulta, pasados a _gr_dict como {pec_id: pec}.
+    pecs = ({p.id: p for p in db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id.in_(pec_ids))}
+            if pec_ids else {})
+    data = [_gr_dict(g, db, pecs) for g in items]
     return respuesta_de_lista(total, data, conteos=conteos)
 
 
@@ -1935,20 +1924,7 @@ def create_recepcion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
         .where(GoodsReceiptLine.gr_id == gr.id)
         .order_by(GoodsReceiptLine.id)
     ).scalars().all()
-    gr.productos = [
-        {
-            "sku_id"        : grl.sku_id,
-            "nombre"        : grl.description or "",
-            "qty_esperada"  : int(grl.quantity_expected or 0),
-            "qty_recibida"  : None,
-            "qty_rechazada" : 0,
-            "qty_cuarentena": 0,
-            "estado"        : "PENDIENTE",
-            "po_line_id"    : grl.po_line_id,
-            "grl_id"        : grl.id,
-        }
-        for grl in _grls_post
-    ]
+    gr.productos = _snapshot_productos(_grls_post)   # B4 T24 r1 (m31): la misma forma que las ediciones
     db.commit()
     db.refresh(gr)
     _log(db, "ENINV", gr.id, gr.numero, "CREATED",
@@ -1975,7 +1951,8 @@ def get_recepcion(eninv_id: int, user: User = Depends(require_roles(*ALL_ERP_ROL
 def _snapshot_productos(gr_lines) -> list:
     """El JSON g.productos de una recepción, regenerado desde sus GoodsReceiptLine (la fuente de verdad): el detalle de la
     recepción (_gr_dict) lo devuelve tal cual y la pantalla arma las líneas con él. Lo usan el PATCH en lote
-    (update_recepcion), el alta y el retiro de líneas y, desde B4 T24 (FINAL-C4-b), el PATCH por línea (update_grl)."""
+    (update_recepcion), el alta y el retiro de líneas, desde B4 T24 (FINAL-C4-b) el PATCH por línea (update_grl) y, desde
+    r1 (m31), las dos altas de recepción (crear_recepcion_desde_pec y create_recepcion): es la única fuente de la forma."""
     return [
         {
             "sku_id"        : grl.sku_id,
@@ -1990,6 +1967,26 @@ def _snapshot_productos(gr_lines) -> list:
         }
         for grl in gr_lines
     ]
+
+
+# B4 T24 r1 (m16): las cantidades del PATCH por línea. Las tres columnas son Numeric(10, 2): el entero más grande es
+# 99.999.999 (sale de la columna, no de una copia a mano).
+_CANTIDADES_DE_LINEA = (("quantity_received", "recibida"), ("quantity_rejected", "rechazada"),
+                        ("quantity_quarantine", "en cuarentena"))
+_TIPO_CANTIDAD_GRL = GoodsReceiptLine.__table__.c.quantity_received.type
+MAX_CANTIDAD_LINEA = 10 ** (_TIPO_CANTIDAD_GRL.precision - _TIPO_CANTIDAD_GRL.scale) - 1
+
+
+def _cantidad_de_linea(body: dict, campo: str, nombre: str):
+    """El valor de una cantidad del PATCH por línea: un entero (no bool) entre 0 y MAX_CANTIDAD_LINEA, o None; si no, 422
+    en español (antes, int() daba 500 con un texto y guardaba un negativo)."""
+    valor = body[campo]
+    if valor is None:
+        return None
+    if isinstance(valor, bool) or not isinstance(valor, int) or not 0 <= valor <= MAX_CANTIDAD_LINEA:
+        tope = f"{MAX_CANTIDAD_LINEA:,}".replace(",", ".")
+        raise HTTPException(422, f"La cantidad {nombre} debe ser un número entero entre 0 y {tope}, o vacía.")
+    return valor
 
 
 @router.patch("/recepciones/{eninv_id}")
@@ -2380,8 +2377,13 @@ def update_grl(
     B4 T24 (FINAL-C4-b): en la misma transacción regenera el JSON g.productos desde las GRL de la recepción, igual que el
     PATCH en lote (_snapshot_productos): el detalle lee ese JSON y, sin esto, mostraba el conteo viejo al recargar.
 
+    B4 T24 r1 (m16): la recepción se lee con FOR UPDATE ANTES de la guarda de BORRADOR (dos PATCH por línea de la misma
+    recepción, o uno y la confirmación, quedan en serie; tras una confirmación sale el 422 de siempre), y las tres
+    cantidades se validan a mano antes de escribir (_cantidad_de_linea: 422 en español, no 500).
+
     """
-    gr = db.query(GoodsReceipt).filter(GoodsReceipt.id == eninv_id).first()
+    cantidades = {campo: _cantidad_de_linea(body, campo, nombre) for campo, nombre in _CANTIDADES_DE_LINEA if campo in body}
+    gr = db.query(GoodsReceipt).filter(GoodsReceipt.id == eninv_id).with_for_update().first()
     if not gr:
         raise HTTPException(404, "Recepcion no encontrada")
     if gr.estado != "BORRADOR":
@@ -2392,13 +2394,12 @@ def update_grl(
     ).scalar_one_or_none()
     if not grl:
         raise HTTPException(404, f"GoodsReceiptLine {grl_id} no encontrada en recepcion {eninv_id}")
-    if "quantity_received" in body:
-        v = body["quantity_received"]
-        grl.quantity_received = None if v is None else int(v)
-    if "quantity_rejected" in body:
-        grl.quantity_rejected = int(body["quantity_rejected"] or 0)
-    if "quantity_quarantine" in body:
-        grl.quantity_quarantine = int(body["quantity_quarantine"] or 0)
+    if "quantity_received" in cantidades:
+        grl.quantity_received = cantidades["quantity_received"]
+    if "quantity_rejected" in cantidades:
+        grl.quantity_rejected = cantidades["quantity_rejected"] or 0
+    if "quantity_quarantine" in cantidades:
+        grl.quantity_quarantine = cantidades["quantity_quarantine"] or 0
     db.flush()
     gr.productos = _snapshot_productos(db.execute(
         select(GoodsReceiptLine).where(GoodsReceiptLine.gr_id == eninv_id).order_by(GoodsReceiptLine.id)
