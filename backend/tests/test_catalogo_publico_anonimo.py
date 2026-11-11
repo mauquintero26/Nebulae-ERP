@@ -287,3 +287,25 @@ def test_el_checkout_anonimo_rechaza_un_sku_que_la_tienda_ya_no_muestra(app_clie
     assert db.query(SaleOrder).count() == antes and nevera
     resp = _pedido_web(app_client, sku=t.p2)   # sin espejo: como hoy
     assert resp.status_code == 201, resp.text
+
+
+
+def test_un_reintento_del_checkout_devuelve_el_pedido_aunque_el_sku_se_despublique(app_client, db, warehouse):
+    """Cierre de r2 (ruling de m7): la regla de publicación del checkout corre DESPUÉS de buscar la idempotencia. Un pedido
+    creado (con el espejo publicado) y reintentado con la misma clave después de despublicar el SKU devuelve el mismo
+    pedido (200, idempotent_replay), no un 409: un reintento de red no puede hacer creer al cliente que falló. Una clave
+    nueva con el SKU ya despublicado sí da 409."""
+    t = _Catalogo(db, warehouse)
+    clave, correo = f"r2-m7-{uuid.uuid4().hex}", f"r2m7-{uuid.uuid4().hex[:8]}@test.nebulae"
+    cuerpo = {"idempotency_key": clave, "customer_email": correo, "customer_name": "Ana Tienda",
+              "customer_phone": "3001234567", "direccion_entrega": "Calle 1 #2-3",
+              "productos": [{"sku_id": t.p1.id, "quantity": 1, "modalidad": "POR_PEDIDO"}]}
+    creado = app_client.post("/api/v1/ecommerce/pedidos", json=cuerpo)
+    assert creado.status_code == 201, creado.text
+    _despublicar_la_nevera(db, t)
+    reintento = app_client.post("/api/v1/ecommerce/pedidos", json=cuerpo)
+    assert reintento.status_code == 200, reintento.text
+    assert reintento.json()["idempotent_replay"] is True
+    assert reintento.json()["data"]["id"] == creado.json()["data"]["id"]
+    nuevo = app_client.post("/api/v1/ecommerce/pedidos", json={**cuerpo, "idempotency_key": f"r2-m7-{uuid.uuid4().hex}"})
+    assert nuevo.status_code == 409, nuevo.text

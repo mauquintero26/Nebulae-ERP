@@ -869,7 +869,7 @@ def create_web_order(body: dict, user: Optional[User] = Depends(get_optional_cur
     - B2.1 D5: correo del cliente con formato valido (422 si no), antes de escribir nada, y recortado.
     - B4 T24 r2 (m7): sin sesión ERP, un SKU que la tienda ya no muestra (la regla de C1: tiene espejo en
       ecommerce_products y ninguno está publicado, _espejo_despublicado) da 409 en español, antes de escribir nada. Un SKU
-      sin espejo sigue como hoy (la regla de BASE). Con sesión, como hoy.
+      sin espejo sigue como hoy (la regla de BASE). Con sesión, como hoy. Cierre de r2: corre después de la idempotencia.
     """
     # B2.1 D5: el resto de la funcion lee body["customer_email"] (huella, cliente y pedido): ya va recortado.
     body["customer_email"] = _correo_de_la_tienda(body.get("customer_email"))
@@ -929,8 +929,6 @@ def create_web_order(body: dict, user: Optional[User] = Depends(get_optional_cur
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Producto SKU '{sku_code or sku_id}' no encontrado en el catalogo."
             )
-        if user is None and _espejo_despublicado(db, sku.sku):   # B4 T24 r2 (m7): la regla de C1
-            raise HTTPException(status.HTTP_409_CONFLICT, f"El producto {sku.sku} ya no está disponible en la tienda.")
 
         db_price = Decimal(str(sku.sale_price or sku.price or 0))
 
@@ -1013,6 +1011,15 @@ def create_web_order(body: dict, user: Optional[User] = Depends(get_optional_cur
                 }
             }
         )
+
+    # B4 T24 r2 (m7) y su cierre (ruling): sin sesión ERP, un SKU que la tienda ya no muestra da 409, DESPUÉS de buscar la
+    # idempotencia (un reintento de un pedido ya creado lo devuelve aunque el SKU se haya despublicado después) y antes de
+    # escribir nada. La validación del precio sigue antes de la idempotencia (es de antes: aparcada para el B5).
+    if user is None:
+        for vl in validated_lines:
+            if _espejo_despublicado(db, vl["sku"].sku):
+                raise HTTPException(status.HTTP_409_CONFLICT,
+                                    f"El producto {vl['sku'].sku} ya no está disponible en la tienda.")
 
     # 6. Resolucion estricta de bodega en el servidor (reglas de fulfillment canonico)
     auth_warehouses, default_wh = _get_authorized_ecommerce_warehouses(db)
