@@ -1493,7 +1493,8 @@ export function TableroKanban<T = unknown>({
       </div>
       <div aria-live="polite" role="status" className="sr-only">{anuncio}</div>
       {arrastre && typeof document !== 'undefined' && createPortal(
-        <div
+        // B4 T24 f2 r1 (m10): el clon del arrastre (sin foco), marcado como todo portal de src.
+        <div data-superficie="arrastre"
           ref={clon}
           aria-hidden="true"
           className="pointer-events-none fixed left-0 top-0 z-[80] opacity-95 drop-shadow-xl"

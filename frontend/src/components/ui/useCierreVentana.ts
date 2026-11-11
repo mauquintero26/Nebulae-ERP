@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MouseEvent, PointerEvent } from 'react';
 import { hayReautenticacionPendiente } from '@/lib/api';
 import {
-  abrirCapa, atrapaTab, cerrarCapa, cierraConClicFuera, cierraConEsc, esCapaDeArriba, lugarDelFocoDe, siguienteFocoAtrapado,
+  abrirCapa, atrapaTab, cerrarCapa, cierraConClicFuera, cierraConEsc, esCapaDeArriba, lugarDelFocoDe, recuperaFocoAlEntrar,
+  siguienteFocoAtrapado,
 } from '@/lib/tabla';
 
 /** Las capas abiertas (Modal y Drawer), de abajo arriba (abrirCapa, cerrarCapa y esCapaDeArriba de lib/tabla.js). */
@@ -85,9 +86,19 @@ export function useCierreVentana(onClose: () => void, bloqueado: boolean) {
       e.preventDefault();
       cerrar.current();
     };
+    // B4 T24 f2 r1 (m9): el foco que LLEGA detrás (Mayús+Tab desde el Copilot, Tab desde la barra del navegador) vuelve al panel en el
+    // acto (recuperaFocoAlEntrar). Los portales que nacen dentro de una capa (MenuFila…) llevan data-superficie: cuentan como «encima».
+    const alEnfocar = () => {
+      if (!panel || !recuperaFocoAlEntrar({
+        arriba: esCapaDeArriba(capas, capa), reautenticando: hayReautenticacionPendiente(), foco: lugarDelFoco(panel),
+      })) return;
+      (panel.querySelector<HTMLElement>(ENFOCABLES) ?? panel).focus({ preventScroll: true });
+    };
     document.addEventListener('keydown', alTeclear);
+    document.addEventListener('focusin', alEnfocar);
     return () => {
       document.removeEventListener('keydown', alTeclear);
+      document.removeEventListener('focusin', alEnfocar);
       capas = cerrarCapa(capas, capa);
       if (abridor && abridor.isConnected) abridor.focus({ preventScroll: true });
     };

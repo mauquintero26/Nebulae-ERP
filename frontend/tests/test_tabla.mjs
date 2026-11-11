@@ -3256,7 +3256,8 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
   assert.match(sesion, /ref=\{refVentana\}\s+className="fixed inset-0 z-\[100\][^"]*"\s+role="dialog"\s+aria-modal="true"\s+aria-labelledby="sesion-cerrada-titulo"/);
   assert.ok(sesion.includes('<h3 id="sesion-cerrada-titulo"'), 'el título que la nombra');
   assert.ok(!/querySelectorAll|onKeyDown=\{alTeclearVentana\}/.test(sesion), 'sin su copia del Tab ni su selector propio');
-  assert.match(hook, /document\.removeEventListener\('keydown', alTeclear\);\s*capas = cerrarCapa\(capas, capa\);/);
+  // B4 T24 f2 r1 (m9, D27): al cerrar se quitan los dos oyentes (keydown y focusin) antes de sacar la capa de la pila.
+  assert.match(hook, /document\.removeEventListener\('keydown', alTeclear\);\s*document\.removeEventListener\('focusin', alEnfocar\);\s*capas = cerrarCapa\(capas, capa\);/);
   assert.match(leer('components/ui/Modal.tsx'), /ref=\{refPanel\}\s+tabIndex=\{-1\}/);
   const drawer = leer('components/ui/Drawer.tsx');
   assert.match(drawer, /ref=\{refPanel\} tabIndex=\{-1\} role="dialog" aria-modal="true"/);
@@ -3325,7 +3326,8 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
   // su cierreExterno={false}: se cierra solo con sus botones. El stopPropagation de la envoltura solo corta los oyentes de window y de
   // React que estén por encima; no es la protección (lo mismo que dice el comentario de selector-cliente.tsx).
   const selector = leer('app/dashboard/ventas/solicitud/selector-cliente.tsx');
-  assert.match(selector, /<div onKeyDown=\{e => \{ if \(e\.key === 'Escape'\) e\.stopPropagation\(\); \}\}>/);
+  // B4 T24 f2 r1 (m10, D27): la raíz del portal lleva su marca (data-superficie), y el Esc sigue cortándose aquí.
+  assert.match(selector, /<div data-superficie="ventana" onKeyDown=\{e => \{ if \(e\.key === 'Escape'\) e\.stopPropagation\(\); \}\}>/);
   assert.ok(!/e\.key === 'Escape'\) \{ e\.stopPropagation\(\); if \(!saving\) onClose\(\);/.test(selector), 'el Esc ya no cierra el alta');
   // Las de solo lectura y las confirmaciones conservan Esc y el fondo.
   for (const ruta of ['app/dashboard/inventario/kardex/page.tsx', 'app/dashboard/inventario/traslados/page.tsx', 'components/ui/Avisos.tsx']) {
@@ -3346,7 +3348,11 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
   // está dentro del panel). Abrir no decide por el usuario.
   const propagar = leer('app/dashboard/ventas/cotizacion/cotizacion-client.tsx');
   assert.match(propagar, /<Button color="indigo" disabled=\{saving\} onClick=\{onConfirm\}>Sí, actualizar también el pedido<\/Button>\s*(?:\{\/\*[\s\S]*?\*\/\}\s*)?<Button variant="secondary" autoFocus disabled=\{saving\} onClick=\{onCancel\}>Solo guardar la cotización<\/Button>/);
-  assert.equal((propagar.match(/\sautoFocus[\s>=]/g) ?? []).length, 1, 'un solo autoFocus en el archivo: el de «Solo guardar la cotización»');
+  // B4 T24 f2 r1 (m12 = m40, D27): la cuenta va DENTRO de PropagarPvenConfirm (otra ventana del archivo puede tener su autoFocus);
+  // la regex de arriba fija cuál.
+  const cuerpoPropagar = propagar.slice(propagar.indexOf('export function PropagarPvenConfirm('), propagar.indexOf('\nexport function ', propagar.indexOf('export function PropagarPvenConfirm(') + 10));
+  assert.ok(cuerpoPropagar.length > 200, 'el cuerpo de PropagarPvenConfirm');
+  assert.equal((cuerpoPropagar.match(/\sautoFocus[\s>=]/g) ?? []).length, 1, 'un solo autoFocus en PropagarPvenConfirm: el de «Solo guardar la cotización»');
   assert.ok(hook.includes('if (panel && !panel.contains(document.activeElement)) {'), 'el hook no pisa el autoFocus de adentro');
 }
 
@@ -3412,7 +3418,8 @@ console.log('--- TEST T24-g (B4 T24: F42, F43 y F44): el aviso del menú, el enc
   const crm = leer('app/dashboard/crm/page.tsx');
   assert.match(crm, /<div className=\{`flex-1 min-h-0 overflow-y-auto p-5 \$\{estado\.modo === 'lista' \? RESERVA_BOTON_IA : ''\}`\}>/);
   assert.match(crm, /<div className=\{`flex-1 min-h-0 overflow-y-auto p-5 \$\{RESERVA_BOTON_IA\}`\}>\s*<PanelAnalisisPerezoso/);
-  assert.match(leer('components/GlobalAIChat.tsx'), /className="fixed bottom-6 right-6 w-14 h-14 /, 'el botón no se mueve');
+  // B4 T24 f2 r1 (m38, D27): la clase pasa a plantilla (lleva ${FOCO}); el botón sigue en el mismo sitio.
+  assert.match(leer('components/GlobalAIChat.tsx'), /className=\{`fixed bottom-6 right-6 w-14 h-14 /, 'el botón no se mueve');
 }
 
 console.log('--- TEST T24-h (B4 T24, FINAL-m11): accionModo traduce el filtro de estados entre la columna del tablero y los estados de la lista ---');
@@ -3591,6 +3598,60 @@ console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetro
 console.log('✓ T4C: sesión, estado armado, partes de columnas, URL de la lista, carga vigente, estado de la lista y modo cliente.');
 console.log('✓ T4C r1: orden rechazado, estados en la sesión, escrituras del usuario del render, esperar y vueltas.');
 console.log('✓ T4C r2: sin filas de otra cuenta, vuelta al orden condicional y atendida, tope de espera y cables vigilados.');
+console.log('--- B4 T24 f2 r1 (m9 + m10, m38): el foco que LLEGA detrás vuelve a la capa; los portales se marcan; el botón del Copilot tiene nombre ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const { recuperaFocoAlEntrar } = TABLA;
+  assert.equal(typeof recuperaFocoAlEntrar, 'function', 'recuperaFocoAlEntrar existe');
+  // La misma regla de atrapaTab para lo que LLEGA (focusin): solo la capa de arriba, sin re-ingreso pendiente, y solo si el foco cayó
+  // DETRÁS (la página tapada). Encima (el Copilot, los avisos, un portal marcado, el re-ingreso), el panel, la pila o el body: nada.
+  assert.equal(recuperaFocoAlEntrar({ arriba: true, foco: 'detras' }), true, 'Mayús+Tab desde el Copilot cae detrás: vuelve');
+  for (const foco of ['panel', 'body', 'pila', 'encima', 'fuera', undefined]) {
+    assert.equal(recuperaFocoAlEntrar({ arriba: true, foco }), false, String(foco));
+  }
+  assert.equal(recuperaFocoAlEntrar({ arriba: false, foco: 'detras' }), false, 'una capa de abajo no');
+  assert.equal(recuperaFocoAlEntrar({ arriba: true, reautenticando: true, foco: 'detras' }), false, 'con el re-ingreso pendiente, no');
+  // El hook: un oyente focusin en document mientras la capa está abierta (se quita al cerrar, antes de devolver el foco al abridor).
+  const hook = leer('components/ui/useCierreVentana.ts');
+  assert.match(hook, /const alEnfocar = \(\) => \{\s*if \(!panel \|\| !recuperaFocoAlEntrar\(\{\s*arriba: esCapaDeArriba\(capas, capa\), reautenticando: hayReautenticacionPendiente\(\), foco: lugarDelFoco\(panel\),\s*\}\)\) return;\s*\(panel\.querySelector<HTMLElement>\(ENFOCABLES\) \?\? panel\)\.focus\(\{ preventScroll: true \}\);\s*\};/);
+  assert.match(hook, /document\.addEventListener\('focusin', alEnfocar\);/);
+  assert.match(hook, /document\.removeEventListener\('keydown', alTeclear\);\s*document\.removeEventListener\('focusin', alEnfocar\);\s*capas = cerrarCapa\(capas, capa\);\s*if \(abridor && abridor\.isConnected\) abridor\.focus/);
+  // m10 (requisito previo): todo portal de src (createPortal) se marca con data-superficie en su raíz: cuenta como «encima» (un menú
+  // abierto dentro de una ventana no pierde el foco). Uno nuevo sin la marca falla aquí.
+  const { readdirSync, statSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const raiz = fileURLToPath(new URL('../src/', import.meta.url));
+  const archivos = [];
+  const recorrer = (dir) => {
+    for (const n of readdirSync(dir)) {
+      const p = join(dir, n);
+      if (statSync(p).isDirectory()) recorrer(p);
+      else if (/\.tsx?$/.test(n)) archivos.push(p);
+    }
+  };
+  recorrer(raiz);
+  const portales = [];
+  for (const p of archivos) {
+    const f = readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
+    for (const m of f.matchAll(/createPortal\(/g)) {
+      if (/import \{[^}]*$/.test(f.slice(Math.max(0, m.index - 40), m.index))) continue;
+      const resto = f.slice(m.index);
+      const marca = resto.match(/^createPortal\(\s*(?:\/\/[^\n]*\n\s*)*<(\w+)\s+data-superficie="([a-z-]+)"/);
+      portales.push([p.slice(raiz.length).replace(/\\/g, '/'), marca ? marca[2] : null]);
+    }
+  }
+  assert.deepEqual(portales.filter(([, marca]) => marca === null), [], 'cada createPortal de src con data-superficie en su raíz');
+  assert.deepEqual(portales.map(([archivo, marca]) => `${archivo}:${marca}`).sort(), [
+    'app/dashboard/ventas/solicitud/selector-cliente.tsx:ventana', 'components/tabla/TablaEstandar.tsx:arrastre',
+    'components/ui/Kanban.tsx:arrastre', 'components/ui/MenuFila.tsx:menu',
+  ], 'los cuatro portales de hoy y su marca');
+  // m38: el botón flotante del Copilot tiene nombre accesible y el token de foco.
+  const chat = leer('components/GlobalAIChat.tsx');
+  assert.match(chat, /<button\s+data-superficie="copilot"\s+onClick=\{\(\) => setIsOpen\(true\)\}\s+aria-label="Abrir Nebulae Copilot"\s+className=\{`fixed bottom-6 right-6 [^`]*\$\{FOCO\}`\}/);
+  assert.match(chat, /import \{ FOCO \} from '@\/lib\/design-system';/);
+}
+
 console.log('✓ T4D: umbral, ancho al contenido, ajustar al ancho, geometría, destino, orden, cuerpo, grupos, selección, barra y el fuente de los componentes.');
 console.log('✓ T4D r1: anchoAlSoltar, estado del total, títulos recortados, filtros a la vista, paneles, Esc de la pantalla completa y los cables de r1.');
 console.log('✓ T4D r2: umbral del asa, la flexible guarda lo que se ve, zona táctil, filtro que se cierra, casilla en el recorte, total obligatorio y JSDoc del memo.');

@@ -1013,6 +1013,8 @@ export default function SolicitudClient() {
   const [cancelRazon,setCancelRazon]=useState('');
   // B4 T24 (FINAL-m32): el id que une la etiqueta «Motivo de la cancelación» con su campo (nombre accesible).
   const idMotivo = useId();
+  // B4 T24 f2 r1 (m34): el «llevas N» nombra el campo (aria-describedby) mientras el motivo no alcanza.
+  const idAyudaMotivo = `${idMotivo}-ayuda`;
   const [cancelling,setCancelling]=useState(false);
   const [cancelErrores,setCancelErrores]=useState<string[]>([]);
   // Marcadas que no se envian a /cancelar (ya estan en la Papelera o son de Soporte): se informan, no se llaman.
@@ -1737,10 +1739,11 @@ export default function SolicitudClient() {
               rows={3}
               maxLength={500}
               placeholder="Describe el motivo de la cancelación..."
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-red-200 outline-none"
+              aria-describedby={motivoValido(cancelRazon) ? undefined : idAyudaMotivo}
+              className={`w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:border-red-300 ${FOCOS.red}`}
               autoFocus
             />
-            {!motivoValido(cancelRazon)&&<p className="text-xs text-red-500 mt-1">El motivo es obligatorio. Mínimo {MINIMO_MOTIVO} caracteres (llevas {largoDelMotivo(cancelRazon)}).</p>}
+            {!motivoValido(cancelRazon)&&<p id={idAyudaMotivo} className="text-xs text-red-500 mt-1">El motivo es obligatorio. Mínimo {MINIMO_MOTIVO} caracteres (llevas {largoDelMotivo(cancelRazon)}).</p>}
             {cancelErrores.length>0&&(
               <div className="mt-3 bg-rose-50 border border-rose-200 rounded-xl p-3 space-y-1.5">
                 <p className="text-xs font-black text-rose-700">No se pudo cancelar:</p>

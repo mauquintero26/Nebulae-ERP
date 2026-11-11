@@ -167,7 +167,9 @@ export function MenuFila({
         <Ellipsis size={16} aria-hidden="true" />
       </button>
       {abierto && createPortal(
-        <div
+        // B4 T24 f2 r1 (m10): el menú va en un portal en <body>; data-superficie lo cuenta como «encima» de una ventana (useCierreVentana
+        // no le quita el foco). Su Tab lo atiende el menú (cierra y vuelve al ⋯).
+        <div data-superficie="menu"
           ref={menu}
           id={idMenu}
           role="menu"

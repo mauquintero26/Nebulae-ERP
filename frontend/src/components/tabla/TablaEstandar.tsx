@@ -903,7 +903,8 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
         </div>
       )}
       {moviendo && typeof document !== 'undefined' && createPortal(
-        <>
+        // B4 T24 f2 r1 (m10): el fantasma y la línea del arrastre de columnas (sin foco), marcados como todo portal de src.
+        <div data-superficie="arrastre">
           <div
             ref={fantasma}
             aria-hidden="true"
@@ -919,7 +920,7 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
               style={{ left: moviendo.linea.x - 1, top: moviendo.linea.top, height: moviendo.linea.alto }}
             />
           )}
-        </>,
+        </div>,
         document.body,
       )}
     </div>

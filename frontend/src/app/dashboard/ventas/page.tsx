@@ -1510,9 +1510,11 @@ export default function VentasHub() {
           </ul>
           <div>
             <label htmlFor={idMotivo} className="block text-xs font-bold text-slate-600 mb-1">Motivo (mínimo {MINIMO_MOTIVO} caracteres)</label>
+            {/* B4 T24 f2 r1 (m34): el foco de ModalMotivo (FOCOS.red) y el foco inicial en el campo. */}
             <textarea id={idMotivo} value={motivoCancelacion} onChange={e=>setMotivoCancelacion(e.target.value)} rows={3} disabled={cancelando}
+              autoFocus
               placeholder="Ej.: El cliente desistió de la compra"
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200 focus:border-rose-400"/>
+              className={`w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-red-300 ${FOCOS.red}`}/>
           </div>
         </Modal>
       )}

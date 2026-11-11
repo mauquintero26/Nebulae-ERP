@@ -2293,6 +2293,19 @@ export function atrapaTab({ arriba, reautenticando = false, foco }) {
 }
 
 /**
+ * B4 T24 f2 r1 (m9 de la revisión r0 de f2, aditivo): si la capa recupera el foco que LLEGA (focusin) a otro sitio: solo la de arriba, sin
+ * una re-autenticación pendiente, y solo si cayó DETRÁS (la página tapada: el Sidebar, el SubNav, la tabla). Así el paso que lleva el
+ * foco detrás (Mayús+Tab desde el primer control del Copilot, o Tab desde la barra del navegador) vuelve al panel en el acto, no con la
+ * tecla siguiente. Encima (el Copilot, los avisos, un portal marcado con data-superficie, el re-ingreso), el panel, la pila o el body:
+ * nada.
+ * @param {{arriba: boolean, reautenticando?: boolean, foco?: LugarDelFoco | 'fuera'}} entrada
+ * @returns {boolean}
+ */
+export function recuperaFocoAlEntrar({ arriba, reautenticando = false, foco }) {
+  return Boolean(arriba) && !reautenticando && foco === 'detras';
+}
+
+/**
  * @typedef {'panel' | 'body' | 'pila' | 'encima' | 'detras'} LugarDelFoco
  *   B4 T24 f2 (m9): dónde está el foco respecto de una capa de la pila (Modal y Drawer).
  */

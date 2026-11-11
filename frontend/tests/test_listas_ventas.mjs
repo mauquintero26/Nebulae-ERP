@@ -1539,7 +1539,20 @@ console.log('--- B4 T24 (FINAL-m32): las ventanas de motivo en lote (Hub y Solic
   // Solicitudes: la guarda, el botón y el «llevas N» (largoDelMotivo, la cuenta de motivoValido).
   assert.ok(sc.includes("if(cancelTarget.length===0||!motivoValido(cancelRazon)){showToast(`El motivo es obligatorio (mínimo ${MINIMO_MOTIVO} caracteres)`,'err');return;}"));
   assert.match(sc, /disabled=\{!motivoValido\(cancelRazon\)\}/);
-  assert.ok(sc.includes('{!motivoValido(cancelRazon)&&<p className="text-xs text-red-500 mt-1">El motivo es obligatorio. Mínimo {MINIMO_MOTIVO} caracteres (llevas {largoDelMotivo(cancelRazon)}).</p>}'));
+  // B4 T24 f2 r1 (m34, D27): el «llevas N» lleva su id (el textarea lo nombra con aria-describedby mientras falta).
+  assert.ok(sc.includes('{!motivoValido(cancelRazon)&&<p id={idAyudaMotivo} className="text-xs text-red-500 mt-1">El motivo es obligatorio. Mínimo {MINIMO_MOTIVO} caracteres (llevas {largoDelMotivo(cancelRazon)}).</p>}'));
+  // r1 (m34): el foco de los dos campos es el de ModalMotivo (FOCOS.red, nunca un ring -200 ni outline-none a mano); el del Hub arranca
+  // en el campo (autoFocus, como ModalMotivo y Solicitudes).
+  const campo = (codigo) => codigo.slice(codigo.indexOf('<textarea', codigo.indexOf('id={idMotivo}') - 400), codigo.indexOf('/>', codigo.indexOf('id={idMotivo}')));
+  for (const [nombre, codigo] of [['Hub', hub], ['Solicitudes', sc]]) {
+    const c = campo(codigo);
+    assert.ok(c.includes('id={idMotivo}'), `${nombre}: el campo`);
+    assert.ok(c.includes('${FOCOS.red}'), `${nombre}: FOCOS.red`);
+    assert.ok(!/focus:ring-\w+-200|outline-none/.test(c), `${nombre}: sin el anillo a mano`);
+    assert.match(c, /\sautoFocus[\s>=]/, `${nombre}: arranca en el campo`);
+  }
+  assert.ok(campo(sc).includes('aria-describedby={motivoValido(cancelRazon) ? undefined : idAyudaMotivo}'), 'Solicitudes: el «llevas N» nombra el campo');
+  assert.match(sc, /const idAyudaMotivo = `\$\{idMotivo\}-ayuda`;/);
 }
 
 console.log('--- B4 T24 f2 r1 (m14, m18): Pedidos de venta y su detalle ofrecen cancelar solo a quien puede, con el rol después de montar ---');
