@@ -1,12 +1,12 @@
 'use client';
 
-import { FOCO } from '@/lib/design-system';
 import { useEffect, useId, useRef, useState } from 'react';
 import {
   AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, CircleDashed, HelpCircle, RotateCw, SlidersHorizontal,
 } from 'lucide-react';
 import { Contador } from '@/components/ui/Contador';
 import { usePreferencia } from '@/components/ui/usePreferencia';
+import { FOCO } from '@/lib/design-system';
 import {
   alternarFiltroSemaforo, estadoDeFranja, estadoNumeroFranja, opcionesSemaforo, semaforoDeFranja,
 } from '@/lib/flujo';

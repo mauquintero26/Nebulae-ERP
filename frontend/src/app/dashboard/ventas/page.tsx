@@ -1278,7 +1278,7 @@ export default function VentasHub() {
               const opciones = [...ESTADOS_VEN_MANUALES, 'FACTURADO'].filter(e => destinos.has(e));
               return (
                 <select value="" onChange={e=>handleBulkChangeEstado(e.target.value)} disabled={venMarcados.length === 0 || opciones.length === 0}
-                  className="bg-slate-800 border border-slate-600 text-white text-xs rounded-xl px-3 py-1.5 outline-none disabled:opacity-50 disabled:cursor-not-allowed">
+                  className={`bg-slate-800 border border-slate-600 text-white text-xs rounded-xl px-3 py-1.5 ${FOCOS.blanco} disabled:opacity-50 disabled:cursor-not-allowed`}>
                   <option value="" disabled>Cambiar estado de pedidos ({venMarcados.length})…</option>
                   {opciones.map(est => <option key={est} value={est}>{ETIQUETA_ESTADO_VEN[est] || est}</option>)}
                 </select>

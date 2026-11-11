@@ -123,6 +123,12 @@ export const FOCO = FOCOS.indigo;
  */
 export const FOCO_DENTRO = 'outline-indigo-700 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-indigo-700';
 
+/**
+ * B4 T24 r1 (m19): el foco de un campo que lo recibe por dentro (un input de fecha: con focus y focus-within, porque el
+ * selector nativo no cumple :focus-visible). El mismo outline índigo -700.
+ */
+export const FOCO_CAMPO = 'outline-indigo-700 focus:outline-2 focus:outline-offset-2 focus:outline-indigo-700 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-indigo-700';
+
 /** Nav pills del sub-módulo (sticky top) */
 export const NAV = {
   wrapper: 'bg-white border-b border-gray-200 px-6 py-2 flex items-center gap-1 sticky top-0 z-30 shadow-sm overflow-x-auto',

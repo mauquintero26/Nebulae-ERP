@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
+import { FOCOS } from '@/lib/design-system';
 import { avisoDeFuente } from '@/lib/avisos';
 import { accesoCopilot } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
@@ -59,7 +60,7 @@ function AvisoFuente({ error, texto, onReintentar }: { error: unknown; texto: st
     <p role="alert" className="flex flex-wrap items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
       {textoAvisoFuente(error, texto)}
       <button type="button" onClick={onReintentar}
-        className="rounded font-bold underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700">
+        className={`rounded font-bold underline ${FOCOS.indigo}`}>
         Reintentar
       </button>
     </p>
@@ -217,7 +218,7 @@ export default function DashboardGeneral() {
                   : 'RADAR OPERATIVO: calculando…'}
               {ventas.error ? (
                 <button type="button" onClick={ventas.recargar}
-                  className="ml-2 rounded font-bold underline hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
+                  className={`ml-2 rounded font-bold underline hover:text-white ${FOCOS.blanco}`}>
                   Reintentar
                 </button>
               ) : null}
@@ -256,7 +257,7 @@ export default function DashboardGeneral() {
                   type="button"
                   aria-pressed={periodo === p.clave}
                   onClick={() => setPeriodo(p.clave)}
-                  className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700 ${
+                  className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${FOCOS.indigo} ${
                     periodo === p.clave ? 'bg-slate-800 text-white shadow' : 'text-slate-600 hover:text-slate-800 hover:bg-slate-50'
                   }`}
                 >
@@ -416,7 +417,7 @@ export default function DashboardGeneral() {
                 <div role="alert" className="flex flex-wrap items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
                   {avisoEmbudo.texto}
                   <button type="button" onClick={() => { if (avisoEmbudo.puedeReintentar) flujo.recargar(); }} aria-disabled={avisoEmbudo.reintentando || undefined}
-                    className="rounded font-bold underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700">
+                    className={`rounded font-bold underline ${FOCOS.indigo}`}>
                     {avisoEmbudo.boton}
                   </button>
                 </div>

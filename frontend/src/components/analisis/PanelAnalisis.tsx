@@ -1,12 +1,12 @@
 'use client';
 
-import { FOCO } from '@/lib/design-system';
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Lock, RefreshCw, Search } from 'lucide-react';
 import type { AccentColor } from '@/components/ui/colors';
 import { usePreferenciaParte } from '@/components/ui/usePreferencia';
 // El usuario del token (el tope de espera de las preferencias y las escrituras son suyos, como useEstadoTabla de T4C r2).
 import { usuarioDeLaSesion } from '@/components/tabla/usuarioDeLaSesion';
+import { FOCO } from '@/lib/design-system';
 import { esperarPreferencias, listoConTope } from '@/lib/tabla';
 import {
   ASISTENTE_POR_DEFECTO, ESPERA_PRODUCTO_MS, GRILLA_ANALISIS, PREFERENCIA_ANALISIS_POR_DEFECTO, aceptaReintento,

@@ -1,9 +1,9 @@
 'use client';
 
-import { FOCO } from '@/lib/design-system';
 import { useId, useMemo, useState } from 'react';
 import { Doughnut } from 'react-chartjs-2';
 import type { ChartData, ChartOptions } from 'chart.js';
+import { FOCO } from '@/lib/design-system';
 import {
   bloqueSinDatos, colorSegmento, formatearValor, resumenAccesible, tamanoCentroDona, valoresConSigno,
 } from '@/lib/analisis';

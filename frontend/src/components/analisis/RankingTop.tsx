@@ -1,8 +1,8 @@
 'use client';
 
-import { FOCO } from '@/lib/design-system';
 import { useId } from 'react';
 import type { AccentColor } from '@/components/ui/colors';
+import { FOCO } from '@/lib/design-system';
 import { TOPS, bloqueSinDatos, colorDeAcento, formatearValor, proporcionesRanking } from '@/lib/analisis';
 import type { Etiquetar, FormatoAnalisis, RankingAnalisis } from '@/lib/analisis';
 

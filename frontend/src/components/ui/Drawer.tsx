@@ -1,6 +1,7 @@
 'use client';
 import { X } from 'lucide-react';
 import { useCierreVentana } from './useCierreVentana';
+import { FOCO } from '@/lib/design-system';
 
 /** Panel lateral deslizante (detalle de un registro de una tabla). Mismo
  * ancho/blur/z-index en todo el proyecto; header y footer son slots libres
@@ -25,7 +26,7 @@ export function Drawer({
       <div className={`w-full ${widthCls} bg-white h-full shadow-2xl border-l border-slate-200 flex flex-col`}>
         <div className="px-6 py-5 border-b border-slate-200 flex items-start justify-between bg-slate-50/70">
           {header}
-          <button type="button" onClick={onClose} aria-label="Cerrar" className="p-2 text-slate-400 hover:bg-slate-100 rounded-full shrink-0">
+          <button type="button" onClick={onClose} aria-label="Cerrar" className={`p-2 text-slate-400 hover:bg-slate-100 rounded-full shrink-0 ${FOCO}`}>
             <X size={18} />
           </button>
         </div>

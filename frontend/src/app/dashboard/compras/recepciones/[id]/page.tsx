@@ -1,6 +1,5 @@
 "use client";
 
-import { FOCOS } from '@/lib/design-system';
 import { createContext, useContext, useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import type { CSSProperties } from 'react';
 import {
@@ -10,6 +9,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
+import { FOCO_DENTRO } from '@/lib/design-system';
 import { apiFetch } from '@/lib/api';
 import { Badge, Button, useAvisos } from '@/components/ui';
 // B4 T16A (TABLA-compras punto 12): la tabla del conteo en la tabla estándar, modo simple (se estira, se mueve y se recuerda;
@@ -27,7 +27,7 @@ type LineaConteo = { idx: number; grl_id?: number; sku_id?: number | string | nu
 /** Lo que las celdas editables le piden a la página (por un contexto, para que las columnas sean una constante, D40 y D41). */
 type ControlConteo = { editable: boolean; actualizar: (idx: number, valor: number) => void };
 const ConteoContext = createContext<ControlConteo | null>(null);
-const FOCO_VISIBLE = FOCOS.emerald;
+// B4 T24 r1 (C5): los campos van dentro de la celda (un span truncado): el foco, hacia adentro (FOCO_DENTRO).
 
 /** Cant. Recibida: el campo de conteo (editable solo con la recepción en BORRADOR). */
 function CeldaRecibida({ l }: { l: LineaConteo }) {
@@ -41,7 +41,7 @@ function CeldaRecibida({ l }: { l: LineaConteo }) {
       disabled={!control?.editable}
       aria-label={`Cantidad recibida de ${l.nombre}`}
       onChange={(e) => control?.actualizar(l.idx, parseInt(e.target.value) || 0)}
-      className={`w-full bg-white border rounded-lg px-2 py-2 text-center font-black transition-colors disabled:bg-slate-100 disabled:text-slate-500 ${FOCO_VISIBLE} ${
+      className={`w-full bg-white border rounded-lg px-2 py-2 text-center font-black transition-colors disabled:bg-slate-100 disabled:text-slate-500 ${FOCO_DENTRO} ${
         hayDiferencia && l.qty_recibida !== 0 ? 'border-amber-400 text-amber-800' : 'border-slate-300 focus:border-emerald-500 text-emerald-700'
       }`}
     />
@@ -64,7 +64,7 @@ function CeldaObservaciones({ l }: { l: LineaConteo }) {
       disabled={!control?.editable}
       placeholder="Ej: Cajas dañadas..."
       aria-label={`Observaciones físicas de ${l.nombre}`}
-      className={`w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-500 ${FOCO_VISIBLE}`}
+      className={`w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-500 ${FOCO_DENTRO}`}
     />
   );
 }

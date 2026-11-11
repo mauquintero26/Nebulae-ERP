@@ -2942,10 +2942,12 @@ console.log('--- TEST T24-FOCO (B4 T24: FINAL-C6, FINAL-m25 y F41): el foco visi
     'components/tabla/Paginacion.tsx', 'components/ui/Kanban.tsx', 'components/ui/MenuFila.tsx', 'components/ui/ConmutadorVista.tsx',
     'components/ui/TarjetaKpi.tsx', 'components/ui/AvisoFuente.tsx',
     // Medido en el banco (Tab real): el botón «Contraer Menú» del menú lateral tenía focus:outline-none (0:1).
-    'components/Sidebar.tsx'];
+    'components/Sidebar.tsx',
+    // r1 (m3, m20, m24): ModalMotivo (outline-none + ring-red-200), la X del Modal y del Drawer.
+    'components/ui/ModalMotivo.tsx', 'components/ui/Modal.tsx', 'components/ui/Drawer.tsx'];
   for (const ruta of PIEZAS) {
     const c = codigo(leer(ruta));
-    assert.match(c, /import \{[^}]*\bFOCOS?\b[^}]*\} from '@\/lib\/design-system';/, `${ruta}: importa el token`);
+    assert.match(c, /import \{[^}]*\bFOCO(?:S|_DENTRO)?\b[^}]*\} from '@\/lib\/design-system';/, `${ruta}: importa el token`);
     assert.ok(!/focus(?:-visible)?:ring-[a-z]+-[123]00\b/.test(c), `${ruta}: sin anillo de foco -100/-300`);
     assert.ok(!/\boutline-none\b/.test(c), `${ruta}: sin outline-none`);
   }
@@ -2957,7 +2959,8 @@ console.log('--- TEST T24-FOCO (B4 T24: FINAL-C6, FINAL-m25 y F41): el foco visi
     'app/dashboard/ventas/cotizacion/cotizacion-client.tsx': 'indigo', 'app/dashboard/ventas/venta/venta-client.tsx': 'indigo',
     'app/dashboard/compras/page.tsx': 'purple', 'app/dashboard/compras/pedidos/page.tsx': 'purple',
     'app/dashboard/compras/lista-compras/page.tsx': 'purple', 'app/dashboard/compras/recepciones/page.tsx': 'teal',
-    'app/dashboard/compras/recepciones/[id]/page.tsx': 'emerald', 'app/dashboard/compras/transito/page.tsx': 'blue',
+    // r1 (C5): recepciones/[id] ya no tiene FOCO_VISIBLE: sus dos campos usan FOCO_DENTRO (abajo).
+    'app/dashboard/compras/transito/page.tsx': 'blue',
     'app/dashboard/compras/traslados/page.tsx': 'orange', 'app/dashboard/crm/page.tsx': 'indigo',
     'app/dashboard/ecommerce/page.tsx': 'purple', 'app/dashboard/inventario/page.tsx': 'indigo',
   };
@@ -2976,8 +2979,30 @@ console.log('--- TEST T24-FOCO (B4 T24: FINAL-C6, FINAL-m25 y F41): el foco visi
     assert.match(f, /import \{[^}]*\bFOCO\b[^}]*\} from '@\/lib\/design-system';/, `${ruta}: importa FOCO`);
   }
   const piezasInv = leer('app/dashboard/inventario/piezas-inventario.tsx');
-  assert.ok(!/export const FOCOS = \{/.test(piezasInv), 'piezas-inventario: sin su copia de FOCOS');
-  assert.match(piezasInv, /^export \{ FOCOS \};$/m, 'piezas-inventario reexporta el FOCOS común');
+  // r1 (m25, m40): FOCOS viene de '@/lib/design-system' (un solo import, con el tipo) y no hay ninguna const FOCOS.
+  assert.ok(!/\bconst FOCOS\s*=/.test(piezasInv), 'piezas-inventario: sin su copia de FOCOS');
+  assert.match(piezasInv, /^import \{ FOCOS, TABLE, type AcentoFoco \} from '@\/lib\/design-system';$/m);
+  assert.equal((piezasInv.match(/from '@\/lib\/design-system'/g) ?? []).length, 1, 'un solo import de design-system');
+  assert.match(piezasInv, /^export \{ FOCOS \};$/m, 'piezas-inventario reexporta el FOCOS común (lo usan las pantallas de Inventario)');
+  for (const ruta of ['app/dashboard/ecommerce/page.tsx', 'app/dashboard/finanzas/gastos/page.tsx']) {
+    assert.match(leer(ruta), /^import \{[^}]*\bFOCOS\b[^}]*\} from '@\/lib\/design-system';$/m, `${ruta}: FOCOS de design-system`);
+    assert.ok(!/\bFOCOS\b[^}]*\} from '\.\.?\/[^']*piezas-inventario'/.test(leer(ruta)), `${ruta}: no de la reexportación`);
+  }
+  // r1 (C5): el ⋯ de MenuFila (dentro del span truncado de la celda) dibuja el foco hacia ADENTRO; también los campos de
+  // recepciones/[id] (dentro de la celda).
+  assert.match(codigo(leer('components/ui/MenuFila.tsx')), /hover:text-slate-700 \$\{FOCO_DENTRO\} aria-expanded:bg-slate-100/);
+  assert.equal((leer('app/dashboard/compras/recepciones/[id]/page.tsx').match(/\$\{FOCO_DENTRO\}/g) ?? []).length, 2);
+  // r1 (m3, m19, m20, m24): ninguna copia a mano del outline del foco fuera de design-system.ts; el campo de fecha usa FOCO_CAMPO.
+  const copias = [];
+  const recorrer = (rel) => { for (const n of readdirSync(new URL(`../src/${rel}`, import.meta.url))) { const r = `${rel}${n}`;
+    if (statSync(new URL(`../src/${r}`, import.meta.url)).isDirectory()) recorrer(`${r}/`);
+    else if (/\.(tsx?|jsx?)$/.test(n) && r !== 'lib/design-system.ts' && /(?:focus|focus-visible|focus-within):outline-(?:2|offset|[a-z]+-\d00|white)/.test(leer(r))) copias.push(r); } };
+  recorrer('');
+  assert.deepEqual(copias.filter((r) => !r.startsWith('app_mocks_backup/')), [], 'copias del foco a mano');
+  assert.match(ds, /^export const FOCO_CAMPO = 'outline-indigo-700 focus:outline-2 focus:outline-offset-2 focus:outline-indigo-700 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-indigo-700';$/m);
+  assert.match(leer('components/analisis/SelectorPeriodo.tsx'), /const CAMPO_FECHA = `[^`]*\$\{FOCO_CAMPO\}`;/);
+  assert.match(leer('app/dashboard/ventas/page.tsx'), /className=\{`bg-slate-800 border border-slate-600 text-white text-xs rounded-xl px-3 py-1\.5 \$\{FOCOS\.blanco\} disabled:opacity-50/, 'el select de la barra oscura del Hub');
+  assert.match(codigo(leer('components/tabla/FiltroEstados.tsx')), /hover:bg-slate-100 \$\{FOCO\} disabled:cursor-not-allowed disabled:opacity-40/, '«Limpiar» del filtro');
 }
 
 console.log('--- TEST T24-b (B4 T24: FINAL-m37, FINAL-C5 y F106): TablaEstandar no ofrece «Reintentar» con un 403 ---');

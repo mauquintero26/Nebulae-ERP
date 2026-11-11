@@ -39,9 +39,9 @@ import { accesoTienda } from '@/lib/roles';
 import { formatoPesos } from '@/lib/pesos';
 import { fechaCorta, fechaHoraLarga, horaCO } from '@/lib/fechas-colombia';
 import { avisoDeFuente, estadoFranjaDeFuente, motivoSinPermiso, recargarTrasError } from '@/lib/avisos';
-import { TABLE } from '@/lib/design-system';
+import { FOCOS, TABLE } from '@/lib/design-system';
 import { getUsuarioActual } from '../ventas/flujo';
-import { CONTENEDOR, FOCOS } from '../inventario/piezas-inventario';
+import { CONTENEDOR } from '../inventario/piezas-inventario';
 import { CHIP } from '../compras/columnas-pec';
 
 // B4 T23A: los montos como en el resto del bloque ('$4.927.538'). Se fue PWEB_ESTADOS (nombres que no existen en los pedidos

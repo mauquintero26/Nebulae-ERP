@@ -3,6 +3,7 @@ import { useId } from 'react';
 import { X } from 'lucide-react';
 import { ACCENTS, AccentColor } from './colors';
 import { useCierreVentana } from './useCierreVentana';
+import { FOCO } from '@/lib/design-system';
 
 /** Modal estandar: header con icono+titulo sobre degradado del acento, cuerpo
  * con scroll propio, footer opcional para los botones de accion. `maxWidth`
@@ -57,7 +58,7 @@ export function Modal({
             </h3>
             {subtitle && <p className="text-xs text-slate-500 mt-0.5">{subtitle}</p>}
           </div>
-          <button onClick={onClose} disabled={bloquearCierre} aria-label="Cerrar" className="p-2 text-slate-400 hover:bg-slate-100 rounded-full disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"><X size={20} /></button>
+          <button onClick={onClose} disabled={bloquearCierre} aria-label="Cerrar" className={`p-2 text-slate-400 hover:bg-slate-100 rounded-full disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent ${FOCO}`}><X size={20} /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
           {children}

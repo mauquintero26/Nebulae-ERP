@@ -1,8 +1,5 @@
 'use client';
 
-import { FOCOS } from '@/lib/design-system';
-import { accesoCompras } from '@/lib/roles';
-import { useRolActual } from '@/components/ui/useRolActual';
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -21,6 +18,9 @@ import { BannerFlujo, PasosFlujo, useResumenFlujo } from '@/components/flujo';
 import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
 import { COMP_NAV } from '../comp-nav';
 
+import { FOCOS } from '@/lib/design-system';
+import { accesoCompras } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 import { apiFetch } from '@/lib/api';
 import { estadoDelTotal } from '@/lib/tabla';
 import { PERIODO_KPI, tarjetasTransito } from '@/lib/kpis';

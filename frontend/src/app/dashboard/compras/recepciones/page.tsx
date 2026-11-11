@@ -1,6 +1,5 @@
 'use client';
 
-import { FOCOS } from '@/lib/design-system';
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -26,6 +25,7 @@ import {
 } from '../columnas-recepcion';
 import type { FilaColumnasRecepcion } from '../columnas-recepcion';
 
+import { FOCOS } from '@/lib/design-system';
 import { apiFetch } from '@/lib/api';
 import { accionModo, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta } from '@/lib/tabla';
 import { NOTA_RECEPCIONES, PERIODO_KPI, tarjetasRecepciones } from '@/lib/kpis';

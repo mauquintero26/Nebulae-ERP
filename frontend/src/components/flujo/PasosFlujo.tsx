@@ -1,12 +1,12 @@
 'use client';
 
-import { FOCO } from '@/lib/design-system';
 import Link from 'next/link';
 import type { ComponentType, FocusEvent, ReactNode } from 'react';
 import {
   Calculator, Check, FileText, ListChecks, PackageCheck, Plane, Receipt, ShoppingBag, ShoppingCart, Truck, Warehouse, X,
 } from 'lucide-react';
 import { Contador } from '@/components/ui/Contador';
+import { FOCO } from '@/lib/design-system';
 import type { EstadoKpi } from '@/lib/kpis';
 import {
   avisosVisibles, chipAtraso, conectorHecho, estadoNumeroFranja, hayEnlaces, indicePasoActual, textoMasAntiguo,

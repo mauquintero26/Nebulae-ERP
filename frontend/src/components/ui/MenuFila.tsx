@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Ellipsis } from 'lucide-react';
-import { FOCO, FOCO_DENTRO } from '@/lib/design-system';
+import { FOCO_DENTRO } from '@/lib/design-system';
 import { posicionMenu } from '@/lib/tabla';
 
 /**
@@ -160,7 +160,7 @@ export function MenuFila({
             setAbierto(true);
           }
         }}
-        className={`inline-flex items-center justify-center rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 ${FOCO} aria-expanded:bg-slate-100 aria-expanded:text-slate-700`}
+        className={`inline-flex items-center justify-center rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 ${FOCO_DENTRO} aria-expanded:bg-slate-100 aria-expanded:text-slate-700`}
       >
         <Ellipsis size={16} aria-hidden="true" />
       </button>

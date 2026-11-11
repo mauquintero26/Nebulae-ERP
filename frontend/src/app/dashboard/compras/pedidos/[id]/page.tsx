@@ -11,6 +11,7 @@ import {
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { apiFetch } from '@/lib/api';
+import { FOCOS } from '@/lib/design-system';
 import { Badge, Button, ContenidoEnlace, useAvisos } from '@/components/ui';
 // B4 T15 (TABLA-compras punto 12, FLUJO-compras punto 7, H13): las etapas reales del envío en la barra estándar, las
 // tablas de detalle en modo simple y, en vez de campos y botones que no guardaban, texto de solo lectura.
@@ -292,7 +293,7 @@ export default function PedidoCompraDetallePage() {
         {!isNew && pedido?.id && (
           <div className="flex items-center gap-3">
             <Link href={`/dashboard/compras/pedidos?id=${pedido.id}`}
-              className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700">
+              className={`flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 ${FOCOS.emerald}`}>
               <ContenidoEnlace icon={Edit2}>Editar en Pedidos de compra</ContenidoEnlace>
             </Link>
           </div>

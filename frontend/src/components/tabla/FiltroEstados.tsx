@@ -149,7 +149,7 @@ export function FiltroEstados({
                 boton.current?.focus({ preventScroll: true });
               }}
               disabled={!seleccion.length}
-              className="rounded-lg px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+              className={`rounded-lg px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-100 ${FOCO} disabled:cursor-not-allowed disabled:opacity-40`}
             >
               Limpiar
             </button>

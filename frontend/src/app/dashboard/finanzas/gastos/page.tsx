@@ -22,7 +22,8 @@ import {
   fechaDeGasto, normalizarRespuesta, tarjetaGasto, textoVacioGastos, tipoDeGasto, urlConteosGastos,
 } from '@/lib/tabla';
 // Las piezas del selector de categoría y el contenedor de las pantallas del bloque son las de Inventario (T18): no se copian.
-import { CONTENEDOR, FOCOS, SelectorCatalogo } from '../../inventario/piezas-inventario';
+import { CONTENEDOR, SelectorCatalogo } from '../../inventario/piezas-inventario';
+import { FOCOS } from '@/lib/design-system';
 import type { Catalogo } from '../../inventario/piezas-inventario';
 import { FIN_NAV } from '../fin-nav';
 

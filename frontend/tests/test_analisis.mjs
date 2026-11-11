@@ -1311,7 +1311,8 @@ console.log('--- TEST 21 (T5C): el fuente de las siete piezas del panel (sin DOM
   assert.equal((selector.match(/type="date"/g) ?? []).length, 2, 'SelectorPeriodo: Desde y Hasta');
   // r1 (M15): un date tiene 4 paradas de Tab (día, mes, año y el calendario); en la cuarta el input ya no cumple
   // :focus-visible NI :focus (medido en Chromium), pero sí :focus-within: el outline va con las dos.
-  assert.ok(selector.includes("const CAMPO_FECHA = `block w-full min-w-0 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 outline-indigo-700 focus:outline-2 focus:outline-offset-2 focus:outline-indigo-700 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-indigo-700`;"));
+  // B4 T24 r1 (m19, D27): las mismas clases, ahora del token FOCO_CAMPO de design-system.ts (test_tabla.mjs fija su texto).
+  assert.ok(selector.includes("const CAMPO_FECHA = `block w-full min-w-0 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 ${FOCO_CAMPO}`;"));
   assert.equal((selector.match(/className=\{`mt-1 \$\{CAMPO_FECHA\}`\}/g) ?? []).length, 2, 'los dos date con CAMPO_FECHA');
   // r1 (M14): el esqueleto de la barra, con los mismos altos que la barra real (píldoras de 26 px o el select de 34 px,
   // la línea de 'Comparado con…' y la de 'Actualizado…').

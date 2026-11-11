@@ -7,8 +7,7 @@ import type { LucideIcon } from 'lucide-react';
 // su page.tsx (una página de Next no puede exportar más que su componente); aquí no se tocan.
 import { Modal } from '@/components/ui';
 import { apiFetch } from '@/lib/api';
-import { FOCOS, TABLE } from '@/lib/design-system';
-import type { AcentoFoco } from '@/lib/design-system';
+import { FOCOS, TABLE, type AcentoFoco } from '@/lib/design-system';
 import { formatoPesos } from '@/lib/pesos';
 import { tiene } from '@/lib/estados-pedido';
 import { formatoDecimal, numeroFinito } from '@/lib/kpis';

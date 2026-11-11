@@ -2447,7 +2447,7 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   trae(piezas, "export const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';", 'el contenedor deja libre la esquina del botón de la IA (pb-24)');
   trae(piezas, "['Costo', numeroFinito(f.costo) !== null && Number(f.costo) > 0 ? pesos(f.costo) : 'Sin costo registrado'],", 'el detalle: un costo 0 es «sin costo» (RP91)');
   // B4 T24 (FINAL-m25, D27): FOCOS es el común de design-system.ts (outline-offset-2: se ve también sobre fondos oscuros).
-  trae(piezas, 'export { FOCOS };', 'el foco visible es el común y se ve también sobre fondos oscuros');
+  trae(piezas, "import { FOCOS, TABLE, type AcentoFoco } from '@/lib/design-system';", 'el foco visible es el común (r1, m25: el import, no el export)');
   sinDefectos('piezas-inventario', piezas);
   // T18 r1 (m10, m21): el Hub de T17 IMPORTA las piezas de aquí y ya no las copia.
   const hub = leerFuente('app/dashboard/inventario/page.tsx');

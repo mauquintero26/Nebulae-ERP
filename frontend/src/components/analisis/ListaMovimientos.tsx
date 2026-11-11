@@ -1,6 +1,5 @@
 'use client';
 
-import { FOCO } from '@/lib/design-system';
 import { useId } from 'react';
 import Link from 'next/link';
 import {
@@ -8,6 +7,7 @@ import {
   ShoppingCart, SlidersHorizontal, Undo2, Users, Wallet,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { FOCO } from '@/lib/design-system';
 import {
   MAX_MOVIMIENTOS, bloqueSinDatos, enlaceDocumento, iconoMovimiento, montoMovimiento,
 } from '@/lib/analisis';

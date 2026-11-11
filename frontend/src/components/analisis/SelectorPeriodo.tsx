@@ -1,7 +1,7 @@
 'use client';
 
-import { FOCO } from '@/lib/design-system';
 import { useId, useState } from 'react';
+import { FOCO, FOCO_CAMPO } from '@/lib/design-system';
 import { PERIODOS, borradorPersonalizado, errorPeriodo } from '@/lib/analisis';
 import type { ClavePeriodo, PeriodoAnalisis } from '@/lib/analisis';
 import { diaColombia } from '@/lib/fechas-colombia';
@@ -37,7 +37,7 @@ const PILDORA_ACTIVA = 'border-slate-900 bg-slate-900 text-white';
 const PILDORA_INACTIVA = 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50';
 // T5C r1 (M15): un <input type="date"> tiene 4 paradas de Tab en Chromium (día, mes, año y el calendario). En la cuarta
 // el input ya no cumple :focus-visible ni :focus (medido), pero sí :focus-within: con las dos el outline sigue en las 4.
-const CAMPO_FECHA = `block w-full min-w-0 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 outline-indigo-700 focus:outline-2 focus:outline-offset-2 focus:outline-indigo-700 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-indigo-700`;
+const CAMPO_FECHA = `block w-full min-w-0 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 ${FOCO_CAMPO}`;
 
 type PropsEditor = {
   inicial: { desde: string; hasta: string };
