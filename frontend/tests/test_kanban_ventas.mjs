@@ -1300,6 +1300,44 @@ console.log('--- B4 T24 f2 (F47): accionesTableroPedidos — las acciones del ta
   }
 }
 
+console.log('--- B4 T24 f2 (duda 3 de f1): en soloLectura, la acción principal de la tarjeta de un pedido queda en «Abrir», salvo la que el rol sí puede hacer ---');
+{
+  const p = (estado, saldo = 0) => ({ id: 9, numero: 'PVEN-9', estado, saldo_cop: saldo, total_cop: 1000 });
+  const accion = (fila, rol) => kv.tarjetaPedido(fila, { ahora: 0, rolSoloLectura: rol }).accionPrincipal?.texto ?? null;
+  // Sin rolSoloLectura (ADMIN y ASESOR mueven), la de siempre.
+  for (const [fila, texto] of [[p('ENTREGADO'), 'Facturar'], [p('LISTO_ENTREGA', 500), 'Cobrar saldo'], [p('PENDIENTE_COMPRA'), 'Gestionar compra'],
+    [p('LISTO_ENTREGA'), 'Despachar'], [p('EN_PROCESO'), 'Ver pedido']]) {
+    assert.equal(kv.tarjetaPedido(fila, { ahora: 0 }).accionPrincipal?.texto, texto, texto);
+    assert.equal(accion(fila, null), texto, `${texto} sin rolSoloLectura`);
+  }
+  // FINANZAS: cobra el saldo (crear-pxp), no factura ni gestiona la compra ni despacha.
+  assert.equal(accion(p('LISTO_ENTREGA', 500), 'FINANZAS'), 'Cobrar saldo');
+  assert.equal(accion(p('ENTREGADO'), 'FINANZAS'), null, 'FINANZAS no factura: queda «Abrir»');
+  assert.equal(accion(p('PENDIENTE_COMPRA'), 'FINANZAS'), null);
+  assert.equal(accion(p('LISTO_ENTREGA'), 'FINANZAS'), null);
+  // COMPRAS: gestiona la compra (create_pec); BODEGA: despacha en Entregas; CONSULTA: ninguna.
+  assert.equal(accion(p('PENDIENTE_COMPRA'), 'COMPRAS'), 'Gestionar compra');
+  assert.equal(accion(p('ENTREGADO'), 'COMPRAS'), null);
+  assert.equal(accion(p('LISTO_ENTREGA'), 'BODEGA'), 'Despachar');
+  assert.equal(accion(p('ENTREGADO'), 'BODEGA'), null, 'BODEGA solo pone ENTREGADO: no factura');
+  for (const fila of [p('ENTREGADO'), p('LISTO_ENTREGA', 500), p('PENDIENTE_COMPRA'), p('LISTO_ENTREGA')]) {
+    assert.equal(accion(fila, 'CONSULTA'), null, `CONSULTA ${fila.estado}`);
+  }
+  // «Ver pedido» es abrir el pedido (GET, todos): se queda para cualquier rol.
+  for (const rol of ['FINANZAS', 'COMPRAS', 'BODEGA', 'CONSULTA']) assert.equal(accion(p('EN_PROCESO'), rol), 'Ver pedido', rol);
+  // Lo demás de la tarjeta no cambia.
+  const conAccion = kv.tarjetaPedido(p('ENTREGADO'), { ahora: 0 });
+  const sinAccion = kv.tarjetaPedido(p('ENTREGADO'), { ahora: 0, rolSoloLectura: 'CONSULTA' });
+  assert.deepEqual({ ...sinAccion, accionPrincipal: conAccion.accionPrincipal }, conAccion);
+  // E-Commerce sigue como estaba (su soloLectura quita la acción a todos los roles que no mueven).
+  assert.equal(kv.tarjetaPedidoWeb(p('LISTO_ENTREGA', 500), { ahora: 0, soloLectura: true }).accionPrincipal, null);
+  // El cableado: Pedidos de venta pasa el rol solo cuando el tablero es de solo lectura.
+  const venta = readFileSync(new URL('../src/app/dashboard/ventas/venta/venta-client.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(venta, /const rol = useRolActual\(\);\s*const accesoTablero = accesoTableroVentas\(rol\);/);
+  assert.match(venta, /const tarjetaDePedido = useCallback\(\s*\(p: FilaPedido\) => tarjetaPedido\(p, \{ rolSoloLectura: accesoTablero\.soloLectura \? rol : null \}\),\s*\[accesoTablero\.soloLectura, rol\],\s*\);/);
+  assert.match(venta, /tarjetaDe=\{tarjetaDePedido\}/);
+}
+
 console.log('--- B4 T10 TEST N: consultaColumnaPedido — la consulta de cada columna del tablero de Pedidos ---');
 {
   const estado = estadoTablaInicial({ vista: 'cancelado', q: ' cuna ', semaforo: 'atrasados', estados: [], orden: 'cliente', pagina: 3, tamano: 50 });
@@ -1491,7 +1529,8 @@ console.log('--- B4 T10 TEST Q: el cableado del tablero de Pedidos (C9, C15, R11
   // RP8: ni estado= en CSV ni search= en ninguna consulta de la lista.
   assert.ok(!/[?&]estado=|search=/.test(codigo), 'RP8');
   assert.match(lista, /<TableroKanban\s+tablero=\{tablero\}\s+regla=\{reglaSoltarPedido\}\s+tarjetaDe=\{tarjetaDePedido\}\s+onAbrir=\{abrirPedido\}\s+onCambio=\{cambiarDesdeTablero\}\s+onAccion=\{accionDesdeTablero\}\s+accionesTarjeta=\{accionesTarjeta\}\s+resumenColumna=\{resumenColumna\}/);
-  assert.match(codigo, /const tarjetaDePedido = \(p: FilaPedido\) => tarjetaPedido\(p\);/);
+  // B4 T24 f2 (duda 3 de f1, D27): la tarjeta lleva el rol cuando el tablero es de solo lectura (bloque «duda 3»).
+  assert.match(codigo, /const tarjetaDePedido = useCallback\(\s*\(p: FilaPedido\) => tarjetaPedido\(p, \{ rolSoloLectura: accesoTablero\.soloLectura \? rol : null \}\),/);
   // C9: la suma de cada columna es el resumen de H47 de su consulta (resumenColumnaPedido; Cancelado no).
   assert.match(lista, /\(clave: string, d: DatosColumnaKanban<FilaPedido>\) => resumenColumnaPedido\(clave, d\.resumen\)/);
   // B4 T24 f2 (F47, D27): 'cambio', 'facturar' (confirmar con confirmacionFacturarPedido antes del PATCH), 'cancelar' (ModalMotivo) y
@@ -1785,7 +1824,8 @@ console.log('--- B4 T24 (FINAL-m31 y FINAL-m38): los tableros de Ventas solo se 
     const c = sin(leer(ruta));
     assert.match(c, /import \{ useRolActual \} from '@\/components\/ui\/useRolActual';/, `${ruta}: useRolActual`);
     assert.match(c, /import \{[^}]*\baccesoTableroVentas\b[^}]*\} from '@\/lib\/roles';/, `${ruta}: accesoTableroVentas`);
-    assert.match(c, /const accesoTablero = accesoTableroVentas\(useRolActual\(\)\);/, `${ruta}: el acceso del tablero`);
+    // B4 T24 f2 (duda 3 de f1, D27): Pedidos de venta guarda el rol (la tarjeta lo usa en solo lectura); el acceso, igual.
+    assert.match(c, /const accesoTablero = accesoTableroVentas\(useRolActual\(\)\);|const rol = useRolActual\(\);\s*const accesoTablero = accesoTableroVentas\(rol\);/, `${ruta}: el acceso del tablero`);
     // El tablero recibe soloLectura (no se arrastra ni ofrece «Mover a…»), como E-Commerce.
     assert.match(c, /<TableroKanban\s[^>]*soloLectura=\{accesoTablero\.soloLectura\}/, `${ruta}: soloLectura`);
   }

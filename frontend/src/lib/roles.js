@@ -55,6 +55,30 @@ export function puedeCrearOrdenDePago(rol) {
 }
 
 /**
+ * B4 T24 f2 (duda 3 de f1): quién puede hacer la acción principal de la tarjeta de un pedido de venta (claveAccionSiguientePVEN de
+ * hub-ventas.js) en la pantalla a la que lleva, con el require_roles real (backend/app/api/v1, leído en solo lectura):
+ *  - 'facturar' (el detalle: PATCH /ventas/pedidos/{id} a FACTURADO, update_pedido de erp_ventas.py): ADMIN y ASESOR (BODEGA
+ *    solo pone ENTREGADO);
+ *  - 'cobrar' (el detalle: POST /ventas/pedidos/{id}/crear-pxp, crear_pxp): ADMIN, FINANZAS y ASESOR (puedeCrearOrdenDePago);
+ *  - 'comprar' («Gestionar compra», en Compras: POST /compras/pedidos, create_pec de erp_compras.py): ADMIN y COMPRAS;
+ *  - 'despachar' (en Entregas: PATCH /ventas/pedidos/{id} a ENTREGADO con la bodega): ADMIN, ASESOR y BODEGA;
+ *  - 'ver' («Ver pedido»: GET /ventas/pedidos/{id}): todos los roles del ERP.
+ * Otra clave, o un rol vacío: false. Los nombres viejos cuentan como el canónico (normalizarRol).
+ * @param {unknown} clave
+ * @param {unknown} rol
+ * @returns {boolean}
+ */
+export function puedeAccionPedido(clave, rol) {
+  const r = normalizarRol(rol);
+  if (r === '') return false;
+  if (clave === 'facturar') return esAdminOAsesor(rol);
+  if (clave === 'cobrar') return puedeCrearOrdenDePago(rol);
+  if (clave === 'comprar') return esAdminOCompras(rol);
+  if (clave === 'despachar') return esAdminOAsesor(rol) || r === 'BODEGA';
+  return clave === 'ver';
+}
+
+/**
  * B4 T23A r1 (I1, I2, m15): lo que cada rol puede pedir y hacer en E-Commerce, de la lista EXACTA de require_roles de cada
  * endpoint de backend/app/api/v1/ecommerce.py (la seguridad real es la del servidor; esto evita pedir lo que da un 403 fijo):
  *  - indicadores (GET /stats) y carritos (GET /carritos): ADMIN y ASESOR;

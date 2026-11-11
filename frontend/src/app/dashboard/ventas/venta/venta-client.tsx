@@ -320,8 +320,6 @@ export function AccionesCabecera({ onActualizar, actualizando }: { onActualizar:
   );
 }
 
-/** La tarjeta del tablero (KANBAN-ventas-listas punto 5, D37 y el cruce C5): vuelve a esta lista. */
-const tarjetaDePedido = (p: FilaPedido) => tarjetaPedido(p);
 
 export default function VentaClient() {
   const router = useRouter();
@@ -337,7 +335,9 @@ export default function VentaClient() {
   const [estado, despachar, listo, modoListo] = useEstadoTabla(ID_PEDIDOS, INICIAL_PEDIDOS);
   // B4 T24 (FINAL-m31 y FINAL-m38): el rol después de montar (useRolActual) decide si el tablero se mueve (accesoTableroVentas: el
   // require_roles del PATCH de destino); sin permiso, soloLectura (no se arrastra ni se ofrece «Mover a…») y sin acciones masivas.
-  const accesoTablero = accesoTableroVentas(useRolActual());
+  // B4 T24 f2 (duda 3 de f1): el rol también va a la tarjeta del tablero de solo lectura (tarjetaDePedido, más abajo).
+  const rol = useRolActual();
+  const accesoTablero = accesoTableroVentas(rol);
   const enKanban = estado.modo === 'kanban';
 
   // La tabla (T6B): GET /ventas/pedidos con vista, estados, semáforo, q, orden, limit y offset del estado, más los conteos
@@ -550,6 +550,13 @@ export default function VentaClient() {
   const {
     cambiarDesdeTablero, accionDesdeTablero, accionesTarjeta, cancelando, cancelarConMotivo, cerrarCancelacion,
   } = useAccionesTableroPedidos<FilaPedido>({ tablero, recargarTrasCambio, mover: accesoTablero.mover });
+  // La tarjeta del tablero (KANBAN-ventas-listas punto 5, D37 y el cruce C5): vuelve a esta lista. B4 T24 f2 (duda 3 de f1): en solo
+  // lectura, su acción principal queda solo si el rol puede hacerla (FINANZAS cobra, COMPRAS gestiona la compra, BODEGA despacha); si
+  // no, la tarjeta queda en «Abrir», como en E-Commerce (tarjetaPedido con rolSoloLectura).
+  const tarjetaDePedido = useCallback(
+    (p: FilaPedido) => tarjetaPedido(p, { rolSoloLectura: accesoTablero.soloLectura ? rol : null }),
+    [accesoTablero.soloLectura, rol],
+  );
   // C9: la suma de H47 de cada columna (el resumen de su consulta) debajo del título, salvo en Cancelado.
   const resumenColumna = useCallback(
     (clave: string, d: DatosColumnaKanban<FilaPedido>) => resumenColumnaPedido(clave, d.resumen), [],

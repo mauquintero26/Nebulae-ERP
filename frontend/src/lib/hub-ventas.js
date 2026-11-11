@@ -727,21 +727,34 @@ const PVEN_EN_CURSO = congelar(['EN_PROCESO', 'EN_TRANSITO']);
  * @returns {{texto: string, href: string, tono: string} | null}
  */
 export function accionSiguientePVEN(p, { returnTo } = {}) {
-  if (!p || typeof p !== 'object') return null;
-  const estado = p.estado;
+  const clave = claveAccionSiguientePVEN(p);
+  if (clave === null) return null;
   const enPedido = conRegresoA(`/dashboard/ventas/venta/${p.id}`, returnTo);
-  if (PVEN_SIN_ACCION.includes(estado)) return null;
-  if (PVEN_POR_FACTURAR.includes(estado)) return { texto: 'Facturar', href: enPedido, tono: 'emerald' };
-  if (PVEN_POR_COMPRAR.includes(estado)) {
-    return { texto: 'Gestionar compra', href: conRegresoA('/dashboard/compras', returnTo), tono: 'amber' };
-  }
-  if (PVEN_EN_CURSO.includes(estado)) return { texto: 'Ver pedido', href: enPedido, tono: 'slate' };
-  if (pasoPedido(estado) === 2) {
-    return Number(p.saldo_cop) > 0
-      ? { texto: 'Cobrar saldo', href: enPedido, tono: 'amber' }
-      : { texto: 'Despachar', href: conRegresoA('/dashboard/inventario/entregas', returnTo), tono: 'indigo' };
+  if (clave === 'facturar') return { texto: 'Facturar', href: enPedido, tono: 'emerald' };
+  if (clave === 'comprar') return { texto: 'Gestionar compra', href: conRegresoA('/dashboard/compras', returnTo), tono: 'amber' };
+  if (clave === 'cobrar') return { texto: 'Cobrar saldo', href: enPedido, tono: 'amber' };
+  if (clave === 'despachar') {
+    return { texto: 'Despachar', href: conRegresoA('/dashboard/inventario/entregas', returnTo), tono: 'indigo' };
   }
   return { texto: 'Ver pedido', href: enPedido, tono: 'slate' };
+}
+
+/**
+ * B4 T24 f2 (duda 3 de f1): QUÉ acción principal da accionSiguientePVEN (la misma rama), sin el texto de la interfaz: 'facturar',
+ * 'comprar' («Gestionar compra»), 'ver' («Ver pedido»), 'cobrar' («Cobrar saldo») o 'despachar'; null sin acción (o si no es un
+ * objeto). Con ella, puedeAccionPedido (lib/roles.js) dice si el rol puede hacerla (la tarjeta de un tablero de solo lectura).
+ * @param {any} p
+ * @returns {'facturar' | 'comprar' | 'ver' | 'cobrar' | 'despachar' | null}
+ */
+export function claveAccionSiguientePVEN(p) {
+  if (!p || typeof p !== 'object') return null;
+  const estado = p.estado;
+  if (PVEN_SIN_ACCION.includes(estado)) return null;
+  if (PVEN_POR_FACTURAR.includes(estado)) return 'facturar';
+  if (PVEN_POR_COMPRAR.includes(estado)) return 'comprar';
+  if (PVEN_EN_CURSO.includes(estado)) return 'ver';
+  if (pasoPedido(estado) === 2) return Number(p.saldo_cop) > 0 ? 'cobrar' : 'despachar';
+  return 'ver';
 }
 
 /**

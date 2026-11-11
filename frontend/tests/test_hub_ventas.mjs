@@ -979,6 +979,24 @@ console.log('--- B4 T2 TEST 6: accionSiguienteCOT (R26, RP15: {texto, href, tono
   }
 }
 
+console.log('--- B4 T24 f2 (duda 3 de f1): claveAccionSiguientePVEN — qué acción da accionSiguientePVEN, sin el texto de la interfaz ---');
+{
+  assert.equal(typeof hv.claveAccionSiguientePVEN, 'function');
+  const p = (estado, saldo = 0) => ({ tipo: 'VEN', id: 8, estado, saldo_cop: saldo });
+  const TEXTO = { facturar: 'Facturar', comprar: 'Gestionar compra', ver: 'Ver pedido', cobrar: 'Cobrar saldo', despachar: 'Despachar' };
+  // La misma rama de accionSiguientePVEN, en todos los estados que conoce el servidor, con y sin saldo, y en uno desconocido.
+  for (const estado of [...Object.keys(ESTADOS_PEDIDO), 'ALGO_NUEVO', null]) {
+    for (const saldo of [0, 500]) {
+      const clave = hv.claveAccionSiguientePVEN(p(estado, saldo));
+      const accion = accionSiguientePVEN(p(estado, saldo));
+      assert.equal(clave === null ? null : TEXTO[clave], accion?.texto ?? null, `${estado} ${saldo}`);
+    }
+  }
+  assert.equal(hv.claveAccionSiguientePVEN(p('LISTO_ENTREGA', 500)), 'cobrar');
+  assert.equal(hv.claveAccionSiguientePVEN(p('LISTO_ENTREGA', 0)), 'despachar');
+  for (const nada of [null, undefined, 'PVEN-1', 5]) assert.equal(hv.claveAccionSiguientePVEN(nada), null, String(nada));
+}
+
 console.log('--- B4 T2 TEST 7: accionSiguientePVEN (R26, RP15: el orden del pedido) ---');
 {
   const p = (estado, saldo = 0) => ({ tipo: 'VEN', id: 8, estado, saldo_cop: saldo });

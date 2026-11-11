@@ -43,7 +43,7 @@ import {
 } from './estados-pedido.js';
 import {
   RUTA_HUB_VENTAS, esSoporte, motivoNoCancelable, tieneProductos, accionSiguienteCOT, accionSiguienteDocumento, diasDesde,
-  textoAntiguedad, ETIQUETA_GRUPO,
+  textoAntiguedad, ETIQUETA_GRUPO, claveAccionSiguientePVEN,
 } from './hub-ventas.js';
 import {
   ESTADOS_SC, PASOS_SC, ESTADOS_SC_HEREDADOS, ESTADOS_SC_CON_CONFIRMACION, infoEstadoSolicitud, puedeReiniciar,
@@ -64,7 +64,7 @@ import { etiquetaTipoSolicitud } from './etiquetas-ventas.js';
 import { redondearPeso, formatoPesos } from './pesos.js';
 import { queryListado } from './tabla.js';
 // B4 T23A: el permiso de mover los pedidos web (RP62).
-import { esAdminOAsesor } from './roles.js';
+import { esAdminOAsesor, puedeAccionPedido } from './roles.js';
 // B4 T24 f2 (F47): la regla única de la recarga tras un error, para las acciones del tablero de pedidos.
 import { recargarTrasError } from './avisos.js';
 
@@ -1190,17 +1190,26 @@ const textoLimpio = (v) => (typeof v === 'string' ? v.trim() : '');
  *    la tabla) y después el atraso y el recordatorio (los de chipsDocumentoVentas; un pedido no tiene chip de cambios
  *    del cliente).
  * La fila es un pedido aunque no traiga `tipo`. tarjetaHub no cambia.
+ * B4 T24 f2 (duda 3 de f1, aditivo): con `rolSoloLectura` (el rol, cuando el tablero es de solo lectura para él: accesoTableroVentas),
+ * la acción principal queda solo si ese rol puede hacerla en su pantalla (puedeAccionPedido con claveAccionSiguientePVEN: FINANZAS
+ * cobra el saldo, COMPRAS gestiona la compra, BODEGA despacha); si no, null: la tarjeta queda en «Abrir», como en E-Commerce. Sin
+ * rolSoloLectura (null o sin pasar), la de siempre.
  * @param {any} fila
- * @param {{ahora?: number, returnTo?: string}} [opciones]
+ * @param {{ahora?: number, returnTo?: string, rolSoloLectura?: string | null}} [opciones]
  * @returns {TarjetaVentas}
  */
-export function tarjetaPedido(fila, { ahora, returnTo = RUTA_LISTA_PEDIDOS } = {}) {
+export function tarjetaPedido(fila, { ahora, returnTo = RUTA_LISTA_PEDIDOS, rolSoloLectura = null } = {}) {
   const pedido = { ...fila, tipo: 'VEN' };
   const tarjeta = tarjetaHub(pedido, { ahora, returnTo });
   const origen = [textoLimpio(fila?.sc_numero), textoLimpio(fila?.cot_numero)].filter(Boolean).join(' · ');
   const { atraso, recordatorio } = chipsDeLaFila(pedido, 'VEN');
   const chips = /** @type {ChipTarjeta[]} */ ([chipSaldoPedido(pedido), atraso, recordatorio].filter(Boolean));
-  return { ...tarjeta, subtitulo: origen || tarjeta.subtitulo, chips: chips.slice(0, MAX_CHIPS) };
+  const conAccion = rolSoloLectura === null || rolSoloLectura === undefined
+    || puedeAccionPedido(claveAccionSiguientePVEN(pedido), rolSoloLectura);
+  return {
+    ...tarjeta, subtitulo: origen || tarjeta.subtitulo, chips: chips.slice(0, MAX_CHIPS),
+    accionPrincipal: conAccion ? tarjeta.accionPrincipal : null,
+  };
 }
 
 /** Los cambios de estado que se ofrecen dentro de la columna En proceso, en este orden. */

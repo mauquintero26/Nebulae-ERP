@@ -267,4 +267,28 @@ console.log('--- T24 (FINAL-m31): puedeCobrarSaldo es esAdminOAsesor (una sola c
   assert.equal(entregas.puedeCobrarSaldo, roles.esAdminOAsesor, 'entregas.js reexporta la MISMA función');
 }
 
+console.log('--- B4 T24 f2 (duda 3 de f1): puedeAccionPedido — quién hace la acción principal de la tarjeta de un pedido, con el require_roles real ---');
+{
+  const { puedeAccionPedido } = await import('../src/lib/roles.js');
+  assert.equal(typeof puedeAccionPedido, 'function', 'puedeAccionPedido existe');
+  // backend/app/api/v1 (solo lectura): facturar = PATCH /ventas/pedidos/{id} a FACTURADO (ADMIN y ASESOR; BODEGA solo a ENTREGADO);
+  // cobrar = POST /ventas/pedidos/{id}/crear-pxp (ADMIN, FINANZAS y ASESOR); comprar = POST /compras/pedidos (ADMIN y COMPRAS);
+  // despachar = PATCH a ENTREGADO con la bodega, en Entregas (ADMIN, ASESOR y BODEGA); ver = GET (todos los roles del ERP).
+  const ESPERADO = {
+    facturar: ['ADMIN', 'ASESOR'],
+    cobrar: ['ADMIN', 'FINANZAS', 'ASESOR'],
+    comprar: ['ADMIN', 'COMPRAS'],
+    despachar: ['ADMIN', 'ASESOR', 'BODEGA'],
+    ver: ['ADMIN', 'ASESOR', 'FINANZAS', 'COMPRAS', 'BODEGA', 'CONSULTA'],
+  };
+  const TODOS = ['ADMIN', 'ASESOR', 'FINANZAS', 'COMPRAS', 'BODEGA', 'CONSULTA'];
+  for (const [clave, roles] of Object.entries(ESPERADO)) {
+    for (const rol of TODOS) assert.equal(puedeAccionPedido(clave, rol), roles.includes(rol), `${clave} ${rol}`);
+    // Los nombres viejos y los bordes, como normalizarRol (Vendedor = ASESOR, Finanzas = FINANZAS).
+    assert.equal(puedeAccionPedido(clave, ' vendedor '), roles.includes('ASESOR'), `${clave} Vendedor`);
+  }
+  for (const rol of RAROS) assert.equal(puedeAccionPedido('ver', rol), false, `ver con ${JSON.stringify(rol)}`);
+  for (const clave of [null, undefined, '', 'otra', 'constructor']) assert.equal(puedeAccionPedido(clave, 'ADMIN'), false, String(clave));
+}
+
 console.log('OK test_roles.mjs');
