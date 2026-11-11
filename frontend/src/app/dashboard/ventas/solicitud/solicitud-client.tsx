@@ -45,6 +45,7 @@ import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas
 import {
   generoCotizacion, cotizacionesVigentes, resumenCancelacionSolicitudes, repartirCancelacionSolicitudes, estadoEnPapelera,
   contarVencidasEnPapelera, confirmacionVaciarVencidas, textoPapeleraVaciada, tarjetasSolicitudes, fechaVencida,
+  vistaSolicitudesPermitida,
 } from '@/lib/listas-ventas';
 import { fechaCorta, fechaLarga } from '@/lib/fechas-colombia';
 import { mailtoUrl, telUrl, motivoTelefono } from '@/lib/chatter';
@@ -583,6 +584,8 @@ type AccionesFilaSC = {
   eliminar: (sc: FilaPapelera) => void;
   /** B4 T24 f2 (m8 de la revisión r0 de f1): el rol cancela, reinicia, manda a la papelera y restaura (ADMIN y ASESOR, accesoTableroVentas). */
   mover: boolean;
+  /** B4 T24 f2 r1 (m18): el rol de la sesión, leído después de montar (useRolActual): «Eliminar permanentemente» es de ADMIN. */
+  rol: string;
 };
 const AccionesLista = createContext<AccionesFilaSC | null>(null);
 
@@ -672,7 +675,8 @@ function CeldaAcciones({ sc }: { sc: FilaSC }) {
   const destinoReinicio = infoEstadoSolicitud(sc.advisor_user_id ? 'ASIGNADA' : 'BORRADOR').label;
   const items: ItemMenuFila[] = [
     { etiqueta: 'Ver Detalle', icono: FileText, onClick: () => acciones?.abrir(sc) },
-    { etiqueta: 'Editar', icono: Edit2, onClick: () => acciones?.abrir(sc) },
+    // B4 T24 f2 r1 (m19 + m37): «Editar» promete el PATCH (ADMIN y ASESOR); sin permiso, solo «Ver Detalle».
+    { etiqueta: 'Editar', icono: Edit2, onClick: () => acciones?.abrir(sc), oculto: !acciones?.mover },
     { etiqueta: `Reiniciar (volver a ${destinoReinicio})`, icono: RotateCcw, onClick: () => acciones?.reiniciar(sc),
       oculto: !conAcciones || !puedeReiniciarSC(sc) },
     { etiqueta: 'Enviar a la papelera', icono: Trash2, peligro: true, onClick: () => acciones?.aPapelera(sc), oculto: !conAcciones || !cancelada },
@@ -763,7 +767,7 @@ function CeldaAccionesPapelera({ sc }: { sc: FilaPapelera }) {
           <RotateCcw size={11} aria-hidden="true" />Restaurar
         </button>
       )}
-      {esAdministrador(getUsuarioActual().role)&&enPapelera.puedeEliminar&&(
+      {esAdministrador(acciones?.rol)&&enPapelera.puedeEliminar&&(
         <button type="button" onClick={() => acciones?.eliminar(sc)} title="Eliminar permanentemente" aria-label={`Eliminar ${sc.numero} permanentemente`}
           className={`bg-red-50 hover:bg-red-100 text-red-600 p-1.5 rounded-lg border border-red-200 ${FOCO_VISIBLE}`}>
           <Trash2 size={13} aria-hidden="true" />
@@ -817,13 +821,15 @@ const ACCESORES_PAPELERA = {
  * búsqueda, sin la vista, los estados ni el semáforo; null mientras cargan: la barra gris, nunca 0) y la Papelera sin
  * conteo (no es una vista del servidor). Sin emojis. B4 T8 r1 (A2): la misma en la pantalla y en su esqueleto.
  */
-export function pestanasDeLaLista(conteos: ConteosSC | null): PestanaTabla[] {
+export function pestanasDeLaLista(conteos: ConteosSC | null, { papelera = false }: { papelera?: boolean } = {}): PestanaTabla[] {
   return [
     { id: 'activas', etiqueta: 'Activas', conteo: conteos?.activas ?? null },
     { id: 'confirmadas', etiqueta: 'Confirmadas', conteo: conteos?.confirmadas ?? null },
     { id: 'canceladas', etiqueta: 'Canceladas', conteo: conteos?.canceladas ?? null },
     { id: 'soporte', etiqueta: 'Soporte', conteo: conteos?.soporte ?? null },
-    { id: 'papelera', etiqueta: 'Papelera', conteo: null, sinConteo: true },
+    // B4 T24 f2 r1 (m21): la Papelera (GET /solicitudes/papelera: ADMIN y ASESOR) solo con `papelera`; el esqueleto (el rol sin leer),
+    // sin ella.
+    ...(papelera ? [{ id: 'papelera', etiqueta: 'Papelera', conteo: null, sinConteo: true }] : []),
   ];
 }
 
@@ -832,7 +838,7 @@ export function pestanasDeLaLista(conteos: ConteosSC | null): PestanaTabla[] {
  * ?tab=analisis&foco=sc, enlaceVerAnalisis) y «Nueva Solicitud». B4 T8 r1 (A2): los mismos en el esqueleto del Suspense,
  * que los pinta invisibles para que la cabecera mida lo mismo.
  */
-export function AccionesCabecera({ onActualizar, actualizando, onNueva }: { onActualizar: () => void; actualizando: boolean; onNueva: () => void }) {
+export function AccionesCabecera({ onActualizar, actualizando, onNueva }: { onActualizar: () => void; actualizando: boolean; onNueva?: () => void }) {
   return (
     <div className="flex flex-wrap items-center gap-2.5">
       <button type="button" onClick={onActualizar} className={`bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm shadow-sm ${FOCO_VISIBLE}`}><RefreshCw size={15} aria-hidden="true" className={actualizando?'animate-spin':''}/> Actualizar</button>
@@ -840,7 +846,8 @@ export function AccionesCabecera({ onActualizar, actualizando, onNueva }: { onAc
         className={`bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 flex items-center gap-2 text-sm shadow-sm ${FOCO_VISIBLE}`}>
         <ContenidoEnlace icon={BarChart3}>Ver análisis</ContenidoEnlace>
       </Link>
-      <Button onClick={onNueva} color="indigo" icon={Plus}>Nueva Solicitud</Button>
+      {/* B4 T24 f2 r1 (m19): crear una solicitud (POST /solicitudes) es de ADMIN y ASESOR: sin onNueva, sin el botón. */}
+      {onNueva && <Button onClick={onNueva} color="indigo" icon={Plus}>Nueva Solicitud</Button>}
     </div>
   );
 }
@@ -1138,7 +1145,8 @@ export default function SolicitudClient() {
   const [vueltaPapelera, setVueltaPapelera] = useState(0);
   const [cargaPapelera, setCargaPapelera] = useState<CargaPapelera>(PAPELERA_SIN_CARGAR);
   useEffect(() => {
-    if (!enPapelera) return;
+    // B4 T24 f2 r1 (m21): sin permiso (ADMIN y ASESOR) no se pide: daría un 403.
+    if (!enPapelera || !accesoTablero.mover) return;
     const control = new AbortController();
     apiFetch('/ventas/solicitudes/papelera', { signal: control.signal })
       .then((d: unknown) => setCargaPapelera({ vuelta: vueltaPapelera, filas: normalizarRespuesta(d).filas as FilaPapelera[], error: '' }))
@@ -1150,8 +1158,13 @@ export default function SolicitudClient() {
         avisar(textoDeError('No se pudo cargar la papelera: ' + msg), { tono: 'error' });
       });
     return () => control.abort();
-  }, [enPapelera, vueltaPapelera, avisar]);
+  }, [enPapelera, accesoTablero.mover, vueltaPapelera, avisar]);
   const recargarPapelera = useCallback(() => setVueltaPapelera((n) => n + 1), []);
+  // B4 T24 f2 r1 (m21): una «papelera» guardada en la sesión, sin permiso, cae a Activas (cuando el rol ya se leyó).
+  const vistaPermitida = vistaSolicitudesPermitida(estado.vista, { papelera: accesoTablero.mover, rolLeido: accesoTablero.listo });
+  useEffect(() => {
+    if (listo && vistaPermitida && vistaPermitida !== estado.vista) despachar(accionPestana(estado, vistaPermitida, opcionesEstadosSolicitudes));
+  }, [listo, vistaPermitida, estado, despachar]);
   const papelera = cargaPapelera.filas ?? SIN_FILAS_PAPELERA;
   const papeleraCargada = cargaPapelera.filas !== null;
   const papeleraError = cargaPapelera.error;
@@ -1413,7 +1426,7 @@ export default function SolicitudClient() {
   }
 
   // ── B4 T8, bloque 2: pestañas y búsqueda (TABLA-listas-ventas punto 5; R5, RP26, RP35, D40, D41) ──
-  const pestanas = pestanasDeLaLista(listado.conteos as ConteosSC | null);
+  const pestanas = pestanasDeLaLista(listado.conteos as ConteosSC | null, { papelera: accesoTablero.mover && listo });
   // La barra recibe el modo que se ve: en Soporte y la Papelera es Lista (no tienen tablero), así «Ajustar tabla» está
   // aunque lo guardado sea Kanban. El estado de la pantalla no cambia (useEstadoTabla sigue siendo su único dueño).
   const estadoBarra = useMemo(() => (estado.modo === modoEfectivo ? estado : { ...estado, modo: modoEfectivo }), [estado, modoEfectivo]);
@@ -1456,7 +1469,7 @@ export default function SolicitudClient() {
   // Las celdas (constantes, D40 y D41) piden a la pantalla lo suyo por AccionesLista. El valor del contexto es estable
   // (las celdas no se repintan con cada cambio de la página) y llama siempre a los manejadores del último render: la ref
   // se pone al día después de pintar y solo se lee en un clic.
-  const manejadores = useRef<Omit<AccionesFilaSC, 'mover'> | null>(null);
+  const manejadores = useRef<Omit<AccionesFilaSC, 'mover' | 'rol'> | null>(null);
   useLayoutEffect(() => {
     manejadores.current = {
       abrir: abrirSolicitud,
@@ -1475,7 +1488,8 @@ export default function SolicitudClient() {
     restaurar: (sc) => manejadores.current?.restaurar(sc),
     eliminar: (sc) => manejadores.current?.eliminar(sc),
     mover: accesoTablero.mover,
-  }), [accesoTablero.mover]);
+    rol,
+  }), [accesoTablero.mover, rol]);
 
   // ── B4 T8, bloque 4: el tablero (KANBAN-ventas-listas punto 7; C15, R11; RP16, RP17, D11, D39) ──
   // reglaSoltarSC sin puedeEnviar (D11): soltar para enviar queda bloqueado con «Ábrela para enviar.» y el enlace a la
@@ -1562,7 +1576,7 @@ export default function SolicitudClient() {
           icon={FileText} color="indigo"
           title="Solicitudes de Cliente"
           subtitle="Lo que te piden los clientes, antes de cotizar."
-          actions={<AccionesCabecera onActualizar={actualizar} actualizando={actualizando} onNueva={()=>setShowCreate(true)} />} />
+          actions={<AccionesCabecera onActualizar={actualizar} actualizando={actualizando} onNueva={accesoTablero.mover ? () => setShowCreate(true) : undefined} />} />
 
         {/* B4 T8 (KPI-ventas punto 7; R12, RP19): las 4 tarjetas con con_resumen de la MISMA llamada de la lista (todas las
             solicitudes, sin Soporte): mientras cargan, barras grises (nunca 0); con error, «—». Las tres primeras son sus
@@ -1608,7 +1622,7 @@ export default function SolicitudClient() {
                       <p className={PAGE_HEADER.subtitle}>Las solicitudes canceladas se pueden eliminar definitivamente después de 30 días si no se restauran, salvo las que tienen documentos vinculados; un administrador vacía las vencidas, y la revisión automática también.</p>
                     </div>
                     <div className="flex items-center gap-3 shrink-0">
-                      {esAdministrador(getUsuarioActual().role)&&<button onClick={vaciarVencidas} disabled={vaciandoPapelera} className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"><Trash2 size={11} className={vaciandoPapelera?'animate-pulse':''}/>Vaciar las vencidas</button>}
+                      {esAdministrador(rol)&&<button onClick={vaciarVencidas} disabled={vaciandoPapelera} className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"><Trash2 size={11} className={vaciandoPapelera?'animate-pulse':''}/>Vaciar las vencidas</button>}
                       <button onClick={recargarPapelera} className="text-xs text-slate-500 hover:text-slate-700 font-bold flex items-center gap-1"><RefreshCw size={11} className={cargandoPapelera?'animate-spin':''}/> Actualizar</button>
                     </div>
                   </div>
@@ -1738,7 +1752,8 @@ export default function SolicitudClient() {
       )}
 
       {/* CREATE MODAL */}
-      {showCreate&&(
+      {/* B4 T24 f2 r1 (m19): el formulario solo para quien crea (también con ?new=1). */}
+      {showCreate && accesoTablero.mover && (
         <Modal cierreExterno={false} title="Nueva Solicitud de Cliente" subtitle="El número de la solicitud se asigna al crearla." icon={Plus} color="indigo" maxWidth="3xl"
           onClose={()=>{setShowCreate(false);resetCreateForm();}}
           footer={(

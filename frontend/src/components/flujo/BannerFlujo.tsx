@@ -8,7 +8,7 @@ import { Contador } from '@/components/ui/Contador';
 import { usePreferencia } from '@/components/ui/usePreferencia';
 import { FOCO } from '@/lib/design-system';
 import {
-  alternarFiltroSemaforo, estadoDeFranja, estadoNumeroFranja, opcionesSemaforo, semaforoDeFranja,
+  alternarFiltroSemaforo, estadoDeFranja, estadoNumeroFranja, opcionesSemaforo, reintentarEnFranja, semaforoDeFranja,
 } from '@/lib/flujo';
 import { ChipAviso, PasosFlujo } from './PasosFlujo';
 import type { AccionAjustar, AvisoFranja, PartesFranja, PasoVista, SemaforoFranja } from './tipos';
@@ -266,7 +266,8 @@ export function BannerFlujo({
         <div role="alert" className="mt-2 flex flex-wrap items-center gap-2 text-xs font-semibold text-rose-700">
           <AlertTriangle size={14} aria-hidden="true" className="shrink-0" />
           <span>No se pudieron cargar los números del flujo.</span>
-          {onReintentar ? (
+          {/* B4 T24 f2 r1 (m20, aditivo): «Reintentar» solo con un error que se arregla volviendo a pedir (un 403, nunca). */}
+          {onReintentar && reintentarEnFranja({ error, reintentando: f.reintentando }) ? (
             <button
               ref={reintentarRef}
               type="button"

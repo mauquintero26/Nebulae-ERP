@@ -395,6 +395,19 @@ export function esSolicitudActiva(sc) {
   return pestanaDeSolicitud(sc) === 'Activas';
 }
 
+/**
+ * B4 T24 f2 r1 (m21): la vista de la lista de Solicitudes que se puede mostrar con el permiso del rol. La Papelera (GET
+ * /solicitudes/papelera, POST /restaurar y DELETE /permanente de erp_ventas.py: ADMIN y ASESOR) solo con `papelera`: sin él, una
+ * 'papelera' guardada en la sesión cae a 'activas', pero solo cuando el rol ya se leyó (`rolLeido`, después de montar: antes, nada
+ * cambia). Las demás vistas, igual.
+ * @param {string | null | undefined} vista
+ * @param {{papelera: boolean, rolLeido: boolean}} permiso
+ * @returns {string | null | undefined}
+ */
+export function vistaSolicitudesPermitida(vista, { papelera, rolLeido }) {
+  return vista === 'papelera' && rolLeido && !papelera ? 'activas' : vista;
+}
+
 /** Un conteo valido (entero >= 0) o 0. */
 const conteo = (n) => (Number.isFinite(n) && n > 0 ? Math.floor(n) : 0);
 

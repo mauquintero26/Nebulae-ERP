@@ -1454,12 +1454,13 @@ console.log('--- B4 T24 f2 (m8 de la revisión r0 de f1): la Lista de Solicitude
   for (const rol of ['FINANZAS', 'COMPRAS', 'BODEGA', 'CONSULTA']) assert.equal(accesoTableroVentas(rol).mover, false, rol);
   const sinComentarios = (t) => t.replace(/\r\n/g, '\n').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
   const lista = sinComentarios(readFileSync(new URL('../src/app/dashboard/ventas/solicitud/solicitud-client.tsx', import.meta.url), 'utf8'));
-  assert.match(lista, /type AccionesFilaSC = \{[\s\S]*?\bmover: boolean;\s*\};/);
+  // B4 T24 f2 r1 (m18, D27): el contexto suma el rol (después de montar); `mover` sigue.
+  assert.match(lista, /type AccionesFilaSC = \{[\s\S]*?\bmover: boolean;[\s\S]*?\brol: string;\s*\};/);
   const celda = lista.slice(lista.indexOf('function CeldaAcciones('), lista.indexOf('\n}\n', lista.indexOf('function CeldaAcciones(')));
   assert.match(celda, /const conAcciones = acciones\?\.mover === true && !soporte && \(!cancelada \|\| !sc\.eliminada_at\);/);
   const papelera = lista.slice(lista.indexOf('function CeldaAccionesPapelera('), lista.indexOf('\n}\n', lista.indexOf('function CeldaAccionesPapelera(')));
   assert.match(papelera, /\{acciones\?\.mover && \(\s*<button type="button" onClick=\{\(\) => acciones\?\.restaurar\(sc\)\}/);
-  assert.match(lista, /const accionesFila = useMemo<AccionesFilaSC>\(\(\) => \(\{[\s\S]*?mover: accesoTablero\.mover,\s*\}\), \[accesoTablero\.mover\]\);/);
+  assert.match(lista, /const accionesFila = useMemo<AccionesFilaSC>\(\(\) => \(\{[\s\S]*?mover: accesoTablero\.mover,\s*rol,\s*\}\), \[accesoTablero\.mover, rol\]\);/);
   assert.match(lista, /seleccion=\{accesoTablero\.mover \? seleccion : undefined\}\s*onSeleccion=\{accesoTablero\.mover \? alSeleccionar : undefined\}/);
 }
 
@@ -1566,6 +1567,47 @@ console.log('--- B4 T24 f2 r1 (m14, m18): Pedidos de venta y su detalle ofrecen 
       assert.equal(puedeCancelarPedido(estado, rol), esperado, `${estado} ${rol}`);
     }
   }
+}
+
+console.log('--- B4 T24 f2 r1 (m18, m19 + m37, m21): Solicitudes ofrece crear, editar y la Papelera solo a quien puede, con el rol después de montar ---');
+{
+  // m21: la vista que se puede mostrar con el permiso del rol (GET /solicitudes/papelera: ADMIN y ASESOR). Sin él, una «papelera»
+  // guardada en la sesión cae a Activas, pero solo cuando el rol ya se leyó (antes, nada cambia: un ADMIN no pierde su pestaña).
+  assert.equal(typeof listas.vistaSolicitudesPermitida, 'function', 'vistaSolicitudesPermitida existe');
+  const vista = listas.vistaSolicitudesPermitida;
+  assert.equal(vista('papelera', { papelera: false, rolLeido: true }), 'activas', 'FINANZAS con la papelera guardada');
+  assert.equal(vista('papelera', { papelera: true, rolLeido: true }), 'papelera', 'ADMIN y ASESOR');
+  assert.equal(vista('papelera', { papelera: false, rolLeido: false }), 'papelera', 'mientras se lee el rol');
+  for (const v of ['activas', 'confirmadas', 'canceladas', 'soporte', null]) {
+    for (const papelera of [true, false]) assert.equal(vista(v, { papelera, rolLeido: true }), v, `${v} ${papelera}`);
+  }
+  const leer = (r) => readFileSync(new URL(`../src/app/dashboard/ventas/solicitud/${r}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const lista = leer('solicitud-client.tsx');
+  // La pestaña: solo con `papelera` (ADMIN y ASESOR, y con la lista lista); el esqueleto (rol sin leer) no la pinta.
+  assert.match(lista, /export function pestanasDeLaLista\(conteos: ConteosSC \| null, \{ papelera = false \}: \{ papelera\?: boolean \} = \{\}\): PestanaTabla\[\] \{/);
+  assert.match(lista, /\.\.\.\(papelera \? \[\{ id: 'papelera', etiqueta: 'Papelera', conteo: null, sinConteo: true \}\] : \[\]\),/);
+  assert.match(lista, /const pestanas = pestanasDeLaLista\(listado\.conteos as ConteosSC \| null, \{ papelera: accesoTablero\.mover && listo \}\);/);
+  assert.ok(leer('CargandoSolicitudes.tsx').includes('const PESTANAS_CARGANDO = pestanasDeLaLista(null);'), 'el esqueleto, sin la Papelera');
+  // El efecto no pide /papelera sin permiso, y la vista guardada cae a Activas con la regla de la lib.
+  assert.match(lista, /if \(!enPapelera \|\| !accesoTablero\.mover\) return;\s*const control = new AbortController\(\);\s*apiFetch\('\/ventas\/solicitudes\/papelera'/);
+  assert.match(lista, /\}, \[enPapelera, accesoTablero\.mover, vueltaPapelera, avisar\]\);/);
+  assert.match(lista, /const vistaPermitida = vistaSolicitudesPermitida\(estado\.vista, \{ papelera: accesoTablero\.mover, rolLeido: accesoTablero\.listo \}\);/);
+  assert.match(lista, /useEffect\(\(\) => \{\s*if \(listo && vistaPermitida && vistaPermitida !== estado\.vista\) despachar\(accionPestana\(estado, vistaPermitida, opcionesEstadosSolicitudes\)\);\s*\}, \[listo, vistaPermitida, estado, despachar\]\);/);
+  // m19 + m37: «Nueva Solicitud» (POST /solicitudes) y «Editar» (PATCH): ADMIN y ASESOR. Sin permiso, sin el botón ni el formulario
+  // (tampoco con ?new=1), y el ⋯ queda en «Ver Detalle».
+  assert.match(lista, /onNueva\?: \(\) => void/);
+  assert.match(lista, /\{onNueva && <Button onClick=\{onNueva\} color="indigo" icon=\{Plus\}>Nueva Solicitud<\/Button>\}/);
+  assert.match(lista, /onNueva=\{accesoTablero\.mover \? \(\) => setShowCreate\(true\) : undefined\}/);
+  assert.match(lista, /\{showCreate && accesoTablero\.mover && \(/);
+  assert.match(lista, /\{ etiqueta: 'Editar', icono: Edit2, onClick: \(\) => acciones\?\.abrir\(sc\), oculto: !acciones\?\.mover \},/);
+  // m18: el rol, de useRolActual (después de montar), también en las celdas (por su contexto): «Eliminar» y «Vaciar las vencidas».
+  assert.ok(!/getUsuarioActual\(\)\.role/.test(lista), 'sin getUsuarioActual().role');
+  assert.match(lista, /type AccionesFilaSC = \{[\s\S]*?\bmover: boolean;[\s\S]*?\brol: string;[\s\S]*?\};/);
+  assert.match(lista, /mover: accesoTablero\.mover,\s*rol,\s*\}\), \[accesoTablero\.mover, rol\]\);/);
+  assert.match(lista, /const manejadores = useRef<Omit<AccionesFilaSC, 'mover' \| 'rol'> \| null>\(null\);/);
+  assert.match(lista, /\{esAdministrador\(acciones\?\.rol\)&&enPapelera\.puedeEliminar&&\(/);
+  assert.match(lista, /\{esAdministrador\(rol\)&&<button onClick=\{vaciarVencidas\}/);
 }
 
 console.log('OK test_listas_ventas.mjs');

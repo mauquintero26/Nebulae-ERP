@@ -189,7 +189,8 @@ console.log('--- D2 TEST 4: el botón «Vaciar las vencidas» (solo ADMIN) en la
   const lista = sinComentarios(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx'));
   assert.equal(veces(lista, 'Vaciar las vencidas'), 1, 'un solo botón');
   // El botón está dentro de la guarda del administrador (la misma de «Eliminar permanentemente»).
-  assert.match(lista, /\{esAdministrador\(getUsuarioActual\(\)\.role\)&&\(?<button[^>]*onClick=\{vaciarVencidas\}[^>]*>[\s\S]{0,300}?Vaciar las vencidas[\s\S]{0,40}?<\/button>\)?\}/);
+  // B4 T24 f2 r1 (m18, D27): solo un administrador, con el rol leído después de montar (useRolActual), no getUsuarioActual().role.
+  assert.match(lista, /\{esAdministrador\(rol\)&&\(?<button[^>]*onClick=\{vaciarVencidas\}[^>]*>[\s\S]{0,300}?Vaciar las vencidas[\s\S]{0,40}?<\/button>\)?\}/);
   assert.match(lista, /<button[^>]*onClick=\{vaciarVencidas\}[^>]*disabled=\{vaciandoPapelera\}/, 'deshabilitado mientras vacía');
 
   const vaciar = cuerpoDe(lista, 'async function vaciarVencidas(');

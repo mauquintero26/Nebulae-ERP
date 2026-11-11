@@ -24,6 +24,7 @@ import { congelar, tiene } from './estados-pedido.js';
 import { cantidadPositiva } from './hub-ventas.js';
 import { formatoEntero } from './kpis.js';
 import { estadoDeConteo } from './tabla.js';
+import { ofreceReintentar } from './avisos.js';
 
 export { congelar };
 
@@ -496,6 +497,16 @@ export function estadoDeFranja({ cargando = false, error = null, huboError = fal
     cargandoNumeros: carga && !conError,
     estadoConteos: conError ? 'error' : carga ? 'cargando' : 'listo',
   };
+}
+
+/**
+ * B4 T24 f2 r1 (m20): si la franja (BannerFlujo) ofrece «Reintentar»: con un error que se arregla volviendo a pedir
+ * (ofreceReintentar de avisos.js: un 403 nunca), o mientras reintenta (el hook ya no trae el error: el botón sigue, «Reintentando…»).
+ * @param {{error?: unknown, reintentando?: boolean}} [estado]
+ * @returns {boolean}
+ */
+export function reintentarEnFranja({ error = null, reintentando = false } = {}) {
+  return Boolean(reintentando) || ofreceReintentar(error);
 }
 
 // ─── la carga del resumen (useResumenFlujo) ─────────────────────────────────────

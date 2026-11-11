@@ -1140,4 +1140,23 @@ console.log('--- B4 T24 f2 (F45): useResumen — el cargador de resúmenes compa
   }
 }
 
+console.log('--- B4 T24 f2 r1 (m20): la franja ofrece «Reintentar» solo con un error que se arregla volviendo a pedir (un 403, no) ---');
+{
+  assert.equal(typeof F.reintentarEnFranja, 'function', 'reintentarEnFranja existe');
+  const e403 = Object.assign(new Error('No tienes permiso para esta acción.'), { status: 403 });
+  const e500 = Object.assign(new Error('Error del servidor'), { status: 500 });
+  const red = new TypeError('Failed to fetch');
+  assert.equal(F.reintentarEnFranja({ error: e500, reintentando: false }), true, 'un 500');
+  assert.equal(F.reintentarEnFranja({ error: red, reintentando: false }), true, 'la red cortada');
+  assert.equal(F.reintentarEnFranja({ error: e403, reintentando: false }), false, 'un 403 nunca ofrece Reintentar');
+  // Mientras reintenta, el hook ya no trae el error: el botón sigue («Reintentando…»), porque lo que se reintenta se pudo ofrecer.
+  assert.equal(F.reintentarEnFranja({ error: null, reintentando: true }), true, 'reintentando');
+  assert.equal(F.reintentarEnFranja({ error: null, reintentando: false }), false, 'sin error');
+  assert.equal(F.reintentarEnFranja({}), false);
+  // El cableado (aditivo, en la pieza): BannerFlujo pinta el botón solo si la pantalla da onReintentar Y el error lo admite.
+  const banner = readFileSync(new URL('../src/components/flujo/BannerFlujo.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(banner, /\{onReintentar && reintentarEnFranja\(\{ error, reintentando: f\.reintentando \}\) \? \(/);
+  assert.match(banner, /import \{[^}]*\breintentarEnFranja\b[^}]*\} from '@\/lib\/flujo';/);
+}
+
 console.log('\nOK: test_flujo.mjs');
