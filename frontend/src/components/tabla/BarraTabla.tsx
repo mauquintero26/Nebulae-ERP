@@ -199,7 +199,7 @@ export function BarraTabla({
   // B4 T7 r2 (m-r1-a): al montar y al cambiar la pestaña activa (la aparte incluida), la fila se desplaza para mostrarla
   // (scrollParaVer). Solo la fila, con su scrollLeft: la ventana no se desplaza. B4 T24 (F35: si los conteos llegan después y ensanchan
   // las pestañas, unos 20 px a 375, la activa restaurada puede quedar cortada; se acepta (cosmético y raro): el efecto no vuelve a
-  // correr con cada recarga de los conteos.
+  // correr con cada recarga de los conteos).
   const filaPestanas = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const fila = filaPestanas.current;

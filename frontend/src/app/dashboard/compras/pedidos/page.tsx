@@ -639,7 +639,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
       setInfoEdit(false);
     } catch(e){
       onToast(e,'error');
-      // T15 r1 (m9): si el PEC cambió en otro lado y recargarTrasError lo indica (un 400, un 409, un 422 (F8) o sin respuesta; un 404 o un 500 no), se vuelve a pedir lo que se muestra.
+      // T15 r1 (m9): si el PEC cambió en otro lado, recargarTrasError (400, 409, 422 o sin respuesta; 404 o 500, no) recarga lo que se ve.
       if (recargarTrasError(e)) { onUpdate(); loadFull(); }
     }
     setSavingInfo(false);
@@ -759,7 +759,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
                 </p>
               </div>
             </div>
-            {/* r1 (m7): «Hacer recepción» crea la recepción (POST /pedidos/{id}/recepcionar: ADMIN y COMPRAS); «Ver recepción» solo navega. */}
+            {/* r1 (m7): «Hacer recepción» la crea (POST /pedidos/{id}/recepcionar: ADMIN y COMPRAS); «Ver recepción» solo navega. */}
             {(detail?.recepciones?.length > 0 || accesoPec.cambiarPec) && (
               <button onClick={goToRecepcion} disabled={goingToRecepcion} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm hover:bg-emerald-700 transition-colors shrink-0 disabled:opacity-50 flex items-center gap-2">
                 {goingToRecepcion && <RefreshCw size={12} className="animate-spin"/>}

@@ -205,12 +205,12 @@ export function textoAtraso(n) {
 /**
  * El clic en una caja de la franja: null si esa clave ya estaba elegida (tocarla otra vez quita el filtro, R6); si
  * no, la clave.
+ * B4 T24 (FINAL-m29): antes alternarSeleccion, el mismo nombre que la de lib/tabla.js con otro contrato.
  * @template {string} T
  * @param {string | null | undefined} actual
  * @param {T} clave
  * @returns {T | null}
  */
-/* B4 T24 (FINAL-m29): antes alternarSeleccion, el mismo nombre que la de lib/tabla.js con otro contrato. */
 export function alternarPaso(actual, clave) {
   return actual === clave ? null : clave;
 }
@@ -323,10 +323,10 @@ export function textoDetalle(detalle) {
  * 'El más antiguo: N días' de una caja de la franja (solo con mostrarAntiguedad; flujo_contenido_caja = total y
  * atrasados, así que por defecto no se pinta). Los días se redondean y el plural sale del redondeado ('1 día'). Lo
  * que no es un número de días (null, NaN, negativo o texto) da ''.
+ * B4 T24 (FINAL-m29): antes textoAntiguedad, el mismo nombre que la de lib/hub-ventas.js con otro texto.
  * @param {unknown} dias
  * @returns {string}
  */
-/* B4 T24 (FINAL-m29): antes textoAntiguedad, el mismo nombre que la de lib/hub-ventas.js con otro texto. */
 export function textoMasAntiguo(dias) {
   const n = numeroONulo(dias);
   if (n === null || n < 0) return '';

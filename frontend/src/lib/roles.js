@@ -159,7 +159,10 @@ export function accesoCopilot(rol) {
   return { listo: true, consultar: esUnoDe(rol, 'ADMIN', 'ASESOR', 'FINANZAS') };
 }
 
-/** B4 T24 (FINAL-m37) y r1 (m30): lo que ve un rol sin GET /crm/leads (ADMIN y ASESOR) en el CRM y en Seguimientos: neutro, sin «Reintentar». */
+/**
+ * B4 T24 (FINAL-m37) y r1 (m30): lo que ve un rol sin GET /crm/leads (ADMIN y ASESOR) en el CRM y en Seguimientos: neutro,
+ * sin «Reintentar».
+ */
 export const TEXTO_SIN_LEADS = 'Tu rol no ve los leads del CRM.';
 
 /** B4 T24: el motivo de un tablero que el rol no puede mover (soloLectura de TableroKanban): no se arrastra ni se ofrece «Mover a…». */
@@ -184,9 +187,10 @@ export function accesoTableroVentas(rol) {
 /**
  * B4 T24 (FINAL-m10, FINAL-m31 y FINAL-m38): lo que cada rol puede hacer con los pedidos de compra (backend/app/api/v1/erp_compras.py):
  * `cambiarPec` (PATCH y DELETE /pedidos/{id}: emitir, cancelar, eliminar, editar, el arrastre del tablero y la barra masiva; con la
- * MISMA lista, r1 m7: POST /pedidos «Nuevo PEC» y «Crear PEC Consolidado», POST /pedidos/{id}/recepcionar y PUT /tracking-config) y `tracking` (PATCH
- * /pedidos/{id}/tracking: las etapas de Tránsito), los dos de ADMIN y COMPRAS (esAdminOCompras). GET /pedidos es de todos los roles del
- * ERP. `soloLectura` es el motivo para los tableros de PEC (null si los mueve). Con un rol vacío, nada listo y soloLectura null (r1, m9).
+ * MISMA lista, r1 m7: POST /pedidos «Nuevo PEC» y «Crear PEC Consolidado», POST /pedidos/{id}/recepcionar y PUT
+ * /tracking-config) y `tracking` (PATCH /pedidos/{id}/tracking: las etapas de Tránsito), los dos de ADMIN y COMPRAS
+ * (esAdminOCompras). GET /pedidos es de todos los roles del ERP. `soloLectura` es el motivo para los tableros de PEC (null si
+ * los mueve). Con un rol vacío, nada listo y soloLectura null (r1, m9).
  * @param {unknown} rol
  * @returns {{listo: boolean, cambiarPec: boolean, tracking: boolean, soloLectura: string | null}}
  */

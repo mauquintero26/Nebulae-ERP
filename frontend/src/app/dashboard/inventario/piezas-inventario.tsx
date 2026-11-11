@@ -49,7 +49,10 @@ export type Catalogo = { filas: OpcionCatalogo[] | null; error: unknown };
 
 /** El contenedor de los Hubs y de las listas del bloque (T7 a T17): pb-24 deja libre la esquina del botón de la IA. */
 export const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
-/** B4 T24 (FINAL-m25): el foco visible es el token común de design-system.ts (una sola copia); se reexporta para quien lo importa de aquí. */
+/**
+ * B4 T24 (FINAL-m25): el foco visible es el token común de design-system.ts (una sola copia); se reexporta para quien lo
+ * importa de aquí.
+ */
 export { FOCOS };
 export type { AcentoFoco };
 

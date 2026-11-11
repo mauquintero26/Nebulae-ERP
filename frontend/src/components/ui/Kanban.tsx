@@ -146,7 +146,10 @@ export type TableroKanbanEstado<T> = {
   /** Pliega o abre una columna (sin `plegada`, alterna) y lo recuerda en kanban:<pantalla>. */
   plegar: (clave: string, plegada?: boolean) => void;
   plegadas: ReadonlyArray<string>;
-  /** Ya se leyeron las plegadas guardadas (B4 T24, F18: o venció el tope de esperarPreferencias). Antes, nada se pide y se pinta el esqueleto. */
+  /**
+   * Ya se leyeron las plegadas guardadas (B4 T24, F18: o venció el tope de esperarPreferencias). Antes, nada se pide y se
+   * pinta el esqueleto.
+   */
   listo: boolean;
   idDe: (item: T) => Id;
   /**

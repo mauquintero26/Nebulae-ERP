@@ -519,10 +519,12 @@ const iguales = (a, b) => {
 /**
  * El reductor del estado único de la pantalla (useEstadoTabla, T4C). Las tarjetas pulsables, las cajas del flujo, los
  * botones del semáforo, las pestañas, la búsqueda y el filtro de estados despachan aquí:
- *  - {tipo: 'vista' | 'modo' | 'semaforo' | 'paso' | 'estados' | 'q' | 'orden' | 'tamano' | 'pagina', valor}
- *    ('busqueda' es lo mismo que 'q');
+ *  - {tipo: 'vista' | 'modo' | 'semaforo' | 'paso' | 'estados' | 'q' | 'orden' | 'tamano' | 'pagina' | 'filtros', valor}
+ *    ('busqueda' es lo mismo que 'q'; 'filtros' reemplaza todos los filtros extra);
+ *  - {tipo: 'filtro', clave, valor} (B4 T24, F39): un filtro extra, mezclado con los vigentes; vacío, se quita. Sin clave, lanza;
  *  - {tipo: 'cambiar', cambios: {...}} para varios campos a la vez (una tarjeta que pone la vista y quita el paso);
- *  - {tipo: 'limpiarFiltros'}: sin semáforo, paso, estados ni búsqueda (conserva pestaña, modo, orden y tamaño);
+ *  - {tipo: 'limpiarFiltros'}: sin semáforo, paso, estados, búsqueda ni filtros extra (conserva pestaña, modo, orden y
+ *    tamaño);
  *  - {tipo: 'restablecerOrden', rechazado} (T4C r2, punto 2; la despacha useListado cuando el servidor rechaza un orden
  *    con 422): quita el orden SOLO si sigue siendo el rechazado (como cualquier cambio, vuelve a la página 1); si el
  *    usuario ya eligió otro, devuelve el MISMO estado y su elección no se pisa.
@@ -2236,7 +2238,8 @@ export function saleConEsc({ tecla, defaultPrevented = false, dialogoEncima = fa
  * B4 T24 (F40): si un Esc cierra una ventana (Modal) o un panel lateral (Drawer): solo la capa de ARRIBA (una confirmación encima se
  * cierra primero), si nadie más lo atendió (defaultPrevented: un menú, el filtro, la búsqueda) y si no está guardando (bloqueado:
  * bloquearCierre).
- * @param {{tecla: string, arriba: boolean, defaultPrevented?: boolean, bloqueado?: boolean, reautenticando?: boolean, dentro?: boolean}} entrada
+ * @param {{tecla: string, arriba: boolean, defaultPrevented?: boolean, bloqueado?: boolean, reautenticando?: boolean,
+ *   dentro?: boolean}} entrada
  * @returns {boolean}
  */
 export function cierraConEsc({ tecla, arriba, defaultPrevented = false, bloqueado = false, reautenticando = false, dentro = true }) {

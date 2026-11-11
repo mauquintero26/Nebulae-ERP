@@ -169,9 +169,6 @@ const PUNTO: Record<EstadoPaso, string> = {
   neutro: 'bg-slate-200',
 };
 
-// r1 (C1, M10): el foco es un outline (no un box-shadow), distinto de cualquier anillo de estado y visible en forced-colors; desde
-// B4 T24 (FINAL-m25), el FOCO común de design-system.ts.
-
 /**
  * Las cajas de la franja. ADAPTABLE: pastilla por debajo de @2xl de la franja y caja desde @2xl (r1, C3: flex-1, del alto
  * de su columna). PASTILLA: siempre pastilla (compacto).

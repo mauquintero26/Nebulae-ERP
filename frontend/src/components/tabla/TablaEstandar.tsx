@@ -76,8 +76,8 @@ import { Paginacion } from './Paginacion';
  * El cuerpo (CuerpoTabla, memoizado) no depende del arrastre: mover una columna no vuelve a pintar las celdas (r1, 6j).
  * Estados (vistaCuerpo): sin datos y cargando, 8 renglones esqueleto y el pie 'Cargando…'; recargando, las filas
  * atenuadas, una barra fina arriba y las casillas deshabilitadas; error, la fila 'No se pudo cargar la lista: <detalle>'
- * con 'Reintentar' (B4 T24: salvo con un 403, ofreceReintentar); vacío, lo que traiga `vacio`. Si un filtro deja menos páginas, salta a la última que existe
- * (paginaCorregida).
+ * con 'Reintentar' (B4 T24: salvo con un 403, ofreceReintentar); vacío, lo que traiga `vacio`. Si un filtro deja menos
+ * páginas, salta a la última que existe (paginaCorregida).
  * Selección: la casilla del encabezado marca solo la página visible (alternarSeleccionPagina) y la selección se limpia
  * cuando cambia la lista: página, pestaña, búsqueda, filtro, orden, tamaño o modo (firmaSeleccion; R5 y C3), y también
  * una vez al montar (r1, 6b: al volver del Kanban).

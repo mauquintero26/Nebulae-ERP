@@ -264,10 +264,10 @@ export function infoCobroEntrega(p) {
 /**
  * La entrega estimada del pedido ('20 nov 2026'; sin fecha, '—'). Es una FECHA DE NEGOCIO ('2026-11-20T00:00:00'): se toma su día
  * (diaDeNegocio) y no se pasa a otra zona, o saldría un día antes (B4 T9 r1 I2). La usan la tarjeta y la columna «Entrega est.».
+ * B4 T24 (FINAL-m29): antes textoEntregaEstimada, el mismo nombre que la de lib/documento-comercial.js con otro contrato.
  * @param {any} p
  * @returns {string}
  */
-/* B4 T24 (FINAL-m29): antes textoEntregaEstimada, el mismo nombre que la de lib/documento-comercial.js con otro contrato. */
 export function textoEntregaTablero(p) {
   return fechaCorta(diaDeNegocio(p?.fecha_entrega_estimada)) || '—';
 }

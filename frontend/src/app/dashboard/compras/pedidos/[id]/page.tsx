@@ -238,7 +238,7 @@ export default function PedidoCompraDetallePage() {
     } catch (err) {
       // RP30: un aviso del sistema con el mensaje del servidor (nunca alert()).
       avisarError(err, 'No se pudo actualizar el seguimiento');
-      // T15 r1 (m9): si el PEC cambió en otro lado y recargarTrasError lo indica (un 400, un 409, un 422 (F8) o sin respuesta; un 404 o un 500 no), se vuelve a pedir lo que se muestra.
+      // T15 r1 (m9): si el PEC cambió en otro lado, recargarTrasError (400, 409, 422 o sin respuesta; 404 o 500, no) recarga lo que se ve.
       if (recargarTrasError(err)) await loadPedido();
     }
     setAdvancing(false);

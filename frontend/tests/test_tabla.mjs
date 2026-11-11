@@ -3309,15 +3309,49 @@ console.log('--- TEST T24-j (B4 T24: F34, F35, F36 y F10): el margen de la fila 
   assert.match(t, /@template T\n \* @param \{ReadonlyArray<T> \| null \| undefined\} nombres\n \* @param \{number\} max\n \* @returns \{\{visibles: T\[\], mas: number, aviso: string \| null\}\}\n \*\/\nexport function recortarColumnas/);
 }
 
+console.log('--- TEST T24-k0 (B4 T24 r1, m36): los comentarios — el JSDoc del reductor, las notas de FINAL-m29 y PasosFlujo ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const tabla = leer('lib/tabla.js');
+  const jsdoc = tabla.slice(tabla.lastIndexOf('/**', tabla.indexOf('export function reducirEstadoTabla(')), tabla.indexOf('export function reducirEstadoTabla('));
+  assert.match(jsdoc, /\{tipo: 'filtro', clave, valor\}/, 'la acción filtro');
+  assert.match(jsdoc, /'filtros'/, 'el campo filtros');
+  assert.match(jsdoc, /\{tipo: 'limpiarFiltros'\}: sin semáforo, paso, estados, búsqueda ni filtros extra/);
+  // Las notas de FINAL-m29 van DENTRO de su JSDoc (no entre el JSDoc y la función).
+  for (const [ruta, nombre] of [['lib/flujo.js', 'alternarPaso'], ['lib/flujo.js', 'textoMasAntiguo'], ['lib/entregas.js', 'textoEntregaTablero']]) {
+    assert.match(leer(ruta), new RegExp(`\\* B4 T24 \\(FINAL-m29\\): antes [^\\n]*\\n(?: \\*[^\\n]*\\n)* \\*/\\nexport function ${nombre}\\(`), `${ruta}: ${nombre}`);
+  }
+  assert.ok(!/^\/\* B4 T24 \(FINAL-m29\)/m.test(leer('lib/flujo.js') + leer('lib/entregas.js')), 'sin la nota suelta');
+  // PasosFlujo: sin el comentario suelto donde estaba la const FOCO.
+  assert.ok(!leer('components/flujo/PasosFlujo.tsx').includes('// B4 T24 (FINAL-m25), el FOCO común de design-system.ts.'));
+  // El comentario de F35 de BarraTabla cierra su paréntesis.
+  assert.match(leer('components/tabla/BarraTabla.tsx'), /B4 T24 \(F35: si los conteos llegan después y ensanchan[^)]*\([^)]*\)[^)]*\)/);
+}
+
 console.log('--- TEST T24-k (B4 T24, FINAL-m29): dos módulos de src/lib no exportan el mismo nombre ---');
 {
   const dir = new URL('../src/lib/', import.meta.url);
+  // r1 (m39): los nombres que un módulo exporta: `export function|const|let|var|class x`, y los de `export { a, b as c }` locales (sin
+  // `from` y que no vienen de un import del mismo archivo: esos son reexportaciones de la misma función, no un duplicado).
+  const exportados = (fuente) => {
+    const nombres = [...fuente.matchAll(/^export (?:async )?(?:function\*?|const|let|var|class)\s+([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]);
+    const importados = new Set([...fuente.matchAll(/^import\s+(?:type\s+)?\{([^}]*)\}\s*from/gm)]
+      .flatMap((m) => m[1].split(',').map((p) => p.trim().split(/\s+as\s+/).pop()).filter(Boolean)));
+    for (const [, lista] of fuente.matchAll(/^export \{([^}]*)\}(?!\s*from)/gm)) {
+      for (const parte of lista.split(',').map((p) => p.trim()).filter(Boolean)) {
+        const [local, como = local] = parte.split(/\s+as\s+/);
+        if (!importados.has(local)) nombres.push(como);
+      }
+    }
+    return nombres;
+  };
+  assert.deepEqual(exportados("function a() {}\nconst b = 1;\nexport { a, b as c };\nexport var d = 1;\nexport { e } from './x';\n"
+    + "import { f, g as h } from './y';\nexport { f, h };\nexport function i() {}\n").sort(), ['a', 'c', 'd', 'i'],
+  'la guarda ve `export var`, `export { x }` y `x as y` locales; no las reexportaciones');
   const vistos = new Map();
   for (const archivo of readdirSync(dir).filter((f) => /\.(js|ts)$/.test(f))) {
-    const fuente = readFileSync(new URL(archivo, dir), 'utf8');
-    for (const [, nombre] of fuente.matchAll(/^export (?:async )?(?:function\*?|const|let|class)\s+([A-Za-z_$][\w$]*)/gm)) {
-      vistos.set(nombre, [...(vistos.get(nombre) ?? []), archivo]);
-    }
+    const fuente = readFileSync(new URL(archivo, dir), 'utf8').replace(/\r\n/g, '\n');
+    for (const nombre of exportados(fuente)) vistos.set(nombre, [...(vistos.get(nombre) ?? []), archivo]);
   }
   const repetidos = [...vistos].filter(([, archivos]) => archivos.length > 1).map(([n, a]) => `${n}: ${a.join(', ')}`);
   assert.deepEqual(repetidos, [], 'un autoimport elegiría el equivocado');

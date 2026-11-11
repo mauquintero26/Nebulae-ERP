@@ -550,8 +550,8 @@ export async function cancelarPecsEnSerie(pecs, cancelarUno) {
 }
 
 /**
- * B4 T24 (FINAL-m27): la alerta de la pestaña que esconde los vencidos («No resueltos» del Hub, «Activos» de Pedidos de compra): «Hay N
- * vencidos» (con su número, que la pestaña no muestra), o false sin vencidos.
+ * B4 T24 (FINAL-m27): la alerta de la pestaña que esconde los vencidos («No resueltos» del Hub, «Activos» de Pedidos de
+ * compra): «Hay N vencidos» (con su número, que la pestaña no muestra), o false sin vencidos.
  * @param {unknown} vencidos
  * @returns {string | false}
  */
