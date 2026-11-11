@@ -1015,7 +1015,21 @@ console.log('--- TEST 23 (T4C y r1, R4, RP8, RP26, RP35, D28 y D38): el fuente d
   // r2, punto 6: los cables del hook (mutantes M14, M15, M22 y M23 del revisor).
   assert.ok(listado.includes('const usuario = usuarioDeLaSesion();'), 'M14: el usuario del render');
   assert.ok(listado.includes("const clave = `${version}|${usuario ?? ''}|${url}`;"), 'M14: el usuario en la clave');
-  assert.ok(listado.includes('contexto: { ruta, orden, usuario }'), 'r2, punto 1: la llegada sabe de qué usuario es');
+  // B4 T24 (F37, D27): el contexto lleva el orden de la URL pedida (ordenDeUrl) y el efecto no depende de estado.orden: con
+  // EXTRA_PAPELERA (orden: null) ordenar la Papelera ya no repite la misma petición.
+  assert.ok(listado.includes('contexto: { ruta, orden: ordenPedido, usuario }'), 'r2, punto 1: la llegada sabe de qué usuario es');
+  assert.ok(listado.includes('const ordenPedido = ordenDeUrl(url);'));
+  assert.ok(listado.includes('[carga, url, clave, ruta, ordenPedido, usuario, activo, esperar],'));
+  {
+    const { ordenDeUrl, urlListado, ESTADO_TABLA_INICIAL } = TABLA;
+    const conOrden = { ...ESTADO_TABLA_INICIAL, orden: '-monto' };
+    assert.equal(ordenDeUrl(urlListado('/x', conOrden)), '-monto');
+    assert.equal(ordenDeUrl(urlListado('/x', conOrden, { extra: { vista: null, limit: 0, offset: 0, orden: null } })), null, 'la Papelera');
+    assert.equal(ordenDeUrl('/x?a=1'), null);
+    assert.equal(ordenDeUrl('/x'), null);
+    assert.equal(ordenDeUrl('/x?orden=%20'), null, 'un orden vacío no cuenta');
+    assert.equal(ordenDeUrl(null), null);
+  }
   assert.ok(listado.includes('const restablece = Boolean(despachar);'), 'M15');
   assert.ok(listado.includes('estadoListado(resultado, { clave, activo, esperar, repeticion, ruta, orden, restablece, atendido, usuario })'),
     'M23: estadoListado recibe esperar (y lo demás)');

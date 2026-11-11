@@ -1067,6 +1067,19 @@ export function urlListado(ruta, estado, { extra = {}, conConteos = false, conRe
 }
 
 /**
+ * B4 T24 (F37): el orden que de verdad lleva la URL de una lista (el parámetro `orden` de urlListado), o null. Un `extra` puede quitarlo
+ * (EXTRA_PAPELERA: orden null): entonces la petición no depende de estado.orden y el contexto de la llegada no lo nombra.
+ * @param {unknown} url
+ * @returns {string | null}
+ */
+export function ordenDeUrl(url) {
+  if (typeof url !== 'string') return null;
+  const i = url.indexOf('?');
+  const valor = i < 0 ? null : new URLSearchParams(url.slice(i + 1)).get('orden');
+  return valor && valor.trim() ? valor.trim() : null;
+}
+
+/**
  * La carga de una lista paginada (useListado; TABLA-api punto 3 y D28: «una carga lenta no pisa a la nueva»), en JS
  * plano para probarla con node:
  *  - cargar(url, marca, contexto?): aborta la petición anterior (AbortController), toma un turno nuevo y pide con su

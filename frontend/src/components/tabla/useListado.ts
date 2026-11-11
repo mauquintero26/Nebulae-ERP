@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { apiFetch } from '@/lib/api';
 import {
-  aplicarLlegadaListado, crearCargaListado, estadoListado, lanzarListado, listadoCliente, rechazoPorAtender, urlListado,
+  aplicarLlegadaListado, crearCargaListado, estadoListado, lanzarListado, listadoCliente, ordenDeUrl, rechazoPorAtender, urlListado,
 } from '@/lib/tabla';
 import type { EstadoListado, EstadoTabla, ResultadoListado } from '@/lib/tabla';
 import type { DespacharTabla } from './useEstadoTabla';
@@ -126,9 +126,12 @@ export function useListado<T = unknown>({
   const usuario = usuarioDeLaSesion();
   const clave = `${version}|${usuario ?? ''}|${url}`;
 
+  // B4 T24 (F37): el contexto lleva el orden de la URL pedida y el efecto depende de ella (no de estado.orden): si un `extra` quita el
+  // orden (la Papelera), ordenar no repite la misma petición.
+  const ordenPedido = ordenDeUrl(url);
   useEffect(
-    () => lanzarListado(carga, { url, clave, contexto: { ruta, orden, usuario }, activo, esperar }),
-    [carga, url, clave, ruta, orden, usuario, activo, esperar],
+    () => lanzarListado(carga, { url, clave, contexto: { ruta, orden: ordenPedido, usuario }, activo, esperar }),
+    [carga, url, clave, ruta, ordenPedido, usuario, activo, esperar],
   );
 
   // Punto 1 (r1) y puntos 2 y 3 (r2): un orden rechazado vuelve al por defecto, UNA vez por llegada, desde un efecto y
@@ -142,7 +145,8 @@ export function useListado<T = unknown>({
     despachar({ tipo: 'restablecerOrden', rechazado: rechazo.orden });
   }, [carga, resultado, orden, atendido, usuario, despachar]);
 
-  const recargar = useCallback(() => setVersion((v) => v + 1), []);
+  // B4 T24 (F37): setVersion en las dependencias (es estable): el React Compiler la infiere y sin ella no preserva la memoización.
+  const recargar = useCallback(() => setVersion((v) => v + 1), [setVersion]);
   const restablece = Boolean(despachar);
 
   return useMemo(() => {
