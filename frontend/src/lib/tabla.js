@@ -2282,11 +2282,39 @@ export function cierraConEsc({ tecla, arriba, defaultPrevented = false, bloquead
  * (como el Esc y como Avisos), y solo si el foco está dentro de su panel ('panel'), en el <body> ('body': un clic en una zona que no se
  * enfoca) o en un panel de la pila ('pila', data-capa). Con el foco en otro elemento fuera de la pila ('fuera': el Copilot, un aviso, la
  * ventana de re-ingreso de SessionKeeper), deja actuar al navegador: si no, le quitaría el foco.
- * @param {{arriba: boolean, reautenticando?: boolean, foco?: 'panel' | 'body' | 'pila' | 'fuera'}} entrada
+ * B4 T24 f2 (m9 de la revisión r3 de f1, aditivo): «fuera» se parte en dos (lugarDelFocoDe). 'encima' (una superficie que va sobre las
+ * capas: el Copilot, la pila de avisos, la ventana de re-ingreso) sigue sin atraparse. 'detras' (la página tapada por la capa: el
+ * Sidebar, el SubNav, la tabla) SÍ se atrapa: la capa de arriba recupera el foco que cayó detrás. 'fuera' queda como estaba (false).
+ * @param {{arriba: boolean, reautenticando?: boolean, foco?: LugarDelFoco | 'fuera'}} entrada
  * @returns {boolean}
  */
 export function atrapaTab({ arriba, reautenticando = false, foco }) {
-  return Boolean(arriba) && !reautenticando && (foco === 'panel' || foco === 'body' || foco === 'pila');
+  return Boolean(arriba) && !reautenticando && (foco === 'panel' || foco === 'body' || foco === 'pila' || foco === 'detras');
+}
+
+/**
+ * @typedef {'panel' | 'body' | 'pila' | 'encima' | 'detras'} LugarDelFoco
+ *   B4 T24 f2 (m9): dónde está el foco respecto de una capa de la pila (Modal y Drawer).
+ */
+
+/**
+ * B4 T24 f2 (m9 de la revisión r3 de f1): dónde está el foco respecto de una capa, de lo que el hook lee del elemento activo (useCierreVentana):
+ *  - 'body': no hay elemento activo o es el <body> (un clic en una zona que no se enfoca);
+ *  - 'panel': dentro del panel de la capa;
+ *  - 'pila': en otro panel de la pila (data-capa; Modal y Drawer también llevan aria-modal, pero son de la pila);
+ *  - 'encima': en una superficie que va SOBRE las capas: marcada con data-superficie (el Copilot, la pila de avisos) o dentro de un
+ *    [aria-modal="true"] que no es de la pila (la ventana de re-ingreso de SessionKeeper);
+ *  - 'detras': cualquier otro elemento: la página que la capa tapa (el Sidebar, el SubNav, la tabla).
+ * En ese orden: el <body>, el panel y la pila ganan.
+ * @param {{body?: boolean, panel?: boolean, pila?: boolean, superficie?: boolean, modalAparte?: boolean}} donde
+ * @returns {LugarDelFoco}
+ */
+export function lugarDelFocoDe({ body = false, panel = false, pila = false, superficie = false, modalAparte = false }) {
+  if (body) return 'body';
+  if (panel) return 'panel';
+  if (pila) return 'pila';
+  if (superficie || modalAparte) return 'encima';
+  return 'detras';
 }
 
 /**

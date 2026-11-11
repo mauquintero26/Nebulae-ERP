@@ -1606,7 +1606,8 @@ console.log('--- B4 T24 (F26) y r2 (C8): el tono de cada columna sale de acentoD
   assert.deepEqual([...bloque.matchAll(/^\s+([a-z]+): \{ punto:/gm)].map((m) => m[1]), [...TONOS], 'TONOS y CLAVES_TONOS_KANBAN, las mismas');
   // r3 (m2, m14): los tipos: CLAVES_TONOS_KANBAN como unión literal y acentoDesdeClase con plantilla (sin conjunto, ColorKpi).
   assert.ok(leerSrc('lib/kanban.js').includes("/** @type {ReadonlyArray<'slate' | 'gray' | 'red' | 'orange' | 'amber' | 'yellow' | 'lime' | 'green' | 'emerald' | 'teal' | 'cyan' | 'sky' | 'blue' | 'indigo' | 'violet' | 'purple' | 'fuchsia' | 'pink' | 'rose'>} */"), 'la unión literal');
-  assert.match(leerSrc('lib/kpis.js'), /@template \{string\} \[C=ColorKpi\]\n \* @param \{unknown\} clase\n \* @param \{string\} \[respaldo\]\n \* @param \{ReadonlyArray<C>\} \[conjunto\]\n \* @returns \{C\}/);
+  // B4 T24 f2 (m1 de la revisión r3 de f1, D27): el respaldo también es de la plantilla (`@param {C} [respaldo]`), no un string suelto.
+  assert.match(leerSrc('lib/kpis.js'), /@template \{string\} \[C=ColorKpi\]\n \* @param \{unknown\} clase\n \* @param \{C\} \[respaldo\]\n \* @param \{ReadonlyArray<C>\} \[conjunto\]\n \* @returns \{C\}/);
   const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8');
   for (const ruta of ['lib/kanban-ventas.js', 'lib/crm-etapas.js']) assert.ok(!/const familia\b|TONO_SC\b/.test(leer(ruta)), `${ruta}: sin copia`);
   assert.match(leer('lib/kanban-ventas.js'), /const tonoDeClase = \(clase\) => acentoDesdeClase\(clase, 'slate', CLAVES_TONOS_KANBAN\);/);

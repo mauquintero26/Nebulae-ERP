@@ -534,7 +534,9 @@ export function PropagarPvenConfirm({ pven, totalAnterior, totalNuevo, onConfirm
       footer={(
         <div className="flex flex-col w-full gap-2">
           <Button color="indigo" disabled={saving} onClick={onConfirm}>Sí, actualizar también el pedido</Button>
-          <Button variant="secondary" disabled={saving} onClick={onCancel}>Solo guardar la cotización</Button>
+          {/* B4 T24 f2 (m2 = m6 de la revisión r3 de f1): sin la X, el foco inicial caía en «Sí, actualizar también el pedido»: arranca en
+              la opción de menos peso (autoFocus; useCierreVentana respeta el foco que ya está dentro del panel). Abrir no decide. */}
+          <Button variant="secondary" autoFocus disabled={saving} onClick={onCancel}>Solo guardar la cotización</Button>
         </div>
       )}>
       <p className="text-slate-500 text-sm">

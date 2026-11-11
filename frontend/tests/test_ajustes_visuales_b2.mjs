@@ -291,7 +291,9 @@ console.log('--- V8 TEST 2: los avatares de la Actividad de la SC y la COT usan 
 console.log('--- V10 TEST (ronda 1): la pila de avisos va arriba al centro ---');
 {
   const avisos = sinComentarios(leer('components/ui/Avisos.tsx'));
-  const pila = avisos.match(/<div className="([^"]*\bz-\[90\][^"]*)">/);
+  // B4 T24 f2 (m9, D27): la pila lleva además data-superficie="avisos" (va encima de las ventanas: la capa de arriba no le quita el
+  // foco). Las clases que se fijan abajo son las mismas.
+  const pila = avisos.match(/<div data-superficie="avisos" className="([^"]*\bz-\[90\][^"]*)">/);
   assert.ok(pila, 'la pila de avisos (z-[90]) encontrada');
   // Arriba al centro (decisión del controlador, ronda 1): a la derecha tapaba «Editar» y «Cancelar Solicitud» de las
   // cabeceras, y abajo el botón principal de las ventanas. Mismo z-index, orden (flex-col) y pointer-events.

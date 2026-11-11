@@ -3190,14 +3190,33 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
   assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, dentro: false, enBody: true }), true);
   assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, dentro: false, enBody: false }), false);
   // r2 (C1 = C3 = C7) y r3 (m10, m1, m5): una sola regla. La capa de arriba atrapa Tab solo si el foco está dentro de su panel, en el
-  // <body> o en un panel de la pila (data-capa); con el foco en otro elemento fuera de la pila (el Copilot, un aviso, la ventana de
-  // re-ingreso) o con una re-autenticación pendiente, deja actuar al navegador.
-  const { atrapaTab } = TABLA;
+  // <body> o en un panel de la pila (data-capa); con una re-autenticación pendiente, deja actuar al navegador.
+  // B4 T24 f2 (m9 de la revisión r3 de f1, D27): lo que antes era un solo «fuera» son dos sitios. «encima» (una superficie marcada con
+  // data-superficie: el Copilot y la pila de avisos; o un [aria-modal="true"] que no es de la pila: la ventana de re-ingreso) NO se
+  // atrapa. «detras» (cualquier otro elemento de la página: el Sidebar, el SubNav, la tabla) SÍ: la capa de arriba recupera el foco.
+  const { atrapaTab, lugarDelFocoDe } = TABLA;
   assert.equal(atrapaTab({ arriba: true, foco: 'panel' }), true, 'dentro de su panel');
   assert.equal(atrapaTab({ arriba: true, foco: 'body' }), true, 'en el <body> (un clic en una zona que no se enfoca)');
   assert.equal(atrapaTab({ arriba: true, foco: 'pila' }), true, 'en otra capa de la pila: vuelve a la de arriba');
-  assert.equal(atrapaTab({ arriba: true, foco: 'fuera' }), false, 'el Copilot o un aviso: fuera de la pila');
-  assert.equal(atrapaTab({ arriba: true, foco: 'fuera', reautenticando: true }), false, 'la ventana de re-ingreso');
+  assert.equal(atrapaTab({ arriba: true, foco: 'encima' }), false, 'el Copilot, un aviso o la ventana de re-ingreso: encima');
+  assert.equal(atrapaTab({ arriba: true, foco: 'detras' }), true, 'm9: la página de atrás (Sidebar, SubNav, la tabla): la capa lo recupera');
+  assert.equal(atrapaTab({ arriba: false, foco: 'detras' }), false, 'm9: solo la de arriba');
+  assert.equal(atrapaTab({ arriba: true, foco: 'detras', reautenticando: true }), false, 'm9: con la re-autenticación pendiente, no');
+  assert.equal(atrapaTab({ arriba: true, foco: 'fuera' }), false, 'el valor de r3 (aditivo): sin atrapar');
+  assert.equal(atrapaTab({ arriba: true, foco: 'encima', reautenticando: true }), false, 'la ventana de re-ingreso');
+  // m9: lugarDelFocoDe, la regla pura de dónde está el foco (el hook le pasa lo que lee del DOM). El orden cuenta: el <body>, el panel
+  // y la pila ganan; una superficie o un modal aparte es «encima»; lo demás, «detras».
+  assert.equal(typeof lugarDelFocoDe, 'function', 'lugarDelFocoDe existe');
+  assert.equal(lugarDelFocoDe({ body: true }), 'body');
+  assert.equal(lugarDelFocoDe({ panel: true, pila: true }), 'panel', 'el panel de la capa también es de la pila: gana el panel');
+  assert.equal(lugarDelFocoDe({ pila: true, modalAparte: true }), 'pila', 'otra capa de la pila (Modal y Drawer llevan aria-modal)');
+  assert.equal(lugarDelFocoDe({ superficie: true }), 'encima', 'el Copilot o un aviso');
+  assert.equal(lugarDelFocoDe({ modalAparte: true }), 'encima', 'la ventana de re-ingreso');
+  assert.equal(lugarDelFocoDe({}), 'detras', 'cualquier otro elemento: la página de atrás');
+  assert.equal(lugarDelFocoDe({ panel: false, pila: false, superficie: false, modalAparte: false, body: false }), 'detras');
+  for (const lugar of [lugarDelFocoDe({}), lugarDelFocoDe({ superficie: true })]) {
+    assert.equal(atrapaTab({ arriba: true, foco: lugar }), lugar === 'detras', `de punta a punta: ${lugar}`);
+  }
   assert.equal(atrapaTab({ arriba: true, foco: 'panel', reautenticando: true }), false, 'con la re-autenticación pendiente');
   assert.equal(atrapaTab({ arriba: false, foco: 'panel' }), false, 'una capa de abajo');
   assert.equal(atrapaTab({ arriba: true }), false, 'sin saber dónde está el foco, no');
@@ -3215,7 +3234,15 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
   assert.match(hook, /export function atraparTab\(contenedor: HTMLElement, e: \{ shiftKey: boolean; preventDefault: \(\) => void \}\) \{\s*const lista = \[\.\.\.contenedor\.querySelectorAll<HTMLElement>\(ENFOCABLES\)\]\.filter\(\(el\) => el\.getClientRects\(\)\.length > 0\);\s*const destino = siguienteFocoAtrapado\(lista\.indexOf\(document\.activeElement as HTMLElement\), lista\.length, e\.shiftKey\);\s*if \(destino === null\) return;\s*e\.preventDefault\(\);\s*if \(destino >= 0\) lista\[destino\]\.focus\(\);\s*\}/);
   // r2 (C1, m12) y r3 (m10): la rama Tab sale con atrapaTab (arriba, la re-autenticación y DÓNDE está el foco) y usa el ayudante.
   assert.match(hook, /if \(e\.key === 'Tab'\) \{\s*if \(!panel \|\| !atrapaTab\(\{ arriba, reautenticando: hayReautenticacionPendiente\(\), foco: lugarDelFoco\(panel\) \}\)\) return;\s*atraparTab\(panel, e\);\s*return;\s*\}/);
-  assert.match(hook, /const lugarDelFoco = \(panel: HTMLElement\): LugarDelFoco => \{\s*const activo = document\.activeElement;\s*if \(!activo \|\| activo === document\.body\) return 'body';\s*if \(panel\.contains\(activo\)\) return 'panel';\s*return activo\.closest\('\[data-capa\]'\) \? 'pila' : 'fuera';\s*\};/);
+  // m9 (D27): el hook lee del DOM y decide con lugarDelFocoDe: «encima» es data-superficie o un aria-modal que no es de la pila.
+  assert.match(hook, /const lugarDelFoco = \(panel: HTMLElement\): LugarDelFoco => \{\s*const activo = document\.activeElement;\s*return lugarDelFocoDe\(\{\s*body: !activo \|\| activo === document\.body,\s*panel: Boolean\(activo && panel\.contains\(activo\)\),\s*pila: Boolean\(activo\?\.closest\('\[data-capa\]'\)\),\s*superficie: Boolean\(activo\?\.closest\('\[data-superficie\]'\)\),\s*modalAparte: Boolean\(activo\?\.closest\('\[aria-modal="true"\]:not\(\[data-capa\]\)'\)\),\s*\}\);\s*\};/);
+  assert.ok(!hook.includes("'fuera'"), 'm9: el hook ya no da «fuera»');
+  // m9: las superficies que van ENCIMA de las capas llevan la marca: el botón y el panel del Copilot (GlobalAIChat) y la pila de avisos.
+  const chat = leer('components/GlobalAIChat.tsx');
+  assert.equal((chat.match(/\bdata-superficie="copilot"/g) ?? []).length, 2, 'el botón y el panel del Copilot');
+  assert.match(chat, /<button\s+data-superficie="copilot"\s+onClick=\{\(\) => setIsOpen\(true\)\}/);
+  assert.match(chat, /<div data-superficie="copilot" className=\{`fixed bottom-6 right-6 bg-white/);
+  assert.match(leer('components/ui/Avisos.tsx'), /<div data-superficie="avisos" className="fixed top-4 left-1\/2 -translate-x-1\/2 z-\[90\]/, 'la pila de avisos');
   // Los paneles de la pila se marcan con data-capa (Modal y Drawer).
   assert.match(leer('components/ui/Modal.tsx'), /aria-describedby=\{describedBy\}\s+data-capa=""/);
   assert.match(leer('components/ui/Drawer.tsx'), /role="dialog" aria-modal="true" data-capa=""/);
@@ -3224,7 +3251,10 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
   const sesion = leer('components/SessionKeeper.tsx');
   assert.match(sesion, /import \{ atraparTab \} from '@\/components\/ui\/useCierreVentana';/);
   assert.match(sesion, /useEffect\(\(\) => \{\s*if \(!abierto\) return undefined;\s*const alTeclear = \(e: KeyboardEvent\) => \{\s*if \(e\.key === 'Tab' && refVentana\.current\) atraparTab\(refVentana\.current, e\);\s*\};\s*window\.addEventListener\('keydown', alTeclear, true\);\s*return \(\) => window\.removeEventListener\('keydown', alTeclear, true\);\s*\}, \[abierto\]\);/);
-  assert.match(sesion, /ref=\{refVentana\}\s+className="fixed inset-0 z-\[100\]/);
+  // B4 T24 f2 (m7 de la revisión r3 de f1, D27): la sonda vuelve a fijar el rol, aria-modal y el nombre de la ventana de re-ingreso
+  // (hayDialogoEncima de usePantallaCompleta y el lector de pantalla los usan; lugarDelFoco la lee como «encima» por su aria-modal).
+  assert.match(sesion, /ref=\{refVentana\}\s+className="fixed inset-0 z-\[100\][^"]*"\s+role="dialog"\s+aria-modal="true"\s+aria-labelledby="sesion-cerrada-titulo"/);
+  assert.ok(sesion.includes('<h3 id="sesion-cerrada-titulo"'), 'el título que la nombra');
   assert.ok(!/querySelectorAll|onKeyDown=\{alTeclearVentana\}/.test(sesion), 'sin su copia del Tab ni su selector propio');
   assert.match(hook, /document\.removeEventListener\('keydown', alTeclear\);\s*capas = cerrarCapa\(capas, capa\);/);
   assert.match(leer('components/ui/Modal.tsx'), /ref=\{refPanel\}\s+tabIndex=\{-1\}/);
@@ -3280,8 +3310,10 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
   assert.ok(leer('app/dashboard/crm/page.tsx').includes('<h2 id="drawer-config-crm-titulo" className="font-black text-slate-800 text-lg">Configuración CRM</h2>'));
   // r3 (m8): la protección de «Nueva Solicitud de Cliente» detrás de «Nuevo cliente» es la pila más su cierreExterno={false}.
   assert.match(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx'), /<Modal cierreExterno=\{false\} title="Nueva Solicitud de Cliente"/);
-  // r2 (m5, m16): «Nuevo cliente» (selector-cliente.tsx) tiene campos: su envoltura solo para el Esc (stopPropagation), para que no
-  // llegue a la ventana de la solicitud de atrás, y ya no lo cierra (ni descarta los campos).
+  // r2 (m5, m16) y B4 T24 f2 (m3 de la revisión r3 de f1): «Nuevo cliente» (selector-cliente.tsx) tiene campos y ya no se cierra con Esc
+  // (ni descarta los campos). Lo que protege a la ventana de la solicitud de atrás es la pila (solo la capa de arriba atiende el Esc) más
+  // su cierreExterno={false}: se cierra solo con sus botones. El stopPropagation de la envoltura solo corta los oyentes de window y de
+  // React que estén por encima; no es la protección (lo mismo que dice el comentario de selector-cliente.tsx).
   const selector = leer('app/dashboard/ventas/solicitud/selector-cliente.tsx');
   assert.match(selector, /<div onKeyDown=\{e => \{ if \(e\.key === 'Escape'\) e\.stopPropagation\(\); \}\}>/);
   assert.ok(!/e\.key === 'Escape'\) \{ e\.stopPropagation\(\); if \(!saving\) onClose\(\);/.test(selector), 'el Esc ya no cierra el alta');
@@ -3289,6 +3321,23 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
   for (const ruta of ['app/dashboard/inventario/kardex/page.tsx', 'app/dashboard/inventario/traslados/page.tsx', 'components/ui/Avisos.tsx']) {
     assert.ok(!leer(ruta).includes('cierreExterno'), ruta);
   }
+  // B4 T24 f2 (m4 de la revisión r3 de f1): VentanaConfirmacion es una capa de la pila (Modal con data-capa y useCierreVentana): su Tab lo
+  // atrapa el hook con la regla única (atrapaTab y atraparTab). Ya no tiene su propia trampa ni su propio ENFOCABLES; conserva el Esc en
+  // captura (responde «no» y no llega a la ventana de abajo).
+  const avisosTsx = leer('components/ui/Avisos.tsx');
+  const ventana = avisosTsx.slice(avisosTsx.indexOf('function VentanaConfirmacion('), avisosTsx.indexOf('<Modal', avisosTsx.indexOf('function VentanaConfirmacion(')));
+  assert.ok(ventana.length > 0, 'VentanaConfirmacion');
+  assert.ok(!/\bENFOCABLES\b|'Tab'|querySelectorAll|shiftKey/.test(avisosTsx), 'sin una tercera copia de la trampa de Tab');
+  assert.match(ventana, /if \(e\.key !== 'Escape'\) return;\s*e\.preventDefault\(\);\s*e\.stopPropagation\(\);\s*onResponder\(id, false\);/);
+  assert.match(ventana, /window\.addEventListener\('keydown', alTeclear, true\);/);
+  assert.match(avisosTsx, /<Modal\s+capa="encima"\s+role="alertdialog"/, 'es un Modal de la pila');
+  // B4 T24 f2 (m2 = m6 de la revisión r3 de f1): «Actualizar Pedido de Venta» no tiene X, así que el foco inicial caía en «Sí, actualizar
+  // también el pedido». Arranca en «Solo guardar la cotización», la opción de menos peso (autoFocus: el hook respeta el foco que ya
+  // está dentro del panel). Abrir no decide por el usuario.
+  const propagar = leer('app/dashboard/ventas/cotizacion/cotizacion-client.tsx');
+  assert.match(propagar, /<Button color="indigo" disabled=\{saving\} onClick=\{onConfirm\}>Sí, actualizar también el pedido<\/Button>\s*(?:\{\/\*[\s\S]*?\*\/\}\s*)?<Button variant="secondary" autoFocus disabled=\{saving\} onClick=\{onCancel\}>Solo guardar la cotización<\/Button>/);
+  assert.equal((propagar.match(/\sautoFocus[\s>=]/g) ?? []).length, 1, 'un solo autoFocus en el archivo: el de «Solo guardar la cotización»');
+  assert.ok(hook.includes('if (panel && !panel.contains(document.activeElement)) {'), 'el hook no pisa el autoFocus de adentro');
 }
 
 console.log('--- TEST T24-f (B4 T24, FINAL-m27): la alerta de una pestaña se dice con texto (no solo con el color) y no desaparece activa ---');
