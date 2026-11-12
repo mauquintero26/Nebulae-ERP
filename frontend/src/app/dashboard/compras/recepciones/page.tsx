@@ -302,7 +302,7 @@ export default function RecepcionesPage() {
   const alCambiarBarra = useCallback((accion: AccionTabla) => {
     if (accion.tipo === 'modo') {
       const modo = String(accion.valor);
-      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_RECEPCION : opcionesEstadosRecepcion));
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_RECEPCION : opcionesEstadosRecepcion, COLUMNAS_RECEPCION));
     } else despachar(accion);
   }, [estado, despachar]);
   // R8: ordenada por una columna, el chip «Orden: … · Más recientes» vuelve al orden del servidor.

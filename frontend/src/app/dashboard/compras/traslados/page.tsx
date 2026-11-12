@@ -265,7 +265,7 @@ export default function TrasladosPage() {
   const alCambiarBarra = useCallback((accion: AccionTabla) => {
     if (accion.tipo === 'modo') {
       const modo = String(accion.valor);
-      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_TRASLADO : opcionesEstadosTraslado));
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_TRASLADO : opcionesEstadosTraslado, COLUMNAS_TRASLADO));
     } else despachar(accion);
   }, [estado, despachar]);
   // R8: ordenada por una columna, el chip «Orden: … · Más recientes» vuelve al orden del servidor.

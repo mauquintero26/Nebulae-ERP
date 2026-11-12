@@ -3714,6 +3714,35 @@ console.log('--- B4 T24 f3 (la ventana de seguimiento de Compras › Pedidos): u
   assert.match(nuevo, /<div data-superficie="ventana" className="fixed inset-0 z-\[95\]/);
 }
 
+console.log('--- B4 T24 f3 (FINAL-m11 de f1): Recepciones, Lista de compras y Traslados (Compras e Inventario) pasan sus columnas a accionModo ---');
+{
+  const { COLUMNAS_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, opcionesEstadosRecepcion } = await import('../src/lib/estados-compras.js');
+  const { accionModo } = TABLA;
+  // Recepciones: en Kanban, «Confirmadas» es COMPLETADA (su estado principal) y vale la columna entera (también COMPLETADA_LOGISTICA).
+  const confirmadas = COLUMNAS_RECEPCION.find((c) => c.estados.includes('COMPLETADA_LOGISTICA'));
+  assert.ok(confirmadas && confirmadas.estados[0] === 'COMPLETADA', 'Confirmadas = COMPLETADA + COMPLETADA_LOGISTICA');
+  const deKanban = estadoTablaInicial({ vista: 'todas', modo: 'kanban', estados: ['COMPLETADA'] });
+  const validos = new Set(opcionesEstadosRecepcion('todas').map((o) => o.valor));
+  const esperados = confirmadas.estados.filter((e) => validos.has(e));
+  assert.ok(esperados.length > 1, 'la Lista ofrece los dos estados de la columna');
+  assert.deepEqual(accionModo(deKanban, 'lista', opcionesEstadosRecepcion, COLUMNAS_RECEPCION), { tipo: 'cambiar', cambios: { modo: 'lista', estados: esperados } },
+    'Kanban → Lista: la columna entera, no solo COMPLETADA');
+  const ida = reducirEstadoTabla(deKanban, accionModo(deKanban, 'lista', opcionesEstadosRecepcion, COLUMNAS_RECEPCION));
+  const vuelta = reducirEstadoTabla(ida, accionModo(ida, 'kanban', OPCIONES_ESTADOS_TABLERO_RECEPCION, COLUMNAS_RECEPCION));
+  assert.deepEqual(vuelta.estados, ['COMPLETADA'], 'y de vuelta, la opción de la columna');
+  // Las pantallas le pasan sus columnas (el cuarto argumento, aditivo).
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  for (const [ruta, tablero, lista, columnas] of [
+    ['app/dashboard/compras/recepciones/page.tsx', 'OPCIONES_ESTADOS_TABLERO_RECEPCION', 'opcionesEstadosRecepcion', 'COLUMNAS_RECEPCION'],
+    ['app/dashboard/inventario/recepciones/page.tsx', 'OPCIONES_ESTADOS_TABLERO_RECEPCION', 'opcionesEstadosRecepcion', 'COLUMNAS_RECEPCION'],
+    ['app/dashboard/compras/lista-compras/page.tsx', 'OPCIONES_ESTADOS_TABLERO_LISTA', 'opcionesEstadosLista', 'COLUMNAS_LISTA'],
+    ['app/dashboard/compras/traslados/page.tsx', 'OPCIONES_ESTADOS_TABLERO_TRASLADO', 'opcionesEstadosTraslado', 'COLUMNAS_TRASLADO'],
+    ['app/dashboard/inventario/traslados/page.tsx', 'OPCIONES_ESTADOS_TABLERO_TRASLADO', 'opcionesEstadosTraslado', 'COLUMNAS_TRASLADO'],
+  ]) {
+    assert.ok(leer(ruta).includes(`despachar(accionModo(estado, modo, modo === 'kanban' ? ${tablero} : ${lista}, ${columnas}));`), ruta);
+  }
+}
+
 console.log('✓ T4D: umbral, ancho al contenido, ajustar al ancho, geometría, destino, orden, cuerpo, grupos, selección, barra y el fuente de los componentes.');
 console.log('✓ T4D r1: anchoAlSoltar, estado del total, títulos recortados, filtros a la vista, paneles, Esc de la pantalla completa y los cables de r1.');
 console.log('✓ T4D r2: umbral del asa, la flexible guarda lo que se ve, zona táctil, filtro que se cierra, casilla en el recorte, total obligatorio y JSDoc del memo.');

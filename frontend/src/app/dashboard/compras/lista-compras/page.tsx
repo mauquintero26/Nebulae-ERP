@@ -451,7 +451,7 @@ export default function ListaComprasPage() {
   const alCambiarBarra = useCallback((accion: AccionTabla) => {
     if (accion.tipo === 'modo') {
       const modo = String(accion.valor);
-      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_LISTA : opcionesEstadosLista));
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_LISTA : opcionesEstadosLista, COLUMNAS_LISTA));
     } else despachar(accion);
   }, [estado, despachar]);
   const vacio = useMemo(() => {
