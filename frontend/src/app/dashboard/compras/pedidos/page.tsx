@@ -12,7 +12,7 @@ import {
 // la pantalla, las tarjetas y la franja del flujo; el Análisis vive en el Hub (R13). El panel del PEC, el seguimiento,
 // la recepción y el alta conservan lo de B1 a B3.
 import {
-  SubNav, PageHeader, Button, useAvisos, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila, ModalMotivo,
+  SubNav, PageHeader, Button, useAvisos, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila, Modal, ModalMotivo,
   TableroKanban, EsqueletoTablero, useTableroKanban,
 } from '@/components/ui';
 import type { ItemMenuFila } from '@/components/ui';
@@ -46,7 +46,7 @@ import {
   transicionesPec, vinculoPvenDelPec,
 } from '@/lib/estados-compras';
 import {
-  ENLACE_VER_ANALISIS_COMPRAS, TEXTO_SEGUIMIENTO_CERRADO, accionSemaforoCompras, avisoTarjetaEtapa, avisosFlujoCompras,
+  ENLACE_VER_ANALISIS_COMPRAS, errorDiasEtapas, TEXTO_SEGUIMIENTO_CERRADO, accionSemaforoCompras, avisoTarjetaEtapa, avisosFlujoCompras,
   etiquetaEtapaTracking, filtroSemaforoCompras, leerEnlacePedidosCompra, pasosDeTracking, pasosPedidosCompra, seguimientoCerrado,
   textoReglaCompras, vistaDePasoPedidosCompra,
 } from '@/lib/flujo-compras';
@@ -145,7 +145,9 @@ function NewCasilleroModal({onSave, onClose}: {onSave:(c:any)=>void; onClose:()=
     setSaving(false);
   }
   return (
-    <div className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm">
+    // B4 T24 f3: se abre también encima de la ventana de seguimiento (un Modal de la pila): data-superficie, para que la capa no le quite el
+    // foco a sus campos.
+    <div data-superficie="ventana" className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm">
       <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg mx-4">
         <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-indigo-50 rounded-t-3xl">
           <div><h3 className="font-black text-gray-900 text-lg">Nuevo Casillero</h3><p className="text-xs text-gray-500 mt-0.5">Punto de recepcion / forwarder</p></div>
@@ -211,12 +213,16 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:Avis
 
   const saveStages = async () => {
     if (stages.some(s=>!s.key || !String(s.key).trim())) { onToast('Cada etapa necesita una key (identificador unico)','error'); return; }
+    // B4 T24 f3 (m21 del backend r1): los días de alerta, en la lib con el rango del servidor (0 a 36500), antes de mandar. Si el servidor
+    // responde 422 (ETAPA_DIAS_INVALIDOS), su texto; la ventana sigue abierta con lo escrito.
+    const errorDias = errorDiasEtapas(stages);
+    if (errorDias) { onToast(errorDias, 'error'); return; }
     setSaving(true);
     try {
       await apiFetch(`/compras/tracking-config/${tipoEnvio}`, {method:'PUT', body:JSON.stringify({stages})});
       onToast('Configuracion de etapas guardada','ok');
       loadConfig();
-    } catch(e:any) { onToast(e.message,'error'); }
+    } catch (e) { onToast(e, 'error'); }
     setSaving(false);
   };
 
@@ -232,28 +238,28 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:Avis
     catch(e:any) { onToast(e.message,'error'); }
   };
 
+  // B4 T24 f3 (duda 1 de f2 r2): un Modal (z-50) de la pila, ya no un panel a mano en z-[95] encima de todo: «Eliminar casillero» abre
+  // confirmar() (capa="encima", z-[60]) ENCIMA de esta ventana, con su Tab dentro, y Esc cierra solo la confirmación. Regla de F40: tiene
+  // lo escrito (las etapas), así que solo la cierran sus botones (sin cierre externo), y no se cierra mientras guarda (bloquearCierre).
   return (
-    // B4 T24 f2 r2 (m4): esta ventana (z-[95]) va ENCIMA de confirmar() (z-[60]) que abre «Eliminar casillero»: data-superficie, para que
-    // la capa de la confirmación no le quite el foco.
-    <div data-superficie="ventana" className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
-      {showNewCasillero && (
-        <NewCasilleroModal onClose={()=>setShowNewCasillero(false)} onSave={()=>{setShowNewCasillero(false);loadCasilleros();}}/>
-      )}
-      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
-        <div className="px-6 py-5 border-b border-gray-100 flex justify-between items-center shrink-0">
-          <div>
-            <h3 className="font-black text-gray-900 text-lg flex items-center gap-2"><Settings2 size={18} className="text-purple-600"/> Configuracion de Tracking</h3>
-            <p className="text-xs text-gray-500 mt-0.5">Etapas, alertas y casilleros del pipeline logistico</p>
-          </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-xl"><X size={18}/></button>
-        </div>
-        <div className="flex gap-1 px-6 pt-4 shrink-0">
+    <>
+      <Modal cierreExterno={false} bloquearCierre={saving} title="Configuración de tracking" subtitle="Etapas, alertas y casilleros del pipeline logístico"
+        icon={Settings2} color="purple" maxWidth="3xl" onClose={onClose}
+        footer={tab === 'etapas' ? (
+          <>
+            <button onClick={onClose} disabled={saving} className="px-4 py-2 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-50">Cerrar</button>
+            <button onClick={saveStages} disabled={saving} className="px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2">
+              {saving?<RefreshCw size={14} className="animate-spin"/>:<Save size={14}/>} Guardar Etapas
+            </button>
+          </>
+        ) : undefined}>
+        <div className="flex gap-1">
           {[{k:'etapas',l:'Etapas y Alertas'},{k:'casilleros',l:'Casilleros'}].map(({k,l}:any)=>(
             <button key={k} onClick={()=>setTab(k)} className={'px-3 py-1.5 rounded-lg text-sm font-bold ' + (tab===k?'bg-purple-600 text-white':'bg-gray-100 text-gray-600 hover:bg-purple-50')}>{l}</button>
           ))}
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6">
+        <div>
           {tab === 'etapas' && (
             <div className="space-y-4">
               <div className="flex gap-2">
@@ -319,17 +325,11 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:Avis
             </div>
           )}
         </div>
-
-        {tab === 'etapas' && (
-          <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3 shrink-0">
-            <button onClick={onClose} className="px-4 py-2 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50">Cerrar</button>
-            <button onClick={saveStages} disabled={saving} className="px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2">
-              {saving?<RefreshCw size={14} className="animate-spin"/>:<Save size={14}/>} Guardar Etapas
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
+      </Modal>
+      {showNewCasillero && (
+        <NewCasilleroModal onClose={()=>setShowNewCasillero(false)} onSave={()=>{setShowNewCasillero(false);loadCasilleros();}}/>
+      )}
+    </>
   );
 }
 

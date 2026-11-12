@@ -573,4 +573,31 @@ console.log('--- TEST 21 (B4 T16B, FLUJO-compras punto 10): la franja de la List
   assert.equal(cargando[0].esEste, true);
 }
 
+console.log('--- B4 T24 f3 (m21 del backend r1): los días de alerta de la configuración del seguimiento, con el rango del servidor antes de mandar ---');
+{
+  assert.equal(typeof fc.errorDiasEtapas, 'function', 'errorDiasEtapas existe');
+  // La paridad con el servidor (backend/app/api/v1/erp_compras.py, solo lectura): el tope y el texto del 422.
+  const compras = readFileSync(new URL('../../backend/app/api/v1/erp_compras.py', import.meta.url), 'utf8');
+  assert.equal(Number(compras.match(/^_MAX_DIAS_ALERTA = (\d+)$/m)?.[1]), fc.MAX_DIAS_ALERTA_ETAPA, 'el tope, el del servidor');
+  assert.equal(compras.match(/^ETAPA_DIAS_INVALIDOS = "([^"]+)"$/m)?.[1], fc.TEXTO_DIAS_ETAPA_INVALIDOS, 'el texto, el del 422');
+  const T = fc.TEXTO_DIAS_ETAPA_INVALIDOS;
+  // Valen: vacíos (null o ausentes) y un número entre 0 y 36500 (el servidor acepta también un decimal).
+  assert.equal(fc.errorDiasEtapas([{ alert_confirm_days: 2, alert_overdue_days: 1 }, { alert_confirm_days: null }, {}]), null);
+  assert.equal(fc.errorDiasEtapas([{ alert_confirm_days: 0, alert_overdue_days: 36500 }]), null, 'los bordes');
+  assert.equal(fc.errorDiasEtapas([{ alert_overdue_days: 1.5 }]), null, 'un decimal también lo acepta el servidor');
+  assert.equal(fc.errorDiasEtapas([]), null);
+  assert.equal(fc.errorDiasEtapas(null), null);
+  // No valen: fuera del rango, un texto o algo que no es un número finito; la primera da el texto del servidor.
+  for (const malo of [-1, 36501, Number.NaN, Infinity, '3', true]) {
+    assert.equal(fc.errorDiasEtapas([{ alert_confirm_days: 2 }, { alert_overdue_days: malo }]), T, String(malo));
+    assert.equal(fc.errorDiasEtapas([{ alert_confirm_days: malo }]), T, `confirmación ${String(malo)}`);
+  }
+  // El cableado: la ventana valida antes del PUT y, si el servidor dice que no (su 422), muestra su texto sin cerrarse ni perder lo escrito.
+  const ped = readFileSync(new URL('../src/app/dashboard/compras/pedidos/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const guardar = ped.slice(ped.indexOf('const saveStages = async () => {'), ped.indexOf('const { confirmar } = useAvisos();'));
+  assert.match(guardar, /const errorDias = errorDiasEtapas\(stages\);\s*if \(errorDias\) \{ onToast\(errorDias, 'error'\); return; \}\s*setSaving\(true\);/);
+  assert.match(guardar, /\} catch \(e\) \{ onToast\(e, 'error'\); \}/, 'el 422: su texto (textoDeError), sin cerrar la ventana');
+  assert.ok(!/onClose\(\)|setStages\(/.test(guardar), 'guardar no cierra la ventana ni toca lo escrito');
+}
+
 console.log('\nOK: test_flujo_compras.mjs');

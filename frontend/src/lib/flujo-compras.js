@@ -409,6 +409,29 @@ export function textoDiasEtapa(eta, hoy = diaColombia()) {
 // ─── El seguimiento del envío en las pantallas (B4 T15 r1: m2, m4, m6 y m14) ────────
 
 /** El texto de un seguimiento cerrado (el panel de la lista, el del Hub y el detalle dicen lo mismo). */
+/** B4 T24 f3 (m21 del backend r1): el tope de los días de alerta de una etapa (_MAX_DIAS_ALERTA de erp_compras.py). */
+export const MAX_DIAS_ALERTA_ETAPA = 36500;
+/** El texto del 422 de PUT /compras/tracking-config (ETAPA_DIAS_INVALIDOS de erp_compras.py; test_flujo_compras vigila la paridad). */
+export const TEXTO_DIAS_ETAPA_INVALIDOS = 'Los días de alerta de una etapa del seguimiento deben ser un número entre 0 y 36500.';
+
+/**
+ * B4 T24 f3 (m21 del backend r1): antes de guardar la configuración del seguimiento, los días de alerta de cada etapa
+ * (alert_confirm_days y alert_overdue_days) con la regla del servidor (_validar_etapas): vacíos (null) o un número entre 0 y 36500.
+ * Devuelve el texto del 422 del servidor con la primera que no vale, o null.
+ * @param {unknown} etapas
+ * @returns {string | null}
+ */
+export function errorDiasEtapas(etapas) {
+  for (const etapa of Array.isArray(etapas) ? etapas : []) {
+    for (const campo of ['alert_confirm_days', 'alert_overdue_days']) {
+      const dias = etapa?.[campo];
+      if (dias == null) continue;
+      if (typeof dias !== 'number' || !Number.isFinite(dias) || dias < 0 || dias > MAX_DIAS_ALERTA_ETAPA) return TEXTO_DIAS_ETAPA_INVALIDOS;
+    }
+  }
+  return null;
+}
+
 export const TEXTO_SEGUIMIENTO_CERRADO = 'Pedido de compra cancelado: su envío ya no se sigue.';
 
 /**
