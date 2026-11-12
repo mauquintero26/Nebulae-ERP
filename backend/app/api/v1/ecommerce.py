@@ -38,6 +38,10 @@ import datetime
 import uuid
 import os
 import json as json_mod
+import logging
+import re
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -1606,19 +1610,37 @@ def delete_media(media_id: int, user: User = Depends(require_roles(*ROLE_ADMIN))
 
 
 # --- WEB BUILDER ---
+# B4 T24 r3 (C1): las claves del constructor del sitio, las únicas que /web-builder/config lee y escribe. Salen de
+# dashboard/sitio-web/page.tsx (theme, hero, featured_section, contact), de /web-builder/chat (las de `changes`, también
+# blog) y de store/page.tsx y store/contacto/page.tsx (hero, contact). web_builder_config guarda también payment_gateways
+# (los secretos), erp_lista_compras, erp_tracking_stages, shipping, ecommerce_fulfillment...: esas no salen ni se pisan.
+CLAVES_CONSTRUCTOR_SITIO = ("theme", "hero", "featured_section", "contact", "blog")
+
+
 @router.get("/web-builder/config")
 def get_web_config(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
+    """B4 T24 r3 (C1): solo las claves del constructor (CLAVES_CONSTRUCTOR_SITIO). Antes devolvía todas las filas, también
+    payment_gateways con los secretos en claro, a ADMIN y a ASESOR. La autenticación no cambia (sin sesión, 401: la tienda
+    pública ya recibía 401, y no se arregla abriendo este GET)."""
     _ensure_ecommerce_tables(db)
     try:
-        rows = db.execute(text("SELECT config_key, config_value FROM web_builder_config")).fetchall()
+        consulta = text("SELECT config_key, config_value FROM web_builder_config WHERE config_key IN :claves").bindparams(
+            bindparam("claves", expanding=True))
+        rows = db.execute(consulta, {"claves": list(CLAVES_CONSTRUCTOR_SITIO)}).fetchall()
         return {"status": "success", "data": {r[0]: r[1] for r in rows}}
     except Exception:
         return {"status": "success", "data": {}}
 
 @router.patch("/web-builder/config")
 def update_web_config(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
+    """B4 T24 r3 (C1): escribe solo las claves del constructor; las demás se ignoran con un warning, sin 422. Así una
+    pestaña vieja de Sitio Web que manda el config completo no pisa la Lista de Compras ni las pasarelas, y su «Guardar»
+    no falla."""
     _ensure_ecommerce_tables(db)
     for key, value in body.items():
+        if key not in CLAVES_CONSTRUCTOR_SITIO:
+            logger.warning("PATCH /web-builder/config: se ignora la clave %r (no es del constructor del sitio)", key)
+            continue
         val_json = json_mod.dumps(value) if not isinstance(value, str) else json_mod.dumps(value)
         db.execute(text("INSERT INTO web_builder_config (config_key, config_value, updated_at) VALUES (:k, CAST(:v AS jsonb), NOW()) ON CONFLICT (config_key) DO UPDATE SET config_value=CAST(:v AS jsonb), updated_at=NOW()"), {"k": key, "v": val_json})
     db.commit()
@@ -1663,8 +1685,26 @@ _SECRETOS_DE_PAGO = (("stripe", "secret_key"), ("stripe", "webhook_secret"), ("m
 
 
 def _enmascarar(valor) -> str:
+    """r3 (m11): un secreto de 8 caracteres o menos se enmascara entero (con 4 a la vista quedaba media clave)."""
     valor = str(valor or "")
-    return ("*" * max(0, len(valor) - 4) + valor[-4:]) if valor else ""
+    if len(valor) <= 8:
+        return "*" * len(valor)
+    return "*" * (len(valor) - 4) + valor[-4:]
+
+
+# r3 (m11): un valor con forma de máscara (asteriscos y hasta 4 caracteres) nunca es un secreto nuevo.
+_FORMA_DE_MASCARA = re.compile(r"^\*+.{0,4}$")
+
+
+def _secreto_sin_cambio(valor) -> bool:
+    """r2 (m6) y r3 (m11): en el PATCH de pagos, «no cambiar» un secreto: null, vacío o vacío después de recortarlo, o
+    cualquier valor con forma de máscara (no solo la del secreto actual: una máscara vieja, de antes de una rotación,
+    tampoco se guarda como secreto)."""
+    if valor is None:
+        return True
+    if isinstance(valor, str):
+        return valor.strip() == "" or bool(_FORMA_DE_MASCARA.match(valor.strip()))
+    return False
 
 
 @router.get("/pagos/config")
@@ -1681,7 +1721,10 @@ def get_payment_config(user: User = Depends(require_roles(*ROLE_ADMIN)), db: Ses
                 config[gw][f"{sk_field}_masked"] = _enmascarar(sk)
                 config[gw].pop(sk_field, None)
         return {"status": "success", "data": config}
-    return {"status": "success", "data": {"stripe": {"enabled": False, "publishable_key": "", "webhook_secret": ""}, "mercadopago": {"enabled": False, "public_key": ""}}}
+    # r3 (m4): sin fila, la misma forma que con fila (los *_masked vacíos), sin un webhook_secret.
+    return {"status": "success", "data": {"stripe": {"enabled": False, "publishable_key": "", "secret_key_masked": "",
+                                                     "webhook_secret_masked": ""},
+                                          "mercadopago": {"enabled": False, "public_key": "", "access_token_masked": ""}}}
 
 @router.patch("/pagos/config")
 def update_payment_config(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
@@ -1697,8 +1740,7 @@ def update_payment_config(body: dict, user: User = Depends(require_roles(*ROLE_A
             # máscara significa «no cambiar» (antes un vacío lo borraba).
             nuevo = {k: v for k, v in config.items() if not str(k).endswith("_masked")}
             for gw, campo in _SECRETOS_DE_PAGO:
-                if gw == gateway and campo in nuevo and (nuevo[campo] in (None, "")
-                                                         or nuevo[campo] == _enmascarar(actual.get(campo))):
+                if gw == gateway and campo in nuevo and _secreto_sin_cambio(nuevo[campo]):
                     nuevo.pop(campo)
             actual.update(nuevo)
     db.execute(text("INSERT INTO web_builder_config (config_key, config_value, updated_at) VALUES ('payment_gateways', CAST(:v AS jsonb), NOW()) ON CONFLICT (config_key) DO UPDATE SET config_value=CAST(:v AS jsonb), updated_at=NOW()"), {"v": json_mod.dumps(existing_data)})

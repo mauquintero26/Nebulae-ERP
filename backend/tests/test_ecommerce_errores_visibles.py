@@ -115,3 +115,86 @@ def test_la_configuracion_de_pagos_no_devuelve_ni_borra_los_secretos(app_client,
     assert app_client.patch("/api/v1/ecommerce/pagos/config", headers=_auth(admin_token),
                             json={"stripe": {"webhook_secret": "whsec_nuevo0000"}}).status_code == 200
     assert leer()["stripe"]["webhook_secret"] == "whsec_nuevo0000"
+
+
+
+# ─── B4 T24 r3 (C1): /web-builder/config solo lee y escribe las claves del constructor del sitio ────────────────────
+
+CLAVES_CONSTRUCTOR = {"theme", "hero", "featured_section", "contact", "blog"}
+
+
+def _sembrar(db, clave, valor):
+    import json
+    from sqlalchemy import text
+    db.execute(text("INSERT INTO web_builder_config (config_key, config_value, updated_at) VALUES (:k, CAST(:v AS jsonb), "
+                    "NOW()) ON CONFLICT (config_key) DO UPDATE SET config_value = CAST(:v AS jsonb)"),
+               {"k": clave, "v": json.dumps(valor)})
+    db.commit()
+
+
+def _fila(db, clave):
+    from sqlalchemy import text
+    db.expire_all()
+    return db.execute(text("SELECT config_value FROM web_builder_config WHERE config_key = :k"), {"k": clave}).scalar()
+
+
+def test_el_constructor_del_sitio_no_lee_ni_pisa_otras_claves(app_client, db, admin_token, vendedor_token):
+    """r3 (C1, ruling): GET /ecommerce/web-builder/config devolvía TODAS las filas de web_builder_config, también
+    payment_gateways con los secretos en claro, a ADMIN y a ASESOR; y PATCH escribía cualquier clave, así que el «Guardar»
+    de Sitio Web (que manda el config completo que leyó al abrir) pisaba la Lista de Compras y las pasarelas. Ahora los
+    dos se limitan a las claves del constructor (theme, hero, featured_section, contact y blog: sitio-web/page.tsx,
+    /web-builder/chat y store/page.tsx); el PATCH ignora las demás (con un warning, sin 422)."""
+    import uuid
+    marca = uuid.uuid4().hex[:8]
+    secretos = {"stripe": {"enabled": True, "secret_key": f"sk_live_{marca}", "webhook_secret": f"whsec_{marca}"},
+                "mercadopago": {"enabled": True, "access_token": f"APP_USR-{marca}"}}
+    lista = [{"id": 1, "producto": f"Item-{marca}", "estado": "PENDIENTE"}]
+    _sembrar(db, "payment_gateways", secretos)
+    _sembrar(db, "erp_lista_compras", lista)
+    _sembrar(db, "theme", {"primary": "#111111"})
+    for token in (vendedor_token, admin_token):
+        resp = app_client.get("/api/v1/ecommerce/web-builder/config", headers=_auth(token))
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert set(data) <= CLAVES_CONSTRUCTOR, sorted(data)
+        assert data["theme"] == {"primary": "#111111"}
+        assert marca not in resp.text, resp.text[:300]
+    cuerpo = {"theme": {"primary": "#222222"}, "payment_gateways": {"stripe": {"secret_key": "sk_pisado"}},
+              "erp_lista_compras": []}
+    resp = app_client.patch("/api/v1/ecommerce/web-builder/config", headers=_auth(admin_token), json=cuerpo)
+    assert resp.status_code == 200, resp.text
+    assert _fila(db, "theme") == {"primary": "#222222"}
+    assert _fila(db, "payment_gateways") == secretos
+    assert _fila(db, "erp_lista_compras") == lista
+    # El chat del constructor solo propone y guarda claves de la lista.
+    resp = app_client.post("/api/v1/ecommerce/web-builder/chat", headers=_auth(admin_token),
+                           json={"instruction": "cambia el tema, el banner, los productos destacados, el contacto y el blog"})
+    assert resp.status_code == 200, resp.text
+    assert set(resp.json()["data"]["changes"]) <= CLAVES_CONSTRUCTOR
+
+
+# ─── B4 T24 r3 (m11, m4): los bordes de los secretos de pago ─────────────────────────────────────────────────────────
+
+def test_los_bordes_de_los_secretos_de_pago(app_client, db, admin_token):
+    """r3 (m11): en el PATCH también es «no cambiar» un valor que queda vacío al recortarlo y cualquier valor con forma de
+    máscara (^\\*+.{0,4}$), no solo la del secreto actual (una máscara vieja, de antes de una rotación, ya no se guarda
+    como secreto). Un secreto de 8 caracteres o menos se enmascara entero. r3 (m4): sin fila, el GET devuelve los
+    *_masked vacíos (no un webhook_secret)."""
+    from sqlalchemy import text
+    _sembrar(db, "payment_gateways", {"stripe": {"enabled": True, "secret_key": "sk_test_abcd1234",
+                                                 "webhook_secret": "whsec_wxyz9876"},
+                                      "mercadopago": {"enabled": True, "access_token": "tok12345"}})
+    cuerpo = {"stripe": {"secret_key": "   ", "webhook_secret": "****zzzz"}, "mercadopago": {"access_token": "***"}}
+    assert app_client.patch("/api/v1/ecommerce/pagos/config", headers=_auth(admin_token), json=cuerpo).status_code == 200
+    fila = _fila(db, "payment_gateways")
+    assert (fila["stripe"]["secret_key"], fila["stripe"]["webhook_secret"], fila["mercadopago"]["access_token"]) == (
+        "sk_test_abcd1234", "whsec_wxyz9876", "tok12345"), fila
+    data = app_client.get("/api/v1/ecommerce/pagos/config", headers=_auth(admin_token)).json()["data"]
+    assert data["mercadopago"]["access_token_masked"] == "********", data   # 8 caracteres: entero
+    assert data["stripe"]["secret_key_masked"] == "*" * 12 + "1234"
+    db.execute(text("DELETE FROM web_builder_config WHERE config_key = 'payment_gateways'"))
+    db.commit()
+    resp = app_client.get("/api/v1/ecommerce/pagos/config", headers=_auth(admin_token))
+    assert resp.json()["data"] == {
+        "stripe": {"enabled": False, "publishable_key": "", "secret_key_masked": "", "webhook_secret_masked": ""},
+        "mercadopago": {"enabled": False, "public_key": "", "access_token_masked": ""}}, resp.text
