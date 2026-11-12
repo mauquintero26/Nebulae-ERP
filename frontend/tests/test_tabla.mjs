@@ -2477,13 +2477,30 @@ console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5,
   // (RP52: «Bajo el mínimo» = estado_stock=bajo_minimo; «Existencias físicas» = incluir_sin_stock=false) y la bodega y la
   // categoría van al servidor ('' = sin filtro, null no se manda).
   assert.match(fuente, /const RUTA_STOCK = '\/inventory\/stock-tabla';/);
-  assert.match(fuente, /const VISTAS_HUB = \{\n {2}todos: \{\},\n {2}bajo_minimo: \{ estado_stock: 'bajo_minimo' \},\n {2}fisico: \{ incluir_sin_stock: false \},\n\};/);
-  assert.match(fuente, /extraPorVista\(estado, VISTAS_HUB, \{\n\s*por: 'bodega', warehouse_id: filtros\.bodega \|\| null, categoria_id: filtros\.categoria \|\| null,\n\s*\}\)/);
-  assert.match(fuente, /useEstadoTabla\(ID_HUB, INICIAL_HUB\)/);
-  assert.match(fuente, /const ID_HUB = 'inventario\.hub';/);
-  assert.match(fuente, /useListado<FilaStock>\(\{\n\s*ruta: RUTA_STOCK, estado, conConteos: true, esperar: !listo, despachar, activo: !enAnalisis && !verAlmacenes, extra: extraDeLaLista,\n\s*\}\)/);
-  // Cada cambio de un filtro extra vuelve a la página 1 y limpia la selección (R5).
-  assert.match(fuente, /const cambiarFiltros = useCallback\(\(cambio: Partial<FiltrosHub>\) => \{\n\s*setFiltros\(\(f\) => \(\{ \.\.\.f, \.\.\.cambio \}\)\);\n\s*setSeleccion\(\[\]\);\n\s*despachar\(\{ tipo: 'pagina', valor: 1 \}\);/);
+  // B4 T24 f3 r2 (F80, D27): las aserciones de formato (espacios y orden exactos) pasan a un includes por prop o por clave.
+  const vistasHub = fuente.slice(fuente.indexOf('const VISTAS_HUB = {'), fuente.indexOf('};', fuente.indexOf('const VISTAS_HUB = {')));
+  for (const parte of ['todos: {}', "bajo_minimo: { estado_stock: 'bajo_minimo' }", 'fisico: { incluir_sin_stock: false }']) assert.ok(vistasHub.includes(parte), `VISTAS_HUB: ${parte}`);
+  const extraLista = fuente.slice(fuente.indexOf('extraPorVista(estado, VISTAS_HUB, {'), fuente.indexOf('})', fuente.indexOf('extraPorVista(estado, VISTAS_HUB, {')));
+  for (const parte of ["por: 'bodega'", 'warehouse_id: filtros.bodega || null', 'categoria_id: filtros.categoria || null']) assert.ok(extraLista.includes(parte), `extraPorVista: ${parte}`);
+  const llamadas = [...fuente.matchAll(/useListado<FilaStock>\(\{([\s\S]*?)\}\);/g)].map((m) => m[1]);
+  assert.equal(llamadas.length, 2, 'la Lista y Almacenes');
+  const [lista, almacenesLlamada] = [llamadas.find((c) => c.includes('extra: extraDeLaLista')), llamadas.find((c) => c.includes('extra: extraAlmacenes'))];
+  for (const parte of ['ruta: RUTA_STOCK', 'conConteos: true', 'esperar: !listo', 'despachar', 'activo: !enAnalisis && !verAlmacenes']) assert.ok(lista?.includes(parte), `la Lista: ${parte}`);
+  // F80 (G): Almacenes también espera a que el estado esté listo (sin esto, pide antes de restaurar la sesión).
+  for (const parte of ['ruta: RUTA_STOCK', 'conConteos: true', 'esperar: !listo', 'activo: !enAnalisis && verAlmacenes']) assert.ok(almacenesLlamada?.includes(parte), `Almacenes: ${parte}`);
+  const cambiar = fuente.slice(fuente.indexOf('const cambiarFiltros = useCallback('), fuente.indexOf('}, [', fuente.indexOf('const cambiarFiltros = useCallback(')));
+  assert.ok(cambiar.length > 0, 'cambiarFiltros');
+  for (const parte of ["despachar({ tipo: 'pagina', valor: 1 })", 'setSeleccion([])']) assert.ok(cambiar.includes(parte), `cambiarFiltros: ${parte}`);
+  // F80: las rutas de error y de carga del Hub (los mutantes B, C, E, F, H e I seguían vivos).
+  assert.ok(fuente.includes('const cargandoStats = stats.cargando;'), 'H: mientras /inventory/stats carga, las tarjetas no dicen 0');
+  assert.ok(fuente.includes('const estadoKpis = useEstadoKpi(cargandoStats, stats.error);'), 'B: el error de stats llega a las tarjetas («—»)');
+  assert.ok(fuente.includes('const estadoConteos = useEstadoKpi(fuente.cargandoInicial || fuente.recargando, fuente.error);'), 'F: el error de la fuente llega a las pestañas');
+  const almacenesVista = fuente.slice(fuente.indexOf('function VistaAlmacenes('), fuente.indexOf('\n}\n', fuente.indexOf('function VistaAlmacenes(')));
+  assert.match(almacenesVista, /<h2 className="sr-only">Existencias por bodega<\/h2>\s*\{error\}/, 'C: VistaAlmacenes muestra su error');
+  const tablaHub = fuente.slice(fuente.indexOf('<TablaEstandar'), fuente.indexOf('/>', fuente.indexOf('<TablaEstandar')));
+  for (const parte of ['recargando={listado.recargando}', 'error={listado.error}', 'onReintentar={listado.recargar}']) assert.ok(tablaHub.includes(parte), `E: la tabla del Hub, ${parte}`);
+  assert.match(fuente, /const reintentarCatalogos = useCallback\(\(\) => setVueltaCatalogos\(\(n\) => n \+ 1\), \[\]\);/, 'I: «Reintentar» de los catálogos sube la vuelta');
+  assert.match(fuente, /\}, \[vueltaCatalogos\]\);/, 'I: y la carga de los catálogos depende de la vuelta');
   // Las pestañas de RP53 con los conteos del servidor (null mientras cargan, nunca 0) y la etiqueta de ESTADOS_STOCK.
   assert.ok(fuente.includes("{ id: 'todos', etiqueta: 'Todos', conteo: conteos?.todos ?? null }"));
   assert.ok(fuente.includes("{ id: 'bajo_minimo', etiqueta: ESTADOS_STOCK.bajo_minimo.label, conteo: conteos?.bajo_minimo ?? null, alerta: (conteos?.bajo_minimo ?? 0) > 0 }"));
