@@ -260,9 +260,10 @@ def test_un_error_del_catalogo_no_le_muestra_el_sql_al_anonimo(app_client, db, w
 
 # ─── B4 T24 r2 (m7): el checkout anónimo no vende lo que la tienda ya no muestra ──────────────────────────────────────
 
-def _pedido_web(app_client, sku=None, codigo=None):
+def _pedido_web(app_client, sku=None, codigo=None, token=None):
     linea = {"quantity": 1, "modalidad": "POR_PEDIDO", **({"sku_id": sku.id} if sku is not None else {"sku": codigo})}
-    return app_client.post("/api/v1/ecommerce/pedidos", json={
+    cabecera = {"Authorization": f"Bearer {token}"} if token else {}
+    return app_client.post("/api/v1/ecommerce/pedidos", headers=cabecera, json={
         "idempotency_key": f"r2-m7-{uuid.uuid4().hex}", "customer_email": f"r2m7-{uuid.uuid4().hex[:8]}@test.nebulae",
         "customer_name": "Ana Tienda", "customer_phone": "3001234567", "productos": [linea],
         "direccion_entrega": "Calle 1 #2-3"})
@@ -281,10 +282,10 @@ def test_el_checkout_anonimo_rechaza_un_sku_que_la_tienda_ya_no_muestra(app_clie
     for por in ({"sku": t.p1}, {"codigo": codigo}):
         with contador_sql.ventana() as v:
             resp = _pedido_web(app_client, **por)
-        assert (resp.status_code, resp.json()) == (409, {"detail": texto}), por
+        assert (resp.status_code, resp.json()) == (409, {"detail": texto}), (por, resp.status_code, resp.text)
         assert not [s for s in v.sentencias if s.lstrip().upper().startswith(("INSERT", "UPDATE"))], por
     db.expire_all()
-    assert db.query(SaleOrder).count() == antes and nevera
+    assert db.query(SaleOrder).count() == antes, nevera   # r3 (m25): sin el «and nevera» que no afirmaba nada
     resp = _pedido_web(app_client, sku=t.p2)   # sin espejo: como hoy
     assert resp.status_code == 201, resp.text
 
@@ -309,3 +310,13 @@ def test_un_reintento_del_checkout_devuelve_el_pedido_aunque_el_sku_se_despubliq
     assert reintento.json()["data"]["id"] == creado.json()["data"]["id"]
     nuevo = app_client.post("/api/v1/ecommerce/pedidos", json={**cuerpo, "idempotency_key": f"r2-m7-{uuid.uuid4().hex}"})
     assert nuevo.status_code == 409, nuevo.text
+
+
+
+def test_el_checkout_con_sesion_erp_sigue_como_hoy(app_client, db, warehouse, admin_token):
+    """r3 (m12 + m23): con sesión ERP (la tienda puede mandar el token de un empleado), el checkout del SKU despublicado
+    crea el pedido (201), como la lista y el detalle de C1 con sesión."""
+    t = _Catalogo(db, warehouse)
+    _despublicar_la_nevera(db, t)
+    resp = _pedido_web(app_client, sku=t.p1, token=admin_token)
+    assert resp.status_code == 201, resp.text
