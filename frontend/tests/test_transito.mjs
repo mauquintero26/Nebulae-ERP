@@ -73,9 +73,16 @@ console.log('--- TEST 2: etapaActual y columnaTransito ---');
 console.log('--- TEST 3: reglaSoltarTransito: solo la etapa siguiente ---');
 {
   const soltar = (p, destino) => reglaSoltarTransito(p, columnaTransito(p), destino, { columnas: COLUMNAS });
+  // B4 T24 f3 (F23, D27): la actual EN_PROCESO (iniciada con «Iniciar»): soltar en la siguiente la completa. Si sigue PENDIENTE, primero
+  // se inicia (la pantalla ofrece «Completar» solo para una EN_PROCESO).
+  const iniciado = (p) => ({ ...p, tracking_stages: p.tracking_stages.map((s, i, l) => (i === l.findIndex((x) => x.status !== 'COMPLETADO') ? { ...s, status: 'EN_PROCESO' } : s)) });
   // Casillero en PROVEEDOR_CASILLERO → la siguiente: completa la actual.
-  assert.deepEqual(soltar(pec('casillero', 1), 'CASILLERO_BODEGA'),
+  assert.deepEqual(soltar(iniciado(pec('casillero', 1)), 'CASILLERO_BODEGA'),
     { tipo: 'cambio', estado: 'COMPLETADO', cuerpo: { stage: 'PROVEEDOR_CASILLERO' } });
+  assert.deepEqual(soltar(pec('casillero', 1), 'CASILLERO_BODEGA'),
+    { tipo: 'bloqueado', motivo: 'Primero inicia «Proveedor → Casillero» con el botón «Iniciar».' }, 'PENDIENTE: primero se inicia');
+  assert.deepEqual(soltar(pec('directo', 0), 'PROVEEDOR_BODEGA'),
+    { tipo: 'bloqueado', motivo: 'Primero inicia «Pendiente Despacho Proveedor» con el botón «Iniciar».' });
   assert.deepEqual(soltar(pec('casillero', 1), 'RECIBIDO'),
     { tipo: 'bloqueado', motivo: 'Las etapas se completan en orden: primero «Casillero → Bodega Nebulae».' });
   assert.deepEqual(soltar(pec('directo', 1), 'CASILLERO_BODEGA'),
@@ -84,7 +91,7 @@ console.log('--- TEST 3: reglaSoltarTransito: solo la etapa siguiente ---');
     { tipo: 'bloqueado', motivo: 'Este pedido va por envío casillero: no pasa por «Proveedor → Bodega Nebulae».' });
   assert.deepEqual(soltar(pec('casillero', 2), 'PENDIENTE_DESPACHO'),
     { tipo: 'bloqueado', motivo: 'Una etapa completada no se deshace desde aquí.' });
-  assert.deepEqual(soltar(pec('directo', 1), 'RECIBIDO'),
+  assert.deepEqual(soltar(iniciado(pec('directo', 1)), 'RECIBIDO'),
     { tipo: 'cambio', estado: 'COMPLETADO', cuerpo: { stage: 'PROVEEDOR_BODEGA' } }, 'directo: de Proveedor → Bodega a Recibido');
   // Ya en Recibido (la etapa final): se confirma en Recepciones.
   const RECEPCIONES = { texto: 'Ir a Recepciones', href: '/dashboard/compras/recepciones' };

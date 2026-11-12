@@ -142,7 +142,9 @@ function tituloEtapa(clave, pec, columnas) {
  *  - si ya está en la etapa final (Recibido) o completó todas: bloqueado 'Ya llegó: confírmalo en Recepciones.', con
  *    el enlace a Recepciones;
  *  - una etapa que no está en su envío: bloqueado 'Este pedido va por envío {directo|casillero}: no pasa por «X».';
- *  - la etapa siguiente: {tipo: 'cambio', estado: 'COMPLETADO', cuerpo: {stage: <la actual>}} (completa la actual);
+ *  - la etapa siguiente: {tipo: 'cambio', estado: 'COMPLETADO', cuerpo: {stage: <la actual>}} (completa la actual); B4 T24 f3 (F23):
+ *    solo si la actual está EN_PROCESO (la pantalla ofrece «Completar» solo entonces); si sigue PENDIENTE, bloqueado 'Primero inicia
+ *    «X» con el botón «Iniciar».';
  *  - una más adelante: bloqueado 'Las etapas se completan en orden: primero «<la siguiente>».';
  *  - una anterior: bloqueado 'Una etapa completada no se deshace desde aquí.'
  * Los títulos salen de `columnas` (las de columnasDeEtapas), si llegan. Un envío sin tipo_envio es por casillero, como
@@ -166,7 +168,12 @@ export function reglaSoltarTransito(pec, origen, destino, { columnas } = {}) {
     const envio = pec?.tipo_envio === 'directo' ? 'directo' : 'casillero';
     return { tipo: 'bloqueado', motivo: `Este pedido va por envío ${envio}: no pasa por «${tituloEtapa(destino, pec, columnas)}».` };
   }
-  if (iDestino === iActual + 1) return { tipo: 'cambio', estado: 'COMPLETADO', cuerpo: { stage: ruta[iActual] } };
+  if (iDestino === iActual + 1) {
+    if (actual.status !== 'EN_PROCESO') {
+      return { tipo: 'bloqueado', motivo: `Primero inicia «${tituloEtapa(ruta[iActual], pec, columnas)}» con el botón «Iniciar».` };
+    }
+    return { tipo: 'cambio', estado: 'COMPLETADO', cuerpo: { stage: ruta[iActual] } };
+  }
   if (iDestino > iActual + 1) {
     return { tipo: 'bloqueado', motivo: `Las etapas se completan en orden: primero «${tituloEtapa(ruta[iActual + 1], pec, columnas)}».` };
   }
