@@ -33,7 +33,7 @@ import { infoEstadoPedido } from '@/lib/estados-pedido';
 import { ordenPorDefecto } from '@/lib/kanban';
 import { AvisoFuente } from '@/components/ui/AvisoFuente';
 import { useRolActual } from '@/components/ui/useRolActual';
-import { cuerpoConfigPagos, fuenteGuardable, lecturaDeFuente, tarjetasTienda, textoLimiteCarritos } from '@/lib/kpis';
+import { AYUDA_SECRETOS_PAGOS, cuerpoConfigPagos, fuenteGuardable, lecturaDeFuente, tarjetasTienda, textoLimiteCarritos } from '@/lib/kpis';
 import { accesoTienda } from '@/lib/roles';
 import { formatoPesos } from '@/lib/pesos';
 import { fechaCorta, fechaHoraLarga, horaCO } from '@/lib/fechas-colombia';
@@ -1139,6 +1139,7 @@ export default function EcommercePage() {
               ) : null}
               {fuenteGuardable(lecturaPagos) ? (
               <div className="space-y-4">
+                <p className="text-xs text-slate-500">{AYUDA_SECRETOS_PAGOS}</p>
                 {[{key:'stripe',label:'Stripe',sub:'Tarjetas de crédito, Apple Pay, Google Pay',fields:[{k:'publishable_key',l:'Publishable Key',ph:'pk_live_...'},{k:'secret_key',l:'Secret Key',ph:'sk_live_...',pw:true},{k:'webhook_secret',l:'Webhook Secret',ph:'whsec_...',pw:true}]},{key:'mercadopago',label:'MercadoPago',sub:'Efecty, PSE, tarjetas locales Colombia',fields:[{k:'public_key',l:'Public Key',ph:'APP_USR-...'},{k:'access_token',l:'Access Token',ph:'APP_USR-...',pw:true}]}].map(gw => (
                   <div key={gw.key} className={`border rounded-2xl p-5 ${payConfig[gw.key]?.enabled?'border-emerald-200 bg-emerald-50/30':'border-gray-200'}`}>
                     <div className="flex items-center justify-between mb-3">

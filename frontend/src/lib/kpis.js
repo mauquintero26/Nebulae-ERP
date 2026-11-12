@@ -1045,8 +1045,20 @@ export function lecturaDeFuente(llego, vuelta) {
   return { datos, cargando, error: cargando ? null : (llego?.error ?? null), marca: llego?.marca ?? null };
 }
 
-/** B4 T24 r1 (m11): los secretos de cada pasarela que GET /ecommerce/pagos/config no devuelve (manda `<campo>_masked`). */
-export const SECRETOS_PAGOS = Object.freeze({ stripe: Object.freeze(['secret_key']), mercadopago: Object.freeze(['access_token']) });
+/**
+ * B4 T24 r1 (m11): los secretos de cada pasarela que GET /ecommerce/pagos/config no devuelve (manda `<campo>_masked`). B4 T24 f4
+ * (m6 del backend r2): el webhook_secret de Stripe también (el GET manda webhook_secret_masked).
+ */
+export const SECRETOS_PAGOS = Object.freeze({
+  stripe: Object.freeze(['secret_key', 'webhook_secret']), mercadopago: Object.freeze(['access_token']),
+});
+
+/**
+ * B4 T24 f4 (m6 del backend r2; m4 y m11 de r3): la ayuda de la pestaña Pagos. El PATCH no cambia un secreto vacío, en blanco o igual a
+ * su máscara: se reemplaza escribiendo otro valor, y desactivar el proveedor no lo borra.
+ */
+export const AYUDA_SECRETOS_PAGOS = 'Los secretos guardados no se muestran. Dejar el campo vacío no cambia el secreto: para cambiarlo, '
+  + 'escribe el nuevo. Desactivar el proveedor tampoco lo borra.';
 
 /**
  * B4 T24 r1 (m11): el cuerpo de PATCH /ecommerce/pagos/config a partir del formulario. update_payment_config MEZCLA cada pasarela sobre

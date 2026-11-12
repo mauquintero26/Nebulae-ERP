@@ -1750,7 +1750,8 @@ console.log('--- TEST T24-e (B4 T24 r1, m11): cuerpoConfigPagos — un secreto v
   const { cuerpoConfigPagos, SECRETOS_PAGOS } = kpisLib;
   // update_payment_config (ecommerce.py) MEZCLA el cuerpo de cada pasarela sobre lo guardado: un secret_key '' lo borraría, y un
   // *_masked se guardaría como un dato. El GET no devuelve los secretos (los quita y manda *_masked).
-  assert.deepEqual(SECRETOS_PAGOS, { stripe: ['secret_key'], mercadopago: ['access_token'] });
+  // B4 T24 f4 (m6; D27): el webhook_secret también es un secreto (abajo, TEST T24-f4b).
+  assert.deepEqual(SECRETOS_PAGOS, { stripe: ['secret_key', 'webhook_secret'], mercadopago: ['access_token'] });
   const leido = {
     stripe: { enabled: true, publishable_key: 'pk_1', secret_key: '', secret_key_masked: '****1234', webhook_secret: 'whsec_9' },
     mercadopago: { enabled: false, public_key: 'APP_1', access_token: '   ', access_token_masked: '****9876' },
@@ -1769,6 +1770,37 @@ console.log('--- TEST T24-e (B4 T24 r1, m11): cuerpoConfigPagos — un secreto v
   assert.ok(pantalla.includes("body:JSON.stringify(cuerpoConfigPagos(payConfig))"), 'Guardar Pagos manda cuerpoConfigPagos');
   assert.ok(!pantalla.includes('JSON.stringify(payConfig)'), 'nunca el estado crudo');
   assert.ok(pantalla.includes("placeholder={payConfig[gw.key]?.[`${field.k}_masked`] || field.ph}"), 'el enmascarado como marcador');
+}
+
+console.log('--- TEST T24-f4b (B4 T24 f4; m6 del backend r2, m4 y m11 de r3): el Webhook Secret de Stripe también es un secreto ---');
+{
+  const { cuerpoConfigPagos, SECRETOS_PAGOS, AYUDA_SECRETOS_PAGOS } = kpisLib;
+  // GET /ecommerce/pagos/config ya no trae webhook_secret sino webhook_secret_masked (m6): el campo llega vacío, y vacío = no cambiar.
+  assert.deepEqual(SECRETOS_PAGOS, { stripe: ['secret_key', 'webhook_secret'], mercadopago: ['access_token'] });
+  const leido = {
+    stripe: { enabled: true, publishable_key: 'pk_1', secret_key: '', secret_key_masked: '****1234', webhook_secret: '',
+      webhook_secret_masked: '****abcd' },
+    mercadopago: { enabled: true, public_key: 'APP_1', access_token: '', access_token_masked: '****9876' },
+  };
+  assert.deepEqual(cuerpoConfigPagos(leido), {
+    stripe: { enabled: true, publishable_key: 'pk_1' },
+    mercadopago: { enabled: true, public_key: 'APP_1' },
+  }, 'los tres secretos vacíos no se mandan, ni sus *_masked');
+  assert.deepEqual(cuerpoConfigPagos({ stripe: { webhook_secret: '   ' } }), { stripe: {} }, 'un webhook_secret en blanco tampoco');
+  assert.deepEqual(cuerpoConfigPagos({ stripe: { webhook_secret: 'whsec_nuevo' } }), { stripe: { webhook_secret: 'whsec_nuevo' } }, 'uno nuevo sí');
+  // El servidor (solo lectura) enmascara los tres y un vacío, null o máscara no cambia (ecommerce.py, _SECRETOS_DE_PAGO).
+  const eco = readFileSync(new URL('../../backend/app/api/v1/ecommerce.py', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.ok(eco.includes('webhook_secret_masked'), 'm6: el GET manda webhook_secret_masked');
+  assert.ok(eco.includes('_SECRETOS_DE_PAGO'), 'la lista del servidor');
+  // La pantalla: el marcador del Webhook Secret es el *_masked (el patrón de m11 de f1, genérico por campo) y la ayuda lo explica.
+  const pantalla = readFileSync(new URL('../src/app/dashboard/ecommerce/page.tsx', import.meta.url), 'utf8');
+  assert.ok(pantalla.includes("{k:'webhook_secret',l:'Webhook Secret',ph:'whsec_...',pw:true}"), 'el campo es de contraseña');
+  assert.ok(pantalla.includes("placeholder={payConfig[gw.key]?.[`${field.k}_masked`] || field.ph}"), 'el marcador del campo es su *_masked');
+  assert.match(AYUDA_SECRETOS_PAGOS, /vacío/);
+  assert.match(AYUDA_SECRETOS_PAGOS, /escribe el nuevo/);
+  assert.match(AYUDA_SECRETOS_PAGOS, /Desactivar el proveedor tampoco lo borra/);
+  assert.ok(pantalla.includes('<p className="text-xs text-slate-500">{AYUDA_SECRETOS_PAGOS}</p>'), 'la ayuda en la pestaña Pagos');
+  assert.match(pantalla, /import \{[^}]*\bAYUDA_SECRETOS_PAGOS\b[^}]*\} from '@\/lib\/kpis';/);
 }
 
 console.log('--- TEST T24-b (B4 T24, FINAL-m23): el Copilot del Dashboard, solo para quien lo puede consultar, sin emojis y con el 403 dicho ---');
