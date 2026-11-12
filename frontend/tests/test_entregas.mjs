@@ -385,4 +385,46 @@ console.log('--- TEST 12 (T19 r1): una sola regla para despachar (fila, tablero 
   assert.equal(ent.COLUMNAS_ENTREGA.some((c) => c.clave === ent.vistaDeTarjetaEntrega('ent_despachados')), true, 'la vista existe');
 }
 
+console.log('--- B4 T24 f3 r1 (F29): el respaldo de motivoN2 era inalcanzable — todos los estados por todas las transiciones dan su motivo ---');
+{
+  const { readFileSync } = await import('node:fs');
+  const { motivoTransicionPedido } = await import('../src/lib/kanban-ventas.js');
+  const { transicionesPedido } = await import('../src/lib/estados-pedido.js');
+  const claves = COLUMNAS_ENTREGA.map((c) => c.clave);
+  // TODOS los estados (los del pedido y los que no lo son), con y sin saldo, por TODOS los roles y TODOS los pares de columnas: ningún
+  // «bloqueado» queda sin motivo, así que el respaldo ('Un pedido despachado no vuelve atrás desde Entregas.') no hacía falta.
+  const estados = [...Object.keys(ESTADOS_PEDIDO), 'PARCIALMENTE_ENTREGADO', 'RARO', '', null, undefined];
+  let casos = 0;
+  for (const estado of estados) {
+    for (const saldo_cop of [0, 50000, '12000', null]) {
+      for (const rol of ['ADMIN', 'ASESOR', 'BODEGA', 'COMPRAS', 'FINANZAS', null]) {
+        for (const origen of claves) {
+          for (const destino of claves) {
+            const r = reglaSoltarEntrega({ id: 1, estado, saldo_cop }, origen, destino, { rol });
+            casos += 1;
+            if (r.tipo === 'bloqueado') {
+              assert.equal(typeof r.motivo, 'string', `${String(estado)} ${origen}→${destino} ${rol}: con motivo`);
+              assert.ok(r.motivo.trim().length > 0, `${String(estado)} ${origen}→${destino} ${rol}: motivo no vacío`);
+            }
+          }
+        }
+      }
+    }
+  }
+  assert.ok(casos > 3000, `se recorrieron ${casos} casos`);
+  // Las tres llamadas a motivoN2, directo sobre la regla de N2: hacia EN_PROCESO o LISTO_ENTREGA desde lo despachado, hacia ENTREGADO
+  // desde lo listo y hacia LISTO_ENTREGA desde lo que espera. Ninguna da null donde la pantalla la usa.
+  for (const estado of estados) {
+    const col = columnaEntrega({ estado, saldo_cop: 0 });
+    if (col === 'despachado') for (const hacia of ['EN_PROCESO', 'LISTO_ENTREGA']) assert.notEqual(motivoTransicionPedido(estado, hacia), null, `${estado}→${hacia}`);
+    if (col === 'esperando' && !transicionesPedido(estado).includes('LISTO_ENTREGA')) {
+      assert.notEqual(motivoTransicionPedido(estado, 'LISTO_ENTREGA'), null, `${String(estado)}→LISTO_ENTREGA`);
+    }
+  }
+  // Quitado el respaldo (ninguno de los casos lo alcanza).
+  const fuente = readFileSync(new URL('../src/lib/entregas.js', import.meta.url), 'utf8');
+  assert.ok(!fuente.includes('Un pedido despachado no vuelve atrás desde Entregas.'), 'sin el respaldo inalcanzable');
+  assert.match(fuente, /const motivoN2 = \(hacia\) => motivoTransicionPedido\(estado, hacia\);/);
+}
+
 console.log('OK test_entregas');

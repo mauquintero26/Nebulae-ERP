@@ -123,7 +123,8 @@ export function reglaSoltarEntrega(pedido, origen, destino, { rol = null } = {})
   const rolNormal = normalizarRol(rol);
   // Los roles que mueven tarjetas en Entregas (R15): los que despachan (puedeDespachar); los demás solo ven el tablero.
   if (!puedeDespachar(rol)) return { tipo: 'bloqueado', motivo: TEXTO_SOLO_VER };
-  const motivoN2 = (hacia) => motivoTransicionPedido(estado, hacia) ?? 'Un pedido despachado no vuelve atrás desde Entregas.';
+  // r1 (F29): sin respaldo: todos los estados por todas las transiciones dan su motivo (test_entregas lo recorre).
+  const motivoN2 = (hacia) => motivoTransicionPedido(estado, hacia);
   if (desde === 'despachado') {
     return { tipo: 'bloqueado', motivo: motivoN2(destino === 'esperando' ? 'EN_PROCESO' : 'LISTO_ENTREGA') };
   }
