@@ -248,6 +248,9 @@ export function columnaPec(e) {
 }
 
 const ENLACE_TRANSITO = congelar({ texto: 'Ir a Mercancía en tránsito', href: '/dashboard/compras/transito' });
+/** B4 T24 f3 (FINAL-m36): los motivos que dependen de la etapa del PEC al soltarlo (reglaSoltarPec). */
+const TEXTO_EMITIR_PRIMERO = 'Primero emítelo: arrástralo a Emitido.';
+const TEXTO_YA_EN_BODEGA = 'Ya llegó a bodega: su estado lo lleva la recepción.';
 /** B4 T24 f2 (F27): el enlace «Ir a Recepciones» de los bloqueos, el único (transito.js lo importa). */
 export const ENLACE_RECEPCIONES = congelar({ texto: 'Ir a Recepciones', href: '/dashboard/compras/recepciones' });
 
@@ -262,6 +265,12 @@ export const ENLACE_RECEPCIONES = congelar({ texto: 'Ir a Recepciones', href: '/
  *  - → En tránsito: bloqueado, con el enlace a Mercancía en tránsito (lo marca el seguimiento del envío);
  *  - → En bodega o Recibido: bloqueado, con el enlace a Recepciones (lo marca la recepción en bodega);
  *  - → Borrador: bloqueado 'Un pedido emitido no vuelve a Borrador.'
+ * B4 T24 f3 (FINAL-m36): el motivo depende de dónde está el PEC (su etapa), porque la pantalla a la que manda tiene que mostrarlo:
+ *  - un Borrador hacia En tránsito, En bodega o Recibido: 'Primero emítelo: arrástralo a Emitido.' (sin enlace: Tránsito y el selector
+ *    de Recepciones no lo listan);
+ *  - un Emitido (o Enviado) hacia En bodega o Recibido: 'Primero sigue el envío en Mercancía en tránsito.', con su enlace;
+ *  - uno que ya llegó a bodega (o se recibió) hacia En tránsito o Borrador: 'Ya llegó a bodega: su estado lo lleva la recepción.'
+ *    (como hacia Cancelado).
  * Una columna que no existe es un error de programación (lanza Error).
  * @param {{estado?: string} | null | undefined} pec
  * @param {string} origen
@@ -274,6 +283,8 @@ export function reglaSoltarPec(pec, origen, destino) {
   const estado = pec?.estado;
   if (etapaPec(estado) === 'cancelado') return { tipo: 'bloqueado', motivo: 'Está cancelado y no se puede reabrir.' };
   const destinos = transicionesPec(estado);
+  const etapa = etapaPec(estado);
+  const yaEnBodega = etapa === 'en_bodega' || etapa === 'recibido';
   switch (destino) {
     case 'emitido':
       return destinos.includes('EMITIDO')
@@ -282,13 +293,18 @@ export function reglaSoltarPec(pec, origen, destino) {
     case 'cancelado':
       return destinos.includes('CANCELADO')
         ? { tipo: 'accion', accion: 'cancelar' }
-        : { tipo: 'bloqueado', motivo: 'Ya llegó a bodega: su estado lo lleva la recepción.' };
+        : { tipo: 'bloqueado', motivo: TEXTO_YA_EN_BODEGA };
     case 'en_transito':
+      if (etapa === 'borrador') return { tipo: 'bloqueado', motivo: TEXTO_EMITIR_PRIMERO };
+      if (yaEnBodega) return { tipo: 'bloqueado', motivo: TEXTO_YA_EN_BODEGA };
       return { tipo: 'bloqueado', motivo: 'El tránsito se marca al iniciar el seguimiento del envío.', enlace: ENLACE_TRANSITO };
     case 'en_bodega':
     case 'recibido':
+      if (etapa === 'borrador') return { tipo: 'bloqueado', motivo: TEXTO_EMITIR_PRIMERO };
+      if (etapa === 'emitido') return { tipo: 'bloqueado', motivo: 'Primero sigue el envío en Mercancía en tránsito.', enlace: ENLACE_TRANSITO };
       return { tipo: 'bloqueado', motivo: 'Lo marca la recepción en bodega.', enlace: ENLACE_RECEPCIONES };
     default: // 'borrador'
+      if (yaEnBodega) return { tipo: 'bloqueado', motivo: TEXTO_YA_EN_BODEGA };
       return { tipo: 'bloqueado', motivo: 'Un pedido emitido no vuelve a Borrador.' };
   }
 }

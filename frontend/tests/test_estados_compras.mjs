@@ -226,10 +226,21 @@ console.log('--- TEST 6: reglaSoltarPec (la forma de resultado de kanban.js) ---
   assert.deepEqual(regla('EMITIDO', 'en_transito'), {
     tipo: 'bloqueado', motivo: 'El tránsito se marca al iniciar el seguimiento del envío.', enlace: TRANSITO,
   });
+  // B4 T24 f3 (FINAL-m36, D27): el motivo depende de la etapa del PEC (desvío frente al brief de T2 en la parte de Recepciones, que
+  // amarraba BORRADOR al enlace de Recepciones: su selector no lista borradores). Solo lo que ya va en camino manda a Recepciones.
   for (const destino of ['en_bodega', 'recibido']) {
-    for (const origen of ['BORRADOR', 'EMITIDO', 'EN_TRANSITO']) {
-      assert.deepEqual(regla(origen, destino), { tipo: 'bloqueado', motivo: 'Lo marca la recepción en bodega.', enlace: RECEPCIONES },
-        `${origen} → ${destino}`);
+    assert.deepEqual(regla('EN_TRANSITO', destino), { tipo: 'bloqueado', motivo: 'Lo marca la recepción en bodega.', enlace: RECEPCIONES }, `EN_TRANSITO → ${destino}`);
+    assert.deepEqual(regla('PENDIENTE_ENTREGA', destino), { tipo: 'bloqueado', motivo: 'Lo marca la recepción en bodega.', enlace: RECEPCIONES });
+    assert.deepEqual(regla('BORRADOR', destino), { tipo: 'bloqueado', motivo: 'Primero emítelo: arrástralo a Emitido.' }, `BORRADOR → ${destino}`);
+    for (const e of ['EMITIDO', 'ENVIADO']) {
+      assert.deepEqual(regla(e, destino), { tipo: 'bloqueado', motivo: 'Primero sigue el envío en Mercancía en tránsito.', enlace: TRANSITO }, `${e} → ${destino}`);
+    }
+  }
+  assert.deepEqual(regla('BORRADOR', 'en_transito'), { tipo: 'bloqueado', motivo: 'Primero emítelo: arrástralo a Emitido.' }, 'BORRADOR → En tránsito');
+  for (const e of ['RECIBIDO', 'PARCIALMENTE_RECIBIDA', 'RECIBIDA', 'COMPLETADO']) {
+    for (const destino of ['en_transito', 'borrador']) {
+      if (columnaPec(e) === destino) continue;
+      assert.deepEqual(regla(e, destino), { tipo: 'bloqueado', motivo: 'Ya llegó a bodega: su estado lo lleva la recepción.' }, `${e} → ${destino}`);
     }
   }
   assert.deepEqual(regla('RECIBIDO', 'recibido'), { tipo: 'bloqueado', motivo: 'Lo marca la recepción en bodega.', enlace: RECEPCIONES });
@@ -253,7 +264,8 @@ console.log('--- TEST 6: reglaSoltarPec (la forma de resultado de kanban.js) ---
   for (const e of ['EN_TRANSITO', 'RECIBIDO', 'RECIBIDA']) {
     assert.deepEqual(regla(e, 'emitido'), { tipo: 'bloqueado', motivo: 'Solo un pedido en Borrador se puede marcar como Emitido.' }, e);
   }
-  for (const e of ['EMITIDO', 'EN_TRANSITO', 'RECIBIDA']) {
+  // B4 T24 f3 (FINAL-m36, D27): RECIBIDA ya llegó a bodega (su motivo, arriba); los emitidos y en tránsito no vuelven a Borrador.
+  for (const e of ['EMITIDO', 'EN_TRANSITO']) {
     assert.deepEqual(regla(e, 'borrador'), { tipo: 'bloqueado', motivo: 'Un pedido emitido no vuelve a Borrador.' }, e);
   }
   // un estado desconocido se trata como emitido: se puede cancelar, no emitir
