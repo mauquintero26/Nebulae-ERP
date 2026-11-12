@@ -19,9 +19,12 @@ import { useResumen } from '@/components/ui/useResumen';
 import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import { PanelAnalisisPerezoso } from '@/components/analisis';
 import { apiFetch } from '@/lib/api';
-import { estadoDelTotal, extraPorVista, textoVacioExistencias } from '@/lib/tabla';
+import { accionesDeFiltros, estadoDelTotal, extraPorVista, filtrosDePantalla, textoVacioExistencias } from '@/lib/tabla';
 import { AYUDA_MINIMO_INVENTARIO, numeroFinito, resumenAlmacenes, tarjetasHubInventario } from '@/lib/kpis';
-import { ESTADOS_STOCK, TOPE_TABLERO_COMPRAS, avisoTope200, filasDeCatalogo, filtrosAplicadosHub, marcarCategoriasPadre, textoPieBodega } from '@/lib/estados-compras';
+import {
+  CARGA_CATALOGO_VACIA, ESTADOS_STOCK, TOPE_TABLERO_COMPRAS, avisoTope200, falloCatalogo, filtrosAplicadosHub, lecturaCatalogo, llegadaCatalogo,
+  marcarCategoriasPadre, textoPieBodega,
+} from '@/lib/estados-compras';
 // ?tab=analisis: la lectura genérica que dejó T14 en flujo-compras.js (se reúsa, no se copia).
 import { leerEnlaceHubCompras } from '@/lib/flujo-compras';
 // T18 r1 (m10, m21): las piezas de una existencia (tipos, celdas, detalle, selector, formatos, clave y clase de fila, CONTENEDOR y
@@ -290,7 +293,8 @@ export default function InventarioHub() {
   }, []);
   // R11: sin tablero; la vista Lista / Almacenes es de la página (como antes, no se recuerda).
   const [verAlmacenes, setVerAlmacenes] = useState(false);
-  const [filtros, setFiltros] = useState<FiltrosHub>(SIN_FILTROS);
+  // B4 T24 f4 (F39): la bodega y la categoría son filtros del estado único (estado.filtros): vuelven con la sesión junto con la página.
+  const filtros = useMemo(() => filtrosDePantalla(estado.filtros, SIN_FILTROS) as FiltrosHub, [estado.filtros]);
   const [seleccion, setSeleccion] = useState<ClaveFila[]>([]);
 
   // La tabla (T13): GET /inventory/stock-tabla?por=bodega con q, orden, limit y offset del estado, la pestaña como su
@@ -317,25 +321,21 @@ export default function InventarioHub() {
   // r1 (F81): {vuelta, filas, error} por catálogo (cargando mientras no llega la de esta vuelta; el patrón de T16B) y filasDeCatalogo (una
   // forma inesperada es un error, no una lista vacía). Con un error y filas viejas, el selector lo dice junto al select.
   const [vueltaCatalogos, setVueltaCatalogos] = useState(0);
-  const [cargaBodegas, setBodegas] = useState<Catalogo & { vuelta: number }>({ vuelta: -1, filas: null, error: null });
-  const [cargaCategorias, setCategorias] = useState<Catalogo & { vuelta: number }>({ vuelta: -1, filas: null, error: null });
+  // B4 T24 f4 (m5 de f3 r2): la vuelta de cada catálogo es la de la lib (llegadaCatalogo, falloCatalogo y lecturaCatalogo), la misma de useCatalogo.
+  const [cargaBodegas, setBodegas] = useState<{ vuelta: number; filas: OpcionCatalogo[] | null; error: unknown }>(CARGA_CATALOGO_VACIA);
+  const [cargaCategorias, setCategorias] = useState<{ vuelta: number; filas: OpcionCatalogo[] | null; error: unknown }>(CARGA_CATALOGO_VACIA);
   useEffect(() => {
     const control = new AbortController();
-    const llegar = (fijar: typeof setBodegas) => (r: unknown) => {
-      const { filas, error } = filasDeCatalogo(r);
-      fijar((c) => ({ vuelta: vueltaCatalogos, filas: (filas as OpcionCatalogo[] | null) ?? c.filas, error }));
-    };
+    const llegar = (fijar: typeof setBodegas) => (r: unknown) => fijar((c) => llegadaCatalogo(c, r, vueltaCatalogos));
     const fallar = (fijar: typeof setBodegas) => (err: unknown) => {
-      if (!control.signal.aborted) fijar((c) => ({ vuelta: vueltaCatalogos, filas: c.filas, error: err }));
+      if (!control.signal.aborted) fijar((c) => falloCatalogo(c, err, vueltaCatalogos));
     };
     apiFetch('/inventory/warehouses', { signal: control.signal }).then(llegar(setBodegas)).catch(fallar(setBodegas));
     apiFetch('/categories', { signal: control.signal }).then(llegar(setCategorias)).catch(fallar(setCategorias));
     return () => control.abort();
   }, [vueltaCatalogos]);
-  const bodegas = useMemo<Catalogo>(() => ({ filas: cargaBodegas.filas, error: cargaBodegas.error, cargando: cargaBodegas.vuelta !== vueltaCatalogos }),
-    [cargaBodegas, vueltaCatalogos]);
-  const categorias = useMemo<Catalogo>(() => ({ filas: cargaCategorias.filas, error: cargaCategorias.error, cargando: cargaCategorias.vuelta !== vueltaCatalogos }),
-    [cargaCategorias, vueltaCatalogos]);
+  const bodegas = useMemo<Catalogo>(() => lecturaCatalogo(cargaBodegas, vueltaCatalogos), [cargaBodegas, vueltaCatalogos]);
+  const categorias = useMemo<Catalogo>(() => lecturaCatalogo(cargaCategorias, vueltaCatalogos), [cargaCategorias, vueltaCatalogos]);
   const reintentarCatalogos = useCallback(() => setVueltaCatalogos((n) => n + 1), []);
 
   // Las tarjetas (KPI-inventario punto 4; R10, R12): GET /inventory/stats, todo el inventario por referencia, sin
@@ -370,10 +370,10 @@ export default function InventarioHub() {
   const abrir = useCallback((f: FilaStock) => setDetalle(f), []);
   const accionesFila = useMemo<AccionesFilaHub>(() => ({ abrir }), [abrir]);
   const pestanas = pestanasDelHub(conteos);
+  // F39: una acción {tipo: 'filtro'} por clave; el reductor la mezcla con los otros filtros y vuelve a la página 1.
   const cambiarFiltros = useCallback((cambio: Partial<FiltrosHub>) => {
-    setFiltros((f) => ({ ...f, ...cambio }));
+    for (const accion of accionesDeFiltros(cambio)) despachar(accion);
     setSeleccion([]);
-    despachar({ tipo: 'pagina', valor: 1 });
   }, [despachar]);
   const alSeleccionar = useCallback((claves: ClaveFila[]) => setSeleccion(claves), []);
   const pieSeleccion = seleccion.length > 0

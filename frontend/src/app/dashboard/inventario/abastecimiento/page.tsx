@@ -90,7 +90,8 @@ export default function AbastecimientoPage() {
   // estado_stock (extraPorVista, RP53). La categoría es un filtro extra de la barra que va al servidor.
   const [estado, despachar, listo] = useEstadoTabla(ID_ABASTECIMIENTO, INICIAL_ABASTECIMIENTO);
   const enKanban = estado.modo === 'kanban';
-  const [categoria, setCategoria] = useState('');
+  // B4 T24 f4 (F39): la categoría es un filtro del estado único (estado.filtros.categoria): vuelve con la sesión junto con la página.
+  const categoria = estado.filtros?.categoria ?? '';
   const { catalogo: categorias, recargar: recargarCategorias } = useCatalogo('/categories');
   const fijos = useMemo(() => ({ ...FIJOS_ABASTECIMIENTO, categoria_id: categoria || null }), [categoria]);
   const extraLista = useMemo(() => extraPorVista(estado, VISTAS_ABASTECIMIENTO, fijos, 'agotado'), [estado, fijos]);
@@ -157,8 +158,7 @@ export default function AbastecimientoPage() {
   const abrir = useCallback((f: FilaExistencia) => setDetalle(f), [setDetalle]);
   const pestanas = pestanasExistencias(conteos, { conTodos: false });
   const cambiarCategoria = useCallback((valor: string) => {
-    setCategoria(valor);
-    despachar({ tipo: 'pagina', valor: 1 });
+    despachar({ tipo: 'filtro', clave: 'categoria', valor });
   }, [despachar]);
   // r1 (m16, como F85 en el Hub): sin el catálogo, «la categoría elegida» (true), nunca el id crudo.
   const nombreCategoria = categoria ? (categorias.filas?.find((c) => String(c.id) === categoria)?.name ?? true) : null;

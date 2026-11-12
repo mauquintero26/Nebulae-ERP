@@ -2419,7 +2419,9 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
     trae(f, 'const { recargar: recargarTablero } = tablero;', `${nombre}: recarga el tablero`);
     trae(f, '<button type="button" onClick={recargarTodo}', `${nombre}: el botón Actualizar`);
     // Un cambio de categoría vuelve a la página 1 en el mismo evento (un solo pedido).
-    trae(f, 'setCategoria(valor);\n    despachar({ tipo: \'pagina\', valor: 1 });', `${nombre}: la categoría vuelve a la página 1`);
+    // B4 T24 f4 (F39; D27): la categoría es un filtro del estado único ({tipo: 'filtro'} vuelve a la página 1 y se guarda con la sesión).
+    trae(f, "despachar({ tipo: 'filtro', clave: 'categoria', valor });", `${nombre}: la categoría vuelve a la página 1`);
+    noTrae(f, 'setCategoria(', `${nombre}: sin el useState de la categoría`);
     // El vacío memoizado dice qué lo deja vacío; la pantalla completa se cierra al pasar a Kanban.
     trae(f, 'const texto = textoVacioExistencias({ q: estado.q, vista: estado.vista, categoria: nombreCategoria, sinBodega: true });', `${nombre}: el vacío (UNA sola función, la del Hub: m20)`);
     trae(f, '}, [estado.q, estado.vista, nombreCategoria]);', `${nombre}: el vacío memoizado con lo que lo deja vacío`);
@@ -2555,15 +2557,17 @@ console.log('--- TEST 44 (B4 T18, TABLA-inventario punto 8; KANBAN-resto; RP54):
   noTrae(k, 'conConteos', 'el Kardex no tiene conteos');
   trae(k, 'const extraLista = useMemo(() => ({ ...extraKardex(filtros), q: null, orden: null }), [filtros]);', 'los filtros al servidor, sin q ni orden');
   // La doble carga (el bug de hoy): el filtro y la página cambian EN EL MISMO evento, por UN solo camino.
-  trae(k, 'setFiltros((f) => ({ ...f, ...cambio }));\n    despachar({ tipo: \'pagina\', valor: 1 });', 'cambiarFiltros cambia el filtro y la página a la vez');
-  assert.equal(k.split('setFiltros(').length - 1, 1, 'solo cambiarFiltros escribe los filtros');
+  // B4 T24 f4 (F39; D27): el filtro y la página cambian en el mismo evento por la acción {tipo: 'filtro'} del estado único.
+  trae(k, 'for (const accion of accionesDeFiltros(cambio)) despachar(accion);', 'cambiarFiltros cambia el filtro y la página a la vez');
+  assert.equal(k.split('accionesDeFiltros(').length - 1, 1, 'solo cambiarFiltros escribe los filtros');
   assert.ok(!/setPage|useState\(0\)|pageSize/.test(k), 'ya no hay una página aparte del estado único');
   assert.equal(k.split('useEffect(').length - 1, 2, 'dos efectos: la búsqueda del SKU y salir de la pantalla completa (ninguno pide la lista)');
   for (const filtro of ['bodega', 'direccion', 'propietario', 'desde', 'hasta']) {
     trae(k, `cambiarFiltros({ ${filtro}`, `el filtro ${filtro} pasa por cambiarFiltros`);
   }
-  trae(k, 'cambiarFiltros({ skuId: o.id });', 'elegir un SKU');
-  trae(k, 'if (filtros.skuId !== null) cambiarFiltros({ skuId: null });', 'escribir de nuevo suelta el SKU (una sola vez)');
+  // B4 T24 f4 (F39; D27): con la etiqueta del SKU, que vuelve con la sesión.
+  trae(k, 'cambiarFiltros({ skuId: o.id, skuEtiqueta: etiqueta });', 'elegir un SKU');
+  trae(k, "if (filtros.skuId !== null) cambiarFiltros({ skuId: null, skuEtiqueta: '' });", 'escribir de nuevo suelta el SKU (una sola vez)');
   trae(k, 'cambiarFiltros(SIN_FILTROS);', 'quitar los filtros');
   // La búsqueda del SKU: con su error dicho, sin resultados viejos y limpia al salir.
   trae(k, ".catch((err: unknown) => { if (!control.signal.aborted) setSkuBusqueda({ texto: skuTexto, filas: [], error: err }); });", 'la búsqueda del SKU dice su error');
@@ -2658,8 +2662,9 @@ console.log('--- TEST 45 (B4 T18, TABLA-inventario punto 7; KANBAN-resto; RP47 a
   trae(p, 'aria-pressed={filtros.sinTarifa} onClick={() => cambiarFiltros({ sinTarifa: !filtros.sinTarifa })}', 'Sin tarifa de IVA');
   assert.match(p, /Requiere revisión\s*<\/button>/);
   assert.match(p, /Sin tarifa de IVA\s*<\/button>/);
-  trae(p, 'setFiltros((f) => ({ ...f, ...cambio }));\n    despachar({ tipo: \'pagina\', valor: 1 });', 'cambiarFiltros cambia el filtro y la página a la vez');
-  assert.equal(p.split('setFiltros(').length - 1, 1, 'solo cambiarFiltros escribe los filtros');
+  // B4 T24 f4 (F39; D27): por la acción {tipo: 'filtro'} del estado único (el filtro y la página, en el mismo evento).
+  trae(p, 'for (const accion of accionesDeFiltros(cambio)) despachar(accion);', 'cambiarFiltros cambia el filtro y la página a la vez');
+  assert.equal(p.split('accionesDeFiltros(').length - 1, 1, 'solo cambiarFiltros escribe los filtros');
   // Lo de B3-T8 en la ficha se conserva: el selector de IVA, el guardado y la insignia de la tabla.
   trae(p, 'id="producto-tarifa-iva"', 'B3-T8: el selector de IVA de la ficha');
   trae(p, '{TARIFAS_IVA.map(t => <option key={t.codigo} value={t.codigo}>{t.etiqueta}</option>)}', 'B3-T8: las tarifas');
@@ -3635,7 +3640,9 @@ console.log('--- B4 T24 f3 r1 (C3, m31): el SKU del Kardex se elige con el rató
   trae(k, 'const r = teclaComboboxSku({ tecla: e.key, abierta: listaSkuAbierta, indice: opciones.indexOf(document.activeElement as HTMLElement), total: opciones.length });');
   trae(k, 'if (r.foco < 0) refCampoSku.current?.focus(); else opciones[r.foco]?.focus();');
   trae(k, 'setSkuCerrado(!r.abierta);', '↓ con la lista cerrada la abre');
-  assert.match(k, /cambiarFiltros\(\{ skuId: o\.id \}\);\s*refCampoSku\.current\?\.focus\(\);/, 'al elegir, el foco vuelve al campo');
+  assert.match(k, /cambiarFiltros\(\{ skuId: o\.id, skuEtiqueta: etiqueta \}\);\s*refCampoSku\.current\?\.focus\(\);/, 'al elegir, el foco vuelve al campo');
+  // B4 T24 f4 (m3 de f3 r2): al elegir con el ratón la lista se desmonta (sin onPointerLeave): el ref se reinicia al elegir.
+  assert.match(k, /const elegirSku = \(o: OpcionSku\) => \{[\s\S]{0,400}ratonSobreLista\.current = false;[\s\S]{0,200}cambiarFiltros\(\{ skuId: o\.id/);
   trae(k, '<input ref={refCampoSku} type="search" aria-label="Producto o SKU"');
   trae(k, 'onFocus={() => setIndiceSku(i)} onBlur={() => setIndiceSku(-1)}', 'aria-selected sigue a la opción con el foco');
   // «Buscando…», el error y «Ningún producto…» fuera del listbox (que solo admite option o group).
@@ -4018,9 +4025,16 @@ console.log('--- B4 T24 f3 r1 (F81): los catálogos de Inventario — una forma 
   trae(piezas, "{catalogo.cargando ? 'Reintentando…' : 'Reintentar'}", 'SelectorCatalogo sin filas: también da señal');
   trae(leerFuente('app/dashboard/inventario/page.tsx'), '<AvisoCatalogoViejo catalogo={bodegas} fallo="No se pudieron actualizar las bodegas" onReintentar={reintentarCatalogos} />');
   const hub = leerFuente('app/dashboard/inventario/page.tsx');
-  trae(hub, 'const { filas, error } = filasDeCatalogo(r);');
+  // B4 T24 f4 (m5 de f3 r2; D27): el Hub usa la vuelta de la lib (llegadaCatalogo con filasDeCatalogo; lecturaCatalogo con `cargando`
+  // mientras no llega la de esta vuelta), sin su copia literal.
+  trae(hub, 'fijar((c) => llegadaCatalogo(c, r, vueltaCatalogos))');
   assert.ok(!/const lista = \(r: \{ data\?: unknown \} \| null\) =>/.test(hub), 'sin la lectura que convertía todo en []');
-  assert.match(hub, /cargando: cargaBodegas\.vuelta !== vueltaCatalogos/);
+  assert.match(hub, /lecturaCatalogo\(cargaBodegas, vueltaCatalogos\)/);
+  {
+    const { llegadaCatalogo, lecturaCatalogo } = await import('../src/lib/estados-compras.js');
+    assert.equal(lecturaCatalogo(llegadaCatalogo(null, { data: [{ id: 1 }] }, 2), 3).cargando, true, 'de otra vuelta: cargando');
+    assert.equal(lecturaCatalogo(llegadaCatalogo(null, { x: 1 }, 3), 3).error instanceof Error, true, 'una forma inesperada es un error');
+  }
 }
 
 console.log('--- B4 T24 f3 r2 (F81 en el hook, m36 completo, m20): la vuelta de los catálogos en la lib y el foco nunca en el <body> ---');

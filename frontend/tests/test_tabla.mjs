@@ -2490,7 +2490,14 @@ console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5,
   for (const parte of ['ruta: RUTA_STOCK', 'conConteos: true', 'esperar: !listo', 'activo: !enAnalisis && verAlmacenes']) assert.ok(almacenesLlamada?.includes(parte), `Almacenes: ${parte}`);
   const cambiar = fuente.slice(fuente.indexOf('const cambiarFiltros = useCallback('), fuente.indexOf('}, [', fuente.indexOf('const cambiarFiltros = useCallback(')));
   assert.ok(cambiar.length > 0, 'cambiarFiltros');
-  for (const parte of ["despachar({ tipo: 'pagina', valor: 1 })", 'setSeleccion([])']) assert.ok(cambiar.includes(parte), `cambiarFiltros: ${parte}`);
+  // B4 T24 f4 (F39; D27): los filtros van en el estado único: cambiarFiltros despacha {tipo: 'filtro'} (el reductor los mezcla y vuelve
+  // a la página 1: el caso «elegir la categoría conserva la bodega» de T24-i-f4 reemplaza la protección de `setFiltros((f) => ({ ...f, ...cambio }))`).
+  for (const parte of ['for (const accion of accionesDeFiltros(cambio)) despachar(accion);', 'setSeleccion([])']) assert.ok(cambiar.includes(parte), `cambiarFiltros: ${parte}`);
+  // B4 T24 f4 (m1 de f3 r2 = m26): vuelven las protecciones que F80 quitó: el id del Hub (no comparte estado ni preferencias con Stock,
+  // RP26) y su estado único con su inicial.
+  assert.ok(fuente.includes("const ID_HUB = 'inventario.hub';"), 'm1 (X1): el id del Hub');
+  assert.ok(fuente.includes('useEstadoTabla(ID_HUB, INICIAL_HUB)'), 'm1 (X2): el estado único del Hub con su inicial');
+  assert.ok(fuente.includes("const INICIAL_HUB = { vista: 'todos' };"), 'm1 (X2): la inicial');
   // F80: las rutas de error y de carga del Hub (los mutantes B, C, E, F, H e I seguían vivos).
   assert.ok(fuente.includes('const cargandoStats = stats.cargando;'), 'H: mientras /inventory/stats carga, las tarjetas no dicen 0');
   assert.ok(fuente.includes('const estadoKpis = useEstadoKpi(cargandoStats, stats.error);'), 'B: el error de stats llega a las tarjetas («—»)');
@@ -2579,8 +2586,13 @@ console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5,
   // Los catálogos de los selectores: sus errores se ven (con Reintentar), no se convierten en una lista vacía.
   assert.match(fuente, /apiFetch\('\/inventory\/warehouses', \{ signal: control\.signal \}\)/);
   assert.match(fuente, /apiFetch\('\/categories', \{ signal: control\.signal \}\)/);
-  // B4 T24 f3 r1 (F81, D27): los dos catálogos con su vuelta; el error conserva lo último bueno.
-  assert.match(fuente, /if \(!control\.signal\.aborted\) fijar\(\(c\) => \(\{ vuelta: vueltaCatalogos, filas: c\.filas, error: err \}\)\);/);
+  // B4 T24 f3 r1 (F81, D27): los dos catálogos con su vuelta; el error conserva lo último bueno. B4 T24 f4 (m5 de f3 r2; D27): con
+  // llegadaCatalogo, falloCatalogo y lecturaCatalogo de la lib (sus casos, en test_estados_compras), sin la copia literal.
+  assert.match(fuente, /if \(!control\.signal\.aborted\) fijar\(\(c\) => falloCatalogo\(c, err, vueltaCatalogos\)\);/);
+  assert.match(fuente, /const llegar = \(fijar: typeof setBodegas\) => \(r: unknown\) => fijar\(\(c\) => llegadaCatalogo\(c, r, vueltaCatalogos\)\);/);
+  assert.match(fuente, /const bodegas = useMemo<Catalogo>\(\(\) => lecturaCatalogo\(cargaBodegas, vueltaCatalogos\), \[cargaBodegas, vueltaCatalogos\]\);/);
+  assert.match(fuente, /const categorias = useMemo<Catalogo>\(\(\) => lecturaCatalogo\(cargaCategorias, vueltaCatalogos\), \[cargaCategorias, vueltaCatalogos\]\);/);
+  assert.ok(!/filasDeCatalogo\(r\)|vuelta: vueltaCatalogos, filas/.test(fuente), 'm5: sin la copia de la regla');
   assert.match(fuente, /apiFetch\('\/inventory\/warehouses', \{ signal: control\.signal \}\)\.then\(llegar\(setBodegas\)\)\.catch\(fallar\(setBodegas\)\);/);
   assert.match(fuente, /apiFetch\('\/categories', \{ signal: control\.signal \}\)\.then\(llegar\(setCategorias\)\)\.catch\(fallar\(setCategorias\)\);/);
   // Recepciones, Entregas y Traslados pasan de pestañas a enlaces a sus pantallas.
@@ -3582,6 +3594,60 @@ console.log('--- TEST T24-i (B4 T24: F39 y FINAL-m19): los filtros extra van en 
   assert.match(crm, /const filterStage = estado\.filtros\?\.etapa \|\| 'all';/);
   assert.ok(!/const \[filterStage, setFilterStage\]/.test(crm));
   assert.match(crm, /despachar\(\{ tipo: 'filtro', clave: 'etapa', valor: valor === 'all' \? '' : valor \}\);/);
+}
+
+console.log('--- TEST T24-i-f4 (B4 T24 f4: F39 en Inventario): filtrosDePantalla y accionesDeFiltros; cada pantalla restaura el filtro con la página ---');
+{
+  const { filtrosDePantalla, accionesDeFiltros } = TABLA;
+  // La forma de la pantalla desde estado.filtros (textos): texto; booleano ('1'); número o null (el id del SKU del Kardex).
+  const BASE = { bodega: '', revision: false, skuId: null, n: 0 };
+  assert.deepEqual(filtrosDePantalla(undefined, BASE), BASE, 'sin filtros guardados, la base');
+  assert.deepEqual(filtrosDePantalla({ bodega: '3', revision: '1', skuId: '42', n: '7', otra: 'x' }, BASE), { bodega: '3', revision: true, skuId: 42, n: 7 },
+    'cada clave con el tipo de su base; lo que no es de la pantalla no entra');
+  assert.deepEqual(filtrosDePantalla({ skuId: 'abc', revision: '0' }, BASE), BASE, 'un número que no se lee y un booleano que no es «1»: la base');
+  // Un cambio de la pantalla → las acciones {tipo: 'filtro'} (una por clave; '' quita el filtro).
+  assert.deepEqual(accionesDeFiltros({ bodega: '3', revision: true, skuId: 42 }), [
+    { tipo: 'filtro', clave: 'bodega', valor: '3' }, { tipo: 'filtro', clave: 'revision', valor: '1' }, { tipo: 'filtro', clave: 'skuId', valor: '42' },
+  ]);
+  assert.deepEqual(accionesDeFiltros({ revision: false, skuId: null, bodega: '' }), [
+    { tipo: 'filtro', clave: 'revision', valor: '' }, { tipo: 'filtro', clave: 'skuId', valor: '' }, { tipo: 'filtro', clave: 'bodega', valor: '' },
+  ], 'falso, null y vacío quitan el filtro');
+  assert.deepEqual(accionesDeFiltros(null), []);
+  // Ida y vuelta por el reductor y la sesión: cambiar un filtro no borra los otros (mata «setFiltros((f) => ({ ...cambio }))», X3 de m1).
+  const INICIAL = { vista: 'todos' };
+  let e = estadoTablaInicial(INICIAL);
+  for (const a of accionesDeFiltros({ bodega: '3' })) e = reducirEstadoTabla(e, a);
+  for (const a of accionesDeFiltros({ categoria: '9' })) e = reducirEstadoTabla(e, a);
+  assert.deepEqual(filtrosDePantalla(e.filtros, { bodega: '', categoria: '' }), { bodega: '3', categoria: '9' }, 'elegir la categoría conserva la bodega');
+  e = reducirEstadoTabla(e, { tipo: 'pagina', valor: 4 });
+  const vuelto = armarEstadoTabla(INICIAL, { sesion: leerSesionTabla(textoSesionTabla(e, 7), 7) });
+  assert.deepEqual([filtrosDePantalla(vuelto.filtros, { bodega: '', categoria: '' }), vuelto.pagina], [{ bodega: '3', categoria: '9' }, 4], 'al volver: el filtro con su página');
+  for (const a of accionesDeFiltros({ bodega: '', categoria: '' })) e = reducirEstadoTabla(e, a);
+  assert.deepEqual([e.filtros, e.pagina], [{}, 1], 'quitar los filtros vuelve a la página 1');
+
+  // Cada pantalla de Inventario lee sus filtros del estado único y los cambia con la acción {tipo: 'filtro'} (sin useState propio).
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  for (const [ruta, tipo] of [['app/dashboard/inventario/page.tsx', 'FiltrosHub'], ['app/dashboard/inventario/kardex/page.tsx', 'FiltrosKardex'],
+    ['app/dashboard/inventario/productos/page.tsx', 'FiltrosProductos']]) {
+    const f = leer(ruta);
+    assert.ok(f.includes(`const filtros = useMemo(() => filtrosDePantalla(estado.filtros, SIN_FILTROS) as ${tipo}, [estado.filtros]);`), `${ruta}: los filtros del estado`);
+    assert.ok(!/const \[filtros, setFiltros\] = useState/.test(f) && !/setFiltros\(/.test(f), `${ruta}: sin el useState de antes`);
+    assert.match(f, new RegExp(`const cambiarFiltros = useCallback\\(\\(cambio: Partial<${tipo}>\\) => \\{\\n\\s*for \\(const accion of accionesDeFiltros\\(cambio\\)\\) despachar\\(accion\\);`), `${ruta}: cambiarFiltros despacha {tipo: 'filtro'}`);
+    assert.equal(f.split('accionesDeFiltros(').length - 1, 1, `${ruta}: solo cambiarFiltros cambia los filtros`);
+    assert.match(f, /import \{[^}]*\bfiltrosDePantalla\b[^}]*\} from '@\/lib\/tabla';/);
+  }
+  for (const ruta of ['app/dashboard/inventario/stock/page.tsx', 'app/dashboard/inventario/abastecimiento/page.tsx']) {
+    const f = leer(ruta);
+    assert.ok(f.includes("const categoria = estado.filtros?.categoria ?? '';"), `${ruta}: la categoría del estado`);
+    assert.ok(!/const \[categoria, setCategoria\] = useState/.test(f) && !/setCategoria\(/.test(f), `${ruta}: sin el useState de antes`);
+    assert.ok(f.includes("despachar({ tipo: 'filtro', clave: 'categoria', valor });"), `${ruta}: la acción {tipo: 'filtro'}`);
+  }
+  // El Kardex guarda también la etiqueta del SKU elegido (la caja vuelve con su texto) y la caja la toma al volver.
+  const k = leer('app/dashboard/inventario/kardex/page.tsx');
+  assert.ok(k.includes("const SIN_FILTROS: FiltrosKardex = { skuId: null, skuEtiqueta: '', bodega: '', propietario: '', direccion: '', desde: '', hasta: '' };"));
+  assert.ok(k.includes('cambiarFiltros({ skuId: o.id, skuEtiqueta: etiqueta });'));
+  assert.match(k, /if \(filtros\.skuId !== null\) cambiarFiltros\(\{ skuId: null, skuEtiqueta: '' \}\);/);
+  assert.match(k, /if \(filtros\.skuId !== skuVisto\) \{\s*setSkuVisto\(filtros\.skuId\);\s*if \(filtros\.skuId !== null\) setSkuTexto\(filtros\.skuEtiqueta\);\s*\}/);
 }
 
 console.log('--- TEST T24-j (B4 T24: F34, F35, F36 y F10): el margen de la fila de pestañas y los JSDoc ---');

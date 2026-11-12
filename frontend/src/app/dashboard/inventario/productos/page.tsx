@@ -18,7 +18,7 @@ import {
 } from '@/components/tabla';
 import type { ColumnaTabla } from '@/components/tabla';
 import { TARIFAS_IVA, etiquetaTarifaCatalogo, normalizarTarifaIva, sinTarifaIva } from '@/lib/iva';
-import { dependenciasTablero, estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
+import { accionesDeFiltros, dependenciasTablero, estadoDelTotal, filtrosDePantalla, normalizarRespuesta } from '@/lib/tabla';
 import { textoDeError } from '@/lib/avisos';
 import {
   TEXTO_SOLO_VER_PRODUCTOS, abrirEnlaceProducto, columnasProductos, consultaColumnaProducto, costoDeProducto, estadoReintento, extraProductos,
@@ -148,7 +148,8 @@ export default function ProductosPage() {
   // página 1 en el mismo evento. El modo (Lista o Kanban) se guarda en vista:inventario.productos.
   const [estado, despachar, listo] = useEstadoTabla(ID_PRODUCTOS, INICIAL_PRODUCTOS);
   const enKanban = estado.modo === 'kanban';
-  const [filtros, setFiltros] = useState<FiltrosProductos>(SIN_FILTROS);
+  // B4 T24 f4 (F39): «Requiere revisión», «Sin tarifa de IVA» y la categoría son filtros del estado único: vuelven con la sesión y su página.
+  const filtros = useMemo(() => filtrosDePantalla(estado.filtros, SIN_FILTROS) as FiltrosProductos, [estado.filtros]);
   // Los catálogos de la ficha y del tablero, con su error y «Reintentar» (antes, tres .catch(() => {}) y listas vacías falsas).
   const { catalogo: categorias, recargar: recargarCategorias } = useCatalogo('/categories');
   const { catalogo: marcas, recargar: recargarMarcas } = useCatalogo('/brands');
@@ -201,9 +202,9 @@ export default function ProductosPage() {
   const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
   // Pasar a Kanban sale de la pantalla completa (el conmutador sigue a la vista y el tablero no queda tapado).
   useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
+  // F39: una acción {tipo: 'filtro'} por clave (el reductor la mezcla con los otros y vuelve a la página 1, en el mismo evento).
   const cambiarFiltros = useCallback((cambio: Partial<FiltrosProductos>) => {
-    setFiltros((f) => ({ ...f, ...cambio }));
-    despachar({ tipo: 'pagina', valor: 1 });
+    for (const accion of accionesDeFiltros(cambio)) despachar(accion);
   }, [despachar]);
   // m8 de T15: el «vacío» memoizado dice qué lo deja vacío (la búsqueda, los filtros de la barra o nada).
   // El nombre de la categoría elegida, para el vacío (si el catálogo todavía no llegó, el id).

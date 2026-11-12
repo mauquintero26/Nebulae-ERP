@@ -13,7 +13,7 @@ import {
 } from '@/components/tabla';
 import type { ColumnaTabla } from '@/components/tabla';
 import { apiFetch } from '@/lib/api';
-import { estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
+import { accionesDeFiltros, estadoDelTotal, filtrosDePantalla, normalizarRespuesta } from '@/lib/tabla';
 import { textoDeError } from '@/lib/avisos';
 import { numeroFinito } from '@/lib/kpis';
 import {
@@ -46,8 +46,11 @@ type Movimiento = {
   created_by?: string | null;
   idempotency_key?: string | null;
 };
-/** Los filtros extra de la barra, que van al servidor (extraKardex): el id del SKU elegido y los demás como texto ('' = todos). */
-type FiltrosKardex = { skuId: number | null; bodega: string; propietario: string; direccion: string; desde: string; hasta: string };
+/**
+ * Los filtros extra de la barra, que van al servidor (extraKardex): el id del SKU elegido y los demás como texto ('' = todos). B4 T24 f4
+ * (F39): `skuEtiqueta` (el texto del SKU elegido) no va al servidor: se guarda con la sesión para que la caja vuelva con su texto.
+ */
+type FiltrosKardex = { skuId: number | null; skuEtiqueta: string; bodega: string; propietario: string; direccion: string; desde: string; hasta: string };
 /** Un resultado de GET /crm/products/search: el SKU y su texto. */
 type OpcionSku = { id: number; display?: string | null; product_name?: string | null };
 
@@ -57,7 +60,7 @@ const INICIAL_KARDEX = {};
 const RUTA_KARDEX = '/inventory/kardex';
 /** m1: el servidor ordena SIEMPRE por fecha (get_kardex no tiene `orden`); la barra lo dice en lugar de un título que prometería ordenar. */
 const TEXTO_ORDEN_KARDEX = 'Del más reciente al más antiguo';
-const SIN_FILTROS: FiltrosKardex = { skuId: null, bodega: '', propietario: '', direccion: '', desde: '', hasta: '' };
+const SIN_FILTROS: FiltrosKardex = { skuId: null, skuEtiqueta: '', bodega: '', propietario: '', direccion: '', desde: '', hasta: '' };
 /** El orden de la lista de direcciones (la del Kardex de hoy, más las dos que escribe el sistema y no estaban). */
 // B4 T24 f3 (F88): el orden de DIRECCIONES_KARDEX (la lib), sin repetir sus claves a mano.
 const ORDEN_DIRECCIONES = Object.keys(DIRECCIONES_KARDEX);
@@ -177,7 +180,8 @@ export default function KardexPage() {
   // evento: la consulta cambia una sola vez (un solo pedido; antes, dos efectos pedían dos veces). El Kardex no tiene `q`.
   const [estado, despachar, listo] = useEstadoTabla(ID_KARDEX, INICIAL_KARDEX);
   const enKanban = estado.modo === 'kanban';
-  const [filtros, setFiltros] = useState<FiltrosKardex>(SIN_FILTROS);
+  // B4 T24 f4 (F39): los filtros son del estado único (estado.filtros): vuelven con la sesión junto con la página.
+  const filtros = useMemo(() => filtrosDePantalla(estado.filtros, SIN_FILTROS) as FiltrosKardex, [estado.filtros]);
   const { catalogo: bodegas, recargar: recargarBodegas } = useCatalogo('/inventory/warehouses');
   const extraLista = useMemo(() => ({ ...extraKardex(filtros), q: null, orden: null }), [filtros]);
   // GET /inventory/kardex con limit y offset del estado; responde {data: {items, total}} (normalizarRespuesta, RP54). esperar:
@@ -214,14 +218,20 @@ export default function KardexPage() {
   }, [recargarListado, recargarTablero, recargarBodegas]);
 
   // ── bloque 2: los filtros y la tabla (R5, R26; D40, D41) ──
+  // F39: una acción {tipo: 'filtro'} por clave (el reductor la mezcla con los otros y vuelve a la página 1, en el mismo evento).
   const cambiarFiltros = useCallback((cambio: Partial<FiltrosKardex>) => {
-    setFiltros((f) => ({ ...f, ...cambio }));
-    despachar({ tipo: 'pagina', valor: 1 });
+    for (const accion of accionesDeFiltros(cambio)) despachar(accion);
   }, [despachar]);
   const hayFiltros = filtros.skuId !== null || Boolean(filtros.bodega || filtros.propietario || filtros.direccion || filtros.desde || filtros.hasta);
   // La búsqueda del SKU: el texto que se escribe y lo que devuelve /crm/products/search (con su error, nunca una lista vacía
   // falsa). Escribir de nuevo suelta el SKU elegido (el filtro cambia una sola vez).
   const [skuTexto, setSkuTexto] = useState('');
+  // F39: al volver con un SKU elegido (la sesión), la caja toma su etiqueta.
+  const [skuVisto, setSkuVisto] = useState<number | null>(null);
+  if (filtros.skuId !== skuVisto) {
+    setSkuVisto(filtros.skuId);
+    if (filtros.skuId !== null) setSkuTexto(filtros.skuEtiqueta);
+  }
   const [skuBusqueda, setSkuBusqueda] = useState<{ texto: string; filas: OpcionSku[]; error: unknown } | null>(null);
   const buscarSku = skuTexto.trim() !== '' && filtros.skuId === null;
   useEffect(() => {
@@ -248,7 +258,7 @@ export default function KardexPage() {
   const escribirSku = (texto: string) => {
     setSkuTexto(texto);
     setSkuCerrado(false);
-    if (filtros.skuId !== null) cambiarFiltros({ skuId: null });
+    if (filtros.skuId !== null) cambiarFiltros({ skuId: null, skuEtiqueta: '' });
   };
   const opcionesSku = () => Array.from(refListaSku.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? []);
   const teclaSku = (e: React.KeyboardEvent<HTMLElement>) => {
@@ -265,8 +275,11 @@ export default function KardexPage() {
     if (cierraComboboxAlSalir(e.currentTarget.contains(e.relatedTarget as Node | null), { sinDestino: e.relatedTarget == null, ratonSobreLista: ratonSobreLista.current })) setSkuCerrado(true);
   };
   const elegirSku = (o: OpcionSku) => {
-    setSkuTexto(o.display || o.product_name || `SKU #${o.id}`);
-    cambiarFiltros({ skuId: o.id });
+    const etiqueta = o.display || o.product_name || `SKU #${o.id}`;
+    setSkuTexto(etiqueta);
+    // B4 T24 f4 (m3 de f3 r2): la lista se desmonta bajo el puntero y React no manda su onPointerLeave: el ref vuelve a false aquí.
+    ratonSobreLista.current = false;
+    cambiarFiltros({ skuId: o.id, skuEtiqueta: etiqueta });
     refCampoSku.current?.focus();
   };
   const quitarFiltros = () => {

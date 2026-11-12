@@ -480,6 +480,48 @@ function filtrosDeTabla(v) {
   }
   return filtros;
 }
+
+/**
+ * B4 T24 f4 (F39, aditivo): los filtros de una pantalla, leídos del estado único (estado.filtros guarda textos) con la forma de su
+ * `base` (SIN_FILTROS de la pantalla): cada clave de la base toma lo guardado con el tipo de la base — texto; booleano ('1' es true);
+ * número, o null en la base (el id del SKU del Kardex): un número que se lee — y si no hay nada que sirva, el valor de la base. Lo que
+ * no es de la base no entra.
+ * @template {Record<string, unknown>} B
+ * @param {Record<string, string> | null | undefined} guardados
+ * @param {B} base
+ * @returns {B}
+ */
+export function filtrosDePantalla(guardados, base) {
+  const g = guardados && typeof guardados === 'object' ? guardados : {};
+  /** @type {Record<string, unknown>} */
+  const salida = {};
+  for (const [clave, porDefecto] of Object.entries(base)) {
+    const texto = typeof g[clave] === 'string' ? g[clave] : null;
+    if (texto === null) salida[clave] = porDefecto;
+    else if (typeof porDefecto === 'boolean') salida[clave] = texto === '1' ? true : porDefecto;
+    else if (porDefecto === null || typeof porDefecto === 'number') {
+      const n = Number(texto);
+      salida[clave] = texto.trim() !== '' && Number.isFinite(n) ? n : porDefecto;
+    } else salida[clave] = texto;
+  }
+  return /** @type {B} */ (salida);
+}
+
+/**
+ * B4 T24 f4 (F39, aditivo): las acciones del reductor para un cambio de los filtros de una pantalla: un {tipo: 'filtro', clave, valor}
+ * por clave, con el valor como texto (true → '1'; un número, su texto; false, null y '' → '', que quita el filtro). El reductor los
+ * mezcla con los vigentes (cambiar uno no borra los otros) y vuelve a la página 1.
+ * @param {Record<string, unknown> | null | undefined} cambio
+ * @returns {Array<{tipo: 'filtro', clave: string, valor: string}>}
+ */
+export function accionesDeFiltros(cambio) {
+  if (!cambio || typeof cambio !== 'object') return [];
+  return Object.entries(cambio).map(([clave, v]) => ({
+    tipo: /** @type {'filtro'} */ ('filtro'),
+    clave,
+    valor: v === true ? '1' : typeof v === 'number' && Number.isFinite(v) ? String(v) : typeof v === 'string' ? v : '',
+  }));
+}
 const CAMPOS = Object.keys(NORMALIZAR);
 
 /**
