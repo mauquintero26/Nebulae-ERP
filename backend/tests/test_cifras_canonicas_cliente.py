@@ -87,7 +87,8 @@ def test_asistente_listas_y_ticket_con_la_regla_de_la_tarjeta(app_client, db, ad
 def test_perfil_360_total_comprado_con_la_regla_del_asistente(app_client, db, admin_token):
     """r2 (m8, ruling): el «Total comprado» de la ficha del cliente (profile-360) y el del Asistente son la misma tarjeta
     del catálogo (cli_total_comprado): los dos con rv.f_pven_con_dinero, sin cancelados ni devueltos. Antes profile-360
-    solo quitaba los cancelados (3.000 frente a 2.300 del Asistente con el cliente de m36)."""
+    solo quitaba los cancelados: con este cliente, 2.200 frente a 1.500 (r3, m25: las cifras de antes eran las del
+    cliente de m36)."""
     cliente = _cliente_con_pedidos(db)
     perfil = app_client.get(f"/api/v1/crm/customers/{cliente.id}/profile-360", headers=_auth(admin_token))
     assert perfil.status_code == 200, perfil.text
@@ -95,4 +96,35 @@ def test_perfil_360_total_comprado_con_la_regla_del_asistente(app_client, db, ad
                                headers=_auth(admin_token))
     assert asistente.status_code == 200, asistente.text
     total = perfil.json()["data"]["resumen_financiero"]["total_comprado_cop"]
-    assert total == asistente.json()["data"]["revenue"]["total_spent_cop"] == 1500.0   # 100+200+300+400+500
+    asistente_total = asistente.json()["data"]["revenue"]["total_spent_cop"]
+    assert total == asistente_total == 1500.0, (total, asistente_total)   # 100+200+300+400+500
+
+
+
+def test_perfil_360_costo_y_margen_con_la_misma_regla(app_client, db, admin_token):
+    """r3 (m3 + m14): total_costo_cop de profile-360 suma solo las líneas de los pedidos con dinero (rv.f_pven_con_dinero,
+    el mismo conjunto del Total comprado): antes sumaba también las de los cancelados y los devueltos, y el margen bruto
+    podía quedar negativo con bases distintas. Cada pedido del cliente lleva una línea de costo 10."""
+    from app.models.fase1b import SaleOrderLineErp
+    cliente = _cliente_con_pedidos(db)
+    for (so_id,) in db.query(SaleOrder.id).filter(SaleOrder.customer_id == cliente.id):
+        db.add(SaleOrderLineErp(so_id=so_id, description="Línea", quantity=1, unit_price_cop=0, cost_unit_cop_snapshot=10))
+    db.commit()
+    resp = app_client.get(f"/api/v1/crm/customers/{cliente.id}/profile-360", headers=_auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    rentabilidad = resp.json()["data"]["rentabilidad"]
+    # 5 pedidos con dinero (sin CANCELADO ni DEVUELTO_TOTAL): costo 50, margen 1.500 - 50
+    assert (rentabilidad["costo_total_cop"], rentabilidad["margen_bruto_cop"]) == (50.0, 1450.0), rentabilidad
+
+
+def test_asistente_trae_filas_y_reglas_en_una_sentencia(app_client, db, admin_token, contador_sql):
+    """r3 (m16): las dos columnas de rv (en curso y con dinero) vienen en la MISMA sentencia que trae las filas del cliente:
+    en READ COMMITTED, dos sentencias pueden ver fotos distintas y «Pedidos en curso» no cuadrar con «Activos (N)»."""
+    cliente = _cliente_con_pedidos(db)
+    cid = cliente.id
+    with contador_sql.ventana() as v:
+        resp = app_client.get("/api/v1/chat/customer-context", params={"customer_id": cid}, headers=_auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    lecturas = [s for s in v.sentencias if s.lstrip().upper().startswith("SELECT") and "FROM sale_orders" in s]
+    assert len(lecturas) == 1, lecturas
+    assert resp.json()["data"]["revenue"]["active_orders_count"] == 3

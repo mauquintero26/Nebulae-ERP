@@ -16,7 +16,6 @@ from app.schemas import crm as schemas
 from app.core import cambios_documento, clientes
 from app.core import analisis as an
 from app.core.analisis_ventas import _cantidad, _conteos_por_cubeta, _enteros, _movimiento, _pct, _ranking
-from app.core.estados_pedido import ESTADOS_VEN_SIN_DINERO
 from app.core import resolucion_ventas as rv
 from app.core.fechas import ahora_utc
 from app.core.textos_filtro import mensaje_control
@@ -650,7 +649,7 @@ def get_customer_360_profile(
     for so in canonical_sos:
         t_cop = Decimal(str(so.total_cop or 0))
         s_cop = Decimal(str(so.saldo_cop or 0))
-        if so.estado not in ESTADOS_VEN_SIN_DINERO:
+        if so.id in con_dinero_ids:   # r3 (m15): la misma regla de rv que el Total comprado
             # B4 T24 (B50-b): el «Saldo por cobrar» (pven_saldo_por_cobrar) es el canónico de Ventas (erp_ventas
             # pven_saldo_por_cobrar, analisis_ventas): Σ max(0, saldo) sin cancelados ni devueltos (H47). Un saldo
             # negativo (crédito a favor) no resta lo que deben los demás pedidos.
@@ -696,7 +695,11 @@ def get_customer_360_profile(
         })
 
     # Line costs for rentabilidad
+    # B4 T24 r3 (m3 + m14): solo las líneas de los pedidos con dinero (con_dinero_ids, el mismo conjunto del Total
+    # comprado): el margen bruto ya no mezcla un ingreso sin devueltos con el costo de los devueltos y cancelados.
     for l in so_lines:
+        if l.so_id not in con_dinero_ids:
+            continue
         cost = Decimal(str(l.cost_unit_cop_snapshot or 0)) * Decimal(str(l.quantity or 0))
         total_costo_cop += cost
 

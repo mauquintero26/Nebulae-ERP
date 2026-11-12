@@ -1570,24 +1570,23 @@ def get_customer_context_for_chat(
         "document": cust.get("document") or "",
     }
 
-    orders_rows = db.execute(text("""
-        SELECT id, numero, fecha_cotizacion, fecha_entrega_estimada,
-               total_cop, anticipo_cop, saldo_cop, estado, productos,
-               created_at
-        FROM sale_orders
-        WHERE customer_id = :cid
-        ORDER BY created_at DESC
-    """), {"cid": cid}).mappings().all()
+    # B4 T24 r3 (m16): las filas y las dos reglas de rv en la MISMA sentencia (en READ COMMITTED, dos sentencias pueden ver
+    # fotos distintas y «Pedidos en curso» no cuadrar con «Activos (N)» ni con «Total de pedidos»).
+    filas_pven = (db.query(SaleOrder.id, SaleOrder.numero, SaleOrder.fecha_cotizacion, SaleOrder.fecha_entrega_estimada,
+                           SaleOrder.total_cop, SaleOrder.anticipo_cop, SaleOrder.saldo_cop, SaleOrder.estado,
+                           SaleOrder.productos, SaleOrder.created_at,
+                           rv.f_pven_en_curso(SaleOrder).label("en_curso"),
+                           rv.f_pven_con_dinero(SaleOrder).label("con_dinero"))
+                  .filter(SaleOrder.customer_id == cid).order_by(SaleOrder.created_at.desc()).all())
+    orders_rows = [r._mapping for r in filas_pven]
 
     # B4 T24 r1 (m7 + m30 + m36): las pestañas y el ticket promedio con la MISMA regla que las tarjetas (B49-b). «En curso»
     # (Activos y active_orders_count) = rv.f_pven_en_curso en SQL (no una copia en Python: sin pasar a mayúsculas, como
     # Ventas); CANCELADO y DEVUELTO_TOTAL no van en ninguna. total_spent y avg_ticket, sobre Activos + Entregados.
     # r2 (m10): las dos reglas salen de rv en la MISMA consulta (dos columnas): Activos = rv.f_pven_en_curso; Entregados =
     # rv.f_pven_con_dinero y no en curso (hoy ENTREGADO y FACTURADO). Si la regla cambia en rv, el Asistente la sigue.
-    reglas = db.query(SaleOrder.id, rv.f_pven_en_curso(SaleOrder), rv.f_pven_con_dinero(SaleOrder)).filter(
-        SaleOrder.customer_id == cid).all()
-    en_curso_ids = {r[0] for r in reglas if r[1]}
-    con_dinero_ids = {r[0] for r in reglas if r[2]}
+    en_curso_ids = {r.id for r in filas_pven if r.en_curso}
+    con_dinero_ids = {r.id for r in filas_pven if r.con_dinero}
     active_orders = []
     closed_orders = []
     total_spent = Decimal("0.0")
