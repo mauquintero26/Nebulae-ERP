@@ -2057,11 +2057,15 @@ const TONOS_PRODUCTOS = congelar(['indigo', 'emerald', 'amber', 'sky', 'rose', '
  * Las columnas del tablero de Productos: una por categoría de GET /categories, por nombre (en español), a lo sumo `max`.
  * `masCategorias` cuenta las que no caben y `aviso` es «N categorías más: usa la lista» (null si caben todas). Una fila sin
  * un id entero positivo, o con un id repetido, no es una columna; sin nombre, «Sin nombre».
+ * B4 T24 f3 r1 (F93, la Recomendación; aditivo): con una categoría elegida en la barra (`elegida`, su id como texto) que está en el
+ * catálogo, el tablero muestra SOLO su columna (aunque quede fuera de las 12): antes, una categoría fuera de las 12 dejaba 12 columnas
+ * vacías aunque tuviera productos. Sin elegida, o si no está en el catálogo, como antes.
  * @param {unknown} categorias
  * @param {number} [max]
+ * @param {{elegida?: string | null}} [opciones]
  * @returns {{columnas: Columna[], masCategorias: number, aviso: string | null}}
  */
-export function columnasProductos(categorias, max = MAX_COLUMNAS_PRODUCTOS) {
+export function columnasProductos(categorias, max = MAX_COLUMNAS_PRODUCTOS, { elegida = null } = {}) {
   const vistas = new Set();
   const lista = [];
   for (const c of Array.isArray(categorias) ? categorias : []) {
@@ -2070,6 +2074,9 @@ export function columnasProductos(categorias, max = MAX_COLUMNAS_PRODUCTOS) {
     lista.push({ id: c.id, nombre: textoLimpio(c.name) ?? 'Sin nombre' });
   }
   lista.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es') || a.id - b.id);
+  const clave = textoLimpio(elegida);
+  const sola = clave === null ? null : lista.find((c) => String(c.id) === clave);
+  if (sola) return { columnas: [columna(`cat-${sola.id}`, sola.nombre, TONOS_PRODUCTOS[0], [String(sola.id)])], masCategorias: 0, aviso: null };
   const { visibles, mas, aviso } = recortarColumnas(lista, max);
   return {
     columnas: visibles.map((c, i) => columna(`cat-${c.id}`, c.nombre, TONOS_PRODUCTOS[i % TONOS_PRODUCTOS.length], [String(c.id)])),

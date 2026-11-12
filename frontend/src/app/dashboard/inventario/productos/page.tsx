@@ -165,7 +165,9 @@ export default function ProductosPage() {
   // El tablero solo para ver, en modo servidor (R11, C4, D39): una columna por categoría de /categories (12 como máximo; el resto
   // se ve en la lista, con su aviso). Una consulta por columna (consultaColumnaProducto: category_id, la búsqueda y el orden del
   // MISMO estado, y los filtros de la barra). El orden del hook ('sin_movimiento') NO se manda: /products responde 422.
-  const { columnas: columnasTablero, aviso: avisoCategorias } = useMemo(() => columnasProductos(categorias.filas), [categorias.filas]);
+  // r1 (F93): con una categoría elegida, el tablero muestra solo su columna (aunque esté fuera de las 12).
+  const { columnas: columnasTablero, aviso: avisoCategorias } = useMemo(
+    () => columnasProductos(categorias.filas, undefined, { elegida: filtros.categoria }), [categorias.filas, filtros.categoria]);
   const tablero = useTableroKanban<Producto>({
     pantalla: ID_PRODUCTOS,
     modo: 'servidor',

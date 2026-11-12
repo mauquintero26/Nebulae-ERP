@@ -2729,7 +2729,8 @@ console.log('--- TEST 45 (B4 T18, TABLA-inventario punto 7; KANBAN-resto; RP47 a
   const hook = bloqueDesde(p, 'useTableroKanban<Producto>(');
   for (const q of ['pantalla: ID_PRODUCTOS', "modo: 'servidor'", 'columnas: columnasTablero', 'activo: listo && enKanban && categorias.filas !== null', 'porColumna: estado.tamano',
     'dependencias: [...dependenciasTablero(estado), filtros.revision, filtros.sinTarifa, filtros.categoria]']) trae(hook, q, `tablero ${q}`);
-  trae(p, 'const { columnas: columnasTablero, aviso: avisoCategorias } = useMemo(() => columnasProductos(categorias.filas), [categorias.filas]);', 'las columnas salen de /categories (máximo 12)');
+  // r1 (F93, D27): con la categoría elegida (solo su columna); lo fija el bloque de r1.
+  trae(p, '() => columnasProductos(categorias.filas, undefined, { elegida: filtros.categoria }), [categorias.filas, filtros.categoria]);', 'las columnas salen de /categories (máximo 12)');
   const tablero = etiquetaJsx(p, '<TableroKanban');
   for (const q of ['tablero={tablero}', 'soloLectura={TEXTO_SOLO_VER_PRODUCTOS}', 'tarjetaDe={tarjetaProducto}', 'onAbrir={openEdit}', 'aviso={avisoCategorias']) trae(tablero, q, `TableroKanban ${q}`);
   for (const q of ['regla=', 'onCambio=', 'onAccion=', 'accionesTarjeta=']) noTrae(tablero, q, `el tablero es solo para ver (${q})`);
@@ -3967,6 +3968,25 @@ console.log('--- B4 T24 f3 r1 (m14 = m23, m41): Almacenes no sigue un filtro de 
   const hubCompras = leerFuente('app/dashboard/compras/page.tsx');
   noTrae(hubCompras, 'estado Pendiente Compra', 'el Hub sin «Pendiente Compra»');
   assert.equal((hubCompras.match(/\{infoEstadoPedido\('PENDIENTE_COMPRA'\)\.label\}/g) ?? []).length >= 3, true, 'la etiqueta del estado en el panel');
+}
+
+console.log('--- B4 T24 f3 r1 (F93): el Kanban de Productos con una categoría elegida muestra solo su columna, aunque esté fuera de las 12 ---');
+{
+  const cats = Array.from({ length: 14 }, (_, i) => ({ id: i + 1, name: `Cat ${String(i + 1).padStart(2, '0')}` }));
+  const todas = ec.columnasProductos(cats);
+  assert.equal(todas.columnas.length, 12, 'sin elegida: las 12 de siempre');
+  assert.equal(todas.masCategorias, 2);
+  // La 14 queda fuera de las 12: antes, elegirla dejaba 12 columnas vacías (consultaColumnaProducto da null en todas).
+  assert.ok(!todas.columnas.some((c) => c.estados[0] === '14'), 'la 14 no está entre las 12');
+  const sola = ec.columnasProductos(cats, undefined, { elegida: '14' });
+  assert.deepEqual(sola.columnas.map((c) => [c.clave, c.titulo, c.estados]), [['cat-14', 'Cat 14', ['14']]], 'solo su columna');
+  assert.equal(sola.masCategorias, 0);
+  assert.equal(sola.aviso, null);
+  assert.notEqual(ec.consultaColumnaProducto(null, sola.columnas[0], { categoria: '14' }, { limit: 25, offset: 0 }), null, 'y su columna pide productos');
+  assert.equal(ec.columnasProductos(cats, undefined, { elegida: '3' }).columnas.length, 1, 'también una de las 12');
+  assert.equal(ec.columnasProductos(cats, undefined, { elegida: '99' }).columnas.length, 12, 'una que no está en el catálogo: como antes');
+  assert.equal(ec.columnasProductos(cats, undefined, { elegida: '' }).columnas.length, 12);
+  assert.equal(ec.columnasProductos(cats, undefined, {}).columnas.length, 12);
 }
 
 console.log('\nOK: test_estados_compras.mjs');
