@@ -3284,4 +3284,16 @@ console.log('--- B4 T24 f3 (F57, F54): el Hub de Compras — «Reintentar» de l
   trae(hub, "{infoEstadoPedido('PENDIENTE_COMPRA').label}");
 }
 
+console.log('--- B4 T24 f3 (FINAL-m4, ruling 7): Compras › Historial no fabrica respuestas de IA: su pestaña Análisis es AsistenteEnConstruccion ---');
+{
+  const h = leerFuente('app/dashboard/compras/historial/page.tsx');
+  trae(h, "import { AsistenteEnConstruccion } from '@/components/analisis';");
+  trae(h, "{activeTab === 'Analisis' && (\n            <div className=\"p-6\">\n              <AsistenteEnConstruccion titulo=\"Asistente de compras\"");
+  // Sin el análisis ni el chat simulados (R2): ni su estado, ni sus funciones, ni sus textos fijos.
+  for (const viejo of ['setAiAnalysis', 'setAiChat', 'handleAIAnalysis', 'sendAIChat', "role:'ia'", 'Con base en los datos actuales', 'ANÁLISIS DE HISTORIAL',
+    'Nebulae Analytics', 'Generar Análisis', 'Consultar al Asistente']) {
+    noTrae(h, viejo, `sin ${viejo}`);
+  }
+}
+
 console.log('\nOK: test_estados_compras.mjs');

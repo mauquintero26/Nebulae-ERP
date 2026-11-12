@@ -1,8 +1,10 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Table2, History, FolderOpen, X, Download, CloudDownload, Filter, Search, Loader2, RefreshCw } from 'lucide-react';
+import { Table2, History, FolderOpen, X, Download, CloudDownload, Filter, Search, Loader2 } from 'lucide-react';
 import { SubNav, PageHeader, Badge, Button, EmptyState } from '@/components/ui';
+// B4 T24 f3 (FINAL-m4, ruling 7): la pestaña Análisis es el asistente «En construcción» (R2): ninguna respuesta de IA fabricada aquí.
+import { AsistenteEnConstruccion } from '@/components/analisis';
 import { COMP_NAV } from '../comp-nav';
 import { apiFetch } from '@/lib/api';
 // B4 T24 f3 (F44-a): la reserva del botón de la IA (la esquina inferior derecha).
@@ -29,12 +31,6 @@ export default function ComprasHistorialPage() {
 
   // Tabs
   const [activeTab, setActiveTab] = useState('Historial');
-
-  // AI Analysis
-  const [aiAnalysis, setAiAnalysis] = useState('');
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiChat, setAiChat] = useState<any[]>([]);
-  const [aiInput, setAiInput] = useState('');
 
   useEffect(() => {
     // Try auto-loading history
@@ -165,20 +161,6 @@ export default function ComprasHistorialPage() {
   const exportCSV = () => alert("Exportación CSV en construcción");
   const exportJSON = () => alert("Exportación JSON en construcción");
   const exportOdoo = () => alert("Exportación Odoo en construcción");
-
-  async function handleAIAnalysis() {
-    setAiLoading(true);
-    const summary = `Datos de Historial de Compras: ${filteredData.length} registros. Top items: ${filteredData.slice(0,3).map((r:any)=>r.Producto||r.order_number||'item').join(', ')}.`;
-    setAiAnalysis(`📊 ANÁLISIS DE HISTORIAL DE COMPRAS — ${new Date().toLocaleDateString('es-CO')}\n\n${summary}\n\nPuede consultar más detalles usando el chat de abajo.`);
-    setAiLoading(false);
-  }
-
-  async function sendAIChat() {
-    if(!aiInput.trim()) return;
-    const msg=aiInput; setAiInput('');
-    setAiChat(h=>[...h,{role:'user',text:msg}]);
-    setAiChat(h=>[...h,{role:'ia',text:`Con base en los datos actuales: ${msg}. El análisis muestra ${filteredData.length} registros disponibles.`}]);
-  }
 
   return (
     <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
@@ -344,40 +326,8 @@ export default function ComprasHistorialPage() {
           )}
 
           {activeTab === 'Analisis' && (
-            <div className="p-6 space-y-4">
-              <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl p-5 border border-blue-100">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="bg-blue-600 rounded-xl p-2 text-white font-black text-sm">AI</div>
-                  <div>
-                    <p className="font-extrabold text-blue-900">Análisis de Historial de Compras</p>
-                    <p className="text-xs text-blue-500">Nebulae Analytics</p>
-                  </div>
-                  <button onClick={handleAIAnalysis} disabled={aiLoading} className="ml-auto bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl font-bold text-sm disabled:opacity-50 flex items-center gap-2">
-                    {aiLoading ? <RefreshCw size={14} className="animate-spin"/> : null} Generar Análisis
-                  </button>
-                </div>
-                {aiAnalysis && (
-                  <pre className="text-sm text-slate-700 whitespace-pre-wrap bg-white/70 rounded-xl p-4 border border-blue-100 leading-relaxed">{aiAnalysis}</pre>
-                )}
-                {!aiAnalysis && !aiLoading && (
-                  <p className="text-sm text-blue-700 italic text-center py-4">Haz clic en "Generar Análisis" para obtener insights sobre los datos actuales.</p>
-                )}
-              </div>
-              {/* Chat */}
-              <div className="bg-white rounded-2xl border border-slate-200 p-4">
-                <p className="font-bold text-slate-700 text-sm mb-3">Consultar al Asistente</p>
-                <div className="space-y-2 max-h-40 overflow-y-auto mb-3">
-                  {aiChat.map((m:any,i:number)=>(
-                    <div key={i} className={`flex ${m.role==='user'?'justify-end':''}`}>
-                      <div className={`rounded-xl px-3 py-2 text-xs max-w-[80%] ${m.role==='user'?'bg-blue-600 text-white':'bg-slate-100 text-slate-700'}`}>{m.text}</div>
-                    </div>
-                  ))}
-                </div>
-                <div className="flex gap-2">
-                  <input value={aiInput} onChange={e=>setAiInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&sendAIChat()} placeholder="Pregunta sobre los datos..." className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-blue-200"/>
-                  <button onClick={sendAIChat} disabled={!aiInput.trim()} className="bg-blue-600 text-white px-3 py-2 rounded-xl text-xs font-bold disabled:opacity-50">Enviar</button>
-                </div>
-              </div>
+            <div className="p-6">
+              <AsistenteEnConstruccion titulo="Asistente de compras" ejemplos={['¿Qué productos compramos más este mes?', '¿Qué proveedor tiene más órdenes en el historial?']} />
             </div>
           )}
 
