@@ -43,7 +43,7 @@ import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, cancelarPecsEnSerie, consultaColumnaPec,
   despuesDeCancelarPec, etapaPec, grupoMesPec, infoEstadoPec, opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec,
   repartirCancelacionPec, resumenCancelacionPec, tarjetaPedidoCompra, textoVacioPec, textoVencidosPec, tituloMesPec,
-  transicionesPec, vinculoPvenDelPec,
+  transicionesPec, vinculoPvenDelPec, avisoRecepcionPec, despuesDeEliminarPec,
 } from '@/lib/estados-compras';
 import {
   ENLACE_VER_ANALISIS_COMPRAS, errorDiasEtapas, TEXTO_SEGUIMIENTO_CERRADO, accionSemaforoCompras, avisoTarjetaEtapa, avisosFlujoCompras,
@@ -379,7 +379,11 @@ function TrackingPanel({pec, onUpdate, onToast, puedeEditar}: {pec:any; onUpdate
       onToast('Etapa actualizada', 'ok');
       onUpdate();
       closeEdit();
-    } catch(e:any) { onToast(e.message, 'error'); }
+    } catch (e) {
+      // B4 T24 f3 (FINAL-m13): si el PEC cambió en otro lado o la red se cayó (recargarTrasError), el panel no se queda con las etapas viejas.
+      onToast(e, 'error');
+      if (recargarTrasError(e)) onUpdate();
+    }
     setUpdating(null);
   }
 
@@ -487,7 +491,7 @@ function TrackingPanel({pec, onUpdate, onToast, puedeEditar}: {pec:any; onUpdate
                     <input value={carrier} onChange={e=>setCarrier(e.target.value)} placeholder="ej: DHL" className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
                   </div>
                 </div>
-                <div><label className="text-xs font-black text-gray-400 uppercase mb-1 block">Numero de Guia / Tracking</label>
+                <div><label className="text-xs font-black text-gray-400 uppercase mb-1 block">Número de guía / tracking</label>
                   <input value={guia} onChange={e=>setGuia(e.target.value)} placeholder="ej: 1Z999AA1234567890" className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
                 </div>
                 <div className="relative">
@@ -518,7 +522,7 @@ function TrackingPanel({pec, onUpdate, onToast, puedeEditar}: {pec:any; onUpdate
             {/* Tracking history */}
             {history.length > 0 && (
               <div className="mt-2 pt-2 border-t border-gray-100">
-                <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Historial de guias:</p>
+                <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Historial de guías:</p>
                 {history.map((h:any,i:number) => (
                   <div key={i} className="flex items-center gap-2 text-[10px] text-gray-500">
                     <span className="text-indigo-600 font-bold">{h.numero}</span>
@@ -568,19 +572,23 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
   // "Hacer recepción": ir directo a LA recepción de este PEC, no al hub general
   // (con cientos de pedidos, aterrizar en la lista completa obliga a buscarla).
   // Si ya existe una (GoodsReceipt), abrirla; si no, crearla y abrir la nueva.
+  // B4 T24 f3 (FINAL-m12): adónde va lo dice avisoRecepcionPec: abre la recepción por confirmar o crea la del resto (nunca la última si
+  // ya está confirmada). Un error se dice con el texto del servidor y, con la regla única, se recarga el panel.
   async function goToRecepcion() {
+    const accion = avisoRecepcionPec(detail)?.accion;
+    if (!accion) return;
     setGoingToRecepcion(true);
     try {
-      const existing = detail?.recepciones?.[detail.recepciones.length - 1];
-      if (existing?.id) { router.push(`/dashboard/compras/recepciones/${existing.id}`); return; }
+      if (accion.tipo === 'abrir') { router.push(`/dashboard/compras/recepciones/${accion.id}`); return; }
       const user = localStorage.getItem('user_name') || '';
       const r = await apiFetch(`/compras/pedidos/${pec.id}/recepcionar`, {
         method: 'POST',
         body: JSON.stringify({ created_by: user, force_full: false }),
       });
-      router.push(`/dashboard/compras/recepciones/${r.id}`);
-    } catch (e: any) {
-      onToast(e.message, 'error');
+      router.push(`/dashboard/compras/recepciones/${(r?.data ?? r)?.id}`);
+    } catch (e) {
+      onToast(e, 'error');
+      if (recargarTrasError(e)) { onUpdate(); loadFull(); }
     }
     setGoingToRecepcion(false);
   }
@@ -661,7 +669,10 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
       onToast('PEC eliminado','ok'); onUpdate(); onClose();
     } catch(e){
       onToast(e,'error');
-      if (recargarTrasError(e)) { onUpdate(); loadFull(); }
+      // B4 T24 f3 (F64): un 404 (el PEC ya no existe) cierra el panel y recarga la lista (despuesDeEliminarPec).
+      const despues = despuesDeEliminarPec(e);
+      if (despues === 'cerrar') { onUpdate(); onClose(); }
+      else if (despues === 'recargar') { onUpdate(); loadFull(); }
     }
   };
 
@@ -670,6 +681,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
   const est = { ...infoEstadoPec(detail?.estado).clases, label: infoEstadoPec(detail?.estado).label };
   const vencido = detail?.is_overdue ?? pec.is_overdue;
   const pvens = detail?.pedidos_venta?.length ? detail.pedidos_venta.map((v:any)=>v.numero) : (detail?.ven_numero ? [detail.ven_numero] : []);
+  const avisoRecepcion = avisoRecepcionPec(detail);
 
   return (
     <>
@@ -745,26 +757,22 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
             hay que poder volver a ella -- antes el banner (y su unico link a
             la recepcion) desaparecia por completo en cuanto se creaba una,
             dejando sin forma de volver a encontrarla desde el PEC. */}
-        {['RECIBIDO','RECIBIDA'].includes(detail?.estado) && (
+        {/* B4 T24 f3 (FINAL-m12): el aviso sale de avisoRecepcionPec: también con PARCIALMENTE_RECIBIDA (lo que el tablero muestra en «En
+            bodega» con «Recepcionar»), y su botón abre la recepción por confirmar o crea la del resto. */}
+        {avisoRecepcion && (
           <div className="mx-8 mt-4 bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex items-center justify-between shrink-0">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 bg-white rounded-full flex items-center justify-center text-emerald-600 shadow-sm"><PackageCheck size={18}/></div>
               <div>
-                <p className="font-black text-emerald-900 text-sm">
-                  {detail?.recepciones?.length > 0 ? 'Mercancía recibida en bodega' : 'Mercancía recibida en bodega, pendiente de recepción'}
-                </p>
-                <p className="text-xs text-emerald-700">
-                  {detail?.recepciones?.length > 0
-                    ? `Recepción ${detail.recepciones[detail.recepciones.length-1].numero} en curso.`
-                    : 'Inicia el conteo físico de este pedido.'}
-                </p>
+                <p className="font-black text-emerald-900 text-sm">{avisoRecepcion.titulo}</p>
+                <p className="text-xs text-emerald-700">{avisoRecepcion.texto}</p>
               </div>
             </div>
             {/* r1 (m7): «Hacer recepción» la crea (POST /pedidos/{id}/recepcionar: ADMIN y COMPRAS); «Ver recepción» solo navega. */}
-            {(detail?.recepciones?.length > 0 || accesoPec.cambiarPec) && (
+            {(avisoRecepcion.accion.tipo === 'abrir' || accesoPec.cambiarPec) && (
               <button onClick={goToRecepcion} disabled={goingToRecepcion} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm hover:bg-emerald-700 transition-colors shrink-0 disabled:opacity-50 flex items-center gap-2">
                 {goingToRecepcion && <RefreshCw size={12} className="animate-spin"/>}
-                {detail?.recepciones?.length > 0 ? 'Ver recepción' : 'Hacer recepción'}
+                {avisoRecepcion.accion.texto}
               </button>
             )}
           </div>
@@ -1207,7 +1215,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
                     <p className="text-xs font-black text-gray-400 uppercase mb-4">Detalles del Pedido</p>
                     <div className="grid grid-cols-3 gap-4">
                       <div>
-                        <label className="block text-xs font-black text-gray-500 uppercase mb-1">Tipo de Envio</label>
+                        <label className="block text-xs font-black text-gray-500 uppercase mb-1">Tipo de envío</label>
                         <select value={form.tipo_envio} onChange={e=>setF('tipo_envio',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200 bg-white">
                           <option value="casillero">Vía casillero</option>
                           <option value="directo">Directo Colombia</option>
@@ -1243,7 +1251,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
                         </select>
                       </div>
                       <div>
-                        <label className="block text-xs font-black text-gray-500 uppercase mb-1">Entrega Estimada (dias)</label>
+                        <label className="block text-xs font-black text-gray-500 uppercase mb-1">Entrega estimada (días)</label>
                         <input type="number" value={form.dias_entrega} onChange={e=>setF('dias_entrega',Number(e.target.value))} min={1} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
                       </div>
                       <div>
@@ -1336,7 +1344,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
               {modalTab === 'pvens' && (
                 <div>
                   <p className="text-sm font-black text-gray-700 mb-1">Pedidos de Venta disponibles</p>
-                  <p className="text-xs text-gray-400 mb-4">Selecciona los PVEN en estado <strong>Pendiente Compra</strong> para asociar a este PEC</p>
+                  <p className="text-xs text-gray-400 mb-4">Selecciona los PVEN en estado <strong>{infoEstadoPedido('PENDIENTE_COMPRA').label}</strong> para asociar a este PEC</p>
                   <div className="flex items-center bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 gap-2 mb-3">
                     <Search size={14} className="text-gray-400"/>
                     <input value={searchPven} onChange={e=>setSearchPven(e.target.value)} placeholder="Buscar PVEN..." className="text-sm bg-transparent outline-none flex-1"/>
@@ -1351,7 +1359,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
                           <RefreshCw size={13} aria-hidden="true"/> Reintentar
                         </button>
                       </div>
-                    ) : filteredPvens.length === 0 && <p className="text-center py-10 text-gray-400 text-sm">Sin PVEN en estado Pendiente Compra</p>}
+                    ) : filteredPvens.length === 0 && <p className="text-center py-10 text-gray-400 text-sm">Sin PVEN pendientes de compra</p>}
                     {filteredPvens.map((p:any)=>(
                       <label key={p.id} className={'flex items-start gap-3 p-4 rounded-2xl border cursor-pointer hover:bg-purple-50 transition-colors ' + (selectedPvens.has(p.id)?'border-purple-300 bg-purple-50':'border-gray-200 bg-white')}>
                         <input type="checkbox" checked={selectedPvens.has(p.id)} onChange={e=>{const n=new Set(selectedPvens);if(e.target.checked)n.add(p.id);else n.delete(p.id);setSelectedPvens(n);}} className="mt-1 rounded border-gray-300 text-purple-600"/>

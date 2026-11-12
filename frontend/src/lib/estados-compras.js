@@ -793,6 +793,52 @@ export function recargaReponeLineas({ silencioso = false, recepcion }) {
 }
 
 /**
+ * B4 T24 f3 (FINAL-m12): el aviso de la recepción en el panel de un PEC (Compras › Pedidos) y adónde lleva su botón:
+ *  - en bodega (columnaPec 'en_bodega': RECIBIDO o PARCIALMENTE_RECIBIDA, lo mismo que el tablero muestra con «Recepcionar»): si hay
+ *    una recepción por confirmar (BORRADOR, esRecepcionPorConfirmar), «Ver recepción» la abre; si no, «Hacer recepción» crea la del
+ *    resto (POST /pedidos/{id}/recepcionar): nunca abre una recepción ya confirmada;
+ *  - recibido (RECIBIDA o COMPLETADO) con recepciones: «Ver recepción» abre la última (como hoy: el camino de vuelta desde el PEC);
+ *  - otro estado: null (sin aviso).
+ * `accion.tipo` es 'abrir' (con el id) o 'crear'.
+ * @param {any} pec
+ * @returns {{titulo: string, texto: string, accion: {tipo: 'abrir', id: number, texto: string} | {tipo: 'crear', texto: string}} | null}
+ */
+export function avisoRecepcionPec(pec) {
+  const columna = columnaPec(pec?.estado);
+  const recepciones = Array.isArray(pec?.recepciones) ? pec.recepciones.filter((r) => r?.id != null) : [];
+  if (columna === 'en_bodega') {
+    const porConfirmar = [...recepciones].reverse().find((r) => esRecepcionPorConfirmar(r));
+    if (porConfirmar) {
+      return { titulo: 'Mercancía recibida en bodega', texto: `Recepción ${numeroRecepcion(porConfirmar)} en curso.`,
+        accion: { tipo: 'abrir', id: porConfirmar.id, texto: 'Ver recepción' } };
+    }
+    const parcial = String(pec?.estado ?? '').trim() === 'PARCIALMENTE_RECIBIDA';
+    return {
+      titulo: parcial ? 'Mercancía recibida en parte' : 'Mercancía recibida en bodega, pendiente de recepción',
+      texto: parcial ? 'Falta por recibir: inicia la recepción de lo que falta.' : 'Inicia el conteo físico de este pedido.',
+      accion: { tipo: 'crear', texto: 'Hacer recepción' },
+    };
+  }
+  if (columna === 'recibido' && recepciones.length > 0) {
+    const ultima = recepciones[recepciones.length - 1];
+    return { titulo: 'Mercancía recibida en bodega', texto: `Recepción ${numeroRecepcion(ultima)}.`,
+      accion: { tipo: 'abrir', id: ultima.id, texto: 'Ver recepción' } };
+  }
+  return null;
+}
+
+/**
+ * B4 T24 f3 (F64): después de un DELETE de PEC que falló, qué hace el panel: un 404 (el PEC ya no existe: lo borró otro) cierra el
+ * panel y recarga la lista; con la regla única (recargarTrasError: 400, 409, 422 o la red) se recarga lo que se ve; lo demás, nada.
+ * @param {unknown} err
+ * @returns {'cerrar' | 'recargar' | null}
+ */
+export function despuesDeEliminarPec(err) {
+  if (/** @type {{status?: unknown}} */ (err)?.status === 404) return 'cerrar';
+  return recargarTrasError(err) ? 'recargar' : null;
+}
+
+/**
  * B4 T24 f3 (FINAL-C7-f): el vínculo de los PVEN en el alta de un PEC (POST /compras/pedidos; create_pec con FINAL-C7-b): `ven_ids`
  * con TODOS los elegidos (el servidor los vincula en el mismo commit y responde 409 en español si alguno no está en PENDIENTE_COMPRA o
  * ya tiene PEC), `ven_id` = el primero (como hoy) y `ven_numero` solo el del primero (la columna es VARCHAR(20): una lista unida por

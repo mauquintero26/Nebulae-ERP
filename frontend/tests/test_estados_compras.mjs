@@ -884,8 +884,11 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
   }
   assert.match(pag, /\{infoEstadoPedido\('PENDIENTE_COMPRA'\)\.label\}/);
   // T15 r1 (m9): guardar la información y eliminar desde el panel aplican recargarTrasError; ningún `catch {}` mudo.
-  assert.equal((pag.match(/onToast\(e,'error'\);\s*(?:\/\/[^\n]*\n\s*)?if \(recargarTrasError\(e\)\) \{ onUpdate\(\); loadFull\(\); \}/g) ?? []).length, 3,
-    'saveInfo, deletePec y changeEstado');
+  // B4 T24 f3 (F64, D27): deletePec pasa a despuesDeEliminarPec (un 404 cierra el panel; la regla única, recarga): quedan saveInfo y changeEstado.
+  assert.equal((pag.match(/onToast\(e,'error'\);\s*(?:\/\/[^\n]*\n\s*)?if \(recargarTrasError\(e\)\) \{ onUpdate\(\); loadFull\(\); \}/g) ?? []).length, 2,
+    'saveInfo y changeEstado');
+  assert.match(pag, /const despues = despuesDeEliminarPec\(e\);\s*if \(despues === 'cerrar'\) \{ onUpdate\(\); onClose\(\); \}\s*else if \(despues === 'recargar'\) \{ onUpdate\(\); loadFull\(\); \}/,
+    'deletePec');
   assert.ok(!/catch \{\s*\}|catch \{ setProdSearchResults\(\[\]\); \}/.test(pag), 'ningún error mudo');
   assert.equal((pag.match(/avisarError\(err, 'No se pudo buscar el (?:casillero|proveedor|producto)'\)/g) ?? []).length, 4, 'las cuatro búsquedas');
   // El menú de fila (MenuFila) ofrece solo lo que acepta update_pec (R9, C15c): Emitir desde Borrador y cancelar con motivo.
@@ -3060,7 +3063,8 @@ console.log('--- B4 T24 (FINAL-m10, FINAL-m31 y FINAL-m38): los tableros y las a
   assert.match(pedidos, /\{!cerrado && puedeEditar && \(\s*<button onClick=\{\(\)=>openEdit\(sd\)\}/, 'el lápiz de la etapa');
   assert.match(pedidos, /<TrackingPanel pec=\{detail\|\|pec\} puedeEditar=\{accesoPec\.tracking\}/);
   assert.match(pedidos, /\{accesoPec\.cambiarPec && \(\s*<button onClick=\{\(\)=>setShowConfig\(true\)\} title="Configurar etapas, alertas y casilleros"/, 'Configurar etapas (PUT /tracking-config)');
-  assert.match(pedidos, /\{\(detail\?\.recepciones\?\.length > 0 \|\| accesoPec\.cambiarPec\) && \(\s*<button onClick=\{goToRecepcion\}/, '«Hacer recepción» (POST /recepcionar); «Ver recepción» para todos');
+  // B4 T24 f3 (FINAL-m12, D27): «Ver recepción» (abrir) para todos; «Hacer recepción» (crear: POST /recepcionar) con cambiarPec.
+  assert.match(pedidos, /\{\(avisoRecepcion\.accion\.tipo === 'abrir' \|\| accesoPec\.cambiarPec\) && \(\s*<button onClick=\{goToRecepcion\}/, '«Hacer recepción» (POST /recepcionar); «Ver recepción» para todos');
   assert.match(pedidos, /\{!infoEdit \? \(accesoPec\.cambiarPec && \(\s*<button onClick=\{openInfoEdit\}/, '«Editar» la información (PATCH /pedidos/{id})');
   assert.match(pedidos, /\{accesoPec\.cambiarPec && <Button color="purple" icon=\{Plus\} onClick=\{\(\)=>setShowNuevoPec\(true\)\}>Nuevo PEC<\/Button>\}/, '«Nuevo PEC» (POST /pedidos)');
   assert.match(hub, /\{selectedPvens\.size > 0 && accesoPec\.cambiarPec && \(/, '«Crear PEC Consolidado» (POST /pedidos)');
@@ -3293,6 +3297,54 @@ console.log('--- B4 T24 f3 (FINAL-m4, ruling 7): Compras › Historial no fabric
   for (const viejo of ['setAiAnalysis', 'setAiChat', 'handleAIAnalysis', 'sendAIChat', "role:'ia'", 'Con base en los datos actuales', 'ANÁLISIS DE HISTORIAL',
     'Nebulae Analytics', 'Generar Análisis', 'Consultar al Asistente']) {
     noTrae(h, viejo, `sin ${viejo}`);
+  }
+}
+
+console.log('--- B4 T24 f3 (FINAL-m12, F64, FINAL-m13, F62): el panel de un PEC — la recepción del resto, el 404 al eliminar, el seguimiento y sus textos ---');
+{
+  const { avisoRecepcionPec, despuesDeEliminarPec } = ec;
+  assert.equal(typeof avisoRecepcionPec, 'function', 'avisoRecepcionPec existe');
+  // FINAL-m12: en bodega sin recepción por confirmar, «Hacer recepción» crea la del resto; nunca abre una ya confirmada.
+  const confirmada = { id: 5, numero: 'ENINV-5', estado: 'COMPLETADA' };
+  const borrador = { id: 8, numero: 'ENINV-8', estado: 'BORRADOR' };
+  assert.deepEqual(avisoRecepcionPec({ estado: 'PARCIALMENTE_RECIBIDA', recepciones: [confirmada] }), {
+    titulo: 'Mercancía recibida en parte', texto: 'Falta por recibir: inicia la recepción de lo que falta.', accion: { tipo: 'crear', texto: 'Hacer recepción' },
+  }, 'parcial con la recepción confirmada: crea la del resto');
+  assert.deepEqual(avisoRecepcionPec({ estado: 'PARCIALMENTE_RECIBIDA', recepciones: [confirmada, borrador] }).accion, { tipo: 'abrir', id: 8, texto: 'Ver recepción' },
+    'con una por confirmar, la abre');
+  assert.deepEqual(avisoRecepcionPec({ estado: 'RECIBIDO', recepciones: [] }), {
+    titulo: 'Mercancía recibida en bodega, pendiente de recepción', texto: 'Inicia el conteo físico de este pedido.', accion: { tipo: 'crear', texto: 'Hacer recepción' },
+  });
+  assert.equal(avisoRecepcionPec({ estado: 'RECIBIDO', recepciones: [borrador] }).texto, 'Recepción ENINV-8 en curso.');
+  // Recibido (RECIBIDA) con recepciones: «Ver recepción» abre la última (el camino de vuelta desde el PEC, como antes).
+  assert.deepEqual(avisoRecepcionPec({ estado: 'RECIBIDA', recepciones: [confirmada] }).accion, { tipo: 'abrir', id: 5, texto: 'Ver recepción' });
+  for (const pec of [{ estado: 'RECIBIDA', recepciones: [] }, { estado: 'EMITIDO' }, { estado: 'EN_TRANSITO', recepciones: [borrador] }, null]) {
+    assert.equal(avisoRecepcionPec(pec), null, JSON.stringify(pec));
+  }
+  // El tablero muestra el PEC parcial en «En bodega»: el panel también lo avisa (la misma columna).
+  assert.equal(ec.columnaPec('PARCIALMENTE_RECIBIDA'), 'en_bodega');
+  // F64: un 404 al eliminar (ya lo borró otro) cierra el panel; la regla única recarga; un 500, nada.
+  assert.equal(despuesDeEliminarPec({ status: 404 }), 'cerrar');
+  for (const status of [400, 409, 422, undefined]) assert.equal(despuesDeEliminarPec({ status }), 'recargar', String(status));
+  assert.equal(despuesDeEliminarPec({ status: 500 }), null);
+  assert.equal(despuesDeEliminarPec({ status: 403 }), null);
+  // El cableado del panel.
+  const ped = leerFuente('app/dashboard/compras/pedidos/page.tsx');
+  trae(ped, 'const avisoRecepcion = avisoRecepcionPec(detail);');
+  trae(ped, '{avisoRecepcion && (');
+  trae(ped, "if (accion.tipo === 'abrir') { router.push(`/dashboard/compras/recepciones/${accion.id}`); return; }");
+  trae(ped, 'router.push(`/dashboard/compras/recepciones/${(r?.data ?? r)?.id}`);');
+  noTrae(ped, "['RECIBIDO','RECIBIDA'].includes(detail?.estado)", 'sin la lista que dejaba fuera a PARCIALMENTE_RECIBIDA');
+  // FINAL-m13: el PATCH /tracking del panel recarga con la regla única.
+  const etapa = ped.slice(ped.indexOf('async function updateStage('), ped.indexOf('const [infoEdit, setInfoEdit]'));
+  assert.match(etapa, /\} catch \(e\) \{[\s\S]*?onToast\(e, 'error'\);\s*if \(recargarTrasError\(e\)\) onUpdate\(\);\s*\}/, 'updateStage: la regla única');
+  // F62: los textos con tildes y la etiqueta del estado de pedido (los valores guardados, como 'Credito 30 dias', no cambian).
+  for (const viejo of ['Numero de Guia', 'Historial de guias', 'Tipo de Envio', 'Entrega Estimada (dias)', 'Sin PVEN en estado Pendiente Compra', '<strong>Pendiente Compra</strong>']) {
+    noTrae(ped, viejo, `sin «${viejo}»`);
+  }
+  for (const nuevo of ['Número de guía / tracking', 'Historial de guías:', 'Tipo de envío', 'Entrega estimada (días)', 'Sin PVEN pendientes de compra',
+    "<strong>{infoEstadoPedido('PENDIENTE_COMPRA').label}</strong>"]) {
+    trae(ped, nuevo);
   }
 }
 
