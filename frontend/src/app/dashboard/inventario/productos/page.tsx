@@ -26,6 +26,7 @@ import {
 } from '@/lib/estados-compras';
 import { INV_NAV } from '../inv-nav';
 import { CONTENEDOR, FOCOS, SelectorCatalogo, pesos, useCatalogo } from '../piezas-inventario';
+import { RESERVA_BOTON_IA } from '@/lib/design-system';
 
 /** Un producto de GET /products (ProductResponse + precio_venta, costo y publicado de T13, RP91). Los nombres son los del servidor. */
 type Producto = {
@@ -555,7 +556,8 @@ export default function ProductosPage() {
         </div>
       </div>
 
-      <form onSubmit={saveProduct} className="flex-1 overflow-y-auto p-6">
+      {/* r1 (m17 + m45, F44-a): la ficha se desplaza sola y llega a la esquina del botón de la IA: la reserva al fondo. */}
+      <form onSubmit={saveProduct} className={`flex-1 overflow-y-auto px-6 pt-6 ${RESERVA_BOTON_IA}`}>
         {activeTab === 'Informacion General' && (
           <div className="grid grid-cols-3 gap-6 max-w-5xl">
             <div className="col-span-2 space-y-4">

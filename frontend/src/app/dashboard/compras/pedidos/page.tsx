@@ -836,7 +836,8 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
           </div>
 
           {/* RIGHT 55% */}
-          <div className="w-[55%] p-6 overflow-y-auto">
+          {/* r1 (m17 + m45, F44-a): la columna de la derecha del panel llega a la esquina del botón de la IA: la reserva al fondo. */}
+          <div className={`w-[55%] px-6 pt-6 ${RESERVA_BOTON_IA} overflow-y-auto`}>
             {loading && <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600"/></div>}
 
             {!loading && tab === 'tracking' && (

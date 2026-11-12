@@ -304,7 +304,8 @@ function PecDetailPanel({
           </div>
 
           {/* RIGHT 55% */}
-          <div className="w-[55%] p-6 overflow-y-auto flex flex-col gap-4">
+          {/* r1 (m17 + m45, F44-a): la columna de la derecha del panel llega a la esquina del botón de la IA: la reserva al fondo. */}
+          <div className={`w-[55%] px-6 pt-6 ${RESERVA_BOTON_IA} overflow-y-auto flex flex-col gap-4`}>
             {editEstado && (
               <div className="bg-purple-50 border-2 border-purple-200 rounded-2xl p-5">
                 <p className="text-sm font-black text-purple-800 mb-3">Cambiar Estado del PEC</p>

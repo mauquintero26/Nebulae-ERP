@@ -1691,6 +1691,32 @@ console.log('--- B4 T24 f3 (F44-a): Compras e Inventario reservan la esquina del
     return /["'`\s]pb-(?:10|20|24)["'`\s]/.test(codigo) || plantillasConReserva.some((t) => /\b(?:sm|md|lg|xl):p-\d/.test(t));
   }).map((p) => p.replace(/\\/g, '/').replace(/^.*\/dashboard\//, ''));
   assert.deepEqual(sueltos, [], 'sin pb-24, pb-20 ni pb-10 literales (ni la reserva pisada por sm:p-*) en Compras e Inventario');
+  // B4 T24 f3 r1 (m17 + m45): la guarda amplia — todo contenedor que se desplaza (overflow-y-auto, sin max-h) en Compras e Inventario
+  // lleva la reserva, salvo los que no llegan a la esquina del botón (la lista blanca, cada uno con su motivo).
+  const LISTA_BLANCA = [
+    ['compras/components/TablaCompras.tsx', 'h-[600px] overflow-y-auto'], // una tabla interna de alto fijo
+    ['compras/page.tsx', 'w-[45%] border-r'], // la columna de la izquierda del panel del PEC
+    ['compras/pedidos/page.tsx', 'w-[45%] border-r'], // ídem en Pedidos
+    ['compras/pedidos/page.tsx', 'flex-1 overflow-y-auto p-6'], // el cuerpo del alta de un PEC (una ventana centrada con su pie)
+    ['compras/pedidos/[id]/page.tsx', 'flex-1 flex flex-col xl:flex-row overflow-y-auto xl:overflow-hidden'], // su último hijo lleva la reserva
+    ['compras/pedidos/[id]/page.tsx', 'xl:flex-1 xl:overflow-y-auto px-4 sm:px-8 py-8'], // la columna de la izquierda
+    ['compras/recepciones/[id]/page.tsx', 'flex-1 flex flex-col xl:flex-row overflow-y-auto xl:overflow-hidden'],
+    ['compras/recepciones/[id]/page.tsx', 'xl:flex-1 xl:overflow-y-auto px-4 sm:px-8 py-8'],
+    ['inventario/categorias/page.tsx', 'flex-1 overflow-y-auto">'], // una tarjeta dentro del contenedor que ya reserva
+  ];
+  const sinReserva = ['compras', 'inventario'].flatMap((d) => recorrer(fileURLToPath(new URL(`../src/app/dashboard/${d}/`, import.meta.url)))).flatMap((p) => {
+    const ruta = p.replace(/\\/g, '/').replace(/^.*\/dashboard\//, '');
+    const codigo = readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
+    return codigo.split('\n').filter((l) => /className=/.test(l) && /\boverflow-y-auto\b/.test(l) && !/max-h-/.test(l) && !l.includes('${RESERVA_BOTON_IA}'))
+      .filter((l) => !LISTA_BLANCA.some(([r, trozo]) => r === ruta && l.includes(trozo)))
+      .map((l) => `${ruta}: ${l.trim().slice(0, 80)}`);
+  });
+  assert.deepEqual(sinReserva, [], 'todo contenedor que se desplaza y llega a la esquina lleva RESERVA_BOTON_IA');
+  for (const [ruta, trozo] of [['compras/page.tsx', '<div className={`w-[55%] px-6 pt-6 ${RESERVA_BOTON_IA} overflow-y-auto flex flex-col gap-4`}>'],
+    ['compras/pedidos/page.tsx', '<div className={`w-[55%] px-6 pt-6 ${RESERVA_BOTON_IA} overflow-y-auto`}>'],
+    ['inventario/productos/page.tsx', '<form onSubmit={saveProduct} className={`flex-1 overflow-y-auto px-6 pt-6 ${RESERVA_BOTON_IA}`}>']]) {
+    assert.ok(leer(ruta).includes(trozo), `${ruta}: la reserva (m45)`);
+  }
 }
 
 console.log('OK test_listas_ventas.mjs');
