@@ -114,9 +114,11 @@ function CeldaAcciones({ r }: { r: FilaRecepcion }) {
       {porConfirmar && acciones?.puedeConfirmar && (
         <button type="button" onClick={() => acciones?.confirmar(r)} disabled={acciones?.confirmandoId != null}
           aria-label={`Confirmar la recepción ${numero}`} aria-busy={confirmando}
-          className={`inline-flex items-center gap-1 rounded-lg border border-teal-700 bg-teal-700 px-2 py-1 text-xs font-bold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60 ${FOCO_VISIBLE}`}>
-          {confirmando && <RefreshCw size={12} aria-hidden="true" className="animate-spin" />}
-          Confirmar
+          className={`relative inline-flex items-center gap-1 rounded-lg border border-teal-700 bg-teal-700 px-2 py-1 text-xs font-bold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60 ${FOCO_VISIBLE}`}>
+          {/* B4 T24 f3 (el anillo de f1 r3): la carga no ensancha el botón (sin ella, la celda cabe en sus 132 px útiles): el spinner va
+              encima del texto, que se oculta sin dejar de ocupar su lugar. */}
+          {confirmando && <RefreshCw size={12} aria-hidden="true" className="absolute inset-0 m-auto animate-spin" />}
+          <span className={confirmando ? 'invisible' : undefined}>Confirmar</span>
         </button>
       )}
       <MenuFila items={items} etiqueta={`Acciones de ${numero}`} />

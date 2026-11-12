@@ -3252,4 +3252,19 @@ console.log('--- B4 T24 f3 (A3-f): el Kardex manda Desde y Hasta como el día de
   assert.ok(!/UTC/.test(sinComentarios(k).replace(/\{\/\*[\s\S]*?\*\/\}/g, '')), 'el Kardex no dice «UTC» en lo que se ve');
 }
 
+console.log('--- B4 T24 f3 (el anillo recortado, duda 1 y m8 de f1 r3): «Completar» de Tránsito y «Confirmar» de Recepciones caben con su anillo ---');
+{
+  // Tránsito: la columna Acción pasa de 96 a 112 px («Completar», 85 px, no cabía en 72 útiles); las visibles siguen en la caja de 704.
+  const tr = leerFuente('app/dashboard/compras/transito/page.tsx');
+  trae(tr, "{ id: 'accion', titulo: 'Acción', ancho: 112, clave: true, fija: 'derecha', alinear: 'centro', celda: (p) => <CeldaAccion p={p} /> },");
+  assert.equal(anchoVisible(tr, 'const COLUMNAS_TABLA_TRANSITO'), 672, 'R26: 120 + 124 + 104 + 104 + 108 + 112');
+  // Recepciones: la columna no se ensancha (696 + 20 pasaría de 704): la carga de «Confirmar» no ensancha el botón; el spinner va encima del
+  // texto, que se oculta sin dejar de ocupar su lugar (sin carga, la celda cabe en sus 132 px útiles).
+  const rec = leerFuente('app/dashboard/compras/recepciones/page.tsx');
+  trae(rec, '{confirmando && <RefreshCw size={12} aria-hidden="true" className="absolute inset-0 m-auto animate-spin" />}');
+  trae(rec, "<span className={confirmando ? 'invisible' : undefined}>Confirmar</span>");
+  assert.match(rec, /className=\{`relative inline-flex items-center gap-1 rounded-lg border border-teal-700/, 'el spinner se ubica sobre el botón');
+  assert.equal(anchoVisible(leerFuente('app/dashboard/compras/columnas-recepcion.tsx'), 'export function columnasRecepcion'), 696, 'Recepciones: sin ensanchar');
+}
+
 console.log('\nOK: test_estados_compras.mjs');

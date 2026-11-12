@@ -181,7 +181,8 @@ function CeldaAccion({ p }: { p: FilaTransito }) {
 /**
  * B4 T16A, la tabla (TABLA-compras punto 8; R26, D41): Pedido de compra (clave, fija a la izquierda, la flexible), Cliente /
  * PVEN y Tipo (ocultas por defecto), Etapa actual, Progreso, Entrega est., Monto y Acción (fija a la derecha). A 1024 px con
- * el menú abierto la caja de la tabla deja 704 px: 120 + 124 + 104 + 104 + 108 + 96 = 656 (la flexible toma el resto). Una
+ * el menú abierto la caja de la tabla deja 704 px: 120 + 124 + 104 + 104 + 108 + 112 = 672 (la flexible toma el resto). B4 T24 f3
+ * (el anillo de f1 r3): Acción pasa de 96 a 112 px: «Completar» (85 px) no cabía en 72 útiles y su anillo de foco se cortaba. Una
  * constante (estable, D40).
  */
 const COLUMNAS_TABLA_TRANSITO: ColumnaTabla<FilaTransito>[] = [
@@ -201,7 +202,7 @@ const COLUMNAS_TABLA_TRANSITO: ColumnaTabla<FilaTransito>[] = [
     celda: (p) => <CeldaEntrega p={p} /> },
   { id: 'monto', titulo: 'Monto', ancho: 108, alinear: 'derecha', ordenable: 'monto', titleCelda: (p) => fCOP(p.total_cop),
     celda: (p) => <CeldaMonto monto={p.total_cop} /> },
-  { id: 'accion', titulo: 'Acción', ancho: 96, clave: true, fija: 'derecha', alinear: 'centro', celda: (p) => <CeldaAccion p={p} /> },
+  { id: 'accion', titulo: 'Acción', ancho: 112, clave: true, fija: 'derecha', alinear: 'centro', celda: (p) => <CeldaAccion p={p} /> },
 ];
 /** {campo de orden: título}, para el chip «Orden: Monto ↓» (textoOrdenHub), solo de las columnas que se ordenan. */
 const TITULOS_ORDEN_TRANSITO = titulosDeOrdenPec(COLUMNAS_TABLA_TRANSITO);
