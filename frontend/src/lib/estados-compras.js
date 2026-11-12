@@ -939,6 +939,47 @@ export function esConteoHeredado(lineas) {
 }
 
 /**
+ * B4 T24 f3 r1 (C1 y la heredada, m19): lo que confirmarRecepcion (roles.js) necesita de una fila de GET /compras/recepciones (o del
+ * detalle), con la MISMA regla en todas las pantallas: si está por confirmar, si es heredada (esConteoHeredado de sus productos, que
+ * _gr_dict trae con grl_id) y si le falta la bodega receptora (sin warehouse_id).
+ * @param {any} r
+ * @returns {{porConfirmar: boolean, heredada: boolean, sinBodega: boolean}}
+ */
+export function datosConfirmacion(r) {
+  return { porConfirmar: esRecepcionPorConfirmar(r), heredada: esConteoHeredado(r?.productos), sinBodega: r?.warehouse_id == null || r.warehouse_id === '' };
+}
+
+/**
+ * B4 T24 f3 r1 (C1, la raíz): la bodega receptora que va al crear una recepción («Recepcionar PEC» y «Hacer recepción»; el servidor ya
+ * acepta body.warehouse_id). `elegida` es lo que el usuario eligió (null: no tocó el select). Sin elegir, se preselecciona la única
+ * bodega si hay una sola (GET /inventory/warehouses no tiene «activa»: todas lo son); si hay varias o ninguna, '' (opcional: el PEC
+ * puede traer la suya).
+ * @param {string | null | undefined} elegida
+ * @param {unknown} bodegas
+ * @returns {string}
+ */
+export function bodegaRecepcion(elegida, bodegas) {
+  if (elegida != null) return String(elegida);
+  const lista = Array.isArray(bodegas) ? bodegas.filter((b) => b?.id != null) : [];
+  return lista.length === 1 ? String(lista[0].id) : '';
+}
+
+/**
+ * B4 T24 f3 r1 (C1, la raíz): el cuerpo de POST /compras/pedidos/{id}/recepcionar. `warehouse_id` solo con una bodega elegida (un
+ * entero positivo); sin ella, el servidor usa la del PEC.
+ * @param {{creadoPor: string, notas?: string, bodega?: string}} entrada
+ * @returns {{created_by: string, force_full: false, notas?: string, warehouse_id?: number}}
+ */
+export function cuerpoRecepcionarPec({ creadoPor, notas, bodega }) {
+  /** @type {{created_by: string, force_full: false, notas?: string, warehouse_id?: number}} */
+  const cuerpo = { created_by: creadoPor, force_full: false };
+  if (notas) cuerpo.notas = notas;
+  const id = Number(bodega);
+  if (bodega !== '' && bodega != null && Number.isInteger(id) && id > 0) cuerpo.warehouse_id = id;
+  return cuerpo;
+}
+
+/**
  * B4 T24 f3 (FINAL-C4-f, ruling 5): el conteo con el PATCH por línea (PATCH /compras/recepciones/{id}/lineas/{grl_id}, que BODEGA
  * tiene): una petición por línea cambiada frente a lo que dice el servidor (`servidor`: d.productos, que update_grl regenera desde C4-b).
  * El cuerpo deja la línea como la dejaba el PATCH en lote: la recibida (un entero) y rechazadas y cuarentena en 0 (el lote las ponía en 0

@@ -413,7 +413,7 @@ console.log('--- B4 T24 f3 (FINAL-C4-f): accesoRecepciones, el conteo de una rec
       { listo: false, contar: false, confirmar: false, contarHeredada: false, bodega: false, recepcionar: false }, JSON.stringify(r));
   }
   assert.equal(roles.TEXTO_CONTEO_SOLO_VER, 'El conteo y la confirmación los hace Bodega.');
-  assert.equal(roles.TEXTO_RECEPCION_HEREDADA, 'Esta recepción es anterior al conteo por línea; la cierra Compras o la Administración.');
+  // r1 (D27): el texto de la heredada lo corrige el ruling de r1 (la cierra la Administración); lo fija el bloque de r1.
   // El require_roles real (backend/app/api/v1/erp_compras.py, solo lectura): si cambia, esta prueba lo dice.
   const compras = readFileSync(new URL('../../backend/app/api/v1/erp_compras.py', import.meta.url), 'utf8');
   const rolesDe = (decorador) => {
@@ -441,6 +441,58 @@ console.log('--- B4 T24 f3 (FINAL-C4-f): accesoRecepciones, el conteo de una rec
   }
   // Mientras se lee el rol, nada (ni el texto): no se sabe todavía qué puede.
   for (const r of RAROS) assert.deepEqual(accionesConteo({ porConfirmar: true, heredada: false, rol: r }), nada, JSON.stringify(r));
+}
+
+console.log('--- B4 T24 f3 r1 (C1 y la heredada): sin bodega receptora, BODEGA cuenta pero no valida; la heredada la cierra la Administración ---');
+{
+  const roles = await import('../src/lib/roles.js');
+  const { accionesConteo, confirmarRecepcion } = roles;
+  const TODOS = ['ADMIN', 'ASESOR', 'FINANZAS', 'COMPRAS', 'BODEGA', 'CONSULTA'];
+  assert.equal(typeof confirmarRecepcion, 'function', 'confirmarRecepcion existe');
+  // El ruling de r1 corrige el texto del ruling 5: COMPRAS no confirma y BODEGA no tiene el lote; la cierra la Administración.
+  assert.equal(roles.TEXTO_RECEPCION_HEREDADA, 'Esta recepción es anterior al conteo por línea; la cierra la Administración.');
+  assert.equal(roles.TEXTO_FALTA_BODEGA, 'Falta la bodega receptora: la asigna Compras o la Administración.');
+  assert.equal(roles.TEXTO_ASIGNA_BODEGA, 'Asigna la bodega receptora para que Bodega pueda confirmar.');
+  const nada = { contar: false, validar: false, texto: null };
+  // El detalle (accionesConteo) con sinBodega, rol por rol.
+  const detalleSinBodega = {
+    ADMIN: { contar: true, validar: true, texto: null }, // tiene el select de la bodega en el mismo detalle
+    BODEGA: { contar: true, validar: false, texto: roles.TEXTO_FALTA_BODEGA }, // guarda el conteo; no valida
+    COMPRAS: { contar: false, validar: false, texto: roles.TEXTO_ASIGNA_BODEGA }, // junto al select que ya tiene
+    ASESOR: { contar: false, validar: false, texto: roles.TEXTO_CONTEO_SOLO_VER },
+    FINANZAS: { contar: false, validar: false, texto: roles.TEXTO_CONTEO_SOLO_VER },
+    CONSULTA: { contar: false, validar: false, texto: roles.TEXTO_CONTEO_SOLO_VER },
+  };
+  for (const r of TODOS) {
+    assert.deepEqual(accionesConteo({ porConfirmar: true, heredada: false, sinBodega: true, rol: r }), detalleSinBodega[r], `${r}: sin bodega`);
+    // Con bodega, como antes de r1 (sinBodega por defecto es false).
+    assert.deepEqual(accionesConteo({ porConfirmar: true, heredada: false, sinBodega: false, rol: r }),
+      accionesConteo({ porConfirmar: true, heredada: false, rol: r }), `${r}: sinBodega por defecto`);
+    // La heredada manda sobre la bodega: solo ADMIN; a los demás (BODEGA y COMPRAS incluidos), el texto corregido.
+    for (const sinBodega of [false, true]) {
+      assert.deepEqual(accionesConteo({ porConfirmar: true, heredada: true, sinBodega, rol: r }),
+        r === 'ADMIN' ? { contar: true, validar: true, texto: null } : { contar: false, validar: false, texto: roles.TEXTO_RECEPCION_HEREDADA },
+        `${r}: heredada, sinBodega ${sinBodega}`);
+      assert.deepEqual(accionesConteo({ porConfirmar: false, heredada: false, sinBodega, rol: r }), nada, `${r}: no por confirmar`);
+    }
+  }
+  for (const r of RAROS) assert.deepEqual(accionesConteo({ porConfirmar: true, heredada: false, sinBodega: true, rol: r }), nada, JSON.stringify(r));
+
+  // Fuera del detalle (la fila, el menú, el Drawer, el tablero y el enlace de Inventario): nadie confirma sin bodega (no hay select).
+  const fuera = (heredada, sinBodega, rol) => confirmarRecepcion({ porConfirmar: true, heredada, sinBodega, rol });
+  for (const r of TODOS) {
+    const confirma = r === 'ADMIN' || r === 'BODEGA';
+    assert.deepEqual(fuera(false, false, r), confirma ? { confirmar: true, texto: null } : { confirmar: false, texto: roles.TEXTO_CONTEO_SOLO_VER }, `${r}: con bodega`);
+    assert.deepEqual(fuera(false, true, r), {
+      confirmar: false,
+      texto: r === 'ADMIN' || r === 'COMPRAS' ? roles.TEXTO_ASIGNA_BODEGA : r === 'BODEGA' ? roles.TEXTO_FALTA_BODEGA : roles.TEXTO_CONTEO_SOLO_VER,
+    }, `${r}: sin bodega`);
+    // La heredada: solo ADMIN, y con bodega; BODEGA ya no la confirma desde la lista (lo que el detalle le escondía).
+    assert.deepEqual(fuera(true, false, r), r === 'ADMIN' ? { confirmar: true, texto: null } : { confirmar: false, texto: roles.TEXTO_RECEPCION_HEREDADA }, `${r}: heredada`);
+    assert.deepEqual(fuera(true, true, r), { confirmar: false, texto: r === 'ADMIN' ? roles.TEXTO_ASIGNA_BODEGA : roles.TEXTO_RECEPCION_HEREDADA }, `${r}: heredada sin bodega`);
+    assert.deepEqual(confirmarRecepcion({ porConfirmar: false, heredada: false, sinBodega: false, rol: r }), { confirmar: false, texto: null }, `${r}: confirmada`);
+  }
+  for (const r of RAROS) assert.deepEqual(fuera(false, false, r), { confirmar: false, texto: null }, JSON.stringify(r));
 }
 
 console.log('OK test_roles.mjs');

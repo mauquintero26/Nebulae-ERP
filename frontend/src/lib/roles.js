@@ -290,8 +290,16 @@ export function accesoProveedores(rol) {
 
 /** B4 T24 f3 (FINAL-C4-f, ruling 5): lo que ve quien no cuenta una recepción por confirmar (COMPRAS y los demás roles). */
 export const TEXTO_CONTEO_SOLO_VER = 'El conteo y la confirmación los hace Bodega.';
-/** B4 T24 f3 (FINAL-C4-f, ruling 5): una recepción heredada (sin GRL: no tiene PATCH por línea) a quien no la puede cerrar. */
-export const TEXTO_RECEPCION_HEREDADA = 'Esta recepción es anterior al conteo por línea; la cierra Compras o la Administración.';
+/**
+ * B4 T24 f3 (FINAL-C4-f, ruling 5; r1, m1 + m19 + m34 + m46, el ruling corrige el texto): una recepción heredada (sin GRL: no tiene
+ * PATCH por línea) a quien no la puede cerrar. La cierra la Administración: COMPRAS no confirma (confirmar_recepcion es de ADMIN y
+ * BODEGA) y BODEGA no tiene el PATCH en lote (de ADMIN y COMPRAS).
+ */
+export const TEXTO_RECEPCION_HEREDADA = 'Esta recepción es anterior al conteo por línea; la cierra la Administración.';
+/** B4 T24 f3 r1 (C1): BODEGA, con una recepción sin bodega receptora (no la puede elegir: el PATCH de la recepción es de ADMIN y COMPRAS). */
+export const TEXTO_FALTA_BODEGA = 'Falta la bodega receptora: la asigna Compras o la Administración.';
+/** B4 T24 f3 r1 (C1): quien sí la elige (ADMIN y COMPRAS), con una recepción sin bodega receptora. */
+export const TEXTO_ASIGNA_BODEGA = 'Asigna la bodega receptora para que Bodega pueda confirmar.';
 
 /**
  * B4 T24 f3 (FINAL-C4-f, ruling 5): el conteo de una recepción (backend/app/api/v1/erp_compras.py, leído en solo lectura; test_roles lo
@@ -318,15 +326,35 @@ export function accesoRecepciones(rol) {
  * confirmar, o con el rol todavía vacío, no ofrece nada (la pantalla dice su estado). Una heredada (sin GRL) solo la cuenta y la cierra
  * quien tiene `contarHeredada` (ADMIN); a los demás, TEXTO_RECEPCION_HEREDADA, sin botones que den 403. Si el rol ni cuenta ni confirma,
  * TEXTO_CONTEO_SOLO_VER.
- * @param {{porConfirmar: boolean, heredada: boolean, rol: unknown}} entrada
+ * r1 (C1): `sinBodega` (la recepción no tiene warehouse_id: confirmar_recepcion responde 400 «Debe seleccionar una bodega antes de
+ * confirmar.»). Quien no elige la bodega (BODEGA) guarda el conteo pero no valida, con TEXTO_FALTA_BODEGA; COMPRAS, que la elige con el
+ * select del detalle, lee TEXTO_ASIGNA_BODEGA; ADMIN tiene el select y valida (no cambia).
+ * @param {{porConfirmar: boolean, heredada: boolean, sinBodega?: boolean, rol: unknown}} entrada
  * @returns {{contar: boolean, validar: boolean, texto: string | null}}
  */
-export function accionesConteo({ porConfirmar, heredada, rol }) {
+export function accionesConteo({ porConfirmar, heredada, sinBodega = false, rol }) {
   const acceso = accesoRecepciones(rol);
   if (!acceso.listo || !porConfirmar) return { contar: false, validar: false, texto: null };
   if (heredada) {
     return acceso.contarHeredada ? { contar: true, validar: true, texto: null } : { contar: false, validar: false, texto: TEXTO_RECEPCION_HEREDADA };
   }
-  if (!acceso.contar && !acceso.confirmar) return { contar: false, validar: false, texto: TEXTO_CONTEO_SOLO_VER };
+  if (!acceso.contar && !acceso.confirmar) {
+    return { contar: false, validar: false, texto: sinBodega && acceso.bodega ? TEXTO_ASIGNA_BODEGA : TEXTO_CONTEO_SOLO_VER };
+  }
+  if (sinBodega && !acceso.bodega) return { contar: acceso.contar, validar: false, texto: TEXTO_FALTA_BODEGA };
   return { contar: acceso.contar, validar: acceso.confirmar, texto: null };
+}
+
+/**
+ * B4 T24 f3 r1 (C1 y la heredada, m19): «Confirmar» de una recepción FUERA del detalle (la fila, el menú y el Drawer de Compras ›
+ * Recepciones, la acción del tablero y el enlace de Inventario › Recepciones), con la MISMA regla que el detalle (accionesConteo). Fuera
+ * del detalle no hay select de bodega: sin bodega receptora nadie confirma (tampoco ADMIN), con TEXTO_ASIGNA_BODEGA si el rol la elige.
+ * `texto` es el motivo cuando no se ofrece (o null).
+ * @param {{porConfirmar: boolean, heredada: boolean, sinBodega: boolean, rol: unknown}} entrada
+ * @returns {{confirmar: boolean, texto: string | null}}
+ */
+export function confirmarRecepcion({ porConfirmar, heredada, sinBodega, rol }) {
+  const conteo = accionesConteo({ porConfirmar, heredada, sinBodega, rol });
+  if (sinBodega && conteo.validar) return { confirmar: false, texto: TEXTO_ASIGNA_BODEGA };
+  return { confirmar: conteo.validar, texto: conteo.texto };
 }

@@ -25,6 +25,7 @@ import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
 import { useResumen } from '@/components/ui/useResumen';
 import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import { COMP_NAV } from '../comp-nav';
+import { SelectorBodegaRecepcion, useBodegasRecepcion } from '../bodega-recepcion';
 
 import { FOCOS, RESERVA_BOTON_IA } from '@/lib/design-system';
 import { accesoCompras } from '@/lib/roles';
@@ -43,7 +44,7 @@ import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, cancelarPecsEnSerie, consultaColumnaPec,
   despuesDeCancelarPec, etapaPec, grupoMesPec, infoEstadoPec, opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec,
   repartirCancelacionPec, resumenCancelacionPec, tarjetaPedidoCompra, textoVacioPec, textoVencidosPec, tituloMesPec,
-  transicionesPec, vinculoPvenDelPec, avisoRecepcionPec, despuesDeEliminarPec,
+  transicionesPec, vinculoPvenDelPec, avisoRecepcionPec, despuesDeEliminarPec, bodegaRecepcion, cuerpoRecepcionarPec,
 } from '@/lib/estados-compras';
 import {
   ENLACE_VER_ANALISIS_COMPRAS, errorDiasEtapas, TEXTO_SEGUIMIENTO_CERRADO, accionSemaforoCompras, avisoTarjetaEtapa, avisosFlujoCompras,
@@ -565,6 +566,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
   const [editEstado, setEditEstado] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
   const [goingToRecepcion, setGoingToRecepcion] = useState(false);
+  const [bodegaElegida, setBodegaElegida] = useState<string | null>(null);
   const [infoEdit, setInfoEdit] = useState(false);
   const [infoForm, setInfoForm] = useState<any>({});
   const [savingInfo, setSavingInfo] = useState(false);
@@ -581,9 +583,10 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
     try {
       if (accion.tipo === 'abrir') { router.push(`/dashboard/compras/recepciones/${accion.id}`); return; }
       const user = localStorage.getItem('user_name') || '';
+      // r1 (C1, la raíz): con la bodega receptora elegida (o la única), para que BODEGA pueda confirmarla.
       const r = await apiFetch(`/compras/pedidos/${pec.id}/recepcionar`, {
         method: 'POST',
-        body: JSON.stringify({ created_by: user, force_full: false }),
+        body: JSON.stringify(cuerpoRecepcionarPec({ creadoPor: user, bodega: bodegaRecepcion(bodegaElegida, bodegas.filas) })),
       });
       router.push(`/dashboard/compras/recepciones/${(r?.data ?? r)?.id}`);
     } catch (e) {
@@ -675,6 +678,10 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
       else if (despues === 'recargar') { onUpdate(); loadFull(); }
     }
   };
+
+  // r1 (C1, la raíz): «Hacer recepción» (ADMIN y COMPRAS) ofrece la bodega receptora antes de crearla.
+  const creaRecepcion = avisoRecepcionPec(detail)?.accion.tipo === 'crear' && accesoPec.cambiarPec;
+  const bodegas = useBodegasRecepcion(creaRecepcion);
 
   if (!pec) return null;
   // C10: la etiqueta y el color de estados-compras.js (RECIBIDA y PARCIALMENTE_RECIBIDA ya no salen como «Borrador»).
@@ -768,6 +775,10 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
               </div>
             </div>
             {/* r1 (m7): «Hacer recepción» la crea (POST /pedidos/{id}/recepcionar: ADMIN y COMPRAS); «Ver recepción» solo navega. */}
+            {creaRecepcion && (
+              <SelectorBodegaRecepcion id="bodega-hacer-recepcion" bodegas={bodegas} elegida={bodegaElegida} onElegir={setBodegaElegida}
+                deshabilitado={goingToRecepcion} acento="purple" />
+            )}
             {(avisoRecepcion.accion.tipo === 'abrir' || accesoPec.cambiarPec) && (
               <button onClick={goToRecepcion} disabled={goingToRecepcion} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm hover:bg-emerald-700 transition-colors shrink-0 disabled:opacity-50 flex items-center gap-2">
                 {goingToRecepcion && <RefreshCw size={12} className="animate-spin"/>}

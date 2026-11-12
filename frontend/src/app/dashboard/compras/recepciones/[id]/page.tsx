@@ -206,7 +206,8 @@ export default function RecepcionDetallePage() {
   const isEditable = data?.estado === 'BORRADOR';
   // B4 T24 f3 (FINAL-C4-f): lo que ofrece el conteo según el rol (después de montar) y si la recepción es heredada (sin GRL).
   const heredada = esConteoHeredado(items);
-  const conteo = accionesConteo({ porConfirmar: isEditable, heredada, rol });
+  // r1 (C1): sin bodega receptora, BODEGA guarda el conteo pero no valida (no la puede elegir) y COMPRAS lee que la asigne.
+  const conteo = accionesConteo({ porConfirmar: isEditable, heredada, sinBodega: !data?.warehouse_id, rol });
   const puedeBodega = isEditable && accesoRecepciones(rol).bodega;
 
   const updateReceived = useCallback((idx: number, val: number) => {

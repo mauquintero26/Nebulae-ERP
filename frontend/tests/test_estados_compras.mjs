@@ -3198,7 +3198,8 @@ console.log('--- B4 T24 f3 (FINAL-C4-f): el conteo con el PATCH por línea, vali
   trae(cont, "import { accesoRecepciones, accionesConteo } from '@/lib/roles';");
   trae(cont, 'const rol = useRolActual();');
   trae(cont, 'const heredada = esConteoHeredado(items);');
-  trae(cont, 'const conteo = accionesConteo({ porConfirmar: isEditable, heredada, rol });');
+  // r1 (D27): accionesConteo recibe también sinBodega (C1); lo fija el bloque de r1.
+  assert.match(cont, /const conteo = accionesConteo\(\{ porConfirmar: isEditable, heredada, [^}]*rol \}\);/);
   assert.match(cont, /if \(!data\?\.id \|\| !conteo\.contar\) return false;\s*const \{ error, peticiones \} = peticionesConteo\(data\.productos, items\);\s*if \(error\) \{ avisar\(error, \{ tono: 'error' \}\); return false; \}/,
     'la lib valida antes de mandar y el aviso es suyo');
   assert.match(cont, /for \(const p of peticiones\) \{\s*await apiFetch\(`\/compras\/recepciones\/\$\{data\.id\}\/lineas\/\$\{p\.grl_id\}`, \{ method: 'PATCH', body: JSON\.stringify\(p\.cuerpo\) \}\);\s*\}/,
@@ -3221,19 +3222,15 @@ console.log('--- B4 T24 f3 (FINAL-C4-f): el conteo con el PATCH por línea, vali
 
   // Compras › Recepciones: «Confirmar» (fila, menú y Drawer) solo con confirmar; «Recepcionar PEC» con recepcionar; la tarjeta del tablero.
   const pag = leerFuente('app/dashboard/compras/recepciones/page.tsx');
-  trae(pag, 'const accesoRec = accesoRecepciones(useRolActual());');
+  // r1 (D27): «Confirmar» de la fila, el Drawer y el tablero salen de confirmarRecepcion (C1 y la heredada); lo fija el bloque de r1.
+  trae(pag, 'const accesoRec = accesoRecepciones(rol);');
   trae(pag, 'oculto: !porConfirmar || !acciones?.puedeConfirmar,');
-  assert.match(pag, /\{porConfirmar && acciones\?\.puedeConfirmar && \(\s*<button/);
   trae(pag, 'puedeConfirmar: accesoRec.confirmar,');
-  trae(pag, '{esRecepcionPorConfirmar(selectedItem) && accesoRec.confirmar && (');
   assert.match(pag, /\{accesoRec\.recepcionar && \(\s*<Button size="sm" color="teal" icon=\{Plus\}/);
-  trae(pag, 'tarjetaRecepcion(r, { contar: accesoRec.contar }), [accesoRec.contar])');
   trae(etiquetaJsx(pag, '<TableroKanban'), 'tarjetaDe={tarjetaDeRecepcion}');
   // Inventario › Recepciones: «Contar y confirmar en Compras» solo a quien cuenta; la misma tarjeta.
   const inv = leerFuente('app/dashboard/inventario/recepciones/page.tsx');
-  trae(inv, 'const accesoRec = accesoRecepciones(useRolActual());');
-  trae(inv, "esRecepcionPorConfirmar(selectedItem) && accesoRec.contar ? 'Contar y confirmar en Compras' : 'Abrir en Compras'");
-  trae(inv, 'tarjetaRecepcion(r, { contar: accesoRec.contar }), [accesoRec.contar])');
+  // r1 (D27): Inventario sigue la regla de confirmarRecepcion; lo fija el bloque de r1.
   trae(etiquetaJsx(inv, '<TableroKanban'), 'tarjetaDe={tarjetaDeRecepcion}');
 }
 
@@ -3468,6 +3465,72 @@ console.log('--- B4 T24 f3 (F56, F55, F89, F94, FINAL-m16, FINAL-m17, F72, FINAL
   const kpisLib = await import('../src/lib/kpis.js');
   assert.equal(kpisLib.tarjetasStock({ unidades_disponibles: 3 }).disponible.ayuda, 'Por bodega: físico menos comprometido, nunca negativo; luego se suma.');
   trae(leerFuente('app/dashboard/inventario/stock/page.tsx'), 'El <strong>Disponible</strong> se calcula por bodega:', 'el banner con la misma regla');
+}
+
+console.log('--- B4 T24 f3 r1 (C1 y la heredada): «Confirmar» con la regla del detalle en todas las pantallas; la bodega receptora al crear la recepción ---');
+{
+  const { datosConfirmacion, bodegaRecepcion, cuerpoRecepcionarPec } = ec;
+  for (const [nombre, f] of Object.entries({ datosConfirmacion, bodegaRecepcion, cuerpoRecepcionarPec })) assert.equal(typeof f, 'function', `${nombre} existe`);
+  // Lo que confirmarRecepcion necesita de una fila (la MISMA regla en la fila, el menú, el Drawer, el tablero y el enlace de Inventario).
+  assert.deepEqual(datosConfirmacion({ estado: 'BORRADOR', warehouse_id: 3, productos: [{ grl_id: 1 }] }), { porConfirmar: true, heredada: false, sinBodega: false });
+  assert.deepEqual(datosConfirmacion({ estado: 'BORRADOR', warehouse_id: null, productos: [{ grl_id: 1 }] }), { porConfirmar: true, heredada: false, sinBodega: true });
+  assert.deepEqual(datosConfirmacion({ estado: 'BORRADOR', productos: [{ grl_id: 1 }, { sku_id: 4 }] }), { porConfirmar: true, heredada: true, sinBodega: true });
+  assert.deepEqual(datosConfirmacion({ estado: 'COMPLETADA', warehouse_id: 2, productos: [] }), { porConfirmar: false, heredada: false, sinBodega: false });
+  assert.deepEqual(datosConfirmacion(null), { porConfirmar: false, heredada: false, sinBodega: true });
+  // La bodega que va al crear: lo elegido; sin tocar el select, la única si hay una sola; si no, '' (opcional: la del PEC).
+  assert.equal(bodegaRecepcion(null, [{ id: 4, name: 'Central' }]), '4', 'una sola: preseleccionada');
+  assert.equal(bodegaRecepcion(null, [{ id: 4 }, { id: 5 }]), '', 'varias: ninguna');
+  assert.equal(bodegaRecepcion(null, []), '');
+  assert.equal(bodegaRecepcion(null, null), '', 'mientras carga');
+  assert.equal(bodegaRecepcion('', [{ id: 4 }]), '', 'el usuario eligió «la del pedido»');
+  assert.equal(bodegaRecepcion('5', [{ id: 4 }]), '5');
+  assert.equal(bodegaRecepcion(undefined, [{ id: null }, { id: 9 }]), '9', 'sin id no cuenta');
+  // El cuerpo de POST /pedidos/{id}/recepcionar: warehouse_id solo con una bodega elegida.
+  assert.deepEqual(cuerpoRecepcionarPec({ creadoPor: 'Ana', notas: 'Mesa', bodega: '4' }), { created_by: 'Ana', force_full: false, notas: 'Mesa', warehouse_id: 4 });
+  assert.deepEqual(cuerpoRecepcionarPec({ creadoPor: 'Ana', bodega: '' }), { created_by: 'Ana', force_full: false });
+  for (const malo of ['0', '-2', '2.5', 'x', null, undefined]) {
+    assert.equal('warehouse_id' in cuerpoRecepcionarPec({ creadoPor: '', bodega: malo }), false, String(malo));
+  }
+  // El servidor ya acepta body.warehouse_id (leído en solo lectura).
+  const esquemas = readFileSync(new URL('../../backend/app/api/v1/schemas_compras.py', import.meta.url), 'utf8');
+  assert.match(esquemas, /class CrearRecepcionDesdePecBody\(BaseModel\):\s*warehouse_id: Optional\[int\] = None/);
+  assert.match(readFileSync(new URL('../../backend/app/api/v1/erp_compras.py', import.meta.url), 'utf8'), /wid = body\.warehouse_id or p\.warehouse_id/);
+
+  // El cableado. El detalle: sinBodega en accionesConteo.
+  const cont = leerFuente('app/dashboard/compras/recepciones/[id]/page.tsx');
+  trae(cont, 'const conteo = accionesConteo({ porConfirmar: isEditable, heredada, sinBodega: !data?.warehouse_id, rol });');
+  // Compras › Recepciones: la fila, el menú (apagado con su motivo si el rol confirma pero la recepción no), el Drawer y el tablero.
+  const pag = leerFuente('app/dashboard/compras/recepciones/page.tsx');
+  trae(pag, "import { accesoRecepciones, confirmarRecepcion } from '@/lib/roles';");
+  trae(pag, 'const confirmacion = useCallback((r: FilaRecepcion) => confirmarRecepcion({ ...datosConfirmacion(r), rol }), [rol]);');
+  assert.match(pag, /\{confirmacion\.confirmar && \(\s*<button type="button" onClick=\{\(\) => acciones\?\.confirmar\(r\)\}/, 'la fila');
+  trae(pag, 'deshabilitado: !confirmacion.confirmar || acciones?.confirmandoId != null,', 'el menú');
+  trae(pag, "titulo: !confirmacion.confirmar ? confirmacion.texto ?? undefined :", 'el menú dice por qué');
+  assert.match(pag, /\{confirmacion\(selectedItem\)\.confirmar \? \(\s*<Button color="teal" icon=\{Check\}/, 'el Drawer');
+  assert.match(pag, /\) : confirmacion\(selectedItem\)\.texto && \(\s*<p role="status"[^>]*>\{confirmacion\(selectedItem\)\.texto\}<\/p>/, 'el Drawer: su motivo (m42)');
+  trae(pag, 'tarjetaRecepcion(r, { contar: confirmacion(r).confirmar }), [confirmacion])', 'el tablero');
+  // «Recepcionar PEC»: la bodega receptora antes de crear (y su cuerpo).
+  trae(pag, "import { SelectorBodegaRecepcion, useBodegasRecepcion } from '../bodega-recepcion';");
+  trae(pag, 'const bodegas = useBodegasRecepcion(showPecModal);');
+  trae(pag, '<SelectorBodegaRecepcion id="bodega-recepcionar-pec" bodegas={bodegas} elegida={bodegaElegida} onElegir={setBodegaElegida}');
+  assert.match(pag, /body: JSON\.stringify\(cuerpoRecepcionarPec\(\{\s*creadoPor: user, notas: 'Recepción generada en Mesa de Entrada', bodega: bodegaRecepcion\(bodegaElegida, bodegas\.filas\),\s*\}\)\),/);
+  // Inventario › Recepciones: la misma regla en el tablero y en el enlace del Drawer, con su motivo.
+  const inv = leerFuente('app/dashboard/inventario/recepciones/page.tsx');
+  trae(inv, 'const confirmacion = useCallback((r: FilaRecepcion) => confirmarRecepcion({ ...datosConfirmacion(r), rol }), [rol]);');
+  trae(inv, "{confirmacion(selectedItem).confirmar ? 'Contar y confirmar en Compras' : 'Abrir en Compras'}");
+  trae(inv, 'tarjetaRecepcion(r, { contar: confirmacion(r).confirmar }), [confirmacion])');
+  assert.match(inv, /\{confirmacion\(selectedItem\)\.texto && \(\s*<p role="status"/);
+  // «Hacer recepción» del panel del PEC (ADMIN y COMPRAS): la bodega antes de crear; el hook antes del return temprano.
+  const ped = leerFuente('app/dashboard/compras/pedidos/page.tsx');
+  trae(ped, "const creaRecepcion = avisoRecepcionPec(detail)?.accion.tipo === 'crear' && accesoPec.cambiarPec;");
+  assert.ok(ped.indexOf('const bodegas = useBodegasRecepcion(creaRecepcion);') < ped.indexOf('  if (!pec) return null;\n  // C10'), 'el hook va antes del return');
+  trae(ped, 'body: JSON.stringify(cuerpoRecepcionarPec({ creadoPor: user, bodega: bodegaRecepcion(bodegaElegida, bodegas.filas) })),');
+  assert.match(ped, /\{creaRecepcion && \(\s*<SelectorBodegaRecepcion id="bodega-hacer-recepcion"/);
+  // La pieza: el select es opcional, la del pedido por defecto, y un 403 no ofrece «Reintentar».
+  const pieza = leerFuente('app/dashboard/compras/bodega-recepcion.tsx');
+  trae(pieza, 'const valor = bodegaRecepcion(elegida, bodegas.filas);');
+  trae(pieza, "'La del pedido (opcional)'");
+  trae(pieza, '{ofreceReintentar(bodegas.error) && (');
 }
 
 console.log('\nOK: test_estados_compras.mjs');

@@ -21,7 +21,7 @@ import { useResumen } from '@/components/ui/useResumen';
 import { INV_NAV } from '../inv-nav';
 import { AvisoReintentar, CONTENEDOR, FOCOS, useCatalogo } from '../piezas-inventario';
 import {
-  CeldaEstadoRecepcion, columnasRecepcion, esRecepcionPorConfirmar, numeroRecepcion, pecDeRecepcion, proveedorDeRecepcion,
+  CeldaEstadoRecepcion, columnasRecepcion, numeroRecepcion, pecDeRecepcion, proveedorDeRecepcion,
   retrasoDeRecepcion, textoFechaRecepcion, titulosDeOrdenRecepcion,
 } from '../../compras/columnas-recepcion';
 import type { FilaColumnasRecepcion } from '../../compras/columnas-recepcion';
@@ -33,11 +33,12 @@ import {
 } from '@/lib/tabla';
 import { PERIODO_KPI, NOTA_RECEPCIONES, formatoDecimal, tarjetasRecepciones, totalRecepciones } from '@/lib/kpis';
 import {
-  COLUMNAS_RECEPCION, EXTRA_TABLERO_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, consultaColumnaRecepcion, opcionesEstadosRecepcion,
-  pestanasRecepcion, tarjetaRecepcion, textoDiasRetraso, textoVacioRecepciones, vistaDeTarjetaRecepcion,
+  COLUMNAS_RECEPCION, EXTRA_TABLERO_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, consultaColumnaRecepcion, datosConfirmacion,
+  opcionesEstadosRecepcion, pestanasRecepcion, tarjetaRecepcion, textoDiasRetraso, textoVacioRecepciones, vistaDeTarjetaRecepcion,
 } from '@/lib/estados-compras';
-// B4 T24 f3 (FINAL-C4-f, ruling 5): BODEGA (y ADMIN) cuenta y confirma en Compras; a los demás, «Abrir en Compras».
-import { accesoRecepciones } from '@/lib/roles';
+// B4 T24 f3 (FINAL-C4-f, ruling 5): BODEGA (y ADMIN) cuenta y confirma en Compras; a los demás, «Abrir en Compras». r1 (C1 y la
+// heredada): con la MISMA regla de Compras › Recepciones (confirmarRecepcion): sin bodega receptora o heredada, «Abrir en Compras».
+import { confirmarRecepcion } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
 
 /** Una línea de la recepción (productos de _gr_dict: JSON; los nombres son los de la recepción de Compras). */
@@ -93,7 +94,8 @@ const unidades = (n: number | null | undefined) => formatoDecimal(n ?? 0);
    ================================================================ */
 export default function InventarioRecepcionesPage() {
   const router = useRouter();
-  const accesoRec = accesoRecepciones(useRolActual());
+  const rol = useRolActual();
+  const confirmacion = useCallback((r: FilaRecepcion) => confirmarRecepcion({ ...datosConfirmacion(r), rol }), [rol]);
   // ── bloque 1: la carga del servidor (TABLA-inventario punto 9; R5, C3, C4; D39, D40) ──
   // El estado ÚNICO de la pantalla: las pestañas, la búsqueda, el filtro de estados, las tarjetas, la tabla y el tablero despachan a
   // él. El modo (Lista o Kanban) se guarda en vista:inventario.recepciones.
@@ -162,8 +164,8 @@ export default function InventarioRecepcionesPage() {
   // m18 (regresión): el enlace al PEC de origen que tenía la pantalla (compras/pedidos?id= lo atiende).
   const abrirPec = useCallback((r: FilaRecepcion) => router.push(`/dashboard/compras/pedidos?id=${r.pec_id}`), [router]);
   const accionesFila = useMemo(() => ({ abrir, abrirEnCompras, abrirPec }), [abrir, abrirEnCompras, abrirPec]);
-  // La tarjeta del tablero: «Contar y confirmar» solo a quien cuenta (sin él, la tarjeta queda en «Abrir»).
-  const tarjetaDeRecepcion = useCallback((r: FilaRecepcion) => tarjetaRecepcion(r, { contar: accesoRec.contar }), [accesoRec.contar]);
+  // La tarjeta del tablero: «Contar y confirmar» solo si esa recepción se puede confirmar (sin eso, la tarjeta queda en «Abrir»).
+  const tarjetaDeRecepcion = useCallback((r: FilaRecepcion) => tarjetaRecepcion(r, { contar: confirmacion(r).confirmar }), [confirmacion]);
 
   // ── bloque 2: la tabla (TABLA-inventario punto 9; R5, R26, D40, D41) ──
   const prefs = usePreferenciasTabla(ID_RECEPCIONES, COLUMNAS_TABLA_RECEPCIONES);
@@ -338,8 +340,11 @@ export default function InventarioRecepcionesPage() {
               <Button variant="secondary" onClick={() => setSelectedItem(null)}>Cerrar</Button>
               <Link href={`/dashboard/compras/recepciones/${selectedItem.id}`}
                 className={`inline-flex items-center gap-2 rounded-xl border border-orange-200 bg-white px-4 py-2.5 text-sm font-bold text-orange-800 hover:bg-orange-50 ${FOCOS.indigo}`}>
-                <ClipboardList size={14} aria-hidden="true" /> {esRecepcionPorConfirmar(selectedItem) && accesoRec.contar ? 'Contar y confirmar en Compras' : 'Abrir en Compras'}
+                <ClipboardList size={14} aria-hidden="true" /> {confirmacion(selectedItem).confirmar ? 'Contar y confirmar en Compras' : 'Abrir en Compras'}
               </Link>
+              {confirmacion(selectedItem).texto && (
+                <p role="status" className="max-w-xs text-xs font-semibold text-slate-600">{confirmacion(selectedItem).texto}</p>
+              )}
             </>
           )}
         >

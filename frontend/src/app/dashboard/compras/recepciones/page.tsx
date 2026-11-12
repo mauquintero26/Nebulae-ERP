@@ -37,12 +37,14 @@ import { NOTA_RECEPCIONES, PERIODO_KPI, tarjetasRecepciones } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { fCOP, textoDia } from '../columnas-pec';
 import {
-  COLUMNAS_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, consultaColumnaRecepcion, infoEstadoPec,
-  opcionesEstadosRecepcion, tarjetaRecepcion, textoVacioRecepciones,
+  COLUMNAS_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, bodegaRecepcion, consultaColumnaRecepcion, cuerpoRecepcionarPec,
+  datosConfirmacion, infoEstadoPec, opcionesEstadosRecepcion, tarjetaRecepcion, textoVacioRecepciones,
 } from '@/lib/estados-compras';
 import { avisosFlujoCompras, pasosPantallaCompras, textoReglaCompras } from '@/lib/flujo-compras';
 // B4 T24 f3 (FINAL-C4-f, ruling 5): confirmar es de ADMIN y BODEGA; recepcionar un PEC, de ADMIN y COMPRAS (accesoRecepciones).
-import { accesoRecepciones } from '@/lib/roles';
+// r1 (C1 y la heredada): «Confirmar» con la MISMA regla del detalle (confirmarRecepcion: sin bodega receptora o heredada, no; su motivo).
+import { accesoRecepciones, confirmarRecepcion } from '@/lib/roles';
+import { SelectorBodegaRecepcion, useBodegasRecepcion } from '../bodega-recepcion';
 import { useRolActual } from '@/components/ui/useRolActual';
 
 /** Una línea de la recepción (productos de _gr_dict; los nombres de campo cambian según quién la creó). */
@@ -80,7 +82,9 @@ type AccionesFilaRecepcion = {
   abrir: (r: FilaRecepcion) => void;
   abrirConteo: (r: FilaRecepcion) => void;
   confirmar: (r: FilaRecepcion) => void;
-  /** B4 T24 f3 (FINAL-C4-f): el rol confirma (ADMIN y BODEGA); si no, ni el botón ni el ítem del menú. */
+  /** B4 T24 f3 (FINAL-C4-f; r1, C1): si se ofrece «Confirmar» para esa recepción y, si no, su motivo (confirmarRecepcion). */
+  confirmacion: (r: FilaRecepcion) => { confirmar: boolean; texto: string | null };
+  /** El rol confirma (ADMIN y BODEGA): si la recepción lo impide (sin bodega o heredada), el ítem del menú queda apagado con el motivo. */
   puedeConfirmar: boolean;
   /** La recepción cuyo «Confirmar» está en camino: solo ese botón muestra la carga (antes, todos a la vez). */
   confirmandoId: number | null;
@@ -99,11 +103,13 @@ function CeldaAcciones({ r }: { r: FilaRecepcion }) {
   const numero = numeroRecepcion(r);
   const porConfirmar = esRecepcionPorConfirmar(r);
   const confirmando = acciones?.confirmandoId === r.id;
+  const confirmacion = acciones?.confirmacion(r) ?? { confirmar: false, texto: null };
   const items: ItemMenuFila[] = [
     { etiqueta: 'Ver detalle', icono: Eye, onClick: () => acciones?.abrir(r) },
     { etiqueta: 'Abrir conteo', icono: ClipboardList, onClick: () => acciones?.abrirConteo(r) },
     { etiqueta: 'Confirmar', icono: Check, onClick: () => acciones?.confirmar(r), oculto: !porConfirmar || !acciones?.puedeConfirmar,
-      deshabilitado: acciones?.confirmandoId != null, titulo: acciones?.confirmandoId != null ? 'Hay otra confirmación en camino.' : undefined },
+      deshabilitado: !confirmacion.confirmar || acciones?.confirmandoId != null,
+      titulo: !confirmacion.confirmar ? confirmacion.texto ?? undefined : acciones?.confirmandoId != null ? 'Hay otra confirmación en camino.' : undefined },
   ];
   return (
     <span className="flex items-center justify-end gap-0.5">
@@ -111,7 +117,7 @@ function CeldaAcciones({ r }: { r: FilaRecepcion }) {
         className={`${BOTON_FILA} text-teal-700 hover:bg-teal-50`}>
         <ClipboardList size={14} aria-hidden="true" />
       </Link>
-      {porConfirmar && acciones?.puedeConfirmar && (
+      {confirmacion.confirmar && (
         <button type="button" onClick={() => acciones?.confirmar(r)} disabled={acciones?.confirmandoId != null}
           aria-label={`Confirmar la recepción ${numero}`} aria-busy={confirmando}
           className={`relative inline-flex items-center gap-1 rounded-lg border border-teal-700 bg-teal-700 px-2 py-1 text-xs font-bold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60 ${FOCO_VISIBLE}`}>
@@ -155,7 +161,8 @@ export default function RecepcionesPage() {
   const pathname = usePathname();
   const router = useRouter();
   const { avisar, avisarError } = useAvisos();
-  const accesoRec = accesoRecepciones(useRolActual());
+  const rol = useRolActual();
+  const accesoRec = accesoRecepciones(rol);
 
   // ── bloque 1: la carga del servidor (TABLA-compras punto 9; R5, C3, C4; D39, D40) ──
   // El estado ÚNICO de la pantalla: las pestañas, la búsqueda, el filtro de estados, las tarjetas, la tabla y el tablero
@@ -225,6 +232,9 @@ export default function RecepcionesPage() {
   // ── el selector «Recepcionar PEC» (B1 a B3): los pedidos en camino o ya en bodega, pedidos al abrir la ventana ──
   const [showPecModal, setShowPecModal] = useState(false);
   const [creatingFromPec, setCreatingFromPec] = useState<number | null>(null);
+  // r1 (C1, la raíz): la bodega receptora de la recepción que se crea (null: sin tocar; bodegaRecepcion preselecciona la única).
+  const bodegas = useBodegasRecepcion(showPecModal);
+  const [bodegaElegida, setBodegaElegida] = useState<string | null>(null);
   const [vueltaPecs, setVueltaPecs] = useState(0);
   const [pecs, setPecs] = useState<{ vuelta: number; filas: PecPorRecepcionar[]; error: unknown } | null>(null);
   useEffect(() => {
@@ -246,7 +256,9 @@ export default function RecepcionesPage() {
       const user = localStorage.getItem('user_name') || 'Mesa de Recepción';
       const res = await apiFetch(`/compras/pedidos/${pecId}/recepcionar`, {
         method: 'POST',
-        body: JSON.stringify({ created_by: user, force_full: false, notas: 'Recepción generada en Mesa de Entrada' }),
+        body: JSON.stringify(cuerpoRecepcionarPec({
+          creadoPor: user, notas: 'Recepción generada en Mesa de Entrada', bodega: bodegaRecepcion(bodegaElegida, bodegas.filas),
+        })),
       });
       avisar('Recepción ENINV creada correctamente', { tono: 'ok' });
       setShowPecModal(false);
@@ -283,11 +295,12 @@ export default function RecepcionesPage() {
       setConfirmandoId(null);
     }
   }, [avisar, avisarError, recargarTodo]);
+  const confirmacion = useCallback((r: FilaRecepcion) => confirmarRecepcion({ ...datosConfirmacion(r), rol }), [rol]);
   const accionesFila = useMemo<AccionesFilaRecepcion>(() => ({
-    abrir, abrirConteo, confirmar: (r) => { void handleConfirmarRecepcion(r); }, puedeConfirmar: accesoRec.confirmar, confirmandoId,
-  }), [abrir, abrirConteo, handleConfirmarRecepcion, accesoRec.confirmar, confirmandoId]);
-  // La tarjeta del tablero: «Contar y confirmar» solo a quien cuenta (sin él, la tarjeta queda en «Abrir»).
-  const tarjetaDeRecepcion = useCallback((r: FilaRecepcion) => tarjetaRecepcion(r, { contar: accesoRec.contar }), [accesoRec.contar]);
+    abrir, abrirConteo, confirmar: (r) => { void handleConfirmarRecepcion(r); }, confirmacion, puedeConfirmar: accesoRec.confirmar, confirmandoId,
+  }), [abrir, abrirConteo, handleConfirmarRecepcion, confirmacion, accesoRec.confirmar, confirmandoId]);
+  // La tarjeta del tablero: «Contar y confirmar» solo si esa recepción se puede confirmar (r1, C1: con bodega y, si es heredada, ADMIN).
+  const tarjetaDeRecepcion = useCallback((r: FilaRecepcion) => tarjetaRecepcion(r, { contar: confirmacion(r).confirmar }), [confirmacion]);
 
   // ── bloque 2: la tabla (TABLA-compras punto 9; R5, R26, D40, D41) ──
   const prefs = usePreferenciasTabla(ID_RECEPCIONES, COLUMNAS_TABLA_RECEPCIONES);
@@ -470,6 +483,10 @@ export default function RecepcionesPage() {
           onClose={() => setShowPecModal(false)}
           footer={<Button variant="secondary" onClick={() => setShowPecModal(false)}>Cancelar</Button>}
         >
+          <div className="mb-4">
+            <SelectorBodegaRecepcion id="bodega-recepcionar-pec" bodegas={bodegas} elegida={bodegaElegida} onElegir={setBodegaElegida}
+              deshabilitado={creatingFromPec !== null} />
+          </div>
           {cargandoPecs ? (
             <div role="status" className="flex items-center justify-center gap-2 py-8 text-sm text-slate-500">
               <RefreshCw size={16} aria-hidden="true" className="animate-spin text-teal-500" /> Buscando los pedidos de compra…
@@ -531,11 +548,14 @@ export default function RecepcionesPage() {
                 className={`inline-flex items-center gap-2 rounded-xl border border-teal-200 bg-white px-4 py-2.5 text-sm font-bold text-teal-800 hover:bg-teal-50 ${FOCO_VISIBLE}`}>
                 <ClipboardList size={14} aria-hidden="true" /> Abrir conteo
               </Link>
-              {esRecepcionPorConfirmar(selectedItem) && accesoRec.confirmar && (
+              {/* r1 (C1, m42): sin «Confirmar» (sin bodega, heredada o el rol no confirma), su motivo en el pie. */}
+              {confirmacion(selectedItem).confirmar ? (
                 <Button color="teal" icon={Check} loading={confirmandoId === selectedItem.id} disabled={confirmandoId !== null}
                   onClick={() => handleConfirmarRecepcion(selectedItem)}>
                   Confirmar Entrada Física y Actualizar Stock
                 </Button>
+              ) : confirmacion(selectedItem).texto && (
+                <p role="status" className="max-w-xs text-xs font-semibold text-slate-600">{confirmacion(selectedItem).texto}</p>
               )}
             </>
           )}
