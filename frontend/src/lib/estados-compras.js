@@ -839,6 +839,18 @@ export function textoPieBodega(enRiesgo, { recortado = false } = {}) {
 }
 
 /**
+ * B4 T24 f3 r1 (m14 = m23, F86 completo): qué filtros de la barra del Hub de Inventario aplican en la vista que se ve. En Almacenes la
+ * consulta no lleva la bodega (F86: se ven todas), así que el selector «Bodega» no se muestra (se dice que ahí se ven todas), el vacío
+ * no la nombra y «Quitar filtros» solo cuenta la categoría.
+ * @param {{verAlmacenes: boolean, bodega: string, categoria: string}} entrada
+ * @returns {{mostrarBodega: boolean, bodegaAplica: boolean, hayFiltros: boolean}}
+ */
+export function filtrosAplicadosHub({ verAlmacenes, bodega, categoria }) {
+  const bodegaAplica = !verAlmacenes && Boolean(bodega);
+  return { mostrarBodega: !verAlmacenes, bodegaAplica, hayFiltros: bodegaAplica || Boolean(categoria) };
+}
+
+/**
  * B4 T24 f3 (F87-f): las categorías del selector del Hub de Inventario (GET /categories, ya ordenado por nombre en el servidor, F87-b),
  * con las que son padre de otra marcadas «X (categoría padre)»: el filtro es por la categoría exacta del producto (P25 decide si
  * incluye las hijas), así que elegir una padre puede dejar la tabla vacía. No muta lo que recibe; null sigue null.

@@ -463,7 +463,7 @@ function TrackingPanel({pec, onUpdate, onToast, puedeEditar}: {pec:any; onUpdate
             {/* ETA / carrier / casillero / guía (T15 r1, m13: la guía vigente, como la barra de antes) / días */}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500 mb-1">
               {sd.eta && <span className="flex items-center gap-1"><Clock size={11}/> ETA: <strong className="text-gray-700">{textoDia(sd.eta)}</strong></span>}
-              {sd.carrier && <span>Carrier: <strong className="text-gray-700">{sd.carrier}</strong></span>}
+              {sd.carrier && <span>Transportadora: <strong className="text-gray-700">{sd.carrier}</strong></span>}
               {sd.casillero_nombre && <span className="flex items-center gap-1"><MapPin size={11}/> {sd.casillero_nombre}</span>}
               {sd.tracking_number && <span>Guía: <strong className="text-indigo-700">{sd.tracking_number}</strong></span>}
               {aviso?.fuente === 'dias' && <span className={'font-bold ' + CLASE_DIAS_ETAPA[aviso.tono]}>{aviso.texto}</span>}
@@ -487,7 +487,7 @@ function TrackingPanel({pec, onUpdate, onToast, puedeEditar}: {pec:any; onUpdate
                   <div><label className="text-xs font-black text-gray-400 uppercase mb-1 block">ETA de esta etapa</label>
                     <input type="date" value={eta} onChange={e=>setEta(e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
                   </div>
-                  <div><label className="text-xs font-black text-gray-400 uppercase mb-1 block">Carrier</label>
+                  <div><label className="text-xs font-black text-gray-400 uppercase mb-1 block">Transportadora</label>
                     <input value={carrier} onChange={e=>setCarrier(e.target.value)} placeholder="ej: DHL" className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
                   </div>
                 </div>
@@ -754,7 +754,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
 
         {/* Tabs */}
         <div className="flex items-center gap-1 px-8 py-2 border-b border-gray-100 shrink-0">
-          {[{k:'tracking',l:'Tracking'},{k:'productos',l:'Productos'},{k:'pvens',l:'Pedidos Venta'},{k:'info',l:'Info'},{k:'actividad',l:'Actividad'}].map(({k,l})=>(
+          {[{k:'tracking',l:'Tracking'},{k:'productos',l:'Productos'},{k:'pvens',l:'Pedidos Venta'},{k:'info',l:'Información'},{k:'actividad',l:'Actividad'}].map(({k,l})=>(
             <button key={k} onClick={()=>setTab(k)} className={'px-3 py-1.5 rounded-lg text-sm font-bold transition-all ' + (tab===k?'bg-purple-600 text-white shadow':'text-gray-600 hover:bg-purple-50 hover:text-purple-700')}>{l}</button>
           ))}
         </div>
@@ -822,7 +822,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
             <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
               <p className="text-xs font-black text-gray-400 uppercase mb-3">Logística</p>
               <div className="grid grid-cols-2 gap-3 text-xs text-gray-600">
-                {[['Modalidad',detail?.modalidad_pago||'-'],['Carrier',detail?.carrier||'-'],['Casillero',detail?.casillero_nombre||'-'],['Tracking',detail?.tracking_number||'-']].map(([l,v],i)=>(
+                {[['Modalidad',detail?.modalidad_pago||'-'],['Transportadora',detail?.carrier||'-'],['Casillero',detail?.casillero_nombre||'-'],['Tracking',detail?.tracking_number||'-']].map(([l,v],i)=>(
                   <div key={i}><span className="block text-gray-400 font-black uppercase mb-0.5">{l}</span>{v}</div>
                 ))}
               </div>
@@ -1256,7 +1256,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
                         </div>
                       )}
                       <div>
-                        <label className="block text-xs font-black text-gray-500 uppercase mb-1">Carrier</label>
+                        <label className="block text-xs font-black text-gray-500 uppercase mb-1">Transportadora</label>
                         <input value={form.carrier} onChange={e=>setF('carrier',e.target.value)} placeholder="ej: DHL, FedEx, Amazon" className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
                       </div>
                       <div>

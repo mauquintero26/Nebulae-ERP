@@ -3945,4 +3945,28 @@ console.log('--- B4 T24 f3 r1 (m6, m18, m22, m25, m31, m36, m40, m43): Nuevo Cas
   assert.match(ventana, /maxWidth="3xl" onClose=\{onClose\} reservaBotonIa/);
 }
 
+console.log('--- B4 T24 f3 r1 (m14 = m23, m41): Almacenes no sigue un filtro de bodega que no aplica; las mismas etiquetas en el Hub y en Pedidos ---');
+{
+  const { filtrosAplicadosHub } = ec;
+  assert.equal(typeof filtrosAplicadosHub, 'function', 'filtrosAplicadosHub existe');
+  assert.deepEqual(filtrosAplicadosHub({ verAlmacenes: false, bodega: '2', categoria: '' }), { mostrarBodega: true, bodegaAplica: true, hayFiltros: true });
+  assert.deepEqual(filtrosAplicadosHub({ verAlmacenes: true, bodega: '2', categoria: '' }), { mostrarBodega: false, bodegaAplica: false, hayFiltros: false },
+    'en Almacenes la bodega no aplica: ni el selector ni «Quitar filtros» por ella');
+  assert.deepEqual(filtrosAplicadosHub({ verAlmacenes: true, bodega: '2', categoria: '7' }), { mostrarBodega: false, bodegaAplica: false, hayFiltros: true });
+  assert.deepEqual(filtrosAplicadosHub({ verAlmacenes: false, bodega: '', categoria: '' }), { mostrarBodega: true, bodegaAplica: false, hayFiltros: false });
+  const hub = leerFuente('app/dashboard/inventario/page.tsx');
+  trae(hub, 'const aplicados = filtrosAplicadosHub({ verAlmacenes, bodega: filtros.bodega, categoria: filtros.categoria });');
+  trae(hub, 'const bodegaDelVacio = aplicados.bodegaAplica ? nombreBodega : null;');
+  assert.match(hub, /\{aplicados\.mostrarBodega \? \(\s*<SelectorCatalogo etiqueta="Bodega"[\s\S]*?\) : \(\s*<span[^>]*>En Almacenes se ven todas las bodegas<\/span>/);
+  trae(hub, "onClick={() => cambiarFiltros(verAlmacenes ? { categoria: '' } : SIN_FILTROS)}");
+  // m41: «Transportadora» e «Información» también en Pedidos (como en el Hub, F54); «Pendiente de compra» con su etiqueta en el Hub.
+  const ped = leerFuente('app/dashboard/compras/pedidos/page.tsx');
+  for (const viejo of ['Carrier:', '>Carrier<', "['Carrier',", "l:'Info'}"]) noTrae(ped, viejo, `Pedidos sin ${viejo}`);
+  trae(ped, "['Transportadora',detail?.carrier||'-']");
+  trae(ped, "{k:'info',l:'Información'}");
+  const hubCompras = leerFuente('app/dashboard/compras/page.tsx');
+  noTrae(hubCompras, 'estado Pendiente Compra', 'el Hub sin «Pendiente Compra»');
+  assert.equal((hubCompras.match(/\{infoEstadoPedido\('PENDIENTE_COMPRA'\)\.label\}/g) ?? []).length >= 3, true, 'la etiqueta del estado en el panel');
+}
+
 console.log('\nOK: test_estados_compras.mjs');

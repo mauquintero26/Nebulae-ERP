@@ -2565,7 +2565,8 @@ console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5,
   }
   // Las acciones llevan aria-label; el vacío se memoiza y dice qué filtro lo deja vacío.
   assert.match(fuente, /aria-label=\{`Ver el detalle de \$\{f\.sku\}/);
-  assert.match(fuente, /const vacio = useMemo\(\(\) => \{\n\s*const texto = textoVacioExistencias\(\{ q: estado\.q, vista: estado\.vista, bodega: nombreBodega, categoria: nombreCategoria \}\);/);
+  // B4 T24 f3 r1 (m14 = m23, D27): en Almacenes la bodega no aplica (F86): el vacío la nombra solo si aplica (bodegaDelVacio).
+  assert.match(fuente, /const vacio = useMemo\(\(\) => \{\n\s*const texto = textoVacioExistencias\(\{ q: estado\.q, vista: estado\.vista, bodega: bodegaDelVacio, categoria: nombreCategoria \}\);/);
 }
 
 console.log('--- TEST 49 (B4 T22, TABLA-otros punto 7 y KANBAN-resto; R11, R16, RP57, RP58, RP104): la lógica de Gastos ---');

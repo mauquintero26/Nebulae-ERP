@@ -21,7 +21,7 @@ import { PanelAnalisisPerezoso } from '@/components/analisis';
 import { apiFetch } from '@/lib/api';
 import { estadoDelTotal, extraPorVista, textoVacioExistencias } from '@/lib/tabla';
 import { AYUDA_MINIMO_INVENTARIO, numeroFinito, resumenAlmacenes, tarjetasHubInventario } from '@/lib/kpis';
-import { ESTADOS_STOCK, TOPE_TABLERO_COMPRAS, avisoTope200, marcarCategoriasPadre, textoPieBodega } from '@/lib/estados-compras';
+import { ESTADOS_STOCK, TOPE_TABLERO_COMPRAS, avisoTope200, filtrosAplicadosHub, marcarCategoriasPadre, textoPieBodega } from '@/lib/estados-compras';
 // ?tab=analisis: la lectura genérica que dejó T14 en flujo-compras.js (se reúsa, no se copia).
 import { leerEnlaceHubCompras } from '@/lib/flujo-compras';
 // T18 r1 (m10, m21): las piezas de una existencia (tipos, celdas, detalle, selector, formatos, clave y clase de fila, CONTENEDOR y
@@ -376,17 +376,20 @@ export default function InventarioHub() {
   const categoriasMarcadas = useMemo(() => ({ ...categorias, filas: marcarCategoriasPadre(categorias.filas) }), [categorias]);
   const nombreBodega = filtros.bodega ? (bodegas.filas?.find((b) => String(b.id) === filtros.bodega)?.name ?? true) : null;
   const nombreCategoria = filtros.categoria ? (categorias.filas?.find((c) => String(c.id) === filtros.categoria)?.name ?? true) : null;
+  // r1 (m14 = m23): lo que aplica en la vista que se ve (en Almacenes, la bodega no: F86).
+  const aplicados = filtrosAplicadosHub({ verAlmacenes, bodega: filtros.bodega, categoria: filtros.categoria });
+  const bodegaDelVacio = aplicados.bodegaAplica ? nombreBodega : null;
   // m8 de T15: el «vacío» memoizado dice qué lo deja vacío (textoVacioExistencias): la búsqueda, la pestaña o los filtros.
   const vacio = useMemo(() => {
-    const texto = textoVacioExistencias({ q: estado.q, vista: estado.vista, bodega: nombreBodega, categoria: nombreCategoria });
+    const texto = textoVacioExistencias({ q: estado.q, vista: estado.vista, bodega: bodegaDelVacio, categoria: nombreCategoria });
     return (
       <div>
         <p className="font-semibold text-slate-600">{texto.titulo}</p>
         {texto.ayuda && <p className="mt-1 text-xs text-slate-500">{texto.ayuda}</p>}
       </div>
     );
-  }, [estado.q, estado.vista, nombreBodega, nombreCategoria]);
-  const hayFiltros = Boolean(filtros.bodega || filtros.categoria);
+  }, [estado.q, estado.vista, bodegaDelVacio, nombreCategoria]);
+  const hayFiltros = aplicados.hayFiltros;
 
   // ── B4 T17, bloque 4: la vista Almacenes (RP52 d) ──
   const elegirVista = useCallback((almacenesAhora: boolean) => {
@@ -528,14 +531,18 @@ export default function InventarioHub() {
                 placeholder="Buscar por SKU o producto…"
                 filtros={(
                   <>
-                    <SelectorCatalogo etiqueta="Bodega" todas="Todas las bodegas" cargando="Cargando bodegas…"
-                      fallo="No se pudieron cargar las bodegas" catalogo={bodegas} valor={filtros.bodega}
-                      onCambiar={(bodega) => cambiarFiltros({ bodega })} onReintentar={reintentarCatalogos} icono={Warehouse} />
+                    {aplicados.mostrarBodega ? (
+                      <SelectorCatalogo etiqueta="Bodega" todas="Todas las bodegas" cargando="Cargando bodegas…"
+                        fallo="No se pudieron cargar las bodegas" catalogo={bodegas} valor={filtros.bodega}
+                        onCambiar={(bodega) => cambiarFiltros({ bodega })} onReintentar={reintentarCatalogos} icono={Warehouse} />
+                    ) : (
+                      <span className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">En Almacenes se ven todas las bodegas</span>
+                    )}
                     <SelectorCatalogo etiqueta="Categoría" todas="Todas las categorías" cargando="Cargando categorías…"
                       fallo="No se pudieron cargar las categorías" catalogo={categoriasMarcadas} valor={filtros.categoria}
                       onCambiar={(categoria) => cambiarFiltros({ categoria })} onReintentar={reintentarCatalogos} icono={Layers} />
                     {hayFiltros && (
-                      <button type="button" onClick={() => cambiarFiltros(SIN_FILTROS)}
+                      <button type="button" onClick={() => cambiarFiltros(verAlmacenes ? { categoria: '' } : SIN_FILTROS)}
                         className={`rounded-xl px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50 ${FOCO_VISIBLE}`}>
                         Quitar filtros
                       </button>
