@@ -431,10 +431,11 @@ console.log('--- TEST T24-c (B4 T24, F46): un solo aviso de fuente — el texto,
   const pieza = leer('components/ui/AvisoFuente.tsx');
   // B4 T24 f3 r1 (m36, D27, aditivo): AvisoDeError recibe `reintentando`: conserva el último error mientras se reintenta («Reintentando…»).
   // r2 (m36, D27, aditivo): AvisoDeError recibe también regionFoco (la región estable del foco).
-  assert.match(pieza, /export function AvisoDeError\(\{ error, fallo, onReintentar, acento, reintentando = false, regionFoco = false \}: \{/);
-  assert.match(pieza, /const visto = error \?\? \(reintentando \? ultimo : null\);\s*const aviso = avisoDeFuente\(visto, fallo\);/);
+  // r3 (C1, D27): regionFoco es el título de la franja (destino visible); qué error se ve lo decide avisoVisible (lib).
+  assert.match(pieza, /export function AvisoDeError\(\{ error, fallo, onReintentar, acento, reintentando = false, regionFoco \}: \{/);
+  assert.match(pieza, /const \{ visto, olvidar \} = avisoVisible\(\{ error, ultimo, reintentando \}\);\s*if \(error != null && error !== ultimo\) setUltimo\(error\);\s*else if \(olvidar\) setUltimo\(null\);/);
   assert.match(pieza, /<AvisoFuente aviso=\{aviso\} onReintentar=\{onReintentar\} acento=\{acento\} reintentando=\{reintentando\}/);
-  assert.match(pieza, /if \(!regionFoco\) return cuadro;/, 'sin regionFoco, como antes (aditivo)');
+  assert.match(pieza, /alSoltarBoton=\{regionFoco \? alSoltarBoton : undefined\}/, 'sin regionFoco, como antes (aditivo)');
   assert.match(pieza, /\$\{FOCOS\[acento\]\}/);
   // AvisoReintentar (Inventario) delega en ella: con un 403, el aviso de permiso sin «Reintentar».
   const piezas = leer('app/dashboard/inventario/piezas-inventario.tsx');

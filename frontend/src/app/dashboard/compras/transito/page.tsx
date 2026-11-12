@@ -282,7 +282,7 @@ export default function TransitoPage() {
   // recargarTrasError (con un 400, un 409, un 422 (F8) o sin respuesta recarga; un 404 o un 500 no), se recarga lo que se ve.
   // I3: un pedido con un PATCH en camino (botón o arrastre), y hasta que llega la recarga, no ofrece Iniciar ni Completar: un
   // segundo clic no manda otro PATCH sobre la etapa vieja. Toda la regla vive en transito.js, con sus casos: pendienteDeTransito
-  // dice si hay uno; terminarPendiente guarda la foto de la lista ACTIVA (y el modo) al resolver el PATCH; soltarPendientes lo suelta
+  // dice si hay uno; terminarPendiente deja la foto SIN TOMAR al resolver el PATCH (r1, F66) y soltarPendientes la toma en el primer render que la ve, y lo suelta
   // cuando ESA lista trae filas nuevas o termina de recargar (también si falla). La lista inactiva no cuenta: no es la que se ve y,
   // si nunca cargó, da un [] nuevo con cada recarga. Si el modo cambia dentro de la ventana, se toma la foto de la nueva lista activa.
   const [enCurso, setEnCurso] = useState<{ id: number; fin: { filas: unknown; modo: string | null; visto: boolean } | null }[]>([]);
@@ -508,7 +508,7 @@ export default function TransitoPage() {
         </FranjaKpis>
         {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
         {/* r2 (m36 completo): montado siempre (regionFoco): si el reintento sale bien o da un 403, el foco va a su región, nunca al <body>. */}
-        <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="blue" reintentando={stats.cargando} regionFoco />
+        <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="blue" reintentando={stats.cargando} regionFoco="Mercancía en tránsito" />
 
         {/* B4 T16A (TABLA-compras punto 8, KANBAN-logistica punto 2): la barra y la tabla estándar en el servidor, o el tablero
             de etapas en modo cliente, con el MISMO estado (búsqueda, estados y «Solo vencidos»). */}

@@ -406,9 +406,8 @@ export default function EntregasPage() {
           <TarjetaKpi kpi="ent_despachados" valor={tarjetas.despachados.valor} estado={estadoConteos}
             activo={vistaActiva === vistaDeTarjetaEntrega('ent_despachados')} onClick={elegirDespachados} />
         </FranjaKpis>
-        {errorStats != null && (
-          <AvisoReintentar error={errorStats} fallo="No se pudieron cargar los indicadores de pedidos" onReintentar={stats.recargar} />
-        )}
+        {/* r3 (C2, m36): montado siempre, con reintentando y el destino del foco (la franja). */}
+        <AvisoReintentar error={errorStats} fallo="No se pudieron cargar los indicadores de pedidos" onReintentar={stats.recargar} reintentando={stats.cargando} regionFoco="Entregas" />
         {errorConteos != null && (
           <AvisoReintentar error={errorConteos} fallo="No se pudieron contar los pedidos de cada pestaña" onReintentar={() => setVueltaConteos((n) => n + 1)} />
         )}

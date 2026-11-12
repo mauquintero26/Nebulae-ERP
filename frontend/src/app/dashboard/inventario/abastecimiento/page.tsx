@@ -249,12 +249,9 @@ export default function AbastecimientoPage() {
         {/* B4 T18, bloque 4 (KPI-inventario punto 6; R10, R12, RP94): Agotados, Bajo el mínimo y Bien abastecidos (de
             /inventory/stats) y Pedidos de compra activos (de /compras/stats), todas informativas. Cada fuente carga y falla por
             separado: barras grises mientras cargan (nunca 0) y «—» si falla, con su aviso y «Reintentar» (m11). Sin gradiente. */}
-        {estadoKpis === 'error' && (
-          <AvisoReintentar error={stats.error} fallo="No se pudieron cargar los indicadores de existencias" onReintentar={stats.recargar} />
-        )}
-        {estadoCompras === 'error' && (
-          <AvisoReintentar error={compras.error} fallo="No se pudieron cargar los pedidos de compra activos" onReintentar={compras.recargar} />
-        )}
+        {/* r3 (C2, m36): montado siempre, con reintentando y el destino del foco (la franja). */}
+        <AvisoReintentar error={stats.error} fallo="No se pudieron cargar los indicadores de existencias" onReintentar={stats.recargar} reintentando={stats.cargando} regionFoco="Abastecimiento" />
+        <AvisoReintentar error={compras.error} fallo="No se pudieron cargar los pedidos de compra activos" onReintentar={compras.recargar} reintentando={compras.cargando} regionFoco="Abastecimiento" />
         <FranjaKpis estado={estadoKpis} titulo="Abastecimiento" nota={AYUDA_MINIMO_INVENTARIO}>
           <TarjetaKpi kpi="inv_agotados" valor={tarjetas.agotados.valor} ayuda={tarjetas.agotados.ayuda} />
           <TarjetaKpi kpi="inv_bajo_minimo" valor={tarjetas.bajo_minimo.valor} ayuda={tarjetas.bajo_minimo.ayuda} />

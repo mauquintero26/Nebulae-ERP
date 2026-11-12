@@ -23,7 +23,7 @@ import { useResumen } from '@/components/ui/useResumen';
 import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import { COMP_NAV } from '../comp-nav';
 import {
-  CeldaEstadoRecepcion, columnasRecepcion, esRecepcionPorConfirmar, numeroRecepcion, pecDeRecepcion, titulosDeOrdenRecepcion,
+  CeldaEstadoRecepcion, columnasRecepcion, numeroRecepcion, pecDeRecepcion, titulosDeOrdenRecepcion,
 } from '../columnas-recepcion';
 import type { FilaColumnasRecepcion } from '../columnas-recepcion';
 
@@ -82,8 +82,6 @@ type AccionesFilaRecepcion = {
   confirmar: (r: FilaRecepcion) => void;
   /** B4 T24 f3 (FINAL-C4-f; r1, C1): si se ofrece «Confirmar» para esa recepción y, si no, su motivo (confirmarRecepcion). */
   confirmacion: (r: FilaRecepcion) => { confirmar: boolean; texto: string | null };
-  /** El rol confirma (ADMIN y BODEGA). */
-  puedeConfirmar: boolean;
   /** r2 (m1): el ítem «Confirmar» del menú (itemConfirmarMenu). */
   menu: (r: FilaRecepcion) => { oculto: boolean; deshabilitado: boolean; titulo: string | null };
   /** La recepción cuyo «Confirmar» está en camino: solo ese botón muestra la carga (antes, todos a la vez). */
@@ -101,7 +99,6 @@ const BOTON_FILA = `rounded-lg p-1.5 transition-colors ${FOCO_VISIBLE}`;
 function CeldaAcciones({ r }: { r: FilaRecepcion }) {
   const acciones = useContext(AccionesFila);
   const numero = numeroRecepcion(r);
-  const porConfirmar = esRecepcionPorConfirmar(r);
   const confirmando = acciones?.confirmandoId === r.id;
   const confirmacion = acciones?.confirmacion(r) ?? { confirmar: false, texto: null };
   const menu = acciones?.menu(r) ?? { oculto: true, deshabilitado: false, titulo: null };
@@ -290,8 +287,8 @@ export default function RecepcionesPage() {
   const confirmacion = useCallback((r: FilaRecepcion) => confirmarRecepcion({ ...datosConfirmacion(r), rol }), [rol]);
   const menu = useCallback((r: FilaRecepcion) => itemConfirmarMenu({ ...datosConfirmacion(r), rol }), [rol]);
   const accionesFila = useMemo<AccionesFilaRecepcion>(() => ({
-    abrir, abrirConteo, confirmar: (r) => { void handleConfirmarRecepcion(r); }, confirmacion, menu, puedeConfirmar: accesoRec.confirmar, confirmandoId,
-  }), [abrir, abrirConteo, handleConfirmarRecepcion, confirmacion, menu, accesoRec.confirmar, confirmandoId]);
+    abrir, abrirConteo, confirmar: (r) => { void handleConfirmarRecepcion(r); }, confirmacion, menu, confirmandoId,
+  }), [abrir, abrirConteo, handleConfirmarRecepcion, confirmacion, menu, confirmandoId]);
   // La tarjeta del tablero: «Contar y confirmar» solo si esa recepción se puede confirmar (r1, C1: con bodega y, si es heredada, ADMIN).
   const tarjetaDeRecepcion = useCallback((r: FilaRecepcion) => tarjetaRecepcion(r, { contar: confirmacion(r).confirmar, motivo: confirmacion(r).texto }), [confirmacion]);
 
@@ -393,7 +390,7 @@ export default function RecepcionesPage() {
         </FranjaKpis>
         {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
         {/* r2 (m36 completo): montado siempre (regionFoco): si el reintento sale bien o da un 403, el foco va a su región, nunca al <body>. */}
-        <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="teal" reintentando={stats.cargando} regionFoco />
+        <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="teal" reintentando={stats.cargando} regionFoco="Recepciones" />
 
         {/* B4 T16A (TABLA-compras punto 9, KANBAN-logistica punto 5): la barra y la tabla estándar en el servidor, o el
             tablero solo para ver en modo servidor, con el MISMO estado (pestaña, búsqueda y estados). En Kanban las

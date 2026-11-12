@@ -2472,14 +2472,15 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   trae(abasto, 'Solo cuenta las referencias con control de inventario.', 'Abastecimiento: la alerta dice qué cuenta');
   // m11: cuando una fuente falla, lo dice y ofrece «Reintentar» (solo esa fuente).
   // B4 T24 f3 (F45, D27): «Reintentar» vuelve a pedir solo esa fuente con el hook (stats.recargar / compras.recargar).
-  trae(abasto, "{estadoKpis === 'error' && (\n          <AvisoReintentar error={stats.error} fallo=\"No se pudieron cargar los indicadores de existencias\" onReintentar={stats.recargar} />", 'Abastecimiento: stats caído, con Reintentar');
-  trae(abasto, "{estadoCompras === 'error' && (\n          <AvisoReintentar error={compras.error} fallo=\"No se pudieron cargar los pedidos de compra activos\" onReintentar={compras.recargar} />", 'Abastecimiento: compras caído, con Reintentar');
+  // r3 (C2, D27): montado siempre, con reintentando y el destino del foco (m36).
+  trae(abasto, '<AvisoReintentar error={stats.error} fallo="No se pudieron cargar los indicadores de existencias" onReintentar={stats.recargar} reintentando={stats.cargando} regionFoco="Abastecimiento" />', 'Abastecimiento: stats caído, con Reintentar');
+  trae(abasto, '<AvisoReintentar error={compras.error} fallo="No se pudieron cargar los pedidos de compra activos" onReintentar={compras.recargar} reintentando={compras.cargando} regionFoco="Abastecimiento" />', 'Abastecimiento: compras caído, con Reintentar');
   // B4 T24 f3 (F92, D27): un solo «Reintentar» para /inventory/stats (el del aviso bajo las tarjetas); la alerta «sin dato» remite a él.
   noTrae(abasto, "onClick={() => setVueltaStats((n) => n + 1)} className={`rounded font-bold underline ${FOCOS.indigo}`}>Reintentar</button>", 'Abastecimiento: la alerta «sin dato» ya no repite Reintentar');
   noTrae(abasto, 'Las tarjetas dicen cuál indicador falló.', 'Abastecimiento: la alerta no repite el aviso');
   // r1 (m11, m21, m37; D27): el aviso va SOBRE las tarjetas, y con los indicadores bien no se le culpa (textoAlertaSinDato).
   trae(abasto, "<p className=\"mt-1 text-xs font-semibold text-slate-600\">{textoAlertaSinDato(estadoKpis === 'error')}</p>", 'Abastecimiento: la alerta remite al aviso');
-  trae(stock, "{estadoKpis === 'error' && (\n          <AvisoReintentar error={stats.error} fallo=\"No se pudieron cargar las tarjetas de existencias\" onReintentar={stats.recargar} />", 'Stock: stats caído, con Reintentar');
+  trae(stock, '<AvisoReintentar error={stats.error} fallo="No se pudieron cargar las tarjetas de existencias" onReintentar={stats.recargar} reintentando={stats.cargando} regionFoco="Existencias" />', 'Stock: stats caído, con Reintentar'); // r3 (C2, D27)
   // m24: la insignia «Reservado» de BASE vuelve a la fila de Stock (hay unidades en bodega y nada disponible).
   trae(stock, 'celda: (f) => <CeldaEstadoExistencia f={f} /> },', 'Stock: el estado lleva «Reservado»');
   trae(stock, "existenciaReservada(f) ? ' · Reservado: hay unidades en bodega, todas comprometidas' : ''", 'Stock: el title dice Reservado');
@@ -2726,7 +2727,7 @@ console.log('--- TEST 45 (B4 T18, TABLA-inventario punto 7; KANBAN-resto; RP47 a
   assert.match(efecto, /alError: \(error\) => setEnlace\(\{ vuelta: vueltaEnlace, error \}\),/);
   trae(p, 'const cargaEnlace = estadoReintento(enlace, vueltaEnlace);');
   trae(p, '<AvisoDeError error={cargaEnlace.error} fallo="No se pudo abrir el producto del enlace" acento="purple" reintentando={cargaEnlace.reintentando}', 'el error del enlace, a la vista');
-  trae(p, 'onReintentar={() => setVueltaEnlace((n) => n + 1)} regionFoco />', 'Reintentar vuelve a pedir (la marca sigue libre); r2 (m36): con su región de foco');
+  trae(p, 'onReintentar={() => setVueltaEnlace((n) => n + 1)} />', 'Reintentar vuelve a pedir (la marca sigue libre); r3: el éxito lleva el foco al título de la ficha');
   trae(p, "if (searchParams.get('id') || searchParams.get('sku')) router.replace(pathname);", 'cerrar la ficha limpia el enlace (id y sku)');
   // El tablero solo para ver, por categoría (12 como máximo, con su aviso), en modo servidor.
   const hook = bloqueDesde(p, 'useTableroKanban<Producto>(');
@@ -3242,7 +3243,7 @@ console.log('--- B4 T24 f3 (FINAL-C4-f): el conteo con el PATCH por línea, vali
   // r1 (D27): «Confirmar» de la fila, el Drawer y el tablero salen de confirmarRecepcion (C1 y la heredada); lo fija el bloque de r1.
   trae(pag, 'const accesoRec = accesoRecepciones(rol);');
   trae(pag, 'oculto: menu.oculto,'); // r2 (m1, D27): el ítem del menú sale de itemConfirmarMenu
-  trae(pag, 'puedeConfirmar: accesoRec.confirmar,');
+  noTrae(pag, 'puedeConfirmar', 'r3 (m6, D27): sin el código muerto; el menú y la fila salen de itemConfirmarMenu y confirmarRecepcion');
   assert.match(pag, /\{accesoRec\.recepcionar && \(\s*<Button size="sm" color="teal" icon=\{Plus\}/);
   trae(etiquetaJsx(pag, '<TableroKanban'), 'tarjetaDe={tarjetaDeRecepcion}');
   // Inventario › Recepciones: «Contar y confirmar en Compras» solo a quien cuenta; la misma tarjeta.
@@ -3593,7 +3594,7 @@ console.log('--- B4 T24 f3 r1 (C2): después del 409, la selección de PVEN deja
   trae(hub, 'const vigente = seleccionVigente(poda.seleccion ?? selectedPvens, pedidosVenta);'); // r2 (m4, D27): con la poda
   trae(hub, 'const selected: FilaVenta[] = vigente.pvens;');
   assert.match(hub, /if \(consolidando\) return;\s*if \(!vigente\.ids\.length\)/, 'un segundo clic no manda otra vez');
-  assert.match(hub, /creado con ' \+ selected\.length \+ ' PVEN\(s\) consolidados'\);\s*setSelectedPvens\(new Set\(\)\);\s*onUpdate\(\);/, 'tras el alta, la selección vacía');
+  assert.match(hub, /creado con ' \+ selected\.length \+ ' PVEN\(s\) consolidados'\);\s*setSelectedPvens\(new Set\(\)\);\s*setQuitadosPvens\(\[\]\);[^\n]*\s*onUpdate\(\);/, 'tras el alta, la selección vacía (r3, m4: y sin el aviso viejo)');
   assert.match(hub, /\} finally \{\s*setConsolidando\(false\);\s*\}/);
   assert.match(hub, /<button type="button" onClick=\{handleConvertPvens\} disabled=\{consolidando\} aria-busy=\{consolidando\}/);
   trae(hub, "{consolidando ? 'Creando PEC…' : 'Crear PEC Consolidado'}");
@@ -3945,7 +3946,7 @@ console.log('--- B4 T24 f3 r1 (m6, m18, m22, m25, m31, m36, m40, m43): Nuevo Cas
   const ds = readFileSync(new URL('../src/lib/design-system.ts', import.meta.url), 'utf8');
   assert.match(ds, /export const RESERVA_BOTON_IA_PIE = 'pr-24';/);
   const drawer = readFileSync(new URL('../src/components/ui/Drawer.tsx', import.meta.url), 'utf8');
-  assert.match(drawer, /<div className=\{`p-6 \$\{RESERVA_BOTON_IA_PIE\} border-t border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-3`\}>/);
+  assert.match(drawer, /<div className=\{`p-6 \$\{RESERVA_BOTON_IA_PIE\} border-t border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-3 \[&>:last-child\]:ml-auto`\}>/); // r3 (m11, D27)
   assert.match(ventana, /maxWidth="3xl" onClose=\{onClose\} reservaBotonIa/);
 }
 
@@ -4053,19 +4054,19 @@ console.log('--- B4 T24 f3 r2 (F81 en el hook, m36 completo, m20): la vuelta de 
   const { focoTrasReintento } = av;
   assert.equal(typeof focoTrasReintento, 'function', 'focoTrasReintento existe');
   assert.equal(focoTrasReintento({ teniaFoco: true, hayBoton: true }), 'boton', 'mientras reintenta («Reintentando…») o con otro error: se queda en el botón');
-  assert.equal(focoTrasReintento({ teniaFoco: true, hayBoton: false }), 'region', 'salió bien (el aviso se va) o un 403 (sin botón): a la región estable');
+  assert.equal(focoTrasReintento({ teniaFoco: true, hayBoton: false }), 'destino', 'salió bien (el aviso se va) o un 403 (sin botón): al destino VISIBLE (r3, D27)');
   assert.equal(focoTrasReintento({ teniaFoco: false, hayBoton: false }), null, 'si el botón no tenía el foco, nada');
   assert.equal(focoTrasReintento({ teniaFoco: false, hayBoton: true }), null);
   // El cableado: AvisoDeError con regionFoco (aditivo) vive en una región tabindex=-1 montada siempre, y el botón avisa al irse.
   const pieza = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(pieza, /return \(\) => alSoltarBoton\(document\.activeElement === nodo\);/, 'el ref con limpieza mira si el botón tenía el foco');
-  assert.match(pieza, /focoTrasReintento\(\{ teniaFoco, hayBoton: ultimoHayBoton\.current \}\) === 'region' && document\.activeElement === document\.body\) region\.current\?\.focus\(\);/);
-  assert.match(pieza, /<div ref=\{region\} tabIndex=\{-1\}/);
+  assert.match(pieza, /focoTrasReintento\(\{ teniaFoco, hayBoton: ultimoHayBoton\.current \}\) === 'destino' && document\.activeElement === document\.body && regionFoco\)/); // r3 (C, D27)
+  assert.ok(!/sr-only|Sin avisos/.test(pieza), 'r3 (C): sin la región sr-only ni su texto'); // D27
   assert.match(pieza, /alSoltarBoton=\{regionFoco \? alSoltarBoton : undefined\}/, 'solo con regionFoco (aditivo)');
   for (const ruta of ['app/dashboard/compras/page.tsx', 'app/dashboard/compras/pedidos/page.tsx', 'app/dashboard/compras/transito/page.tsx',
     'app/dashboard/compras/recepciones/page.tsx', 'app/dashboard/compras/lista-compras/page.tsx', 'app/dashboard/inventario/page.tsx']) {
     const f = leerFuente(ruta);
-    assert.match(f, /<AvisoDeError error=\{stats\.error\}[^\n]*reintentando=\{stats\.cargando\} regionFoco \/>/, `${ruta}: el aviso de /stats con su región`);
+    assert.match(f, /<AvisoDeError error=\{stats\.error\}[^\n]*reintentando=\{stats\.cargando\} regionFoco="[^"]+" \/>/, `${ruta}: el aviso de /stats con su destino`); // r3 (D27)
     assert.ok(!/stats\.cargando\) && \(\s*<AvisoDeError/.test(f), `${ruta}: montado siempre (si se desmonta, la región se va con él)`);
   }
   trae(piezas, 'export function AvisoReintentar(props: React.ComponentProps<typeof AvisoDeError>) {', 'AvisoReintentar acepta el mismo contrato');
@@ -4154,6 +4155,53 @@ console.log('--- B4 T24 f3 r2 (m36, el banco): un solo contrato de reintentando;
   trae(p, '<h1 id="ficha-producto-titulo" tabIndex={-1}');
   trae(p, "abrir: (p) => { openEdit(p); requestAnimationFrame(() => document.getElementById('ficha-producto-titulo')?.focus()); },",
     'el enlace abre la ficha (la lista y su aviso se van): el foco va a su título');
+}
+
+console.log('--- B4 T24 f3 r3 (C1 = C3, C2 = C4, C, m4, m6, m9, m11): el aviso no vuelve tras un reintento bueno; m36 en las pantallas de m17; el foco a la franja ---');
+{
+  const av = await import('../src/lib/avisos.js');
+  const { avisoVisible, focoTrasReintento } = av;
+  assert.equal(typeof avisoVisible, 'function', 'avisoVisible existe');
+  const e500 = Object.assign(new Error('Caído'), { status: 500 });
+  const e403 = Object.assign(new Error('Sin permiso'), { status: 403 });
+  // C1: los cinco casos del ruling.
+  assert.deepEqual(avisoVisible({ error: e500, ultimo: e500, reintentando: true }), { visto: e500, olvidar: false }, 'el error conservado mientras se reintenta (estadoReintento)');
+  assert.deepEqual(avisoVisible({ error: null, ultimo: e500, reintentando: true }), { visto: e500, olvidar: false }, 'error null mientras se reintenta (useResumen), con un último');
+  assert.deepEqual(avisoVisible({ error: null, ultimo: e500, reintentando: false }), { visto: null, olvidar: true }, 'un éxito OLVIDA el último');
+  assert.deepEqual(avisoVisible({ error: null, ultimo: null, reintentando: true }), { visto: null, olvidar: false }, 'una recarga normal sin último: nada');
+  assert.deepEqual(avisoVisible({ error: null, ultimo: null, reintentando: false }), { visto: null, olvidar: false });
+  assert.deepEqual(avisoVisible({ error: e403, ultimo: null, reintentando: false }), { visto: e403, olvidar: false }, 'un 403: su aviso (de permiso, sin «Reintentar»)');
+  assert.equal(av.avisoDeFuente(e403, 'x')?.reintentar, false);
+  // La secuencia de la regresión: falla, reintento bueno, «Actualizar» (otra carga sin error): ningún aviso falso.
+  let ultimo = null;
+  const paso = (error, reintentando) => {
+    const { visto, olvidar } = avisoVisible({ error, ultimo, reintentando });
+    if (error != null) ultimo = error; else if (olvidar) ultimo = null;
+    return visto;
+  };
+  assert.equal(paso(e500, false), e500, 'falla');
+  assert.equal(paso(null, true), e500, 'Reintentar: «Reintentando…» con el último');
+  assert.equal(paso(null, false), null, 'salió bien: nada');
+  assert.equal(paso(null, true), null, '«Actualizar» después: NO vuelve el error viejo (era la regresión de r2)');
+  const pieza = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(pieza, /else if \(olvidar\) setUltimo\(null\);/, 'AvisoDeError limpia el último');
+  // C (ruling de la duda 4): el destino del foco es VISIBLE — la franja de tarjetas (tabindex=-1), buscada por su aria-label.
+  assert.equal(focoTrasReintento({ teniaFoco: true, hayBoton: false }), 'destino');
+  assert.match(pieza, /document\.querySelector<HTMLElement>\(`section\[aria-label="\$\{regionFoco\}"\]`\)\?\.focus\(\);/);
+  assert.ok(!/sr-only|Sin avisos|aria-label=\{aviso/.test(pieza), 'sin la región sr-only ni el aria-label sobre un div sin rol');
+  assert.match(readFileSync(new URL('../src/components/ui/TarjetaKpi.tsx', import.meta.url), 'utf8'), /<section aria-label=\{titulo\} aria-busy=\{estado === 'cargando'\} className="@container" tabIndex=\{-1\}>/);
+  // C2 = C4: las pantallas de m17, montadas como el Hub, con el título de SU franja como destino.
+  for (const [ruta, franja, reintentando] of [['stock', 'Existencias', 'stats.cargando'], ['abastecimiento', 'Abastecimiento', 'stats.cargando'],
+    ['entregas', 'Entregas', 'stats.cargando'], ['recepciones', 'Entradas', 'cargandoStats']]) {
+    const f = leerFuente(`app/dashboard/inventario/${ruta}/page.tsx`);
+    assert.ok(f.includes(`reintentando={${reintentando}} regionFoco="${franja}" />`), `${ruta}: el aviso con reintentando y su destino`);
+    assert.match(f, new RegExp(`<FranjaKpis[^>]*titulo="${franja}"`), `${ruta}: la franja «${franja}» existe`);
+  }
+  // m6: sin el código muerto. m9: el comentario de Tránsito al día. m4: el aviso de los quitados se reinicia. m11: el botón que baja, a la derecha.
+  noTrae(leerFuente('app/dashboard/compras/recepciones/page.tsx'), 'const porConfirmar = esRecepcionPorConfirmar(r);');
+  trae(leerFuente('app/dashboard/compras/transito/page.tsx'), 'terminarPendiente deja la foto SIN TOMAR');
+  trae(leerFuente('app/dashboard/compras/page.tsx'), "setSelectedPvens(new Set()); setQuitadosPvens([]); }, [pec && pec.id]);");
+  assert.match(readFileSync(new URL('../src/components/ui/Drawer.tsx', import.meta.url), 'utf8'), /flex flex-wrap items-center justify-between gap-3 \[&>:last-child\]:ml-auto/);
 }
 
 console.log('\nOK: test_estados_compras.mjs');

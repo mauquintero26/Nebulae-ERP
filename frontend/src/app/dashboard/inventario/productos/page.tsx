@@ -426,7 +426,7 @@ export default function ProductosPage() {
 
           {/* r2 (m36 completo): montado siempre (regionFoco): si el reintento sale bien, el foco va a su región, nunca al <body>. */}
           <AvisoDeError error={cargaEnlace.error} fallo="No se pudo abrir el producto del enlace" acento="purple" reintentando={cargaEnlace.reintentando}
-            onReintentar={() => setVueltaEnlace((n) => n + 1)} regionFoco />
+            onReintentar={() => setVueltaEnlace((n) => n + 1)} />
 
           {/* B4 T18, bloques 2 y 3 (TABLA-inventario punto 7, KANBAN-resto): la barra con la búsqueda (q) y los filtros de B3-T8, y
               la tabla estándar en el servidor, o el tablero solo para ver por categoría con el MISMO estado. */}

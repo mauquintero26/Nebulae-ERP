@@ -510,7 +510,7 @@ export default function InventarioHub() {
             </FranjaKpis>
             {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
             {/* r2 (m36 completo): montado siempre (regionFoco): si el reintento sale bien o da un 403, el foco va a su región, nunca al <body>. */}
-            <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de existencias" onReintentar={stats.recargar} acento="indigo" reintentando={stats.cargando} regionFoco />
+            <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de existencias" onReintentar={stats.recargar} acento="indigo" reintentando={stats.cargando} regionFoco="Existencias" />
             <nav aria-label="Operaciones de inventario" className="flex flex-wrap items-center gap-2 text-xs">
               <span className="font-semibold text-slate-600">Operaciones:</span>
               {OPERACIONES.map((o) => (

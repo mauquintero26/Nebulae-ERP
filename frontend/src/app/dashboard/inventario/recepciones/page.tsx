@@ -248,9 +248,8 @@ export default function InventarioRecepcionesPage() {
           <TarjetaKpi kpi="rec_total" valor={totalRec}
             activo={vistaActiva === vistaDeTarjetaRecepcion('rec_total')} onClick={() => elegirVista('rec_total')} />
         </FranjaKpis>
-        {errorStats != null && (
-          <AvisoReintentar error={errorStats} fallo="No se pudieron cargar los indicadores de recepciones" onReintentar={stats.recargar} />
-        )}
+        {/* r3 (C2, m36): montado siempre, con reintentando y el destino del foco (la franja). */}
+        <AvisoReintentar error={errorStats} fallo="No se pudieron cargar los indicadores de recepciones" onReintentar={stats.recargar} reintentando={cargandoStats} regionFoco="Entradas" />
         {errorBodegas != null && (
           <AvisoReintentar error={errorBodegas} fallo="No se pudieron cargar las bodegas" onReintentar={recargarBodegas} />
         )}

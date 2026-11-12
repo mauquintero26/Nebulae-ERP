@@ -348,11 +348,27 @@ export function estadoFranjaDeFuente(aviso, estado) {
  * B4 T24 f3 r2 (m36 completo, ruling): adónde va el foco cuando cambia el aviso de una fuente que se reintenta. `teniaFoco`: el botón
  * «Reintentar» tenía el foco; `hayBoton`: el aviso nuevo sigue ofreciendo el botón (mientras reintenta, «Reintentando…», o con otro
  * error). Con el botón, el foco se queda en él ('boton'); sin él (el reintento salió bien y el aviso se va, o un 403 sin «Reintentar»),
- * va a la región estable del aviso ('region', tabindex=-1): nunca al <body>. Si el botón no tenía el foco, nada (null).
+ * va a un destino VISIBLE ('destino': r3, el ruling de la duda 4 — la franja de tarjetas de la pantalla, con tabindex=-1): nunca al <body>.
+ * Si el botón no tenía el foco, nada (null).
  * @param {{teniaFoco: boolean, hayBoton: boolean}} entrada
- * @returns {'boton' | 'region' | null}
+ * @returns {'boton' | 'destino' | null}
  */
 export function focoTrasReintento({ teniaFoco, hayBoton }) {
   if (!teniaFoco) return null;
-  return hayBoton ? 'boton' : 'region';
+  return hayBoton ? 'boton' : 'destino';
+}
+
+/**
+ * B4 T24 f3 r3 (C1 = C3, ruling): QUÉ error muestra el aviso de una fuente. `error` es el de la carga de ahora (useResumen lo limpia al
+ * reintentar; estadoReintento lo conserva), `ultimo` el último que se vio y `reintentando` si va un reintento. Mientras se reintenta, el
+ * último sigue a la vista («Reintentando…»); si no hay error y no se reintenta (el reintento salió bien, o una recarga normal), nada, y
+ * `olvidar` pide limpiar el último: si no, la recarga siguiente volvía a pintar el error viejo con role=alert. Un 403 se ve como su
+ * error (el aviso de permiso, sin «Reintentar»).
+ * @param {{error: unknown, ultimo: unknown, reintentando: boolean}} entrada
+ * @returns {{visto: unknown, olvidar: boolean}}
+ */
+export function avisoVisible({ error, ultimo, reintentando }) {
+  if (error != null) return { visto: error, olvidar: false };
+  if (reintentando && ultimo != null) return { visto: ultimo, olvidar: false };
+  return { visto: null, olvidar: ultimo != null };
 }

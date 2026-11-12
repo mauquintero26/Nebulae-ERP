@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
-import { avisoDeFuente, focoTrasReintento } from '@/lib/avisos';
+import { avisoDeFuente, avisoVisible, focoTrasReintento } from '@/lib/avisos';
 import { FOCOS } from '@/lib/design-system';
 import type { AcentoFoco } from '@/lib/design-system';
 
@@ -42,38 +42,33 @@ export function AvisoFuente({ aviso, onReintentar, acento = 'rose', reintentando
  * B4 T24 (F46): el aviso de una fuente a partir de su error y del texto de la falla (avisoDeFuente → AvisoFuente); sin error, nada. Es
  * la pieza que usan el Dashboard y AvisoReintentar de Inventario: un 403 nunca ofrece «Reintentar».
  */
-export function AvisoDeError({ error, fallo, onReintentar, acento, reintentando = false, regionFoco = false }: {
+export function AvisoDeError({ error, fallo, onReintentar, acento, reintentando = false, regionFoco }: {
   error: unknown; fallo: string; onReintentar: () => void; acento?: AcentoFoco;
-  /** B4 T24 f3 r1 (m36, aditivo): true mientras se reintenta (la carga limpia el error). El aviso sigue montado con el último error y
-   * «Reintentando…» (aria-disabled), como la línea de BannerFlujo: el foco no cae al <body>. */
+  /** B4 T24 f3 r1 (m36, aditivo): true mientras se reintenta. El aviso sigue con el último error y «Reintentando…» (aria-disabled). */
   reintentando?: boolean;
-  /** B4 T24 f3 r2 (m36 completo, aditivo): true para que el aviso viva en una región estable (tabindex=-1, montada siempre: la pantalla lo
-   * pinta sin condición). Si el botón se va con el foco (el reintento salió bien, o un 403 sin «Reintentar»), el foco va a esa región
-   * (focoTrasReintento, lib/avisos.js), nunca al <body>. Sin la prop, como antes. */
-  regionFoco?: boolean;
+  /** B4 T24 f3 r2 y r3 (m36, C del ruling, aditivo): el título (aria-label) de la franja de tarjetas: el destino VISIBLE del foco.
+   * Si el botón «Reintentar» se va con el foco (el reintento salió bien, o un 403), el foco va ahí (focoTrasReintento), nunca al <body>.
+   * La pantalla pinta el aviso sin condición (que siga montado). Sin la prop, como antes. */
+  regionFoco?: string;
 }) {
   const [ultimo, setUltimo] = useState<unknown>(null);
+  // r3 (C1 = C3): qué se ve lo decide avisoVisible (lib); al terminar un reintento bueno, el último se olvida.
+  const { visto, olvidar } = avisoVisible({ error, ultimo, reintentando });
   if (error != null && error !== ultimo) setUltimo(error);
-  const visto = error ?? (reintentando ? ultimo : null);
+  else if (olvidar) setUltimo(null);
   const aviso = avisoDeFuente(visto, fallo);
-  const region = useRef<HTMLDivElement>(null);
   const hayBoton = Boolean(aviso?.reintentar);
   const ultimoHayBoton = useRef(hayBoton);
   useLayoutEffect(() => { ultimoHayBoton.current = hayBoton; }, [hayBoton]);
   const alSoltarBoton = useCallback((teniaFoco: boolean) => {
     // Se decide después del commit (el aviso nuevo ya pintado): si el botón volvió (otro error), el foco se queda en él.
     queueMicrotask(() => {
-      if (focoTrasReintento({ teniaFoco, hayBoton: ultimoHayBoton.current }) === 'region' && document.activeElement === document.body) region.current?.focus();
+      if (focoTrasReintento({ teniaFoco, hayBoton: ultimoHayBoton.current }) === 'destino' && document.activeElement === document.body && regionFoco) {
+        document.querySelector<HTMLElement>(`section[aria-label="${regionFoco}"]`)?.focus();
+      }
     });
-  }, []);
-  // r2 (m36, un solo contrato): `reintentando` llega tal cual (useResumen limpia el error al reintentar; estadoReintento lo conserva):
-  // con los dos, el botón dice «Reintentando…» mientras va el reintento.
-  const cuadro = aviso ? <AvisoFuente aviso={aviso} onReintentar={onReintentar} acento={acento} reintentando={reintentando}
+  }, [regionFoco]);
+  // r2 (m36, un solo contrato): `reintentando` llega tal cual (useResumen limpia el error al reintentar; estadoReintento lo conserva).
+  return aviso ? <AvisoFuente aviso={aviso} onReintentar={onReintentar} acento={acento} reintentando={reintentando}
     alSoltarBoton={regionFoco ? alSoltarBoton : undefined} /> : null;
-  if (!regionFoco) return cuadro;
-  return (
-    <div ref={region} tabIndex={-1} aria-label={aviso ? undefined : 'Avisos'} className={aviso ? undefined : 'sr-only'}>
-      {cuadro ?? <span>Sin avisos.</span>}
-    </div>
-  );
 }

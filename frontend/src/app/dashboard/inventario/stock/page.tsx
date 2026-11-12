@@ -187,9 +187,8 @@ export default function StockPage() {
         {/* B4 T18, bloque 4 (KPI-inventario punto 5; R10, R12): las 4 tarjetas de /inventory/stats (todo el inventario, por
             referencia): mientras cargan, barras grises (nunca 0); con error, «—». Ninguna es botón: no equivalen a una
             pestaña. La nota dice dónde se define el mínimo (R10). Sin la nota de «datos de ejemplo»: la tabla ya es real. */}
-        {estadoKpis === 'error' && (
-          <AvisoReintentar error={stats.error} fallo="No se pudieron cargar las tarjetas de existencias" onReintentar={stats.recargar} />
-        )}
+        {/* r3 (C2, m36): montado siempre, con reintentando y el destino del foco (la franja). */}
+        <AvisoReintentar error={stats.error} fallo="No se pudieron cargar las tarjetas de existencias" onReintentar={stats.recargar} reintentando={stats.cargando} regionFoco="Existencias" />
         <FranjaKpis estado={estadoKpis} titulo="Existencias" nota={AYUDA_MINIMO_INVENTARIO}>
           <TarjetaKpi kpi="inv_fisico" valor={tarjetas?.fisico.valor ?? null} ayuda={tarjetas?.fisico.ayuda} />
           <TarjetaKpi kpi="inv_reservado" valor={tarjetas?.reservado.valor ?? null} ayuda={tarjetas?.reservado.ayuda} />
