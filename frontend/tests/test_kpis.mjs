@@ -1803,6 +1803,21 @@ console.log('--- TEST T24-c (B4 T24, F108): la Agenda ofrece Nuevo, Editar y Eli
   assert.match(c, /\{accesoProv\.editar && <p className="text-xs text-slate-500 mt-1 mb-6">Crea el primer proveedor para gestionar compras y pedidos PEC\.<\/p>\}/);
 }
 
+console.log('--- TEST T24-f4a (B4 T24 f4, A4): la Agenda guarda el proveedor con peticionGuardarProveedor (PATCH al editar, las claves del servidor) ---');
+{
+  const fuente = readFileSync(new URL('../src/app/dashboard/agenda/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const c = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const guardar = c.slice(c.indexOf('const handleSaveSupplier = async'), c.indexOf('const handleConfirmDeleteSupplier = async'));
+  assert.ok(guardar.length > 0, 'handleSaveSupplier existe');
+  assert.match(guardar, /const editar = supplierModal === 'EDIT' && selectedSupplier\?\.id \? selectedSupplier\.id : null;/);
+  assert.match(guardar, /const \{ ruta, opciones \} = peticionGuardarProveedor\(supplierForm, editar\);/);
+  assert.match(guardar, /const res = await apiFetch\(ruta, opciones\);/);
+  // Lo que vuelve el PATCH (_supplier_dict, con name, contact_name…) se lee con proveedorDeServidor antes de mostrarlo.
+  assert.match(guardar, /setSelectedSupplier\(proveedorDeServidor\(res\?\.data\) \?\? \{ \.\.\.selectedSupplier, \.\.\.supplierForm \}\);/);
+  assert.ok(!/method: 'PUT'|JSON\.stringify\(supplierForm\)/.test(c), 'ni PUT ni las claves de la pantalla en el cuerpo');
+  assert.match(c, /import \{[^}]*\bpeticionGuardarProveedor\b[^}]*\} from '@\/lib\/datos-cliente';/);
+}
+
 console.log('--- TEST T24-d (B4 T24: F3 y F4): etiquetaKpi con tiene() y el comentario del redondeo ---');
 {
   const fuente = readFileSync(new URL('../src/lib/kpis.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');

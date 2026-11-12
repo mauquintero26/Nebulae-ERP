@@ -544,4 +544,52 @@ console.log('--- TEST T23B: proveedorDeServidor (la Agenda lee nombre, contacto_
   assert.equal(proveedorDeServidor([{ name: 'x' }]), null);
 }
 
+console.log('--- TEST T24-f4 (A4): proveedorAServidor y peticionGuardarProveedor — la Agenda guarda con las claves y el método del servidor ---');
+{
+  const { proveedorAServidor, peticionGuardarProveedor, proveedorDeServidor } = await import('../src/lib/datos-cliente.js');
+  // El formulario de la Agenda (supplierForm) con todas sus claves, incluidas las dos que Supplier no tiene (P33).
+  const form = {
+    nombre: 'Textiles Andinos', contacto_nombre: 'Luis Mora', email: 'l@ta.co', telefono: '3001234567', direccion: 'Cra 1',
+    ciudad: 'Cali', pais: 'Colombia', moneda_default: 'USD', condiciones_pago: '30 días', tiempo_entrega_dias: 12,
+  };
+  // Las claves que leen create_supplier y update_supplier (erp_compras.py), y nada más.
+  assert.deepEqual(proveedorAServidor(form), {
+    name: 'Textiles Andinos', contact_name: 'Luis Mora', email: 'l@ta.co', phone: '3001234567', address: 'Cra 1',
+    city: 'Cali', country: 'Colombia', payment_terms: '30 días',
+  });
+  const cuerpo = proveedorAServidor(form);
+  assert.equal('moneda_default' in cuerpo, false, 'Supplier no tiene moneda (P33): no se manda');
+  assert.equal('tiempo_entrega_dias' in cuerpo, false, 'ni tiempo de entrega (P33)');
+  for (const vieja of ['nombre', 'contacto_nombre', 'telefono', 'condiciones_pago', 'direccion', 'ciudad', 'pais']) {
+    assert.equal(vieja in cuerpo, false, `sin la clave de la pantalla ${vieja}`);
+  }
+  // Una clave que el formulario no trae no se manda (el PATCH solo toca lo que llega).
+  assert.deepEqual(proveedorAServidor({ nombre: 'Solo nombre' }), { name: 'Solo nombre' });
+  assert.deepEqual(proveedorAServidor(null), {});
+  // La inversa: lo que se manda y vuelve por proveedorDeServidor es lo que la pantalla escribió (sin moneda ni tiempo).
+  const ida = proveedorDeServidor({ id: 3, ...cuerpo });
+  for (const k of ['nombre', 'contacto_nombre', 'email', 'telefono', 'direccion', 'ciudad', 'pais', 'condiciones_pago']) {
+    assert.equal(ida[k], form[k], `ida y vuelta: ${k}`);
+  }
+  // La petición: el alta es POST /compras/proveedores; editar es PATCH /compras/proveedores/{id} (el servidor no tiene PUT).
+  const alta = peticionGuardarProveedor(form, null);
+  assert.equal(alta.ruta, '/compras/proveedores');
+  assert.equal(alta.opciones.method, 'POST');
+  assert.deepEqual(JSON.parse(alta.opciones.body), cuerpo);
+  const editar = peticionGuardarProveedor(form, 7);
+  assert.equal(editar.ruta, '/compras/proveedores/7');
+  assert.equal(editar.opciones.method, 'PATCH', 'update_supplier es @router.patch');
+  assert.deepEqual(JSON.parse(editar.opciones.body), cuerpo);
+  // El contrato del servidor, leído en solo lectura: el PATCH existe (no hay PUT) y las claves que lee son las del cuerpo.
+  const compras = readFileSync(new URL('../../backend/app/api/v1/erp_compras.py', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.ok(compras.includes('@router.patch("/proveedores/{supplier_id}")'), 'PATCH /proveedores/{id}');
+  assert.ok(!compras.includes('@router.put("/proveedores/{supplier_id}")'), 'sin PUT');
+  const lista = compras.slice(compras.indexOf('def update_supplier('), compras.indexOf('def delete_supplier('));
+  const alta2 = compras.slice(compras.indexOf('def create_supplier('), compras.indexOf('def get_supplier('));
+  for (const k of Object.keys(cuerpo)) {
+    assert.ok(lista.includes(`"${k}"`), `update_supplier lee ${k}`);
+    assert.ok(alta2.includes(`body.get("${k}"`), `create_supplier lee ${k}`);
+  }
+}
+
 console.log('OK test_datos_cliente');

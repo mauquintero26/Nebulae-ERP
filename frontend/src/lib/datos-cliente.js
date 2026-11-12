@@ -431,3 +431,40 @@ export function proveedorDeServidor(s) {
     condiciones_pago: de('condiciones_pago', 'payment_terms'),
   };
 }
+
+/** B4 T24 f4 (A4): las claves del formulario de la Agenda → las que leen create_supplier y update_supplier (erp_compras.py). */
+const CLAVES_PROVEEDOR_SERVIDOR = Object.freeze([
+  ['nombre', 'name'], ['contacto_nombre', 'contact_name'], ['email', 'email'], ['telefono', 'phone'], ['direccion', 'address'],
+  ['ciudad', 'city'], ['pais', 'country'], ['condiciones_pago', 'payment_terms'],
+]);
+
+/**
+ * B4 T24 f4 (A4): la inversa de proveedorDeServidor. El formulario de la Agenda (nombre, contacto_nombre, telefono…) con las
+ * claves del servidor (name, contact_name, phone…). La moneda y el tiempo de entrega no se mandan: Supplier no los tiene (P33).
+ * Una clave que el formulario no trae no se manda (el PATCH solo toca lo que llega).
+ * @param {Record<string, unknown> | null | undefined} form
+ * @returns {Record<string, unknown>}
+ */
+export function proveedorAServidor(form) {
+  /** @type {Record<string, unknown>} */
+  const cuerpo = {};
+  if (!form || typeof form !== 'object') return cuerpo;
+  for (const [pantalla, servidor] of CLAVES_PROVEEDOR_SERVIDOR) {
+    if (form[pantalla] !== undefined) cuerpo[servidor] = form[pantalla];
+  }
+  return cuerpo;
+}
+
+/**
+ * B4 T24 f4 (A4): la petición de «Guardar» del proveedor en la Agenda. El alta es POST /compras/proveedores y editar es
+ * PATCH /compras/proveedores/{id} (el servidor no tiene PUT), las dos con las claves del servidor (proveedorAServidor).
+ * @param {Record<string, unknown>} form
+ * @param {number | string | null} id el proveedor que se edita; null es un alta
+ * @returns {{ ruta: string, opciones: { method: 'POST' | 'PATCH', body: string } }}
+ */
+export function peticionGuardarProveedor(form, id) {
+  const body = JSON.stringify(proveedorAServidor(form));
+  return id != null
+    ? { ruta: `/compras/proveedores/${id}`, opciones: { method: 'PATCH', body } }
+    : { ruta: '/compras/proveedores', opciones: { method: 'POST', body } };
+}

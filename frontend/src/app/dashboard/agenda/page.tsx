@@ -16,7 +16,7 @@ import {
   Truck, Building2, Globe, Edit2, ShieldAlert
 } from 'lucide-react';
 import { CambiosDeActividad } from '@/app/dashboard/ventas/flujo';
-import { itemDeTimelineCliente, proveedorDeServidor } from '@/lib/datos-cliente';
+import { itemDeTimelineCliente, peticionGuardarProveedor, proveedorDeServidor } from '@/lib/datos-cliente';
 import { fechaCorta } from '@/lib/fechas-colombia';
 // B4 T23B: la franja de indicadores estándar de la ficha del cliente y del proveedor (KPI-otros punto 3).
 import { FranjaKpis, TarjetaKpi } from '@/components/ui';
@@ -453,18 +453,14 @@ export default function AgendaPage() {
     }
     const tid = toast.loading('Guardando proveedor...');
     try {
-      if (supplierModal === 'EDIT' && selectedSupplier?.id) {
-        const res = await apiFetch(`/compras/proveedores/${selectedSupplier.id}`, {
-          method: 'PUT',
-          body: JSON.stringify(supplierForm),
-        });
+      // B4 T24 f4 (A4): PATCH al editar (el servidor no tiene PUT) y, en los dos casos, las claves del servidor.
+      const editar = supplierModal === 'EDIT' && selectedSupplier?.id ? selectedSupplier.id : null;
+      const { ruta, opciones } = peticionGuardarProveedor(supplierForm, editar);
+      const res = await apiFetch(ruta, opciones);
+      if (editar !== null) {
         toast.success('Proveedor actualizado', { id: tid });
-        setSelectedSupplier(res.data || { ...selectedSupplier, ...supplierForm });
+        setSelectedSupplier(proveedorDeServidor(res?.data) ?? { ...selectedSupplier, ...supplierForm });
       } else {
-        await apiFetch('/compras/proveedores', {
-          method: 'POST',
-          body: JSON.stringify(supplierForm),
-        });
         toast.success('Proveedor creado exitosamente', { id: tid });
       }
       setSupplierModal(null);
