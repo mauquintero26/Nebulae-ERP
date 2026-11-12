@@ -2558,7 +2558,10 @@ console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5,
   // Los catálogos de los selectores: sus errores se ven (con Reintentar), no se convierten en una lista vacía.
   assert.match(fuente, /apiFetch\('\/inventory\/warehouses', \{ signal: control\.signal \}\)/);
   assert.match(fuente, /apiFetch\('\/categories', \{ signal: control\.signal \}\)/);
-  assert.equal((fuente.match(/if \(!control\.signal\.aborted\) set(Bodegas|Categorias)\(\(c\) => \(\{ filas: c\.filas, error: err \}\)\)/g) ?? []).length, 2);
+  // B4 T24 f3 r1 (F81, D27): los dos catálogos con su vuelta; el error conserva lo último bueno.
+  assert.match(fuente, /if \(!control\.signal\.aborted\) fijar\(\(c\) => \(\{ vuelta: vueltaCatalogos, filas: c\.filas, error: err \}\)\);/);
+  assert.match(fuente, /apiFetch\('\/inventory\/warehouses', \{ signal: control\.signal \}\)\.then\(llegar\(setBodegas\)\)\.catch\(fallar\(setBodegas\)\);/);
+  assert.match(fuente, /apiFetch\('\/categories', \{ signal: control\.signal \}\)\.then\(llegar\(setCategorias\)\)\.catch\(fallar\(setCategorias\)\);/);
   // Recepciones, Entregas y Traslados pasan de pestañas a enlaces a sus pantallas.
   for (const ruta of ['/dashboard/inventario/recepciones', '/dashboard/inventario/entregas', '/dashboard/inventario/traslados']) {
     assert.ok(fuente.includes(`ruta: '${ruta}'`), ruta);
@@ -3093,7 +3096,8 @@ console.log('--- TEST T24-c (B4 T24, FINAL-C5): Gastos pide y pinta solo lo que 
   assert.equal((g.match(/\{ofreceReintentar\(estadoConteos\.error\) && \(\s*<button type="button" onClick=\{recargarConteos\}/g) ?? []).length, 2, 'las dos cajas rose');
   // SelectorCatalogo (piezas de Inventario, aditivo): su «Reintentar» también mira ofreceReintentar.
   const piezas = codigo(leer('app/dashboard/inventario/piezas-inventario.tsx'));
-  assert.match(piezas, /\{ofreceReintentar\(catalogo\.error\) && <button type="button" onClick=\{onReintentar\}/);
+  // B4 T24 f3 r1 (F81, D27): el «Reintentar» del catálogo, solo si ofreceReintentar (un 403 no), y con señal mientras pide.
+  assert.match(piezas, /const reintentar = ofreceReintentar\(catalogo\.error\) && \(\s*<button type="button" onClick=\{catalogo\.cargando \? undefined : onReintentar\}/);
 }
 
 console.log('--- TEST T24-d (B4 T24, FINAL-m21): la pestaña Pagos de E-Commerce, solo ADMIN y sin guardar los valores por defecto ---');

@@ -2515,14 +2515,16 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   assert.equal(columnasDe(abasto, 'COLUMNAS_TABLA_ABASTECIMIENTO').find((c) => c.id === 'minimo')?.ordenable, null, 'el mínimo no se ordena en stock-tabla');
 
   // piezas-inventario.tsx: el catálogo conserva el error y el selector lo dice con «Reintentar».
-  trae(piezas, ".catch((err: unknown) => { if (!control.signal.aborted) setCatalogo((c) => ({ filas: c.filas, error: err })); });", 'useCatalogo: el error se conserva');
-  trae(piezas, 'setCatalogo({ filas, error: null });', 'useCatalogo: llega bien');
+  // r1 (F81, D27): {vuelta, filas, error} y filasDeCatalogo (una forma inesperada es un error); lo fija el bloque de r1.
+  trae(piezas, ".catch((err: unknown) => { if (!control.signal.aborted) setCarga((c) => ({ vuelta, filas: c.filas, error: err })); });", 'useCatalogo: el error se conserva');
+  trae(piezas, 'const { filas, error } = filasDeCatalogo(r);', 'useCatalogo: llega bien');
   trae(piezas, '}, [ruta, vuelta]);', 'useCatalogo: se vuelve a pedir con la vuelta');
   trae(piezas, 'const recargar = useCallback(() => setVuelta((n) => n + 1), []);', 'useCatalogo: recargar sube la vuelta');
   trae(piezas, 'if (catalogo.error && !catalogo.filas) {', 'SelectorCatalogo: la rama del error');
   trae(piezas, 'role="alert"', 'SelectorCatalogo: el error se anuncia');
   trae(piezas, '{textoDeError(catalogo.error, fallo)}', 'SelectorCatalogo: el detalle del servidor tal cual');
-  trae(piezas, '<button type="button" onClick={onReintentar} className={`rounded font-bold underline ${FOCOS[acento]}`}>Reintentar</button>', 'SelectorCatalogo: «Reintentar» vuelve a pedir');
+  // r1 (F81, D27): «Reintentar» da señal mientras pide (aria-disabled, «Reintentando…»).
+  trae(piezas, '<button type="button" onClick={catalogo.cargando ? undefined : onReintentar} aria-disabled={catalogo.cargando || undefined}', 'SelectorCatalogo: «Reintentar» vuelve a pedir');
   trae(piezas, 'disabled={!catalogo.filas}', 'SelectorCatalogo: deshabilitado mientras carga');
   trae(piezas, '<option value="">{catalogo.filas ? todas : cargando}</option>', 'SelectorCatalogo: «Cargando…» mientras carga');
   // B4 T24 (F44-a, D27): la reserva es el token RESERVA_BOTON_IA (pb-24) de design-system.ts.
@@ -3987,6 +3989,28 @@ console.log('--- B4 T24 f3 r1 (F93): el Kanban de Productos con una categoría e
   assert.equal(ec.columnasProductos(cats, undefined, { elegida: '99' }).columnas.length, 12, 'una que no está en el catálogo: como antes');
   assert.equal(ec.columnasProductos(cats, undefined, { elegida: '' }).columnas.length, 12);
   assert.equal(ec.columnasProductos(cats, undefined, {}).columnas.length, 12);
+}
+
+console.log('--- B4 T24 f3 r1 (F81): los catálogos de Inventario — una forma inesperada es un error, el error con filas viejas se dice, «Reintentar» da señal ---');
+{
+  const { filasDeCatalogo } = ec;
+  assert.equal(typeof filasDeCatalogo, 'function', 'filasDeCatalogo existe');
+  assert.deepEqual(filasDeCatalogo({ status: 'success', data: [{ id: 1, name: 'Central' }] }), { filas: [{ id: 1, name: 'Central' }], error: null });
+  assert.deepEqual(filasDeCatalogo([{ id: 2, name: 'Norte' }]), { filas: [{ id: 2, name: 'Norte' }], error: null });
+  assert.deepEqual(filasDeCatalogo({ status: 'success', data: [] }), { filas: [], error: null }, 'una lista vacía de verdad');
+  for (const rara of [null, {}, { data: { items: 'x' } }, 'texto', { data: null }]) {
+    const r = filasDeCatalogo(rara);
+    assert.equal(r.filas, null, `${JSON.stringify(rara)}: sin filas falsas`);
+    assert.match(String(r.error?.message), /no trae la lista/, `${JSON.stringify(rara)}: es un error`);
+  }
+  const piezas = leerFuente('app/dashboard/inventario/piezas-inventario.tsx');
+  trae(piezas, "return { catalogo: { filas: carga.filas, error: carga.error, cargando: carga.vuelta !== vuelta }, recargar };", 'useCatalogo: cargando por la vuelta');
+  assert.match(piezas, /\{catalogo\.error != null && catalogo\.filas && \(\s*<span role="alert"[^>]*>\s*\{textoDeError\(catalogo\.error, fallo\)\}\. \{reintentar\}/, 'el error con filas viejas, junto al select');
+  trae(piezas, "{catalogo.cargando ? 'Reintentando…' : 'Reintentar'}");
+  const hub = leerFuente('app/dashboard/inventario/page.tsx');
+  trae(hub, 'const { filas, error } = filasDeCatalogo(r);');
+  assert.ok(!/const lista = \(r: \{ data\?: unknown \} \| null\) =>/.test(hub), 'sin la lectura que convertía todo en []');
+  assert.match(hub, /cargando: cargaBodegas\.vuelta !== vueltaCatalogos/);
 }
 
 console.log('\nOK: test_estados_compras.mjs');

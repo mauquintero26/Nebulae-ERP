@@ -945,6 +945,18 @@ export function estadoReintento(carga, vuelta) {
 }
 
 /**
+ * B4 T24 f3 r1 (F81): las filas de un catálogo (GET /inventory/warehouses, /categories…) con normalizarRespuesta. Una respuesta con
+ * forma inesperada (ni un arreglo ni {data: [...]}) es un ERROR, no una lista vacía (antes se convertía en [] sin decir nada).
+ * @param {unknown} r
+ * @returns {{filas: any[] | null, error: Error | null}}
+ */
+export function filasDeCatalogo(r) {
+  const forma = Array.isArray(r) || Array.isArray(/** @type {any} */ (r)?.data);
+  if (!forma) return { filas: null, error: new Error('La respuesta del servidor no trae la lista.') };
+  return { filas: normalizarRespuesta(r).filas, error: null };
+}
+
+/**
  * B4 T24 f3 r1 (m22): el conteo por línea, en serie (PATCH /compras/recepciones/{id}/lineas/{grl_id}): manda una petición tras otra y se
  * DETIENE en la primera que falla (las que siguen no salen). Devuelve cuántas quedaron guardadas y, si una falló, cuál y su error, para
  * que el aviso diga qué línea falló y que las anteriores ya se guardaron.

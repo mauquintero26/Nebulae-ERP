@@ -21,7 +21,7 @@ import { PanelAnalisisPerezoso } from '@/components/analisis';
 import { apiFetch } from '@/lib/api';
 import { estadoDelTotal, extraPorVista, textoVacioExistencias } from '@/lib/tabla';
 import { AYUDA_MINIMO_INVENTARIO, numeroFinito, resumenAlmacenes, tarjetasHubInventario } from '@/lib/kpis';
-import { ESTADOS_STOCK, TOPE_TABLERO_COMPRAS, avisoTope200, filtrosAplicadosHub, marcarCategoriasPadre, textoPieBodega } from '@/lib/estados-compras';
+import { ESTADOS_STOCK, TOPE_TABLERO_COMPRAS, avisoTope200, filasDeCatalogo, filtrosAplicadosHub, marcarCategoriasPadre, textoPieBodega } from '@/lib/estados-compras';
 // ?tab=analisis: la lectura genérica que dejó T14 en flujo-compras.js (se reúsa, no se copia).
 import { leerEnlaceHubCompras } from '@/lib/flujo-compras';
 // T18 r1 (m10, m21): las piezas de una existencia (tipos, celdas, detalle, selector, formatos, clave y clase de fila, CONTENEDOR y
@@ -313,20 +313,28 @@ export default function InventarioHub() {
 
   // Los selectores (las bodegas y las categorías reales; antes, 3 bodegas de relleno si la lista venía vacía y los
   // errores tragados como una lista vacía). Si falla, lo último bueno se conserva y el selector lo dice con «Reintentar».
+  // r1 (F81): {vuelta, filas, error} por catálogo (cargando mientras no llega la de esta vuelta; el patrón de T16B) y filasDeCatalogo (una
+  // forma inesperada es un error, no una lista vacía). Con un error y filas viejas, el selector lo dice junto al select.
   const [vueltaCatalogos, setVueltaCatalogos] = useState(0);
-  const [bodegas, setBodegas] = useState<Catalogo>({ filas: null, error: null });
-  const [categorias, setCategorias] = useState<Catalogo>({ filas: null, error: null });
+  const [cargaBodegas, setBodegas] = useState<Catalogo & { vuelta: number }>({ vuelta: -1, filas: null, error: null });
+  const [cargaCategorias, setCategorias] = useState<Catalogo & { vuelta: number }>({ vuelta: -1, filas: null, error: null });
   useEffect(() => {
     const control = new AbortController();
-    const lista = (r: { data?: unknown } | null) => (Array.isArray(r?.data) ? (r.data as OpcionCatalogo[]) : []);
-    apiFetch('/inventory/warehouses', { signal: control.signal })
-      .then((r: { data?: unknown } | null) => setBodegas({ filas: lista(r), error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setBodegas((c) => ({ filas: c.filas, error: err })); });
-    apiFetch('/categories', { signal: control.signal })
-      .then((r: { data?: unknown } | null) => setCategorias({ filas: lista(r), error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setCategorias((c) => ({ filas: c.filas, error: err })); });
+    const llegar = (fijar: typeof setBodegas) => (r: unknown) => {
+      const { filas, error } = filasDeCatalogo(r);
+      fijar((c) => ({ vuelta: vueltaCatalogos, filas: (filas as OpcionCatalogo[] | null) ?? c.filas, error }));
+    };
+    const fallar = (fijar: typeof setBodegas) => (err: unknown) => {
+      if (!control.signal.aborted) fijar((c) => ({ vuelta: vueltaCatalogos, filas: c.filas, error: err }));
+    };
+    apiFetch('/inventory/warehouses', { signal: control.signal }).then(llegar(setBodegas)).catch(fallar(setBodegas));
+    apiFetch('/categories', { signal: control.signal }).then(llegar(setCategorias)).catch(fallar(setCategorias));
     return () => control.abort();
   }, [vueltaCatalogos]);
+  const bodegas = useMemo<Catalogo>(() => ({ filas: cargaBodegas.filas, error: cargaBodegas.error, cargando: cargaBodegas.vuelta !== vueltaCatalogos }),
+    [cargaBodegas, vueltaCatalogos]);
+  const categorias = useMemo<Catalogo>(() => ({ filas: cargaCategorias.filas, error: cargaCategorias.error, cargando: cargaCategorias.vuelta !== vueltaCatalogos }),
+    [cargaCategorias, vueltaCatalogos]);
   const reintentarCatalogos = useCallback(() => setVueltaCatalogos((n) => n + 1), []);
 
   // Las tarjetas (KPI-inventario punto 4; R10, R12): GET /inventory/stats, todo el inventario por referencia, sin
