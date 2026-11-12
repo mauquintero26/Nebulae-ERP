@@ -3218,4 +3218,24 @@ console.log('--- B4 T24 f3 (FINAL-C7-f): consolidar varios PVEN en un PEC manda 
     'el Hub: el 409 con su texto y la recarga');
 }
 
+console.log('--- B4 T24 f3 (A3-f): el Kardex manda Desde y Hasta como el día de Colombia que elige el usuario, y ninguna ayuda dice «UTC» ---');
+{
+  // El borde del ledger: un movimiento del 7 nov a las 21:00 de Colombia (02:00 UTC del 8). Con «Desde 7 nov» y «Hasta 7 nov» la
+  // pantalla manda exactamente esos días (sin pasarlos a UTC); el servidor (A3-b) los compara con las 00:00 de Colombia.
+  assert.deepEqual(ec.extraKardex({ desde: '2026-11-07', hasta: '2026-11-07' }),
+    { sku_id: null, warehouse_id: null, owner: null, direction: null, start_date: '2026-11-07', end_date: '2026-11-07' });
+  assert.equal(ec.extraKardex({ desde: '2026-12-31', hasta: '2027-01-01' }).end_date, '2027-01-01', 'el día tal cual, también en el cambio de año');
+  // El contrato de A3-b (backend/app/api/v1/erp_inventario.py, solo lectura): >= inicio(D) y < inicio(D+1), las 00:00 de Colombia.
+  const inv = readFileSync(new URL('../../backend/app/api/v1/erp_inventario.py', import.meta.url), 'utf8');
+  assert.match(inv, /InventoryMovement\.created_at >= _inicio_del_dia_co\(start_date\)/);
+  assert.match(inv, /InventoryMovement\.created_at < _inicio_del_dia_co\(end_date \+ datetime\.timedelta\(days=1\)\)/);
+  // Ninguna ayuda dice «UTC»: ni el JSDoc de extraKardex ni lo que se ve en el Kardex (title, aria-label, textos).
+  const lib = leerFuente('lib/estados-compras.js');
+  const jsdoc = lib.slice(lib.lastIndexOf('/**', lib.indexOf('export function extraKardex(')), lib.indexOf('export function extraKardex('));
+  assert.ok(!/UTC/.test(jsdoc), 'el JSDoc de extraKardex ya no dice que los bordes son días UTC');
+  assert.match(jsdoc, /el día de Colombia/);
+  const k = leerFuente('app/dashboard/inventario/kardex/page.tsx');
+  assert.ok(!/UTC/.test(sinComentarios(k).replace(/\{\/\*[\s\S]*?\*\/\}/g, '')), 'el Kardex no dice «UTC» en lo que se ve');
+}
+
 console.log('\nOK: test_estados_compras.mjs');

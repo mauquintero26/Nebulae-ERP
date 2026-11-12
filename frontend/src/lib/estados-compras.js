@@ -1584,7 +1584,9 @@ export const COLUMNAS_KARDEX = congelar([
 
 /**
  * Los filtros extra de la barra del Kardex como parámetros de GET /inventory/kardex (sku_id, warehouse_id, owner,
- * direction, start_date y end_date; los bordes de fecha son días UTC desde antes). Lo vacío no se manda.
+ * direction, start_date y end_date). Lo vacío no se manda. B4 T24 f3 (A3-f): Desde y Hasta van tal como los elige el usuario
+ * (AAAA-MM-DD, el día de Colombia): desde A3-b, get_kardex los compara con las 00:00 de Colombia (_inicio_del_dia_co), el mismo
+ * día que muestra la tabla.
  * @param {{skuId?: number | null, bodega?: string, propietario?: string, direccion?: string, desde?: string, hasta?: string} | null | undefined} filtros
  * @returns {Record<string, unknown>}
  */
