@@ -3711,6 +3711,10 @@ console.log('--- B4 T24 f3 (la ventana de seguimiento de Compras › Pedidos): u
   // no le quita el foco a sus campos).
   const finModal = ventana.indexOf('</Modal>');
   assert.ok(finModal > 0 && ventana.indexOf('{showNewCasillero && (') > finModal, 'Nuevo Casillero, después del Modal');
+  // Con el mismo z-50 que el panel del PEC (fixed, z-50), gana el orden del DOM: la ventana va DESPUÉS del panel (el banco lo midió:
+  // antes de moverla, el panel la tapaba).
+  const panel = ped.indexOf(`<div className="fixed top-0 bottom-0 right-0 z-50 bg-white shadow-2xl flex flex-col" style={{left:'240px'}}>`);
+  assert.ok(panel > 0 && ped.indexOf('{showConfig && <TrackingConfigModal onClose=') > panel, 'la ventana de seguimiento, después del panel del PEC');
   const nuevo = ped.slice(ped.indexOf('function NewCasilleroModal('), ped.indexOf('function TrackingConfigModal('));
   assert.match(nuevo, /<div data-superficie="ventana" className="fixed inset-0 z-\[95\]/);
 }

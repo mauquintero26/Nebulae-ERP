@@ -685,7 +685,6 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
 
   return (
     <>
-      {showConfig && <TrackingConfigModal onClose={()=>setShowConfig(false)} onToast={onToast}/>}
       <div className="fixed inset-0 bg-gray-900/20 backdrop-blur-sm z-40" onClick={onClose}/>
       <div className="fixed top-0 bottom-0 right-0 z-50 bg-white shadow-2xl flex flex-col" style={{left:'240px'}}>
         {/* Header */}
@@ -952,6 +951,9 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
           </div>
         </div>
       </div>
+      {/* B4 T24 f3 (duda 1 de f2 r2): la ventana de seguimiento (un Modal z-50) va DESPUÉS del panel (también z-50) en el DOM: con el
+          mismo z gana el orden, así que queda encima del panel; confirmar() (z-[60]) queda encima de los dos. */}
+      {showConfig && <TrackingConfigModal onClose={()=>setShowConfig(false)} onToast={onToast}/>}
     </>
   );
 }
