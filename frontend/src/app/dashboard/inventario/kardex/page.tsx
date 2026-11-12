@@ -58,7 +58,8 @@ const RUTA_KARDEX = '/inventory/kardex';
 const TEXTO_ORDEN_KARDEX = 'Del más reciente al más antiguo';
 const SIN_FILTROS: FiltrosKardex = { skuId: null, bodega: '', propietario: '', direccion: '', desde: '', hasta: '' };
 /** El orden de la lista de direcciones (la del Kardex de hoy, más las dos que escribe el sistema y no estaban). */
-const ORDEN_DIRECCIONES = ['IN', 'OUT', 'TRANSFER_IN', 'TRANSFER_OUT', 'ADJUST_IN', 'ADJUST_OUT', 'QUARANTINE', 'SCRAP', 'RETURN_IN'];
+// B4 T24 f3 (F88): el orden de DIRECCIONES_KARDEX (la lib), sin repetir sus claves a mano.
+const ORDEN_DIRECCIONES = Object.keys(DIRECCIONES_KARDEX);
 const ICONO_DIRECCION: Record<string, LucideIcon> = {
   IN: ArrowDownRight, OUT: ArrowUpRight, TRANSFER_IN: RefreshCw, TRANSFER_OUT: RefreshCw, ADJUST_IN: ArrowDownRight,
   ADJUST_OUT: ArrowUpRight, QUARANTINE: RefreshCw, SCRAP: ArrowUpRight, RETURN_IN: ArrowDownRight,
@@ -150,7 +151,8 @@ function DetalleMovimiento({ m, onCerrar }: { m: Movimiento; onCerrar: () => voi
     ['Registrado por', m.created_by || 'Sistema'],
   ];
   return (
-    <Modal title={`Movimiento ${numeroMovimiento(m)}`} subtitle={[m.sku, m.product_name].filter(Boolean).join(' · ')} icon={ArrowRightLeft}
+    // B4 T24 f3 (F90): el título fijo y el número en el subtítulo (sin «Movimiento Movimiento n.º 3» cuando no trae documento).
+    <Modal title="Detalle del movimiento" subtitle={[numeroMovimiento(m), m.sku, m.product_name].filter(Boolean).join(' · ')} icon={ArrowRightLeft}
       color="indigo" onClose={onCerrar} footer={(
         <button type="button" onClick={onCerrar}
           className={`rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white hover:bg-slate-800 ${FOCOS.indigo}`}>Cerrar</button>
@@ -234,9 +236,27 @@ export default function KardexPage() {
     return () => { clearTimeout(pausa); control.abort(); };
   }, [buscarSku, skuTexto]);
   const resultadosSku = buscarSku && skuBusqueda?.texto === skuTexto ? skuBusqueda : null;
+  // B4 T24 f3 (F88): la lista del autocompletar se cierra con Esc y al salir del campo y de la lista; se abre otra vez al escribir.
+  const [skuCerrado, setSkuCerrado] = useState(false);
+  const listaSkuAbierta = buscarSku && !skuCerrado;
+  const refListaSku = useRef<HTMLDivElement>(null);
   const escribirSku = (texto: string) => {
     setSkuTexto(texto);
+    setSkuCerrado(false);
     if (filtros.skuId !== null) cambiarFiltros({ skuId: null });
+  };
+  const opcionesSku = () => Array.from(refListaSku.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? []);
+  const teclaSku = (e: React.KeyboardEvent<HTMLElement>) => {
+    if (e.key === 'Escape' && listaSkuAbierta) { e.preventDefault(); e.stopPropagation(); setSkuCerrado(true); return; }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    const opciones = opcionesSku();
+    if (!opciones.length) return;
+    e.preventDefault();
+    const i = opciones.indexOf(document.activeElement as HTMLElement);
+    opciones[e.key === 'ArrowDown' ? Math.min(i + 1, opciones.length - 1) : Math.max(i - 1, 0)].focus();
+  };
+  const saleDelSku = (e: React.FocusEvent<HTMLElement>) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setSkuCerrado(true);
   };
   const elegirSku = (o: OpcionSku) => {
     setSkuTexto(o.display || o.product_name || `SKU #${o.id}`);
@@ -299,23 +319,27 @@ export default function KardexPage() {
               buscar={false}
               filtros={(
                 <>
-                  <div className="relative">
+                  <div className="relative" onKeyDown={teclaSku} onBlur={saleDelSku}>
                     <label className="relative flex items-center">
                       <Search size={14} aria-hidden="true" className="pointer-events-none absolute left-3 text-slate-500" />
                       <input type="search" aria-label="Producto o SKU" placeholder="Producto / SKU…" value={skuTexto}
+                        role="combobox" aria-expanded={listaSkuAbierta} aria-controls="kardex-sku-opciones" aria-autocomplete="list"
                         onChange={(e) => escribirSku(e.target.value)}
                         className={`w-44 py-2 pl-8 pr-3 text-xs font-bold ${CONTROL} ${filtros.skuId !== null ? 'border-emerald-400 bg-emerald-50' : ''}`} />
                     </label>
-                    {buscarSku && resultadosSku !== null && (
-                      <div className="absolute left-0 top-full z-20 mt-1 max-h-48 w-64 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl">
-                        {resultadosSku.error ? (
+                    {listaSkuAbierta && (
+                      <div ref={refListaSku} id="kardex-sku-opciones" role="listbox" aria-label="Productos que coinciden"
+                        className="absolute left-0 top-full z-20 mt-1 max-h-48 w-64 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl">
+                        {resultadosSku === null ? (
+                          <p role="status" className="px-3 py-2 text-xs text-slate-600">Buscando…</p>
+                        ) : resultadosSku.error ? (
                           <p role="alert" className="px-3 py-2 text-xs font-semibold text-rose-800">
                             {textoDeError(resultadosSku.error, 'No se pudo buscar el producto')}
                           </p>
                         ) : resultadosSku.filas.length === 0 ? (
                           <p className="px-3 py-2 text-xs text-slate-600">Ningún producto coincide con «{skuTexto.trim()}».</p>
                         ) : resultadosSku.filas.map((o) => (
-                          <button key={o.id} type="button" onClick={() => elegirSku(o)}
+                          <button key={o.id} type="button" role="option" aria-selected={false} onClick={() => elegirSku(o)}
                             className={`block w-full border-b border-slate-50 px-3 py-2 text-left text-xs text-slate-800 last:border-0 hover:bg-slate-50 ${FOCOS.indigo}`}>
                             {o.display || o.product_name}
                           </button>
@@ -332,8 +356,7 @@ export default function KardexPage() {
                   </select>
                   <select aria-label="Propietario" value={filtros.propietario} onChange={(e) => cambiarFiltros({ propietario: e.target.value })} className={CONTROL}>
                     <option value="">Todos los propietarios</option>
-                    <option value="NEBULAE">Nebulae</option>
-                    <option value="MAU">Mau</option>
+                    {['NEBULAE', 'MAU'].map((o) => <option key={o} value={o}>{etiquetaPropietario(o)}</option>)}
                   </select>
                   <label className="inline-flex items-center gap-1 text-xs font-bold text-slate-600">
                     Desde

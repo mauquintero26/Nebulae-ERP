@@ -2542,7 +2542,8 @@ console.log('--- TEST 44 (B4 T18, TABLA-inventario punto 8; KANBAN-resto; RP54):
   trae(k, 'return () => { clearTimeout(pausa); control.abort(); };', 'la búsqueda se limpia');
   trae(k, 'const resultadosSku = buscarSku && skuBusqueda?.texto === skuTexto ? skuBusqueda : null;', 'nunca resultados de otro texto');
   trae(k, "{textoDeError(resultadosSku.error, 'No se pudo buscar el producto')}", 'el detalle del servidor tal cual');
-  trae(k, '{resultadosSku.error ? (', 'el error se ve en lugar de la lista');
+  // B4 T24 f3 (F88, D27): antes del error, «Buscando…» mientras la respuesta no llega; el error sigue viéndose en lugar de la lista.
+  trae(k, ') : resultadosSku.error ? (', 'el error se ve en lugar de la lista');
   trae(k, "useCatalogo('/inventory/warehouses')", 'las bodegas con su error y Reintentar');
   trae(k, 'onReintentar={recargarBodegas}', 'Reintentar vuelve a pedir las bodegas');
   // La tabla y la barra.
@@ -2570,8 +2571,8 @@ console.log('--- TEST 44 (B4 T18, TABLA-inventario punto 8; KANBAN-resto; RP54):
   assert.ok(!/toLocale/.test(k), 'sin toLocaleString (el navegador leería el UTC sin zona 5 horas corrido)');
   trae(k, 'textoFechaMovimiento(m.created_at)', 'la fecha de Colombia');
   // Las direcciones del filtro son TODAS las del Kardex, y las columnas del tablero salen de la lib.
-  const lista = /const ORDEN_DIRECCIONES = \[([^\]]*)\]/.exec(k)?.[1] ?? '';
-  assert.deepEqual([...lista.matchAll(/'([A-Z_]+)'/g)].map((m) => m[1]).sort(), Object.keys(ec.DIRECCIONES_KARDEX).sort(), 'el filtro ofrece cada dirección');
+  // B4 T24 f3 (F88, D27): el orden sale de la lib (Object.keys(DIRECCIONES_KARDEX)): cada dirección, sin repetir sus claves a mano.
+  trae(k, 'const ORDEN_DIRECCIONES = Object.keys(DIRECCIONES_KARDEX);', 'el filtro ofrece cada dirección');
   trae(k, 'DIRECCIONES_KARDEX[d].label', 'la etiqueta de cada dirección');
   // El tablero solo para ver, en modo servidor.
   const hook = bloqueDesde(k, 'useTableroKanban<Movimiento>(');
@@ -3396,6 +3397,27 @@ console.log('--- B4 T24 f3 (F79, F82, F85, F86, F87-f, F78): el Hub de Inventari
   trae(hub, 'catalogo={categoriasMarcadas} valor={filtros.categoria}', 'F87-f: el selector con las padre marcadas');
   trae(hub, '<div className="flex flex-wrap items-center gap-3">', 'F78: los botones se parten');
   trae(hub, '<div className="flex flex-wrap items-center gap-2">\n                <h1 className="text-3xl font-black text-slate-900 tracking-tight break-words">HUB de Inventario</h1>', 'F78: el título');
+}
+
+console.log('--- B4 T24 f3 (F88, F90, F91): el Kardex — el autocompletar como combobox, el título del detalle y las opciones del propietario ---');
+{
+  const k = leerFuente('app/dashboard/inventario/kardex/page.tsx');
+  // F88: la semántica de combobox, «Buscando…», Esc y al perder el foco, y las flechas.
+  trae(k, 'role="combobox" aria-expanded={listaSkuAbierta} aria-controls="kardex-sku-opciones" aria-autocomplete="list"');
+  trae(k, '<div ref={refListaSku} id="kardex-sku-opciones" role="listbox" aria-label="Productos que coinciden"');
+  trae(k, '<p role="status" className="px-3 py-2 text-xs text-slate-600">Buscando…</p>', 'mientras la respuesta no llega');
+  trae(k, "role=\"option\" aria-selected={false} onClick={() => elegirSku(o)}");
+  trae(k, "if (e.key === 'Escape' && listaSkuAbierta) { e.preventDefault(); e.stopPropagation(); setSkuCerrado(true); return; }", 'Esc cierra la lista');
+  trae(k, 'if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setSkuCerrado(true);', 'al salir del campo y de la lista, se cierra');
+  trae(k, "opciones[e.key === 'ArrowDown' ? Math.min(i + 1, opciones.length - 1) : Math.max(i - 1, 0)].focus();", 'las flechas recorren las opciones');
+  trae(k, '<div className="relative" onKeyDown={teclaSku} onBlur={saleDelSku}>');
+  trae(k, 'setSkuCerrado(false);', 'escribir la abre otra vez');
+  // F90: el título fijo; el número en el subtítulo.
+  trae(k, '<Modal title="Detalle del movimiento" subtitle={[numeroMovimiento(m), m.sku, m.product_name].filter(Boolean).join(\' · \')}');
+  noTrae(k, 'title={`Movimiento ${numeroMovimiento(m)}`}', 'sin «Movimiento Movimiento n.º 3»');
+  // F91: las opciones del propietario con etiquetaPropietario.
+  trae(k, "{['NEBULAE', 'MAU'].map((o) => <option key={o} value={o}>{etiquetaPropietario(o)}</option>)}");
+  noTrae(k, '<option value="NEBULAE">Nebulae</option>', 'sin el texto escrito a mano');
 }
 
 console.log('\nOK: test_estados_compras.mjs');
