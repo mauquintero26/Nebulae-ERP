@@ -2501,6 +2501,10 @@ console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5,
   for (const parte of ['recargando={listado.recargando}', 'error={listado.error}', 'onReintentar={listado.recargar}']) assert.ok(tablaHub.includes(parte), `E: la tabla del Hub, ${parte}`);
   assert.match(fuente, /const reintentarCatalogos = useCallback\(\(\) => setVueltaCatalogos\(\(n\) => n \+ 1\), \[\]\);/, 'I: «Reintentar» de los catálogos sube la vuelta');
   assert.match(fuente, /\}, \[vueltaCatalogos\]\);/, 'I: y la carga de los catálogos depende de la vuelta');
+  // F80 (D y J, también aquí): la rama del error de SelectorCatalogo (role=alert con «Reintentar») y el «Reintentar» de Almacenes.
+  const piezasF80 = readFileSync(new URL('../src/app/dashboard/inventario/piezas-inventario.tsx', import.meta.url), 'utf8');
+  assert.match(piezasF80, /if \(catalogo\.error && !catalogo\.filas\) \{\s*return \(\s*<span role="alert"/, 'D: sin filas, el error del catálogo se dice');
+  assert.match(fuente, /<AvisoDeError error=\{listado\.error\} fallo="No se pudieron cargar las existencias por bodega" onReintentar=\{listado\.recargar\}/, 'J: «Reintentar» de Almacenes vuelve a pedir');
   // Las pestañas de RP53 con los conteos del servidor (null mientras cargan, nunca 0) y la etiqueta de ESTADOS_STOCK.
   assert.ok(fuente.includes("{ id: 'todos', etiqueta: 'Todos', conteo: conteos?.todos ?? null }"));
   assert.ok(fuente.includes("{ id: 'bajo_minimo', etiqueta: ESTADOS_STOCK.bajo_minimo.label, conteo: conteos?.bajo_minimo ?? null, alerta: (conteos?.bajo_minimo ?? 0) > 0 }"));
