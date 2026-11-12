@@ -1751,6 +1751,38 @@ export const COLUMNAS_KARDEX = congelar([
 ]);
 
 /**
+ * B4 T24 f3 r1 (C3, m31): las teclas del autocompletar del SKU del Kardex (role combobox). `indice` es la opción con el foco (-1: el
+ * campo) y `total` las opciones que hay. Devuelve si la lista queda abierta y adónde va el foco (-1: el campo; si no, esa opción), o
+ * null si la tecla no le toca:
+ *  - Esc con la lista abierta la cierra y el foco vuelve al campo (antes, con el foco en una opción, caía en <body>);
+ *  - ↓ con la lista cerrada la abre (el foco sigue en el campo); abierta, baja una opción (de la última no pasa);
+ *  - ↑ desde la primera opción vuelve al campo; desde el campo no hace nada.
+ * Al elegir (Enter o clic) el foco vuelve al campo (la página). El clic con el ratón no cierra la lista antes de elegir: la lista
+ * evita el mousedown (Safari y Firefox de macOS no enfocan el botón al hacer clic y el blur llegaba con relatedTarget null).
+ * @param {{tecla: string, abierta: boolean, indice: number, total: number}} entrada
+ * @returns {{abierta: boolean, foco: number} | null}
+ */
+export function teclaComboboxSku({ tecla, abierta, indice, total }) {
+  if (tecla === 'Escape') return abierta ? { abierta: false, foco: -1 } : null;
+  if (tecla === 'ArrowDown') {
+    if (!abierta) return { abierta: true, foco: -1 };
+    return total > 0 ? { abierta: true, foco: Math.min(Math.max(indice, -1) + 1, total - 1) } : null;
+  }
+  if (tecla === 'ArrowUp') return abierta && indice >= 0 ? { abierta: true, foco: indice - 1 } : null;
+  return null;
+}
+
+/**
+ * B4 T24 f3 r1 (C3): al salir del autocompletar (el blur del contenedor), se cierra la lista si el foco no va a algo de adentro (fuera,
+ * o null: un clic en la página). Un clic en la lista no saca el foco del campo (la lista evita el mousedown), así que no llega aquí.
+ * @param {boolean} focoVaDentro
+ * @returns {boolean}
+ */
+export function cierraComboboxAlSalir(focoVaDentro) {
+  return !focoVaDentro;
+}
+
+/**
  * Los filtros extra de la barra del Kardex como parámetros de GET /inventory/kardex (sku_id, warehouse_id, owner,
  * direction, start_date y end_date). Lo vacío no se manda. B4 T24 f3 (A3-f): Desde y Hasta van tal como los elige el usuario
  * (AAAA-MM-DD, el día de Colombia): desde A3-b, get_kardex los compara con las 00:00 de Colombia (_inicio_del_dia_co), el mismo

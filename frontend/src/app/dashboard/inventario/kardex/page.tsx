@@ -17,8 +17,8 @@ import { estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
 import { textoDeError } from '@/lib/avisos';
 import { numeroFinito } from '@/lib/kpis';
 import {
-  COLUMNAS_KARDEX, DIRECCIONES_KARDEX, TEXTO_SOLO_VER_KARDEX, consultaColumnaKardex, direccionesDeColumnaKardex, extraKardex,
-  etiquetaPropietario, infoDireccionKardex, numeroMovimiento, tarjetaMovimiento, textoFechaMovimiento, textoVacioKardex,
+  COLUMNAS_KARDEX, DIRECCIONES_KARDEX, TEXTO_SOLO_VER_KARDEX, cierraComboboxAlSalir, consultaColumnaKardex, direccionesDeColumnaKardex,
+  extraKardex, etiquetaPropietario, teclaComboboxSku, infoDireccionKardex, numeroMovimiento, tarjetaMovimiento, textoFechaMovimiento, textoVacioKardex,
 } from '@/lib/estados-compras';
 import { INV_NAV } from '../inv-nav';
 import { CONTENEDOR, FOCOS, SelectorCatalogo, cantidad, pesos, useCatalogo } from '../piezas-inventario';
@@ -237,9 +237,12 @@ export default function KardexPage() {
   }, [buscarSku, skuTexto]);
   const resultadosSku = buscarSku && skuBusqueda?.texto === skuTexto ? skuBusqueda : null;
   // B4 T24 f3 (F88): la lista del autocompletar se cierra con Esc y al salir del campo y de la lista; se abre otra vez al escribir.
+  // r1 (C3): las teclas y el cierre en la lib (teclaComboboxSku, cierraComboboxAlSalir); el foco vuelve al campo tras Esc y tras elegir.
   const [skuCerrado, setSkuCerrado] = useState(false);
   const listaSkuAbierta = buscarSku && !skuCerrado;
   const refListaSku = useRef<HTMLDivElement>(null);
+  const refCampoSku = useRef<HTMLInputElement>(null);
+  const [indiceSku, setIndiceSku] = useState(-1);
   const escribirSku = (texto: string) => {
     setSkuTexto(texto);
     setSkuCerrado(false);
@@ -247,20 +250,21 @@ export default function KardexPage() {
   };
   const opcionesSku = () => Array.from(refListaSku.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? []);
   const teclaSku = (e: React.KeyboardEvent<HTMLElement>) => {
-    if (e.key === 'Escape' && listaSkuAbierta) { e.preventDefault(); e.stopPropagation(); setSkuCerrado(true); return; }
-    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
     const opciones = opcionesSku();
-    if (!opciones.length) return;
+    const r = teclaComboboxSku({ tecla: e.key, abierta: listaSkuAbierta, indice: opciones.indexOf(document.activeElement as HTMLElement), total: opciones.length });
+    if (!r) return;
     e.preventDefault();
-    const i = opciones.indexOf(document.activeElement as HTMLElement);
-    opciones[e.key === 'ArrowDown' ? Math.min(i + 1, opciones.length - 1) : Math.max(i - 1, 0)].focus();
+    if (e.key === 'Escape') e.stopPropagation();
+    setSkuCerrado(!r.abierta);
+    if (r.foco < 0) refCampoSku.current?.focus(); else opciones[r.foco]?.focus();
   };
   const saleDelSku = (e: React.FocusEvent<HTMLElement>) => {
-    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setSkuCerrado(true);
+    if (cierraComboboxAlSalir(e.currentTarget.contains(e.relatedTarget as Node | null))) setSkuCerrado(true);
   };
   const elegirSku = (o: OpcionSku) => {
     setSkuTexto(o.display || o.product_name || `SKU #${o.id}`);
     cambiarFiltros({ skuId: o.id });
+    refCampoSku.current?.focus();
   };
   const quitarFiltros = () => {
     setSkuTexto('');
@@ -273,7 +277,7 @@ export default function KardexPage() {
   // Pasar a Kanban sale de la pantalla completa (el conmutador sigue a la vista y el tablero no queda tapado).
   useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
   const [detalle, setDetalle] = useState<Movimiento | null>(null);
-  const abrir = useCallback((m: Movimiento) => setDetalle(m), []);
+  const abrir = useCallback((m: Movimiento) => setDetalle(m), [setDetalle]);
   // m8 de T15: el «vacío» memoizado dice qué lo deja vacío (los filtros o nada).
   const vacio = useMemo(() => {
     const texto = textoVacioKardex(hayFiltros);
@@ -322,24 +326,33 @@ export default function KardexPage() {
                   <div className="relative" onKeyDown={teclaSku} onBlur={saleDelSku}>
                     <label className="relative flex items-center">
                       <Search size={14} aria-hidden="true" className="pointer-events-none absolute left-3 text-slate-500" />
-                      <input type="search" aria-label="Producto o SKU" placeholder="Producto / SKU…" value={skuTexto}
+                      <input ref={refCampoSku} type="search" aria-label="Producto o SKU" placeholder="Producto / SKU…" value={skuTexto}
                         role="combobox" aria-expanded={listaSkuAbierta} aria-controls="kardex-sku-opciones" aria-autocomplete="list"
                         onChange={(e) => escribirSku(e.target.value)}
                         className={`w-44 py-2 pl-8 pr-3 text-xs font-bold ${CONTROL} ${filtros.skuId !== null ? 'border-emerald-400 bg-emerald-50' : ''}`} />
                     </label>
-                    {listaSkuAbierta && (
-                      <div ref={refListaSku} id="kardex-sku-opciones" role="listbox" aria-label="Productos que coinciden"
-                        className="absolute left-0 top-full z-20 mt-1 max-h-48 w-64 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl">
+                    {/* r1 (C3): «Buscando…», el error y «Ningún producto…» van fuera del listbox (que solo admite opciones). */}
+                    {listaSkuAbierta && (resultadosSku === null || resultadosSku.error != null || resultadosSku.filas.length === 0) && (
+                      <div className="absolute left-0 top-full z-20 mt-1 w-64 rounded-xl border border-slate-200 bg-white shadow-xl">
                         {resultadosSku === null ? (
                           <p role="status" className="px-3 py-2 text-xs text-slate-600">Buscando…</p>
                         ) : resultadosSku.error ? (
                           <p role="alert" className="px-3 py-2 text-xs font-semibold text-rose-800">
                             {textoDeError(resultadosSku.error, 'No se pudo buscar el producto')}
                           </p>
-                        ) : resultadosSku.filas.length === 0 ? (
-                          <p className="px-3 py-2 text-xs text-slate-600">Ningún producto coincide con «{skuTexto.trim()}».</p>
-                        ) : resultadosSku.filas.map((o) => (
-                          <button key={o.id} type="button" role="option" aria-selected={false} onClick={() => elegirSku(o)}
+                        ) : (
+                          <p role="status" className="px-3 py-2 text-xs text-slate-600">Ningún producto coincide con «{skuTexto.trim()}».</p>
+                        )}
+                      </div>
+                    )}
+                    {/* El mousedown en la lista no saca el foco del campo: el clic llega siempre a la opción (C3). */}
+                    {listaSkuAbierta && resultadosSku !== null && resultadosSku.error == null && resultadosSku.filas.length > 0 && (
+                      <div ref={refListaSku} id="kardex-sku-opciones" role="listbox" aria-label="Productos que coinciden"
+                        onMouseDown={(e) => e.preventDefault()}
+                        className="absolute left-0 top-full z-20 mt-1 max-h-48 w-64 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl">
+                        {resultadosSku.filas.map((o, i) => (
+                          <button key={o.id} type="button" role="option" aria-selected={i === indiceSku} onClick={() => elegirSku(o)}
+                            onFocus={() => setIndiceSku(i)} onBlur={() => setIndiceSku(-1)}
                             className={`block w-full border-b border-slate-50 px-3 py-2 text-left text-xs text-slate-800 last:border-0 hover:bg-slate-50 ${FOCOS.indigo}`}>
                             {o.display || o.product_name}
                           </button>

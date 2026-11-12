@@ -3417,10 +3417,10 @@ console.log('--- B4 T24 f3 (F88, F90, F91): el Kardex — el autocompletar como 
   trae(k, 'role="combobox" aria-expanded={listaSkuAbierta} aria-controls="kardex-sku-opciones" aria-autocomplete="list"');
   trae(k, '<div ref={refListaSku} id="kardex-sku-opciones" role="listbox" aria-label="Productos que coinciden"');
   trae(k, '<p role="status" className="px-3 py-2 text-xs text-slate-600">Buscando…</p>', 'mientras la respuesta no llega');
-  trae(k, "role=\"option\" aria-selected={false} onClick={() => elegirSku(o)}");
-  trae(k, "if (e.key === 'Escape' && listaSkuAbierta) { e.preventDefault(); e.stopPropagation(); setSkuCerrado(true); return; }", 'Esc cierra la lista');
-  trae(k, 'if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setSkuCerrado(true);', 'al salir del campo y de la lista, se cierra');
-  trae(k, "opciones[e.key === 'ArrowDown' ? Math.min(i + 1, opciones.length - 1) : Math.max(i - 1, 0)].focus();", 'las flechas recorren las opciones');
+  // r1 (D27, C3): las teclas y el cierre pasan a la lib (teclaComboboxSku, cierraComboboxAlSalir); aria-selected sigue a la opción con el
+  // foco. Lo fija el bloque de r1.
+  trae(k, "role=\"option\" aria-selected={i === indiceSku} onClick={() => elegirSku(o)}");
+  trae(k, 'if (cierraComboboxAlSalir(e.currentTarget.contains(e.relatedTarget as Node | null))) setSkuCerrado(true);', 'al salir del campo y de la lista, se cierra');
   trae(k, '<div className="relative" onKeyDown={teclaSku} onBlur={saleDelSku}>');
   trae(k, 'setSkuCerrado(false);', 'escribir la abre otra vez');
   // F90: el título fijo; el número en el subtítulo.
@@ -3578,6 +3578,48 @@ console.log('--- B4 T24 f3 r1 (C2): después del 409, la selección de PVEN deja
   trae(hub, "{consolidando ? 'Creando PEC…' : 'Crear PEC Consolidado'}");
   assert.match(hub, /\{avisoQuitados && <p role="status"[^>]*>\{avisoQuitados\}<\/p>\}/);
   assert.ok(!/selectedPvens\.size/.test(hub), 'el Hub: nada cuenta la selección vieja');
+}
+
+console.log('--- B4 T24 f3 r1 (C3, m31): el SKU del Kardex se elige con el ratón y con el teclado; las teclas y el cierre en la lib ---');
+{
+  const { teclaComboboxSku, cierraComboboxAlSalir } = ec;
+  assert.equal(typeof teclaComboboxSku, 'function', 'teclaComboboxSku existe');
+  assert.equal(typeof cierraComboboxAlSalir, 'function', 'cierraComboboxAlSalir existe');
+  const t = (tecla, abierta, indice, total) => teclaComboboxSku({ tecla, abierta, indice, total });
+  // Esc: abierta, la cierra y el foco vuelve al campo (también desde una opción: antes caía en <body>); cerrada, no le toca.
+  assert.deepEqual(t('Escape', true, 2, 3), { abierta: false, foco: -1 });
+  assert.deepEqual(t('Escape', true, -1, 3), { abierta: false, foco: -1 });
+  assert.equal(t('Escape', false, -1, 0), null);
+  // ↓: cerrada, la abre (el foco sigue en el campo); abierta, baja una (de la última no pasa); sin opciones, nada.
+  assert.deepEqual(t('ArrowDown', false, -1, 0), { abierta: true, foco: -1 });
+  assert.deepEqual(t('ArrowDown', true, -1, 3), { abierta: true, foco: 0 });
+  assert.deepEqual(t('ArrowDown', true, 0, 3), { abierta: true, foco: 1 });
+  assert.deepEqual(t('ArrowDown', true, 2, 3), { abierta: true, foco: 2 });
+  assert.equal(t('ArrowDown', true, -1, 0), null);
+  // ↑: desde la primera vuelve al campo (antes se quedaba en ella); desde el campo, nada.
+  assert.deepEqual(t('ArrowUp', true, 0, 3), { abierta: true, foco: -1 });
+  assert.deepEqual(t('ArrowUp', true, 2, 3), { abierta: true, foco: 1 });
+  assert.equal(t('ArrowUp', true, -1, 3), null);
+  assert.equal(t('ArrowUp', false, -1, 0), null);
+  for (const otra of ['Enter', 'a', 'Tab', ' ']) assert.equal(t(otra, true, 0, 3), null, `${otra}: no le toca (Enter lo atiende la opción)`);
+  // Al salir: se cierra si el foco va fuera (o a ninguna parte: relatedTarget null); no si va a algo de adentro.
+  assert.equal(cierraComboboxAlSalir(false), true);
+  assert.equal(cierraComboboxAlSalir(true), false);
+
+  // El cableado: el mousedown en la lista no saca el foco del campo (Safari y Firefox de macOS no enfocan el botón: el blur llegaba con
+  // relatedTarget null y desmontaba la lista antes del clic); tras Esc y tras elegir, el foco vuelve al campo.
+  const k = leerFuente('app/dashboard/inventario/kardex/page.tsx');
+  assert.match(k, /role="listbox" aria-label="Productos que coinciden"\s*onMouseDown=\{\(e\) => e\.preventDefault\(\)\}/, 'el ratón elige');
+  trae(k, 'const r = teclaComboboxSku({ tecla: e.key, abierta: listaSkuAbierta, indice: opciones.indexOf(document.activeElement as HTMLElement), total: opciones.length });');
+  trae(k, 'if (r.foco < 0) refCampoSku.current?.focus(); else opciones[r.foco]?.focus();');
+  trae(k, 'setSkuCerrado(!r.abierta);', '↓ con la lista cerrada la abre');
+  assert.match(k, /cambiarFiltros\(\{ skuId: o\.id \}\);\s*refCampoSku\.current\?\.focus\(\);/, 'al elegir, el foco vuelve al campo');
+  trae(k, '<input ref={refCampoSku} type="search" aria-label="Producto o SKU"');
+  trae(k, 'onFocus={() => setIndiceSku(i)} onBlur={() => setIndiceSku(-1)}', 'aria-selected sigue a la opción con el foco');
+  // «Buscando…», el error y «Ningún producto…» fuera del listbox (que solo admite option o group).
+  const lista = k.slice(k.indexOf('role="listbox"'), k.indexOf('</div>', k.indexOf('role="listbox"')));
+  assert.ok(!/role="status"|role="alert"|Ningún producto/.test(lista), 'el listbox solo tiene opciones');
+  assert.match(k, /<p role="status"[^>]*>Ningún producto coincide con «\{skuTexto\.trim\(\)\}»\.<\/p>/);
 }
 
 console.log('\nOK: test_estados_compras.mjs');
