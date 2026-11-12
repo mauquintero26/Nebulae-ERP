@@ -2945,7 +2945,48 @@ console.log('--- TEST T23A-b (B4 T23A; TABLA-otros punto 5, KANBAN-resto punto 3
   assert.match(pantalla, /textoVacioCatalogo\(\{ q: estadoCatalogo\.q, categoria \}\)/);
   // El filtro de categoría va al servidor con el retardo de la búsqueda y vuelve a la página 1 solo si cambió.
   assert.ok(!/RETARDO_CATEGORIA_MS/.test(codigo), 'r1 (m6): el retardo es el de la búsqueda de BarraTabla (lib/tabla.js), no uno propio');
-  assert.match(pantalla, /busquedaCategoria\.current \?\?= crearBusquedaConRetardo\(\{\s*alBuscar: \(buscado\) => \{\s*const nueva = buscado\.trim\(\);\s*if \(nueva === categoriaAplicada\.current\) return;\s*categoriaAplicada\.current = nueva;\s*setCategoria\(nueva\);\s*despacharCatalogo\(\{ tipo: 'pagina', valor: 1 \}\);\s*\},\s*\}\);\s*busquedaCategoria\.current\.escribir\(texto\);/);
+  // B4 T24 f4 (F39 en el catálogo; D27): la categoría es un filtro del estado único ({tipo: 'filtro'}: vuelve a la página 1 solo si
+  // cambió y se guarda con la sesión); la caja se sincroniza con sincronizarBusqueda, como la búsqueda de BarraTabla.
+  assert.match(pantalla, /busquedaCategoria\.current \?\?= crearBusquedaConRetardo\(\{\s*alBuscar: \(buscado\) => \{\s*const nueva = buscado\.trim\(\);\s*setCajaCategoria\(\(c\) => \(\{ \.\.\.c, enviado: nueva \}\)\);\s*despacharCatalogo\(\{ tipo: 'filtro', clave: 'categoria', valor: nueva \}\);\s*\},\s*\}\);\s*busquedaCategoria\.current\.escribir\(texto\);/);
+  assert.match(pantalla, /const categoria = estadoCatalogo\.filtros\?\.categoria \?\? '';/);
+  assert.match(pantalla, /const \[cajaCategoria, setCajaCategoria\] = useState<LocalBusqueda>\(\(\) => \(\{ texto: categoria, visto: categoria, enviado: null \}\)\);/);
+  assert.match(pantalla, /if \(categoria !== cajaCategoria\.visto\) setCajaCategoria\(sincronizarBusqueda\(cajaCategoria, categoria\)\);/);
+  assert.match(pantalla, /<input value=\{cajaCategoria\.texto\} onChange=\{\(e\) => alEscribirCategoria\(e\.target\.value\)\}/);
+  assert.ok(!/const \[categoria, setCategoria\]|categoriaAplicada|const \[categoriaTexto/.test(pantalla), 'sin el useState ni el ref de antes');
+  {
+    // Al volver: la categoría vuelve con la página (la sesión de useEstadoTabla).
+    const INICIAL = { orden: 'nombre' };
+    const conCat = reducirEstadoTabla(reducirEstadoTabla(estadoTablaInicial(INICIAL), { tipo: 'filtro', clave: 'categoria', valor: 'Cunas' }), { tipo: 'pagina', valor: 3 });
+    const vuelto = armarEstadoTabla(INICIAL, { sesion: leerSesionTabla(textoSesionTabla(conCat, 7), 7) });
+    assert.deepEqual([vuelto.filtros, vuelto.pagina], [{ categoria: 'Cunas' }, 3], 'el catálogo: la categoría vuelve con su página');
+    assert.ok(TABLA.urlListado('/ecommerce/catalogo', vuelto, { extra: { categoria: vuelto.filtros.categoria } }).includes('categoria=Cunas'));
+    assert.equal(reducirEstadoTabla(conCat, { tipo: 'filtro', clave: 'categoria', valor: 'Cunas' }), conCat, 'la misma categoría: el mismo estado (sin volver a la 1)');
+    // La caja: el eco de lo que mandó no pisa lo que se sigue escribiendo; lo que viene de afuera (volver, limpiar) sí la reemplaza.
+    assert.deepEqual(sincronizarBusqueda({ texto: 'Cunas b', visto: '', enviado: 'Cunas' }, 'Cunas'), { texto: 'Cunas b', visto: 'Cunas', enviado: null });
+    assert.deepEqual(sincronizarBusqueda({ texto: '', visto: '', enviado: null }, 'Cunas'), { texto: 'Cunas', visto: 'Cunas', enviado: null });
+  }
+  // FINAL-m11 en E-Commerce: el conmutador Lista / Kanban pasa las columnas del tablero (COLUMNAS_PEDIDO) a accionModo.
+  assert.ok(pantalla.includes('despacharPedidos(accionModo(estadoPedidos, modo, modo === \'kanban\' ? OPCIONES_ESTADOS_TABLERO_PEDIDO : OPCIONES_ESTADOS_PEDIDOS_WEB, COLUMNAS_PEDIDO));'));
+  {
+    const KV = await import('../src/lib/kanban-ventas.js');
+    const conVarios = KV.COLUMNAS_PEDIDO.find((c) => c.estados.filter((e) => KV.OPCIONES_ESTADOS_PEDIDOS_WEB.some((o) => o.valor === e)).length > 1);
+    if (conVarios) {
+      const enKanban = estadoTablaInicial({ modo: 'kanban', estados: [conVarios.estados[0]] });
+      const accion = TABLA.accionModo(enKanban, 'lista', KV.OPCIONES_ESTADOS_PEDIDOS_WEB, KV.COLUMNAS_PEDIDO);
+      const esperados = conVarios.estados.filter((e) => KV.OPCIONES_ESTADOS_PEDIDOS_WEB.some((o) => o.valor === e));
+      assert.deepEqual(accion, { tipo: 'cambiar', cambios: { modo: 'lista', estados: esperados } }, 'la columna se expande a sus estados de la lista web');
+    }
+  }
+  // F107: la tarjeta de la cuadrícula no es un div con clic: un botón principal (con el token de foco), separado del interruptor.
+  const tarjeta = codigo.slice(codigo.indexOf('function TarjetaProductoCuadricula('), codigo.indexOf('export default function EcommercePage('));
+  assert.ok(tarjeta.length > 100, 'la tarjeta existe');
+  assert.ok(!/onClick=\{puedeEditar \? onEditar : undefined\}/.test(tarjeta), 'sin el div pulsable');
+  assert.match(tarjeta, /<button type="button" onClick=\{onEditar\} disabled=\{!puedeEditar\} aria-label=\{`Editar \$\{p\.nombre\}`\}\s+title=\{puedeEditar \? undefined : TITULO_SOLO_ADMIN\}\s+className=\{`block w-full text-left [^`]*\$\{FOCO_DENTRO\}`\}>/);
+  const iBoton = tarjeta.indexOf('<button type="button" onClick={onEditar}');
+  const iFinBoton = tarjeta.indexOf('</button>', iBoton);
+  const iInterruptor = tarjeta.indexOf('<input type="checkbox"');
+  assert.ok(iBoton > 0 && iFinBoton > iBoton && iInterruptor > iFinBoton, 'el interruptor va FUERA del botón (sin controles anidados)');
+  assert.match(codigo, /import \{[^}]*\bFOCO_DENTRO\b[^}]*\} from '@\/lib\/design-system';/);
   assert.match(pantalla, /return \(\) => busquedas\.current\?\.cancelar\(\);/);
   assert.ok(!/setTimeout/.test(pantalla), 'sin un temporizador propio');
   assert.equal(TABLA.RETARDO_BUSQUEDA_MS, 300);
