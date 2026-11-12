@@ -780,9 +780,10 @@ console.log('--- TEST 23 (B4 T14): el Hub de Compras (compras/page.tsx) cablea l
   assert.match(hub, /errorVentas=\{ventas\.error\}/);
   // Cierre T14 (re-revisión r1): el panel decide con el error, el catch lo guarda y un éxito lo limpia.
   assert.match(hub, /\{errorVentas \? \(/, 'el panel muestra el error cuando lo hay');
-  assert.match(hub, /\.catch\(\(err: unknown\) => \{ if \(vigente\) setVentas\(\(v\) => \(\{ filas: v\.filas, error: err \}\)\); \}\)/,
+  // B4 T24 f3 (F57, D27): con la vuelta de la carga ({vuelta, filas, error}); la protección (el catch guarda, el éxito limpia) sigue.
+  assert.match(hub, /\.catch\(\(err: unknown\) => \{ if \(vigente\) setVentas\(\(v\) => \(\{ vuelta: vueltaVentas, filas: v\.filas, error: err \}\)\); \}\)/,
     'el catch de /ventas/pedidos guarda el error');
-  assert.match(hub, /if \(vigente\) setVentas\(\{ filas: Array\.isArray\(r\)[^\n]*, error: null \}\); \}\)/,
+  assert.match(hub, /if \(vigente\) setVentas\(\{ vuelta: vueltaVentas, filas: Array\.isArray\(r\)[^\n]*, error: null \}\); \}\)/,
     'un éxito limpia el error');
   // T14 r1 (m11, m12, m13): foco de la barra masiva, nombres del panel, «Pago y logística» y el respaldo de F. compra.
   // B4 T24 (FINAL-m25, D27): el foco blanco común de design-system.ts (FOCOS.blanco: outline-white separado 2 px).
@@ -3265,6 +3266,22 @@ console.log('--- B4 T24 f3 (el anillo recortado, duda 1 y m8 de f1 r3): «Comple
   trae(rec, "<span className={confirmando ? 'invisible' : undefined}>Confirmar</span>");
   assert.match(rec, /className=\{`relative inline-flex items-center gap-1 rounded-lg border border-teal-700/, 'el spinner se ubica sobre el botón');
   assert.equal(anchoVisible(leerFuente('app/dashboard/compras/columnas-recepcion.tsx'), 'export function columnasRecepcion'), 696, 'Recepciones: sin ensanchar');
+}
+
+console.log('--- B4 T24 f3 (F57, F54): el Hub de Compras — «Reintentar» de los PVEN da señal mientras carga; los textos del panel con GC:12 ---');
+{
+  const hub = leerFuente('app/dashboard/compras/page.tsx');
+  // F57: la lista de consolidación con la vuelta de su carga, como stats; mientras va el reintento, «Cargando…» y el botón apagado.
+  trae(hub, 'const cargandoVentas = ventas.vuelta !== vueltaVentas;');
+  trae(hub, 'cargandoVentas={cargandoVentas}');
+  trae(hub, "<button type=\"button\" onClick={onReintentarVentas} disabled={cargandoVentas} aria-busy={cargandoVentas}");
+  trae(hub, "{cargandoVentas ? 'Cargando…' : 'Reintentar'}");
+  // F54: «Información», «Transportadora», «Cant.» y la etiqueta del estado (infoEstadoPedido), nunca el código.
+  for (const viejo of ["l:'Info PEC'", "['Carrier',", '>Qty<', '>PEND. COMPRA<']) noTrae(hub, viejo, `sin ${viejo}`);
+  trae(hub, "l:'Información'");
+  trae(hub, "['Transportadora',");
+  trae(hub, '<th className="px-4 py-3 text-center">Cant.</th>');
+  trae(hub, "{infoEstadoPedido('PENDIENTE_COMPRA').label}");
 }
 
 console.log('\nOK: test_estados_compras.mjs');

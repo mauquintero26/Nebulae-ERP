@@ -35,6 +35,8 @@ import {
 } from '@/lib/tabla';
 import { PERIODO_KPI, tarjetasHubCompras } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
+// B4 T24 f3 (F54): la etiqueta del estado del pedido de venta (el chip del panel), nunca el código.
+import { infoEstadoPedido } from '@/lib/estados-pedido';
 import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, consultaColumnaPec, grupoMesPec, infoEstadoPec,
   opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec, repartirCancelacionPec, resumenCancelacionPec, tarjetaPec,
@@ -120,12 +122,14 @@ type PropsPanelPec = {
   /** B4 T14 r1 (m9): el error de GET /ventas/pedidos (la lista de consolidación), y volver a pedirla. */
   errorVentas: unknown;
   onReintentarVentas: () => void;
+  /** B4 T24 f3 (F57): la lista de consolidación va en camino (el reintento da señal: «Cargando…» y el botón apagado). */
+  cargandoVentas: boolean;
   /** B4 T14 r1 (m10): sube cuando la página pide releer el detalle (cancelar falló y el servidor pide recargar). */
   vueltaDetalle: number;
 };
 
 function PecDetailPanel({
-  pec, pedidosVenta, onClose, onUpdate, onToast, onCancelar, errorVentas, onReintentarVentas, vueltaDetalle,
+  pec, pedidosVenta, onClose, onUpdate, onToast, onCancelar, errorVentas, onReintentarVentas, cargandoVentas, vueltaDetalle,
 }: PropsPanelPec) {
   const [detail, setDetail] = useState<FilaPec | null>(pec);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -244,7 +248,7 @@ function PecDetailPanel({
 
         {/* Tab bar */}
         <div className="flex items-center gap-1 px-8 py-2 border-b border-gray-100 bg-white shrink-0">
-          {[{k:'info',l:'Info PEC'},{k:'pvens',l:'Pedidos de Venta'},{k:'productos',l:'Productos'}].map(function(t){ return (
+          {[{k:'info',l:'Información'},{k:'pvens',l:'Pedidos de Venta'},{k:'productos',l:'Productos'}].map(function(t){ return (
             <button key={t.k} onClick={()=>setTab(t.k)} className={'px-4 py-2 rounded-lg text-sm font-bold transition-all ' + (tab===t.k?'bg-purple-600 text-white shadow':'text-gray-600 hover:bg-purple-50 hover:text-purple-700')}>{t.l}</button>
           ); })}
         </div>
@@ -276,7 +280,7 @@ function PecDetailPanel({
             <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
               <p className="text-xs font-black text-gray-400 uppercase mb-3">Pago y logística</p>
               <div className="grid grid-cols-2 gap-3 text-xs text-gray-600">
-                {[['Modalidad',(detail&&detail.modalidad_pago)||'-'],['Carrier',(detail&&detail.carrier)||'-'],['Tracking',(detail&&detail.tracking_number)||'-']].map(function(r,i){return(
+                {[['Modalidad',(detail&&detail.modalidad_pago)||'-'],['Transportadora',(detail&&detail.carrier)||'-'],['Tracking',(detail&&detail.tracking_number)||'-']].map(function(r,i){return(
                   <div key={i}><span className="block text-gray-400 font-black uppercase mb-0.5">{r[0]}</span>{r[1]}</div>
                 );})}
               </div>
@@ -372,9 +376,9 @@ function PecDetailPanel({
                   {errorVentas ? (
                     <div className="py-8 text-center space-y-3">
                       <p role="alert" className="text-sm font-bold text-rose-700">No se pudieron cargar los pedidos de venta.</p>
-                      <button type="button" onClick={onReintentarVentas}
-                        className={`inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 ${FOCO_VISIBLE}`}>
-                        <RefreshCw size={13} aria-hidden="true"/> Reintentar
+                      <button type="button" onClick={onReintentarVentas} disabled={cargandoVentas} aria-busy={cargandoVentas}
+                        className={`inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 ${FOCO_VISIBLE}`}>
+                        <RefreshCw size={13} aria-hidden="true" className={cargandoVentas ? 'animate-spin' : undefined}/> {cargandoVentas ? 'Cargando…' : 'Reintentar'}
                       </button>
                     </div>
                   ) : filteredPvens.length === 0 && (
@@ -388,7 +392,7 @@ function PecDetailPanel({
                       <div className="flex-1">
                         <div className="flex items-center gap-2">
                           <span className="font-bold text-gray-900 text-sm">{p.numero}</span>
-                          <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-bold">PEND. COMPRA</span>
+                          <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-bold">{infoEstadoPedido('PENDIENTE_COMPRA').label}</span>
                         </div>
                         <p className="text-xs text-gray-500">{p.customer_name||'-'} · {textoInstante(p.created_at)}</p>
                         <p className="text-xs font-bold text-indigo-700 mt-0.5">{fCOP(p.total_cop||p.total||0)} · {(p.productos||[]).length} producto(s)</p>
@@ -414,7 +418,7 @@ function PecDetailPanel({
                 <div className="p-5 border-b border-gray-100"><p className="text-xs font-black text-gray-400 uppercase">Productos del PEC</p></div>
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 border-b border-gray-100 text-xs text-gray-400 font-black uppercase">
-                    <tr><th className="px-5 py-3 text-left">Producto</th><th className="px-4 py-3 text-center">Qty</th><th className="px-4 py-3 text-right">Precio</th><th className="px-4 py-3 text-right">Subtotal</th></tr>
+                    <tr><th className="px-5 py-3 text-left">Producto</th><th className="px-4 py-3 text-center">Cant.</th><th className="px-4 py-3 text-right">Precio</th><th className="px-4 py-3 text-right">Subtotal</th></tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {(detail?.productos||[]).map(function(p,i){ return (
@@ -624,15 +628,17 @@ export default function ComprasHub() {
   // B1 a B3 (queda igual): los pedidos de venta del panel de consolidación (sus PENDIENTE_COMPRA se filtran en el panel).
   // T14 r1 (m9): si el GET falla, el error queda en el estado (el panel lo dice con «Reintentar») y la lista de antes se
   // conserva; nunca se presenta como una lista vacía.
-  const [ventas, setVentas] = useState<{ filas: FilaVenta[]; error: unknown }>({ filas: [], error: null });
+  // B4 T24 f3 (F57): con la vuelta de la carga, como stats: mientras no llega la de esta vuelta, el panel dice «Cargando…».
+  const [ventas, setVentas] = useState<{ vuelta: number; filas: FilaVenta[]; error: unknown }>({ vuelta: -1, filas: [], error: null });
   const [vueltaVentas, setVueltaVentas] = useState(0);
   useEffect(() => {
     let vigente = true;
     apiFetch('/ventas/pedidos?limit=200')
-      .then((r) => { if (vigente) setVentas({ filas: Array.isArray(r) ? r : (r && Array.isArray(r.data) ? r.data : []), error: null }); })
-      .catch((err: unknown) => { if (vigente) setVentas((v) => ({ filas: v.filas, error: err })); });
+      .then((r) => { if (vigente) setVentas({ vuelta: vueltaVentas, filas: Array.isArray(r) ? r : (r && Array.isArray(r.data) ? r.data : []), error: null }); })
+      .catch((err: unknown) => { if (vigente) setVentas((v) => ({ vuelta: vueltaVentas, filas: v.filas, error: err })); });
     return () => { vigente = false; };
   }, [vueltaVentas]);
+  const cargandoVentas = ventas.vuelta !== vueltaVentas;
   // m10: releer el detalle del panel abierto cuando cancelar desde él falla y el servidor pide recargar.
   const [vueltaDetalle, setVueltaDetalle] = useState(0);
 
@@ -821,6 +827,7 @@ export default function ComprasHub() {
           pedidosVenta={ventas.filas}
           errorVentas={ventas.error}
           onReintentarVentas={() => setVueltaVentas((n) => n + 1)}
+          cargandoVentas={cargandoVentas}
           vueltaDetalle={vueltaDetalle}
           onClose={()=>setSelectedPec(null)}
           onUpdate={recargarTodo}
