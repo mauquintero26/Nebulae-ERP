@@ -389,4 +389,58 @@ console.log('--- B4 T24 f2 r1 (m17, m19 + m37): puedeDespachar (una sola copia) 
   }
 }
 
+console.log('--- B4 T24 f3 (FINAL-C4-f): accesoRecepciones, el conteo de una recepción con el require_roles real ---');
+{
+  const roles = await import('../src/lib/roles.js');
+  const TODOS = ['ADMIN', 'ASESOR', 'FINANZAS', 'COMPRAS', 'BODEGA', 'CONSULTA'];
+  assert.equal(typeof roles.accesoRecepciones, 'function', 'accesoRecepciones existe');
+  // El ruling 5: BODEGA cuenta (PATCH por línea) y confirma; COMPRAS ve el conteo en solo lectura; ADMIN ve todo. La bodega receptora
+  // (PATCH /recepciones/{id}) y recepcionar un PEC son de ADMIN y COMPRAS; el conteo de una recepción heredada (sin GRL: el PATCH en
+  // lote y después la confirmación), solo de ADMIN, el único con los dos permisos.
+  for (const r of TODOS) {
+    assert.deepEqual(roles.accesoRecepciones(r), {
+      listo: true,
+      contar: r === 'ADMIN' || r === 'BODEGA',
+      confirmar: r === 'ADMIN' || r === 'BODEGA',
+      contarHeredada: r === 'ADMIN',
+      bodega: r === 'ADMIN' || r === 'COMPRAS',
+      recepcionar: r === 'ADMIN' || r === 'COMPRAS',
+    }, r);
+  }
+  assert.deepEqual(roles.accesoRecepciones(' bodega '), roles.accesoRecepciones('BODEGA'));
+  for (const r of RAROS) {
+    assert.deepEqual(roles.accesoRecepciones(r),
+      { listo: false, contar: false, confirmar: false, contarHeredada: false, bodega: false, recepcionar: false }, JSON.stringify(r));
+  }
+  assert.equal(roles.TEXTO_CONTEO_SOLO_VER, 'El conteo y la confirmación los hace Bodega.');
+  assert.equal(roles.TEXTO_RECEPCION_HEREDADA, 'Esta recepción es anterior al conteo por línea; la cierra Compras o la Administración.');
+  // El require_roles real (backend/app/api/v1/erp_compras.py, solo lectura): si cambia, esta prueba lo dice.
+  const compras = readFileSync(new URL('../../backend/app/api/v1/erp_compras.py', import.meta.url), 'utf8');
+  const rolesDe = (decorador) => {
+    const i = compras.indexOf(decorador);
+    assert.ok(i >= 0, decorador);
+    return compras.slice(i, i + 500).match(/require_roles\(([^)]*)\)/)?.[1];
+  };
+  assert.equal(rolesDe('@router.patch("/recepciones/{eninv_id}/lineas/{grl_id}")'), '*ROLE_ADMIN, *ROLE_COMPRAS, *ROLE_BODEGA', 'update_grl');
+  assert.equal(rolesDe('@router.post("/recepciones/{eninv_id}/confirmar")'), '*ROLE_ADMIN, *ROLE_BODEGA', 'confirmar_recepcion');
+  assert.equal(rolesDe('@router.patch("/recepciones/{eninv_id}")'), '*ROLE_ADMIN, *ROLE_COMPRAS', 'update_recepcion (el lote y la bodega)');
+  assert.equal(rolesDe('@router.post("/pedidos/{pec_id}/recepcionar")'), '*ROLE_ADMIN, *ROLE_COMPRAS', 'recepcionar un PEC');
+  // accionesConteo: lo que ofrece el detalle del conteo (recepciones/[id]), por rol, estado y si la recepción es heredada (sin GRL).
+  const { accionesConteo } = roles;
+  assert.equal(typeof accionesConteo, 'function', 'accionesConteo existe');
+  const nada = { contar: false, validar: false, texto: null };
+  for (const r of TODOS) {
+    // Una recepción que ya no está por confirmar no ofrece nada (la pantalla dice «Recepción no editable en este estado»).
+    assert.deepEqual(accionesConteo({ porConfirmar: false, heredada: false, rol: r }), nada, `${r}: no por confirmar`);
+    assert.deepEqual(accionesConteo({ porConfirmar: false, heredada: true, rol: r }), nada, `${r}: no por confirmar, heredada`);
+    const cuenta = r === 'ADMIN' || r === 'BODEGA';
+    assert.deepEqual(accionesConteo({ porConfirmar: true, heredada: false, rol: r }),
+      cuenta ? { contar: true, validar: true, texto: null } : { contar: false, validar: false, texto: roles.TEXTO_CONTEO_SOLO_VER }, `${r}: por confirmar`);
+    assert.deepEqual(accionesConteo({ porConfirmar: true, heredada: true, rol: r }),
+      r === 'ADMIN' ? { contar: true, validar: true, texto: null } : { contar: false, validar: false, texto: roles.TEXTO_RECEPCION_HEREDADA }, `${r}: heredada`);
+  }
+  // Mientras se lee el rol, nada (ni el texto): no se sabe todavía qué puede.
+  for (const r of RAROS) assert.deepEqual(accionesConteo({ porConfirmar: true, heredada: false, rol: r }), nada, JSON.stringify(r));
+}
+
 console.log('OK test_roles.mjs');

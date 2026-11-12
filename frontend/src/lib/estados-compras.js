@@ -793,16 +793,84 @@ export function recargaReponeLineas({ silencioso = false, recepcion }) {
 }
 
 /**
+ * B4 T24 f3 (FINAL-C4-f; m16 del backend r1): el tope de una cantidad del conteo por línea. update_grl acepta un entero de 0 a
+ * 99.999.999 (sale de Numeric(10, 2) de la columna); 2.5 da 422.
+ */
+export const MAX_CANTIDAD_CONTEO = 99999999;
+
+/**
+ * B4 T24 f3 (FINAL-C4-f): la cantidad recibida que se escribe en el conteo, leída SIN truncar (antes parseInt: «2.5» pasaba como 2 en
+ * silencio). Vacío, 0 (el campo vacío es «nada contado»); lo demás, Number tal cual (errorCantidadConteo lo valida antes de mandar).
+ * @param {unknown} texto
+ * @returns {number}
+ */
+export function leerCantidadConteo(texto) {
+  const t = String(texto ?? '').trim();
+  return t === '' ? 0 : Number(t);
+}
+
+/**
+ * B4 T24 f3 (FINAL-C4-f): el aviso en español de una cantidad del conteo que el servidor no acepta (un entero de 0 a 99.999.999), o
+ * null si vale.
+ * @param {unknown} n
+ * @param {string} nombre
+ * @returns {string | null}
+ */
+export function errorCantidadConteo(n, nombre) {
+  if (typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= MAX_CANTIDAD_CONTEO) return null;
+  return `La cantidad recibida de «${nombre}» debe ser un número entero entre 0 y 99.999.999.`;
+}
+
+/**
+ * B4 T24 f3 (FINAL-C4-f, ruling 5): una recepción heredada, sin GRL: alguna de sus líneas no trae grl_id, así que el PATCH por línea
+ * no la alcanza.
+ * @param {unknown} lineas
+ * @returns {boolean}
+ */
+export function esConteoHeredado(lineas) {
+  return Array.isArray(lineas) && lineas.some((l) => l?.grl_id == null);
+}
+
+/**
+ * B4 T24 f3 (FINAL-C4-f, ruling 5): el conteo con el PATCH por línea (PATCH /compras/recepciones/{id}/lineas/{grl_id}, que BODEGA
+ * tiene): una petición por línea cambiada frente a lo que dice el servidor (`servidor`: d.productos, que update_grl regenera desde C4-b).
+ * El cuerpo deja la línea como la dejaba el PATCH en lote: la recibida (un entero) y rechazadas y cuarentena en 0 (el lote las ponía en 0
+ * si no venían). Cambiada: la recibida es otra (una del servidor sin contar, null, cuenta aunque la de la pantalla sea 0: el lote la
+ * dejaba en 0 explícito y la confirmación exige un número), o rechazadas o cuarentena no están en 0. Las líneas sin grl_id (una
+ * heredada) no van. Antes de mandar nada se valida cada cantidad: con la primera que no vale, {error} con su aviso y ninguna petición.
+ * @param {unknown} servidor
+ * @param {unknown} locales
+ * @returns {{error: string | null, peticiones: {grl_id: number, cuerpo: {quantity_received: number, quantity_rejected: 0, quantity_quarantine: 0}}[]}}
+ */
+export function peticionesConteo(servidor, locales) {
+  const previas = new Map((Array.isArray(servidor) ? servidor : []).map((p) => [p?.grl_id, p]));
+  const peticiones = [];
+  for (const l of Array.isArray(locales) ? locales : []) {
+    const n = l?.qty_recibida ?? 0;
+    const error = errorCantidadConteo(n, textoLimpio(l?.nombre) ?? 'la línea');
+    if (error) return { error, peticiones: [] };
+    if (l?.grl_id == null) continue;
+    const p = previas.get(l.grl_id);
+    const igual = p != null && p.qty_recibida != null && Number(p.qty_recibida) === n
+      && !(Number(p.qty_rechazada) > 0) && !(Number(p.qty_cuarentena) > 0);
+    if (!igual) peticiones.push({ grl_id: l.grl_id, cuerpo: { quantity_received: n, quantity_rejected: 0, quantity_quarantine: 0 } });
+  }
+  return { error: null, peticiones };
+}
+
+/**
  * La tarjeta de una recepción en el tablero solo para ver (la forma de DatosTarjetaKanban): el número (sin él, ENINV-id),
  * el proveedor (o 'Sin proveedor'), el PEC de origen (o 'Entrada manual'), la insignia del estado, el chip «Retraso N
  * días» (dias_retraso de _gr_dict, solo si es mayor que 0), la bodega y el día (fecha de recepción o de creación) y, en
- * «Por contar», la acción «Contar y confirmar» hacia el conteo.
+ * «Por contar», la acción «Contar y confirmar» hacia el conteo. B4 T24 f3 (FINAL-C4-f): con `{contar: false}` (aditivo: el rol no
+ * cuenta, accesoRecepciones), sin esa acción; la tarjeta queda en «Abrir» (el Drawer, con «Abrir conteo»).
  * @param {any} r
+ * @param {{contar?: boolean}} [opciones]
  * @returns {{numero: string, tipo: 'ENINV', titulo: string, subtitulo: string, monto: null, estado: Readonly<InfoEstado>,
  *   chips: {texto: string, tono: string}[], tiempo: string, atrasada: boolean,
  *   accionPrincipal: {texto: string, href: string, tono: string} | null}}
  */
-export function tarjetaRecepcion(r) {
+export function tarjetaRecepcion(r, { contar = true } = {}) {
   const retraso = numeroFinito(r?.dias_retraso);
   const atrasada = retraso !== null && retraso > 0;
   const dia = fechaCorta(r?.fecha_recepcion || r?.created_at);
@@ -818,7 +886,7 @@ export function tarjetaRecepcion(r) {
     chips: atrasada ? [{ texto: `Retraso ${retraso} ${retraso === 1 ? 'día' : 'días'}`, tono: 'rose' }] : [],
     tiempo: dia ? `${bodega} · ${dia}` : bodega,
     atrasada,
-    accionPrincipal: porContar && r?.id != null
+    accionPrincipal: porContar && contar && r?.id != null
       ? { texto: 'Contar y confirmar', href: `/dashboard/compras/recepciones/${r.id}`, tono: 'teal' }
       : null,
   };

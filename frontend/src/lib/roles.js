@@ -287,3 +287,46 @@ export function accesoProveedores(rol) {
   if (normalizarRol(rol) === '') return { listo: false, editar: false };
   return { listo: true, editar: esAdminOCompras(rol) };
 }
+
+/** B4 T24 f3 (FINAL-C4-f, ruling 5): lo que ve quien no cuenta una recepción por confirmar (COMPRAS y los demás roles). */
+export const TEXTO_CONTEO_SOLO_VER = 'El conteo y la confirmación los hace Bodega.';
+/** B4 T24 f3 (FINAL-C4-f, ruling 5): una recepción heredada (sin GRL: no tiene PATCH por línea) a quien no la puede cerrar. */
+export const TEXTO_RECEPCION_HEREDADA = 'Esta recepción es anterior al conteo por línea; la cierra Compras o la Administración.';
+
+/**
+ * B4 T24 f3 (FINAL-C4-f, ruling 5): el conteo de una recepción (backend/app/api/v1/erp_compras.py, leído en solo lectura; test_roles lo
+ * vigila). BODEGA cuenta con el PATCH por línea (`contar`: PATCH /recepciones/{id}/lineas/{grl_id}, de ADMIN, COMPRAS y BODEGA) y
+ * confirma (`confirmar`: POST /recepciones/{id}/confirmar, de ADMIN y BODEGA); COMPRAS ve el conteo en solo lectura (el ruling, aunque el
+ * PATCH por línea lo admita); ADMIN ve todo. `contarHeredada`: una recepción sin GRL solo se cuenta con el PATCH en lote (ADMIN y
+ * COMPRAS) y después se confirma: solo ADMIN tiene los dos. `bodega` (la bodega receptora: el mismo PATCH /recepciones/{id}) y
+ * `recepcionar` (POST /pedidos/{id}/recepcionar): ADMIN y COMPRAS. Con un rol vacío (la hidratación), nada listo ni ofrecido.
+ * @param {unknown} rol
+ * @returns {{listo: boolean, contar: boolean, confirmar: boolean, contarHeredada: boolean, bodega: boolean, recepcionar: boolean}}
+ */
+export function accesoRecepciones(rol) {
+  if (normalizarRol(rol) === '') return { listo: false, contar: false, confirmar: false, contarHeredada: false, bodega: false, recepcionar: false };
+  const adminOBodega = esUnoDe(rol, 'ADMIN', 'BODEGA');
+  return {
+    listo: true, contar: adminOBodega, confirmar: adminOBodega, contarHeredada: esAdmin(rol), bodega: esAdminOCompras(rol),
+    recepcionar: esAdminOCompras(rol),
+  };
+}
+
+/**
+ * B4 T24 f3 (FINAL-C4-f): lo que ofrece el detalle del conteo de una recepción (recepciones/[id]): `contar` («Guardar Borrador» y los
+ * campos editables), `validar` («Cerrar y Validar Conteo») y `texto` (el motivo de solo lectura, o null). Una recepción que no está por
+ * confirmar, o con el rol todavía vacío, no ofrece nada (la pantalla dice su estado). Una heredada (sin GRL) solo la cuenta y la cierra
+ * quien tiene `contarHeredada` (ADMIN); a los demás, TEXTO_RECEPCION_HEREDADA, sin botones que den 403. Si el rol ni cuenta ni confirma,
+ * TEXTO_CONTEO_SOLO_VER.
+ * @param {{porConfirmar: boolean, heredada: boolean, rol: unknown}} entrada
+ * @returns {{contar: boolean, validar: boolean, texto: string | null}}
+ */
+export function accionesConteo({ porConfirmar, heredada, rol }) {
+  const acceso = accesoRecepciones(rol);
+  if (!acceso.listo || !porConfirmar) return { contar: false, validar: false, texto: null };
+  if (heredada) {
+    return acceso.contarHeredada ? { contar: true, validar: true, texto: null } : { contar: false, validar: false, texto: TEXTO_RECEPCION_HEREDADA };
+  }
+  if (!acceso.contar && !acceso.confirmar) return { contar: false, validar: false, texto: TEXTO_CONTEO_SOLO_VER };
+  return { contar: acceso.contar, validar: acceso.confirmar, texto: null };
+}

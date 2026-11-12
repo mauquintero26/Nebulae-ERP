@@ -1316,7 +1316,8 @@ console.log('--- TEST 32 (B4 T16A): Recepciones (compras/recepciones/page.tsx) y
   const tab = /<TableroKanban([\s\S]*?)\/>/.exec(pag)?.[1] ?? '';
   assert.match(pag, /const TEXTO_SOLO_VER = 'Este tablero es para ver: las recepciones se confirman contando la mercancía\.';/);
   assert.match(tab, /soloLectura=\{TEXTO_SOLO_VER\}/);
-  assert.match(tab, /tarjetaDe=\{tarjetaRecepcion\}/);
+  // B4 T24 f3 (FINAL-C4-f, D27): la tarjeta sale de tarjetaRecepcion con `contar` del rol (tarjetaDeRecepcion; el bloque de C4-f la fija).
+  assert.match(tab, /tarjetaDe=\{tarjetaDeRecepcion\}/);
   assert.match(tab, /onAbrir=\{abrir\}/, 'el clic abre el Drawer, como la fila');
   assert.ok(!/regla=|onCambio=|onAccion=/.test(tab), 'sin regla: no se arrastra');
   // La tabla (R26, D41): estándar en el servidor; toda la fila abre el Drawer; las vistas reales de RP41 y D6.
@@ -1377,7 +1378,8 @@ console.log('--- TEST 33-b (B4 T24 r1, m15): la recarga silenciosa del conteo de
   assert.match(cont, /if \(!silencioso\) setLoadError\(err\.message \|\| 'No se pudo cargar la recepción'\);\s*else avisarError\(err, 'No se pudo recargar la recepción'\);/);
   assert.match(cont, /if \(!silencioso\) setLoading\(false\);\s*\}, \[params\.id, avisarError\]\);/);
   // Guardar el conteo (lo primero que hace validar) también recarga en silencio: el spinner vaciaba las observaciones antes de validar.
-  assert.match(cont, /productos: items\.map\(i => \(\{ grl_id: i\.grl_id, qty_recibida: Number\(i\.qty_recibida\) \|\| 0 \}\)\),\s*\}\),\s*\}\);\s*await loadRecepcion\(\{ silencioso: true \}\);/);
+  // B4 T24 f3 (FINAL-C4-f, D27): el guardado es el PATCH por línea (o el lote, en una heredada); la recarga silenciosa va después de los dos.
+  assert.match(cont, /for \(const p of peticiones\) \{\s*await apiFetch\([^\n]*\);\s*\}\s*\}\s*await loadRecepcion\(\{ silencioso: true \}\);\s*return true;/);
 }
 
 console.log('--- TEST 33 (B4 T16A, TABLA-compras punto 12; RP30): el conteo de una recepción (recepciones/[id]/page.tsx) en modo simple y sin diálogos nativos ---');
@@ -1386,7 +1388,8 @@ console.log('--- TEST 33 (B4 T16A, TABLA-compras punto 12; RP30): el conteo de u
   const codigo = cont.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '');
   // Los 3 diálogos nativos de B1 a B3 (bodega, guardar el conteo y validar) pasaron a useAvisos con el mismo texto.
   assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(codigo), 'sin diálogos nativos');
-  assert.match(cont, /const \{ avisarError \} = useAvisos\(\);/);
+  // B4 T24 f3 (FINAL-C4-f, D27): también `avisar`, para el aviso de la lib (una cantidad que no es un entero ≥ 0) antes de mandar.
+  assert.match(cont, /const \{ avisar, avisarError \} = useAvisos\(\);/);
   for (const texto of ['Error al asignar la bodega', 'Error al guardar el conteo', 'Error al validar la recepción']) {
     assert.match(cont, new RegExp(`avisarError\\(err, '${texto}'\\)`), texto);
   }
@@ -1406,7 +1409,8 @@ console.log('--- TEST 33 (B4 T16A, TABLA-compras punto 12; RP30): el conteo de u
   assert.match(cont, /const isEditable = data\?\.estado === 'BORRADOR';/, 'solo un BORRADOR se cuenta');
   assert.match(cont, /if \(!isEditable\) return;\s*setItems\(prev => prev\.map\(\(it, i\) => \(i === idx \? \{ \.\.\.it, qty_recibida: val \} : it\)\)\);/, 'el conteo sigue editable solo en BORRADOR');
   assert.equal((cont.match(/disabled=\{!control\?\.editable\}/g) ?? []).length, 2, 'los dos campos (cantidad y observaciones) se apagan cuando no es editable');
-  assert.match(cont, /onChange=\{\(e\) => control\?\.actualizar\(l\.idx, parseInt\(e\.target\.value\) \|\| 0\)\}/, 'y escribe en la línea de esa fila');
+  // B4 T24 f3 (FINAL-C4-f, D27): la cantidad se lee con la lib, sin truncar (antes parseInt); la lib la valida antes de mandar.
+  assert.match(cont, /onChange=\{\(e\) => control\?\.actualizar\(l\.idx, leerCantidadConteo\(e\.target\.value\)\)\}/, 'y escribe en la línea de esa fila');
   assert.match(cont, /aria-label=\{`Cantidad recibida de \$\{l\.nombre\}`\}/);
   // Lo de B1 a B3 sigue: guardar el borrador, cerrar y validar (guarda antes de confirmar), la bodega y el exceso.
   for (const texto of ['Guardar Borrador', 'Cerrar y Validar Conteo', 'Bodega Receptora', 'Alerta de Discrepancia en Conteo Físico']) assert.ok(cont.includes(texto), texto);
@@ -3073,6 +3077,116 @@ console.log('--- B4 T24 r2 (m2, m10): los tableros de PEC, el esqueleto mientras
     assert.match(f, /!accesoPec\.listo \? <EsqueletoTablero \/> : <TableroKanban/, `${ruta}: el esqueleto con el rol vacío`);
     assert.match(f, /import \{[^}]*\bEsqueletoTablero\b[^}]*\} from '@\/components\/ui';/, `${ruta}: la pieza común`);
   }
+}
+
+console.log('--- B4 T24 f3 (FINAL-C4-f): el conteo con el PATCH por línea, validado en la lib; los botones y el tablero por rol ---');
+{
+  const { leerCantidadConteo, errorCantidadConteo, esConteoHeredado, peticionesConteo, MAX_CANTIDAD_CONTEO, tarjetaRecepcion } = ec;
+  for (const [nombre, f] of Object.entries({ leerCantidadConteo, errorCantidadConteo, esConteoHeredado, peticionesConteo })) {
+    assert.equal(typeof f, 'function', `${nombre} existe`);
+  }
+  // El tope de update_grl (m16 del backend r1): Numeric(10, 2) de la columna.
+  assert.equal(MAX_CANTIDAD_CONTEO, 99999999);
+  // Lo escrito, sin truncar: «2.5» ya no pasa como 2 en silencio; vacío es «nada contado» (0).
+  for (const [texto, n] of [['', 0], ['  ', 0], [null, 0], [undefined, 0], ['3', 3], [' 7 ', 7], ['2.5', 2.5], ['-1', -1], ['0', 0]]) {
+    assert.equal(leerCantidadConteo(texto), n, JSON.stringify(texto));
+  }
+  // La validación en la lib antes de mandar: un entero de 0 a 99.999.999 (el servidor da 422 con 2.5).
+  for (const bueno of [0, 3, 99999999]) assert.equal(errorCantidadConteo(bueno, 'Tornillo'), null, String(bueno));
+  const aviso = 'La cantidad recibida de «Tornillo» debe ser un número entero entre 0 y 99.999.999.';
+  for (const malo of [2.5, -1, 100000000, NaN, Infinity, '3', null, undefined]) assert.equal(errorCantidadConteo(malo, 'Tornillo'), aviso, String(malo));
+  // Heredada: alguna línea sin grl_id (sin PATCH por línea).
+  assert.equal(esConteoHeredado([{ grl_id: 1 }, { grl_id: 2 }]), false);
+  assert.equal(esConteoHeredado([{ grl_id: 1 }, {}]), true);
+  assert.equal(esConteoHeredado([{ grl_id: null }]), true);
+  assert.equal(esConteoHeredado([]), false, 'sin líneas no es heredada');
+  assert.equal(esConteoHeredado(null), false);
+  // Una petición por línea cambiada frente al servidor; el cuerpo deja la línea como el lote (rechazadas y cuarentena en 0).
+  const servidor = [
+    { grl_id: 1, qty_recibida: 5, qty_rechazada: 0, qty_cuarentena: 0 },
+    { grl_id: 2, qty_recibida: null, qty_rechazada: 0, qty_cuarentena: 0 },
+    { grl_id: 3, qty_recibida: 4, qty_rechazada: 1, qty_cuarentena: 0 },
+    { grl_id: 4, qty_recibida: 7, qty_rechazada: 0, qty_cuarentena: 0 },
+    { grl_id: 5, qty_recibida: 2, qty_rechazada: 0, qty_cuarentena: 3 },
+  ];
+  const locales = [
+    { grl_id: 1, nombre: 'A', qty_recibida: 5 },
+    { grl_id: 2, nombre: 'B', qty_recibida: 0 },
+    { grl_id: 3, nombre: 'C', qty_recibida: 4 },
+    { grl_id: 4, nombre: 'D', qty_recibida: 9 },
+    { grl_id: 5, nombre: 'E', qty_recibida: 2 },
+    { grl_id: 6, nombre: 'F', qty_recibida: 1 },
+  ];
+  const cuerpo = (n) => ({ quantity_received: n, quantity_rejected: 0, quantity_quarantine: 0 });
+  assert.deepEqual(peticionesConteo(servidor, locales), {
+    error: null,
+    peticiones: [
+      { grl_id: 2, cuerpo: cuerpo(0) }, // sin contar en el servidor: va con su 0 explícito (la confirmación exige un número)
+      { grl_id: 3, cuerpo: cuerpo(4) }, // las rechazadas no están en 0: el lote las ponía en 0
+      { grl_id: 4, cuerpo: cuerpo(9) }, // cambió
+      { grl_id: 5, cuerpo: cuerpo(2) }, // la cuarentena no está en 0
+      { grl_id: 6, cuerpo: cuerpo(1) }, // el servidor no la trae
+    ],
+  });
+  assert.deepEqual(peticionesConteo(servidor, locales.slice(0, 1)), { error: null, peticiones: [] }, 'igual al servidor: ninguna');
+  assert.deepEqual(peticionesConteo(null, null), { error: null, peticiones: [] });
+  // Una cantidad que no vale: su aviso y NINGUNA petición, aunque otras líneas sí cambien (nada se manda a medias).
+  assert.deepEqual(peticionesConteo(servidor, [{ grl_id: 4, nombre: 'D', qty_recibida: 9 }, { grl_id: 1, nombre: ' Tornillo ', qty_recibida: 2.5 }]),
+    { error: aviso, peticiones: [] });
+  assert.equal(peticionesConteo(servidor, [{ grl_id: 1, qty_recibida: -3 }]).error,
+    'La cantidad recibida de «la línea» debe ser un número entero entre 0 y 99.999.999.', 'sin nombre');
+  // Las líneas sin grl_id (una heredada) no van, pero se validan igual.
+  assert.deepEqual(peticionesConteo([], [{ nombre: 'X', qty_recibida: 3 }]), { error: null, peticiones: [] });
+  assert.match(peticionesConteo([], [{ nombre: 'X', qty_recibida: 1.5 }]).error ?? '', /«X»/);
+  // El tablero: quien no cuenta no ve «Contar y confirmar» (la tarjeta queda en «Abrir»); sin opciones, como siempre.
+  const rec = { id: 7, estado: 'BORRADOR' };
+  assert.equal(tarjetaRecepcion(rec).accionPrincipal?.texto, 'Contar y confirmar', 'sin opciones, como antes');
+  assert.equal(tarjetaRecepcion(rec, { contar: true }).accionPrincipal?.texto, 'Contar y confirmar');
+  assert.equal(tarjetaRecepcion(rec, { contar: false }).accionPrincipal, null, 'quien no cuenta');
+  assert.equal(tarjetaRecepcion({ id: 7, estado: 'COMPLETADA' }, { contar: true }).accionPrincipal, null);
+
+  // El cableado del detalle (recepciones/[id]): el rol después de montar, el PATCH por línea, el lote solo en la heredada y los botones.
+  const cont = leerFuente('app/dashboard/compras/recepciones/[id]/page.tsx');
+  trae(cont, "import { accesoRecepciones, accionesConteo } from '@/lib/roles';");
+  trae(cont, 'const rol = useRolActual();');
+  trae(cont, 'const heredada = esConteoHeredado(items);');
+  trae(cont, 'const conteo = accionesConteo({ porConfirmar: isEditable, heredada, rol });');
+  assert.match(cont, /if \(!data\?\.id \|\| !conteo\.contar\) return false;\s*const \{ error, peticiones \} = peticionesConteo\(data\.productos, items\);\s*if \(error\) \{ avisar\(error, \{ tono: 'error' \}\); return false; \}/,
+    'la lib valida antes de mandar y el aviso es suyo');
+  assert.match(cont, /for \(const p of peticiones\) \{\s*await apiFetch\(`\/compras\/recepciones\/\$\{data\.id\}\/lineas\/\$\{p\.grl_id\}`, \{ method: 'PATCH', body: JSON\.stringify\(p\.cuerpo\) \}\);\s*\}/,
+    'una petición por línea, en serie (si una falla, el resto no sale)');
+  const ramaHeredada = cont.indexOf('if (heredada) {');
+  const lote = cont.indexOf('body: JSON.stringify({ productos: items.map');
+  assert.ok(ramaHeredada >= 0 && lote > ramaHeredada && lote < cont.indexOf('} else {', ramaHeredada), 'el PATCH en lote, solo en la rama heredada (ADMIN)');
+  assert.equal((cont.match(/productos: items\.map/g) ?? []).length, 1, 'un solo PATCH en lote');
+  assert.match(cont, /avisarError\(err, 'Error al guardar el conteo'\);\s*if \(recargarTrasError\(err\)\) await loadRecepcion\(\{ silencioso: true \}\);\s*return false;/,
+    'si una falla: se avisa con el texto del servidor (también su 422) y, con la regla única, se recarga');
+  assert.match(cont, /async function validateConteo\(\) \{\s*if \(!data\?\.id \|\| !conteo\.validar\) return;/);
+  assert.match(cont, /\{conteo\.contar && \(\s*<Button variant="secondary" icon=\{Save\}[^>]*>\s*Guardar Borrador/);
+  assert.match(cont, /\{conteo\.validar && \(\s*<Button color="teal" icon=\{PackageCheck\}[^>]*>\s*Cerrar y Validar Conteo/);
+  assert.match(cont, /\{conteo\.texto && <span role="status"[^>]*>\{conteo\.texto\}<\/span>\}/, 'COMPRAS (o una heredada): el texto de solo lectura');
+  assert.match(cont, /editable: conteo\.contar, actualizar: updateReceived \}\), \[conteo\.contar, updateReceived\]\)/, 'los campos, editables solo para quien cuenta');
+  trae(cont, 'const puedeBodega = isEditable && accesoRecepciones(rol).bodega;', 'la bodega receptora: el PATCH de la recepción (ADMIN y COMPRAS)');
+  assert.match(cont, /\{puedeBodega \? \(\s*<select/);
+  trae(cont, 'disabled={!conteo.validar}', 'las notas van con la confirmación');
+  assert.ok(!/parseInt\(/.test(cont), 'sin parseInt: «2.5» no se trunca en silencio');
+
+  // Compras › Recepciones: «Confirmar» (fila, menú y Drawer) solo con confirmar; «Recepcionar PEC» con recepcionar; la tarjeta del tablero.
+  const pag = leerFuente('app/dashboard/compras/recepciones/page.tsx');
+  trae(pag, 'const accesoRec = accesoRecepciones(useRolActual());');
+  trae(pag, 'oculto: !porConfirmar || !acciones?.puedeConfirmar,');
+  assert.match(pag, /\{porConfirmar && acciones\?\.puedeConfirmar && \(\s*<button/);
+  trae(pag, 'puedeConfirmar: accesoRec.confirmar,');
+  trae(pag, '{esRecepcionPorConfirmar(selectedItem) && accesoRec.confirmar && (');
+  assert.match(pag, /\{accesoRec\.recepcionar && \(\s*<Button size="sm" color="teal" icon=\{Plus\}/);
+  trae(pag, 'tarjetaRecepcion(r, { contar: accesoRec.contar }), [accesoRec.contar])');
+  trae(etiquetaJsx(pag, '<TableroKanban'), 'tarjetaDe={tarjetaDeRecepcion}');
+  // Inventario › Recepciones: «Contar y confirmar en Compras» solo a quien cuenta; la misma tarjeta.
+  const inv = leerFuente('app/dashboard/inventario/recepciones/page.tsx');
+  trae(inv, 'const accesoRec = accesoRecepciones(useRolActual());');
+  trae(inv, "esRecepcionPorConfirmar(selectedItem) && accesoRec.contar ? 'Contar y confirmar en Compras' : 'Abrir en Compras'");
+  trae(inv, 'tarjetaRecepcion(r, { contar: accesoRec.contar }), [accesoRec.contar])');
+  trae(etiquetaJsx(inv, '<TableroKanban'), 'tarjetaDe={tarjetaDeRecepcion}');
 }
 
 console.log('\nOK: test_estados_compras.mjs');
