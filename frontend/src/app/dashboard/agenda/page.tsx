@@ -27,7 +27,7 @@ import { RESERVA_BOTON_IA } from '@/lib/design-system';
 import { useRolActual } from '@/components/ui/useRolActual';
 import {
   datosDeRespuesta, esRespuestaVigente, estadoFichaCliente, estadoPedidosProveedor, numeroFinito, pedidosDeProveedor, siguientePerfil,
-  tarjetasFichaCliente, tarjetasFichaProveedor, textoProveedoresCortados,
+  tarjetasFichaCliente, tarjetasFichaProveedor, textoProveedoresCortados, vistaListaAgenda,
 } from '@/lib/kpis';
 import { infoEstadoPec } from '@/lib/estados-compras';
 import { resumenFichaCliente } from '@/lib/kpis-ventas';
@@ -120,6 +120,9 @@ export default function AgendaPage() {
   const [totalProveedores, setTotalProveedores] = useState<number | null>(null);
   const [selectedSupplier, setSelectedSupplier] = useState<any | null>(null);
   const [loadingSuppliers, setLoadingSuppliers] = useState(false);
+  // B4 T24 f4 (FINAL-m20): el error de la carga de proveedores y de clientes (antes un console.error mudo y un vacío falso).
+  const [errorProveedores, setErrorProveedores] = useState<unknown>(null);
+  const [errorClientes, setErrorClientes] = useState<unknown>(null);
   const [supplierSearch, setSupplierSearch] = useState('');
   const [supplierPecs, setSupplierPecs] = useState<any[]>([]);
   // El total de GET /compras/pedidos?supplier_id= (la lista trae como mucho 200) y su error: el «Pedidos de compra» de la ficha.
@@ -147,6 +150,7 @@ export default function AgendaPage() {
   const fetchCustomers = async () => {
     try {
       const raw = await getCustomers();
+      setErrorClientes(null);
       const list = raw.data || raw;
       if (Array.isArray(list)) {
         setCustomers(list.map((c: any) => ({
@@ -166,7 +170,7 @@ export default function AgendaPage() {
         })));
       }
     } catch (e) {
-      console.error('Error cargando clientes', e);
+      setErrorClientes(e);
     }
   };
 
@@ -189,8 +193,9 @@ export default function AgendaPage() {
       const list = res?.data || res || [];
       setTotalProveedores(numeroFinito(res?.total));
       setSuppliers(Array.isArray(list) ? list.map(proveedorDeServidor).filter(Boolean) : []);
+      setErrorProveedores(null);
     } catch (e) {
-      console.error('Error cargando proveedores', e);
+      setErrorProveedores(e);
     } finally {
       setLoadingSuppliers(false);
     }
@@ -237,6 +242,10 @@ export default function AgendaPage() {
   const errorPerfil = perfilDelCliente?.error ?? null;
   const estadoFicha = estadoFichaCliente(clienteActual, perfilDelCliente);
   const textoCortados = textoProveedoresCortados(totalProveedores, suppliers.length);
+  // B4 T24 f4 (FINAL-m20): el error se dice con el aviso común (un 403 sin «Reintentar») y nunca como «Sin proveedores registrados».
+  const avisoProveedores = avisoDeFuente(errorProveedores, 'No se pudieron cargar los proveedores');
+  const avisoClientes = avisoDeFuente(errorClientes, 'No se pudieron cargar los clientes');
+  const vistaProveedores = vistaListaAgenda({ cargando: loadingSuppliers, error: errorProveedores, cantidad: suppliers.length });
   const avisoPerfil = avisoDeFuente(errorPerfil, 'No se pudo cargar la ficha del cliente');
 
   const openClient = (client: any) => {
@@ -566,10 +575,11 @@ export default function AgendaPage() {
           </div>
 
           {textoCortados && <p className="mb-3 text-xs font-semibold text-slate-500">{textoCortados}</p>}
+          {avisoProveedores && <div className="mb-4"><AvisoFuente aviso={avisoProveedores} onReintentar={fetchSuppliers} reintentando={loadingSuppliers} /></div>}
           {/* Grid Proveedores */}
-          {loadingSuppliers ? (
+          {vistaProveedores === 'cargando' ? (
             <div className="py-20 text-center text-slate-400 text-sm">Cargando proveedores...</div>
-          ) : filteredSuppliers.length === 0 ? (
+          ) : vistaProveedores === 'error' ? null : filteredSuppliers.length === 0 ? (
             <div className="bg-white rounded-3xl p-12 text-center border border-slate-200 shadow-sm max-w-lg mx-auto">
               <Building2 className="text-slate-300 mx-auto mb-3" size={48} />
               <h3 className="font-black text-slate-800 text-lg">Sin proveedores registrados</h3>
@@ -1170,6 +1180,7 @@ export default function AgendaPage() {
           </span>
         </div>
 
+        {avisoClientes && <div className="mb-4"><AvisoFuente aviso={avisoClientes} onReintentar={fetchCustomers} /></div>}
         {/* Customer Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filteredCustomers.map(client => {

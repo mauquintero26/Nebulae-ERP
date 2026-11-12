@@ -1472,3 +1472,16 @@ export function textoProveedoresCortados(total, llegaron) {
   if (t === null || llegaron <= 0 || t <= llegaron) return null;
   return `Se muestran los primeros ${formatoEntero(llegaron)} de ${formatoEntero(t)} (por nombre)`;
 }
+
+/**
+ * B4 T24 f4 (FINAL-m20): qué pinta una lista de la Agenda (proveedores o clientes) según su carga. Un error no se vuelve un vacío falso:
+ * sin filas es 'error' (solo el aviso, también mientras se reintenta: el aviso dice «Reintentando…»); con filas de antes es 'lista' (el
+ * aviso va encima). Sin error: 'cargando' mientras pide, 'vacio' si no llegó ninguna y 'lista' si llegaron.
+ * @param {{cargando: boolean, error: unknown, cantidad: number}} carga
+ * @returns {'cargando' | 'error' | 'vacio' | 'lista'}
+ */
+export function vistaListaAgenda({ cargando, error, cantidad }) {
+  if (error) return cantidad > 0 ? 'lista' : 'error';
+  if (cargando) return 'cargando';
+  return cantidad > 0 ? 'lista' : 'vacio';
+}

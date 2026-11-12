@@ -1865,6 +1865,47 @@ console.log('--- TEST T24-c (B4 T24, F108): la Agenda ofrece Nuevo, Editar y Eli
   assert.match(c, /\{accesoProv\.editar && <p className="text-xs text-slate-500 mt-1 mb-6">Crea el primer proveedor para gestionar compras y pedidos PEC\.<\/p>\}/);
 }
 
+console.log('--- TEST T24-f4d (B4 T24 f4: FINAL-m20, F113 y F114): la Agenda no vuelve un error de carga un vacío falso ---');
+{
+  const { vistaListaAgenda, textoProveedoresCortados } = kpisLib;
+  // FINAL-m20: la regla, pura. Un error sin filas es 'error' (el aviso, nunca «Sin proveedores registrados» ni «+ Registrar»).
+  assert.equal(vistaListaAgenda({ cargando: true, error: null, cantidad: 0 }), 'cargando');
+  assert.equal(vistaListaAgenda({ cargando: false, error: null, cantidad: 0 }), 'vacio', 'un vacío de verdad');
+  assert.equal(vistaListaAgenda({ cargando: false, error: null, cantidad: 3 }), 'lista');
+  assert.equal(vistaListaAgenda({ cargando: false, error: new Error('500'), cantidad: 0 }), 'error', 'un 500 o la red no son un vacío');
+  assert.equal(vistaListaAgenda({ cargando: true, error: new Error('500'), cantidad: 0 }), 'error', 'mientras se reintenta, el aviso sigue (con «Reintentando…»)');
+  assert.equal(vistaListaAgenda({ cargando: false, error: new Error('500'), cantidad: 2 }), 'lista', 'con filas de antes, la lista sigue y el aviso va encima');
+  assert.equal(vistaListaAgenda({ cargando: true, error: null, cantidad: 2 }), 'cargando');
+  // F114: el separador de miles de textoProveedoresCortados (mata N4: sin formatoEntero).
+  assert.equal(textoProveedoresCortados(5000, 1200), 'Se muestran los primeros 1.200 de 5.000 (por nombre)');
+  const fuente = readFileSync(new URL('../src/app/dashboard/agenda/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const c = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // El cableado: los dos catch GUARDAN el error (antes, un console.error mudo) y lo limpian al llegar bien.
+  const proveedores = c.slice(c.indexOf('const fetchSuppliers = async'), c.indexOf('const openSupplier = async'));
+  assert.match(proveedores, /setErrorProveedores\(null\);/);
+  assert.match(proveedores, /\} catch \(e\) \{\s*setErrorProveedores\(e\);/);
+  assert.ok(!/console\.error\('Error cargando proveedores'/.test(c), 'el error de proveedores no se traga');
+  const clientes = c.slice(c.indexOf('const fetchCustomers = async'), c.indexOf('const fetchProfile = async'));
+  assert.match(clientes, /setErrorClientes\(null\);/);
+  assert.match(clientes, /\} catch \(e\) \{\s*setErrorClientes\(e\);/);
+  assert.ok(!/console\.error\('Error cargando clientes'/.test(c), 'el error de clientes no se traga');
+  // El aviso común (avisoDeFuente: un 403 sin «Reintentar») y la vista de la lib.
+  assert.match(c, /const avisoProveedores = avisoDeFuente\(errorProveedores, 'No se pudieron cargar los proveedores'\);/);
+  assert.match(c, /const avisoClientes = avisoDeFuente\(errorClientes, 'No se pudieron cargar los clientes'\);/);
+  assert.match(c, /const vistaProveedores = vistaListaAgenda\(\{ cargando: loadingSuppliers, error: errorProveedores, cantidad: suppliers\.length \}\);/);
+  assert.match(c, /\{avisoProveedores && <div className="mb-4"><AvisoFuente aviso=\{avisoProveedores\} onReintentar=\{fetchSuppliers\} reintentando=\{loadingSuppliers\} \/><\/div>\}/);
+  assert.match(c, /\{avisoClientes && <div className="mb-4"><AvisoFuente aviso=\{avisoClientes\} onReintentar=\{fetchCustomers\} \/><\/div>\}/);
+  assert.ok(c.indexOf('{avisoClientes && ') < c.indexOf('{filteredCustomers.map(client =>'), 'el aviso de clientes va sobre la cuadrícula');
+  // El vacío «Sin proveedores registrados» solo en la rama 'vacio' (con la búsqueda que no encuentra nada, también).
+  const rama = c.slice(c.indexOf("{vistaProveedores === 'cargando' ? ("), c.indexOf('<h3 className="font-black text-slate-800 text-lg">Sin proveedores registrados</h3>'));
+  assert.match(rama, /^\{vistaProveedores === 'cargando' \? \([\s\S]*\) : vistaProveedores === 'error' \? null : filteredSuppliers\.length === 0 \? \(/);
+  // F113: el orden de lo que va sobre la lista: la línea de los cortados, el aviso y después la lista (o su vacío).
+  const iCortados = c.indexOf('{textoCortados && ');
+  const iAviso = c.indexOf('{avisoProveedores && <div className="mb-4"><AvisoFuente');
+  const iLista = c.indexOf("{vistaProveedores === 'cargando' ? (");
+  assert.ok(iCortados > 0 && iAviso > iCortados && iLista > iAviso, `F113: cortados (${iCortados}) < aviso (${iAviso}) < lista (${iLista})`);
+}
+
 console.log('--- TEST T24-f4a (B4 T24 f4, A4): la Agenda guarda el proveedor con peticionGuardarProveedor (PATCH al editar, las claves del servidor) ---');
 {
   const fuente = readFileSync(new URL('../src/app/dashboard/agenda/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
