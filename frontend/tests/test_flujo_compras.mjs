@@ -621,12 +621,12 @@ console.log('--- B4 T24 f3 r1 (F63): una sola regla de tono para la tarjeta de e
     assert.deepEqual(fc.pasosDeTracking([stage])[0].avisos, [{ texto: 'Va tarde', tono }], `la barra: ${nivel}`);
   }
   // En el fuente: avisoTarjetaEtapa llama a avisosDeEtapa; textoVacioPec y filtroSemaforoCompras, a esSemaforoVencidos.
-  const flujoFuente = readFileSync(new URL('../src/lib/flujo-compras.js', import.meta.url), 'utf8');
+  const flujoFuente = readFileSync(new URL('../src/lib/flujo-compras.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const tarjeta = flujoFuente.slice(flujoFuente.indexOf('export function avisoTarjetaEtapa('), flujoFuente.indexOf('\n}\n', flujoFuente.indexOf('export function avisoTarjetaEtapa(')));
   assert.match(tarjeta, /const \[delServidor\] = avisosDeEtapa\(stage\);/);
   assert.ok(!/alert\?\.nivel === 'atrasado'/.test(tarjeta), 'sin la copia de la regla de tono');
   assert.match(flujoFuente, /return esSemaforoVencidos\(estado\?\.semaforo\) \? 'atrasados' : 'todos';/);
-  const ecFuente = readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8');
+  const ecFuente = readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(ecFuente, /export function textoVacioPec\(estado, ayuda = null\) \{\s*if \(esSemaforoVencidos\(estado\?\.semaforo\)\)/);
 }
 

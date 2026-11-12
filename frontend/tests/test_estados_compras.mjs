@@ -1886,7 +1886,7 @@ console.log('--- TEST 40 (B4 T16B): Traslados (compras/traslados/page.tsx) y col
   // El enlace ?id= del HUB de Inventario: el traslado se pide al servidor por su número.
   // B4 T24 f3 (F74-f, D27): por el parámetro exacto de F74-b (?id=), no por q= (que también busca en notas, documento y guía).
   // B4 T24 f3 r1 (F69, D27): el efecto bajó a la lib (abrirEnlaceTraslado), con la misma ruta y la misma llegada.
-  const fuenteEc = readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8');
+  const fuenteEc = readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(fuenteEc, /\?operation_type=TRANSFER&id=\$\{id\}&limit=5`/, 'el traslado se pide por su id exacto, con a lo sumo 5 filas');
   assert.ok(!/q=\$\{encodeURIComponent\(numeroTraslado/.test(pag), 'sin la búsqueda por texto');
   assert.match(fuenteEc, /llegadaEnlaceTraslado\(id, normalizarRespuesta\(r\)\.filas\)/, 'abre solo la fila cuyo número es exacto (m13)');
@@ -3709,7 +3709,7 @@ console.log('--- B4 T24 f3 r1 (F59, F61, F65, F76): la cobertura — la fila ven
   assert.deepEqual(await correrConfirmar({ falla: 500 }), ['cargando 8', 'POST /compras/recepciones/8/confirmar clave-1', 'error: No se pudo confirmar ENINV-8', 'cargando null'], 'un 500 no');
 
   // F76: la hora de un movimiento del Kardex es horaCO (la fuente única de m13): nada de un Intl.DateTimeFormat propio.
-  const fuenteEc = readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8');
+  const fuenteEc = readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const cuerpo = fuenteEc.slice(fuenteEc.indexOf('export function textoFechaMovimiento('), fuenteEc.indexOf('\n}\n', fuenteEc.indexOf('export function textoFechaMovimiento(')));
   assert.match(cuerpo, /hora: horaCO\(fecha\)/, 'textoFechaMovimiento usa horaCO');
   assert.ok(!/Intl\.DateTimeFormat|timeZone/.test(sinComentarios(fuenteEc)), 'estados-compras.js no arma fechas con su propia zona');
@@ -3794,9 +3794,9 @@ console.log('--- B4 T24 f3 r1 (F71, F77, F69): la Lista y Traslados — la selec
 
 console.log('--- B4 T24 f3 r1 (m2, m3, m4, m5, m10, m11, m15, m16, m20, m24, m39, m41): comentarios fieles, textos y roles en Compras e Inventario ---');
 {
-  const fuenteEc = readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8');
+  const fuenteEc = readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   // m4: el tope de m16 sale de la columna del modelo (Numeric(p, s) de GoodsReceiptLine.quantity_received), no de un literal.
-  const modelo = readFileSync(new URL('../../backend/app/models/fase1b.py', import.meta.url), 'utf8');
+  const modelo = readFileSync(new URL('../../backend/app/models/fase1b.py', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const clase = modelo.slice(modelo.indexOf('class GoodsReceiptLine(Base):'), modelo.indexOf('class GoodsReceiptLineAllocation(Base):'));
   const [, p, s] = /quantity_received\s*=\s*Column\(Numeric\((\d+),\s*(\d+)\)/.exec(clase) ?? [];
   assert.ok(p && s, 'la columna del modelo');
@@ -3805,13 +3805,13 @@ console.log('--- B4 T24 f3 r1 (m2, m3, m4, m5, m10, m11, m15, m16, m20, m24, m39
     /_TIPO_CANTIDAD_GRL = GoodsReceiptLine\.__table__\.c\.quantity_received\.type\s*MAX_CANTIDAD_LINEA = 10 \*\* \(_TIPO_CANTIDAD_GRL\.precision - _TIPO_CANTIDAD_GRL\.scale\) - 1/,
     'el servidor deriva MAX_CANTIDAD_LINEA de la misma columna');
   // m2 / m28: el JSDoc de confirmacionDespacho ya no dice que el servidor bloquea por saldo; m5: el de la llegada del enlace de Productos.
-  const entregas = readFileSync(new URL('../src/lib/entregas.js', import.meta.url), 'utf8');
+  const entregas = readFileSync(new URL('../src/lib/entregas.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.ok(!entregas.includes('el servidor tiene la misma regla desde FINAL-m35'), 'm2: sin el comentario falso');
   assert.match(entregas, /el servidor NO bloquea por saldo/);
   assert.ok(!fuenteEc.includes('`q` también encuentra los que lo contienen'), 'm5: sin el contrato viejo');
   assert.match(fuenteEc, /filtra por el SKU EXACTO distinguiendo mayúsculas/);
   // m3: el JSDoc de TEXTO_SEGUIMIENTO_CERRADO va pegado a su export.
-  const flujoFuente = readFileSync(new URL('../src/lib/flujo-compras.js', import.meta.url), 'utf8');
+  const flujoFuente = readFileSync(new URL('../src/lib/flujo-compras.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(flujoFuente, /\/\*\* El texto de un seguimiento cerrado \(el panel de la lista, el del Hub y el detalle dicen lo mismo\)\. \*\/\nexport const TEXTO_SEGUIMIENTO_CERRADO = /);
   assert.ok(!/\*\/\n\/\*\* B4 T24 f3 \(m21 del backend r1\)/.test(flujoFuente), 'sin dos JSDoc seguidos');
   // m10: el comentario de Historial no coincide con la búsqueda de RP99 («en construcci»).
