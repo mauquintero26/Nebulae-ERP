@@ -1866,7 +1866,9 @@ console.log('--- TEST 40 (B4 T16B): Traslados (compras/traslados/page.tsx) y col
   assert.match(pag, /tarjetasTraslados\(conteosTraslado\(totales\?\.conteos \?\? null\), bodegas \? bodegas\.length : null\)/);
   assert.match(pag, /despachar\(accionVistaEnLista\(estado, siguiente, opcionesEstadosTraslado\)\)/, 'como un clic en la pestaña (D41)');
   // El enlace ?id= del HUB de Inventario: el traslado se pide al servidor por su número.
-  assert.match(pag, /q=\$\{encodeURIComponent\(numeroTraslado\(\{ id \}\)\)\}&limit=5`/, 'el traslado se pide por su número, con a lo sumo 5 filas');
+  // B4 T24 f3 (F74-f, D27): por el parámetro exacto de F74-b (?id=), no por q= (que también busca en notas, documento y guía).
+  assert.match(pag, /\?operation_type=TRANSFER&id=\$\{id\}&limit=5`/, 'el traslado se pide por su id exacto, con a lo sumo 5 filas');
+  assert.ok(!/q=\$\{encodeURIComponent\(numeroTraslado/.test(pag), 'sin la búsqueda por texto');
   assert.match(pag, /llegadaEnlaceTraslado\(id, normalizarRespuesta\(r\)\.filas\)/, 'abre solo la fila cuyo número es exacto (m13)');
   assert.match(pag, /if \(searchParams\.get\('id'\)\) router\.replace\(pathname\)/, 'al cerrar el Drawer se quita ?id=');
   // R2 y R13: fuera la IA simulada y su pestaña; queda «Ver análisis» hacia el Hub.
@@ -2229,7 +2231,8 @@ console.log('--- TEST 42 (B4 T18; TABLA-inventario 5 a 8, KANBAN-resto; RP47 a R
   assert.equal(ec.pedirEnlaceProducto(null, null, null), null);
   assert.equal(ec.pedirEnlaceProducto(null, undefined, undefined), null);
   assert.deepEqual(ec.pedirEnlaceProducto(null, null, 'NEB 001/x'), {
-    marca: 'sku:NEB 001/x', ruta: '/products?q=NEB%20001%2Fx&limit=50&offset=0', id: null, sku: 'NEB 001/x',
+    // B4 T24 f3 (B40-f, D27): el parámetro exacto de B40-b (?sku=), no q=.
+    marca: 'sku:NEB 001/x', ruta: '/products?sku=NEB%20001%2Fx&limit=50&offset=0', id: null, sku: 'NEB 001/x',
   });
   assert.equal(ec.pedirEnlaceProducto('sku:NEB-001', null, 'NEB-001'), null);
   assert.equal(ec.pedirEnlaceProducto(null, null, '   '), null);
@@ -2691,7 +2694,8 @@ console.log('--- TEST 45 (B4 T18, TABLA-inventario punto 7; KANBAN-resto; RP47 a
   trae(p, 'p.publicado', 'E-Commerce: publicado');
   assert.ok(!/p\.sale_price|p\.cost_price|p\.is_published/.test(p.slice(0, p.indexOf('function openEdit'))), 'la tabla no lee sale_price, cost_price ni is_published (/products no los trae)');
   // RP49: el enlace ?id= (y ?sku=) pide el producto al servidor; la marca se pone cuando la respuesta LLEGÓ.
-  const efecto = /const enlaceAtendido = useRef[^\n]*\n([\s\S]*?)\}, \[idDeLaUrl, skuDeLaUrl, avisar, avisarError\]\);/.exec(p)?.[1] ?? '';
+  // B4 T24 f3 (B40-f, D27): el error del enlace queda en errorEnlace (AvisoDeError con «Reintentar») y la vuelta del reintento va en las deps.
+  const efecto = /const enlaceAtendido = useRef[^\n]*\n([\s\S]*?)\}, \[idDeLaUrl, skuDeLaUrl, avisar, vueltaEnlace\]\);/.exec(p)?.[1] ?? '';
   assert.match(efecto, /pedirEnlaceProducto\(enlaceAtendido\.current, idDeLaUrl, skuDeLaUrl\)/);
   assert.match(efecto, /_apiFetch\(pedido\.ruta, \{ signal: control\.signal \}\)/);
   assert.match(efecto, /llegadaEnlaceProducto\(pedido, normalizarRespuesta\(r\)\.filas\)/);
@@ -2699,7 +2703,9 @@ console.log('--- TEST 45 (B4 T18, TABLA-inventario punto 7; KANBAN-resto; RP47 a
   assert.ok(!/enlaceAtendido\.current =/.test(antes), 'la marca no se pone antes del fetch');
   assert.match(efecto, /enlaceAtendido\.current = llegada\.marca;/);
   assert.match(efecto, /if \(llegada\.abrir\) openEdit\(llegada\.abrir\);\s*else avisar\(llegada\.texto \?\? 'No se encontró el producto\.', \{ tono: 'info' \}\);/);
-  assert.match(efecto, /\.catch\(\(err: unknown\) => \{ if \(!control\.signal\.aborted\) avisarError\(err, 'No se pudo abrir el producto'\); \}\);/);
+  assert.match(efecto, /\.catch\(\(err: unknown\) => \{ if \(!control\.signal\.aborted\) setErrorEnlace\(err\); \}\);/);
+  trae(p, '<AvisoDeError error={errorEnlace} fallo="No se pudo abrir el producto del enlace" acento="purple"', 'el error del enlace, a la vista');
+  trae(p, 'onReintentar={() => { setErrorEnlace(null); setVueltaEnlace((n) => n + 1); }} />', 'Reintentar vuelve a pedir (la marca sigue libre)');
   assert.match(efecto, /return \(\) => control\.abort\(\);/);
   trae(p, "if (searchParams.get('id') || searchParams.get('sku')) router.replace(pathname);", 'cerrar la ficha limpia el enlace (id y sku)');
   // El tablero solo para ver, por categoría (12 como máximo, con su aviso), en modo servidor.
@@ -3418,6 +3424,22 @@ console.log('--- B4 T24 f3 (F88, F90, F91): el Kardex — el autocompletar como 
   // F91: las opciones del propietario con etiquetaPropietario.
   trae(k, "{['NEBULAE', 'MAU'].map((o) => <option key={o} value={o}>{etiquetaPropietario(o)}</option>)}");
   noTrae(k, '<option value="NEBULAE">Nebulae</option>', 'sin el texto escrito a mano');
+}
+
+console.log('--- B4 T24 f3 (B40-f, F74-f, F73): los enlaces ?sku= y ?id= piden por su parámetro exacto; ?id=063 no repite ---');
+{
+  // B40-f: el SKU exacto de B40-b (GET /products?sku=); F74-f: el id exacto de F74-b (GET /inventory/operations?id=), los dos leídos en solo lectura.
+  assert.equal(ec.pedirEnlaceProducto(null, null, 'NEB-1').ruta, '/products?sku=NEB-1&limit=50&offset=0');
+  const catalogo = readFileSync(new URL('../../backend/app/api/v1/catalog.py', import.meta.url), 'utf8');
+  assert.ok(catalogo.slice(catalogo.indexOf('def list_products('), catalogo.indexOf('def list_products(') + 400).includes('sku: Optional[str] = None,'), 'B40-b: /products acepta ?sku=');
+  const inv = readFileSync(new URL('../../backend/app/api/v1/inventory.py', import.meta.url), 'utf8');
+  assert.ok(inv.includes('MENSAJE_ID_OPERACION = "El id de la operación debe ser un número entero positivo."'), 'F74-b: /inventory/operations acepta ?id=');
+  // F73: la marca es String(id): ?id=063 y ?id=63 son el mismo traslado (no se repiten la consulta ni el aviso).
+  assert.equal(ec.pedirEnlaceTraslado('63', '063'), null, '?id=063 ya atendido como 63');
+  assert.equal(ec.pedirEnlaceTraslado(null, '063'), 63);
+  assert.equal(ec.pedirEnlaceTraslado(ec.llegadaEnlaceTraslado(63, []).marca, '0063'), null);
+  const tra = leerFuente('app/dashboard/compras/traslados/page.tsx');
+  trae(tra, "if (llegada.avisar) avisar(`No se encontró el traslado ${numeroTraslado({ id })}.`, { tono: 'info' });", 'la página lee llegada.avisar');
 }
 
 console.log('\nOK: test_estados_compras.mjs');

@@ -176,13 +176,14 @@ export default function TrasladosPage() {
     const id = pedirEnlaceTraslado(idAbierto.current, idDeLaUrl);
     if (id === null) return undefined;
     const control = new AbortController();
-    apiFetch(`${RUTA_OPERACIONES}?operation_type=TRANSFER&q=${encodeURIComponent(numeroTraslado({ id }))}&limit=5`, { signal: control.signal })
+    // B4 T24 f3 (F74-f): el parámetro exacto de F74-b (?id=); antes q= con limit=5, que fallaba si más de 5 traslados mencionaban el número.
+    apiFetch(`${RUTA_OPERACIONES}?operation_type=TRANSFER&id=${id}&limit=5`, { signal: control.signal })
       .then((r: unknown) => {
         if (control.signal.aborted) return;
         const llegada = llegadaEnlaceTraslado(id, normalizarRespuesta(r).filas);
         idAbierto.current = llegada.marca;
         if (llegada.abrir) setSelected(llegada.abrir as FilaTraslado);
-        else avisar(`No se encontró el traslado ${numeroTraslado({ id })}.`, { tono: 'info' });
+        if (llegada.avisar) avisar(`No se encontró el traslado ${numeroTraslado({ id })}.`, { tono: 'info' });
       })
       .catch((err: unknown) => { if (!control.signal.aborted) avisarError(err, 'No se pudo abrir el traslado'); });
     return () => control.abort();

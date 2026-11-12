@@ -1445,7 +1445,8 @@ export function filaDelEnlaceTraslado(filas, id) {
 export function pedirEnlaceTraslado(marca, idDeLaUrl) {
   if (typeof idDeLaUrl !== 'string' || !/^\d+$/.test(idDeLaUrl)) return null;
   const id = Number(idDeLaUrl);
-  if (!Number.isInteger(id) || id <= 0 || marca === idDeLaUrl) return null;
+  // B4 T24 f3 (F73): la marca es String(id) (llegadaEnlaceTraslado): se compara con el id leído, no con el texto crudo (?id=063).
+  if (!Number.isInteger(id) || id <= 0 || marca === String(id)) return null;
   return id;
 }
 
@@ -1942,7 +1943,8 @@ export function textoVacioProductos(filtro) {
 
 /**
  * RP49: ¿hay que pedir el producto del enlace? `?id=` pide /products?id=N y `?sku=` (el de Abastecimiento: stock-tabla no
- * trae el id del producto) pide /products?q=SKU. `marca` es lo ya atendido (la respuesta llegó), no lo que se pidió: un fetch
+ * trae el id del producto) pide /products?sku=SKU (B4 T24 f3, B40-f: el parámetro exacto de B40-b; antes q=, que con un código corto
+ * presente en más de 50 productos dejaba fuera el buscado). `marca` es lo ya atendido (la respuesta llegó), no lo que se pidió: un fetch
  * abortado deja la marca como estaba y el siguiente render vuelve a pedir. El id gana; uno que no es un entero positivo no
  * tapa un SKU bueno. Sin nada que pedir, null.
  * @param {string | null} marca
@@ -1958,7 +1960,7 @@ export function pedirEnlaceProducto(marca, idDeLaUrl, skuDeLaUrl) {
   const sku = typeof skuDeLaUrl === 'string' ? skuDeLaUrl.trim() : '';
   if (sku === '') return null;
   const nueva = `sku:${sku}`;
-  return marca === nueva ? null : { marca: nueva, ruta: `/products?q=${encodeURIComponent(sku)}&limit=50&offset=0`, id: null, sku };
+  return marca === nueva ? null : { marca: nueva, ruta: `/products?sku=${encodeURIComponent(sku)}&limit=50&offset=0`, id: null, sku };
 }
 
 /**

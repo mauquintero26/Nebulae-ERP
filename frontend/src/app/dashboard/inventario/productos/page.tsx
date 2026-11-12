@@ -12,6 +12,7 @@ import {
 // por categoría (R11). La ficha (formulario, variantes, stock y E-Commerce) y el guardado son los de B1 a B3, sin cambios.
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
 import { SubNav, PageHeader, Badge, Button, TableroKanban, useAvisos, useTableroKanban } from '@/components/ui';
+import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import {
   BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
 } from '@/components/tabla';
@@ -381,6 +382,9 @@ export default function ProductosPage() {
   const idDeLaUrl = searchParams.get('id');
   const skuDeLaUrl = searchParams.get('sku');
   const enlaceAtendido = useRef<string | null>(null);
+  // B4 T24 f3 (B40-f): el error del enlace queda a la vista con «Reintentar» (AvisoDeError: un 403 no lo ofrece); reintentar sube la vuelta.
+  const [errorEnlace, setErrorEnlace] = useState<unknown>(null);
+  const [vueltaEnlace, setVueltaEnlace] = useState(0);
   useEffect(() => {
     const pedido = pedirEnlaceProducto(enlaceAtendido.current, idDeLaUrl, skuDeLaUrl);
     if (pedido === null) return undefined;
@@ -390,12 +394,13 @@ export default function ProductosPage() {
         if (control.signal.aborted) return;
         const llegada = llegadaEnlaceProducto(pedido, normalizarRespuesta(r).filas);
         enlaceAtendido.current = llegada.marca;
+        setErrorEnlace(null);
         if (llegada.abrir) openEdit(llegada.abrir);
         else avisar(llegada.texto ?? 'No se encontró el producto.', { tono: 'info' });
       })
-      .catch((err: unknown) => { if (!control.signal.aborted) avisarError(err, 'No se pudo abrir el producto'); });
+      .catch((err: unknown) => { if (!control.signal.aborted) setErrorEnlace(err); });
     return () => control.abort();
-  }, [idDeLaUrl, skuDeLaUrl, avisar, avisarError]);
+  }, [idDeLaUrl, skuDeLaUrl, avisar, vueltaEnlace]);
 
   // ─── PRODUCT LIST ───
   if (!selectedProduct) {
@@ -419,6 +424,11 @@ export default function ProductosPage() {
                 </button>
               </div>
             )} />
+
+          {errorEnlace != null && (
+            <AvisoDeError error={errorEnlace} fallo="No se pudo abrir el producto del enlace" acento="purple"
+              onReintentar={() => { setErrorEnlace(null); setVueltaEnlace((n) => n + 1); }} />
+          )}
 
           {/* B4 T18, bloques 2 y 3 (TABLA-inventario punto 7, KANBAN-resto): la barra con la búsqueda (q) y los filtros de B3-T8, y
               la tabla estándar en el servidor, o el tablero solo para ver por categoría con el MISMO estado. */}
