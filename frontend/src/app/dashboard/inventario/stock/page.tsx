@@ -11,6 +11,7 @@ import {
   BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
 } from '@/components/tabla';
 import type { ColumnaTabla } from '@/components/tabla';
+import { useResumen } from '@/components/ui/useResumen';
 import { apiFetch } from '@/lib/api';
 import { AYUDA_MINIMO_INVENTARIO, tarjetasStock } from '@/lib/kpis';
 import { dependenciasTablero, estadoDelTotal, extraPorVista, normalizarRespuesta, textoVacioExistencias } from '@/lib/tabla';
@@ -101,17 +102,12 @@ export default function StockPage() {
   // Las tarjetas (KPI-inventario punto 5; R10, R12): GET /inventory/stats, todo el inventario por referencia, sin respaldo
   // local. Mientras no llega, 'cargando' (nunca 0); si falla, «—».
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    apiFetch('/inventory/stats', { signal: control.signal })
-      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  const cargandoStats = stats?.vuelta !== vueltaStats;
-  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
-  const tarjetas = tarjetasStock(stats?.datos ?? null);
+  // B4 T24 f3 (F45): el cargador compartido de los resúmenes (useResumen: aborta la anterior, descarta las viejas, va atado al usuario,
+  // conserva lo último al recargar y con error no deja datos viejos: «—»).
+  const stats = useResumen('/inventory/stats', vueltaStats);
+  const cargandoStats = stats.cargando;
+  const estadoKpis = useEstadoKpi(cargandoStats, stats.error);
+  const tarjetas = tarjetasStock(stats.datos);
 
   // «Actualizar»: la lista, el tablero, las tarjetas y el selector. Ninguna recarga vacía lo que se ve.
   const { recargar: recargarListado } = listado;
@@ -122,7 +118,7 @@ export default function StockPage() {
     recargarCategorias();
     setVueltaStats((n) => n + 1);
   }, [recargarListado, recargarTablero, recargarCategorias]);
-  const actualizando = listado.recargando || (cargandoStats && stats !== null);
+  const actualizando = listado.recargando || (cargandoStats && stats.datos !== null);
 
   // ── bloque 2: la tabla (R5, R26; D40, D41) ──
   const prefs = usePreferenciasTabla(ID_STOCK, COLUMNAS_TABLA_STOCK);
@@ -190,7 +186,7 @@ export default function StockPage() {
             referencia): mientras cargan, barras grises (nunca 0); con error, «—». Ninguna es botón: no equivalen a una
             pestaña. La nota dice dónde se define el mínimo (R10). Sin la nota de «datos de ejemplo»: la tabla ya es real. */}
         {estadoKpis === 'error' && (
-          <AvisoReintentar error={stats?.error} fallo="No se pudieron cargar las tarjetas de existencias" onReintentar={() => setVueltaStats((n) => n + 1)} />
+          <AvisoReintentar error={stats.error} fallo="No se pudieron cargar las tarjetas de existencias" onReintentar={stats.recargar} />
         )}
         <FranjaKpis estado={estadoKpis} titulo="Existencias" nota={AYUDA_MINIMO_INVENTARIO}>
           <TarjetaKpi kpi="inv_fisico" valor={tarjetas?.fisico.valor ?? null} ayuda={tarjetas?.fisico.ayuda} />

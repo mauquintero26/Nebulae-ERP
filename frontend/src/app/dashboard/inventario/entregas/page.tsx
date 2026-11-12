@@ -13,6 +13,7 @@ import { ArrowUpFromLine, Eye, MessageCircle, Package, RefreshCw, Truck } from '
 import {
   SubNav, PageHeader, Drawer, Button, MenuFila, useAvisos, FranjaKpis, TarjetaKpi, useEstadoKpi, TableroKanban, useTableroKanban,
 } from '@/components/ui';
+import { useResumen } from '@/components/ui/useResumen';
 import type { ItemMenuFila } from '@/components/ui';
 import {
   BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
@@ -152,7 +153,6 @@ const COLUMNAS_TABLA_ENTREGAS: ColumnaTabla<FilaPedido>[] = [
 const TITULOS_ORDEN_ENTREGAS = titulosDeOrdenPec(COLUMNAS_TABLA_ENTREGAS);
 
 type ConteosCargados = { vuelta: string; conteos: Record<ClaveColumna, number> | null; error: unknown };
-type StatsCargadas = { vuelta: number; kpis: unknown; error: unknown };
 
 /* ================================================================
    MAIN PAGE — EntregasPage (B4 T19)
@@ -223,17 +223,11 @@ export default function EntregasPage() {
   const estadoConteos = useEstadoKpi(cargandoConteos, errorConteos);
 
   // Las tarjetas «Pedidos en curso» y «Saldo antes de despachar» (KPI-inventario punto 8): GET /ventas/stats, sin respaldo local.
+  // B4 T24 f3 (F45): el cargador compartido (useResumen: conserva lo último al recargar y con error no deja datos viejos).
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<StatsCargadas | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    apiFetch('/ventas/stats', { signal: control.signal })
-      .then((r: { data?: { kpis?: unknown } } | null) => setStats({ vuelta: vueltaStats, kpis: r?.data?.kpis ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, kpis: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  const { datos: kpisStats, cargando: cargandoStats } = lecturaDeCarga(stats && { vuelta: stats.vuelta, datos: stats.kpis, error: stats.error }, vueltaStats);
-  const errorStats = cargandoStats ? null : (stats?.error ?? null);
+  const stats = useResumen<{ kpis?: unknown }>('/ventas/stats', vueltaStats);
+  const kpisStats = stats.datos?.kpis ?? null;
+  const { cargando: cargandoStats, error: errorStats } = stats;
   const estadoStats = useEstadoKpi(cargandoStats, errorStats);
   const tarjetas = tarjetasEntregas(kpisStats, conteos);
 
@@ -377,7 +371,7 @@ export default function EntregasPage() {
     const siguiente = vistaActiva === vista ? INICIAL_ENTREGAS.vista : vista;
     despachar(accionVistaEnLista(estado, siguiente, opcionesEstadosEntrega));
   };
-  const actualizando = listado.recargando || (cargandoConteos && cargadosConteos !== null) || (cargandoStats && stats !== null);
+  const actualizando = listado.recargando || (cargandoConteos && cargadosConteos !== null) || (cargandoStats && stats.datos !== null);
   const tel = selected ? (selected.telefono_whatsapp || selected.customer_phone || '') : '';
   const urlTel = selected ? waUrl(tel, '') : null;
 
@@ -413,7 +407,7 @@ export default function EntregasPage() {
             activo={vistaActiva === vistaDeTarjetaEntrega('ent_despachados')} onClick={elegirDespachados} />
         </FranjaKpis>
         {errorStats != null && (
-          <AvisoReintentar error={errorStats} fallo="No se pudieron cargar los indicadores de pedidos" onReintentar={() => setVueltaStats((n) => n + 1)} />
+          <AvisoReintentar error={errorStats} fallo="No se pudieron cargar los indicadores de pedidos" onReintentar={stats.recargar} />
         )}
         {errorConteos != null && (
           <AvisoReintentar error={errorConteos} fallo="No se pudieron contar los pedidos de cada pestaña" onReintentar={() => setVueltaConteos((n) => n + 1)} />

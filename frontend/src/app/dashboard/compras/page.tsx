@@ -19,6 +19,8 @@ import {
 import type { AccionTabla, ClaveFila, PestanaTabla } from '@/components/tabla';
 import { BannerFlujo, PasosFlujo, useResumenFlujo } from '@/components/flujo';
 import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
+import { useResumen } from '@/components/ui/useResumen';
+import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import { PanelAnalisisPerezoso } from '@/components/analisis';
 import { COMP_NAV } from './comp-nav';
 
@@ -612,17 +614,12 @@ export default function ComprasHub() {
   // Las tarjetas (KPI-compras punto 5; R7, R12, RP43): GET /compras/stats?periodo=30d (antes se pedía sin período a un
   // endpoint que no existía y quedaba en {}), sin respaldo local. Mientras no llega, 'cargando' (nunca 0); si falla, «—».
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    _apiFetch(`/compras/stats?periodo=${PERIODO_KPI}`, { signal: control.signal })
-      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  const cargandoStats = stats?.vuelta !== vueltaStats;
-  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
-  const tarjetas = tarjetasHubCompras(stats?.datos ?? null);
+  // B4 T24 f3 (F45): el cargador compartido de los resúmenes (useResumen: aborta la anterior, descarta las viejas, va atado al usuario,
+  // conserva lo último al recargar y con error no deja datos viejos: «—»).
+  const stats = useResumen(`/compras/stats?periodo=${PERIODO_KPI}`, vueltaStats);
+  const cargandoStats = stats.cargando;
+  const estadoKpis = useEstadoKpi(cargandoStats, stats.error);
+  const tarjetas = tarjetasHubCompras(stats.datos);
 
   // B1 a B3 (queda igual): los pedidos de venta del panel de consolidación (sus PENDIENTE_COMPRA se filtran en el panel).
   // T14 r1 (m9): si el GET falla, el error queda en el estado (el panel lo dice con «Reintentar») y la lista de antes se
@@ -813,7 +810,7 @@ export default function ComprasHub() {
     if (accion) despachar(accion);
     if (enAnalisis) cambiarSeccion(false);
   };
-  const actualizando = listado.recargando || flujo.cargando || (cargandoStats && stats !== null);
+  const actualizando = listado.recargando || flujo.cargando || (cargandoStats && stats.datos !== null);
 
   /* ════════════════ RENDER ════════════════ */
   return (
@@ -890,6 +887,10 @@ export default function ComprasHub() {
             <TarjetaKpi kpi="comprado_periodo" valor={tarjetas?.comprado.valor ?? null}
               variacion={tarjetas?.comprado.variacion ?? { actual: null, anterior: null }} ayuda={tarjetas?.comprado.ayuda} />
           </FranjaKpis>
+        )}
+        {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
+        {!enAnalisis && estadoKpis === 'error' && (
+          <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="purple" />
         )}
 
         {/* B4 T14 (TABLA-compras punto 6, KANBAN-compras punto 7, ANALISIS-compras punto 4): la barra y la tabla estándar

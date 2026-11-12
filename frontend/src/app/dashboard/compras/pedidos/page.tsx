@@ -22,6 +22,8 @@ import {
 import type { AccionTabla, ClaveFila, PestanaTabla } from '@/components/tabla';
 import { BannerFlujo, PasosFlujo, useResumenFlujo } from '@/components/flujo';
 import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
+import { useResumen } from '@/components/ui/useResumen';
+import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import { COMP_NAV } from '../comp-nav';
 
 import { FOCOS } from '@/lib/design-system';
@@ -1561,17 +1563,12 @@ export default function PedidosCompraPage() {
   // Las tarjetas (KPI-compras punto 6; R7, R12): GET /compras/stats?periodo=30d (antes se pedía sin período a un
   // endpoint que no existía y quedaba en {}), sin respaldo local. Mientras no llega, 'cargando' (nunca 0); si falla, «—».
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    _apiFetch(`/compras/stats?periodo=${PERIODO_KPI}`, { signal: control.signal })
-      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  const cargandoStats = stats?.vuelta !== vueltaStats;
-  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
-  const tarjetas = tarjetasPedidosCompra(stats?.datos ?? null);
+  // B4 T24 f3 (F45): el cargador compartido de los resúmenes (useResumen: aborta la anterior, descarta las viejas, va atado al usuario,
+  // conserva lo último al recargar y con error no deja datos viejos: «—»).
+  const stats = useResumen(`/compras/stats?periodo=${PERIODO_KPI}`, vueltaStats);
+  const cargandoStats = stats.cargando;
+  const estadoKpis = useEstadoKpi(cargandoStats, stats.error);
+  const tarjetas = tarjetasPedidosCompra(stats.datos);
 
   // B1 a B3 (queda igual): los pedidos de venta del alta (sus PENDIENTE_COMPRA se eligen en «Nuevo PEC»). Si el GET
   // falla, el error queda en el estado (el alta lo dice con «Reintentar», m9 de T14) y la lista de antes se conserva.
@@ -1812,7 +1809,7 @@ export default function PedidosCompraPage() {
     const vista = vistaDePasoPedidosCompra(clave);
     if (vista) elegirVista(vista);
   };
-  const actualizando = listado.recargando || flujo.cargando || (cargandoStats && stats !== null);
+  const actualizando = listado.recargando || flujo.cargando || (cargandoStats && stats.datos !== null);
 
   /* ════════════════ RENDER ════════════════ */
   return (
@@ -1897,6 +1894,10 @@ export default function PedidosCompraPage() {
           <TarjetaKpi kpi="pec_monto" valor={tarjetas?.monto.valor ?? null} ayuda={tarjetas?.monto.ayuda ?? undefined}
             activo={vistaActiva === 'vigentes'} onClick={() => elegirVista('vigentes')} />
         </FranjaKpis>
+        {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
+        {estadoKpis === 'error' && (
+          <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="purple" />
+        )}
 
         {/* B4 T15 (TABLA-compras punto 7, KANBAN-compras punto 6): la barra y la tabla estándar en el servidor, o el tablero
             en modo servidor, con el MISMO estado (pestaña, búsqueda, estados y semáforo). En Kanban las pestañas no se ven

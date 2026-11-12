@@ -915,7 +915,8 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
   assert.equal((pag.match(/await confirmar\(\{/g) ?? []).length >= 3, true, 'el panel, el menú de fila y el casillero');
   // Las tarjetas (KPI-compras punto 6; R12, RP92): las cuatro de /compras/stats, pulsables como sus vistas.
   for (const kpi of ['pec_activos', 'pec_en_transito', 'pec_vencidos', 'pec_monto']) assert.match(pag, new RegExp(`kpi="${kpi}"`));
-  assert.match(pag, /const tarjetas = tarjetasPedidosCompra\(stats\?\.datos \?\? null\);/);
+  // B4 T24 f3 (F45, D27): los datos de useResumen (stats.datos; null mientras carga la primera vez o con error).
+  assert.match(pag, /const tarjetas = tarjetasPedidosCompra\(stats\.datos\);/);
   assert.match(pag, /kpi="pec_vencidos"[\s\S]{0,300}onClick=\{alternarVencidos\}/, 'RP92: la tarjeta de vencidos abre semaforo=vencidos');
   assert.match(pag, /accionVistaEnLista\(estado, siguiente, opcionesEstadosPec\)/);
   // La franja (FLUJO-compras punto 6; RP21, RP40, RP46, D42): «Estás aquí» en Pedido de compra, sin «No resueltos».
@@ -1207,7 +1208,8 @@ console.log('--- TEST 31 (B4 T16A): Tránsito (compras/transito/page.tsx) cablea
   assert.ok(!/ALERTA DE RETRASO/.test(pag), 'el aviso rojo pasó a la franja');
   // Las tarjetas (KPI-compras punto 7): las de /compras/stats y el avance de la página (RP95); nunca 0 mientras cargan.
   for (const kpi of ['pec_activos', 'pec_vencidos', 'pec_avance', 'pec_monto_por_recibir']) assert.match(pag, new RegExp(`<TarjetaKpi kpi="${kpi}"`), kpi);
-  assert.match(pag, /tarjetasTransito\(stats\?\.datos \?\? null, avance\)/);
+  // B4 T24 f3 (F45, D27): los datos de useResumen (stats.datos; null mientras carga la primera vez o con error).
+  assert.match(pag, /tarjetasTransito\(stats\.datos, avance\)/);
   assert.match(pag, /avancePromedioTransito\(filasVisibles\)/, 'el avance es de las filas que se ven');
   assert.match(pag, /const estadoAvance = errorLista \? 'error' : filasVisibles === null \? 'cargando' : 'listo';/, 'm8: el avance tiene su propio estado, no hereda el de /compras/stats');
   // El tablero (KANBAN-logistica punto 2; R11, C4): modo cliente con las etapas de la configuración y la regla de soltar.
@@ -1346,7 +1348,8 @@ console.log('--- TEST 32 (B4 T16A): Recepciones (compras/recepciones/page.tsx) y
   // Las tarjetas (KPI-compras punto 8) y la nota; la franja (FLUJO-compras punto 9) sin semáforo.
   for (const kpi of ['rec_por_confirmar', 'rec_confirmadas', 'pec_en_transito']) assert.match(pag, new RegExp(`<TarjetaKpi kpi="${kpi}"`), kpi);
   assert.match(pag, /<FranjaKpis estado=\{estadoKpis\} titulo="Recepciones" nota=\{NOTA_RECEPCIONES\}>/);
-  assert.match(pag, /tarjetasRecepciones\(stats\?\.datos \?\? null\)/);
+  // B4 T24 f3 (F45, D27): los datos de useResumen (stats.datos; null mientras carga la primera vez o con error).
+  assert.match(pag, /tarjetasRecepciones\(stats\.datos\)/);
   assert.match(pag, /activo=\{vistaActiva === 'por_confirmar'\} onClick=\{\(\) => elegirVista\('por_confirmar'\)\}/);
   assert.match(pag, /activo=\{vistaActiva === 'confirmadas'\} onClick=\{\(\) => elegirVista\('confirmadas'\)\}/);
   assert.match(pag, /pasos=\{pasosPantallaCompras\(flujo\.datos, 'RECEPCION'\)\}/);
@@ -1696,7 +1699,8 @@ console.log('--- TEST 39 (B4 T16B): la Lista de compras (compras/lista-compras/p
   assert.ok(completa, 'el tablero pide su propia consulta, activa solo en Kanban');
   assert.match(pag, /const extraDelTablero = useMemo\(\(\) => consultaTableroLista\(estado, filtros\), \[estado, filtros\]\);/);
   assert.match(pag, /useResumenFlujo<DatosFlujo>\('\/compras\/flujo', recargaFlujo\)/);
-  assert.match(pag, /apiFetch\('\/compras\/lista-compras\/stats', \{ signal: control\.signal \}\)/);
+  // B4 T24 f3 (F45, D27): /compras/lista-compras/stats con el cargador compartido (useResumen).
+  assert.match(pag, /const stats = useResumen\('\/compras\/lista-compras\/stats', vueltaStats\);/);
   // Nada se traga: ya no hay .catch que vacíe el error ni la carga de 200 en el navegador.
   assert.ok(!/\.catch\(\(\) => (\[\]|\{\}|null|\(\{[^)]*\}\))\)/.test(codigo) && !/\.catch\(\(\)\s*=>\s*\{\s*\}\)/.test(codigo), 'sin .catch que traga el error');
   assert.ok(!/limit: '200'|new URLSearchParams/.test(codigo), 'ya no se pide limit=200 desde el navegador para la tabla');
@@ -1741,7 +1745,8 @@ console.log('--- TEST 39 (B4 T16B): la Lista de compras (compras/lista-compras/p
   for (const [kpi, vista] of [['lista_pendientes', 'PENDIENTE'], ['lista_en_pedido', 'EN_PEDIDO'], ['lista_recibidos', 'RECIBIDO'], ['lista_total', 'todos']]) {
     assert.match(pag, new RegExp(`<TarjetaKpi kpi="${kpi}"[^>]*\\n?[^>]*activo=\\{vistaActiva === '${vista}'\\} onClick=\\{\\(\\) => elegirVista\\('${vista}'\\)\\}`), kpi);
   }
-  assert.match(pag, /tarjetasLista\(stats\?\.datos \?\? null\)/);
+  // B4 T24 f3 (F45, D27): los datos de useResumen (stats.datos; null mientras carga la primera vez o con error).
+  assert.match(pag, /tarjetasLista\(stats\.datos\)/);
   assert.match(pag, /despachar\(accionVistaEnLista\(estado, siguiente, opcionesEstadosLista\)\)/, 'como un clic en la pestaña (D41)');
   // La franja (FLUJO-compras punto 10): «Estás aquí» en Lista de compras, sin semáforo ni «No resueltos».
   assert.match(pag, /pasos=\{pasosPantallaCompras\(flujo\.datos, 'LISTA'\)\}/);
@@ -2354,11 +2359,12 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
       assert.equal(llamadas.length, 0, `${nombre}: una columna sin consulta no pide nada`);
     }
     // Tarjetas (R12): de /inventory/stats, sin respaldo local; cargando = null (nunca 0); con error, «—».
-    trae(f, "apiFetch('/inventory/stats', { signal: control.signal })", `${nombre}: /inventory/stats`);
-    trae(f, '.then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))', `${nombre}: stats llega`);
-    trae(f, '.catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });', `${nombre}: stats falla y LO DICE`);
-    trae(f, 'const cargandoStats = stats?.vuelta !== vueltaStats;', `${nombre}: cargando mientras la vuelta no llegó`);
-    trae(f, 'const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));', `${nombre}: el estado de las tarjetas lleva el error`);
+    // B4 T24 f3 (F45, D27): el cargador es useResumen (el compartido); su comportamiento (llega, falla, recarga, 403) lo prueban los
+    // casos de la lib del bloque «B4 T24 f3 (F45, segunda mitad)». Aquí queda el cableado.
+    trae(f, "const stats = useResumen('/inventory/stats', vueltaStats);", `${nombre}: /inventory/stats con el hook`);
+    noTrae(f, 'setStats(', `${nombre}: sin la copia del cargador`);
+    trae(f, 'const cargandoStats = stats.cargando;', `${nombre}: cargando mientras la vuelta no llegó`);
+    trae(f, 'const estadoKpis = useEstadoKpi(cargandoStats, stats.error);', `${nombre}: el estado de las tarjetas lleva el error`);
     trae(f, '<FranjaKpis estado={estadoKpis}', `${nombre}: la franja lleva el estado`);
     trae(f, 'nota={AYUDA_MINIMO_INVENTARIO}', `${nombre}: la nota del mínimo (R10)`);
     trae(f, `import { AYUDA_MINIMO_INVENTARIO,`, `${nombre}: importa la nota`);
@@ -2404,7 +2410,7 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   assert.ok(!(/<FranjaKpis[\s\S]*?<\/FranjaKpis>/.exec(stock)?.[0] ?? '').includes('onClick'), 'Stock: las tarjetas no son botones');
   trae(stock, "const INICIAL_STOCK = { vista: 'todos' };", 'Stock: arranca en Todos');
   trae(stock, 'const pestanas = pestanasExistencias(conteos);', 'Stock: las 4 pestañas');
-  trae(stock, 'const tarjetas = tarjetasStock(stats?.datos ?? null);', 'Stock: tarjetasStock');
+  trae(stock, 'const tarjetas = tarjetasStock(stats.datos);', 'Stock: tarjetasStock'); // B4 T24 f3 (F45, D27)
   assert.deepEqual(columnasDe(stock, 'COLUMNAS_TABLA_STOCK').map((c) => c.id), ['sku', 'producto', 'categoria', 'fisico', 'reservado', 'disponible', 'transito', 'precio', 'estado']);
   assert.deepEqual(columnasDe(stock, 'COLUMNAS_TABLA_STOCK').filter((c) => c.oculta).map((c) => c.id), ['categoria', 'precio'], 'Stock: ocultas por defecto (R26, medido a 1024 px)');
 
@@ -2413,7 +2419,7 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   trae(abasto, "const INICIAL_ABASTECIMIENTO = { vista: 'agotado' };", 'Abastecimiento: arranca en Agotado');
   trae(abasto, "extraPorVista(estado, VISTAS_ABASTECIMIENTO, fijos, 'agotado')", 'Abastecimiento: la pestaña por defecto es Agotado');
   trae(abasto, 'const pestanas = pestanasExistencias(conteos, { conTodos: false });', 'Abastecimiento: sin «Todos» (RP53)');
-  trae(abasto, 'const tarjetas = tarjetasAbastecimiento(stats?.datos ?? null, compras?.datos ?? null);', 'Abastecimiento: cada tarjeta con su fuente');
+  trae(abasto, 'const tarjetas = tarjetasAbastecimiento(stats.datos, compras.datos);', 'Abastecimiento: cada tarjeta con su fuente'); // F45 (D27)
   // T18 r1 (I1): las tres tarjetas de /inventory/stats son INFORMATIVAS (como inv_bajo_minimo del Hub, RP52 b): su número cuenta
   // referencias con control de inventario y la pestaña cuenta filas (33 contra 36), así que no equivalen a una vista (R12).
   for (const [kpi, clave] of [['inv_agotados', 'agotados'], ['inv_bajo_minimo', 'bajo_minimo'], ['inv_abastecidos', 'abastecidos']]) {
@@ -2425,10 +2431,14 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   for (const boton of ['vistaActiva', 'elegirVista', 'accionVistaEnLista']) noTrae(abasto, boton, `Abastecimiento: ya no hay ${boton}`);
   trae(abasto, 'Solo cuenta las referencias con control de inventario.', 'Abastecimiento: la alerta dice qué cuenta');
   // m11: cuando una fuente falla, lo dice y ofrece «Reintentar» (solo esa fuente).
-  trae(abasto, "{estadoKpis === 'error' && (\n          <AvisoReintentar error={stats?.error} fallo=\"No se pudieron cargar los indicadores de existencias\" onReintentar={() => setVueltaStats((n) => n + 1)} />", 'Abastecimiento: stats caído, con Reintentar');
-  trae(abasto, "{estadoCompras === 'error' && (\n          <AvisoReintentar error={compras?.error} fallo=\"No se pudieron cargar los pedidos de compra activos\" onReintentar={() => setVueltaCompras((n) => n + 1)} />", 'Abastecimiento: compras caído, con Reintentar');
-  trae(abasto, "onClick={() => setVueltaStats((n) => n + 1)} className={`rounded font-bold underline ${FOCOS.indigo}`}>Reintentar</button>", 'Abastecimiento: la alerta «sin dato» ofrece Reintentar');
-  trae(stock, "{estadoKpis === 'error' && (\n          <AvisoReintentar error={stats?.error} fallo=\"No se pudieron cargar las tarjetas de existencias\" onReintentar={() => setVueltaStats((n) => n + 1)} />", 'Stock: stats caído, con Reintentar');
+  // B4 T24 f3 (F45, D27): «Reintentar» vuelve a pedir solo esa fuente con el hook (stats.recargar / compras.recargar).
+  trae(abasto, "{estadoKpis === 'error' && (\n          <AvisoReintentar error={stats.error} fallo=\"No se pudieron cargar los indicadores de existencias\" onReintentar={stats.recargar} />", 'Abastecimiento: stats caído, con Reintentar');
+  trae(abasto, "{estadoCompras === 'error' && (\n          <AvisoReintentar error={compras.error} fallo=\"No se pudieron cargar los pedidos de compra activos\" onReintentar={compras.recargar} />", 'Abastecimiento: compras caído, con Reintentar');
+  // B4 T24 f3 (F92, D27): un solo «Reintentar» para /inventory/stats (el del aviso bajo las tarjetas); la alerta «sin dato» remite a él.
+  noTrae(abasto, "onClick={() => setVueltaStats((n) => n + 1)} className={`rounded font-bold underline ${FOCOS.indigo}`}>Reintentar</button>", 'Abastecimiento: la alerta «sin dato» ya no repite Reintentar');
+  noTrae(abasto, 'Las tarjetas dicen cuál indicador falló.', 'Abastecimiento: la alerta no repite el aviso');
+  trae(abasto, '<p className="mt-1 text-xs font-semibold text-slate-600">El aviso bajo las tarjetas dice qué falló.</p>', 'Abastecimiento: la alerta remite al aviso');
+  trae(stock, "{estadoKpis === 'error' && (\n          <AvisoReintentar error={stats.error} fallo=\"No se pudieron cargar las tarjetas de existencias\" onReintentar={stats.recargar} />", 'Stock: stats caído, con Reintentar');
   // m24: la insignia «Reservado» de BASE vuelve a la fila de Stock (hay unidades en bodega y nada disponible).
   trae(stock, 'celda: (f) => <CeldaEstadoExistencia f={f} /> },', 'Stock: el estado lleva «Reservado»');
   trae(stock, "existenciaReservada(f) ? ' · Reservado: hay unidades en bodega, todas comprometidas' : ''", 'Stock: el title dice Reservado');
@@ -2436,11 +2446,11 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   // B4 T24 (F46, D27): AvisoReintentar delega en la pieza común (AvisoDeError → AvisoFuente; casos en test_avisos.mjs).
   trae(piezas, 'return <AvisoDeError {...props} />;', 'piezas: AvisoReintentar delega en la pieza común');
   trae(abasto, '<TarjetaKpi kpi="pec_activos" valor={tarjetas.pec_activos.valor} ayuda={tarjetas.pec_activos.ayuda} estado={estadoCompras} />', 'Abastecimiento: pec_activos con su estado y sin botón');
-  trae(abasto, "apiFetch('/compras/stats', { signal: control.signal })", 'Abastecimiento: /compras/stats (RP94)');
-  trae(abasto, '.then((r: { data?: unknown } | null) => setCompras({ vuelta: vueltaCompras, datos: r?.data ?? null, error: null }))', 'Abastecimiento: compras llega');
-  trae(abasto, '.catch((err: unknown) => { if (!control.signal.aborted) setCompras({ vuelta: vueltaCompras, datos: null, error: err }); });', 'Abastecimiento: compras falla y LO DICE');
-  trae(abasto, 'const cargandoCompras = compras?.vuelta !== vueltaCompras;', 'Abastecimiento: cargando compras');
-  trae(abasto, 'const estadoCompras = useEstadoKpi(cargandoCompras, cargandoCompras ? null : (compras?.error ?? null));', 'Abastecimiento: el estado de pec_activos lleva el error');
+  // B4 T24 f3 (F45, D27): /compras/stats con el mismo hook (su comportamiento, en los casos de la lib).
+  trae(abasto, "const compras = useResumen('/compras/stats', vueltaCompras);", 'Abastecimiento: /compras/stats (RP94)');
+  noTrae(abasto, 'setCompras(', 'Abastecimiento: sin la copia del cargador');
+  trae(abasto, 'const cargandoCompras = compras.cargando;', 'Abastecimiento: cargando compras');
+  trae(abasto, 'const estadoCompras = useEstadoKpi(cargandoCompras, compras.error);', 'Abastecimiento: el estado de pec_activos lleva el error');
   trae(abasto, 'setVueltaCompras((n) => n + 1);', 'Abastecimiento: «Actualizar» vuelve a pedir compras');
   trae(abasto, "const agotados = tarjetas.agotados.valor;", 'Abastecimiento: el número de la alerta es el de /inventory/stats');
   trae(abasto, 'const alerta = estadoAlertaAgotados(estadoKpis, agotados);', 'Abastecimiento: la alerta sale de su regla (estadoAlertaAgotados)');
@@ -2804,7 +2814,9 @@ console.log('--- TEST 47 (B4 T19): Recepciones, Traslados y Ajustes de Inventari
       trae(f, `<AvisoReintentar error={${err}}`, `${nombre}: la fuente que falla dice SU error con Reintentar (${err}; el uso, no el import)`);
     }
     assert.ok(!/\? null : \(?\w+\?\.(datos|kpis|conteos|totales)/.test(sinComentarios(f)), `${nombre}: una recarga no borra el último valor (I3)`);
-    trae(f, 'lecturaDeCarga(', `${nombre}: lee el último valor con lecturaDeCarga`);
+    // B4 T24 f3 (F45, D27): Recepciones lee sus tarjetas con useResumen, que también conserva el último valor al recargar (estadoResumen).
+    assert.ok(f.includes('lecturaDeCarga(') || f.includes('const { datos: datosStats, cargando: cargandoStats, error: errorStats } = stats;'),
+      `${nombre}: lee el último valor con lecturaDeCarga o con useResumen`);
     assert.ok(!/cargando\w* \? null : (?!\(?\w+\?\.error)/.test(sinComentarios(f)), `${nombre}: ningún valor se pone en null mientras recarga`);
     trae(f, 'etiqueta={`Acciones de ${', `${nombre}: las acciones llevan el número en su nombre`);
     assert.ok(/soloLectura=\{TEXTO_SOLO_VER\}/.test(f), `${nombre}: tablero solo para ver`);
@@ -2896,10 +2908,12 @@ console.log('--- TEST 48 (B4 T19; KANBAN-logistica 4, KPI-inventario 8; R15, RP2
   trae(e.slice(e.indexOf('<TarjetaKpi kpi="ent_despachados"'), e.indexOf('/>', e.indexOf('<TarjetaKpi kpi="ent_despachados"'))), "activo={vistaActiva === vistaDeTarjetaEntrega('ent_despachados')}", 'el anillo es el de SU pestaña');
   for (const err of ['errorConteos', 'errorStats']) trae(e, `<AvisoReintentar error={${err}}`, `la fuente que falla dice SU error con Reintentar (${err})`);
   trae(e, 'lecturaDeCarga(', 'Entregas lee el último valor con lecturaDeCarga');
-  assert.equal(e.split('lecturaDeCarga(').length - 1, 2, 'los conteos y las tarjetas');
+  // B4 T24 f3 (F45, D27): las tarjetas pasan a useResumen (conserva lo último al recargar); los conteos siguen con lecturaDeCarga.
+  assert.equal(e.split('lecturaDeCarga(').length - 1, 1, 'los conteos');
+  trae(e, "const stats = useResumen<{ kpis?: unknown }>('/ventas/stats', vueltaStats);", 'las tarjetas, con el cargador compartido');
   assert.ok(!/cargando\w* \? null : (?!\(?\w+\?\.error)/.test(sinComentarios(e)), 'Entregas: ningún valor se pone en null mientras recarga');
   assert.ok(/const errorConteos = cargandoConteos \? null : \(cargadosConteos\?\.error \?\? null\);/.test(e), 'el error de los conteos sale de su fuente');
-  assert.ok(/const errorStats = cargandoStats \? null : \(stats\?\.error \?\? null\);/.test(e), 'el error de las tarjetas sale de su fuente');
+  assert.ok(/const \{ cargando: cargandoStats, error: errorStats \} = stats;/.test(e), 'el error de las tarjetas sale de su fuente'); // F45 (D27)
   // r2 (m6): las regresiones repuestas y el WhatsApp visible llevan su prueba.
   trae(e, '{p.customer_phone && <span', 'el teléfono bajo el cliente (m24)');
   trae(e, "accionPrincipal: r ? { texto: 'Recordar el saldo por WhatsApp', onClick: () => abrirWhatsApp(r.url)", 'el botón de WhatsApp visible en la tarjeta (m2)');

@@ -17,6 +17,7 @@ import {
   BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
 } from '@/components/tabla';
 import type { AccionTabla } from '@/components/tabla';
+import { useResumen } from '@/components/ui/useResumen';
 import { INV_NAV } from '../inv-nav';
 import { AvisoReintentar, CONTENEDOR, FOCOS, useCatalogo } from '../piezas-inventario';
 import {
@@ -30,7 +31,7 @@ import {
   accionModo, accionVistaEnLista, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta, ordenEsAtencion,
   textoOrdenHub,
 } from '@/lib/tabla';
-import { PERIODO_KPI, NOTA_RECEPCIONES, formatoDecimal, lecturaDeCarga, tarjetasRecepciones, totalRecepciones } from '@/lib/kpis';
+import { PERIODO_KPI, NOTA_RECEPCIONES, formatoDecimal, tarjetasRecepciones, totalRecepciones } from '@/lib/kpis';
 import {
   COLUMNAS_RECEPCION, EXTRA_TABLERO_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, consultaColumnaRecepcion, opcionesEstadosRecepcion,
   pestanasRecepcion, tarjetaRecepcion, textoDiasRetraso, textoVacioRecepciones, vistaDeTarjetaRecepcion,
@@ -133,17 +134,11 @@ export default function InventarioRecepcionesPage() {
   // Las tarjetas (KPI-inventario punto 7; R7, R12): GET /compras/stats?periodo=30d, el MISMO endpoint de Compras › Recepciones (los
   // mismos números), sin respaldo local. Mientras no llega, 'cargando' (nunca 0); si falla, «—» y «Reintentar».
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    apiFetch(`/compras/stats?periodo=${PERIODO_KPI}`, { signal: control.signal })
-      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  // I3 (r1): una recarga conserva el último valor (actualizando); solo la primera carga va en cargando.
-  const { datos: datosStats, cargando: cargandoStats } = lecturaDeCarga(stats, vueltaStats);
-  const errorStats = cargandoStats ? null : (stats?.error ?? null);
+  // B4 T24 f3 (F45): el cargador compartido de los resúmenes (useResumen: aborta la anterior, descarta las viejas, va atado al usuario,
+  // conserva lo último al recargar y con error no deja datos viejos: «—»).
+  const stats = useResumen(`/compras/stats?periodo=${PERIODO_KPI}`, vueltaStats);
+  // I3 (r1): una recarga conserva el último valor (actualizando; useResumen, estadoResumen); solo la primera carga va en cargando.
+  const { datos: datosStats, cargando: cargandoStats, error: errorStats } = stats;
   const estadoKpis = useEstadoKpi(cargandoStats, errorStats);
   const tarjetas = tarjetasRecepciones(datosStats);
   const totalRec = totalRecepciones(datosStats);
@@ -252,7 +247,7 @@ export default function InventarioRecepcionesPage() {
             activo={vistaActiva === vistaDeTarjetaRecepcion('rec_total')} onClick={() => elegirVista('rec_total')} />
         </FranjaKpis>
         {errorStats != null && (
-          <AvisoReintentar error={errorStats} fallo="No se pudieron cargar los indicadores de recepciones" onReintentar={() => setVueltaStats((n) => n + 1)} />
+          <AvisoReintentar error={errorStats} fallo="No se pudieron cargar los indicadores de recepciones" onReintentar={stats.recargar} />
         )}
         {errorBodegas != null && (
           <AvisoReintentar error={errorBodegas} fallo="No se pudieron cargar las bodegas" onReintentar={recargarBodegas} />

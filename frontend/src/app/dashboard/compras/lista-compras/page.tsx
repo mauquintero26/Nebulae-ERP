@@ -22,6 +22,8 @@ import {
 import type { AccionTabla, ClaveFila, ColumnaTabla, PestanaTabla } from '@/components/tabla';
 import { BannerFlujo, useResumenFlujo } from '@/components/flujo';
 import type { DatosFlujo } from '@/components/flujo';
+import { useResumen } from '@/components/ui/useResumen';
+import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import { COMP_NAV } from '../comp-nav';
 import { CHIP, textoInstante } from '../columnas-pec';
 
@@ -253,17 +255,12 @@ export default function ListaComprasPage() {
   // Las tarjetas (KPI-compras punto 9; R7, R12): GET /compras/lista-compras/stats, sin respaldo local. Mientras no llega,
   // 'cargando' (nunca 0); si falla, «—».
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    apiFetch('/compras/lista-compras/stats', { signal: control.signal })
-      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  const cargandoStats = stats?.vuelta !== vueltaStats;
-  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
-  const tarjetas = tarjetasLista(stats?.datos ?? null);
+  // B4 T24 f3 (F45): el cargador compartido de los resúmenes (useResumen: aborta la anterior, descarta las viejas, va atado al usuario,
+  // conserva lo último al recargar y con error no deja datos viejos: «—»).
+  const stats = useResumen('/compras/lista-compras/stats', vueltaStats);
+  const cargandoStats = stats.cargando;
+  const estadoKpis = useEstadoKpi(cargandoStats, stats.error);
+  const tarjetas = tarjetasLista(stats.datos);
 
   // «Actualizar» y lo que sigue a un cambio: la tabla con sus conteos, el tablero (el que no se ve se recarga al activarse), la
   // franja y las tarjetas. Ninguna recarga vacía lo que se ve: los hooks conservan lo último.
@@ -519,7 +516,7 @@ export default function ListaComprasPage() {
     const siguiente = vistaActiva === vista ? 'todos' : vista;
     despachar(accionVistaEnLista(estado, siguiente, opcionesEstadosLista));
   };
-  const actualizando = listado.recargando || completa.recargando || flujo.cargando || (cargandoStats && stats !== null);
+  const actualizando = listado.recargando || completa.recargando || flujo.cargando || (cargandoStats && stats.datos !== null);
 
   /* ════════════════ RENDER ════════════════ */
   return (
@@ -571,6 +568,10 @@ export default function ListaComprasPage() {
           <TarjetaKpi kpi="lista_total" valor={tarjetas?.total.valor ?? null}
             activo={vistaActiva === 'todos'} onClick={() => elegirVista('todos')} />
         </FranjaKpis>
+        {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
+        {estadoKpis === 'error' && (
+          <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de la lista de compras" onReintentar={stats.recargar} acento="purple" />
+        )}
 
         {/* B4 T16B (TABLA-compras punto 10, KANBAN-logistica punto 5): la barra y la tabla estándar en el servidor, o el tablero
             solo para ver en modo cliente, con el MISMO estado (búsqueda y estados) y los mismos filtros extra. En Kanban las

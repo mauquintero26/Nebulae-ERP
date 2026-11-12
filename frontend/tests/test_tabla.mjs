@@ -2543,8 +2543,9 @@ console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5,
   assert.ok(fuente.includes('resumenAlmacenes(listado.filas)') && fuente.includes("avisoTope200(listado.total, 'existencias')"));
   // R12: las 4 tarjetas de /inventory/stats (tarjetasHubInventario), cada una una vez; inv_bajo_minimo NO es botón
   // (RP52 b) y va en alerta con su tono; la nota dice dónde se define el mínimo (R10) y no hay nota de datos de ejemplo.
-  assert.match(fuente, /apiFetch\('\/inventory\/stats', \{ signal: control\.signal \}\)/);
-  assert.match(fuente, /const tarjetas = tarjetasHubInventario\(stats\?\.datos \?\? null\);/);
+  // B4 T24 f3 (F45, D27): /inventory/stats con el cargador compartido (useResumen) y sus datos.
+  assert.match(fuente, /const stats = useResumen\('\/inventory\/stats', vueltaStats\);/);
+  assert.match(fuente, /const tarjetas = tarjetasHubInventario\(stats\.datos\);/);
   for (const id of ['inv_valorizacion', 'inv_skus', 'inv_bajo_minimo', 'inv_disponibilidad']) {
     assert.equal((fuente.match(new RegExp(`<TarjetaKpi kpi="${id}"`, 'g')) ?? []).length, 1, id);
   }

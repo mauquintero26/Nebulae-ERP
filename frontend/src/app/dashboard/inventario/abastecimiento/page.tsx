@@ -12,6 +12,7 @@ import {
   BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
 } from '@/components/tabla';
 import type { ColumnaTabla } from '@/components/tabla';
+import { useResumen } from '@/components/ui/useResumen';
 import { apiFetch } from '@/lib/api';
 import { AYUDA_MINIMO_INVENTARIO, formatoEntero, tarjetasAbastecimiento } from '@/lib/kpis';
 import { dependenciasTablero, estadoDelTotal, extraPorVista, normalizarRespuesta, textoVacioExistencias } from '@/lib/tabla';
@@ -119,28 +120,16 @@ export default function AbastecimientoPage() {
   // (T12), que cargan y fallan POR SEPARADO: la que falla dice «—» y las demás siguen. Sin respaldo local; mientras no llegan,
   // 'cargando' (nunca 0 ni «?»).
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    apiFetch('/inventory/stats', { signal: control.signal })
-      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  const cargandoStats = stats?.vuelta !== vueltaStats;
-  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
+  // B4 T24 f3 (F45): el cargador compartido de los resúmenes (useResumen: aborta la anterior, descarta las viejas, va atado al usuario,
+  // conserva lo último al recargar y con error no deja datos viejos: «—»).
+  const stats = useResumen('/inventory/stats', vueltaStats);
+  const cargandoStats = stats.cargando;
+  const estadoKpis = useEstadoKpi(cargandoStats, stats.error);
   const [vueltaCompras, setVueltaCompras] = useState(0);
-  const [compras, setCompras] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    apiFetch('/compras/stats', { signal: control.signal })
-      .then((r: { data?: unknown } | null) => setCompras({ vuelta: vueltaCompras, datos: r?.data ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setCompras({ vuelta: vueltaCompras, datos: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaCompras]);
-  const cargandoCompras = compras?.vuelta !== vueltaCompras;
-  const estadoCompras = useEstadoKpi(cargandoCompras, cargandoCompras ? null : (compras?.error ?? null));
-  const tarjetas = tarjetasAbastecimiento(stats?.datos ?? null, compras?.datos ?? null);
+  const compras = useResumen('/compras/stats', vueltaCompras);
+  const cargandoCompras = compras.cargando;
+  const estadoCompras = useEstadoKpi(cargandoCompras, compras.error);
+  const tarjetas = tarjetasAbastecimiento(stats.datos, compras.datos);
   const agotados = tarjetas.agotados.valor;
   const alerta = estadoAlertaAgotados(estadoKpis, agotados);
 
@@ -154,7 +143,7 @@ export default function AbastecimientoPage() {
     setVueltaStats((n) => n + 1);
     setVueltaCompras((n) => n + 1);
   }, [recargarListado, recargarTablero, recargarCategorias]);
-  const actualizando = listado.recargando || (cargandoStats && stats !== null) || (cargandoCompras && compras !== null);
+  const actualizando = listado.recargando || (cargandoStats && stats.datos !== null) || (cargandoCompras && compras.datos !== null);
 
   // ── bloque 2: la tabla (R5, R26; D40, D41) ──
   const prefs = usePreferenciasTabla(ID_ABASTECIMIENTO, COLUMNAS_TABLA_ABASTECIMIENTO);
@@ -211,10 +200,8 @@ export default function AbastecimientoPage() {
       {alerta === 'sin_dato' && (
         <div role="status" className="min-h-[4.1rem] border-b border-slate-200 bg-slate-100 px-6 py-3">
           <h4 className="text-sm font-black text-slate-700">No se pudo verificar el stock crítico</h4>
-          <p className="mt-1 text-xs font-semibold text-slate-600">
-            Las tarjetas dicen cuál indicador falló.{' '}
-            <button type="button" onClick={() => setVueltaStats((n) => n + 1)} className={`rounded font-bold underline ${FOCOS.indigo}`}>Reintentar</button>
-          </p>
+          {/* B4 T24 f3 (F92): un solo «Reintentar» para /inventory/stats, el del aviso bajo las tarjetas (un 403 no lo ofrece). */}
+          <p className="mt-1 text-xs font-semibold text-slate-600">El aviso bajo las tarjetas dice qué falló.</p>
         </div>
       )}
       {alerta === 'ninguno' && (
@@ -260,10 +247,10 @@ export default function AbastecimientoPage() {
             /inventory/stats) y Pedidos de compra activos (de /compras/stats), todas informativas. Cada fuente carga y falla por
             separado: barras grises mientras cargan (nunca 0) y «—» si falla, con su aviso y «Reintentar» (m11). Sin gradiente. */}
         {estadoKpis === 'error' && (
-          <AvisoReintentar error={stats?.error} fallo="No se pudieron cargar los indicadores de existencias" onReintentar={() => setVueltaStats((n) => n + 1)} />
+          <AvisoReintentar error={stats.error} fallo="No se pudieron cargar los indicadores de existencias" onReintentar={stats.recargar} />
         )}
         {estadoCompras === 'error' && (
-          <AvisoReintentar error={compras?.error} fallo="No se pudieron cargar los pedidos de compra activos" onReintentar={() => setVueltaCompras((n) => n + 1)} />
+          <AvisoReintentar error={compras.error} fallo="No se pudieron cargar los pedidos de compra activos" onReintentar={compras.recargar} />
         )}
         <FranjaKpis estado={estadoKpis} titulo="Abastecimiento" nota={AYUDA_MINIMO_INVENTARIO}>
           <TarjetaKpi kpi="inv_agotados" valor={tarjetas.agotados.valor} ayuda={tarjetas.agotados.ayuda} />

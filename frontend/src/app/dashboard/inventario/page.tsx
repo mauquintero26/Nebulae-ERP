@@ -15,6 +15,8 @@ import {
   BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
 } from '@/components/tabla';
 import type { ClaveFila, ColumnaTabla, Listado, PestanaTabla } from '@/components/tabla';
+import { useResumen } from '@/components/ui/useResumen';
+import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import { PanelAnalisisPerezoso } from '@/components/analisis';
 import { apiFetch } from '@/lib/api';
 import { estadoDelTotal, extraPorVista, textoVacioExistencias } from '@/lib/tabla';
@@ -331,17 +333,12 @@ export default function InventarioHub() {
   // Las tarjetas (KPI-inventario punto 4; R10, R12): GET /inventory/stats, todo el inventario por referencia, sin
   // respaldo local. Mientras no llega, 'cargando' (nunca 0); si falla, «—».
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    apiFetch('/inventory/stats', { signal: control.signal })
-      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  const cargandoStats = stats?.vuelta !== vueltaStats;
-  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
-  const tarjetas = tarjetasHubInventario(stats?.datos ?? null);
+  // B4 T24 f3 (F45): el cargador compartido de los resúmenes (useResumen: aborta la anterior, descarta las viejas, va atado al usuario,
+  // conserva lo último al recargar y con error no deja datos viejos: «—»).
+  const stats = useResumen('/inventory/stats', vueltaStats);
+  const cargandoStats = stats.cargando;
+  const estadoKpis = useEstadoKpi(cargandoStats, stats.error);
+  const tarjetas = tarjetasHubInventario(stats.datos);
 
   // «Actualizar»: la tabla (o las bodegas), las tarjetas y los selectores. Ninguna recarga vacía lo que se ve.
   const { recargar: recargarListado } = listado;
@@ -352,7 +349,7 @@ export default function InventarioHub() {
     setVueltaStats((n) => n + 1);
     setVueltaCatalogos((n) => n + 1);
   }, [recargarListado, recargarAlmacenes]);
-  const actualizando = fuente.recargando || (cargandoStats && stats !== null);
+  const actualizando = fuente.recargando || (cargandoStats && stats.datos !== null);
 
   // ── B4 T17, bloque 2: la tabla (TABLA-inventario punto 4; R5, R26, RP53; D40, D41) ──
   const prefs = usePreferenciasTabla(ID_HUB, COLUMNAS_HUB);
@@ -496,6 +493,10 @@ export default function InventarioHub() {
                 tono={tarjetas?.bajo_minimo.tono ?? 'normal'} />
               <TarjetaKpi kpi="inv_disponibilidad" valor={tarjetas?.disponibilidad.valor ?? null} ayuda={tarjetas?.disponibilidad.ayuda ?? undefined} />
             </FranjaKpis>
+            {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
+            {estadoKpis === 'error' && (
+              <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de existencias" onReintentar={stats.recargar} acento="indigo" />
+            )}
             <nav aria-label="Operaciones de inventario" className="flex flex-wrap items-center gap-2 text-xs">
               <span className="font-semibold text-slate-600">Operaciones:</span>
               {OPERACIONES.map((o) => (

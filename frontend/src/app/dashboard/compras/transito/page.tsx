@@ -16,6 +16,8 @@ import {
 import type { ColumnaTabla } from '@/components/tabla';
 import { BannerFlujo, PasosFlujo, useResumenFlujo } from '@/components/flujo';
 import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
+import { useResumen } from '@/components/ui/useResumen';
+import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import { COMP_NAV } from '../comp-nav';
 
 import { FOCOS } from '@/lib/design-system';
@@ -256,16 +258,11 @@ export default function TransitoPage() {
   // Las tarjetas (KPI-compras punto 7; R7, R12): GET /compras/stats?periodo=30d (todos los PEC), sin respaldo local. Mientras
   // no llega, 'cargando' (nunca 0); si falla, «—».
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    apiFetch(`/compras/stats?periodo=${PERIODO_KPI}`, { signal: control.signal })
-      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  const cargandoStats = stats?.vuelta !== vueltaStats;
-  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
+  // B4 T24 f3 (F45): el cargador compartido de los resúmenes (useResumen: aborta la anterior, descarta las viejas, va atado al usuario,
+  // conserva lo último al recargar y con error no deja datos viejos: «—»).
+  const stats = useResumen(`/compras/stats?periodo=${PERIODO_KPI}`, vueltaStats);
+  const cargandoStats = stats.cargando;
+  const estadoKpis = useEstadoKpi(cargandoStats, stats.error);
 
   // «Actualizar» y lo que sigue a un cambio de etapa: la tabla y el tablero (el que no se ve se recarga al activarse), la
   // franja y las tarjetas. Ninguna recarga vacía lo que se ve: los hooks conservan lo último.
@@ -446,7 +443,7 @@ export default function TransitoPage() {
   // es el promedio de la página que se ve (RP95), de la tabla o del tablero; mientras llega, la barra gris.
   const filasVisibles = enKanban ? (completa.cargandoInicial ? null : completa.filas) : (lista.cargandoInicial ? null : lista.filas);
   const avance = useMemo(() => avancePromedioTransito(filasVisibles), [filasVisibles]);
-  const tarjetas = tarjetasTransito(stats?.datos ?? null, avance);
+  const tarjetas = tarjetasTransito(stats.datos, avance);
   const errorLista = enKanban ? completa.error : lista.error;
   const estadoAvance = errorLista ? 'error' : filasVisibles === null ? 'cargando' : 'listo';
 
@@ -457,7 +454,7 @@ export default function TransitoPage() {
   const filtroSemaforo = filtroSemaforoCompras(estado);
   const alFiltrarSemaforo = (f: FiltroSemaforo) => despachar(accionSemaforoCompras(estado, f, opcionesEstadosPec));
   const alternarVencidos = () => alFiltrarSemaforo(filtroSemaforo === 'atrasados' ? 'todos' : 'atrasados');
-  const actualizando = lista.recargando || completa.recargando || flujo.cargando || (cargandoStats && stats !== null);
+  const actualizando = lista.recargando || completa.recargando || flujo.cargando || (cargandoStats && stats.datos !== null);
 
   /* ════════════════ RENDER ════════════════ */
   return (
@@ -510,6 +507,10 @@ export default function TransitoPage() {
           <TarjetaKpi kpi="pec_avance" valor={tarjetas.avance.valor} ayuda={tarjetas.avance.ayuda} estado={estadoAvance} />
           <TarjetaKpi kpi="pec_monto_por_recibir" valor={tarjetas.monto_por_recibir.valor} />
         </FranjaKpis>
+        {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
+        {estadoKpis === 'error' && (
+          <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="blue" />
+        )}
 
         {/* B4 T16A (TABLA-compras punto 8, KANBAN-logistica punto 2): la barra y la tabla estándar en el servidor, o el tablero
             de etapas en modo cliente, con el MISMO estado (búsqueda, estados y «Solo vencidos»). */}
