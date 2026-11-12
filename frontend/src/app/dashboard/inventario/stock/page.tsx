@@ -135,7 +135,8 @@ export default function StockPage() {
     despachar({ tipo: 'pagina', valor: 1 });
   }, [despachar]);
   // El nombre de lo elegido, para el vacío (si el catálogo todavía no llegó, el id).
-  const nombreCategoria = categoria ? (categorias.filas?.find((c) => String(c.id) === categoria)?.name ?? `#${categoria}`) : null;
+  // r1 (m16, como F85 en el Hub): sin el catálogo, «la categoría elegida» (true), nunca el id crudo.
+  const nombreCategoria = categoria ? (categorias.filas?.find((c) => String(c.id) === categoria)?.name ?? true) : null;
   // m8 de T15: el «vacío» memoizado dice qué lo deja vacío (la búsqueda, la pestaña o la categoría).
   const vacio = useMemo(() => {
     const texto = textoVacioExistencias({ q: estado.q, vista: estado.vista, categoria: nombreCategoria, sinBodega: true });

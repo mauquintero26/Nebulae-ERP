@@ -915,7 +915,8 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
   assert.match(pag, /<MenuFila items=\{items\} etiqueta=\{`Acciones de \$\{p\.numero\}`\} \/>/);
   // El tablero (KANBAN-compras punto 6): las reglas de R9, la tarjeta con «Recepcionar» y D39.
   assert.match(pag, /regla=\{reglaSoltarPec\}/);
-  assert.match(pag, /tarjetaDe=\{tarjetaPedidoCompra\}/);
+  // B4 T24 f3 r1 (m20, D27): la tarjeta con {recepcionar} del rol (tarjetaDePec); lo fija el bloque de r1.
+  assert.match(pag, /tarjetaDe=\{tarjetaDePec\}/);
   assert.match(pag, /tablero\.recargar\(\[\.\.\.columnas\]\)/, 'D39: tras la acción, solo el origen y el destino');
   assert.match(pag, /catch \(err\) \{\s*if \(recargarTrasError\(err\)\) recargarTrasCambio\(\);\s*throw err;\s*\}/,
     'el tablero relanza el error del PATCH para deshacer y avisar');
@@ -2474,7 +2475,8 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   // B4 T24 f3 (F92, D27): un solo «Reintentar» para /inventory/stats (el del aviso bajo las tarjetas); la alerta «sin dato» remite a él.
   noTrae(abasto, "onClick={() => setVueltaStats((n) => n + 1)} className={`rounded font-bold underline ${FOCOS.indigo}`}>Reintentar</button>", 'Abastecimiento: la alerta «sin dato» ya no repite Reintentar');
   noTrae(abasto, 'Las tarjetas dicen cuál indicador falló.', 'Abastecimiento: la alerta no repite el aviso');
-  trae(abasto, '<p className="mt-1 text-xs font-semibold text-slate-600">El aviso bajo las tarjetas dice qué falló.</p>', 'Abastecimiento: la alerta remite al aviso');
+  // r1 (m11, m21, m37; D27): el aviso va SOBRE las tarjetas, y con los indicadores bien no se le culpa (textoAlertaSinDato).
+  trae(abasto, "<p className=\"mt-1 text-xs font-semibold text-slate-600\">{textoAlertaSinDato(estadoKpis === 'error')}</p>", 'Abastecimiento: la alerta remite al aviso');
   trae(stock, "{estadoKpis === 'error' && (\n          <AvisoReintentar error={stats.error} fallo=\"No se pudieron cargar las tarjetas de existencias\" onReintentar={stats.recargar} />", 'Stock: stats caído, con Reintentar');
   // m24: la insignia «Reservado» de BASE vuelve a la fila de Stock (hay unidades en bodega y nada disponible).
   trae(stock, 'celda: (f) => <CeldaEstadoExistencia f={f} /> },', 'Stock: el estado lleva «Reservado»');
@@ -3370,7 +3372,8 @@ console.log('--- B4 T24 f3 (FINAL-m12, F64, FINAL-m13, F62): el panel de un PEC 
   assert.equal(despuesDeEliminarPec({ status: 403 }), null);
   // El cableado del panel.
   const ped = leerFuente('app/dashboard/compras/pedidos/page.tsx');
-  trae(ped, 'const avisoRecepcion = avisoRecepcionPec(detail);');
+  // r1 (m20, D27): el aviso recibe {recepcionar} del rol; lo fija el bloque de r1.
+  trae(ped, 'const avisoRecepcion = avisoRecepcionPec(detail, { recepcionar: accesoPec.cambiarPec });');
   trae(ped, '{avisoRecepcion && (');
   trae(ped, "if (accion.tipo === 'abrir') { router.push(`/dashboard/compras/recepciones/${accion.id}`); return; }");
   trae(ped, 'router.push(`/dashboard/compras/recepciones/${(r?.data ?? r)?.id}`);');
@@ -3395,9 +3398,10 @@ console.log('--- B4 T24 f3 (F79, F82, F85, F86, F87-f, F78): el Hub de Inventari
   assert.deepEqual(textoPieBodega(1), { texto: '1 bajo el mínimo o agotada', alerta: true });
   assert.deepEqual(textoPieBodega(3), { texto: '3 bajo el mínimo o agotadas', alerta: true });
   assert.deepEqual(textoPieBodega(1200, { recortado: true }), { texto: '1.200 bajo el mínimo o agotadas', alerta: true });
-  assert.deepEqual(textoPieBodega(0), { texto: ESTADOS_STOCK.abastecido.label, alerta: false });
+  // r1 (m41, D27): una bodega sin alertas dice «Sin alertas» (no «Bien abastecido», la etiqueta de una referencia, en masculino).
+  assert.deepEqual(textoPieBodega(0), { texto: 'Sin alertas', alerta: false });
   assert.deepEqual(textoPieBodega(0, { recortado: true }), { texto: `Sin alertas en las ${TOPE_TABLERO_COMPRAS} cargadas`, alerta: false });
-  assert.equal(textoPieBodega(null).texto, ESTADOS_STOCK.abastecido.label);
+  assert.equal(textoPieBodega(null).texto, 'Sin alertas');
   // F87-f: las padre, marcadas (sin mutar); null sigue null.
   const cats = [{ id: 1, name: 'Hogar', parent_id: null }, { id: 2, name: 'Cocina', parent_id: 1 }, { id: 3, name: 'Juguetes', parent_id: null }];
   assert.deepEqual(marcarCategoriasPadre(cats).map((c) => c.name), ['Hogar (categoría padre)', 'Cocina', 'Juguetes']);
@@ -3412,7 +3416,8 @@ console.log('--- B4 T24 f3 (F79, F82, F85, F86, F87-f, F78): el Hub de Inventari
   trae(hub, '{textoPieBodega(b.en_riesgo, { recortado: recortado }).texto}', 'F79: el pie con su regla');
   trae(hub, 'const recortado = (listado.total ?? 0) > TOPE_TABLERO_COMPRAS;');
   noTrae(hub, "'Bien abastecida'", 'F79: sin la etiqueta local');
-  trae(hub, "textoDeError(listado.error, 'No se pudieron cargar las existencias por bodega')", 'F82 a');
+  // r1 (m24, D27): el mismo texto, ahora con AvisoDeError (un 403 no ofrece «Reintentar»).
+  trae(hub, '<AvisoDeError error={listado.error} fallo="No se pudieron cargar las existencias por bodega" onReintentar={listado.recargar} acento="indigo" />', 'F82 a');
   trae(hub, '<h2 className="sr-only">Existencias por bodega</h2>', 'F82 b');
   noTrae(hub, '`#${filtros.bodega}`', 'F85: sin el id crudo');
   noTrae(hub, '`#${filtros.categoria}`', 'F85');
@@ -3783,6 +3788,73 @@ console.log('--- B4 T24 f3 r1 (F71, F77, F69): la Lista y Traslados — la selec
   assert.deepEqual(r3, ['error']);
   assert.equal(libre.current, null);
   assert.equal(typeof montar({ current: null }, 'x', []), 'function', 'sin id válido: una limpieza que no hace nada');
+}
+
+console.log('--- B4 T24 f3 r1 (m2, m3, m4, m5, m10, m11, m15, m16, m20, m24, m39, m41): comentarios fieles, textos y roles en Compras e Inventario ---');
+{
+  const fuenteEc = readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8');
+  // m4: el tope de m16 sale de la columna del modelo (Numeric(p, s) de GoodsReceiptLine.quantity_received), no de un literal.
+  const modelo = readFileSync(new URL('../../backend/app/models/fase1b.py', import.meta.url), 'utf8');
+  const clase = modelo.slice(modelo.indexOf('class GoodsReceiptLine(Base):'), modelo.indexOf('class GoodsReceiptLineAllocation(Base):'));
+  const [, p, s] = /quantity_received\s*=\s*Column\(Numeric\((\d+),\s*(\d+)\)/.exec(clase) ?? [];
+  assert.ok(p && s, 'la columna del modelo');
+  assert.equal(ec.MAX_CANTIDAD_CONTEO, 10 ** (Number(p) - Number(s)) - 1, 'MAX_CANTIDAD_CONTEO = 10^(p-s) - 1 de la columna');
+  assert.match(readFileSync(new URL('../../backend/app/api/v1/erp_compras.py', import.meta.url), 'utf8'),
+    /_TIPO_CANTIDAD_GRL = GoodsReceiptLine\.__table__\.c\.quantity_received\.type\s*MAX_CANTIDAD_LINEA = 10 \*\* \(_TIPO_CANTIDAD_GRL\.precision - _TIPO_CANTIDAD_GRL\.scale\) - 1/,
+    'el servidor deriva MAX_CANTIDAD_LINEA de la misma columna');
+  // m2 / m28: el JSDoc de confirmacionDespacho ya no dice que el servidor bloquea por saldo; m5: el de la llegada del enlace de Productos.
+  const entregas = readFileSync(new URL('../src/lib/entregas.js', import.meta.url), 'utf8');
+  assert.ok(!entregas.includes('el servidor tiene la misma regla desde FINAL-m35'), 'm2: sin el comentario falso');
+  assert.match(entregas, /el servidor NO bloquea por saldo/);
+  assert.ok(!fuenteEc.includes('`q` también encuentra los que lo contienen'), 'm5: sin el contrato viejo');
+  assert.match(fuenteEc, /filtra por el SKU EXACTO distinguiendo mayúsculas/);
+  // m3: el JSDoc de TEXTO_SEGUIMIENTO_CERRADO va pegado a su export.
+  const flujoFuente = readFileSync(new URL('../src/lib/flujo-compras.js', import.meta.url), 'utf8');
+  assert.match(flujoFuente, /\/\*\* El texto de un seguimiento cerrado \(el panel de la lista, el del Hub y el detalle dicen lo mismo\)\. \*\/\nexport const TEXTO_SEGUIMIENTO_CERRADO = /);
+  assert.ok(!/\*\/\n\/\*\* B4 T24 f3 \(m21 del backend r1\)/.test(flujoFuente), 'sin dos JSDoc seguidos');
+  // m10: el comentario de Historial no coincide con la búsqueda de RP99 («en construcci»).
+  const historial = leerFuente('app/dashboard/compras/historial/page.tsx');
+  assert.equal((historial.slice(0, 600).match(/en construcci/gi) ?? []).length, 0, 'm10: la cabecera no lleva «en construcci»');
+  // m11 / m21 / m37: el aviso de /inventory/stats va SOBRE las tarjetas; con los indicadores bien, no se le culpa.
+  assert.equal(ec.textoAlertaSinDato(true), 'El aviso sobre las tarjetas dice qué falló.');
+  assert.equal(ec.textoAlertaSinDato(false), 'El servidor no dio el número de agotados.');
+  const abasto = leerFuente('app/dashboard/inventario/abastecimiento/page.tsx');
+  assert.ok(abasto.indexOf('<AvisoReintentar error={stats.error}') < abasto.indexOf('<FranjaKpis'), 'el aviso de stats va antes (sobre) la franja');
+  // m15: un PEC ya recibido soltado en «En bodega» no lleva a Recepciones (su selector no lo lista).
+  for (const estado of ['RECIBIDA', 'COMPLETADO']) {
+    assert.deepEqual(ec.reglaSoltarPec({ id: 1, estado }, ec.columnaPec(estado), 'en_bodega'), { tipo: 'bloqueado', motivo: 'Ya llegó a bodega: su estado lo lleva la recepción.' }, estado);
+  }
+  assert.equal(ec.reglaSoltarPec({ id: 1, estado: 'RECIBIDO' }, 'en_bodega', 'recibido').enlace?.href, '/dashboard/compras/recepciones', 'en bodega → recibido sigue con su enlace');
+  // m16: sin el catálogo, «la categoría elegida» (nunca «#7») en Stock, Abastecimiento y Productos.
+  for (const ruta of ['app/dashboard/inventario/stock/page.tsx', 'app/dashboard/inventario/abastecimiento/page.tsx', 'app/dashboard/inventario/productos/page.tsx']) {
+    const f = leerFuente(ruta);
+    assert.ok(!/\?\? `#\$\{/.test(f), `${ruta}: sin el id crudo`);
+    assert.match(f, /\?\.name \?\? true\) : null;/, `${ruta}: true sin el catálogo`);
+  }
+  assert.equal(ec.textoVacioProductos({ categoria: true }).titulo, 'Ningún producto en la categoría elegida.');
+  assert.equal(ec.textoVacioProductos({ q: 'tenis', categoria: true }).titulo, 'Ningún producto coincide con «tenis» en la categoría elegida.');
+  assert.equal(ec.textoVacioProductos({ categoria: 'Calzado' }).titulo, 'Ningún producto en la categoría «Calzado».', 'con nombre, como antes');
+  // m20: «Recepcionar» de la tarjeta y el aviso del panel solo empujan a quien recepciona (ADMIN y COMPRAS).
+  const enBodega = { id: 3, estado: 'RECIBIDO' };
+  assert.equal(ec.tarjetaPedidoCompra(enBodega).accionPrincipal?.texto, 'Recepcionar', 'sin opciones, como antes');
+  assert.equal(ec.tarjetaPedidoCompra(enBodega, { recepcionar: true }).accionPrincipal?.texto, 'Recepcionar');
+  assert.equal(ec.tarjetaPedidoCompra(enBodega, { recepcionar: false }).accionPrincipal, null, 'sin permiso, la tarjeta queda en «Abrir»');
+  const parcial = { id: 3, estado: 'PARCIALMENTE_RECIBIDA', recepciones: [] };
+  assert.equal(ec.avisoRecepcionPec(parcial).texto, 'Falta por recibir: inicia la recepción de lo que falta.', 'como antes');
+  assert.equal(ec.avisoRecepcionPec(parcial, { recepcionar: false }).texto, 'Falta recibir el resto: la recepción la abre Compras.');
+  assert.equal(ec.avisoRecepcionPec(enBodega, { recepcionar: false }).texto, 'Falta la recepción: la abre Compras.');
+  const ped = leerFuente('app/dashboard/compras/pedidos/page.tsx');
+  trae(ped, 'const tarjetaDePec = useCallback((p: FilaPec) => tarjetaPedidoCompra(p, { recepcionar: accesoPec.cambiarPec }), [accesoPec.cambiarPec]);');
+  trae(ped, 'tarjetaDe={tarjetaDePec}');
+  // m24: el error de Almacenes con AvisoDeError (sin el «Reintentar» fijo).
+  const hub = leerFuente('app/dashboard/inventario/page.tsx');
+  assert.ok(!/onClick=\{listado\.recargar\}[\s\S]{0,300}Reintentar/.test(hub), 'sin el botón fijo');
+  // m39: «Editar proveedor» no se cierra mientras guarda.
+  const lis = leerFuente('app/dashboard/compras/lista-compras/page.tsx');
+  trae(lis, '<Modal cierreExterno={false} bloquearCierre={ocupadoId === editando.id} title="Editar proveedor"');
+  trae(lis, '<Button variant="secondary" disabled={ocupadoId === editando.id} onClick={() => setEditando(null)}>Cancelar</Button>');
+  // m41 (la bodega): «Sin alertas», no «Bien abastecido».
+  assert.equal(ec.textoPieBodega(0).texto, 'Sin alertas');
 }
 
 console.log('\nOK: test_estados_compras.mjs');

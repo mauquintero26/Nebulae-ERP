@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Table2, History, FolderOpen, X, Download, CloudDownload, Filter, Search, Loader2 } from 'lucide-react';
 import { SubNav, PageHeader, Badge, Button, EmptyState } from '@/components/ui';
-// B4 T24 f3 (FINAL-m4, ruling 7): la pestaña Análisis es el asistente «En construcción» (R2): ninguna respuesta de IA fabricada aquí.
+// B4 T24 f3 (FINAL-m4, ruling 7): la pestaña Análisis es AsistenteEnConstruccion (R2): ninguna respuesta de IA fabricada aquí.
 import { AsistenteEnConstruccion } from '@/components/analisis';
 import { COMP_NAV } from '../comp-nav';
 import { apiFetch } from '@/lib/api';

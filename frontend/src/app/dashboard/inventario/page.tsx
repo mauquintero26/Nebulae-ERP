@@ -24,7 +24,6 @@ import { AYUDA_MINIMO_INVENTARIO, numeroFinito, resumenAlmacenes, tarjetasHubInv
 import { ESTADOS_STOCK, TOPE_TABLERO_COMPRAS, avisoTope200, marcarCategoriasPadre, textoPieBodega } from '@/lib/estados-compras';
 // ?tab=analisis: la lectura genérica que dejó T14 en flujo-compras.js (se reúsa, no se copia).
 import { leerEnlaceHubCompras } from '@/lib/flujo-compras';
-import { textoDeError } from '@/lib/avisos';
 // T18 r1 (m10, m21): las piezas de una existencia (tipos, celdas, detalle, selector, formatos, clave y clase de fila, CONTENEDOR y
 // foco) son de piezas-inventario.tsx, fuente única de las cinco pantallas de existencias; el Hub las importa sin cambio visible.
 import {
@@ -176,15 +175,10 @@ function VistaAlmacenes({ listado, vacio, onVer }: { listado: Listado<FilaStock>
   const aviso = avisoTope200(listado.total, 'existencias');
   // B4 T24 f3 (F79): con más filas que las cargadas, el pie no afirma «Bien abastecido» de lo que quedó fuera.
   const recortado = (listado.total ?? 0) > TOPE_TABLERO_COMPRAS;
-  const error = listado.error ? (
-    <div role="alert" className="flex flex-wrap items-center gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">
-      {textoDeError(listado.error, 'No se pudieron cargar las existencias por bodega')}
-      <button type="button" onClick={listado.recargar}
-        className={`inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 ${FOCO_VISIBLE}`}>
-        <RefreshCw size={13} aria-hidden="true" /> Reintentar
-      </button>
-    </div>
-  ) : null;
+  // r1 (m24): con AvisoDeError: un 403 no ofrece «Reintentar» (ofreceReintentar), como el resto de f3.
+  const error = listado.error
+    ? <AvisoDeError error={listado.error} fallo="No se pudieron cargar las existencias por bodega" onReintentar={listado.recargar} acento="indigo" />
+    : null;
   if (listado.cargandoInicial) {
     // El esqueleto con la MISMA forma de la tarjeta cargada (las mismas cajas y alturas de línea): nada salta al llegar.
     return (

@@ -409,7 +409,6 @@ export function textoDiasEtapa(eta, hoy = diaColombia()) {
 
 // ─── El seguimiento del envío en las pantallas (B4 T15 r1: m2, m4, m6 y m14) ────────
 
-/** El texto de un seguimiento cerrado (el panel de la lista, el del Hub y el detalle dicen lo mismo). */
 /** B4 T24 f3 (m21 del backend r1): el tope de los días de alerta de una etapa (_MAX_DIAS_ALERTA de erp_compras.py). */
 export const MAX_DIAS_ALERTA_ETAPA = 36500;
 /** El texto del 422 de PUT /compras/tracking-config (ETAPA_DIAS_INVALIDOS de erp_compras.py; test_flujo_compras vigila la paridad). */
@@ -433,6 +432,7 @@ export function errorDiasEtapas(etapas) {
   return null;
 }
 
+/** El texto de un seguimiento cerrado (el panel de la lista, el del Hub y el detalle dicen lo mismo). */
 export const TEXTO_SEGUIMIENTO_CERRADO = 'Pedido de compra cancelado: su envío ya no se sigue.';
 
 /**

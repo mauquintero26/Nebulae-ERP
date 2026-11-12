@@ -683,10 +683,12 @@ export default function ListaComprasPage() {
 
       {/* Editar el proveedor de un ítem */}
       {editando && (
-        <Modal cierreExterno={false} title="Editar proveedor" subtitle={editando.producto} color="purple" maxWidth="md" onClose={() => setEditando(null)}
+        <Modal cierreExterno={false} bloquearCierre={ocupadoId === editando.id} title="Editar proveedor" subtitle={editando.producto} color="purple" maxWidth="md"
+          onClose={() => setEditando(null)}
           footer={(
             <>
-              <Button variant="secondary" onClick={() => setEditando(null)}>Cancelar</Button>
+              {/* r1 (m39, F40): mientras guarda, ni la X ni «Cancelar» la cierran (si el PATCH falla, lo escrito sigue). */}
+              <Button variant="secondary" disabled={ocupadoId === editando.id} onClick={() => setEditando(null)}>Cancelar</Button>
               <Button color="purple" icon={Package} loading={ocupadoId === editando.id} disabled={ocupadoId != null} onClick={guardarProveedor}>Guardar proveedor</Button>
             </>
           )}>

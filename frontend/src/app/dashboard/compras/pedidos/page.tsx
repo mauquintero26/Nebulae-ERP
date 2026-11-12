@@ -688,7 +688,8 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
   const est = { ...infoEstadoPec(detail?.estado).clases, label: infoEstadoPec(detail?.estado).label };
   const vencido = detail?.is_overdue ?? pec.is_overdue;
   const pvens = detail?.pedidos_venta?.length ? detail.pedidos_venta.map((v:any)=>v.numero) : (detail?.ven_numero ? [detail.ven_numero] : []);
-  const avisoRecepcion = avisoRecepcionPec(detail);
+  // r1 (m20): sin el permiso de recepcionar (ADMIN y COMPRAS), el aviso informa sin empujar a una acción que no tiene.
+  const avisoRecepcion = avisoRecepcionPec(detail, { recepcionar: accesoPec.cambiarPec });
 
   return (
     <>
@@ -1543,6 +1544,8 @@ export default function PedidosCompraPage() {
   // /compras/pedidos y PATCH /tracking son de ADMIN y COMPRAS); sin permiso, el tablero es solo para ver y no se ofrecen sus acciones.
   const accesoPec = accesoCompras(useRolActual());
   const enKanban = estado.modo === 'kanban';
+  // r1 (m20): «Recepcionar» de la tarjeta en «En bodega» solo a quien recepciona (sin permiso, la tarjeta queda en «Abrir»).
+  const tarjetaDePec = useCallback((p: FilaPec) => tarjetaPedidoCompra(p, { recepcionar: accesoPec.cambiarPec }), [accesoPec.cambiarPec]);
 
   // GET /compras/pedidos con vista, estados, semáforo, q, orden, limit y offset del estado, más los conteos de las
   // pestañas en la MISMA llamada. esperar: !listo (D40): el esqueleto, nunca «vacío». En Kanban, sin filas. Sin orden (el
@@ -1992,7 +1995,7 @@ export default function PedidosCompraPage() {
             !accesoPec.listo ? <EsqueletoTablero /> : <TableroKanban
               tablero={tablero}
               regla={reglaSoltarPec}
-              tarjetaDe={tarjetaPedidoCompra}
+              tarjetaDe={tarjetaDePec}
               onAbrir={abrir}
               onCambio={cambiarDesdeTablero}
               onAccion={accionDesdeTablero}

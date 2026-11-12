@@ -302,6 +302,8 @@ export function reglaSoltarPec(pec, origen, destino) {
     case 'recibido':
       if (etapa === 'borrador') return { tipo: 'bloqueado', motivo: TEXTO_EMITIR_PRIMERO };
       if (etapa === 'emitido') return { tipo: 'bloqueado', motivo: 'Primero sigue el envío en Mercancía en tránsito.', enlace: ENLACE_TRANSITO };
+      // r1 (m15): un PEC ya recibido soltado en «En bodega» no lleva a Recepciones (su selector «Recepcionar PEC» no lo lista).
+      if (etapa === 'recibido') return { tipo: 'bloqueado', motivo: TEXTO_YA_EN_BODEGA };
       return { tipo: 'bloqueado', motivo: 'Lo marca la recepción en bodega.', enlace: ENLACE_RECEPCIONES };
     default: // 'borrador'
       if (yaEnBodega) return { tipo: 'bloqueado', motivo: TEXTO_YA_EN_BODEGA };
@@ -455,11 +457,13 @@ const ACCION_RECEPCIONAR = congelar({ texto: 'Recepcionar', href: '/dashboard/co
  * @param {any} p
  * @returns {ReturnType<typeof tarjetaPec> & {accionPrincipal: {texto: string, href: string, tono: string} | null}}
  */
-export function tarjetaPedidoCompra(p) {
+export function tarjetaPedidoCompra(p, { recepcionar = true } = {}) {
   const tarjeta = tarjetaPec(p);
   const enBodega = columnaPec(p?.estado) === 'en_bodega';
   const chips = p?.estado === 'PARCIALMENTE_RECIBIDA' ? [...tarjeta.chips, { texto: 'Falta por recibir', tono: 'amber' }] : tarjeta.chips;
-  return { ...tarjeta, chips, accionPrincipal: enBodega ? { ...ACCION_RECEPCIONAR } : null };
+  // r1 (m20, aditivo): «Recepcionar» (POST /pedidos/{id}/recepcionar: ADMIN y COMPRAS) solo a quien recepciona; sin permiso, la tarjeta
+  // queda en «Abrir» (el panel), como tarjetaRecepcion con {contar}.
+  return { ...tarjeta, chips, accionPrincipal: enBodega && recepcionar ? { ...ACCION_RECEPCIONAR } : null };
 }
 
 /**
@@ -830,7 +834,8 @@ export function textoPieBodega(enRiesgo, { recortado = false } = {}) {
   const n = numeroFinito(enRiesgo) ?? 0;
   if (n > 0) return { texto: `${formatoEntero(n)} bajo el mínimo o ${n === 1 ? 'agotada' : 'agotadas'}`, alerta: true };
   if (recortado) return { texto: `Sin alertas en las ${TOPE_TABLERO_COMPRAS} cargadas`, alerta: false };
-  return { texto: ESTADOS_STOCK.abastecido.label, alerta: false };
+  // r1 (m41): una bodega no está «Bien abastecido» (la etiqueta de una referencia): «Sin alertas», como la variante recortada.
+  return { texto: 'Sin alertas', alerta: false };
 }
 
 /**
@@ -858,7 +863,7 @@ export function marcarCategoriasPadre(categorias) {
  * @param {any} pec
  * @returns {{titulo: string, texto: string, accion: {tipo: 'abrir', id: number, texto: string} | {tipo: 'crear', texto: string}} | null}
  */
-export function avisoRecepcionPec(pec) {
+export function avisoRecepcionPec(pec, { recepcionar = true } = {}) {
   const columna = columnaPec(pec?.estado);
   const recepciones = Array.isArray(pec?.recepciones) ? pec.recepciones.filter((r) => r?.id != null) : [];
   if (columna === 'en_bodega') {
@@ -868,9 +873,13 @@ export function avisoRecepcionPec(pec) {
         accion: { tipo: 'abrir', id: porConfirmar.id, texto: 'Ver recepción' } };
     }
     const parcial = String(pec?.estado ?? '').trim() === 'PARCIALMENTE_RECIBIDA';
+    // r1 (m20, aditivo): sin el permiso de recepcionar (ADMIN y COMPRAS), un texto informativo, sin empujar a una acción que no tiene.
+    const texto = !recepcionar
+      ? (parcial ? 'Falta recibir el resto: la recepción la abre Compras.' : 'Falta la recepción: la abre Compras.')
+      : parcial ? 'Falta por recibir: inicia la recepción de lo que falta.' : 'Inicia el conteo físico de este pedido.';
     return {
       titulo: parcial ? 'Mercancía recibida en parte' : 'Mercancía recibida en bodega, pendiente de recepción',
-      texto: parcial ? 'Falta por recibir: inicia la recepción de lo que falta.' : 'Inicia el conteo físico de este pedido.',
+      texto,
       accion: { tipo: 'crear', texto: 'Hacer recepción' },
     };
   }
@@ -2061,14 +2070,15 @@ export function tarjetaProducto(p) {
 
 /**
  * Lo que dice la tabla de Productos cuando no hay filas: la búsqueda, los filtros de la barra (revisión, IVA) o nada.
- * @param {{q?: string | null, revision?: boolean, sinTarifa?: boolean, categoria?: string | null} | null | undefined} filtro
+ * @param {{q?: string | null, revision?: boolean, sinTarifa?: boolean, categoria?: string | true | null} | null | undefined} filtro
  * @returns {{titulo: string, ayuda: string | null}}
  */
 export function textoVacioProductos(filtro) {
   const f = objetoPlano(filtro) ?? {};
   const q = textoLimpio(f.q);
-  const categoria = textoLimpio(f.categoria);
-  const donde = categoria ? ` en la categoría «${categoria}»` : '';
+  // r1 (m16, aditivo): `true` = hay una categoría elegida pero el catálogo no llegó (nunca el id crudo «#7»).
+  const categoria = f.categoria === true ? true : textoLimpio(f.categoria);
+  const donde = categoria === true ? ' en la categoría elegida' : categoria ? ` en la categoría «${categoria}»` : '';
   const quita = categoria ? 'Quita los filtros de revisión, de IVA o de categoría para ver más.' : 'Quita los filtros de revisión o de IVA para ver más.';
   if (q) {
     return {
@@ -2106,9 +2116,10 @@ export function pedirEnlaceProducto(marca, idDeLaUrl, skuDeLaUrl) {
 }
 
 /**
- * Llegó la respuesta del enlace: abre el producto exacto (por su id, o el que tiene ese SKU exacto, sin distinguir
- * mayúsculas: `q` también encuentra los que lo contienen); si no está, avisa UNA vez. En los dos casos la marca queda en
- * lo pedido (no se vuelve a pedir ni a avisar).
+ * Llegó la respuesta del enlace: abre el producto exacto (por su id, o el que tiene ese SKU). r1 (m5, m28): desde B40-f la consulta
+ * es /products?sku=, y el servidor (B40-b, catalog.py) filtra por el SKU EXACTO distinguiendo mayúsculas: un ?sku= con otras
+ * mayúsculas da «No se encontró». La comparación sin mayúsculas de aquí ya solo es un respaldo. Si no está, avisa UNA vez. En los dos
+ * casos la marca queda en lo pedido (no se vuelve a pedir ni a avisar).
  * @param {{marca: string, id: number | null, sku: string | null}} pedido
  * @param {ReadonlyArray<any> | null | undefined} filas
  * @returns {{marca: string, abrir: any | null, avisar: boolean, texto: string | null}}
@@ -2369,6 +2380,17 @@ export function pestanasTraslado(conteos) {
 /** Los conteos de TODOS los traslados (sin búsqueda ni filtros) para las tarjetas: solo el total y los conteos, sin filas. */
 export const RUTA_CONTEOS_TRASLADOS = '/inventory/operations?operation_type=TRANSFER&limit=0&con_conteos=1';
 /** La columna del tablero de Traslados (su estado) y el día en que se hizo (la fecha real). */
+/**
+ * B4 T24 f3 r1 (m11, m21, m37): lo que dice la alerta «No se pudo verificar el stock crítico» de Abastecimiento. Si /inventory/stats
+ * falló, remite al aviso con «Reintentar», que va SOBRE las tarjetas (antes decía «bajo»); si respondió pero sin un número de agotados,
+ * no culpa a un aviso que no existe.
+ * @param {boolean} fallaronLosIndicadores
+ * @returns {string}
+ */
+export function textoAlertaSinDato(fallaronLosIndicadores) {
+  return fallaronLosIndicadores ? 'El aviso sobre las tarjetas dice qué falló.' : 'El servidor no dio el número de agotados.';
+}
+
 export const columnaDeTraslado = (t) => t?.status;
 export const fechaDeTraslado = (t) => t?.fecha;
 

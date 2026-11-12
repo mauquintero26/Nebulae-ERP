@@ -203,7 +203,8 @@ export default function ProductosPage() {
   }, [despachar]);
   // m8 de T15: el «vacío» memoizado dice qué lo deja vacío (la búsqueda, los filtros de la barra o nada).
   // El nombre de la categoría elegida, para el vacío (si el catálogo todavía no llegó, el id).
-  const nombreCategoria = filtros.categoria ? (categorias.filas?.find((c) => String(c.id) === filtros.categoria)?.name ?? `#${filtros.categoria}`) : null;
+  // r1 (m16, como F85 en el Hub): sin el catálogo, «la categoría elegida» (true), nunca el id crudo.
+  const nombreCategoria = filtros.categoria ? (categorias.filas?.find((c) => String(c.id) === filtros.categoria)?.name ?? true) : null;
   const vacio = useMemo(() => {
     const texto = textoVacioProductos({ q: estado.q, revision: filtros.revision, sinTarifa: filtros.sinTarifa, categoria: nombreCategoria });
     return (

@@ -428,8 +428,9 @@ export function cuerpoDespacho(pedido, { rol, warehouseId, hoy = new Date().toLo
 /**
  * Lo que pregunta confirmar() de useAvisos antes de despachar (RP23: ya no window.confirm): sin saldo, la confirmación normal, con el
  * cliente y la bodega de salida. B4 T24 f3 (F32): la rama «Alerta de cobro» (con saldo por cobrar) es una guarda defensiva: desde T19 r2
- * la página no despacha un pedido con saldo (puedeDespacharPedido; el servidor tiene la misma regla desde FINAL-m35), así que no se
- * alcanza desde la pantalla; si un llamador la pide igual, avisa el monto real.
+ * la página no despacha un pedido con saldo (puedeDespacharPedido), así que no se alcanza desde la pantalla; si un llamador la pide
+ * igual, avisa el monto real. r1 (m2, m28): el servidor NO bloquea por saldo (FINAL-m35 sin la regla del saldo por el ruling 2: los
+ * clientes con crédito de B3.1; solo valida los estados): la guarda de la pantalla (puedeDespacharPedido) es la ÚNICA barrera.
  * @param {any} pedido
  * @param {string | null | undefined} nombreBodega
  * @returns {{titulo: string, mensaje: string, efectos: string[], textoConfirmar: string, peligro: boolean}}

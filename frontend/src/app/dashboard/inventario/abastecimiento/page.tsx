@@ -18,7 +18,7 @@ import { AYUDA_MINIMO_INVENTARIO, formatoEntero, tarjetasAbastecimiento } from '
 import { dependenciasTablero, estadoDelTotal, extraPorVista, normalizarRespuesta, textoVacioExistencias } from '@/lib/tabla';
 import {
   COLUMNAS_STOCK, TEXTO_SOLO_VER_STOCK, VISTAS_ABASTECIMIENTO, consultaColumnaStock, estadoAlertaAgotados, pestanasExistencias,
-  tarjetaExistencia,
+  tarjetaExistencia, textoAlertaSinDato,
 } from '@/lib/estados-compras';
 import { INV_NAV } from '../inv-nav';
 import {
@@ -159,7 +159,8 @@ export default function AbastecimientoPage() {
     setCategoria(valor);
     despachar({ tipo: 'pagina', valor: 1 });
   }, [despachar]);
-  const nombreCategoria = categoria ? (categorias.filas?.find((c) => String(c.id) === categoria)?.name ?? `#${categoria}`) : null;
+  // r1 (m16, como F85 en el Hub): sin el catálogo, «la categoría elegida» (true), nunca el id crudo.
+  const nombreCategoria = categoria ? (categorias.filas?.find((c) => String(c.id) === categoria)?.name ?? true) : null;
   // m8 de T15: el «vacío» memoizado dice qué lo deja vacío (la búsqueda, la pestaña o la categoría).
   const vacio = useMemo(() => {
     const texto = textoVacioExistencias({ q: estado.q, vista: estado.vista, categoria: nombreCategoria, sinBodega: true });
@@ -200,8 +201,9 @@ export default function AbastecimientoPage() {
       {alerta === 'sin_dato' && (
         <div role="status" className="min-h-[4.1rem] border-b border-slate-200 bg-slate-100 px-6 py-3">
           <h4 className="text-sm font-black text-slate-700">No se pudo verificar el stock crítico</h4>
-          {/* B4 T24 f3 (F92): un solo «Reintentar» para /inventory/stats, el del aviso bajo las tarjetas (un 403 no lo ofrece). */}
-          <p className="mt-1 text-xs font-semibold text-slate-600">El aviso bajo las tarjetas dice qué falló.</p>
+          {/* B4 T24 f3 (F92): un solo «Reintentar» para /inventory/stats, el del aviso sobre las tarjetas (un 403 no lo ofrece). r1 (m11,
+              m37): si los indicadores respondieron, el texto no remite a un aviso que no existe (textoAlertaSinDato). */}
+          <p className="mt-1 text-xs font-semibold text-slate-600">{textoAlertaSinDato(estadoKpis === 'error')}</p>
         </div>
       )}
       {alerta === 'ninguno' && (
