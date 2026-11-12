@@ -31,6 +31,7 @@ import {
   claseDeFilaExistencia as claseDeFilaStock, claveDeFilaExistencia as claveDeFilaStock, infoStock, pesos,
 } from './piezas-inventario';
 import type { Catalogo, ConteosStock, FilaExistencia as FilaStock, OpcionCatalogo } from './piezas-inventario';
+import { AvisoCatalogoViejo } from './aviso-catalogo';
 
 const SUB_MODULES = [
   { name: 'Stock y Catálogo', path: '/dashboard/inventario/stock' },
@@ -549,6 +550,9 @@ export default function InventarioHub() {
                     <SelectorCatalogo etiqueta="Categoría" todas="Todas las categorías" cargando="Cargando categorías…"
                       fallo="No se pudieron cargar las categorías" catalogo={categoriasMarcadas} valor={filtros.categoria}
                       onCambiar={(categoria) => cambiarFiltros({ categoria })} onReintentar={reintentarCatalogos} icono={Layers} />
+                    {/* r1 (F81): si «Actualizar» falla con los catálogos ya cargados, se dice junto a los selectores, con «Reintentar». */}
+                    <AvisoCatalogoViejo catalogo={bodegas} fallo="No se pudieron actualizar las bodegas" onReintentar={reintentarCatalogos} />
+                    <AvisoCatalogoViejo catalogo={categorias} fallo="No se pudieron actualizar las categorías" onReintentar={reintentarCatalogos} />
                     {hayFiltros && (
                       <button type="button" onClick={() => cambiarFiltros(verAlmacenes ? { categoria: '' } : SIN_FILTROS)}
                         className={`rounded-xl px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50 ${FOCO_VISIBLE}`}>

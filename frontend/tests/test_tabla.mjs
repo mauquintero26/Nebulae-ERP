@@ -3097,7 +3097,7 @@ console.log('--- TEST T24-c (B4 T24, FINAL-C5): Gastos pide y pinta solo lo que 
   // SelectorCatalogo (piezas de Inventario, aditivo): su «Reintentar» también mira ofreceReintentar.
   const piezas = codigo(leer('app/dashboard/inventario/piezas-inventario.tsx'));
   // B4 T24 f3 r1 (F81, D27): el «Reintentar» del catálogo, solo si ofreceReintentar (un 403 no), y con señal mientras pide.
-  assert.match(piezas, /const reintentar = ofreceReintentar\(catalogo\.error\) && \(\s*<button type="button" onClick=\{catalogo\.cargando \? undefined : onReintentar\}/);
+  assert.match(piezas, /\{ofreceReintentar\(catalogo\.error\) && <button type="button" onClick=\{catalogo\.cargando \? undefined : onReintentar\}/);
 }
 
 console.log('--- TEST T24-d (B4 T24, FINAL-m21): la pestaña Pagos de E-Commerce, solo ADMIN y sin guardar los valores por defecto ---');

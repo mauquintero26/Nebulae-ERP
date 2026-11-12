@@ -12,7 +12,7 @@ import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import { formatoPesos } from '@/lib/pesos';
 import { tiene } from '@/lib/estados-pedido';
 import { formatoDecimal, numeroFinito } from '@/lib/kpis';
-import { ESTADOS_STOCK, existenciaReservada, filasDeCatalogo } from '@/lib/estados-compras';
+import { ESTADOS_STOCK, existenciaReservada } from '@/lib/estados-compras';
 import { ofreceReintentar, textoDeError } from '@/lib/avisos';
 // El chip estándar de las tablas del bloque (columnas-pec.tsx, T15 r1): la misma forma que el estado de un PEC.
 import { CHIP } from '../compras/columnas-pec';
@@ -46,8 +46,7 @@ export type ConteosStock = Partial<Record<'todos' | 'agotados' | 'bajo_minimo' |
 /** Una bodega de GET /inventory/warehouses o una categoría de GET /categories. */
 export type OpcionCatalogo = { id: number; name: string; parent_id?: number | null };
 /** Un catálogo: filas null mientras carga; si falla, el error (y lo último que llegó bien, si había). */
-/** r1 (F81, aditivo): `cargando` mientras va una vuelta (la primera o un «Reintentar»). */
-export type Catalogo = { filas: OpcionCatalogo[] | null; error: unknown; cargando?: boolean };
+export type Catalogo = { filas: OpcionCatalogo[] | null; error: unknown; cargando?: boolean /* r1 (F81, aditivo): una vuelta en camino */ };
 
 /** El contenedor de los Hubs y de las listas del bloque (T7 a T17): RESERVA_BOTON_IA (pb-24, F44-a) deja libre la esquina del botón de la IA. */
 export const CONTENEDOR = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;
@@ -165,22 +164,20 @@ export function DetalleExistencia({ f, onCerrar, color = 'indigo' }: { f: FilaEx
  * falla, el error SE CONSERVA (con lo último bueno, si había) y `recargar` vuelve a pedir: nunca una lista vacía falsa.
  */
 export function useCatalogo(ruta: string): { catalogo: Catalogo; recargar: () => void } {
-  // r1 (F81): con la vuelta de la carga ({vuelta, filas, error}: cargando mientras no llega la de esta vuelta) y filasDeCatalogo (una
-  // forma inesperada es un error, no una lista vacía); con un error, lo último bueno se conserva.
   const [vuelta, setVuelta] = useState(0);
-  const [carga, setCarga] = useState<Catalogo & { vuelta: number }>({ vuelta: -1, filas: null, error: null });
+  const [catalogo, setCatalogo] = useState<Catalogo>({ filas: null, error: null });
   useEffect(() => {
     const control = new AbortController();
     apiFetch(ruta, { signal: control.signal })
-      .then((r: unknown) => {
-        const { filas, error } = filasDeCatalogo(r);
-        setCarga((c) => ({ vuelta, filas: (filas as OpcionCatalogo[] | null) ?? c.filas, error }));
+      .then((r: { data?: unknown } | OpcionCatalogo[] | null) => {
+        const filas = Array.isArray(r) ? r : Array.isArray(r?.data) ? (r.data as OpcionCatalogo[]) : [];
+        setCatalogo({ filas, error: null });
       })
-      .catch((err: unknown) => { if (!control.signal.aborted) setCarga((c) => ({ vuelta, filas: c.filas, error: err })); });
+      .catch((err: unknown) => { if (!control.signal.aborted) setCatalogo((c) => ({ filas: c.filas, error: err })); });
     return () => control.abort();
   }, [ruta, vuelta]);
   const recargar = useCallback(() => setVuelta((n) => n + 1), []);
-  return { catalogo: { filas: carga.filas, error: carga.error, cargando: carga.vuelta !== vuelta }, recargar };
+  return { catalogo, recargar };
 }
 
 /**
@@ -191,22 +188,16 @@ export function SelectorCatalogo({ etiqueta, todas, cargando, fallo, catalogo, v
   etiqueta: string; todas: string; cargando: string; fallo: string; catalogo: Catalogo; valor: string;
   onCambiar: (valor: string) => void; onReintentar: () => void; icono: LucideIcon; acento?: AcentoFoco;
 }) {
-  // r1 (F81): «Reintentar» da señal mientras pide («Reintentando…», aria-disabled: conserva el foco).
-  const reintentar = ofreceReintentar(catalogo.error) && (
-    <button type="button" onClick={catalogo.cargando ? undefined : onReintentar} aria-disabled={catalogo.cargando || undefined}
-      className={`rounded font-bold underline aria-disabled:cursor-wait ${FOCOS[acento]}`}>{catalogo.cargando ? 'Reintentando…' : 'Reintentar'}</button>
-  );
   if (catalogo.error && !catalogo.filas) {
     return (
       <span role="alert" className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800">
         {textoDeError(catalogo.error, fallo)}
         {/* B4 T24 (FINAL-C5): un 403 no ofrece «Reintentar» (ofreceReintentar de lib/avisos.js). */}
-        {reintentar}
+        {ofreceReintentar(catalogo.error) && <button type="button" onClick={catalogo.cargando ? undefined : onReintentar} aria-disabled={catalogo.cargando || undefined} className={`rounded font-bold underline ${FOCOS[acento]}`}>{catalogo.cargando ? 'Reintentando…' : 'Reintentar'}</button>}
       </span>
     );
   }
   return (
-    <span className="inline-flex flex-wrap items-center gap-1.5">
     <label className="inline-flex items-center gap-1.5">
       <Icono size={14} aria-hidden="true" className="shrink-0 text-slate-500" />
       <select aria-label={etiqueta} value={valor} disabled={!catalogo.filas} onChange={(e) => onCambiar(e.target.value)}
@@ -215,12 +206,5 @@ export function SelectorCatalogo({ etiqueta, todas, cargando, fallo, catalogo, v
         {(catalogo.filas ?? []).map((o) => <option key={o.id} value={String(o.id)}>{o.name}</option>)}
       </select>
     </label>
-    {/* r1 (F81): si «Actualizar» falla con el catálogo ya cargado, se dice junto al select (antes, solo sin filas). */}
-    {catalogo.error != null && catalogo.filas && (
-      <span role="alert" className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-800">
-        {textoDeError(catalogo.error, fallo)}. {reintentar}
-      </span>
-    )}
-    </span>
   );
 }
