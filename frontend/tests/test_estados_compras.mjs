@@ -4145,4 +4145,15 @@ console.log('--- B4 T24 f3 r2 (m1, m2, m3, m4, m5, m8, m11, m14, m16, m19, m21, 
   for (const parte of ['vigente.ids.length > 0', 'accesoPec.cambiarPec', 'onClick={handleConvertPvens}']) assert.ok(boton.includes(parte), `m11: ${parte}`);
 }
 
+console.log('--- B4 T24 f3 r2 (m36, el banco): un solo contrato de reintentando; el enlace de Productos deja el foco en el título de la ficha ---');
+{
+  const pieza = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8');
+  assert.match(pieza, /<AvisoFuente aviso=\{aviso\} onReintentar=\{onReintentar\} acento=\{acento\} reintentando=\{reintentando\}/,
+    'reintentando llega tal cual (estadoReintento conserva el error mientras reintenta: con «error == null &&» el botón no decía «Reintentando…»)');
+  const p = leerFuente('app/dashboard/inventario/productos/page.tsx');
+  trae(p, '<h1 id="ficha-producto-titulo" tabIndex={-1}');
+  trae(p, "abrir: (p) => { openEdit(p); requestAnimationFrame(() => document.getElementById('ficha-producto-titulo')?.focus()); },",
+    'el enlace abre la ficha (la lista y su aviso se van): el foco va a su título');
+}
+
 console.log('\nOK: test_estados_compras.mjs');

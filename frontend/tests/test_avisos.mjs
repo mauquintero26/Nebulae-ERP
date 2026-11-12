@@ -433,7 +433,7 @@ console.log('--- TEST T24-c (B4 T24, F46): un solo aviso de fuente — el texto,
   // r2 (m36, D27, aditivo): AvisoDeError recibe también regionFoco (la región estable del foco).
   assert.match(pieza, /export function AvisoDeError\(\{ error, fallo, onReintentar, acento, reintentando = false, regionFoco = false \}: \{/);
   assert.match(pieza, /const visto = error \?\? \(reintentando \? ultimo : null\);\s*const aviso = avisoDeFuente\(visto, fallo\);/);
-  assert.match(pieza, /<AvisoFuente aviso=\{aviso\} onReintentar=\{onReintentar\} acento=\{acento\} reintentando=\{error == null && reintentando\}/);
+  assert.match(pieza, /<AvisoFuente aviso=\{aviso\} onReintentar=\{onReintentar\} acento=\{acento\} reintentando=\{reintentando\}/);
   assert.match(pieza, /if \(!regionFoco\) return cuadro;/, 'sin regionFoco, como antes (aditivo)');
   assert.match(pieza, /\$\{FOCOS\[acento\]\}/);
   // AvisoReintentar (Inventario) delega en ella: con un 403, el aviso de permiso sin «Reintentar».

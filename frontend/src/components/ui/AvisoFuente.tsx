@@ -66,7 +66,9 @@ export function AvisoDeError({ error, fallo, onReintentar, acento, reintentando 
       if (focoTrasReintento({ teniaFoco, hayBoton: ultimoHayBoton.current }) === 'region' && document.activeElement === document.body) region.current?.focus();
     });
   }, []);
-  const cuadro = aviso ? <AvisoFuente aviso={aviso} onReintentar={onReintentar} acento={acento} reintentando={error == null && reintentando}
+  // r2 (m36, un solo contrato): `reintentando` llega tal cual (useResumen limpia el error al reintentar; estadoReintento lo conserva):
+  // con los dos, el botón dice «Reintentando…» mientras va el reintento.
+  const cuadro = aviso ? <AvisoFuente aviso={aviso} onReintentar={onReintentar} acento={acento} reintentando={reintentando}
     alSoltarBoton={regionFoco ? alSoltarBoton : undefined} /> : null;
   if (!regionFoco) return cuadro;
   return (

@@ -395,7 +395,8 @@ export default function ProductosPage() {
   const cargaEnlace = estadoReintento(enlace, vueltaEnlace);
   useEffect(() => abrirEnlaceProducto({
     marca: enlaceAtendido, idDeLaUrl, skuDeLaUrl, pedir: _apiFetch,
-    abrir: (p) => openEdit(p),
+    // r2 (m36): el enlace abre la ficha (la lista y su aviso se van): el foco va a su título, nunca al <body>.
+    abrir: (p) => { openEdit(p); requestAnimationFrame(() => document.getElementById('ficha-producto-titulo')?.focus()); },
     avisar: (texto) => avisar(texto, { tono: 'info' }),
     alError: (error) => setEnlace({ vuelta: vueltaEnlace, error }),
   }), [idDeLaUrl, skuDeLaUrl, avisar, vueltaEnlace]);
@@ -530,7 +531,7 @@ export default function ProductosPage() {
           <ChevronLeft size={20} />
         </button>
         <div className="flex-1">
-          <h1 className="font-extrabold text-xl text-slate-900">{isNew ? 'Nuevo Producto' : form.name}</h1>
+          <h1 id="ficha-producto-titulo" tabIndex={-1} className="font-extrabold text-xl text-slate-900">{isNew ? 'Nuevo Producto' : form.name}</h1>
           {!isNew && selectedProduct?.reference && <p className="text-xs text-slate-400">Ref: {selectedProduct.reference}</p>}
         </div>
         <div className="flex items-center gap-3">
