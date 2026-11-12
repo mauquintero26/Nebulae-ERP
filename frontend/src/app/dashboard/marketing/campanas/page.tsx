@@ -12,7 +12,7 @@ import type { ColumnaTabla } from '@/components/tabla';
 import { MKT_NAV } from '../mkt-nav';
 import { accesoMarketing } from '@/lib/roles';
 import { avisoDeFuente } from '@/lib/avisos';
-import { datosDeRespuesta, lecturaLeadsCampana, tarjetasCampana } from '@/lib/kpis';
+import { barraPresupuesto, datosDeRespuesta, lecturaLeadsCampana, tarjetasCampana } from '@/lib/kpis';
 import { textoDiaCorto } from '@/lib/fechas-colombia';
 import { humanizarCodigo } from '@/lib/estados-pedido';
 import { formatoPesos } from '@/lib/pesos';
@@ -33,6 +33,10 @@ const ESTADO_COLORS: Record<string, string> = {
 };
 const CANALES_DISPONIBLES = ['Meta Ads','Instagram','TikTok','WhatsApp','Email','Google Ads','LinkedIn','Físico','YouTube','SMS'];
 const TIPOS_CAMPANA = ['OMNICANAL','EMAIL','META','TIKTOK','WHATSAPP','FISICA','GOOGLE'];
+// B4 T24 f4 (FINAL-m24): la etiqueta de cada tipo, con su tilde (el valor que se guarda no cambia).
+const ETIQUETA_TIPO_CAMPANA: Record<string, string> = {
+  OMNICANAL: 'Omnicanal', EMAIL: 'Email', META: 'Meta', TIKTOK: 'TikTok', WHATSAPP: 'WhatsApp', FISICA: 'Física', GOOGLE: 'Google',
+};
 
 /** Un lead de una campaña (GET /marketing/campanas/{id}/leads: campaign_leads). */
 type LeadCampana = {
@@ -170,7 +174,7 @@ export default function CampanasPage() {
   
   const launchCampana = async () => {
     if (!selected) return;
-    try { await apiFetch(`/marketing/campanas/${selected.id}/launch`, {method:'POST'}); showToast('Campaña lanzada!'); loadCampanas(); setSelected((s:any)=>({...s, estado:'ACTIVA'})); } 
+    try { await apiFetch(`/marketing/campanas/${selected.id}/launch`, {method:'POST'}); showToast('¡Campaña lanzada!'); loadCampanas(); setSelected((s:any)=>({...s, estado:'ACTIVA'})); } 
     catch(e:any) { showToast(e.message,'error'); }
   };
   
@@ -200,6 +204,8 @@ export default function CampanasPage() {
   };
   
   const tarjetasMetricas = tarjetasCampana(selected, leads);
+  // B4 T24 f4 (F111): la barra del presupuesto, de la lib: «—» y gris mientras carga, con error o sin dato (nunca «$0»).
+  const barra = barraPresupuesto(lectura.estado, tarjetasMetricas.ventas_atribuidas.valor, selected?.presupuesto_cop);
 
   const filtered = useMemo(() => campanas.filter(c => {
     if (filtroEstado && c.estado !== filtroEstado) return false;
@@ -217,7 +223,8 @@ export default function CampanasPage() {
   }
 
   return (
-    <div className="w-full h-full bg-slate-50 flex flex-col overflow-hidden">
+    // B4 T24 f4 (Campañas a 375): en el teléfono se desplaza la página entera (el detalle quedaba con 0 px de alto); desde md, el panel.
+    <div className="w-full h-full bg-slate-50 flex flex-col overflow-y-auto md:overflow-hidden">
       <Toast toast={toast as any} onClose={() => setToast(null)} />
 
       <SubNav label="Marketing" items={MKT_NAV} currentPath="/dashboard/marketing/campanas" color="emerald" hub={{ href: '/dashboard/marketing' }} />
@@ -237,9 +244,9 @@ export default function CampanasPage() {
           )} />
       </div>
 
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex flex-col md:flex-row md:flex-1 md:min-h-0 md:overflow-hidden">
         {/* COLUMNA IZQUIERDA — Lista de campañas */}
-        <div className="w-72 shrink-0 bg-white border-r border-slate-200 flex flex-col">
+        <div className="w-full md:w-72 shrink-0 bg-white border-b md:border-b-0 md:border-r border-slate-200 flex flex-col max-h-80 md:max-h-none">
           {/* Search row */}
           <div className="p-3 border-b border-slate-100 space-y-2">
             <div className="relative">
@@ -252,7 +259,7 @@ export default function CampanasPage() {
             </select>
           </div>
           {/* List */}
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 min-h-0 overflow-y-auto">
             {loading && <div className="text-center py-10 text-slate-400 text-sm">Cargando...</div>}
             {Boolean(errorCampanas) && !loading && <div className="p-3">{(() => { const a = avisoDeFuente(errorCampanas, 'No se pudieron cargar las campañas'); return a ? <AvisoFuente aviso={a} onReintentar={loadCampanas} /> : null; })()}</div>}
             {!loading && !errorCampanas && filtered.length===0 && <div className="text-center py-10 text-slate-400 text-sm">Sin campañas</div>}
@@ -280,9 +287,9 @@ export default function CampanasPage() {
         
         {/* PANEL CENTRAL — Detalle */}
         {selected ? (
-          <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="flex-1 flex flex-col md:overflow-hidden">
             {/* Campaña Header */}
-            <div className="bg-white px-6 py-4 border-b border-slate-200 flex items-center justify-between shrink-0">
+            <div className="bg-white px-6 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 shrink-0">
               <div>
                 <div className="flex items-center gap-2 mb-0.5">
                   <h2 className="text-xl font-black text-slate-800">{selected.nombre}</h2>
@@ -312,21 +319,21 @@ export default function CampanasPage() {
             </div>
             
             {/* Tabs */}
-            <div className="bg-white border-b border-slate-100 px-6 flex gap-1">
+            <div className="bg-white border-b border-slate-100 px-6 flex gap-1 overflow-x-auto">
               {[['resumen','Resumen'],['leads','Leads'],['metricas','Métricas'],['descuentos','Descuentos']].map(([v,l])=>(
                 <button key={v} onClick={()=>setActiveTab(v)} className={`px-4 py-3 font-bold text-sm border-b-2 transition-colors ${activeTab===v?'border-emerald-600 text-emerald-600':'border-transparent text-slate-400 hover:text-slate-700'}`}>{l}</button>
               ))}
             </div>
             
             {/* Tab Content */}
-            <div className={`flex-1 overflow-y-auto p-6 ${RESERVA_BOTON_IA}`}>
+            <div className={`flex-1 md:overflow-y-auto p-6 ${RESERVA_BOTON_IA}`}>
               {/* RESUMEN TAB */}
               {activeTab==='resumen' && (
                 <div className="space-y-6">
-                  <div className="grid grid-cols-2 gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-4">
                       <h3 className="font-black text-slate-700 text-sm uppercase tracking-wide">Información General</h3>
-                      {[['Tipo',selected.tipo],['Fecha Inicio',fDate(selected.fecha_inicio)],['Fecha Fin',fDate(selected.fecha_fin)],['Presupuesto',fCOP(selected.presupuesto_cop||0)]].map(([l,v])=>(
+                      {[['Tipo', ETIQUETA_TIPO_CAMPANA[selected.tipo] ?? humanizarCodigo(selected.tipo)],['Fecha Inicio',fDate(selected.fecha_inicio)],['Fecha Fin',fDate(selected.fecha_fin)],['Presupuesto',fCOP(selected.presupuesto_cop||0)]].map(([l,v])=>(
                         <div key={l} className="flex justify-between text-sm"><span className="text-slate-400 font-medium">{l}</span><span className="font-bold text-slate-800">{v}</span></div>
                       ))}
                     </div>
@@ -404,10 +411,10 @@ export default function CampanasPage() {
                     <div className="bg-white rounded-2xl border border-slate-200 p-5">
                       <div className="flex justify-between mb-2">
                         <span className="text-sm font-bold text-slate-700">Progreso del Presupuesto</span>
-                        <span className="text-sm font-black text-emerald-600">{lectura.estado === 'cargando' ? '—' : <>{fCOP(tarjetasMetricas.ventas_atribuidas.valor ?? 0)} / {fCOP(selected.presupuesto_cop)}</>}</span>
+                        <span className="text-sm font-black text-emerald-600">{barra.texto}</span>
                       </div>
                       <div className="w-full bg-slate-100 rounded-full h-3">
-                        {lectura.estado === 'cargando' ? <div className="h-3 w-full animate-pulse rounded-full bg-slate-200" aria-hidden="true" /> : <div className="bg-emerald-500 h-3 rounded-full" style={{width:`${Math.min(100, ((tarjetasMetricas.ventas_atribuidas.valor ?? 0) / selected.presupuesto_cop) * 100)}%`}}/>}
+                        {barra.gris ? <div className={`h-3 w-full rounded-full bg-slate-200 ${lectura.estado === 'cargando' ? 'animate-pulse' : ''}`} aria-hidden="true" /> : <div className="bg-emerald-500 h-3 rounded-full" style={{width:`${barra.ancho}%`}}/>}
                       </div>
                     </div>
                   )}
@@ -464,8 +471,8 @@ export default function CampanasPage() {
             <div className="space-y-5">
               <div><label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Nombre *</label><input value={form.nombre} onChange={e=>setForm(f=>({...f,nombre:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-200" placeholder="Ej. Black Friday 2026"/></div>
               <div className="grid grid-cols-2 gap-4">
-                <div><label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Tipo</label><select value={form.tipo} onChange={e=>setForm(f=>({...f,tipo:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-200 bg-white">{TIPOS_CAMPANA.map(t=><option key={t}>{t}</option>)}</select></div>
-                <div><label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Estado</label><select value={form.estado} onChange={e=>setForm(f=>({...f,estado:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-200 bg-white">{Object.keys(ESTADO_COLORS).map(e=><option key={e}>{e}</option>)}</select></div>
+                <div><label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Tipo</label><select value={form.tipo} onChange={e=>setForm(f=>({...f,tipo:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-200 bg-white">{TIPOS_CAMPANA.map(t=><option key={t} value={t}>{ETIQUETA_TIPO_CAMPANA[t] ?? humanizarCodigo(t)}</option>)}</select></div>
+                <div><label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Estado</label><select value={form.estado} onChange={e=>setForm(f=>({...f,estado:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-200 bg-white">{Object.keys(ESTADO_COLORS).map(e=><option key={e} value={e}>{humanizarCodigo(e)}</option>)}</select></div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div><label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Fecha Inicio</label><input type="date" value={form.fecha_inicio} onChange={e=>setForm(f=>({...f,fecha_inicio:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-200"/></div>

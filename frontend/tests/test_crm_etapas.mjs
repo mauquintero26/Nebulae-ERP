@@ -567,6 +567,27 @@ console.log('--- TEST 16 (B4 T24, FINAL-m37 y F96): la sonda de cableado del CRM
     assert.ok(!f.includes('rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600'), `${ruta}: sin la copia de la caja`);
     assert.match(f, /import \{[^}]*\bCAJA_SIN_PERMISO\b[^}]*\} from '@\/lib\/design-system';/, `${ruta}: importa el token`);
   }
+  // B4 T24 f4 (m30 de f1 r1): también la portada de Marketing y el Asistente; y ninguna copia de la caja queda en src (solo el token).
+  for (const [ruta, margen] of Object.entries({ 'app/dashboard/marketing/page.tsx': '', 'app/dashboard/asistente_omnicanal/page.tsx': 'm-4 ' })) {
+    const f = leerSrc(ruta);
+    assert.ok(f.includes(`<p role="status" className={\`${margen}\${CAJA_SIN_PERMISO}\`}>`), `${ruta}: la caja con el token`);
+    assert.match(f, /import \{[^}]*\bCAJA_SIN_PERMISO\b[^}]*\} from '@\/lib\/design-system';/, `${ruta}: importa el token`);
+  }
+  const { readdirSync, statSync } = await import('node:fs');
+  const { join, relative } = await import('node:path');
+  const raiz = new URL('../src/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  const copias = [];
+  const recorrer = (dir) => {
+    for (const nombre of readdirSync(dir)) {
+      const ruta = join(dir, nombre);
+      if (statSync(ruta).isDirectory()) recorrer(ruta);
+      else if (/\.(tsx?|jsx?)$/.test(nombre) && readFileSync(ruta, 'utf8').includes('rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600')) {
+        copias.push(relative(raiz, ruta).replace(/\\/g, '/'));
+      }
+    }
+  };
+  recorrer(decodeURIComponent(raiz));
+  assert.deepEqual(copias, ['lib/design-system.ts'], 'la caja neutra vive solo en el token');
 }
 
 console.log('--- TEST 17 (B4 T24 f4: FINAL-m18, F99, F100, F97 y F98): el subtítulo, la versión, «Limpiar», la insignia y la caché de etapas ---');

@@ -1510,11 +1510,15 @@ console.log('--- TEST 33 (B4 T23B, KPI-otros punto 4 y TABLA-otros punto 6; R11,
   assert.match(codigo, /const fCOP = \(v: number\) => formatoPesos\(v \|\| 0\);/);
   // El botón flotante de la IA no tapa la última fila de la tabla de leads: el panel baja 96 px de más (medido en el banco a 1024 x 600).
   // B4 T24 (F44-a, D27): la reserva es el token RESERVA_BOTON_IA (pb-24).
-  assert.match(codigo, /<div className=\{`flex-1 overflow-y-auto p-6 \$\{RESERVA_BOTON_IA\}`\}>/);
-  // m1: la barra del presupuesto usa la MISMA cifra que la tarjeta y el ROI, y queda gris mientras carga.
-  assert.match(codigo, /\{fCOP\(tarjetasMetricas\.ventas_atribuidas\.valor \?\? 0\)\} \/ \{fCOP\(selected\.presupuesto_cop\)\}/);
-  assert.match(codigo, /width:`\$\{Math\.min\(100, \(\(tarjetasMetricas\.ventas_atribuidas\.valor \?\? 0\) \/ selected\.presupuesto_cop\) \* 100\)\}%`/);
-  assert.match(codigo, /lectura\.estado === 'cargando' \? <div className="h-3 w-full animate-pulse rounded-full bg-slate-200" aria-hidden="true" \/> : /);
+  // B4 T24 f4 (Campañas a 375; D27): en el teléfono la página entera se desplaza (el detalle ya no queda con 0 px de alto); desde md,
+  // el panel se desplaza solo, como antes. La reserva sigue en el mismo contenedor.
+  assert.match(codigo, /<div className=\{`flex-1 md:overflow-y-auto p-6 \$\{RESERVA_BOTON_IA\}`\}>/);
+  // m1 (B4 T24 f4, F111; D27): la barra del presupuesto sale de barraPresupuesto (kpis.js, con sus casos): la MISMA cifra que la
+  // tarjeta y el ROI, «—» y gris mientras carga, con error o sin dato (nunca «$0» ni un ancho 0 como si fuera un dato).
+  assert.match(codigo, /const barra = barraPresupuesto\(lectura\.estado, tarjetasMetricas\.ventas_atribuidas\.valor, selected\?\.presupuesto_cop\);/);
+  assert.match(codigo, /<span className="text-sm font-black text-emerald-600">\{barra\.texto\}<\/span>/);
+  assert.match(codigo, /\{barra\.gris \? <div className=\{`h-3 w-full rounded-full bg-slate-200 \$\{lectura\.estado === 'cargando' \? 'animate-pulse' : ''\}`\} aria-hidden="true" \/> : <div className="bg-emerald-500 h-3 rounded-full" style=\{\{width:`\$\{barra\.ancho\}%`\}\}\/>\}/);
+  assert.ok(!/ventas_atribuidas\.valor \?\? 0/.test(codigo), 'sin el «?? 0» que pintaba $0 con un error');
   assert.ok(!/selected\.ventas_cop/.test(codigo.replace(/c\.ventas_cop/g, '')), 'ninguna cifra de ventas de la pestaña sale de la fila');
   // m7: el filtro de estado de la lista dice la etiqueta, no el código.
   assert.match(codigo, /<option key=\{e\} value=\{e\}>\{humanizarCodigo\(e\)\}<\/option>/);
@@ -1619,7 +1623,7 @@ console.log('--- TEST 35 (B4 T23B, KPI-otros punto 6; H13, RP70): el Asistente o
   // P19 (m35): el error de la búsqueda se guarda y se dice.
   assert.match(codigo, /setSearchResults\(\[\]\);\s*setErrorBusqueda\(err\);/);
   assert.match(codigo, /<p role="alert" className="[^"]*">\{textoDeError\(errorBusqueda, 'No se pudo buscar clientes'\)\}<\/p>/);
-  // m9: la tarjeta «Pedidos en curso» aclara que incluye los facturados.
+  // m9: la ayuda de «Pedidos en curso», si la trae, se pinta (B4 T24 f4, B49-f: hoy no trae ninguna; chat.py ya es canónico).
   assert.match(codigo, /\{ficha\.mini\[1\]\.ayuda && <div className="text-\[9px\] leading-tight text-slate-400">\{ficha\.mini\[1\]\.ayuda\}<\/div>\}/);
   assert.match(codigo, /const avisoContexto = errorContexto \? avisoDeFuente\(errorContexto\.error, 'No se pudo cargar el perfil del cliente'\) : null;/);
   assert.match(codigo, /<AvisoFuente aviso=\{avisoContexto\} onReintentar=\{\(\) => loadCustomerContext\(errorContexto!\.pedido\)\} \/>/);
@@ -1904,6 +1908,51 @@ console.log('--- TEST T24-f4d (B4 T24 f4: FINAL-m20, F113 y F114): la Agenda no 
   const iAviso = c.indexOf('{avisoProveedores && <div className="mb-4"><AvisoFuente');
   const iLista = c.indexOf("{vistaProveedores === 'cargando' ? (");
   assert.ok(iCortados > 0 && iAviso > iCortados && iLista > iAviso, `F113: cortados (${iCortados}) < aviso (${iAviso}) < lista (${iLista})`);
+}
+
+console.log('--- TEST T24-f4e (B4 T24 f4: F111, FINAL-m24, Campañas a 375 y F112): la barra del presupuesto, el modal, el teléfono y el Asistente ---');
+{
+  const { barraPresupuesto } = kpisLib;
+  // F111: la barra, pura. Mientras carga: «—» y gris (con pulso); con error o sin dato: «— / $presupuesto» y gris (nunca «$0»).
+  assert.deepEqual(barraPresupuesto('cargando', null, 1000000), { texto: '—', ancho: 0, gris: true });
+  assert.deepEqual(barraPresupuesto('cargando', 400000, 1000000), { texto: '—', ancho: 0, gris: true }, 'lo de otra campaña no se ve');
+  assert.deepEqual(barraPresupuesto('error', null, 1000000), { texto: '— / $1.000.000', ancho: 0, gris: true }, 'GET …/leads falló: sin $0');
+  assert.deepEqual(barraPresupuesto('listo', null, 1000000), { texto: '— / $1.000.000', ancho: 0, gris: true }, 'valor null: «—»');
+  assert.deepEqual(barraPresupuesto('listo', 400000, 1000000), { texto: '$400.000 / $1.000.000', ancho: 40, gris: false });
+  assert.deepEqual(barraPresupuesto('actualizando', 400000, 1000000), { texto: '$400.000 / $1.000.000', ancho: 40, gris: false }, 'la recarga conserva lo último');
+  assert.deepEqual(barraPresupuesto('listo', 0, 1000000), { texto: '$0 / $1.000.000', ancho: 0, gris: false }, 'un cero real se dice');
+  assert.equal(barraPresupuesto('listo', 2500000, 1000000).ancho, 100, 'tope 100 %');
+  assert.equal(barraPresupuesto('listo', -5, 1000000).ancho, 0, 'nunca negativo');
+  assert.deepEqual(barraPresupuesto('listo', 400000, 0), { texto: '$400.000 / $0', ancho: 0, gris: false }, 'sin presupuesto, sin dividir por cero');
+
+  const camp = paginaT23B('marketing/campanas/page.tsx');
+  // FINAL-m24: el select «Estado» del modal con la etiqueta (humanizarCodigo), el tipo con su etiqueta con tilde y «¡Campaña lanzada!».
+  assert.equal((camp.match(/\{Object\.keys\(ESTADO_COLORS\)\.map\(e=><option key=\{e\} value=\{e\}>\{humanizarCodigo\(e\)\}<\/option>\)\}/g) ?? []).length, 2,
+    'el filtro de la lista y el modal');
+  assert.ok(!/<option key=\{e\}>\{e\}<\/option>|<option key=\{t\}>\{t\}<\/option>/.test(camp), 'sin códigos crudos');
+  assert.match(camp, /\{TIPOS_CAMPANA\.map\(t=><option key=\{t\} value=\{t\}>\{ETIQUETA_TIPO_CAMPANA\[t\] \?\? humanizarCodigo\(t\)\}<\/option>\)\}/);
+  assert.match(camp, /FISICA: 'Física'/);
+  assert.match(camp, /\['Tipo', ETIQUETA_TIPO_CAMPANA\[selected\.tipo\] \?\? humanizarCodigo\(selected\.tipo\)\]/);
+  assert.ok(camp.includes("showToast('¡Campaña lanzada!')"), 'con «¡»');
+  assert.ok(!camp.includes("showToast('Campaña lanzada!')"));
+
+  // Campañas a 375 (f1 r2, duda 1): la raíz se desplaza en el teléfono; desde md, el panel (como antes).
+  const campCrudo = readFileSync(new URL('../src/app/dashboard/marketing/campanas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(campCrudo, /<div className="w-full h-full bg-slate-50 flex flex-col overflow-y-auto md:overflow-hidden">\s*<Toast/);
+  assert.match(campCrudo, /<div className="flex flex-col md:flex-row md:flex-1 md:min-h-0 md:overflow-hidden">\s*\{\/\* COLUMNA IZQUIERDA/);
+  assert.match(campCrudo, /<div className="w-full md:w-72 shrink-0 bg-white border-b md:border-b-0 md:border-r border-slate-200 flex flex-col max-h-80 md:max-h-none">/);
+  assert.match(campCrudo, /<div className="flex-1 min-h-0 overflow-y-auto">/);
+  assert.match(campCrudo, /<div className="flex-1 flex flex-col md:overflow-hidden">\s*\{\/\* Campaña Header \*\/\}/);
+  assert.ok(!/<div className="flex-1 flex overflow-hidden">/.test(campCrudo), 'sin la fila que dejaba el detalle en 0 px');
+
+  // F112: «Sin cliente seleccionado» sale UNA vez, y solo en la rama 'vacio' de vistaContexto (mata V7).
+  const asis = paginaT23B('asistente_omnicanal/page.tsx');
+  assert.equal((asis.match(/Sin cliente seleccionado/g) ?? []).length, 1, 'una sola vez en lo que se pinta');
+  const iVacio = asis.indexOf(") : vista === 'vacio' ? (");
+  const iTexto = asis.indexOf('Sin cliente seleccionado');
+  const iFin = asis.indexOf(') : null}', iVacio);
+  assert.ok(iVacio > 0 && iTexto > iVacio && (iFin < 0 || iTexto < iFin), `dentro de la rama 'vacio' (${iVacio} < ${iTexto})`);
+  assert.ok(!asis.slice(asis.indexOf("{vista === 'cargando' ? ("), iVacio).includes('Sin cliente seleccionado'), 'ni en cargando ni en contexto');
 }
 
 console.log('--- TEST T24-f4a (B4 T24 f4, A4): la Agenda guarda el proveedor con peticionGuardarProveedor (PATCH al editar, las claves del servidor) ---');

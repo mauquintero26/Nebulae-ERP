@@ -1268,6 +1268,24 @@ export function tarjetasCampana(campana, leads) {
   };
 }
 
+/**
+ * B4 T24 f4 (F111): la barra «Progreso del Presupuesto» de una campaña, con la MISMA cifra de la tarjeta (ventas_atribuidas) y el
+ * estado de la lectura de sus leads. Mientras carga: «—» y gris. Con error o sin dato (null): «— / $presupuesto» y gris, nunca «$0»
+ * ni un ancho 0 como si fuera un dato. Actualizando conserva lo último. El ancho va de 0 a 100 (sin presupuesto, 0).
+ * @param {EstadoKpi} estado  el de lecturaLeadsCampana
+ * @param {unknown} ventas
+ * @param {unknown} presupuesto
+ * @returns {{texto: string, ancho: number, gris: boolean}}
+ */
+export function barraPresupuesto(estado, ventas, presupuesto) {
+  if (estado === 'cargando') return { texto: '—', ancho: 0, gris: true };
+  const p = numeroFinito(presupuesto) ?? 0;
+  const v = estado === 'error' ? null : numeroFinito(ventas);
+  if (v === null) return { texto: `— / ${formatoPesos(p)}`, ancho: 0, gris: true };
+  const ancho = p > 0 ? Math.min(100, Math.max(0, v / p * 100)) : 0;
+  return { texto: `${formatoPesos(v)} / ${formatoPesos(p)}`, ancho, gris: false };
+}
+
 const SIN_PERMISO_MONTOS = 'Sin permiso para ver montos';
 
 /**

@@ -13,6 +13,7 @@ import { useRolActual } from '@/components/ui/useRolActual';
 import { accesoMarketing } from '@/lib/roles';
 import { avisoDeFuente, estadoFranjaDeFuente, motivoSinPermiso } from '@/lib/avisos';
 import { datosDeRespuesta, lecturaDeFuente, tarjetasMarketing } from '@/lib/kpis';
+import { CAJA_SIN_PERMISO } from '@/lib/design-system';
 
 /** Lo último que llegó de /marketing/stats: la vuelta con la que se pidió, sus datos y su error (lecturaDeFuente). */
 type Cargado = { vuelta: number; datos: Record<string, unknown> | null; error: unknown };
@@ -66,7 +67,7 @@ export default function MarketingDashboard() {
 
       <div className="mb-10 space-y-4">
         {acceso.listo && !acceso.ver ? (
-          <p role="status" className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600">{TEXTO_SIN_INDICADORES}</p>
+          <p role="status" className={`${CAJA_SIN_PERMISO}`}>{TEXTO_SIN_INDICADORES}</p>
         ) : (
           <>
             {aviso && <AvisoFuente aviso={aviso} onReintentar={reintentar} />}

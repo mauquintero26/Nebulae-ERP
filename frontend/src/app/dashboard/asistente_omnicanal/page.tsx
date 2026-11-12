@@ -14,6 +14,7 @@ import { avisoDeFuente, textoDeError } from '@/lib/avisos';
 import { fichaRevenueAsistente, vistaContexto } from '@/lib/kpis';
 import { clasesDeEstadoPedido } from '@/lib/estados-pedido';
 import { formatoPesos } from '@/lib/pesos';
+import { CAJA_SIN_PERMISO } from '@/lib/design-system';
 // Mismo modal de cliente nuevo y el mismo bloque de Tipo/Modalidad/campos por
 // tipo que usa la Solicitud de Cliente real (/dashboard/ventas/solicitud) --
 // se reutilizan tal cual para que "Crear Solicitud de Cliente" dispare
@@ -404,7 +405,7 @@ export default function AsistenteOmnicanal() {
             
             {/* Header de la Columna: Buscador de Cliente */}
             {acceso.listo && !acceso.contexto ? (
-              <p role="status" className="m-4 rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600">Tu rol no ve el contexto del cliente.</p>
+              <p role="status" className={`m-4 ${CAJA_SIN_PERMISO}`}>Tu rol no ve el contexto del cliente.</p>
             ) : (
             <div className="p-3.5 border-b border-slate-200 bg-slate-50/70">
               <div className="relative">
