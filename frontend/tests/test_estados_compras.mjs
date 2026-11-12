@@ -1202,10 +1202,10 @@ console.log('--- TEST 31 (B4 T16A): Tránsito (compras/transito/page.tsx) cablea
   assert.match(pag, /const recargandoActiva = enKanban \? completa\.recargando : lista\.recargando;/);
   assert.match(pag, /soltarPendientes\(enCurso, \{ filas: filasActivas, recargando: recargandoActiva, modo \}\);\s*if \(sueltos !== enCurso\) setEnCurso\(sueltos\);/);
   assert.match(pag, /const modo = enKanban \? 'kanban' : 'lista';/);
-  // Y1, Y2 y Y3 (r3): la foto es de la lista activa y su modo, y se actualiza sin esperar un efecto pasivo (m5).
-  assert.match(pag, /const filasAhora = useRef<\{ filas: unknown; modo: string \}>\(\{ filas: filasActivas, modo \}\);/, 'Y3: una sola foto, la de la lista activa');
-  assert.match(pag, /useLayoutEffect\(\(\) => \{ filasAhora\.current = \{ filas: filasActivas, modo \}; \}, \[filasActivas, modo\]\);/, 'Y2 y m5: la foto se actualiza dentro del commit (useLayoutEffect), no en un efecto pasivo');
-  assert.match(pag, /const ahora = filasAhora\.current;\s*setEnCurso\(\(l\) => terminarPendiente\(l, id, ahora\.filas, ahora\.modo\)\);/, 'Y1: terminarCambio guarda la foto de la activa con terminarPendiente (transito.js)');
+  // Y1, Y2 y Y3 (r3). B4 T24 f3 r1 (F66, D27): la foto de la lista activa la toma soltarPendientes en el primer render que la ve; sobran
+  // el ref filasAhora y su useLayoutEffect.
+  assert.ok(!/filasAhora|useLayoutEffect\(/.test(pag.replace(/\/\/[^\n]*/g, '')), 'sin el ref de la foto ni su useLayoutEffect');
+  assert.match(pag, /const terminarCambio = useCallback\(\(id: number\) => setEnCurso\(\(l\) => terminarPendiente\(l, id\)\), \[\]\);/, 'Y1: terminarCambio deja la foto sin tomar (transito.js)');
   assert.ok(!/lista\.filas, completa\.filas|\{ lista: lista/.test(pag), 'Y3: sin la foto de las dos listas');
   assert.match(pag, /useEffect\(\(\) => \{ pendienteRef\.current = pendiente; \}, \[pendiente\]\);/, 'X3: el guardián de los segundos clics lee el pendiente de ahora');
   assert.match(pag, /const CLASE_ENTREGA: Record<string, string> = \{ vencido: 'text-rose-700', pronto: 'text-amber-700', normal: 'text-slate-500' \};/, 'X2: el ámbar de «pronto»');

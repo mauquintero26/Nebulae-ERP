@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { AlertCircle, Package, RefreshCw, Truck } from 'lucide-react';
@@ -30,7 +30,7 @@ import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { humanizarCodigo } from '@/lib/estados-pedido';
 import { TOPE_TABLERO_COMPRAS, avisoTope200, infoEstadoPec, opcionesEstadosPec, textoVacioPec } from '@/lib/estados-compras';
 import {
-  accionEtapaTransito, avanceTransito, avancePromedioTransito, columnaTransito, columnasDeEtapas, etapaActual,
+  accionEtapaTransito, avanceTransito, avancePromedioTransito, avisoLlegaronTransito, columnaTransito, columnasDeEtapas, etapaActual,
   pendienteDeTransito, reglaSoltarTransito, soltarPendientes, tarjetaTransito, terminarPendiente, textoEntregaTransito, tonoEntregaTransito,
 } from '@/lib/transito';
 import {
@@ -285,14 +285,12 @@ export default function TransitoPage() {
   // dice si hay uno; terminarPendiente guarda la foto de la lista ACTIVA (y el modo) al resolver el PATCH; soltarPendientes lo suelta
   // cuando ESA lista trae filas nuevas o termina de recargar (también si falla). La lista inactiva no cuenta: no es la que se ve y,
   // si nunca cargó, da un [] nuevo con cada recarga. Si el modo cambia dentro de la ventana, se toma la foto de la nueva lista activa.
-  const [enCurso, setEnCurso] = useState<{ id: number; fin: { filas: unknown; modo: string; visto: boolean } | null }[]>([]);
+  const [enCurso, setEnCurso] = useState<{ id: number; fin: { filas: unknown; modo: string | null; visto: boolean } | null }[]>([]);
   const modo = enKanban ? 'kanban' : 'lista';
   const filasActivas = enKanban ? completa.filas : lista.filas;
   const recargandoActiva = enKanban ? completa.recargando : lista.recargando;
-  // m5: la foto se lee en la continuación del PATCH (otra tarea del navegador); un efecto pasivo podría no haber corrido todavía
-  // y dejaría la referencia vieja. useLayoutEffect corre dentro del commit, antes de cualquier continuación posterior.
-  const filasAhora = useRef<{ filas: unknown; modo: string }>({ filas: filasActivas, modo });
-  useLayoutEffect(() => { filasAhora.current = { filas: filasActivas, modo }; }, [filasActivas, modo]);
+  // r1 (F66): la foto de la lista activa la toma soltarPendientes en el primer render que ve el pendiente terminado (sin el ref ni el
+  // useLayoutEffect de antes: un GET viejo pintado en ese mismo render ya no suelta el pendiente).
   const sueltos = soltarPendientes(enCurso, { filas: filasActivas, recargando: recargandoActiva, modo });
   if (sueltos !== enCurso) setEnCurso(sueltos);
   const pendiente = useCallback((id: number) => pendienteDeTransito(enCurso, id), [enCurso]);
@@ -300,10 +298,7 @@ export default function TransitoPage() {
   useEffect(() => { pendienteRef.current = pendiente; }, [pendiente]);
   const iniciarCambio = useCallback((id: number) => setEnCurso((l) => [...l.slice(-19), { id, fin: null }]), []);
   // Terminó el PATCH y se pidió la recarga: sigue pendiente hasta que la lista activa trae filas nuevas o termina de recargar.
-  const terminarCambio = useCallback((id: number) => {
-    const ahora = filasAhora.current;
-    setEnCurso((l) => terminarPendiente(l, id, ahora.filas, ahora.modo));
-  }, []);
+  const terminarCambio = useCallback((id: number) => setEnCurso((l) => terminarPendiente(l, id)), []);
   // Falló sin recarga (un 404 o un 500): no hay nada que esperar.
   const descartarCambio = useCallback((id: number) => setEnCurso((l) => l.filter((e) => !(e.id === id && e.fin === null))), []);
   const aplicarEtapa = useCallback((p: FilaTransito, stage: string, status: string) => apiFetch(`/compras/pedidos/${p.id}/tracking`, {
@@ -416,11 +411,13 @@ export default function TransitoPage() {
     };
   }, [avanzar, pendiente, accesoPec.tracking]);
   const textoTope = enKanban && !completa.cargandoInicial ? avisoTope200(completa.total, 'pedidos') : null;
+  // r1 (F68): los que ya llegaron a bodega no tienen columna: el aviso lo dice (la tabla los muestra con su insignia).
+  const textoLlegaron = enKanban && !completa.cargandoInicial ? avisoLlegaronTransito(completa.filas) : null;
   const sinEtapas = enKanban && itemsTablero !== null && columnasTablero.length === 0;
   const errorConfig = !cargandoConfig && config?.error != null;
   // I2: si falla la carga del tablero, lo dice con «Reintentar» (con datos viejos, el mismo aviso encima); sin datos, items null.
   const errorTablero = enKanban && completa.error != null;
-  const avisoTablero = (textoTope || errorConfig || sinEtapas || errorTablero) ? (
+  const avisoTablero = (textoTope || textoLlegaron || errorConfig || sinEtapas || errorTablero) ? (
     <div className="flex flex-col gap-1">
       {errorTablero && (
         <p role="alert">
@@ -429,6 +426,7 @@ export default function TransitoPage() {
         </p>
       )}
       {textoTope && <p>{textoTope}</p>}
+      {textoLlegaron && <p>{textoLlegaron}</p>}
       {errorConfig && (
         <p role="alert">
           {textoDeError(config?.error, 'No se pudieron cargar las etapas del envío')}. Las columnas salen de los pedidos.{' '}

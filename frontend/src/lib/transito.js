@@ -283,6 +283,19 @@ export function tarjetaTransito(pec, { hoy, pendiente = false } = {}) {
 }
 
 /**
+ * B4 T24 f3 r1 (F68, la Recomendación: el aviso, sin cambiar las columnas): cuántos de los pedidos que trajo el tablero ya completaron
+ * todas sus etapas («Llegó a bodega», RP98): la tabla los muestra con su insignia, pero el tablero no tiene columna para ellos y los
+ * descartaba sin decirlo (aunque «Se muestran los 200 más recientes de N» los cuenta en N). Sin ninguno, null.
+ * @param {unknown} filas
+ * @returns {string | null}
+ */
+export function avisoLlegaronTransito(filas) {
+  const n = (Array.isArray(filas) ? filas : []).filter((p) => esObjeto(p) && etapasDe(p).length > 0 && etapaActual(p) === null).length;
+  if (n === 0) return null;
+  return n === 1 ? '1 pedido ya llegó a bodega: se ve en la lista.' : `${n} pedidos ya llegaron a bodega: se ven en la lista.`;
+}
+
+/**
  * El tono de «Entrega en N días» (m17, como en BASE: ámbar con 3 días o menos): 'vencido' si el servidor lo marca y el día
  * ya pasó, 'pronto' de hoy a 3 días, y 'normal' en lo demás (también una fecha pasada sin la marca del servidor).
  * @param {any} pec
@@ -298,7 +311,7 @@ export function tonoEntregaTransito(pec, hoy = diaColombia()) {
  * camino y, al terminar y pedir la recarga (terminarPendiente), {filas, modo, visto}: las filas de la lista ACTIVA (la tabla
  * en 'lista' o el tablero en 'kanban', la que se ve) en ese momento, ese modo y si ya se vio que esa lista recarga. La lista
  * inactiva no cuenta: no es la que se ve y, si nunca cargó, da un [] nuevo con cada recarga. Ver soltarPendientes.
- * @typedef {{filas: unknown, modo: string, visto: boolean}} FotoPendiente
+ * @typedef {{filas: unknown, modo: string | null, visto: boolean}} FotoPendiente  (r1, F66: modo null = la foto sin tomar, SIN_FOTO)
  * @typedef {{id: unknown, fin: FotoPendiente | null}} EntradaPendiente
  */
 
@@ -313,17 +326,24 @@ export function pendienteDeTransito(entradas, id) {
 }
 
 /**
- * I3 (r3): terminó el PATCH de `id` y se pidió la recarga: guarda la foto de la lista ACTIVA de ese momento (sus filas y el
- * modo) para que soltarPendientes sepa cuándo llegó la recarga. Solo toca la entrada que sigue en camino (fin null).
+ * B4 T24 f3 r1 (F66): la foto todavía sin tomar (terminarPendiente la deja así; soltarPendientes la toma en el primer render que la ve).
+ * @type {Readonly<{sinFoto: true}>}
+ */
+export const SIN_FOTO = Object.freeze({ sinFoto: true });
+
+/**
+ * I3 (r3): terminó el PATCH de `id` y se pidió la recarga. B4 T24 f3 r1 (F66): deja la foto SIN TOMAR ({filas: SIN_FOTO, modo:
+ * null}): soltarPendientes la toma en el PRIMER render que la ve, con la lista activa de ESE render. Antes la foto era la de la
+ * continuación del PATCH (un ref que se ponía en el commit anterior): un GET que salió antes de que resolviera el PATCH y se pintaba
+ * en el mismo render soltaba el pendiente y el botón de la etapa vieja volvía mientras llegaba la recarga. Solo toca la entrada que
+ * sigue en camino (fin null).
  * @template {EntradaPendiente} T
  * @param {T[]} entradas
  * @param {unknown} id
- * @param {unknown} filasActivas  las filas de la lista que se ve ahora
- * @param {string} modo  'lista' o 'kanban'
  * @returns {T[]}
  */
-export function terminarPendiente(entradas, id, filasActivas, modo) {
-  return entradas.map((e) => (e.id === id && e.fin === null ? { ...e, fin: { filas: filasActivas, modo, visto: false } } : e));
+export function terminarPendiente(entradas, id) {
+  return entradas.map((e) => (e.id === id && e.fin === null ? { ...e, fin: { filas: SIN_FOTO, modo: null, visto: false } } : e));
 }
 
 /**
@@ -346,6 +366,12 @@ export function soltarPendientes(entradas, { filas, recargando, modo }) {
   const salida = [];
   for (const e of entradas) {
     if (e.fin === null) { salida.push(e); continue; }
+    // r1 (F66): la foto sin tomar se toma aquí, con la lista activa de este render (y si ya recarga, vista).
+    if (e.fin.filas === SIN_FOTO) {
+      cambio = true;
+      salida.push({ ...e, fin: { filas, modo, visto: recargando } });
+      continue;
+    }
     if (e.fin.modo !== modo) {
       cambio = true;
       salida.push({ ...e, fin: { filas, modo, visto: recargando } });

@@ -19,7 +19,7 @@ import { congelar, conteosDePasos, pasosConConteos } from './flujo.js';
 import { humanizarCodigo, tiene } from './estados-pedido.js';
 import { diaColombia, diasEntre, fechaLarga } from './fechas-colombia.js';
 import { formatoEntero, numeroFinito } from './kpis.js';
-import { GRUPOS_PEC, diaPec, etapaPec, vistaPuedeVencer } from './estados-compras.js';
+import { GRUPOS_PEC, diaPec, esSemaforoVencidos, etapaPec, vistaPuedeVencer } from './estados-compras.js';
 // B4 T14 r1 (m1; D41, D42): las cajas y «Con atraso» cambian la vista con accionPestana, como el Hub de Ventas.
 import { accionPestana, opcionesDeVista } from './tabla.js';
 
@@ -297,7 +297,7 @@ export function accionSemaforoCompras(estado, filtro, opciones, extra) {
  * @returns {'atrasados' | 'todos'}
  */
 export function filtroSemaforoCompras(estado) {
-  return estado?.semaforo === SEMAFORO_VENCIDOS || estado?.semaforo === 'atrasados' ? 'atrasados' : 'todos';
+  return esSemaforoVencidos(estado?.semaforo) ? 'atrasados' : 'todos';
 }
 
 /**
@@ -460,8 +460,9 @@ export function seguimientoCerrado(estado) {
 export function avisoTarjetaEtapa(stage, hoy = diaColombia()) {
   if (stage === null || typeof stage !== 'object') return null;
   if (ETAPAS_CERRADAS.includes(/** @type {any} */ (stage.status))) return null;
-  const mensaje = textoNoVacio(stage.alert?.mensaje);
-  if (mensaje) return { texto: mensaje, tono: stage.alert?.nivel === 'atrasado' ? 'rojo' : 'gris', fuente: 'servidor' };
+  // B4 T24 f3 r1 (F63): el aviso del servidor sale de avisosDeEtapa (la regla de tono RP28, una sola vez).
+  const [delServidor] = avisosDeEtapa(stage);
+  if (delServidor) return { ...delServidor, fuente: 'servidor' };
   const dias = textoDiasEtapa(stage.eta, hoy);
   return dias ? { ...dias, fuente: 'dias' } : null;
 }

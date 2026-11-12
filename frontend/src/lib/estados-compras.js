@@ -474,14 +474,23 @@ export function tarjetaPedidoCompra(p) {
  * @returns {{titulo: string, ayuda: string | null}}
  */
 export function textoVacioPec(estado, ayuda = null) {
-  const semaforo = estado?.semaforo;
-  if (semaforo === 'vencidos' || semaforo === 'atrasados') return { titulo: 'Ningún pedido de compra con la entrega vencida.', ayuda: null };
+  if (esSemaforoVencidos(estado?.semaforo)) return { titulo: 'Ningún pedido de compra con la entrega vencida.', ayuda: null };
   if (Array.isArray(estado?.estados) && estado.estados.length > 0) {
     return { titulo: 'Ningún pedido de compra con esos estados. Ajusta el filtro.', ayuda: null };
   }
   const q = typeof estado?.q === 'string' ? estado.q.trim() : '';
   if (q) return { titulo: `Sin resultados para «${q}»`, ayuda: 'Ajusta la búsqueda o el filtro de estados.' };
   return { titulo: 'No hay pedidos de compra en esta vista', ayuda: ayuda ?? null };
+}
+
+/**
+ * B4 T24 f3 r1 (F63): el semáforo «vencidos» del estado único, o su sinónimo «atrasados» (el FiltroSemaforo de la franja). Lo usan
+ * textoVacioPec y filtroSemaforoCompras (flujo-compras.js): un solo sitio para el sinónimo.
+ * @param {unknown} semaforo
+ * @returns {boolean}
+ */
+export function esSemaforoVencidos(semaforo) {
+  return semaforo === 'vencidos' || semaforo === 'atrasados';
 }
 
 /**

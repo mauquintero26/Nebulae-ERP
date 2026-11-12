@@ -602,4 +602,32 @@ console.log('--- B4 T24 f3 (m21 del backend r1): los días de alerta de la confi
   assert.ok(!/onClose\(\)|setStages\(/.test(guardar), 'guardar no cierra la ventana ni toca lo escrito');
 }
 
+console.log('--- B4 T24 f3 r1 (F63): una sola regla de tono para la tarjeta de etapa y un solo sinónimo de «vencidos» ---');
+{
+  assert.equal(typeof estadosCompras.esSemaforoVencidos, 'function', 'esSemaforoVencidos existe');
+  assert.equal(estadosCompras.esSemaforoVencidos('vencidos'), true);
+  assert.equal(estadosCompras.esSemaforoVencidos('atrasados'), true, 'el sinónimo de la franja');
+  for (const otro of ['todos', null, undefined, '', 'VENCIDOS']) assert.equal(estadosCompras.esSemaforoVencidos(otro), false, String(otro));
+  // Las dos que lo usan dicen lo mismo con los dos nombres.
+  for (const semaforo of ['vencidos', 'atrasados']) {
+    assert.equal(fc.filtroSemaforoCompras({ semaforo }), 'atrasados');
+    assert.equal(estadosCompras.textoVacioPec({ semaforo }).titulo, 'Ningún pedido de compra con la entrega vencida.');
+  }
+  assert.equal(fc.filtroSemaforoCompras({ semaforo: 'todos' }), 'todos');
+  // El tono de la tarjeta de etapa sale de la MISMA regla que los avisos de la barra (RP28: rojo solo con «atrasado»).
+  for (const [nivel, tono] of [['atrasado', 'rojo'], ['ok', 'gris'], [undefined, 'gris']]) {
+    const stage = { stage: 'X', status: 'EN_PROCESO', alert: { mensaje: 'Va tarde', nivel } };
+    assert.deepEqual(fc.avisoTarjetaEtapa(stage, '2026-11-07'), { texto: 'Va tarde', tono, fuente: 'servidor' }, String(nivel));
+    assert.deepEqual(fc.pasosDeTracking([stage])[0].avisos, [{ texto: 'Va tarde', tono }], `la barra: ${nivel}`);
+  }
+  // En el fuente: avisoTarjetaEtapa llama a avisosDeEtapa; textoVacioPec y filtroSemaforoCompras, a esSemaforoVencidos.
+  const flujoFuente = readFileSync(new URL('../src/lib/flujo-compras.js', import.meta.url), 'utf8');
+  const tarjeta = flujoFuente.slice(flujoFuente.indexOf('export function avisoTarjetaEtapa('), flujoFuente.indexOf('\n}\n', flujoFuente.indexOf('export function avisoTarjetaEtapa(')));
+  assert.match(tarjeta, /const \[delServidor\] = avisosDeEtapa\(stage\);/);
+  assert.ok(!/alert\?\.nivel === 'atrasado'/.test(tarjeta), 'sin la copia de la regla de tono');
+  assert.match(flujoFuente, /return esSemaforoVencidos\(estado\?\.semaforo\) \? 'atrasados' : 'todos';/);
+  const ecFuente = readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8');
+  assert.match(ecFuente, /export function textoVacioPec\(estado, ayuda = null\) \{\s*if \(esSemaforoVencidos\(estado\?\.semaforo\)\)/);
+}
+
 console.log('\nOK: test_flujo_compras.mjs');

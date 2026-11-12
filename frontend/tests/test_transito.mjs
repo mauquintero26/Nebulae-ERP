@@ -319,12 +319,13 @@ console.log('--- TEST 11 (B4 T16A r1): tonoEntregaTransito (m17) y los pendiente
   m2.paso();
   m2.falla();
   assert.equal(m2.pendiente(), false, 'la recarga de la nueva falló: se suelta');
-  // terminarPendiente solo toca la entrada que sigue en camino y guarda la lista activa con su modo.
+  // terminarPendiente solo toca la entrada que sigue en camino. B4 T24 f3 r1 (F66, D27): deja la foto SIN TOMAR; soltarPendientes la toma
+  // en el primer render que la ve (antes guardaba aquí la lista activa con su modo).
   const L = [{ id: 1 }];
-  assert.deepEqual(tr.terminarPendiente([{ id: 5, fin: null }, { id: 6, fin: null }], 5, L, 'kanban'),
-    [{ id: 5, fin: { filas: L, modo: 'kanban', visto: false } }, { id: 6, fin: null }]);
+  assert.deepEqual(tr.terminarPendiente([{ id: 5, fin: null }, { id: 6, fin: null }], 5),
+    [{ id: 5, fin: { filas: tr.SIN_FOTO, modo: null, visto: false } }, { id: 6, fin: null }]);
   const ya = [{ id: 5, fin: { filas: [], modo: 'lista', visto: true } }];
-  assert.deepEqual(tr.terminarPendiente(ya, 5, L, 'kanban'), ya, 'una foto que ya existe no se pisa');
+  assert.deepEqual(tr.terminarPendiente(ya, 5), ya, 'una foto que ya existe no se pisa');
   const quieta = [{ id: 5, fin: { filas: L, modo: 'lista', visto: false } }];
   assert.equal(tr.soltarPendientes(quieta, { filas: L, recargando: false, modo: 'lista' }), quieta, 'sin cambios: la misma lista');
   // Filas nuevas en la activa, aunque nunca se viera recargar (llegaron entre dos renders): se suelta.
@@ -335,6 +336,48 @@ console.log('--- TEST 11 (B4 T16A r1): tonoEntregaTransito (m17) y los pendiente
   assert.deepEqual(tr.tarjetaTransito(p, { hoy: '2026-11-07', pendiente: true }).accionPrincipal, null);
   assert.equal(tr.tarjetaTransito(p, { hoy: '2026-11-07', pendiente: false }).accionPrincipal?.texto, 'Completar');
   assert.equal(tr.tarjetaTransito(p, { hoy: '2026-11-07' }).accionPrincipal?.texto, 'Completar', 'sin la opción, como antes');
+}
+
+console.log('--- B4 T24 f3 r1 (F66, F68): Tránsito — la foto del pendiente se toma en el primer render; el tablero dice cuántos ya llegaron ---');
+{
+  const { readFileSync } = await import('node:fs');
+  assert.ok(tr.SIN_FOTO && Object.isFrozen(tr.SIN_FOTO), 'SIN_FOTO existe');
+  // F66: el borde residual de I3. Un GET que salió ANTES de que resolviera el PATCH llega y se pinta en el MISMO render en que el PATCH
+  // termina: con la foto tomada antes (la de la continuación del PATCH), esas filas «nuevas» soltaban el pendiente y volvía el botón de
+  // la etapa vieja. Ahora la foto se toma en ese render (la lista vieja recién pintada) y el pendiente sigue hasta la recarga de verdad.
+  const viejas = [{ id: 5, etapa: 'vieja' }];
+  let e = tr.terminarPendiente([{ id: 5, fin: null }], 5);
+  e = tr.soltarPendientes(e, { filas: viejas, recargando: false, modo: 'kanban' });
+  assert.equal(tr.pendienteDeTransito(e, 5), true, 'el GET viejo pintado en el mismo render no suelta el pendiente');
+  assert.deepEqual(e, [{ id: 5, fin: { filas: viejas, modo: 'kanban', visto: false } }], 'la foto es la del primer render que lo ve');
+  e = tr.soltarPendientes(e, { filas: viejas, recargando: true, modo: 'kanban' });
+  assert.equal(tr.pendienteDeTransito(e, 5), true, 'la recarga empieza: sigue');
+  e = tr.soltarPendientes(e, { filas: [{ id: 5, etapa: 'nueva' }], recargando: false, modo: 'kanban' });
+  assert.equal(tr.pendienteDeTransito(e, 5), false, 'llegó la recarga: se suelta');
+  // Si el primer render ya ve la recarga en camino, la foto queda vista: al terminar sin filas nuevas (falló), se suelta.
+  let f = tr.soltarPendientes(tr.terminarPendiente([{ id: 5, fin: null }], 5), { filas: viejas, recargando: true, modo: 'lista' });
+  assert.deepEqual(f, [{ id: 5, fin: { filas: viejas, modo: 'lista', visto: true } }]);
+  f = tr.soltarPendientes(f, { filas: viejas, recargando: false, modo: 'lista' });
+  assert.deepEqual(f, [], 'la recarga terminó sin filas nuevas: se suelta (m7)');
+  // Lo que va en camino no se toca; sin cambios, la MISMA lista.
+  const enCamino = [{ id: 6, fin: null }];
+  assert.equal(tr.soltarPendientes(enCamino, { filas: viejas, recargando: false, modo: 'lista' }), enCamino);
+  // La página: sin el ref de la foto ni su useLayoutEffect.
+  const pag = readFileSync(new URL('../src/app/dashboard/compras/transito/page.tsx', import.meta.url), 'utf8');
+  assert.match(pag, /const terminarCambio = useCallback\(\(id: number\) => setEnCurso\(\(l\) => terminarPendiente\(l, id\)\), \[\]\);/);
+
+  // F68 (la Recomendación: el aviso, sin cambiar las columnas): los pedidos que ya completaron todas sus etapas no tienen columna.
+  const llego = conEstados('casillero', ['COMPLETADO', 'COMPLETADO', 'COMPLETADO', 'COMPLETADO']);
+  const enCurso = conEstados('casillero', ['COMPLETADO', 'EN_PROCESO']);
+  assert.equal(tr.columnaTransito(llego), null, 'el tablero no tiene columna para él');
+  assert.equal(tr.avisoLlegaronTransito([llego, enCurso]), '1 pedido ya llegó a bodega: se ve en la lista.');
+  assert.equal(tr.avisoLlegaronTransito([llego, llego, enCurso]), '2 pedidos ya llegaron a bodega: se ven en la lista.');
+  assert.equal(tr.avisoLlegaronTransito([enCurso]), null);
+  assert.equal(tr.avisoLlegaronTransito([{ id: 9, tracking_stages: [] }]), null, 'sin etapas no cuenta como llegado');
+  assert.equal(tr.avisoLlegaronTransito(null), null);
+  assert.match(pag, /const textoLlegaron = enKanban && !completa\.cargandoInicial \? avisoLlegaronTransito\(completa\.filas\) : null;/);
+  assert.match(pag, /\{textoLlegaron && <p>\{textoLlegaron\}<\/p>\}/);
+  assert.match(pag, /const avisoTablero = \(textoTope \|\| textoLlegaron \|\|/);
 }
 
 console.log('OK test_transito');
