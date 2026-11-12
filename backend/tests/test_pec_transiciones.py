@@ -994,6 +994,8 @@ def test_el_eta_con_zona_se_acepta_y_se_guarda_como_el_dia_de_colombia(app_clien
                                ("2026-12-01T03:00:00+00:00", "2026-11-30", "30/11/2026"),   # en Colombia, el 30
                                ("2026-12-01T10:30:00+05:30", "2026-12-01", "01/12/2026"),
                                ("2999-12-31T23:00:00-05:00", "2999-12-31", "31/12/2999"),   # en UTC, 3000
+                               ("2026-12-02T01:00:00Z", "2026-12-01", "01/12/2026"),        # r3 (m1): Z = UTC
+                               ("2026-12-02T01:00:00.000z", "2026-12-01", "01/12/2026"),    # toISOString de JS
                                ("2026-12-01", "2026-12-01", "01/12/2026")):
         resp = app_client.patch(ruta, headers=_auth(admin_token), json={"stage": "PROVEEDOR_CASILLERO",
                                                                         "status": "EN_PROCESO", "eta": eta})
@@ -1094,7 +1096,7 @@ def test_la_cancelacion_desvincula_los_pven_con_bloqueo(app_client, db, admin_to
     db.expire_all()
     assert [(x.pec_id, x.estado) for x in db.query(SaleOrder).filter(SaleOrder.id.in_(ids)).order_by(SaleOrder.id)] == [
         (None, "PENDIENTE_COMPRA"), (None, "PENDIENTE_COMPRA")]
-    assert _estado(db, pec) == "CANCELADO" and pec_id
+    assert _estado(db, pec) == "CANCELADO", pec_id   # r3 (m25): sin el «and pec_id» que no afirmaba nada
 
 
 def test_la_recepcion_desde_el_pedido_la_firma_la_sesion(app_client, db, admin_token, user_admin, pec_10u, warehouse):
@@ -1155,6 +1157,14 @@ def test_la_actividad_de_recepciones_y_lista_la_firma_la_sesion(app_client, db, 
     assert resp.status_code == 200, resp.text
     de_la_recepcion = firmas("ENINV", eninv_id)
     assert de_la_recepcion and set(de_la_recepcion) == {yo}, de_la_recepcion
+    # r3 (m17): el nombre del navegador sigue como DATO de la confirmación y de sus movimientos.
+    from app.models.inventory import InventoryMovement, InventoryOperation
+    db.expire_all()
+    assert db.query(GoodsReceipt.confirmed_by).filter(GoodsReceipt.id == eninv_id).scalar() == "Otra Persona"
+    movimientos = [m[0] for m in db.query(InventoryMovement.created_by).join(
+        InventoryOperation, InventoryOperation.id == InventoryMovement.operation_id).filter(
+        InventoryOperation.source_document_type == "ENINV", InventoryOperation.source_document_id == eninv_id)]
+    assert movimientos and set(movimientos) == {"Otra Persona"}, movimientos
     assert yo in firmas("PEC", pec_id) and "Otra Persona" not in firmas("PEC", pec_id)
     ven = _Fabrica(db).pven("PENDIENTE_COMPRA")
     resp = app_client.post("/api/v1/compras/lista-compras", headers=_auth(admin_token),
@@ -1183,3 +1193,131 @@ def test_un_dia_de_alerta_legado_invalido_no_tumba_la_lista(app_client, db, admi
     assert alertas[:4] == [None, None, None, None], alertas
     assert alertas[4] and "ETA 01/12/2026" in alertas[4]["mensaje"], alertas
     assert app_client.get(f"{RUTA}/{pec.id}", headers=_auth(admin_token)).status_code == 200
+
+
+
+# ─── B4 T24 r3 (m9, m10, m2 + m8, m18) ──────────────────────────────────────────────────────────────────────────────
+
+def _avisos(monkeypatch):
+    """Los logger.warning de erp_compras, guardados (r3: m9 y m10 dejan rastro)."""
+    from app.api.v1 import erp_compras
+    registro = []
+    monkeypatch.setattr(erp_compras.logger, "warning", lambda *a, **k: registro.append(a[0] % a[1:] if len(a) > 1 else a[0]))
+    return registro
+
+
+def test_las_etapas_legadas_que_no_son_dict_no_tumban_la_lista(app_client, db, admin_token, monkeypatch):
+    """r3 (m9): _annotate_stage_alerts trata un tracking_stages que no es lista como [] y omite una etapa que no es dict,
+    con un logger.warning: antes dict(s) daba ValueError o TypeError y GET /compras/pedidos daba 500 a todos."""
+    registro = _avisos(monkeypatch)
+    f = _Fabrica(db)
+    con_basura = f.pec("EMITIDO", tracking_stages=["x", None, {"stage": "E", "status": "PENDIENTE", "timestamp": None,
+                                                                "eta": "2026-12-01", "alert_overdue_days": 3}])
+    no_lista = [f.pec("EMITIDO", tracking_stages={"stage": "E"}), f.pec("EMITIDO", tracking_stages="texto")]
+    for pec, etapas in ((con_basura, 1), (no_lista[0], 0), (no_lista[1], 0)):
+        resp = app_client.get(RUTA, headers=_auth(admin_token), params={"q": pec.numero})
+        assert resp.status_code == 200, resp.text
+        [fila] = [p for p in resp.json()["data"] if p["id"] == pec.id]
+        assert len(fila["tracking_stages"]) == etapas, fila["tracking_stages"]
+        assert app_client.get(f"{RUTA}/{pec.id}", headers=_auth(admin_token)).status_code == 200
+    assert any(con_basura.numero in r or "no es un objeto" in r for r in registro), registro
+
+
+def test_el_try_de_la_alerta_deja_rastro(monkeypatch):
+    """r3 (m10): el except del try de _stage_alert deja un logger.warning con la etapa, el tipo y el mensaje (un error de
+    programación ya no queda en silencio como «sin alerta»)."""
+    from app.api.v1.erp_compras import _stage_alert
+    registro = _avisos(monkeypatch)
+    assert _stage_alert({"stage": "E0", "status": "EN_PROCESO", "eta": "2026-12-01", "alert_overdue_days": 10 ** 9},
+                        None) is None
+    assert len(registro) == 1 and "E0" in registro[0] and "OverflowError" in registro[0], registro
+
+
+def test_la_desvinculacion_deja_un_solo_commit(app_client, db, admin_token):
+    """r3 (m2 + m8, ruling): _desvincular_pec_cancelado agrega los ActivityLog con db.add (sin _log, que comitea) y deja
+    UN solo db.commit() al final: los PVEN siguen bloqueados (FOR UPDATE de m4) hasta que se desvinculan todos. Antes
+    cada _log comiteaba y soltaba el bloqueo después del primero."""
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+    from sqlalchemy.orm import Session
+    f = _Fabrica(db)
+    pec = f.pec("EMITIDO")
+    a, b = f.pven("EN_PROCESO", pec=pec), f.pven("EN_PROCESO", pec=pec)
+    ids = (a.id, b.id)
+    db.refresh(pec)
+    eventos = []
+
+    def sentencia(conn, cursor, statement, parameters, context, executemany):
+        eventos.append(statement)
+
+    def commit(session):
+        eventos.append("COMMIT")
+
+    event.listen(Engine, "before_cursor_execute", sentencia)
+    event.listen(Session, "after_commit", commit)
+    try:
+        resp = _patch(app_client, admin_token, pec, estado="CANCELADO", motivo="Ya no se necesita")
+    finally:
+        event.remove(Engine, "before_cursor_execute", sentencia)
+        event.remove(Session, "after_commit", commit)
+    assert resp.status_code == 200, resp.text
+    [inicio] = [i for i, e in enumerate(eventos) if e != "COMMIT" and "FROM sale_orders" in e and "FOR UPDATE" in e.upper()
+                and "sale_orders.pec_id =" in e]
+    assert eventos[inicio:].count("COMMIT") == 1, eventos[inicio:]
+    db.expire_all()
+    assert [(x.pec_id, x.estado) for x in db.query(SaleOrder).filter(SaleOrder.id.in_(ids)).order_by(SaleOrder.id)] == [
+        (None, "PENDIENTE_COMPRA"), (None, "PENDIENTE_COMPRA")]
+    assert sorted(l.entity_id for l in db.query(ActivityLog).filter(
+        ActivityLog.action == "PEC_DESVINCULADO", ActivityLog.entity_id.in_(ids))) == sorted(ids)
+
+
+def test_las_lineas_y_el_respaldo_de_la_lista_firman_con_la_sesion(app_client, db, admin_token, user_admin, pec_10u,
+                                                                  sku):
+    """r3 (m18): nombre_de_usuario(user) también firma el LINE_ADDED y el LINE_REMOVED de una recepción (antes, user.email)
+    y es el respaldo del created_by del ítem de la Lista cuando la pantalla manda '' (antes full_name/name/email, distinto
+    de la firma del mismo envío)."""
+    yo = nombre_de_usuario(user_admin)
+    resp = app_client.post(RECEPCIONES, headers=_auth(admin_token),
+                           json={"pec_id": pec_10u.id, "pec_numero": pec_10u.numero, "productos": []})
+    assert resp.status_code == 201, resp.text
+    rec = resp.json()["data"]["id"]
+    resp = app_client.post(f"{RECEPCIONES}/{rec}/lineas", headers=_auth(admin_token),
+                           json={"sku_id": sku.id, "qty_esperada": 2, "nombre": "Extra"})
+    assert resp.status_code in (200, 201), resp.text
+    grl = resp.json()["data"]["grl_id"]
+    resp = app_client.delete(f"{RECEPCIONES}/{rec}/lineas/{grl}", headers=_auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    firmas = {l.action: l.user_name for l in db.query(ActivityLog).filter(
+        ActivityLog.entity_type == "ENINV", ActivityLog.entity_id == rec,
+        ActivityLog.action.in_(("LINE_ADDED", "LINE_REMOVED")))}
+    assert firmas == {"LINE_ADDED": yo, "LINE_REMOVED": yo}, firmas
+    ven = _Fabrica(db).pven("PENDIENTE_COMPRA")
+    resp = app_client.post("/api/v1/compras/lista-compras", headers=_auth(admin_token),
+                           json={"pven_id": ven.id, "pven_numero": ven.numero, "producto": "Taladro", "cantidad": 1,
+                                 "created_by": ""})
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["data"][0]["created_by"] == yo, resp.json()["data"][0]
+
+
+
+def test_la_normalizacion_legacy_la_firma_la_sesion(app_client, db, admin_token, user_admin, sku, warehouse):
+    """r3 (m24): el renglón LEGACY_NORMALIZED de confirmar una recepción legacy (sin GRL, solo el JSON) lo firma la sesión
+    (cierre de r2, m11), no el user_name del cuerpo. test_fase1b_legacy no corre con el runner de ROLLBACK (importa
+    tests.conftest, que aborta: TEST_DATABASE_URL == DATABASE_URL), así que el caso va aquí."""
+    g = GoodsReceipt(numero=f"ENINV-LG{uuid.uuid4().hex[:8].upper()}", pec_id=None, pec_numero=None,
+                     warehouse_id=warehouse.id, warehouse_name=warehouse.name, estado="BORRADOR", stock_actualizado=False,
+                     productos=[{"sku_id": sku.id, "nombre": "Legacy", "qty_esperada": 2, "qty_recibida": 2}],
+                     created_by="legacy")
+    db.add(g)
+    db.commit()
+    gid = g.id
+    resp = app_client.post(f"{RECEPCIONES}/{gid}/confirmar", headers=_auth(admin_token),
+                           json={"idempotency_key": f"r3-m24-{uuid.uuid4().hex}", "receipt_type": "FISICA",
+                                 "allow_excess": False, "user_name": "test"})
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    firmas = [l.user_name for l in db.query(ActivityLog).filter(
+        ActivityLog.entity_type == "ENINV", ActivityLog.entity_id == gid, ActivityLog.action == "LEGACY_NORMALIZED")]
+    assert firmas == [nombre_de_usuario(user_admin)], firmas
+    assert db.query(GoodsReceipt.confirmed_by).filter(GoodsReceipt.id == gid).scalar() == "test"

@@ -162,8 +162,9 @@ def _parse_dt(v):
     con zona horaria sale en UTC sin zona. Así un eta con zona ya guardado (de antes de A2, o puesto en la fila) no tumba
     GET /compras/pedidos con un TypeError. Una que no se lee, o que desborda al pasarla a UTC, es None (se ignora).
     r2 (m3 + m14, ruling): también None si el año, ya normalizado, queda fuera de ANIO_MINIMO..ANIO_MAXIMO, la cota de la
-    escritura (con zona o sin ella): un '9999-12-31' legado desbordaba al sumarle los días de alerta. Con la cota (2999)
-    y los 36500 días de alerta como máximo (_MAX_DIAS_ALERTA) el límite llega a 3099: no queda ningún OverflowError."""
+    escritura (con zona o sin ella): un '9999-12-31' legado desbordaba al sumarle los días de alerta. Con los días
+    validados (36500 como máximo, _MAX_DIAS_ALERTA) el límite llega a 3099 y no desborda; los días legados inválidos
+    (enormes o en texto) los cubre el try de _stage_alert (cierre de r2; r3, m5)."""
     try:
         leida = _a_utc_sin_zona(_fecha_iso(v))
     except OverflowError:
@@ -179,7 +180,10 @@ def _stage_alert(stage: dict, base_date) -> Optional[dict]:
     para ESA etapa: un solo valor no tumba GET /compras/pedidos para todos."""
     try:
         return _alerta_de_etapa(stage, base_date)
-    except (OverflowError, TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError) as e:
+        # r3 (m10): con rastro (un error de programación ya no queda en silencio como «sin alerta»)
+        logger.warning("Alerta de la etapa %r sin calcular: %s: %s", stage.get("stage") if isinstance(stage, dict) else None,
+                       type(e).__name__, e)
         return None
 
 
@@ -230,9 +234,17 @@ def _alerta_de_etapa(stage: dict, base_date) -> Optional[dict]:
 
 
 def _annotate_stage_alerts(stages: list, fecha_compra) -> list:
+    """r3 (m9): un tracking_stages que no es lista cuenta como [] y una etapa que no es dict se omite (sin cambiar la base
+    de la siguiente), las dos con un logger.warning: un dato legado así (de antes de B26) daba 500 a todos."""
     out = []
     base = fecha_compra
+    if not isinstance(stages, list):
+        logger.warning("tracking_stages que no es una lista (%s): se toma como []", type(stages).__name__)
+        stages = []
     for s in stages:
+        if not isinstance(s, dict):
+            logger.warning("Etapa del seguimiento que no es un objeto (%r): se omite", s)
+            continue
         s = dict(s)
         s["alert"] = _stage_alert(s, base)
         out.append(s)
@@ -1036,16 +1048,18 @@ def _desvincular_pec_cancelado(db: Session, pec_id: int, pec_numero: str, user_n
     eleccion "Pendiente de Compra" en vez de quedar apuntando a una PEC muerta.
     B4 T24 r2 (m4): los PVEN se leen con FOR UPDATE, en orden de id: en serie con un create_pec que los vincule a la vez
     (en READ COMMITTED, tras la espera, PostgreSQL vuelve a evaluar pec_id y salta el que ya se vinculó a otro PEC).
-    Hacer la desvinculación en el mismo commit que el CANCELADO queda para el B5."""
+    r3 (m2 + m8, ruling): los renglones de Actividad se agregan con db.add (sin _log, que comitea) y la Lista se guarda sin
+    commit: hay UN solo db.commit() al final, así que TODOS los PVEN siguen bloqueados hasta que se desvinculan (antes el
+    primer _log soltaba el bloqueo). La desvinculación sigue en su propia transacción, después del CANCELADO."""
     ventas = db.query(SaleOrder).filter(SaleOrder.pec_id == pec_id).order_by(SaleOrder.id).with_for_update().all()
     for v in ventas:
         v.pec_id = None
         v.pec_numero = None
         if v.estado == "EN_PROCESO":
             v.estado = "PENDIENTE_COMPRA"
-        _log(db, "VEN", v.id, v.numero, "PEC_DESVINCULADO",
-             f"PEC {pec_numero} fue cancelada; el pedido vuelve a Pendiente de Compra",
-             user_name=user_name)
+        db.add(ActivityLog(entity_type="VEN", entity_id=v.id, entity_numero=v.numero, action="PEC_DESVINCULADO",
+                           description=f"PEC {pec_numero} fue cancelada; el pedido vuelve a Pendiente de Compra",
+                           user_name=user_name))
     items = _load_lista_compras(db)
     changed = False
     for it in items:
@@ -1055,7 +1069,7 @@ def _desvincular_pec_cancelado(db: Session, pec_id: int, pec_numero: str, user_n
             it["estado"] = "PENDIENTE"
             changed = True
     if changed:
-        _save_lista_compras(db, items)
+        _save_lista_compras(db, items, commit=False)   # r3 (m2 + m8): en el mismo commit
     db.commit()
 
 
@@ -1174,8 +1188,14 @@ def _eta_del_seguimiento(valor):
     leen los 10 primeros caracteres, y con el instante en UTC uno de las 19:00-23:59 de Colombia se veía al día siguiente.
     Se pierde la hora, que nadie usa. Sin zona (el AAAA-MM-DD de la pantalla) o uno que no se lee (_parse_dt lo ignora),
     tal cual, como hoy. El año (del día de Colombia, o del valor sin zona) entre ANIO_MINIMO y ANIO_MAXIMO (A2): si no, o
-    si el paso a Colombia desborda, 422 ETA_SEGUIMIENTO_INVALIDA. None o '' no cambian nada."""
-    leida = _fecha_iso(valor)
+    si el paso a Colombia desborda, 422 ETA_SEGUIMIENTO_INVALIDA. None o '' no cambian nada.
+    r3 (m1): una Z final (o z) es UTC: se pasa a '+00:00' ANTES de decidir si trae zona ('2026-12-02T01:00:00Z', lo que
+    da toISOString de JS para las 20:00 de Colombia del 1, -> '2026-12-01'). _fecha_iso no se toca (la usan la lectura y
+    la validación del timestamp)."""
+    texto = valor.strip() if isinstance(valor, str) else valor
+    if isinstance(texto, str) and texto[-1:] in ("Z", "z"):
+        texto = texto[:-1] + "+00:00"
+    leida = _fecha_iso(texto)
     if leida is None:
         return valor
     if leida.tzinfo is None:
@@ -1202,9 +1222,9 @@ def _validar_etapas(etapas) -> Optional[list]:
     """Lo que lee _annotate_stage_alerts / _stage_alert de cada etapa: que sea un dict; alert_overdue_days y
     alert_confirm_days, un número (no bool) entre 0 y 36500 o ausentes; timestamp, si trae valor, un texto sin zona horaria
     y con el año entre 1900 y 2999 (A2) (o uno que no se lee, que _parse_dt ignora). El eta, con el MISMO ayudante de PATCH
-    /tracking (_eta_del_seguimiento; cierre de r1, ruling de la duda 1): con zona horaria se normaliza a UTC sin zona en
-    vez de dar 422 (r2, m12: el día de Colombia); el año, entre 1900 y 2999; uno que no es texto, el mismo 422
-    (ETA_SEGUIMIENTO_INVALIDA).
+    /tracking (_eta_del_seguimiento; cierre de r1, ruling de la duda 1): con zona horaria (también la Z) se guarda como el
+    día de Colombia (AAAA-MM-DD) en vez de dar 422 (r2, m12; r3, m5); el año, entre 1900 y 2999; uno que no es texto, el
+    mismo 422 (ETA_SEGUIMIENTO_INVALIDA).
     Devuelve las etapas (copias) con el eta ya normalizado, para guardarlas así; None si no vinieron."""
     if etapas is None:
         return None
@@ -2358,9 +2378,9 @@ def add_grl(
     ).scalars().all()
     g.productos = _snapshot_productos(all_grls)
     db.commit()
-    _log(db, "ENINV", eninv_id, g.numero, "LINE_ADDED",
+    _log(db, "ENINV", eninv_id, g.numero, "LINE_ADDED",   # r3 (m18): firma la sesión
          f"Línea agregada: SKU {sku_id_new}, qty_esperada={qty_esp_new}, grl_id={new_grl.id}",
-         user_name=user.email)
+         user_name=nombre_de_usuario(user))
     return {"status": "success", "data": {
         "grl_id"        : new_grl.id,
         "sku_id"        : new_grl.sku_id,
@@ -2445,9 +2465,9 @@ def remove_grl(
     ).scalars().all()
     g.productos = _snapshot_productos(remaining_grls)
     db.commit()
-    _log(db, "ENINV", eninv_id, g.numero, "LINE_REMOVED",
+    _log(db, "ENINV", eninv_id, g.numero, "LINE_REMOVED",   # r3 (m18): firma la sesión
          f"Línea retirada: grl_id={grl_id_del}, SKU {grl_sku}, po_line_id={grl_pol}",
-         user_name=user.email)
+         user_name=nombre_de_usuario(user))
     return {"status": "success", "data": {
         "grl_id_removed"        : grl_id_del,
         "sku_id"                : grl_sku,
@@ -3814,7 +3834,8 @@ def add_to_lista_compras(
     pven_id = body.get("pven_id")
     pven_numero = body.get("pven_numero")
     notas = body.get("notas") or ""
-    created_by = body.get("created_by") or (getattr(user, "full_name", None) or getattr(user, "name", None) or getattr(user, "email", "Sistema") if user else "Sistema")
+    # r3 (m18): el respaldo es el mismo nombre que firma el renglón de Actividad del envío (nombre_de_usuario)
+    created_by = body.get("created_by") or nombre_de_usuario(user)
     now_iso = datetime.datetime.utcnow().isoformat()
     
     added = []

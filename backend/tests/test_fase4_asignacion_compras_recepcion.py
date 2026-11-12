@@ -151,7 +151,7 @@ class TestFase4AsignacionComprasRecepcion:
         c_key = f"idem-recv-{uuid.uuid4().hex}"
         resp_conf = app_client.post(
             f"/api/v1/compras/recepciones/{eninv.id}/confirmar",
-            json={"idempotency_key": c_key, "receipt_type": "FISICA"},
+            json={"idempotency_key": c_key, "receipt_type": "FISICA", "user_name": "Otra Persona"},
             headers=_auth(admin_token)
         )
         assert resp_conf.status_code == 200, resp_conf.text
@@ -180,6 +180,11 @@ class TestFase4AsignacionComprasRecepcion:
                                                       ActivityLog.entity_type == "VEN",
                                                       ActivityLog.entity_id == so_id)).scalars().all()
         assert [(a.entity_type, a.entity_id, a.entity_numero) for a in avisos] == [("VEN", so_id, so_numero)]
+        # B4 T24 r3 (m24): el aviso lo firma la sesión, no el user_name del cuerpo (cierre de r2, m11).
+        from app.api.dependencies import usuario_de_token
+        from app.core.textos_actividad import nombre_de_usuario
+        yo = nombre_de_usuario(usuario_de_token(admin_token, db))
+        assert [a.user_name for a in avisos] == [yo], ([a.user_name for a in avisos], yo)
         viejos = db.execute(select(ActivityLog).where(ActivityLog.action == "MERCANCIA_DISPONIBLE",
                                                       ActivityLog.entity_type == "PVEN",
                                                       ActivityLog.entity_id == line_id,
