@@ -21,7 +21,7 @@ import { PanelAnalisisPerezoso } from '@/components/analisis';
 import { apiFetch } from '@/lib/api';
 import { estadoDelTotal, extraPorVista, textoVacioExistencias } from '@/lib/tabla';
 import { AYUDA_MINIMO_INVENTARIO, numeroFinito, resumenAlmacenes, tarjetasHubInventario } from '@/lib/kpis';
-import { ESTADOS_STOCK, TOPE_TABLERO_COMPRAS, avisoTope200 } from '@/lib/estados-compras';
+import { ESTADOS_STOCK, TOPE_TABLERO_COMPRAS, avisoTope200, marcarCategoriasPadre, textoPieBodega } from '@/lib/estados-compras';
 // ?tab=analisis: la lectura genérica que dejó T14 en flujo-compras.js (se reúsa, no se copia).
 import { leerEnlaceHubCompras } from '@/lib/flujo-compras';
 import { textoDeError } from '@/lib/avisos';
@@ -174,9 +174,11 @@ const BARRA_ESQUELETO = 'inline-block rounded bg-slate-100 motion-safe:animate-p
 function VistaAlmacenes({ listado, vacio, onVer }: { listado: Listado<FilaStock>; vacio: React.ReactNode; onVer: (id: number) => void }) {
   const grupos = useMemo(() => resumenAlmacenes(listado.filas), [listado.filas]);
   const aviso = avisoTope200(listado.total, 'existencias');
+  // B4 T24 f3 (F79): con más filas que las cargadas, el pie no afirma «Bien abastecido» de lo que quedó fuera.
+  const recortado = (listado.total ?? 0) > TOPE_TABLERO_COMPRAS;
   const error = listado.error ? (
     <div role="alert" className="flex flex-wrap items-center gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">
-      {textoDeError(listado.error, 'No se pudieron cargar las bodegas')}
+      {textoDeError(listado.error, 'No se pudieron cargar las existencias por bodega')}
       <button type="button" onClick={listado.recargar}
         className={`inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 ${FOCO_VISIBLE}`}>
         <RefreshCw size={13} aria-hidden="true" /> Reintentar
@@ -218,6 +220,8 @@ function VistaAlmacenes({ listado, vacio, onVer }: { listado: Listado<FilaStock>
   }
   return (
     <div className="@container space-y-3" aria-busy={listado.recargando || undefined}>
+      {/* B4 T24 f3 (F82 b): las tarjetas de bodega (h3) quedan bajo un h2 de la vista, sin cambiar lo que se ve. */}
+      <h2 className="sr-only">Existencias por bodega</h2>
       {error}
       {aviso && <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-800">{aviso}</p>}
       {grupos.length === 0 ? (
@@ -249,7 +253,7 @@ function VistaAlmacenes({ listado, vacio, onVer }: { listado: Listado<FilaStock>
               <div className={PIE_BODEGA}>
                 <span className={`flex items-center gap-1 ${b.en_riesgo > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
                   {b.en_riesgo > 0 ? <AlertTriangle size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}
-                  {b.en_riesgo > 0 ? `${b.en_riesgo} bajo el mínimo o agotadas` : 'Bien abastecida'}
+                  {textoPieBodega(b.en_riesgo, { recortado: recortado }).texto}
                 </span>
                 <button type="button" onClick={() => onVer(b.warehouse_id)} aria-label={`Ver los artículos de ${b.bodega}`}
                   className={`flex items-center gap-1 rounded font-black text-indigo-700 hover:text-indigo-900 ${FOCO_VISIBLE}`}>
@@ -304,7 +308,8 @@ export default function InventarioHub() {
     ruta: RUTA_STOCK, estado, conConteos: true, esperar: !listo, despachar, activo: !enAnalisis && !verAlmacenes, extra: extraDeLaLista,
   });
   // RP52 (d): «Almacenes» agrupa hasta 200 filas de la MISMA consulta (con sus conteos, para las pestañas).
-  const extraAlmacenes = useMemo(() => ({ ...extraDeLaLista, limit: TOPE_TABLERO_COMPRAS, offset: 0 }), [extraDeLaLista]);
+  // B4 T24 f3 (F86): sin la bodega de la Lista: Almacenes muestra todas las bodegas (como en BASE); «Ver artículos» vuelve a filtrarla.
+  const extraAlmacenes = useMemo(() => ({ ...extraDeLaLista, warehouse_id: null, limit: TOPE_TABLERO_COMPRAS, offset: 0 }), [extraDeLaLista]);
   const almacenes = useListado<FilaStock>({
     ruta: RUTA_STOCK, estado, conConteos: true, esperar: !listo, activo: !enAnalisis && verAlmacenes, extra: extraAlmacenes,
   });
@@ -372,8 +377,11 @@ export default function InventarioHub() {
     ? <span className="font-bold text-indigo-700">{seleccion.length} {seleccion.length === 1 ? 'seleccionada' : 'seleccionadas'}</span>
     : null;
   // Los nombres de lo elegido, para el vacío (si el catálogo todavía no llegó, el id).
-  const nombreBodega = filtros.bodega ? (bodegas.filas?.find((b) => String(b.id) === filtros.bodega)?.name ?? `#${filtros.bodega}`) : null;
-  const nombreCategoria = filtros.categoria ? (categorias.filas?.find((c) => String(c.id) === filtros.categoria)?.name ?? `#${filtros.categoria}`) : null;
+  // B4 T24 f3 (F85): sin el nombre (el catálogo no llegó), `true`: el vacío dice «la bodega elegida», nunca «#2».
+  // B4 T24 f3 (F87-f): las categorías padre, marcadas en el selector (el filtro es por la categoría exacta; P25 decide si incluye las hijas).
+  const categoriasMarcadas = useMemo(() => ({ ...categorias, filas: marcarCategoriasPadre(categorias.filas) }), [categorias]);
+  const nombreBodega = filtros.bodega ? (bodegas.filas?.find((b) => String(b.id) === filtros.bodega)?.name ?? true) : null;
+  const nombreCategoria = filtros.categoria ? (categorias.filas?.find((c) => String(c.id) === filtros.categoria)?.name ?? true) : null;
   // m8 de T15: el «vacío» memoizado dice qué lo deja vacío (textoVacioExistencias): la búsqueda, la pestaña o los filtros.
   const vacio = useMemo(() => {
     const texto = textoVacioExistencias({ q: estado.q, vista: estado.vista, bodega: nombreBodega, categoria: nombreCategoria });
@@ -450,14 +458,15 @@ export default function InventarioHub() {
       <div className={CONTENEDOR}>
 
         {/* 3. HEADER MAESTRO */}
-        <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
+        {/* B4 T24 f3 (F78): flex-wrap y min-w-0: a 768 px con el menú abierto y a 375 px el encabezado se parte, no desplaza el main. */}
+        <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4 min-w-0">
+          <div className="flex items-center gap-4 min-w-0">
             <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-slate-800 to-indigo-600 flex items-center justify-center text-white shadow-lg shadow-indigo-200">
               <Archive size={28}/>
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-3xl font-black text-slate-900 tracking-tight">HUB de Inventario</h1>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-3xl font-black text-slate-900 tracking-tight break-words">HUB de Inventario</h1>
                 <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
                   Nebulae Kids
                 </span>
@@ -467,7 +476,7 @@ export default function InventarioHub() {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <button type="button" onClick={recargarTodo} className={`px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold text-xs flex items-center gap-2 transition-colors ${FOCO_VISIBLE}`}>
               <RefreshCw size={14} aria-hidden="true" className={actualizando ? 'animate-spin' : ''}/>
               Actualizar
@@ -529,7 +538,7 @@ export default function InventarioHub() {
                       fallo="No se pudieron cargar las bodegas" catalogo={bodegas} valor={filtros.bodega}
                       onCambiar={(bodega) => cambiarFiltros({ bodega })} onReintentar={reintentarCatalogos} icono={Warehouse} />
                     <SelectorCatalogo etiqueta="Categoría" todas="Todas las categorías" cargando="Cargando categorías…"
-                      fallo="No se pudieron cargar las categorías" catalogo={categorias} valor={filtros.categoria}
+                      fallo="No se pudieron cargar las categorías" catalogo={categoriasMarcadas} valor={filtros.categoria}
                       onCambiar={(categoria) => cambiarFiltros({ categoria })} onReintentar={reintentarCatalogos} icono={Layers} />
                     {hayFiltros && (
                       <button type="button" onClick={() => cambiarFiltros(SIN_FILTROS)}

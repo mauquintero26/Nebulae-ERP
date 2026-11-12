@@ -2539,7 +2539,8 @@ console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5,
   // R11: el Hub no lleva tablero; conserva su vista Lista / Almacenes. Almacenes = hasta 200 filas de la MISMA consulta
   // (RP52 d), agrupadas en la lib y con el aviso de R11 si hay más.
   assert.ok(!/kanbanDisponible|TableroKanban|useTableroKanban/.test(fuente), 'sin tablero');
-  assert.ok(fuente.includes('const extraAlmacenes = useMemo(() => ({ ...extraDeLaLista, limit: TOPE_TABLERO_COMPRAS, offset: 0 }), [extraDeLaLista]);'));
+  // B4 T24 f3 (F86, D27): Almacenes no hereda la bodega de la Lista (warehouse_id: null): muestra todas las bodegas, como en BASE.
+  assert.ok(fuente.includes('const extraAlmacenes = useMemo(() => ({ ...extraDeLaLista, warehouse_id: null, limit: TOPE_TABLERO_COMPRAS, offset: 0 }), [extraDeLaLista]);'));
   assert.ok(fuente.includes('resumenAlmacenes(listado.filas)') && fuente.includes("avisoTope200(listado.total, 'existencias')"));
   // R12: las 4 tarjetas de /inventory/stats (tarjetasHubInventario), cada una una vez; inv_bajo_minimo NO es botón
   // (RP52 b) y va en alerta con su tono; la nota dice dónde se define el mínimo (R10) y no hay nota de datos de ejemplo.

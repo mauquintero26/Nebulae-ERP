@@ -695,7 +695,8 @@ const textoLimpio = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() 
  * `bodega` y `categoria` son los NOMBRES de lo elegido (null si no hay filtro). T18 r1 (m20): la comparten Stock y
  * Abastecimiento (pestañas 'agotado' y 'abastecido' además de las del Hub); con `sinBodega` (esas pantallas no filtran por
  * bodega) la ayuda habla solo de la categoría.
- * @param {{q?: string | null, vista?: string | null, bodega?: string | null, categoria?: string | null, sinBodega?: boolean} | null | undefined} filtro
+ * B4 T24 f3 (F85): `true` en bodega o categoria es una elegida cuyo nombre no se conoce («la bodega elegida»).
+ * @param {{q?: string | null, vista?: string | null, bodega?: string | true | null, categoria?: string | true | null, sinBodega?: boolean} | null | undefined} filtro
  * @returns {{titulo: string, ayuda: string | null}}
  */
 export function textoVacioExistencias(filtro) {
@@ -703,7 +704,11 @@ export function textoVacioExistencias(filtro) {
   const q = textoLimpio(f.q);
   const bodega = textoLimpio(f.bodega);
   const categoria = textoLimpio(f.categoria);
-  const donde = [bodega && `en la bodega «${bodega}»`, categoria && `en la categoría «${categoria}»`].filter(Boolean).join(' y ');
+  // B4 T24 f3 (F85, aditivo): `true` es una elegida cuyo nombre no se conoce (el catálogo no llegó): «la bodega elegida», nunca el id crudo.
+  const donde = [
+    f.bodega === true ? 'en la bodega elegida' : bodega && `en la bodega «${bodega}»`,
+    f.categoria === true ? 'en la categoría elegida' : categoria && `en la categoría «${categoria}»`,
+  ].filter(Boolean).join(' y ');
   const conDonde = donde ? ` ${donde}` : '';
   const quita = donde ? (f.sinBodega === true ? 'Quita el filtro de categoría para ver las demás.' : 'Quita el filtro de bodega o de categoría para ver las demás.') : null;
   if (q) return { titulo: `Ninguna existencia coincide con «${q}»${conDonde}.`, ayuda: 'Busca por el código del SKU o por el nombre del producto.' };

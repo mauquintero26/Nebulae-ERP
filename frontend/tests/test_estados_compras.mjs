@@ -3364,4 +3364,38 @@ console.log('--- B4 T24 f3 (FINAL-m12, F64, FINAL-m13, F62): el panel de un PEC 
   }
 }
 
+console.log('--- B4 T24 f3 (F79, F82, F85, F86, F87-f, F78): el Hub de Inventario — el pie de la bodega, los textos, Almacenes, las categorías padre y el encabezado ---');
+{
+  const { textoPieBodega, marcarCategoriasPadre, ESTADOS_STOCK, TOPE_TABLERO_COMPRAS } = ec;
+  // F79: singular y plural; sin riesgo, la etiqueta de ESTADOS_STOCK; con la consulta recortada, no afirma de lo que no cargó.
+  assert.deepEqual(textoPieBodega(1), { texto: '1 bajo el mínimo o agotada', alerta: true });
+  assert.deepEqual(textoPieBodega(3), { texto: '3 bajo el mínimo o agotadas', alerta: true });
+  assert.deepEqual(textoPieBodega(1200, { recortado: true }), { texto: '1.200 bajo el mínimo o agotadas', alerta: true });
+  assert.deepEqual(textoPieBodega(0), { texto: ESTADOS_STOCK.abastecido.label, alerta: false });
+  assert.deepEqual(textoPieBodega(0, { recortado: true }), { texto: `Sin alertas en las ${TOPE_TABLERO_COMPRAS} cargadas`, alerta: false });
+  assert.equal(textoPieBodega(null).texto, ESTADOS_STOCK.abastecido.label);
+  // F87-f: las padre, marcadas (sin mutar); null sigue null.
+  const cats = [{ id: 1, name: 'Hogar', parent_id: null }, { id: 2, name: 'Cocina', parent_id: 1 }, { id: 3, name: 'Juguetes', parent_id: null }];
+  assert.deepEqual(marcarCategoriasPadre(cats).map((c) => c.name), ['Hogar (categoría padre)', 'Cocina', 'Juguetes']);
+  assert.equal(cats[0].name, 'Hogar', 'no muta lo que recibe');
+  assert.equal(marcarCategoriasPadre(null), null);
+  // F85: el vacío nunca muestra el id crudo; sin el nombre, «la bodega elegida».
+  const { textoVacioExistencias } = await import('../src/lib/tabla.js');
+  assert.equal(textoVacioExistencias({ bodega: true }).titulo, 'Ninguna existencia en la bodega elegida.');
+  assert.equal(textoVacioExistencias({ categoria: true, bodega: 'Central' }).titulo, 'Ninguna existencia en la bodega «Central» y en la categoría elegida.');
+  // El cableado del Hub.
+  const hub = leerFuente('app/dashboard/inventario/page.tsx');
+  trae(hub, '{textoPieBodega(b.en_riesgo, { recortado: recortado }).texto}', 'F79: el pie con su regla');
+  trae(hub, 'const recortado = (listado.total ?? 0) > TOPE_TABLERO_COMPRAS;');
+  noTrae(hub, "'Bien abastecida'", 'F79: sin la etiqueta local');
+  trae(hub, "textoDeError(listado.error, 'No se pudieron cargar las existencias por bodega')", 'F82 a');
+  trae(hub, '<h2 className="sr-only">Existencias por bodega</h2>', 'F82 b');
+  noTrae(hub, '`#${filtros.bodega}`', 'F85: sin el id crudo');
+  noTrae(hub, '`#${filtros.categoria}`', 'F85');
+  trae(hub, 'warehouse_id: null, limit: TOPE_TABLERO_COMPRAS', 'F86: Almacenes muestra todas las bodegas');
+  trae(hub, 'catalogo={categoriasMarcadas} valor={filtros.categoria}', 'F87-f: el selector con las padre marcadas');
+  trae(hub, '<div className="flex flex-wrap items-center gap-3">', 'F78: los botones se parten');
+  trae(hub, '<div className="flex flex-wrap items-center gap-2">\n                <h1 className="text-3xl font-black text-slate-900 tracking-tight break-words">HUB de Inventario</h1>', 'F78: el título');
+}
+
 console.log('\nOK: test_estados_compras.mjs');

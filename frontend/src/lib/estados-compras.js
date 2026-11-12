@@ -809,6 +809,35 @@ export function recargaReponeLineas({ silencioso = false, recepcion }) {
 }
 
 /**
+ * B4 T24 f3 (F79): el pie de la tarjeta de una bodega en la vista Almacenes del Hub de Inventario. Con referencias en riesgo, cuántas
+ * (singular y plural); sin ninguna, la etiqueta de ESTADOS_STOCK.abastecido (RP53: sin variantes locales), salvo que la consulta se
+ * haya recortado (`recortado`: más de TOPE_TABLERO_COMPRAS filas): ahí no se afirma nada de lo que no se cargó.
+ * @param {unknown} enRiesgo
+ * @param {{recortado?: boolean}} [opciones]
+ * @returns {{texto: string, alerta: boolean}}
+ */
+export function textoPieBodega(enRiesgo, { recortado = false } = {}) {
+  const n = numeroFinito(enRiesgo) ?? 0;
+  if (n > 0) return { texto: `${formatoEntero(n)} bajo el mínimo o ${n === 1 ? 'agotada' : 'agotadas'}`, alerta: true };
+  if (recortado) return { texto: `Sin alertas en las ${TOPE_TABLERO_COMPRAS} cargadas`, alerta: false };
+  return { texto: ESTADOS_STOCK.abastecido.label, alerta: false };
+}
+
+/**
+ * B4 T24 f3 (F87-f): las categorías del selector del Hub de Inventario (GET /categories, ya ordenado por nombre en el servidor, F87-b),
+ * con las que son padre de otra marcadas «X (categoría padre)»: el filtro es por la categoría exacta del producto (P25 decide si
+ * incluye las hijas), así que elegir una padre puede dejar la tabla vacía. No muta lo que recibe; null sigue null.
+ * @template {{id?: unknown, name?: unknown, parent_id?: unknown}} C
+ * @param {ReadonlyArray<C> | null | undefined} categorias
+ * @returns {C[] | null}
+ */
+export function marcarCategoriasPadre(categorias) {
+  if (!Array.isArray(categorias)) return null;
+  const padres = new Set(categorias.map((c) => c?.parent_id).filter((id) => id != null).map(String));
+  return categorias.map((c) => (c && padres.has(String(c.id)) ? { ...c, name: `${c.name} (categoría padre)` } : c));
+}
+
+/**
  * B4 T24 f3 (FINAL-m12): el aviso de la recepción en el panel de un PEC (Compras › Pedidos) y adónde lleva su botón:
  *  - en bodega (columnaPec 'en_bodega': RECIBIDO o PARCIALMENTE_RECIBIDA, lo mismo que el tablero muestra con «Recepcionar»): si hay
  *    una recepción por confirmar (BORRADOR, esRecepcionPorConfirmar), «Ver recepción» la abre; si no, «Hacer recepción» crea la del
