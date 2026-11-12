@@ -128,9 +128,7 @@ export function reglaSoltarEntrega(pedido, origen, destino, { rol = null } = {})
     return { tipo: 'bloqueado', motivo: motivoN2(destino === 'esperando' ? 'EN_PROCESO' : 'LISTO_ENTREGA') };
   }
   if (destino === 'despachado') {
-    if (desde === 'falta_saldo') {
-      return { tipo: 'bloqueado', motivo: `Falta cobrar el saldo de ${formatoPesos(saldoDe(pedido))} antes de despachar.` };
-    }
+    if (desde === 'falta_saldo') return { tipo: 'bloqueado', motivo: textoFaltaSaldo(pedido) };
     if (desde !== 'listo') return { tipo: 'bloqueado', motivo: 'La mercancía todavía no está lista para entrega.' };
     // r2 (I3): la MISMA regla de la fila y del Drawer.
     return puedeDespacharPedido(pedido, rol)
@@ -277,15 +275,27 @@ export function textoEntregaTablero(p) {
 }
 
 /**
+ * B4 T24 f3 (F95): el motivo de un pedido con saldo que todavía no se despacha: 'Falta cobrar el saldo de $X antes de despachar.'
+ * (formatoPesos). Lo dicen el tablero (reglaSoltarEntrega) y el Drawer de Entregas, a TODOS los roles (cobrarlo es de ADMIN y ASESOR).
+ * @param {any} pedido
+ * @returns {string}
+ */
+export function textoFaltaSaldo(pedido) {
+  return `Falta cobrar el saldo de ${formatoPesos(saldoDe(pedido))} antes de despachar.`;
+}
+
+/**
  * La tarjeta del tablero de Entregas (KANBAN-logistica punto 4): el PVEN, el cliente, los ítems, el total, el estado y el chip
- * «Saldo $X» (o «Pagado»). El recordatorio por WhatsApp va en el menú ⋯ de la tarjeta (recordatorioSaldo), no aquí.
+ * «Saldo $X» (o «Pagado»); B4 T24 f3 (FINAL-m26): con la entrega estimada vencida, el borde rose y el chip «Entrega vencida». El recordatorio por WhatsApp va en el menú ⋯ de la tarjeta (recordatorioSaldo), no aquí.
  * @param {any} p
+ * @param {{ahora?: number}} [opciones]  B4 T24 f3 (FINAL-m26): el instante de «hoy» (las pruebas lo fijan); por defecto, ahora.
  * @returns {import('./kanban-ventas.js').TarjetaVentas}
  */
-export function tarjetaEntrega(p) {
+export function tarjetaEntrega(p, { ahora = Date.now() } = {}) {
   const n = Array.isArray(p?.productos) ? p.productos.length : 0;
   const saldo = saldoDe(p);
   const entrega = textoEntregaTablero(p);
+  const vencida = alertaEntregaPedido(p, ahora) === 'vencida';
   return {
     numero: String(p?.numero ?? p?.id ?? ''),
     tipo: 'PVEN',
@@ -293,11 +303,12 @@ export function tarjetaEntrega(p) {
     subtitulo: n === 0 ? 'Sin ítems' : `${n} ${n === 1 ? 'ítem' : 'ítems'}`,
     monto: numeroFinito(p?.total_cop),
     estado: estadoDeTarjeta('PVEN', p?.estado),
+    // B4 T24 f3 (FINAL-m26): el borde rose (atrasada) nunca va solo: la entrega estimada vencida lleva su chip de texto.
     chips: [saldo > 0
       ? { texto: `Saldo ${formatoPesos(redondearPeso(saldo))}`, tono: 'amber' }
-      : { texto: 'Pagado', tono: 'emerald' }],
+      : { texto: 'Pagado', tono: 'emerald' }, ...(vencida ? [{ texto: 'Entrega vencida', tono: 'rose' }] : [])],
     tiempo: entrega !== '—' ? `Entrega ${entrega}` : null,
-    atrasada: alertaEntregaPedido(p) === 'vencida',
+    atrasada: vencida,
     accionPrincipal: null,
   };
 }
@@ -414,8 +425,10 @@ export function cuerpoDespacho(pedido, { rol, warehouseId, hoy = new Date().toLo
 }
 
 /**
- * Lo que pregunta confirmar() de useAvisos antes de despachar (RP23: ya no window.confirm): con saldo por cobrar, la alerta de
- * cobro con el monto real (ya no «40 %»); sin él, la confirmación normal. Las dos dicen el cliente y la bodega de salida.
+ * Lo que pregunta confirmar() de useAvisos antes de despachar (RP23: ya no window.confirm): sin saldo, la confirmación normal, con el
+ * cliente y la bodega de salida. B4 T24 f3 (F32): la rama «Alerta de cobro» (con saldo por cobrar) es una guarda defensiva: desde T19 r2
+ * la página no despacha un pedido con saldo (puedeDespacharPedido; el servidor tiene la misma regla desde FINAL-m35), así que no se
+ * alcanza desde la pantalla; si un llamador la pide igual, avisa el monto real.
  * @param {any} pedido
  * @param {string | null | undefined} nombreBodega
  * @returns {{titulo: string, mensaje: string, efectos: string[], textoConfirmar: string, peligro: boolean}}

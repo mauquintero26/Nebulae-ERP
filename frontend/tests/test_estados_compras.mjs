@@ -2940,7 +2940,11 @@ console.log('--- TEST 48 (B4 T19; KANBAN-logistica 4, KPI-inventario 8; R15, RP2
   trae(e, 'puedeDespacharPedido(p, acciones.rol)', 'la fila usa la regla única');
   // B4 T24 r2 (m15 c, D27): y el cierre del Drawer (cierreExterno={!puedeDespacharPedido(selected, rol)}).
   assert.equal(e.split('puedeDespacharPedido(selected, rol)').length - 1, 3, 'el botón, el selector y el cierre del Drawer usan la regla única');
-  trae(e, 'tieneSaldo && puedeCobrarSaldo(rol)', 'Marcar Saldo Cobrado solo a quien el servidor se lo permite');
+  // B4 T24 f3 (F95, D27): el motivo del saldo lo ven todos ({tieneSaldo && (…{textoFaltaSaldo(selected)}…)}); el botón, solo quien cobra.
+  trae(e, '{tieneSaldo && (', 'el motivo del saldo, a todos');
+  trae(e, '{textoFaltaSaldo(selected)}', 'el texto del tablero');
+  trae(e, '{puedeCobrarSaldo(rol) && (\n                      <Button size="sm" color="emerald" loading={updating} onClick={() => handleRegistrarCobroSaldo(selected)}>', 'Marcar Saldo Cobrado solo a quien el servidor se lo permite');
+  noTrae(e, 'El cliente debe cancelar el saldo antes del despacho.', 'sin el texto que solo veían ADMIN y ASESOR');
   // B4 T24 (F46, D27): con useRolActual (la pieza común; '' en el servidor y en la hidratación).
   trae(e, 'const rol = useRolActual();', 'el rol se lee después de montar');
   noTrae(sinComentarios(e), 'useState(() => getUsuarioActual()', 'el rol no se lee en el inicializador');

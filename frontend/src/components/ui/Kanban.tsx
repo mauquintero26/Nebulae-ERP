@@ -589,6 +589,7 @@ export type DatosTarjetaKanban = {
   /** Máximo 3. */
   chips?: ReadonlyArray<ChipTarjetaKanban> | null;
   tiempo?: string | null;
+  /** El borde rose. B4 T24 f3 (FINAL-m26): nunca va solo: la tarjeta lleva además un chip de texto que dice por qué (el color nunca va solo). */
   atrasada?: boolean;
   accionPrincipal?: AccionTarjetaKanban | null;
 };

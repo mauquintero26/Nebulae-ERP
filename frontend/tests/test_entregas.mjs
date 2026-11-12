@@ -266,7 +266,9 @@ console.log('--- TEST 10 (T19): la tarjeta del tablero, el cobro, el recordatori
 {
   const ped = { id: 12, numero: 'PVEN-12', customer_name: 'Ana Pérez', customer_phone: '300 123 4567', telefono_whatsapp: null,
     total_cop: 1000000, saldo_cop: 400000, estado: 'LISTO_ENTREGA', productos: [{ qty: 1 }, { qty: 2 }], fecha_entrega_estimada: '2026-11-20T00:00:00' };
-  const t = ent.tarjetaEntrega(ped);
+  // B4 T24 f3 (FINAL-m26, D27): «hoy» fijo (la entrega estimada del 20 nov todavía no vence): la tarjeta ya no depende del día de la corrida.
+  const AHORA = Date.parse('2026-11-10T12:00:00-05:00');
+  const t = ent.tarjetaEntrega(ped, { ahora: AHORA });
   assert.equal(t.numero, 'PVEN-12');
   assert.equal(t.tipo, 'PVEN');
   assert.equal(t.titulo, 'Ana Pérez');
@@ -278,8 +280,18 @@ console.log('--- TEST 10 (T19): la tarjeta del tablero, el cobro, el recordatori
   assert.equal(t.tiempo, 'Entrega 20 nov 2026', 'fecha de negocio: el día del API, no un instante (T9 r1 I2)');
   assert.equal(ent.textoEntregaTablero(ped), '20 nov 2026');
   assert.equal(ent.textoEntregaTablero({}), '—');
-  assert.deepEqual(ent.tarjetaEntrega({ ...ped, saldo_cop: 0 }).chips, [{ texto: 'Pagado', tono: 'emerald' }]);
-  assert.deepEqual(ent.tarjetaEntrega({ ...ped, saldo_cop: -3000 }).chips, [{ texto: 'Pagado', tono: 'emerald' }], 'a favor: pagado');
+  assert.deepEqual(ent.tarjetaEntrega({ ...ped, saldo_cop: 0 }, { ahora: AHORA }).chips, [{ texto: 'Pagado', tono: 'emerald' }]);
+  assert.deepEqual(ent.tarjetaEntrega({ ...ped, saldo_cop: -3000 }, { ahora: AHORA }).chips, [{ texto: 'Pagado', tono: 'emerald' }], 'a favor: pagado');
+  // B4 T24 f3 (FINAL-m26): la entrega estimada vencida lleva el borde rose Y su chip de texto (el color nunca va solo); por vencer, nada.
+  const despues = Date.parse('2026-11-25T12:00:00-05:00');
+  const vencida = ent.tarjetaEntrega(ped, { ahora: despues });
+  assert.equal(vencida.atrasada, true);
+  assert.deepEqual(vencida.chips, [{ texto: 'Saldo $400.000', tono: 'amber' }, { texto: 'Entrega vencida', tono: 'rose' }]);
+  assert.equal(t.atrasada, false);
+  assert.ok(!t.chips.some((c) => c.texto === 'Entrega vencida'), 'por vencer: sin chip (el ruling: solo «Entrega vencida»)');
+  const entregado = ent.tarjetaEntrega({ ...ped, estado: 'ENTREGADO' }, { ahora: despues });
+  assert.equal(entregado.atrasada, false, 'un despachado no está vencido');
+  for (const tarjeta of [t, vencida, entregado]) assert.equal(tarjeta.atrasada, tarjeta.chips.some((c) => c.texto === 'Entrega vencida'), 'atrasada siempre con su chip');
   assert.equal(ent.tarjetaEntrega({ ...ped, customer_name: ' ', productos: [{}] }).titulo, 'Cliente sin nombre');
   assert.equal(ent.tarjetaEntrega({ ...ped, productos: [{}] }).subtitulo, '1 ítem');
   assert.equal(ent.tarjetaEntrega({ ...ped, productos: [] }).subtitulo, 'Sin ítems');
@@ -329,8 +341,9 @@ console.log('--- TEST 11 (T19): «Filtrar estado» de la tabla (los estados de l
 console.log('--- TEST 12 (T19 r1): una sola regla para despachar (fila, tablero y Drawer: la MISMA función), cobrar el saldo y la tarjeta que abre cada pestaña ---');
 {
   const p = (estado, saldo = 0) => ({ id: 1, numero: 'PVEN-1', estado, saldo_cop: saldo });
-  // m3, m10, m17: despachar desde «Listo para despachar», desde «falta saldo» (con la alerta) y terminar un PARCIALMENTE_ENTREGADO; nunca desde
-  // «Esperando mercancía», ni un ya despachado, cancelado o devuelto.
+  // m3, m10, m17 y r2 (I3): despachar desde «Listo para despachar» y terminar un PARCIALMENTE_ENTREGADO sin saldo; con saldo pendiente,
+  // no («Falta cobrar el saldo»: se cobra primero; B4 T24 f3, F32: el comentario dice la regla de r2). Nunca desde «Esperando mercancía», ni un
+  // ya despachado, cancelado o devuelto.
   const casos = [
     ['LISTO_ENTREGA', 0, true], ['DISPONIBLE', 0, true],
     // r2 (I3): con saldo pendiente NO se despacha (el brief y el tablero: «Falta cobrar el saldo»); se cobra primero.
@@ -354,6 +367,13 @@ console.log('--- TEST 12 (T19 r1): una sola regla para despachar (fila, tablero 
     }
   }
   assert.match(reglaSoltarEntrega(p('LISTO_ENTREGA', 5000), 'falta_saldo', 'despachado', { rol: 'ADMIN' }).motivo, /Falta cobrar el saldo de \$5\.000/);
+  // B4 T24 f3 (F31): la rama sin columna (un pedido que no está en el tablero, o ninguno) también usa la regla única: no se despacha. No es
+  // un mutante equivalente: no es alcanzable desde la UI (la tarjeta siempre tiene columna).
+  assert.equal(reglaSoltarEntrega({ id: 9, estado: 'CANCELADO', saldo_cop: 0 }, 'listo', 'despachado', { rol: 'ADMIN' }).tipo, 'bloqueado', 'cancelado, sin columna');
+  assert.equal(reglaSoltarEntrega(null, 'listo', 'despachado', { rol: 'ADMIN' }).tipo, 'bloqueado', 'sin pedido');
+  // B4 T24 f3 (F95): el motivo del saldo es uno (el tablero y el Drawer, a todos los roles).
+  assert.equal(ent.textoFaltaSaldo(p('LISTO_ENTREGA', 5000)), 'Falta cobrar el saldo de $5.000 antes de despachar.');
+  assert.equal(reglaSoltarEntrega(p('LISTO_ENTREGA', 5000), 'falta_saldo', 'despachado', { rol: 'BODEGA' }).motivo, ent.textoFaltaSaldo(p('LISTO_ENTREGA', 5000)));
   // m6, m12, m21: «Marcar Saldo Cobrado» (PATCH saldo_cop) solo ADMIN y ASESOR; Bodega recibe 403.
   for (const rol of ['ADMIN', 'ASESOR', 'Vendedor', ' admin ']) assert.equal(ent.puedeCobrarSaldo(rol), true, rol);
   for (const rol of ['BODEGA', 'FINANZAS', 'COMPRAS', 'CONSULTA', '', null, undefined]) assert.equal(ent.puedeCobrarSaldo(rol), false, String(rol));

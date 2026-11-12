@@ -36,7 +36,7 @@ import {
   COLUMNAS_ENTREGA, NOTA_ENTREGAS, OPCIONES_ESTADOS_TABLERO_ENTREGA, VISTA_DE_TRABAJO_ENTREGA, confirmacionDespacho,
   consultaColumnaEntrega, consultaConteoEntrega, consultaEntregas, cuerpoDespacho, infoCobroEntrega, mensajeFaltaBodega, opcionesEstadosEntrega,
   pestanasEntrega, puedeCobrarSaldo, puedeDespacharPedido, recordatorioSaldo, reglaSoltarEntrega, resumenColumnaEntrega, saldoEntrega,
-  tarjetaEntrega, tarjetasEntregas, textoEntregaTablero, textoVacioEntregas, vistaDeTarjetaEntrega,
+  tarjetaEntrega, tarjetasEntregas, textoEntregaTablero, textoFaltaSaldo, textoVacioEntregas, vistaDeTarjetaEntrega,
 } from '@/lib/entregas';
 
 /** Una línea del pedido (productos de _ven_dict: JSON; los nombres son los del servidor). */
@@ -555,12 +555,15 @@ export default function EntregasPage() {
                     El cliente pagó de más: hay un crédito a favor de <strong>{pesos(Math.abs(saldo))}</strong> pendiente de coordinar (reembolso o abono a otro pedido).
                   </p>
                 )}
-                {tieneSaldo && puedeCobrarSaldo(rol) && (
+                {/* B4 T24 f3 (F95): con saldo, TODOS ven por qué no se despacha (el motivo del tablero); cobrarlo es de ADMIN y ASESOR. */}
+                {tieneSaldo && (
                   <div className="mt-3 flex items-center justify-between gap-3">
-                    <p className="text-[11px] text-amber-900 leading-tight">El cliente debe cancelar el saldo antes del despacho.</p>
-                    <Button size="sm" color="emerald" loading={updating} onClick={() => handleRegistrarCobroSaldo(selected)}>
-                      Marcar Saldo Cobrado
-                    </Button>
+                    <p className="text-[11px] text-amber-900 leading-tight">{textoFaltaSaldo(selected)}</p>
+                    {puedeCobrarSaldo(rol) && (
+                      <Button size="sm" color="emerald" loading={updating} onClick={() => handleRegistrarCobroSaldo(selected)}>
+                        Marcar Saldo Cobrado
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>
