@@ -35,16 +35,19 @@ const tsLib = createRequire(import.meta.url)('typescript');
  * recargas…). Así la prueba mira lo que HACE, no cómo está escrita.
  */
 function cancelarConMotivoDe(fuente) {
-  const inicio = fuente.indexOf('async function cancelarConMotivo(');
-  assert.ok(inicio >= 0, 'la página tiene cancelarConMotivo');
-  const abre = fuente.indexOf('{', fuente.indexOf(')', inicio));
-  let nivel = 0;
-  let fin = -1;
-  for (let j = abre; j < fuente.length; j += 1) {
-    if (fuente[j] === '{') nivel += 1;
-    else if (fuente[j] === '}') { nivel -= 1; if (nivel === 0) { fin = j; break; } }
-  }
-  assert.ok(fin > abre, 'cancelarConMotivo cierra');
+  // B4 T24 f3 r1 (F59 d): la función sale del árbol de TypeScript (createSourceFile), no de contar llaves: una llave dentro de una
+  // cadena o de un comentario ya no la corta.
+  const arbol = tsLib.createSourceFile('pagina.tsx', fuente, tsLib.ScriptTarget.Latest, true, tsLib.ScriptKind.TSX);
+  let nodo = null;
+  const buscar = (n) => {
+    if (nodo) return;
+    if (tsLib.isFunctionDeclaration(n) && n.name?.text === 'cancelarConMotivo') { nodo = n; return; }
+    tsLib.forEachChild(n, buscar);
+  };
+  buscar(arbol);
+  assert.ok(nodo, 'la página tiene cancelarConMotivo');
+  const inicio = nodo.getStart(arbol);
+  const fin = nodo.getEnd() - 1;
   const js = tsLib.transpileModule(`(${fuente.slice(inicio, fin + 1)})`, { compilerOptions: { target: tsLib.ScriptTarget.ES2020 } })
     .outputText.replace(/^"use strict";\s*/, '').trim().replace(/;$/, '');
   return (entorno) => new Function('entorno', `with (entorno) { return ${js}; }`)(entorno);
@@ -901,7 +904,8 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
     'saveInfo y changeEstado');
   assert.match(pag, /const despues = despuesDeEliminarPec\(e\);\s*if \(despues === 'cerrar'\) \{ onUpdate\(\); onClose\(\); \}\s*else if \(despues === 'recargar'\) \{ onUpdate\(\); loadFull\(\); \}/,
     'deletePec');
-  assert.ok(!/catch \{\s*\}|catch \{ setProdSearchResults\(\[\]\); \}/.test(pag), 'ningún error mudo');
+  // B4 T24 f3 r1 (F59 b, D27): el catch vacío con o sin parámetro (`catch (e) {}` también).
+  assert.ok(!/catch\s*(?:\([^)]*\))?\s*\{\s*\}|catch\s*(?:\([^)]*\))?\s*\{ setProdSearchResults\(\[\]\); \}/.test(pag), 'ningún error mudo');
   assert.equal((pag.match(/avisarError\(err, 'No se pudo buscar el (?:casillero|proveedor|producto)'\)/g) ?? []).length, 4, 'las cuatro búsquedas');
   // El menú de fila (MenuFila) ofrece solo lo que acepta update_pec (R9, C15c): Emitir desde Borrador y cancelar con motivo.
   // B4 T24 (FINAL-m10, D27): además, solo con el rol que hace el PATCH y el DELETE (accesoPec.cambiarPec; r1, m35: la celda lo recibe por el contexto como cambiarPec).
@@ -959,10 +963,14 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
   assert.ok(!/textoDiasEtapa\(sd\.eta\)|sd\.alert\.nivel|bg-blue-50 border border-blue-200 rounded-lg/.test(pag), 'sin la segunda regla ni el aviso «ok» en azul');
   assert.match(pag, /\{sd\.tracking_number && <span>Guía: <strong[^>]*>\{sd\.tracking_number\}<\/strong><\/span>\}/, 'm13: la guía vigente');
   // T15 r1 (m4, m14): con el PEC cancelado el TrackingPanel es de solo lectura (seguimientoCerrado, la regla del detalle).
-  assert.match(pag, /const cerrado = seguimientoCerrado\(pec\.estado\);/);
+  // B4 T24 f3 r1 (F59 c, D27): la llamada, no la línea exacta.
+  assert.match(pag, /const cerrado = seguimientoCerrado\(\s*pec\.estado\s*\)/);
   assert.match(pag, /\{cerrado \? \([\s\S]{0,200}\{TEXTO_SEGUIMIENTO_CERRADO\}[\s\S]{0,120}\) : \([\s\S]{0,120}<PasosFlujo variante="barra" pasos=\{pasosDeTracking\(stages\)\}/);
   // B4 T24 r1 (m2, D27): y solo con el rol del PATCH /tracking (puedeEditar).
-  assert.match(pag, /const isEditing = !cerrado && puedeEditar && editStage === sd\.stage;/);
+  {
+    const editando = /const isEditing = ([^;\n]+);/.exec(pag)?.[1] ?? '';
+    for (const parte of [/!cerrado\b/, /\bpuedeEditar\b/, /editStage === sd\.stage/]) assert.match(editando, parte, `isEditing lleva ${parte}`);
+  }
   assert.match(pag, /\{!cerrado && puedeEditar && \(\s*<button onClick=\{\(\)=>openEdit\(sd\)\}/, 'sin editar las etapas de un cancelado');
   assert.ok(!/stageColor|diasTexto|Math\.ceil\(\(new Date/.test(pag), 'sin la barra a mano ni la cuenta de días con el reloj local');
   assert.match(pag, /fecha_entrega_estimada: infoForm\.fecha_entrega_estimada \|\| null/, '«Editar información» manda null en blanco, como el alta');
@@ -1245,7 +1253,8 @@ console.log('--- TEST 31 (B4 T16A): Tránsito (compras/transito/page.tsx) cablea
   assert.match(pag, /regla=\{reglaTablero\}/);
   assert.match(pag, /onCambio=\{cambiarDesdeTablero\}/);
   assert.match(pag, /avisoTope200\(completa\.total, 'pedidos'\)/, 'el aviso de los 200 sale de la frase única (solo si total > 200)');
-  assert.match(pag, /Reintentar/, 'si falla tracking-config, el tablero ofrece Reintentar');
+  // B4 T24 f3 r1 (F65, D27): el «Reintentar» del tracking-config atado a su onClick (antes pasaba con cualquier aparición).
+  assert.match(pag, /<button type="button" onClick=\{\(\) => setVueltaConfig\(\(n\) => n \+ 1\)\}[^>]*>Reintentar<\/button>/, 'si falla tracking-config, el tablero ofrece Reintentar');
   // Los diálogos nativos no existen (RP30) y el PATCH es el de /tracking.
   assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(pag.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')), 'sin diálogos nativos');
   assert.match(pag, /apiFetch\(`\/compras\/pedidos\/\$\{p\.id\}\/tracking`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ stage, status, user_name: autorActual\(\) \}\)/);
@@ -3620,6 +3629,79 @@ console.log('--- B4 T24 f3 r1 (C3, m31): el SKU del Kardex se elige con el rató
   const lista = k.slice(k.indexOf('role="listbox"'), k.indexOf('</div>', k.indexOf('role="listbox"')));
   assert.ok(!/role="status"|role="alert"|Ningún producto/.test(lista), 'el listbox solo tiene opciones');
   assert.match(k, /<p role="status"[^>]*>Ningún producto coincide con «\{skuTexto\.trim\(\)\}»\.<\/p>/);
+}
+
+console.log('--- B4 T24 f3 r1 (F59, F61, F65, F76): la cobertura — la fila vencida del PEC, avanzar y confirmar ejecutados, la hora del Kardex ---');
+{
+  // F61: columnas-pec.tsx — la clase de la fila vencida, el title «· Vencido» de Entrega est., el chip y las tres columnas clave.
+  const colPec = leerFuente('app/dashboard/compras/columnas-pec.tsx');
+  trae(colPec, 'export const claseDeFilaPec = (p: FilaColumnasPec) => (p.is_overdue ? `${TABLE.filaAlerta} ${MARCA_VENCIDO}` : null);');
+  trae(colPec, "titleCelda: (p) => `${textoDia(p.fecha_entrega_estimada)}${p.is_overdue ? ' · Vencido' : ''}`, celda: (p) => <CeldaEntrega p={p} /> },");
+  trae(colPec, "titleCelda: (p) => [p.numero, p.ven_numero, p.is_overdue ? 'Vencido' : null].filter(Boolean).join(' · '),");
+  assert.match(colPec, /\{p\.is_overdue && <span className=\{`\$\{CHIP\} text-\[10px\] \$\{CLASE_CHIP\.rose\}`\}>Vencido<\/span>\}/, 'el chip Vencido');
+  assert.match(colPec, /\{ id: 'numero', titulo: 'PEC \/ PVEN', ancho: 132, clave: true, fija: 'izquierda'/);
+  assert.match(colPec, /\{ id: 'estado', titulo: 'Estado', ancho: 120, clave: true,/);
+  assert.match(colPec, /\{ id: 'acciones', titulo: 'Acciones', ancho: 80, clave: true, fija: 'derecha', celda: celdaAcciones \}/);
+
+  // F65: avanzar de Tránsito, ejecutado (no un regex): un 409 recarga, un 500 no, y un segundo clic no manda otro PATCH.
+  const tra = leerFuente('app/dashboard/compras/transito/page.tsx');
+  const correrAvanzar = async ({ falla, pendiente = false, status = 'COMPLETADO' }) => {
+    const llamadas = [];
+    const entorno = {
+      pendienteRef: { current: () => Boolean(pendiente) },
+      iniciarCambio: () => llamadas.push('inicia'),
+      aplicarEtapa: async (p, stage, st) => {
+        llamadas.push(`PATCH ${p.id} ${stage} ${st}`);
+        if (falla) throw Object.assign(new Error('no'), { status: falla });
+      },
+      avisar: (texto) => llamadas.push(`ok: ${texto}`),
+      avisarError: () => llamadas.push('error'),
+      recargarTrasError: (err) => err.status === 409,
+      recargarTodo: () => llamadas.push('recargar'),
+      terminarCambio: () => llamadas.push('termina'),
+      descartarCambio: () => llamadas.push('descarta'),
+    };
+    await funcionEjecutable(tra, 'async (p: FilaTransito, accion: { stage: string; status: string }) =>')(entorno)({ id: 4, numero: 'PEC-4' }, { stage: 'X', status });
+    return llamadas;
+  };
+  assert.deepEqual(await correrAvanzar({}), ['inicia', 'PATCH 4 X COMPLETADO', 'ok: PEC-4: etapa completada', 'recargar', 'termina']);
+  assert.deepEqual(await correrAvanzar({ status: 'EN_PROCESO' }), ['inicia', 'PATCH 4 X EN_PROCESO', 'ok: PEC-4: etapa iniciada', 'recargar', 'termina']);
+  assert.deepEqual(await correrAvanzar({ falla: 409 }), ['inicia', 'PATCH 4 X COMPLETADO', 'error', 'recargar', 'termina'], 'un 409 recarga');
+  assert.deepEqual(await correrAvanzar({ falla: 500 }), ['inicia', 'PATCH 4 X COMPLETADO', 'error', 'descarta'], 'un 500 no recarga');
+  assert.deepEqual(await correrAvanzar({ pendiente: true }), [], 'con un cambio en camino, nada');
+
+  // F65: handleConfirmarRecepcion de Compras › Recepciones, ejecutado: el POST con su clave, la carga por fila y la regla única.
+  const rec = leerFuente('app/dashboard/compras/recepciones/page.tsx');
+  const correrConfirmar = async ({ falla }) => {
+    const llamadas = [];
+    const entorno = {
+      setConfirmandoId: (id) => llamadas.push(`cargando ${id}`),
+      localStorage: { getItem: () => 'Ana' },
+      crypto: { randomUUID: () => 'clave-1' },
+      apiFetch: async (ruta, op) => {
+        llamadas.push(`${op.method} ${ruta} ${JSON.parse(op.body).idempotency_key}`);
+        if (falla) throw Object.assign(new Error('no'), { status: falla });
+      },
+      avisar: () => llamadas.push('ok'),
+      avisarError: (err, texto) => llamadas.push(`error: ${texto}`),
+      setSelectedItem: (v) => llamadas.push(`drawer ${v}`),
+      recargarTodo: () => llamadas.push('recargar'),
+      recargarTrasError: (err) => [400, 409, 422].includes(err.status),
+      numeroRecepcion: (r) => `ENINV-${r.id}`,
+      JSON,
+    };
+    await funcionEjecutable(rec, 'async (r: FilaRecepcion) =>')(entorno)({ id: 8 });
+    return llamadas;
+  };
+  assert.deepEqual(await correrConfirmar({}), ['cargando 8', 'POST /compras/recepciones/8/confirmar clave-1', 'ok', 'drawer null', 'recargar', 'cargando null']);
+  assert.deepEqual(await correrConfirmar({ falla: 400 }), ['cargando 8', 'POST /compras/recepciones/8/confirmar clave-1', 'error: No se pudo confirmar ENINV-8', 'recargar', 'cargando null'], 'un 400 (sin bodega) recarga');
+  assert.deepEqual(await correrConfirmar({ falla: 500 }), ['cargando 8', 'POST /compras/recepciones/8/confirmar clave-1', 'error: No se pudo confirmar ENINV-8', 'cargando null'], 'un 500 no');
+
+  // F76: la hora de un movimiento del Kardex es horaCO (la fuente única de m13): nada de un Intl.DateTimeFormat propio.
+  const fuenteEc = readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8');
+  const cuerpo = fuenteEc.slice(fuenteEc.indexOf('export function textoFechaMovimiento('), fuenteEc.indexOf('\n}\n', fuenteEc.indexOf('export function textoFechaMovimiento(')));
+  assert.match(cuerpo, /hora: horaCO\(fecha\)/, 'textoFechaMovimiento usa horaCO');
+  assert.ok(!/Intl\.DateTimeFormat|timeZone/.test(sinComentarios(fuenteEc)), 'estados-compras.js no arma fechas con su propia zona');
 }
 
 console.log('\nOK: test_estados_compras.mjs');
