@@ -1262,7 +1262,7 @@ const SIN_PERMISO_MONTOS = 'Sin permiso para ver montos';
  * Lo que pintan las 4 tarjetas de la ficha de un cliente en la Agenda, con lo que da resumenFichaCliente (lib/kpis-ventas.js, de
  * GET /crm/customers/{id}/profile-360; null mientras el perfil llega):
  *  - pven_saldo_por_cobrar: tono 'alerta' si hay saldo, 'bien' con «Al día con pagos» si es 0;
- *  - cli_total_comprado: con «N pedidos» (los que cuentan en el total, sin cancelados);
+ *  - cli_total_comprado: con «N pedidos» (los que cuentan en el total: sin cancelados ni devueltos del todo, m8);
  *  - cli_total_pagado: con «Pagos confirmados, menos devoluciones» (así lo suma el servidor);
  *  - cli_cot_abiertas (RP70): fuera de CONFIRMADA y RECHAZADA, con «N solicitudes activas».
  * Sin permiso (resumen_financiero null: BODEGA y COMPRAS), los tres montos son null con la ayuda «Sin permiso para ver montos»; los
@@ -1336,8 +1336,8 @@ export function fichaRevenueAsistente(revenue) {
     total: { etiqueta: etiquetaSinPeriodo('cli_total_comprado'), texto: formatoValorKpi(r.total_spent_cop, 'pesos') },
     mini: [
       { etiqueta: etiquetaSinPeriodo('pven_total'), texto: formatoValorKpi(r.total_orders_count, 'numero'), ayuda: null },
-      // chat.py cuenta como «en curso» todo lo que no es ENTREGADO, COMPLETADO ni cancelado, FACTURADO incluido.
-      { etiqueta: etiquetaSinPeriodo('pven_en_curso'), texto: formatoValorKpi(r.active_orders_count, 'numero'), ayuda: 'Incluye los facturados' },
+      // B4 T24 f4 (B49-f): chat.py da active_orders_count = rv.f_pven_en_curso (B49-b), la regla del catálogo: sin ayuda.
+      { etiqueta: etiquetaSinPeriodo('pven_en_curso'), texto: formatoValorKpi(r.active_orders_count, 'numero'), ayuda: null },
       { etiqueta: etiquetaSinPeriodo('ticket_promedio'), texto: formatoValorKpi(r.avg_ticket_cop, 'pesos'), ayuda: null },
     ],
   };

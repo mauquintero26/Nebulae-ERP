@@ -1325,10 +1325,19 @@ console.log('--- TEST 29 (B4 T23B, KPI-otros puntos 3, 4 y 6; RP70): las tarjeta
     total: { etiqueta: 'Total comprado', texto: '$4.927.538' },
     mini: [
       { etiqueta: 'Total de pedidos', texto: '6', ayuda: null },
-      { etiqueta: 'Pedidos en curso', texto: '2', ayuda: 'Incluye los facturados' },
+      // B4 T24 f4 (B49-f; D27): sin la ayuda «Incluye los facturados». B49-b dejó active_orders_count = pven_en_curso.
+      { etiqueta: 'Pedidos en curso', texto: '2', ayuda: null },
       { etiqueta: 'Ticket promedio', texto: '$821.256', ayuda: null },
     ],
   });
+  assert.ok(k.fichaRevenueAsistente(rev).mini.every((x) => x.ayuda === null || !/factur/i.test(x.ayuda)), 'B49-f: ninguna ayuda habla de facturados');
+  {
+    // El contrato del servidor (solo lectura): chat.py da active_orders_count = rv.f_pven_en_curso y total_orders_count = pven_total.
+    const chat = readFileSync(new URL('../../backend/app/api/v1/chat.py', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    assert.ok(chat.includes('"active_orders_count": pven_en_curso,'), 'B49-b: active_orders_count = pven_en_curso');
+    assert.ok(chat.includes('"total_orders_count": pven_total,'), 'B49-b: total_orders_count = pven_total');
+    assert.ok(chat.includes('rv.f_pven_en_curso(SaleOrder)'), 'la regla de rv');
+  }
   assert.equal(k.fichaRevenueAsistente(rev).total.etiqueta, k.CATALOGO_KPI.cli_total_comprado.etiqueta);
   assert.deepEqual(k.fichaRevenueAsistente(rev).mini.slice(0, 2).map((x) => x.etiqueta), [k.CATALOGO_KPI.pven_total.etiqueta, k.CATALOGO_KPI.pven_en_curso.etiqueta]);
   const sin = k.fichaRevenueAsistente({});
