@@ -3685,7 +3685,13 @@ console.log('--- B4 T24 f2 r1 (m9 + m10, m38): el foco que LLEGA detrás vuelve 
   // m38: el botón flotante del Copilot tiene nombre accesible y el token de foco.
   const chat = leer('components/GlobalAIChat.tsx');
   assert.match(chat, /<button\s+data-superficie="copilot"\s+onClick=\{\(\) => setIsOpen\(true\)\}\s+aria-label="Abrir Nebulae Copilot"\s+className=\{`fixed bottom-6 right-6 [^`]*\$\{FOCO\}`\}/);
-  assert.match(chat, /import \{ FOCO \} from '@\/lib\/design-system';/);
+  // B4 T24 f4 (duda 6 de f2 r1; D27 del import): minimizar y cerrar el panel llevan nombre accesible y el token de foco. El
+  // encabezado es oscuro (slate-900/800): el anillo es FOCOS.blanco, como la barra oscura de f1.
+  assert.match(chat, /import \{ FOCO, FOCOS \} from '@\/lib\/design-system';/);
+  assert.match(chat, /<button\s+onClick=\{\(\) => setIsExpanded\(!isExpanded\)\}\s+aria-label=\{isExpanded \? 'Reducir el Copilot' : 'Ampliar el Copilot'\}\s+className=\{`p-1\.5 [^`]*\$\{FOCOS\.blanco\}`\}/);
+  assert.match(chat, /<button\s+onClick=\{\(\) => setIsOpen\(false\)\}\s+aria-label="Cerrar el Copilot"\s+className=\{`p-1\.5 [^`]*\$\{FOCOS\.blanco\}`\}/);
+  assert.ok(chat.includes('<div data-superficie="copilot" className={`fixed bottom-6 right-6 bg-white'), 'los dos botones viven en el panel marcado');
+  assert.ok(chat.indexOf('aria-label="Cerrar el Copilot"') > chat.indexOf('<div data-superficie="copilot"'), 'dentro del panel');
 }
 
 console.log('--- B4 T24 f2 r2 (m4, m5): las superficies fijas que van encima de una capa, marcadas; el foco vuelve al abridor solo al cerrar de verdad ---');
