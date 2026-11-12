@@ -1949,7 +1949,12 @@ console.log('--- TEST 41 (B4 T16B r1): fecha del ítem, aviso de los 200, enlace
   assert.match(lis, /const guardarProveedor = async \(\) => \{[\s\S]*?\n  \};/);
   const guardar = /const guardarProveedor = async \(\) => \{([\s\S]*?)\n  \};/.exec(lis)?.[1] ?? '';
   assert.ok(!/setEditando\(null\);\s*await cambiarItem/.test(guardar), 'm6: no se cierra antes de que el PATCH salga bien');
-  assert.match(guardar, /if \(await cambiarItem\([\s\S]*'No se pudo actualizar el proveedor'\)\) setEditando\(null\);/, 'm6: se cierra solo si salió bien');
+  // B4 T24 f3 (F70, D27): se cierra solo si salió bien Y solo la ventana de ese ítem (otra abierta mientras tanto conserva lo escrito).
+  assert.match(guardar, /if \(await cambiarItem\([\s\S]*'No se pudo actualizar el proveedor'\)\) setEditando\(\(e\) => \(e\?\.id === it\.id \? null : e\)\);/, 'm6: se cierra solo si salió bien');
+  // F70: «Guardar proveedor» carga mientras va su PATCH y no admite un segundo clic (dos PATCH, dos avisos, dos recargas).
+  assert.match(lis, /<Button color="purple" icon=\{Package\} loading=\{ocupadoId === editando\.id\} disabled=\{ocupadoId != null\} onClick=\{guardarProveedor\}>Guardar proveedor<\/Button>/);
+  // F70: el catch de cambiarItem devuelve false (la ventana no se cierra con un error).
+  assert.match(lis, /if \(recargarTrasError\(err\)\) recargarTodo\(\);\s*return false;/, 'un error: false');
   assert.match(lis, /'pueden'/, 'm12: dice cuántos entran');
   assert.match(lis, /\(pedibles === elegidos\s*\?/, 'm12: solo calla cuando todos los elegidos se pueden pedir');
   assert.match(lis, /textoSeleccion\(seleccion\.length, itemsSeleccionados\.length\)/);

@@ -333,7 +333,8 @@ export default function ListaComprasPage() {
     if (await cambiarItem(it, async () => {
       await apiFetch(`/compras/lista-compras/${it.id}`, { method: 'PATCH', body: JSON.stringify({ proveedor: proveedorNuevo }) });
       return 'Proveedor actualizado';
-    }, 'No se pudo actualizar el proveedor')) setEditando(null);
+    // B4 T24 f3 (F70): se cierra solo la ventana de ESE ítem (si mientras tanto se abrió otra, queda abierta con lo escrito).
+    }, 'No se pudo actualizar el proveedor')) setEditando((e) => (e?.id === it.id ? null : e));
   };
 
   const accionesFila = useMemo<AccionesFilaLista>(() => ({
@@ -690,7 +691,7 @@ export default function ListaComprasPage() {
           footer={(
             <>
               <Button variant="secondary" onClick={() => setEditando(null)}>Cancelar</Button>
-              <Button color="purple" icon={Package} onClick={guardarProveedor}>Guardar proveedor</Button>
+              <Button color="purple" icon={Package} loading={ocupadoId === editando.id} disabled={ocupadoId != null} onClick={guardarProveedor}>Guardar proveedor</Button>
             </>
           )}>
           <label className={ETIQUETA_CAMPO}>Proveedor
