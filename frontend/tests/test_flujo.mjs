@@ -1179,6 +1179,14 @@ console.log('--- B4 T24 f2 r1 (m20): la franja ofrece «Reintentar» solo con un
   assert.equal(F.ofrecibleDeLaFranja(true, e403), false, 'llega un 403: no se ofrece');
   assert.equal(F.ofrecibleDeLaFranja(true, null), true, 'sin error nuevo, lo recordado');
   assert.equal(F.ofrecibleDeLaFranja(false, null), false);
+  // B4 T24 f3 (m4 de revision-24-f2-r2): el error de red (sin status) también se ofrece, y su reintento pinta «Reintentando…».
+  assert.equal(F.ofrecibleDeLaFranja(false, red), true, 'la red cortada: se ofrece');
+  {
+    let o = F.ofrecibleDeLaFranja(false, red);
+    assert.equal(F.reintentarEnFranja({ error: red, reintentando: false, ofrecible: o }), true, 'red: Reintentar');
+    o = F.ofrecibleDeLaFranja(o, null);
+    assert.equal(F.reintentarEnFranja({ error: null, reintentando: true, ofrecible: o }), true, 'red y su reintento: «Reintentando…»');
+  }
   // La secuencia: 403 → la pantalla recarga (cargando, error null) → sin botón; 500 → «Reintentar» → reintentando → «Reintentando…».
   {
     let ofrecible = false;

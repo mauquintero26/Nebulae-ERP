@@ -3678,6 +3678,14 @@ console.log('--- B4 T24 f2 r2 (m4, m5): las superficies fijas que van encima de 
   const hook = leer('components/ui/useCierreVentana.ts');
   assert.match(hook, /if \(abridor && devuelveFocoAlCerrar\(\{ abridorConectado: abridor\.isConnected, panelConectado: Boolean\(panel\?\.isConnected\) \}\)\) \{\s*abridor\.focus\(\{ preventScroll: true \}\);\s*\}/);
   assert.ok(!/if \(abridor && abridor\.isConnected\) abridor\.focus/.test(hook), 'sin la vuelta incondicional de antes');
+  // B4 T24 f3 (m3 de revision-24-f2-r2): la guarda de m5 (panelConectado) depende de que la limpieza de la capa corra DESPUÉS de quitar el
+  // DOM, y eso solo pasa con un useEffect pasivo (la limpieza de un useLayoutEffect corre antes de que React quite el panel: el foco no
+  // volvería nunca al abridor). El efecto que abre y cierra la capa es un useEffect, no un useLayoutEffect.
+  const iCapa = hook.indexOf('capas = abrirCapa(capas, capa);');
+  assert.ok(iCapa > 0, 'el efecto de la capa');
+  const antes = hook.slice(0, iCapa);
+  assert.ok(antes.lastIndexOf('useEffect(() => {') > antes.lastIndexOf('useLayoutEffect('), 'la capa se abre en un useEffect pasivo');
+  assert.ok(!/useLayoutEffect/.test(hook.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')), 'el hook no usa useLayoutEffect');
 }
 
 console.log('✓ T4D: umbral, ancho al contenido, ajustar al ancho, geometría, destino, orden, cuerpo, grupos, selección, barra y el fuente de los componentes.');
