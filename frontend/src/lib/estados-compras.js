@@ -40,7 +40,7 @@
 import { congelar, humanizarCodigo, tiene } from './estados-pedido.js';
 import { diaColombia, diaDeNegocio as diaPec, fechaCorta, fechaSolo, horaCO, instante } from './fechas-colombia.js';
 // B4 T14: la consulta de cada columna del tablero de Compras (consultaColumnaPec) sale de la misma queryListado.
-import { queryListado, recortarColumnas } from './tabla.js';
+import { normalizarRespuesta, queryListado, recortarColumnas } from './tabla.js';
 // B4 T14 r1: la regla de la columna con filtro (m4, la misma de Ventas), el número del servidor (m7) y la regla de
 // recarga y el texto de los errores (m15).
 import { estadosDeColumnaLista } from './kanban.js';
@@ -1538,6 +1538,31 @@ export function llegadaEnlaceTraslado(id, filas) {
   return { marca: String(id), abrir, avisar: abrir === null };
 }
 
+/**
+ * B4 T24 f3 r1 (F69, la Recomendación: el efecto baja a la lib, junto con F73 y F74-f): el enlace ?id= de Compras › Traslados. Pide el
+ * traslado por su id exacto (F74-b) si pedirEnlaceTraslado lo manda; la marca (`marca.current`) se pone SOLO cuando la respuesta llegó
+ * (llegadaEnlaceTraslado), nunca antes del fetch ni al limpiar: un montaje abortado (el doble montaje de React) deja la marca como
+ * estaba y el siguiente vuelve a pedir. Devuelve la limpieza (aborta). `pedir` es apiFetch (con `signal`).
+ * @param {{marca: {current: string | null}, idDeLaUrl: string | null | undefined, pedir: (ruta: string, op: {signal: AbortSignal}) => Promise<unknown>,
+ *   abrir: (fila: any) => void, avisar: (texto: string) => void, avisarError: (err: unknown) => void}} entrada
+ * @returns {() => void}
+ */
+export function abrirEnlaceTraslado({ marca, idDeLaUrl, pedir, abrir, avisar, avisarError }) {
+  const id = pedirEnlaceTraslado(marca.current, idDeLaUrl);
+  if (id === null) return () => {};
+  const control = new AbortController();
+  pedir(`/inventory/operations?operation_type=TRANSFER&id=${id}&limit=5`, { signal: control.signal })
+    .then((r) => {
+      if (control.signal.aborted) return;
+      const llegada = llegadaEnlaceTraslado(id, normalizarRespuesta(r).filas);
+      marca.current = llegada.marca;
+      if (llegada.abrir) abrir(llegada.abrir);
+      if (llegada.avisar) avisar(`No se encontró el traslado ${numeroTraslado({ id })}.`);
+    })
+    .catch((err) => { if (!control.signal.aborted) avisarError(err); });
+  return () => control.abort();
+}
+
 // ─── Estado del stock (RP53) ────────────────────────────────────────────────────
 
 /**
@@ -2337,6 +2362,25 @@ export const RUTA_CONTEOS_TRASLADOS = '/inventory/operations?operation_type=TRAN
 /** La columna del tablero de Traslados (su estado) y el día en que se hizo (la fecha real). */
 export const columnaDeTraslado = (t) => t?.status;
 export const fechaDeTraslado = (t) => t?.fecha;
+
+/**
+ * B4 T24 f3 r1 (F71): lo que dice la barra de la selección de la Lista de compras (m12 de T16B): los mismos ítems que usará «Crear
+ * Pedido de Compra»; si hay seleccionados que no entran (ya en pedido o recibidos), lo dice.
+ * @param {number} elegidos
+ * @param {number} pedibles
+ * @returns {string}
+ */
+export function textoSeleccionLista(elegidos, pedibles) {
+  const base = `${elegidos} ${elegidos === 1 ? 'seleccionado' : 'seleccionados'}`;
+  return pedibles === elegidos ? base : `${base}; ${pedibles} se ${pedibles === 1 ? 'puede' : 'pueden'} pedir`;
+}
+
+/**
+ * B4 T24 f3 r1 (F71): el día en que se movió un ítem de la Lista de compras para el tablero (fechaMovimiento: su `fecha`, I1 de T16B).
+ * @param {any} it
+ * @returns {string | null}
+ */
+export const fechaItemLista = (it) => it?.fecha ?? null;
 
 /** '1 día', '3 días'. */
 export function textoDiasRetraso(n) {

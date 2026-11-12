@@ -37,7 +37,7 @@ import { NOTA_RECEPCIONES, PERIODO_KPI, tarjetasRecepciones } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { fCOP, textoDia } from '../columnas-pec';
 import {
-  COLUMNAS_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, bodegaRecepcion, consultaColumnaRecepcion, cuerpoRecepcionarPec,
+  COLUMNAS_RECEPCION, EXTRA_TABLERO_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, bodegaRecepcion, pestanasRecepcion, consultaColumnaRecepcion, cuerpoRecepcionarPec,
   datosConfirmacion, infoEstadoPec, opcionesEstadosRecepcion, tarjetaRecepcion, textoVacioRecepciones,
 } from '@/lib/estados-compras';
 import { avisosFlujoCompras, pasosPantallaCompras, textoReglaCompras } from '@/lib/flujo-compras';
@@ -67,8 +67,6 @@ type ConteosRecepcion = Partial<Record<'por_confirmar' | 'confirmadas' | 'cancel
 const ID_RECEPCIONES = 'compras.recepciones';
 /** RP41, D6: la pestaña de trabajo es Por confirmar. */
 const INICIAL_RECEPCIONES = { vista: 'por_confirmar' };
-/** D39: en Kanban la lista va sin filas (limit=0); los conteos siguen al día y las filas las piden las columnas. */
-const EXTRA_TABLERO = { limit: 0 };
 /** El motivo de un tablero solo para ver (R11, KANBAN-logistica punto 5). */
 const TEXTO_SOLO_VER = 'Este tablero es para ver: las recepciones se confirman contando la mercancía.';
 /** Los estados del PEC que se pueden recepcionar: en camino y los que ya llegaron a bodega (R9). */
@@ -141,18 +139,8 @@ const COLUMNAS_TABLA_RECEPCIONES = columnasRecepcion<FilaRecepcion>((r) => <Celd
 /** {campo de orden: título}, para el chip «Orden: Fecha ↓», solo de las columnas que se ordenan. */
 const TITULOS_ORDEN_RECEPCIONES = titulosDeOrdenRecepcion(COLUMNAS_TABLA_RECEPCIONES);
 
-/**
- * Las pestañas de Recepciones (RP41, D6, sin emojis): las vistas de GET /compras/recepciones, con los conteos del servidor
- * (con la búsqueda; null mientras cargan: la barra gris, nunca 0). Por confirmar va en ámbar si hay alguna.
- */
-function pestanasDeRecepciones(conteos: ConteosRecepcion | null): PestanaTabla[] {
-  return [
-    { id: 'por_confirmar', etiqueta: 'Por confirmar', conteo: conteos?.por_confirmar ?? null, alerta: (conteos?.por_confirmar ?? 0) > 0 },
-    { id: 'confirmadas', etiqueta: 'Confirmadas', conteo: conteos?.confirmadas ?? null },
-    { id: 'canceladas', etiqueta: 'Canceladas', conteo: conteos?.canceladas ?? null },
-    { id: 'todas', etiqueta: 'Todas', conteo: conteos?.todas ?? null },
-  ];
-}
+// B4 T24 f3 r1 (F77): las pestañas (pestanasRecepcion) y el extra del tablero (EXTRA_TABLERO_RECEPCION) son los de la lib, los mismos de
+// Inventario › Recepciones (RP41: si cambian, cambian en las dos).
 
 /* ================================================================
    MAIN PAGE — RecepcionesPage (B4 T16A)
@@ -176,7 +164,7 @@ export default function RecepcionesPage() {
   // MISMA llamada. esperar: !listo (D40): el esqueleto, nunca «vacío». En Kanban, sin filas. Sin orden, el del servidor
   // (la más reciente primero).
   const listado = useListado<FilaRecepcion>({
-    ruta: '/compras/recepciones', estado, conConteos: true, esperar: !listo, despachar, extra: enKanban ? EXTRA_TABLERO : null,
+    ruta: '/compras/recepciones', estado, conConteos: true, esperar: !listo, despachar, extra: enKanban ? EXTRA_TABLERO_RECEPCION : null,
   });
   // m5 de T8: mientras la última respuesta sea la de Kanban (sin filas) y la tabla ya pida su página, la tabla está
   // cargando y el total en 'cargando': nunca «No hay recepciones…» con el total de la otra consulta.
@@ -309,7 +297,7 @@ export default function RecepcionesPage() {
   const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
   // Pasar a Kanban sale de la pantalla completa (el conmutador sigue a la vista y el tablero no queda tapado).
   useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
-  const pestanas = pestanasDeRecepciones(conteos);
+  const pestanas: PestanaTabla[] = pestanasRecepcion(conteos);
   // m2 de T8: el conmutador Lista / Kanban poda los estados con las opciones del modo nuevo (las columnas del tablero, o las
   // de la pestaña en Lista), con la regla de accionPestana (accionModo); lo demás de la barra va directo.
   const alCambiarBarra = useCallback((accion: AccionTabla) => {

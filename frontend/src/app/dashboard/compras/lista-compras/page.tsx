@@ -34,7 +34,7 @@ import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { FOCOS, TABLE, RESERVA_BOTON_IA } from '@/lib/design-system';
 import {
   OPCIONES_ESTADOS_TABLERO_LISTA, COLUMNAS_LISTA, consultaLista, consultaTableroLista, avisoTope200, destinoItemLista,
-  esItemSeleccionable, infoEstadoItemLista, opcionesEstadosLista, tarjetaItemLista, textoVacioLista,
+  esItemSeleccionable, fechaItemLista, infoEstadoItemLista, opcionesEstadosLista, tarjetaItemLista, textoSeleccionLista, textoVacioLista,
 } from '@/lib/estados-compras';
 import { ENLACE_VER_ANALISIS_COMPRAS, avisosFlujoCompras, pasosPantallaCompras, textoReglaCompras } from '@/lib/flujo-compras';
 
@@ -73,10 +73,7 @@ const FOCO_VISIBLE = FOCOS.purple;
 const FOCO_OSCURO = FOCOS.blanco;
 /** Las modalidades de pago del pedido de compra: [lo que se manda al servidor, lo que se ve]. */
 const MODALIDADES_PAGO = [['Contado', 'Contado'], ['Credito 30d', 'Crédito 30d'], ['Credito 60d', 'Crédito 60d'], ['Adelanto 50%', 'Adelanto 50%'], ['Contra entrega', 'Contra entrega']];
-/** m12: la barra dice los mismos ítems que usará «Crear Pedido de Compra»; si hay seleccionados que no entran, lo dice. */
-const textoSeleccion = (elegidos: number, pedibles: number) => (pedibles === elegidos
-  ? `${elegidos} ${elegidos === 1 ? 'seleccionado' : 'seleccionados'}`
-  : `${elegidos} ${elegidos === 1 ? 'seleccionado' : 'seleccionados'}; ${pedibles} se ${pedibles === 1 ? 'puede' : 'pueden'} pedir`);
+// m12 (y r1, F71): la barra de la selección es textoSeleccionLista de la lib, con sus casos.
 const CAMPO = 'border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200';
 const ETIQUETA_CAMPO = 'block text-xs font-black text-gray-500 uppercase mb-1';
 
@@ -176,7 +173,6 @@ function pestanasDeLista(conteos: ConteosLista | null): PestanaTabla[] {
 
 /** El ítem que el tablero muestra en cada columna: su estado. */
 const columnaDeItem = (it: ItemLista) => it.estado;
-const fechaDeItem = (it: ItemLista) => it.fecha;
 
 function NewSupplierModal({ onSave, onClose }: { onSave: (s: Proveedor) => void; onClose: () => void }) {
   const { avisarError } = useAvisos();
@@ -489,7 +485,7 @@ export default function ListaComprasPage() {
     porColumna: estado.tamano,
     items: itemsTablero,
     columnaDe: columnaDeItem,
-    fechaMovimiento: fechaDeItem,
+    fechaMovimiento: fechaItemLista,
   });
   const abrirItem = useCallback((it: ItemLista) => {
     const destino = destinoItemLista(it);
@@ -675,7 +671,7 @@ export default function ListaComprasPage() {
           de la tabla, así que solo en Lista. */}
       {seleccion.length > 0 && !enKanban && (
         <div className="fixed bottom-8 left-1/2 z-40 flex -translate-x-1/2 items-center gap-4 rounded-2xl border border-slate-700 bg-slate-900 px-6 py-4 text-white shadow-2xl">
-          <span className="rounded-full bg-slate-800 px-3 py-1 text-sm font-bold">{textoSeleccion(seleccion.length, itemsSeleccionados.length)}</span>
+          <span className="rounded-full bg-slate-800 px-3 py-1 text-sm font-bold">{textoSeleccionLista(seleccion.length, itemsSeleccionados.length)}</span>
           <button type="button" onClick={() => openPecModal(itemsSeleccionados)} disabled={itemsSeleccionados.length === 0}
             className={`flex items-center gap-2 rounded-xl bg-purple-500/20 px-3 py-1.5 text-xs font-bold text-purple-200 transition-colors hover:bg-purple-500/40 disabled:opacity-50 ${FOCO_OSCURO}`}>
             <ShoppingCart size={14} aria-hidden="true" /> Crear Pedido de Compra con seleccionados

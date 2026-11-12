@@ -184,7 +184,7 @@ function PecDetailPanel({
   const handleConvertPvens = async () => {
     if (consolidando) return;
     if (!vigente.ids.length) { onToast('Selecciona al menos un PVEN', 'error'); return; }
-    const selected = vigente.pvens;
+    const selected: FilaVenta[] = vigente.pvens;
     setConsolidando(true);
     const productos = selected.flatMap(p => (p.productos||[]).map(pr => ({ ...pr, pven_origen: p.numero })));
     try {

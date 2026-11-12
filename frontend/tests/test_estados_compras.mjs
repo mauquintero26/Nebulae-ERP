@@ -1327,10 +1327,12 @@ console.log('--- TEST 32 (B4 T16A): Recepciones (compras/recepciones/page.tsx) y
   assert.match(pag, /const INICIAL_RECEPCIONES = \{ vista: 'por_confirmar' \};/);
   assert.match(pag, /useEstadoTabla\(ID_RECEPCIONES, INICIAL_RECEPCIONES\)/);
   const llamada = /useListado<FilaRecepcion>\(\{([\s\S]*?)\}\);/.exec(pag)?.[1] ?? '';
-  for (const parte of [/ruta: '\/compras\/recepciones'/, /(?:^|[,{]\s*)estado\s*,/, /conConteos: true/, /esperar: !listo/, /\bdespachar\b/, /extra: enKanban \? EXTRA_TABLERO : null/]) {
+  for (const parte of [/ruta: '\/compras\/recepciones'/, /(?:^|[,{]\s*)estado\s*,/, /conConteos: true/, /esperar: !listo/, /\bdespachar\b/, /extra: enKanban \? EXTRA_TABLERO_RECEPCION : null/]) {
     assert.match(llamada, parte, `useListado lleva ${parte}`);
   }
-  assert.match(pag, /const EXTRA_TABLERO = \{ limit: 0 \};/, 'en Kanban la lista va sin filas (D39)');
+  // B4 T24 f3 r1 (F77, D27): el extra del tablero es el de la lib (EXTRA_TABLERO_RECEPCION, el mismo de Inventario).
+  assert.deepEqual({ ...ec.EXTRA_TABLERO_RECEPCION }, { limit: 0 }, 'en Kanban la lista va sin filas (D39)');
+  assert.ok(!/const EXTRA_TABLERO = /.test(pag), 'sin la copia local');
   assert.match(pag, /consultaColumnaRecepcion\(estado, columna, \{ orden, limit, offset \}\)/, 'la consulta de cada columna es la de la lib');
   const tablero = /useTableroKanban<FilaRecepcion>\(\{([\s\S]*?)\n {2}\}\);/.exec(pag)?.[1] ?? '';
   for (const parte of [/pantalla: ID_RECEPCIONES/, /modo: 'servidor'/, /columnas: COLUMNAS_RECEPCION/, /activo: listo && enKanban\b/, /porColumna: estado\.tamano/,
@@ -1351,9 +1353,10 @@ console.log('--- TEST 32 (B4 T16A): Recepciones (compras/recepciones/page.tsx) y
   // La tabla (R26, D41): estándar en el servidor; toda la fila abre el Drawer; las vistas reales de RP41 y D6.
   assert.match(pag, /<TablaEstandar\s+id=\{ID_RECEPCIONES\}\s+modo="servidor"/);
   assert.match(pag, /onFila=\{abrir\}/, 'toda la fila abre el Drawer');
-  for (const [id, etiqueta] of [['por_confirmar', 'Por confirmar'], ['confirmadas', 'Confirmadas'], ['canceladas', 'Canceladas'], ['todas', 'Todas']]) {
-    assert.match(pag, new RegExp(`\\{ id: '${id}', etiqueta: '${etiqueta}', conteo: conteos\\?\\.${id} \\?\\? null`), `pestaña ${etiqueta}`);
-  }
+  // B4 T24 f3 r1 (F77, D27): las pestañas son pestanasRecepcion de la lib (las de Inventario): se comprueban ahí, con conteos.
+  assert.deepEqual(ec.pestanasRecepcion({ por_confirmar: 2, confirmadas: 5, canceladas: 0, todas: 7 }).map((p) => [p.id, p.etiqueta, p.conteo]),
+    [['por_confirmar', 'Por confirmar', 2], ['confirmadas', 'Confirmadas', 5], ['canceladas', 'Canceladas', 0], ['todas', 'Todas', 7]], 'las pestañas');
+  assert.deepEqual(ec.pestanasRecepcion(null).map((p) => p.conteo), [null, null, null, null], 'mientras cargan, la barra gris (nunca 0)');
   const codigo = pag.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '');
   assert.ok(!/'Pendientes'|'Completadas'|Regla de Separación|Mesa de Recepci[oó]n Activa|r\.estado === 'PENDIENTE'|!r\.stock_actualizado|row\.stock_actualizado/.test(codigo),
     'sin las pestañas viejas, el estado que no existe ni la tarjeta/aviso de antes');
@@ -1832,7 +1835,9 @@ console.log('--- TEST 40 (B4 T16B): Traslados (compras/traslados/page.tsx) y col
   assert.match(pag, /useListado<FilaTraslado>\(\{\s*ruta: RUTA_OPERACIONES, estado, esperar: !listo, activo: enKanban, extra: extraDelTablero,?\s*\}\);/, 'el tablero pide su propia consulta, activa solo en Kanban');
   assert.match(pag, /const extraDelTablero = useMemo\(\(\) => consultaTableroTraslados\(estado\), \[estado\]\);/);
   assert.match(pag, /const RUTA_OPERACIONES = '\/inventory\/operations';/);
-  assert.match(pag, /`\$\{RUTA_OPERACIONES\}\?operation_type=TRANSFER&limit=0&con_conteos=1`/, 'las tarjetas cuentan TODOS los traslados: sin búsqueda ni filtros, sin filas');
+  // B4 T24 f3 r1 (F77, D27): la ruta es RUTA_CONTEOS_TRASLADOS de la lib (la misma de Inventario).
+  assert.equal(ec.RUTA_CONTEOS_TRASLADOS, '/inventory/operations?operation_type=TRANSFER&limit=0&con_conteos=1', 'las tarjetas cuentan TODOS los traslados: sin búsqueda ni filtros, sin filas');
+  assert.match(pag, /apiFetch\(RUTA_CONTEOS_TRASLADOS, \{ signal: control\.signal \}\)/);
   assert.ok(!/limit=100/.test(codigo), 'ya no se cargan 100 y se pagina en el navegador');
   assert.ok(!/\.catch\(\(\) => (\[\]|\{\}|null)\)/.test(codigo) && !/\.catch\(\(\)\s*=>\s*\{\s*\}\)/.test(codigo) && !/catch \{ setTraslados/.test(codigo), 'sin .catch que traga el error');
   // Las bodegas: su error se dice con Reintentar (los nombres salen como «Bodega #N»), no se traga en silencio.
@@ -1843,10 +1848,11 @@ console.log('--- TEST 40 (B4 T16B): Traslados (compras/traslados/page.tsx) y col
   // La tabla: estándar en el servidor, toda la fila abre el Drawer; las pestañas de los grupos de operación (R9) con los conteos del servidor.
   assert.match(pag, /<TablaEstandar\s+id=\{ID_TRASLADOS\}\s+modo="servidor"/);
   assert.match(pag, /onFila=\{abrir\}/, 'toda la fila abre el Drawer');
+  // B4 T24 f3 r1 (F77, D27): las pestañas son pestanasTraslado de la lib (las de Inventario).
   for (const [id, etiqueta, campo] of [['en_proceso', 'En proceso', 'en_proceso'], ['completadas', 'Completados', 'completadas'], ['canceladas', 'Cancelados', 'canceladas'], ['todos', 'Todos', 'todos']]) {
-    assert.match(pag, new RegExp(`\\{ id: '${id}', etiqueta: '${etiqueta}', conteo: c\\.${campo} \\}`), `pestaña ${etiqueta}`);
+    assert.deepEqual(ec.pestanasTraslado({ [campo]: 3 }).find((p) => p.id === id)?.etiqueta, etiqueta, `pestaña ${etiqueta}`);
   }
-  assert.match(pag, /const c = conteosTraslado\(conteos\);/);
+  assert.match(readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8'), /const c = conteosTraslado\(conteos\);/, 'las pestañas leen conteosTraslado');
   assert.match(pag, /opcionesEstados=\{enKanban \? OPCIONES_ESTADOS_TABLERO_TRASLADO : opcionesEstadosTraslado\}/);
   // «Ver detalle» y el ⋯ ya hacen algo: un MenuFila con «Ver detalle», que abre el Drawer.
   assert.match(pag, /\{ etiqueta: 'Ver detalle', icono: Eye, onClick: \(\) => acciones\?\.abrir\(t\) \}/);
@@ -1877,9 +1883,11 @@ console.log('--- TEST 40 (B4 T16B): Traslados (compras/traslados/page.tsx) y col
   assert.match(pag, /despachar\(accionVistaEnLista\(estado, siguiente, opcionesEstadosTraslado\)\)/, 'como un clic en la pestaña (D41)');
   // El enlace ?id= del HUB de Inventario: el traslado se pide al servidor por su número.
   // B4 T24 f3 (F74-f, D27): por el parámetro exacto de F74-b (?id=), no por q= (que también busca en notas, documento y guía).
-  assert.match(pag, /\?operation_type=TRANSFER&id=\$\{id\}&limit=5`/, 'el traslado se pide por su id exacto, con a lo sumo 5 filas');
+  // B4 T24 f3 r1 (F69, D27): el efecto bajó a la lib (abrirEnlaceTraslado), con la misma ruta y la misma llegada.
+  const fuenteEc = readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8');
+  assert.match(fuenteEc, /\?operation_type=TRANSFER&id=\$\{id\}&limit=5`/, 'el traslado se pide por su id exacto, con a lo sumo 5 filas');
   assert.ok(!/q=\$\{encodeURIComponent\(numeroTraslado/.test(pag), 'sin la búsqueda por texto');
-  assert.match(pag, /llegadaEnlaceTraslado\(id, normalizarRespuesta\(r\)\.filas\)/, 'abre solo la fila cuyo número es exacto (m13)');
+  assert.match(fuenteEc, /llegadaEnlaceTraslado\(id, normalizarRespuesta\(r\)\.filas\)/, 'abre solo la fila cuyo número es exacto (m13)');
   assert.match(pag, /if \(searchParams\.get\('id'\)\) router\.replace\(pathname\)/, 'al cerrar el Drawer se quita ?id=');
   // R2 y R13: fuera la IA simulada y su pestaña; queda «Ver análisis» hacia el Hub.
   assert.ok(!/aiChat|aiAnalysis|aiLoading|aiInput|sendAIChat|handleAIAnalysis|Nebulae Analytics|activeTab|'Analisis'|Generar Análisis/.test(codigo), 'sin la IA simulada ni la pestaña Análisis');
@@ -1936,14 +1944,10 @@ console.log('--- TEST 41 (B4 T16B r1): fecha del ítem, aviso de los 200, enlace
   const lis = readFileSync(new URL('../src/app/dashboard/compras/lista-compras/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const tra = readFileSync(new URL('../src/app/dashboard/compras/transito/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const col = readFileSync(new URL('../src/app/dashboard/compras/columnas-traslado.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-  // El ref solo se marca cuando el traslado llegó (en la llegada), nunca antes del fetch.
-  const efecto = /const idAbierto = useRef[^\n]*\n([\s\S]*?)\}, \[idDeLaUrl, avisar, avisarError\]\);/.exec(pag)?.[1] ?? '';
-  assert.match(efecto, /pedirEnlaceTraslado\(idAbierto\.current, idDeLaUrl\)/);
-  assert.match(efecto, /llegadaEnlaceTraslado\(id, normalizarRespuesta\(r\)\.filas/);
-  assert.match(efecto, /\.then\(/);
-  const antes = efecto.slice(0, efecto.indexOf('.then('));
-  assert.ok(!/idAbierto\.current =/.test(antes), 'la marca no se pone antes del fetch');
-  assert.match(efecto, /idAbierto\.current = llegada\.marca;/);
+  // El ref solo se marca cuando el traslado llegó (en la llegada), nunca antes del fetch. B4 T24 f3 r1 (F69, D27): el efecto es
+  // abrirEnlaceTraslado de la lib; su doble montaje se EJECUTA en el bloque de r1 (antes, solo el orden en el fuente).
+  const efecto = /const idAbierto = useRef[^\n]*\n([\s\S]*?)\}\), \[idDeLaUrl, avisar, avisarError\]\);/.exec(pag)?.[1] ?? '';
+  assert.match(efecto, /useEffect\(\(\) => abrirEnlaceTraslado\(\{\s*marca: idAbierto, idDeLaUrl, pedir: apiFetch,/);
   // m5, m11, m12, m14, m6, m7, m2: fuente.
   for (const [nombre, f] of [['lista', lis], ['traslados', pag], ['tránsito', tra]]) {
     assert.match(f, /avisoTope200\(/, `${nombre} usa la frase única`);
@@ -1964,9 +1968,8 @@ console.log('--- TEST 41 (B4 T16B r1): fecha del ítem, aviso de los 200, enlace
   assert.match(lis, /<Button color="purple" icon=\{Package\} loading=\{ocupadoId === editando\.id\} disabled=\{ocupadoId != null\} onClick=\{guardarProveedor\}>Guardar proveedor<\/Button>/);
   // F70: el catch de cambiarItem devuelve false (la ventana no se cierra con un error).
   assert.match(lis, /if \(recargarTrasError\(err\)\) recargarTodo\(\);\s*return false;/, 'un error: false');
-  assert.match(lis, /'pueden'/, 'm12: dice cuántos entran');
-  assert.match(lis, /\(pedibles === elegidos\s*\?/, 'm12: solo calla cuando todos los elegidos se pueden pedir');
-  assert.match(lis, /textoSeleccion\(seleccion\.length, itemsSeleccionados\.length\)/);
+  // B4 T24 f3 r1 (F71, D27): textoSeleccionLista vive en la lib con sus casos (1/1, 3/2, 2/1 y 1/0, en el bloque de r1).
+  assert.match(lis, /textoSeleccionLista\(seleccion\.length, itemsSeleccionados\.length\)/);
   assert.match(lis, /itemsSeleccionados\.length/, 'm12: la barra usa los seleccionables de verdad');
   assert.match(lis, /item\.fecha\b|it\.fecha\b/);
   assert.ok(!/fecha_creacion/.test(lis), 'I1: la Lista lee `fecha`');
@@ -3452,8 +3455,9 @@ console.log('--- B4 T24 f3 (B40-f, F74-f, F73): los enlaces ?sku= y ?id= piden p
   assert.equal(ec.pedirEnlaceTraslado('63', '063'), null, '?id=063 ya atendido como 63');
   assert.equal(ec.pedirEnlaceTraslado(null, '063'), 63);
   assert.equal(ec.pedirEnlaceTraslado(ec.llegadaEnlaceTraslado(63, []).marca, '0063'), null);
-  const tra = leerFuente('app/dashboard/compras/traslados/page.tsx');
-  trae(tra, "if (llegada.avisar) avisar(`No se encontró el traslado ${numeroTraslado({ id })}.`, { tono: 'info' });", 'la página lee llegada.avisar');
+  // r1 (F69, D27): el efecto bajó a la lib (abrirEnlaceTraslado): ahí se lee llegada.avisar; la página pasa el aviso con su tono.
+  trae(readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8'), 'if (llegada.avisar) avisar(`No se encontró el traslado ${numeroTraslado({ id })}.`);', 'la lib lee llegada.avisar');
+  trae(leerFuente('app/dashboard/compras/traslados/page.tsx'), "avisar: (texto) => avisar(texto, { tono: 'info' }),");
 }
 
 console.log('--- B4 T24 f3 (F56, F55, F89, F94, FINAL-m16, FINAL-m17, F72, FINAL-m15): comentarios, textos y una constante ---');
@@ -3579,7 +3583,7 @@ console.log('--- B4 T24 f3 r1 (C2): después del 409, la selección de PVEN deja
   // El Hub: lo mismo, un solo envío a la vez (loading/disabled) y la selección vacía tras un alta buena.
   const hub = leerFuente('app/dashboard/compras/page.tsx');
   trae(hub, 'const vigente = seleccionVigente(selectedPvens, pedidosVenta);');
-  trae(hub, 'const selected = vigente.pvens;');
+  trae(hub, 'const selected: FilaVenta[] = vigente.pvens;');
   assert.match(hub, /if \(consolidando\) return;\s*if \(!vigente\.ids\.length\)/, 'un segundo clic no manda otra vez');
   assert.match(hub, /creado con ' \+ selected\.length \+ ' PVEN\(s\) consolidados'\);\s*setSelectedPvens\(new Set\(\)\);\s*onUpdate\(\);/, 'tras el alta, la selección vacía');
   assert.match(hub, /\} finally \{\s*setConsolidando\(false\);\s*\}/);
@@ -3702,6 +3706,83 @@ console.log('--- B4 T24 f3 r1 (F59, F61, F65, F76): la cobertura — la fila ven
   const cuerpo = fuenteEc.slice(fuenteEc.indexOf('export function textoFechaMovimiento('), fuenteEc.indexOf('\n}\n', fuenteEc.indexOf('export function textoFechaMovimiento(')));
   assert.match(cuerpo, /hora: horaCO\(fecha\)/, 'textoFechaMovimiento usa horaCO');
   assert.ok(!/Intl\.DateTimeFormat|timeZone/.test(sinComentarios(fuenteEc)), 'estados-compras.js no arma fechas con su propia zona');
+}
+
+console.log('--- B4 T24 f3 r1 (F71, F77, F69): la Lista y Traslados — la selección y la fecha en la lib, las copias fuera, el ?id= con doble montaje ---');
+{
+  const { textoSeleccionLista, fechaItemLista, abrirEnlaceTraslado } = ec;
+  for (const [nombre, f] of Object.entries({ textoSeleccionLista, fechaItemLista, abrirEnlaceTraslado })) assert.equal(typeof f, 'function', `${nombre} existe`);
+  // F71: los casos que nunca se habían visto.
+  assert.equal(textoSeleccionLista(1, 1), '1 seleccionado');
+  assert.equal(textoSeleccionLista(3, 2), '3 seleccionados; 2 se pueden pedir');
+  assert.equal(textoSeleccionLista(2, 1), '2 seleccionados; 1 se puede pedir');
+  assert.equal(textoSeleccionLista(1, 0), '1 seleccionado; 0 se pueden pedir');
+  assert.equal(textoSeleccionLista(4, 4), '4 seleccionados');
+  assert.equal(fechaItemLista({ fecha: '2026-11-07T10:00:00' }), '2026-11-07T10:00:00', 'I1: la Lista lee `fecha`');
+  assert.equal(fechaItemLista({ fecha_creacion: 'x' }), null);
+  assert.equal(fechaItemLista(null), null);
+  const lis = leerFuente('app/dashboard/compras/lista-compras/page.tsx');
+  trae(lis, 'fechaMovimiento: fechaItemLista,');
+  noTrae(sinComentarios(lis), 'const textoSeleccion =', 'sin la copia local');
+  noTrae(sinComentarios(lis), 'const fechaDeItem =', 'sin la copia local');
+
+  // F77: Compras › Recepciones y Traslados importan de la lib lo que Inventario ya usa (RP41).
+  const rec = leerFuente('app/dashboard/compras/recepciones/page.tsx');
+  trae(rec, 'const pestanas: PestanaTabla[] = pestanasRecepcion(conteos);');
+  trae(rec, 'extra: enKanban ? EXTRA_TABLERO_RECEPCION : null,');
+  noTrae(sinComentarios(rec), 'pestanasDeRecepciones', 'sin la copia local de las pestañas');
+  const tra = leerFuente('app/dashboard/compras/traslados/page.tsx');
+  trae(tra, 'const pestanas: PestanaTabla[] = pestanasTraslado(listado.conteos);');
+  trae(tra, 'apiFetch(RUTA_CONTEOS_TRASLADOS, { signal: control.signal })');
+  for (const copia of ['pestanasDeTraslados', 'const RUTA_CONTEOS =', 'const columnaDeTraslado =', 'const fechaDeTraslado =']) noTrae(sinComentarios(tra), copia, `sin ${copia}`);
+  assert.match(tra, /columnaDe: columnaDeTraslado,\s*fechaMovimiento: fechaDeTraslado,/, 'el tablero con las de la lib');
+
+  // F69: el efecto del ?id= ejecutado con un apiFetch falso que RESPETA el signal: montar, limpiar (el doble montaje de React) y volver
+  // a montar pide otra vez y abre UNA vez; con la marca puesta, un tercer montaje no pide. Antes sobrevivían la marca en la limpieza
+  // (V1) y en el catch del abort (V2).
+  const montar = (marca, idDeLaUrl, registro, filas = [{ id: 63, status: 'DONE' }]) => abrirEnlaceTraslado({
+    marca, idDeLaUrl,
+    pedir: (ruta, { signal }) => {
+      registro.push(`GET ${ruta}`);
+      return new Promise((resolver, rechazar) => {
+        const t = setTimeout(() => resolver({ status: 'success', data: filas }), 5);
+        signal.addEventListener('abort', () => { clearTimeout(t); rechazar(Object.assign(new Error('abortada'), { name: 'AbortError' })); });
+      });
+    },
+    abrir: (fila) => registro.push(`abrir ${fila.id}`),
+    avisar: (texto) => registro.push(`aviso ${texto}`),
+    avisarError: () => registro.push('error'),
+  });
+  const espera = (ms) => new Promise((r) => setTimeout(r, ms));
+  const marca = { current: null };
+  const registro = [];
+  const limpiar1 = montar(marca, '63', registro);
+  limpiar1(); // el doble montaje: la primera se aborta
+  assert.equal(marca.current, null, 'abortada: la marca queda libre');
+  const limpiar2 = montar(marca, '63', registro);
+  await espera(20);
+  assert.deepEqual(registro, ['GET /inventory/operations?operation_type=TRANSFER&id=63&limit=5', 'GET /inventory/operations?operation_type=TRANSFER&id=63&limit=5', 'abrir 63'],
+    'el segundo montaje vuelve a pedir y abre una sola vez; el abort no avisa ni marca');
+  assert.equal(marca.current, '63', 'la marca, cuando llegó');
+  limpiar2();
+  montar(marca, '063', registro);
+  await espera(10);
+  assert.equal(registro.length, 3, 'ya atendido (también ?id=063): no pide otra vez');
+  // No existe: avisa UNA vez y marca.
+  const otra = { current: null };
+  const r2 = [];
+  montar(otra, '64', r2, []);
+  await espera(20);
+  assert.deepEqual(r2, ['GET /inventory/operations?operation_type=TRANSFER&id=64&limit=5', 'aviso No se encontró el traslado TRL-0064.']);
+  assert.equal(otra.current, '64');
+  // Un error de verdad (no un abort) se avisa y deja la marca libre.
+  const libre = { current: null };
+  const r3 = [];
+  abrirEnlaceTraslado({ marca: libre, idDeLaUrl: '7', pedir: async () => { throw Object.assign(new Error('caído'), { status: 500 }); }, abrir: () => {}, avisar: () => {}, avisarError: () => r3.push('error') });
+  await espera(5);
+  assert.deepEqual(r3, ['error']);
+  assert.equal(libre.current, null);
+  assert.equal(typeof montar({ current: null }, 'x', []), 'function', 'sin id válido: una limpieza que no hace nada');
 }
 
 console.log('\nOK: test_estados_compras.mjs');
