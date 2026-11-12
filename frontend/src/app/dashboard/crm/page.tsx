@@ -28,6 +28,8 @@ import {
   // T21 r1: lo que pidió la revisión r0.
   esLeadAtrasadoAbierto, columnaDelTablero, extraListaLeads, vistaDelTablero, datosDelTablero, respuestaDeCarga,
   totalDelTablero, camposDeEtapa, hayFiltroDeLeads,
+  // T24 f4: FINAL-m18, F99, F97 y F98.
+  subtituloCrm, llegadaDePerdidos, textoDeEtapa, etapasDeLaCache,
 } from '@/lib/crm-etapas';
 import { estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
 import { formatoPesos } from '@/lib/pesos';
@@ -320,7 +322,7 @@ function ErrorCarga({ texto, onReintentar }: { texto: string; onReintentar?: () 
 // ══════════════════════════════════════════════════════════════════════════
 function LeadCard({ lead, stage, contexto }) {
   const isStale = esLeadAtrasadoAbierto(lead); // T21 r1 (m2): Ganado y Perdido no se marcan atrasados
-  const stageColor = stage ? (COLOR_HEX[stage.color] || '#6366f1') : '#94a3b8';
+  const stageColor = textoDeEtapa(stage?.color);   // T24 f4 (F97): el -700 de la etapa (≥ 4,5:1 en 10 px)
   const stageBg = stage ? (BG_HEX[stage.bg_color] || '#f8fafc') : '#f8fafc';
   const chips = chipsDeLead(lead);
   return (
@@ -382,6 +384,7 @@ export default function CRMPage() {
   const router = useRouter();
   const [stages, setStages] = useState<any[]>([]);
   const [leads, setLeads]   = useState<any[]>([]);
+  const [totalLeads, setTotalLeads] = useState<number | null>(null);   // T24 f4 (FINAL-m18): el total de GET /crm/leads (corta en 500)
   const [loading, setLoading] = useState(true);
   // B4 T21 (KANBAN-crm 6, RP26, D40): el modo Kanban / Lista es de useEstadoTabla (vista:crm.leads; la primera vez,
   // Kanban), la búsqueda es estado.q y «Análisis» es un estado de la página que no se guarda. filterStage es el select
@@ -440,15 +443,11 @@ export default function CRMPage() {
   // ═══ Load data ═══════════════════════════════════════════════════════════
   // Stages: cached in localStorage for 5 min (rarely change)
   const STAGES_CACHE_KEY = 'crm_stages_v1';
-  const STAGES_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-  function getCachedStages() {
+  // T24 f4 (F98): la regla es etapasDeLaCache (5 minutos); con ignorarTTL, la vieja sirve si /crm/pipeline-stages falló.
+  function getCachedStages(ignorarTTL = false) {
     try {
-      const raw = localStorage.getItem(STAGES_CACHE_KEY);
-      if (!raw) return null;
-      const { data, ts } = JSON.parse(raw);
-      if (Date.now() - ts > STAGES_CACHE_TTL) return null;
-      return data;
+      return etapasDeLaCache(localStorage.getItem(STAGES_CACHE_KEY), Date.now(), { ignorarTTL });
     } catch { return null; }
   }
 
@@ -473,11 +472,9 @@ export default function CRMPage() {
   // T21 r1 (m14): el turno de cada carga y la versión de los leads (aplicarLead y quitarLead la suben). Una respuesta de
   // una carga que ya no es la última no se aplica, y la de una carga que salió antes de un cambio no pisa los leads.
   const turnoCarga = useRef(0);
-  // La versión es estado (aplicarLead y quitarLead la suben sin tocar refs: el Drawer los llama desde el render) y su
-  // copia en un ref es la que lee loadAll después del await.
-  const [versionDeLeads, setVersionDeLeads] = useState(0);
+  // T24 f4 (F99): la versión es un ref que aplicarLead y quitarLead suben SÍNCRONO (antes era estado copiado en un efecto
+  // pasivo: un loadAll viejo que llegaba en ese hueco pisaba el cambio). loadAll y cargarPerdidos la leen después del await.
   const versionLeads = useRef(0);
-  useEffect(() => { versionLeads.current = versionDeLeads; }, [versionDeLeads]);
   const otraCargaRef = useRef(() => {});   // loadAll(false), puesto después de declararla (efecto de abajo)
   const loadAll = useCallback(async (showSpinner = true, opciones = {}) => {
     const turno = ++turnoCarga.current;
@@ -506,11 +503,21 @@ export default function CRMPage() {
       setCachedStages(arr);
       setEtapasListas(true);
       setErrorEtapas(null);
-    } else setErrorEtapas(etapas.reason);
+    } else {
+      setErrorEtapas(etapas.reason);
+      // T24 f4 (F98): sin etapas frescas, las de la caché aunque hayan vencido (el tablero dice «No se pudo actualizar el CRM»).
+      const viejas = cached ? null : getCachedStages(true);
+      if (viejas) {
+        setStages(viejas);
+        setConfigStages(viejas);
+        setEtapasListas(true);
+      }
+    }
     // Un lead cambió mientras iba: estos leads son viejos. Se piden otra vez (la respuesta nueva ya trae el cambio).
     if (!conLeads) { otraCargaRef.current(); return; }
     if (activos.status === 'fulfilled') {
       setLeads(normalizarRespuesta(activos.value).filas);
+      setTotalLeads(normalizarRespuesta(activos.value).total);
       setLeadsListos(true);
     }
     setErrorLeads(activos.status === 'rejected' ? activos.reason : null);
@@ -526,16 +533,24 @@ export default function CRMPage() {
     setLoading(false);
   }, []);
   useEffect(() => { otraCargaRef.current = () => loadAll(false); }, [loadAll]);
-  // «Reintentar» de la columna Perdido: solo esa consulta.
+  // «Reintentar» de la columna Perdido: solo esa consulta. T24 f4 (F99): comparte el turno de loadAll (llegadaDePerdidos) y, si
+  // un lead cambió mientras iba, vuelve a pedir en vez de aplicar lo viejo y limpiar el error.
   const cargarPerdidos = useCallback(async () => {
-    const version = versionLeads.current;
+    const turno = turnoCarga.current;
     setCargandoPerdidos(true);
     try {
-      const p = normalizarRespuesta(await _apiFetch(RUTA_PERDIDOS));
-      if (version === versionLeads.current) setPerdidos({ items: p.filas, total: p.total });
-      setErrorPerdidos(null);
+      for (;;) {
+        const version = versionLeads.current;
+        const p = normalizarRespuesta(await _apiFetch(RUTA_PERDIDOS));
+        const que = llegadaDePerdidos({ turno, ultimoTurno: turnoCarga.current, version, versionActual: versionLeads.current });
+        if (que === 'descartar') return;
+        if (que === 'repedir') continue;
+        setPerdidos({ items: p.filas, total: p.total });
+        setErrorPerdidos(null);
+        return;
+      }
     } catch (e) {
-      setErrorPerdidos(e);
+      if (turno === turnoCarga.current) setErrorPerdidos(e);
     } finally {
       setCargandoPerdidos(false);
     }
@@ -608,13 +623,13 @@ export default function CRMPage() {
   // la versión de los leads, para que una carga que salió antes no pise el cambio.
   const aplicarLead = useCallback((lead) => {
     if (!lead || typeof lead !== 'object') return;
-    setVersionDeLeads((v) => v + 1);
+    versionLeads.current += 1;
     setLeads((prev) => conLeadActivo(prev, lead));
     setPerdidos((prev) => conLeadPerdido(prev, lead));
     recargarLista();
   }, [recargarLista]);
   const quitarLead = useCallback((id) => {
-    setVersionDeLeads((v) => v + 1);
+    versionLeads.current += 1;
     setLeads((prev) => sinLead(prev, id));
     setPerdidos((prev) => sinLeadPerdido(prev, id));
     recargarLista();
@@ -662,7 +677,6 @@ export default function CRMPage() {
   // ═══ Helpers ═════════════════════════════════════════════════════════════
   // B4 T21: el filtro del Kanban (filteredLeads) es filtrarLeads de lib/crm-etapas.js (arriba, en leadsTablero) y la
   // Lista filtra en el servidor; getLeadsForStage era del Análisis viejo.
-  const totalValue = leads.reduce((s, l) => s + (l.value || 0), 0);
   const isQuotacion = (tipo) => tipo?.toLowerCase().includes('cotizac');
 
   // ─── Select customer from autocomplete ────────────────────────────────
@@ -969,7 +983,7 @@ export default function CRMPage() {
           title="CRM Pipeline"
           // r1 (m1, m5, m43): sin permiso loadAll no corre: sin subtítulo (nunca «Cargando leads…» para siempre).
           subtitle={acceso.listo && !acceso.leads ? undefined
-            : leadsListos ? `${leads.length} leads · ${formatoPesos(totalValue)} en pipeline`
+            : leadsListos ? subtituloCrm(leads, totalLeads)
             : errorLeads ? 'No se pudieron cargar los leads' : 'Cargando leads…'}
           actions={acceso.leads ? (
             <div className="flex items-center gap-2 flex-wrap">
