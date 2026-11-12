@@ -18,7 +18,7 @@
 import { congelar, conteosDePasos, pasosConConteos } from './flujo.js';
 import { humanizarCodigo, tiene } from './estados-pedido.js';
 import { diaColombia, diasEntre, fechaLarga } from './fechas-colombia.js';
-import { formatoEntero } from './kpis.js';
+import { formatoEntero, numeroFinito } from './kpis.js';
 import { GRUPOS_PEC, diaPec, etapaPec, vistaPuedeVencer } from './estados-compras.js';
 // B4 T14 r1 (m1; D41, D42): las cajas y «Con atraso» cambian la vista con accionPestana, como el Hub de Ventas.
 import { accionPestana, opcionesDeVista } from './tabla.js';
@@ -308,8 +308,9 @@ export function filtroSemaforoCompras(estado) {
  * @returns {{texto: string, tono: 'ambar'}[]}
  */
 export function avisosFlujoCompras(datos) {
-  const n = datos?.pasos?.RECEPCION?.recepciones_por_confirmar;
-  if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0) return [];
+  // B4 T24 f3 (F58): el número con numeroFinito (kpis.js), como las tarjetas: un '3' del servidor también cuenta.
+  const n = numeroFinito(datos?.pasos?.RECEPCION?.recepciones_por_confirmar);
+  if (n === null || n <= 0) return [];
   return [{ texto: `${formatoEntero(n)} ${n === 1 ? 'recepción' : 'recepciones'} por confirmar`, tono: 'ambar' }];
 }
 

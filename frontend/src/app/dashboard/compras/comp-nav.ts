@@ -7,7 +7,7 @@
 export const COMP_NAV = [
   { name: 'Lista de Compras',      path: '/dashboard/compras/lista-compras' },
   { name: 'Pedidos de Compra',     path: '/dashboard/compras/pedidos' },
-  { name: 'Mercancia en Transito', path: '/dashboard/compras/transito' },
+  { name: 'Mercancía en tránsito', path: '/dashboard/compras/transito' },
   { name: 'Recepciones (Entrada)', path: '/dashboard/compras/recepciones' },
   { name: 'Traslados Internos',    path: '/dashboard/compras/traslados' },
 ];

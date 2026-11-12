@@ -2,9 +2,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Archive } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-// B4 T18: las piezas que comparten Stock, Abastecimiento, Kardex y Productos (el tipo de una existencia y sus celdas, el
-// detalle, y los selectores de un catálogo con su error y «Reintentar»). El Hub de Inventario (T17) trae las suyas dentro de
-// su page.tsx (una página de Next no puede exportar más que su componente); aquí no se tocan.
+// B4 T18 (y T18 r1, m10 y m21; B4 T24 f3, F89): la fuente ÚNICA de las piezas de las cinco pantallas de existencias (el Hub, Stock,
+// Abastecimiento, Kardex y Productos): el tipo de una existencia y sus celdas, el detalle, el contenedor y los selectores de un
+// catálogo con su error y «Reintentar». El Hub importa de aquí (ya no trae copias propias).
 import { Modal } from '@/components/ui';
 import { apiFetch } from '@/lib/api';
 import { FOCOS, RESERVA_BOTON_IA, TABLE, type AcentoFoco } from '@/lib/design-system';

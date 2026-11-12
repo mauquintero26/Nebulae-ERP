@@ -63,7 +63,7 @@ function CeldaAcciones({ t }: { t: FilaTraslado }) {
 
 /**
  * B4 T19, la tabla (TABLA-inventario punto 11; R26, D41): las columnas de columnas-traslado.tsx (compartidas con Compras › Traslados)
- * con la celda de Acciones de esta pantalla. Una constante (estable, D40). Todas se ven por defecto (720 px).
+ * con la celda de Acciones de esta pantalla. Una constante (estable, D40). Todas se ven por defecto (696 px).
  */
 /** R26 (m9): la celda de Acciones lleva solo el ⋯; 104+130+130+88+92+96+56 = 696 px contra los 704 de la caja a 1024 px con el menú abierto. */
 const ANCHO_ACCIONES_TRASLADOS = 56;

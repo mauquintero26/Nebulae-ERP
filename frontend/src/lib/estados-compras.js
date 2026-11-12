@@ -371,7 +371,7 @@ export function opcionesEstadosPec(vista) {
 
 /**
  * B4 T14: «Filtrar estado» en el tablero (como el de Pedidos de venta, T10): una opción por columna, con su estado
- * principal (el primero) y el título de la columna; estadosDeColumnaPec la convierte en la columna entera. Inmutable.
+ * principal (el primero) y el título de la columna; estadosDeColumnaLista (kanban.js) la convierte en la columna entera. Inmutable.
  * @type {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
  */
 export const OPCIONES_ESTADOS_TABLERO_PEC = congelar(COLUMNAS_PEC.map((c) => ({ valor: c.estados[0], etiqueta: c.titulo })));
@@ -581,7 +581,8 @@ export function textoVencidosPec(vencidos) {
  *  - recargarVentas (I1): si se canceló algo, los pedidos de venta del panel de consolidación (los vinculados vuelven a
  *    Pendiente de compra);
  *  - recargarDetalle (m10): si una falla pide recargar, el detalle del panel abierto también;
- *  - mensajeOk: el aviso de lo cancelado (con los omitidos solo si no hubo fallas: con fallas quedan en la ventana);
+ *  - mensajeOk: el aviso de lo cancelado (con los omitidos solo si no hubo fallas; B4 T24 f3, F55: con fallas, los omitidos no van en el
+ *    aviso y la página no los deja en la ventana: allí quedan solo los pendientes, para reintentar con lo escrito);
  *  - error: null si nada falló; con un solo PEC, el MISMO error (el modal muestra el detail del servidor); con varios,
  *    un Error con una línea por PEC (resumenCancelacionPec). Nunca se resuelve en silencio con una falla.
  * @param {any[] | null | undefined} pecs

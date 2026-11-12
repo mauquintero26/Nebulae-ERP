@@ -770,7 +770,7 @@ console.log('--- TEST 21 (B4 T18, KPI-inventario punto 5 y 6): las tarjetas de S
   assert.deepEqual(stock(stats), {
     fisico: { valor: 26, ayuda: 'Lo que hay físicamente en las bodegas.' },
     reservado: { valor: 4, ayuda: 'Reservas activas que no han vencido.' },
-    disponible: { valor: 22, ayuda: 'Físico menos comprometido, nunca negativo.' },
+    disponible: { valor: 22, ayuda: 'Por bodega: físico menos comprometido, nunca negativo; luego se suma.' }, // B4 T24 f3 (FINAL-m15, D27)
     en_transito: { valor: 9, ayuda: 'Pedido al proveedor y aún sin recibir.' },
   });
   // Cada tarjeta lee SU clave (un mutante que cruce dos da otro número). Un 0 del servidor es 0; un Decimal en texto vale;
@@ -778,7 +778,7 @@ console.log('--- TEST 21 (B4 T18, KPI-inventario punto 5 y 6): las tarjetas de S
   assert.deepEqual(stock({ unidades_fisicas: 0, unidades_reservadas: '2,5x', unidades_disponibles: '7.5', unidades_en_transito: null }), {
     fisico: { valor: 0, ayuda: 'Lo que hay físicamente en las bodegas.' },
     reservado: { valor: null, ayuda: 'Reservas activas que no han vencido.' },
-    disponible: { valor: 7.5, ayuda: 'Físico menos comprometido, nunca negativo.' },
+    disponible: { valor: 7.5, ayuda: 'Por bodega: físico menos comprometido, nunca negativo; luego se suma.' }, // B4 T24 f3 (FINAL-m15, D27)
     en_transito: { valor: null, ayuda: 'Pedido al proveedor y aún sin recibir.' },
   });
   for (const malo of [null, undefined, 'x', [1], 3]) assert.equal(stock(malo), null, String(malo));

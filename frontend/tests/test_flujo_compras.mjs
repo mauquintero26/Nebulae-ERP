@@ -371,7 +371,9 @@ console.log('--- TEST 14 (B4 T14): avisosFlujoCompras (RP46) y leerEnlaceHubComp
   const con = (n) => fc.avisosFlujoCompras({ pasos: { RECEPCION: { recepciones_por_confirmar: n } } });
   assert.deepEqual(con(1), [{ texto: '1 recepción por confirmar', tono: 'ambar' }]);
   assert.deepEqual(con(1234), [{ texto: '1.234 recepciones por confirmar', tono: 'ambar' }]);
-  for (const n of [0, -2, null, undefined, '3', Number.NaN]) assert.deepEqual(con(n), [], String(n));
+  // B4 T24 f3 (F58, D27): un texto numérico ('3') también cuenta, como en las tarjetas (numeroFinito); lo que no es un número, no.
+  assert.deepEqual(con('3'), [{ texto: '3 recepciones por confirmar', tono: 'ambar' }], "'3' del servidor");
+  for (const n of [0, -2, null, undefined, 'tres', Number.NaN]) assert.deepEqual(con(n), [], String(n));
   assert.deepEqual(fc.avisosFlujoCompras(null), []);
   assert.deepEqual(fc.avisosFlujoCompras({ pasos: {} }), []);
   assert.equal(typeof fc.leerEnlaceHubCompras, 'function', 'leerEnlaceHubCompras existe');

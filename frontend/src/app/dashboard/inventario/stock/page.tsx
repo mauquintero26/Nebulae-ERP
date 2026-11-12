@@ -178,7 +178,7 @@ export default function StockPage() {
           <Info className="text-indigo-600 shrink-0 mt-0.5" size={18} />
           <div className="text-xs text-indigo-900 leading-relaxed">
             <span className="font-bold">Regla de Oro de Nebulae: </span>
-            El <strong>Inventario Físico</strong> contabiliza todas las unidades reales en bodega. El <strong>Disponible</strong> resta los ítems comprometidos con clientes que pagaron su anticipo. Los asesores comerciales solo pueden comprometer unidades con entrega inmediata si figuran en <strong>Disponible</strong>.
+            El <strong>Inventario Físico</strong> contabiliza todas las unidades reales en bodega. El <strong>Disponible</strong> se calcula por bodega: resta los ítems comprometidos con clientes que pagaron su anticipo, nunca queda negativo, y luego se suma. Los asesores comerciales solo pueden comprometer unidades con entrega inmediata si figuran en <strong>Disponible</strong>.
           </div>
         </div>
 

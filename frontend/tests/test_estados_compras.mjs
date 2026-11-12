@@ -1165,8 +1165,9 @@ console.log('--- TEST 31 (B4 T16A): Tránsito (compras/transito/page.tsx) cablea
   for (const parte of [/ruta: '\/compras\/pedidos'/, /(?:^|[,{]\s*)estado\s*,/, /esperar: !listo/, /activo: enKanban/, /extra: EXTRA_TABLERO/]) {
     assert.match(completa, parte, `el tablero pide la vista completa con ${parte}`);
   }
-  assert.match(pag, /const TOPE_TABLERO = 200;/);
-  assert.match(pag, /const EXTRA_TABLERO = \{ orden: 'reciente', limit: TOPE_TABLERO, offset: 0 \};/, 'C4: hasta 200 pedidos, de la primera página');
+  // B4 T24 f3 (F72, D27): el tope es TOPE_TABLERO_COMPRAS (el del aviso), sin una constante local repetida.
+  assert.ok(!/const TOPE_TABLERO = 200;/.test(pag), 'sin la constante local');
+  assert.match(pag, /const EXTRA_TABLERO = \{ orden: 'reciente', limit: TOPE_TABLERO_COMPRAS, offset: 0 \};/, 'C4: hasta 200 pedidos, de la primera página');
   assert.match(pag, /apiFetch\('\/compras\/tracking-config', \{ signal: control\.signal \}\)/, 'GET /compras/tracking-config al cargar');
   assert.match(pag, /useResumenFlujo<DatosFlujo>\('\/compras\/flujo', recargaFlujo\)/);
   assert.match(pag, /`\/compras\/stats\?periodo=\$\{PERIODO_KPI\}`/);
@@ -3440,6 +3441,28 @@ console.log('--- B4 T24 f3 (B40-f, F74-f, F73): los enlaces ?sku= y ?id= piden p
   assert.equal(ec.pedirEnlaceTraslado(ec.llegadaEnlaceTraslado(63, []).marca, '0063'), null);
   const tra = leerFuente('app/dashboard/compras/traslados/page.tsx');
   trae(tra, "if (llegada.avisar) avisar(`No se encontró el traslado ${numeroTraslado({ id })}.`, { tono: 'info' });", 'la página lee llegada.avisar');
+}
+
+console.log('--- B4 T24 f3 (F56, F55, F89, F94, FINAL-m16, FINAL-m17, F72, FINAL-m15): comentarios, textos y una constante ---');
+{
+  const lib = leerFuente('lib/estados-compras.js');
+  noTrae(lib, 'estadosDeColumnaPec', 'F56: sin la función que ya no existe');
+  trae(lib, 'estadosDeColumnaLista (kanban.js) la convierte en la columna entera', 'F56');
+  noTrae(lib, 'con fallas quedan en la ventana);', 'F55: el JSDoc ya no dice lo que la página no hace');
+  trae(leerFuente('app/dashboard/inventario/piezas-inventario.tsx'), 'la fuente ÚNICA de las piezas de las cinco pantallas de existencias', 'F89');
+  trae(leerFuente('app/dashboard/inventario/traslados/page.tsx'), 'Todas se ven por defecto (696 px).', 'F94');
+  // FINAL-m16: la barra de submódulos con tildes.
+  trae(leerFuente('app/dashboard/compras/comp-nav.ts'), "{ name: 'Mercancía en tránsito', path: '/dashboard/compras/transito' },");
+  // FINAL-m17: el title de Retraso con el singular de la celda (textoDiasRetraso).
+  assert.equal(`${ec.textoDiasRetraso(1)} de retraso`, '1 día de retraso');
+  assert.equal(`${ec.textoDiasRetraso(4)} de retraso`, '4 días de retraso');
+  trae(leerFuente('app/dashboard/compras/columnas-recepcion.tsx'), '`${textoDiasRetraso(retrasoDeRecepcion(r))} de retraso`');
+  // F72: Tránsito usa TOPE_TABLERO_COMPRAS (el del aviso).
+  trae(leerFuente('app/dashboard/compras/transito/page.tsx'), "limit: TOPE_TABLERO_COMPRAS, offset: 0 };");
+  // FINAL-m15: la ayuda del disponible con la regla de R10 (por bodega y luego la suma), también en el banner de Stock.
+  const kpisLib = await import('../src/lib/kpis.js');
+  assert.equal(kpisLib.tarjetasStock({ unidades_disponibles: 3 }).disponible.ayuda, 'Por bodega: físico menos comprometido, nunca negativo; luego se suma.');
+  trae(leerFuente('app/dashboard/inventario/stock/page.tsx'), 'El <strong>Disponible</strong> se calcula por bodega:', 'el banner con la misma regla');
 }
 
 console.log('\nOK: test_estados_compras.mjs');

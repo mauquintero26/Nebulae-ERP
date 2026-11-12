@@ -28,7 +28,7 @@ import { estadoDelTotal, ordenEsAtencion, textoOrdenHub } from '@/lib/tabla';
 import { PERIODO_KPI, tarjetasTransito } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { humanizarCodigo } from '@/lib/estados-pedido';
-import { avisoTope200, infoEstadoPec, opcionesEstadosPec, textoVacioPec } from '@/lib/estados-compras';
+import { TOPE_TABLERO_COMPRAS, avisoTope200, infoEstadoPec, opcionesEstadosPec, textoVacioPec } from '@/lib/estados-compras';
 import {
   accionEtapaTransito, avanceTransito, avancePromedioTransito, columnaTransito, columnasDeEtapas, etapaActual,
   pendienteDeTransito, reglaSoltarTransito, soltarPendientes, tarjetaTransito, terminarPendiente, textoEntregaTransito, tonoEntregaTransito,
@@ -66,8 +66,8 @@ const ID_TRANSITO = 'compras.transito';
 /** TABLA-compras punto 8: la vista transito_logistica de T12 con lo vencido primero (R8). */
 const INICIAL_TRANSITO = { vista: 'transito_logistica', orden: 'atencion' };
 /** C4: el tablero de etapas es de modo cliente: pide la vista completa, hasta 200 pedidos, de la primera página. */
-const TOPE_TABLERO = 200;
-const EXTRA_TABLERO = { orden: 'reciente', limit: TOPE_TABLERO, offset: 0 };
+// B4 T24 f3 (F72): el tope del aviso (avisoTope200 compara con TOPE_TABLERO_COMPRAS): una sola constante para la misma regla.
+const EXTRA_TABLERO = { orden: 'reciente', limit: TOPE_TABLERO_COMPRAS, offset: 0 };
 const RUTA_PEDIDOS = '/dashboard/compras/pedidos';
 /** El contenedor de los Hubs y de las listas del bloque (T7 a T15): RESERVA_BOTON_IA (pb-24, F44-a) deja libre la esquina del botón de la IA. */
 const CONTENEDOR = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;

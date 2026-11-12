@@ -812,6 +812,13 @@ export function resumenAlmacenes(filas) {
 const datosDe = (d) => (d !== null && typeof d === 'object' && !Array.isArray(d) ? d : null);
 
 /**
+ * B4 T24 f3 (FINAL-m15): la ayuda de «Disponibles para vender», con la regla de R10 que aplica el servidor (core/existencias.py): el
+ * disponible se calcula por bodega (físico menos comprometido, nunca negativo) y luego se suma; una reserva en una bodega sin
+ * existencias no descuenta.
+ */
+export const AYUDA_DISPONIBLE = 'Por bodega: físico menos comprometido, nunca negativo; luego se suma.';
+
+/**
  * B4 T18 (KPI-inventario punto 5): lo que pintan las 4 tarjetas de Stock con `data` de GET /inventory/stats (T13), todo el
  * inventario sin las referencias de rastrear_inventario = false: fisico (unidades_fisicas), reservado (unidades_reservadas),
  * disponible (unidades_disponibles) y en_transito (unidades_en_transito, una vez por SKU). Cada número pasa por numeroFinito
@@ -826,7 +833,7 @@ export function tarjetasStock(datos) {
   return {
     fisico: { valor: numeroFinito(d.unidades_fisicas), ayuda: 'Lo que hay físicamente en las bodegas.' },
     reservado: { valor: numeroFinito(d.unidades_reservadas), ayuda: 'Reservas activas que no han vencido.' },
-    disponible: { valor: numeroFinito(d.unidades_disponibles), ayuda: 'Físico menos comprometido, nunca negativo.' },
+    disponible: { valor: numeroFinito(d.unidades_disponibles), ayuda: AYUDA_DISPONIBLE },
     en_transito: { valor: numeroFinito(d.unidades_en_transito), ayuda: 'Pedido al proveedor y aún sin recibir.' },
   };
 }
