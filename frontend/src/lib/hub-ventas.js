@@ -21,6 +21,7 @@ import {
   ESTADOS_PEDIDO, ESTADOS_PEDIDO_MANUALES, ESTADOS_PEDIDO_CERRADOS, infoEstadoPedido, pasoPedido, transicionesPedido,
   esPedidoVigente, esCotizacionActiva, congelar, humanizarCodigo, tiene,
 } from './estados-pedido.js';
+import { ordenEsAtencion, textoOrdenHub } from './tabla.js';
 
 // ─── N3: cancelar documentos ────────────────────────────────────────────────────
 
@@ -152,6 +153,23 @@ export function opcionesEstadoPVEN(estado) {
     cancelar: destinos.includes('CANCELADO'),
     facturar: destinos.includes('FACTURADO'),
   };
+}
+
+/**
+ * B4 T24 f2 (m8 de la revisión r0 de f1): lo que el panel rápido del Hub ofrece para un pedido con el permiso del rol (`mover`:
+ * accesoTableroVentas, el require_roles de PATCH /ventas/pedidos/{id}: ADMIN y ASESOR). Con permiso, opcionesEstadoPVEN; sin él,
+ * nada que mande un PATCH (ni estados, ni Facturado, ni Cancelar) y solo «Despachar en Entregas», que es un enlace (Entregas decide:
+ * BODEGA despacha). B4 T24 f2 r1 (m13 + m37, aditivo): `despacha` (puedeAccionPedido('despachar', rol): ADMIN, ASESOR y BODEGA)
+ * deja el enlace solo a quien despacha; sin pasarlo, como antes.
+ * @param {unknown} estado
+ * @param {boolean} mover
+ * @param {boolean} [despacha]
+ * @returns {{mover: string[], despachar: boolean, cancelar: boolean, facturar: boolean}}
+ */
+export function opcionesPanelPedido(estado, mover, despacha = true) {
+  const op = opcionesEstadoPVEN(estado);
+  if (mover && despacha) return op;
+  return mover ? { ...op, despachar: false } : { mover: [], despachar: op.despachar && despacha, cancelar: false, facturar: false };
 }
 
 /**
@@ -393,8 +411,13 @@ export function esAccionTomada(row, scConCot, opciones) {
 /** Los tipos de documento; 'PVEN' es el mismo que 'VEN' (_ALIAS_TIPO del backend). */
 const TIPO_DOCUMENTO = congelar({ SC: 'SC', COT: 'COT', VEN: 'VEN', PVEN: 'VEN' });
 
-/** 'SC', 'COT' o 'VEN' ('PVEN' -> 'VEN'); otro tipo es un error de programación (ValueError en Python). */
-function tipoDocumento(tipo) {
+/**
+ * 'SC', 'COT' o 'VEN' ('PVEN' -> 'VEN'); otro tipo es un error de programación (ValueError en Python). B4 T24 f2 (F27): exportada,
+ * la única (kanban-ventas.js la importa; antes tenía una copia textual).
+ * @param {unknown} tipo
+ * @returns {'SC' | 'COT' | 'VEN'}
+ */
+export function tipoDocumento(tipo) {
   if (typeof tipo === 'string' && tiene(TIPO_DOCUMENTO, tipo)) return TIPO_DOCUMENTO[tipo];
   throw new Error(`Tipo de documento no válido: ${JSON.stringify(tipo ?? null)}`);
 }
@@ -540,36 +563,9 @@ export function scConCotDeFilas(filas) {
   return ids;
 }
 
-/**
- * La tabla del Hub va en el orden del semáforo («Atención primero», R6 y R8): sin orden (el que deja alternarOrden al
- * tercer clic) o con 'atencion'. Con él se ven los separadores y no el chip del orden.
- * @param {string | null | undefined} orden
- * @returns {boolean}
- */
-export function ordenEsAtencion(orden) {
-  return orden === null || orden === undefined || orden === '' || orden === 'atencion';
-}
 
-/**
- * El chip del orden de la tabla del Hub (R6, orden_clic_columna): 'Orden: Monto ↓' (descendente, con '-') u
- * 'Orden: Monto ↑'; junto a él va el botón «Atención primero». Con el orden de atención, null (no hay chip). `titulos`
- * es {campo: título de la columna}; un campo sin título sale humanizado (nunca el código crudo).
- * B4 T7 r1 (m4): `inversos` son los campos de las columnas con ordenInverso (lib/tabla.js), cuya flecha dice lo que ve
- * el usuario: 'Antigüedad ↑' es '-creado' (la más nueva primero) y 'Antigüedad ↓' es 'creado'.
- * @param {string | null | undefined} orden
- * @param {Readonly<Record<string, string>>} [titulos]
- * @param {{inversos?: ReadonlyArray<string | null> | null}} [opciones]
- * @returns {string | null}
- */
-export function textoOrdenHub(orden, titulos = {}, { inversos = [] } = {}) {
-  if (ordenEsAtencion(orden) || typeof orden !== 'string') return null;
-  const desc = orden.startsWith('-');
-  const campo = desc ? orden.slice(1) : orden;
-  const propio = titulos && tiene(titulos, campo) && typeof titulos[campo] === 'string' && titulos[campo].trim()
-    ? titulos[campo].trim() : humanizarCodigo(campo);
-  const abajo = (inversos ?? []).includes(campo) ? !desc : desc;
-  return `Orden: ${propio} ${abajo ? '↓' : '↑'}`;
-}
+/** B4 T24 (F9): ordenEsAtencion y textoOrdenHub viven en lib/tabla.js (Compras e Inventario las toman de ahí). */
+export { ordenEsAtencion, textoOrdenHub };
 
 /**
  * B4 T7 r1 (I1): el foco del enlace (?foco= de «Ver análisis») que el Hub le pasa a la pestaña Análisis como
@@ -667,30 +663,77 @@ function conRegresoA(ruta, returnTo) {
  * @returns {{label: string, href: string, tono: string} | null}
  */
 export function accionSiguienteSC(row, ctx = {}) {
+  const { rama, pedido, cot } = decisionSC(row, ctx);
+  if (rama === null) return null;
+  const volver = (ruta) => conRegresoA(ruta, ctx.returnTo);
+  const { label, tono } = ACCION_SC[rama];
+  if (rama === 'ver_pedido') return { label, href: volver(`/dashboard/ventas/venta/${pedido.id}`), tono };
+  if (rama === 'ver_cotizacion') return { label, href: volver(`/dashboard/ventas/cotizacion/${cot.id}`), tono };
+  return { label, href: volver(`/dashboard/ventas/solicitud/${row?.id}`), tono };
+}
+
+/** B4 T24 f2 r1 (duda 2 + m15): el texto y el tono de cada rama de accionSiguienteSC. */
+const ACCION_SC = congelar({
+  ver_ticket: { label: 'Ver ticket', tono: 'slate' },
+  ver_pedido: { label: 'Ver pedido', tono: 'emerald' },
+  ver_cotizacion: { label: 'Ver cotización', tono: 'indigo' },
+  agregar_productos: { label: 'Agregar productos', tono: 'amber' },
+  cotizar: { label: 'Cotizar →', tono: 'emerald' },
+  reiniciar_o_cotizar: { label: 'Reiniciar o cotizar', tono: 'slate' },
+  esperando: { label: 'Esperando cliente', tono: 'blue' },
+  enviar_confirmacion: { label: 'Enviar para confirmación', tono: 'indigo' },
+  asignar: { label: 'Asignar asesor', tono: 'amber' },
+  ver_solicitud: { label: 'Ver solicitud', tono: 'slate' },
+});
+
+/**
+ * B4 T24 f2 r1 (duda 2 + m15): la decisión ÚNICA de accionSiguienteSC (la rama; el primer caso que aplica gana) y los documentos
+ * de su enlace. claveAccionSiguienteSC la da sin el texto de la interfaz.
+ * @param {any} row
+ * @param {{cotizaciones?: any[], pedidos?: any[]}} ctx
+ * @returns {{rama: ClaveAccionSC | null, pedido?: any, cot?: any}}
+ */
+function decisionSC(row, ctx) {
   const cotizaciones = ctx.cotizaciones || [];
   const pedidos = ctx.pedidos || [];
-  const volver = (ruta) => conRegresoA(ruta, ctx.returnTo);
-  const enSolicitud = volver(`/dashboard/ventas/solicitud/${row?.id}`);
   const estado = row?.estado;
-  if (esSoporte(row)) return { label: 'Ver ticket', href: enSolicitud, tono: 'slate' };
-  if (estado === 'CANCELADA') return null;
+  if (esSoporte(row)) return { rama: 'ver_ticket' };
+  if (estado === 'CANCELADA') return { rama: null };
   const pedido = masReciente(pedidos.filter((v) => v && esPedidoVigente(v.estado)));
-  if (pedido) return { label: 'Ver pedido', href: volver(`/dashboard/ventas/venta/${pedido.id}`), tono: 'emerald' };
+  if (pedido) return { rama: 'ver_pedido', pedido };
   // choque H3/N4: una COT VENCIDA cuenta como activa (esCotizacionActiva), igual que en el backend.
   const cot = masReciente(cotizaciones.filter((c) => c && esCotizacionActiva(c.estado)));
-  if (cot) return { label: 'Ver cotización', href: volver(`/dashboard/ventas/cotizacion/${cot.id}`), tono: 'indigo' };
+  if (cot) return { rama: 'ver_cotizacion', cot };
   if (!tieneProductos(row?.productos) && ['ASIGNADA', 'PENDIENTE_CONFIRMACION', 'CONFIRMADA'].includes(estado)) {
-    return { label: 'Agregar productos', href: enSolicitud, tono: 'amber' };
+    return { rama: 'agregar_productos' };
   }
   // R19 (U15): solo se cotiza con la confirmación del cliente vigente (confirmacion_vigente de _sc_dict: gate1 de la SC).
-  if (estado === 'CONFIRMADA' && row?.confirmacion_vigente === true) return { label: 'Cotizar →', href: enSolicitud, tono: 'emerald' };
+  if (estado === 'CONFIRMADA' && row?.confirmacion_vigente === true) return { rama: 'cotizar' };
   // R19 (enmienda T9B r1): una Confirmada cuya confirmación ya no vale no se envía (el servidor solo envía una Asignada
   // o reenvía una Pendiente por confirmación): en el detalle se reinicia o se cotiza sin esperar confirmación.
-  if (estado === 'CONFIRMADA') return { label: 'Reiniciar o cotizar', href: enSolicitud, tono: 'slate' };
-  if (estado === 'PENDIENTE_CONFIRMACION') return { label: 'Esperando cliente', href: enSolicitud, tono: 'blue' };
-  if (estado === 'ASIGNADA') return { label: 'Enviar para confirmación', href: enSolicitud, tono: 'indigo' };
-  if (estado === 'BORRADOR') return { label: 'Asignar asesor', href: enSolicitud, tono: 'amber' };
-  return { label: 'Ver solicitud', href: enSolicitud, tono: 'slate' };
+  if (estado === 'CONFIRMADA') return { rama: 'reiniciar_o_cotizar' };
+  if (estado === 'PENDIENTE_CONFIRMACION') return { rama: 'esperando' };
+  if (estado === 'ASIGNADA') return { rama: 'enviar_confirmacion' };
+  if (estado === 'BORRADOR') return { rama: 'asignar' };
+  return { rama: 'ver_solicitud' };
+}
+
+/**
+ * @typedef {'ver_ticket' | 'ver_pedido' | 'ver_cotizacion' | 'agregar_productos' | 'cotizar' | 'reiniciar_o_cotizar' | 'esperando'
+ *   | 'enviar_confirmacion' | 'asignar' | 'ver_solicitud'} ClaveAccionSC
+ * @typedef {'completar_precios' | 'enviar_al_cliente' | 'esperando' | 'ver_pedido' | 'crear_pedido'} ClaveAccionCOT
+ */
+
+/**
+ * B4 T24 f2 r1 (duda 2 + m15): QUÉ acción da accionSiguienteSC (la misma rama), sin el texto de la interfaz; null si no hay
+ * acción (cancelada) o si no es un objeto. Con ella, puedeAccionDocumento (lib/roles.js) dice si el rol puede hacerla.
+ * @param {any} row
+ * @param {{cotizaciones?: any[], pedidos?: any[]}} [ctx]
+ * @returns {ClaveAccionSC | null}
+ */
+export function claveAccionSiguienteSC(row, ctx = {}) {
+  if (!row || typeof row !== 'object') return null;
+  return decisionSC(row, ctx).rama;
 }
 
 // ─── B4 T2 (R26, RP15): la próxima acción de COT y PVEN y la de cualquier fila ──
@@ -714,23 +757,58 @@ const pedidoVigenteDe = (cot) => masReciente((Array.isArray(cot?.pedidos_venta) 
  * @returns {{texto: string, href: string | null, tono: string} | null}
  */
 export function accionSiguienteCOT(cot, { returnTo } = {}) {
-  const estado = cot?.estado;
+  const { rama, pedido } = decisionCOT(cot);
   const enCot = conRegresoA(`/dashboard/ventas/cotizacion/${cot?.id}`, returnTo);
-  if (estado === 'BORRADOR' || estado === 'VENCIDA' || estado === 'ENVIADA') {
-    const total = Number(cot?.total_cop);
-    return Number.isFinite(total) && total > 0
-      ? { texto: 'Enviar al cliente', href: enCot, tono: 'indigo' }
-      : { texto: 'Completar precios', href: enCot, tono: 'amber' };
-  }
-  if (estado === 'PENDIENTE_CONFIRMACION') return { texto: 'Esperando al cliente', href: null, tono: 'blue' };
-  if (estado === 'CONFIRMADA') {
-    const pedido = pedidoVigenteDe(cot);
-    return pedido
-      ? { texto: 'Ver pedido', href: conRegresoA(`/dashboard/ventas/venta/${pedido.id}`, returnTo), tono: 'emerald' }
-      : { texto: 'Crear pedido', href: enCot, tono: 'emerald' };
-  }
+  if (rama === 'enviar_al_cliente') return { texto: 'Enviar al cliente', href: enCot, tono: 'indigo' };
+  if (rama === 'completar_precios') return { texto: 'Completar precios', href: enCot, tono: 'amber' };
+  if (rama === 'esperando') return { texto: 'Esperando al cliente', href: null, tono: 'blue' };
+  if (rama === 'ver_pedido') return { texto: 'Ver pedido', href: conRegresoA(`/dashboard/ventas/venta/${pedido.id}`, returnTo), tono: 'emerald' };
+  if (rama === 'crear_pedido') return { texto: 'Crear pedido', href: enCot, tono: 'emerald' };
   return null;
 }
+
+/**
+ * B4 T24 f2 r1 (duda 2 + m15): la decisión ÚNICA de accionSiguienteCOT (la rama) y el pedido de su enlace.
+ * @param {any} cot
+ * @returns {{rama: ClaveAccionCOT | null, pedido?: any}}
+ */
+function decisionCOT(cot) {
+  const estado = cot?.estado;
+  if (estado === 'BORRADOR' || estado === 'VENCIDA' || estado === 'ENVIADA') {
+    return { rama: tienePreciosCot(cot) ? 'enviar_al_cliente' : 'completar_precios' };
+  }
+  if (estado === 'PENDIENTE_CONFIRMACION') return { rama: 'esperando' };
+  if (estado === 'CONFIRMADA') {
+    const pedido = pedidoVigenteDe(cot);
+    return pedido ? { rama: 'ver_pedido', pedido } : { rama: 'crear_pedido' };
+  }
+  return { rama: null };
+}
+
+/**
+ * B4 T24 f2 r1 (duda 2 + m15): QUÉ acción da accionSiguienteCOT (la misma rama), sin el texto de la interfaz; null sin acción o si
+ * no es un objeto.
+ * @param {any} cot
+ * @returns {ClaveAccionCOT | null}
+ */
+export function claveAccionSiguienteCOT(cot) {
+  if (!cot || typeof cot !== 'object') return null;
+  return decisionCOT(cot).rama;
+}
+
+/**
+ * B4 T24 f2 (F28): si la cotización tiene sus precios calculados (total_cop, un número positivo). La regla de «Completar precios»
+ * de accionSiguienteCOT y del bloqueo de enviar del tablero (kanban-ventas.js), sin atarla a un texto de la interfaz.
+ * @param {any} cot
+ * @returns {boolean}
+ */
+export function tienePreciosCot(cot) {
+  const total = Number(cot?.total_cop);
+  return Number.isFinite(total) && total > 0;
+}
+
+/** B4 T24 f2 (F27): la ruta de Entregas (inventario), la única: la de «Despachar», el enlace del tablero de Pedidos y entregas.js. */
+export const RUTA_ENTREGAS = '/dashboard/inventario/entregas';
 
 const PVEN_SIN_ACCION = congelar(['CANCELADO', 'DEVUELTO_TOTAL', 'FACTURADO']);
 const PVEN_POR_FACTURAR = congelar(['ENTREGADO', 'PARCIALMENTE_ENTREGADO']);
@@ -753,21 +831,34 @@ const PVEN_EN_CURSO = congelar(['EN_PROCESO', 'EN_TRANSITO']);
  * @returns {{texto: string, href: string, tono: string} | null}
  */
 export function accionSiguientePVEN(p, { returnTo } = {}) {
-  if (!p || typeof p !== 'object') return null;
-  const estado = p.estado;
+  const clave = claveAccionSiguientePVEN(p);
+  if (clave === null) return null;
   const enPedido = conRegresoA(`/dashboard/ventas/venta/${p.id}`, returnTo);
-  if (PVEN_SIN_ACCION.includes(estado)) return null;
-  if (PVEN_POR_FACTURAR.includes(estado)) return { texto: 'Facturar', href: enPedido, tono: 'emerald' };
-  if (PVEN_POR_COMPRAR.includes(estado)) {
-    return { texto: 'Gestionar compra', href: conRegresoA('/dashboard/compras', returnTo), tono: 'amber' };
-  }
-  if (PVEN_EN_CURSO.includes(estado)) return { texto: 'Ver pedido', href: enPedido, tono: 'slate' };
-  if (pasoPedido(estado) === 2) {
-    return Number(p.saldo_cop) > 0
-      ? { texto: 'Cobrar saldo', href: enPedido, tono: 'amber' }
-      : { texto: 'Despachar', href: conRegresoA('/dashboard/inventario/entregas', returnTo), tono: 'indigo' };
+  if (clave === 'facturar') return { texto: 'Facturar', href: enPedido, tono: 'emerald' };
+  if (clave === 'comprar') return { texto: 'Gestionar compra', href: conRegresoA('/dashboard/compras', returnTo), tono: 'amber' };
+  if (clave === 'cobrar') return { texto: 'Cobrar saldo', href: enPedido, tono: 'amber' };
+  if (clave === 'despachar') {
+    return { texto: 'Despachar', href: conRegresoA(RUTA_ENTREGAS, returnTo), tono: 'indigo' };
   }
   return { texto: 'Ver pedido', href: enPedido, tono: 'slate' };
+}
+
+/**
+ * B4 T24 f2 (duda 3 de f1): QUÉ acción principal da accionSiguientePVEN (la misma rama), sin el texto de la interfaz: 'facturar',
+ * 'comprar' («Gestionar compra»), 'ver' («Ver pedido»), 'cobrar' («Cobrar saldo») o 'despachar'; null sin acción (o si no es un
+ * objeto). Con ella, puedeAccionPedido (lib/roles.js) dice si el rol puede hacerla (la tarjeta de un tablero de solo lectura).
+ * @param {any} p
+ * @returns {'facturar' | 'comprar' | 'ver' | 'cobrar' | 'despachar' | null}
+ */
+export function claveAccionSiguientePVEN(p) {
+  if (!p || typeof p !== 'object') return null;
+  const estado = p.estado;
+  if (PVEN_SIN_ACCION.includes(estado)) return null;
+  if (PVEN_POR_FACTURAR.includes(estado)) return 'facturar';
+  if (PVEN_POR_COMPRAR.includes(estado)) return 'comprar';
+  if (PVEN_EN_CURSO.includes(estado)) return 'ver';
+  if (pasoPedido(estado) === 2) return Number(p.saldo_cop) > 0 ? 'cobrar' : 'despachar';
+  return 'ver';
 }
 
 /**
@@ -788,6 +879,21 @@ export function accionSiguienteDocumento(fila, { returnTo } = {}) {
   }
   if (tipo === 'COT') return accionSiguienteCOT(fila, { returnTo });
   if (tipo === 'VEN' || tipo === 'PVEN') return accionSiguientePVEN(fila, { returnTo });
+  return null;
+}
+
+/**
+ * B4 T24 f2 r1 (duda 2 + m15): la clave de la próxima acción de cualquier fila (SC, COT, VEN o PVEN), la de accionSiguienteDocumento
+ * sin el texto: claveAccionSiguienteSC (con fila.cotizaciones y fila.pedidos_venta), claveAccionSiguienteCOT o
+ * claveAccionSiguientePVEN. Un tipo desconocido o algo que no es un objeto: null.
+ * @param {any} fila
+ * @returns {string | null}
+ */
+export function claveAccionSiguienteDocumento(fila) {
+  if (!fila || typeof fila !== 'object') return null;
+  if (fila.tipo === 'SC') return claveAccionSiguienteSC(fila, { cotizaciones: fila.cotizaciones, pedidos: fila.pedidos_venta });
+  if (fila.tipo === 'COT') return claveAccionSiguienteCOT(fila);
+  if (fila.tipo === 'VEN' || fila.tipo === 'PVEN') return claveAccionSiguientePVEN(fila);
   return null;
 }
 

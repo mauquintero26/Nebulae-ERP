@@ -11,7 +11,8 @@
  *    lib/dinero-ventas.js ('12,5%', anticipos y Resumen Financiero) es otro formato y NO cambia (RP75).
  *  - Variación (RP27): '+12,5 %', '−8 %' (con el menos tipográfico), 'Nuevo' (el anterior es 0 y el actual no) o
  *    'Sin cambio'. Mismo cálculo que variacion_pct del servidor; el redondeo de la mitad puede diferir en 0,1 (JS
- *    redondea la mitad hacia arriba, Python al par). La pantalla siempre usa este cálculo, no el del servidor (RP27).
+ *    la mitad se aleja del cero (ROUND_HALF_UP), Python al par). La pantalla siempre usa este cálculo, no el del servidor
+ *    (RP27).
  *    La dirección de 'Nuevo' sale del signo del valor actual, y solo aquí (direccionVariacion; analisis.js la usa).
  *    Un solo vocabulario de tono: 'bien', 'mal' o 'neutro'. El «mejor» del servidor ('sube' | 'baja' | 'neutro')
  *    pasa a mejorSiSube con mejorDesde().
@@ -25,8 +26,8 @@
  */
 
 import { congelar } from './estados-pedido.js';
-import { textoDeError } from './avisos.js';
-import { formatoPesos } from './pesos.js';
+import { textoAvisoFuente } from './avisos.js';
+import { agruparMiles, formatoPesos } from './pesos.js';
 
 /**
  * @typedef {'pesos' | 'numero' | 'porcentaje' | 'texto'} FormatoKpi
@@ -90,7 +91,7 @@ export function numeroFinito(v) {
   return null;
 }
 
-const agrupar = (entero) => String(entero).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+const agrupar = agruparMiles;
 
 /** Décimas enteras de |n| (toPrecision quita el ruido binario: 45.24 * 10). */
 const decimas = (n) => Math.round(Number((Math.abs(n) * 10).toPrecision(12)));
@@ -146,14 +147,15 @@ export function estadoKpi({ loading = false, yaCargo = false, error = null } = {
 
 /**
  * La variación de `actual` contra `anterior`. Mismo cálculo que variacion_pct del servidor; el redondeo de la mitad
- * puede diferir en 0,1 (JS redondea la mitad hacia arriba, Python al par). La pantalla siempre usa este cálculo, no
- * el del servidor (RP27).
+ * puede diferir en 0,1 (aquí la mitad se aleja del cero (ROUND_HALF_UP), Python al par). La pantalla siempre usa
+ * este cálculo, no el del servidor (RP27).
  *  - null si alguno no es un número finito (sin comparación);
  *  - {tipo: 'igual'} si los dos son 0;
  *  - {tipo: 'nuevo', signo} si el anterior es 0 y el actual no (RP27: distinto de 0); signo 1 o −1 es el del valor
  *    actual, del que sale la dirección (direccionVariacion);
  *  - si no, {tipo: 'pct', pct} con pct = (actual − anterior) / |anterior| × 100, redondeado a 1 decimal con la mitad
- *    alejándose del cero en los dos sentidos (ROUND_HALF_UP, como redondear_peso: +12,25 -> +12,3 y −12,25 -> −12,3;
+ *    alejándose del cero en los dos sentidos (ROUND_HALF_UP, como redondear_peso: +12,25 -> +12,3 y
+ *    −12,25 -> −12,3;
  *    sin −0), igual que formatoDecimal y el porcentaje de formatoValorKpi.
  * @param {unknown} actual
  * @param {unknown} anterior
@@ -303,15 +305,22 @@ export function textoContador(valor, estado) {
 
 /**
  * El color de tarjeta de una clase de Tailwind ('bg-blue-500' -> 'blue', también text-, border-, ring-, from- y
- * to-). Un color que no es de COLORES_KPI, un '#hex' o nada dan 'indigo'.
+ * to-). Un color que no es de COLORES_KPI, un '#hex' o nada dan `respaldo` ('indigo'). B4 T24 (F26): la única regla también para el
+ * tono de las columnas de los tableros (con respaldo 'slate'): sin copias de «la familia de una clase». r2 (C8): `conjunto` (aditivo;
+ * por defecto COLORES_KPI) son los colores admitidos: el tablero pasa las claves de TONOS (CLAVES_TONOS_KANBAN de lib/kanban.js), así
+ * que slate queda solo para lo que el tablero no puede pintar.
+ * r3 (m2, m14): una plantilla: sin conjunto, ColorKpi como siempre; con CLAVES_TONOS_KANBAN, la unión de sus claves.
+ * @template {string} [C=ColorKpi]
  * @param {unknown} clase
- * @returns {ColorKpi}
+ * @param {NoInfer<C>} [respaldo]
+ * @param {ReadonlyArray<C>} [conjunto]
+ * @returns {C}
  */
-export function acentoDesdeClase(clase) {
+export function acentoDesdeClase(clase, respaldo = 'indigo', conjunto = COLORES_KPI) {
   const texto = typeof clase === 'string' ? clase.trim() : '';
   const m = /^(?:bg|text|border|ring|from|to)-([a-z]+)-\d{2,3}$/.exec(texto);
   const color = m ? m[1] : texto;
-  return COLORES_KPI.includes(/** @type {ColorKpi} */ (color)) ? /** @type {ColorKpi} */ (color) : 'indigo';
+  return /** @type {C} */ (conjunto.includes(/** @type {C} */ (color)) ? color : respaldo);
 }
 
 // ─── lo que usan TarjetaKpi, Contador y useEstadoKpi (T4A) ──────────────────────
@@ -524,9 +533,10 @@ export const CATALOGO_KPI = congelar(CATALOGO);
  * @returns {string}
  */
 export function etiquetaKpi(id, periodo = PERIODO_KPI) {
-  const definicion = Object.prototype.hasOwnProperty.call(CATALOGO_KPI, id) ? CATALOGO_KPI[id] : null;
-  if (!definicion) throw new Error(`Indicador desconocido: ${String(id)}`);
+  // B4 T24 (F3): una sola guarda, tiene(), también para el catálogo.
   const tiene = (tabla, clave) => typeof clave === 'string' && Object.prototype.hasOwnProperty.call(tabla, clave);
+  const definicion = tiene(CATALOGO_KPI, id) ? CATALOGO_KPI[id] : null;
+  if (!definicion) throw new Error(`Indicador desconocido: ${String(id)}`);
   const conocido = tiene(TEXTO_PERIODO, periodo) ? TEXTO_PERIODO[/** @type {'30d' | '7d' | 'mes'} */ (periodo)].etiqueta
     : tiene(ETIQUETAS_PERIODO, periodo) ? ETIQUETAS_PERIODO[/** @type {keyof typeof ETIQUETAS_PERIODO} */ (periodo)] : null;
   const texto = conocido ?? (typeof periodo === 'string' && periodo.trim() ? periodo.trim() : TEXTO_PERIODO[PERIODO_KPI].etiqueta);
@@ -1028,6 +1038,40 @@ export function lecturaDeFuente(llego, vuelta) {
   return { datos, cargando, error: cargando ? null : (llego?.error ?? null), marca: llego?.marca ?? null };
 }
 
+/** B4 T24 r1 (m11): los secretos de cada pasarela que GET /ecommerce/pagos/config no devuelve (manda `<campo>_masked`). */
+export const SECRETOS_PAGOS = Object.freeze({ stripe: Object.freeze(['secret_key']), mercadopago: Object.freeze(['access_token']) });
+
+/**
+ * B4 T24 r1 (m11): el cuerpo de PATCH /ecommerce/pagos/config a partir del formulario. update_payment_config MEZCLA cada pasarela sobre
+ * lo guardado: un secreto vacío (el GET no lo devuelve) borraría el guardado, y un `*_masked` se guardaría como un dato. Por eso: solo
+ * las pasarelas que el servidor conoce (stripe y mercadopago), sin los `*_masked` y sin los secretos vacíos (vacío = no cambiar). No
+ * muta lo que recibe.
+ * @param {Record<string, any> | null | undefined} config
+ * @returns {Record<string, Record<string, unknown>>}
+ */
+export function cuerpoConfigPagos(config) {
+  /** @type {Record<string, Record<string, unknown>>} */
+  const cuerpo = {};
+  for (const [pasarela, secretos] of Object.entries(SECRETOS_PAGOS)) {
+    const datos = config?.[pasarela];
+    if (!datos || typeof datos !== 'object') continue;
+    cuerpo[pasarela] = Object.fromEntries(Object.entries(datos).filter(([clave, valor]) => !clave.endsWith('_masked')
+      && !(secretos.includes(clave) && (typeof valor !== 'string' || !valor.trim()))));
+  }
+  return cuerpo;
+}
+
+/**
+ * B4 T24 (FINAL-m21): si un formulario cargado de una fuente (lecturaDeFuente) se puede guardar: solo con lo que LLEGÓ en la vuelta
+ * vigente, sin error. Mientras carga, si falló o si no llegaron datos, no: los valores por defecto del estado de la pantalla no son lo
+ * guardado (la configuración de pagos y envíos de E-Commerce; «Guardar Envíos» reemplaza todo el JSON, también las zonas).
+ * @param {{datos: unknown, cargando: boolean, error: unknown} | null | undefined} lectura
+ * @returns {boolean}
+ */
+export function fuenteGuardable(lectura) {
+  return Boolean(lectura) && !lectura.cargando && !lectura.error && lectura.datos !== null && lectura.datos !== undefined;
+}
+
 /**
  * B4 T22 r1 (m3, m11): el período del rótulo y del «vs …» de una tarjeta de dinero: el de los datos que se ven (`marca`), para
  * que el número viejo no lleve el rótulo del período nuevo; sin datos todavía, el elegido.
@@ -1039,18 +1083,8 @@ export function periodoVisto(marca, elegido) {
   return periodoDashboard(marca ?? elegido);
 }
 
-/**
- * B4 T22 r1 (m6): el aviso de una fuente caída, 'No se pudieron cargar las existencias: Error del servidor.', con un solo
- * punto al final aunque el mensaje ya lo traiga. Sin error, null.
- * @param {unknown} error
- * @param {string} texto
- * @returns {string | null}
- */
-export function textoAvisoFuente(error, texto) {
-  if (!error) return null;
-  const mensaje = textoDeError(error, texto);
-  return mensaje.endsWith('.') ? mensaje : `${mensaje}.`;
-}
+/** B4 T24 (F46): textoAvisoFuente vive en avisos.js (la usa avisoDeFuente); se reexporta (la misma función). */
+export { textoAvisoFuente };
 
 // ─── B4 T23A: las tarjetas de la tienda (KPI-otros punto 5; R7, R12, RP102) ──────────────────────────────────────
 

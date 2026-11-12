@@ -144,10 +144,15 @@ export function tiene(obj, clave) {
  */
 const ETIQUETAS_SIN_TABLA = congelar({ EN_GESTION: 'En gestión' });
 
-/** 'PENDIENTE_ALGO' -> 'Pendiente algo' (igual que etiqueta_estado del backend); null/undefined/'' -> ''. */
+/**
+ * 'PENDIENTE_ALGO' -> 'Pendiente algo' (igual que etiqueta_estado del backend); null/undefined/'' -> ''. B4 T24 f2 (F1): recorta
+ * ANTES de buscar el nombre con tilde (' EN_GESTION ' -> 'En gestión', no 'En gestion'): un solo lugar para los espejos
+ * (estados-cotizacion.js y estados-compras.js pasan el código tal cual).
+ */
 function humanizar(e) {
-  if (typeof e === 'string' && tiene(ETIQUETAS_SIN_TABLA, e)) return ETIQUETAS_SIN_TABLA[e];
-  const texto = e === null || e === undefined ? '' : String(e).trim().replace(/_/g, ' ').toLowerCase();
+  const codigo = e === null || e === undefined ? '' : String(e).trim();
+  if (tiene(ETIQUETAS_SIN_TABLA, codigo)) return ETIQUETAS_SIN_TABLA[codigo];
+  const texto = codigo.replace(/_/g, ' ').toLowerCase();
   return texto.charAt(0).toUpperCase() + texto.slice(1);
 }
 

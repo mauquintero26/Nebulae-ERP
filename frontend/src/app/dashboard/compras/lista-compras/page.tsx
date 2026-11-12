@@ -26,11 +26,10 @@ import { COMP_NAV } from '../comp-nav';
 import { CHIP, textoInstante } from '../columnas-pec';
 
 import { apiFetch } from '@/lib/api';
-import { accionModo, estadoDelTotal } from '@/lib/tabla';
+import { accionModo, accionVistaEnLista, estadoDelTotal } from '@/lib/tabla';
 import { tarjetasLista } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
-import { TABLE } from '@/lib/design-system';
-import { accionVistaEnLista } from '@/lib/listas-ventas';
+import { FOCOS, TABLE } from '@/lib/design-system';
 import {
   OPCIONES_ESTADOS_TABLERO_LISTA, COLUMNAS_LISTA, consultaLista, consultaTableroLista, avisoTope200, destinoItemLista,
   esItemSeleccionable, infoEstadoItemLista, opcionesEstadosLista, tarjetaItemLista, textoVacioLista,
@@ -67,9 +66,9 @@ const SIN_FILTROS: FiltrosLista = { proveedor: '', desde: '', hasta: '' };
 const TEXTO_SOLO_VER = 'Este tablero es para ver: pasa a En pedido al crear el pedido de compra y a Recibido con la recepción.';
 /** El contenedor de los Hubs y de las listas del bloque (T7 a T16A): pb-24 deja libre la esquina del botón de la IA. */
 const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
-const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-700';
+const FOCO_VISIBLE = FOCOS.purple;
 /** El foco sobre la barra oscura de la selección. */
-const FOCO_OSCURO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white';
+const FOCO_OSCURO = FOCOS.blanco;
 /** Las modalidades de pago del pedido de compra: [lo que se manda al servidor, lo que se ve]. */
 const MODALIDADES_PAGO = [['Contado', 'Contado'], ['Credito 30d', 'Crédito 30d'], ['Credito 60d', 'Crédito 60d'], ['Adelanto 50%', 'Adelanto 50%'], ['Contra entrega', 'Contra entrega']];
 /** m12: la barra dice los mismos ítems que usará «Crear Pedido de Compra»; si hay seleccionados que no entran, lo dice. */
@@ -193,7 +192,7 @@ function NewSupplierModal({ onSave, onClose }: { onSave: (s: Proveedor) => void;
     setSaving(false);
   }
   return (
-    <Modal title="Nuevo Proveedor" subtitle="Agregar a la agenda de proveedores" color="purple" capa="encima" onClose={onClose}
+    <Modal cierreExterno={false} title="Nuevo Proveedor" subtitle="Agregar a la agenda de proveedores" color="purple" capa="encima" onClose={onClose}
       footer={(
         <>
           <Button variant="secondary" onClick={onClose}>Cancelar</Button>
@@ -305,7 +304,7 @@ export default function ListaComprasPage() {
       return true;
     } catch (err) {
       avisarError(err, fallo);
-      // La regla única: con un 400, un 409 o sin respuesta (otro usuario ya cambió el ítem) se recarga lo que se ve; un 404 no.
+      // La regla única (recargarTrasError): con un 400, un 409, un 422 (F8) o sin respuesta (otro cambió el ítem) recarga; 404 o 500, no.
       if (recargarTrasError(err)) recargarTodo();
       return false;
     } finally {
@@ -608,10 +607,10 @@ export default function ListaComprasPage() {
                     {(verFechas || hayFechas) && (
                       <>
                         <input type="date" value={filtros.desde} onChange={(e) => cambiarFiltros({ desde: e.target.value })} aria-label="Desde"
-                          className={`rounded-xl border border-gray-200 px-3 py-2 text-xs shadow-sm outline-none ${FOCO_VISIBLE}`} />
+                          className={`rounded-xl border border-gray-200 px-3 py-2 text-xs shadow-sm ${FOCO_VISIBLE}`} />
                         <span aria-hidden="true" className="text-sm text-gray-500">→</span>
                         <input type="date" value={filtros.hasta} onChange={(e) => cambiarFiltros({ hasta: e.target.value })} aria-label="Hasta"
-                          className={`rounded-xl border border-gray-200 px-3 py-2 text-xs shadow-sm outline-none ${FOCO_VISIBLE}`} />
+                          className={`rounded-xl border border-gray-200 px-3 py-2 text-xs shadow-sm ${FOCO_VISIBLE}`} />
                         {hayFechas && (
                           <button type="button" onClick={() => cambiarFiltros({ desde: '', hasta: '' })}
                             className={`rounded text-xs font-bold text-red-700 hover:underline ${FOCO_VISIBLE}`}>Limpiar fechas</button>
@@ -686,7 +685,7 @@ export default function ListaComprasPage() {
 
       {/* Editar el proveedor de un ítem */}
       {editando && (
-        <Modal title="Editar proveedor" subtitle={editando.producto} color="purple" maxWidth="md" onClose={() => setEditando(null)}
+        <Modal cierreExterno={false} title="Editar proveedor" subtitle={editando.producto} color="purple" maxWidth="md" onClose={() => setEditando(null)}
           footer={(
             <>
               <Button variant="secondary" onClick={() => setEditando(null)}>Cancelar</Button>
@@ -702,7 +701,7 @@ export default function ListaComprasPage() {
 
       {/* Modal Crear PEC */}
       {showPecModal && pecModalItems.length > 0 && (
-        <Modal title="Crear Pedido de Compra" subtitle={`${pecModalItems.length} producto(s) seleccionado(s)`}
+        <Modal cierreExterno={false} title="Crear Pedido de Compra" subtitle={`${pecModalItems.length} producto(s) seleccionado(s)`}
           color="purple" maxWidth="md" onClose={() => setShowPecModal(false)}
           footer={(
             <>

@@ -307,7 +307,7 @@ export default function EmpleadosHub() {
 
       {/* Modal Nuevo Empleado */}
       {showModal && (
-        <Modal title="Registrar Nuevo Empleado" subtitle="Crea la credencial de acceso para el equipo" icon={UserPlus} color="indigo"
+        <Modal cierreExterno={false} title="Registrar Nuevo Empleado" subtitle="Crea la credencial de acceso para el equipo" icon={UserPlus} color="indigo"
           onClose={() => setShowModal(false)}
           footer={(
             <>

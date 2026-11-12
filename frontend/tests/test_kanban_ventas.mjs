@@ -367,6 +367,7 @@ console.log('--- TEST 10: COLUMNAS_PEDIDO: una por grupo y cada estado en una so
   assert.equal(de('EN_TRANSITO'), 'en_proceso');
   assert.equal(de('DEVUELTO_TOTAL'), 'cancelado');
   assert.deepEqual(agruparEnColumnas(codigos.map((estado) => ({ estado })), COLUMNAS_PEDIDO)[SIN_COLUMNA], []);
+  // B4 T24 (F26) y r2 (C8, D27): acentoDesdeClase con las claves de TONOS del tablero: Facturado vuelve a green (el color de BASE).
   assert.deepEqual(COLUMNAS_PEDIDO.map((c) => c.tono), ['orange', 'purple', 'teal', 'emerald', 'green', 'red'],
     'el color de ESTADOS_PEDIDO del estado clave');
 }
@@ -977,9 +978,12 @@ console.log('--- B4 T9 TEST L: el cableado del tablero de Cotizaciones (C15, RP1
   assert.equal(conRegla.motivo, 'Ábrela para enviar.');
   assert.equal(reglaSoltarCotizacion({ id: 4, estado: 'PENDIENTE_CONFIRMACION' }, 'esperando', 'borrador').motivo,
     'Ábrela para re-cotizar; te pedirá la razón.', 'C15(a)');
-  assert.match(codigo, /const tarjetaDeCOT = \(cot: FilaCOT\) => tarjetaCotizacion\(cot\);/);
-  // 'cambio': el PATCH del estado con el autor; el tablero recarga su origen y su destino, aquí las tarjetas y la franja.
-  assert.match(lista, /async function cambiarDesdeTablero\(cot: FilaCOT, resultado: \{ estado: string \}\) \{\s*await apiFetch\(`\/ventas\/cotizaciones\/\$\{cot\.id\}`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ estado: resultado\.estado, updated_by: autorActual\(\) \}\),\s*\}\);\s*recargarListado\(\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*\}/);
+  // B4 T24 f2 r1 (duda 2 + m15, D27): la tarjeta, con el rol leído después de montar (el bloque de r1 lo prueba por rol).
+  assert.match(codigo, /const tarjetaDeCOT = useCallback\(\(cot: FilaCOT\) => tarjetaCotizacion\(cot, \{ rol \}\), \[rol\]\);/);
+  // 'cambio': el PATCH del estado con el autor; el tablero recarga su origen y su destino, aquí las tarjetas y la franja. B4 T24 f2
+  // (FINAL-m9, D27): si el PATCH falla, también con la regla única recargarTrasError, y el error sigue (el tablero deshace).
+  // r1 (m28, D27): con el ayudante puro cambiarConRegla (avisos.js).
+  assert.match(lista, /async function cambiarDesdeTablero\(cot: FilaCOT, resultado: \{ estado: string \}\) \{\s*await cambiarConRegla\(\s*\(\) => apiFetch\(`\/ventas\/cotizaciones\/\$\{cot\.id\}`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ estado: resultado\.estado, updated_by: autorActual\(\) \}\),\s*\}\),\s*\(\) => \{ recargarListado\(\); setRecargaFlujo\(\(n\) => n \+ 1\); \},\s*\);\s*\}/);
   // 'rechazar': ModalMotivo → PATCH RECHAZADA y la nota «Motivo del rechazo: …» en la Actividad (N3); al terminar, del
   // tablero solo su origen y su destino (D39).
   assert.match(lista, /if \(resultado\.accion === 'rechazar'\) setRechazando\(\{ cot, columnas: \[origen, destino\] \}\);/);
@@ -992,11 +996,12 @@ console.log('--- B4 T9 TEST L: el cableado del tablero de Cotizaciones (C15, RP1
   // r1 (m1): si el PATCH falla, la regla única recargarTrasError (lib/avisos.js) decide si se recargan la lista, el origen
   // y el destino del tablero y la franja; el error sigue (throw) para que ModalMotivo lo muestre y conserve lo escrito.
   assert.match(rechazar, /try \{\s*await apiFetch\(`\/ventas\/cotizaciones\/\$\{cot\.id\}`, \{ method: 'PATCH', body: JSON\.stringify\(\{ estado: 'RECHAZADA', updated_by: autor \}\) \}\);\s*\} catch \(err\) \{\s*if \(recargarTrasError\(err\)\) \{\s*recargarListado\(\);\s*tablero\.recargar\(\[\.\.\.columnas\]\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*\}\s*throw err;\s*\}/);
-  assert.match(fuente, /import \{ recargarTrasError, textoDeError \} from '@\/lib\/avisos';/);
+  // B4 T24 f2 r1 (m28, D27): el import suma cambiarConRegla; recargarTrasError sigue (el rechazo con motivo).
+  assert.match(fuente, /import \{ cambiarConRegla, recargarTrasError, textoDeError \} from '@\/lib\/avisos';/);
   {
-    // La regla: un 400, un 409 o la red cortada recargan; un 422 o un 500 no.
+    // La regla: un 400, un 409, un 422 (B4 T24, F8; D27) o la red cortada recargan; un 500 no.
     const { recargarTrasError } = await import('../src/lib/avisos.js');
-    assert.deepEqual([400, 409, undefined, 422, 500].map((status) => recargarTrasError({ status })), [true, true, true, false, false]);
+    assert.deepEqual([400, 409, undefined, 422, 500].map((status) => recargarTrasError({ status })), [true, true, true, true, false]);
   }
   assert.match(lista, /<ModalMotivo\s+titulo=\{`Rechazar \$\{rechazando\.cot\.numero\}`\}[\s\S]*?onConfirmar=\{rechazarConMotivo\}\s+onCerrar=\{\(\) => setRechazando\(null\)\}/);
   // Al pasar a Kanban se sale de la pantalla completa; la barra no la ofrece en Kanban.
@@ -1103,16 +1108,21 @@ console.log('--- B4 T10 TEST M: opcionesEstadosPedidos — el filtro de estados 
   const sinPagado = kv.porEstadoVisto(visto1, enProceso, { EN_PROCESO: 4, EN_TRANSITO: 1, PARCIALMENTE_DISPONIBLE: 1 });
   assert.deepEqual(valores(sinPagado.porEstado), ['EN_PROCESO', 'EN_TRANSITO', 'PARCIALMENTE_DISPONIBLE']);
   assert.equal(kv.porEstadoVisto(visto0, enProceso, { ...completo }), visto0, 'la completa con lo mismo: la misma referencia');
-  // Otra vista, otra búsqueda u otro semáforo: empieza de nuevo, aunque la respuesta venga filtrada.
-  for (const otro of [{ vista: 'todos', estados: ['PAGADO'] }, { vista: 'en_proceso', q: 'ana', estados: ['PAGADO'] },
-    { vista: 'en_proceso', semaforo: 'atrasados', estados: ['PAGADO'] }]) {
+  // Otra búsqueda u otro semáforo: empieza de nuevo, aunque la respuesta venga filtrada. B4 T24 f2 (F30 a, D27): la vista ya no es
+  // parte de la clave (opcionesEstadosPedidos ya filtra por el grupo de la pestaña): al llegar a otra pestaña con un estado ya marcado,
+  // el panel conserva lo visto y suma lo nuevo (antes mostraba solo lo marcado hasta desmarcarlo).
+  for (const otro of [{ vista: 'en_proceso', q: 'ana', estados: ['PAGADO'] }, { vista: 'en_proceso', semaforo: 'atrasados', estados: ['PAGADO'] }]) {
     assert.deepEqual(Object.keys(kv.porEstadoVisto(visto1, estadoTablaInicial(otro), { PAGADO: 2 }).porEstado), ['PAGADO'], JSON.stringify(otro));
   }
-  // r3 (q1): otra vista con un estado marcado y una respuesta filtrada vacía: la clave nueva con {}, nunca lo visto en la
-  // otra vista.
-  const otraVacia = kv.porEstadoVisto(visto1, estadoTablaInicial({ vista: 'todos', estados: ['PAGADO'] }), {});
-  assert.notEqual(otraVacia, visto1, 'no devuelve lo de la otra vista');
-  assert.equal(otraVacia.clave, 'todos||');
+  assert.equal(kv.porEstadoVisto(visto1, estadoTablaInicial({ vista: 'todos', estados: ['PAGADO'] }), { PAGADO: 2 }), visto1,
+    'F30 a: otra pestaña con PAGADO marcado conserva lo visto (nada nuevo: la misma referencia)');
+  assert.deepEqual(valores(kv.porEstadoVisto(visto1, estadoTablaInicial({ vista: 'listo_entrega', estados: ['DISPONIBLE'] }), { DISPONIBLE: 1 }).porEstado),
+    ['EN_PROCESO', 'EN_TRANSITO', 'PAGADO', 'PARCIALMENTE_DISPONIBLE'], 'F30 a: suma lo de la otra pestaña sin perder lo visto');
+  // r3 (q1): otra búsqueda con un estado marcado y una respuesta filtrada vacía: la clave nueva con {}, nunca lo visto con la otra
+  // búsqueda (F30, D27: con una búsqueda, porque la vista ya no cambia la clave).
+  const otraVacia = kv.porEstadoVisto(visto1, estadoTablaInicial({ vista: 'todos', q: 'zzz', estados: ['PAGADO'] }), {});
+  assert.notEqual(otraVacia, visto1, 'no devuelve lo de la otra búsqueda');
+  assert.equal(otraVacia.clave, 'zzz|');
   assert.deepEqual(otraVacia.porEstado, {});
   // r3 (q2): la clave recorta la búsqueda, como dependenciasTablero y queryListado: «ana» y «ana » son la misma consulta.
   const conAna = kv.porEstadoVisto(null, estadoTablaInicial({ vista: 'en_proceso', q: 'ana' }), completo);
@@ -1120,13 +1130,235 @@ console.log('--- B4 T10 TEST M: opcionesEstadosPedidos — el filtro de estados 
     '«ana» y «ana »: la misma referencia');
   // La página, el orden y el filtro de estados no cambian lo visto.
   assert.equal(kv.porEstadoVisto(visto0, estadoTablaInicial({ vista: 'en_proceso', pagina: 3, orden: 'reciente', estados: ['EN_PROCESO'] }), { EN_PROCESO: 3 }), visto0);
-  // Sin respuesta vigente (cargando, recargando o con error): lo de la misma clave; de otra clave, nada todavía.
+  // Sin respuesta vigente (cargando, recargando o con error): lo de la misma clave. B4 T24 f2 (F30 b, D27): de otra clave, también lo
+  // previo, con SU clave vieja, hasta la primera respuesta de la nueva: una segunda acción durante el viaje al servidor (otra pestaña,
+  // el conmutador, una caja del flujo) poda con lo visto, no con la lista base, y no quita un heredado marcado.
   assert.equal(kv.porEstadoVisto(visto1, conPagado, null), visto1);
   assert.equal(kv.porEstadoVisto(null, enProceso, null), null);
-  assert.equal(kv.porEstadoVisto(visto1, estadoTablaInicial({ vista: 'todos' }), null).porEstado, null);
+  const enViaje = kv.porEstadoVisto(visto1, estadoTablaInicial({ vista: 'en_proceso', q: 'ana', estados: ['PAGADO'] }), null);
+  assert.equal(enViaje, visto1, 'F30 b: lo previo, con su clave vieja');
+  assert.ok(kv.opcionesEstadosPedidos('en_proceso', enViaje.porEstado).some((o) => o.valor === 'PAGADO'), 'F30 b: el heredado marcado no se poda');
+  // Y la primera respuesta de la clave nueva empieza de nuevo (la vieja no se mezcla con otra búsqueda).
+  assert.deepEqual(Object.keys(kv.porEstadoVisto(enViaje, estadoTablaInicial({ vista: 'en_proceso', q: 'ana' }), { EN_PROCESO: 1 }).porEstado), ['EN_PROCESO']);
   // Los conteos que no son positivos no cuentan; inmutable.
   assert.deepEqual(Object.keys(kv.porEstadoVisto(null, enProceso, { EN_PROCESO: 3, PAGADO: 0, DISPONIBLE: 'x' }).porEstado), ['EN_PROCESO']);
   assert.ok(Object.isFrozen(visto0) && Object.isFrozen(visto0.porEstado));
+}
+
+console.log('--- B4 T24 f2 (F2): «Listo para entrega» es una sola opción del filtro, que manda LISTO_ENTREGA y el heredado LISTO_PARA_ENTREGA ---');
+{
+  // LISTO_ENTREGA y el heredado LISTO_PARA_ENTREGA tienen la misma etiqueta y el mismo grupo: el usuario no los distingue. El filtro
+  // ofrece una sola opción (la de la lista) y la consulta manda las dos claves (estadosConsultaPedidos → extra.estados de useListado).
+  const conHeredado = { LISTO_PARA_ENTREGA: 2, LISTO_ENTREGA: 1, DISPONIBLE: 1 };
+  assert.deepEqual(kv.opcionesEstadosPedidos('listo_entrega', conHeredado).map((o) => [o.valor, o.etiqueta]),
+    [['LISTO_ENTREGA', 'Listo para entrega'], ['DISPONIBLE', 'Disponible']], 'una sola «Listo para entrega»');
+  assert.equal(kv.opcionesEstadosPedidos('listo_entrega', { LISTO_PARA_ENTREGA: 3 }), kv.opcionesEstadosPedidos('listo_entrega'),
+    'solo el equivalente: la lista base, la misma referencia');
+  // En ninguna pestaña salen dos opciones con la misma etiqueta, aunque los pedidos traigan los 18 estados.
+  const todos18 = Object.fromEntries(Object.keys(ESTADOS_PEDIDO).map((e) => [e, 1]));
+  for (const vista of ['todos', ...COLUMNAS_PEDIDO.map((c) => c.clave)]) {
+    const etiquetas = kv.opcionesEstadosPedidos(vista, todos18).map((o) => o.etiqueta);
+    assert.equal(new Set(etiquetas).size, etiquetas.length, `${vista}: sin etiquetas repetidas (${etiquetas.join(' | ')})`);
+  }
+  assert.ok(!kv.opcionesEstadosPedidos('todos', todos18).some((o) => o.valor === 'LISTO_PARA_ENTREGA'), 'el heredado no tiene opción propia');
+  // La consulta: la opción manda las dos claves; sin equivalentes que sumar, null (la consulta de siempre).
+  assert.equal(typeof kv.estadosConsultaPedidos, 'function', 'estadosConsultaPedidos existe');
+  assert.deepEqual(kv.estadosConsultaPedidos(['LISTO_ENTREGA']), ['LISTO_ENTREGA', 'LISTO_PARA_ENTREGA']);
+  assert.deepEqual(kv.estadosConsultaPedidos(['EN_PROCESO', 'LISTO_ENTREGA']), ['EN_PROCESO', 'LISTO_ENTREGA', 'LISTO_PARA_ENTREGA']);
+  for (const nada of [['EN_PROCESO'], ['LISTO_ENTREGA', 'LISTO_PARA_ENTREGA'], [], null, undefined, 'LISTO_ENTREGA', [5]]) {
+    assert.equal(kv.estadosConsultaPedidos(nada), null, JSON.stringify(nada));
+  }
+  // Un solo par: ningún otro estado de la lista tiene un heredado con su misma etiqueta.
+  for (const e of Object.keys(ESTADOS_PEDIDO).filter((x) => x !== 'LISTO_ENTREGA')) {
+    assert.equal(kv.estadosConsultaPedidos([e]), null, e);
+  }
+  // Lo que llega al servidor: estados en CSV (queryListado con extra.estados, D23: pisa los del estado).
+  const estado = estadoTablaInicial({ vista: 'listo_entrega', estados: ['LISTO_ENTREGA'] });
+  assert.match(queryListado(estado, { estados: kv.estadosConsultaPedidos(estado.estados) }), /estados=LISTO_ENTREGA,LISTO_PARA_ENTREGA/);
+  // La etiqueta sigue igual en la tabla y el tablero (la de estados-pedido.js).
+  assert.equal(infoEstadoPedido('LISTO_PARA_ENTREGA').label, infoEstadoPedido('LISTO_ENTREGA').label);
+  // El cableado: la Lista de Pedidos manda los equivalentes en extra (en Kanban, el limit=0 de siempre).
+  const venta = readFileSync(new URL('../src/app/dashboard/ventas/venta/venta-client.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(venta, /const estadosConsulta = useMemo\(\(\) => estadosConsultaPedidos\(estado\.estados\), \[estado\.estados\]\);\s*const extraDeLaLista = useMemo\(\(\) => \(estadosConsulta \? \{ estados: estadosConsulta \} : null\), \[estadosConsulta\]\);/);
+  assert.match(venta, /ruta: '\/ventas\/pedidos', estado, conConteos: true, esperar: !listo, despachar,\s*extra: enKanban \? EXTRA_TABLERO : extraDeLaLista,/);
+}
+
+console.log('--- B4 T24 f2 (F47): accionesTableroPedidos — las acciones del tablero de Pedidos y E-Commerce, ejecutadas con un apiFetch falso ---');
+{
+  assert.equal(typeof kv.accionesTableroPedidos, 'function', 'accionesTableroPedidos existe');
+  const conStatus = (status) => Object.assign(new Error(`error ${status}`), { status });
+  const sinRed = () => Object.assign(new TypeError('Failed to fetch'), {});
+  /** Un entorno con dobles: el apiFetch responde con `respuesta` (un Error se lanza) y todo lo demás se anota. */
+  const entorno = ({ respuesta = { status: 'success' }, confirma = true } = {}) => {
+    const notas = { peticiones: [], tablero: [], trasCambio: 0, avisos: [], errores: [], confirmaciones: [] };
+    const acciones = kv.accionesTableroPedidos({
+      apiFetch: async (ruta, opciones) => {
+        notas.peticiones.push([ruta, opciones?.method, JSON.parse(opciones?.body ?? 'null')]);
+        if (respuesta instanceof Error) throw respuesta;
+        return respuesta;
+      },
+      autor: () => 'Ana Asesora',
+      confirmar: async (o) => { notas.confirmaciones.push(o); return confirma; },
+      avisar: (texto, o) => notas.avisos.push([texto, o?.tono]),
+      avisarError: (err, prefijo) => notas.errores.push([err?.status ?? null, prefijo]),
+      recargarTablero: (columnas) => notas.tablero.push([...columnas]),
+      recargarTrasCambio: () => { notas.trasCambio += 1; },
+    });
+    return { acciones, notas };
+  };
+  const P = { id: 7, numero: 'PVEN-7', estado: 'EN_PROCESO' };
+  const FALLAS_QUE_RECARGAN = [conStatus(409), conStatus(400), conStatus(422), sinRed()];
+  const FALLAS_QUE_NO = [conStatus(500), conStatus(403)];
+
+  // cambiar (arrastre): PATCH con el autor; bien → lo demás se recarga (el tablero mueve la tarjeta y recarga su origen y su destino).
+  {
+    const { acciones, notas } = entorno();
+    await acciones.cambiar(P, 'LISTO_ENTREGA');
+    assert.deepEqual(notas.peticiones, [['/ventas/pedidos/7', 'PATCH', { estado: 'LISTO_ENTREGA', updated_by: 'Ana Asesora' }]]);
+    assert.equal(notas.trasCambio, 1);
+    assert.deepEqual(notas.tablero, [], 'D39: el arrastre no recarga el tablero a mano');
+  }
+  // Falla: el error sigue (el tablero deshace); un 409, un 400, un 422 o la red cortada recargan lo demás; un 500 o un 403, no.
+  for (const falla of [...FALLAS_QUE_RECARGAN, ...FALLAS_QUE_NO]) {
+    const { acciones, notas } = entorno({ respuesta: falla });
+    await assert.rejects(acciones.cambiar(P, 'LISTO_ENTREGA'), (e) => e === falla, `cambiar ${falla.status ?? 'red'}: el error sigue`);
+    assert.equal(notas.trasCambio, FALLAS_QUE_RECARGAN.includes(falla) ? 1 : 0, `cambiar ${falla.status ?? 'red'}`);
+    assert.deepEqual(notas.tablero, [], 'deshacer ya recarga el origen y el destino');
+  }
+
+  // facturar: primero confirma (confirmacionFacturarPedido); sin confirmar, no manda nada.
+  {
+    const { acciones, notas } = entorno({ confirma: false });
+    await acciones.facturar({ ...P, estado: 'ENTREGADO' }, ['entregado', 'facturado']);
+    assert.deepEqual(notas.confirmaciones, [kv.confirmacionFacturarPedido({ ...P, estado: 'ENTREGADO' })]);
+    assert.deepEqual(notas.peticiones, [], 'sin confirmar, ningún PATCH');
+    assert.equal(notas.trasCambio, 0);
+  }
+  {
+    const { acciones, notas } = entorno();
+    await acciones.facturar({ ...P, estado: 'ENTREGADO' }, ['entregado', 'facturado']);
+    assert.deepEqual(notas.peticiones, [['/ventas/pedidos/7', 'PATCH', { estado: 'FACTURADO', updated_by: 'Ana Asesora' }]]);
+    assert.deepEqual(notas.avisos, [['PVEN-7 quedó Facturado', 'ok']]);
+    assert.deepEqual(notas.tablero, [['entregado', 'facturado']], 'el origen y el destino');
+    assert.equal(notas.trasCambio, 1);
+  }
+  for (const falla of [...FALLAS_QUE_RECARGAN, ...FALLAS_QUE_NO]) {
+    const { acciones, notas } = entorno({ respuesta: falla });
+    await acciones.facturar({ ...P, estado: 'ENTREGADO' }, ['entregado', 'facturado']); // no lanza: avisa
+    assert.deepEqual(notas.errores, [[falla.status ?? null, 'No se pudo facturar PVEN-7']]);
+    assert.deepEqual(notas.avisos, []);
+    const recarga = FALLAS_QUE_RECARGAN.includes(falla);
+    assert.deepEqual(notas.tablero, recarga ? [['entregado', 'facturado']] : [], `facturar ${falla.status ?? 'red'}`);
+    assert.equal(notas.trasCambio, recarga ? 1 : 0);
+  }
+
+  // cancelar (ModalMotivo): PATCH CANCELADO con el motivo y quién autoriza; bien → aviso y el origen y el destino.
+  {
+    const { acciones, notas } = entorno();
+    await acciones.cancelar(P, 'El cliente desistió', ['en_proceso', 'cancelado']);
+    assert.deepEqual(notas.peticiones, [['/ventas/pedidos/7', 'PATCH', {
+      estado: 'CANCELADO', cancellation_reason: 'El cliente desistió', cancellation_authorized_by: 'Ana Asesora', updated_by: 'Ana Asesora',
+    }]]);
+    assert.deepEqual(notas.avisos, [['PVEN-7 cancelado', 'ok']]);
+    assert.deepEqual(notas.tablero, [['en_proceso', 'cancelado']]);
+    assert.equal(notas.trasCambio, 1);
+  }
+  // Falla: el error sigue (ModalMotivo lo muestra y conserva lo escrito); con la regla, el origen, el destino y lo demás.
+  for (const falla of [...FALLAS_QUE_RECARGAN, ...FALLAS_QUE_NO]) {
+    const { acciones, notas } = entorno({ respuesta: falla });
+    await assert.rejects(acciones.cancelar(P, 'El cliente desistió', ['en_proceso', 'cancelado']), (e) => e === falla);
+    const recarga = FALLAS_QUE_RECARGAN.includes(falla);
+    assert.deepEqual(notas.tablero, recarga ? [['en_proceso', 'cancelado']] : [], `cancelar ${falla.status ?? 'red'}`);
+    assert.equal(notas.trasCambio, recarga ? 1 : 0);
+    assert.deepEqual(notas.avisos, [], 'sin «cancelado» si falló');
+  }
+
+  // marcar («Marcar En tránsito / En proceso»): PATCH y, al terminar, la columna En proceso y lo demás.
+  {
+    const { acciones, notas } = entorno();
+    await acciones.marcar(P, 'EN_TRANSITO');
+    assert.deepEqual(notas.peticiones, [['/ventas/pedidos/7', 'PATCH', { estado: 'EN_TRANSITO', updated_by: 'Ana Asesora' }]]);
+    assert.deepEqual(notas.avisos, [['PVEN-7 pasó a En tránsito', 'ok']]);
+    assert.deepEqual(notas.tablero, [['en_proceso']]);
+    assert.equal(notas.trasCambio, 1);
+  }
+  for (const falla of [...FALLAS_QUE_RECARGAN, ...FALLAS_QUE_NO]) {
+    const { acciones, notas } = entorno({ respuesta: falla });
+    await acciones.marcar(P, 'EN_TRANSITO');
+    assert.deepEqual(notas.errores, [[falla.status ?? null, 'No se pudo cambiar el estado de PVEN-7']]);
+    const recarga = FALLAS_QUE_RECARGAN.includes(falla);
+    assert.deepEqual(notas.tablero, recarga ? [['en_proceso']] : [], `marcar ${falla.status ?? 'red'}`);
+    assert.equal(notas.trasCambio, recarga ? 1 : 0);
+  }
+
+  // El cableado: Pedidos de venta y E-Commerce usan el MISMO hook (useAccionesTableroPedidos), sin su copia de las funciones.
+  const sinComentarios = (t) => t.replace(/\r\n/g, '\n').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const hook = sinComentarios(readFileSync(new URL('../src/app/dashboard/ventas/acciones-tablero-pedidos.ts', import.meta.url), 'utf8'));
+  assert.match(hook, /export function useAccionesTableroPedidos</);
+  assert.match(hook, /accionesTableroPedidos\(\{\s*apiFetch, autor: autorActual, confirmar, avisar, avisarError, recargarTablero, recargarTrasCambio,\s*\}\)/);
+  assert.match(hook, /if \(resultado\.accion === 'cancelar'\) setCancelando\(\{ pedido: p, columnas: \[origen, destino\] \}\);\s*else if \(resultado\.accion === 'facturar'\) void acciones\.facturar\(p, \[origen, destino\]\);/);
+  assert.match(hook, /\(mover \? accionesTarjetaPedido\(p\) : \[\]\)\.map\(\(a\) => \(\{\s*etiqueta: a\.etiqueta, icono: a\.estado === 'EN_TRANSITO' \? Truck : Package, onClick: \(\) => \{ void acciones\.marcar\(p, a\.estado\); \},/);
+  const PANTALLAS = {
+    'ventas/venta/venta-client.tsx': /useAccionesTableroPedidos<FilaPedido>\(\{ tablero, recargarTrasCambio, mover: accesoTablero\.mover \}\)/,
+    'ecommerce/page.tsx': /useAccionesTableroPedidos<PedidoWeb>\(\{ tablero, recargarTrasCambio, mover: soloLectura === null \}\)/,
+  };
+  for (const [ruta, uso] of Object.entries(PANTALLAS)) {
+    const codigo = sinComentarios(readFileSync(new URL(`../src/app/dashboard/${ruta}`, import.meta.url), 'utf8'));
+    assert.match(codigo, uso, `${ruta}: usa el hook`);
+    for (const copia of ['async function cambiarDesdeTablero(', 'async function facturarDesdeTablero(', 'async function cancelarConMotivo(',
+      'const marcarDesdeTablero', 'function accionDesdeTablero(']) {
+      assert.ok(!codigo.includes(copia), `${ruta}: sin su copia de ${copia}`);
+    }
+    assert.match(codigo, /onCambio=\{cambiarDesdeTablero\}\s+onAccion=\{accionDesdeTablero\}\s+accionesTarjeta=\{accionesTarjeta\}/, `${ruta}: el tablero`);
+    assert.match(codigo, /onConfirmar=\{cancelarConMotivo\}\s+onCerrar=\{cerrarCancelacion\}/, `${ruta}: ModalMotivo`);
+  }
+}
+
+console.log('--- B4 T24 f2 (duda 3 de f1): en soloLectura, la acción principal de la tarjeta de un pedido queda en «Abrir», salvo la que el rol sí puede hacer ---');
+{
+  // r1 (m16, D27): la opción es `rol` y Pedidos la pasa SIEMPRE (no solo en solo lectura): ASESOR tampoco ve «Gestionar compra».
+  const p = (estado, saldo = 0) => ({ id: 9, numero: 'PVEN-9', estado, saldo_cop: saldo, total_cop: 1000 });
+  const accion = (fila, rol) => kv.tarjetaPedido(fila, { ahora: 0, rol }).accionPrincipal?.texto ?? null;
+  // Sin rol (sin pasar), la de siempre.
+  for (const [fila, texto] of [[p('ENTREGADO'), 'Facturar'], [p('LISTO_ENTREGA', 500), 'Cobrar saldo'], [p('PENDIENTE_COMPRA'), 'Gestionar compra'],
+    [p('LISTO_ENTREGA'), 'Despachar'], [p('EN_PROCESO'), 'Ver pedido']]) {
+    assert.equal(kv.tarjetaPedido(fila, { ahora: 0 }).accionPrincipal?.texto, texto, texto);
+    assert.equal(accion(fila, undefined), texto, `${texto} sin rol`);
+    assert.equal(accion(fila, 'ADMIN'), texto, `${texto} con ADMIN`);
+  }
+  // ASESOR (m16): factura, cobra y despacha, pero no gestiona la compra (create_pec: ADMIN y COMPRAS).
+  assert.equal(accion(p('PENDIENTE_COMPRA'), 'ASESOR'), null, 'ASESOR: «Abrir» en lugar de «Gestionar compra»');
+  for (const [fila, texto] of [[p('ENTREGADO'), 'Facturar'], [p('LISTO_ENTREGA', 500), 'Cobrar saldo'], [p('LISTO_ENTREGA'), 'Despachar']]) {
+    assert.equal(accion(fila, 'ASESOR'), texto, `ASESOR ${texto}`);
+  }
+  // Mientras se lee el rol (''): sin acción.
+  assert.equal(accion(p('ENTREGADO'), ''), null, 'sin rol leído todavía');
+  // FINANZAS: cobra el saldo (crear-pxp), no factura ni gestiona la compra ni despacha.
+  assert.equal(accion(p('LISTO_ENTREGA', 500), 'FINANZAS'), 'Cobrar saldo');
+  assert.equal(accion(p('ENTREGADO'), 'FINANZAS'), null, 'FINANZAS no factura: queda «Abrir»');
+  assert.equal(accion(p('PENDIENTE_COMPRA'), 'FINANZAS'), null);
+  assert.equal(accion(p('LISTO_ENTREGA'), 'FINANZAS'), null);
+  // COMPRAS: gestiona la compra (create_pec); BODEGA: despacha en Entregas; CONSULTA: ninguna.
+  assert.equal(accion(p('PENDIENTE_COMPRA'), 'COMPRAS'), 'Gestionar compra');
+  assert.equal(accion(p('ENTREGADO'), 'COMPRAS'), null);
+  assert.equal(accion(p('LISTO_ENTREGA'), 'BODEGA'), 'Despachar');
+  assert.equal(accion(p('ENTREGADO'), 'BODEGA'), null, 'BODEGA solo pone ENTREGADO: no factura');
+  for (const fila of [p('ENTREGADO'), p('LISTO_ENTREGA', 500), p('PENDIENTE_COMPRA'), p('LISTO_ENTREGA')]) {
+    assert.equal(accion(fila, 'CONSULTA'), null, `CONSULTA ${fila.estado}`);
+  }
+  // «Ver pedido» es abrir el pedido (GET, todos): se queda para cualquier rol.
+  for (const rol of ['FINANZAS', 'COMPRAS', 'BODEGA', 'CONSULTA']) assert.equal(accion(p('EN_PROCESO'), rol), 'Ver pedido', rol);
+  // Lo demás de la tarjeta no cambia.
+  const conAccion = kv.tarjetaPedido(p('ENTREGADO'), { ahora: 0 });
+  const sinAccion = kv.tarjetaPedido(p('ENTREGADO'), { ahora: 0, rol: 'CONSULTA' });
+  assert.deepEqual({ ...sinAccion, accionPrincipal: conAccion.accionPrincipal }, conAccion);
+  // E-Commerce sigue como estaba (su soloLectura quita la acción a todos los roles que no mueven).
+  assert.equal(kv.tarjetaPedidoWeb(p('LISTO_ENTREGA', 500), { ahora: 0, soloLectura: true }).accionPrincipal, null);
+  // El cableado (r1, m16): Pedidos de venta pasa SIEMPRE el rol leído después de montar.
+  const venta = readFileSync(new URL('../src/app/dashboard/ventas/venta/venta-client.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(venta, /const rol = useRolActual\(\);\s*const accesoTablero = accesoTableroVentas\(rol\);/);
+  assert.match(venta, /const tarjetaDePedido = useCallback\(\(p: FilaPedido\) => tarjetaPedido\(p, \{ rol \}\), \[rol\]\);/);
+  assert.match(venta, /tarjetaDe=\{tarjetaDePedido\}/);
 }
 
 console.log('--- B4 T10 TEST N: consultaColumnaPedido — la consulta de cada columna del tablero de Pedidos ---');
@@ -1161,6 +1393,86 @@ console.log('--- B4 T10 TEST N: consultaColumnaPedido — la consulta de cada co
   // Las de Solicitudes y Cotizaciones no cambian.
   assert.equal(params(kv.consultaColumnaCOT(estado, COLUMNAS_COT[0], { orden: 'atencion', limit: 25, offset: 0 })).vista, 'todas');
   assert.equal(params(kv.consultaColumnaSC(estado, COLUMNAS_SC[0], { orden: 'atencion', limit: 25, offset: 0 })).vista, 'todas_sin_soporte');
+}
+
+console.log('--- B4 T24 f2 (F24, F25): el motivo de un pedido entregado en parte y la etiqueta de un estado que no es de pedido ---');
+{
+  // F24: un pedido PARCIALMENTE_ENTREGADO que se suelta en «Entregado» ya no recibe «Se despacha desde Entregas…»: en Entregas está en
+  // «Despachados», donde todo movimiento queda bloqueado. Su entrega se completa desde el pedido («Abrir pedido»).
+  const parcial = reglaSoltarPedido({ id: 5, estado: 'PARCIALMENTE_ENTREGADO' }, 'listo_entrega', 'entregado');
+  assert.deepEqual(parcial, {
+    tipo: 'bloqueado', motivo: 'Está entregado en parte: la entrega se completa desde el pedido.',
+    enlace: { texto: 'Abrir pedido', href: enlaceDocumento('PVEN', 5, { returnTo: kv.RUTA_LISTA_PEDIDOS }) },
+  });
+  // Los demás de Listo para entrega siguen yendo a Entregas.
+  for (const estado of ['LISTO_ENTREGA', 'LISTO_PARA_ENTREGA', 'DISPONIBLE', 'PENDIENTE_SALDO']) {
+    const r = reglaSoltarPedido({ id: 6, estado }, 'listo_entrega', 'entregado');
+    assert.equal(r.enlace?.texto, 'Ir a Entregas', estado);
+  }
+  // F25: un destino que no es de pedido se nombra como el backend (_nombre_de_estado: VEN, después COT y después SC), con tilde.
+  assert.equal(kv.motivoTransicionPedido('EN_PROCESO', 'PENDIENTE_CONFIRMACION'),
+    '«Esperando confirmación del cliente» no es un estado válido para un Pedido de Venta.', 'la etiqueta de la COT (antes, «Pendiente confirmacion»)');
+  assert.equal(kv.motivoTransicionPedido('EN_PROCESO', 'VENCIDA'), '«Vencida» no es un estado válido para un Pedido de Venta.');
+  assert.equal(kv.motivoTransicionPedido('EN_PROCESO', 'ASIGNADA'), '«Asignada» no es un estado válido para un Pedido de Venta.', 'la de la SC');
+  assert.equal(kv.motivoTransicionPedido('EN_PROCESO', 'CANCELADA'), '«Cancelada» no es un estado válido para un Pedido de Venta.');
+  assert.equal(kv.motivoTransicionPedido('EN_PROCESO', ' PENDIENTE_CONFIRMACION '),
+    '«Esperando confirmación del cliente» no es un estado válido para un Pedido de Venta.', 'recortado, como el backend');
+  // Uno de pedido que no se pone por PATCH lleva la etiqueta del pedido (VEN primero); uno desconocido, humanizado.
+  assert.equal(kv.motivoTransicionPedido('EN_PROCESO', 'PENDIENTE_SALDO'), '«Pendiente de saldo» no es un estado válido para un Pedido de Venta.');
+  assert.equal(kv.motivoTransicionPedido('EN_PROCESO', 'ALGO_NUEVO'), '«Algo nuevo» no es un estado válido para un Pedido de Venta.');
+}
+
+console.log('--- B4 T24 f2 (F27, F28): una sola copia de tipoDocumento y de las rutas de Entregas y Recepciones; tienePreciosCot ---');
+{
+  const hv = await import('../src/lib/hub-ventas.js');
+  const leer = (ruta) => readFileSync(new URL(`../src/lib/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // F27: tipoDocumento vive en hub-ventas.js (exportada) y kanban-ventas.js la importa: sin su copia.
+  assert.equal(typeof hv.tipoDocumento, 'function');
+  for (const [t, e] of [['SC', 'SC'], ['COT', 'COT'], ['VEN', 'VEN'], ['PVEN', 'VEN']]) assert.equal(hv.tipoDocumento(t), e, t);
+  for (const malo of ['X', '', null, undefined, 'constructor']) assert.throws(() => hv.tipoDocumento(malo), /Tipo de documento no válido/);
+  const kanban = leer('kanban-ventas.js');
+  assert.match(kanban, /import \{[^}]*\btipoDocumento\b[^}]*\} from '\.\/hub-ventas\.js';/);
+  assert.ok(!/const TIPO_DOCUMENTO\b|function tipoDocumento\(/.test(kanban), 'kanban-ventas.js sin la copia');
+  assert.equal(kv.estadoDeTarjeta('PVEN', 'EN_PROCESO').label, 'En proceso', 'la tarjeta sigue aceptando PVEN');
+  assert.throws(() => kv.estadoDeTarjeta('X', 'EN_PROCESO'), /Tipo de documento no válido/);
+  // La ruta de Entregas: una sola (RUTA_ENTREGAS de hub-ventas.js, la de «Despachar»); el enlace del tablero (ENLACE_ENTREGAS) y
+  // entregas.js la importan. La de Recepciones: el enlace de estados-compras.js (ENLACE_RECEPCIONES), que transito.js importa.
+  assert.equal(hv.RUTA_ENTREGAS, '/dashboard/inventario/entregas');
+  assert.deepEqual(kv.ENLACE_ENTREGAS, { texto: 'Ir a Entregas', href: hv.RUTA_ENTREGAS });
+  const compras = await import('../src/lib/estados-compras.js');
+  assert.deepEqual(compras.ENLACE_RECEPCIONES, { texto: 'Ir a Recepciones', href: '/dashboard/compras/recepciones' });
+  assert.match(leer('entregas.js'), /import \{[^}]*\bRUTA_ENTREGAS\b[^}]*\} from '\.\/hub-ventas\.js';/);
+  assert.match(leer('transito.js'), /import \{[^}]*\bENLACE_RECEPCIONES\b[^}]*\} from '\.\/estados-compras\.js';/);
+  for (const ruta of ['kanban-ventas.js', 'entregas.js']) assert.ok(!leer(ruta).includes("'/dashboard/inventario/entregas'"), `${ruta}: sin la ruta a mano`);
+  // r1 (m7): el panel rápido del Hub también usa RUTA_ENTREGAS («Despachar en Entregas →»).
+  const paginaHub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8');
+  assert.ok(!paginaHub.includes('/dashboard/inventario/entregas'), 'el Hub sin la ruta a mano');
+  assert.match(paginaHub, /<Link href=\{RUTA_ENTREGAS\}/);
+  assert.match(paginaHub, /import \{[^}]*\bRUTA_ENTREGAS\b[^}]*\} from '@\/lib\/hub-ventas';/);
+  assert.ok(!/const ENLACE_RECEPCIONES/.test(leer('transito.js')), 'transito.js sin su copia del enlace');
+  const transito = await import('../src/lib/transito.js');
+  assert.ok(transito, 'transito.js carga con el import nuevo');
+  // F28: tienePreciosCot, el predicado que usan accionSiguienteCOT («Completar precios») y el bloqueo de enviar del tablero: la regla ya
+  // no está atada al texto visible.
+  assert.equal(typeof hv.tienePreciosCot, 'function');
+  for (const [total, esperado] of [[1, true], [0, false], [-5, false], [null, false], ['abc', false], ['1200', true], [undefined, false]]) {
+    assert.equal(hv.tienePreciosCot({ total_cop: total }), esperado, String(total));
+  }
+  assert.equal(hv.tienePreciosCot(null), false);
+  for (const estado of ['BORRADOR', 'VENCIDA', 'ENVIADA']) {
+    for (const total of [0, 100, null]) {
+      const cot = { id: 3, estado, total_cop: total };
+      assert.equal(hv.accionSiguienteCOT(cot).texto === 'Completar precios', !hv.tienePreciosCot(cot), `${estado} ${total}`);
+    }
+  }
+  assert.ok(!kanban.includes("=== 'Completar precios'"), 'kanban-ventas.js no compara el texto de la interfaz');
+  assert.match(kanban, /\|\| !tienePreciosCot\(cot\)/);
+  // La regla del tablero no cambia: sin precios, «Calcula los precios antes de enviarla.»; con precios y productos, se envía.
+  const conProductos = { productos: [{ sku: 'A' }] };
+  assert.equal(reglaSoltarCotizacion({ id: 4, estado: 'BORRADOR', total_cop: 0, ...conProductos }, 'borrador', 'esperando', { puedeEnviar: true }).motivo,
+    'Calcula los precios antes de enviarla.');
+  assert.deepEqual(reglaSoltarCotizacion({ id: 4, estado: 'BORRADOR', total_cop: 10, ...conProductos }, 'borrador', 'esperando', { puedeEnviar: true }),
+    { tipo: 'accion', accion: 'enviar' });
 }
 
 console.log('--- B4 T10 TEST O: tarjetaPedido — la tarjeta del tablero de Pedidos (y el chip del saldo de la tabla) ---');
@@ -1268,8 +1580,9 @@ console.log('--- B4 T10 TEST P: las acciones del tablero de Pedidos — mover de
   });
   assert.equal(kv.confirmacionFacturarPedido({ numero: '  ' }).titulo, 'Marcar como Facturado');
   assert.equal(kv.confirmacionFacturarPedido(null).titulo, 'Marcar como Facturado');
+  // B4 T24 f2 (F53, D27): el panel rápido del Hub ya no escribe el texto: usa la MISMA confirmacionFacturarPedido.
   const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8');
-  assert.ok(hub.includes(`mensaje: '${kv.confirmacionFacturarPedido({}).mensaje}'`), 'el mismo texto del panel rápido del Hub');
+  assert.ok(hub.includes('confirmar(confirmacionFacturarPedido(doc))'), 'el mismo texto del panel rápido del Hub');
 
   // cancelar (H45, H46): los efectos del ModalMotivo. Las frases del modal del detalle salen de aquí (una sola fuente):
   // la cotización que vuelve a Borrador, el saldo a favor y la orden de pago. El detalle trae `pagos` y `pxps`; la fila
@@ -1320,35 +1633,20 @@ console.log('--- B4 T10 TEST Q: el cableado del tablero de Pedidos (C9, C15, R11
   // RP8: ni estado= en CSV ni search= en ninguna consulta de la lista.
   assert.ok(!/[?&]estado=|search=/.test(codigo), 'RP8');
   assert.match(lista, /<TableroKanban\s+tablero=\{tablero\}\s+regla=\{reglaSoltarPedido\}\s+tarjetaDe=\{tarjetaDePedido\}\s+onAbrir=\{abrirPedido\}\s+onCambio=\{cambiarDesdeTablero\}\s+onAccion=\{accionDesdeTablero\}\s+accionesTarjeta=\{accionesTarjeta\}\s+resumenColumna=\{resumenColumna\}/);
-  assert.match(codigo, /const tarjetaDePedido = \(p: FilaPedido\) => tarjetaPedido\(p\);/);
+  // B4 T24 f2 (duda 3 de f1, D27): la tarjeta lleva el rol cuando el tablero es de solo lectura (bloque «duda 3»).
+  // r1 (m16, D27): con el rol siempre.
+  assert.match(codigo, /const tarjetaDePedido = useCallback\(\(p: FilaPedido\) => tarjetaPedido\(p, \{ rol \}\), \[rol\]\);/);
   // C9: la suma de cada columna es el resumen de H47 de su consulta (resumenColumnaPedido; Cancelado no).
   assert.match(lista, /\(clave: string, d: DatosColumnaKanban<FilaPedido>\) => resumenColumnaPedido\(clave, d\.resumen\)/);
-  // 'cambio': el PATCH del estado con el autor; el tablero recarga su origen y su destino, aquí lo demás. r1 (m4): si el
-  // PATCH falla, también se recarga lo demás con la regla de recargarTrasError (un 409: el pedido cambió en otro lado) y
-  // el error sigue (el tablero deshace y recarga su origen y su destino, D39: aquí no se llama a tablero.recargar).
-  assert.match(lista, /async function cambiarDesdeTablero\(p: FilaPedido, resultado: \{ estado: string \}\) \{\s*try \{\s*await apiFetch\(`\/ventas\/pedidos\/\$\{p\.id\}`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ estado: resultado\.estado, updated_by: autorActual\(\) \}\),\s*\}\);\s*\} catch \(err\) \{\s*if \(recargarTrasError\(err\)\) recargarTrasCambio\(\);\s*throw err;\s*\}\s*recargarTrasCambio\(\);\s*\}/);
-  {
-    const cambiar = lista.slice(lista.indexOf('async function cambiarDesdeTablero('), lista.indexOf('\n  }\n', lista.indexOf('async function cambiarDesdeTablero(')));
-    assert.ok(cambiar.length > 100 && !cambiar.includes('tablero.recargar'), 'el arrastre no recarga el tablero a mano (lo hace deshacer)');
-  }
-  // 'facturar' (N2): confirmar() con confirmacionFacturarPedido → PATCH FACTURADO; 'cancelar': ModalMotivo.
-  assert.match(lista, /if \(resultado\.accion === 'cancelar'\) setCancelando\(\{ pedido: p, columnas: \[origen, destino\] \}\);\s*else if \(resultado\.accion === 'facturar'\) void facturarDesdeTablero\(p, \[origen, destino\]\);/);
-  const facturar = lista.slice(lista.indexOf('async function facturarDesdeTablero('), lista.indexOf('\n  }\n', lista.indexOf('async function facturarDesdeTablero(')));
-  assert.match(facturar, /if \(!\(await confirmar\(confirmacionFacturarPedido\(p\)\)\)\) return;/);
-  assert.ok(facturar.indexOf('confirmar(') < facturar.indexOf("estado: 'FACTURADO'"), 'primero confirma');
-  assert.match(facturar, /if \(!recargarTrasError\(err\)\) return;\s*\}\s*tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*$/);
-  // 'cancelar' (N2, H45, H46): PATCH CANCELADO con el motivo; si falla, recargarTrasError y el error sigue (ModalMotivo lo
-  // muestra y conserva lo escrito); al terminar, solo el origen y el destino del tablero (D39).
-  const cancelar = lista.slice(lista.indexOf('async function cancelarConMotivo('), lista.indexOf('\n  }\n', lista.indexOf('async function cancelarConMotivo(')));
-  assert.match(cancelar, /JSON\.stringify\(\{ estado: 'CANCELADO', cancellation_reason: motivo, cancellation_authorized_by: autor, updated_by: autor \}\)/);
-  assert.match(cancelar, /\} catch \(err\) \{\s*if \(recargarTrasError\(err\)\) \{\s*tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*\}\s*throw err;\s*\}/);
-  assert.match(cancelar, /tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*$/);
-  assert.match(lista, /<ModalMotivo\s+titulo=\{`Cancelar \$\{cancelando\.pedido\.numero\}`\}\s+efectos=\{efectosCancelarPedido\(cancelando\.pedido\)\}[\s\S]*?onConfirmar=\{cancelarConMotivo\}\s+onCerrar=\{\(\) => setCancelando\(null\)\}/);
-  // accionesTarjeta: accionesTarjetaPedido; al terminar, la columna En proceso y lo que mueve el cambio.
-  assert.match(lista, /accionesTarjetaPedido\(p\)\.map\(\(a\) => \(\{\s*etiqueta: a\.etiqueta, [^\n]*onClick: \(\) => \{ void marcarDesdeTablero\(p, a\.estado\); \},/);
-  const marcar = lista.slice(lista.indexOf('const marcarDesdeTablero'), lista.indexOf('\n  }, [', lista.indexOf('const marcarDesdeTablero')));
-  assert.match(marcar, /JSON\.stringify\(\{ estado: nuevo, updated_by: autorActual\(\) \}\)/);
-  assert.match(marcar, /if \(!recargarTrasError\(err\)\) return;\s*\}\s*recargarTablero\(\['en_proceso'\]\);\s*recargarTrasCambio\(\);\s*$/);
+  // B4 T24 f2 (F47, D27): 'cambio', 'facturar' (confirmar con confirmacionFacturarPedido antes del PATCH), 'cancelar' (ModalMotivo) y
+  // «Marcar En tránsito / En proceso» ya no son funciones de la pantalla: son accionesTableroPedidos (lib/kanban-ventas.js), que el
+  // bloque «B4 T24 f2 (F47)» EJECUTA con un apiFetch falso (el PATCH y su cuerpo, el aviso, la regla recargarTrasError con 409, 400,
+  // 422, la red cortada, 403 y 500, el error que sigue y qué columnas del tablero se recargan: D39). Aquí, el cableado: el hook, y solo
+  // quien mueve (accesoTablero.mover) ve las acciones del ⋯ (FINAL-m38).
+  assert.match(lista, /const \{\s*cambiarDesdeTablero, accionDesdeTablero, accionesTarjeta, cancelando, cancelarConMotivo, cerrarCancelacion,\s*\} = useAccionesTableroPedidos<FilaPedido>\(\{ tablero, recargarTrasCambio, mover: accesoTablero\.mover \}\);/);
+  assert.match(lista, /<ModalMotivo\s+titulo=\{`Cancelar \$\{cancelando\.pedido\.numero\}`\}\s+efectos=\{efectosCancelarPedido\(cancelando\.pedido\)\}[\s\S]*?onConfirmar=\{cancelarConMotivo\}\s+onCerrar=\{cerrarCancelacion\}/);
+  assert.match(lista, /const recargarTrasCambio = useCallback\(\(\) => \{\s*recargarListado\(\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*setVueltaStats\(\(n\) => n \+ 1\);\s*\}, \[recargarListado\]\);/,
+    'lo que mueve un cambio: las pestañas, la franja y las tarjetas (del tablero, solo el origen y el destino)');
   // La regla del tablero (T3C) da 'facturar' y 'cancelar', las dos que maneja la pantalla, y bloquea Entregado.
   assert.deepEqual(reglaSoltarPedido({ id: 1, estado: 'ENTREGADO' }, 'entregado', 'facturado'), { tipo: 'accion', accion: 'facturar' });
   assert.deepEqual(reglaSoltarPedido({ id: 1, estado: 'EN_PROCESO' }, 'en_proceso', 'cancelado'), { tipo: 'accion', accion: 'cancelar' });
@@ -1496,7 +1794,17 @@ console.log('--- B4 T23A TEST S: el cableado del tablero y del filtro de los ped
   // El conmutador poda los estados con las opciones del modo nuevo (accionModo).
   assert.match(pantalla, /despacharPedidos\(accionModo\(estadoPedidos, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_PEDIDO : OPCIONES_ESTADOS_PEDIDOS_WEB\)\);/);
   // La lista pide GET /ecommerce/pedidos con el estado, esperando las preferencias, y solo en su pestaña y fuera de Kanban.
-  assert.match(pantalla, /useListado<PedidoWeb>\(\{\s*ruta: RUTA_PEDIDOS_WEB, estado: estadoPedidos, esperar: !listoPedidos, despachar: despacharPedidos, activo: panelActivo && !enKanban && acceso\.pedidos,\s*\}\);/);
+  // B4 T24 (F104, D27): mientras el rol no se conoce (acceso.listo false) la tabla espera (el esqueleto), no «Sin pedidos web».
+  assert.match(pantalla, /useListado<PedidoWeb>\(\{\s*ruta: RUTA_PEDIDOS_WEB, estado: estadoPedidos, esperar: !listoPedidos \|\| !acceso\.listo, despachar: despacharPedidos,\s*activo: panelActivo && !enKanban && \(acceso\.pedidos \|\| !acceso\.listo\),\s*\}\);/);
+  // F104: con rol '' la franja está en 'cargando' y la caja de carritos en esqueleto (nunca vacías ni «—» falsos); el catálogo no
+  // depende del rol (GET /catalogo no tiene guardia): accesoTienda ya no lleva `catalogo`.
+  assert.match(pantalla, /\{\(acceso\.indicadores \|\| !acceso\.listo\) && \(/);
+  assert.match(pantalla, /<FranjaKpis estado=\{acceso\.listo \? estadoFranjaDeFuente\(avisoStats, estadoStats\) : 'cargando'\} titulo="Indicadores de la tienda">/);
+  assert.match(pantalla, /\{\(acceso\.carritos \|\| !acceso\.listo\) && \(/);
+  assert.match(pantalla, /const faseCaja = acceso\.listo \? faseCarritos : 'cargando';\s*const estadoCaja = acceso\.listo \? estadoCarritos : 'cargando';/);
+  assert.match(pantalla, /<Contador valor=\{carritos === null \? null : carritos\.length\} estado=\{estadoCaja\} \/>/);
+  for (const fase of ['cargando', 'error', 'vacio', 'filas']) assert.ok(pantalla.includes(`{faseCaja === '${fase}'`), fase);
+  assert.ok(!/acceso\.catalogo/.test(pantalla));
   // El tablero en modo servidor con el MISMO id y estado (RP26, D39): consultaColumnaPedido y el orden de las columnas (reciente:
   // 'atencion' es de Ventas y daría 422 en /ecommerce/pedidos).
   assert.match(pantalla, /pantalla: ID_PEDIDOS_WEB,\s*modo: 'servidor',\s*columnas: COLUMNAS_PEDIDO,\s*activo: listoPedidos && enKanban && panelActivo && acceso\.pedidos,\s*porColumna: estadoPedidos\.tamano,\s*dependencias: dependenciasTablero\(estadoPedidos\),\s*ordenDe: ordenPorDefecto,/);
@@ -1518,7 +1826,8 @@ console.log('--- B4 T23A TEST S: el cableado del tablero y del filtro de los ped
   assert.match(codigo, /\{!filtrado && acceso\.editarCatalogo && \(/);
   // RP8: ni estado= ni search= en ninguna consulta de los pedidos web.
   assert.ok(!/search=|pedidos\?(?:[^`'"]*&)?estado=|\$\{RUTA_PEDIDOS_WEB\}\?(?:[^`'"]*&)?estado=/.test(codigo), 'RP8');
-  assert.match(codigo, /const tarjetaDeWeb = useCallback\(\(p: PedidoWeb\) => tarjetaPedidoWeb\(p, \{ soloLectura: soloLectura !== null \}\), \[soloLectura\]\);/);
+  // B4 T24 f2 r1 (duda 2, D27): con el rol (ASESOR no gestiona la compra); el soloLectura de siempre.
+  assert.match(codigo, /const tarjetaDeWeb = useCallback\(\(p: PedidoWeb\) => tarjetaPedidoWeb\(p, \{ soloLectura: soloLectura !== null, rol \}\), \[soloLectura, rol\]\);/);
   // El rol se lee DESPUÉS de montar (useSyncExternalStore: '' en el servidor y en la hidratación), una sola vez, nunca en un inicializador.
   assert.match(pantalla, /const rol = useRolActual\(\);\s*const acceso = accesoTienda\(rol\);\s*const soloLectura = soloLecturaPedidosWeb\(rol\);/);
   assert.equal((codigo.match(/getUsuarioActual\(\)\.role/g) || []).length, 0, 'el rol se lee en un solo lugar: useRolActual');
@@ -1526,33 +1835,20 @@ console.log('--- B4 T23A TEST S: el cableado del tablero y del filtro de los ped
   assert.ok(!/esAdminOAsesor|'ADMIN'|'ASESOR'|'VENDEDOR'/.test(codigo), 'el permiso lo decide soloLecturaPedidosWeb (RP62), no la pantalla');
   // El tablero: las mismas reglas de los pedidos de venta y, sin permiso, solo para ver con su motivo; sus acciones de tarjeta
   // (que son PATCH) tampoco se ofrecen a un rol que no mueve pedidos.
-  assert.match(pantalla, /<TableroKanban\s+tablero=\{tablero\}\s+regla=\{reglaSoltarPedido\}\s+tarjetaDe=\{tarjetaDeWeb\}\s+onAbrir=\{abrirPedido\}\s+onCambio=\{cambiarDesdeTablero\}\s+onAccion=\{accionDesdeTablero\}\s+accionesTarjeta=\{accionesTarjeta\}\s+soloLectura=\{soloLectura\}/);
-  assert.match(pantalla, /const accionesTarjeta = useCallback\(\(p: PedidoWeb\): ItemMenuFila\[\] => \(soloLectura \? \[\] : accionesTarjetaPedido\(p\)\.map\(/);
+  // B4 T24 f2 r1 (m3, D27): la regla de los pedidos de venta con el return_to de E-Commerce (reglaSoltarPedidoWeb).
+  assert.match(pantalla, /<TableroKanban\s+tablero=\{tablero\}\s+regla=\{reglaSoltarPedidoWeb\}\s+tarjetaDe=\{tarjetaDeWeb\}\s+onAbrir=\{abrirPedido\}\s+onCambio=\{cambiarDesdeTablero\}\s+onAccion=\{accionDesdeTablero\}\s+accionesTarjeta=\{accionesTarjeta\}\s+soloLectura=\{soloLectura\}/);
+  // B4 T24 f2 (F47, D27): las acciones de la tarjeta y del tablero salen del hook compartido; un rol de solo lectura no las ve.
+  assert.match(pantalla, /\} = useAccionesTableroPedidos<PedidoWeb>\(\{ tablero, recargarTrasCambio, mover: soloLectura === null \}\);/);
   assert.match(pantalla, /const abrirPedido = useCallback\(\(p: PedidoWeb\) => setSelectedOrder\(p\), \[\]\);/);
-  // 'cambio': PATCH /ventas/pedidos/{id} con el autor; si falla, recargarTrasError y el error sigue (el tablero deshace y recarga su
-  // origen y su destino: aquí no se llama a tablero.recargar).
-  assert.match(pantalla, /async function cambiarDesdeTablero\(p: PedidoWeb, resultado: \{ estado: string \}\) \{\s*try \{\s*await apiFetch\(`\/ventas\/pedidos\/\$\{p\.id\}`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ estado: resultado\.estado, updated_by: autorActual\(\) \}\),\s*\}\);\s*\} catch \(err\) \{\s*if \(recargarTrasError\(err\)\) recargarTrasCambio\(\);\s*throw err;\s*\}\s*recargarTrasCambio\(\);\s*\}/);
+  // B4 T24 f2 (F47, D27): 'cambio', 'facturar', 'cancelar' y «Marcar En tránsito / En proceso» son accionesTableroPedidos (la regla
+  // de error y de recarga, ejecutada con un apiFetch falso en el bloque «B4 T24 f2 (F47)»): las mismas de Pedidos de venta.
+  assert.match(pantalla, /<ModalMotivo\s+titulo=\{`Cancelar \$\{cancelando\.pedido\.numero\}`\}\s+efectos=\{efectosCancelarPedido\(cancelando\.pedido\)\}[\s\S]*?onConfirmar=\{cancelarConMotivo\}\s+onCerrar=\{cerrarCancelacion\}/);
   {
-    const cambiar = pantalla.slice(pantalla.indexOf('async function cambiarDesdeTablero('), pantalla.indexOf('\n  }\n', pantalla.indexOf('async function cambiarDesdeTablero(')));
-    assert.ok(cambiar.length > 100 && !cambiar.includes('tablero.recargar'), 'el arrastre no recarga el tablero a mano (lo hace deshacer)');
+    const hook = readFileSync(new URL('../src/app/dashboard/ventas/acciones-tablero-pedidos.ts', import.meta.url), 'utf8');
+    assert.ok(!/\/ecommerce\/pedidos\/\$\{/.test(hook), 'el hook mueve por /ventas/pedidos/{id} (accionesTableroPedidos)');
+    const lib = readFileSync(new URL('../src/lib/kanban-ventas.js', import.meta.url), 'utf8');
+    assert.ok(lib.includes("apiFetch(`/ventas/pedidos/${p.id}`, { method: 'PATCH', body: JSON.stringify(cuerpo) })"), 'el único PATCH de la lib');
   }
-  // 'facturar' (N2): confirmar() con confirmacionFacturarPedido → PATCH FACTURADO; 'cancelar': ModalMotivo.
-  assert.match(pantalla, /if \(resultado\.accion === 'cancelar'\) setCancelando\(\{ pedido: p, columnas: \[origen, destino\] \}\);\s*else if \(resultado\.accion === 'facturar'\) void facturarDesdeTablero\(p, \[origen, destino\]\);/);
-  const facturar = pantalla.slice(pantalla.indexOf('async function facturarDesdeTablero('), pantalla.indexOf('\n  }\n', pantalla.indexOf('async function facturarDesdeTablero(')));
-  assert.match(facturar, /if \(!\(await confirmar\(confirmacionFacturarPedido\(p\)\)\)\) return;/);
-  assert.ok(facturar.indexOf('confirmar(') < facturar.indexOf("estado: 'FACTURADO'"), 'primero confirma');
-  assert.match(facturar, /if \(!recargarTrasError\(err\)\) return;\s*\}\s*tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*$/);
-  // 'cancelar' (N2, H45, H46): PATCH CANCELADO con el motivo; si falla, recargarTrasError (el origen y el destino del tablero y lo
-  // demás) y el error sigue (ModalMotivo lo muestra y conserva lo escrito); al terminar, solo el origen y el destino (D39).
-  const cancelar = pantalla.slice(pantalla.indexOf('async function cancelarConMotivo('), pantalla.indexOf('\n  }\n', pantalla.indexOf('async function cancelarConMotivo(')));
-  assert.match(cancelar, /JSON\.stringify\(\{ estado: 'CANCELADO', cancellation_reason: motivo, cancellation_authorized_by: autor, updated_by: autor \}\)/);
-  assert.match(cancelar, /\} catch \(err\) \{\s*if \(recargarTrasError\(err\)\) \{\s*tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*\}\s*throw err;\s*\}/);
-  assert.match(cancelar, /tablero\.recargar\(\[\.\.\.columnas\]\);\s*recargarTrasCambio\(\);\s*$/);
-  assert.match(pantalla, /<ModalMotivo\s+titulo=\{`Cancelar \$\{cancelando\.pedido\.numero\}`\}\s+efectos=\{efectosCancelarPedido\(cancelando\.pedido\)\}[\s\S]*?onConfirmar=\{cancelarConMotivo\}\s+onCerrar=\{\(\) => setCancelando\(null\)\}/);
-  // «Marcar En tránsito» / «Marcar En proceso» (accionesTarjetaPedido): PATCH y, al terminar, la columna En proceso y lo demás.
-  const marcar = pantalla.slice(pantalla.indexOf('const marcarDesdeTablero'), pantalla.indexOf('\n  }, [', pantalla.indexOf('const marcarDesdeTablero')));
-  assert.match(marcar, /JSON\.stringify\(\{ estado: nuevo, updated_by: autorActual\(\) \}\)/);
-  assert.match(marcar, /if \(!recargarTrasError\(err\)\) return;\s*\}\s*recargarTablero\(\['en_proceso'\]\);\s*recargarTrasCambio\(\);\s*$/);
   // El único PATCH al servidor de pedidos es el de Ventas (ADMIN y ASESOR): ninguna ruta propia de E-Commerce mueve un pedido.
   assert.ok(!/\/ecommerce\/pedidos\/\$\{/.test(codigo), 'los pedidos se mueven por /ventas/pedidos/{id}');
   // Nunca confirm(), alert() ni prompt() (RP30; test_sin_dialogos_nativos lo vigila con la ruta de este archivo en RAICES).
@@ -1564,6 +1860,194 @@ console.log('--- B4 T23A TEST S: el cableado del tablero y del filtro de los ped
   assert.match(eliminar, /if \(!\(await confirmar\(\{ titulo: 'Eliminar producto', mensaje: '¿Eliminar este producto\?', efectos: \[prod\.nombre\], textoConfirmar: 'Eliminar', peligro: true \}\)\)\) return;/);
   assert.ok(eliminar.indexOf('confirmar(') < eliminar.indexOf("method: 'DELETE'"), 'primero confirma');
   assert.ok(!/Â|Ã|â€/.test(eliminar), 'sin mojibake en lo que se tocó');
+}
+
+console.log('--- B4 T24 (F26) y r2 (C8): el tono de cada columna sale de acentoDesdeClase con las claves de TONOS del tablero ---');
+{
+  const { readFileSync } = await import('node:fs');
+  // r3 (m14): el alias dice lo que es: las claves de TONOS del tablero.
+  const { CLAVES_TONOS_KANBAN: TONOS } = await import('../src/lib/kanban.js');
+  const kv = await import('../src/lib/kanban-ventas.js');
+  const { COLUMNAS_ENTREGA } = await import('../src/lib/entregas.js');
+  const { columnasDesdeEtapas } = await import('../src/lib/crm-etapas.js');
+  const crm = columnasDesdeEtapas([{ id: 1, name: 'a', color: 'bg-cyan-500' }, { id: 2, name: 'b', color: 'bg-pink-500' },
+    { id: 3, name: 'c', color: 'bg-blue-500' }, { id: 4, name: 'd', color: '#123456' }]);
+  const leerSrc = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // r2 (C8): una etapa cyan sale cyan en el tablero (como en el Drawer, COLOR_HEX); lo que no es una clase, slate.
+  assert.deepEqual(crm.map((c) => c.tono), ['cyan', 'pink', 'blue', 'slate'], 'el CRM: el color de su clase; un hex, slate');
+  for (const [nombre, columnas] of [['COT', kv.COLUMNAS_COT], ['Hub', kv.COLUMNAS_HUB], ['PVEN', kv.COLUMNAS_PEDIDO], ['SC', kv.COLUMNAS_SC],
+    ['Entregas', COLUMNAS_ENTREGA]]) {
+    for (const c of columnas) assert.ok(TONOS.includes(c.tono), `${nombre} ${c.clave}: ${c.tono}`);
+  }
+  // SC: el tono sale del hex de ESTADOS_SC (la clase más cercana, claseTailwindCercana), no de una tabla a mano.
+  // r2 (C8): Asignada vuelve a cyan (distinta de Nueva) y Vencida a violet; «Esperando mercancía», a sky. Los colores de BASE.
+  assert.deepEqual(kv.COLUMNAS_SC.map((c) => c.tono), ['slate', 'cyan', 'amber', 'emerald', 'red']);
+  assert.deepEqual(kv.COLUMNAS_COT.map((c) => c.tono), ['slate', 'blue', 'emerald', 'violet', 'red']);
+  assert.equal(COLUMNAS_ENTREGA[0].tono, 'sky');
+  // Las claves de la lib son las de TONOS del tablero (las clases literales de Kanban.tsx).
+  const kanbanTsx = leerSrc('components/ui/Kanban.tsx');
+  const bloque = kanbanTsx.slice(kanbanTsx.indexOf('const TONOS: Record<ClaveTonoKanban, Tono> = {'), kanbanTsx.indexOf('};', kanbanTsx.indexOf('const TONOS')));
+  assert.deepEqual([...bloque.matchAll(/^\s+([a-z]+): \{ punto:/gm)].map((m) => m[1]), [...TONOS], 'TONOS y CLAVES_TONOS_KANBAN, las mismas');
+  // r3 (m2, m14): los tipos: CLAVES_TONOS_KANBAN como unión literal y acentoDesdeClase con plantilla (sin conjunto, ColorKpi).
+  assert.ok(leerSrc('lib/kanban.js').includes("/** @type {ReadonlyArray<'slate' | 'gray' | 'red' | 'orange' | 'amber' | 'yellow' | 'lime' | 'green' | 'emerald' | 'teal' | 'cyan' | 'sky' | 'blue' | 'indigo' | 'violet' | 'purple' | 'fuchsia' | 'pink' | 'rose'>} */"), 'la unión literal');
+  // B4 T24 f2 (m1 de la revisión r3 de f1, D27): el respaldo también es de la plantilla (`@param {C} [respaldo]`), no un string suelto.
+  // B4 T24 f2 r1 (m8, D27): NoInfer<C>: el respaldo ya no es un sitio de inferencia (acentoDesdeClase(c, 'no-es-color') no compila).
+  assert.match(leerSrc('lib/kpis.js'), /@template \{string\} \[C=ColorKpi\]\n \* @param \{unknown\} clase\n \* @param \{NoInfer<C>\} \[respaldo\]\n \* @param \{ReadonlyArray<C>\} \[conjunto\]\n \* @returns \{C\}/);
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8');
+  for (const ruta of ['lib/kanban-ventas.js', 'lib/crm-etapas.js']) assert.ok(!/const familia\b|TONO_SC\b/.test(leer(ruta)), `${ruta}: sin copia`);
+  assert.match(leer('lib/kanban-ventas.js'), /const tonoDeClase = \(clase\) => acentoDesdeClase\(clase, 'slate', CLAVES_TONOS_KANBAN\);/);
+  assert.match(leer('lib/crm-etapas.js'), /tono: acentoDesdeClase\(s\.color, 'slate', CLAVES_TONOS_KANBAN\),/);
+}
+
+console.log('--- B4 T24 r2 (m2, m10): mientras se lee el rol (accesoTablero.listo false), el esqueleto en lugar del tablero ---');
+{
+  const { readFileSync } = await import('node:fs');
+  for (const ruta of ['app/dashboard/ventas/page.tsx', 'app/dashboard/ventas/solicitud/solicitud-client.tsx', 'app/dashboard/ventas/cotizacion/cotizacion-client.tsx', 'app/dashboard/ventas/venta/venta-client.tsx']) {
+    const f = readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8');
+    assert.match(f, /!accesoTablero\.listo \? <EsqueletoTablero \/> : <TableroKanban/, `${ruta}: el esqueleto con el rol vacío`);
+    assert.match(f, /import \{[^}]*\bEsqueletoTablero\b[^}]*\} from '@\/components\/ui';/, `${ruta}: la pieza común`);
+  }
+  // La pieza es la del tablero común (components/ui/Kanban.tsx), la misma del CRM.
+  const kanban = readFileSync(new URL('../src/components/ui/Kanban.tsx', import.meta.url), 'utf8');
+  assert.match(kanban, /export function EsqueletoTablero\(\) \{/);
+  assert.ok(!/function EsqueletoTablero\(/.test(readFileSync(new URL('../src/app/dashboard/crm/page.tsx', import.meta.url), 'utf8')), 'el CRM, sin su copia');
+}
+
+console.log('--- B4 T24 (FINAL-m31 y FINAL-m38): los tableros de Ventas solo se mueven con el rol del PATCH de destino ---');
+{
+  const { readFileSync } = await import('node:fs');
+  const { accesoTableroVentas, TEXTO_TABLERO_SOLO_VER } = await import('../src/lib/roles.js');
+  // Un caso por rol, igual que soloLecturaPedidosWeb (RP62): ADMIN y ASESOR mueven; los demás ven el tablero con el motivo.
+  for (const rol of ['ADMIN', 'ASESOR', 'admin', 'Vendedor', ' asesor ']) assert.equal(accesoTableroVentas(rol).soloLectura, null, rol);
+  for (const rol of ['FINANZAS', 'BODEGA', 'COMPRAS', 'CONSULTA', 'INVENTADO']) {
+    assert.equal(accesoTableroVentas(rol).soloLectura, TEXTO_TABLERO_SOLO_VER, String(rol));
+  }
+  // r1 (m9 b): mientras se lee el rol, sin el aviso (soloLectura null) y sin mover.
+  for (const rol of ['', null, undefined]) assert.deepEqual([accesoTableroVentas(rol).soloLectura, accesoTableroVentas(rol).mover], [null, false], String(rol));
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const sin = (f) => f.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const PANTALLAS = ['app/dashboard/ventas/page.tsx', 'app/dashboard/ventas/solicitud/solicitud-client.tsx',
+    'app/dashboard/ventas/cotizacion/cotizacion-client.tsx', 'app/dashboard/ventas/venta/venta-client.tsx'];
+  for (const ruta of PANTALLAS) {
+    const c = sin(leer(ruta));
+    assert.match(c, /import \{ useRolActual \} from '@\/components\/ui\/useRolActual';/, `${ruta}: useRolActual`);
+    assert.match(c, /import \{[^}]*\baccesoTableroVentas\b[^}]*\} from '@\/lib\/roles';/, `${ruta}: accesoTableroVentas`);
+    // B4 T24 f2 (duda 3 de f1, D27): Pedidos de venta guarda el rol (la tarjeta lo usa en solo lectura); el acceso, igual.
+    assert.match(c, /const accesoTablero = accesoTableroVentas\(useRolActual\(\)\);|const rol = useRolActual\(\);\s*const accesoTablero = accesoTableroVentas\(rol\);/, `${ruta}: el acceso del tablero`);
+    // El tablero recibe soloLectura (no se arrastra ni ofrece «Mover a…»), como E-Commerce.
+    assert.match(c, /<TableroKanban\s[^>]*soloLectura=\{accesoTablero\.soloLectura\}/, `${ruta}: soloLectura`);
+  }
+  // El Hub: la barra de acciones masivas (los mismos PATCH) solo para quien mueve.
+  assert.match(sin(leer('app/dashboard/ventas/page.tsx')), /\{selectedIds\.size>0 && !enAnalisis && estado\.modo === 'lista' && accesoTablero\.mover && \(/);
+  // Solicitudes: «Cancelar seleccionadas» (POST /solicitudes/{id}/cancelar, ADMIN y ASESOR) solo para quien mueve.
+  assert.ok(sin(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx')).includes("{checked.size>0 && modoEfectivo === 'lista' && !enPapelera && accesoTablero.mover && ("));
+  // Pedidos de venta: las acciones del ⋯ de la tarjeta (los mismos PATCH de estado) solo para quien mueve.
+  // B4 T24 f2 (F47, D27): el ⋯ de la tarjeta sale de useAccionesTableroPedidos, con `mover` = accesoTablero.mover.
+  assert.match(sin(leer('app/dashboard/ventas/venta/venta-client.tsx')), /useAccionesTableroPedidos<FilaPedido>\(\{ tablero, recargarTrasCambio, mover: accesoTablero\.mover \}\)/);
+  assert.match(sin(leer('app/dashboard/ventas/acciones-tablero-pedidos.ts')), /const accionesTarjeta = useCallback\(\(p: P\): ItemMenuFila\[\] => \(mover \? accionesTarjetaPedido\(p\) : \[\]\)\.map\(/);
+}
+
+console.log('--- B4 T24 f2 r1 (duda 2 + m15 + m16): ninguna tarjeta ofrece como acción principal una acción cuyo endpoint no admite el rol ---');
+{
+  const TODOS = ['ADMIN', 'ASESOR', 'FINANZAS', 'COMPRAS', 'BODEGA', 'CONSULTA'];
+  const sc = (estado, extra = {}) => ({ tipo: 'SC', id: 4, numero: 'SC-4', estado, tipo_solicitud: 'Cotizacion de Producto',
+    productos: [{ product_name: 'Tenis' }], cotizaciones: [], pedidos_venta: [], ...extra });
+  const cot = (estado, extra = {}) => ({ tipo: 'COT', id: 6, numero: 'COT-6', estado, total_cop: 1000, pedidos_venta: [], ...extra });
+  const texto = (t) => t.accionPrincipal?.texto ?? null;
+  // Las acciones de la SC y de la COT (ADMIN y ASESOR) en el tablero del Hub, el de Solicitudes y el de Cotizaciones.
+  const ACCIONES = [
+    [sc('BORRADOR'), 'Asignar asesor'], [sc('ASIGNADA'), 'Enviar para confirmación'], [sc('CONFIRMADA', { confirmacion_vigente: true }), 'Cotizar →'],
+    [sc('ASIGNADA', { productos: [] }), 'Agregar productos'], [sc('CONFIRMADA'), 'Reiniciar o cotizar'],
+    [cot('BORRADOR', { total_cop: 0 }), 'Completar precios'], [cot('BORRADOR'), 'Enviar al cliente'], [cot('CONFIRMADA'), 'Crear pedido'],
+  ];
+  for (const [fila, accion] of ACCIONES) {
+    const delTipo = fila.tipo === 'SC' ? (o) => kv.tarjetaSolicitud(fila, o) : (o) => kv.tarjetaCotizacion(fila, o);
+    for (const rol of TODOS) {
+      const esperado = rol === 'ADMIN' || rol === 'ASESOR' ? accion : null;
+      assert.equal(texto(kv.tarjetaHub(fila, { ahora: 0, rol })), esperado, `Hub ${accion} ${rol}`);
+      assert.equal(texto(delTipo({ ahora: 0, rol })), esperado, `${fila.tipo} ${accion} ${rol}`);
+    }
+    // Sin rol (sin pasar): la de siempre; mientras se lee el rol (''): sin acción.
+    assert.equal(texto(kv.tarjetaHub(fila, { ahora: 0 })), accion, `${accion} sin rol`);
+    assert.equal(texto(kv.tarjetaHub(fila, { ahora: 0, rol: '' })), null, `${accion} sin rol leído`);
+  }
+  // Abrir lo que se ve (GET, todos los roles): se queda.
+  for (const [fila, accion] of [[sc('BORRADOR', { tipo_solicitud: 'Soporte Tecnico' }), 'Ver ticket'],
+    [sc('CONFIRMADA', { cotizaciones: [{ id: 5, estado: 'BORRADOR' }] }), 'Ver cotización'], [sc('PENDIENTE_CONFIRMACION'), 'Esperando cliente'],
+    [cot('PENDIENTE_CONFIRMACION'), 'Esperando al cliente'], [cot('CONFIRMADA', { pedidos_venta: [{ id: 2, estado: 'EN_PROCESO' }] }), 'Ver pedido'],
+    [{ tipo: 'VEN', id: 8, numero: 'PVEN-8', estado: 'EN_PROCESO' }, 'Ver pedido']]) {
+    for (const rol of TODOS) assert.equal(texto(kv.tarjetaHub(fila, { ahora: 0, rol })), accion, `${accion} ${rol}`);
+  }
+  // Un pedido en el Hub: la regla de la duda 3 (ASESOR no gestiona la compra).
+  const pend = { tipo: 'VEN', id: 8, numero: 'PVEN-8', estado: 'PENDIENTE_COMPRA' };
+  assert.equal(texto(kv.tarjetaHub(pend, { ahora: 0, rol: 'ASESOR' })), null);
+  assert.equal(texto(kv.tarjetaHub(pend, { ahora: 0, rol: 'COMPRAS' })), 'Gestionar compra');
+  // Lo demás de la tarjeta no cambia con el rol.
+  const conRol = kv.tarjetaHub(sc('BORRADOR'), { ahora: 0, rol: 'CONSULTA' });
+  assert.deepEqual({ ...conRol, accionPrincipal: kv.tarjetaHub(sc('BORRADOR'), { ahora: 0 }).accionPrincipal }, kv.tarjetaHub(sc('BORRADOR'), { ahora: 0 }));
+  // E-Commerce, el mismo principio: ASESOR no gestiona la compra de un pedido web; su soloLectura sigue.
+  const web = { id: 3, numero: 'PWEB-3', estado: 'PENDIENTE_COMPRA', pven_numero: 'PVEN-3' };
+  assert.equal(texto(kv.tarjetaPedidoWeb(web, { ahora: 0, rol: 'ASESOR' })), null, 'E-Commerce ASESOR');
+  assert.equal(texto(kv.tarjetaPedidoWeb(web, { ahora: 0, rol: 'ADMIN' })), 'Gestionar compra', 'E-Commerce ADMIN');
+  assert.equal(texto(kv.tarjetaPedidoWeb({ ...web, estado: 'ENTREGADO' }, { ahora: 0, soloLectura: true, rol: 'ADMIN' })), null);
+  // La columna Acción de la Lista del Hub (CeldaAccion): sin permiso, «Abrir» (el detalle, con return_to al Hub); sin acción, null («—»).
+  assert.equal(typeof kv.accionDeLaFilaHub, 'function', 'accionDeLaFilaHub existe');
+  assert.deepEqual(kv.accionDeLaFilaHub(sc('BORRADOR'), { rol: 'FINANZAS' }),
+    { texto: 'Abrir', href: '/dashboard/ventas/solicitud/4?return_to=%2Fdashboard%2Fventas', tono: 'slate' });
+  assert.deepEqual(kv.accionDeLaFilaHub(cot('BORRADOR'), { rol: 'CONSULTA' }),
+    { texto: 'Abrir', href: '/dashboard/ventas/cotizacion/6?return_to=%2Fdashboard%2Fventas', tono: 'slate' });
+  assert.deepEqual(kv.accionDeLaFilaHub(pend, { rol: 'ASESOR' }),
+    { texto: 'Abrir', href: '/dashboard/ventas/venta/8?return_to=%2Fdashboard%2Fventas', tono: 'slate' });
+  for (const fila of [sc('BORRADOR'), cot('BORRADOR'), pend]) {
+    assert.deepEqual(kv.accionDeLaFilaHub(fila, { rol: 'ADMIN' }), accionSiguienteDocumento(fila), `ADMIN ${fila.tipo}`);
+  }
+  assert.equal(kv.accionDeLaFilaHub(sc('CANCELADA'), { rol: 'FINANZAS' }), null, 'sin acción: «—», no «Abrir»');
+  assert.deepEqual(kv.accionDeLaFilaHub(sc('BORRADOR', { tipo_solicitud: 'Soporte Tecnico' }), { rol: 'FINANZAS' }).texto, 'Ver ticket');
+  // El cableado: cada pantalla pasa el rol leído después de montar (useRolActual).
+  const leer = (r) => readFileSync(new URL(`../src/${r}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const hub = leer('app/dashboard/ventas/page.tsx');
+  assert.match(hub, /const tarjetaDeFila = useCallback\(\(f: FilaHub\) => tarjetaHub\(f, \{ rol \}\), \[rol\]\);/, 'el tablero del Hub');
+  assert.ok(!/^const tarjetaDeFila = /m.test(hub), 'sin la tarjeta sin rol de nivel de módulo');
+  assert.match(hub, /const accion = accionDeLaFilaHub\(fila, \{ rol: acciones\?\.rol \?\? '' \}\);/, 'la columna Acción');
+  assert.match(hub, /type AccionesFilaHub = \{[^}]*\brol: string;\s*\};/);
+  assert.match(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx'),
+    /const tarjetaDeSC = useCallback\(\(sc: FilaSC\) => tarjetaSolicitud\(sc, \{ returnTo: RUTA_LISTA_SOLICITUDES, rol \}\), \[rol\]\);/, 'Solicitudes');
+  assert.match(leer('app/dashboard/ventas/cotizacion/cotizacion-client.tsx'),
+    /const tarjetaDeCOT = useCallback\(\(cot: FilaCOT\) => tarjetaCotizacion\(cot, \{ rol \}\), \[rol\]\);/, 'Cotizaciones');
+  assert.match(leer('app/dashboard/ecommerce/page.tsx'),
+    /const tarjetaDeWeb = useCallback\(\(p: PedidoWeb\) => tarjetaPedidoWeb\(p, \{ soloLectura: soloLectura !== null, rol \}\), \[soloLectura, rol\]\);/, 'E-Commerce');
+  for (const r of ['app/dashboard/ventas/page.tsx', 'app/dashboard/ventas/solicitud/solicitud-client.tsx', 'app/dashboard/ventas/cotizacion/cotizacion-client.tsx']) {
+    assert.match(leer(r), /const rol = useRolActual\(\);\s*const accesoTablero = accesoTableroVentas\(rol\);/, `${r}: el rol después de montar`);
+  }
+}
+
+console.log('--- B4 T24 f2 r1 (m3, m28, m32): el return_to de E-Commerce al soltar, la ruta de error del arrastre y el reenvío del hook ---');
+{
+  // m3: reglaSoltarPedido con una opción aditiva { returnTo } (por defecto la lista de Pedidos); E-Commerce pasa la suya.
+  const parcial = { id: 7, numero: 'PVEN-7', estado: 'PARCIALMENTE_ENTREGADO' };
+  assert.match(kv.reglaSoltarPedido(parcial, 'listo_entrega', 'entregado').enlace.href, /return_to=%2Fdashboard%2Fventas%2Fventa$/, 'por defecto, Pedidos');
+  assert.match(kv.reglaSoltarPedido(parcial, 'listo_entrega', 'entregado', { returnTo: kv.RUTA_ECOMMERCE }).enlace.href, /return_to=%2Fdashboard%2Fecommerce$/);
+  assert.equal(typeof kv.reglaSoltarPedidoWeb, 'function', 'reglaSoltarPedidoWeb existe');
+  assert.match(kv.reglaSoltarPedidoWeb(parcial, 'listo_entrega', 'entregado').enlace.href, /return_to=%2Fdashboard%2Fecommerce$/, 'E-Commerce vuelve a E-Commerce');
+  // Lo demás de la regla, igual en las dos.
+  for (const estado of ['PENDIENTE_COMPRA', 'EN_PROCESO', 'LISTO_ENTREGA', 'ENTREGADO']) {
+    for (const [o, d] of [['pend_compra', 'en_proceso'], ['en_proceso', 'listo_entrega'], ['listo_entrega', 'entregado'], ['listo_entrega', 'cancelado'], ['entregado', 'facturado']]) {
+      const p = { id: 3, numero: 'PVEN-3', estado, saldo_cop: 0 };
+      const a = kv.reglaSoltarPedido(p, o, d);
+      const b = kv.reglaSoltarPedidoWeb(p, o, d);
+      assert.deepEqual({ ...b, enlace: undefined }, { ...a, enlace: undefined }, `${estado} ${o}→${d}`);
+    }
+  }
+  assert.match(readFileSync(new URL('../src/app/dashboard/ecommerce/page.tsx', import.meta.url), 'utf8'), /regla=\{reglaSoltarPedidoWeb\}/);
+  // m28: el Hub, Cotizaciones y accionesTableroPedidos usan el MISMO ayudante (cambiarConRegla); su conducta, en test_avisos.
+  const kanban = readFileSync(new URL('../src/lib/kanban-ventas.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(kanban, /async cambiar\(p, estado\) \{\s*await cambiarConRegla\(\(\) => patch\(p, \{ estado, updated_by: autor\(\) \}\), recargarTrasCambio\);\s*\}/);
+  assert.match(kanban, /import \{[^}]*\bcambiarConRegla\b[^}]*\} from '\.\/avisos\.js';/);
+  // m32: el hook reenvía el estado del arrastre y las columnas de la cancelación (la lib los recibe como parámetros).
+  const hook = readFileSync(new URL('../src/app/dashboard/ventas/acciones-tablero-pedidos.ts', import.meta.url), 'utf8');
+  assert.match(hook, /\(p: P, resultado: \{ estado: string \}\) => acciones\.cambiar\(p, resultado\.estado\)/);
+  assert.match(hook, /await acciones\.cancelar\(cancelando\.pedido, motivo, cancelando\.columnas\);/);
 }
 
 console.log('OK test_kanban_ventas');

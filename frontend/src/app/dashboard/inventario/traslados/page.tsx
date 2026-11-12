@@ -23,12 +23,10 @@ import { BodegasTraslado, CeldaEstadoTraslado, columnasTraslado, titulosDeOrdenT
 import type { FilaColumnasTraslado } from '../../compras/columnas-traslado';
 
 import { apiFetch } from '@/lib/api';
-import { accionModo, estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
+import { accionModo, accionVistaEnLista, estadoDelTotal, normalizarRespuesta, ordenEsAtencion, textoOrdenHub } from '@/lib/tabla';
 import { lecturaDeCarga, tarjetasTraslados } from '@/lib/kpis';
 import { textoDeError } from '@/lib/avisos';
 import { fechaLarga } from '@/lib/fechas-colombia';
-import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
-import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
   COLUMNAS_TRASLADO, OPCIONES_ESTADOS_TABLERO_TRASLADO, RUTA_CONTEOS_TRASLADOS, avisoTope200, columnaDeTraslado, conteosTraslado,
   consultaTableroTraslados, consultaTraslados, fechaDeTraslado, nombreBodega, numeroTraslado, opcionesEstadosTraslado, pestanasTraslado,
@@ -331,9 +329,9 @@ export default function InventarioTrasladosPage() {
 
       {/* Drawer (B1 a B3): el detalle del traslado y su enlace a Compras, donde se gestiona. */}
       {selected && (
-        <Drawer onClose={() => setSelected(null)} header={(
+        <Drawer idTitulo="drawer-traslado-titulo" onClose={() => setSelected(null)} header={(
           <div>
-            <h2 className="font-extrabold text-slate-900 text-xl">{numeroTraslado(selected)}</h2>
+            <h2 id="drawer-traslado-titulo" className="font-extrabold text-slate-900 text-xl">{numeroTraslado(selected)}</h2>
             <p className="text-xs text-slate-500 mt-0.5">Traslado Interno</p>
             <div className="mt-2"><CeldaEstadoTraslado t={selected} /></div>
           </div>

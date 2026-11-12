@@ -2,6 +2,7 @@
 
 import { useId } from 'react';
 import type { AccentColor } from '@/components/ui/colors';
+import { FOCO } from '@/lib/design-system';
 import { TOPS, bloqueSinDatos, colorDeAcento, formatearValor, proporcionesRanking } from '@/lib/analisis';
 import type { Etiquetar, FormatoAnalisis, RankingAnalisis } from '@/lib/analisis';
 
@@ -33,7 +34,6 @@ export type PropsRankingTop = {
 };
 
 const TARJETA = 'min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-xs';
-const FOCO = 'outline-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
 const PILDORA = `inline-flex items-center rounded-full border px-3 py-1 text-xs font-bold tabular-nums transition-colors ${FOCO}`;
 const PILDORA_ACTIVA = 'border-slate-900 bg-slate-900 text-white';
 const PILDORA_INACTIVA = 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50';

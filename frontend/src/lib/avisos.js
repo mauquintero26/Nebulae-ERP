@@ -186,16 +186,38 @@ export function errorDeRespuesta(status, body) {
 
 /**
  * Despues de una accion que fallo (guardar, re-cotizar, cambiar estado, enviar…): true si conviene recargar el
- * documento en silencio. Un 400 o un 409 (cambio en otra pantalla: ya tiene cotizacion, se confirmo, se cancelo…) o un
- * error sin status (la red se corto y la operacion pudo hacerse igual; tambien null o undefined). Un 401
- * (SesionVencidaError), 403, 404, 422 o 500 no recargan. La usan los detalles de la SC, la COT y el PVEN (B2-T8A, una
- * sola regla desde B2-T9A ronda 1).
+ * documento en silencio. Un 400 o un 409 (cambio en otra pantalla: ya tiene cotizacion, se confirmo, se cancelo…), un 422
+ * o un error sin status (la red se corto y la operacion pudo hacerse igual; tambien null o undefined). Un 401
+ * (SesionVencidaError), 403, 404 o 500 no recargan. La usan los detalles de la SC, la COT y el PVEN (B2-T8A, una
+ * sola regla desde B2-T9A ronda 1) y los tableros.
+ * B4 T24 (F8, ruling del controlador): el 422 cuenta SIN mirar el detail. El 422 de transición del PATCH de estado
+ * (_validar_transicion_pedido de erp_ventas.py) es el conflicto real del tablero de pedidos (el 409 solo sale con productos):
+ * recargar el origen y el destino no hace daño y es más robusto que comparar textos.
  * @param {unknown} err
  * @returns {boolean}
  */
 export function recargarTrasError(err) {
   const status = /** @type {{ status?: unknown } | null | undefined} */ (err)?.status;
-  return status === 400 || status === 409 || status === undefined || status === null;
+  return status === 400 || status === 409 || status === 422 || status === undefined || status === null;
+}
+
+/**
+ * B4 T24 f2 r1 (m28): la ruta de un cambio desde un tablero (el arrastre del Hub, de Cotizaciones y de los tableros de pedidos,
+ * accionesTableroPedidos): corre `cambio` (el PATCH) y después `recargar` (lo que la pantalla recarga: las pestañas, la franja…). Si
+ * falla, recarga solo con la regla de recargarTrasError (400, 409, 422 o la red cortada) y el MISMO error sigue (el tablero deshace la
+ * tarjeta y recarga su origen y su destino: D39, por eso aquí no se toca el tablero).
+ * @param {() => Promise<unknown>} cambio
+ * @param {() => void} recargar
+ * @returns {Promise<void>}
+ */
+export async function cambiarConRegla(cambio, recargar) {
+  try {
+    await cambio();
+  } catch (err) {
+    if (recargarTrasError(err)) recargar();
+    throw err;
+  }
+  recargar();
 }
 
 /**
@@ -265,12 +287,40 @@ export function agregarAviso(lista, aviso, max = 3) {
  */
 export function avisoDeFuente(error, fallo) {
   if (!error) return null;
-  if (/** @type {{status?: unknown}} */ (error).status === 403) return { tipo: 'permiso', texto: MENSAJE_SIN_PERMISO_FUENTE, reintentar: false };
-  return { tipo: 'carga', texto: textoDeError(error, fallo), reintentar: true };
+  // r1 (m10, m34): la regla del 403 vive en ofreceReintentar (una sola copia).
+  if (!ofreceReintentar(error)) return { tipo: 'permiso', texto: MENSAJE_SIN_PERMISO_FUENTE, reintentar: false };
+  // B4 T24 (F46): el texto de la falla con su punto final (textoAvisoFuente), el mismo del Dashboard.
+  return { tipo: 'carga', texto: /** @type {string} */ (textoAvisoFuente(error, fallo)), reintentar: true };
+}
+
+/**
+ * B4 T22 r1 (m6): el aviso de una fuente caída, 'No se pudieron cargar las existencias: Error del servidor.', con un solo
+ * punto al final aunque el mensaje ya lo traiga. Sin error, null.
+ * @param {unknown} error
+ * @param {string} texto
+ * @returns {string | null}
+ */
+export function textoAvisoFuente(error, texto) {
+  if (!error) return null;
+  const mensaje = textoDeError(error, texto);
+  return mensaje.endsWith('.') ? mensaje : `${mensaje}.`;
 }
 
 /** El aviso de un 403 al leer una fuente de una pantalla. */
 export const MENSAJE_SIN_PERMISO_FUENTE = 'No tienes permiso para ver esto.';
+
+/**
+ * B4 T24 (FINAL-m37, FINAL-C5 y F106): si una carga que falló ofrece «Reintentar». Un 403 no: es un tema de permiso y volver a pedir no
+ * lo cambia. Cualquier otro error sí (también uno sin status: la red). Sin error, no hay nada que reintentar. avisoDeFuente la usa (r1,
+ * m10 y m34: la regla escrita una vez), y también quien no pinta un aviso de fuente: TablaEstandar, las columnas del tablero,
+ * SelectorCatalogo y las cajas de error de las pantallas.
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+export function ofreceReintentar(error) {
+  if (!error) return false;
+  return /** @type {{status?: unknown}} */ (error).status !== 403;
+}
 
 /**
  * B4 T23B r1 (I2): el motivo de permiso de una fuente (el texto de avisoDeFuente cuando es un 403) o null: lo que la tarjeta dice en su

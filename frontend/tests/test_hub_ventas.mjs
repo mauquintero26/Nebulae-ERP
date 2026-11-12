@@ -284,7 +284,9 @@ console.log('--- T11 calidad E2+E3: los destinos del Hub llevan return_to del Hu
   assert.ok(!hub.includes('/dashboard/ventas/cotizacion?id='), 'el Hub no enlaza /dashboard/ventas/cotizacion?id=');
   // B4 T7 (D27, RP15): la columna Acción usa accionSiguienteDocumento (hub-ventas.js), que lleva a la COT con el
   // return_to del Hub (desdeElHub): la protección de «Aprobar Venta» pasó a la librería.
-  assert.ok(hub.includes('const accion = accionSiguienteDocumento(fila);'), 'la Acción del Hub sale de accionSiguienteDocumento');
+  // B4 T24 f2 r1 (duda 2 + m15, D27): la Acción sale de accionDeLaFilaHub, que es accionSiguienteDocumento con el rol (sin permiso,
+  // «Abrir»; su caso, en test_kanban_ventas).
+  assert.ok(hub.includes("const accion = accionDeLaFilaHub(fila, { rol: acciones?.rol ?? '' });"), 'la Acción del Hub sale de accionDeLaFilaHub');
   for (const estado of ['BORRADOR', 'ENVIADA', 'VENCIDA']) {
     for (const total_cop of [0, 250000]) {
       assert.equal(accionSiguienteDocumento({ tipo: 'COT', id: 12, estado, total_cop }).href,
@@ -310,14 +312,18 @@ console.log('--- B4 T7 (RP86 y D28): la recarga del Hub sin perder lo que había
   const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.equal(typeof hv.fusionarCargaHub, 'undefined', 'RP86: fusionarCargaHub ya no existe');
   assert.equal(typeof hv.AVISOS_CARGA_HUB, 'undefined', 'RP86: AVISOS_CARGA_HUB ya no existe');
-  assert.match(hub, /const listado = useListado<FilaHub>\(\{\s*ruta: '\/ventas\/hub\/documentos', estado, conConteos: true, esperar: !listo, despachar, activo: !enAnalisis,\s*\}\);/,
+  // B4 T24 f2 (FINAL-m8, D27): con extra (limit=0 en Kanban, EXTRA_TABLERO).
+  assert.match(hub, /const listado = useListado<FilaHub>\(\{\s*ruta: '\/ventas\/hub\/documentos', estado, conConteos: true, esperar: !listo, despachar, activo: !enAnalisis,\s*extra: enKanban \? EXTRA_TABLERO : null,\s*\}\);/,
     'la tabla carga con useListado (RP35, RP68, D40)');
   assert.ok(!/\b(cargaRef|ultimaCarga|fusionarCargaHub)\b/.test(hub), 'sin la carga en memoria de antes');
   const uso = readFileSync(new URL('../src/components/tabla/useListado.ts', import.meta.url), 'utf8');
   assert.ok(uso.includes('crearCargaListado({'), 'useListado: la carga que aborta la anterior y descarta las viejas (D28)');
   // Las tarjetas y la configuración, que siguen con su GET propio, tampoco pintan una respuesta vieja.
-  const stats = hub.slice(hub.indexOf("apiFetch(`/ventas/stats?periodo=${PERIODO_KPI}`"), hub.indexOf('}, [vueltaStats]);'));
-  assert.ok(stats.includes('{ signal: control.signal }') && stats.includes('return () => control.abort();'), 'stats: aborta la anterior');
+  // B4 T24 f2 (F45, D27): las tarjetas cargan con useResumen (components/ui), que aborta la anterior y descarta las viejas con la
+  // MISMA carga de useListado (crearCargaListado; sus casos, en test_flujo.mjs «B4 T24 f2 (F45)»).
+  assert.match(hub, /const stats = useResumen<StatsHub>\(`\/ventas\/stats\?periodo=\$\{PERIODO_KPI\}`, vueltaStats\);/, 'stats: con el hook');
+  const usoResumen = readFileSync(new URL('../src/components/ui/useResumen.ts', import.meta.url), 'utf8');
+  assert.ok(usoResumen.includes('crearCargaListado({') && usoResumen.includes('return () => carga.cancelar();'), 'stats: aborta la anterior');
   const cfg = hub.slice(hub.indexOf("apiFetch('/ventas/config')"), hub.indexOf('}, [vueltaConfig, avisar]);'));
   assert.match(cfg, /\.then\(\(cfg: unknown\) => \{\s*if \(!vigente\) return;/, 'config: una respuesta vieja no pinta');
   assert.match(cfg, /\.catch\(\(err: unknown\) => \{\s*if \(!vigente\) return;/, 'config: el error de una vieja no avisa');
@@ -375,9 +381,11 @@ console.log('--- B4 T7 r1 (A3): Análisis es la 7.ª pestaña de la barra (pesta
   const panel = codigo.indexOf('<PanelAnalisisPerezoso');
   assert.ok(barra > 0 && panel > barra, 'el panel va debajo de la barra');
   assert.match(codigo, /\{!enAnalisis && estado\.modo === 'lista' && \(\s*<AccionesFila\.Provider/, 'la tabla, solo en Documentos');
-  assert.match(codigo, /\{enAnalisis \? \(\s*<PanelAnalisisPerezoso[\s\S]*?\/>\s*\) : estado\.modo === 'kanban' \? \(\s*<TableroKanban/, 'el panel, en lugar del tablero');
-  // D-7: ?tab=analisis abre en Análisis y volver a Documentos limpia la URL con router.replace.
-  assert.match(codigo, /useState<SeccionHub>\(enlace\.analisis \? 'analisis' : 'documentos'\)/);
+  assert.match(codigo, /\{enAnalisis \? \(\s*<PanelAnalisisPerezoso[\s\S]*?\/>\s*\) : estado\.modo === 'kanban' \? \(\s*(?:\/\/[^\n]*\n\s*)?!accesoTablero\.listo \? <EsqueletoTablero \/> : <TableroKanban/, 'el panel, en lugar del tablero (r2, m2, D27: el esqueleto con el rol vacío)');
+  // D-7: ?tab=analisis abre en Análisis y volver a Documentos limpia la URL con router.replace. B4 T24 (FINAL-C3, D27): la
+  // sección arranca en Documentos y el useLayoutEffect de montaje la pasa a Análisis con la URL ya nueva (después del commit).
+  assert.match(codigo, /useState<SeccionHub>\('documentos'\)/);
+  assert.match(codigo, /if \(inicio\.seccion\) setSeccion\(inicio\.seccion\);/);
   assert.match(codigo, /if \(s === 'documentos' && leerEnlaceHub\(window\.location\.search\)\.analisis\) router\.replace\(RUTA_HUB_VENTAS\);/);
   // D-9: tocar un paso o el semáforo vuelve a Documentos.
   assert.equal((codigo.match(/if \(enAnalisis\) cambiarSeccion\('documentos'\);/g) ?? []).length, 2);
@@ -976,6 +984,24 @@ console.log('--- B4 T2 TEST 6: accionSiguienteCOT (R26, RP15: {texto, href, tono
   }
 }
 
+console.log('--- B4 T24 f2 (duda 3 de f1): claveAccionSiguientePVEN — qué acción da accionSiguientePVEN, sin el texto de la interfaz ---');
+{
+  assert.equal(typeof hv.claveAccionSiguientePVEN, 'function');
+  const p = (estado, saldo = 0) => ({ tipo: 'VEN', id: 8, estado, saldo_cop: saldo });
+  const TEXTO = { facturar: 'Facturar', comprar: 'Gestionar compra', ver: 'Ver pedido', cobrar: 'Cobrar saldo', despachar: 'Despachar' };
+  // La misma rama de accionSiguientePVEN, en todos los estados que conoce el servidor, con y sin saldo, y en uno desconocido.
+  for (const estado of [...Object.keys(ESTADOS_PEDIDO), 'ALGO_NUEVO', null]) {
+    for (const saldo of [0, 500]) {
+      const clave = hv.claveAccionSiguientePVEN(p(estado, saldo));
+      const accion = accionSiguientePVEN(p(estado, saldo));
+      assert.equal(clave === null ? null : TEXTO[clave], accion?.texto ?? null, `${estado} ${saldo}`);
+    }
+  }
+  assert.equal(hv.claveAccionSiguientePVEN(p('LISTO_ENTREGA', 500)), 'cobrar');
+  assert.equal(hv.claveAccionSiguientePVEN(p('LISTO_ENTREGA', 0)), 'despachar');
+  for (const nada of [null, undefined, 'PVEN-1', 5]) assert.equal(hv.claveAccionSiguientePVEN(nada), null, String(nada));
+}
+
 console.log('--- B4 T2 TEST 7: accionSiguientePVEN (R26, RP15: el orden del pedido) ---');
 {
   const p = (estado, saldo = 0) => ({ tipo: 'VEN', id: 8, estado, saldo_cop: saldo });
@@ -1161,8 +1187,10 @@ console.log('--- B4 T7 r1 (B): el foco del enlace, la fila de último recurso, l
   const codigo = hub.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
   // m1 (R2): el texto «En construcción» vive solo en AsistenteEnConstruccion.tsx, tampoco en los comentarios de la página.
   assert.ok(!hub.includes('En construcci'), 'm1: sin «En construcción» en page.tsx');
-  // I1: el foco del enlace en un estado propio, suelto al elegir un foco y al volver a los documentos.
-  assert.match(codigo, /const \[focoEnlace, setFocoEnlace\] = useState\(enlace\.foco\);/);
+  // I1: el foco del enlace en un estado propio, suelto al elegir un foco y al volver a los documentos. B4 T24 (FINAL-C3, D27):
+  // arranca en null y lo pone el useLayoutEffect de montaje con la URL nueva.
+  assert.match(codigo, /const \[focoEnlace, setFocoEnlace\] = useState<string \| null>\(null\);/);
+  assert.match(codigo, /if \(inicio\.foco\) setFocoEnlace\(inicio\.foco\);/);
   assert.match(codigo, /if \(s === 'documentos'\) setFocoEnlace\(\(f\) => focoEnlaceTras\(f, \{ tipo: 'documentos' \}\)\);/);
   assert.match(codigo,
     /const alCambiarFoco = useCallback\(\(foco: string\) => \{\s*setFocoEnlace\(\(f\) => focoEnlaceTras\(f, \{ tipo: 'elegir' \}\)\);\s*router\.replace\(`\$\{RUTA_HUB_VENTAS\}\?tab=analisis&foco=\$\{foco\}`\);\s*\}, \[router\]\);/);
@@ -1182,9 +1210,10 @@ console.log('--- B4 T7 r1 (B): el foco del enlace, la fila de último recurso, l
   assert.match(codigo, /if \(dias === null\) return <span className="text-xs text-slate-400">—<\/span>;/);
   assert.match(codigo, /fila\.resolucion === 'ATRASADO' \? 'font-bold text-rose-600' : undefined/);
   assert.ok(!codigo.includes('Number(f.dias_creado) || 0'), 'm8: sin «hoy» para un dato que falta');
-  // m6: el valor del contexto es estable.
+  // m6: el valor del contexto es estable. B4 T24 f2 (m8 de la revisión r0 de f1, D27): con `mover`, que solo cambia con el rol.
   assert.match(codigo,
-    /const accionesFila = useMemo<AccionesFilaHub>\(\s*\(\) => \(\{ abrir: openDocDetail, actividad: setActRow, cancelar: abrirCancelacion \}\),\s*\[openDocDetail, abrirCancelacion\],\s*\);/);
+    // B4 T24 f2 r1 (duda 2 + m15, D27): el contexto lleva también el rol (la columna Acción).
+    /const accionesFila = useMemo<AccionesFilaHub>\(\s*\(\) => \(\{ abrir: openDocDetail, actividad: setActRow, cancelar: abrirCancelacion, mover: accesoTablero\.mover, rol \}\),\s*\[openDocDetail, abrirCancelacion, accesoTablero\.mover, rol\],\s*\);/);
   // m7: fuente única. (a) los chips con CLASE_CHIP de components/ui/Kanban.tsx; (b) los títulos del orden con
   // campoOrden y solo de las columnas que se ordenan (y las de orden inverso, aparte); (d) una sola sigla de tipo.
   assert.ok(!codigo.includes('CHIP_TONO'), 'm7a: sin CHIP_TONO');
@@ -1213,12 +1242,304 @@ console.log('--- B4 T7 r1b (duda 3): el contenedor del Hub reserva el lugar del 
   // El botón de GlobalAIChat (fixed bottom-6 right-6 w-14 h-14) ocupa los 80 px de abajo de la ventana. Con pb-24
   // (96 px) en el contenedor del Hub, con la página al fondo, el pie de la tabla, el tablero y el panel de Análisis
   // quedan por encima. En la pantalla completa sigue el pr-20 del pie (D41).
-  assert.match(hub, /<div className="flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-\[1600px\] mx-auto w-full min-w-0 gap-6">/);
+  // B4 T24 f2 (F44-a, D27): con el token RESERVA_BOTON_IA (pb-24) de design-system.ts.
+  assert.ok(hub.includes('<div className={`flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`}>'));
+  assert.ok(readFileSync(new URL('../src/lib/design-system.ts', import.meta.url), 'utf8').includes("export const RESERVA_BOTON_IA = 'pb-24';"), 'el token es pb-24');
   assert.ok(!hub.includes('px-4 xl:px-8 py-6 max-w-[1600px]'), 'sin el py-6 de antes');
   const ia = readFileSync(new URL('../src/components/GlobalAIChat.tsx', import.meta.url), 'utf8');
   assert.ok(ia.includes('fixed bottom-6 right-6 w-14 h-14'), 'el botón mide lo que la reserva supone (24 + 56 = 80 px < 96)');
   const tabla = readFileSync(new URL('../src/lib/design-system.ts', import.meta.url), 'utf8');
   assert.ok(tabla.includes('[&_[data-pie-tabla]]:pr-20'), 'en la pantalla completa, el pr-20 del pie (D41)');
+}
+
+console.log('--- B4 T24 f2 (F50, F53): el «vacío» del Hub memoizado y su confirmación de Facturado la de Pedidos ---');
+{
+  const sinComentarios = (t) => t.replace(/\r\n/g, '\n').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const hub = sinComentarios(readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8'));
+  // F50 (D41): el vacío se memoiza con la búsqueda (como la lista de SC, m8 de T8 r1): un JSX nuevo en cada render anulaba el memo de
+  // CuerpoTabla y repintaba todas las filas.
+  assert.match(hub, /const vacioHub = useMemo\(\(\) => \([\s\S]*?\), \[estado\.q\]\);/);
+  assert.match(hub, /vacio=\{vacioHub\}/);
+  assert.ok(!/vacio=\{\(/.test(hub), 'sin el JSX en línea');
+  // F53: el panel rápido confirma Facturado con confirmacionFacturarPedido (kanban-ventas.js), la MISMA del tablero de Pedidos.
+  assert.match(hub, /import \{[^}]*\bconfirmacionFacturarPedido\b[^}]*\} from '@\/lib\/kanban-ventas';/);
+  assert.match(hub, /if \(await confirmar\(confirmacionFacturarPedido\(doc\)\)\) cambiarEstadoPedido\(doc, 'FACTURADO'\);/);
+  assert.ok(!hub.includes("titulo: `Marcar ${doc.numero} como Facturado`"), 'sin el texto escrito a mano');
+}
+
+console.log('--- B4 T24 f2 (m8 de la revisión r0 de f1): el Hub ofrece cancelar y cambiar de estado solo a quien puede (require_roles) ---');
+{
+  // opcionesPanelPedido: lo que el panel rápido ofrece con el permiso del rol. PATCH /ventas/pedidos/{id} (estado, Facturado y
+  // Cancelado) es de ADMIN y ASESOR (accesoTableroVentas.mover; BODEGA solo pone ENTREGADO con la bodega, desde Entregas). Sin
+  // permiso queda «Despachar en Entregas» (un enlace: Entregas decide) y nada que mande un PATCH.
+  assert.equal(typeof hv.opcionesPanelPedido, 'function', 'opcionesPanelPedido existe');
+  for (const estado of [...Object.keys(ESTADOS_PEDIDO), 'ALGO_NUEVO']) {
+    assert.deepEqual(hv.opcionesPanelPedido(estado, true), opcionesEstadoPVEN(estado), `${estado}: con permiso, lo de siempre`);
+    const sin = hv.opcionesPanelPedido(estado, false);
+    assert.deepEqual(sin, { mover: [], despachar: opcionesEstadoPVEN(estado).despachar, cancelar: false, facturar: false }, `${estado}: sin permiso`);
+    // r1 (m13 + m37, D27): con el tercer parámetro (si el rol despacha: puedeAccionPedido('despachar')), el enlace solo para quien
+    // despacha; sin él (aditivo), como antes.
+    assert.deepEqual(hv.opcionesPanelPedido(estado, false, true), sin, `${estado}: BODEGA conserva el enlace`);
+    assert.deepEqual(hv.opcionesPanelPedido(estado, false, false), { mover: [], despachar: false, cancelar: false, facturar: false }, `${estado}: FINANZAS, COMPRAS y CONSULTA`);
+    assert.deepEqual(hv.opcionesPanelPedido(estado, true, true), opcionesEstadoPVEN(estado), `${estado}: ADMIN y ASESOR`);
+    // r2 (m8): un rol que mueve pero no despacha (hoy no existe: ADMIN y ASESOR hacen las dos cosas) conserva sus botones sin el enlace.
+    assert.deepEqual(hv.opcionesPanelPedido(estado, true, false), { ...opcionesEstadoPVEN(estado), despachar: false }, `${estado}: mueve sin despachar`);
+  }
+  // Por rol, con las piezas de la pantalla: el panel de un pedido listo para entrega.
+  const { accesoTableroVentas, puedeAccionPedido } = await import('../src/lib/roles.js');
+  const panel = (rol) => hv.opcionesPanelPedido('LISTO_ENTREGA', accesoTableroVentas(rol).mover, puedeAccionPedido('despachar', rol));
+  assert.equal(panel('BODEGA').despachar, true, 'BODEGA: «Despachar en Entregas →»');
+  for (const rol of ['FINANZAS', 'COMPRAS', 'CONSULTA']) assert.deepEqual(panel(rol), { mover: [], despachar: false, cancelar: false, facturar: false }, rol);
+  assert.deepEqual(panel('ASESOR'), opcionesEstadoPVEN('LISTO_ENTREGA'));
+  const sinComentarios = (t) => t.replace(/\r\n/g, '\n').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const hub = sinComentarios(readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8'));
+  // La fila: «Cancelar documento» (POST /solicitudes/{id}/cancelar y PATCH de COT y PVEN: ADMIN y ASESOR) solo con mover.
+  // r1 (duda 2 + m15, D27): el contexto suma el rol (la columna Acción); `mover` sigue.
+  assert.match(hub, /type AccionesFilaHub = \{\s*abrir: \(f: FilaHub\) => void; actividad: \(f: FilaHub\) => void; cancelar: \(ids: string\[\]\) => void; mover: boolean; rol: string;\s*\};/);
+  assert.match(hub, /oculto: !acciones\?\.mover \|\| Boolean\(motivoNoCancelable\(fila\)\) \}/);
+  assert.match(hub, /\(\) => \(\{ abrir: openDocDetail, actividad: setActRow, cancelar: abrirCancelacion, mover: accesoTablero\.mover, rol \}\),\s*\[openDocDetail, abrirCancelacion, accesoTablero\.mover, rol\],/);
+  // Sin permiso, sin casillas (la barra masiva ya no sale: FINAL-m38).
+  assert.match(hub, /seleccion=\{accesoTablero\.mover \? seleccion : undefined\}\s*onSeleccion=\{accesoTablero\.mover \? alSeleccionar : undefined\}/);
+  // El panel rápido: los botones de estado, Facturado y Cancelar salen de opcionesPanelPedido con el permiso.
+  // r1 (m13 + m37, D27): con quién despacha; sin nada que el rol pueda hacer, la sección no se pinta.
+  assert.match(hub, /const op = opcionesPanelPedido\(quickDetailDoc\.estado, accesoTablero\.mover, puedeAccionPedido\('despachar', rol\)\);\s*if \(!accesoTablero\.mover && !op\.despachar\) return null;/);
+  assert.ok(!/opcionesEstadoPVEN\(quickDetailDoc\.estado\)/.test(hub), 'el panel ya no ofrece lo que el rol no puede');
+}
+
+console.log('--- B4 T24 f2 (FINAL-m8, FINAL-m9, FINAL-m28): el Hub en Kanban sin la página de la tabla, el error del tablero y una sola insignia ---');
+{
+  const sinComentarios = (t) => t.replace(/\r\n/g, '\n').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const hub = sinComentarios(readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8'));
+  // FINAL-m8: en Kanban la tabla no pide filas (limit=0, EXTRA_TABLERO, como Solicitudes, Cotizaciones y Pedidos): las pestañas y el
+  // total siguen llegando (con_conteos) y scConCot ya trae las tarjetas del tablero (RP36). Al volver a Lista, mientras la última
+  // respuesta sea la de Kanban, la tabla está cargando y el total en 'cargando' (llegadaDeListado): nunca «No hay documentos».
+  assert.match(hub, /^const EXTRA_TABLERO = \{ limit: 0 \};$/m);
+  assert.match(hub, /const enKanban = estado\.modo === 'kanban';/);
+  assert.match(hub, /activo: !enAnalisis,\s*extra: enKanban \? EXTRA_TABLERO : null,\s*\}\);/);
+  assert.match(hub, /const \[llegada, setLlegada\] = useState\(\(\) => llegadaDeListado\(null, null, false\)\);\s*const llegadaAhora = llegadaDeListado\(llegada, listado\.crudo, enKanban\);\s*if \(llegadaAhora !== llegada\) setLlegada\(llegadaAhora\);\s*const sinPagina = !enKanban && llegadaAhora\.sinFilas && !listado\.error;/);
+  assert.match(hub, /total=\{sinPagina \? null : listado\.total\}\s*cargando=\{listado\.cargandoInicial \|\| sinPagina\}/, 'la tabla');
+  assert.match(hub, /total=\{sinPagina \? null : listado\.total\}\s*estadoTotal=\{estadoDelTotal\(\{\s*total: listado\.total, cargando: listado\.cargandoInicial \|\| sinPagina, recargando: listado\.recargando, error: listado\.error,\s*\}\)\}/, 'la barra');
+  // FINAL-m9: si el PATCH de un cambio desde el tablero falla, el Hub y Cotizaciones aplican la regla única recargarTrasError (las
+  // pestañas y la franja, no el tablero: D39) y el error sigue para que el tablero deshaga. Como Pedidos desde T10 r1 (m4).
+  assert.match(hub, /import \{[^}]*\bcambiarConRegla\b[^}]*\} from '@\/lib\/avisos';/);
+  // B4 T24 f2 r1 (m28, D27): la ruta de error es el ayudante puro cambiarConRegla (avisos.js, con sus casos en test_avisos): el PATCH, y
+  // después (bien, o con un error que recarga) las pestañas y la franja; el error sigue.
+  assert.match(hub, /async function cambiarDesdeTablero\(fila: FilaHub, resultado: \{ estado: string \}\) \{\s*const ruta = fila\.tipo === 'SC' \? 'solicitudes' : fila\.tipo === 'COT' \? 'cotizaciones' : 'pedidos';\s*await cambiarConRegla\(\s*\(\) => apiFetch\(`\/ventas\/\$\{ruta\}\/\$\{fila\.id\}`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ estado: resultado\.estado, updated_by: autorActual\(\) \}\),\s*\}\),\s*\(\) => \{ recargarListado\(\); setRecargaFlujo\(\(n\) => n \+ 1\); \},\s*\);\s*\}/);
+  const cot = sinComentarios(readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/cotizacion-client.tsx', import.meta.url), 'utf8'));
+  assert.match(cot, /async function cambiarDesdeTablero\(cot: FilaCOT, resultado: \{ estado: string \}\) \{\s*await cambiarConRegla\(\s*\(\) => apiFetch\(`\/ventas\/cotizaciones\/\$\{cot\.id\}`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ estado: resultado\.estado, updated_by: autorActual\(\) \}\),\s*\}\),\s*\(\) => \{ recargarListado\(\); setRecargaFlujo\(\(n\) => n \+ 1\); \},\s*\);\s*\}/);
+  for (const [nombre, codigo] of [['Hub', hub], ['Cotizaciones', cot]]) {
+    const cambiar = codigo.slice(codigo.indexOf('async function cambiarDesdeTablero('), codigo.indexOf('\n  }\n', codigo.indexOf('async function cambiarDesdeTablero(')));
+    assert.ok(cambiar.length > 100 && !/tablero\.recargar|recargarTablero/.test(cambiar), `${nombre}: el arrastre no recarga el tablero a mano (D39: lo hace deshacer)`);
+  }
+  // La regla (F8): un 409 (otra cotización activa, N7), un 400, un 422 o la red cortada recargan; un 500 o un 403, no.
+  const { recargarTrasError } = await import('../src/lib/avisos.js');
+  for (const s of [400, 409, 422]) assert.equal(recargarTrasError(Object.assign(new Error('x'), { status: s })), true, String(s));
+  for (const s of [403, 500]) assert.equal(recargarTrasError(Object.assign(new Error('x'), { status: s })), false, String(s));
+  // FINAL-m28: el panel rápido pinta el estado con la MISMA InsigniaEstado de la tabla (estadoDeTarjeta de lib/kanban-ventas.js, la
+  // fuente única: GC:11), sin un mapa de colores propio ni otra búsqueda de la etiqueta.
+  assert.ok(!/\bgetEstadoClass\b|\betiquetaEstado\b/.test(hub), 'sin getEstadoClass ni etiquetaEstado');
+  assert.ok(!/\b(?:BORRADOR|EN_TRANSITO|LISTO_ENTREGA|FACTURADO|CANCELADO|CONFIRMADA|RECHAZADA|PENDIENTE_COMPRA)\s*:\s*['"`]bg-/.test(hub), 'sin un mapa local de estados a clases');
+  assert.ok(!/ESTADOS as ESTADOS_COT|import \{ ESTADOS_SC \}/.test(hub), 'sin las tablas de las listas para la etiqueta');
+  // r1 (C3, D27): el h2 lleva el id del título del Drawer (aria-labelledby).
+  assert.match(hub, /<h2 id="drawer-panel-rapido-titulo" className="text-lg font-black text-slate-900">\{quickDetailDoc\.numero\}<\/h2>\s*<InsigniaEstado tipo=\{quickDetailDoc\.tipo\} estado=\{quickDetailDoc\.estado\} \/>/);
+  assert.match(hub, /Este pedido está \{estadoDeTarjeta\('VEN', quickDetailDoc\.estado\)\.label\}; su estado ya no se cambia desde aquí\./);
+  // La insignia es la de la tabla: estadoDeTarjeta, con las clases de la tabla del tipo (o los hex de la SC).
+  assert.match(hub, /function InsigniaEstado\(\{ tipo, estado \}: \{ tipo: FilaHub\['tipo'\]; estado: unknown \}\) \{\s*const e = estadoDeTarjeta\(tipo, estado\);/);
+  const { estadoDeTarjeta } = await import('../src/lib/kanban-ventas.js');
+  assert.equal(estadoDeTarjeta('VEN', 'EN_TRANSITO').clases.bg, 'bg-sky-100', 'VEN EN_TRANSITO: sky, en la tabla y en el panel');
+  assert.equal(estadoDeTarjeta('COT', 'VENCIDA').label, 'Vencida');
+  assert.equal(estadoDeTarjeta('VEN', 'LISTO_PARA_ENTREGA').label, 'Listo para entrega');
+}
+
+console.log('--- B4 T24 (FINAL-C3): los tres Hubs leen el enlace DESPUÉS del commit (useLayoutEffect de montaje), nunca en el render ---');
+{
+  // Next 16 cambia la URL de una navegación con <Link> en el useInsertionEffect de HistoryUpdater (app-router.js): el render
+  // de la página nueva (el inicializador de useState) todavía ve la URL de la ANTERIOR; un useLayoutEffect del mismo commit
+  // ya ve la nueva. Esta guarda fija ese orden: cada lectura de window.location.search de los tres Hubs va dentro de un
+  // useLayoutEffect, un useEffect o un manejador (useCallback), nunca en el cuerpo del render, en useState, useMemo ni useRef.
+  const sinComentarios = (t) => t.replace(/\r\n/g, '\n').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  /** Los nombres de las llamadas que envuelven la posición `i`, de adentro hacia afuera (los paréntesis sin cerrar). */
+  const llamadasQueEnvuelven = (codigo, i) => {
+    const cadena = [];
+    let abiertos = 0;
+    for (let k = i - 1; k >= 0; k--) {
+      const c = codigo[k];
+      if (c === ')') abiertos++;
+      else if (c === '(') {
+        if (abiertos > 0) { abiertos--; continue; }
+        const m = /([A-Za-z_$][\w$]*)\s*(?:<[^()]*>)?\s*$/.exec(codigo.slice(Math.max(0, k - 80), k));
+        cadena.push(m ? m[1] : '(');
+      }
+    }
+    return cadena;
+  };
+  const HOOK_DESPUES = ['useLayoutEffect', 'useEffect', 'useCallback'];
+  const HOOK_EN_RENDER = ['useState', 'useMemo', 'useRef', 'useSyncExternalStore'];
+  /** Las lecturas de la URL de una pantalla, cada una con el primer hook que la envuelve (o null: en el cuerpo del render). */
+  const lecturas = (codigo) => [...codigo.matchAll(/window\.location\.search/g)].map((m) => {
+    const hook = llamadasQueEnvuelven(codigo, m.index).find((n) => /^use[A-Z]/.test(n)) ?? null;
+    return hook;
+  });
+  // La guarda sí distingue: el patrón viejo (el inicializador de useState) y una lectura en el render fallan.
+  assert.deepEqual(lecturas("function P() {\n  const [enlace] = useState(() => leerEnlaceHub(typeof window === 'undefined' ? '' : window.location.search));\n}"), ['useState']);
+  assert.deepEqual(lecturas('function P() {\n  const x = leerEnlaceHub(window.location.search);\n  return x;\n}'), [null]);
+  assert.deepEqual(lecturas('function P() {\n  useLayoutEffect(() => {\n    if (leer(window.location.search).analisis) setA(true);\n  }, []);\n}'), ['useLayoutEffect']);
+  const PANTALLAS = {
+    ventas: { ruta: '../src/app/dashboard/ventas/page.tsx', lector: 'inicioDelEnlaceHub' },
+    compras: { ruta: '../src/app/dashboard/compras/page.tsx', lector: 'leerEnlaceHubCompras' },
+    inventario: { ruta: '../src/app/dashboard/inventario/page.tsx', lector: 'leerEnlaceHubCompras' },
+  };
+  for (const [nombre, { ruta, lector }] of Object.entries(PANTALLAS)) {
+    const codigo = sinComentarios(readFileSync(new URL(ruta, import.meta.url), 'utf8'));
+    const hooks = lecturas(codigo);
+    assert.ok(hooks.length >= 2, `${nombre}: lee la URL al montar y al volver a los documentos`);
+    for (const hook of hooks) {
+      assert.ok(HOOK_DESPUES.includes(hook) && !HOOK_EN_RENDER.includes(hook), `${nombre}: lectura de la URL dentro de ${hook} (debe ser después del commit)`);
+    }
+    // La lectura del montaje: un useLayoutEffect (antes de pintar: no se ve un cuadro con la sección equivocada).
+    const montaje = codigo.match(/useLayoutEffect\(\(\) => \{[\s\S]*?\n {2}\}, \[[^\]]*\]\);/g)?.find((b) => b.includes(`${lector}(window.location.search)`));
+    assert.ok(montaje, `${nombre}: el enlace se lee en un useLayoutEffect`);
+    assert.ok(!/useState(?:<[^>]*>)?\(\(\) => leerEnlace/.test(codigo), `${nombre}: sin el inicializador de useState que leía la URL anterior`);
+    assert.match(codigo, /import React, \{[^}]*\buseLayoutEffect\b[^}]*\} from 'react';/, `${nombre}: importa useLayoutEffect`);
+  }
+  // Ventas: la sección, el foco y el paso arrancan vacíos y los pone el montaje, una sola vez (StrictMode no lo repite).
+  const hub = sinComentarios(readFileSync(new URL(PANTALLAS.ventas.ruta, import.meta.url), 'utf8'));
+  assert.match(hub, /const \[seccion, setSeccion\] = useState<SeccionHub>\('documentos'\);/);
+  assert.match(hub, /const \[focoEnlace, setFocoEnlace\] = useState<string \| null>\(null\);/);
+  assert.match(hub,
+    /const enlaceLeido = useRef\(false\);\s*useLayoutEffect\(\(\) => \{\s*if \(enlaceLeido\.current\) return;\s*enlaceLeido\.current = true;\s*const inicio = inicioDelEnlaceHub\(window\.location\.search\);\s*if \(inicio\.seccion\) setSeccion\(inicio\.seccion\);\s*if \(inicio\.foco\) setFocoEnlace\(inicio\.foco\);\s*if \(!inicio\.paso\) return;\s*despachar\(\{ tipo: 'paso', valor: inicio\.paso \}\);\s*if \(inicio\.vista\) despachar\(accionPestana\(estado, inicio\.vista, opcionesEstadosHub\)\);\s*\}, \[estado, despachar\]\);/);
+  assert.ok(!/pasoDelEnlace|\benlace\.(paso|foco|analisis)\b/.test(hub), 'sin la foto del enlace tomada en el render');
+  // Compras e Inventario: Análisis arranca apagado y lo enciende el montaje si la URL NUEVA lo pide (al revés de antes: la
+  // URL vieja con ?tab=analisis, por ejemplo la del Hub de Ventas, ya no abre su Análisis desde el menú lateral).
+  for (const nombre of ['compras', 'inventario']) {
+    const codigo = sinComentarios(readFileSync(new URL(PANTALLAS[nombre].ruta, import.meta.url), 'utf8'));
+    assert.match(codigo, /const \[enAnalisis, setEnAnalisis\] = useState\(false\);/, nombre);
+    assert.match(codigo, /useLayoutEffect\(\(\) => \{\s*if \(leerEnlaceHubCompras\(window\.location\.search\)\.analisis\) setEnAnalisis\(true\);\s*\}, \[\]\);/, nombre);
+  }
+}
+
+console.log('--- B4 T24 f2 r1 (C3): el panel rápido del Hub es un Drawer (título, foco de ida y vuelta, Esc, la trampa de Tab y data-capa) ---');
+{
+  const crudo = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const hub = crudo.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // El Drawer trae role="dialog", aria-modal, data-capa y useCierreVentana (el foco entra al abrir y vuelve al cerrar, Esc, el clic en
+  // el fondo y Tab atrapado): T24-e y T24-e2 de test_tabla. Su ancho de 600 px y la reserva del botón de la IA son props aditivas.
+  assert.match(hub, /\{quickDetailDoc && \(\s*<Drawer idTitulo="drawer-panel-rapido-titulo" maxWidth="600" reservaBotonIA onClose=\{\(\) => setQuickDetailDoc\(null\)\} header=\{\(/);
+  assert.ok(!/fixed top-0 bottom-0 right-0/.test(hub), 'sin el panel lateral armado a mano');
+  assert.ok(!/backdrop-blur-xs z-40/.test(hub), 'sin su fondo a mano');
+  assert.equal((hub.match(/setQuickDetailDoc\(null\)/g) ?? []).length, 1, 'un solo cierre: el del Drawer (su X con aria-label, Esc y el fondo)');
+  // Sin campos que escribir (F40 de f1 r2): no lleva cierreExterno={false} ni bloquearCierre.
+  const panel = hub.slice(hub.indexOf('<Drawer idTitulo="drawer-panel-rapido-titulo"'), hub.indexOf('</Drawer>', hub.indexOf('<Drawer idTitulo="drawer-panel-rapido-titulo"')));
+  assert.ok(panel.length > 1000, 'el panel entero');
+  assert.ok(!/<(?:input|textarea|select)\b|ComposerChatter/.test(panel), 'el panel no tiene campos (si los tuviera, F40: cierreExterno={false} y bloquearCierre)');
+  // Cada control del panel lleva el token de foco (FOCO), no el anillo del navegador.
+  const controles = (panel.match(/<(?:button|Link)\b/g) ?? []).length;
+  assert.ok(controles >= 5, `los controles del panel (${controles})`);
+  assert.equal((panel.match(/\$\{FOCO\}/g) ?? []).length, controles, 'cada botón y enlace del panel con ${FOCO}');
+  assert.match(hub, /import \{[^}]*\bFOCO\b[^}]*\} from '@\/lib\/design-system';/);
+}
+
+console.log('--- B4 T24 f2 r1 (duda 2 + m15): claveAccionSiguienteSC, claveAccionSiguienteCOT y claveAccionSiguienteDocumento, sin el texto ---');
+{
+  for (const n of ['claveAccionSiguienteSC', 'claveAccionSiguienteCOT', 'claveAccionSiguienteDocumento']) assert.equal(typeof hv[n], 'function', `${n} existe`);
+  // La MISMA rama de accionSiguienteSC y accionSiguienteCOT (una sola decisión), con la clave que puedeAccionDocumento (lib/roles.js)
+  // cruza con el require_roles de su endpoint.
+  const TEXTO_SC = {
+    ver_ticket: 'Ver ticket', ver_pedido: 'Ver pedido', ver_cotizacion: 'Ver cotización', agregar_productos: 'Agregar productos',
+    cotizar: 'Cotizar →', reiniciar_o_cotizar: 'Reiniciar o cotizar', esperando: 'Esperando cliente',
+    enviar_confirmacion: 'Enviar para confirmación', asignar: 'Asignar asesor', ver_solicitud: 'Ver solicitud',
+  };
+  const sc = (estado, extra = {}) => ({ tipo: 'SC', id: 4, estado, tipo_solicitud: 'Cotizacion de Producto',
+    productos: [{ product_name: 'Tenis' }], cotizaciones: [], pedidos_venta: [], ...extra });
+  const ctx = (f) => ({ cotizaciones: f.cotizaciones, pedidos: f.pedidos_venta });
+  const CASOS_SC = [
+    [sc('BORRADOR', { tipo_solicitud: 'Soporte Tecnico' }), 'ver_ticket'], [sc('CANCELADA'), null],
+    [sc('CONFIRMADA', { pedidos_venta: [{ id: 3, estado: 'EN_PROCESO' }] }), 'ver_pedido'],
+    [sc('CONFIRMADA', { cotizaciones: [{ id: 5, estado: 'BORRADOR' }] }), 'ver_cotizacion'],
+    [sc('ASIGNADA', { productos: [] }), 'agregar_productos'], [sc('CONFIRMADA', { confirmacion_vigente: true }), 'cotizar'],
+    [sc('CONFIRMADA'), 'reiniciar_o_cotizar'], [sc('PENDIENTE_CONFIRMACION'), 'esperando'], [sc('ASIGNADA'), 'enviar_confirmacion'],
+    [sc('BORRADOR'), 'asignar'], [sc('COTIZADA'), 'ver_solicitud'],
+  ];
+  for (const [fila, clave] of CASOS_SC) {
+    assert.equal(hv.claveAccionSiguienteSC(fila, ctx(fila)), clave, `${fila.estado} → ${clave}`);
+    assert.equal(hv.claveAccionSiguienteDocumento(fila), clave, `la fila SC ${fila.estado}`);
+  }
+  // Toda la matriz: la clave dice el mismo texto que la acción (estados × productos × confirmación × soporte × documentos).
+  for (const estado of [...Object.keys(ESTADOS_SC), 'ALGO_NUEVO', null]) {
+    for (const extra of [{}, { productos: [] }, { confirmacion_vigente: true }, { tipo_solicitud: 'Soporte Tecnico' },
+      { cotizaciones: [{ id: 5, estado: 'RECHAZADA' }] }, { cotizaciones: [{ id: 5, estado: 'VENCIDA' }] },
+      { pedidos_venta: [{ id: 3, estado: 'CANCELADO' }] }, { pedidos_venta: [{ id: 3, estado: 'ENTREGADO' }] }]) {
+      const fila = sc(estado, extra);
+      const clave = hv.claveAccionSiguienteSC(fila, ctx(fila));
+      assert.equal(clave === null ? null : TEXTO_SC[clave], hv.accionSiguienteSC(fila, ctx(fila))?.label ?? null, `${estado} ${JSON.stringify(extra)}`);
+    }
+  }
+  const TEXTO_COT = {
+    completar_precios: 'Completar precios', enviar_al_cliente: 'Enviar al cliente', esperando: 'Esperando al cliente',
+    ver_pedido: 'Ver pedido', crear_pedido: 'Crear pedido',
+  };
+  const cot = (estado, extra = {}) => ({ tipo: 'COT', id: 6, estado, total_cop: 1000, pedidos_venta: [], ...extra });
+  const CASOS_COT = [
+    [cot('BORRADOR'), 'enviar_al_cliente'], [cot('BORRADOR', { total_cop: 0 }), 'completar_precios'], [cot('VENCIDA'), 'enviar_al_cliente'],
+    [cot('ENVIADA', { total_cop: null }), 'completar_precios'], [cot('PENDIENTE_CONFIRMACION'), 'esperando'],
+    [cot('CONFIRMADA', { pedidos_venta: [{ id: 2, estado: 'EN_PROCESO' }] }), 'ver_pedido'], [cot('CONFIRMADA'), 'crear_pedido'],
+    [cot('RECHAZADA'), null],
+  ];
+  for (const [fila, clave] of CASOS_COT) {
+    assert.equal(hv.claveAccionSiguienteCOT(fila), clave, `${fila.estado} → ${clave}`);
+    assert.equal(hv.claveAccionSiguienteDocumento(fila), clave, `la fila COT ${fila.estado}`);
+  }
+  for (const estado of [...Object.keys(ESTADOS_COTIZACION), 'ALGO_NUEVO', null]) {
+    for (const extra of [{}, { total_cop: 0 }, { pedidos_venta: [{ id: 2, estado: 'EN_PROCESO' }] }, { pedidos_venta: [{ id: 2, estado: 'CANCELADO' }] }]) {
+      const fila = cot(estado, extra);
+      const clave = hv.claveAccionSiguienteCOT(fila);
+      assert.equal(clave === null ? null : TEXTO_COT[clave], hv.accionSiguienteCOT(fila)?.texto ?? null, `${estado} ${JSON.stringify(extra)}`);
+    }
+  }
+  // Un pedido: la clave de siempre (claveAccionSiguientePVEN), con VEN y con PVEN; otra cosa: null.
+  assert.equal(hv.claveAccionSiguienteDocumento({ tipo: 'VEN', id: 1, estado: 'ENTREGADO' }), 'facturar');
+  assert.equal(hv.claveAccionSiguienteDocumento({ tipo: 'PVEN', id: 1, estado: 'PENDIENTE_COMPRA' }), 'comprar');
+  for (const nada of [null, undefined, 'SC-1', { tipo: 'OTRO', estado: 'BORRADOR' }, {}]) assert.equal(hv.claveAccionSiguienteDocumento(nada), null, JSON.stringify(nada));
+  for (const nada of [null, undefined, 3]) {
+    assert.equal(hv.claveAccionSiguienteSC(nada), null, String(nada));
+    assert.equal(hv.claveAccionSiguienteCOT(nada), null, String(nada));
+  }
+}
+
+console.log('--- B4 T24 f2 r1 (m18, m19 + m37): el Hub lee el rol después de montar y no ofrece lo que da 403 ---');
+{
+  const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // m18: nada de getUsuarioActual().role en el render; useRolActual (después de montar) en el Hub, el ConfigPanel y el panel de notas.
+  assert.ok(!/getUsuarioActual\(\)\.role/.test(hub), 'sin getUsuarioActual().role');
+  assert.match(hub, /const soloLectura = !esAdmin\(useRolActual\(\)\);/, 'el ConfigPanel');
+  assert.match(hub, /const accionAjustar = esAdmin\(rol\)/, '«Ajustar tiempos»');
+  // m19: «Nueva Solicitud» (POST /solicitudes: ADMIN y ASESOR) solo con mover.
+  assert.match(hub, /\{accesoTablero\.mover && \(\s*<Link href="\/dashboard\/ventas\/solicitud\?new=1" aria-label="Nueva solicitud"/);
+  // m19 + m37: el compositor de notas (POST …/actividad: ADMIN, ASESOR y COMPRAS) con accesoNotasVentas, sin una lista propia.
+  assert.match(hub, /const notas = accesoNotasVentas\(useRolActual\(\)\);/);
+  assert.match(hub, /\{detail\?\.id && notas\.anotar && \(\s*<div className="pb-5 border-b border-slate-100">\s*<ComposerChatter compacto/);
+  assert.match(hub, /import \{[^}]*\baccesoNotasVentas\b[^}]*\} from '@\/lib\/roles';/);
+  assert.match(hub, /import \{[^}]*\bpuedeAccionPedido\b[^}]*\} from '@\/lib\/roles';/);
+}
+
+console.log('--- B4 T24 f2 r2 (m4): ActivitiesPanel y ConfigPanel van DESPUÉS de la tarjeta en pantalla completa y de la barra masiva ---');
+{
+  // Los Drawer (fixed z-40) se pintan encima de lo que va antes en el DOM con el mismo z-40: la tarjeta en pantalla completa
+  // (TABLE.tarjetaCompleta) y la barra de acciones masivas. Antes iban al principio y quedaban DEBAJO: el focusin de la capa (m9 de r1)
+  // le quitaba el foco al buscador y al select de la barra, que el usuario veía encima. Como el panel rápido, van después.
+  const crudo = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const pos = (texto) => {
+    assert.equal(crudo.split(texto).length - 1, 1, `una vez: ${texto}`);
+    return crudo.indexOf(texto);
+  };
+  const tarjeta = pos('<section ref={refTarjeta} className={claseTarjeta}>');
+  const barra = pos("{selectedIds.size>0 && !enAnalisis && estado.modo === 'lista' && accesoTablero.mover && (");
+  for (const panel of ['{actRow && <ActivitiesPanel', '{showConfig && <ConfigPanel']) {
+    const i = pos(panel);
+    assert.ok(i > tarjeta, `${panel}: después de la tarjeta en pantalla completa`);
+    assert.ok(i > barra, `${panel}: después de la barra masiva`);
+  }
 }
 
 console.log('OK test_hub_ventas.mjs');

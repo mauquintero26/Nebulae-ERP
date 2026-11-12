@@ -21,12 +21,10 @@ import type { OpcionCatalogo } from '../piezas-inventario';
 import { CHIP, titulosDeOrdenPec } from '../../compras/columnas-pec';
 
 import { apiFetch } from '@/lib/api';
-import { dependenciasTablero, estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
+import { accionVistaEnLista, dependenciasTablero, estadoDelTotal, normalizarRespuesta, ordenEsAtencion, textoOrdenHub } from '@/lib/tabla';
 import { formatoDecimal, lecturaDeCarga, tarjetasAjustes } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { fechaLarga } from '@/lib/fechas-colombia';
-import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
-import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
   COLUMNAS_AJUSTE, MOTIVOS_AJUSTE, bodegaDeAjuste, cantidadDeAjuste, consultaAjustes, consultaColumnaAjuste, direccionDeAjuste,
   consultasTotalesAjuste, infoDireccionAjuste, motivoDeAjuste, nombreBodega, numeroAjuste, pestanasAjustes, skuDeAjuste, tarjetaAjuste, textoFechaAjuste,
@@ -278,7 +276,7 @@ export default function AjustesPage() {
       recargarTodo();
     } catch (err) {
       avisarError(err, 'No se pudo registrar el ajuste');
-      // La regla única: con un 400, un 409 o sin respuesta se recarga lo que se ve; un 404 no.
+      // La regla única (recargarTrasError): con un 400, un 409, un 422 (F8) o sin respuesta se recarga lo que se ve; un 404 o un 500, no.
       if (recargarTrasError(err)) recargarTodo();
     } finally {
       setSaving(false);
@@ -396,11 +394,11 @@ export default function AjustesPage() {
 
       {/* Drawer (B1 a B3): el detalle del ajuste, con la fecha real. */}
       {selected && (
-        <Drawer
+        <Drawer idTitulo="drawer-ajuste-titulo"
           onClose={() => setSelected(null)}
           header={(
             <div>
-              <h2 className="font-extrabold text-xl text-slate-900">{numeroAjuste(selected)}</h2>
+              <h2 id="drawer-ajuste-titulo" className="font-extrabold text-xl text-slate-900">{numeroAjuste(selected)}</h2>
               <p className="text-xs text-slate-500">Ajuste de Inventario</p>
               <div className="mt-2">
                 <span className={`${CHIP} text-[11px] ${direccionSeleccionada.clases.bg} ${direccionSeleccionada.clases.text} ${direccionSeleccionada.clases.border}`}>
@@ -430,7 +428,7 @@ export default function AjustesPage() {
 
       {/* Create Modal (B1 a B3) */}
       {showCreate && (
-        <Modal title="Nuevo Ajuste de Inventario" icon={SlidersHorizontal} color="amber" onClose={() => setShowCreate(false)}
+        <Modal cierreExterno={false} title="Nuevo Ajuste de Inventario" icon={SlidersHorizontal} color="amber" onClose={() => setShowCreate(false)}
           footer={(
             <>
               <Button variant="secondary" onClick={() => setShowCreate(false)}>Cancelar</Button>

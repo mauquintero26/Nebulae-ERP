@@ -22,8 +22,12 @@ import {
 } from '@/lib/kanban-ventas';
 import { textoDeError, recargarTrasError } from '@/lib/avisos';
 import { NewSupplierModal } from '../venta-client';
-import { CambiosDeActividad, CabeceraActividad, getUsuarioActual, puedeCrearOrdenDePago, returnToSeguro, BotonVolver, EnlaceConfirmacionModal } from '../../flujo';
+import { CambiosDeActividad, CabeceraActividad, puedeCrearOrdenDePago, returnToSeguro, BotonVolver, EnlaceConfirmacionModal } from '../../flujo';
 import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
+// B4 T24 f2 (F44-a): la reserva del botón flotante de la IA en las columnas de la derecha (IA, Actividad y Chatter), que se desplazan bajo él.
+import { RESERVA_BOTON_IA } from '@/lib/design-system';
+import { useRolActual } from '@/components/ui/useRolActual';
+import { puedeCancelarPedido } from '@/lib/kanban-ventas';
 import { ChannelModal } from '../../cotizacion/cotizacion-client';
 import { useEnvioAlCliente, LineaEnlaceCliente, TablaProductosPedido } from './detalle-bloque3';
 import { formatoPesos } from '@/lib/pesos';
@@ -97,6 +101,8 @@ function PedidoVentaDetalleContent() {
   const [showNewSupplier, setShowNewSupplier] = useState(false);
   const [listaSaving, setListaSaving] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
+  // B4 T24 f2 r1 (m14, m18): el rol leído después de montar.
+  const rol = useRolActual();
   const [cancelRazon, setCancelRazon] = useState('');
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState('');
@@ -204,12 +210,13 @@ function PedidoVentaDetalleContent() {
   // antes de stepIndex 'hecho', el suyo 'actual' y los siguientes 'pendiente'; los pinta PasosFlujo (la pieza común).
   const pasosPedido = pasosConProgreso(STEPS, stepIndex);
   // N2: solo se ofrece lo que el servidor acepta por PATCH desde el estado actual.
-  const puedeCancelar = transicionesPedido(estadoActual).includes('CANCELADO');
+  // B4 T24 f2 r1 (m14): cancelar (PATCH a CANCELADO) es de ADMIN y ASESOR; el botón y la ventana de ?accion=cancelar, con el rol.
+  const puedeCancelar = puedeCancelarPedido(estadoActual, rol);
   const opcionesEstado = ESTADOS_PEDIDO_MANUALES.filter(k => transicionesPedido(estadoActual).includes(k));
   const estadoSoloLectura = ESTADOS_PEDIDO_CERRADOS.includes(estadoActual) || opcionesEstado.length === 0;
   // H44+N6 / H45: la orden de pago vigente (o la ultima cancelada) y si se puede crear otra.
   const { vigente: pxpVigente, cancelada: pxpCancelada } = pxpsDelPedido(pedido);
-  const puedePxp = puedeCrearOrdenDePago(getUsuarioActual().role) && pedidoAdmitePxp(pedido);
+  const puedePxp = puedeCrearOrdenDePago(rol) && pedidoAdmitePxp(pedido);
 
   async function handleCrearPxp() {
     if (!pedido?.id) return;
@@ -838,7 +845,7 @@ function PedidoVentaDetalleContent() {
           </div>
 
           {panelTab === 'ia' && (
-            <div className="flex-1 overflow-y-auto p-5 bg-slate-50/30 space-y-4">
+            <div className={`flex-1 overflow-y-auto p-5 bg-slate-50/30 space-y-4 ${RESERVA_BOTON_IA}`}>
               <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-2xl p-4 border border-indigo-100">
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
@@ -861,7 +868,7 @@ function PedidoVentaDetalleContent() {
             <>
               {/* U6+H22: la caja de notas y los botones de contacto se mudaron a la pestaña Chatter (ChatterDocumento:
                   nota interna, llamada, WhatsApp, correo y Nota externa). Aquí queda el enlace 'Escribir nota'. */}
-              <div className="flex-1 overflow-y-auto p-6 custom-scrollbar bg-white">
+              <div className={`flex-1 overflow-y-auto p-6 custom-scrollbar bg-white ${RESERVA_BOTON_IA}`}>
                 <div className="flex items-center justify-between gap-2 mb-6">
                   <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Línea Temporal</h4>
                   <button type="button" onClick={() => setPanelTab('chatter')}
@@ -904,7 +911,7 @@ function PedidoVentaDetalleContent() {
               nota guardada entra de una vez aquí y en la Actividad, sin el spinner de página; si el servidor no devuelve
               el renglón, recarga silenciosa. */}
           {panelTab === 'chatter' && (
-            <div className="flex-1 overflow-y-auto p-5 custom-scrollbar bg-white">
+            <div className={`flex-1 overflow-y-auto p-5 custom-scrollbar bg-white ${RESERVA_BOTON_IA}`}>
               <ChatterDocumento tipoDoc="VEN" doc={pedido}
                 onRegistrado={(log) => log ? setPedido((p: any) => agregarActividad(p, log, 'VEN')) : void loadPedido({ silencioso: true })} />
             </div>
@@ -912,7 +919,7 @@ function PedidoVentaDetalleContent() {
         </div>
       </div>
       {showPecModal && pedido && (
-        <Modal title="Crear Pedido de Compra" icon={ShoppingCart} color="purple"
+        <Modal cierreExterno={false} title="Crear Pedido de Compra" icon={ShoppingCart} color="purple"
           subtitle={`Vinculado a ${pedido.numero} — ${pedido.customer_name}`}
           // Mientras se crea el PEC no se cierra (ni la X ni 'Cancelar'): el resultado siempre llega a una ventana abierta.
           onClose={() => { if (!pecSaving) setShowPecModal(false); }} bloquearCierre={pecSaving}
@@ -985,8 +992,8 @@ function PedidoVentaDetalleContent() {
           onClose={() => setShowNewSupplier(false)}
         />
       )}
-      {showCancelModal && (
-        <Modal title="Cancelar Pedido de Venta" icon={AlertCircle} color="red" maxWidth="md"
+      {showCancelModal && puedeCancelar && (
+        <Modal cierreExterno={false} title="Cancelar Pedido de Venta" icon={AlertCircle} color="red" maxWidth="md"
           // Mientras se cancela no se cierra (ni la X ni 'Volver'): el resultado siempre llega a una ventana abierta.
           onClose={() => { if (!cancelling) setShowCancelModal(false); }} bloquearCierre={cancelling}
           footer={(

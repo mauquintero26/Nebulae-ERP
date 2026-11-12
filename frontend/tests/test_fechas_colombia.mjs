@@ -148,4 +148,51 @@ console.log('--- TEST (B4 T18 r1, m13): horaCO, la hora de Colombia con la regla
   assert.ok(fechaHoraCO('2026-10-05T14:00:00Z').endsWith(fechasLib.horaCO('2026-10-05T14:00:00Z')), 'la misma hora que fechaHoraCO');
 }
 
+console.log('--- TEST T24 (B4 T24, FINAL-m30 y F3): el día de negocio, la aritmética de días y el día corto, una sola vez ---');
+{
+  const { diaDeCalendario, diaDeNegocio, sumarDias, diasEntre, textoDiaCorto } = fechasLib;
+  // F3: diaDeCalendario, exportado (analisis.js ya no lo copia): el Date UTC de un 'AAAA-MM-DD' que existe, o null.
+  assert.equal(diaDeCalendario('2026-11-10')?.getTime(), Date.UTC(2026, 10, 10));
+  for (const malo of ['2026-02-30', '2026-1-10', '2026-11-10T00:00:00', '', null, 20261110]) assert.equal(diaDeCalendario(malo), null, String(malo));
+  // diaDeNegocio: los 10 primeros caracteres de una fecha de negocio, sin pasarla a ninguna zona; un día que no existe, ''.
+  assert.equal(diaDeNegocio('2026-11-10T00:00:00'), '2026-11-10');
+  assert.equal(diaDeNegocio('  2026-11-10 '), '2026-11-10');
+  assert.equal(diaDeNegocio('2026-11-10T23:59:59Z'), '2026-11-10', 'no se corre a Colombia');
+  for (const malo of ['2026-02-30', '10/11/2026', 'x2026-11-10', '', null, undefined, 5]) assert.equal(diaDeNegocio(malo), '', String(malo));
+  // sumarDias y diasEntre: días de calendario en UTC (sin horas de verano); lo que no es un día, '' y null.
+  assert.equal(sumarDias('2026-12-30', 3), '2027-01-02');
+  assert.equal(sumarDias('2028-03-01', -1), '2028-02-29');
+  assert.equal(sumarDias('2026-11-10', 0), '2026-11-10');
+  for (const [dia, n] of [['2026-02-30', 1], ['', 1], ['2026-11-10', 1.5], ['2026-11-10', NaN]]) assert.equal(sumarDias(dia, n), '', `${dia} ${n}`);
+  assert.equal(diasEntre('2026-11-10', '2026-11-13'), 3);
+  assert.equal(diasEntre('2026-11-13', '2026-11-10'), -3);
+  assert.equal(diasEntre('2026-03-01', '2026-03-31'), 30, 'sin horas de verano');
+  assert.equal(diasEntre('2026-11-10', '2026-02-30'), null);
+  // textoDiaCorto: el día corto o '—' (las cuatro copias de antes: Compras dos veces, Campañas con '-' y Entregas).
+  assert.equal(textoDiaCorto('2026-11-20T00:00:00'), '20 nov 2026');
+  for (const nada of [null, '', 'x', '2026-02-30']) assert.equal(textoDiaCorto(nada), '—', String(nada));
+  // Las libs y las pantallas usan estas (sin copias): diaPec y diaDeNegocio de las libs son la misma función.
+  const estadosCompras = await import('../src/lib/estados-compras.js');
+  const listasVentas = await import('../src/lib/listas-ventas.js');
+  assert.equal(estadosCompras.diaPec, diaDeNegocio, 'diaPec es diaDeNegocio');
+  assert.equal(listasVentas.diaDeNegocio, diaDeNegocio);
+  const leer = (ruta) => readFileSync(join(SRC, ruta), 'utf8').replace(/\r\n/g, '\n');
+  for (const ruta of ['lib/flujo-compras.js', 'lib/transito.js', 'lib/listas-ventas.js', 'lib/analisis.js', 'lib/estados-compras.js']) {
+    const f = leer(ruta);
+    assert.ok(!/const MS_DIA|Date\.UTC\(/.test(f), `${ruta}: sin aritmética de días propia`);
+  }
+  assert.ok(!/INICIO_DIA_DE_NEGOCIO|function sumarDias/.test(leer('lib/listas-ventas.js')));
+  for (const ruta of ['app/dashboard/compras/columnas-pec.tsx', 'app/dashboard/compras/pedidos/[id]/page.tsx', 'app/dashboard/marketing/campanas/page.tsx',
+    'lib/entregas.js']) {
+    const f = leer(ruta);
+    assert.match(f, /textoDiaCorto/, `${ruta}: textoDiaCorto`);
+    assert.ok(!/fechaCorta\((?:diaPec|diaDeNegocio)\(/.test(f), `${ruta}: sin su copia`);
+  }
+  // F3: agrupar los miles, una sola vez (agruparMiles de pesos.js, la de formatoPesos).
+  const pesos = await import('../src/lib/pesos.js');
+  assert.equal(pesos.agruparMiles(1234567), '1.234.567');
+  assert.equal(pesos.agruparMiles(999), '999');
+  assert.equal((leer('lib/pesos.js') + leer('lib/kpis.js')).match(/\\B\(\?=\(\\d\{3\}\)\+\(\?!\\d\)\)/g)?.length, 1, 'la expresión, una vez');
+}
+
 console.log('✓ Todas las pruebas de fechas de Colombia pasaron.');

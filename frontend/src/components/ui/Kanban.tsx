@@ -8,8 +8,9 @@ import { ArrowRightLeft, ChevronsRightLeft, ExternalLink, Loader2, Lock, RotateC
 import {
   TEXTO_SOLO_VER, agregarPendiente, aplicarPagina, alternarPlegada, altoEnContenedor, asegurarColumna, bloqueoDeColumna,
   cancelarVerMas, columnaBajoPunto, columnaOcupada, columnasPorLanzar, consultaColumna, crearTopesDeEspera, crearTurnos,
-  definirColumnas, deshacerMovimiento, esDesplazable, esperarRecarga, estadoColumna, estadoDestino, firmaConsulta,
-  idsPendientes, llegoRecarga, mapaDestinos, marcarRecibido, moverTarjeta, opcionesMoverA, paginaDeRespuesta,
+  definirColumnas, deshacerMovimiento, esCopiaVieja, esDesplazable, esperarRecarga, estadoColumna, estadoDestino, firmaConsulta,
+  idsPendientes, limiteDeRecarga, llegoRecarga, mapaDestinos, marcarRecibido, minimasTrasSoltar, moverTarjeta, opcionesMoverA,
+  paginaDeRespuesta, CLAVES_TONOS_KANBAN,
   plegadasValidas, quedanEnServidor, reemplazarTarjeta, reglaSegunManejadores, resolverPlegadas, resolverSoltar,
   siguienteAnuncio, soltarEsperasOcultas, subirVersiones, superaUmbral, tableroCliente, textoMovimiento, textoTotalColumna,
   velocidadAutodesplazamiento, vencerEspera,
@@ -17,14 +18,15 @@ import {
 import type {
   ColumnaKanban, ConsultaColumna, DatosColumna, Destino, PendienteMovimiento, ReglaSoltar, ResultadoSoltar,
 } from '@/lib/kanban';
+import { FOCO, FOCO_DENTRO, FOCOS } from '@/lib/design-system';
 import { formatoPesos } from '@/lib/pesos';
-import { textoDeError } from '@/lib/avisos';
+import { ofreceReintentar, textoDeError } from '@/lib/avisos';
+import { esperarPreferencias, listoConTope } from '@/lib/tabla';
 import { useAvisos } from './Avisos';
 import { Contador } from './Contador';
 import { MenuFila } from './MenuFila';
 import type { ItemMenuFila } from './MenuFila';
 import { usePreferencia } from './usePreferencia';
-import { ACCENTS } from './colors';
 import type { AccentColor } from './colors';
 
 /**
@@ -80,6 +82,11 @@ export type DatosColumnaKanban<T> = {
    * lo que pinta puede ser viejo y sus tarjetas no se mueven (bloqueoDeColumna).
    */
   cargaFallida?: boolean;
+  /**
+   * B4 T24 (F11): lo que pinta es de una versión menor que la mínima de la columna (una copia vieja de antes de ocultarse, con su
+   * recarga en camino): sus tarjetas no se mueven (bloqueoDeColumna) hasta que llega.
+   */
+  copiaVieja?: boolean;
   /** Quedan tarjetas sin mostrar (en el servidor o, en modo cliente, ya cargadas). */
   hayMas: boolean;
   /** El resumen que devolvió cargar (modo servidor), p. ej. la suma de la columna. */
@@ -102,10 +109,10 @@ export type OpcionesTableroKanban<T> = {
   columnas: ReadonlyArray<ColumnaKanban>;
   /** Por defecto item.id. Si dos tipos de documento comparten ids (el Hub), una clave propia como `${tipo}|${id}`. */
   idDe?: (item: T) => Id;
-  /** false mientras la vista es Lista: no carga nada. */
-  activo?: boolean;
-  /** El mismo tamaño de página de la tabla, 25 o 50. */
-  porColumna?: number;
+  /** false mientras la vista es Lista: no carga nada. B4 T24 (F19): obligatorio (tsc se lo exige a cada pantalla). */
+  activo: boolean;
+  /** El mismo tamaño de página de la tabla, 25 o 50. B4 T24 (F19): obligatorio. */
+  porColumna: number;
   // modo servidor
   cargar?: (columna: ColumnaKanban, consulta: ConsultaColumnaKanban) => Promise<RespuestaColumnaKanban<T>>;
   /** La búsqueda y los filtros (valores simples); al cambiar, se recarga todo. */
@@ -139,7 +146,10 @@ export type TableroKanbanEstado<T> = {
   /** Pliega o abre una columna (sin `plegada`, alterna) y lo recuerda en kanban:<pantalla>. */
   plegar: (clave: string, plegada?: boolean) => void;
   plegadas: ReadonlyArray<string>;
-  /** Ya se leyeron las plegadas guardadas. */
+  /**
+   * Ya se leyeron las plegadas guardadas (B4 T24, F18: o venció el tope de esperarPreferencias). Antes, nada se pide y se
+   * pinta el esqueleto.
+   */
   listo: boolean;
   idDe: (item: T) => Id;
   /**
@@ -159,7 +169,11 @@ export type TableroKanbanEstado<T> = {
   ) => MovimientoOptimista<T>;
 };
 
-type ColumnaInterna = DatosColumna & { firma?: string; resumen?: unknown; cargandoMas?: boolean; errorMas?: unknown };
+type ColumnaInterna = DatosColumna & {
+  firma?: string; resumen?: unknown; cargandoMas?: boolean; errorMas?: unknown;
+  /** B4 T24 (F11): la versión de la consulta principal que trajo lo que se pinta. */
+  version?: number;
+};
 /** La consulta en camino de una columna: la principal o la de «Ver más» (T4B r2: solo esa se aborta al mover). */
 type ControlConsulta = { control: AbortController; agregar: boolean };
 type TableroInterno = Record<string, ColumnaInterna>;
@@ -186,7 +200,7 @@ const SIN_MOVIMIENTOS: ReadonlyArray<never> = [];
  */
 export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>): TableroKanbanEstado<T> {
   const {
-    pantalla, modo, columnas: crudas, idDe = idPorDefecto, activo = true, porColumna = 25, cargar, dependencias,
+    pantalla, modo, columnas: crudas, idDe = idPorDefecto, activo, porColumna, cargar, dependencias,
     ordenDe, esperaMs = 0, items, columnaDe, esAtrasado, fechaMovimiento, totales,
   } = opciones;
 
@@ -200,6 +214,14 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
     validar: plegadasValidas,
   });
   const plegadas = useMemo(() => resolverPlegadas(guardadas, columnas), [guardadas, columnas]);
+  // B4 T24 (F18): nada se pide (y TableroKanban pinta el esqueleto) hasta leer lo guardado; con el tope de las preferencias de la tabla
+  // (esperarPreferencias de lib/tabla.js, r1 m42: el mismo de useEstadoTabla), para no esperar para siempre si la precarga no termina.
+  const [vencioEspera, setVencioEspera] = useState(false);
+  useEffect(() => {
+    if (listo) return undefined;
+    return esperarPreferencias({ alVencer: () => setVencioEspera(true) });
+  }, [listo]);
+  const listoTablero = listoConTope(listo, vencioEspera);
 
   const claveDeps = JSON.stringify(dependencias ?? null);
 
@@ -207,6 +229,14 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
   const [tablero, setTablero] = useState<TableroInterno>({});
   const tableroRef = useRef<TableroInterno>({});
   const [versiones, setVersiones] = useState<Record<string, number>>({});
+  // B4 T24 (F15): el limit con que se recarga cada columna (limiteDeRecarga: lo que tenía cargado con «Ver más», hasta 200), por las
+  // dependencias y el tamaño vigentes: otra búsqueda u otro tamaño vuelven a porColumna.
+  const claveLimites = `${claveDeps}|${porColumna}`;
+  const [limites, setLimites] = useState<{ clave: string; valores: Record<string, number> }>({ clave: '', valores: {} });
+  const limitesVigentes = limites.clave === claveLimites ? limites.valores : SIN_CORTES;
+  // B4 T24 (F11): las versiones mínimas que tienen que pintar las columnas (minimasTrasSoltar).
+  const minimasRef = useRef<Record<string, number>>({});
+  const [minimas, setMinimas] = useState<Record<string, number>>({});
   // T4B r2: la copia síncrona de las versiones, para saber en el manejador qué versión espera cada movimiento.
   const versionesRef = useRef<Record<string, number>>({});
   // Los movimientos pendientes (T4B r2): la copia síncrona y el estado que pinta.
@@ -217,7 +247,7 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
   // cargando).
   const deseadas: Record<string, { consulta: ConsultaColumna; firma: string; version: number }> = {};
   for (const c of columnas) {
-    const consulta = consultaColumna(c, { plegada: plegadas.includes(c.clave), porColumna, ordenDe });
+    const consulta = consultaColumna(c, { plegada: plegadas.includes(c.clave), porColumna: limitesVigentes[c.clave] ?? porColumna, ordenDe });
     const version = versiones[c.clave] ?? 0;
     deseadas[c.clave] = { consulta, version, firma: firmaConsulta(consulta, { dependencias: claveDeps, version }) };
   }
@@ -229,10 +259,12 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
   const [movimientos, setMovimientos] = useState<ReadonlyArray<MovimientoCliente<T>>>(SIN_MOVIMIENTOS);
 
   // Lo último que pasó la pantalla, para los manejadores y las respuestas (se lee fuera del render).
-  const actuales = useRef({ cargar, columnas, deseadas, idDe, items, porColumna, ordenDe, modo });
+  const actuales = useRef({ cargar, columnas, deseadas, idDe, items, porColumna, ordenDe, modo, claveLimites });
   useEffect(() => {
-    actuales.current = { cargar, columnas, deseadas, idDe, items, porColumna, ordenDe, modo };
+    actuales.current = { cargar, columnas, deseadas, idDe, items, porColumna, ordenDe, modo, claveLimites };
   });
+  // B4 T24 (F12): si el PATCH responde con el tablero desmontado, cerrar no arma un tope que nadie limpiaría.
+  const montado = useRef(false);
 
   const lanzadas = useRef<Record<string, string>>({});
   const controles = useRef<Record<string, ControlConsulta>>({});
@@ -255,6 +287,13 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
     tableroRef.current = nuevo;
     setTablero(nuevo);
   }, [setTablero]);
+
+  const actualizarMinimas = useCallback((cambio: (m: Record<string, number>) => Record<string, number>) => {
+    const nuevas = cambio(minimasRef.current);
+    if (nuevas === minimasRef.current) return;
+    minimasRef.current = nuevas;
+    setMinimas(nuevas);
+  }, [setMinimas]);
 
   const actualizarPendientes = useCallback((
     cambio: (lista: ReadonlyArray<PendienteMovimiento>) => ReadonlyArray<PendienteMovimiento>,
@@ -296,7 +335,7 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
           const marcado = marcarRecibido(conPagina, clave) as TableroInterno;
           const extra: Partial<ColumnaInterna> = agregar
             ? { cargandoMas: false, errorMas: null }
-            : { firma: firma ?? undefined, resumen: pagina.resumen, cargandoMas: false, errorMas: null };
+            : { firma: firma ?? undefined, version: version ?? undefined, resumen: pagina.resumen, cargandoMas: false, errorMas: null };
           return { ...marcado, [clave]: { ...marcado[clave], ...extra } };
         });
         if (!agregar && version !== null) actualizarPendientes((l) => llegoRecarga(l, clave, version));
@@ -321,8 +360,10 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
     // T4B r3: las esperas de las columnas que ya no se ven (un filtro, una tarjeta de indicador) se sueltan; cuando
     // vuelvan a verse, su versión (que subió igual) las recarga.
     const visibles = actuales.current.columnas.map((c) => c.clave);
+    // B4 T24 (F11): antes de soltar las esperas de las que se ocultaron, su versión mínima: al reaparecer, su copia vieja no se mueve.
+    actualizarMinimas((m) => minimasTrasSoltar(m, pendientesRef.current, visibles));
     actualizarPendientes((l) => soltarEsperasOcultas(l, visibles));
-    if (modo !== 'servidor' || !activo) {
+    if (modo !== 'servidor' || !activo || !listoTablero) {
       lanzadas.current = {};
       return undefined;
     }
@@ -339,14 +380,16 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
     }
     lanzar();
     return undefined;
-  }, [modo, activo, firmas, claveDeps, esperaMs, pedir, actualizarPendientes]);
+  }, [modo, activo, listoTablero, firmas, claveDeps, esperaMs, pedir, actualizarPendientes, actualizarMinimas]);
 
   // Al desmontar, ninguna consulta queda viva (ni un tope de espera, r3). Al volver a montar (StrictMode en desarrollo),
   // los movimientos que esperaban recargas recuperan su tope.
   useEffect(() => {
+    montado.current = true;
     const vivos = controles.current;
     for (const p of pendientesRef.current) if (p.espera) obtenerTopes().armar(p.n);
     return () => {
+      montado.current = false;
       for (const { control } of Object.values(vivos)) control.abort();
       // T4B r1: StrictMode (en desarrollo) desmonta y vuelve a montar. Lo que se acaba de abortar tiene que relanzarse
       // al montar otra vez, así que la guarda de lo lanzado y las últimas dependencias se olvidan con las consultas;
@@ -364,8 +407,15 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
     const r = subirVersiones(versionesRef.current, claves, ahora.columnas.map((c) => c.clave));
     versionesRef.current = r.versiones;
     setVersiones(r.versiones);
+    // B4 T24 (F15): la recarga trae lo que la columna tenía cargado (limiteDeRecarga), no vuelve a porColumna.
+    const subidas = claves ?? ahora.columnas.map((c) => c.clave);
+    setLimites((l) => {
+      const valores = l.clave === ahora.claveLimites ? { ...l.valores } : {};
+      for (const clave of subidas) valores[clave] = limiteDeRecarga(ahora.porColumna, tableroRef.current[clave]?.items.length);
+      return { clave: ahora.claveLimites, valores };
+    });
     return r.subidas;
-  }, [setVersiones]);
+  }, [setVersiones, setLimites]);
 
   const recargar = useCallback((claves?: ReadonlyArray<string>) => {
     subir(claves);
@@ -420,7 +470,7 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
       const subidas = subir([origen, destino]);
       actualizarPendientes((l) => esperarRecarga(l, n, subidas));
       // T4B r3: la espera de la recarga lleva tope; el PATCH no (el servidor todavía puede aplicar el cambio).
-      if (Object.keys(subidas).length) obtenerTopes().armar(n);
+      if (Object.keys(subidas).length && montado.current) obtenerTopes().armar(n);
     };
     if (actuales.current.modo === 'cliente') {
       const base = actuales.current.items;
@@ -471,10 +521,17 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
 
   // ── lo que ve la pantalla ──
   const cortesVigentes = cortes.clave === claveCortes ? cortes.valores : SIN_CORTES;
+  // B4 T24 (F14): el modo cliente agrupa una vez por cambio de sus entradas (no reagrupa hasta 500 leads en cada render).
+  const baseCliente = useMemo(
+    () => (modo === 'cliente'
+      ? tableroCliente(items, columnas, { columnaDe, esAtrasado, fechaMovimiento, porColumna, cortes: cortesVigentes, totales })
+      : null),
+    [modo, items, columnas, columnaDe, esAtrasado, fechaMovimiento, porColumna, cortesVigentes, totales],
+  );
   let datos: Record<string, DatosColumnaKanban<T>>;
   let cargandoInicial: boolean;
-  if (modo === 'cliente') {
-    let t = tableroCliente(items, columnas, { columnaDe, esAtrasado, fechaMovimiento, porColumna, cortes: cortesVigentes, totales });
+  if (modo === 'cliente' && baseCliente) {
+    let t = baseCliente;
     for (const m of movimientos) {
       if (m.base !== items || !t[m.origen] || !t[m.destino]) continue;
       t = moverTarjeta(t, m.id, m.origen, m.destino, m.cambios, { idDe: m.idDe }).tablero as typeof t;
@@ -494,6 +551,7 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
         error: cargando ? null : base.error,
         hayMas: !plegadas.includes(c.clave) && quedanEnServidor(base),
         cargaFallida: Boolean(base.error),
+        copiaVieja: esCopiaVieja(minimas, c.clave, base.version),
       };
     }
     cargandoInicial = columnas.some((c) => tablero[c.clave]?.firma === undefined);
@@ -502,7 +560,7 @@ export function useTableroKanban<T = unknown>(opciones: OpcionesTableroKanban<T>
   const pendientes = useMemo(() => idsPendientes(pendientesLista), [pendientesLista]);
 
   return {
-    modo, columnas, datos, cargandoInicial, verMas, recargar, plegar, plegadas, listo, idDe, pendientes,
+    modo, columnas, datos, cargandoInicial, verMas, recargar, plegar, plegadas, listo: listoTablero, idDe, pendientes,
     movimientosPendientes: pendientesLista, moverOptimista,
   };
 }
@@ -537,7 +595,8 @@ export type DatosTarjetaKanban = {
 
 export type PropsTarjetaKanban = DatosTarjetaKanban & {
   /** El menú ⋯ (MenuFila). */
-  menu?: ItemMenuFila[];
+  /** B4 T24 (F14): o una función que arma el menú al abrirlo (MenuFila la llama entonces). */
+  menu?: ItemMenuFila[] | (() => ItemMenuFila[]);
   /** El número es un botón que abre el documento (teclado). */
   onAbrir?: () => void;
   /** Espera al servidor: spinner. */
@@ -637,7 +696,7 @@ export function TarjetaKanban({
                 onAbrir();
               }}
               title={`Abrir ${numero}`}
-              className="min-w-0 truncate rounded font-bold text-slate-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
+              className={`min-w-0 truncate rounded font-bold text-slate-800 hover:underline ${FOCO}`}
             >
               {numero}
             </button>
@@ -648,7 +707,7 @@ export function TarjetaKanban({
             <Loader2 size={12} className="shrink-0 animate-spin text-slate-500" aria-label="Guardando el cambio" />
           )}
         </div>
-        {menu && menu.length > 0 && <MenuFila items={menu} etiqueta={`Acciones de ${numero}`} />}
+        {menu && (typeof menu === 'function' || menu.length > 0) && <MenuFila items={menu} etiqueta={`Acciones de ${numero}`} />}
       </div>
       <p className="mt-1 truncate text-sm font-semibold text-slate-800" title={titulo}>{titulo}</p>
       {subtitulo && <p className="truncate text-slate-500" title={subtitulo}>{subtitulo}</p>}
@@ -732,6 +791,11 @@ export type PropsTableroKanban<T> = {
   pieColumna?: (clave: string) => ReactNode;
   /** El motivo de un tablero solo para ver («Este tablero es para ver: …», R11): no se arrastra ni se ofrece «Mover a». */
   soloLectura?: string | null;
+  /**
+   * B4 T24 (F21): el nombre de la tarjeta en el anuncio aria-live («Ana Pérez movido a Ganado»). Por defecto el número de tarjetaDe;
+   * con renderTarjeta y sin tarjetaDe, el id crudo: la pantalla lo da.
+   */
+  nombreDe?: (item: T) => string;
   color?: AccentColor;
   /** El texto de una columna vacía; por defecto 'Sin documentos aquí'. */
   vacio?: string;
@@ -742,7 +806,9 @@ export type PropsTableroKanban<T> = {
 type Tono = { punto: string; borde: string; fondo: string; texto: string; anillo: string };
 
 // Clases literales (el JIT de Tailwind no ve clases armadas): una por familia de color de las columnas.
-const TONOS: Record<string, Tono> = {
+type ClaveTonoKanban = typeof CLAVES_TONOS_KANBAN[number];
+// r2 (C8): las claves son CLAVES_TONOS_KANBAN de lib/kanban.js (una prueba fija que coinciden).
+const TONOS: Record<ClaveTonoKanban, Tono> = {
   slate: { punto: 'bg-slate-400', borde: 'border-slate-400', fondo: 'bg-slate-100', texto: 'text-slate-700', anillo: 'ring-slate-300' },
   gray: { punto: 'bg-gray-400', borde: 'border-gray-400', fondo: 'bg-gray-100', texto: 'text-gray-700', anillo: 'ring-gray-300' },
   red: { punto: 'bg-red-500', borde: 'border-red-400', fondo: 'bg-red-50', texto: 'text-red-700', anillo: 'ring-red-300' },
@@ -763,9 +829,21 @@ const TONOS: Record<string, Tono> = {
   pink: { punto: 'bg-pink-500', borde: 'border-pink-400', fondo: 'bg-pink-50', texto: 'text-pink-700', anillo: 'ring-pink-300' },
   rose: { punto: 'bg-rose-500', borde: 'border-rose-400', fondo: 'bg-rose-50', texto: 'text-rose-700', anillo: 'ring-rose-300' },
 };
-const tonoDe = (tono: string | undefined): Tono => TONOS[tono ?? 'slate'] ?? TONOS.slate;
+const tonoDe = (tono: string | undefined): Tono => TONOS[(tono ?? 'slate') as ClaveTonoKanban] ?? TONOS.slate;
 
 const VACIO_POR_DEFECTO = 'Sin documentos aquí';
+/** B4 T24 (F20): «Ver más» en el tono -700 del acento (≥ 4,5:1 en text-xs; el -600 de ACCENTS daba ≈3:1 con amber). */
+const TEXTO_VER_MAS: Record<AccentColor, string> = {
+  amber: 'text-amber-700',
+  rose: 'text-rose-700',
+  orange: 'text-orange-700',
+  indigo: 'text-indigo-700',
+  purple: 'text-purple-700',
+  emerald: 'text-emerald-700',
+  blue: 'text-blue-700',
+  teal: 'text-teal-700',
+  red: 'text-red-700',
+};
 
 type Arrastre<T> = {
   item: T;
@@ -806,13 +884,35 @@ type Seguimiento<T> = {
 };
 
 /**
+ * El esqueleto del tablero mientras faltan las preferencias, las etapas o el rol (la forma de TableroKanban: nada salta). B4 T24 r2
+ * (m2, m10): la pieza común (antes, local del CRM): las pantallas con tablero la pintan mientras !acceso.listo.
+ */
+export function EsqueletoTablero() {
+  return (
+    <div aria-busy="true" aria-label="Cargando el tablero" className="flex min-h-[420px] w-full min-w-0 items-stretch gap-3 overflow-hidden pb-2">
+      {[0, 1, 2, 3].map((i) => (
+        <div key={i} className="flex w-[85vw] shrink-0 flex-col rounded-2xl border border-slate-200 bg-slate-50 sm:w-72">
+          <div className="shrink-0 border-b border-slate-200 px-3 pb-2 pt-3">
+            <div className="h-3.5 w-28 animate-pulse rounded bg-slate-200"/>
+            <div className="mt-2 h-3 w-16 animate-pulse rounded bg-slate-200"/>
+          </div>
+          <div className="space-y-2 p-2">
+            {[0, 1, 2].map((j) => <div key={j} className="h-20 animate-pulse rounded-xl border border-slate-200 bg-white"/>)}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
  * El tablero (KANBAN-base b a g). Ver el comentario de arriba. Ocupa todo el ancho del contenido, sin una tarjeta que
  * lo encierre (U5), y se desplaza en horizontal dentro de su caja: la página no se corre (H8). Su alto es el alto libre
  * de la ventana, mínimo 420 px.
  */
 export function TableroKanban<T = unknown>({
   tablero, idDe, regla, onCambio, onAccion, onAbrir, tarjetaDe, renderTarjeta, accionesTarjeta, resumenColumna,
-  pieColumna, soloLectura, color = 'indigo', vacio = VACIO_POR_DEFECTO, aviso,
+  pieColumna, soloLectura, color = 'indigo', vacio = VACIO_POR_DEFECTO, aviso, nombreDe,
 }: PropsTableroKanban<T>) {
   const { avisar, avisarError } = useAvisos();
   const idTarjeta = idDe ?? tablero.idDe;
@@ -897,12 +997,13 @@ export function TableroKanban<T = unknown>({
       observador?.disconnect();
       window.cancelAnimationFrame(cuadro);
     };
-  }, [ajustarAlto]);
+    // r1 (m13): con tablero.listo, porque el esqueleto de F18 sale sin el `contenedor`: al pasar a listo, el efecto vuelve a correr.
+  }, [ajustarAlto, tablero.listo]);
 
   // El aviso y el banner de solo para ver corren el tablero hacia abajo o hacia arriba.
   useLayoutEffect(() => {
     ajustarAlto();
-  }, [aviso, soloVer, ajustarAlto]);
+  }, [aviso, soloVer, ajustarAlto, tablero.listo]);
 
   // T4B r1: después de «Mover a…» el foco va a la tarjeta en su columna nueva (o al encabezado de la columna si ahí no
   // se ve) y, al plegar o abrir, al botón que la abre o la pliega. Se intenta después de cada render hasta que aparece,
@@ -994,7 +1095,7 @@ export function TableroKanban<T = unknown>({
 
   const tituloDe = (clave: string) => columnas.find((c) => c.clave === clave)?.titulo ?? clave;
   const datosDe = (item: T): DatosTarjetaKanban => tarjetaDe?.(item) ?? { numero: String(idTarjeta(item) ?? ''), titulo: '' };
-  const nombreDe = (item: T) => datosDe(item).numero;
+  const nombreTarjeta = (item: T) => nombreDe?.(item) || datosDe(item).numero;
   /** La región aria-live; un texto igual al anterior se vuelve a anunciar (T4B r1). */
   const anunciar = (texto: string) => setAnuncio((anterior) => siguienteAnuncio(anterior, texto));
   const enfocarDespues = (foco: Omit<FocoPendiente, 'n'>) => {
@@ -1003,8 +1104,14 @@ export function TableroKanban<T = unknown>({
 
   /** Lo mismo al soltar con el puntero y al elegir «Mover a …» en el menú (desdeMenu: el foco sigue a la tarjeta). */
   const soltar = async (item: T, origen: string, destino: string, desdeMenu = false) => {
-    // T4B r3: lo que pinta una columna cuya última carga falló puede ser viejo: sus tarjetas no se mueven.
-    if (bloqueoDeColumna(tablero.datos[origen])) return;
+    // T4B r3: lo que pinta una columna cuya última carga falló puede ser viejo: sus tarjetas no se mueven. B4 T24 (F13): se dice y se
+    // anuncia, como la rama 'bloqueado' (antes volvía en silencio y el arrastre «no funcionaba»).
+    const bloqueoOrigen = bloqueoDeColumna(tablero.datos[origen]);
+    if (bloqueoOrigen) {
+      avisar(bloqueoOrigen, { tono: 'error' });
+      anunciar(bloqueoOrigen);
+      return;
+    }
     const resultado = resolverSoltar(item, origen, destino, reglaEfectiva, opcionesSoltar);
     if (resultado.tipo === 'ninguno') return;
     if (resultado.tipo === 'bloqueado') {
@@ -1026,7 +1133,7 @@ export function TableroKanban<T = unknown>({
       const documento = await onCambio(item, resultado);
       // confirmar y deshacer recargan el origen y el destino; la tarjeta sigue pendiente hasta que esas recargas llegan.
       movimiento.confirmar(documento);
-      anunciar(textoMovimiento(nombreDe(item), tituloDe(destino)));
+      anunciar(textoMovimiento(nombreTarjeta(item), tituloDe(destino)));
     } catch (err) {
       movimiento.deshacer();
       if (desdeMenu) enfocarDespues({ columna: origen, tarjeta: clave });
@@ -1126,7 +1233,10 @@ export function TableroKanban<T = unknown>({
   };
 
   // ── piezas ──
-  const menuDe = (item: T, origen: string, pendiente: boolean): ItemMenuFila[] => {
+  // B4 T24 (F14): el menú de una tarjeta se arma al abrirlo (MenuFila llama a la función), con el estado de ese render (las tarjetas
+  // se repintan con el tablero): antes se armaba en cada render para todas las tarjetas (mapaDestinos por columna y por tarjeta).
+  const menuDe = (item: T, origen: string): ItemMenuFila[] => {
+    const pendiente = tablero.pendientes.has(String(idTarjeta(item)));
     const lista: ItemMenuFila[] = [{ etiqueta: 'Abrir', icono: ExternalLink, onClick: () => onAbrir(item) }];
     if (!soloVer) {
       const destinos = mapaDestinos(item, origen, columnas, reglaEfectiva, opcionesSoltar);
@@ -1158,7 +1268,7 @@ export function TableroKanban<T = unknown>({
     const datos = datosDe(item);
     const pendiente = tablero.pendientes.has(clave);
     const arrastrando = arrastre?.clave === clave;
-    const menu = menuDe(item, origen, pendiente);
+    const menu = () => menuDe(item, origen);
     const movible = !soloVer && !pendiente && !bloqueoDeColumna(tablero.datos[origen]);
     return (
       <div
@@ -1172,7 +1282,7 @@ export function TableroKanban<T = unknown>({
         onPointerUp={alLevantar}
         onPointerCancel={alCancelarPuntero}
         onLostPointerCapture={alPerderCaptura}
-        className={`select-none touch-auto rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 sm:touch-pan-y ${movible ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${arrastrando ? 'opacity-40' : ''} ${pendiente ? 'opacity-70' : ''}`}
+        className={`select-none touch-auto rounded-xl ${FOCO_DENTRO} sm:touch-pan-y ${movible ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${arrastrando ? 'opacity-40' : ''} ${pendiente ? 'opacity-70' : ''}`}
       >
         {contenidoTarjeta(
           item,
@@ -1214,7 +1324,9 @@ export function TableroKanban<T = unknown>({
     const encima = sobre === c.clave && marca === 'permitido';
     const clasesMarca = marca === 'permitido'
       ? `border-2 border-dashed ${tono.borde} ${tono.fondo} ${encima ? `ring-2 ${tono.anillo}` : ''}`
-      : marca === 'bloqueado' || marca === 'neutro' ? 'border-slate-200 bg-slate-50 opacity-50' : 'border-slate-200 bg-slate-50';
+      : 'border-slate-200 bg-slate-50';
+    // B4 T24 (F20): una columna bloqueada atenúa solo su cuerpo (antes toda la sección: la cabecera con el motivo quedaba en ≈2,3:1).
+    const atenuada = marca === 'bloqueado' || marca === 'neutro';
 
     if (tablero.plegadas.includes(c.clave)) {
       return (
@@ -1222,7 +1334,7 @@ export function TableroKanban<T = unknown>({
           key={c.clave}
           ref={refSeccion(c.clave)}
           aria-label={c.titulo}
-          className={`flex w-12 shrink-0 snap-start flex-col rounded-2xl border ${clasesMarca}`}
+          className={`flex w-12 shrink-0 snap-start flex-col rounded-2xl border ${clasesMarca} ${atenuada ? 'opacity-50' : ''}`}
         >
           <button
             type="button"
@@ -1231,7 +1343,7 @@ export function TableroKanban<T = unknown>({
             data-encabezado
             aria-expanded={false}
             title={motivo ?? `Abrir la columna ${c.titulo}`}
-            className="flex h-full w-full flex-col items-center gap-2 rounded-2xl px-1 py-3 text-xs font-bold text-slate-600 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+            className={`flex h-full w-full flex-col items-center gap-2 rounded-2xl px-1 py-3 text-xs font-bold text-slate-600 hover:bg-white ${FOCO_DENTRO}`}
           >
             <span aria-hidden="true" className={`h-2.5 w-2.5 shrink-0 rounded-full ${tono.punto}`} />
             <Contador valor={d?.total} estado={estado} />
@@ -1243,9 +1355,10 @@ export function TableroKanban<T = unknown>({
       );
     }
 
-    const contador = estado === 'listo'
-      ? <span className="tabular-nums">{textoTotalColumna(d.items.length, d.total)}</span>
-      : <Contador valor={estado === 'actualizando' ? d.total : null} estado={estado} />;
+    // B4 T24 (F17): al recargar de fondo sigue «25 de 80», atenuado (antes pasaba a Contador con el total y volvía: un parpadeo).
+    const contador = estado === 'listo' || estado === 'actualizando'
+      ? <span className={`tabular-nums ${estado === 'actualizando' ? 'opacity-60' : ''}`}>{textoTotalColumna(d.items.length, d.total)}</span>
+      : <Contador valor={null} estado={estado} />;
     const sinTarjetas = !d || d.items.length === 0;
     const ocupada = columnaOcupada(tablero.movimientosPendientes, c.clave);
 
@@ -1262,22 +1375,25 @@ export function TableroKanban<T = unknown>({
             <h3
               tabIndex={-1}
               data-encabezado
-              className="min-w-0 flex-1 truncate rounded text-sm font-bold text-slate-800 outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
+              className={`min-w-0 flex-1 truncate rounded text-sm font-bold text-slate-800 ${FOCO_DENTRO}`}
               title={c.ayuda ?? c.titulo}
             >
               {c.titulo}
             </h3>
             <span className="shrink-0 text-xs font-bold text-slate-500">{contador}</span>
-            <button
-              type="button"
-              onClick={() => plegarColumna(c.clave, true)}
-              data-plegar="plegar"
-              aria-label={`Plegar la columna ${c.titulo}`}
-              title={`Plegar la columna ${c.titulo}`}
-              className="shrink-0 rounded-md p-1 text-slate-500 hover:bg-white hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
-            >
-              <ChevronsRightLeft size={14} aria-hidden="true" />
-            </button>
+            {/* B4 T24 (F16): con una sola columna (el filtro de estado) no se ofrece plegarla. */}
+            {columnas.length > 1 && (
+              <button
+                type="button"
+                onClick={() => plegarColumna(c.clave, true)}
+                data-plegar="plegar"
+                aria-label={`Plegar la columna ${c.titulo}`}
+                title={`Plegar la columna ${c.titulo}`}
+                className={`shrink-0 rounded-md p-1 text-slate-500 hover:bg-white hover:text-slate-700 ${FOCO}`}
+              >
+                <ChevronsRightLeft size={14} aria-hidden="true" />
+              </button>
+            )}
           </div>
           {resumenColumna && d && <div className="mt-1 truncate text-xs text-slate-500">{resumenColumna(c.clave, d)}</div>}
           {marca === 'permitido' && <p className={`mt-1 text-xs font-bold ${tono.texto}`}>Soltar aquí</p>}
@@ -1288,23 +1404,32 @@ export function TableroKanban<T = unknown>({
             </p>
           )}
         </header>
-        <div ref={refCuerpo(c.clave)} role="list" aria-label={`Tarjetas de ${c.titulo}`} className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
+        {/* B4 T24 (F22): el cuerpo se desplaza; dentro, el role=list solo tiene las tarjetas (listitem). El error, la espera, el
+            vacío y «Ver más» van fuera de la lista. */}
+        <div ref={refCuerpo(c.clave)} className={`flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2 ${atenuada ? 'opacity-50' : ''}`}>
           {estado === 'error' && (
             <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">
               <p className="font-bold">No se pudo cargar esta columna.</p>
               <p className="mt-0.5 break-words">{textoDeError(d.error)}</p>
-              <button
-                type="button"
-                onClick={() => tablero.recargar([c.clave])}
-                className="mt-2 inline-flex items-center gap-1 font-bold underline underline-offset-2 hover:opacity-80"
-              >
-                <RotateCw size={12} aria-hidden="true" />
-                Reintentar
-              </button>
+              {/* B4 T24 (F106): una columna con un 403 no ofrece «Reintentar» (ofreceReintentar de lib/avisos.js). */}
+              {ofreceReintentar(d.error) && (
+                <button
+                  type="button"
+                  onClick={() => tablero.recargar([c.clave])}
+                  className={`mt-2 inline-flex items-center gap-1 rounded font-bold underline underline-offset-2 hover:opacity-80 ${FOCOS.rose}`}
+                >
+                  <RotateCw size={12} aria-hidden="true" />
+                  Reintentar
+                </button>
+              )}
             </div>
           )}
           {d?.cargando && sinTarjetas ? esqueleto : null}
-          {d ? d.items.map((item) => pintarTarjeta(item, c.clave)) : null}
+          {d && d.items.length > 0 && (
+            <div role="list" aria-label={`Tarjetas de ${c.titulo}`} className="space-y-2">
+              {d.items.map((item) => pintarTarjeta(item, c.clave))}
+            </div>
+          )}
           {estado === 'listo' && sinTarjetas && (
             <p className="px-2 py-6 text-center text-xs text-slate-500">{vacio}</p>
           )}
@@ -1315,8 +1440,8 @@ export function TableroKanban<T = unknown>({
                 if (!ocupada) tablero.verMas(c.clave);
               }}
               disabled={d.cargandoMas || d.cargando || ocupada || d.cargaFallida}
-              title={ocupada ? 'Espera a que termine el cambio de una tarjeta de esta columna.' : d.cargaFallida ? 'Reintenta esta columna para ver más.' : undefined}
-              className={`flex w-full items-center justify-center gap-1 rounded-xl border border-dashed border-slate-300 py-2 text-xs font-bold hover:bg-white disabled:opacity-60 ${ACCENTS[color].text}`}
+              title={ocupada ? 'Espera a que termine el cambio de una tarjeta de esta columna.' : d.cargaFallida && ofreceReintentar(d.error) ? 'Reintenta esta columna para ver más.' : undefined}
+              className={`flex w-full items-center justify-center gap-1 rounded-xl border border-dashed border-slate-300 py-2 text-xs font-bold hover:bg-white disabled:opacity-60 ${TEXTO_VER_MAS[color]} ${FOCO}`}
             >
               {d.cargandoMas && <Loader2 size={12} aria-hidden="true" className="animate-spin" />}
               Ver más
@@ -1334,6 +1459,20 @@ export function TableroKanban<T = unknown>({
   const contenidoClon = arrastre
     ? contenidoTarjeta(arrastre.item, datosDe(arrastre.item), { menu: null, esperando: false, arrastrando: true }, {})
     : null;
+
+  // B4 T24 (F18): hasta leer las plegadas guardadas, columnas con esqueleto (ni plegadas por defecto que después se abren, ni consultas).
+  if (!tablero.listo) {
+    return (
+      <div aria-busy="true" className="flex min-h-[420px] w-full min-w-0 items-stretch gap-3 overflow-x-hidden pb-2">
+        {columnas.map((c) => (
+          <section key={c.clave} aria-label={c.titulo} className="flex w-[85vw] shrink-0 flex-col rounded-2xl border border-slate-200 bg-slate-50 sm:w-72">
+            <header className="shrink-0 truncate border-b border-slate-200 px-3 pb-2 pt-3 text-sm font-bold text-slate-800">{c.titulo}</header>
+            <div className="flex flex-col gap-2 p-2">{esqueleto}</div>
+          </section>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div ref={envoltura} className="flex w-full min-w-0 flex-col gap-2">
@@ -1354,7 +1493,8 @@ export function TableroKanban<T = unknown>({
       </div>
       <div aria-live="polite" role="status" className="sr-only">{anuncio}</div>
       {arrastre && typeof document !== 'undefined' && createPortal(
-        <div
+        // B4 T24 f2 r1 (m10): el clon del arrastre (sin foco), marcado como todo portal de src.
+        <div data-superficie="arrastre"
           ref={clon}
           aria-hidden="true"
           className="pointer-events-none fixed left-0 top-0 z-[80] opacity-95 drop-shadow-xl"

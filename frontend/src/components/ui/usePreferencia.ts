@@ -124,7 +124,15 @@ export function usePreferenciaParte<T extends Record<string, unknown>>(
   clave: string,
   porDefecto: T,
   opciones: OpcionesPreferencia = {},
-): [T, GuardarParte<T>, boolean] {
+): [T, GuardarParte<T>, boolean, () => boolean] {
   const { valor, guardar, listo } = useVinculo<T>(clave, porDefecto, opciones.validar, true);
-  return [valor, guardar as GuardarParte<T>, listo];
+  // B4 T24 (F33, aditivo): si la precarga de las preferencias falló (lo que se lee puede no tener las piezas del servidor). Si
+  // falló, la vuelve a pedir (como escribirParte; una en camino no se repite).
+  const precargaFallida = useCallback(() => {
+    const p = preferenciasApp();
+    const fallo = p.precargaFallida?.() ?? false;
+    if (fallo) void p.precargar('');
+    return fallo;
+  }, []);
+  return [valor, guardar as GuardarParte<T>, listo, precargaFallida];
 }

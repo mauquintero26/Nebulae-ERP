@@ -8,6 +8,11 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
+import { FOCOS } from '@/lib/design-system';
+import { avisoDeFuente } from '@/lib/avisos';
+import { accesoCopilot } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
+import { AvisoDeError } from '@/components/ui/AvisoFuente';
 // B4 T22 (KPI-otros punto 1, FLUJO-ventas-pantallas E; R7, R12, RP104): las tarjetas leen los mismos endpoints que los Hubs
 // (/ventas/stats, /compras/stats e /inventory/stats), el embudo es PasosFlujo con /ventas/flujo y el selector es Semana,
 // 30 días o Mes. El Copilot (/chat/copilot/query) y las listas «Recientes» siguen como estaban.
@@ -19,7 +24,7 @@ import { infoEstadoPec } from '@/lib/estados-compras';
 import { infoEstadoPedido } from '@/lib/estados-pedido';
 import {
   PERIODOS_DASHBOARD, RUTA_RADAR, TEXTO_PERIODO, datosDeRespuesta, etiquetaKpi, lecturaDeFuente, periodoDashboard, periodoVisto,
-  radarOperativo, tarjetasInventarioDashboard, tarjetasVitalesDashboard, textoAvisoFuente, textoRadar,
+  radarOperativo, tarjetasInventarioDashboard, tarjetasVitalesDashboard, textoRadar,
 } from '@/lib/kpis';
 
 function formatCOP(v: number | string | null | undefined) {
@@ -47,20 +52,6 @@ function useFuente<T>(url: string, marca: string | null = null) {
   }, [url, clave, marca]);
   const recargar = useCallback(() => setVuelta((n) => n + 1), []);
   return { ...lecturaDeFuente(llego, clave), recargar };
-}
-
-/** Bajo una franja: si su fuente falló, lo dice con el detalle del servidor y «Reintentar» (nunca un 0 ni un vacío falso). */
-function AvisoFuente({ error, texto, onReintentar }: { error: unknown; texto: string; onReintentar: () => void }) {
-  if (!error) return null;
-  return (
-    <p role="alert" className="flex flex-wrap items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
-      {textoAvisoFuente(error, texto)}
-      <button type="button" onClick={onReintentar}
-        className="rounded font-bold underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700">
-        Reintentar
-      </button>
-    </p>
-  );
 }
 
 /** El `data` de cada endpoint (los nombres son los del servidor; las funciones de lib/kpis.js leen solo lo que necesitan). */
@@ -95,6 +86,9 @@ export default function DashboardGeneral() {
   const pasosEmbudo = useMemo(() => pasosEmbudoDashboard(flujo.datos), [flujo.datos]);
 
   // ─── COPILOTO IA ───────────────────────────────────────────────────────────
+  // B4 T24 (FINAL-m23): el rol después de montar (useRolActual) y si puede consultar el copiloto (accesoCopilot, lib/roles.js).
+  const rol = useRolActual();
+  const accesoIa = accesoCopilot(rol);
   const [aiQuestion, setAiQuestion] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResponse, setAiResponse] = useState<{
@@ -142,7 +136,7 @@ export default function DashboardGeneral() {
   // ─── CONSULTA AL COPILOTO IA ───────────────────────────────────────────────
   const handleAskAI = async (customPrompt?: string) => {
     const q = (customPrompt || aiQuestion).trim();
-    if (!q) return;
+    if (!q || !accesoIa.consultar) return;
 
     setAiLoading(true);
     try {
@@ -158,8 +152,9 @@ export default function DashboardGeneral() {
         });
       }
     } catch (err: any) {
+      // B4 T24 (FINAL-m23): la causa real (avisoDeFuente): un 403 es un tema de permiso; lo demás, el detalle del servidor.
       setAiResponse({
-        answer: 'No se pudo conectar con el motor de IA en este momento. Revisa la conectividad del backend.',
+        answer: avisoDeFuente(err, 'No se pudo consultar el copiloto')!.texto,
         source: 'Error',
         timestamp: new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }),
       });
@@ -210,7 +205,7 @@ export default function DashboardGeneral() {
                   : 'RADAR OPERATIVO: calculando…'}
               {ventas.error ? (
                 <button type="button" onClick={ventas.recargar}
-                  className="ml-2 rounded font-bold underline hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
+                  className={`ml-2 rounded font-bold underline hover:text-white ${FOCOS.blanco}`}>
                   Reintentar
                 </button>
               ) : null}
@@ -249,7 +244,7 @@ export default function DashboardGeneral() {
                   type="button"
                   aria-pressed={periodo === p.clave}
                   onClick={() => setPeriodo(p.clave)}
-                  className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700 ${
+                  className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${FOCOS.indigo} ${
                     periodo === p.clave ? 'bg-slate-800 text-white shadow' : 'text-slate-600 hover:text-slate-800 hover:bg-slate-50'
                   }`}
                 >
@@ -260,7 +255,9 @@ export default function DashboardGeneral() {
           </div>
         </div>
 
-        {/* 2. COPILOTO IA INTERACTIVO (Box LLM Integrado a Nebulae) */}
+        {/* 2. COPILOTO IA INTERACTIVO (Box LLM Integrado a Nebulae). B4 T24 (FINAL-m23): solo para quien puede consultarlo
+            (POST /chat/copilot/query es de ADMIN, ASESOR y FINANZAS: accesoCopilot). */}
+        {accesoIa.consultar && (
         <div className="bg-gradient-to-r from-purple-950 via-indigo-950 to-slate-950 rounded-3xl p-1 shadow-xl relative overflow-hidden border border-purple-800/40">
           <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none">
             <BrainCircuit size={160} className="text-white" />
@@ -308,10 +305,10 @@ export default function DashboardGeneral() {
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-1">Consultas rápidas:</span>
                 {[
-                  { label: '📦 Estado de inventario', prompt: '¿Cómo está el inventario hoy entre físico, reservado y disponible?' },
-                  { label: '🚢 Compras en tránsito', prompt: '¿Cuáles compras o PECs están en tránsito hacia bodega?' },
-                  { label: '💰 Cartera pendiente', prompt: '¿Cuál es el saldo total pendiente de cobro en pedidos de venta?' },
-                  { label: '👥 Resumen de clientes', prompt: 'Dame un resumen del volumen de clientes y pedidos recientes' },
+                  { label: 'Estado de inventario', prompt: '¿Cómo está el inventario hoy entre físico, reservado y disponible?' },
+                  { label: 'Compras en tránsito', prompt: '¿Cuáles compras o PECs están en tránsito hacia bodega?' },
+                  { label: 'Cartera pendiente', prompt: '¿Cuál es el saldo total pendiente de cobro en pedidos de venta?' },
+                  { label: 'Resumen de clientes', prompt: 'Dame un resumen del volumen de clientes y pedidos recientes' },
                 ].map((sug, idx) => (
                   <button
                     key={idx}
@@ -340,6 +337,7 @@ export default function DashboardGeneral() {
             )}
           </div>
         </div>
+        )}
 
         {/* 3. FLUJO DEL INVENTARIO (ZONA CENTRAL MAESTRA NEBULAE) */}
         <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-6">
@@ -366,9 +364,9 @@ export default function DashboardGeneral() {
             <TarjetaKpi kpi="inv_disponible" valor={existencias.disponible.valor} />
             <TarjetaKpi kpi="inv_en_transito" valor={existencias.en_transito.valor} ayuda={existencias.en_transito.ayuda ?? undefined} />
           </FranjaKpis>
-          <AvisoFuente error={inventario.error} texto="No se pudieron cargar las existencias" onReintentar={inventario.recargar} />
+          <AvisoDeError error={inventario.error} fallo="No se pudieron cargar las existencias" onReintentar={inventario.recargar} acento="indigo" />
           {!inventario.error && compras.error ? (
-            <AvisoFuente error={compras.error} texto="No se pudieron cargar los pedidos de compra activos" onReintentar={compras.recargar} />
+            <AvisoDeError error={compras.error} fallo="No se pudieron cargar los pedidos de compra activos" onReintentar={compras.recargar} acento="indigo" />
           ) : null}
         </div>
 
@@ -383,8 +381,8 @@ export default function DashboardGeneral() {
               variacion={{ actual: vitales.saldo.valor, anterior: null, es_foto: true }} />
             <TarjetaKpi kpi="clientes_total" estado={estadoClientes} valor={vitales.clientes.valor} />
           </FranjaKpis>
-          <AvisoFuente error={ventas.error} texto="No se pudieron cargar las cifras de ventas" onReintentar={ventas.recargar} />
-          <AvisoFuente error={clientes.error} texto="No se pudieron contar los clientes" onReintentar={clientes.recargar} />
+          <AvisoDeError error={ventas.error} fallo="No se pudieron cargar las cifras de ventas" onReintentar={ventas.recargar} acento="indigo" />
+          <AvisoDeError error={clientes.error} fallo="No se pudieron contar los clientes" onReintentar={clientes.recargar} acento="indigo" />
         </div>
 
         {/* 5. Embudo B2B & Radar Operativo */}
@@ -406,7 +404,7 @@ export default function DashboardGeneral() {
                 <div role="alert" className="flex flex-wrap items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
                   {avisoEmbudo.texto}
                   <button type="button" onClick={() => { if (avisoEmbudo.puedeReintentar) flujo.recargar(); }} aria-disabled={avisoEmbudo.reintentando || undefined}
-                    className="rounded font-bold underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700">
+                    className={`rounded font-bold underline ${FOCOS.indigo}`}>
                     {avisoEmbudo.boton}
                   </button>
                 </div>

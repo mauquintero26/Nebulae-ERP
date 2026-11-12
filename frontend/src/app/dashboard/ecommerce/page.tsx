@@ -27,21 +27,21 @@ import {
 import type { AccionTabla } from '@/lib/tabla';
 import {
   COLUMNAS_PEDIDO, OPCIONES_ESTADOS_PEDIDOS_WEB, OPCIONES_ESTADOS_TABLERO_PEDIDO, RUTA_PEDIDOS_WEB,
-  accionesTarjetaPedido, confirmacionFacturarPedido, consultaColumnaPedido, efectosCancelarPedido, reglaSoltarPedido,
-  soloLecturaPedidosWeb, tarjetaPedidoWeb,
+  consultaColumnaPedido, efectosCancelarPedido, reglaSoltarPedidoWeb, soloLecturaPedidosWeb, tarjetaPedidoWeb,
 } from '@/lib/kanban-ventas';
 import { infoEstadoPedido } from '@/lib/estados-pedido';
 import { ordenPorDefecto } from '@/lib/kanban';
 import { AvisoFuente } from '@/components/ui/AvisoFuente';
 import { useRolActual } from '@/components/ui/useRolActual';
-import { lecturaDeFuente, tarjetasTienda, textoLimiteCarritos } from '@/lib/kpis';
+import { cuerpoConfigPagos, fuenteGuardable, lecturaDeFuente, tarjetasTienda, textoLimiteCarritos } from '@/lib/kpis';
 import { accesoTienda } from '@/lib/roles';
 import { formatoPesos } from '@/lib/pesos';
 import { fechaCorta, fechaHoraLarga, horaCO } from '@/lib/fechas-colombia';
-import { avisoDeFuente, estadoFranjaDeFuente, motivoSinPermiso, recargarTrasError } from '@/lib/avisos';
-import { TABLE } from '@/lib/design-system';
-import { getUsuarioActual } from '../ventas/flujo';
-import { CONTENEDOR, FOCOS } from '../inventario/piezas-inventario';
+import { avisoDeFuente, estadoFranjaDeFuente, motivoSinPermiso } from '@/lib/avisos';
+import { CAJA_SIN_PERMISO, FOCOS, TABLE } from '@/lib/design-system';
+// B4 T24 f2 (F47): las acciones del tablero de pedidos, las mismas de Pedidos de venta.
+import { useAccionesTableroPedidos } from '../ventas/acciones-tablero-pedidos';
+import { CONTENEDOR } from '../inventario/piezas-inventario';
 import { CHIP } from '../compras/columnas-pec';
 
 // B4 T23A: los montos como en el resto del bloque ('$4.927.538'). Se fue PWEB_ESTADOS (nombres que no existen en los pedidos
@@ -411,8 +411,6 @@ const TITULO_SOLO_ADMIN = 'Solo la Administración edita el catálogo';
 /** I1 (r1): lo que ve un rol que el servidor no deja leer los pedidos (COMPRAS, CONSULTA): no es una falla, no hay «Reintentar». */
 const TEXTO_SIN_PEDIDOS = 'Tu rol no ve los pedidos de la tienda.';
 const FOCO_VISIBLE = FOCOS.purple;
-/** Quien hace el cambio desde el tablero (updated_by, como el Hub y los pedidos de venta). */
-const autorActual = () => { const u = getUsuarioActual(); return u.name || u.email || undefined; };
 
 /** Lo que las celdas de los pedidos web le piden a la pantalla. */
 const AccionesPedidosWeb = createContext<{ abrir: (p: PedidoWeb) => void } | null>(null);
@@ -623,6 +621,12 @@ export default function EcommercePage() {
   const [shipConfig, setShipConfig] = useState<any>({ envio_local: { enabled: true, tarifa: 12000 }, envio_nacional: { enabled: true, tarifa: 25000 }, envio_gratis_desde: 200000 });
   const [savingPay, setSavingPay] = useState(false);
   const [savingShip, setSavingShip] = useState(false);
+  // B4 T24 (FINAL-m21): la configuración de pagos y envíos (GET y PATCH, solo ADMIN: acceso.pagosConfig). Lo que llegó (o su error)
+  // por vuelta, leído con lecturaDeFuente: sin los valores del servidor no hay formulario ni «Guardar» (fuenteGuardable), nunca los
+  // valores por defecto de arriba como si fueran los de la tienda.
+  const [vueltaConfig, setVueltaConfig] = useState(0);
+  const [cargaPagos, setCargaPagos] = useState<Cargado<Record<string, unknown>> | null>(null);
+  const [cargaEnvios, setCargaEnvios] = useState<Cargado<Record<string, unknown>> | null>(null);
 
   // ── B4 T23A, bloque 5: las tarjetas de la tienda (KPI-otros punto 5; R12, RP102) ──
   // GET /ecommerce/stats, sin respaldo local: mientras llega la primera vez, 'cargando' (barras grises, nunca 0); al recargar
@@ -660,6 +664,9 @@ export default function EcommercePage() {
   const textoLimite = textoLimiteCarritos(datosStats?.carritos_abandonados_count, carritos === null ? null : carritos.length);
   const faseCarritos = faseDeLista({ cargandoInicial: cargandoCarritos && carritos === null, error: errorCarritos, filas: carritos });
   const estadoCarritos = useEstadoKpi(cargandoCarritos, errorCarritos);
+  // B4 T24 (F104): mientras el rol no se conoce, la caja de carritos en esqueleto (nunca «Sin carritos» ni un «—» falso).
+  const faseCaja = acceso.listo ? faseCarritos : 'cargando';
+  const estadoCaja = acceso.listo ? estadoCarritos : 'cargando';
 
   // ── B4 T23A, bloque 1: la carga del servidor de los pedidos web (TABLA-otros punto 5; R5; RP8, RP26, D39, D40) ──
   // Un estado ÚNICO: la búsqueda, el filtro de estados, el orden y la página de la tabla y del tablero. El modo (Lista o
@@ -668,8 +675,10 @@ export default function EcommercePage() {
   // «vacío». En Kanban no se pide la lista: cada columna del tablero hace su consulta.
   const [estadoPedidos, despacharPedidos, listoPedidos] = useEstadoTabla(ID_PEDIDOS_WEB, INICIAL_PEDIDOS_WEB);
   const enKanban = estadoPedidos.modo === 'kanban';
+  // B4 T24 (F104): mientras el rol no se conoce, la tabla espera (el esqueleto), nunca «Sin pedidos web».
   const pedidos = useListado<PedidoWeb>({
-    ruta: RUTA_PEDIDOS_WEB, estado: estadoPedidos, esperar: !listoPedidos, despachar: despacharPedidos, activo: panelActivo && !enKanban && acceso.pedidos,
+    ruta: RUTA_PEDIDOS_WEB, estado: estadoPedidos, esperar: !listoPedidos || !acceso.listo, despachar: despacharPedidos,
+    activo: panelActivo && !enKanban && (acceso.pedidos || !acceso.listo),
   });
 
   // ── B4 T23A, bloque 3: el tablero de los pedidos web (KANBAN-resto puntos 2 y 3; C4, R11; RP62, D39) ──
@@ -737,79 +746,15 @@ export default function EcommercePage() {
   // ── bloque 3, las acciones del tablero (N2; C15, R11; D39) ──
   // reglaSoltarPedido (T3C): libre entre Pendiente de compra, En proceso y Listo para entrega; a Entregado no se arrastra
   // (Entregas elige la bodega); Facturado solo desde Entregado, con confirmación; Cancelado pide el motivo. 'cambio': PATCH
-  // /ventas/pedidos/{id} (ADMIN y ASESOR). Si falla, con recargarTrasError (un 409: el pedido cambió en otro lado) se recarga
-  // lo demás y el error sigue para que el tablero deshaga (eso ya recarga su origen y su destino).
-  async function cambiarDesdeTablero(p: PedidoWeb, resultado: { estado: string }) {
-    try {
-      await apiFetch(`/ventas/pedidos/${p.id}`, {
-        method: 'PATCH', body: JSON.stringify({ estado: resultado.estado, updated_by: autorActual() }),
-      });
-    } catch (err) {
-      if (recargarTrasError(err)) recargarTrasCambio();
-      throw err;
-    }
-    recargarTrasCambio();
-  }
-  // 'accion' 'facturar': confirmar() de useAvisos → PATCH {estado: 'FACTURADO'}; 'cancelar': ModalMotivo. Al terminar, del tablero
-  // solo su origen y su destino.
-  const [cancelando, setCancelando] = useState<{ pedido: PedidoWeb; columnas: readonly [string, string] } | null>(null);
-  async function facturarDesdeTablero(p: PedidoWeb, columnas: readonly [string, string]) {
-    if (!(await confirmar(confirmacionFacturarPedido(p)))) return;
-    try {
-      await apiFetch(`/ventas/pedidos/${p.id}`, { method: 'PATCH', body: JSON.stringify({ estado: 'FACTURADO', updated_by: autorActual() }) });
-      avisar(`${p.numero} quedó Facturado`, { tono: 'ok' });
-    } catch (err) {
-      avisarError(err, `No se pudo facturar ${p.numero}`);
-      if (!recargarTrasError(err)) return;
-    }
-    tablero.recargar([...columnas]);
-    recargarTrasCambio();
-  }
-  function accionDesdeTablero(p: PedidoWeb, resultado: { accion: string }, origen: string, destino: string) {
-    if (resultado.accion === 'cancelar') setCancelando({ pedido: p, columnas: [origen, destino] });
-    else if (resultado.accion === 'facturar') void facturarDesdeTablero(p, [origen, destino]);
-  }
-  // 'cancelar' (N2, H45, H46): ModalMotivo (5 letras o más) → PATCH {estado: 'CANCELADO', cancellation_reason} (el servidor deja
-  // el motivo en la Actividad). Si falla, con recargarTrasError se recargan el origen y el destino del tablero y lo demás, y el
-  // error sigue (throw) para que ModalMotivo lo muestre y conserve lo escrito.
-  async function cancelarConMotivo(motivo: string) {
-    if (!cancelando) return;
-    const { pedido, columnas } = cancelando;
-    const autor = autorActual();
-    try {
-      await apiFetch(`/ventas/pedidos/${pedido.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ estado: 'CANCELADO', cancellation_reason: motivo, cancellation_authorized_by: autor, updated_by: autor }),
-      });
-    } catch (err) {
-      if (recargarTrasError(err)) {
-        tablero.recargar([...columnas]);
-        recargarTrasCambio();
-      }
-      throw err;
-    }
-    avisar(`${pedido.numero} cancelado`, { tono: 'ok' });
-    tablero.recargar([...columnas]);
-    recargarTrasCambio();
-  }
-  // accionesTarjeta: «Marcar En tránsito» y «Marcar En proceso» sin salir de la columna En proceso (accionesTarjetaPedido: solo lo
-  // que acepta el PATCH). Un rol que no mueve pedidos (soloLectura) no las ve: darían 403.
-  const marcarDesdeTablero = useCallback(async (p: PedidoWeb, nuevo: string) => {
-    try {
-      await apiFetch(`/ventas/pedidos/${p.id}`, { method: 'PATCH', body: JSON.stringify({ estado: nuevo, updated_by: autorActual() }) });
-      avisar(`${p.numero} pasó a ${infoEstadoPedido(nuevo).label}`, { tono: 'ok' });
-    } catch (err) {
-      avisarError(err, `No se pudo cambiar el estado de ${p.numero}`);
-      if (!recargarTrasError(err)) return;
-    }
-    recargarTablero(['en_proceso']);
-    recargarTrasCambio();
-  }, [avisar, avisarError, recargarTablero, recargarTrasCambio]);
+  // /ventas/pedidos/{id} (ADMIN y ASESOR). B4 T24 f2 (F47): las MISMAS acciones de Pedidos de venta (useAccionesTableroPedidos: la
+  // regla de error y de recarga vive en accionesTableroPedidos de lib/kanban-ventas.js, con sus casos). Un rol que no mueve pedidos
+  // (soloLectura) no ve las acciones del ⋯: darían 403.
+  const {
+    cambiarDesdeTablero, accionDesdeTablero, accionesTarjeta, cancelando, cancelarConMotivo, cerrarCancelacion,
+  } = useAccionesTableroPedidos<PedidoWeb>({ tablero, recargarTrasCambio, mover: soloLectura === null });
   // r1 (m4): la acción principal de la tarjeta es la de los pedidos de venta (salvo PENDIENTE_PAGO); un rol de solo lectura no la lleva.
-  const tarjetaDeWeb = useCallback((p: PedidoWeb) => tarjetaPedidoWeb(p, { soloLectura: soloLectura !== null }), [soloLectura]);
-  const accionesTarjeta = useCallback((p: PedidoWeb): ItemMenuFila[] => (soloLectura ? [] : accionesTarjetaPedido(p).map((a) => ({
-    etiqueta: a.etiqueta, icono: a.estado === 'EN_TRANSITO' ? Truck : Package, onClick: () => { void marcarDesdeTablero(p, a.estado); },
-  }))), [soloLectura, marcarDesdeTablero]);
+  // B4 T24 f2 r1 (duda 2): con el rol, la regla de los pedidos de venta (ASESOR no gestiona la compra: create_pec, ADMIN y COMPRAS).
+  const tarjetaDeWeb = useCallback((p: PedidoWeb) => tarjetaPedidoWeb(p, { soloLectura: soloLectura !== null, rol }), [soloLectura, rol]);
 
   // ── B4 T23A, bloque 4: el catálogo en la tabla estándar del servidor (TABLA-otros punto 5; RP56) ──
   // Mismo patrón. GET /ecommerce/catalogo manda SIEMPRE offset (aunque sea 0: queryListado) para que el servidor pagine exacto y
@@ -897,11 +842,25 @@ export default function EcommercePage() {
   };
 
   useEffect(() => {
-    if (activeTab === 'Pagos') {
-      apiFetch('/ecommerce/pagos/config').then(d => setPayConfig(d.data || payConfig)).catch(() => {});
-      apiFetch('/ecommerce/envios/config').then(d => setShipConfig(d.data || shipConfig)).catch(() => {});
-    }
-  }, [activeTab]);
+    if (activeTab !== 'Pagos' || !acceso.pagosConfig) return undefined;
+    const control = new AbortController();
+    apiFetch('/ecommerce/pagos/config', { signal: control.signal })
+      .then((d: { data?: Record<string, unknown> } | null) => {
+        if (d?.data) setPayConfig(d.data);
+        setCargaPagos({ vuelta: vueltaConfig, datos: d?.data ?? null, error: null });
+      })
+      .catch((err: unknown) => { if (!control.signal.aborted) setCargaPagos({ vuelta: vueltaConfig, datos: null, error: err }); });
+    apiFetch('/ecommerce/envios/config', { signal: control.signal })
+      .then((d: { data?: Record<string, unknown> } | null) => {
+        if (d?.data) setShipConfig(d.data);
+        setCargaEnvios({ vuelta: vueltaConfig, datos: d?.data ?? null, error: null });
+      })
+      .catch((err: unknown) => { if (!control.signal.aborted) setCargaEnvios({ vuelta: vueltaConfig, datos: null, error: err }); });
+    return () => control.abort();
+  }, [activeTab, acceso.pagosConfig, vueltaConfig]);
+  const lecturaPagos = lecturaDeFuente(cargaPagos, vueltaConfig);
+  const lecturaEnvios = lecturaDeFuente(cargaEnvios, vueltaConfig);
+  const reintentarConfig = useCallback(() => setVueltaConfig((n) => n + 1), []);
 
   // «Actualizar»: las tarjetas, los carritos, los pedidos (la tabla y el tablero) y el catálogo. Ninguna recarga vacía lo que se ve.
   const recargarTodo = useCallback(() => {
@@ -948,10 +907,11 @@ export default function EcommercePage() {
             equivale a una vista. */}
         {/* r1 (I1, I2): solo ADMIN y ASESOR leen /ecommerce/stats; para los demás roles no se pide ni se pinta. Un 403 que llegue igual
             es un tema de permiso: sin «Reintentar» y con «—» y el motivo en las tarjetas (no «No se pudo cargar»). */}
-        {acceso.indicadores && (
+        {/* B4 T24 (F104): mientras el rol no se conoce, la franja en 'cargando' (después, solo para quien lee /stats). */}
+        {(acceso.indicadores || !acceso.listo) && (
           <>
             {avisoStats && <AvisoFuente aviso={avisoStats} onReintentar={() => setVueltaStats((n) => n + 1)} />}
-            <FranjaKpis estado={estadoFranjaDeFuente(avisoStats, estadoStats)} titulo="Indicadores de la tienda">
+            <FranjaKpis estado={acceso.listo ? estadoFranjaDeFuente(avisoStats, estadoStats) : 'cargando'} titulo="Indicadores de la tienda">
               <TarjetaKpi kpi="web_ventas_hoy" valor={tarjetas.web_ventas_hoy.valor} variacion={tarjetas.web_ventas_hoy.variacion} textoPeriodo={tarjetas.web_ventas_hoy.textoPeriodo} ayuda={sinPermisoStats ?? tarjetas.web_ventas_hoy.ayuda ?? undefined} />
               <TarjetaKpi kpi="web_ventas_mes" valor={tarjetas.web_ventas_mes.valor} variacion={tarjetas.web_ventas_mes.variacion} textoPeriodo={tarjetas.web_ventas_mes.textoPeriodo} ayuda={sinPermisoStats ?? tarjetas.web_ventas_mes.ayuda ?? undefined} />
               <TarjetaKpi kpi="carritos_abandonados" valor={tarjetas.carritos_abandonados.valor} tono={tarjetas.carritos_abandonados.tono} ayuda={sinPermisoStats ?? tarjetas.carritos_abandonados.ayuda ?? undefined} />
@@ -963,7 +923,7 @@ export default function EcommercePage() {
         {/* TABS */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-xl p-1 shadow-sm overflow-x-auto">
-            {['Panel', 'Catálogo', 'Clientes Web', 'Pagos'].map(t => (
+            {['Panel', 'Catálogo', 'Clientes Web', ...(acceso.pagosConfig ? ['Pagos'] : [])].map(t => (
               <button key={t} type="button" onClick={() => setActiveTab(t)} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${FOCO_VISIBLE} ${activeTab === t ? 'bg-purple-600 text-white shadow' : 'text-gray-600 hover:text-purple-700 hover:bg-purple-50'}`}>{t}</button>
             ))}
           </div>
@@ -986,24 +946,24 @@ export default function EcommercePage() {
             menú abierto los pedidos van arriba y a todo el ancho (los carritos, debajo): R26; desde 2xl, los carritos a la izquierda. */}
         {activeTab === 'Panel' && (
           <div className="flex min-w-0 flex-1 flex-col gap-6 2xl:flex-row">
-            {acceso.carritos && (
+            {(acceso.carritos || !acceso.listo) && (
             <div className="order-2 flex w-full shrink-0 flex-col overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm 2xl:order-1 2xl:w-80 2xl:self-start">
               <div className="p-5 border-b border-gray-100 bg-rose-50/50 flex items-center justify-between">
                 <h3 className="font-black text-gray-800 text-sm flex items-center gap-2"><AlertCircle className="text-rose-500" size={16}/> Recuperación de Carritos</h3>
-                <span className="bg-rose-100 text-rose-700 text-xs font-black px-2 py-0.5 rounded-full"><Contador valor={carritos === null ? null : carritos.length} estado={estadoCarritos} /></span>
+                <span className="bg-rose-100 text-rose-700 text-xs font-black px-2 py-0.5 rounded-full"><Contador valor={carritos === null ? null : carritos.length} estado={estadoCaja} /></span>
               </div>
               {textoLimite && <p className="border-b border-gray-100 px-5 py-2 text-[11px] font-semibold text-slate-500">{textoLimite}</p>}
               <div className="max-h-96 flex-1 overflow-y-auto p-4 space-y-3 2xl:max-h-[32rem]">
-                {faseCarritos === 'cargando' && (
+                {faseCaja === 'cargando' && (
                   <div role="status" aria-label="Cargando los carritos" className="space-y-3">
                     {[0, 1, 2].map((i) => <div key={i} aria-hidden="true" className="h-16 animate-pulse rounded-2xl bg-slate-100" />)}
                   </div>
                 )}
-                {faseCarritos === 'error' && avisoCarritos && (
+                {faseCaja === 'error' && avisoCarritos && (
                   <AvisoFuente aviso={avisoCarritos} onReintentar={() => setVueltaCarritos((n) => n + 1)} />
                 )}
-                {faseCarritos === 'vacio' && <div className="text-center py-10 text-gray-400"><ShoppingCart size={28} className="mx-auto mb-2 opacity-30"/><p className="text-sm">Sin carritos abandonados</p></div>}
-                {faseCarritos === 'filas' && (carritos ?? []).map((c) => (
+                {faseCaja === 'vacio' && <div className="text-center py-10 text-gray-400"><ShoppingCart size={28} className="mx-auto mb-2 opacity-30"/><p className="text-sm">Sin carritos abandonados</p></div>}
+                {faseCaja === 'filas' && (carritos ?? []).map((c) => (
                   <div key={c.id} className="border border-gray-100 p-4 rounded-2xl hover:shadow-md transition-shadow">
                     <div className="flex justify-between items-start mb-1">
                       <p className="font-bold text-gray-800 text-xs truncate">{c.customer_email||'Anónimo'}</p>
@@ -1029,7 +989,7 @@ export default function EcommercePage() {
               {/* La barra (búsqueda al servidor con retardo, filtro de estados reales, «Ajustar tabla», Lista / Kanban y pantalla
                   completa) y la tabla estándar en el servidor, o el tablero con el MISMO estado. */}
               {acceso.listo && !acceso.pedidos && (
-                <p role="status" className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600">{TEXTO_SIN_PEDIDOS}</p>
+                <p role="status" className={`${CAJA_SIN_PERMISO}`}>{TEXTO_SIN_PEDIDOS}</p>
               )}
               {(!acceso.listo || acceso.pedidos) && (<>
               {capa}
@@ -1074,7 +1034,7 @@ export default function EcommercePage() {
               {enKanban && (
                 <TableroKanban
                   tablero={tablero}
-                  regla={reglaSoltarPedido}
+                  regla={reglaSoltarPedidoWeb}
                   tarjetaDe={tarjetaDeWeb}
                   onAbrir={abrirPedido}
                   onCambio={cambiarDesdeTablero}
@@ -1097,7 +1057,7 @@ export default function EcommercePage() {
             textoConfirmar="Cancelar pedido"
             placeholder="Ej: Cliente desistió de la compra, error en el pedido, etc."
             onConfirmar={cancelarConMotivo}
-            onCerrar={() => setCancelando(null)}
+            onCerrar={cerrarCancelacion}
           />
         )}
 
@@ -1168,12 +1128,18 @@ export default function EcommercePage() {
         )}
 
         {/* PAGOS */}
-        {activeTab === 'Pagos' && (
+        {activeTab === 'Pagos' && acceso.pagosConfig && (
           <div className="grid grid-cols-2 gap-6">
             <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
               <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><CreditCard size={16} className="text-purple-600"/> Pasarelas de Pago</h3>
+              {lecturaPagos.error ? (
+                <AvisoFuente aviso={avisoDeFuente(lecturaPagos.error, 'No se pudo cargar la configuración de pagos')!} onReintentar={reintentarConfig} />
+              ) : !fuenteGuardable(lecturaPagos) ? (
+                <p role="status" aria-busy="true" className="py-6 text-center text-sm text-slate-500">Cargando la configuración de pagos…</p>
+              ) : null}
+              {fuenteGuardable(lecturaPagos) ? (
               <div className="space-y-4">
-                {[{key:'stripe',label:'Stripe',sub:'Tarjetas de crÃ©dito, Apple Pay, Google Pay',fields:[{k:'publishable_key',l:'Publishable Key',ph:'pk_live_...'},{k:'secret_key',l:'Secret Key',ph:'sk_live_...',pw:true},{k:'webhook_secret',l:'Webhook Secret',ph:'whsec_...',pw:true}]},{key:'mercadopago',label:'MercadoPago',sub:'Efecty, PSE, tarjetas locales Colombia',fields:[{k:'public_key',l:'Public Key',ph:'APP_USR-...'},{k:'access_token',l:'Access Token',ph:'APP_USR-...',pw:true}]}].map(gw => (
+                {[{key:'stripe',label:'Stripe',sub:'Tarjetas de crédito, Apple Pay, Google Pay',fields:[{k:'publishable_key',l:'Publishable Key',ph:'pk_live_...'},{k:'secret_key',l:'Secret Key',ph:'sk_live_...',pw:true},{k:'webhook_secret',l:'Webhook Secret',ph:'whsec_...',pw:true}]},{key:'mercadopago',label:'MercadoPago',sub:'Efecty, PSE, tarjetas locales Colombia',fields:[{k:'public_key',l:'Public Key',ph:'APP_USR-...'},{k:'access_token',l:'Access Token',ph:'APP_USR-...',pw:true}]}].map(gw => (
                   <div key={gw.key} className={`border rounded-2xl p-5 ${payConfig[gw.key]?.enabled?'border-emerald-200 bg-emerald-50/30':'border-gray-200'}`}>
                     <div className="flex items-center justify-between mb-3">
                       <div><h4 className="font-bold text-gray-800">{gw.label}</h4><p className="text-xs text-gray-500">{gw.sub}</p></div>
@@ -1184,20 +1150,27 @@ export default function EcommercePage() {
                     </div>
                     <div className="space-y-2">
                       {gw.fields.map(field => (
-                        <div key={field.k}><label className="block text-xs font-black text-gray-400 uppercase mb-1">{field.l}</label><input type={field.pw?'password':'text'} value={payConfig[gw.key]?.[field.k]||''} onChange={e => setPayConfig((c: any) => ({...c,[gw.key]:{...c[gw.key],[field.k]:e.target.value}}))} placeholder={field.ph} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200 font-mono text-xs"/></div>
+                        <div key={field.k}><label className="block text-xs font-black text-gray-400 uppercase mb-1">{field.l}</label><input type={field.pw?'password':'text'} value={payConfig[gw.key]?.[field.k]||''} onChange={e => setPayConfig((c: any) => ({...c,[gw.key]:{...c[gw.key],[field.k]:e.target.value}}))} placeholder={payConfig[gw.key]?.[`${field.k}_masked`] || field.ph} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200 font-mono text-xs"/></div>
                       ))}
                     </div>
                   </div>
                 ))}
-                <button onClick={async()=>{setSavingPay(true);try{await apiFetch('/ecommerce/pagos/config',{method:'PATCH',body:JSON.stringify(payConfig)});showToast('ConfiguraciÃ³n guardada','ok');}catch(e:any){showToast(e.message,'error');}setSavingPay(false);}} disabled={savingPay} className="w-full flex items-center justify-center gap-2 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-sm disabled:opacity-50">
+                <button onClick={async()=>{setSavingPay(true);try{await apiFetch('/ecommerce/pagos/config',{method:'PATCH',body:JSON.stringify(cuerpoConfigPagos(payConfig))});showToast('Configuración guardada','ok');}catch(e:any){showToast(e.message,'error');}setSavingPay(false);}} disabled={savingPay || !fuenteGuardable(lecturaPagos)} className="w-full flex items-center justify-center gap-2 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-sm disabled:opacity-50">
                   {savingPay?<RefreshCw size={14} className="animate-spin"/>:<Check size={14}/>} Guardar Pagos
                 </button>
               </div>
+              ) : null}
             </div>
             <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
-              <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Truck size={16} className="text-purple-600"/> ConfiguraciÃ³n de EnvÃ­os</h3>
+              <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-4 flex items-center gap-2"><Truck size={16} className="text-purple-600"/> Configuración de Envíos</h3>
+              {lecturaEnvios.error ? (
+                <AvisoFuente aviso={avisoDeFuente(lecturaEnvios.error, 'No se pudo cargar la configuración de envíos')!} onReintentar={reintentarConfig} />
+              ) : !fuenteGuardable(lecturaEnvios) ? (
+                <p role="status" aria-busy="true" className="py-6 text-center text-sm text-slate-500">Cargando la configuración de envíos…</p>
+              ) : null}
+              {fuenteGuardable(lecturaEnvios) ? (
               <div className="space-y-4">
-                {[{k:'envio_local',l:'EnvÃ­o Local'},{k:'envio_nacional',l:'EnvÃ­o Nacional'}].map(e => (
+                {[{k:'envio_local',l:'Envío Local'},{k:'envio_nacional',l:'Envío Nacional'}].map(e => (
                   <div key={e.k} className="border border-gray-200 rounded-2xl p-4">
                     <div className="flex items-center justify-between mb-3">
                       <h4 className="font-bold text-gray-800">{e.l}</h4>
@@ -1211,12 +1184,13 @@ export default function EcommercePage() {
                 ))}
                 <div className="bg-purple-50 border border-purple-100 rounded-2xl p-4 flex items-center gap-3">
                   <Tag size={16} className="text-purple-600 shrink-0"/>
-                  <div className="flex-1"><h4 className="font-bold text-purple-900 text-sm">EnvÃ­o Gratis desde</h4><div className="flex items-center gap-2 mt-1"><input type="number" value={shipConfig.envio_gratis_desde||200000} onChange={e => setShipConfig((c: any) => ({...c,envio_gratis_desde:Number(e.target.value)}))} className="border border-purple-200 bg-white rounded-xl px-3 py-1.5 text-sm font-bold w-32 outline-none"/><span className="text-xs text-purple-700">COP</span></div></div>
+                  <div className="flex-1"><h4 className="font-bold text-purple-900 text-sm">Envío Gratis desde</h4><div className="flex items-center gap-2 mt-1"><input type="number" value={shipConfig.envio_gratis_desde||200000} onChange={e => setShipConfig((c: any) => ({...c,envio_gratis_desde:Number(e.target.value)}))} className="border border-purple-200 bg-white rounded-xl px-3 py-1.5 text-sm font-bold w-32 outline-none"/><span className="text-xs text-purple-700">COP</span></div></div>
                 </div>
-                <button onClick={async()=>{setSavingShip(true);try{await apiFetch('/ecommerce/envios/config',{method:'PATCH',body:JSON.stringify(shipConfig)});showToast('EnvÃ­os guardados','ok');}catch(e:any){showToast(e.message,'error');}setSavingShip(false);}} disabled={savingShip} className="w-full flex items-center justify-center gap-2 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-sm disabled:opacity-50">
-                  {savingShip?<RefreshCw size={14} className="animate-spin"/>:<Check size={14}/>} Guardar EnvÃ­os
+                <button onClick={async()=>{setSavingShip(true);try{await apiFetch('/ecommerce/envios/config',{method:'PATCH',body:JSON.stringify(shipConfig)});showToast('Envíos guardados','ok');}catch(e:any){showToast(e.message,'error');}setSavingShip(false);}} disabled={savingShip || !fuenteGuardable(lecturaEnvios)} className="w-full flex items-center justify-center gap-2 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-sm disabled:opacity-50">
+                  {savingShip?<RefreshCw size={14} className="animate-spin"/>:<Check size={14}/>} Guardar Envíos
                 </button>
               </div>
+              ) : null}
             </div>
           </div>
         )}
@@ -1224,8 +1198,8 @@ export default function EcommercePage() {
 
       {/* Order Detail Slide-over */}
       {selectedOrder && (
-        <Drawer onClose={() => setSelectedOrder(null)} header={(
-          <div><h2 className="text-lg font-black text-gray-900">{selectedOrder.numero}</h2><p className="text-xs text-gray-500">{selectedOrder.pven_numero} · {selectedOrder.customer_name}</p></div>
+        <Drawer idTitulo="drawer-pedido-web-titulo" onClose={() => setSelectedOrder(null)} header={(
+          <div><h2 id="drawer-pedido-web-titulo" className="text-lg font-black text-gray-900">{selectedOrder.numero}</h2><p className="text-xs text-gray-500">{selectedOrder.pven_numero} · {selectedOrder.customer_name}</p></div>
         )}>
               <div className="grid grid-cols-2 gap-3">
                 {[['Cliente',selectedOrder.customer_name],['Email',selectedOrder.customer_email],['Teléfono',selectedOrder.customer_phone||'-'],['Total',fCOP(selectedOrder.total_cop ?? 0)],['Fecha',fechaCorta(selectedOrder.created_at) || '-'],['Estado',infoEstadoPedido(selectedOrder.estado).label]].map(([l,v]) => (

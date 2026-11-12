@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { ArrowUpFromLine, Eye, MessageCircle, Package, RefreshCw, Truck } from 'lucide-react';
 // B4 T19: Entregas (Cola de Despacho) 100 % sobre el servidor (R5, R15, C3, C4, C19). Las pestañas SON las columnas del tablero
@@ -21,21 +21,21 @@ import type { AccionTabla, ColumnaTabla } from '@/components/tabla';
 import { INV_NAV } from '../inv-nav';
 import { AvisoReintentar, CONTENEDOR, FOCOS, pesos, useCatalogo } from '../piezas-inventario';
 import { CHIP, titulosDeOrdenPec } from '../../compras/columnas-pec';
-import { getUsuarioActual } from '../../ventas/flujo';
+import { useRolActual } from '@/components/ui/useRolActual';
 
 import { apiFetch } from '@/lib/api';
-import { accionModo, dependenciasTablero, estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
+import {
+  accionModo, accionVistaEnLista, dependenciasTablero, estadoDelTotal, normalizarRespuesta, ordenEsAtencion, textoOrdenHub,
+} from '@/lib/tabla';
 import { lecturaDeCarga } from '@/lib/kpis';
 import { recargarTrasError } from '@/lib/avisos';
 import { infoEstadoPedido } from '@/lib/estados-pedido';
 import { abrirWhatsApp, waUrl } from '@/lib/whatsapp';
-import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
-import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
   COLUMNAS_ENTREGA, NOTA_ENTREGAS, OPCIONES_ESTADOS_TABLERO_ENTREGA, VISTA_DE_TRABAJO_ENTREGA, confirmacionDespacho,
   consultaColumnaEntrega, consultaConteoEntrega, consultaEntregas, cuerpoDespacho, infoCobroEntrega, mensajeFaltaBodega, opcionesEstadosEntrega,
   pestanasEntrega, puedeCobrarSaldo, puedeDespacharPedido, recordatorioSaldo, reglaSoltarEntrega, resumenColumnaEntrega, saldoEntrega,
-  tarjetaEntrega, tarjetasEntregas, textoEntregaEstimada, textoVacioEntregas, vistaDeTarjetaEntrega,
+  tarjetaEntrega, tarjetasEntregas, textoEntregaTablero, textoVacioEntregas, vistaDeTarjetaEntrega,
 } from '@/lib/entregas';
 
 /** Una línea del pedido (productos de _ven_dict: JSON; los nombres son los del servidor). */
@@ -144,8 +144,8 @@ const COLUMNAS_TABLA_ENTREGAS: ColumnaTabla<FilaPedido>[] = [
   { id: 'cobro', titulo: 'Cobro', ancho: 116, ocultaPorDefecto: true, celda: (p) => <CeldaCobro p={p} /> },
   { id: 'estado', titulo: 'Estado', ancho: 124, clave: true, ordenable: 'estado', titleCelda: (p) => infoEstadoPedido(p.estado).label, celda: (p) => <CeldaEstado p={p} /> },
   { id: 'entrega', titulo: 'Entrega est.', ancho: 100, ocultaPorDefecto: true, ordenable: 'entrega',
-    titleCelda: (p) => textoEntregaEstimada(p),
-    celda: (p) => <span className="text-xs text-slate-600">{textoEntregaEstimada(p)}</span> },
+    titleCelda: (p) => textoEntregaTablero(p),
+    celda: (p) => <span className="text-xs text-slate-600">{textoEntregaTablero(p)}</span> },
   { id: 'acciones', titulo: 'Acciones', ancho: 112, clave: true, fija: 'derecha', celda: (p) => <CeldaAcciones p={p} /> },
 ];
 /** {campo de orden: título}, para el chip «Orden: Total ↓», solo de las columnas que se ordenan. */
@@ -154,21 +154,15 @@ const TITULOS_ORDEN_ENTREGAS = titulosDeOrdenPec(COLUMNAS_TABLA_ENTREGAS);
 type ConteosCargados = { vuelta: string; conteos: Record<ClaveColumna, number> | null; error: unknown };
 type StatsCargadas = { vuelta: number; kpis: unknown; error: unknown };
 
-/** El rol viene de localStorage: se relee al montar y cuando otra pestaña lo cambie. */
-const suscribirRol = (alCambiar: () => void) => {
-  window.addEventListener('storage', alCambiar);
-  return () => window.removeEventListener('storage', alCambiar);
-};
-
 /* ================================================================
    MAIN PAGE — EntregasPage (B4 T19)
    ================================================================ */
 export default function EntregasPage() {
   const { avisar, avisarError, confirmar } = useAvisos();
   // El rol que despacha: ADMIN, ASESOR y BODEGA (R15); los demás roles solo ven (reglaSoltarEntrega los deja en «solo ver»).
-  // m14: el rol se lee DESPUÉS de montar (useSyncExternalStore: '' en el servidor y en la hidratación, el real en el cliente); sin rol no
+  // m14: el rol se lee DESPUÉS de montar (B4 T24, F46: useRolActual, la pieza común; '' en el servidor y en la hidratación); sin rol no
   // se pintan los botones que dependen de él.
-  const rol = useSyncExternalStore(suscribirRol, () => getUsuarioActual().role, () => '');
+  const rol = useRolActual();
 
   // ── bloque 1: la carga del servidor (TABLA-inventario punto 10; R5, C3, C4, C19; D39, D40) ──
   // El estado ÚNICO de la pantalla: las pestañas (= las columnas), la búsqueda, el filtro de estados, la tarjeta, la tabla y el tablero
@@ -279,7 +273,7 @@ export default function EntregasPage() {
       setDesdeTablero(null);
     } catch (err) {
       avisarError(err, 'No se pudo despachar el pedido');
-      // La regla única: con un 400, un 409 o sin respuesta se recarga lo que se ve; un 404 no.
+      // La regla única (recargarTrasError): con un 400, un 409, un 422 (F8) o sin respuesta se recarga lo que se ve; un 404 o un 500, no.
       if (recargarTrasError(err)) recargarTodo();
     } finally {
       setUpdating(false);
@@ -499,12 +493,12 @@ export default function EntregasPage() {
 
       {/* DRAWER LATERAL DE DESPACHO Y COBRO (B1 a B3) */}
       {selected && (
-        <Drawer
+        <Drawer idTitulo="drawer-entrega-titulo" cierreExterno={!puedeDespacharPedido(selected, rol)}
           onClose={() => { setSelected(null); setDesdeTablero(null); }}
           header={(
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-xl font-black text-slate-800">{selected.numero}</h2>
+                <h2 id="drawer-entrega-titulo" className="text-xl font-black text-slate-800">{selected.numero}</h2>
                 <CeldaEstado p={selected} />
               </div>
               <p className="text-xs text-slate-500 mt-0.5">Control de Despacho y Verificación Financiera</p>
@@ -611,7 +605,7 @@ export default function EntregasPage() {
               <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-2.5">Bodega de Despacho</h4>
               <select aria-label="Bodega de despacho" value={warehouseId} disabled={!bodegas.filas}
                 onChange={(e) => setBodegaElegida(e.target.value)}
-                className={`w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none disabled:text-slate-500 ${FOCOS.indigo}`}>
+                className={`w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm disabled:text-slate-500 ${FOCOS.indigo}`}>
                 <option value="">{bodegas.filas ? 'Seleccionar...' : (bodegas.error ? 'No se pudieron cargar' : 'Cargando bodegas…')}</option>
                 {(bodegas.filas ?? []).map((w) => <option key={w.id} value={String(w.id)}>{w.name}</option>)}
               </select>

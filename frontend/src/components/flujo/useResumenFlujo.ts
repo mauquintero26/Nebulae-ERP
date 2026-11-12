@@ -1,13 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import { apiFetch } from '@/lib/api';
-import { crearCargaListado } from '@/lib/tabla';
-import { aplicarLlegadaResumen, estadoResumen } from '@/lib/flujo';
-import type { ResultadoResumen } from '@/lib/flujo';
-// r1 (M12): el usuario del token, como useListado (T4C r2). Es interno de components/tabla y compartido: el index de
-// components/tabla no lo exporta.
-import { usuarioDeLaSesion } from '@/components/tabla/usuarioDeLaSesion';
+import { useMemo } from 'react';
+import { RESUMEN_DEL_FLUJO } from '@/lib/flujo';
+// B4 T24 f2 r1 (C2): una sola implementación del cargador de resúmenes, la de components/ui/useResumen.
+import { useResumen } from '@/components/ui/useResumen';
 import type { DatosFlujo, ResumenFlujo } from './tipos';
 
 /**
@@ -18,6 +14,9 @@ import type { DatosFlujo, ResumenFlujo } from './tipos';
  *  - Cada carga aborta la anterior, y la respuesta de una que ya no es la vigente se descarta antes de tocar el estado:
  *    el turno es crearCargaListado de lib/tabla.js (el mismo de useListado). Al desmontar, o al cambiar la ruta,
  *    `recarga` o el usuario, la carga en camino se aborta. Con StrictMode sale una sola petición.
+ *  - B4 T24 f2 r1 (C2): todo eso es useResumen (components/ui/useResumen.ts) con la regla del flujo, RESUMEN_DEL_FLUJO (sus
+ *    textos y, con error, lo último bueno). Este hook es su envoltorio: la API pública ({datos, cargando, error, recargar}) no
+ *    cambia.
  *  - En la primera carga, datos es null y las cajas pintan la barra gris de Contador (D21). Al recargar (otro valor de
  *    `recarga`, o recargar()) los datos anteriores siguen y solo `cargando` es true: los números no parpadean.
  *  - Un error conserva lo último bueno de la misma ruta y del mismo usuario (aplicarLlegadaResumen) y se ve en `error`;
@@ -29,30 +28,10 @@ import type { DatosFlujo, ResumenFlujo } from './tipos';
  * `recarga`: un número que la pantalla sube cuando cambió algo (por ejemplo, cada vez que corre su loadData).
  */
 
-const pedirResumen = (url: string, signal: AbortSignal) => apiFetch(url, { signal });
-
 export function useResumenFlujo<T = DatosFlujo>(ruta: string, recarga: number = 0): ResumenFlujo<T> {
-  const [version, setVersion] = useState(0);
-  const [resultado, setResultado] = useState<ResultadoResumen | null>(null);
-  // Una carga por hook: aborta la anterior y solo publica la vigente. setResultado se llama solo cuando llega.
-  const [carga] = useState(() => crearCargaListado({
-    pedir: pedirResumen,
-    alLlegar: (llegada) => setResultado((previo) => aplicarLlegadaResumen(previo, llegada)),
-  }));
-  // M13: cuántas veces se volvió a pedir una clave que ya había llegado.
-  const repeticion = useSyncExternalStore(carga.suscribir, carga.repeticion, carga.repeticion);
-  const usuario = usuarioDeLaSesion();
-  const clave = `${version}|${usuario ?? ''}|${recarga}|${ruta}`;
-
-  useEffect(() => {
-    carga.cargar(ruta, clave, { ruta, usuario });
-    return () => carga.cancelar();
-  }, [carga, ruta, clave, usuario]);
-
-  const recargar = useCallback(() => setVersion((v) => v + 1), []);
-
-  return useMemo(() => {
-    const visto = estadoResumen(resultado, { clave, ruta, usuario, repeticion });
-    return { datos: visto.datos as T | null, cargando: visto.cargando, error: visto.error, recargar };
-  }, [resultado, clave, ruta, usuario, repeticion, recargar]);
+  const r = useResumen<T>(ruta, recarga, RESUMEN_DEL_FLUJO);
+  return useMemo(
+    () => ({ datos: r.datos, cargando: r.cargando, error: r.error, recargar: r.recargar }),
+    [r],
+  );
 }

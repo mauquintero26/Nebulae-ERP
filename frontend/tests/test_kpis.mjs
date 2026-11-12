@@ -193,6 +193,17 @@ console.log('--- TEST 9: acentoDesdeClase (KPI-otros) ---');
   assert.equal(acentoDesdeClase(null), 'indigo');
   assert.equal(acentoDesdeClase('amber'), 'amber', 'un acento ya resuelto se queda');
   assert.deepEqual(COLORES_KPI, ['amber', 'rose', 'orange', 'indigo', 'purple', 'emerald', 'blue', 'teal', 'red', 'slate']);
+  // B4 T24 (F26): el respaldo es un parámetro (aditivo; por defecto 'indigo'): los tableros piden 'slate'.
+  assert.equal(acentoDesdeClase('bg-cyan-500', 'slate'), 'slate');
+  assert.equal(acentoDesdeClase('bg-green-100', 'slate'), 'slate');
+  assert.equal(acentoDesdeClase('bg-orange-100', 'slate'), 'orange');
+  assert.equal(acentoDesdeClase(undefined, 'slate'), 'slate');
+  // r2 (C8): y el conjunto de colores admitidos (aditivo; por defecto COLORES_KPI): el tablero pasa las claves de TONOS.
+  const tonos = ['green', 'cyan', 'violet', 'sky', 'slate'];
+  assert.equal(acentoDesdeClase('bg-green-100', 'slate', tonos), 'green');
+  assert.equal(acentoDesdeClase('bg-cyan-500', 'slate', tonos), 'cyan');
+  assert.equal(acentoDesdeClase('bg-stone-100', 'slate', tonos), 'slate', 'lo que el tablero no pinta');
+  assert.equal(acentoDesdeClase('bg-cyan-500'), 'indigo', 'sin conjunto: COLORES_KPI, como siempre');
 }
 
 console.log('--- TEST 10: CATALOGO_KPI, etiquetaKpi e ICONOS_KPI ---');
@@ -445,32 +456,33 @@ console.log('--- TEST 13 (B4 T7 r1b): el esqueleto de TarjetaKpi tiene la forma 
   assert.ok(!fuente.includes('block h-7 w-24') && !fuente.includes('animate-pulse mt-2'), 'sin las barras de antes');
 }
 
-console.log('--- TEST 14 (B4 T8 r1, A1): una tarjeta pulsable y activa muestra el foco distinto de su anillo de «activa» ---');
+console.log('--- TEST 14 (B4 T8 r1, A1; B4 T24, FINAL-m25): una tarjeta pulsable y activa muestra el foco distinto de su anillo de «activa» ---');
 {
   const fuente = readFileSync(new URL('../src/components/ui/TarjetaKpi.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-  const mapa = (nombre) => {
-    const cuerpo = new RegExp(`const ${nombre}: Record<ColorKpi, string> = \\{([\\s\\S]*?)\\n\\};`).exec(fuente)?.[1] ?? '';
-    return Object.fromEntries([...cuerpo.matchAll(/(\w+): '([^']*)'/g)].map((m) => [m[1], m[2].split(/\s+/)]));
-  };
-  const anillo = mapa('ANILLO');
-  const foco = mapa('FOCO');
-  const focoActiva = mapa('FOCO_ACTIVA');
+  const ds = readFileSync(new URL('../src/lib/design-system.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const cuerpo = /const ANILLO: Record<ColorKpi, string> = \{([\s\S]*?)\n\};/.exec(fuente)?.[1] ?? '';
+  const anillo = Object.fromEntries([...cuerpo.matchAll(/(\w+): '([^']*)'/g)].map((m) => [m[1], m[2].split(/\s+/)]));
+  const focos = Object.fromEntries([.../export const FOCOS = \{([\s\S]*?)\n\} as const;/.exec(ds)[1].matchAll(/^\s+(\w+):\s+'([^']*)',$/gm)]
+    .map((m) => [m[1], m[2].split(/\s+/)]));
   const colores = Object.keys(anillo);
   assert.ok(colores.length >= 10, 'los colores del anillo');
-  assert.deepEqual(Object.keys(focoActiva).sort(), [...colores].sort(), 'FOCO_ACTIVA tiene un foco por cada color');
+  // B4 T24 (FINAL-m25, D27): el foco es el token común FOCOS[color] (outline -700 separado 2 px), activa o no. Ya no hay mapas
+  // FOCO (ring -300 de ≈2:1) ni FOCO_ACTIVA en la tarjeta.
+  assert.ok(!/const FOCO(_ACTIVA)?: Record/.test(fuente), 'sin los mapas de foco propios');
   for (const c of colores) {
-    const anilloActiva = anillo[c].find((x) => /^ring-[a-z]+-\d+$/.test(x));
-    // Con foco y activa: un anillo separado de la tarjeta (ring-offset-2) y de otro tono que el de «activa».
-    assert.ok(focoActiva[c].includes('focus-visible:ring-offset-2'), `${c}: el foco de la activa va separado`);
-    const tonoFoco = focoActiva[c].find((x) => /^focus-visible:ring-[a-z]+-\d+$/.test(x))?.replace('focus-visible:', '');
-    assert.ok(tonoFoco && tonoFoco !== anilloActiva, `${c}: el foco de la activa no es el anillo ${anilloActiva}`);
-    // Sin foco nada cambia: el anillo de «activa» y el foco de las demás son los de siempre.
+    assert.ok(focos[c], `${c}: FOCOS tiene el color`);
+    const tonoAnillo = anillo[c].find((x) => /^ring-[a-z]+-\d+$/.test(x))?.replace('ring-', '');
+    const tonoFoco = focos[c].find((x) => /^focus-visible:outline-(?!offset)[a-z]+-\d+$/.test(x))?.replace('focus-visible:outline-', '');
+    // Con foco y activa: un outline separado de la tarjeta (por fuera del anillo) y de otro tono que el de «activa».
+    assert.ok(focos[c].includes('focus-visible:outline-offset-2'), `${c}: el foco va separado`);
+    assert.ok(tonoFoco && tonoFoco !== tonoAnillo && tonoFoco.endsWith('-700'), `${c}: el foco (${tonoFoco}) no es el anillo ${tonoAnillo}`);
+    // Sin foco nada cambia: el anillo de «activa» no depende del foco, y el token solo pinta con el foco (outline-2).
     assert.ok(!anillo[c].some((x) => x.startsWith('focus-visible:')), `${c}: el anillo de activa no depende del foco`);
-    assert.ok(foco[c].every((x) => x.startsWith('focus-visible:')) && !foco[c].includes('focus-visible:ring-offset-2'), `${c}: FOCO igual`);
-    assert.ok(focoActiva[c].every((x) => x.startsWith('focus-visible:')), `${c}: FOCO_ACTIVA solo actúa con el foco`);
+    assert.ok(focos[c].filter((x) => !x.startsWith('focus-visible:')).every((x) => /^outline-[a-z]+-\d+$/.test(x)), `${c}: sin foco, solo el color`);
   }
-  // El botón usa FOCO_ACTIVA solo cuando está activo.
-  assert.match(fuente, /focus-visible:outline-none focus-visible:ring-2 \$\{activo \? FOCO_ACTIVA\[colorFinal\] : FOCO\[colorFinal\]\}/);
+  // El botón usa el token, igual activo o no.
+  assert.match(fuente, /cursor-pointer transition-colors\$\{hover\} \$\{FOCOS\[colorFinal\]\}`\}/);
+  assert.match(fuente, /import \{ FOCOS \} from '@\/lib\/design-system';/);
 }
 
 console.log('--- TEST 15 (B4 T8 r2, p1): activa y en alerta, un solo color de borde: el de ANILLO ---');
@@ -506,7 +518,7 @@ console.log('--- TEST 15 (B4 T8 r2, p1): activa y en alerta, un solo color de bo
   // Pulsable: el hover tampoco le cambia el borde a la activa (solo a las demás).
   assert.equal(componer(true, 'alerta', 'indigo', ANILLO).hover, '', 'activa: sin hover de borde');
   assert.equal(componer(false, 'alerta', 'indigo', ANILLO).hover, ' hover:border-slate-300', 'no activa: el hover de siempre');
-  assert.match(fuente, /cursor-pointer transition-colors\$\{hover\} focus-visible:outline-none focus-visible:ring-2 /, 'el botón usa ese hover');
+  assert.match(fuente, /cursor-pointer transition-colors\$\{hover\} \$\{FOCOS\[colorFinal\]\}/, 'el botón usa ese hover (B4 T24, D27: con el foco común)');
   assert.equal((fuente.match(/hover:border-slate-300/g) ?? []).length, 1, 'un solo hover de borde');
   assert.match(fuente, /alerta: 'text-rose-700',/, 'la ayuda en alerta sigue en rosa');
 }
@@ -965,10 +977,10 @@ console.log('--- TEST 25 (B4 T22, KPI-otros punto 1 y FLUJO-ventas-pantallas E; 
   assert.ok(fuente.includes('setLlego({ vuelta: clave, datos: null, error: err, marca })'));
   assert.ok(fuente.includes('useEstadoKpi(ventas.cargando, ventas.error)') && fuente.includes('useEstadoKpi(inventario.cargando, inventario.error)'));
   // Cada fuente que falla lo dice con «Reintentar» (nunca 0 ni un vacío falso).
+  // B4 T24 (F46, D27): con la pieza común (AvisoDeError: avisoDeFuente y AvisoFuente; un 403 sin «Reintentar»).
   for (const f of ['inventario', 'compras', 'ventas', 'clientes']) {
-    assert.match(fuente, new RegExp(`<AvisoFuente error=\\{${f}\\.error\\} texto="[^"]+" onReintentar=\\{${f}\\.recargar\\} />`), `aviso de ${f}`);
+    assert.match(fuente, new RegExp(`<AvisoDeError error=\\{${f}\\.error\\} fallo="[^"]+" onReintentar=\\{${f}\\.recargar\\} acento="indigo" />`), `aviso de ${f}`);
   }
-  assert.match(fuente, /<p role="alert"[\s\S]{0,300}Reintentar/);
   // El embudo: PasosFlujo vertical con /ventas/flujo y los enlaces al Hub; su error con «Reintentar».
   assert.ok(fuente.includes("useResumenFlujo('/ventas/flujo', 0)"));
   assert.ok(fuente.includes('<PasosFlujo variante="banner" orientacion="vertical"'));
@@ -987,11 +999,11 @@ console.log('--- TEST 25 (B4 T22, KPI-otros punto 1 y FLUJO-ventas-pantallas E; 
   assert.doesNotMatch(fuente, /a la espera de la mercancía|Ver Tránsito Compras/);
   // m6: el aviso de una fuente caída sale de textoAvisoFuente (un solo punto).
   // I1 (M1, M4b, M10, m6): el aviso se pinta SOLO con error, la fuente devuelve el error de la lectura y el embudo lo muestra.
-  assert.ok(fuente.includes('  if (!error) return null;\n  return (\n    <p role="alert"'), 'AvisoFuente solo se pinta con error');
-  assert.ok(fuente.includes('      {textoAvisoFuente(error, texto)}\n'), 'un solo punto: lo pone textoAvisoFuente');
+  // B4 T24 (F46, D27): AvisoDeError se pinta solo con error y su texto es textoAvisoFuente (vía avisoDeFuente; test_avisos.mjs).
+  assert.ok(!/function AvisoFuente\b/.test(fuente), 'sin la copia local');
   assert.ok(fuente.includes('return { ...lecturaDeFuente(llego, clave), recargar };'), 'useFuente devuelve el error de la lectura');
   assert.ok(fuente.includes('{avisoEmbudo.visible && ('));
-  assert.ok(fuente.includes('texto="No se pudieron contar los clientes"'));
+  assert.ok(fuente.includes('fallo="No se pudieron contar los clientes"'), 'F46 (D27): la prop de AvisoDeError');
   // m10: las «Recientes» dicen la etiqueta del estado, no el código.
   assert.ok(fuente.includes('{infoEstadoPec(pec.estado).label}') && fuente.includes('{infoEstadoPedido(ven.estado).label}'));
   assert.doesNotMatch(fuente, /\{(pec|ven)\.estado\}/);
@@ -1161,8 +1173,8 @@ console.log('--- TEST 28 (B4 T23A): el cableado de las tarjetas de la tienda en 
   assert.match(codigo, /onClick=\{recargarTodo\}/);
   // Los carritos: lo mismo (primera carga en esqueleto, error con Reintentar, vacío y filas por faseDeLista).
   assert.match(codigo, /const faseCarritos = faseDeLista\(\{ cargandoInicial: cargandoCarritos && carritos === null, error: errorCarritos, filas: carritos \}\);/);
-  assert.match(codigo, /\{faseCarritos === 'error' && avisoCarritos && \(\s*<AvisoFuente aviso=\{avisoCarritos\} onReintentar=\{\(\) => setVueltaCarritos\(\(n\) => n \+ 1\)\} \/>/);
-  assert.match(codigo, /<Contador valor=\{carritos === null \? null : carritos\.length\} estado=\{estadoCarritos\} \/>/);
+  assert.match(codigo, /\{faseCaja === 'error' && avisoCarritos && \(\s*<AvisoFuente aviso=\{avisoCarritos\} onReintentar=\{\(\) => setVueltaCarritos\(\(n\) => n \+ 1\)\} \/>/);
+  assert.match(codigo, /<Contador valor=\{carritos === null \? null : carritos\.length\} estado=\{estadoCaja\} \/>/); // F104 (D27): estadoCaja = estadoCarritos con el rol ya leído
   // Se fueron el StatCard, el '...' del cargando, los números armados con || 0 y los catch mudos.
   assert.ok(!/StatCard/.test(codigo), 'sin StatCard');
   assert.ok(!/'\.\.\.'/.test(codigo), "sin el '...' del cargando");
@@ -1172,15 +1184,16 @@ console.log('--- TEST 28 (B4 T23A): el cableado de las tarjetas de la tienda en 
   assert.match(codigo, /if \(!acceso\.indicadores\) return;\s*const control = new AbortController\(\);\s*apiFetch\('\/ecommerce\/stats'/);
   assert.match(codigo, /\}, \[vueltaStats, acceso\.indicadores\]\);/);
   assert.match(codigo, /if \(!panelActivo \|\| !acceso\.carritos\) return;\s*const control = new AbortController\(\);\s*apiFetch\('\/ecommerce\/carritos\?estado=ABANDONADO'/);
-  assert.match(codigo, /\{acceso\.indicadores && \(\s*<>/);
-  assert.match(codigo, /\{acceso\.carritos && \(\s*<div className="order-2/);
+  // B4 T24 (F104, D27): también mientras el rol no se conoce (la franja en cargando y la caja en esqueleto).
+  assert.match(codigo, /\{\(acceso\.indicadores \|\| !acceso\.listo\) && \(\s*<>/);
+  assert.match(codigo, /\{\(acceso\.carritos \|\| !acceso\.listo\) && \(\s*<div className="order-2/);
   assert.match(codigo, /const actualizando = \(acceso\.indicadores && cargandoStats\) \|\| /);
   // 403 que llega igual: «—» con el motivo de permiso y sin «Reintentar».
   assert.match(codigo, /const sinPermisoStats = motivoSinPermiso\(avisoStats\);/);
   assert.match(codigo, /import \{ AvisoFuente \} from '@\/components\/ui\/AvisoFuente';/);
   assert.match(codigo, /import \{ useRolActual \} from '@\/components\/ui\/useRolActual';/);
   assert.ok(!/function AvisoFuente|suscribirRol|useSyncExternalStore/.test(codigo), 'sin la copia local del aviso ni del rol');
-  assert.match(codigo, /<FranjaKpis estado=\{estadoFranjaDeFuente\(avisoStats, estadoStats\)\} titulo="Indicadores de la tienda">/);
+  assert.match(codigo, /<FranjaKpis estado=\{acceso\.listo \? estadoFranjaDeFuente\(avisoStats, estadoStats\) : 'cargando'\} titulo="Indicadores de la tienda">/); // F104 (D27)
   assert.ok(!/AvisoReintentar/.test(codigo), 'ningún Reintentar fijo');
   // m16: «Los 50 más recientes de N».
   assert.match(codigo, /const textoLimite = textoLimiteCarritos\(datosStats\?\.carritos_abandonados_count, carritos === null \? null : carritos\.length\);/);
@@ -1468,7 +1481,8 @@ console.log('--- TEST 33 (B4 T23B, KPI-otros punto 4 y TABLA-otros punto 6; R11,
   assert.match(codigo, /\n\s*Pasar al CRM\n/);
   assert.ok(!/Sync CRM/.test(codigo), 'sin el inglés');
   // m11: las fechas de las campañas son días de calendario y su estado lleva etiqueta.
-  assert.match(codigo, /const fDate = \(d: any\) => d \? fechaCorta\(diaDeNegocio\(d\)\) : '-';/);
+  // B4 T24 (FINAL-m30, D27): textoDiaCorto de fechas-colombia.js (el día corto o '—').
+  assert.match(codigo, /const fDate = \(d: unknown\) => textoDiaCorto\(d\);/);
   assert.ok(!/toLocaleDateString/.test(codigo));
   assert.match(codigo, /\{humanizarCodigo\(c\.estado\)\}/);
   assert.match(codigo, /\{humanizarCodigo\(selected\.estado\)\}/);
@@ -1483,7 +1497,8 @@ console.log('--- TEST 33 (B4 T23B, KPI-otros punto 4 y TABLA-otros punto 6; R11,
   assert.ok(!/StatCard|\+\$\{|toFixed\(0\)|Intl\.NumberFormat/.test(codigo), 'sin StatCard, el «+» fijo del ROI ni el formato de dinero propio');
   assert.match(codigo, /const fCOP = \(v: number\) => formatoPesos\(v \|\| 0\);/);
   // El botón flotante de la IA no tapa la última fila de la tabla de leads: el panel baja 96 px de más (medido en el banco a 1024 x 600).
-  assert.match(codigo, /<div className="flex-1 overflow-y-auto p-6 pb-24">/);
+  // B4 T24 (F44-a, D27): la reserva es el token RESERVA_BOTON_IA (pb-24).
+  assert.match(codigo, /<div className=\{`flex-1 overflow-y-auto p-6 \$\{RESERVA_BOTON_IA\}`\}>/);
   // m1: la barra del presupuesto usa la MISMA cifra que la tarjeta y el ROI, y queda gris mientras carga.
   assert.match(codigo, /\{fCOP\(tarjetasMetricas\.ventas_atribuidas\.valor \?\? 0\)\} \/ \{fCOP\(selected\.presupuesto_cop\)\}/);
   assert.match(codigo, /width:`\$\{Math\.min\(100, \(\(tarjetasMetricas\.ventas_atribuidas\.valor \?\? 0\) \/ selected\.presupuesto_cop\) \* 100\)\}%`/);
@@ -1694,6 +1709,115 @@ console.log('--- TEST 37 (B4 T23B r1; I2, m6, m12, m31): las rutas de carga y de
   assert.equal(k.textoProveedoresCortados(undefined, 200), null, 'sin total no se inventa');
   assert.equal(k.textoProveedoresCortados('x', 3), null);
   assert.equal(k.textoProveedoresCortados(5, 0), null, 'sin filas no hay lista que cortar');
+}
+
+console.log('--- TEST T24 (B4 T24, FINAL-m21): fuenteGuardable — un formulario cargado de una fuente se guarda solo con lo que llegó ---');
+{
+  const { fuenteGuardable, lecturaDeFuente } = kpisLib;
+  assert.equal(typeof fuenteGuardable, 'function');
+  const llego = (datos, error = null, vuelta = 1) => lecturaDeFuente({ vuelta, datos, error }, 1);
+  // Llegó: se guarda (también una configuración vacía que mandó el servidor).
+  assert.equal(fuenteGuardable(llego({ envio_local: { enabled: true, tarifa: 9000 }, zonas: [] })), true);
+  assert.equal(fuenteGuardable(llego({})), true, 'un objeto vacío del servidor también es lo guardado');
+  // Cargando (nada llegó, o llegó de otra vuelta): no se guarda (los valores por defecto del estado NO son los de la tienda).
+  assert.equal(fuenteGuardable(lecturaDeFuente(null, 1)), false, 'todavía no llegó');
+  assert.equal(fuenteGuardable(llego({ a: 1 }, null, 0)), false, 'llegó la de otra vuelta: recargando');
+  // Falló: no se guarda (con «Guardar Envíos» se pisaría todo el JSON, también las zonas).
+  assert.equal(fuenteGuardable(llego(null, Object.assign(new Error('x'), { status: 500 }))), false, 'error');
+  assert.equal(fuenteGuardable(llego(null, { status: 403 })), false, '403');
+  // Con un error de la vuelta vigente no se guarda aunque haya datos (una regla, no la forma de lo que arma la pantalla).
+  assert.equal(fuenteGuardable(llego({ envio_local: { tarifa: 1 } }, new Error('x'))), false, 'datos con error');
+  // Sin datos y sin error (el servidor no mandó data): tampoco.
+  assert.equal(fuenteGuardable(llego(null)), false, 'sin datos');
+  assert.equal(fuenteGuardable(null), false);
+  assert.equal(fuenteGuardable(undefined), false);
+}
+
+console.log('--- TEST T24-e (B4 T24 r1, m11): cuerpoConfigPagos — un secreto vacío no borra el guardado ni se reenvían los *_masked ---');
+{
+  const { cuerpoConfigPagos, SECRETOS_PAGOS } = kpisLib;
+  // update_payment_config (ecommerce.py) MEZCLA el cuerpo de cada pasarela sobre lo guardado: un secret_key '' lo borraría, y un
+  // *_masked se guardaría como un dato. El GET no devuelve los secretos (los quita y manda *_masked).
+  assert.deepEqual(SECRETOS_PAGOS, { stripe: ['secret_key'], mercadopago: ['access_token'] });
+  const leido = {
+    stripe: { enabled: true, publishable_key: 'pk_1', secret_key: '', secret_key_masked: '****1234', webhook_secret: 'whsec_9' },
+    mercadopago: { enabled: false, public_key: 'APP_1', access_token: '   ', access_token_masked: '****9876' },
+    otro: { x: 1 },
+  };
+  assert.deepEqual(cuerpoConfigPagos(leido), {
+    stripe: { enabled: true, publishable_key: 'pk_1', webhook_secret: 'whsec_9' },
+    mercadopago: { enabled: false, public_key: 'APP_1' },
+  }, 'vacío = no cambiar; sin *_masked ni pasarelas que el servidor no conoce');
+  // Un secreto nuevo, escrito, sí va.
+  assert.deepEqual(cuerpoConfigPagos({ stripe: { secret_key: 'sk_nuevo' } }), { stripe: { secret_key: 'sk_nuevo' } });
+  assert.deepEqual(cuerpoConfigPagos(null), {});
+  assert.notEqual(cuerpoConfigPagos(leido).stripe, leido.stripe, 'no muta lo leído');
+  // La pantalla manda ese cuerpo y muestra el enmascarado como marcador del campo vacío.
+  const pantalla = readFileSync(new URL('../src/app/dashboard/ecommerce/page.tsx', import.meta.url), 'utf8');
+  assert.ok(pantalla.includes("body:JSON.stringify(cuerpoConfigPagos(payConfig))"), 'Guardar Pagos manda cuerpoConfigPagos');
+  assert.ok(!pantalla.includes('JSON.stringify(payConfig)'), 'nunca el estado crudo');
+  assert.ok(pantalla.includes("placeholder={payConfig[gw.key]?.[`${field.k}_masked`] || field.ph}"), 'el enmascarado como marcador');
+}
+
+console.log('--- TEST T24-b (B4 T24, FINAL-m23): el Copilot del Dashboard, solo para quien lo puede consultar, sin emojis y con el 403 dicho ---');
+{
+  const fuente = readFileSync(new URL('../src/app/dashboard/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const c = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // accesoCopilot (lib/roles.js, casos en test_roles.mjs) con useRolActual: el Copilot solo para ADMIN, ASESOR y FINANZAS.
+  assert.match(c, /import \{ useRolActual \} from '@\/components\/ui\/useRolActual';/);
+  assert.match(c, /import \{ accesoCopilot \} from '@\/lib\/roles';/);
+  assert.match(c, /const rol = useRolActual\(\);\s*const accesoIa = accesoCopilot\(rol\);/);
+  assert.match(c, /\{accesoIa\.consultar && \(\s*<div className="bg-gradient-to-r from-purple-950/);
+  assert.match(c, /if \(!q \|\| !accesoIa\.consultar\) return;/, 'tampoco se consulta por Enter sin permiso');
+  // Sin emojis en los botones de consulta rápida.
+  const rapidas = c.slice(c.indexOf('Consultas rápidas'), c.indexOf('].map((sug, idx)'));
+  assert.ok(rapidas.length > 0);
+  assert.ok(!/\p{Extended_Pictographic}/u.test(rapidas), 'sin emojis');
+  for (const t of ["label: 'Estado de inventario'", "label: 'Compras en tránsito'", "label: 'Cartera pendiente'", "label: 'Resumen de clientes'"]) assert.ok(rapidas.includes(t), t);
+  // El error dice la causa real (avisoDeFuente: un 403 es de permiso; lo demás, el detalle del servidor), no «Revisa la conectividad».
+  assert.ok(!c.includes('Revisa la conectividad del backend'), 'sin la causa falsa');
+  assert.match(c, /answer: avisoDeFuente\(err, 'No se pudo consultar el copiloto'\)!\.texto,/);
+}
+
+console.log('--- TEST T24-c (B4 T24, F108): la Agenda ofrece Nuevo, Editar y Eliminar proveedor solo a ADMIN y COMPRAS ---');
+{
+  const fuente = readFileSync(new URL('../src/app/dashboard/agenda/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const c = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // accesoProveedores (lib/roles.js; casos en test_roles.mjs) con useRolActual.
+  assert.match(c, /import \{[^}]*\baccesoProveedores\b[^}]*\} from '@\/lib\/roles';/);
+  assert.match(c, /import \{ useRolActual \} from '@\/components\/ui\/useRolActual';/);
+  assert.match(c, /const accesoProv = accesoProveedores\(useRolActual\(\)\);/);
+  // Los cuatro botones (Nuevo, Eliminar de la tarjeta, Editar y Eliminar del detalle), dentro de accesoProv.editar.
+  assert.match(c, /\{accesoProv\.editar && \(\s*<button\s+onClick=\{openNewSupplier\}/);
+  assert.match(c, /\{accesoProv\.editar && \(\s*<button\s+onClick=\{\(e\) => \{\s*e\.stopPropagation\(\);\s*setDeleteConfirmSupplier\(sup\);/);
+  assert.match(c, /\{accesoProv\.editar && \(\s*<>\s*<button\s+onClick=\{\(\) => openEditSupplier\(selectedSupplier\)\}/);
+  assert.equal((c.match(/setDeleteConfirmSupplier\((sup|selectedSupplier)\)/g) ?? []).length, 2, 'los dos «Eliminar Proveedor»');
+  // r1 (C3): las CINCO entradas: cada onClick={openNewSupplier} (el encabezado y el vacío) va dentro de accesoProv.editar.
+  const nuevos = [...c.matchAll(/onClick=\{openNewSupplier\}/g)];
+  assert.equal(nuevos.length, 2, 'el encabezado y el vacío');
+  for (const m of nuevos) assert.match(c.slice(Math.max(0, m.index - 120), m.index), /\{accesoProv\.editar && \(\s*<button\s+$/, 'dentro de accesoProv.editar');
+  // Sin permiso, el vacío dice solo «Sin proveedores registrados» (sin invitar a crear).
+  assert.match(c, /\{accesoProv\.editar && <p className="text-xs text-slate-500 mt-1 mb-6">Crea el primer proveedor para gestionar compras y pedidos PEC\.<\/p>\}/);
+}
+
+console.log('--- TEST T24-d (B4 T24: F3 y F4): etiquetaKpi con tiene() y el comentario del redondeo ---');
+{
+  const fuente = readFileSync(new URL('../src/lib/kpis.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const etiqueta = fuente.slice(fuente.indexOf('export function etiquetaKpi('), fuente.indexOf('\n}\n', fuente.indexOf('export function etiquetaKpi(')));
+  assert.ok(!etiqueta.includes('hasOwnProperty.call(CATALOGO_KPI'), 'F3: el catálogo con tiene()');
+  assert.match(etiqueta, /const definicion = tiene\(CATALOGO_KPI, id\) \? CATALOGO_KPI\[id\] : null;/);
+  const unId = Object.keys(kpisLib.CATALOGO_KPI)[0];
+  assert.equal(typeof kpisLib.etiquetaKpi(unId), 'string', 'un id del catálogo sigue dando su etiqueta');
+  assert.throws(() => kpisLib.etiquetaKpi('toString'), /Indicador desconocido/, 'un nombre del prototipo no es un indicador');
+  // F4: el redondeo de la mitad se aleja del cero en los dos signos (no «hacia arriba»).
+  assert.ok(!fuente.includes('redondea la mitad hacia arriba'), 'F4 (a)');
+  assert.equal((fuente.match(/la mitad se aleja del cero \(ROUND_HALF_UP\)/g) ?? []).length, 2);
+  // F4 (b): ninguna línea de JSDoc del diff de 896b7b3 pasa de 120 caracteres.
+  const prefs = readFileSync(new URL('../src/lib/preferencias.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  for (const linea of [fuente.split('\n').find((l) => l.includes('alejándose del cero en los dos sentidos')),
+    prefs.split('\n').find((l) => l.includes('(no toca el almacén ni hay PUT).'))]) {
+    assert.ok(linea && [...linea].length <= 120, `${[...(linea ?? '')].length}: ${linea}`);
+  }
 }
 
 console.log('✓ lib/kpis.js: período, estado, variación, tono, formato, tamaño, franja, contador, acento, catálogo y lo de TarjetaKpi.');

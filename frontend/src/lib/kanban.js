@@ -38,6 +38,14 @@ export const SIN_COLUMNA = '__sin_columna';
 /** El motivo de un tablero sin regla, si la pantalla no pasa su soloLectura (RP67). */
 export const TEXTO_SOLO_VER = 'Este tablero es solo para ver.';
 
+/**
+ * B4 T24 r2 (C8): las familias de color que el tablero sabe pintar (las claves de TONOS de components/ui/Kanban.tsx, con sus clases
+ * literales para el JIT de Tailwind; una prueba fija que son las mismas). El tono de una columna sale de acentoDesdeClase con este
+ * conjunto: slate solo para lo que no está. Inmutable.
+ */
+/** @type {ReadonlyArray<'slate' | 'gray' | 'red' | 'orange' | 'amber' | 'yellow' | 'lime' | 'green' | 'emerald' | 'teal' | 'cyan' | 'sky' | 'blue' | 'indigo' | 'violet' | 'purple' | 'fuchsia' | 'pink' | 'rose'>} */
+export const CLAVES_TONOS_KANBAN = congelar(['slate', 'gray', 'red', 'orange', 'amber', 'yellow', 'lime', 'green', 'emerald', 'teal', 'cyan', 'sky', 'blue', 'indigo', 'violet', 'purple', 'fuchsia', 'pink', 'rose']);
+
 const idPorDefecto = (item) => item?.id;
 
 // ─── columnas ───────────────────────────────────────────────────────────────────
@@ -352,8 +360,21 @@ export function textoTotalColumna(n, total) {
   return formatoEntero(visibles);
 }
 
-/** Los caracteres mínimos del motivo de cancelar o rechazar desde un tablero (ModalMotivo, T4A). */
+/**
+ * Los caracteres mínimos del motivo de cancelar o rechazar desde un tablero (ModalMotivo, T4A). B4 T24 (FINAL-m32): también
+ * las ventanas de motivo de la cancelación en lote del Hub y de Solicitudes.
+ */
 export const MINIMO_MOTIVO = 5;
+
+/**
+ * B4 T24 (FINAL-m32): los caracteres del motivo sin los espacios del borde: la cuenta de motivoValido y el «llevas N» de
+ * las ventanas de motivo en lote. Caracteres, no unidades UTF-16, como len() del servidor. Lo que no es texto da 0.
+ * @param {unknown} texto
+ * @returns {number}
+ */
+export function largoDelMotivo(texto) {
+  return typeof texto === 'string' ? [...texto.trim()].length : 0;
+}
 
 /**
  * true si `texto` tiene `minimo` caracteres o más sin contar los espacios del borde (ModalMotivo: el botón de peligro
@@ -363,7 +384,7 @@ export const MINIMO_MOTIVO = 5;
  * @returns {boolean}
  */
 export function motivoValido(texto, minimo = MINIMO_MOTIVO) {
-  return typeof texto === 'string' && [...texto.trim()].length >= minimo;
+  return typeof texto === 'string' && largoDelMotivo(texto) >= minimo;
 }
 
 // ─── tablero común (T4B: useTableroKanban y TableroKanban de components/ui/Kanban.tsx) ──────────────
@@ -431,6 +452,21 @@ export function firmaConsulta(consulta, { dependencias = null, version = 0 } = {
   return JSON.stringify([dependencias ?? null, consulta?.limit ?? null, consulta?.orden ?? null, version]);
 }
 
+/** B4 T24 (F15): el `le` del limit de las listas del servidor: una columna no se recarga con más. */
+export const LIMITE_RECARGA_COLUMNA = 200;
+
+/**
+ * B4 T24 (F15): el limit con el que se recarga una columna (tras un movimiento o «Actualizar»): lo que tenía cargado (abierta a 75
+ * con «Ver más», vuelve con 75 y no salta a 25), nunca menos que porColumna y nunca más que LIMITE_RECARGA_COLUMNA.
+ * @param {number} porColumna
+ * @param {unknown} cargadas
+ * @returns {number}
+ */
+export function limiteDeRecarga(porColumna, cargadas) {
+  const n = typeof cargadas === 'number' && Number.isFinite(cargadas) ? cargadas : 0;
+  return Math.min(LIMITE_RECARGA_COLUMNA, Math.max(porColumna, n));
+}
+
 /**
  * Las claves de las columnas que salen plegadas por defecto: las cerradas (kanban_columnas_cerradas = «Plegadas: se ve
  * el nombre y cuántas hay, y con un clic se abren»).
@@ -453,12 +489,15 @@ export function plegadasValidas(valor) {
 
 /**
  * Las columnas plegadas de verdad: sin nada guardado (null), las cerradas; con una lista guardada, esa lista en el
- * orden de las columnas y sin las claves que ya no existen.
+ * orden de las columnas y sin las claves que ya no existen. B4 T24 (F16): con UNA sola columna (el filtro de estado de la
+ * regla de montaje 6), ninguna: esa única columna sale abierta aunque sea cerrada o lo guardado diga que no (lo guardado no
+ * se toca).
  * @param {unknown} guardado
  * @param {ReadonlyArray<ColumnaKanban>} columnas
  * @returns {string[]}
  */
 export function resolverPlegadas(guardado, columnas) {
+  if ((columnas ?? []).length === 1) return [];
   if (!plegadasValidas(guardado)) return plegadasPorDefecto(columnas);
   const lista = /** @type {string[]} */ (guardado);
   return (columnas ?? []).map((c) => c.clave).filter((clave) => lista.includes(clave));
@@ -786,16 +825,56 @@ export function soltarEsperasOcultas(lista, visibles) {
 
 /** El motivo de «Mover a…» en una columna cuya última carga falló (T4B r3). */
 export const TEXTO_REINTENTA_COLUMNA = 'Reintenta esta columna para mover sus tarjetas.';
+/** B4 T24 (F11): el motivo de «Mover a…» en una columna que todavía pinta una copia vieja (copiaVieja). */
+export const TEXTO_ESPERA_COLUMNA = 'Espera a que se actualice esta columna para mover sus tarjetas.';
 
 /**
  * T4B r3: por qué las tarjetas de una columna no se pueden mover, o null. Si la última carga principal de la columna
  * falló (`cargaFallida`, la da useTableroKanban), lo que pinta puede ser viejo: sus tarjetas no se arrastran y en «Mover
- * a…» todos los destinos salen deshabilitados con TEXTO_REINTENTA_COLUMNA, hasta que un Reintentar sale bien.
- * @param {{cargaFallida?: boolean} | null | undefined} datos
+ * a…» todos los destinos salen deshabilitados con TEXTO_REINTENTA_COLUMNA, hasta que un Reintentar sale bien. B4 T24 (F11,
+ * aditivo): con `copiaVieja` (lo que pinta es de una versión menor que la mínima, esCopiaVieja), TEXTO_ESPERA_COLUMNA hasta que
+ * llega su recarga; un error manda.
+ * @param {{cargaFallida?: boolean, copiaVieja?: boolean} | null | undefined} datos
  * @returns {string | null}
  */
 export function bloqueoDeColumna(datos) {
-  return datos?.cargaFallida === true ? TEXTO_REINTENTA_COLUMNA : null;
+  if (datos?.cargaFallida === true) return TEXTO_REINTENTA_COLUMNA;
+  return datos?.copiaVieja === true ? TEXTO_ESPERA_COLUMNA : null;
+}
+
+/**
+ * B4 T24 (F11): las versiones mínimas que tienen que pintar las columnas. soltarEsperasOcultas suelta la espera de un movimiento en
+ * una columna que dejó de verse (un filtro, una tarjeta de indicador); al reaparecer, su recarga ya va en camino, pero mientras tanto
+ * pinta una copia vieja (con la tarjeta que se movió, que ya no está pendiente): se guarda la versión que esperaba ese movimiento, la
+ * más alta por columna. Sin cambios devuelve el mismo objeto.
+ * @param {Record<string, number>} minimas
+ * @param {ReadonlyArray<PendienteMovimiento>} lista
+ * @param {ReadonlyArray<string>} visibles
+ * @returns {Record<string, number>}
+ */
+export function minimasTrasSoltar(minimas, lista, visibles) {
+  const seVen = new Set(visibles);
+  let nuevas = minimas;
+  for (const p of lista ?? []) {
+    for (const [clave, version] of Object.entries(p.espera ?? {})) {
+      if (seVen.has(clave) || (tiene(nuevas, clave) && nuevas[clave] >= version)) continue;
+      nuevas = { ...nuevas, [clave]: version };
+    }
+  }
+  return nuevas;
+}
+
+/**
+ * B4 T24 (F11): true si lo que pinta la columna `clave` (de la versión `version`, la de la consulta principal que llegó) es de una
+ * versión menor que su mínima (minimasTrasSoltar): una copia vieja cuyas tarjetas no se mueven. Sin mínima, false.
+ * @param {Record<string, number>} minimas
+ * @param {string} clave
+ * @param {number | null | undefined} version
+ * @returns {boolean}
+ */
+export function esCopiaVieja(minimas, clave, version) {
+  if (!tiene(minimas ?? {}, clave)) return false;
+  return !(typeof version === 'number' && version >= minimas[clave]);
 }
 
 /** Lo que un movimiento espera la recarga de su origen y su destino antes de soltarla y volver a pedirla (T4B r3). */

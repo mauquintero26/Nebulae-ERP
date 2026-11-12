@@ -10,6 +10,7 @@ import {
   PanelLeftClose, PanelLeftOpen, LogOut, SlidersHorizontal, Settings, UserCircle2
 } from 'lucide-react';
 import { AlertasBadge } from '@/components/AlertasBadge';
+import { FOCO } from '@/lib/design-system';
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -130,7 +131,8 @@ export function Sidebar() {
           </div>
           {!isCollapsed && <h1 className="text-xl font-extrabold text-slate-900 tracking-tight ml-3">Nebulae Hub</h1>}
         </div>
-        <button onClick={handleToggleCollapse} className="text-slate-400 hover:text-purple-600 focus:outline-none" title={isCollapsed ? "Expandir Menú" : "Contraer Menú"}>
+        {/* B4 T24 (FINAL-m25): el foco del token común (antes focus:outline-none: sin indicador, medido en el banco). */}
+        <button onClick={handleToggleCollapse} className={`rounded-md text-slate-400 hover:text-purple-600 ${FOCO}`} title={isCollapsed ? "Expandir Menú" : "Contraer Menú"}>
           {isCollapsed ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
         </button>
       </div>

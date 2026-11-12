@@ -6,6 +6,7 @@ import { Lock, LogOut } from 'lucide-react';
 import { getToken, login, pedirReautenticacion, registrarReautenticacion, renovarSesion } from '@/lib/api';
 import { estadoSesion, leerPayload, tokenSirveParaReintentar } from '@/lib/session';
 import { Button } from '@/components/ui/Button';
+import { atraparTab } from '@/components/ui/useCierreVentana';
 
 // Uso real del usuario: solo clics, teclas, rueda y toques (las consultas automaticas no cuentan).
 const EVENTOS_DE_USO = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const;
@@ -192,10 +193,24 @@ export function SessionKeeper() {
     router.replace('/login?reason=session-expired');
   };
 
+  // B4 T24 r2 (C1) y r3 (m13, m4): Tab y Mayús+Tab quedan dentro de la ventana de re-ingreso (no está en la pila de Modal y Drawer, que
+  // la deja pasar), con el ayudante único atraparTab. Un oyente en window, en captura, mientras está abierta: también con el foco en el
+  // <body> (un clic en el fondo oscuro), que va al primero o al último, como VentanaConfirmacion en Avisos.
+  const refVentana = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!abierto) return undefined;
+    const alTeclear = (e: KeyboardEvent) => {
+      if (e.key === 'Tab' && refVentana.current) atraparTab(refVentana.current, e);
+    };
+    window.addEventListener('keydown', alTeclear, true);
+    return () => window.removeEventListener('keydown', alTeclear, true);
+  }, [abierto]);
+
   if (!abierto) return null;
 
   return (
     <div
+      ref={refVentana}
       className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4"
       role="dialog"
       aria-modal="true"

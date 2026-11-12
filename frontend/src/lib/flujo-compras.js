@@ -17,7 +17,7 @@
 
 import { congelar, conteosDePasos, pasosConConteos } from './flujo.js';
 import { humanizarCodigo, tiene } from './estados-pedido.js';
-import { diaColombia, fechaLarga } from './fechas-colombia.js';
+import { diaColombia, diasEntre, fechaLarga } from './fechas-colombia.js';
 import { formatoEntero } from './kpis.js';
 import { GRUPOS_PEC, diaPec, etapaPec, vistaPuedeVencer } from './estados-compras.js';
 // B4 T14 r1 (m1; D41, D42): las cajas y «Con atraso» cambian la vista con accionPestana, como el Hub de Ventas.
@@ -382,12 +382,6 @@ export function pasosPedidosCompra(datos, vista) {
   });
 }
 
-const MS_DIA = 24 * 60 * 60 * 1000;
-/** Los milisegundos UTC de un 'AAAA-MM-DD' (para restar días de calendario sin zonas ni horas de verano). */
-const msDelDia = (dia) => {
-  const [anio, mes, d] = dia.split('-').map(Number);
-  return Date.UTC(anio, mes - 1, d);
-};
 
 /**
  * B4 T15 (resolución 4: un día de calendario contra diaColombia()): cuánto falta para la ETA de una etapa del envío,
@@ -405,7 +399,7 @@ export function textoDiasEtapa(eta, hoy = diaColombia()) {
   const dia = diaPec(eta);
   const base = diaPec(hoy);
   if (!dia || !base) return null;
-  const dias = Math.round((msDelDia(dia) - msDelDia(base)) / MS_DIA);
+  const dias = /** @type {number} */ (diasEntre(base, dia));
   if (dias === 0) return { texto: 'Vence hoy', tono: 'ambar' };
   const n = Math.abs(dias);
   if (dias > 0) return { texto: `${formatoEntero(n)} ${n === 1 ? 'día restante' : 'días restantes'}`, tono: 'azul' };

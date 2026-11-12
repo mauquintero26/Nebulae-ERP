@@ -36,14 +36,14 @@
  * lucide-react, pero aquí no se pinta nada.
  */
 
-import { definirColumnas, estadosDeColumnaLista } from './kanban.js';
+import { CLAVES_TONOS_KANBAN, definirColumnas, estadosDeColumnaLista } from './kanban.js';
 import {
   congelar, ESTADOS_PEDIDO, PASOS_PEDIDO, TRANSICIONES_PEDIDO_PATCH, grupoPedido, transicionesPedido, esPedidoVigente,
   infoEstadoPedido, tiene, ESTADOS_PEDIDO_OPERATIVOS, ESTADOS_PEDIDO_CERRADOS,
 } from './estados-pedido.js';
 import {
-  RUTA_HUB_VENTAS, esSoporte, motivoNoCancelable, tieneProductos, accionSiguienteCOT, accionSiguienteDocumento, diasDesde,
-  textoAntiguedad, ETIQUETA_GRUPO,
+  RUTA_HUB_VENTAS, esSoporte, motivoNoCancelable, tieneProductos, accionSiguienteDocumento, diasDesde,
+  textoAntiguedad, ETIQUETA_GRUPO, tipoDocumento, tienePreciosCot, RUTA_ENTREGAS, claveAccionSiguienteDocumento,
 } from './hub-ventas.js';
 import {
   ESTADOS_SC, PASOS_SC, ESTADOS_SC_HEREDADOS, ESTADOS_SC_CON_CONFIRMACION, infoEstadoSolicitud, puedeReiniciar,
@@ -58,12 +58,15 @@ import {
   avisoCambiosCliente, etiquetaChipCambios, RUTA_LISTA_SOLICITUDES, RUTA_LISTA_COTIZACIONES,
 } from './cambios-cliente.js';
 import { ACCIONES_BLOQUE3 } from './acciones-bloque3.js';
-import { enlaceDocumento } from './analisis.js';
+import { claseTailwindCercana, enlaceDocumento } from './analisis.js';
+import { acentoDesdeClase } from './kpis.js';
 import { etiquetaTipoSolicitud } from './etiquetas-ventas.js';
 import { redondearPeso, formatoPesos } from './pesos.js';
 import { queryListado } from './tabla.js';
 // B4 T23A: el permiso de mover los pedidos web (RP62).
-import { esAdminOAsesor } from './roles.js';
+import { esAdminOAsesor, puedeAccionDocumento } from './roles.js';
+// B4 T24 f2 (F47): la regla única de la recarga tras un error, para las acciones del tablero de pedidos.
+import { cambiarConRegla, recargarTrasError } from './avisos.js';
 
 /**
  * @typedef {import('./kanban.js').ResultadoSoltar} ResultadoSoltar
@@ -123,9 +126,12 @@ const TEXTO = congelar({
   PASALA_BORRADOR: 'Primero pásala a Borrador para retomarla.',
   CALCULA_PRECIOS: 'Calcula los precios antes de enviarla.',
   ENTREGAS: 'Se despacha desde Entregas: ahí eliges la bodega y se descuenta el inventario.',
+  // B4 T24 f2 (F24): en Entregas un pedido entregado en parte está en «Despachados» (no se mueve): su entrega se completa desde él.
+  ENTREGA_PARCIAL: 'Está entregado en parte: la entrega se completa desde el pedido.',
 });
 
-const ENLACE_ENTREGAS = congelar({ texto: 'Ir a Entregas', href: '/dashboard/inventario/entregas' });
+/** B4 T24 f2 (F27): el enlace «Ir a Entregas» de los bloqueos, con la ruta única de hub-ventas.js (RUTA_ENTREGAS). */
+export const ENLACE_ENTREGAS = congelar({ texto: 'Ir a Entregas', href: RUTA_ENTREGAS });
 const TEXTO_ENLACE = congelar({ SC: 'Abrir solicitud', COT: 'Abrir cotización', PVEN: 'Abrir pedido' });
 
 // ─── piezas comunes ─────────────────────────────────────────────────────────────
@@ -164,15 +170,6 @@ function oracion(texto) {
   return /[.!?]$/.test(frase) ? frase : `${frase}.`;
 }
 
-/** Los tipos de documento; 'PVEN' es el mismo que 'VEN' (RP74, _ALIAS_ENTIDAD del backend). */
-const TIPO_DOCUMENTO = congelar({ SC: 'SC', COT: 'COT', VEN: 'VEN', PVEN: 'VEN' });
-
-/** 'SC', 'COT' o 'VEN'; otro tipo es un error de programación. */
-function tipoDocumento(tipo) {
-  if (typeof tipo === 'string' && tiene(TIPO_DOCUMENTO, tipo)) return TIPO_DOCUMENTO[tipo];
-  throw new Error(`Tipo de documento no válido: ${JSON.stringify(tipo ?? null)}`);
-}
-
 /**
  * B4 T7 r1 (m7d): la sigla del tipo que ve el usuario: 'SC', 'COT' o 'PVEN' (las filas del Hub traen 'VEN', RP74). La
  * única: la usan la tarjeta del tablero (tarjetaHub) y la tabla del Hub. Otro valor queda como está.
@@ -189,8 +186,11 @@ function exigirDestino(claves, destino, tablero) {
   if (!claves.includes(destino)) throw new Error(`Columna del tablero ${tablero} desconocida: ${String(destino)}`);
 }
 
-/** La familia de color de una clase de Tailwind ('bg-orange-100' -> 'orange'). */
-const familia = (clase) => /^bg-([a-z]+)-\d+$/.exec(String(clase ?? ''))?.[1] ?? 'slate';
+/**
+ * B4 T24 (F26) y r2 (C8): el tono de una columna, de la clase de su estado: acentoDesdeClase de kpis.js con las claves de TONOS del
+ * tablero (CLAVES_TONOS_KANBAN): slate solo para lo que el tablero no pinta.
+ */
+const tonoDeClase = (clase) => acentoDesdeClase(clase, 'slate', CLAVES_TONOS_KANBAN);
 
 /** El pedido vigente de una cotización, con el texto del bloqueo y el enlace al pedido. */
 function bloqueoPorPedido(cot, returnTo) {
@@ -220,11 +220,12 @@ const SC_CONFIRMADAS = congelar(['CONFIRMADA', ...ESTADOS_SC_HEREDADOS]);
 /**
  * T3C r1: la COT no tiene nada que el cliente pueda confirmar, y enviar_cotizacion_para_confirmacion responde 400: no
  * trae productos (la lista vacía o ausente, `not cot.productos`) o su total da «Completar precios» en la columna Acción
- * (accionSiguienteCOT: total_cop ≤ 0 o que no es un número). Para BORRADOR y la antigua ENVIADA.
+ * (tienePreciosCot de hub-ventas.js, B4 T24 f2 F28: total_cop ≤ 0 o que no es un número). Para BORRADOR y la antigua ENVIADA.
  */
 function sinPrecios(cot) {
+  // B4 T24 f2 (F28): el predicado de hub-ventas.js (el mismo de «Completar precios»), no el texto de la interfaz.
   return !Array.isArray(cot?.productos) || cot.productos.length === 0
-    || accionSiguienteCOT(cot)?.texto === 'Completar precios';
+    || !tienePreciosCot(cot);
 }
 
 /**
@@ -246,6 +247,21 @@ const DESTINOS_PEDIDO = congelar([...new Set(Object.values(TRANSICIONES_PEDIDO_P
 const etiquetaPedido = (e) => infoEstadoPedido(e).label;
 
 /**
+ * B4 T24 f2 (F25): el nombre de un estado que llega como destino de un PATCH de pedido, como _nombre_de_estado del backend: recortado,
+ * primero el del pedido, después el de la cotización y después el de la solicitud ('PENDIENTE_CONFIRMACION' -> 'Esperando
+ * confirmación del cliente'); si no es de ninguno, humanizado.
+ */
+function etiquetaDeDestino(e) {
+  const codigo = typeof e === 'string' ? e.trim() : e;
+  if (typeof codigo === 'string') {
+    if (tiene(ESTADOS_PEDIDO, codigo)) return ESTADOS_PEDIDO[codigo].label;
+    if (tiene(ESTADOS_COTIZACION, codigo)) return ESTADOS_COTIZACION[codigo].label;
+    if (tiene(ESTADOS_SC, codigo)) return ESTADOS_SC[codigo].label;
+  }
+  return etiquetaPedido(e);
+}
+
+/**
  * Por qué un pedido no puede pasar de `desde` a `hacia` por PATCH, con los textos de N2 sin el número
  * (_validar_transicion_pedido de backend/app/api/v1/erp_ventas.py, en su mismo orden), o null si el servidor lo acepta
  * (o es el mismo estado):
@@ -262,7 +278,7 @@ const etiquetaPedido = (e) => infoEstadoPedido(e).label;
 export function motivoTransicionPedido(desde, hacia) {
   if (hacia === null || hacia === undefined || hacia === desde) return null;
   if (typeof hacia !== 'string' || !DESTINOS_PEDIDO.includes(hacia)) {
-    return `«${etiquetaPedido(hacia)}» no es un estado válido para un Pedido de Venta.`;
+    return `«${etiquetaDeDestino(hacia)}» no es un estado válido para un Pedido de Venta.`;
   }
   const permitidos = transicionesPedido(desde);
   if (permitidos.includes(hacia)) return null;
@@ -485,14 +501,15 @@ export function estadoDeTarjeta(tipo, estado) {
  *  - tiempo = la antigüedad de R5 ('hoy', 'hace N días') con dias_creado del servidor, o desde created_at;
  *  - atrasada = fila.resolucion === 'ATRASADO'; chips = chipsDocumentoVentas;
  *  - accionPrincipal = accionSiguienteDocumento de hub-ventas.js (D25: {texto, href, tono}; su href puede ser null, como
- *    «Esperando al cliente»), con return_to de `returnTo` (cruce C5: por defecto el Hub; T8 manda la ruta de su lista).
+ *    «Esperando al cliente»), con return_to de `returnTo` (cruce C5: por defecto el Hub; T8 manda la ruta de su lista). B4 T24
+ *    f2 r1 (duda 2 + m15): con `rol`, solo si el rol puede hacerla (accionConRol); si no, null: la tarjeta queda en «Abrir».
  * Un tipo que no es SC, COT, VEN o PVEN lanza Error.
  * @param {any} fila
- * @param {{ahora?: number, returnTo?: string}} [opciones]  `ahora`: el instante para la antigüedad cuando no viene
+ * @param {{ahora?: number, returnTo?: string, rol?: unknown}} [opciones]  `ahora`: el instante para la antigüedad cuando no viene
  *   dias_creado (pruebas)
  * @returns {TarjetaVentas}
  */
-export function tarjetaHub(fila, { ahora = Date.now(), returnTo } = {}) {
+export function tarjetaHub(fila, { ahora = Date.now(), returnTo, rol } = {}) {
   const tipo = tipoDocumento(fila?.tipo);
   const cliente = String(fila?.customer_name || fila?.cliente?.nombre || '').trim();
   const asesor = String(fila?.advisor_name || fila?.cotizador || fila?.asesor?.nombre || '').trim();
@@ -508,8 +525,37 @@ export function tarjetaHub(fila, { ahora = Date.now(), returnTo } = {}) {
     tiempo: textoAntiguedad(dias),
     atrasada: fila?.resolucion === 'ATRASADO',
     chips: chipsDocumentoVentas(fila, tipo),
-    accionPrincipal: accionSiguienteDocumento(fila, { returnTo }),
+    accionPrincipal: accionConRol(fila, accionSiguienteDocumento(fila, { returnTo }), rol),
   };
+}
+
+/**
+ * B4 T24 f2 r1 (duda 2 + m15 + m16): la acción si el rol puede hacerla en su pantalla (puedeAccionDocumento con
+ * claveAccionSiguienteDocumento: el require_roles de su endpoint); si no, null (la tarjeta queda en «Abrir»). Sin rol (undefined,
+ * una llamada que no lo pasa), la de siempre; con un rol vacío (todavía se lee, después de montar), null.
+ * @template A
+ * @param {any} fila
+ * @param {A | null} accion
+ * @param {unknown} rol
+ * @returns {A | null}
+ */
+function accionConRol(fila, accion, rol) {
+  if (rol === undefined || accion === null) return accion;
+  return puedeAccionDocumento(fila?.tipo, claveAccionSiguienteDocumento(fila), rol) ? accion : null;
+}
+
+/**
+ * B4 T24 f2 r1 (duda 2 + m15): la columna Acción de la Lista del Hub (CeldaAccion). La de accionSiguienteDocumento si el rol puede
+ * hacerla; si no, «Abrir» (el detalle del documento, con return_to al Hub o a `returnTo`); sin acción (una SC cancelada, una COT
+ * rechazada), null: la celda dice «—».
+ * @param {any} fila
+ * @param {{rol?: unknown, returnTo?: string}} [opciones]
+ * @returns {{texto: string, href: string | null, tono: string} | null}
+ */
+export function accionDeLaFilaHub(fila, { rol, returnTo } = {}) {
+  const accion = accionSiguienteDocumento(fila, { returnTo });
+  if (accion === null || accionConRol(fila, accion, rol) !== null) return accion;
+  return { texto: 'Abrir', href: enlaceDocumento(fila?.tipo, fila?.id, { returnTo: returnTo || RUTA_HUB_VENTAS }), tono: 'slate' };
 }
 
 /**
@@ -628,7 +674,7 @@ export const COLUMNAS_PEDIDO = /** @type {any} */ (definirColumnas(GRUPOS_PEDIDO
   return {
     clave,
     titulo: info.label,
-    tono: familia(info.clases.bg),
+    tono: tonoDeClase(info.clases.bg),
     estados: Object.keys(ESTADOS_PEDIDO).filter((e) => grupoPedido(e) === grupo),
     cerrada: clave === 'facturado' || clave === 'cancelado',
     estadoDestino: DESTINO_COLUMNA_PEDIDO[clave],
@@ -645,16 +691,21 @@ const CLAVES_PEDIDO = congelar(COLUMNAS_PEDIDO.map((c) => c.clave));
  *  - → Facturado: acción 'facturar' (la pantalla confirma), solo desde ENTREGADO;
  *  - → una de las tres primeras: cambio al estado de la columna, si transicionesPedido lo permite;
  *  - en cualquier otro caso, bloqueado con motivoTransicionPedido.
+ * B4 T24 f2 r1 (m3, aditivo): `returnTo` es el return_to de «Abrir pedido» (por defecto la lista de Pedidos; E-Commerce pasa la suya,
+ * reglaSoltarPedidoWeb).
  * @param {any} pedido
  * @param {string} origen
  * @param {string} destino
+ * @param {{returnTo?: string}} [opciones]
  * @returns {ResultadoSoltar}
  */
-export function reglaSoltarPedido(pedido, origen, destino) {
+export function reglaSoltarPedido(pedido, origen, destino, { returnTo = RUTA_LISTA_PEDIDOS } = {}) {
   exigirDestino(CLAVES_PEDIDO, destino, 'de pedidos');
   if (origen === destino) return ninguno();
   const estado = pedido?.estado;
   if (destino === 'entregado') {
+    // B4 T24 f2 (F24): entregado en parte, su entrega se completa desde el pedido (en Entregas ya no se mueve).
+    if (estado === 'PARCIALMENTE_ENTREGADO') return bloqueado(TEXTO.ENTREGA_PARCIAL, enlaceAbrir('PVEN', pedido?.id, returnTo));
     return transicionesPedido(estado).includes('ENTREGADO')
       ? bloqueado(TEXTO.ENTREGAS, ENLACE_ENTREGAS)
       : bloqueado(motivoTransicionPedido(estado, 'ENTREGADO') ?? TEXTO.ABRELA_CAMBIAR);
@@ -673,7 +724,7 @@ export function reglaSoltarPedido(pedido, origen, destino) {
 
 /** Una columna de Cotizaciones con el título de su estado (o el que se le da) y el tono de su pastilla. */
 function columnaCot(clave, estados, titulo = infoEstadoCotizacion(estados[0]).label, cerrada = false) {
-  return { clave, titulo, tono: familia(infoEstadoCotizacion(estados[0]).clases.bg), estados, cerrada };
+  return { clave, titulo, tono: tonoDeClase(infoEstadoCotizacion(estados[0]).clases.bg), estados, cerrada };
 }
 
 /**
@@ -745,8 +796,8 @@ export function reglaSoltarCotizacion(cot, origen, destino, { puedeEnviar = fals
 
 /** La clave de cada paso de PASOS_SC en el tablero. */
 const CLAVE_PASO_SC = congelar({ BORRADOR: 'nueva', ASIGNADA: 'asignada', PENDIENTE_CONFIRMACION: 'pendiente', CONFIRMADA: 'confirmada' });
-/** El tono de cada columna: la familia de Tailwind de los hex de ESTADOS_SC (#64748b slate, #0e7490 cyan, …). */
-const TONO_SC = congelar({ BORRADOR: 'slate', ASIGNADA: 'cyan', PENDIENTE_CONFIRMACION: 'amber', CONFIRMADA: 'emerald', CANCELADA: 'red' });
+/** B4 T24 (F26): el tono de cada columna, del fondo hex de ESTADOS_SC: la clase más cercana (claseTailwindCercana) y su acento. */
+const tonoSc = (estado) => tonoDeClase(claseTailwindCercana(ESTADOS_SC[estado]?.bg));
 
 /**
  * El tablero de Solicitudes, con PASOS_SC de estados-solicitud.js: Nueva (BORRADOR) · Asignada · Pendiente por
@@ -759,11 +810,11 @@ export const COLUMNAS_SC = /** @type {any} */ (definirColumnas([
   ...PASOS_SC.map((p) => ({
     clave: CLAVE_PASO_SC[p.clave],
     titulo: p.label,
-    tono: TONO_SC[p.clave],
+    tono: tonoSc(p.clave),
     estados: p.clave === 'CONFIRMADA' ? [...SC_CONFIRMADAS] : [p.clave],
     ayuda: p.ayuda,
   })),
-  { clave: 'cancelada', titulo: ESTADOS_SC.CANCELADA.label, tono: TONO_SC.CANCELADA, estados: ['CANCELADA'], cerrada: true },
+  { clave: 'cancelada', titulo: ESTADOS_SC.CANCELADA.label, tono: tonoSc('CANCELADA'), estados: ['CANCELADA'], cerrada: true },
 ]));
 
 const CLAVES_SC = congelar(COLUMNAS_SC.map((c) => c.clave));
@@ -894,12 +945,13 @@ export function consultaColumnaSC(estado, columna, { orden, limit, offset }) {
  * la de tarjetaHub (número, cliente, estado, antigüedad, atraso, chipsDocumentoVentas y accionSiguienteDocumento) con el
  * return_to de la lista (`returnTo`, por defecto RUTA_LISTA_SOLICITUDES) y el subtítulo «asesor · tipo de solicitud»
  * (etiquetaTipoSolicitud; sin tipo, Cotización de producto, como la lista). La fila es una SC aunque no traiga `tipo`.
+ * B4 T24 f2 r1 (duda 2 + m15): con `rol`, la acción principal solo si el rol puede hacerla (accionConRol).
  * @param {any} fila
- * @param {{ahora?: number, returnTo?: string}} [opciones]
+ * @param {{ahora?: number, returnTo?: string, rol?: unknown}} [opciones]
  * @returns {TarjetaVentas}
  */
-export function tarjetaSolicitud(fila, { ahora, returnTo = RUTA_LISTA_SOLICITUDES } = {}) {
-  const tarjeta = tarjetaHub({ ...fila, tipo: 'SC' }, { ahora, returnTo });
+export function tarjetaSolicitud(fila, { ahora, returnTo = RUTA_LISTA_SOLICITUDES, rol } = {}) {
+  const tarjeta = tarjetaHub({ ...fila, tipo: 'SC' }, { ahora, returnTo, rol });
   const tipoSolicitud = etiquetaTipoSolicitud(fila?.tipo_solicitud || 'Cotizacion de Producto');
   return { ...tarjeta, subtitulo: `${tarjeta.subtitulo} · ${tipoSolicitud}` };
 }
@@ -987,13 +1039,14 @@ export function consultaColumnaCOT(estado, columna, { orden, limit, offset }) {
  *  3. «Sin precio» (chipSinPrecio, el mismo de la columna Total);
  *  4. el resto de chipsDocumentoVentas: el atraso y el recordatorio.
  * tarjetaHub no cambia: las tarjetas del Hub no los llevan.
+ * B4 T24 f2 r1 (duda 2 + m15): con `rol`, la acción principal solo si el rol puede hacerla (accionConRol).
  * @param {any} fila
- * @param {{ahora?: number, returnTo?: string}} [opciones]
+ * @param {{ahora?: number, returnTo?: string, rol?: unknown}} [opciones]
  * @returns {TarjetaVentas}
  */
-export function tarjetaCotizacion(fila, { ahora, returnTo = RUTA_LISTA_COTIZACIONES } = {}) {
+export function tarjetaCotizacion(fila, { ahora, returnTo = RUTA_LISTA_COTIZACIONES, rol } = {}) {
   const cot = { ...fila, tipo: 'COT' };
-  const tarjeta = tarjetaHub(cot, { ahora, returnTo });
+  const tarjeta = tarjetaHub(cot, { ahora, returnTo, rol });
   const { atraso, recordatorio, cambios } = chipsDeLaFila(cot, 'COT');
   const chips = /** @type {ChipTarjeta[]} */ ([marcaPedidoCotizacion(cot), cambios, chipSinPrecio(cot), atraso, recordatorio].filter(Boolean));
   return { ...tarjeta, chips: chips.slice(0, MAX_CHIPS) };
@@ -1018,6 +1071,20 @@ const OPCIONES_PEDIDO_POR_VISTA = congelar({
   todos: congelar(COLUMNAS_PEDIDO.flatMap((c) => ESTADOS_FILTRO_PEDIDO.filter((e) => c.estados.includes(e))).map(opcionPedido)),
 });
 
+/**
+ * B4 T24 f2 (F2): los heredados que el filtro trata como el estado de la lista con la MISMA etiqueta y el mismo grupo
+ * (grupoPedido): LISTO_PARA_ENTREGA («Listo para entrega») va con LISTO_ENTREGA. El usuario no distingue un estado heredado:
+ * una sola opción, que manda las dos claves (estadosConsultaPedidos). Inmutable.
+ * @type {Readonly<Record<string, ReadonlyArray<string>>>}
+ */
+const EQUIVALENTES_FILTRO_PEDIDO = congelar(Object.fromEntries(ESTADOS_FILTRO_PEDIDO
+  .map((e) => [e, Object.keys(ESTADOS_PEDIDO).filter((h) => !ESTADOS_FILTRO_PEDIDO.includes(h) && grupoPedido(h) === grupoPedido(e)
+    && infoEstadoPedido(h).label === infoEstadoPedido(e).label)])
+  .filter(([, heredados]) => heredados.length > 0)));
+
+/** Los heredados que ya van dentro de una opción de la lista (EQUIVALENTES_FILTRO_PEDIDO): no tienen opción propia. */
+const PLEGADOS_FILTRO_PEDIDO = congelar(Object.values(EQUIVALENTES_FILTRO_PEDIDO).flat());
+
 /** El orden de los estados de pedido (el de ESTADOS_PEDIDO): los heredados del filtro van en ese orden. */
 const ORDEN_ESTADO_PEDIDO = congelar(Object.fromEntries(Object.keys(ESTADOS_PEDIDO).map((e, i) => [e, i])));
 
@@ -1032,6 +1099,8 @@ const ORDEN_ESTADO_PEDIDO = congelar(Object.fromEntries(Object.keys(ESTADOS_PEDI
  * grupo. Con la etiqueta de infoEstadoPedido, en el orden de ESTADOS_PEDIDO. Uno sin grupo (desconocido) no entra: el
  * servidor rechaza filtrar por él (_estados_de_lista: 422). Sin heredados, la lista base: inmutable y la misma
  * referencia en cada llamada; con ellos, una lista nueva, también inmutable.
+ * B4 T24 f2 (F2): un heredado con la misma etiqueta y grupo que una opción de la lista (LISTO_PARA_ENTREGA) no sale aparte:
+ * va dentro de esa opción (estadosConsultaPedidos manda las dos claves). Nunca dos opciones con la misma etiqueta.
  * @param {string | null | undefined} vista
  * @param {Record<string, unknown> | null} [porEstado]
  * @returns {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
@@ -1043,7 +1112,7 @@ export function opcionesEstadosPedidos(vista, porEstado = null) {
   const enLaBase = new Set(base.map((o) => o.valor));
   const heredados = Object.keys(porEstado).filter((e) => {
     const n = Number(porEstado[e]);
-    if (!Number.isFinite(n) || n <= 0 || enLaBase.has(e)) return false;
+    if (!Number.isFinite(n) || n <= 0 || enLaBase.has(e) || PLEGADOS_FILTRO_PEDIDO.includes(e)) return false;
     const grupo = grupoPedido(e);
     return grupo !== null && (vista === 'todos' || CLAVE_GRUPO_PEDIDO[grupo] === vista);
   });
@@ -1053,8 +1122,23 @@ export function opcionesEstadosPedidos(vista, porEstado = null) {
 }
 
 /**
+ * B4 T24 f2 (F2): los estados que la Lista de Pedidos manda al servidor por su filtro: los marcados más los heredados equivalentes
+ * de cada uno (EQUIVALENTES_FILTRO_PEDIDO: la opción «Listo para entrega» manda LISTO_ENTREGA y LISTO_PARA_ENTREGA), sin
+ * repetir. Sin nada que sumar (o sin estados), null: la consulta va con los del estado, como siempre. La pantalla lo pasa en
+ * extra.estados de useListado (D23: pisa los del estado); la tabla y el tablero muestran la misma etiqueta para los dos.
+ * @param {unknown} estados
+ * @returns {string[] | null}
+ */
+export function estadosConsultaPedidos(estados) {
+  if (!Array.isArray(estados) || estados.length === 0) return null;
+  const suma = estados.flatMap((e) => (typeof e === 'string' && tiene(EQUIVALENTES_FILTRO_PEDIDO, e) ? EQUIVALENTES_FILTRO_PEDIDO[e] : []));
+  const nuevos = [...new Set(suma)].filter((h) => !estados.includes(h));
+  return nuevos.length > 0 ? [...estados, ...nuevos] : null;
+}
+
+/**
  * @typedef {{clave: string, porEstado: Readonly<Record<string, number>> | null}} PorEstadoVisto
- *   r2 (p1): lo que porEstadoVisto lleva visto de resumen.por_estado en una vista, búsqueda y semáforo (`clave`).
+ *   r2 (p1): lo que porEstadoVisto lleva visto de resumen.por_estado en una búsqueda y un semáforo (`clave`; B4 T24 f2, F30: sin la vista).
  */
 
 /** Los conteos positivos de un por_estado (un objeto plano), o null si no lo es. */
@@ -1073,14 +1157,16 @@ function conteosPositivos(porEstado) {
  * B4 T10 r2 (p1): el por_estado con el que la Lista arma los heredados del filtro (opcionesEstadosPedidos). El servidor
  * calcula resumen.por_estado DESPUÉS del filtro de estados (filtrar_por_estados corre antes de _resumen_pedidos): con
  * un estado marcado, la respuesta ya no trae los heredados que no se marcaron y, leídos directo, salían del panel (nunca
- * se podían combinar dos). Por eso se guarda lo visto mientras no cambien la vista, la búsqueda ni el semáforo (`clave`;
- * la página, el orden y el filtro de estados no cuentan; r3 (q2): la búsqueda va recortada, como en dependenciasTablero
- * y queryListado, porque «ana» y «ana » son la misma consulta):
+ * se podían combinar dos). Por eso se guarda lo visto mientras no cambien la búsqueda ni el semáforo (`clave`; la página,
+ * el orden y el filtro de estados no cuentan; r3 (q2): la búsqueda va recortada, como en dependenciasTablero y
+ * queryListado, porque «ana» y «ana » son la misma consulta). B4 T24 f2 (F30 a): la vista tampoco cuenta: opcionesEstadosPedidos
+ * ya filtra por el grupo de la pestaña, así que al llegar a otra pestaña con un estado ya marcado el panel conserva lo visto.
  *  - una respuesta sin filtro de estados es la completa: reemplaza lo anterior (lo que ya no está, se va);
  *  - una filtrada suma los estados que no se habían visto;
  *  - con otra clave se empieza de nuevo con la respuesta, aunque venga filtrada;
- *  - sin respuesta vigente (`porEstado` null: cargando, recargando o con error) queda lo de la misma clave; de otra
- *    clave, {clave, porEstado: null}; sin nada antes, null.
+ *  - sin respuesta vigente (`porEstado` null: cargando, recargando o con error) queda lo previo (F30 b: también con otra
+ *    clave, con SU clave vieja, hasta la primera respuesta de la nueva: una segunda acción durante el viaje al servidor poda con
+ *    lo visto y no quita un heredado marcado); sin nada antes, null.
  * Solo los conteos positivos. Si nada cambia devuelve `previo` (la misma referencia: la pantalla no vuelve a pintar).
  * Inmutable. La pantalla lo guarda como estado derivado en el render (como llegadaDeListado), sin efectos.
  * @param {PorEstadoVisto | null} previo
@@ -1089,13 +1175,10 @@ function conteosPositivos(porEstado) {
  * @returns {PorEstadoVisto | null}
  */
 export function porEstadoVisto(previo, estado, porEstado) {
-  const clave = [estado?.vista ?? '', (estado?.q ?? '').trim(), estado?.semaforo ?? ''].join('|');
+  const clave = [(estado?.q ?? '').trim(), estado?.semaforo ?? ''].join('|');
   const mismo = previo !== null && previo !== undefined && previo.clave === clave;
   const llegado = conteosPositivos(porEstado);
-  if (llegado === null) {
-    if (mismo) return previo;
-    return previo ? congelar({ clave, porEstado: null }) : null;
-  }
+  if (llegado === null) return previo ?? null;
   const anterior = mismo ? previo.porEstado : null;
   const completo = !(Array.isArray(estado?.estados) && estado.estados.length > 0);
   if (anterior === null || completo) {
@@ -1153,17 +1236,33 @@ const textoLimpio = (v) => (typeof v === 'string' ? v.trim() : '');
  *    la tabla) y después el atraso y el recordatorio (los de chipsDocumentoVentas; un pedido no tiene chip de cambios
  *    del cliente).
  * La fila es un pedido aunque no traiga `tipo`. tarjetaHub no cambia.
+ * B4 T24 f2 (duda 3 de f1) y r1 (m16): con `rol` (el de la sesión, SIEMPRE, no solo en solo lectura), la acción principal queda solo
+ * si ese rol puede hacerla en su pantalla (puedeAccionDocumento → puedeAccionPedido con la clave de claveAccionSiguientePVEN:
+ * FINANZAS cobra el saldo, COMPRAS gestiona la compra, BODEGA despacha, ASESOR no gestiona la compra); si no, null: la tarjeta queda
+ * en «Abrir», como en E-Commerce. Sin rol (sin pasar), la de siempre.
  * @param {any} fila
- * @param {{ahora?: number, returnTo?: string}} [opciones]
+ * @param {{ahora?: number, returnTo?: string, rol?: unknown}} [opciones]
  * @returns {TarjetaVentas}
  */
-export function tarjetaPedido(fila, { ahora, returnTo = RUTA_LISTA_PEDIDOS } = {}) {
+export function tarjetaPedido(fila, { ahora, returnTo = RUTA_LISTA_PEDIDOS, rol } = {}) {
   const pedido = { ...fila, tipo: 'VEN' };
-  const tarjeta = tarjetaHub(pedido, { ahora, returnTo });
+  const tarjeta = tarjetaHub(pedido, { ahora, returnTo, rol });
   const origen = [textoLimpio(fila?.sc_numero), textoLimpio(fila?.cot_numero)].filter(Boolean).join(' · ');
   const { atraso, recordatorio } = chipsDeLaFila(pedido, 'VEN');
   const chips = /** @type {ChipTarjeta[]} */ ([chipSaldoPedido(pedido), atraso, recordatorio].filter(Boolean));
   return { ...tarjeta, subtitulo: origen || tarjeta.subtitulo, chips: chips.slice(0, MAX_CHIPS) };
+}
+
+/**
+ * B4 T24 f2 r1 (m14): si se ofrece cancelar un pedido (el botón del detalle y la ventana de ?accion=cancelar): el servidor acepta
+ * CANCELADO desde su estado (transicionesPedido) y el rol es ADMIN o ASESOR (PATCH /ventas/pedidos/{id} a CANCELADO; BODEGA solo
+ * pone ENTREGADO).
+ * @param {unknown} estado
+ * @param {unknown} rol
+ * @returns {boolean}
+ */
+export function puedeCancelarPedido(estado, rol) {
+  return transicionesPedido(estado).includes('CANCELADO') && esAdminOAsesor(rol);
 }
 
 /** Los cambios de estado que se ofrecen dentro de la columna En proceso, en este orden. */
@@ -1213,6 +1312,86 @@ export function confirmacionFacturarPedido(pedido) {
     titulo: numero ? `Marcar ${numero} como Facturado` : 'Marcar como Facturado',
     mensaje: 'Después de esto el estado del pedido ya no se puede cambiar.',
     textoConfirmar: 'Marcar como Facturado',
+  };
+}
+
+/**
+ * @typedef {{
+ *   apiFetch: (ruta: string, opciones: {method: string, body: string}) => Promise<unknown>,
+ *   autor: () => string | undefined,
+ *   confirmar: (opciones: {titulo: string, mensaje: string, textoConfirmar: string}) => Promise<boolean>,
+ *   avisar: (texto: string, opciones?: {tono?: 'ok' | 'error' | 'info'}) => void,
+ *   avisarError: (err: unknown, prefijo?: string) => void,
+ *   recargarTablero: (columnas: string[]) => void,
+ *   recargarTrasCambio: () => void,
+ * }} DependenciasTableroPedidos
+ *   B4 T24 f2 (F47): lo que las acciones del tablero de pedidos necesitan de la pantalla (y que la prueba cambia por dobles).
+ */
+
+/**
+ * B4 T24 f2 (F47): las acciones del tablero de pedidos (Pedidos de venta y E-Commerce: los dos mueven por PATCH /ventas/pedidos/{id}),
+ * sin React, para que su regla de error y de recarga se pruebe con un apiFetch falso (test_kanban_ventas.mjs). La pantalla las usa por
+ * useAccionesTableroPedidos (app/dashboard/ventas/acciones-tablero-pedidos.ts). En las cuatro, una falla con recargarTrasError (un 409:
+ * el pedido cambió en otro lado; un 400, un 422 o la red cortada) recarga; un 403 o un 500, no:
+ *  - cambiar (arrastre): PATCH {estado}; bien o con la regla, lo que mueve el cambio (recargarTrasCambio). El error sigue (throw) para
+ *    que el tablero deshaga, y eso ya recarga su origen y su destino: aquí no se recarga el tablero (D39);
+ *  - facturar: confirmar(confirmacionFacturarPedido) y PATCH FACTURADO; bien, el aviso; mal, avisarError. Bien o con la regla, el
+ *    origen y el destino del tablero y lo demás;
+ *  - cancelar (ModalMotivo): PATCH CANCELADO con el motivo y quién autoriza. Mal: con la regla, el origen, el destino y lo demás, y el
+ *    error sigue (ModalMotivo lo muestra y conserva lo escrito). Bien: el aviso, el origen, el destino y lo demás;
+ *  - marcar («Marcar En tránsito / En proceso»): PATCH {estado}; bien, el aviso; mal, avisarError. Bien o con la regla, la columna
+ *    En proceso y lo demás.
+ * @param {DependenciasTableroPedidos} dependencias
+ */
+export function accionesTableroPedidos({ apiFetch, autor, confirmar, avisar, avisarError, recargarTablero, recargarTrasCambio }) {
+  /** @param {{id: unknown}} p @param {Record<string, unknown>} cuerpo */
+  const patch = (p, cuerpo) => apiFetch(`/ventas/pedidos/${p.id}`, { method: 'PATCH', body: JSON.stringify(cuerpo) });
+  return {
+    /** @param {{id: unknown, numero?: string | null}} p @param {string} estado */
+    async cambiar(p, estado) {
+      await cambiarConRegla(() => patch(p, { estado, updated_by: autor() }), recargarTrasCambio);
+    },
+    /** @param {{id: unknown, numero?: string | null}} p @param {ReadonlyArray<string>} columnas */
+    async facturar(p, columnas) {
+      if (!(await confirmar(confirmacionFacturarPedido(p)))) return;
+      try {
+        await patch(p, { estado: 'FACTURADO', updated_by: autor() });
+        avisar(`${p.numero} quedó Facturado`, { tono: 'ok' });
+      } catch (err) {
+        avisarError(err, `No se pudo facturar ${p.numero}`);
+        if (!recargarTrasError(err)) return;
+      }
+      recargarTablero([...columnas]);
+      recargarTrasCambio();
+    },
+    /** @param {{id: unknown, numero?: string | null}} p @param {string} motivo @param {ReadonlyArray<string>} columnas */
+    async cancelar(p, motivo, columnas) {
+      const quien = autor();
+      try {
+        await patch(p, { estado: 'CANCELADO', cancellation_reason: motivo, cancellation_authorized_by: quien, updated_by: quien });
+      } catch (err) {
+        if (recargarTrasError(err)) {
+          recargarTablero([...columnas]);
+          recargarTrasCambio();
+        }
+        throw err;
+      }
+      avisar(`${p.numero} cancelado`, { tono: 'ok' });
+      recargarTablero([...columnas]);
+      recargarTrasCambio();
+    },
+    /** @param {{id: unknown, numero?: string | null}} p @param {string} nuevo */
+    async marcar(p, nuevo) {
+      try {
+        await patch(p, { estado: nuevo, updated_by: autor() });
+        avisar(`${p.numero} pasó a ${infoEstadoPedido(nuevo).label}`, { tono: 'ok' });
+      } catch (err) {
+        avisarError(err, `No se pudo cambiar el estado de ${p.numero}`);
+        if (!recargarTrasError(err)) return;
+      }
+      recargarTablero(['en_proceso']);
+      recargarTrasCambio();
+    },
   };
 }
 
@@ -1309,14 +1488,27 @@ export const OPCIONES_ESTADOS_PEDIDOS_WEB = congelar(COLUMNAS_PEDIDO.flatMap(
  * en PENDIENTE_PAGO (el estado propio de la tienda: «Gestionar compra» no aplica a un pedido que espera el pago del cliente) y con
  * `soloLectura` (un rol que no mueve pedidos no llega a esas pantallas). La fila de GET /ecommerce/pedidos no trae asesor, saldo
  * ni atraso: no salen chips ni «Sin asignar».
+ * B4 T24 f2 r1 (duda 2): con `rol`, la regla de tarjetaPedido (ASESOR no gestiona la compra de un pedido web).
  * @param {any} fila
- * @param {{ahora?: number, soloLectura?: boolean}} [opciones]
+ * @param {{ahora?: number, soloLectura?: boolean, rol?: unknown}} [opciones]
  * @returns {TarjetaVentas}
  */
-export function tarjetaPedidoWeb(fila, { ahora, soloLectura = false } = {}) {
-  const tarjeta = tarjetaPedido(fila, { ahora, returnTo: RUTA_ECOMMERCE });
+export function tarjetaPedidoWeb(fila, { ahora, soloLectura = false, rol } = {}) {
+  const tarjeta = tarjetaPedido(fila, { ahora, returnTo: RUTA_ECOMMERCE, rol });
   const sinAccion = soloLectura || fila?.estado === 'PENDIENTE_PAGO';
   return { ...tarjeta, subtitulo: textoLimpio(fila?.pven_numero) || 'Pedido web', accionPrincipal: sinAccion ? null : tarjeta.accionPrincipal };
+}
+
+/**
+ * B4 T24 f2 r1 (m3): la regla de soltar del tablero de E-Commerce: la de los pedidos de venta con «Abrir pedido» de vuelta a E-Commerce
+ * (como el return_to de sus tarjetas).
+ * @param {any} pedido
+ * @param {string} origen
+ * @param {string} destino
+ * @returns {ResultadoSoltar}
+ */
+export function reglaSoltarPedidoWeb(pedido, origen, destino) {
+  return reglaSoltarPedido(pedido, origen, destino, { returnTo: RUTA_ECOMMERCE });
 }
 
 /** El motivo del tablero de los pedidos web para un rol que no puede moverlos. */

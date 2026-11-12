@@ -15,7 +15,9 @@ export function Toast({ toast, onClose }: { toast: ToastMsg; onClose: () => void
 
   if (!toast) return null;
   return (
-    <div className={`fixed bottom-6 right-6 z-[100] px-5 py-3 rounded-2xl shadow-xl text-white text-sm font-semibold flex items-center gap-2 ${
+    // B4 T24 f2 r2 (m4): va encima de las ventanas (z-[100]; su botón se usa con un Modal abierto): data-superficie, para que la capa
+    // no le quite el foco.
+    <div data-superficie="avisos" className={`fixed bottom-6 right-6 z-[100] px-5 py-3 rounded-2xl shadow-xl text-white text-sm font-semibold flex items-center gap-2 ${
       toast.type === 'ok' ? 'bg-emerald-600' : 'bg-red-600'
     }`}>
       {toast.type === 'ok' ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}

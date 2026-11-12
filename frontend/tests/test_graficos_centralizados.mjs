@@ -17,8 +17,9 @@
  *    o react-chartjs-2 (PanelAnalisisPerezoso carga PanelAnalisis con import('./PanelAnalisis'), un chunk aparte); y
  *    fuera de components/analisis nadie importa estático PanelAnalisis, los gráficos ni registro.ts (las pantallas
  *    importan PanelAnalisisPerezoso o el índice).
- * Cada tarea que deja de necesitar una entrada temporal la BORRA de su lista en el mismo commit (una por línea). Una
- * entrada que ya no se usa no hace fallar la prueba: se lista al final para que se borre.
+ * Cada tarea que deja de necesitar una entrada temporal la BORRA de su lista en el mismo commit (una por línea). B4 T24
+ * (F110): una entrada que ya no se usa HACE FALLAR la prueba (antes solo se listaba); import(…) admite comentarios mágicos
+ * (/* webpackChunkName: … *\/) y '/ventas/ai-chat' se busca en todo src/ salvo src/app_mocks_backup/.
  * Detecta import … from '…', import '…', import('…') y require('…'); un comentario que escriba esa forma también cuenta
  * (recorrido simple a propósito). Autoprueba del patrón al inicio.
  */
@@ -44,7 +45,8 @@ const PERMITIDOS_AI_CHAT = [];
 
 // import … from 'chart.js' | import 'chart.js' | import('chart.js') | require('chart.js'), con comillas simples, dobles
 // o invertidas, y la subruta opcional ('chart.js/auto'). No detecta 'chart.jsx' ni 'mi-chart.js'.
-const PATRON_GRAFICOS = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s+)(['"`])(react-chartjs-2|chart\.js)(?:\/[^'"`]*)?\1/g;
+// B4 T24 (F110): import(…) con comentarios antes del módulo (import(/* webpackChunkName: "x" */ 'chart.js')) también cuenta.
+const PATRON_GRAFICOS = /(?:\bfrom\s*|\bimport\s*\(\s*(?:\/\*[\s\S]*?\*\/\s*)*|\brequire\s*\(\s*|\bimport\s+)(['"`])(react-chartjs-2|chart\.js)(?:\/[^'"`]*)?\1/g;
 const AI_CHAT = '/ventas/ai-chat';
 
 /** [{linea, modulo}] de cada import de los gráficos en `texto`. */
@@ -90,6 +92,9 @@ console.log('--- Autoprueba de los patrones ---');
     "const m = await import('react-chartjs-2');",
     'const c = require(`chart.js`);',
     "import Chart from 'chart.js/auto'",
+    // B4 T24 (F110): con comentarios mágicos.
+    "const g = await import(/* webpackChunkName: \"graficos\" */ 'chart.js');",
+    "import(/* a */ /* b */ `react-chartjs-2`)",
   ];
   for (const m of muestras) assert.equal(importsDeGraficos(m).length, 1, m);
   assert.deepEqual(importsDeGraficos(muestras[1]), [{ linea: 4, modulo: 'chart.js' }], 'la línea del from');
@@ -125,7 +130,9 @@ console.log('--- R13: chart.js y react-chartjs-2 solo en components/analisis ---
   }
   assert.deepEqual(fuera, [], `importa gráficos fuera de ${CARPETA_GRAFICOS} (usa los componentes de Análisis):\n  ${fuera.join('\n  ')}`);
   const sinUso = PERMITIDOS_GRAFICOS.filter((p) => !usados.has(p));
-  console.log(`  ${todos.length} archivos revisados` + (sinUso.length ? `; lista blanca sin uso (bórrala): ${sinUso.join(', ')}` : ''));
+  // B4 T24 (F110): una entrada sin uso hace fallar la prueba (se borra en el mismo commit que deja de necesitarla).
+  assert.deepEqual(sinUso, [], `lista blanca de gráficos sin uso (bórrala): ${sinUso.join(', ')}`);
+  console.log(`  ${todos.length} archivos revisados`);
 }
 
 console.log('--- T5B: dentro de components/analisis, solo registro.ts y los tres gráficos importan chart.js ---');
@@ -272,10 +279,10 @@ console.log('--- T5C: chart.js solo entra en el chunk de la pestaña (PanelAnali
   assert.deepEqual(fuera, [], `importan el panel o los gráficos directo (usa PanelAnalisisPerezoso):\n  ${fuera.join('\n  ')}`);
 }
 
-console.log("--- R2: '/ventas/ai-chat' no aparece en src/app ---");
+console.log("--- R2: '/ventas/ai-chat' no aparece en src/ (salvo src/app_mocks_backup/) ---");
 {
-  const app = join(RAIZ, 'src', 'app');
-  const todos = archivos(app);
+  // B4 T24 (F110): todo src/, no solo src/app (un componente o una lib también podría llamarlo).
+  const todos = archivos(join(RAIZ, 'src')).filter((ruta) => !rel(ruta).startsWith('src/app_mocks_backup/'));
   assert.ok(todos.length > 50, 'la guardia no puede quedar vacía en silencio');
   const fuera = [];
   const usados = new Set();
@@ -288,7 +295,8 @@ console.log("--- R2: '/ventas/ai-chat' no aparece en src/app ---");
   }
   assert.deepEqual(fuera, [], `llama a ${AI_CHAT}, que no existe (el asistente queda «En construcción», R2):\n  ${fuera.join('\n  ')}`);
   const sinUso = PERMITIDOS_AI_CHAT.filter((p) => !usados.has(p));
-  console.log(`  ${todos.length} archivos revisados` + (sinUso.length ? `; lista blanca sin uso (bórrala): ${sinUso.join(', ')}` : ''));
+  assert.deepEqual(sinUso, [], `lista blanca de ${AI_CHAT} sin uso (bórrala): ${sinUso.join(', ')}`);
+  console.log(`  ${todos.length} archivos revisados`);
 }
 
 console.log('✓ Los gráficos se importan solo en components/analisis y nadie llama a /ventas/ai-chat (con sus listas blancas).');

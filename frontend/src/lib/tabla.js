@@ -49,7 +49,7 @@
  */
 
 import { normalizarBusqueda } from './busqueda.js';
-import { congelar, tiene } from './estados-pedido.js';
+import { congelar, humanizarCodigo, tiene } from './estados-pedido.js';
 import { formatoEntero, numeroFinito } from './kpis.js';
 import { diaColombia, fechaLarga } from './fechas-colombia.js';
 
@@ -60,13 +60,16 @@ import { diaColombia, fechaLarga } from './fechas-colombia.js';
  * @typedef {{orden: string[], anchos: Record<string, number>, ocultas: string[]}} ColumnasReconciliadas
  * @typedef {'lista' | 'kanban'} ModoTabla
  * @typedef {{vista: string | null, modo: ModoTabla, semaforo: string | null, paso: string | null, estados: string[],
- *   q: string, orden: string | null, pagina: number, tamano: number}} EstadoTabla
- * @typedef {{tipo: 'vista' | 'modo' | 'semaforo' | 'paso' | 'estados' | 'q' | 'busqueda' | 'orden' | 'pagina' | 'tamano',
- *   valor?: unknown} | {tipo: 'cambiar', cambios: Partial<Record<keyof EstadoTabla, unknown>>} | {tipo: 'limpiarFiltros'}
+ *   q: string, orden: string | null, pagina: number, tamano: number, filtros?: Record<string, string>}} EstadoTabla
+ *   B4 T24 (F39): `filtros` son los filtros extra de la pantalla (la categoría de Gastos, la etapa del CRM…), aditivo: sin ellos,
+ *   el estado de siempre.
+ * @typedef {{tipo: 'vista' | 'modo' | 'semaforo' | 'paso' | 'estados' | 'q' | 'busqueda' | 'orden' | 'pagina' | 'tamano'
+ *   | 'filtros', valor?: unknown} | {tipo: 'filtro', clave: string, valor: unknown}
+ *   | {tipo: 'cambiar', cambios: Partial<Record<keyof EstadoTabla, unknown>>} | {tipo: 'limpiarFiltros'}
  *   | {tipo: 'restablecerOrden', rechazado: string}} AccionTabla
  * @typedef {{filas: any[], total: number, conteos: Record<string, number> | null, resumen: Record<string, any> | null,
  *   crudo: unknown}} RespuestaListado
- * @typedef {'vista' | 'pagina' | 'q' | 'orden' | 'semaforo' | 'paso' | 'estados'} CampoSesionTabla
+ * @typedef {'vista' | 'pagina' | 'q' | 'orden' | 'semaforo' | 'paso' | 'estados' | 'filtros'} CampoSesionTabla
  * @typedef {Partial<Pick<EstadoTabla, CampoSesionTabla>>} SesionTabla
  * @typedef {{sesion: boolean, modo: boolean, tamano: boolean}} CambiosEstadoTabla
  * @typedef {{tipo: 'anchos', anchos: Record<string, number>} | {tipo: 'mover', id: string, hueco: number}
@@ -458,7 +461,25 @@ const NORMALIZAR = {
   orden: textoONulo,
   pagina: (v) => enteroPositivo(v, 1),
   tamano: (v) => (TAMANOS_PAGINA.includes(Number(v)) ? Number(v) : TAMANOS_PAGINA[0]),
+  filtros: filtrosDeTabla,
 };
+
+/**
+ * B4 T24 (F39): los filtros extra normalizados: {clave: texto} con claves y textos llenos (sin los espacios de los bordes), en orden de
+ * clave; lo demás se descarta. Algo que no es un objeto da {}.
+ * @param {unknown} v
+ * @returns {Record<string, string>}
+ */
+function filtrosDeTabla(v) {
+  /** @type {Record<string, string>} */
+  const filtros = {};
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return filtros;
+  for (const clave of Object.keys(v).sort()) {
+    const valor = /** @type {any} */ (v)[clave];
+    if (clave.trim() && typeof valor === 'string' && valor.trim()) filtros[clave] = valor.trim();
+  }
+  return filtros;
+}
 const CAMPOS = Object.keys(NORMALIZAR);
 
 /**
@@ -485,15 +506,25 @@ export function estadoTablaInicial(parcial = {}) {
   return /** @type {EstadoTabla} */ (estado);
 }
 
-const iguales = (a, b) => (Array.isArray(a) && Array.isArray(b) ? a.length === b.length && a.every((x, i) => x === b[i]) : a === b);
+/** Dos valores del estado iguales: los arreglos por sus elementos y (B4 T24, F39) los filtros por sus claves y valores. */
+const iguales = (a, b) => {
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((x, i) => x === b[i]);
+  if (a && b && typeof a === 'object' && typeof b === 'object' && !Array.isArray(a) && !Array.isArray(b)) {
+    const claves = Object.keys(a);
+    return claves.length === Object.keys(b).length && claves.every((k) => a[k] === b[k]);
+  }
+  return a === b;
+};
 
 /**
  * El reductor del estado único de la pantalla (useEstadoTabla, T4C). Las tarjetas pulsables, las cajas del flujo, los
  * botones del semáforo, las pestañas, la búsqueda y el filtro de estados despachan aquí:
- *  - {tipo: 'vista' | 'modo' | 'semaforo' | 'paso' | 'estados' | 'q' | 'orden' | 'tamano' | 'pagina', valor}
- *    ('busqueda' es lo mismo que 'q');
+ *  - {tipo: 'vista' | 'modo' | 'semaforo' | 'paso' | 'estados' | 'q' | 'orden' | 'tamano' | 'pagina' | 'filtros', valor}
+ *    ('busqueda' es lo mismo que 'q'; 'filtros' reemplaza todos los filtros extra);
+ *  - {tipo: 'filtro', clave, valor} (B4 T24, F39): un filtro extra, mezclado con los vigentes; vacío, se quita. Sin clave, lanza;
  *  - {tipo: 'cambiar', cambios: {...}} para varios campos a la vez (una tarjeta que pone la vista y quita el paso);
- *  - {tipo: 'limpiarFiltros'}: sin semáforo, paso, estados ni búsqueda (conserva pestaña, modo, orden y tamaño);
+ *  - {tipo: 'limpiarFiltros'}: sin semáforo, paso, estados, búsqueda ni filtros extra (conserva pestaña, modo, orden y
+ *    tamaño);
  *  - {tipo: 'restablecerOrden', rechazado} (T4C r2, punto 2; la despacha useListado cuando el servidor rechaza un orden
  *    con 422): quita el orden SOLO si sigue siendo el rechazado (como cualquier cambio, vuelve a la página 1); si el
  *    usuario ya eligió otro, devuelve el MISMO estado y su elección no se pisa.
@@ -512,7 +543,14 @@ export function reducirEstadoTabla(estado, accion) {
   if (CAMPOS.includes(tipo)) cambios = { [tipo]: /** @type {any} */ (accion).valor };
   else if (tipo === 'busqueda') cambios = { q: /** @type {any} */ (accion).valor };
   else if (tipo === 'cambiar') cambios = { .../** @type {any} */ (accion).cambios };
-  else if (tipo === 'limpiarFiltros') cambios = { semaforo: null, paso: null, estados: [], q: '' };
+  else if (tipo === 'filtro') {
+    // B4 T24 (F39): un filtro extra; se mezcla aquí con los vigentes (sin cierres viejos en la pantalla). Vacío, se quita.
+    const clave = /** @type {any} */ (accion).clave;
+    if (typeof clave !== 'string' || !clave.trim()) throw new Error('Un filtro de la tabla necesita su clave.');
+    cambios = { filtros: { ...(actual.filtros ?? {}), [clave]: /** @type {any} */ (accion).valor } };
+  } else if (tipo === 'limpiarFiltros') {
+    cambios = { semaforo: null, paso: null, estados: [], q: '', ...(actual.filtros ? { filtros: {} } : {}) };
+  }
   else if (tipo === 'restablecerOrden') {
     const rechazado = /** @type {any} */ (accion).rechazado;
     if (typeof rechazado !== 'string' || actual.orden !== rechazado) return actual;
@@ -708,10 +746,11 @@ export function posicionMenu(boton, menu, ventana, { margen = 8, separacion = 4 
  * Lo del estado de la pantalla que va en sessionStorage 'tabla-sesion:{id}' (R4, C2): el estado de la SESIÓN, para
  * volver a la misma pestaña, página, búsqueda y orden (y semáforo, paso y filtro de estados) al regresar de un
  * documento. T4C r1, punto 2: 'estados' también, porque la página N solo tiene sentido con el filtro con que se llegó a
- * ella. El modo (vista:<id>) y el tamaño (tabla:<id>) son preferencias del usuario (lib/preferencias.js). Inmutable.
+ * ella. El modo (vista:<id>) y el tamaño (tabla:<id>) son preferencias del usuario (lib/preferencias.js). B4 T24 (F39): y los
+ * filtros extra (`filtros`, solo si la pantalla los usa: sin ellos, el texto de siempre). Inmutable.
  * @type {ReadonlyArray<CampoSesionTabla>}
  */
-export const CAMPOS_SESION_TABLA = congelar(['vista', 'pagina', 'q', 'orden', 'semaforo', 'paso', 'estados']);
+export const CAMPOS_SESION_TABLA = congelar(['vista', 'pagina', 'q', 'orden', 'semaforo', 'paso', 'estados', 'filtros']);
 
 /** El máximo de valores de 'estados' que acepta el servidor (core/listados.py); más, en la sesión, no se restaura. */
 export const MAXIMO_ESTADOS = 20;
@@ -983,6 +1022,19 @@ export function actualizadorColumnas(definicion, cambio, sinGuardar) {
   return (anterior) => (anterior === sinGuardar ? {} : (parteDeColumnas(definicion, anterior, cambio) ?? {}));
 }
 
+/** B4 T24 r2 (duda 4 de r1): el aviso de un cambio de columnas que no se escribe porque la precarga de preferencias falló. */
+export const TEXTO_PRECARGA_FALLIDA_COLUMNAS = 'No se pudieron cargar tus preferencias de columnas; intenta de nuevo en un momento.';
+
+/**
+ * B4 T24 r2: el aviso para el usuario de un cambio de columnas (ocultar, mover, desplazar o estirar) con la precarga fallida (F33: no
+ * se escribe la pieza compuesta), o null. «Restablecer» se escribe igual: sin aviso.
+ * @param {{precargaFallida: boolean, cambio: CambioColumnas | {tipo?: string}}} entrada
+ * @returns {string | null}
+ */
+export function avisoCambioColumnas({ precargaFallida, cambio }) {
+  return precargaFallida && /** @type {any} */ (cambio)?.tipo !== 'restablecer' ? TEXTO_PRECARGA_FALLIDA_COLUMNAS : null;
+}
+
 /**
  * Lo que hace cada operación de usePreferenciasTabla (T4C r1, puntos 3 y 6a): no escribe (false) antes de listo ni si
  * el usuario del token ya no es el usuario con que se pintó la pantalla (el gesto se hizo sobre la pantalla de otra
@@ -991,11 +1043,14 @@ export function actualizadorColumnas(definicion, cambio, sinGuardar) {
  * Si guardarParte descarta el guardado (un cambio de sesión que el hook no vio) y no llama al actualizador, false.
  * @param {(entrada: (anterior: any) => Record<string, unknown>) => void} guardarParte
  * @param {{definicion: ReadonlyArray<DefinicionColumna>, cambio: CambioColumnas, sinGuardar: object, listo: boolean,
- *   usuarioRender: number | null, usuarioToken: number | null}} opciones
+ *   usuarioRender: number | null, usuarioToken: number | null, precargaFallida?: boolean}} opciones
  * @returns {boolean}
  */
-export function guardarCambioColumnas(guardarParte, { definicion, cambio, sinGuardar, listo, usuarioRender, usuarioToken }) {
+export function guardarCambioColumnas(guardarParte, { definicion, cambio, sinGuardar, listo, usuarioRender, usuarioToken, precargaFallida = false }) {
   if (!listo || (usuarioRender ?? null) !== (usuarioToken ?? null)) return false;
+  // B4 T24 (F33): con la precarga fallida, una pieza compuesta (el mapa de anchos, {orden, ocultas}) se armaría sobre {} y
+  // reemplazaría la guardada en el servidor: no se escribe. «Restablecer» no depende de lo guardado.
+  if (avisoCambioColumnas({ precargaFallida, cambio })) return false;
   const actualizar = actualizadorColumnas(definicion, cambio, sinGuardar);
   let escribio = false;
   guardarParte((anterior) => {
@@ -1025,6 +1080,19 @@ export function urlListado(ruta, estado, { extra = {}, conConteos = false, conRe
   });
   if (!consulta) return ruta;
   return `${ruta}${ruta.includes('?') ? '&' : '?'}${consulta}`;
+}
+
+/**
+ * B4 T24 (F37): el orden que de verdad lleva la URL de una lista (el parámetro `orden` de urlListado), o null. Un `extra` puede quitarlo
+ * (EXTRA_PAPELERA: orden null): entonces la petición no depende de estado.orden y el contexto de la llegada no lo nombra.
+ * @param {unknown} url
+ * @returns {string | null}
+ */
+export function ordenDeUrl(url) {
+  if (typeof url !== 'string') return null;
+  const i = url.indexOf('?');
+  const valor = i < 0 ? null : new URLSearchParams(url.slice(i + 1)).get('orden');
+  return valor && valor.trim() ? valor.trim() : null;
 }
 
 /**
@@ -1842,16 +1910,19 @@ export function estadoPastillaPestana(conteo, estadoConteos, { aparteActiva = fa
  * vea el elemento [inicio, inicio + ancho), en coordenadas del contenido de la fila. Si ya se ve, el mismo; si queda a
  * la izquierda (o es más ancho que la fila), su inicio; si queda a la derecha, lo justo para ver su final. Nunca
  * negativo; con datos que no son números, el mismo scroll.
+ * B4 T24 (F34, aditivo): `margen` (el padding de la fila) también se deja a la vista de cada lado, para que el anillo de foco de
+ * la pestaña (el token FOCO: 2 px de separación y 2 de grosor) no se corte; volver a la primera da 0 y no el padding.
  * @param {{inicio: number, ancho: number}} elemento
- * @param {{scroll: number, visible: number}} fila
+ * @param {{scroll: number, visible: number, margen?: number}} fila
  * @returns {number}
  */
-export function scrollParaVer({ inicio, ancho }, { scroll, visible }) {
+export function scrollParaVer({ inicio, ancho }, { scroll, visible, margen = 0 }) {
   if (![inicio, ancho, scroll, visible].every((n) => typeof n === 'number' && Number.isFinite(n))) {
     return typeof scroll === 'number' && Number.isFinite(scroll) ? scroll : 0;
   }
-  if (inicio < scroll || ancho > visible) return Math.max(0, inicio);
-  if (inicio + ancho > scroll + visible) return Math.max(0, inicio + ancho - visible);
+  const m = typeof margen === 'number' && Number.isFinite(margen) && margen > 0 ? margen : 0;
+  if (inicio < scroll || ancho > visible) return Math.max(0, inicio - m);
+  if (inicio + ancho > scroll + visible) return Math.max(0, inicio + ancho + m - visible);
   return scroll;
 }
 
@@ -1893,19 +1964,42 @@ export function accionPestana(estado, vista, opciones) {
  * {tipo: 'cambiar', cambios: {modo, estados}} si las opciones del modo nuevo (las de la vista del estado) no tienen alguno
  * de los estados filtrados (el tablero ofrece sus columnas y la lista los estados de la pestaña: lo que no está se quita,
  * si no filtraría sin verse). Sin opciones (null o undefined), el filtro no se toca. La pantalla envuelve el onEstado de
- * la barra: onEstado(accionModo(estado, valor, opcionesDelModo(valor))).
+ * la barra: onEstado(accionModo(estado, valor, opcionesDelModo(valor))). B4 T24 (FINAL-m11, aditivo): con `columnas` (las del
+ * tablero), el filtro se traduce antes entre la columna y sus estados (traducirEstadosDeModo).
  * @param {EstadoTabla} estado
  * @param {string} modo
  * @param {OpcionesEstados | null | undefined} opciones
+ * @param {ReadonlyArray<{estados: ReadonlyArray<string>}> | null} [columnas]
  * @returns {AccionTabla}
  */
-export function accionModo(estado, modo, opciones) {
+export function accionModo(estado, modo, opciones, columnas = null) {
   const actuales = estado?.estados ?? [];
   if (opciones === null || opciones === undefined || !actuales.length) return { tipo: 'modo', valor: modo };
   const validos = new Set(opcionesDeVista(opciones, estado?.vista ?? null).map((o) => o.valor));
-  const quedan = actuales.filter((e) => validos.has(e));
-  if (quedan.length === actuales.length) return { tipo: 'modo', valor: modo };
+  // B4 T24 (FINAL-m11): con las columnas del tablero, el filtro cambia de significado entre los modos (traducirEstadosDeModo).
+  const quedan = traducirEstadosDeModo(actuales, modo, columnas).filter((e) => validos.has(e));
+  if (quedan.length === actuales.length && quedan.every((e, i) => e === actuales[i])) return { tipo: 'modo', valor: modo };
   return { tipo: 'cambiar', cambios: { modo, estados: quedan } };
+}
+
+/**
+ * B4 T24 (FINAL-m11): el filtro de estados al pasar de un modo al otro. En Kanban, la opción de una columna es su estado principal
+ * (estados[0]) y vale la columna entera («En bodega» = RECIBIDO + PARCIALMENTE_RECIBIDA); en Lista, cada estado es él solo. Hacia
+ * 'lista', el principal de una columna se expande a los estados de esa columna; hacia 'kanban', cada estado pasa al principal de su
+ * columna, sin repetir. Lo que no es de ninguna columna, y todo sin columnas, queda igual (accionModo poda después lo que la vista no
+ * tiene).
+ * @param {ReadonlyArray<string>} estados
+ * @param {string} modo
+ * @param {ReadonlyArray<{estados: ReadonlyArray<string>}> | null | undefined} columnas
+ * @returns {string[]}
+ */
+export function traducirEstadosDeModo(estados, modo, columnas) {
+  const lista = [...(estados ?? [])];
+  if (!Array.isArray(columnas) || !columnas.length) return lista;
+  const traducidos = modo === 'lista'
+    ? lista.flatMap((e) => columnas.find((c) => c.estados?.[0] === e)?.estados ?? [e])
+    : lista.map((e) => columnas.find((c) => c.estados?.includes(e))?.estados[0] ?? e);
+  return [...new Set(traducidos)];
 }
 
 /**
@@ -2169,6 +2263,154 @@ export function saleConEsc({ tecla, defaultPrevented = false, dialogoEncima = fa
   return tecla === 'Escape' && !defaultPrevented && !dialogoEncima;
 }
 
+/**
+ * B4 T24 (F40): si un Esc cierra una ventana (Modal) o un panel lateral (Drawer): solo la capa de ARRIBA (una confirmación encima se
+ * cierra primero), si nadie más lo atendió (defaultPrevented: un menú, el filtro, la búsqueda) y si no está guardando (bloqueado:
+ * bloquearCierre).
+ * r2 (m8): un Esc con el foco en el <body> (`enBody`: un clic en una zona del panel que no se enfoca) cuenta como de dentro.
+ * @param {{tecla: string, arriba: boolean, defaultPrevented?: boolean, bloqueado?: boolean, reautenticando?: boolean,
+ *   dentro?: boolean, enBody?: boolean}} entrada
+ * @returns {boolean}
+ */
+export function cierraConEsc({ tecla, arriba, defaultPrevented = false, bloqueado = false, reautenticando = false, dentro = true, enBody = false }) {
+  // B4 T24 r1 (m12): tampoco con la ventana de re-ingreso abierta (no está en la pila) ni con un Esc de fuera del panel de esa capa.
+  return tecla === 'Escape' && arriba && !defaultPrevented && !bloqueado && !reautenticando && (dentro || enBody);
+}
+
+/**
+ * B4 T24 r2 (C1 = C3 = C7) y r3 (m10, una sola regla): si la capa atrapa un Tab. Solo la de arriba, sin una re-autenticación pendiente
+ * (como el Esc y como Avisos), y solo si el foco está dentro de su panel ('panel'), en el <body> ('body': un clic en una zona que no se
+ * enfoca) o en un panel de la pila ('pila', data-capa). Con el foco en otro elemento fuera de la pila ('fuera': el Copilot, un aviso, la
+ * ventana de re-ingreso de SessionKeeper), deja actuar al navegador: si no, le quitaría el foco.
+ * B4 T24 f2 (m9 de la revisión r3 de f1, aditivo): «fuera» se parte en dos (lugarDelFocoDe). 'encima' (una superficie que va sobre las
+ * capas: el Copilot, la pila de avisos, la ventana de re-ingreso) sigue sin atraparse. 'detras' (la página tapada por la capa: el
+ * Sidebar, el SubNav, la tabla) SÍ se atrapa: la capa de arriba recupera el foco que cayó detrás. 'fuera' queda como estaba (false).
+ * @param {{arriba: boolean, reautenticando?: boolean, foco?: LugarDelFoco | 'fuera'}} entrada
+ * @returns {boolean}
+ */
+export function atrapaTab({ arriba, reautenticando = false, foco }) {
+  return Boolean(arriba) && !reautenticando && (foco === 'panel' || foco === 'body' || foco === 'pila' || foco === 'detras');
+}
+
+/**
+ * B4 T24 f2 r1 (m9 de la revisión r0 de f2, aditivo): si la capa recupera el foco que LLEGA (focusin) a otro sitio: solo la de arriba, sin
+ * una re-autenticación pendiente, y solo si cayó DETRÁS (la página tapada: el Sidebar, el SubNav, la tabla). Así el paso que lleva el
+ * foco detrás (Mayús+Tab desde el primer control del Copilot, o Tab desde la barra del navegador) vuelve al panel en el acto, no con la
+ * tecla siguiente. Encima (el Copilot, los avisos, un portal marcado con data-superficie, el re-ingreso), el panel, la pila o el body:
+ * nada.
+ * @param {{arriba: boolean, reautenticando?: boolean, foco?: LugarDelFoco | 'fuera'}} entrada
+ * @returns {boolean}
+ */
+export function recuperaFocoAlEntrar({ arriba, reautenticando = false, foco }) {
+  return Boolean(arriba) && !reautenticando && foco === 'detras';
+}
+
+/**
+ * B4 T24 f2 r2 (m5): si la limpieza de una capa devuelve el foco al control que la abrió: solo si el abridor sigue en el documento y el
+ * panel YA NO (se cerró de verdad). En el desmontaje que simula StrictMode en desarrollo (limpieza y vuelta a montar) el panel sigue
+ * conectado: no se toca el foco, y el autoFocus de adentro se conserva.
+ * @param {{abridorConectado?: boolean, panelConectado?: boolean}} estado
+ * @returns {boolean}
+ */
+export function devuelveFocoAlCerrar({ abridorConectado = false, panelConectado = false } = {}) {
+  return Boolean(abridorConectado) && !panelConectado;
+}
+
+/**
+ * @typedef {'panel' | 'body' | 'pila' | 'encima' | 'detras'} LugarDelFoco
+ *   B4 T24 f2 (m9): dónde está el foco respecto de una capa de la pila (Modal y Drawer).
+ */
+
+/**
+ * B4 T24 f2 (m9 de la revisión r3 de f1): dónde está el foco respecto de una capa, de lo que el hook lee del elemento activo (useCierreVentana):
+ *  - 'body': no hay elemento activo o es el <body> (un clic en una zona que no se enfoca);
+ *  - 'panel': dentro del panel de la capa;
+ *  - 'pila': en otro panel de la pila (data-capa; Modal y Drawer también llevan aria-modal, pero son de la pila);
+ *  - 'encima': en una superficie que va SOBRE las capas: marcada con data-superficie (el Copilot, la pila de avisos) o dentro de un
+ *    [aria-modal="true"] que no es de la pila (la ventana de re-ingreso de SessionKeeper);
+ *  - 'detras': cualquier otro elemento: la página que la capa tapa (el Sidebar, el SubNav, la tabla).
+ * En ese orden: el <body>, el panel y la pila ganan.
+ * @param {{body?: boolean, panel?: boolean, pila?: boolean, superficie?: boolean, modalAparte?: boolean}} donde
+ * @returns {LugarDelFoco}
+ */
+export function lugarDelFocoDe({ body = false, panel = false, pila = false, superficie = false, modalAparte = false }) {
+  if (body) return 'body';
+  if (panel) return 'panel';
+  if (pila) return 'pila';
+  if (superficie || modalAparte) return 'encima';
+  return 'detras';
+}
+
+/**
+ * B4 T24 r1 (m29): la pila de capas abiertas (Modal y Drawer), de abajo arriba: una pila nueva con `id` encima.
+ * @template T
+ * @param {ReadonlyArray<T>} capas
+ * @param {T} id
+ * @returns {T[]}
+ */
+export function abrirCapa(capas, id) {
+  return [...(capas ?? []).filter((c) => c !== id), id];
+}
+
+/**
+ * B4 T24 r1 (m29): la pila sin `id` (también fuera de orden); un id que no está devuelve la MISMA pila.
+ * @template T
+ * @param {ReadonlyArray<T>} capas
+ * @param {T} id
+ * @returns {ReadonlyArray<T>}
+ */
+export function cerrarCapa(capas, id) {
+  return capas.includes(id) ? capas.filter((c) => c !== id) : capas;
+}
+
+/**
+ * B4 T24 r1 (m29): si `id` es la capa de arriba (la única que atiende Esc y atrapa Tab).
+ * @template T
+ * @param {ReadonlyArray<T>} capas
+ * @param {T} id
+ * @returns {boolean}
+ */
+export function esCapaDeArriba(capas, id) {
+  return capas.length > 0 && capas[capas.length - 1] === id;
+}
+
+/**
+ * B4 T24 r1 (m18): Tab atrapado en la capa de arriba. Con el foco en `indice` de `total` controles: el índice a enfocar al salir por un
+ * borde (o desde afuera: -1), null si el navegador sigue solo (en el medio), o -1 sin controles (el foco se queda).
+ * @param {number} indice
+ * @param {number} total
+ * @param {boolean} atras  Mayús+Tab
+ * @returns {number | null}
+ */
+export function siguienteFocoAtrapado(indice, total, atras) {
+  if (total <= 0) return -1;
+  if (indice < 0) return atras ? total - 1 : 0;
+  if (!atras && indice >= total - 1) return 0;
+  if (atras && indice <= 0) return total - 1;
+  return null;
+}
+
+/**
+ * B4 T24 (F40): si un clic en el fondo cierra la ventana: empezó Y terminó en la capa oscura (arrastrar desde un campo para
+ * seleccionar texto y soltar afuera no la cierra), salvo guardando.
+ * @param {{inicioEnFondo: boolean, finEnFondo: boolean, bloqueado?: boolean}} entrada
+ * @returns {boolean}
+ */
+export function cierraConClicFuera({ inicioEnFondo, finEnFondo, bloqueado = false }) {
+  return inicioEnFondo && finEnFondo && !bloqueado;
+}
+
+/**
+ * B4 T24 (FINAL-m27): el texto de la alerta de una pestaña de BarraTabla (para el title y el sr-only): un texto lleno tal cual (sin los
+ * espacios de los bordes); true, «Requiere atención»; lo demás, null (sin alerta). Así la alerta no es solo un color.
+ * @param {unknown} alerta
+ * @returns {string | null}
+ */
+export function textoAlertaPestana(alerta) {
+  if (alerta === true) return 'Requiere atención';
+  return typeof alerta === 'string' && alerta.trim() ? alerta.trim() : null;
+}
+
 // ─── B4 T22: Gastos (TABLA-otros punto 7, KANBAN-resto; R11, R16, RP57, RP58, RP104) ────────────────────────────
 
 /** R11: el tablero de Gastos tiene a lo sumo 12 columnas (una por categoría); el resto se ve en la lista. */
@@ -2182,10 +2424,12 @@ const RUTA_GASTOS = '/finance/expenses';
 
 /**
  * El recorte de las columnas de un tablero por categoría (R11; Productos y Gastos): las `max` primeras y, si sobran, el aviso
- * «N categorías más: usa la lista». Es el ÚNICO lugar de ese texto.
- * @param {ReadonlyArray<string> | null | undefined} nombres
+ * «N categorías más: usa la lista». Es el ÚNICO lugar de ese texto. B4 T24 (F10): los nombres pueden ser textos o los objetos
+ * {id, nombre} de columnasProductos (una plantilla).
+ * @template T
+ * @param {ReadonlyArray<T> | null | undefined} nombres
  * @param {number} max
- * @returns {{visibles: string[], mas: number, aviso: string | null}}
+ * @returns {{visibles: T[], mas: number, aviso: string | null}}
  */
 export function recortarColumnas(nombres, max) {
   const todas = Array.isArray(nombres) ? nombres : [];
@@ -2420,4 +2664,66 @@ export function textoVacioCatalogo(filtro) {
   const f = objeto(filtro) ? /** @type {any} */ (filtro) : {};
   const filtrado = textoLimpio(f.q) !== null || textoLimpio(f.categoria) !== null;
   return { titulo: filtrado ? 'Sin productos con esos filtros' : 'Sin productos', filtrado };
+}
+
+// ─── B4 T24 (F9): lo genérico que Compras e Inventario tomaban de las libs de Ventas ─────────────────────────
+
+/**
+ * La tabla del Hub va en el orden del semáforo («Atención primero», R6 y R8): sin orden (el que deja alternarOrden al
+ * tercer clic) o con 'atencion'. Con él se ven los separadores y no el chip del orden.
+ * @param {string | null | undefined} orden
+ * @returns {boolean}
+ */
+export function ordenEsAtencion(orden) {
+  return orden === null || orden === undefined || orden === '' || orden === 'atencion';
+}
+
+/**
+ * El chip del orden de la tabla del Hub (R6, orden_clic_columna): 'Orden: Monto ↓' (descendente, con '-') u
+ * 'Orden: Monto ↑'; junto a él va el botón «Atención primero». Con el orden de atención, null (no hay chip). `titulos`
+ * es {campo: título de la columna}; un campo sin título sale humanizado (nunca el código crudo).
+ * B4 T7 r1 (m4): `inversos` son los campos de las columnas con ordenInverso (lib/tabla.js), cuya flecha dice lo que ve
+ * el usuario: 'Antigüedad ↑' es '-creado' (la más nueva primero) y 'Antigüedad ↓' es 'creado'.
+ * @param {string | null | undefined} orden
+ * @param {Readonly<Record<string, string>>} [titulos]
+ * @param {{inversos?: ReadonlyArray<string | null> | null}} [opciones]
+ * @returns {string | null}
+ */
+export function textoOrdenHub(orden, titulos = {}, { inversos = [] } = {}) {
+  if (ordenEsAtencion(orden) || typeof orden !== 'string') return null;
+  const desc = orden.startsWith('-');
+  const campo = desc ? orden.slice(1) : orden;
+  const propio = titulos && tiene(titulos, campo) && typeof titulos[campo] === 'string' && titulos[campo].trim()
+    ? titulos[campo].trim() : humanizarCodigo(campo);
+  const abajo = (inversos ?? []).includes(campo) ? !desc : desc;
+  return `Orden: ${propio} ${abajo ? '↓' : '↑'}`;
+}
+
+/**
+ * B1 (R8): la misma ruta sin el parametro `nombre` y con los demas intactos (p. ej. quitar ?accion=cancelar tras abrir
+ * el modal de cancelacion, conservando return_to). `query` es lo que da useSearchParams() o su texto.
+ * @returns {string}
+ */
+export function rutaSinParametro(ruta, query, nombre) {
+  const q = new URLSearchParams(query ? query.toString() : '');
+  q.delete(nombre);
+  const resto = q.toString();
+  return resto ? `${ruta}?${resto}` : ruta;
+}
+
+/**
+ * B4 T10 r1 (I1): la acción de abrir la pestaña `vista` de una lista que tiene tablero, también desde Kanban (el enlace
+ * ?tab= y elegirVista de Pedidos de venta): en Lista, accionPestana tal cual; en Kanban, la misma vista y la poda de
+ * accionPestana con `opciones` (las de la LISTA, que es el destino) más {modo: 'lista'}, en una sola acción
+ * {tipo: 'cambiar'}, porque el tablero muestra todas las vistas (pide vista=todos). No toca `estado`.
+ * @param {EstadoTabla} estado
+ * @param {string} vista
+ * @param {OpcionesEstados | null | undefined} opciones
+ * @returns {AccionTabla}
+ */
+export function accionVistaEnLista(estado, vista, opciones) {
+  const accion = /** @type {any} */ (accionPestana(estado, vista, opciones));
+  if (estado?.modo !== 'kanban') return accion;
+  const cambios = accion.tipo === 'cambiar' ? accion.cambios : { vista: accion.valor };
+  return { tipo: 'cambiar', cambios: { ...cambios, modo: 'lista' } };
 }

@@ -7,7 +7,7 @@ import type {
 import { createPortal } from 'react-dom';
 import { ArrowDown, ArrowUp, RotateCw, TriangleAlert } from 'lucide-react';
 import { TABLE } from '@/lib/design-system';
-import { textoDeError } from '@/lib/avisos';
+import { ofreceReintentar, textoDeError } from '@/lib/avisos';
 import { velocidadAutodesplazamiento } from '@/lib/kanban';
 import {
   ANCHO_SELECCION, RELLENO_CELDA, alternarSeleccion, alternarSeleccionPagina, anchoAlContenido,
@@ -76,8 +76,8 @@ import { Paginacion } from './Paginacion';
  * El cuerpo (CuerpoTabla, memoizado) no depende del arrastre: mover una columna no vuelve a pintar las celdas (r1, 6j).
  * Estados (vistaCuerpo): sin datos y cargando, 8 renglones esqueleto y el pie 'Cargando…'; recargando, las filas
  * atenuadas, una barra fina arriba y las casillas deshabilitadas; error, la fila 'No se pudo cargar la lista: <detalle>'
- * con 'Reintentar'; vacío, lo que traiga `vacio`. Si un filtro deja menos páginas, salta a la última que existe
- * (paginaCorregida).
+ * con 'Reintentar' (B4 T24: salvo con un 403, ofreceReintentar); vacío, lo que traiga `vacio`. Si un filtro deja menos
+ * páginas, salta a la última que existe (paginaCorregida).
  * Selección: la casilla del encabezado marca solo la página visible (alternarSeleccionPagina) y la selección se limpia
  * cuando cambia la lista: página, pestaña, búsqueda, filtro, orden, tamaño o modo (firmaSeleccion; R5 y C3), y también
  * una vez al montar (r1, 6b: al volver del Kanban).
@@ -261,8 +261,9 @@ function CuerpoTablaBase<T>({
     if (window.getSelection()?.toString()) return;
     onFila(fila);
   };
+  // B4 T24 r1 (m17): Enter o Espacio (con preventDefault: el Espacio no desplaza la caja), solo si la tecla es de la fila.
   const alTeclearFila = (e: EventoTeclado<HTMLTableRowElement>, fila: T) => {
-    if (onFila && e.key === 'Enter' && e.target === e.currentTarget) {
+    if (onFila && (e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) {
       e.preventDefault();
       onFila(fila);
     }
@@ -275,7 +276,8 @@ function CuerpoTablaBase<T>({
           <td colSpan={nColumnas} className={TABLE.error}>
             <div role="alert" className={TABLE.mensajeFijo} style={anchoMensaje}>
               {textoDeError(error, 'No se pudo cargar la lista')}
-              {onReintentar && (
+              {/* B4 T24 (FINAL-m37): un 403 no ofrece «Reintentar» (ofreceReintentar): volver a pedir no cambia el permiso. */}
+              {onReintentar && ofreceReintentar(error) && (
                 <button type="button" onClick={onReintentar} className={TABLE.botonReintentar}>
                   <RotateCw size={12} aria-hidden="true" />
                   Reintentar
@@ -318,7 +320,7 @@ function CuerpoTablaBase<T>({
             className={`${TABLE.fila} ${fondo} ${onFila ? TABLE.filaClic : ''}`}
           >
             {seleccionActiva && (
-              <td className={TABLE.celdaCasilla} style={casillaQuieta ? undefined : CASILLA_SUELTA}>
+              <td className={`${TABLE.celdaCasilla} ${onFila ? TABLE.celdaFoco : ''}`} style={casillaQuieta ? undefined : CASILLA_SUELTA}>
                 <input
                   type="checkbox"
                   aria-label="Seleccionar esta fila"
@@ -339,9 +341,10 @@ function CuerpoTablaBase<T>({
                   key={v}
                   title={titulo ?? undefined}
                   style={estiloFija(v, fijas, offsets)}
-                  className={`${TABLE.celda} ${fijas[v] ? TABLE.celdaFija : ''} ${clasesFija(v, fijas, visibles)} ${ALINEAR[col.alinear ?? 'izquierda']}`}
+                  className={`${TABLE.celda} ${fijas[v] ? TABLE.celdaFija : ''} ${clasesFija(v, fijas, visibles)} ${ALINEAR[col.alinear ?? 'izquierda']} ${onFila ? TABLE.celdaFoco : ''}`}
                 >
-                  <span data-celda={v} className={TABLE.contenido}>{contenido}</span>
+                  {/* B4 T24 r2 (m17): la columna de acciones (fija a la derecha) sin el truncate, que recortaba el anillo de foco. */}
+                  <span data-celda={v} className={fijas[v] === 'derecha' ? TABLE.contenidoAcciones : TABLE.contenido}>{contenido}</span>
                 </td>
               );
             })}
@@ -900,7 +903,8 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
         </div>
       )}
       {moviendo && typeof document !== 'undefined' && createPortal(
-        <>
+        // B4 T24 f2 r1 (m10): el fantasma y la línea del arrastre de columnas (sin foco), marcados como todo portal de src.
+        <div data-superficie="arrastre">
           <div
             ref={fantasma}
             aria-hidden="true"
@@ -916,7 +920,7 @@ export function TablaEstandar<T>(props: PropsTablaEstandar<T>) {
               style={{ left: moviendo.linea.x - 1, top: moviendo.linea.top, height: moviendo.linea.alto }}
             />
           )}
-        </>,
+        </div>,
         document.body,
       )}
     </div>

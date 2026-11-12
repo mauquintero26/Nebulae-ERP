@@ -429,8 +429,9 @@ export function ComposerChatter({ tipoDoc, doc, onRegistrado, compacto = false }
 export function ListaChatter({ actividades }: { actividades: any }) {
   const notas = entradasChatter(actividades);
   return (
-    // pb-24: la burbuja fija del asistente (bottom-6 right-6) no tapa la ultima nota.
-    <div className="space-y-2 pb-24">
+    // B4 T24 f2 (F44-a): la reserva de la burbuja del asistente la lleva el contenedor que se desplaza (RESERVA_BOTON_IA en la columna
+    // de la derecha de cada detalle), una sola vez.
+    <div className="space-y-2">
       {notas.length === 0 ? (
         <p className="text-sm text-slate-500 italic text-center py-8">Todavía no hay notas. Escribe la primera arriba.</p>
       ) : (

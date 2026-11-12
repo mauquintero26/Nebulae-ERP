@@ -24,13 +24,11 @@ import {
 import type { BodegaTraslado, FilaColumnasTraslado } from '../columnas-traslado';
 
 import { apiFetch } from '@/lib/api';
-import { accionModo, estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
+import { accionModo, accionVistaEnLista, estadoDelTotal, normalizarRespuesta, ordenEsAtencion, textoOrdenHub } from '@/lib/tabla';
 import { tarjetasTraslados } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { fechaLarga } from '@/lib/fechas-colombia';
-import { TABLE } from '@/lib/design-system';
-import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
-import { accionVistaEnLista } from '@/lib/listas-ventas';
+import { FOCOS, TABLE } from '@/lib/design-system';
 import {
   COLUMNAS_TRASLADO, OPCIONES_ESTADOS_TABLERO_TRASLADO, avisoTope200, conteosTraslado, llegadaEnlaceTraslado, pedirEnlaceTraslado, consultaTableroTraslados,
   consultaTraslados, nombreBodega, numeroTraslado, opcionesEstadosTraslado, tarjetaTraslado, textoVacioTraslados,
@@ -56,7 +54,7 @@ const RUTA_CONTEOS = `${RUTA_OPERACIONES}?operation_type=TRANSFER&limit=0&con_co
 const TEXTO_SOLO_VER = 'Este tablero es para ver: los traslados no cambian de estado desde aquí.';
 /** El contenedor de los Hubs y de las listas del bloque (T7 a T16A): pb-24 deja libre la esquina del botón de la IA. */
 const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
-const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-700';
+const FOCO_VISIBLE = FOCOS.orange;
 
 /** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
 const AccionesFila = React.createContext<{ abrir: (t: FilaTraslado) => void } | null>(null);
@@ -249,7 +247,7 @@ export default function TrasladosPage() {
       recargarTodo();
     } catch (err) {
       avisarError(err, 'No se pudo crear el traslado');
-      // La regla única: con un 400, un 409 o sin respuesta se recarga lo que se ve; un 404 no.
+      // La regla única (recargarTrasError): con un 400, un 409, un 422 (F8) o sin respuesta se recarga lo que se ve; un 404 o un 500, no.
       if (recargarTrasError(err)) recargarTodo();
     }
     setSaving(false);
@@ -450,9 +448,9 @@ export default function TrasladosPage() {
 
       {/* Drawer */}
       {selected && (
-        <Drawer onClose={closeSelected} header={(
+        <Drawer idTitulo="drawer-traslado-titulo" onClose={closeSelected} header={(
           <div>
-            <h2 className="font-extrabold text-slate-900 text-xl">{numeroTraslado(selected)}</h2>
+            <h2 id="drawer-traslado-titulo" className="font-extrabold text-slate-900 text-xl">{numeroTraslado(selected)}</h2>
             <p className="text-xs text-slate-500 mt-0.5">Traslado Interno</p>
             <div className="mt-2"><CeldaEstadoTraslado t={selected} /></div>
           </div>
@@ -507,7 +505,7 @@ export default function TrasladosPage() {
 
       {/* Create Modal */}
       {showCreate && (
-        <Modal title="Nuevo Traslado Interno" subtitle="Mover mercancía entre bodegas" icon={ArrowLeftRight} color="orange"
+        <Modal cierreExterno={false} title="Nuevo Traslado Interno" subtitle="Mover mercancía entre bodegas" icon={ArrowLeftRight} color="orange"
           onClose={() => setShowCreate(false)}
           footer={(
             <>

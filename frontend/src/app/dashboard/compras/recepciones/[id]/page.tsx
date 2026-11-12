@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
+import { FOCO_DENTRO } from '@/lib/design-system';
 import { apiFetch } from '@/lib/api';
 import { Badge, Button, useAvisos } from '@/components/ui';
 // B4 T16A (TABLA-compras punto 12): la tabla del conteo en la tabla estándar, modo simple (se estira, se mueve y se recuerda;
@@ -17,6 +18,7 @@ import { TablaEstandar, usePreferenciasTabla } from '@/components/tabla';
 import type { ColumnaTabla } from '@/components/tabla';
 import { fechaLarga } from '@/lib/fechas-colombia';
 import { recargarTrasError } from '@/lib/avisos';
+import { recargaReponeLineas } from '@/lib/estados-compras';
 
 // Un instante del API (la fecha de recepción) en el día de Colombia; lo vacío, '-'.
 const fDateLong = (iso: unknown) => fechaLarga(iso) || '-';
@@ -26,7 +28,7 @@ type LineaConteo = { idx: number; grl_id?: number; sku_id?: number | string | nu
 /** Lo que las celdas editables le piden a la página (por un contexto, para que las columnas sean una constante, D40 y D41). */
 type ControlConteo = { editable: boolean; actualizar: (idx: number, valor: number) => void };
 const ConteoContext = createContext<ControlConteo | null>(null);
-const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-emerald-700';
+// B4 T24 r1 (C5): los campos van dentro de la celda (un span truncado): el foco, hacia adentro (FOCO_DENTRO).
 
 /** Cant. Recibida: el campo de conteo (editable solo con la recepción en BORRADOR). */
 function CeldaRecibida({ l }: { l: LineaConteo }) {
@@ -40,7 +42,7 @@ function CeldaRecibida({ l }: { l: LineaConteo }) {
       disabled={!control?.editable}
       aria-label={`Cantidad recibida de ${l.nombre}`}
       onChange={(e) => control?.actualizar(l.idx, parseInt(e.target.value) || 0)}
-      className={`w-full bg-white border rounded-lg px-2 py-2 text-center font-black outline-none transition-colors disabled:bg-slate-100 disabled:text-slate-500 ${FOCO_VISIBLE} ${
+      className={`w-full bg-white border rounded-lg px-2 py-2 text-center font-black transition-colors disabled:bg-slate-100 disabled:text-slate-500 ${FOCO_DENTRO} ${
         hayDiferencia && l.qty_recibida !== 0 ? 'border-amber-400 text-amber-800' : 'border-slate-300 focus:border-emerald-500 text-emerald-700'
       }`}
     />
@@ -63,7 +65,7 @@ function CeldaObservaciones({ l }: { l: LineaConteo }) {
       disabled={!control?.editable}
       placeholder="Ej: Cajas dañadas..."
       aria-label={`Observaciones físicas de ${l.nombre}`}
-      className={`w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:border-emerald-500 outline-none disabled:bg-slate-100 disabled:text-slate-500 ${FOCO_VISIBLE}`}
+      className={`w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-500 ${FOCO_DENTRO}`}
     />
   );
 }
@@ -131,26 +133,30 @@ export default function RecepcionDetallePage() {
     setCurrentUser(localStorage.getItem('user_name') || localStorage.getItem('username') || '');
   }, []);
 
-  const loadRecepcion = useCallback(async () => {
+  // B4 T24 r1 (m15): la recarga silenciosa (tras guardar el conteo o tras un error que pide recargar, también un 422) no muestra el spinner
+  // de página, que desmontaba el conteo y vaciaba las «Observaciones Físicas», ni vuelve a llenar las líneas mientras siga en BORRADOR.
+  const loadRecepcion = useCallback(async ({ silencioso = false }: { silencioso?: boolean } = {}) => {
     if (!params.id) { setLoading(false); return; }
-    setLoading(true);
-    setLoadError('');
+    if (!silencioso) { setLoading(true); setLoadError(''); }
     try {
       const raw = await apiFetch(`/compras/recepciones/${params.id}`);
       const d = raw?.data ?? raw;
       setData(d);
-      setItems((d?.productos || []).map((p: any) => ({
-        grl_id: p.grl_id,
-        sku_id: p.sku_id,
-        nombre: p.nombre || p.product_name || p.descripcion || 'Ítem de Compra',
-        qty_esperada: Number(p.qty_esperada ?? p.qty ?? 0),
-        qty_recibida: Number(p.qty_recibida ?? 0),
-      })));
+      if (recargaReponeLineas({ silencioso, recepcion: d })) {
+        setItems((d?.productos || []).map((p: any) => ({
+          grl_id: p.grl_id,
+          sku_id: p.sku_id,
+          nombre: p.nombre || p.product_name || p.descripcion || 'Ítem de Compra',
+          qty_esperada: Number(p.qty_esperada ?? p.qty ?? 0),
+          qty_recibida: Number(p.qty_recibida ?? 0),
+        })));
+      }
     } catch (err: any) {
-      setLoadError(err.message || 'No se pudo cargar la recepción');
+      if (!silencioso) setLoadError(err.message || 'No se pudo cargar la recepción');
+      else avisarError(err, 'No se pudo recargar la recepción');
     }
-    setLoading(false);
-  }, [params.id]);
+    if (!silencioso) setLoading(false);
+  }, [params.id, avisarError]);
 
   useEffect(() => { loadRecepcion(); }, [loadRecepcion]);
 
@@ -237,7 +243,7 @@ export default function RecepcionDetallePage() {
           productos: items.map(i => ({ grl_id: i.grl_id, qty_recibida: Number(i.qty_recibida) || 0 })),
         }),
       });
-      await loadRecepcion();
+      await loadRecepcion({ silencioso: true });
       return true;
     } catch (err: unknown) {
       avisarError(err, 'Error al guardar el conteo');
@@ -270,8 +276,8 @@ export default function RecepcionDetallePage() {
       await loadRecepcion();
     } catch (err: unknown) {
       avisarError(err, 'Error al validar la recepción');
-      // Si la recepción cambió en otro lado (un 409, por ejemplo), se vuelve a pedir lo que se muestra (recargarTrasError).
-      if (recargarTrasError(err)) await loadRecepcion();
+      // Si la recepción cambió en otro lado (un 409 o un 422, F8: recargarTrasError), se vuelve a pedir en silencio lo que se muestra.
+      if (recargarTrasError(err)) await loadRecepcion({ silencioso: true });
     }
     setConfirming(false);
   }

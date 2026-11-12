@@ -2,6 +2,8 @@
 import { useId } from 'react';
 import { X } from 'lucide-react';
 import { ACCENTS, AccentColor } from './colors';
+import { useCierreVentana } from './useCierreVentana';
+import { FOCO, FOCO_DENTRO } from '@/lib/design-system';
 
 /** Modal estandar: header con icono+titulo sobre degradado del acento, cuerpo
  * con scroll propio, footer opcional para los botones de accion. `maxWidth`
@@ -10,10 +12,12 @@ import { ACCENTS, AccentColor } from './colors';
  * `capa='encima'` (z-[60]) la pone sobre los modales de la pagina (z-50), p. ej.
  * las confirmaciones de useAvisos; el modal de sesion vencida (z-[100]) sigue encima.
  * `bloquearCierre` deshabilita la X (p. ej. mientras la ventana guarda); el onClose del llamador
- * tambien debe ignorar el cierre en ese momento. */
+ * tambien debe ignorar el cierre en ese momento.
+ * B4 T24 (F40): tambien se cierra con Esc (solo la de arriba) y con un clic en el fondo (useCierreVentana), salvo con
+ * bloquearCierre o con cierreExterno={false} (aditivo: la que solo se cierra con sus botones). */
 export function Modal({
   title, subtitle, icon: Icon, color = 'amber', onClose, children, footer,
-  maxWidth = 'lg', capa = 'base', role = 'dialog', describedBy, bloquearCierre = false,
+  maxWidth = 'lg', capa = 'base', role = 'dialog', describedBy, bloquearCierre = false, cierreExterno = true, sinCerrar = false,
 }: {
   title: string;
   subtitle?: string;
@@ -30,19 +34,27 @@ export function Modal({
   describedBy?: string;
   /** true: la X queda deshabilitada (la ventana está guardando). */
   bloquearCierre?: boolean;
+  /** B4 T24 (F40): false para que Esc y el clic en el fondo no la cierren (por defecto, sí). */
+  cierreExterno?: boolean;
+  /** B4 T24 r3 (m6): true para no mostrar la X (aditivo): una ventana cuyo cierre decidiría por el usuario sale solo por sus botones. */
+  sinCerrar?: boolean;
 }) {
   const accent = ACCENTS[color];
   const widthCls = { md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-xl', '3xl': 'max-w-3xl', '4xl': 'max-w-4xl' }[maxWidth];
   const capaCls = capa === 'encima' ? 'z-[60]' : 'z-50';
   const tituloId = useId();
+  const { alPresionar, alSoltar, refPanel } = useCierreVentana(onClose, bloquearCierre || !cierreExterno);
   return (
-    <div className={`fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center ${capaCls} p-4`}>
+    <div onPointerDown={alPresionar} onClick={alSoltar} className={`fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center ${capaCls} p-4`}>
       <div
+        ref={refPanel}
+        tabIndex={-1}
         role={role}
         aria-modal="true"
         aria-labelledby={tituloId}
         aria-describedby={describedBy}
-        className={`bg-white rounded-3xl shadow-2xl w-full ${widthCls} max-h-[90vh] overflow-hidden flex flex-col`}
+        data-capa=""
+        className={`bg-white rounded-3xl shadow-2xl w-full ${widthCls} max-h-[90vh] overflow-hidden flex flex-col ${FOCO_DENTRO}`}
       >
         <div className={`px-6 py-5 border-b flex justify-between items-center bg-gradient-to-r ${accent.modalGradient}`}>
           <div>
@@ -51,7 +63,9 @@ export function Modal({
             </h3>
             {subtitle && <p className="text-xs text-slate-500 mt-0.5">{subtitle}</p>}
           </div>
-          <button onClick={onClose} disabled={bloquearCierre} aria-label="Cerrar" className="p-2 text-slate-400 hover:bg-slate-100 rounded-full disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"><X size={20} /></button>
+          {!sinCerrar && (
+            <button onClick={onClose} disabled={bloquearCierre} aria-label="Cerrar" className={`p-2 text-slate-400 hover:bg-slate-100 rounded-full disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent ${FOCO}`}><X size={20} /></button>
+          )}
         </div>
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
           {children}

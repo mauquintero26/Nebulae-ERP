@@ -1,7 +1,7 @@
 'use client';
 
 import {
-  useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, forwardRef, useImperativeHandle, createContext, useContext,
+  useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, forwardRef, useImperativeHandle, createContext, useContext, useId,
 } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -13,7 +13,7 @@ import {
 import { apiFetch, getToken } from '@/lib/api';
 import {
   SubNav, PageHeader, Modal, Button, EmptyState, useAvisos, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila,
-  TableroKanban, useTableroKanban, CLASE_CHIP,
+  TableroKanban, EsqueletoTablero, useTableroKanban, CLASE_CHIP,
 } from '@/components/ui';
 import type { ItemMenuFila } from '@/components/ui';
 // B4 T8: la lista 100 % en el servidor con las piezas estándar (R5, R8, R11, R12, R13, R26; C3, C4, C13, C14, C15, C21).
@@ -27,20 +27,25 @@ import {
   accesoresDeOrden, accionModo, accionPestana, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta,
 } from '@/lib/tabla';
 import type { AccionTabla } from '@/lib/tabla';
-import { alternarSeleccion } from '@/lib/flujo';
+import { alternarPaso } from '@/lib/flujo';
 import { avisoVencidas, enlaceVerAnalisis, pasosDeLista, textoRegla } from '@/lib/flujo-ventas';
 import {
   COLUMNAS_SC, OPCIONES_ESTADOS_TABLERO_SC, chipsDocumentoVentas, confirmacionReiniciarSolicitud, consultaColumnaSC,
   estadoDeTarjeta, opcionesEstadosSolicitudes, puedeReiniciarSC, reglaSoltarSC, tarjetaSolicitud,
 } from '@/lib/kanban-ventas';
 import { textoDeError, recargarTrasError } from '@/lib/avisos';
+// B4 T24 (FINAL-m32): la regla del motivo de ModalMotivo también en la ventana de la cancelación en lote.
+import { MINIMO_MOTIVO, largoDelMotivo, motivoValido } from '@/lib/kanban';
 import { VEN_NAV } from '../ven-nav';
-import { PAGE_HEADER, TABLE } from '@/lib/design-system';
+import { FOCOS, PAGE_HEADER, RESERVA_BOTON_IA, TABLE } from '@/lib/design-system';
+import { accesoTableroVentas } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 import { esAdministrador, esAsesorElegible, getUsuarioActual } from '../flujo';
 import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas';
 import {
   generoCotizacion, cotizacionesVigentes, resumenCancelacionSolicitudes, repartirCancelacionSolicitudes, estadoEnPapelera,
   contarVencidasEnPapelera, confirmacionVaciarVencidas, textoPapeleraVaciada, tarjetasSolicitudes, fechaVencida,
+  vistaSolicitudesPermitida,
 } from '@/lib/listas-ventas';
 import { fechaCorta, fechaLarga } from '@/lib/fechas-colombia';
 import { mailtoUrl, telUrl, motivoTelefono } from '@/lib/chatter';
@@ -461,7 +466,7 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
 });
 
 // ── B4 T8: las piezas de la lista (TABLA-listas-ventas, KANBAN-ventas-listas, KPI-ventas y FLUJO-ventas-pantallas) ──
-// T11 (V2) armó aquí RowMenu (el menú «⋮» con posición fija, posicionMenuFila y recortesDe): lo reemplaza MenuFila de
+// T11 (V2) armó aquí RowMenu (el menú «⋮» con su posición fija y sus recortes): lo reemplaza MenuFila de
 // components/ui (R11: el ÚNICO menú ⋯, en un portal con posición fija, que se cierra con un clic afuera, Esc, un scroll o
 // un cambio de tamaño). Las opciones y su lógica son las mismas (CeldaAcciones).
 
@@ -530,7 +535,8 @@ const ID_PAPELERA = 'ventas.solicitudes.papelera';
 /** R8 (atencion_primero_listas = «Sí; con un clic en una columna ordenas como quieras»): primero lo atrasado. */
 export const INICIAL_SC = { vista: 'activas', orden: 'atencion' };
 /** B4 T8 r1 (A2): el contenedor de la lista (el del Hub, T7), el mismo en la pantalla y en su esqueleto del Suspense. */
-export const CONTENEDOR_LISTA = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
+// B4 T24 f2 (F44-a): la reserva del botón de la IA es el token RESERVA_BOTON_IA (pb-24) de design-system.ts.
+export const CONTENEDOR_LISTA = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;
 /** KANBAN-ventas-listas punto 7: los tickets de Soporte y la Papelera no van al tablero (se ven en lista). */
 const VISTAS_SIN_TABLERO = ['soporte', 'papelera'];
 /** R8 y r1 (m7): fuera del semáforo (Soporte) o de canceladas (la Papelera y Canceladas): «Con atraso» abre Activas. */
@@ -561,7 +567,7 @@ const VACIO_PAPELERA = (
 // Los chips: los tintes del tablero (CLASE_CHIP de components/ui/Kanban.tsx), así la misma marca sale igual en Lista y en
 // Kanban (como el Hub, T7 r1 m7a). Sin tamaño de letra: cada uso pone el suyo.
 const CHIP = 'inline-block max-w-full truncate rounded-full border px-1.5 py-0.5 font-bold leading-tight';
-const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
+const FOCO_VISIBLE = FOCOS.indigo;
 // D41: el tono opaco filaAlerta para la fila atrasada (la resolución del servidor, R8; antes un rosa translúcido solo en
 // las Nuevas sin atender) y la marca rosa a la izquierda del Hub (una sombra en la primera celda, no un tinte).
 const MARCA_ATRASO = '[&>td:first-child]:shadow-[inset_3px_0_0_var(--color-rose-500)]';
@@ -576,6 +582,10 @@ type AccionesFilaSC = {
   reiniciar: (sc: FilaSC) => void;
   restaurar: (sc: FilaPapelera) => void;
   eliminar: (sc: FilaPapelera) => void;
+  /** B4 T24 f2 (m8 de la revisión r0 de f1): el rol cancela, reinicia, manda a la papelera y restaura (ADMIN y ASESOR, accesoTableroVentas). */
+  mover: boolean;
+  /** B4 T24 f2 r1 (m18): el rol de la sesión, leído después de montar (useRolActual): «Eliminar permanentemente» es de ADMIN. */
+  rol: string;
 };
 const AccionesLista = createContext<AccionesFilaSC | null>(null);
 
@@ -659,11 +669,14 @@ function CeldaAcciones({ sc }: { sc: FilaSC }) {
   const acciones = useContext(AccionesLista);
   const soporte = sc.tipo_solicitud === 'Soporte Tecnico';
   const cancelada = sc.estado === 'CANCELADA';
-  const conAcciones = !soporte && (!cancelada || !sc.eliminada_at);
+  // B4 T24 f2 (m8 de la revisión r0 de f1): cancelar y «Enviar a la papelera» (POST /solicitudes/{id}/cancelar) y «Reiniciar» (PATCH)
+  // son de ADMIN y ASESOR: sin ese permiso la fila queda con «Ver Detalle» y «Editar».
+  const conAcciones = acciones?.mover === true && !soporte && (!cancelada || !sc.eliminada_at);
   const destinoReinicio = infoEstadoSolicitud(sc.advisor_user_id ? 'ASIGNADA' : 'BORRADOR').label;
   const items: ItemMenuFila[] = [
     { etiqueta: 'Ver Detalle', icono: FileText, onClick: () => acciones?.abrir(sc) },
-    { etiqueta: 'Editar', icono: Edit2, onClick: () => acciones?.abrir(sc) },
+    // B4 T24 f2 r1 (m19 + m37): «Editar» promete el PATCH (ADMIN y ASESOR); sin permiso, solo «Ver Detalle».
+    { etiqueta: 'Editar', icono: Edit2, onClick: () => acciones?.abrir(sc), oculto: !acciones?.mover },
     { etiqueta: `Reiniciar (volver a ${destinoReinicio})`, icono: RotateCcw, onClick: () => acciones?.reiniciar(sc),
       oculto: !conAcciones || !puedeReiniciarSC(sc) },
     { etiqueta: 'Enviar a la papelera', icono: Trash2, peligro: true, onClick: () => acciones?.aPapelera(sc), oculto: !conAcciones || !cancelada },
@@ -747,11 +760,14 @@ function CeldaAccionesPapelera({ sc }: { sc: FilaPapelera }) {
   const enPapelera = estadoEnPapelera(sc);
   return (
     <span className="flex items-center justify-end gap-1.5">
-      <button type="button" onClick={() => acciones?.restaurar(sc)} aria-label={`Restaurar ${sc.numero}`}
-        className={`bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2.5 py-1.5 rounded-lg text-xs font-bold border border-emerald-200 flex items-center gap-1 ${FOCO_VISIBLE}`}>
-        <RotateCcw size={11} aria-hidden="true" />Restaurar
-      </button>
-      {esAdministrador(getUsuarioActual().role)&&enPapelera.puedeEliminar&&(
+      {/* B4 T24 f2 (m8 de la revisión r0 de f1): POST /solicitudes/{id}/restaurar es de ADMIN y ASESOR. */}
+      {acciones?.mover && (
+        <button type="button" onClick={() => acciones?.restaurar(sc)} aria-label={`Restaurar ${sc.numero}`}
+          className={`bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2.5 py-1.5 rounded-lg text-xs font-bold border border-emerald-200 flex items-center gap-1 ${FOCO_VISIBLE}`}>
+          <RotateCcw size={11} aria-hidden="true" />Restaurar
+        </button>
+      )}
+      {esAdministrador(acciones?.rol)&&enPapelera.puedeEliminar&&(
         <button type="button" onClick={() => acciones?.eliminar(sc)} title="Eliminar permanentemente" aria-label={`Eliminar ${sc.numero} permanentemente`}
           className={`bg-red-50 hover:bg-red-100 text-red-600 p-1.5 rounded-lg border border-red-200 ${FOCO_VISIBLE}`}>
           <Trash2 size={13} aria-hidden="true" />
@@ -805,13 +821,15 @@ const ACCESORES_PAPELERA = {
  * búsqueda, sin la vista, los estados ni el semáforo; null mientras cargan: la barra gris, nunca 0) y la Papelera sin
  * conteo (no es una vista del servidor). Sin emojis. B4 T8 r1 (A2): la misma en la pantalla y en su esqueleto.
  */
-export function pestanasDeLaLista(conteos: ConteosSC | null): PestanaTabla[] {
+export function pestanasDeLaLista(conteos: ConteosSC | null, { papelera = false }: { papelera?: boolean } = {}): PestanaTabla[] {
   return [
     { id: 'activas', etiqueta: 'Activas', conteo: conteos?.activas ?? null },
     { id: 'confirmadas', etiqueta: 'Confirmadas', conteo: conteos?.confirmadas ?? null },
     { id: 'canceladas', etiqueta: 'Canceladas', conteo: conteos?.canceladas ?? null },
     { id: 'soporte', etiqueta: 'Soporte', conteo: conteos?.soporte ?? null },
-    { id: 'papelera', etiqueta: 'Papelera', conteo: null, sinConteo: true },
+    // B4 T24 f2 r1 (m21): la Papelera (GET /solicitudes/papelera: ADMIN y ASESOR) solo con `papelera`; el esqueleto (el rol sin leer),
+    // sin ella.
+    ...(papelera ? [{ id: 'papelera', etiqueta: 'Papelera', conteo: null, sinConteo: true }] : []),
   ];
 }
 
@@ -820,7 +838,7 @@ export function pestanasDeLaLista(conteos: ConteosSC | null): PestanaTabla[] {
  * ?tab=analisis&foco=sc, enlaceVerAnalisis) y «Nueva Solicitud». B4 T8 r1 (A2): los mismos en el esqueleto del Suspense,
  * que los pinta invisibles para que la cabecera mida lo mismo.
  */
-export function AccionesCabecera({ onActualizar, actualizando, onNueva }: { onActualizar: () => void; actualizando: boolean; onNueva: () => void }) {
+export function AccionesCabecera({ onActualizar, actualizando, onNueva }: { onActualizar: () => void; actualizando: boolean; onNueva?: () => void }) {
   return (
     <div className="flex flex-wrap items-center gap-2.5">
       <button type="button" onClick={onActualizar} className={`bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm shadow-sm ${FOCO_VISIBLE}`}><RefreshCw size={15} aria-hidden="true" className={actualizando?'animate-spin':''}/> Actualizar</button>
@@ -828,13 +846,11 @@ export function AccionesCabecera({ onActualizar, actualizando, onNueva }: { onAc
         className={`bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 flex items-center gap-2 text-sm shadow-sm ${FOCO_VISIBLE}`}>
         <ContenidoEnlace icon={BarChart3}>Ver análisis</ContenidoEnlace>
       </Link>
-      <Button onClick={onNueva} color="indigo" icon={Plus}>Nueva Solicitud</Button>
+      {/* B4 T24 f2 r1 (m19): crear una solicitud (POST /solicitudes) es de ADMIN y ASESOR: sin onNueva, sin el botón. */}
+      {onNueva && <Button onClick={onNueva} color="indigo" icon={Plus}>Nueva Solicitud</Button>}
     </div>
   );
 }
-
-/** La tarjeta del tablero (KANBAN-ventas-listas punto 7, RP15, RP18, D37 y el cruce C5): vuelve a esta lista. */
-const tarjetaDeSC = (sc: FilaSC) => tarjetaSolicitud(sc, { returnTo: RUTA_LISTA_SOLICITUDES });
 
 
 // ── IA Panel SC ────────────────────────────────────────────────────────────────
@@ -847,14 +863,14 @@ export function IAPanelSC({sc,apiBase}:{sc:any;apiBase:string}) {
   const tipo=sc?.tipo_solicitud||'Cotizacion de Producto';
   const isTraz=['Seguimiento','Programar Entrega'].includes(tipo);
   const isDev=tipo==='Devolucion de Producto';
-  const label=isTraz?'Analisis de Trazabilidad':isDev?'Analisis de Devolucion':'Analisis de Solicitud';
+  const label=isTraz?'Análisis de trazabilidad':isDev?'Análisis de devolución':'Análisis de la solicitud';
   async function generar() {
     setLoading(true);
     try{
       const token=getToken();
       const res=await fetch(`${apiBase}/ventas/solicitudes/${sc.id}/ia-analisis`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`}});
       const d=await res.json().catch(()=>({}));
-      setAnalisis(d.data?.analisis||d.analisis||'Error al generar analisis.');
+      setAnalisis(d.data?.analisis||d.analisis||'Error al generar el análisis.');
     }catch(e:any){setAnalisis('Error: '+e.message);}
     setLoading(false);
   }
@@ -863,7 +879,7 @@ export function IAPanelSC({sc,apiBase}:{sc:any;apiBase:string}) {
     setSending(true);
     const userMsg=chat;setChat('');
     setChatHistory(h=>[...h,{role:'user',text:userMsg}]);
-    setChatHistory(h=>[...h,{role:'ia',text:`Con base en ${sc.numero} (${etiquetaTipoSolicitud(tipo)}):${(analisis||'Sin analisis previo.').slice(0,150)}... Puedo profundizar en cualquier aspecto.`}]);
+    setChatHistory(h=>[...h,{role:'ia',text:`Con base en ${sc.numero} (${etiquetaTipoSolicitud(tipo)}):${(analisis||'Sin análisis previo.').slice(0,150)}... Puedo profundizar en cualquier aspecto.`}]);
     setSending(false);
   }
   // T8B ronda 2: los enlaces del «Formato de Confirmación» con el criterio del detalle: WhatsApp solo con un teléfono que
@@ -883,12 +899,12 @@ export function IAPanelSC({sc,apiBase}:{sc:any;apiBase:string}) {
           {!analisis&&!loading&&(
             <div className="text-center py-4">
               <p className="text-xs text-indigo-700 mb-3 font-medium">
-                {isTraz?'Genera analisis de trazabilidad: estados, historial, proximos pasos.':
-                 isDev?'Verifica si la devolucion cumple condiciones de politica (30 dias, estado).':
-                 'Obtene un analisis completo de esta solicitud.'}
+                {isTraz?'Genera el análisis de trazabilidad: estados, historial y próximos pasos.':
+                 isDev?'Verifica si la devolución cumple las condiciones de la política (30 días, estado).':
+                 'Obtén un análisis completo de esta solicitud.'}
               </p>
               <button onClick={generar} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-xl font-bold text-sm shadow flex items-center gap-2 mx-auto">
-                Generar Analisis IA
+                Generar análisis con IA
               </button>
             </div>
           )}
@@ -902,11 +918,11 @@ export function IAPanelSC({sc,apiBase}:{sc:any;apiBase:string}) {
         </div>
         {sc?.tipo_solicitud==='Cotizacion de Producto'&&(
           <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
-            <p className="font-extrabold text-amber-800 text-sm mb-2">Formato de Confirmacion al Cliente</p>
+            <p className="font-extrabold text-amber-800 text-sm mb-2">Formato de confirmación al cliente</p>
             <div className="bg-white border border-amber-300 rounded-xl p-4 mb-3 shadow-sm">
               <div className="flex items-center gap-2 mb-3 border-b pb-2">
                 <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-black text-sm">N</div>
-                <div><p className="font-black text-slate-900 text-sm">Nebulae Kids</p><p className="text-[10px] text-slate-500">Solicitud de Confirmacion</p></div>
+                <div><p className="font-black text-slate-900 text-sm">Nebulae Kids</p><p className="text-[10px] text-slate-500">Solicitud de confirmación</p></div>
               </div>
               <p className="text-xs font-bold text-slate-700 mb-1">SC: <span className="text-indigo-700">{sc.numero}</span></p>
               <p className="text-xs text-slate-600 mb-0.5">Cliente: <strong>{sc.customer_name}</strong></p>
@@ -976,7 +992,7 @@ export default function SolicitudClient() {
       await apiFetch(`/ventas/solicitudes/${id}/cancelar`, {
         method: 'POST',
         body: JSON.stringify({
-          razon: razonToSend.length >= 5 ? razonToSend : 'Enviada a la papelera (sin motivo registrado)',
+          razon: motivoValido(razonToSend) ? razonToSend : 'Enviada a la papelera (sin motivo registrado)',
           user_name: currentUser || 'asesor'
         })
       });
@@ -993,6 +1009,10 @@ export default function SolicitudClient() {
   // N4: ids de las solicitudes a cancelar (una desde la fila o varias desde la barra masiva) y por que fallaron.
   const [cancelTarget,setCancelTarget]=useState<number[]>([]);
   const [cancelRazon,setCancelRazon]=useState('');
+  // B4 T24 (FINAL-m32): el id que une la etiqueta «Motivo de la cancelación» con su campo (nombre accesible).
+  const idMotivo = useId();
+  // B4 T24 f2 r1 (m34): el «llevas N» nombra el campo (aria-describedby) mientras el motivo no alcanza.
+  const idAyudaMotivo = `${idMotivo}-ayuda`;
   const [cancelling,setCancelling]=useState(false);
   const [cancelErrores,setCancelErrores]=useState<string[]>([]);
   // Marcadas que no se envian a /cancelar (ya estan en la Papelera o son de Soporte): se informan, no se llaman.
@@ -1033,6 +1053,13 @@ export default function SolicitudClient() {
   // la tabla y el tablero despachan a él. El modo (Lista o Kanban) se guarda en vista:ventas.solicitudes (RP26: este hook
   // es su único dueño) y la pestaña, la página y la búsqueda en la sesión (volver del detalle deja lo mismo).
   const [estado, despachar, listo] = useEstadoTabla(ID_SC, INICIAL_SC);
+  // B4 T24 (FINAL-m31 y FINAL-m38): el rol después de montar (useRolActual) decide si el tablero se mueve (accesoTableroVentas: el
+  // require_roles del PATCH de destino); sin permiso, soloLectura (no se arrastra ni se ofrece «Mover a…») y sin acciones masivas.
+  const rol = useRolActual();
+  const accesoTablero = accesoTableroVentas(rol);
+  // La tarjeta del tablero (KANBAN-ventas-listas punto 7, RP15, RP18, D37 y el cruce C5): vuelve a esta lista. B4 T24 f2 r1 (duda 2 +
+  // m15): ofrece su acción solo si el rol puede hacerla (su require_roles); si no, «Abrir».
+  const tarjetaDeSC = useCallback((sc: FilaSC) => tarjetaSolicitud(sc, { returnTo: RUTA_LISTA_SOLICITUDES, rol }), [rol]);
   const enPapelera = estado.vista === 'papelera';
   // KANBAN-ventas-listas punto 7: Soporte y la Papelera no tienen tablero (ahí no aparece el botón y se ve la lista).
   const kanbanDisponible = !VISTAS_SIN_TABLERO.includes(estado.vista ?? '');
@@ -1119,7 +1146,8 @@ export default function SolicitudClient() {
   const [vueltaPapelera, setVueltaPapelera] = useState(0);
   const [cargaPapelera, setCargaPapelera] = useState<CargaPapelera>(PAPELERA_SIN_CARGAR);
   useEffect(() => {
-    if (!enPapelera) return;
+    // B4 T24 f2 r1 (m21): sin permiso (ADMIN y ASESOR) no se pide: daría un 403.
+    if (!enPapelera || !accesoTablero.mover) return;
     const control = new AbortController();
     apiFetch('/ventas/solicitudes/papelera', { signal: control.signal })
       .then((d: unknown) => setCargaPapelera({ vuelta: vueltaPapelera, filas: normalizarRespuesta(d).filas as FilaPapelera[], error: '' }))
@@ -1131,8 +1159,13 @@ export default function SolicitudClient() {
         avisar(textoDeError('No se pudo cargar la papelera: ' + msg), { tono: 'error' });
       });
     return () => control.abort();
-  }, [enPapelera, vueltaPapelera, avisar]);
+  }, [enPapelera, accesoTablero.mover, vueltaPapelera, avisar]);
   const recargarPapelera = useCallback(() => setVueltaPapelera((n) => n + 1), []);
+  // B4 T24 f2 r1 (m21): una «papelera» guardada en la sesión, sin permiso, cae a Activas (cuando el rol ya se leyó).
+  const vistaPermitida = vistaSolicitudesPermitida(estado.vista, { papelera: accesoTablero.mover, rolLeido: accesoTablero.listo });
+  useEffect(() => {
+    if (listo && vistaPermitida && vistaPermitida !== estado.vista) despachar(accionPestana(estado, vistaPermitida, opcionesEstadosSolicitudes));
+  }, [listo, vistaPermitida, estado, despachar]);
   const papelera = cargaPapelera.filas ?? SIN_FILAS_PAPELERA;
   const papeleraCargada = cargaPapelera.filas !== null;
   const papeleraError = cargaPapelera.error;
@@ -1194,7 +1227,7 @@ export default function SolicitudClient() {
   // solo con ellas, para leerlas; las que se cancelaron salen de la lista.
   async function cancelWithReason() {
     const razon=cancelRazon.trim();
-    if(cancelTarget.length===0||razon.length<5){showToast('El motivo es obligatorio (mínimo 5 caracteres)','err');return;}
+    if(cancelTarget.length===0||!motivoValido(cancelRazon)){showToast(`El motivo es obligatorio (mínimo ${MINIMO_MOTIVO} caracteres)`,'err');return;}
     setCancelling(true);
     setCancelErrores([]);
     const resultados:{numero:string;ok:boolean;error?:string}[]=[];
@@ -1394,7 +1427,7 @@ export default function SolicitudClient() {
   }
 
   // ── B4 T8, bloque 2: pestañas y búsqueda (TABLA-listas-ventas punto 5; R5, RP26, RP35, D40, D41) ──
-  const pestanas = pestanasDeLaLista(listado.conteos as ConteosSC | null);
+  const pestanas = pestanasDeLaLista(listado.conteos as ConteosSC | null, { papelera: accesoTablero.mover && listo });
   // La barra recibe el modo que se ve: en Soporte y la Papelera es Lista (no tienen tablero), así «Ajustar tabla» está
   // aunque lo guardado sea Kanban. El estado de la pantalla no cambia (useEstadoTabla sigue siendo su único dueño).
   const estadoBarra = useMemo(() => (estado.modo === modoEfectivo ? estado : { ...estado, modo: modoEfectivo }), [estado, modoEfectivo]);
@@ -1418,7 +1451,7 @@ export default function SolicitudClient() {
   const alCambiarBarra = useCallback((accion: AccionTabla) => {
     if (accion.tipo === 'modo') {
       const modo = String(accion.valor);
-      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_SC : opcionesEstadosSolicitudes));
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_SC : opcionesEstadosSolicitudes, COLUMNAS_SC));
     } else despachar(accion);
   }, [estado, despachar]);
   // r1 (m8): el «vacío» de la lista solo cambia con la búsqueda.
@@ -1437,7 +1470,7 @@ export default function SolicitudClient() {
   // Las celdas (constantes, D40 y D41) piden a la pantalla lo suyo por AccionesLista. El valor del contexto es estable
   // (las celdas no se repintan con cada cambio de la página) y llama siempre a los manejadores del último render: la ref
   // se pone al día después de pintar y solo se lee en un clic.
-  const manejadores = useRef<AccionesFilaSC | null>(null);
+  const manejadores = useRef<Omit<AccionesFilaSC, 'mover' | 'rol'> | null>(null);
   useLayoutEffect(() => {
     manejadores.current = {
       abrir: abrirSolicitud,
@@ -1455,7 +1488,9 @@ export default function SolicitudClient() {
     reiniciar: (sc) => manejadores.current?.reiniciar(sc),
     restaurar: (sc) => manejadores.current?.restaurar(sc),
     eliminar: (sc) => manejadores.current?.eliminar(sc),
-  }), []);
+    mover: accesoTablero.mover,
+    rol,
+  }), [accesoTablero.mover, rol]);
 
   // ── B4 T8, bloque 4: el tablero (KANBAN-ventas-listas punto 7; C15, R11; RP16, RP17, D11, D39) ──
   // reglaSoltarSC sin puedeEnviar (D11): soltar para enviar queda bloqueado con «Ábrela para enviar.» y el enlace a la
@@ -1471,10 +1506,10 @@ export default function SolicitudClient() {
   // ── B4 T8, bloque 5: las tarjetas (KPI-ventas punto 7; R12, RP19) ──
   const tarjetas = tarjetasSolicitudes(listado.resumen);
   // En Lista son las pestañas (D41: accionPestana, como un clic en la pestaña); tocar la activa vuelve a Activas (la de
-  // siempre, alternarSeleccion). En Kanban abren esa pestaña en Lista: el tablero muestra todas.
+  // siempre, alternarPaso). En Kanban abren esa pestaña en Lista: el tablero muestra todas.
   const vistaActiva = modoEfectivo === 'lista' ? estado.vista : null;
   const elegirVista = (vista: string) => {
-    const siguiente = modoEfectivo === 'lista' ? (alternarSeleccion(estado.vista, vista) ?? INICIAL_SC.vista) : vista;
+    const siguiente = modoEfectivo === 'lista' ? (alternarPaso(estado.vista, vista) ?? INICIAL_SC.vista) : vista;
     despachar(accionPestana(estado, siguiente, opcionesEstadosSolicitudes));
     if (modoEfectivo === 'kanban') despachar({ tipo: 'modo', valor: 'lista' });
   };
@@ -1542,7 +1577,7 @@ export default function SolicitudClient() {
           icon={FileText} color="indigo"
           title="Solicitudes de Cliente"
           subtitle="Lo que te piden los clientes, antes de cotizar."
-          actions={<AccionesCabecera onActualizar={actualizar} actualizando={actualizando} onNueva={()=>setShowCreate(true)} />} />
+          actions={<AccionesCabecera onActualizar={actualizar} actualizando={actualizando} onNueva={accesoTablero.mover ? () => setShowCreate(true) : undefined} />} />
 
         {/* B4 T8 (KPI-ventas punto 7; R12, RP19): las 4 tarjetas con con_resumen de la MISMA llamada de la lista (todas las
             solicitudes, sin Soporte): mientras cargan, barras grises (nunca 0); con error, «—». Las tres primeras son sus
@@ -1588,7 +1623,7 @@ export default function SolicitudClient() {
                       <p className={PAGE_HEADER.subtitle}>Las solicitudes canceladas se pueden eliminar definitivamente después de 30 días si no se restauran, salvo las que tienen documentos vinculados; un administrador vacía las vencidas, y la revisión automática también.</p>
                     </div>
                     <div className="flex items-center gap-3 shrink-0">
-                      {esAdministrador(getUsuarioActual().role)&&<button onClick={vaciarVencidas} disabled={vaciandoPapelera} className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"><Trash2 size={11} className={vaciandoPapelera?'animate-pulse':''}/>Vaciar las vencidas</button>}
+                      {esAdministrador(rol)&&<button onClick={vaciarVencidas} disabled={vaciandoPapelera} className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"><Trash2 size={11} className={vaciandoPapelera?'animate-pulse':''}/>Vaciar las vencidas</button>}
                       <button onClick={recargarPapelera} className="text-xs text-slate-500 hover:text-slate-700 font-bold flex items-center gap-1"><RefreshCw size={11} className={cargandoPapelera?'animate-spin':''}/> Actualizar</button>
                     </div>
                   </div>
@@ -1638,8 +1673,9 @@ export default function SolicitudClient() {
                   aviso={listado.avisoOrden}
                   onFila={abrirSolicitud}
                   claseFila={claseDeFila}
-                  seleccion={seleccion}
-                  onSeleccion={alSeleccionar}
+                  // B4 T24 f2 (m8 de la revisión r0 de f1): sin permiso de cancelar, sin casillas (la barra masiva tampoco sale).
+                  seleccion={accesoTablero.mover ? seleccion : undefined}
+                  onSeleccion={accesoTablero.mover ? alSeleccionar : undefined}
                   vacio={vacioLista}
                   etiqueta="Solicitudes de cliente"
                 />
@@ -1647,12 +1683,14 @@ export default function SolicitudClient() {
             </section>
           </AccionesLista.Provider>
           {modoEfectivo === 'kanban' && (
-            <TableroKanban
+            // B4 T24 r2 (m2, m10): mientras se lee el rol, el esqueleto (sin acciones) en lugar del tablero.
+            !accesoTablero.listo ? <EsqueletoTablero /> : <TableroKanban
               tablero={tablero}
               regla={reglaSoltarSC}
               tarjetaDe={tarjetaDeSC}
               onAbrir={abrirSolicitud}
               onAccion={accionDesdeTablero}
+              soloLectura={accesoTablero.soloLectura}
               color="indigo"
             />
           )}
@@ -1662,7 +1700,7 @@ export default function SolicitudClient() {
       {/* N4 (barra masiva): solo cancela las marcadas (U15: ningún estado se pone a mano). B4 T8: la selección es de la
           página de la tabla («Seleccionar todo» marca la página), así que solo en Lista y fuera de la Papelera; va abajo y
           fija, como la del Hub, para no correr la lista al marcar una fila. */}
-      {checked.size>0 && modoEfectivo === 'lista' && !enPapelera && (
+      {checked.size>0 && modoEfectivo === 'lista' && !enPapelera && accesoTablero.mover && (
         <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-indigo-600 text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-4 z-40">
           <span className="font-bold text-sm">{checked.size} seleccionada(s)</span>
           <div className="flex gap-2">
@@ -1675,14 +1713,14 @@ export default function SolicitudClient() {
 
       {/* MODAL: MOTIVO DE CANCELACIÓN (N4: una o varias solicitudes; el servidor revisa que no tengan documentos activos) */}
       {showCancelModal&&(
-        <Modal title={cancelTarget.length>1?`Cancelar ${cancelTarget.length} solicitudes`:'Cancelar Solicitud'} subtitle="La solicitud pasa a la Papelera. No se puede cancelar si tiene una cotización o un pedido de venta activos." icon={Trash2} color="red" maxWidth="md"
+        <Modal cierreExterno={false} title={cancelTarget.length>1?`Cancelar ${cancelTarget.length} solicitudes`:'Cancelar Solicitud'} subtitle="La solicitud pasa a la Papelera. No se puede cancelar si tiene una cotización o un pedido de venta activos." icon={Trash2} color="red" maxWidth="md"
           // Mientras se cancela, la X y el fondo no cierran la ventana (igual que "No, mantener"): las fallidas y el
           // detalle del servidor siempre llegan a una ventana abierta; bloquearCierre deja la X deshabilitada a la vista.
           onClose={()=>{if(!cancelling) cerrarCancelacion();}} bloquearCierre={cancelling}
           footer={(
             <>
               <Button variant="secondary" disabled={cancelling} onClick={cerrarCancelacion}>No, mantener</Button>
-              <Button variant="danger" icon={Trash2} loading={cancelling} disabled={cancelRazon.trim().length<5} onClick={cancelWithReason}>{cancelTarget.length>1?'Cancelar solicitudes':'Cancelar SC'}</Button>
+              <Button variant="danger" icon={Trash2} loading={cancelling} disabled={!motivoValido(cancelRazon)} onClick={cancelWithReason}>{cancelTarget.length>1?'Cancelar solicitudes':'Cancelar SC'}</Button>
             </>
           )}>
           <div>
@@ -1692,17 +1730,19 @@ export default function SolicitudClient() {
                 No se enviarán: {cancelOmitidas.map(o=>`${o.numero} ${o.motivo}`).join('; ')}.
               </p>
             )}
-            <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Motivo de la cancelación *</label>
+            <label htmlFor={idMotivo} className="text-xs font-black text-slate-500 uppercase mb-2 block">Motivo de la cancelación *</label>
             <textarea
+              id={idMotivo}
               value={cancelRazon}
               onChange={e=>setCancelRazon(e.target.value)}
               rows={3}
               maxLength={500}
               placeholder="Describe el motivo de la cancelación..."
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-red-200 outline-none"
+              aria-describedby={motivoValido(cancelRazon) ? undefined : idAyudaMotivo}
+              className={`w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:border-red-300 ${FOCOS.red}`}
               autoFocus
             />
-            {cancelRazon.trim().length<5&&<p className="text-xs text-red-500 mt-1">El motivo es obligatorio. Mínimo 5 caracteres (llevas {cancelRazon.trim().length}).</p>}
+            {!motivoValido(cancelRazon)&&<p id={idAyudaMotivo} className="text-xs text-red-500 mt-1">El motivo es obligatorio. Mínimo {MINIMO_MOTIVO} caracteres (llevas {largoDelMotivo(cancelRazon)}).</p>}
             {cancelErrores.length>0&&(
               <div className="mt-3 bg-rose-50 border border-rose-200 rounded-xl p-3 space-y-1.5">
                 <p className="text-xs font-black text-rose-700">No se pudo cancelar:</p>
@@ -1714,8 +1754,9 @@ export default function SolicitudClient() {
       )}
 
       {/* CREATE MODAL */}
-      {showCreate&&(
-        <Modal title="Nueva Solicitud de Cliente" subtitle="El número de la solicitud se asigna al crearla." icon={Plus} color="indigo" maxWidth="3xl"
+      {/* B4 T24 f2 r1 (m19): el formulario solo para quien crea (también con ?new=1). */}
+      {showCreate && accesoTablero.mover && (
+        <Modal cierreExterno={false} title="Nueva Solicitud de Cliente" subtitle="El número de la solicitud se asigna al crearla." icon={Plus} color="indigo" maxWidth="3xl"
           onClose={()=>{setShowCreate(false);resetCreateForm();}}
           footer={(
             <>

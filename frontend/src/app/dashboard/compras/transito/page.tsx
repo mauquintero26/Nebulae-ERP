@@ -7,7 +7,7 @@ import { AlertCircle, Package, RefreshCw, Truck } from 'lucide-react';
 // B4 T16A: Mercancía en tránsito 100 % sobre el servidor (R5, C3, C4): la tabla estándar y el tablero de etapas con el
 // estado único de la pantalla, las tarjetas de /compras/stats y la franja del flujo con «Estás aquí» en En tránsito.
 import {
-  SubNav, PageHeader, useAvisos, FranjaKpis, TarjetaKpi, useEstadoKpi, TableroKanban, useTableroKanban,
+  SubNav, PageHeader, useAvisos, FranjaKpis, TarjetaKpi, useEstadoKpi, TableroKanban, EsqueletoTablero, useTableroKanban,
 } from '@/components/ui';
 import type { DatosTarjetaKanban } from '@/components/ui';
 import {
@@ -18,12 +18,13 @@ import { BannerFlujo, PasosFlujo, useResumenFlujo } from '@/components/flujo';
 import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
 import { COMP_NAV } from '../comp-nav';
 
+import { FOCOS } from '@/lib/design-system';
+import { accesoCompras } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 import { apiFetch } from '@/lib/api';
-import { estadoDelTotal } from '@/lib/tabla';
+import { estadoDelTotal, ordenEsAtencion, textoOrdenHub } from '@/lib/tabla';
 import { PERIODO_KPI, tarjetasTransito } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
-// Piezas genéricas que nacieron en las libs de Ventas (T7), como en el Hub de Compras (T14): el chip del orden.
-import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
 import { humanizarCodigo } from '@/lib/estados-pedido';
 import { avisoTope200, infoEstadoPec, opcionesEstadosPec, textoVacioPec } from '@/lib/estados-compras';
 import {
@@ -68,7 +69,7 @@ const EXTRA_TABLERO = { orden: 'reciente', limit: TOPE_TABLERO, offset: 0 };
 const RUTA_PEDIDOS = '/dashboard/compras/pedidos';
 /** El contenedor de los Hubs y de las listas del bloque (T7 a T15): pb-24 deja libre la esquina del botón de la IA. */
 const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
-const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700';
+const FOCO_VISIBLE = FOCOS.blue;
 
 /** La flecha bonita de los labels de las etapas: 'Proveedor -> Casillero' -> 'Proveedor → Casillero'. */
 const conFlecha = (texto: string) => texto.trim().replace(/\s*->\s*/g, ' → ');
@@ -78,6 +79,8 @@ type AccionesFilaTransito = {
   avanzar: (p: FilaTransito, accion: { stage: string; status: string }) => void;
   /** I3: ¿ese pedido tiene un cambio de etapa en camino (o su recarga sin llegar)? Su botón muestra la carga: cada fila por su cuenta. */
   pendiente: (id: number) => boolean;
+  /** B4 T24 (FINAL-m38): si el rol puede iniciar o completar una etapa (PATCH /tracking: ADMIN y COMPRAS, accesoCompras). */
+  puedeAvanzar: boolean;
 };
 const AccionesFila = React.createContext<AccionesFilaTransito | null>(null);
 
@@ -160,7 +163,7 @@ function CeldaAccion({ p }: { p: FilaTransito }) {
   if (acciones?.pendiente(p.id)) {
     return <RefreshCw size={14} role="status" aria-label={`Actualizando ${p.numero}`} className="animate-spin text-blue-500" />;
   }
-  if (!accion) return <span className="text-xs text-slate-400">—</span>;
+  if (!accion || !acciones?.puedeAvanzar) return <span className="text-xs text-slate-400">—</span>;
   const completar = accion.status === 'COMPLETADO';
   return (
     <button type="button" onClick={() => acciones?.avanzar(p, accion)} aria-label={`${accion.texto} la etapa actual de ${p.numero}`}
@@ -216,6 +219,9 @@ export default function TransitoPage() {
   // El estado ÚNICO de la pantalla: la búsqueda, el filtro de estados, «Solo vencidos» (semaforo=vencidos), la franja, las
   // tarjetas, la tabla y el tablero despachan a él. El modo (Lista o Kanban) se guarda en vista:compras.transito.
   const [estado, despachar, listo] = useEstadoTabla(ID_TRANSITO, INICIAL_TRANSITO);
+  // B4 T24 (FINAL-m10, m31 y m38): el rol después de montar (useRolActual) decide si se cambian los PEC (accesoCompras: PATCH y DELETE
+  // /compras/pedidos y PATCH /tracking son de ADMIN y COMPRAS); sin permiso, el tablero es solo para ver y no se ofrecen sus acciones.
+  const accesoPec = accesoCompras(useRolActual());
   const enKanban = estado.modo === 'kanban';
 
   // La tabla: la página (25 o 50) de GET /compras/pedidos?vista=transito_logistica. esperar: !listo (D40): el esqueleto, nunca
@@ -275,7 +281,7 @@ export default function TransitoPage() {
   // ── bloque 6: avanzar una etapa (TABLA-compras punto 8; KANBAN-logistica punto 2) ──
   // El mismo PATCH /compras/pedidos/{id}/tracking del botón (Iniciar o Completar) y del arrastre a la etapa siguiente; queda en
   // la Actividad del PEC. Nada se traga: si falla, el mensaje del servidor tal cual (avisarError) y, con la regla única
-  // recargarTrasError (con un 400, un 409 o sin respuesta recarga; un 404 no), se recarga lo que se ve.
+  // recargarTrasError (con un 400, un 409, un 422 (F8) o sin respuesta recarga; un 404 o un 500 no), se recarga lo que se ve.
   // I3: un pedido con un PATCH en camino (botón o arrastre), y hasta que llega la recarga, no ofrece Iniciar ni Completar: un
   // segundo clic no manda otro PATCH sobre la etapa vieja. Toda la regla vive en transito.js, con sus casos: pendienteDeTransito
   // dice si hay uno; terminarPendiente guarda la foto de la lista ACTIVA (y el modo) al resolver el PATCH; soltarPendientes lo suelta
@@ -321,7 +327,9 @@ export default function TransitoPage() {
       terminarCambio(p.id);
     } else descartarCambio(p.id);
   }, [aplicarEtapa, avisar, avisarError, recargarTodo, iniciarCambio, terminarCambio, descartarCambio]);
-  const accionesFila = useMemo<AccionesFilaTransito>(() => ({ avanzar: (p, a) => { void avanzar(p, a); }, pendiente }), [avanzar, pendiente]);
+  const accionesFila = useMemo<AccionesFilaTransito>(() => ({
+    avanzar: (p, a) => { void avanzar(p, a); }, pendiente, puedeAvanzar: accesoPec.tracking,
+  }), [avanzar, pendiente, accesoPec.tracking]);
 
   // ── bloque 2: la tabla (TABLA-compras punto 8; R5, R26, D40, D41) ──
   const prefs = usePreferenciasTabla(ID_TRANSITO, COLUMNAS_TABLA_TRANSITO);
@@ -403,11 +411,12 @@ export default function TransitoPage() {
     const accion = accionEtapaTransito(p);
     return {
       ...tarjeta,
-      accionPrincipal: tarjeta.accionPrincipal && accion
+      // B4 T24 r1 (C1): «Iniciar» y «Completar» (PATCH /tracking) solo con tracking, también en el tablero (soloLectura no la quita).
+      accionPrincipal: accesoPec.tracking && tarjeta.accionPrincipal && accion
         ? { ...tarjeta.accionPrincipal, onClick: () => { void avanzar(p, accion); } }
         : null,
     };
-  }, [avanzar, pendiente]);
+  }, [avanzar, pendiente, accesoPec.tracking]);
   const textoTope = enKanban && !completa.cargandoInicial ? avisoTope200(completa.total, 'pedidos') : null;
   const sinEtapas = enKanban && itemsTablero !== null && columnasTablero.length === 0;
   const errorConfig = !cargandoConfig && config?.error != null;
@@ -566,13 +575,15 @@ export default function TransitoPage() {
           {enKanban ? (
             /* KANBAN-logistica punto 2: una columna por etapa del envío. Arrastrar solo lleva a la etapa siguiente del mismo
                pedido y equivale a «Completar»; lo demás queda bloqueado con su motivo ANTES de soltar. */
-            <TableroKanban
+            // B4 T24 r2 (m2, m10): mientras se lee el rol, el esqueleto (sin acciones) en lugar del tablero.
+            !accesoPec.listo ? <EsqueletoTablero /> : <TableroKanban
               tablero={tablero}
               regla={reglaTablero}
               tarjetaDe={tarjetaDe}
               onAbrir={abrirPedido}
               onCambio={cambiarDesdeTablero}
               aviso={avisoTablero}
+              soloLectura={accesoPec.soloLectura}
               color="blue"
               vacio="Sin pedidos en esta etapa"
             />

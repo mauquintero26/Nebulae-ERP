@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect, useCallback, useContext, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useContext, useLayoutEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -10,7 +10,7 @@ import {
 // la pantalla, las tarjetas, la franja del flujo y la pestaña Análisis estándar. El panel del PEC conserva lo de B1 a B3.
 import {
   SubNav, PageHeader, useAvisos, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila, ModalMotivo,
-  TableroKanban, useTableroKanban,
+  TableroKanban, EsqueletoTablero, useTableroKanban,
 } from '@/components/ui';
 import type { ItemMenuFila } from '@/components/ui';
 import {
@@ -22,19 +22,22 @@ import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
 import { PanelAnalisisPerezoso } from '@/components/analisis';
 import { COMP_NAV } from './comp-nav';
 
+import { FOCOS } from '@/lib/design-system';
+import { accesoCompras } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 import { apiFetch as _apiFetch } from '@/lib/api';
 import type { OpcionesApiFetch } from '@/lib/api';
-import { accionModo, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta } from '@/lib/tabla';
+import {
+  accionModo, accionVistaEnLista, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta, ordenEsAtencion,
+  textoOrdenHub,
+} from '@/lib/tabla';
 import { PERIODO_KPI, tarjetasHubCompras } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
-// Dos piezas genéricas que nacieron en las libs de Ventas (T7 y T10): el chip del orden y la vista desde Kanban.
-import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
-import { accionVistaEnLista } from '@/lib/listas-ventas';
 import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, consultaColumnaPec, grupoMesPec, infoEstadoPec,
   opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec, repartirCancelacionPec, resumenCancelacionPec, tarjetaPec,
   cancelarPecsEnSerie, despuesDeCancelarPec, textoVacioPec,
-  tituloMesPec, transicionesPec,
+  textoVencidosPec, tituloMesPec, transicionesPec,
 } from '@/lib/estados-compras';
 import {
   RUTA_HUB_COMPRAS, TEXTO_SEGUIMIENTO_CERRADO, accionPasoHubCompras, accionSemaforoCompras, avisosFlujoCompras, etiquetaEtapaTracking,
@@ -145,7 +148,9 @@ function PecDetailPanel({
   // B4 T14 (KANBAN-compras punto 7; R9, C15c): el botón Estado solo ofrece lo que acepta update_pec (transicionesPec):
   // emitir un borrador (PATCH) o cancelar, que abre el ModalMotivo de la página con su motivo. En tránsito y Recibido
   // los ponen el seguimiento y la recepción. Si el servidor dice que no, se ve su mensaje.
-  const transiciones = transicionesPec(detail?.estado);
+  // B4 T24 (FINAL-m10): «Cambiar Estado» y «Cancelar PEC» solo con el rol que hace el PATCH (accesoCompras).
+  const accesoPec = accesoCompras(useRolActual());
+  const transiciones = accesoPec.cambiarPec ? transicionesPec(detail?.estado) : [];
   const handleChangeEstado = async (est: string) => {
     setEditEstado(false);
     if (!pec) return;
@@ -361,7 +366,7 @@ function PecDetailPanel({
                     <div className="py-8 text-center space-y-3">
                       <p role="alert" className="text-sm font-bold text-rose-700">No se pudieron cargar los pedidos de venta.</p>
                       <button type="button" onClick={onReintentarVentas}
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-700">
+                        className={`inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 ${FOCO_VISIBLE}`}>
                         <RefreshCw size={13} aria-hidden="true"/> Reintentar
                       </button>
                     </div>
@@ -385,7 +390,8 @@ function PecDetailPanel({
                     </label>
                   ); })}
                 </div>
-                {selectedPvens.size > 0 && (
+                {/* r1 (m7): crear el PEC consolidado es POST /compras/pedidos (ADMIN y COMPRAS). */}
+                {selectedPvens.size > 0 && accesoPec.cambiarPec && (
                   <div className="p-4 border-t border-gray-100 bg-purple-50 flex items-center justify-between">
                     <span className="text-sm font-bold text-purple-800">{selectedPvens.size} PVEN seleccionado(s)</span>
                     <button onClick={handleConvertPvens} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-sm flex items-center gap-2">
@@ -450,9 +456,9 @@ type Cancelacion = {
   desdePanel: boolean;
 };
 
-const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-700';
+const FOCO_VISIBLE = FOCOS.purple;
 /** T14 r1 (m11): el foco de los botones de la barra masiva (fondo slate-900). */
-const FOCO_OSCURO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white';
+const FOCO_OSCURO = FOCOS.blanco;
 
 /** RP69: el asistente de hoy del Hub de Compras, con su título y sus ejemplos (sin códigos crudos ni emojis). */
 const ASISTENTE_COMPRAS = {
@@ -466,7 +472,11 @@ const ASISTENTE_COMPRAS = {
 };
 
 /** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
-type AccionesFilaHub = { abrir: (p: FilaPec) => void; ir: (ruta: string) => void; cancelar: (filas: FilaPec[]) => void };
+type AccionesFilaHub = {
+  abrir: (p: FilaPec) => void; ir: (ruta: string) => void; cancelar: (filas: FilaPec[]) => void;
+  /** r1 (m35): si el rol cambia los PEC (accesoCompras). */
+  cambiarPec: boolean;
+};
 const AccionesFila = React.createContext<AccionesFilaHub | null>(null);
 
 /**
@@ -475,11 +485,13 @@ const AccionesFila = React.createContext<AccionesFilaHub | null>(null);
  */
 function CeldaAcciones({ p }: { p: FilaPec }) {
   const acciones = useContext(AccionesFila);
+  // r1 (m35): el permiso llega por el contexto (como Tránsito con puedeAvanzar): sin leer el rol en cada fila.
+  const cambiarPec = acciones?.cambiarPec ?? false;
   const items: ItemMenuFila[] = [
     { etiqueta: 'Ver detalle', icono: Eye, onClick: () => acciones?.abrir(p) },
     { etiqueta: 'Ver en Pedidos de compra', icono: ExternalLink, onClick: () => acciones?.ir(`/dashboard/compras/pedidos?id=${p.id}`) },
     { etiqueta: 'Cancelar PEC', icono: Trash2, peligro: true, onClick: () => acciones?.cancelar([p]),
-      oculto: !transicionesPec(p.estado).includes('CANCELADO') },
+      oculto: !cambiarPec || !transicionesPec(p.estado).includes('CANCELADO') },
   ];
   return (
     <span className="flex items-center justify-end gap-0.5">
@@ -508,7 +520,7 @@ const TITULOS_ORDEN_HUB = titulosDeOrdenPec(COLUMNAS_TABLA_HUB);
 function pestanasDelHub(conteos: ConteosPec | null): PestanaTabla[] {
   return [
     { id: 'todos', etiqueta: 'Todos', conteo: conteos?.todos ?? null },
-    { id: 'no_resueltos', etiqueta: 'No resueltos', conteo: conteos?.no_resueltos ?? null, alerta: (conteos?.vencidos ?? 0) > 0 },
+    { id: 'no_resueltos', etiqueta: 'No resueltos', conteo: conteos?.no_resueltos ?? null, alerta: textoVencidosPec(conteos?.vencidos) },
     { id: 'pedidos', etiqueta: 'Pedidos de compra', conteo: conteos?.pedidos ?? null },
     { id: 'en_transito', etiqueta: 'En tránsito', conteo: conteos?.en_transito ?? null },
     { id: 'en_bodega', etiqueta: 'Recepciones', conteo: conteos?.en_bodega ?? null },
@@ -534,11 +546,22 @@ export default function ComprasHub() {
   // las tarjetas, la tabla y el tablero despachan a él. El modo (Lista o Kanban) se guarda en vista:compras.hub. Ya no
   // hay arreglos en memoria (antes, los 200 más recientes filtrados y contados en el navegador).
   const [estado, despachar, listo] = useEstadoTabla(ID_HUB, INICIAL_HUB);
+  // B4 T24 (FINAL-m10, m31 y m38): el rol después de montar (useRolActual) decide si se cambian los PEC (accesoCompras: PATCH y DELETE
+  // /compras/pedidos y PATCH /tracking son de ADMIN y COMPRAS); sin permiso, el tablero es solo para ver y no se ofrecen sus acciones.
+  const accesoPec = accesoCompras(useRolActual());
   const enKanban = estado.modo === 'kanban';
   // R13: ?tab=analisis («Ver análisis» de las listas de Compras) abre la pestaña Análisis; se lee de window.location al
   // montar (AuthGuard pinta el dashboard solo en el navegador, como el Hub de Ventas). Análisis es un estado de la
   // página, nunca una vista de la tabla (RP35).
-  const [enAnalisis, setEnAnalisis] = useState(() => leerEnlaceHubCompras(typeof window === 'undefined' ? '' : window.location.search).analisis);
+  // B4 T24 (FINAL-C3): Análisis arranca apagado y lo enciende el useLayoutEffect de montaje si la URL NUEVA lo pide. En una
+  // navegación con <Link>, Next 16 cambia la URL en el useInsertionEffect de HistoryUpdater, después del render: el
+  // inicializador de useState leía la URL de la página anterior (la del Hub de Ventas con ?tab=analisis abría este Análisis
+  // sin que nadie lo pidiera, y «Ver análisis» podía no abrirlo). Este efecto corre en el mismo commit, antes de pintar.
+  const [enAnalisis, setEnAnalisis] = useState(false);
+  useLayoutEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- FINAL-C3: la URL de la navegación existe recién en el commit
+    if (leerEnlaceHubCompras(window.location.search).analisis) setEnAnalisis(true);
+  }, []);
 
   // La tabla (T12): GET /compras/pedidos con vista, estados, semáforo, q, orden, limit y offset del estado, más los conteos
   // de las pestañas en la MISMA llamada. esperar: !listo (D40): el esqueleto, nunca «vacío». En Análisis no pide nada
@@ -686,14 +709,15 @@ export default function ComprasHub() {
   const abrir = useCallback((p: FilaPec) => setSelectedPec(p), []);
   const accionesFila = useMemo<AccionesFilaHub>(() => ({
     abrir, ir: (ruta) => router.push(ruta), cancelar: (filas) => pedirCancelacion(filas),
-  }), [abrir, router, pedirCancelacion]);
+    cambiarPec: accesoPec.cambiarPec,
+  }), [abrir, router, pedirCancelacion, accesoPec.cambiarPec]);
   const pestanas = pestanasDelHub(conteos);
   // m2 de T8: el conmutador Lista / Kanban poda los estados con las opciones del modo nuevo (las columnas del tablero, o
   // las de la pestaña en Lista), con la regla de accionPestana (accionModo); lo demás de la barra va directo.
   const alCambiarBarra = useCallback((accion: AccionTabla) => {
     if (accion.tipo === 'modo') {
       const modo = String(accion.valor);
-      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEC : opcionesEstadosPec));
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEC : opcionesEstadosPec, COLUMNAS_PEC));
     } else despachar(accion);
   }, [estado, despachar]);
   // R8: ordenada por una columna, el chip «Orden: … · Atención primero» vuelve a lo vencido primero.
@@ -834,10 +858,13 @@ export default function ComprasHub() {
           subtitle="Compras a proveedores, envíos en camino y recepción en bodega."
           actions={(
             <div className="flex flex-wrap items-center gap-2.5">
-              <Link href="/dashboard/compras/pedidos"
-                className="flex items-center gap-2 px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all">
-                <ContenidoEnlace icon={Plus}>Nuevo PEC</ContenidoEnlace>
-              </Link>
+              {/* B4 T24 r2 (m7): crear un PEC es POST /compras/pedidos (ADMIN y COMPRAS). */}
+              {accesoPec.cambiarPec && (
+                <Link href="/dashboard/compras/pedidos"
+                  className="flex items-center gap-2 px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all">
+                  <ContenidoEnlace icon={Plus}>Nuevo PEC</ContenidoEnlace>
+                </Link>
+              )}
               <button type="button" onClick={recargarTodo}
                 className={`flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-semibold text-xs shadow-xs transition-colors ${FOCO_VISIBLE}`}>
                 <RefreshCw size={13} aria-hidden="true" className={actualizando ? 'animate-spin' : ''}/> Actualizar
@@ -936,20 +963,22 @@ export default function ComprasHub() {
           ) : enKanban ? (
             /* KANBAN-compras punto 7: Borrador · Emitido · En tránsito · En bodega · Recibido (plegada) · Cancelado
                (plegada). Lo que no se puede queda bloqueado con su motivo y su enlace ANTES de soltar (reglaSoltarPec). */
-            <TableroKanban
+            // B4 T24 r2 (m2, m10): mientras se lee el rol, el esqueleto (sin acciones) en lugar del tablero.
+            !accesoPec.listo ? <EsqueletoTablero /> : <TableroKanban
               tablero={tablero}
               regla={reglaSoltarPec}
               tarjetaDe={tarjetaPec}
               onAbrir={abrir}
               onCambio={cambiarDesdeTablero}
               onAccion={accionDesdeTablero}
+              soloLectura={accesoPec.soloLectura}
               color="purple"
             />
           ) : null}
         </div>
 
         {/* La barra masiva (la selección es de la página de la tabla, así que solo en Lista): cancelar con un motivo. */}
-        {seleccion.length > 0 && !enAnalisis && !enKanban && (
+        {seleccion.length > 0 && !enAnalisis && !enKanban && accesoPec.cambiarPec && (
           <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-4 z-40 border border-slate-700">
             <span className="font-bold text-sm bg-slate-800 px-3 py-1 rounded-full">{seleccion.length} {seleccion.length === 1 ? 'seleccionado' : 'seleccionados'}</span>
             {/* T14 r1 (m11): sobre el fondo oscuro, un foco blanco que se vea (el anillo del navegador apenas contrasta). */}

@@ -4,8 +4,9 @@
  * - V1: el aviso «N atrasados» deja de flotar (fixed) sobre la cabecera: es un elemento del menú lateral (Sidebar), con
  *   la misma carga de siempre (cada 5 min, sin consultar con la pestaña oculta ni con el re-ingreso pendiente).
  *   textoAtrasados (hub-ventas.js) y guardias de layout.tsx, AlertasBadge.tsx y Sidebar.tsx.
- * - V2: el menú «⋮» de la fila de solicitudes va con position: fixed calculado desde el botón (posicionMenuFila,
- *   listas-ventas.js): el overflow de la tabla ya no lo corta y, si no cabe abajo, se abre hacia arriba.
+ * - V2: el menú «⋮» de la fila de solicitudes va con position: fixed calculado desde el botón: el overflow de la tabla ya
+ *   no lo corta y, si no cabe abajo, se abre hacia arriba. B4 T8: es MenuFila (posicionMenu, probada en test_tabla.mjs); B4
+ *   T24 f2 (F48): se retiraron posicionMenuFila, botonALaVista y recortesDeAncestros (solo las usaban sus pruebas).
  * - V3: la cabecera de las tarjetas de la Actividad (título + fecha) es UN componente (CabeceraActividad de flujo.tsx)
  *   en la SC, la COT y el PVEN: el título usa el ancho que haya y la fecha no se encoge ni se sale.
  * - V4: la caja del Chatter va en el flujo normal (sin sticky): el botón «Guardar nota» no tapa la lista.
@@ -27,7 +28,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { textoAtrasados, RUTA_HUB_VENTAS } from '../src/lib/hub-ventas.js';
-import { posicionMenuFila, botonALaVista, recortesDeAncestros } from '../src/lib/listas-ventas.js';
 import { inicialesAutor } from '../src/lib/detalle-layout.js';
 
 // Con los saltos de línea normalizados (el checkout de Windows deja CRLF en algunos archivos).
@@ -81,7 +81,9 @@ console.log('--- V1 TEST 2: el aviso vive en el menú lateral, ya no flota sobre
   assert.ok(/textoAtrasados\(/.test(badge), 'el texto sale de textoAtrasados');
   // B3 T18 (H28-cambios punto 11, C22): las pastillas de cambios del cliente se muestran aunque no haya atrasados;
   // sin ninguna no se muestra nada (antes: «if (!texto) return null;») y, sin atrasados, la roja no se pinta (r1).
-  assert.ok(/if \(!texto && pastillas\.length === 0\) return null;/.test(badge), 'sin atrasados ni cambios no se muestra nada');
+  // B4 T24 (F42, D27): sin ninguna no se muestra NADA a la vista, pero el alto queda reservado (un div vacío aria-hidden): que el aviso
+  // llegue después no corre el menú.
+  assert.ok(/if \(!texto && pastillas\.length === 0\) return <div aria-hidden="true" className=\{RESERVA\} \/>;/.test(badge), 'sin atrasados ni cambios no se muestra nada (solo el alto reservado)');
   assert.ok(/\{texto && <PastillaMenuLateral\b/.test(badge), 'sin atrasados no se pinta la roja');
   assert.ok(badge.includes('router.push(RUTA_HUB_VENTAS)') && RUTA_HUB_VENTAS === '/dashboard/ventas', 'el clic lleva al Hub');
   assert.ok(/icono=\{AlertTriangle\}/.test(badge), 'con el ícono AlertTriangle');
@@ -119,37 +121,6 @@ console.log('--- V1 TEST 2: el aviso vive en el menú lateral, ya no flota sobre
   assert.ok(/<AlertasBadge colapsado=\{isCollapsed\} \/>/.test(sidebar), 'con el estado contraído del menú');
   // Arriba: antes de la lista de grupos del menú.
   assert.ok(sidebar.indexOf('<AlertasBadge') < sidebar.indexOf('MENU_ITEMS.map('), 'arriba, antes de los grupos');
-}
-
-console.log('--- V2 TEST 1: posicionMenuFila abre abajo, alineado a la derecha del botón ---');
-{
-  const ventana = { ancho: 1440, alto: 900 };
-  const menu = { ancho: 224, alto: 150 };
-  assert.deepEqual(posicionMenuFila({ top: 100, bottom: 127, right: 900 }, menu, ventana), { top: 131, left: 676 });
-  // Coordenadas con decimales (getBoundingClientRect): se redondean.
-  assert.deepEqual(posicionMenuFila({ top: 100.4, bottom: 127.4, right: 900.6 }, menu, ventana), { top: 131, left: 677 });
-}
-
-console.log('--- V2 TEST 2: si no cabe abajo y arriba sí, se abre hacia arriba ---');
-{
-  const ventana = { ancho: 1440, alto: 900 };
-  const menu = { ancho: 224, alto: 150 };
-  assert.deepEqual(posicionMenuFila({ top: 850, bottom: 877, right: 900 }, menu, ventana), { top: 696, left: 676 });
-  // Desde 731 cabe (731 + 150 = 881 <= 900 - 8) y se queda abajo; desde 771 ya no (921 > 892) y se abre hacia arriba.
-  assert.deepEqual(posicionMenuFila({ top: 700, bottom: 727, right: 900 }, menu, ventana), { top: 731, left: 676 });
-  assert.deepEqual(posicionMenuFila({ top: 740, bottom: 767, right: 900 }, menu, ventana), { top: 586, left: 676 });
-}
-
-console.log('--- V2 TEST 3: nunca se sale de la ventana (margen de 8 px) ---');
-{
-  const menu = { ancho: 224, alto: 150 };
-  // Botón pegado a la izquierda: el menú no se sale por la izquierda.
-  assert.equal(posicionMenuFila({ top: 100, bottom: 127, right: 100 }, menu, { ancho: 1440, alto: 900 }).left, 8);
-  // Botón más allá del borde derecho: el menú queda dentro.
-  assert.equal(posicionMenuFila({ top: 100, bottom: 127, right: 1500 }, menu, { ancho: 1440, alto: 900 }).left, 1208);
-  // No cabe ni abajo ni arriba (ventana baja): se queda dentro, arriba del todo.
-  assert.deepEqual(posicionMenuFila({ top: 90, bottom: 110, right: 600 }, { ancho: 224, alto: 300 }, { ancho: 1024, alto: 200 }),
-    { top: 8, left: 376 });
 }
 
 console.log('--- V2 TEST 4: el menú de fila de la lista de solicitudes usa la posición fija ---');
@@ -289,7 +260,9 @@ console.log('--- V8 TEST 2: los avatares de la Actividad de la SC y la COT usan 
 console.log('--- V10 TEST (ronda 1): la pila de avisos va arriba al centro ---');
 {
   const avisos = sinComentarios(leer('components/ui/Avisos.tsx'));
-  const pila = avisos.match(/<div className="([^"]*\bz-\[90\][^"]*)">/);
+  // B4 T24 f2 (m9, D27): la pila lleva además data-superficie="avisos" (va encima de las ventanas: la capa de arriba no le quita el
+  // foco). Las clases que se fijan abajo son las mismas.
+  const pila = avisos.match(/<div data-superficie="avisos" className="([^"]*\bz-\[90\][^"]*)">/);
   assert.ok(pila, 'la pila de avisos (z-[90]) encontrada');
   // Arriba al centro (decisión del controlador, ronda 1): a la derecha tapaba «Editar» y «Cancelar Solicitud» de las
   // cabeceras, y abajo el botón principal de las ventanas. Mismo z-index, orden (flex-col) y pointer-events.
@@ -344,61 +317,6 @@ console.log('--- R1 (4) TEST: la tarjeta de Activas de la pestaña Análisis no 
   assert.equal((lista.match(/pistaActivasSolicitudes\(/g) ?? []).length, 0, 'la pantalla no arma la pista: la da tarjetasSolicitudes');
 }
 
-console.log('--- R1 (5) TEST 1: botonALaVista (el centro del botón dentro de la ventana y de sus contenedores) ---');
-{
-  const ventana = { top: 0, left: 0, right: 1440, bottom: 900 };
-  const boton = { top: 100, bottom: 127, left: 880, right: 907 };
-  assert.equal(botonALaVista(boton, [ventana]), true);
-  assert.equal(botonALaVista(boton, [ventana, { top: 50, left: 300, right: 1400, bottom: 800 }]), true);
-  // Fuera de la ventana (desplazado hacia arriba) o fuera del contenedor con overflow (la tabla desplazada).
-  assert.equal(botonALaVista({ top: -40, bottom: -13, left: 880, right: 907 }, [ventana]), false);
-  assert.equal(botonALaVista(boton, [ventana, { top: 130, left: 300, right: 1400, bottom: 800 }]), false, 'tapado arriba');
-  assert.equal(botonALaVista(boton, [ventana, { top: 50, left: 300, right: 890, bottom: 800 }]), false, 'tapado a la derecha');
-  // Medio botón a la vista: el centro decide (113,5 dentro de [110, 800] sí; dentro de [115, 800] no).
-  assert.equal(botonALaVista(boton, [ventana, { top: 110, left: 300, right: 1400, bottom: 800 }]), true);
-  assert.equal(botonALaVista(boton, [ventana, { top: 115, left: 300, right: 1400, bottom: 800 }]), false);
-  // Sin rectángulo (el botón ya no está): no está a la vista. Sin recortes: a la vista.
-  assert.equal(botonALaVista(null, [ventana]), false);
-  assert.equal(botonALaVista(boton, []), true);
-  // Revisión final (F11, M2): también por abajo y por la izquierda (centro del botón: x 893,5; y 113,5).
-  assert.equal(botonALaVista({ top: 890, bottom: 917, left: 880, right: 907 }, [ventana]), false, 'fuera por abajo');
-  assert.equal(botonALaVista({ top: 100, bottom: 127, left: -30, right: -3 }, [ventana]), false, 'fuera por la izquierda');
-  assert.equal(botonALaVista(boton, [ventana, { top: 50, left: 300, right: 1400, bottom: 110 }]), false, 'tapado abajo');
-  assert.equal(botonALaVista(boton, [ventana, { top: 50, left: 900, right: 1400, bottom: 800 }]), false, 'tapado a la izquierda');
-  // El borde exacto cuenta como a la vista.
-  assert.equal(botonALaVista(boton, [ventana, { top: 50, left: 893.5, right: 1400, bottom: 113.5 }]), true, 'en el borde');
-}
-
-console.log('--- R1 (5) TEST 1b (revisión final, F11 M2): recortesDeAncestros, la lógica de recortesDe ---');
-{
-  const ventana = { ancho: 1440, alto: 900 };
-  const caja = (top, left, right, bottom) => ({ top, left, right, bottom });
-  // Sin ancestros: solo la ventana.
-  assert.deepEqual(recortesDeAncestros(ventana, []), [caja(0, 0, 1440, 900)]);
-  // Solo recorta un ancestro con overflow distinto de visible en algún eje (auto, hidden, scroll, clip).
-  const ancestros = [
-    { overflowX: 'visible', overflowY: 'visible', rect: caja(1, 1, 2, 2) },
-    { overflowX: 'auto', overflowY: 'visible', rect: caja(10, 20, 1000, 800) },
-    { overflowX: 'visible', overflowY: 'hidden', rect: caja(30, 40, 900, 700) },
-    { overflowX: 'scroll', overflowY: 'scroll', rect: caja(50, 60, 800, 600) },
-    { overflowX: 'clip', overflowY: 'visible', rect: caja(70, 80, 700, 500) },
-  ];
-  assert.deepEqual(recortesDeAncestros(ventana, ancestros),
-    [caja(0, 0, 1440, 900), caja(10, 20, 1000, 800), caja(30, 40, 900, 700), caja(50, 60, 800, 600), caja(70, 80, 700, 500)]);
-  // Solo top/left/right/bottom (un DOMRect trae más claves); entradas rotas se ignoran.
-  const domRect = { ...caja(5, 6, 7, 8), x: 6, y: 5, width: 1, height: 3 };
-  assert.deepEqual(recortesDeAncestros(ventana, [{ overflowX: 'hidden', overflowY: 'hidden', rect: domRect }, null, {}]),
-    [caja(0, 0, 1440, 900), caja(5, 6, 7, 8)]);
-  assert.deepEqual(recortesDeAncestros(ventana, undefined), [caja(0, 0, 1440, 900)]);
-  // Con botonALaVista: el botón dentro de la ventana pero fuera de la tabla desplazada no está a la vista.
-  const boton = { top: 100, bottom: 127, left: 880, right: 907 };
-  assert.equal(botonALaVista(boton, recortesDeAncestros(ventana, [{ overflowX: 'auto', overflowY: 'visible', rect: caja(0, 0, 850, 900) }])), false);
-  // B4 T8 (D27): recortesDe se fue con RowMenu (la lista usa MenuFila, que no deja el menú flotando: se cierra con
-  // cualquier scroll, ver el TEST 2). recortesDeAncestros y botonALaVista quedan probadas arriba como funciones puras.
-  const lista = sinComentarios(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx'));
-  assert.ok(!lista.includes('function recortesDe(') && !lista.includes('function RowMenu('), 'sin el menú propio de la lista');
-}
-
 console.log('--- R1 (5) TEST 2: RowMenu se cierra si su botón sale de la vista (solo al desplazar o redimensionar) ---');
 {
   // B4 T8 (D27, R11): el menú de la fila es MenuFila. Un scroll (de la página o de la tabla, en captura) o un cambio de
@@ -406,6 +324,8 @@ console.log('--- R1 (5) TEST 2: RowMenu se cierra si su botón sale de la vista 
   // lo cierra (la primera medición solo lo ubica y lo muestra).
   const lista = sinComentarios(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx'));
   assert.ok(/<MenuFila items=\{items\}/.test(cuerpo(lista, 'function CeldaAcciones(')), 'la fila usa MenuFila');
+  // B4 T24 f2 (F48, D27): lo que fijaba el final de TEST 1b (retirado con recortesDeAncestros): sin el menú propio ni recortesDe.
+  assert.ok(!lista.includes('function recortesDe(') && !lista.includes('function RowMenu('), 'sin el menú propio de la lista');
   const menu = sinComentarios(leer('components/ui/MenuFila.tsx'));
   assert.ok(/const alDesplazar = \(e: Event\) => \{\s*if \(!\(e\.target instanceof Node && menu\.current\?\.contains\(e\.target\)\)\) setAbierto\(false\);/.test(menu),
     'un scroll fuera del menú lo cierra');

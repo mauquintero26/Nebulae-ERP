@@ -424,7 +424,9 @@ console.log('--- TEST 15: JS puro (sin React ni DOM) y congelar importado, no co
   assert.ok(!/esPecAtrasado/.test(fuente), 'RP28/RP93: no se crea esPecAtrasado');
   // T14 r1 (m6): el día de entrega sale de diaPec en los dos lados (la celda y la regla de vencido), sin repetir la regla.
   assert.match(fuente, /export function esPecVencido\(p, hoy = diaColombia\(\)\) \{\s*const dia = diaPec\(p\?\.fecha_entrega_estimada\);/);
-  assert.equal((fuente.match(/\.slice\(0, 10\)/g) ?? []).length, 1, 'la extracción del día, una sola vez (en diaPec)');
+  // B4 T24 (FINAL-m30, D27): diaPec es diaDeNegocio de fechas-colombia.js (la misma función): aquí no queda ninguna extracción del día.
+  assert.equal((fuente.match(/\.slice\(0, 10\)/g) ?? []).length, 0, 'la extracción del día vive en fechas-colombia.js');
+  assert.match(fuente, /import \{[^}]*\bdiaDeNegocio as diaPec\b[^}]*\} from '\.\/fechas-colombia\.js';/);
   // T14 r1 (m7): el número del servidor es numeroFinito de kpis.js (una sola política), sin copia local.
   assert.match(fuente, /import \{[^}]*\bnumeroFinito\b[^}]*\} from '\.\/kpis\.js'/);
   assert.match(fuente, /monto: numeroFinito\(p\?\.total_cop\),/);
@@ -653,12 +655,17 @@ console.log('--- TEST 24 (B4 T14 r1: I1, m10, m15): cancelar en serie y lo que h
   assert.equal(mezcla.mensajeOk, '1 pedido de compra cancelado');
   assert.ok(mezcla.error instanceof Error);
   assert.equal(mezcla.error.message, `${textoDeError(conflicto)}\nPEC-3: ${textoDeError(invalido)}`);
-  // Todos mal con un 422: nada sale de la selección, no se recarga (el dato no cambió), ningún aviso de éxito.
+  // Todos mal con un 422: nada sale de la selección y ningún aviso de éxito. B4 T24 (F8, D27): un 422 también pide recargar (la lista y el
+  // detalle; recargarTrasError lo cuenta sin mirar el detail); los PVEN no, porque no se canceló nada.
   const malos = [pecs[0], pecs[2]].map((p) => ({ id: p.id, numero: p.numero, ok: false, error: textoDeError(invalido), err: invalido }));
   const todosMal = ec.despuesDeCancelarPec([pecs[0], pecs[2]], malos, []);
   assert.deepEqual(todosMal.fuera, []);
   assert.deepEqual(todosMal.pendientes, [pecs[0], pecs[2]]);
-  assert.deepEqual([todosMal.recargar, todosMal.recargarVentas, todosMal.recargarDetalle, todosMal.mensajeOk], [false, false, false, null]);
+  assert.deepEqual([todosMal.recargar, todosMal.recargarVentas, todosMal.recargarDetalle, todosMal.mensajeOk], [true, false, true, null]);
+  // Un 500 sigue sin recargar (el dato no cambió).
+  const errorServidor = Object.assign(new Error('boom'), { status: 500 });
+  const con500 = ec.despuesDeCancelarPec([pecs[0]], [{ id: 1, numero: 'PEC-1', ok: false, error: 'boom', err: errorServidor }], []);
+  assert.deepEqual([con500.recargar, con500.recargarDetalle], [false, false]);
   assert.equal(todosMal.error.message, `PEC-1: ${textoDeError(invalido)}\nPEC-3: ${textoDeError(invalido)}`);
   // Uno solo con el 409: se relanza el MISMO error (el modal muestra el detail del servidor) y se recarga, también el
   // detalle del panel abierto (m10); los PVEN no, porque no se canceló nada.
@@ -778,7 +785,8 @@ console.log('--- TEST 23 (B4 T14): el Hub de Compras (compras/page.tsx) cablea l
   assert.match(hub, /if \(vigente\) setVentas\(\{ filas: Array\.isArray\(r\)[^\n]*, error: null \}\); \}\)/,
     'un éxito limpia el error');
   // T14 r1 (m11, m12, m13): foco de la barra masiva, nombres del panel, «Pago y logística» y el respaldo de F. compra.
-  assert.match(hub, /const FOCO_OSCURO = '[^']*focus-visible:outline-white';/);
+  // B4 T24 (FINAL-m25, D27): el foco blanco común de design-system.ts (FOCOS.blanco: outline-white separado 2 px).
+  assert.match(hub, /const FOCO_OSCURO = FOCOS\.blanco;/);
   assert.equal((hub.match(/\$\{FOCO_OSCURO\}/g) ?? []).length, 2, 'los dos botones de la barra masiva');
   assert.match(hub, /aria-label=\{`Acciones de \$\{/);
   assert.match(hub, /aria-label="Cerrar el panel"/);
@@ -880,9 +888,10 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
   assert.ok(!/catch \{\s*\}|catch \{ setProdSearchResults\(\[\]\); \}/.test(pag), 'ningún error mudo');
   assert.equal((pag.match(/avisarError\(err, 'No se pudo buscar el (?:casillero|proveedor|producto)'\)/g) ?? []).length, 4, 'las cuatro búsquedas');
   // El menú de fila (MenuFila) ofrece solo lo que acepta update_pec (R9, C15c): Emitir desde Borrador y cancelar con motivo.
-  assert.match(pag, /etiqueta: 'Marcar Emitido'[\s\S]{0,300}oculto: !transicionesPec\(p\.estado\)\.includes\('EMITIDO'\)/);
-  assert.match(pag, /etiqueta: 'Cancelar PEC'[\s\S]{0,200}oculto: !transicionesPec\(p\.estado\)\.includes\('CANCELADO'\)/);
-  assert.match(pag, /etiqueta: 'Eliminar definitivamente'[\s\S]{0,200}oculto: etapaPec\(p\.estado\) !== 'cancelado'/);
+  // B4 T24 (FINAL-m10, D27): además, solo con el rol que hace el PATCH y el DELETE (accesoPec.cambiarPec; r1, m35: la celda lo recibe por el contexto como cambiarPec).
+  assert.match(pag, /etiqueta: 'Marcar Emitido'[\s\S]{0,300}oculto: !cambiarPec \|\| !transicionesPec\(p\.estado\)\.includes\('EMITIDO'\)/);
+  assert.match(pag, /etiqueta: 'Cancelar PEC'[\s\S]{0,200}oculto: !cambiarPec \|\| !transicionesPec\(p\.estado\)\.includes\('CANCELADO'\)/);
+  assert.match(pag, /etiqueta: 'Eliminar definitivamente'[\s\S]{0,200}oculto: !cambiarPec \|\| etapaPec\(p\.estado\) !== 'cancelado'/);
   assert.match(pag, /<MenuFila items=\{items\} etiqueta=\{`Acciones de \$\{p\.numero\}`\} \/>/);
   // El tablero (KANBAN-compras punto 6): las reglas de R9, la tarjeta con «Recepcionar» y D39.
   assert.match(pag, /regla=\{reglaSoltarPec\}/);
@@ -900,7 +909,8 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
   assert.ok(!/\.catch\(\(\) ?=> ?\{\}\)/.test(pag), 'ningún error se traga');
   assert.ok(!/estado: ?'RECIBIDO'/.test(pag) && !/estado: ?'EN_TRANSITO'/.test(pag), 'ningún PATCH a mano a tránsito o recibido');
   assert.ok(!/Object\.entries\(PEC_ESTADOS\)|PEC_ESTADOS/.test(pag), 'el botón Estado ya no ofrece todos los estados');
-  assert.match(pag, /const transiciones = transicionesPec\(detail\?\.estado\);/);
+  // B4 T24 (FINAL-m10, D27): sin el rol del PATCH, ninguna transición a mano.
+  assert.match(pag, /const transiciones = accesoPec\.cambiarPec \? transicionesPec\(detail\?\.estado\) : \[\];/);
   // «Eliminar definitivamente» con confirmar de useAvisos (RP30), en el panel y en el menú.
   assert.equal((pag.match(/await confirmar\(\{/g) ?? []).length >= 3, true, 'el panel, el menú de fila y el casillero');
   // Las tarjetas (KPI-compras punto 6; R12, RP92): las cuatro de /compras/stats, pulsables como sus vistas.
@@ -934,8 +944,9 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
   // T15 r1 (m4, m14): con el PEC cancelado el TrackingPanel es de solo lectura (seguimientoCerrado, la regla del detalle).
   assert.match(pag, /const cerrado = seguimientoCerrado\(pec\.estado\);/);
   assert.match(pag, /\{cerrado \? \([\s\S]{0,200}\{TEXTO_SEGUIMIENTO_CERRADO\}[\s\S]{0,120}\) : \([\s\S]{0,120}<PasosFlujo variante="barra" pasos=\{pasosDeTracking\(stages\)\}/);
-  assert.match(pag, /const isEditing = !cerrado && editStage === sd\.stage;/);
-  assert.match(pag, /\{!cerrado && \(\s*<button onClick=\{\(\)=>openEdit\(sd\)\}/, 'sin editar las etapas de un cancelado');
+  // B4 T24 r1 (m2, D27): y solo con el rol del PATCH /tracking (puedeEditar).
+  assert.match(pag, /const isEditing = !cerrado && puedeEditar && editStage === sd\.stage;/);
+  assert.match(pag, /\{!cerrado && puedeEditar && \(\s*<button onClick=\{\(\)=>openEdit\(sd\)\}/, 'sin editar las etapas de un cancelado');
   assert.ok(!/stageColor|diasTexto|Math\.ceil\(\(new Date/.test(pag), 'sin la barra a mano ni la cuenta de días con el reloj local');
   assert.match(pag, /fecha_entrega_estimada: infoForm\.fecha_entrega_estimada \|\| null/, '«Editar información» manda null en blanco, como el alta');
   assert.ok(!/updated_by: ?localStorage/.test(pag), 'updated_by = autorActual() (sin sesión se omite)');
@@ -1347,6 +1358,28 @@ console.log('--- TEST 32 (B4 T16A): Recepciones (compras/recepciones/page.tsx) y
   assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(pag.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')), 'sin diálogos nativos');
 }
 
+console.log('--- TEST 33-b (B4 T24 r1, m15): la recarga silenciosa del conteo de una recepción no pisa lo escrito ---');
+{
+  const { recargaReponeLineas } = await import('../src/lib/estados-compras.js');
+  // La carga completa (al abrir) siempre llena las líneas; la silenciosa, solo si ya no está por confirmar (otro la confirmó o la canceló).
+  assert.equal(recargaReponeLineas({ silencioso: false, recepcion: { estado: 'BORRADOR' } }), true, 'al abrir');
+  assert.equal(recargaReponeLineas({ recepcion: { estado: 'BORRADOR' } }), true, 'por defecto, completa');
+  assert.equal(recargaReponeLineas({ silencioso: true, recepcion: { estado: 'BORRADOR' } }), false, 'en BORRADOR, lo escrito queda');
+  assert.equal(recargaReponeLineas({ silencioso: true, recepcion: { estado: ' BORRADOR ' } }), false);
+  for (const estado of ['CONFIRMADA', 'CONFIRMADA_CON_DIFERENCIAS', 'CANCELADA']) {
+    assert.equal(recargaReponeLineas({ silencioso: true, recepcion: { estado } }), true, `${estado}: cambió en otro lado`);
+  }
+  assert.equal(recargaReponeLineas({ silencioso: true, recepcion: null }), true, 'sin datos: lo del servidor');
+  const cont = readFileSync(new URL('../src/app/dashboard/compras/recepciones/[id]/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(cont, /const loadRecepcion = useCallback\(async \(\{ silencioso = false \}: \{ silencioso\?: boolean \} = \{\}\) => \{/);
+  assert.match(cont, /if \(!silencioso\) \{ setLoading\(true\); setLoadError\(''\); \}/, 'la silenciosa no muestra el spinner');
+  assert.match(cont, /if \(recargaReponeLineas\(\{ silencioso, recepcion: d \}\)\) \{\s*setItems\(/);
+  assert.match(cont, /if \(!silencioso\) setLoadError\(err\.message \|\| 'No se pudo cargar la recepción'\);\s*else avisarError\(err, 'No se pudo recargar la recepción'\);/);
+  assert.match(cont, /if \(!silencioso\) setLoading\(false\);\s*\}, \[params\.id, avisarError\]\);/);
+  // Guardar el conteo (lo primero que hace validar) también recarga en silencio: el spinner vaciaba las observaciones antes de validar.
+  assert.match(cont, /productos: items\.map\(i => \(\{ grl_id: i\.grl_id, qty_recibida: Number\(i\.qty_recibida\) \|\| 0 \}\)\),\s*\}\),\s*\}\);\s*await loadRecepcion\(\{ silencioso: true \}\);/);
+}
+
 console.log('--- TEST 33 (B4 T16A, TABLA-compras punto 12; RP30): el conteo de una recepción (recepciones/[id]/page.tsx) en modo simple y sin diálogos nativos ---');
 {
   const cont = readFileSync(new URL('../src/app/dashboard/compras/recepciones/[id]/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
@@ -1359,7 +1392,9 @@ console.log('--- TEST 33 (B4 T16A, TABLA-compras punto 12; RP30): el conteo de u
   }
   assert.match(cont, /avisarError\(err, 'No se pudieron cargar las bodegas'\)/, 'la lista de bodegas ya no se traga el error');
   assert.ok(!/\.catch\(\(\) => \{\}\)/.test(cont) && !/\.catch\(\(\) => (\[\]|null)\)/.test(cont), 'ningún error se traga');
-  assert.match(cont, /if \(recargarTrasError\(err\)\) await loadRecepcion\(\);/, 'validar: un 409 recarga lo que se ve');
+  // r1 (m15): validar con un error que pide recargar (también un 422, F8) recarga EN SILENCIO: sin el spinner de página (que desmonta el
+  // conteo y vacía las «Observaciones Físicas») y sin volver a llenar las líneas mientras siga en BORRADOR (recargaReponeLineas).
+  assert.match(cont, /if \(recargarTrasError\(err\)\) await loadRecepcion\(\{ silencioso: true \}\);/, 'validar: un 409 o un 422 recarga en silencio');
   // La tabla (modo simple, D40): una instancia de preferencias, una tabla y los campos de conteo siguen editables.
   assert.match(cont, /const prefsConteo = usePreferenciasTabla\('compras\.recepcion\.conteo', COLUMNAS_CONTEO\);/);
   assert.match(cont, /<TablaEstandar id="compras\.recepcion\.conteo" modo="simple" columnas=\{COLUMNAS_CONTEO\} preferencias=\{prefsConteo\}/);
@@ -2394,8 +2429,8 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   trae(stock, 'celda: (f) => <CeldaEstadoExistencia f={f} /> },', 'Stock: el estado lleva «Reservado»');
   trae(stock, "existenciaReservada(f) ? ' · Reservado: hay unidades en bodega, todas comprometidas' : ''", 'Stock: el title dice Reservado');
   trae(piezas, '{existenciaReservada(f) && <span className={`${CHIP} border-amber-200 bg-amber-100 text-[10px] text-amber-800`}>Reservado</span>}', 'piezas: la insignia Reservado, solo si existenciaReservada');
-  trae(piezas, 'onClick={onReintentar}\n        className={`inline-flex', 'piezas: AvisoReintentar vuelve a pedir');
-  trae(piezas, '{textoDeError(error, fallo)}', 'piezas: AvisoReintentar dice el detalle');
+  // B4 T24 (F46, D27): AvisoReintentar delega en la pieza común (AvisoDeError → AvisoFuente; casos en test_avisos.mjs).
+  trae(piezas, 'return <AvisoDeError {...props} />;', 'piezas: AvisoReintentar delega en la pieza común');
   trae(abasto, '<TarjetaKpi kpi="pec_activos" valor={tarjetas.pec_activos.valor} ayuda={tarjetas.pec_activos.ayuda} estado={estadoCompras} />', 'Abastecimiento: pec_activos con su estado y sin botón');
   trae(abasto, "apiFetch('/compras/stats', { signal: control.signal })", 'Abastecimiento: /compras/stats (RP94)');
   trae(abasto, '.then((r: { data?: unknown } | null) => setCompras({ vuelta: vueltaCompras, datos: r?.data ?? null, error: null }))', 'Abastecimiento: compras llega');
@@ -2436,9 +2471,11 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   trae(piezas, '<button type="button" onClick={onReintentar} className={`rounded font-bold underline ${FOCOS[acento]}`}>Reintentar</button>', 'SelectorCatalogo: «Reintentar» vuelve a pedir');
   trae(piezas, 'disabled={!catalogo.filas}', 'SelectorCatalogo: deshabilitado mientras carga');
   trae(piezas, '<option value="">{catalogo.filas ? todas : cargando}</option>', 'SelectorCatalogo: «Cargando…» mientras carga');
-  trae(piezas, "export const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';", 'el contenedor deja libre la esquina del botón de la IA (pb-24)');
+  // B4 T24 (F44-a, D27): la reserva es el token RESERVA_BOTON_IA (pb-24) de design-system.ts.
+  trae(piezas, "export const CONTENEDOR = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;", 'el contenedor deja libre la esquina del botón de la IA (pb-24)');
   trae(piezas, "['Costo', numeroFinito(f.costo) !== null && Number(f.costo) > 0 ? pesos(f.costo) : 'Sin costo registrado'],", 'el detalle: un costo 0 es «sin costo» (RP91)');
-  trae(piezas, 'focus-visible:outline-offset-2', 'el foco visible se ve también sobre fondos oscuros');
+  // B4 T24 (FINAL-m25, D27): FOCOS es el común de design-system.ts (outline-offset-2: se ve también sobre fondos oscuros).
+  trae(piezas, "import { FOCOS, RESERVA_BOTON_IA, TABLE, type AcentoFoco } from '@/lib/design-system';", 'el foco visible es el común (r1, m25: el import, no el export; F44-a, D27: con la reserva)');
   sinDefectos('piezas-inventario', piezas);
   // T18 r1 (m10, m21): el Hub de T17 IMPORTA las piezas de aquí y ya no las copia.
   const hub = leerFuente('app/dashboard/inventario/page.tsx');
@@ -2842,7 +2879,7 @@ console.log('--- TEST 48 (B4 T19; KANBAN-logistica 4, KPI-inventario 8; R15, RP2
   trae(e, 'if (!(await confirmar(', 'sin confirmación no se despacha');
   trae(e, 'JSON.stringify(cuerpoDespacho(pedido, { rol, warehouseId }))', 'el cuerpo del PATCH sale de cuerpoDespacho (RP23)');
   noTrae(sinComentarios(e), 'fecha_entrega:', 'ya no manda fecha_entrega');
-  trae(e, "avisarError(err, 'No se pudo despachar el pedido');\n      // La regla única: con un 400, un 409 o sin respuesta se recarga lo que se ve; un 404 no.\n      if (recargarTrasError(err)) recargarTodo();", 'si el despacho falla: se avisa y se recarga (recargarTrasError)');
+  trae(e, "avisarError(err, 'No se pudo despachar el pedido');\n      // La regla única (recargarTrasError): con un 400, un 409, un 422 (F8) o sin respuesta se recarga lo que se ve; un 404 o un 500, no.\n      if (recargarTrasError(err)) recargarTodo();", 'si el despacho falla: se avisa y se recarga (recargarTrasError)');
   trae(e, 'recargarTodo(desdeTablero ? [desdeTablero.origen, desdeTablero.destino] : undefined);', 'tras despachar: la fila, origen, destino y tarjetas (D39)');
   // «Registrar cobro de saldo»: su PATCH no se toca.
   trae(e, "saldo_cop: 0,\n          notas: pedido.notas ? `${pedido.notas} | Saldo 40% cobrado y verificado` : 'Saldo 40% verificado',", 'Registrar cobro de saldo: el PATCH de siempre');
@@ -2867,12 +2904,14 @@ console.log('--- TEST 48 (B4 T19; KANBAN-logistica 4, KPI-inventario 8; R15, RP2
   trae(e, 'consultaConteoEntrega(columna, { q: qConteos })', 'los conteos siguen la búsqueda (m1)');
   // m3, m10, m17: UNA regla para despachar (la fila, el Drawer y su selector de bodega); m6: cobrar el saldo solo ADMIN y ASESOR; m14: el rol tras montar.
   trae(e, 'puedeDespacharPedido(p, acciones.rol)', 'la fila usa la regla única');
-  assert.equal(e.split('puedeDespacharPedido(selected, rol)').length - 1, 2, 'el botón y el selector del Drawer usan la regla única');
+  // B4 T24 r2 (m15 c, D27): y el cierre del Drawer (cierreExterno={!puedeDespacharPedido(selected, rol)}).
+  assert.equal(e.split('puedeDespacharPedido(selected, rol)').length - 1, 3, 'el botón, el selector y el cierre del Drawer usan la regla única');
   trae(e, 'tieneSaldo && puedeCobrarSaldo(rol)', 'Marcar Saldo Cobrado solo a quien el servidor se lo permite');
-  trae(e, "useSyncExternalStore(suscribirRol, () => getUsuarioActual().role, () => '')", 'el rol se lee después de montar');
+  // B4 T24 (F46, D27): con useRolActual (la pieza común; '' en el servidor y en la hidratación).
+  trae(e, 'const rol = useRolActual();', 'el rol se lee después de montar');
   noTrae(sinComentarios(e), 'useState(() => getUsuarioActual()', 'el rol no se lee en el inicializador');
   trae(e, 'if (recargarTrasError(err)) { setVueltaConteos((n) => n + 1); setVueltaStats((n) => n + 1); }', 'si el PATCH del tablero falla: solo pestañas y tarjetas (D39)');
-  trae(e, 'textoEntregaEstimada(p)', 'la entrega estimada es una fecha de negocio');
+  trae(e, 'textoEntregaTablero(p)', 'la entrega estimada es una fecha de negocio');
   noTrae(sinComentarios(e), 'slice(0, 10)', 'sin el ISO crudo');
   trae(e, 'extra: extraDeLaLista', 'la tabla pide estados + saldo de la pestaña');
   const t = (id) => { const i = e.indexOf(`<TarjetaKpi kpi="${id}"`); assert.ok(i >= 0, id); return e.slice(i, e.indexOf('/>', i) + 2); };
@@ -2943,6 +2982,97 @@ console.log('--- TEST 49 (B4 T19 r1): la tarjeta que abre cada pestaña, las pes
   assert.equal(ec.textoDiasRetraso(1), '1 día');
   assert.equal(ec.textoDiasRetraso(3), '3 días');
   assert.deepEqual(ec.MOTIVOS_AJUSTE, ['Conteo físico', 'Merma', 'Sobrante', 'Corrección de error', 'Daño en bodega', 'Vencimiento', 'Otro']);
+}
+
+console.log('--- B4 T24 (FINAL-m27): textoVencidosPec, la alerta de la pestaña con su número ---');
+{
+  assert.equal(ec.textoVencidosPec(3), 'Hay 3 vencidos');
+  assert.equal(ec.textoVencidosPec(1), 'Hay 1 vencido');
+  assert.equal(ec.textoVencidosPec(1200), 'Hay 1.200 vencidos', 'con punto de miles');
+  for (const nada of [0, -1, null, undefined, NaN, '3']) assert.equal(ec.textoVencidosPec(nada), false, String(nada));
+}
+
+console.log('--- B4 T24 (FINAL-m10, FINAL-m31 y FINAL-m38): los tableros y las acciones de los PEC solo con ADMIN y COMPRAS ---');
+{
+  const { accesoCompras, TEXTO_TABLERO_SOLO_VER } = await import('../src/lib/roles.js');
+  // Un caso por rol (PATCH y DELETE /compras/pedidos y PATCH /tracking: ADMIN y COMPRAS).
+  for (const rol of ['ADMIN', 'COMPRAS', 'compras', ' Admin ']) {
+    const a = accesoCompras(rol);
+    assert.deepEqual([a.cambiarPec, a.tracking, a.soloLectura], [true, true, null], rol);
+  }
+  for (const rol of ['ASESOR', 'FINANZAS', 'BODEGA', 'CONSULTA', 'INVENTADO']) {
+    const a = accesoCompras(rol);
+    assert.deepEqual([a.cambiarPec, a.tracking, a.soloLectura], [false, false, TEXTO_TABLERO_SOLO_VER], String(rol));
+  }
+  // r1 (m9 b): mientras se lee el rol, sin el aviso (soloLectura null) y sin cambiar nada.
+  for (const rol of ['', null]) {
+    const a = accesoCompras(rol);
+    assert.deepEqual([a.cambiarPec, a.tracking, a.soloLectura], [false, false, null], String(rol));
+  }
+  const sin = (f) => f.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const hub = sin(leerFuente('app/dashboard/compras/page.tsx'));
+  const pedidos = sin(leerFuente('app/dashboard/compras/pedidos/page.tsx'));
+  const transito = sin(leerFuente('app/dashboard/compras/transito/page.tsx'));
+  for (const [nombre, c] of [['Hub', hub], ['Pedidos', pedidos], ['Tránsito', transito]]) {
+    assert.match(c, /import \{ useRolActual \} from '@\/components\/ui\/useRolActual';/, `${nombre}: useRolActual`);
+    assert.match(c, /import \{[^}]*\baccesoCompras\b[^}]*\} from '@\/lib\/roles';/, `${nombre}: accesoCompras`);
+    assert.match(c, /const accesoPec = accesoCompras\(useRolActual\(\)\);/, `${nombre}: el acceso de la pantalla`);
+    assert.match(c, /<TableroKanban\s[^>]*soloLectura=\{accesoPec\.soloLectura\}/, `${nombre}: el tablero, solo para ver sin permiso`);
+  }
+  // m10: «Cambiar Estado» / «Estado», «Cancelar PEC» y «Marcar Emitido» salen de transicionesPec SOLO con cambiarPec (los dos paneles).
+  for (const [nombre, c] of [['Hub', hub], ['Pedidos', pedidos]]) {
+    assert.match(c, /const transiciones = accesoPec\.cambiarPec \? transicionesPec\(detail\?\.estado\) : \[\];/, `${nombre}: el panel`);
+    assert.match(c, /\{seleccion\.length > 0 && (?:!enAnalisis && )?!enKanban && accesoPec\.cambiarPec && \(/, `${nombre}: la barra masiva`);
+    assert.match(c, /oculto: !cambiarPec \|\| !transicionesPec\(p\.estado\)\.includes\('CANCELADO'\) \}/, `${nombre}: «Cancelar PEC» de la fila`);
+    // r1 (m35): la celda de acciones recibe el permiso por el contexto (como Tránsito con puedeAvanzar), sin leer el rol por fila.
+    const celda = c.slice(c.indexOf('function CeldaAcciones('), c.indexOf('\n}\n', c.indexOf('function CeldaAcciones(')));
+    assert.ok(!celda.includes('useRolActual'), `${nombre}: la celda no lee el rol`);
+    assert.match(celda, /const acciones = useContext\(AccionesFila\);\s*const cambiarPec = acciones\?\.cambiarPec \?\? false;/, `${nombre}: el permiso del contexto`);
+    assert.match(c, /cambiarPec: boolean;/, `${nombre}: el tipo del contexto`);
+    assert.match(c, /cambiarPec: accesoPec\.cambiarPec,/, `${nombre}: la página lo pasa`);
+    assert.equal((c.match(/accesoCompras\(useRolActual\(\)\)/g) ?? []).length, 2, `${nombre}: el panel y la página, no cada fila`);
+  }
+  assert.match(pedidos, /oculto: !cambiarPec \|\| !transicionesPec\(p\.estado\)\.includes\('EMITIDO'\) \}/, '«Marcar Emitido» de la fila');
+  assert.match(pedidos, /oculto: !cambiarPec \|\| etapaPec\(p\.estado\) !== 'cancelado' \}/, '«Eliminar definitivamente» de la fila');
+  // r1 (m2, m7): el resto de las escrituras del PEC solo con el rol de su require_roles (erp_compras.py: PATCH /pedidos/{id}/tracking,
+  // PATCH /pedidos/{id}, POST /pedidos/{id}/recepcionar, PUT /tracking-config/{tipo} y POST /pedidos, todos de ADMIN y COMPRAS).
+  assert.match(pedidos, /function TrackingPanel\(\{pec, onUpdate, onToast, puedeEditar\}: \{pec:any; onUpdate:\(\)=>void; onToast:AvisoPantalla; puedeEditar: boolean\}\)/);
+  assert.match(pedidos, /const isEditing = !cerrado && puedeEditar && editStage === sd\.stage;/, 'sin permiso, la tarjeta no se edita');
+  assert.match(pedidos, /\{!cerrado && puedeEditar && \(\s*<button onClick=\{\(\)=>openEdit\(sd\)\}/, 'el lápiz de la etapa');
+  assert.match(pedidos, /<TrackingPanel pec=\{detail\|\|pec\} puedeEditar=\{accesoPec\.tracking\}/);
+  assert.match(pedidos, /\{accesoPec\.cambiarPec && \(\s*<button onClick=\{\(\)=>setShowConfig\(true\)\} title="Configurar etapas, alertas y casilleros"/, 'Configurar etapas (PUT /tracking-config)');
+  assert.match(pedidos, /\{\(detail\?\.recepciones\?\.length > 0 \|\| accesoPec\.cambiarPec\) && \(\s*<button onClick=\{goToRecepcion\}/, '«Hacer recepción» (POST /recepcionar); «Ver recepción» para todos');
+  assert.match(pedidos, /\{!infoEdit \? \(accesoPec\.cambiarPec && \(\s*<button onClick=\{openInfoEdit\}/, '«Editar» la información (PATCH /pedidos/{id})');
+  assert.match(pedidos, /\{accesoPec\.cambiarPec && <Button color="purple" icon=\{Plus\} onClick=\{\(\)=>setShowNuevoPec\(true\)\}>Nuevo PEC<\/Button>\}/, '«Nuevo PEC» (POST /pedidos)');
+  assert.match(hub, /\{selectedPvens\.size > 0 && accesoPec\.cambiarPec && \(/, '«Crear PEC Consolidado» (POST /pedidos)');
+  assert.match(pedidos, /\{accesoPec\.cambiarPec && etapaPec\(detail\?\.estado\) === 'cancelado' && \(/, '«Eliminar definitivamente» del panel');
+  // Tránsito: «Iniciar» y «Completar» de la fila (el mismo PATCH /tracking) solo con tracking.
+  assert.match(transito, /puedeAvanzar: accesoPec\.tracking/);
+  assert.match(transito, /if \(!accion \|\| !acciones\?\.puedeAvanzar\) return <span className="text-xs text-slate-400">—<\/span>;/);
+  // r1 (C1): en el Kanban, la acción principal de la tarjeta («Iniciar»/«Completar», el mismo PATCH /tracking) también solo con tracking.
+  assert.match(transito, /accionPrincipal: accesoPec\.tracking && tarjeta\.accionPrincipal && accion\n\s*\? \{ \.\.\.tarjeta\.accionPrincipal, onClick: \(\) => \{ void avanzar\(p, accion\); \} \}\n\s*: null,/);
+  assert.match(transito, /\}, \[avanzar, pendiente, accesoPec\.tracking\]\);/);
+}
+
+console.log('--- B4 T24 r2 (m6, m7): «Avanzar etapa logística» del detalle y el enlace «Nuevo PEC» del Hub, solo con su rol ---');
+{
+  // erp_compras.py:1276-1278: PATCH /pedidos/{id}/tracking es de ADMIN y COMPRAS (accesoCompras.tracking, casos en test_roles.mjs);
+  // POST /pedidos también (cambiarPec).
+  const det = readFileSync(new URL('../src/app/dashboard/compras/pedidos/[id]/page.tsx', import.meta.url), 'utf8');
+  assert.match(det, /import \{ accesoCompras \} from '@\/lib\/roles';/);
+  assert.match(det, /const accesoPec = accesoCompras\(useRolActual\(\)\);/);
+  assert.match(det, /\{!isNew && !cancelado && accesoPec\.tracking && completedCount < stages\.length && \(\s*<Button size="sm" color="blue" icon=\{Truck\} loading=\{advancing\} onClick=\{avanzarTracking\}>Avanzar etapa logística<\/Button>/);
+  const hub = readFileSync(new URL('../src/app/dashboard/compras/page.tsx', import.meta.url), 'utf8');
+  assert.match(hub, /\{accesoPec\.cambiarPec && \(\s*<Link href="\/dashboard\/compras\/pedidos"[^>]*>\s*<ContenidoEnlace icon=\{Plus\}>Nuevo PEC<\/ContenidoEnlace>/);
+}
+
+console.log('--- B4 T24 r2 (m2, m10): los tableros de PEC, el esqueleto mientras se lee el rol (accesoPec.listo false) ---');
+{
+  for (const ruta of ['app/dashboard/compras/page.tsx', 'app/dashboard/compras/pedidos/page.tsx', 'app/dashboard/compras/transito/page.tsx']) {
+    const f = readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8');
+    assert.match(f, /!accesoPec\.listo \? <EsqueletoTablero \/> : <TableroKanban/, `${ruta}: el esqueleto con el rol vacío`);
+    assert.match(f, /import \{[^}]*\bEsqueletoTablero\b[^}]*\} from '@\/components\/ui';/, `${ruta}: la pieza común`);
+  }
 }
 
 console.log('\nOK: test_estados_compras.mjs');

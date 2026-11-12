@@ -7,12 +7,13 @@ import type { LucideIcon } from 'lucide-react';
 // su page.tsx (una página de Next no puede exportar más que su componente); aquí no se tocan.
 import { Modal } from '@/components/ui';
 import { apiFetch } from '@/lib/api';
-import { TABLE } from '@/lib/design-system';
+import { FOCOS, RESERVA_BOTON_IA, TABLE, type AcentoFoco } from '@/lib/design-system';
+import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import { formatoPesos } from '@/lib/pesos';
 import { tiene } from '@/lib/estados-pedido';
 import { formatoDecimal, numeroFinito } from '@/lib/kpis';
 import { ESTADOS_STOCK, existenciaReservada } from '@/lib/estados-compras';
-import { textoDeError } from '@/lib/avisos';
+import { ofreceReintentar, textoDeError } from '@/lib/avisos';
 // El chip estándar de las tablas del bloque (columnas-pec.tsx, T15 r1): la misma forma que el estado de un PEC.
 import { CHIP } from '../compras/columnas-pec';
 
@@ -47,14 +48,14 @@ export type OpcionCatalogo = { id: number; name: string; parent_id?: number | nu
 /** Un catálogo: filas null mientras carga; si falla, el error (y lo último que llegó bien, si había). */
 export type Catalogo = { filas: OpcionCatalogo[] | null; error: unknown };
 
-/** El contenedor de los Hubs y de las listas del bloque (T7 a T17): pb-24 deja libre la esquina del botón de la IA. */
-export const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
-/** El foco visible de cada acento (clases literales: Tailwind no ve las armadas), con outline-offset para que se vea sobre fondos oscuros. */
-export const FOCOS = {
-  indigo: 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700',
-  purple: 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-700',
-} as const;
-export type AcentoFoco = keyof typeof FOCOS;
+/** El contenedor de los Hubs y de las listas del bloque (T7 a T17): RESERVA_BOTON_IA (pb-24, F44-a) deja libre la esquina del botón de la IA. */
+export const CONTENEDOR = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;
+/**
+ * B4 T24 (FINAL-m25): el foco visible es el token común de design-system.ts (una sola copia); se reexporta para quien lo
+ * importa de aquí.
+ */
+export { FOCOS };
+export type { AcentoFoco };
 
 // H42: pesos enteros con punto de miles; lo que no llega, '—'. Las cantidades sin redondear ('2,5').
 export const pesos = (v: unknown) => (numeroFinito(v) === null ? '—' : formatoPesos(v));
@@ -106,18 +107,11 @@ export function CeldaEstadoExistencia({ f }: { f: FilaExistencia }) {
 
 /**
  * Una fuente de indicadores que falló (T18 r1, m11): lo dice con el detalle del servidor y ofrece «Reintentar» (que vuelve a pedir
- * SOLO esa fuente), en lugar de dejar solo «—» en las tarjetas.
+ * SOLO esa fuente), en lugar de dejar solo «—» en las tarjetas. B4 T24 (F46): delega en la pieza común (AvisoDeError → AvisoFuente),
+ * así que con un 403 dice el permiso sin «Reintentar».
  */
-export function AvisoReintentar({ error, fallo, onReintentar, acento = 'indigo' }: { error: unknown; fallo: string; onReintentar: () => void; acento?: AcentoFoco }) {
-  return (
-    <div role="alert" className="flex flex-wrap items-center gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">
-      {textoDeError(error, fallo)}
-      <button type="button" onClick={onReintentar}
-        className={`inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 ${FOCOS[acento]}`}>
-        Reintentar
-      </button>
-    </div>
-  );
+export function AvisoReintentar(props: { error: unknown; fallo: string; onReintentar: () => void; acento?: AcentoFoco }) {
+  return <AvisoDeError {...props} />;
 }
 
 /**
@@ -188,7 +182,7 @@ export function useCatalogo(ruta: string): { catalogo: Catalogo; recargar: () =>
 
 /**
  * Un selector de un catálogo (la bodega o la categoría de la barra). Mientras carga, deshabilitado («Cargando…»); si falla sin
- * nada antes, lo dice con el detalle del servidor y «Reintentar» (nunca una lista vacía).
+ * nada antes, lo dice con el detalle del servidor y «Reintentar», salvo con un 403 (nunca una lista vacía).
  */
 export function SelectorCatalogo({ etiqueta, todas, cargando, fallo, catalogo, valor, onCambiar, onReintentar, icono: Icono, acento = 'indigo' }: {
   etiqueta: string; todas: string; cargando: string; fallo: string; catalogo: Catalogo; valor: string;
@@ -198,7 +192,8 @@ export function SelectorCatalogo({ etiqueta, todas, cargando, fallo, catalogo, v
     return (
       <span role="alert" className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800">
         {textoDeError(catalogo.error, fallo)}
-        <button type="button" onClick={onReintentar} className={`rounded font-bold underline ${FOCOS[acento]}`}>Reintentar</button>
+        {/* B4 T24 (FINAL-C5): un 403 no ofrece «Reintentar» (ofreceReintentar de lib/avisos.js). */}
+        {ofreceReintentar(catalogo.error) && <button type="button" onClick={onReintentar} className={`rounded font-bold underline ${FOCOS[acento]}`}>Reintentar</button>}
       </span>
     );
   }

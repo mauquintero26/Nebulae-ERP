@@ -25,12 +25,14 @@ import {
 } from '../columnas-recepcion';
 import type { FilaColumnasRecepcion } from '../columnas-recepcion';
 
+import { FOCOS } from '@/lib/design-system';
 import { apiFetch } from '@/lib/api';
-import { accionModo, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta } from '@/lib/tabla';
+import {
+  accionModo, accionVistaEnLista, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta, ordenEsAtencion,
+  textoOrdenHub,
+} from '@/lib/tabla';
 import { NOTA_RECEPCIONES, PERIODO_KPI, tarjetasRecepciones } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
-import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
-import { accionVistaEnLista } from '@/lib/listas-ventas';
 import { fCOP, textoDia } from '../columnas-pec';
 import {
   COLUMNAS_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, consultaColumnaRecepcion, infoEstadoPec,
@@ -66,7 +68,7 @@ const TEXTO_SOLO_VER = 'Este tablero es para ver: las recepciones se confirman c
 const ESTADOS_RECEPCIONABLES = 'EN_TRANSITO,PENDIENTE_ENTREGA,RECIBIDO,PARCIALMENTE_RECIBIDA';
 /** El contenedor de los Hubs y de las listas del bloque (T7 a T15): pb-24 deja libre la esquina del botón de la IA. */
 const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
-const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-700';
+const FOCO_VISIBLE = FOCOS.teal;
 
 /** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
 type AccionesFilaRecepcion = {
@@ -255,7 +257,8 @@ export default function RecepcionesPage() {
   };
 
   // Confirmar (la fila, el menú o el Drawer): cada botón carga por su cuenta (confirmandoId). Si el servidor dice que no, su
-  // mensaje tal cual; con la regla única recargarTrasError (recarga con un 400, un 409 o sin respuesta; un 404 no), se recarga lo que se ve.
+  // mensaje tal cual; con la regla única recargarTrasError (recarga con un 400, un 409, un 422 (F8) o sin respuesta; un 404 o un
+  // 500 no), se recarga lo que se ve.
   const handleConfirmarRecepcion = useCallback(async (r: FilaRecepcion) => {
     setConfirmandoId(r.id);
     try {
@@ -495,12 +498,12 @@ export default function RecepcionesPage() {
 
       {/* DRAWER DETALLE DE RECEPCION Y SEPARACION POR DESTINO (B1 a B3) */}
       {selectedItem && (
-        <Drawer
+        <Drawer idTitulo="drawer-recepcion-titulo"
           onClose={() => setSelectedItem(null)}
           header={(
             <div>
               <div className="flex items-center gap-2.5">
-                <h2 className="text-xl font-black text-slate-800">{numeroRecepcion(selectedItem)}</h2>
+                <h2 id="drawer-recepcion-titulo" className="text-xl font-black text-slate-800">{numeroRecepcion(selectedItem)}</h2>
                 <CeldaEstadoRecepcion r={selectedItem} />
               </div>
               <p className="text-xs text-slate-500 mt-0.5">

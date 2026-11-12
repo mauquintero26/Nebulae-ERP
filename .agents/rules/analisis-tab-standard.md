@@ -44,7 +44,7 @@ NUNCA:
   Con ella activa, la barra queda con solo sus pestañas y debajo va `PanelAnalisisPerezoso`, en lugar de la tabla o
   el tablero. Ver «La barra (`BarraTabla`)» en `design-system-reference.md`.
 - `modulo` es un `ModuloAnalisis` (`MODULOS_ANALISIS` de `@/lib/analisis`) y da la clave de preferencias `analisis:<modulo>`. En Ventas el foco va DENTRO de `analisis:ventas`; no existen `analisis:ventas-sc`, `analisis:ventas-cot` ni `analisis:ventas-pven`.
-- Las listas de Solicitudes, Cotizaciones y Pedidos de venta NO llevan pestaña Análisis propia: llevan un botón «Ver análisis» que abre el del Hub ya enfocado: `/dashboard/ventas?tab=analisis&foco=sc`, `foco=cot` o `foco=pven`. Pedidos de compra, Lista de compras y Traslados hacen lo mismo hacia `/dashboard/compras?tab=analisis`. El botón es un `<Link>` con `BTN.secondary` (`@/lib/design-system`).
+- Las listas de Solicitudes, Cotizaciones y Pedidos de venta NO llevan pestaña Análisis propia: llevan un botón «Ver análisis» que abre el del Hub ya enfocado: `/dashboard/ventas?tab=analisis&foco=sc`, `foco=cot` o `foco=pven`. Pedidos de compra, Lista de compras y Traslados hacen lo mismo hacia `/dashboard/compras?tab=analisis`. El botón es un `<Link>` con el `href` de `enlaceVerAnalisis(foco)` (`@/lib/flujo-ventas`) o `ENLACE_VER_ANALISIS_COMPRAS` (`@/lib/flujo-compras`), el aspecto de los botones de la cabecera y el token de foco común (`FOCOS.<acento>` de `@/lib/design-system`). `BTN.secondary` no trae foco: no lo uses solo. El Hub lee el enlace después del commit (ver «La barra (`BarraTabla`)» en `design-system-reference.md`).
 - Todavía no tienen Análisis E-commerce, Marketing, Logística ni el Dashboard General. No se les agrega uno sin que el usuario lo pida.
 - `acento` es un `AccentColor` (`components/ui/colors.ts`) y el de esta tabla es el que vale para el Hub. No es el de `MODULE_COLORS` de `design-system.ts`, que es legado.
 
@@ -174,7 +174,7 @@ GET /<módulo>/analisis?periodo=30d&top=5[&desde=AAAA-MM-DD&hasta=AAAA-MM-DD][&f
 
 ## 5. Gráficos: solo desde `components/analisis`
 
-`chart.js` y `react-chartjs-2` solo se importan en `components/analisis`: `registro.ts` (el ÚNICO `ChartJS.register`) y los tres gráficos `GraficoLinea`, `GraficoDona` y `GraficoBarras`. Las excepciones de `test_graficos_centralizados.mjs` (`ventas/proyecciones`, `compras/proyecciones`, `finanzas/resumen` hasta que pase a `PanelAnalisisPerezoso`, y `app_mocks_backup`) son una lista blanca que se va vaciando.
+`chart.js` y `react-chartjs-2` solo se importan en `components/analisis`: `registro.ts` (el ÚNICO `ChartJS.register`) y los tres gráficos `GraficoLinea`, `GraficoDona` y `GraficoBarras`. Las excepciones de `test_graficos_centralizados.mjs` (`ventas/proyecciones`, `compras/proyecciones` y `app_mocks_backup`) son una lista blanca que se va vaciando: `finanzas/resumen` ya usa `PanelAnalisisPerezoso` y salió de ella (T22).
 
 - **Registro:** los valores globales de Chart.js son solo la fuente de la app y la animación de 400 ms, que pasa a 0 con `prefers-reduced-motion`. El color de los ejes (`COLOR_EJES`, slate-600) y el estilo de los tooltips (`ESTILO_TOOLTIP`) van en las opciones de cada gráfico, no en `ChartJS.defaults`.
 - **Tooltips:** pesos colombianos y fechas en español, con `formatearValor` y `etiquetaFecha` de `@/lib/analisis`.

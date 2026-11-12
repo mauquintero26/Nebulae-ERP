@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { Sparkles, X, Send, Bot, Minimize2, Maximize2, Paperclip } from 'lucide-react';
 // B2.1 D4: el servidor configurado (API_URL y su WebSocket), el de pruebas en pruebas; nunca una URL escrita a mano.
 import { getToken, API_URL, urlWebSocket } from '@/lib/api';
+import { FOCO } from '@/lib/design-system';
 
 
 export function GlobalAIChat() {
@@ -111,9 +112,12 @@ export function GlobalAIChat() {
 
   if (!isOpen) {
     return (
-      <button 
+      // B4 T24 f2 (m9): data-superficie: el Copilot va ENCIMA de las ventanas (lugarDelFoco): con el foco aquí, la capa de arriba no lo atrapa.
+      <button
+        data-superficie="copilot"
         onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 right-6 w-14 h-14 bg-gradient-to-br from-purple-600 to-blue-600 rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(168,85,247,0.4)] hover:scale-110 transition-transform z-50 group"
+        aria-label="Abrir Nebulae Copilot"
+        className={`fixed bottom-6 right-6 w-14 h-14 bg-gradient-to-br from-purple-600 to-blue-600 rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(168,85,247,0.4)] hover:scale-110 transition-transform z-50 group ${FOCO}`}
       >
         <Sparkles className="text-white group-hover:animate-spin-slow" size={24} />
         <span className="absolute top-0 right-0 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full"></span>
@@ -122,7 +126,8 @@ export function GlobalAIChat() {
   }
 
   return (
-    <div className={`fixed bottom-6 right-6 bg-white border border-slate-200 rounded-2xl shadow-2xl flex flex-col z-50 overflow-hidden transition-all duration-300 ${isExpanded ? 'w-[600px] h-[80vh]' : 'w-[380px] h-[550px]'}`}>
+    // B4 T24 f2 (m9): el panel del Copilot también es una superficie de encima (data-superficie).
+    <div data-superficie="copilot" className={`fixed bottom-6 right-6 bg-white border border-slate-200 rounded-2xl shadow-2xl flex flex-col z-50 overflow-hidden transition-all duration-300 ${isExpanded ? 'w-[600px] h-[80vh]' : 'w-[380px] h-[550px]'}`}>
       
       {/* Header */}
       <div className="bg-gradient-to-r from-slate-900 to-slate-800 p-4 shrink-0 flex items-center justify-between">

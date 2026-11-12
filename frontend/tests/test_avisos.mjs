@@ -247,13 +247,21 @@ console.log('--- TEST 9: recargarTrasError (B2-T9A ronda 1: una sola regla para 
   assert.equal(recargarTrasError(new TypeError('Failed to fetch')), true, 'error de red sin status');
   assert.equal(recargarTrasError(null), true);
   assert.equal(recargarTrasError(undefined), true);
-  // 401 (SesionVencidaError de api.ts: status 401), 403, 404, 422 y 500 no recargan.
+  // 401 (SesionVencidaError de api.ts: status 401), 403, 404 y 500 no recargan.
   const sesionVencida = Object.assign(new Error('Tu sesión venció. Inicia sesión nuevamente para continuar.'),
     { name: 'SesionVencidaError', status: 401 });
   assert.equal(recargarTrasError(sesionVencida), false, 'SesionVencidaError');
-  for (const status of [401, 403, 404, 422, 500]) {
+  for (const status of [401, 403, 404, 500]) {
     assert.equal(recargarTrasError(errorDeRespuesta(status, {})), false, String(status));
   }
+  // B4 T24 (F8, ruling del controlador; D27): el 422 también recarga, SIN mirar el detail. El 422 de transición del PATCH de estado
+  // (_validar_transicion_pedido, erp_ventas.py) es el conflicto real del tablero de pedidos: recargar el origen y el destino no hace
+  // daño y es más robusto que comparar textos. Cualquier 422 (también uno de validación de campos o sin detail).
+  const transicion = errorDeRespuesta(422, { detail: 'No se puede pasar de ENTREGADO a EN_PROCESO.' });
+  assert.equal(recargarTrasError(transicion), true, 'el 422 de transición');
+  assert.equal(recargarTrasError(errorDeRespuesta(422, { detail: [{ type: 'missing', loc: ['body', 'motivo'], msg: 'Field required' }] })), true, 'un 422 de validación');
+  assert.equal(recargarTrasError(errorDeRespuesta(422, {})), true, 'un 422 sin detail');
+  assert.equal(recargarTrasError({ status: 422 }), true);
 }
 
 console.log('--- TEST 10 (revisión final, F2): el 403 técnico de require_roles se traduce ---');
@@ -337,7 +345,8 @@ console.log('--- TEST 13 (revisión final B3, F2: M45): las frases por defecto d
   // 403: es un tema de permiso, sin «Reintentar» (volver a pedir no lo cambia) y nunca el 403 técnico de require_roles.
   assert.deepEqual(av.avisoDeFuente(e403, 'No se pudieron cargar los indicadores'), { tipo: 'permiso', texto: 'No tienes permiso para ver esto.', reintentar: false });
   // Cualquier otro error: la falla con el detalle del servidor y «Reintentar».
-  assert.deepEqual(av.avisoDeFuente(e500, 'No se pudieron cargar los indicadores'), { tipo: 'carga', texto: 'No se pudieron cargar los indicadores: Error del servidor', reintentar: true });
+  // B4 T24 (F46, D27): el texto de una falla es textoAvisoFuente (con su punto final, como el Dashboard).
+  assert.deepEqual(av.avisoDeFuente(e500, 'No se pudieron cargar los indicadores'), { tipo: 'carga', texto: 'No se pudieron cargar los indicadores: Error del servidor.', reintentar: true });
   assert.equal(av.avisoDeFuente(Object.assign(new Error('x'), { status: 401 }), 'F').reintentar, true);
   assert.equal(av.avisoDeFuente(Object.assign(new Error('x'), { status: 422 }), 'F').reintentar, true);
   assert.equal(av.avisoDeFuente(new Error('sin status'), 'F').tipo, 'carga');
@@ -358,6 +367,111 @@ console.log('--- TEST 13 (revisión final B3, F2: M45): las frases por defecto d
   assert.equal(estadoFranjaDeFuente(carga, 'error'), 'error');
   assert.equal(estadoFranjaDeFuente(null, 'cargando'), 'cargando');
   assert.equal(estadoFranjaDeFuente(null, 'actualizando'), 'actualizando');
+}
+
+// B4 T24 (FINAL-m37, FINAL-C5 y F106): ofreceReintentar — una carga que falló con un 403 nunca ofrece «Reintentar» (volver a pedir no
+// cambia el permiso). Es la regla de TablaEstandar, las columnas del tablero, SelectorCatalogo y las cajas de error de las pantallas.
+console.log('--- TEST T24-a: ofreceReintentar ---');
+{
+  const { ofreceReintentar, avisoDeFuente } = await import('../src/lib/avisos.js');
+  assert.equal(typeof ofreceReintentar, 'function');
+  assert.equal(ofreceReintentar(Object.assign(new Error('x'), { status: 403 })), false, '403');
+  assert.equal(ofreceReintentar({ status: 403 }), false, '403 sin Error');
+  assert.equal(ofreceReintentar(errorDeRespuesta(403, { detail: "Rol 'BODEGA' (normalizado: 'BODEGA') no autorizado para esta operación." })), false,
+    'el 403 real de require_roles');
+  for (const status of [400, 401, 404, 409, 422, 500, 502, undefined, null]) {
+    assert.equal(ofreceReintentar(Object.assign(new Error('x'), { status })), true, String(status));
+  }
+  assert.equal(ofreceReintentar(new TypeError('Failed to fetch')), true, 'sin red');
+  assert.equal(ofreceReintentar('texto'), true, 'un error que no es objeto');
+  // Sin error no hay nada que reintentar.
+  for (const nada of [null, undefined, false, 0, '']) assert.equal(ofreceReintentar(nada), false, String(nada));
+  // La misma respuesta que avisoDeFuente(...).reintentar.
+  for (const e of [{ status: 403 }, { status: 500 }, { status: 422 }, new Error('x'), errorDeRespuesta(403, {})]) {
+    assert.equal(ofreceReintentar(e), avisoDeFuente(e, 'F').reintentar, JSON.stringify(e));
+  }
+  // r1 (m10, m34): la regla «403 → sin Reintentar» escrita UNA vez: avisoDeFuente la toma de ofreceReintentar.
+  const { readFileSync } = await import('node:fs');
+  const fuente = readFileSync(new URL('../src/lib/avisos.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const cuerpo = (nombre) => fuente.slice(fuente.indexOf(`export function ${nombre}(`), fuente.indexOf('\n}\n', fuente.indexOf(`export function ${nombre}(`)));
+  assert.match(cuerpo('avisoDeFuente'), /ofreceReintentar\(error\)/, 'avisoDeFuente usa ofreceReintentar');
+  assert.ok(!/403/.test(cuerpo('avisoDeFuente')), 'avisoDeFuente no repite el 403');
+  assert.equal((fuente.match(/\.status (?:!|=)== 403/g) ?? []).length, 1, 'una sola comparación con el 403, en ofreceReintentar');
+}
+
+console.log('--- TEST T24-b (B4 T24 r1, m16): los comentarios que citan la regla de recarga incluyen el 422 (F8) ---');
+{
+  const { readFileSync } = await import('node:fs');
+  const ARCHIVOS = ['app/dashboard/ventas/venta/venta-client.tsx', 'app/dashboard/crm/page.tsx', 'app/dashboard/compras/transito/page.tsx', 'app/dashboard/compras/recepciones/page.tsx', 'app/dashboard/inventario/ajustes/page.tsx', 'app/dashboard/compras/pedidos/[id]/page.tsx', 'app/dashboard/compras/pedidos/page.tsx', 'app/dashboard/compras/lista-compras/page.tsx', 'app/dashboard/compras/traslados/page.tsx', 'app/dashboard/inventario/entregas/page.tsx', 'app/dashboard/ventas/cotizacion/cotizacion-client.tsx'];
+  for (const ruta of ARCHIVOS) {
+    const f = readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8');
+    // Las líneas que LISTAN la regla (400 y 409); un ejemplo suelto («un 409: el pedido cambió») no es la regla.
+    const lineas = f.split(/\r?\n/).filter((l) => /^\s*(?:\/\/|\*)/.test(l) && /\b400\b/.test(l) && /\b409\b/.test(l) && /recarg/.test(l));
+    // r2 (m13): cada archivo tiene al menos una (si se borra el comentario de la regla, la sonda falla; mata RR-m16-borrar).
+    assert.ok(lineas.length >= 1, `${ruta}: el comentario de la regla`);
+    for (const linea of lineas) {
+      assert.match(linea, /\b422\b/, `${ruta}: ${linea.trim()}`);
+      assert.ok(!/\b422\b[^.;]*\bno\b/.test(linea), `${ruta}: el 422 SÍ recarga: ${linea.trim()}`);
+    }
+  }
+}
+
+console.log('--- TEST T24-c (B4 T24, F46): un solo aviso de fuente — el texto, la regla y la pieza ---');
+{
+  const { readFileSync } = await import('node:fs');
+  const av = await import('../src/lib/avisos.js');
+  const kpis = await import('../src/lib/kpis.js');
+  // textoAvisoFuente vive en avisos.js (kpis.js la reexporta: la misma función) y avisoDeFuente la usa.
+  assert.equal(kpis.textoAvisoFuente, av.textoAvisoFuente);
+  assert.equal(av.textoAvisoFuente(new Error('Intenta de nuevo.'), 'No se pudo'), 'No se pudo: Intenta de nuevo.', 'sin doble punto');
+  assert.equal(av.avisoDeFuente(new Error('Intenta de nuevo.'), 'No se pudo').texto, 'No se pudo: Intenta de nuevo.');
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // La pieza: AvisoFuente (común), con un acento opcional, y AvisoDeError (error + texto de la falla → avisoDeFuente → AvisoFuente).
+  const pieza = leer('components/ui/AvisoFuente.tsx');
+  assert.match(pieza, /export function AvisoDeError\(\{ error, fallo, onReintentar, acento \}: \{ error: unknown; fallo: string; onReintentar: \(\) => void; acento\?: AcentoFoco \}\) \{\s*const aviso = avisoDeFuente\(error, fallo\);\s*return aviso \? <AvisoFuente aviso=\{aviso\} onReintentar=\{onReintentar\} acento=\{acento\} \/> : null;\s*\}/);
+  assert.match(pieza, /\$\{FOCOS\[acento\]\}/);
+  // AvisoReintentar (Inventario) delega en ella: con un 403, el aviso de permiso sin «Reintentar».
+  const piezas = leer('app/dashboard/inventario/piezas-inventario.tsx');
+  assert.match(piezas, /export function AvisoReintentar\(props: \{ error: unknown; fallo: string; onReintentar: \(\) => void; acento\?: AcentoFoco \}\) \{\s*return <AvisoDeError \{\.\.\.props\} \/>;\s*\}/);
+  // El Dashboard usa la pieza común (sin su AvisoFuente local).
+  const dash = leer('app/dashboard/page.tsx');
+  assert.ok(!/function AvisoFuente\b/.test(dash), 'Dashboard: sin la copia local');
+  assert.match(dash, /import \{ AvisoDeError \} from '@\/components\/ui\/AvisoFuente';/);
+  assert.equal((dash.match(/<AvisoDeError error=\{(?:inventario|compras|ventas|clientes)\.error\} fallo="[^"]+" onReintentar=\{(?:inventario|compras|ventas|clientes)\.recargar\} acento="indigo" \/>/g) ?? []).length, 4);
+  // Entregas lee el rol con useRolActual (sin su copia de suscribirRol).
+  const entregas = leer('app/dashboard/inventario/entregas/page.tsx');
+  assert.match(entregas, /import \{ useRolActual \} from '@\/components\/ui\/useRolActual';/);
+  assert.match(entregas, /const rol = useRolActual\(\);/);
+  assert.ok(!/suscribirRol|useSyncExternalStore|getUsuarioActual/.test(entregas), 'Entregas: sin la copia del rol');
+}
+
+console.log('--- B4 T24 f2 r1 (m28): cambiarConRegla — la ruta de error del arrastre de los tableros, una sola, con la regla de recargarTrasError ---');
+{
+  const { cambiarConRegla } = await import('../src/lib/avisos.js');
+  assert.equal(typeof cambiarConRegla, 'function', 'cambiarConRegla existe');
+  const correr = async (resultado) => {
+    let recargas = 0;
+    let error = null;
+    let valor;
+    try {
+      valor = await cambiarConRegla(async () => { if (resultado instanceof Error) throw resultado; return resultado; }, () => { recargas += 1; });
+    } catch (e) { error = e; }
+    return { recargas, error, valor };
+  };
+  // Bien: recarga una vez y no hay error.
+  assert.deepEqual(await correr('ok'), { recargas: 1, error: null, valor: undefined });
+  // 400, 409, 422 o la red cortada: recarga (el dato cambió o no se sabe) y el error sigue (el tablero deshace).
+  for (const e of [errorDeRespuesta(400, { detail: 'x' }), errorDeRespuesta(409, { detail: 'x' }), errorDeRespuesta(422, { detail: 'x' }), new TypeError('Failed to fetch')]) {
+    const r = await correr(e);
+    assert.equal(r.recargas, 1, String(e.status));
+    assert.equal(r.error, e, 'el mismo error sigue');
+  }
+  // 403 o 500: no recarga (nada cambió) y el error sigue.
+  for (const e of [errorDeRespuesta(403, { detail: 'x' }), errorDeRespuesta(500, { detail: 'x' })]) {
+    const r = await correr(e);
+    assert.deepEqual([r.recargas, r.error], [0, e], String(e.status));
+  }
 }
 
 console.log('✓ Todas las pruebas de avisos pasaron.');

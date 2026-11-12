@@ -38,7 +38,7 @@
 
 // congelar: mutar estas tablas lanza TypeError (una sola función en todo el frontend; no se copia).
 import { congelar, humanizarCodigo, tiene } from './estados-pedido.js';
-import { diaColombia, fechaCorta, fechaSolo, horaCO, instante } from './fechas-colombia.js';
+import { diaColombia, diaDeNegocio as diaPec, fechaCorta, fechaSolo, horaCO, instante } from './fechas-colombia.js';
 // B4 T14: la consulta de cada columna del tablero de Compras (consultaColumnaPec) sale de la misma queryListado.
 import { queryListado, recortarColumnas } from './tabla.js';
 // B4 T14 r1: la regla de la columna con filtro (m4, la misma de Ventas), el número del servidor (m7) y la regla de
@@ -248,7 +248,8 @@ export function columnaPec(e) {
 }
 
 const ENLACE_TRANSITO = congelar({ texto: 'Ir a Mercancía en tránsito', href: '/dashboard/compras/transito' });
-const ENLACE_RECEPCIONES = congelar({ texto: 'Ir a Recepciones', href: '/dashboard/compras/recepciones' });
+/** B4 T24 f2 (F27): el enlace «Ir a Recepciones» de los bloqueos, el único (transito.js lo importa). */
+export const ENLACE_RECEPCIONES = congelar({ texto: 'Ir a Recepciones', href: '/dashboard/compras/recepciones' });
 
 /**
  * Qué pasa al soltar un PEC de la columna `origen` en la columna `destino` (claves de COLUMNAS_PEC), con la forma de
@@ -392,16 +393,10 @@ export function vistaPuedeVencer(vista) {
 
 /**
  * B4 T14 (RP40, resolución 4 de T14): el día de una fecha de negocio del PEC (fecha_entrega_estimada, fecha_alerta) tal
- * como se guarda: sus 10 primeros caracteres, sin pasarla a Colombia, como esPecVencido. Un día que no existe o lo que
- * no empieza con una fecha: ''.
- * @param {unknown} valor
- * @returns {string}
+ * como se guarda, sin pasarla a Colombia, como esPecVencido. B4 T24 (FINAL-m30): es diaDeNegocio de fechas-colombia.js
+ * (la misma función), con su nombre de siempre.
  */
-export function diaPec(valor) {
-  if (typeof valor !== 'string') return '';
-  const dia = valor.trim().slice(0, 10);
-  return FECHA_DE_CALENDARIO.test(dia) && fechaSolo(dia) ? dia : '';
-}
+export { diaPec };
 
 /** Un texto con algo, sin los espacios de los bordes; si no, null. */
 const textoLimpio = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
@@ -550,12 +545,23 @@ export async function cancelarPecsEnSerie(pecs, cancelarUno) {
 }
 
 /**
+ * B4 T24 (FINAL-m27): la alerta de la pestaña que esconde los vencidos («No resueltos» del Hub, «Activos» de Pedidos de
+ * compra): «Hay N vencidos» (con su número, que la pestaña no muestra), o false sin vencidos.
+ * @param {unknown} vencidos
+ * @returns {string | false}
+ */
+export function textoVencidosPec(vencidos) {
+  if (typeof vencidos !== 'number' || !Number.isFinite(vencidos) || vencidos <= 0) return false;
+  return `Hay ${formatoEntero(vencidos)} ${vencidos === 1 ? 'vencido' : 'vencidos'}`;
+}
+
+/**
  * B4 T14 r1 (I1, m10, m15): lo que hace la pantalla después de cancelar en serie (cancelarPecsEnSerie), para que la
  * página solo lo ejecute:
  *  - fuera: las claves que salen de la selección (lo cancelado y lo omitido); lo que falló sigue marcado;
  *  - pendientes: los PEC que fallaron (se quedan en la ventana del motivo para reintentar con lo escrito);
  *  - recargar: la lista, la franja, las tarjetas y del tablero el origen y el destino, si se canceló algo o si una falla
- *    lo pide (recargarTrasError: un 409, un 400 o la red; un 422 no);
+ *    lo pide (recargarTrasError: un 409, un 400, un 422 (B4 T24, F8) o la red; un 500 no);
  *  - recargarVentas (I1): si se canceló algo, los pedidos de venta del panel de consolidación (los vinculados vuelven a
  *    Pendiente de compra);
  *  - recargarDetalle (m10): si una falla pide recargar, el detalle del panel abierto también;
@@ -772,6 +778,18 @@ export function proveedorDeRecepcion(r) {
 /** Una recepción por confirmar (BORRADOR): la única que se cuenta y se confirma (grupoRecepcion, R9). */
 export function esRecepcionPorConfirmar(r) {
   return grupoRecepcion(typeof r?.estado === 'string' ? r.estado.trim() : r?.estado) === 'por_confirmar';
+}
+
+/**
+ * B4 T24 r1 (m15): si una recarga del conteo vuelve a llenar las líneas con lo del servidor. La completa (al abrir), sí; la silenciosa
+ * (tras guardar el conteo, o tras un error que pide recargar: recargarTrasError, también un 422), solo si la recepción ya no está por
+ * confirmar (otro la confirmó o la canceló). Mientras siga en BORRADOR, las líneas y las «Observaciones Físicas» escritas (que no se
+ * guardan) quedan como están.
+ * @param {{silencioso?: boolean, recepcion: unknown}} entrada
+ * @returns {boolean}
+ */
+export function recargaReponeLineas({ silencioso = false, recepcion }) {
+  return !silencioso || !esRecepcionPorConfirmar(recepcion);
 }
 
 /**

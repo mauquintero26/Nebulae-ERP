@@ -15,8 +15,9 @@
 import { congelar, humanizarCodigo } from './estados-pedido.js';
 import { definirColumnas } from './kanban.js';
 // B4 T16A: el día de una fecha de negocio y la tarjeta de un PEC, el día de hoy y los números con su formato.
-import { diaPec, tarjetaPec } from './estados-compras.js';
-import { diaColombia } from './fechas-colombia.js';
+// B4 T24 f2 (F27): el enlace a Recepciones, el de estados-compras.js (sin una copia aquí).
+import { diaPec, ENLACE_RECEPCIONES, tarjetaPec } from './estados-compras.js';
+import { diaColombia, diasEntre } from './fechas-colombia.js';
 import { formatoDecimal, formatoEntero } from './kpis.js';
 
 /**
@@ -31,7 +32,6 @@ import { formatoDecimal, formatoEntero } from './kpis.js';
 /** Los tipos de envío, en el orden en que se unen sus etapas (el casillero es el más largo). */
 const TIPOS_ENVIO = congelar(['casillero', 'directo']);
 
-const ENLACE_RECEPCIONES = congelar({ texto: 'Ir a Recepciones', href: '/dashboard/compras/recepciones' });
 
 const esObjeto = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const textoLleno = (v) => typeof v === 'string' && v.trim() !== '';
@@ -223,12 +223,6 @@ export function avancePromedioTransito(filas) {
   return `${formatoDecimal(promedio)}/${etapas > 0 ? formatoEntero(etapas) : '—'}`;
 }
 
-const MS_DIA = 24 * 60 * 60 * 1000;
-/** Los días de calendario de `desde` a `hasta` ('AAAA-MM-DD'): sin zonas ni horas de verano. */
-function diasEntre(desde, hasta) {
-  const ms = (dia) => { const [a, m, d] = dia.split('-').map(Number); return Date.UTC(a, m - 1, d); };
-  return Math.round((ms(hasta) - ms(desde)) / MS_DIA);
-}
 const enDias = (n) => `${formatoEntero(n)} ${n === 1 ? 'día' : 'días'}`;
 
 function entregaDe(pec, hoy) {

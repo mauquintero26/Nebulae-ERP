@@ -49,9 +49,12 @@ export function NewClientModal({ onSave, onClose, textoInicial }: {
 
   if (typeof document === 'undefined') return null;
   return createPortal(
-    // C9 (ronda 1): Escape cierra el alta si no está guardando, sin llegar a la ventana de la solicitud (stopPropagation).
-    <div onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); if (!saving) onClose(); } }}>
-    <Modal title="Nuevo cliente" subtitle="Completa los datos del cliente nuevo para continuar." icon={UserPlus} color="indigo"
+    // C9 (ronda 1) y B4 T24 r2-r3 (m5, m16, m8): el alta tiene campos (F40, C2): se cierra solo con sus botones. Lo que protege a la ventana
+    // de la solicitud de atrás es la pila de capas (solo la de arriba atiende el Esc) más su cierre solo con botones; el stopPropagation de
+    // aquí solo corta los oyentes de window y de React que estén por encima.
+    // B4 T24 f2 r1 (m10): data-superficie marca el portal (todo portal de src la lleva); dentro, el Modal es su capa (data-capa).
+    <div data-superficie="ventana" onKeyDown={e => { if (e.key === 'Escape') e.stopPropagation(); }}>
+    <Modal cierreExterno={false} title="Nuevo cliente" subtitle="Completa los datos del cliente nuevo para continuar." icon={UserPlus} color="indigo"
       capa="encima"
       // Mientras guarda no se cierra (ni la X ni 'Cancelar'): el resultado siempre llega a una ventana abierta.
       onClose={() => { if (!saving) onClose(); }} bloquearCierre={saving}

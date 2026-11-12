@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Ellipsis } from 'lucide-react';
+import { FOCO_DENTRO } from '@/lib/design-system';
 import { posicionMenu } from '@/lib/tabla';
 
 /**
@@ -45,7 +46,8 @@ function enfocar(item: HTMLElement | null | undefined) {
 export function MenuFila({
   items, etiqueta = 'Acciones',
 }: {
-  items: ItemMenuFila[];
+  /** B4 T24 (F14, aditivo): también una función que se llama al abrir (el tablero arma el menú de una tarjeta solo cuando se abre). */
+  items: ItemMenuFila[] | (() => ItemMenuFila[]);
   /** El nombre del botón ⋯ (aria-label y title). */
   etiqueta?: string;
 }) {
@@ -53,7 +55,8 @@ export function MenuFila({
   const boton = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const idMenu = useId();
-  const visibles = items.filter((item) => !item.oculto);
+  const perezoso = typeof items === 'function';
+  const visibles = (perezoso ? (abierto ? items() : []) : items).filter((item) => !item.oculto);
 
   const cerrar = useCallback((devolverFoco: boolean) => {
     setAbierto(false);
@@ -107,7 +110,7 @@ export function MenuFila({
     };
   }, [abierto, cerrar]);
 
-  if (!visibles.length) return null;
+  if (!perezoso && !visibles.length) return null;
 
   const elegir = (item: ItemMenuFila) => {
     if (item.deshabilitado) return;
@@ -159,12 +162,14 @@ export function MenuFila({
             setAbierto(true);
           }
         }}
-        className="inline-flex items-center justify-center rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 aria-expanded:bg-slate-100 aria-expanded:text-slate-700"
+        className={`inline-flex items-center justify-center rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 ${FOCO_DENTRO} aria-expanded:bg-slate-100 aria-expanded:text-slate-700`}
       >
         <Ellipsis size={16} aria-hidden="true" />
       </button>
       {abierto && createPortal(
-        <div
+        // B4 T24 f2 r1 (m10): el menú va en un portal en <body>; data-superficie lo cuenta como «encima» de una ventana (useCierreVentana
+        // no le quita el foco). Su Tab lo atiende el menú (cierra y vuelve al ⋯).
+        <div data-superficie="menu"
           ref={menu}
           id={idMenu}
           role="menu"
@@ -185,7 +190,7 @@ export function MenuFila({
                 // T4B r2: con el motivo a la vista (segunda línea), sin el mismo texto en title: no se lee dos veces.
                 title={item.deshabilitado && item.titulo ? undefined : item.titulo}
                 onClick={() => elegir(item)}
-                className={`group flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold outline-none aria-disabled:cursor-not-allowed ${
+                className={`group flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold ${FOCO_DENTRO} aria-disabled:cursor-not-allowed ${
                   item.peligro ? 'text-rose-600 hover:bg-rose-50 focus:bg-rose-50' : 'text-slate-700 hover:bg-slate-50 focus:bg-slate-100'
                 }`}
               >

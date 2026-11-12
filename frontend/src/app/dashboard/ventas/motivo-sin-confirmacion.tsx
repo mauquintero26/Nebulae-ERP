@@ -41,7 +41,7 @@ export function VentanaMotivoSinConfirmacion({
   const largo = largoTexto(motivoLimpio(motivo));
   const errorMotivo = errorMotivoSinConfirmacion(motivo);
   return (
-    <Modal title={titulo} icon={AlertTriangle} color="amber" maxWidth="md"
+    <Modal cierreExterno={false} title={titulo} icon={AlertTriangle} color="amber" maxWidth="md"
       onClose={() => { if (!guardando) onCerrar(); }}
       bloquearCierre={guardando}
       footer={(

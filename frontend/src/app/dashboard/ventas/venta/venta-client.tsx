@@ -4,25 +4,25 @@ export const dynamic = 'force-dynamic';
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, createContext, useContext } from 'react';
 import Link from 'next/link';
 // B4 T10: se fueron Search, MoreHorizontal, FileText y Package de la lista hecha a mano (la búsqueda, el ⋯ propio, las
-// StatCard y la pestaña Análisis); entran BarChart3 («Ver análisis») y Truck/Package de «Marcar En tránsito / En proceso».
+// StatCard y la pestaña Análisis); entra BarChart3 («Ver análisis»). B4 T24 f2 (F47): Truck y Package de «Marcar En tránsito / En
+// proceso» pasan con sus acciones a acciones-tablero-pedidos.ts.
 import {
-  RefreshCw, X, FileCheck, AlertCircle, ShoppingCart, DollarSign, UserPlus, BarChart3, Truck, Package,
+  RefreshCw, X, FileCheck, AlertCircle, ShoppingCart, DollarSign, UserPlus, BarChart3,
 } from 'lucide-react';
 import { useSearchParams, useRouter } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
 import { formatoPesos } from '@/lib/pesos';
-import { infoEstadoPedido, transicionesPedido } from '@/lib/estados-pedido';
-// B4 T10: la lista ya no cuenta ni filtra en el navegador (kpisPedidos, opcionesFiltroEstado, grupoPedido y la búsqueda
-// con coincideProducto): las vistas, los conteos y las tarjetas son del servidor (T6B y T6C). Lo de cada fila sigue
-// saliendo de las librerías.
+import { transicionesPedido } from '@/lib/estados-pedido';
+// B4 T10: la lista ya no cuenta ni filtra en el navegador (grupoPedido y la búsqueda con coincideProducto): las vistas,
+// los conteos y las tarjetas son del servidor (T6B y T6C). Lo de cada fila sigue saliendo de las librerías.
 import {
   tarjetasPedidos, saldoVisiblePedido, alertaEntregaPedido, diaDeNegocio, rutaSinParametro, accionVistaEnLista,
 } from '@/lib/listas-ventas';
 import { pedidoAdmitePxp } from '@/lib/dinero-ventas';
 import {
   SubNav, PageHeader, Button, Modal, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila, ModalMotivo,
-  TableroKanban, useTableroKanban, CLASE_CHIP, useAvisos,
+  TableroKanban, EsqueletoTablero, useTableroKanban, CLASE_CHIP, useAvisos,
 } from '@/components/ui';
 import type { DatosColumnaKanban, ItemMenuFila } from '@/components/ui';
 import {
@@ -35,20 +35,26 @@ import {
   accionModo, accionPestana, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta,
 } from '@/lib/tabla';
 import type { AccionTabla } from '@/lib/tabla';
-import { alternarSeleccion } from '@/lib/flujo';
+import { alternarPaso } from '@/lib/flujo';
 import { enlaceVerAnalisis, leerEnlacePedidos, pasosDePedidos, textoRegla, vistaDePasoPedido } from '@/lib/flujo-ventas';
 import {
-  COLUMNAS_PEDIDO, OPCIONES_ESTADOS_TABLERO_PEDIDO, RUTA_LISTA_PEDIDOS, accionesTarjetaPedido, chipsDocumentoVentas,
-  confirmacionFacturarPedido, consultaColumnaPedido, efectosCancelarPedido, estadoDeTarjeta, opcionesEstadosPedidos,
-  porEstadoVisto, reglaSoltarPedido, resumenColumnaPedido, tarjetaPedido,
+  COLUMNAS_PEDIDO, OPCIONES_ESTADOS_TABLERO_PEDIDO, RUTA_LISTA_PEDIDOS, chipsDocumentoVentas, consultaColumnaPedido,
+  efectosCancelarPedido, estadoDeTarjeta, estadosConsultaPedidos, opcionesEstadosPedidos, porEstadoVisto, reglaSoltarPedido,
+  resumenColumnaPedido, tarjetaPedido,
 } from '@/lib/kanban-ventas';
 import type { PorEstadoVisto } from '@/lib/kanban-ventas';
 import { fechaCorta, fechaSolo } from '@/lib/fechas-colombia';
 import { PERIODO_KPI } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
-import { TABLE } from '@/lib/design-system';
+import { FOCOS, RESERVA_BOTON_IA, TABLE } from '@/lib/design-system';
+import { accesoTableroVentas } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
+// B4 T24 f2 (F45): el cargador compartido de los resúmenes de las tarjetas.
+import { useResumen } from '@/components/ui/useResumen';
 import { VEN_NAV } from '../ven-nav';
-import { getUsuarioActual, puedeCrearOrdenDePago } from '../flujo';
+import { puedeCrearOrdenDePago } from '../flujo';
+// B4 T24 f2 (F47): las acciones del tablero, las mismas de E-Commerce.
+import { useAccionesTableroPedidos } from '../acciones-tablero-pedidos';
 
 export function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClose:()=>void}) {
   const [form, setForm] = useState({name:'',reference:'',contact_name:'',phone:'',email:'',address:'',city:'',country:'Colombia',payment_terms:'',notes:''});
@@ -66,7 +72,7 @@ export function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClo
     setSaving(false);
   }
   return (
-    <Modal title="Nuevo Proveedor" subtitle="Agregar a la agenda de proveedores" icon={UserPlus} color="purple"
+    <Modal cierreExterno={false} title="Nuevo Proveedor" subtitle="Agregar a la agenda de proveedores" icon={UserPlus} color="purple"
       // Mientras guarda no se cierra (ni la X ni 'Cancelar'): el resultado siempre llega a una ventana abierta.
       onClose={()=>{ if (!saving) onClose(); }} bloquearCierre={saving}
       footer={(
@@ -126,8 +132,6 @@ type FilaPedido = {
 
 /** `conteos` de con_conteos=1: las pestañas (con la búsqueda; sin vista, estados ni semáforo, R5). */
 type ConteosPedidos = Partial<Record<'todos' | 'pend_compra' | 'en_proceso' | 'listo_entrega' | 'entregado' | 'facturado' | 'cancelado', number>>;
-/** D39: las columnas del tablero de una acción desde una tarjeta: [origen, destino]. */
-type ColumnasDeTarjeta = readonly [string, string];
 /** Lo que la lista lee de GET /ventas/stats?periodo=30d (T6C): los kpis de las tarjetas (RP19 (2), D5). */
 type StatsPedidos = { kpis?: Record<string, unknown> | null };
 
@@ -139,7 +143,8 @@ export const INICIAL_PEDIDOS = { vista: 'todos', orden: 'atencion' };
 /** El contenedor del Hub y de las otras listas (T7 a T9): pb-24 deja libre, con la página al fondo, la esquina del botón
  *  flotante de la IA; px-4 hasta xl: a 1024 px con el menú abierto las columnas clave caben (R26). El mismo en la
  *  pantalla y en su esqueleto del Suspense. */
-export const CONTENEDOR_LISTA = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
+// B4 T24 f2 (F44-a): la reserva del botón de la IA es el token RESERVA_BOTON_IA (pb-24) de design-system.ts.
+export const CONTENEDOR_LISTA = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;
 /** R8: un pedido entregado, facturado o cancelado está cerrado y nunca va atrasado: desde ahí, «Con atraso» abre Todos. */
 const VISTAS_SIN_ATRASO = ['entregado', 'facturado', 'cancelado'];
 /** D39 (m6 de T8): en Kanban la lista va sin filas (limit=0): los conteos siguen al día en una consulta barata; las filas
@@ -149,12 +154,10 @@ const EXTRA_TABLERO = { limit: 0 };
 // Los chips: los tintes del tablero (CLASE_CHIP de components/ui/Kanban.tsx), el chip estándar de las tablas del B4 (m12
 // de T8): la misma marca sale igual en Lista y en Kanban. Sin tamaño de letra: cada uso pone el suyo.
 const CHIP = 'inline-block max-w-full truncate rounded-full border px-1.5 py-0.5 font-bold leading-tight';
-const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
+const FOCO_VISIBLE = FOCOS.indigo;
 // D41: el tono opaco filaAlerta para la fila atrasada (la resolución del servidor, R8) y la marca rosa a la izquierda del Hub.
 const MARCA_ATRASO = '[&>td:first-child]:shadow-[inset_3px_0_0_var(--color-rose-500)]';
 const claseDeFila = (p: FilaPedido) => (p.resolucion === 'ATRASADO' ? `${TABLE.filaAlerta} ${MARCA_ATRASO}` : null);
-/** Quien hace el cambio desde el tablero (updated_by, como el Hub). */
-const autorActual = () => { const u = getUsuarioActual(); return u.name || u.email || undefined; };
 
 /** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
 type AccionesFilaPedido = {
@@ -163,6 +166,8 @@ type AccionesFilaPedido = {
   crearPxp: (p: FilaPedido) => void;
   creandoPxp: number | null;
   puedePxpRol: boolean;
+  /** B4 T24 f2 r1 (m14): el rol cancela pedidos (PATCH a CANCELADO: ADMIN y ASESOR, accesoTableroVentas). */
+  mover: boolean;
 };
 const AccionesLista = createContext<AccionesFilaPedido | null>(null);
 
@@ -240,7 +245,7 @@ function CeldaAcciones({ p }: { p: FilaPedido }) {
     { etiqueta: 'Crear PXP', icono: DollarSign, onClick: () => acciones?.crearPxp(p), oculto: !puedePxp,
       deshabilitado: acciones?.creandoPxp === p.id },
     { etiqueta: 'Cancelar pedido', icono: X, peligro: true, onClick: () => acciones?.ir(`/dashboard/ventas/venta/${p.id}?accion=cancelar`),
-      oculto: !transicionesPedido(p.estado).includes('CANCELADO') },
+      oculto: !acciones?.mover || !transicionesPedido(p.estado).includes('CANCELADO') },
   ];
   return (
     <span className="flex items-center justify-end">
@@ -319,29 +324,37 @@ export function AccionesCabecera({ onActualizar, actualizando }: { onActualizar:
   );
 }
 
-/** La tarjeta del tablero (KANBAN-ventas-listas punto 5, D37 y el cruce C5): vuelve a esta lista. */
-const tarjetaDePedido = (p: FilaPedido) => tarjetaPedido(p);
 
 export default function VentaClient() {
   const router = useRouter();
-  // H49 (T1B): avisos del sistema y confirmar() (nunca confirm, alert ni prompt).
-  const { avisar, avisarError, confirmar } = useAvisos();
+  // H49 (T1B): avisos del sistema (nunca confirm, alert ni prompt). B4 T24 f2 (F47): confirmar() y avisarError() del tablero los usa
+  // useAccionesTableroPedidos.
+  const { avisar } = useAvisos();
 
   // ── B4 T10, bloque 1: la carga del servidor (TABLA-listas-ventas punto 7; R5, R8, C3, C4, C9; RP8, RP19, RP26, D5, D39, D40) ──
   // Ya no hay arreglos en memoria (antes, los 200 más recientes, filtrados, contados y sumados en el navegador). El estado
   // ÚNICO de la lista: las pestañas, la búsqueda, el filtro de estados, el semáforo y las cajas de la franja, las
   // tarjetas, la tabla y el tablero despachan a él. El modo (Lista o Kanban) se guarda en vista:ventas.pedidos (RP26:
   // este hook es su único dueño) y la pestaña, la página y la búsqueda en la sesión (volver del detalle deja lo mismo).
-  const [estado, despachar, listo] = useEstadoTabla(ID_PEDIDOS, INICIAL_PEDIDOS);
+  const [estado, despachar, listo, modoListo] = useEstadoTabla(ID_PEDIDOS, INICIAL_PEDIDOS);
+  // B4 T24 (FINAL-m31 y FINAL-m38): el rol después de montar (useRolActual) decide si el tablero se mueve (accesoTableroVentas: el
+  // require_roles del PATCH de destino); sin permiso, soloLectura (no se arrastra ni se ofrece «Mover a…») y sin acciones masivas.
+  // B4 T24 f2 (duda 3 de f1): el rol también va a la tarjeta del tablero de solo lectura (tarjetaDePedido, más abajo).
+  const rol = useRolActual();
+  const accesoTablero = accesoTableroVentas(rol);
   const enKanban = estado.modo === 'kanban';
 
   // La tabla (T6B): GET /ventas/pedidos con vista, estados, semáforo, q, orden, limit y offset del estado, más los conteos
   // de las pestañas en la MISMA llamada. esperar: !listo (D40): el esqueleto, nunca «vacío». En Kanban, sin filas
   // (EXTRA_TABLERO): las piden las columnas. Del resumen de H47 de esta respuesta solo se usa por_estado: los estados
   // heredados del filtro (r1 m5, r2 p1); las tarjetas leen /ventas/stats (D5) y cada columna del tablero trae el suyo (C9).
+  // B4 T24 f2 (F2): en Lista, el filtro manda también los heredados equivalentes de lo marcado («Listo para entrega» lleva
+  // LISTO_ENTREGA y LISTO_PARA_ENTREGA: una sola opción, estadosConsultaPedidos); sin nada que sumar, la consulta de siempre.
+  const estadosConsulta = useMemo(() => estadosConsultaPedidos(estado.estados), [estado.estados]);
+  const extraDeLaLista = useMemo(() => (estadosConsulta ? { estados: estadosConsulta } : null), [estadosConsulta]);
   const listado = useListado<FilaPedido>({
     ruta: '/ventas/pedidos', estado, conConteos: true, esperar: !listo, despachar,
-    extra: enKanban ? EXTRA_TABLERO : null,
+    extra: enKanban ? EXTRA_TABLERO : extraDeLaLista,
   });
   // m5 de T8: mientras la última respuesta sea la de Kanban (sin filas) y la tabla ya pida su página, la tabla está
   // cargando y el total en 'cargando': nunca «No hay pedidos en esta vista» con el total de la otra consulta.
@@ -356,17 +369,11 @@ export default function VentaClient() {
 
   // Las tarjetas (RP19 (2), D5): los kpis de GET /ventas/stats?periodo=30d (la llamada del Hub: «Saldo por cobrar» es el
   // mismo número, R7), sin respaldo local. Mientras no llega, 'cargando' (barras grises, nunca 0); si falla, «—».
+  // B4 T24 f2 (F45): con useResumen (components/ui), el MISMO cargador del Hub (antes, una copia literal).
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<{ vuelta: number; datos: StatsPedidos | null; error: unknown } | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    apiFetch(`/ventas/stats?periodo=${PERIODO_KPI}`, { signal: control.signal })
-      .then((r: { data?: StatsPedidos } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  const cargandoStats = stats?.vuelta !== vueltaStats;
-  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
+  const stats = useResumen<StatsPedidos>(`/ventas/stats?periodo=${PERIODO_KPI}`, vueltaStats);
+  const cargandoStats = stats.cargando;
+  const estadoKpis = useEstadoKpi(cargandoStats, stats.error);
 
   // El tablero en modo servidor (R11, C4, D39): una consulta por columna (consultaColumnaPedido: vista=todos, los estados
   // de la columna cruzados con el filtro de la pantalla; sin ninguno en común la columna queda vacía sin pedir nada) con
@@ -438,8 +445,9 @@ export default function VentaClient() {
   // r1 (m5): las opciones del filtro de la Lista suman los estados heredados que traen los pedidos (resumen.por_estado,
   // H47; opcionesEstadosPedidos). Una sola función, estable mientras no cambia lo visto: la barra y la poda de las
   // pestañas, del conmutador, del semáforo y del enlace usan la misma. r2 (p1): el servidor calcula por_estado después
-  // del filtro de estados, así que no se lee directo: porEstadoVisto guarda la unión de lo visto en la misma vista,
-  // búsqueda y semáforo, solo de una respuesta vigente (ni cargando, ni recargando, ni con error). Es un estado derivado
+  // del filtro de estados, así que no se lee directo: porEstadoVisto guarda la unión de lo visto con la misma búsqueda y
+  // semáforo (B4 T24 f2, F30: la pestaña ya no cuenta, y durante un viaje al servidor queda lo visto), solo de una respuesta
+  // vigente (ni cargando, ni recargando, ni con error). Es un estado derivado
   // en el render, sin efectos (como llegadaDeListado): con la misma referencia no vuelve a pintar.
   const vigente = listado.cargandoInicial || listado.recargando || listado.error ? null : (listado.resumen?.por_estado ?? null);
   const [vistos, setVistos] = useState<PorEstadoVisto | null>(null);
@@ -460,12 +468,14 @@ export default function VentaClient() {
     despachar(accionPestana(estado, vista, opcionesDeLaLista));
     router.replace(rutaSinParametro(RUTA_LISTA_PEDIDOS, window.location.search, 'tab'), { scroll: false });
   }, [estado, despachar, router, opcionesDeLaLista]);
+  // B4 T24 (F38): con modoListo (el modo guardado leído de verdad), no con `listo`, que también llega por el tope de 4 s: si después
+  // llegara 'kanban', la vista del enlace quedaría escondida en el tablero.
   useLayoutEffect(() => {
     const vista = enlacePendiente.current;
-    if (!listo || vista === null) return;
+    if (!modoListo || vista === null) return;
     enlacePendiente.current = null;
     if (estado.modo === 'kanban') despachar(accionVistaEnLista(estado, vista, opcionesDeLaLista));
-  }, [listo, estado, despachar, opcionesDeLaLista]);
+  }, [modoListo, estado, despachar, opcionesDeLaLista]);
 
   // ── B4 T10, bloque 2: pestañas y búsqueda (TABLA-listas-ventas punto 7; R5, RP21, RP26, D40, D41; H15, H17) ──
   const pestanas = pestanasDeLaLista(listado.conteos as ConteosPedidos | null);
@@ -482,7 +492,7 @@ export default function VentaClient() {
   const alCambiarBarra = useCallback((accion: AccionTabla) => {
     if (accion.tipo === 'modo') {
       const modo = String(accion.valor);
-      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesDeLaLista));
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesDeLaLista, COLUMNAS_PEDIDO));
     } else despachar(accion);
   }, [estado, despachar, opcionesDeLaLista]);
   // m8 de T8: el «vacío» de la lista solo cambia con la búsqueda. Sin búsqueda, de dónde salen los pedidos (H47).
@@ -511,15 +521,17 @@ export default function VentaClient() {
     } catch (err) {
       // Los de error pasan por textoDeError (sin conexión, '[object Object]', 'Error: ' repetido).
       avisar(textoDeError(err), { tono: 'error' });
+      // La regla única (recargarTrasError): un 400, un 409, un 422 (F8) o la red cortada recargan la lista; un 403 o un 500, no.
       if (recargarTrasError(err)) recargarListado();
     } finally {
       setCreandoPxp(null);
     }
   }, [avisar, recargarListado]);
-  const puedePxpRol = puedeCrearOrdenDePago(getUsuarioActual().role);
+  // B4 T24 f2 r1 (m18): el rol leído después de montar (el de la tarjeta y del tablero), no getUsuarioActual().role en el render.
+  const puedePxpRol = puedeCrearOrdenDePago(rol);
   const accionesFila = useMemo<AccionesFilaPedido>(() => ({
-    abrir: abrirPedido, ir: (ruta) => router.push(ruta), crearPxp, creandoPxp, puedePxpRol,
-  }), [abrirPedido, router, crearPxp, creandoPxp, puedePxpRol]);
+    abrir: abrirPedido, ir: (ruta) => router.push(ruta), crearPxp, creandoPxp, puedePxpRol, mover: accesoTablero.mover,
+  }), [abrirPedido, router, crearPxp, creandoPxp, puedePxpRol, accesoTablero.mover]);
   // La selección de las filas (la de B1): «Seleccionar todo» marca la página; TablaEstandar la limpia al cambiar de
   // página, pestaña, búsqueda, filtro u orden.
   const [seleccion, setSeleccion] = useState<ClaveFila[]>([]);
@@ -532,94 +544,30 @@ export default function VentaClient() {
   // reglaSoltarPedido (T3C): libre entre Pendiente de compra, En proceso y Listo para entrega; a Entregado no se arrastra
   // (Entregas elige la bodega); Facturado solo desde Entregado, con confirmación; Cancelado pide el motivo; un pedido
   // entregado o cancelado no vuelve atrás. Lo que no se puede queda bloqueado con su motivo ANTES de soltar.
-  // 'cambio': el PATCH del estado. El tablero mueve la tarjeta y, si el servidor la rechaza, la devuelve con su mensaje;
-  // recarga su origen y su destino (D39) y aquí se recargan las pestañas, la franja y las tarjetas. r1 (m4): si el PATCH
-  // falla, también, con la regla de recargarTrasError (un 409: el pedido cambió en otro lado), y el error sigue para que
-  // el tablero deshaga (eso ya recarga su origen y su destino: aquí no se llama a tablero.recargar).
-  async function cambiarDesdeTablero(p: FilaPedido, resultado: { estado: string }) {
-    try {
-      await apiFetch(`/ventas/pedidos/${p.id}`, {
-        method: 'PATCH', body: JSON.stringify({ estado: resultado.estado, updated_by: autorActual() }),
-      });
-    } catch (err) {
-      if (recargarTrasError(err)) recargarTrasCambio();
-      throw err;
-    }
-    recargarTrasCambio();
-  }
-  // 'accion' 'facturar' (N2): confirmar() con el texto del panel rápido del Hub → PATCH {estado: 'FACTURADO'}; 'cancelar':
-  // ModalMotivo. Al terminar, del tablero solo su origen y su destino (D39).
-  const [cancelando, setCancelando] = useState<{ pedido: FilaPedido; columnas: ColumnasDeTarjeta } | null>(null);
-  async function facturarDesdeTablero(p: FilaPedido, columnas: ColumnasDeTarjeta) {
-    if (!(await confirmar(confirmacionFacturarPedido(p)))) return;
-    try {
-      await apiFetch(`/ventas/pedidos/${p.id}`, { method: 'PATCH', body: JSON.stringify({ estado: 'FACTURADO', updated_by: autorActual() }) });
-      avisar(`${p.numero} quedó Facturado`, { tono: 'ok' });
-    } catch (err) {
-      avisarError(err, `No se pudo facturar ${p.numero}`);
-      // r1 de T9 (m1): un 400, un 409 o la red cortada recargan (algo cambió en otro lado); un 422 o un 500, no.
-      if (!recargarTrasError(err)) return;
-    }
-    tablero.recargar([...columnas]);
-    recargarTrasCambio();
-  }
-  function accionDesdeTablero(p: FilaPedido, resultado: { accion: string }, origen: string, destino: string) {
-    if (resultado.accion === 'cancelar') setCancelando({ pedido: p, columnas: [origen, destino] });
-    else if (resultado.accion === 'facturar') void facturarDesdeTablero(p, [origen, destino]);
-  }
-  // 'cancelar' (N2, H45, H46): ModalMotivo (5 letras o más) → PATCH {estado: 'CANCELADO', cancellation_reason} (el
-  // servidor deja el motivo en la Actividad, «Motivo de cancelación», anula la PXP pendiente y reabre la cotización). Si
-  // el PATCH falla, con la regla única recargarTrasError se recargan el origen y el destino del tablero, las pestañas, la
-  // franja y las tarjetas, y el error sigue (throw) para que ModalMotivo lo muestre y conserve lo escrito.
-  async function cancelarConMotivo(motivo: string) {
-    if (!cancelando) return;
-    const { pedido, columnas } = cancelando;
-    const autor = autorActual();
-    try {
-      await apiFetch(`/ventas/pedidos/${pedido.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ estado: 'CANCELADO', cancellation_reason: motivo, cancellation_authorized_by: autor, updated_by: autor }),
-      });
-    } catch (err) {
-      if (recargarTrasError(err)) {
-        tablero.recargar([...columnas]);
-        recargarTrasCambio();
-      }
-      throw err;
-    }
-    avisar(`${pedido.numero} cancelado`, { tono: 'ok' });
-    tablero.recargar([...columnas]);
-    recargarTrasCambio();
-  }
-  // accionesTarjeta: «Marcar En tránsito» y «Marcar En proceso» sin salir de la columna En proceso (accionesTarjetaPedido:
-  // solo lo que acepta el PATCH). Al terminar, esa columna y lo que mueve el cambio.
-  const marcarDesdeTablero = useCallback(async (p: FilaPedido, nuevo: string) => {
-    try {
-      await apiFetch(`/ventas/pedidos/${p.id}`, { method: 'PATCH', body: JSON.stringify({ estado: nuevo, updated_by: autorActual() }) });
-      avisar(`${p.numero} pasó a ${infoEstadoPedido(nuevo).label}`, { tono: 'ok' });
-    } catch (err) {
-      avisarError(err, `No se pudo cambiar el estado de ${p.numero}`);
-      if (!recargarTrasError(err)) return;
-    }
-    recargarTablero(['en_proceso']);
-    recargarTrasCambio();
-  }, [avisar, avisarError, recargarTablero, recargarTrasCambio]);
-  const accionesTarjeta = useCallback((p: FilaPedido): ItemMenuFila[] => accionesTarjetaPedido(p).map((a) => ({
-    etiqueta: a.etiqueta, icono: a.estado === 'EN_TRANSITO' ? Truck : Package, onClick: () => { void marcarDesdeTablero(p, a.estado); },
-  })), [marcarDesdeTablero]);
+  // B4 T24 f2 (F47): lo que pasa al soltar ('cambio', 'facturar' y 'cancelar') y «Marcar En tránsito / En proceso» del ⋯ son las
+  // MISMAS acciones de E-Commerce: useAccionesTableroPedidos (la regla de error y de recarga, en accionesTableroPedidos de
+  // lib/kanban-ventas.js, con sus casos). Solo quien mueve (accesoTablero.mover) ve las acciones del ⋯.
+  const {
+    cambiarDesdeTablero, accionDesdeTablero, accionesTarjeta, cancelando, cancelarConMotivo, cerrarCancelacion,
+  } = useAccionesTableroPedidos<FilaPedido>({ tablero, recargarTrasCambio, mover: accesoTablero.mover });
+  // La tarjeta del tablero (KANBAN-ventas-listas punto 5, D37 y el cruce C5): vuelve a esta lista. B4 T24 f2 (duda 3 de f1): en solo
+  // lectura, su acción principal queda solo si el rol puede hacerla (FINANZAS cobra, COMPRAS gestiona la compra, BODEGA despacha); si
+  // no, la tarjeta queda en «Abrir», como en E-Commerce. r1 (m16): con el rol SIEMPRE, no solo en solo lectura (ASESOR no gestiona
+  // la compra: create_pec es de ADMIN y COMPRAS).
+  const tarjetaDePedido = useCallback((p: FilaPedido) => tarjetaPedido(p, { rol }), [rol]);
   // C9: la suma de H47 de cada columna (el resumen de su consulta) debajo del título, salvo en Cancelado.
   const resumenColumna = useCallback(
     (clave: string, d: DatosColumnaKanban<FilaPedido>) => resumenColumnaPedido(clave, d.resumen), [],
   );
 
   // ── B4 T10, bloque 5: las tarjetas (KPI-ventas punto 9; R12, RP19 (2), D5) ──
-  const tarjetas = tarjetasPedidos(stats?.datos?.kpis ?? null);
+  const tarjetas = tarjetasPedidos(stats.datos?.kpis ?? null);
   // En Lista son pestañas (D41: accionPestana, como un clic en la pestaña); tocar la activa vuelve a Todos (la de siempre,
-  // alternarSeleccion). En Kanban abren esa pestaña en Lista (accionVistaEnLista, la misma acción del enlace ?tab=). El
+  // alternarPaso). En Kanban abren esa pestaña en Lista (accionVistaEnLista, la misma acción del enlace ?tab=). El
   // monto vendido y el saldo no tienen una vista: no son botones.
   const vistaActiva = enKanban ? null : estado.vista;
   const elegirVista = (vista: string) => {
-    const siguiente = enKanban ? vista : (alternarSeleccion(estado.vista, vista) ?? INICIAL_PEDIDOS.vista);
+    const siguiente = enKanban ? vista : (alternarPaso(estado.vista, vista) ?? INICIAL_PEDIDOS.vista);
     despachar(accionVistaEnLista(estado, siguiente, opcionesDeLaLista));
   };
 
@@ -642,7 +590,9 @@ export default function VentaClient() {
     const vista = vistaDePasoPedido(clave);
     if (vista) elegirVista(vista);
   };
-  const actualizando = listado.recargando || flujo.cargando || (cargandoStats && stats !== null);
+  // B4 T24 f2 r1 (m22): el estado de useEstadoKpi distingue la primera carga ('cargando') de una recarga ('actualizando', también
+  // después de un /ventas/stats fallido): la semántica de BASE.
+  const actualizando = listado.recargando || flujo.cargando || estadoKpis === 'actualizando';
 
   return (
     <div className="w-full bg-slate-50 min-h-full flex flex-col">
@@ -749,7 +699,8 @@ export default function VentaClient() {
               Entregado · Facturado (plegada) · Cancelado (plegada), con la suma de cada columna. Lo que no se puede queda
               bloqueado con su motivo ANTES de soltar (reglaSoltarPedido). */}
           {enKanban && (
-            <TableroKanban
+            // B4 T24 r2 (m2, m10): mientras se lee el rol, el esqueleto (sin acciones) en lugar del tablero.
+            !accesoTablero.listo ? <EsqueletoTablero /> : <TableroKanban
               tablero={tablero}
               regla={reglaSoltarPedido}
               tarjetaDe={tarjetaDePedido}
@@ -758,6 +709,7 @@ export default function VentaClient() {
               onAccion={accionDesdeTablero}
               accionesTarjeta={accionesTarjeta}
               resumenColumna={resumenColumna}
+              soloLectura={accesoTablero.soloLectura}
               color="indigo"
             />
           )}
@@ -773,7 +725,7 @@ export default function VentaClient() {
           textoConfirmar="Cancelar pedido"
           placeholder="Ej: Cliente desistió de la compra, error en el pedido, etc."
           onConfirmar={cancelarConMotivo}
-          onCerrar={() => setCancelando(null)}
+          onCerrar={cerrarCancelacion}
         />
       )}
     </div>

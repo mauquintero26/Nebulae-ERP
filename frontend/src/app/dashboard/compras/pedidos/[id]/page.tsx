@@ -11,15 +11,18 @@ import {
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { apiFetch } from '@/lib/api';
+import { FOCOS } from '@/lib/design-system';
 import { Badge, Button, ContenidoEnlace, useAvisos } from '@/components/ui';
 // B4 T15 (TABLA-compras punto 12, FLUJO-compras punto 7, H13): las etapas reales del envío en la barra estándar, las
 // tablas de detalle en modo simple y, en vez de campos y botones que no guardaban, texto de solo lectura.
 import { TablaEstandar, usePreferenciasTabla } from '@/components/tabla';
 import type { ColumnaTabla } from '@/components/tabla';
 import { PasosFlujo } from '@/components/flujo';
-import { diaPec, infoEstadoPec } from '@/lib/estados-compras';
+import { infoEstadoPec } from '@/lib/estados-compras';
+import { accesoCompras } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 import { TEXTO_SEGUIMIENTO_CERRADO, pasosDeTracking, seguimientoCerrado } from '@/lib/flujo-compras';
-import { fechaCorta, fechaHoraLarga } from '@/lib/fechas-colombia';
+import { fechaCorta, fechaHoraLarga, textoDiaCorto } from '@/lib/fechas-colombia';
 import { formatoPesos } from '@/lib/pesos';
 import { recargarTrasError } from '@/lib/avisos';
 
@@ -37,7 +40,7 @@ const DEFAULT_ACTIVITY_STYLE = { icon: MessageSquare, color: 'text-slate-500 bg-
 // B4 T15 (resolución 4): un instante (fecha de compra, la Actividad) en Colombia; un día de negocio (la entrega estimada)
 // tal como se guarda (diaPec, RP40), sin correrlo. Lo vacío, '—'. Los montos en pesos enteros (H42).
 const textoInstante = (v: unknown) => fechaCorta(v) || '—';
-const textoDia = (v: unknown) => fechaCorta(diaPec(v)) || '—';
+const textoDia = textoDiaCorto;
 const fCOP = (v: unknown) => formatoPesos(Number(v) || 0);
 
 /** Una línea de productos del PEC (el JSON `productos`), con su posición como clave de la tabla. */
@@ -129,6 +132,8 @@ export default function PedidoCompraDetallePage() {
   const [currentUser, setCurrentUser] = useState('');
   const [advancing, setAdvancing] = useState(false);
   const { avisarError } = useAvisos();
+  // B4 T24 r2 (m6): «Avanzar etapa logística» es PATCH /pedidos/{id}/tracking (ADMIN y COMPRAS: accesoCompras.tracking).
+  const accesoPec = accesoCompras(useRolActual());
   // TABLA-compras punto 12 (D40, D41): un solo usePreferenciasTabla por tabla de detalle (las columnas se estiran, se
   // mueven y se recuerdan; sin paginación, orden ni selección).
   const prefsProductos = usePreferenciasTabla('compras.pec.productos', COLUMNAS_PRODUCTOS);
@@ -237,7 +242,7 @@ export default function PedidoCompraDetallePage() {
     } catch (err) {
       // RP30: un aviso del sistema con el mensaje del servidor (nunca alert()).
       avisarError(err, 'No se pudo actualizar el seguimiento');
-      // T15 r1 (m9): si el PEC cambió en otro lado y recargarTrasError lo indica (un 400, un 409 o sin respuesta; un 404 no recarga), se vuelve a pedir lo que se muestra.
+      // T15 r1 (m9): si el PEC cambió en otro lado, recargarTrasError (400, 409, 422 o sin respuesta; 404 o 500, no) recarga lo que se ve.
       if (recargarTrasError(err)) await loadPedido();
     }
     setAdvancing(false);
@@ -292,7 +297,7 @@ export default function PedidoCompraDetallePage() {
         {!isNew && pedido?.id && (
           <div className="flex items-center gap-3">
             <Link href={`/dashboard/compras/pedidos?id=${pedido.id}`}
-              className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700">
+              className={`flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 ${FOCOS.emerald}`}>
               <ContenidoEnlace icon={Edit2}>Editar en Pedidos de compra</ContenidoEnlace>
             </Link>
           </div>
@@ -366,7 +371,7 @@ export default function PedidoCompraDetallePage() {
                 <div className="bg-slate-50 p-6 rounded-xl border border-slate-200">
                   <div className="flex justify-between items-center gap-3 mb-6">
                     <span className="text-sm font-bold text-slate-700">Progreso de la importación / ruta</span>
-                    {!isNew && !cancelado && completedCount < stages.length && (
+                    {!isNew && !cancelado && accesoPec.tracking && completedCount < stages.length && (
                       <Button size="sm" color="blue" icon={Truck} loading={advancing} onClick={avanzarTracking}>Avanzar etapa logística</Button>
                     )}
                   </div>

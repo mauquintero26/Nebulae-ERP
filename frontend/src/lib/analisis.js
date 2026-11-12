@@ -29,7 +29,7 @@
  */
 
 import { congelar, tiene } from './estados-pedido.js';
-import { diaColombia, hace } from './fechas-colombia.js';
+import { diaColombia, diaDeCalendario, hace } from './fechas-colombia.js';
 import { formatoPesos } from './pesos.js';
 import {
   variacionPct, textoVariacion, direccionVariacion, tonoDeDireccion, mejorDesde, formatoValorKpi, formatoEntero,
@@ -121,15 +121,8 @@ export const ERRORES_PERIODO = congelar({
 
 const FECHA = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-/** Los milisegundos UTC de un 'AAAA-MM-DD' que existe (no '2026-02-30'), o null. */
-function diaUTC(texto) {
-  const m = FECHA.exec(texto);
-  if (!m) return null;
-  const [anio, mes, dia] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  const t = Date.UTC(anio, mes - 1, dia);
-  const f = new Date(t);
-  return f.getUTCFullYear() === anio && f.getUTCMonth() === mes - 1 && f.getUTCDate() === dia ? t : null;
-}
+/** Los milisegundos UTC de un 'AAAA-MM-DD' que existe (no '2026-02-30'), o null: diaDeCalendario de fechas-colombia.js (F3). */
+const diaUTC = (texto) => diaDeCalendario(texto)?.getTime() ?? null;
 
 const vacio = (v) => v === null || v === undefined || (typeof v === 'string' && !v.trim());
 
@@ -447,6 +440,24 @@ export const HEX_CLASE_TAILWIND = congelar({
   'bg-indigo-600': '#4f46e5', 'bg-purple-600': '#9333ea', 'bg-emerald-600': '#059669',
   'bg-blue-600': '#2563eb', 'bg-teal-600': '#0d9488', 'bg-red-600': '#dc2626',
 });
+
+/**
+ * B4 T24 (F26): la clase de HEX_CLASE_TAILWIND más cercana a un '#hex' (distanciaColor; en un empate, la primera de la tabla), o null
+ * si no es un hex. Así un color guardado como hex (ESTADOS_SC) se lleva a una clase y a su acento con una regla, no con una tabla.
+ * @param {unknown} hex
+ * @returns {string | null}
+ */
+export function claseTailwindCercana(hex) {
+  const texto = typeof hex === 'string' ? hex.trim() : '';
+  if (!lab(texto)) return null;
+  let mejor = null;
+  let distancia = Infinity;
+  for (const [clase, valor] of Object.entries(HEX_CLASE_TAILWIND)) {
+    const d = distanciaColor(texto, valor);
+    if (d < distancia) { mejor = clase; distancia = d; }
+  }
+  return mejor;
+}
 
 /**
  * El hex de una clase de Tailwind de HEX_CLASE_TAILWIND ('bg-blue-500' -> '#3b82f6'); una desconocida da '#94a3b8'.

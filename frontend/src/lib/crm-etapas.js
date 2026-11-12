@@ -17,7 +17,7 @@
 
 import { congelar, tiene } from './estados-pedido.js';
 import { HEX_CLASE_TAILWIND, hexDeClaseTailwind } from './analisis.js';
-import { definirColumnas } from './kanban.js';
+import { CLAVES_TONOS_KANBAN, definirColumnas } from './kanban.js';
 import { formatoPesos } from './pesos.js';
 import { filtrarFilas } from './tabla.js';
 import { acentoDesdeClase } from './kpis.js';
@@ -64,12 +64,10 @@ function colorDe(clase) {
   return c.startsWith('#') ? c : hexDeClaseTailwind(c);
 }
 
-/** La familia de color de la clase ('bg-blue-500' -> 'blue'), o 'slate'. */
-const familia = (clase) => /^bg-([a-z]+)-\d+$/.exec(typeof clase === 'string' ? clase.trim() : '')?.[1] ?? 'slate';
 
 /**
  * Las columnas del tablero del CRM a partir de las etapas (GET /crm/pipeline-stages, o su respuesta {status, data}), en
- * su orden, con la forma de kanban.js: {clave: String(id), titulo: name (o 'Etapa {id}'), tono (la familia del color),
+ * su orden, con la forma de kanban.js: {clave: String(id), titulo: name (o 'Etapa {id}'), tono (acentoDesdeClase del color con las claves de TONOS, F26 y r2 C8),
  * colorHex, bgHex (null si el fondo no es una clase conocida), cerrada}. cerrada = maps_to_status CANCELLED o INVOICED,
  * o is_closed === true (RP73; hoy el modelo no lo trae). Sin etapas devuelve [] (la pantalla avisa). Inmutable.
  * @param {ReadonlyArray<EtapaCrm> | {data?: ReadonlyArray<EtapaCrm>} | null | undefined} stages
@@ -83,7 +81,7 @@ export function columnasDesdeEtapas(stages) {
     return {
       clave: String(s.id),
       titulo: typeof s.name === 'string' && s.name.trim() ? s.name.trim() : `Etapa ${s.id}`,
-      tono: familia(s.color),
+      tono: acentoDesdeClase(s.color, 'slate', CLAVES_TONOS_KANBAN),
       colorHex: colorDe(s.color),
       bgHex: tiene(BG_HEX, fondo) ? BG_HEX[fondo] : null,
       cerrada: STATUS_CERRADOS.includes(/** @type {string} */ (s.maps_to_status)) || s.is_closed === true,

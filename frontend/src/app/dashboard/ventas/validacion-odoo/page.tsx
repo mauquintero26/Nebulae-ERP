@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Cloud, FileSpreadsheet, ShieldAlert } from 'lucide-react';
 import { SubNav, PageHeader, Button, useAvisos } from '@/components/ui';
 import { VEN_NAV } from '../ven-nav';
+import { RESERVA_BOTON_IA } from '@/lib/design-system';
 
 export default function ValidacionOdooPage() {
   const { avisar } = useAvisos();
@@ -24,7 +25,8 @@ export default function ValidacionOdooPage() {
     <div className="w-full h-full flex flex-col">
       <SubNav label="Hub Ventas" items={VEN_NAV} currentPath="/dashboard/ventas/validacion-odoo" color="indigo" hub={{ href: '/dashboard/ventas' }} />
 
-      <div className="flex flex-col gap-6 w-full p-6 pb-10">
+      {/* B4 T24 f2 r1 (m2 de F44-a): el contenido deja libre, al fondo, la esquina del botón de la IA. */}
+      <div className={`flex flex-col gap-6 w-full p-6 ${RESERVA_BOTON_IA}`}>
         <PageHeader
           icon={Cloud} color="indigo"
           title="Validación Formato Odoo"

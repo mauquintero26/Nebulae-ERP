@@ -441,7 +441,8 @@ const tic = () => new Promise((r) => setImmediate(r));
 
 console.log('--- TEST 16 (T4C y r1, R4 y C2): lo de la sesión (tabla-sesion:{id}): pestaña, página, búsqueda, orden, semáforo, paso y estados ---');
 {
-  assert.deepEqual(CAMPOS_SESION_TABLA, ['vista', 'pagina', 'q', 'orden', 'semaforo', 'paso', 'estados']);
+  // B4 T24 (F39, D27): y los filtros extra de la pantalla (aditivo: sin filtros, la sesión de siempre).
+  assert.deepEqual(CAMPOS_SESION_TABLA, ['vista', 'pagina', 'q', 'orden', 'semaforo', 'paso', 'estados', 'filtros']);
   assert.ok(Object.isFrozen(CAMPOS_SESION_TABLA));
   assert.equal(MAXIMO_ESTADOS, 20);
   assert.equal(claveSesionTabla('ventas.hub'), 'tabla-sesion:ventas.hub');
@@ -1014,7 +1015,21 @@ console.log('--- TEST 23 (T4C y r1, R4, RP8, RP26, RP35, D28 y D38): el fuente d
   // r2, punto 6: los cables del hook (mutantes M14, M15, M22 y M23 del revisor).
   assert.ok(listado.includes('const usuario = usuarioDeLaSesion();'), 'M14: el usuario del render');
   assert.ok(listado.includes("const clave = `${version}|${usuario ?? ''}|${url}`;"), 'M14: el usuario en la clave');
-  assert.ok(listado.includes('contexto: { ruta, orden, usuario }'), 'r2, punto 1: la llegada sabe de qué usuario es');
+  // B4 T24 (F37, D27): el contexto lleva el orden de la URL pedida (ordenDeUrl) y el efecto no depende de estado.orden: con
+  // EXTRA_PAPELERA (orden: null) ordenar la Papelera ya no repite la misma petición.
+  assert.ok(listado.includes('contexto: { ruta, orden: ordenPedido, usuario }'), 'r2, punto 1: la llegada sabe de qué usuario es');
+  assert.ok(listado.includes('const ordenPedido = ordenDeUrl(url);'));
+  assert.ok(listado.includes('[carga, url, clave, ruta, ordenPedido, usuario, activo, esperar],'));
+  {
+    const { ordenDeUrl, urlListado, ESTADO_TABLA_INICIAL } = TABLA;
+    const conOrden = { ...ESTADO_TABLA_INICIAL, orden: '-monto' };
+    assert.equal(ordenDeUrl(urlListado('/x', conOrden)), '-monto');
+    assert.equal(ordenDeUrl(urlListado('/x', conOrden, { extra: { vista: null, limit: 0, offset: 0, orden: null } })), null, 'la Papelera');
+    assert.equal(ordenDeUrl('/x?a=1'), null);
+    assert.equal(ordenDeUrl('/x'), null);
+    assert.equal(ordenDeUrl('/x?orden=%20'), null, 'un orden vacío no cuenta');
+    assert.equal(ordenDeUrl(null), null);
+  }
   assert.ok(listado.includes('const restablece = Boolean(despachar);'), 'M15');
   assert.ok(listado.includes('estadoListado(resultado, { clave, activo, esperar, repeticion, ruta, orden, restablece, atendido, usuario })'),
     'M23: estadoListado recibe esperar (y lo demás)');
@@ -1025,7 +1040,9 @@ console.log('--- TEST 23 (T4C y r1, R4, RP8, RP26, RP35, D28 y D38): el fuente d
   assert.ok(estado.includes('const vinculosListos = modoListo && tablaListo;'));
   assert.ok(estado.includes('const [vencidoPara, setVencidoPara] = useState<number | null | undefined>(undefined);'));
   assert.match(estado, /useEffect\(\(\) => \{\s*if \(vinculosListos\) return undefined;\s*return esperarPreferencias\(\{ alVencer: \(\) => setVencidoPara\(usuario\) \}\);\s*\}, \[usuario, vinculosListos\]\);/);
-  assert.ok(estado.includes('return [estado, despachar, listoConTope(vinculosListos, vencidoPara === usuario)];'));
+  // B4 T24 (F38, D27): un cuarto elemento aditivo, modoListo (el modo guardado de verdad leído, no por el tope de espera).
+  assert.ok(estado.includes('return [estado, despachar, listoConTope(vinculosListos, vencidoPara === usuario), modoListo];'));
+  assert.ok(estado.includes('): [EstadoTabla, DespacharTabla, boolean, boolean] {'), 'el tipo, con el cuarto elemento');
   // Revisión de r2 (mutante H2): rechazoPorAtender recibe el usuario; sin él (usuario = null por defecto) el hook nunca
   // despacha la vuelta y la tabla queda en esqueleto.
   assert.ok(cuerpos.some((c) => c.includes('rechazoPorAtender(resultado, { orden, atendido, usuario })')),
@@ -1091,6 +1108,35 @@ console.log('--- TEST 24 (T4C r1, puntos 3 y 4): sesionVigente, escriturasDeAcci
   assert.deepEqual(llamadas.at(-1), {});
   // Si guardarParte descarta el guardado (cambio de sesión que el hook no vio) y no llama al actualizador: false.
   assert.equal(guardarCambioColumnas(() => {}, { ...base, listo: true, usuarioRender: 7, usuarioToken: 7 }), false);
+  // B4 T24 (F33): con la precarga fallida, una pieza compuesta (el mapa de anchos, {orden, ocultas}) se armaría sobre {} y reemplazaría
+  // la guardada en el servidor: no se escribe. «Restablecer» no depende de lo guardado: sí.
+  const antes = llamadas.length;
+  // r3 (m12): también 'desplazar' (las flechas de «Ajustar tabla»): la misma regla que el aviso (avisoCambioColumnas).
+  for (const cambio of [{ tipo: 'anchos', anchos: { cli: 310 } }, { tipo: 'ocultar', id: 'est' }, { tipo: 'mover', id: 'cli', hueco: 0 },
+    { tipo: 'desplazar', id: 'cli', paso: 1 }]) {
+    assert.equal(guardarCambioColumnas(guardarParte, { ...base, cambio, listo: true, usuarioRender: 7, usuarioToken: 7, precargaFallida: true }), false, cambio.tipo);
+  }
+  assert.equal(llamadas.length, antes, 'ni llama a guardarParte');
+  guardarCambioColumnas(guardarParte, { ...base, cambio: { tipo: 'restablecer' }, listo: true, usuarioRender: 7, usuarioToken: 7, precargaFallida: true });
+  assert.equal(llamadas.length, antes + 1, '«Restablecer» sí llega a guardarParte');
+  // r3 (m12): lo que no se escribe y lo que se avisa salen del MISMO predicado.
+  assert.match(readFileSync(new URL('../src/lib/tabla.js', import.meta.url), 'utf8'), /if \(avisoCambioColumnas\(\{ precargaFallida, cambio \}\)\) return false;/);
+  // r2 (ruling de la duda 4): el intento de ocultar, mover o estirar con la precarga fallida se dice (avisoCambioColumnas, pura).
+  const { avisoCambioColumnas, TEXTO_PRECARGA_FALLIDA_COLUMNAS } = TABLA;
+  assert.equal(TEXTO_PRECARGA_FALLIDA_COLUMNAS, 'No se pudieron cargar tus preferencias de columnas; intenta de nuevo en un momento.');
+  for (const tipo of ['anchos', 'ocultar', 'mover', 'desplazar']) {
+    assert.equal(avisoCambioColumnas({ precargaFallida: true, cambio: { tipo } }), TEXTO_PRECARGA_FALLIDA_COLUMNAS, tipo);
+    assert.equal(avisoCambioColumnas({ precargaFallida: false, cambio: { tipo } }), null, `${tipo} sin falla`);
+  }
+  assert.equal(avisoCambioColumnas({ precargaFallida: true, cambio: { tipo: 'restablecer' } }), null, 'restablecer sí se escribe');
+  // La pantalla lo cablea: usePreferenciaParte da precargaFallida (que vuelve a pedir la precarga) y usePreferenciasTabla la pasa.
+  const usoPrefs = readFileSync(new URL('../src/components/tabla/usePreferenciasTabla.ts', import.meta.url), 'utf8');
+  assert.match(usoPrefs, /const \[guardado, guardarParte, listo, precargaFallida\] = usePreferenciaParte<ColumnasGuardadas>\(/);
+  assert.match(usoPrefs, /const fallida = precargaFallida\(\);\s*const aviso = avisoCambioColumnas\(\{ precargaFallida: fallida, cambio \}\);\s*if \(aviso\) avisar\(aviso, \{ tono: 'error' \}\);/);
+  assert.match(usoPrefs, /usuarioRender: ahora\.usuario, usuarioToken: usuarioDeLaSesion\(\), precargaFallida: fallida,/);
+  assert.match(usoPrefs, /import \{ useAvisos \} from '@\/components\/ui\/Avisos';/);
+  const usoPref = readFileSync(new URL('../src/components/ui/usePreferencia.ts', import.meta.url), 'utf8');
+  assert.match(usoPref, /\): \[T, GuardarParte<T>, boolean, \(\) => boolean\] \{/);
 }
 
 console.log('--- TEST 25 (T4C r1, punto 1): un orden que el servidor rechaza vuelve al orden por defecto ---');
@@ -1855,7 +1901,10 @@ console.log('--- TEST 37 (T4D r1): los cables de la ronda r1 en el fuente (gesto
     'r2: la zona táctil de 24 px queda dentro de su propio th (16 px hacia la izquierda) y la línea visible');
 
   // 2. El doble clic mide el ancho propio del contenido: un inline-block que se encoge (y trunca con su máximo).
-  assert.match(t, /<span data-celda=\{v\} className=\{TABLE\.contenido\}>\{contenido\}<\/span>/);
+  // B4 T24 r2 (m17, D27): la columna de acciones (fija a la derecha) no se recorta: su span no lleva el truncate de TABLE.contenido,
+  // que cortaba el anillo de foco del ojo (y antes, del ⋯).
+  assert.match(t, /<span data-celda=\{v\} className=\{fijas\[v\] === 'derecha' \? TABLE\.contenidoAcciones : TABLE\.contenido\}>\{contenido\}<\/span>/);
+  assert.match(readFileSync(new URL('../src/lib/design-system.ts', import.meta.url), 'utf8'), /contenidoAcciones: 'inline-flex max-w-\[calc\(100%\+0\.5rem\)\] items-center overflow-hidden p-1 -m-1 align-middle',/);
   assert.equal(clase('contenido'), 'inline-block max-w-full truncate align-middle');
 
   // 3. La flexible: anchoAlSoltar con la base de las preferencias y el ancho pintado.
@@ -2029,7 +2078,8 @@ console.log('--- TEST 39 (B4 T7 r1, A2): fijasActivas — en una caja angosta la
   assert.match(t, /const SIN_FIJAS: Record<string, LadoFijo> = Object\.freeze\(\{\}\);/);
   assert.match(t, /const CASILLA_SUELTA: CSSProperties = \{ left: 'auto' \};/);
   assert.match(t, /<th scope="col" className=\{TABLE\.encabezadoCasilla\} style=\{quietas \? undefined : CASILLA_SUELTA\}>/);
-  assert.match(t, /<td className=\{TABLE\.celdaCasilla\} style=\{casillaQuieta \? undefined : CASILLA_SUELTA\}>/);
+  // B4 T24 (FINAL-C6, D27): con la línea del foco de una fila pulsable (celdaFoco).
+  assert.match(t, /<td className=\{`\$\{TABLE\.celdaCasilla\} \$\{onFila \? TABLE\.celdaFoco : ''\}`\} style=\{casillaQuieta \? undefined : CASILLA_SUELTA\}>/);
   assert.match(t, /style=\{estiloFija\(v, fijasQuietas, geometria\.offsets\)\}\s*className=\{`\$\{TABLE\.encabezado\} \$\{fijasQuietas\[v\] \? TABLE\.encabezadoFijo : ''\} \$\{clasesFija\(v, fijasQuietas, visibles\)\}/);
   assert.match(t, /fijas=\{fijasQuietas\}\s*offsets=\{geometria\.offsets\}/);
   assert.match(t, /casillaQuieta=\{quietas\}/);
@@ -2180,12 +2230,15 @@ console.log('--- TEST 42 (B4 T7 r2, I-r1 y m-r1-a): la pastilla de una pestaña 
   // B4 T8: también con la marca sinConteo de la pestaña (TEST 43); la aparte sigue llegando igual.
   assert.match(barra, /const estadoPastilla = estadoPastillaPestana\(p\.conteo, estadoConteos, \{ aparteActiva, sinConteo: p\.sinConteo \}\);/);
   assert.match(barra,
-    /\{estadoPastilla !== 'oculto' && \(\s*<span className=\{`inline-flex min-w-\[1\.25rem\] items-center justify-center rounded-full px-1\.5 py-px text-\[11px\] \$\{activa \? PASTILLA_ACTIVA : p\.alerta \? PASTILLA_ALERTA : PASTILLA\}`\}>\s*<Contador valor=\{p\.conteo\} estado=\{estadoPastilla\} \/>\s*<\/span>\s*\)\}/,
+    // B4 T24 (FINAL-m27, D27): la alerta manda también con la pestaña activa, con su texto en title y sr-only.
+    // B4 T24 r1 (m21, D27): con la alerta, además del color, el triángulo (aria-hidden: el texto ya va en title y sr-only).
+    /\{estadoPastilla !== 'oculto' && \(\s*<span title=\{textoAlerta \?\? undefined\} className=\{`inline-flex min-w-\[1\.25rem\] items-center justify-center rounded-full px-1\.5 py-px text-\[11px\] \$\{textoAlerta \? PASTILLA_ALERTA : activa \? PASTILLA_ACTIVA : PASTILLA\}`\}>\s*\{textoAlerta && <AlertTriangle size=\{10\} aria-hidden="true" className="mr-0\.5 shrink-0" \/>\}\s*<Contador valor=\{p\.conteo\} estado=\{estadoPastilla\} \/>\s*<\/span>\s*\)\}/,
     'sin pastilla, ni Contador ni la alerta rosa');
   assert.match(barra, /const filaPestanas = useRef<HTMLDivElement>\(null\);/);
   assert.match(barra, /<div ref=\{filaPestanas\} role="tablist"/);
+  // B4 T24 (F34, D27): con el margen de la fila (MARGEN_FILA_PESTANAS).
   assert.match(barra,
-    /useLayoutEffect\(\(\) => \{\s*const fila = filaPestanas\.current;\s*const boton = enfocable \? botonesPestana\.current\.get\(enfocable\) : undefined;\s*if \(!fila \|\| !boton\) return;\s*const caja = fila\.getBoundingClientRect\(\);\s*const r = boton\.getBoundingClientRect\(\);\s*fila\.scrollLeft = scrollParaVer\(\{ inicio: r\.left - caja\.left \+ fila\.scrollLeft, ancho: r\.width \}, \{ scroll: fila\.scrollLeft, visible: fila\.clientWidth \}\);\s*\}, \[enfocable\]\);/);
+    /useLayoutEffect\(\(\) => \{\s*const fila = filaPestanas\.current;\s*const boton = enfocable \? botonesPestana\.current\.get\(enfocable\) : undefined;\s*if \(!fila \|\| !boton\) return;\s*const caja = fila\.getBoundingClientRect\(\);\s*const r = boton\.getBoundingClientRect\(\);\s*fila\.scrollLeft = scrollParaVer\(\{ inicio: r\.left - caja\.left \+ fila\.scrollLeft, ancho: r\.width \}, \{ scroll: fila\.scrollLeft, visible: fila\.clientWidth, margen: MARGEN_FILA_PESTANAS \}\);\s*\}, \[enfocable\]\);/);
   assert.ok(!/scrollIntoView/.test(barra), 'sin scrollIntoView: la página no se mueve');
 }
 
@@ -2647,7 +2700,8 @@ console.log('--- TEST 50 (B4 T22, Gastos; R5, R11, R16, RP26, RP57, RP58): el ca
   assert.doesNotMatch(fuente, /useVistaGuardada/);
   assert.ok(fuente.includes('pantalla: ID_GASTOS,') && fuente.includes('id={ID_GASTOS}') && fuente.includes('usePreferenciasTabla(ID_GASTOS, COLUMNAS_GASTOS)'), 'el MISMO id en todo');
   // Modo servidor (R5): q, orden, limit y offset del estado, esperando las preferencias; en Kanban la lista no se pide.
-  assert.ok(fuente.includes("ruta: '/finance/expenses', estado, esperar: !listo, despachar, activo: !enKanban, extra: extraLista"));
+  // B4 T24 (FINAL-C5, D27): además espera el rol y no pide sin permiso (accesoFinanzas, TEST T24-c).
+  assert.ok(fuente.includes("ruta: '/finance/expenses', estado, esperar: !listo || !acceso.listo, despachar, activo: !enKanban && acceso.gastos, extra: extraLista"));
   assert.ok(fuente.includes('modo="servidor"'));
   // Ordena solo por lo que el servidor acepta (RP58): fecha, categoria, concepto, tipo y monto.
   assert.deepEqual([...fuente.matchAll(/ordenable: '([a-z]+)'/g)].map((m) => m[1]), ['fecha', 'categoria', 'concepto', 'tipo', 'monto']);
@@ -2671,7 +2725,8 @@ console.log('--- TEST 50 (B4 T22, Gastos; R5, R11, R16, RP26, RP57, RP58): el ca
   assert.ok(fuente.includes('error: estadoConteos.error }'));
   // m17: el filtro de tipo va al servidor y vuelve a la página 1; los conteos lo llevan.
   assert.match(fuente, /<select aria-label="Tipo" value=\{tipo\} onChange=\{\(e\) => cambiarTipo\(e\.target\.value\)\}/);
-  assert.match(fuente, /const cambiarTipo = useCallback\(\(valor: string\) => \{\n\s*setTipo\(valor\);\n\s*despachar\(\{ tipo: 'pagina', valor: 1 \}\);/);
+  // B4 T24 (F39 y FINAL-m19, D27): el tipo va en el estado único (filtro), que vuelve a la página 1 y se guarda con la sesión.
+  assert.match(fuente, /const cambiarTipo = useCallback\(\(valor: string\) => \{\n\s*despachar\(\{ tipo: 'filtro', clave: 'tipo', valor \}\);/);
   assert.ok(fuente.includes('urlConteosGastos(estado, filtros)') && fuente.includes('const filtros = useMemo(() => ({ categoria, tipo }), [categoria, tipo]);'));
   // m9: «Monto (COP)» se guarda en pesos enteros; m4: sin atributos pegados.
   assert.ok(fuente.includes('amount: redondearPeso(parseFloat(form.amount)),'));
@@ -2682,7 +2737,7 @@ console.log('--- TEST 50 (B4 T22, Gastos; R5, R11, R16, RP26, RP57, RP58): el ca
   assert.ok(fuente.includes('datos: c?.datos ?? null, error: err'), 'un error de los conteos no borra lo último que llegó');
   assert.match(fuente, /recargarListado\(\);\n\s*recargarTablero\(\);\n\s*recargarConteos\(\);/);
   // El filtro de categoría de la barra (para seguir el aviso, lección de T18): vuelve a la página 1 y va al servidor.
-  assert.match(fuente, /const cambiarCategoria = useCallback\(\(valor: string\) => \{\n\s*setCategoria\(valor\);\n\s*despachar\(\{ tipo: 'pagina', valor: 1 \}\);/);
+  assert.match(fuente, /const cambiarCategoria = useCallback\(\(valor: string\) => \{\n\s*despachar\(\{ tipo: 'filtro', clave: 'categoria', valor \}\);/);
   assert.ok(fuente.includes('cambiarCategoria(catalogoCategorias.filas?.find((o) => String(o.id) === valor)?.name'));
   assert.ok(fuente.includes('const extraLista = useMemo(() => extraGastos(filtros), [filtros]);'));
   // RP57: el formulario manda el día como mediodía de Colombia, no medianoche UTC; el día de la tabla es fechaLarga.
@@ -2899,10 +2954,731 @@ console.log('--- TEST T23A-b (B4 T23A; TABLA-otros punto 5, KANBAN-resto punto 3
   assert.match(codigo, /className="flex min-w-0 flex-1 flex-col gap-6 2xl:flex-row"/);
 }
 
+console.log('--- TEST T24-FOCO (B4 T24: FINAL-C6, FINAL-m25 y F41): el foco visible, un solo token de design-system.ts ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = (texto) => texto.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const ds = leer('lib/design-system.ts');
+  // El token: un outline de 2 px separado 2 px, en el -700 del acento (≥ 3:1 sobre blanco, rose-50 e indigo-50), con el color fijado
+  // antes del foco; `blanco` para los fondos oscuros. Un acento por clave, sin ring ni outline-none.
+  const bloque = /export const FOCOS = \{([\s\S]*?)\n\} as const;/.exec(ds);
+  assert.ok(bloque, 'design-system.ts exporta FOCOS');
+  const focos = Object.fromEntries([...bloque[1].matchAll(/^\s+([a-z]+):\s+'([^']*)',$/gm)].map((m) => [m[1], m[2]]));
+  const ACENTOS = ['indigo', 'purple', 'teal', 'blue', 'emerald', 'orange', 'amber', 'rose', 'red', 'slate'];
+  assert.deepEqual(Object.keys(focos), [...ACENTOS, 'blanco']);
+  for (const a of ACENTOS) {
+    assert.equal(focos[a], `outline-${a}-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-${a}-700`, a);
+  }
+  assert.equal(focos.blanco, 'outline-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white');
+  assert.match(ds, /^export const FOCO = FOCOS\.indigo;$/m, 'FOCO es el índigo');
+  assert.match(ds, /^export const FOCO_DENTRO = 'outline-indigo-700 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-indigo-700';$/m,
+    'FINAL-C6: la fila, hacia adentro');
+  assert.ok(ds.indexOf('export const FOCOS') < ds.indexOf('export const TABLE'), 'FOCOS va antes de TABLE (lo usa)');
+  // FINAL-C6: la fila pulsable y el título ordenable usan el token; ni un fondo como foco (≈1,1:1 y nulo sobre una seleccionada),
+  // ni ring -300, ni outline-none (en Tailwind v4 apaga el outline del foco).
+  const tabla = /export const TABLE = \{([\s\S]*?)\n\};/.exec(ds)[1];
+  const linea = (clave) => new RegExp(`^\\s+${clave}:\\s+(.*),$`, 'm').exec(tabla)?.[1] ?? '';
+  assert.equal(linea('filaClic'), '`cursor-pointer ${FOCO_DENTRO}`');
+  assert.equal(linea('titulo'), '`flex min-w-0 flex-1 items-center gap-1 rounded text-left ${FOCO}`');
+  // Las columnas fijas (sticky, z-10, fondo opaco) tapan el outline de la fila (medido en el banco): las celdas de una fila pulsable
+  // repiten la línea por dentro con un box-shadow (arriba y abajo, y los bordes de la primera y la última), solo con el foco del teclado.
+  assert.equal(linea('celdaFoco'), "'group-focus-visible:shadow-[inset_0_2px_0_0_var(--color-indigo-700),inset_0_-2px_0_0_var(--color-indigo-700)] group-focus-visible:first:shadow-[inset_2px_0_0_0_var(--color-indigo-700),inset_0_2px_0_0_var(--color-indigo-700),inset_0_-2px_0_0_var(--color-indigo-700)] group-focus-visible:last:shadow-[inset_-2px_0_0_0_var(--color-indigo-700),inset_0_2px_0_0_var(--color-indigo-700),inset_0_-2px_0_0_var(--color-indigo-700)]'");
+  const tablaEstandar = codigo(leer('components/tabla/TablaEstandar.tsx'));
+  assert.equal((tablaEstandar.match(/\$\{onFila \? TABLE\.celdaFoco : ''\}/g) ?? []).length, 2, 'la casilla y cada celda de una fila pulsable');
+  assert.match(tablaEstandar, /className=\{`\$\{TABLE\.fila\} \$\{fondo\} \$\{onFila \? TABLE\.filaClic : ''\}`\}/, 'la fila pulsable lleva filaClic');
+  // Las piezas compartidas: el token, sin anillos -100/-300 de foco y sin outline-none.
+  const PIEZAS = ['components/tabla/BarraTabla.tsx', 'components/tabla/FiltroEstados.tsx', 'components/tabla/MenuAjustes.tsx',
+    'components/tabla/Paginacion.tsx', 'components/ui/Kanban.tsx', 'components/ui/MenuFila.tsx', 'components/ui/ConmutadorVista.tsx',
+    'components/ui/TarjetaKpi.tsx', 'components/ui/AvisoFuente.tsx',
+    // Medido en el banco (Tab real): el botón «Contraer Menú» del menú lateral tenía focus:outline-none (0:1).
+    'components/Sidebar.tsx',
+    // r1 (m3, m20, m24): ModalMotivo (outline-none + ring-red-200), la X del Modal y del Drawer.
+    'components/ui/ModalMotivo.tsx', 'components/ui/Modal.tsx', 'components/ui/Drawer.tsx'];
+  for (const ruta of PIEZAS) {
+    const c = codigo(leer(ruta));
+    assert.match(c, /import \{[^}]*\bFOCO(?:S|_DENTRO)?\b[^}]*\} from '@\/lib\/design-system';/, `${ruta}: importa el token`);
+    assert.ok(!/focus(?:-visible)?:ring-[a-z]+-[123]00\b/.test(c), `${ruta}: sin anillo de foco -100/-300`);
+    assert.ok(!/\boutline-none\b/.test(c), `${ruta}: sin outline-none`);
+  }
+  // El input «Buscar» de BarraTabla (C18 reportaba outline:none): el token, no el ring-indigo-100.
+  assert.match(codigo(leer('components/tabla/BarraTabla.tsx')), /placeholder:text-slate-400 \$\{FOCO\}/);
+  // Una sola copia: las pantallas y components/analisis y components/flujo no escriben su propio foco; lo toman de FOCOS.
+  const COPIAS = {
+    'app/dashboard/ventas/page.tsx': 'indigo', 'app/dashboard/ventas/solicitud/solicitud-client.tsx': 'indigo',
+    'app/dashboard/ventas/cotizacion/cotizacion-client.tsx': 'indigo', 'app/dashboard/ventas/venta/venta-client.tsx': 'indigo',
+    'app/dashboard/compras/page.tsx': 'purple', 'app/dashboard/compras/pedidos/page.tsx': 'purple',
+    'app/dashboard/compras/lista-compras/page.tsx': 'purple', 'app/dashboard/compras/recepciones/page.tsx': 'teal',
+    // r1 (C5): recepciones/[id] ya no tiene FOCO_VISIBLE: sus dos campos usan FOCO_DENTRO (abajo).
+    'app/dashboard/compras/transito/page.tsx': 'blue',
+    'app/dashboard/compras/traslados/page.tsx': 'orange', 'app/dashboard/crm/page.tsx': 'indigo',
+    'app/dashboard/ecommerce/page.tsx': 'purple', 'app/dashboard/inventario/page.tsx': 'indigo',
+  };
+  for (const [ruta, acento] of Object.entries(COPIAS)) {
+    const f = leer(ruta);
+    assert.equal((f.match(/^const FOCO_VISIBLE = [^;]*;/gm) ?? []).join(), `const FOCO_VISIBLE = FOCOS.${acento};`, ruta);
+    assert.match(f, /import \{[^}]*\bFOCOS\b[^}]*\} from '@\/lib\/design-system';|import \{[^}]*\bFOCOS\b[^}]*\} from '\.\.?\/[^']*piezas-inventario';/, `${ruta}: importa FOCOS`);
+  }
+  for (const ruta of ['app/dashboard/compras/page.tsx', 'app/dashboard/compras/pedidos/page.tsx', 'app/dashboard/compras/lista-compras/page.tsx']) {
+    assert.match(leer(ruta), /^const FOCO_OSCURO = FOCOS\.blanco;$/m, `${ruta}: el foco sobre la barra oscura`);
+  }
+  for (const ruta of ['components/analisis/GraficoDona.tsx', 'components/analisis/ListaMovimientos.tsx', 'components/analisis/PanelAnalisis.tsx',
+    'components/analisis/RankingTop.tsx', 'components/analisis/SelectorPeriodo.tsx', 'components/flujo/BannerFlujo.tsx', 'components/flujo/PasosFlujo.tsx']) {
+    const f = leer(ruta);
+    assert.ok(!/^const FOCO = '/m.test(f), `${ruta}: sin su copia de FOCO`);
+    assert.match(f, /import \{[^}]*\bFOCO\b[^}]*\} from '@\/lib\/design-system';/, `${ruta}: importa FOCO`);
+  }
+  const piezasInv = leer('app/dashboard/inventario/piezas-inventario.tsx');
+  // r1 (m25, m40): FOCOS viene de '@/lib/design-system' (un solo import, con el tipo) y no hay ninguna const FOCOS.
+  assert.ok(!/\bconst FOCOS\s*=/.test(piezasInv), 'piezas-inventario: sin su copia de FOCOS');
+  // F44-a (D27): con RESERVA_BOTON_IA, en el mismo import.
+  assert.match(piezasInv, /^import \{ FOCOS, RESERVA_BOTON_IA, TABLE, type AcentoFoco \} from '@\/lib\/design-system';\r?$/m);
+  assert.equal((piezasInv.match(/from '@\/lib\/design-system'/g) ?? []).length, 1, 'un solo import de design-system');
+  assert.match(piezasInv, /^export \{ FOCOS \};$/m, 'piezas-inventario reexporta el FOCOS común (lo usan las pantallas de Inventario)');
+  for (const ruta of ['app/dashboard/ecommerce/page.tsx', 'app/dashboard/finanzas/gastos/page.tsx']) {
+    assert.match(leer(ruta), /^import \{[^}]*\bFOCOS\b[^}]*\} from '@\/lib\/design-system';$/m, `${ruta}: FOCOS de design-system`);
+    assert.ok(!/\bFOCOS\b[^}]*\} from '\.\.?\/[^']*piezas-inventario'/.test(leer(ruta)), `${ruta}: no de la reexportación`);
+  }
+  // r1 (C5): el ⋯ de MenuFila (dentro del span truncado de la celda) dibuja el foco hacia ADENTRO; también los campos de
+  // recepciones/[id] (dentro de la celda).
+  assert.match(codigo(leer('components/ui/MenuFila.tsx')), /hover:text-slate-700 \$\{FOCO_DENTRO\} aria-expanded:bg-slate-100/);
+  assert.equal((leer('app/dashboard/compras/recepciones/[id]/page.tsx').match(/\$\{FOCO_DENTRO\}/g) ?? []).length, 2);
+  // r1 (m3, m19, m20, m24): ninguna copia a mano del outline del foco fuera de design-system.ts; el campo de fecha usa FOCO_CAMPO.
+  const copias = [];
+  const recorrer = (rel) => { for (const n of readdirSync(new URL(`../src/${rel}`, import.meta.url))) { const r = `${rel}${n}`;
+    if (statSync(new URL(`../src/${r}`, import.meta.url)).isDirectory()) recorrer(`${r}/`);
+    else if (/\.(tsx?|jsx?)$/.test(n) && r !== 'lib/design-system.ts' && /(?:focus|focus-visible|focus-within):outline-(?:2|offset|[a-z]+-\d00|white)/.test(leer(r))) copias.push(r); } };
+  recorrer('');
+  assert.deepEqual(copias.filter((r) => !r.startsWith('app_mocks_backup/')), [], 'copias del foco a mano');
+  assert.match(ds, /^export const FOCO_CAMPO = 'outline-indigo-700 focus:outline-2 focus:outline-offset-2 focus:outline-indigo-700 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-indigo-700';$/m);
+  assert.match(leer('components/analisis/SelectorPeriodo.tsx'), /const CAMPO_FECHA = `[^`]*\$\{FOCO_CAMPO\}`;/);
+  assert.match(leer('app/dashboard/ventas/page.tsx'), /className=\{`bg-slate-800 border border-slate-600 text-white text-xs rounded-xl px-3 py-1\.5 \$\{FOCOS\.blanco\} disabled:opacity-50/, 'el select de la barra oscura del Hub');
+  assert.match(codigo(leer('components/tabla/FiltroEstados.tsx')), /hover:bg-slate-100 \$\{FOCO\} disabled:cursor-not-allowed disabled:opacity-40/, '«Limpiar» del filtro');
+}
+
+console.log('--- TEST T24-b (B4 T24: FINAL-m37, FINAL-C5 y F106): TablaEstandar no ofrece «Reintentar» con un 403 ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = (texto) => texto.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const t = codigo(leer('components/tabla/TablaEstandar.tsx'));
+  // La regla es ofreceReintentar (lib/avisos.js, con sus casos en test_avisos.mjs); la tabla solo la llama.
+  assert.match(t, /import \{[^}]*\bofreceReintentar\b[^}]*\} from '@\/lib\/avisos';/);
+  assert.match(t, /\{onReintentar && ofreceReintentar\(error\) && \(\s*<button type="button" onClick=\{onReintentar\} className=\{TABLE\.botonReintentar\}>/);
+  assert.equal((t.match(/>\s*Reintentar\s*</g) ?? []).length, 1, 'un solo «Reintentar» en la tabla');
+}
+
+console.log('--- TEST T24-c (B4 T24, FINAL-C5): Gastos pide y pinta solo lo que el rol puede leer (accesoFinanzas, como T23A) ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = (texto) => texto.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const g = codigo(leer('app/dashboard/finanzas/gastos/page.tsx'));
+  // El rol con useRolActual (después de montar) y el acceso de lib/roles.js (casos en test_roles.mjs): la pantalla no decide el rol.
+  assert.match(g, /import \{ useRolActual \} from '@\/components\/ui\/useRolActual';/);
+  assert.match(g, /import \{ accesoFinanzas \} from '@\/lib\/roles';/);
+  assert.match(g, /const rol = useRolActual\(\);\s*const acceso = accesoFinanzas\(rol\);/);
+  assert.ok(!/'ADMIN'|'FINANZAS'|esAdmin\(/.test(g), 'sin un rol escrito a mano');
+  // Sin permiso no se pide nada: ni la lista (activo), ni los conteos (el efecto vuelve antes), ni el tablero; con rol '' se espera.
+  assert.match(g, /esperar: !listo \|\| !acceso\.listo, despachar, activo: !enKanban && acceso\.gastos,/);
+  assert.match(g, /useEffect\(\(\) => \{\s*if \(!listo \|\| !acceso\.gastos\) return undefined;\s*const control = new AbortController\(\);\s*apiFetch\(urlConteos/);
+  assert.match(g, /\}, \[listo, acceso\.gastos, urlConteos, claveConteos\]\);/);
+  assert.match(g, /activo: listo && acceso\.gastos && enKanban && conteos\?\.datos != null && columnasTablero\.length > 0,/);
+  // El texto neutro en lugar de la barra, la tabla y el tablero; «Añadir Gasto» y «Actualizar», solo con permiso.
+  assert.match(g, /const TEXTO_SIN_GASTOS = 'Tu rol no ve los gastos\.';/);
+  assert.match(g, /\{acceso\.listo && !acceso\.gastos \? \(\s*<p role="status"[^>]*>\{TEXTO_SIN_GASTOS\}<\/p>\s*\) : \(/);
+  assert.match(g, /actions=\{acceso\.gastos \? \(/);
+  assert.ok(g.indexOf('acceso.gastos ? (') < g.indexOf('Añadir Gasto') && g.indexOf('Añadir Gasto') < g.indexOf('<BarraTabla'), '«Añadir Gasto» dentro de la condición');
+  // Un 403 que llegue igual: sin «Reintentar» (ofreceReintentar) en las cajas del tablero; la tabla y el selector ya lo resuelven.
+  assert.equal((g.match(/\{ofreceReintentar\(estadoConteos\.error\) && \(\s*<button type="button" onClick=\{recargarConteos\}/g) ?? []).length, 2, 'las dos cajas rose');
+  // SelectorCatalogo (piezas de Inventario, aditivo): su «Reintentar» también mira ofreceReintentar.
+  const piezas = codigo(leer('app/dashboard/inventario/piezas-inventario.tsx'));
+  assert.match(piezas, /\{ofreceReintentar\(catalogo\.error\) && <button type="button" onClick=\{onReintentar\}/);
+}
+
+console.log('--- TEST T24-d (B4 T24, FINAL-m21): la pestaña Pagos de E-Commerce, solo ADMIN y sin guardar los valores por defecto ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const fuente = leer('app/dashboard/ecommerce/page.tsx');
+  const c = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // La pestaña solo con acceso.pagosConfig (accesoTienda, casos en test_roles.mjs); el panel, igual.
+  assert.match(c, /\{\['Panel', 'Catálogo', 'Clientes Web', \.\.\.\(acceso\.pagosConfig \? \['Pagos'\] : \[\]\)\]\.map\(t => \(/);
+  assert.match(c, /\{activeTab === 'Pagos' && acceso\.pagosConfig && \(/);
+  // Los GET solo con permiso, con su error guardado (nada de .catch(() => {})) y la lectura de lecturaDeFuente.
+  assert.match(c, /if \(activeTab !== 'Pagos' \|\| !acceso\.pagosConfig\) return undefined;/);
+  // r1 (C6): el efecto entero, en orden: la guarda, los dos GET con su .then (error: null) y su .catch que GUARDA el error (nada de
+  // tragarlo), y la limpieza que aborta.
+  const ini = c.indexOf("if (activeTab !== 'Pagos' || !acceso.pagosConfig) return undefined;");
+  const fin = c.indexOf('}, [activeTab, acceso.pagosConfig, vueltaConfig]);');
+  assert.ok(ini > 0 && fin > ini, 'el efecto de la configuración');
+  const efecto = c.slice(ini, fin);
+  for (const [fuente, set] of [['pagos', 'setCargaPagos'], ['envios', 'setCargaEnvios']]) {
+    assert.match(efecto, new RegExp(`apiFetch\\('/ecommerce/${fuente}/config', \\{ signal: control\\.signal \\}\\)\\s*\\.then\\([^]*?${set}\\(\\{ vuelta: vueltaConfig, datos: d\\?\\.data \\?\\? null, error: null \\}\\);\\s*\\}\\)\\s*\\.catch\\(\\(err: unknown\\) => \\{ if \\(!control\\.signal\\.aborted\\) ${set}\\(\\{ vuelta: vueltaConfig, datos: null, error: err \\}\\); \\}\\);`), fuente);
+  }
+  assert.ok(efecto.indexOf("'/ecommerce/pagos/config'") < efecto.indexOf("'/ecommerce/envios/config'"));
+  assert.match(efecto, /return \(\) => control\.abort\(\);\s*$/);
+  assert.ok(!/\.catch\(\(\) => \{\}\)/.test(efecto), 'sin tragarse el error del GET');
+  assert.match(c, /const lecturaPagos = lecturaDeFuente\(cargaPagos, vueltaConfig\);/);
+  assert.match(c, /const lecturaEnvios = lecturaDeFuente\(cargaEnvios, vueltaConfig\);/);
+  // Si falla, se dice (AvisoFuente) y no hay formulario ni «Guardar»; mientras carga, tampoco (fuenteGuardable, test_kpis.mjs).
+  assert.match(c, /\{fuenteGuardable\(lecturaPagos\) \? \(/);
+  assert.match(c, /\{fuenteGuardable\(lecturaEnvios\) \? \(/);
+  assert.equal((c.match(/<AvisoFuente aviso=\{avisoDeFuente\(lectura(Pagos|Envios)\.error, 'No se pudo cargar la configuración de (pagos|envíos)'\)!\} onReintentar=\{reintentarConfig\} \/>/g) ?? []).length, 2);
+  assert.match(c, /disabled=\{savingPay \|\| !fuenteGuardable\(lecturaPagos\)\}/);
+  assert.match(c, /disabled=\{savingShip \|\| !fuenteGuardable\(lecturaEnvios\)\}/);
+  // Sin mojibake: las 7 líneas con tildes de verdad (el archivo conserva su BOM).
+  assert.ok(fuente.startsWith('\uFEFF'), 'el BOM sigue');
+  assert.ok(!/Ã[©³­]/.test(fuente), 'sin «Ã©», «Ã³» ni «Ã­»');
+  for (const t of ['Tarjetas de crédito, Apple Pay, Google Pay', 'Configuración de Envíos', "l:'Envío Local'", "l:'Envío Nacional'", 'Envío Gratis desde', 'Guardar Envíos', "showToast('Configuración guardada'", "showToast('Envíos guardados'"]) {
+    assert.ok(fuente.includes(t), t);
+  }
+}
+
+console.log('--- TEST T24-e (B4 T24, F40): el Modal y el Drawer se cierran con Esc y con un clic en el fondo ---');
+{
+  const { cierraConEsc, cierraConClicFuera } = TABLA;
+  // Esc: solo la capa de arriba, si nadie más lo atendió y si no está guardando (bloquearCierre).
+  assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true }), true);
+  assert.equal(cierraConEsc({ tecla: 'Esc', arriba: true }), false, 'solo «Escape»');
+  assert.equal(cierraConEsc({ tecla: 'Enter', arriba: true }), false);
+  assert.equal(cierraConEsc({ tecla: 'Escape', arriba: false }), false, 'una confirmación encima se cierra primero');
+  assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, defaultPrevented: true }), false, 'un menú o un filtro ya lo atendió');
+  assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, bloqueado: true }), false, 'guardando: bloquearCierre');
+  // El fondo: el clic empezó y terminó en la capa oscura (arrastrar desde un campo para seleccionar no cierra).
+  assert.equal(cierraConClicFuera({ inicioEnFondo: true, finEnFondo: true }), true);
+  assert.equal(cierraConClicFuera({ inicioEnFondo: false, finEnFondo: true }), false, 'empezó dentro de la ventana');
+  assert.equal(cierraConClicFuera({ inicioEnFondo: true, finEnFondo: false }), false);
+  assert.equal(cierraConClicFuera({ inicioEnFondo: true, finEnFondo: true, bloqueado: true }), false, 'guardando');
+  // El cableado: un solo hook (useCierreVentana) en el Modal y el Drawer; la X del Drawer con su aria-label.
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const hook = leer('components/ui/useCierreVentana.ts');
+  for (const n of ['cierraConEsc(', 'cierraConClicFuera(', "document.addEventListener('keydown'", "document.removeEventListener('keydown'"]) assert.ok(hook.includes(n), n);
+  const modal = leer('components/ui/Modal.tsx');
+  assert.match(modal, /const \{ alPresionar, alSoltar, refPanel \} = useCierreVentana\(onClose, bloquearCierre \|\| !cierreExterno\);/);
+  assert.match(modal, /onPointerDown=\{alPresionar\} onClick=\{alSoltar\}/);
+  const drawer = leer('components/ui/Drawer.tsx');
+  // r1 (C2): el Drawer suma bloquearCierre (abajo, T24-e2).
+  assert.match(drawer, /onPointerDown=\{alPresionar\} onClick=\{alSoltar\}/);
+  assert.match(drawer, /<button type="button" onClick=\{onClose\} disabled=\{bloquearCierre\} aria-label="Cerrar"/);
+}
+
+console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué ventanas se cierran desde fuera, la pila de capas y el foco ---');
+{
+  const { abrirCapa, cerrarCapa, esCapaDeArriba, siguienteFocoAtrapado, cierraConEsc } = TABLA;
+  // m29: la pila de capas, pura.
+  let capas = abrirCapa([], 'A');
+  assert.equal(esCapaDeArriba(capas, 'A'), true, 'A sola, arriba');
+  capas = abrirCapa(capas, 'B');
+  assert.deepEqual([esCapaDeArriba(capas, 'B'), esCapaDeArriba(capas, 'A')], [true, false], 'B encima de A');
+  const sinB = cerrarCapa(capas, 'B');
+  assert.equal(esCapaDeArriba(sinB, 'A'), true, 'cerrada B, A vuelve arriba');
+  const fueraDeOrden = cerrarCapa(capas, 'A');
+  assert.deepEqual(fueraDeOrden, ['B'], 'cerrar fuera de orden');
+  assert.equal(cerrarCapa(capas, 'Z'), capas, 'un id desconocido: la misma pila');
+  assert.equal(esCapaDeArriba(capas, 'Z'), false);
+  assert.equal(esCapaDeArriba([], 'A'), false);
+  assert.notEqual(abrirCapa(capas, 'C'), capas, 'una pila nueva');
+  // m18: Tab atrapado en la capa de arriba (el índice a enfocar, o null si el navegador sigue solo; -1 sin controles).
+  assert.equal(siguienteFocoAtrapado(2, 3, false), 0, 'del último, al primero');
+  assert.equal(siguienteFocoAtrapado(0, 3, true), 2, 'del primero hacia atrás, al último');
+  assert.equal(siguienteFocoAtrapado(-1, 3, false), 0, 'con el foco afuera, al primero');
+  assert.equal(siguienteFocoAtrapado(-1, 3, true), 2);
+  assert.equal(siguienteFocoAtrapado(1, 3, false), null, 'en el medio, el navegador');
+  assert.equal(siguienteFocoAtrapado(0, 0, false), -1, 'sin controles: quieto');
+  // m12: con la re-autenticación pendiente o un Esc de fuera del panel de esa capa, no se cierra.
+  assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, reautenticando: true }), false);
+  assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, dentro: false }), false);
+  assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, dentro: true }), true);
+  // r2 (m8): un Esc con el foco en el <body> (un clic en una zona no enfocable del panel) cuenta como de dentro.
+  assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, dentro: false, enBody: true }), true);
+  assert.equal(cierraConEsc({ tecla: 'Escape', arriba: true, dentro: false, enBody: false }), false);
+  // r2 (C1 = C3 = C7) y r3 (m10, m1, m5): una sola regla. La capa de arriba atrapa Tab solo si el foco está dentro de su panel, en el
+  // <body> o en un panel de la pila (data-capa); con una re-autenticación pendiente, deja actuar al navegador.
+  // B4 T24 f2 (m9 de la revisión r3 de f1, D27): lo que antes era un solo «fuera» son dos sitios. «encima» (una superficie marcada con
+  // data-superficie: el Copilot y la pila de avisos; o un [aria-modal="true"] que no es de la pila: la ventana de re-ingreso) NO se
+  // atrapa. «detras» (cualquier otro elemento de la página: el Sidebar, el SubNav, la tabla) SÍ: la capa de arriba recupera el foco.
+  const { atrapaTab, lugarDelFocoDe } = TABLA;
+  assert.equal(atrapaTab({ arriba: true, foco: 'panel' }), true, 'dentro de su panel');
+  assert.equal(atrapaTab({ arriba: true, foco: 'body' }), true, 'en el <body> (un clic en una zona que no se enfoca)');
+  assert.equal(atrapaTab({ arriba: true, foco: 'pila' }), true, 'en otra capa de la pila: vuelve a la de arriba');
+  assert.equal(atrapaTab({ arriba: true, foco: 'encima' }), false, 'el Copilot, un aviso o la ventana de re-ingreso: encima');
+  assert.equal(atrapaTab({ arriba: true, foco: 'detras' }), true, 'm9: la página de atrás (Sidebar, SubNav, la tabla): la capa lo recupera');
+  assert.equal(atrapaTab({ arriba: false, foco: 'detras' }), false, 'm9: solo la de arriba');
+  assert.equal(atrapaTab({ arriba: true, foco: 'detras', reautenticando: true }), false, 'm9: con la re-autenticación pendiente, no');
+  assert.equal(atrapaTab({ arriba: true, foco: 'fuera' }), false, 'el valor de r3 (aditivo): sin atrapar');
+  assert.equal(atrapaTab({ arriba: true, foco: 'encima', reautenticando: true }), false, 'la ventana de re-ingreso');
+  // m9: lugarDelFocoDe, la regla pura de dónde está el foco (el hook le pasa lo que lee del DOM). El orden cuenta: el <body>, el panel
+  // y la pila ganan; una superficie o un modal aparte es «encima»; lo demás, «detras».
+  assert.equal(typeof lugarDelFocoDe, 'function', 'lugarDelFocoDe existe');
+  assert.equal(lugarDelFocoDe({ body: true }), 'body');
+  assert.equal(lugarDelFocoDe({ panel: true, pila: true }), 'panel', 'el panel de la capa también es de la pila: gana el panel');
+  assert.equal(lugarDelFocoDe({ pila: true, modalAparte: true }), 'pila', 'otra capa de la pila (Modal y Drawer llevan aria-modal)');
+  assert.equal(lugarDelFocoDe({ superficie: true }), 'encima', 'el Copilot o un aviso');
+  assert.equal(lugarDelFocoDe({ modalAparte: true }), 'encima', 'la ventana de re-ingreso');
+  assert.equal(lugarDelFocoDe({}), 'detras', 'cualquier otro elemento: la página de atrás');
+  assert.equal(lugarDelFocoDe({ panel: false, pila: false, superficie: false, modalAparte: false, body: false }), 'detras');
+  for (const lugar of [lugarDelFocoDe({}), lugarDelFocoDe({ superficie: true })]) {
+    assert.equal(atrapaTab({ arriba: true, foco: lugar }), lugar === 'detras', `de punta a punta: ${lugar}`);
+  }
+  assert.equal(atrapaTab({ arriba: true, foco: 'panel', reautenticando: true }), false, 'con la re-autenticación pendiente');
+  assert.equal(atrapaTab({ arriba: false, foco: 'panel' }), false, 'una capa de abajo');
+  assert.equal(atrapaTab({ arriba: true }), false, 'sin saber dónde está el foco, no');
+  // El hook usa la lib: la pila, el foco que entra y vuelve, Tab y la re-autenticación.
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const hook = leer('components/ui/useCierreVentana.ts');
+  for (const n of ['capas = abrirCapa(capas, capa);', 'const arriba = esCapaDeArriba(capas, capa);', 'reautenticando: hayReautenticacionPendiente()',
+    // B4 T24 f2 r2 (m5, D27): el foco vuelve al abridor al cerrar de verdad (devuelveFocoAlCerrar: el panel ya no está), no en el
+    // desmontaje simulado de StrictMode.
+    'dentro: !panel || panel.contains(e.target as Node)', 'siguienteFocoAtrapado(',
+    'if (abridor && devuelveFocoAlCerrar({ abridorConectado: abridor.isConnected, panelConectado: Boolean(panel?.isConnected) })) {',
+    'abridor.focus({ preventScroll: true });',
+    // r2 (m12): el foco que entra al abrir; r2 (m8): el <body>.
+    '(panel.querySelector<HTMLElement>(ENFOCABLES) ?? panel).focus({ preventScroll: true });', 'enBody: e.target === document.body,']) {
+    assert.ok(hook.includes(n), n);
+  }
+  // r3 (m13): un solo ayudante de Tab (atraparTab: contenedor, evento y ENFOCABLES) para la pila y para la ventana de re-ingreso.
+  assert.match(hook, /export const ENFOCABLES = 'a\[href\], button:not\(\[disabled\]\), input:not\(\[disabled\]\), select:not\(\[disabled\]\), textarea:not\(\[disabled\]\), \[tabindex\]:not\(\[tabindex="-1"\]\)';/);
+  assert.match(hook, /export function atraparTab\(contenedor: HTMLElement, e: \{ shiftKey: boolean; preventDefault: \(\) => void \}\) \{\s*const lista = \[\.\.\.contenedor\.querySelectorAll<HTMLElement>\(ENFOCABLES\)\]\.filter\(\(el\) => el\.getClientRects\(\)\.length > 0\);\s*const destino = siguienteFocoAtrapado\(lista\.indexOf\(document\.activeElement as HTMLElement\), lista\.length, e\.shiftKey\);\s*if \(destino === null\) return;\s*e\.preventDefault\(\);\s*if \(destino >= 0\) lista\[destino\]\.focus\(\);\s*\}/);
+  // r2 (C1, m12) y r3 (m10): la rama Tab sale con atrapaTab (arriba, la re-autenticación y DÓNDE está el foco) y usa el ayudante.
+  assert.match(hook, /if \(e\.key === 'Tab'\) \{\s*if \(!panel \|\| !atrapaTab\(\{ arriba, reautenticando: hayReautenticacionPendiente\(\), foco: lugarDelFoco\(panel\) \}\)\) return;\s*atraparTab\(panel, e\);\s*return;\s*\}/);
+  // m9 (D27): el hook lee del DOM y decide con lugarDelFocoDe: «encima» es data-superficie o un aria-modal que no es de la pila.
+  assert.match(hook, /const lugarDelFoco = \(panel: HTMLElement\): LugarDelFoco => \{\s*const activo = document\.activeElement;\s*return lugarDelFocoDe\(\{\s*body: !activo \|\| activo === document\.body,\s*panel: Boolean\(activo && panel\.contains\(activo\)\),\s*pila: Boolean\(activo\?\.closest\('\[data-capa\]'\)\),\s*superficie: Boolean\(activo\?\.closest\('\[data-superficie\]'\)\),\s*modalAparte: Boolean\(activo\?\.closest\('\[aria-modal="true"\]:not\(\[data-capa\]\)'\)\),\s*\}\);\s*\};/);
+  assert.ok(!hook.includes("'fuera'"), 'm9: el hook ya no da «fuera»');
+  // m9: las superficies que van ENCIMA de las capas llevan la marca: el botón y el panel del Copilot (GlobalAIChat) y la pila de avisos.
+  const chat = leer('components/GlobalAIChat.tsx');
+  assert.equal((chat.match(/\bdata-superficie="copilot"/g) ?? []).length, 2, 'el botón y el panel del Copilot');
+  assert.match(chat, /<button\s+data-superficie="copilot"\s+onClick=\{\(\) => setIsOpen\(true\)\}/);
+  assert.match(chat, /<div data-superficie="copilot" className=\{`fixed bottom-6 right-6 bg-white/);
+  assert.match(leer('components/ui/Avisos.tsx'), /<div data-superficie="avisos" className="fixed top-4 left-1\/2 -translate-x-1\/2 z-\[90\]/, 'la pila de avisos');
+  // Los paneles de la pila se marcan con data-capa (Modal y Drawer).
+  assert.match(leer('components/ui/Modal.tsx'), /aria-describedby=\{describedBy\}\s+data-capa=""/);
+  assert.match(leer('components/ui/Drawer.tsx'), /role="dialog" aria-modal="true" data-capa=""/);
+  // r2 (C1, banco), r3 (m13 y m4): la ventana de re-ingreso (fuera de la pila) atrapa su Tab con el MISMO ayudante, desde un oyente en
+  // window en captura mientras está abierta: también con el foco en el <body> (un clic en el fondo oscuro).
+  const sesion = leer('components/SessionKeeper.tsx');
+  assert.match(sesion, /import \{ atraparTab \} from '@\/components\/ui\/useCierreVentana';/);
+  assert.match(sesion, /useEffect\(\(\) => \{\s*if \(!abierto\) return undefined;\s*const alTeclear = \(e: KeyboardEvent\) => \{\s*if \(e\.key === 'Tab' && refVentana\.current\) atraparTab\(refVentana\.current, e\);\s*\};\s*window\.addEventListener\('keydown', alTeclear, true\);\s*return \(\) => window\.removeEventListener\('keydown', alTeclear, true\);\s*\}, \[abierto\]\);/);
+  // B4 T24 f2 (m7 de la revisión r3 de f1, D27): la sonda vuelve a fijar el rol, aria-modal y el nombre de la ventana de re-ingreso
+  // (hayDialogoEncima de usePantallaCompleta y el lector de pantalla los usan; lugarDelFoco la lee como «encima» por su aria-modal).
+  assert.match(sesion, /ref=\{refVentana\}\s+className="fixed inset-0 z-\[100\][^"]*"\s+role="dialog"\s+aria-modal="true"\s+aria-labelledby="sesion-cerrada-titulo"/);
+  assert.ok(sesion.includes('<h3 id="sesion-cerrada-titulo"'), 'el título que la nombra');
+  assert.ok(!/querySelectorAll|onKeyDown=\{alTeclearVentana\}/.test(sesion), 'sin su copia del Tab ni su selector propio');
+  // B4 T24 f2 r1 (m9, D27): al cerrar se quitan los dos oyentes (keydown y focusin) antes de sacar la capa de la pila.
+  assert.match(hook, /document\.removeEventListener\('keydown', alTeclear\);\s*document\.removeEventListener\('focusin', alEnfocar\);\s*capas = cerrarCapa\(capas, capa\);/);
+  assert.match(leer('components/ui/Modal.tsx'), /ref=\{refPanel\}\s+tabIndex=\{-1\}/);
+  const drawer = leer('components/ui/Drawer.tsx');
+  assert.match(drawer, /ref=\{refPanel\} tabIndex=\{-1\} role="dialog" aria-modal="true"/);
+  assert.match(drawer, /const \{ alPresionar, alSoltar, refPanel \} = useCierreVentana\(onClose, bloquearCierre \|\| !cierreExterno\);/, 'C2: el Drawer con bloqueo mientras guarda');
+  assert.match(drawer, /disabled=\{bloquearCierre\}/);
+  // r2 (C2 = C4 = C6, m11): la tabla de F40 leída a mano (ventanas-r2.tsv), anclada por ventana: cada una por un fragmento único de
+  // su apertura y si se cierra desde fuera ('fuera'), solo con sus botones ('no', cierreExterno={false}) o con una expresión.
+  const MAPA = [["app/dashboard/admin/empleados/page.tsx", "title=\"Registrar Nuevo Empleado\"", "no"], ["app/dashboard/admin/empleados/page.tsx", "title=\"Confirmar Cambio de Rol\"", "fuera"], ["app/dashboard/compras/lista-compras/page.tsx", "title=\"Nuevo Proveedor\"", "no"], ["app/dashboard/compras/lista-compras/page.tsx", "title=\"Editar proveedor\"", "no"], ["app/dashboard/compras/lista-compras/page.tsx", "title=\"Crear Pedido de Compra\"", "no"], ["app/dashboard/compras/recepciones/page.tsx", "title=\"Iniciar Entrada desde Pedido de Compra\"", "fuera"], ["app/dashboard/compras/recepciones/page.tsx", "onClose={() => setSelectedItem(null)}", "fuera"], ["app/dashboard/compras/traslados/page.tsx", "onClose={closeSelected}", "fuera"], ["app/dashboard/compras/traslados/page.tsx", "title=\"Nuevo Traslado Interno\"", "no"], ["app/dashboard/crm/page.tsx", "onClose={() => { setSelectedLead(null); setEditingLead(false); }}", "{!editingLead}"], ["app/dashboard/crm/page.tsx", "title=\"Nuevo Lead\"", "no"], ["app/dashboard/crm/page.tsx", "onClose={() => setShowConfig(false)} header", "no"], ["app/dashboard/ecommerce/page.tsx", "onClose={() => setSelectedOrder(null)}", "fuera"], ["app/dashboard/finanzas/gastos/page.tsx", "title=\"Añadir Gasto\"", "no"], ["app/dashboard/inventario/ajustes/page.tsx", "onClose={() => setSelected(null)}", "fuera"], ["app/dashboard/inventario/ajustes/page.tsx", "title=\"Nuevo Ajuste de Inventario\"", "no"], ["app/dashboard/inventario/entregas/page.tsx", "onClose={() => { setSelected(null); setDesdeTablero(null); }}", "{!puedeDespacharPedido(selected, rol)}"], ["app/dashboard/inventario/kardex/page.tsx", "title={`Movimiento ${numeroMovimiento(m)}`}", "fuera"], ["app/dashboard/inventario/piezas-inventario.tsx", "title={f.producto || f.sku}", "fuera"], ["app/dashboard/inventario/recepciones/page.tsx", "onClose={() => setSelectedItem(null)}", "fuera"], ["app/dashboard/inventario/traslados/page.tsx", "onClose={() => setSelected(null)}", "fuera"], ["app/dashboard/marketing/campanas/page.tsx", "title={editMode?'Editar Campaña':'Nueva Campaña'}", "no"], ["app/dashboard/ventas/cotizacion/cotizacion-client.tsx", "title=\"Calculadora de Cotización\"", "no"], ["app/dashboard/ventas/cotizacion/cotizacion-client.tsx", "title=\"Eliminar Cotización\"", "fuera"], ["app/dashboard/ventas/cotizacion/cotizacion-client.tsx", "title=\"Actualizar Pedido de Venta\"", "no"], ["app/dashboard/ventas/cotizacion/cotizacion-client.tsx", "title=\"Seleccionar Canal de Envío\"", "fuera"], ["app/dashboard/ventas/cotizacion/cotizacion-client.tsx", "title=\"Verificar el pago del anticipo\"", "no"], ["app/dashboard/ventas/cotizacion/cotizacion-client.tsx", "title=\"Ajustar anticipo\"", "no"], ["app/dashboard/ventas/flujo.tsx", "title={textos.titulo}", "fuera"], ["app/dashboard/ventas/motivo-sin-confirmacion.tsx", "title={titulo} icon={AlertTriangle}", "no"], ["app/dashboard/ventas/page.tsx", "${getTipoClass(row.tipo)}", "fuera"], ["app/dashboard/ventas/page.tsx", "onClose={onClose} maxWidth=\"md\"", "{soloLectura}"], ["app/dashboard/ventas/page.tsx", "title={filasCancelacion.length === 1", "no"], ["app/dashboard/ventas/page.tsx", "idTitulo=\"drawer-panel-rapido-titulo\"", "fuera"], ["app/dashboard/ventas/solicitud/selector-cliente.tsx", "title=\"Nuevo cliente\"", "no"], ["app/dashboard/ventas/solicitud/solicitud-client.tsx", "title={cancelTarget.length>1", "no"], ["app/dashboard/ventas/solicitud/solicitud-client.tsx", "title=\"Nueva Solicitud de Cliente\"", "no"], ["app/dashboard/ventas/solicitud/[id]/detalle-bloque3.tsx", "title=\"Se anulará la confirmación del cliente\"", "no"], ["app/dashboard/ventas/solicitud/[id]/page.tsx", "subtitle=\"Antes de cancelarla hay que dejar sin efecto sus documentos activos.\"", "fuera"], ["app/dashboard/ventas/solicitud/[id]/page.tsx", "subtitle=\"La solicitud pasa a la Papelera. Podrás restaurarla desde allí.\"", "no"], ["app/dashboard/ventas/venta/venta-client.tsx", "title=\"Nuevo Proveedor\"", "no"], ["app/dashboard/ventas/venta/[id]/page.tsx", "title=\"Crear Pedido de Compra\"", "no"], ["app/dashboard/ventas/venta/[id]/page.tsx", "title=\"Cancelar Pedido de Venta\"", "no"], ["components/ui/Avisos.tsx", "describedBy={mensajeId}", "fuera"], ["components/ui/ModalMotivo.tsx", "capa=\"encima\"", "no"]];
+  // B4 T24 f2 r1 (C3, D27): el panel rápido del Hub pasa a Drawer (sin campos que escribir: Esc y el fondo lo cierran, F40).
+  assert.equal(MAPA.length, 45, 'las 33 Modal y los 12 Drawer');
+  for (const [ruta, fragmento, esperado] of MAPA) {
+    const f = leer(ruta);
+    const i = f.indexOf(fragmento);
+    assert.ok(i >= 0 && f.indexOf(fragmento, i + 1) < 0, `${ruta}: el fragmento «${fragmento}», una vez`);
+    const apertura = f.slice(Math.max(f.lastIndexOf('<Modal', i), f.lastIndexOf('<Drawer', i)), i);
+    if (esperado === 'fuera') assert.ok(!apertura.includes('cierreExterno'), `${ruta} «${fragmento}»: Esc y el fondo la cierran`);
+    else if (esperado === 'no') assert.ok(apertura.includes('cierreExterno={false}'), `${ruta} «${fragmento}»: solo sus botones`);
+    else assert.ok(apertura.includes(`cierreExterno=${esperado}`), `${ruta} «${fragmento}»: cierreExterno=${esperado}`);
+  }
+  // La guarda de antes, adicional: cuántos cierreExterno={false} hay en cada archivo.
+  const ESPERADO = {"app/dashboard/admin/empleados/page.tsx": 1, "app/dashboard/compras/lista-compras/page.tsx": 3, "app/dashboard/compras/recepciones/page.tsx": 0, "app/dashboard/compras/traslados/page.tsx": 1, "app/dashboard/crm/page.tsx": 2, "app/dashboard/ecommerce/page.tsx": 0, "app/dashboard/finanzas/gastos/page.tsx": 1, "app/dashboard/inventario/ajustes/page.tsx": 1, "app/dashboard/inventario/entregas/page.tsx": 0, "app/dashboard/inventario/kardex/page.tsx": 0, "app/dashboard/inventario/piezas-inventario.tsx": 0, "app/dashboard/inventario/recepciones/page.tsx": 0, "app/dashboard/inventario/traslados/page.tsx": 0, "app/dashboard/marketing/campanas/page.tsx": 1, "app/dashboard/ventas/cotizacion/cotizacion-client.tsx": 4, "app/dashboard/ventas/flujo.tsx": 0, "app/dashboard/ventas/motivo-sin-confirmacion.tsx": 1, "app/dashboard/ventas/page.tsx": 1, "app/dashboard/ventas/solicitud/selector-cliente.tsx": 1, "app/dashboard/ventas/solicitud/solicitud-client.tsx": 2, "app/dashboard/ventas/solicitud/[id]/detalle-bloque3.tsx": 1, "app/dashboard/ventas/solicitud/[id]/page.tsx": 1, "app/dashboard/ventas/venta/venta-client.tsx": 1, "app/dashboard/ventas/venta/[id]/page.tsx": 2, "components/ui/Avisos.tsx": 0, "components/ui/ModalMotivo.tsx": 1};
+  for (const [ruta, n] of Object.entries(ESPERADO)) {
+    assert.equal((leer(ruta).match(/cierreExterno=\{false\}/g) ?? []).length, n, ruta);
+  }
+  assert.match(leer('app/dashboard/crm/page.tsx'), /<Drawer idTitulo="drawer-lead-titulo" cierreExterno=\{!editingLead\} bloquearCierre=\{isSaving\}/, 'el panel del lead en edición (r3, m7, D27: con su título visible)');
+  assert.match(leer('components/ui/ModalMotivo.tsx'), /<Modal\s+cierreExterno=\{false\}/, 'ModalMotivo');
+  // r2 (C5): «Actualizar Pedido de Venta» escribe al cerrarse (onCancel = commitCalcSave(..., false, false), un PATCH): no es una
+  // confirmación para F40. Sin cierre de fuera y bloqueada mientras guarda (un Esc repetido mandaba un segundo PATCH).
+  // r3 (m6): y sin la X: la calculadora no conserva lo editado (se desmonta antes de esta ventana y vuelve a leer la cotización), así que
+  // la X no puede «volver»; con la prop aditiva sinCerrar de Modal, las únicas salidas son los dos botones.
+  assert.match(leer('app/dashboard/ventas/cotizacion/cotizacion-client.tsx'), /<Modal cierreExterno=\{false\} bloquearCierre=\{saving\} sinCerrar title="Actualizar Pedido de Venta"/);
+  const modalTsx = leer('components/ui/Modal.tsx');
+  assert.match(modalTsx, /sinCerrar\?: boolean;/);
+  assert.match(modalTsx, /\{!sinCerrar && \(\s*<button onClick=\{onClose\} disabled=\{bloquearCierre\} aria-label="Cerrar"/);
+  // r2 (m18) y r3 (m7): el Drawer tiene nombre accesible: idTitulo → aria-labelledby (lo que se ve en su encabezado: el número del
+  // documento o el título) o, sin encabezado con título, etiqueta → aria-label. Los 11 lo reciben de su pantalla.
+  assert.match(drawer, /etiqueta\?: string;/);
+  assert.match(drawer, /idTitulo\?: string;/);
+  assert.match(drawer, /ref=\{refPanel\} tabIndex=\{-1\} role="dialog" aria-modal="true" data-capa="" aria-labelledby=\{idTitulo\} aria-label=\{idTitulo \? undefined : etiqueta\}/);
+  const TITULOS = {"app/dashboard/compras/recepciones/page.tsx": ["drawer-recepcion-titulo"], "app/dashboard/compras/traslados/page.tsx": ["drawer-traslado-titulo"], "app/dashboard/crm/page.tsx": ["drawer-lead-titulo", "drawer-config-crm-titulo"], "app/dashboard/ecommerce/page.tsx": ["drawer-pedido-web-titulo"], "app/dashboard/inventario/ajustes/page.tsx": ["drawer-ajuste-titulo"], "app/dashboard/inventario/entregas/page.tsx": ["drawer-entrega-titulo"], "app/dashboard/inventario/recepciones/page.tsx": ["drawer-recepcion-titulo"], "app/dashboard/inventario/traslados/page.tsx": ["drawer-traslado-titulo"], "app/dashboard/ventas/page.tsx": ["drawer-documento-titulo", "drawer-config-hub-titulo", "drawer-panel-rapido-titulo"]};
+  let drawers = 0;
+  for (const [ruta, ids] of Object.entries(TITULOS)) {
+    const f = leer(ruta);
+    assert.deepEqual([...f.matchAll(/<Drawer idTitulo="([^"]+)"/g)].map((m) => m[1]), ids, ruta);
+    assert.equal((f.match(/<Drawer\b/g) ?? []).length, ids.length, `${ruta}: todos con su título`);
+    for (const id of ids) assert.equal(f.split(`id="${id}"`).length - 1, 1, `${ruta}: el encabezado visible lleva id="${id}"`);
+    drawers += ids.length;
+  }
+  assert.equal(drawers, 12, 'los 12 Drawer de la tabla de F40 (r1 de f2, C3: el panel rápido del Hub)');
+  // B4 T24 f2 r1 (C3): dos props ADITIVAS del Drawer para el panel rápido del Hub, sin cambiar los valores por defecto: su ancho
+  // de 600 px (a todo el ancho en un teléfono) y la reserva del botón de la IA en el cuerpo que se desplaza (RESERVA_BOTON_IA).
+  assert.match(drawer, /maxWidth\?: 'md' \| 'lg' \| '600';/);
+  assert.match(drawer, /maxWidth = 'lg', /, 'por defecto, el ancho de siempre');
+  assert.match(drawer, /const widthCls = maxWidth === 'md' \? 'max-w-md' : maxWidth === '600' \? 'max-w-\[600px\]' : 'max-w-lg';/);
+  assert.match(drawer, /reservaBotonIA\?: boolean;/);
+  assert.match(drawer, /reservaBotonIA = false/, 'por defecto, sin la reserva');
+  assert.match(drawer, /<div className=\{`flex-1 overflow-y-auto p-6 space-y-6\$\{reservaBotonIA \? ` \$\{RESERVA_BOTON_IA\}` : ''\}`\}>/);
+  assert.match(drawer, /import \{ FOCO, FOCO_DENTRO, RESERVA_BOTON_IA \} from '@\/lib\/design-system';/);
+  // r3 (m7): lo que se anuncia es lo que se ve.
+  assert.ok(leer('app/dashboard/ventas/page.tsx').includes('<h2 id="drawer-config-hub-titulo" className="font-black text-slate-800 text-lg">Configuración de HUB Ventas</h2>'));
+  assert.ok(leer('app/dashboard/crm/page.tsx').includes('<h2 id="drawer-config-crm-titulo" className="font-black text-slate-800 text-lg">Configuración CRM</h2>'));
+  // r3 (m8): la protección de «Nueva Solicitud de Cliente» detrás de «Nuevo cliente» es la pila más su cierreExterno={false}.
+  assert.match(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx'), /<Modal cierreExterno=\{false\} title="Nueva Solicitud de Cliente"/);
+  // r2 (m5, m16) y B4 T24 f2 (m3 de la revisión r3 de f1): «Nuevo cliente» (selector-cliente.tsx) tiene campos y ya no se cierra con Esc
+  // (ni descarta los campos). Lo que protege a la ventana de la solicitud de atrás es la pila (solo la capa de arriba atiende el Esc) más
+  // su cierreExterno={false}: se cierra solo con sus botones. El stopPropagation de la envoltura solo corta los oyentes de window y de
+  // React que estén por encima; no es la protección (lo mismo que dice el comentario de selector-cliente.tsx).
+  const selector = leer('app/dashboard/ventas/solicitud/selector-cliente.tsx');
+  // B4 T24 f2 r1 (m10, D27): la raíz del portal lleva su marca (data-superficie), y el Esc sigue cortándose aquí.
+  assert.match(selector, /<div data-superficie="ventana" onKeyDown=\{e => \{ if \(e\.key === 'Escape'\) e\.stopPropagation\(\); \}\}>/);
+  assert.ok(!/e\.key === 'Escape'\) \{ e\.stopPropagation\(\); if \(!saving\) onClose\(\);/.test(selector), 'el Esc ya no cierra el alta');
+  // Las de solo lectura y las confirmaciones conservan Esc y el fondo.
+  for (const ruta of ['app/dashboard/inventario/kardex/page.tsx', 'app/dashboard/inventario/traslados/page.tsx', 'components/ui/Avisos.tsx']) {
+    assert.ok(!leer(ruta).includes('cierreExterno'), ruta);
+  }
+  // B4 T24 f2 (m4 de la revisión r3 de f1): VentanaConfirmacion es una capa de la pila (Modal con data-capa y useCierreVentana): su Tab lo
+  // atrapa el hook con la regla única (atrapaTab y atraparTab). Ya no tiene su propia trampa ni su propio ENFOCABLES; conserva el Esc en
+  // captura (responde «no» y no llega a la ventana de abajo).
+  const avisosTsx = leer('components/ui/Avisos.tsx');
+  const ventana = avisosTsx.slice(avisosTsx.indexOf('function VentanaConfirmacion('), avisosTsx.indexOf('<Modal', avisosTsx.indexOf('function VentanaConfirmacion(')));
+  assert.ok(ventana.length > 0, 'VentanaConfirmacion');
+  assert.ok(!/\bENFOCABLES\b|'Tab'|querySelectorAll|shiftKey/.test(avisosTsx), 'sin una tercera copia de la trampa de Tab');
+  assert.match(ventana, /if \(e\.key !== 'Escape'\) return;\s*e\.preventDefault\(\);\s*e\.stopPropagation\(\);\s*onResponder\(id, false\);/);
+  assert.match(ventana, /window\.addEventListener\('keydown', alTeclear, true\);/);
+  assert.match(avisosTsx, /<Modal\s+capa="encima"\s+role="alertdialog"/, 'es un Modal de la pila');
+  // B4 T24 f2 (m2 = m6 de la revisión r3 de f1): «Actualizar Pedido de Venta» no tiene X, así que el foco inicial caía en «Sí, actualizar
+  // también el pedido». Arranca en «Solo guardar la cotización», la opción de menos peso (autoFocus: el hook respeta el foco que ya
+  // está dentro del panel). Abrir no decide por el usuario.
+  const propagar = leer('app/dashboard/ventas/cotizacion/cotizacion-client.tsx');
+  assert.match(propagar, /<Button color="indigo" disabled=\{saving\} onClick=\{onConfirm\}>Sí, actualizar también el pedido<\/Button>\s*(?:\{\/\*[\s\S]*?\*\/\}\s*)?<Button variant="secondary" autoFocus disabled=\{saving\} onClick=\{onCancel\}>Solo guardar la cotización<\/Button>/);
+  // B4 T24 f2 r1 (m12 = m40, D27): la cuenta va DENTRO de PropagarPvenConfirm (otra ventana del archivo puede tener su autoFocus);
+  // la regex de arriba fija cuál.
+  const cuerpoPropagar = propagar.slice(propagar.indexOf('export function PropagarPvenConfirm('), propagar.indexOf('\nexport function ', propagar.indexOf('export function PropagarPvenConfirm(') + 10));
+  assert.ok(cuerpoPropagar.length > 200, 'el cuerpo de PropagarPvenConfirm');
+  assert.equal((cuerpoPropagar.match(/\sautoFocus[\s>=]/g) ?? []).length, 1, 'un solo autoFocus en PropagarPvenConfirm: el de «Solo guardar la cotización»');
+  assert.ok(hook.includes('if (panel && !panel.contains(document.activeElement)) {'), 'el hook no pisa el autoFocus de adentro');
+}
+
+console.log('--- TEST T24-f (B4 T24, FINAL-m27): la alerta de una pestaña se dice con texto (no solo con el color) y no desaparece activa ---');
+{
+  const { textoAlertaPestana } = TABLA;
+  assert.equal(textoAlertaPestana('Hay 3 vencidos'), 'Hay 3 vencidos');
+  assert.equal(textoAlertaPestana('  Hay 1 vencido  '), 'Hay 1 vencido');
+  assert.equal(textoAlertaPestana(true), 'Requiere atención', 'sin texto, el genérico');
+  for (const nada of [false, undefined, null, '', '   ', 0]) assert.equal(textoAlertaPestana(nada), null, String(nada));
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const barra = leer('components/tabla/BarraTabla.tsx');
+  assert.match(barra, /alerta\?: boolean \| string;/, 'aditivo: un texto o true');
+  assert.match(barra, /const textoAlerta = textoAlertaPestana\(p\.alerta\);/);
+  assert.match(barra, /\{textoAlerta && <span className="sr-only">\{` \(\$\{textoAlerta\}\)`\}<\/span>\}/);
+  // Las pantallas de Compras dicen cuántos vencidos (textoVencidosPec, lib/estados-compras.js, casos en test_estados_compras.mjs).
+  assert.ok(leer('app/dashboard/compras/page.tsx').includes("alerta: textoVencidosPec(conteos?.vencidos) }"));
+  assert.ok(leer('app/dashboard/compras/pedidos/page.tsx').includes("alerta: textoVencidosPec(conteos?.vencidos) }"));
+  // r1 (m21, WCAG 1.4.1): en una pestaña inactiva rose-100/rose-700 y slate-200/slate-600 tienen casi la misma luminancia: la alerta
+  // lleva además una señal que no es color (el triángulo, aria-hidden).
+  assert.match(barra, /import \{[^}]*\bAlertTriangle\b[^}]*\} from 'lucide-react';/);
+  assert.equal((barra.match(/\{textoAlerta && <AlertTriangle size=\{10\} aria-hidden="true" className="mr-0\.5 shrink-0" \/>\}/g) ?? []).length, 1);
+  // r1 (m17): la fila pulsable (tabIndex 0) se abre con Enter y con Espacio, sin desplazar la caja, y solo si la tecla es de la fila.
+  const tablaEstandar = leer('components/tabla/TablaEstandar.tsx');
+  assert.match(tablaEstandar, /const alTeclearFila = \(e: EventoTeclado<HTMLTableRowElement>, fila: T\) => \{\s*if \(onFila && \(e\.key === 'Enter' \|\| e\.key === ' '\) && e\.target === e\.currentTarget\) \{\s*e\.preventDefault\(\);\s*onFila\(fila\);\s*\}\s*\};/);
+}
+
+console.log('--- TEST T24-g (B4 T24: F42, F43 y F44): el aviso del menú, el encabezado y la paginación angostos y el botón de la IA en pantalla completa ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigo = (texto) => texto.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // F42: el alto del aviso de atrasados queda reservado en el menú (que llegue no corre el menú: el CLS).
+  const badge = codigo(leer('components/AlertasBadge.tsx'));
+  assert.match(badge, /if \(!texto && pastillas\.length === 0\) return <div aria-hidden="true" className=\{RESERVA\} \/>;/);
+  assert.match(badge, /const RESERVA = 'min-h-\[3\.75rem\] shrink-0';/);
+  assert.match(badge, /<div className=\{`\$\{RESERVA\} space-y-2 px-3 pt-4`\}>/);
+  // F43: el título se achica y se parte en pantallas angostas; las acciones bajan cuando no caben; los botones de página se envuelven.
+  const encabezado = codigo(leer('components/ui/PageHeader.tsx'));
+  assert.match(encabezado, /<div className="flex flex-wrap items-center justify-between gap-4">/);
+  assert.match(encabezado, /<div className="min-w-0">/);
+  assert.match(encabezado, /<h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3">/);
+  assert.match(encabezado, /<span className="min-w-0 break-words">\{title\}<\/span>/);
+  assert.match(codigo(leer('components/tabla/Paginacion.tsx')), /<div className="flex flex-wrap items-center justify-end gap-0\.5">/);
+  // F44 (b): en pantalla completa el pie de la tabla es tan alto como la esquina del botón flotante de la IA (bottom-6 + h-14 = 80 px
+  // sobre el borde; la tarjeta está a 16 px): el botón queda dentro del pie (pr-20) y no tapa la última fila.
+  const ds = leer('lib/design-system.ts');
+  const completa = /^\s+tarjetaCompleta:\s+'([^']*)'/m.exec(ds)?.[1] ?? '';
+  assert.ok(completa.includes('[&_[data-pie-tabla]]:pr-20') && completa.includes('[&_[data-pie-tabla]]:min-h-[4.5rem]'), completa);
+  // F44 (a), ruling del controlador: la reserva inferior para el botón de la IA es un token (RESERVA_BOTON_IA) en los contenedores que se
+  // desplazan solos (h-full overflow-y-auto, no el <main> del layout): Gastos (por CONTENEDOR), Agenda (sus cuatro vistas), el CRM
+  // (Lista y Análisis; el tablero se mide al alto de la ventana) y Campañas. El botón no se mueve.
+  assert.match(ds, /export const RESERVA_BOTON_IA = 'pb-24';/);
+  const piezas = leer('app/dashboard/inventario/piezas-inventario.tsx');
+  assert.match(piezas, /export const CONTENEDOR = `flex-1 flex flex-col px-4 xl:px-8 pt-6 \$\{RESERVA_BOTON_IA\} max-w-\[1600px\] mx-auto w-full min-w-0 gap-6`;/);
+  const USOS = { 'app/dashboard/agenda/page.tsx': 4, 'app/dashboard/crm/page.tsx': 1 /* + la de Lista, abajo */, 'app/dashboard/marketing/campanas/page.tsx': 1,
+    'app/dashboard/inventario/piezas-inventario.tsx': 1 };
+  for (const [ruta, n] of Object.entries(USOS)) {
+    const f = leer(ruta);
+    assert.match(f, /import \{[^}]*\bRESERVA_BOTON_IA\b[^}]*\} from '@\/lib\/design-system';/, `${ruta}: importa el token`);
+    assert.equal((f.match(/\$\{RESERVA_BOTON_IA\}/g) ?? []).length, n, ruta);
+  }
+  assert.ok(!/p-6 overflow-y-auto animate-in fade-in"/.test(leer('app/dashboard/agenda/page.tsx')), 'Agenda: ninguna vista sin la reserva');
+  const crm = leer('app/dashboard/crm/page.tsx');
+  assert.match(crm, /<div className=\{`flex-1 min-h-0 overflow-y-auto p-5 \$\{estado\.modo === 'lista' \? RESERVA_BOTON_IA : ''\}`\}>/);
+  assert.match(crm, /<div className=\{`flex-1 min-h-0 overflow-y-auto p-5 \$\{RESERVA_BOTON_IA\}`\}>\s*<PanelAnalisisPerezoso/);
+  // B4 T24 f2 r1 (m38, D27): la clase pasa a plantilla (lleva ${FOCO}); el botón sigue en el mismo sitio.
+  assert.match(leer('components/GlobalAIChat.tsx'), /className=\{`fixed bottom-6 right-6 w-14 h-14 /, 'el botón no se mueve');
+}
+
+console.log('--- TEST T24-h (B4 T24, FINAL-m11): accionModo traduce el filtro de estados entre la columna del tablero y los estados de la lista ---');
+{
+  const { accionModo, traducirEstadosDeModo } = TABLA;
+  const { COLUMNAS_PEC, OPCIONES_ESTADOS_TABLERO_PEC, opcionesEstadosPec } = await import('../src/lib/estados-compras.js');
+  // Kanban → Lista: el estado principal de una columna es la columna entera (sus estados que la vista permite).
+  const enBodega = COLUMNAS_PEC.find((c) => c.estados.includes('PARCIALMENTE_RECIBIDA'));
+  assert.ok(enBodega && enBodega.estados[0] === 'RECIBIDO', 'En bodega = RECIBIDO + PARCIALMENTE_RECIBIDA');
+  assert.deepEqual(traducirEstadosDeModo(['RECIBIDO'], 'lista', COLUMNAS_PEC), enBodega.estados);
+  const deKanban = estadoTablaInicial({ vista: 'todos', modo: 'kanban', estados: ['RECIBIDO'] });
+  const validosLista = new Set(opcionesEstadosPec('todos').map((o) => o.valor));
+  const esperados = enBodega.estados.filter((e) => validosLista.has(e));
+  assert.deepEqual(accionModo(deKanban, 'lista', opcionesEstadosPec, COLUMNAS_PEC), { tipo: 'cambiar', cambios: { modo: 'lista', estados: esperados } });
+  // Lista → Kanban: cada estado de la lista pasa a la opción de su columna (sin repetir).
+  const deLista = estadoTablaInicial({ vista: 'todos', modo: 'lista', estados: ['PARCIALMENTE_RECIBIDA', 'RECIBIDO'] });
+  assert.deepEqual(traducirEstadosDeModo(['PARCIALMENTE_RECIBIDA', 'RECIBIDO'], 'kanban', COLUMNAS_PEC), ['RECIBIDO']);
+  assert.deepEqual(accionModo(deLista, 'kanban', OPCIONES_ESTADOS_TABLERO_PEC, COLUMNAS_PEC), { tipo: 'cambiar', cambios: { modo: 'kanban', estados: ['RECIBIDO'] } });
+  // Lo que no es de ninguna columna queda igual; sin columnas, como antes (aditivo).
+  assert.deepEqual(traducirEstadosDeModo(['X'], 'lista', COLUMNAS_PEC), ['X']);
+  assert.deepEqual(traducirEstadosDeModo(['RECIBIDO'], 'lista', null), ['RECIBIDO']);
+  assert.deepEqual(accionModo(deKanban, 'lista', opcionesEstadosPec), accionModo(deKanban, 'lista', opcionesEstadosPec, null), 'sin columnas, lo de TEST 44');
+  // Ida y vuelta: Kanban «En bodega» → Lista (la columna) → Kanban «En bodega».
+  const ida = reducirEstadoTabla(deKanban, accionModo(deKanban, 'lista', opcionesEstadosPec, COLUMNAS_PEC));
+  const vuelta = reducirEstadoTabla(ida, accionModo(ida, 'kanban', OPCIONES_ESTADOS_TABLERO_PEC, COLUMNAS_PEC));
+  assert.deepEqual(vuelta.estados, ['RECIBIDO']);
+  // Ventas, la misma mecánica (Pedidos de venta).
+  const { COLUMNAS_PEDIDO } = await import('../src/lib/kanban-ventas.js');
+  const conVarios = COLUMNAS_PEDIDO.find((c) => c.estados.length > 1);
+  if (conVarios) assert.deepEqual(traducirEstadosDeModo([conVarios.estados[0]], 'lista', COLUMNAS_PEDIDO), conVarios.estados);
+  // Las pantallas le pasan sus columnas.
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.ok(leer('app/dashboard/compras/page.tsx').includes("despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEC : opcionesEstadosPec, COLUMNAS_PEC));"), 'compras/page.tsx');
+  assert.ok(leer('app/dashboard/compras/pedidos/page.tsx').includes("despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEC : opcionesEstadosPec, COLUMNAS_PEC));"), 'compras/pedidos/page.tsx');
+  assert.ok(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx').includes("despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_SC : opcionesEstadosSolicitudes, COLUMNAS_SC));"), 'ventas/solicitud/solicitud-client.tsx');
+  assert.ok(leer('app/dashboard/ventas/cotizacion/cotizacion-client.tsx').includes("despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_COT : opcionesEstadosCotizaciones, COLUMNAS_COT));"), 'ventas/cotizacion/cotizacion-client.tsx');
+  assert.ok(leer('app/dashboard/ventas/venta/venta-client.tsx').includes("despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesDeLaLista, COLUMNAS_PEDIDO));"), 'ventas/venta/venta-client.tsx');
+}
+
+console.log('--- TEST T24-i (B4 T24: F39 y FINAL-m19): los filtros extra van en el estado único y se guardan con la sesión ---');
+{
+  const e = estadoTablaInicial({ vista: 'todos', pagina: 4 });
+  assert.ok(!('filtros' in e), 'aditivo: sin filtros, el estado de siempre');
+  // {tipo: 'filtro', clave, valor}: se mezcla en el reductor (sin cierres viejos) y, como todo filtro, vuelve a la página 1.
+  const conCat = reducirEstadoTabla(e, { tipo: 'filtro', clave: 'categoria', valor: 'Nómina' });
+  assert.deepEqual([conCat.filtros, conCat.pagina], [{ categoria: 'Nómina' }, 1]);
+  const conTipo = reducirEstadoTabla(conCat, { tipo: 'filtro', clave: 'tipo', valor: 'variable' });
+  assert.deepEqual(conTipo.filtros, { categoria: 'Nómina', tipo: 'variable' });
+  assert.deepEqual(reducirEstadoTabla(conTipo, { tipo: 'filtro', clave: 'categoria', valor: '' }).filtros, { tipo: 'variable' }, 'vacío: se quita');
+  assert.equal(reducirEstadoTabla(conTipo, { tipo: 'filtro', clave: 'tipo', valor: 'variable' }), conTipo, 'sin cambio: el mismo estado');
+  assert.equal(reducirEstadoTabla({ ...conTipo, pagina: 5 }, { tipo: 'pagina', valor: 6 }).filtros, conTipo.filtros, 'la página no los toca');
+  // Normalizados: textos sin bordes, sin vacíos ni lo que no es texto, en orden de clave.
+  assert.deepEqual(estadoTablaInicial({ filtros: { b: ' x ', a: 'y', c: 3, d: '  ', '': 'z' } }).filtros, { a: 'y', b: 'x' });
+  assert.deepEqual(estadoTablaInicial({ filtros: 'mal' }).filtros, {});
+  assert.throws(() => reducirEstadoTabla(e, { tipo: 'filtro', clave: '', valor: 'x' }), /filtro/);
+  // La sesión: se guardan y vuelven con la página N (antes la página N volvía sin el filtro que la definía).
+  const texto = textoSesionTabla({ ...conTipo, pagina: 3 }, 7);
+  assert.deepEqual(leerSesionTabla(texto, 7).filtros, { categoria: 'Nómina', tipo: 'variable' });
+  const vuelto = armarEstadoTabla({ vista: 'todos' }, { sesion: leerSesionTabla(texto, 7) });
+  assert.deepEqual([vuelto.filtros, vuelto.pagina], [{ categoria: 'Nómina', tipo: 'variable' }, 3]);
+  assert.deepEqual(leerSesionTabla(texto, 8), {}, 'de otra cuenta, nada');
+  assert.ok(!textoSesionTabla(e, 7).includes('filtros'), 'sin filtros, el texto de siempre');
+  assert.equal(cambiosEstadoTabla(e, conCat).sesion, true, 'cambiar un filtro escribe la sesión');
+  // «Limpiar» los quita (si había); sin filtros, como siempre.
+  assert.deepEqual(reducirEstadoTabla(conTipo, { tipo: 'limpiarFiltros' }).filtros, {});
+  assert.ok(!('filtros' in reducirEstadoTabla(e, { tipo: 'limpiarFiltros' })));
+  // Gastos (categoría y tipo) y el CRM (la etapa) leen sus filtros del estado único (FINAL-m19).
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const gastos = leer('app/dashboard/finanzas/gastos/page.tsx');
+  assert.match(gastos, /const categoria = estado\.filtros\?\.categoria \?\? '';\s*\n\s*(\/\/[^\n]*\n\s*)*const tipo = estado\.filtros\?\.tipo \?\? '';/);
+  assert.ok(!/useState\(''\);\s*\n\s*const filtros|const \[categoria, setCategoria\]|const \[tipo, setTipo\]/.test(gastos), 'sin el useState de antes');
+  assert.match(gastos, /const cambiarTipo = useCallback\(\(valor: string\) => \{\n\s*despachar\(\{ tipo: 'filtro', clave: 'tipo', valor \}\);/);
+  assert.match(gastos, /const cambiarCategoria = useCallback\(\(valor: string\) => \{\n\s*despachar\(\{ tipo: 'filtro', clave: 'categoria', valor \}\);/);
+  const crm = leer('app/dashboard/crm/page.tsx');
+  assert.match(crm, /const filterStage = estado\.filtros\?\.etapa \|\| 'all';/);
+  assert.ok(!/const \[filterStage, setFilterStage\]/.test(crm));
+  assert.match(crm, /despachar\(\{ tipo: 'filtro', clave: 'etapa', valor: valor === 'all' \? '' : valor \}\);/);
+}
+
+console.log('--- TEST T24-j (B4 T24: F34, F35, F36 y F10): el margen de la fila de pestañas y los JSDoc ---');
+{
+  const { scrollParaVer } = TABLA;
+  // F34: con el margen de la fila (su p-1: el anillo de foco del token FOCO, 2 px de separación y 2 de grosor, no se corta).
+  assert.equal(scrollParaVer({ inicio: 4, ancho: 60 }, { scroll: 433, visible: 343, margen: 4 }), 0, 'volver a «Todos»: scrollLeft 0, no 4');
+  assert.equal(scrollParaVer({ inicio: 4, ancho: 60 }, { scroll: 433, visible: 343 }), 4, 'sin margen, lo de antes (aditivo)');
+  assert.equal(scrollParaVer({ inicio: 500, ancho: 80 }, { scroll: 0, visible: 343, margen: 4 }), 500 + 80 + 4 - 343, 'a la derecha, con el margen');
+  assert.equal(scrollParaVer({ inicio: 100, ancho: 60 }, { scroll: 50, visible: 343, margen: 4 }), 50, 'ya se ve: el mismo');
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const barra = leer('components/tabla/BarraTabla.tsx');
+  assert.match(barra, /\{ scroll: fila\.scrollLeft, visible: fila\.clientWidth, margen: MARGEN_FILA_PESTANAS \}/);
+  assert.match(barra, /const MARGEN_FILA_PESTANAS = 4;/);
+  // F35 (aceptado con su comentario) y F36 (el JSDoc dice lo que hace la pastilla y el desplazamiento).
+  assert.ok(barra.includes('F35: si los conteos llegan después y ensanchan'), 'F35: la decisión, en el comentario');
+  assert.ok(barra.includes('r2 (I-r1): con la aparte activa, una de vista sin número no pinta su pastilla (estadoPastillaPestana)'));
+  assert.ok(barra.includes('r2 (m-r1-a): al montar y al cambiar la activa, la fila se desplaza con scrollLeft (scrollParaVer)'));
+  assert.ok(barra.includes('null: gris mientras carga; con la aparte activa, sin pastilla'));
+  // F10: recortarColumnas tipa los nombres con una plantilla (columnasProductos le pasa {id, nombre}).
+  const t = leer('lib/tabla.js');
+  assert.match(t, /@template T\n \* @param \{ReadonlyArray<T> \| null \| undefined\} nombres\n \* @param \{number\} max\n \* @returns \{\{visibles: T\[\], mas: number, aviso: string \| null\}\}\n \*\/\nexport function recortarColumnas/);
+}
+
+console.log('--- TEST T24-F9 (B4 T24, F9): Compras e Inventario no importan lo genérico de las libs de Ventas ---');
+{
+  const hv = await import('../src/lib/hub-ventas.js');
+  const lv = await import('../src/lib/listas-ventas.js');
+  // Las cuatro viven en lib/tabla.js (sus casos siguen en test_hub_ventas.mjs y test_listas_ventas.mjs, por la reexportación).
+  for (const nombre of ['ordenEsAtencion', 'textoOrdenHub', 'accionVistaEnLista', 'rutaSinParametro']) assert.equal(typeof TABLA[nombre], 'function', nombre);
+  assert.equal(hv.ordenEsAtencion, TABLA.ordenEsAtencion, 'hub-ventas la reexporta (la misma función)');
+  assert.equal(hv.textoOrdenHub, TABLA.textoOrdenHub);
+  assert.equal(lv.accionVistaEnLista, TABLA.accionVistaEnLista);
+  assert.equal(lv.rutaSinParametro, TABLA.rutaSinParametro);
+  assert.equal(TABLA.rutaSinParametro('/x', '?a=1&tab=b', 'tab'), '/x?a=1');
+  assert.equal(TABLA.textoOrdenHub('-monto', { monto: 'Monto' }), 'Orden: Monto ↓');
+  const PANTALLAS = ['app/dashboard/compras/lista-compras/page.tsx', 'app/dashboard/compras/page.tsx', 'app/dashboard/compras/pedidos/page.tsx', 'app/dashboard/compras/recepciones/page.tsx', 'app/dashboard/compras/transito/page.tsx', 'app/dashboard/compras/traslados/page.tsx', 'app/dashboard/inventario/ajustes/page.tsx', 'app/dashboard/inventario/entregas/page.tsx', 'app/dashboard/inventario/recepciones/page.tsx', 'app/dashboard/inventario/traslados/page.tsx'];
+  for (const ruta of PANTALLAS) {
+    const f = readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8');
+    assert.ok(!/from '@\/lib\/(?:hub-ventas|listas-ventas)'/.test(f), `${ruta}: sin las libs de Ventas`);
+  }
+}
+
+console.log('--- TEST T24-k0 (B4 T24 r1, m36): los comentarios — el JSDoc del reductor, las notas de FINAL-m29 y PasosFlujo ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const tabla = leer('lib/tabla.js');
+  const jsdoc = tabla.slice(tabla.lastIndexOf('/**', tabla.indexOf('export function reducirEstadoTabla(')), tabla.indexOf('export function reducirEstadoTabla('));
+  assert.match(jsdoc, /\{tipo: 'filtro', clave, valor\}/, 'la acción filtro');
+  assert.match(jsdoc, /'filtros'/, 'el campo filtros');
+  assert.match(jsdoc, /\{tipo: 'limpiarFiltros'\}: sin semáforo, paso, estados, búsqueda ni filtros extra/);
+  // Las notas de FINAL-m29 van DENTRO de su JSDoc (no entre el JSDoc y la función).
+  for (const [ruta, nombre] of [['lib/flujo.js', 'alternarPaso'], ['lib/flujo.js', 'textoMasAntiguo'], ['lib/entregas.js', 'textoEntregaTablero']]) {
+    assert.match(leer(ruta), new RegExp(`\\* B4 T24 \\(FINAL-m29\\): antes [^\\n]*\\n(?: \\*[^\\n]*\\n)* \\*/\\nexport function ${nombre}\\(`), `${ruta}: ${nombre}`);
+  }
+  assert.ok(!/^\/\* B4 T24 \(FINAL-m29\)/m.test(leer('lib/flujo.js') + leer('lib/entregas.js')), 'sin la nota suelta');
+  // PasosFlujo: sin el comentario suelto donde estaba la const FOCO.
+  assert.ok(!leer('components/flujo/PasosFlujo.tsx').includes('// B4 T24 (FINAL-m25), el FOCO común de design-system.ts.'));
+  // El comentario de F35 de BarraTabla cierra su paréntesis.
+  assert.match(leer('components/tabla/BarraTabla.tsx'), /B4 T24 \(F35: si los conteos llegan después y ensanchan[^)]*\([^)]*\)[^)]*\)/);
+}
+
+console.log('--- TEST T24-k (B4 T24, FINAL-m29): dos módulos de src/lib no exportan el mismo nombre ---');
+{
+  const dir = new URL('../src/lib/', import.meta.url);
+  // r1 (m39): los nombres que un módulo exporta: `export function|const|let|var|class x`, y los de `export { a, b as c }` locales (sin
+  // `from` y que no vienen de un import del mismo archivo: esos son reexportaciones de la misma función, no un duplicado).
+  const exportados = (fuente) => {
+    const nombres = [...fuente.matchAll(/^export (?:async )?(?:function\*?|const|let|var|class)\s+([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]);
+    const importados = new Set([...fuente.matchAll(/^import\s+(?:type\s+)?\{([^}]*)\}\s*from/gm)]
+      .flatMap((m) => m[1].split(',').map((p) => p.trim().split(/\s+as\s+/).pop()).filter(Boolean)));
+    for (const [, lista] of fuente.matchAll(/^export \{([^}]*)\}(?!\s*from)/gm)) {
+      for (const parte of lista.split(',').map((p) => p.trim()).filter(Boolean)) {
+        const [local, como = local] = parte.split(/\s+as\s+/);
+        if (!importados.has(local)) nombres.push(como);
+      }
+    }
+    return nombres;
+  };
+  assert.deepEqual(exportados("function a() {}\nconst b = 1;\nexport { a, b as c };\nexport var d = 1;\nexport { e } from './x';\n"
+    + "import { f, g as h } from './y';\nexport { f, h };\nexport function i() {}\n").sort(), ['a', 'c', 'd', 'i'],
+  'la guarda ve `export var`, `export { x }` y `x as y` locales; no las reexportaciones');
+  const vistos = new Map();
+  for (const archivo of readdirSync(dir).filter((f) => /\.(js|ts)$/.test(f))) {
+    const fuente = readFileSync(new URL(archivo, dir), 'utf8').replace(/\r\n/g, '\n');
+    for (const nombre of exportados(fuente)) vistos.set(nombre, [...(vistos.get(nombre) ?? []), archivo]);
+  }
+  const repetidos = [...vistos].filter(([, archivos]) => archivos.length > 1).map(([n, a]) => `${n}: ${a.join(', ')}`);
+  assert.deepEqual(repetidos, [], 'un autoimport elegiría el equivocado');
+  // Los nombres nuevos: alternarPaso y textoMasAntiguo (flujo.js), textoEntregaTablero (entregas.js).
+  const flujo = await import('../src/lib/flujo.js');
+  assert.equal(flujo.alternarPaso('COT', 'COT'), null);
+  assert.equal(flujo.textoMasAntiguo(6), 'El más antiguo: 6 días');
+  const entregas = await import('../src/lib/entregas.js');
+  assert.equal(entregas.textoEntregaTablero({}), '—');
+}
+
 console.log('✓ lib/tabla.js: columnas, modo cliente, estado único, parámetros de lista, respuestas, modo de vista y menú de fila.');
 console.log('✓ T4C: sesión, estado armado, partes de columnas, URL de la lista, carga vigente, estado de la lista y modo cliente.');
 console.log('✓ T4C r1: orden rechazado, estados en la sesión, escrituras del usuario del render, esperar y vueltas.');
 console.log('✓ T4C r2: sin filas de otra cuenta, vuelta al orden condicional y atendida, tope de espera y cables vigilados.');
+console.log('--- B4 T24 f2 r1 (m9 + m10, m38): el foco que LLEGA detrás vuelve a la capa; los portales se marcan; el botón del Copilot tiene nombre ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const { recuperaFocoAlEntrar } = TABLA;
+  assert.equal(typeof recuperaFocoAlEntrar, 'function', 'recuperaFocoAlEntrar existe');
+  // La misma regla de atrapaTab para lo que LLEGA (focusin): solo la capa de arriba, sin re-ingreso pendiente, y solo si el foco cayó
+  // DETRÁS (la página tapada). Encima (el Copilot, los avisos, un portal marcado, el re-ingreso), el panel, la pila o el body: nada.
+  assert.equal(recuperaFocoAlEntrar({ arriba: true, foco: 'detras' }), true, 'Mayús+Tab desde el Copilot cae detrás: vuelve');
+  for (const foco of ['panel', 'body', 'pila', 'encima', 'fuera', undefined]) {
+    assert.equal(recuperaFocoAlEntrar({ arriba: true, foco }), false, String(foco));
+  }
+  assert.equal(recuperaFocoAlEntrar({ arriba: false, foco: 'detras' }), false, 'una capa de abajo no');
+  assert.equal(recuperaFocoAlEntrar({ arriba: true, reautenticando: true, foco: 'detras' }), false, 'con el re-ingreso pendiente, no');
+  // El hook: un oyente focusin en document mientras la capa está abierta (se quita al cerrar, antes de devolver el foco al abridor).
+  const hook = leer('components/ui/useCierreVentana.ts');
+  assert.match(hook, /const alEnfocar = \(\) => \{\s*if \(!panel \|\| !recuperaFocoAlEntrar\(\{\s*arriba: esCapaDeArriba\(capas, capa\), reautenticando: hayReautenticacionPendiente\(\), foco: lugarDelFoco\(panel\),\s*\}\)\) return;\s*\(panel\.querySelector<HTMLElement>\(ENFOCABLES\) \?\? panel\)\.focus\(\{ preventScroll: true \}\);\s*\};/);
+  assert.match(hook, /document\.addEventListener\('focusin', alEnfocar\);/);
+  // r2 (m5, D27): y después devuelve el foco solo al cerrar de verdad (devuelveFocoAlCerrar).
+  assert.match(hook, /document\.removeEventListener\('keydown', alTeclear\);\s*document\.removeEventListener\('focusin', alEnfocar\);\s*capas = cerrarCapa\(capas, capa\);(?:\s*\/\/[^\n]*)*\s*if \(abridor && devuelveFocoAlCerrar\(/);
+  // m10 (requisito previo): todo portal de src (createPortal) se marca con data-superficie en su raíz: cuenta como «encima» (un menú
+  // abierto dentro de una ventana no pierde el foco). Uno nuevo sin la marca falla aquí.
+  const { readdirSync, statSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const raiz = fileURLToPath(new URL('../src/', import.meta.url));
+  const archivos = [];
+  const recorrer = (dir) => {
+    for (const n of readdirSync(dir)) {
+      const p = join(dir, n);
+      if (statSync(p).isDirectory()) recorrer(p);
+      else if (/\.tsx?$/.test(n)) archivos.push(p);
+    }
+  };
+  recorrer(raiz);
+  const portales = [];
+  for (const p of archivos) {
+    const f = readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
+    for (const m of f.matchAll(/createPortal\(/g)) {
+      if (/import \{[^}]*$/.test(f.slice(Math.max(0, m.index - 40), m.index))) continue;
+      const resto = f.slice(m.index);
+      const marca = resto.match(/^createPortal\(\s*(?:\/\/[^\n]*\n\s*)*<(\w+)\s+data-superficie="([a-z-]+)"/);
+      portales.push([p.slice(raiz.length).replace(/\\/g, '/'), marca ? marca[2] : null]);
+    }
+  }
+  assert.deepEqual(portales.filter(([, marca]) => marca === null), [], 'cada createPortal de src con data-superficie en su raíz');
+  assert.deepEqual(portales.map(([archivo, marca]) => `${archivo}:${marca}`).sort(), [
+    'app/dashboard/ventas/solicitud/selector-cliente.tsx:ventana', 'components/tabla/TablaEstandar.tsx:arrastre',
+    'components/ui/Kanban.tsx:arrastre', 'components/ui/MenuFila.tsx:menu',
+  ], 'los cuatro portales de hoy y su marca');
+  // m38: el botón flotante del Copilot tiene nombre accesible y el token de foco.
+  const chat = leer('components/GlobalAIChat.tsx');
+  assert.match(chat, /<button\s+data-superficie="copilot"\s+onClick=\{\(\) => setIsOpen\(true\)\}\s+aria-label="Abrir Nebulae Copilot"\s+className=\{`fixed bottom-6 right-6 [^`]*\$\{FOCO\}`\}/);
+  assert.match(chat, /import \{ FOCO \} from '@\/lib\/design-system';/);
+}
+
+console.log('--- B4 T24 f2 r2 (m4, m5): las superficies fijas que van encima de una capa, marcadas; el foco vuelve al abridor solo al cerrar de verdad ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // m4: la búsqueda en frontend/src de superficies fijas sin data-capa ni data-superficie que se pintan ENCIMA de un Modal o un Drawer
+  // abierto (el reporte r2 tiene la tabla). Dos llevan su marca: el Toast (z-[100], con su botón, sobre los Modal de Empleados y
+  // Campañas) y la ventana de seguimiento de Compras › Pedidos (z-[95]; su «Eliminar casillero» abre confirmar(), z-[60]).
+  assert.match(leer('components/ui/Toast.tsx'), /<div data-superficie="avisos" className=\{`fixed bottom-6 right-6 z-\[100\]/);
+  assert.match(leer('app/dashboard/compras/pedidos/page.tsx'), /<div data-superficie="ventana" className="fixed inset-0 z-\[95\] flex items-center justify-center bg-slate-900\/60 backdrop-blur-sm p-4">/);
+  // m5: con StrictMode, React simula desmontar y volver a montar: la limpieza no debe devolver el foco al abridor (pisaría el autoFocus de
+  // adentro), solo al cerrar de verdad, cuando el panel ya no está en el documento.
+  const { devuelveFocoAlCerrar } = TABLA;
+  assert.equal(typeof devuelveFocoAlCerrar, 'function', 'devuelveFocoAlCerrar existe');
+  assert.equal(devuelveFocoAlCerrar({ abridorConectado: true, panelConectado: false }), true, 'se cerró de verdad: vuelve al abridor');
+  assert.equal(devuelveFocoAlCerrar({ abridorConectado: true, panelConectado: true }), false, 'el desmontaje simulado de StrictMode: no');
+  assert.equal(devuelveFocoAlCerrar({ abridorConectado: false, panelConectado: false }), false, 'el abridor ya no está');
+  assert.equal(devuelveFocoAlCerrar({ abridorConectado: false, panelConectado: true }), false);
+  assert.equal(devuelveFocoAlCerrar({}), false);
+  const hook = leer('components/ui/useCierreVentana.ts');
+  assert.match(hook, /if \(abridor && devuelveFocoAlCerrar\(\{ abridorConectado: abridor\.isConnected, panelConectado: Boolean\(panel\?\.isConnected\) \}\)\) \{\s*abridor\.focus\(\{ preventScroll: true \}\);\s*\}/);
+  assert.ok(!/if \(abridor && abridor\.isConnected\) abridor\.focus/.test(hook), 'sin la vuelta incondicional de antes');
+}
+
 console.log('✓ T4D: umbral, ancho al contenido, ajustar al ancho, geometría, destino, orden, cuerpo, grupos, selección, barra y el fuente de los componentes.');
 console.log('✓ T4D r1: anchoAlSoltar, estado del total, títulos recortados, filtros a la vista, paneles, Esc de la pantalla completa y los cables de r1.');
 console.log('✓ T4D r2: umbral del asa, la flexible guarda lo que se ve, zona táctil, filtro que se cierra, casilla en el recorte, total obligatorio y JSDoc del memo.');

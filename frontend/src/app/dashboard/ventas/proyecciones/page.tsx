@@ -16,6 +16,7 @@ import {
 import { Line } from 'react-chartjs-2';
 import { SubNav, PageHeader, Button, useAvisos } from '@/components/ui';
 import { VEN_NAV } from '../ven-nav';
+import { RESERVA_BOTON_IA } from '@/lib/design-system';
 import { apiFetch } from '@/lib/api';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
@@ -140,7 +141,8 @@ export default function ProyeccionesPage() {
     <div className="w-full h-full flex flex-col">
       <SubNav label="Hub Ventas" items={VEN_NAV} currentPath="/dashboard/ventas/proyecciones" color="indigo" hub={{ href: '/dashboard/ventas' }} />
 
-      <div className="flex flex-col gap-6 w-full p-6 pb-10">
+      {/* B4 T24 f2 r1 (m2 de F44-a): el contenido deja libre, al fondo, la esquina del botón de la IA. */}
+      <div className={`flex flex-col gap-6 w-full p-6 ${RESERVA_BOTON_IA}`}>
         <PageHeader
           icon={TrendingUp} color="indigo"
           title="Proyecciones Matemáticas de Ventas"

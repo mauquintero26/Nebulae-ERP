@@ -505,6 +505,40 @@ console.log('--- B4 T7 TEST 1: leerEnlaceHub — ?paso= y ?tab=analisis&foco= de
   assert.ok(Object.isFrozen(fv.leerEnlaceHub('?paso=SC')));
 }
 
+console.log('--- B4 T24 (FINAL-C3): inicioDelEnlaceHub — lo que el Hub aplica al montar, del enlace leído DESPUÉS del commit ---');
+{
+  assert.equal(typeof fv.inicioDelEnlaceHub, 'function', 'inicioDelEnlaceHub existe');
+  const NADA = { seccion: null, foco: null, paso: null, vista: null };
+  // La URL de la página anterior (la que leía el inicializador de useState): sin el enlace, nada que aplicar.
+  for (const vieja of ['', '?', '?tab=documentos', '?foco=pven', undefined, null, 42]) {
+    assert.deepEqual(fv.inicioDelEnlaceHub(vieja), NADA, String(vieja));
+  }
+  // «Ver análisis» de Solicitudes, Cotizaciones y Pedidos (enlaceVerAnalisis): la sección Análisis con su foco.
+  for (const { clave } of FOCOS_VENTAS) {
+    assert.deepEqual(fv.inicioDelEnlaceHub(`?tab=analisis&foco=${clave}`), { ...NADA, seccion: 'analisis', foco: clave }, clave);
+  }
+  assert.deepEqual(fv.inicioDelEnlaceHub('?tab=analisis'), { ...NADA, seccion: 'analisis' });
+  assert.deepEqual(fv.inicioDelEnlaceHub('?tab=analisis&foco=otro'), { ...NADA, seccion: 'analisis' }, 'un foco desconocido no cuenta');
+  // Una caja del embudo del Dashboard (pasosEmbudoDashboard → ?paso=): el paso y la pestaña de su tipo (tabHubDePaso).
+  for (const clave of CLAVES) {
+    assert.deepEqual(fv.inicioDelEnlaceHub(`?paso=${clave}`), { ...NADA, paso: clave, vista: tabHubDePaso(clave) }, clave);
+  }
+  assert.equal(fv.inicioDelEnlaceHub('?paso=SC').vista, 'sc');
+  assert.equal(fv.inicioDelEnlaceHub('?paso=FACTURADO').vista, 'ven');
+  for (const malo of ['?paso=pven', '?paso=OTRO']) assert.deepEqual(fv.inicioDelEnlaceHub(malo), NADA, malo);
+  // Los dos a la vez: se aplican los dos.
+  assert.deepEqual(fv.inicioDelEnlaceHub('?paso=COT&tab=analisis&foco=cot'), { seccion: 'analisis', foco: 'cot', paso: 'COT', vista: 'cot' });
+  // Lo que escriben los orígenes reales se lee igual: el embudo del Dashboard y «Ver análisis» de las tres listas.
+  for (const p of fv.pasosEmbudoDashboard(null)) {
+    assert.equal(fv.inicioDelEnlaceHub(p.href.slice(p.href.indexOf('?'))).paso, p.clave, `${p.clave}: el embudo abre el Hub filtrado`);
+  }
+  for (const foco of ['sc', 'cot', 'pven']) {
+    const enlace = fv.enlaceVerAnalisis(foco);
+    assert.deepEqual(fv.inicioDelEnlaceHub(enlace.slice(enlace.indexOf('?'))), { ...NADA, seccion: 'analisis', foco }, foco);
+  }
+  assert.ok(Object.isFrozen(fv.inicioDelEnlaceHub('?paso=SC')));
+}
+
 console.log('--- B4 T7 TEST 2: chipsFiltroHub — los chips que quitan el filtro del paso y del semáforo (R6, clic_en_hub) ---');
 {
   assert.deepEqual(fv.chipsFiltroHub({ paso: 'COT', semaforo: null }), [{ campo: 'paso', texto: 'Paso: Cotización' }]);
@@ -617,6 +651,28 @@ console.log('--- B4 T8 TEST 3: avisoVencidas — el chip ámbar «N vencidas» d
   assert.deepEqual(fv.avisoVencidas(3), { texto: '3 vencidas', tono: 'ambar' });
   assert.deepEqual(fv.avisoVencidas(1234), { texto: '1.234 vencidas', tono: 'ambar' }, 'con el punto de miles');
   for (const n of [0, -2, null, undefined, NaN, 'x', '']) assert.equal(fv.avisoVencidas(n), null, String(n));
+}
+
+console.log('--- B4 T24 f2 (B14-f): reservaAvisosCotizaciones — la franja de Cotizaciones reserva el renglón de los avisos solo si /ventas/flujo dice que habrá ---');
+{
+  assert.equal(typeof fv.reservaAvisosCotizaciones, 'function', 'reservaAvisosCotizaciones existe');
+  // B14-b (contrato aditivo de GET /ventas/flujo): data.cotizaciones = {sin_calc, vencen_pronto}, las mismas condiciones del resumen de
+  // /ventas/cotizaciones. Mientras la lista carga, reserva solo si alguno es > 0.
+  const conClave = (sin_calc, vencen_pronto) => ({ pasos: {}, cotizaciones: { sin_calc, vencen_pronto } });
+  assert.equal(fv.reservaAvisosCotizaciones(conClave(2, 0), true), true, 'N sin precio: reserva');
+  assert.equal(fv.reservaAvisosCotizaciones(conClave(0, 3), true), true, 'N vencen: reserva');
+  assert.equal(fv.reservaAvisosCotizaciones(conClave(0, 0), true), false, 'sin avisos: no reserva (el CLS sin avisos)');
+  for (const raro of [-1, null, 'dos', NaN]) assert.equal(fv.reservaAvisosCotizaciones(conClave(raro, 0), true), false, String(raro));
+  // Respaldo: sin la clave (un backend de antes de B14-b) o mientras /ventas/flujo carga (datos null), reserva como antes.
+  for (const sinClave of [null, undefined, {}, { pasos: {} }, { cotizaciones: null }, { cotizaciones: [1] }]) {
+    assert.equal(fv.reservaAvisosCotizaciones(sinClave, true), true, `respaldo: ${JSON.stringify(sinClave)}`);
+  }
+  // Con la lista ya respondida (o fallada) no se reserva: los avisos son los de su resumen (avisosCotizaciones).
+  for (const datos of [conClave(2, 1), conClave(0, 0), null]) assert.equal(fv.reservaAvisosCotizaciones(datos, false), false);
+  // Los avisos que se reservan son los que pintará la lista: la misma regla (cantidadPositiva) en las dos.
+  for (const [s, v] of [[2, 0], [0, 3], [0, 0], [1, 1]]) {
+    assert.equal(fv.reservaAvisosCotizaciones(conClave(s, v), true), fv.avisosCotizaciones({ sin_calc: s, vencen_pronto: v }).length > 0, `${s}/${v}`);
+  }
 }
 
 console.log('--- B4 T9 TEST 1: avisosCotizaciones — los chips «N sin precio» y «N vencen en 7 días» de la franja de Cotizaciones ---');

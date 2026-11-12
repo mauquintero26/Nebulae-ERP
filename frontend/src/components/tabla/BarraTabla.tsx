@@ -2,16 +2,17 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent as EventoTeclado, ReactNode, RefObject } from 'react';
-import { Maximize2, Minimize2, Search, X } from 'lucide-react';
+import { AlertTriangle, Maximize2, Minimize2, Search, X } from 'lucide-react';
 import { ConmutadorVista } from '@/components/ui/ConmutadorVista';
 import { Contador } from '@/components/ui/Contador';
 import { ACCENTS } from '@/components/ui/colors';
 import type { AccentColor } from '@/components/ui/colors';
+import { FOCO } from '@/lib/design-system';
 import type { EstadoKpi } from '@/lib/kpis';
 import { pestanaConTecla } from '@/lib/pestanas';
 import {
   accionPestana, crearBusquedaConRetardo, estadoDeConteo, estadoPastillaPestana, etiquetasDeEstados, idsDePestanas,
-  opcionesDeVista, pestanaEnfocable, scrollParaVer, sincronizarBusqueda, textoResultados, toquePestana,
+  opcionesDeVista, pestanaEnfocable, scrollParaVer, sincronizarBusqueda, textoAlertaPestana, textoResultados, toquePestana,
 } from '@/lib/tabla';
 import type { EstadoTabla, LocalBusqueda, OpcionesEstados } from '@/lib/tabla';
 import type { DespacharTabla } from './useEstadoTabla';
@@ -26,7 +27,8 @@ import type { ColumnaAjustes } from './MenuAjustes';
  * hace despacha al estado ÚNICO de la pantalla (`estado` y `onEstado` son el estado y el despachar de useEstadoTabla);
  * la lógica es de lib/tabla.js.
  *  - Pestañas [{id, etiqueta, conteo: number | null, alerta?}]: la activa es estado.vista. El número va en Contador
- *    (C13): un conteo null pinta la pastilla gris animada, nunca 0 ('—' si estadoConteos es 'error'; estadoDeConteo).
+ *    (C13): un conteo null: gris mientras carga; con la aparte activa, sin pastilla; nunca 0 ('—' si estadoConteos es 'error';
+ *    estadoDeConteo).
  *    Sin emojis. Con el teclado (r1, 6e: activación manual, WAI-ARIA), las flechas, Inicio y Fin mueven el foco
  *    (pestanaConTecla) y Enter o Espacio activan. Al cambiar de pestaña, los estados filtrados que la otra no tiene se
  *    quitan (accionPestana; las tarjetas y las cajas del flujo usan el mismo ayudante).
@@ -59,6 +61,9 @@ import type { ColumnaAjustes } from './MenuAjustes';
  *    - Las flechas, Inicio y Fin la incluyen (idsDePestanas) y el tabIndex sigue el patrón de siempre
  *      (pestanaEnfocable).
  *    - La pantalla pinta debajo lo suyo en lugar de la tabla o el tablero.
+ *    - r2 (I-r1): con la aparte activa, una de vista sin número no pinta su pastilla (estadoPastillaPestana).
+ *    - r2 (m-r1-a): al montar y al cambiar la activa, la fila se desplaza con scrollLeft (scrollParaVer), con el margen de su
+ *      padding (B4 T24, F34: MARGEN_FILA_PESTANAS) para que el anillo de foco no se corte.
  */
 
 export type { OpcionesEstados } from '@/lib/tabla';
@@ -68,8 +73,11 @@ export type PestanaTabla = {
   etiqueta: string;
   /** null mientras carga: pastilla gris, nunca 0. */
   conteo: number | null;
-  /** La pastilla en rojo (por ejemplo, hay atrasados). */
-  alerta?: boolean;
+  /**
+   * La pastilla en rojo (por ejemplo, hay atrasados). B4 T24 (FINAL-m27, aditivo): un texto («Hay 3 vencidos») va en el title y en un
+   * sr-only (true dice «Requiere atención»); con la pestaña activa la pastilla sigue en rojo.
+   */
+  alerta?: boolean | string;
   /**
    * B4 T8: una pestaña de vista que no lleva número (la Papelera de Solicitudes, TABLA-listas-ventas punto 5): sin
    * pastilla ni Contador (estadoPastillaPestana da 'oculto'). Sin esta marca, todo como siempre.
@@ -117,11 +125,13 @@ type PropsBaseBarraTabla = {
 export type PropsBarraTabla = PropsBaseBarraTabla
   & ({ total?: undefined; estadoTotal?: never } | { total: number | null; estadoTotal: EstadoKpi });
 
+/** B4 T24 (F34): el padding de la fila de pestañas (p-1): scrollParaVer lo deja a la vista para que el anillo de foco no se corte. */
+const MARGEN_FILA_PESTANAS = 4;
 const PASTILLA_ACTIVA = 'bg-white/25 text-white';
 const PASTILLA_ALERTA = 'bg-rose-100 text-rose-700';
 const PASTILLA = 'bg-slate-200/70 text-slate-600';
-const BOTON = 'inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300';
-const PESTANA = 'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 py-1.5 text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300';
+const BOTON = `inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50 ${FOCO}`;
+const PESTANA = `inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 py-1.5 text-xs font-bold transition-colors ${FOCO}`;
 const PESTANA_INACTIVA = 'border-transparent text-slate-600 hover:bg-slate-100';
 
 export function BarraTabla({
@@ -187,7 +197,9 @@ export function BarraTabla({
     botonesPestana.current.get(siguiente)?.focus();
   };
   // B4 T7 r2 (m-r1-a): al montar y al cambiar la pestaña activa (la aparte incluida), la fila se desplaza para mostrarla
-  // (scrollParaVer). Solo la fila, con su scrollLeft: la ventana no se desplaza.
+  // (scrollParaVer). Solo la fila, con su scrollLeft: la ventana no se desplaza. B4 T24 (F35: si los conteos llegan después y ensanchan
+  // las pestañas, unos 20 px a 375, la activa restaurada puede quedar cortada; se acepta (cosmético y raro): el efecto no vuelve a
+  // correr con cada recarga de los conteos).
   const filaPestanas = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const fila = filaPestanas.current;
@@ -195,7 +207,7 @@ export function BarraTabla({
     if (!fila || !boton) return;
     const caja = fila.getBoundingClientRect();
     const r = boton.getBoundingClientRect();
-    fila.scrollLeft = scrollParaVer({ inicio: r.left - caja.left + fila.scrollLeft, ancho: r.width }, { scroll: fila.scrollLeft, visible: fila.clientWidth });
+    fila.scrollLeft = scrollParaVer({ inicio: r.left - caja.left + fila.scrollLeft, ancho: r.width }, { scroll: fila.scrollLeft, visible: fila.clientWidth, margen: MARGEN_FILA_PESTANAS });
   }, [enfocable]);
 
   const opciones = opcionesDeVista(opcionesEstados, estado.vista);
@@ -207,11 +219,12 @@ export function BarraTabla({
   return (
     <div className="flex flex-col gap-3 border-b border-slate-100 px-4 py-3">
       {(pestanas && pestanas.length > 0) || pestanaAparte ? (
-        <div ref={filaPestanas} role="tablist" aria-label="Pestañas" onKeyDown={teclaPestanas} className="-mx-1 flex min-w-0 items-center gap-1 overflow-x-auto px-1 pb-0.5">
+        <div ref={filaPestanas} role="tablist" aria-label="Pestañas" onKeyDown={teclaPestanas} className="-m-1 flex min-w-0 items-center gap-1 overflow-x-auto p-1">
           {pestanas?.map((p) => {
             const activa = !aparteActiva && p.id === estado.vista;
             // B4 T7 r2 (I-r1): con la aparte activa y sin conteo, sin pastilla: no hay nada cargando (RP35).
             const estadoPastilla = estadoPastillaPestana(p.conteo, estadoConteos, { aparteActiva, sinConteo: p.sinConteo });
+            const textoAlerta = textoAlertaPestana(p.alerta);
             return (
               <button
                 key={p.id}
@@ -228,11 +241,14 @@ export function BarraTabla({
                 className={`${PESTANA} ${activa ? ACCENTS[color].navActive : PESTANA_INACTIVA}`}
               >
                 {p.etiqueta}
+                {/* B4 T24 r1 (m21): la alerta no es solo color (WCAG 1.4.1): el triángulo, sin nombre (el texto va en title y sr-only). */}
                 {estadoPastilla !== 'oculto' && (
-                  <span className={`inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 py-px text-[11px] ${activa ? PASTILLA_ACTIVA : p.alerta ? PASTILLA_ALERTA : PASTILLA}`}>
+                  <span title={textoAlerta ?? undefined} className={`inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 py-px text-[11px] ${textoAlerta ? PASTILLA_ALERTA : activa ? PASTILLA_ACTIVA : PASTILLA}`}>
+                    {textoAlerta && <AlertTriangle size={10} aria-hidden="true" className="mr-0.5 shrink-0" />}
                     <Contador valor={p.conteo} estado={estadoPastilla} />
                   </span>
                 )}
+                {textoAlerta && <span className="sr-only">{` (${textoAlerta})`}</span>}
               </button>
             );
           })}
@@ -282,7 +298,7 @@ export function BarraTabla({
                   e.preventDefault();
                   retardo().ya(busqueda.texto);
                 }}
-                className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-8 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 [&::-webkit-search-cancel-button]:hidden"
+                className={`w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-8 text-sm text-slate-700 placeholder:text-slate-400 ${FOCO} [&::-webkit-search-cancel-button]:hidden`}
               />
               {busqueda.texto !== '' && (
                 <button
@@ -293,7 +309,7 @@ export function BarraTabla({
                     limpiarBusqueda();
                     entrada.current?.focus();
                   }}
-                  className="absolute right-2 inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                  className={`absolute right-2 inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600 ${FOCO}`}
                 >
                   <X size={14} aria-hidden="true" />
                 </button>

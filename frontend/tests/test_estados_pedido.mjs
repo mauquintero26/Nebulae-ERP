@@ -237,4 +237,22 @@ console.log('--- B4 T2 TEST 11: congelar está exportado y congela todos los niv
   assert.equal(clasesDeEstadoPedido(null).etiqueta, '');
 }
 
+console.log('--- B4 T24 f2 (F1): el respaldo humanizado recorta antes de buscar el nombre con tilde ---');
+{
+  // ' EN_GESTION ' daba «En gestion» (el recorte solo se hacía en la búsqueda de la tabla propia). humanizar recorta primero, en un
+  // solo lugar: lo heredan infoEstadoPedido, humanizarCodigo y los espejos (estados-cotizacion.js y estados-compras.js).
+  for (const e of ['EN_GESTION', ' EN_GESTION ', '\tEN_GESTION\n']) {
+    assert.equal(humanizarCodigo(e), 'En gestión', JSON.stringify(e));
+    assert.equal(infoEstadoPedido(e).label, 'En gestión', JSON.stringify(e));
+  }
+  const { infoEstadoCotizacion } = await import('../src/lib/estados-cotizacion.js');
+  const { infoEstadoPec } = await import('../src/lib/estados-compras.js');
+  assert.equal(infoEstadoCotizacion(' EN_GESTION ').label, 'En gestión', 'el espejo de la cotización');
+  assert.equal(infoEstadoPec(' EN_GESTION ').label, 'En gestión', 'el espejo de compras');
+  // Lo demás, igual: un código nuevo sin los espacios del borde, y nada para lo vacío.
+  assert.equal(humanizarCodigo('  ALGO_NUEVO '), 'Algo nuevo');
+  for (const nada of [null, undefined, '', '   ']) assert.equal(humanizarCodigo(nada), '', JSON.stringify(nada));
+  assert.equal(humanizarCodigo(42), '42');
+}
+
 console.log('\nOK: test_estados_pedido.mjs');

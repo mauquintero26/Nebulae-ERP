@@ -18,14 +18,18 @@
 import { congelar, ESTADOS_PEDIDO, ESTADOS_PEDIDO_SIN_DINERO, infoEstadoPedido, pasoPedido, transicionesPedido } from './estados-pedido.js';
 import { definirColumnas, estadosDeColumnaLista, TEXTO_SOLO_VER } from './kanban.js';
 import { estadoDeTarjeta, motivoTransicionPedido } from './kanban-ventas.js';
-import { alertaEntregaPedido, diaDeNegocio } from './listas-ventas.js';
+// B4 T24 f2 (F27): la ruta de Entregas, la única (a donde vuelve el pedido abierto desde un bloqueo).
+import { RUTA_ENTREGAS } from './hub-ventas.js';
+import { alertaEntregaPedido } from './listas-ventas.js';
 import { formatoPesos, redondearPeso } from './pesos.js';
 import { normalizarRol } from './chatter.js';
+// B4 T24 f2 r1 (m17): quién despacha vive una sola vez en roles.js; aquí se reexporta con su nombre de hoy (f3, avisado).
+import { puedeDespachar } from './roles.js';
 import { enlaceDocumento } from './analisis.js';
 import { queryListado } from './tabla.js';
 import { numeroFinito } from './kpis.js';
 import { waUrl } from './whatsapp.js';
-import { fechaCorta } from './fechas-colombia.js';
+import { textoDiaCorto } from './fechas-colombia.js';
 
 /**
  * @typedef {import('./kanban.js').ResultadoSoltar} ResultadoSoltar
@@ -35,8 +39,6 @@ import { fechaCorta } from './fechas-colombia.js';
  *   saldo: FiltroSaldo | null, cerrada: boolean}} ColumnaEntrega
  */
 
-/** La ruta de Entregas: a donde vuelve el pedido abierto desde un bloqueo. */
-const RUTA_ENTREGAS = '/dashboard/inventario/entregas';
 
 const PASO_LISTO = congelar(['LISTO_ENTREGA', 'DISPONIBLE', 'PENDIENTE_SALDO', 'LISTO_PARA_ENTREGA']);
 const DESPACHADOS = congelar(['ENTREGADO', 'PARCIALMENTE_ENTREGADO', 'FACTURADO']);
@@ -47,6 +49,7 @@ const DESPACHADOS = congelar(['ENTREGADO', 'PARCIALMENTE_ENTREGADO', 'FACTURADO'
  * @type {ReadonlyArray<Readonly<ColumnaEntrega>>}
  */
 export const COLUMNAS_ENTREGA = /** @type {any} */ (definirColumnas([
+  // B4 T24 r2 (C8): sky, el color de BASE (el tablero lo pinta: CLAVES_TONOS_KANBAN).
   { clave: 'esperando', titulo: 'Esperando mercancía', tono: 'sky',
     estados: Object.keys(ESTADOS_PEDIDO).filter((e) => columnaEntrega({ estado: e }) === 'esperando'), saldo: null },
   { clave: 'falta_saldo', titulo: 'Listo pero falta saldo', tono: 'amber', estados: [...PASO_LISTO], saldo: 'pendiente' },
@@ -85,8 +88,8 @@ export function columnaEntrega(p) {
 
 const BODEGA_SOLO_DESPACHA = 'Bodega solo puede marcar el pedido como despachado.';
 
-/** Los roles que mueven tarjetas en Entregas (R15); los demás solo ven el tablero. */
-const ROLES_QUE_MUEVEN = congelar(['ADMIN', 'ASESOR', 'BODEGA']);
+/** B4 T24 f2 r1 (m17): quién despacha desde Entregas (R15): ADMIN, ASESOR y BODEGA; la regla única es la de roles.js. */
+export { puedeDespachar };
 
 /**
  * Qué pasa al soltar un pedido de la columna `origen` en `destino` (claves de COLUMNAS_ENTREGA), con la forma de
@@ -118,7 +121,8 @@ export function reglaSoltarEntrega(pedido, origen, destino, { rol = null } = {})
   const desde = columnaEntrega(pedido) ?? origen;
   if (desde === destino) return { tipo: 'ninguno' };
   const rolNormal = normalizarRol(rol);
-  if (!ROLES_QUE_MUEVEN.includes(rolNormal)) return { tipo: 'bloqueado', motivo: TEXTO_SOLO_VER };
+  // Los roles que mueven tarjetas en Entregas (R15): los que despachan (puedeDespachar); los demás solo ven el tablero.
+  if (!puedeDespachar(rol)) return { tipo: 'bloqueado', motivo: TEXTO_SOLO_VER };
   const motivoN2 = (hacia) => motivoTransicionPedido(estado, hacia) ?? 'Un pedido despachado no vuelve atrás desde Entregas.';
   if (desde === 'despachado') {
     return { tipo: 'bloqueado', motivo: motivoN2(destino === 'esperando' ? 'EN_PROCESO' : 'LISTO_ENTREGA') };
@@ -264,11 +268,12 @@ export function infoCobroEntrega(p) {
 /**
  * La entrega estimada del pedido ('20 nov 2026'; sin fecha, '—'). Es una FECHA DE NEGOCIO ('2026-11-20T00:00:00'): se toma su día
  * (diaDeNegocio) y no se pasa a otra zona, o saldría un día antes (B4 T9 r1 I2). La usan la tarjeta y la columna «Entrega est.».
+ * B4 T24 (FINAL-m29): antes textoEntregaEstimada, el mismo nombre que la de lib/documento-comercial.js con otro contrato.
  * @param {any} p
  * @returns {string}
  */
-export function textoEntregaEstimada(p) {
-  return fechaCorta(diaDeNegocio(p?.fecha_entrega_estimada)) || '—';
+export function textoEntregaTablero(p) {
+  return textoDiaCorto(p?.fecha_entrega_estimada);
 }
 
 /**
@@ -280,7 +285,7 @@ export function textoEntregaEstimada(p) {
 export function tarjetaEntrega(p) {
   const n = Array.isArray(p?.productos) ? p.productos.length : 0;
   const saldo = saldoDe(p);
-  const entrega = textoEntregaEstimada(p);
+  const entrega = textoEntregaTablero(p);
   return {
     numero: String(p?.numero ?? p?.id ?? ''),
     tipo: 'PVEN',
@@ -374,11 +379,6 @@ export const OPCIONES_ESTADOS_TABLERO_ENTREGA = congelar([
 
 // ─── el despacho (RP23): Bodega manda lo mínimo; ADMIN y ASESOR, lo de hoy sin fecha_entrega ─────────────────────────────
 
-/** Quién despacha desde Entregas: ADMIN, ASESOR y BODEGA (R15); los demás roles solo ven. */
-export function puedeDespachar(rol) {
-  return ROLES_QUE_MUEVEN.includes(normalizarRol(rol));
-}
-
 /** ¿El despacho exige elegir la bodega? Siempre con Bodega (RP23); con ADMIN y ASESOR, solo si el pedido tiene líneas de catálogo. */
 export function bodegaObligatoria(pedido, rol) {
   if (normalizarRol(rol) === 'BODEGA') return true;
@@ -455,10 +455,11 @@ export function puedeDespacharPedido(pedido, rol) {
   return sePuede && transicionesPedido(pedido.estado).includes('ENTREGADO');
 }
 
-/** «Marcar Saldo Cobrado» (PATCH saldo_cop): solo ADMIN y ASESOR; el servidor le responde 403 a Bodega y a los demás (RP23). */
-export function puedeCobrarSaldo(rol) {
-  return ['ADMIN', 'ASESOR'].includes(normalizarRol(rol));
-}
+/**
+ * «Marcar Saldo Cobrado» (PATCH saldo_cop): solo ADMIN y ASESOR; el servidor le responde 403 a Bodega y a los demás (RP23). B4 T24
+ * (FINAL-m31): es esAdminOAsesor de lib/roles.js, la una sola copia de las reglas de rol (reexportada con su nombre de siempre).
+ */
+export { esAdminOAsesor as puedeCobrarSaldo } from './roles.js';
 
 /** La pestaña que abre una tarjeta de Entregas (la única pulsable es la de Despachados); las demás son informativas: null. */
 export function vistaDeTarjetaEntrega(kpi) {

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { Database, Link2, KeyRound, User, Settings2, CheckCircle2 } from 'lucide-react';
 import { SubNav, PageHeader, Button, Badge } from '@/components/ui';
 import { VEN_NAV } from '../ven-nav';
+import { RESERVA_BOTON_IA } from '@/lib/design-system';
 
 export default function SincronizacionPage() {
   const [odooUrl, setOdooUrl] = useState('');
@@ -34,7 +35,8 @@ export default function SincronizacionPage() {
     <div className="w-full h-full flex flex-col">
       <SubNav label="Hub Ventas" items={VEN_NAV} currentPath="/dashboard/ventas/sincronizacion" color="indigo" hub={{ href: '/dashboard/ventas' }} />
 
-      <div className="flex flex-col gap-6 w-full p-6 pb-10">
+      {/* B4 T24 f2 r1 (m2 de F44-a): el contenido deja libre, al fondo, la esquina del botón de la IA. */}
+      <div className={`flex flex-col gap-6 w-full p-6 ${RESERVA_BOTON_IA}`}>
         <PageHeader
           icon={Settings2} color="indigo"
           title="Configuración Integración Odoo / Postgres"

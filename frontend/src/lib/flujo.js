@@ -11,7 +11,7 @@
  *    la forma de pasosConConteos (camelCase).
  *  - pasosConConteos: la franja (los números por paso, el actual y el elegido).
  *  - El chequeo de claves es tiene() de estados-pedido.js (sin copia propia).
- *  - textoConteo, textoAtraso, alternarSeleccion y resumenSemaforo: los textos y el clic de la franja.
+ *  - textoConteo, textoAtraso, alternarPaso y resumenSemaforo: los textos y el clic de la franja.
  * No lee ni escribe ningún almacenamiento (R4): el modo compacto de la franja lo guarda BannerFlujo con
  * usePreferencia('flujo:<id>') (T5A). La regla de atraso NO vive aquí: Ventas la trae del servidor (resolucion_ventas.py,
  * espejo en hub-ventas.js) y Compras usa esPecVencido de estados-compras.js.
@@ -24,6 +24,7 @@ import { congelar, tiene } from './estados-pedido.js';
 import { cantidadPositiva } from './hub-ventas.js';
 import { formatoEntero } from './kpis.js';
 import { estadoDeConteo } from './tabla.js';
+import { ofreceReintentar } from './avisos.js';
 
 export { congelar };
 
@@ -205,12 +206,13 @@ export function textoAtraso(n) {
 /**
  * El clic en una caja de la franja: null si esa clave ya estaba elegida (tocarla otra vez quita el filtro, R6); si
  * no, la clave.
+ * B4 T24 (FINAL-m29): antes alternarSeleccion, el mismo nombre que la de lib/tabla.js con otro contrato.
  * @template {string} T
  * @param {string | null | undefined} actual
  * @param {T} clave
  * @returns {T | null}
  */
-export function alternarSeleccion(actual, clave) {
+export function alternarPaso(actual, clave) {
   return actual === clave ? null : clave;
 }
 
@@ -322,10 +324,11 @@ export function textoDetalle(detalle) {
  * 'El más antiguo: N días' de una caja de la franja (solo con mostrarAntiguedad; flujo_contenido_caja = total y
  * atrasados, así que por defecto no se pinta). Los días se redondean y el plural sale del redondeado ('1 día'). Lo
  * que no es un número de días (null, NaN, negativo o texto) da ''.
+ * B4 T24 (FINAL-m29): antes textoAntiguedad, el mismo nombre que la de lib/hub-ventas.js con otro texto.
  * @param {unknown} dias
  * @returns {string}
  */
-export function textoAntiguedad(dias) {
+export function textoMasAntiguo(dias) {
   const n = numeroONulo(dias);
   if (n === null || n < 0) return '';
   const r = Math.round(n);
@@ -496,6 +499,29 @@ export function estadoDeFranja({ cargando = false, error = null, huboError = fal
   };
 }
 
+/**
+ * B4 T24 f2 r1 (m20) y r2 (m3 = m6): si la franja (BannerFlujo) ofrece «Reintentar»: con un error que se arregla volviendo a pedir
+ * (ofreceReintentar de avisos.js: un 403 nunca), o mientras reintenta (el hook ya no trae el error: el botón sigue, «Reintentando…»)
+ * SOLO si el error que se reintenta lo ofrecía (`ofrecible`, lo que la franja recuerda con ofrecibleDeLaFranja). Así un 403 seguido de
+ * una recarga de la pantalla no pinta «Reintentando…».
+ * @param {{error?: unknown, reintentando?: boolean, ofrecible?: boolean}} [estado]
+ * @returns {boolean}
+ */
+export function reintentarEnFranja({ error = null, reintentando = false, ofrecible = false } = {}) {
+  return (Boolean(reintentando) && Boolean(ofrecible)) || ofreceReintentar(error);
+}
+
+/**
+ * B4 T24 f2 r2 (m3 = m6): lo que la franja recuerda del último error: si ofrecía «Reintentar». Cambia solo cuando llega un error (su
+ * ofreceReintentar); sin error (mientras recarga, o cuando sale bien) queda lo de antes.
+ * @param {boolean} previo
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+export function ofrecibleDeLaFranja(previo, error) {
+  return error ? ofreceReintentar(error) : Boolean(previo);
+}
+
 // ─── la carga del resumen (useResumenFlujo) ─────────────────────────────────────
 
 /**
@@ -520,23 +546,51 @@ const delMismo = (resultado, ruta, usuario) => Boolean(resultado) && resultado.r
  *    buenos de la MISMA ruta y del MISMO usuario (un error conserva lo último bueno; lo de otra ruta o de otra cuenta
  *    no se muestra, como useListado en T4C r2).
  * No muta lo que recibe.
+ * B4 T24 f2 (F45, aditivo): `regla` (por defecto la del flujo, RESUMEN_DEL_FLUJO) da los textos de respaldo y si un error conserva lo
+ * último bueno. useResumen (components/ui) pasa RESUMEN_DE_TARJETAS: sus textos y, con error, sin datos (las tarjetas dicen «—»).
  * @param {ResultadoResumen | null | undefined} previo
  * @param {{marca: string, ok: boolean, respuesta?: unknown, error?: unknown, repeticion?: number,
  *   contexto?: {ruta?: string | null, usuario?: number | null} | null}} llegada
+ * @param {ReglaResumen} [regla]
  * @returns {ResultadoResumen}
  */
-export function aplicarLlegadaResumen(previo, llegada) {
+export function aplicarLlegadaResumen(previo, llegada, regla = RESUMEN_DEL_FLUJO) {
   const ruta = llegada?.contexto?.ruta ?? null;
   const usuario = llegada?.contexto?.usuario ?? null;
-  const anteriores = delMismo(previo, ruta, usuario) ? /** @type {ResultadoResumen} */ (previo).datos : null;
+  const conserva = regla.conservarConError !== false && delMismo(previo, ruta, usuario);
+  const anteriores = conserva ? /** @type {ResultadoResumen} */ (previo).datos : null;
   const base = { clave: llegada.marca, ruta, usuario, repeticion: llegada.repeticion ?? 0 };
   if (llegada.ok) {
     const datos = /** @type {any} */ (llegada.respuesta)?.data;
     if (esMapa(datos)) return { ...base, datos, error: null };
-    return { ...base, datos: anteriores, error: new Error('La respuesta del flujo no trae datos.') };
+    return { ...base, datos: anteriores, error: new Error(regla.sinDatos) };
   }
-  return { ...base, datos: anteriores, error: llegada.error ?? new Error('No se pudieron cargar los números del flujo.') };
+  return { ...base, datos: anteriores, error: llegada.error ?? new Error(regla.sinError) };
 }
+
+/**
+ * @typedef {{sinDatos: string, sinError: string, conservarConError: boolean}} ReglaResumen
+ *   B4 T24 f2 (F45): cómo queda un resumen que no llegó: el texto de una respuesta sin un objeto en `data`, el de un error que no trae
+ *   ninguno y si el error conserva lo último bueno de la misma ruta y del mismo usuario.
+ */
+
+/** La regla de la franja del flujo (useResumenFlujo): sus textos de siempre y, con error, lo último bueno. Inmutable. */
+export const RESUMEN_DEL_FLUJO = congelar({
+  sinDatos: 'La respuesta del flujo no trae datos.',
+  sinError: 'No se pudieron cargar los números del flujo.',
+  conservarConError: true,
+});
+
+/**
+ * B4 T24 f2 (F45): la regla de los resúmenes de tarjetas (useResumen: /ventas/stats y, en f3, /compras/stats e /inventory/stats):
+ * con error, sin los datos de antes, como el cargador que reemplaza (C6: «—»; al reintentar, barras grises, nunca un número viejo).
+ * Inmutable.
+ */
+export const RESUMEN_DE_TARJETAS = congelar({
+  sinDatos: 'La respuesta del resumen no trae datos.',
+  sinError: 'No se pudo cargar el resumen.',
+  conservarConError: false,
+});
 
 /**
  * Lo que devuelve useResumenFlujo para la consulta `clave` de `ruta`, con `resultado` (lo último que llegó):

@@ -13,15 +13,16 @@ import { MKT_NAV } from '../mkt-nav';
 import { accesoMarketing } from '@/lib/roles';
 import { avisoDeFuente } from '@/lib/avisos';
 import { datosDeRespuesta, lecturaLeadsCampana, tarjetasCampana } from '@/lib/kpis';
-import { fechaCorta } from '@/lib/fechas-colombia';
-import { diaDeNegocio } from '@/lib/listas-ventas';
+import { textoDiaCorto } from '@/lib/fechas-colombia';
 import { humanizarCodigo } from '@/lib/estados-pedido';
 import { formatoPesos } from '@/lib/pesos';
 import { accesoresDeOrden, estadoDelTotal } from '@/lib/tabla';
+import { CAJA_SIN_PERMISO, RESERVA_BOTON_IA } from '@/lib/design-system';
 // B4 T23B: el dinero con el formato del catálogo (formatoPesos: '$1.062.523', sin el espacio duro de Intl).
 const fCOP = (v: number) => formatoPesos(v || 0);
 // m11: la fecha de una campaña es un día de calendario (fechaCorta), no un instante que se corre a la víspera en Colombia.
-const fDate = (d: any) => d ? fechaCorta(diaDeNegocio(d)) : '-';
+// B4 T24 (FINAL-m30): textoDiaCorto de fechas-colombia.js (el día corto o '—', como las demás pantallas).
+const fDate = (d: unknown) => textoDiaCorto(d);
 
 const ESTADO_COLORS: Record<string, string> = {
   BORRADOR: 'bg-slate-100 text-slate-600',
@@ -210,7 +211,7 @@ export default function CampanasPage() {
     return (
       <div className="w-full h-full bg-slate-50 flex flex-col overflow-hidden">
         <SubNav label="Marketing" items={MKT_NAV} currentPath="/dashboard/marketing/campanas" color="emerald" hub={{ href: '/dashboard/marketing' }} />
-        <p role="status" className="m-6 rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600">Tu rol no ve las campañas de Marketing.</p>
+        <p role="status" className={`m-6 ${CAJA_SIN_PERMISO}`}>Tu rol no ve las campañas de Marketing.</p>
       </div>
     );
   }
@@ -318,7 +319,7 @@ export default function CampanasPage() {
             </div>
             
             {/* Tab Content */}
-            <div className="flex-1 overflow-y-auto p-6 pb-24">
+            <div className={`flex-1 overflow-y-auto p-6 ${RESERVA_BOTON_IA}`}>
               {/* RESUMEN TAB */}
               {activeTab==='resumen' && (
                 <div className="space-y-6">
@@ -452,7 +453,7 @@ export default function CampanasPage() {
       
       {/* MODAL / PANEL FORMULARIO */}
       {showForm && (
-        <Modal title={editMode?'Editar Campaña':'Nueva Campaña'} icon={Megaphone} color="emerald" maxWidth="xl"
+        <Modal cierreExterno={false} title={editMode?'Editar Campaña':'Nueva Campaña'} icon={Megaphone} color="emerald" maxWidth="xl"
           onClose={()=>setShowForm(false)}
           footer={(
             <>

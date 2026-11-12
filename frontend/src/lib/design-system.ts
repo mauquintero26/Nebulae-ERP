@@ -92,6 +92,53 @@ export const getActivityColor = (action: string) =>
 
 // ─── CLASES DE COMPONENTES REUTILIZABLES ─────────────────────────────
 
+/**
+ * El foco visible de la app (B4 T24: FINAL-m25, FINAL-C6 y F41), UNA sola copia: piezas compartidas y pantallas lo importan.
+ * Un outline de 2 px, separado 2 px del control y en el tono -700 de su acento: ≥ 3:1 sobre el blanco, rose-50 e indigo-50
+ * (WCAG 1.4.11; el ring -300 de antes daba ≈2:1), no depende del fondo del control y sobrevive a forced-colors (un box-shadow
+ * no). El `outline-<tono>-700` sin variante fija el color antes del foco: con transition-colors el outline no pasa por el color
+ * del texto. NUNCA junto a `outline-none` en el mismo elemento: en Tailwind v4 apaga también el outline del foco. `blanco` es
+ * para los controles sobre un fondo oscuro (la barra de acciones masivas). Clases literales: Tailwind no ve las armadas.
+ */
+export const FOCOS = {
+  indigo:  'outline-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700',
+  purple:  'outline-purple-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-700',
+  teal:    'outline-teal-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-700',
+  blue:    'outline-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700',
+  emerald: 'outline-emerald-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700',
+  orange:  'outline-orange-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-700',
+  amber:   'outline-amber-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700',
+  rose:    'outline-rose-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-700',
+  red:     'outline-red-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-700',
+  slate:   'outline-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700',
+  blanco:  'outline-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white',
+} as const;
+export type AcentoFoco = keyof typeof FOCOS;
+/** El foco de las piezas compartidas (tabla, barra, paginación, tablero, menú ⋯): el índigo. */
+export const FOCO = FOCOS.indigo;
+/**
+ * El mismo outline hacia ADENTRO (-outline-offset-2), para lo que llena el ancho de una caja que corta lo de afuera: la fila
+ * pulsable de la tabla estándar (FINAL-C6; su caja tiene barra propia), la tarjeta y la columna plegada del tablero y los ítems
+ * del menú ⋯. No depende del fondo: se ve igual sobre filaAlerta (rose-50), una fila seleccionada (indigo-50) o el hover.
+ */
+export const FOCO_DENTRO = 'outline-indigo-700 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-indigo-700';
+
+/**
+ * B4 T24 r1 (m19): el foco de un campo que lo recibe por dentro (un input de fecha: con focus y focus-within, porque el
+ * selector nativo no cumple :focus-visible). El mismo outline índigo -700.
+ */
+export const FOCO_CAMPO = 'outline-indigo-700 focus:outline-2 focus:outline-offset-2 focus:outline-indigo-700 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-indigo-700';
+
+/**
+ * B4 T24 (F44-a, ruling del controlador): la reserva inferior para el botón flotante de la IA (GlobalAIChat: fixed bottom-6 right-6
+ * h-14, los 80 px de abajo de la ventana; pb-24 = 96 px, con 16 de aire), en los contenedores que se desplazan solos (h-full
+ * overflow-y-auto): así, con la página al fondo, la última fila queda a la vista sobre el botón. El botón no se mueve.
+ */
+export const RESERVA_BOTON_IA = 'pb-24';
+
+/** B4 T24 r1 (m30): la caja del texto neutro de un rol sin permiso («Tu rol no ve …», role=status): una sola copia. */
+export const CAJA_SIN_PERMISO = 'rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600';
+
 /** Nav pills del sub-módulo (sticky top) */
 export const NAV = {
   wrapper: 'bg-white border-b border-gray-200 px-6 py-2 flex items-center gap-1 sticky top-0 z-30 shadow-sm overflow-x-auto',
@@ -158,7 +205,8 @@ export const SEARCH_BAR = {
 export const TABLE = {
   // La tarjeta de la pantalla (la barra, la tabla y su paginación).
   tarjeta:          'flex min-w-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm',
-  tarjetaCompleta:  'fixed inset-4 z-40 flex min-w-0 flex-col overscroll-contain rounded-2xl border border-slate-200 bg-white shadow-2xl [&_[data-pie-tabla]]:pr-20',
+  // B4 T24 (F44): y el pie tan alto como la esquina del botón (bottom-6 + h-14 = 80 px; la tarjeta, a 16 px): no tapa la última fila.
+  tarjetaCompleta:  'fixed inset-4 z-40 flex min-w-0 flex-col overscroll-contain rounded-2xl border border-slate-200 bg-white shadow-2xl [&_[data-pie-tabla]]:pr-20 [&_[data-pie-tabla]]:min-h-[4.5rem]',
   capaCompleta:     'fixed inset-0 z-[39] touch-none overscroll-contain bg-slate-900/35',
   // El contenedor: la tabla tiene su propia barra vertical, hasta el alto de la pantalla (TABLA-base, riesgos).
   raiz:             'relative flex min-h-0 min-w-0 flex-1 flex-col',
@@ -172,7 +220,7 @@ export const TABLE = {
   encabezadoCasilla: 'sticky left-0 top-0 z-30 h-10 border-b border-slate-200 bg-slate-50 text-center align-middle',
   encabezadoInterior: 'flex h-full min-w-0 items-center gap-1',
   encabezadoArrastrado: 'opacity-40',
-  titulo:           'flex min-w-0 flex-1 items-center gap-1 rounded text-left outline-none focus-visible:ring-2 focus-visible:ring-indigo-300',
+  titulo:           `flex min-w-0 flex-1 items-center gap-1 rounded text-left ${FOCO}`,
   tituloOrdenable:  'cursor-pointer hover:text-slate-800',
   flechaOrden:      'shrink-0 text-indigo-600',
   asa:              'absolute right-0 top-0 z-10 h-full w-2 cursor-col-resize touch-none before:absolute before:inset-y-0 before:left-0 before:right-0 pointer-coarse:before:-left-4 after:absolute after:bottom-2 after:right-0 after:top-2 after:w-px after:bg-slate-200 hover:after:w-0.5 hover:after:bg-blue-500',
@@ -180,7 +228,11 @@ export const TABLE = {
   fila:             'group transition-colors',
   filaFondo:        'bg-white',
   filaHover:        'hover:bg-slate-50',
-  filaClic:         'cursor-pointer outline-none focus-visible:bg-indigo-50',
+  filaClic:         `cursor-pointer ${FOCO_DENTRO}`,
+  // FINAL-C6: el outline de la fila queda DEBAJO de las columnas fijas (sticky, z-10, fondo opaco; medido en el banco): las celdas de
+  // una fila pulsable repiten la línea con un box-shadow interior (arriba y abajo; el borde izquierdo en la primera y el derecho en la
+  // última), solo con la fila enfocada desde el teclado. El outline de la fila se queda para forced-colors (que quita las sombras).
+  celdaFoco:        'group-focus-visible:shadow-[inset_0_2px_0_0_var(--color-indigo-700),inset_0_-2px_0_0_var(--color-indigo-700)] group-focus-visible:first:shadow-[inset_2px_0_0_0_var(--color-indigo-700),inset_0_2px_0_0_var(--color-indigo-700),inset_0_-2px_0_0_var(--color-indigo-700)] group-focus-visible:last:shadow-[inset_-2px_0_0_0_var(--color-indigo-700),inset_0_2px_0_0_var(--color-indigo-700),inset_0_-2px_0_0_var(--color-indigo-700)]',
   filaSeleccionada: 'bg-indigo-50 hover:bg-indigo-100',
   // Tonos opacos para claseFila (las columnas fijas heredan el fondo: un /NN dejaría ver lo de debajo).
   filaAlerta:       'bg-rose-50 hover:bg-rose-100',
@@ -193,13 +245,18 @@ export const TABLE = {
   bordeFijaIzquierda: 'border-r border-r-slate-200',
   bordeFijaDerecha: 'border-l border-l-slate-200',
   contenido:        'inline-block max-w-full truncate align-middle',
+  /**
+   * B4 T24 r2 (m17) y r3 (m11): el contenido de la columna de acciones (fija a la derecha). Contiene lo que no cabe (overflow-hidden: no
+   * se sale de la tabla) con 4 px de aire para el anillo de foco (p-1, compensado con -m-1 y con el max-w: el ancho útil no cambia).
+   */
+  contenidoAcciones: 'inline-flex max-w-[calc(100%+0.5rem)] items-center overflow-hidden p-1 -m-1 align-middle',
   casilla:          'h-4 w-4 cursor-pointer accent-indigo-600 disabled:cursor-not-allowed disabled:opacity-40',
   // Separadores, vacío, error y aviso (el texto queda a la vista aunque la tabla se corra de lado).
   grupoCelda:       'h-8 border-b border-slate-200 bg-slate-100 px-3 text-xs font-bold text-slate-600',
   mensajeFijo:      'sticky left-3 max-w-full',
   vacio:            'border-b border-slate-100 px-3 py-10 text-center text-sm text-slate-500',
   error:            'border-b border-rose-100 bg-rose-50 px-3 py-6 text-center text-sm font-semibold text-rose-700',
-  botonReintentar:  'ml-3 inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-100',
+  botonReintentar:  `ml-3 inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-100 ${FOCOS.rose}`,
   aviso:            'flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-800',
   // Recargando: las filas atenuadas y una barra fina arriba.
   recarga:          'pointer-events-none absolute inset-x-0 top-0 z-40 h-0.5 animate-pulse bg-indigo-500',

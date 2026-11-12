@@ -52,9 +52,6 @@ export type ContextoAvisos = {
 type Aviso = { id: number; texto: string; tono: TonoAviso; accion?: AccionAviso };
 type Confirmacion = { id: number; opciones: OpcionesConfirmar; resolver: (valor: boolean) => void; ruta: string };
 
-// Lo que puede tener foco dentro de la ventana de confirmación (para el ciclo de Tab).
-const ENFOCABLES =
-  'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 const ESTILO_TONO: Record<TonoAviso, string> = {
   ok: 'bg-emerald-600',
@@ -192,7 +189,9 @@ export function AvisosProvider({ children }: { children: React.ReactNode }) {
           y arriba a la derecha tapaba «Editar» y «Cancelar Solicitud» de las cabeceras (y la pausa con el puntero lo
           dejaba quieto justo al ir al botón). Ancho de hasta 24rem sin salirse de la ventana. Mismo orden, z-index y
           comportamiento; el modal de sesión (z-[100]) sigue encima. */}
-      <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[90] flex flex-col items-center gap-2 w-[min(24rem,calc(100vw_-_2rem))] pointer-events-none">
+      {/* B4 T24 f2 (m9): data-superficie: la pila de avisos va ENCIMA de las ventanas (lugarDelFoco): con el foco en «Cerrar aviso», la
+          capa de arriba no lo atrapa. */}
+      <div data-superficie="avisos" className="fixed top-4 left-1/2 -translate-x-1/2 z-[90] flex flex-col items-center gap-2 w-[min(24rem,calc(100vw_-_2rem))] pointer-events-none">
         {avisos.map((aviso) => (
           <TarjetaAviso key={aviso.id} aviso={aviso} onCerrar={cerrarAviso} />
         ))}
@@ -263,38 +262,22 @@ function VentanaConfirmacion({
   const mensajeId = useId();
   const no = () => onResponder(id, false);
 
-  // Teclado mientras esta ventana está visible, en fase de captura:
-  // - Escape responde 'no' y no se propaga (no cierra además una ventana de la página que esté debajo).
-  // - Tab / Shift+Tab dan la vuelta dentro de la ventana (el foco no se va a la página de atrás).
-  // Con la ventana de sesión vencida abierta (z-[100], encima) el teclado es de ella: no se toca.
+  // Escape, mientras esta ventana está visible y en fase de captura, responde 'no' y no se propaga (no cierra además una ventana de la
+  // página que esté debajo). Con la ventana de sesión vencida abierta (z-[100], encima) el teclado es de ella: no se toca.
+  // B4 T24 f2 (m4 de la revisión r3 de f1): Tab ya no tiene una trampa propia aquí. Esta ventana es un Modal de la pila (data-capa y
+  // useCierreVentana) y es la capa de arriba: la atrapa el hook con la regla única (atrapaTab y atraparTab), que deja libres el Copilot
+  // y los avisos (encima) y recupera el foco que cae en la página de atrás.
   useEffect(() => {
     const alTeclear = (e: KeyboardEvent) => {
       if (hayReautenticacionPendiente()) return;
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        onResponder(id, false);
-        return;
-      }
-      if (e.key !== 'Tab') return;
-      const panel = document.getElementById(mensajeId)?.closest<HTMLElement>('[aria-modal="true"]');
-      const enfocables = panel ? Array.from(panel.querySelectorAll<HTMLElement>(ENFOCABLES)) : [];
-      if (!panel || !enfocables.length) return;
-      const primero = enfocables[0];
-      const ultimo = enfocables[enfocables.length - 1];
-      const activo = document.activeElement;
-      const dentro = activo instanceof Node && panel.contains(activo);
-      const destino = e.shiftKey
-        ? !dentro || activo === primero ? ultimo : null
-        : !dentro || activo === ultimo ? primero : null;
-      if (destino) {
-        e.preventDefault();
-        destino.focus();
-      }
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      onResponder(id, false);
     };
     window.addEventListener('keydown', alTeclear, true);
     return () => window.removeEventListener('keydown', alTeclear, true);
-  }, [id, mensajeId, onResponder]);
+  }, [id, onResponder]);
 
   return (
     <Modal

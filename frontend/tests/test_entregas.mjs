@@ -276,8 +276,8 @@ console.log('--- TEST 10 (T19): la tarjeta del tablero, el cobro, el recordatori
   assert.deepEqual(t.chips, [{ texto: 'Saldo $400.000', tono: 'amber' }]);
   assert.equal(t.accionPrincipal, null);
   assert.equal(t.tiempo, 'Entrega 20 nov 2026', 'fecha de negocio: el día del API, no un instante (T9 r1 I2)');
-  assert.equal(ent.textoEntregaEstimada(ped), '20 nov 2026');
-  assert.equal(ent.textoEntregaEstimada({}), '—');
+  assert.equal(ent.textoEntregaTablero(ped), '20 nov 2026');
+  assert.equal(ent.textoEntregaTablero({}), '—');
   assert.deepEqual(ent.tarjetaEntrega({ ...ped, saldo_cop: 0 }).chips, [{ texto: 'Pagado', tono: 'emerald' }]);
   assert.deepEqual(ent.tarjetaEntrega({ ...ped, saldo_cop: -3000 }).chips, [{ texto: 'Pagado', tono: 'emerald' }], 'a favor: pagado');
   assert.equal(ent.tarjetaEntrega({ ...ped, customer_name: ' ', productos: [{}] }).titulo, 'Cliente sin nombre');

@@ -3,6 +3,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { ChevronDown, ChevronUp, Lock, MoveHorizontal, RotateCcw, SlidersHorizontal } from 'lucide-react';
+import { FOCO } from '@/lib/design-system';
 import { ajustarAlAncho, posicionPanel, puedeDesplazar } from '@/lib/tabla';
 import type { DefinicionColumna } from '@/lib/tabla';
 import type { PreferenciasTabla } from './usePreferenciasTabla';
@@ -30,8 +31,8 @@ import type { PreferenciasTabla } from './usePreferenciasTabla';
 /** Lo que MenuAjustes necesita de cada columna (ColumnaTabla de TablaEstandar lo cumple). */
 export type ColumnaAjustes = DefinicionColumna & { titulo: string };
 
-const FLECHA = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent';
-const ACCION = 'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 disabled:cursor-not-allowed disabled:opacity-40';
+const FLECHA = `inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-700 ${FOCO} disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent`;
+const ACCION = `flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50 ${FOCO} disabled:cursor-not-allowed disabled:opacity-40`;
 
 export function MenuAjustes({
   columnas, preferencias, anchoRef,
@@ -112,7 +113,7 @@ export function MenuAjustes({
         aria-controls={abierto ? idPanel : undefined}
         title="Ajustar tabla"
         onClick={() => setAbierto((a) => !a)}
-        className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 aria-expanded:bg-slate-100"
+        className={`inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50 ${FOCO} aria-expanded:bg-slate-100`}
       >
         <SlidersHorizontal size={14} aria-hidden="true" />
         <span className="hidden sm:inline">Ajustar tabla</span>

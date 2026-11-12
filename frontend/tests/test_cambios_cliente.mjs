@@ -139,7 +139,17 @@ console.log('--- TEST 6 (T18 r1): AYUDA_NOTA_CLIENTE y las pantallas que usan la
   // La pastilla es UNA (ventas/chip-cambios-cliente.tsx) con etiquetaChipCambios. B4 T9 r1 (m5): desde T8 y T9 ya no la
   // usan las listas (pintan chipsDocumentoVentas, abajo): solo la cabecera del detalle de la SC (solicitud/[id]).
   const chip = leer('app/dashboard/ventas/chip-cambios-cliente.tsx');
-  assert.ok(chip.includes('etiquetaChipCambios(doc, tipoDoc)') && chip.includes('avisoCambiosCliente(doc, tipoDoc)'));
+  // B4 T24 f2 (F49, D27): su único uso es la SC, así que la rama tipoDoc='COT' (sin consumidor) se retiró: la misma fuente única,
+  // con el tipo de la SC.
+  assert.ok(chip.includes("etiquetaChipCambios(doc, 'SC')") && chip.includes("avisoCambiosCliente(doc, 'SC')"));
+  assert.ok(!/tipoDoc|'COT'/.test(chip), 'sin la rama de la COT');
+  assert.match(chip, /export function ChipCambiosCliente\(\{ doc \}: \{ doc: unknown \}\)/);
+  assert.ok(chip.includes('Su único uso es la cabecera del detalle de la SC (solicitud/[id])'), 'el JSDoc dice su único uso');
+  // Y sigue siendo su único uso (si otra pantalla la necesita para una COT, la rama vuelve con su prueba).
+  const usos = ['app/dashboard/ventas/solicitud/[id]/page.tsx', 'app/dashboard/ventas/solicitud/solicitud-client.tsx',
+    'app/dashboard/ventas/cotizacion/cotizacion-client.tsx', 'app/dashboard/ventas/cotizacion/[id]/page.tsx']
+    .filter((r) => /<ChipCambiosCliente\b/.test(leer(r)));
+  assert.deepEqual(usos, ['app/dashboard/ventas/solicitud/[id]/page.tsx']);
   // B4 T8 (D27, RP18, D4): la lista de SC pinta los chips de la fila con chipsDocumentoVentas (los mismos de la tarjeta
   // del tablero y del Hub), cuyo chip de cambios sale de etiquetaChipCambios y avisoCambiosCliente: la misma fuente única.
   const listaSC = leer('app/dashboard/ventas/solicitud/solicitud-client.tsx');

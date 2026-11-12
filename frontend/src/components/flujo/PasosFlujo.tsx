@@ -6,9 +6,10 @@ import {
   Calculator, Check, FileText, ListChecks, PackageCheck, Plane, Receipt, ShoppingBag, ShoppingCart, Truck, Warehouse, X,
 } from 'lucide-react';
 import { Contador } from '@/components/ui/Contador';
+import { FOCO } from '@/lib/design-system';
 import type { EstadoKpi } from '@/lib/kpis';
 import {
-  avisosVisibles, chipAtraso, conectorHecho, estadoNumeroFranja, hayEnlaces, indicePasoActual, textoAntiguedad,
+  avisosVisibles, chipAtraso, conectorHecho, estadoNumeroFranja, hayEnlaces, indicePasoActual, textoMasAntiguo,
   textoDetalle, textoEstadoPaso, tituloPaso, tituloPunto,
 } from '@/lib/flujo';
 import type { ClaveIcono, EstadoPaso, OrientacionFlujo, PasoVista, TonoAviso, TonoPaso, VarianteFlujo } from './tipos';
@@ -59,7 +60,7 @@ export type PropsPasosFlujo = {
   orientacion?: OrientacionFlujo;
   /** El aria-label de la lista de pasos. */
   etiqueta: string;
-  /** El clic en una caja sin href (y que no es esEste): la pantalla pone o quita ese filtro (alternarSeleccion). */
+  /** El clic en una caja sin href (y que no es esEste): la pantalla pone o quita ese filtro (alternarPaso). */
   onSeleccionar?: (clave: string) => void;
   /** 'banner': pastillas en una sola línea. 'barra': círculos de 22 px (el panel rápido). */
   compacto?: boolean;
@@ -167,9 +168,6 @@ const PUNTO: Record<EstadoPaso, string> = {
   cancelado: 'bg-rose-500',
   neutro: 'bg-slate-200',
 };
-
-/** r1 (C1, M10): el foco es un outline (no un box-shadow): se distingue del anillo de la selección y no lo borra forced-colors. */
-const FOCO = 'outline-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
 
 /**
  * Las cajas de la franja. ADAPTABLE: pastilla por debajo de @2xl de la franja y caja desde @2xl (r1, C3: flex-1, del alto
@@ -373,7 +371,7 @@ function PasosBanner({
         const Icon = paso.icono ? ICONOS[paso.icono] : null;
         const chip = chipAtraso(paso.atrasados, { estadoConteos });
         const detalle = paso.esEste ? textoDetalle(paso.detalle) : '';
-        const antiguedad = mostrarAntiguedad ? textoAntiguedad(paso.masAntiguoDias) : '';
+        const antiguedad = mostrarAntiguedad ? textoMasAntiguo(paso.masAntiguoDias) : '';
         const interactiva = Boolean(paso.href) || Boolean(onSeleccionar && !paso.esEste);
         const ayuda = mostrarAyuda && paso.ayuda ? paso.ayuda : '';
         const clases = `${compacto ? CAJA_PASTILLA : CAJA_ADAPTABLE} ${coloresCaja(paso, interactiva, Boolean(chip), compacto)}`;

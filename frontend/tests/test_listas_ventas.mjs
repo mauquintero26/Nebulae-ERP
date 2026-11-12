@@ -13,10 +13,10 @@
 import assert from 'node:assert/strict';
 import {
   diasAlerta, pedidoVigente, soloPedidosCancelados, ultimoPedidoCancelado, pestanaCotizacion, situacionPedidoCotizacion,
-  ESTADOS_PEDIDO_SIN_DINERO, pedidoSumaDinero, resumenPedidos, kpisPedidos, hintTotalPedidos, opcionesFiltroEstado,
-  generoCotizacion, cotizacionesVigentes, cotizacionesRechazadas, esperaCotizacion, contadoresSolicitudes,
-  tasaConversionCotizacion, superaDiasAlerta, resumenCancelacionSolicitudes, estadoEnPapelera, pasosParaCancelarSolicitud,
-  repartirCancelacionSolicitudes, cifrasVentasDashboard, rutaSinParametro, esSolicitudActiva, pestanaDeSolicitud,
+  ESTADOS_PEDIDO_SIN_DINERO, pedidoSumaDinero,
+  generoCotizacion, cotizacionesVigentes, cotizacionesRechazadas, esperaCotizacion,
+  superaDiasAlerta, resumenCancelacionSolicitudes, estadoEnPapelera, pasosParaCancelarSolicitud,
+  repartirCancelacionSolicitudes, rutaSinParametro, esSolicitudActiva,
   pistaActivasSolicitudes, valorConfig, enteroConfig, DIAS_VALIDEZ_COTIZACION, configLeida, cuerpoGuardarConfig,
   tarifaIvaDeConfig, AVISO_CONFIG_SIN_LEER,
 } from '../src/lib/listas-ventas.js';
@@ -95,85 +95,16 @@ console.log('--- COT-LISTA TEST 5: pestanaCotizacion (la confirmada con pedido c
   assert.equal(pestanaCotizacion(null), 'Activas');
 }
 
-console.log('--- H47 TEST 6: resumenPedidos no suma el dinero de cancelados ni devueltos (como el servidor) ---');
+console.log('--- H47 TEST 6: pedidoSumaDinero no suma el dinero de cancelados ni devueltos (como el servidor) ---');
 {
+  // B4 T24 f2 r1 (C1, D27 ampliado): resumenPedidos se retiró con sus casos (ni frontend/src, ni backend/tests, ni backend/app la
+  // usan; el resumen de la lista es el del servidor, con_resumen). pedidoSumaDinero sigue: la usa saldoVisiblePedido.
   assert.deepEqual([...ESTADOS_PEDIDO_SIN_DINERO], ['CANCELADO', 'DEVUELTO_TOTAL']);
-  const r = resumenPedidos([
-    { estado: 'PENDIENTE_COMPRA', total_cop: '1000000.00', saldo_cop: 400000, anticipo_cop: 600000 },
-    { estado: 'CANCELADO', total_cop: 2000000, saldo_cop: 2000000 },
-    null,
-  ]);
-  assert.equal(r.monto_cop, 1000000);
-  assert.equal(r.saldo_cop, 400000);
-  assert.equal(r.anticipo_cop, 600000);
-  assert.equal(r.total, 2, 'cuenta los pedidos (las lineas null no)');
-  assert.deepEqual(r.por_estado, { PENDIENTE_COMPRA: 1, CANCELADO: 1 });
-
-  const conDevuelto = resumenPedidos([
-    { estado: 'ENTREGADO', total_cop: 500000, saldo_cop: 0, anticipo_cop: 500000 },
-    { estado: 'DEVUELTO_TOTAL', total_cop: 700000, saldo_cop: 100000, anticipo_cop: 600000 },
-    'no es un objeto',
-  ]);
-  assert.equal(conDevuelto.monto_cop, 500000);
-  assert.equal(conDevuelto.saldo_cop, 0);
-  assert.equal(conDevuelto.anticipo_cop, 500000);
-  assert.deepEqual(conDevuelto.por_estado, { ENTREGADO: 1, DEVUELTO_TOTAL: 1 });
-
-  const centavos = resumenPedidos([{ estado: 'EN_PROCESO', total_cop: 2786923.08, saldo_cop: 1062523.4, anticipo_cop: 1724399.68 }]);
-  assert.equal(centavos.monto_cop, 2786923, 'en pesos enteros');
-  assert.equal(centavos.saldo_cop, 1062523);
-
-  for (const vacio of [[], undefined, null]) {
-    assert.deepEqual(resumenPedidos(vacio), { total: 0, monto_cop: 0, saldo_cop: 0, anticipo_cop: 0, por_estado: {} });
-  }
   assert.equal(pedidoSumaDinero({ estado: 'CANCELADO' }), false);
   assert.equal(pedidoSumaDinero({ estado: 'DEVUELTO_TOTAL' }), false);
   assert.equal(pedidoSumaDinero({ estado: 'PENDIENTE_PAGO' }), true);
   assert.equal(pedidoSumaDinero(null), false);
-}
-
-console.log('--- H47 TEST 7: kpisPedidos usa el resumen del servidor y, si no viene, el del navegador ---');
-{
-  const cargados = [
-    { estado: 'PENDIENTE_COMPRA', total_cop: 1000, saldo_cop: 400, anticipo_cop: 600 },
-    { estado: 'CANCELADO', total_cop: 9000, saldo_cop: 9000, anticipo_cop: 0 },
-  ];
-  const servidor = {
-    total: 250, monto_cop: 5000000, saldo_cop: 1200000, anticipo_cop: 3800000,
-    por_estado: { PENDIENTE_COMPRA: 10, EN_PROCESO: 5, ENTREGADO: 200, FACTURADO: 20, CANCELADO: 12, DEVUELTO_TOTAL: 3 },
-  };
-  const k = kpisPedidos(servidor, cargados);
-  assert.equal(k.total, 250);
-  assert.equal(k.monto, 5000000);
-  assert.equal(k.saldo, 1200000);
-  assert.equal(k.anticipo, 3800000);
-  assert.equal(k.pCompra, 10);
-  assert.equal(k.cancelados, 15, 'cancelados y devueltos, como la pestaña Cancelado');
-  assert.equal(k.activos, 15, 'total menos entregados, facturados, cancelados y devueltos');
-  assert.equal(k.cargados, 2);
-  assert.equal(hintTotalPedidos(k), '15 activos · 15 cancelados · se ven los 2 más recientes');
-
-  const sinServidor = kpisPedidos(null, cargados);
-  assert.equal(sinServidor.total, 2);
-  assert.equal(sinServidor.monto, 1000, 'el cancelado no suma');
-  assert.equal(sinServidor.saldo, 400);
-  assert.equal(sinServidor.activos, 1);
-  assert.equal(hintTotalPedidos(sinServidor), '1 activos · 1 cancelados');
-
-  const vacio = kpisPedidos(null, undefined);
-  assert.equal(vacio.total, 0);
-  assert.equal(hintTotalPedidos(vacio), '0 activos');
-}
-
-console.log('--- N10 TEST 8: opcionesFiltroEstado (lista base + los estados que traen los datos, sin repetir) ---');
-{
-  const base = opcionesFiltroEstado([]);
-  assert.deepEqual(base, ['PENDIENTE_COMPRA', 'PENDIENTE_PAGO', 'EN_PROCESO', 'EN_TRANSITO', 'LISTO_ENTREGA',
-    'ENTREGADO', 'FACTURADO', 'CANCELADO']);
-  const conRaros = opcionesFiltroEstado([{ estado: 'PENDIENTE_SALDO' }, { estado: 'EN_PROCESO' }, null,
-    { estado: 'DEVUELTO_TOTAL' }, { estado: 'PENDIENTE_SALDO' }, { estado: '' }]);
-  assert.deepEqual(conRaros.slice(-2), ['PENDIENTE_SALDO', 'DEVUELTO_TOTAL']);
-  assert.equal(conRaros.length, base.length + 2);
+  assert.equal(pedidoSumaDinero('no es un objeto'), false);
 }
 
 console.log('--- H46 / N1 TEST 9: situacionPedidoCotizacion (crear pedido, reabrir o ya convertida) ---');
@@ -242,51 +173,6 @@ console.log('--- H32 TEST 2: esperaCotizacion (confirmada y sin cotizacion en ju
   assert.equal(esperaCotizacion({ estado: 'CONFIRMADA', cotizaciones: [{ estado: 'BORRADOR' }] }), false);
   assert.equal(esperaCotizacion({ estado: 'ASIGNADA', cotizaciones: [] }), false);
   assert.equal(esperaCotizacion(null), false);
-}
-
-console.log('--- H32 TEST 3: contadoresSolicitudes (tarjetas Confirmadas y Total) ---');
-{
-  const lista = [
-    { estado: 'CONFIRMADA', cotizaciones: [] },                                  // espera cotizacion
-    { estado: 'COTIZADA', cotizaciones: [{ estado: 'BORRADOR' }] },               // genero
-    { estado: 'ASIGNADA', cotizaciones: [{ estado: 'RECHAZADA' }] },              // genero (rechazada)
-    { estado: 'CANCELADA' },
-  ];
-  const c = contadoresSolicitudes(lista, 4);
-  assert.equal(c.total, 4);
-  assert.equal(c.totalConf, 1);
-  assert.equal(c.conCot, 2);
-  assert.equal(c.esperanCot, 1);
-  assert.equal(c.hintConfirmadas, '1 esperan cotización');
-  assert.equal(c.hintTotal, '2 generaron cotización');
-
-  // El servidor tiene mas solicitudes que las cargadas (tope de 200): se dice cuantas se ven.
-  assert.equal(contadoresSolicitudes(lista, 350).hintTotal, '2 generaron cotización · se ven las 4 más recientes de 350');
-  assert.equal(contadoresSolicitudes(lista, null).hintTotal, '2 generaron cotización');
-
-  assert.equal(contadoresSolicitudes([{ estado: 'ASIGNADA' }], 1).hintConfirmadas, 'Sin confirmadas');
-  assert.equal(contadoresSolicitudes([{ estado: 'CONFIRMADA', cotizaciones: [{ estado: 'CONFIRMADA' }] }], 1).hintConfirmadas, 'Todas con cotización');
-  const vacio = contadoresSolicitudes(null, null);
-  assert.equal(vacio.total, 0);
-  assert.equal(vacio.hintConfirmadas, 'Sin confirmadas');
-}
-
-console.log('--- H32 TEST 4: tasa de conversion solo con solicitudes de cotizacion de producto (decision del usuario) ---');
-{
-  const lista = [
-    { tipo_solicitud: 'Cotizacion de Producto', cotizaciones: [{ estado: 'BORRADOR' }] },
-    { tipo_solicitud: 'Cotizacion de Producto', cotizaciones: [{ estado: 'RECHAZADA' }] },
-    { cotizaciones: [] },                                                           // sin tipo: cotizacion de producto
-    { tipo_solicitud: 'Cotizacion de Producto', cotizaciones: [] },
-    { tipo_solicitud: 'Soporte Tecnico' },                                          // nunca se cotiza: no cuenta
-    { tipo_solicitud: 'Devolucion de Producto' },
-  ];
-  const t = tasaConversionCotizacion(lista);
-  assert.equal(t.total, 4);
-  assert.equal(t.conCot, 2);
-  assert.equal(t.pct, 50);
-  assert.deepEqual(tasaConversionCotizacion([{ tipo_solicitud: 'Soporte Tecnico' }]), { total: 0, conCot: 0, pct: 0 });
-  assert.deepEqual(tasaConversionCotizacion(null), { total: 0, conCot: 0, pct: 0 });
 }
 
 console.log('--- N8 TEST 5: superaDiasAlerta lee las fechas del API como UTC ---');
@@ -406,6 +292,10 @@ console.log('--- T7 TEST 7d (ronda 1, C12): esSolicitudActiva, un solo predicado
 
 console.log('--- T7 TEST 7e (ronda 2): pestanaDeSolicitud — cada SC cae en exactamente una pestaña ---');
 {
+  // B4 T24 f2 r1 (C1, m29): el bloque original vuelve tal cual; pestanaDeSolicitud es el espejo que llaman por node las
+  // pruebas de paridad del backend (test_listas_ventas_paginadas). Por el espacio de nombres, para que su falta no tape lo demás.
+  const { pestanaDeSolicitud } = listas;
+  assert.equal(typeof pestanaDeSolicitud, 'function', 'pestanaDeSolicitud existe (espejo de la paridad del backend)');
   const PESTANAS = ['Activas', 'Confirmadas', 'Canceladas', 'Soporte'];
   const sc = (estado, tipo = 'Cotizacion de Producto') => ({ estado, tipo_solicitud: tipo });
   // Orden: Soporte (por tipo o por su estado propio) -> Confirmadas -> Canceladas -> Activas.
@@ -444,6 +334,35 @@ console.log('--- T7 TEST 7e (ronda 2): pestanaDeSolicitud — cada SC cae en exa
   const conteos = PESTANAS.map((t) => filas.filter((s) => pestanaDeSolicitud(s) === t).length);
   assert.equal(conteos.reduce((a, b) => a + b, 0), filas.length);
   assert.deepEqual(conteos, [9, 1, 1, 12]);
+}
+
+console.log('--- B4 T24 f2 r1 (C1, D27 ampliado): lo retirado ya no existe y lo que llaman por node las pruebas de paridad del backend, sí ---');
+{
+  // F48 retiró lo que no tenía consumidor; r1 (C1) devolvió pestanaDeSolicitud y conserva esperaCotizacion, que las pruebas de
+  // paridad del backend llaman por node. resumenPedidos se retira en r1 (sin consumidor en ningún lado).
+  for (const n of ['kpisPedidos', 'hintTotalPedidos', 'cifrasVentasDashboard', 'opcionesFiltroEstado', 'contadoresSolicitudes',
+    'tasaConversionCotizacion', 'posicionMenuFila', 'botonALaVista', 'recortesDeAncestros', 'resumenPedidos']) {
+    assert.equal(typeof listas[n], 'undefined', `${n} se retiró`);
+  }
+  // D27 ampliado: cada `listas.X`, `hub.X` y `pedidos.X` del JS que esas pruebas corren con node existe en su lib (el mismo
+  // espacio de nombres que arma su _PREAMBULO). Una retirada futura que olvide el grep en backend/tests falla aquí.
+  const hubNs = await import('../src/lib/hub-ventas.js');
+  const pedidosNs = await import('../src/lib/estados-pedido.js');
+  const libs = { listas, hub: hubNs, pedidos: pedidosNs };
+  let vistos = 0;
+  for (const prueba of ['test_listas_ventas_paginadas.py', 'test_paridad_reglas_ventas.py']) {
+    const ruta = new URL(`../../backend/tests/${prueba}`, import.meta.url);
+    assert.ok(existsSync(ruta), `${prueba} existe en el checkout`);
+    const texto = readFileSync(ruta, 'utf8');
+    for (const [, ns, nombre] of texto.matchAll(/\b(listas|hub|pedidos)\.([A-Za-z_]\w*)/g)) {
+      assert.notEqual(typeof libs[ns][nombre], 'undefined', `${prueba}: ${ns}.${nombre} existe`);
+      vistos += 1;
+    }
+  }
+  assert.ok(vistos >= 30, `la sonda lee de verdad las dos pruebas (${vistos} usos)`);
+  for (const n of ['pestanaDeSolicitud', 'esperaCotizacion', 'esSolicitudActiva']) assert.equal(typeof listas[n], 'function', n);
+  // El comentario de backend/app/api/v1/erp_ventas.py que nombra pestanaDeSolicitud queda correcto (solo lectura).
+  assert.ok(readFileSync(new URL('../../backend/app/api/v1/erp_ventas.py', import.meta.url), 'utf8').includes('(pestanaDeSolicitud mira'));
 }
 
 console.log('--- N4 TEST 7b (revision T11): repartirCancelacionSolicitudes omite las que ya estan en la Papelera y las de soporte ---');
@@ -510,31 +429,6 @@ console.log('--- B1 / R8 TEST: tras abrir la cancelacion, la URL queda sin ?acci
     `${ruta}?return_to=%2Fdashboard%2Fventas`);
   assert.equal(rutaSinParametro(ruta, 'return_to=%2Fx', 'accion'), `${ruta}?return_to=%2Fx`);
   for (const vacio of [null, undefined, '']) assert.equal(rutaSinParametro(ruta, vacio, 'accion'), ruta);
-}
-
-console.log('--- A4 / H47 TEST: cifras de ventas del Dashboard General sin cancelados ni devueltos ---');
-{
-  // Con el resumen del servidor (todos los pedidos, no solo la pagina de 50).
-  const respuesta = {
-    total: 4,
-    resumen: { monto_cop: 3000, saldo_cop: 700, anticipo_cop: 900,
-      por_estado: { EN_PROCESO: 2, CANCELADO: 1, DEVUELTO_TOTAL: 1 } },
-    data: [{ estado: 'EN_PROCESO', total_cop: 1000, saldo_cop: 100, anticipo_cop: 900 }],
-  };
-  assert.deepEqual(cifrasVentasDashboard(respuesta), { ventas: 3000, cartera: 700, ticket: 1500 });
-  // Sin resumen: la misma regla en el navegador. La cartera es el saldo (con abonos), no total - anticipo.
-  const cargados = [
-    { estado: 'EN_PROCESO', total_cop: 1000, saldo_cop: 100, anticipo_cop: 400 },
-    { estado: 'PENDIENTE_PAGO', total_cop: 2001, saldo_cop: 2001, anticipo_cop: 0 },
-    { estado: 'CANCELADO', total_cop: 5000, saldo_cop: 5000, anticipo_cop: 0 },
-    { estado: 'DEVUELTO_TOTAL', total_cop: 7000, saldo_cop: 0, anticipo_cop: 7000 },
-  ];
-  assert.deepEqual(cifrasVentasDashboard({ data: cargados }), { ventas: 3001, cartera: 2101, ticket: 1501 });
-  assert.deepEqual(cifrasVentasDashboard(cargados), { ventas: 3001, cartera: 2101, ticket: 1501 });
-  assert.deepEqual(cifrasVentasDashboard({ data: [cargados[2]] }), { ventas: 0, cartera: 0, ticket: 0 });
-  for (const nulo of [null, undefined, {}, []]) {
-    assert.deepEqual(cifrasVentasDashboard(nulo), { ventas: 0, cartera: 0, ticket: 0 });
-  }
 }
 
 console.log('--- T11 (V7): la tarjeta ACTIVAS no contradice al banner de vencidas ---');
@@ -680,17 +574,14 @@ console.log('--- B4 T8 TEST 1: tarjetasSolicitudes — las 4 tarjetas de Solicit
   assert.equal(listas.tarjetasSolicitudes({ ...resumen, sin_atender: 1, vencidas: 0 }).activas.tono, 'alerta', 'solo sin atender');
   assert.equal(listas.tarjetasSolicitudes({ ...resumen, sin_atender: -2, vencidas: 'x' }).activas.tono, 'normal', 'lo que no es un número');
   assert.equal(listas.tarjetasSolicitudes(resumen).activas.ayuda, pistaActivasSolicitudes(2, 1));
-  // Confirmadas, con la regla de H32 de contadoresSolicitudes (la misma frase).
+  // Confirmadas, con la regla de H32 (B4 T24 f2, F48, D27: la frase, sin contadoresSolicitudes, que se retiró).
   assert.equal(listas.tarjetasSolicitudes({ ...resumen, confirmadas: 0, esperan_cot: 0 }).confirmadas.ayuda, 'Sin confirmadas');
   assert.equal(listas.tarjetasSolicitudes({ ...resumen, esperan_cot: 0 }).confirmadas.ayuda, 'Todas con cotización');
-  assert.equal(listas.pistaConfirmadasSolicitudes(1, 1), contadoresSolicitudes([{ estado: 'CONFIRMADA', cotizaciones: [] }], 1).hintConfirmadas);
+  assert.equal(listas.pistaConfirmadasSolicitudes(1, 1), '1 esperan cotización');
   assert.equal(listas.pistaConfirmadasSolicitudes(0, 0), 'Sin confirmadas');
   assert.equal(listas.pistaConfirmadasSolicitudes(2, 0), 'Todas con cotización');
   assert.equal(listas.pistaTotalSolicitudes(4), '4 generaron cotización');
   assert.equal(listas.pistaTotalSolicitudes(null), '0 generaron cotización');
-  // contadoresSolicitudes no cambia (usa las mismas frases).
-  assert.equal(contadoresSolicitudes([{ estado: 'CONFIRMADA', cotizaciones: [] }], 350).hintTotal,
-    `${listas.pistaTotalSolicitudes(0)} · se ven las 1 más recientes de 350`);
   // Sin resumen (cargando o con error): null, la franja pinta las barras grises o «—» (nunca 0).
   for (const nada of [null, undefined, 'x', 3, []]) assert.equal(listas.tarjetasSolicitudes(nada), null, String(nada));
   // Un número que falta o no sirve queda en null (la tarjeta dice «—»), no en 0.
@@ -722,7 +613,7 @@ console.log('--- B4 T8 r1: el cableado de la lista de Solicitudes (A2, A3, m1, m
   assert.match(lista, /<TarjetaKpi kpi="sc_activas" [^>]*\btono=\{tarjetas\?\.activas\.tono\}/);
   // m2: la barra despacha por alCambiarBarra, que poda con accionModo y las opciones del modo NUEVO.
   assert.match(lista, /<BarraTabla\s+estado=\{estadoBarra\}\s+onEstado=\{alCambiarBarra\}/);
-  assert.match(lista, /if \(accion\.tipo === 'modo'\) \{\s*const modo = String\(accion\.valor\);\s*despachar\(accionModo\(estado, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_SC : opcionesEstadosSolicitudes\)\);\s*\} else despachar\(accion\);/);
+  assert.match(lista, /if \(accion\.tipo === 'modo'\) \{\s*const modo = String\(accion\.valor\);\s*despachar\(accionModo\(estado, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_SC : opcionesEstadosSolicitudes, COLUMNAS_SC\)\);\s*\} else despachar\(accion\);/);
   // m5: la marca de la llegada sin filas (la Papelera y Kanban), puesta al día en el render, y la tabla y el total en
   // «cargando» mientras falte la página.
   assert.match(lista, /const sinFilasAhora = enPapelera \|\| modoEfectivo === 'kanban';/);
@@ -985,7 +876,7 @@ console.log('--- B4 T9: el cableado de la lista de Cotizaciones con el servidor 
   assert.match(lista, /<BarraTabla\s+estado=\{estado\}\s+onEstado=\{alCambiarBarra\}\s+pestanas=\{enKanban \? undefined : pestanas\}/);
   assert.match(lista, /opcionesEstados=\{enKanban \? OPCIONES_ESTADOS_TABLERO_COT : opcionesEstadosCotizaciones\}/);
   assert.match(lista, /kanbanDisponible\n/);
-  assert.match(lista, /if \(accion\.tipo === 'modo'\) \{\s*const modo = String\(accion\.valor\);\s*despachar\(accionModo\(estado, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_COT : opcionesEstadosCotizaciones\)\);\s*\} else despachar\(accion\);/);
+  assert.match(lista, /if \(accion\.tipo === 'modo'\) \{\s*const modo = String\(accion\.valor\);\s*despachar\(accionModo\(estado, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_COT : opcionesEstadosCotizaciones, COLUMNAS_COT\)\);\s*\} else despachar\(accion\);/);
   // m8 de T8: el «vacío» memoizado (la búsqueda y la pestaña), con el enlace a Solicitudes en Activas.
   assert.match(lista, /const vacioLista = useMemo\(\(\) => \{[\s\S]*?Ir a Solicitudes para crear una COT[\s\S]*?\}, \[estado\.q, estado\.vista\]\);/);
   assert.match(lista, /vacio=\{vacioLista\}/);
@@ -1094,7 +985,8 @@ console.log('--- B4 T9: el cableado de la lista de Cotizaciones con el servidor 
   assert.match(cabecera, /<button type="button" onClick=\{onActualizar\}[^>]*>\s*<RefreshCw [^>]*className=\{actualizando \? 'animate-spin' : ''\}\/> Actualizar/);
   assert.match(cabecera, /<Link href=\{enlaceVerAnalisis\('cot'\)\}/);
   assert.match(cabecera, /<ContenidoEnlace icon=\{BarChart3\}>Ver análisis<\/ContenidoEnlace>/);
-  assert.match(codigo, /export const CONTENEDOR_LISTA = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-\[1600px\] mx-auto w-full min-w-0 gap-6';/);
+  // B4 T24 f2 (F44-a, D27): la reserva es el token RESERVA_BOTON_IA (pb-24).
+  assert.ok(codigo.includes('export const CONTENEDOR_LISTA = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;'));
   assert.ok(lista.includes('<div className={CONTENEDOR_LISTA}>'), 'la lista usa el contenedor');
   // Lo de los Bloques 1 a 3 que se queda: la redirección de ?id= y «Nueva desde SC».
   assert.match(lista, /router\.replace\(`\/dashboard\/ventas\/cotizacion\/\$\{numId\}`\)/);
@@ -1211,8 +1103,9 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   // se contaba, filtraba o sumaba en el navegador.
   assert.match(codigo, /export const ID_PEDIDOS = 'ventas\.pedidos';/);
   assert.match(codigo, /export const INICIAL_PEDIDOS = \{ vista: 'todos', orden: 'atencion' \};/);
-  assert.match(lista, /const \[estado, despachar, listo\] = useEstadoTabla\(ID_PEDIDOS, INICIAL_PEDIDOS\);/);
-  assert.match(lista, /ruta: '\/ventas\/pedidos', estado, conConteos: true, esperar: !listo, despachar,\s*extra: enKanban \? EXTRA_TABLERO : null,/);
+  assert.match(lista, /const \[estado, despachar, listo, modoListo\] = useEstadoTabla\(ID_PEDIDOS, INICIAL_PEDIDOS\);/); // F38 (D27)
+  // B4 T24 f2 (F2, D27): en Lista, extra lleva los estados equivalentes del filtro (estadosConsultaPedidos) o null.
+  assert.match(lista, /ruta: '\/ventas\/pedidos', estado, conConteos: true, esperar: !listo, despachar,\s*extra: enKanban \? EXTRA_TABLERO : extraDeLaLista,/);
   assert.match(codigo, /const EXTRA_TABLERO = \{ limit: 0 \};/);
   for (const viejo of ['limit=200', 'kpisPedidos', 'hintTotalPedidos', 'opcionesFiltroEstado', 'grupoPedido(', 'coincideProducto',
     'useVistaGuardada', 'StatCard', "'Analisis'", 'filtered', 'setCurrentPage', 'MoreHorizontal', '<table']) {
@@ -1224,9 +1117,10 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   assert.match(lista, /total=\{sinPagina \? null : listado\.total\}\s*cargando=\{listado\.cargandoInicial \|\| sinPagina\}/);
   assert.match(lista, /total: sinPagina \? null : listado\.total,\s*estadoTotal: estadoDelTotal\(\{\s*total: listado\.total, cargando: listado\.cargandoInicial \|\| sinPagina,/);
   // Las tarjetas (RP19 (2), D5): los kpis de /ventas/stats?periodo=30d, la llamada del Hub; 'cargando' hasta que llegan.
-  assert.match(lista, /apiFetch\(`\/ventas\/stats\?periodo=\$\{PERIODO_KPI\}`, \{ signal: control\.signal \}\)/);
-  assert.match(lista, /const cargandoStats = stats\?\.vuelta !== vueltaStats;\s*const estadoKpis = useEstadoKpi\(cargandoStats, cargandoStats \? null : \(stats\?\.error \?\? null\)\);/);
-  assert.match(lista, /const tarjetas = tarjetasPedidos\(stats\?\.datos\?\.kpis \?\? null\);/);
+  // B4 T24 f2 (F45, D27): con useResumen (components/ui), el cargador compartido; sus casos, en test_flujo.mjs.
+  assert.match(lista, /const stats = useResumen<StatsPedidos>\(`\/ventas\/stats\?periodo=\$\{PERIODO_KPI\}`, vueltaStats\);/);
+  assert.match(lista, /const cargandoStats = stats\.cargando;\s*const estadoKpis = useEstadoKpi\(cargandoStats, stats\.error\);/);
+  assert.match(lista, /const tarjetas = tarjetasPedidos\(stats\.datos\?\.kpis \?\? null\);/);
   // «Actualizar» recarga la tabla, el tablero, la franja y las tarjetas; tras un cambio, lo que el cambio mueve.
   assert.match(lista, /const recargarLista = useCallback\(\(\) => \{\s*recargarListado\(\);\s*recargarTablero\(\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*setVueltaStats\(\(n\) => n \+ 1\);\s*\}, \[recargarListado, recargarTablero\]\);/);
   assert.match(lista, /const recargarTrasCambio = useCallback\(\(\) => \{\s*recargarListado\(\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*setVueltaStats\(\(n\) => n \+ 1\);\s*\}, \[recargarListado\]\);/);
@@ -1262,7 +1156,7 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   assert.equal((lista.match(/por_estado/g) ?? []).length, 1, 'por_estado se lee en un solo lugar (el vigente)');
   assert.equal((lista.match(/opcionesEstadosPedidos/g) ?? []).length, 1, 'la pantalla usa las opciones con los heredados');
   assert.match(lista, /kanbanDisponible\n/);
-  assert.match(lista, /if \(accion\.tipo === 'modo'\) \{\s*const modo = String\(accion\.valor\);\s*despachar\(accionModo\(estado, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesDeLaLista\)\);\s*\} else despachar\(accion\);/);
+  assert.match(lista, /if \(accion\.tipo === 'modo'\) \{\s*const modo = String\(accion\.valor\);\s*despachar\(accionModo\(estado, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_PEDIDO : opcionesDeLaLista, COLUMNAS_PEDIDO\)\);\s*\} else despachar\(accion\);/);
   assert.match(lista, /const vacioLista = useMemo\(\(\) => \{[\s\S]*?Los pedidos se crean al convertir una cotización confirmada por el cliente\.[\s\S]*?\}, \[estado\.q\]\);/);
   assert.match(lista, /vacio=\{vacioLista\}/);
 
@@ -1323,9 +1217,11 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   assert.match(acciones, /const puedePxp = Boolean\(acciones\?\.puedePxpRol\) && pedidoAdmitePxp\(p\);/);
   assert.match(acciones, /\{ etiqueta: 'Ver detalle', icono: FileCheck, onClick: \(\) => acciones\?\.abrir\(p\) \}/);
   assert.match(acciones, /\{ etiqueta: 'Crear PXP', [^\n]*oculto: !puedePxp,\s*deshabilitado: acciones\?\.creandoPxp === p\.id \}/);
-  assert.match(acciones, /\{ etiqueta: 'Cancelar pedido', icono: X, peligro: true, onClick: \(\) => acciones\?\.ir\(`\/dashboard\/ventas\/venta\/\$\{p\.id\}\?accion=cancelar`\),\s*oculto: !transicionesPedido\(p\.estado\)\.includes\('CANCELADO'\) \}/);
+  // B4 T24 f2 r1 (m14, D27): «Cancelar pedido» (PATCH a CANCELADO: ADMIN y ASESOR) solo con mover; sin él, el ⋯ no lo ofrece.
+  assert.match(acciones, /\{ etiqueta: 'Cancelar pedido', icono: X, peligro: true, onClick: \(\) => acciones\?\.ir\(`\/dashboard\/ventas\/venta\/\$\{p\.id\}\?accion=cancelar`\),\s*oculto: !acciones\?\.mover \|\| !transicionesPedido\(p\.estado\)\.includes\('CANCELADO'\) \}/);
   assert.match(acciones, /<MenuFila items=\{items\} etiqueta=\{`Acciones de \$\{p\.numero\}`\} \/>/);
-  assert.match(lista, /const puedePxpRol = puedeCrearOrdenDePago\(getUsuarioActual\(\)\.role\);/);
+  // B4 T24 f2 r1 (m18, D27): con el rol leído después de montar (useRolActual), el mismo de la tarjeta y del tablero.
+  assert.match(lista, /const puedePxpRol = puedeCrearOrdenDePago\(rol\);/);
   assert.match(lista, /apiFetch\(`\/ventas\/pedidos\/\$\{p\.id\}\/crear-pxp`, \{ method: 'POST', body: JSON\.stringify\(\{\}\) \}\);/);
 
   // Bloque 5 (RP19 (2), D5): las 4 tarjetas con los kpis; el total y Pendientes de compra son sus pestañas.
@@ -1335,7 +1231,7 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   assert.match(lista, /<TarjetaKpi kpi="pven_saldo_por_cobrar" valor=\{tarjetas\?\.saldo_por_cobrar\.valor \?\? null\} ayuda=\{tarjetas\?\.saldo_por_cobrar\.ayuda \?\? undefined\}\s*variacion=\{\{ actual: tarjetas\?\.saldo_por_cobrar\.valor \?\? null, anterior: null, es_foto: true \}\} \/>/);
   assert.match(lista, /<FranjaKpis estado=\{estadoKpis\} titulo="Pedidos de venta">/);
   // r1 (I1): en Kanban abre esa pestaña en Lista con accionVistaEnLista (la misma acción del enlace ?tab=).
-  assert.match(lista, /const siguiente = enKanban \? vista : \(alternarSeleccion\(estado\.vista, vista\) \?\? INICIAL_PEDIDOS\.vista\);\s*despachar\(accionVistaEnLista\(estado, siguiente, opcionesDeLaLista\)\);\s*\};/);
+  assert.match(lista, /const siguiente = enKanban \? vista : \(alternarPaso\(estado\.vista, vista\) \?\? INICIAL_PEDIDOS\.vista\);\s*despachar\(accionVistaEnLista\(estado, siguiente, opcionesDeLaLista\)\);\s*\};/);
 
   // Bloque 6 (D42, RP21, RP90): la franja con «Estás aquí» en Pedido de venta, Entregado y Facturado como pestañas y los
   // atrasados del paso PVEN; sin noResueltos.
@@ -1377,7 +1273,8 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   assert.match(cabecera, /<button type="button" onClick=\{onActualizar\}[^>]*>\s*<RefreshCw [^>]*className=\{actualizando \? 'animate-spin' : ''\}\/> Actualizar/);
   assert.match(cabecera, /<Link href=\{enlaceVerAnalisis\('pven'\)\}/);
   assert.match(cabecera, /<ContenidoEnlace icon=\{BarChart3\}>Ver análisis<\/ContenidoEnlace>/);
-  assert.match(codigo, /export const CONTENEDOR_LISTA = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-\[1600px\] mx-auto w-full min-w-0 gap-6';/);
+  // B4 T24 f2 (F44-a, D27): la reserva es el token RESERVA_BOTON_IA (pb-24).
+  assert.ok(codigo.includes('export const CONTENEDOR_LISTA = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;'));
   assert.ok(lista.includes('<div className={CONTENEDOR_LISTA}>'), 'la lista usa el contenedor');
   assert.match(lista, /subtitle="Pedidos confirmados por tus clientes"/);
   // Lo de los Bloques 1 a 3 que se queda: NewSupplierModal exportado (lo importa venta/[id]; F5 fija sus tildes).
@@ -1419,7 +1316,10 @@ console.log('--- B4 T10 r1 (I1): ?tab= con Kanban guardado abre esa pestaña en 
   const codigo = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
   const lista = codigo.slice(codigo.indexOf('export default function VentaClient('));
   assert.match(lista, /const enlacePendiente = useRef<string \| null>\(null\);/);
-  assert.match(lista, /useLayoutEffect\(\(\) => \{\s*const vista = enlacePendiente\.current;\s*if \(!listo \|\| vista === null\) return;\s*enlacePendiente\.current = null;\s*if \(estado\.modo === 'kanban'\) despachar\(accionVistaEnLista\(estado, vista, opcionesDeLaLista\)\);\s*\}, \[listo, estado, despachar, opcionesDeLaLista\]\);/);
+  // B4 T24 (F38, D27): el enlace se consume con modoListo (el modo guardado leído de verdad), no con `listo`: si listo llega por el
+  // tope de 4 s y después llega 'kanban', la vista del enlace no queda escondida en el tablero.
+  assert.match(lista, /const \[estado, despachar, listo, modoListo\] = useEstadoTabla\(ID_PEDIDOS, INICIAL_PEDIDOS\);/);
+  assert.match(lista, /useLayoutEffect\(\(\) => \{\s*const vista = enlacePendiente\.current;\s*if \(!modoListo \|\| vista === null\) return;\s*enlacePendiente\.current = null;\s*if \(estado\.modo === 'kanban'\) despachar\(accionVistaEnLista\(estado, vista, opcionesDeLaLista\)\);\s*\}, \[modoListo, estado, despachar, opcionesDeLaLista\]\);/);
   assert.ok(lista.indexOf('enlacePendiente.current = vista;') < lista.indexOf('useLayoutEffect(() => {\n    const vista = enlacePendiente.current;'),
     'primero se anota, después se consume');
   // elegirVista usa la misma acción: el enlace y el clic dan lo mismo.
@@ -1542,6 +1442,208 @@ console.log('--- B4 T10: el cableado del detalle del pedido (FLUJO-documentos 5,
   // Las columnas son estables (D40) y siguen a `discriminado` (el título «Total con IVA» o «Total»), con su único
   // usePreferenciasTabla.
   assert.match(bloque3, /const columnas = useMemo<ColumnaTabla<FilaProductoPedido>\[\]>\(\(\) => \[[\s\S]*?\], \[discriminado\]\);\s*const prefs = usePreferenciasTabla\('ventas\.pedido\.productos', columnas\);/);
+}
+
+console.log('--- B4 T24 f2 (m8 de la revisión r0 de f1): la Lista de Solicitudes ofrece cancelar, reiniciar, la papelera y restaurar solo a quien puede ---');
+{
+  // POST /solicitudes/{id}/cancelar (cancelar y «Enviar a la papelera»), PATCH /solicitudes/{id} («Reiniciar») y POST
+  // /solicitudes/{id}/restaurar son de ADMIN y ASESOR (erp_ventas.py): accesoTableroVentas.mover. FINANZAS, COMPRAS, BODEGA y
+  // CONSULTA ven la fila con «Ver Detalle» y sin casillas.
+  const { accesoTableroVentas } = await import('../src/lib/roles.js');
+  for (const rol of ['ADMIN', 'ASESOR']) assert.equal(accesoTableroVentas(rol).mover, true, rol);
+  for (const rol of ['FINANZAS', 'COMPRAS', 'BODEGA', 'CONSULTA']) assert.equal(accesoTableroVentas(rol).mover, false, rol);
+  const sinComentarios = (t) => t.replace(/\r\n/g, '\n').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const lista = sinComentarios(readFileSync(new URL('../src/app/dashboard/ventas/solicitud/solicitud-client.tsx', import.meta.url), 'utf8'));
+  // B4 T24 f2 r1 (m18, D27): el contexto suma el rol (después de montar); `mover` sigue.
+  assert.match(lista, /type AccionesFilaSC = \{[\s\S]*?\bmover: boolean;[\s\S]*?\brol: string;\s*\};/);
+  const celda = lista.slice(lista.indexOf('function CeldaAcciones('), lista.indexOf('\n}\n', lista.indexOf('function CeldaAcciones(')));
+  assert.match(celda, /const conAcciones = acciones\?\.mover === true && !soporte && \(!cancelada \|\| !sc\.eliminada_at\);/);
+  const papelera = lista.slice(lista.indexOf('function CeldaAccionesPapelera('), lista.indexOf('\n}\n', lista.indexOf('function CeldaAccionesPapelera(')));
+  assert.match(papelera, /\{acciones\?\.mover && \(\s*<button type="button" onClick=\{\(\) => acciones\?\.restaurar\(sc\)\}/);
+  assert.match(lista, /const accionesFila = useMemo<AccionesFilaSC>\(\(\) => \(\{[\s\S]*?mover: accesoTablero\.mover,\s*rol,\s*\}\), \[accesoTablero\.mover, rol\]\);/);
+  assert.match(lista, /seleccion=\{accesoTablero\.mover \? seleccion : undefined\}\s*onSeleccion=\{accesoTablero\.mover \? alSeleccionar : undefined\}/);
+}
+
+console.log('--- B4 T24 f2 (F44-a): las pantallas de Ventas reservan la esquina del botón de la IA con el token RESERVA_BOTON_IA ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/app/dashboard/ventas/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const CONTENEDOR = 'export const CONTENEDOR_LISTA = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;';
+  // Las tres copias de CONTENEDOR_LISTA (Solicitudes, Cotizaciones y Pedidos) y el contenedor del Hub, con el token (pb-24).
+  for (const ruta of ['solicitud/solicitud-client.tsx', 'cotizacion/cotizacion-client.tsx', 'venta/venta-client.tsx']) {
+    const f = leer(ruta);
+    assert.ok(f.includes(CONTENEDOR), `${ruta}: CONTENEDOR_LISTA con RESERVA_BOTON_IA`);
+    assert.match(f, /^import \{[^}]*\bRESERVA_BOTON_IA\b[^}]*\} from '@\/lib\/design-system';/m, `${ruta}: importa el token`);
+  }
+  const hub = leer('page.tsx');
+  assert.ok(hub.includes('<div className={`flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`}>'), 'el Hub');
+  // Lo que se desplaza bajo el botón (fixed bottom-6 right-6): el panel rápido del Hub y su panel de actividad (Drawer).
+  // r1 (C3, D27): el panel rápido es un Drawer con la prop aditiva reservaBotonIA (el cuerpo que se desplaza lleva el token).
+  assert.ok(hub.includes('<Drawer idTitulo="drawer-panel-rapido-titulo" maxWidth="600" reservaBotonIA '), 'el panel rápido');
+  assert.ok(readFileSync(new URL('../src/components/ui/Drawer.tsx', import.meta.url), 'utf8').includes("space-y-6${reservaBotonIA ? ` ${RESERVA_BOTON_IA}` : ''}"), 'el cuerpo del Drawer');
+  assert.ok(hub.includes('<div className={RESERVA_BOTON_IA}>'), 'el historial del panel de actividad');
+  // Las columnas de la derecha de los tres detalles (IA, Actividad y Chatter): el contenedor que se desplaza lleva la reserva, y la
+  // lista del Chatter ya no la repite (una sola, en el contenedor).
+  const DETALLES = {
+    'venta/[id]/page.tsx': 3, 'cotizacion/[id]/page.tsx': 3, 'solicitud/[id]/page.tsx': 1,
+  };
+  for (const [ruta, n] of Object.entries(DETALLES)) {
+    const f = leer(ruta);
+    const conReserva = (f.match(/className=\{`flex-1 overflow-y-auto p-[56] [^`]*\$\{RESERVA_BOTON_IA\}[^`]*`\}/g) ?? []).length;
+    assert.equal(conReserva, n, `${ruta}: ${n} paneles de la derecha con la reserva`);
+  }
+  assert.ok(leer('chatter.tsx').includes('<div className="space-y-2">'), 'ListaChatter sin su pb-24 propio');
+  // Ningún pb-24 ni pb-20 escrito a mano en Ventas: la reserva es una sola (design-system.ts).
+  const { readdirSync, statSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const raiz = new URL('../src/app/dashboard/ventas/', import.meta.url);
+  const recorrer = (dir) => readdirSync(dir).flatMap((n) => {
+    const p = join(dir, n);
+    return statSync(p).isDirectory() ? recorrer(p) : /\.tsx?$/.test(n) ? [p] : [];
+  });
+  // r1 (m30): la ruta con fileURLToPath (un checkout con espacios o tildes no rompe la guarda).
+  const { fileURLToPath } = await import('node:url');
+  const sueltos = recorrer(fileURLToPath(raiz)).filter((p) => {
+    const codigo = readFileSync(p, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '');
+    return /["'`\s]pb-(?:10|20|24)["'`\s]/.test(codigo);
+  });
+  // r1 (m2): también el pb-10 de las páginas de Ventas que terminan con él (el botón ocupa 80 px: bottom-6 + h-14).
+  assert.deepEqual(sueltos, [], 'sin pb-24, pb-20 ni pb-10 literales en las pantallas de Ventas');
+  for (const pagina of ['sincronizacion', 'proyecciones', 'validacion-odoo', 'exportar-dia', 'exportar-rango']) {
+    const f = leer(`${pagina}/page.tsx`);
+    assert.ok(f.includes('<div className={`flex flex-col gap-6 w-full p-6 ${RESERVA_BOTON_IA}`}>'), `${pagina}: el contenedor con la reserva`);
+    assert.match(f, /^import \{ RESERVA_BOTON_IA \} from '@\/lib\/design-system';/m, `${pagina}: importa el token`);
+  }
+}
+
+console.log('--- B4 T24 f2 (F52): los comentarios de Cotizaciones dicen que el chip de Total es el mismo chip, no el mismo objeto ---');
+{
+  // chipSinPrecio devuelve un objeto NUEVO en cada llamada (lo exige el caso de r2, p2): lo que comparten la tabla y la tarjeta es el
+  // chip (texto y tono).
+  const cot = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/cotizacion-client.tsx', import.meta.url), 'utf8');
+  assert.ok(!cot.includes('el mismo objeto de la tarjeta'), 'sin «el mismo objeto»');
+  assert.equal((cot.match(/el mismo chip \(texto y tono\) de la tarjeta/g) ?? []).length, 2, 'las dos líneas');
+  assert.notEqual(listas.chipSinPrecio({ estado: 'BORRADOR', total_cop: 0 }), listas.chipSinPrecio({ estado: 'BORRADOR', total_cop: 0 }));
+}
+
+console.log('--- B4 T24 (FINAL-m32): las ventanas de motivo en lote (Hub y Solicitudes) usan la regla de ModalMotivo y nombran su campo ---');
+{
+  const sinComentarios = (t) => t.replace(/\r\n/g, '\n').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const hub = sinComentarios(readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8'));
+  const sc = sinComentarios(readFileSync(new URL('../src/app/dashboard/ventas/solicitud/solicitud-client.tsx', import.meta.url), 'utf8'));
+  for (const [nombre, codigo] of [['Hub', hub], ['Solicitudes', sc]]) {
+    // El mínimo y la cuenta salen de lib/kanban.js (MINIMO_MOTIVO, motivoValido y largoDelMotivo), no de un 5 a mano.
+    assert.match(codigo, /import \{[^}]*\bMINIMO_MOTIVO\b[^}]*\} from '@\/lib\/kanban';/, `${nombre}: importa MINIMO_MOTIVO`);
+    assert.match(codigo, /import \{[^}]*\bmotivoValido\b[^}]*\} from '@\/lib\/kanban';/, `${nombre}: importa motivoValido`);
+    assert.ok(!/(?:Motivo|Razon|motivo|razon)\w*\.trim\(\)\.length\s*<\s*5|razon\.length<5/.test(codigo), `${nombre}: sin un 5 a mano`);
+    // La etiqueta nombra el textarea (useId): el campo tiene nombre accesible.
+    assert.match(codigo, /const idMotivo = (?:React\.)?useId\(\);/, `${nombre}: el id del motivo sale de useId`);
+    assert.match(codigo, /<label htmlFor=\{idMotivo\}/, `${nombre}: la etiqueta va con htmlFor`);
+    assert.match(codigo, /<textarea\s+id=\{idMotivo\}/, `${nombre}: el textarea lleva el id`);
+  }
+  // Hub: el botón y la guarda con la misma regla; la etiqueta dice el mínimo de la lib.
+  assert.match(hub, /if\(!cancelacion \|\| !motivoValido\(motivoCancelacion\) \|\| porCancelar\.length === 0\) return;/);
+  assert.match(hub, /disabled=\{!motivoValido\(motivoCancelacion\) \|\| porCancelar\.length === 0\}/);
+  assert.ok(hub.includes('Motivo (mínimo {MINIMO_MOTIVO} caracteres)'));
+  // Solicitudes: la guarda, el botón y el «llevas N» (largoDelMotivo, la cuenta de motivoValido).
+  assert.ok(sc.includes("if(cancelTarget.length===0||!motivoValido(cancelRazon)){showToast(`El motivo es obligatorio (mínimo ${MINIMO_MOTIVO} caracteres)`,'err');return;}"));
+  assert.match(sc, /disabled=\{!motivoValido\(cancelRazon\)\}/);
+  // B4 T24 f2 r1 (m34, D27): el «llevas N» lleva su id (el textarea lo nombra con aria-describedby mientras falta).
+  assert.ok(sc.includes('{!motivoValido(cancelRazon)&&<p id={idAyudaMotivo} className="text-xs text-red-500 mt-1">El motivo es obligatorio. Mínimo {MINIMO_MOTIVO} caracteres (llevas {largoDelMotivo(cancelRazon)}).</p>}'));
+  // r1 (m34): el foco de los dos campos es el de ModalMotivo (FOCOS.red, nunca un ring -200 ni outline-none a mano); el del Hub arranca
+  // en el campo (autoFocus, como ModalMotivo y Solicitudes).
+  const campo = (codigo) => codigo.slice(codigo.indexOf('<textarea', codigo.indexOf('id={idMotivo}') - 400), codigo.indexOf('/>', codigo.indexOf('id={idMotivo}')));
+  for (const [nombre, codigo] of [['Hub', hub], ['Solicitudes', sc]]) {
+    const c = campo(codigo);
+    assert.ok(c.includes('id={idMotivo}'), `${nombre}: el campo`);
+    assert.ok(c.includes('${FOCOS.red}'), `${nombre}: FOCOS.red`);
+    assert.ok(!/focus:ring-\w+-200|outline-none/.test(c), `${nombre}: sin el anillo a mano`);
+    assert.match(c, /\sautoFocus[\s>=]/, `${nombre}: arranca en el campo`);
+  }
+  assert.ok(campo(sc).includes('aria-describedby={motivoValido(cancelRazon) ? undefined : idAyudaMotivo}'), 'Solicitudes: el «llevas N» nombra el campo');
+  assert.match(sc, /const idAyudaMotivo = `\$\{idMotivo\}-ayuda`;/);
+}
+
+console.log('--- B4 T24 f2 r1 (m14, m18): Pedidos de venta y su detalle ofrecen cancelar solo a quien puede, con el rol después de montar ---');
+{
+  const leer = (r) => readFileSync(new URL(`../src/app/dashboard/ventas/${r}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const lista = leer('venta/venta-client.tsx');
+  assert.match(lista, /type AccionesFilaPedido = \{[\s\S]*?\bmover: boolean;[\s\S]*?\};/);
+  assert.match(lista, /const accionesFila = useMemo<AccionesFilaPedido>\(\(\) => \(\{\s*abrir: abrirPedido, ir: \(ruta\) => router\.push\(ruta\), crearPxp, creandoPxp, puedePxpRol, mover: accesoTablero\.mover,\s*\}\), \[abrirPedido, router, crearPxp, creandoPxp, puedePxpRol, accesoTablero\.mover\]\);/);
+  assert.ok(!/getUsuarioActual\(\)\.role/.test(lista), 'Pedidos sin getUsuarioActual().role');
+  // El detalle (venta/[id], R17): el botón y la ventana de ?accion=cancelar con puedeCancelarPedido (el estado y el rol).
+  const detalle = leer('venta/[id]/page.tsx');
+  assert.match(detalle, /const rol = useRolActual\(\);/);
+  assert.match(detalle, /const puedeCancelar = puedeCancelarPedido\(estadoActual, rol\);/);
+  assert.match(detalle, /\{showCancelModal && puedeCancelar && \(\s*<Modal cierreExterno=\{false\} title="Cancelar Pedido de Venta"/, 'la ventana del enlace ?accion=cancelar, también con el rol');
+  assert.match(detalle, /const puedePxp = puedeCrearOrdenDePago\(rol\) && pedidoAdmitePxp\(pedido\);/);
+  assert.ok(!/getUsuarioActual\(\)\.role/.test(detalle), 'el detalle sin getUsuarioActual().role');
+  // La regla, en la lib: el servidor acepta cancelar desde ese estado (transicionesPedido) y el rol es ADMIN o ASESOR.
+  const { puedeCancelarPedido } = await import('../src/lib/kanban-ventas.js');
+  const { transicionesPedido, ESTADOS_PEDIDO } = await import('../src/lib/estados-pedido.js');
+  assert.equal(typeof puedeCancelarPedido, 'function', 'puedeCancelarPedido existe');
+  for (const estado of [...Object.keys(ESTADOS_PEDIDO), 'ALGO_NUEVO']) {
+    for (const rol of ['ADMIN', 'ASESOR', 'FINANZAS', 'COMPRAS', 'BODEGA', 'CONSULTA', '', null]) {
+      const esperado = transicionesPedido(estado).includes('CANCELADO') && (rol === 'ADMIN' || rol === 'ASESOR');
+      assert.equal(puedeCancelarPedido(estado, rol), esperado, `${estado} ${rol}`);
+    }
+  }
+}
+
+console.log('--- B4 T24 f2 r1 (m18, m19 + m37, m21): Solicitudes ofrece crear, editar y la Papelera solo a quien puede, con el rol después de montar ---');
+{
+  // m21: la vista que se puede mostrar con el permiso del rol (GET /solicitudes/papelera: ADMIN y ASESOR). Sin él, una «papelera»
+  // guardada en la sesión cae a Activas, pero solo cuando el rol ya se leyó (antes, nada cambia: un ADMIN no pierde su pestaña).
+  assert.equal(typeof listas.vistaSolicitudesPermitida, 'function', 'vistaSolicitudesPermitida existe');
+  const vista = listas.vistaSolicitudesPermitida;
+  assert.equal(vista('papelera', { papelera: false, rolLeido: true }), 'activas', 'FINANZAS con la papelera guardada');
+  assert.equal(vista('papelera', { papelera: true, rolLeido: true }), 'papelera', 'ADMIN y ASESOR');
+  assert.equal(vista('papelera', { papelera: false, rolLeido: false }), 'papelera', 'mientras se lee el rol');
+  for (const v of ['activas', 'confirmadas', 'canceladas', 'soporte', null]) {
+    for (const papelera of [true, false]) assert.equal(vista(v, { papelera, rolLeido: true }), v, `${v} ${papelera}`);
+  }
+  const leer = (r) => readFileSync(new URL(`../src/app/dashboard/ventas/solicitud/${r}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const lista = leer('solicitud-client.tsx');
+  // La pestaña: solo con `papelera` (ADMIN y ASESOR, y con la lista lista); el esqueleto (rol sin leer) no la pinta.
+  assert.match(lista, /export function pestanasDeLaLista\(conteos: ConteosSC \| null, \{ papelera = false \}: \{ papelera\?: boolean \} = \{\}\): PestanaTabla\[\] \{/);
+  assert.match(lista, /\.\.\.\(papelera \? \[\{ id: 'papelera', etiqueta: 'Papelera', conteo: null, sinConteo: true \}\] : \[\]\),/);
+  assert.match(lista, /const pestanas = pestanasDeLaLista\(listado\.conteos as ConteosSC \| null, \{ papelera: accesoTablero\.mover && listo \}\);/);
+  assert.ok(leer('CargandoSolicitudes.tsx').includes('const PESTANAS_CARGANDO = pestanasDeLaLista(null);'), 'el esqueleto, sin la Papelera');
+  // El efecto no pide /papelera sin permiso, y la vista guardada cae a Activas con la regla de la lib.
+  assert.match(lista, /if \(!enPapelera \|\| !accesoTablero\.mover\) return;\s*const control = new AbortController\(\);\s*apiFetch\('\/ventas\/solicitudes\/papelera'/);
+  assert.match(lista, /\}, \[enPapelera, accesoTablero\.mover, vueltaPapelera, avisar\]\);/);
+  assert.match(lista, /const vistaPermitida = vistaSolicitudesPermitida\(estado\.vista, \{ papelera: accesoTablero\.mover, rolLeido: accesoTablero\.listo \}\);/);
+  assert.match(lista, /useEffect\(\(\) => \{\s*if \(listo && vistaPermitida && vistaPermitida !== estado\.vista\) despachar\(accionPestana\(estado, vistaPermitida, opcionesEstadosSolicitudes\)\);\s*\}, \[listo, vistaPermitida, estado, despachar\]\);/);
+  // m19 + m37: «Nueva Solicitud» (POST /solicitudes) y «Editar» (PATCH): ADMIN y ASESOR. Sin permiso, sin el botón ni el formulario
+  // (tampoco con ?new=1), y el ⋯ queda en «Ver Detalle».
+  assert.match(lista, /onNueva\?: \(\) => void/);
+  assert.match(lista, /\{onNueva && <Button onClick=\{onNueva\} color="indigo" icon=\{Plus\}>Nueva Solicitud<\/Button>\}/);
+  assert.match(lista, /onNueva=\{accesoTablero\.mover \? \(\) => setShowCreate\(true\) : undefined\}/);
+  assert.match(lista, /\{showCreate && accesoTablero\.mover && \(/);
+  assert.match(lista, /\{ etiqueta: 'Editar', icono: Edit2, onClick: \(\) => acciones\?\.abrir\(sc\), oculto: !acciones\?\.mover \},/);
+  // m18: el rol, de useRolActual (después de montar), también en las celdas (por su contexto): «Eliminar» y «Vaciar las vencidas».
+  assert.ok(!/getUsuarioActual\(\)\.role/.test(lista), 'sin getUsuarioActual().role');
+  assert.match(lista, /type AccionesFilaSC = \{[\s\S]*?\bmover: boolean;[\s\S]*?\brol: string;[\s\S]*?\};/);
+  assert.match(lista, /mover: accesoTablero\.mover,\s*rol,\s*\}\), \[accesoTablero\.mover, rol\]\);/);
+  assert.match(lista, /const manejadores = useRef<Omit<AccionesFilaSC, 'mover' \| 'rol'> \| null>\(null\);/);
+  assert.match(lista, /\{esAdministrador\(acciones\?\.rol\)&&enPapelera\.puedeEliminar&&\(/);
+  assert.match(lista, /\{esAdministrador\(rol\)&&<button onClick=\{vaciarVencidas\}/);
+}
+
+console.log('--- B4 T24 f2 r1 (m22): «Actualizar» de Pedidos gira con la regla de useEstadoKpi (no la primera carga), como en BASE ---');
+{
+  const lista = readFileSync(new URL('../src/app/dashboard/ventas/venta/venta-client.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(lista, /const actualizando = listado\.recargando \|\| flujo\.cargando \|\| estadoKpis === 'actualizando';/);
+  // La regla: 'actualizando' es una carga DESPUÉS de una que ya pasó (buena o con error); la primera es 'cargando'.
+  const { estadoKpi, avanzarCarga } = await import('../src/lib/kpis.js');
+  let marca = { vioCarga: false, yaCargo: false };
+  marca = avanzarCarga(marca, true);
+  assert.equal(estadoKpi({ loading: true, yaCargo: marca.yaCargo }), 'cargando', 'la primera carga no gira «Actualizar» por las tarjetas');
+  marca = avanzarCarga(marca, false);
+  assert.equal(estadoKpi({ loading: false, yaCargo: marca.yaCargo, error: new Error('x') }), 'error', 'un /ventas/stats fallido');
+  marca = avanzarCarga(marca, true);
+  assert.equal(estadoKpi({ loading: true, yaCargo: marca.yaCargo }), 'actualizando', 'la recarga después de un fallo sí gira (como BASE)');
 }
 
 console.log('OK test_listas_ventas.mjs');

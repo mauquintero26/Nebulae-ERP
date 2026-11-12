@@ -94,13 +94,14 @@ type ParteTamano = { tamano?: unknown };
 type Local = { id: string; usuario: number | null; sesion: SesionTabla };
 
 /**
- * [estado, despachar, listo] de la pantalla `id` (el mismo id de usePreferenciasTabla y de useTableroKanban). Ver
- * arriba.
+ * [estado, despachar, listo, modoListo] de la pantalla `id` (el mismo id de usePreferenciasTabla y de useTableroKanban). Ver
+ * arriba. B4 T24 (F38): modoListo (aditivo) es true solo cuando el modo guardado (vista:<id>) se leyó de verdad; `listo` también
+ * llega por el tope de espera. Quien consume un enlace que depende del modo (?tab= de Pedidos de venta) espera modoListo.
  */
 export function useEstadoTabla(
   id: string,
   inicial: Partial<EstadoTabla> = {},
-): [EstadoTabla, DespacharTabla, boolean] {
+): [EstadoTabla, DespacharTabla, boolean, boolean] {
   const [inicialFijo] = useState(() => estadoTablaInicial(inicial));
 
   // La sesión guardada (al montar) y lo que el usuario cambió desde entonces (una sola actualización por acción), que
@@ -162,5 +163,5 @@ export function useEstadoTabla(
     return esperarPreferencias({ alVencer: () => setVencidoPara(usuario) });
   }, [usuario, vinculosListos]);
 
-  return [estado, despachar, listoConTope(vinculosListos, vencidoPara === usuario)];
+  return [estado, despachar, listoConTope(vinculosListos, vencidoPara === usuario), modoListo];
 }

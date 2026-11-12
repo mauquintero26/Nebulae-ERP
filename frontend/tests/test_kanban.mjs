@@ -262,6 +262,19 @@ console.log('--- TEST 11 (T4A): motivoValido (ModalMotivo: 5 caracteres o más, 
   for (const otro of [null, undefined, 12345, {}, ['abcde']]) assert.equal(motivoValido(otro), false, String(otro));
   assert.equal(motivoValido('abc', 3), true, 'el mínimo se puede cambiar');
   assert.equal(motivoValido('ab', 3), false);
+  // B4 T24 (FINAL-m32): largoDelMotivo, la cuenta que usa motivoValido y el «llevas N» de las ventanas de motivo en lote
+  // (Hub y Solicitudes): caracteres sin los espacios del borde; lo que no es texto da 0.
+  {
+    const { largoDelMotivo } = await import('../src/lib/kanban.js');
+    assert.equal(typeof largoDelMotivo, 'function', 'largoDelMotivo existe');
+    assert.equal(largoDelMotivo('  abcd  '), 4);
+    assert.equal(largoDelMotivo('😀😀😀😀'), 4, 'caracteres, no unidades UTF-16');
+    assert.equal(largoDelMotivo('a b c'), 5);
+    for (const otro of [null, undefined, 12345, {}, ['abcde']]) assert.equal(largoDelMotivo(otro), 0, String(otro));
+    for (const t of ['', 'abcd', 'abcde', ' 😀😀😀😀😀 ', '\n x \t']) {
+      assert.equal(motivoValido(t), largoDelMotivo(t) >= MINIMO_MOTIVO, `misma regla: ${JSON.stringify(t)}`);
+    }
+  }
   // T4A r1 (punto 5): si el servidor responde con error, el foco vuelve al campo (habilitado otra vez) y lo escrito
   // se conserva. Sin DOM en node: se fija sobre el fuente de ModalMotivo.tsx.
   const fuente = readFileSync(new URL('../src/components/ui/ModalMotivo.tsx', import.meta.url), 'utf8');
@@ -636,7 +649,7 @@ console.log('--- TEST 14 (T4B r1): ninguna tarjeta perdida, «Ver más» sin sal
     /for \(const \{ control \} of Object\.values\(vivos\)\) control\.abort\(\);[\s\S]{0,500}?lanzadas\.current = \{\};\s*ultimasDeps\.current = null;/);
   assert.match(fuente, /columnasPorLanzar\(/);
   // Punto 5: el alto se recalcula con el aviso y el banner, y con el contenedor desplazable y el propio tablero.
-  assert.match(fuente, /useLayoutEffect\(\(\) => \{\s*ajustarAlto\(\);\s*\}, \[aviso, soloVer, ajustarAlto\]\);/);
+  assert.match(fuente, /useLayoutEffect\(\(\) => \{\s*ajustarAlto\(\);\s*\}, \[aviso, soloVer, ajustarAlto, tablero\.listo\]\);/); // r1 (m13, D27)
   assert.match(fuente, /observador\.observe\(desplazable\);/);
   assert.match(fuente, /observador\.observe\(envoltura\.current\);/);
   assert.match(fuente, /esDesplazable\(/);
@@ -1023,7 +1036,8 @@ console.log('--- TEST 15 (T4B r2): una tarjeta sigue pendiente hasta la recarga 
   assert.match(fuente, /opcionesMoverA\(origen, columnas, destinos, \{ bloqueo \}\)/);
   // r3 punto 3: el tope se arma en cerrar (con la espera de la recarga), se sincroniza con los pendientes y se limpia al
   // desmontar; el PATCH no lo lleva.
-  assert.match(fuente, /if \(Object\.keys\(subidas\)\.length\) obtenerTopes\(\)\.armar\(n\);/);
+  // B4 T24 (F12, D27): además, solo con el tablero montado.
+  assert.match(fuente, /if \(Object\.keys\(subidas\)\.length && montado\.current\) obtenerTopes\(\)\.armar\(n\);/);
   assert.match(fuente, /topes\.current\?\.sincronizar\(nueva\);/);
   assert.match(fuente, /topes\.current\?\.limpiar\(\);/);
   assert.match(fuente, /const \{ lista, faltan \} = vencerEspera\(pendientesRef\.current, n\);/);
@@ -1054,6 +1068,143 @@ console.log('--- TEST 16 (B4 T14 r1, m4 y m14): estadosDeColumnaLista vive en ka
   const sinComentarios = (ruta) => readFileSync(new URL(ruta, import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
   assert.ok(!/function estadosDeColumna/.test(sinComentarios('../src/lib/kanban-ventas.js')), 'kanban-ventas.js sin su copia');
   assert.ok(!/function estadosDeColumna/.test(sinComentarios('../src/lib/estados-compras.js')), 'estados-compras.js sin su copia');
+}
+
+console.log('--- TEST T24 (B4 T24, paquete f1): el tablero común ---');
+{
+  const fuenteKanban = readFileSync(new URL('../src/components/ui/Kanban.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const codigoKanban = fuenteKanban.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // F106: una columna con un 403 no ofrece «Reintentar» (la regla es ofreceReintentar de lib/avisos.js, con sus casos en test_avisos.mjs).
+  assert.match(codigoKanban, /import \{[^}]*\bofreceReintentar\b[^}]*\} from '@\/lib\/avisos';/);
+  assert.match(codigoKanban, /\{ofreceReintentar\(d\.error\) && \(\s*<button\s+type="button"\s+onClick=\{\(\) => tablero\.recargar\(\[c\.clave\]\)\}/);
+  // r1 (m6): con un 403, «Ver más» no dice «Reintenta esta columna…» (ya no hay botón para reintentar).
+  assert.match(codigoKanban, /title=\{ocupada \? 'Espera a que termine el cambio de una tarjeta de esta columna\.' : d\.cargaFallida && ofreceReintentar\(d\.error\) \? 'Reintenta esta columna para ver más\.' : undefined\}/);
+}
+
+console.log('--- TEST T24-F14 (B4 T24, F14): el menú se arma al abrirlo y el modo cliente se memoriza ---');
+{
+  const fuente = readFileSync(new URL('../src/components/ui/Kanban.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const menuFila = readFileSync(new URL('../src/components/ui/MenuFila.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // MenuFila (aditivo): items puede ser una función que se llama al abrir (mapaDestinos solo para el menú abierto).
+  assert.match(menuFila, /items: ItemMenuFila\[\] \| \(\(\) => ItemMenuFila\[\]\);/);
+  assert.match(menuFila, /const perezoso = typeof items === 'function';\s*const visibles = \(perezoso \? \(abierto \? items\(\) : \[\]\) : items\)\.filter\(\(item\) => !item\.oculto\);/);
+  assert.match(menuFila, /if \(!perezoso && !visibles\.length\) return null;/);
+  // El tablero: el menú de cada tarjeta se arma al abrirlo, con el menuDe de ese render (las tarjetas se repintan con el tablero).
+  assert.match(fuente, /const menu = \(\) => menuDe\(item, origen\);/);
+  assert.match(fuente, /const menuDe = \(item: T, origen: string\): ItemMenuFila\[\] => \{\s*const pendiente = tablero\.pendientes\.has\(String\(idTarjeta\(item\)\)\);/);
+  assert.ok(!/menuDe\(item, origen, pendiente\)/.test(fuente), 'ya no se arma en cada render');
+  // El modo cliente: tableroCliente memorizado (no reagrupa hasta 500 leads en cada render).
+  assert.match(fuente, /const baseCliente = useMemo\(\s*\(\) => \(modo === 'cliente'\s*\? tableroCliente\(items, columnas, \{ columnaDe, esAtrasado, fechaMovimiento, porColumna, cortes: cortesVigentes, totales \}\)\s*: null\),/);
+}
+
+console.log('--- TEST T24-b (B4 T24: F11, F12, F13, F15, F16, F17, F19, F20, F21 y F22): el tablero común ---');
+{
+  const fuenteKanban = readFileSync(new URL('../src/components/ui/Kanban.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const c = fuenteKanban.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+  // F16: con una sola columna (el filtro de estado de la regla de montaje 6) no se pliega, aunque sea cerrada o lo guardado diga
+  // que sí; lo guardado no se toca. Con dos o más, como siempre.
+  const una = definirColumnas([{ clave: 'cancelado', titulo: 'Cancelado', estados: ['CANCELADO'], cerrada: true }]);
+  assert.deepEqual(kanban.resolverPlegadas(null, una), [], 'una sola columna cerrada: abierta');
+  assert.deepEqual(kanban.resolverPlegadas(['cancelado'], una), [], 'ni con lo guardado');
+  assert.deepEqual(kanban.resolverPlegadas(null, definirColumnas(COLS)), ['hecho'], 'con tres, las cerradas, como siempre');
+  // ni se ofrece «Plegar» con una sola columna.
+  assert.match(c, /\{columnas\.length > 1 && \(\s*<button\s+type="button"\s+onClick=\{\(\) => plegarColumna\(c\.clave, true\)\}/);
+
+  // F15: tras un movimiento (o una recarga), la columna vuelve con lo que tenía cargado (Ver más), hasta 200 (el `le` del servidor);
+  // nunca menos que porColumna.
+  assert.equal(kanban.LIMITE_RECARGA_COLUMNA, 200);
+  assert.equal(kanban.limiteDeRecarga(25, 75), 75, 'abierta a 75: vuelve con 75');
+  assert.equal(kanban.limiteDeRecarga(25, 10), 25, 'con menos: porColumna');
+  assert.equal(kanban.limiteDeRecarga(50, 0), 50);
+  assert.equal(kanban.limiteDeRecarga(25, 260), 200, 'tope 200');
+  assert.equal(kanban.limiteDeRecarga(25, NaN), 25);
+  assert.equal(kanban.limiteDeRecarga(25, undefined), 25);
+  assert.equal(kanban.limiteDeRecarga(250, 10), 200, 'porColumna tampoco pasa de 200');
+  // El hook lo usa al subir la versión de una columna, y la consulta de la columna lo toma (sin tocar la de «Ver más»).
+  assert.match(c, /limiteDeRecarga\(ahora\.porColumna, tableroRef\.current\[clave\]\?\.items\.length\)/);
+  assert.match(c, /consultaColumna\(c, \{ plegada: plegadas\.includes\(c\.clave\), porColumna: limitesVigentes\[c\.clave\] \?\? porColumna, ordenDe \}\)/);
+  assert.match(c, /consultaColumna\(columna, \{ porColumna: ahora\.porColumna, ordenDe: ahora\.ordenDe, offset: datos\.items\.length \}\)/, '«Ver más» sigue igual');
+
+  // F11: una columna que se ocultó con una espera suelta guarda la versión mínima que tiene que pintar; mientras lo que pinta es de una
+  // versión menor (la copia vieja de antes de ocultarse), sus tarjetas no se mueven (bloqueoDeColumna con su motivo).
+  {
+    const pendientes = [{ n: 1, id: 'B', origen: 'X', destino: 'Y', espera: { X: 3, Y: 2 } }, { n: 2, id: 'C', origen: 'Z', destino: 'W', espera: null }];
+    const m1 = kanban.minimasTrasSoltar({}, pendientes, ['Y', 'Z', 'W']);
+    assert.deepEqual(m1, { X: 3 }, 'X se ocultó esperando la versión 3');
+    assert.equal(kanban.minimasTrasSoltar(m1, pendientes, ['X', 'Y', 'Z', 'W']), m1, 'todas visibles: el mismo objeto');
+    assert.deepEqual(kanban.minimasTrasSoltar({ X: 5 }, pendientes, []), { X: 5, Y: 2 }, 'nunca baja una mínima (y Y también se ocultó)');
+    assert.deepEqual(kanban.minimasTrasSoltar({}, [{ n: 3, id: 'D', origen: 'X', destino: 'Y', espera: null }], []), {}, 'un PATCH en camino no cuenta');
+    assert.equal(kanban.esCopiaVieja(m1, 'X', 2), true, 'pinta la versión 2: copia vieja');
+    assert.equal(kanban.esCopiaVieja(m1, 'X', 3), false, 'llegó la 3');
+    assert.equal(kanban.esCopiaVieja(m1, 'X', undefined), true, 'sin versión pintada con una mínima: vieja');
+    assert.equal(kanban.esCopiaVieja(m1, 'Y', 0), false, 'sin mínima: no');
+    assert.equal(kanban.TEXTO_ESPERA_COLUMNA, 'Espera a que se actualice esta columna para mover sus tarjetas.');
+    assert.equal(kanban.bloqueoDeColumna({ copiaVieja: true }), kanban.TEXTO_ESPERA_COLUMNA);
+    assert.equal(kanban.bloqueoDeColumna({ cargaFallida: true, copiaVieja: true }), kanban.TEXTO_REINTENTA_COLUMNA, 'un error manda');
+    assert.equal(kanban.bloqueoDeColumna({ copiaVieja: false }), null);
+    // El hook: guarda las mínimas al soltar las esperas ocultas, la versión de lo que llega y la marca de cada columna.
+    assert.match(c, /actualizarMinimas\(\(m\) => minimasTrasSoltar\(m, pendientesRef\.current, visibles\)\);\s*actualizarPendientes\(\(l\) => soltarEsperasOcultas\(l, visibles\)\);/);
+    assert.match(c, /: \{ firma: firma \?\? undefined, version: version \?\? undefined, resumen: pagina\.resumen, cargandoMas: false, errorMas: null \};/);
+    assert.match(c, /copiaVieja: esCopiaVieja\(minimas, c\.clave, base\.version\),/);
+  }
+
+  // F12: si el PATCH responde con el tablero desmontado, cerrar no arma un tope que nadie limpia.
+  assert.match(c, /const montado = useRef\(false\);/);
+  assert.match(c, /montado\.current = true;[\s\S]{0,400}return \(\) => \{\s*montado\.current = false;/);
+  assert.match(c, /if \(Object\.keys\(subidas\)\.length && montado\.current\) obtenerTopes\(\)\.armar\(n\);/);
+
+  // F13: soltar con el origen bloqueado (su recarga falló, o es una copia vieja) avisa y anuncia el motivo, como 'bloqueado'.
+  assert.match(c, /const bloqueoOrigen = bloqueoDeColumna\(tablero\.datos\[origen\]\);\s*if \(bloqueoOrigen\) \{\s*avisar\(bloqueoOrigen, \{ tono: 'error' \}\);\s*anunciar\(bloqueoOrigen\);\s*return;\s*\}/);
+
+  // F17: en 'actualizando' la cabecera sigue con «25 de 80» atenuado (sin pasar a Contador y volver: el parpadeo).
+  assert.match(c, /const contador = estado === 'listo' \|\| estado === 'actualizando'\s*\? <span className=\{`tabular-nums \$\{estado === 'actualizando' \? 'opacity-60' : ''\}`\}>\{textoTotalColumna\(d\.items\.length, d\.total\)\}<\/span>\s*: <Contador valor=\{null\} estado=\{estado\} \/>;/);
+
+  // F18: hasta leer las plegadas guardadas (o el tope de ESPERA_PREFERENCIAS_MS, como la tabla: listoConTope) no se pide nada y se
+  // pintan columnas con esqueleto (antes salían con las plegadas por defecto y se volvían a pedir al llegar lo guardado).
+  // r1 (m42): el tope es esperarPreferencias de lib/tabla.js (el mismo de useEstadoTabla y PanelAnalisis), no un setTimeout a mano.
+  assert.match(c, /import \{ esperarPreferencias, listoConTope \} from '@\/lib\/tabla';/);
+  assert.match(c, /const listoTablero = listoConTope\(listo, vencioEspera\);/);
+  assert.match(c, /useEffect\(\(\) => \{\s*if \(listo\) return undefined;\s*return esperarPreferencias\(\{ alVencer: \(\) => setVencioEspera\(true\) \}\);\s*\}, \[listo\]\);/);
+  assert.ok(!/window\.setTimeout\(\(\) => setVencioEspera/.test(c), 'sin el setTimeout a mano');
+  assert.match(c, /if \(modo !== 'servidor' \|\| !activo \|\| !listoTablero\) \{/);
+  assert.match(c, /plegadas, listo: listoTablero, idDe, pendientes,/);
+  assert.match(c, /if \(!tablero\.listo\) \{\s*return \(\s*<div aria-busy="true"/);
+  // r1 (m13): el esqueleto sale antes del `contenedor`; al pasar a listo, los dos efectos del alto vuelven a correr (tablero.listo en
+  // sus dependencias): si no, el tablero quedaba sin alto, sin oyente de resize y sin ResizeObserver hasta volver a montarse.
+  assert.match(c, /if \(envoltura\.current\) observador\.observe\(envoltura\.current\);[\s\S]{0,300}\}, \[ajustarAlto, tablero\.listo\]\);/);
+  assert.match(c, /useLayoutEffect\(\(\) => \{\s*ajustarAlto\(\);\s*\}, \[aviso, soloVer, ajustarAlto, tablero\.listo\]\);/);
+
+  // F19: activo y porColumna son obligatorios (tsc se los exige a las pantallas). r1 (m38): sin los valores por defecto muertos.
+  assert.match(fuenteKanban, /\n {2}activo: boolean;\n/);
+  assert.match(fuenteKanban, /\n {2}porColumna: number;\n/);
+  assert.match(c, /pantalla, modo, columnas: crudas, idDe = idPorDefecto, activo, porColumna, cargar, dependencias,/);
+
+  // F20: una columna bloqueada atenúa solo su cuerpo (la cabecera, el candado y el motivo se leen); «Ver más» en -700.
+  assert.ok(!/opacity-50'/.test(c.slice(c.indexOf('const clasesMarca'), c.indexOf('if (tablero.plegadas.includes(c.clave))'))), 'la sección no se atenúa entera');
+  assert.match(c, /const atenuada = marca === 'bloqueado' \|\| marca === 'neutro';/);
+  assert.match(c, /\$\{atenuada \? 'opacity-50' : ''\}/);
+  assert.match(c, /const TEXTO_VER_MAS: Record<AccentColor, string> = \{/);
+  assert.ok(!/ACCENTS\[color\]\.text/.test(c), '«Ver más» ya no usa el -600 del acento');
+  // El mapa TEXTO_VER_MAS mismo (otro mapa del archivo también tiene tonos -700): un tono por acento, todos -700.
+  const verMas = /const TEXTO_VER_MAS: Record<AccentColor, string> = \{([\s\S]*?)\n\};/.exec(fuenteKanban)?.[1] ?? '';
+  const tonos = Object.fromEntries([...verMas.matchAll(/^\s+(\w+): '([^']*)',$/gm)].map((m) => [m[1], m[2]]));
+  assert.deepEqual(Object.keys(tonos), ['amber', 'rose', 'orange', 'indigo', 'purple', 'emerald', 'blue', 'teal', 'red']);
+  for (const [acento, clase] of Object.entries(tonos)) assert.equal(clase, `text-${acento}-700`, `Ver más ${acento}`);
+
+  // F21: el anuncio usa nombreDe(item) si la pantalla lo da (aditivo; renderTarjeta no expone un título).
+  assert.match(fuenteKanban, /nombreDe\?: \(item: T\) => string;/);
+  assert.match(c, /const nombreTarjeta = \(item: T\) => nombreDe\?\.\(item\) \|\| datosDe\(item\)\.numero;/);
+  assert.match(c, /anunciar\(textoMovimiento\(nombreTarjeta\(item\), tituloDe\(destino\)\)\);/);
+
+  // F22: el role=list de la columna solo tiene sus tarjetas (role=listitem); el error, la espera, el vacío y «Ver más» van fuera.
+  const cuerpo = c.slice(c.indexOf('ref={refCuerpo(c.clave)}'), c.indexOf('{pieColumna &&'));
+  const lista = cuerpo.slice(cuerpo.indexOf('role="list"'), cuerpo.indexOf('</div>', cuerpo.indexOf('role="list"')));
+  assert.ok(lista.includes('pintarTarjeta(item, c.clave)'), 'las tarjetas, en la lista');
+  for (const fuera of ['No se pudo cargar esta columna.', 'esqueleto', '{vacio}', 'Ver más', 'd.errorMas']) {
+    assert.ok(!lista.includes(fuera), `fuera de la lista: ${fuera}`);
+    assert.ok(cuerpo.includes(fuera), `sigue en la columna: ${fuera}`);
+  }
 }
 
 console.log('✓ lib/kanban.js: columnas, reparto, orden, páginas, movimiento, reglas, destinos, arrastre y motivo.');

@@ -13,7 +13,7 @@ import {
 // la recepción y el alta conservan lo de B1 a B3.
 import {
   SubNav, PageHeader, Button, useAvisos, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila, ModalMotivo,
-  TableroKanban, useTableroKanban,
+  TableroKanban, EsqueletoTablero, useTableroKanban,
 } from '@/components/ui';
 import type { ItemMenuFila } from '@/components/ui';
 import {
@@ -24,23 +24,24 @@ import { BannerFlujo, PasosFlujo, useResumenFlujo } from '@/components/flujo';
 import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
 import { COMP_NAV } from '../comp-nav';
 
+import { FOCOS } from '@/lib/design-system';
+import { accesoCompras } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 import { apiFetch as _apiFetch } from '@/lib/api';
 import type { OpcionesApiFetch } from '@/lib/api';
 import {
-  accionModo, accionPestana, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta,
+  accionModo, accionPestana, accionVistaEnLista, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta,
+  ordenEsAtencion, rutaSinParametro, textoOrdenHub,
 } from '@/lib/tabla';
 import { PERIODO_KPI, tarjetasPedidosCompra } from '@/lib/kpis';
 // T15 r1 (m7): la etiqueta del estado del pedido de venta (el chip del alta), nunca el código.
 import { infoEstadoPedido } from '@/lib/estados-pedido';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
-// Piezas genéricas que nacieron en las libs de Ventas (T7 y T10), como en el Hub de Compras (T14): el chip del orden, la
-// pestaña desde Kanban y la ruta sin un parámetro.
-import { ordenEsAtencion, textoOrdenHub } from '@/lib/hub-ventas';
-import { accionVistaEnLista, rutaSinParametro } from '@/lib/listas-ventas';
 import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, cancelarPecsEnSerie, consultaColumnaPec,
   despuesDeCancelarPec, etapaPec, grupoMesPec, infoEstadoPec, opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec,
-  repartirCancelacionPec, resumenCancelacionPec, tarjetaPedidoCompra, textoVacioPec, tituloMesPec, transicionesPec,
+  repartirCancelacionPec, resumenCancelacionPec, tarjetaPedidoCompra, textoVacioPec, textoVencidosPec, tituloMesPec,
+  transicionesPec,
 } from '@/lib/estados-compras';
 import {
   ENLACE_VER_ANALISIS_COMPRAS, TEXTO_SEGUIMIENTO_CERRADO, accionSemaforoCompras, avisoTarjetaEtapa, avisosFlujoCompras,
@@ -230,7 +231,9 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:Avis
   };
 
   return (
-    <div className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+    // B4 T24 f2 r2 (m4): esta ventana (z-[95]) va ENCIMA de confirmar() (z-[60]) que abre «Eliminar casillero»: data-superficie, para que
+    // la capa de la confirmación no le quite el foco.
+    <div data-superficie="ventana" className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
       {showNewCasillero && (
         <NewCasilleroModal onClose={()=>setShowNewCasillero(false)} onSave={()=>{setShowNewCasillero(false);loadCasilleros();}}/>
       )}
@@ -336,7 +339,8 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:Avis
    este archivo usaban nombres de etapa distintos, asi que el PATCH de
    las etapas 2/3/4 nunca encontraba coincidencia y no hacia nada).
    ================================================================ */
-function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; onToast:AvisoPantalla}) {
+// r1 (m2, m7): puedeEditar es accesoCompras.tracking (PATCH /pedidos/{id}/tracking: ADMIN y COMPRAS); sin él, las tarjetas solo se ven.
+function TrackingPanel({pec, onUpdate, onToast, puedeEditar}: {pec:any; onUpdate:()=>void; onToast:AvisoPantalla; puedeEditar: boolean}) {
   const [updating, setUpdating] = useState<string|null>(null);
   const [editStage, setEditStage] = useState<string|null>(null);
   const [guia, setGuia] = useState('');
@@ -430,7 +434,7 @@ function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; on
       {stages.map((sd) => {
         const status = sd.status || 'PENDIENTE';
         const history: any[] = sd.tracking_history || [];
-        const isEditing = !cerrado && editStage === sd.stage;
+        const isEditing = !cerrado && puedeEditar && editStage === sd.stage;
         // T15 r1 (m2, m6): UNA regla por tarjeta (avisoTarjetaEtapa): el aviso del servidor si lo hay (rojo si va
         // atrasada, neutro si no) o, si no, los días que faltan para la ETA (el día de calendario de Colombia).
         const aviso = cerrado ? null : avisoTarjetaEtapa(sd);
@@ -444,7 +448,7 @@ function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; on
               <div className="flex items-center gap-2">
                 {/* RP28: el estado de la etapa en palabras (Pendiente, En curso, Completada, Cancelada), nunca el código. */}
                 <span className={'text-xs font-black px-2 py-1 rounded-full ' + (status==='COMPLETADO'?'bg-emerald-100 text-emerald-700':status==='EN_PROCESO'?'bg-blue-100 text-blue-700':'bg-gray-100 text-gray-600')}>{etiquetaEtapaTracking(status)}</span>
-                {!cerrado && (
+                {!cerrado && puedeEditar && (
                   <button onClick={()=>openEdit(sd)} aria-label={`Editar la etapa ${sd.label || ''}`} className="p-1.5 hover:bg-white rounded-lg border border-gray-200 text-gray-500"><Edit2 size={12}/></button>
                 )}
               </div>
@@ -594,7 +598,9 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
   // B4 T15 (KANBAN-compras punto 6; R9, C15c): el botón Estado solo ofrece lo que acepta update_pec (transicionesPec):
   // emitir un borrador (PATCH) o cancelar, que abre el ModalMotivo de la página con su motivo. En tránsito y Recibido
   // los ponen el seguimiento y la recepción. Si el servidor dice que no, se ve su mensaje.
-  const transiciones = transicionesPec(detail?.estado);
+  // B4 T24 (FINAL-m10): «Estado», «Cancelar PEC» y «Eliminar definitivamente» solo con el rol del PATCH y el DELETE (accesoCompras).
+  const accesoPec = accesoCompras(useRolActual());
+  const transiciones = accesoPec.cambiarPec ? transicionesPec(detail?.estado) : [];
   const changeEstado = async (est: string) => {
     setEditEstado(false);
     if (est === 'CANCELADO') { onCancelar(detail ?? pec); return; }
@@ -632,7 +638,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
       setInfoEdit(false);
     } catch(e){
       onToast(e,'error');
-      // T15 r1 (m9): si el PEC cambió en otro lado y recargarTrasError lo indica (un 400, un 409 o sin respuesta; un 404 no recarga), se vuelve a pedir lo que se muestra.
+      // T15 r1 (m9): si el PEC cambió en otro lado, recargarTrasError (400, 409, 422 o sin respuesta; 404 o 500, no) recarga lo que se ve.
       if (recargarTrasError(e)) { onUpdate(); loadFull(); }
     }
     setSavingInfo(false);
@@ -686,7 +692,10 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
             {transiciones.length > 0 && (
               <button onClick={()=>setEditEstado(x=>!x)} aria-expanded={editEstado} className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-50 border border-purple-200 text-purple-700 rounded-xl text-xs font-bold hover:bg-purple-100"><Edit2 size={12}/> Estado</button>
             )}
-            <button onClick={()=>setShowConfig(true)} title="Configurar etapas, alertas y casilleros" aria-label="Configurar etapas, alertas y casilleros" className="p-2 hover:bg-gray-100 rounded-xl text-gray-500"><Settings2 size={16}/></button>
+            {/* r1 (m2, m7): PUT /compras/tracking-config/{tipo} es de ADMIN y COMPRAS (el GET, de todos). */}
+            {accesoPec.cambiarPec && (
+              <button onClick={()=>setShowConfig(true)} title="Configurar etapas, alertas y casilleros" aria-label="Configurar etapas, alertas y casilleros" className="p-2 hover:bg-gray-100 rounded-xl text-gray-500"><Settings2 size={16}/></button>
+            )}
             <div className="relative">
               <button onClick={()=>setMenuOpen(m=>!m)} aria-label={`Acciones de ${detail?.numero || pec.numero}`} aria-expanded={menuOpen} className="p-2 hover:bg-gray-100 rounded-xl text-gray-500"><MoreHorizontal size={18}/></button>
               {menuOpen && (
@@ -699,7 +708,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
                       <button onClick={()=>{cancelPec();setMenuOpen(false);}} className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"><Trash2 size={13}/> Cancelar PEC</button>
                     </>
                   )}
-                  {etapaPec(detail?.estado) === 'cancelado' && (
+                  {accesoPec.cambiarPec && etapaPec(detail?.estado) === 'cancelado' && (
                     <>
                       <div className="border-t border-gray-100 my-1"/>
                       <button onClick={()=>{deletePec();setMenuOpen(false);}} className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"><Trash2 size={13}/> Eliminar definitivamente</button>
@@ -749,10 +758,13 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
                 </p>
               </div>
             </div>
-            <button onClick={goToRecepcion} disabled={goingToRecepcion} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm hover:bg-emerald-700 transition-colors shrink-0 disabled:opacity-50 flex items-center gap-2">
-              {goingToRecepcion && <RefreshCw size={12} className="animate-spin"/>}
-              {detail?.recepciones?.length > 0 ? 'Ver recepción' : 'Hacer recepción'}
-            </button>
+            {/* r1 (m7): «Hacer recepción» la crea (POST /pedidos/{id}/recepcionar: ADMIN y COMPRAS); «Ver recepción» solo navega. */}
+            {(detail?.recepciones?.length > 0 || accesoPec.cambiarPec) && (
+              <button onClick={goToRecepcion} disabled={goingToRecepcion} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm hover:bg-emerald-700 transition-colors shrink-0 disabled:opacity-50 flex items-center gap-2">
+                {goingToRecepcion && <RefreshCw size={12} className="animate-spin"/>}
+                {detail?.recepciones?.length > 0 ? 'Ver recepción' : 'Hacer recepción'}
+              </button>
+            )}
           </div>
         )}
 
@@ -808,7 +820,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
             {loading && <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600"/></div>}
 
             {!loading && tab === 'tracking' && (
-              <TrackingPanel pec={detail||pec} onUpdate={()=>{loadFull();onUpdate();}} onToast={onToast}/>
+              <TrackingPanel pec={detail||pec} puedeEditar={accesoPec.tracking} onUpdate={()=>{loadFull();onUpdate();}} onToast={onToast}/>
             )}
 
             {!loading && tab === 'productos' && (
@@ -864,9 +876,10 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
                 <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm">
                   <div className="flex items-center justify-between mb-4">
                     <p className="text-xs font-black text-gray-400 uppercase">Información del PEC</p>
-                    {!infoEdit ? (
+                    {/* r1 (m7): «Editar» guarda con PATCH /pedidos/{id} (ADMIN y COMPRAS). */}
+                    {!infoEdit ? (accesoPec.cambiarPec && (
                       <button onClick={openInfoEdit} className="flex items-center gap-1 text-xs font-bold text-purple-600 hover:text-purple-800"><Edit2 size={12}/> Editar</button>
-                    ) : (
+                    )) : (
                       <div className="flex gap-2">
                         <button onClick={()=>setInfoEdit(false)} disabled={savingInfo} className="text-xs font-bold text-gray-500 hover:text-gray-700 disabled:opacity-50">Cancelar</button>
                         <button onClick={saveInfo} disabled={savingInfo} className="flex items-center gap-1 text-xs font-bold text-white bg-purple-600 hover:bg-purple-700 px-3 py-1 rounded-lg disabled:opacity-50">
@@ -1345,7 +1358,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
                       <div className="py-8 text-center space-y-3">
                         <p role="alert" className="text-sm font-bold text-rose-700">No se pudieron cargar los pedidos de venta.</p>
                         <button type="button" onClick={onReintentarVentas}
-                          className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-700">
+                          className={`inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 ${FOCO_VISIBLE}`}>
                           <RefreshCw size={13} aria-hidden="true"/> Reintentar
                         </button>
                       </div>
@@ -1424,9 +1437,9 @@ const RUTA_PEDIDOS = '/dashboard/compras/pedidos';
 /** El contenedor de los Hubs y de las listas del bloque (T7 a T14): pb-24 deja libre la esquina del botón de la IA. */
 const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
 
-const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-700';
+const FOCO_VISIBLE = FOCOS.purple;
 /** El foco de los botones de la barra masiva (fondo slate-900), como en el Hub (m11 de T14). */
-const FOCO_OSCURO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white';
+const FOCO_OSCURO = FOCOS.blanco;
 
 /** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
 type AccionesFilaPedidos = {
@@ -1434,6 +1447,8 @@ type AccionesFilaPedidos = {
   emitir: (p: FilaPec) => void;
   cancelar: (filas: FilaPec[]) => void;
   eliminar: (p: FilaPec) => void;
+  /** r1 (m35): si el rol cambia los PEC (accesoCompras). */
+  cambiarPec: boolean;
 };
 const AccionesFila = React.createContext<AccionesFilaPedidos | null>(null);
 
@@ -1444,14 +1459,16 @@ const AccionesFila = React.createContext<AccionesFilaPedidos | null>(null);
  */
 function CeldaAcciones({ p }: { p: FilaPec }) {
   const acciones = useContext(AccionesFila);
+  // r1 (m35): el permiso llega por el contexto (como Tránsito con puedeAvanzar): sin leer el rol en cada fila.
+  const cambiarPec = acciones?.cambiarPec ?? false;
   const items: ItemMenuFila[] = [
     { etiqueta: 'Ver detalle', icono: Eye, onClick: () => acciones?.abrir(p) },
     { etiqueta: 'Marcar Emitido', icono: Send, onClick: () => acciones?.emitir(p),
-      oculto: !transicionesPec(p.estado).includes('EMITIDO') },
+      oculto: !cambiarPec || !transicionesPec(p.estado).includes('EMITIDO') },
     { etiqueta: 'Cancelar PEC', icono: Trash2, peligro: true, onClick: () => acciones?.cancelar([p]),
-      oculto: !transicionesPec(p.estado).includes('CANCELADO') },
+      oculto: !cambiarPec || !transicionesPec(p.estado).includes('CANCELADO') },
     { etiqueta: 'Eliminar definitivamente', icono: Trash2, peligro: true, onClick: () => acciones?.eliminar(p),
-      oculto: etapaPec(p.estado) !== 'cancelado' },
+      oculto: !cambiarPec || etapaPec(p.estado) !== 'cancelado' },
   ];
   return (
     <span className="flex items-center justify-end gap-0.5">
@@ -1480,7 +1497,7 @@ const TITULOS_ORDEN_PEDIDOS = titulosDeOrdenPec(COLUMNAS_TABLA_PEDIDOS);
 function pestanasDePedidos(conteos: ConteosPec | null): PestanaTabla[] {
   return [
     { id: 'vigentes', etiqueta: 'Todos', conteo: conteos?.vigentes ?? null },
-    { id: 'activos', etiqueta: 'Activos', conteo: conteos?.activos ?? null, alerta: (conteos?.vencidos ?? 0) > 0 },
+    { id: 'activos', etiqueta: 'Activos', conteo: conteos?.activos ?? null, alerta: textoVencidosPec(conteos?.vencidos) },
     { id: 'en_transito', etiqueta: 'En tránsito', conteo: conteos?.en_transito ?? null },
     { id: 'recibidos', etiqueta: 'Recibidos', conteo: conteos?.recibidos ?? null },
     { id: 'cancelados', etiqueta: 'Cancelados', conteo: conteos?.cancelados ?? null },
@@ -1509,6 +1526,9 @@ export default function PedidosCompraPage() {
   // las tarjetas, la tabla y el tablero despachan a él. El modo (Lista o Kanban) se guarda en vista:compras.pedidos. Ya
   // no hay arreglos en memoria (antes, los 200 más recientes filtrados, contados y paginados en el navegador).
   const [estado, despachar, listo] = useEstadoTabla(ID_PEDIDOS, INICIAL_PEDIDOS);
+  // B4 T24 (FINAL-m10, m31 y m38): el rol después de montar (useRolActual) decide si se cambian los PEC (accesoCompras: PATCH y DELETE
+  // /compras/pedidos y PATCH /tracking son de ADMIN y COMPRAS); sin permiso, el tablero es solo para ver y no se ofrecen sus acciones.
+  const accesoPec = accesoCompras(useRolActual());
   const enKanban = estado.modo === 'kanban';
 
   // GET /compras/pedidos con vista, estados, semáforo, q, orden, limit y offset del estado, más los conteos de las
@@ -1719,14 +1739,15 @@ export default function PedidosCompraPage() {
   const abrir = useCallback((p: FilaPec) => setSelectedPec(p), []);
   const accionesFila = useMemo<AccionesFilaPedidos>(() => ({
     abrir, emitir: (p) => { void emitir(p); }, cancelar: (filas) => pedirCancelacion(filas), eliminar: (p) => { void eliminar(p); },
-  }), [abrir, emitir, pedirCancelacion, eliminar]);
+    cambiarPec: accesoPec.cambiarPec,
+  }), [abrir, emitir, pedirCancelacion, eliminar, accesoPec.cambiarPec]);
   const pestanas = pestanasDePedidos(conteos);
   // m2 de T8: el conmutador Lista / Kanban poda los estados con las opciones del modo nuevo (las columnas del tablero, o
   // las de la pestaña en Lista), con la regla de accionPestana (accionModo); lo demás de la barra va directo.
   const alCambiarBarra = useCallback((accion: AccionTabla) => {
     if (accion.tipo === 'modo') {
       const modo = String(accion.valor);
-      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEC : opcionesEstadosPec));
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEC : opcionesEstadosPec, COLUMNAS_PEC));
     } else despachar(accion);
   }, [estado, despachar]);
   // R8: ordenada por una columna, el chip «Orden: … · Atención primero» vuelve a lo vencido primero.
@@ -1870,7 +1891,8 @@ export default function PedidosCompraPage() {
                 className={`flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-purple-50 hover:text-purple-800 hover:border-purple-200 font-semibold text-sm shadow-sm transition-colors ${FOCO_VISIBLE}`}>
                 <ContenidoEnlace icon={BarChart3}>Ver análisis</ContenidoEnlace>
               </Link>
-              <Button color="purple" icon={Plus} onClick={()=>setShowNuevoPec(true)}>Nuevo PEC</Button>
+              {/* r1 (m7): POST /compras/pedidos es de ADMIN y COMPRAS. */}
+              {accesoPec.cambiarPec && <Button color="purple" icon={Plus} onClick={()=>setShowNuevoPec(true)}>Nuevo PEC</Button>}
             </div>
           )}
         />
@@ -1954,20 +1976,22 @@ export default function PedidosCompraPage() {
             /* KANBAN-compras punto 6: Borrador · Emitido · En tránsito · En bodega · Recibido (plegada) · Cancelado
                (plegada). Lo que no se puede queda bloqueado con su motivo y su enlace ANTES de soltar (reglaSoltarPec);
                en En bodega, «Recepcionar» (tarjetaPedidoCompra). */
-            <TableroKanban
+            // B4 T24 r2 (m2, m10): mientras se lee el rol, el esqueleto (sin acciones) en lugar del tablero.
+            !accesoPec.listo ? <EsqueletoTablero /> : <TableroKanban
               tablero={tablero}
               regla={reglaSoltarPec}
               tarjetaDe={tarjetaPedidoCompra}
               onAbrir={abrir}
               onCambio={cambiarDesdeTablero}
               onAccion={accionDesdeTablero}
+              soloLectura={accesoPec.soloLectura}
               color="purple"
             />
           ) : null}
         </div>
 
         {/* La barra masiva (la selección es de la página de la tabla, así que solo en Lista): cancelar con un motivo. */}
-        {seleccion.length > 0 && !enKanban && (
+        {seleccion.length > 0 && !enKanban && accesoPec.cambiarPec && (
           <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-4 z-40 border border-slate-700">
             <span className="font-bold text-sm bg-slate-800 px-3 py-1 rounded-full">{seleccion.length} {seleccion.length === 1 ? 'seleccionado' : 'seleccionados'}</span>
             <button type="button" onClick={() => pedirCancelacion(filasSeleccionadas())}

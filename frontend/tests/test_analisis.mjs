@@ -41,6 +41,33 @@ console.log('--- TEST 1: constantes (períodos, tops y focos de R13) ---');
   for (const c of [PERIODOS, PERIODO_POR_DEFECTO, TOPS, FOCOS_VENTAS, ERRORES_PERIODO]) assert.ok(Object.isFrozen(c));
 }
 
+console.log('--- TEST 1b (B4 T24, F5): la paridad con backend/app/core/periodos.py y analisis.py sale de sus archivos ---');
+{
+  const leerBack = (ruta) => readFileSync(new URL(`../../backend/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const periodos = leerBack('app/core/periodos.py');
+  assert.equal(Number(/^MAX_DIAS = (\d+)/m.exec(periodos)?.[1]), MAX_DIAS, 'MAX_DIAS');
+  const texto = (nombre) => new RegExp(`^ERROR_${nombre} = "([^"]+)"`, 'm').exec(periodos)?.[1];
+  assert.deepEqual(ERRORES_PERIODO, {
+    periodo: texto('PERIODO'), sin_fechas: texto('SIN_FECHAS'), formato: texto('FORMATO'), orden: texto('ORDEN'), futuro: texto('FUTURO'),
+    largo: texto('LARGO'),
+  }, 'los seis ERROR_* del backend');
+  assert.match(periodos, /^ERRORES = \(ERROR_PERIODO, ERROR_SIN_FECHAS, ERROR_FORMATO, ERROR_ORDEN, ERROR_FUTURO, ERROR_LARGO\)$/m, 'los seis, ni uno más');
+  const claves = /^PERIODOS = \(([^)]*)\)/m.exec(periodos)?.[1].split(',').map((c) => c.trim().replace(/"/g, ''));
+  assert.deepEqual(PERIODOS.map((p) => p.clave), claves, 'PERIODOS');
+  const tops = /^TOPS = \(([^)]*)\)/m.exec(leerBack('app/core/analisis.py'))?.[1].split(',').map((t) => Number(t.trim()));
+  assert.deepEqual([...TOPS], tops, 'TOPS');
+}
+
+console.log('--- TEST 1c (B4 T24, F26): claseTailwindCercana — la clase de HEX_CLASE_TAILWIND más cercana a un hex ---');
+{
+  const { claseTailwindCercana } = analisis;
+  assert.equal(claseTailwindCercana('#ecfeff'), 'bg-cyan-50', 'exacta');
+  assert.equal(claseTailwindCercana('#f1f5f9'), 'bg-slate-50', 'la más cercana');
+  assert.equal(claseTailwindCercana('#f0fdf4'), 'bg-emerald-50', 'un empate: la primera de la tabla');
+  assert.equal(claseTailwindCercana(' #FEF2F2 '), 'bg-red-50');
+  for (const malo of ['', 'bg-red-50', null, '#12']) assert.equal(claseTailwindCercana(malo), null, String(malo));
+}
+
 console.log('--- TEST 2: validarPeriodo y errorPeriodo (los seis textos del servidor) ---');
 {
   // Los textos exactos de backend/app/core/periodos.py (ERRORES).
@@ -607,6 +634,8 @@ console.log('--- TEST 18 (T5B): el fuente de las ocho piezas de components/anali
   };
   const fuentes = Object.fromEntries(Object.keys(PIEZAS).map((n) => [n, leer(n)]));
   const FOCO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
+  // B4 T24 (FINAL-m25, D27): el foco literal o el FOCO común de design-system.ts (que es ese mismo texto, test_tabla.mjs).
+  const usaFoco = (fuente, c) => c.includes(FOCO) || (c.includes('${FOCO}') && /import \{[^}]*\bFOCO\b[^}]*\} from '@\/lib\/design-system';/.test(fuente));
   for (const [archivo, exportado] of Object.entries(PIEZAS)) {
     const fuente = fuentes[archivo];
     const c = codigo(fuente);
@@ -618,7 +647,7 @@ console.log('--- TEST 18 (T5B): el fuente de las ocho piezas de components/anali
       `${archivo}: pieza de presentación (el período, el top y los datos son de PanelAnalisis, T5C)`);
     assert.ok(!/outline-none/.test(c), `${archivo}: nunca outline-none`);
     // Lo que puede tomar el foco usa el outline de focus-visible.
-    if (/<button\b|<Link\b/.test(c)) assert.ok(c.includes(FOCO), `${archivo}: foco visible con outline`);
+    if (/<button\b|<Link\b/.test(c)) assert.ok(usaFoco(fuente, c), `${archivo}: foco visible con outline`);
     // Un texto recortado lleva su title en la misma etiqueta.
     for (const linea of c.split('\n').filter((l) => /className=[^>]*\btruncate\b/.test(l))) {
       assert.ok(/\btitle=/.test(linea), `${archivo}: truncate sin title: ${linea.trim()}`);
@@ -1222,6 +1251,8 @@ console.log('--- TEST 21 (T5C): el fuente de las siete piezas del panel (sin DOM
   };
   const fuentes = Object.fromEntries(Object.keys(PIEZAS).map((n) => [n, leer(n)]));
   const FOCO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
+  // B4 T24 (FINAL-m25, D27): el foco literal o el FOCO común de design-system.ts (que es ese mismo texto, test_tabla.mjs).
+  const usaFoco = (fuente, c) => c.includes(FOCO) || (c.includes('${FOCO}') && /import \{[^}]*\bFOCO\b[^}]*\} from '@\/lib\/design-system';/.test(fuente));
   for (const [archivo, exporta] of Object.entries(PIEZAS)) {
     const fuente = fuentes[archivo];
     const c = codigo(fuente);
@@ -1235,7 +1266,7 @@ console.log('--- TEST 21 (T5C): el fuente de las siete piezas del panel (sin DOM
     assert.equal(/usePreferencia/.test(c), archivo === 'PanelAnalisis.tsx', `${archivo}: solo PanelAnalisis recuerda (analisis:<modulo>)`);
     assert.ok(!c.includes('/ventas/ai-chat'), `${archivo}: R2, ningún endpoint de IA`);
     // Lo que toma el foco usa el outline de focus-visible (los controles deshabilitados del asistente no lo toman).
-    if (archivo !== 'AsistenteEnConstruccion.tsx' && /<button\b|<Link\b|<input\b|<select\b/.test(c)) assert.ok(c.includes(FOCO), `${archivo}: foco visible`);
+    if (archivo !== 'AsistenteEnConstruccion.tsx' && /<button\b|<Link\b|<input\b|<select\b/.test(c)) assert.ok(usaFoco(fuente, c), `${archivo}: foco visible`);
     for (const linea of c.split('\n').filter((l) => /className=[^>]*\btruncate\b/.test(l))) {
       assert.ok(/\btitle=/.test(linea), `${archivo}: truncate sin title: ${linea.trim()}`);
     }
@@ -1307,7 +1338,8 @@ console.log('--- TEST 21 (T5C): el fuente de las siete piezas del panel (sin DOM
   assert.equal((selector.match(/type="date"/g) ?? []).length, 2, 'SelectorPeriodo: Desde y Hasta');
   // r1 (M15): un date tiene 4 paradas de Tab (día, mes, año y el calendario); en la cuarta el input ya no cumple
   // :focus-visible NI :focus (medido en Chromium), pero sí :focus-within: el outline va con las dos.
-  assert.ok(selector.includes("const CAMPO_FECHA = `block w-full min-w-0 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 outline-indigo-700 focus:outline-2 focus:outline-offset-2 focus:outline-indigo-700 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-indigo-700`;"));
+  // B4 T24 r1 (m19, D27): las mismas clases, ahora del token FOCO_CAMPO de design-system.ts (test_tabla.mjs fija su texto).
+  assert.ok(selector.includes("const CAMPO_FECHA = `block w-full min-w-0 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 ${FOCO_CAMPO}`;"));
   assert.equal((selector.match(/className=\{`mt-1 \$\{CAMPO_FECHA\}`\}/g) ?? []).length, 2, 'los dos date con CAMPO_FECHA');
   // r1 (M14): el esqueleto de la barra, con los mismos altos que la barra real (píldoras de 26 px o el select de 34 px,
   // la línea de 'Comparado con…' y la de 'Actualizado…').
@@ -1434,10 +1466,14 @@ console.log('--- TEST 23 (B4 T17, ANALISIS-inventario punto 3; R2, R13, RP69, D3
     'En construcción', '/ventas/ai-chat', 'GPT-4o', 'Análisis Funcional', 'warehouseStats']) {
     assert.ok(!fuente.includes(viejo), viejo);
   }
-  // La pestaña aparte de BarraTabla (sin emoji); ?tab=analisis se lee al montar con la guarda de window; en Análisis la
-  // lista no pide nada (activo: false, RP35) y al volver a los documentos la URL se limpia.
+  // La pestaña aparte de BarraTabla (sin emoji); ?tab=analisis se lee al montar; en Análisis la lista no pide nada
+  // (activo: false, RP35) y al volver a los documentos la URL se limpia. B4 T24 (FINAL-C3, D27): ya no en el inicializador
+  // de useState (en una navegación con <Link> leía la URL de la página anterior), sino en un useLayoutEffect de montaje,
+  // después del commit; la guarda de orden de las tres pantallas está en test_hub_ventas.mjs.
   assert.ok(fuente.includes("pestanaAparte={{ id: 'analisis', etiqueta: 'Análisis', activa: enAnalisis, onCambiar: alCambiarAparte }}"));
-  assert.match(fuente, /useState\(\(\) => leerEnlaceHubCompras\(typeof window === 'undefined' \? '' : window\.location\.search\)\.analisis\)/);
+  assert.match(fuente, /const \[enAnalisis, setEnAnalisis\] = useState\(false\);/);
+  assert.match(fuente, /useLayoutEffect\(\(\) => \{\s*if \(leerEnlaceHubCompras\(window\.location\.search\)\.analisis\) setEnAnalisis\(true\);\s*\}, \[\]\);/);
+  assert.ok(!fuente.includes('useState(() => leerEnlaceHubCompras('), 'sin el inicializador que leía la URL anterior');
   assert.match(fuente, /if \(!analisis && leerEnlaceHubCompras\(window\.location\.search\)\.analisis\) router\.replace\(RUTA_HUB\);/);
   assert.match(fuente, /activo: !enAnalisis && !verAlmacenes, extra: extraDeLaLista/);
   assert.match(fuente, /activo: !enAnalisis && verAlmacenes, extra: extraAlmacenes/);

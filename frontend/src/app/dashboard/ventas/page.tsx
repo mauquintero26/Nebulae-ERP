@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import {
   MessageCircle, Trash2, X, RefreshCw, Bell, Settings, Activity, CheckCircle2, Zap, ToggleLeft, ToggleRight, Save,
@@ -9,7 +9,7 @@ import { useRouter } from 'next/navigation';
 import { apiFetch } from '@/lib/api';
 import {
   SubNav, PageHeader, Drawer, Modal, Button, useAvisos, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila,
-  TableroKanban, useTableroKanban, CLASE_CHIP,
+  TableroKanban, EsqueletoTablero, useTableroKanban, CLASE_CHIP,
 } from '@/components/ui';
 import type { DatosColumnaKanban, ItemMenuFila } from '@/components/ui';
 // B4 T7: el Hub 100 % sobre el servidor (R6, C4): la tabla y el tablero estándar con el estado único de la pantalla
@@ -21,32 +21,35 @@ import type { AccionTabla, ColumnaTabla, PestanaTabla } from '@/components/tabla
 import { BannerFlujo, CadenaDocumentos, useResumenFlujo } from '@/components/flujo';
 import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
 import { PanelAnalisisPerezoso } from '@/components/analisis';
-import { TABLE } from '@/lib/design-system';
-import { accionPestana, campoOrden, dependenciasTablero, estadoDelTotal, normalizarRespuesta, queryListado } from '@/lib/tabla';
-import { alternarSeleccion, pasosConConteos } from '@/lib/flujo';
+import { FOCO, FOCOS, RESERVA_BOTON_IA, TABLE } from '@/lib/design-system';
 import {
-  PASOS_FLUJO_VENTAS, chipsFiltroHub, conteosDesdeResumen, leerEnlaceHub, pasoTrasPestana, tabHubDePaso, textoRegla,
+  accionPestana, campoOrden, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta, queryListado,
+} from '@/lib/tabla';
+import { alternarPaso, pasosConConteos } from '@/lib/flujo';
+import {
+  PASOS_FLUJO_VENTAS, chipsFiltroHub, conteosDesdeResumen, inicioDelEnlaceHub, leerEnlaceHub, pasoTrasPestana, tabHubDePaso,
+  textoRegla,
 } from '@/lib/flujo-ventas';
 import {
-  COLUMNAS_HUB, chipsResolucionHub, confirmacionReiniciarSolicitud, estadoDeTarjeta, opcionesEstadosHub, reglaSoltarHub,
-  siglaDeTipo, tarjetaHub,
+  COLUMNAS_HUB, chipsResolucionHub, confirmacionFacturarPedido, confirmacionReiniciarSolicitud, estadoDeTarjeta, opcionesEstadosHub,
+  reglaSoltarHub, siglaDeTipo, tarjetaHub, accionDeLaFilaHub,
 } from '@/lib/kanban-ventas';
 import { PERIODO_KPI } from '@/lib/kpis';
 import { FOCOS_VENTAS } from '@/lib/analisis';
-import { textoDeError, esErrorDeValidacion } from '@/lib/avisos';
+import { textoDeError, esErrorDeValidacion, cambiarConRegla } from '@/lib/avisos';
+// B4 T24 (FINAL-m32): la regla del motivo de ModalMotivo también en la ventana de la cancelación en lote.
+import { MINIMO_MOTIVO, motivoValido } from '@/lib/kanban';
 import { VEN_NAV } from './ven-nav';
 import { CambiosDeActividad, EnlaceConfirmacionModal, getUsuarioActual } from './flujo';
-import { ChannelModal, ESTADOS as ESTADOS_COT } from './cotizacion/cotizacion-client';
+import { ChannelModal } from './cotizacion/cotizacion-client';
 import { useEstadoEnvioWhatsApp } from './cotizacion/estado-envio-whatsapp';
-import { ESTADOS_SC } from './solicitud/solicitud-client';
 import { ComposerChatter, EtiquetaChatter } from './chatter';
 import { agregarActividad, esEntradaChatter, motivoTelefono, textoSinTelefono } from '@/lib/chatter';
-import { infoEstadoPedido } from '@/lib/estados-pedido';
 import {
-  ordenParaCancelar, motivoNoCancelable, resumenLote, ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN,
-  repartirCambioEstadoPVEN, comoUTC, textoAntiguedad, notaReiniciaAtraso, conDetalleDelEnvio, accionSiguienteDocumento,
+  ordenParaCancelar, motivoNoCancelable, resumenLote, ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN, opcionesPanelPedido,
+  repartirCambioEstadoPVEN, comoUTC, textoAntiguedad, notaReiniciaAtraso, conDetalleDelEnvio,
   tituloGrupo, scConCotDeFilas, ordenEsAtencion, textoOrdenHub, RUTA_HUB_VENTAS, cantidadPositiva, focoEnlaceTras,
-  filaDelHub,
+  filaDelHub, RUTA_ENTREGAS,
 } from '@/lib/hub-ventas';
 import { waUrl, abrirWhatsApp } from '@/lib/whatsapp';
 import { correoDelCliente } from '@/lib/aviso-correo';
@@ -63,7 +66,10 @@ import { accionBloque3 } from '@/lib/acciones-bloque3';
 import { abreWhatsAppLocal, MENSAJE_WHATSAPP_SIN_GUARDAR, banderaReenvio } from '@/lib/envio-whatsapp';
 import { configSeguimientoInicial, errorConfigSeguimiento } from '@/lib/seguimiento';
 // Revisión final B3 (F2): la regla de rol (M12) y la nota ámbar en la ventana de envío del tablero (M47).
-import { esAdmin } from '@/lib/roles';
+import { accesoNotasVentas, accesoTableroVentas, esAdmin, puedeAccionPedido } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
+// B4 T24 f2 (F45): el cargador compartido de los resúmenes de las tarjetas.
+import { useResumen } from '@/components/ui/useResumen';
 import { AvisoNombreSinContacto } from './aviso-nombre-sin-contacto';
 import { normalizarTarifaIva, TARIFA_IVA_POR_DEFECTO } from '@/lib/iva';
 
@@ -72,14 +78,6 @@ const fCOP  = (v: any) => formatoPesos(v);
 // Las fechas del API son UTC; si alguna llega sin zona, comoUTC la marca como UTC (no hora local corrida 5 h).
 const fDate = (iso: any) => iso ? new Date(comoUTC(iso)).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
 const fTime = (iso: any) => iso ? new Date(comoUTC(iso)).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}) : '';
-
-// N10: el estado siempre con su etiqueta (pedido: estados-pedido.js; COT y SC: sus tablas), nunca el código crudo; una
-// clave desconocida sale humanizada. B4 T7: el filtro de estados ya no la usa (opcionesEstadosHub, agrupado por tipo).
-const etiquetaEstado = (tipo: string, e: string): string => {
-  if (tipo === 'VEN') return infoEstadoPedido(e).label;
-  const propia = tipo === 'COT' ? ESTADOS_COT[e]?.label : tipo === 'SC' ? ESTADOS_SC[e]?.label : undefined;
-  return propia || ESTADOS_SC[e]?.label || ESTADOS_COT[e]?.label || infoEstadoPedido(e).label;
-};
 
 // H3 y R26 (B4 T7): el color del botón de la próxima acción (el tono de accionSiguienteDocumento).
 const TONO_ACCION: Record<string,string> = {
@@ -105,24 +103,6 @@ const EFECTO_CANCELACION: Record<string,string> = {
 
 // Autor de los cambios hechos desde el Hub (Actividad); sin sesión, el servidor usa el correo del usuario.
 const autorActual = () => { const u = getUsuarioActual(); return u.name || u.email || undefined; };
-
-const getEstadoClass = (e: string) => ({
-  BORRADOR: 'bg-slate-100 text-slate-700 border-slate-200',
-  PENDIENTE_CONFIRMACION: 'bg-amber-100 text-amber-800 border-amber-200',
-  EN_GESTION: 'bg-blue-100 text-blue-800 border-blue-200',
-  CONFIRMADA: 'bg-emerald-100 text-emerald-700 border-emerald-200',
-  ENVIADA: 'bg-sky-100 text-sky-700 border-sky-200',
-  PENDIENTE_COMPRA: 'bg-orange-100 text-orange-700 border-orange-200',
-  PENDIENTE_PAGO: 'bg-amber-100 text-amber-800 border-amber-200',
-  EN_PROCESO: 'bg-purple-100 text-purple-700 border-purple-200',
-  EN_TRANSITO: 'bg-indigo-100 text-indigo-700 border-indigo-200',
-  LISTO_ENTREGA: 'bg-teal-100 text-teal-700 border-teal-200',
-  ENTREGADO: 'bg-emerald-100 text-emerald-800 border-emerald-200',
-  FACTURADO: 'bg-green-100 text-green-800 border-green-200',
-  CANCELADO: 'bg-rose-100 text-rose-700 border-rose-200',
-  CANCELADA: 'bg-rose-100 text-rose-700 border-rose-200',
-  RECHAZADA: 'bg-rose-100 text-rose-700 border-rose-200',
-} as Record<string,string>)[e] || 'bg-gray-100 text-gray-700 border-gray-200';
 
 const getTipoClass = (t: string) => ({
   SC: 'bg-indigo-100 text-indigo-700 border-indigo-200',
@@ -182,6 +162,8 @@ type ConteosHub = { pestanas?: Partial<Record<string, number>>; grupos?: Partial
 /** El id de la pantalla: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26). */
 const ID_HUB = 'ventas.hub';
 const INICIAL_HUB = { vista: 'todos', orden: 'atencion' };
+/** B4 T24 f2 (FINAL-m8): en Kanban la tabla no pide filas (limit=0), como Solicitudes, Cotizaciones y Pedidos (m6 de T8). */
+const EXTRA_TABLERO = { limit: 0 };
 const claveDeFila = (f: FilaHub) => `${f.tipo}|${f.id}`;
 // U1: con el orden de atención, un separador por resolución. D41: los tintes translúcidos de antes (dejaban ver lo de
 // debajo de las columnas fijas) pasan a los tonos opacos más parecidos: las atrasadas a filaAlerta y, B4 T7 r1 (m3 y
@@ -191,7 +173,6 @@ const MARCA_ATRASO = '[&>td:first-child]:shadow-[inset_3px_0_0_var(--color-rose-
 const grupoDeFila = (f: FilaHub) => f.resolucion ?? null;
 const claseDeFila = (f: FilaHub) => (f.resolucion === 'ATRASADO' ? `${TABLE.filaAlerta} ${MARCA_ATRASO}`
   : f.resolucion === 'NO_RESUELTO' ? TABLE.filaAviso : null);
-const tarjetaDeFila = (f: FilaHub) => tarjetaHub(f);
 const variacionDe = (p?: ParPeriodo | null) => ({ actual: p?.actual ?? null, anterior: p?.anterior ?? null });
 
 /** RP69 con su ajuste: cambia solo el primer ejemplo y se quita el emoji; los otros tres quedan como estaban. */
@@ -209,7 +190,7 @@ const ASISTENTE_VENTAS = {
 // los tintes por tono son los del tablero (CLASE_CHIP de components/ui/Kanban.tsx, m7a: el mismo chip sale igual en
 // Lista y en Kanban) y la base no lleva tamaño de letra: cada uso pone el suyo (m9b).
 const CHIP = 'inline-block max-w-full truncate rounded-full border px-1 py-0.5 font-bold leading-tight tracking-tight';
-const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
+const FOCO_VISIBLE = FOCOS.indigo;
 
 /**
  * Los dos apartados del Hub. Análisis es un estado de la página, no una vista de la tabla (RP35, RP21). B4 T7 r1 (A3):
@@ -246,7 +227,11 @@ const tituloResolucion = (f: FilaHub) => {
  * Lo que las celdas de la tabla le piden a la pantalla (abrir el panel rápido, el chatter y la cancelación de N3). Va por
  * un contexto para que las columnas sean una constante del módulo (D40 y D41: estables; el cuerpo está memoizado).
  */
-type AccionesFilaHub = { abrir: (f: FilaHub) => void; actividad: (f: FilaHub) => void; cancelar: (ids: string[]) => void };
+// B4 T24 f2 (m8 de la revisión r0 de f1): `mover` (accesoTableroVentas) decide si la fila ofrece «Cancelar documento».
+// B4 T24 f2 r1 (duda 2 + m15, m18): el rol de la sesión, leído después de montar (useRolActual), llega a las celdas por el contexto.
+type AccionesFilaHub = {
+  abrir: (f: FilaHub) => void; actividad: (f: FilaHub) => void; cancelar: (ids: string[]) => void; mover: boolean; rol: string;
+};
 const AccionesFila = React.createContext<AccionesFilaHub | null>(null);
 
 /** Chatter: el panel de notas y actividad del documento (ActivitiesPanel). */
@@ -264,14 +249,16 @@ function BotonChatter({ fila }: { fila: FilaHub }) {
 /** Acción (R26, RP15): la próxima acción del documento (solo navega) y el menú ⋯ de N3 (MenuFila: clic y portal). */
 function CeldaAccion({ fila }: { fila: FilaHub }) {
   const acciones = React.useContext(AccionesFila);
-  const accion = accionSiguienteDocumento(fila);
+  // B4 T24 f2 r1 (duda 2 + m15): sin permiso para la acción (su require_roles), «Abrir» (el detalle); sin acción, «—».
+  const accion = accionDeLaFilaHub(fila, { rol: acciones?.rol ?? '' });
   const urlWhatsApp = waUrl(fila.customer_phone);
   const items: ItemMenuFila[] = [
     { etiqueta: 'Ver detalle completo', icono: ExternalLink, onClick: () => acciones?.abrir(fila) },
     { etiqueta: 'Ver historial y chatter', icono: Activity, onClick: () => acciones?.actividad(fila) },
     { etiqueta: 'Abrir WhatsApp', icono: MessageCircle, onClick: () => abrirWhatsApp(urlWhatsApp), oculto: !urlWhatsApp },
     { etiqueta: 'Cancelar documento', icono: Trash2, peligro: true, onClick: () => acciones?.cancelar([claveDeFila(fila)]),
-      oculto: Boolean(motivoNoCancelable(fila)) },
+      // B4 T24 f2 (m8 de la revisión r0 de f1): cancelar es POST /solicitudes/{id}/cancelar o el PATCH de COT y PVEN (ADMIN y ASESOR).
+      oculto: !acciones?.mover || Boolean(motivoNoCancelable(fila)) },
   ];
   const clave = accion?.tono ?? 'slate';
   return (
@@ -360,6 +347,7 @@ const INVERSOS_ORDEN_HUB = COLUMNAS_TABLA_HUB.filter((c) => c.ordenInverso).map(
 // onNotaGuardada: una nota que reinicia el atraso del documento (un contacto con el cliente) recarga el Hub en silencio
 // (sin el spinner de página) para que su alerta roja desaparezca; el panel sigue abierto con su borrador.
 function ActivitiesPanel({row,onClose,onNotaGuardada}:{row:any,onClose:()=>void,onNotaGuardada:()=>void}) {
+  const notas = accesoNotasVentas(useRolActual());
   const [detail, setDetail] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [errorCarga, setErrorCarga] = useState<string|null>(null);
@@ -397,9 +385,9 @@ function ActivitiesPanel({row,onClose,onNotaGuardada}:{row:any,onClose:()=>void,
   }
   const acts = detail?.actividades||[];
   return (
-    <Drawer onClose={onClose} header={(
+    <Drawer idTitulo="drawer-documento-titulo" onClose={onClose} header={(
       <div>
-        <div className="flex items-center gap-2">
+        <div id="drawer-documento-titulo" className="flex items-center gap-2">
           <span className={`px-2 py-0.5 rounded-full text-xs font-bold border ${getTipoClass(row.tipo)}`}>{row.tipo}</span>
           <span className="font-bold text-slate-800">{row.numero}</span>
         </div>
@@ -420,13 +408,14 @@ function ActivitiesPanel({row,onClose,onNotaGuardada}:{row:any,onClose:()=>void,
         </div>
       ):(
         <>
-          {detail?.id&&(
+          {/* B4 T24 f2 r1 (m19 + m37): el compositor solo para quien anota (POST …/actividad: ADMIN, ASESOR y COMPRAS). */}
+          {detail?.id && notas.anotar && (
             <div className="pb-5 border-b border-slate-100">
               <ComposerChatter compacto tipoDoc={row.tipo} doc={detail} onRegistrado={notaRegistrada}/>
             </div>
           )}
-          {/* pb-20: la burbuja fija del asistente (bottom-6 right-6) no tapa el último renglón. */}
-          <div className="pb-20">
+          {/* B4 T24 f2 (F44-a): RESERVA_BOTON_IA (antes pb-20): la burbuja fija del asistente (bottom-6 right-6) no tapa el último renglón. */}
+          <div className={RESERVA_BOTON_IA}>
             <p className="text-xs font-black text-slate-400 uppercase mb-3 flex items-center gap-1"><Activity size={12}/> Historial de Acciones Tomadas</p>
             {acts.length===0?<p className="text-xs text-slate-400 italic">Sin actividad registrada</p>:(
               <div className="space-y-3 relative before:absolute before:left-2 before:top-0 before:bottom-0 before:w-0.5 before:bg-slate-100">
@@ -457,7 +446,8 @@ function ActivitiesPanel({row,onClose,onNotaGuardada}:{row:any,onClose:()=>void,
 /* ── Config Panel ── */
 function ConfigPanel({alertDias,configCargada,onSave,onClose}:{alertDias:any,configCargada:boolean,onSave:(cfg:any)=>void,onClose:()=>void}) {
   // N8: todos leen los valores reales; solo un administrador los cambia (la seguridad real es el 403 del PATCH).
-  const soloLectura = !esAdmin(getUsuarioActual().role);
+  // B4 T24 f2 r1 (m18): el rol leído después de montar (useRolActual), no getUsuarioActual().role en el render.
+  const soloLectura = !esAdmin(useRolActual());
   const { avisarError } = useAvisos();
   const [error, setError] = useState('');
   // F2 (M15): el campo que falló (aria-invalid y ligado al error del pie, que tiene este id).
@@ -513,10 +503,11 @@ function ConfigPanel({alertDias,configCargada,onSave,onClose}:{alertDias:any,con
     </div>
   );
   return (
-    <Drawer onClose={onClose} maxWidth="md" header={(
+    // B4 T24 r2 (m4, m15 b): para quien edita, solo sus botones y nada mientras guarda; en solo lectura, Esc y el fondo.
+    <Drawer idTitulo="drawer-config-hub-titulo" cierreExterno={soloLectura} bloquearCierre={saving} onClose={onClose} maxWidth="md" header={(
       <div className="flex items-center gap-3">
         <div className="bg-indigo-600 text-white p-2.5 rounded-xl shadow-md"><Settings size={20}/></div>
-        <div><h2 className="font-black text-slate-800 text-lg">Configuración de HUB Ventas</h2><p className="text-xs text-slate-500">Parámetros de resolución, alertas y automatizaciones</p></div>
+        <div><h2 id="drawer-config-hub-titulo" className="font-black text-slate-800 text-lg">Configuración de HUB Ventas</h2><p className="text-xs text-slate-500">Parámetros de resolución, alertas y automatizaciones</p></div>
       </div>
     )} footer={soloLectura ? (
       <p className="text-xs text-slate-500 text-center">Solo un administrador puede cambiar estos valores.</p>
@@ -585,13 +576,20 @@ export default function VentasHub() {
   // estados, el semáforo, las cajas del flujo, la tabla y el tablero despachan a él; el modo (Lista o Kanban) se guarda
   // en vista:ventas.hub. Ya no hay arreglos en memoria (C4): la tabla y el tablero piden a /ventas/hub/documentos.
   const [estado, despachar, listo] = useEstadoTabla(ID_HUB, INICIAL_HUB);
-  // R6 y RP21: ?paso= y ?tab=analisis&foco= (leerEnlaceHub) salen de window.location al montar, sin useSearchParams (la
-  // página no necesita Suspense; AuthGuard la pinta solo en el navegador). Análisis es un estado de la página (RP35).
-  const [enlace] = useState(() => leerEnlaceHub(typeof window === 'undefined' ? '' : window.location.search));
-  const [seccion, setSeccion] = useState<SeccionHub>(enlace.analisis ? 'analisis' : 'documentos');
+  // B4 T24 (FINAL-m31 y FINAL-m38): el rol después de montar (useRolActual) decide si el tablero se mueve (accesoTableroVentas: el
+  // require_roles del PATCH de destino); sin permiso, soloLectura (no se arrastra ni se ofrece «Mover a…») y sin acciones masivas.
+  const rol = useRolActual();
+  const accesoTablero = accesoTableroVentas(rol);
+  // B4 T24 f2 r1 (duda 2 + m15): la tarjeta del tablero ofrece su acción solo si el rol puede hacerla; si no, «Abrir».
+  const tarjetaDeFila = useCallback((f: FilaHub) => tarjetaHub(f, { rol }), [rol]);
+  // R6 y RP21: ?paso= y ?tab=analisis&foco= salen de window.location, sin useSearchParams (la página no necesita Suspense).
+  // B4 T24 (FINAL-C3): la sección y el foco arrancan vacíos y los pone el useLayoutEffect de montaje (más abajo, junto al
+  // paso), DESPUÉS del commit: en el render, una navegación con <Link> todavía ve la URL de la página anterior.
+  // Análisis es un estado de la página (RP35).
+  const [seccion, setSeccion] = useState<SeccionHub>('documentos');
   // B4 T7 r1 (I1): el ?foco= de «Ver análisis» en un estado propio: vale hasta que el usuario elige un foco o vuelve a los
   // documentos (focoEnlaceTras); después la pestaña Análisis abre en lo guardado, no en el foco viejo del enlace.
-  const [focoEnlace, setFocoEnlace] = useState(enlace.foco);
+  const [focoEnlace, setFocoEnlace] = useState<string | null>(null);
   const enAnalisis = seccion === 'analisis';
   const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set());
   const [alertDias, setAlertDias]   = useState<any>({alerta_sc_dias:'2',alerta_cot_dias:'2',alerta_ven_dias:'2'});
@@ -605,6 +603,8 @@ export default function VentasHub() {
   // N3: cancelación con motivo (modal) y resultado de un lote con fallos (banner; lo comparte N5).
   const [cancelacion, setCancelacion]             = useState<{ids:string[]}|null>(null);
   const [motivoCancelacion, setMotivoCancelacion] = useState('');
+  // B4 T24 (FINAL-m32): el id que une la etiqueta del motivo con su campo (nombre accesible).
+  const idMotivo = React.useId();
   const [cancelando, setCancelando]               = useState(false);
   const [resultadoLote, setResultadoLote]         = useState<{titulo:string, lineas:{numero:string,error:string}[]}|null>(null);
   // H27+H39: al arrastrar una SC o COT para enviarla se pregunta el canal y luego se muestra el enlace con el aviso del correo.
@@ -621,9 +621,20 @@ export default function VentasHub() {
   // ── B4 T7, carga (R6, C4): cada parte pide lo suyo al servidor ──
   // La tabla (RP35 y RP68: sin conResumen ni extra.semaforo; el semáforo va en estado.semaforo). En la pestaña Análisis
   // no pide nada (activo: false, RP35) y nunca se manda vista=analisis. esperar: !listo (D40): el esqueleto, nunca vacío.
+  // B4 T24 f2 (FINAL-m8): en Kanban, sin filas (EXTRA_TABLERO, limit=0): nadie las usa (la tabla no se pinta y la barra masiva
+  // es de la Lista) y es el endpoint más caro del bloque (A5, R28). Las pestañas y el total siguen llegando (con_conteos), y
+  // scConCot ya trae las tarjetas del tablero (RP36).
+  const enKanban = estado.modo === 'kanban';
   const listado = useListado<FilaHub>({
     ruta: '/ventas/hub/documentos', estado, conConteos: true, esperar: !listo, despachar, activo: !enAnalisis,
+    extra: enKanban ? EXTRA_TABLERO : null,
   });
+  // m5 de T8 (llegadaDeListado): al volver a Lista, mientras la última respuesta sea la de Kanban (sin filas), la tabla está
+  // cargando y el total en 'cargando': nunca «No hay documentos en esta vista» con el total de la otra consulta.
+  const [llegada, setLlegada] = useState(() => llegadaDeListado(null, null, false));
+  const llegadaAhora = llegadaDeListado(llegada, listado.crudo, enKanban);
+  if (llegadaAhora !== llegada) setLlegada(llegadaAhora);
+  const sinPagina = !enKanban && llegadaAhora.sinFilas && !listado.error;
   const conteos = listado.conteos as ConteosHub | null;
   const estadoConteos = useEstadoKpi(listado.cargandoInicial || listado.recargando, listado.error);
 
@@ -649,18 +660,13 @@ export default function VentasHub() {
   const flujo = useResumenFlujo<DatosFlujo>('/ventas/flujo', recargaFlujo);
 
   // Las tarjetas (R6, RP68): GET /ventas/stats?periodo=30d, sin respaldo local; si falla, «—» (C6, C13).
+  // B4 T24 f2 (F45): con useResumen (components/ui), el cargador compartido: aborta la anterior, descarta las viejas, va con el
+  // usuario del token y, con error, sin datos («—»).
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<{ vuelta: number; datos: StatsHub | null; error: unknown } | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    apiFetch(`/ventas/stats?periodo=${PERIODO_KPI}`, { signal: control.signal })
-      .then((r: { data?: StatsHub } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  const cargandoStats = stats?.vuelta !== vueltaStats;
-  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
-  const datosStats = stats?.datos ?? null;
+  const stats = useResumen<StatsHub>(`/ventas/stats?periodo=${PERIODO_KPI}`, vueltaStats);
+  const cargandoStats = stats.cargando;
+  const estadoKpis = useEstadoKpi(cargandoStats, stats.error);
+  const datosStats = stats.datos;
 
   // La configuración (ConfigPanel, B3-T10d): GET /ventas/config, como antes; configCargada abre el panel y «Ajustar
   // tiempos» (configLeida). Si falla, un aviso y lo que había en pantalla sigue.
@@ -782,7 +788,7 @@ export default function VentasHub() {
 
   async function confirmarCancelacion(){
     const motivo = motivoCancelacion.trim();
-    if(!cancelacion || motivo.length < 5 || porCancelar.length === 0) return;
+    if(!cancelacion || !motivoValido(motivoCancelacion) || porCancelar.length === 0) return;
     setCancelando(true);
     setResultadoLote(null);
     const autor = autorActual();
@@ -835,13 +841,18 @@ export default function VentasHub() {
   // 'cambio': el PATCH del estado. El tablero mueve la tarjeta y, si el servidor la rechaza (R10: el 409 de una SC con
   // documentos activos), la devuelve con su mensaje. No se devuelve el documento: el PATCH no trae la resolución ni el
   // tipo de la fila, y el tablero recarga el origen y el destino (D39). Las pestañas y el flujo se recargan aquí.
+  // B4 T24 f2 (FINAL-m9): si el PATCH falla, también, con la regla única recargarTrasError (un 409: el documento cambió en otro
+  // lado; un 400, un 422 o la red cortada), como Pedidos; el error sigue para que el tablero deshaga (eso ya recarga su origen
+  // y su destino: aquí no se llama a tablero.recargar).
   async function cambiarDesdeTablero(fila: FilaHub, resultado: { estado: string }) {
     const ruta = fila.tipo === 'SC' ? 'solicitudes' : fila.tipo === 'COT' ? 'cotizaciones' : 'pedidos';
-    await apiFetch(`/ventas/${ruta}/${fila.id}`, {
-      method: 'PATCH', body: JSON.stringify({ estado: resultado.estado, updated_by: autorActual() }),
-    });
-    recargarListado();
-    setRecargaFlujo((n) => n + 1);
+    // B4 T24 f2 r1 (m28): la ruta de error es el ayudante puro cambiarConRegla (avisos.js), el mismo de Cotizaciones y de Pedidos.
+    await cambiarConRegla(
+      () => apiFetch(`/ventas/${ruta}/${fila.id}`, {
+        method: 'PATCH', body: JSON.stringify({ estado: resultado.estado, updated_by: autorActual() }),
+      }),
+      () => { recargarListado(); setRecargaFlujo((n) => n + 1); },
+    );
   }
 
   // 'accion' (D39): la pantalla abre su ventana y, al terminar, recarga el origen y el destino.
@@ -930,8 +941,8 @@ export default function VentasHub() {
   // B4 T7 r1 (m6): un valor estable para el contexto (sus tres manejadores ya lo son): las celdas no se repintan con cada
   // cambio de la página.
   const accionesFila = useMemo<AccionesFilaHub>(
-    () => ({ abrir: openDocDetail, actividad: setActRow, cancelar: abrirCancelacion }),
-    [openDocDetail, abrirCancelacion],
+    () => ({ abrir: openDocDetail, actividad: setActRow, cancelar: abrirCancelacion, mover: accesoTablero.mover, rol }),
+    [openDocDetail, abrirCancelacion, accesoTablero.mover, rol],
   );
   // D40: un solo usePreferenciasTabla por id; la tabla y «Ajustar tabla» comparten su resultado y el ref del ancho.
   const prefs = usePreferenciasTabla(ID_HUB, COLUMNAS_TABLA_HUB);
@@ -970,6 +981,14 @@ export default function VentasHub() {
   const chipsFiltro = chipsFiltroHub(estado);
   // N3/N5: la selección de la página (TablaEstandar la limpia al cambiar de página, de pestaña, de filtro o de orden).
   const seleccion = useMemo(() => Array.from(selectedIds), [selectedIds]);
+  // B4 T24 f2 (F50, D41): el «vacío» de la tabla solo cambia con la búsqueda (como la lista de SC, m8 de T8 r1): un JSX nuevo en cada
+  // render anulaba el memo de CuerpoTabla y repintaba todas las filas.
+  const vacioHub = useMemo(() => (
+    <div>
+      <p className="font-semibold text-slate-600">{estado.q.trim() ? `Sin resultados para «${estado.q.trim()}»` : 'No hay documentos en esta vista'}</p>
+      <p className="mt-1 text-xs text-slate-400">Prueba cambiando los filtros o agregando una nueva solicitud.</p>
+    </div>
+  ), [estado.q]);
   const alSeleccionar = useCallback((claves: (string | number)[]) => setSelectedIds(new Set(claves.map(String))), []);
 
   // ── B4 T7, Documentos / Análisis (RP35): Análisis es un estado de la página; nunca va en estado.vista ──
@@ -1002,25 +1021,33 @@ export default function VentasHub() {
     if (enAnalisis) cambiarSeccion('documentos');
   };
   const elegirPaso = (clave: string) => {
-    const paso = alternarSeleccion(estado.paso, clave);
+    const paso = alternarPaso(estado.paso, clave);
     despachar({ tipo: 'paso', valor: paso });
     const vista = paso ? tabHubDePaso(paso) : null;
     if (vista) despachar(accionPestana(estado, vista, opcionesEstadosHub));
     if (enAnalisis) cambiarSeccion('documentos');
   };
-  // ?paso=<clave> (R6): el Hub abre filtrado por ese paso y en la pestaña de su tipo, una sola vez, como tocar la caja.
-  const pasoDelEnlace = useRef(enlace.paso);
-  useEffect(() => {
-    const paso = pasoDelEnlace.current;
-    if (!paso) return;
-    pasoDelEnlace.current = null;
-    despachar({ tipo: 'paso', valor: paso });
-    const vista = tabHubDePaso(paso);
-    if (vista) despachar(accionPestana(estado, vista, opcionesEstadosHub));
+  // B4 T24 (FINAL-C3): el enlace del Hub, una sola vez al montar (el ref: StrictMode no lo repite) y DESPUÉS del commit. Next
+  // 16 cambia la URL de una navegación con <Link> en el useInsertionEffect de HistoryUpdater; este useLayoutEffect corre en
+  // el mismo commit, después de eso y antes de pintar, así que lee la URL nueva y no se ve un cuadro con la sección vieja:
+  //  - ?tab=analisis&foco= («Ver análisis» de las listas): la pestaña Análisis con su foco;
+  //  - ?paso=<clave> (R6; una caja del embudo del Dashboard): el Hub filtrado por ese paso y en la pestaña de su tipo, como
+  //    tocar la caja.
+  const enlaceLeido = useRef(false);
+  useLayoutEffect(() => {
+    if (enlaceLeido.current) return;
+    enlaceLeido.current = true;
+    const inicio = inicioDelEnlaceHub(window.location.search);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- FINAL-C3: la URL de la navegación existe recién en el commit
+    if (inicio.seccion) setSeccion(inicio.seccion);
+    if (inicio.foco) setFocoEnlace(inicio.foco);
+    if (!inicio.paso) return;
+    despachar({ tipo: 'paso', valor: inicio.paso });
+    if (inicio.vista) despachar(accionPestana(estado, inicio.vista, opcionesEstadosHub));
   }, [estado, despachar]);
   // RP34 y D27(a): «Ajustar tiempos» solo para un administrador (esAdmin, el mismo esAdministrador de flujo.tsx), apagado y
   // con el porqué mientras no se leyó /ventas/config, igual que el botón «Configuración» de arriba.
-  const accionAjustar = esAdmin(getUsuarioActual().role)
+  const accionAjustar = esAdmin(rol)
     ? { label: 'Ajustar tiempos', onClick: () => setShowConfig(true), deshabilitado: !configCargada, titulo: configCargada ? undefined : AVISO_CONFIG_SIN_LEER }
     : null;
 
@@ -1052,9 +1079,6 @@ export default function VentasHub() {
   /* ════════════════ RENDER ════════════════ */
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
-      {actRow && <ActivitiesPanel key={`${actRow.tipo}|${actRow.id}`} row={actRow} onClose={()=>setActRow(null)} onNotaGuardada={()=>loadData({silencioso: true})}/>}
-      {showConfig && <ConfigPanel alertDias={alertDias} configCargada={configCargada} onSave={cfg=>{setAlertDias(cfg);setShowConfig(false);loadData();}} onClose={()=>setShowConfig(false)}/>}
-
       <SubNav label="Hub Ventas" items={VEN_NAV} currentPath="/dashboard/ventas" color="indigo" />
 
       {/* B4 T7 (FLUJO-ventas-pantallas A; R6, D42): la franja del flujo reemplaza el semáforo con emojis y sus botones
@@ -1083,7 +1107,8 @@ export default function VentasHub() {
       {/* B4 T7 r1b (D41): pb-24 deja libre, con la página al fondo, la esquina del botón flotante de la IA (GlobalAIChat:
           fixed bottom-6 de 56 px, 80 px en total): el pie de la tabla, el tablero y Análisis quedan por encima. En la
           pantalla completa la reserva es el pr-20 del pie. */}
-      <div className="flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6">
+      {/* B4 T24 f2 (F44-a): con el token RESERVA_BOTON_IA (pb-24) de design-system.ts. */}
+      <div className={`flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`}>
 
         {/* HEADER ROW */}
         <PageHeader
@@ -1095,10 +1120,13 @@ export default function VentasHub() {
             <div className="flex flex-wrap items-center gap-2.5">
               {/* H9: directo a la lista con ?new=1 (abre el formulario y limpia la URL, U9), sin pasar por
                   /solicitud/nueva; «Abriendo…» apenas se hace clic. */}
-              <Link href="/dashboard/ventas/solicitud?new=1" aria-label="Nueva solicitud"
-                className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all">
-                <ContenidoEnlace icon={Plus}>Nueva Solicitud</ContenidoEnlace>
-              </Link>
+              {/* B4 T24 f2 r1 (m19): crear una solicitud (POST /solicitudes) es de ADMIN y ASESOR. */}
+              {accesoTablero.mover && (
+                <Link href="/dashboard/ventas/solicitud?new=1" aria-label="Nueva solicitud"
+                  className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all">
+                  <ContenidoEnlace icon={Plus}>Nueva Solicitud</ContenidoEnlace>
+                </Link>
+              )}
               <button onClick={() => loadData()}
                 className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-semibold text-xs shadow-xs transition-colors">
                 <RefreshCw size={13} className={listado.recargando || flujo.cargando || cargandoStats ? 'animate-spin' : ''}/> Actualizar
@@ -1185,9 +1213,9 @@ export default function VentasHub() {
               ajustes={{ columnas: COLUMNAS_TABLA_HUB, preferencias: prefs, anchoRef: anchoTablaRef }}
               kanbanDisponible
               pantallaCompleta={estado.modo === 'lista' ? { completa, alternar } : undefined}
-              total={listado.total}
+              total={sinPagina ? null : listado.total}
               estadoTotal={estadoDelTotal({
-                total: listado.total, cargando: listado.cargandoInicial, recargando: listado.recargando, error: listado.error,
+                total: listado.total, cargando: listado.cargandoInicial || sinPagina, recargando: listado.recargando, error: listado.error,
               })}
             />
             {!enAnalisis && estado.modo === 'lista' && (
@@ -1201,8 +1229,8 @@ export default function VentasHub() {
                   estado={estado}
                   onEstado={despachar}
                   filas={listado.filas}
-                  total={listado.total}
-                  cargando={listado.cargandoInicial}
+                  total={sinPagina ? null : listado.total}
+                  cargando={listado.cargandoInicial || sinPagina}
                   recargando={listado.recargando}
                   error={listado.error}
                   onReintentar={listado.recargar}
@@ -1212,14 +1240,10 @@ export default function VentasHub() {
                   claseFila={claseDeFila}
                   grupoFila={atencion ? grupoDeFila : undefined}
                   tituloGrupo={tituloDeGrupo}
-                  seleccion={seleccion}
-                  onSeleccion={alSeleccionar}
-                  vacio={(
-                    <div>
-                      <p className="font-semibold text-slate-600">{estado.q.trim() ? `Sin resultados para «${estado.q.trim()}»` : 'No hay documentos en esta vista'}</p>
-                      <p className="mt-1 text-xs text-slate-400">Prueba cambiando los filtros o agregando una nueva solicitud.</p>
-                    </div>
-                  )}
+                  // B4 T24 f2 (m8 de la revisión r0 de f1): sin permiso de mover, sin casillas (la barra masiva tampoco sale).
+                  seleccion={accesoTablero.mover ? seleccion : undefined}
+                  onSeleccion={accesoTablero.mover ? alSeleccionar : undefined}
+                  vacio={vacioHub}
                   etiqueta="Documentos del Hub de Ventas"
                 />
               </AccionesFila.Provider>
@@ -1242,7 +1266,8 @@ export default function VentasHub() {
               asistente={ASISTENTE_VENTAS}
             />
           ) : estado.modo === 'kanban' ? (
-            <TableroKanban
+            // B4 T24 r2 (m2, m10): mientras se lee el rol, el esqueleto (sin acciones) en lugar del tablero.
+            !accesoTablero.listo ? <EsqueletoTablero /> : <TableroKanban
               tablero={tablero}
               regla={reglaHub}
               tarjetaDe={tarjetaDeFila}
@@ -1251,13 +1276,14 @@ export default function VentasHub() {
               onAccion={accionDesdeTablero}
               accionesTarjeta={accionesTarjeta}
               resumenColumna={resumenColumna}
+              soloLectura={accesoTablero.soloLectura}
               color="indigo"
             />
           ) : null}
         </div>
 
         {/* Bulk action bar (N3 y N5): la selección es de la página de la tabla, así que solo en Lista. */}
-        {selectedIds.size>0 && !enAnalisis && estado.modo === 'lista' && (
+        {selectedIds.size>0 && !enAnalisis && estado.modo === 'lista' && accesoTablero.mover && (
           <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-6 py-3.5 rounded-2xl shadow-2xl flex items-center gap-4 z-40 border border-slate-700">
             <span className="font-bold text-xs bg-slate-800 px-3 py-1 rounded-full border border-slate-700">{selectedIds.size} seleccionados</span>
             {(() => {
@@ -1273,7 +1299,7 @@ export default function VentasHub() {
               const opciones = [...ESTADOS_VEN_MANUALES, 'FACTURADO'].filter(e => destinos.has(e));
               return (
                 <select value="" onChange={e=>handleBulkChangeEstado(e.target.value)} disabled={venMarcados.length === 0 || opciones.length === 0}
-                  className="bg-slate-800 border border-slate-600 text-white text-xs rounded-xl px-3 py-1.5 outline-none disabled:opacity-50 disabled:cursor-not-allowed">
+                  className={`bg-slate-800 border border-slate-600 text-white text-xs rounded-xl px-3 py-1.5 ${FOCOS.blanco} disabled:opacity-50 disabled:cursor-not-allowed`}>
                   <option value="" disabled>Cambiar estado de pedidos ({venMarcados.length})…</option>
                   {opciones.map(est => <option key={est} value={est}>{ETIQUETA_ESTADO_VEN[est] || est}</option>)}
                 </select>
@@ -1287,176 +1313,178 @@ export default function VentasHub() {
         )}
 
         {/* UNIVERSAL DOCUMENT QUICK DETAIL PANEL (SC, COT, VEN) */}
-        {quickDetailDoc&&(
-          <>
-            <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-40" onClick={()=>setQuickDetailDoc(null)}/>
-            <div className="fixed top-0 bottom-0 right-0 z-50 bg-white shadow-2xl flex flex-col w-[600px] max-w-full border-l border-slate-200">
-              <div className="flex items-center justify-between px-6 py-5 border-b border-slate-100 bg-slate-50">
-                <div className="flex items-center gap-3">
-                  <span className={`px-2.5 py-1 rounded-full text-xs font-black border ${getTipoClass(quickDetailDoc.tipo)}`}>
-                    {getTipoLabel(quickDetailDoc.tipo)}
-                  </span>
-                  <div>
-                    <h2 className="text-lg font-black text-slate-900">{quickDetailDoc.numero}</h2>
-                    <span className={`px-2 py-0.5 rounded-md text-[10px] font-black border ${getEstadoClass(quickDetailDoc.estado)}`}>
-                      {etiquetaEstado(quickDetailDoc.tipo, quickDetailDoc.estado)}
-                    </span>
-                  </div>
-                </div>
-                <button onClick={()=>setQuickDetailDoc(null)} className="p-2 hover:bg-slate-200 rounded-xl text-slate-500"><X size={18}/></button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-6 space-y-6">
-                {/* B4 T7 (FLUJO-documentos punto 6; RP74, D36, D42): la cadena de documentos, compacta (solo los números;
-                    las cajas caídas conservan su palabra). Las etiquetas salen de las tablas únicas de cada tipo (RP4). */}
-                <div className="min-w-0 bg-white rounded-2xl p-4 border border-slate-200 shadow-xs">
-                  <CadenaDocumentos doc={quickDetailDoc} tipo={quickDetailDoc.tipo} compacta/>
-                </div>
-
-                {/* Que se esta pidiendo -- tipo de solicitud + notas, solo aplica a SC */}
-                {quickDetailDoc.tipo === 'SC' && (quickDetailDoc.tipo_solicitud || quickDetailDoc.notas) && (
-                  <div className="bg-indigo-50 rounded-2xl p-4 border border-indigo-100 space-y-2">
-                    <p className="text-[10px] font-black text-indigo-400 uppercase tracking-wide">Qué se está pidiendo</p>
-                    {quickDetailDoc.tipo_solicitud && (
-                      <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-black bg-white text-indigo-700 border border-indigo-200">{etiquetaTipoSolicitud(quickDetailDoc.tipo_solicitud)}</span>
-                    )}
-                    {quickDetailDoc.notas && <p className="text-xs text-indigo-900 leading-relaxed">{quickDetailDoc.notas}</p>}
-                  </div>
-                )}
-
-                {/* Customer Card */}
-                <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-2">
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide">Información del Cliente</p>
-                  <p className="font-black text-slate-800 text-sm">{quickDetailDoc.customer_name || quickDetailDoc.cliente?.nombre || 'Cliente General'}</p>
-                  <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
-                    <div><span className="text-slate-400 block text-[10px]">Teléfono / WhatsApp:</span> {quickDetailDoc.customer_phone || quickDetailDoc.telefono || '-'}</div>
-                    <div><span className="text-slate-400 block text-[10px]">Email:</span> {quickDetailDoc.customer_email || quickDetailDoc.email || '-'}</div>
-                    <div className="col-span-2"><span className="text-slate-400 block text-[10px]">Dirección de Entrega:</span> {quickDetailDoc.customer_address || quickDetailDoc.direccion_entrega || 'Recoge en Tienda'}</div>
-                  </div>
-                </div>
-
-                {/* Financial Breakdown */}
-                <div className="bg-white rounded-2xl p-4 border border-slate-200 space-y-2 shadow-xs">
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide">Resumen Financiero</p>
-                  <div className="space-y-1.5 text-xs">
-                    <div className="flex justify-between text-slate-600">
-                      <span>Total Liquidado:</span>
-                      <span className="font-bold text-slate-900">{fCOP(quickDetailDoc.total_cop || quickDetailDoc.total || 0)}</span>
-                    </div>
-                    {quickDetailDoc.anticipo_cop !== undefined && (
-                      <div className="flex justify-between text-emerald-700">
-                        <span>Anticipo / Recaudo:</span>
-                        <span className="font-bold">{fCOP(quickDetailDoc.anticipo_cop)}</span>
-                      </div>
-                    )}
-                    {quickDetailDoc.saldo_cop !== undefined && (
-                      <div className="flex justify-between text-rose-600 font-bold border-t border-slate-100 pt-1">
-                        <span>Saldo Pendiente:</span>
-                        <span>{fCOP(quickDetailDoc.saldo_cop)}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Products items */}
-                {Array.isArray(quickDetailDoc.productos) && quickDetailDoc.productos.length > 0 && (
-                  <div className="bg-white rounded-2xl p-4 border border-slate-200 space-y-2 shadow-xs">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide">Partidas y Referencias</p>
-                    <div className="divide-y divide-slate-100">
-                      {quickDetailDoc.productos.map((item:any, idx:number)=>(
-                        <div key={idx} className="py-2 flex justify-between items-center text-xs">
-                          <div>
-                            <p className="font-bold text-slate-800">{item.product_name || item.nombre || item.producto_nombre || item.sku || `Ítem #${idx+1}`}</p>
-                            <p className="text-[10px] text-slate-400">Cant: {item.qty || item.cantidad || 1} {item.talla ? `· Talla: ${item.talla}` : ''}</p>
-                          </div>
-                          <span className="font-bold text-slate-700">{fCOP(item.unit_price_cop || item.precio_unitario || item.precio || 0)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* State Changer for VEN -- N2: solo lo que el servidor acepta desde el estado actual; nunca un botón
-                    directo a Entregado (va por Entregas) ni a Cancelado sin motivo (modal de N3). */}
-                {quickDetailDoc.tipo === 'VEN' && (() => {
-                  const op = opcionesEstadoPVEN(quickDetailDoc.estado);
-                  const sinOpciones = op.mover.length === 0 && !op.despachar && !op.cancelar && !op.facturar;
-                  return (
-                    <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-2">
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide">Cambiar Estado Operativo</p>
-                      {op.mover.length > 0 && (
-                        <div className="flex flex-wrap gap-2">
-                          {op.mover.map(est => (
-                            <button key={est} onClick={() => cambiarEstadoPedido(quickDetailDoc, est)}
-                              className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-white text-slate-700 hover:bg-slate-100 border-slate-200">
-                              {ETIQUETA_ESTADO_VEN[est]}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      {(op.despachar || op.facturar || op.cancelar) && (
-                        <div className="flex flex-wrap items-center gap-2 pt-1">
-                          {op.despachar && (
-                            <Link href="/dashboard/inventario/entregas"
-                              className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-teal-50 text-teal-800 hover:bg-teal-100 border-teal-200">
-                              Despachar en Entregas →
-                            </Link>
-                          )}
-                          {op.facturar && (
-                            <button onClick={async () => {
-                              const doc = quickDetailDoc;
-                              if (await confirmar({
-                                titulo: `Marcar ${doc.numero} como Facturado`,
-                                mensaje: 'Después de esto el estado del pedido ya no se puede cambiar.',
-                                textoConfirmar: 'Marcar como Facturado',
-                              })) cambiarEstadoPedido(doc, 'FACTURADO');
-                            }}
-                              className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-green-50 text-green-800 hover:bg-green-100 border-green-200">
-                              Marcar como Facturado
-                            </button>
-                          )}
-                          {op.cancelar && (
-                            <button onClick={() => abrirCancelacion([`VEN|${quickDetailDoc.id}`])}
-                              className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-white text-rose-600 hover:bg-rose-50 border-rose-200">
-                              Cancelar pedido
-                            </button>
-                          )}
-                        </div>
-                      )}
-                      {sinOpciones && (
-                        <p className="text-xs text-slate-500">
-                          Este pedido está {etiquetaEstado('VEN', quickDetailDoc.estado)}; su estado ya no se cambia desde aquí.
-                        </p>
-                      )}
-                    </div>
-                  );
-                })()}
-
-                {/* Direct Action Link */}
-                <div className="pt-2">
-                  <button onClick={()=>{
-                    const q = quickDetailDoc;
-                    // H37: con return_to del Hub, el único botón de volver del detalle dice «Volver al Hub de Ventas». La SC
-                    // va directo a su detalle (/solicitud?id= montaba la lista entera solo para redirigir).
-                    if(q.tipo==='SC')  router.push(`/dashboard/ventas/solicitud/${q.id}?return_to=%2Fdashboard%2Fventas`);
-                    if(q.tipo==='COT') router.push(`/dashboard/ventas/cotizacion/${q.id}?return_to=%2Fdashboard%2Fventas`);
-                    if(q.tipo==='VEN') router.push(`/dashboard/ventas/venta/${q.id}?return_to=%2Fdashboard%2Fventas`);
-                  }}
-                  className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors">
-                    Abrir en Módulo Detallado <ArrowRight size={14}/>
-                  </button>
-                </div>
+        {/* B4 T24 f2 r1 (C3): el panel rápido es un Drawer: role="dialog" con aria-labelledby (su h2 con el número), el foco que entra al
+            abrir y vuelve a la fila al cerrar, Esc, el clic en el fondo, Tab atrapado y data-capa (useCierreVentana). Su ancho de 600 px y
+            la reserva del botón de la IA (F44-a: «Abrir en Módulo Detallado» queda a la vista) son props aditivas. Sin campos que
+            escribir, Esc y el fondo lo cierran (F40). */}
+        {quickDetailDoc && (
+          <Drawer idTitulo="drawer-panel-rapido-titulo" maxWidth="600" reservaBotonIA onClose={() => setQuickDetailDoc(null)} header={(
+            <div className="flex items-center gap-3">
+              <span className={`px-2.5 py-1 rounded-full text-xs font-black border ${getTipoClass(quickDetailDoc.tipo)}`}>
+                {getTipoLabel(quickDetailDoc.tipo)}
+              </span>
+              <div>
+                <h2 id="drawer-panel-rapido-titulo" className="text-lg font-black text-slate-900">{quickDetailDoc.numero}</h2>
+                {/* B4 T24 f2 (FINAL-m28): la MISMA insignia de la tabla y del tablero (estadoDeTarjeta, la fuente única de los estados). */}
+                <InsigniaEstado tipo={quickDetailDoc.tipo} estado={quickDetailDoc.estado} />
               </div>
             </div>
-          </>
+          )}>
+            {/* B4 T7 (FLUJO-documentos punto 6; RP74, D36, D42): la cadena de documentos, compacta (solo los números;
+                las cajas caídas conservan su palabra). Las etiquetas salen de las tablas únicas de cada tipo (RP4). */}
+            <div className="min-w-0 bg-white rounded-2xl p-4 border border-slate-200 shadow-xs">
+              <CadenaDocumentos doc={quickDetailDoc} tipo={quickDetailDoc.tipo} compacta/>
+            </div>
+
+            {/* Que se esta pidiendo -- tipo de solicitud + notas, solo aplica a SC */}
+            {quickDetailDoc.tipo === 'SC' && (quickDetailDoc.tipo_solicitud || quickDetailDoc.notas) && (
+              <div className="bg-indigo-50 rounded-2xl p-4 border border-indigo-100 space-y-2">
+                <p className="text-[10px] font-black text-indigo-400 uppercase tracking-wide">Qué se está pidiendo</p>
+                {quickDetailDoc.tipo_solicitud && (
+                  <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-black bg-white text-indigo-700 border border-indigo-200">{etiquetaTipoSolicitud(quickDetailDoc.tipo_solicitud)}</span>
+                )}
+                {quickDetailDoc.notas && <p className="text-xs text-indigo-900 leading-relaxed">{quickDetailDoc.notas}</p>}
+              </div>
+            )}
+
+            {/* Customer Card */}
+            <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-2">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide">Información del Cliente</p>
+              <p className="font-black text-slate-800 text-sm">{quickDetailDoc.customer_name || quickDetailDoc.cliente?.nombre || 'Cliente General'}</p>
+              <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
+                <div><span className="text-slate-400 block text-[10px]">Teléfono / WhatsApp:</span> {quickDetailDoc.customer_phone || quickDetailDoc.telefono || '-'}</div>
+                <div><span className="text-slate-400 block text-[10px]">Email:</span> {quickDetailDoc.customer_email || quickDetailDoc.email || '-'}</div>
+                <div className="col-span-2"><span className="text-slate-400 block text-[10px]">Dirección de Entrega:</span> {quickDetailDoc.customer_address || quickDetailDoc.direccion_entrega || 'Recoge en Tienda'}</div>
+              </div>
+            </div>
+
+            {/* Financial Breakdown */}
+            <div className="bg-white rounded-2xl p-4 border border-slate-200 space-y-2 shadow-xs">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide">Resumen Financiero</p>
+              <div className="space-y-1.5 text-xs">
+                <div className="flex justify-between text-slate-600">
+                  <span>Total Liquidado:</span>
+                  <span className="font-bold text-slate-900">{fCOP(quickDetailDoc.total_cop || quickDetailDoc.total || 0)}</span>
+                </div>
+                {quickDetailDoc.anticipo_cop !== undefined && (
+                  <div className="flex justify-between text-emerald-700">
+                    <span>Anticipo / Recaudo:</span>
+                    <span className="font-bold">{fCOP(quickDetailDoc.anticipo_cop)}</span>
+                  </div>
+                )}
+                {quickDetailDoc.saldo_cop !== undefined && (
+                  <div className="flex justify-between text-rose-600 font-bold border-t border-slate-100 pt-1">
+                    <span>Saldo Pendiente:</span>
+                    <span>{fCOP(quickDetailDoc.saldo_cop)}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Products items */}
+            {Array.isArray(quickDetailDoc.productos) && quickDetailDoc.productos.length > 0 && (
+              <div className="bg-white rounded-2xl p-4 border border-slate-200 space-y-2 shadow-xs">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide">Partidas y Referencias</p>
+                <div className="divide-y divide-slate-100">
+                  {quickDetailDoc.productos.map((item:any, idx:number)=>(
+                    <div key={idx} className="py-2 flex justify-between items-center text-xs">
+                      <div>
+                        <p className="font-bold text-slate-800">{item.product_name || item.nombre || item.producto_nombre || item.sku || `Ítem #${idx+1}`}</p>
+                        <p className="text-[10px] text-slate-400">Cant: {item.qty || item.cantidad || 1} {item.talla ? `· Talla: ${item.talla}` : ''}</p>
+                      </div>
+                      <span className="font-bold text-slate-700">{fCOP(item.unit_price_cop || item.precio_unitario || item.precio || 0)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* State Changer for VEN -- N2: solo lo que el servidor acepta desde el estado actual; nunca un botón
+                directo a Entregado (va por Entregas) ni a Cancelado sin motivo (modal de N3). */}
+            {quickDetailDoc.tipo === 'VEN' && (() => {
+              // B4 T24 f2 (m8 de la revisión r0 de f1): con el permiso del rol (PATCH /ventas/pedidos: ADMIN y ASESOR). Sin él,
+              // solo el enlace a Entregas, si aplica; si no hay nada, la sección no se pinta.
+              // r1 (m13 + m37): «Despachar en Entregas →» solo para quien despacha (BODEGA lo conserva).
+              const op = opcionesPanelPedido(quickDetailDoc.estado, accesoTablero.mover, puedeAccionPedido('despachar', rol));
+              if (!accesoTablero.mover && !op.despachar) return null;
+              const sinOpciones = op.mover.length === 0 && !op.despachar && !op.cancelar && !op.facturar;
+              return (
+                <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-2">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide">Cambiar Estado Operativo</p>
+                  {op.mover.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {op.mover.map(est => (
+                        <button type="button" key={est} onClick={() => cambiarEstadoPedido(quickDetailDoc, est)}
+                          className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-white text-slate-700 hover:bg-slate-100 border-slate-200 ${FOCO}`}>
+                          {ETIQUETA_ESTADO_VEN[est]}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {(op.despachar || op.facturar || op.cancelar) && (
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      {op.despachar && (
+                        <Link href={RUTA_ENTREGAS}
+                          className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-teal-50 text-teal-800 hover:bg-teal-100 border-teal-200 ${FOCO}`}>
+                          Despachar en Entregas →
+                        </Link>
+                      )}
+                      {op.facturar && (
+                        <button type="button" onClick={async () => {
+                          const doc = quickDetailDoc;
+                          // B4 T24 f2 (F53): la MISMA confirmación del tablero de Pedidos (confirmacionFacturarPedido).
+                          if (await confirmar(confirmacionFacturarPedido(doc))) cambiarEstadoPedido(doc, 'FACTURADO');
+                        }}
+                          className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-green-50 text-green-800 hover:bg-green-100 border-green-200 ${FOCO}`}>
+                          Marcar como Facturado
+                        </button>
+                      )}
+                      {op.cancelar && (
+                        <button type="button" onClick={() => abrirCancelacion([`VEN|${quickDetailDoc.id}`])}
+                          className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-white text-rose-600 hover:bg-rose-50 border-rose-200 ${FOCO}`}>
+                          Cancelar pedido
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {sinOpciones && (
+                    <p className="text-xs text-slate-500">
+                      Este pedido está {estadoDeTarjeta('VEN', quickDetailDoc.estado).label}; su estado ya no se cambia desde aquí.
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Direct Action Link */}
+            <div className="pt-2">
+              <button type="button" onClick={()=>{
+                const q = quickDetailDoc;
+                // H37: con return_to del Hub, el único botón de volver del detalle dice «Volver al Hub de Ventas». La SC
+                // va directo a su detalle (/solicitud?id= montaba la lista entera solo para redirigir).
+                if(q.tipo==='SC')  router.push(`/dashboard/ventas/solicitud/${q.id}?return_to=%2Fdashboard%2Fventas`);
+                if(q.tipo==='COT') router.push(`/dashboard/ventas/cotizacion/${q.id}?return_to=%2Fdashboard%2Fventas`);
+                if(q.tipo==='VEN') router.push(`/dashboard/ventas/venta/${q.id}?return_to=%2Fdashboard%2Fventas`);
+              }}
+              className={`w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors ${FOCO}`}>
+                Abrir en Módulo Detallado <ArrowRight size={14}/>
+              </button>
+            </div>
+          </Drawer>
         )}
       </div>
+
+      {/* B4 T24 f2 r2 (m4): los Drawer de la actividad y de la configuración (fixed z-40) van DESPUÉS de la tarjeta en pantalla completa y
+          de la barra masiva (las dos fixed z-40), como el panel rápido: así quedan encima (con el mismo z gana el orden del DOM) y el
+          foco de la capa no le quita el foco a una superficie que el usuario ve arriba. */}
+      {actRow && <ActivitiesPanel key={`${actRow.tipo}|${actRow.id}`} row={actRow} onClose={()=>setActRow(null)} onNotaGuardada={()=>loadData({silencioso: true})}/>}
+      {showConfig && <ConfigPanel alertDias={alertDias} configCargada={configCargada} onSave={cfg=>{setAlertDias(cfg);setShowConfig(false);loadData();}} onClose={()=>setShowConfig(false)}/>}
 
       {/* Ventanas que pueden abrirse desde el panel rápido (z-50): van después en el DOM para quedar encima. */}
 
       {/* N3: cancelar documentos con motivo */}
       {cancelacion && (
-        <Modal
+        <Modal cierreExterno={false}
           title={filasCancelacion.length === 1 ? `Cancelar ${filasCancelacion[0].row?.numero || 'documento'}` : `Cancelar ${filasCancelacion.length} documentos`}
           subtitle="Revisa qué se va a cancelar e indica el motivo"
           icon={Trash2} color="rose" maxWidth="lg"
@@ -1464,7 +1492,7 @@ export default function VentasHub() {
           footer={(
             <>
               <Button variant="secondary" disabled={cancelando} onClick={()=>setCancelacion(null)}>Volver</Button>
-              <Button variant="danger" loading={cancelando} disabled={motivoCancelacion.trim().length < 5 || porCancelar.length === 0} onClick={confirmarCancelacion}>
+              <Button variant="danger" loading={cancelando} disabled={!motivoValido(motivoCancelacion) || porCancelar.length === 0} onClick={confirmarCancelacion}>
                 {porCancelar.length === 1 ? 'Cancelar documento' : 'Cancelar documentos'}
               </Button>
             </>
@@ -1481,10 +1509,12 @@ export default function VentasHub() {
             ))}
           </ul>
           <div>
-            <label className="block text-xs font-bold text-slate-600 mb-1">Motivo (mínimo 5 caracteres)</label>
-            <textarea value={motivoCancelacion} onChange={e=>setMotivoCancelacion(e.target.value)} rows={3} disabled={cancelando}
+            <label htmlFor={idMotivo} className="block text-xs font-bold text-slate-600 mb-1">Motivo (mínimo {MINIMO_MOTIVO} caracteres)</label>
+            {/* B4 T24 f2 r1 (m34): el foco de ModalMotivo (FOCOS.red) y el foco inicial en el campo. */}
+            <textarea id={idMotivo} value={motivoCancelacion} onChange={e=>setMotivoCancelacion(e.target.value)} rows={3} disabled={cancelando}
+              autoFocus
               placeholder="Ej.: El cliente desistió de la compra"
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200 focus:border-rose-400"/>
+              className={`w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-red-300 ${FOCOS.red}`}/>
           </div>
         </Modal>
       )}

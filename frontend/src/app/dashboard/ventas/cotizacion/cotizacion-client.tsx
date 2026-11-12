@@ -37,14 +37,14 @@ import {
 // B4 T9: la lista ya no cuenta en el navegador (diasAlerta, pestanaCotizacion): las vistas, los conteos y el resumen son
 // del servidor (T6B). Las marcas del pedido de cada fila (COT-LISTA) siguen saliendo de aquí. r1 (I1 e I2): la marca del
 // pedido y «Sin precio» con la regla de la tarjeta del tablero; la Entrega est. como día de calendario. r2 (p2): el chip
-// «Sin precio» es chipSinPrecio, el mismo objeto de la tarjeta.
+// «Sin precio» es chipSinPrecio, el mismo chip (texto y tono) de la tarjeta.
 import {
   pedidoVigente, tarjetasCotizaciones, marcaPedidoCotizacion, chipSinPrecio, diaDeNegocio, fechaNegocioVencida,
   fechaPorVencer, avisoSolicitudTrasRechazo,
 } from '@/lib/listas-ventas';
 import {
   SubNav, PageHeader, Modal, Button, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila, ModalMotivo,
-  TableroKanban, useTableroKanban, CLASE_CHIP, useAvisos,
+  TableroKanban, EsqueletoTablero, useTableroKanban, CLASE_CHIP, useAvisos,
 } from '@/components/ui';
 import type { ItemMenuFila } from '@/components/ui';
 import {
@@ -57,8 +57,8 @@ import {
   accionModo, accionPestana, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta,
 } from '@/lib/tabla';
 import type { AccionTabla } from '@/lib/tabla';
-import { alternarSeleccion } from '@/lib/flujo';
-import { avisosCotizaciones, enlaceVerAnalisis, pasosDeLista, textoRegla } from '@/lib/flujo-ventas';
+import { alternarPaso } from '@/lib/flujo';
+import { avisosCotizaciones, enlaceVerAnalisis, pasosDeLista, reservaAvisosCotizaciones, textoRegla } from '@/lib/flujo-ventas';
 import {
   COLUMNAS_COT, OPCIONES_ESTADOS_TABLERO_COT, chipsDocumentoVentas, consultaColumnaCOT, estadoDeTarjeta,
   opcionesEstadosCotizaciones, reglaSoltarCotizacion, tarjetaCotizacion,
@@ -66,8 +66,10 @@ import {
 import { ESTADOS_COTIZACION } from '@/lib/estados-cotizacion';
 import { fechaCorta, fechaSolo } from '@/lib/fechas-colombia';
 import { enlaceDocumento } from '@/lib/analisis';
-import { recargarTrasError, textoDeError } from '@/lib/avisos';
-import { TABLE } from '@/lib/design-system';
+import { cambiarConRegla, recargarTrasError, textoDeError } from '@/lib/avisos';
+import { FOCOS, RESERVA_BOTON_IA, TABLE } from '@/lib/design-system';
+import { accesoTableroVentas } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 import { VEN_NAV } from '../ven-nav';
 import { getUsuarioActual } from '../flujo';
 
@@ -332,7 +334,7 @@ export function CalculadorModal({
     && validaPreciosAlGuardar(cuerpoDeGuardado(armarPayload(), referenciaGuardado()));
 
   return (
-    <Modal title="Calculadora de Cotización" subtitle={`${cot.numero} — ${cot.customer_name}`}
+    <Modal cierreExterno={false} title="Calculadora de Cotización" subtitle={`${cot.numero} — ${cot.customer_name}`}
       icon={Calculator} color="amber" maxWidth="4xl" onClose={onClose} bloquearCierre={saving}
       footer={anulacion ? (
         // H40 (R7): el servidor no guardó (409 ANULA_CONFIRMACION): qué cambió y la razón obligatoria antes de anular.
@@ -526,11 +528,15 @@ export function PropagarPvenConfirm({ pven, totalAnterior, totalNuevo, onConfirm
   // B3.1 r1 (B): «antes» es el total del pedido; si ya difiere del de la COT, una nota en vez del total nuevo y del crédito.
   const { antes, nuevo, pagado: yaPagado, credito: creditoAFavor, nota } = resumenPropagacionPedido(pven, totalAnterior, totalNuevo);
   return (
-    <Modal title="Actualizar Pedido de Venta" icon={RotateCcw} color="indigo" maxWidth="md" onClose={onCancel}
+    // B4 T24 r2 (C5) y r3 (m6): su cierre ES una de sus dos decisiones (onCancel guarda la cotización con un PATCH): solo sus botones
+    // (sin la X: la calculadora no conserva lo editado), y nada mientras guarda.
+    <Modal cierreExterno={false} bloquearCierre={saving} sinCerrar title="Actualizar Pedido de Venta" icon={RotateCcw} color="indigo" maxWidth="md" onClose={onCancel}
       footer={(
         <div className="flex flex-col w-full gap-2">
           <Button color="indigo" disabled={saving} onClick={onConfirm}>Sí, actualizar también el pedido</Button>
-          <Button variant="secondary" disabled={saving} onClick={onCancel}>Solo guardar la cotización</Button>
+          {/* B4 T24 f2 (m2 = m6 de la revisión r3 de f1): sin la X, el foco inicial caía en «Sí, actualizar también el pedido»: arranca en
+              la opción de menos peso (autoFocus; useCierreVentana respeta el foco que ya está dentro del panel). Abrir no decide. */}
+          <Button variant="secondary" autoFocus disabled={saving} onClick={onCancel}>Solo guardar la cotización</Button>
         </div>
       )}>
       <p className="text-slate-500 text-sm">
@@ -673,7 +679,7 @@ export function VerificarAnticipoModal({ cot, verificador, saving, error, onConf
   const ev = evaluarVerificacion(cuenta, form, hoy);
   const campo = 'w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400';
   return (
-    <Modal title="Verificar el pago del anticipo" subtitle={`${cot.numero} — ${cot.customer_name || ''}`}
+    <Modal cierreExterno={false} title="Verificar el pago del anticipo" subtitle={`${cot.numero} — ${cot.customer_name || ''}`}
       icon={DollarSign} color="emerald" maxWidth="lg" onClose={onCancel}
       footer={(
         <>
@@ -773,7 +779,7 @@ export function AjustarAnticipoModal({ cot, saving, error, onGuardar, onVolverMo
   const campo = 'w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400';
   const errorGuardado = error && <p className="text-xs text-red-600 font-bold bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>;
   return (
-    <Modal title="Ajustar anticipo" subtitle={`${cot.numero} — total ${fCOP(cot.total_cop)}`}
+    <Modal cierreExterno={false} title="Ajustar anticipo" subtitle={`${cot.numero} — total ${fCOP(cot.total_cop)}`}
       icon={DollarSign} color="amber" maxWidth="md" onClose={onCancel}
       footer={anulacion ? (
         <PanelAnularConfirmacion anulacion={anulacion} razon={razon} onRazon={setRazon} saving={saving}
@@ -859,7 +865,8 @@ export const INICIAL_COT = { vista: 'activas', orden: 'atencion' };
 /** El contenedor de la lista, el del Hub y el de Solicitudes (T7 y T8): pb-24 deja libre, con la página al fondo, la
  *  esquina del botón flotante de la IA; px-4 hasta xl: a 1024 px con el menú abierto las columnas clave caben (R26). El
  *  mismo en la pantalla y en su esqueleto del Suspense (r1, A2). */
-export const CONTENEDOR_LISTA = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
+// B4 T24 f2 (F44-a): la reserva del botón de la IA es el token RESERVA_BOTON_IA (pb-24) de design-system.ts.
+export const CONTENEDOR_LISTA = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;
 /** R8: una rechazada está cerrada y nunca va atrasada: desde Rechazadas, «Con atraso» abre Activas (m7 de T8). */
 const VISTAS_SIN_ATRASO = ['rechazadas'];
 /** D39 (m6 de T8): en Kanban la lista va sin filas (limit=0): las tarjetas siguen con su resumen en una consulta barata; las
@@ -869,7 +876,7 @@ const EXTRA_TABLERO = { limit: 0 };
 // Los chips: los tintes del tablero (CLASE_CHIP de components/ui/Kanban.tsx), el chip estándar de las tablas del B4 (m12
 // de T8): la misma marca sale igual en Lista y en Kanban. Sin tamaño de letra: cada uso pone el suyo.
 const CHIP = 'inline-block max-w-full truncate rounded-full border px-1.5 py-0.5 font-bold leading-tight';
-const FOCO_VISIBLE = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';
+const FOCO_VISIBLE = FOCOS.indigo;
 // D41: el tono opaco filaAlerta para la fila atrasada (la resolución del servidor, R8) y la marca rosa a la izquierda del Hub.
 const MARCA_ATRASO = '[&>td:first-child]:shadow-[inset_3px_0_0_var(--color-rose-500)]';
 const claseDeFila = (cot: FilaCOT) => (cot.resolucion === 'ATRASADO' ? `${TABLE.filaAlerta} ${MARCA_ATRASO}` : null);
@@ -912,7 +919,7 @@ function CeldaCliente({ cot }: { cot: FilaCOT }) {
 
 /** Total: el monto y, debajo, «Sin precio» si el total no es mayor que 0 (como antes, en cualquier estado). r1 (I1): la
  *  regla es cotizacionSinPrecio (listas-ventas.js), la misma del chip del tablero. r2 (p2): el chip (texto y tono) sale
- *  de chipSinPrecio, el mismo objeto de la tarjeta. */
+ *  de chipSinPrecio, el mismo chip (texto y tono) de la tarjeta. */
 function CeldaTotal({ cot }: { cot: FilaCOT }) {
   const chip = chipSinPrecio(cot);
   return (
@@ -1057,9 +1064,6 @@ export function AccionesCabecera({ onActualizar, actualizando }: { onActualizar:
   );
 }
 
-/** La tarjeta del tablero (KANBAN-ventas-listas punto 6, RP18, D4, D37 y el cruce C5): vuelve a esta lista. */
-const tarjetaDeCOT = (cot: FilaCOT) => tarjetaCotizacion(cot);
-
 // â”€â”€ Main Component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export default function CotizacionClient() {
   const router = useRouter();
@@ -1072,6 +1076,13 @@ export default function CotizacionClient() {
   // vista:ventas.cotizaciones (RP26: este hook es su único dueño) y la pestaña, la página y la búsqueda en la sesión
   // (volver del detalle deja lo mismo).
   const [estado, despachar, listo] = useEstadoTabla(ID_COT, INICIAL_COT);
+  // B4 T24 (FINAL-m31 y FINAL-m38): el rol después de montar (useRolActual) decide si el tablero se mueve (accesoTableroVentas: el
+  // require_roles del PATCH de destino); sin permiso, soloLectura (no se arrastra ni se ofrece «Mover a…») y sin acciones masivas.
+  const rol = useRolActual();
+  const accesoTablero = accesoTableroVentas(rol);
+  // La tarjeta del tablero (KANBAN-ventas-listas punto 6, RP18, D4, D37 y el cruce C5): vuelve a esta lista. B4 T24 f2 r1 (duda 2 +
+  // m15): ofrece su acción solo si el rol puede hacerla (su require_roles); si no, «Abrir».
+  const tarjetaDeCOT = useCallback((cot: FilaCOT) => tarjetaCotizacion(cot, { rol }), [rol]);
   const enKanban = estado.modo === 'kanban';
 
   // La tabla (T6B): GET /ventas/cotizaciones con vista, estados, semáforo, q, orden, limit y offset del estado, más los
@@ -1155,7 +1166,7 @@ export default function CotizacionClient() {
   const alCambiarBarra = useCallback((accion: AccionTabla) => {
     if (accion.tipo === 'modo') {
       const modo = String(accion.valor);
-      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_COT : opcionesEstadosCotizaciones));
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_COT : opcionesEstadosCotizaciones, COLUMNAS_COT));
     } else despachar(accion);
   }, [estado, despachar]);
   // m8 de T8: el «vacío» de la lista solo cambia con la búsqueda y la pestaña. En Activas, sin búsqueda, el enlace de
@@ -1186,12 +1197,16 @@ export default function CotizacionClient() {
   // 'cambio' (Rechazada → Borrador, Borrador → Vencida…): el PATCH del estado. El tablero mueve la tarjeta y, si el
   // servidor la rechaza (N7: el 409 de otra activa), la devuelve con su mensaje; recarga su origen y su destino (D39) y
   // aquí se recargan las tarjetas de arriba y la franja.
+  // B4 T24 f2 (FINAL-m9): si el PATCH falla (el 409 N7 de otra activa, un 400, un 422 o la red cortada), también con la regla única
+  // recargarTrasError, y el error sigue para que el tablero deshaga.
   async function cambiarDesdeTablero(cot: FilaCOT, resultado: { estado: string }) {
-    await apiFetch(`/ventas/cotizaciones/${cot.id}`, {
-      method: 'PATCH', body: JSON.stringify({ estado: resultado.estado, updated_by: autorActual() }),
-    });
-    recargarListado();
-    setRecargaFlujo((n) => n + 1);
+    // B4 T24 f2 r1 (m28): la ruta de error, el ayudante puro cambiarConRegla (avisos.js).
+    await cambiarConRegla(
+      () => apiFetch(`/ventas/cotizaciones/${cot.id}`, {
+        method: 'PATCH', body: JSON.stringify({ estado: resultado.estado, updated_by: autorActual() }),
+      }),
+      () => { recargarListado(); setRecargaFlujo((n) => n + 1); },
+    );
   }
   // 'accion' 'rechazar': ModalMotivo (5 letras o más) → PATCH {estado: 'RECHAZADA'} y la nota «Motivo del rechazo: …» en
   // la Actividad (N3). Al terminar, del tablero solo su origen y su destino (D39), más las tarjetas y la franja.
@@ -1204,7 +1219,7 @@ export default function CotizacionClient() {
     const { cot, columnas } = rechazando;
     const autor = autorActual();
     // Si el servidor no la rechaza, ModalMotivo muestra su mensaje y conserva lo escrito. r1 (m1): con la regla única de
-    // recargarTrasError (un 400, un 409 o la red cortada: algo cambió en otro lado, o el rechazo pudo quedar hecho) se
+    // recargarTrasError (un 400, un 409, un 422 (F8) o la red cortada: algo cambió en otro lado, o el rechazo pudo quedar hecho) se
     // recargan la lista, el origen y el destino del tablero y la franja; el error sigue para que ModalMotivo lo muestre.
     try {
       await apiFetch(`/ventas/cotizaciones/${cot.id}`, { method: 'PATCH', body: JSON.stringify({ estado: 'RECHAZADA', updated_by: autor }) });
@@ -1233,11 +1248,11 @@ export default function CotizacionClient() {
   // ── B4 T9, bloque 5: las tarjetas (KPI-ventas punto 8; R12, RP19) ──
   const tarjetas = tarjetasCotizaciones(listado.resumen);
   // En Lista son las pestañas (D41: accionPestana, como un clic en la pestaña); tocar la activa vuelve a Activas (la de
-  // siempre, alternarSeleccion). En Kanban abren esa pestaña en Lista: el tablero muestra todas. Monto confirmado suma las
+  // siempre, alternarPaso). En Kanban abren esa pestaña en Lista: el tablero muestra todas. Monto confirmado suma las
   // Confirmadas: abre esa pestaña. El total no tiene una vista: no es un botón (RP19 (5)).
   const vistaActiva = enKanban ? null : estado.vista;
   const elegirVista = (vista: string) => {
-    const siguiente = enKanban ? vista : (alternarSeleccion(estado.vista, vista) ?? INICIAL_COT.vista);
+    const siguiente = enKanban ? vista : (alternarPaso(estado.vista, vista) ?? INICIAL_COT.vista);
     despachar(accionPestana(estado, siguiente, opcionesEstadosCotizaciones));
     if (enKanban) despachar({ tipo: 'modo', valor: 'lista' });
   };
@@ -1251,7 +1266,9 @@ export default function CotizacionClient() {
   // r1 (m6, CLS): los avisos salen de la lista, no de /ventas/flujo. Hasta que la lista responda (o falle), la franja
   // reserva su renglón (reservarAvisos): al llegar «N sin precio» o «N vencen en 7 días» no empujan las cajas ni lo de
   // abajo. Una recarga conserva lo último (el hook no vacía lo que se ve).
-  const avisosPendientes = listado.crudo === null && listado.error === null;
+  // B4 T24 f2 (B14-f): con data.cotizaciones de /ventas/flujo (B14-b) se sabe antes si habrá avisos: el renglón se reserva solo si
+  // alguno es > 0 (sin avisos no aparece ni desaparece); sin esa clave o mientras /ventas/flujo carga, como antes.
+  const avisosPendientes = reservaAvisosCotizaciones(flujo.datos, listado.crudo === null && listado.error === null);
   const filtroSemaforo: FiltroSemaforo = estado.semaforo === 'atrasados' ? 'atrasados' : 'todos';
   // «Con atraso» pone semaforo=atrasados en el estado único (la tabla y el tablero lo mandan al servidor) y vuelve a la
   // página 1; «Ver todo» lo quita. Rechazadas nunca va atrasada: desde ahí abre Activas, también en Kanban (r2b de T8),
@@ -1368,13 +1385,15 @@ export default function CotizacionClient() {
           {/* B4 T9, el tablero (KANBAN-ventas-listas punto 6): Borrador · Esperando al cliente · Confirmada · Vencida ·
               Rechazada (plegada). Lo que no se puede queda bloqueado con su motivo ANTES de soltar (reglaSoltarCotizacion). */}
           {enKanban && (
-            <TableroKanban
+            // B4 T24 r2 (m2, m10): mientras se lee el rol, el esqueleto (sin acciones) en lugar del tablero.
+            !accesoTablero.listo ? <EsqueletoTablero /> : <TableroKanban
               tablero={tablero}
               regla={reglaSoltarCotizacion}
               tarjetaDe={tarjetaDeCOT}
               onAbrir={abrirCotizacion}
               onCambio={cambiarDesdeTablero}
               onAccion={accionDesdeTablero}
+              soloLectura={accesoTablero.soloLectura}
               color="amber"
             />
           )}

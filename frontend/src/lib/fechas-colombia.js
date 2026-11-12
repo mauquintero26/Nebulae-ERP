@@ -50,13 +50,56 @@ export function diaColombia(ahora = new Date()) {
   return `${p.year}-${p.month}-${p.day}`;
 }
 
-/** Date UTC de un 'AAAA-MM-DD' que existe (no '2026-02-30'), o null. */
-function diaDeCalendario(texto) {
+/** Date UTC de un 'AAAA-MM-DD' que existe (no '2026-02-30'), o null. B4 T24 (F3): exportada (analisis.js la usa). */
+export function diaDeCalendario(texto) {
+  if (typeof texto !== 'string') return null;
   const m = FECHA_DE_CALENDARIO.exec(texto);
   if (!m) return null;
   const [anio, mes, dia] = [Number(m[1]), Number(m[2]), Number(m[3])];
   const f = new Date(Date.UTC(anio, mes - 1, dia));
   return f.getUTCFullYear() === anio && f.getUTCMonth() === mes - 1 && f.getUTCDate() === dia ? f : null;
+}
+
+/**
+ * B4 T24 (FINAL-m30): el día de una fecha de negocio ('2026-11-10T00:00:00' -> '2026-11-10'): sus 10 primeros caracteres, sin pasarla a
+ * ninguna zona (una fecha de negocio a las 00:00 no se corre de día). Un día que no existe ('2026-02-30') o lo que no empieza con una
+ * fecha: ''. Una sola copia: diaDeNegocio de listas-ventas.js y diaPec de estados-compras.js son esta.
+ * @param {unknown} valor
+ * @returns {string}
+ */
+export function diaDeNegocio(valor) {
+  if (typeof valor !== 'string') return '';
+  const m = INICIO_DE_CALENDARIO.exec(valor.trim());
+  return m && diaDeCalendario(m[1]) ? m[1] : '';
+}
+
+/**
+ * B4 T24 (FINAL-m30): 'AAAA-MM-DD' + n días de calendario (en UTC: sin horas de verano). Un día que no existe o un n que no es
+ * entero: ''.
+ * @param {string} dia
+ * @param {number} n
+ * @returns {string}
+ */
+export function sumarDias(dia, n) {
+  const f = diaDeCalendario(dia);
+  if (!f || !Number.isInteger(n)) return '';
+  f.setUTCDate(f.getUTCDate() + n);
+  return f.toISOString().slice(0, 10);
+}
+
+const MS_DIA = 24 * 60 * 60 * 1000;
+
+/**
+ * B4 T24 (FINAL-m30): los días de calendario de `desde` a `hasta` ('AAAA-MM-DD'; negativo si hasta es antes), sin zonas ni horas de
+ * verano. Si alguno no es un día: null.
+ * @param {string} desde
+ * @param {string} hasta
+ * @returns {number | null}
+ */
+export function diasEntre(desde, hasta) {
+  const d = diaDeCalendario(desde);
+  const h = diaDeCalendario(hasta);
+  return d && h ? Math.round((h.getTime() - d.getTime()) / MS_DIA) : null;
 }
 
 /** Date válido de un instante (Date, o texto con fecha y hora), o null. */
@@ -121,6 +164,16 @@ export function fechaSolo(valor) {
   const m = INICIO_DE_CALENDARIO.exec(valor.trim());
   const dia = m ? diaDeCalendario(m[1]) : null;
   return dia ? textoDeCalendario(dia) : '';
+}
+
+/**
+ * B4 T24 (FINAL-m30): el día corto de una fecha de negocio ('20 nov 2026', fechaCorta de diaDeNegocio) o '—'. Una sola copia para
+ * las fechas de negocio de Compras (entrega estimada, alerta), Campañas y Entregas.
+ * @param {unknown} valor
+ * @returns {string}
+ */
+export function textoDiaCorto(valor) {
+  return fechaCorta(diaDeNegocio(valor)) || '—';
 }
 
 /**

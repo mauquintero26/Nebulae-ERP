@@ -16,7 +16,7 @@ import { useRouter } from 'next/navigation';
 
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
 import {
-  SubNav, PageHeader, Drawer, Modal, Button, MenuFila, TableroKanban, useAvisos, useTableroKanban, CLASE_CHIP,
+  SubNav, PageHeader, Drawer, Modal, Button, MenuFila, TableroKanban, EsqueletoTablero, useAvisos, useTableroKanban, CLASE_CHIP,
 } from '@/components/ui';
 // B4 T21: la tabla estándar (TABLA-otros punto 4), el tablero común (KANBAN-crm) y la pestaña Análisis (ANALISIS-crm).
 import { BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla } from '@/components/tabla';
@@ -31,8 +31,10 @@ import {
 } from '@/lib/crm-etapas';
 import { estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
 import { formatoPesos } from '@/lib/pesos';
-import { recargarTrasError, textoDeError } from '@/lib/avisos';
-import { TABLE } from '@/lib/design-system';
+import { ofreceReintentar, recargarTrasError, textoDeError } from '@/lib/avisos';
+import { accesoCrm, TEXTO_SIN_LEADS } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
+import { CAJA_SIN_PERMISO, FOCOS, RESERVA_BOTON_IA, TABLE } from '@/lib/design-system';
 import { CRM_NAV } from './crm-nav';
 
 async function apiFetch(path, opts = {}) {
@@ -210,17 +212,20 @@ const ASISTENTE_CRM = {
   titulo: 'Asistente del CRM',
   ejemplos: ['¿Qué leads llevan más días sin movimiento?', '¿En qué etapa se quedan los leads?'],
 };
-const FOCO_VISIBLE = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300';
+const FOCO_VISIBLE = FOCOS.indigo;
 
-/** «Abrir» y «Borrar» de la fila de la Lista: las columnas son estables (useMemo por las etapas) y leen esto del contexto. */
-const AccionesLead = createContext({ abrir: () => {}, borrar: () => {} });
+/**
+ * «Abrir» y «Borrar» de la fila de la Lista: las columnas son estables (useMemo por las etapas) y leen esto del contexto. B4 T24 (F96):
+ * «Borrar» solo con puedeBorrar (DELETE /crm/leads/{id} es solo de ADMIN).
+ */
+const AccionesLead = createContext({ abrir: () => {}, borrar: () => {}, puedeBorrar: false });
 
 function MenuLead({ lead }) {
-  const { abrir, borrar } = useContext(AccionesLead);
+  const { abrir, borrar, puedeBorrar } = useContext(AccionesLead);
   return (
     <MenuFila etiqueta={`Acciones de ${lead.client || 'este lead'}`} items={[
       { etiqueta: 'Abrir', icono: ExternalLink, onClick: () => abrir(lead) },
-      { etiqueta: 'Borrar', icono: Trash2, peligro: true, onClick: () => borrar(lead) },
+      { etiqueta: 'Borrar', icono: Trash2, peligro: true, oculto: !puedeBorrar, onClick: () => borrar(lead) },
     ]}/>
   );
 }
@@ -298,34 +303,20 @@ const claseDeFilaLead = (l) => (esLeadAtrasadoAbierto(l) ? TABLE.filaAviso : nul
 /** El nombre de la tarjeta para el menú ⋯ («Acciones de …») y el anuncio del movimiento («… movido a …»). */
 const tarjetaDeLead = (l) => ({ numero: l.client || `Lead ${l.id}`, titulo: l.client || '' });
 
-/** El esqueleto del tablero mientras faltan las preferencias o las etapas (la forma de TableroKanban: nada salta). */
-function EsqueletoTablero() {
-  return (
-    <div aria-busy="true" aria-label="Cargando el tablero" className="flex min-h-[420px] w-full min-w-0 items-stretch gap-3 overflow-hidden pb-2">
-      {[0, 1, 2, 3].map((i) => (
-        <div key={i} className="flex w-[85vw] shrink-0 flex-col rounded-2xl border border-slate-200 bg-slate-50 sm:w-72">
-          <div className="shrink-0 border-b border-slate-200 px-3 pb-2 pt-3">
-            <div className="h-3.5 w-28 animate-pulse rounded bg-slate-200"/>
-            <div className="mt-2 h-3 w-16 animate-pulse rounded bg-slate-200"/>
-          </div>
-          <div className="space-y-2 p-2">
-            {[0, 1, 2].map((j) => <div key={j} className="h-20 animate-pulse rounded-xl border border-slate-200 bg-white"/>)}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/** Una carga del tablero que falló: el texto del servidor tal cual y «Reintentar» (nunca columnas vacías falsas). */
-function ErrorCarga({ texto, onReintentar }) {
+/**
+ * Una carga del tablero que falló: el texto del servidor tal cual y «Reintentar» (nunca columnas vacías falsas). B4 T24 (FINAL-m37):
+ * sin onReintentar (un 403: ofreceReintentar), sin el botón.
+ */
+function ErrorCarga({ texto, onReintentar }: { texto: string; onReintentar?: () => void }) {
   return (
     <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
       <p className="break-words font-semibold">{texto}</p>
-      <button type="button" onClick={onReintentar}
-        className={`mt-3 inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 ${FOCO_VISIBLE}`}>
-        <RefreshCw size={12} aria-hidden="true"/> Reintentar
-      </button>
+      {onReintentar && (
+        <button type="button" onClick={onReintentar}
+          className={`mt-3 inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 ${FOCO_VISIBLE}`}>
+          <RefreshCw size={12} aria-hidden="true"/> Reintentar
+        </button>
+      )}
     </div>
   );
 }
@@ -405,8 +396,14 @@ export default function CRMPage() {
   // de etapa de la barra (stage_id en el servidor).
   const [estado, despachar, listo] = useEstadoTabla(ID_LEADS, INICIAL_LEADS);
   const [enAnalisis, setEnAnalisis] = useState(false);
-  const [filterStage, setFilterStage] = useState('all');
+  // B4 T24 (F39 y FINAL-m19): la etapa es un filtro del estado único (estado.filtros.etapa): vuelve con la sesión (la Lista y el Kanban).
+  const filterStage = estado.filtros?.etapa || 'all';
   const { avisar, avisarError, confirmar } = useAvisos();
+  // B4 T24 (FINAL-m37 y F96): el rol después de montar (useRolActual) y lo que puede pedir y ofrecer (accesoCrm, lib/roles.js): sin
+  // leads no se pide nada (ni /crm/warmup, que es solo de ADMIN) y se pinta el texto neutro; las altas, «Configurar CRM» y «Borrar»
+  // solo con su permiso.
+  const rol = useRolActual();
+  const acceso = accesoCrm(rol);
   // Los perdidos (los 50 más recientes y el total real, RP61) y el estado de la carga del tablero.
   const [perdidos, setPerdidos] = useState(null);           // {items, total} | null (todavía no llegó)
   const [leadsListos, setLeadsListos] = useState(false);    // los activos llegaron al menos una vez
@@ -552,12 +549,12 @@ export default function CRMPage() {
     }
   }, []);
 
-  // On mount: warmup pool, then load
+  // On mount: warmup pool, then load. B4 T24 (FINAL-m37): solo con el permiso de leer los leads, y el warmup solo para ADMIN.
   useEffect(() => {
-    // Fire warmup in background (don't await — just wakes the pool)
-    apiFetch('/crm/warmup').catch(() => {});
+    if (!acceso.leads) return;
+    if (acceso.warmup) apiFetch('/crm/warmup').catch(() => {});
     loadAll(true, { inicial: true });
-  }, [loadAll]);
+  }, [loadAll, acceso.leads, acceso.warmup]);
 
   // ═══ B4 T21: la Lista (TABLA-otros punto 4) y el tablero común (KANBAN-crm punto 5) ═════════════════════════════
   // La Lista: TablaEstandar 'crm.leads' en el servidor (/crm/leads con q y el stage_id del select de etapa), activa solo
@@ -568,7 +565,7 @@ export default function CRMPage() {
   // r1 (I2): con la etapa Perdido, perdidos=solo (get_leads deja fuera los CANCELLED por defecto).
   const extraLista = useMemo(() => extraListaLeads(filterStage, stages), [filterStage, stages]);
   const listado = useListado({
-    ruta: '/crm/leads', estado, extra: extraLista, esperar: !listo, despachar, activo: estado.modo === 'lista' && !enAnalisis,
+    ruta: '/crm/leads', estado, extra: extraLista, esperar: !listo || !acceso.listo, despachar, activo: estado.modo === 'lista' && !enAnalisis && acceso.leads,
   });
   const recargarLista = listado.recargar;
   useEffect(() => { recargarListaRef.current = recargarLista; }, [recargarLista]);
@@ -596,7 +593,7 @@ export default function CRMPage() {
     pantalla: ID_LEADS,
     modo: 'cliente',
     columnas: columnasTablero,
-    activo: listo && estado.modo === 'kanban' && !enAnalisis,
+    activo: listo && acceso.leads && estado.modo === 'kanban' && !enAnalisis,
     porColumna: estado.tamano,
     items: leadsTablero,
     columnaDe,
@@ -639,12 +636,10 @@ export default function CRMPage() {
   };
   // El select de etapa de la barra (stage_id en el servidor): vuelve a la página 1, como todo filtro (R5).
   const elegirEtapa = (valor) => {
-    setFilterStage(valor);
-    despachar({ tipo: 'pagina', valor: 1 });
+    despachar({ tipo: 'filtro', clave: 'etapa', valor: valor === 'all' ? '' : valor });
   };
   // r1 (m21): «Limpiar» de la barra vieja: borra a la vez la búsqueda y la etapa (limpiarFiltros vuelve a la página 1).
   const limpiarFiltros = () => {
-    setFilterStage('all');
     despachar({ tipo: 'limpiarFiltros' });
   };
   // Un movimiento de «Requieren atención» abre su lead; si no está cargado, se avisa (ANALISIS-crm punto 2).
@@ -827,7 +822,7 @@ export default function CRMPage() {
       if (selectedLead?.id === updated?.id) setSelectedLead(updated);
       return updated;
     } catch (err) {
-      // r1 (m17): la regla única (recargarTrasError): un 400, un 409 o un corte de red recargan los activos, Perdido y la
+      // r1 (m17): la regla única (recargarTrasError): un 400, un 409, un 422 (F8) o un corte de red recargan los activos, Perdido y la
       // Lista (en modo cliente el tablero no recarga solo). El tablero devuelve la tarjeta y avisa el detail.
       if (recargarTrasError(err)) loadAll(false);
       throw err;
@@ -980,14 +975,18 @@ export default function CRMPage() {
       <div className="bg-white border-b border-slate-200 flex-shrink-0 px-6 py-4">
         <PageHeader icon={LayoutGrid} color="indigo"
           title="CRM Pipeline"
-          subtitle={leadsListos ? `${leads.length} leads · ${formatoPesos(totalValue)} en pipeline`
+          // r1 (m1, m5, m43): sin permiso loadAll no corre: sin subtítulo (nunca «Cargando leads…» para siempre).
+          subtitle={acceso.listo && !acceso.leads ? undefined
+            : leadsListos ? `${leads.length} leads · ${formatoPesos(totalValue)} en pipeline`
             : errorLeads ? 'No se pudieron cargar los leads' : 'Cargando leads…'}
-          actions={(
+          actions={acceso.leads ? (
             <div className="flex items-center gap-2 flex-wrap">
+              {acceso.config && (
               <button onClick={openConfig}
                 className="p-2.5 rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-indigo-600 transition-colors" title="Configurar CRM">
                 <Settings size={17}/>
               </button>
+              )}
               <button onClick={loadAll} className="p-2.5 rounded-xl border border-slate-200 text-slate-400 hover:bg-slate-50 transition-colors">
                 <RefreshCw size={17} className={loading ? 'animate-spin' : ''}/>
               </button>
@@ -1005,18 +1004,30 @@ export default function CRMPage() {
                   );
                 })}
               </div>
-              <Button color="indigo" icon={Plus} onClick={() => setShowNewLead(true)}>Nuevo Lead</Button>
+              {acceso.crear && <Button color="indigo" icon={Plus} onClick={() => setShowNewLead(true)}>Nuevo Lead</Button>}
             </div>
-          )} />
+          ) : undefined} />
       </div>
+
+      {/* r1 (m9 a): mientras se lee el rol, el esqueleto del tablero (como Gastos), no la pantalla en blanco. */}
+      {!acceso.listo && (
+        <div className="flex-1 min-h-0 overflow-hidden p-5">
+          <EsqueletoTablero/>
+        </div>
+      )}
+
+      {acceso.listo && !acceso.leads && (
+        <p role="status" className={`m-5 ${CAJA_SIN_PERMISO}`}>{TEXTO_SIN_LEADS}</p>
+      )}
 
       {/* ══ B4 T21: la barra, la Lista y el Kanban (TABLA-otros 4, KANBAN-crm 3 y 5; R5, R11, D39, D40, D41) ═════════
           Una sola barra para las dos vistas: la búsqueda es estado.q y el select de etapa (stage_id) va en `filtros`.
           En Lista, la tabla estándar en el servidor; en Kanban, el tablero común en modo cliente con los mismos filtros.
           «Análisis» reemplaza las dos. */}
-      {!enAnalisis && (
-        // pb-24 en Lista: al final de la tabla, la paginación y los ⋯ de las últimas filas no quedan bajo el botón de la IA.
-        <div className={`flex-1 min-h-0 overflow-y-auto p-5 ${estado.modo === 'lista' ? 'pb-24' : ''}`}>
+      {acceso.leads && !enAnalisis && (
+        // La reserva del botón de la IA en Lista (F44-a): al final de la tabla, la paginación y los ⋯ de las últimas filas no quedan
+        // bajo el botón. En Kanban no: el tablero se mide al alto de la ventana (altoEnContenedor) y la reserva lo haría desplazar.
+        <div className={`flex-1 min-h-0 overflow-y-auto p-5 ${estado.modo === 'lista' ? RESERVA_BOTON_IA : ''}`}>
           <div className="flex min-w-0 flex-col gap-4">
             {capa}
             <section ref={refTarjeta} className={claseTarjeta}>
@@ -1058,7 +1069,7 @@ export default function CRMPage() {
                 })}
               />
               {estado.modo === 'lista' && (
-                <AccionesLead.Provider value={{ abrir: openDetail, borrar: handleDeleteLead }}>
+                <AccionesLead.Provider value={{ abrir: openDetail, borrar: handleDeleteLead, puedeBorrar: acceso.borrar }}>
                   <TablaEstandar
                     id={ID_LEADS}
                     modo="servidor"
@@ -1091,7 +1102,7 @@ export default function CRMPage() {
               });
               if (vista === 'esqueleto') return <EsqueletoTablero/>;
               if (vista === 'error-etapas') {
-                return <ErrorCarga texto={textoDeError(errorEtapas, 'No se pudieron cargar las etapas del CRM')} onReintentar={() => loadAll()}/>;
+                return <ErrorCarga texto={textoDeError(errorEtapas, 'No se pudieron cargar las etapas del CRM')} onReintentar={ofreceReintentar(errorEtapas) ? () => loadAll() : undefined}/>;
               }
               if (vista === 'sin-etapas') {
                 return (
@@ -1101,7 +1112,7 @@ export default function CRMPage() {
                 );
               }
               if (vista === 'error-leads') {
-                return <ErrorCarga texto={textoDeError(errorLeads, 'No se pudieron cargar los leads')} onReintentar={() => loadAll()}/>;
+                return <ErrorCarga texto={textoDeError(errorLeads, 'No se pudieron cargar los leads')} onReintentar={ofreceReintentar(errorLeads) ? () => loadAll() : undefined}/>;
               }
               const fallo = errorLeads || errorEtapas;
               // Plegada, la columna Perdido solo muestra «—»: el aviso dice qué falló y deja reintentar.
@@ -1117,33 +1128,38 @@ export default function CRMPage() {
                     <LeadCard lead={lead} stage={etapasPorId[columnaDelTablero(lead, stages)]} contexto={contexto}/>
                   )}
                   accionesTarjeta={(lead) => [
-                    { etiqueta: 'Borrar', icono: Trash2, peligro: true, onClick: () => handleDeleteLead(lead) },
+                    { etiqueta: 'Borrar', icono: Trash2, peligro: true, oculto: !acceso.borrar, onClick: () => handleDeleteLead(lead) },
                   ]}
                   // r1 (I1): mientras la columna carga (o no hay leads), sin resumen: nunca «$0».
                   resumenColumna={(clave, d) => (d.cargando || d.error || !leadsTablero
                     ? null : textoResumenEtapa(clave, sumasTablero, { clavePerdido, perdidos }))}
-                  pieColumna={(clave) => (
+                  pieColumna={acceso.crear ? (clave) => (
                     <button type="button" onClick={() => {
                       setNlForm(f => ({...f, pipeline_stage_id: clave}));
                       setShowNewLead(true);
                     }} className={`w-full text-xs font-bold text-slate-600 hover:text-indigo-700 flex items-center gap-1 px-2 py-1.5 hover:bg-indigo-50 rounded-lg transition-colors ${FOCO_VISIBLE}`}>
                       <Plus size={13} aria-hidden="true"/> Agregar lead
                     </button>
-                  )}
+                  ) : undefined}
                   color="indigo"
                   vacio="Sin leads aquí"
                   aviso={(fallo && leadsTablero) || falloPerdido ? (
                     <div className="flex flex-col gap-1">
                       {fallo && leadsTablero && (
                         <p role="alert" className="text-rose-800">
-                          {textoDeError(fallo, 'No se pudo actualizar el CRM')}{' '}
-                          <button type="button" onClick={() => loadAll()} className={`rounded font-bold underline ${FOCO_VISIBLE}`}>Reintentar</button>
+                          {textoDeError(fallo, 'No se pudo actualizar el CRM')}
+                          {/* r1 (m6, m31): un 403 no ofrece «Reintentar» (ofreceReintentar). */}
+                          {ofreceReintentar(fallo) && (
+                            <>{' '}<button type="button" onClick={() => loadAll()} className={`rounded font-bold underline ${FOCO_VISIBLE}`}>Reintentar</button></>
+                          )}
                         </p>
                       )}
                       {falloPerdido && (
                         <p role="alert" className="text-rose-800">
-                          {textoDeError(errorPerdidos, 'No se pudo cargar la columna Perdido')}{' '}
-                          <button type="button" onClick={cargarPerdidos} className={`rounded font-bold underline ${FOCO_VISIBLE}`}>Reintentar</button>
+                          {textoDeError(errorPerdidos, 'No se pudo cargar la columna Perdido')}
+                          {ofreceReintentar(errorPerdidos) && (
+                            <>{' '}<button type="button" onClick={cargarPerdidos} className={`rounded font-bold underline ${FOCO_VISIBLE}`}>Reintentar</button></>
+                          )}
                         </p>
                       )}
                     </div>
@@ -1156,8 +1172,8 @@ export default function CRMPage() {
       )}
 
       {/* ══ ANALISIS VIEW (B4 T21, ANALISIS-crm punto 2; R2, R13, RP69, D45) ══════════════════════════════════════ */}
-      {enAnalisis && (
-        <div className="flex-1 min-h-0 overflow-y-auto p-5">
+      {acceso.leads && enAnalisis && (
+        <div className={`flex-1 min-h-0 overflow-y-auto p-5 ${RESERVA_BOTON_IA}`}>
           <PanelAnalisisPerezoso
             modulo="crm"
             endpoint="/crm/analisis"
@@ -1173,7 +1189,7 @@ export default function CRMPage() {
       {selectedLead && (() => {
         const stage = stages.find(s => s.id === selectedLead.pipeline_stage_id);
         return (
-          <Drawer onClose={() => { setSelectedLead(null); setEditingLead(false); }} header={(
+          <Drawer idTitulo="drawer-lead-titulo" cierreExterno={!editingLead} bloquearCierre={isSaving} onClose={() => { setSelectedLead(null); setEditingLead(false); }} header={(
             <div className="flex-1 flex items-start justify-between gap-2 min-w-0">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1">
@@ -1183,7 +1199,7 @@ export default function CRMPage() {
                   </span>}
                   <span className="text-xs text-slate-400">{timeAgo(selectedLead.updated_at)}</span>
                 </div>
-                <h2 className="text-xl font-black text-slate-800">{selectedLead.client}</h2>
+                <h2 id="drawer-lead-titulo" className="text-xl font-black text-slate-800">{selectedLead.client}</h2>
                 <p className="text-sm text-indigo-600 font-bold mt-0.5">{selectedLead.solicitud_tipo || selectedLead.tag}</p>
               </div>
               <div className="flex items-center gap-2 ml-2">
@@ -1379,10 +1395,12 @@ export default function CRMPage() {
                             className="flex items-center justify-center gap-1.5 py-2 bg-slate-50 border border-slate-200 text-slate-600 rounded-xl text-xs font-bold hover:bg-slate-100">
                             <User size={13}/> Ver en Agenda
                           </Link>
+                          {acceso.borrar && (
                           <button onClick={() => handleDeleteLead(selectedLead)}
                             className="flex items-center justify-center gap-1.5 py-2 bg-rose-50 border border-rose-200 text-rose-600 rounded-xl text-xs font-bold hover:bg-rose-100">
                             <Trash2 size={13}/> Eliminar Lead
                           </button>
+                          )}
                         </div>
                       </div>
                     )}
@@ -1392,7 +1410,7 @@ export default function CRMPage() {
 
       {/* ══ MODAL — NUEVO LEAD ═════════════════════════════════════════════ */}
       {showNewLead && (
-        <Modal title="Nuevo Lead" icon={Plus} color="indigo" onClose={() => setShowNewLead(false)}
+        <Modal cierreExterno={false} title="Nuevo Lead" icon={Plus} color="indigo" onClose={() => setShowNewLead(false)}
           footer={(
             <>
               <Button variant="secondary" onClick={() => setShowNewLead(false)}>Cancelar</Button>
@@ -1481,10 +1499,10 @@ export default function CRMPage() {
 
       {/* ══ PANEL — CONFIGURACIÓN CRM ══════════════════════════════════════ */}
       {showConfig && (
-        <Drawer onClose={() => setShowConfig(false)} header={(
+        <Drawer idTitulo="drawer-config-crm-titulo" cierreExterno={false} onClose={() => setShowConfig(false)} header={(
           <div className="flex items-center gap-3">
             <div className="p-2 bg-slate-700 text-white rounded-xl"><Settings size={18}/></div>
-            <h2 className="font-black text-slate-800 text-lg">Configuración CRM</h2>
+            <h2 id="drawer-config-crm-titulo" className="font-black text-slate-800 text-lg">Configuración CRM</h2>
           </div>
         )}>
               {/* Pipeline stages management */}

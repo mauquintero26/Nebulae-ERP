@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  congelar, pasosConProgreso, pasosConConteos, conteosDePasos, textoConteo, textoAtraso, alternarSeleccion,
+  congelar, pasosConProgreso, pasosConConteos, conteosDePasos, textoConteo, textoAtraso, alternarPaso,
   resumenSemaforo,
 } from '../src/lib/flujo.js';
 import { congelar as congelarDePedido, PASOS_PEDIDO } from '../src/lib/estados-pedido.js';
@@ -196,11 +196,11 @@ console.log('--- TEST 7: textoAtraso ---');
   assert.equal(textoAtraso(1500), '1.500 con atraso');
 }
 
-console.log('--- TEST 8: alternarSeleccion ---');
+console.log('--- TEST 8: alternarPaso ---');
 {
-  assert.equal(alternarSeleccion('COT', 'COT'), null);
-  assert.equal(alternarSeleccion(null, 'COT'), 'COT');
-  assert.equal(alternarSeleccion('SC', 'COT'), 'COT');
+  assert.equal(alternarPaso('COT', 'COT'), null);
+  assert.equal(alternarPaso(null, 'COT'), 'COT');
+  assert.equal(alternarPaso('SC', 'COT'), 'COT');
 }
 
 console.log('--- TEST 9: resumenSemaforo (RP67: error -> gris y «—»; D21) ---');
@@ -303,20 +303,20 @@ console.log('--- TEST 12 (T5A; R6, RP67 y cruce C9 de la verificación): opcione
   }
 }
 
-console.log('--- TEST 13 (T5A): textoDetalle (solo en el paso esEste) y textoAntiguedad (solo con mostrarAntiguedad) ---');
+console.log('--- TEST 13 (T5A): textoDetalle (solo en el paso esEste) y textoMasAntiguo (solo con mostrarAntiguedad) ---');
 {
   assert.equal(F.textoDetalle([{ label: 'Nueva', n: 1 }, { label: 'Asignada', n: 2 }]), 'Nueva 1 · Asignada 2');
   assert.equal(F.textoDetalle([{ label: 'Confirmada', n: 1234 }]), 'Confirmada 1.234');
   // Lo que no tiene etiqueta o número se salta; nada da ''.
   assert.equal(F.textoDetalle([{ label: 'Nueva', n: null }, { n: 3 }, null, { label: 'Asignada', n: 0 }]), 'Asignada 0');
   for (const nada of [null, undefined, [], 'x', {}]) assert.equal(F.textoDetalle(/** @type {any} */ (nada)), '');
-  assert.equal(F.textoAntiguedad(6), 'El más antiguo: 6 días');
-  assert.equal(F.textoAntiguedad(1), 'El más antiguo: 1 día');
-  assert.equal(F.textoAntiguedad(0), 'El más antiguo: 0 días');
-  assert.equal(F.textoAntiguedad(1200), 'El más antiguo: 1.200 días');
-  assert.equal(F.textoAntiguedad(1.4), 'El más antiguo: 1 día', 'redondeado, y el plural sale del redondeado');
-  assert.equal(F.textoAntiguedad(1.6), 'El más antiguo: 2 días', 'r1 (M16): se redondea, no se trunca');
-  for (const nada of [null, undefined, NaN, -1, '6']) assert.equal(F.textoAntiguedad(/** @type {any} */ (nada)), '');
+  assert.equal(F.textoMasAntiguo(6), 'El más antiguo: 6 días');
+  assert.equal(F.textoMasAntiguo(1), 'El más antiguo: 1 día');
+  assert.equal(F.textoMasAntiguo(0), 'El más antiguo: 0 días');
+  assert.equal(F.textoMasAntiguo(1200), 'El más antiguo: 1.200 días');
+  assert.equal(F.textoMasAntiguo(1.4), 'El más antiguo: 1 día', 'redondeado, y el plural sale del redondeado');
+  assert.equal(F.textoMasAntiguo(1.6), 'El más antiguo: 2 días', 'r1 (M16): se redondea, no se trunca');
+  for (const nada of [null, undefined, NaN, -1, '6']) assert.equal(F.textoMasAntiguo(/** @type {any} */ (nada)), '');
 }
 
 console.log('--- TEST 14 (T5A): textos de la barra y de los puntos — tituloPaso, textoEstadoPaso, tituloPunto e indicePasoActual ---');
@@ -658,7 +658,7 @@ console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuent
   const pasos = codigo(fuentes['PasosFlujo.tsx']);
   assert.match(pasos, /import \{ Contador \} from '@\/components\/ui\/Contador';/);
   assert.ok(!/estadoDeConteo|from '@\/lib\/tabla'/.test(pasos), 'el estado de cada número es estadoNumeroFranja (lib/flujo.js)');
-  for (const n of ['indicePasoActual', 'textoAntiguedad', 'chipAtraso', 'textoDetalle', 'textoEstadoPaso', 'tituloPaso', 'tituloPunto',
+  for (const n of ['indicePasoActual', 'textoMasAntiguo', 'chipAtraso', 'textoDetalle', 'textoEstadoPaso', 'tituloPaso', 'tituloPunto',
     'estadoNumeroFranja', 'conectorHecho', 'hayEnlaces']) {
     assert.match(pasos, new RegExp(`\\b${n}\\(`), `PasosFlujo usa ${n}`);
   }
@@ -691,9 +691,16 @@ console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuent
   // r1 (C1, M10): el foco es un outline, distinto del anillo de la selección.
   // El color va también en reposo: transition-colors anima outline-color, y sin él el outline aparecería negro y se
   // iría volviendo índigo.
-  const FOCO_R1 = "const FOCO = 'outline-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700';";
-  assert.ok(pasos.includes(FOCO_R1), 'PasosFlujo: FOCO');
-  assert.ok(codigo(fuentes['BannerFlujo.tsx']).includes(FOCO_R1), 'BannerFlujo: el mismo FOCO');
+  // B4 T24 (FINAL-m25, D27): ese FOCO es ahora el token común de design-system.ts (una sola copia), con el mismo texto.
+  const ds = readFileSync(new URL('../src/lib/design-system.ts', import.meta.url), 'utf8');
+  assert.ok(ds.includes("  indigo:  'outline-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700',"), 'FOCOS.indigo');
+  assert.match(ds, /^export const FOCO = FOCOS\.indigo;\r?$/m, 'FOCO es FOCOS.indigo');
+  for (const nombre of ['PasosFlujo.tsx', 'BannerFlujo.tsx']) {
+    const f = fuentes[nombre];
+    assert.ok(!/^const FOCO = /m.test(f), `${nombre}: sin su copia de FOCO`);
+    assert.match(f, /^import \{ FOCO \} from '@\/lib\/design-system';\r?$/m, `${nombre}: importa FOCO`);
+    assert.ok(codigo(f).includes('${FOCO}'), `${nombre}: usa FOCO`);
+  }
   // r1 (M9 y M6): <nav> solo si hay enlaces; si no, un <ol aria-label>. El contenedor lleva w-full.
   assert.match(pasos, /if \(conNav\) \{\s*return \(\s*<nav aria-label=\{etiqueta\} className="w-full min-w-0">\s*<ol className=\{clases\}>\{children\}<\/ol>/);
   assert.match(pasos, /<div className="w-full min-w-0">\s*<ol aria-label=\{etiqueta\} className=\{clases\}>\{children\}<\/ol>/);
@@ -735,7 +742,7 @@ console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuent
   assert.match(pasos, /<span aria-hidden="true">\{chip\.corto\}<\/span>\s*<span className="sr-only">\{chip\.largo\}<\/span>/, 'compacto: siempre corto');
   assert.match(pasos, /<span aria-hidden="true" className="@2xl\/flujo:hidden">\{chip\.corto\}<\/span>\s*<span className="sr-only @2xl\/flujo:not-sr-only">\{chip\.largo\}<\/span>/);
   assert.match(pasos, /const detalle = paso\.esEste \? textoDetalle\(paso\.detalle\) : '';/, 'el detalle solo en el esEste');
-  assert.match(pasos, /const antiguedad = mostrarAntiguedad \? textoAntiguedad\(paso\.masAntiguoDias\) : '';/);
+  assert.match(pasos, /const antiguedad = mostrarAntiguedad \? textoMasAntiguo\(paso\.masAntiguoDias\) : '';/);
   assert.match(pasos, /const ayuda = mostrarAyuda && paso\.ayuda \? paso\.ayuda : '';/);
   assert.match(pasos, /variante = 'barra'/, "por defecto 'barra'");
   assert.match(pasos, /mostrarAntiguedad = false/, 'flujo_contenido_caja: sin antigüedad por defecto');
@@ -904,23 +911,31 @@ console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuent
   assert.ok(!/Sin resolver|Pendientes/.test(banner), 'cruce C9: el botón es «No resueltos» (sale de opcionesSemaforo)');
   assert.ok(!/partes/.test(banner.split('export function BannerFlujo')[1]), "R1: partes no se lee (solo 'todo')");
 
-  // useResumenFlujo: apiFetch con signal, el turno de crearCargaListado, abortar al desmontar o al cambiar.
+  // useResumenFlujo. B4 T24 f2 r1 (C2, D27): una sola implementación del cargador. useResumenFlujo es el envoltorio de useResumen
+  // (components/ui) con la regla del flujo (RESUMEN_DEL_FLUJO: sus textos y, con error, lo último bueno) y su forma pública de siempre
+  // ({datos, cargando, error, recargar}). Las protecciones de antes (apiFetch con signal, el turno de crearCargaListado, abortar al
+  // desmontar o al cambiar, r1 M12 el usuario del token, r1 M13 las vueltas, la clave y el efecto) siguen, sobre el cableado común.
   const hook = codigo(fuentes['useResumenFlujo.ts']);
-  assert.match(hook, /import \{ apiFetch \} from '@\/lib\/api';/);
-  assert.match(hook, /const pedirResumen = \(url: string, signal: AbortSignal\) => apiFetch\(url, \{ signal \}\);/);
-  assert.match(hook, /import \{ crearCargaListado \} from '@\/lib\/tabla';/);
-  assert.match(hook, /alLlegar: \(llegada\) => setResultado\(\(previo\) => aplicarLlegadaResumen\(previo, llegada\)\)/);
-  // r1 (M12): el usuario del token, como useListado (T4C r2); usuarioDeLaSesion sigue sin exportarse en el index de tabla.
-  assert.match(hook, /import \{ usuarioDeLaSesion \} from '@\/components\/tabla\/usuarioDeLaSesion';/);
+  assert.match(hook, /import \{ useResumen \} from '@\/components\/ui\/useResumen';/);
+  assert.match(hook, /import \{ RESUMEN_DEL_FLUJO \} from '@\/lib\/flujo';/);
+  assert.match(hook, /export function useResumenFlujo<T = DatosFlujo>\(ruta: string, recarga: number = 0\): ResumenFlujo<T> \{\s*const r = useResumen<T>\(ruta, recarga, RESUMEN_DEL_FLUJO\);\s*return useMemo\(\s*\(\) => \(\{ datos: r\.datos, cargando: r\.cargando, error: r\.error, recargar: r\.recargar \}\),\s*\[r\],\s*\);\s*\}/);
+  for (const copia of ['crearCargaListado', 'useEffect', 'useSyncExternalStore', 'usuarioDeLaSesion', 'apiFetch', 'estadoResumen']) {
+    assert.ok(!hook.includes(copia), `useResumenFlujo sin su copia del cargador: ${copia}`);
+  }
+  const comun = codigo(leer('components/ui/useResumen.ts'));
+  assert.match(comun, /import \{ apiFetch \} from '@\/lib\/api';/);
+  assert.match(comun, /const pedirResumen = \(url: string, signal: AbortSignal\) => apiFetch\(url, \{ signal \}\);/);
+  assert.match(comun, /import \{ crearCargaListado \} from '@\/lib\/tabla';/);
+  assert.match(comun, /alLlegar: \(llegada\) => setResultado\(\(previo\) => aplicarLlegadaResumen\(previo, llegada, regla\)\)/);
+  assert.match(comun, /import \{ usuarioDeLaSesion \} from '@\/components\/tabla\/usuarioDeLaSesion';/);
   assert.ok(!/usuarioDeLaSesion/.test(leer('components/tabla/index.ts')), 'el index de tabla no lo exporta');
-  assert.match(hook, /const usuario = usuarioDeLaSesion\(\);/);
-  // r1 (M13): las vueltas de la carga.
-  assert.match(hook, /const repeticion = useSyncExternalStore\(carga\.suscribir, carga\.repeticion, carga\.repeticion\);/);
-  assert.match(hook, /const clave = `\$\{version\}\|\$\{usuario \?\? ''\}\|\$\{recarga\}\|\$\{ruta\}`;/);
-  assert.match(hook, /useEffect\(\(\) => \{\s*carga\.cargar\(ruta, clave, \{ ruta, usuario \}\);\s*return \(\) => carga\.cancelar\(\);\s*\}, \[carga, ruta, clave, usuario\]\);/);
-  assert.match(hook, /const recargar = useCallback\(\(\) => setVersion\(\(v\) => v \+ 1\), \[\]\);/);
-  assert.match(hook, /const visto = estadoResumen\(resultado, \{ clave, ruta, usuario, repeticion \}\);/);
-  assert.match(hook, /recarga: number = 0/);
+  assert.match(comun, /const usuario = usuarioDeLaSesion\(\);/);
+  assert.match(comun, /const repeticion = useSyncExternalStore\(carga\.suscribir, carga\.repeticion, carga\.repeticion\);/);
+  assert.match(comun, /const clave = `\$\{version\}\|\$\{usuario \?\? ''\}\|\$\{recarga\}\|\$\{ruta\}`;/);
+  assert.match(comun, /useEffect\(\(\) => \{\s*carga\.cargar\(ruta, clave, \{ ruta, usuario \}\);\s*return \(\) => carga\.cancelar\(\);\s*\}, \[carga, ruta, clave, usuario\]\);/);
+  assert.match(comun, /const recargar = useCallback\(\(\) => setVersion\(\(v\) => v \+ 1\), \[\]\);/);
+  assert.match(comun, /const visto = estadoResumen\(resultado, \{ clave, ruta, usuario, repeticion \}\);/);
+  assert.match(comun, /recarga: number = 0, regla: ReglaResumen = RESUMEN_DE_TARJETAS/);
 }
 
 console.log('--- TEST 21 (B4 T9 r1, m6): BannerFlujo reserva el renglón de los avisos con reservarAvisos (aditivo) ---');
@@ -942,9 +957,10 @@ console.log('--- TEST 21 (B4 T9 r1, m6): BannerFlujo reserva el renglón de los 
   for (const ruta of ['app/dashboard/ventas/page.tsx', 'app/dashboard/ventas/solicitud/solicitud-client.tsx', 'app/dashboard/ventas/solicitud/CargandoSolicitudes.tsx']) {
     assert.ok(!readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').includes('reservarAvisos'), `${ruta} no la pasa`);
   }
-  // Cotizaciones la pasa mientras su lista no respondió, y su esqueleto también (la misma geometría, A2).
+  // Cotizaciones la pasa mientras su lista no respondió, y su esqueleto también (la misma geometría, A2). B4 T24 f2 (B14-f, D27): con
+  // data.cotizaciones de /ventas/flujo, solo si habrá avisos (reservaAvisosCotizaciones; sin la clave, como antes).
   const cot = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/cotizacion-client.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-  assert.match(cot, /const avisosPendientes = listado\.crudo === null && listado\.error === null;/);
+  assert.match(cot, /const avisosPendientes = reservaAvisosCotizaciones\(flujo\.datos, listado\.crudo === null && listado\.error === null\);/);
   assert.match(cot, /avisos=\{avisosFlujo\}\s*reservarAvisos=\{avisosPendientes\}\s*cargando=\{flujo\.cargando\}/);
   const carga = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/CargandoCotizaciones.tsx', import.meta.url), 'utf8');
   assert.match(carga, /pasos=\{pasosDeLista\(null, 'COT'\)\}\s*reservarAvisos\s*cargando/);
@@ -1011,6 +1027,181 @@ console.log('--- TEST 23 (B4 T11): PasosFlujo muestra la palabra y los avisos de
     assert.ok(!leerApp(otro).includes('estadoVisible'), `${otro} no la pasa`);
   }
   assert.match(leerApp('app/dashboard/ventas/cotizacion/[id]/page.tsx'), /<PasosFlujo variante="barra" pasos=\{pasosCot\} etiqueta="Pasos de la cotización" partirEtiquetas estadoVisible \/>/);
+}
+
+console.log('--- B4 T24 f2 (F45): useResumen — el cargador de resúmenes compartido (llega, falla, abortado, recarga, cambio de usuario y el 403) ---');
+{
+  // El hook de components/ui sin React: la carga de lib/tabla.js (crearCargaListado: aborta la anterior y descarta las viejas) y la
+  // llegada con la regla de un resumen de tarjetas (RESUMEN_DE_TARJETAS: sus textos, no los del flujo, y un error SIN los datos de
+  // antes: las tarjetas dicen «—», C6, como el cargador que reemplaza). La clave va con el usuario del token, como useListado.
+  assert.ok(F.RESUMEN_DE_TARJETAS && Object.isFrozen(F.RESUMEN_DE_TARJETAS), 'RESUMEN_DE_TARJETAS existe');
+  const RUTA = '/ventas/stats?periodo=30d';
+  const S1 = { kpis: { pven_saldo_por_cobrar: 500 } };
+  const S2 = { kpis: { pven_saldo_por_cobrar: 700 } };
+  const { llamadas, pedir } = aMano();
+  let resultado = null;
+  const carga = crearCargaListado({ pedir, alLlegar: (l) => { resultado = F.aplicarLlegadaResumen(resultado, l, F.RESUMEN_DE_TARJETAS); } });
+  const clave = (version, usuario, recarga) => `${version}|${usuario ?? ''}|${recarga}|${RUTA}`;
+  const ver = (k, usuario) => F.estadoResumen(resultado, { clave: k, ruta: RUTA, usuario });
+  // Llega: lee res.data (nunca 0 mientras carga: datos null).
+  assert.deepEqual(ver(clave(0, 7, 0), 7), { datos: null, cargando: true, error: null });
+  carga.cargar(RUTA, clave(0, 7, 0), { ruta: RUTA, usuario: 7 });
+  await tic();
+  llamadas[0].resolver({ status: 'success', data: S1 });
+  await tic();
+  assert.deepEqual(ver(clave(0, 7, 0), 7), { datos: S1, cargando: false, error: null }, 'llega');
+  // Recarga (la pantalla sube su vuelta): los datos siguen mientras llega la nueva.
+  assert.deepEqual(ver(clave(0, 7, 1), 7), { datos: S1, cargando: true, error: null }, 'recarga sin parpadeo');
+  // Abortado: una recarga que se adelanta aborta la anterior, y si la vieja llega igual se descarta.
+  carga.cargar(RUTA, clave(0, 7, 1), { ruta: RUTA, usuario: 7 });
+  await tic();
+  carga.cargar(RUTA, clave(0, 7, 2), { ruta: RUTA, usuario: 7 });
+  await tic();
+  assert.equal(llamadas[1].signal.aborted, true, 'abortado');
+  llamadas[2].resolver({ data: S2 });
+  await tic();
+  llamadas[1].resolver({ data: S1 });
+  await tic();
+  assert.deepEqual(ver(clave(0, 7, 2), 7), { datos: S2, cargando: false, error: null }, 'la vieja no pisa la nueva');
+  // Falla: el error, sin los datos de antes (las tarjetas dicen «—», C6); mientras se reintenta, sin el error viejo y sin datos (barras
+  // grises, nunca un número viejo). Un 500 ofrece «Reintentar»; un 403, no.
+  const e500 = Object.assign(new Error('Error del servidor'), { status: 500 });
+  carga.cargar(RUTA, clave(1, 7, 2), { ruta: RUTA, usuario: 7 });
+  await tic();
+  llamadas[3].rechazar(e500);
+  await tic();
+  const fallo = ver(clave(1, 7, 2), 7);
+  assert.deepEqual(fallo, { datos: null, cargando: false, error: e500 }, 'falla');
+  assert.deepEqual(ver(clave(2, 7, 2), 7), { datos: null, cargando: true, error: null }, 'reintenta: cargando, sin datos viejos');
+  const { ofreceReintentar } = await import('../src/lib/avisos.js');
+  assert.equal(ofreceReintentar(fallo.error), true, 'un 500 ofrece Reintentar');
+  assert.equal(ofreceReintentar(ver(clave(2, 7, 2), 7).error), false, 'mientras reintenta, nada que ofrecer');
+  const e403 = Object.assign(new Error('No tienes permiso para esta acción.'), { status: 403 });
+  carga.cargar(RUTA, clave(2, 7, 2), { ruta: RUTA, usuario: 7 });
+  await tic();
+  llamadas[4].rechazar(e403);
+  await tic();
+  assert.equal(ver(clave(2, 7, 2), 7).error, e403);
+  assert.equal(ofreceReintentar(ver(clave(2, 7, 2), 7).error), false, 'un 403 del resumen no ofrece Reintentar');
+  // Una respuesta sin un objeto en data es un error con el texto del resumen (no el del flujo).
+  carga.cargar(RUTA, clave(3, 7, 2), { ruta: RUTA, usuario: 7 });
+  await tic();
+  llamadas[5].resolver({ status: 'success', data: null });
+  await tic();
+  assert.equal(ver(clave(3, 7, 2), 7).error.message, F.RESUMEN_DE_TARJETAS.sinDatos);
+  assert.ok(!/flujo/i.test(F.RESUMEN_DE_TARJETAS.sinDatos + F.RESUMEN_DE_TARJETAS.sinError));
+  // Y un error sin objeto lleva el texto del resumen.
+  assert.equal(F.aplicarLlegadaResumen(null, { marca: 'k', ok: false, contexto: { ruta: RUTA } }, F.RESUMEN_DE_TARJETAS).error.message, F.RESUMEN_DE_TARJETAS.sinError);
+  // Cambio de usuario: lo de la cuenta anterior no se muestra (ni datos ni error) hasta que llega lo del usuario nuevo.
+  assert.deepEqual(ver(clave(3, 9, 2), 9), { datos: null, cargando: true, error: null }, 'otro usuario: nada de la anterior');
+  carga.cargar(RUTA, clave(3, 9, 2), { ruta: RUTA, usuario: 9 });
+  await tic();
+  llamadas[6].rechazar(e500);
+  await tic();
+  assert.deepEqual(ver(clave(3, 9, 2), 9), { datos: null, cargando: false, error: e500 }, 'su error, sin los datos de la otra cuenta');
+  // r1 (m23): la carrera: la carga del usuario 7 en camino, el cambio al 9 y la respuesta del 7 que llega tarde. La del 7 queda abortada,
+  // la del 9 en {datos: null, cargando: true} (nada de la otra cuenta) y, al llegar, los datos del 9.
+  {
+    const mano = aMano();
+    let visto = null;
+    const otra = crearCargaListado({ pedir: mano.pedir, alLlegar: (l) => { visto = F.aplicarLlegadaResumen(visto, l, F.RESUMEN_DE_TARJETAS); } });
+    const estado9 = () => F.estadoResumen(visto, { clave: clave(0, 9, 0), ruta: RUTA, usuario: 9 });
+    otra.cargar(RUTA, clave(0, 7, 0), { ruta: RUTA, usuario: 7 });
+    await tic();
+    otra.cargar(RUTA, clave(0, 9, 0), { ruta: RUTA, usuario: 9 });
+    await tic();
+    assert.equal(mano.llamadas[0].signal.aborted, true, 'la carga del 7, abortada');
+    mano.llamadas[0].resolver({ data: S1 });
+    await tic();
+    assert.deepEqual(estado9(), { datos: null, cargando: true, error: null }, 'la del 7 que llega tarde no se ve');
+    mano.llamadas[1].resolver({ data: S2 });
+    await tic();
+    assert.deepEqual(estado9(), { datos: S2, cargando: false, error: null }, 'los datos del 9');
+  }
+  // El flujo sigue como estaba (aditivo: el tercer parámetro es opcional): sus textos y un error que conserva lo último bueno.
+  const sinTexto = F.aplicarLlegadaResumen(null, { marca: 'k', ok: true, respuesta: { data: null }, contexto: { ruta: RUTA } });
+  assert.match(sinTexto.error.message, /flujo/);
+  const previoFlujo = { clave: 'a', ruta: RUTA, usuario: null, repeticion: 0, datos: S1, error: null };
+  assert.equal(F.aplicarLlegadaResumen(previoFlujo, { marca: 'b', ok: false, error: e500, contexto: { ruta: RUTA } }).datos, S1);
+  assert.equal(F.aplicarLlegadaResumen(previoFlujo, { marca: 'b', ok: false, error: e500, contexto: { ruta: RUTA } }, F.RESUMEN_DE_TARJETAS).datos, null);
+  // El hook (components/ui/useResumen.ts) usa esas piezas, va con el usuario del token y expone si ofrecer «Reintentar».
+  const hook = readFileSync(new URL('../src/components/ui/useResumen.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // r1 (C2 y m31, D27): la regla es un parámetro (por defecto la de las tarjetas; useResumenFlujo pasa la del flujo), y la lista suma
+  // las tres líneas que producen la recarga y el cambio de usuario (como useAnalisis en test_analisis): sin `usuario` en la carga, o
+  // sin `clave` en las dependencias, «Actualizar» y la cuenta nueva no piden nada.
+  for (const parte of ['crearCargaListado({', 'aplicarLlegadaResumen(previo, llegada, regla)', 'estadoResumen(resultado, { clave, ruta, usuario, repeticion })',
+    'const usuario = usuarioDeLaSesion();', 'const clave = `${version}|${usuario ?? \'\'}|${recarga}|${ruta}`;', 'ofreceReintentar: ofreceReintentar(visto.error)',
+    'return () => carga.cancelar();', 'regla: ReglaResumen = RESUMEN_DE_TARJETAS',
+    'carga.cargar(ruta, clave, { ruta, usuario });', '}, [carga, ruta, clave, usuario]);', 'const recargar = useCallback(() => setVersion((v) => v + 1), []);']) {
+    assert.ok(hook.includes(parte), `useResumen: ${parte}`);
+  }
+  // Una sola implementación del cargador de resúmenes en components/: solo useResumen.ts arma la carga con aplicarLlegadaResumen.
+  const { readdirSync, statSync } = await import('node:fs');
+  const { fileURLToPath } = await import('node:url');
+  const { join } = await import('node:path');
+  const conCargador = [];
+  const recorrer = (dir) => {
+    for (const n of readdirSync(dir)) {
+      const ruta = join(dir, n);
+      if (statSync(ruta).isDirectory()) recorrer(ruta);
+      else if (/\.tsx?$/.test(n) && readFileSync(ruta, 'utf8').includes('aplicarLlegadaResumen(')) conCargador.push(n);
+    }
+  };
+  recorrer(fileURLToPath(new URL('../src/components', import.meta.url)));
+  assert.deepEqual(conCargador, ['useResumen.ts'], 'una sola implementación del cargador (C2)');
+  // Las copias de Ventas (el Hub y Pedidos de venta) usan el hook: sin su AbortController ni su vuelta a mano.
+  for (const ruta of ['app/dashboard/ventas/page.tsx', 'app/dashboard/ventas/venta/venta-client.tsx']) {
+    const f = readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    assert.match(f, /import \{ useResumen \} from '@\/components\/ui\/useResumen';/, `${ruta}: importa el hook`);
+    assert.match(f, /const stats = useResumen<Stats\w+>\(`\/ventas\/stats\?periodo=\$\{PERIODO_KPI\}`, vueltaStats\);/, `${ruta}: el hook`);
+    assert.match(f, /const cargandoStats = stats\.cargando;\s*const estadoKpis = useEstadoKpi\(cargandoStats, stats\.error\);/, `${ruta}: el estado de las tarjetas`);
+    assert.ok(!/setStats\(|new AbortController\(\)/.test(f), `${ruta}: sin la copia del cargador`);
+  }
+}
+
+console.log('--- B4 T24 f2 r1 (m20): la franja ofrece «Reintentar» solo con un error que se arregla volviendo a pedir (un 403, no) ---');
+{
+  assert.equal(typeof F.reintentarEnFranja, 'function', 'reintentarEnFranja existe');
+  const e403 = Object.assign(new Error('No tienes permiso para esta acción.'), { status: 403 });
+  const e500 = Object.assign(new Error('Error del servidor'), { status: 500 });
+  const red = new TypeError('Failed to fetch');
+  assert.equal(F.reintentarEnFranja({ error: e500, reintentando: false }), true, 'un 500');
+  assert.equal(F.reintentarEnFranja({ error: red, reintentando: false }), true, 'la red cortada');
+  assert.equal(F.reintentarEnFranja({ error: e403, reintentando: false }), false, 'un 403 nunca ofrece Reintentar');
+  // r2 (m3 = m6, D27): mientras reintenta, el hook ya no trae el error: el botón sigue («Reintentando…») solo si el error que se reintenta
+  // lo ofrecía (`ofrecible`, que la franja recuerda junto con huboError: ofrecibleDeLaFranja). Un 403 seguido de una recarga de la
+  // pantalla (sube `recarga`, «Actualizar») no pinta «Reintentando…».
+  assert.equal(F.reintentarEnFranja({ error: null, reintentando: true, ofrecible: true }), true, 'reintentando un 500');
+  assert.equal(F.reintentarEnFranja({ error: null, reintentando: true, ofrecible: false }), false, 'recargando después de un 403');
+  assert.equal(F.reintentarEnFranja({ error: null, reintentando: true }), false, 'sin saber si se ofrecía, no');
+  assert.equal(typeof F.ofrecibleDeLaFranja, 'function', 'ofrecibleDeLaFranja existe');
+  assert.equal(F.ofrecibleDeLaFranja(false, e500), true, 'llega un 500: se ofrece');
+  assert.equal(F.ofrecibleDeLaFranja(true, e403), false, 'llega un 403: no se ofrece');
+  assert.equal(F.ofrecibleDeLaFranja(true, null), true, 'sin error nuevo, lo recordado');
+  assert.equal(F.ofrecibleDeLaFranja(false, null), false);
+  // La secuencia: 403 → la pantalla recarga (cargando, error null) → sin botón; 500 → «Reintentar» → reintentando → «Reintentando…».
+  {
+    let ofrecible = false;
+    ofrecible = F.ofrecibleDeLaFranja(ofrecible, e403);
+    const f403 = F.estadoDeFranja({ cargando: false, error: e403, huboError: false });
+    assert.equal(F.reintentarEnFranja({ error: e403, reintentando: f403.reintentando, ofrecible }), false, '403: sin botón');
+    ofrecible = F.ofrecibleDeLaFranja(ofrecible, null);
+    const recarga = F.estadoDeFranja({ cargando: true, error: null, huboError: true });
+    assert.equal(recarga.reintentando, true, 'la recarga cuenta como reintento para la franja');
+    assert.equal(F.reintentarEnFranja({ error: null, reintentando: recarga.reintentando, ofrecible }), false, '403 y una recarga de la pantalla: sin botón');
+    ofrecible = F.ofrecibleDeLaFranja(ofrecible, e500);
+    assert.equal(F.reintentarEnFranja({ error: e500, reintentando: false, ofrecible }), true, '500: Reintentar');
+    ofrecible = F.ofrecibleDeLaFranja(ofrecible, null);
+    assert.equal(F.reintentarEnFranja({ error: null, reintentando: true, ofrecible }), true, '500 y su reintento: «Reintentando…»');
+  }
+  assert.equal(F.reintentarEnFranja({ error: null, reintentando: false }), false, 'sin error');
+  assert.equal(F.reintentarEnFranja({}), false);
+  // El cableado (aditivo, en la pieza): BannerFlujo pinta el botón solo si la pantalla da onReintentar Y el error lo admite.
+  const banner = readFileSync(new URL('../src/components/flujo/BannerFlujo.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // r2 (m3 = m6, D27): con lo recordado de la llegada del error.
+  assert.match(banner, /const \[ofrecible, setOfrecible\] = useState\(false\);\s*const ofrecibleAhora = ofrecibleDeLaFranja\(ofrecible, error\);\s*if \(ofrecibleAhora !== ofrecible\) setOfrecible\(ofrecibleAhora\);/);
+  assert.match(banner, /\{onReintentar && reintentarEnFranja\(\{ error, reintentando: f\.reintentando, ofrecible: ofrecibleAhora \}\) \? \(/);
+  assert.match(banner, /import \{[^}]*\breintentarEnFranja\b[^}]*\} from '@\/lib\/flujo';/);
 }
 
 console.log('\nOK: test_flujo.mjs');

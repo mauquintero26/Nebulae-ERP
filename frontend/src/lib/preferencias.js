@@ -52,6 +52,7 @@ import { leerPayload } from './session.js';
  *   cerrar: () => void,
  *   listo: Promise<void>,
  *   estaLista: () => boolean,
+ *   precargaFallida: () => boolean,
  * }} Preferencias
  */
 
@@ -320,8 +321,8 @@ export function crearPreferencias({
    * Guarda `valor` en `clave`: de inmediato en local y, con servidor, en un PUT agrupado (RETARDO_MS después del
    * último cambio). Devuelve false, sin lanzar y con un console.warn, si la clave no vale, si el valor no se puede
    * serializar, si pasa de LIMITE_BYTES en bytes UTF-8 o si su JSON tiene más de MAXIMO_NIVELES niveles anidados
-   * (no toca el almacén ni hay PUT). Después de cerrar() devuelve false y no hace nada. Escribir lo mismo que ya está y no está
-   * pendiente no manda nada. Si la precarga falló, la pide otra vez (T4A r1) y el valor sube igual: reemplaza la clave
+   * (no toca el almacén ni hay PUT). Después de cerrar() devuelve false y no hace nada. Escribir lo mismo que ya está y
+   * no está pendiente no manda nada. Si la precarga falló, la pide otra vez (T4A r1) y el valor sube igual: reemplaza la clave
    * entera, así que no borra partes ajenas.
    * @param {string} clave
    * @param {unknown} valor
@@ -477,6 +478,9 @@ export function crearPreferencias({
     cerrar,
     listo,
     estaLista: () => lista,
+    // B4 T24 (F33): la última precarga('') falló y ninguna salió bien desde entonces (aditivo): quien arma una pieza compuesta
+    // sobre lo leído (usePreferenciasTabla) no la escribe, porque se armaría sobre {} y reemplazaría la del servidor.
+    precargaFallida: () => precargaFallo,
   };
 }
 

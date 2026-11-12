@@ -22,6 +22,9 @@ import { fechaCorta } from '@/lib/fechas-colombia';
 import { FranjaKpis, TarjetaKpi } from '@/components/ui';
 import { AvisoFuente } from '@/components/ui/AvisoFuente';
 import { avisoDeFuente } from '@/lib/avisos';
+import { accesoProveedores } from '@/lib/roles';
+import { RESERVA_BOTON_IA } from '@/lib/design-system';
+import { useRolActual } from '@/components/ui/useRolActual';
 import {
   datosDeRespuesta, esRespuestaVigente, estadoFichaCliente, estadoPedidosProveedor, numeroFinito, pedidosDeProveedor, siguientePerfil,
   tarjetasFichaCliente, tarjetasFichaProveedor, textoProveedoresCortados,
@@ -79,6 +82,9 @@ export default function AgendaPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
+  // B4 T24 (F108): Nuevo, Editar y Eliminar proveedor (POST, PATCH y DELETE /compras/proveedores) solo con accesoProveedores
+  // (ADMIN y COMPRAS); el rol se lee después de montar.
+  const accesoProv = accesoProveedores(useRolActual());
 
   // ─── PESTAÑA PRINCIPAL (Clientes vs Proveedores) ───────────────────────────
   const [mainTab, setMainTab] = useState<'clientes' | 'proveedores'>('clientes');
@@ -509,7 +515,7 @@ export default function AgendaPage() {
   if (mainTab === 'proveedores') {
     if (!selectedSupplier) {
       return (
-        <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-6 overflow-y-auto animate-in fade-in">
+        <div className={`h-full w-full bg-[#f8f9fa] flex flex-col p-6 ${RESERVA_BOTON_IA} overflow-y-auto animate-in fade-in`}>
           {/* Top Switcher Tab Bar */}
           <div className="flex items-center bg-white p-1.5 rounded-2xl border border-slate-200 shadow-sm w-fit mb-6">
             <button
@@ -536,12 +542,14 @@ export default function AgendaPage() {
                 <p className="text-slate-500 text-xs mt-0.5">Gestión de fabricantes, distribuidores, condiciones comerciales y pedidos de compra.</p>
               </div>
             </div>
+            {accesoProv.editar && (
             <button
               onClick={openNewSupplier}
               className="bg-teal-600 hover:bg-teal-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-md transition-all flex items-center gap-2"
             >
               <Plus size={16} /> Nuevo Proveedor
             </button>
+            )}
           </div>
 
           {/* Search Bar */}
@@ -569,13 +577,16 @@ export default function AgendaPage() {
             <div className="bg-white rounded-3xl p-12 text-center border border-slate-200 shadow-sm max-w-lg mx-auto">
               <Building2 className="text-slate-300 mx-auto mb-3" size={48} />
               <h3 className="font-black text-slate-800 text-lg">Sin proveedores registrados</h3>
-              <p className="text-xs text-slate-500 mt-1 mb-6">Crea el primer proveedor para gestionar compras y pedidos PEC.</p>
+              {/* B4 T24 r1 (C3): la quinta entrada a «Nuevo proveedor», también solo con accesoProv.editar. */}
+              {accesoProv.editar && <p className="text-xs text-slate-500 mt-1 mb-6">Crea el primer proveedor para gestionar compras y pedidos PEC.</p>}
+              {accesoProv.editar && (
               <button
                 onClick={openNewSupplier}
                 className="bg-teal-600 hover:bg-teal-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-md"
               >
                 + Registrar Proveedor
               </button>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -600,6 +611,7 @@ export default function AgendaPage() {
                             <span className="text-[11px] font-semibold text-slate-400">PROV-{String(sup.id).padStart(4, '0')}</span>
                           </div>
                         </div>
+                        {accesoProv.editar && (
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -610,6 +622,7 @@ export default function AgendaPage() {
                         >
                           <Trash2 size={14} />
                         </button>
+                        )}
                       </div>
 
                       <div className="space-y-1.5 text-xs text-slate-600 mt-2">
@@ -818,7 +831,7 @@ export default function AgendaPage() {
     const pecs = estadoPedidosProveedor(supplierPecsError, supplierPecsTotal, supplierPecs);
 
     return (
-      <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-6 overflow-y-auto animate-in fade-in">
+      <div className={`h-full w-full bg-[#f8f9fa] flex flex-col p-6 ${RESERVA_BOTON_IA} overflow-y-auto animate-in fade-in`}>
         {/* Back Button */}
         <div className="mb-4">
           <button
@@ -867,6 +880,8 @@ export default function AgendaPage() {
                   <Mail size={14} /> Correo
                 </a>
               )}
+              {accesoProv.editar && (
+              <>
               <button
                 onClick={() => openEditSupplier(selectedSupplier)}
                 className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-3.5 py-2 rounded-xl font-bold text-xs shadow-sm flex items-center gap-1.5 transition-colors"
@@ -880,6 +895,8 @@ export default function AgendaPage() {
               >
                 <Trash2 size={16} />
               </button>
+              </>
+              )}
             </div>
           </div>
         </div>
@@ -1105,7 +1122,7 @@ export default function AgendaPage() {
   // ═══════════════════════════════════════════════════════════════════════════
   if (!selectedClient) {
     return (
-      <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-6 overflow-y-auto animate-in fade-in">
+      <div className={`h-full w-full bg-[#f8f9fa] flex flex-col p-6 ${RESERVA_BOTON_IA} overflow-y-auto animate-in fade-in`}>
         {/* Top Switcher Tab Bar */}
         <div className="flex items-center bg-white p-1.5 rounded-2xl border border-slate-200 shadow-sm w-fit mb-6">
           <button
@@ -1289,7 +1306,7 @@ export default function AgendaPage() {
   const tarjetasCliente = tarjetasFichaCliente(customer360 ? resumenFichaCliente(customer360) : null);
 
   return (
-    <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-6 overflow-y-auto animate-in fade-in">
+    <div className={`h-full w-full bg-[#f8f9fa] flex flex-col p-6 ${RESERVA_BOTON_IA} overflow-y-auto animate-in fade-in`}>
       {/* Back Button & Header */}
       <div className="mb-4">
         <button

@@ -126,7 +126,8 @@ export function VentanaAnularPorModalidad({ anulacion, titulo, numero, guardando
 }) {
   const [razon, setRazon] = useState('');
   return (
-    <Modal title="Se anulará la confirmación del cliente"
+    // B4 T24 r2 (C2): la razón obligatoria vive en PanelAnularConfirmacion (un hijo que se desmonta con la ventana): solo sus botones.
+    <Modal cierreExterno={false} title="Se anulará la confirmación del cliente"
       subtitle={numero ? `Cambiaste la modalidad de pago de la solicitud ${numero}` : 'Cambiaste la modalidad de pago de la solicitud'}
       icon={AlertTriangle} color="rose" maxWidth="lg" bloquearCierre={guardando}
       onClose={() => { if (!guardando) onSeguirEditando(); }}>

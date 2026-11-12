@@ -19,6 +19,8 @@ import {
 import type { AnulacionConfirmacion } from '../cotizacion-client';
 import { NextStepCard, EnlaceConfirmacionModal, CambiosDeActividad, CabeceraActividad, returnToSeguro, getUsuarioActual, BotonVolver } from '../../flujo';
 import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
+// B4 T24 f2 (F44-a): la reserva del botón flotante de la IA en las columnas de la derecha (IA, Actividad y Chatter), que se desplazan bajo él.
+import { RESERVA_BOTON_IA } from '@/lib/design-system';
 import { CadenaDocumentos, PasosFlujo } from '@/components/flujo';
 import { pasosConProgreso } from '@/lib/flujo';
 import { PASOS_COTIZACION, pasoCotizacion, anotarPasosCotizacion } from '@/lib/flujo-ventas';
@@ -1241,21 +1243,21 @@ function CotizacionDetalleContent() {
 
           {/* IA Tab Content */}
           {cotPanelTab==='ia'&&(
-            <div className="flex-1 overflow-y-auto p-5 bg-slate-50/30 space-y-4">
+            <div className={`flex-1 overflow-y-auto p-5 bg-slate-50/30 space-y-4 ${RESERVA_BOTON_IA}`}>
               <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-2xl p-4 border border-indigo-100">
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
                     <div className="bg-indigo-600 rounded-lg px-2 py-1 text-white font-black text-xs">AI</div>
-                    <div><p className="font-extrabold text-indigo-900 text-sm">Analisis de Cotizacion</p><p className="text-[10px] text-indigo-500">Nebulae Analytics</p></div>
+                    <div><p className="font-extrabold text-indigo-900 text-sm">Análisis de cotización</p><p className="text-[10px] text-indigo-500">Nebulae Analytics</p></div>
                   </div>
                   <Button size="sm" color="indigo" disabled={!cotizacion} onClick={()=>{
                     const prods = cotizacion?.productos || [];
                     const actividades = cotizacion?.actividades || [];
-                    const txt=`ANALISIS DE COTIZACION\n\nEstado: ${estadoCfg.label}\nTotal: ${fCOP(cotizacion?.total_cop)}\nSubtotal: ${fCOP(cotizacion?.subtotal_cop)}\nDescuento: ${Number(cotizacion?.descuento_pct)||0}%\n\nArticulos: ${prods.length} linea(s)\n${prods.map((p:any)=>`- ${p.product_name||'Producto'} x${p.qty||0} - ${fCOP((Number(p.unit_price_cop)||0)*(Number(p.qty)||0))}`).join('\n')}\n\nActividad: ${actividades.length} evento(s) registrados.`;
+                    const txt=`ANÁLISIS DE COTIZACIÓN\n\nEstado: ${estadoCfg.label}\nTotal: ${fCOP(cotizacion?.total_cop)}\nSubtotal: ${fCOP(cotizacion?.subtotal_cop)}\nDescuento: ${Number(cotizacion?.descuento_pct)||0}%\n\nArtículos: ${prods.length} línea(s)\n${prods.map((p:any)=>`- ${p.product_name||'Producto'} x${p.qty||0} - ${fCOP((Number(p.unit_price_cop)||0)*(Number(p.qty)||0))}`).join('\n')}\n\nActividad: ${actividades.length} evento(s) registrados.`;
                     setCotAnalisis(txt);
                   }}>Analizar</Button>
                 </div>
-                {!cotAnalisis&&<p className="text-xs text-indigo-700 italic text-center py-3">Genera un analisis con los precios, productos y estado de la cotizacion.</p>}
+                {!cotAnalisis&&<p className="text-xs text-indigo-700 italic text-center py-3">Genera un análisis con los precios, productos y estado de la cotización.</p>}
                 {cotAnalisis&&<pre className="text-xs text-slate-800 whitespace-pre-wrap font-medium leading-relaxed bg-white/70 rounded-xl p-3 border border-indigo-100 mt-2">{cotAnalisis}</pre>}
               </div>
             </div>
@@ -1266,7 +1268,7 @@ function CotizacionDetalleContent() {
               nota interna, llamada, WhatsApp, correo y Nota externa). Aquí queda el enlace 'Escribir nota'. */}
 
           {/* Timeline / Bitacora */}
-          <div className="flex-1 overflow-y-auto p-6 custom-scrollbar bg-white">
+          <div className={`flex-1 overflow-y-auto p-6 custom-scrollbar bg-white ${RESERVA_BOTON_IA}`}>
             <div className="flex items-center justify-between gap-2 mb-6">
               <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Línea Temporal</h4>
               <button type="button" onClick={() => setCotPanelTab('chatter')}
@@ -1331,7 +1333,7 @@ function CotizacionDetalleContent() {
               nota guardada entra de una vez aquí y en la Actividad, sin el spinner de página; si el servidor no devuelve
               el renglón, recarga silenciosa. */}
           {cotPanelTab === 'chatter' && (
-            <div className="flex-1 overflow-y-auto p-5 custom-scrollbar bg-white">
+            <div className={`flex-1 overflow-y-auto p-5 custom-scrollbar bg-white ${RESERVA_BOTON_IA}`}>
               <ChatterDocumento tipoDoc="COT" doc={cotizacion} onRegistrado={notaRegistrada} />
             </div>
           )}

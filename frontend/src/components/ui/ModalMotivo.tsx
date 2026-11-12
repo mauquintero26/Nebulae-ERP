@@ -6,6 +6,7 @@ import { Modal } from './Modal';
 import { Button } from './Button';
 import { MINIMO_MOTIVO, motivoValido } from '@/lib/kanban';
 import { textoDeError } from '@/lib/avisos';
+import { FOCOS } from '@/lib/design-system';
 
 /**
  * La ventana del motivo para cancelar o rechazar (Bloque 4, T4A; KANBAN-base punto 4): la usan los tableros y las
@@ -67,6 +68,7 @@ export function ModalMotivo({
 
   return (
     <Modal
+      cierreExterno={false}
       capa="encima"
       role="alertdialog"
       color="red"
@@ -103,7 +105,7 @@ export function ModalMotivo({
           disabled={guardando}
           placeholder={placeholder}
           aria-describedby={error ? idError : undefined}
-          className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-red-200 focus:border-red-300 resize-none disabled:bg-slate-50"
+          className={`w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:border-red-300 ${FOCOS.red} resize-none disabled:bg-slate-50`}
         />
       </div>
       {error && (
