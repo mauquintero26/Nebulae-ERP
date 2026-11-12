@@ -793,6 +793,21 @@ export function recargaReponeLineas({ silencioso = false, recepcion }) {
 }
 
 /**
+ * B4 T24 f3 (FINAL-C7-f): el vínculo de los PVEN en el alta de un PEC (POST /compras/pedidos; create_pec con FINAL-C7-b): `ven_ids`
+ * con TODOS los elegidos (el servidor los vincula en el mismo commit y responde 409 en español si alguno no está en PENDIENTE_COMPRA o
+ * ya tiene PEC), `ven_id` = el primero (como hoy) y `ven_numero` solo el del primero (la columna es VARCHAR(20): una lista unida por
+ * comas no cabe). Sin PVEN: ven_id y ven_numero en null, sin ven_ids. Antes el alta mandaba solo el primero y un PATCH
+ * /ventas/pedidos/{id} por cada otro, que COMPRAS no tiene (403): esos PVEN quedaban sin PEC.
+ * @param {unknown} pvens
+ * @returns {{ven_id: number | null, ven_numero: string | null, ven_ids?: number[]}}
+ */
+export function vinculoPvenDelPec(pvens) {
+  const lista = (Array.isArray(pvens) ? pvens : []).filter((p) => p?.id != null);
+  if (lista.length === 0) return { ven_id: null, ven_numero: null };
+  return { ven_id: lista[0].id, ven_ids: lista.map((p) => p.id), ven_numero: textoLimpio(lista[0].numero) };
+}
+
+/**
  * B4 T24 f3 (FINAL-C4-f; m16 del backend r1): el tope de una cantidad del conteo por línea. update_grl acepta un entero de 0 a
  * 99.999.999 (sale de Numeric(10, 2) de la columna); 2.5 da 422.
  */

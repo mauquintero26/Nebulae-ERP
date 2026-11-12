@@ -3189,4 +3189,33 @@ console.log('--- B4 T24 f3 (FINAL-C4-f): el conteo con el PATCH por línea, vali
   trae(etiquetaJsx(inv, '<TableroKanban'), 'tarjetaDe={tarjetaDeRecepcion}');
 }
 
+console.log('--- B4 T24 f3 (FINAL-C7-f): consolidar varios PVEN en un PEC manda ven_ids en el alta, sin un PATCH /ventas/pedidos por PVEN ---');
+{
+  const { vinculoPvenDelPec } = ec;
+  assert.equal(typeof vinculoPvenDelPec, 'function', 'vinculoPvenDelPec existe');
+  // Todos los elegidos en ven_ids; ven_id y ven_numero, solo del primero (VARCHAR(20): antes los números unidos por comas).
+  assert.deepEqual(vinculoPvenDelPec([{ id: 9, numero: ' PVEN-20260009 ' }, { id: 4, numero: 'PVEN-20260004' }, { id: 7, numero: 'PVEN-7' }]),
+    { ven_id: 9, ven_ids: [9, 4, 7], ven_numero: 'PVEN-20260009' });
+  assert.deepEqual(vinculoPvenDelPec([{ id: 3, numero: 'PVEN-3' }]), { ven_id: 3, ven_ids: [3], ven_numero: 'PVEN-3' }, 'uno solo también va en ven_ids');
+  assert.deepEqual(vinculoPvenDelPec([{ id: 3, numero: '  ' }]), { ven_id: 3, ven_ids: [3], ven_numero: null }, 'un número en blanco no vale');
+  for (const vacio of [[], null, undefined, [{ numero: 'PVEN-1' }]]) {
+    assert.deepEqual(vinculoPvenDelPec(vacio), { ven_id: null, ven_numero: null }, `sin PVEN: ${JSON.stringify(vacio)}`);
+  }
+  // El cableado: el alta de Pedidos (NuevoPecModal) y del Hub (handleConvertPvens) llevan el vínculo de la lib; no queda ningún PATCH
+  // /ventas/pedidos ni el aviso «No se pudieron vincular» (V20 del registro cambia); el 409 se dice y recarga con la regla única.
+  const ped = leerFuente('app/dashboard/compras/pedidos/page.tsx');
+  const hub = leerFuente('app/dashboard/compras/page.tsx');
+  for (const [nombre, f] of [['Pedidos', ped], ['Hub', hub]]) {
+    assert.ok(!/\/ventas\/pedidos\//.test(sinComentarios(f)), `${nombre}: sin PATCH /ventas/pedidos/{id} en el alta`);
+    assert.ok(!/No se pudieron vincular/.test(f), `${nombre}: sin el aviso de los PVEN sin vincular`);
+    assert.ok(!/ven_numero: selected\.map|\.join\(', '\),\s*productos/.test(f), `${nombre}: ven_numero ya no une números`);
+  }
+  assert.match(ped, /\.\.\.vinculoPvenDelPec\(pvensSelected\),/, 'NuevoPecModal: ven_ids, ven_id y ven_numero de la lib');
+  assert.match(ped, /await apiFetch\('\/compras\/pedidos',\{method:'POST',body:JSON\.stringify\(payload\)\}\);\s*onToast\('PEC creado exitosamente','ok'\);/);
+  assert.match(ped, /onToast\(e, 'error'\);\s*if \(recargarTrasError\(e\)\) onCreated\(\);/, 'NuevoPecModal: el 409 con su texto y la recarga');
+  assert.match(hub, /body: JSON\.stringify\(\{\s*\.\.\.vinculoPvenDelPec\(selected\),\s*productos,/, 'el Hub: el vínculo de la lib');
+  assert.match(hub, /const handleConvertPvens = async \(\) => \{[\s\S]*?\} catch \(e\) \{\s*onToast\(e, 'error'\);\s*if \(recargarTrasError\(e\)\) onUpdate\(\);\s*\}/,
+    'el Hub: el 409 con su texto y la recarga');
+}
+
 console.log('\nOK: test_estados_compras.mjs');

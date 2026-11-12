@@ -41,7 +41,7 @@ import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, cancelarPecsEnSerie, consultaColumnaPec,
   despuesDeCancelarPec, etapaPec, grupoMesPec, infoEstadoPec, opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec,
   repartirCancelacionPec, resumenCancelacionPec, tarjetaPedidoCompra, textoVacioPec, textoVencidosPec, tituloMesPec,
-  transicionesPec,
+  transicionesPec, vinculoPvenDelPec,
 } from '@/lib/estados-compras';
 import {
   ENLACE_VER_ANALISIS_COMPRAS, TEXTO_SEGUIMIENTO_CERRADO, accionSemaforoCompras, avisoTarjetaEtapa, avisosFlujoCompras,
@@ -1088,12 +1088,9 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
         supplier_id: selectedSupplier.id,
         supplier_name: selectedSupplier.name,
         supplier_ref: selectedSupplier.reference,
-        ven_id: pvensSelected[0]?.id || null,
-        // ven_numero es VARCHAR(20) en la BD -- no cabe una lista unida por comas
-        // de varios PVEN reales. El vinculo real de cada PVEN adicional vive en
-        // su propio pec_id/pec_numero (ver loop de PATCH mas abajo), asi que aqui
-        // solo va el primero como referencia legible.
-        ven_numero: pvensSelected[0]?.numero || null,
+        // B4 T24 f3 (FINAL-C7-f): ven_ids con TODOS los PVEN elegidos (el servidor los vincula en el mismo alta), ven_id y ven_numero
+        // solo del primero (VARCHAR(20)). Ya no hay un PATCH /ventas/pedidos por cada otro, que COMPRAS no tiene (403).
+        ...vinculoPvenDelPec(pvensSelected),
         modalidad_pago: form.modalidad_pago,
         metodo_pago: form.metodo_pago || null,
         tipo_envio: form.tipo_envio,
@@ -1107,26 +1104,16 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
         total_cop: form.total_cop,
         created_by: user,
       };
-      const pec = await apiFetch('/compras/pedidos',{method:'POST',body:JSON.stringify(payload)});
-      const pecObj = pec?.data ?? pec;
-      // El POST solo vincula el primer PVEN seleccionado (payload.ven_id); el resto
-      // se vincula aqui explicitamente para que TODOS los PVEN marcados queden con
-      // pec_id/pec_numero, no solo el primero.
-      const restantes = pvensSelected.slice(1);
-      // B4 T15: un PVEN que no se pudo vincular se dice con el mensaje del servidor (antes el error se tragaba).
-      const sinVincular: string[] = [];
-      for (const pv of restantes) {
-        try {
-          await apiFetch(`/ventas/pedidos/${pv.id}`,{method:'PATCH',body:JSON.stringify({
-            pec_id: pecObj.id, pec_numero: pecObj.numero, estado:'EN_PROCESO', updated_by:user,
-          })});
-        } catch (err) { sinVincular.push(`${pv.numero}: ${textoDeError(err)}`); }
-      }
+      await apiFetch('/compras/pedidos',{method:'POST',body:JSON.stringify(payload)});
       onToast('PEC creado exitosamente','ok');
-      if (sinVincular.length > 0) onToast(`No se pudieron vincular al PEC: ${sinVincular.join('; ')}`, 'error');
       onCreated();
       onClose();
-    } catch(e:any){ onToast(e.message,'error'); }
+    } catch (e) {
+      // El 409 del servidor (un PVEN que ya no está pendiente de compra o ya tiene PEC) se dice con su texto y, con la regla única,
+      // se recarga lo que se ve (onCreated recarga la lista y los PVEN del selector).
+      onToast(e, 'error');
+      if (recargarTrasError(e)) onCreated();
+    }
     setSaving(false);
   }
 

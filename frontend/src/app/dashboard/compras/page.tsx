@@ -37,7 +37,7 @@ import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, consultaColumnaPec, grupoMesPec, infoEstadoPec,
   opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec, repartirCancelacionPec, resumenCancelacionPec, tarjetaPec,
   cancelarPecsEnSerie, despuesDeCancelarPec, textoVacioPec,
-  textoVencidosPec, tituloMesPec, transicionesPec,
+  textoVencidosPec, tituloMesPec, transicionesPec, vinculoPvenDelPec,
 } from '@/lib/estados-compras';
 import {
   RUTA_HUB_COMPRAS, TEXTO_SEGUIMIENTO_CERRADO, accionPasoHubCompras, accionSemaforoCompras, avisosFlujoCompras, etiquetaEtapaTracking,
@@ -176,16 +176,21 @@ function PecDetailPanel({
     const productos = selected.flatMap(p => (p.productos||[]).map(pr => ({ ...pr, pven_origen: p.numero })));
     try {
       const user = localStorage.getItem('user_name') || '';
-      const newPec = await apiFetch('/compras/pedidos', { method: 'POST', body: JSON.stringify({
-        ven_id: selected[0] && selected[0].id,
-        ven_numero: selected.map(p => p.numero).join(', '),
+      // B4 T24 f3 (FINAL-C7-f): ven_ids con todos los PVEN (el servidor los vincula en el alta); ven_numero, solo el del primero
+      // (VARCHAR(20): antes los números unidos por comas). El 409 se dice con su texto y recarga (recargarTrasError).
+      const respuesta = await apiFetch('/compras/pedidos', { method: 'POST', body: JSON.stringify({
+        ...vinculoPvenDelPec(selected),
         productos,
         notas: 'Consolidado de PVEN: ' + selected.map(p=>p.numero).join(', '),
         created_by: user,
       })});
-      onToast('PEC ' + newPec.numero + ' creado con ' + selected.length + ' PVEN(s) consolidados');
+      const newPec = respuesta?.data ?? respuesta;
+      onToast('PEC ' + newPec?.numero + ' creado con ' + selected.length + ' PVEN(s) consolidados');
       onUpdate();
-    } catch(e) { onToast(e, 'error'); }
+    } catch (e) {
+      onToast(e, 'error');
+      if (recargarTrasError(e)) onUpdate();
+    }
   };
 
   if (!pec) return null;
