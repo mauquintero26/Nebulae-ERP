@@ -1803,6 +1803,27 @@ console.log('--- TEST T24-f4b (B4 T24 f4; m6 del backend r2, m4 y m11 de r3): el
   assert.match(pantalla, /import \{[^}]*\bAYUDA_SECRETOS_PAGOS\b[^}]*\} from '@\/lib\/kpis';/);
 }
 
+console.log('--- TEST T24-f4c (B4 T24 f4; C1 del backend r3): Sitio Web solo usa las claves que GET /ecommerce/web-builder/config sigue trayendo ---');
+{
+  // Backend r3 (C1): el GET solo trae CLAVES_CONSTRUCTOR_SITIO y el PATCH ignora el resto. Sitio Web lee y escribe solo esas.
+  const eco = readFileSync(new URL('../../backend/app/api/v1/ecommerce.py', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const m = eco.match(/^CLAVES_CONSTRUCTOR_SITIO = \(([^)]*)\)$/m);
+  assert.ok(m, 'CLAVES_CONSTRUCTOR_SITIO en ecommerce.py');
+  const claves = new Set([...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]));
+  assert.deepEqual([...claves], ['theme', 'hero', 'featured_section', 'contact', 'blog']);
+  const sitio = readFileSync(new URL('../src/app/dashboard/sitio-web/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const usadas = new Set([
+    ...[...sitio.matchAll(/\bconfig\.([a-z_]+)/g)].map((x) => x[1]),
+    ...[...sitio.matchAll(/updateSection\('([a-z_]+)'/g)].map((x) => x[1]),
+    ...[...sitio.matchAll(/\{ k: '([a-z_]+)', l: /g)].map((x) => x[1]),
+  ]);
+  assert.ok(usadas.size >= 4, `Sitio Web usa sus secciones: ${[...usadas]}`);
+  for (const k of usadas) assert.ok(claves.has(k), `Sitio Web usa «${k}», que el GET ya no trae`);
+  // La pantalla sigue leyendo d.data del GET y mandando el config al PATCH (las claves de fuera las ignora el servidor).
+  assert.ok(sitio.includes("apiFetch('/ecommerce/web-builder/config').then(d => { setConfig(d.data || {});"));
+  assert.ok(sitio.includes("await apiFetch('/ecommerce/web-builder/config', { method: 'PATCH', body: JSON.stringify(config) });"));
+}
+
 console.log('--- TEST T24-b (B4 T24, FINAL-m23): el Copilot del Dashboard, solo para quien lo puede consultar, sin emojis y con el 403 dicho ---');
 {
   const fuente = readFileSync(new URL('../src/app/dashboard/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
