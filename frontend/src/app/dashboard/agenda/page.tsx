@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { CambiosDeActividad } from '@/app/dashboard/ventas/flujo';
 import { itemDeTimelineCliente, peticionGuardarProveedor, proveedorDeServidor } from '@/lib/datos-cliente';
-import { fechaCorta } from '@/lib/fechas-colombia';
+import { fechaCorta, hace } from '@/lib/fechas-colombia';
 // B4 T23B: la franja de indicadores estándar de la ficha del cliente y del proveedor (KPI-otros punto 3).
 import { FranjaKpis, TarjetaKpi } from '@/components/ui';
 import { AvisoFuente } from '@/components/ui/AvisoFuente';
@@ -31,18 +31,6 @@ import {
 } from '@/lib/kpis';
 import { infoEstadoPec } from '@/lib/estados-compras';
 import { resumenFichaCliente } from '@/lib/kpis-ventas';
-
-function timeAgo(isoString: string) {
-  if (!isoString) return 'Hoy';
-  const date = new Date(isoString);
-  const now = new Date();
-  const diff = Math.floor((now.getTime() - date.getTime()) / 1000);
-  if (diff < 60) return 'Hace unos segundos';
-  if (diff < 3600) return `Hace ${Math.floor(diff / 60)} min`;
-  if (diff < 86400) return `Hace ${Math.floor(diff / 3600)} horas`;
-  if (diff < 604800) return `Hace ${Math.floor(diff / 86400)} días`;
-  return date.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' });
-}
 
 function formatCOP(v: number | string | null | undefined) {
   const num = Number(v) || 0;
@@ -1550,7 +1538,7 @@ export default function AgendaPage() {
                           <span className="font-bold text-xs text-slate-800">{sc.numero}</span>
                           <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${STATUS_COLOR_MAP[sc.estado] || 'bg-slate-100 text-slate-600'}`}>{sc.estado}</span>
                         </div>
-                        <p className="text-[11px] text-slate-400 mt-0.5">{sc.tipo_solicitud || 'Cotización'} · {timeAgo(sc.created_at)}</p>
+                        <p className="text-[11px] text-slate-400 mt-0.5">{sc.tipo_solicitud || 'Cotización'} · {hace(sc.created_at)}</p>
                       </div>
                       <Link href="/dashboard/ventas/solicitud" className="text-xs font-bold text-indigo-600 hover:underline">Ver SC →</Link>
                     </div>
@@ -1601,7 +1589,7 @@ export default function AgendaPage() {
                       <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 hover:bg-white transition-colors">
                         <div className="flex items-center justify-between gap-3 mb-1">
                           <span className="text-xs font-bold text-slate-800">{it.titulo}</span>
-                          {it.fecha && <span className="text-[10px] text-slate-400 shrink-0">{timeAgo(it.fecha)}</span>}
+                          {it.fecha && <span className="text-[10px] text-slate-400 shrink-0">{hace(it.fecha)}</span>}
                         </div>
                         <p className="text-xs text-slate-600">{t.description}</p>
                         {it.cambios.length > 0 && (

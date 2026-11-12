@@ -31,6 +31,7 @@ import {
 } from '@/lib/crm-etapas';
 import { estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
 import { formatoPesos } from '@/lib/pesos';
+import { hace } from '@/lib/fechas-colombia';
 import { ofreceReintentar, recargarTrasError, textoDeError } from '@/lib/avisos';
 import { accesoCrm, TEXTO_SIN_LEADS } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
@@ -72,15 +73,6 @@ const STATUS_MAP = {
 function formatCOP(v) {
   if (!v && v !== 0) return '—';
   return new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(v);
-}
-function timeAgo(iso) {
-  if (!iso) return 'Hoy';
-  const diff = Date.now() - new Date(iso).getTime();
-  const d = Math.floor(diff / 86400000);
-  const h = Math.floor(diff / 3600000);
-  if (d > 0) return `hace ${d}d`;
-  if (h > 0) return `hace ${h}h`;
-  return 'Hace un momento';
 }
 function daysAgo(iso) {
   if (!iso) return 0;
@@ -1197,7 +1189,7 @@ export default function CRMPage() {
                     style={{ color: COLOR_HEX[stage.color], backgroundColor: BG_HEX[stage.bg_color]||'#f8fafc' }}>
                     {stage.name}
                   </span>}
-                  <span className="text-xs text-slate-400">{timeAgo(selectedLead.updated_at)}</span>
+                  <span className="text-xs text-slate-400">{hace(selectedLead.updated_at)}</span>
                 </div>
                 <h2 id="drawer-lead-titulo" className="text-xl font-black text-slate-800">{selectedLead.client}</h2>
                 <p className="text-sm text-indigo-600 font-bold mt-0.5">{selectedLead.solicitud_tipo || selectedLead.tag}</p>
