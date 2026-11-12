@@ -165,7 +165,7 @@ export default function InventarioRecepcionesPage() {
   const abrirPec = useCallback((r: FilaRecepcion) => router.push(`/dashboard/compras/pedidos?id=${r.pec_id}`), [router]);
   const accionesFila = useMemo(() => ({ abrir, abrirEnCompras, abrirPec }), [abrir, abrirEnCompras, abrirPec]);
   // La tarjeta del tablero: «Contar y confirmar» solo si esa recepción se puede confirmar (sin eso, la tarjeta queda en «Abrir»).
-  const tarjetaDeRecepcion = useCallback((r: FilaRecepcion) => tarjetaRecepcion(r, { contar: confirmacion(r).confirmar }), [confirmacion]);
+  const tarjetaDeRecepcion = useCallback((r: FilaRecepcion) => tarjetaRecepcion(r, { contar: confirmacion(r).confirmar, motivo: confirmacion(r).texto }), [confirmacion]);
 
   // ── bloque 2: la tabla (TABLA-inventario punto 9; R5, R26, D40, D41) ──
   const prefs = usePreferenciasTabla(ID_RECEPCIONES, COLUMNAS_TABLA_RECEPCIONES);

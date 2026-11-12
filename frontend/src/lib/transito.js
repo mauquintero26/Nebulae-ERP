@@ -366,12 +366,8 @@ export function soltarPendientes(entradas, { filas, recargando, modo }) {
   const salida = [];
   for (const e of entradas) {
     if (e.fin === null) { salida.push(e); continue; }
-    // r1 (F66): la foto sin tomar se toma aquí, con la lista activa de este render (y si ya recarga, vista).
-    if (e.fin.filas === SIN_FOTO) {
-      cambio = true;
-      salida.push({ ...e, fin: { filas, modo, visto: recargando } });
-      continue;
-    }
+    // r1 (F66) y r2 (m28): la foto sin tomar (SIN_FOTO, modo null) cae aquí, como un cambio de modo: se toma con la lista activa de este
+    // render (y si ya recarga, vista). Una sola rama: la de antes duplicaba esta.
     if (e.fin.modo !== modo) {
       cambio = true;
       salida.push({ ...e, fin: { filas, modo, visto: recargando } });

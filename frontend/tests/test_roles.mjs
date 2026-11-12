@@ -489,7 +489,8 @@ console.log('--- B4 T24 f3 r1 (C1 y la heredada): sin bodega receptora, BODEGA c
     }, `${r}: sin bodega`);
     // La heredada: solo ADMIN, y con bodega; BODEGA ya no la confirma desde la lista (lo que el detalle le escondía).
     assert.deepEqual(fuera(true, false, r), r === 'ADMIN' ? { confirmar: true, texto: null } : { confirmar: false, texto: roles.TEXTO_RECEPCION_HEREDADA }, `${r}: heredada`);
-    assert.deepEqual(fuera(true, true, r), { confirmar: false, texto: r === 'ADMIN' ? roles.TEXTO_ASIGNA_BODEGA : roles.TEXTO_RECEPCION_HEREDADA }, `${r}: heredada sin bodega`);
+    // r2 (m14, D27): heredada y sin bodega: manda el texto de la heredada (la cierra la Administración), también para ADMIN.
+    assert.deepEqual(fuera(true, true, r), { confirmar: false, texto: roles.TEXTO_RECEPCION_HEREDADA }, `${r}: heredada sin bodega`);
     assert.deepEqual(confirmarRecepcion({ porConfirmar: false, heredada: false, sinBodega: false, rol: r }), { confirmar: false, texto: null }, `${r}: confirmada`);
   }
   for (const r of RAROS) assert.deepEqual(fuera(false, false, r), { confirmar: false, texto: null }, JSON.stringify(r));

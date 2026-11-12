@@ -44,7 +44,7 @@ export function SelectorBodegaRecepcion({ id, bodegas, elegida, onElegir, deshab
       <label htmlFor={id} className="font-bold text-slate-600">Bodega receptora</label>
       <select id={id} value={valor} onChange={(e) => onElegir(e.target.value)} disabled={deshabilitado || (bodegas.cargando && !bodegas.filas)}
         className={`min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700 disabled:opacity-60 ${FOCOS[acento]}`}>
-        <option value="">{bodegas.cargando && !bodegas.filas ? 'Cargando bodegas…' : 'La del pedido (opcional)'}</option>
+        <option value="">{bodegas.cargando && !bodegas.filas ? 'Cargando bodegas…' : 'Sin elegir (la del pedido, si tiene)'}</option>
         {(bodegas.filas ?? []).map((b) => <option key={b.id} value={String(b.id)}>{b.name || `Bodega ${b.id}`}</option>)}
       </select>
       {bodegas.error != null && (

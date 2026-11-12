@@ -41,7 +41,7 @@ import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, consultaColumnaPec, grupoMesPec, infoEstadoPec,
   opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec, repartirCancelacionPec, resumenCancelacionPec, tarjetaPec,
   cancelarPecsEnSerie, despuesDeCancelarPec, textoVacioPec,
-  textoVencidosPec, tituloMesPec, transicionesPec, vinculoPvenDelPec, seleccionVigente, avisoSeleccionQuitada, estadoReintento,
+  textoVencidosPec, tituloMesPec, transicionesPec, vinculoPvenDelPec, seleccionVigente, avisoSeleccionQuitada, estadoReintento, podarSeleccion,
 } from '@/lib/estados-compras';
 import {
   RUTA_HUB_COMPRAS, TEXTO_SEGUIMIENTO_CERRADO, accionPasoHubCompras, accionSemaforoCompras, avisosFlujoCompras, etiquetaEtapaTracking,
@@ -136,6 +136,7 @@ function PecDetailPanel({
   const [tab, setTab] = useState('info');
   const [selectedPvens, setSelectedPvens] = useState<Set<number>>(new Set());
   const [consolidando, setConsolidando] = useState(false);
+  const [quitadosPvens, setQuitadosPvens] = useState<string[]>([]);
   const [searchPven, setSearchPven] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [editEstado, setEditEstado] = useState(false);
@@ -179,8 +180,11 @@ function PecDetailPanel({
 
   // r1 (C2): la selección vigente (seleccionVigente: solo los que siguen en PENDIENTE_COMPRA; los demás se avisan), un solo envío a la vez
   // (consolidando) y, tras un alta buena, la selección vacía (un segundo clic ya no da «PEC creado» seguido del 409).
-  const vigente = seleccionVigente(selectedPvens, pedidosVenta);
-  const avisoQuitados = avisoSeleccionQuitada(vigente.quitados);
+  // r2 (m4 = m7): la selección guardada se PODA; el aviso de los quitados queda.
+  const poda = podarSeleccion(selectedPvens, pedidosVenta);
+  if (poda.seleccion) { setSelectedPvens(poda.seleccion); setQuitadosPvens(poda.quitados); }
+  const vigente = seleccionVigente(poda.seleccion ?? selectedPvens, pedidosVenta);
+  const avisoQuitados = avisoSeleccionQuitada(quitadosPvens);
   const handleConvertPvens = async () => {
     if (consolidando) return;
     if (!vigente.ids.length) { onToast('Selecciona al menos un PVEN', 'error'); return; }

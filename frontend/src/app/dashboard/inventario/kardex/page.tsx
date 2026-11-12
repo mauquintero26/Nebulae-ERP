@@ -243,6 +243,7 @@ export default function KardexPage() {
   const listaSkuAbierta = buscarSku && !skuCerrado;
   const refListaSku = useRef<HTMLDivElement>(null);
   const refCampoSku = useRef<HTMLInputElement>(null);
+  const ratonSobreLista = useRef(false);
   const [indiceSku, setIndiceSku] = useState(-1);
   const escribirSku = (texto: string) => {
     setSkuTexto(texto);
@@ -260,7 +261,8 @@ export default function KardexPage() {
     if (r.foco < 0) refCampoSku.current?.focus(); else opciones[r.foco]?.focus();
   };
   const saleDelSku = (e: React.FocusEvent<HTMLElement>) => {
-    if (cierraComboboxAlSalir(e.currentTarget.contains(e.relatedTarget as Node | null))) setSkuCerrado(true);
+    // r2 (m5 = m15): la decisión entera en la lib: hacia adentro no cierra; sin destino (Safari) con el ratón sobre la lista, tampoco.
+    if (cierraComboboxAlSalir(e.currentTarget.contains(e.relatedTarget as Node | null), { sinDestino: e.relatedTarget == null, ratonSobreLista: ratonSobreLista.current })) setSkuCerrado(true);
   };
   const elegirSku = (o: OpcionSku) => {
     setSkuTexto(o.display || o.product_name || `SKU #${o.id}`);
@@ -349,6 +351,7 @@ export default function KardexPage() {
                     {/* El mousedown en la lista no saca el foco del campo: el clic llega siempre a la opción (C3). */}
                     {listaSkuAbierta && resultadosSku !== null && resultadosSku.error == null && resultadosSku.filas.length > 0 && (
                       <div ref={refListaSku} id="kardex-sku-opciones" role="listbox" aria-label="Productos que coinciden"
+                        onPointerEnter={() => { ratonSobreLista.current = true; }} onPointerLeave={() => { ratonSobreLista.current = false; }}
                         onMouseDown={(e) => e.preventDefault()}
                         className="absolute left-0 top-full z-20 mt-1 max-h-48 w-64 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl">
                         {resultadosSku.filas.map((o, i) => (

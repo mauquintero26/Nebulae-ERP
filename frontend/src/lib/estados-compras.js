@@ -1075,6 +1075,29 @@ export function seleccionVigente(seleccion, pedidosVenta) {
 }
 
 /**
+ * B4 T24 f3 r2 (m4 = m7): poda la selección GUARDADA (selectedPvens): si seleccionVigente quitó alguno, la selección nueva (solo los
+ * vigentes) y los quitados (para avisar); si no, `seleccion` null (no cambia nada). Así un PVEN quitado no reaparece marcado si vuelve a
+ * PENDIENTE_COMPRA.
+ * @param {Set<number>} seleccion
+ * @param {unknown} pedidosVenta
+ * @returns {{seleccion: Set<number> | null, quitados: string[]}}
+ */
+export function podarSeleccion(seleccion, pedidosVenta) {
+  const vigente = seleccionVigente(seleccion, pedidosVenta);
+  return vigente.quitados.length ? { seleccion: new Set(vigente.ids), quitados: vigente.quitados } : { seleccion: null, quitados: [] };
+}
+
+/**
+ * B4 T24 f3 r2 (m21): «Crear casillero» en el alta de un PEC: se ofrece (un botón; ya no se abre solo) cuando una búsqueda con texto
+ * terminó sin resultados y no hay uno elegido.
+ * @param {{texto: string, resultados: unknown[] | null, elegido: unknown}} entrada  resultados null: la búsqueda no terminó
+ * @returns {boolean}
+ */
+export function ofrecerCrearCasillero({ texto, resultados, elegido }) {
+  return Boolean(String(texto ?? '').trim()) && Array.isArray(resultados) && resultados.length === 0 && !elegido;
+}
+
+/**
  * B4 T24 f3 r1 (C2): el aviso de los PVEN que seleccionVigente quitó (ya no están pendientes de compra), o null.
  * @param {string[]} quitados
  * @returns {string | null}
@@ -1200,12 +1223,12 @@ export function peticionesConteo(servidor, locales) {
  * «Por contar», la acción «Contar y confirmar» hacia el conteo. B4 T24 f3 (FINAL-C4-f): con `{contar: false}` (aditivo: el rol no
  * cuenta, accesoRecepciones), sin esa acción; la tarjeta queda en «Abrir» (el Drawer, con «Abrir conteo»).
  * @param {any} r
- * @param {{contar?: boolean}} [opciones]
+ * @param {{contar?: boolean, motivo?: string | null}} [opciones]
  * @returns {{numero: string, tipo: 'ENINV', titulo: string, subtitulo: string, monto: null, estado: Readonly<InfoEstado>,
  *   chips: {texto: string, tono: string}[], tiempo: string, atrasada: boolean,
  *   accionPrincipal: {texto: string, href: string, tono: string} | null}}
  */
-export function tarjetaRecepcion(r, { contar = true } = {}) {
+export function tarjetaRecepcion(r, { contar = true, motivo = null } = {}) {
   const retraso = numeroFinito(r?.dias_retraso);
   const atrasada = retraso !== null && retraso > 0;
   const dia = fechaCorta(r?.fecha_recepcion || r?.created_at);
@@ -1218,7 +1241,11 @@ export function tarjetaRecepcion(r, { contar = true } = {}) {
     subtitulo: pecDeRecepcion(r),
     monto: null,
     estado: infoEstadoRecepcion(r?.estado),
-    chips: atrasada ? [{ texto: `Retraso ${retraso} ${retraso === 1 ? 'día' : 'días'}`, tono: 'rose' }] : [],
+    // r2 (m2, aditivo): sin «Contar y confirmar», el motivo (el texto de confirmarRecepcion) va como un chip.
+    chips: [
+      ...(atrasada ? [{ texto: `Retraso ${retraso} ${retraso === 1 ? 'día' : 'días'}`, tono: 'rose' }] : []),
+      ...(porContar && !contar && textoLimpio(motivo) ? [{ texto: textoLimpio(motivo), tono: 'slate' }] : []),
+    ],
     tiempo: dia ? `${bodega} · ${dia}` : bodega,
     atrasada,
     accionPrincipal: porContar && contar && r?.id != null
@@ -1956,8 +1983,11 @@ export function teclaComboboxSku({ tecla, abierta, indice, total }) {
  * @param {boolean} focoVaDentro
  * @returns {boolean}
  */
-export function cierraComboboxAlSalir(focoVaDentro) {
-  return !focoVaDentro;
+export function cierraComboboxAlSalir(focoVaDentro, { sinDestino = false, ratonSobreLista = false } = {}) {
+  // r2 (m5 = m15): un blur sin destino (Safari y Firefox de macOS no enfocan el botón al hacer clic) con el ratón sobre la lista no cierra:
+  // es un clic en una opción. Con el foco hacia algo de adentro, tampoco.
+  if (focoVaDentro) return false;
+  return !(sinDestino && ratonSobreLista);
 }
 
 /**
@@ -2521,7 +2551,6 @@ export function pestanasTraslado(conteos) {
 }
 /** Los conteos de TODOS los traslados (sin búsqueda ni filtros) para las tarjetas: solo el total y los conteos, sin filas. */
 export const RUTA_CONTEOS_TRASLADOS = '/inventory/operations?operation_type=TRANSFER&limit=0&con_conteos=1';
-/** La columna del tablero de Traslados (su estado) y el día en que se hizo (la fecha real). */
 /**
  * B4 T24 f3 r1 (m11, m21, m37): lo que dice la alerta «No se pudo verificar el stock crítico» de Abastecimiento. Si /inventory/stats
  * falló, remite al aviso con «Reintentar», que va SOBRE las tarjetas (antes decía «bajo»); si respondió pero sin un número de agotados,
@@ -2533,6 +2562,7 @@ export function textoAlertaSinDato(fallaronLosIndicadores) {
   return fallaronLosIndicadores ? 'El aviso sobre las tarjetas dice qué falló.' : 'El servidor no dio el número de agotados.';
 }
 
+/** La columna del tablero de Traslados (su estado) y el día en que se hizo (la fecha real). */
 export const columnaDeTraslado = (t) => t?.status;
 export const fechaDeTraslado = (t) => t?.fecha;
 

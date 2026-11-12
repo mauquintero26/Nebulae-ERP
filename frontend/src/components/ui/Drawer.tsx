@@ -48,7 +48,7 @@ export function Drawer({
         {footer && (
           // B4 T24 f3 r1 (m43): el pie reserva a la derecha el área del botón de la IA (RESERVA_BOTON_IA_PIE): su botón de la derecha
           // queda entero a la vista.
-          <div className={`p-6 ${RESERVA_BOTON_IA_PIE} border-t border-slate-200 bg-slate-50 flex items-center justify-between gap-3`}>
+          <div className={`p-6 ${RESERVA_BOTON_IA_PIE} border-t border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-3`}>
             {footer}
           </div>
         )}

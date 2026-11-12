@@ -1370,7 +1370,8 @@ console.log('--- TEST 32 (B4 T16A): Recepciones (compras/recepciones/page.tsx) y
   assert.match(pag, /aria-label=\{`Abrir el conteo de \$\{numero\}`\}/);
   assert.match(pag, /aria-label=\{`Confirmar la recepción \$\{numero\}`\}/);
   assert.match(pag, /href=\{`\/dashboard\/compras\/recepciones\/\$\{r\.id\}`\}/, '«Abrir conteo» va a /compras/recepciones/[id]');
-  assert.match(pag, /oculto: !porConfirmar/, 'Confirmar solo en una recepción por confirmar (BORRADOR), no en logísticas ni canceladas');
+  // r2 (m1, D27): el ítem «Confirmar» del menú sale de itemConfirmarMenu (oculto si no está por confirmar; casos en test_roles).
+  assert.match(pag, /oculto: menu\.oculto,/, 'Confirmar solo en una recepción por confirmar (BORRADOR), no en logísticas ni canceladas');
   assert.match(pag, /avisarError\(err, `No se pudo confirmar \$\{numeroRecepcion\(r\)\}`\);\s*if \(recargarTrasError\(err\)\) recargarTodo\(\);/, 'un error se dice y, con la regla única, se recarga');
   // El Drawer conserva «Confirmar Entrada Física y Actualizar Stock» y suma «Abrir conteo».
   assert.match(pag, /Confirmar Entrada Física y Actualizar Stock/);
@@ -3240,7 +3241,7 @@ console.log('--- B4 T24 f3 (FINAL-C4-f): el conteo con el PATCH por línea, vali
   const pag = leerFuente('app/dashboard/compras/recepciones/page.tsx');
   // r1 (D27): «Confirmar» de la fila, el Drawer y el tablero salen de confirmarRecepcion (C1 y la heredada); lo fija el bloque de r1.
   trae(pag, 'const accesoRec = accesoRecepciones(rol);');
-  trae(pag, 'oculto: !porConfirmar || !acciones?.puedeConfirmar,');
+  trae(pag, 'oculto: menu.oculto,'); // r2 (m1, D27): el ítem del menú sale de itemConfirmarMenu
   trae(pag, 'puedeConfirmar: accesoRec.confirmar,');
   assert.match(pag, /\{accesoRec\.recepcionar && \(\s*<Button size="sm" color="teal" icon=\{Plus\}/);
   trae(etiquetaJsx(pag, '<TableroKanban'), 'tarjetaDe={tarjetaDeRecepcion}');
@@ -3439,7 +3440,7 @@ console.log('--- B4 T24 f3 (F88, F90, F91): el Kardex — el autocompletar como 
   // r1 (D27, C3): las teclas y el cierre pasan a la lib (teclaComboboxSku, cierraComboboxAlSalir); aria-selected sigue a la opción con el
   // foco. Lo fija el bloque de r1.
   trae(k, "role=\"option\" aria-selected={i === indiceSku} onClick={() => elegirSku(o)}");
-  trae(k, 'if (cierraComboboxAlSalir(e.currentTarget.contains(e.relatedTarget as Node | null))) setSkuCerrado(true);', 'al salir del campo y de la lista, se cierra');
+  trae(k, 'if (cierraComboboxAlSalir(e.currentTarget.contains(e.relatedTarget as Node | null), { sinDestino: e.relatedTarget == null, ratonSobreLista: ratonSobreLista.current })) setSkuCerrado(true);', 'al salir del campo y de la lista, se cierra (r2, m5: con el null de Safari y el ratón sobre la lista, D27)');
   trae(k, '<div className="relative" onKeyDown={teclaSku} onBlur={saleDelSku}>');
   trae(k, 'setSkuCerrado(false);', 'escribir la abre otra vez');
   // F90: el título fijo; el número en el subtítulo.
@@ -3523,14 +3524,14 @@ console.log('--- B4 T24 f3 r1 (C1 y la heredada): «Confirmar» con la regla del
   trae(cont, 'const conteo = accionesConteo({ porConfirmar: isEditable, heredada, sinBodega: !data?.warehouse_id, rol });');
   // Compras › Recepciones: la fila, el menú (apagado con su motivo si el rol confirma pero la recepción no), el Drawer y el tablero.
   const pag = leerFuente('app/dashboard/compras/recepciones/page.tsx');
-  trae(pag, "import { accesoRecepciones, confirmarRecepcion } from '@/lib/roles';");
+  trae(pag, "import { accesoRecepciones, confirmarRecepcion, itemConfirmarMenu } from '@/lib/roles';"); // r2 (m1, D27)
   trae(pag, 'const confirmacion = useCallback((r: FilaRecepcion) => confirmarRecepcion({ ...datosConfirmacion(r), rol }), [rol]);');
   assert.match(pag, /\{confirmacion\.confirmar && \(\s*<button type="button" onClick=\{\(\) => acciones\?\.confirmar\(r\)\}/, 'la fila');
-  trae(pag, 'deshabilitado: !confirmacion.confirmar || acciones?.confirmandoId != null,', 'el menú');
-  trae(pag, "titulo: !confirmacion.confirmar ? confirmacion.texto ?? undefined :", 'el menú dice por qué');
+  trae(pag, 'deshabilitado: menu.deshabilitado || acciones?.confirmandoId != null,', 'el menú'); // r2 (m1, D27): itemConfirmarMenu
+  trae(pag, "titulo: menu.titulo ?? (acciones?.confirmandoId != null ? 'Hay otra confirmación en camino.' : undefined) },", 'el menú dice por qué');
   assert.match(pag, /\{confirmacion\(selectedItem\)\.confirmar \? \(\s*<Button color="teal" icon=\{Check\}/, 'el Drawer');
   assert.match(pag, /\) : confirmacion\(selectedItem\)\.texto && \(\s*<p role="status"[^>]*>\{confirmacion\(selectedItem\)\.texto\}<\/p>/, 'el Drawer: su motivo (m42)');
-  trae(pag, 'tarjetaRecepcion(r, { contar: confirmacion(r).confirmar }), [confirmacion])', 'el tablero');
+  trae(pag, 'tarjetaRecepcion(r, { contar: confirmacion(r).confirmar, motivo: confirmacion(r).texto }), [confirmacion])', 'el tablero');
   // «Recepcionar PEC»: la bodega receptora antes de crear (y su cuerpo).
   trae(pag, "import { SelectorBodegaRecepcion, useBodegasRecepcion } from '../bodega-recepcion';");
   trae(pag, 'const bodegas = useBodegasRecepcion(showPecModal);');
@@ -3540,7 +3541,7 @@ console.log('--- B4 T24 f3 r1 (C1 y la heredada): «Confirmar» con la regla del
   const inv = leerFuente('app/dashboard/inventario/recepciones/page.tsx');
   trae(inv, 'const confirmacion = useCallback((r: FilaRecepcion) => confirmarRecepcion({ ...datosConfirmacion(r), rol }), [rol]);');
   trae(inv, "{confirmacion(selectedItem).confirmar ? 'Contar y confirmar en Compras' : 'Abrir en Compras'}");
-  trae(inv, 'tarjetaRecepcion(r, { contar: confirmacion(r).confirmar }), [confirmacion])');
+  trae(inv, 'tarjetaRecepcion(r, { contar: confirmacion(r).confirmar, motivo: confirmacion(r).texto }), [confirmacion])');
   assert.match(inv, /\{confirmacion\(selectedItem\)\.texto && \(\s*<p role="status"/);
   // «Hacer recepción» del panel del PEC (ADMIN y COMPRAS): la bodega antes de crear; el hook antes del return temprano.
   const ped = leerFuente('app/dashboard/compras/pedidos/page.tsx');
@@ -3551,7 +3552,7 @@ console.log('--- B4 T24 f3 r1 (C1 y la heredada): «Confirmar» con la regla del
   // La pieza: el select es opcional, la del pedido por defecto, y un 403 no ofrece «Reintentar».
   const pieza = leerFuente('app/dashboard/compras/bodega-recepcion.tsx');
   trae(pieza, 'const valor = bodegaRecepcion(elegida, bodegas.filas);');
-  trae(pieza, "'La del pedido (opcional)'");
+  trae(pieza, "'Sin elegir (la del pedido, si tiene)'"); // r2 (m3, D27)
   trae(pieza, '{ofreceReintentar(bodegas.error) && (');
 }
 
@@ -3581,7 +3582,7 @@ console.log('--- B4 T24 f3 r1 (C2): después del 409, la selección de PVEN deja
 
   // NuevoPecModal: el contador, el pie y ven_ids salen de la selección vigente; el aviso de los quitados.
   const ped = leerFuente('app/dashboard/compras/pedidos/page.tsx');
-  trae(ped, 'const vigente = seleccionVigente(selectedPvens, pedidosVenta);');
+  trae(ped, 'const vigente = seleccionVigente(poda.seleccion ?? selectedPvens, pedidosVenta);'); // r2 (m4, D27): con la poda
   trae(ped, '...vinculoPvenDelPec(vigente.pvens),');
   trae(ped, '{vigente.ids.length} PVEN seleccionado(s)');
   trae(ped, '<span className="font-bold">{vigente.ids.length}</span> PVEN asociado(s)');
@@ -3589,7 +3590,7 @@ console.log('--- B4 T24 f3 r1 (C2): después del 409, la selección de PVEN deja
   assert.ok(!/selectedPvens\.size/.test(ped), 'Pedidos: nada cuenta la selección vieja');
   // El Hub: lo mismo, un solo envío a la vez (loading/disabled) y la selección vacía tras un alta buena.
   const hub = leerFuente('app/dashboard/compras/page.tsx');
-  trae(hub, 'const vigente = seleccionVigente(selectedPvens, pedidosVenta);');
+  trae(hub, 'const vigente = seleccionVigente(poda.seleccion ?? selectedPvens, pedidosVenta);'); // r2 (m4, D27): con la poda
   trae(hub, 'const selected: FilaVenta[] = vigente.pvens;');
   assert.match(hub, /if \(consolidando\) return;\s*if \(!vigente\.ids\.length\)/, 'un segundo clic no manda otra vez');
   assert.match(hub, /creado con ' \+ selected\.length \+ ' PVEN\(s\) consolidados'\);\s*setSelectedPvens\(new Set\(\)\);\s*onUpdate\(\);/, 'tras el alta, la selección vacía');
@@ -3629,7 +3630,7 @@ console.log('--- B4 T24 f3 r1 (C3, m31): el SKU del Kardex se elige con el rató
   // El cableado: el mousedown en la lista no saca el foco del campo (Safari y Firefox de macOS no enfocan el botón: el blur llegaba con
   // relatedTarget null y desmontaba la lista antes del clic); tras Esc y tras elegir, el foco vuelve al campo.
   const k = leerFuente('app/dashboard/inventario/kardex/page.tsx');
-  assert.match(k, /role="listbox" aria-label="Productos que coinciden"\s*onMouseDown=\{\(e\) => e\.preventDefault\(\)\}/, 'el ratón elige');
+  assert.match(k, /role="listbox" aria-label="Productos que coinciden"[^]{0,240}?onMouseDown=\{\(e\) => e\.preventDefault\(\)\}/, 'el ratón elige');
   trae(k, 'const r = teclaComboboxSku({ tecla: e.key, abierta: listaSkuAbierta, indice: opciones.indexOf(document.activeElement as HTMLElement), total: opciones.length });');
   trae(k, 'if (r.foco < 0) refCampoSku.current?.focus(); else opciones[r.foco]?.focus();');
   trae(k, 'setSkuCerrado(!r.abierta);', '↓ con la lista cerrada la abre');
@@ -3944,7 +3945,7 @@ console.log('--- B4 T24 f3 r1 (m6, m18, m22, m25, m31, m36, m40, m43): Nuevo Cas
   const ds = readFileSync(new URL('../src/lib/design-system.ts', import.meta.url), 'utf8');
   assert.match(ds, /export const RESERVA_BOTON_IA_PIE = 'pr-24';/);
   const drawer = readFileSync(new URL('../src/components/ui/Drawer.tsx', import.meta.url), 'utf8');
-  assert.match(drawer, /<div className=\{`p-6 \$\{RESERVA_BOTON_IA_PIE\} border-t border-slate-200 bg-slate-50 flex items-center justify-between gap-3`\}>/);
+  assert.match(drawer, /<div className=\{`p-6 \$\{RESERVA_BOTON_IA_PIE\} border-t border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-3`\}>/);
   assert.match(ventana, /maxWidth="3xl" onClose=\{onClose\} reservaBotonIa/);
 }
 
@@ -4068,6 +4069,80 @@ console.log('--- B4 T24 f3 r2 (F81 en el hook, m36 completo, m20): la vuelta de 
     assert.ok(!/stats\.cargando\) && \(\s*<AvisoDeError/.test(f), `${ruta}: montado siempre (si se desmonta, la región se va con él)`);
   }
   trae(piezas, 'export function AvisoReintentar(props: React.ComponentProps<typeof AvisoDeError>) {', 'AvisoReintentar acepta el mismo contrato');
+}
+
+console.log('--- B4 T24 f3 r2 (m1, m2, m3, m4, m5, m8, m11, m14, m16, m19, m21, m23, m28): el menú, la tarjeta, la bodega, la poda, el combobox y las ventanas ---');
+{
+  const roles = await import('../src/lib/roles.js');
+  const { itemConfirmarMenu } = roles;
+  assert.equal(typeof itemConfirmarMenu, 'function', 'itemConfirmarMenu existe');
+  const menu = (heredada, sinBodega, rol, porConfirmar = true) => itemConfirmarMenu({ porConfirmar, heredada, sinBodega, rol });
+  const oculto = { oculto: true, deshabilitado: false, titulo: null };
+  // m1: en una heredada que el rol no cierra, el ítem se OCULTA (A-bis); apagado con su motivo, solo sin bodega (C1).
+  assert.deepEqual(menu(true, false, 'BODEGA'), oculto, 'BODEGA, heredada: oculto');
+  assert.deepEqual(menu(true, true, 'BODEGA'), oculto, 'BODEGA, heredada sin bodega: oculto');
+  assert.deepEqual(menu(true, true, 'ADMIN'), oculto, 'ADMIN, heredada sin bodega: oculto (m14: manda la heredada)');
+  assert.deepEqual(menu(true, false, 'ADMIN'), { oculto: false, deshabilitado: false, titulo: null }, 'ADMIN cierra la heredada');
+  assert.deepEqual(menu(false, true, 'BODEGA'), { oculto: false, deshabilitado: true, titulo: roles.TEXTO_FALTA_BODEGA }, 'sin bodega: apagado con su motivo');
+  assert.deepEqual(menu(false, true, 'ADMIN'), { oculto: false, deshabilitado: true, titulo: roles.TEXTO_ASIGNA_BODEGA });
+  assert.deepEqual(menu(false, false, 'COMPRAS'), oculto, 'el rol no confirma');
+  assert.deepEqual(menu(false, false, 'BODEGA', false), oculto, 'no está por confirmar');
+  assert.deepEqual(menu(false, false, 'BODEGA'), { oculto: false, deshabilitado: false, titulo: null });
+  // m14: heredada y sin bodega, fuera del detalle: el texto de la heredada, también para ADMIN.
+  assert.equal(roles.confirmarRecepcion({ porConfirmar: true, heredada: true, sinBodega: true, rol: 'ADMIN' }).texto, roles.TEXTO_RECEPCION_HEREDADA);
+  // m2: la tarjeta sin «Contar y confirmar» lleva el motivo (aditivo).
+  const r = { id: 7, estado: 'BORRADOR' };
+  assert.deepEqual(ec.tarjetaRecepcion(r, { contar: false, motivo: 'Falta la bodega receptora.' }).chips, [{ texto: 'Falta la bodega receptora.', tono: 'slate' }]);
+  assert.deepEqual(ec.tarjetaRecepcion(r, { contar: true, motivo: 'x' }).chips, [], 'con la acción, sin el motivo');
+  assert.deepEqual(ec.tarjetaRecepcion(r, { contar: false }).chips, [], 'sin motivo, como antes');
+  // m4 = m7: la poda de la selección guardada.
+  const pvens = [{ id: 1, numero: 'PVEN-1', estado: 'PENDIENTE_COMPRA' }, { id: 2, numero: 'PVEN-2', estado: 'EN_PROCESO' }];
+  const poda = ec.podarSeleccion(new Set([1, 2]), pvens);
+  assert.deepEqual([...poda.seleccion], [1], 'la selección guardada queda sin el quitado');
+  assert.deepEqual(poda.quitados, ['PVEN-2']);
+  assert.deepEqual(ec.podarSeleccion(new Set([1]), pvens), { seleccion: null, quitados: [] }, 'nada que podar: no cambia (sin bucle)');
+  // Si el quitado vuelve a PENDIENTE_COMPRA, ya no está marcado.
+  assert.deepEqual(ec.seleccionVigente(poda.seleccion, [...pvens.slice(0, 1), { id: 2, numero: 'PVEN-2', estado: 'PENDIENTE_COMPRA' }]).ids, [1]);
+  for (const ruta of ['app/dashboard/compras/pedidos/page.tsx', 'app/dashboard/compras/page.tsx']) {
+    trae(leerFuente(ruta), 'if (poda.seleccion) { setSelectedPvens(poda.seleccion); setQuitadosPvens(poda.quitados); }', `${ruta}: poda la selección guardada`);
+  }
+  // m5 = m15: la decisión de cierre del combobox, entera en la lib.
+  const { cierraComboboxAlSalir } = ec;
+  assert.equal(cierraComboboxAlSalir(true), false, 'hacia adentro: no cierra');
+  assert.equal(cierraComboboxAlSalir(false), true, 'hacia afuera: cierra');
+  assert.equal(cierraComboboxAlSalir(false, { sinDestino: true, ratonSobreLista: true }), false, 'Safari: un clic en una opción (blur sin destino, el ratón sobre la lista)');
+  assert.equal(cierraComboboxAlSalir(false, { sinDestino: true, ratonSobreLista: false }), true, 'un clic en la página: cierra');
+  assert.equal(cierraComboboxAlSalir(false, { sinDestino: false, ratonSobreLista: true }), true, 'Tab hacia otro control: cierra');
+  // m8: textoAlertaSinDato no queda entre un JSDoc y su export; m28: una sola rama para la foto sin tomar.
+  const fuenteEc = readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(fuenteEc, /\/\*\* La columna del tablero de Traslados \(su estado\) y el día en que se hizo \(la fecha real\)\. \*\/\nexport const columnaDeTraslado = /);
+  const transito = readFileSync(new URL('../src/lib/transito.js', import.meta.url), 'utf8');
+  assert.ok(!/if \(e\.fin\.filas === SIN_FOTO\)/.test(transito), 'm28: sin la rama duplicada');
+  // m3 y m16: la bodega — la opción vacía, los botones apagados mientras cargan y el reinicio al cambiar de PEC o al reabrir.
+  trae(leerFuente('app/dashboard/compras/bodega-recepcion.tsx'), "'Sin elegir (la del pedido, si tiene)'");
+  const rec = leerFuente('app/dashboard/compras/recepciones/page.tsx');
+  trae(rec, 'disabled={creatingFromPec !== null || bodegas.cargando}', 'm3: «Recepcionar» apagado mientras cargan las bodegas');
+  trae(rec, 'onClick={() => { setBodegaElegida(null); setShowPecModal(true); }}', 'm16: al reabrir, sin la elegida de antes');
+  const ped = leerFuente('app/dashboard/compras/pedidos/page.tsx');
+  trae(ped, 'disabled={goingToRecepcion || (creaRecepcion && bodegas.cargando)}', 'm3: «Hacer recepción» apagado mientras cargan');
+  trae(ped, "useEffect(()=>{setDetail(pec);setTab('tracking');setBodegaElegida(null);},[pec?.id]);", 'm16: al cambiar de PEC');
+  // m21: «Nuevo Casillero» ya no se abre solo; el vacío ofrece el botón.
+  assert.equal(ec.ofrecerCrearCasillero({ texto: 'Bogotá', resultados: [], elegido: null }), true);
+  assert.equal(ec.ofrecerCrearCasillero({ texto: 'Bogotá', resultados: null, elegido: null }), false, 'la búsqueda no terminó');
+  assert.equal(ec.ofrecerCrearCasillero({ texto: 'Bogotá', resultados: [{ id: 1 }], elegido: null }), false);
+  assert.equal(ec.ofrecerCrearCasillero({ texto: ' ', resultados: [], elegido: null }), false);
+  assert.equal(ec.ofrecerCrearCasillero({ texto: 'Bogotá', resultados: [], elegido: { id: 1 } }), false);
+  assert.ok(!/if \(arr\.length === 0\) setShowNewCasillero\(true\);/.test(ped), 'm21: no se abre solo');
+  assert.match(ped, /ofrecerCrearCasillero\(\{[^}]*\}\) && \(\s*<p role="status"[^>]*>Ningún casillero coincide\.\{' '\}\s*<button type="button" onClick=\{\(\)=>setShowNewCasillero\(true\)\}/);
+  // m19: el pie del Drawer baja sus botones antes de la reserva (flex-wrap); m23: la reserva del pie de Modal, con su prueba.
+  assert.match(readFileSync(new URL('../src/components/ui/Drawer.tsx', import.meta.url), 'utf8'), /\$\{RESERVA_BOTON_IA_PIE\} border-t border-slate-200 bg-slate-50 flex flex-wrap/);
+  const modal = readFileSync(new URL('../src/components/ui/Modal.tsx', import.meta.url), 'utf8');
+  assert.match(modal, /<div className=\{`px-6 py-4 \$\{reservaBotonIa \? RESERVA_BOTON_IA_PIE : ''\} border-t/, 'm23: el pie de Modal con la reserva');
+  assert.match(modal, /reservaBotonIa = false,/, 'm23: aditivo (por defecto, sin la reserva)');
+  // m11: el bloque FINAL-m10 también mira las partes por separado (como TEST 26).
+  const hub = leerFuente('app/dashboard/compras/page.tsx');
+  const boton = hub.slice(hub.indexOf('{vigente.ids.length > 0 && accesoPec.cambiarPec && ('), hub.indexOf('Crear PEC Consolidado'));
+  for (const parte of ['vigente.ids.length > 0', 'accesoPec.cambiarPec', 'onClick={handleConvertPvens}']) assert.ok(boton.includes(parte), `m11: ${parte}`);
 }
 
 console.log('\nOK: test_estados_compras.mjs');

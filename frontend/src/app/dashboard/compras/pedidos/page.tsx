@@ -44,7 +44,7 @@ import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, cancelarPecsEnSerie, consultaColumnaPec,
   despuesDeCancelarPec, etapaPec, grupoMesPec, infoEstadoPec, opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec,
   repartirCancelacionPec, resumenCancelacionPec, tarjetaPedidoCompra, textoVacioPec, textoVencidosPec, tituloMesPec,
-  transicionesPec, vinculoPvenDelPec, seleccionVigente, avisoSeleccionQuitada, avisoRecepcionPec, despuesDeEliminarPec, bodegaRecepcion, cuerpoRecepcionarPec,
+  transicionesPec, vinculoPvenDelPec, seleccionVigente, avisoSeleccionQuitada, podarSeleccion, ofrecerCrearCasillero, avisoRecepcionPec, despuesDeEliminarPec, bodegaRecepcion, cuerpoRecepcionarPec,
 } from '@/lib/estados-compras';
 import {
   ENLACE_VER_ANALISIS_COMPRAS, errorDiasEtapas, TEXTO_SEGUIMIENTO_CERRADO, accionSemaforoCompras, avisoTarjetaEtapa, avisosFlujoCompras,
@@ -595,7 +595,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
     setGoingToRecepcion(false);
   }
 
-  useEffect(()=>{setDetail(pec);setTab('tracking');},[pec?.id]);
+  useEffect(()=>{setDetail(pec);setTab('tracking');setBodegaElegida(null);},[pec?.id]); // r2 (m16): la bodega elegida, de nuevo
 
   const loadFull = async () => {
     if (!pec) return;
@@ -780,7 +780,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
                 deshabilitado={goingToRecepcion} acento="purple" />
             )}
             {(avisoRecepcion.accion.tipo === 'abrir' || accesoPec.cambiarPec) && (
-              <button onClick={goToRecepcion} disabled={goingToRecepcion} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm hover:bg-emerald-700 transition-colors shrink-0 disabled:opacity-50 flex items-center gap-2">
+              <button onClick={goToRecepcion} disabled={goingToRecepcion || (creaRecepcion && bodegas.cargando)} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm hover:bg-emerald-700 transition-colors shrink-0 disabled:opacity-50 flex items-center gap-2">
                 {goingToRecepcion && <RefreshCw size={12} className="animate-spin"/>}
                 {avisoRecepcion.accion.texto}
               </button>
@@ -995,6 +995,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
   const [casilleroResults, setCasilleroResults] = useState<any[]>([]);
   const [selectedCasillero, setSelectedCasillero] = useState<any>(null);
   const [showNewCasillero, setShowNewCasillero] = useState(false);
+  const [casilleroBuscado, setCasilleroBuscado] = useState('');
   const [casilleroTimer, setCasilleroTimer] = useState<any>(null);
   const [form, setForm] = useState({
     modalidad_pago:'Contado', metodo_pago:'', tipo_envio:'casillero',
@@ -1003,6 +1004,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
   });
   const [productos, setProductos] = useState<any[]>([]);
   const [selectedPvens, setSelectedPvens] = useState<Set<number>>(new Set());
+  const [quitadosPvens, setQuitadosPvens] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [modalTab, setModalTab] = useState('info');
   const [searchPven, setSearchPven] = useState('');
@@ -1035,7 +1037,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
         const res = await apiFetch('/compras/casilleros/search?q='+encodeURIComponent(val));
         const arr = Array.isArray(res) ? res : (res?.data || []);
         setCasilleroResults(arr);
-        if (arr.length === 0) setShowNewCasillero(true);
+        setCasilleroBuscado(val); // r2 (m21): ya no abre «Nuevo Casillero» solo; el vacío ofrece el botón (ofrecerCrearCasillero)
       } catch (err) { avisarError(err, 'No se pudo buscar el casillero'); }
     }, 350);
     setCasilleroTimer(t);
@@ -1097,8 +1099,11 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
     JSON.stringify(p).toLowerCase().includes(searchPven.toLowerCase())
   );
   // r1 (C2): la selección que sigue en PENDIENTE_COMPRA (después de un 409 y la recarga, la del PVEN que otro compró se quita y se avisa).
-  const vigente = seleccionVigente(selectedPvens, pedidosVenta);
-  const avisoQuitados = avisoSeleccionQuitada(vigente.quitados);
+  // r2 (m4 = m7): la selección guardada se PODA (un PVEN quitado no reaparece marcado si vuelve a PENDIENTE_COMPRA); el aviso queda.
+  const poda = podarSeleccion(selectedPvens, pedidosVenta);
+  if (poda.seleccion) { setSelectedPvens(poda.seleccion); setQuitadosPvens(poda.quitados); }
+  const vigente = seleccionVigente(poda.seleccion ?? selectedPvens, pedidosVenta);
+  const avisoQuitados = avisoSeleccionQuitada(quitadosPvens);
 
   async function submit() {
     if (!selectedSupplier) { onToast('Selecciona un proveedor','error'); return; }
@@ -1244,6 +1249,11 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
                             placeholder="Buscar casillero..."
                             className={'w-full border rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200 ' + (selectedCasillero?'border-emerald-300 bg-emerald-50':'border-gray-200')}/>
                           {selectedCasillero && <CheckCircle2 size={16} className="absolute right-3 top-9 text-emerald-600"/>}
+                          {ofrecerCrearCasillero({ texto: casilleroBuscado === casilleroSearch ? casilleroSearch : '', resultados: casilleroResults, elegido: selectedCasillero }) && (
+                            <p role="status" className="mt-1 text-xs text-gray-600">Ningún casillero coincide.{' '}
+                              <button type="button" onClick={()=>setShowNewCasillero(true)} className={`font-bold text-purple-700 underline ${FOCOS.purple}`}>Crear casillero</button>
+                            </p>
+                          )}
                           {casilleroResults.length > 0 && !selectedCasillero && (
                             <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-2xl shadow-2xl z-10 overflow-hidden">
                               {casilleroResults.map((c:any)=>(

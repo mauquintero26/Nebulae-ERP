@@ -355,6 +355,22 @@ export function accionesConteo({ porConfirmar, heredada, sinBodega = false, rol 
  */
 export function confirmarRecepcion({ porConfirmar, heredada, sinBodega, rol }) {
   const conteo = accionesConteo({ porConfirmar, heredada, sinBodega, rol });
-  if (sinBodega && conteo.validar) return { confirmar: false, texto: TEXTO_ASIGNA_BODEGA };
+  // r2 (m14): heredada y sin bodega: manda el texto de la heredada (la cierra la Administración), también para ADMIN fuera del detalle.
+  if (sinBodega && conteo.validar) return { confirmar: false, texto: heredada ? TEXTO_RECEPCION_HEREDADA : TEXTO_ASIGNA_BODEGA };
   return { confirmar: conteo.validar, texto: conteo.texto };
+}
+
+/**
+ * B4 T24 f3 r2 (m1): el ítem «Confirmar» del menú de una recepción. Se OCULTA si no está por confirmar, si el rol no confirma o si es una
+ * heredada que el rol no cierra (A-bis); apagado con su motivo queda solo para lo que el rol sí podría confirmar pero le falta la bodega
+ * receptora (C1).
+ * @param {{porConfirmar: boolean, heredada: boolean, sinBodega: boolean, rol: unknown}} entrada
+ * @returns {{oculto: boolean, deshabilitado: boolean, titulo: string | null}}
+ */
+export function itemConfirmarMenu(entrada) {
+  const c = confirmarRecepcion(entrada);
+  if (!entrada.porConfirmar || !accesoRecepciones(entrada.rol).confirmar || (entrada.heredada && !c.confirmar)) {
+    return { oculto: true, deshabilitado: false, titulo: null };
+  }
+  return { oculto: false, deshabilitado: !c.confirmar, titulo: c.confirmar ? null : c.texto };
 }
