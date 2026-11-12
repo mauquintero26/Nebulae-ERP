@@ -1007,7 +1007,7 @@ console.log('--- TEST 25 (B4 T22, KPI-otros punto 1 y FLUJO-ventas-pantallas E; 
   // m10: las «Recientes» dicen la etiqueta del estado, no el código.
   assert.ok(fuente.includes('{infoEstadoPec(pec.estado).label}') && fuente.includes('{infoEstadoPedido(ven.estado).label}'));
   assert.doesNotMatch(fuente, /\{(pec|ven)\.estado\}/);
-  // Lo que no se toca: el Copilot y las listas «Recientes».
+  // Lo que no se toca: el Copilot y lo que piden las «Recientes» (que sí dicen la etiqueta del estado: m10). (B4 T24 f4, F103 (c).)
   assert.ok(fuente.includes("apiFetch('/chat/copilot/query'"));
   assert.ok(fuente.includes("apiFetch('/ventas/pedidos')") && fuente.includes("apiFetch('/compras/pedidos')"));
   assert.ok(fuente.includes('recientes.pecsActivos.map(') && fuente.includes('recientes.pedidosRecientes.map('));
@@ -1036,7 +1036,8 @@ console.log('--- TEST 26 (B4 T22 r1; I1, m3, m6, m11, m13): las rutas de error y
   const falla = new Error('Error del servidor');
   assert.deepEqual(kpisLib.lecturaDeFuente(null, 'a'), { datos: null, cargando: true, error: null, marca: null });
   assert.deepEqual(kpisLib.lecturaDeFuente({ vuelta: 'a', datos: { n: 1 }, error: null, marca: '30d' }, 'a'), { datos: { n: 1 }, cargando: false, error: null, marca: '30d' });
-  assert.deepEqual(kpisLib.lecturaDeFuente({ vuelta: 'a', datos: null, error: falla, marca: '30d' }, 'a'), { datos: null, cargando: false, error: falla, marca: '30d' });
+  // B4 T24 f4 (F7; D27): sin datos no hay marca (antes '30d'): el rótulo es el del período elegido, no el de una carga que falló.
+  assert.deepEqual(kpisLib.lecturaDeFuente({ vuelta: 'a', datos: null, error: falla, marca: '30d' }, 'a'), { datos: null, cargando: false, error: falla, marca: null });
   const reintento = kpisLib.lecturaDeFuente({ vuelta: 'a', datos: null, error: falla, marca: '30d' }, 'b');
   assert.equal(reintento.error, null, 'mientras se reintenta, el error anterior no se muestra');
   assert.equal(reintento.cargando, true);
@@ -1072,6 +1073,42 @@ console.log('--- TEST 26 (B4 T22 r1; I1, m3, m6, m11, m13): las rutas de error y
   assert.ok(cuerpo.includes('tarjetasStock(datosInventario)'));
   assert.doesNotMatch(cuerpo, /unidades_(fisicas|reservadas|disponibles|en_transito)/);
   assert.doesNotMatch(fuente, /const objetoPlano = /, 'un solo predicado de objeto (datosDe)');
+}
+
+console.log('--- TEST 26-f4 (B4 T24 f4: F7, F102 y F103): la marca solo con datos; las anclas del Dashboard y de Gastos; los comentarios ---');
+{
+  const falla = new Error('Error del servidor');
+  // F7: /ventas/stats falló para 30 días y se elige Semana: la tarjeta dice «Vendido (7 días)», no «(30 días)» sobre la carga de 7.
+  const fallo30 = kpisLib.lecturaDeFuente({ vuelta: '30d:1', datos: null, error: falla, marca: '30d' }, '7d:1');
+  assert.equal(fallo30.marca, null, 'reintentando con otro período, sin datos: sin marca');
+  assert.equal(kpisLib.periodoVisto(fallo30.marca, '7d'), '7d');
+  assert.equal(kpisLib.etiquetaKpi('vendido_periodo', kpisLib.periodoVisto(fallo30.marca, '7d')), 'Vendido (7 días)');
+  // Con datos, la marca de los datos que se ven (m3 y m11 siguen).
+  assert.equal(kpisLib.lecturaDeFuente({ vuelta: 'a', datos: { n: 1 }, error: null, marca: '30d' }, 'b').marca, '30d');
+  // lecturaLeadsCampana sigue sabiendo de QUÉ campaña es un error (la marca cruda de lo que llegó, no la de la lectura).
+  const errCampana = kpisLib.lecturaLeadsCampana({ vuelta: '5:0', marca: '5', datos: null, error: falla }, '5:0', '5', true);
+  assert.deepEqual([errCampana.error, errCampana.estado, errCampana.cargando], [falla, 'error', false], 'el error de la campaña elegida se ve');
+  const otra = kpisLib.lecturaLeadsCampana({ vuelta: '4:0', marca: '4', datos: null, error: falla }, '5:0', '5', true);
+  assert.deepEqual([otra.error, otra.estado], [null, 'cargando'], 'el de otra campaña no');
+
+  const dash = readFileSync(new URL('../src/app/dashboard/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // F102 W3: el then de useFuente guarda la marca con los datos.
+  assert.ok(dash.includes('.then((r: unknown) => setLlego({ vuelta: clave, datos: datosDeRespuesta(r) as T, error: null, marca }))'));
+  // F102 W2: el «Reintentar» del radar, en la rama de ventas.error, llama a ventas.recargar.
+  assert.match(dash, /\{ventas\.error \? \(\s*<button type="button" onClick=\{ventas\.recargar\}\s+className=\{`ml-2 rounded font-bold underline hover:text-white \$\{FOCOS\.blanco\}`\}>\s*Reintentar\s*<\/button>\s*\) : null\}/);
+  // F102 W1b/W1c (con F46: la pieza común): el botón completo, type=button, con onReintentar y el texto «Reintentar» dentro.
+  const aviso = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(aviso, /\{aviso\.reintentar && \(\s*<button ref=\{refBoton\} type="button" onClick=\{reintentando \? undefined : onReintentar\}[^>]*>\s*\{reintentando \? 'Reintentando…' : 'Reintentar'\}\s*<\/button>\s*\)\}/);
+  // F103 (a): el comentario del radar nombra la pestaña de donde sale el número.
+  assert.ok(!dash.includes('el mismo número de la pestaña del Hub de Ventas'), 'F103 (a): sin el comentario viejo');
+  assert.ok(dash.includes('la pestaña «Pend. Compra» de Pedidos de venta'), 'F103 (a)');
+  // F103 (c): el comentario de TEST 25 (arriba) ya no dice que «Recientes» no se toca.
+  const esta = readFileSync(new URL(import.meta.url), 'utf8');
+  assert.ok(!esta.includes(['// Lo que no se toca: el Copilot', 'y las listas «Recientes».'].join(' ')), 'F103 (c)');
+  // F103 (d): el comentario de los conteos de Gastos menciona el tipo.
+  const gastos = readFileSync(new URL('../src/app/dashboard/finanzas/gastos/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.ok(gastos.includes('// Los conteos por categoría ({categoría: n}, con la búsqueda y el tipo, sin la categoría)'), 'F103 (d)');
+  // F102 W4 y W5 van en TEST 50 de test_tabla.mjs; F103 (b), en el comentario de TEST 49 de test_tabla.mjs.
 }
 
 console.log('--- TEST 27 (B4 T23A, KPI-otros punto 5; R7, R12, RP102): las tarjetas de la tienda y su comparación ---');

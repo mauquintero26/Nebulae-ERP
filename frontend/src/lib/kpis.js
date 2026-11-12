@@ -1042,7 +1042,8 @@ export function datosDeRespuesta(respuesta) {
  */
 export function lecturaDeFuente(llego, vuelta) {
   const { datos, cargando } = lecturaDeCarga(llego, vuelta);
-  return { datos, cargando, error: cargando ? null : (llego?.error ?? null), marca: llego?.marca ?? null };
+  // B4 T24 f4 (F7): la marca es la de los DATOS que se ven; sin datos, ninguna (el rótulo es el del período elegido).
+  return { datos, cargando, error: cargando ? null : (llego?.error ?? null), marca: datos !== null ? (llego?.marca ?? null) : null };
 }
 
 /**
@@ -1388,7 +1389,8 @@ export function fichaRevenueAsistente(revenue) {
  */
 export function lecturaLeadsCampana(cargados, clave, marcaElegida, pide) {
   const lectura = lecturaDeFuente(cargados, clave);
-  const delaCampana = lectura.marca === marcaElegida;
+  // B4 T24 f4 (F7): de qué campaña es lo que llegó (también un error, que no trae datos) sale de su marca cruda.
+  const delaCampana = (cargados?.marca ?? null) === marcaElegida;
   const leads = delaCampana ? lectura.datos : null;
   const cargando = pide && (lectura.cargando || !delaCampana);
   const error = delaCampana ? lectura.error : null;

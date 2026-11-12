@@ -2645,7 +2645,10 @@ console.log('--- TEST 49 (B4 T22, TABLA-otros punto 7 y KANBAN-resto; R11, R16, 
   assert.deepEqual(TABLA.extraGastos(null), { vista: null, categoria: null, tipo: null });
 
   // consultaColumnaGasto: la categoría de la columna, la búsqueda y el orden del MISMO estado, y SIEMPRE limit y offset. Sin
-  // vista, semáforo, paso ni estados; nunca `tipo` ni «concepto» con otro sentido (RP58).
+  // vista, semáforo, paso ni estados; con tipo (recurrente | variable) cuando se elige, y nunca «concepto» con otro sentido (RP58).
+  // (B4 T24 f4, F103 (b): el comentario decía «nunca `tipo`».)
+  assert.ok(TABLA.consultaColumnaGasto(estadoTablaInicial({}), { clave: 'n', titulo: 'N', estados: ['Nómina'] }, { tipo: 'recurrente' }, { limit: 25, offset: 0 }).includes('tipo=recurrente'),
+    'con el tipo elegido, la columna lo manda');
   const estado = estadoTablaInicial({ q: 'nom', orden: '-monto', pagina: 3, tamano: 50, vista: 'x', semaforo: 'atrasados', paso: 'SC', estados: ['A'] });
   const colNomina = columnas[1];
   assert.equal(TABLA.consultaColumnaGasto(estado, colNomina, { categoria: '' }, { limit: 50, offset: 0 }), 'q=nom&orden=-monto&limit=50&offset=0&categoria=N%C3%B3mina');
@@ -2749,6 +2752,12 @@ console.log('--- TEST 50 (B4 T22, Gastos; R5, R11, R16, RP26, RP57, RP58): el ca
   assert.ok(fuente.includes("estadoConteos.tipo !== 'listo' ? (") && fuente.includes("estadoConteos.tipo === 'error' ? ("));
   assert.match(fuente, /estadoConteos\.tipo === 'listo' && estadoConteos\.error \? \(\s*<div role="alert"[\s\S]{0,600}onClick=\{recargarConteos\}/);
   assert.ok(fuente.includes('aria-busy={estadoConteos.actualizando || undefined}'));
+  // B4 T24 f4 (F102 W4 y W5): el aviso de los conteos viejos no depende de enKanban (va antes de {enKanban ? (, en las dos vistas) y el
+  // tablero se atenúa (opacity-60) mientras actualiza.
+  const iAvisoViejo = fuente.indexOf("{estadoConteos.tipo === 'listo' && estadoConteos.error ? (");
+  assert.ok(iAvisoViejo > 0 && iAvisoViejo < fuente.indexOf('{enKanban ? ('), 'W4: el aviso, fuera del Kanban');
+  assert.ok(!/enKanban\s*&&\s*$/.test(fuente.slice(0, iAvisoViejo).trimEnd()), 'W4: sin enKanban && delante');
+  assert.ok(fuente.includes("<div aria-busy={estadoConteos.actualizando || undefined} className={estadoConteos.actualizando ? 'opacity-60' : undefined}>"), 'W5');
   assert.ok(fuente.includes('error: estadoConteos.error }'));
   // m17: el filtro de tipo va al servidor y vuelve a la página 1; los conteos lo llevan.
   assert.match(fuente, /<select aria-label="Tipo" value=\{tipo\} onChange=\{\(e\) => cambiarTipo\(e\.target\.value\)\}/);

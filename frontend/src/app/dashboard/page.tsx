@@ -175,7 +175,7 @@ export default function DashboardGeneral() {
     <div className="w-full shrink-0 bg-slate-50 min-h-screen pb-24 animate-in fade-in custom-scrollbar">
       
       {/* 1. Radar de Alertas Operativas */}
-      {/* El radar cuenta los pedidos pendientes de compra de /ventas/stats (el mismo número de la pestaña del Hub de Ventas), no
+      {/* El radar cuenta los pedidos pendientes de compra de /ventas/stats (la pestaña «Pend. Compra» de Pedidos de venta), no
           los de la lista de «Recientes». Sin el dato (cargando o con error) no dice ni «alerta» ni «todo bien». */}
       {radar?.tipo === 'alerta' ? (
         <div className="bg-amber-600 text-white px-6 py-2.5 flex items-center justify-between shadow-sm shrink-0 relative z-20">
