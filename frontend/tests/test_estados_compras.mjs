@@ -3096,7 +3096,8 @@ console.log('--- B4 T24 (FINAL-m10, FINAL-m31 y FINAL-m38): los tableros y las a
   assert.match(pedidos, /\{\(avisoRecepcion\.accion\.tipo === 'abrir' \|\| accesoPec\.cambiarPec\) && \(\s*<button onClick=\{goToRecepcion\}/, '«Hacer recepción» (POST /recepcionar); «Ver recepción» para todos');
   assert.match(pedidos, /\{!infoEdit \? \(accesoPec\.cambiarPec && \(\s*<button onClick=\{openInfoEdit\}/, '«Editar» la información (PATCH /pedidos/{id})');
   assert.match(pedidos, /\{accesoPec\.cambiarPec && <Button color="purple" icon=\{Plus\} onClick=\{\(\)=>setShowNuevoPec\(true\)\}>Nuevo PEC<\/Button>\}/, '«Nuevo PEC» (POST /pedidos)');
-  assert.match(hub, /\{selectedPvens\.size > 0 && accesoPec\.cambiarPec && \(/, '«Crear PEC Consolidado» (POST /pedidos)');
+  // r1 (D27, C2): la selección vigente (seleccionVigente) en lugar de la vieja.
+  assert.match(hub, /\{vigente\.ids\.length > 0 && accesoPec\.cambiarPec && \(/, '«Crear PEC Consolidado» (POST /pedidos)');
   assert.match(pedidos, /\{accesoPec\.cambiarPec && etapaPec\(detail\?\.estado\) === 'cancelado' && \(/, '«Eliminar definitivamente» del panel');
   // Tránsito: «Iniciar» y «Completar» de la fila (el mismo PATCH /tracking) solo con tracking.
   assert.match(transito, /puedeAvanzar: accesoPec\.tracking/);
@@ -3255,7 +3256,8 @@ console.log('--- B4 T24 f3 (FINAL-C7-f): consolidar varios PVEN en un PEC manda 
     assert.ok(!/No se pudieron vincular/.test(f), `${nombre}: sin el aviso de los PVEN sin vincular`);
     assert.ok(!/ven_numero: selected\.map|\.join\(', '\),\s*productos/.test(f), `${nombre}: ven_numero ya no une números`);
   }
-  assert.match(ped, /\.\.\.vinculoPvenDelPec\(pvensSelected\),/, 'NuevoPecModal: ven_ids, ven_id y ven_numero de la lib');
+  // r1 (D27): ven_ids sale de la selección vigente (C2); lo fija el bloque de r1.
+  assert.match(ped, /\.\.\.vinculoPvenDelPec\(vigente\.pvens\),/, 'NuevoPecModal: ven_ids, ven_id y ven_numero de la lib');
   assert.match(ped, /await apiFetch\('\/compras\/pedidos',\{method:'POST',body:JSON\.stringify\(payload\)\}\);\s*onToast\('PEC creado exitosamente','ok'\);/);
   assert.match(ped, /onToast\(e, 'error'\);\s*if \(recargarTrasError\(e\)\) onCreated\(\);/, 'NuevoPecModal: el 409 con su texto y la recarga');
   assert.match(hub, /body: JSON\.stringify\(\{\s*\.\.\.vinculoPvenDelPec\(selected\),\s*productos,/, 'el Hub: el vínculo de la lib');
@@ -3531,6 +3533,51 @@ console.log('--- B4 T24 f3 r1 (C1 y la heredada): «Confirmar» con la regla del
   trae(pieza, 'const valor = bodegaRecepcion(elegida, bodegas.filas);');
   trae(pieza, "'La del pedido (opcional)'");
   trae(pieza, '{ofreceReintentar(bodegas.error) && (');
+}
+
+console.log('--- B4 T24 f3 r1 (C2): después del 409, la selección de PVEN deja solo los que siguen pendientes de compra y avisa cuál quitó ---');
+{
+  const { seleccionVigente, avisoSeleccionQuitada } = ec;
+  assert.equal(typeof seleccionVigente, 'function', 'seleccionVigente existe');
+  assert.equal(typeof avisoSeleccionQuitada, 'function', 'avisoSeleccionQuitada existe');
+  const pvens = [
+    { id: 1, numero: 'PVEN-1', estado: 'PENDIENTE_COMPRA' },
+    { id: 2, numero: 'PVEN-2', estado: 'EN_PROCESO' }, // otro usuario lo consolidó (el 409)
+    { id: 3, numero: 'PVEN-3', estado: ' PENDIENTE_COMPRA ' },
+    { id: 4, numero: 'PVEN-4', estado: 'CANCELADO' },
+  ];
+  // En el orden de la selección; la lista recargada manda.
+  assert.deepEqual(seleccionVigente(new Set([3, 2, 1]), pvens), { ids: [3, 1], pvens: [pvens[2], pvens[0]], quitados: ['PVEN-2'] });
+  assert.deepEqual(seleccionVigente([4, 9], pvens), { ids: [], pvens: [], quitados: ['PVEN-4', 'PVEN #9'] }, 'el que ya no viene: «PVEN #id»');
+  assert.deepEqual(seleccionVigente(new Set(), pvens), { ids: [], pvens: [], quitados: [] });
+  assert.deepEqual(seleccionVigente(null, null), { ids: [], pvens: [], quitados: [] });
+  assert.deepEqual(seleccionVigente([1], [{ id: 1, estado: 'PENDIENTE_COMPRA' }]).ids, [1]);
+  // ven_ids sale de la selección vigente: el PVEN oculto ya no viaja (cada «Crear» repetía el 409).
+  assert.deepEqual(ec.vinculoPvenDelPec(seleccionVigente(new Set([2, 1, 3]), pvens).pvens), { ven_id: 1, ven_ids: [1, 3], ven_numero: 'PVEN-1' });
+  assert.equal(avisoSeleccionQuitada([]), null);
+  assert.equal(avisoSeleccionQuitada(null), null);
+  assert.equal(avisoSeleccionQuitada(['PVEN-2']), 'PVEN-2 ya no está pendiente de compra: se quitó de la selección.');
+  assert.equal(avisoSeleccionQuitada(['PVEN-2', 'PVEN #9']), 'PVEN-2, PVEN #9 ya no están pendientes de compra: se quitaron de la selección.');
+
+  // NuevoPecModal: el contador, el pie y ven_ids salen de la selección vigente; el aviso de los quitados.
+  const ped = leerFuente('app/dashboard/compras/pedidos/page.tsx');
+  trae(ped, 'const vigente = seleccionVigente(selectedPvens, pedidosVenta);');
+  trae(ped, '...vinculoPvenDelPec(vigente.pvens),');
+  trae(ped, '{vigente.ids.length} PVEN seleccionado(s)');
+  trae(ped, '<span className="font-bold">{vigente.ids.length}</span> PVEN asociado(s)');
+  assert.match(ped, /\{avisoQuitados && <p role="status"[^>]*>\{avisoQuitados\}<\/p>\}/);
+  assert.ok(!/selectedPvens\.size/.test(ped), 'Pedidos: nada cuenta la selección vieja');
+  // El Hub: lo mismo, un solo envío a la vez (loading/disabled) y la selección vacía tras un alta buena.
+  const hub = leerFuente('app/dashboard/compras/page.tsx');
+  trae(hub, 'const vigente = seleccionVigente(selectedPvens, pedidosVenta);');
+  trae(hub, 'const selected = vigente.pvens;');
+  assert.match(hub, /if \(consolidando\) return;\s*if \(!vigente\.ids\.length\)/, 'un segundo clic no manda otra vez');
+  assert.match(hub, /creado con ' \+ selected\.length \+ ' PVEN\(s\) consolidados'\);\s*setSelectedPvens\(new Set\(\)\);\s*onUpdate\(\);/, 'tras el alta, la selección vacía');
+  assert.match(hub, /\} finally \{\s*setConsolidando\(false\);\s*\}/);
+  assert.match(hub, /<button type="button" onClick=\{handleConvertPvens\} disabled=\{consolidando\} aria-busy=\{consolidando\}/);
+  trae(hub, "{consolidando ? 'Creando PEC…' : 'Crear PEC Consolidado'}");
+  assert.match(hub, /\{avisoQuitados && <p role="status"[^>]*>\{avisoQuitados\}<\/p>\}/);
+  assert.ok(!/selectedPvens\.size/.test(hub), 'el Hub: nada cuenta la selección vieja');
 }
 
 console.log('\nOK: test_estados_compras.mjs');

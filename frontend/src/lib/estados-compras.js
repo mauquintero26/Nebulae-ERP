@@ -900,6 +900,40 @@ export function vinculoPvenDelPec(pvens) {
 }
 
 /**
+ * B4 T24 f3 r1 (C2): la selección de PVEN que sigue valiendo para el alta de un PEC (NuevoPecModal y «Crear PEC Consolidado» del Hub).
+ * Después de un 409 (otro usuario consolidó o canceló uno de los elegidos), la recarga lo saca de la lista (que solo muestra los
+ * PENDIENTE_COMPRA) pero seguía en la selección, en el contador y en ven_ids: cada «Crear» repetía el mismo 409. Quedan solo los ids
+ * que siguen en PENDIENTE_COMPRA en `pedidosVenta`, en el orden de la selección (`ids` y sus `pvens`); `quitados` son los números de
+ * los demás (o «PVEN #id» si ya no vienen), para avisar cuál se quitó.
+ * @param {Iterable<number> | null | undefined} seleccion
+ * @param {unknown} pedidosVenta
+ * @returns {{ids: number[], pvens: any[], quitados: string[]}}
+ */
+export function seleccionVigente(seleccion, pedidosVenta) {
+  const porId = new Map((Array.isArray(pedidosVenta) ? pedidosVenta : []).filter((p) => p?.id != null).map((p) => [p.id, p]));
+  /** @type {{ids: number[], pvens: any[], quitados: string[]}} */
+  const vigente = { ids: [], pvens: [], quitados: [] };
+  for (const id of seleccion ?? []) {
+    const p = porId.get(id);
+    if (p && String(p.estado ?? '').trim() === 'PENDIENTE_COMPRA') { vigente.ids.push(id); vigente.pvens.push(p); }
+    else vigente.quitados.push(textoLimpio(p?.numero) ?? `PVEN #${id}`);
+  }
+  return vigente;
+}
+
+/**
+ * B4 T24 f3 r1 (C2): el aviso de los PVEN que seleccionVigente quitó (ya no están pendientes de compra), o null.
+ * @param {string[]} quitados
+ * @returns {string | null}
+ */
+export function avisoSeleccionQuitada(quitados) {
+  if (!Array.isArray(quitados) || quitados.length === 0) return null;
+  return quitados.length === 1
+    ? `${quitados[0]} ya no está pendiente de compra: se quitó de la selección.`
+    : `${quitados.join(', ')} ya no están pendientes de compra: se quitaron de la selección.`;
+}
+
+/**
  * B4 T24 f3 (FINAL-C4-f; m16 del backend r1): el tope de una cantidad del conteo por línea. update_grl acepta un entero de 0 a
  * 99.999.999 (sale de Numeric(10, 2) de la columna); 2.5 da 422.
  */

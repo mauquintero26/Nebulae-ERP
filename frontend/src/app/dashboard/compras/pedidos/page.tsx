@@ -44,7 +44,7 @@ import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, cancelarPecsEnSerie, consultaColumnaPec,
   despuesDeCancelarPec, etapaPec, grupoMesPec, infoEstadoPec, opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec,
   repartirCancelacionPec, resumenCancelacionPec, tarjetaPedidoCompra, textoVacioPec, textoVencidosPec, tituloMesPec,
-  transicionesPec, vinculoPvenDelPec, avisoRecepcionPec, despuesDeEliminarPec, bodegaRecepcion, cuerpoRecepcionarPec,
+  transicionesPec, vinculoPvenDelPec, seleccionVigente, avisoSeleccionQuitada, avisoRecepcionPec, despuesDeEliminarPec, bodegaRecepcion, cuerpoRecepcionarPec,
 } from '@/lib/estados-compras';
 import {
   ENLACE_VER_ANALISIS_COMPRAS, errorDiasEtapas, TEXTO_SEGUIMIENTO_CERRADO, accionSemaforoCompras, avisoTarjetaEtapa, avisosFlujoCompras,
@@ -1095,6 +1095,9 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
     p.estado === 'PENDIENTE_COMPRA' &&
     JSON.stringify(p).toLowerCase().includes(searchPven.toLowerCase())
   );
+  // r1 (C2): la selección que sigue en PENDIENTE_COMPRA (después de un 409 y la recarga, la del PVEN que otro compró se quita y se avisa).
+  const vigente = seleccionVigente(selectedPvens, pedidosVenta);
+  const avisoQuitados = avisoSeleccionQuitada(vigente.quitados);
 
   async function submit() {
     if (!selectedSupplier) { onToast('Selecciona un proveedor','error'); return; }
@@ -1106,14 +1109,13 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
     setSaving(true);
     try {
       const user = localStorage.getItem('user_name') || '';
-      const pvensSelected = pedidosVenta.filter(p=>selectedPvens.has(p.id));
       const payload = {
         supplier_id: selectedSupplier.id,
         supplier_name: selectedSupplier.name,
         supplier_ref: selectedSupplier.reference,
         // B4 T24 f3 (FINAL-C7-f): ven_ids con TODOS los PVEN elegidos (el servidor los vincula en el mismo alta), ven_id y ven_numero
         // solo del primero (VARCHAR(20)). Ya no hay un PATCH /ventas/pedidos por cada otro, que COMPRAS no tiene (403).
-        ...vinculoPvenDelPec(pvensSelected),
+        ...vinculoPvenDelPec(vigente.pvens),
         modalidad_pago: form.modalidad_pago,
         metodo_pago: form.metodo_pago || null,
         tipo_envio: form.tipo_envio,
@@ -1385,9 +1387,10 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
                       </label>
                     ))}
                   </div>
-                  {selectedPvens.size > 0 && (
+                  {avisoQuitados && <p role="status" className="mt-4 text-xs font-semibold text-amber-800">{avisoQuitados}</p>}
+                  {vigente.ids.length > 0 && (
                     <div className="mt-4 p-3 bg-purple-50 border border-purple-200 rounded-2xl flex items-center justify-between">
-                      <span className="text-sm font-bold text-purple-800">{selectedPvens.size} PVEN seleccionado(s)</span>
+                      <span className="text-sm font-bold text-purple-800">{vigente.ids.length} PVEN seleccionado(s)</span>
                       <span className="text-xs text-purple-600">Se asociaran al nuevo PEC al crearlo</span>
                     </div>
                   )}
@@ -1398,7 +1401,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
 
           {/* Footer */}
           <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex items-center justify-between shrink-0">
-            <div className="text-sm text-gray-500"><span className="font-bold">{productos.length}</span> producto(s) · <span className="font-bold">{selectedPvens.size}</span> PVEN asociado(s)</div>
+            <div className="text-sm text-gray-500"><span className="font-bold">{productos.length}</span> producto(s) · <span className="font-bold">{vigente.ids.length}</span> PVEN asociado(s)</div>
             <div className="flex gap-3">
               <button onClick={onClose} className="px-4 py-2 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50">Cancelar</button>
               <button onClick={submit} disabled={saving} className="flex items-center gap-2 px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold disabled:opacity-50">

@@ -41,7 +41,7 @@ import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, consultaColumnaPec, grupoMesPec, infoEstadoPec,
   opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec, repartirCancelacionPec, resumenCancelacionPec, tarjetaPec,
   cancelarPecsEnSerie, despuesDeCancelarPec, textoVacioPec,
-  textoVencidosPec, tituloMesPec, transicionesPec, vinculoPvenDelPec,
+  textoVencidosPec, tituloMesPec, transicionesPec, vinculoPvenDelPec, seleccionVigente, avisoSeleccionQuitada,
 } from '@/lib/estados-compras';
 import {
   RUTA_HUB_COMPRAS, TEXTO_SEGUIMIENTO_CERRADO, accionPasoHubCompras, accionSemaforoCompras, avisosFlujoCompras, etiquetaEtapaTracking,
@@ -135,6 +135,7 @@ function PecDetailPanel({
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [tab, setTab] = useState('info');
   const [selectedPvens, setSelectedPvens] = useState<Set<number>>(new Set());
+  const [consolidando, setConsolidando] = useState(false);
   const [searchPven, setSearchPven] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [editEstado, setEditEstado] = useState(false);
@@ -176,9 +177,15 @@ function PecDetailPanel({
     if (pec) onCancelar(detail ?? pec);
   };
 
+  // r1 (C2): la selección vigente (seleccionVigente: solo los que siguen en PENDIENTE_COMPRA; los demás se avisan), un solo envío a la vez
+  // (consolidando) y, tras un alta buena, la selección vacía (un segundo clic ya no da «PEC creado» seguido del 409).
+  const vigente = seleccionVigente(selectedPvens, pedidosVenta);
+  const avisoQuitados = avisoSeleccionQuitada(vigente.quitados);
   const handleConvertPvens = async () => {
-    if (!selectedPvens.size) { onToast('Selecciona al menos un PVEN', 'error'); return; }
-    const selected = pedidosVenta.filter(p => selectedPvens.has(p.id));
+    if (consolidando) return;
+    if (!vigente.ids.length) { onToast('Selecciona al menos un PVEN', 'error'); return; }
+    const selected = vigente.pvens;
+    setConsolidando(true);
     const productos = selected.flatMap(p => (p.productos||[]).map(pr => ({ ...pr, pven_origen: p.numero })));
     try {
       const user = localStorage.getItem('user_name') || '';
@@ -192,10 +199,13 @@ function PecDetailPanel({
       })});
       const newPec = respuesta?.data ?? respuesta;
       onToast('PEC ' + newPec?.numero + ' creado con ' + selected.length + ' PVEN(s) consolidados');
+      setSelectedPvens(new Set());
       onUpdate();
     } catch (e) {
       onToast(e, 'error');
       if (recargarTrasError(e)) onUpdate();
+    } finally {
+      setConsolidando(false);
     }
   };
 
@@ -402,11 +412,13 @@ function PecDetailPanel({
                   ); })}
                 </div>
                 {/* r1 (m7): crear el PEC consolidado es POST /compras/pedidos (ADMIN y COMPRAS). */}
-                {selectedPvens.size > 0 && accesoPec.cambiarPec && (
+                {avisoQuitados && <p role="status" className="px-4 pt-3 text-xs font-semibold text-amber-800">{avisoQuitados}</p>}
+                {vigente.ids.length > 0 && accesoPec.cambiarPec && (
                   <div className="p-4 border-t border-gray-100 bg-purple-50 flex items-center justify-between">
-                    <span className="text-sm font-bold text-purple-800">{selectedPvens.size} PVEN seleccionado(s)</span>
-                    <button onClick={handleConvertPvens} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-sm flex items-center gap-2">
-                      <ShoppingCart size={14}/> Crear PEC Consolidado
+                    <span className="text-sm font-bold text-purple-800">{vigente.ids.length} PVEN seleccionado(s)</span>
+                    <button type="button" onClick={handleConvertPvens} disabled={consolidando} aria-busy={consolidando}
+                      className={`bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-sm flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-60 ${FOCO_VISIBLE}`}>
+                      {consolidando ? <RefreshCw size={14} aria-hidden="true" className="animate-spin"/> : <ShoppingCart size={14} aria-hidden="true"/>} {consolidando ? 'Creando PEC…' : 'Crear PEC Consolidado'}
                     </button>
                   </div>
                 )}
