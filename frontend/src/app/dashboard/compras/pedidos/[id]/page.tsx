@@ -11,7 +11,7 @@ import {
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { apiFetch } from '@/lib/api';
-import { FOCOS } from '@/lib/design-system';
+import { FOCOS, RESERVA_BOTON_IA } from '@/lib/design-system';
 import { Badge, Button, ContenidoEnlace, useAvisos } from '@/components/ui';
 // B4 T15 (TABLA-compras punto 12, FLUJO-compras punto 7, H13): las etapas reales del envío en la barra estándar, las
 // tablas de detalle en modo simple y, en vez de campos y botones que no guardaban, texto de solo lectura.
@@ -429,7 +429,7 @@ export default function PedidoCompraDetallePage() {
 
           {/* B4 T15 (H13): se fueron «Nota», la caja de texto y «Enviar», que no guardaban nada. La Actividad es la tabla
               estándar en modo simple (TABLA-compras punto 12), con su fecha y hora de Colombia y los estados con su nombre. */}
-          <div className="xl:flex-1 xl:overflow-y-auto p-4 sm:p-6 custom-scrollbar bg-slate-50">
+          <div className={`xl:flex-1 xl:overflow-y-auto px-4 pt-4 sm:px-6 sm:pt-6 ${RESERVA_BOTON_IA} custom-scrollbar bg-slate-50`}>
             <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">Línea temporal</h4>
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
               <TablaEstandar id="compras.pec.actividades" modo="simple" columnas={COLUMNAS_ACTIVIDADES} preferencias={prefsActividades}

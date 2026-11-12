@@ -1646,4 +1646,51 @@ console.log('--- B4 T24 f2 r1 (m22): «Actualizar» de Pedidos gira con la regla
   assert.equal(estadoKpi({ loading: true, yaCargo: marca.yaCargo }), 'actualizando', 'la recarga después de un fallo sí gira (como BASE)');
 }
 
+console.log('--- B4 T24 f3 (F44-a): Compras e Inventario reservan la esquina del botón de la IA con el token RESERVA_BOTON_IA ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/app/dashboard/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const CONTENEDOR = 'const CONTENEDOR = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;';
+  // Las seis copias locales de CONTENEDOR de Compras (antes con pb-24 escrito a mano) y la de Inventario (piezas-inventario, de f1).
+  for (const ruta of ['compras/page.tsx', 'compras/lista-compras/page.tsx', 'compras/pedidos/page.tsx', 'compras/recepciones/page.tsx',
+    'compras/transito/page.tsx', 'compras/traslados/page.tsx']) {
+    const f = leer(ruta);
+    assert.ok(f.includes(CONTENEDOR), `${ruta}: CONTENEDOR con RESERVA_BOTON_IA`);
+    assert.match(f, /^import \{[^}]*\bRESERVA_BOTON_IA\b[^}]*\} from '@\/lib\/design-system';/m, `${ruta}: importa el token`);
+  }
+  assert.ok(leer('inventario/piezas-inventario.tsx').includes(`export ${CONTENEDOR}`), 'Inventario: el CONTENEDOR común');
+  // Las páginas que terminaban con pb-10 y las que se desplazan solas (h-full overflow-y-auto), y la columna de la derecha de los dos
+  // detalles (el PEC y el conteo de la recepción), que queda bajo el botón en xl y al final en el teléfono.
+  const CON_RESERVA = {
+    'compras/proyecciones/page.tsx': '<div className={`flex flex-col gap-6 w-full p-6 ${RESERVA_BOTON_IA}`}>',
+    'compras/registro/page.tsx': '<div className={`flex flex-col gap-6 w-full p-6 ${RESERVA_BOTON_IA}`}>',
+    'compras/historial/page.tsx': '${RESERVA_BOTON_IA}',
+    'inventario/calendario/page.tsx': '<div className={`p-8 ${RESERVA_BOTON_IA} h-full overflow-y-auto',
+    'inventario/operaciones/page.tsx': '<div className={`p-8 ${RESERVA_BOTON_IA} h-full overflow-y-auto',
+    'inventario/categorias/page.tsx': '<div className={`h-full w-full bg-[#f8f9fa] flex flex-col p-5 ${RESERVA_BOTON_IA} overflow-y-auto`}>',
+    'compras/pedidos/[id]/page.tsx': '<div className={`xl:flex-1 xl:overflow-y-auto px-4 pt-4 sm:px-6 sm:pt-6 ${RESERVA_BOTON_IA} custom-scrollbar bg-slate-50`}>',
+    'compras/recepciones/[id]/page.tsx': '<div className={`xl:flex-1 xl:overflow-y-auto px-4 pt-4 sm:px-6 sm:pt-6 ${RESERVA_BOTON_IA} custom-scrollbar bg-slate-50 space-y-6`}>',
+  };
+  for (const [ruta, trozo] of Object.entries(CON_RESERVA)) {
+    const f = leer(ruta);
+    assert.ok(f.includes(trozo), `${ruta}: la reserva`);
+    assert.match(f, /^import \{[^}]*\bRESERVA_BOTON_IA\b[^}]*\} from '@\/lib\/design-system';/m, `${ruta}: importa el token`);
+  }
+  // Ningún pb-24, pb-20 ni pb-10 escrito a mano en Compras e Inventario (la reserva es una sola: design-system.ts). Un sm:p-6 o
+  // sm:p-8 después de la reserva la pisaría en pantallas anchas: la columna de los detalles usa px/pt para el padding.
+  const { readdirSync, statSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const recorrer = (dir) => readdirSync(dir).flatMap((n) => {
+    const p = join(dir, n);
+    return statSync(p).isDirectory() ? recorrer(p) : /\.tsx?$/.test(n) ? [p] : [];
+  });
+  const sueltos = ['compras', 'inventario'].flatMap((d) => recorrer(fileURLToPath(new URL(`../src/app/dashboard/${d}/`, import.meta.url)))).filter((p) => {
+    const codigo = readFileSync(p, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '');
+    // Una plantilla de clases con la reserva y un p-N con variante (sm:, md:, lg:, xl:): el de la variante va después en el CSS y la pisa.
+    const plantillasConReserva = (codigo.match(/`[^`]*`/g) ?? []).filter((t) => t.includes('${RESERVA_BOTON_IA}'));
+    return /["'`\s]pb-(?:10|20|24)["'`\s]/.test(codigo) || plantillasConReserva.some((t) => /\b(?:sm|md|lg|xl):p-\d/.test(t));
+  }).map((p) => p.replace(/\\/g, '/').replace(/^.*\/dashboard\//, ''));
+  assert.deepEqual(sueltos, [], 'sin pb-24, pb-20 ni pb-10 literales (ni la reserva pisada por sm:p-*) en Compras e Inventario');
+}
+
 console.log('OK test_listas_ventas.mjs');

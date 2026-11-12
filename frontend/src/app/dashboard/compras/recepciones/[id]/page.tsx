@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { FOCO_DENTRO } from '@/lib/design-system';
+import { FOCO_DENTRO, RESERVA_BOTON_IA } from '@/lib/design-system';
 import { apiFetch } from '@/lib/api';
 import { Badge, Button, useAvisos } from '@/components/ui';
 // B4 T16A (TABLA-compras punto 12): la tabla del conteo en la tabla estándar, modo simple (se estira, se mueve y se recuerda;
@@ -504,7 +504,7 @@ export default function RecepcionDetallePage() {
             </h3>
           </div>
 
-          <div className="xl:flex-1 xl:overflow-y-auto p-4 sm:p-6 custom-scrollbar bg-slate-50 space-y-6">
+          <div className={`xl:flex-1 xl:overflow-y-auto px-4 pt-4 sm:px-6 sm:pt-6 ${RESERVA_BOTON_IA} custom-scrollbar bg-slate-50 space-y-6`}>
 
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
               <label className="block text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">Estado Visual de la Carga</label>

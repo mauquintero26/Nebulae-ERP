@@ -5,6 +5,8 @@ import { Table2, History, FolderOpen, X, Download, CloudDownload, Filter, Search
 import { SubNav, PageHeader, Badge, Button, EmptyState } from '@/components/ui';
 import { COMP_NAV } from '../comp-nav';
 import { apiFetch } from '@/lib/api';
+// B4 T24 f3 (F44-a): la reserva del botón de la IA (la esquina inferior derecha).
+import { RESERVA_BOTON_IA } from '@/lib/design-system';
 
 export default function ComprasHistorialPage() {
   const [comprasData, setComprasData] = useState<any[]>([]);
@@ -183,7 +185,7 @@ export default function ComprasHistorialPage() {
 
       <SubNav label="Hub de Compras" items={COMP_NAV} currentPath="/dashboard/compras/historial" color="emerald" hub={{ href: '/dashboard/compras' }} />
 
-      <div className="flex flex-col gap-6 w-full p-8 max-w-[1600px] mx-auto pb-10">
+      <div className={`flex flex-col gap-6 w-full p-8 max-w-[1600px] mx-auto ${RESERVA_BOTON_IA}`}>
 
         <PageHeader icon={Table2} color="emerald"
           title="Historial de Compras"
