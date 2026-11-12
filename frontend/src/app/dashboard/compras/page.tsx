@@ -914,8 +914,9 @@ export default function ComprasHub() {
           </FranjaKpis>
         )}
         {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
-        {!enAnalisis && (estadoKpis === 'error' || stats.cargando) && (
-          <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="purple" reintentando={stats.cargando} />
+        {/* r2 (m36 completo): montado siempre (regionFoco): si el reintento sale bien o da un 403, el foco va a su región, nunca al <body>. */}
+        {!enAnalisis && (
+          <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="purple" reintentando={stats.cargando} regionFoco />
         )}
 
         {/* B4 T14 (TABLA-compras punto 6, KANBAN-compras punto 7, ANALISIS-compras punto 4): la barra y la tabla estándar

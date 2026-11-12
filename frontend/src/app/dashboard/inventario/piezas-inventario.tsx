@@ -12,7 +12,7 @@ import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import { formatoPesos } from '@/lib/pesos';
 import { tiene } from '@/lib/estados-pedido';
 import { formatoDecimal, numeroFinito } from '@/lib/kpis';
-import { ESTADOS_STOCK, existenciaReservada } from '@/lib/estados-compras';
+import { CARGA_CATALOGO_VACIA, ESTADOS_STOCK, existenciaReservada, falloCatalogo, lecturaCatalogo, llegadaCatalogo } from '@/lib/estados-compras';
 import { ofreceReintentar, textoDeError } from '@/lib/avisos';
 // El chip estándar de las tablas del bloque (columnas-pec.tsx, T15 r1): la misma forma que el estado de un PEC.
 import { CHIP } from '../compras/columnas-pec';
@@ -110,7 +110,7 @@ export function CeldaEstadoExistencia({ f }: { f: FilaExistencia }) {
  * SOLO esa fuente), en lugar de dejar solo «—» en las tarjetas. B4 T24 (F46): delega en la pieza común (AvisoDeError → AvisoFuente),
  * así que con un 403 dice el permiso sin «Reintentar».
  */
-export function AvisoReintentar(props: { error: unknown; fallo: string; onReintentar: () => void; acento?: AcentoFoco }) {
+export function AvisoReintentar(props: React.ComponentProps<typeof AvisoDeError>) { // r2 (m36): el mismo contrato (reintentando, regionFoco)
   return <AvisoDeError {...props} />;
 }
 
@@ -165,19 +165,18 @@ export function DetalleExistencia({ f, onCerrar, color = 'indigo' }: { f: FilaEx
  */
 export function useCatalogo(ruta: string): { catalogo: Catalogo; recargar: () => void } {
   const [vuelta, setVuelta] = useState(0);
-  const [catalogo, setCatalogo] = useState<Catalogo>({ filas: null, error: null });
+  const [carga, setCatalogo] = useState<{ vuelta: number; filas: OpcionCatalogo[] | null; error: unknown }>(CARGA_CATALOGO_VACIA); // r2 (F81)
   useEffect(() => {
     const control = new AbortController();
     apiFetch(ruta, { signal: control.signal })
       .then((r: { data?: unknown } | OpcionCatalogo[] | null) => {
-        const filas = Array.isArray(r) ? r : Array.isArray(r?.data) ? (r.data as OpcionCatalogo[]) : [];
-        setCatalogo({ filas, error: null });
+        setCatalogo((c) => llegadaCatalogo(c, r, vuelta));
       })
-      .catch((err: unknown) => { if (!control.signal.aborted) setCatalogo((c) => ({ filas: c.filas, error: err })); });
+      .catch((err: unknown) => { if (!control.signal.aborted) setCatalogo((c) => falloCatalogo(c, err, vuelta)); });
     return () => control.abort();
   }, [ruta, vuelta]);
   const recargar = useCallback(() => setVuelta((n) => n + 1), []);
-  return { catalogo, recargar };
+  return { catalogo: lecturaCatalogo(carga, vuelta), recargar };
 }
 
 /**

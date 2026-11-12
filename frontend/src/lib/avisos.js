@@ -343,3 +343,16 @@ export function motivoSinPermiso(aviso) {
 export function estadoFranjaDeFuente(aviso, estado) {
   return aviso?.tipo === 'permiso' ? 'listo' : estado;
 }
+
+/**
+ * B4 T24 f3 r2 (m36 completo, ruling): adónde va el foco cuando cambia el aviso de una fuente que se reintenta. `teniaFoco`: el botón
+ * «Reintentar» tenía el foco; `hayBoton`: el aviso nuevo sigue ofreciendo el botón (mientras reintenta, «Reintentando…», o con otro
+ * error). Con el botón, el foco se queda en él ('boton'); sin él (el reintento salió bien y el aviso se va, o un 403 sin «Reintentar»),
+ * va a la región estable del aviso ('region', tabindex=-1): nunca al <body>. Si el botón no tenía el foco, nada (null).
+ * @param {{teniaFoco: boolean, hayBoton: boolean}} entrada
+ * @returns {'boton' | 'region' | null}
+ */
+export function focoTrasReintento({ teniaFoco, hayBoton }) {
+  if (!teniaFoco) return null;
+  return hayBoton ? 'boton' : 'region';
+}

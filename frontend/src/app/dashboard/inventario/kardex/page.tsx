@@ -22,6 +22,7 @@ import {
 } from '@/lib/estados-compras';
 import { INV_NAV } from '../inv-nav';
 import { CONTENEDOR, FOCOS, SelectorCatalogo, cantidad, pesos, useCatalogo } from '../piezas-inventario';
+import { AvisoCatalogoViejo } from '../aviso-catalogo';
 // El chip estándar de las tablas del bloque (columnas-pec.tsx, T15 r1): la misma forma que el estado de un PEC.
 import { CHIP } from '../../compras/columnas-pec';
 
@@ -363,6 +364,8 @@ export default function KardexPage() {
                   <SelectorCatalogo etiqueta="Bodega" todas="Todas las bodegas" cargando="Cargando bodegas…"
                     fallo="No se pudieron cargar las bodegas" catalogo={bodegas} valor={filtros.bodega}
                     onCambiar={(bodega) => cambiarFiltros({ bodega })} onReintentar={recargarBodegas} icono={Warehouse} />
+                  {/* r2 (F81): si «Actualizar» falla con el catálogo ya cargado, se dice junto al selector (la vuelta, en useCatalogo). */}
+                  <AvisoCatalogoViejo catalogo={bodegas} fallo="No se pudieron actualizar las bodegas" onReintentar={recargarBodegas} />
                   <select aria-label="Dirección" value={filtros.direccion} onChange={(e) => cambiarFiltros({ direccion: e.target.value })} className={CONTROL}>
                     <option value="">Todas las direcciones</option>
                     {ORDEN_DIRECCIONES.map((d) => <option key={d} value={d}>{DIRECCIONES_KARDEX[d].label}</option>)}

@@ -23,6 +23,7 @@ import {
   AvisoReintentar, CONTENEDOR, CeldaEstadoExistencia, CeldaProducto, DetalleExistencia, FOCOS, SelectorCatalogo, cantidad, claseDeFilaExistencia,
   claveDeFilaExistencia, infoStock, pesos, useCatalogo,
 } from '../piezas-inventario';
+import { AvisoCatalogoViejo } from '../aviso-catalogo';
 import type { ConteosStock, FilaExistencia } from '../piezas-inventario';
 
 /** El id de la pantalla: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26). */
@@ -213,6 +214,8 @@ export default function StockPage() {
                   <SelectorCatalogo etiqueta="Categoría" todas="Todas las categorías" cargando="Cargando categorías…"
                     fallo="No se pudieron cargar las categorías" catalogo={categorias} valor={categoria}
                     onCambiar={cambiarCategoria} onReintentar={recargarCategorias} icono={Layers} />
+                  {/* r2 (F81): si «Actualizar» falla con el catálogo ya cargado, se dice junto al selector (la vuelta, en useCatalogo). */}
+                  <AvisoCatalogoViejo catalogo={categorias} fallo="No se pudieron actualizar las categorías" onReintentar={recargarCategorias} />
                   {categoria && (
                     <button type="button" onClick={() => cambiarCategoria('')}
                       className={`rounded-xl px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50 ${FOCOS.indigo}`}>

@@ -26,6 +26,7 @@ import {
 } from '@/lib/estados-compras';
 import { INV_NAV } from '../inv-nav';
 import { CONTENEDOR, FOCOS, SelectorCatalogo, pesos, useCatalogo } from '../piezas-inventario';
+import { AvisoCatalogoViejo } from '../aviso-catalogo';
 import { RESERVA_BOTON_IA } from '@/lib/design-system';
 
 /** Un producto de GET /products (ProductResponse + precio_venta, costo y publicado de T13, RP91). Los nombres son los del servidor. */
@@ -422,10 +423,9 @@ export default function ProductosPage() {
               </div>
             )} />
 
-          {cargaEnlace.error != null && (
-            <AvisoDeError error={cargaEnlace.error} fallo="No se pudo abrir el producto del enlace" acento="purple" reintentando={cargaEnlace.reintentando}
-              onReintentar={() => setVueltaEnlace((n) => n + 1)} />
-          )}
+          {/* r2 (m36 completo): montado siempre (regionFoco): si el reintento sale bien, el foco va a su región, nunca al <body>. */}
+          <AvisoDeError error={cargaEnlace.error} fallo="No se pudo abrir el producto del enlace" acento="purple" reintentando={cargaEnlace.reintentando}
+            onReintentar={() => setVueltaEnlace((n) => n + 1)} regionFoco />
 
           {/* B4 T18, bloques 2 y 3 (TABLA-inventario punto 7, KANBAN-resto): la barra con la búsqueda (q) y los filtros de B3-T8, y
               la tabla estándar en el servidor, o el tablero solo para ver por categoría con el MISMO estado. */}
@@ -450,6 +450,8 @@ export default function ProductosPage() {
                     <SelectorCatalogo etiqueta="Categoría" todas="Todas las categorías" cargando="Cargando categorías…"
                       fallo="No se pudieron cargar las categorías" catalogo={categorias} valor={filtros.categoria}
                       onCambiar={(categoria) => cambiarFiltros({ categoria })} onReintentar={recargarCategorias} icono={Layers} acento="purple" />
+                    {/* r2 (F81): si «Actualizar» falla con el catálogo ya cargado, se dice junto al selector (la vuelta, en useCatalogo). */}
+                    <AvisoCatalogoViejo catalogo={categorias} fallo="No se pudieron actualizar las categorías" onReintentar={recargarCategorias} acento="purple" />
                   </>
                 )}
                 ajustes={{ columnas: COLUMNAS_TABLA_PRODUCTOS, preferencias: prefs, anchoRef: anchoTablaRef }}

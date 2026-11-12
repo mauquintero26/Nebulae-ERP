@@ -2515,8 +2515,9 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   assert.equal(columnasDe(abasto, 'COLUMNAS_TABLA_ABASTECIMIENTO').find((c) => c.id === 'minimo')?.ordenable, null, 'el mínimo no se ordena en stock-tabla');
 
   // piezas-inventario.tsx: el catálogo conserva el error y el selector lo dice con «Reintentar».
-  trae(piezas, ".catch((err: unknown) => { if (!control.signal.aborted) setCatalogo((c) => ({ filas: c.filas, error: err })); });", 'useCatalogo: el error se conserva');
-  trae(piezas, 'setCatalogo({ filas, error: null });', 'useCatalogo: llega bien');
+  // r2 (F81, D27): la carga del catálogo con su vuelta va en la lib (llegadaCatalogo, falloCatalogo, lecturaCatalogo; bloque de r2).
+  trae(piezas, ".catch((err: unknown) => { if (!control.signal.aborted) setCatalogo((c) => falloCatalogo(c, err, vuelta)); });", 'useCatalogo: el error se conserva');
+  trae(piezas, 'setCatalogo((c) => llegadaCatalogo(c, r, vuelta));', 'useCatalogo: llega bien');
   trae(piezas, '}, [ruta, vuelta]);', 'useCatalogo: se vuelve a pedir con la vuelta');
   trae(piezas, 'const recargar = useCallback(() => setVuelta((n) => n + 1), []);', 'useCatalogo: recargar sube la vuelta');
   trae(piezas, 'if (catalogo.error && !catalogo.filas) {', 'SelectorCatalogo: la rama del error');
@@ -2724,7 +2725,7 @@ console.log('--- TEST 45 (B4 T18, TABLA-inventario punto 7; KANBAN-resto; RP47 a
   assert.match(efecto, /alError: \(error\) => setEnlace\(\{ vuelta: vueltaEnlace, error \}\),/);
   trae(p, 'const cargaEnlace = estadoReintento(enlace, vueltaEnlace);');
   trae(p, '<AvisoDeError error={cargaEnlace.error} fallo="No se pudo abrir el producto del enlace" acento="purple" reintentando={cargaEnlace.reintentando}', 'el error del enlace, a la vista');
-  trae(p, 'onReintentar={() => setVueltaEnlace((n) => n + 1)} />', 'Reintentar vuelve a pedir (la marca sigue libre)');
+  trae(p, 'onReintentar={() => setVueltaEnlace((n) => n + 1)} regionFoco />', 'Reintentar vuelve a pedir (la marca sigue libre); r2 (m36): con su región de foco');
   trae(p, "if (searchParams.get('id') || searchParams.get('sku')) router.replace(pathname);", 'cerrar la ficha limpia el enlace (id y sku)');
   // El tablero solo para ver, por categoría (12 como máximo, con su aviso), en modo servidor.
   const hook = bloqueDesde(p, 'useTableroKanban<Producto>(');
@@ -4006,8 +4007,10 @@ console.log('--- B4 T24 f3 r1 (F81): los catálogos de Inventario — una forma 
   // que da señal; el Hub la pone junto a sus dos selectores.
   const aviso = leerFuente('app/dashboard/inventario/aviso-catalogo.tsx');
   trae(aviso, 'if (catalogo.error == null || !catalogo.filas) return null;');
-  trae(aviso, '<span role="alert"');
-  trae(aviso, '{ofreceReintentar(catalogo.error) && (', 'un 403 no ofrece «Reintentar»');
+  // r2 (m20, D27): el rol y el texto salen de avisoDeFuente (la regla de AvisoFuente: sin doble punto; un 403 es de permiso).
+  trae(aviso, "<span role={aviso.tipo === 'permiso' ? 'status' : 'alert'}");
+  trae(aviso, '{aviso.texto}');
+  trae(aviso, '{aviso.reintentar && (', 'un 403 no ofrece «Reintentar»');
   trae(aviso, "{catalogo.cargando ? 'Reintentando…' : 'Reintentar'}");
   const piezas = leerFuente('app/dashboard/inventario/piezas-inventario.tsx');
   trae(piezas, "{catalogo.cargando ? 'Reintentando…' : 'Reintentar'}", 'SelectorCatalogo sin filas: también da señal');
@@ -4016,6 +4019,55 @@ console.log('--- B4 T24 f3 r1 (F81): los catálogos de Inventario — una forma 
   trae(hub, 'const { filas, error } = filasDeCatalogo(r);');
   assert.ok(!/const lista = \(r: \{ data\?: unknown \} \| null\) =>/.test(hub), 'sin la lectura que convertía todo en []');
   assert.match(hub, /cargando: cargaBodegas\.vuelta !== vueltaCatalogos/);
+}
+
+console.log('--- B4 T24 f3 r2 (F81 en el hook, m36 completo, m20): la vuelta de los catálogos en la lib y el foco nunca en el <body> ---');
+{
+  const { CARGA_CATALOGO_VACIA, llegadaCatalogo, falloCatalogo, lecturaCatalogo } = ec;
+  for (const [n, f] of Object.entries({ llegadaCatalogo, falloCatalogo, lecturaCatalogo })) assert.equal(typeof f, 'function', `${n} existe`);
+  // F81: la carga de un catálogo con su vuelta (useCatalogo y el Hub; así llega a Stock, Abastecimiento, Productos y el Kardex).
+  assert.deepEqual({ ...CARGA_CATALOGO_VACIA }, { vuelta: -1, filas: null, error: null });
+  assert.deepEqual(lecturaCatalogo(CARGA_CATALOGO_VACIA, 0), { filas: null, error: null, cargando: true }, 'la primera carga');
+  const bien = llegadaCatalogo(CARGA_CATALOGO_VACIA, { data: [{ id: 1, name: 'Calzado' }] }, 0);
+  assert.deepEqual(lecturaCatalogo(bien, 0), { filas: [{ id: 1, name: 'Calzado' }], error: null, cargando: false });
+  assert.equal(lecturaCatalogo(bien, 1).cargando, true, '«Reintentar» o «Actualizar»: cargando, con lo último a la vista');
+  const e500 = Object.assign(new Error('Caído'), { status: 500 });
+  const fallo = falloCatalogo(bien, e500, 1);
+  assert.deepEqual(lecturaCatalogo(fallo, 1), { filas: [{ id: 1, name: 'Calzado' }], error: e500, cargando: false }, 'el error conserva lo último bueno');
+  const rara = llegadaCatalogo(bien, { data: 'x' }, 2);
+  assert.deepEqual(rara.filas, [{ id: 1, name: 'Calzado' }], 'una forma inesperada no borra lo último');
+  assert.match(String(rara.error?.message), /no trae la lista/);
+  const piezas = leerFuente('app/dashboard/inventario/piezas-inventario.tsx');
+  trae(piezas, 'return { catalogo: lecturaCatalogo(carga, vuelta), recargar };', 'useCatalogo lee la carga con la lib');
+  for (const pantalla of ['stock', 'abastecimiento', 'productos', 'kardex']) {
+    const f = leerFuente(`app/dashboard/inventario/${pantalla}/page.tsx`);
+    assert.match(f, /<AvisoCatalogoViejo catalogo=\{\w+\} fallo="No se pudieron actualizar las (?:categorías|bodegas)" onReintentar=\{\w+\}/, `${pantalla}: el error con filas viejas, junto al selector`);
+  }
+  // m20: aviso-catalogo.tsx usa la regla de AvisoFuente (avisoDeFuente): sin doble punto y un 403 sin «Reintentar».
+  const av = await import('../src/lib/avisos.js');
+  assert.equal(av.avisoDeFuente(new Error('Servidor caído.'), 'No se pudieron actualizar las bodegas').texto, 'No se pudieron actualizar las bodegas: Servidor caído.', 'sin doble punto');
+  assert.ok(!/textoDeError|ofreceReintentar/.test(leerFuente('app/dashboard/inventario/aviso-catalogo.tsx').replace(/\/\/[^\n]*/g, '')), 'no reimplementa la regla');
+
+  // m36 (ruling): adónde va el foco cuando cambia el aviso de una fuente que se reintenta — mientras, éxito, otro error y 403.
+  const { focoTrasReintento } = av;
+  assert.equal(typeof focoTrasReintento, 'function', 'focoTrasReintento existe');
+  assert.equal(focoTrasReintento({ teniaFoco: true, hayBoton: true }), 'boton', 'mientras reintenta («Reintentando…») o con otro error: se queda en el botón');
+  assert.equal(focoTrasReintento({ teniaFoco: true, hayBoton: false }), 'region', 'salió bien (el aviso se va) o un 403 (sin botón): a la región estable');
+  assert.equal(focoTrasReintento({ teniaFoco: false, hayBoton: false }), null, 'si el botón no tenía el foco, nada');
+  assert.equal(focoTrasReintento({ teniaFoco: false, hayBoton: true }), null);
+  // El cableado: AvisoDeError con regionFoco (aditivo) vive en una región tabindex=-1 montada siempre, y el botón avisa al irse.
+  const pieza = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(pieza, /return \(\) => alSoltarBoton\(document\.activeElement === nodo\);/, 'el ref con limpieza mira si el botón tenía el foco');
+  assert.match(pieza, /focoTrasReintento\(\{ teniaFoco, hayBoton: ultimoHayBoton\.current \}\) === 'region' && document\.activeElement === document\.body\) region\.current\?\.focus\(\);/);
+  assert.match(pieza, /<div ref=\{region\} tabIndex=\{-1\}/);
+  assert.match(pieza, /alSoltarBoton=\{regionFoco \? alSoltarBoton : undefined\}/, 'solo con regionFoco (aditivo)');
+  for (const ruta of ['app/dashboard/compras/page.tsx', 'app/dashboard/compras/pedidos/page.tsx', 'app/dashboard/compras/transito/page.tsx',
+    'app/dashboard/compras/recepciones/page.tsx', 'app/dashboard/compras/lista-compras/page.tsx', 'app/dashboard/inventario/page.tsx']) {
+    const f = leerFuente(ruta);
+    assert.match(f, /<AvisoDeError error=\{stats\.error\}[^\n]*reintentando=\{stats\.cargando\} regionFoco \/>/, `${ruta}: el aviso de /stats con su región`);
+    assert.ok(!/stats\.cargando\) && \(\s*<AvisoDeError/.test(f), `${ruta}: montado siempre (si se desmonta, la región se va con él)`);
+  }
+  trae(piezas, 'export function AvisoReintentar(props: React.ComponentProps<typeof AvisoDeError>) {', 'AvisoReintentar acepta el mismo contrato');
 }
 
 console.log('\nOK: test_estados_compras.mjs');

@@ -1303,7 +1303,7 @@ console.log('--- B4 T24 f3 (F45, segunda mitad; FINAL-m14, F84): Compras e Inven
     const f = leer(ruta);
     assert.match(f, /import \{ AvisoDeError \} from '@\/components\/ui\/AvisoFuente';/, `${ruta}: la pieza común`);
     // B4 T24 f3 r1 (m36, D27): el aviso sigue montado mientras se reintenta (stats.cargando), con «Reintentando…» (reintentando).
-    assert.ok(new RegExp(`\\(estadoKpis === 'error' \\|\\| stats\\.cargando\\) && \\(\\s*<AvisoDeError error=\\{stats\\.error\\} fallo="${fallo}" onReintentar=\\{stats\\.recargar\\} acento="\\w+" reintentando=\\{stats\\.cargando\\}`).test(f),
+    assert.ok(new RegExp(`<AvisoDeError error=\\{stats\\.error\\} fallo="${fallo}" onReintentar=\\{stats\\.recargar\\} acento="\\w+" reintentando=\\{stats\\.cargando\\} regionFoco \\/>`).test(f),
       `${ruta}: el aviso de /stats, que reintenta solo esa fuente`);
   }
   for (const ruta of ['app/dashboard/inventario/stock/page.tsx', 'app/dashboard/inventario/abastecimiento/page.tsx', 'app/dashboard/inventario/recepciones/page.tsx',

@@ -957,6 +957,41 @@ export function filasDeCatalogo(r) {
 }
 
 /**
+ * B4 T24 f3 r2 (F81 en el hook compartido, ruling): la carga de un catálogo con su vuelta — `llegadaCatalogo` (lo que llegó, con
+ * filasDeCatalogo: una forma inesperada es un error y conserva lo último bueno), `falloCatalogo` (el error conserva lo último bueno) y
+ * `lecturaCatalogo` (lo que lee la pantalla: `cargando` mientras no llega la de esta vuelta). useCatalogo (piezas-inventario.tsx) y el Hub
+ * de Inventario la usan: así llegan a Stock, Abastecimiento, Productos, el Kardex y las demás.
+ */
+export const CARGA_CATALOGO_VACIA = congelar({ vuelta: -1, filas: null, error: null });
+/**
+ * @param {{filas?: any[] | null} | null | undefined} previo
+ * @param {unknown} respuesta
+ * @param {number} vuelta
+ * @returns {{vuelta: number, filas: any[] | null, error: unknown}}
+ */
+export function llegadaCatalogo(previo, respuesta, vuelta) {
+  const { filas, error } = filasDeCatalogo(respuesta);
+  return { vuelta, filas: filas ?? previo?.filas ?? null, error };
+}
+/**
+ * @param {{filas?: any[] | null} | null | undefined} previo
+ * @param {unknown} error
+ * @param {number} vuelta
+ * @returns {{vuelta: number, filas: any[] | null, error: unknown}}
+ */
+export function falloCatalogo(previo, error, vuelta) {
+  return { vuelta, filas: previo?.filas ?? null, error };
+}
+/**
+ * @param {{vuelta?: number, filas?: any[] | null, error?: unknown} | null | undefined} carga
+ * @param {number} vuelta
+ * @returns {{filas: any[] | null, error: unknown, cargando: boolean}}
+ */
+export function lecturaCatalogo(carga, vuelta) {
+  return { filas: carga?.filas ?? null, error: carga?.error ?? null, cargando: carga?.vuelta !== vuelta };
+}
+
+/**
  * B4 T24 f3 r1 (m22): el conteo por línea, en serie (PATCH /compras/recepciones/{id}/lineas/{grl_id}): manda una petición tras otra y se
  * DETIENE en la primera que falla (las que siguen no salen). Devuelve cuántas quedaron guardadas y, si una falló, cuál y su error, para
  * que el aviso diga qué línea falló y que las anteriores ya se guardaron.

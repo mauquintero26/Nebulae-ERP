@@ -1361,7 +1361,8 @@ console.log('--- TEST 30 (B4 T23B): las piezas comunes: AvisoFuente y useRolActu
   assert.ok(!/useState\([^)]*localStorage/.test(hook), 'el rol no se lee en el inicializador de useState');
   // El aviso: un 403 es de permiso (sin «Reintentar»); una falla lleva «Reintentar» solo si aviso.reintentar.
   // B4 T24 f3 r1 (m36, D27): mientras se reintenta, el mismo botón sin onClick y con aria-disabled («Reintentando…»).
-  assert.match(fuente, /\{aviso\.reintentar && \(\s*<button type="button" onClick=\{reintentando \? undefined : onReintentar\} aria-disabled=\{reintentando \|\| undefined\}/);
+  // r2 (m36, D27): el botón lleva su ref con limpieza (alSoltarBoton: el foco nunca queda en el <body>).
+  assert.match(fuente, /\{aviso\.reintentar && \(\s*<button ref=\{refBoton\} type="button" onClick=\{reintentando \? undefined : onReintentar\} aria-disabled=\{reintentando \|\| undefined\}/);
   assert.match(fuente, /const permiso = aviso\.tipo === 'permiso';/);
   assert.match(fuente, /role=\{permiso \? 'status' : 'alert'\}/);
   // r1 (m36, D27): el texto es {reintentando ? 'Reintentando…' : 'Reintentar'} (un solo botón).

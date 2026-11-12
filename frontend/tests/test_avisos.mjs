@@ -430,12 +430,16 @@ console.log('--- TEST T24-c (B4 T24, F46): un solo aviso de fuente — el texto,
   // La pieza: AvisoFuente (común), con un acento opcional, y AvisoDeError (error + texto de la falla → avisoDeFuente → AvisoFuente).
   const pieza = leer('components/ui/AvisoFuente.tsx');
   // B4 T24 f3 r1 (m36, D27, aditivo): AvisoDeError recibe `reintentando`: conserva el último error mientras se reintenta («Reintentando…»).
-  assert.match(pieza, /export function AvisoDeError\(\{ error, fallo, onReintentar, acento, reintentando = false \}: \{/);
-  assert.match(pieza, /const visto = error \?\? \(reintentando \? ultimo : null\);\s*const aviso = avisoDeFuente\(visto, fallo\);\s*return aviso \? <AvisoFuente aviso=\{aviso\} onReintentar=\{onReintentar\} acento=\{acento\} reintentando=\{error == null && reintentando\} \/> : null;/);
+  // r2 (m36, D27, aditivo): AvisoDeError recibe también regionFoco (la región estable del foco).
+  assert.match(pieza, /export function AvisoDeError\(\{ error, fallo, onReintentar, acento, reintentando = false, regionFoco = false \}: \{/);
+  assert.match(pieza, /const visto = error \?\? \(reintentando \? ultimo : null\);\s*const aviso = avisoDeFuente\(visto, fallo\);/);
+  assert.match(pieza, /<AvisoFuente aviso=\{aviso\} onReintentar=\{onReintentar\} acento=\{acento\} reintentando=\{error == null && reintentando\}/);
+  assert.match(pieza, /if \(!regionFoco\) return cuadro;/, 'sin regionFoco, como antes (aditivo)');
   assert.match(pieza, /\$\{FOCOS\[acento\]\}/);
   // AvisoReintentar (Inventario) delega en ella: con un 403, el aviso de permiso sin «Reintentar».
   const piezas = leer('app/dashboard/inventario/piezas-inventario.tsx');
-  assert.match(piezas, /export function AvisoReintentar\(props: \{ error: unknown; fallo: string; onReintentar: \(\) => void; acento\?: AcentoFoco \}\) \{\s*return <AvisoDeError \{\.\.\.props\} \/>;\s*\}/);
+  // r2 (m36, D27): AvisoReintentar acepta el mismo contrato que AvisoDeError (reintentando, regionFoco) y delega en ella.
+  assert.match(piezas, /export function AvisoReintentar\(props: React\.ComponentProps<typeof AvisoDeError>\) \{[^\n]*\n\s*return <AvisoDeError \{\.\.\.props\} \/>;\s*\}/);
   // El Dashboard usa la pieza común (sin su AvisoFuente local).
   const dash = leer('app/dashboard/page.tsx');
   assert.ok(!/function AvisoFuente\b/.test(dash), 'Dashboard: sin la copia local');

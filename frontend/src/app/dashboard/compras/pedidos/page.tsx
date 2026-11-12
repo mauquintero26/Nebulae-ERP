@@ -1922,9 +1922,8 @@ export default function PedidosCompraPage() {
             activo={vistaActiva === 'vigentes'} onClick={() => elegirVista('vigentes')} />
         </FranjaKpis>
         {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
-        {(estadoKpis === 'error' || stats.cargando) && (
-          <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="purple" reintentando={stats.cargando} />
-        )}
+        {/* r2 (m36 completo): montado siempre (regionFoco): si el reintento sale bien o da un 403, el foco va a su región, nunca al <body>. */}
+        <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="purple" reintentando={stats.cargando} regionFoco />
 
         {/* B4 T15 (TABLA-compras punto 7, KANBAN-compras punto 6): la barra y la tabla estándar en el servidor, o el tablero
             en modo servidor, con el MISMO estado (pestaña, búsqueda, estados y semáforo). En Kanban las pestañas no se ven
