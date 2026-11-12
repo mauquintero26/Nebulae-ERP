@@ -111,7 +111,7 @@ function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClose:()=>
             <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Nombre *</label><input required value={form.name} onChange={e=>set('name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
             <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Referencia / NIT</label><input value={form.reference} onChange={e=>set('reference',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
             <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Contacto</label><input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Telefono</label><input value={form.phone} onChange={e=>set('phone',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Teléfono</label><input value={form.phone} onChange={e=>set('phone',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
             <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Email</label><input type="email" value={form.email} onChange={e=>set('email',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
             <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Ciudad</label><input value={form.city} onChange={e=>set('city',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
             <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Terminos de Pago</label><input value={form.payment_terms} onChange={e=>set('payment_terms',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
@@ -131,7 +131,7 @@ function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClose:()=>
 /* ================================================================
    NUEVO CASILLERO MODAL
    ================================================================ */
-function NewCasilleroModal({onSave, onClose}: {onSave:(c:any)=>void; onClose:()=>void}) {
+function NewCasilleroModal({onSave, onClose, capa = 'encima'}: {onSave:(c:any)=>void; onClose:()=>void; capa?: 'encima' | 'alta'}) {
   const [form, setForm] = useState({name:'',address:'',reception_point:'',contact_name:'',phone:'',email:'',city:'',country:'Estados Unidos',notes:''});
   const [saving, setSaving] = useState(false);
   // B4 T15 (RP30): el error en un aviso del sistema, con el texto del servidor (nunca alert()).
@@ -145,34 +145,32 @@ function NewCasilleroModal({onSave, onClose}: {onSave:(c:any)=>void; onClose:()=
     catch(err) { avisarError(err, 'No se pudo crear el casillero'); }
     setSaving(false);
   }
+  // B4 T24 f3 r1 (m6 = m27 = m38): un Modal de la pila, apilado ENCIMA de quien lo abre (capa="encima" sobre la ventana de seguimiento y
+  // el panel del PEC; "alta" sobre el alta de un PEC, un panel a mano en z-[80]), con la regla de F40: tiene lo escrito, así que solo lo
+  // cierran sus botones, y no mientras guarda. Toma el foco al abrir, atrapa Tab y Esc no cierra lo de atrás. Ya sin data-superficie.
   return (
-    // B4 T24 f3: se abre también encima de la ventana de seguimiento (un Modal de la pila): data-superficie, para que la capa no le quite el
-    // foco a sus campos.
-    <div data-superficie="ventana" className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm">
-      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg mx-4">
-        <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-indigo-50 rounded-t-3xl">
-          <div><h3 className="font-black text-gray-900 text-lg">Nuevo Casillero</h3><p className="text-xs text-gray-500 mt-0.5">Punto de recepcion / forwarder</p></div>
-          <button onClick={onClose} className="p-2 hover:bg-indigo-100 rounded-xl"><X size={18}/></button>
-        </div>
-        <form onSubmit={save} className="p-6 space-y-4">
+    <Modal cierreExterno={false} bloquearCierre={saving} capa={capa} title="Nuevo Casillero" subtitle="Punto de recepción / forwarder"
+      icon={MapPin} color="indigo" maxWidth="lg" onClose={onClose}
+      footer={(
+        <>
+          <button type="button" onClick={onClose} disabled={saving} className={`px-4 py-2 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-50 ${FOCOS.indigo}`}>Cancelar</button>
+          <button type="submit" form="form-nuevo-casillero" disabled={saving} className={`px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2 ${FOCOS.indigo}`}>
+            {saving?<RefreshCw size={14} className="animate-spin" aria-hidden="true"/>:<MapPin size={14} aria-hidden="true"/>} Agregar Casillero
+          </button>
+        </>
+      )}>
+        <form id="form-nuevo-casillero" onSubmit={save} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Nombre *</label><input required value={form.name} onChange={e=>set('name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-            <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Direccion</label><input value={form.address} onChange={e=>set('address',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-            <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Punto de Recepcion</label><input value={form.reception_point} onChange={e=>set('reception_point',e.target.value)} placeholder="ej: Bodega 4, Muelle B" className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
+            <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Dirección</label><input value={form.address} onChange={e=>set('address',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
+            <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Punto de recepción</label><input value={form.reception_point} onChange={e=>set('reception_point',e.target.value)} placeholder="ej: Bodega 4, Muelle B" className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
             <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Contacto</label><input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Telefono</label><input value={form.phone} onChange={e=>set('phone',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Teléfono</label><input value={form.phone} onChange={e=>set('phone',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
             <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Ciudad</label><input value={form.city} onChange={e=>set('city',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Pais</label><input value={form.country} onChange={e=>set('country',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-          </div>
-          <div className="flex justify-end gap-3 pt-2 border-t border-gray-100">
-            <button type="button" onClick={onClose} className="px-4 py-2 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50">Cancelar</button>
-            <button type="submit" disabled={saving} className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2">
-              {saving?<RefreshCw size={14} className="animate-spin"/>:<MapPin size={14}/>} Agregar Casillero
-            </button>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">País</label><input value={form.country} onChange={e=>set('country',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
           </div>
         </form>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -213,7 +211,7 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:Avis
   });
 
   const saveStages = async () => {
-    if (stages.some(s=>!s.key || !String(s.key).trim())) { onToast('Cada etapa necesita una key (identificador unico)','error'); return; }
+    if (stages.some(s=>!s.key || !String(s.key).trim())) { onToast('Cada etapa necesita una key (identificador único)','error'); return; }
     // B4 T24 f3 (m21 del backend r1): los días de alerta, en la lib con el rango del servidor (0 a 36500), antes de mandar. Si el servidor
     // responde 422 (ETAPA_DIAS_INVALIDOS), su texto; la ventana sigue abierta con lo escrito.
     const errorDias = errorDiasEtapas(stages);
@@ -221,7 +219,7 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:Avis
     setSaving(true);
     try {
       await apiFetch(`/compras/tracking-config/${tipoEnvio}`, {method:'PUT', body:JSON.stringify({stages})});
-      onToast('Configuracion de etapas guardada','ok');
+      onToast('Configuración de etapas guardada','ok');
       loadConfig();
     } catch (e) { onToast(e, 'error'); }
     setSaving(false);
@@ -245,18 +243,19 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:Avis
   return (
     <>
       <Modal cierreExterno={false} bloquearCierre={saving} title="Configuración de tracking" subtitle="Etapas, alertas y casilleros del pipeline logístico"
-        icon={Settings2} color="purple" maxWidth="3xl" onClose={onClose}
+        icon={Settings2} color="purple" maxWidth="3xl" onClose={onClose} reservaBotonIa
         footer={tab === 'etapas' ? (
           <>
-            <button onClick={onClose} disabled={saving} className="px-4 py-2 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-50">Cerrar</button>
-            <button onClick={saveStages} disabled={saving} className="px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2">
-              {saving?<RefreshCw size={14} className="animate-spin"/>:<Save size={14}/>} Guardar Etapas
+            {/* r1 (m40): el foco con el token; (m43) el pie reserva el área del botón de la IA (reservaBotonIa). */}
+            <button type="button" onClick={onClose} disabled={saving} className={`px-4 py-2 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-50 ${FOCOS.purple}`}>Cerrar</button>
+            <button type="button" onClick={saveStages} disabled={saving} className={`px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2 ${FOCOS.purple}`}>
+              {saving?<RefreshCw size={14} className="animate-spin" aria-hidden="true"/>:<Save size={14} aria-hidden="true"/>} Guardar Etapas
             </button>
           </>
         ) : undefined}>
         <div className="flex gap-1">
           {[{k:'etapas',l:'Etapas y Alertas'},{k:'casilleros',l:'Casilleros'}].map(({k,l}:any)=>(
-            <button key={k} onClick={()=>setTab(k)} className={'px-3 py-1.5 rounded-lg text-sm font-bold ' + (tab===k?'bg-purple-600 text-white':'bg-gray-100 text-gray-600 hover:bg-purple-50')}>{l}</button>
+            <button key={k} type="button" onClick={()=>setTab(k)} aria-pressed={tab===k} className={`px-3 py-1.5 rounded-lg text-sm font-bold ${FOCOS.purple} ` + (tab===k?'bg-purple-600 text-white':'bg-gray-100 text-gray-600 hover:bg-purple-50')}>{l}</button>
           ))}
         </div>
 
@@ -265,7 +264,7 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:Avis
             <div className="space-y-4">
               <div className="flex gap-2">
                 {(['casillero','directo'] as const).map(t=>(
-                  <button key={t} onClick={()=>setTipoEnvio(t)} className={'px-3 py-1.5 rounded-lg text-xs font-bold border ' + (tipoEnvio===t?'bg-indigo-600 text-white border-indigo-600':'bg-white text-gray-600 border-gray-200 hover:bg-gray-50')}>
+                  <button key={t} type="button" onClick={()=>setTipoEnvio(t)} aria-pressed={tipoEnvio===t} className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${FOCOS.purple} ` + (tipoEnvio===t?'bg-indigo-600 text-white border-indigo-600':'bg-white text-gray-600 border-gray-200 hover:bg-gray-50')}>
                     {t==='casillero'?'Vía casillero':'Directo Colombia'}
                   </button>
                 ))}
@@ -280,7 +279,7 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:Avis
                           <input value={s.label||''} onChange={e=>setStage(i,'label',e.target.value)} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-purple-200"/>
                         </div>
                         <div className="col-span-3">
-                          <label className="text-[10px] font-black text-gray-400 uppercase">Key (unica)</label>
+                          <label className="text-[10px] font-black text-gray-400 uppercase">Key (única)</label>
                           <input value={s.key||''} onChange={e=>setStage(i,'key',e.target.value.toUpperCase().replace(/\s+/g,'_'))} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-purple-200 font-mono"/>
                         </div>
                         <div className="col-span-2">
@@ -312,15 +311,15 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:Avis
 
           {tab === 'casilleros' && (
             <div className="space-y-2">
-              <button onClick={()=>setShowNewCasillero(true)} className="w-full py-2.5 border-2 border-dashed border-gray-300 rounded-2xl text-sm font-bold text-gray-500 hover:border-indigo-400 hover:text-indigo-600 flex items-center justify-center gap-2 mb-2"><Plus size={14}/> Nuevo Casillero</button>
+              <button type="button" onClick={()=>setShowNewCasillero(true)} className={`w-full py-2.5 border-2 border-dashed border-gray-300 rounded-2xl text-sm font-bold text-gray-500 hover:border-indigo-400 hover:text-indigo-600 flex items-center justify-center gap-2 mb-2 ${FOCOS.purple}`}><Plus size={14} aria-hidden="true"/> Nuevo Casillero</button>
               {casilleros.length === 0 && <p className="text-center py-8 text-gray-400 text-sm">Sin casilleros registrados</p>}
               {casilleros.map(c=>(
                 <div key={c.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-200">
                   <div>
                     <p className="font-bold text-sm text-gray-900">{c.name}</p>
-                    <p className="text-xs text-gray-400">{[c.address,c.city].filter(Boolean).join(' · ')||'Sin direccion'}</p>
+                    <p className="text-xs text-gray-400">{[c.address,c.city].filter(Boolean).join(' · ')||'Sin dirección'}</p>
                   </div>
-                  <button onClick={()=>deleteCasillero(c.id)} className="p-1.5 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-500"><Trash2 size={14}/></button>
+                  <button type="button" onClick={()=>deleteCasillero(c.id)} aria-label={`Eliminar el casillero ${c.name}`} title="Eliminar casillero" className={`p-1.5 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-500 ${FOCOS.purple}`}><Trash2 size={14} aria-hidden="true"/></button>
                 </div>
               ))}
             </div>
@@ -1154,7 +1153,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
         />
       )}
       {showNewCasillero && (
-        <NewCasilleroModal
+        <NewCasilleroModal capa="alta"
           onSave={(c)=>{setSelectedCasillero(c);setCasilleroSearch(c.name);setCasilleroResults([]);setShowNewCasillero(false);}}
           onClose={()=>setShowNewCasillero(false)}
         />
@@ -1922,8 +1921,8 @@ export default function PedidosCompraPage() {
             activo={vistaActiva === 'vigentes'} onClick={() => elegirVista('vigentes')} />
         </FranjaKpis>
         {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
-        {estadoKpis === 'error' && (
-          <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="purple" />
+        {(estadoKpis === 'error' || stats.cargando) && (
+          <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="purple" reintentando={stats.cargando} />
         )}
 
         {/* B4 T15 (TABLA-compras punto 7, KANBAN-compras punto 6): la barra y la tabla estándar en el servidor, o el tablero

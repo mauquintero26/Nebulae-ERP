@@ -45,7 +45,7 @@ import { normalizarRespuesta, queryListado, recortarColumnas } from './tabla.js'
 // recarga y el texto de los errores (m15).
 import { estadosDeColumnaLista } from './kanban.js';
 import { formatoDecimal, formatoEntero, numeroFinito } from './kpis.js';
-import { recargarTrasError, textoDeError } from './avisos.js';
+import { ofreceReintentar, recargarTrasError, textoDeError } from './avisos.js';
 // B4 T18 (Productos): el precio en pesos enteros y la etiqueta y la regla de la tarifa de IVA, de sus dueños.
 import { formatoPesos } from './pesos.js';
 import { etiquetaTarifaCatalogo, sinTarifaIva } from './iva.js';
@@ -915,6 +915,82 @@ export function vinculoPvenDelPec(pvens) {
   const lista = (Array.isArray(pvens) ? pvens : []).filter((p) => p?.id != null);
   if (lista.length === 0) return { ven_id: null, ven_numero: null };
   return { ven_id: lista[0].id, ven_ids: lista.map((p) => p.id), ven_numero: textoLimpio(lista[0].numero) };
+}
+
+/**
+ * B4 T24 f3 r1 (m18, m31, m25, m36): la lectura de una carga con vuelta ({vuelta, error} de la última que llegó; `vuelta` es la que se
+ * acaba de pedir): `cargando` mientras no llega la de esta vuelta; `error` el de la última que llegó (se conserva mientras se reintenta,
+ * para que el aviso siga montado y el foco no caiga al <body>); `reintentando` si hay un error y otra vuelta en camino; `ofrecer` si
+ * «Reintentar» sirve (un 403 no). La usan los PVEN del panel del Hub (F57) y el enlace de Productos (B40-f).
+ * @param {{vuelta: number, error: unknown} | null | undefined} carga
+ * @param {number} vuelta
+ * @returns {{cargando: boolean, error: unknown, reintentando: boolean, ofrecer: boolean}}
+ */
+export function estadoReintento(carga, vuelta) {
+  const cargando = carga?.vuelta !== vuelta;
+  const error = carga?.error ?? null;
+  return { cargando, error, reintentando: cargando && error != null, ofrecer: error != null && ofreceReintentar(error) };
+}
+
+/**
+ * B4 T24 f3 r1 (m22): el conteo por línea, en serie (PATCH /compras/recepciones/{id}/lineas/{grl_id}): manda una petición tras otra y se
+ * DETIENE en la primera que falla (las que siguen no salen). Devuelve cuántas quedaron guardadas y, si una falló, cuál y su error, para
+ * que el aviso diga qué línea falló y que las anteriores ya se guardaron.
+ * @param {ReadonlyArray<{grl_id: unknown, cuerpo: unknown}>} peticiones
+ * @param {(p: {grl_id: unknown, cuerpo: unknown}) => Promise<unknown>} enviar
+ * @returns {Promise<{guardadas: number, fallo: {grl_id: unknown, error: unknown} | null}>}
+ */
+export async function guardarConteoEnSerie(peticiones, enviar) {
+  let guardadas = 0;
+  for (const p of Array.isArray(peticiones) ? peticiones : []) {
+    try {
+      await enviar(p);
+    } catch (error) {
+      return { guardadas, fallo: { grl_id: p.grl_id, error } };
+    }
+    guardadas += 1;
+  }
+  return { guardadas, fallo: null };
+}
+
+/**
+ * B4 T24 f3 r1 (m22): el texto con que se avisa un conteo que falló a medias: la línea que falló y, si antes se guardaron otras, que ya
+ * quedaron guardadas (el detalle del servidor lo añade textoDeError).
+ * @param {string | null | undefined} nombre
+ * @param {number} guardadas
+ * @returns {string}
+ */
+export function textoFalloConteo(nombre, guardadas) {
+  const linea = textoLimpio(nombre) ? `la línea «${textoLimpio(nombre)}»` : 'una línea';
+  const antes = guardadas > 0 ? `; ${guardadas === 1 ? 'la anterior quedó guardada' : `las ${guardadas} anteriores quedaron guardadas`}` : '';
+  return `No se pudo guardar ${linea}${antes}`;
+}
+
+/**
+ * B4 T24 f3 r1 (m18, B40-f): el efecto del enlace ?id= / ?sku= de Inventario › Productos, en la lib: pide el producto si
+ * pedirEnlaceProducto lo manda; la marca (`marca.current`) se pone SOLO cuando la respuesta llegó (un montaje abortado deja la marca
+ * libre). Al llegar: `alError(null)` y abre el producto o avisa que no está; si falla (no un abort): `alError(err)` (la página lo
+ * muestra con «Reintentar»). Devuelve la limpieza (aborta).
+ * @param {{marca: {current: string | null}, idDeLaUrl: string | null, skuDeLaUrl: string | null,
+ *   pedir: (ruta: string, op: {signal: AbortSignal}) => Promise<unknown>, abrir: (fila: any) => void, avisar: (texto: string) => void,
+ *   alError: (err: unknown) => void}} entrada
+ * @returns {() => void}
+ */
+export function abrirEnlaceProducto({ marca, idDeLaUrl, skuDeLaUrl, pedir, abrir, avisar, alError }) {
+  const pedido = pedirEnlaceProducto(marca.current, idDeLaUrl, skuDeLaUrl);
+  if (pedido === null) return () => {};
+  const control = new AbortController();
+  pedir(pedido.ruta, { signal: control.signal })
+    .then((r) => {
+      if (control.signal.aborted) return;
+      const llegada = llegadaEnlaceProducto(pedido, normalizarRespuesta(r).filas);
+      marca.current = llegada.marca;
+      alError(null);
+      if (llegada.abrir) abrir(llegada.abrir);
+      else avisar(llegada.texto ?? 'No se encontró el producto.');
+    })
+    .catch((err) => { if (!control.signal.aborted) alError(err); });
+  return () => control.abort();
 }
 
 /**

@@ -566,8 +566,8 @@ export default function ListaComprasPage() {
             activo={vistaActiva === 'todos'} onClick={() => elegirVista('todos')} />
         </FranjaKpis>
         {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
-        {estadoKpis === 'error' && (
-          <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de la lista de compras" onReintentar={stats.recargar} acento="purple" />
+        {(estadoKpis === 'error' || stats.cargando) && (
+          <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de la lista de compras" onReintentar={stats.recargar} acento="purple" reintentando={stats.cargando} />
         )}
 
         {/* B4 T16B (TABLA-compras punto 10, KANBAN-logistica punto 5): la barra y la tabla estándar en el servidor, o el tablero

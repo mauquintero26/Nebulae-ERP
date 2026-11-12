@@ -507,8 +507,8 @@ export default function TransitoPage() {
           <TarjetaKpi kpi="pec_monto_por_recibir" valor={tarjetas.monto_por_recibir.valor} />
         </FranjaKpis>
         {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
-        {estadoKpis === 'error' && (
-          <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="blue" />
+        {(estadoKpis === 'error' || stats.cargando) && (
+          <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="blue" reintentando={stats.cargando} />
         )}
 
         {/* B4 T16A (TABLA-compras punto 8, KANBAN-logistica punto 2): la barra y la tabla estándar en el servidor, o el tablero

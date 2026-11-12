@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { avisoDeFuente } from '@/lib/avisos';
 import { FOCOS } from '@/lib/design-system';
 import type { AcentoFoco } from '@/lib/design-system';
@@ -9,19 +10,21 @@ import type { AcentoFoco } from '@/lib/design-system';
  * «Reintentar»; un 403 es un tema de permiso y NO ofrece «Reintentar» (volver a pedir no lo cambia). Es la pieza común de
  * Seguimientos, Marketing, Campañas, Agenda, Asistente y E-Commerce. Se importa directo de '@/components/ui/AvisoFuente' (R18).
  */
-export function AvisoFuente({ aviso, onReintentar, acento = 'rose' }: {
+export function AvisoFuente({ aviso, onReintentar, acento = 'rose', reintentando = false }: {
   aviso: NonNullable<ReturnType<typeof avisoDeFuente>>; onReintentar: () => void;
   /** B4 T24 (F46): el foco de «Reintentar» con el acento de la pantalla (aditivo; por defecto, rose). */
   acento?: AcentoFoco;
+  /** B4 T24 f3 r1 (m36, aditivo): mientras se reintenta, el botón dice «Reintentando…» con aria-disabled (no disabled: conserva el foco). */
+  reintentando?: boolean;
 }) {
   const permiso = aviso.tipo === 'permiso';
   return (
     <div role={permiso ? 'status' : 'alert'} className={`flex flex-wrap items-center gap-3 rounded-2xl border px-4 py-3 text-sm font-semibold ${permiso ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-rose-200 bg-rose-50 text-rose-800'}`}>
       {aviso.texto}
       {aviso.reintentar && (
-        <button type="button" onClick={onReintentar}
-          className={`inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 ${FOCOS[acento]}`}>
-          Reintentar
+        <button type="button" onClick={reintentando ? undefined : onReintentar} aria-disabled={reintentando || undefined}
+          className={`inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 aria-disabled:cursor-wait aria-disabled:opacity-70 ${FOCOS[acento]}`}>
+          {reintentando ? 'Reintentando…' : 'Reintentar'}
         </button>
       )}
     </div>
@@ -32,7 +35,15 @@ export function AvisoFuente({ aviso, onReintentar, acento = 'rose' }: {
  * B4 T24 (F46): el aviso de una fuente a partir de su error y del texto de la falla (avisoDeFuente → AvisoFuente); sin error, nada. Es
  * la pieza que usan el Dashboard y AvisoReintentar de Inventario: un 403 nunca ofrece «Reintentar».
  */
-export function AvisoDeError({ error, fallo, onReintentar, acento }: { error: unknown; fallo: string; onReintentar: () => void; acento?: AcentoFoco }) {
-  const aviso = avisoDeFuente(error, fallo);
-  return aviso ? <AvisoFuente aviso={aviso} onReintentar={onReintentar} acento={acento} /> : null;
+export function AvisoDeError({ error, fallo, onReintentar, acento, reintentando = false }: {
+  error: unknown; fallo: string; onReintentar: () => void; acento?: AcentoFoco;
+  /** B4 T24 f3 r1 (m36, aditivo): true mientras se reintenta (la carga limpia el error). El aviso sigue montado con el último error y
+   * «Reintentando…» (aria-disabled), como la línea de BannerFlujo: el foco no cae al <body>. */
+  reintentando?: boolean;
+}) {
+  const [ultimo, setUltimo] = useState<unknown>(null);
+  if (error != null && error !== ultimo) setUltimo(error);
+  const visto = error ?? (reintentando ? ultimo : null);
+  const aviso = avisoDeFuente(visto, fallo);
+  return aviso ? <AvisoFuente aviso={aviso} onReintentar={onReintentar} acento={acento} reintentando={error == null && reintentando} /> : null;
 }

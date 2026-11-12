@@ -21,8 +21,8 @@ import { TARIFAS_IVA, etiquetaTarifaCatalogo, normalizarTarifaIva, sinTarifaIva 
 import { dependenciasTablero, estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
 import { textoDeError } from '@/lib/avisos';
 import {
-  TEXTO_SOLO_VER_PRODUCTOS, columnasProductos, consultaColumnaProducto, costoDeProducto, extraProductos, llegadaEnlaceProducto,
-  pedirEnlaceProducto, precioDeProducto, tarjetaProducto, textoVacioProductos,
+  TEXTO_SOLO_VER_PRODUCTOS, abrirEnlaceProducto, columnasProductos, consultaColumnaProducto, costoDeProducto, estadoReintento, extraProductos,
+  precioDeProducto, tarjetaProducto, textoVacioProductos,
 } from '@/lib/estados-compras';
 import { INV_NAV } from '../inv-nav';
 import { CONTENEDOR, FOCOS, SelectorCatalogo, pesos, useCatalogo } from '../piezas-inventario';
@@ -384,24 +384,17 @@ export default function ProductosPage() {
   const skuDeLaUrl = searchParams.get('sku');
   const enlaceAtendido = useRef<string | null>(null);
   // B4 T24 f3 (B40-f): el error del enlace queda a la vista con «Reintentar» (AvisoDeError: un 403 no lo ofrece); reintentar sube la vuelta.
-  const [errorEnlace, setErrorEnlace] = useState<unknown>(null);
+  // r1 (m18): el efecto vive en la lib (abrirEnlaceProducto) y la carga se lee con estadoReintento: mientras se reintenta, el aviso sigue
+  // montado con «Reintentando…» (m36: el foco no cae al <body>).
+  const [enlace, setEnlace] = useState<{ vuelta: number; error: unknown }>({ vuelta: 0, error: null });
   const [vueltaEnlace, setVueltaEnlace] = useState(0);
-  useEffect(() => {
-    const pedido = pedirEnlaceProducto(enlaceAtendido.current, idDeLaUrl, skuDeLaUrl);
-    if (pedido === null) return undefined;
-    const control = new AbortController();
-    _apiFetch(pedido.ruta, { signal: control.signal })
-      .then((r: unknown) => {
-        if (control.signal.aborted) return;
-        const llegada = llegadaEnlaceProducto(pedido, normalizarRespuesta(r).filas);
-        enlaceAtendido.current = llegada.marca;
-        setErrorEnlace(null);
-        if (llegada.abrir) openEdit(llegada.abrir);
-        else avisar(llegada.texto ?? 'No se encontró el producto.', { tono: 'info' });
-      })
-      .catch((err: unknown) => { if (!control.signal.aborted) setErrorEnlace(err); });
-    return () => control.abort();
-  }, [idDeLaUrl, skuDeLaUrl, avisar, vueltaEnlace]);
+  const cargaEnlace = estadoReintento(enlace, vueltaEnlace);
+  useEffect(() => abrirEnlaceProducto({
+    marca: enlaceAtendido, idDeLaUrl, skuDeLaUrl, pedir: _apiFetch,
+    abrir: (p) => openEdit(p),
+    avisar: (texto) => avisar(texto, { tono: 'info' }),
+    alError: (error) => setEnlace({ vuelta: vueltaEnlace, error }),
+  }), [idDeLaUrl, skuDeLaUrl, avisar, vueltaEnlace]);
 
   // ─── PRODUCT LIST ───
   if (!selectedProduct) {
@@ -426,9 +419,9 @@ export default function ProductosPage() {
               </div>
             )} />
 
-          {errorEnlace != null && (
-            <AvisoDeError error={errorEnlace} fallo="No se pudo abrir el producto del enlace" acento="purple"
-              onReintentar={() => { setErrorEnlace(null); setVueltaEnlace((n) => n + 1); }} />
+          {cargaEnlace.error != null && (
+            <AvisoDeError error={cargaEnlace.error} fallo="No se pudo abrir el producto del enlace" acento="purple" reintentando={cargaEnlace.reintentando}
+              onReintentar={() => setVueltaEnlace((n) => n + 1)} />
           )}
 
           {/* B4 T18, bloques 2 y 3 (TABLA-inventario punto 7, KANBAN-resto): la barra con la búsqueda (q) y los filtros de B3-T8, y

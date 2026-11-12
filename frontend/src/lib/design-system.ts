@@ -136,6 +136,14 @@ export const FOCO_CAMPO = 'outline-indigo-700 focus:outline-2 focus:outline-offs
  */
 export const RESERVA_BOTON_IA = 'pb-24';
 
+/**
+ * B4 T24 f3 r1 (m43, ruling del controlador): la reserva a la DERECHA del pie de una ventana que llega a la esquina inferior derecha
+ * (el pie de todo Drawer y el de la ventana de seguimiento): el botón de la IA (fixed bottom-6 right-6, 56 px, z-50) tapaba unos 56 px
+ * del botón de la derecha del pie («Confirmar Entrada Física y Actualizar Stock»). pr-24 = 96 px: el botón ocupa de 24 a 80 px desde
+ * el borde, con 16 de aire. El botón de la IA no se mueve.
+ */
+export const RESERVA_BOTON_IA_PIE = 'pr-24';
+
 /** B4 T24 r1 (m30): la caja del texto neutro de un rol sin permiso («Tu rol no ve …», role=status): una sola copia. */
 export const CAJA_SIN_PERMISO = 'rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600';
 

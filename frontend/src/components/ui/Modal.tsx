@@ -3,7 +3,7 @@ import { useId } from 'react';
 import { X } from 'lucide-react';
 import { ACCENTS, AccentColor } from './colors';
 import { useCierreVentana } from './useCierreVentana';
-import { FOCO, FOCO_DENTRO } from '@/lib/design-system';
+import { FOCO, FOCO_DENTRO, RESERVA_BOTON_IA_PIE } from '@/lib/design-system';
 
 /** Modal estandar: header con icono+titulo sobre degradado del acento, cuerpo
  * con scroll propio, footer opcional para los botones de accion. `maxWidth`
@@ -18,6 +18,7 @@ import { FOCO, FOCO_DENTRO } from '@/lib/design-system';
 export function Modal({
   title, subtitle, icon: Icon, color = 'amber', onClose, children, footer,
   maxWidth = 'lg', capa = 'base', role = 'dialog', describedBy, bloquearCierre = false, cierreExterno = true, sinCerrar = false,
+  reservaBotonIa = false,
 }: {
   title: string;
   subtitle?: string;
@@ -28,7 +29,9 @@ export function Modal({
   footer?: React.ReactNode;
   /** B3 T17: '4xl' para la calculadora de la cotización con la columna IVA. */
   maxWidth?: 'md' | 'lg' | 'xl' | '3xl' | '4xl';
-  capa?: 'base' | 'encima';
+  /** B4 T24 f3 r1 (m6, aditivo): 'alta' (z-[90]) para abrirla sobre un panel a mano en z-[80] (el alta de un PEC); la de sesión vencida
+   * (z-[100]) sigue encima. */
+  capa?: 'base' | 'encima' | 'alta';
   role?: 'dialog' | 'alertdialog';
   /** id del texto que describe la ventana (aria-describedby), p. ej. el mensaje de una confirmación. */
   describedBy?: string;
@@ -38,10 +41,13 @@ export function Modal({
   cierreExterno?: boolean;
   /** B4 T24 r3 (m6): true para no mostrar la X (aditivo): una ventana cuyo cierre decidiría por el usuario sale solo por sus botones. */
   sinCerrar?: boolean;
+  /** B4 T24 f3 r1 (m43, aditivo): true para que el pie reserve a la derecha el área del botón de la IA (una ventana alta que llega a la
+   * esquina, como la de seguimiento de Compras › Pedidos). */
+  reservaBotonIa?: boolean;
 }) {
   const accent = ACCENTS[color];
   const widthCls = { md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-xl', '3xl': 'max-w-3xl', '4xl': 'max-w-4xl' }[maxWidth];
-  const capaCls = capa === 'encima' ? 'z-[60]' : 'z-50';
+  const capaCls = capa === 'alta' ? 'z-[90]' : capa === 'encima' ? 'z-[60]' : 'z-50';
   const tituloId = useId();
   const { alPresionar, alSoltar, refPanel } = useCierreVentana(onClose, bloquearCierre || !cierreExterno);
   return (
@@ -71,7 +77,7 @@ export function Modal({
           {children}
         </div>
         {footer && (
-          <div className="px-6 py-4 border-t border-slate-100 flex justify-end gap-3 bg-slate-50 rounded-b-3xl">
+          <div className={`px-6 py-4 ${reservaBotonIa ? RESERVA_BOTON_IA_PIE : ''} border-t border-slate-100 flex justify-end gap-3 bg-slate-50 rounded-b-3xl`}>
             {footer}
           </div>
         )}

@@ -18,7 +18,7 @@ import { TablaEstandar, usePreferenciasTabla } from '@/components/tabla';
 import type { ColumnaTabla } from '@/components/tabla';
 import { fechaLarga } from '@/lib/fechas-colombia';
 import { recargarTrasError } from '@/lib/avisos';
-import { esConteoHeredado, leerCantidadConteo, peticionesConteo, recargaReponeLineas } from '@/lib/estados-compras';
+import { esConteoHeredado, guardarConteoEnSerie, leerCantidadConteo, peticionesConteo, recargaReponeLineas, textoFalloConteo } from '@/lib/estados-compras';
 // B4 T24 f3 (FINAL-C4-f, ruling 5): BODEGA cuenta con el PATCH por línea y confirma; COMPRAS ve el conteo en solo lectura; ADMIN ve todo.
 import { accesoRecepciones, accionesConteo } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
@@ -256,8 +256,15 @@ export default function RecepcionDetallePage() {
           body: JSON.stringify({ productos: items.map(i => ({ grl_id: i.grl_id, qty_recibida: Number(i.qty_recibida) || 0 })) }),
         });
       } else {
-        for (const p of peticiones) {
-          await apiFetch(`/compras/recepciones/${data.id}/lineas/${p.grl_id}`, { method: 'PATCH', body: JSON.stringify(p.cuerpo) });
+        // r1 (m22): en serie, en la lib (guardarConteoEnSerie): se detiene en la primera que falla; el aviso nombra esa línea y dice que
+        // las anteriores ya quedaron guardadas; con la regla única (recargarTrasError), se recarga.
+        const serie = await guardarConteoEnSerie(peticiones,
+          (p) => apiFetch(`/compras/recepciones/${data.id}/lineas/${p.grl_id}`, { method: 'PATCH', body: JSON.stringify(p.cuerpo) }));
+        if (serie.fallo) {
+          const nombre = items.find((i) => i.grl_id === serie.fallo?.grl_id)?.nombre;
+          avisarError(serie.fallo.error, textoFalloConteo(nombre, serie.guardadas));
+          if (recargarTrasError(serie.fallo.error)) await loadRecepcion({ silencioso: true });
+          return false;
         }
       }
       await loadRecepcion({ silencioso: true });

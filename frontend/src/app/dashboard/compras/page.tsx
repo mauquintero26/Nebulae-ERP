@@ -41,7 +41,7 @@ import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, consultaColumnaPec, grupoMesPec, infoEstadoPec,
   opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec, repartirCancelacionPec, resumenCancelacionPec, tarjetaPec,
   cancelarPecsEnSerie, despuesDeCancelarPec, textoVacioPec,
-  textoVencidosPec, tituloMesPec, transicionesPec, vinculoPvenDelPec, seleccionVigente, avisoSeleccionQuitada,
+  textoVencidosPec, tituloMesPec, transicionesPec, vinculoPvenDelPec, seleccionVigente, avisoSeleccionQuitada, estadoReintento,
 } from '@/lib/estados-compras';
 import {
   RUTA_HUB_COMPRAS, TEXTO_SEGUIMIENTO_CERRADO, accionPasoHubCompras, accionSemaforoCompras, avisosFlujoCompras, etiquetaEtapaTracking,
@@ -375,7 +375,7 @@ function PecDetailPanel({
               <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
                 <div className="p-5 border-b border-gray-100">
                   <p className="text-sm font-black text-gray-800 mb-1">Consolidar Pedidos de Venta</p>
-                  <p className="text-xs text-gray-500 mb-3">Selecciona 1 o varios PVEN en estado Pendiente Compra para convertirlos en una orden de compra</p>
+                  <p className="text-xs text-gray-500 mb-3">Selecciona 1 o varios PVEN en estado {infoEstadoPedido('PENDIENTE_COMPRA').label} para convertirlos en una orden de compra</p>
                   <div className="flex items-center bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 gap-2">
                     <Search size={14} className="text-gray-400"/>
                     <input value={searchPven} onChange={e=>setSearchPven(e.target.value)} placeholder="Buscar PVEN..." className="text-sm bg-transparent outline-none flex-1"/>
@@ -386,13 +386,17 @@ function PecDetailPanel({
                   {errorVentas ? (
                     <div className="py-8 text-center space-y-3">
                       <p role="alert" className="text-sm font-bold text-rose-700">No se pudieron cargar los pedidos de venta.</p>
-                      <button type="button" onClick={onReintentarVentas} disabled={cargandoVentas} aria-busy={cargandoVentas}
-                        className={`inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 ${FOCO_VISIBLE}`}>
+                      {/* r1 (m36): aria-disabled (no disabled) mientras carga: el botón conserva el foco. */}
+                      <button type="button" onClick={cargandoVentas ? undefined : onReintentarVentas} aria-disabled={cargandoVentas || undefined} aria-busy={cargandoVentas}
+                        className={`inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 aria-disabled:cursor-wait aria-disabled:opacity-60 ${FOCO_VISIBLE}`}>
                         <RefreshCw size={13} aria-hidden="true" className={cargandoVentas ? 'animate-spin' : undefined}/> {cargandoVentas ? 'Cargando…' : 'Reintentar'}
                       </button>
                     </div>
+                  ) : filteredPvens.length === 0 && cargandoVentas ? (
+                    /* r1 (m25): en la primera carga, «Cargando…», nunca el vacío falso. */
+                    <p role="status" className="py-10 text-center text-sm text-gray-500">Cargando pedidos de venta…</p>
                   ) : filteredPvens.length === 0 && (
-                    <div className="py-10 text-center"><Package size={28} className="mx-auto mb-2 text-gray-300"/><p className="text-gray-400 text-sm">No hay PVEN en estado Pendiente Compra</p></div>
+                    <div className="py-10 text-center"><Package size={28} className="mx-auto mb-2 text-gray-300"/><p className="text-gray-400 text-sm">No hay PVEN en estado {infoEstadoPedido('PENDIENTE_COMPRA').label}</p></div>
                   )}
                   {filteredPvens.map(function(p){ return (
                     <label key={p.id} className={'flex items-start gap-3 px-5 py-3 cursor-pointer hover:bg-purple-50 transition-colors ' + (selectedPvens.has(p.id)?'bg-purple-50/80':'')}>
@@ -650,7 +654,8 @@ export default function ComprasHub() {
       .catch((err: unknown) => { if (vigente) setVentas((v) => ({ vuelta: vueltaVentas, filas: v.filas, error: err })); });
     return () => { vigente = false; };
   }, [vueltaVentas]);
-  const cargandoVentas = ventas.vuelta !== vueltaVentas;
+  // r1 (m31): la carga de los PVEN se lee con estadoReintento (lib): cargando, el error que se conserva mientras se reintenta.
+  const cargandoVentas = estadoReintento(ventas, vueltaVentas).cargando;
   // m10: releer el detalle del panel abierto cuando cancelar desde él falla y el servidor pide recargar.
   const [vueltaDetalle, setVueltaDetalle] = useState(0);
 
@@ -908,8 +913,8 @@ export default function ComprasHub() {
           </FranjaKpis>
         )}
         {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
-        {!enAnalisis && estadoKpis === 'error' && (
-          <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="purple" />
+        {!enAnalisis && (estadoKpis === 'error' || stats.cargando) && (
+          <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="purple" reintentando={stats.cargando} />
         )}
 
         {/* B4 T14 (TABLA-compras punto 6, KANBAN-compras punto 7, ANALISIS-compras punto 4): la barra y la tabla estándar

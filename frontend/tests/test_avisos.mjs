@@ -429,7 +429,9 @@ console.log('--- TEST T24-c (B4 T24, F46): un solo aviso de fuente — el texto,
   const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   // La pieza: AvisoFuente (común), con un acento opcional, y AvisoDeError (error + texto de la falla → avisoDeFuente → AvisoFuente).
   const pieza = leer('components/ui/AvisoFuente.tsx');
-  assert.match(pieza, /export function AvisoDeError\(\{ error, fallo, onReintentar, acento \}: \{ error: unknown; fallo: string; onReintentar: \(\) => void; acento\?: AcentoFoco \}\) \{\s*const aviso = avisoDeFuente\(error, fallo\);\s*return aviso \? <AvisoFuente aviso=\{aviso\} onReintentar=\{onReintentar\} acento=\{acento\} \/> : null;\s*\}/);
+  // B4 T24 f3 r1 (m36, D27, aditivo): AvisoDeError recibe `reintentando`: conserva el último error mientras se reintenta («Reintentando…»).
+  assert.match(pieza, /export function AvisoDeError\(\{ error, fallo, onReintentar, acento, reintentando = false \}: \{/);
+  assert.match(pieza, /const visto = error \?\? \(reintentando \? ultimo : null\);\s*const aviso = avisoDeFuente\(visto, fallo\);\s*return aviso \? <AvisoFuente aviso=\{aviso\} onReintentar=\{onReintentar\} acento=\{acento\} reintentando=\{error == null && reintentando\} \/> : null;/);
   assert.match(pieza, /\$\{FOCOS\[acento\]\}/);
   // AvisoReintentar (Inventario) delega en ella: con un 403, el aviso de permiso sin «Reintentar».
   const piezas = leer('app/dashboard/inventario/piezas-inventario.tsx');

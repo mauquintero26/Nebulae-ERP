@@ -1412,7 +1412,8 @@ console.log('--- TEST 33-b (B4 T24 r1, m15): la recarga silenciosa del conteo de
   assert.match(cont, /if \(!silencioso\) setLoading\(false\);\s*\}, \[params\.id, avisarError\]\);/);
   // Guardar el conteo (lo primero que hace validar) también recarga en silencio: el spinner vaciaba las observaciones antes de validar.
   // B4 T24 f3 (FINAL-C4-f, D27): el guardado es el PATCH por línea (o el lote, en una heredada); la recarga silenciosa va después de los dos.
-  assert.match(cont, /for \(const p of peticiones\) \{\s*await apiFetch\([^\n]*\);\s*\}\s*\}\s*await loadRecepcion\(\{ silencioso: true \}\);\s*return true;/);
+  // B4 T24 f3 r1 (m22, D27): la serie del PATCH por línea vive en la lib (guardarConteoEnSerie, ejecutada en el bloque de r1).
+  assert.match(cont, /const serie = await guardarConteoEnSerie\(peticiones,[\s\S]*?\n\s*await loadRecepcion\(\{ silencioso: true \}\);\s*return true;/);
 }
 
 console.log('--- TEST 33 (B4 T16A, TABLA-compras punto 12; RP30): el conteo de una recepción (recepciones/[id]/page.tsx) en modo simple y sin diálogos nativos ---');
@@ -2715,18 +2716,14 @@ console.log('--- TEST 45 (B4 T18, TABLA-inventario punto 7; KANBAN-resto; RP47 a
   assert.ok(!/p\.sale_price|p\.cost_price|p\.is_published/.test(p.slice(0, p.indexOf('function openEdit'))), 'la tabla no lee sale_price, cost_price ni is_published (/products no los trae)');
   // RP49: el enlace ?id= (y ?sku=) pide el producto al servidor; la marca se pone cuando la respuesta LLEGÓ.
   // B4 T24 f3 (B40-f, D27): el error del enlace queda en errorEnlace (AvisoDeError con «Reintentar») y la vuelta del reintento va en las deps.
-  const efecto = /const enlaceAtendido = useRef[^\n]*\n([\s\S]*?)\}, \[idDeLaUrl, skuDeLaUrl, avisar, vueltaEnlace\]\);/.exec(p)?.[1] ?? '';
-  assert.match(efecto, /pedirEnlaceProducto\(enlaceAtendido\.current, idDeLaUrl, skuDeLaUrl\)/);
-  assert.match(efecto, /_apiFetch\(pedido\.ruta, \{ signal: control\.signal \}\)/);
-  assert.match(efecto, /llegadaEnlaceProducto\(pedido, normalizarRespuesta\(r\)\.filas\)/);
-  const antes = efecto.slice(0, efecto.indexOf('.then('));
-  assert.ok(!/enlaceAtendido\.current =/.test(antes), 'la marca no se pone antes del fetch');
-  assert.match(efecto, /enlaceAtendido\.current = llegada\.marca;/);
-  assert.match(efecto, /if \(llegada\.abrir\) openEdit\(llegada\.abrir\);\s*else avisar\(llegada\.texto \?\? 'No se encontró el producto\.', \{ tono: 'info' \}\);/);
-  assert.match(efecto, /\.catch\(\(err: unknown\) => \{ if \(!control\.signal\.aborted\) setErrorEnlace\(err\); \}\);/);
-  trae(p, '<AvisoDeError error={errorEnlace} fallo="No se pudo abrir el producto del enlace" acento="purple"', 'el error del enlace, a la vista');
-  trae(p, 'onReintentar={() => { setErrorEnlace(null); setVueltaEnlace((n) => n + 1); }} />', 'Reintentar vuelve a pedir (la marca sigue libre)');
-  assert.match(efecto, /return \(\) => control\.abort\(\);/);
+  // B4 T24 f3 r1 (m18, D27): el efecto vive en la lib (abrirEnlaceProducto: la marca cuando llegó, alError con el error o null) y la carga
+  // se lee con estadoReintento; los dos se EJECUTAN en el bloque de r1. Aquí, el cableado.
+  const efecto = /const enlaceAtendido = useRef[^\n]*\n([\s\S]*?)\}\), \[idDeLaUrl, skuDeLaUrl, avisar, vueltaEnlace\]\);/.exec(p)?.[1] ?? '';
+  assert.match(efecto, /useEffect\(\(\) => abrirEnlaceProducto\(\{\s*marca: enlaceAtendido, idDeLaUrl, skuDeLaUrl, pedir: _apiFetch,/);
+  assert.match(efecto, /alError: \(error\) => setEnlace\(\{ vuelta: vueltaEnlace, error \}\),/);
+  trae(p, 'const cargaEnlace = estadoReintento(enlace, vueltaEnlace);');
+  trae(p, '<AvisoDeError error={cargaEnlace.error} fallo="No se pudo abrir el producto del enlace" acento="purple" reintentando={cargaEnlace.reintentando}', 'el error del enlace, a la vista');
+  trae(p, 'onReintentar={() => setVueltaEnlace((n) => n + 1)} />', 'Reintentar vuelve a pedir (la marca sigue libre)');
   trae(p, "if (searchParams.get('id') || searchParams.get('sku')) router.replace(pathname);", 'cerrar la ficha limpia el enlace (id y sku)');
   // El tablero solo para ver, por categoría (12 como máximo, con su aviso), en modo servidor.
   const hook = bloqueDesde(p, 'useTableroKanban<Producto>(');
@@ -3217,7 +3214,8 @@ console.log('--- B4 T24 f3 (FINAL-C4-f): el conteo con el PATCH por línea, vali
   assert.match(cont, /const conteo = accionesConteo\(\{ porConfirmar: isEditable, heredada, [^}]*rol \}\);/);
   assert.match(cont, /if \(!data\?\.id \|\| !conteo\.contar\) return false;\s*const \{ error, peticiones \} = peticionesConteo\(data\.productos, items\);\s*if \(error\) \{ avisar\(error, \{ tono: 'error' \}\); return false; \}/,
     'la lib valida antes de mandar y el aviso es suyo');
-  assert.match(cont, /for \(const p of peticiones\) \{\s*await apiFetch\(`\/compras\/recepciones\/\$\{data\.id\}\/lineas\/\$\{p\.grl_id\}`, \{ method: 'PATCH', body: JSON\.stringify\(p\.cuerpo\) \}\);\s*\}/,
+  // r1 (m22, D27): la serie (y su corte en la primera que falla) está en guardarConteoEnSerie; la página le pasa el PATCH por línea.
+  assert.match(cont, /\(p\) => apiFetch\(`\/compras\/recepciones\/\$\{data\.id\}\/lineas\/\$\{p\.grl_id\}`, \{ method: 'PATCH', body: JSON\.stringify\(p\.cuerpo\) \}\)\);/,
     'una petición por línea, en serie (si una falla, el resto no sale)');
   const ramaHeredada = cont.indexOf('if (heredada) {');
   const lote = cont.indexOf('body: JSON.stringify({ productos: items.map');
@@ -3318,9 +3316,10 @@ console.log('--- B4 T24 f3 (F57, F54): el Hub de Compras — «Reintentar» de l
 {
   const hub = leerFuente('app/dashboard/compras/page.tsx');
   // F57: la lista de consolidación con la vuelta de su carga, como stats; mientras va el reintento, «Cargando…» y el botón apagado.
-  trae(hub, 'const cargandoVentas = ventas.vuelta !== vueltaVentas;');
+  // r1 (m31, m36, D27): la carga se lee con estadoReintento (lib, ejecutada en el bloque de r1) y el botón conserva el foco (aria-disabled).
+  trae(hub, 'const cargandoVentas = estadoReintento(ventas, vueltaVentas).cargando;');
   trae(hub, 'cargandoVentas={cargandoVentas}');
-  trae(hub, "<button type=\"button\" onClick={onReintentarVentas} disabled={cargandoVentas} aria-busy={cargandoVentas}");
+  trae(hub, "<button type=\"button\" onClick={cargandoVentas ? undefined : onReintentarVentas} aria-disabled={cargandoVentas || undefined} aria-busy={cargandoVentas}");
   trae(hub, "{cargandoVentas ? 'Cargando…' : 'Reintentar'}");
   // F54: «Información», «Transportadora», «Cant.» y la etiqueta del estado (infoEstadoPedido), nunca el código.
   for (const viejo of ["l:'Info PEC'", "['Carrier',", '>Qty<', '>PEND. COMPRA<']) noTrae(hub, viejo, `sin ${viejo}`);
@@ -3855,6 +3854,95 @@ console.log('--- B4 T24 f3 r1 (m2, m3, m4, m5, m10, m11, m15, m16, m20, m24, m39
   trae(lis, '<Button variant="secondary" disabled={ocupadoId === editando.id} onClick={() => setEditando(null)}>Cancelar</Button>');
   // m41 (la bodega): «Sin alertas», no «Bien abastecido».
   assert.equal(ec.textoPieBodega(0).texto, 'Sin alertas');
+}
+
+console.log('--- B4 T24 f3 r1 (m6, m18, m22, m25, m31, m36, m40, m43): Nuevo Casillero en la pila, el pie frente a la IA, el foco al reintentar y las cargas en la lib ---');
+{
+  const { estadoReintento, guardarConteoEnSerie, textoFalloConteo, abrirEnlaceProducto } = ec;
+  for (const [nombre, f] of Object.entries({ estadoReintento, guardarConteoEnSerie, textoFalloConteo, abrirEnlaceProducto })) assert.equal(typeof f, 'function', `${nombre} existe`);
+  // m18 / m31: la lectura de una carga con vuelta (los PVEN del Hub y el enlace de Productos).
+  const e403 = Object.assign(new Error('Sin permiso'), { status: 403 });
+  const e500 = Object.assign(new Error('Caído'), { status: 500 });
+  assert.deepEqual(estadoReintento({ vuelta: -1, error: null }, 0), { cargando: true, error: null, reintentando: false, ofrecer: false }, 'la primera carga');
+  assert.deepEqual(estadoReintento({ vuelta: 0, error: null }, 0), { cargando: false, error: null, reintentando: false, ofrecer: false }, 'llegó');
+  assert.deepEqual(estadoReintento({ vuelta: 0, error: e500 }, 0), { cargando: false, error: e500, reintentando: false, ofrecer: true }, 'falló: «Reintentar»');
+  assert.deepEqual(estadoReintento({ vuelta: 0, error: e500 }, 1), { cargando: true, error: e500, reintentando: true, ofrecer: true }, 'reintentando: el error se conserva (el aviso sigue montado)');
+  assert.equal(estadoReintento({ vuelta: 0, error: e403 }, 0).ofrecer, false, 'un 403 no ofrece «Reintentar»');
+  assert.equal(estadoReintento(null, 0).cargando, true);
+  // m22: la serie del PATCH por línea se detiene en la primera que falla; el aviso nombra la línea y dice cuántas quedaron guardadas.
+  const enviadas = [];
+  const serie = await guardarConteoEnSerie([{ grl_id: 1, cuerpo: 'a' }, { grl_id: 2, cuerpo: 'b' }, { grl_id: 3, cuerpo: 'c' }], async (p) => {
+    enviadas.push(p.grl_id);
+    if (p.grl_id === 2) throw e500;
+  });
+  assert.deepEqual(enviadas, [1, 2], 'la tercera no sale');
+  assert.deepEqual(serie, { guardadas: 1, fallo: { grl_id: 2, error: e500 } });
+  assert.deepEqual(await guardarConteoEnSerie([{ grl_id: 1, cuerpo: 'a' }], async () => {}), { guardadas: 1, fallo: null });
+  assert.deepEqual(await guardarConteoEnSerie(null, async () => {}), { guardadas: 0, fallo: null });
+  assert.equal(textoFalloConteo('Tornillo', 1), 'No se pudo guardar la línea «Tornillo»; la anterior quedó guardada');
+  assert.equal(textoFalloConteo(' Tenis ', 3), 'No se pudo guardar la línea «Tenis»; las 3 anteriores quedaron guardadas');
+  assert.equal(textoFalloConteo(null, 0), 'No se pudo guardar una línea');
+  const cont = leerFuente('app/dashboard/compras/recepciones/[id]/page.tsx');
+  assert.match(cont, /avisarError\(serie\.fallo\.error, textoFalloConteo\(nombre, serie\.guardadas\)\);\s*if \(recargarTrasError\(serie\.fallo\.error\)\) await loadRecepcion\(\{ silencioso: true \}\);\s*return false;/,
+    'avisa la línea y recarga solo con la regla única (400, 409, 422 o la red)');
+  // m18 (B40-f): el efecto del enlace de Productos, ejecutado: un abort no marca ni avisa; al llegar, alError(null) y abre; si falla, alError.
+  const espera = (ms) => new Promise((r) => setTimeout(r, ms));
+  const montarProducto = (marca, sku, registro, { filas = [{ id: 9, skus: [{ sku: 'ABC' }] }], falla = null } = {}) => abrirEnlaceProducto({
+    marca, idDeLaUrl: null, skuDeLaUrl: sku,
+    pedir: (ruta, { signal }) => {
+      registro.push(`GET ${ruta}`);
+      return new Promise((resolver, rechazar) => {
+        const t = setTimeout(() => (falla ? rechazar(falla) : resolver({ status: 'success', data: filas })), 5);
+        signal.addEventListener('abort', () => { clearTimeout(t); rechazar(Object.assign(new Error('abortada'), { name: 'AbortError' })); });
+      });
+    },
+    abrir: (p) => registro.push(`abrir ${p.id}`),
+    avisar: (texto) => registro.push(`aviso ${texto}`),
+    alError: (err) => registro.push(`error ${err === null ? 'null' : err.status}`),
+  });
+  const marcaP = { current: null };
+  const rp = [];
+  montarProducto(marcaP, 'ABC', rp)();
+  assert.equal(marcaP.current, null, 'abortada: la marca queda libre');
+  montarProducto(marcaP, 'ABC', rp);
+  await espera(20);
+  assert.equal(rp.filter((x) => x.startsWith('GET')).length, 2, 'el segundo montaje vuelve a pedir');
+  assert.deepEqual(rp.slice(2), ['error null', 'abrir 9'], 'al llegar: el error se limpia y abre (una vez)');
+  const libreP = { current: null };
+  const rf = [];
+  montarProducto(libreP, 'ABC', rf, { falla: e500 });
+  await espera(20);
+  assert.deepEqual(rf.slice(1), ['error 500'], 'si falla: alError con el error');
+  assert.equal(libreP.current, null, 'y la marca libre (Reintentar vuelve a pedir)');
+  // m25: en la primera carga, el panel de PVEN del Hub dice «Cargando…», nunca el vacío falso.
+  const hub = leerFuente('app/dashboard/compras/page.tsx');
+  assert.match(hub, /\) : filteredPvens\.length === 0 && cargandoVentas \? \(\s*\/\* r1 \(m25\)[^*]*\*\/\s*<p role="status"[^>]*>Cargando pedidos de venta…<\/p>/);
+  // m36: el aviso de /stats sigue montado mientras se reintenta y el botón conserva el foco («Reintentando…», aria-disabled).
+  const pieza = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8');
+  assert.match(pieza, /if \(error != null && error !== ultimo\) setUltimo\(error\);/);
+  assert.ok(!/[^-]disabled=\{reintentando/.test(pieza), 'aria-disabled, no disabled (el foco no se pierde)');
+  assert.match(pieza, /aria-disabled=\{reintentando \|\| undefined\}/);
+
+  // m6 = m27 = m38: «Nuevo Casillero» es un Modal de la pila (encima de la ventana; «alta» sobre el alta de un PEC), con la regla de F40.
+  const ped = leerFuente('app/dashboard/compras/pedidos/page.tsx');
+  const nuevo = ped.slice(ped.indexOf('function NewCasilleroModal('), ped.indexOf('function TrackingConfigModal('));
+  assert.match(nuevo, /<Modal cierreExterno=\{false\} bloquearCierre=\{saving\} capa=\{capa\} title="Nuevo Casillero" subtitle="Punto de recepción \/ forwarder"/);
+  assert.match(nuevo, /<button type="submit" form="form-nuevo-casillero" disabled=\{saving\}/, 'el botón del pie envía el formulario');
+  assert.match(nuevo, /<form id="form-nuevo-casillero" onSubmit=\{save\}/);
+  trae(ped, '<NewCasilleroModal capa="alta"', 'desde el alta de un PEC (z-[80]), en la capa alta');
+  assert.match(readFileSync(new URL('../src/components/ui/Modal.tsx', import.meta.url), 'utf8'), /capa\?: 'base' \| 'encima' \| 'alta';/);
+  // m40: la ventana de seguimiento — FOCOS en su pie, sus pestañas, el tipo de envío y «Nuevo Casillero»; la papelera con su nombre; tildes.
+  const ventana = ped.slice(ped.indexOf('function TrackingConfigModal('), ped.indexOf('function TrackingPanel('));
+  assert.ok((ventana.match(/\$\{FOCOS\.purple\}/g) ?? []).length >= 6, 'el foco con el token en los botones de la ventana');
+  trae(ventana, 'aria-label={`Eliminar el casillero ${c.name}`}');
+  for (const sinTilde of ['Configuracion de etapas guardada', 'identificador unico', 'Key (unica)', "'Sin direccion'"]) noTrae(ped, sinTilde, `sin «${sinTilde}»`);
+  for (const sinTilde of ['Punto de recepcion / forwarder', '>Direccion<', '>Punto de Recepcion<', '>Telefono<', '>Pais<']) noTrae(nuevo, sinTilde, `sin «${sinTilde}»`);
+  // m43: el pie de todo Drawer y el de la ventana de seguimiento reservan el área del botón de la IA a la derecha.
+  const ds = readFileSync(new URL('../src/lib/design-system.ts', import.meta.url), 'utf8');
+  assert.match(ds, /export const RESERVA_BOTON_IA_PIE = 'pr-24';/);
+  const drawer = readFileSync(new URL('../src/components/ui/Drawer.tsx', import.meta.url), 'utf8');
+  assert.match(drawer, /<div className=\{`p-6 \$\{RESERVA_BOTON_IA_PIE\} border-t border-slate-200 bg-slate-50 flex items-center justify-between gap-3`\}>/);
+  assert.match(ventana, /maxWidth="3xl" onClose=\{onClose\} reservaBotonIa/);
 }
 
 console.log('\nOK: test_estados_compras.mjs');

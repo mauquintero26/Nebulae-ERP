@@ -497,8 +497,8 @@ export default function InventarioHub() {
               <TarjetaKpi kpi="inv_disponibilidad" valor={tarjetas?.disponibilidad.valor ?? null} ayuda={tarjetas?.disponibilidad.ayuda ?? undefined} />
             </FranjaKpis>
             {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
-            {estadoKpis === 'error' && (
-              <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de existencias" onReintentar={stats.recargar} acento="indigo" />
+            {(estadoKpis === 'error' || stats.cargando) && (
+              <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de existencias" onReintentar={stats.recargar} acento="indigo" reintentando={stats.cargando} />
             )}
             <nav aria-label="Operaciones de inventario" className="flex flex-wrap items-center gap-2 text-xs">
               <span className="font-semibold text-slate-600">Operaciones:</span>
