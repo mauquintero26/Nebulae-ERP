@@ -13,8 +13,10 @@ import {
 } from '@/components/tabla';
 import type { ColumnaTabla } from '@/components/tabla';
 import { useResumen } from '@/components/ui/useResumen';
+import { useRolActual } from '@/components/ui/useRolActual';
 import { apiFetch } from '@/lib/api';
 import { AYUDA_MINIMO_INVENTARIO, formatoEntero, tarjetasAbastecimiento } from '@/lib/kpis';
+import { accesoCompras } from '@/lib/roles';
 import { dependenciasTablero, estadoDelTotal, extraPorVista, normalizarRespuesta, textoVacioExistencias } from '@/lib/tabla';
 import {
   COLUMNAS_STOCK, TEXTO_SOLO_VER_STOCK, VISTAS_ABASTECIMIENTO, consultaColumnaStock, estadoAlertaAgotados, pestanasExistencias,
@@ -84,6 +86,8 @@ const COLUMNAS_TABLA_ABASTECIMIENTO: ColumnaTabla<FilaExistencia>[] = [
 ];
 
 export default function AbastecimientoPage() {
+  // B4 T24 f4 r1 (R1-m5): crear un pedido de compra (POST /compras/pedidos) es de ADMIN y COMPRAS (accesoCompras.cambiarPec).
+  const accesoPec = accesoCompras(useRolActual());
   // ── B4 T18, bloque 1: la carga del servidor (TABLA-inventario punto 6; R5, R10, RP53; D40) ──
   // El estado ÚNICO de la pantalla: las pestañas, las tarjetas pulsables, la búsqueda, la tabla y el tablero despachan a él;
   // el modo (Lista o Kanban) se guarda en vista:inventario.abastecimiento. stock-tabla no tiene `vista`: la pestaña viaja como
@@ -223,9 +227,11 @@ export default function AbastecimientoPage() {
               <span className="block font-semibold text-red-800">Solo cuenta las referencias con control de inventario.</span>
             </p>
           </div>
+          {accesoPec.cambiarPec && (
           <Link href="/dashboard/compras/pedidos" className={`bg-red-700 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-red-800 ${FOCOS.indigo}`}>
             Crear PEC Urgente
           </Link>
+          )}
         </div>
       )}
 
@@ -239,10 +245,12 @@ export default function AbastecimientoPage() {
                 className={`flex items-center gap-1.5 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-bold text-xs shadow-sm transition-colors ${FOCOS.indigo}`}>
                 <RefreshCw size={13} aria-hidden="true" className={actualizando ? 'animate-spin' : ''} /> Actualizar
               </button>
+              {accesoPec.cambiarPec && (
               <Link href="/dashboard/compras/pedidos"
                 className={`bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-3 rounded-xl font-bold shadow-md flex items-center gap-2 ${FOCOS.indigo}`}>
                 <ShoppingCart size={18} aria-hidden="true" /> Crear Pedido de Compra
               </Link>
+              )}
             </div>
           )} />
 

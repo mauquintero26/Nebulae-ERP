@@ -239,7 +239,10 @@ export default function CampanasPage() {
               <button onClick={loadCampanas} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 font-semibold text-sm">
                 <RefreshCw size={13} className={loading?'animate-spin':''}/> Actualizar
               </button>
+              {/* f4 r1 (R1-m2): crear es de quien ve Marketing (ADMIN y ASESOR); nada mientras el rol no se sabe. */}
+              {acceso.ver && (
               <Button color="emerald" icon={Plus} onClick={()=>{setForm({nombre:'',tipo:'OMNICANAL',estado:'BORRADOR',fecha_inicio:'',fecha_fin:'',presupuesto_cop:0,objetivo:'',canales:[],descripcion:'',codigo_descuento:'',descuento_pct:0});setEditMode(false);setShowForm(true);}}>Nueva Campaña</Button>
+              )}
             </div>
           )} />
       </div>

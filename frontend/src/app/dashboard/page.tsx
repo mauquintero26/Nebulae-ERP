@@ -9,7 +9,7 @@ import {
 import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
 import { FOCOS, RESERVA_BOTON_IA } from '@/lib/design-system';
-import { avisoDeFuente } from '@/lib/avisos';
+import { avisoDeFuente, ofreceReintentar } from '@/lib/avisos';
 import { accesoCopilot } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
 import { AvisoDeError } from '@/components/ui/AvisoFuente';
@@ -203,7 +203,8 @@ export default function DashboardGeneral() {
                 : ventas.error
                   ? 'RADAR OPERATIVO: no se pudo calcular el estado de los pedidos.'
                   : 'RADAR OPERATIVO: calculando…'}
-              {ventas.error ? (
+              {/* f4 r1 (R1-m1): un 403 no se reintenta (ofreceReintentar). */}
+              {ofreceReintentar(ventas.error) ? (
                 <button type="button" onClick={ventas.recargar}
                   className={`ml-2 rounded font-bold underline hover:text-white ${FOCOS.blanco}`}>
                   Reintentar

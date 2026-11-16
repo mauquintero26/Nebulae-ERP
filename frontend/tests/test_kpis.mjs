@@ -1130,7 +1130,8 @@ console.log('--- TEST 26-f4 (B4 T24 f4: F7, F102 y F103): la marca solo con dato
   // F102 W3: el then de useFuente guarda la marca con los datos.
   assert.ok(dash.includes('.then((r: unknown) => setLlego({ vuelta: clave, datos: datosDeRespuesta(r) as T, error: null, marca }))'));
   // F102 W2: el «Reintentar» del radar, en la rama de ventas.error, llama a ventas.recargar.
-  assert.match(dash, /\{ventas\.error \? \(\s*<button type="button" onClick=\{ventas\.recargar\}\s+className=\{`ml-2 rounded font-bold underline hover:text-white \$\{FOCOS\.blanco\}`\}>\s*Reintentar\s*<\/button>\s*\) : null\}/);
+  // f4 r1 (R1-m1; D27): solo si ofreceReintentar(ventas.error) (un 403 no se reintenta; lo fija TEST T24-f4r1b).
+  assert.match(dash, /\{ofreceReintentar\(ventas\.error\) \? \(\s*<button type="button" onClick=\{ventas\.recargar\}\s+className=\{`ml-2 rounded font-bold underline hover:text-white \$\{FOCOS\.blanco\}`\}>\s*Reintentar\s*<\/button>\s*\) : null\}/);
   // F102 W1b/W1c (con F46: la pieza común): el botón completo, type=button, con onReintentar y el texto «Reintentar» dentro.
   const aviso = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(aviso, /\{aviso\.reintentar && \(\s*<button ref=\{refBoton\} type="button" onClick=\{reintentando \? undefined : onReintentar\}[^>]*>\s*\{reintentando \? 'Reintentando…' : 'Reintentar'\}\s*<\/button>\s*\)\}/);
@@ -2082,6 +2083,37 @@ console.log('--- TEST T24-f4r1 (B4 T24 f4 r1: I1 y R1-m3): la Agenda de clientes
   const carga = c.slice(c.indexOf('const fetchCustomers = async'), c.indexOf('const fetchProfile = async'));
   assert.match(carga, /setCargandoClientes\(true\);/);
   assert.match(carga, /\} finally \{\s*setCargandoClientes\(false\);/);
+}
+
+console.log('--- TEST T24-f4r1b (B4 T24 f4 r1: R1-m1, R1-m2 y R1-m5): Reintentar, Nueva Campaña y Crear Pedido de Compra, solo a quien puede ---');
+{
+  const leer = (ruta) => readFileSync(new URL(ruta, import.meta.url), 'utf8').replace(/^﻿/, '').replace(/\r\n/g, '\n');
+  const sinComentarios = (s) => s.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // R1-m1: el «Reintentar» del radar sale solo con ofreceReintentar(ventas.error) (lib/avisos.js; un 403 no se reintenta: casos en
+  // test_avisos). El botón completo lo fija F102 W2 (TEST 26-f4, arriba).
+  const dash = sinComentarios(leer('../src/app/dashboard/page.tsx'));
+  assert.match(dash, /import \{[^}]*\bofreceReintentar\b[^}]*\} from '@\/lib\/avisos';/, 'R1-m1: el Dashboard importa ofreceReintentar');
+  assert.ok(!/\{ventas\.error \? \(\s*<button/.test(dash), 'R1-m1: el radar no ofrece Reintentar con cualquier error');
+  assert.equal((dash.match(/onClick=\{ventas\.recargar\}/g) ?? []).length, 1, 'R1-m1: un solo Reintentar del radar');
+  // R1-m2: «Nueva Campaña» solo con acceso.ver (accesoMarketing: false mientras !listo y para quien no ve Marketing; casos en test_roles).
+  const camp = sinComentarios(leer('../src/app/dashboard/marketing/campanas/page.tsx'));
+  const iNueva = camp.indexOf('<Button color="emerald" icon={Plus}');
+  assert.ok(iNueva > 0, 'R1-m2: el botón Nueva Campaña');
+  assert.equal(camp.split('icon={Plus}').length - 1, 1, 'R1-m2: un solo botón de crear');
+  assert.match(camp.slice(Math.max(0, iNueva - 80), iNueva), /\{acceso\.ver && \(\s*$/, 'R1-m2: Nueva Campaña dentro de acceso.ver');
+  // R1-m5: «Crear Pedido de Compra» (POST /compras/pedidos es de ADMIN y COMPRAS) solo con accesoCompras(rol).cambiarPec.
+  const abas = sinComentarios(leer('../src/app/dashboard/inventario/abastecimiento/page.tsx'));
+  assert.match(abas, /import \{[^}]*\baccesoCompras\b[^}]*\} from '@\/lib\/roles';/, 'R1-m5: accesoCompras');
+  assert.match(abas, /import \{ useRolActual \} from '@\/components\/ui\/useRolActual';/, 'R1-m5: useRolActual');
+  assert.match(abas, /const accesoPec = accesoCompras\(useRolActual\(\)\);/, 'R1-m5: el acceso del rol');
+  assert.equal((abas.match(/accesoCompras\(useRolActual\(\)\)/g) ?? []).length, 1, 'R1-m5: el rol se lee una vez, en la página');
+  // El botón del encabezado y, con la misma regla, «Crear PEC Urgente» de la alerta de agotados (los dos en la página).
+  for (const [ancla, texto] of [['<Link href="/dashboard/compras/pedidos"\n', 'Crear Pedido de Compra'],
+    ['<Link href="/dashboard/compras/pedidos" className={`bg-red-700', 'Crear PEC Urgente']]) {
+    const i = abas.indexOf(ancla);
+    assert.ok(i > 0 && abas.indexOf(texto, i) > i, `R1-m5: el enlace ${texto}`);
+    assert.match(abas.slice(Math.max(0, i - 80), i), /\{accesoPec\.cambiarPec && \(\s*$/, `R1-m5: ${texto} dentro de cambiarPec`);
+  }
 }
 
 console.log('--- TEST T24-d (B4 T24: F3 y F4): etiquetaKpi con tiene() y el comentario del redondeo ---');
