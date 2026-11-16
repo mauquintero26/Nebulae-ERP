@@ -2563,6 +2563,7 @@ console.log('--- TEST 44 (B4 T18, TABLA-inventario punto 8; KANBAN-resto; RP54):
   // B4 T24 f4 (F39; D27): el filtro y la página cambian en el mismo evento por la acción {tipo: 'filtro'} del estado único.
   trae(k, 'for (const accion of accionesDeFiltros(cambio)) despachar(accion);', 'cambiarFiltros cambia el filtro y la página a la vez');
   assert.equal(k.split('accionesDeFiltros(').length - 1, 1, 'solo cambiarFiltros escribe los filtros');
+  assert.ok(!/despachar\(\{\s*tipo: 'filtros?'/.test(k), 'nadie despacha un filtro por fuera de cambiarFiltros (f4 r1, R2-m1)');
   assert.ok(!/setPage|useState\(0\)|pageSize/.test(k), 'ya no hay una página aparte del estado único');
   assert.equal(k.split('useEffect(').length - 1, 2, 'dos efectos: la búsqueda del SKU y salir de la pantalla completa (ninguno pide la lista)');
   for (const filtro of ['bodega', 'direccion', 'propietario', 'desde', 'hasta']) {
@@ -2668,6 +2669,7 @@ console.log('--- TEST 45 (B4 T18, TABLA-inventario punto 7; KANBAN-resto; RP47 a
   // B4 T24 f4 (F39; D27): por la acción {tipo: 'filtro'} del estado único (el filtro y la página, en el mismo evento).
   trae(p, 'for (const accion of accionesDeFiltros(cambio)) despachar(accion);', 'cambiarFiltros cambia el filtro y la página a la vez');
   assert.equal(p.split('accionesDeFiltros(').length - 1, 1, 'solo cambiarFiltros escribe los filtros');
+  assert.ok(!/despachar\(\{\s*tipo: 'filtros?'/.test(p), 'nadie despacha un filtro por fuera de cambiarFiltros (f4 r1, R2-m1)');
   // Lo de B3-T8 en la ficha se conserva: el selector de IVA, el guardado y la insignia de la tabla.
   trae(p, 'id="producto-tarifa-iva"', 'B3-T8: el selector de IVA de la ficha');
   trae(p, '{TARIFAS_IVA.map(t => <option key={t.codigo} value={t.codigo}>{t.etiqueta}</option>)}', 'B3-T8: las tarifas');

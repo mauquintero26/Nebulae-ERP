@@ -1991,6 +1991,8 @@ console.log('--- TEST T24-f4e (B4 T24 f4: F111, FINAL-m24, Campañas a 375 y F11
   assert.deepEqual(barraPresupuesto('cargando', null, 1000000), { texto: '—', ancho: 0, gris: true });
   assert.deepEqual(barraPresupuesto('cargando', 400000, 1000000), { texto: '—', ancho: 0, gris: true }, 'lo de otra campaña no se ve');
   assert.deepEqual(barraPresupuesto('error', null, 1000000), { texto: '— / $1.000.000', ancho: 0, gris: true }, 'GET …/leads falló: sin $0');
+  // f4 r1 (R2-m5): con error, lo que hubiera de antes tampoco se ve como si fuera de ahora.
+  assert.deepEqual(barraPresupuesto('error', 400000, 1000000), { texto: '— / $1.000.000', ancho: 0, gris: true }, 'con error, el valor viejo no se pinta');
   assert.deepEqual(barraPresupuesto('listo', null, 1000000), { texto: '— / $1.000.000', ancho: 0, gris: true }, 'valor null: «—»');
   assert.deepEqual(barraPresupuesto('listo', 400000, 1000000), { texto: '$400.000 / $1.000.000', ancho: 40, gris: false });
   assert.deepEqual(barraPresupuesto('actualizando', 400000, 1000000), { texto: '$400.000 / $1.000.000', ancho: 40, gris: false }, 'la recarga conserva lo último');
