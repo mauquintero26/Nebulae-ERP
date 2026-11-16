@@ -555,7 +555,7 @@ export default function ListaComprasPage() {
 
         {/* B4 T16B (KPI-compras punto 9; R7, R12): las 4 tarjetas de /compras/lista-compras/stats: mientras cargan, barras
             grises (nunca 0); con error, «—». Cada una abre su pestaña. */}
-        <FranjaKpis estado={estadoKpis} titulo="Lista de compras">
+        <FranjaKpis estado={estadoKpis} titulo="Lista de compras" idFoco="franja-lista-compras">
           <TarjetaKpi kpi="lista_pendientes" valor={tarjetas?.pendientes.valor ?? null}
             activo={vistaActiva === 'PENDIENTE'} onClick={() => elegirVista('PENDIENTE')} />
           <TarjetaKpi kpi="lista_en_pedido" valor={tarjetas?.en_pedido.valor ?? null}
@@ -566,8 +566,8 @@ export default function ListaComprasPage() {
             activo={vistaActiva === 'todos'} onClick={() => elegirVista('todos')} />
         </FranjaKpis>
         {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
-        {/* r2 (m36 completo): montado siempre (regionFoco): si el reintento sale bien o da un 403, el foco va a su región, nunca al <body>. */}
-        <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de la lista de compras" onReintentar={stats.recargar} acento="purple" reintentando={stats.cargando} regionFoco="Lista de compras" />
+        {/* r2 (m36 completo): montado siempre (destinoFoco, el id de la franja): si el reintento sale bien o da un 403, el foco va a la franja, nunca al <body>. */}
+        <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de la lista de compras" onReintentar={stats.recargar} acento="purple" reintentando={stats.cargando} destinoFoco="franja-lista-compras" />
 
         {/* B4 T16B (TABLA-compras punto 10, KANBAN-logistica punto 5): la barra y la tabla estándar en el servidor, o el tablero
             solo para ver en modo cliente, con el MISMO estado (búsqueda y estados) y los mismos filtros extra. En Kanban las

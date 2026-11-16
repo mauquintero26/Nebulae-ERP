@@ -499,7 +499,7 @@ export default function TransitoPage() {
 
         {/* B4 T16A (KPI-compras punto 7; R7, R12): las 4 tarjetas de /compras/stats (todos los PEC) y el avance de la página:
             mientras cargan, barras grises (nunca 0); con error, «—». Con entrega vencida es el filtro «Con atraso». */}
-        <FranjaKpis estado={estadoKpis} titulo="Mercancía en tránsito">
+        <FranjaKpis estado={estadoKpis} titulo="Mercancía en tránsito" idFoco="franja-transito">
           <TarjetaKpi kpi="pec_activos" valor={tarjetas.activos.valor} ayuda={tarjetas.activos.ayuda} />
           <TarjetaKpi kpi="pec_vencidos" valor={tarjetas.vencidos.valor} tono={tarjetas.vencidos.tono}
             activo={filtroSemaforo === 'atrasados'} onClick={alternarVencidos} />
@@ -507,8 +507,8 @@ export default function TransitoPage() {
           <TarjetaKpi kpi="pec_monto_por_recibir" valor={tarjetas.monto_por_recibir.valor} />
         </FranjaKpis>
         {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
-        {/* r2 (m36 completo): montado siempre (regionFoco): si el reintento sale bien o da un 403, el foco va a su región, nunca al <body>. */}
-        <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="blue" reintentando={stats.cargando} regionFoco="Mercancía en tránsito" />
+        {/* r2 (m36 completo): montado siempre (destinoFoco, el id de la franja): si el reintento sale bien o da un 403, el foco va a la franja, nunca al <body>. */}
+        <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="blue" reintentando={stats.cargando} destinoFoco="franja-transito" />
 
         {/* B4 T16A (TABLA-compras punto 8, KANBAN-logistica punto 2): la barra y la tabla estándar en el servidor, o el tablero
             de etapas en modo cliente, con el MISMO estado (búsqueda, estados y «Solo vencidos»). */}

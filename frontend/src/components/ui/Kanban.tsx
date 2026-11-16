@@ -588,6 +588,8 @@ export type DatosTarjetaKanban = {
   estado?: EstadoTarjetaKanban | null;
   /** Máximo 3. */
   chips?: ReadonlyArray<ChipTarjetaKanban> | null;
+  /** B4 T24 f4 (m16 de f3 r2, aditivo): una línea de texto que hace salto (un motivo largo que un chip truncaría). */
+  nota?: string | null;
   tiempo?: string | null;
   /** El borde rose. B4 T24 f3 (FINAL-m26): nunca va solo: la tarjeta lleva además un chip de texto que dice por qué (el color nunca va solo). */
   atrasada?: boolean;
@@ -671,7 +673,7 @@ function InsigniaEstado({ estado }: { estado: EstadoTarjetaKanban }) {
  * insignia de estado; borde rose si está atrasada.
  */
 export function TarjetaKanban({
-  numero, tipo, titulo, subtitulo, monto, estado, chips, tiempo, atrasada = false, accionPrincipal, menu, onAbrir,
+  numero, tipo, titulo, subtitulo, monto, estado, chips, nota, tiempo, atrasada = false, accionPrincipal, menu, onAbrir,
   esperando = false,
 }: PropsTarjetaKanban) {
   const visibles = (chips ?? []).slice(0, MAX_CHIPS);
@@ -725,6 +727,7 @@ export function TarjetaKanban({
           ))}
         </div>
       )}
+      {nota && <p className="mt-2 whitespace-normal break-words text-[11px] font-semibold leading-snug text-slate-600">{nota}</p>}
       {accionPrincipal && (
         <div className="mt-2 truncate">
           {accionPrincipal.href ? (

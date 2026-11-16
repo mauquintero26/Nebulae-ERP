@@ -432,10 +432,11 @@ console.log('--- TEST T24-c (B4 T24, F46): un solo aviso de fuente — el texto,
   // B4 T24 f3 r1 (m36, D27, aditivo): AvisoDeError recibe `reintentando`: conserva el último error mientras se reintenta («Reintentando…»).
   // r2 (m36, D27, aditivo): AvisoDeError recibe también regionFoco (la región estable del foco).
   // r3 (C1, D27): regionFoco es el título de la franja (destino visible); qué error se ve lo decide avisoVisible (lib).
-  assert.match(pieza, /export function AvisoDeError\(\{ error, fallo, onReintentar, acento, reintentando = false, regionFoco \}: \{/);
-  assert.match(pieza, /const \{ visto, olvidar \} = avisoVisible\(\{ error, ultimo, reintentando \}\);\s*if \(error != null && error !== ultimo\) setUltimo\(error\);\s*else if \(olvidar\) setUltimo\(null\);/);
+  // B4 T24 f4 (m2 + m10 de f3 r3; D27): la prop se llama destinoFoco (el id del destino); m8: el último va con su cuenta.
+  assert.match(pieza, /export function AvisoDeError\(\{ error, fallo, onReintentar, acento, reintentando = false, destinoFoco \}: \{/);
+  assert.match(pieza, /const \{ visto, olvidar \} = avisoVisible\(\{ error, ultimo, reintentando, cuenta, cuentaDelUltimo \}\);\s*if \(error != null && \(error !== ultimo \|\| cuenta !== cuentaDelUltimo\)\) \{\s*setUltimo\(error\);\s*setCuentaDelUltimo\(cuenta\);\s*\}\s*else if \(olvidar\) setUltimo\(null\);/);
   assert.match(pieza, /<AvisoFuente aviso=\{aviso\} onReintentar=\{onReintentar\} acento=\{acento\} reintentando=\{reintentando\}/);
-  assert.match(pieza, /alSoltarBoton=\{regionFoco \? alSoltarBoton : undefined\}/, 'sin regionFoco, como antes (aditivo)');
+  assert.match(pieza, /alSoltarBoton=\{destinoFoco \? alSoltarBoton : undefined\}/, 'sin destinoFoco, como antes (aditivo)');
   assert.match(pieza, /\$\{FOCOS\[acento\]\}/);
   // AvisoReintentar (Inventario) delega en ella: con un 403, el aviso de permiso sin «Reintentar».
   const piezas = leer('app/dashboard/inventario/piezas-inventario.tsx');

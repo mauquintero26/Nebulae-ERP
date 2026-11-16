@@ -1037,7 +1037,12 @@ export function textoFalloConteo(nombre, guardadas) {
  */
 export function abrirEnlaceProducto({ marca, idDeLaUrl, skuDeLaUrl, pedir, abrir, avisar, alError }) {
   const pedido = pedirEnlaceProducto(marca.current, idDeLaUrl, skuDeLaUrl);
-  if (pedido === null) return () => {};
+  if (pedido === null) {
+    // B4 T24 f4 (m12 de f3 r2): nada que pedir (el enlace salió de la URL, o ya se atendió): se cierra la vuelta, para que un reintento
+    // en camino no deje «Reintentando…» pegado ni el aviso de un enlace que ya no está.
+    alError(null);
+    return () => {};
+  }
   const control = new AbortController();
   pedir(pedido.ruta, { signal: control.signal })
     .then((r) => {
@@ -1089,11 +1094,13 @@ export function podarSeleccion(seleccion, pedidosVenta) {
 
 /**
  * B4 T24 f3 r2 (m21): «Crear casillero» en el alta de un PEC: se ofrece (un botón; ya no se abre solo) cuando una búsqueda con texto
- * terminó sin resultados y no hay uno elegido.
- * @param {{texto: string, resultados: unknown[] | null, elegido: unknown}} entrada  resultados null: la búsqueda no terminó
+ * terminó sin resultados y no hay uno elegido. B4 T24 f4 (m7 de f3 r2 = m20, aditivo): `buscado` es el último texto que se buscó; si
+ * viene y no es el de la caja, la búsqueda de ESTE texto no terminó (la primera letra, antes de buscar, no ofrece el botón).
+ * @param {{texto: string, buscado?: string, resultados: unknown[] | null, elegido: unknown}} entrada  resultados null: no terminó
  * @returns {boolean}
  */
-export function ofrecerCrearCasillero({ texto, resultados, elegido }) {
+export function ofrecerCrearCasillero({ texto, buscado, resultados, elegido }) {
+  if (buscado !== undefined && buscado !== texto) return false;
   return Boolean(String(texto ?? '').trim()) && Array.isArray(resultados) && resultados.length === 0 && !elegido;
 }
 
@@ -1225,7 +1232,7 @@ export function peticionesConteo(servidor, locales) {
  * @param {any} r
  * @param {{contar?: boolean, motivo?: string | null}} [opciones]
  * @returns {{numero: string, tipo: 'ENINV', titulo: string, subtitulo: string, monto: null, estado: Readonly<InfoEstado>,
- *   chips: {texto: string, tono: string}[], tiempo: string, atrasada: boolean,
+ *   chips: {texto: string, tono: string}[], nota: string | null, tiempo: string, atrasada: boolean,
  *   accionPrincipal: {texto: string, href: string, tono: string} | null}}
  */
 export function tarjetaRecepcion(r, { contar = true, motivo = null } = {}) {
@@ -1241,11 +1248,10 @@ export function tarjetaRecepcion(r, { contar = true, motivo = null } = {}) {
     subtitulo: pecDeRecepcion(r),
     monto: null,
     estado: infoEstadoRecepcion(r?.estado),
-    // r2 (m2, aditivo): sin «Contar y confirmar», el motivo (el texto de confirmarRecepcion) va como un chip.
-    chips: [
-      ...(atrasada ? [{ texto: `Retraso ${retraso} ${retraso === 1 ? 'día' : 'días'}`, tono: 'rose' }] : []),
-      ...(porContar && !contar && textoLimpio(motivo) ? [{ texto: textoLimpio(motivo), tono: 'slate' }] : []),
-    ],
+    chips: atrasada ? [{ texto: `Retraso ${retraso} ${retraso === 1 ? 'día' : 'días'}`, tono: 'rose' }] : [],
+    // r2 (m2, aditivo): sin «Contar y confirmar», el motivo (el texto de confirmarRecepcion). B4 T24 f4 (m16 de f3 r2): en una línea que
+    // hace salto (`nota` de TarjetaKanban), no en un chip (truncate a 10 px cortaba la mitad del texto).
+    nota: porContar && !contar ? textoLimpio(motivo) : null,
     tiempo: dia ? `${bodega} · ${dia}` : bodega,
     atrasada,
     accionPrincipal: porContar && contar && r?.id != null

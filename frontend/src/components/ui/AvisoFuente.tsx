@@ -4,6 +4,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { avisoDeFuente, avisoVisible, focoTrasReintento } from '@/lib/avisos';
 import { FOCOS } from '@/lib/design-system';
 import type { AcentoFoco } from '@/lib/design-system';
+import { usuarioDeLaSesion } from '@/components/tabla/usuarioDeLaSesion';
 
 /**
  * B4 T23B: el aviso de una fuente de una pantalla que falló (lib/avisos.js avisoDeFuente): una falla lleva el detalle del servidor y
@@ -42,19 +43,26 @@ export function AvisoFuente({ aviso, onReintentar, acento = 'rose', reintentando
  * B4 T24 (F46): el aviso de una fuente a partir de su error y del texto de la falla (avisoDeFuente → AvisoFuente); sin error, nada. Es
  * la pieza que usan el Dashboard y AvisoReintentar de Inventario: un 403 nunca ofrece «Reintentar».
  */
-export function AvisoDeError({ error, fallo, onReintentar, acento, reintentando = false, regionFoco }: {
+export function AvisoDeError({ error, fallo, onReintentar, acento, reintentando = false, destinoFoco }: {
   error: unknown; fallo: string; onReintentar: () => void; acento?: AcentoFoco;
   /** B4 T24 f3 r1 (m36, aditivo): true mientras se reintenta. El aviso sigue con el último error y «Reintentando…» (aria-disabled). */
   reintentando?: boolean;
-  /** B4 T24 f3 r2 y r3 (m36, C del ruling, aditivo): el título (aria-label) de la franja de tarjetas: el destino VISIBLE del foco.
+  /** B4 T24 f3 r2 y r3 (m36, C del ruling, aditivo): el destino VISIBLE del foco. B4 T24 f4 (m2 + m10 de f3 r3): es el `id` del destino
+   * (el idFoco de la FranjaKpis de la pantalla, o la lista de Productos), no el texto de su aria-label, y la prop cambió de nombre.
    * Si el botón «Reintentar» se va con el foco (el reintento salió bien, o un 403), el foco va ahí (focoTrasReintento), nunca al <body>.
    * La pantalla pinta el aviso sin condición (que siga montado). Sin la prop, como antes. */
-  regionFoco?: string;
+  destinoFoco?: string;
 }) {
   const [ultimo, setUltimo] = useState<unknown>(null);
+  // B4 T24 f4 (m8 de f3 r3): el último va con la cuenta con que se vio: si la sesión pasa a otra, no se pinta mientras carga la nueva.
+  const cuenta = usuarioDeLaSesion();
+  const [cuentaDelUltimo, setCuentaDelUltimo] = useState<number | null>(null);
   // r3 (C1 = C3): qué se ve lo decide avisoVisible (lib); al terminar un reintento bueno, el último se olvida.
-  const { visto, olvidar } = avisoVisible({ error, ultimo, reintentando });
-  if (error != null && error !== ultimo) setUltimo(error);
+  const { visto, olvidar } = avisoVisible({ error, ultimo, reintentando, cuenta, cuentaDelUltimo });
+  if (error != null && (error !== ultimo || cuenta !== cuentaDelUltimo)) {
+    setUltimo(error);
+    setCuentaDelUltimo(cuenta);
+  }
   else if (olvidar) setUltimo(null);
   const aviso = avisoDeFuente(visto, fallo);
   const hayBoton = Boolean(aviso?.reintentar);
@@ -63,12 +71,12 @@ export function AvisoDeError({ error, fallo, onReintentar, acento, reintentando 
   const alSoltarBoton = useCallback((teniaFoco: boolean) => {
     // Se decide después del commit (el aviso nuevo ya pintado): si el botón volvió (otro error), el foco se queda en él.
     queueMicrotask(() => {
-      if (focoTrasReintento({ teniaFoco, hayBoton: ultimoHayBoton.current }) === 'destino' && document.activeElement === document.body && regionFoco) {
-        document.querySelector<HTMLElement>(`section[aria-label="${regionFoco}"]`)?.focus();
+      if (focoTrasReintento({ teniaFoco, hayBoton: ultimoHayBoton.current }) === 'destino' && document.activeElement === document.body && destinoFoco) {
+        document.getElementById(destinoFoco)?.focus();
       }
     });
-  }, [regionFoco]);
+  }, [destinoFoco]);
   // r2 (m36, un solo contrato): `reintentando` llega tal cual (useResumen limpia el error al reintentar; estadoReintento lo conserva).
   return aviso ? <AvisoFuente aviso={aviso} onReintentar={onReintentar} acento={acento} reintentando={reintentando}
-    alSoltarBoton={regionFoco ? alSoltarBoton : undefined} /> : null;
+    alSoltarBoton={destinoFoco ? alSoltarBoton : undefined} /> : null;
 }

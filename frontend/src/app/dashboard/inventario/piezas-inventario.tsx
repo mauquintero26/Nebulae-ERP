@@ -110,7 +110,7 @@ export function CeldaEstadoExistencia({ f }: { f: FilaExistencia }) {
  * SOLO esa fuente), en lugar de dejar solo «—» en las tarjetas. B4 T24 (F46): delega en la pieza común (AvisoDeError → AvisoFuente),
  * así que con un 403 dice el permiso sin «Reintentar».
  */
-export function AvisoReintentar(props: React.ComponentProps<typeof AvisoDeError>) { // r2 (m36): el mismo contrato (reintentando, regionFoco)
+export function AvisoReintentar(props: React.ComponentProps<typeof AvisoDeError>) { // r2 (m36): el mismo contrato (reintentando, destinoFoco: f4)
   return <AvisoDeError {...props} />;
 }
 

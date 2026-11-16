@@ -400,14 +400,14 @@ export default function EntregasPage() {
         {/* B4 T19 (KPI-inventario punto 8; R7, R12): las 3 tarjetas. «Pedidos en curso» es el mismo número del Hub de Ventas; «Saldo antes
             de despachar», el saldo real de cada pedido según su forma de pago; «Pedidos despachados», el conteo de su pestaña. Mientras
             cargan, barras grises (nunca 0); con error, «—» y «Reintentar». La nota reemplaza la tarjeta «Protocolo 60/40». */}
-        <FranjaKpis estado={estadoStats} titulo="Entregas" nota={NOTA_ENTREGAS}>
+        <FranjaKpis estado={estadoStats} titulo="Entregas" idFoco="franja-entregas" nota={NOTA_ENTREGAS}>
           <TarjetaKpi kpi="pven_en_curso" valor={tarjetas.en_curso.valor} ayuda="Por despachar" />
           <TarjetaKpi kpi="ent_saldo" valor={tarjetas.saldo.valor} ayuda="Según la forma de pago de cada pedido" />
           <TarjetaKpi kpi="ent_despachados" valor={tarjetas.despachados.valor} estado={estadoConteos}
             activo={vistaActiva === vistaDeTarjetaEntrega('ent_despachados')} onClick={elegirDespachados} />
         </FranjaKpis>
         {/* r3 (C2, m36): montado siempre, con reintentando y el destino del foco (la franja). */}
-        <AvisoReintentar error={errorStats} fallo="No se pudieron cargar los indicadores de pedidos" onReintentar={stats.recargar} reintentando={stats.cargando} regionFoco="Entregas" />
+        <AvisoReintentar error={errorStats} fallo="No se pudieron cargar los indicadores de pedidos" onReintentar={stats.recargar} reintentando={stats.cargando} destinoFoco="franja-entregas" />
         {errorConteos != null && (
           <AvisoReintentar error={errorConteos} fallo="No se pudieron contar los pedidos de cada pestaña" onReintentar={() => setVueltaConteos((n) => n + 1)} />
         )}

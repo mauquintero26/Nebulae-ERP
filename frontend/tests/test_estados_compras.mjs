@@ -1378,7 +1378,7 @@ console.log('--- TEST 32 (B4 T16A): Recepciones (compras/recepciones/page.tsx) y
   assert.match(pag, /<ClipboardList size=\{14\} aria-hidden="true" \/> Abrir conteo/);
   // Las tarjetas (KPI-compras punto 8) y la nota; la franja (FLUJO-compras punto 9) sin semáforo.
   for (const kpi of ['rec_por_confirmar', 'rec_confirmadas', 'pec_en_transito']) assert.match(pag, new RegExp(`<TarjetaKpi kpi="${kpi}"`), kpi);
-  assert.match(pag, /<FranjaKpis estado=\{estadoKpis\} titulo="Recepciones" nota=\{NOTA_RECEPCIONES\}>/);
+  assert.match(pag, /<FranjaKpis estado=\{estadoKpis\} titulo="Recepciones" idFoco="franja-recepciones-compras" nota=\{NOTA_RECEPCIONES\}>/); // f4 (D27: idFoco)
   // B4 T24 f3 (F45, D27): los datos de useResumen (stats.datos; null mientras carga la primera vez o con error).
   assert.match(pag, /tarjetasRecepciones\(stats\.datos\)/);
   assert.match(pag, /activo=\{vistaActiva === 'por_confirmar'\} onClick=\{\(\) => elegirVista\('por_confirmar'\)\}/);
@@ -2475,14 +2475,14 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   // m11: cuando una fuente falla, lo dice y ofrece «Reintentar» (solo esa fuente).
   // B4 T24 f3 (F45, D27): «Reintentar» vuelve a pedir solo esa fuente con el hook (stats.recargar / compras.recargar).
   // r3 (C2, D27): montado siempre, con reintentando y el destino del foco (m36).
-  trae(abasto, '<AvisoReintentar error={stats.error} fallo="No se pudieron cargar los indicadores de existencias" onReintentar={stats.recargar} reintentando={stats.cargando} regionFoco="Abastecimiento" />', 'Abastecimiento: stats caído, con Reintentar');
-  trae(abasto, '<AvisoReintentar error={compras.error} fallo="No se pudieron cargar los pedidos de compra activos" onReintentar={compras.recargar} reintentando={compras.cargando} regionFoco="Abastecimiento" />', 'Abastecimiento: compras caído, con Reintentar');
+  trae(abasto, '<AvisoReintentar error={stats.error} fallo="No se pudieron cargar los indicadores de existencias" onReintentar={stats.recargar} reintentando={stats.cargando} destinoFoco="franja-abastecimiento" />', 'Abastecimiento: stats caído, con Reintentar');
+  trae(abasto, '<AvisoReintentar error={compras.error} fallo="No se pudieron cargar los pedidos de compra activos" onReintentar={compras.recargar} reintentando={compras.cargando} destinoFoco="franja-abastecimiento" />', 'Abastecimiento: compras caído, con Reintentar');
   // B4 T24 f3 (F92, D27): un solo «Reintentar» para /inventory/stats (el del aviso bajo las tarjetas); la alerta «sin dato» remite a él.
   noTrae(abasto, "onClick={() => setVueltaStats((n) => n + 1)} className={`rounded font-bold underline ${FOCOS.indigo}`}>Reintentar</button>", 'Abastecimiento: la alerta «sin dato» ya no repite Reintentar');
   noTrae(abasto, 'Las tarjetas dicen cuál indicador falló.', 'Abastecimiento: la alerta no repite el aviso');
   // r1 (m11, m21, m37; D27): el aviso va SOBRE las tarjetas, y con los indicadores bien no se le culpa (textoAlertaSinDato).
   trae(abasto, "<p className=\"mt-1 text-xs font-semibold text-slate-600\">{textoAlertaSinDato(estadoKpis === 'error')}</p>", 'Abastecimiento: la alerta remite al aviso');
-  trae(stock, '<AvisoReintentar error={stats.error} fallo="No se pudieron cargar las tarjetas de existencias" onReintentar={stats.recargar} reintentando={stats.cargando} regionFoco="Existencias" />', 'Stock: stats caído, con Reintentar'); // r3 (C2, D27)
+  trae(stock, '<AvisoReintentar error={stats.error} fallo="No se pudieron cargar las tarjetas de existencias" onReintentar={stats.recargar} reintentando={stats.cargando} destinoFoco="franja-stock" />', 'Stock: stats caído, con Reintentar'); // r3 (C2, D27)
   // m24: la insignia «Reservado» de BASE vuelve a la fila de Stock (hay unidades en bodega y nada disponible).
   trae(stock, 'celda: (f) => <CeldaEstadoExistencia f={f} /> },', 'Stock: el estado lleva «Reservado»');
   trae(stock, "existenciaReservada(f) ? ' · Reservado: hay unidades en bodega, todas comprometidas' : ''", 'Stock: el title dice Reservado');
@@ -2732,7 +2732,8 @@ console.log('--- TEST 45 (B4 T18, TABLA-inventario punto 7; KANBAN-resto; RP47 a
   assert.match(efecto, /alError: \(error\) => setEnlace\(\{ vuelta: vueltaEnlace, error \}\),/);
   trae(p, 'const cargaEnlace = estadoReintento(enlace, vueltaEnlace);');
   trae(p, '<AvisoDeError error={cargaEnlace.error} fallo="No se pudo abrir el producto del enlace" acento="purple" reintentando={cargaEnlace.reintentando}', 'el error del enlace, a la vista');
-  trae(p, 'onReintentar={() => setVueltaEnlace((n) => n + 1)} />', 'Reintentar vuelve a pedir (la marca sigue libre); r3: el éxito lleva el foco al título de la ficha');
+  // f4 (m3 = m9 de f3 r3; D27): y un 403 o el «no existe» llevan el foco a la lista (destinoFoco).
+  trae(p, 'onReintentar={() => setVueltaEnlace((n) => n + 1)} destinoFoco="productos-lista" />', 'Reintentar vuelve a pedir (la marca sigue libre); r3: el éxito lleva el foco al título de la ficha');
   trae(p, "if (searchParams.get('id') || searchParams.get('sku')) router.replace(pathname);", 'cerrar la ficha limpia el enlace (id y sku)');
   // El tablero solo para ver, por categoría (12 como máximo, con su aviso), en modo servidor.
   const hook = bloqueDesde(p, 'useTableroKanban<Producto>(');
@@ -3109,7 +3110,13 @@ console.log('--- B4 T24 (FINAL-m10, FINAL-m31 y FINAL-m38): los tableros y las a
   // r1 (m2, m7): el resto de las escrituras del PEC solo con el rol de su require_roles (erp_compras.py: PATCH /pedidos/{id}/tracking,
   // PATCH /pedidos/{id}, POST /pedidos/{id}/recepcionar, PUT /tracking-config/{tipo} y POST /pedidos, todos de ADMIN y COMPRAS).
   assert.match(pedidos, /function TrackingPanel\(\{pec, onUpdate, onToast, puedeEditar\}: \{pec:any; onUpdate:\(\)=>void; onToast:AvisoPantalla; puedeEditar: boolean\}\)/);
-  assert.match(pedidos, /const isEditing = !cerrado && puedeEditar && editStage === sd\.stage;/, 'sin permiso, la tarjeta no se edita');
+  {
+    // B4 T24 f4 (m2 de f3 r2 = m17; D27): la línea exacta se relaja a sus partes (el patrón de TEST 26): reformatearla no rompe la prueba.
+    const editando = /const isEditing = ([^;\n]+);/.exec(pedidos)?.[1] ?? '';
+    assert.ok(editando.length > 0, 'isEditing existe');
+    for (const parte of [/!cerrado\b/, /\bpuedeEditar\b/, /editStage === sd\.stage/]) assert.match(editando, parte, `sin permiso, la tarjeta no se edita: ${parte}`);
+    assert.ok(!/\|\|/.test(editando), 'isEditing exige las tres (sin un «o»)');
+  }
   assert.match(pedidos, /\{!cerrado && puedeEditar && \(\s*<button onClick=\{\(\)=>openEdit\(sd\)\}/, 'el lápiz de la etapa');
   assert.match(pedidos, /<TrackingPanel pec=\{detail\|\|pec\} puedeEditar=\{accesoPec\.tracking\}/);
   assert.match(pedidos, /\{accesoPec\.cambiarPec && \(\s*<button onClick=\{\(\)=>setShowConfig\(true\)\} title="Configurar etapas, alertas y casilleros"/, 'Configurar etapas (PUT /tracking-config)');
@@ -3926,12 +3933,41 @@ console.log('--- B4 T24 f3 r1 (m6, m18, m22, m25, m31, m36, m40, m43): Nuevo Cas
   await espera(20);
   assert.deepEqual(rf.slice(1), ['error 500'], 'si falla: alError con el error');
   assert.equal(libreP.current, null, 'y la marca libre (Reintentar vuelve a pedir)');
+  // B4 T24 f4 (m10 de f3 r2 = m25, X26): el «no encontrado» (filas []) se avisa, y la marca queda puesta (no vuelve a pedir).
+  const nadaP = { current: null };
+  const rn = [];
+  montarProducto(nadaP, 'ZZZ', rn, { filas: [] });
+  await espera(20);
+  assert.deepEqual(rn.slice(1), ['error null', 'aviso No se encontró un producto con el SKU «ZZZ».'], 'no encontrado: se avisa (X26)');
+  assert.equal(nadaP.current, 'sku:ZZZ');
+  // B4 T24 f4 (m12 de f3 r2): si el enlace ya no está en la URL (o ya se atendió), no hay nada que pedir: se cierra la vuelta con
+  // alError(null), y «Reintentando…» no se queda pegado (ni el aviso de un enlace que ya no está a la vista).
+  const sinEnlace = [];
+  abrirEnlaceProducto({ marca: { current: null }, idDeLaUrl: null, skuDeLaUrl: null, pedir: () => { sinEnlace.push('GET'); return Promise.resolve({}); },
+    abrir: () => sinEnlace.push('abrir'), avisar: () => sinEnlace.push('aviso'), alError: (e) => sinEnlace.push(`error ${e === null ? 'null' : 'x'}`) })();
+  assert.deepEqual(sinEnlace, ['error null'], 'sin ?id= ni ?sku=: cierra la vuelta, sin pedir');
+  const yaAtendido = [];
+  abrirEnlaceProducto({ marca: { current: 'sku:ABC' }, idDeLaUrl: null, skuDeLaUrl: 'ABC', pedir: () => { yaAtendido.push('GET'); return Promise.resolve({}); },
+    abrir: () => {}, avisar: () => {}, alError: (e) => yaAtendido.push(`error ${e === null ? 'null' : 'x'}`) })();
+  assert.deepEqual(yaAtendido, ['error null'], 'el mismo enlace ya atendido: no vuelve a pedir');
+  {
+    // Con la vuelta cerrada, estadoReintento ya no dice «reintentando».
+    const { estadoReintento } = ec;
+    assert.equal(estadoReintento({ vuelta: 1, error: e500 }, 2).reintentando, true, 'pidiendo otra vez');
+    assert.deepEqual(estadoReintento({ vuelta: 2, error: null }, 2), { cargando: false, error: null, reintentando: false, ofrecer: false }, 'la vuelta cerrada');
+  }
+  // m10 (X27): Productos avisa el «no encontrado» en tono 'info'.
+  trae(leerFuente('app/dashboard/inventario/productos/page.tsx'), "avisar: (texto) => avisar(texto, { tono: 'info' }),", 'el aviso del enlace, informativo');
+  // m10 (X28 a X30): el Esc del autocompletar del Kardex no saca de la pantalla completa: preventDefault y stopPropagation.
+  assert.match(leerFuente('app/dashboard/inventario/kardex/page.tsx'), /if \(!r\) return;\s*e\.preventDefault\(\);\s*if \(e\.key === 'Escape'\) e\.stopPropagation\(\);/,
+    'teclaSku: preventDefault y, con Esc, stopPropagation');
   // m25: en la primera carga, el panel de PVEN del Hub dice «Cargando…», nunca el vacío falso.
   const hub = leerFuente('app/dashboard/compras/page.tsx');
   assert.match(hub, /\) : filteredPvens\.length === 0 && cargandoVentas \? \(\s*\/\* r1 \(m25\)[^*]*\*\/\s*<p role="status"[^>]*>Cargando pedidos de venta…<\/p>/);
   // m36: el aviso de /stats sigue montado mientras se reintenta y el botón conserva el foco («Reintentando…», aria-disabled).
   const pieza = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8');
-  assert.match(pieza, /if \(error != null && error !== ultimo\) setUltimo\(error\);/);
+  // B4 T24 f4 (m8 de f3 r3; D27): el último se guarda con su cuenta.
+  assert.match(pieza, /if \(error != null && \(error !== ultimo \|\| cuenta !== cuentaDelUltimo\)\) \{\s*setUltimo\(error\);/);
   assert.ok(!/[^-]disabled=\{reintentando/.test(pieza), 'aria-disabled, no disabled (el foco no se pierde)');
   assert.match(pieza, /aria-disabled=\{reintentando \|\| undefined\}/);
 
@@ -3953,7 +3989,7 @@ console.log('--- B4 T24 f3 r1 (m6, m18, m22, m25, m31, m36, m40, m43): Nuevo Cas
   const ds = readFileSync(new URL('../src/lib/design-system.ts', import.meta.url), 'utf8');
   assert.match(ds, /export const RESERVA_BOTON_IA_PIE = 'pr-24';/);
   const drawer = readFileSync(new URL('../src/components/ui/Drawer.tsx', import.meta.url), 'utf8');
-  assert.match(drawer, /<div className=\{`p-6 \$\{RESERVA_BOTON_IA_PIE\} border-t border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-3 \[&>:last-child\]:ml-auto`\}>/); // r3 (m11, D27)
+  assert.match(drawer, /<div className=\{`p-6 \$\{RESERVA_BOTON_IA_PIE\} border-t border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-3 \[&>:not\(:first-child\)\]:ml-auto`\}>/); // r3 (m11, D27); f4 (m4 = m6 de f3 r3, D27)
   assert.match(ventana, /maxWidth="3xl" onClose=\{onClose\} reservaBotonIa/);
 }
 
@@ -4074,13 +4110,14 @@ console.log('--- B4 T24 f3 r2 (F81 en el hook, m36 completo, m20): la vuelta de 
   // El cableado: AvisoDeError con regionFoco (aditivo) vive en una región tabindex=-1 montada siempre, y el botón avisa al irse.
   const pieza = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(pieza, /return \(\) => alSoltarBoton\(document\.activeElement === nodo\);/, 'el ref con limpieza mira si el botón tenía el foco');
-  assert.match(pieza, /focoTrasReintento\(\{ teniaFoco, hayBoton: ultimoHayBoton\.current \}\) === 'destino' && document\.activeElement === document\.body && regionFoco\)/); // r3 (C, D27)
+  // B4 T24 f4 (m2 + m10 de f3 r3; D27): el destino se busca por su id (destinoFoco → getElementById), no por el texto del aria-label.
+  assert.match(pieza, /focoTrasReintento\(\{ teniaFoco, hayBoton: ultimoHayBoton\.current \}\) === 'destino' && document\.activeElement === document\.body && destinoFoco\)/); // r3 (C, D27)
   assert.ok(!/sr-only|Sin avisos/.test(pieza), 'r3 (C): sin la región sr-only ni su texto'); // D27
-  assert.match(pieza, /alSoltarBoton=\{regionFoco \? alSoltarBoton : undefined\}/, 'solo con regionFoco (aditivo)');
+  assert.match(pieza, /alSoltarBoton=\{destinoFoco \? alSoltarBoton : undefined\}/, 'solo con destinoFoco (aditivo)');
   for (const ruta of ['app/dashboard/compras/page.tsx', 'app/dashboard/compras/pedidos/page.tsx', 'app/dashboard/compras/transito/page.tsx',
     'app/dashboard/compras/recepciones/page.tsx', 'app/dashboard/compras/lista-compras/page.tsx', 'app/dashboard/inventario/page.tsx']) {
     const f = leerFuente(ruta);
-    assert.match(f, /<AvisoDeError error=\{stats\.error\}[^\n]*reintentando=\{stats\.cargando\} regionFoco="[^"]+" \/>/, `${ruta}: el aviso de /stats con su destino`); // r3 (D27)
+    assert.match(f, /<AvisoDeError error=\{stats\.error\}[^\n]*reintentando=\{stats\.cargando\} destinoFoco="[^"]+" \/>/, `${ruta}: el aviso de /stats con su destino`); // r3 (D27)
     assert.ok(!/stats\.cargando\) && \(\s*<AvisoDeError/.test(f), `${ruta}: montado siempre (si se desmonta, la región se va con él)`);
   }
   trae(piezas, 'export function AvisoReintentar(props: React.ComponentProps<typeof AvisoDeError>) {', 'AvisoReintentar acepta el mismo contrato');
@@ -4107,9 +4144,18 @@ console.log('--- B4 T24 f3 r2 (m1, m2, m3, m4, m5, m8, m11, m14, m16, m19, m21, 
   assert.equal(roles.confirmarRecepcion({ porConfirmar: true, heredada: true, sinBodega: true, rol: 'ADMIN' }).texto, roles.TEXTO_RECEPCION_HEREDADA);
   // m2: la tarjeta sin «Contar y confirmar» lleva el motivo (aditivo).
   const r = { id: 7, estado: 'BORRADOR' };
-  assert.deepEqual(ec.tarjetaRecepcion(r, { contar: false, motivo: 'Falta la bodega receptora.' }).chips, [{ texto: 'Falta la bodega receptora.', tono: 'slate' }]);
-  assert.deepEqual(ec.tarjetaRecepcion(r, { contar: true, motivo: 'x' }).chips, [], 'con la acción, sin el motivo');
-  assert.deepEqual(ec.tarjetaRecepcion(r, { contar: false }).chips, [], 'sin motivo, como antes');
+  // B4 T24 f4 (m16 de f3 r2; D27): el motivo ya no es un chip (truncate a 10 px cortaba la mitad de 60 a 80 caracteres): va en una
+  // línea de la tarjeta que hace salto (`nota`, aditiva en TarjetaKanban).
+  const conMotivo = ec.tarjetaRecepcion(r, { contar: false, motivo: roles.TEXTO_RECEPCION_HEREDADA });
+  assert.deepEqual([conMotivo.chips, conMotivo.nota], [[], roles.TEXTO_RECEPCION_HEREDADA], 'el motivo entero, en la nota');
+  assert.equal(ec.tarjetaRecepcion(r, { contar: true, motivo: 'x' }).nota, null, 'con la acción, sin el motivo');
+  assert.deepEqual([ec.tarjetaRecepcion(r, { contar: false }).chips, ec.tarjetaRecepcion(r, { contar: false }).nota], [[], null], 'sin motivo, como antes');
+  {
+    const kanban = readFileSync(new URL('../src/components/ui/Kanban.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    assert.match(kanban, /nota\?: string \| null;/, 'la nota, aditiva en DatosTarjetaKanban');
+    assert.match(kanban, /\{nota && <p className="mt-2 whitespace-normal break-words text-\[11px\] font-semibold leading-snug text-slate-600">\{nota\}<\/p>\}/,
+      'una línea que hace salto (sin truncate)');
+  }
   // m4 = m7: la poda de la selección guardada.
   const pvens = [{ id: 1, numero: 'PVEN-1', estado: 'PENDIENTE_COMPRA' }, { id: 2, numero: 'PVEN-2', estado: 'EN_PROCESO' }];
   const poda = ec.podarSeleccion(new Set([1, 2]), pvens);
@@ -4148,6 +4194,13 @@ console.log('--- B4 T24 f3 r2 (m1, m2, m3, m4, m5, m8, m11, m14, m16, m19, m21, 
   assert.equal(ec.ofrecerCrearCasillero({ texto: ' ', resultados: [], elegido: null }), false);
   assert.equal(ec.ofrecerCrearCasillero({ texto: 'Bogotá', resultados: [], elegido: { id: 1 } }), false);
   assert.ok(!/if \(arr\.length === 0\) setShowNewCasillero\(true\);/.test(ped), 'm21: no se abre solo');
+  // B4 T24 f4 (m7 de f3 r2 = m20): la guarda REAL («terminó la búsqueda de ESTE texto») pasa a la lib: con `buscado` (el último texto
+  // buscado) distinto del que hay en la caja, no se ofrece (escribir la primera letra, antes de buscar, no ofrece «Crear casillero»).
+  assert.equal(ec.ofrecerCrearCasillero({ texto: 'Bo', buscado: 'B', resultados: [], elegido: null }), false, 'se escribió más: la búsqueda de ESTE texto no terminó');
+  assert.equal(ec.ofrecerCrearCasillero({ texto: 'B', buscado: '', resultados: [], elegido: null }), false, 'la primera letra, antes de buscar');
+  assert.equal(ec.ofrecerCrearCasillero({ texto: 'Bogotá', buscado: 'Bogotá', resultados: [], elegido: null }), true, 'buscó este texto y no hay');
+  assert.ok(ped.includes('ofrecerCrearCasillero({ texto: casilleroSearch, buscado: casilleroBuscado, resultados: casilleroResults, elegido: selectedCasillero })'),
+    'la página pasa el texto y lo buscado tal cual (la guarda vive en la lib)');
   assert.match(ped, /ofrecerCrearCasillero\(\{[^}]*\}\) && \(\s*<p role="status"[^>]*>Ningún casillero coincide\.\{' '\}\s*<button type="button" onClick=\{\(\)=>setShowNewCasillero\(true\)\}/);
   // m19: el pie del Drawer baja sus botones antes de la reserva (flex-wrap); m23: la reserva del pie de Modal, con su prueba.
   assert.match(readFileSync(new URL('../src/components/ui/Drawer.tsx', import.meta.url), 'utf8'), /\$\{RESERVA_BOTON_IA_PIE\} border-t border-slate-200 bg-slate-50 flex flex-wrap/);
@@ -4186,6 +4239,21 @@ console.log('--- B4 T24 f3 r3 (C1 = C3, C2 = C4, C, m4, m6, m9, m11): el aviso n
   assert.deepEqual(avisoVisible({ error: null, ultimo: null, reintentando: false }), { visto: null, olvidar: false });
   assert.deepEqual(avisoVisible({ error: e403, ultimo: null, reintentando: false }), { visto: e403, olvidar: false }, 'un 403: su aviso (de permiso, sin «Reintentar»)');
   assert.equal(av.avisoDeFuente(e403, 'x')?.reintentar, false);
+  // B4 T24 f4 (m8 de f3 r3): el último es de UNA cuenta. Si la sesión pasa a otra (otra pestaña, el re-ingreso), mientras carga la nueva
+  // no se pinta el error de la anterior (ni su aviso de permiso), y se olvida.
+  assert.deepEqual(avisoVisible({ error: null, ultimo: e403, reintentando: true, cuenta: 8, cuentaDelUltimo: 7 }), { visto: null, olvidar: true },
+    'otra cuenta cargando: nada de la anterior');
+  assert.deepEqual(avisoVisible({ error: null, ultimo: e500, reintentando: true, cuenta: 7, cuentaDelUltimo: 7 }), { visto: e500, olvidar: false },
+    'la misma cuenta reintentando: el último sigue');
+  assert.deepEqual(avisoVisible({ error: e500, ultimo: e403, reintentando: false, cuenta: 8, cuentaDelUltimo: 7 }), { visto: e500, olvidar: false },
+    'un error de la cuenta nueva sí se ve');
+  assert.deepEqual(avisoVisible({ error: null, ultimo: e500, reintentando: true }), { visto: e500, olvidar: false }, 'sin cuentas (aditivo): como antes');
+  {
+    const piezaCuenta = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    assert.match(piezaCuenta, /const cuenta = usuarioDeLaSesion\(\);/);
+    assert.match(piezaCuenta, /avisoVisible\(\{ error, ultimo, reintentando, cuenta, cuentaDelUltimo \}\)/);
+    assert.match(piezaCuenta, /if \(error != null && \(error !== ultimo \|\| cuenta !== cuentaDelUltimo\)\) \{\s*setUltimo\(error\);\s*setCuentaDelUltimo\(cuenta\);\s*\}/);
+  }
   // La secuencia de la regresión: falla, reintento bueno, «Actualizar» (otra carga sin error): ningún aviso falso.
   let ultimo = null;
   const paso = (error, reintentando) => {
@@ -4199,23 +4267,58 @@ console.log('--- B4 T24 f3 r3 (C1 = C3, C2 = C4, C, m4, m6, m9, m11): el aviso n
   assert.equal(paso(null, true), null, '«Actualizar» después: NO vuelve el error viejo (era la regresión de r2)');
   const pieza = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(pieza, /else if \(olvidar\) setUltimo\(null\);/, 'AvisoDeError limpia el último');
-  // C (ruling de la duda 4): el destino del foco es VISIBLE — la franja de tarjetas (tabindex=-1), buscada por su aria-label.
+  // C (ruling de la duda 4): el destino del foco es VISIBLE — la franja de tarjetas (tabindex=-1). B4 T24 f4 (m2 + m10 de f3 r3; D27):
+  // buscada por su id (idFoco de FranjaKpis ↔ destinoFoco de AvisoDeError), no por el texto de su aria-label.
   assert.equal(focoTrasReintento({ teniaFoco: true, hayBoton: false }), 'destino');
-  assert.match(pieza, /document\.querySelector<HTMLElement>\(`section\[aria-label="\$\{regionFoco\}"\]`\)\?\.focus\(\);/);
+  assert.match(pieza, /document\.getElementById\(destinoFoco\)\?\.focus\(\);/);
+  assert.ok(!/querySelector<HTMLElement>\(`section\[aria-label|regionFoco/.test(pieza), 'sin la búsqueda por el texto ni el nombre viejo');
   assert.ok(!/sr-only|Sin avisos|aria-label=\{aviso/.test(pieza), 'sin la región sr-only ni el aria-label sobre un div sin rol');
-  assert.match(readFileSync(new URL('../src/components/ui/TarjetaKpi.tsx', import.meta.url), 'utf8'), /<section aria-label=\{titulo\} aria-busy=\{estado === 'cargando'\} className="@container" tabIndex=\{-1\}>/);
-  // C2 = C4: las pantallas de m17, montadas como el Hub, con el título de SU franja como destino.
-  for (const [ruta, franja, reintentando] of [['stock', 'Existencias', 'stats.cargando'], ['abastecimiento', 'Abastecimiento', 'stats.cargando'],
-    ['entregas', 'Entregas', 'stats.cargando'], ['recepciones', 'Entradas', 'cargandoStats']]) {
-    const f = leerFuente(`app/dashboard/inventario/${ruta}/page.tsx`);
-    assert.ok(f.includes(`reintentando={${reintentando}} regionFoco="${franja}" />`), `${ruta}: el aviso con reintentando y su destino`);
-    assert.match(f, new RegExp(`<FranjaKpis[^>]*titulo="${franja}"`), `${ruta}: la franja «${franja}» existe`);
+  // B4 T24 f4 (m5 = m7 de f3 r3; D27): la franja, como destino, con el token de foco neutro (focus-visible), fuera del orden de Tab.
+  const franjaKpi = readFileSync(new URL('../src/components/ui/TarjetaKpi.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(franjaKpi, /<section id=\{idFoco\} aria-label=\{titulo\} aria-busy=\{estado === 'cargando'\} className=\{`@container rounded-2xl \$\{FOCOS\.slate\}`\} tabIndex=\{-1\}>/);
+  assert.match(franjaKpi, /children, estado = 'listo', nota, titulo = 'Indicadores', idFoco,/);
+  // m2 + m10 (mueren M3 y M4): en CADA pantalla, cada destinoFoco es el idFoco de una franja del MISMO archivo (y los ids no se repiten).
+  const PANTALLAS_DESTINO = ['compras/page.tsx', 'compras/pedidos/page.tsx', 'compras/transito/page.tsx', 'compras/recepciones/page.tsx',
+    'compras/lista-compras/page.tsx', 'inventario/page.tsx', 'inventario/stock/page.tsx', 'inventario/abastecimiento/page.tsx',
+    'inventario/entregas/page.tsx', 'inventario/recepciones/page.tsx', 'inventario/productos/page.tsx'];
+  const idsVistos = new Set();
+  for (const ruta of PANTALLAS_DESTINO) {
+    const f = leerFuente(`app/dashboard/${ruta}`);
+    const destinos = [...f.matchAll(/destinoFoco="([^"]+)"/g)].map((m) => m[1]);
+    const ids = [...f.matchAll(/(?:idFoco|id)="(franja-[^"]+|productos-[^"]+)"/g)].map((m) => m[1]);
+    assert.ok(destinos.length >= 1, `${ruta}: el aviso tiene destino`);
+    for (const d of destinos) assert.ok(ids.includes(d), `${ruta}: «${d}» es el id de un destino del mismo archivo (${ids})`);
+    for (const id of new Set(ids)) { assert.ok(!idsVistos.has(id), `«${id}» no se repite entre pantallas`); idsVistos.add(id); }
+    assert.ok(!/regionFoco/.test(f), `${ruta}: sin el nombre viejo`);
   }
+  // C2 = C4: las pantallas de m17, montadas como el Hub, con SU franja como destino.
+  for (const [ruta, id, reintentando] of [['stock', 'franja-stock', 'stats.cargando'], ['abastecimiento', 'franja-abastecimiento', 'stats.cargando'],
+    ['entregas', 'franja-entregas', 'stats.cargando'], ['recepciones', 'franja-entradas', 'cargandoStats']]) {
+    const f = leerFuente(`app/dashboard/inventario/${ruta}/page.tsx`);
+    assert.ok(f.includes(`reintentando={${reintentando}} destinoFoco="${id}" />`), `${ruta}: el aviso con reintentando y su destino`);
+    assert.match(f, new RegExp(`<FranjaKpis[^>]*idFoco="${id}"`), `${ruta}: la franja «${id}» existe`);
+    // B4 T24 f4 (m1 de f3 r3; mueren M1 y M2): el aviso de /stats montado SIEMPRE: sin una condición delante.
+    assert.ok(!/&& \(\s*<AvisoReintentar error=\{(?:stats\.error|errorStats|compras\.error)\}[^\n]*destinoFoco=/.test(f), `${ruta}: montado siempre`);
+    for (const vieja of ["{estadoKpis === 'error' && (", "{estadoCompras === 'error' && (", '{errorStats != null && (', '{stats.error != null && (']) {
+      assert.ok(!f.includes(`${vieja}\n        <AvisoReintentar`) && !new RegExp(`${vieja.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*<AvisoReintentar`).test(f), `${ruta}: sin «${vieja}» delante del aviso`);
+    }
+  }
+  // B4 T24 f4 (m3 = m9 de f3 r3): Productos tiene un destino visible para el aviso del enlace (el 403 y el «no existe» tras un reintento).
+  const prod = leerFuente('app/dashboard/inventario/productos/page.tsx');
+  assert.ok(prod.includes('<section ref={refTarjeta} className={`${claseTarjeta} ${FOCOS.slate}`} id="productos-lista" tabIndex={-1} aria-label="Productos">'));
+  assert.match(prod, /<AvisoDeError error=\{cargaEnlace\.error\} fallo="No se pudo abrir el producto del enlace" acento="purple" reintentando=\{cargaEnlace\.reintentando\}\s+onReintentar=\{\(\) => setVueltaEnlace\(\(n\) => n \+ 1\)\} destinoFoco="productos-lista" \/>/);
+  // y los comentarios viejos («el foco va a su región») dicen lo de ahora: a la franja (o a la lista, en Productos).
+  for (const ruta of PANTALLAS_DESTINO) assert.ok(!leerFuente(`app/dashboard/${ruta}`).includes('el foco va a su región'), `${ruta}: el comentario al día`);
   // m6: sin el código muerto. m9: el comentario de Tránsito al día. m4: el aviso de los quitados se reinicia. m11: el botón que baja, a la derecha.
   noTrae(leerFuente('app/dashboard/compras/recepciones/page.tsx'), 'const porConfirmar = esRecepcionPorConfirmar(r);');
   trae(leerFuente('app/dashboard/compras/transito/page.tsx'), 'terminarPendiente deja la foto SIN TOMAR');
   trae(leerFuente('app/dashboard/compras/page.tsx'), "setSelectedPvens(new Set()); setQuitadosPvens([]); }, [pec && pec.id]);");
-  assert.match(readFileSync(new URL('../src/components/ui/Drawer.tsx', import.meta.url), 'utf8'), /flex flex-wrap items-center justify-between gap-3 \[&>:last-child\]:ml-auto/);
+  // B4 T24 f4 (m4 = m6 de f3 r3; D27): la regla del pie, solo para pies de dos o más elementos (uno solo no se mueve a la derecha).
+  // Lo equivalente del ruling: ml-auto en cada hijo que no es el primero (un pie de uno no se mueve; el del centro de tres no se pega
+  // al primero; lo que baja solo va a la derecha). Medido en el banco a 375 y a 1024.
+  const pie = readFileSync(new URL('../src/components/ui/Drawer.tsx', import.meta.url), 'utf8');
+  assert.match(pie, /flex flex-wrap items-center justify-between gap-3 \[&>:not\(:first-child\)\]:ml-auto`\}>/);
+  assert.ok(!/\[&>:last-child\]:ml-auto/.test(pie), 'sin la regla que movía también un pie de un solo elemento');
 }
 
 console.log('\nOK: test_estados_compras.mjs');

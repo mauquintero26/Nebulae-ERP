@@ -501,7 +501,7 @@ export default function InventarioHub() {
             Traslados como enlaces (antes, pestañas que no filtraban nada y decían siempre 14, 8 y 5). */}
         {!enAnalisis && (
           <>
-            <FranjaKpis estado={estadoKpis} titulo="Existencias" nota={AYUDA_MINIMO_INVENTARIO}>
+            <FranjaKpis estado={estadoKpis} titulo="Existencias" idFoco="franja-existencias" nota={AYUDA_MINIMO_INVENTARIO}>
               <TarjetaKpi kpi="inv_valorizacion" valor={tarjetas?.valorizacion.valor ?? null} ayuda={tarjetas?.valorizacion.ayuda ?? undefined} />
               <TarjetaKpi kpi="inv_skus" valor={tarjetas?.skus.valor ?? null} ayuda={tarjetas?.skus.ayuda ?? undefined} />
               <TarjetaKpi kpi="inv_bajo_minimo" valor={tarjetas?.bajo_minimo.valor ?? null} ayuda={tarjetas?.bajo_minimo.ayuda ?? undefined}
@@ -509,8 +509,8 @@ export default function InventarioHub() {
               <TarjetaKpi kpi="inv_disponibilidad" valor={tarjetas?.disponibilidad.valor ?? null} ayuda={tarjetas?.disponibilidad.ayuda ?? undefined} />
             </FranjaKpis>
             {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
-            {/* r2 (m36 completo): montado siempre (regionFoco): si el reintento sale bien o da un 403, el foco va a su región, nunca al <body>. */}
-            <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de existencias" onReintentar={stats.recargar} acento="indigo" reintentando={stats.cargando} regionFoco="Existencias" />
+            {/* r2 (m36 completo): montado siempre (destinoFoco, el id de la franja): si el reintento sale bien o da un 403, el foco va a la franja, nunca al <body>. */}
+            <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de existencias" onReintentar={stats.recargar} acento="indigo" reintentando={stats.cargando} destinoFoco="franja-existencias" />
             <nav aria-label="Operaciones de inventario" className="flex flex-wrap items-center gap-2 text-xs">
               <span className="font-semibold text-slate-600">Operaciones:</span>
               {OPERACIONES.map((o) => (

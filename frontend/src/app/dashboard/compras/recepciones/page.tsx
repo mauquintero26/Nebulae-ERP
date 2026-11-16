@@ -381,7 +381,7 @@ export default function RecepcionesPage() {
         {/* B4 T16A (KPI-compras punto 8; R7, R12): las 3 tarjetas de /compras/stats (todas las recepciones y los PEC en
             tránsito): mientras cargan, barras grises (nunca 0); con error, «—». La nota corta reemplaza la tarjeta «Regla de
             Separación». */}
-        <FranjaKpis estado={estadoKpis} titulo="Recepciones" nota={NOTA_RECEPCIONES}>
+        <FranjaKpis estado={estadoKpis} titulo="Recepciones" idFoco="franja-recepciones-compras" nota={NOTA_RECEPCIONES}>
           <TarjetaKpi kpi="rec_por_confirmar" valor={tarjetas?.por_confirmar.valor ?? null}
             activo={vistaActiva === 'por_confirmar'} onClick={() => elegirVista('por_confirmar')} />
           <TarjetaKpi kpi="rec_confirmadas" valor={tarjetas?.confirmadas.valor ?? null}
@@ -389,8 +389,8 @@ export default function RecepcionesPage() {
           <TarjetaKpi kpi="pec_en_transito" valor={tarjetas?.en_transito.valor ?? null} />
         </FranjaKpis>
         {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
-        {/* r2 (m36 completo): montado siempre (regionFoco): si el reintento sale bien o da un 403, el foco va a su región, nunca al <body>. */}
-        <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="teal" reintentando={stats.cargando} regionFoco="Recepciones" />
+        {/* r2 (m36 completo): montado siempre (destinoFoco, el id de la franja): si el reintento sale bien o da un 403, el foco va a la franja, nunca al <body>. */}
+        <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="teal" reintentando={stats.cargando} destinoFoco="franja-recepciones-compras" />
 
         {/* B4 T16A (TABLA-compras punto 9, KANBAN-logistica punto 5): la barra y la tabla estándar en el servidor, o el
             tablero solo para ver en modo servidor, con el MISMO estado (pestaña, búsqueda y estados). En Kanban las

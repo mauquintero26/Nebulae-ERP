@@ -908,7 +908,7 @@ export default function ComprasHub() {
             cargan, barras grises (nunca 0); con error, «—». «Pedidos de compra activos» abre «No resueltos» y «En tránsito»
             su pestaña; «Comprado (30 días)» lleva su % en gris. No se ven en Análisis. */}
         {!enAnalisis && (
-          <FranjaKpis estado={estadoKpis} titulo="Pedidos de compra">
+          <FranjaKpis estado={estadoKpis} titulo="Pedidos de compra" idFoco="franja-compras">
             <TarjetaKpi kpi="pec_activos" valor={tarjetas?.activos.valor ?? null} ayuda={tarjetas?.activos.ayuda ?? undefined}
               tono={tarjetas?.activos.tono ?? 'normal'} activo={vistaActiva === 'no_resueltos'} onClick={() => elegirVista('no_resueltos')} />
             <TarjetaKpi kpi="pec_en_transito" valor={tarjetas?.en_transito.valor ?? null}
@@ -919,9 +919,9 @@ export default function ComprasHub() {
           </FranjaKpis>
         )}
         {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
-        {/* r2 (m36 completo): montado siempre (regionFoco): si el reintento sale bien o da un 403, el foco va a su región, nunca al <body>. */}
+        {/* r2 (m36 completo): montado siempre (destinoFoco, el id de la franja): si el reintento sale bien o da un 403, el foco va a la franja, nunca al <body>. */}
         {!enAnalisis && (
-          <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="purple" reintentando={stats.cargando} regionFoco="Pedidos de compra" />
+          <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="purple" reintentando={stats.cargando} destinoFoco="franja-compras" />
         )}
 
         {/* B4 T14 (TABLA-compras punto 6, KANBAN-compras punto 7, ANALISIS-compras punto 4): la barra y la tabla estándar

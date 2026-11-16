@@ -425,15 +425,16 @@ export default function ProductosPage() {
               </div>
             )} />
 
-          {/* r2 (m36 completo): montado siempre (regionFoco): si el reintento sale bien, el foco va a su región, nunca al <body>. */}
+          {/* r2 (m36 completo): montado siempre. B4 T24 f4 (m3 = m9 de f3 r3): si el reintento sale bien, el enlace abre la ficha (el foco
+              va a su título); si da un 403 o el producto no existe, el botón se va y el foco va a la lista (destinoFoco), nunca al <body>. */}
           <AvisoDeError error={cargaEnlace.error} fallo="No se pudo abrir el producto del enlace" acento="purple" reintentando={cargaEnlace.reintentando}
-            onReintentar={() => setVueltaEnlace((n) => n + 1)} />
+            onReintentar={() => setVueltaEnlace((n) => n + 1)} destinoFoco="productos-lista" />
 
           {/* B4 T18, bloques 2 y 3 (TABLA-inventario punto 7, KANBAN-resto): la barra con la búsqueda (q) y los filtros de B3-T8, y
               la tabla estándar en el servidor, o el tablero solo para ver por categoría con el MISMO estado. */}
           <div className="flex min-w-0 flex-col gap-4">
             {capa}
-            <section ref={refTarjeta} className={claseTarjeta}>
+            <section ref={refTarjeta} className={`${claseTarjeta} ${FOCOS.slate}`} id="productos-lista" tabIndex={-1} aria-label="Productos">
               <BarraTabla
                 estado={estado}
                 onEstado={despachar}

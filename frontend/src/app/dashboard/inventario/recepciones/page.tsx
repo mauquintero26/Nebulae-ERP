@@ -239,7 +239,7 @@ export default function InventarioRecepcionesPage() {
         {/* B4 T19 (KPI-inventario punto 7; R7, R12): las 4 tarjetas del MISMO /compras/stats de Compras › Recepciones y las bodegas:
             mientras cargan, barras grises (nunca 0); con error, «—» y «Reintentar». Por confirmar, Confirmadas y el total abren su
             pestaña; Bodegas es informativa. */}
-        <FranjaKpis estado={estadoKpis} titulo="Entradas" nota={NOTA_RECEPCIONES}>
+        <FranjaKpis estado={estadoKpis} titulo="Entradas" idFoco="franja-entradas" nota={NOTA_RECEPCIONES}>
           <TarjetaKpi kpi="rec_por_confirmar" valor={tarjetas?.por_confirmar.valor ?? null}
             activo={vistaActiva === vistaDeTarjetaRecepcion('rec_por_confirmar')} onClick={() => elegirVista('rec_por_confirmar')} />
           <TarjetaKpi kpi="rec_confirmadas" valor={tarjetas?.confirmadas.valor ?? null}
@@ -249,7 +249,7 @@ export default function InventarioRecepcionesPage() {
             activo={vistaActiva === vistaDeTarjetaRecepcion('rec_total')} onClick={() => elegirVista('rec_total')} />
         </FranjaKpis>
         {/* r3 (C2, m36): montado siempre, con reintentando y el destino del foco (la franja). */}
-        <AvisoReintentar error={errorStats} fallo="No se pudieron cargar los indicadores de recepciones" onReintentar={stats.recargar} reintentando={cargandoStats} regionFoco="Entradas" />
+        <AvisoReintentar error={errorStats} fallo="No se pudieron cargar los indicadores de recepciones" onReintentar={stats.recargar} reintentando={cargandoStats} destinoFoco="franja-entradas" />
         {errorBodegas != null && (
           <AvisoReintentar error={errorBodegas} fallo="No se pudieron cargar las bodegas" onReintentar={recargarBodegas} />
         )}

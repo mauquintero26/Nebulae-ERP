@@ -188,8 +188,8 @@ export default function StockPage() {
             referencia): mientras cargan, barras grises (nunca 0); con error, «—». Ninguna es botón: no equivalen a una
             pestaña. La nota dice dónde se define el mínimo (R10). Sin la nota de «datos de ejemplo»: la tabla ya es real. */}
         {/* r3 (C2, m36): montado siempre, con reintentando y el destino del foco (la franja). */}
-        <AvisoReintentar error={stats.error} fallo="No se pudieron cargar las tarjetas de existencias" onReintentar={stats.recargar} reintentando={stats.cargando} regionFoco="Existencias" />
-        <FranjaKpis estado={estadoKpis} titulo="Existencias" nota={AYUDA_MINIMO_INVENTARIO}>
+        <AvisoReintentar error={stats.error} fallo="No se pudieron cargar las tarjetas de existencias" onReintentar={stats.recargar} reintentando={stats.cargando} destinoFoco="franja-stock" />
+        <FranjaKpis estado={estadoKpis} titulo="Existencias" idFoco="franja-stock" nota={AYUDA_MINIMO_INVENTARIO}>
           <TarjetaKpi kpi="inv_fisico" valor={tarjetas?.fisico.valor ?? null} ayuda={tarjetas?.fisico.ayuda} />
           <TarjetaKpi kpi="inv_reservado" valor={tarjetas?.reservado.valor ?? null} ayuda={tarjetas?.reservado.ayuda} />
           <TarjetaKpi kpi="inv_disponible" valor={tarjetas?.disponible.valor ?? null} ayuda={tarjetas?.disponible.ayuda} />

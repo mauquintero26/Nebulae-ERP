@@ -363,12 +363,14 @@ export function focoTrasReintento({ teniaFoco, hayBoton }) {
  * reintentar; estadoReintento lo conserva), `ultimo` el último que se vio y `reintentando` si va un reintento. Mientras se reintenta, el
  * último sigue a la vista («Reintentando…»); si no hay error y no se reintenta (el reintento salió bien, o una recarga normal), nada, y
  * `olvidar` pide limpiar el último: si no, la recarga siguiente volvía a pintar el error viejo con role=alert. Un 403 se ve como su
- * error (el aviso de permiso, sin «Reintentar»).
- * @param {{error: unknown, ultimo: unknown, reintentando: boolean}} entrada
+ * error (el aviso de permiso, sin «Reintentar»). B4 T24 f4 (m8 de f3 r3, aditivo): `cuenta` es la de la sesión y `cuentaDelUltimo` la de
+ * cuando se vio el último; si son otras (la sesión pasó a otra cuenta), el último no se pinta mientras carga la nueva y se olvida. Sin
+ * las dos (undefined), como antes.
+ * @param {{error: unknown, ultimo: unknown, reintentando: boolean, cuenta?: unknown, cuentaDelUltimo?: unknown}} entrada
  * @returns {{visto: unknown, olvidar: boolean}}
  */
-export function avisoVisible({ error, ultimo, reintentando }) {
+export function avisoVisible({ error, ultimo, reintentando, cuenta = null, cuentaDelUltimo = null }) {
   if (error != null) return { visto: error, olvidar: false };
-  if (reintentando && ultimo != null) return { visto: ultimo, olvidar: false };
+  if (reintentando && ultimo != null && cuenta === cuentaDelUltimo) return { visto: ultimo, olvidar: false };
   return { visto: null, olvidar: ultimo != null };
 }

@@ -1249,7 +1249,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
                             placeholder="Buscar casillero..."
                             className={'w-full border rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200 ' + (selectedCasillero?'border-emerald-300 bg-emerald-50':'border-gray-200')}/>
                           {selectedCasillero && <CheckCircle2 size={16} className="absolute right-3 top-9 text-emerald-600"/>}
-                          {ofrecerCrearCasillero({ texto: casilleroBuscado === casilleroSearch ? casilleroSearch : '', resultados: casilleroResults, elegido: selectedCasillero }) && (
+                          {ofrecerCrearCasillero({ texto: casilleroSearch, buscado: casilleroBuscado, resultados: casilleroResults, elegido: selectedCasillero }) && (
                             <p role="status" className="mt-1 text-xs text-gray-600">Ningún casillero coincide.{' '}
                               <button type="button" onClick={()=>setShowNewCasillero(true)} className={`font-bold text-purple-700 underline ${FOCOS.purple}`}>Crear casillero</button>
                             </p>
@@ -1921,7 +1921,7 @@ export default function PedidosCompraPage() {
         {/* B4 T15 (KPI-compras punto 6; R7, R12, RP92): las 4 tarjetas de /compras/stats (todos los PEC): mientras cargan,
             barras grises (nunca 0); con error, «—». Activos, En tránsito y Monto abren su pestaña; Con entrega vencida, el
             filtro «Con atraso». */}
-        <FranjaKpis estado={estadoKpis} titulo="Pedidos de compra">
+        <FranjaKpis estado={estadoKpis} titulo="Pedidos de compra" idFoco="franja-pedidos-compra">
           <TarjetaKpi kpi="pec_activos" valor={tarjetas?.activos.valor ?? null}
             activo={vistaActiva === 'activos'} onClick={() => elegirVista('activos')} />
           <TarjetaKpi kpi="pec_en_transito" valor={tarjetas?.en_transito.valor ?? null}
@@ -1932,8 +1932,8 @@ export default function PedidosCompraPage() {
             activo={vistaActiva === 'vigentes'} onClick={() => elegirVista('vigentes')} />
         </FranjaKpis>
         {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
-        {/* r2 (m36 completo): montado siempre (regionFoco): si el reintento sale bien o da un 403, el foco va a su región, nunca al <body>. */}
-        <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="purple" reintentando={stats.cargando} regionFoco="Pedidos de compra" />
+        {/* r2 (m36 completo): montado siempre (destinoFoco, el id de la franja): si el reintento sale bien o da un 403, el foco va a la franja, nunca al <body>. */}
+        <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="purple" reintentando={stats.cargando} destinoFoco="franja-pedidos-compra" />
 
         {/* B4 T15 (TABLA-compras punto 7, KANBAN-compras punto 6): la barra y la tabla estándar en el servidor, o el tablero
             en modo servidor, con el MISMO estado (pestaña, búsqueda, estados y semáforo). En Kanban las pestañas no se ven
