@@ -241,6 +241,22 @@ console.log('--- T24 (F108): accesoProveedores ---');
   for (const r of NADIE) assert.deepEqual(roles.accesoProveedores(r), { listo: false, editar: false }, String(r));
 }
 
+console.log('--- T24 f4 r1 (I1): accesoClientes — la Agenda de clientes escribe solo con ADMIN y ASESOR ---');
+{
+  const roles = await import('../src/lib/roles.js');
+  // crm.py: POST, PUT y DELETE /customers, POST /customers/{id}/solicitudes y POST /events son de ADMIN y ASESOR (el GET, de todos);
+  // «Cotizar» lleva a POST /ventas/cotizaciones (erp_ventas.py), también de ADMIN y ASESOR.
+  for (const r of TODOS) assert.deepEqual(roles.accesoClientes(r), { listo: true, editar: r === 'ADMIN' || r === 'ASESOR' }, r);
+  for (const r of NADIE) assert.deepEqual(roles.accesoClientes(r), { listo: false, editar: false }, String(r));
+  assert.deepEqual(roles.accesoClientes(' asesor '), { listo: true, editar: true }, 'normaliza el rol');
+  const { readFileSync } = await import('node:fs');
+  const crm = readFileSync(new URL('../../backend/app/api/v1/crm.py', import.meta.url), 'utf8');
+  for (const firma of ['def create_customer(', 'def update_customer(', 'def delete_customer(', 'def create_customer_solicitud(', 'def create_event(']) {
+    const linea = crm.split('\n').find((l) => l.startsWith(firma));
+    assert.ok(linea && linea.includes('require_roles(*ROLE_ADMIN, *ROLE_ASESOR)'), `crm.py ${firma} es de ADMIN y ASESOR`);
+  }
+}
+
 console.log('--- T24 r1 (m33): esAdminOCompras, una sola lista para Compras, y `listo` de una sola manera ---');
 {
   const roles = await import('../src/lib/roles.js');

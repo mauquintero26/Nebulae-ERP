@@ -22,7 +22,7 @@ import { fechaCorta, hace } from '@/lib/fechas-colombia';
 import { FranjaKpis, TarjetaKpi } from '@/components/ui';
 import { AvisoFuente } from '@/components/ui/AvisoFuente';
 import { avisoDeFuente } from '@/lib/avisos';
-import { accesoProveedores } from '@/lib/roles';
+import { accesoClientes, accesoProveedores } from '@/lib/roles';
 import { RESERVA_BOTON_IA } from '@/lib/design-system';
 import { useRolActual } from '@/components/ui/useRolActual';
 import {
@@ -73,6 +73,8 @@ export default function AgendaPage() {
   // B4 T24 (F108): Nuevo, Editar y Eliminar proveedor (POST, PATCH y DELETE /compras/proveedores) solo con accesoProveedores
   // (ADMIN y COMPRAS); el rol se lee después de montar.
   const accesoProv = accesoProveedores(useRolActual());
+  // B4 T24 f4 r1 (I1): crear, editar, borrar, solicitar, agendar y cotizar un cliente son de ADMIN y ASESOR (accesoClientes, crm.py).
+  const accesoCli = accesoClientes(useRolActual());
 
   // ─── PESTAÑA PRINCIPAL (Clientes vs Proveedores) ───────────────────────────
   const [mainTab, setMainTab] = useState<'clientes' | 'proveedores'>('clientes');
@@ -111,6 +113,7 @@ export default function AgendaPage() {
   // B4 T24 f4 (FINAL-m20): el error de la carga de proveedores y de clientes (antes un console.error mudo y un vacío falso).
   const [errorProveedores, setErrorProveedores] = useState<unknown>(null);
   const [errorClientes, setErrorClientes] = useState<unknown>(null);
+  const [cargandoClientes, setCargandoClientes] = useState(false);   // r1 (R1-m3): «Reintentando…» en el aviso de clientes
   const [supplierSearch, setSupplierSearch] = useState('');
   const [supplierPecs, setSupplierPecs] = useState<any[]>([]);
   // El total de GET /compras/pedidos?supplier_id= (la lista trae como mucho 200) y su error: el «Pedidos de compra» de la ficha.
@@ -136,6 +139,7 @@ export default function AgendaPage() {
 
   // ─── CARGA DE CLIENTES ─────────────────────────────────────────────────────
   const fetchCustomers = async () => {
+    setCargandoClientes(true);
     try {
       const raw = await getCustomers();
       setErrorClientes(null);
@@ -159,6 +163,8 @@ export default function AgendaPage() {
       }
     } catch (e) {
       setErrorClientes(e);
+    } finally {
+      setCargandoClientes(false);
     }
   };
 
@@ -1143,12 +1149,14 @@ export default function AgendaPage() {
               <p className="text-slate-500 text-xs mt-0.5">Ficha única centralizada, historial comercial y contacto directo.</p>
             </div>
           </div>
+          {accesoCli.editar && (
           <button
             onClick={openNew}
             className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-md transition-all flex items-center gap-2"
           >
             <Plus size={16} /> Nuevo Cliente
           </button>
+          )}
         </div>
 
         {/* Search */}
@@ -1164,11 +1172,11 @@ export default function AgendaPage() {
             />
           </div>
           <span className="text-xs font-bold text-slate-500 shrink-0">
-            {filteredCustomers.length} clientes encontrados
+            {errorClientes ? null : `${filteredCustomers.length} clientes encontrados`}
           </span>
         </div>
 
-        {avisoClientes && <div className="mb-4"><AvisoFuente aviso={avisoClientes} onReintentar={fetchCustomers} /></div>}
+        {avisoClientes && <div className="mb-4"><AvisoFuente aviso={avisoClientes} onReintentar={fetchCustomers} reintentando={cargandoClientes} /></div>}
         {/* Customer Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filteredCustomers.map(client => {
@@ -1192,6 +1200,7 @@ export default function AgendaPage() {
                         <span className="text-[11px] font-semibold text-slate-400">{client.id}</span>
                       </div>
                     </div>
+                    {accesoCli.editar && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -1202,6 +1211,7 @@ export default function AgendaPage() {
                     >
                       <Trash2 size={14} />
                     </button>
+                    )}
                   </div>
 
                   <div className="space-y-1.5 text-xs text-slate-600 mt-2">
@@ -1349,6 +1359,8 @@ export default function AgendaPage() {
                   <MessageCircle size={15} /> WhatsApp
                 </a>
               )}
+              {accesoCli.editar && (
+              <>
               <button
                 onClick={() => setShowModal('Solicitud')}
                 className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm flex items-center gap-1.5 transition-colors"
@@ -1374,6 +1386,8 @@ export default function AgendaPage() {
               >
                 <Trash2 size={16} />
               </button>
+              </>
+              )}
             </div>
           )}
         </div>
@@ -1491,7 +1505,7 @@ export default function AgendaPage() {
             </div>
 
             <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
-              {!isNew && (
+              {!isNew && accesoCli.editar && (
                 <button
                   type="button"
                   onClick={() => setDeleteConfirmClient(selectedClient)}
@@ -1508,6 +1522,7 @@ export default function AgendaPage() {
                 >
                   Cancelar
                 </button>
+                {accesoCli.editar && (
                 <button
                   type="button"
                   disabled={isSaving}
@@ -1516,6 +1531,7 @@ export default function AgendaPage() {
                 >
                   {isSaving ? 'Guardando...' : (isNew ? 'Crear Cliente' : 'Guardar Cambios')}
                 </button>
+                )}
               </div>
             </div>
           </div>
