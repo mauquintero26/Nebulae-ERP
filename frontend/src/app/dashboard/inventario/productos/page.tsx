@@ -21,7 +21,8 @@ import { TARIFAS_IVA, etiquetaTarifaCatalogo, normalizarTarifaIva, sinTarifaIva 
 import { accionesDeFiltros, dependenciasTablero, estadoDelTotal, filtrosDePantalla, normalizarRespuesta } from '@/lib/tabla';
 import { textoDeError } from '@/lib/avisos';
 import {
-  TEXTO_SOLO_VER_PRODUCTOS, abrirEnlaceProducto, columnasProductos, consultaColumnaProducto, costoDeProducto, estadoReintento, extraProductos,
+  TEXTO_SOLO_VER_PRODUCTOS, abrirEnlaceProducto, cargaConError, columnasProductos, consultaColumnaProducto, costoDeProducto, estadoReintento,
+  extraProductos,
   precioDeProducto, tarjetaProducto, textoVacioProductos,
 } from '@/lib/estados-compras';
 import { INV_NAV } from '../inv-nav';
@@ -399,7 +400,8 @@ export default function ProductosPage() {
     // r2 (m36): el enlace abre la ficha (la lista y su aviso se van): el foco va a su título, nunca al <body>.
     abrir: (p) => { openEdit(p); requestAnimationFrame(() => document.getElementById('ficha-producto-titulo')?.focus()); },
     avisar: (texto) => avisar(texto, { tono: 'info' }),
-    alError: (error) => setEnlace({ vuelta: vueltaEnlace, error }),
+    // f4 r1 (R2-m3): la misma carga si no cambió (cargaConError): el alError(null) de cada efecto sin enlace no vuelve a pintar.
+    alError: (error) => setEnlace((actual) => cargaConError(actual, vueltaEnlace, error)),
   }), [idDeLaUrl, skuDeLaUrl, avisar, vueltaEnlace]);
 
   // ─── PRODUCT LIST ───

@@ -945,6 +945,18 @@ export function estadoReintento(carga, vuelta) {
 }
 
 /**
+ * B4 T24 f4 r1 (R2-m3): la carga que guarda alError (abrirEnlaceProducto) para la vuelta `vuelta`: la MISMA si no cambió (el setState
+ * no vuelve a pintar; el alError(null) de cada efecto sin enlace era un render de más) o una nueva con el error.
+ * @param {{vuelta: number, error: unknown} | null | undefined} actual
+ * @param {number} vuelta
+ * @param {unknown} error
+ * @returns {{vuelta: number, error: unknown}}
+ */
+export function cargaConError(actual, vuelta, error) {
+  return actual != null && actual.vuelta === vuelta && actual.error === error ? actual : { vuelta, error };
+}
+
+/**
  * B4 T24 f3 r1 (F81): las filas de un catálogo (GET /inventory/warehouses, /categories…) con normalizarRespuesta. Una respuesta con
  * forma inesperada (ni un arreglo ni {data: [...]}) es un ERROR, no una lista vacía (antes se convertía en [] sin decir nada).
  * @param {unknown} r

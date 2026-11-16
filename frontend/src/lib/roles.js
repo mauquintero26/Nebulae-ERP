@@ -288,6 +288,18 @@ export function accesoProveedores(rol) {
   return { listo: true, editar: esAdminOCompras(rol) };
 }
 
+/**
+ * B4 T24 f4 r1 (I1): la Agenda de clientes (backend/app/api/v1/crm.py, solo lectura): POST /customers (:212), PUT /customers/{id}
+ * (:234), DELETE /customers/{id} (:285), POST /customers/{id}/solicitudes (:1191) y POST /events (:1866) son de ADMIN y ASESOR; el GET,
+ * de todos. «Cotizar» lleva a POST /ventas/cotizaciones (erp_ventas.py), también de ADMIN y ASESOR. `editar` = esAdminOAsesor.
+ * @param {unknown} rol
+ * @returns {{listo: boolean, editar: boolean}}
+ */
+export function accesoClientes(rol) {
+  if (normalizarRol(rol) === '') return { listo: false, editar: false };
+  return { listo: true, editar: esAdminOAsesor(rol) };
+}
+
 /** B4 T24 f3 (FINAL-C4-f, ruling 5): lo que ve quien no cuenta una recepción por confirmar (COMPRAS y los demás roles). */
 export const TEXTO_CONTEO_SOLO_VER = 'El conteo y la confirmación los hace Bodega.';
 /**

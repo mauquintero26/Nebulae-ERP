@@ -2493,6 +2493,10 @@ console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5,
   // B4 T24 f4 (F39; D27): los filtros van en el estado único: cambiarFiltros despacha {tipo: 'filtro'} (el reductor los mezcla y vuelve
   // a la página 1: el caso «elegir la categoría conserva la bodega» de T24-i-f4 reemplaza la protección de `setFiltros((f) => ({ ...f, ...cambio }))`).
   for (const parte of ['for (const accion of accionesDeFiltros(cambio)) despachar(accion);', 'setSeleccion([])']) assert.ok(cambiar.includes(parte), `cambiarFiltros: ${parte}`);
+  // f4 r1 (R2-m1): «Ver artículos» de Almacenes cambia la bodega por cambiarFiltros (el filtro, la página y la selección, juntos).
+  const verArt = fuente.slice(fuente.indexOf('const verArticulos = useCallback('), fuente.indexOf('}, [', fuente.indexOf('const verArticulos = useCallback(')));
+  for (const parte of ['cambiarFiltros({ bodega: String(id) });', 'setVerAlmacenes(false);']) assert.ok(verArt.includes(parte), `verArticulos: ${parte}`);
+  assert.ok(fuente.includes('<VistaAlmacenes listado={almacenes} vacio={vacio} onVer={verArticulos} />'), 'Ver artículos llama a verArticulos');
   // B4 T24 f4 (m1 de f3 r2 = m26): vuelven las protecciones que F80 quitó: el id del Hub (no comparte estado ni preferencias con Stock,
   // RP26) y su estado único con su inicial.
   assert.ok(fuente.includes("const ID_HUB = 'inventario.hub';"), 'm1 (X1): el id del Hub');
@@ -3634,6 +3638,7 @@ console.log('--- TEST T24-i-f4 (B4 T24 f4: F39 en Inventario): filtrosDePantalla
     assert.ok(!/const \[filtros, setFiltros\] = useState/.test(f) && !/setFiltros\(/.test(f), `${ruta}: sin el useState de antes`);
     assert.match(f, new RegExp(`const cambiarFiltros = useCallback\\(\\(cambio: Partial<${tipo}>\\) => \\{\\n\\s*for \\(const accion of accionesDeFiltros\\(cambio\\)\\) despachar\\(accion\\);`), `${ruta}: cambiarFiltros despacha {tipo: 'filtro'}`);
     assert.equal(f.split('accionesDeFiltros(').length - 1, 1, `${ruta}: solo cambiarFiltros cambia los filtros`);
+    assert.ok(!/despachar\(\{\s*tipo: 'filtros?'/.test(f), `${ruta}: nadie despacha un filtro por fuera de cambiarFiltros (f4 r1, R2-m1)`);
     assert.match(f, /import \{[^}]*\bfiltrosDePantalla\b[^}]*\} from '@\/lib\/tabla';/);
   }
   for (const ruta of ['app/dashboard/inventario/stock/page.tsx', 'app/dashboard/inventario/abastecimiento/page.tsx']) {

@@ -4,7 +4,20 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { avisoDeFuente, avisoVisible, focoTrasReintento } from '@/lib/avisos';
 import { FOCOS } from '@/lib/design-system';
 import type { AcentoFoco } from '@/lib/design-system';
-import { usuarioDeLaSesion } from '@/components/tabla/usuarioDeLaSesion';
+import { getToken } from '@/lib/api';
+import { usuarioDelToken } from '@/lib/preferencias';
+
+/**
+ * B4 T24 f4 r1 (R2-m2): la cuenta de la sesión (el sub del token, usuarioDelToken de lib/preferencias.js), o null si no hay token o
+ * no se puede leer (localStorage bloqueado): de lib, sin el interno de components/tabla.
+ */
+function cuentaDeLaSesion(): number | null {
+  try {
+    return usuarioDelToken(getToken());
+  } catch {
+    return null;
+  }
+}
 
 /**
  * B4 T23B: el aviso de una fuente de una pantalla que falló (lib/avisos.js avisoDeFuente): una falla lleva el detalle del servidor y
@@ -55,7 +68,7 @@ export function AvisoDeError({ error, fallo, onReintentar, acento, reintentando 
 }) {
   const [ultimo, setUltimo] = useState<unknown>(null);
   // B4 T24 f4 (m8 de f3 r3): el último va con la cuenta con que se vio: si la sesión pasa a otra, no se pinta mientras carga la nueva.
-  const cuenta = usuarioDeLaSesion();
+  const cuenta = cuentaDeLaSesion();
   const [cuentaDelUltimo, setCuentaDelUltimo] = useState<number | null>(null);
   // r3 (C1 = C3): qué se ve lo decide avisoVisible (lib); al terminar un reintento bueno, el último se olvida.
   const { visto, olvidar } = avisoVisible({ error, ultimo, reintentando, cuenta, cuentaDelUltimo });
