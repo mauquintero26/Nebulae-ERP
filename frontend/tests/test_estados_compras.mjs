@@ -758,7 +758,8 @@ console.log('--- TEST 23 (B4 T14): el Hub de Compras (compras/page.tsx) cablea l
   assert.match(hub, /useEstadoTabla\(ID_HUB, INICIAL_HUB\)/);
   assert.match(hub, /const ID_HUB = 'compras\.hub';/);
   assert.match(hub, /const INICIAL_HUB = \{ vista: 'todos', orden: 'atencion' \};/, 'R8: lo vencido primero');
-  assert.match(hub, /ruta: '\/compras\/pedidos', estado, conConteos: true, esperar: !listo, despachar, activo: !enAnalisis,/);
+  // B4 T24 f4 (F60; D27): con el resumen en la MISMA llamada (las tarjetas cuadran con las pestañas cuando hay una búsqueda).
+  assert.match(hub, /ruta: '\/compras\/pedidos', estado, conConteos: true, conResumen: true, esperar: !listo, despachar, activo: !enAnalisis,/);
   assert.match(hub, /const EXTRA_TABLERO = \{ limit: 0 \};/, 'en Kanban la lista va sin filas');
   assert.match(hub, /extra: enKanban \? EXTRA_TABLERO : extraDeLaLista/);
   assert.match(hub, /const extraDeLaLista = useMemo\(\(\) => \(\{ orden: estado\.orden \|\| 'atencion' \}\), \[estado\.orden\]\);/,
@@ -937,7 +938,9 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
   // Las tarjetas (KPI-compras punto 6; R12, RP92): las cuatro de /compras/stats, pulsables como sus vistas.
   for (const kpi of ['pec_activos', 'pec_en_transito', 'pec_vencidos', 'pec_monto']) assert.match(pag, new RegExp(`kpi="${kpi}"`));
   // B4 T24 f3 (F45, D27): los datos de useResumen (stats.datos; null mientras carga la primera vez o con error).
-  assert.match(pag, /const tarjetas = tarjetasPedidosCompra\(stats\.datos\);/);
+  // B4 T24 f4 (F60; D27): con el resumen y los conteos de la lista (datosTarjetasCompras), que llevan la búsqueda.
+  assert.match(pag, /const datosTarjetas = datosTarjetasCompras\(stats\.datos, listado\.resumen, conteos\);/);
+  assert.match(pag, /const tarjetas = tarjetasPedidosCompra\(datosTarjetas\);/);
   assert.match(pag, /kpi="pec_vencidos"[\s\S]{0,300}onClick=\{alternarVencidos\}/, 'RP92: la tarjeta de vencidos abre semaforo=vencidos');
   assert.match(pag, /accionVistaEnLista\(estado, siguiente, opcionesEstadosPec\)/);
   // La franja (FLUJO-compras punto 6; RP21, RP40, RP46, D42): «Estás aquí» en Pedido de compra, sin «No resueltos».

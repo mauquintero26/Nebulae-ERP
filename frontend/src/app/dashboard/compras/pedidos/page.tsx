@@ -36,7 +36,7 @@ import {
   accionModo, accionPestana, accionVistaEnLista, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta,
   ordenEsAtencion, rutaSinParametro, textoOrdenHub,
 } from '@/lib/tabla';
-import { PERIODO_KPI, tarjetasPedidosCompra } from '@/lib/kpis';
+import { PERIODO_KPI, datosTarjetasCompras, tarjetasPedidosCompra } from '@/lib/kpis';
 // T15 r1 (m7): la etiqueta del estado del pedido de venta (el chip del alta), nunca el código.
 import { infoEstadoPedido } from '@/lib/estados-pedido';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
@@ -1562,7 +1562,7 @@ export default function PedidosCompraPage() {
   // tercer clic en un título), 'atencion': lo vencido primero sigue siendo el orden por defecto (R8).
   const extraDeLaLista = useMemo(() => ({ orden: estado.orden || 'atencion' }), [estado.orden]);
   const listado = useListado<FilaPec>({
-    ruta: '/compras/pedidos', estado, conConteos: true, esperar: !listo, despachar,
+    ruta: '/compras/pedidos', estado, conConteos: true, conResumen: true, esperar: !listo, despachar,
     extra: enKanban ? EXTRA_TABLERO : extraDeLaLista,
   });
   // m5 de T8: mientras la última respuesta sea la de Kanban (sin filas) y la tabla ya pida su página, la tabla está
@@ -1603,9 +1603,12 @@ export default function PedidosCompraPage() {
   // B4 T24 f3 (F45): el cargador compartido de los resúmenes (useResumen: aborta la anterior, descarta las viejas, va atado al usuario,
   // conserva lo último al recargar y con error no deja datos viejos: «—»).
   const stats = useResumen(`/compras/stats?periodo=${PERIODO_KPI}`, vueltaStats);
-  const cargandoStats = stats.cargando;
-  const estadoKpis = useEstadoKpi(cargandoStats, stats.error);
-  const tarjetas = tarjetasPedidosCompra(stats.datos);
+  // B4 T24 f4 (F60): lo que abre una pestaña cuenta con la búsqueda: el resumen y los conteos de la MISMA llamada de la lista
+  // (datosTarjetasCompras); «Comprado» sigue con /stats. Hasta que llega el resumen, las tarjetas cargan (nunca otra cifra).
+  const datosTarjetas = datosTarjetasCompras(stats.datos, listado.resumen, conteos);
+  const cargandoStats = stats.cargando || (datosTarjetas === null && stats.datos !== null && listado.error == null);
+  const estadoKpis = useEstadoKpi(cargandoStats, stats.error ?? listado.error);
+  const tarjetas = tarjetasPedidosCompra(datosTarjetas);
 
   // B1 a B3 (queda igual): los pedidos de venta del alta (sus PENDIENTE_COMPRA se eligen en «Nuevo PEC»). Si el GET
   // falla, el error queda en el estado (el alta lo dice con «Reintentar», m9 de T14) y la lista de antes se conserva.

@@ -634,6 +634,27 @@ export function tarjetasPedidosCompra(datos) {
 }
 
 /**
+ * B4 T24 f4 (F60): los datos de las tarjetas del Hub y de Pedidos de compra para que cuadren con las pestañas cuando hay una búsqueda.
+ * /compras/stats es de TODOS los PEC (sin la búsqueda); el `resumen` (con_resumen) y los `conteos` (con_conteos) de la MISMA llamada de
+ * GET /compras/pedidos sí la llevan: activos, en_transito, en_bodega, vencidos, recibidos, cumplimiento_pct y el monto (capital_cop)
+ * salen del resumen, y «N vigentes» de conteos.vigentes. Lo del período (flujo: «Comprado (30 días)») sigue saliendo de /stats. Sin el
+ * resumen o sin /stats, null (las tarjetas cargan o dicen «—»: nunca las cifras de otra consulta).
+ * @param {any} stats  `data` de /compras/stats
+ * @param {any} resumen  el resumen de la lista
+ * @param {any} conteos  los conteos de la lista
+ * @returns {any | null}  con la forma de /compras/stats (lo que leen tarjetasHubCompras y tarjetasPedidosCompra)
+ */
+export function datosTarjetasCompras(stats, resumen, conteos) {
+  if (!datosDe(stats) || !datosDe(resumen)) return null;
+  const vigentes = conteos && typeof conteos === 'object' ? numeroFinito(conteos.vigentes) : null;
+  return {
+    ...stats,
+    activos: resumen.activos, en_transito: resumen.en_transito, en_bodega: resumen.en_bodega, vencidos: resumen.vencidos,
+    recibidos: resumen.recibidos, cumplimiento_pct: resumen.cumplimiento_pct, monto_cop: resumen.capital_cop, vigentes,
+  };
+}
+
+/**
  * B4 T16A (KPI-compras punto 7): lo que pintan las 4 tarjetas de Mercancía en tránsito. Los números son de GET
  * /compras/stats?periodo=30d (todos los PEC) y el avance es de la página que se ve (RP95; lo arma avancePromedioTransito
  * de transito.js, que esta librería no importa para no cerrar un ciclo):

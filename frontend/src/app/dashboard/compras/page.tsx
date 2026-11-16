@@ -33,7 +33,7 @@ import {
   accionModo, accionVistaEnLista, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta, ordenEsAtencion,
   textoOrdenHub,
 } from '@/lib/tabla';
-import { PERIODO_KPI, tarjetasHubCompras } from '@/lib/kpis';
+import { PERIODO_KPI, datosTarjetasCompras, tarjetasHubCompras } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 // B4 T24 f3 (F54): la etiqueta del estado del pedido de venta (el chip del panel), nunca el código.
 import { infoEstadoPedido } from '@/lib/estados-pedido';
@@ -602,7 +602,7 @@ export default function ComprasHub() {
   // lo vencido primero sigue siendo el orden por defecto (R8), no el created_at del servidor.
   const extraDeLaLista = useMemo(() => ({ orden: estado.orden || 'atencion' }), [estado.orden]);
   const listado = useListado<FilaPec>({
-    ruta: '/compras/pedidos', estado, conConteos: true, esperar: !listo, despachar, activo: !enAnalisis,
+    ruta: '/compras/pedidos', estado, conConteos: true, conResumen: true, esperar: !listo, despachar, activo: !enAnalisis,
     extra: enKanban ? EXTRA_TABLERO : extraDeLaLista,
   });
   // m5 de T8: mientras la última respuesta sea la de Kanban (sin filas) y la tabla ya pida su página, la tabla está
@@ -643,9 +643,12 @@ export default function ComprasHub() {
   // B4 T24 f3 (F45): el cargador compartido de los resúmenes (useResumen: aborta la anterior, descarta las viejas, va atado al usuario,
   // conserva lo último al recargar y con error no deja datos viejos: «—»).
   const stats = useResumen(`/compras/stats?periodo=${PERIODO_KPI}`, vueltaStats);
-  const cargandoStats = stats.cargando;
-  const estadoKpis = useEstadoKpi(cargandoStats, stats.error);
-  const tarjetas = tarjetasHubCompras(stats.datos);
+  // B4 T24 f4 (F60): lo que abre una pestaña cuenta con la búsqueda: el resumen y los conteos de la MISMA llamada de la lista
+  // (datosTarjetasCompras); «Comprado» sigue con /stats. Hasta que llega el resumen, las tarjetas cargan (nunca otra cifra).
+  const datosTarjetas = datosTarjetasCompras(stats.datos, listado.resumen, conteos);
+  const cargandoStats = stats.cargando || (datosTarjetas === null && stats.datos !== null && listado.error == null);
+  const estadoKpis = useEstadoKpi(cargandoStats, stats.error ?? listado.error);
+  const tarjetas = tarjetasHubCompras(datosTarjetas);
 
   // B1 a B3 (queda igual): los pedidos de venta del panel de consolidación (sus PENDIENTE_COMPRA se filtran en el panel).
   // T14 r1 (m9): si el GET falla, el error queda en el estado (el panel lo dice con «Reintentar») y la lista de antes se

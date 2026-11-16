@@ -606,6 +606,40 @@ console.log('--- TEST 17 (B4 T15, KPI-compras punto 6): tarjetasPedidosCompra co
   assert.equal(etiquetaKpi('pec_monto'), 'Monto en compras');
 }
 
+console.log('--- TEST 17-f4 (B4 T24 f4, F60): las tarjetas del Hub y de Pedidos de compra cuadran con las pestañas cuando hay una búsqueda ---');
+{
+  const { datosTarjetasCompras, tarjetasHubCompras, tarjetasPedidosCompra } = kpisLib;
+  // /compras/stats es de TODOS los PEC (sin la búsqueda); el resumen y los conteos de GET /compras/pedidos (con_resumen, con_conteos)
+  // llevan la búsqueda: las cifras que abren una pestaña salen de ahí. Comprado (del período, flujo) sigue saliendo de /stats.
+  const stats = { activos: 7, en_transito: 3, en_bodega: 1, vencidos: 2, recibidos: 9, cumplimiento_pct: 56, monto_cop: 9000000, vigentes: 20,
+    flujo: { comprado_cop: { actual: 5000000, anterior: 4000000 } } };
+  const resumen = { capital_cop: 1200000, activos: 2, en_transito: 1, en_bodega: 0, vencidos: 1, recibidos: 3, cumplimiento_pct: 60 };
+  const conteos = { vigentes: 4, activos: 2, vencidos: 1 };
+  const d = datosTarjetasCompras(stats, resumen, conteos);
+  assert.deepEqual([d.activos, d.en_transito, d.vencidos, d.recibidos, d.cumplimiento_pct, d.monto_cop, d.vigentes], [2, 1, 1, 3, 60, 1200000, 4],
+    'con la búsqueda: el resumen y los conteos de la MISMA llamada de la lista');
+  assert.deepEqual(d.flujo, stats.flujo, 'Comprado (30 días) sigue con /stats');
+  const hub = tarjetasHubCompras(d);
+  assert.equal(hub.activos.valor, conteos.activos, '«Pedidos de compra activos» = el número de la pestaña Activos');
+  assert.equal(hub.activos.ayuda, '1 con entrega vencida');
+  assert.equal(hub.comprado.valor, 5000000);
+  const ped = tarjetasPedidosCompra(d);
+  assert.deepEqual([ped.activos.valor, ped.vencidos.valor, ped.monto.valor, ped.monto.ayuda], [2, 1, 1200000, '4 pedidos vigentes']);
+  // Sin el resumen todavía (la lista no llegó) o sin /stats, no hay tarjetas (cargan o dicen «—»): nunca las de otra consulta.
+  assert.equal(datosTarjetasCompras(stats, null, conteos), null);
+  assert.equal(datosTarjetasCompras(null, resumen, conteos), null);
+  assert.equal(datosTarjetasCompras(stats, resumen, null).vigentes, null, 'sin conteos, sin «N vigentes»');
+  // El cableado: la lista pide el resumen en la MISMA llamada y las tarjetas lo usan; el estado espera al resumen.
+  for (const [ruta, fn] of [['compras/page.tsx', 'tarjetasHubCompras'], ['compras/pedidos/page.tsx', 'tarjetasPedidosCompra']]) {
+    const f = readFileSync(new URL(`../src/app/dashboard/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    assert.match(f, /ruta: '\/compras\/pedidos', estado, conConteos: true, conResumen: true, esperar: !listo, despachar,/, `${ruta}: conResumen`);
+    assert.ok(f.includes('const datosTarjetas = datosTarjetasCompras(stats.datos, listado.resumen, conteos);'), `${ruta}: las tarjetas con el resumen`);
+    assert.ok(f.includes('const cargandoStats = stats.cargando || (datosTarjetas === null && stats.datos !== null && listado.error == null);'), `${ruta}: cargando hasta el resumen`);
+    assert.ok(f.includes('const estadoKpis = useEstadoKpi(cargandoStats, stats.error ?? listado.error);'), `${ruta}: el error de cualquiera de las dos`);
+    assert.ok(f.includes(`const tarjetas = ${fn}(datosTarjetas);`), `${ruta}: ${fn}`);
+  }
+}
+
 console.log('--- TEST 18 (B4 T16A, KPI-compras puntos 7 y 8): tarjetasTransito y tarjetasRecepciones con lo de GET /compras/stats ---');
 {
   const transito = kpisLib.tarjetasTransito;
