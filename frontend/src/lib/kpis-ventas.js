@@ -7,8 +7,7 @@
  * Hubs y las listas salen del servidor (/ventas/stats, con_resumen y con_conteos; C4, C5).
  */
 
-import { esPedidoVigente } from './estados-pedido.js';
-import { esSolicitudActiva } from './listas-ventas.js';
+import { esSolicitudActiva, pedidoSumaDinero } from './listas-ventas.js';
 import { redondearPeso } from './pesos.js';
 
 /**
@@ -29,9 +28,10 @@ function pesos(v) {
  * Las cifras de la ficha del cliente con las claves reales de GET /crm/customers/{id}/profile-360 (el perfil, o la
  * respuesta {status, data}):
  *  - saldoPorCobrar, totalComprado y totalPagado: resumen_financiero.saldo_pendiente_cop, total_comprado_cop y
- *    total_pagado_cop, en pesos enteros. Si resumen_financiero es null (BODEGA o COMPRAS no ven montos), los tres van en
+ *    total_pagado_cop, en pesos enteros (un saldo null es null: «—», B50-f). Si resumen_financiero es null (BODEGA o COMPRAS no ven montos), los tres van en
  *    null y sinPermiso es true: la pantalla pinta «—» con 'Sin permiso para ver montos';
- *  - pedidos: los pedidos que cuentan en el total comprado (todos menos los CANCELADO, como el servidor);
+ *  - pedidos: los pedidos que cuentan en el total comprado (sin CANCELADO ni DEVUELTO_TOTAL: pedidoSumaDinero, la regla de
+ *    rv.f_pven_con_dinero con la que profile-360 suma total_comprado_cop; B4 T24 f4, m8 del backend r2);
  *  - cotizacionesAbiertas: las que no están CONFIRMADA ni RECHAZADA (cli_cot_abiertas, RP70);
  *  - solicitudesActivas: las de la pestaña Activas de la lista (esSolicitudActiva: sin Soporte, Confirmadas ni
  *    Canceladas).
@@ -46,10 +46,11 @@ export function resumenFichaCliente(perfil360) {
   const financiero = esObjeto(perfil.resumen_financiero) ? perfil.resumen_financiero : {};
   return {
     sinPermiso,
-    saldoPorCobrar: sinPermiso ? null : pesos(financiero.saldo_pendiente_cop),
+    // B4 T24 f4 (B50-f): un saldo que llega null es null (la tarjeta pinta «—»), no 0.
+    saldoPorCobrar: sinPermiso || financiero.saldo_pendiente_cop === null ? null : pesos(financiero.saldo_pendiente_cop),
     totalComprado: sinPermiso ? null : pesos(financiero.total_comprado_cop),
     totalPagado: sinPermiso ? null : pesos(financiero.total_pagado_cop),
-    pedidos: filas(perfil.pedidos).filter((p) => esPedidoVigente(p.estado)).length,
+    pedidos: filas(perfil.pedidos).filter(pedidoSumaDinero).length,
     cotizacionesAbiertas: filas(perfil.cotizaciones).filter((c) => c.estado !== 'CONFIRMADA' && c.estado !== 'RECHAZADA').length,
     solicitudesActivas: filas(perfil.solicitudes).filter(esSolicitudActiva).length,
   };

@@ -19,13 +19,15 @@ import {
 import type { AccionTabla, PestanaTabla } from '@/components/tabla';
 import { BannerFlujo, useResumenFlujo } from '@/components/flujo';
 import type { DatosFlujo } from '@/components/flujo';
+import { useResumen } from '@/components/ui/useResumen';
+import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import { COMP_NAV } from '../comp-nav';
 import {
-  CeldaEstadoRecepcion, columnasRecepcion, esRecepcionPorConfirmar, numeroRecepcion, pecDeRecepcion, titulosDeOrdenRecepcion,
+  CeldaEstadoRecepcion, columnasRecepcion, numeroRecepcion, pecDeRecepcion, titulosDeOrdenRecepcion,
 } from '../columnas-recepcion';
 import type { FilaColumnasRecepcion } from '../columnas-recepcion';
 
-import { FOCOS } from '@/lib/design-system';
+import { FOCOS, RESERVA_BOTON_IA } from '@/lib/design-system';
 import { apiFetch } from '@/lib/api';
 import {
   accionModo, accionVistaEnLista, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta, ordenEsAtencion,
@@ -35,10 +37,15 @@ import { NOTA_RECEPCIONES, PERIODO_KPI, tarjetasRecepciones } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { fCOP, textoDia } from '../columnas-pec';
 import {
-  COLUMNAS_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, consultaColumnaRecepcion, infoEstadoPec,
-  opcionesEstadosRecepcion, tarjetaRecepcion, textoVacioRecepciones,
+  COLUMNAS_RECEPCION, EXTRA_TABLERO_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, bodegaRecepcion, pestanasRecepcion, consultaColumnaRecepcion, cuerpoRecepcionarPec,
+  datosConfirmacion, infoEstadoPec, opcionesEstadosRecepcion, tarjetaRecepcion, textoVacioRecepciones,
 } from '@/lib/estados-compras';
 import { avisosFlujoCompras, pasosPantallaCompras, textoReglaCompras } from '@/lib/flujo-compras';
+// B4 T24 f3 (FINAL-C4-f, ruling 5): confirmar es de ADMIN y BODEGA; recepcionar un PEC, de ADMIN y COMPRAS (accesoRecepciones).
+// r1 (C1 y la heredada): «Confirmar» con la MISMA regla del detalle (confirmarRecepcion: sin bodega receptora o heredada, no; su motivo).
+import { accesoRecepciones, confirmarRecepcion, itemConfirmarMenu } from '@/lib/roles';
+import { SelectorBodegaRecepcion, useBodegasRecepcion } from '../bodega-recepcion';
+import { useRolActual } from '@/components/ui/useRolActual';
 
 /** Una línea de la recepción (productos de _gr_dict; los nombres de campo cambian según quién la creó). */
 type LineaRecepcion = {
@@ -60,14 +67,12 @@ type ConteosRecepcion = Partial<Record<'por_confirmar' | 'confirmadas' | 'cancel
 const ID_RECEPCIONES = 'compras.recepciones';
 /** RP41, D6: la pestaña de trabajo es Por confirmar. */
 const INICIAL_RECEPCIONES = { vista: 'por_confirmar' };
-/** D39: en Kanban la lista va sin filas (limit=0); los conteos siguen al día y las filas las piden las columnas. */
-const EXTRA_TABLERO = { limit: 0 };
 /** El motivo de un tablero solo para ver (R11, KANBAN-logistica punto 5). */
 const TEXTO_SOLO_VER = 'Este tablero es para ver: las recepciones se confirman contando la mercancía.';
 /** Los estados del PEC que se pueden recepcionar: en camino y los que ya llegaron a bodega (R9). */
 const ESTADOS_RECEPCIONABLES = 'EN_TRANSITO,PENDIENTE_ENTREGA,RECIBIDO,PARCIALMENTE_RECIBIDA';
-/** El contenedor de los Hubs y de las listas del bloque (T7 a T15): pb-24 deja libre la esquina del botón de la IA. */
-const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
+/** El contenedor de los Hubs y de las listas del bloque (T7 a T15): RESERVA_BOTON_IA (pb-24, F44-a) deja libre la esquina del botón de la IA. */
+const CONTENEDOR = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;
 const FOCO_VISIBLE = FOCOS.teal;
 
 /** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
@@ -75,6 +80,10 @@ type AccionesFilaRecepcion = {
   abrir: (r: FilaRecepcion) => void;
   abrirConteo: (r: FilaRecepcion) => void;
   confirmar: (r: FilaRecepcion) => void;
+  /** B4 T24 f3 (FINAL-C4-f; r1, C1): si se ofrece «Confirmar» para esa recepción y, si no, su motivo (confirmarRecepcion). */
+  confirmacion: (r: FilaRecepcion) => { confirmar: boolean; texto: string | null };
+  /** r2 (m1): el ítem «Confirmar» del menú (itemConfirmarMenu). */
+  menu: (r: FilaRecepcion) => { oculto: boolean; deshabilitado: boolean; titulo: string | null };
   /** La recepción cuyo «Confirmar» está en camino: solo ese botón muestra la carga (antes, todos a la vez). */
   confirmandoId: number | null;
 };
@@ -90,13 +99,16 @@ const BOTON_FILA = `rounded-lg p-1.5 transition-colors ${FOCO_VISIBLE}`;
 function CeldaAcciones({ r }: { r: FilaRecepcion }) {
   const acciones = useContext(AccionesFila);
   const numero = numeroRecepcion(r);
-  const porConfirmar = esRecepcionPorConfirmar(r);
   const confirmando = acciones?.confirmandoId === r.id;
+  const confirmacion = acciones?.confirmacion(r) ?? { confirmar: false, texto: null };
+  const menu = acciones?.menu(r) ?? { oculto: true, deshabilitado: false, titulo: null };
   const items: ItemMenuFila[] = [
     { etiqueta: 'Ver detalle', icono: Eye, onClick: () => acciones?.abrir(r) },
     { etiqueta: 'Abrir conteo', icono: ClipboardList, onClick: () => acciones?.abrirConteo(r) },
-    { etiqueta: 'Confirmar', icono: Check, onClick: () => acciones?.confirmar(r), oculto: !porConfirmar,
-      deshabilitado: acciones?.confirmandoId != null, titulo: acciones?.confirmandoId != null ? 'Hay otra confirmación en camino.' : undefined },
+    // r2 (m1): oculto en una heredada que el rol no cierra; apagado con su motivo solo sin bodega (itemConfirmarMenu).
+    { etiqueta: 'Confirmar', icono: Check, onClick: () => acciones?.confirmar(r), oculto: menu.oculto,
+      deshabilitado: menu.deshabilitado || acciones?.confirmandoId != null,
+      titulo: menu.titulo ?? (acciones?.confirmandoId != null ? 'Hay otra confirmación en camino.' : undefined) },
   ];
   return (
     <span className="flex items-center justify-end gap-0.5">
@@ -104,12 +116,14 @@ function CeldaAcciones({ r }: { r: FilaRecepcion }) {
         className={`${BOTON_FILA} text-teal-700 hover:bg-teal-50`}>
         <ClipboardList size={14} aria-hidden="true" />
       </Link>
-      {porConfirmar && (
+      {confirmacion.confirmar && (
         <button type="button" onClick={() => acciones?.confirmar(r)} disabled={acciones?.confirmandoId != null}
           aria-label={`Confirmar la recepción ${numero}`} aria-busy={confirmando}
-          className={`inline-flex items-center gap-1 rounded-lg border border-teal-700 bg-teal-700 px-2 py-1 text-xs font-bold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60 ${FOCO_VISIBLE}`}>
-          {confirmando && <RefreshCw size={12} aria-hidden="true" className="animate-spin" />}
-          Confirmar
+          className={`relative inline-flex items-center gap-1 rounded-lg border border-teal-700 bg-teal-700 px-2 py-1 text-xs font-bold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60 ${FOCO_VISIBLE}`}>
+          {/* B4 T24 f3 (el anillo de f1 r3): la carga no ensancha el botón (sin ella, la celda cabe en sus 132 px útiles): el spinner va
+              encima del texto, que se oculta sin dejar de ocupar su lugar. */}
+          {confirmando && <RefreshCw size={12} aria-hidden="true" className="absolute inset-0 m-auto animate-spin" />}
+          <span className={confirmando ? 'invisible' : undefined}>Confirmar</span>
         </button>
       )}
       <MenuFila items={items} etiqueta={`Acciones de ${numero}`} />
@@ -126,18 +140,8 @@ const COLUMNAS_TABLA_RECEPCIONES = columnasRecepcion<FilaRecepcion>((r) => <Celd
 /** {campo de orden: título}, para el chip «Orden: Fecha ↓», solo de las columnas que se ordenan. */
 const TITULOS_ORDEN_RECEPCIONES = titulosDeOrdenRecepcion(COLUMNAS_TABLA_RECEPCIONES);
 
-/**
- * Las pestañas de Recepciones (RP41, D6, sin emojis): las vistas de GET /compras/recepciones, con los conteos del servidor
- * (con la búsqueda; null mientras cargan: la barra gris, nunca 0). Por confirmar va en ámbar si hay alguna.
- */
-function pestanasDeRecepciones(conteos: ConteosRecepcion | null): PestanaTabla[] {
-  return [
-    { id: 'por_confirmar', etiqueta: 'Por confirmar', conteo: conteos?.por_confirmar ?? null, alerta: (conteos?.por_confirmar ?? 0) > 0 },
-    { id: 'confirmadas', etiqueta: 'Confirmadas', conteo: conteos?.confirmadas ?? null },
-    { id: 'canceladas', etiqueta: 'Canceladas', conteo: conteos?.canceladas ?? null },
-    { id: 'todas', etiqueta: 'Todas', conteo: conteos?.todas ?? null },
-  ];
-}
+// B4 T24 f3 r1 (F77): las pestañas (pestanasRecepcion) y el extra del tablero (EXTRA_TABLERO_RECEPCION) son los de la lib, los mismos de
+// Inventario › Recepciones (RP41: si cambian, cambian en las dos).
 
 /* ================================================================
    MAIN PAGE — RecepcionesPage (B4 T16A)
@@ -146,6 +150,8 @@ export default function RecepcionesPage() {
   const pathname = usePathname();
   const router = useRouter();
   const { avisar, avisarError } = useAvisos();
+  const rol = useRolActual();
+  const accesoRec = accesoRecepciones(rol);
 
   // ── bloque 1: la carga del servidor (TABLA-compras punto 9; R5, C3, C4; D39, D40) ──
   // El estado ÚNICO de la pantalla: las pestañas, la búsqueda, el filtro de estados, las tarjetas, la tabla y el tablero
@@ -159,7 +165,7 @@ export default function RecepcionesPage() {
   // MISMA llamada. esperar: !listo (D40): el esqueleto, nunca «vacío». En Kanban, sin filas. Sin orden, el del servidor
   // (la más reciente primero).
   const listado = useListado<FilaRecepcion>({
-    ruta: '/compras/recepciones', estado, conConteos: true, esperar: !listo, despachar, extra: enKanban ? EXTRA_TABLERO : null,
+    ruta: '/compras/recepciones', estado, conConteos: true, esperar: !listo, despachar, extra: enKanban ? EXTRA_TABLERO_RECEPCION : null,
   });
   // m5 de T8: mientras la última respuesta sea la de Kanban (sin filas) y la tabla ya pida su página, la tabla está
   // cargando y el total en 'cargando': nunca «No hay recepciones…» con el total de la otra consulta.
@@ -194,17 +200,12 @@ export default function RecepcionesPage() {
   // Las tarjetas (KPI-compras punto 8; R7, R12): GET /compras/stats?periodo=30d, sin respaldo local. Mientras no llega,
   // 'cargando' (nunca 0); si falla, «—».
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    apiFetch(`/compras/stats?periodo=${PERIODO_KPI}`, { signal: control.signal })
-      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  const cargandoStats = stats?.vuelta !== vueltaStats;
-  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
-  const tarjetas = tarjetasRecepciones(stats?.datos ?? null);
+  // B4 T24 f3 (F45): el cargador compartido de los resúmenes (useResumen: aborta la anterior, descarta las viejas, va atado al usuario,
+  // conserva lo último al recargar y con error no deja datos viejos: «—»).
+  const stats = useResumen(`/compras/stats?periodo=${PERIODO_KPI}`, vueltaStats);
+  const cargandoStats = stats.cargando;
+  const estadoKpis = useEstadoKpi(cargandoStats, stats.error);
+  const tarjetas = tarjetasRecepciones(stats.datos);
 
   // «Actualizar» y lo que sigue a confirmar o recepcionar: la lista con sus conteos, el tablero, la franja y las tarjetas.
   // Ninguna recarga vacía lo que se ve: los hooks conservan lo último.
@@ -220,6 +221,9 @@ export default function RecepcionesPage() {
   // ── el selector «Recepcionar PEC» (B1 a B3): los pedidos en camino o ya en bodega, pedidos al abrir la ventana ──
   const [showPecModal, setShowPecModal] = useState(false);
   const [creatingFromPec, setCreatingFromPec] = useState<number | null>(null);
+  // r1 (C1, la raíz): la bodega receptora de la recepción que se crea (null: sin tocar; bodegaRecepcion preselecciona la única).
+  const bodegas = useBodegasRecepcion(showPecModal);
+  const [bodegaElegida, setBodegaElegida] = useState<string | null>(null);
   const [vueltaPecs, setVueltaPecs] = useState(0);
   const [pecs, setPecs] = useState<{ vuelta: number; filas: PecPorRecepcionar[]; error: unknown } | null>(null);
   useEffect(() => {
@@ -241,7 +245,9 @@ export default function RecepcionesPage() {
       const user = localStorage.getItem('user_name') || 'Mesa de Recepción';
       const res = await apiFetch(`/compras/pedidos/${pecId}/recepcionar`, {
         method: 'POST',
-        body: JSON.stringify({ created_by: user, force_full: false, notas: 'Recepción generada en Mesa de Entrada' }),
+        body: JSON.stringify(cuerpoRecepcionarPec({
+          creadoPor: user, notas: 'Recepción generada en Mesa de Entrada', bodega: bodegaRecepcion(bodegaElegida, bodegas.filas),
+        })),
       });
       avisar('Recepción ENINV creada correctamente', { tono: 'ok' });
       setShowPecModal(false);
@@ -278,9 +284,13 @@ export default function RecepcionesPage() {
       setConfirmandoId(null);
     }
   }, [avisar, avisarError, recargarTodo]);
+  const confirmacion = useCallback((r: FilaRecepcion) => confirmarRecepcion({ ...datosConfirmacion(r), rol }), [rol]);
+  const menu = useCallback((r: FilaRecepcion) => itemConfirmarMenu({ ...datosConfirmacion(r), rol }), [rol]);
   const accionesFila = useMemo<AccionesFilaRecepcion>(() => ({
-    abrir, abrirConteo, confirmar: (r) => { void handleConfirmarRecepcion(r); }, confirmandoId,
-  }), [abrir, abrirConteo, handleConfirmarRecepcion, confirmandoId]);
+    abrir, abrirConteo, confirmar: (r) => { void handleConfirmarRecepcion(r); }, confirmacion, menu, confirmandoId,
+  }), [abrir, abrirConteo, handleConfirmarRecepcion, confirmacion, menu, confirmandoId]);
+  // La tarjeta del tablero: «Contar y confirmar» solo si esa recepción se puede confirmar (r1, C1: con bodega y, si es heredada, ADMIN).
+  const tarjetaDeRecepcion = useCallback((r: FilaRecepcion) => tarjetaRecepcion(r, { contar: confirmacion(r).confirmar, motivo: confirmacion(r).texto }), [confirmacion]);
 
   // ── bloque 2: la tabla (TABLA-compras punto 9; R5, R26, D40, D41) ──
   const prefs = usePreferenciasTabla(ID_RECEPCIONES, COLUMNAS_TABLA_RECEPCIONES);
@@ -289,13 +299,13 @@ export default function RecepcionesPage() {
   const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
   // Pasar a Kanban sale de la pantalla completa (el conmutador sigue a la vista y el tablero no queda tapado).
   useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
-  const pestanas = pestanasDeRecepciones(conteos);
+  const pestanas: PestanaTabla[] = pestanasRecepcion(conteos);
   // m2 de T8: el conmutador Lista / Kanban poda los estados con las opciones del modo nuevo (las columnas del tablero, o las
   // de la pestaña en Lista), con la regla de accionPestana (accionModo); lo demás de la barra va directo.
   const alCambiarBarra = useCallback((accion: AccionTabla) => {
     if (accion.tipo === 'modo') {
       const modo = String(accion.valor);
-      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_RECEPCION : opcionesEstadosRecepcion));
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_RECEPCION : opcionesEstadosRecepcion, COLUMNAS_RECEPCION));
     } else despachar(accion);
   }, [estado, despachar]);
   // R8: ordenada por una columna, el chip «Orden: … · Más recientes» vuelve al orden del servidor.
@@ -325,7 +335,7 @@ export default function RecepcionesPage() {
     const siguiente = vistaActiva === vista ? 'todas' : vista;
     despachar(accionVistaEnLista(estado, siguiente, opcionesEstadosRecepcion));
   };
-  const actualizando = listado.recargando || flujo.cargando || (cargandoStats && stats !== null);
+  const actualizando = listado.recargando || flujo.cargando || (cargandoStats && stats.datos !== null);
 
   /* ════════════════ RENDER ════════════════ */
   return (
@@ -355,9 +365,11 @@ export default function RecepcionesPage() {
           subtitle="Inspección física y separación por destino: Cliente (despacho), Stock Nebulae (disponible) y Socio Mau."
           actions={(
             <div className="flex flex-wrap items-center gap-2.5">
-              <Button size="sm" color="teal" icon={Plus} onClick={() => setShowPecModal(true)}>
-                Recepcionar PEC
-              </Button>
+              {accesoRec.recepcionar && (
+                <Button size="sm" color="teal" icon={Plus} onClick={() => { setBodegaElegida(null); setShowPecModal(true); }}>
+                  Recepcionar PEC
+                </Button>
+              )}
               <button type="button" onClick={recargarTodo}
                 className={`flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 text-xs font-bold shadow-sm transition-colors ${FOCO_VISIBLE}`}>
                 <RefreshCw size={13} aria-hidden="true" className={actualizando ? 'animate-spin' : ''} /> Actualizar
@@ -369,13 +381,16 @@ export default function RecepcionesPage() {
         {/* B4 T16A (KPI-compras punto 8; R7, R12): las 3 tarjetas de /compras/stats (todas las recepciones y los PEC en
             tránsito): mientras cargan, barras grises (nunca 0); con error, «—». La nota corta reemplaza la tarjeta «Regla de
             Separación». */}
-        <FranjaKpis estado={estadoKpis} titulo="Recepciones" nota={NOTA_RECEPCIONES}>
+        <FranjaKpis estado={estadoKpis} titulo="Recepciones" idFoco="franja-recepciones-compras" nota={NOTA_RECEPCIONES}>
           <TarjetaKpi kpi="rec_por_confirmar" valor={tarjetas?.por_confirmar.valor ?? null}
             activo={vistaActiva === 'por_confirmar'} onClick={() => elegirVista('por_confirmar')} />
           <TarjetaKpi kpi="rec_confirmadas" valor={tarjetas?.confirmadas.valor ?? null}
             activo={vistaActiva === 'confirmadas'} onClick={() => elegirVista('confirmadas')} />
           <TarjetaKpi kpi="pec_en_transito" valor={tarjetas?.en_transito.valor ?? null} />
         </FranjaKpis>
+        {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
+        {/* r2 (m36 completo): montado siempre (destinoFoco, el id de la franja): si el reintento sale bien o da un 403, el foco va a la franja, nunca al <body>. */}
+        <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="teal" reintentando={stats.cargando} destinoFoco="franja-recepciones-compras" />
 
         {/* B4 T16A (TABLA-compras punto 9, KANBAN-logistica punto 5): la barra y la tabla estándar en el servidor, o el
             tablero solo para ver en modo servidor, con el MISMO estado (pestaña, búsqueda y estados). En Kanban las
@@ -438,7 +453,7 @@ export default function RecepcionesPage() {
             <TableroKanban
               tablero={tablero}
               soloLectura={TEXTO_SOLO_VER}
-              tarjetaDe={tarjetaRecepcion}
+              tarjetaDe={tarjetaDeRecepcion}
               onAbrir={abrir}
               color="teal"
               vacio="Sin recepciones aquí"
@@ -457,6 +472,10 @@ export default function RecepcionesPage() {
           onClose={() => setShowPecModal(false)}
           footer={<Button variant="secondary" onClick={() => setShowPecModal(false)}>Cancelar</Button>}
         >
+          <div className="mb-4">
+            <SelectorBodegaRecepcion id="bodega-recepcionar-pec" bodegas={bodegas} elegida={bodegaElegida} onElegir={setBodegaElegida}
+              deshabilitado={creatingFromPec !== null} />
+          </div>
           {cargandoPecs ? (
             <div role="status" className="flex items-center justify-center gap-2 py-8 text-sm text-slate-500">
               <RefreshCw size={16} aria-hidden="true" className="animate-spin text-teal-500" /> Buscando los pedidos de compra…
@@ -485,7 +504,7 @@ export default function RecepcionesPage() {
                     <p className="text-xs font-semibold text-slate-700 mt-1">{pec.supplier_name || 'Proveedor'}</p>
                     <p className="text-[11px] text-slate-500 mt-0.5">Entrega est.: {textoDia(pec.fecha_entrega_estimada)} · {fCOP(pec.total_cop)}</p>
                   </div>
-                  <Button size="sm" color="teal" icon={PackageCheck} loading={creatingFromPec === pec.id} disabled={creatingFromPec !== null}
+                  <Button size="sm" color="teal" icon={PackageCheck} loading={creatingFromPec === pec.id} disabled={creatingFromPec !== null || bodegas.cargando}
                     onClick={() => handleCrearDesdePec(pec.id)}>
                     Recepcionar
                   </Button>
@@ -518,11 +537,14 @@ export default function RecepcionesPage() {
                 className={`inline-flex items-center gap-2 rounded-xl border border-teal-200 bg-white px-4 py-2.5 text-sm font-bold text-teal-800 hover:bg-teal-50 ${FOCO_VISIBLE}`}>
                 <ClipboardList size={14} aria-hidden="true" /> Abrir conteo
               </Link>
-              {esRecepcionPorConfirmar(selectedItem) && (
+              {/* r1 (C1, m42): sin «Confirmar» (sin bodega, heredada o el rol no confirma), su motivo en el pie. */}
+              {confirmacion(selectedItem).confirmar ? (
                 <Button color="teal" icon={Check} loading={confirmandoId === selectedItem.id} disabled={confirmandoId !== null}
                   onClick={() => handleConfirmarRecepcion(selectedItem)}>
                   Confirmar Entrada Física y Actualizar Stock
                 </Button>
+              ) : confirmacion(selectedItem).texto && (
+                <p role="status" className="max-w-xs text-xs font-semibold text-slate-600">{confirmacion(selectedItem).texto}</p>
               )}
             </>
           )}

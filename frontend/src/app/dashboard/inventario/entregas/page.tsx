@@ -13,6 +13,7 @@ import { ArrowUpFromLine, Eye, MessageCircle, Package, RefreshCw, Truck } from '
 import {
   SubNav, PageHeader, Drawer, Button, MenuFila, useAvisos, FranjaKpis, TarjetaKpi, useEstadoKpi, TableroKanban, useTableroKanban,
 } from '@/components/ui';
+import { useResumen } from '@/components/ui/useResumen';
 import type { ItemMenuFila } from '@/components/ui';
 import {
   BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
@@ -35,7 +36,7 @@ import {
   COLUMNAS_ENTREGA, NOTA_ENTREGAS, OPCIONES_ESTADOS_TABLERO_ENTREGA, VISTA_DE_TRABAJO_ENTREGA, confirmacionDespacho,
   consultaColumnaEntrega, consultaConteoEntrega, consultaEntregas, cuerpoDespacho, infoCobroEntrega, mensajeFaltaBodega, opcionesEstadosEntrega,
   pestanasEntrega, puedeCobrarSaldo, puedeDespacharPedido, recordatorioSaldo, reglaSoltarEntrega, resumenColumnaEntrega, saldoEntrega,
-  tarjetaEntrega, tarjetasEntregas, textoEntregaTablero, textoVacioEntregas, vistaDeTarjetaEntrega,
+  tarjetaEntrega, tarjetasEntregas, textoEntregaTablero, textoFaltaSaldo, textoVacioEntregas, vistaDeTarjetaEntrega,
 } from '@/lib/entregas';
 
 /** Una línea del pedido (productos de _ven_dict: JSON; los nombres son los del servidor). */
@@ -152,7 +153,6 @@ const COLUMNAS_TABLA_ENTREGAS: ColumnaTabla<FilaPedido>[] = [
 const TITULOS_ORDEN_ENTREGAS = titulosDeOrdenPec(COLUMNAS_TABLA_ENTREGAS);
 
 type ConteosCargados = { vuelta: string; conteos: Record<ClaveColumna, number> | null; error: unknown };
-type StatsCargadas = { vuelta: number; kpis: unknown; error: unknown };
 
 /* ================================================================
    MAIN PAGE — EntregasPage (B4 T19)
@@ -223,17 +223,11 @@ export default function EntregasPage() {
   const estadoConteos = useEstadoKpi(cargandoConteos, errorConteos);
 
   // Las tarjetas «Pedidos en curso» y «Saldo antes de despachar» (KPI-inventario punto 8): GET /ventas/stats, sin respaldo local.
+  // B4 T24 f3 (F45): el cargador compartido (useResumen: conserva lo último al recargar y con error no deja datos viejos).
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<StatsCargadas | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    apiFetch('/ventas/stats', { signal: control.signal })
-      .then((r: { data?: { kpis?: unknown } } | null) => setStats({ vuelta: vueltaStats, kpis: r?.data?.kpis ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, kpis: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  const { datos: kpisStats, cargando: cargandoStats } = lecturaDeCarga(stats && { vuelta: stats.vuelta, datos: stats.kpis, error: stats.error }, vueltaStats);
-  const errorStats = cargandoStats ? null : (stats?.error ?? null);
+  const stats = useResumen<{ kpis?: unknown }>('/ventas/stats', vueltaStats);
+  const kpisStats = stats.datos?.kpis ?? null;
+  const { cargando: cargandoStats, error: errorStats } = stats;
   const estadoStats = useEstadoKpi(cargandoStats, errorStats);
   const tarjetas = tarjetasEntregas(kpisStats, conteos);
 
@@ -377,7 +371,7 @@ export default function EntregasPage() {
     const siguiente = vistaActiva === vista ? INICIAL_ENTREGAS.vista : vista;
     despachar(accionVistaEnLista(estado, siguiente, opcionesEstadosEntrega));
   };
-  const actualizando = listado.recargando || (cargandoConteos && cargadosConteos !== null) || (cargandoStats && stats !== null);
+  const actualizando = listado.recargando || (cargandoConteos && cargadosConteos !== null) || (cargandoStats && stats.datos !== null);
   const tel = selected ? (selected.telefono_whatsapp || selected.customer_phone || '') : '';
   const urlTel = selected ? waUrl(tel, '') : null;
 
@@ -406,15 +400,14 @@ export default function EntregasPage() {
         {/* B4 T19 (KPI-inventario punto 8; R7, R12): las 3 tarjetas. «Pedidos en curso» es el mismo número del Hub de Ventas; «Saldo antes
             de despachar», el saldo real de cada pedido según su forma de pago; «Pedidos despachados», el conteo de su pestaña. Mientras
             cargan, barras grises (nunca 0); con error, «—» y «Reintentar». La nota reemplaza la tarjeta «Protocolo 60/40». */}
-        <FranjaKpis estado={estadoStats} titulo="Entregas" nota={NOTA_ENTREGAS}>
+        <FranjaKpis estado={estadoStats} titulo="Entregas" idFoco="franja-entregas" nota={NOTA_ENTREGAS}>
           <TarjetaKpi kpi="pven_en_curso" valor={tarjetas.en_curso.valor} ayuda="Por despachar" />
           <TarjetaKpi kpi="ent_saldo" valor={tarjetas.saldo.valor} ayuda="Según la forma de pago de cada pedido" />
           <TarjetaKpi kpi="ent_despachados" valor={tarjetas.despachados.valor} estado={estadoConteos}
             activo={vistaActiva === vistaDeTarjetaEntrega('ent_despachados')} onClick={elegirDespachados} />
         </FranjaKpis>
-        {errorStats != null && (
-          <AvisoReintentar error={errorStats} fallo="No se pudieron cargar los indicadores de pedidos" onReintentar={() => setVueltaStats((n) => n + 1)} />
-        )}
+        {/* r3 (C2, m36): montado siempre, con reintentando y el destino del foco (la franja). */}
+        <AvisoReintentar error={errorStats} fallo="No se pudieron cargar los indicadores de pedidos" onReintentar={stats.recargar} reintentando={stats.cargando} destinoFoco="franja-entregas" />
         {errorConteos != null && (
           <AvisoReintentar error={errorConteos} fallo="No se pudieron contar los pedidos de cada pestaña" onReintentar={() => setVueltaConteos((n) => n + 1)} />
         )}
@@ -561,12 +554,15 @@ export default function EntregasPage() {
                     El cliente pagó de más: hay un crédito a favor de <strong>{pesos(Math.abs(saldo))}</strong> pendiente de coordinar (reembolso o abono a otro pedido).
                   </p>
                 )}
-                {tieneSaldo && puedeCobrarSaldo(rol) && (
+                {/* B4 T24 f3 (F95): con saldo, TODOS ven por qué no se despacha (el motivo del tablero); cobrarlo es de ADMIN y ASESOR. */}
+                {tieneSaldo && (
                   <div className="mt-3 flex items-center justify-between gap-3">
-                    <p className="text-[11px] text-amber-900 leading-tight">El cliente debe cancelar el saldo antes del despacho.</p>
-                    <Button size="sm" color="emerald" loading={updating} onClick={() => handleRegistrarCobroSaldo(selected)}>
-                      Marcar Saldo Cobrado
-                    </Button>
+                    <p className="text-[11px] text-amber-900 leading-tight">{textoFaltaSaldo(selected)}</p>
+                    {puedeCobrarSaldo(rol) && (
+                      <Button size="sm" color="emerald" loading={updating} onClick={() => handleRegistrarCobroSaldo(selected)}>
+                        Marcar Saldo Cobrado
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>

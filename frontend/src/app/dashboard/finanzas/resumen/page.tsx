@@ -4,6 +4,7 @@ import { Activity } from 'lucide-react';
 import { SubNav, PageHeader } from '@/components/ui';
 import { PanelAnalisisPerezoso } from '@/components/analisis';
 import { FIN_NAV } from '../fin-nav';
+import { RESERVA_BOTON_IA } from '@/lib/design-system';
 
 // B4 T22 (ANALISIS-finanzas puntos 3 y 4; R2, R13, R16, R17, RP69): el Resumen de Finanzas con la pestaña Análisis estándar y
 // los datos reales de GET /finance/analisis (solo ADMIN y FINANZAS: a un rol sin permiso el panel le dice «No tienes permiso
@@ -21,8 +22,8 @@ export default function ResumenFinancieroPage() {
     <div className="w-full h-full overflow-y-auto animate-in fade-in duration-500 custom-scrollbar bg-slate-50">
       <SubNav label="Finanzas" items={FIN_NAV} currentPath="/dashboard/finanzas/resumen" color="blue" />
 
-      {/* pb-24 deja libre, con la página al fondo, la esquina del botón flotante de la IA (T7 r1b). */}
-      <div className="px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 space-y-6">
+      {/* RESERVA_BOTON_IA (pb-24; B4 T24 f4, F44-a) deja libre, con la página al fondo, la esquina del botón flotante de la IA (T7 r1b). */}
+      <div className={`px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 space-y-6`}>
         <PageHeader icon={Activity} color="blue"
           title="Dashboard P&L (Pérdidas y Ganancias)"
           subtitle="Ventas, dinero recibido, gastos y utilidad estimada del período, con datos reales." />

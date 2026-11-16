@@ -13,15 +13,16 @@ import {
 } from '@/components/tabla';
 import type { ColumnaTabla } from '@/components/tabla';
 import { apiFetch } from '@/lib/api';
-import { estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
+import { accionesDeFiltros, estadoDelTotal, filtrosDePantalla, normalizarRespuesta } from '@/lib/tabla';
 import { textoDeError } from '@/lib/avisos';
 import { numeroFinito } from '@/lib/kpis';
 import {
-  COLUMNAS_KARDEX, DIRECCIONES_KARDEX, TEXTO_SOLO_VER_KARDEX, consultaColumnaKardex, direccionesDeColumnaKardex, extraKardex,
-  etiquetaPropietario, infoDireccionKardex, numeroMovimiento, tarjetaMovimiento, textoFechaMovimiento, textoVacioKardex,
+  COLUMNAS_KARDEX, DIRECCIONES_KARDEX, TEXTO_SOLO_VER_KARDEX, cierraComboboxAlSalir, consultaColumnaKardex, direccionesDeColumnaKardex,
+  extraKardex, etiquetaPropietario, teclaComboboxSku, infoDireccionKardex, numeroMovimiento, tarjetaMovimiento, textoFechaMovimiento, textoVacioKardex,
 } from '@/lib/estados-compras';
 import { INV_NAV } from '../inv-nav';
 import { CONTENEDOR, FOCOS, SelectorCatalogo, cantidad, pesos, useCatalogo } from '../piezas-inventario';
+import { AvisoCatalogoViejo } from '../aviso-catalogo';
 // El chip estándar de las tablas del bloque (columnas-pec.tsx, T15 r1): la misma forma que el estado de un PEC.
 import { CHIP } from '../../compras/columnas-pec';
 
@@ -45,8 +46,11 @@ type Movimiento = {
   created_by?: string | null;
   idempotency_key?: string | null;
 };
-/** Los filtros extra de la barra, que van al servidor (extraKardex): el id del SKU elegido y los demás como texto ('' = todos). */
-type FiltrosKardex = { skuId: number | null; bodega: string; propietario: string; direccion: string; desde: string; hasta: string };
+/**
+ * Los filtros extra de la barra, que van al servidor (extraKardex): el id del SKU elegido y los demás como texto ('' = todos). B4 T24 f4
+ * (F39): `skuEtiqueta` (el texto del SKU elegido) no va al servidor: se guarda con la sesión para que la caja vuelva con su texto.
+ */
+type FiltrosKardex = { skuId: number | null; skuEtiqueta: string; bodega: string; propietario: string; direccion: string; desde: string; hasta: string };
 /** Un resultado de GET /crm/products/search: el SKU y su texto. */
 type OpcionSku = { id: number; display?: string | null; product_name?: string | null };
 
@@ -56,9 +60,10 @@ const INICIAL_KARDEX = {};
 const RUTA_KARDEX = '/inventory/kardex';
 /** m1: el servidor ordena SIEMPRE por fecha (get_kardex no tiene `orden`); la barra lo dice en lugar de un título que prometería ordenar. */
 const TEXTO_ORDEN_KARDEX = 'Del más reciente al más antiguo';
-const SIN_FILTROS: FiltrosKardex = { skuId: null, bodega: '', propietario: '', direccion: '', desde: '', hasta: '' };
+const SIN_FILTROS: FiltrosKardex = { skuId: null, skuEtiqueta: '', bodega: '', propietario: '', direccion: '', desde: '', hasta: '' };
 /** El orden de la lista de direcciones (la del Kardex de hoy, más las dos que escribe el sistema y no estaban). */
-const ORDEN_DIRECCIONES = ['IN', 'OUT', 'TRANSFER_IN', 'TRANSFER_OUT', 'ADJUST_IN', 'ADJUST_OUT', 'QUARANTINE', 'SCRAP', 'RETURN_IN'];
+// B4 T24 f3 (F88): el orden de DIRECCIONES_KARDEX (la lib), sin repetir sus claves a mano.
+const ORDEN_DIRECCIONES = Object.keys(DIRECCIONES_KARDEX);
 const ICONO_DIRECCION: Record<string, LucideIcon> = {
   IN: ArrowDownRight, OUT: ArrowUpRight, TRANSFER_IN: RefreshCw, TRANSFER_OUT: RefreshCw, ADJUST_IN: ArrowDownRight,
   ADJUST_OUT: ArrowUpRight, QUARANTINE: RefreshCw, SCRAP: ArrowUpRight, RETURN_IN: ArrowDownRight,
@@ -150,7 +155,8 @@ function DetalleMovimiento({ m, onCerrar }: { m: Movimiento; onCerrar: () => voi
     ['Registrado por', m.created_by || 'Sistema'],
   ];
   return (
-    <Modal title={`Movimiento ${numeroMovimiento(m)}`} subtitle={[m.sku, m.product_name].filter(Boolean).join(' · ')} icon={ArrowRightLeft}
+    // B4 T24 f3 (F90): el título fijo y el número en el subtítulo (sin «Movimiento Movimiento n.º 3» cuando no trae documento).
+    <Modal title="Detalle del movimiento" subtitle={[numeroMovimiento(m), m.sku, m.product_name].filter(Boolean).join(' · ')} icon={ArrowRightLeft}
       color="indigo" onClose={onCerrar} footer={(
         <button type="button" onClick={onCerrar}
           className={`rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white hover:bg-slate-800 ${FOCOS.indigo}`}>Cerrar</button>
@@ -174,7 +180,8 @@ export default function KardexPage() {
   // evento: la consulta cambia una sola vez (un solo pedido; antes, dos efectos pedían dos veces). El Kardex no tiene `q`.
   const [estado, despachar, listo] = useEstadoTabla(ID_KARDEX, INICIAL_KARDEX);
   const enKanban = estado.modo === 'kanban';
-  const [filtros, setFiltros] = useState<FiltrosKardex>(SIN_FILTROS);
+  // B4 T24 f4 (F39): los filtros son del estado único (estado.filtros): vuelven con la sesión junto con la página.
+  const filtros = useMemo(() => filtrosDePantalla(estado.filtros, SIN_FILTROS) as FiltrosKardex, [estado.filtros]);
   const { catalogo: bodegas, recargar: recargarBodegas } = useCatalogo('/inventory/warehouses');
   const extraLista = useMemo(() => ({ ...extraKardex(filtros), q: null, orden: null }), [filtros]);
   // GET /inventory/kardex con limit y offset del estado; responde {data: {items, total}} (normalizarRespuesta, RP54). esperar:
@@ -211,14 +218,20 @@ export default function KardexPage() {
   }, [recargarListado, recargarTablero, recargarBodegas]);
 
   // ── bloque 2: los filtros y la tabla (R5, R26; D40, D41) ──
+  // F39: una acción {tipo: 'filtro'} por clave (el reductor la mezcla con los otros y vuelve a la página 1, en el mismo evento).
   const cambiarFiltros = useCallback((cambio: Partial<FiltrosKardex>) => {
-    setFiltros((f) => ({ ...f, ...cambio }));
-    despachar({ tipo: 'pagina', valor: 1 });
+    for (const accion of accionesDeFiltros(cambio)) despachar(accion);
   }, [despachar]);
   const hayFiltros = filtros.skuId !== null || Boolean(filtros.bodega || filtros.propietario || filtros.direccion || filtros.desde || filtros.hasta);
   // La búsqueda del SKU: el texto que se escribe y lo que devuelve /crm/products/search (con su error, nunca una lista vacía
   // falsa). Escribir de nuevo suelta el SKU elegido (el filtro cambia una sola vez).
   const [skuTexto, setSkuTexto] = useState('');
+  // F39: al volver con un SKU elegido (la sesión), la caja toma su etiqueta.
+  const [skuVisto, setSkuVisto] = useState<number | null>(null);
+  if (filtros.skuId !== skuVisto) {
+    setSkuVisto(filtros.skuId);
+    if (filtros.skuId !== null) setSkuTexto(filtros.skuEtiqueta);
+  }
   const [skuBusqueda, setSkuBusqueda] = useState<{ texto: string; filas: OpcionSku[]; error: unknown } | null>(null);
   const buscarSku = skuTexto.trim() !== '' && filtros.skuId === null;
   useEffect(() => {
@@ -234,13 +247,40 @@ export default function KardexPage() {
     return () => { clearTimeout(pausa); control.abort(); };
   }, [buscarSku, skuTexto]);
   const resultadosSku = buscarSku && skuBusqueda?.texto === skuTexto ? skuBusqueda : null;
+  // B4 T24 f3 (F88): la lista del autocompletar se cierra con Esc y al salir del campo y de la lista; se abre otra vez al escribir.
+  // r1 (C3): las teclas y el cierre en la lib (teclaComboboxSku, cierraComboboxAlSalir); el foco vuelve al campo tras Esc y tras elegir.
+  const [skuCerrado, setSkuCerrado] = useState(false);
+  const listaSkuAbierta = buscarSku && !skuCerrado;
+  const refListaSku = useRef<HTMLDivElement>(null);
+  const refCampoSku = useRef<HTMLInputElement>(null);
+  const ratonSobreLista = useRef(false);
+  const [indiceSku, setIndiceSku] = useState(-1);
   const escribirSku = (texto: string) => {
     setSkuTexto(texto);
-    if (filtros.skuId !== null) cambiarFiltros({ skuId: null });
+    setSkuCerrado(false);
+    if (filtros.skuId !== null) cambiarFiltros({ skuId: null, skuEtiqueta: '' });
+  };
+  const opcionesSku = () => Array.from(refListaSku.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? []);
+  const teclaSku = (e: React.KeyboardEvent<HTMLElement>) => {
+    const opciones = opcionesSku();
+    const r = teclaComboboxSku({ tecla: e.key, abierta: listaSkuAbierta, indice: opciones.indexOf(document.activeElement as HTMLElement), total: opciones.length });
+    if (!r) return;
+    e.preventDefault();
+    if (e.key === 'Escape') e.stopPropagation();
+    setSkuCerrado(!r.abierta);
+    if (r.foco < 0) refCampoSku.current?.focus(); else opciones[r.foco]?.focus();
+  };
+  const saleDelSku = (e: React.FocusEvent<HTMLElement>) => {
+    // r2 (m5 = m15): la decisión entera en la lib: hacia adentro no cierra; sin destino (Safari) con el ratón sobre la lista, tampoco.
+    if (cierraComboboxAlSalir(e.currentTarget.contains(e.relatedTarget as Node | null), { sinDestino: e.relatedTarget == null, ratonSobreLista: ratonSobreLista.current })) setSkuCerrado(true);
   };
   const elegirSku = (o: OpcionSku) => {
-    setSkuTexto(o.display || o.product_name || `SKU #${o.id}`);
-    cambiarFiltros({ skuId: o.id });
+    const etiqueta = o.display || o.product_name || `SKU #${o.id}`;
+    setSkuTexto(etiqueta);
+    // B4 T24 f4 (m3 de f3 r2): la lista se desmonta bajo el puntero y React no manda su onPointerLeave: el ref vuelve a false aquí.
+    ratonSobreLista.current = false;
+    cambiarFiltros({ skuId: o.id, skuEtiqueta: etiqueta });
+    refCampoSku.current?.focus();
   };
   const quitarFiltros = () => {
     setSkuTexto('');
@@ -253,7 +293,7 @@ export default function KardexPage() {
   // Pasar a Kanban sale de la pantalla completa (el conmutador sigue a la vista y el tablero no queda tapado).
   useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
   const [detalle, setDetalle] = useState<Movimiento | null>(null);
-  const abrir = useCallback((m: Movimiento) => setDetalle(m), []);
+  const abrir = useCallback((m: Movimiento) => setDetalle(m), [setDetalle]);
   // m8 de T15: el «vacío» memoizado dice qué lo deja vacío (los filtros o nada).
   const vacio = useMemo(() => {
     const texto = textoVacioKardex(hayFiltros);
@@ -299,23 +339,37 @@ export default function KardexPage() {
               buscar={false}
               filtros={(
                 <>
-                  <div className="relative">
+                  <div className="relative" onKeyDown={teclaSku} onBlur={saleDelSku}>
                     <label className="relative flex items-center">
                       <Search size={14} aria-hidden="true" className="pointer-events-none absolute left-3 text-slate-500" />
-                      <input type="search" aria-label="Producto o SKU" placeholder="Producto / SKU…" value={skuTexto}
+                      <input ref={refCampoSku} type="search" aria-label="Producto o SKU" placeholder="Producto / SKU…" value={skuTexto}
+                        role="combobox" aria-expanded={listaSkuAbierta} aria-controls="kardex-sku-opciones" aria-autocomplete="list"
                         onChange={(e) => escribirSku(e.target.value)}
                         className={`w-44 py-2 pl-8 pr-3 text-xs font-bold ${CONTROL} ${filtros.skuId !== null ? 'border-emerald-400 bg-emerald-50' : ''}`} />
                     </label>
-                    {buscarSku && resultadosSku !== null && (
-                      <div className="absolute left-0 top-full z-20 mt-1 max-h-48 w-64 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl">
-                        {resultadosSku.error ? (
+                    {/* r1 (C3): «Buscando…», el error y «Ningún producto…» van fuera del listbox (que solo admite opciones). */}
+                    {listaSkuAbierta && (resultadosSku === null || resultadosSku.error != null || resultadosSku.filas.length === 0) && (
+                      <div className="absolute left-0 top-full z-20 mt-1 w-64 rounded-xl border border-slate-200 bg-white shadow-xl">
+                        {resultadosSku === null ? (
+                          <p role="status" className="px-3 py-2 text-xs text-slate-600">Buscando…</p>
+                        ) : resultadosSku.error ? (
                           <p role="alert" className="px-3 py-2 text-xs font-semibold text-rose-800">
                             {textoDeError(resultadosSku.error, 'No se pudo buscar el producto')}
                           </p>
-                        ) : resultadosSku.filas.length === 0 ? (
-                          <p className="px-3 py-2 text-xs text-slate-600">Ningún producto coincide con «{skuTexto.trim()}».</p>
-                        ) : resultadosSku.filas.map((o) => (
-                          <button key={o.id} type="button" onClick={() => elegirSku(o)}
+                        ) : (
+                          <p role="status" className="px-3 py-2 text-xs text-slate-600">Ningún producto coincide con «{skuTexto.trim()}».</p>
+                        )}
+                      </div>
+                    )}
+                    {/* El mousedown en la lista no saca el foco del campo: el clic llega siempre a la opción (C3). */}
+                    {listaSkuAbierta && resultadosSku !== null && resultadosSku.error == null && resultadosSku.filas.length > 0 && (
+                      <div ref={refListaSku} id="kardex-sku-opciones" role="listbox" aria-label="Productos que coinciden"
+                        onPointerEnter={() => { ratonSobreLista.current = true; }} onPointerLeave={() => { ratonSobreLista.current = false; }}
+                        onMouseDown={(e) => e.preventDefault()}
+                        className="absolute left-0 top-full z-20 mt-1 max-h-48 w-64 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl">
+                        {resultadosSku.filas.map((o, i) => (
+                          <button key={o.id} type="button" role="option" aria-selected={i === indiceSku} onClick={() => elegirSku(o)}
+                            onFocus={() => setIndiceSku(i)} onBlur={() => setIndiceSku(-1)}
                             className={`block w-full border-b border-slate-50 px-3 py-2 text-left text-xs text-slate-800 last:border-0 hover:bg-slate-50 ${FOCOS.indigo}`}>
                             {o.display || o.product_name}
                           </button>
@@ -326,14 +380,15 @@ export default function KardexPage() {
                   <SelectorCatalogo etiqueta="Bodega" todas="Todas las bodegas" cargando="Cargando bodegas…"
                     fallo="No se pudieron cargar las bodegas" catalogo={bodegas} valor={filtros.bodega}
                     onCambiar={(bodega) => cambiarFiltros({ bodega })} onReintentar={recargarBodegas} icono={Warehouse} />
+                  {/* r2 (F81): si «Actualizar» falla con el catálogo ya cargado, se dice junto al selector (la vuelta, en useCatalogo). */}
+                  <AvisoCatalogoViejo catalogo={bodegas} fallo="No se pudieron actualizar las bodegas" onReintentar={recargarBodegas} />
                   <select aria-label="Dirección" value={filtros.direccion} onChange={(e) => cambiarFiltros({ direccion: e.target.value })} className={CONTROL}>
                     <option value="">Todas las direcciones</option>
                     {ORDEN_DIRECCIONES.map((d) => <option key={d} value={d}>{DIRECCIONES_KARDEX[d].label}</option>)}
                   </select>
                   <select aria-label="Propietario" value={filtros.propietario} onChange={(e) => cambiarFiltros({ propietario: e.target.value })} className={CONTROL}>
                     <option value="">Todos los propietarios</option>
-                    <option value="NEBULAE">Nebulae</option>
-                    <option value="MAU">Mau</option>
+                    {['NEBULAE', 'MAU'].map((o) => <option key={o} value={o}>{etiquetaPropietario(o)}</option>)}
                   </select>
                   <label className="inline-flex items-center gap-1 text-xs font-bold text-slate-600">
                     Desde

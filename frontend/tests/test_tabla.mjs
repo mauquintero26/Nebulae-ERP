@@ -2477,13 +2477,41 @@ console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5,
   // (RP52: «Bajo el mínimo» = estado_stock=bajo_minimo; «Existencias físicas» = incluir_sin_stock=false) y la bodega y la
   // categoría van al servidor ('' = sin filtro, null no se manda).
   assert.match(fuente, /const RUTA_STOCK = '\/inventory\/stock-tabla';/);
-  assert.match(fuente, /const VISTAS_HUB = \{\n {2}todos: \{\},\n {2}bajo_minimo: \{ estado_stock: 'bajo_minimo' \},\n {2}fisico: \{ incluir_sin_stock: false \},\n\};/);
-  assert.match(fuente, /extraPorVista\(estado, VISTAS_HUB, \{\n\s*por: 'bodega', warehouse_id: filtros\.bodega \|\| null, categoria_id: filtros\.categoria \|\| null,\n\s*\}\)/);
-  assert.match(fuente, /useEstadoTabla\(ID_HUB, INICIAL_HUB\)/);
-  assert.match(fuente, /const ID_HUB = 'inventario\.hub';/);
-  assert.match(fuente, /useListado<FilaStock>\(\{\n\s*ruta: RUTA_STOCK, estado, conConteos: true, esperar: !listo, despachar, activo: !enAnalisis && !verAlmacenes, extra: extraDeLaLista,\n\s*\}\)/);
-  // Cada cambio de un filtro extra vuelve a la página 1 y limpia la selección (R5).
-  assert.match(fuente, /const cambiarFiltros = useCallback\(\(cambio: Partial<FiltrosHub>\) => \{\n\s*setFiltros\(\(f\) => \(\{ \.\.\.f, \.\.\.cambio \}\)\);\n\s*setSeleccion\(\[\]\);\n\s*despachar\(\{ tipo: 'pagina', valor: 1 \}\);/);
+  // B4 T24 f3 r2 (F80, D27): las aserciones de formato (espacios y orden exactos) pasan a un includes por prop o por clave.
+  const vistasHub = fuente.slice(fuente.indexOf('const VISTAS_HUB = {'), fuente.indexOf('};', fuente.indexOf('const VISTAS_HUB = {')));
+  for (const parte of ['todos: {}', "bajo_minimo: { estado_stock: 'bajo_minimo' }", 'fisico: { incluir_sin_stock: false }']) assert.ok(vistasHub.includes(parte), `VISTAS_HUB: ${parte}`);
+  const extraLista = fuente.slice(fuente.indexOf('extraPorVista(estado, VISTAS_HUB, {'), fuente.indexOf('})', fuente.indexOf('extraPorVista(estado, VISTAS_HUB, {')));
+  for (const parte of ["por: 'bodega'", 'warehouse_id: filtros.bodega || null', 'categoria_id: filtros.categoria || null']) assert.ok(extraLista.includes(parte), `extraPorVista: ${parte}`);
+  const llamadas = [...fuente.matchAll(/useListado<FilaStock>\(\{([\s\S]*?)\}\);/g)].map((m) => m[1]);
+  assert.equal(llamadas.length, 2, 'la Lista y Almacenes');
+  const [lista, almacenesLlamada] = [llamadas.find((c) => c.includes('extra: extraDeLaLista')), llamadas.find((c) => c.includes('extra: extraAlmacenes'))];
+  for (const parte of ['ruta: RUTA_STOCK', 'conConteos: true', 'esperar: !listo', 'despachar', 'activo: !enAnalisis && !verAlmacenes']) assert.ok(lista?.includes(parte), `la Lista: ${parte}`);
+  // F80 (G): Almacenes también espera a que el estado esté listo (sin esto, pide antes de restaurar la sesión).
+  for (const parte of ['ruta: RUTA_STOCK', 'conConteos: true', 'esperar: !listo', 'activo: !enAnalisis && verAlmacenes']) assert.ok(almacenesLlamada?.includes(parte), `Almacenes: ${parte}`);
+  const cambiar = fuente.slice(fuente.indexOf('const cambiarFiltros = useCallback('), fuente.indexOf('}, [', fuente.indexOf('const cambiarFiltros = useCallback(')));
+  assert.ok(cambiar.length > 0, 'cambiarFiltros');
+  // B4 T24 f4 (F39; D27): los filtros van en el estado único: cambiarFiltros despacha {tipo: 'filtro'} (el reductor los mezcla y vuelve
+  // a la página 1: el caso «elegir la categoría conserva la bodega» de T24-i-f4 reemplaza la protección de `setFiltros((f) => ({ ...f, ...cambio }))`).
+  for (const parte of ['for (const accion of accionesDeFiltros(cambio)) despachar(accion);', 'setSeleccion([])']) assert.ok(cambiar.includes(parte), `cambiarFiltros: ${parte}`);
+  // B4 T24 f4 (m1 de f3 r2 = m26): vuelven las protecciones que F80 quitó: el id del Hub (no comparte estado ni preferencias con Stock,
+  // RP26) y su estado único con su inicial.
+  assert.ok(fuente.includes("const ID_HUB = 'inventario.hub';"), 'm1 (X1): el id del Hub');
+  assert.ok(fuente.includes('useEstadoTabla(ID_HUB, INICIAL_HUB)'), 'm1 (X2): el estado único del Hub con su inicial');
+  assert.ok(fuente.includes("const INICIAL_HUB = { vista: 'todos' };"), 'm1 (X2): la inicial');
+  // F80: las rutas de error y de carga del Hub (los mutantes B, C, E, F, H e I seguían vivos).
+  assert.ok(fuente.includes('const cargandoStats = stats.cargando;'), 'H: mientras /inventory/stats carga, las tarjetas no dicen 0');
+  assert.ok(fuente.includes('const estadoKpis = useEstadoKpi(cargandoStats, stats.error);'), 'B: el error de stats llega a las tarjetas («—»)');
+  assert.ok(fuente.includes('const estadoConteos = useEstadoKpi(fuente.cargandoInicial || fuente.recargando, fuente.error);'), 'F: el error de la fuente llega a las pestañas');
+  const almacenesVista = fuente.slice(fuente.indexOf('function VistaAlmacenes('), fuente.indexOf('\n}\n', fuente.indexOf('function VistaAlmacenes(')));
+  assert.match(almacenesVista, /<h2 className="sr-only">Existencias por bodega<\/h2>\s*\{error\}/, 'C: VistaAlmacenes muestra su error');
+  const tablaHub = fuente.slice(fuente.indexOf('<TablaEstandar'), fuente.indexOf('/>', fuente.indexOf('<TablaEstandar')));
+  for (const parte of ['recargando={listado.recargando}', 'error={listado.error}', 'onReintentar={listado.recargar}']) assert.ok(tablaHub.includes(parte), `E: la tabla del Hub, ${parte}`);
+  assert.match(fuente, /const reintentarCatalogos = useCallback\(\(\) => setVueltaCatalogos\(\(n\) => n \+ 1\), \[\]\);/, 'I: «Reintentar» de los catálogos sube la vuelta');
+  assert.match(fuente, /\}, \[vueltaCatalogos\]\);/, 'I: y la carga de los catálogos depende de la vuelta');
+  // F80 (D y J, también aquí): la rama del error de SelectorCatalogo (role=alert con «Reintentar») y el «Reintentar» de Almacenes.
+  const piezasF80 = readFileSync(new URL('../src/app/dashboard/inventario/piezas-inventario.tsx', import.meta.url), 'utf8');
+  assert.match(piezasF80, /if \(catalogo\.error && !catalogo\.filas\) \{\s*return \(\s*<span role="alert"/, 'D: sin filas, el error del catálogo se dice');
+  assert.match(fuente, /<AvisoDeError error=\{listado\.error\} fallo="No se pudieron cargar las existencias por bodega" onReintentar=\{listado\.recargar\}/, 'J: «Reintentar» de Almacenes vuelve a pedir');
   // Las pestañas de RP53 con los conteos del servidor (null mientras cargan, nunca 0) y la etiqueta de ESTADOS_STOCK.
   assert.ok(fuente.includes("{ id: 'todos', etiqueta: 'Todos', conteo: conteos?.todos ?? null }"));
   assert.ok(fuente.includes("{ id: 'bajo_minimo', etiqueta: ESTADOS_STOCK.bajo_minimo.label, conteo: conteos?.bajo_minimo ?? null, alerta: (conteos?.bajo_minimo ?? 0) > 0 }"));
@@ -2539,12 +2567,14 @@ console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5,
   // R11: el Hub no lleva tablero; conserva su vista Lista / Almacenes. Almacenes = hasta 200 filas de la MISMA consulta
   // (RP52 d), agrupadas en la lib y con el aviso de R11 si hay más.
   assert.ok(!/kanbanDisponible|TableroKanban|useTableroKanban/.test(fuente), 'sin tablero');
-  assert.ok(fuente.includes('const extraAlmacenes = useMemo(() => ({ ...extraDeLaLista, limit: TOPE_TABLERO_COMPRAS, offset: 0 }), [extraDeLaLista]);'));
+  // B4 T24 f3 (F86, D27): Almacenes no hereda la bodega de la Lista (warehouse_id: null): muestra todas las bodegas, como en BASE.
+  assert.ok(fuente.includes('const extraAlmacenes = useMemo(() => ({ ...extraDeLaLista, warehouse_id: null, limit: TOPE_TABLERO_COMPRAS, offset: 0 }), [extraDeLaLista]);'));
   assert.ok(fuente.includes('resumenAlmacenes(listado.filas)') && fuente.includes("avisoTope200(listado.total, 'existencias')"));
   // R12: las 4 tarjetas de /inventory/stats (tarjetasHubInventario), cada una una vez; inv_bajo_minimo NO es botón
   // (RP52 b) y va en alerta con su tono; la nota dice dónde se define el mínimo (R10) y no hay nota de datos de ejemplo.
-  assert.match(fuente, /apiFetch\('\/inventory\/stats', \{ signal: control\.signal \}\)/);
-  assert.match(fuente, /const tarjetas = tarjetasHubInventario\(stats\?\.datos \?\? null\);/);
+  // B4 T24 f3 (F45, D27): /inventory/stats con el cargador compartido (useResumen) y sus datos.
+  assert.match(fuente, /const stats = useResumen\('\/inventory\/stats', vueltaStats\);/);
+  assert.match(fuente, /const tarjetas = tarjetasHubInventario\(stats\.datos\);/);
   for (const id of ['inv_valorizacion', 'inv_skus', 'inv_bajo_minimo', 'inv_disponibilidad']) {
     assert.equal((fuente.match(new RegExp(`<TarjetaKpi kpi="${id}"`, 'g')) ?? []).length, 1, id);
   }
@@ -2556,14 +2586,23 @@ console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5,
   // Los catálogos de los selectores: sus errores se ven (con Reintentar), no se convierten en una lista vacía.
   assert.match(fuente, /apiFetch\('\/inventory\/warehouses', \{ signal: control\.signal \}\)/);
   assert.match(fuente, /apiFetch\('\/categories', \{ signal: control\.signal \}\)/);
-  assert.equal((fuente.match(/if \(!control\.signal\.aborted\) set(Bodegas|Categorias)\(\(c\) => \(\{ filas: c\.filas, error: err \}\)\)/g) ?? []).length, 2);
+  // B4 T24 f3 r1 (F81, D27): los dos catálogos con su vuelta; el error conserva lo último bueno. B4 T24 f4 (m5 de f3 r2; D27): con
+  // llegadaCatalogo, falloCatalogo y lecturaCatalogo de la lib (sus casos, en test_estados_compras), sin la copia literal.
+  assert.match(fuente, /if \(!control\.signal\.aborted\) fijar\(\(c\) => falloCatalogo\(c, err, vueltaCatalogos\)\);/);
+  assert.match(fuente, /const llegar = \(fijar: typeof setBodegas\) => \(r: unknown\) => fijar\(\(c\) => llegadaCatalogo\(c, r, vueltaCatalogos\)\);/);
+  assert.match(fuente, /const bodegas = useMemo<Catalogo>\(\(\) => lecturaCatalogo\(cargaBodegas, vueltaCatalogos\), \[cargaBodegas, vueltaCatalogos\]\);/);
+  assert.match(fuente, /const categorias = useMemo<Catalogo>\(\(\) => lecturaCatalogo\(cargaCategorias, vueltaCatalogos\), \[cargaCategorias, vueltaCatalogos\]\);/);
+  assert.ok(!/filasDeCatalogo\(r\)|vuelta: vueltaCatalogos, filas/.test(fuente), 'm5: sin la copia de la regla');
+  assert.match(fuente, /apiFetch\('\/inventory\/warehouses', \{ signal: control\.signal \}\)\.then\(llegar\(setBodegas\)\)\.catch\(fallar\(setBodegas\)\);/);
+  assert.match(fuente, /apiFetch\('\/categories', \{ signal: control\.signal \}\)\.then\(llegar\(setCategorias\)\)\.catch\(fallar\(setCategorias\)\);/);
   // Recepciones, Entregas y Traslados pasan de pestañas a enlaces a sus pantallas.
   for (const ruta of ['/dashboard/inventario/recepciones', '/dashboard/inventario/entregas', '/dashboard/inventario/traslados']) {
     assert.ok(fuente.includes(`ruta: '${ruta}'`), ruta);
   }
   // Las acciones llevan aria-label; el vacío se memoiza y dice qué filtro lo deja vacío.
   assert.match(fuente, /aria-label=\{`Ver el detalle de \$\{f\.sku\}/);
-  assert.match(fuente, /const vacio = useMemo\(\(\) => \{\n\s*const texto = textoVacioExistencias\(\{ q: estado\.q, vista: estado\.vista, bodega: nombreBodega, categoria: nombreCategoria \}\);/);
+  // B4 T24 f3 r1 (m14 = m23, D27): en Almacenes la bodega no aplica (F86): el vacío la nombra solo si aplica (bodegaDelVacio).
+  assert.match(fuente, /const vacio = useMemo\(\(\) => \{\n\s*const texto = textoVacioExistencias\(\{ q: estado\.q, vista: estado\.vista, bodega: bodegaDelVacio, categoria: nombreCategoria \}\);/);
 }
 
 console.log('--- TEST 49 (B4 T22, TABLA-otros punto 7 y KANBAN-resto; R11, R16, RP57, RP58, RP104): la lógica de Gastos ---');
@@ -2618,7 +2657,10 @@ console.log('--- TEST 49 (B4 T22, TABLA-otros punto 7 y KANBAN-resto; R11, R16, 
   assert.deepEqual(TABLA.extraGastos(null), { vista: null, categoria: null, tipo: null });
 
   // consultaColumnaGasto: la categoría de la columna, la búsqueda y el orden del MISMO estado, y SIEMPRE limit y offset. Sin
-  // vista, semáforo, paso ni estados; nunca `tipo` ni «concepto» con otro sentido (RP58).
+  // vista, semáforo, paso ni estados; con tipo (recurrente | variable) cuando se elige, y nunca «concepto» con otro sentido (RP58).
+  // (B4 T24 f4, F103 (b): el comentario decía «nunca `tipo`».)
+  assert.ok(TABLA.consultaColumnaGasto(estadoTablaInicial({}), { clave: 'n', titulo: 'N', estados: ['Nómina'] }, { tipo: 'recurrente' }, { limit: 25, offset: 0 }).includes('tipo=recurrente'),
+    'con el tipo elegido, la columna lo manda');
   const estado = estadoTablaInicial({ q: 'nom', orden: '-monto', pagina: 3, tamano: 50, vista: 'x', semaforo: 'atrasados', paso: 'SC', estados: ['A'] });
   const colNomina = columnas[1];
   assert.equal(TABLA.consultaColumnaGasto(estado, colNomina, { categoria: '' }, { limit: 50, offset: 0 }), 'q=nom&orden=-monto&limit=50&offset=0&categoria=N%C3%B3mina');
@@ -2722,6 +2764,12 @@ console.log('--- TEST 50 (B4 T22, Gastos; R5, R11, R16, RP26, RP57, RP58): el ca
   assert.ok(fuente.includes("estadoConteos.tipo !== 'listo' ? (") && fuente.includes("estadoConteos.tipo === 'error' ? ("));
   assert.match(fuente, /estadoConteos\.tipo === 'listo' && estadoConteos\.error \? \(\s*<div role="alert"[\s\S]{0,600}onClick=\{recargarConteos\}/);
   assert.ok(fuente.includes('aria-busy={estadoConteos.actualizando || undefined}'));
+  // B4 T24 f4 (F102 W4 y W5): el aviso de los conteos viejos no depende de enKanban (va antes de {enKanban ? (, en las dos vistas) y el
+  // tablero se atenúa (opacity-60) mientras actualiza.
+  const iAvisoViejo = fuente.indexOf("{estadoConteos.tipo === 'listo' && estadoConteos.error ? (");
+  assert.ok(iAvisoViejo > 0 && iAvisoViejo < fuente.indexOf('{enKanban ? ('), 'W4: el aviso, fuera del Kanban');
+  assert.ok(!/enKanban\s*&&\s*$/.test(fuente.slice(0, iAvisoViejo).trimEnd()), 'W4: sin enKanban && delante');
+  assert.ok(fuente.includes("<div aria-busy={estadoConteos.actualizando || undefined} className={estadoConteos.actualizando ? 'opacity-60' : undefined}>"), 'W5');
   assert.ok(fuente.includes('error: estadoConteos.error }'));
   // m17: el filtro de tipo va al servidor y vuelve a la página 1; los conteos lo llevan.
   assert.match(fuente, /<select aria-label="Tipo" value=\{tipo\} onChange=\{\(e\) => cambiarTipo\(e\.target\.value\)\}/);
@@ -2909,7 +2957,48 @@ console.log('--- TEST T23A-b (B4 T23A; TABLA-otros punto 5, KANBAN-resto punto 3
   assert.match(pantalla, /textoVacioCatalogo\(\{ q: estadoCatalogo\.q, categoria \}\)/);
   // El filtro de categoría va al servidor con el retardo de la búsqueda y vuelve a la página 1 solo si cambió.
   assert.ok(!/RETARDO_CATEGORIA_MS/.test(codigo), 'r1 (m6): el retardo es el de la búsqueda de BarraTabla (lib/tabla.js), no uno propio');
-  assert.match(pantalla, /busquedaCategoria\.current \?\?= crearBusquedaConRetardo\(\{\s*alBuscar: \(buscado\) => \{\s*const nueva = buscado\.trim\(\);\s*if \(nueva === categoriaAplicada\.current\) return;\s*categoriaAplicada\.current = nueva;\s*setCategoria\(nueva\);\s*despacharCatalogo\(\{ tipo: 'pagina', valor: 1 \}\);\s*\},\s*\}\);\s*busquedaCategoria\.current\.escribir\(texto\);/);
+  // B4 T24 f4 (F39 en el catálogo; D27): la categoría es un filtro del estado único ({tipo: 'filtro'}: vuelve a la página 1 solo si
+  // cambió y se guarda con la sesión); la caja se sincroniza con sincronizarBusqueda, como la búsqueda de BarraTabla.
+  assert.match(pantalla, /busquedaCategoria\.current \?\?= crearBusquedaConRetardo\(\{\s*alBuscar: \(buscado\) => \{\s*const nueva = buscado\.trim\(\);\s*setCajaCategoria\(\(c\) => \(\{ \.\.\.c, enviado: nueva \}\)\);\s*despacharCatalogo\(\{ tipo: 'filtro', clave: 'categoria', valor: nueva \}\);\s*\},\s*\}\);\s*busquedaCategoria\.current\.escribir\(texto\);/);
+  assert.match(pantalla, /const categoria = estadoCatalogo\.filtros\?\.categoria \?\? '';/);
+  assert.match(pantalla, /const \[cajaCategoria, setCajaCategoria\] = useState<LocalBusqueda>\(\(\) => \(\{ texto: categoria, visto: categoria, enviado: null \}\)\);/);
+  assert.match(pantalla, /if \(categoria !== cajaCategoria\.visto\) setCajaCategoria\(sincronizarBusqueda\(cajaCategoria, categoria\)\);/);
+  assert.match(pantalla, /<input value=\{cajaCategoria\.texto\} onChange=\{\(e\) => alEscribirCategoria\(e\.target\.value\)\}/);
+  assert.ok(!/const \[categoria, setCategoria\]|categoriaAplicada|const \[categoriaTexto/.test(pantalla), 'sin el useState ni el ref de antes');
+  {
+    // Al volver: la categoría vuelve con la página (la sesión de useEstadoTabla).
+    const INICIAL = { orden: 'nombre' };
+    const conCat = reducirEstadoTabla(reducirEstadoTabla(estadoTablaInicial(INICIAL), { tipo: 'filtro', clave: 'categoria', valor: 'Cunas' }), { tipo: 'pagina', valor: 3 });
+    const vuelto = armarEstadoTabla(INICIAL, { sesion: leerSesionTabla(textoSesionTabla(conCat, 7), 7) });
+    assert.deepEqual([vuelto.filtros, vuelto.pagina], [{ categoria: 'Cunas' }, 3], 'el catálogo: la categoría vuelve con su página');
+    assert.ok(TABLA.urlListado('/ecommerce/catalogo', vuelto, { extra: { categoria: vuelto.filtros.categoria } }).includes('categoria=Cunas'));
+    assert.equal(reducirEstadoTabla(conCat, { tipo: 'filtro', clave: 'categoria', valor: 'Cunas' }), conCat, 'la misma categoría: el mismo estado (sin volver a la 1)');
+    // La caja: el eco de lo que mandó no pisa lo que se sigue escribiendo; lo que viene de afuera (volver, limpiar) sí la reemplaza.
+    assert.deepEqual(sincronizarBusqueda({ texto: 'Cunas b', visto: '', enviado: 'Cunas' }, 'Cunas'), { texto: 'Cunas b', visto: 'Cunas', enviado: null });
+    assert.deepEqual(sincronizarBusqueda({ texto: '', visto: '', enviado: null }, 'Cunas'), { texto: 'Cunas', visto: 'Cunas', enviado: null });
+  }
+  // FINAL-m11 en E-Commerce: el conmutador Lista / Kanban pasa las columnas del tablero (COLUMNAS_PEDIDO) a accionModo.
+  assert.ok(pantalla.includes('despacharPedidos(accionModo(estadoPedidos, modo, modo === \'kanban\' ? OPCIONES_ESTADOS_TABLERO_PEDIDO : OPCIONES_ESTADOS_PEDIDOS_WEB, COLUMNAS_PEDIDO));'));
+  {
+    const KV = await import('../src/lib/kanban-ventas.js');
+    const conVarios = KV.COLUMNAS_PEDIDO.find((c) => c.estados.filter((e) => KV.OPCIONES_ESTADOS_PEDIDOS_WEB.some((o) => o.valor === e)).length > 1);
+    if (conVarios) {
+      const enKanban = estadoTablaInicial({ modo: 'kanban', estados: [conVarios.estados[0]] });
+      const accion = TABLA.accionModo(enKanban, 'lista', KV.OPCIONES_ESTADOS_PEDIDOS_WEB, KV.COLUMNAS_PEDIDO);
+      const esperados = conVarios.estados.filter((e) => KV.OPCIONES_ESTADOS_PEDIDOS_WEB.some((o) => o.valor === e));
+      assert.deepEqual(accion, { tipo: 'cambiar', cambios: { modo: 'lista', estados: esperados } }, 'la columna se expande a sus estados de la lista web');
+    }
+  }
+  // F107: la tarjeta de la cuadrícula no es un div con clic: un botón principal (con el token de foco), separado del interruptor.
+  const tarjeta = codigo.slice(codigo.indexOf('function TarjetaProductoCuadricula('), codigo.indexOf('export default function EcommercePage('));
+  assert.ok(tarjeta.length > 100, 'la tarjeta existe');
+  assert.ok(!/onClick=\{puedeEditar \? onEditar : undefined\}/.test(tarjeta), 'sin el div pulsable');
+  assert.match(tarjeta, /<button type="button" onClick=\{onEditar\} disabled=\{!puedeEditar\} aria-label=\{`Editar \$\{p\.nombre\}`\}\s+title=\{puedeEditar \? undefined : TITULO_SOLO_ADMIN\}\s+className=\{`block w-full text-left [^`]*\$\{FOCO_DENTRO\}`\}>/);
+  const iBoton = tarjeta.indexOf('<button type="button" onClick={onEditar}');
+  const iFinBoton = tarjeta.indexOf('</button>', iBoton);
+  const iInterruptor = tarjeta.indexOf('<input type="checkbox"');
+  assert.ok(iBoton > 0 && iFinBoton > iBoton && iInterruptor > iFinBoton, 'el interruptor va FUERA del botón (sin controles anidados)');
+  assert.match(codigo, /import \{[^}]*\bFOCO_DENTRO\b[^}]*\} from '@\/lib\/design-system';/);
   assert.match(pantalla, /return \(\) => busquedas\.current\?\.cancelar\(\);/);
   assert.ok(!/setTimeout/.test(pantalla), 'sin un temporizador propio');
   assert.equal(TABLA.RETARDO_BUSQUEDA_MS, 300);
@@ -3090,7 +3179,8 @@ console.log('--- TEST T24-c (B4 T24, FINAL-C5): Gastos pide y pinta solo lo que 
   assert.equal((g.match(/\{ofreceReintentar\(estadoConteos\.error\) && \(\s*<button type="button" onClick=\{recargarConteos\}/g) ?? []).length, 2, 'las dos cajas rose');
   // SelectorCatalogo (piezas de Inventario, aditivo): su «Reintentar» también mira ofreceReintentar.
   const piezas = codigo(leer('app/dashboard/inventario/piezas-inventario.tsx'));
-  assert.match(piezas, /\{ofreceReintentar\(catalogo\.error\) && <button type="button" onClick=\{onReintentar\}/);
+  // B4 T24 f3 r1 (F81, D27): el «Reintentar» del catálogo, solo si ofreceReintentar (un 403 no), y con señal mientras pide.
+  assert.match(piezas, /\{ofreceReintentar\(catalogo\.error\) && <button type="button" onClick=\{catalogo\.cargando \? undefined : onReintentar\}/);
 }
 
 console.log('--- TEST T24-d (B4 T24, FINAL-m21): la pestaña Pagos de E-Commerce, solo ADMIN y sin guardar los valores por defecto ---');
@@ -3269,9 +3359,11 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
   assert.match(drawer, /disabled=\{bloquearCierre\}/);
   // r2 (C2 = C4 = C6, m11): la tabla de F40 leída a mano (ventanas-r2.tsv), anclada por ventana: cada una por un fragmento único de
   // su apertura y si se cierra desde fuera ('fuera'), solo con sus botones ('no', cierreExterno={false}) o con una expresión.
-  const MAPA = [["app/dashboard/admin/empleados/page.tsx", "title=\"Registrar Nuevo Empleado\"", "no"], ["app/dashboard/admin/empleados/page.tsx", "title=\"Confirmar Cambio de Rol\"", "fuera"], ["app/dashboard/compras/lista-compras/page.tsx", "title=\"Nuevo Proveedor\"", "no"], ["app/dashboard/compras/lista-compras/page.tsx", "title=\"Editar proveedor\"", "no"], ["app/dashboard/compras/lista-compras/page.tsx", "title=\"Crear Pedido de Compra\"", "no"], ["app/dashboard/compras/recepciones/page.tsx", "title=\"Iniciar Entrada desde Pedido de Compra\"", "fuera"], ["app/dashboard/compras/recepciones/page.tsx", "onClose={() => setSelectedItem(null)}", "fuera"], ["app/dashboard/compras/traslados/page.tsx", "onClose={closeSelected}", "fuera"], ["app/dashboard/compras/traslados/page.tsx", "title=\"Nuevo Traslado Interno\"", "no"], ["app/dashboard/crm/page.tsx", "onClose={() => { setSelectedLead(null); setEditingLead(false); }}", "{!editingLead}"], ["app/dashboard/crm/page.tsx", "title=\"Nuevo Lead\"", "no"], ["app/dashboard/crm/page.tsx", "onClose={() => setShowConfig(false)} header", "no"], ["app/dashboard/ecommerce/page.tsx", "onClose={() => setSelectedOrder(null)}", "fuera"], ["app/dashboard/finanzas/gastos/page.tsx", "title=\"Añadir Gasto\"", "no"], ["app/dashboard/inventario/ajustes/page.tsx", "onClose={() => setSelected(null)}", "fuera"], ["app/dashboard/inventario/ajustes/page.tsx", "title=\"Nuevo Ajuste de Inventario\"", "no"], ["app/dashboard/inventario/entregas/page.tsx", "onClose={() => { setSelected(null); setDesdeTablero(null); }}", "{!puedeDespacharPedido(selected, rol)}"], ["app/dashboard/inventario/kardex/page.tsx", "title={`Movimiento ${numeroMovimiento(m)}`}", "fuera"], ["app/dashboard/inventario/piezas-inventario.tsx", "title={f.producto || f.sku}", "fuera"], ["app/dashboard/inventario/recepciones/page.tsx", "onClose={() => setSelectedItem(null)}", "fuera"], ["app/dashboard/inventario/traslados/page.tsx", "onClose={() => setSelected(null)}", "fuera"], ["app/dashboard/marketing/campanas/page.tsx", "title={editMode?'Editar Campaña':'Nueva Campaña'}", "no"], ["app/dashboard/ventas/cotizacion/cotizacion-client.tsx", "title=\"Calculadora de Cotización\"", "no"], ["app/dashboard/ventas/cotizacion/cotizacion-client.tsx", "title=\"Eliminar Cotización\"", "fuera"], ["app/dashboard/ventas/cotizacion/cotizacion-client.tsx", "title=\"Actualizar Pedido de Venta\"", "no"], ["app/dashboard/ventas/cotizacion/cotizacion-client.tsx", "title=\"Seleccionar Canal de Envío\"", "fuera"], ["app/dashboard/ventas/cotizacion/cotizacion-client.tsx", "title=\"Verificar el pago del anticipo\"", "no"], ["app/dashboard/ventas/cotizacion/cotizacion-client.tsx", "title=\"Ajustar anticipo\"", "no"], ["app/dashboard/ventas/flujo.tsx", "title={textos.titulo}", "fuera"], ["app/dashboard/ventas/motivo-sin-confirmacion.tsx", "title={titulo} icon={AlertTriangle}", "no"], ["app/dashboard/ventas/page.tsx", "${getTipoClass(row.tipo)}", "fuera"], ["app/dashboard/ventas/page.tsx", "onClose={onClose} maxWidth=\"md\"", "{soloLectura}"], ["app/dashboard/ventas/page.tsx", "title={filasCancelacion.length === 1", "no"], ["app/dashboard/ventas/page.tsx", "idTitulo=\"drawer-panel-rapido-titulo\"", "fuera"], ["app/dashboard/ventas/solicitud/selector-cliente.tsx", "title=\"Nuevo cliente\"", "no"], ["app/dashboard/ventas/solicitud/solicitud-client.tsx", "title={cancelTarget.length>1", "no"], ["app/dashboard/ventas/solicitud/solicitud-client.tsx", "title=\"Nueva Solicitud de Cliente\"", "no"], ["app/dashboard/ventas/solicitud/[id]/detalle-bloque3.tsx", "title=\"Se anulará la confirmación del cliente\"", "no"], ["app/dashboard/ventas/solicitud/[id]/page.tsx", "subtitle=\"Antes de cancelarla hay que dejar sin efecto sus documentos activos.\"", "fuera"], ["app/dashboard/ventas/solicitud/[id]/page.tsx", "subtitle=\"La solicitud pasa a la Papelera. Podrás restaurarla desde allí.\"", "no"], ["app/dashboard/ventas/venta/venta-client.tsx", "title=\"Nuevo Proveedor\"", "no"], ["app/dashboard/ventas/venta/[id]/page.tsx", "title=\"Crear Pedido de Compra\"", "no"], ["app/dashboard/ventas/venta/[id]/page.tsx", "title=\"Cancelar Pedido de Venta\"", "no"], ["components/ui/Avisos.tsx", "describedBy={mensajeId}", "fuera"], ["components/ui/ModalMotivo.tsx", "capa=\"encima\"", "no"]];
+  const MAPA = [["app/dashboard/admin/empleados/page.tsx", "title=\"Registrar Nuevo Empleado\"", "no"], ["app/dashboard/admin/empleados/page.tsx", "title=\"Confirmar Cambio de Rol\"", "fuera"], ["app/dashboard/compras/lista-compras/page.tsx", "title=\"Nuevo Proveedor\"", "no"], ["app/dashboard/compras/lista-compras/page.tsx", "title=\"Editar proveedor\"", "no"], ["app/dashboard/compras/lista-compras/page.tsx", "title=\"Crear Pedido de Compra\"", "no"], ["app/dashboard/compras/recepciones/page.tsx", "title=\"Iniciar Entrada desde Pedido de Compra\"", "fuera"], ["app/dashboard/compras/recepciones/page.tsx", "onClose={() => setSelectedItem(null)}", "fuera"], ["app/dashboard/compras/traslados/page.tsx", "onClose={closeSelected}", "fuera"], ["app/dashboard/compras/traslados/page.tsx", "title=\"Nuevo Traslado Interno\"", "no"], ["app/dashboard/crm/page.tsx", "onClose={() => { setSelectedLead(null); setEditingLead(false); }}", "{!editingLead}"], ["app/dashboard/crm/page.tsx", "title=\"Nuevo Lead\"", "no"], ["app/dashboard/crm/page.tsx", "onClose={() => setShowConfig(false)} header", "no"], ["app/dashboard/ecommerce/page.tsx", "onClose={() => setSelectedOrder(null)}", "fuera"], ["app/dashboard/finanzas/gastos/page.tsx", "title=\"Añadir Gasto\"", "no"], ["app/dashboard/inventario/ajustes/page.tsx", "onClose={() => setSelected(null)}", "fuera"], ["app/dashboard/inventario/ajustes/page.tsx", "title=\"Nuevo Ajuste de Inventario\"", "no"], ["app/dashboard/inventario/entregas/page.tsx", "onClose={() => { setSelected(null); setDesdeTablero(null); }}", "{!puedeDespacharPedido(selected, rol)}"], ["app/dashboard/inventario/kardex/page.tsx", "title=\"Detalle del movimiento\"", "fuera"], ["app/dashboard/inventario/piezas-inventario.tsx", "title={f.producto || f.sku}", "fuera"], ["app/dashboard/inventario/recepciones/page.tsx", "onClose={() => setSelectedItem(null)}", "fuera"], ["app/dashboard/inventario/traslados/page.tsx", "onClose={() => setSelected(null)}", "fuera"], ["app/dashboard/marketing/campanas/page.tsx", "title={editMode?'Editar Campaña':'Nueva Campaña'}", "no"], ["app/dashboard/ventas/cotizacion/cotizacion-client.tsx", "title=\"Calculadora de Cotización\"", "no"], ["app/dashboard/ventas/cotizacion/cotizacion-client.tsx", "title=\"Eliminar Cotización\"", "fuera"], ["app/dashboard/ventas/cotizacion/cotizacion-client.tsx", "title=\"Actualizar Pedido de Venta\"", "no"], ["app/dashboard/ventas/cotizacion/cotizacion-client.tsx", "title=\"Seleccionar Canal de Envío\"", "fuera"], ["app/dashboard/ventas/cotizacion/cotizacion-client.tsx", "title=\"Verificar el pago del anticipo\"", "no"], ["app/dashboard/ventas/cotizacion/cotizacion-client.tsx", "title=\"Ajustar anticipo\"", "no"], ["app/dashboard/ventas/flujo.tsx", "title={textos.titulo}", "fuera"], ["app/dashboard/ventas/motivo-sin-confirmacion.tsx", "title={titulo} icon={AlertTriangle}", "no"], ["app/dashboard/ventas/page.tsx", "${getTipoClass(row.tipo)}", "fuera"], ["app/dashboard/ventas/page.tsx", "onClose={onClose} maxWidth=\"md\"", "{soloLectura}"], ["app/dashboard/ventas/page.tsx", "title={filasCancelacion.length === 1", "no"], ["app/dashboard/ventas/page.tsx", "idTitulo=\"drawer-panel-rapido-titulo\"", "fuera"], ["app/dashboard/ventas/solicitud/selector-cliente.tsx", "title=\"Nuevo cliente\"", "no"], ["app/dashboard/ventas/solicitud/solicitud-client.tsx", "title={cancelTarget.length>1", "no"], ["app/dashboard/ventas/solicitud/solicitud-client.tsx", "title=\"Nueva Solicitud de Cliente\"", "no"], ["app/dashboard/ventas/solicitud/[id]/detalle-bloque3.tsx", "title=\"Se anulará la confirmación del cliente\"", "no"], ["app/dashboard/ventas/solicitud/[id]/page.tsx", "subtitle=\"Antes de cancelarla hay que dejar sin efecto sus documentos activos.\"", "fuera"], ["app/dashboard/ventas/solicitud/[id]/page.tsx", "subtitle=\"La solicitud pasa a la Papelera. Podrás restaurarla desde allí.\"", "no"], ["app/dashboard/ventas/venta/venta-client.tsx", "title=\"Nuevo Proveedor\"", "no"], ["app/dashboard/ventas/venta/[id]/page.tsx", "title=\"Crear Pedido de Compra\"", "no"], ["app/dashboard/ventas/venta/[id]/page.tsx", "title=\"Cancelar Pedido de Venta\"", "no"], ["components/ui/Avisos.tsx", "describedBy={mensajeId}", "fuera"], ["components/ui/ModalMotivo.tsx", "capa=\"encima\"", "no"], ["app/dashboard/compras/pedidos/page.tsx", "title=\"Configuración de tracking\"", "no"], ["app/dashboard/compras/pedidos/page.tsx", "title=\"Nuevo Casillero\"", "no"]];
   // B4 T24 f2 r1 (C3, D27): el panel rápido del Hub pasa a Drawer (sin campos que escribir: Esc y el fondo lo cierran, F40).
-  assert.equal(MAPA.length, 45, 'las 33 Modal y los 12 Drawer');
+  // B4 T24 f3 (duda 1 de f2 r2, D27): la ventana de seguimiento de Compras › Pedidos pasa a Modal (tiene lo escrito: solo sus botones).
+  // B4 T24 f3 r1 (m6 = m27 = m38, D27): «Nuevo Casillero» pasa a Modal de la pila (tiene lo escrito: solo sus botones).
+  assert.equal(MAPA.length, 47, 'las 35 Modal y los 12 Drawer');
   for (const [ruta, fragmento, esperado] of MAPA) {
     const f = leer(ruta);
     const i = f.indexOf(fragmento);
@@ -3282,7 +3374,7 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
     else assert.ok(apertura.includes(`cierreExterno=${esperado}`), `${ruta} «${fragmento}»: cierreExterno=${esperado}`);
   }
   // La guarda de antes, adicional: cuántos cierreExterno={false} hay en cada archivo.
-  const ESPERADO = {"app/dashboard/admin/empleados/page.tsx": 1, "app/dashboard/compras/lista-compras/page.tsx": 3, "app/dashboard/compras/recepciones/page.tsx": 0, "app/dashboard/compras/traslados/page.tsx": 1, "app/dashboard/crm/page.tsx": 2, "app/dashboard/ecommerce/page.tsx": 0, "app/dashboard/finanzas/gastos/page.tsx": 1, "app/dashboard/inventario/ajustes/page.tsx": 1, "app/dashboard/inventario/entregas/page.tsx": 0, "app/dashboard/inventario/kardex/page.tsx": 0, "app/dashboard/inventario/piezas-inventario.tsx": 0, "app/dashboard/inventario/recepciones/page.tsx": 0, "app/dashboard/inventario/traslados/page.tsx": 0, "app/dashboard/marketing/campanas/page.tsx": 1, "app/dashboard/ventas/cotizacion/cotizacion-client.tsx": 4, "app/dashboard/ventas/flujo.tsx": 0, "app/dashboard/ventas/motivo-sin-confirmacion.tsx": 1, "app/dashboard/ventas/page.tsx": 1, "app/dashboard/ventas/solicitud/selector-cliente.tsx": 1, "app/dashboard/ventas/solicitud/solicitud-client.tsx": 2, "app/dashboard/ventas/solicitud/[id]/detalle-bloque3.tsx": 1, "app/dashboard/ventas/solicitud/[id]/page.tsx": 1, "app/dashboard/ventas/venta/venta-client.tsx": 1, "app/dashboard/ventas/venta/[id]/page.tsx": 2, "components/ui/Avisos.tsx": 0, "components/ui/ModalMotivo.tsx": 1};
+  const ESPERADO = {"app/dashboard/admin/empleados/page.tsx": 1, "app/dashboard/compras/lista-compras/page.tsx": 3, "app/dashboard/compras/recepciones/page.tsx": 0, "app/dashboard/compras/traslados/page.tsx": 1, "app/dashboard/crm/page.tsx": 2, "app/dashboard/ecommerce/page.tsx": 0, "app/dashboard/finanzas/gastos/page.tsx": 1, "app/dashboard/inventario/ajustes/page.tsx": 1, "app/dashboard/inventario/entregas/page.tsx": 0, "app/dashboard/inventario/kardex/page.tsx": 0, "app/dashboard/inventario/piezas-inventario.tsx": 0, "app/dashboard/inventario/recepciones/page.tsx": 0, "app/dashboard/inventario/traslados/page.tsx": 0, "app/dashboard/marketing/campanas/page.tsx": 1, "app/dashboard/ventas/cotizacion/cotizacion-client.tsx": 4, "app/dashboard/ventas/flujo.tsx": 0, "app/dashboard/ventas/motivo-sin-confirmacion.tsx": 1, "app/dashboard/ventas/page.tsx": 1, "app/dashboard/ventas/solicitud/selector-cliente.tsx": 1, "app/dashboard/ventas/solicitud/solicitud-client.tsx": 2, "app/dashboard/ventas/solicitud/[id]/detalle-bloque3.tsx": 1, "app/dashboard/ventas/solicitud/[id]/page.tsx": 1, "app/dashboard/ventas/venta/venta-client.tsx": 1, "app/dashboard/ventas/venta/[id]/page.tsx": 2, "components/ui/Avisos.tsx": 0, "components/ui/ModalMotivo.tsx": 1, "app/dashboard/compras/pedidos/page.tsx": 2};
   for (const [ruta, n] of Object.entries(ESPERADO)) {
     assert.equal((leer(ruta).match(/cierreExterno=\{false\}/g) ?? []).length, n, ruta);
   }
@@ -3319,7 +3411,8 @@ console.log('--- TEST T24-e2 (B4 T24 r1: C2, C4, m12, m18, m23 y m29): qué vent
   assert.match(drawer, /reservaBotonIA\?: boolean;/);
   assert.match(drawer, /reservaBotonIA = false/, 'por defecto, sin la reserva');
   assert.match(drawer, /<div className=\{`flex-1 overflow-y-auto p-6 space-y-6\$\{reservaBotonIA \? ` \$\{RESERVA_BOTON_IA\}` : ''\}`\}>/);
-  assert.match(drawer, /import \{ FOCO, FOCO_DENTRO, RESERVA_BOTON_IA \} from '@\/lib\/design-system';/);
+  // r1 (m43, D27): el Drawer importa también RESERVA_BOTON_IA_PIE (el pie reserva el área del botón de la IA).
+  assert.match(drawer, /import \{ FOCO, FOCO_DENTRO, RESERVA_BOTON_IA, RESERVA_BOTON_IA_PIE \} from '@\/lib\/design-system';/);
   // r3 (m7): lo que se anuncia es lo que se ve.
   assert.ok(leer('app/dashboard/ventas/page.tsx').includes('<h2 id="drawer-config-hub-titulo" className="font-black text-slate-800 text-lg">Configuración de HUB Ventas</h2>'));
   assert.ok(leer('app/dashboard/crm/page.tsx').includes('<h2 id="drawer-config-crm-titulo" className="font-black text-slate-800 text-lg">Configuración CRM</h2>'));
@@ -3503,6 +3596,60 @@ console.log('--- TEST T24-i (B4 T24: F39 y FINAL-m19): los filtros extra van en 
   assert.match(crm, /despachar\(\{ tipo: 'filtro', clave: 'etapa', valor: valor === 'all' \? '' : valor \}\);/);
 }
 
+console.log('--- TEST T24-i-f4 (B4 T24 f4: F39 en Inventario): filtrosDePantalla y accionesDeFiltros; cada pantalla restaura el filtro con la página ---');
+{
+  const { filtrosDePantalla, accionesDeFiltros } = TABLA;
+  // La forma de la pantalla desde estado.filtros (textos): texto; booleano ('1'); número o null (el id del SKU del Kardex).
+  const BASE = { bodega: '', revision: false, skuId: null, n: 0 };
+  assert.deepEqual(filtrosDePantalla(undefined, BASE), BASE, 'sin filtros guardados, la base');
+  assert.deepEqual(filtrosDePantalla({ bodega: '3', revision: '1', skuId: '42', n: '7', otra: 'x' }, BASE), { bodega: '3', revision: true, skuId: 42, n: 7 },
+    'cada clave con el tipo de su base; lo que no es de la pantalla no entra');
+  assert.deepEqual(filtrosDePantalla({ skuId: 'abc', revision: '0' }, BASE), BASE, 'un número que no se lee y un booleano que no es «1»: la base');
+  // Un cambio de la pantalla → las acciones {tipo: 'filtro'} (una por clave; '' quita el filtro).
+  assert.deepEqual(accionesDeFiltros({ bodega: '3', revision: true, skuId: 42 }), [
+    { tipo: 'filtro', clave: 'bodega', valor: '3' }, { tipo: 'filtro', clave: 'revision', valor: '1' }, { tipo: 'filtro', clave: 'skuId', valor: '42' },
+  ]);
+  assert.deepEqual(accionesDeFiltros({ revision: false, skuId: null, bodega: '' }), [
+    { tipo: 'filtro', clave: 'revision', valor: '' }, { tipo: 'filtro', clave: 'skuId', valor: '' }, { tipo: 'filtro', clave: 'bodega', valor: '' },
+  ], 'falso, null y vacío quitan el filtro');
+  assert.deepEqual(accionesDeFiltros(null), []);
+  // Ida y vuelta por el reductor y la sesión: cambiar un filtro no borra los otros (mata «setFiltros((f) => ({ ...cambio }))», X3 de m1).
+  const INICIAL = { vista: 'todos' };
+  let e = estadoTablaInicial(INICIAL);
+  for (const a of accionesDeFiltros({ bodega: '3' })) e = reducirEstadoTabla(e, a);
+  for (const a of accionesDeFiltros({ categoria: '9' })) e = reducirEstadoTabla(e, a);
+  assert.deepEqual(filtrosDePantalla(e.filtros, { bodega: '', categoria: '' }), { bodega: '3', categoria: '9' }, 'elegir la categoría conserva la bodega');
+  e = reducirEstadoTabla(e, { tipo: 'pagina', valor: 4 });
+  const vuelto = armarEstadoTabla(INICIAL, { sesion: leerSesionTabla(textoSesionTabla(e, 7), 7) });
+  assert.deepEqual([filtrosDePantalla(vuelto.filtros, { bodega: '', categoria: '' }), vuelto.pagina], [{ bodega: '3', categoria: '9' }, 4], 'al volver: el filtro con su página');
+  for (const a of accionesDeFiltros({ bodega: '', categoria: '' })) e = reducirEstadoTabla(e, a);
+  assert.deepEqual([e.filtros, e.pagina], [{}, 1], 'quitar los filtros vuelve a la página 1');
+
+  // Cada pantalla de Inventario lee sus filtros del estado único y los cambia con la acción {tipo: 'filtro'} (sin useState propio).
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  for (const [ruta, tipo] of [['app/dashboard/inventario/page.tsx', 'FiltrosHub'], ['app/dashboard/inventario/kardex/page.tsx', 'FiltrosKardex'],
+    ['app/dashboard/inventario/productos/page.tsx', 'FiltrosProductos']]) {
+    const f = leer(ruta);
+    assert.ok(f.includes(`const filtros = useMemo(() => filtrosDePantalla(estado.filtros, SIN_FILTROS) as ${tipo}, [estado.filtros]);`), `${ruta}: los filtros del estado`);
+    assert.ok(!/const \[filtros, setFiltros\] = useState/.test(f) && !/setFiltros\(/.test(f), `${ruta}: sin el useState de antes`);
+    assert.match(f, new RegExp(`const cambiarFiltros = useCallback\\(\\(cambio: Partial<${tipo}>\\) => \\{\\n\\s*for \\(const accion of accionesDeFiltros\\(cambio\\)\\) despachar\\(accion\\);`), `${ruta}: cambiarFiltros despacha {tipo: 'filtro'}`);
+    assert.equal(f.split('accionesDeFiltros(').length - 1, 1, `${ruta}: solo cambiarFiltros cambia los filtros`);
+    assert.match(f, /import \{[^}]*\bfiltrosDePantalla\b[^}]*\} from '@\/lib\/tabla';/);
+  }
+  for (const ruta of ['app/dashboard/inventario/stock/page.tsx', 'app/dashboard/inventario/abastecimiento/page.tsx']) {
+    const f = leer(ruta);
+    assert.ok(f.includes("const categoria = estado.filtros?.categoria ?? '';"), `${ruta}: la categoría del estado`);
+    assert.ok(!/const \[categoria, setCategoria\] = useState/.test(f) && !/setCategoria\(/.test(f), `${ruta}: sin el useState de antes`);
+    assert.ok(f.includes("despachar({ tipo: 'filtro', clave: 'categoria', valor });"), `${ruta}: la acción {tipo: 'filtro'}`);
+  }
+  // El Kardex guarda también la etiqueta del SKU elegido (la caja vuelve con su texto) y la caja la toma al volver.
+  const k = leer('app/dashboard/inventario/kardex/page.tsx');
+  assert.ok(k.includes("const SIN_FILTROS: FiltrosKardex = { skuId: null, skuEtiqueta: '', bodega: '', propietario: '', direccion: '', desde: '', hasta: '' };"));
+  assert.ok(k.includes('cambiarFiltros({ skuId: o.id, skuEtiqueta: etiqueta });'));
+  assert.match(k, /if \(filtros\.skuId !== null\) cambiarFiltros\(\{ skuId: null, skuEtiqueta: '' \}\);/);
+  assert.match(k, /if \(filtros\.skuId !== skuVisto\) \{\s*setSkuVisto\(filtros\.skuId\);\s*if \(filtros\.skuId !== null\) setSkuTexto\(filtros\.skuEtiqueta\);\s*\}/);
+}
+
 console.log('--- TEST T24-j (B4 T24: F34, F35, F36 y F10): el margen de la fila de pestañas y los JSDoc ---');
 {
   const { scrollParaVer } = TABLA;
@@ -3654,7 +3801,13 @@ console.log('--- B4 T24 f2 r1 (m9 + m10, m38): el foco que LLEGA detrás vuelve 
   // m38: el botón flotante del Copilot tiene nombre accesible y el token de foco.
   const chat = leer('components/GlobalAIChat.tsx');
   assert.match(chat, /<button\s+data-superficie="copilot"\s+onClick=\{\(\) => setIsOpen\(true\)\}\s+aria-label="Abrir Nebulae Copilot"\s+className=\{`fixed bottom-6 right-6 [^`]*\$\{FOCO\}`\}/);
-  assert.match(chat, /import \{ FOCO \} from '@\/lib\/design-system';/);
+  // B4 T24 f4 (duda 6 de f2 r1; D27 del import): minimizar y cerrar el panel llevan nombre accesible y el token de foco. El
+  // encabezado es oscuro (slate-900/800): el anillo es FOCOS.blanco, como la barra oscura de f1.
+  assert.match(chat, /import \{ FOCO, FOCOS \} from '@\/lib\/design-system';/);
+  assert.match(chat, /<button\s+onClick=\{\(\) => setIsExpanded\(!isExpanded\)\}\s+aria-label=\{isExpanded \? 'Reducir el Copilot' : 'Ampliar el Copilot'\}\s+className=\{`p-1\.5 [^`]*\$\{FOCOS\.blanco\}`\}/);
+  assert.match(chat, /<button\s+onClick=\{\(\) => setIsOpen\(false\)\}\s+aria-label="Cerrar el Copilot"\s+className=\{`p-1\.5 [^`]*\$\{FOCOS\.blanco\}`\}/);
+  assert.ok(chat.includes('<div data-superficie="copilot" className={`fixed bottom-6 right-6 bg-white'), 'los dos botones viven en el panel marcado');
+  assert.ok(chat.indexOf('aria-label="Cerrar el Copilot"') > chat.indexOf('<div data-superficie="copilot"'), 'dentro del panel');
 }
 
 console.log('--- B4 T24 f2 r2 (m4, m5): las superficies fijas que van encima de una capa, marcadas; el foco vuelve al abridor solo al cerrar de verdad ---');
@@ -3664,7 +3817,10 @@ console.log('--- B4 T24 f2 r2 (m4, m5): las superficies fijas que van encima de 
   // abierto (el reporte r2 tiene la tabla). Dos llevan su marca: el Toast (z-[100], con su botón, sobre los Modal de Empleados y
   // Campañas) y la ventana de seguimiento de Compras › Pedidos (z-[95]; su «Eliminar casillero» abre confirmar(), z-[60]).
   assert.match(leer('components/ui/Toast.tsx'), /<div data-superficie="avisos" className=\{`fixed bottom-6 right-6 z-\[100\]/);
-  assert.match(leer('app/dashboard/compras/pedidos/page.tsx'), /<div data-superficie="ventana" className="fixed inset-0 z-\[95\] flex items-center justify-center bg-slate-900\/60 backdrop-blur-sm p-4">/);
+  // B4 T24 f3 (duda 1 de f2 r2, D27): la ventana de seguimiento ya no es un panel a mano en z-[95] (con su marca): es un Modal de la pila
+  // (z-50) y confirmar() (z-[60]) queda ENCIMA. El bloque «B4 T24 f3 (la ventana de seguimiento)» fija el resto.
+  assert.ok(!/<div data-superficie="ventana" className="fixed inset-0 z-\[95\] flex items-center justify-center bg-slate-900\/60 backdrop-blur-sm p-4">/.test(leer('app/dashboard/compras/pedidos/page.tsx')),
+    'sin el panel a mano de la ventana de seguimiento');
   // m5: con StrictMode, React simula desmontar y volver a montar: la limpieza no debe devolver el foco al abridor (pisaría el autoFocus de
   // adentro), solo al cerrar de verdad, cuando el panel ya no está en el documento.
   const { devuelveFocoAlCerrar } = TABLA;
@@ -3677,6 +3833,71 @@ console.log('--- B4 T24 f2 r2 (m4, m5): las superficies fijas que van encima de 
   const hook = leer('components/ui/useCierreVentana.ts');
   assert.match(hook, /if \(abridor && devuelveFocoAlCerrar\(\{ abridorConectado: abridor\.isConnected, panelConectado: Boolean\(panel\?\.isConnected\) \}\)\) \{\s*abridor\.focus\(\{ preventScroll: true \}\);\s*\}/);
   assert.ok(!/if \(abridor && abridor\.isConnected\) abridor\.focus/.test(hook), 'sin la vuelta incondicional de antes');
+  // B4 T24 f3 (m3 de revision-24-f2-r2): la guarda de m5 (panelConectado) depende de que la limpieza de la capa corra DESPUÉS de quitar el
+  // DOM, y eso solo pasa con un useEffect pasivo (la limpieza de un useLayoutEffect corre antes de que React quite el panel: el foco no
+  // volvería nunca al abridor). El efecto que abre y cierra la capa es un useEffect, no un useLayoutEffect.
+  const iCapa = hook.indexOf('capas = abrirCapa(capas, capa);');
+  assert.ok(iCapa > 0, 'el efecto de la capa');
+  const antes = hook.slice(0, iCapa);
+  assert.ok(antes.lastIndexOf('useEffect(() => {') > antes.lastIndexOf('useLayoutEffect('), 'la capa se abre en un useEffect pasivo');
+  assert.ok(!/useLayoutEffect/.test(hook.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')), 'el hook no usa useLayoutEffect');
+}
+
+console.log('--- B4 T24 f3 (la ventana de seguimiento de Compras › Pedidos): un Modal de la pila; confirmar() queda encima ---');
+{
+  const ped = readFileSync(new URL('../src/app/dashboard/compras/pedidos/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const ventana = ped.slice(ped.indexOf('function TrackingConfigModal('), ped.indexOf('function TrackingPanel('));
+  assert.ok(ventana.length > 0, 'TrackingConfigModal');
+  // Un Modal (z-50) con la regla de F40: tiene lo escrito (las etapas): solo lo cierran sus botones, y no mientras guarda.
+  assert.match(ventana, /<Modal cierreExterno=\{false\} bloquearCierre=\{saving\} title="Configuración de tracking" subtitle="Etapas, alertas y casilleros del pipeline logístico"\s+icon=\{Settings2\} color="purple" maxWidth="3xl" onClose=\{onClose\}/);
+  assert.ok(!/data-superficie|z-\[95\]|fixed inset-0/.test(ventana.replace(/\/\/[^\n]*/g, '')), 'sin la marca ni el panel a mano: ya es una capa');
+  // «Eliminar casillero» abre confirmar() (useAvisos): capa="encima" (z-[60]), sobre los Modal de la página (z-50).
+  assert.match(ventana, /await confirmar\(\{\s*titulo: '¿Eliminar este casillero\?'/);
+  const avisosTsx = readFileSync(new URL('../src/components/ui/Avisos.tsx', import.meta.url), 'utf8');
+  assert.match(avisosTsx, /<Modal\s+capa="encima"/, 'la confirmación va encima');
+  const modalTsx = readFileSync(new URL('../src/components/ui/Modal.tsx', import.meta.url), 'utf8');
+  // r1 (m6, D27, aditivo): la capa 'alta' (z-[90]) para abrir una ventana sobre un panel a mano en z-[80] (el alta de un PEC).
+  assert.match(modalTsx, /const capaCls = capa === 'alta' \? 'z-\[90\]' : capa === 'encima' \? 'z-\[60\]' : 'z-50';/);
+  // «Nuevo Casillero» se abre encima de la ventana (fuera del Modal, después en el DOM). r1 (m6, D27): es un Modal de la pila (capa
+  // «encima»), ya no una superficie a mano.
+  const finModal = ventana.indexOf('</Modal>');
+  assert.ok(finModal > 0 && ventana.indexOf('{showNewCasillero && (') > finModal, 'Nuevo Casillero, después del Modal');
+  // Con el mismo z-50 que el panel del PEC (fixed, z-50), gana el orden del DOM: la ventana va DESPUÉS del panel (el banco lo midió:
+  // antes de moverla, el panel la tapaba).
+  const panel = ped.indexOf(`<div className="fixed top-0 bottom-0 right-0 z-50 bg-white shadow-2xl flex flex-col" style={{left:'240px'}}>`);
+  assert.ok(panel > 0 && ped.indexOf('{showConfig && <TrackingConfigModal onClose=') > panel, 'la ventana de seguimiento, después del panel del PEC');
+  const nuevo = ped.slice(ped.indexOf('function NewCasilleroModal('), ped.indexOf('function TrackingConfigModal('));
+  assert.match(nuevo, /<Modal cierreExterno=\{false\} bloquearCierre=\{saving\} capa=\{capa\} title="Nuevo Casillero"/);
+  assert.ok(!/data-superficie|z-\[95\]/.test(nuevo.replace(/\/\/[^\n]*/g, '')), 'sin la marca ni el panel a mano');
+}
+
+console.log('--- B4 T24 f3 (FINAL-m11 de f1): Recepciones, Lista de compras y Traslados (Compras e Inventario) pasan sus columnas a accionModo ---');
+{
+  const { COLUMNAS_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, opcionesEstadosRecepcion } = await import('../src/lib/estados-compras.js');
+  const { accionModo } = TABLA;
+  // Recepciones: en Kanban, «Confirmadas» es COMPLETADA (su estado principal) y vale la columna entera (también COMPLETADA_LOGISTICA).
+  const confirmadas = COLUMNAS_RECEPCION.find((c) => c.estados.includes('COMPLETADA_LOGISTICA'));
+  assert.ok(confirmadas && confirmadas.estados[0] === 'COMPLETADA', 'Confirmadas = COMPLETADA + COMPLETADA_LOGISTICA');
+  const deKanban = estadoTablaInicial({ vista: 'todas', modo: 'kanban', estados: ['COMPLETADA'] });
+  const validos = new Set(opcionesEstadosRecepcion('todas').map((o) => o.valor));
+  const esperados = confirmadas.estados.filter((e) => validos.has(e));
+  assert.ok(esperados.length > 1, 'la Lista ofrece los dos estados de la columna');
+  assert.deepEqual(accionModo(deKanban, 'lista', opcionesEstadosRecepcion, COLUMNAS_RECEPCION), { tipo: 'cambiar', cambios: { modo: 'lista', estados: esperados } },
+    'Kanban → Lista: la columna entera, no solo COMPLETADA');
+  const ida = reducirEstadoTabla(deKanban, accionModo(deKanban, 'lista', opcionesEstadosRecepcion, COLUMNAS_RECEPCION));
+  const vuelta = reducirEstadoTabla(ida, accionModo(ida, 'kanban', OPCIONES_ESTADOS_TABLERO_RECEPCION, COLUMNAS_RECEPCION));
+  assert.deepEqual(vuelta.estados, ['COMPLETADA'], 'y de vuelta, la opción de la columna');
+  // Las pantallas le pasan sus columnas (el cuarto argumento, aditivo).
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  for (const [ruta, tablero, lista, columnas] of [
+    ['app/dashboard/compras/recepciones/page.tsx', 'OPCIONES_ESTADOS_TABLERO_RECEPCION', 'opcionesEstadosRecepcion', 'COLUMNAS_RECEPCION'],
+    ['app/dashboard/inventario/recepciones/page.tsx', 'OPCIONES_ESTADOS_TABLERO_RECEPCION', 'opcionesEstadosRecepcion', 'COLUMNAS_RECEPCION'],
+    ['app/dashboard/compras/lista-compras/page.tsx', 'OPCIONES_ESTADOS_TABLERO_LISTA', 'opcionesEstadosLista', 'COLUMNAS_LISTA'],
+    ['app/dashboard/compras/traslados/page.tsx', 'OPCIONES_ESTADOS_TABLERO_TRASLADO', 'opcionesEstadosTraslado', 'COLUMNAS_TRASLADO'],
+    ['app/dashboard/inventario/traslados/page.tsx', 'OPCIONES_ESTADOS_TABLERO_TRASLADO', 'opcionesEstadosTraslado', 'COLUMNAS_TRASLADO'],
+  ]) {
+    assert.ok(leer(ruta).includes(`despachar(accionModo(estado, modo, modo === 'kanban' ? ${tablero} : ${lista}, ${columnas}));`), ruta);
+  }
 }
 
 console.log('✓ T4D: umbral, ancho al contenido, ajustar al ancho, geometría, destino, orden, cuerpo, grupos, selección, barra y el fuente de los componentes.');

@@ -12,7 +12,7 @@ import {
 // la pantalla, las tarjetas y la franja del flujo; el Análisis vive en el Hub (R13). El panel del PEC, el seguimiento,
 // la recepción y el alta conservan lo de B1 a B3.
 import {
-  SubNav, PageHeader, Button, useAvisos, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila, ModalMotivo,
+  SubNav, PageHeader, Button, useAvisos, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila, Modal, ModalMotivo,
   TableroKanban, EsqueletoTablero, useTableroKanban,
 } from '@/components/ui';
 import type { ItemMenuFila } from '@/components/ui';
@@ -22,9 +22,12 @@ import {
 import type { AccionTabla, ClaveFila, PestanaTabla } from '@/components/tabla';
 import { BannerFlujo, PasosFlujo, useResumenFlujo } from '@/components/flujo';
 import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
+import { useResumen } from '@/components/ui/useResumen';
+import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import { COMP_NAV } from '../comp-nav';
+import { SelectorBodegaRecepcion, useBodegasRecepcion } from '../bodega-recepcion';
 
-import { FOCOS } from '@/lib/design-system';
+import { FOCOS, RESERVA_BOTON_IA } from '@/lib/design-system';
 import { accesoCompras } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
 import { apiFetch as _apiFetch } from '@/lib/api';
@@ -33,7 +36,7 @@ import {
   accionModo, accionPestana, accionVistaEnLista, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta,
   ordenEsAtencion, rutaSinParametro, textoOrdenHub,
 } from '@/lib/tabla';
-import { PERIODO_KPI, tarjetasPedidosCompra } from '@/lib/kpis';
+import { PERIODO_KPI, datosTarjetasCompras, tarjetasPedidosCompra } from '@/lib/kpis';
 // T15 r1 (m7): la etiqueta del estado del pedido de venta (el chip del alta), nunca el código.
 import { infoEstadoPedido } from '@/lib/estados-pedido';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
@@ -41,10 +44,10 @@ import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, cancelarPecsEnSerie, consultaColumnaPec,
   despuesDeCancelarPec, etapaPec, grupoMesPec, infoEstadoPec, opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec,
   repartirCancelacionPec, resumenCancelacionPec, tarjetaPedidoCompra, textoVacioPec, textoVencidosPec, tituloMesPec,
-  transicionesPec,
+  transicionesPec, vinculoPvenDelPec, seleccionVigente, avisoSeleccionQuitada, podarSeleccion, ofrecerCrearCasillero, avisoRecepcionPec, despuesDeEliminarPec, bodegaRecepcion, cuerpoRecepcionarPec,
 } from '@/lib/estados-compras';
 import {
-  ENLACE_VER_ANALISIS_COMPRAS, TEXTO_SEGUIMIENTO_CERRADO, accionSemaforoCompras, avisoTarjetaEtapa, avisosFlujoCompras,
+  ENLACE_VER_ANALISIS_COMPRAS, errorDiasEtapas, TEXTO_SEGUIMIENTO_CERRADO, accionSemaforoCompras, avisoTarjetaEtapa, avisosFlujoCompras,
   etiquetaEtapaTracking, filtroSemaforoCompras, leerEnlacePedidosCompra, pasosDeTracking, pasosPedidosCompra, seguimientoCerrado,
   textoReglaCompras, vistaDePasoPedidosCompra,
 } from '@/lib/flujo-compras';
@@ -108,7 +111,7 @@ function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClose:()=>
             <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Nombre *</label><input required value={form.name} onChange={e=>set('name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
             <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Referencia / NIT</label><input value={form.reference} onChange={e=>set('reference',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
             <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Contacto</label><input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Telefono</label><input value={form.phone} onChange={e=>set('phone',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Teléfono</label><input value={form.phone} onChange={e=>set('phone',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
             <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Email</label><input type="email" value={form.email} onChange={e=>set('email',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
             <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Ciudad</label><input value={form.city} onChange={e=>set('city',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
             <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Terminos de Pago</label><input value={form.payment_terms} onChange={e=>set('payment_terms',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
@@ -128,7 +131,7 @@ function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClose:()=>
 /* ================================================================
    NUEVO CASILLERO MODAL
    ================================================================ */
-function NewCasilleroModal({onSave, onClose}: {onSave:(c:any)=>void; onClose:()=>void}) {
+function NewCasilleroModal({onSave, onClose, capa = 'encima'}: {onSave:(c:any)=>void; onClose:()=>void; capa?: 'encima' | 'alta'}) {
   const [form, setForm] = useState({name:'',address:'',reception_point:'',contact_name:'',phone:'',email:'',city:'',country:'Estados Unidos',notes:''});
   const [saving, setSaving] = useState(false);
   // B4 T15 (RP30): el error en un aviso del sistema, con el texto del servidor (nunca alert()).
@@ -142,32 +145,32 @@ function NewCasilleroModal({onSave, onClose}: {onSave:(c:any)=>void; onClose:()=
     catch(err) { avisarError(err, 'No se pudo crear el casillero'); }
     setSaving(false);
   }
+  // B4 T24 f3 r1 (m6 = m27 = m38): un Modal de la pila, apilado ENCIMA de quien lo abre (capa="encima" sobre la ventana de seguimiento y
+  // el panel del PEC; "alta" sobre el alta de un PEC, un panel a mano en z-[80]), con la regla de F40: tiene lo escrito, así que solo lo
+  // cierran sus botones, y no mientras guarda. Toma el foco al abrir, atrapa Tab y Esc no cierra lo de atrás. Ya sin data-superficie.
   return (
-    <div className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm">
-      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg mx-4">
-        <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-indigo-50 rounded-t-3xl">
-          <div><h3 className="font-black text-gray-900 text-lg">Nuevo Casillero</h3><p className="text-xs text-gray-500 mt-0.5">Punto de recepcion / forwarder</p></div>
-          <button onClick={onClose} className="p-2 hover:bg-indigo-100 rounded-xl"><X size={18}/></button>
-        </div>
-        <form onSubmit={save} className="p-6 space-y-4">
+    <Modal cierreExterno={false} bloquearCierre={saving} capa={capa} title="Nuevo Casillero" subtitle="Punto de recepción / forwarder"
+      icon={MapPin} color="indigo" maxWidth="lg" onClose={onClose}
+      footer={(
+        <>
+          <button type="button" onClick={onClose} disabled={saving} className={`px-4 py-2 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-50 ${FOCOS.indigo}`}>Cancelar</button>
+          <button type="submit" form="form-nuevo-casillero" disabled={saving} className={`px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2 ${FOCOS.indigo}`}>
+            {saving?<RefreshCw size={14} className="animate-spin" aria-hidden="true"/>:<MapPin size={14} aria-hidden="true"/>} Agregar Casillero
+          </button>
+        </>
+      )}>
+        <form id="form-nuevo-casillero" onSubmit={save} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Nombre *</label><input required value={form.name} onChange={e=>set('name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-            <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Direccion</label><input value={form.address} onChange={e=>set('address',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-            <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Punto de Recepcion</label><input value={form.reception_point} onChange={e=>set('reception_point',e.target.value)} placeholder="ej: Bodega 4, Muelle B" className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
+            <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Dirección</label><input value={form.address} onChange={e=>set('address',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
+            <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Punto de recepción</label><input value={form.reception_point} onChange={e=>set('reception_point',e.target.value)} placeholder="ej: Bodega 4, Muelle B" className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
             <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Contacto</label><input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Telefono</label><input value={form.phone} onChange={e=>set('phone',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Teléfono</label><input value={form.phone} onChange={e=>set('phone',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
             <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Ciudad</label><input value={form.city} onChange={e=>set('city',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Pais</label><input value={form.country} onChange={e=>set('country',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-          </div>
-          <div className="flex justify-end gap-3 pt-2 border-t border-gray-100">
-            <button type="button" onClick={onClose} className="px-4 py-2 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50">Cancelar</button>
-            <button type="submit" disabled={saving} className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2">
-              {saving?<RefreshCw size={14} className="animate-spin"/>:<MapPin size={14}/>} Agregar Casillero
-            </button>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">País</label><input value={form.country} onChange={e=>set('country',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
           </div>
         </form>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -208,13 +211,17 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:Avis
   });
 
   const saveStages = async () => {
-    if (stages.some(s=>!s.key || !String(s.key).trim())) { onToast('Cada etapa necesita una key (identificador unico)','error'); return; }
+    if (stages.some(s=>!s.key || !String(s.key).trim())) { onToast('Cada etapa necesita una key (identificador único)','error'); return; }
+    // B4 T24 f3 (m21 del backend r1): los días de alerta, en la lib con el rango del servidor (0 a 36500), antes de mandar. Si el servidor
+    // responde 422 (ETAPA_DIAS_INVALIDOS), su texto; la ventana sigue abierta con lo escrito.
+    const errorDias = errorDiasEtapas(stages);
+    if (errorDias) { onToast(errorDias, 'error'); return; }
     setSaving(true);
     try {
       await apiFetch(`/compras/tracking-config/${tipoEnvio}`, {method:'PUT', body:JSON.stringify({stages})});
-      onToast('Configuracion de etapas guardada','ok');
+      onToast('Configuración de etapas guardada','ok');
       loadConfig();
-    } catch(e:any) { onToast(e.message,'error'); }
+    } catch (e) { onToast(e, 'error'); }
     setSaving(false);
   };
 
@@ -230,33 +237,34 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:Avis
     catch(e:any) { onToast(e.message,'error'); }
   };
 
+  // B4 T24 f3 (duda 1 de f2 r2): un Modal (z-50) de la pila, ya no un panel a mano en z-[95] encima de todo: «Eliminar casillero» abre
+  // confirmar() (capa="encima", z-[60]) ENCIMA de esta ventana, con su Tab dentro, y Esc cierra solo la confirmación. Regla de F40: tiene
+  // lo escrito (las etapas), así que solo la cierran sus botones (sin cierre externo), y no se cierra mientras guarda (bloquearCierre).
   return (
-    // B4 T24 f2 r2 (m4): esta ventana (z-[95]) va ENCIMA de confirmar() (z-[60]) que abre «Eliminar casillero»: data-superficie, para que
-    // la capa de la confirmación no le quite el foco.
-    <div data-superficie="ventana" className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
-      {showNewCasillero && (
-        <NewCasilleroModal onClose={()=>setShowNewCasillero(false)} onSave={()=>{setShowNewCasillero(false);loadCasilleros();}}/>
-      )}
-      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
-        <div className="px-6 py-5 border-b border-gray-100 flex justify-between items-center shrink-0">
-          <div>
-            <h3 className="font-black text-gray-900 text-lg flex items-center gap-2"><Settings2 size={18} className="text-purple-600"/> Configuracion de Tracking</h3>
-            <p className="text-xs text-gray-500 mt-0.5">Etapas, alertas y casilleros del pipeline logistico</p>
-          </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-xl"><X size={18}/></button>
-        </div>
-        <div className="flex gap-1 px-6 pt-4 shrink-0">
+    <>
+      <Modal cierreExterno={false} bloquearCierre={saving} title="Configuración de tracking" subtitle="Etapas, alertas y casilleros del pipeline logístico"
+        icon={Settings2} color="purple" maxWidth="3xl" onClose={onClose} reservaBotonIa
+        footer={tab === 'etapas' ? (
+          <>
+            {/* r1 (m40): el foco con el token; (m43) el pie reserva el área del botón de la IA (reservaBotonIa). */}
+            <button type="button" onClick={onClose} disabled={saving} className={`px-4 py-2 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-50 ${FOCOS.purple}`}>Cerrar</button>
+            <button type="button" onClick={saveStages} disabled={saving} className={`px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2 ${FOCOS.purple}`}>
+              {saving?<RefreshCw size={14} className="animate-spin" aria-hidden="true"/>:<Save size={14} aria-hidden="true"/>} Guardar Etapas
+            </button>
+          </>
+        ) : undefined}>
+        <div className="flex gap-1">
           {[{k:'etapas',l:'Etapas y Alertas'},{k:'casilleros',l:'Casilleros'}].map(({k,l}:any)=>(
-            <button key={k} onClick={()=>setTab(k)} className={'px-3 py-1.5 rounded-lg text-sm font-bold ' + (tab===k?'bg-purple-600 text-white':'bg-gray-100 text-gray-600 hover:bg-purple-50')}>{l}</button>
+            <button key={k} type="button" onClick={()=>setTab(k)} aria-pressed={tab===k} className={`px-3 py-1.5 rounded-lg text-sm font-bold ${FOCOS.purple} ` + (tab===k?'bg-purple-600 text-white':'bg-gray-100 text-gray-600 hover:bg-purple-50')}>{l}</button>
           ))}
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6">
+        <div>
           {tab === 'etapas' && (
             <div className="space-y-4">
               <div className="flex gap-2">
                 {(['casillero','directo'] as const).map(t=>(
-                  <button key={t} onClick={()=>setTipoEnvio(t)} className={'px-3 py-1.5 rounded-lg text-xs font-bold border ' + (tipoEnvio===t?'bg-indigo-600 text-white border-indigo-600':'bg-white text-gray-600 border-gray-200 hover:bg-gray-50')}>
+                  <button key={t} type="button" onClick={()=>setTipoEnvio(t)} aria-pressed={tipoEnvio===t} className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${FOCOS.purple} ` + (tipoEnvio===t?'bg-indigo-600 text-white border-indigo-600':'bg-white text-gray-600 border-gray-200 hover:bg-gray-50')}>
                     {t==='casillero'?'Vía casillero':'Directo Colombia'}
                   </button>
                 ))}
@@ -271,7 +279,7 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:Avis
                           <input value={s.label||''} onChange={e=>setStage(i,'label',e.target.value)} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-purple-200"/>
                         </div>
                         <div className="col-span-3">
-                          <label className="text-[10px] font-black text-gray-400 uppercase">Key (unica)</label>
+                          <label className="text-[10px] font-black text-gray-400 uppercase">Key (única)</label>
                           <input value={s.key||''} onChange={e=>setStage(i,'key',e.target.value.toUpperCase().replace(/\s+/g,'_'))} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-purple-200 font-mono"/>
                         </div>
                         <div className="col-span-2">
@@ -303,31 +311,25 @@ function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:Avis
 
           {tab === 'casilleros' && (
             <div className="space-y-2">
-              <button onClick={()=>setShowNewCasillero(true)} className="w-full py-2.5 border-2 border-dashed border-gray-300 rounded-2xl text-sm font-bold text-gray-500 hover:border-indigo-400 hover:text-indigo-600 flex items-center justify-center gap-2 mb-2"><Plus size={14}/> Nuevo Casillero</button>
+              <button type="button" onClick={()=>setShowNewCasillero(true)} className={`w-full py-2.5 border-2 border-dashed border-gray-300 rounded-2xl text-sm font-bold text-gray-500 hover:border-indigo-400 hover:text-indigo-600 flex items-center justify-center gap-2 mb-2 ${FOCOS.purple}`}><Plus size={14} aria-hidden="true"/> Nuevo Casillero</button>
               {casilleros.length === 0 && <p className="text-center py-8 text-gray-400 text-sm">Sin casilleros registrados</p>}
               {casilleros.map(c=>(
                 <div key={c.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-200">
                   <div>
                     <p className="font-bold text-sm text-gray-900">{c.name}</p>
-                    <p className="text-xs text-gray-400">{[c.address,c.city].filter(Boolean).join(' · ')||'Sin direccion'}</p>
+                    <p className="text-xs text-gray-400">{[c.address,c.city].filter(Boolean).join(' · ')||'Sin dirección'}</p>
                   </div>
-                  <button onClick={()=>deleteCasillero(c.id)} className="p-1.5 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-500"><Trash2 size={14}/></button>
+                  <button type="button" onClick={()=>deleteCasillero(c.id)} aria-label={`Eliminar el casillero ${c.name}`} title="Eliminar casillero" className={`p-1.5 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-500 ${FOCOS.purple}`}><Trash2 size={14} aria-hidden="true"/></button>
                 </div>
               ))}
             </div>
           )}
         </div>
-
-        {tab === 'etapas' && (
-          <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3 shrink-0">
-            <button onClick={onClose} className="px-4 py-2 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50">Cerrar</button>
-            <button onClick={saveStages} disabled={saving} className="px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2">
-              {saving?<RefreshCw size={14} className="animate-spin"/>:<Save size={14}/>} Guardar Etapas
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
+      </Modal>
+      {showNewCasillero && (
+        <NewCasilleroModal onClose={()=>setShowNewCasillero(false)} onSave={()=>{setShowNewCasillero(false);loadCasilleros();}}/>
+      )}
+    </>
   );
 }
 
@@ -377,7 +379,11 @@ function TrackingPanel({pec, onUpdate, onToast, puedeEditar}: {pec:any; onUpdate
       onToast('Etapa actualizada', 'ok');
       onUpdate();
       closeEdit();
-    } catch(e:any) { onToast(e.message, 'error'); }
+    } catch (e) {
+      // B4 T24 f3 (FINAL-m13): si el PEC cambió en otro lado o la red se cayó (recargarTrasError), el panel no se queda con las etapas viejas.
+      onToast(e, 'error');
+      if (recargarTrasError(e)) onUpdate();
+    }
     setUpdating(null);
   }
 
@@ -457,7 +463,7 @@ function TrackingPanel({pec, onUpdate, onToast, puedeEditar}: {pec:any; onUpdate
             {/* ETA / carrier / casillero / guía (T15 r1, m13: la guía vigente, como la barra de antes) / días */}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500 mb-1">
               {sd.eta && <span className="flex items-center gap-1"><Clock size={11}/> ETA: <strong className="text-gray-700">{textoDia(sd.eta)}</strong></span>}
-              {sd.carrier && <span>Carrier: <strong className="text-gray-700">{sd.carrier}</strong></span>}
+              {sd.carrier && <span>Transportadora: <strong className="text-gray-700">{sd.carrier}</strong></span>}
               {sd.casillero_nombre && <span className="flex items-center gap-1"><MapPin size={11}/> {sd.casillero_nombre}</span>}
               {sd.tracking_number && <span>Guía: <strong className="text-indigo-700">{sd.tracking_number}</strong></span>}
               {aviso?.fuente === 'dias' && <span className={'font-bold ' + CLASE_DIAS_ETAPA[aviso.tono]}>{aviso.texto}</span>}
@@ -481,11 +487,11 @@ function TrackingPanel({pec, onUpdate, onToast, puedeEditar}: {pec:any; onUpdate
                   <div><label className="text-xs font-black text-gray-400 uppercase mb-1 block">ETA de esta etapa</label>
                     <input type="date" value={eta} onChange={e=>setEta(e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
                   </div>
-                  <div><label className="text-xs font-black text-gray-400 uppercase mb-1 block">Carrier</label>
+                  <div><label className="text-xs font-black text-gray-400 uppercase mb-1 block">Transportadora</label>
                     <input value={carrier} onChange={e=>setCarrier(e.target.value)} placeholder="ej: DHL" className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
                   </div>
                 </div>
-                <div><label className="text-xs font-black text-gray-400 uppercase mb-1 block">Numero de Guia / Tracking</label>
+                <div><label className="text-xs font-black text-gray-400 uppercase mb-1 block">Número de guía / tracking</label>
                   <input value={guia} onChange={e=>setGuia(e.target.value)} placeholder="ej: 1Z999AA1234567890" className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
                 </div>
                 <div className="relative">
@@ -516,7 +522,7 @@ function TrackingPanel({pec, onUpdate, onToast, puedeEditar}: {pec:any; onUpdate
             {/* Tracking history */}
             {history.length > 0 && (
               <div className="mt-2 pt-2 border-t border-gray-100">
-                <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Historial de guias:</p>
+                <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Historial de guías:</p>
                 {history.map((h:any,i:number) => (
                   <div key={i} className="flex items-center gap-2 text-[10px] text-gray-500">
                     <span className="text-indigo-600 font-bold">{h.numero}</span>
@@ -559,6 +565,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
   const [editEstado, setEditEstado] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
   const [goingToRecepcion, setGoingToRecepcion] = useState(false);
+  const [bodegaElegida, setBodegaElegida] = useState<string | null>(null);
   const [infoEdit, setInfoEdit] = useState(false);
   const [infoForm, setInfoForm] = useState<any>({});
   const [savingInfo, setSavingInfo] = useState(false);
@@ -566,24 +573,29 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
   // "Hacer recepción": ir directo a LA recepción de este PEC, no al hub general
   // (con cientos de pedidos, aterrizar en la lista completa obliga a buscarla).
   // Si ya existe una (GoodsReceipt), abrirla; si no, crearla y abrir la nueva.
+  // B4 T24 f3 (FINAL-m12): adónde va lo dice avisoRecepcionPec: abre la recepción por confirmar o crea la del resto (nunca la última si
+  // ya está confirmada). Un error se dice con el texto del servidor y, con la regla única, se recarga el panel.
   async function goToRecepcion() {
+    const accion = avisoRecepcionPec(detail)?.accion;
+    if (!accion) return;
     setGoingToRecepcion(true);
     try {
-      const existing = detail?.recepciones?.[detail.recepciones.length - 1];
-      if (existing?.id) { router.push(`/dashboard/compras/recepciones/${existing.id}`); return; }
+      if (accion.tipo === 'abrir') { router.push(`/dashboard/compras/recepciones/${accion.id}`); return; }
       const user = localStorage.getItem('user_name') || '';
+      // r1 (C1, la raíz): con la bodega receptora elegida (o la única), para que BODEGA pueda confirmarla.
       const r = await apiFetch(`/compras/pedidos/${pec.id}/recepcionar`, {
         method: 'POST',
-        body: JSON.stringify({ created_by: user, force_full: false }),
+        body: JSON.stringify(cuerpoRecepcionarPec({ creadoPor: user, bodega: bodegaRecepcion(bodegaElegida, bodegas.filas) })),
       });
-      router.push(`/dashboard/compras/recepciones/${r.id}`);
-    } catch (e: any) {
-      onToast(e.message, 'error');
+      router.push(`/dashboard/compras/recepciones/${(r?.data ?? r)?.id}`);
+    } catch (e) {
+      onToast(e, 'error');
+      if (recargarTrasError(e)) { onUpdate(); loadFull(); }
     }
     setGoingToRecepcion(false);
   }
 
-  useEffect(()=>{setDetail(pec);setTab('tracking');},[pec?.id]);
+  useEffect(()=>{setDetail(pec);setTab('tracking');setBodegaElegida(null);},[pec?.id]); // r2 (m16): la bodega elegida, de nuevo
 
   const loadFull = async () => {
     if (!pec) return;
@@ -659,19 +671,27 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
       onToast('PEC eliminado','ok'); onUpdate(); onClose();
     } catch(e){
       onToast(e,'error');
-      if (recargarTrasError(e)) { onUpdate(); loadFull(); }
+      // B4 T24 f3 (F64): un 404 (el PEC ya no existe) cierra el panel y recarga la lista (despuesDeEliminarPec).
+      const despues = despuesDeEliminarPec(e);
+      if (despues === 'cerrar') { onUpdate(); onClose(); }
+      else if (despues === 'recargar') { onUpdate(); loadFull(); }
     }
   };
+
+  // r1 (C1, la raíz): «Hacer recepción» (ADMIN y COMPRAS) ofrece la bodega receptora antes de crearla.
+  const creaRecepcion = avisoRecepcionPec(detail)?.accion.tipo === 'crear' && accesoPec.cambiarPec;
+  const bodegas = useBodegasRecepcion(creaRecepcion);
 
   if (!pec) return null;
   // C10: la etiqueta y el color de estados-compras.js (RECIBIDA y PARCIALMENTE_RECIBIDA ya no salen como «Borrador»).
   const est = { ...infoEstadoPec(detail?.estado).clases, label: infoEstadoPec(detail?.estado).label };
   const vencido = detail?.is_overdue ?? pec.is_overdue;
   const pvens = detail?.pedidos_venta?.length ? detail.pedidos_venta.map((v:any)=>v.numero) : (detail?.ven_numero ? [detail.ven_numero] : []);
+  // r1 (m20): sin el permiso de recepcionar (ADMIN y COMPRAS), el aviso informa sin empujar a una acción que no tiene.
+  const avisoRecepcion = avisoRecepcionPec(detail, { recepcionar: accesoPec.cambiarPec });
 
   return (
     <>
-      {showConfig && <TrackingConfigModal onClose={()=>setShowConfig(false)} onToast={onToast}/>}
       <div className="fixed inset-0 bg-gray-900/20 backdrop-blur-sm z-40" onClick={onClose}/>
       <div className="fixed top-0 bottom-0 right-0 z-50 bg-white shadow-2xl flex flex-col" style={{left:'240px'}}>
         {/* Header */}
@@ -734,7 +754,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
 
         {/* Tabs */}
         <div className="flex items-center gap-1 px-8 py-2 border-b border-gray-100 shrink-0">
-          {[{k:'tracking',l:'Tracking'},{k:'productos',l:'Productos'},{k:'pvens',l:'Pedidos Venta'},{k:'info',l:'Info'},{k:'actividad',l:'Actividad'}].map(({k,l})=>(
+          {[{k:'tracking',l:'Tracking'},{k:'productos',l:'Productos'},{k:'pvens',l:'Pedidos Venta'},{k:'info',l:'Información'},{k:'actividad',l:'Actividad'}].map(({k,l})=>(
             <button key={k} onClick={()=>setTab(k)} className={'px-3 py-1.5 rounded-lg text-sm font-bold transition-all ' + (tab===k?'bg-purple-600 text-white shadow':'text-gray-600 hover:bg-purple-50 hover:text-purple-700')}>{l}</button>
           ))}
         </div>
@@ -743,26 +763,26 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
             hay que poder volver a ella -- antes el banner (y su unico link a
             la recepcion) desaparecia por completo en cuanto se creaba una,
             dejando sin forma de volver a encontrarla desde el PEC. */}
-        {['RECIBIDO','RECIBIDA'].includes(detail?.estado) && (
+        {/* B4 T24 f3 (FINAL-m12): el aviso sale de avisoRecepcionPec: también con PARCIALMENTE_RECIBIDA (lo que el tablero muestra en «En
+            bodega» con «Recepcionar»), y su botón abre la recepción por confirmar o crea la del resto. */}
+        {avisoRecepcion && (
           <div className="mx-8 mt-4 bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex items-center justify-between shrink-0">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 bg-white rounded-full flex items-center justify-center text-emerald-600 shadow-sm"><PackageCheck size={18}/></div>
               <div>
-                <p className="font-black text-emerald-900 text-sm">
-                  {detail?.recepciones?.length > 0 ? 'Mercancía recibida en bodega' : 'Mercancía recibida en bodega, pendiente de recepción'}
-                </p>
-                <p className="text-xs text-emerald-700">
-                  {detail?.recepciones?.length > 0
-                    ? `Recepción ${detail.recepciones[detail.recepciones.length-1].numero} en curso.`
-                    : 'Inicia el conteo físico de este pedido.'}
-                </p>
+                <p className="font-black text-emerald-900 text-sm">{avisoRecepcion.titulo}</p>
+                <p className="text-xs text-emerald-700">{avisoRecepcion.texto}</p>
               </div>
             </div>
             {/* r1 (m7): «Hacer recepción» la crea (POST /pedidos/{id}/recepcionar: ADMIN y COMPRAS); «Ver recepción» solo navega. */}
-            {(detail?.recepciones?.length > 0 || accesoPec.cambiarPec) && (
-              <button onClick={goToRecepcion} disabled={goingToRecepcion} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm hover:bg-emerald-700 transition-colors shrink-0 disabled:opacity-50 flex items-center gap-2">
+            {creaRecepcion && (
+              <SelectorBodegaRecepcion id="bodega-hacer-recepcion" bodegas={bodegas} elegida={bodegaElegida} onElegir={setBodegaElegida}
+                deshabilitado={goingToRecepcion} acento="purple" />
+            )}
+            {(avisoRecepcion.accion.tipo === 'abrir' || accesoPec.cambiarPec) && (
+              <button onClick={goToRecepcion} disabled={goingToRecepcion || (creaRecepcion && bodegas.cargando)} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm hover:bg-emerald-700 transition-colors shrink-0 disabled:opacity-50 flex items-center gap-2">
                 {goingToRecepcion && <RefreshCw size={12} className="animate-spin"/>}
-                {detail?.recepciones?.length > 0 ? 'Ver recepción' : 'Hacer recepción'}
+                {avisoRecepcion.accion.texto}
               </button>
             )}
           </div>
@@ -802,7 +822,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
             <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
               <p className="text-xs font-black text-gray-400 uppercase mb-3">Logística</p>
               <div className="grid grid-cols-2 gap-3 text-xs text-gray-600">
-                {[['Modalidad',detail?.modalidad_pago||'-'],['Carrier',detail?.carrier||'-'],['Casillero',detail?.casillero_nombre||'-'],['Tracking',detail?.tracking_number||'-']].map(([l,v],i)=>(
+                {[['Modalidad',detail?.modalidad_pago||'-'],['Transportadora',detail?.carrier||'-'],['Casillero',detail?.casillero_nombre||'-'],['Tracking',detail?.tracking_number||'-']].map(([l,v],i)=>(
                   <div key={i}><span className="block text-gray-400 font-black uppercase mb-0.5">{l}</span>{v}</div>
                 ))}
               </div>
@@ -816,7 +836,8 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
           </div>
 
           {/* RIGHT 55% */}
-          <div className="w-[55%] p-6 overflow-y-auto">
+          {/* r1 (m17 + m45, F44-a): la columna de la derecha del panel llega a la esquina del botón de la IA: la reserva al fondo. */}
+          <div className={`w-[55%] px-6 pt-6 ${RESERVA_BOTON_IA} overflow-y-auto`}>
             {loading && <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600"/></div>}
 
             {!loading && tab === 'tracking' && (
@@ -942,6 +963,9 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast, onCancelar, vueltaDeta
           </div>
         </div>
       </div>
+      {/* B4 T24 f3 (duda 1 de f2 r2): la ventana de seguimiento (un Modal z-50) va DESPUÉS del panel (también z-50) en el DOM: con el
+          mismo z gana el orden, así que queda encima del panel; confirmar() (z-[60]) queda encima de los dos. */}
+      {showConfig && <TrackingConfigModal onClose={()=>setShowConfig(false)} onToast={onToast}/>}
     </>
   );
 }
@@ -971,6 +995,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
   const [casilleroResults, setCasilleroResults] = useState<any[]>([]);
   const [selectedCasillero, setSelectedCasillero] = useState<any>(null);
   const [showNewCasillero, setShowNewCasillero] = useState(false);
+  const [casilleroBuscado, setCasilleroBuscado] = useState('');
   const [casilleroTimer, setCasilleroTimer] = useState<any>(null);
   const [form, setForm] = useState({
     modalidad_pago:'Contado', metodo_pago:'', tipo_envio:'casillero',
@@ -979,6 +1004,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
   });
   const [productos, setProductos] = useState<any[]>([]);
   const [selectedPvens, setSelectedPvens] = useState<Set<number>>(new Set());
+  const [quitadosPvens, setQuitadosPvens] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [modalTab, setModalTab] = useState('info');
   const [searchPven, setSearchPven] = useState('');
@@ -1011,7 +1037,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
         const res = await apiFetch('/compras/casilleros/search?q='+encodeURIComponent(val));
         const arr = Array.isArray(res) ? res : (res?.data || []);
         setCasilleroResults(arr);
-        if (arr.length === 0) setShowNewCasillero(true);
+        setCasilleroBuscado(val); // r2 (m21): ya no abre «Nuevo Casillero» solo; el vacío ofrece el botón (ofrecerCrearCasillero)
       } catch (err) { avisarError(err, 'No se pudo buscar el casillero'); }
     }, 350);
     setCasilleroTimer(t);
@@ -1072,6 +1098,12 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
     p.estado === 'PENDIENTE_COMPRA' &&
     JSON.stringify(p).toLowerCase().includes(searchPven.toLowerCase())
   );
+  // r1 (C2): la selección que sigue en PENDIENTE_COMPRA (después de un 409 y la recarga, la del PVEN que otro compró se quita y se avisa).
+  // r2 (m4 = m7): la selección guardada se PODA (un PVEN quitado no reaparece marcado si vuelve a PENDIENTE_COMPRA); el aviso queda.
+  const poda = podarSeleccion(selectedPvens, pedidosVenta);
+  if (poda.seleccion) { setSelectedPvens(poda.seleccion); setQuitadosPvens(poda.quitados); }
+  const vigente = seleccionVigente(poda.seleccion ?? selectedPvens, pedidosVenta);
+  const avisoQuitados = avisoSeleccionQuitada(quitadosPvens);
 
   async function submit() {
     if (!selectedSupplier) { onToast('Selecciona un proveedor','error'); return; }
@@ -1083,17 +1115,13 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
     setSaving(true);
     try {
       const user = localStorage.getItem('user_name') || '';
-      const pvensSelected = pedidosVenta.filter(p=>selectedPvens.has(p.id));
       const payload = {
         supplier_id: selectedSupplier.id,
         supplier_name: selectedSupplier.name,
         supplier_ref: selectedSupplier.reference,
-        ven_id: pvensSelected[0]?.id || null,
-        // ven_numero es VARCHAR(20) en la BD -- no cabe una lista unida por comas
-        // de varios PVEN reales. El vinculo real de cada PVEN adicional vive en
-        // su propio pec_id/pec_numero (ver loop de PATCH mas abajo), asi que aqui
-        // solo va el primero como referencia legible.
-        ven_numero: pvensSelected[0]?.numero || null,
+        // B4 T24 f3 (FINAL-C7-f): ven_ids con TODOS los PVEN elegidos (el servidor los vincula en el mismo alta), ven_id y ven_numero
+        // solo del primero (VARCHAR(20)). Ya no hay un PATCH /ventas/pedidos por cada otro, que COMPRAS no tiene (403).
+        ...vinculoPvenDelPec(vigente.pvens),
         modalidad_pago: form.modalidad_pago,
         metodo_pago: form.metodo_pago || null,
         tipo_envio: form.tipo_envio,
@@ -1107,26 +1135,16 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
         total_cop: form.total_cop,
         created_by: user,
       };
-      const pec = await apiFetch('/compras/pedidos',{method:'POST',body:JSON.stringify(payload)});
-      const pecObj = pec?.data ?? pec;
-      // El POST solo vincula el primer PVEN seleccionado (payload.ven_id); el resto
-      // se vincula aqui explicitamente para que TODOS los PVEN marcados queden con
-      // pec_id/pec_numero, no solo el primero.
-      const restantes = pvensSelected.slice(1);
-      // B4 T15: un PVEN que no se pudo vincular se dice con el mensaje del servidor (antes el error se tragaba).
-      const sinVincular: string[] = [];
-      for (const pv of restantes) {
-        try {
-          await apiFetch(`/ventas/pedidos/${pv.id}`,{method:'PATCH',body:JSON.stringify({
-            pec_id: pecObj.id, pec_numero: pecObj.numero, estado:'EN_PROCESO', updated_by:user,
-          })});
-        } catch (err) { sinVincular.push(`${pv.numero}: ${textoDeError(err)}`); }
-      }
+      await apiFetch('/compras/pedidos',{method:'POST',body:JSON.stringify(payload)});
       onToast('PEC creado exitosamente','ok');
-      if (sinVincular.length > 0) onToast(`No se pudieron vincular al PEC: ${sinVincular.join('; ')}`, 'error');
       onCreated();
       onClose();
-    } catch(e:any){ onToast(e.message,'error'); }
+    } catch (e) {
+      // El 409 del servidor (un PVEN que ya no está pendiente de compra o ya tiene PEC) se dice con su texto y, con la regla única,
+      // se recarga lo que se ve (onCreated recarga la lista y los PVEN del selector).
+      onToast(e, 'error');
+      if (recargarTrasError(e)) onCreated();
+    }
     setSaving(false);
   }
 
@@ -1141,7 +1159,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
         />
       )}
       {showNewCasillero && (
-        <NewCasilleroModal
+        <NewCasilleroModal capa="alta"
           onSave={(c)=>{setSelectedCasillero(c);setCasilleroSearch(c.name);setCasilleroResults([]);setShowNewCasillero(false);}}
           onClose={()=>setShowNewCasillero(false)}
         />
@@ -1218,7 +1236,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
                     <p className="text-xs font-black text-gray-400 uppercase mb-4">Detalles del Pedido</p>
                     <div className="grid grid-cols-3 gap-4">
                       <div>
-                        <label className="block text-xs font-black text-gray-500 uppercase mb-1">Tipo de Envio</label>
+                        <label className="block text-xs font-black text-gray-500 uppercase mb-1">Tipo de envío</label>
                         <select value={form.tipo_envio} onChange={e=>setF('tipo_envio',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200 bg-white">
                           <option value="casillero">Vía casillero</option>
                           <option value="directo">Directo Colombia</option>
@@ -1231,6 +1249,11 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
                             placeholder="Buscar casillero..."
                             className={'w-full border rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200 ' + (selectedCasillero?'border-emerald-300 bg-emerald-50':'border-gray-200')}/>
                           {selectedCasillero && <CheckCircle2 size={16} className="absolute right-3 top-9 text-emerald-600"/>}
+                          {ofrecerCrearCasillero({ texto: casilleroSearch, buscado: casilleroBuscado, resultados: casilleroResults, elegido: selectedCasillero }) && (
+                            <p role="status" className="mt-1 text-xs text-gray-600">Ningún casillero coincide.{' '}
+                              <button type="button" onClick={()=>setShowNewCasillero(true)} className={`font-bold text-purple-700 underline ${FOCOS.purple}`}>Crear casillero</button>
+                            </p>
+                          )}
                           {casilleroResults.length > 0 && !selectedCasillero && (
                             <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-2xl shadow-2xl z-10 overflow-hidden">
                               {casilleroResults.map((c:any)=>(
@@ -1244,7 +1267,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
                         </div>
                       )}
                       <div>
-                        <label className="block text-xs font-black text-gray-500 uppercase mb-1">Carrier</label>
+                        <label className="block text-xs font-black text-gray-500 uppercase mb-1">Transportadora</label>
                         <input value={form.carrier} onChange={e=>setF('carrier',e.target.value)} placeholder="ej: DHL, FedEx, Amazon" className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
                       </div>
                       <div>
@@ -1254,7 +1277,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
                         </select>
                       </div>
                       <div>
-                        <label className="block text-xs font-black text-gray-500 uppercase mb-1">Entrega Estimada (dias)</label>
+                        <label className="block text-xs font-black text-gray-500 uppercase mb-1">Entrega estimada (días)</label>
                         <input type="number" value={form.dias_entrega} onChange={e=>setF('dias_entrega',Number(e.target.value))} min={1} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
                       </div>
                       <div>
@@ -1347,7 +1370,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
               {modalTab === 'pvens' && (
                 <div>
                   <p className="text-sm font-black text-gray-700 mb-1">Pedidos de Venta disponibles</p>
-                  <p className="text-xs text-gray-400 mb-4">Selecciona los PVEN en estado <strong>Pendiente Compra</strong> para asociar a este PEC</p>
+                  <p className="text-xs text-gray-400 mb-4">Selecciona los PVEN en estado <strong>{infoEstadoPedido('PENDIENTE_COMPRA').label}</strong> para asociar a este PEC</p>
                   <div className="flex items-center bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 gap-2 mb-3">
                     <Search size={14} className="text-gray-400"/>
                     <input value={searchPven} onChange={e=>setSearchPven(e.target.value)} placeholder="Buscar PVEN..." className="text-sm bg-transparent outline-none flex-1"/>
@@ -1362,7 +1385,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
                           <RefreshCw size={13} aria-hidden="true"/> Reintentar
                         </button>
                       </div>
-                    ) : filteredPvens.length === 0 && <p className="text-center py-10 text-gray-400 text-sm">Sin PVEN en estado Pendiente Compra</p>}
+                    ) : filteredPvens.length === 0 && <p className="text-center py-10 text-gray-400 text-sm">Sin PVEN pendientes de compra</p>}
                     {filteredPvens.map((p:any)=>(
                       <label key={p.id} className={'flex items-start gap-3 p-4 rounded-2xl border cursor-pointer hover:bg-purple-50 transition-colors ' + (selectedPvens.has(p.id)?'border-purple-300 bg-purple-50':'border-gray-200 bg-white')}>
                         <input type="checkbox" checked={selectedPvens.has(p.id)} onChange={e=>{const n=new Set(selectedPvens);if(e.target.checked)n.add(p.id);else n.delete(p.id);setSelectedPvens(n);}} className="mt-1 rounded border-gray-300 text-purple-600"/>
@@ -1375,9 +1398,10 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
                       </label>
                     ))}
                   </div>
-                  {selectedPvens.size > 0 && (
+                  {avisoQuitados && <p role="status" className="mt-4 text-xs font-semibold text-amber-800">{avisoQuitados}</p>}
+                  {vigente.ids.length > 0 && (
                     <div className="mt-4 p-3 bg-purple-50 border border-purple-200 rounded-2xl flex items-center justify-between">
-                      <span className="text-sm font-bold text-purple-800">{selectedPvens.size} PVEN seleccionado(s)</span>
+                      <span className="text-sm font-bold text-purple-800">{vigente.ids.length} PVEN seleccionado(s)</span>
                       <span className="text-xs text-purple-600">Se asociaran al nuevo PEC al crearlo</span>
                     </div>
                   )}
@@ -1388,7 +1412,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast, errorVentas, 
 
           {/* Footer */}
           <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex items-center justify-between shrink-0">
-            <div className="text-sm text-gray-500"><span className="font-bold">{productos.length}</span> producto(s) · <span className="font-bold">{selectedPvens.size}</span> PVEN asociado(s)</div>
+            <div className="text-sm text-gray-500"><span className="font-bold">{productos.length}</span> producto(s) · <span className="font-bold">{vigente.ids.length}</span> PVEN asociado(s)</div>
             <div className="flex gap-3">
               <button onClick={onClose} className="px-4 py-2 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50">Cancelar</button>
               <button onClick={submit} disabled={saving} className="flex items-center gap-2 px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold disabled:opacity-50">
@@ -1434,8 +1458,8 @@ const OPCIONES_SEMAFORO = { vistaTodos: INICIAL_PEDIDOS.vista };
 /** D39 (m6 de T8): en Kanban la lista va sin filas (limit=0); los conteos siguen al día y las filas las piden las columnas. */
 const EXTRA_TABLERO = { limit: 0 };
 const RUTA_PEDIDOS = '/dashboard/compras/pedidos';
-/** El contenedor de los Hubs y de las listas del bloque (T7 a T14): pb-24 deja libre la esquina del botón de la IA. */
-const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
+/** El contenedor de los Hubs y de las listas del bloque (T7 a T14): RESERVA_BOTON_IA (pb-24, F44-a) deja libre la esquina del botón de la IA. */
+const CONTENEDOR = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;
 
 const FOCO_VISIBLE = FOCOS.purple;
 /** El foco de los botones de la barra masiva (fondo slate-900), como en el Hub (m11 de T14). */
@@ -1530,13 +1554,15 @@ export default function PedidosCompraPage() {
   // /compras/pedidos y PATCH /tracking son de ADMIN y COMPRAS); sin permiso, el tablero es solo para ver y no se ofrecen sus acciones.
   const accesoPec = accesoCompras(useRolActual());
   const enKanban = estado.modo === 'kanban';
+  // r1 (m20): «Recepcionar» de la tarjeta en «En bodega» solo a quien recepciona (sin permiso, la tarjeta queda en «Abrir»).
+  const tarjetaDePec = useCallback((p: FilaPec) => tarjetaPedidoCompra(p, { recepcionar: accesoPec.cambiarPec }), [accesoPec.cambiarPec]);
 
   // GET /compras/pedidos con vista, estados, semáforo, q, orden, limit y offset del estado, más los conteos de las
   // pestañas en la MISMA llamada. esperar: !listo (D40): el esqueleto, nunca «vacío». En Kanban, sin filas. Sin orden (el
   // tercer clic en un título), 'atencion': lo vencido primero sigue siendo el orden por defecto (R8).
   const extraDeLaLista = useMemo(() => ({ orden: estado.orden || 'atencion' }), [estado.orden]);
   const listado = useListado<FilaPec>({
-    ruta: '/compras/pedidos', estado, conConteos: true, esperar: !listo, despachar,
+    ruta: '/compras/pedidos', estado, conConteos: true, conResumen: true, esperar: !listo, despachar,
     extra: enKanban ? EXTRA_TABLERO : extraDeLaLista,
   });
   // m5 de T8: mientras la última respuesta sea la de Kanban (sin filas) y la tabla ya pida su página, la tabla está
@@ -1574,17 +1600,15 @@ export default function PedidosCompraPage() {
   // Las tarjetas (KPI-compras punto 6; R7, R12): GET /compras/stats?periodo=30d (antes se pedía sin período a un
   // endpoint que no existía y quedaba en {}), sin respaldo local. Mientras no llega, 'cargando' (nunca 0); si falla, «—».
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    _apiFetch(`/compras/stats?periodo=${PERIODO_KPI}`, { signal: control.signal })
-      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  const cargandoStats = stats?.vuelta !== vueltaStats;
-  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
-  const tarjetas = tarjetasPedidosCompra(stats?.datos ?? null);
+  // B4 T24 f3 (F45): el cargador compartido de los resúmenes (useResumen: aborta la anterior, descarta las viejas, va atado al usuario,
+  // conserva lo último al recargar y con error no deja datos viejos: «—»).
+  const stats = useResumen(`/compras/stats?periodo=${PERIODO_KPI}`, vueltaStats);
+  // B4 T24 f4 (F60): lo que abre una pestaña cuenta con la búsqueda: el resumen y los conteos de la MISMA llamada de la lista
+  // (datosTarjetasCompras); «Comprado» sigue con /stats. Hasta que llega el resumen, las tarjetas cargan (nunca otra cifra).
+  const datosTarjetas = datosTarjetasCompras(stats.datos, listado.resumen, conteos);
+  const cargandoStats = stats.cargando || (datosTarjetas === null && stats.datos !== null && listado.error == null);
+  const estadoKpis = useEstadoKpi(cargandoStats, stats.error ?? listado.error);
+  const tarjetas = tarjetasPedidosCompra(datosTarjetas);
 
   // B1 a B3 (queda igual): los pedidos de venta del alta (sus PENDIENTE_COMPRA se eligen en «Nuevo PEC»). Si el GET
   // falla, el error queda en el estado (el alta lo dice con «Reintentar», m9 de T14) y la lista de antes se conserva.
@@ -1825,7 +1849,7 @@ export default function PedidosCompraPage() {
     const vista = vistaDePasoPedidosCompra(clave);
     if (vista) elegirVista(vista);
   };
-  const actualizando = listado.recargando || flujo.cargando || (cargandoStats && stats !== null);
+  const actualizando = listado.recargando || flujo.cargando || (cargandoStats && stats.datos !== null);
 
   /* ════════════════ RENDER ════════════════ */
   return (
@@ -1900,7 +1924,7 @@ export default function PedidosCompraPage() {
         {/* B4 T15 (KPI-compras punto 6; R7, R12, RP92): las 4 tarjetas de /compras/stats (todos los PEC): mientras cargan,
             barras grises (nunca 0); con error, «—». Activos, En tránsito y Monto abren su pestaña; Con entrega vencida, el
             filtro «Con atraso». */}
-        <FranjaKpis estado={estadoKpis} titulo="Pedidos de compra">
+        <FranjaKpis estado={estadoKpis} titulo="Pedidos de compra" idFoco="franja-pedidos-compra">
           <TarjetaKpi kpi="pec_activos" valor={tarjetas?.activos.valor ?? null}
             activo={vistaActiva === 'activos'} onClick={() => elegirVista('activos')} />
           <TarjetaKpi kpi="pec_en_transito" valor={tarjetas?.en_transito.valor ?? null}
@@ -1910,6 +1934,9 @@ export default function PedidosCompraPage() {
           <TarjetaKpi kpi="pec_monto" valor={tarjetas?.monto.valor ?? null} ayuda={tarjetas?.monto.ayuda ?? undefined}
             activo={vistaActiva === 'vigentes'} onClick={() => elegirVista('vigentes')} />
         </FranjaKpis>
+        {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
+        {/* r2 (m36 completo): montado siempre (destinoFoco, el id de la franja): si el reintento sale bien o da un 403, el foco va a la franja, nunca al <body>. */}
+        <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="purple" reintentando={stats.cargando} destinoFoco="franja-pedidos-compra" />
 
         {/* B4 T15 (TABLA-compras punto 7, KANBAN-compras punto 6): la barra y la tabla estándar en el servidor, o el tablero
             en modo servidor, con el MISMO estado (pestaña, búsqueda, estados y semáforo). En Kanban las pestañas no se ven
@@ -1980,7 +2007,7 @@ export default function PedidosCompraPage() {
             !accesoPec.listo ? <EsqueletoTablero /> : <TableroKanban
               tablero={tablero}
               regla={reglaSoltarPec}
-              tarjetaDe={tarjetaPedidoCompra}
+              tarjetaDe={tarjetaDePec}
               onAbrir={abrir}
               onCambio={cambiarDesdeTablero}
               onAccion={accionDesdeTablero}

@@ -1791,8 +1791,9 @@ console.log('--- B4 T23A TEST S: el cableado del tablero y del filtro de los ped
   assert.match(pantalla, /opcionesEstados=\{enKanban \? OPCIONES_ESTADOS_TABLERO_PEDIDO : OPCIONES_ESTADOS_PEDIDOS_WEB\}/);
   assert.match(codigo, /const info = infoEstadoPedido\(p\.estado\);\s*return <span className=\{`\$\{CHIP\} text-\[11px\] \$\{info\.clases\.bg\} \$\{info\.clases\.text\} \$\{info\.clases\.border\}`\}>\{info\.label\}<\/span>;/);
   assert.match(pantalla, /\['Estado',infoEstadoPedido\(selectedOrder\.estado\)\.label\]/, 'el panel del pedido tampoco dice el código crudo');
-  // El conmutador poda los estados con las opciones del modo nuevo (accionModo).
-  assert.match(pantalla, /despacharPedidos\(accionModo\(estadoPedidos, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_PEDIDO : OPCIONES_ESTADOS_PEDIDOS_WEB\)\);/);
+  // El conmutador poda los estados con las opciones del modo nuevo (accionModo). B4 T24 f4 (FINAL-m11 en E-Commerce; D27): y traduce
+  // la columna a sus estados con las columnas del tablero (COLUMNAS_PEDIDO).
+  assert.match(pantalla, /despacharPedidos\(accionModo\(estadoPedidos, modo, modo === 'kanban' \? OPCIONES_ESTADOS_TABLERO_PEDIDO : OPCIONES_ESTADOS_PEDIDOS_WEB, COLUMNAS_PEDIDO\)\);/);
   // La lista pide GET /ecommerce/pedidos con el estado, esperando las preferencias, y solo en su pestaña y fuera de Kanban.
   // B4 T24 (F104, D27): mientras el rol no se conoce (acceso.listo false) la tabla espera (el esqueleto), no «Sin pedidos web».
   assert.match(pantalla, /useListado<PedidoWeb>\(\{\s*ruta: RUTA_PEDIDOS_WEB, estado: estadoPedidos, esperar: !listoPedidos \|\| !acceso\.listo, despachar: despacharPedidos,\s*activo: panelActivo && !enKanban && \(acceso\.pedidos \|\| !acceso\.listo\),\s*\}\);/);

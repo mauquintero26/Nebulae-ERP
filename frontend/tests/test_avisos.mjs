@@ -429,11 +429,19 @@ console.log('--- TEST T24-c (B4 T24, F46): un solo aviso de fuente — el texto,
   const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   // La pieza: AvisoFuente (común), con un acento opcional, y AvisoDeError (error + texto de la falla → avisoDeFuente → AvisoFuente).
   const pieza = leer('components/ui/AvisoFuente.tsx');
-  assert.match(pieza, /export function AvisoDeError\(\{ error, fallo, onReintentar, acento \}: \{ error: unknown; fallo: string; onReintentar: \(\) => void; acento\?: AcentoFoco \}\) \{\s*const aviso = avisoDeFuente\(error, fallo\);\s*return aviso \? <AvisoFuente aviso=\{aviso\} onReintentar=\{onReintentar\} acento=\{acento\} \/> : null;\s*\}/);
+  // B4 T24 f3 r1 (m36, D27, aditivo): AvisoDeError recibe `reintentando`: conserva el último error mientras se reintenta («Reintentando…»).
+  // r2 (m36, D27, aditivo): AvisoDeError recibe también regionFoco (la región estable del foco).
+  // r3 (C1, D27): regionFoco es el título de la franja (destino visible); qué error se ve lo decide avisoVisible (lib).
+  // B4 T24 f4 (m2 + m10 de f3 r3; D27): la prop se llama destinoFoco (el id del destino); m8: el último va con su cuenta.
+  assert.match(pieza, /export function AvisoDeError\(\{ error, fallo, onReintentar, acento, reintentando = false, destinoFoco \}: \{/);
+  assert.match(pieza, /const \{ visto, olvidar \} = avisoVisible\(\{ error, ultimo, reintentando, cuenta, cuentaDelUltimo \}\);\s*if \(error != null && \(error !== ultimo \|\| cuenta !== cuentaDelUltimo\)\) \{\s*setUltimo\(error\);\s*setCuentaDelUltimo\(cuenta\);\s*\}\s*else if \(olvidar\) setUltimo\(null\);/);
+  assert.match(pieza, /<AvisoFuente aviso=\{aviso\} onReintentar=\{onReintentar\} acento=\{acento\} reintentando=\{reintentando\}/);
+  assert.match(pieza, /alSoltarBoton=\{destinoFoco \? alSoltarBoton : undefined\}/, 'sin destinoFoco, como antes (aditivo)');
   assert.match(pieza, /\$\{FOCOS\[acento\]\}/);
   // AvisoReintentar (Inventario) delega en ella: con un 403, el aviso de permiso sin «Reintentar».
   const piezas = leer('app/dashboard/inventario/piezas-inventario.tsx');
-  assert.match(piezas, /export function AvisoReintentar\(props: \{ error: unknown; fallo: string; onReintentar: \(\) => void; acento\?: AcentoFoco \}\) \{\s*return <AvisoDeError \{\.\.\.props\} \/>;\s*\}/);
+  // r2 (m36, D27): AvisoReintentar acepta el mismo contrato que AvisoDeError (reintentando, regionFoco) y delega en ella.
+  assert.match(piezas, /export function AvisoReintentar\(props: React\.ComponentProps<typeof AvisoDeError>\) \{[^\n]*\n\s*return <AvisoDeError \{\.\.\.props\} \/>;\s*\}/);
   // El Dashboard usa la pieza común (sin su AvisoFuente local).
   const dash = leer('app/dashboard/page.tsx');
   assert.ok(!/function AvisoFuente\b/.test(dash), 'Dashboard: sin la copia local');

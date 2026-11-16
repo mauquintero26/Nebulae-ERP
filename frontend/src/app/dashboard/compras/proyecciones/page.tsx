@@ -17,6 +17,8 @@ import { Line } from 'react-chartjs-2';
 import { SubNav, PageHeader, Button } from '@/components/ui';
 import { COMP_NAV } from '../comp-nav';
 import { apiFetch } from '@/lib/api';
+// B4 T24 f3 (F44-a): la reserva del botón de la IA (la esquina inferior derecha).
+import { RESERVA_BOTON_IA } from '@/lib/design-system';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
@@ -143,7 +145,7 @@ export default function ComprasProyeccionesPage() {
     <div className="w-full h-full flex flex-col">
       <SubNav label="Hub de Compras" items={COMP_NAV} currentPath="/dashboard/compras/proyecciones" color="purple" hub={{ href: '/dashboard/compras' }} />
 
-      <div className="flex flex-col gap-6 w-full p-6 pb-10">
+      <div className={`flex flex-col gap-6 w-full p-6 ${RESERVA_BOTON_IA}`}>
         <PageHeader
           icon={TrendingUp} color="purple"
           title="Proyecciones de Compras"

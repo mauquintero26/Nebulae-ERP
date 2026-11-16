@@ -15,14 +15,18 @@ import {
   BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
 } from '@/components/tabla';
 import type { ClaveFila, ColumnaTabla, Listado, PestanaTabla } from '@/components/tabla';
+import { useResumen } from '@/components/ui/useResumen';
+import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import { PanelAnalisisPerezoso } from '@/components/analisis';
 import { apiFetch } from '@/lib/api';
-import { estadoDelTotal, extraPorVista, textoVacioExistencias } from '@/lib/tabla';
+import { accionesDeFiltros, estadoDelTotal, extraPorVista, filtrosDePantalla, textoVacioExistencias } from '@/lib/tabla';
 import { AYUDA_MINIMO_INVENTARIO, numeroFinito, resumenAlmacenes, tarjetasHubInventario } from '@/lib/kpis';
-import { ESTADOS_STOCK, TOPE_TABLERO_COMPRAS, avisoTope200 } from '@/lib/estados-compras';
+import {
+  CARGA_CATALOGO_VACIA, ESTADOS_STOCK, TOPE_TABLERO_COMPRAS, avisoTope200, falloCatalogo, filtrosAplicadosHub, lecturaCatalogo, llegadaCatalogo,
+  marcarCategoriasPadre, textoPieBodega,
+} from '@/lib/estados-compras';
 // ?tab=analisis: la lectura genérica que dejó T14 en flujo-compras.js (se reúsa, no se copia).
 import { leerEnlaceHubCompras } from '@/lib/flujo-compras';
-import { textoDeError } from '@/lib/avisos';
 // T18 r1 (m10, m21): las piezas de una existencia (tipos, celdas, detalle, selector, formatos, clave y clase de fila, CONTENEDOR y
 // foco) son de piezas-inventario.tsx, fuente única de las cinco pantallas de existencias; el Hub las importa sin cambio visible.
 import {
@@ -30,6 +34,7 @@ import {
   claseDeFilaExistencia as claseDeFilaStock, claveDeFilaExistencia as claveDeFilaStock, infoStock, pesos,
 } from './piezas-inventario';
 import type { Catalogo, ConteosStock, FilaExistencia as FilaStock, OpcionCatalogo } from './piezas-inventario';
+import { AvisoCatalogoViejo } from './aviso-catalogo';
 
 const SUB_MODULES = [
   { name: 'Stock y Catálogo', path: '/dashboard/inventario/stock' },
@@ -172,15 +177,12 @@ const BARRA_ESQUELETO = 'inline-block rounded bg-slate-100 motion-safe:animate-p
 function VistaAlmacenes({ listado, vacio, onVer }: { listado: Listado<FilaStock>; vacio: React.ReactNode; onVer: (id: number) => void }) {
   const grupos = useMemo(() => resumenAlmacenes(listado.filas), [listado.filas]);
   const aviso = avisoTope200(listado.total, 'existencias');
-  const error = listado.error ? (
-    <div role="alert" className="flex flex-wrap items-center gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">
-      {textoDeError(listado.error, 'No se pudieron cargar las bodegas')}
-      <button type="button" onClick={listado.recargar}
-        className={`inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 ${FOCO_VISIBLE}`}>
-        <RefreshCw size={13} aria-hidden="true" /> Reintentar
-      </button>
-    </div>
-  ) : null;
+  // B4 T24 f3 (F79): con más filas que las cargadas, el pie no afirma «Bien abastecido» de lo que quedó fuera.
+  const recortado = (listado.total ?? 0) > TOPE_TABLERO_COMPRAS;
+  // r1 (m24): con AvisoDeError: un 403 no ofrece «Reintentar» (ofreceReintentar), como el resto de f3.
+  const error = listado.error
+    ? <AvisoDeError error={listado.error} fallo="No se pudieron cargar las existencias por bodega" onReintentar={listado.recargar} acento="indigo" />
+    : null;
   if (listado.cargandoInicial) {
     // El esqueleto con la MISMA forma de la tarjeta cargada (las mismas cajas y alturas de línea): nada salta al llegar.
     return (
@@ -216,6 +218,8 @@ function VistaAlmacenes({ listado, vacio, onVer }: { listado: Listado<FilaStock>
   }
   return (
     <div className="@container space-y-3" aria-busy={listado.recargando || undefined}>
+      {/* B4 T24 f3 (F82 b): las tarjetas de bodega (h3) quedan bajo un h2 de la vista, sin cambiar lo que se ve. */}
+      <h2 className="sr-only">Existencias por bodega</h2>
       {error}
       {aviso && <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-800">{aviso}</p>}
       {grupos.length === 0 ? (
@@ -247,7 +251,7 @@ function VistaAlmacenes({ listado, vacio, onVer }: { listado: Listado<FilaStock>
               <div className={PIE_BODEGA}>
                 <span className={`flex items-center gap-1 ${b.en_riesgo > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
                   {b.en_riesgo > 0 ? <AlertTriangle size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}
-                  {b.en_riesgo > 0 ? `${b.en_riesgo} bajo el mínimo o agotadas` : 'Bien abastecida'}
+                  {textoPieBodega(b.en_riesgo, { recortado: recortado }).texto}
                 </span>
                 <button type="button" onClick={() => onVer(b.warehouse_id)} aria-label={`Ver los artículos de ${b.bodega}`}
                   className={`flex items-center gap-1 rounded font-black text-indigo-700 hover:text-indigo-900 ${FOCO_VISIBLE}`}>
@@ -289,7 +293,8 @@ export default function InventarioHub() {
   }, []);
   // R11: sin tablero; la vista Lista / Almacenes es de la página (como antes, no se recuerda).
   const [verAlmacenes, setVerAlmacenes] = useState(false);
-  const [filtros, setFiltros] = useState<FiltrosHub>(SIN_FILTROS);
+  // B4 T24 f4 (F39): la bodega y la categoría son filtros del estado único (estado.filtros): vuelven con la sesión junto con la página.
+  const filtros = useMemo(() => filtrosDePantalla(estado.filtros, SIN_FILTROS) as FiltrosHub, [estado.filtros]);
   const [seleccion, setSeleccion] = useState<ClaveFila[]>([]);
 
   // La tabla (T13): GET /inventory/stock-tabla?por=bodega con q, orden, limit y offset del estado, la pestaña como su
@@ -302,7 +307,8 @@ export default function InventarioHub() {
     ruta: RUTA_STOCK, estado, conConteos: true, esperar: !listo, despachar, activo: !enAnalisis && !verAlmacenes, extra: extraDeLaLista,
   });
   // RP52 (d): «Almacenes» agrupa hasta 200 filas de la MISMA consulta (con sus conteos, para las pestañas).
-  const extraAlmacenes = useMemo(() => ({ ...extraDeLaLista, limit: TOPE_TABLERO_COMPRAS, offset: 0 }), [extraDeLaLista]);
+  // B4 T24 f3 (F86): sin la bodega de la Lista: Almacenes muestra todas las bodegas (como en BASE); «Ver artículos» vuelve a filtrarla.
+  const extraAlmacenes = useMemo(() => ({ ...extraDeLaLista, warehouse_id: null, limit: TOPE_TABLERO_COMPRAS, offset: 0 }), [extraDeLaLista]);
   const almacenes = useListado<FilaStock>({
     ruta: RUTA_STOCK, estado, conConteos: true, esperar: !listo, activo: !enAnalisis && verAlmacenes, extra: extraAlmacenes,
   });
@@ -312,36 +318,35 @@ export default function InventarioHub() {
 
   // Los selectores (las bodegas y las categorías reales; antes, 3 bodegas de relleno si la lista venía vacía y los
   // errores tragados como una lista vacía). Si falla, lo último bueno se conserva y el selector lo dice con «Reintentar».
+  // r1 (F81): {vuelta, filas, error} por catálogo (cargando mientras no llega la de esta vuelta; el patrón de T16B) y filasDeCatalogo (una
+  // forma inesperada es un error, no una lista vacía). Con un error y filas viejas, el selector lo dice junto al select.
   const [vueltaCatalogos, setVueltaCatalogos] = useState(0);
-  const [bodegas, setBodegas] = useState<Catalogo>({ filas: null, error: null });
-  const [categorias, setCategorias] = useState<Catalogo>({ filas: null, error: null });
+  // B4 T24 f4 (m5 de f3 r2): la vuelta de cada catálogo es la de la lib (llegadaCatalogo, falloCatalogo y lecturaCatalogo), la misma de useCatalogo.
+  const [cargaBodegas, setBodegas] = useState<{ vuelta: number; filas: OpcionCatalogo[] | null; error: unknown }>(CARGA_CATALOGO_VACIA);
+  const [cargaCategorias, setCategorias] = useState<{ vuelta: number; filas: OpcionCatalogo[] | null; error: unknown }>(CARGA_CATALOGO_VACIA);
   useEffect(() => {
     const control = new AbortController();
-    const lista = (r: { data?: unknown } | null) => (Array.isArray(r?.data) ? (r.data as OpcionCatalogo[]) : []);
-    apiFetch('/inventory/warehouses', { signal: control.signal })
-      .then((r: { data?: unknown } | null) => setBodegas({ filas: lista(r), error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setBodegas((c) => ({ filas: c.filas, error: err })); });
-    apiFetch('/categories', { signal: control.signal })
-      .then((r: { data?: unknown } | null) => setCategorias({ filas: lista(r), error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setCategorias((c) => ({ filas: c.filas, error: err })); });
+    const llegar = (fijar: typeof setBodegas) => (r: unknown) => fijar((c) => llegadaCatalogo(c, r, vueltaCatalogos));
+    const fallar = (fijar: typeof setBodegas) => (err: unknown) => {
+      if (!control.signal.aborted) fijar((c) => falloCatalogo(c, err, vueltaCatalogos));
+    };
+    apiFetch('/inventory/warehouses', { signal: control.signal }).then(llegar(setBodegas)).catch(fallar(setBodegas));
+    apiFetch('/categories', { signal: control.signal }).then(llegar(setCategorias)).catch(fallar(setCategorias));
     return () => control.abort();
   }, [vueltaCatalogos]);
+  const bodegas = useMemo<Catalogo>(() => lecturaCatalogo(cargaBodegas, vueltaCatalogos), [cargaBodegas, vueltaCatalogos]);
+  const categorias = useMemo<Catalogo>(() => lecturaCatalogo(cargaCategorias, vueltaCatalogos), [cargaCategorias, vueltaCatalogos]);
   const reintentarCatalogos = useCallback(() => setVueltaCatalogos((n) => n + 1), []);
 
   // Las tarjetas (KPI-inventario punto 4; R10, R12): GET /inventory/stats, todo el inventario por referencia, sin
   // respaldo local. Mientras no llega, 'cargando' (nunca 0); si falla, «—».
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    apiFetch('/inventory/stats', { signal: control.signal })
-      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  const cargandoStats = stats?.vuelta !== vueltaStats;
-  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
-  const tarjetas = tarjetasHubInventario(stats?.datos ?? null);
+  // B4 T24 f3 (F45): el cargador compartido de los resúmenes (useResumen: aborta la anterior, descarta las viejas, va atado al usuario,
+  // conserva lo último al recargar y con error no deja datos viejos: «—»).
+  const stats = useResumen('/inventory/stats', vueltaStats);
+  const cargandoStats = stats.cargando;
+  const estadoKpis = useEstadoKpi(cargandoStats, stats.error);
+  const tarjetas = tarjetasHubInventario(stats.datos);
 
   // «Actualizar»: la tabla (o las bodegas), las tarjetas y los selectores. Ninguna recarga vacía lo que se ve.
   const { recargar: recargarListado } = listado;
@@ -352,7 +357,7 @@ export default function InventarioHub() {
     setVueltaStats((n) => n + 1);
     setVueltaCatalogos((n) => n + 1);
   }, [recargarListado, recargarAlmacenes]);
-  const actualizando = fuente.recargando || (cargandoStats && stats !== null);
+  const actualizando = fuente.recargando || (cargandoStats && stats.datos !== null);
 
   // ── B4 T17, bloque 2: la tabla (TABLA-inventario punto 4; R5, R26, RP53; D40, D41) ──
   const prefs = usePreferenciasTabla(ID_HUB, COLUMNAS_HUB);
@@ -365,29 +370,35 @@ export default function InventarioHub() {
   const abrir = useCallback((f: FilaStock) => setDetalle(f), []);
   const accionesFila = useMemo<AccionesFilaHub>(() => ({ abrir }), [abrir]);
   const pestanas = pestanasDelHub(conteos);
+  // F39: una acción {tipo: 'filtro'} por clave; el reductor la mezcla con los otros filtros y vuelve a la página 1.
   const cambiarFiltros = useCallback((cambio: Partial<FiltrosHub>) => {
-    setFiltros((f) => ({ ...f, ...cambio }));
+    for (const accion of accionesDeFiltros(cambio)) despachar(accion);
     setSeleccion([]);
-    despachar({ tipo: 'pagina', valor: 1 });
   }, [despachar]);
   const alSeleccionar = useCallback((claves: ClaveFila[]) => setSeleccion(claves), []);
   const pieSeleccion = seleccion.length > 0
     ? <span className="font-bold text-indigo-700">{seleccion.length} {seleccion.length === 1 ? 'seleccionada' : 'seleccionadas'}</span>
     : null;
   // Los nombres de lo elegido, para el vacío (si el catálogo todavía no llegó, el id).
-  const nombreBodega = filtros.bodega ? (bodegas.filas?.find((b) => String(b.id) === filtros.bodega)?.name ?? `#${filtros.bodega}`) : null;
-  const nombreCategoria = filtros.categoria ? (categorias.filas?.find((c) => String(c.id) === filtros.categoria)?.name ?? `#${filtros.categoria}`) : null;
+  // B4 T24 f3 (F85): sin el nombre (el catálogo no llegó), `true`: el vacío dice «la bodega elegida», nunca «#2».
+  // B4 T24 f3 (F87-f): las categorías padre, marcadas en el selector (el filtro es por la categoría exacta; P25 decide si incluye las hijas).
+  const categoriasMarcadas = useMemo(() => ({ ...categorias, filas: marcarCategoriasPadre(categorias.filas) }), [categorias]);
+  const nombreBodega = filtros.bodega ? (bodegas.filas?.find((b) => String(b.id) === filtros.bodega)?.name ?? true) : null;
+  const nombreCategoria = filtros.categoria ? (categorias.filas?.find((c) => String(c.id) === filtros.categoria)?.name ?? true) : null;
+  // r1 (m14 = m23): lo que aplica en la vista que se ve (en Almacenes, la bodega no: F86).
+  const aplicados = filtrosAplicadosHub({ verAlmacenes, bodega: filtros.bodega, categoria: filtros.categoria });
+  const bodegaDelVacio = aplicados.bodegaAplica ? nombreBodega : null;
   // m8 de T15: el «vacío» memoizado dice qué lo deja vacío (textoVacioExistencias): la búsqueda, la pestaña o los filtros.
   const vacio = useMemo(() => {
-    const texto = textoVacioExistencias({ q: estado.q, vista: estado.vista, bodega: nombreBodega, categoria: nombreCategoria });
+    const texto = textoVacioExistencias({ q: estado.q, vista: estado.vista, bodega: bodegaDelVacio, categoria: nombreCategoria });
     return (
       <div>
         <p className="font-semibold text-slate-600">{texto.titulo}</p>
         {texto.ayuda && <p className="mt-1 text-xs text-slate-500">{texto.ayuda}</p>}
       </div>
     );
-  }, [estado.q, estado.vista, nombreBodega, nombreCategoria]);
-  const hayFiltros = Boolean(filtros.bodega || filtros.categoria);
+  }, [estado.q, estado.vista, bodegaDelVacio, nombreCategoria]);
+  const hayFiltros = aplicados.hayFiltros;
 
   // ── B4 T17, bloque 4: la vista Almacenes (RP52 d) ──
   const elegirVista = useCallback((almacenesAhora: boolean) => {
@@ -453,14 +464,15 @@ export default function InventarioHub() {
       <div className={CONTENEDOR}>
 
         {/* 3. HEADER MAESTRO */}
-        <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
+        {/* B4 T24 f3 (F78): flex-wrap y min-w-0: a 768 px con el menú abierto y a 375 px el encabezado se parte, no desplaza el main. */}
+        <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4 min-w-0">
+          <div className="flex items-center gap-4 min-w-0">
             <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-slate-800 to-indigo-600 flex items-center justify-center text-white shadow-lg shadow-indigo-200">
               <Archive size={28}/>
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-3xl font-black text-slate-900 tracking-tight">HUB de Inventario</h1>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-3xl font-black text-slate-900 tracking-tight break-words">HUB de Inventario</h1>
                 <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
                   Nebulae Kids
                 </span>
@@ -470,7 +482,7 @@ export default function InventarioHub() {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <button type="button" onClick={recargarTodo} className={`px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold text-xs flex items-center gap-2 transition-colors ${FOCO_VISIBLE}`}>
               <RefreshCw size={14} aria-hidden="true" className={actualizando ? 'animate-spin' : ''}/>
               Actualizar
@@ -489,13 +501,16 @@ export default function InventarioHub() {
             Traslados como enlaces (antes, pestañas que no filtraban nada y decían siempre 14, 8 y 5). */}
         {!enAnalisis && (
           <>
-            <FranjaKpis estado={estadoKpis} titulo="Existencias" nota={AYUDA_MINIMO_INVENTARIO}>
+            <FranjaKpis estado={estadoKpis} titulo="Existencias" idFoco="franja-existencias" nota={AYUDA_MINIMO_INVENTARIO}>
               <TarjetaKpi kpi="inv_valorizacion" valor={tarjetas?.valorizacion.valor ?? null} ayuda={tarjetas?.valorizacion.ayuda ?? undefined} />
               <TarjetaKpi kpi="inv_skus" valor={tarjetas?.skus.valor ?? null} ayuda={tarjetas?.skus.ayuda ?? undefined} />
               <TarjetaKpi kpi="inv_bajo_minimo" valor={tarjetas?.bajo_minimo.valor ?? null} ayuda={tarjetas?.bajo_minimo.ayuda ?? undefined}
                 tono={tarjetas?.bajo_minimo.tono ?? 'normal'} />
               <TarjetaKpi kpi="inv_disponibilidad" valor={tarjetas?.disponibilidad.valor ?? null} ayuda={tarjetas?.disponibilidad.ayuda ?? undefined} />
             </FranjaKpis>
+            {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
+            {/* r2 (m36 completo): montado siempre (destinoFoco, el id de la franja): si el reintento sale bien o da un 403, el foco va a la franja, nunca al <body>. */}
+            <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de existencias" onReintentar={stats.recargar} acento="indigo" reintentando={stats.cargando} destinoFoco="franja-existencias" />
             <nav aria-label="Operaciones de inventario" className="flex flex-wrap items-center gap-2 text-xs">
               <span className="font-semibold text-slate-600">Operaciones:</span>
               {OPERACIONES.map((o) => (
@@ -524,14 +539,21 @@ export default function InventarioHub() {
                 placeholder="Buscar por SKU o producto…"
                 filtros={(
                   <>
-                    <SelectorCatalogo etiqueta="Bodega" todas="Todas las bodegas" cargando="Cargando bodegas…"
-                      fallo="No se pudieron cargar las bodegas" catalogo={bodegas} valor={filtros.bodega}
-                      onCambiar={(bodega) => cambiarFiltros({ bodega })} onReintentar={reintentarCatalogos} icono={Warehouse} />
+                    {aplicados.mostrarBodega ? (
+                      <SelectorCatalogo etiqueta="Bodega" todas="Todas las bodegas" cargando="Cargando bodegas…"
+                        fallo="No se pudieron cargar las bodegas" catalogo={bodegas} valor={filtros.bodega}
+                        onCambiar={(bodega) => cambiarFiltros({ bodega })} onReintentar={reintentarCatalogos} icono={Warehouse} />
+                    ) : (
+                      <span className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">En Almacenes se ven todas las bodegas</span>
+                    )}
                     <SelectorCatalogo etiqueta="Categoría" todas="Todas las categorías" cargando="Cargando categorías…"
-                      fallo="No se pudieron cargar las categorías" catalogo={categorias} valor={filtros.categoria}
+                      fallo="No se pudieron cargar las categorías" catalogo={categoriasMarcadas} valor={filtros.categoria}
                       onCambiar={(categoria) => cambiarFiltros({ categoria })} onReintentar={reintentarCatalogos} icono={Layers} />
+                    {/* r1 (F81): si «Actualizar» falla con los catálogos ya cargados, se dice junto a los selectores, con «Reintentar». */}
+                    <AvisoCatalogoViejo catalogo={bodegas} fallo="No se pudieron actualizar las bodegas" onReintentar={reintentarCatalogos} />
+                    <AvisoCatalogoViejo catalogo={categorias} fallo="No se pudieron actualizar las categorías" onReintentar={reintentarCatalogos} />
                     {hayFiltros && (
-                      <button type="button" onClick={() => cambiarFiltros(SIN_FILTROS)}
+                      <button type="button" onClick={() => cambiarFiltros(verAlmacenes ? { categoria: '' } : SIN_FILTROS)}
                         className={`rounded-xl px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50 ${FOCO_VISIBLE}`}>
                         Quitar filtros
                       </button>

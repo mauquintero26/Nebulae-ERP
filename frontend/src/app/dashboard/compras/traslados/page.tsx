@@ -28,9 +28,10 @@ import { accionModo, accionVistaEnLista, estadoDelTotal, normalizarRespuesta, or
 import { tarjetasTraslados } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { fechaLarga } from '@/lib/fechas-colombia';
-import { FOCOS, TABLE } from '@/lib/design-system';
+import { FOCOS, TABLE, RESERVA_BOTON_IA } from '@/lib/design-system';
 import {
-  COLUMNAS_TRASLADO, OPCIONES_ESTADOS_TABLERO_TRASLADO, avisoTope200, conteosTraslado, llegadaEnlaceTraslado, pedirEnlaceTraslado, consultaTableroTraslados,
+  COLUMNAS_TRASLADO, OPCIONES_ESTADOS_TABLERO_TRASLADO, RUTA_CONTEOS_TRASLADOS, abrirEnlaceTraslado, avisoTope200, columnaDeTraslado, conteosTraslado,
+  fechaDeTraslado, pestanasTraslado, consultaTableroTraslados,
   consultaTraslados, nombreBodega, numeroTraslado, opcionesEstadosTraslado, tarjetaTraslado, textoVacioTraslados,
 } from '@/lib/estados-compras';
 import { ENLACE_VER_ANALISIS_COMPRAS } from '@/lib/flujo-compras';
@@ -48,12 +49,12 @@ const ID_TRASLADOS = 'compras.traslados';
 /** La pestaña de trabajo (como hoy): En proceso. */
 const INICIAL_TRASLADOS = { vista: 'en_proceso' };
 const RUTA_OPERACIONES = '/inventory/operations';
-/** Los conteos de TODOS los traslados (sin búsqueda ni filtros) para las tarjetas: solo el total y los conteos, sin filas. */
-const RUTA_CONTEOS = `${RUTA_OPERACIONES}?operation_type=TRANSFER&limit=0&con_conteos=1`;
+// B4 T24 f3 r1 (F77): la ruta de los conteos (RUTA_CONTEOS_TRASLADOS), las pestañas (pestanasTraslado), la columna y la fecha del tablero
+// (columnaDeTraslado, fechaDeTraslado) son las de la lib, las mismas de Inventario › Traslados (RP41).
 /** El motivo de un tablero solo para ver (R11, KANBAN-logistica punto 5). */
 const TEXTO_SOLO_VER = 'Este tablero es para ver: los traslados no cambian de estado desde aquí.';
-/** El contenedor de los Hubs y de las listas del bloque (T7 a T16A): pb-24 deja libre la esquina del botón de la IA. */
-const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
+/** El contenedor de los Hubs y de las listas del bloque (T7 a T16A): RESERVA_BOTON_IA (pb-24, F44-a) deja libre la esquina del botón de la IA. */
+const CONTENEDOR = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;
 const FOCO_VISIBLE = FOCOS.orange;
 
 /** Lo que las celdas le piden a la pantalla. Va por un contexto para que las columnas sean constantes (D40 y D41). */
@@ -78,20 +79,6 @@ const COLUMNAS_TABLA_TRASLADOS = columnasTraslado<FilaTraslado>((t) => <CeldaAcc
 /** {campo de orden: título}, para el chip «Orden: Fecha ↓», solo de las columnas que se ordenan. */
 const TITULOS_ORDEN_TRASLADOS = titulosDeOrdenTraslado(COLUMNAS_TABLA_TRASLADOS);
 
-/** Las pestañas (sin emojis): En proceso · Completados · Cancelados · Todos, con los conteos del servidor (null mientras cargan: barra gris). */
-function pestanasDeTraslados(conteos: unknown): PestanaTabla[] {
-  const c = conteosTraslado(conteos);
-  return [
-    { id: 'en_proceso', etiqueta: 'En proceso', conteo: c.en_proceso },
-    { id: 'completadas', etiqueta: 'Completados', conteo: c.completadas },
-    { id: 'canceladas', etiqueta: 'Cancelados', conteo: c.canceladas },
-    { id: 'todos', etiqueta: 'Todos', conteo: c.todos },
-  ];
-}
-
-/** El estado del traslado que el tablero muestra en cada columna, y el día en que se hizo. */
-const columnaDeTraslado = (t: FilaTraslado) => t.status;
-const fechaDeTraslado = (t: FilaTraslado) => t.fecha;
 
 /* ================================================================
    MAIN PAGE — TrasladosPage (B4 T16B)
@@ -145,7 +132,7 @@ export default function TrasladosPage() {
   const [totales, setTotales] = useState<{ vuelta: number; conteos: unknown; error: unknown } | null>(null);
   useEffect(() => {
     const control = new AbortController();
-    apiFetch(RUTA_CONTEOS, { signal: control.signal })
+    apiFetch(RUTA_CONTEOS_TRASLADOS, { signal: control.signal })
       .then((r: unknown) => setTotales({ vuelta: vueltaConteos, conteos: normalizarRespuesta(r).conteos, error: null }))
       .catch((err: unknown) => { if (!control.signal.aborted) setTotales({ vuelta: vueltaConteos, conteos: null, error: err }); });
     return () => control.abort();
@@ -170,23 +157,14 @@ export default function TrasladosPage() {
   const [selected, setSelected] = useState<FilaTraslado | null>(null);
   const idDeLaUrl = searchParams.get('id');
   const idAbierto = useRef<string | null>(null);
-  useEffect(() => {
-    // I3 e I5: la marca (idAbierto) se pone cuando la respuesta LLEGÓ, nunca antes del fetch: si el efecto se aborta, queda libre y el
-    // siguiente render vuelve a pedir. Las reglas viven en estados-compras.js (pedirEnlaceTraslado y llegadaEnlaceTraslado).
-    const id = pedirEnlaceTraslado(idAbierto.current, idDeLaUrl);
-    if (id === null) return undefined;
-    const control = new AbortController();
-    apiFetch(`${RUTA_OPERACIONES}?operation_type=TRANSFER&q=${encodeURIComponent(numeroTraslado({ id }))}&limit=5`, { signal: control.signal })
-      .then((r: unknown) => {
-        if (control.signal.aborted) return;
-        const llegada = llegadaEnlaceTraslado(id, normalizarRespuesta(r).filas);
-        idAbierto.current = llegada.marca;
-        if (llegada.abrir) setSelected(llegada.abrir as FilaTraslado);
-        else avisar(`No se encontró el traslado ${numeroTraslado({ id })}.`, { tono: 'info' });
-      })
-      .catch((err: unknown) => { if (!control.signal.aborted) avisarError(err, 'No se pudo abrir el traslado'); });
-    return () => control.abort();
-  }, [idDeLaUrl, avisar, avisarError]);
+  // I3 e I5 (y r1, F69): el efecto vive en la lib (abrirEnlaceTraslado): la marca (idAbierto) se pone cuando la respuesta LLEGÓ, nunca
+  // antes del fetch ni al limpiar; el traslado se pide por su id exacto (F74-b) y ?id=063 no repite (F73).
+  useEffect(() => abrirEnlaceTraslado({
+    marca: idAbierto, idDeLaUrl, pedir: apiFetch,
+    abrir: (t) => setSelected(t as FilaTraslado),
+    avisar: (texto) => avisar(texto, { tono: 'info' }),
+    avisarError: (err) => avisarError(err, 'No se pudo abrir el traslado'),
+  }), [idDeLaUrl, avisar, avisarError]);
   const abrir = useCallback((t: FilaTraslado) => setSelected(t), []);
   const closeSelected = useCallback(() => {
     setSelected(null);
@@ -260,12 +238,12 @@ export default function TrasladosPage() {
   const { capa, claseTarjeta, refTarjeta, completa: pantallaCompleta, alternar, salir } = usePantallaCompleta();
   // Pasar a Kanban sale de la pantalla completa (el conmutador sigue a la vista y el tablero no queda tapado).
   useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
-  const pestanas = pestanasDeTraslados(listado.conteos);
+  const pestanas: PestanaTabla[] = pestanasTraslado(listado.conteos);
   // m2 de T8: el conmutador Lista / Kanban poda los estados con las opciones del modo nuevo, con la regla de accionPestana.
   const alCambiarBarra = useCallback((accion: AccionTabla) => {
     if (accion.tipo === 'modo') {
       const modo = String(accion.valor);
-      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_TRASLADO : opcionesEstadosTraslado));
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_TRASLADO : opcionesEstadosTraslado, COLUMNAS_TRASLADO));
     } else despachar(accion);
   }, [estado, despachar]);
   // R8: ordenada por una columna, el chip «Orden: … · Más recientes» vuelve al orden del servidor.

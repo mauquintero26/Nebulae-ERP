@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { AlertCircle, Package, RefreshCw, Truck } from 'lucide-react';
@@ -16,9 +16,11 @@ import {
 import type { ColumnaTabla } from '@/components/tabla';
 import { BannerFlujo, PasosFlujo, useResumenFlujo } from '@/components/flujo';
 import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
+import { useResumen } from '@/components/ui/useResumen';
+import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import { COMP_NAV } from '../comp-nav';
 
-import { FOCOS } from '@/lib/design-system';
+import { FOCOS, RESERVA_BOTON_IA } from '@/lib/design-system';
 import { accesoCompras } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
 import { apiFetch } from '@/lib/api';
@@ -26,9 +28,9 @@ import { estadoDelTotal, ordenEsAtencion, textoOrdenHub } from '@/lib/tabla';
 import { PERIODO_KPI, tarjetasTransito } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { humanizarCodigo } from '@/lib/estados-pedido';
-import { avisoTope200, infoEstadoPec, opcionesEstadosPec, textoVacioPec } from '@/lib/estados-compras';
+import { TOPE_TABLERO_COMPRAS, avisoTope200, infoEstadoPec, opcionesEstadosPec, textoVacioPec } from '@/lib/estados-compras';
 import {
-  accionEtapaTransito, avanceTransito, avancePromedioTransito, columnaTransito, columnasDeEtapas, etapaActual,
+  accionEtapaTransito, avanceTransito, avancePromedioTransito, avisoLlegaronTransito, columnaTransito, columnasDeEtapas, etapaActual,
   pendienteDeTransito, reglaSoltarTransito, soltarPendientes, tarjetaTransito, terminarPendiente, textoEntregaTransito, tonoEntregaTransito,
 } from '@/lib/transito';
 import {
@@ -64,11 +66,11 @@ const ID_TRANSITO = 'compras.transito';
 /** TABLA-compras punto 8: la vista transito_logistica de T12 con lo vencido primero (R8). */
 const INICIAL_TRANSITO = { vista: 'transito_logistica', orden: 'atencion' };
 /** C4: el tablero de etapas es de modo cliente: pide la vista completa, hasta 200 pedidos, de la primera página. */
-const TOPE_TABLERO = 200;
-const EXTRA_TABLERO = { orden: 'reciente', limit: TOPE_TABLERO, offset: 0 };
+// B4 T24 f3 (F72): el tope del aviso (avisoTope200 compara con TOPE_TABLERO_COMPRAS): una sola constante para la misma regla.
+const EXTRA_TABLERO = { orden: 'reciente', limit: TOPE_TABLERO_COMPRAS, offset: 0 };
 const RUTA_PEDIDOS = '/dashboard/compras/pedidos';
-/** El contenedor de los Hubs y de las listas del bloque (T7 a T15): pb-24 deja libre la esquina del botón de la IA. */
-const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
+/** El contenedor de los Hubs y de las listas del bloque (T7 a T15): RESERVA_BOTON_IA (pb-24, F44-a) deja libre la esquina del botón de la IA. */
+const CONTENEDOR = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;
 const FOCO_VISIBLE = FOCOS.blue;
 
 /** La flecha bonita de los labels de las etapas: 'Proveedor -> Casillero' -> 'Proveedor → Casillero'. */
@@ -179,7 +181,8 @@ function CeldaAccion({ p }: { p: FilaTransito }) {
 /**
  * B4 T16A, la tabla (TABLA-compras punto 8; R26, D41): Pedido de compra (clave, fija a la izquierda, la flexible), Cliente /
  * PVEN y Tipo (ocultas por defecto), Etapa actual, Progreso, Entrega est., Monto y Acción (fija a la derecha). A 1024 px con
- * el menú abierto la caja de la tabla deja 704 px: 120 + 124 + 104 + 104 + 108 + 96 = 656 (la flexible toma el resto). Una
+ * el menú abierto la caja de la tabla deja 704 px: 120 + 124 + 104 + 104 + 108 + 112 = 672 (la flexible toma el resto). B4 T24 f3
+ * (el anillo de f1 r3): Acción pasa de 96 a 112 px: «Completar» (85 px) no cabía en 72 útiles y su anillo de foco se cortaba. Una
  * constante (estable, D40).
  */
 const COLUMNAS_TABLA_TRANSITO: ColumnaTabla<FilaTransito>[] = [
@@ -199,7 +202,7 @@ const COLUMNAS_TABLA_TRANSITO: ColumnaTabla<FilaTransito>[] = [
     celda: (p) => <CeldaEntrega p={p} /> },
   { id: 'monto', titulo: 'Monto', ancho: 108, alinear: 'derecha', ordenable: 'monto', titleCelda: (p) => fCOP(p.total_cop),
     celda: (p) => <CeldaMonto monto={p.total_cop} /> },
-  { id: 'accion', titulo: 'Acción', ancho: 96, clave: true, fija: 'derecha', alinear: 'centro', celda: (p) => <CeldaAccion p={p} /> },
+  { id: 'accion', titulo: 'Acción', ancho: 112, clave: true, fija: 'derecha', alinear: 'centro', celda: (p) => <CeldaAccion p={p} /> },
 ];
 /** {campo de orden: título}, para el chip «Orden: Monto ↓» (textoOrdenHub), solo de las columnas que se ordenan. */
 const TITULOS_ORDEN_TRANSITO = titulosDeOrdenPec(COLUMNAS_TABLA_TRANSITO);
@@ -256,16 +259,11 @@ export default function TransitoPage() {
   // Las tarjetas (KPI-compras punto 7; R7, R12): GET /compras/stats?periodo=30d (todos los PEC), sin respaldo local. Mientras
   // no llega, 'cargando' (nunca 0); si falla, «—».
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    apiFetch(`/compras/stats?periodo=${PERIODO_KPI}`, { signal: control.signal })
-      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  const cargandoStats = stats?.vuelta !== vueltaStats;
-  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
+  // B4 T24 f3 (F45): el cargador compartido de los resúmenes (useResumen: aborta la anterior, descarta las viejas, va atado al usuario,
+  // conserva lo último al recargar y con error no deja datos viejos: «—»).
+  const stats = useResumen(`/compras/stats?periodo=${PERIODO_KPI}`, vueltaStats);
+  const cargandoStats = stats.cargando;
+  const estadoKpis = useEstadoKpi(cargandoStats, stats.error);
 
   // «Actualizar» y lo que sigue a un cambio de etapa: la tabla y el tablero (el que no se ve se recarga al activarse), la
   // franja y las tarjetas. Ninguna recarga vacía lo que se ve: los hooks conservan lo último.
@@ -284,17 +282,15 @@ export default function TransitoPage() {
   // recargarTrasError (con un 400, un 409, un 422 (F8) o sin respuesta recarga; un 404 o un 500 no), se recarga lo que se ve.
   // I3: un pedido con un PATCH en camino (botón o arrastre), y hasta que llega la recarga, no ofrece Iniciar ni Completar: un
   // segundo clic no manda otro PATCH sobre la etapa vieja. Toda la regla vive en transito.js, con sus casos: pendienteDeTransito
-  // dice si hay uno; terminarPendiente guarda la foto de la lista ACTIVA (y el modo) al resolver el PATCH; soltarPendientes lo suelta
+  // dice si hay uno; terminarPendiente deja la foto SIN TOMAR al resolver el PATCH (r1, F66) y soltarPendientes la toma en el primer render que la ve, y lo suelta
   // cuando ESA lista trae filas nuevas o termina de recargar (también si falla). La lista inactiva no cuenta: no es la que se ve y,
   // si nunca cargó, da un [] nuevo con cada recarga. Si el modo cambia dentro de la ventana, se toma la foto de la nueva lista activa.
-  const [enCurso, setEnCurso] = useState<{ id: number; fin: { filas: unknown; modo: string; visto: boolean } | null }[]>([]);
+  const [enCurso, setEnCurso] = useState<{ id: number; fin: { filas: unknown; modo: string | null; visto: boolean } | null }[]>([]);
   const modo = enKanban ? 'kanban' : 'lista';
   const filasActivas = enKanban ? completa.filas : lista.filas;
   const recargandoActiva = enKanban ? completa.recargando : lista.recargando;
-  // m5: la foto se lee en la continuación del PATCH (otra tarea del navegador); un efecto pasivo podría no haber corrido todavía
-  // y dejaría la referencia vieja. useLayoutEffect corre dentro del commit, antes de cualquier continuación posterior.
-  const filasAhora = useRef<{ filas: unknown; modo: string }>({ filas: filasActivas, modo });
-  useLayoutEffect(() => { filasAhora.current = { filas: filasActivas, modo }; }, [filasActivas, modo]);
+  // r1 (F66): la foto de la lista activa la toma soltarPendientes en el primer render que ve el pendiente terminado (sin el ref ni el
+  // useLayoutEffect de antes: un GET viejo pintado en ese mismo render ya no suelta el pendiente).
   const sueltos = soltarPendientes(enCurso, { filas: filasActivas, recargando: recargandoActiva, modo });
   if (sueltos !== enCurso) setEnCurso(sueltos);
   const pendiente = useCallback((id: number) => pendienteDeTransito(enCurso, id), [enCurso]);
@@ -302,10 +298,7 @@ export default function TransitoPage() {
   useEffect(() => { pendienteRef.current = pendiente; }, [pendiente]);
   const iniciarCambio = useCallback((id: number) => setEnCurso((l) => [...l.slice(-19), { id, fin: null }]), []);
   // Terminó el PATCH y se pidió la recarga: sigue pendiente hasta que la lista activa trae filas nuevas o termina de recargar.
-  const terminarCambio = useCallback((id: number) => {
-    const ahora = filasAhora.current;
-    setEnCurso((l) => terminarPendiente(l, id, ahora.filas, ahora.modo));
-  }, []);
+  const terminarCambio = useCallback((id: number) => setEnCurso((l) => terminarPendiente(l, id)), []);
   // Falló sin recarga (un 404 o un 500): no hay nada que esperar.
   const descartarCambio = useCallback((id: number) => setEnCurso((l) => l.filter((e) => !(e.id === id && e.fin === null))), []);
   const aplicarEtapa = useCallback((p: FilaTransito, stage: string, status: string) => apiFetch(`/compras/pedidos/${p.id}/tracking`, {
@@ -418,11 +411,13 @@ export default function TransitoPage() {
     };
   }, [avanzar, pendiente, accesoPec.tracking]);
   const textoTope = enKanban && !completa.cargandoInicial ? avisoTope200(completa.total, 'pedidos') : null;
+  // r1 (F68): los que ya llegaron a bodega no tienen columna: el aviso lo dice (la tabla los muestra con su insignia).
+  const textoLlegaron = enKanban && !completa.cargandoInicial ? avisoLlegaronTransito(completa.filas) : null;
   const sinEtapas = enKanban && itemsTablero !== null && columnasTablero.length === 0;
   const errorConfig = !cargandoConfig && config?.error != null;
   // I2: si falla la carga del tablero, lo dice con «Reintentar» (con datos viejos, el mismo aviso encima); sin datos, items null.
   const errorTablero = enKanban && completa.error != null;
-  const avisoTablero = (textoTope || errorConfig || sinEtapas || errorTablero) ? (
+  const avisoTablero = (textoTope || textoLlegaron || errorConfig || sinEtapas || errorTablero) ? (
     <div className="flex flex-col gap-1">
       {errorTablero && (
         <p role="alert">
@@ -431,6 +426,7 @@ export default function TransitoPage() {
         </p>
       )}
       {textoTope && <p>{textoTope}</p>}
+      {textoLlegaron && <p>{textoLlegaron}</p>}
       {errorConfig && (
         <p role="alert">
           {textoDeError(config?.error, 'No se pudieron cargar las etapas del envío')}. Las columnas salen de los pedidos.{' '}
@@ -446,7 +442,7 @@ export default function TransitoPage() {
   // es el promedio de la página que se ve (RP95), de la tabla o del tablero; mientras llega, la barra gris.
   const filasVisibles = enKanban ? (completa.cargandoInicial ? null : completa.filas) : (lista.cargandoInicial ? null : lista.filas);
   const avance = useMemo(() => avancePromedioTransito(filasVisibles), [filasVisibles]);
-  const tarjetas = tarjetasTransito(stats?.datos ?? null, avance);
+  const tarjetas = tarjetasTransito(stats.datos, avance);
   const errorLista = enKanban ? completa.error : lista.error;
   const estadoAvance = errorLista ? 'error' : filasVisibles === null ? 'cargando' : 'listo';
 
@@ -457,7 +453,7 @@ export default function TransitoPage() {
   const filtroSemaforo = filtroSemaforoCompras(estado);
   const alFiltrarSemaforo = (f: FiltroSemaforo) => despachar(accionSemaforoCompras(estado, f, opcionesEstadosPec));
   const alternarVencidos = () => alFiltrarSemaforo(filtroSemaforo === 'atrasados' ? 'todos' : 'atrasados');
-  const actualizando = lista.recargando || completa.recargando || flujo.cargando || (cargandoStats && stats !== null);
+  const actualizando = lista.recargando || completa.recargando || flujo.cargando || (cargandoStats && stats.datos !== null);
 
   /* ════════════════ RENDER ════════════════ */
   return (
@@ -503,13 +499,16 @@ export default function TransitoPage() {
 
         {/* B4 T16A (KPI-compras punto 7; R7, R12): las 4 tarjetas de /compras/stats (todos los PEC) y el avance de la página:
             mientras cargan, barras grises (nunca 0); con error, «—». Con entrega vencida es el filtro «Con atraso». */}
-        <FranjaKpis estado={estadoKpis} titulo="Mercancía en tránsito">
+        <FranjaKpis estado={estadoKpis} titulo="Mercancía en tránsito" idFoco="franja-transito">
           <TarjetaKpi kpi="pec_activos" valor={tarjetas.activos.valor} ayuda={tarjetas.activos.ayuda} />
           <TarjetaKpi kpi="pec_vencidos" valor={tarjetas.vencidos.valor} tono={tarjetas.vencidos.tono}
             activo={filtroSemaforo === 'atrasados'} onClick={alternarVencidos} />
           <TarjetaKpi kpi="pec_avance" valor={tarjetas.avance.valor} ayuda={tarjetas.avance.ayuda} estado={estadoAvance} />
           <TarjetaKpi kpi="pec_monto_por_recibir" valor={tarjetas.monto_por_recibir.valor} />
         </FranjaKpis>
+        {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
+        {/* r2 (m36 completo): montado siempre (destinoFoco, el id de la franja): si el reintento sale bien o da un 403, el foco va a la franja, nunca al <body>. */}
+        <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="blue" reintentando={stats.cargando} destinoFoco="franja-transito" />
 
         {/* B4 T16A (TABLA-compras punto 8, KANBAN-logistica punto 2): la barra y la tabla estándar en el servidor, o el tablero
             de etapas en modo cliente, con el MISMO estado (búsqueda, estados y «Solo vencidos»). */}

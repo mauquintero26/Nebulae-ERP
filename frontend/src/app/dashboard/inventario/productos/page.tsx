@@ -12,19 +12,22 @@ import {
 // por categoría (R11). La ficha (formulario, variantes, stock y E-Commerce) y el guardado son los de B1 a B3, sin cambios.
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
 import { SubNav, PageHeader, Badge, Button, TableroKanban, useAvisos, useTableroKanban } from '@/components/ui';
+import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import {
   BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
 } from '@/components/tabla';
 import type { ColumnaTabla } from '@/components/tabla';
 import { TARIFAS_IVA, etiquetaTarifaCatalogo, normalizarTarifaIva, sinTarifaIva } from '@/lib/iva';
-import { dependenciasTablero, estadoDelTotal, normalizarRespuesta } from '@/lib/tabla';
+import { accionesDeFiltros, dependenciasTablero, estadoDelTotal, filtrosDePantalla, normalizarRespuesta } from '@/lib/tabla';
 import { textoDeError } from '@/lib/avisos';
 import {
-  TEXTO_SOLO_VER_PRODUCTOS, columnasProductos, consultaColumnaProducto, costoDeProducto, extraProductos, llegadaEnlaceProducto,
-  pedirEnlaceProducto, precioDeProducto, tarjetaProducto, textoVacioProductos,
+  TEXTO_SOLO_VER_PRODUCTOS, abrirEnlaceProducto, columnasProductos, consultaColumnaProducto, costoDeProducto, estadoReintento, extraProductos,
+  precioDeProducto, tarjetaProducto, textoVacioProductos,
 } from '@/lib/estados-compras';
 import { INV_NAV } from '../inv-nav';
 import { CONTENEDOR, FOCOS, SelectorCatalogo, pesos, useCatalogo } from '../piezas-inventario';
+import { AvisoCatalogoViejo } from '../aviso-catalogo';
+import { RESERVA_BOTON_IA } from '@/lib/design-system';
 
 /** Un producto de GET /products (ProductResponse + precio_venta, costo y publicado de T13, RP91). Los nombres son los del servidor. */
 type Producto = {
@@ -145,7 +148,8 @@ export default function ProductosPage() {
   // página 1 en el mismo evento. El modo (Lista o Kanban) se guarda en vista:inventario.productos.
   const [estado, despachar, listo] = useEstadoTabla(ID_PRODUCTOS, INICIAL_PRODUCTOS);
   const enKanban = estado.modo === 'kanban';
-  const [filtros, setFiltros] = useState<FiltrosProductos>(SIN_FILTROS);
+  // B4 T24 f4 (F39): «Requiere revisión», «Sin tarifa de IVA» y la categoría son filtros del estado único: vuelven con la sesión y su página.
+  const filtros = useMemo(() => filtrosDePantalla(estado.filtros, SIN_FILTROS) as FiltrosProductos, [estado.filtros]);
   // Los catálogos de la ficha y del tablero, con su error y «Reintentar» (antes, tres .catch(() => {}) y listas vacías falsas).
   const { catalogo: categorias, recargar: recargarCategorias } = useCatalogo('/categories');
   const { catalogo: marcas, recargar: recargarMarcas } = useCatalogo('/brands');
@@ -163,7 +167,9 @@ export default function ProductosPage() {
   // El tablero solo para ver, en modo servidor (R11, C4, D39): una columna por categoría de /categories (12 como máximo; el resto
   // se ve en la lista, con su aviso). Una consulta por columna (consultaColumnaProducto: category_id, la búsqueda y el orden del
   // MISMO estado, y los filtros de la barra). El orden del hook ('sin_movimiento') NO se manda: /products responde 422.
-  const { columnas: columnasTablero, aviso: avisoCategorias } = useMemo(() => columnasProductos(categorias.filas), [categorias.filas]);
+  // r1 (F93): con una categoría elegida, el tablero muestra solo su columna (aunque esté fuera de las 12).
+  const { columnas: columnasTablero, aviso: avisoCategorias } = useMemo(
+    () => columnasProductos(categorias.filas, undefined, { elegida: filtros.categoria }), [categorias.filas, filtros.categoria]);
   const tablero = useTableroKanban<Producto>({
     pantalla: ID_PRODUCTOS,
     modo: 'servidor',
@@ -196,13 +202,14 @@ export default function ProductosPage() {
   const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
   // Pasar a Kanban sale de la pantalla completa (el conmutador sigue a la vista y el tablero no queda tapado).
   useEffect(() => { if (enKanban) salir(); }, [enKanban, salir]);
+  // F39: una acción {tipo: 'filtro'} por clave (el reductor la mezcla con los otros y vuelve a la página 1, en el mismo evento).
   const cambiarFiltros = useCallback((cambio: Partial<FiltrosProductos>) => {
-    setFiltros((f) => ({ ...f, ...cambio }));
-    despachar({ tipo: 'pagina', valor: 1 });
+    for (const accion of accionesDeFiltros(cambio)) despachar(accion);
   }, [despachar]);
   // m8 de T15: el «vacío» memoizado dice qué lo deja vacío (la búsqueda, los filtros de la barra o nada).
   // El nombre de la categoría elegida, para el vacío (si el catálogo todavía no llegó, el id).
-  const nombreCategoria = filtros.categoria ? (categorias.filas?.find((c) => String(c.id) === filtros.categoria)?.name ?? `#${filtros.categoria}`) : null;
+  // r1 (m16, como F85 en el Hub): sin el catálogo, «la categoría elegida» (true), nunca el id crudo.
+  const nombreCategoria = filtros.categoria ? (categorias.filas?.find((c) => String(c.id) === filtros.categoria)?.name ?? true) : null;
   const vacio = useMemo(() => {
     const texto = textoVacioProductos({ q: estado.q, revision: filtros.revision, sinTarifa: filtros.sinTarifa, categoria: nombreCategoria });
     return (
@@ -381,21 +388,19 @@ export default function ProductosPage() {
   const idDeLaUrl = searchParams.get('id');
   const skuDeLaUrl = searchParams.get('sku');
   const enlaceAtendido = useRef<string | null>(null);
-  useEffect(() => {
-    const pedido = pedirEnlaceProducto(enlaceAtendido.current, idDeLaUrl, skuDeLaUrl);
-    if (pedido === null) return undefined;
-    const control = new AbortController();
-    _apiFetch(pedido.ruta, { signal: control.signal })
-      .then((r: unknown) => {
-        if (control.signal.aborted) return;
-        const llegada = llegadaEnlaceProducto(pedido, normalizarRespuesta(r).filas);
-        enlaceAtendido.current = llegada.marca;
-        if (llegada.abrir) openEdit(llegada.abrir);
-        else avisar(llegada.texto ?? 'No se encontró el producto.', { tono: 'info' });
-      })
-      .catch((err: unknown) => { if (!control.signal.aborted) avisarError(err, 'No se pudo abrir el producto'); });
-    return () => control.abort();
-  }, [idDeLaUrl, skuDeLaUrl, avisar, avisarError]);
+  // B4 T24 f3 (B40-f): el error del enlace queda a la vista con «Reintentar» (AvisoDeError: un 403 no lo ofrece); reintentar sube la vuelta.
+  // r1 (m18): el efecto vive en la lib (abrirEnlaceProducto) y la carga se lee con estadoReintento: mientras se reintenta, el aviso sigue
+  // montado con «Reintentando…» (m36: el foco no cae al <body>).
+  const [enlace, setEnlace] = useState<{ vuelta: number; error: unknown }>({ vuelta: 0, error: null });
+  const [vueltaEnlace, setVueltaEnlace] = useState(0);
+  const cargaEnlace = estadoReintento(enlace, vueltaEnlace);
+  useEffect(() => abrirEnlaceProducto({
+    marca: enlaceAtendido, idDeLaUrl, skuDeLaUrl, pedir: _apiFetch,
+    // r2 (m36): el enlace abre la ficha (la lista y su aviso se van): el foco va a su título, nunca al <body>.
+    abrir: (p) => { openEdit(p); requestAnimationFrame(() => document.getElementById('ficha-producto-titulo')?.focus()); },
+    avisar: (texto) => avisar(texto, { tono: 'info' }),
+    alError: (error) => setEnlace({ vuelta: vueltaEnlace, error }),
+  }), [idDeLaUrl, skuDeLaUrl, avisar, vueltaEnlace]);
 
   // ─── PRODUCT LIST ───
   if (!selectedProduct) {
@@ -420,11 +425,16 @@ export default function ProductosPage() {
               </div>
             )} />
 
+          {/* r2 (m36 completo): montado siempre. B4 T24 f4 (m3 = m9 de f3 r3): si el reintento sale bien, el enlace abre la ficha (el foco
+              va a su título); si da un 403 o el producto no existe, el botón se va y el foco va a la lista (destinoFoco), nunca al <body>. */}
+          <AvisoDeError error={cargaEnlace.error} fallo="No se pudo abrir el producto del enlace" acento="purple" reintentando={cargaEnlace.reintentando}
+            onReintentar={() => setVueltaEnlace((n) => n + 1)} destinoFoco="productos-lista" />
+
           {/* B4 T18, bloques 2 y 3 (TABLA-inventario punto 7, KANBAN-resto): la barra con la búsqueda (q) y los filtros de B3-T8, y
               la tabla estándar en el servidor, o el tablero solo para ver por categoría con el MISMO estado. */}
           <div className="flex min-w-0 flex-col gap-4">
             {capa}
-            <section ref={refTarjeta} className={claseTarjeta}>
+            <section ref={refTarjeta} className={`${claseTarjeta} ${FOCOS.slate}`} id="productos-lista" tabIndex={-1} aria-label="Productos">
               <BarraTabla
                 estado={estado}
                 onEstado={despachar}
@@ -443,6 +453,8 @@ export default function ProductosPage() {
                     <SelectorCatalogo etiqueta="Categoría" todas="Todas las categorías" cargando="Cargando categorías…"
                       fallo="No se pudieron cargar las categorías" catalogo={categorias} valor={filtros.categoria}
                       onCambiar={(categoria) => cambiarFiltros({ categoria })} onReintentar={recargarCategorias} icono={Layers} acento="purple" />
+                    {/* r2 (F81): si «Actualizar» falla con el catálogo ya cargado, se dice junto al selector (la vuelta, en useCatalogo). */}
+                    <AvisoCatalogoViejo catalogo={categorias} fallo="No se pudieron actualizar las categorías" onReintentar={recargarCategorias} acento="purple" />
                   </>
                 )}
                 ajustes={{ columnas: COLUMNAS_TABLA_PRODUCTOS, preferencias: prefs, anchoRef: anchoTablaRef }}
@@ -521,7 +533,7 @@ export default function ProductosPage() {
           <ChevronLeft size={20} />
         </button>
         <div className="flex-1">
-          <h1 className="font-extrabold text-xl text-slate-900">{isNew ? 'Nuevo Producto' : form.name}</h1>
+          <h1 id="ficha-producto-titulo" tabIndex={-1} className="font-extrabold text-xl text-slate-900">{isNew ? 'Nuevo Producto' : form.name}</h1>
           {!isNew && selectedProduct?.reference && <p className="text-xs text-slate-400">Ref: {selectedProduct.reference}</p>}
         </div>
         <div className="flex items-center gap-3">
@@ -551,7 +563,8 @@ export default function ProductosPage() {
         </div>
       </div>
 
-      <form onSubmit={saveProduct} className="flex-1 overflow-y-auto p-6">
+      {/* r1 (m17 + m45, F44-a): la ficha se desplaza sola y llega a la esquina del botón de la IA: la reserva al fondo. */}
+      <form onSubmit={saveProduct} className={`flex-1 overflow-y-auto px-6 pt-6 ${RESERVA_BOTON_IA}`}>
         {activeTab === 'Informacion General' && (
           <div className="grid grid-cols-3 gap-6 max-w-5xl">
             <div className="col-span-2 space-y-4">

@@ -16,8 +16,8 @@ import {
   Truck, Building2, Globe, Edit2, ShieldAlert
 } from 'lucide-react';
 import { CambiosDeActividad } from '@/app/dashboard/ventas/flujo';
-import { itemDeTimelineCliente, proveedorDeServidor } from '@/lib/datos-cliente';
-import { fechaCorta } from '@/lib/fechas-colombia';
+import { itemDeTimelineCliente, peticionGuardarProveedor, proveedorDeServidor } from '@/lib/datos-cliente';
+import { fechaCorta, hace } from '@/lib/fechas-colombia';
 // B4 T23B: la franja de indicadores estándar de la ficha del cliente y del proveedor (KPI-otros punto 3).
 import { FranjaKpis, TarjetaKpi } from '@/components/ui';
 import { AvisoFuente } from '@/components/ui/AvisoFuente';
@@ -27,22 +27,10 @@ import { RESERVA_BOTON_IA } from '@/lib/design-system';
 import { useRolActual } from '@/components/ui/useRolActual';
 import {
   datosDeRespuesta, esRespuestaVigente, estadoFichaCliente, estadoPedidosProveedor, numeroFinito, pedidosDeProveedor, siguientePerfil,
-  tarjetasFichaCliente, tarjetasFichaProveedor, textoProveedoresCortados,
+  tarjetasFichaCliente, tarjetasFichaProveedor, textoProveedoresCortados, vistaListaAgenda,
 } from '@/lib/kpis';
 import { infoEstadoPec } from '@/lib/estados-compras';
 import { resumenFichaCliente } from '@/lib/kpis-ventas';
-
-function timeAgo(isoString: string) {
-  if (!isoString) return 'Hoy';
-  const date = new Date(isoString);
-  const now = new Date();
-  const diff = Math.floor((now.getTime() - date.getTime()) / 1000);
-  if (diff < 60) return 'Hace unos segundos';
-  if (diff < 3600) return `Hace ${Math.floor(diff / 60)} min`;
-  if (diff < 86400) return `Hace ${Math.floor(diff / 3600)} horas`;
-  if (diff < 604800) return `Hace ${Math.floor(diff / 86400)} días`;
-  return date.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' });
-}
 
 function formatCOP(v: number | string | null | undefined) {
   const num = Number(v) || 0;
@@ -120,6 +108,9 @@ export default function AgendaPage() {
   const [totalProveedores, setTotalProveedores] = useState<number | null>(null);
   const [selectedSupplier, setSelectedSupplier] = useState<any | null>(null);
   const [loadingSuppliers, setLoadingSuppliers] = useState(false);
+  // B4 T24 f4 (FINAL-m20): el error de la carga de proveedores y de clientes (antes un console.error mudo y un vacío falso).
+  const [errorProveedores, setErrorProveedores] = useState<unknown>(null);
+  const [errorClientes, setErrorClientes] = useState<unknown>(null);
   const [supplierSearch, setSupplierSearch] = useState('');
   const [supplierPecs, setSupplierPecs] = useState<any[]>([]);
   // El total de GET /compras/pedidos?supplier_id= (la lista trae como mucho 200) y su error: el «Pedidos de compra» de la ficha.
@@ -147,6 +138,7 @@ export default function AgendaPage() {
   const fetchCustomers = async () => {
     try {
       const raw = await getCustomers();
+      setErrorClientes(null);
       const list = raw.data || raw;
       if (Array.isArray(list)) {
         setCustomers(list.map((c: any) => ({
@@ -166,7 +158,7 @@ export default function AgendaPage() {
         })));
       }
     } catch (e) {
-      console.error('Error cargando clientes', e);
+      setErrorClientes(e);
     }
   };
 
@@ -189,8 +181,9 @@ export default function AgendaPage() {
       const list = res?.data || res || [];
       setTotalProveedores(numeroFinito(res?.total));
       setSuppliers(Array.isArray(list) ? list.map(proveedorDeServidor).filter(Boolean) : []);
+      setErrorProveedores(null);
     } catch (e) {
-      console.error('Error cargando proveedores', e);
+      setErrorProveedores(e);
     } finally {
       setLoadingSuppliers(false);
     }
@@ -237,6 +230,10 @@ export default function AgendaPage() {
   const errorPerfil = perfilDelCliente?.error ?? null;
   const estadoFicha = estadoFichaCliente(clienteActual, perfilDelCliente);
   const textoCortados = textoProveedoresCortados(totalProveedores, suppliers.length);
+  // B4 T24 f4 (FINAL-m20): el error se dice con el aviso común (un 403 sin «Reintentar») y nunca como «Sin proveedores registrados».
+  const avisoProveedores = avisoDeFuente(errorProveedores, 'No se pudieron cargar los proveedores');
+  const avisoClientes = avisoDeFuente(errorClientes, 'No se pudieron cargar los clientes');
+  const vistaProveedores = vistaListaAgenda({ cargando: loadingSuppliers, error: errorProveedores, cantidad: suppliers.length });
   const avisoPerfil = avisoDeFuente(errorPerfil, 'No se pudo cargar la ficha del cliente');
 
   const openClient = (client: any) => {
@@ -453,18 +450,14 @@ export default function AgendaPage() {
     }
     const tid = toast.loading('Guardando proveedor...');
     try {
-      if (supplierModal === 'EDIT' && selectedSupplier?.id) {
-        const res = await apiFetch(`/compras/proveedores/${selectedSupplier.id}`, {
-          method: 'PUT',
-          body: JSON.stringify(supplierForm),
-        });
+      // B4 T24 f4 (A4): PATCH al editar (el servidor no tiene PUT) y, en los dos casos, las claves del servidor.
+      const editar = supplierModal === 'EDIT' && selectedSupplier?.id ? selectedSupplier.id : null;
+      const { ruta, opciones } = peticionGuardarProveedor(supplierForm, editar);
+      const res = await apiFetch(ruta, opciones);
+      if (editar !== null) {
         toast.success('Proveedor actualizado', { id: tid });
-        setSelectedSupplier(res.data || { ...selectedSupplier, ...supplierForm });
+        setSelectedSupplier(proveedorDeServidor(res?.data) ?? { ...selectedSupplier, ...supplierForm });
       } else {
-        await apiFetch('/compras/proveedores', {
-          method: 'POST',
-          body: JSON.stringify(supplierForm),
-        });
         toast.success('Proveedor creado exitosamente', { id: tid });
       }
       setSupplierModal(null);
@@ -570,10 +563,11 @@ export default function AgendaPage() {
           </div>
 
           {textoCortados && <p className="mb-3 text-xs font-semibold text-slate-500">{textoCortados}</p>}
+          {avisoProveedores && <div className="mb-4"><AvisoFuente aviso={avisoProveedores} onReintentar={fetchSuppliers} reintentando={loadingSuppliers} /></div>}
           {/* Grid Proveedores */}
-          {loadingSuppliers ? (
+          {vistaProveedores === 'cargando' ? (
             <div className="py-20 text-center text-slate-400 text-sm">Cargando proveedores...</div>
-          ) : filteredSuppliers.length === 0 ? (
+          ) : vistaProveedores === 'error' ? null : filteredSuppliers.length === 0 ? (
             <div className="bg-white rounded-3xl p-12 text-center border border-slate-200 shadow-sm max-w-lg mx-auto">
               <Building2 className="text-slate-300 mx-auto mb-3" size={48} />
               <h3 className="font-black text-slate-800 text-lg">Sin proveedores registrados</h3>
@@ -1174,6 +1168,7 @@ export default function AgendaPage() {
           </span>
         </div>
 
+        {avisoClientes && <div className="mb-4"><AvisoFuente aviso={avisoClientes} onReintentar={fetchCustomers} /></div>}
         {/* Customer Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filteredCustomers.map(client => {
@@ -1543,7 +1538,7 @@ export default function AgendaPage() {
                           <span className="font-bold text-xs text-slate-800">{sc.numero}</span>
                           <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${STATUS_COLOR_MAP[sc.estado] || 'bg-slate-100 text-slate-600'}`}>{sc.estado}</span>
                         </div>
-                        <p className="text-[11px] text-slate-400 mt-0.5">{sc.tipo_solicitud || 'Cotización'} · {timeAgo(sc.created_at)}</p>
+                        <p className="text-[11px] text-slate-400 mt-0.5">{sc.tipo_solicitud || 'Cotización'} · {hace(sc.created_at)}</p>
                       </div>
                       <Link href="/dashboard/ventas/solicitud" className="text-xs font-bold text-indigo-600 hover:underline">Ver SC →</Link>
                     </div>
@@ -1594,7 +1589,7 @@ export default function AgendaPage() {
                       <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 hover:bg-white transition-colors">
                         <div className="flex items-center justify-between gap-3 mb-1">
                           <span className="text-xs font-bold text-slate-800">{it.titulo}</span>
-                          {it.fecha && <span className="text-[10px] text-slate-400 shrink-0">{timeAgo(it.fecha)}</span>}
+                          {it.fecha && <span className="text-[10px] text-slate-400 shrink-0">{hace(it.fecha)}</span>}
                         </div>
                         <p className="text-xs text-slate-600">{t.description}</p>
                         {it.cambios.length > 0 && (

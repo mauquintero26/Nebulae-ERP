@@ -195,4 +195,24 @@ console.log('--- TEST T24 (B4 T24, FINAL-m30 y F3): el día de negocio, la aritm
   assert.equal((leer('lib/pesos.js') + leer('lib/kpis.js')).match(/\\B\(\?=\(\\d\{3\}\)\+\(\?!\\d\)\)/g)?.length, 1, 'la expresión, una vez');
 }
 
+console.log('--- B4 T24 f4 (FINAL-m22): el CRM y la Agenda dicen «hace…» con hace(), que lee la fecha del API (sin zona) como UTC ---');
+{
+  // updated_at de _lead_to_dict y created_at de las SC del perfil 360 son un isoformat UTC sin «Z» (con microsegundos).
+  const ahora = new Date('2026-10-05T14:00:00Z');   // 09:00 en Colombia
+  assert.equal(hace('2026-10-05T13:56:00.123456', ahora), 'hace 3 minutos', 'el lead cambiado hace 4 minutos (UTC sin zona)');
+  assert.equal(hace('2026-10-05T09:00:00', ahora), 'hace 5 horas', 'las 09:00 UTC son hace 5 horas, no «ahora»');
+  assert.equal(hace(null, ahora), '', 'sin fecha, nada');
+  const leer = (ruta) => readFileSync(join(SRC, ruta), 'utf8').replace(/\r\n/g, '\n');
+  for (const ruta of ['app/dashboard/crm/page.tsx', 'app/dashboard/agenda/page.tsx']) {
+    const f = leer(ruta);
+    assert.ok(!/function timeAgo\b|\btimeAgo\(/.test(f), `${ruta}: sin timeAgo (new Date(iso) tomaba la hora UTC como de Colombia)`);
+    assert.match(f, /import \{[^}]*\bhace\b[^}]*\} from '@\/lib\/fechas-colombia';/, `${ruta}: hace de fechas-colombia`);
+  }
+  const crm = leer('app/dashboard/crm/page.tsx');
+  assert.ok(crm.includes('<span className="text-xs text-slate-400">{hace(selectedLead.updated_at)}</span>'), 'el Drawer del lead');
+  const agenda = leer('app/dashboard/agenda/page.tsx');
+  assert.ok(agenda.includes("{sc.tipo_solicitud || 'Cotización'} · {hace(sc.created_at)}"), 'las SC del perfil 360');
+  assert.ok(agenda.includes('{it.fecha && <span className="text-[10px] text-slate-400 shrink-0">{hace(it.fecha)}</span>}'), 'la línea de tiempo');
+}
+
 console.log('✓ Todas las pruebas de fechas de Colombia pasaron.');

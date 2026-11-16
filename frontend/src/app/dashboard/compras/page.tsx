@@ -19,10 +19,12 @@ import {
 import type { AccionTabla, ClaveFila, PestanaTabla } from '@/components/tabla';
 import { BannerFlujo, PasosFlujo, useResumenFlujo } from '@/components/flujo';
 import type { DatosFlujo, FiltroSemaforo } from '@/components/flujo';
+import { useResumen } from '@/components/ui/useResumen';
+import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import { PanelAnalisisPerezoso } from '@/components/analisis';
 import { COMP_NAV } from './comp-nav';
 
-import { FOCOS } from '@/lib/design-system';
+import { FOCOS, RESERVA_BOTON_IA } from '@/lib/design-system';
 import { accesoCompras } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
 import { apiFetch as _apiFetch } from '@/lib/api';
@@ -31,13 +33,15 @@ import {
   accionModo, accionVistaEnLista, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta, ordenEsAtencion,
   textoOrdenHub,
 } from '@/lib/tabla';
-import { PERIODO_KPI, tarjetasHubCompras } from '@/lib/kpis';
+import { PERIODO_KPI, datosTarjetasCompras, tarjetasHubCompras } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
+// B4 T24 f3 (F54): la etiqueta del estado del pedido de venta (el chip del panel), nunca el código.
+import { infoEstadoPedido } from '@/lib/estados-pedido';
 import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, consultaColumnaPec, grupoMesPec, infoEstadoPec,
   opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec, repartirCancelacionPec, resumenCancelacionPec, tarjetaPec,
   cancelarPecsEnSerie, despuesDeCancelarPec, textoVacioPec,
-  textoVencidosPec, tituloMesPec, transicionesPec,
+  textoVencidosPec, tituloMesPec, transicionesPec, vinculoPvenDelPec, seleccionVigente, avisoSeleccionQuitada, estadoReintento, podarSeleccion,
 } from '@/lib/estados-compras';
 import {
   RUTA_HUB_COMPRAS, TEXTO_SEGUIMIENTO_CERRADO, accionPasoHubCompras, accionSemaforoCompras, avisosFlujoCompras, etiquetaEtapaTracking,
@@ -118,22 +122,26 @@ type PropsPanelPec = {
   /** B4 T14 r1 (m9): el error de GET /ventas/pedidos (la lista de consolidación), y volver a pedirla. */
   errorVentas: unknown;
   onReintentarVentas: () => void;
+  /** B4 T24 f3 (F57): la lista de consolidación va en camino (el reintento da señal: «Cargando…» y el botón apagado). */
+  cargandoVentas: boolean;
   /** B4 T14 r1 (m10): sube cuando la página pide releer el detalle (cancelar falló y el servidor pide recargar). */
   vueltaDetalle: number;
 };
 
 function PecDetailPanel({
-  pec, pedidosVenta, onClose, onUpdate, onToast, onCancelar, errorVentas, onReintentarVentas, vueltaDetalle,
+  pec, pedidosVenta, onClose, onUpdate, onToast, onCancelar, errorVentas, onReintentarVentas, cargandoVentas, vueltaDetalle,
 }: PropsPanelPec) {
   const [detail, setDetail] = useState<FilaPec | null>(pec);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [tab, setTab] = useState('info');
   const [selectedPvens, setSelectedPvens] = useState<Set<number>>(new Set());
+  const [consolidando, setConsolidando] = useState(false);
+  const [quitadosPvens, setQuitadosPvens] = useState<string[]>([]);
   const [searchPven, setSearchPven] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [editEstado, setEditEstado] = useState(false);
 
-  useEffect(() => { setDetail(pec); setTab('info'); setSelectedPvens(new Set()); }, [pec && pec.id]);
+  useEffect(() => { setDetail(pec); setTab('info'); setSelectedPvens(new Set()); setQuitadosPvens([]); }, [pec && pec.id]); // r3 (m4): también el aviso
 
   const loadFull = async () => {
     if (!pec) return;
@@ -170,22 +178,40 @@ function PecDetailPanel({
     if (pec) onCancelar(detail ?? pec);
   };
 
+  // r1 (C2): la selección vigente (seleccionVigente: solo los que siguen en PENDIENTE_COMPRA; los demás se avisan), un solo envío a la vez
+  // (consolidando) y, tras un alta buena, la selección vacía (un segundo clic ya no da «PEC creado» seguido del 409).
+  // r2 (m4 = m7): la selección guardada se PODA; el aviso de los quitados queda.
+  const poda = podarSeleccion(selectedPvens, pedidosVenta);
+  if (poda.seleccion) { setSelectedPvens(poda.seleccion); setQuitadosPvens(poda.quitados); }
+  const vigente = seleccionVigente(poda.seleccion ?? selectedPvens, pedidosVenta);
+  const avisoQuitados = avisoSeleccionQuitada(quitadosPvens);
   const handleConvertPvens = async () => {
-    if (!selectedPvens.size) { onToast('Selecciona al menos un PVEN', 'error'); return; }
-    const selected = pedidosVenta.filter(p => selectedPvens.has(p.id));
+    if (consolidando) return;
+    if (!vigente.ids.length) { onToast('Selecciona al menos un PVEN', 'error'); return; }
+    const selected: FilaVenta[] = vigente.pvens;
+    setConsolidando(true);
     const productos = selected.flatMap(p => (p.productos||[]).map(pr => ({ ...pr, pven_origen: p.numero })));
     try {
       const user = localStorage.getItem('user_name') || '';
-      const newPec = await apiFetch('/compras/pedidos', { method: 'POST', body: JSON.stringify({
-        ven_id: selected[0] && selected[0].id,
-        ven_numero: selected.map(p => p.numero).join(', '),
+      // B4 T24 f3 (FINAL-C7-f): ven_ids con todos los PVEN (el servidor los vincula en el alta); ven_numero, solo el del primero
+      // (VARCHAR(20): antes los números unidos por comas). El 409 se dice con su texto y recarga (recargarTrasError).
+      const respuesta = await apiFetch('/compras/pedidos', { method: 'POST', body: JSON.stringify({
+        ...vinculoPvenDelPec(selected),
         productos,
         notas: 'Consolidado de PVEN: ' + selected.map(p=>p.numero).join(', '),
         created_by: user,
       })});
-      onToast('PEC ' + newPec.numero + ' creado con ' + selected.length + ' PVEN(s) consolidados');
+      const newPec = respuesta?.data ?? respuesta;
+      onToast('PEC ' + newPec?.numero + ' creado con ' + selected.length + ' PVEN(s) consolidados');
+      setSelectedPvens(new Set());
+      setQuitadosPvens([]); // r3 (m4): tras un alta buena, sin el aviso viejo
       onUpdate();
-    } catch(e) { onToast(e, 'error'); }
+    } catch (e) {
+      onToast(e, 'error');
+      if (recargarTrasError(e)) onUpdate();
+    } finally {
+      setConsolidando(false);
+    }
   };
 
   if (!pec) return null;
@@ -237,7 +263,7 @@ function PecDetailPanel({
 
         {/* Tab bar */}
         <div className="flex items-center gap-1 px-8 py-2 border-b border-gray-100 bg-white shrink-0">
-          {[{k:'info',l:'Info PEC'},{k:'pvens',l:'Pedidos de Venta'},{k:'productos',l:'Productos'}].map(function(t){ return (
+          {[{k:'info',l:'Información'},{k:'pvens',l:'Pedidos de Venta'},{k:'productos',l:'Productos'}].map(function(t){ return (
             <button key={t.k} onClick={()=>setTab(t.k)} className={'px-4 py-2 rounded-lg text-sm font-bold transition-all ' + (tab===t.k?'bg-purple-600 text-white shadow':'text-gray-600 hover:bg-purple-50 hover:text-purple-700')}>{t.l}</button>
           ); })}
         </div>
@@ -269,7 +295,7 @@ function PecDetailPanel({
             <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
               <p className="text-xs font-black text-gray-400 uppercase mb-3">Pago y logística</p>
               <div className="grid grid-cols-2 gap-3 text-xs text-gray-600">
-                {[['Modalidad',(detail&&detail.modalidad_pago)||'-'],['Carrier',(detail&&detail.carrier)||'-'],['Tracking',(detail&&detail.tracking_number)||'-']].map(function(r,i){return(
+                {[['Modalidad',(detail&&detail.modalidad_pago)||'-'],['Transportadora',(detail&&detail.carrier)||'-'],['Tracking',(detail&&detail.tracking_number)||'-']].map(function(r,i){return(
                   <div key={i}><span className="block text-gray-400 font-black uppercase mb-0.5">{r[0]}</span>{r[1]}</div>
                 );})}
               </div>
@@ -283,7 +309,8 @@ function PecDetailPanel({
           </div>
 
           {/* RIGHT 55% */}
-          <div className="w-[55%] p-6 overflow-y-auto flex flex-col gap-4">
+          {/* r1 (m17 + m45, F44-a): la columna de la derecha del panel llega a la esquina del botón de la IA: la reserva al fondo. */}
+          <div className={`w-[55%] px-6 pt-6 ${RESERVA_BOTON_IA} overflow-y-auto flex flex-col gap-4`}>
             {editEstado && (
               <div className="bg-purple-50 border-2 border-purple-200 rounded-2xl p-5">
                 <p className="text-sm font-black text-purple-800 mb-3">Cambiar Estado del PEC</p>
@@ -354,7 +381,7 @@ function PecDetailPanel({
               <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
                 <div className="p-5 border-b border-gray-100">
                   <p className="text-sm font-black text-gray-800 mb-1">Consolidar Pedidos de Venta</p>
-                  <p className="text-xs text-gray-500 mb-3">Selecciona 1 o varios PVEN en estado Pendiente Compra para convertirlos en una orden de compra</p>
+                  <p className="text-xs text-gray-500 mb-3">Selecciona 1 o varios PVEN en estado {infoEstadoPedido('PENDIENTE_COMPRA').label} para convertirlos en una orden de compra</p>
                   <div className="flex items-center bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 gap-2">
                     <Search size={14} className="text-gray-400"/>
                     <input value={searchPven} onChange={e=>setSearchPven(e.target.value)} placeholder="Buscar PVEN..." className="text-sm bg-transparent outline-none flex-1"/>
@@ -365,13 +392,17 @@ function PecDetailPanel({
                   {errorVentas ? (
                     <div className="py-8 text-center space-y-3">
                       <p role="alert" className="text-sm font-bold text-rose-700">No se pudieron cargar los pedidos de venta.</p>
-                      <button type="button" onClick={onReintentarVentas}
-                        className={`inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 ${FOCO_VISIBLE}`}>
-                        <RefreshCw size={13} aria-hidden="true"/> Reintentar
+                      {/* r1 (m36): aria-disabled (no disabled) mientras carga: el botón conserva el foco. */}
+                      <button type="button" onClick={cargandoVentas ? undefined : onReintentarVentas} aria-disabled={cargandoVentas || undefined} aria-busy={cargandoVentas}
+                        className={`inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 aria-disabled:cursor-wait aria-disabled:opacity-60 ${FOCO_VISIBLE}`}>
+                        <RefreshCw size={13} aria-hidden="true" className={cargandoVentas ? 'animate-spin' : undefined}/> {cargandoVentas ? 'Cargando…' : 'Reintentar'}
                       </button>
                     </div>
+                  ) : filteredPvens.length === 0 && cargandoVentas ? (
+                    /* r1 (m25): en la primera carga, «Cargando…», nunca el vacío falso. */
+                    <p role="status" className="py-10 text-center text-sm text-gray-500">Cargando pedidos de venta…</p>
                   ) : filteredPvens.length === 0 && (
-                    <div className="py-10 text-center"><Package size={28} className="mx-auto mb-2 text-gray-300"/><p className="text-gray-400 text-sm">No hay PVEN en estado Pendiente Compra</p></div>
+                    <div className="py-10 text-center"><Package size={28} className="mx-auto mb-2 text-gray-300"/><p className="text-gray-400 text-sm">No hay PVEN en estado {infoEstadoPedido('PENDIENTE_COMPRA').label}</p></div>
                   )}
                   {filteredPvens.map(function(p){ return (
                     <label key={p.id} className={'flex items-start gap-3 px-5 py-3 cursor-pointer hover:bg-purple-50 transition-colors ' + (selectedPvens.has(p.id)?'bg-purple-50/80':'')}>
@@ -381,7 +412,7 @@ function PecDetailPanel({
                       <div className="flex-1">
                         <div className="flex items-center gap-2">
                           <span className="font-bold text-gray-900 text-sm">{p.numero}</span>
-                          <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-bold">PEND. COMPRA</span>
+                          <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-bold">{infoEstadoPedido('PENDIENTE_COMPRA').label}</span>
                         </div>
                         <p className="text-xs text-gray-500">{p.customer_name||'-'} · {textoInstante(p.created_at)}</p>
                         <p className="text-xs font-bold text-indigo-700 mt-0.5">{fCOP(p.total_cop||p.total||0)} · {(p.productos||[]).length} producto(s)</p>
@@ -391,11 +422,13 @@ function PecDetailPanel({
                   ); })}
                 </div>
                 {/* r1 (m7): crear el PEC consolidado es POST /compras/pedidos (ADMIN y COMPRAS). */}
-                {selectedPvens.size > 0 && accesoPec.cambiarPec && (
+                {avisoQuitados && <p role="status" className="px-4 pt-3 text-xs font-semibold text-amber-800">{avisoQuitados}</p>}
+                {vigente.ids.length > 0 && accesoPec.cambiarPec && (
                   <div className="p-4 border-t border-gray-100 bg-purple-50 flex items-center justify-between">
-                    <span className="text-sm font-bold text-purple-800">{selectedPvens.size} PVEN seleccionado(s)</span>
-                    <button onClick={handleConvertPvens} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-sm flex items-center gap-2">
-                      <ShoppingCart size={14}/> Crear PEC Consolidado
+                    <span className="text-sm font-bold text-purple-800">{vigente.ids.length} PVEN seleccionado(s)</span>
+                    <button type="button" onClick={handleConvertPvens} disabled={consolidando} aria-busy={consolidando}
+                      className={`bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-sm flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-60 ${FOCO_VISIBLE}`}>
+                      {consolidando ? <RefreshCw size={14} aria-hidden="true" className="animate-spin"/> : <ShoppingCart size={14} aria-hidden="true"/>} {consolidando ? 'Creando PEC…' : 'Crear PEC Consolidado'}
                     </button>
                   </div>
                 )}
@@ -407,7 +440,7 @@ function PecDetailPanel({
                 <div className="p-5 border-b border-gray-100"><p className="text-xs font-black text-gray-400 uppercase">Productos del PEC</p></div>
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 border-b border-gray-100 text-xs text-gray-400 font-black uppercase">
-                    <tr><th className="px-5 py-3 text-left">Producto</th><th className="px-4 py-3 text-center">Qty</th><th className="px-4 py-3 text-right">Precio</th><th className="px-4 py-3 text-right">Subtotal</th></tr>
+                    <tr><th className="px-5 py-3 text-left">Producto</th><th className="px-4 py-3 text-center">Cant.</th><th className="px-4 py-3 text-right">Precio</th><th className="px-4 py-3 text-right">Subtotal</th></tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {(detail?.productos||[]).map(function(p,i){ return (
@@ -440,8 +473,8 @@ const ID_HUB = 'compras.hub';
 const INICIAL_HUB = { vista: 'todos', orden: 'atencion' };
 /** D39 (m6 de T8): en Kanban la lista va sin filas (limit=0); los conteos siguen al día y las filas las piden las columnas. */
 const EXTRA_TABLERO = { limit: 0 };
-/** El contenedor de los Hubs y de las listas del bloque (T7 a T10): pb-24 deja libre la esquina del botón de la IA. */
-const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
+/** El contenedor de los Hubs y de las listas del bloque (T7 a T10): RESERVA_BOTON_IA (pb-24, F44-a) deja libre la esquina del botón de la IA. */
+const CONTENEDOR = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;
 
 /** `conteos` de GET /compras/pedidos con con_conteos=1 (T12): cada vista y los vencidos, con la búsqueda (R5). */
 type ConteosPec = Partial<Record<'todos' | 'no_resueltos' | 'pedidos' | 'en_transito' | 'en_bodega' | 'acciones_tomadas'
@@ -569,7 +602,7 @@ export default function ComprasHub() {
   // lo vencido primero sigue siendo el orden por defecto (R8), no el created_at del servidor.
   const extraDeLaLista = useMemo(() => ({ orden: estado.orden || 'atencion' }), [estado.orden]);
   const listado = useListado<FilaPec>({
-    ruta: '/compras/pedidos', estado, conConteos: true, esperar: !listo, despachar, activo: !enAnalisis,
+    ruta: '/compras/pedidos', estado, conConteos: true, conResumen: true, esperar: !listo, despachar, activo: !enAnalisis,
     extra: enKanban ? EXTRA_TABLERO : extraDeLaLista,
   });
   // m5 de T8: mientras la última respuesta sea la de Kanban (sin filas) y la tabla ya pida su página, la tabla está
@@ -607,30 +640,31 @@ export default function ComprasHub() {
   // Las tarjetas (KPI-compras punto 5; R7, R12, RP43): GET /compras/stats?periodo=30d (antes se pedía sin período a un
   // endpoint que no existía y quedaba en {}), sin respaldo local. Mientras no llega, 'cargando' (nunca 0); si falla, «—».
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    _apiFetch(`/compras/stats?periodo=${PERIODO_KPI}`, { signal: control.signal })
-      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  const cargandoStats = stats?.vuelta !== vueltaStats;
-  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
-  const tarjetas = tarjetasHubCompras(stats?.datos ?? null);
+  // B4 T24 f3 (F45): el cargador compartido de los resúmenes (useResumen: aborta la anterior, descarta las viejas, va atado al usuario,
+  // conserva lo último al recargar y con error no deja datos viejos: «—»).
+  const stats = useResumen(`/compras/stats?periodo=${PERIODO_KPI}`, vueltaStats);
+  // B4 T24 f4 (F60): lo que abre una pestaña cuenta con la búsqueda: el resumen y los conteos de la MISMA llamada de la lista
+  // (datosTarjetasCompras); «Comprado» sigue con /stats. Hasta que llega el resumen, las tarjetas cargan (nunca otra cifra).
+  const datosTarjetas = datosTarjetasCompras(stats.datos, listado.resumen, conteos);
+  const cargandoStats = stats.cargando || (datosTarjetas === null && stats.datos !== null && listado.error == null);
+  const estadoKpis = useEstadoKpi(cargandoStats, stats.error ?? listado.error);
+  const tarjetas = tarjetasHubCompras(datosTarjetas);
 
   // B1 a B3 (queda igual): los pedidos de venta del panel de consolidación (sus PENDIENTE_COMPRA se filtran en el panel).
   // T14 r1 (m9): si el GET falla, el error queda en el estado (el panel lo dice con «Reintentar») y la lista de antes se
   // conserva; nunca se presenta como una lista vacía.
-  const [ventas, setVentas] = useState<{ filas: FilaVenta[]; error: unknown }>({ filas: [], error: null });
+  // B4 T24 f3 (F57): con la vuelta de la carga, como stats: mientras no llega la de esta vuelta, el panel dice «Cargando…».
+  const [ventas, setVentas] = useState<{ vuelta: number; filas: FilaVenta[]; error: unknown }>({ vuelta: -1, filas: [], error: null });
   const [vueltaVentas, setVueltaVentas] = useState(0);
   useEffect(() => {
     let vigente = true;
     apiFetch('/ventas/pedidos?limit=200')
-      .then((r) => { if (vigente) setVentas({ filas: Array.isArray(r) ? r : (r && Array.isArray(r.data) ? r.data : []), error: null }); })
-      .catch((err: unknown) => { if (vigente) setVentas((v) => ({ filas: v.filas, error: err })); });
+      .then((r) => { if (vigente) setVentas({ vuelta: vueltaVentas, filas: Array.isArray(r) ? r : (r && Array.isArray(r.data) ? r.data : []), error: null }); })
+      .catch((err: unknown) => { if (vigente) setVentas((v) => ({ vuelta: vueltaVentas, filas: v.filas, error: err })); });
     return () => { vigente = false; };
   }, [vueltaVentas]);
+  // r1 (m31): la carga de los PVEN se lee con estadoReintento (lib): cargando, el error que se conserva mientras se reintenta.
+  const cargandoVentas = estadoReintento(ventas, vueltaVentas).cargando;
   // m10: releer el detalle del panel abierto cuando cancelar desde él falla y el servidor pide recargar.
   const [vueltaDetalle, setVueltaDetalle] = useState(0);
 
@@ -808,7 +842,7 @@ export default function ComprasHub() {
     if (accion) despachar(accion);
     if (enAnalisis) cambiarSeccion(false);
   };
-  const actualizando = listado.recargando || flujo.cargando || (cargandoStats && stats !== null);
+  const actualizando = listado.recargando || flujo.cargando || (cargandoStats && stats.datos !== null);
 
   /* ════════════════ RENDER ════════════════ */
   return (
@@ -819,6 +853,7 @@ export default function ComprasHub() {
           pedidosVenta={ventas.filas}
           errorVentas={ventas.error}
           onReintentarVentas={() => setVueltaVentas((n) => n + 1)}
+          cargandoVentas={cargandoVentas}
           vueltaDetalle={vueltaDetalle}
           onClose={()=>setSelectedPec(null)}
           onUpdate={recargarTodo}
@@ -876,7 +911,7 @@ export default function ComprasHub() {
             cargan, barras grises (nunca 0); con error, «—». «Pedidos de compra activos» abre «No resueltos» y «En tránsito»
             su pestaña; «Comprado (30 días)» lleva su % en gris. No se ven en Análisis. */}
         {!enAnalisis && (
-          <FranjaKpis estado={estadoKpis} titulo="Pedidos de compra">
+          <FranjaKpis estado={estadoKpis} titulo="Pedidos de compra" idFoco="franja-compras">
             <TarjetaKpi kpi="pec_activos" valor={tarjetas?.activos.valor ?? null} ayuda={tarjetas?.activos.ayuda ?? undefined}
               tono={tarjetas?.activos.tono ?? 'normal'} activo={vistaActiva === 'no_resueltos'} onClick={() => elegirVista('no_resueltos')} />
             <TarjetaKpi kpi="pec_en_transito" valor={tarjetas?.en_transito.valor ?? null}
@@ -885,6 +920,11 @@ export default function ComprasHub() {
             <TarjetaKpi kpi="comprado_periodo" valor={tarjetas?.comprado.valor ?? null}
               variacion={tarjetas?.comprado.variacion ?? { actual: null, anterior: null }} ayuda={tarjetas?.comprado.ayuda} />
           </FranjaKpis>
+        )}
+        {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
+        {/* r2 (m36 completo): montado siempre (destinoFoco, el id de la franja): si el reintento sale bien o da un 403, el foco va a la franja, nunca al <body>. */}
+        {!enAnalisis && (
+          <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de compras" onReintentar={stats.recargar} acento="purple" reintentando={stats.cargando} destinoFoco="franja-compras" />
         )}
 
         {/* B4 T14 (TABLA-compras punto 6, KANBAN-compras punto 7, ANALISIS-compras punto 4): la barra y la tabla estándar

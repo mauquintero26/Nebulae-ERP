@@ -1646,4 +1646,105 @@ console.log('--- B4 T24 f2 r1 (m22): «Actualizar» de Pedidos gira con la regla
   assert.equal(estadoKpi({ loading: true, yaCargo: marca.yaCargo }), 'actualizando', 'la recarga después de un fallo sí gira (como BASE)');
 }
 
+console.log('--- B4 T24 f3 (F44-a): Compras e Inventario reservan la esquina del botón de la IA con el token RESERVA_BOTON_IA ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/app/dashboard/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const CONTENEDOR = 'const CONTENEDOR = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;';
+  // Las seis copias locales de CONTENEDOR de Compras (antes con pb-24 escrito a mano) y la de Inventario (piezas-inventario, de f1).
+  for (const ruta of ['compras/page.tsx', 'compras/lista-compras/page.tsx', 'compras/pedidos/page.tsx', 'compras/recepciones/page.tsx',
+    'compras/transito/page.tsx', 'compras/traslados/page.tsx']) {
+    const f = leer(ruta);
+    assert.ok(f.includes(CONTENEDOR), `${ruta}: CONTENEDOR con RESERVA_BOTON_IA`);
+    assert.match(f, /^import \{[^}]*\bRESERVA_BOTON_IA\b[^}]*\} from '@\/lib\/design-system';/m, `${ruta}: importa el token`);
+  }
+  assert.ok(leer('inventario/piezas-inventario.tsx').includes(`export ${CONTENEDOR}`), 'Inventario: el CONTENEDOR común');
+  // Las páginas que terminaban con pb-10 y las que se desplazan solas (h-full overflow-y-auto), y la columna de la derecha de los dos
+  // detalles (el PEC y el conteo de la recepción), que queda bajo el botón en xl y al final en el teléfono.
+  const CON_RESERVA = {
+    'compras/proyecciones/page.tsx': '<div className={`flex flex-col gap-6 w-full p-6 ${RESERVA_BOTON_IA}`}>',
+    'compras/registro/page.tsx': '<div className={`flex flex-col gap-6 w-full p-6 ${RESERVA_BOTON_IA}`}>',
+    'compras/historial/page.tsx': '${RESERVA_BOTON_IA}',
+    'inventario/calendario/page.tsx': '<div className={`p-8 ${RESERVA_BOTON_IA} h-full overflow-y-auto',
+    'inventario/operaciones/page.tsx': '<div className={`p-8 ${RESERVA_BOTON_IA} h-full overflow-y-auto',
+    'inventario/categorias/page.tsx': '<div className={`h-full w-full bg-[#f8f9fa] flex flex-col p-5 ${RESERVA_BOTON_IA} overflow-y-auto`}>',
+    'compras/pedidos/[id]/page.tsx': '<div className={`xl:flex-1 xl:overflow-y-auto px-4 pt-4 sm:px-6 sm:pt-6 ${RESERVA_BOTON_IA} custom-scrollbar bg-slate-50`}>',
+    'compras/recepciones/[id]/page.tsx': '<div className={`xl:flex-1 xl:overflow-y-auto px-4 pt-4 sm:px-6 sm:pt-6 ${RESERVA_BOTON_IA} custom-scrollbar bg-slate-50 space-y-6`}>',
+  };
+  for (const [ruta, trozo] of Object.entries(CON_RESERVA)) {
+    const f = leer(ruta);
+    assert.ok(f.includes(trozo), `${ruta}: la reserva`);
+    assert.match(f, /^import \{[^}]*\bRESERVA_BOTON_IA\b[^}]*\} from '@\/lib\/design-system';/m, `${ruta}: importa el token`);
+  }
+  // Ningún pb-24, pb-20 ni pb-10 escrito a mano en Compras e Inventario (la reserva es una sola: design-system.ts). Un sm:p-6 o
+  // sm:p-8 después de la reserva la pisaría en pantallas anchas: la columna de los detalles usa px/pt para el padding.
+  const { readdirSync, statSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const recorrer = (dir) => readdirSync(dir).flatMap((n) => {
+    const p = join(dir, n);
+    return statSync(p).isDirectory() ? recorrer(p) : /\.tsx?$/.test(n) ? [p] : [];
+  });
+  const sueltos = ['compras', 'inventario'].flatMap((d) => recorrer(fileURLToPath(new URL(`../src/app/dashboard/${d}/`, import.meta.url)))).filter((p) => {
+    const codigo = readFileSync(p, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '');
+    // Una plantilla de clases con la reserva y un p-N con variante (sm:, md:, lg:, xl:): el de la variante va después en el CSS y la pisa.
+    const plantillasConReserva = (codigo.match(/`[^`]*`/g) ?? []).filter((t) => t.includes('${RESERVA_BOTON_IA}'));
+    return /["'`\s]pb-(?:10|20|24)["'`\s]/.test(codigo) || plantillasConReserva.some((t) => /\b(?:sm|md|lg|xl):p-\d/.test(t));
+  }).map((p) => p.replace(/\\/g, '/').replace(/^.*\/dashboard\//, ''));
+  assert.deepEqual(sueltos, [], 'sin pb-24, pb-20 ni pb-10 literales (ni la reserva pisada por sm:p-*) en Compras e Inventario');
+  // B4 T24 f3 r1 (m17 + m45): la guarda amplia — todo contenedor que se desplaza (overflow-y-auto, sin max-h) en Compras e Inventario
+  // lleva la reserva, salvo los que no llegan a la esquina del botón (la lista blanca, cada uno con su motivo).
+  const LISTA_BLANCA = [
+    ['compras/components/TablaCompras.tsx', 'h-[600px] overflow-y-auto'], // una tabla interna de alto fijo
+    ['compras/page.tsx', 'w-[45%] border-r'], // la columna de la izquierda del panel del PEC
+    ['compras/pedidos/page.tsx', 'w-[45%] border-r'], // ídem en Pedidos
+    ['compras/pedidos/page.tsx', 'flex-1 overflow-y-auto p-6'], // el cuerpo del alta de un PEC (una ventana centrada con su pie)
+    ['compras/pedidos/[id]/page.tsx', 'flex-1 flex flex-col xl:flex-row overflow-y-auto xl:overflow-hidden'], // su último hijo lleva la reserva
+    ['compras/pedidos/[id]/page.tsx', 'xl:flex-1 xl:overflow-y-auto px-4 sm:px-8 py-8'], // la columna de la izquierda
+    ['compras/recepciones/[id]/page.tsx', 'flex-1 flex flex-col xl:flex-row overflow-y-auto xl:overflow-hidden'],
+    ['compras/recepciones/[id]/page.tsx', 'xl:flex-1 xl:overflow-y-auto px-4 sm:px-8 py-8'],
+    ['inventario/categorias/page.tsx', 'flex-1 overflow-y-auto">'], // una tarjeta dentro del contenedor que ya reserva
+  ];
+  const sinReserva = ['compras', 'inventario'].flatMap((d) => recorrer(fileURLToPath(new URL(`../src/app/dashboard/${d}/`, import.meta.url)))).flatMap((p) => {
+    const ruta = p.replace(/\\/g, '/').replace(/^.*\/dashboard\//, '');
+    const codigo = readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
+    return codigo.split('\n').filter((l) => /className=/.test(l) && /\boverflow-y-auto\b/.test(l) && !/max-h-/.test(l) && !l.includes('${RESERVA_BOTON_IA}'))
+      .filter((l) => !LISTA_BLANCA.some(([r, trozo]) => r === ruta && l.includes(trozo)))
+      .map((l) => `${ruta}: ${l.trim().slice(0, 80)}`);
+  });
+  assert.deepEqual(sinReserva, [], 'todo contenedor que se desplaza y llega a la esquina lleva RESERVA_BOTON_IA');
+  for (const [ruta, trozo] of [['compras/page.tsx', '<div className={`w-[55%] px-6 pt-6 ${RESERVA_BOTON_IA} overflow-y-auto flex flex-col gap-4`}>'],
+    ['compras/pedidos/page.tsx', '<div className={`w-[55%] px-6 pt-6 ${RESERVA_BOTON_IA} overflow-y-auto`}>'],
+    ['inventario/productos/page.tsx', '<form onSubmit={saveProduct} className={`flex-1 overflow-y-auto px-6 pt-6 ${RESERVA_BOTON_IA}`}>']]) {
+    assert.ok(leer(ruta).includes(trozo), `${ruta}: la reserva (m45)`);
+  }
+}
+
+console.log('--- B4 T24 f4 (F44-a): las otras pantallas (Dashboard, Marketing, Asistente, Seguimientos, Finanzas…) reservan la esquina del botón de la IA ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/app/dashboard/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const CON_RESERVA = {
+    'page.tsx': '<div className={`w-full shrink-0 bg-slate-50 min-h-screen ${RESERVA_BOTON_IA} animate-in fade-in custom-scrollbar`}>',
+    'marketing/page.tsx': '<div className={`w-full bg-slate-50 flex flex-col px-8 pt-8 ${RESERVA_BOTON_IA} min-h-max animate-in fade-in custom-scrollbar`}>',
+    'asistente_omnicanal/page.tsx': '<div className={`flex-1 overflow-y-auto p-4 ${RESERVA_BOTON_IA} space-y-4`}>',
+    'crm/calendario/page.tsx': '<div className={`px-8 pt-8 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto space-y-6`}>',
+    'finanzas/resumen/page.tsx': '<div className={`px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 space-y-6`}>',
+    'agenda/page.tsx': '${RESERVA_BOTON_IA} overflow-y-auto',
+    'crm/page.tsx': '<div className={`flex-1 min-h-0 overflow-y-auto p-5 ${RESERVA_BOTON_IA}`}>',
+    'marketing/campanas/page.tsx': '<div className={`flex-1 md:overflow-y-auto p-6 ${RESERVA_BOTON_IA}`}>',
+    'finanzas/gastos/page.tsx': 'CONTENEDOR',
+    'ecommerce/page.tsx': '<div className={CONTENEDOR}>',
+  };
+  for (const [ruta, trozo] of Object.entries(CON_RESERVA)) {
+    const f = leer(ruta);
+    assert.ok(f.includes(trozo), `${ruta}: la reserva`);
+    if (trozo.includes('RESERVA_BOTON_IA')) assert.match(f, /^import \{[^}]*\bRESERVA_BOTON_IA\b[^}]*\} from '@\/lib\/design-system';/m, `${ruta}: importa el token`);
+  }
+  // Ningún pb-24, pb-20 ni pb-10 escrito a mano (en el código; los comentarios no cuentan) en las pantallas de f4.
+  const sueltos = Object.keys(CON_RESERVA).filter((ruta) => {
+    const codigo = leer(ruta).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '');
+    return /["'`\s]pb-(?:10|20|24)["'`\s]/.test(codigo);
+  });
+  assert.deepEqual(sueltos, [], 'sin pb-24, pb-20 ni pb-10 literales en las otras pantallas');
+}
+
 console.log('OK test_listas_ventas.mjs');

@@ -22,9 +22,9 @@ import {
 import type { ColumnaTabla } from '@/components/tabla';
 import {
   RETARDO_BUSQUEDA_MS, accionModo, crearBusquedaConRetardo, dependenciasTablero, estadoDelTotal, faseDeLista, normalizarRespuesta,
-  textoVacioCatalogo, textoVacioPedidosWeb,
+  sincronizarBusqueda, textoVacioCatalogo, textoVacioPedidosWeb,
 } from '@/lib/tabla';
-import type { AccionTabla } from '@/lib/tabla';
+import type { AccionTabla, LocalBusqueda } from '@/lib/tabla';
 import {
   COLUMNAS_PEDIDO, OPCIONES_ESTADOS_PEDIDOS_WEB, OPCIONES_ESTADOS_TABLERO_PEDIDO, RUTA_PEDIDOS_WEB,
   consultaColumnaPedido, efectosCancelarPedido, reglaSoltarPedidoWeb, soloLecturaPedidosWeb, tarjetaPedidoWeb,
@@ -33,12 +33,12 @@ import { infoEstadoPedido } from '@/lib/estados-pedido';
 import { ordenPorDefecto } from '@/lib/kanban';
 import { AvisoFuente } from '@/components/ui/AvisoFuente';
 import { useRolActual } from '@/components/ui/useRolActual';
-import { cuerpoConfigPagos, fuenteGuardable, lecturaDeFuente, tarjetasTienda, textoLimiteCarritos } from '@/lib/kpis';
+import { AYUDA_SECRETOS_PAGOS, cuerpoConfigPagos, fuenteGuardable, lecturaDeFuente, tarjetasTienda, textoLimiteCarritos } from '@/lib/kpis';
 import { accesoTienda } from '@/lib/roles';
 import { formatoPesos } from '@/lib/pesos';
 import { fechaCorta, fechaHoraLarga, horaCO } from '@/lib/fechas-colombia';
 import { avisoDeFuente, estadoFranjaDeFuente, motivoSinPermiso } from '@/lib/avisos';
-import { CAJA_SIN_PERMISO, FOCOS, TABLE } from '@/lib/design-system';
+import { CAJA_SIN_PERMISO, FOCO_DENTRO, FOCOS, TABLE } from '@/lib/design-system';
 // B4 T24 f2 (F47): las acciones del tablero de pedidos, las mismas de Pedidos de venta.
 import { useAccionesTableroPedidos } from '../ventas/acciones-tablero-pedidos';
 import { CONTENEDOR } from '../inventario/piezas-inventario';
@@ -570,27 +570,32 @@ const COLUMNAS_CATALOGO: ColumnaTabla<ProductoCatalogo>[] = [
   { id: 'acciones', titulo: 'Acciones', ancho: 88, clave: true, fija: 'derecha', celda: (p) => <CeldaAccionesCatalogo p={p} /> },
 ];
 
-/** La cuadrícula del catálogo («Cuadrícula», LayoutGrid): la tarjeta de cada producto; un clic la abre para editar. */
+/**
+ * La cuadrícula del catálogo («Cuadrícula», LayoutGrid): la tarjeta de cada producto. B4 T24 f4 (F107): ya no es un div con clic; el
+ * botón principal (Enter o Espacio, con el token de foco) la abre para editar, y el interruptor de publicar va FUERA de él (sin controles
+ * anidados), en la esquina del texto.
+ */
 function TarjetaProductoCuadricula({ p, puedeEditar, onEditar, onAlternar }: { p: ProductoCatalogo; puedeEditar: boolean; onEditar: () => void; onAlternar: () => void }) {
   return (
-    <div className={`bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden ${puedeEditar ? 'cursor-pointer hover:shadow-md transition-all' : ''}`} onClick={puedeEditar ? onEditar : undefined}
-      title={puedeEditar ? undefined : TITULO_SOLO_ADMIN}>
-      {p.imagenes?.[0] ? <img src={p.imagenes[0]} alt={p.nombre} className="w-full h-40 object-cover bg-gray-100"/> : <div className="w-full h-40 bg-gray-100 flex items-center justify-center"><Package size={32} className="text-gray-300"/></div>}
-      <div className="p-4">
-        <div className="flex items-start justify-between gap-2 mb-2">
-          <p className="font-bold text-gray-900 text-sm leading-tight line-clamp-2">{p.nombre}</p>
-          <label className={`shrink-0 relative inline-flex items-center ${puedeEditar ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`} onClick={e => e.stopPropagation()}>
-            <input type="checkbox" className="peer sr-only" checked={p.publicado_web || false} disabled={!puedeEditar} onChange={onAlternar}
-              aria-label={`${p.publicado_web ? 'Ocultar' : 'Publicar'} ${p.nombre} en la tienda`} />
-            <div className="h-5 w-9 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:border after:bg-white after:transition-all after:content-[''] peer-checked:bg-purple-600 peer-checked:after:translate-x-full peer-focus-visible:ring-2 peer-focus-visible:ring-purple-700 peer-focus-visible:ring-offset-2"></div>
-          </label>
+    <div className={`relative bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden ${puedeEditar ? 'hover:shadow-md transition-all' : ''}`}>
+      <button type="button" onClick={onEditar} disabled={!puedeEditar} aria-label={`Editar ${p.nombre}`}
+        title={puedeEditar ? undefined : TITULO_SOLO_ADMIN}
+        className={`block w-full text-left rounded-2xl enabled:cursor-pointer disabled:cursor-default ${FOCO_DENTRO}`}>
+        {p.imagenes?.[0] ? <img src={p.imagenes[0]} alt="" className="w-full h-40 object-cover bg-gray-100"/> : <div className="w-full h-40 bg-gray-100 flex items-center justify-center"><Package size={32} className="text-gray-300" aria-hidden="true"/></div>}
+        <div className="p-4">
+          <p className="font-bold text-gray-900 text-sm leading-tight line-clamp-2 mb-2 pr-11">{p.nombre}</p>
+          {p.categoria && <p className="text-[10px] text-gray-400 mb-1">{p.categoria}</p>}
+          <div className="flex items-center justify-between">
+            <span className="font-black text-purple-700">{fCOP(p.precio_venta)}</span>
+            <span className={`text-[10px] font-bold ${p.stock_disponible === 0 ? 'text-red-600' : p.is_low_stock ? 'text-amber-600' : 'text-emerald-600'}`}>{p.stock_disponible} uds</span>
+          </div>
         </div>
-        {p.categoria && <p className="text-[10px] text-gray-400 mb-1">{p.categoria}</p>}
-        <div className="flex items-center justify-between">
-          <span className="font-black text-purple-700">{fCOP(p.precio_venta)}</span>
-          <span className={`text-[10px] font-bold ${p.stock_disponible === 0 ? 'text-red-600' : p.is_low_stock ? 'text-amber-600' : 'text-emerald-600'}`}>{p.stock_disponible} uds</span>
-        </div>
-      </div>
+      </button>
+      <label className={`absolute right-4 top-44 inline-flex items-center ${puedeEditar ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
+        <input type="checkbox" className="peer sr-only" checked={p.publicado_web || false} disabled={!puedeEditar} onChange={onAlternar}
+          aria-label={`${p.publicado_web ? 'Ocultar' : 'Publicar'} ${p.nombre} en la tienda`} />
+        <div className="relative h-5 w-9 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:border after:bg-white after:transition-all after:content-[''] peer-checked:bg-purple-600 peer-checked:after:translate-x-full peer-focus-visible:ring-2 peer-focus-visible:ring-purple-700 peer-focus-visible:ring-offset-2"></div>
+      </label>
     </div>
   );
 }
@@ -722,7 +727,7 @@ export default function EcommercePage() {
   const alCambiarBarra = useCallback((accion: AccionTabla) => {
     if (accion.tipo === 'modo') {
       const modo = String(accion.valor);
-      despacharPedidos(accionModo(estadoPedidos, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEDIDO : OPCIONES_ESTADOS_PEDIDOS_WEB));
+      despacharPedidos(accionModo(estadoPedidos, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_PEDIDO : OPCIONES_ESTADOS_PEDIDOS_WEB, COLUMNAS_PEDIDO));
     } else despacharPedidos(accion);
   }, [estadoPedidos, despacharPedidos]);
   // «N resultados» es el de la tabla; en Kanban cada columna trae su total (la barra no lo repite).
@@ -761,21 +766,22 @@ export default function EcommercePage() {
   // dé el total real; sin offset ni orden responde como la tienda pública, con un total que no es exacto. El filtro de
   // categoría va al servidor con el mismo retardo de la búsqueda (no recarga con cada tecla) y vuelve a la página 1.
   const [estadoCatalogo, despacharCatalogo, listoCatalogo] = useEstadoTabla(ID_CATALOGO, INICIAL_CATALOGO);
-  const [categoriaTexto, setCategoriaTexto] = useState('');
-  const [categoria, setCategoria] = useState('');
-  const categoriaAplicada = useRef('');
+  // B4 T24 f4 (F39): la categoría es un filtro del estado único (estado.filtros.categoria): vuelve con la sesión junto con la página.
+  const categoria = estadoCatalogo.filtros?.categoria ?? '';
+  // La caja que se escribe: como la búsqueda de BarraTabla, el eco de lo que mandó no pisa lo que se sigue escribiendo y lo que viene de
+  // afuera (volver a la pantalla, «Limpiar») la reemplaza (sincronizarBusqueda).
+  const [cajaCategoria, setCajaCategoria] = useState<LocalBusqueda>(() => ({ texto: categoria, visto: categoria, enviado: null }));
+  if (categoria !== cajaCategoria.visto) setCajaCategoria(sincronizarBusqueda(cajaCategoria, categoria));
   // El retardo es el de la búsqueda de BarraTabla (crearBusquedaConRetardo, RETARDO_BUSQUEDA_MS), creado al primer uso y cancelado al
-  // desmontar. La categoría no entra en useEstadoTabla (su reductor no admite un filtro extra): se anota para T24.
+  // desmontar.
   const busquedaCategoria = useRef<ReturnType<typeof crearBusquedaConRetardo> | null>(null);
   const alEscribirCategoria = (texto: string) => {
-    setCategoriaTexto(texto);
+    setCajaCategoria((c) => ({ ...c, texto }));
     busquedaCategoria.current ??= crearBusquedaConRetardo({
       alBuscar: (buscado) => {
         const nueva = buscado.trim();
-        if (nueva === categoriaAplicada.current) return;
-        categoriaAplicada.current = nueva;
-        setCategoria(nueva);
-        despacharCatalogo({ tipo: 'pagina', valor: 1 });
+        setCajaCategoria((c) => ({ ...c, enviado: nueva }));
+        despacharCatalogo({ tipo: 'filtro', clave: 'categoria', valor: nueva });
       },
     });
     busquedaCategoria.current.escribir(texto);
@@ -1071,7 +1077,7 @@ export default function EcommercePage() {
                 placeholder="Buscar producto, SKU…"
                 ajustes={vistaCatalogo === 'tabla' ? { columnas: COLUMNAS_CATALOGO, preferencias: prefsCatalogo, anchoRef: anchoCatalogoRef } : undefined}
                 filtros={(
-                  <input value={categoriaTexto} onChange={(e) => alEscribirCategoria(e.target.value)} maxLength={80} aria-label="Filtrar por categoría" placeholder="Filtrar categoría…"
+                  <input value={cajaCategoria.texto} onChange={(e) => alEscribirCategoria(e.target.value)} maxLength={80} aria-label="Filtrar por categoría" placeholder="Filtrar categoría…"
                     className={`w-40 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 placeholder:font-normal ${FOCO_VISIBLE}`} />
                 )}
                 color="purple"
@@ -1139,6 +1145,7 @@ export default function EcommercePage() {
               ) : null}
               {fuenteGuardable(lecturaPagos) ? (
               <div className="space-y-4">
+                <p className="text-xs text-slate-500">{AYUDA_SECRETOS_PAGOS}</p>
                 {[{key:'stripe',label:'Stripe',sub:'Tarjetas de crédito, Apple Pay, Google Pay',fields:[{k:'publishable_key',l:'Publishable Key',ph:'pk_live_...'},{k:'secret_key',l:'Secret Key',ph:'sk_live_...',pw:true},{k:'webhook_secret',l:'Webhook Secret',ph:'whsec_...',pw:true}]},{key:'mercadopago',label:'MercadoPago',sub:'Efecty, PSE, tarjetas locales Colombia',fields:[{k:'public_key',l:'Public Key',ph:'APP_USR-...'},{k:'access_token',l:'Access Token',ph:'APP_USR-...',pw:true}]}].map(gw => (
                   <div key={gw.key} className={`border rounded-2xl p-5 ${payConfig[gw.key]?.enabled?'border-emerald-200 bg-emerald-50/30':'border-gray-200'}`}>
                     <div className="flex items-center justify-between mb-3">

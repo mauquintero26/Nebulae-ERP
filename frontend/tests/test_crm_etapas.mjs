@@ -313,6 +313,8 @@ console.log('--- TEST 12 (T21 r1): columna del tablero, Lista con Perdido, estad
   assert.equal(vistaDelTablero({ ...base, etapasListas: false, errorEtapas: new Error('x'), cargando: true }), 'esqueleto', 'reintentando');
   assert.equal(vistaDelTablero({ ...base, hayColumnas: false }), 'sin-etapas');
   assert.equal(vistaDelTablero({ ...base, leadsListos: false, errorLeads: new Error('x') }), 'error-leads', 'fallaron los activos');
+  // B4 T24 f4 (F101): reintentando los activos que fallaron, el tablero (sus columnas cargan), no la caja de error.
+  assert.equal(vistaDelTablero({ ...base, leadsListos: false, errorLeads: new Error('x'), cargando: true }), 'tablero', 'reintentando los activos');
   assert.equal(vistaDelTablero({ ...base, leadsListos: false, cargando: true }), 'tablero', 'las columnas cargan solas');
   assert.equal(vistaDelTablero({ ...base, errorLeads: new Error('x') }), 'tablero', 'una recarga que falla no tapa lo que ya está');
 
@@ -540,7 +542,8 @@ console.log('--- TEST 16 (B4 T24, FINAL-m37 y F96): la sonda de cableado del CRM
   assert.match(c, /<ErrorCarga texto=\{textoDeError\(errorEtapas, 'No se pudieron cargar las etapas del CRM'\)\} onReintentar=\{ofreceReintentar\(errorEtapas\) \? \(\) => loadAll\(\) : undefined\}\/>/);
   assert.match(c, /<ErrorCarga texto=\{textoDeError\(errorLeads, 'No se pudieron cargar los leads'\)\} onReintentar=\{ofreceReintentar\(errorLeads\) \? \(\) => loadAll\(\) : undefined\}\/>/);
   // r1 (m1, m5, m43): sin permiso, el encabezado no dice «Cargando leads…» (loadAll no corre): sin subtítulo.
-  assert.match(c, /subtitle=\{acceso\.listo && !acceso\.leads \? undefined\s*: leadsListos \? `\$\{leads\.length\} leads · \$\{formatoPesos\(totalValue\)\} en pipeline`\s*: errorLeads \? 'No se pudieron cargar los leads' : 'Cargando leads…'\}/);
+  // B4 T24 f4 (FINAL-m18; D27): el subtítulo con los leads ABIERTOS (subtituloCrm, la definición del Análisis) y el total del servidor.
+  assert.match(c, /subtitle=\{acceso\.listo && !acceso\.leads \? undefined\s*: leadsListos \? subtituloCrm\(leads, totalLeads\)\s*: errorLeads \? 'No se pudieron cargar los leads' : 'Cargando leads…'\}/);
   // r1 (m9 a): con el rol vacío (la hidratación), el esqueleto del tablero, no la pantalla en blanco.
   assert.match(c, /\{!acceso\.listo && \(\s*<div className="flex-1 min-h-0 overflow-hidden p-5">\s*<EsqueletoTablero\/>\s*<\/div>\s*\)\}/);
   // r1 (m6, m31): los dos «Reintentar» del aviso del tablero, solo si el error lo permite (un 403, no).
@@ -564,6 +567,112 @@ console.log('--- TEST 16 (B4 T24, FINAL-m37 y F96): la sonda de cableado del CRM
     assert.ok(!f.includes('rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600'), `${ruta}: sin la copia de la caja`);
     assert.match(f, /import \{[^}]*\bCAJA_SIN_PERMISO\b[^}]*\} from '@\/lib\/design-system';/, `${ruta}: importa el token`);
   }
+  // B4 T24 f4 (m30 de f1 r1): también la portada de Marketing y el Asistente; y ninguna copia de la caja queda en src (solo el token).
+  for (const [ruta, margen] of Object.entries({ 'app/dashboard/marketing/page.tsx': '', 'app/dashboard/asistente_omnicanal/page.tsx': 'm-4 ' })) {
+    const f = leerSrc(ruta);
+    assert.ok(f.includes(`<p role="status" className={\`${margen}\${CAJA_SIN_PERMISO}\`}>`), `${ruta}: la caja con el token`);
+    assert.match(f, /import \{[^}]*\bCAJA_SIN_PERMISO\b[^}]*\} from '@\/lib\/design-system';/, `${ruta}: importa el token`);
+  }
+  const { readdirSync, statSync } = await import('node:fs');
+  const { join, relative } = await import('node:path');
+  const raiz = new URL('../src/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  const copias = [];
+  const recorrer = (dir) => {
+    for (const nombre of readdirSync(dir)) {
+      const ruta = join(dir, nombre);
+      if (statSync(ruta).isDirectory()) recorrer(ruta);
+      else if (/\.(tsx?|jsx?)$/.test(nombre) && readFileSync(ruta, 'utf8').includes('rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center text-sm font-semibold text-slate-600')) {
+        copias.push(relative(raiz, ruta).replace(/\\/g, '/'));
+      }
+    }
+  };
+  recorrer(decodeURIComponent(raiz));
+  assert.deepEqual(copias, ['lib/design-system.ts'], 'la caja neutra vive solo en el token');
+}
+
+console.log('--- TEST 17 (B4 T24 f4: FINAL-m18, F99, F100, F97 y F98): el subtítulo, la versión, «Limpiar», la insignia y la caché de etapas ---');
+{
+  const lib = await import('../src/lib/crm-etapas.js');
+  const { readFileSync } = await import('node:fs');
+  const fuente = readFileSync(new URL('../src/app/dashboard/crm/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const c = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+  // FINAL-m18: «N leads abiertos · $X en pipeline», sin Ganados (INVOICED) ni Perdidos (CANCELLED): la definición del Análisis.
+  const leads = [
+    { status: 'DRAFT', value: 100000 }, { status: 'QUOTATION', value: 250000 }, { status: 'INVOICED', value: 900000 },
+    { status: 'CANCELLED', value: 50000 }, { status: 'PENDING', value: null },
+  ];
+  assert.equal(lib.subtituloCrm(leads, 5), '3 leads abiertos · $350.000 en pipeline');
+  assert.equal(lib.subtituloCrm([{ status: 'DRAFT', value: 5 }], 1), '1 lead abierto · $5 en pipeline');
+  assert.equal(lib.subtituloCrm([], 0), '0 leads abiertos · $0 en pipeline', 'cero de verdad (ya cargó)');
+  // GET /crm/leads corta en 500: si el total del servidor pasa de lo que llegó, se dice.
+  assert.equal(lib.subtituloCrm(leads, 1234), '3 leads abiertos · $350.000 en pipeline (de los primeros 5 de 1.234 leads)');
+  assert.equal(lib.subtituloCrm(leads, null), '3 leads abiertos · $350.000 en pipeline', 'sin total, sin la nota');
+  const crm = readFileSync(new URL('../../backend/app/api/v1/crm.py', import.meta.url), 'utf8');
+  assert.ok(crm.includes('STATUS_LEAD_CERRADOS = (STATUS_LEAD_GANADO, STATUS_LEAD_PERDIDO)'), 'la regla del Análisis (solo lectura)');
+  assert.ok(crm.includes('return {"status": "success", "data": leads, "total": total}'), 'GET /crm/leads manda total');
+  assert.match(c, /setTotalLeads\(normalizarRespuesta\(activos\.value\)\.total\);/);
+  assert.ok(!/const totalValue = /.test(c), 'sin la suma de todos (Ganados incluidos)');
+
+  // F99: la versión de los leads sube SÍNCRONA en aplicarLead y quitarLead (el ref, sin el efecto pasivo que la copiaba tarde).
+  assert.ok(!/useEffect\(\(\) => \{ versionLeads\.current = versionDeLeads; \}/.test(c), 'sin la copia en un efecto pasivo');
+  assert.ok(!/setVersionDeLeads/.test(c), 'sin el estado de la versión');
+  const aplicar = c.slice(c.indexOf('const aplicarLead = useCallback('), c.indexOf('const quitarLead = useCallback('));
+  assert.match(aplicar, /if \(!lead \|\| typeof lead !== 'object'\) return;\s*versionLeads\.current \+= 1;/);
+  const quitar = c.slice(c.indexOf('const quitarLead = useCallback('), c.indexOf('const quitarLead = useCallback(') + 300);
+  assert.match(quitar, /\(id\) => \{\s*versionLeads\.current \+= 1;/);
+  // F99: «Reintentar» de Perdido: lo que llega se decide con llegadaDePerdidos (comparte el turno con loadAll).
+  assert.equal(lib.llegadaDePerdidos({ turno: 3, ultimoTurno: 3, version: 5, versionActual: 5 }), 'aplicar');
+  assert.equal(lib.llegadaDePerdidos({ turno: 2, ultimoTurno: 3, version: 5, versionActual: 5 }), 'descartar', 'salió otra loadAll después: ella aplica');
+  assert.equal(lib.llegadaDePerdidos({ turno: 3, ultimoTurno: 3, version: 5, versionActual: 6 }), 'repedir',
+    'cambió un lead mientras iba: se vuelve a pedir (no se limpia el error con datos viejos)');
+  assert.equal(lib.llegadaDePerdidos({ turno: 2, ultimoTurno: 3, version: 5, versionActual: 6 }), 'descartar');
+  const perdidos = c.slice(c.indexOf('const cargarPerdidos = useCallback('), c.indexOf('const cargarPerdidos = useCallback(') + 900);
+  assert.match(perdidos, /const turno = turnoCarga\.current;/);
+  assert.match(perdidos, /const que = llegadaDePerdidos\(\{ turno, ultimoTurno: turnoCarga\.current, version, versionActual: versionLeads\.current \}\);/);
+  assert.match(perdidos, /if \(que === 'descartar'\) return;\s*if \(que === 'repedir'\) continue;\s*setPerdidos\(\{ items: p\.filas, total: p\.total \}\);\s*setErrorPerdidos\(null\);/);
+  assert.match(perdidos, /\} catch \(e\) \{\s*if \(turno === turnoCarga\.current\) setErrorPerdidos\(e\);/);
+
+  // F100 (revalidado tras F39 de f1): la etapa vive en estado.filtros, así que «Limpiar» vuelve a la página 1 aunque sea el único filtro.
+  const { reducirEstadoTabla, ESTADO_TABLA_INICIAL } = await import('../src/lib/tabla.js');
+  const conEtapa = reducirEstadoTabla(reducirEstadoTabla(ESTADO_TABLA_INICIAL, { tipo: 'filtro', clave: 'etapa', valor: '4' }), { tipo: 'pagina', valor: 3 });
+  assert.equal(conEtapa.pagina, 3);
+  const limpio = reducirEstadoTabla(conEtapa, { tipo: 'limpiarFiltros' });
+  assert.deepEqual([limpio.pagina, limpio.filtros, limpio.q], [1, {}, ''], 'solo la etapa: «Limpiar» vuelve a la página 1');
+  assert.match(c, /const filterStage = estado\.filtros\?\.etapa \|\| 'all';/);
+  assert.match(c, /const limpiarFiltros = \(\) => \{\s*despachar\(\{ tipo: 'limpiarFiltros' \}\);\s*\};/);
+
+  // F97: la insignia de tipo de la tarjeta en -700 (texto de 10 px, ≥ 4,5:1) sobre el fondo -50 de la etapa (con su alfa 'cc').
+  const lum = (hex) => {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const sobreBlanco = (hex, alfa) => `#${[1, 3, 5].map((i) => Math.round(parseInt(hex.slice(i, i + 2), 16) * alfa + 255 * (1 - alfa)).toString(16).padStart(2, '0')).join('')}`;
+  const contraste = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+  assert.equal(Object.keys(lib.TEXTO_HEX).length, Object.keys(lib.COLOR_HEX).length, 'un -700 por cada color de etapa');
+  for (const clase of Object.keys(lib.COLOR_HEX)) {
+    const fondo = sobreBlanco(lib.BG_HEX[clase.replace('-500', '-50')], 0xcc / 255);
+    const texto = lib.textoDeEtapa(clase);
+    assert.ok(contraste(texto, fondo) >= 4.5, `${clase}: ${texto} sobre ${fondo} da ${contraste(texto, fondo).toFixed(2)}:1`);
+    assert.ok(contraste(lib.COLOR_HEX[clase], fondo) < contraste(texto, fondo), `${clase}: el -700 contrasta más que el -500`);
+  }
+  assert.equal(lib.textoDeEtapa('bg-red-500'), '#b91c1c', 'Perdido: red-700');
+  assert.equal(lib.textoDeEtapa('nope'), '#334155', 'sin color conocido: slate-700');
+  assert.equal(lib.textoDeEtapa(undefined), '#334155');
+  assert.match(c, /const stageColor = textoDeEtapa\(stage\?\.color\);/);
+
+  // F98: si /crm/pipeline-stages falla, las etapas de la caché aunque haya vencido (con el aviso «No se pudo actualizar el CRM»).
+  const ahora = 1_000_000_000;
+  const raw = (ts) => JSON.stringify({ data: [{ id: 1, name: 'Nuevo' }], ts });
+  assert.deepEqual(lib.etapasDeLaCache(raw(ahora - 1000), ahora), [{ id: 1, name: 'Nuevo' }], 'fresca');
+  assert.equal(lib.etapasDeLaCache(raw(ahora - 6 * 60 * 1000), ahora), null, 'vencida (5 minutos)');
+  assert.deepEqual(lib.etapasDeLaCache(raw(ahora - 6 * 60 * 1000), ahora, { ignorarTTL: true }), [{ id: 1, name: 'Nuevo' }], 'vencida, si la carga falló');
+  assert.equal(lib.etapasDeLaCache(null, ahora, { ignorarTTL: true }), null, 'sin caché');
+  assert.equal(lib.etapasDeLaCache('{roto', ahora, { ignorarTTL: true }), null, 'rota');
+  assert.equal(lib.etapasDeLaCache(JSON.stringify({ data: 'x', ts: ahora }), ahora), null, 'sin una lista');
+  const carga = c.slice(c.indexOf('const loadAll = useCallback('), c.indexOf('const cargarPerdidos = useCallback('));
+  assert.match(carga, /\} else \{\s*setErrorEtapas\(etapas\.reason\);\s*const viejas = cached \? null : getCachedStages\(true\);\s*if \(viejas\) \{\s*setStages\(viejas\);\s*setConfigStages\(viejas\);\s*setEtapasListas\(true\);\s*\}\s*\}/);
+  assert.match(c, /return etapasDeLaCache\(localStorage\.getItem\(STAGES_CACHE_KEY\), Date\.now\(\), \{ ignorarTTL \}\);/);
 }
 
 console.log('OK test_crm_etapas');

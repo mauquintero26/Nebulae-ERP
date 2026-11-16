@@ -634,6 +634,27 @@ export function tarjetasPedidosCompra(datos) {
 }
 
 /**
+ * B4 T24 f4 (F60): los datos de las tarjetas del Hub y de Pedidos de compra para que cuadren con las pestañas cuando hay una búsqueda.
+ * /compras/stats es de TODOS los PEC (sin la búsqueda); el `resumen` (con_resumen) y los `conteos` (con_conteos) de la MISMA llamada de
+ * GET /compras/pedidos sí la llevan: activos, en_transito, en_bodega, vencidos, recibidos, cumplimiento_pct y el monto (capital_cop)
+ * salen del resumen, y «N vigentes» de conteos.vigentes. Lo del período (flujo: «Comprado (30 días)») sigue saliendo de /stats. Sin el
+ * resumen o sin /stats, null (las tarjetas cargan o dicen «—»: nunca las cifras de otra consulta).
+ * @param {any} stats  `data` de /compras/stats
+ * @param {any} resumen  el resumen de la lista
+ * @param {any} conteos  los conteos de la lista
+ * @returns {any | null}  con la forma de /compras/stats (lo que leen tarjetasHubCompras y tarjetasPedidosCompra)
+ */
+export function datosTarjetasCompras(stats, resumen, conteos) {
+  if (!datosDe(stats) || !datosDe(resumen)) return null;
+  const vigentes = conteos && typeof conteos === 'object' ? numeroFinito(conteos.vigentes) : null;
+  return {
+    ...stats,
+    activos: resumen.activos, en_transito: resumen.en_transito, en_bodega: resumen.en_bodega, vencidos: resumen.vencidos,
+    recibidos: resumen.recibidos, cumplimiento_pct: resumen.cumplimiento_pct, monto_cop: resumen.capital_cop, vigentes,
+  };
+}
+
+/**
  * B4 T16A (KPI-compras punto 7): lo que pintan las 4 tarjetas de Mercancía en tránsito. Los números son de GET
  * /compras/stats?periodo=30d (todos los PEC) y el avance es de la página que se ve (RP95; lo arma avancePromedioTransito
  * de transito.js, que esta librería no importa para no cerrar un ciclo):
@@ -812,6 +833,13 @@ export function resumenAlmacenes(filas) {
 const datosDe = (d) => (d !== null && typeof d === 'object' && !Array.isArray(d) ? d : null);
 
 /**
+ * B4 T24 f3 (FINAL-m15): la ayuda de «Disponibles para vender», con la regla de R10 que aplica el servidor (core/existencias.py): el
+ * disponible se calcula por bodega (físico menos comprometido, nunca negativo) y luego se suma; una reserva en una bodega sin
+ * existencias no descuenta.
+ */
+export const AYUDA_DISPONIBLE = 'Por bodega: físico menos comprometido, nunca negativo; luego se suma.';
+
+/**
  * B4 T18 (KPI-inventario punto 5): lo que pintan las 4 tarjetas de Stock con `data` de GET /inventory/stats (T13), todo el
  * inventario sin las referencias de rastrear_inventario = false: fisico (unidades_fisicas), reservado (unidades_reservadas),
  * disponible (unidades_disponibles) y en_transito (unidades_en_transito, una vez por SKU). Cada número pasa por numeroFinito
@@ -826,7 +854,7 @@ export function tarjetasStock(datos) {
   return {
     fisico: { valor: numeroFinito(d.unidades_fisicas), ayuda: 'Lo que hay físicamente en las bodegas.' },
     reservado: { valor: numeroFinito(d.unidades_reservadas), ayuda: 'Reservas activas que no han vencido.' },
-    disponible: { valor: numeroFinito(d.unidades_disponibles), ayuda: 'Físico menos comprometido, nunca negativo.' },
+    disponible: { valor: numeroFinito(d.unidades_disponibles), ayuda: AYUDA_DISPONIBLE },
     en_transito: { valor: numeroFinito(d.unidades_en_transito), ayuda: 'Pedido al proveedor y aún sin recibir.' },
   };
 }
@@ -1035,11 +1063,24 @@ export function datosDeRespuesta(respuesta) {
  */
 export function lecturaDeFuente(llego, vuelta) {
   const { datos, cargando } = lecturaDeCarga(llego, vuelta);
-  return { datos, cargando, error: cargando ? null : (llego?.error ?? null), marca: llego?.marca ?? null };
+  // B4 T24 f4 (F7): la marca es la de los DATOS que se ven; sin datos, ninguna (el rótulo es el del período elegido).
+  return { datos, cargando, error: cargando ? null : (llego?.error ?? null), marca: datos !== null ? (llego?.marca ?? null) : null };
 }
 
-/** B4 T24 r1 (m11): los secretos de cada pasarela que GET /ecommerce/pagos/config no devuelve (manda `<campo>_masked`). */
-export const SECRETOS_PAGOS = Object.freeze({ stripe: Object.freeze(['secret_key']), mercadopago: Object.freeze(['access_token']) });
+/**
+ * B4 T24 r1 (m11): los secretos de cada pasarela que GET /ecommerce/pagos/config no devuelve (manda `<campo>_masked`). B4 T24 f4
+ * (m6 del backend r2): el webhook_secret de Stripe también (el GET manda webhook_secret_masked).
+ */
+export const SECRETOS_PAGOS = Object.freeze({
+  stripe: Object.freeze(['secret_key', 'webhook_secret']), mercadopago: Object.freeze(['access_token']),
+});
+
+/**
+ * B4 T24 f4 (m6 del backend r2; m4 y m11 de r3): la ayuda de la pestaña Pagos. El PATCH no cambia un secreto vacío, en blanco o igual a
+ * su máscara: se reemplaza escribiendo otro valor, y desactivar el proveedor no lo borra.
+ */
+export const AYUDA_SECRETOS_PAGOS = 'Los secretos guardados no se muestran. Dejar el campo vacío no cambia el secreto: para cambiarlo, '
+  + 'escribe el nuevo. Desactivar el proveedor tampoco lo borra.';
 
 /**
  * B4 T24 r1 (m11): el cuerpo de PATCH /ecommerce/pagos/config a partir del formulario. update_payment_config MEZCLA cada pasarela sobre
@@ -1249,13 +1290,31 @@ export function tarjetasCampana(campana, leads) {
   };
 }
 
+/**
+ * B4 T24 f4 (F111): la barra «Progreso del Presupuesto» de una campaña, con la MISMA cifra de la tarjeta (ventas_atribuidas) y el
+ * estado de la lectura de sus leads. Mientras carga: «—» y gris. Con error o sin dato (null): «— / $presupuesto» y gris, nunca «$0»
+ * ni un ancho 0 como si fuera un dato. Actualizando conserva lo último. El ancho va de 0 a 100 (sin presupuesto, 0).
+ * @param {EstadoKpi} estado  el de lecturaLeadsCampana
+ * @param {unknown} ventas
+ * @param {unknown} presupuesto
+ * @returns {{texto: string, ancho: number, gris: boolean}}
+ */
+export function barraPresupuesto(estado, ventas, presupuesto) {
+  if (estado === 'cargando') return { texto: '—', ancho: 0, gris: true };
+  const p = numeroFinito(presupuesto) ?? 0;
+  const v = estado === 'error' ? null : numeroFinito(ventas);
+  if (v === null) return { texto: `— / ${formatoPesos(p)}`, ancho: 0, gris: true };
+  const ancho = p > 0 ? Math.min(100, Math.max(0, v / p * 100)) : 0;
+  return { texto: `${formatoPesos(v)} / ${formatoPesos(p)}`, ancho, gris: false };
+}
+
 const SIN_PERMISO_MONTOS = 'Sin permiso para ver montos';
 
 /**
  * Lo que pintan las 4 tarjetas de la ficha de un cliente en la Agenda, con lo que da resumenFichaCliente (lib/kpis-ventas.js, de
  * GET /crm/customers/{id}/profile-360; null mientras el perfil llega):
  *  - pven_saldo_por_cobrar: tono 'alerta' si hay saldo, 'bien' con «Al día con pagos» si es 0;
- *  - cli_total_comprado: con «N pedidos» (los que cuentan en el total, sin cancelados);
+ *  - cli_total_comprado: con «N pedidos» (los que cuentan en el total: sin cancelados ni devueltos del todo, m8);
  *  - cli_total_pagado: con «Pagos confirmados, menos devoluciones» (así lo suma el servidor);
  *  - cli_cot_abiertas (RP70): fuera de CONFIRMADA y RECHAZADA, con «N solicitudes activas».
  * Sin permiso (resumen_financiero null: BODEGA y COMPRAS), los tres montos son null con la ayuda «Sin permiso para ver montos»; los
@@ -1329,8 +1388,8 @@ export function fichaRevenueAsistente(revenue) {
     total: { etiqueta: etiquetaSinPeriodo('cli_total_comprado'), texto: formatoValorKpi(r.total_spent_cop, 'pesos') },
     mini: [
       { etiqueta: etiquetaSinPeriodo('pven_total'), texto: formatoValorKpi(r.total_orders_count, 'numero'), ayuda: null },
-      // chat.py cuenta como «en curso» todo lo que no es ENTREGADO, COMPLETADO ni cancelado, FACTURADO incluido.
-      { etiqueta: etiquetaSinPeriodo('pven_en_curso'), texto: formatoValorKpi(r.active_orders_count, 'numero'), ayuda: 'Incluye los facturados' },
+      // B4 T24 f4 (B49-f): chat.py da active_orders_count = rv.f_pven_en_curso (B49-b), la regla del catálogo: sin ayuda.
+      { etiqueta: etiquetaSinPeriodo('pven_en_curso'), texto: formatoValorKpi(r.active_orders_count, 'numero'), ayuda: null },
       { etiqueta: etiquetaSinPeriodo('ticket_promedio'), texto: formatoValorKpi(r.avg_ticket_cop, 'pesos'), ayuda: null },
     ],
   };
@@ -1351,7 +1410,8 @@ export function fichaRevenueAsistente(revenue) {
  */
 export function lecturaLeadsCampana(cargados, clave, marcaElegida, pide) {
   const lectura = lecturaDeFuente(cargados, clave);
-  const delaCampana = lectura.marca === marcaElegida;
+  // B4 T24 f4 (F7): de qué campaña es lo que llegó (también un error, que no trae datos) sale de su marca cruda.
+  const delaCampana = (cargados?.marca ?? null) === marcaElegida;
   const leads = delaCampana ? lectura.datos : null;
   const cargando = pide && (lectura.cargando || !delaCampana);
   const error = delaCampana ? lectura.error : null;
@@ -1452,4 +1512,17 @@ export function textoProveedoresCortados(total, llegaron) {
   const t = numeroFinito(total);
   if (t === null || llegaron <= 0 || t <= llegaron) return null;
   return `Se muestran los primeros ${formatoEntero(llegaron)} de ${formatoEntero(t)} (por nombre)`;
+}
+
+/**
+ * B4 T24 f4 (FINAL-m20): qué pinta una lista de la Agenda (proveedores o clientes) según su carga. Un error no se vuelve un vacío falso:
+ * sin filas es 'error' (solo el aviso, también mientras se reintenta: el aviso dice «Reintentando…»); con filas de antes es 'lista' (el
+ * aviso va encima). Sin error: 'cargando' mientras pide, 'vacio' si no llegó ninguna y 'lista' si llegaron.
+ * @param {{cargando: boolean, error: unknown, cantidad: number}} carga
+ * @returns {'cargando' | 'error' | 'vacio' | 'lista'}
+ */
+export function vistaListaAgenda({ cargando, error, cantidad }) {
+  if (error) return cantidad > 0 ? 'lista' : 'error';
+  if (cargando) return 'cargando';
+  return cantidad > 0 ? 'lista' : 'vacio';
 }

@@ -1,7 +1,7 @@
 'use client';
 import { X } from 'lucide-react';
 import { useCierreVentana } from './useCierreVentana';
-import { FOCO, FOCO_DENTRO, RESERVA_BOTON_IA } from '@/lib/design-system';
+import { FOCO, FOCO_DENTRO, RESERVA_BOTON_IA, RESERVA_BOTON_IA_PIE } from '@/lib/design-system';
 
 /** Panel lateral deslizante (detalle de un registro de una tabla). Mismo
  * ancho/blur/z-index en todo el proyecto; header y footer son slots libres
@@ -46,7 +46,11 @@ export function Drawer({
           {children}
         </div>
         {footer && (
-          <div className="p-6 border-t border-slate-200 bg-slate-50 flex items-center justify-between gap-3">
+          // B4 T24 f3 r1 (m43): el pie reserva a la derecha el área del botón de la IA (RESERVA_BOTON_IA_PIE): su botón de la derecha
+          // queda entero a la vista.
+          // B4 T24 f4 (m4 = m6 de f3 r3): solo en un pie de DOS o más: cada uno que no es el primero lleva ml-auto. Un pie de uno no se mueve;
+          // en uno de tres que cabe en una fila, el del centro queda entre los otros (no pegado al primero); lo que baja solo, a la derecha.
+          <div className={`p-6 ${RESERVA_BOTON_IA_PIE} border-t border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-3 [&>:not(:first-child)]:ml-auto`}>
             {footer}
           </div>
         )}

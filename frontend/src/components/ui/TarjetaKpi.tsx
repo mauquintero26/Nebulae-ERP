@@ -249,17 +249,22 @@ export function TarjetaKpi({
  * traen el suyo. `nota`: una línea con el ícono Info debajo.
  */
 export function FranjaKpis({
-  children, estado = 'listo', nota, titulo = 'Indicadores',
+  children, estado = 'listo', nota, titulo = 'Indicadores', idFoco,
 }: {
   children: React.ReactNode;
   estado?: EstadoKpi;
   nota?: React.ReactNode;
   titulo?: string;
+  /** B4 T24 f4 (m2 + m10 de f3 r3, aditivo): el id del destino del foco de AvisoDeError (su destinoFoco). */
+  idFoco?: string;
 }) {
   // Children.toArray deja fuera null, undefined y los booleanos de {cond && <TarjetaKpi …/>}.
   const n = Children.toArray(children).length;
   return (
-    <section aria-label={titulo} aria-busy={estado === 'cargando'} className="@container">
+    // B4 T24 f3 r3 (C del ruling): la franja es el destino VISIBLE del foco tras un reintento bueno: se puede enfocar por programa
+    // (tabindex=-1, fuera del orden de Tab). B4 T24 f4: AvisoDeError la busca por su id (idFoco), y m5 = m7 de f3 r3: con el token de
+    // foco neutro (FOCOS.slate, solo con focus-visible), no el contorno por defecto del navegador.
+    <section id={idFoco} aria-label={titulo} aria-busy={estado === 'cargando'} className={`@container rounded-2xl ${FOCOS.slate}`} tabIndex={-1}>
       <EstadoFranja.Provider value={estado}>
         <div className={`grid gap-3 ${clasesFranja(n)}`}>{children}</div>
       </EstadoFranja.Provider>

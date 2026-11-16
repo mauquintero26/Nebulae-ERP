@@ -480,6 +480,48 @@ function filtrosDeTabla(v) {
   }
   return filtros;
 }
+
+/**
+ * B4 T24 f4 (F39, aditivo): los filtros de una pantalla, leídos del estado único (estado.filtros guarda textos) con la forma de su
+ * `base` (SIN_FILTROS de la pantalla): cada clave de la base toma lo guardado con el tipo de la base — texto; booleano ('1' es true);
+ * número, o null en la base (el id del SKU del Kardex): un número que se lee — y si no hay nada que sirva, el valor de la base. Lo que
+ * no es de la base no entra.
+ * @template {Record<string, unknown>} B
+ * @param {Record<string, string> | null | undefined} guardados
+ * @param {B} base
+ * @returns {B}
+ */
+export function filtrosDePantalla(guardados, base) {
+  const g = guardados && typeof guardados === 'object' ? guardados : {};
+  /** @type {Record<string, unknown>} */
+  const salida = {};
+  for (const [clave, porDefecto] of Object.entries(base)) {
+    const texto = typeof g[clave] === 'string' ? g[clave] : null;
+    if (texto === null) salida[clave] = porDefecto;
+    else if (typeof porDefecto === 'boolean') salida[clave] = texto === '1' ? true : porDefecto;
+    else if (porDefecto === null || typeof porDefecto === 'number') {
+      const n = Number(texto);
+      salida[clave] = texto.trim() !== '' && Number.isFinite(n) ? n : porDefecto;
+    } else salida[clave] = texto;
+  }
+  return /** @type {B} */ (salida);
+}
+
+/**
+ * B4 T24 f4 (F39, aditivo): las acciones del reductor para un cambio de los filtros de una pantalla: un {tipo: 'filtro', clave, valor}
+ * por clave, con el valor como texto (true → '1'; un número, su texto; false, null y '' → '', que quita el filtro). El reductor los
+ * mezcla con los vigentes (cambiar uno no borra los otros) y vuelve a la página 1.
+ * @param {Record<string, unknown> | null | undefined} cambio
+ * @returns {Array<{tipo: 'filtro', clave: string, valor: string}>}
+ */
+export function accionesDeFiltros(cambio) {
+  if (!cambio || typeof cambio !== 'object') return [];
+  return Object.entries(cambio).map(([clave, v]) => ({
+    tipo: /** @type {'filtro'} */ ('filtro'),
+    clave,
+    valor: v === true ? '1' : typeof v === 'number' && Number.isFinite(v) ? String(v) : typeof v === 'string' ? v : '',
+  }));
+}
 const CAMPOS = Object.keys(NORMALIZAR);
 
 /**
@@ -695,7 +737,8 @@ const textoLimpio = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() 
  * `bodega` y `categoria` son los NOMBRES de lo elegido (null si no hay filtro). T18 r1 (m20): la comparten Stock y
  * Abastecimiento (pestañas 'agotado' y 'abastecido' además de las del Hub); con `sinBodega` (esas pantallas no filtran por
  * bodega) la ayuda habla solo de la categoría.
- * @param {{q?: string | null, vista?: string | null, bodega?: string | null, categoria?: string | null, sinBodega?: boolean} | null | undefined} filtro
+ * B4 T24 f3 (F85): `true` en bodega o categoria es una elegida cuyo nombre no se conoce («la bodega elegida»).
+ * @param {{q?: string | null, vista?: string | null, bodega?: string | true | null, categoria?: string | true | null, sinBodega?: boolean} | null | undefined} filtro
  * @returns {{titulo: string, ayuda: string | null}}
  */
 export function textoVacioExistencias(filtro) {
@@ -703,7 +746,11 @@ export function textoVacioExistencias(filtro) {
   const q = textoLimpio(f.q);
   const bodega = textoLimpio(f.bodega);
   const categoria = textoLimpio(f.categoria);
-  const donde = [bodega && `en la bodega «${bodega}»`, categoria && `en la categoría «${categoria}»`].filter(Boolean).join(' y ');
+  // B4 T24 f3 (F85, aditivo): `true` es una elegida cuyo nombre no se conoce (el catálogo no llegó): «la bodega elegida», nunca el id crudo.
+  const donde = [
+    f.bodega === true ? 'en la bodega elegida' : bodega && `en la bodega «${bodega}»`,
+    f.categoria === true ? 'en la categoría elegida' : categoria && `en la categoría «${categoria}»`,
+  ].filter(Boolean).join(' y ');
   const conDonde = donde ? ` ${donde}` : '';
   const quita = donde ? (f.sinBodega === true ? 'Quita el filtro de categoría para ver las demás.' : 'Quita el filtro de bodega o de categoría para ver las demás.') : null;
   if (q) return { titulo: `Ninguna existencia coincide con «${q}»${conDonde}.`, ayuda: 'Busca por el código del SKU o por el nombre del producto.' };

@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import { Sparkles, X, Send, Bot, Minimize2, Maximize2, Paperclip } from 'lucide-react';
 // B2.1 D4: el servidor configurado (API_URL y su WebSocket), el de pruebas en pruebas; nunca una URL escrita a mano.
 import { getToken, API_URL, urlWebSocket } from '@/lib/api';
-import { FOCO } from '@/lib/design-system';
+import { FOCO, FOCOS } from '@/lib/design-system';
 
 
 export function GlobalAIChat() {
@@ -144,10 +144,19 @@ export function GlobalAIChat() {
           </div>
         </div>
         <div className="flex items-center gap-1 text-slate-400">
-          <button onClick={() => setIsExpanded(!isExpanded)} className="p-1.5 hover:bg-slate-700 rounded-lg transition-colors">
+          {/* B4 T24 f4 (duda 6 de f2 r1): nombre accesible y el anillo blanco del encabezado oscuro. */}
+          <button
+            onClick={() => setIsExpanded(!isExpanded)}
+            aria-label={isExpanded ? 'Reducir el Copilot' : 'Ampliar el Copilot'}
+            className={`p-1.5 hover:bg-slate-700 rounded-lg transition-colors ${FOCOS.blanco}`}
+          >
             {isExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
           </button>
-          <button onClick={() => setIsOpen(false)} className="p-1.5 hover:bg-slate-700 hover:text-red-400 rounded-lg transition-colors">
+          <button
+            onClick={() => setIsOpen(false)}
+            aria-label="Cerrar el Copilot"
+            className={`p-1.5 hover:bg-slate-700 hover:text-red-400 rounded-lg transition-colors ${FOCOS.blanco}`}
+          >
             <X size={20} />
           </button>
         </div>

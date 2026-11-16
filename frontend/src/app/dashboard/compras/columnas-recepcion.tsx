@@ -14,7 +14,7 @@ import type { ReactNode } from 'react';
 import type { ColumnaTabla } from '@/components/tabla';
 import { fechaCorta } from '@/lib/fechas-colombia';
 import {
-  numeroRecepcion, pecDeRecepcion, proveedorDeRecepcion, esRecepcionPorConfirmar, esEntradaManual, infoEstadoRecepcion,
+  numeroRecepcion, pecDeRecepcion, proveedorDeRecepcion, esRecepcionPorConfirmar, esEntradaManual, infoEstadoRecepcion, textoDiasRetraso,
 } from '@/lib/estados-compras';
 import { numeroFinito } from '@/lib/kpis';
 import { CHIP, titulosDeOrdenPec } from './columnas-pec';
@@ -99,7 +99,7 @@ export function columnasRecepcion<T extends FilaColumnasRecepcion>(celdaAcciones
     { id: 'estado', titulo: 'Estado', ancho: 124, clave: true, ordenable: 'estado', titleCelda: (r) => infoEstadoRecepcion(r.estado).label,
       celda: (r) => <CeldaEstadoRecepcion r={r} /> },
     { id: 'retraso', titulo: 'Retraso', ancho: 84, ocultaPorDefecto: true, ordenable: 'retraso',
-      titleCelda: (r) => (retrasoDeRecepcion(r) > 0 ? `${retrasoDeRecepcion(r)} días de retraso` : 'Sin retraso'),
+      titleCelda: (r) => (retrasoDeRecepcion(r) > 0 ? `${textoDiasRetraso(retrasoDeRecepcion(r))} de retraso` : 'Sin retraso'),
       celda: (r) => <CeldaRetraso r={r} /> },
     { id: 'stock', titulo: 'Stock', ancho: 76, alinear: 'centro', ocultaPorDefecto: true, celda: (r) => <CeldaStock r={r} /> },
     { id: 'acciones', titulo: 'Acciones', ancho: 156, clave: true, fija: 'derecha', celda: celdaAcciones },

@@ -1,6 +1,8 @@
 "use client";
 
 import { ShoppingCart, Search, Filter, Plus, FileText, CheckCircle2, Truck, Clock } from 'lucide-react';
+// B4 T24 f3 (F44-a): la reserva del botón de la IA (la esquina inferior derecha).
+import { RESERVA_BOTON_IA } from '@/lib/design-system';
 
 const PO_MOCK = [
   { id: 'PO-2026-0801', proveedor: 'Apple Inc.', items: 120, total: '$95,400', fechaEsperada: '2026-08-25', estado: 'En Tránsito' },
@@ -11,7 +13,7 @@ const PO_MOCK = [
 
 export default function OperacionesPage() {
   return (
-    <div className="p-8 h-full overflow-y-auto space-y-6 animate-in fade-in duration-500 custom-scrollbar bg-slate-50">
+    <div className={`p-8 ${RESERVA_BOTON_IA} h-full overflow-y-auto space-y-6 animate-in fade-in duration-500 custom-scrollbar bg-slate-50`}>
       
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">

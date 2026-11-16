@@ -17,10 +17,11 @@ import {
   BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
 } from '@/components/tabla';
 import type { AccionTabla } from '@/components/tabla';
+import { useResumen } from '@/components/ui/useResumen';
 import { INV_NAV } from '../inv-nav';
 import { AvisoReintentar, CONTENEDOR, FOCOS, useCatalogo } from '../piezas-inventario';
 import {
-  CeldaEstadoRecepcion, columnasRecepcion, esRecepcionPorConfirmar, numeroRecepcion, pecDeRecepcion, proveedorDeRecepcion,
+  CeldaEstadoRecepcion, columnasRecepcion, numeroRecepcion, pecDeRecepcion, proveedorDeRecepcion,
   retrasoDeRecepcion, textoFechaRecepcion, titulosDeOrdenRecepcion,
 } from '../../compras/columnas-recepcion';
 import type { FilaColumnasRecepcion } from '../../compras/columnas-recepcion';
@@ -30,11 +31,15 @@ import {
   accionModo, accionVistaEnLista, dependenciasTablero, estadoDelTotal, llegadaDeListado, normalizarRespuesta, ordenEsAtencion,
   textoOrdenHub,
 } from '@/lib/tabla';
-import { PERIODO_KPI, NOTA_RECEPCIONES, formatoDecimal, lecturaDeCarga, tarjetasRecepciones, totalRecepciones } from '@/lib/kpis';
+import { PERIODO_KPI, NOTA_RECEPCIONES, formatoDecimal, tarjetasRecepciones, totalRecepciones } from '@/lib/kpis';
 import {
-  COLUMNAS_RECEPCION, EXTRA_TABLERO_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, consultaColumnaRecepcion, opcionesEstadosRecepcion,
-  pestanasRecepcion, tarjetaRecepcion, textoDiasRetraso, textoVacioRecepciones, vistaDeTarjetaRecepcion,
+  COLUMNAS_RECEPCION, EXTRA_TABLERO_RECEPCION, OPCIONES_ESTADOS_TABLERO_RECEPCION, consultaColumnaRecepcion, datosConfirmacion,
+  opcionesEstadosRecepcion, pestanasRecepcion, tarjetaRecepcion, textoDiasRetraso, textoVacioRecepciones, vistaDeTarjetaRecepcion,
 } from '@/lib/estados-compras';
+// B4 T24 f3 (FINAL-C4-f, ruling 5): BODEGA (y ADMIN) cuenta y confirma en Compras; a los demás, «Abrir en Compras». r1 (C1 y la
+// heredada): con la MISMA regla de Compras › Recepciones (confirmarRecepcion): sin bodega receptora o heredada, «Abrir en Compras».
+import { confirmarRecepcion } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 
 /** Una línea de la recepción (productos de _gr_dict: JSON; los nombres son los de la recepción de Compras). */
 type LineaRecepcion = { product_name?: string | null; sku_id?: number | null; qty_esperada?: number | null; qty?: number | null; qty_recibida?: number | null };
@@ -89,6 +94,8 @@ const unidades = (n: number | null | undefined) => formatoDecimal(n ?? 0);
    ================================================================ */
 export default function InventarioRecepcionesPage() {
   const router = useRouter();
+  const rol = useRolActual();
+  const confirmacion = useCallback((r: FilaRecepcion) => confirmarRecepcion({ ...datosConfirmacion(r), rol }), [rol]);
   // ── bloque 1: la carga del servidor (TABLA-inventario punto 9; R5, C3, C4; D39, D40) ──
   // El estado ÚNICO de la pantalla: las pestañas, la búsqueda, el filtro de estados, las tarjetas, la tabla y el tablero despachan a
   // él. El modo (Lista o Kanban) se guarda en vista:inventario.recepciones.
@@ -129,17 +136,11 @@ export default function InventarioRecepcionesPage() {
   // Las tarjetas (KPI-inventario punto 7; R7, R12): GET /compras/stats?periodo=30d, el MISMO endpoint de Compras › Recepciones (los
   // mismos números), sin respaldo local. Mientras no llega, 'cargando' (nunca 0); si falla, «—» y «Reintentar».
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    apiFetch(`/compras/stats?periodo=${PERIODO_KPI}`, { signal: control.signal })
-      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  // I3 (r1): una recarga conserva el último valor (actualizando); solo la primera carga va en cargando.
-  const { datos: datosStats, cargando: cargandoStats } = lecturaDeCarga(stats, vueltaStats);
-  const errorStats = cargandoStats ? null : (stats?.error ?? null);
+  // B4 T24 f3 (F45): el cargador compartido de los resúmenes (useResumen: aborta la anterior, descarta las viejas, va atado al usuario,
+  // conserva lo último al recargar y con error no deja datos viejos: «—»).
+  const stats = useResumen(`/compras/stats?periodo=${PERIODO_KPI}`, vueltaStats);
+  // I3 (r1): una recarga conserva el último valor (actualizando; useResumen, estadoResumen); solo la primera carga va en cargando.
+  const { datos: datosStats, cargando: cargandoStats, error: errorStats } = stats;
   const estadoKpis = useEstadoKpi(cargandoStats, errorStats);
   const tarjetas = tarjetasRecepciones(datosStats);
   const totalRec = totalRecepciones(datosStats);
@@ -163,6 +164,8 @@ export default function InventarioRecepcionesPage() {
   // m18 (regresión): el enlace al PEC de origen que tenía la pantalla (compras/pedidos?id= lo atiende).
   const abrirPec = useCallback((r: FilaRecepcion) => router.push(`/dashboard/compras/pedidos?id=${r.pec_id}`), [router]);
   const accionesFila = useMemo(() => ({ abrir, abrirEnCompras, abrirPec }), [abrir, abrirEnCompras, abrirPec]);
+  // La tarjeta del tablero: «Contar y confirmar» solo si esa recepción se puede confirmar (sin eso, la tarjeta queda en «Abrir»).
+  const tarjetaDeRecepcion = useCallback((r: FilaRecepcion) => tarjetaRecepcion(r, { contar: confirmacion(r).confirmar, motivo: confirmacion(r).texto }), [confirmacion]);
 
   // ── bloque 2: la tabla (TABLA-inventario punto 9; R5, R26, D40, D41) ──
   const prefs = usePreferenciasTabla(ID_RECEPCIONES, COLUMNAS_TABLA_RECEPCIONES);
@@ -177,7 +180,7 @@ export default function InventarioRecepcionesPage() {
   const alCambiarBarra = useCallback((accion: AccionTabla) => {
     if (accion.tipo === 'modo') {
       const modo = String(accion.valor);
-      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_RECEPCION : opcionesEstadosRecepcion));
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_RECEPCION : opcionesEstadosRecepcion, COLUMNAS_RECEPCION));
     } else despachar(accion);
   }, [estado, despachar]);
   // R8: ordenada por una columna, el chip «Orden: … · Más recientes» vuelve al orden del servidor.
@@ -236,7 +239,7 @@ export default function InventarioRecepcionesPage() {
         {/* B4 T19 (KPI-inventario punto 7; R7, R12): las 4 tarjetas del MISMO /compras/stats de Compras › Recepciones y las bodegas:
             mientras cargan, barras grises (nunca 0); con error, «—» y «Reintentar». Por confirmar, Confirmadas y el total abren su
             pestaña; Bodegas es informativa. */}
-        <FranjaKpis estado={estadoKpis} titulo="Entradas" nota={NOTA_RECEPCIONES}>
+        <FranjaKpis estado={estadoKpis} titulo="Entradas" idFoco="franja-entradas" nota={NOTA_RECEPCIONES}>
           <TarjetaKpi kpi="rec_por_confirmar" valor={tarjetas?.por_confirmar.valor ?? null}
             activo={vistaActiva === vistaDeTarjetaRecepcion('rec_por_confirmar')} onClick={() => elegirVista('rec_por_confirmar')} />
           <TarjetaKpi kpi="rec_confirmadas" valor={tarjetas?.confirmadas.valor ?? null}
@@ -245,9 +248,8 @@ export default function InventarioRecepcionesPage() {
           <TarjetaKpi kpi="rec_total" valor={totalRec}
             activo={vistaActiva === vistaDeTarjetaRecepcion('rec_total')} onClick={() => elegirVista('rec_total')} />
         </FranjaKpis>
-        {errorStats != null && (
-          <AvisoReintentar error={errorStats} fallo="No se pudieron cargar los indicadores de recepciones" onReintentar={() => setVueltaStats((n) => n + 1)} />
-        )}
+        {/* r3 (C2, m36): montado siempre, con reintentando y el destino del foco (la franja). */}
+        <AvisoReintentar error={errorStats} fallo="No se pudieron cargar los indicadores de recepciones" onReintentar={stats.recargar} reintentando={cargandoStats} destinoFoco="franja-entradas" />
         {errorBodegas != null && (
           <AvisoReintentar error={errorBodegas} fallo="No se pudieron cargar las bodegas" onReintentar={recargarBodegas} />
         )}
@@ -312,7 +314,7 @@ export default function InventarioRecepcionesPage() {
             <TableroKanban
               tablero={tablero}
               soloLectura={TEXTO_SOLO_VER}
-              tarjetaDe={tarjetaRecepcion}
+              tarjetaDe={tarjetaDeRecepcion}
               onAbrir={abrir}
               color="orange"
               vacio="Sin recepciones aquí"
@@ -337,8 +339,11 @@ export default function InventarioRecepcionesPage() {
               <Button variant="secondary" onClick={() => setSelectedItem(null)}>Cerrar</Button>
               <Link href={`/dashboard/compras/recepciones/${selectedItem.id}`}
                 className={`inline-flex items-center gap-2 rounded-xl border border-orange-200 bg-white px-4 py-2.5 text-sm font-bold text-orange-800 hover:bg-orange-50 ${FOCOS.indigo}`}>
-                <ClipboardList size={14} aria-hidden="true" /> {esRecepcionPorConfirmar(selectedItem) ? 'Contar y confirmar en Compras' : 'Abrir en Compras'}
+                <ClipboardList size={14} aria-hidden="true" /> {confirmacion(selectedItem).confirmar ? 'Contar y confirmar en Compras' : 'Abrir en Compras'}
               </Link>
+              {confirmacion(selectedItem).texto && (
+                <p role="status" className="max-w-xs text-xs font-semibold text-slate-600">{confirmacion(selectedItem).texto}</p>
+              )}
             </>
           )}
         >

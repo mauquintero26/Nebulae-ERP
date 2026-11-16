@@ -1,6 +1,8 @@
 "use client";
 
 import { Calendar as CalendarIcon, Truck, MapPin, Search, Filter, AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight } from 'lucide-react';
+// B4 T24 f3 (F44-a): la reserva del botón de la IA (la esquina inferior derecha).
+import { RESERVA_BOTON_IA } from '@/lib/design-system';
 
 const LOGISTICS_EVENTS = [
   { id: 'L-1', date: 'Hoy, 09:00 AM', status: 'Llegan Hoy', title: 'Entrega PO-2026-0802', supplier: 'Textiles S.A.', items: 500, color: 'bg-amber-100 text-amber-800 border-amber-300', icon: <Truck size={18} /> },
@@ -11,7 +13,7 @@ const LOGISTICS_EVENTS = [
 
 export default function LogisticsCalendarPage() {
   return (
-    <div className="p-8 h-full overflow-y-auto space-y-6 animate-in fade-in duration-500 custom-scrollbar bg-slate-50">
+    <div className={`p-8 ${RESERVA_BOTON_IA} h-full overflow-y-auto space-y-6 animate-in fade-in duration-500 custom-scrollbar bg-slate-50`}>
       
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">

@@ -2,9 +2,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Archive } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-// B4 T18: las piezas que comparten Stock, Abastecimiento, Kardex y Productos (el tipo de una existencia y sus celdas, el
-// detalle, y los selectores de un catálogo con su error y «Reintentar»). El Hub de Inventario (T17) trae las suyas dentro de
-// su page.tsx (una página de Next no puede exportar más que su componente); aquí no se tocan.
+// B4 T18 (y T18 r1, m10 y m21; B4 T24 f3, F89): la fuente ÚNICA de las piezas de las cinco pantallas de existencias (el Hub, Stock,
+// Abastecimiento, Kardex y Productos): el tipo de una existencia y sus celdas, el detalle, el contenedor y los selectores de un
+// catálogo con su error y «Reintentar». El Hub importa de aquí (ya no trae copias propias).
 import { Modal } from '@/components/ui';
 import { apiFetch } from '@/lib/api';
 import { FOCOS, RESERVA_BOTON_IA, TABLE, type AcentoFoco } from '@/lib/design-system';
@@ -12,7 +12,7 @@ import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import { formatoPesos } from '@/lib/pesos';
 import { tiene } from '@/lib/estados-pedido';
 import { formatoDecimal, numeroFinito } from '@/lib/kpis';
-import { ESTADOS_STOCK, existenciaReservada } from '@/lib/estados-compras';
+import { CARGA_CATALOGO_VACIA, ESTADOS_STOCK, existenciaReservada, falloCatalogo, lecturaCatalogo, llegadaCatalogo } from '@/lib/estados-compras';
 import { ofreceReintentar, textoDeError } from '@/lib/avisos';
 // El chip estándar de las tablas del bloque (columnas-pec.tsx, T15 r1): la misma forma que el estado de un PEC.
 import { CHIP } from '../compras/columnas-pec';
@@ -46,7 +46,7 @@ export type ConteosStock = Partial<Record<'todos' | 'agotados' | 'bajo_minimo' |
 /** Una bodega de GET /inventory/warehouses o una categoría de GET /categories. */
 export type OpcionCatalogo = { id: number; name: string; parent_id?: number | null };
 /** Un catálogo: filas null mientras carga; si falla, el error (y lo último que llegó bien, si había). */
-export type Catalogo = { filas: OpcionCatalogo[] | null; error: unknown };
+export type Catalogo = { filas: OpcionCatalogo[] | null; error: unknown; cargando?: boolean /* r1 (F81, aditivo): una vuelta en camino */ };
 
 /** El contenedor de los Hubs y de las listas del bloque (T7 a T17): RESERVA_BOTON_IA (pb-24, F44-a) deja libre la esquina del botón de la IA. */
 export const CONTENEDOR = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;
@@ -110,7 +110,7 @@ export function CeldaEstadoExistencia({ f }: { f: FilaExistencia }) {
  * SOLO esa fuente), en lugar de dejar solo «—» en las tarjetas. B4 T24 (F46): delega en la pieza común (AvisoDeError → AvisoFuente),
  * así que con un 403 dice el permiso sin «Reintentar».
  */
-export function AvisoReintentar(props: { error: unknown; fallo: string; onReintentar: () => void; acento?: AcentoFoco }) {
+export function AvisoReintentar(props: React.ComponentProps<typeof AvisoDeError>) { // r2 (m36): el mismo contrato (reintentando, destinoFoco: f4)
   return <AvisoDeError {...props} />;
 }
 
@@ -165,19 +165,18 @@ export function DetalleExistencia({ f, onCerrar, color = 'indigo' }: { f: FilaEx
  */
 export function useCatalogo(ruta: string): { catalogo: Catalogo; recargar: () => void } {
   const [vuelta, setVuelta] = useState(0);
-  const [catalogo, setCatalogo] = useState<Catalogo>({ filas: null, error: null });
+  const [carga, setCatalogo] = useState<{ vuelta: number; filas: OpcionCatalogo[] | null; error: unknown }>(CARGA_CATALOGO_VACIA); // r2 (F81)
   useEffect(() => {
     const control = new AbortController();
     apiFetch(ruta, { signal: control.signal })
       .then((r: { data?: unknown } | OpcionCatalogo[] | null) => {
-        const filas = Array.isArray(r) ? r : Array.isArray(r?.data) ? (r.data as OpcionCatalogo[]) : [];
-        setCatalogo({ filas, error: null });
+        setCatalogo((c) => llegadaCatalogo(c, r, vuelta));
       })
-      .catch((err: unknown) => { if (!control.signal.aborted) setCatalogo((c) => ({ filas: c.filas, error: err })); });
+      .catch((err: unknown) => { if (!control.signal.aborted) setCatalogo((c) => falloCatalogo(c, err, vuelta)); });
     return () => control.abort();
   }, [ruta, vuelta]);
   const recargar = useCallback(() => setVuelta((n) => n + 1), []);
-  return { catalogo, recargar };
+  return { catalogo: lecturaCatalogo(carga, vuelta), recargar };
 }
 
 /**
@@ -193,7 +192,7 @@ export function SelectorCatalogo({ etiqueta, todas, cargando, fallo, catalogo, v
       <span role="alert" className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800">
         {textoDeError(catalogo.error, fallo)}
         {/* B4 T24 (FINAL-C5): un 403 no ofrece «Reintentar» (ofreceReintentar de lib/avisos.js). */}
-        {ofreceReintentar(catalogo.error) && <button type="button" onClick={onReintentar} className={`rounded font-bold underline ${FOCOS[acento]}`}>Reintentar</button>}
+        {ofreceReintentar(catalogo.error) && <button type="button" onClick={catalogo.cargando ? undefined : onReintentar} aria-disabled={catalogo.cargando || undefined} className={`rounded font-bold underline ${FOCOS[acento]}`}>{catalogo.cargando ? 'Reintentando…' : 'Reintentar'}</button>}
       </span>
     );
   }

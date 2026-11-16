@@ -35,16 +35,19 @@ const tsLib = createRequire(import.meta.url)('typescript');
  * recargas…). Así la prueba mira lo que HACE, no cómo está escrita.
  */
 function cancelarConMotivoDe(fuente) {
-  const inicio = fuente.indexOf('async function cancelarConMotivo(');
-  assert.ok(inicio >= 0, 'la página tiene cancelarConMotivo');
-  const abre = fuente.indexOf('{', fuente.indexOf(')', inicio));
-  let nivel = 0;
-  let fin = -1;
-  for (let j = abre; j < fuente.length; j += 1) {
-    if (fuente[j] === '{') nivel += 1;
-    else if (fuente[j] === '}') { nivel -= 1; if (nivel === 0) { fin = j; break; } }
-  }
-  assert.ok(fin > abre, 'cancelarConMotivo cierra');
+  // B4 T24 f3 r1 (F59 d): la función sale del árbol de TypeScript (createSourceFile), no de contar llaves: una llave dentro de una
+  // cadena o de un comentario ya no la corta.
+  const arbol = tsLib.createSourceFile('pagina.tsx', fuente, tsLib.ScriptTarget.Latest, true, tsLib.ScriptKind.TSX);
+  let nodo = null;
+  const buscar = (n) => {
+    if (nodo) return;
+    if (tsLib.isFunctionDeclaration(n) && n.name?.text === 'cancelarConMotivo') { nodo = n; return; }
+    tsLib.forEachChild(n, buscar);
+  };
+  buscar(arbol);
+  assert.ok(nodo, 'la página tiene cancelarConMotivo');
+  const inicio = nodo.getStart(arbol);
+  const fin = nodo.getEnd() - 1;
   const js = tsLib.transpileModule(`(${fuente.slice(inicio, fin + 1)})`, { compilerOptions: { target: tsLib.ScriptTarget.ES2020 } })
     .outputText.replace(/^"use strict";\s*/, '').trim().replace(/;$/, '');
   return (entorno) => new Function('entorno', `with (entorno) { return ${js}; }`)(entorno);
@@ -226,10 +229,21 @@ console.log('--- TEST 6: reglaSoltarPec (la forma de resultado de kanban.js) ---
   assert.deepEqual(regla('EMITIDO', 'en_transito'), {
     tipo: 'bloqueado', motivo: 'El tránsito se marca al iniciar el seguimiento del envío.', enlace: TRANSITO,
   });
+  // B4 T24 f3 (FINAL-m36, D27): el motivo depende de la etapa del PEC (desvío frente al brief de T2 en la parte de Recepciones, que
+  // amarraba BORRADOR al enlace de Recepciones: su selector no lista borradores). Solo lo que ya va en camino manda a Recepciones.
   for (const destino of ['en_bodega', 'recibido']) {
-    for (const origen of ['BORRADOR', 'EMITIDO', 'EN_TRANSITO']) {
-      assert.deepEqual(regla(origen, destino), { tipo: 'bloqueado', motivo: 'Lo marca la recepción en bodega.', enlace: RECEPCIONES },
-        `${origen} → ${destino}`);
+    assert.deepEqual(regla('EN_TRANSITO', destino), { tipo: 'bloqueado', motivo: 'Lo marca la recepción en bodega.', enlace: RECEPCIONES }, `EN_TRANSITO → ${destino}`);
+    assert.deepEqual(regla('PENDIENTE_ENTREGA', destino), { tipo: 'bloqueado', motivo: 'Lo marca la recepción en bodega.', enlace: RECEPCIONES });
+    assert.deepEqual(regla('BORRADOR', destino), { tipo: 'bloqueado', motivo: 'Primero emítelo: arrástralo a Emitido.' }, `BORRADOR → ${destino}`);
+    for (const e of ['EMITIDO', 'ENVIADO']) {
+      assert.deepEqual(regla(e, destino), { tipo: 'bloqueado', motivo: 'Primero sigue el envío en Mercancía en tránsito.', enlace: TRANSITO }, `${e} → ${destino}`);
+    }
+  }
+  assert.deepEqual(regla('BORRADOR', 'en_transito'), { tipo: 'bloqueado', motivo: 'Primero emítelo: arrástralo a Emitido.' }, 'BORRADOR → En tránsito');
+  for (const e of ['RECIBIDO', 'PARCIALMENTE_RECIBIDA', 'RECIBIDA', 'COMPLETADO']) {
+    for (const destino of ['en_transito', 'borrador']) {
+      if (columnaPec(e) === destino) continue;
+      assert.deepEqual(regla(e, destino), { tipo: 'bloqueado', motivo: 'Ya llegó a bodega: su estado lo lleva la recepción.' }, `${e} → ${destino}`);
     }
   }
   assert.deepEqual(regla('RECIBIDO', 'recibido'), { tipo: 'bloqueado', motivo: 'Lo marca la recepción en bodega.', enlace: RECEPCIONES });
@@ -253,7 +267,8 @@ console.log('--- TEST 6: reglaSoltarPec (la forma de resultado de kanban.js) ---
   for (const e of ['EN_TRANSITO', 'RECIBIDO', 'RECIBIDA']) {
     assert.deepEqual(regla(e, 'emitido'), { tipo: 'bloqueado', motivo: 'Solo un pedido en Borrador se puede marcar como Emitido.' }, e);
   }
-  for (const e of ['EMITIDO', 'EN_TRANSITO', 'RECIBIDA']) {
+  // B4 T24 f3 (FINAL-m36, D27): RECIBIDA ya llegó a bodega (su motivo, arriba); los emitidos y en tránsito no vuelven a Borrador.
+  for (const e of ['EMITIDO', 'EN_TRANSITO']) {
     assert.deepEqual(regla(e, 'borrador'), { tipo: 'bloqueado', motivo: 'Un pedido emitido no vuelve a Borrador.' }, e);
   }
   // un estado desconocido se trata como emitido: se puede cancelar, no emitir
@@ -743,7 +758,8 @@ console.log('--- TEST 23 (B4 T14): el Hub de Compras (compras/page.tsx) cablea l
   assert.match(hub, /useEstadoTabla\(ID_HUB, INICIAL_HUB\)/);
   assert.match(hub, /const ID_HUB = 'compras\.hub';/);
   assert.match(hub, /const INICIAL_HUB = \{ vista: 'todos', orden: 'atencion' \};/, 'R8: lo vencido primero');
-  assert.match(hub, /ruta: '\/compras\/pedidos', estado, conConteos: true, esperar: !listo, despachar, activo: !enAnalisis,/);
+  // B4 T24 f4 (F60; D27): con el resumen en la MISMA llamada (las tarjetas cuadran con las pestañas cuando hay una búsqueda).
+  assert.match(hub, /ruta: '\/compras\/pedidos', estado, conConteos: true, conResumen: true, esperar: !listo, despachar, activo: !enAnalisis,/);
   assert.match(hub, /const EXTRA_TABLERO = \{ limit: 0 \};/, 'en Kanban la lista va sin filas');
   assert.match(hub, /extra: enKanban \? EXTRA_TABLERO : extraDeLaLista/);
   assert.match(hub, /const extraDeLaLista = useMemo\(\(\) => \(\{ orden: estado\.orden \|\| 'atencion' \}\), \[estado\.orden\]\);/,
@@ -780,9 +796,10 @@ console.log('--- TEST 23 (B4 T14): el Hub de Compras (compras/page.tsx) cablea l
   assert.match(hub, /errorVentas=\{ventas\.error\}/);
   // Cierre T14 (re-revisión r1): el panel decide con el error, el catch lo guarda y un éxito lo limpia.
   assert.match(hub, /\{errorVentas \? \(/, 'el panel muestra el error cuando lo hay');
-  assert.match(hub, /\.catch\(\(err: unknown\) => \{ if \(vigente\) setVentas\(\(v\) => \(\{ filas: v\.filas, error: err \}\)\); \}\)/,
+  // B4 T24 f3 (F57, D27): con la vuelta de la carga ({vuelta, filas, error}); la protección (el catch guarda, el éxito limpia) sigue.
+  assert.match(hub, /\.catch\(\(err: unknown\) => \{ if \(vigente\) setVentas\(\(v\) => \(\{ vuelta: vueltaVentas, filas: v\.filas, error: err \}\)\); \}\)/,
     'el catch de /ventas/pedidos guarda el error');
-  assert.match(hub, /if \(vigente\) setVentas\(\{ filas: Array\.isArray\(r\)[^\n]*, error: null \}\); \}\)/,
+  assert.match(hub, /if \(vigente\) setVentas\(\{ vuelta: vueltaVentas, filas: Array\.isArray\(r\)[^\n]*, error: null \}\); \}\)/,
     'un éxito limpia el error');
   // T14 r1 (m11, m12, m13): foco de la barra masiva, nombres del panel, «Pago y logística» y el respaldo de F. compra.
   // B4 T24 (FINAL-m25, D27): el foco blanco común de design-system.ts (FOCOS.blanco: outline-white separado 2 px).
@@ -883,9 +900,13 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
   }
   assert.match(pag, /\{infoEstadoPedido\('PENDIENTE_COMPRA'\)\.label\}/);
   // T15 r1 (m9): guardar la información y eliminar desde el panel aplican recargarTrasError; ningún `catch {}` mudo.
-  assert.equal((pag.match(/onToast\(e,'error'\);\s*(?:\/\/[^\n]*\n\s*)?if \(recargarTrasError\(e\)\) \{ onUpdate\(\); loadFull\(\); \}/g) ?? []).length, 3,
-    'saveInfo, deletePec y changeEstado');
-  assert.ok(!/catch \{\s*\}|catch \{ setProdSearchResults\(\[\]\); \}/.test(pag), 'ningún error mudo');
+  // B4 T24 f3 (F64, D27): deletePec pasa a despuesDeEliminarPec (un 404 cierra el panel; la regla única, recarga): quedan saveInfo y changeEstado.
+  assert.equal((pag.match(/onToast\(e,'error'\);\s*(?:\/\/[^\n]*\n\s*)?if \(recargarTrasError\(e\)\) \{ onUpdate\(\); loadFull\(\); \}/g) ?? []).length, 2,
+    'saveInfo y changeEstado');
+  assert.match(pag, /const despues = despuesDeEliminarPec\(e\);\s*if \(despues === 'cerrar'\) \{ onUpdate\(\); onClose\(\); \}\s*else if \(despues === 'recargar'\) \{ onUpdate\(\); loadFull\(\); \}/,
+    'deletePec');
+  // B4 T24 f3 r1 (F59 b, D27): el catch vacío con o sin parámetro (`catch (e) {}` también).
+  assert.ok(!/catch\s*(?:\([^)]*\))?\s*\{\s*\}|catch\s*(?:\([^)]*\))?\s*\{ setProdSearchResults\(\[\]\); \}/.test(pag), 'ningún error mudo');
   assert.equal((pag.match(/avisarError\(err, 'No se pudo buscar el (?:casillero|proveedor|producto)'\)/g) ?? []).length, 4, 'las cuatro búsquedas');
   // El menú de fila (MenuFila) ofrece solo lo que acepta update_pec (R9, C15c): Emitir desde Borrador y cancelar con motivo.
   // B4 T24 (FINAL-m10, D27): además, solo con el rol que hace el PATCH y el DELETE (accesoPec.cambiarPec; r1, m35: la celda lo recibe por el contexto como cambiarPec).
@@ -895,7 +916,8 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
   assert.match(pag, /<MenuFila items=\{items\} etiqueta=\{`Acciones de \$\{p\.numero\}`\} \/>/);
   // El tablero (KANBAN-compras punto 6): las reglas de R9, la tarjeta con «Recepcionar» y D39.
   assert.match(pag, /regla=\{reglaSoltarPec\}/);
-  assert.match(pag, /tarjetaDe=\{tarjetaPedidoCompra\}/);
+  // B4 T24 f3 r1 (m20, D27): la tarjeta con {recepcionar} del rol (tarjetaDePec); lo fija el bloque de r1.
+  assert.match(pag, /tarjetaDe=\{tarjetaDePec\}/);
   assert.match(pag, /tablero\.recargar\(\[\.\.\.columnas\]\)/, 'D39: tras la acción, solo el origen y el destino');
   assert.match(pag, /catch \(err\) \{\s*if \(recargarTrasError\(err\)\) recargarTrasCambio\(\);\s*throw err;\s*\}/,
     'el tablero relanza el error del PATCH para deshacer y avisar');
@@ -915,7 +937,10 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
   assert.equal((pag.match(/await confirmar\(\{/g) ?? []).length >= 3, true, 'el panel, el menú de fila y el casillero');
   // Las tarjetas (KPI-compras punto 6; R12, RP92): las cuatro de /compras/stats, pulsables como sus vistas.
   for (const kpi of ['pec_activos', 'pec_en_transito', 'pec_vencidos', 'pec_monto']) assert.match(pag, new RegExp(`kpi="${kpi}"`));
-  assert.match(pag, /const tarjetas = tarjetasPedidosCompra\(stats\?\.datos \?\? null\);/);
+  // B4 T24 f3 (F45, D27): los datos de useResumen (stats.datos; null mientras carga la primera vez o con error).
+  // B4 T24 f4 (F60; D27): con el resumen y los conteos de la lista (datosTarjetasCompras), que llevan la búsqueda.
+  assert.match(pag, /const datosTarjetas = datosTarjetasCompras\(stats\.datos, listado\.resumen, conteos\);/);
+  assert.match(pag, /const tarjetas = tarjetasPedidosCompra\(datosTarjetas\);/);
   assert.match(pag, /kpi="pec_vencidos"[\s\S]{0,300}onClick=\{alternarVencidos\}/, 'RP92: la tarjeta de vencidos abre semaforo=vencidos');
   assert.match(pag, /accionVistaEnLista\(estado, siguiente, opcionesEstadosPec\)/);
   // La franja (FLUJO-compras punto 6; RP21, RP40, RP46, D42): «Estás aquí» en Pedido de compra, sin «No resueltos».
@@ -942,10 +967,14 @@ console.log('--- TEST 26 (B4 T15): Pedidos de compra (compras/pedidos/page.tsx) 
   assert.ok(!/textoDiasEtapa\(sd\.eta\)|sd\.alert\.nivel|bg-blue-50 border border-blue-200 rounded-lg/.test(pag), 'sin la segunda regla ni el aviso «ok» en azul');
   assert.match(pag, /\{sd\.tracking_number && <span>Guía: <strong[^>]*>\{sd\.tracking_number\}<\/strong><\/span>\}/, 'm13: la guía vigente');
   // T15 r1 (m4, m14): con el PEC cancelado el TrackingPanel es de solo lectura (seguimientoCerrado, la regla del detalle).
-  assert.match(pag, /const cerrado = seguimientoCerrado\(pec\.estado\);/);
+  // B4 T24 f3 r1 (F59 c, D27): la llamada, no la línea exacta.
+  assert.match(pag, /const cerrado = seguimientoCerrado\(\s*pec\.estado\s*\)/);
   assert.match(pag, /\{cerrado \? \([\s\S]{0,200}\{TEXTO_SEGUIMIENTO_CERRADO\}[\s\S]{0,120}\) : \([\s\S]{0,120}<PasosFlujo variante="barra" pasos=\{pasosDeTracking\(stages\)\}/);
   // B4 T24 r1 (m2, D27): y solo con el rol del PATCH /tracking (puedeEditar).
-  assert.match(pag, /const isEditing = !cerrado && puedeEditar && editStage === sd\.stage;/);
+  {
+    const editando = /const isEditing = ([^;\n]+);/.exec(pag)?.[1] ?? '';
+    for (const parte of [/!cerrado\b/, /\bpuedeEditar\b/, /editStage === sd\.stage/]) assert.match(editando, parte, `isEditing lleva ${parte}`);
+  }
   assert.match(pag, /\{!cerrado && puedeEditar && \(\s*<button onClick=\{\(\)=>openEdit\(sd\)\}/, 'sin editar las etapas de un cancelado');
   assert.ok(!/stageColor|diasTexto|Math\.ceil\(\(new Date/.test(pag), 'sin la barra a mano ni la cuenta de días con el reloj local');
   assert.match(pag, /fecha_entrega_estimada: infoForm\.fecha_entrega_estimada \|\| null/, '«Editar información» manda null en blanco, como el alta');
@@ -1148,8 +1177,9 @@ console.log('--- TEST 31 (B4 T16A): Tránsito (compras/transito/page.tsx) cablea
   for (const parte of [/ruta: '\/compras\/pedidos'/, /(?:^|[,{]\s*)estado\s*,/, /esperar: !listo/, /activo: enKanban/, /extra: EXTRA_TABLERO/]) {
     assert.match(completa, parte, `el tablero pide la vista completa con ${parte}`);
   }
-  assert.match(pag, /const TOPE_TABLERO = 200;/);
-  assert.match(pag, /const EXTRA_TABLERO = \{ orden: 'reciente', limit: TOPE_TABLERO, offset: 0 \};/, 'C4: hasta 200 pedidos, de la primera página');
+  // B4 T24 f3 (F72, D27): el tope es TOPE_TABLERO_COMPRAS (el del aviso), sin una constante local repetida.
+  assert.ok(!/const TOPE_TABLERO = 200;/.test(pag), 'sin la constante local');
+  assert.match(pag, /const EXTRA_TABLERO = \{ orden: 'reciente', limit: TOPE_TABLERO_COMPRAS, offset: 0 \};/, 'C4: hasta 200 pedidos, de la primera página');
   assert.match(pag, /apiFetch\('\/compras\/tracking-config', \{ signal: control\.signal \}\)/, 'GET /compras/tracking-config al cargar');
   assert.match(pag, /useResumenFlujo<DatosFlujo>\('\/compras\/flujo', recargaFlujo\)/);
   assert.match(pag, /`\/compras\/stats\?periodo=\$\{PERIODO_KPI\}`/);
@@ -1176,10 +1206,10 @@ console.log('--- TEST 31 (B4 T16A): Tránsito (compras/transito/page.tsx) cablea
   assert.match(pag, /const recargandoActiva = enKanban \? completa\.recargando : lista\.recargando;/);
   assert.match(pag, /soltarPendientes\(enCurso, \{ filas: filasActivas, recargando: recargandoActiva, modo \}\);\s*if \(sueltos !== enCurso\) setEnCurso\(sueltos\);/);
   assert.match(pag, /const modo = enKanban \? 'kanban' : 'lista';/);
-  // Y1, Y2 y Y3 (r3): la foto es de la lista activa y su modo, y se actualiza sin esperar un efecto pasivo (m5).
-  assert.match(pag, /const filasAhora = useRef<\{ filas: unknown; modo: string \}>\(\{ filas: filasActivas, modo \}\);/, 'Y3: una sola foto, la de la lista activa');
-  assert.match(pag, /useLayoutEffect\(\(\) => \{ filasAhora\.current = \{ filas: filasActivas, modo \}; \}, \[filasActivas, modo\]\);/, 'Y2 y m5: la foto se actualiza dentro del commit (useLayoutEffect), no en un efecto pasivo');
-  assert.match(pag, /const ahora = filasAhora\.current;\s*setEnCurso\(\(l\) => terminarPendiente\(l, id, ahora\.filas, ahora\.modo\)\);/, 'Y1: terminarCambio guarda la foto de la activa con terminarPendiente (transito.js)');
+  // Y1, Y2 y Y3 (r3). B4 T24 f3 r1 (F66, D27): la foto de la lista activa la toma soltarPendientes en el primer render que la ve; sobran
+  // el ref filasAhora y su useLayoutEffect.
+  assert.ok(!/filasAhora|useLayoutEffect\(/.test(pag.replace(/\/\/[^\n]*/g, '')), 'sin el ref de la foto ni su useLayoutEffect');
+  assert.match(pag, /const terminarCambio = useCallback\(\(id: number\) => setEnCurso\(\(l\) => terminarPendiente\(l, id\)\), \[\]\);/, 'Y1: terminarCambio deja la foto sin tomar (transito.js)');
   assert.ok(!/lista\.filas, completa\.filas|\{ lista: lista/.test(pag), 'Y3: sin la foto de las dos listas');
   assert.match(pag, /useEffect\(\(\) => \{ pendienteRef\.current = pendiente; \}, \[pendiente\]\);/, 'X3: el guardián de los segundos clics lee el pendiente de ahora');
   assert.match(pag, /const CLASE_ENTREGA: Record<string, string> = \{ vencido: 'text-rose-700', pronto: 'text-amber-700', normal: 'text-slate-500' \};/, 'X2: el ámbar de «pronto»');
@@ -1207,7 +1237,8 @@ console.log('--- TEST 31 (B4 T16A): Tránsito (compras/transito/page.tsx) cablea
   assert.ok(!/ALERTA DE RETRASO/.test(pag), 'el aviso rojo pasó a la franja');
   // Las tarjetas (KPI-compras punto 7): las de /compras/stats y el avance de la página (RP95); nunca 0 mientras cargan.
   for (const kpi of ['pec_activos', 'pec_vencidos', 'pec_avance', 'pec_monto_por_recibir']) assert.match(pag, new RegExp(`<TarjetaKpi kpi="${kpi}"`), kpi);
-  assert.match(pag, /tarjetasTransito\(stats\?\.datos \?\? null, avance\)/);
+  // B4 T24 f3 (F45, D27): los datos de useResumen (stats.datos; null mientras carga la primera vez o con error).
+  assert.match(pag, /tarjetasTransito\(stats\.datos, avance\)/);
   assert.match(pag, /avancePromedioTransito\(filasVisibles\)/, 'el avance es de las filas que se ven');
   assert.match(pag, /const estadoAvance = errorLista \? 'error' : filasVisibles === null \? 'cargando' : 'listo';/, 'm8: el avance tiene su propio estado, no hereda el de /compras/stats');
   // El tablero (KANBAN-logistica punto 2; R11, C4): modo cliente con las etapas de la configuración y la regla de soltar.
@@ -1226,7 +1257,8 @@ console.log('--- TEST 31 (B4 T16A): Tránsito (compras/transito/page.tsx) cablea
   assert.match(pag, /regla=\{reglaTablero\}/);
   assert.match(pag, /onCambio=\{cambiarDesdeTablero\}/);
   assert.match(pag, /avisoTope200\(completa\.total, 'pedidos'\)/, 'el aviso de los 200 sale de la frase única (solo si total > 200)');
-  assert.match(pag, /Reintentar/, 'si falla tracking-config, el tablero ofrece Reintentar');
+  // B4 T24 f3 r1 (F65, D27): el «Reintentar» del tracking-config atado a su onClick (antes pasaba con cualquier aparición).
+  assert.match(pag, /<button type="button" onClick=\{\(\) => setVueltaConfig\(\(n\) => n \+ 1\)\}[^>]*>Reintentar<\/button>/, 'si falla tracking-config, el tablero ofrece Reintentar');
   // Los diálogos nativos no existen (RP30) y el PATCH es el de /tracking.
   assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(pag.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')), 'sin diálogos nativos');
   assert.match(pag, /apiFetch\(`\/compras\/pedidos\/\$\{p\.id\}\/tracking`, \{\s*method: 'PATCH', body: JSON\.stringify\(\{ stage, status, user_name: autorActual\(\) \}\)/);
@@ -1299,10 +1331,12 @@ console.log('--- TEST 32 (B4 T16A): Recepciones (compras/recepciones/page.tsx) y
   assert.match(pag, /const INICIAL_RECEPCIONES = \{ vista: 'por_confirmar' \};/);
   assert.match(pag, /useEstadoTabla\(ID_RECEPCIONES, INICIAL_RECEPCIONES\)/);
   const llamada = /useListado<FilaRecepcion>\(\{([\s\S]*?)\}\);/.exec(pag)?.[1] ?? '';
-  for (const parte of [/ruta: '\/compras\/recepciones'/, /(?:^|[,{]\s*)estado\s*,/, /conConteos: true/, /esperar: !listo/, /\bdespachar\b/, /extra: enKanban \? EXTRA_TABLERO : null/]) {
+  for (const parte of [/ruta: '\/compras\/recepciones'/, /(?:^|[,{]\s*)estado\s*,/, /conConteos: true/, /esperar: !listo/, /\bdespachar\b/, /extra: enKanban \? EXTRA_TABLERO_RECEPCION : null/]) {
     assert.match(llamada, parte, `useListado lleva ${parte}`);
   }
-  assert.match(pag, /const EXTRA_TABLERO = \{ limit: 0 \};/, 'en Kanban la lista va sin filas (D39)');
+  // B4 T24 f3 r1 (F77, D27): el extra del tablero es el de la lib (EXTRA_TABLERO_RECEPCION, el mismo de Inventario).
+  assert.deepEqual({ ...ec.EXTRA_TABLERO_RECEPCION }, { limit: 0 }, 'en Kanban la lista va sin filas (D39)');
+  assert.ok(!/const EXTRA_TABLERO = /.test(pag), 'sin la copia local');
   assert.match(pag, /consultaColumnaRecepcion\(estado, columna, \{ orden, limit, offset \}\)/, 'la consulta de cada columna es la de la lib');
   const tablero = /useTableroKanban<FilaRecepcion>\(\{([\s\S]*?)\n {2}\}\);/.exec(pag)?.[1] ?? '';
   for (const parte of [/pantalla: ID_RECEPCIONES/, /modo: 'servidor'/, /columnas: COLUMNAS_RECEPCION/, /activo: listo && enKanban\b/, /porColumna: estado\.tamano/,
@@ -1316,15 +1350,17 @@ console.log('--- TEST 32 (B4 T16A): Recepciones (compras/recepciones/page.tsx) y
   const tab = /<TableroKanban([\s\S]*?)\/>/.exec(pag)?.[1] ?? '';
   assert.match(pag, /const TEXTO_SOLO_VER = 'Este tablero es para ver: las recepciones se confirman contando la mercancía\.';/);
   assert.match(tab, /soloLectura=\{TEXTO_SOLO_VER\}/);
-  assert.match(tab, /tarjetaDe=\{tarjetaRecepcion\}/);
+  // B4 T24 f3 (FINAL-C4-f, D27): la tarjeta sale de tarjetaRecepcion con `contar` del rol (tarjetaDeRecepcion; el bloque de C4-f la fija).
+  assert.match(tab, /tarjetaDe=\{tarjetaDeRecepcion\}/);
   assert.match(tab, /onAbrir=\{abrir\}/, 'el clic abre el Drawer, como la fila');
   assert.ok(!/regla=|onCambio=|onAccion=/.test(tab), 'sin regla: no se arrastra');
   // La tabla (R26, D41): estándar en el servidor; toda la fila abre el Drawer; las vistas reales de RP41 y D6.
   assert.match(pag, /<TablaEstandar\s+id=\{ID_RECEPCIONES\}\s+modo="servidor"/);
   assert.match(pag, /onFila=\{abrir\}/, 'toda la fila abre el Drawer');
-  for (const [id, etiqueta] of [['por_confirmar', 'Por confirmar'], ['confirmadas', 'Confirmadas'], ['canceladas', 'Canceladas'], ['todas', 'Todas']]) {
-    assert.match(pag, new RegExp(`\\{ id: '${id}', etiqueta: '${etiqueta}', conteo: conteos\\?\\.${id} \\?\\? null`), `pestaña ${etiqueta}`);
-  }
+  // B4 T24 f3 r1 (F77, D27): las pestañas son pestanasRecepcion de la lib (las de Inventario): se comprueban ahí, con conteos.
+  assert.deepEqual(ec.pestanasRecepcion({ por_confirmar: 2, confirmadas: 5, canceladas: 0, todas: 7 }).map((p) => [p.id, p.etiqueta, p.conteo]),
+    [['por_confirmar', 'Por confirmar', 2], ['confirmadas', 'Confirmadas', 5], ['canceladas', 'Canceladas', 0], ['todas', 'Todas', 7]], 'las pestañas');
+  assert.deepEqual(ec.pestanasRecepcion(null).map((p) => p.conteo), [null, null, null, null], 'mientras cargan, la barra gris (nunca 0)');
   const codigo = pag.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '');
   assert.ok(!/'Pendientes'|'Completadas'|Regla de Separación|Mesa de Recepci[oó]n Activa|r\.estado === 'PENDIENTE'|!r\.stock_actualizado|row\.stock_actualizado/.test(codigo),
     'sin las pestañas viejas, el estado que no existe ni la tarjeta/aviso de antes');
@@ -1337,15 +1373,17 @@ console.log('--- TEST 32 (B4 T16A): Recepciones (compras/recepciones/page.tsx) y
   assert.match(pag, /aria-label=\{`Abrir el conteo de \$\{numero\}`\}/);
   assert.match(pag, /aria-label=\{`Confirmar la recepción \$\{numero\}`\}/);
   assert.match(pag, /href=\{`\/dashboard\/compras\/recepciones\/\$\{r\.id\}`\}/, '«Abrir conteo» va a /compras/recepciones/[id]');
-  assert.match(pag, /oculto: !porConfirmar/, 'Confirmar solo en una recepción por confirmar (BORRADOR), no en logísticas ni canceladas');
+  // r2 (m1, D27): el ítem «Confirmar» del menú sale de itemConfirmarMenu (oculto si no está por confirmar; casos en test_roles).
+  assert.match(pag, /oculto: menu\.oculto,/, 'Confirmar solo en una recepción por confirmar (BORRADOR), no en logísticas ni canceladas');
   assert.match(pag, /avisarError\(err, `No se pudo confirmar \$\{numeroRecepcion\(r\)\}`\);\s*if \(recargarTrasError\(err\)\) recargarTodo\(\);/, 'un error se dice y, con la regla única, se recarga');
   // El Drawer conserva «Confirmar Entrada Física y Actualizar Stock» y suma «Abrir conteo».
   assert.match(pag, /Confirmar Entrada Física y Actualizar Stock/);
   assert.match(pag, /<ClipboardList size=\{14\} aria-hidden="true" \/> Abrir conteo/);
   // Las tarjetas (KPI-compras punto 8) y la nota; la franja (FLUJO-compras punto 9) sin semáforo.
   for (const kpi of ['rec_por_confirmar', 'rec_confirmadas', 'pec_en_transito']) assert.match(pag, new RegExp(`<TarjetaKpi kpi="${kpi}"`), kpi);
-  assert.match(pag, /<FranjaKpis estado=\{estadoKpis\} titulo="Recepciones" nota=\{NOTA_RECEPCIONES\}>/);
-  assert.match(pag, /tarjetasRecepciones\(stats\?\.datos \?\? null\)/);
+  assert.match(pag, /<FranjaKpis estado=\{estadoKpis\} titulo="Recepciones" idFoco="franja-recepciones-compras" nota=\{NOTA_RECEPCIONES\}>/); // f4 (D27: idFoco)
+  // B4 T24 f3 (F45, D27): los datos de useResumen (stats.datos; null mientras carga la primera vez o con error).
+  assert.match(pag, /tarjetasRecepciones\(stats\.datos\)/);
   assert.match(pag, /activo=\{vistaActiva === 'por_confirmar'\} onClick=\{\(\) => elegirVista\('por_confirmar'\)\}/);
   assert.match(pag, /activo=\{vistaActiva === 'confirmadas'\} onClick=\{\(\) => elegirVista\('confirmadas'\)\}/);
   assert.match(pag, /pasos=\{pasosPantallaCompras\(flujo\.datos, 'RECEPCION'\)\}/);
@@ -1377,7 +1415,9 @@ console.log('--- TEST 33-b (B4 T24 r1, m15): la recarga silenciosa del conteo de
   assert.match(cont, /if \(!silencioso\) setLoadError\(err\.message \|\| 'No se pudo cargar la recepción'\);\s*else avisarError\(err, 'No se pudo recargar la recepción'\);/);
   assert.match(cont, /if \(!silencioso\) setLoading\(false\);\s*\}, \[params\.id, avisarError\]\);/);
   // Guardar el conteo (lo primero que hace validar) también recarga en silencio: el spinner vaciaba las observaciones antes de validar.
-  assert.match(cont, /productos: items\.map\(i => \(\{ grl_id: i\.grl_id, qty_recibida: Number\(i\.qty_recibida\) \|\| 0 \}\)\),\s*\}\),\s*\}\);\s*await loadRecepcion\(\{ silencioso: true \}\);/);
+  // B4 T24 f3 (FINAL-C4-f, D27): el guardado es el PATCH por línea (o el lote, en una heredada); la recarga silenciosa va después de los dos.
+  // B4 T24 f3 r1 (m22, D27): la serie del PATCH por línea vive en la lib (guardarConteoEnSerie, ejecutada en el bloque de r1).
+  assert.match(cont, /const serie = await guardarConteoEnSerie\(peticiones,[\s\S]*?\n\s*await loadRecepcion\(\{ silencioso: true \}\);\s*return true;/);
 }
 
 console.log('--- TEST 33 (B4 T16A, TABLA-compras punto 12; RP30): el conteo de una recepción (recepciones/[id]/page.tsx) en modo simple y sin diálogos nativos ---');
@@ -1386,7 +1426,8 @@ console.log('--- TEST 33 (B4 T16A, TABLA-compras punto 12; RP30): el conteo de u
   const codigo = cont.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '');
   // Los 3 diálogos nativos de B1 a B3 (bodega, guardar el conteo y validar) pasaron a useAvisos con el mismo texto.
   assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(codigo), 'sin diálogos nativos');
-  assert.match(cont, /const \{ avisarError \} = useAvisos\(\);/);
+  // B4 T24 f3 (FINAL-C4-f, D27): también `avisar`, para el aviso de la lib (una cantidad que no es un entero ≥ 0) antes de mandar.
+  assert.match(cont, /const \{ avisar, avisarError \} = useAvisos\(\);/);
   for (const texto of ['Error al asignar la bodega', 'Error al guardar el conteo', 'Error al validar la recepción']) {
     assert.match(cont, new RegExp(`avisarError\\(err, '${texto}'\\)`), texto);
   }
@@ -1406,7 +1447,8 @@ console.log('--- TEST 33 (B4 T16A, TABLA-compras punto 12; RP30): el conteo de u
   assert.match(cont, /const isEditable = data\?\.estado === 'BORRADOR';/, 'solo un BORRADOR se cuenta');
   assert.match(cont, /if \(!isEditable\) return;\s*setItems\(prev => prev\.map\(\(it, i\) => \(i === idx \? \{ \.\.\.it, qty_recibida: val \} : it\)\)\);/, 'el conteo sigue editable solo en BORRADOR');
   assert.equal((cont.match(/disabled=\{!control\?\.editable\}/g) ?? []).length, 2, 'los dos campos (cantidad y observaciones) se apagan cuando no es editable');
-  assert.match(cont, /onChange=\{\(e\) => control\?\.actualizar\(l\.idx, parseInt\(e\.target\.value\) \|\| 0\)\}/, 'y escribe en la línea de esa fila');
+  // B4 T24 f3 (FINAL-C4-f, D27): la cantidad se lee con la lib, sin truncar (antes parseInt); la lib la valida antes de mandar.
+  assert.match(cont, /onChange=\{\(e\) => control\?\.actualizar\(l\.idx, leerCantidadConteo\(e\.target\.value\)\)\}/, 'y escribe en la línea de esa fila');
   assert.match(cont, /aria-label=\{`Cantidad recibida de \$\{l\.nombre\}`\}/);
   // Lo de B1 a B3 sigue: guardar el borrador, cerrar y validar (guarda antes de confirmar), la bodega y el exceso.
   for (const texto of ['Guardar Borrador', 'Cerrar y Validar Conteo', 'Bodega Receptora', 'Alerta de Discrepancia en Conteo Físico']) assert.ok(cont.includes(texto), texto);
@@ -1692,7 +1734,8 @@ console.log('--- TEST 39 (B4 T16B): la Lista de compras (compras/lista-compras/p
   assert.ok(completa, 'el tablero pide su propia consulta, activa solo en Kanban');
   assert.match(pag, /const extraDelTablero = useMemo\(\(\) => consultaTableroLista\(estado, filtros\), \[estado, filtros\]\);/);
   assert.match(pag, /useResumenFlujo<DatosFlujo>\('\/compras\/flujo', recargaFlujo\)/);
-  assert.match(pag, /apiFetch\('\/compras\/lista-compras\/stats', \{ signal: control\.signal \}\)/);
+  // B4 T24 f3 (F45, D27): /compras/lista-compras/stats con el cargador compartido (useResumen).
+  assert.match(pag, /const stats = useResumen\('\/compras\/lista-compras\/stats', vueltaStats\);/);
   // Nada se traga: ya no hay .catch que vacíe el error ni la carga de 200 en el navegador.
   assert.ok(!/\.catch\(\(\) => (\[\]|\{\}|null|\(\{[^)]*\}\))\)/.test(codigo) && !/\.catch\(\(\)\s*=>\s*\{\s*\}\)/.test(codigo), 'sin .catch que traga el error');
   assert.ok(!/limit: '200'|new URLSearchParams/.test(codigo), 'ya no se pide limit=200 desde el navegador para la tabla');
@@ -1737,7 +1780,8 @@ console.log('--- TEST 39 (B4 T16B): la Lista de compras (compras/lista-compras/p
   for (const [kpi, vista] of [['lista_pendientes', 'PENDIENTE'], ['lista_en_pedido', 'EN_PEDIDO'], ['lista_recibidos', 'RECIBIDO'], ['lista_total', 'todos']]) {
     assert.match(pag, new RegExp(`<TarjetaKpi kpi="${kpi}"[^>]*\\n?[^>]*activo=\\{vistaActiva === '${vista}'\\} onClick=\\{\\(\\) => elegirVista\\('${vista}'\\)\\}`), kpi);
   }
-  assert.match(pag, /tarjetasLista\(stats\?\.datos \?\? null\)/);
+  // B4 T24 f3 (F45, D27): los datos de useResumen (stats.datos; null mientras carga la primera vez o con error).
+  assert.match(pag, /tarjetasLista\(stats\.datos\)/);
   assert.match(pag, /despachar\(accionVistaEnLista\(estado, siguiente, opcionesEstadosLista\)\)/, 'como un clic en la pestaña (D41)');
   // La franja (FLUJO-compras punto 10): «Estás aquí» en Lista de compras, sin semáforo ni «No resueltos».
   assert.match(pag, /pasos=\{pasosPantallaCompras\(flujo\.datos, 'LISTA'\)\}/);
@@ -1797,7 +1841,9 @@ console.log('--- TEST 40 (B4 T16B): Traslados (compras/traslados/page.tsx) y col
   assert.match(pag, /useListado<FilaTraslado>\(\{\s*ruta: RUTA_OPERACIONES, estado, esperar: !listo, activo: enKanban, extra: extraDelTablero,?\s*\}\);/, 'el tablero pide su propia consulta, activa solo en Kanban');
   assert.match(pag, /const extraDelTablero = useMemo\(\(\) => consultaTableroTraslados\(estado\), \[estado\]\);/);
   assert.match(pag, /const RUTA_OPERACIONES = '\/inventory\/operations';/);
-  assert.match(pag, /`\$\{RUTA_OPERACIONES\}\?operation_type=TRANSFER&limit=0&con_conteos=1`/, 'las tarjetas cuentan TODOS los traslados: sin búsqueda ni filtros, sin filas');
+  // B4 T24 f3 r1 (F77, D27): la ruta es RUTA_CONTEOS_TRASLADOS de la lib (la misma de Inventario).
+  assert.equal(ec.RUTA_CONTEOS_TRASLADOS, '/inventory/operations?operation_type=TRANSFER&limit=0&con_conteos=1', 'las tarjetas cuentan TODOS los traslados: sin búsqueda ni filtros, sin filas');
+  assert.match(pag, /apiFetch\(RUTA_CONTEOS_TRASLADOS, \{ signal: control\.signal \}\)/);
   assert.ok(!/limit=100/.test(codigo), 'ya no se cargan 100 y se pagina en el navegador');
   assert.ok(!/\.catch\(\(\) => (\[\]|\{\}|null)\)/.test(codigo) && !/\.catch\(\(\)\s*=>\s*\{\s*\}\)/.test(codigo) && !/catch \{ setTraslados/.test(codigo), 'sin .catch que traga el error');
   // Las bodegas: su error se dice con Reintentar (los nombres salen como «Bodega #N»), no se traga en silencio.
@@ -1808,10 +1854,11 @@ console.log('--- TEST 40 (B4 T16B): Traslados (compras/traslados/page.tsx) y col
   // La tabla: estándar en el servidor, toda la fila abre el Drawer; las pestañas de los grupos de operación (R9) con los conteos del servidor.
   assert.match(pag, /<TablaEstandar\s+id=\{ID_TRASLADOS\}\s+modo="servidor"/);
   assert.match(pag, /onFila=\{abrir\}/, 'toda la fila abre el Drawer');
+  // B4 T24 f3 r1 (F77, D27): las pestañas son pestanasTraslado de la lib (las de Inventario).
   for (const [id, etiqueta, campo] of [['en_proceso', 'En proceso', 'en_proceso'], ['completadas', 'Completados', 'completadas'], ['canceladas', 'Cancelados', 'canceladas'], ['todos', 'Todos', 'todos']]) {
-    assert.match(pag, new RegExp(`\\{ id: '${id}', etiqueta: '${etiqueta}', conteo: c\\.${campo} \\}`), `pestaña ${etiqueta}`);
+    assert.deepEqual(ec.pestanasTraslado({ [campo]: 3 }).find((p) => p.id === id)?.etiqueta, etiqueta, `pestaña ${etiqueta}`);
   }
-  assert.match(pag, /const c = conteosTraslado\(conteos\);/);
+  assert.match(readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8'), /const c = conteosTraslado\(conteos\);/, 'las pestañas leen conteosTraslado');
   assert.match(pag, /opcionesEstados=\{enKanban \? OPCIONES_ESTADOS_TABLERO_TRASLADO : opcionesEstadosTraslado\}/);
   // «Ver detalle» y el ⋯ ya hacen algo: un MenuFila con «Ver detalle», que abre el Drawer.
   assert.match(pag, /\{ etiqueta: 'Ver detalle', icono: Eye, onClick: \(\) => acciones\?\.abrir\(t\) \}/);
@@ -1841,8 +1888,12 @@ console.log('--- TEST 40 (B4 T16B): Traslados (compras/traslados/page.tsx) y col
   assert.match(pag, /tarjetasTraslados\(conteosTraslado\(totales\?\.conteos \?\? null\), bodegas \? bodegas\.length : null\)/);
   assert.match(pag, /despachar\(accionVistaEnLista\(estado, siguiente, opcionesEstadosTraslado\)\)/, 'como un clic en la pestaña (D41)');
   // El enlace ?id= del HUB de Inventario: el traslado se pide al servidor por su número.
-  assert.match(pag, /q=\$\{encodeURIComponent\(numeroTraslado\(\{ id \}\)\)\}&limit=5`/, 'el traslado se pide por su número, con a lo sumo 5 filas');
-  assert.match(pag, /llegadaEnlaceTraslado\(id, normalizarRespuesta\(r\)\.filas\)/, 'abre solo la fila cuyo número es exacto (m13)');
+  // B4 T24 f3 (F74-f, D27): por el parámetro exacto de F74-b (?id=), no por q= (que también busca en notas, documento y guía).
+  // B4 T24 f3 r1 (F69, D27): el efecto bajó a la lib (abrirEnlaceTraslado), con la misma ruta y la misma llegada.
+  const fuenteEc = readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(fuenteEc, /\?operation_type=TRANSFER&id=\$\{id\}&limit=5`/, 'el traslado se pide por su id exacto, con a lo sumo 5 filas');
+  assert.ok(!/q=\$\{encodeURIComponent\(numeroTraslado/.test(pag), 'sin la búsqueda por texto');
+  assert.match(fuenteEc, /llegadaEnlaceTraslado\(id, normalizarRespuesta\(r\)\.filas\)/, 'abre solo la fila cuyo número es exacto (m13)');
   assert.match(pag, /if \(searchParams\.get\('id'\)\) router\.replace\(pathname\)/, 'al cerrar el Drawer se quita ?id=');
   // R2 y R13: fuera la IA simulada y su pestaña; queda «Ver análisis» hacia el Hub.
   assert.ok(!/aiChat|aiAnalysis|aiLoading|aiInput|sendAIChat|handleAIAnalysis|Nebulae Analytics|activeTab|'Analisis'|Generar Análisis/.test(codigo), 'sin la IA simulada ni la pestaña Análisis');
@@ -1899,14 +1950,10 @@ console.log('--- TEST 41 (B4 T16B r1): fecha del ítem, aviso de los 200, enlace
   const lis = readFileSync(new URL('../src/app/dashboard/compras/lista-compras/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const tra = readFileSync(new URL('../src/app/dashboard/compras/transito/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const col = readFileSync(new URL('../src/app/dashboard/compras/columnas-traslado.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-  // El ref solo se marca cuando el traslado llegó (en la llegada), nunca antes del fetch.
-  const efecto = /const idAbierto = useRef[^\n]*\n([\s\S]*?)\}, \[idDeLaUrl, avisar, avisarError\]\);/.exec(pag)?.[1] ?? '';
-  assert.match(efecto, /pedirEnlaceTraslado\(idAbierto\.current, idDeLaUrl\)/);
-  assert.match(efecto, /llegadaEnlaceTraslado\(id, normalizarRespuesta\(r\)\.filas/);
-  assert.match(efecto, /\.then\(/);
-  const antes = efecto.slice(0, efecto.indexOf('.then('));
-  assert.ok(!/idAbierto\.current =/.test(antes), 'la marca no se pone antes del fetch');
-  assert.match(efecto, /idAbierto\.current = llegada\.marca;/);
+  // El ref solo se marca cuando el traslado llegó (en la llegada), nunca antes del fetch. B4 T24 f3 r1 (F69, D27): el efecto es
+  // abrirEnlaceTraslado de la lib; su doble montaje se EJECUTA en el bloque de r1 (antes, solo el orden en el fuente).
+  const efecto = /const idAbierto = useRef[^\n]*\n([\s\S]*?)\}\), \[idDeLaUrl, avisar, avisarError\]\);/.exec(pag)?.[1] ?? '';
+  assert.match(efecto, /useEffect\(\(\) => abrirEnlaceTraslado\(\{\s*marca: idAbierto, idDeLaUrl, pedir: apiFetch,/);
   // m5, m11, m12, m14, m6, m7, m2: fuente.
   for (const [nombre, f] of [['lista', lis], ['traslados', pag], ['tránsito', tra]]) {
     assert.match(f, /avisoTope200\(/, `${nombre} usa la frase única`);
@@ -1921,10 +1968,14 @@ console.log('--- TEST 41 (B4 T16B r1): fecha del ítem, aviso de los 200, enlace
   assert.match(lis, /const guardarProveedor = async \(\) => \{[\s\S]*?\n  \};/);
   const guardar = /const guardarProveedor = async \(\) => \{([\s\S]*?)\n  \};/.exec(lis)?.[1] ?? '';
   assert.ok(!/setEditando\(null\);\s*await cambiarItem/.test(guardar), 'm6: no se cierra antes de que el PATCH salga bien');
-  assert.match(guardar, /if \(await cambiarItem\([\s\S]*'No se pudo actualizar el proveedor'\)\) setEditando\(null\);/, 'm6: se cierra solo si salió bien');
-  assert.match(lis, /'pueden'/, 'm12: dice cuántos entran');
-  assert.match(lis, /\(pedibles === elegidos\s*\?/, 'm12: solo calla cuando todos los elegidos se pueden pedir');
-  assert.match(lis, /textoSeleccion\(seleccion\.length, itemsSeleccionados\.length\)/);
+  // B4 T24 f3 (F70, D27): se cierra solo si salió bien Y solo la ventana de ese ítem (otra abierta mientras tanto conserva lo escrito).
+  assert.match(guardar, /if \(await cambiarItem\([\s\S]*'No se pudo actualizar el proveedor'\)\) setEditando\(\(e\) => \(e\?\.id === it\.id \? null : e\)\);/, 'm6: se cierra solo si salió bien');
+  // F70: «Guardar proveedor» carga mientras va su PATCH y no admite un segundo clic (dos PATCH, dos avisos, dos recargas).
+  assert.match(lis, /<Button color="purple" icon=\{Package\} loading=\{ocupadoId === editando\.id\} disabled=\{ocupadoId != null\} onClick=\{guardarProveedor\}>Guardar proveedor<\/Button>/);
+  // F70: el catch de cambiarItem devuelve false (la ventana no se cierra con un error).
+  assert.match(lis, /if \(recargarTrasError\(err\)\) recargarTodo\(\);\s*return false;/, 'un error: false');
+  // B4 T24 f3 r1 (F71, D27): textoSeleccionLista vive en la lib con sus casos (1/1, 3/2, 2/1 y 1/0, en el bloque de r1).
+  assert.match(lis, /textoSeleccionLista\(seleccion\.length, itemsSeleccionados\.length\)/);
   assert.match(lis, /itemsSeleccionados\.length/, 'm12: la barra usa los seleccionables de verdad');
   assert.match(lis, /item\.fecha\b|it\.fecha\b/);
   assert.ok(!/fecha_creacion/.test(lis), 'I1: la Lista lee `fecha`');
@@ -2204,7 +2255,8 @@ console.log('--- TEST 42 (B4 T18; TABLA-inventario 5 a 8, KANBAN-resto; RP47 a R
   assert.equal(ec.pedirEnlaceProducto(null, null, null), null);
   assert.equal(ec.pedirEnlaceProducto(null, undefined, undefined), null);
   assert.deepEqual(ec.pedirEnlaceProducto(null, null, 'NEB 001/x'), {
-    marca: 'sku:NEB 001/x', ruta: '/products?q=NEB%20001%2Fx&limit=50&offset=0', id: null, sku: 'NEB 001/x',
+    // B4 T24 f3 (B40-f, D27): el parámetro exacto de B40-b (?sku=), no q=.
+    marca: 'sku:NEB 001/x', ruta: '/products?sku=NEB%20001%2Fx&limit=50&offset=0', id: null, sku: 'NEB 001/x',
   });
   assert.equal(ec.pedirEnlaceProducto('sku:NEB-001', null, 'NEB-001'), null);
   assert.equal(ec.pedirEnlaceProducto(null, null, '   '), null);
@@ -2350,11 +2402,12 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
       assert.equal(llamadas.length, 0, `${nombre}: una columna sin consulta no pide nada`);
     }
     // Tarjetas (R12): de /inventory/stats, sin respaldo local; cargando = null (nunca 0); con error, «—».
-    trae(f, "apiFetch('/inventory/stats', { signal: control.signal })", `${nombre}: /inventory/stats`);
-    trae(f, '.then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))', `${nombre}: stats llega`);
-    trae(f, '.catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });', `${nombre}: stats falla y LO DICE`);
-    trae(f, 'const cargandoStats = stats?.vuelta !== vueltaStats;', `${nombre}: cargando mientras la vuelta no llegó`);
-    trae(f, 'const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));', `${nombre}: el estado de las tarjetas lleva el error`);
+    // B4 T24 f3 (F45, D27): el cargador es useResumen (el compartido); su comportamiento (llega, falla, recarga, 403) lo prueban los
+    // casos de la lib del bloque «B4 T24 f3 (F45, segunda mitad)». Aquí queda el cableado.
+    trae(f, "const stats = useResumen('/inventory/stats', vueltaStats);", `${nombre}: /inventory/stats con el hook`);
+    noTrae(f, 'setStats(', `${nombre}: sin la copia del cargador`);
+    trae(f, 'const cargandoStats = stats.cargando;', `${nombre}: cargando mientras la vuelta no llegó`);
+    trae(f, 'const estadoKpis = useEstadoKpi(cargandoStats, stats.error);', `${nombre}: el estado de las tarjetas lleva el error`);
     trae(f, '<FranjaKpis estado={estadoKpis}', `${nombre}: la franja lleva el estado`);
     trae(f, 'nota={AYUDA_MINIMO_INVENTARIO}', `${nombre}: la nota del mínimo (R10)`);
     trae(f, `import { AYUDA_MINIMO_INVENTARIO,`, `${nombre}: importa la nota`);
@@ -2369,7 +2422,9 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
     trae(f, 'const { recargar: recargarTablero } = tablero;', `${nombre}: recarga el tablero`);
     trae(f, '<button type="button" onClick={recargarTodo}', `${nombre}: el botón Actualizar`);
     // Un cambio de categoría vuelve a la página 1 en el mismo evento (un solo pedido).
-    trae(f, 'setCategoria(valor);\n    despachar({ tipo: \'pagina\', valor: 1 });', `${nombre}: la categoría vuelve a la página 1`);
+    // B4 T24 f4 (F39; D27): la categoría es un filtro del estado único ({tipo: 'filtro'} vuelve a la página 1 y se guarda con la sesión).
+    trae(f, "despachar({ tipo: 'filtro', clave: 'categoria', valor });", `${nombre}: la categoría vuelve a la página 1`);
+    noTrae(f, 'setCategoria(', `${nombre}: sin el useState de la categoría`);
     // El vacío memoizado dice qué lo deja vacío; la pantalla completa se cierra al pasar a Kanban.
     trae(f, 'const texto = textoVacioExistencias({ q: estado.q, vista: estado.vista, categoria: nombreCategoria, sinBodega: true });', `${nombre}: el vacío (UNA sola función, la del Hub: m20)`);
     trae(f, '}, [estado.q, estado.vista, nombreCategoria]);', `${nombre}: el vacío memoizado con lo que lo deja vacío`);
@@ -2400,7 +2455,7 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   assert.ok(!(/<FranjaKpis[\s\S]*?<\/FranjaKpis>/.exec(stock)?.[0] ?? '').includes('onClick'), 'Stock: las tarjetas no son botones');
   trae(stock, "const INICIAL_STOCK = { vista: 'todos' };", 'Stock: arranca en Todos');
   trae(stock, 'const pestanas = pestanasExistencias(conteos);', 'Stock: las 4 pestañas');
-  trae(stock, 'const tarjetas = tarjetasStock(stats?.datos ?? null);', 'Stock: tarjetasStock');
+  trae(stock, 'const tarjetas = tarjetasStock(stats.datos);', 'Stock: tarjetasStock'); // B4 T24 f3 (F45, D27)
   assert.deepEqual(columnasDe(stock, 'COLUMNAS_TABLA_STOCK').map((c) => c.id), ['sku', 'producto', 'categoria', 'fisico', 'reservado', 'disponible', 'transito', 'precio', 'estado']);
   assert.deepEqual(columnasDe(stock, 'COLUMNAS_TABLA_STOCK').filter((c) => c.oculta).map((c) => c.id), ['categoria', 'precio'], 'Stock: ocultas por defecto (R26, medido a 1024 px)');
 
@@ -2409,7 +2464,7 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   trae(abasto, "const INICIAL_ABASTECIMIENTO = { vista: 'agotado' };", 'Abastecimiento: arranca en Agotado');
   trae(abasto, "extraPorVista(estado, VISTAS_ABASTECIMIENTO, fijos, 'agotado')", 'Abastecimiento: la pestaña por defecto es Agotado');
   trae(abasto, 'const pestanas = pestanasExistencias(conteos, { conTodos: false });', 'Abastecimiento: sin «Todos» (RP53)');
-  trae(abasto, 'const tarjetas = tarjetasAbastecimiento(stats?.datos ?? null, compras?.datos ?? null);', 'Abastecimiento: cada tarjeta con su fuente');
+  trae(abasto, 'const tarjetas = tarjetasAbastecimiento(stats.datos, compras.datos);', 'Abastecimiento: cada tarjeta con su fuente'); // F45 (D27)
   // T18 r1 (I1): las tres tarjetas de /inventory/stats son INFORMATIVAS (como inv_bajo_minimo del Hub, RP52 b): su número cuenta
   // referencias con control de inventario y la pestaña cuenta filas (33 contra 36), así que no equivalen a una vista (R12).
   for (const [kpi, clave] of [['inv_agotados', 'agotados'], ['inv_bajo_minimo', 'bajo_minimo'], ['inv_abastecidos', 'abastecidos']]) {
@@ -2421,10 +2476,16 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   for (const boton of ['vistaActiva', 'elegirVista', 'accionVistaEnLista']) noTrae(abasto, boton, `Abastecimiento: ya no hay ${boton}`);
   trae(abasto, 'Solo cuenta las referencias con control de inventario.', 'Abastecimiento: la alerta dice qué cuenta');
   // m11: cuando una fuente falla, lo dice y ofrece «Reintentar» (solo esa fuente).
-  trae(abasto, "{estadoKpis === 'error' && (\n          <AvisoReintentar error={stats?.error} fallo=\"No se pudieron cargar los indicadores de existencias\" onReintentar={() => setVueltaStats((n) => n + 1)} />", 'Abastecimiento: stats caído, con Reintentar');
-  trae(abasto, "{estadoCompras === 'error' && (\n          <AvisoReintentar error={compras?.error} fallo=\"No se pudieron cargar los pedidos de compra activos\" onReintentar={() => setVueltaCompras((n) => n + 1)} />", 'Abastecimiento: compras caído, con Reintentar');
-  trae(abasto, "onClick={() => setVueltaStats((n) => n + 1)} className={`rounded font-bold underline ${FOCOS.indigo}`}>Reintentar</button>", 'Abastecimiento: la alerta «sin dato» ofrece Reintentar');
-  trae(stock, "{estadoKpis === 'error' && (\n          <AvisoReintentar error={stats?.error} fallo=\"No se pudieron cargar las tarjetas de existencias\" onReintentar={() => setVueltaStats((n) => n + 1)} />", 'Stock: stats caído, con Reintentar');
+  // B4 T24 f3 (F45, D27): «Reintentar» vuelve a pedir solo esa fuente con el hook (stats.recargar / compras.recargar).
+  // r3 (C2, D27): montado siempre, con reintentando y el destino del foco (m36).
+  trae(abasto, '<AvisoReintentar error={stats.error} fallo="No se pudieron cargar los indicadores de existencias" onReintentar={stats.recargar} reintentando={stats.cargando} destinoFoco="franja-abastecimiento" />', 'Abastecimiento: stats caído, con Reintentar');
+  trae(abasto, '<AvisoReintentar error={compras.error} fallo="No se pudieron cargar los pedidos de compra activos" onReintentar={compras.recargar} reintentando={compras.cargando} destinoFoco="franja-abastecimiento" />', 'Abastecimiento: compras caído, con Reintentar');
+  // B4 T24 f3 (F92, D27): un solo «Reintentar» para /inventory/stats (el del aviso bajo las tarjetas); la alerta «sin dato» remite a él.
+  noTrae(abasto, "onClick={() => setVueltaStats((n) => n + 1)} className={`rounded font-bold underline ${FOCOS.indigo}`}>Reintentar</button>", 'Abastecimiento: la alerta «sin dato» ya no repite Reintentar');
+  noTrae(abasto, 'Las tarjetas dicen cuál indicador falló.', 'Abastecimiento: la alerta no repite el aviso');
+  // r1 (m11, m21, m37; D27): el aviso va SOBRE las tarjetas, y con los indicadores bien no se le culpa (textoAlertaSinDato).
+  trae(abasto, "<p className=\"mt-1 text-xs font-semibold text-slate-600\">{textoAlertaSinDato(estadoKpis === 'error')}</p>", 'Abastecimiento: la alerta remite al aviso');
+  trae(stock, '<AvisoReintentar error={stats.error} fallo="No se pudieron cargar las tarjetas de existencias" onReintentar={stats.recargar} reintentando={stats.cargando} destinoFoco="franja-stock" />', 'Stock: stats caído, con Reintentar'); // r3 (C2, D27)
   // m24: la insignia «Reservado» de BASE vuelve a la fila de Stock (hay unidades en bodega y nada disponible).
   trae(stock, 'celda: (f) => <CeldaEstadoExistencia f={f} /> },', 'Stock: el estado lleva «Reservado»');
   trae(stock, "existenciaReservada(f) ? ' · Reservado: hay unidades en bodega, todas comprometidas' : ''", 'Stock: el title dice Reservado');
@@ -2432,11 +2493,11 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   // B4 T24 (F46, D27): AvisoReintentar delega en la pieza común (AvisoDeError → AvisoFuente; casos en test_avisos.mjs).
   trae(piezas, 'return <AvisoDeError {...props} />;', 'piezas: AvisoReintentar delega en la pieza común');
   trae(abasto, '<TarjetaKpi kpi="pec_activos" valor={tarjetas.pec_activos.valor} ayuda={tarjetas.pec_activos.ayuda} estado={estadoCompras} />', 'Abastecimiento: pec_activos con su estado y sin botón');
-  trae(abasto, "apiFetch('/compras/stats', { signal: control.signal })", 'Abastecimiento: /compras/stats (RP94)');
-  trae(abasto, '.then((r: { data?: unknown } | null) => setCompras({ vuelta: vueltaCompras, datos: r?.data ?? null, error: null }))', 'Abastecimiento: compras llega');
-  trae(abasto, '.catch((err: unknown) => { if (!control.signal.aborted) setCompras({ vuelta: vueltaCompras, datos: null, error: err }); });', 'Abastecimiento: compras falla y LO DICE');
-  trae(abasto, 'const cargandoCompras = compras?.vuelta !== vueltaCompras;', 'Abastecimiento: cargando compras');
-  trae(abasto, 'const estadoCompras = useEstadoKpi(cargandoCompras, cargandoCompras ? null : (compras?.error ?? null));', 'Abastecimiento: el estado de pec_activos lleva el error');
+  // B4 T24 f3 (F45, D27): /compras/stats con el mismo hook (su comportamiento, en los casos de la lib).
+  trae(abasto, "const compras = useResumen('/compras/stats', vueltaCompras);", 'Abastecimiento: /compras/stats (RP94)');
+  noTrae(abasto, 'setCompras(', 'Abastecimiento: sin la copia del cargador');
+  trae(abasto, 'const cargandoCompras = compras.cargando;', 'Abastecimiento: cargando compras');
+  trae(abasto, 'const estadoCompras = useEstadoKpi(cargandoCompras, compras.error);', 'Abastecimiento: el estado de pec_activos lleva el error');
   trae(abasto, 'setVueltaCompras((n) => n + 1);', 'Abastecimiento: «Actualizar» vuelve a pedir compras');
   trae(abasto, "const agotados = tarjetas.agotados.valor;", 'Abastecimiento: el número de la alerta es el de /inventory/stats');
   trae(abasto, 'const alerta = estadoAlertaAgotados(estadoKpis, agotados);', 'Abastecimiento: la alerta sale de su regla (estadoAlertaAgotados)');
@@ -2461,14 +2522,16 @@ console.log('--- TEST 43 (B4 T18, TABLA-inventario 5 y 6; KPI-inventario 5 y 6; 
   assert.equal(columnasDe(abasto, 'COLUMNAS_TABLA_ABASTECIMIENTO').find((c) => c.id === 'minimo')?.ordenable, null, 'el mínimo no se ordena en stock-tabla');
 
   // piezas-inventario.tsx: el catálogo conserva el error y el selector lo dice con «Reintentar».
-  trae(piezas, ".catch((err: unknown) => { if (!control.signal.aborted) setCatalogo((c) => ({ filas: c.filas, error: err })); });", 'useCatalogo: el error se conserva');
-  trae(piezas, 'setCatalogo({ filas, error: null });', 'useCatalogo: llega bien');
+  // r2 (F81, D27): la carga del catálogo con su vuelta va en la lib (llegadaCatalogo, falloCatalogo, lecturaCatalogo; bloque de r2).
+  trae(piezas, ".catch((err: unknown) => { if (!control.signal.aborted) setCatalogo((c) => falloCatalogo(c, err, vuelta)); });", 'useCatalogo: el error se conserva');
+  trae(piezas, 'setCatalogo((c) => llegadaCatalogo(c, r, vuelta));', 'useCatalogo: llega bien');
   trae(piezas, '}, [ruta, vuelta]);', 'useCatalogo: se vuelve a pedir con la vuelta');
   trae(piezas, 'const recargar = useCallback(() => setVuelta((n) => n + 1), []);', 'useCatalogo: recargar sube la vuelta');
   trae(piezas, 'if (catalogo.error && !catalogo.filas) {', 'SelectorCatalogo: la rama del error');
   trae(piezas, 'role="alert"', 'SelectorCatalogo: el error se anuncia');
   trae(piezas, '{textoDeError(catalogo.error, fallo)}', 'SelectorCatalogo: el detalle del servidor tal cual');
-  trae(piezas, '<button type="button" onClick={onReintentar} className={`rounded font-bold underline ${FOCOS[acento]}`}>Reintentar</button>', 'SelectorCatalogo: «Reintentar» vuelve a pedir');
+  // r1 (F81, D27): «Reintentar» da señal mientras pide (aria-disabled, «Reintentando…»).
+  trae(piezas, '<button type="button" onClick={catalogo.cargando ? undefined : onReintentar} aria-disabled={catalogo.cargando || undefined} className={`rounded font-bold underline ${FOCOS[acento]}`}>{catalogo.cargando ? \'Reintentando…\' : \'Reintentar\'}</button>', 'SelectorCatalogo: «Reintentar» vuelve a pedir');
   trae(piezas, 'disabled={!catalogo.filas}', 'SelectorCatalogo: deshabilitado mientras carga');
   trae(piezas, '<option value="">{catalogo.filas ? todas : cargando}</option>', 'SelectorCatalogo: «Cargando…» mientras carga');
   // B4 T24 (F44-a, D27): la reserva es el token RESERVA_BOTON_IA (pb-24) de design-system.ts.
@@ -2497,22 +2560,25 @@ console.log('--- TEST 44 (B4 T18, TABLA-inventario punto 8; KANBAN-resto; RP54):
   noTrae(k, 'conConteos', 'el Kardex no tiene conteos');
   trae(k, 'const extraLista = useMemo(() => ({ ...extraKardex(filtros), q: null, orden: null }), [filtros]);', 'los filtros al servidor, sin q ni orden');
   // La doble carga (el bug de hoy): el filtro y la página cambian EN EL MISMO evento, por UN solo camino.
-  trae(k, 'setFiltros((f) => ({ ...f, ...cambio }));\n    despachar({ tipo: \'pagina\', valor: 1 });', 'cambiarFiltros cambia el filtro y la página a la vez');
-  assert.equal(k.split('setFiltros(').length - 1, 1, 'solo cambiarFiltros escribe los filtros');
+  // B4 T24 f4 (F39; D27): el filtro y la página cambian en el mismo evento por la acción {tipo: 'filtro'} del estado único.
+  trae(k, 'for (const accion of accionesDeFiltros(cambio)) despachar(accion);', 'cambiarFiltros cambia el filtro y la página a la vez');
+  assert.equal(k.split('accionesDeFiltros(').length - 1, 1, 'solo cambiarFiltros escribe los filtros');
   assert.ok(!/setPage|useState\(0\)|pageSize/.test(k), 'ya no hay una página aparte del estado único');
   assert.equal(k.split('useEffect(').length - 1, 2, 'dos efectos: la búsqueda del SKU y salir de la pantalla completa (ninguno pide la lista)');
   for (const filtro of ['bodega', 'direccion', 'propietario', 'desde', 'hasta']) {
     trae(k, `cambiarFiltros({ ${filtro}`, `el filtro ${filtro} pasa por cambiarFiltros`);
   }
-  trae(k, 'cambiarFiltros({ skuId: o.id });', 'elegir un SKU');
-  trae(k, 'if (filtros.skuId !== null) cambiarFiltros({ skuId: null });', 'escribir de nuevo suelta el SKU (una sola vez)');
+  // B4 T24 f4 (F39; D27): con la etiqueta del SKU, que vuelve con la sesión.
+  trae(k, 'cambiarFiltros({ skuId: o.id, skuEtiqueta: etiqueta });', 'elegir un SKU');
+  trae(k, "if (filtros.skuId !== null) cambiarFiltros({ skuId: null, skuEtiqueta: '' });", 'escribir de nuevo suelta el SKU (una sola vez)');
   trae(k, 'cambiarFiltros(SIN_FILTROS);', 'quitar los filtros');
   // La búsqueda del SKU: con su error dicho, sin resultados viejos y limpia al salir.
   trae(k, ".catch((err: unknown) => { if (!control.signal.aborted) setSkuBusqueda({ texto: skuTexto, filas: [], error: err }); });", 'la búsqueda del SKU dice su error');
   trae(k, 'return () => { clearTimeout(pausa); control.abort(); };', 'la búsqueda se limpia');
   trae(k, 'const resultadosSku = buscarSku && skuBusqueda?.texto === skuTexto ? skuBusqueda : null;', 'nunca resultados de otro texto');
   trae(k, "{textoDeError(resultadosSku.error, 'No se pudo buscar el producto')}", 'el detalle del servidor tal cual');
-  trae(k, '{resultadosSku.error ? (', 'el error se ve en lugar de la lista');
+  // B4 T24 f3 (F88, D27): antes del error, «Buscando…» mientras la respuesta no llega; el error sigue viéndose en lugar de la lista.
+  trae(k, ') : resultadosSku.error ? (', 'el error se ve en lugar de la lista');
   trae(k, "useCatalogo('/inventory/warehouses')", 'las bodegas con su error y Reintentar');
   trae(k, 'onReintentar={recargarBodegas}', 'Reintentar vuelve a pedir las bodegas');
   // La tabla y la barra.
@@ -2540,8 +2606,8 @@ console.log('--- TEST 44 (B4 T18, TABLA-inventario punto 8; KANBAN-resto; RP54):
   assert.ok(!/toLocale/.test(k), 'sin toLocaleString (el navegador leería el UTC sin zona 5 horas corrido)');
   trae(k, 'textoFechaMovimiento(m.created_at)', 'la fecha de Colombia');
   // Las direcciones del filtro son TODAS las del Kardex, y las columnas del tablero salen de la lib.
-  const lista = /const ORDEN_DIRECCIONES = \[([^\]]*)\]/.exec(k)?.[1] ?? '';
-  assert.deepEqual([...lista.matchAll(/'([A-Z_]+)'/g)].map((m) => m[1]).sort(), Object.keys(ec.DIRECCIONES_KARDEX).sort(), 'el filtro ofrece cada dirección');
+  // B4 T24 f3 (F88, D27): el orden sale de la lib (Object.keys(DIRECCIONES_KARDEX)): cada dirección, sin repetir sus claves a mano.
+  trae(k, 'const ORDEN_DIRECCIONES = Object.keys(DIRECCIONES_KARDEX);', 'el filtro ofrece cada dirección');
   trae(k, 'DIRECCIONES_KARDEX[d].label', 'la etiqueta de cada dirección');
   // El tablero solo para ver, en modo servidor.
   const hook = bloqueDesde(k, 'useTableroKanban<Movimiento>(');
@@ -2599,8 +2665,9 @@ console.log('--- TEST 45 (B4 T18, TABLA-inventario punto 7; KANBAN-resto; RP47 a
   trae(p, 'aria-pressed={filtros.sinTarifa} onClick={() => cambiarFiltros({ sinTarifa: !filtros.sinTarifa })}', 'Sin tarifa de IVA');
   assert.match(p, /Requiere revisión\s*<\/button>/);
   assert.match(p, /Sin tarifa de IVA\s*<\/button>/);
-  trae(p, 'setFiltros((f) => ({ ...f, ...cambio }));\n    despachar({ tipo: \'pagina\', valor: 1 });', 'cambiarFiltros cambia el filtro y la página a la vez');
-  assert.equal(p.split('setFiltros(').length - 1, 1, 'solo cambiarFiltros escribe los filtros');
+  // B4 T24 f4 (F39; D27): por la acción {tipo: 'filtro'} del estado único (el filtro y la página, en el mismo evento).
+  trae(p, 'for (const accion of accionesDeFiltros(cambio)) despachar(accion);', 'cambiarFiltros cambia el filtro y la página a la vez');
+  assert.equal(p.split('accionesDeFiltros(').length - 1, 1, 'solo cambiarFiltros escribe los filtros');
   // Lo de B3-T8 en la ficha se conserva: el selector de IVA, el guardado y la insignia de la tabla.
   trae(p, 'id="producto-tarifa-iva"', 'B3-T8: el selector de IVA de la ficha');
   trae(p, '{TARIFAS_IVA.map(t => <option key={t.codigo} value={t.codigo}>{t.etiqueta}</option>)}', 'B3-T8: las tarifas');
@@ -2660,22 +2727,23 @@ console.log('--- TEST 45 (B4 T18, TABLA-inventario punto 7; KANBAN-resto; RP47 a
   trae(p, 'p.publicado', 'E-Commerce: publicado');
   assert.ok(!/p\.sale_price|p\.cost_price|p\.is_published/.test(p.slice(0, p.indexOf('function openEdit'))), 'la tabla no lee sale_price, cost_price ni is_published (/products no los trae)');
   // RP49: el enlace ?id= (y ?sku=) pide el producto al servidor; la marca se pone cuando la respuesta LLEGÓ.
-  const efecto = /const enlaceAtendido = useRef[^\n]*\n([\s\S]*?)\}, \[idDeLaUrl, skuDeLaUrl, avisar, avisarError\]\);/.exec(p)?.[1] ?? '';
-  assert.match(efecto, /pedirEnlaceProducto\(enlaceAtendido\.current, idDeLaUrl, skuDeLaUrl\)/);
-  assert.match(efecto, /_apiFetch\(pedido\.ruta, \{ signal: control\.signal \}\)/);
-  assert.match(efecto, /llegadaEnlaceProducto\(pedido, normalizarRespuesta\(r\)\.filas\)/);
-  const antes = efecto.slice(0, efecto.indexOf('.then('));
-  assert.ok(!/enlaceAtendido\.current =/.test(antes), 'la marca no se pone antes del fetch');
-  assert.match(efecto, /enlaceAtendido\.current = llegada\.marca;/);
-  assert.match(efecto, /if \(llegada\.abrir\) openEdit\(llegada\.abrir\);\s*else avisar\(llegada\.texto \?\? 'No se encontró el producto\.', \{ tono: 'info' \}\);/);
-  assert.match(efecto, /\.catch\(\(err: unknown\) => \{ if \(!control\.signal\.aborted\) avisarError\(err, 'No se pudo abrir el producto'\); \}\);/);
-  assert.match(efecto, /return \(\) => control\.abort\(\);/);
+  // B4 T24 f3 (B40-f, D27): el error del enlace queda en errorEnlace (AvisoDeError con «Reintentar») y la vuelta del reintento va en las deps.
+  // B4 T24 f3 r1 (m18, D27): el efecto vive en la lib (abrirEnlaceProducto: la marca cuando llegó, alError con el error o null) y la carga
+  // se lee con estadoReintento; los dos se EJECUTAN en el bloque de r1. Aquí, el cableado.
+  const efecto = /const enlaceAtendido = useRef[^\n]*\n([\s\S]*?)\}\), \[idDeLaUrl, skuDeLaUrl, avisar, vueltaEnlace\]\);/.exec(p)?.[1] ?? '';
+  assert.match(efecto, /useEffect\(\(\) => abrirEnlaceProducto\(\{\s*marca: enlaceAtendido, idDeLaUrl, skuDeLaUrl, pedir: _apiFetch,/);
+  assert.match(efecto, /alError: \(error\) => setEnlace\(\{ vuelta: vueltaEnlace, error \}\),/);
+  trae(p, 'const cargaEnlace = estadoReintento(enlace, vueltaEnlace);');
+  trae(p, '<AvisoDeError error={cargaEnlace.error} fallo="No se pudo abrir el producto del enlace" acento="purple" reintentando={cargaEnlace.reintentando}', 'el error del enlace, a la vista');
+  // f4 (m3 = m9 de f3 r3; D27): y un 403 o el «no existe» llevan el foco a la lista (destinoFoco).
+  trae(p, 'onReintentar={() => setVueltaEnlace((n) => n + 1)} destinoFoco="productos-lista" />', 'Reintentar vuelve a pedir (la marca sigue libre); r3: el éxito lleva el foco al título de la ficha');
   trae(p, "if (searchParams.get('id') || searchParams.get('sku')) router.replace(pathname);", 'cerrar la ficha limpia el enlace (id y sku)');
   // El tablero solo para ver, por categoría (12 como máximo, con su aviso), en modo servidor.
   const hook = bloqueDesde(p, 'useTableroKanban<Producto>(');
   for (const q of ['pantalla: ID_PRODUCTOS', "modo: 'servidor'", 'columnas: columnasTablero', 'activo: listo && enKanban && categorias.filas !== null', 'porColumna: estado.tamano',
     'dependencias: [...dependenciasTablero(estado), filtros.revision, filtros.sinTarifa, filtros.categoria]']) trae(hook, q, `tablero ${q}`);
-  trae(p, 'const { columnas: columnasTablero, aviso: avisoCategorias } = useMemo(() => columnasProductos(categorias.filas), [categorias.filas]);', 'las columnas salen de /categories (máximo 12)');
+  // r1 (F93, D27): con la categoría elegida (solo su columna); lo fija el bloque de r1.
+  trae(p, '() => columnasProductos(categorias.filas, undefined, { elegida: filtros.categoria }), [categorias.filas, filtros.categoria]);', 'las columnas salen de /categories (máximo 12)');
   const tablero = etiquetaJsx(p, '<TableroKanban');
   for (const q of ['tablero={tablero}', 'soloLectura={TEXTO_SOLO_VER_PRODUCTOS}', 'tarjetaDe={tarjetaProducto}', 'onAbrir={openEdit}', 'aviso={avisoCategorias']) trae(tablero, q, `TableroKanban ${q}`);
   for (const q of ['regla=', 'onCambio=', 'onAccion=', 'accionesTarjeta=']) noTrae(tablero, q, `el tablero es solo para ver (${q})`);
@@ -2800,7 +2868,9 @@ console.log('--- TEST 47 (B4 T19): Recepciones, Traslados y Ajustes de Inventari
       trae(f, `<AvisoReintentar error={${err}}`, `${nombre}: la fuente que falla dice SU error con Reintentar (${err}; el uso, no el import)`);
     }
     assert.ok(!/\? null : \(?\w+\?\.(datos|kpis|conteos|totales)/.test(sinComentarios(f)), `${nombre}: una recarga no borra el último valor (I3)`);
-    trae(f, 'lecturaDeCarga(', `${nombre}: lee el último valor con lecturaDeCarga`);
+    // B4 T24 f3 (F45, D27): Recepciones lee sus tarjetas con useResumen, que también conserva el último valor al recargar (estadoResumen).
+    assert.ok(f.includes('lecturaDeCarga(') || f.includes('const { datos: datosStats, cargando: cargandoStats, error: errorStats } = stats;'),
+      `${nombre}: lee el último valor con lecturaDeCarga o con useResumen`);
     assert.ok(!/cargando\w* \? null : (?!\(?\w+\?\.error)/.test(sinComentarios(f)), `${nombre}: ningún valor se pone en null mientras recarga`);
     trae(f, 'etiqueta={`Acciones de ${', `${nombre}: las acciones llevan el número en su nombre`);
     assert.ok(/soloLectura=\{TEXTO_SOLO_VER\}/.test(f), `${nombre}: tablero solo para ver`);
@@ -2892,10 +2962,12 @@ console.log('--- TEST 48 (B4 T19; KANBAN-logistica 4, KPI-inventario 8; R15, RP2
   trae(e.slice(e.indexOf('<TarjetaKpi kpi="ent_despachados"'), e.indexOf('/>', e.indexOf('<TarjetaKpi kpi="ent_despachados"'))), "activo={vistaActiva === vistaDeTarjetaEntrega('ent_despachados')}", 'el anillo es el de SU pestaña');
   for (const err of ['errorConteos', 'errorStats']) trae(e, `<AvisoReintentar error={${err}}`, `la fuente que falla dice SU error con Reintentar (${err})`);
   trae(e, 'lecturaDeCarga(', 'Entregas lee el último valor con lecturaDeCarga');
-  assert.equal(e.split('lecturaDeCarga(').length - 1, 2, 'los conteos y las tarjetas');
+  // B4 T24 f3 (F45, D27): las tarjetas pasan a useResumen (conserva lo último al recargar); los conteos siguen con lecturaDeCarga.
+  assert.equal(e.split('lecturaDeCarga(').length - 1, 1, 'los conteos');
+  trae(e, "const stats = useResumen<{ kpis?: unknown }>('/ventas/stats', vueltaStats);", 'las tarjetas, con el cargador compartido');
   assert.ok(!/cargando\w* \? null : (?!\(?\w+\?\.error)/.test(sinComentarios(e)), 'Entregas: ningún valor se pone en null mientras recarga');
   assert.ok(/const errorConteos = cargandoConteos \? null : \(cargadosConteos\?\.error \?\? null\);/.test(e), 'el error de los conteos sale de su fuente');
-  assert.ok(/const errorStats = cargandoStats \? null : \(stats\?\.error \?\? null\);/.test(e), 'el error de las tarjetas sale de su fuente');
+  assert.ok(/const \{ cargando: cargandoStats, error: errorStats \} = stats;/.test(e), 'el error de las tarjetas sale de su fuente'); // F45 (D27)
   // r2 (m6): las regresiones repuestas y el WhatsApp visible llevan su prueba.
   trae(e, '{p.customer_phone && <span', 'el teléfono bajo el cliente (m24)');
   trae(e, "accionPrincipal: r ? { texto: 'Recordar el saldo por WhatsApp', onClick: () => abrirWhatsApp(r.url)", 'el botón de WhatsApp visible en la tarjeta (m2)');
@@ -2906,7 +2978,11 @@ console.log('--- TEST 48 (B4 T19; KANBAN-logistica 4, KPI-inventario 8; R15, RP2
   trae(e, 'puedeDespacharPedido(p, acciones.rol)', 'la fila usa la regla única');
   // B4 T24 r2 (m15 c, D27): y el cierre del Drawer (cierreExterno={!puedeDespacharPedido(selected, rol)}).
   assert.equal(e.split('puedeDespacharPedido(selected, rol)').length - 1, 3, 'el botón, el selector y el cierre del Drawer usan la regla única');
-  trae(e, 'tieneSaldo && puedeCobrarSaldo(rol)', 'Marcar Saldo Cobrado solo a quien el servidor se lo permite');
+  // B4 T24 f3 (F95, D27): el motivo del saldo lo ven todos ({tieneSaldo && (…{textoFaltaSaldo(selected)}…)}); el botón, solo quien cobra.
+  trae(e, '{tieneSaldo && (', 'el motivo del saldo, a todos');
+  trae(e, '{textoFaltaSaldo(selected)}', 'el texto del tablero');
+  trae(e, '{puedeCobrarSaldo(rol) && (\n                      <Button size="sm" color="emerald" loading={updating} onClick={() => handleRegistrarCobroSaldo(selected)}>', 'Marcar Saldo Cobrado solo a quien el servidor se lo permite');
+  noTrae(e, 'El cliente debe cancelar el saldo antes del despacho.', 'sin el texto que solo veían ADMIN y ASESOR');
   // B4 T24 (F46, D27): con useRolActual (la pieza común; '' en el servidor y en la hidratación).
   trae(e, 'const rol = useRolActual();', 'el rol se lee después de montar');
   noTrae(sinComentarios(e), 'useState(() => getUsuarioActual()', 'el rol no se lee en el inicializador');
@@ -3037,14 +3113,22 @@ console.log('--- B4 T24 (FINAL-m10, FINAL-m31 y FINAL-m38): los tableros y las a
   // r1 (m2, m7): el resto de las escrituras del PEC solo con el rol de su require_roles (erp_compras.py: PATCH /pedidos/{id}/tracking,
   // PATCH /pedidos/{id}, POST /pedidos/{id}/recepcionar, PUT /tracking-config/{tipo} y POST /pedidos, todos de ADMIN y COMPRAS).
   assert.match(pedidos, /function TrackingPanel\(\{pec, onUpdate, onToast, puedeEditar\}: \{pec:any; onUpdate:\(\)=>void; onToast:AvisoPantalla; puedeEditar: boolean\}\)/);
-  assert.match(pedidos, /const isEditing = !cerrado && puedeEditar && editStage === sd\.stage;/, 'sin permiso, la tarjeta no se edita');
+  {
+    // B4 T24 f4 (m2 de f3 r2 = m17; D27): la línea exacta se relaja a sus partes (el patrón de TEST 26): reformatearla no rompe la prueba.
+    const editando = /const isEditing = ([^;\n]+);/.exec(pedidos)?.[1] ?? '';
+    assert.ok(editando.length > 0, 'isEditing existe');
+    for (const parte of [/!cerrado\b/, /\bpuedeEditar\b/, /editStage === sd\.stage/]) assert.match(editando, parte, `sin permiso, la tarjeta no se edita: ${parte}`);
+    assert.ok(!/\|\|/.test(editando), 'isEditing exige las tres (sin un «o»)');
+  }
   assert.match(pedidos, /\{!cerrado && puedeEditar && \(\s*<button onClick=\{\(\)=>openEdit\(sd\)\}/, 'el lápiz de la etapa');
   assert.match(pedidos, /<TrackingPanel pec=\{detail\|\|pec\} puedeEditar=\{accesoPec\.tracking\}/);
   assert.match(pedidos, /\{accesoPec\.cambiarPec && \(\s*<button onClick=\{\(\)=>setShowConfig\(true\)\} title="Configurar etapas, alertas y casilleros"/, 'Configurar etapas (PUT /tracking-config)');
-  assert.match(pedidos, /\{\(detail\?\.recepciones\?\.length > 0 \|\| accesoPec\.cambiarPec\) && \(\s*<button onClick=\{goToRecepcion\}/, '«Hacer recepción» (POST /recepcionar); «Ver recepción» para todos');
+  // B4 T24 f3 (FINAL-m12, D27): «Ver recepción» (abrir) para todos; «Hacer recepción» (crear: POST /recepcionar) con cambiarPec.
+  assert.match(pedidos, /\{\(avisoRecepcion\.accion\.tipo === 'abrir' \|\| accesoPec\.cambiarPec\) && \(\s*<button onClick=\{goToRecepcion\}/, '«Hacer recepción» (POST /recepcionar); «Ver recepción» para todos');
   assert.match(pedidos, /\{!infoEdit \? \(accesoPec\.cambiarPec && \(\s*<button onClick=\{openInfoEdit\}/, '«Editar» la información (PATCH /pedidos/{id})');
   assert.match(pedidos, /\{accesoPec\.cambiarPec && <Button color="purple" icon=\{Plus\} onClick=\{\(\)=>setShowNuevoPec\(true\)\}>Nuevo PEC<\/Button>\}/, '«Nuevo PEC» (POST /pedidos)');
-  assert.match(hub, /\{selectedPvens\.size > 0 && accesoPec\.cambiarPec && \(/, '«Crear PEC Consolidado» (POST /pedidos)');
+  // r1 (D27, C2): la selección vigente (seleccionVigente) en lugar de la vieja.
+  assert.match(hub, /\{vigente\.ids\.length > 0 && accesoPec\.cambiarPec && \(/, '«Crear PEC Consolidado» (POST /pedidos)');
   assert.match(pedidos, /\{accesoPec\.cambiarPec && etapaPec\(detail\?\.estado\) === 'cancelado' && \(/, '«Eliminar definitivamente» del panel');
   // Tránsito: «Iniciar» y «Completar» de la fila (el mismo PATCH /tracking) solo con tracking.
   assert.match(transito, /puedeAvanzar: accesoPec\.tracking/);
@@ -3073,6 +3157,1171 @@ console.log('--- B4 T24 r2 (m2, m10): los tableros de PEC, el esqueleto mientras
     assert.match(f, /!accesoPec\.listo \? <EsqueletoTablero \/> : <TableroKanban/, `${ruta}: el esqueleto con el rol vacío`);
     assert.match(f, /import \{[^}]*\bEsqueletoTablero\b[^}]*\} from '@\/components\/ui';/, `${ruta}: la pieza común`);
   }
+}
+
+console.log('--- B4 T24 f3 (FINAL-C4-f): el conteo con el PATCH por línea, validado en la lib; los botones y el tablero por rol ---');
+{
+  const { leerCantidadConteo, errorCantidadConteo, esConteoHeredado, peticionesConteo, MAX_CANTIDAD_CONTEO, tarjetaRecepcion } = ec;
+  for (const [nombre, f] of Object.entries({ leerCantidadConteo, errorCantidadConteo, esConteoHeredado, peticionesConteo })) {
+    assert.equal(typeof f, 'function', `${nombre} existe`);
+  }
+  // El tope de update_grl (m16 del backend r1): Numeric(10, 2) de la columna.
+  assert.equal(MAX_CANTIDAD_CONTEO, 99999999);
+  // Lo escrito, sin truncar: «2.5» ya no pasa como 2 en silencio; vacío es «nada contado» (0).
+  for (const [texto, n] of [['', 0], ['  ', 0], [null, 0], [undefined, 0], ['3', 3], [' 7 ', 7], ['2.5', 2.5], ['-1', -1], ['0', 0]]) {
+    assert.equal(leerCantidadConteo(texto), n, JSON.stringify(texto));
+  }
+  // La validación en la lib antes de mandar: un entero de 0 a 99.999.999 (el servidor da 422 con 2.5).
+  for (const bueno of [0, 3, 99999999]) assert.equal(errorCantidadConteo(bueno, 'Tornillo'), null, String(bueno));
+  const aviso = 'La cantidad recibida de «Tornillo» debe ser un número entero entre 0 y 99.999.999.';
+  for (const malo of [2.5, -1, 100000000, NaN, Infinity, '3', null, undefined]) assert.equal(errorCantidadConteo(malo, 'Tornillo'), aviso, String(malo));
+  // Heredada: alguna línea sin grl_id (sin PATCH por línea).
+  assert.equal(esConteoHeredado([{ grl_id: 1 }, { grl_id: 2 }]), false);
+  assert.equal(esConteoHeredado([{ grl_id: 1 }, {}]), true);
+  assert.equal(esConteoHeredado([{ grl_id: null }]), true);
+  assert.equal(esConteoHeredado([]), false, 'sin líneas no es heredada');
+  assert.equal(esConteoHeredado(null), false);
+  // Una petición por línea cambiada frente al servidor; el cuerpo deja la línea como el lote (rechazadas y cuarentena en 0).
+  const servidor = [
+    { grl_id: 1, qty_recibida: 5, qty_rechazada: 0, qty_cuarentena: 0 },
+    { grl_id: 2, qty_recibida: null, qty_rechazada: 0, qty_cuarentena: 0 },
+    { grl_id: 3, qty_recibida: 4, qty_rechazada: 1, qty_cuarentena: 0 },
+    { grl_id: 4, qty_recibida: 7, qty_rechazada: 0, qty_cuarentena: 0 },
+    { grl_id: 5, qty_recibida: 2, qty_rechazada: 0, qty_cuarentena: 3 },
+  ];
+  const locales = [
+    { grl_id: 1, nombre: 'A', qty_recibida: 5 },
+    { grl_id: 2, nombre: 'B', qty_recibida: 0 },
+    { grl_id: 3, nombre: 'C', qty_recibida: 4 },
+    { grl_id: 4, nombre: 'D', qty_recibida: 9 },
+    { grl_id: 5, nombre: 'E', qty_recibida: 2 },
+    { grl_id: 6, nombre: 'F', qty_recibida: 1 },
+  ];
+  const cuerpo = (n) => ({ quantity_received: n, quantity_rejected: 0, quantity_quarantine: 0 });
+  assert.deepEqual(peticionesConteo(servidor, locales), {
+    error: null,
+    peticiones: [
+      { grl_id: 2, cuerpo: cuerpo(0) }, // sin contar en el servidor: va con su 0 explícito (la confirmación exige un número)
+      { grl_id: 3, cuerpo: cuerpo(4) }, // las rechazadas no están en 0: el lote las ponía en 0
+      { grl_id: 4, cuerpo: cuerpo(9) }, // cambió
+      { grl_id: 5, cuerpo: cuerpo(2) }, // la cuarentena no está en 0
+      { grl_id: 6, cuerpo: cuerpo(1) }, // el servidor no la trae
+    ],
+  });
+  assert.deepEqual(peticionesConteo(servidor, locales.slice(0, 1)), { error: null, peticiones: [] }, 'igual al servidor: ninguna');
+  assert.deepEqual(peticionesConteo(null, null), { error: null, peticiones: [] });
+  // Una cantidad que no vale: su aviso y NINGUNA petición, aunque otras líneas sí cambien (nada se manda a medias).
+  assert.deepEqual(peticionesConteo(servidor, [{ grl_id: 4, nombre: 'D', qty_recibida: 9 }, { grl_id: 1, nombre: ' Tornillo ', qty_recibida: 2.5 }]),
+    { error: aviso, peticiones: [] });
+  assert.equal(peticionesConteo(servidor, [{ grl_id: 1, qty_recibida: -3 }]).error,
+    'La cantidad recibida de «la línea» debe ser un número entero entre 0 y 99.999.999.', 'sin nombre');
+  // Las líneas sin grl_id (una heredada) no van, pero se validan igual.
+  assert.deepEqual(peticionesConteo([], [{ nombre: 'X', qty_recibida: 3 }]), { error: null, peticiones: [] });
+  assert.match(peticionesConteo([], [{ nombre: 'X', qty_recibida: 1.5 }]).error ?? '', /«X»/);
+  // El tablero: quien no cuenta no ve «Contar y confirmar» (la tarjeta queda en «Abrir»); sin opciones, como siempre.
+  const rec = { id: 7, estado: 'BORRADOR' };
+  assert.equal(tarjetaRecepcion(rec).accionPrincipal?.texto, 'Contar y confirmar', 'sin opciones, como antes');
+  assert.equal(tarjetaRecepcion(rec, { contar: true }).accionPrincipal?.texto, 'Contar y confirmar');
+  assert.equal(tarjetaRecepcion(rec, { contar: false }).accionPrincipal, null, 'quien no cuenta');
+  assert.equal(tarjetaRecepcion({ id: 7, estado: 'COMPLETADA' }, { contar: true }).accionPrincipal, null);
+
+  // El cableado del detalle (recepciones/[id]): el rol después de montar, el PATCH por línea, el lote solo en la heredada y los botones.
+  const cont = leerFuente('app/dashboard/compras/recepciones/[id]/page.tsx');
+  trae(cont, "import { accesoRecepciones, accionesConteo } from '@/lib/roles';");
+  trae(cont, 'const rol = useRolActual();');
+  trae(cont, 'const heredada = esConteoHeredado(items);');
+  // r1 (D27): accionesConteo recibe también sinBodega (C1); lo fija el bloque de r1.
+  assert.match(cont, /const conteo = accionesConteo\(\{ porConfirmar: isEditable, heredada, [^}]*rol \}\);/);
+  assert.match(cont, /if \(!data\?\.id \|\| !conteo\.contar\) return false;\s*const \{ error, peticiones \} = peticionesConteo\(data\.productos, items\);\s*if \(error\) \{ avisar\(error, \{ tono: 'error' \}\); return false; \}/,
+    'la lib valida antes de mandar y el aviso es suyo');
+  // r1 (m22, D27): la serie (y su corte en la primera que falla) está en guardarConteoEnSerie; la página le pasa el PATCH por línea.
+  assert.match(cont, /\(p\) => apiFetch\(`\/compras\/recepciones\/\$\{data\.id\}\/lineas\/\$\{p\.grl_id\}`, \{ method: 'PATCH', body: JSON\.stringify\(p\.cuerpo\) \}\)\);/,
+    'una petición por línea, en serie (si una falla, el resto no sale)');
+  const ramaHeredada = cont.indexOf('if (heredada) {');
+  const lote = cont.indexOf('body: JSON.stringify({ productos: items.map');
+  assert.ok(ramaHeredada >= 0 && lote > ramaHeredada && lote < cont.indexOf('} else {', ramaHeredada), 'el PATCH en lote, solo en la rama heredada (ADMIN)');
+  assert.equal((cont.match(/productos: items\.map/g) ?? []).length, 1, 'un solo PATCH en lote');
+  assert.match(cont, /avisarError\(err, 'Error al guardar el conteo'\);\s*if \(recargarTrasError\(err\)\) await loadRecepcion\(\{ silencioso: true \}\);\s*return false;/,
+    'si una falla: se avisa con el texto del servidor (también su 422) y, con la regla única, se recarga');
+  assert.match(cont, /async function validateConteo\(\) \{\s*if \(!data\?\.id \|\| !conteo\.validar\) return;/);
+  assert.match(cont, /\{conteo\.contar && \(\s*<Button variant="secondary" icon=\{Save\}[^>]*>\s*Guardar Borrador/);
+  assert.match(cont, /\{conteo\.validar && \(\s*<Button color="teal" icon=\{PackageCheck\}[^>]*>\s*Cerrar y Validar Conteo/);
+  assert.match(cont, /\{conteo\.texto && <span role="status"[^>]*>\{conteo\.texto\}<\/span>\}/, 'COMPRAS (o una heredada): el texto de solo lectura');
+  assert.match(cont, /editable: conteo\.contar, actualizar: updateReceived \}\), \[conteo\.contar, updateReceived\]\)/, 'los campos, editables solo para quien cuenta');
+  trae(cont, 'const puedeBodega = isEditable && accesoRecepciones(rol).bodega;', 'la bodega receptora: el PATCH de la recepción (ADMIN y COMPRAS)');
+  assert.match(cont, /\{puedeBodega \? \(\s*<select/);
+  trae(cont, 'disabled={!conteo.validar}', 'las notas van con la confirmación');
+  assert.ok(!/parseInt\(/.test(cont), 'sin parseInt: «2.5» no se trunca en silencio');
+
+  // Compras › Recepciones: «Confirmar» (fila, menú y Drawer) solo con confirmar; «Recepcionar PEC» con recepcionar; la tarjeta del tablero.
+  const pag = leerFuente('app/dashboard/compras/recepciones/page.tsx');
+  // r1 (D27): «Confirmar» de la fila, el Drawer y el tablero salen de confirmarRecepcion (C1 y la heredada); lo fija el bloque de r1.
+  trae(pag, 'const accesoRec = accesoRecepciones(rol);');
+  trae(pag, 'oculto: menu.oculto,'); // r2 (m1, D27): el ítem del menú sale de itemConfirmarMenu
+  noTrae(pag, 'puedeConfirmar', 'r3 (m6, D27): sin el código muerto; el menú y la fila salen de itemConfirmarMenu y confirmarRecepcion');
+  assert.match(pag, /\{accesoRec\.recepcionar && \(\s*<Button size="sm" color="teal" icon=\{Plus\}/);
+  trae(etiquetaJsx(pag, '<TableroKanban'), 'tarjetaDe={tarjetaDeRecepcion}');
+  // Inventario › Recepciones: «Contar y confirmar en Compras» solo a quien cuenta; la misma tarjeta.
+  const inv = leerFuente('app/dashboard/inventario/recepciones/page.tsx');
+  // r1 (D27): Inventario sigue la regla de confirmarRecepcion; lo fija el bloque de r1.
+  trae(etiquetaJsx(inv, '<TableroKanban'), 'tarjetaDe={tarjetaDeRecepcion}');
+}
+
+console.log('--- B4 T24 f3 (FINAL-C7-f): consolidar varios PVEN en un PEC manda ven_ids en el alta, sin un PATCH /ventas/pedidos por PVEN ---');
+{
+  const { vinculoPvenDelPec } = ec;
+  assert.equal(typeof vinculoPvenDelPec, 'function', 'vinculoPvenDelPec existe');
+  // Todos los elegidos en ven_ids; ven_id y ven_numero, solo del primero (VARCHAR(20): antes los números unidos por comas).
+  assert.deepEqual(vinculoPvenDelPec([{ id: 9, numero: ' PVEN-20260009 ' }, { id: 4, numero: 'PVEN-20260004' }, { id: 7, numero: 'PVEN-7' }]),
+    { ven_id: 9, ven_ids: [9, 4, 7], ven_numero: 'PVEN-20260009' });
+  assert.deepEqual(vinculoPvenDelPec([{ id: 3, numero: 'PVEN-3' }]), { ven_id: 3, ven_ids: [3], ven_numero: 'PVEN-3' }, 'uno solo también va en ven_ids');
+  assert.deepEqual(vinculoPvenDelPec([{ id: 3, numero: '  ' }]), { ven_id: 3, ven_ids: [3], ven_numero: null }, 'un número en blanco no vale');
+  for (const vacio of [[], null, undefined, [{ numero: 'PVEN-1' }]]) {
+    assert.deepEqual(vinculoPvenDelPec(vacio), { ven_id: null, ven_numero: null }, `sin PVEN: ${JSON.stringify(vacio)}`);
+  }
+  // El cableado: el alta de Pedidos (NuevoPecModal) y del Hub (handleConvertPvens) llevan el vínculo de la lib; no queda ningún PATCH
+  // /ventas/pedidos ni el aviso «No se pudieron vincular» (V20 del registro cambia); el 409 se dice y recarga con la regla única.
+  const ped = leerFuente('app/dashboard/compras/pedidos/page.tsx');
+  const hub = leerFuente('app/dashboard/compras/page.tsx');
+  for (const [nombre, f] of [['Pedidos', ped], ['Hub', hub]]) {
+    assert.ok(!/\/ventas\/pedidos\//.test(sinComentarios(f)), `${nombre}: sin PATCH /ventas/pedidos/{id} en el alta`);
+    assert.ok(!/No se pudieron vincular/.test(f), `${nombre}: sin el aviso de los PVEN sin vincular`);
+    assert.ok(!/ven_numero: selected\.map|\.join\(', '\),\s*productos/.test(f), `${nombre}: ven_numero ya no une números`);
+  }
+  // r1 (D27): ven_ids sale de la selección vigente (C2); lo fija el bloque de r1.
+  assert.match(ped, /\.\.\.vinculoPvenDelPec\(vigente\.pvens\),/, 'NuevoPecModal: ven_ids, ven_id y ven_numero de la lib');
+  assert.match(ped, /await apiFetch\('\/compras\/pedidos',\{method:'POST',body:JSON\.stringify\(payload\)\}\);\s*onToast\('PEC creado exitosamente','ok'\);/);
+  assert.match(ped, /onToast\(e, 'error'\);\s*if \(recargarTrasError\(e\)\) onCreated\(\);/, 'NuevoPecModal: el 409 con su texto y la recarga');
+  assert.match(hub, /body: JSON\.stringify\(\{\s*\.\.\.vinculoPvenDelPec\(selected\),\s*productos,/, 'el Hub: el vínculo de la lib');
+  assert.match(hub, /const handleConvertPvens = async \(\) => \{[\s\S]*?\} catch \(e\) \{\s*onToast\(e, 'error'\);\s*if \(recargarTrasError\(e\)\) onUpdate\(\);\s*\}/,
+    'el Hub: el 409 con su texto y la recarga');
+}
+
+console.log('--- B4 T24 f3 (A3-f): el Kardex manda Desde y Hasta como el día de Colombia que elige el usuario, y ninguna ayuda dice «UTC» ---');
+{
+  // El borde del ledger: un movimiento del 7 nov a las 21:00 de Colombia (02:00 UTC del 8). Con «Desde 7 nov» y «Hasta 7 nov» la
+  // pantalla manda exactamente esos días (sin pasarlos a UTC); el servidor (A3-b) los compara con las 00:00 de Colombia.
+  assert.deepEqual(ec.extraKardex({ desde: '2026-11-07', hasta: '2026-11-07' }),
+    { sku_id: null, warehouse_id: null, owner: null, direction: null, start_date: '2026-11-07', end_date: '2026-11-07' });
+  assert.equal(ec.extraKardex({ desde: '2026-12-31', hasta: '2027-01-01' }).end_date, '2027-01-01', 'el día tal cual, también en el cambio de año');
+  // El contrato de A3-b (backend/app/api/v1/erp_inventario.py, solo lectura): >= inicio(D) y < inicio(D+1), las 00:00 de Colombia.
+  const inv = readFileSync(new URL('../../backend/app/api/v1/erp_inventario.py', import.meta.url), 'utf8');
+  assert.match(inv, /InventoryMovement\.created_at >= _inicio_del_dia_co\(start_date\)/);
+  assert.match(inv, /InventoryMovement\.created_at < _inicio_del_dia_co\(end_date \+ datetime\.timedelta\(days=1\)\)/);
+  // Ninguna ayuda dice «UTC»: ni el JSDoc de extraKardex ni lo que se ve en el Kardex (title, aria-label, textos).
+  const lib = leerFuente('lib/estados-compras.js');
+  const jsdoc = lib.slice(lib.lastIndexOf('/**', lib.indexOf('export function extraKardex(')), lib.indexOf('export function extraKardex('));
+  assert.ok(!/UTC/.test(jsdoc), 'el JSDoc de extraKardex ya no dice que los bordes son días UTC');
+  assert.match(jsdoc, /el día de Colombia/);
+  const k = leerFuente('app/dashboard/inventario/kardex/page.tsx');
+  assert.ok(!/UTC/.test(sinComentarios(k).replace(/\{\/\*[\s\S]*?\*\/\}/g, '')), 'el Kardex no dice «UTC» en lo que se ve');
+}
+
+console.log('--- B4 T24 f3 (el anillo recortado, duda 1 y m8 de f1 r3): «Completar» de Tránsito y «Confirmar» de Recepciones caben con su anillo ---');
+{
+  // Tránsito: la columna Acción pasa de 96 a 112 px («Completar», 85 px, no cabía en 72 útiles); las visibles siguen en la caja de 704.
+  const tr = leerFuente('app/dashboard/compras/transito/page.tsx');
+  trae(tr, "{ id: 'accion', titulo: 'Acción', ancho: 112, clave: true, fija: 'derecha', alinear: 'centro', celda: (p) => <CeldaAccion p={p} /> },");
+  assert.equal(anchoVisible(tr, 'const COLUMNAS_TABLA_TRANSITO'), 672, 'R26: 120 + 124 + 104 + 104 + 108 + 112');
+  // Recepciones: la columna no se ensancha (696 + 20 pasaría de 704): la carga de «Confirmar» no ensancha el botón; el spinner va encima del
+  // texto, que se oculta sin dejar de ocupar su lugar (sin carga, la celda cabe en sus 132 px útiles).
+  const rec = leerFuente('app/dashboard/compras/recepciones/page.tsx');
+  trae(rec, '{confirmando && <RefreshCw size={12} aria-hidden="true" className="absolute inset-0 m-auto animate-spin" />}');
+  trae(rec, "<span className={confirmando ? 'invisible' : undefined}>Confirmar</span>");
+  assert.match(rec, /className=\{`relative inline-flex items-center gap-1 rounded-lg border border-teal-700/, 'el spinner se ubica sobre el botón');
+  assert.equal(anchoVisible(leerFuente('app/dashboard/compras/columnas-recepcion.tsx'), 'export function columnasRecepcion'), 696, 'Recepciones: sin ensanchar');
+}
+
+console.log('--- B4 T24 f3 (F57, F54): el Hub de Compras — «Reintentar» de los PVEN da señal mientras carga; los textos del panel con GC:12 ---');
+{
+  const hub = leerFuente('app/dashboard/compras/page.tsx');
+  // F57: la lista de consolidación con la vuelta de su carga, como stats; mientras va el reintento, «Cargando…» y el botón apagado.
+  // r1 (m31, m36, D27): la carga se lee con estadoReintento (lib, ejecutada en el bloque de r1) y el botón conserva el foco (aria-disabled).
+  trae(hub, 'const cargandoVentas = estadoReintento(ventas, vueltaVentas).cargando;');
+  trae(hub, 'cargandoVentas={cargandoVentas}');
+  trae(hub, "<button type=\"button\" onClick={cargandoVentas ? undefined : onReintentarVentas} aria-disabled={cargandoVentas || undefined} aria-busy={cargandoVentas}");
+  trae(hub, "{cargandoVentas ? 'Cargando…' : 'Reintentar'}");
+  // F54: «Información», «Transportadora», «Cant.» y la etiqueta del estado (infoEstadoPedido), nunca el código.
+  for (const viejo of ["l:'Info PEC'", "['Carrier',", '>Qty<', '>PEND. COMPRA<']) noTrae(hub, viejo, `sin ${viejo}`);
+  trae(hub, "l:'Información'");
+  trae(hub, "['Transportadora',");
+  trae(hub, '<th className="px-4 py-3 text-center">Cant.</th>');
+  trae(hub, "{infoEstadoPedido('PENDIENTE_COMPRA').label}");
+}
+
+console.log('--- B4 T24 f3 (FINAL-m4, ruling 7): Compras › Historial no fabrica respuestas de IA: su pestaña Análisis es AsistenteEnConstruccion ---');
+{
+  const h = leerFuente('app/dashboard/compras/historial/page.tsx');
+  trae(h, "import { AsistenteEnConstruccion } from '@/components/analisis';");
+  trae(h, "{activeTab === 'Analisis' && (\n            <div className=\"p-6\">\n              <AsistenteEnConstruccion titulo=\"Asistente de compras\"");
+  // Sin el análisis ni el chat simulados (R2): ni su estado, ni sus funciones, ni sus textos fijos.
+  for (const viejo of ['setAiAnalysis', 'setAiChat', 'handleAIAnalysis', 'sendAIChat', "role:'ia'", 'Con base en los datos actuales', 'ANÁLISIS DE HISTORIAL',
+    'Nebulae Analytics', 'Generar Análisis', 'Consultar al Asistente']) {
+    noTrae(h, viejo, `sin ${viejo}`);
+  }
+}
+
+console.log('--- B4 T24 f3 (FINAL-m12, F64, FINAL-m13, F62): el panel de un PEC — la recepción del resto, el 404 al eliminar, el seguimiento y sus textos ---');
+{
+  const { avisoRecepcionPec, despuesDeEliminarPec } = ec;
+  assert.equal(typeof avisoRecepcionPec, 'function', 'avisoRecepcionPec existe');
+  // FINAL-m12: en bodega sin recepción por confirmar, «Hacer recepción» crea la del resto; nunca abre una ya confirmada.
+  const confirmada = { id: 5, numero: 'ENINV-5', estado: 'COMPLETADA' };
+  const borrador = { id: 8, numero: 'ENINV-8', estado: 'BORRADOR' };
+  assert.deepEqual(avisoRecepcionPec({ estado: 'PARCIALMENTE_RECIBIDA', recepciones: [confirmada] }), {
+    titulo: 'Mercancía recibida en parte', texto: 'Falta por recibir: inicia la recepción de lo que falta.', accion: { tipo: 'crear', texto: 'Hacer recepción' },
+  }, 'parcial con la recepción confirmada: crea la del resto');
+  assert.deepEqual(avisoRecepcionPec({ estado: 'PARCIALMENTE_RECIBIDA', recepciones: [confirmada, borrador] }).accion, { tipo: 'abrir', id: 8, texto: 'Ver recepción' },
+    'con una por confirmar, la abre');
+  assert.deepEqual(avisoRecepcionPec({ estado: 'RECIBIDO', recepciones: [] }), {
+    titulo: 'Mercancía recibida en bodega, pendiente de recepción', texto: 'Inicia el conteo físico de este pedido.', accion: { tipo: 'crear', texto: 'Hacer recepción' },
+  });
+  assert.equal(avisoRecepcionPec({ estado: 'RECIBIDO', recepciones: [borrador] }).texto, 'Recepción ENINV-8 en curso.');
+  // Recibido (RECIBIDA) con recepciones: «Ver recepción» abre la última (el camino de vuelta desde el PEC, como antes).
+  assert.deepEqual(avisoRecepcionPec({ estado: 'RECIBIDA', recepciones: [confirmada] }).accion, { tipo: 'abrir', id: 5, texto: 'Ver recepción' });
+  for (const pec of [{ estado: 'RECIBIDA', recepciones: [] }, { estado: 'EMITIDO' }, { estado: 'EN_TRANSITO', recepciones: [borrador] }, null]) {
+    assert.equal(avisoRecepcionPec(pec), null, JSON.stringify(pec));
+  }
+  // El tablero muestra el PEC parcial en «En bodega»: el panel también lo avisa (la misma columna).
+  assert.equal(ec.columnaPec('PARCIALMENTE_RECIBIDA'), 'en_bodega');
+  // F64: un 404 al eliminar (ya lo borró otro) cierra el panel; la regla única recarga; un 500, nada.
+  assert.equal(despuesDeEliminarPec({ status: 404 }), 'cerrar');
+  for (const status of [400, 409, 422, undefined]) assert.equal(despuesDeEliminarPec({ status }), 'recargar', String(status));
+  assert.equal(despuesDeEliminarPec({ status: 500 }), null);
+  assert.equal(despuesDeEliminarPec({ status: 403 }), null);
+  // El cableado del panel.
+  const ped = leerFuente('app/dashboard/compras/pedidos/page.tsx');
+  // r1 (m20, D27): el aviso recibe {recepcionar} del rol; lo fija el bloque de r1.
+  trae(ped, 'const avisoRecepcion = avisoRecepcionPec(detail, { recepcionar: accesoPec.cambiarPec });');
+  trae(ped, '{avisoRecepcion && (');
+  trae(ped, "if (accion.tipo === 'abrir') { router.push(`/dashboard/compras/recepciones/${accion.id}`); return; }");
+  trae(ped, 'router.push(`/dashboard/compras/recepciones/${(r?.data ?? r)?.id}`);');
+  noTrae(ped, "['RECIBIDO','RECIBIDA'].includes(detail?.estado)", 'sin la lista que dejaba fuera a PARCIALMENTE_RECIBIDA');
+  // FINAL-m13: el PATCH /tracking del panel recarga con la regla única.
+  const etapa = ped.slice(ped.indexOf('async function updateStage('), ped.indexOf('const [infoEdit, setInfoEdit]'));
+  assert.match(etapa, /\} catch \(e\) \{[\s\S]*?onToast\(e, 'error'\);\s*if \(recargarTrasError\(e\)\) onUpdate\(\);\s*\}/, 'updateStage: la regla única');
+  // F62: los textos con tildes y la etiqueta del estado de pedido (los valores guardados, como 'Credito 30 dias', no cambian).
+  for (const viejo of ['Numero de Guia', 'Historial de guias', 'Tipo de Envio', 'Entrega Estimada (dias)', 'Sin PVEN en estado Pendiente Compra', '<strong>Pendiente Compra</strong>']) {
+    noTrae(ped, viejo, `sin «${viejo}»`);
+  }
+  for (const nuevo of ['Número de guía / tracking', 'Historial de guías:', 'Tipo de envío', 'Entrega estimada (días)', 'Sin PVEN pendientes de compra',
+    "<strong>{infoEstadoPedido('PENDIENTE_COMPRA').label}</strong>"]) {
+    trae(ped, nuevo);
+  }
+}
+
+console.log('--- B4 T24 f3 (F79, F82, F85, F86, F87-f, F78): el Hub de Inventario — el pie de la bodega, los textos, Almacenes, las categorías padre y el encabezado ---');
+{
+  const { textoPieBodega, marcarCategoriasPadre, ESTADOS_STOCK, TOPE_TABLERO_COMPRAS } = ec;
+  // F79: singular y plural; sin riesgo, la etiqueta de ESTADOS_STOCK; con la consulta recortada, no afirma de lo que no cargó.
+  assert.deepEqual(textoPieBodega(1), { texto: '1 bajo el mínimo o agotada', alerta: true });
+  assert.deepEqual(textoPieBodega(3), { texto: '3 bajo el mínimo o agotadas', alerta: true });
+  assert.deepEqual(textoPieBodega(1200, { recortado: true }), { texto: '1.200 bajo el mínimo o agotadas', alerta: true });
+  // r1 (m41, D27): una bodega sin alertas dice «Sin alertas» (no «Bien abastecido», la etiqueta de una referencia, en masculino).
+  assert.deepEqual(textoPieBodega(0), { texto: 'Sin alertas', alerta: false });
+  assert.deepEqual(textoPieBodega(0, { recortado: true }), { texto: `Sin alertas en las ${TOPE_TABLERO_COMPRAS} cargadas`, alerta: false });
+  assert.equal(textoPieBodega(null).texto, 'Sin alertas');
+  // F87-f: las padre, marcadas (sin mutar); null sigue null.
+  const cats = [{ id: 1, name: 'Hogar', parent_id: null }, { id: 2, name: 'Cocina', parent_id: 1 }, { id: 3, name: 'Juguetes', parent_id: null }];
+  assert.deepEqual(marcarCategoriasPadre(cats).map((c) => c.name), ['Hogar (categoría padre)', 'Cocina', 'Juguetes']);
+  assert.equal(cats[0].name, 'Hogar', 'no muta lo que recibe');
+  assert.equal(marcarCategoriasPadre(null), null);
+  // F85: el vacío nunca muestra el id crudo; sin el nombre, «la bodega elegida».
+  const { textoVacioExistencias } = await import('../src/lib/tabla.js');
+  assert.equal(textoVacioExistencias({ bodega: true }).titulo, 'Ninguna existencia en la bodega elegida.');
+  assert.equal(textoVacioExistencias({ categoria: true, bodega: 'Central' }).titulo, 'Ninguna existencia en la bodega «Central» y en la categoría elegida.');
+  // El cableado del Hub.
+  const hub = leerFuente('app/dashboard/inventario/page.tsx');
+  trae(hub, '{textoPieBodega(b.en_riesgo, { recortado: recortado }).texto}', 'F79: el pie con su regla');
+  trae(hub, 'const recortado = (listado.total ?? 0) > TOPE_TABLERO_COMPRAS;');
+  noTrae(hub, "'Bien abastecida'", 'F79: sin la etiqueta local');
+  // r1 (m24, D27): el mismo texto, ahora con AvisoDeError (un 403 no ofrece «Reintentar»).
+  trae(hub, '<AvisoDeError error={listado.error} fallo="No se pudieron cargar las existencias por bodega" onReintentar={listado.recargar} acento="indigo" />', 'F82 a');
+  trae(hub, '<h2 className="sr-only">Existencias por bodega</h2>', 'F82 b');
+  noTrae(hub, '`#${filtros.bodega}`', 'F85: sin el id crudo');
+  noTrae(hub, '`#${filtros.categoria}`', 'F85');
+  trae(hub, 'warehouse_id: null, limit: TOPE_TABLERO_COMPRAS', 'F86: Almacenes muestra todas las bodegas');
+  trae(hub, 'catalogo={categoriasMarcadas} valor={filtros.categoria}', 'F87-f: el selector con las padre marcadas');
+  trae(hub, '<div className="flex flex-wrap items-center gap-3">', 'F78: los botones se parten');
+  trae(hub, '<div className="flex flex-wrap items-center gap-2">\n                <h1 className="text-3xl font-black text-slate-900 tracking-tight break-words">HUB de Inventario</h1>', 'F78: el título');
+}
+
+console.log('--- B4 T24 f3 (F88, F90, F91): el Kardex — el autocompletar como combobox, el título del detalle y las opciones del propietario ---');
+{
+  const k = leerFuente('app/dashboard/inventario/kardex/page.tsx');
+  // F88: la semántica de combobox, «Buscando…», Esc y al perder el foco, y las flechas.
+  trae(k, 'role="combobox" aria-expanded={listaSkuAbierta} aria-controls="kardex-sku-opciones" aria-autocomplete="list"');
+  trae(k, '<div ref={refListaSku} id="kardex-sku-opciones" role="listbox" aria-label="Productos que coinciden"');
+  trae(k, '<p role="status" className="px-3 py-2 text-xs text-slate-600">Buscando…</p>', 'mientras la respuesta no llega');
+  // r1 (D27, C3): las teclas y el cierre pasan a la lib (teclaComboboxSku, cierraComboboxAlSalir); aria-selected sigue a la opción con el
+  // foco. Lo fija el bloque de r1.
+  trae(k, "role=\"option\" aria-selected={i === indiceSku} onClick={() => elegirSku(o)}");
+  trae(k, 'if (cierraComboboxAlSalir(e.currentTarget.contains(e.relatedTarget as Node | null), { sinDestino: e.relatedTarget == null, ratonSobreLista: ratonSobreLista.current })) setSkuCerrado(true);', 'al salir del campo y de la lista, se cierra (r2, m5: con el null de Safari y el ratón sobre la lista, D27)');
+  trae(k, '<div className="relative" onKeyDown={teclaSku} onBlur={saleDelSku}>');
+  trae(k, 'setSkuCerrado(false);', 'escribir la abre otra vez');
+  // F90: el título fijo; el número en el subtítulo.
+  trae(k, '<Modal title="Detalle del movimiento" subtitle={[numeroMovimiento(m), m.sku, m.product_name].filter(Boolean).join(\' · \')}');
+  noTrae(k, 'title={`Movimiento ${numeroMovimiento(m)}`}', 'sin «Movimiento Movimiento n.º 3»');
+  // F91: las opciones del propietario con etiquetaPropietario.
+  trae(k, "{['NEBULAE', 'MAU'].map((o) => <option key={o} value={o}>{etiquetaPropietario(o)}</option>)}");
+  noTrae(k, '<option value="NEBULAE">Nebulae</option>', 'sin el texto escrito a mano');
+}
+
+console.log('--- B4 T24 f3 (B40-f, F74-f, F73): los enlaces ?sku= y ?id= piden por su parámetro exacto; ?id=063 no repite ---');
+{
+  // B40-f: el SKU exacto de B40-b (GET /products?sku=); F74-f: el id exacto de F74-b (GET /inventory/operations?id=), los dos leídos en solo lectura.
+  assert.equal(ec.pedirEnlaceProducto(null, null, 'NEB-1').ruta, '/products?sku=NEB-1&limit=50&offset=0');
+  const catalogo = readFileSync(new URL('../../backend/app/api/v1/catalog.py', import.meta.url), 'utf8');
+  assert.ok(catalogo.slice(catalogo.indexOf('def list_products('), catalogo.indexOf('def list_products(') + 400).includes('sku: Optional[str] = None,'), 'B40-b: /products acepta ?sku=');
+  const inv = readFileSync(new URL('../../backend/app/api/v1/inventory.py', import.meta.url), 'utf8');
+  assert.ok(inv.includes('MENSAJE_ID_OPERACION = "El id de la operación debe ser un número entero positivo."'), 'F74-b: /inventory/operations acepta ?id=');
+  // F73: la marca es String(id): ?id=063 y ?id=63 son el mismo traslado (no se repiten la consulta ni el aviso).
+  assert.equal(ec.pedirEnlaceTraslado('63', '063'), null, '?id=063 ya atendido como 63');
+  assert.equal(ec.pedirEnlaceTraslado(null, '063'), 63);
+  assert.equal(ec.pedirEnlaceTraslado(ec.llegadaEnlaceTraslado(63, []).marca, '0063'), null);
+  // r1 (F69, D27): el efecto bajó a la lib (abrirEnlaceTraslado): ahí se lee llegada.avisar; la página pasa el aviso con su tono.
+  trae(readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8'), 'if (llegada.avisar) avisar(`No se encontró el traslado ${numeroTraslado({ id })}.`);', 'la lib lee llegada.avisar');
+  trae(leerFuente('app/dashboard/compras/traslados/page.tsx'), "avisar: (texto) => avisar(texto, { tono: 'info' }),");
+}
+
+console.log('--- B4 T24 f3 (F56, F55, F89, F94, FINAL-m16, FINAL-m17, F72, FINAL-m15): comentarios, textos y una constante ---');
+{
+  const lib = leerFuente('lib/estados-compras.js');
+  noTrae(lib, 'estadosDeColumnaPec', 'F56: sin la función que ya no existe');
+  trae(lib, 'estadosDeColumnaLista (kanban.js) la convierte en la columna entera', 'F56');
+  noTrae(lib, 'con fallas quedan en la ventana);', 'F55: el JSDoc ya no dice lo que la página no hace');
+  trae(leerFuente('app/dashboard/inventario/piezas-inventario.tsx'), 'la fuente ÚNICA de las piezas de las cinco pantallas de existencias', 'F89');
+  trae(leerFuente('app/dashboard/inventario/traslados/page.tsx'), 'Todas se ven por defecto (696 px).', 'F94');
+  // FINAL-m16: la barra de submódulos con tildes.
+  trae(leerFuente('app/dashboard/compras/comp-nav.ts'), "{ name: 'Mercancía en tránsito', path: '/dashboard/compras/transito' },");
+  // FINAL-m17: el title de Retraso con el singular de la celda (textoDiasRetraso).
+  assert.equal(`${ec.textoDiasRetraso(1)} de retraso`, '1 día de retraso');
+  assert.equal(`${ec.textoDiasRetraso(4)} de retraso`, '4 días de retraso');
+  trae(leerFuente('app/dashboard/compras/columnas-recepcion.tsx'), '`${textoDiasRetraso(retrasoDeRecepcion(r))} de retraso`');
+  // F72: Tránsito usa TOPE_TABLERO_COMPRAS (el del aviso).
+  trae(leerFuente('app/dashboard/compras/transito/page.tsx'), "limit: TOPE_TABLERO_COMPRAS, offset: 0 };");
+  // FINAL-m15: la ayuda del disponible con la regla de R10 (por bodega y luego la suma), también en el banner de Stock.
+  const kpisLib = await import('../src/lib/kpis.js');
+  assert.equal(kpisLib.tarjetasStock({ unidades_disponibles: 3 }).disponible.ayuda, 'Por bodega: físico menos comprometido, nunca negativo; luego se suma.');
+  trae(leerFuente('app/dashboard/inventario/stock/page.tsx'), 'El <strong>Disponible</strong> se calcula por bodega:', 'el banner con la misma regla');
+}
+
+console.log('--- B4 T24 f3 r1 (C1 y la heredada): «Confirmar» con la regla del detalle en todas las pantallas; la bodega receptora al crear la recepción ---');
+{
+  const { datosConfirmacion, bodegaRecepcion, cuerpoRecepcionarPec } = ec;
+  for (const [nombre, f] of Object.entries({ datosConfirmacion, bodegaRecepcion, cuerpoRecepcionarPec })) assert.equal(typeof f, 'function', `${nombre} existe`);
+  // Lo que confirmarRecepcion necesita de una fila (la MISMA regla en la fila, el menú, el Drawer, el tablero y el enlace de Inventario).
+  assert.deepEqual(datosConfirmacion({ estado: 'BORRADOR', warehouse_id: 3, productos: [{ grl_id: 1 }] }), { porConfirmar: true, heredada: false, sinBodega: false });
+  assert.deepEqual(datosConfirmacion({ estado: 'BORRADOR', warehouse_id: null, productos: [{ grl_id: 1 }] }), { porConfirmar: true, heredada: false, sinBodega: true });
+  assert.deepEqual(datosConfirmacion({ estado: 'BORRADOR', productos: [{ grl_id: 1 }, { sku_id: 4 }] }), { porConfirmar: true, heredada: true, sinBodega: true });
+  assert.deepEqual(datosConfirmacion({ estado: 'COMPLETADA', warehouse_id: 2, productos: [] }), { porConfirmar: false, heredada: false, sinBodega: false });
+  assert.deepEqual(datosConfirmacion(null), { porConfirmar: false, heredada: false, sinBodega: true });
+  // La bodega que va al crear: lo elegido; sin tocar el select, la única si hay una sola; si no, '' (opcional: la del PEC).
+  assert.equal(bodegaRecepcion(null, [{ id: 4, name: 'Central' }]), '4', 'una sola: preseleccionada');
+  assert.equal(bodegaRecepcion(null, [{ id: 4 }, { id: 5 }]), '', 'varias: ninguna');
+  assert.equal(bodegaRecepcion(null, []), '');
+  assert.equal(bodegaRecepcion(null, null), '', 'mientras carga');
+  assert.equal(bodegaRecepcion('', [{ id: 4 }]), '', 'el usuario eligió «la del pedido»');
+  assert.equal(bodegaRecepcion('5', [{ id: 4 }]), '5');
+  assert.equal(bodegaRecepcion(undefined, [{ id: null }, { id: 9 }]), '9', 'sin id no cuenta');
+  // El cuerpo de POST /pedidos/{id}/recepcionar: warehouse_id solo con una bodega elegida.
+  assert.deepEqual(cuerpoRecepcionarPec({ creadoPor: 'Ana', notas: 'Mesa', bodega: '4' }), { created_by: 'Ana', force_full: false, notas: 'Mesa', warehouse_id: 4 });
+  assert.deepEqual(cuerpoRecepcionarPec({ creadoPor: 'Ana', bodega: '' }), { created_by: 'Ana', force_full: false });
+  for (const malo of ['0', '-2', '2.5', 'x', null, undefined]) {
+    assert.equal('warehouse_id' in cuerpoRecepcionarPec({ creadoPor: '', bodega: malo }), false, String(malo));
+  }
+  // El servidor ya acepta body.warehouse_id (leído en solo lectura).
+  const esquemas = readFileSync(new URL('../../backend/app/api/v1/schemas_compras.py', import.meta.url), 'utf8');
+  assert.match(esquemas, /class CrearRecepcionDesdePecBody\(BaseModel\):\s*warehouse_id: Optional\[int\] = None/);
+  assert.match(readFileSync(new URL('../../backend/app/api/v1/erp_compras.py', import.meta.url), 'utf8'), /wid = body\.warehouse_id or p\.warehouse_id/);
+
+  // El cableado. El detalle: sinBodega en accionesConteo.
+  const cont = leerFuente('app/dashboard/compras/recepciones/[id]/page.tsx');
+  trae(cont, 'const conteo = accionesConteo({ porConfirmar: isEditable, heredada, sinBodega: !data?.warehouse_id, rol });');
+  // Compras › Recepciones: la fila, el menú (apagado con su motivo si el rol confirma pero la recepción no), el Drawer y el tablero.
+  const pag = leerFuente('app/dashboard/compras/recepciones/page.tsx');
+  trae(pag, "import { accesoRecepciones, confirmarRecepcion, itemConfirmarMenu } from '@/lib/roles';"); // r2 (m1, D27)
+  trae(pag, 'const confirmacion = useCallback((r: FilaRecepcion) => confirmarRecepcion({ ...datosConfirmacion(r), rol }), [rol]);');
+  assert.match(pag, /\{confirmacion\.confirmar && \(\s*<button type="button" onClick=\{\(\) => acciones\?\.confirmar\(r\)\}/, 'la fila');
+  trae(pag, 'deshabilitado: menu.deshabilitado || acciones?.confirmandoId != null,', 'el menú'); // r2 (m1, D27): itemConfirmarMenu
+  trae(pag, "titulo: menu.titulo ?? (acciones?.confirmandoId != null ? 'Hay otra confirmación en camino.' : undefined) },", 'el menú dice por qué');
+  assert.match(pag, /\{confirmacion\(selectedItem\)\.confirmar \? \(\s*<Button color="teal" icon=\{Check\}/, 'el Drawer');
+  assert.match(pag, /\) : confirmacion\(selectedItem\)\.texto && \(\s*<p role="status"[^>]*>\{confirmacion\(selectedItem\)\.texto\}<\/p>/, 'el Drawer: su motivo (m42)');
+  trae(pag, 'tarjetaRecepcion(r, { contar: confirmacion(r).confirmar, motivo: confirmacion(r).texto }), [confirmacion])', 'el tablero');
+  // «Recepcionar PEC»: la bodega receptora antes de crear (y su cuerpo).
+  trae(pag, "import { SelectorBodegaRecepcion, useBodegasRecepcion } from '../bodega-recepcion';");
+  trae(pag, 'const bodegas = useBodegasRecepcion(showPecModal);');
+  trae(pag, '<SelectorBodegaRecepcion id="bodega-recepcionar-pec" bodegas={bodegas} elegida={bodegaElegida} onElegir={setBodegaElegida}');
+  assert.match(pag, /body: JSON\.stringify\(cuerpoRecepcionarPec\(\{\s*creadoPor: user, notas: 'Recepción generada en Mesa de Entrada', bodega: bodegaRecepcion\(bodegaElegida, bodegas\.filas\),\s*\}\)\),/);
+  // Inventario › Recepciones: la misma regla en el tablero y en el enlace del Drawer, con su motivo.
+  const inv = leerFuente('app/dashboard/inventario/recepciones/page.tsx');
+  trae(inv, 'const confirmacion = useCallback((r: FilaRecepcion) => confirmarRecepcion({ ...datosConfirmacion(r), rol }), [rol]);');
+  trae(inv, "{confirmacion(selectedItem).confirmar ? 'Contar y confirmar en Compras' : 'Abrir en Compras'}");
+  trae(inv, 'tarjetaRecepcion(r, { contar: confirmacion(r).confirmar, motivo: confirmacion(r).texto }), [confirmacion])');
+  assert.match(inv, /\{confirmacion\(selectedItem\)\.texto && \(\s*<p role="status"/);
+  // «Hacer recepción» del panel del PEC (ADMIN y COMPRAS): la bodega antes de crear; el hook antes del return temprano.
+  const ped = leerFuente('app/dashboard/compras/pedidos/page.tsx');
+  trae(ped, "const creaRecepcion = avisoRecepcionPec(detail)?.accion.tipo === 'crear' && accesoPec.cambiarPec;");
+  assert.ok(ped.indexOf('const bodegas = useBodegasRecepcion(creaRecepcion);') < ped.indexOf('  if (!pec) return null;\n  // C10'), 'el hook va antes del return');
+  trae(ped, 'body: JSON.stringify(cuerpoRecepcionarPec({ creadoPor: user, bodega: bodegaRecepcion(bodegaElegida, bodegas.filas) })),');
+  assert.match(ped, /\{creaRecepcion && \(\s*<SelectorBodegaRecepcion id="bodega-hacer-recepcion"/);
+  // La pieza: el select es opcional, la del pedido por defecto, y un 403 no ofrece «Reintentar».
+  const pieza = leerFuente('app/dashboard/compras/bodega-recepcion.tsx');
+  trae(pieza, 'const valor = bodegaRecepcion(elegida, bodegas.filas);');
+  trae(pieza, "'Sin elegir (la del pedido, si tiene)'"); // r2 (m3, D27)
+  trae(pieza, '{ofreceReintentar(bodegas.error) && (');
+}
+
+console.log('--- B4 T24 f3 r1 (C2): después del 409, la selección de PVEN deja solo los que siguen pendientes de compra y avisa cuál quitó ---');
+{
+  const { seleccionVigente, avisoSeleccionQuitada } = ec;
+  assert.equal(typeof seleccionVigente, 'function', 'seleccionVigente existe');
+  assert.equal(typeof avisoSeleccionQuitada, 'function', 'avisoSeleccionQuitada existe');
+  const pvens = [
+    { id: 1, numero: 'PVEN-1', estado: 'PENDIENTE_COMPRA' },
+    { id: 2, numero: 'PVEN-2', estado: 'EN_PROCESO' }, // otro usuario lo consolidó (el 409)
+    { id: 3, numero: 'PVEN-3', estado: ' PENDIENTE_COMPRA ' },
+    { id: 4, numero: 'PVEN-4', estado: 'CANCELADO' },
+  ];
+  // En el orden de la selección; la lista recargada manda.
+  assert.deepEqual(seleccionVigente(new Set([3, 2, 1]), pvens), { ids: [3, 1], pvens: [pvens[2], pvens[0]], quitados: ['PVEN-2'] });
+  assert.deepEqual(seleccionVigente([4, 9], pvens), { ids: [], pvens: [], quitados: ['PVEN-4', 'PVEN #9'] }, 'el que ya no viene: «PVEN #id»');
+  assert.deepEqual(seleccionVigente(new Set(), pvens), { ids: [], pvens: [], quitados: [] });
+  assert.deepEqual(seleccionVigente(null, null), { ids: [], pvens: [], quitados: [] });
+  assert.deepEqual(seleccionVigente([1], [{ id: 1, estado: 'PENDIENTE_COMPRA' }]).ids, [1]);
+  // ven_ids sale de la selección vigente: el PVEN oculto ya no viaja (cada «Crear» repetía el 409).
+  assert.deepEqual(ec.vinculoPvenDelPec(seleccionVigente(new Set([2, 1, 3]), pvens).pvens), { ven_id: 1, ven_ids: [1, 3], ven_numero: 'PVEN-1' });
+  assert.equal(avisoSeleccionQuitada([]), null);
+  assert.equal(avisoSeleccionQuitada(null), null);
+  assert.equal(avisoSeleccionQuitada(['PVEN-2']), 'PVEN-2 ya no está pendiente de compra: se quitó de la selección.');
+  assert.equal(avisoSeleccionQuitada(['PVEN-2', 'PVEN #9']), 'PVEN-2, PVEN #9 ya no están pendientes de compra: se quitaron de la selección.');
+
+  // NuevoPecModal: el contador, el pie y ven_ids salen de la selección vigente; el aviso de los quitados.
+  const ped = leerFuente('app/dashboard/compras/pedidos/page.tsx');
+  trae(ped, 'const vigente = seleccionVigente(poda.seleccion ?? selectedPvens, pedidosVenta);'); // r2 (m4, D27): con la poda
+  trae(ped, '...vinculoPvenDelPec(vigente.pvens),');
+  trae(ped, '{vigente.ids.length} PVEN seleccionado(s)');
+  trae(ped, '<span className="font-bold">{vigente.ids.length}</span> PVEN asociado(s)');
+  assert.match(ped, /\{avisoQuitados && <p role="status"[^>]*>\{avisoQuitados\}<\/p>\}/);
+  assert.ok(!/selectedPvens\.size/.test(ped), 'Pedidos: nada cuenta la selección vieja');
+  // El Hub: lo mismo, un solo envío a la vez (loading/disabled) y la selección vacía tras un alta buena.
+  const hub = leerFuente('app/dashboard/compras/page.tsx');
+  trae(hub, 'const vigente = seleccionVigente(poda.seleccion ?? selectedPvens, pedidosVenta);'); // r2 (m4, D27): con la poda
+  trae(hub, 'const selected: FilaVenta[] = vigente.pvens;');
+  assert.match(hub, /if \(consolidando\) return;\s*if \(!vigente\.ids\.length\)/, 'un segundo clic no manda otra vez');
+  assert.match(hub, /creado con ' \+ selected\.length \+ ' PVEN\(s\) consolidados'\);\s*setSelectedPvens\(new Set\(\)\);\s*setQuitadosPvens\(\[\]\);[^\n]*\s*onUpdate\(\);/, 'tras el alta, la selección vacía (r3, m4: y sin el aviso viejo)');
+  assert.match(hub, /\} finally \{\s*setConsolidando\(false\);\s*\}/);
+  assert.match(hub, /<button type="button" onClick=\{handleConvertPvens\} disabled=\{consolidando\} aria-busy=\{consolidando\}/);
+  trae(hub, "{consolidando ? 'Creando PEC…' : 'Crear PEC Consolidado'}");
+  assert.match(hub, /\{avisoQuitados && <p role="status"[^>]*>\{avisoQuitados\}<\/p>\}/);
+  assert.ok(!/selectedPvens\.size/.test(hub), 'el Hub: nada cuenta la selección vieja');
+}
+
+console.log('--- B4 T24 f3 r1 (C3, m31): el SKU del Kardex se elige con el ratón y con el teclado; las teclas y el cierre en la lib ---');
+{
+  const { teclaComboboxSku, cierraComboboxAlSalir } = ec;
+  assert.equal(typeof teclaComboboxSku, 'function', 'teclaComboboxSku existe');
+  assert.equal(typeof cierraComboboxAlSalir, 'function', 'cierraComboboxAlSalir existe');
+  const t = (tecla, abierta, indice, total) => teclaComboboxSku({ tecla, abierta, indice, total });
+  // Esc: abierta, la cierra y el foco vuelve al campo (también desde una opción: antes caía en <body>); cerrada, no le toca.
+  assert.deepEqual(t('Escape', true, 2, 3), { abierta: false, foco: -1 });
+  assert.deepEqual(t('Escape', true, -1, 3), { abierta: false, foco: -1 });
+  assert.equal(t('Escape', false, -1, 0), null);
+  // ↓: cerrada, la abre (el foco sigue en el campo); abierta, baja una (de la última no pasa); sin opciones, nada.
+  assert.deepEqual(t('ArrowDown', false, -1, 0), { abierta: true, foco: -1 });
+  assert.deepEqual(t('ArrowDown', true, -1, 3), { abierta: true, foco: 0 });
+  assert.deepEqual(t('ArrowDown', true, 0, 3), { abierta: true, foco: 1 });
+  assert.deepEqual(t('ArrowDown', true, 2, 3), { abierta: true, foco: 2 });
+  assert.equal(t('ArrowDown', true, -1, 0), null);
+  // ↑: desde la primera vuelve al campo (antes se quedaba en ella); desde el campo, nada.
+  assert.deepEqual(t('ArrowUp', true, 0, 3), { abierta: true, foco: -1 });
+  assert.deepEqual(t('ArrowUp', true, 2, 3), { abierta: true, foco: 1 });
+  assert.equal(t('ArrowUp', true, -1, 3), null);
+  assert.equal(t('ArrowUp', false, -1, 0), null);
+  for (const otra of ['Enter', 'a', 'Tab', ' ']) assert.equal(t(otra, true, 0, 3), null, `${otra}: no le toca (Enter lo atiende la opción)`);
+  // Al salir: se cierra si el foco va fuera (o a ninguna parte: relatedTarget null); no si va a algo de adentro.
+  assert.equal(cierraComboboxAlSalir(false), true);
+  assert.equal(cierraComboboxAlSalir(true), false);
+
+  // El cableado: el mousedown en la lista no saca el foco del campo (Safari y Firefox de macOS no enfocan el botón: el blur llegaba con
+  // relatedTarget null y desmontaba la lista antes del clic); tras Esc y tras elegir, el foco vuelve al campo.
+  const k = leerFuente('app/dashboard/inventario/kardex/page.tsx');
+  assert.match(k, /role="listbox" aria-label="Productos que coinciden"[^]{0,240}?onMouseDown=\{\(e\) => e\.preventDefault\(\)\}/, 'el ratón elige');
+  trae(k, 'const r = teclaComboboxSku({ tecla: e.key, abierta: listaSkuAbierta, indice: opciones.indexOf(document.activeElement as HTMLElement), total: opciones.length });');
+  trae(k, 'if (r.foco < 0) refCampoSku.current?.focus(); else opciones[r.foco]?.focus();');
+  trae(k, 'setSkuCerrado(!r.abierta);', '↓ con la lista cerrada la abre');
+  assert.match(k, /cambiarFiltros\(\{ skuId: o\.id, skuEtiqueta: etiqueta \}\);\s*refCampoSku\.current\?\.focus\(\);/, 'al elegir, el foco vuelve al campo');
+  // B4 T24 f4 (m3 de f3 r2): al elegir con el ratón la lista se desmonta (sin onPointerLeave): el ref se reinicia al elegir.
+  assert.match(k, /const elegirSku = \(o: OpcionSku\) => \{[\s\S]{0,400}ratonSobreLista\.current = false;[\s\S]{0,200}cambiarFiltros\(\{ skuId: o\.id/);
+  trae(k, '<input ref={refCampoSku} type="search" aria-label="Producto o SKU"');
+  trae(k, 'onFocus={() => setIndiceSku(i)} onBlur={() => setIndiceSku(-1)}', 'aria-selected sigue a la opción con el foco');
+  // «Buscando…», el error y «Ningún producto…» fuera del listbox (que solo admite option o group).
+  const lista = k.slice(k.indexOf('role="listbox"'), k.indexOf('</div>', k.indexOf('role="listbox"')));
+  assert.ok(!/role="status"|role="alert"|Ningún producto/.test(lista), 'el listbox solo tiene opciones');
+  assert.match(k, /<p role="status"[^>]*>Ningún producto coincide con «\{skuTexto\.trim\(\)\}»\.<\/p>/);
+}
+
+console.log('--- B4 T24 f3 r1 (F59, F61, F65, F76): la cobertura — la fila vencida del PEC, avanzar y confirmar ejecutados, la hora del Kardex ---');
+{
+  // F61: columnas-pec.tsx — la clase de la fila vencida, el title «· Vencido» de Entrega est., el chip y las tres columnas clave.
+  const colPec = leerFuente('app/dashboard/compras/columnas-pec.tsx');
+  trae(colPec, 'export const claseDeFilaPec = (p: FilaColumnasPec) => (p.is_overdue ? `${TABLE.filaAlerta} ${MARCA_VENCIDO}` : null);');
+  trae(colPec, "titleCelda: (p) => `${textoDia(p.fecha_entrega_estimada)}${p.is_overdue ? ' · Vencido' : ''}`, celda: (p) => <CeldaEntrega p={p} /> },");
+  trae(colPec, "titleCelda: (p) => [p.numero, p.ven_numero, p.is_overdue ? 'Vencido' : null].filter(Boolean).join(' · '),");
+  assert.match(colPec, /\{p\.is_overdue && <span className=\{`\$\{CHIP\} text-\[10px\] \$\{CLASE_CHIP\.rose\}`\}>Vencido<\/span>\}/, 'el chip Vencido');
+  assert.match(colPec, /\{ id: 'numero', titulo: 'PEC \/ PVEN', ancho: 132, clave: true, fija: 'izquierda'/);
+  assert.match(colPec, /\{ id: 'estado', titulo: 'Estado', ancho: 120, clave: true,/);
+  assert.match(colPec, /\{ id: 'acciones', titulo: 'Acciones', ancho: 80, clave: true, fija: 'derecha', celda: celdaAcciones \}/);
+
+  // F65: avanzar de Tránsito, ejecutado (no un regex): un 409 recarga, un 500 no, y un segundo clic no manda otro PATCH.
+  const tra = leerFuente('app/dashboard/compras/transito/page.tsx');
+  const correrAvanzar = async ({ falla, pendiente = false, status = 'COMPLETADO' }) => {
+    const llamadas = [];
+    const entorno = {
+      pendienteRef: { current: () => Boolean(pendiente) },
+      iniciarCambio: () => llamadas.push('inicia'),
+      aplicarEtapa: async (p, stage, st) => {
+        llamadas.push(`PATCH ${p.id} ${stage} ${st}`);
+        if (falla) throw Object.assign(new Error('no'), { status: falla });
+      },
+      avisar: (texto) => llamadas.push(`ok: ${texto}`),
+      avisarError: () => llamadas.push('error'),
+      recargarTrasError: (err) => err.status === 409,
+      recargarTodo: () => llamadas.push('recargar'),
+      terminarCambio: () => llamadas.push('termina'),
+      descartarCambio: () => llamadas.push('descarta'),
+    };
+    await funcionEjecutable(tra, 'async (p: FilaTransito, accion: { stage: string; status: string }) =>')(entorno)({ id: 4, numero: 'PEC-4' }, { stage: 'X', status });
+    return llamadas;
+  };
+  assert.deepEqual(await correrAvanzar({}), ['inicia', 'PATCH 4 X COMPLETADO', 'ok: PEC-4: etapa completada', 'recargar', 'termina']);
+  assert.deepEqual(await correrAvanzar({ status: 'EN_PROCESO' }), ['inicia', 'PATCH 4 X EN_PROCESO', 'ok: PEC-4: etapa iniciada', 'recargar', 'termina']);
+  assert.deepEqual(await correrAvanzar({ falla: 409 }), ['inicia', 'PATCH 4 X COMPLETADO', 'error', 'recargar', 'termina'], 'un 409 recarga');
+  assert.deepEqual(await correrAvanzar({ falla: 500 }), ['inicia', 'PATCH 4 X COMPLETADO', 'error', 'descarta'], 'un 500 no recarga');
+  assert.deepEqual(await correrAvanzar({ pendiente: true }), [], 'con un cambio en camino, nada');
+
+  // F65: handleConfirmarRecepcion de Compras › Recepciones, ejecutado: el POST con su clave, la carga por fila y la regla única.
+  const rec = leerFuente('app/dashboard/compras/recepciones/page.tsx');
+  const correrConfirmar = async ({ falla }) => {
+    const llamadas = [];
+    const entorno = {
+      setConfirmandoId: (id) => llamadas.push(`cargando ${id}`),
+      localStorage: { getItem: () => 'Ana' },
+      crypto: { randomUUID: () => 'clave-1' },
+      apiFetch: async (ruta, op) => {
+        llamadas.push(`${op.method} ${ruta} ${JSON.parse(op.body).idempotency_key}`);
+        if (falla) throw Object.assign(new Error('no'), { status: falla });
+      },
+      avisar: () => llamadas.push('ok'),
+      avisarError: (err, texto) => llamadas.push(`error: ${texto}`),
+      setSelectedItem: (v) => llamadas.push(`drawer ${v}`),
+      recargarTodo: () => llamadas.push('recargar'),
+      recargarTrasError: (err) => [400, 409, 422].includes(err.status),
+      numeroRecepcion: (r) => `ENINV-${r.id}`,
+      JSON,
+    };
+    await funcionEjecutable(rec, 'async (r: FilaRecepcion) =>')(entorno)({ id: 8 });
+    return llamadas;
+  };
+  assert.deepEqual(await correrConfirmar({}), ['cargando 8', 'POST /compras/recepciones/8/confirmar clave-1', 'ok', 'drawer null', 'recargar', 'cargando null']);
+  assert.deepEqual(await correrConfirmar({ falla: 400 }), ['cargando 8', 'POST /compras/recepciones/8/confirmar clave-1', 'error: No se pudo confirmar ENINV-8', 'recargar', 'cargando null'], 'un 400 (sin bodega) recarga');
+  assert.deepEqual(await correrConfirmar({ falla: 500 }), ['cargando 8', 'POST /compras/recepciones/8/confirmar clave-1', 'error: No se pudo confirmar ENINV-8', 'cargando null'], 'un 500 no');
+
+  // F76: la hora de un movimiento del Kardex es horaCO (la fuente única de m13): nada de un Intl.DateTimeFormat propio.
+  const fuenteEc = readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const cuerpo = fuenteEc.slice(fuenteEc.indexOf('export function textoFechaMovimiento('), fuenteEc.indexOf('\n}\n', fuenteEc.indexOf('export function textoFechaMovimiento(')));
+  assert.match(cuerpo, /hora: horaCO\(fecha\)/, 'textoFechaMovimiento usa horaCO');
+  assert.ok(!/Intl\.DateTimeFormat|timeZone/.test(sinComentarios(fuenteEc)), 'estados-compras.js no arma fechas con su propia zona');
+}
+
+console.log('--- B4 T24 f3 r1 (F71, F77, F69): la Lista y Traslados — la selección y la fecha en la lib, las copias fuera, el ?id= con doble montaje ---');
+{
+  const { textoSeleccionLista, fechaItemLista, abrirEnlaceTraslado } = ec;
+  for (const [nombre, f] of Object.entries({ textoSeleccionLista, fechaItemLista, abrirEnlaceTraslado })) assert.equal(typeof f, 'function', `${nombre} existe`);
+  // F71: los casos que nunca se habían visto.
+  assert.equal(textoSeleccionLista(1, 1), '1 seleccionado');
+  assert.equal(textoSeleccionLista(3, 2), '3 seleccionados; 2 se pueden pedir');
+  assert.equal(textoSeleccionLista(2, 1), '2 seleccionados; 1 se puede pedir');
+  assert.equal(textoSeleccionLista(1, 0), '1 seleccionado; 0 se pueden pedir');
+  assert.equal(textoSeleccionLista(4, 4), '4 seleccionados');
+  assert.equal(fechaItemLista({ fecha: '2026-11-07T10:00:00' }), '2026-11-07T10:00:00', 'I1: la Lista lee `fecha`');
+  assert.equal(fechaItemLista({ fecha_creacion: 'x' }), null);
+  assert.equal(fechaItemLista(null), null);
+  const lis = leerFuente('app/dashboard/compras/lista-compras/page.tsx');
+  trae(lis, 'fechaMovimiento: fechaItemLista,');
+  noTrae(sinComentarios(lis), 'const textoSeleccion =', 'sin la copia local');
+  noTrae(sinComentarios(lis), 'const fechaDeItem =', 'sin la copia local');
+
+  // F77: Compras › Recepciones y Traslados importan de la lib lo que Inventario ya usa (RP41).
+  const rec = leerFuente('app/dashboard/compras/recepciones/page.tsx');
+  trae(rec, 'const pestanas: PestanaTabla[] = pestanasRecepcion(conteos);');
+  trae(rec, 'extra: enKanban ? EXTRA_TABLERO_RECEPCION : null,');
+  noTrae(sinComentarios(rec), 'pestanasDeRecepciones', 'sin la copia local de las pestañas');
+  const tra = leerFuente('app/dashboard/compras/traslados/page.tsx');
+  trae(tra, 'const pestanas: PestanaTabla[] = pestanasTraslado(listado.conteos);');
+  trae(tra, 'apiFetch(RUTA_CONTEOS_TRASLADOS, { signal: control.signal })');
+  for (const copia of ['pestanasDeTraslados', 'const RUTA_CONTEOS =', 'const columnaDeTraslado =', 'const fechaDeTraslado =']) noTrae(sinComentarios(tra), copia, `sin ${copia}`);
+  assert.match(tra, /columnaDe: columnaDeTraslado,\s*fechaMovimiento: fechaDeTraslado,/, 'el tablero con las de la lib');
+
+  // F69: el efecto del ?id= ejecutado con un apiFetch falso que RESPETA el signal: montar, limpiar (el doble montaje de React) y volver
+  // a montar pide otra vez y abre UNA vez; con la marca puesta, un tercer montaje no pide. Antes sobrevivían la marca en la limpieza
+  // (V1) y en el catch del abort (V2).
+  const montar = (marca, idDeLaUrl, registro, filas = [{ id: 63, status: 'DONE' }]) => abrirEnlaceTraslado({
+    marca, idDeLaUrl,
+    pedir: (ruta, { signal }) => {
+      registro.push(`GET ${ruta}`);
+      return new Promise((resolver, rechazar) => {
+        const t = setTimeout(() => resolver({ status: 'success', data: filas }), 5);
+        signal.addEventListener('abort', () => { clearTimeout(t); rechazar(Object.assign(new Error('abortada'), { name: 'AbortError' })); });
+      });
+    },
+    abrir: (fila) => registro.push(`abrir ${fila.id}`),
+    avisar: (texto) => registro.push(`aviso ${texto}`),
+    avisarError: () => registro.push('error'),
+  });
+  const espera = (ms) => new Promise((r) => setTimeout(r, ms));
+  const marca = { current: null };
+  const registro = [];
+  const limpiar1 = montar(marca, '63', registro);
+  limpiar1(); // el doble montaje: la primera se aborta
+  assert.equal(marca.current, null, 'abortada: la marca queda libre');
+  const limpiar2 = montar(marca, '63', registro);
+  await espera(20);
+  assert.deepEqual(registro, ['GET /inventory/operations?operation_type=TRANSFER&id=63&limit=5', 'GET /inventory/operations?operation_type=TRANSFER&id=63&limit=5', 'abrir 63'],
+    'el segundo montaje vuelve a pedir y abre una sola vez; el abort no avisa ni marca');
+  assert.equal(marca.current, '63', 'la marca, cuando llegó');
+  limpiar2();
+  montar(marca, '063', registro);
+  await espera(10);
+  assert.equal(registro.length, 3, 'ya atendido (también ?id=063): no pide otra vez');
+  // No existe: avisa UNA vez y marca.
+  const otra = { current: null };
+  const r2 = [];
+  montar(otra, '64', r2, []);
+  await espera(20);
+  assert.deepEqual(r2, ['GET /inventory/operations?operation_type=TRANSFER&id=64&limit=5', 'aviso No se encontró el traslado TRL-0064.']);
+  assert.equal(otra.current, '64');
+  // Un error de verdad (no un abort) se avisa y deja la marca libre.
+  const libre = { current: null };
+  const r3 = [];
+  abrirEnlaceTraslado({ marca: libre, idDeLaUrl: '7', pedir: async () => { throw Object.assign(new Error('caído'), { status: 500 }); }, abrir: () => {}, avisar: () => {}, avisarError: () => r3.push('error') });
+  await espera(5);
+  assert.deepEqual(r3, ['error']);
+  assert.equal(libre.current, null);
+  assert.equal(typeof montar({ current: null }, 'x', []), 'function', 'sin id válido: una limpieza que no hace nada');
+}
+
+console.log('--- B4 T24 f3 r1 (m2, m3, m4, m5, m10, m11, m15, m16, m20, m24, m39, m41): comentarios fieles, textos y roles en Compras e Inventario ---');
+{
+  const fuenteEc = readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // m4: el tope de m16 sale de la columna del modelo (Numeric(p, s) de GoodsReceiptLine.quantity_received), no de un literal.
+  const modelo = readFileSync(new URL('../../backend/app/models/fase1b.py', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const clase = modelo.slice(modelo.indexOf('class GoodsReceiptLine(Base):'), modelo.indexOf('class GoodsReceiptLineAllocation(Base):'));
+  const [, p, s] = /quantity_received\s*=\s*Column\(Numeric\((\d+),\s*(\d+)\)/.exec(clase) ?? [];
+  assert.ok(p && s, 'la columna del modelo');
+  assert.equal(ec.MAX_CANTIDAD_CONTEO, 10 ** (Number(p) - Number(s)) - 1, 'MAX_CANTIDAD_CONTEO = 10^(p-s) - 1 de la columna');
+  assert.match(readFileSync(new URL('../../backend/app/api/v1/erp_compras.py', import.meta.url), 'utf8'),
+    /_TIPO_CANTIDAD_GRL = GoodsReceiptLine\.__table__\.c\.quantity_received\.type\s*MAX_CANTIDAD_LINEA = 10 \*\* \(_TIPO_CANTIDAD_GRL\.precision - _TIPO_CANTIDAD_GRL\.scale\) - 1/,
+    'el servidor deriva MAX_CANTIDAD_LINEA de la misma columna');
+  // m2 / m28: el JSDoc de confirmacionDespacho ya no dice que el servidor bloquea por saldo; m5: el de la llegada del enlace de Productos.
+  const entregas = readFileSync(new URL('../src/lib/entregas.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.ok(!entregas.includes('el servidor tiene la misma regla desde FINAL-m35'), 'm2: sin el comentario falso');
+  assert.match(entregas, /el servidor NO bloquea por saldo/);
+  assert.ok(!fuenteEc.includes('`q` también encuentra los que lo contienen'), 'm5: sin el contrato viejo');
+  assert.match(fuenteEc, /filtra por el SKU EXACTO distinguiendo mayúsculas/);
+  // m3: el JSDoc de TEXTO_SEGUIMIENTO_CERRADO va pegado a su export.
+  const flujoFuente = readFileSync(new URL('../src/lib/flujo-compras.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(flujoFuente, /\/\*\* El texto de un seguimiento cerrado \(el panel de la lista, el del Hub y el detalle dicen lo mismo\)\. \*\/\nexport const TEXTO_SEGUIMIENTO_CERRADO = /);
+  assert.ok(!/\*\/\n\/\*\* B4 T24 f3 \(m21 del backend r1\)/.test(flujoFuente), 'sin dos JSDoc seguidos');
+  // m10: el comentario de Historial no coincide con la búsqueda de RP99 («en construcci»).
+  const historial = leerFuente('app/dashboard/compras/historial/page.tsx');
+  assert.equal((historial.slice(0, 600).match(/en construcci/gi) ?? []).length, 0, 'm10: la cabecera no lleva «en construcci»');
+  // m11 / m21 / m37: el aviso de /inventory/stats va SOBRE las tarjetas; con los indicadores bien, no se le culpa.
+  assert.equal(ec.textoAlertaSinDato(true), 'El aviso sobre las tarjetas dice qué falló.');
+  assert.equal(ec.textoAlertaSinDato(false), 'El servidor no dio el número de agotados.');
+  const abasto = leerFuente('app/dashboard/inventario/abastecimiento/page.tsx');
+  assert.ok(abasto.indexOf('<AvisoReintentar error={stats.error}') < abasto.indexOf('<FranjaKpis'), 'el aviso de stats va antes (sobre) la franja');
+  // m15: un PEC ya recibido soltado en «En bodega» no lleva a Recepciones (su selector no lo lista).
+  for (const estado of ['RECIBIDA', 'COMPLETADO']) {
+    assert.deepEqual(ec.reglaSoltarPec({ id: 1, estado }, ec.columnaPec(estado), 'en_bodega'), { tipo: 'bloqueado', motivo: 'Ya llegó a bodega: su estado lo lleva la recepción.' }, estado);
+  }
+  assert.equal(ec.reglaSoltarPec({ id: 1, estado: 'RECIBIDO' }, 'en_bodega', 'recibido').enlace?.href, '/dashboard/compras/recepciones', 'en bodega → recibido sigue con su enlace');
+  // m16: sin el catálogo, «la categoría elegida» (nunca «#7») en Stock, Abastecimiento y Productos.
+  for (const ruta of ['app/dashboard/inventario/stock/page.tsx', 'app/dashboard/inventario/abastecimiento/page.tsx', 'app/dashboard/inventario/productos/page.tsx']) {
+    const f = leerFuente(ruta);
+    assert.ok(!/\?\? `#\$\{/.test(f), `${ruta}: sin el id crudo`);
+    assert.match(f, /\?\.name \?\? true\) : null;/, `${ruta}: true sin el catálogo`);
+  }
+  assert.equal(ec.textoVacioProductos({ categoria: true }).titulo, 'Ningún producto en la categoría elegida.');
+  assert.equal(ec.textoVacioProductos({ q: 'tenis', categoria: true }).titulo, 'Ningún producto coincide con «tenis» en la categoría elegida.');
+  assert.equal(ec.textoVacioProductos({ categoria: 'Calzado' }).titulo, 'Ningún producto en la categoría «Calzado».', 'con nombre, como antes');
+  // m20: «Recepcionar» de la tarjeta y el aviso del panel solo empujan a quien recepciona (ADMIN y COMPRAS).
+  const enBodega = { id: 3, estado: 'RECIBIDO' };
+  assert.equal(ec.tarjetaPedidoCompra(enBodega).accionPrincipal?.texto, 'Recepcionar', 'sin opciones, como antes');
+  assert.equal(ec.tarjetaPedidoCompra(enBodega, { recepcionar: true }).accionPrincipal?.texto, 'Recepcionar');
+  assert.equal(ec.tarjetaPedidoCompra(enBodega, { recepcionar: false }).accionPrincipal, null, 'sin permiso, la tarjeta queda en «Abrir»');
+  const parcial = { id: 3, estado: 'PARCIALMENTE_RECIBIDA', recepciones: [] };
+  assert.equal(ec.avisoRecepcionPec(parcial).texto, 'Falta por recibir: inicia la recepción de lo que falta.', 'como antes');
+  assert.equal(ec.avisoRecepcionPec(parcial, { recepcionar: false }).texto, 'Falta recibir el resto: la recepción la abre Compras.');
+  assert.equal(ec.avisoRecepcionPec(enBodega, { recepcionar: false }).texto, 'Falta la recepción: la abre Compras.');
+  const ped = leerFuente('app/dashboard/compras/pedidos/page.tsx');
+  trae(ped, 'const tarjetaDePec = useCallback((p: FilaPec) => tarjetaPedidoCompra(p, { recepcionar: accesoPec.cambiarPec }), [accesoPec.cambiarPec]);');
+  trae(ped, 'tarjetaDe={tarjetaDePec}');
+  // m24: el error de Almacenes con AvisoDeError (sin el «Reintentar» fijo).
+  const hub = leerFuente('app/dashboard/inventario/page.tsx');
+  assert.ok(!/onClick=\{listado\.recargar\}[\s\S]{0,300}Reintentar/.test(hub), 'sin el botón fijo');
+  // m39: «Editar proveedor» no se cierra mientras guarda.
+  const lis = leerFuente('app/dashboard/compras/lista-compras/page.tsx');
+  trae(lis, '<Modal cierreExterno={false} bloquearCierre={ocupadoId === editando.id} title="Editar proveedor"');
+  trae(lis, '<Button variant="secondary" disabled={ocupadoId === editando.id} onClick={() => setEditando(null)}>Cancelar</Button>');
+  // m41 (la bodega): «Sin alertas», no «Bien abastecido».
+  assert.equal(ec.textoPieBodega(0).texto, 'Sin alertas');
+}
+
+console.log('--- B4 T24 f3 r1 (m6, m18, m22, m25, m31, m36, m40, m43): Nuevo Casillero en la pila, el pie frente a la IA, el foco al reintentar y las cargas en la lib ---');
+{
+  const { estadoReintento, guardarConteoEnSerie, textoFalloConteo, abrirEnlaceProducto } = ec;
+  for (const [nombre, f] of Object.entries({ estadoReintento, guardarConteoEnSerie, textoFalloConteo, abrirEnlaceProducto })) assert.equal(typeof f, 'function', `${nombre} existe`);
+  // m18 / m31: la lectura de una carga con vuelta (los PVEN del Hub y el enlace de Productos).
+  const e403 = Object.assign(new Error('Sin permiso'), { status: 403 });
+  const e500 = Object.assign(new Error('Caído'), { status: 500 });
+  assert.deepEqual(estadoReintento({ vuelta: -1, error: null }, 0), { cargando: true, error: null, reintentando: false, ofrecer: false }, 'la primera carga');
+  assert.deepEqual(estadoReintento({ vuelta: 0, error: null }, 0), { cargando: false, error: null, reintentando: false, ofrecer: false }, 'llegó');
+  assert.deepEqual(estadoReintento({ vuelta: 0, error: e500 }, 0), { cargando: false, error: e500, reintentando: false, ofrecer: true }, 'falló: «Reintentar»');
+  assert.deepEqual(estadoReintento({ vuelta: 0, error: e500 }, 1), { cargando: true, error: e500, reintentando: true, ofrecer: true }, 'reintentando: el error se conserva (el aviso sigue montado)');
+  assert.equal(estadoReintento({ vuelta: 0, error: e403 }, 0).ofrecer, false, 'un 403 no ofrece «Reintentar»');
+  assert.equal(estadoReintento(null, 0).cargando, true);
+  // m22: la serie del PATCH por línea se detiene en la primera que falla; el aviso nombra la línea y dice cuántas quedaron guardadas.
+  const enviadas = [];
+  const serie = await guardarConteoEnSerie([{ grl_id: 1, cuerpo: 'a' }, { grl_id: 2, cuerpo: 'b' }, { grl_id: 3, cuerpo: 'c' }], async (p) => {
+    enviadas.push(p.grl_id);
+    if (p.grl_id === 2) throw e500;
+  });
+  assert.deepEqual(enviadas, [1, 2], 'la tercera no sale');
+  assert.deepEqual(serie, { guardadas: 1, fallo: { grl_id: 2, error: e500 } });
+  assert.deepEqual(await guardarConteoEnSerie([{ grl_id: 1, cuerpo: 'a' }], async () => {}), { guardadas: 1, fallo: null });
+  assert.deepEqual(await guardarConteoEnSerie(null, async () => {}), { guardadas: 0, fallo: null });
+  assert.equal(textoFalloConteo('Tornillo', 1), 'No se pudo guardar la línea «Tornillo»; la anterior quedó guardada');
+  assert.equal(textoFalloConteo(' Tenis ', 3), 'No se pudo guardar la línea «Tenis»; las 3 anteriores quedaron guardadas');
+  assert.equal(textoFalloConteo(null, 0), 'No se pudo guardar una línea');
+  const cont = leerFuente('app/dashboard/compras/recepciones/[id]/page.tsx');
+  assert.match(cont, /avisarError\(serie\.fallo\.error, textoFalloConteo\(nombre, serie\.guardadas\)\);\s*if \(recargarTrasError\(serie\.fallo\.error\)\) await loadRecepcion\(\{ silencioso: true \}\);\s*return false;/,
+    'avisa la línea y recarga solo con la regla única (400, 409, 422 o la red)');
+  // m18 (B40-f): el efecto del enlace de Productos, ejecutado: un abort no marca ni avisa; al llegar, alError(null) y abre; si falla, alError.
+  const espera = (ms) => new Promise((r) => setTimeout(r, ms));
+  const montarProducto = (marca, sku, registro, { filas = [{ id: 9, skus: [{ sku: 'ABC' }] }], falla = null } = {}) => abrirEnlaceProducto({
+    marca, idDeLaUrl: null, skuDeLaUrl: sku,
+    pedir: (ruta, { signal }) => {
+      registro.push(`GET ${ruta}`);
+      return new Promise((resolver, rechazar) => {
+        const t = setTimeout(() => (falla ? rechazar(falla) : resolver({ status: 'success', data: filas })), 5);
+        signal.addEventListener('abort', () => { clearTimeout(t); rechazar(Object.assign(new Error('abortada'), { name: 'AbortError' })); });
+      });
+    },
+    abrir: (p) => registro.push(`abrir ${p.id}`),
+    avisar: (texto) => registro.push(`aviso ${texto}`),
+    alError: (err) => registro.push(`error ${err === null ? 'null' : err.status}`),
+  });
+  const marcaP = { current: null };
+  const rp = [];
+  montarProducto(marcaP, 'ABC', rp)();
+  assert.equal(marcaP.current, null, 'abortada: la marca queda libre');
+  montarProducto(marcaP, 'ABC', rp);
+  await espera(20);
+  assert.equal(rp.filter((x) => x.startsWith('GET')).length, 2, 'el segundo montaje vuelve a pedir');
+  assert.deepEqual(rp.slice(2), ['error null', 'abrir 9'], 'al llegar: el error se limpia y abre (una vez)');
+  const libreP = { current: null };
+  const rf = [];
+  montarProducto(libreP, 'ABC', rf, { falla: e500 });
+  await espera(20);
+  assert.deepEqual(rf.slice(1), ['error 500'], 'si falla: alError con el error');
+  assert.equal(libreP.current, null, 'y la marca libre (Reintentar vuelve a pedir)');
+  // B4 T24 f4 (m10 de f3 r2 = m25, X26): el «no encontrado» (filas []) se avisa, y la marca queda puesta (no vuelve a pedir).
+  const nadaP = { current: null };
+  const rn = [];
+  montarProducto(nadaP, 'ZZZ', rn, { filas: [] });
+  await espera(20);
+  assert.deepEqual(rn.slice(1), ['error null', 'aviso No se encontró un producto con el SKU «ZZZ».'], 'no encontrado: se avisa (X26)');
+  assert.equal(nadaP.current, 'sku:ZZZ');
+  // B4 T24 f4 (m12 de f3 r2): si el enlace ya no está en la URL (o ya se atendió), no hay nada que pedir: se cierra la vuelta con
+  // alError(null), y «Reintentando…» no se queda pegado (ni el aviso de un enlace que ya no está a la vista).
+  const sinEnlace = [];
+  abrirEnlaceProducto({ marca: { current: null }, idDeLaUrl: null, skuDeLaUrl: null, pedir: () => { sinEnlace.push('GET'); return Promise.resolve({}); },
+    abrir: () => sinEnlace.push('abrir'), avisar: () => sinEnlace.push('aviso'), alError: (e) => sinEnlace.push(`error ${e === null ? 'null' : 'x'}`) })();
+  assert.deepEqual(sinEnlace, ['error null'], 'sin ?id= ni ?sku=: cierra la vuelta, sin pedir');
+  const yaAtendido = [];
+  abrirEnlaceProducto({ marca: { current: 'sku:ABC' }, idDeLaUrl: null, skuDeLaUrl: 'ABC', pedir: () => { yaAtendido.push('GET'); return Promise.resolve({}); },
+    abrir: () => {}, avisar: () => {}, alError: (e) => yaAtendido.push(`error ${e === null ? 'null' : 'x'}`) })();
+  assert.deepEqual(yaAtendido, ['error null'], 'el mismo enlace ya atendido: no vuelve a pedir');
+  {
+    // Con la vuelta cerrada, estadoReintento ya no dice «reintentando».
+    const { estadoReintento } = ec;
+    assert.equal(estadoReintento({ vuelta: 1, error: e500 }, 2).reintentando, true, 'pidiendo otra vez');
+    assert.deepEqual(estadoReintento({ vuelta: 2, error: null }, 2), { cargando: false, error: null, reintentando: false, ofrecer: false }, 'la vuelta cerrada');
+  }
+  // m10 (X27): Productos avisa el «no encontrado» en tono 'info'.
+  trae(leerFuente('app/dashboard/inventario/productos/page.tsx'), "avisar: (texto) => avisar(texto, { tono: 'info' }),", 'el aviso del enlace, informativo');
+  // m10 (X28 a X30): el Esc del autocompletar del Kardex no saca de la pantalla completa: preventDefault y stopPropagation.
+  assert.match(leerFuente('app/dashboard/inventario/kardex/page.tsx'), /if \(!r\) return;\s*e\.preventDefault\(\);\s*if \(e\.key === 'Escape'\) e\.stopPropagation\(\);/,
+    'teclaSku: preventDefault y, con Esc, stopPropagation');
+  // m25: en la primera carga, el panel de PVEN del Hub dice «Cargando…», nunca el vacío falso.
+  const hub = leerFuente('app/dashboard/compras/page.tsx');
+  assert.match(hub, /\) : filteredPvens\.length === 0 && cargandoVentas \? \(\s*\/\* r1 \(m25\)[^*]*\*\/\s*<p role="status"[^>]*>Cargando pedidos de venta…<\/p>/);
+  // m36: el aviso de /stats sigue montado mientras se reintenta y el botón conserva el foco («Reintentando…», aria-disabled).
+  const pieza = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8');
+  // B4 T24 f4 (m8 de f3 r3; D27): el último se guarda con su cuenta.
+  assert.match(pieza, /if \(error != null && \(error !== ultimo \|\| cuenta !== cuentaDelUltimo\)\) \{\s*setUltimo\(error\);/);
+  assert.ok(!/[^-]disabled=\{reintentando/.test(pieza), 'aria-disabled, no disabled (el foco no se pierde)');
+  assert.match(pieza, /aria-disabled=\{reintentando \|\| undefined\}/);
+
+  // m6 = m27 = m38: «Nuevo Casillero» es un Modal de la pila (encima de la ventana; «alta» sobre el alta de un PEC), con la regla de F40.
+  const ped = leerFuente('app/dashboard/compras/pedidos/page.tsx');
+  const nuevo = ped.slice(ped.indexOf('function NewCasilleroModal('), ped.indexOf('function TrackingConfigModal('));
+  assert.match(nuevo, /<Modal cierreExterno=\{false\} bloquearCierre=\{saving\} capa=\{capa\} title="Nuevo Casillero" subtitle="Punto de recepción \/ forwarder"/);
+  assert.match(nuevo, /<button type="submit" form="form-nuevo-casillero" disabled=\{saving\}/, 'el botón del pie envía el formulario');
+  assert.match(nuevo, /<form id="form-nuevo-casillero" onSubmit=\{save\}/);
+  trae(ped, '<NewCasilleroModal capa="alta"', 'desde el alta de un PEC (z-[80]), en la capa alta');
+  assert.match(readFileSync(new URL('../src/components/ui/Modal.tsx', import.meta.url), 'utf8'), /capa\?: 'base' \| 'encima' \| 'alta';/);
+  // m40: la ventana de seguimiento — FOCOS en su pie, sus pestañas, el tipo de envío y «Nuevo Casillero»; la papelera con su nombre; tildes.
+  const ventana = ped.slice(ped.indexOf('function TrackingConfigModal('), ped.indexOf('function TrackingPanel('));
+  assert.ok((ventana.match(/\$\{FOCOS\.purple\}/g) ?? []).length >= 6, 'el foco con el token en los botones de la ventana');
+  trae(ventana, 'aria-label={`Eliminar el casillero ${c.name}`}');
+  for (const sinTilde of ['Configuracion de etapas guardada', 'identificador unico', 'Key (unica)', "'Sin direccion'"]) noTrae(ped, sinTilde, `sin «${sinTilde}»`);
+  for (const sinTilde of ['Punto de recepcion / forwarder', '>Direccion<', '>Punto de Recepcion<', '>Telefono<', '>Pais<']) noTrae(nuevo, sinTilde, `sin «${sinTilde}»`);
+  // m43: el pie de todo Drawer y el de la ventana de seguimiento reservan el área del botón de la IA a la derecha.
+  const ds = readFileSync(new URL('../src/lib/design-system.ts', import.meta.url), 'utf8');
+  assert.match(ds, /export const RESERVA_BOTON_IA_PIE = 'pr-24';/);
+  const drawer = readFileSync(new URL('../src/components/ui/Drawer.tsx', import.meta.url), 'utf8');
+  assert.match(drawer, /<div className=\{`p-6 \$\{RESERVA_BOTON_IA_PIE\} border-t border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-3 \[&>:not\(:first-child\)\]:ml-auto`\}>/); // r3 (m11, D27); f4 (m4 = m6 de f3 r3, D27)
+  assert.match(ventana, /maxWidth="3xl" onClose=\{onClose\} reservaBotonIa/);
+}
+
+console.log('--- B4 T24 f3 r1 (m14 = m23, m41): Almacenes no sigue un filtro de bodega que no aplica; las mismas etiquetas en el Hub y en Pedidos ---');
+{
+  const { filtrosAplicadosHub } = ec;
+  assert.equal(typeof filtrosAplicadosHub, 'function', 'filtrosAplicadosHub existe');
+  assert.deepEqual(filtrosAplicadosHub({ verAlmacenes: false, bodega: '2', categoria: '' }), { mostrarBodega: true, bodegaAplica: true, hayFiltros: true });
+  assert.deepEqual(filtrosAplicadosHub({ verAlmacenes: true, bodega: '2', categoria: '' }), { mostrarBodega: false, bodegaAplica: false, hayFiltros: false },
+    'en Almacenes la bodega no aplica: ni el selector ni «Quitar filtros» por ella');
+  assert.deepEqual(filtrosAplicadosHub({ verAlmacenes: true, bodega: '2', categoria: '7' }), { mostrarBodega: false, bodegaAplica: false, hayFiltros: true });
+  assert.deepEqual(filtrosAplicadosHub({ verAlmacenes: false, bodega: '', categoria: '' }), { mostrarBodega: true, bodegaAplica: false, hayFiltros: false });
+  const hub = leerFuente('app/dashboard/inventario/page.tsx');
+  trae(hub, 'const aplicados = filtrosAplicadosHub({ verAlmacenes, bodega: filtros.bodega, categoria: filtros.categoria });');
+  trae(hub, 'const bodegaDelVacio = aplicados.bodegaAplica ? nombreBodega : null;');
+  assert.match(hub, /\{aplicados\.mostrarBodega \? \(\s*<SelectorCatalogo etiqueta="Bodega"[\s\S]*?\) : \(\s*<span[^>]*>En Almacenes se ven todas las bodegas<\/span>/);
+  trae(hub, "onClick={() => cambiarFiltros(verAlmacenes ? { categoria: '' } : SIN_FILTROS)}");
+  // m41: «Transportadora» e «Información» también en Pedidos (como en el Hub, F54); «Pendiente de compra» con su etiqueta en el Hub.
+  const ped = leerFuente('app/dashboard/compras/pedidos/page.tsx');
+  for (const viejo of ['Carrier:', '>Carrier<', "['Carrier',", "l:'Info'}"]) noTrae(ped, viejo, `Pedidos sin ${viejo}`);
+  trae(ped, "['Transportadora',detail?.carrier||'-']");
+  trae(ped, "{k:'info',l:'Información'}");
+  const hubCompras = leerFuente('app/dashboard/compras/page.tsx');
+  noTrae(hubCompras, 'estado Pendiente Compra', 'el Hub sin «Pendiente Compra»');
+  assert.equal((hubCompras.match(/\{infoEstadoPedido\('PENDIENTE_COMPRA'\)\.label\}/g) ?? []).length >= 3, true, 'la etiqueta del estado en el panel');
+}
+
+console.log('--- B4 T24 f3 r1 (F93): el Kanban de Productos con una categoría elegida muestra solo su columna, aunque esté fuera de las 12 ---');
+{
+  const cats = Array.from({ length: 14 }, (_, i) => ({ id: i + 1, name: `Cat ${String(i + 1).padStart(2, '0')}` }));
+  const todas = ec.columnasProductos(cats);
+  assert.equal(todas.columnas.length, 12, 'sin elegida: las 12 de siempre');
+  assert.equal(todas.masCategorias, 2);
+  // La 14 queda fuera de las 12: antes, elegirla dejaba 12 columnas vacías (consultaColumnaProducto da null en todas).
+  assert.ok(!todas.columnas.some((c) => c.estados[0] === '14'), 'la 14 no está entre las 12');
+  const sola = ec.columnasProductos(cats, undefined, { elegida: '14' });
+  assert.deepEqual(sola.columnas.map((c) => [c.clave, c.titulo, c.estados]), [['cat-14', 'Cat 14', ['14']]], 'solo su columna');
+  assert.equal(sola.masCategorias, 0);
+  assert.equal(sola.aviso, null);
+  assert.notEqual(ec.consultaColumnaProducto(null, sola.columnas[0], { categoria: '14' }, { limit: 25, offset: 0 }), null, 'y su columna pide productos');
+  assert.equal(ec.columnasProductos(cats, undefined, { elegida: '3' }).columnas.length, 1, 'también una de las 12');
+  assert.equal(ec.columnasProductos(cats, undefined, { elegida: '99' }).columnas.length, 12, 'una que no está en el catálogo: como antes');
+  assert.equal(ec.columnasProductos(cats, undefined, { elegida: '' }).columnas.length, 12);
+  assert.equal(ec.columnasProductos(cats, undefined, {}).columnas.length, 12);
+}
+
+console.log('--- B4 T24 f3 r1 (F81): los catálogos de Inventario — una forma inesperada es un error, el error con filas viejas se dice, «Reintentar» da señal ---');
+{
+  const { filasDeCatalogo } = ec;
+  assert.equal(typeof filasDeCatalogo, 'function', 'filasDeCatalogo existe');
+  assert.deepEqual(filasDeCatalogo({ status: 'success', data: [{ id: 1, name: 'Central' }] }), { filas: [{ id: 1, name: 'Central' }], error: null });
+  assert.deepEqual(filasDeCatalogo([{ id: 2, name: 'Norte' }]), { filas: [{ id: 2, name: 'Norte' }], error: null });
+  assert.deepEqual(filasDeCatalogo({ status: 'success', data: [] }), { filas: [], error: null }, 'una lista vacía de verdad');
+  for (const rara of [null, {}, { data: { items: 'x' } }, 'texto', { data: null }]) {
+    const r = filasDeCatalogo(rara);
+    assert.equal(r.filas, null, `${JSON.stringify(rara)}: sin filas falsas`);
+    assert.match(String(r.error?.message), /no trae la lista/, `${JSON.stringify(rara)}: es un error`);
+  }
+  // La pieza nueva (aviso-catalogo.tsx): el error con filas viejas, junto al select (sin filas lo dice SelectorCatalogo), con «Reintentar»
+  // que da señal; el Hub la pone junto a sus dos selectores.
+  const aviso = leerFuente('app/dashboard/inventario/aviso-catalogo.tsx');
+  trae(aviso, 'if (catalogo.error == null || !catalogo.filas) return null;');
+  // r2 (m20, D27): el rol y el texto salen de avisoDeFuente (la regla de AvisoFuente: sin doble punto; un 403 es de permiso).
+  trae(aviso, "<span role={aviso.tipo === 'permiso' ? 'status' : 'alert'}");
+  trae(aviso, '{aviso.texto}');
+  trae(aviso, '{aviso.reintentar && (', 'un 403 no ofrece «Reintentar»');
+  trae(aviso, "{catalogo.cargando ? 'Reintentando…' : 'Reintentar'}");
+  const piezas = leerFuente('app/dashboard/inventario/piezas-inventario.tsx');
+  trae(piezas, "{catalogo.cargando ? 'Reintentando…' : 'Reintentar'}", 'SelectorCatalogo sin filas: también da señal');
+  trae(leerFuente('app/dashboard/inventario/page.tsx'), '<AvisoCatalogoViejo catalogo={bodegas} fallo="No se pudieron actualizar las bodegas" onReintentar={reintentarCatalogos} />');
+  const hub = leerFuente('app/dashboard/inventario/page.tsx');
+  // B4 T24 f4 (m5 de f3 r2; D27): el Hub usa la vuelta de la lib (llegadaCatalogo con filasDeCatalogo; lecturaCatalogo con `cargando`
+  // mientras no llega la de esta vuelta), sin su copia literal.
+  trae(hub, 'fijar((c) => llegadaCatalogo(c, r, vueltaCatalogos))');
+  assert.ok(!/const lista = \(r: \{ data\?: unknown \} \| null\) =>/.test(hub), 'sin la lectura que convertía todo en []');
+  assert.match(hub, /lecturaCatalogo\(cargaBodegas, vueltaCatalogos\)/);
+  {
+    const { llegadaCatalogo, lecturaCatalogo } = await import('../src/lib/estados-compras.js');
+    assert.equal(lecturaCatalogo(llegadaCatalogo(null, { data: [{ id: 1 }] }, 2), 3).cargando, true, 'de otra vuelta: cargando');
+    assert.equal(lecturaCatalogo(llegadaCatalogo(null, { x: 1 }, 3), 3).error instanceof Error, true, 'una forma inesperada es un error');
+  }
+}
+
+console.log('--- B4 T24 f3 r2 (F81 en el hook, m36 completo, m20): la vuelta de los catálogos en la lib y el foco nunca en el <body> ---');
+{
+  const { CARGA_CATALOGO_VACIA, llegadaCatalogo, falloCatalogo, lecturaCatalogo } = ec;
+  for (const [n, f] of Object.entries({ llegadaCatalogo, falloCatalogo, lecturaCatalogo })) assert.equal(typeof f, 'function', `${n} existe`);
+  // F81: la carga de un catálogo con su vuelta (useCatalogo y el Hub; así llega a Stock, Abastecimiento, Productos y el Kardex).
+  assert.deepEqual({ ...CARGA_CATALOGO_VACIA }, { vuelta: -1, filas: null, error: null });
+  assert.deepEqual(lecturaCatalogo(CARGA_CATALOGO_VACIA, 0), { filas: null, error: null, cargando: true }, 'la primera carga');
+  const bien = llegadaCatalogo(CARGA_CATALOGO_VACIA, { data: [{ id: 1, name: 'Calzado' }] }, 0);
+  assert.deepEqual(lecturaCatalogo(bien, 0), { filas: [{ id: 1, name: 'Calzado' }], error: null, cargando: false });
+  assert.equal(lecturaCatalogo(bien, 1).cargando, true, '«Reintentar» o «Actualizar»: cargando, con lo último a la vista');
+  const e500 = Object.assign(new Error('Caído'), { status: 500 });
+  const fallo = falloCatalogo(bien, e500, 1);
+  assert.deepEqual(lecturaCatalogo(fallo, 1), { filas: [{ id: 1, name: 'Calzado' }], error: e500, cargando: false }, 'el error conserva lo último bueno');
+  const rara = llegadaCatalogo(bien, { data: 'x' }, 2);
+  assert.deepEqual(rara.filas, [{ id: 1, name: 'Calzado' }], 'una forma inesperada no borra lo último');
+  assert.match(String(rara.error?.message), /no trae la lista/);
+  const piezas = leerFuente('app/dashboard/inventario/piezas-inventario.tsx');
+  trae(piezas, 'return { catalogo: lecturaCatalogo(carga, vuelta), recargar };', 'useCatalogo lee la carga con la lib');
+  for (const pantalla of ['stock', 'abastecimiento', 'productos', 'kardex']) {
+    const f = leerFuente(`app/dashboard/inventario/${pantalla}/page.tsx`);
+    assert.match(f, /<AvisoCatalogoViejo catalogo=\{\w+\} fallo="No se pudieron actualizar las (?:categorías|bodegas)" onReintentar=\{\w+\}/, `${pantalla}: el error con filas viejas, junto al selector`);
+  }
+  // m20: aviso-catalogo.tsx usa la regla de AvisoFuente (avisoDeFuente): sin doble punto y un 403 sin «Reintentar».
+  const av = await import('../src/lib/avisos.js');
+  assert.equal(av.avisoDeFuente(new Error('Servidor caído.'), 'No se pudieron actualizar las bodegas').texto, 'No se pudieron actualizar las bodegas: Servidor caído.', 'sin doble punto');
+  assert.ok(!/textoDeError|ofreceReintentar/.test(leerFuente('app/dashboard/inventario/aviso-catalogo.tsx').replace(/\/\/[^\n]*/g, '')), 'no reimplementa la regla');
+
+  // m36 (ruling): adónde va el foco cuando cambia el aviso de una fuente que se reintenta — mientras, éxito, otro error y 403.
+  const { focoTrasReintento } = av;
+  assert.equal(typeof focoTrasReintento, 'function', 'focoTrasReintento existe');
+  assert.equal(focoTrasReintento({ teniaFoco: true, hayBoton: true }), 'boton', 'mientras reintenta («Reintentando…») o con otro error: se queda en el botón');
+  assert.equal(focoTrasReintento({ teniaFoco: true, hayBoton: false }), 'destino', 'salió bien (el aviso se va) o un 403 (sin botón): al destino VISIBLE (r3, D27)');
+  assert.equal(focoTrasReintento({ teniaFoco: false, hayBoton: false }), null, 'si el botón no tenía el foco, nada');
+  assert.equal(focoTrasReintento({ teniaFoco: false, hayBoton: true }), null);
+  // El cableado: AvisoDeError con regionFoco (aditivo) vive en una región tabindex=-1 montada siempre, y el botón avisa al irse.
+  const pieza = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(pieza, /return \(\) => alSoltarBoton\(document\.activeElement === nodo\);/, 'el ref con limpieza mira si el botón tenía el foco');
+  // B4 T24 f4 (m2 + m10 de f3 r3; D27): el destino se busca por su id (destinoFoco → getElementById), no por el texto del aria-label.
+  assert.match(pieza, /focoTrasReintento\(\{ teniaFoco, hayBoton: ultimoHayBoton\.current \}\) === 'destino' && document\.activeElement === document\.body && destinoFoco\)/); // r3 (C, D27)
+  assert.ok(!/sr-only|Sin avisos/.test(pieza), 'r3 (C): sin la región sr-only ni su texto'); // D27
+  assert.match(pieza, /alSoltarBoton=\{destinoFoco \? alSoltarBoton : undefined\}/, 'solo con destinoFoco (aditivo)');
+  for (const ruta of ['app/dashboard/compras/page.tsx', 'app/dashboard/compras/pedidos/page.tsx', 'app/dashboard/compras/transito/page.tsx',
+    'app/dashboard/compras/recepciones/page.tsx', 'app/dashboard/compras/lista-compras/page.tsx', 'app/dashboard/inventario/page.tsx']) {
+    const f = leerFuente(ruta);
+    assert.match(f, /<AvisoDeError error=\{stats\.error\}[^\n]*reintentando=\{stats\.cargando\} destinoFoco="[^"]+" \/>/, `${ruta}: el aviso de /stats con su destino`); // r3 (D27)
+    assert.ok(!/stats\.cargando\) && \(\s*<AvisoDeError/.test(f), `${ruta}: montado siempre (si se desmonta, la región se va con él)`);
+  }
+  trae(piezas, 'export function AvisoReintentar(props: React.ComponentProps<typeof AvisoDeError>) {', 'AvisoReintentar acepta el mismo contrato');
+}
+
+console.log('--- B4 T24 f3 r2 (m1, m2, m3, m4, m5, m8, m11, m14, m16, m19, m21, m23, m28): el menú, la tarjeta, la bodega, la poda, el combobox y las ventanas ---');
+{
+  const roles = await import('../src/lib/roles.js');
+  const { itemConfirmarMenu } = roles;
+  assert.equal(typeof itemConfirmarMenu, 'function', 'itemConfirmarMenu existe');
+  const menu = (heredada, sinBodega, rol, porConfirmar = true) => itemConfirmarMenu({ porConfirmar, heredada, sinBodega, rol });
+  const oculto = { oculto: true, deshabilitado: false, titulo: null };
+  // m1: en una heredada que el rol no cierra, el ítem se OCULTA (A-bis); apagado con su motivo, solo sin bodega (C1).
+  assert.deepEqual(menu(true, false, 'BODEGA'), oculto, 'BODEGA, heredada: oculto');
+  assert.deepEqual(menu(true, true, 'BODEGA'), oculto, 'BODEGA, heredada sin bodega: oculto');
+  assert.deepEqual(menu(true, true, 'ADMIN'), oculto, 'ADMIN, heredada sin bodega: oculto (m14: manda la heredada)');
+  assert.deepEqual(menu(true, false, 'ADMIN'), { oculto: false, deshabilitado: false, titulo: null }, 'ADMIN cierra la heredada');
+  assert.deepEqual(menu(false, true, 'BODEGA'), { oculto: false, deshabilitado: true, titulo: roles.TEXTO_FALTA_BODEGA }, 'sin bodega: apagado con su motivo');
+  assert.deepEqual(menu(false, true, 'ADMIN'), { oculto: false, deshabilitado: true, titulo: roles.TEXTO_ASIGNA_BODEGA });
+  assert.deepEqual(menu(false, false, 'COMPRAS'), oculto, 'el rol no confirma');
+  assert.deepEqual(menu(false, false, 'BODEGA', false), oculto, 'no está por confirmar');
+  assert.deepEqual(menu(false, false, 'BODEGA'), { oculto: false, deshabilitado: false, titulo: null });
+  // m14: heredada y sin bodega, fuera del detalle: el texto de la heredada, también para ADMIN.
+  assert.equal(roles.confirmarRecepcion({ porConfirmar: true, heredada: true, sinBodega: true, rol: 'ADMIN' }).texto, roles.TEXTO_RECEPCION_HEREDADA);
+  // m2: la tarjeta sin «Contar y confirmar» lleva el motivo (aditivo).
+  const r = { id: 7, estado: 'BORRADOR' };
+  // B4 T24 f4 (m16 de f3 r2; D27): el motivo ya no es un chip (truncate a 10 px cortaba la mitad de 60 a 80 caracteres): va en una
+  // línea de la tarjeta que hace salto (`nota`, aditiva en TarjetaKanban).
+  const conMotivo = ec.tarjetaRecepcion(r, { contar: false, motivo: roles.TEXTO_RECEPCION_HEREDADA });
+  assert.deepEqual([conMotivo.chips, conMotivo.nota], [[], roles.TEXTO_RECEPCION_HEREDADA], 'el motivo entero, en la nota');
+  assert.equal(ec.tarjetaRecepcion(r, { contar: true, motivo: 'x' }).nota, null, 'con la acción, sin el motivo');
+  assert.deepEqual([ec.tarjetaRecepcion(r, { contar: false }).chips, ec.tarjetaRecepcion(r, { contar: false }).nota], [[], null], 'sin motivo, como antes');
+  {
+    const kanban = readFileSync(new URL('../src/components/ui/Kanban.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    assert.match(kanban, /nota\?: string \| null;/, 'la nota, aditiva en DatosTarjetaKanban');
+    assert.match(kanban, /\{nota && <p className="mt-2 whitespace-normal break-words text-\[11px\] font-semibold leading-snug text-slate-600">\{nota\}<\/p>\}/,
+      'una línea que hace salto (sin truncate)');
+  }
+  // m4 = m7: la poda de la selección guardada.
+  const pvens = [{ id: 1, numero: 'PVEN-1', estado: 'PENDIENTE_COMPRA' }, { id: 2, numero: 'PVEN-2', estado: 'EN_PROCESO' }];
+  const poda = ec.podarSeleccion(new Set([1, 2]), pvens);
+  assert.deepEqual([...poda.seleccion], [1], 'la selección guardada queda sin el quitado');
+  assert.deepEqual(poda.quitados, ['PVEN-2']);
+  assert.deepEqual(ec.podarSeleccion(new Set([1]), pvens), { seleccion: null, quitados: [] }, 'nada que podar: no cambia (sin bucle)');
+  // Si el quitado vuelve a PENDIENTE_COMPRA, ya no está marcado.
+  assert.deepEqual(ec.seleccionVigente(poda.seleccion, [...pvens.slice(0, 1), { id: 2, numero: 'PVEN-2', estado: 'PENDIENTE_COMPRA' }]).ids, [1]);
+  for (const ruta of ['app/dashboard/compras/pedidos/page.tsx', 'app/dashboard/compras/page.tsx']) {
+    trae(leerFuente(ruta), 'if (poda.seleccion) { setSelectedPvens(poda.seleccion); setQuitadosPvens(poda.quitados); }', `${ruta}: poda la selección guardada`);
+  }
+  // m5 = m15: la decisión de cierre del combobox, entera en la lib.
+  const { cierraComboboxAlSalir } = ec;
+  assert.equal(cierraComboboxAlSalir(true), false, 'hacia adentro: no cierra');
+  assert.equal(cierraComboboxAlSalir(false), true, 'hacia afuera: cierra');
+  assert.equal(cierraComboboxAlSalir(false, { sinDestino: true, ratonSobreLista: true }), false, 'Safari: un clic en una opción (blur sin destino, el ratón sobre la lista)');
+  assert.equal(cierraComboboxAlSalir(false, { sinDestino: true, ratonSobreLista: false }), true, 'un clic en la página: cierra');
+  assert.equal(cierraComboboxAlSalir(false, { sinDestino: false, ratonSobreLista: true }), true, 'Tab hacia otro control: cierra');
+  // m8: textoAlertaSinDato no queda entre un JSDoc y su export; m28: una sola rama para la foto sin tomar.
+  const fuenteEc = readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(fuenteEc, /\/\*\* La columna del tablero de Traslados \(su estado\) y el día en que se hizo \(la fecha real\)\. \*\/\nexport const columnaDeTraslado = /);
+  const transito = readFileSync(new URL('../src/lib/transito.js', import.meta.url), 'utf8');
+  assert.ok(!/if \(e\.fin\.filas === SIN_FOTO\)/.test(transito), 'm28: sin la rama duplicada');
+  // m3 y m16: la bodega — la opción vacía, los botones apagados mientras cargan y el reinicio al cambiar de PEC o al reabrir.
+  trae(leerFuente('app/dashboard/compras/bodega-recepcion.tsx'), "'Sin elegir (la del pedido, si tiene)'");
+  const rec = leerFuente('app/dashboard/compras/recepciones/page.tsx');
+  trae(rec, 'disabled={creatingFromPec !== null || bodegas.cargando}', 'm3: «Recepcionar» apagado mientras cargan las bodegas');
+  trae(rec, 'onClick={() => { setBodegaElegida(null); setShowPecModal(true); }}', 'm16: al reabrir, sin la elegida de antes');
+  const ped = leerFuente('app/dashboard/compras/pedidos/page.tsx');
+  trae(ped, 'disabled={goingToRecepcion || (creaRecepcion && bodegas.cargando)}', 'm3: «Hacer recepción» apagado mientras cargan');
+  trae(ped, "useEffect(()=>{setDetail(pec);setTab('tracking');setBodegaElegida(null);},[pec?.id]);", 'm16: al cambiar de PEC');
+  // m21: «Nuevo Casillero» ya no se abre solo; el vacío ofrece el botón.
+  assert.equal(ec.ofrecerCrearCasillero({ texto: 'Bogotá', resultados: [], elegido: null }), true);
+  assert.equal(ec.ofrecerCrearCasillero({ texto: 'Bogotá', resultados: null, elegido: null }), false, 'la búsqueda no terminó');
+  assert.equal(ec.ofrecerCrearCasillero({ texto: 'Bogotá', resultados: [{ id: 1 }], elegido: null }), false);
+  assert.equal(ec.ofrecerCrearCasillero({ texto: ' ', resultados: [], elegido: null }), false);
+  assert.equal(ec.ofrecerCrearCasillero({ texto: 'Bogotá', resultados: [], elegido: { id: 1 } }), false);
+  assert.ok(!/if \(arr\.length === 0\) setShowNewCasillero\(true\);/.test(ped), 'm21: no se abre solo');
+  // B4 T24 f4 (m7 de f3 r2 = m20): la guarda REAL («terminó la búsqueda de ESTE texto») pasa a la lib: con `buscado` (el último texto
+  // buscado) distinto del que hay en la caja, no se ofrece (escribir la primera letra, antes de buscar, no ofrece «Crear casillero»).
+  assert.equal(ec.ofrecerCrearCasillero({ texto: 'Bo', buscado: 'B', resultados: [], elegido: null }), false, 'se escribió más: la búsqueda de ESTE texto no terminó');
+  assert.equal(ec.ofrecerCrearCasillero({ texto: 'B', buscado: '', resultados: [], elegido: null }), false, 'la primera letra, antes de buscar');
+  assert.equal(ec.ofrecerCrearCasillero({ texto: 'Bogotá', buscado: 'Bogotá', resultados: [], elegido: null }), true, 'buscó este texto y no hay');
+  assert.ok(ped.includes('ofrecerCrearCasillero({ texto: casilleroSearch, buscado: casilleroBuscado, resultados: casilleroResults, elegido: selectedCasillero })'),
+    'la página pasa el texto y lo buscado tal cual (la guarda vive en la lib)');
+  assert.match(ped, /ofrecerCrearCasillero\(\{[^}]*\}\) && \(\s*<p role="status"[^>]*>Ningún casillero coincide\.\{' '\}\s*<button type="button" onClick=\{\(\)=>setShowNewCasillero\(true\)\}/);
+  // m19: el pie del Drawer baja sus botones antes de la reserva (flex-wrap); m23: la reserva del pie de Modal, con su prueba.
+  assert.match(readFileSync(new URL('../src/components/ui/Drawer.tsx', import.meta.url), 'utf8'), /\$\{RESERVA_BOTON_IA_PIE\} border-t border-slate-200 bg-slate-50 flex flex-wrap/);
+  const modal = readFileSync(new URL('../src/components/ui/Modal.tsx', import.meta.url), 'utf8');
+  assert.match(modal, /<div className=\{`px-6 py-4 \$\{reservaBotonIa \? RESERVA_BOTON_IA_PIE : ''\} border-t/, 'm23: el pie de Modal con la reserva');
+  assert.match(modal, /reservaBotonIa = false,/, 'm23: aditivo (por defecto, sin la reserva)');
+  // m11: el bloque FINAL-m10 también mira las partes por separado (como TEST 26).
+  const hub = leerFuente('app/dashboard/compras/page.tsx');
+  const boton = hub.slice(hub.indexOf('{vigente.ids.length > 0 && accesoPec.cambiarPec && ('), hub.indexOf('Crear PEC Consolidado'));
+  for (const parte of ['vigente.ids.length > 0', 'accesoPec.cambiarPec', 'onClick={handleConvertPvens}']) assert.ok(boton.includes(parte), `m11: ${parte}`);
+}
+
+console.log('--- B4 T24 f3 r2 (m36, el banco): un solo contrato de reintentando; el enlace de Productos deja el foco en el título de la ficha ---');
+{
+  const pieza = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8');
+  assert.match(pieza, /<AvisoFuente aviso=\{aviso\} onReintentar=\{onReintentar\} acento=\{acento\} reintentando=\{reintentando\}/,
+    'reintentando llega tal cual (estadoReintento conserva el error mientras reintenta: con «error == null &&» el botón no decía «Reintentando…»)');
+  const p = leerFuente('app/dashboard/inventario/productos/page.tsx');
+  trae(p, '<h1 id="ficha-producto-titulo" tabIndex={-1}');
+  trae(p, "abrir: (p) => { openEdit(p); requestAnimationFrame(() => document.getElementById('ficha-producto-titulo')?.focus()); },",
+    'el enlace abre la ficha (la lista y su aviso se van): el foco va a su título');
+}
+
+console.log('--- B4 T24 f3 r3 (C1 = C3, C2 = C4, C, m4, m6, m9, m11): el aviso no vuelve tras un reintento bueno; m36 en las pantallas de m17; el foco a la franja ---');
+{
+  const av = await import('../src/lib/avisos.js');
+  const { avisoVisible, focoTrasReintento } = av;
+  assert.equal(typeof avisoVisible, 'function', 'avisoVisible existe');
+  const e500 = Object.assign(new Error('Caído'), { status: 500 });
+  const e403 = Object.assign(new Error('Sin permiso'), { status: 403 });
+  // C1: los cinco casos del ruling.
+  assert.deepEqual(avisoVisible({ error: e500, ultimo: e500, reintentando: true }), { visto: e500, olvidar: false }, 'el error conservado mientras se reintenta (estadoReintento)');
+  assert.deepEqual(avisoVisible({ error: null, ultimo: e500, reintentando: true }), { visto: e500, olvidar: false }, 'error null mientras se reintenta (useResumen), con un último');
+  assert.deepEqual(avisoVisible({ error: null, ultimo: e500, reintentando: false }), { visto: null, olvidar: true }, 'un éxito OLVIDA el último');
+  assert.deepEqual(avisoVisible({ error: null, ultimo: null, reintentando: true }), { visto: null, olvidar: false }, 'una recarga normal sin último: nada');
+  assert.deepEqual(avisoVisible({ error: null, ultimo: null, reintentando: false }), { visto: null, olvidar: false });
+  assert.deepEqual(avisoVisible({ error: e403, ultimo: null, reintentando: false }), { visto: e403, olvidar: false }, 'un 403: su aviso (de permiso, sin «Reintentar»)');
+  assert.equal(av.avisoDeFuente(e403, 'x')?.reintentar, false);
+  // B4 T24 f4 (m8 de f3 r3): el último es de UNA cuenta. Si la sesión pasa a otra (otra pestaña, el re-ingreso), mientras carga la nueva
+  // no se pinta el error de la anterior (ni su aviso de permiso), y se olvida.
+  assert.deepEqual(avisoVisible({ error: null, ultimo: e403, reintentando: true, cuenta: 8, cuentaDelUltimo: 7 }), { visto: null, olvidar: true },
+    'otra cuenta cargando: nada de la anterior');
+  assert.deepEqual(avisoVisible({ error: null, ultimo: e500, reintentando: true, cuenta: 7, cuentaDelUltimo: 7 }), { visto: e500, olvidar: false },
+    'la misma cuenta reintentando: el último sigue');
+  assert.deepEqual(avisoVisible({ error: e500, ultimo: e403, reintentando: false, cuenta: 8, cuentaDelUltimo: 7 }), { visto: e500, olvidar: false },
+    'un error de la cuenta nueva sí se ve');
+  assert.deepEqual(avisoVisible({ error: null, ultimo: e500, reintentando: true }), { visto: e500, olvidar: false }, 'sin cuentas (aditivo): como antes');
+  {
+    const piezaCuenta = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    assert.match(piezaCuenta, /const cuenta = usuarioDeLaSesion\(\);/);
+    assert.match(piezaCuenta, /avisoVisible\(\{ error, ultimo, reintentando, cuenta, cuentaDelUltimo \}\)/);
+    assert.match(piezaCuenta, /if \(error != null && \(error !== ultimo \|\| cuenta !== cuentaDelUltimo\)\) \{\s*setUltimo\(error\);\s*setCuentaDelUltimo\(cuenta\);\s*\}/);
+  }
+  // La secuencia de la regresión: falla, reintento bueno, «Actualizar» (otra carga sin error): ningún aviso falso.
+  let ultimo = null;
+  const paso = (error, reintentando) => {
+    const { visto, olvidar } = avisoVisible({ error, ultimo, reintentando });
+    if (error != null) ultimo = error; else if (olvidar) ultimo = null;
+    return visto;
+  };
+  assert.equal(paso(e500, false), e500, 'falla');
+  assert.equal(paso(null, true), e500, 'Reintentar: «Reintentando…» con el último');
+  assert.equal(paso(null, false), null, 'salió bien: nada');
+  assert.equal(paso(null, true), null, '«Actualizar» después: NO vuelve el error viejo (era la regresión de r2)');
+  const pieza = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(pieza, /else if \(olvidar\) setUltimo\(null\);/, 'AvisoDeError limpia el último');
+  // C (ruling de la duda 4): el destino del foco es VISIBLE — la franja de tarjetas (tabindex=-1). B4 T24 f4 (m2 + m10 de f3 r3; D27):
+  // buscada por su id (idFoco de FranjaKpis ↔ destinoFoco de AvisoDeError), no por el texto de su aria-label.
+  assert.equal(focoTrasReintento({ teniaFoco: true, hayBoton: false }), 'destino');
+  assert.match(pieza, /document\.getElementById\(destinoFoco\)\?\.focus\(\);/);
+  assert.ok(!/querySelector<HTMLElement>\(`section\[aria-label|regionFoco/.test(pieza), 'sin la búsqueda por el texto ni el nombre viejo');
+  assert.ok(!/sr-only|Sin avisos|aria-label=\{aviso/.test(pieza), 'sin la región sr-only ni el aria-label sobre un div sin rol');
+  // B4 T24 f4 (m5 = m7 de f3 r3; D27): la franja, como destino, con el token de foco neutro (focus-visible), fuera del orden de Tab.
+  const franjaKpi = readFileSync(new URL('../src/components/ui/TarjetaKpi.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(franjaKpi, /<section id=\{idFoco\} aria-label=\{titulo\} aria-busy=\{estado === 'cargando'\} className=\{`@container rounded-2xl \$\{FOCOS\.slate\}`\} tabIndex=\{-1\}>/);
+  assert.match(franjaKpi, /children, estado = 'listo', nota, titulo = 'Indicadores', idFoco,/);
+  // m2 + m10 (mueren M3 y M4): en CADA pantalla, cada destinoFoco es el idFoco de una franja del MISMO archivo (y los ids no se repiten).
+  const PANTALLAS_DESTINO = ['compras/page.tsx', 'compras/pedidos/page.tsx', 'compras/transito/page.tsx', 'compras/recepciones/page.tsx',
+    'compras/lista-compras/page.tsx', 'inventario/page.tsx', 'inventario/stock/page.tsx', 'inventario/abastecimiento/page.tsx',
+    'inventario/entregas/page.tsx', 'inventario/recepciones/page.tsx', 'inventario/productos/page.tsx'];
+  const idsVistos = new Set();
+  for (const ruta of PANTALLAS_DESTINO) {
+    const f = leerFuente(`app/dashboard/${ruta}`);
+    const destinos = [...f.matchAll(/destinoFoco="([^"]+)"/g)].map((m) => m[1]);
+    const ids = [...f.matchAll(/(?:idFoco|id)="(franja-[^"]+|productos-[^"]+)"/g)].map((m) => m[1]);
+    assert.ok(destinos.length >= 1, `${ruta}: el aviso tiene destino`);
+    for (const d of destinos) assert.ok(ids.includes(d), `${ruta}: «${d}» es el id de un destino del mismo archivo (${ids})`);
+    for (const id of new Set(ids)) { assert.ok(!idsVistos.has(id), `«${id}» no se repite entre pantallas`); idsVistos.add(id); }
+    assert.ok(!/regionFoco/.test(f), `${ruta}: sin el nombre viejo`);
+  }
+  // C2 = C4: las pantallas de m17, montadas como el Hub, con SU franja como destino.
+  for (const [ruta, id, reintentando] of [['stock', 'franja-stock', 'stats.cargando'], ['abastecimiento', 'franja-abastecimiento', 'stats.cargando'],
+    ['entregas', 'franja-entregas', 'stats.cargando'], ['recepciones', 'franja-entradas', 'cargandoStats']]) {
+    const f = leerFuente(`app/dashboard/inventario/${ruta}/page.tsx`);
+    assert.ok(f.includes(`reintentando={${reintentando}} destinoFoco="${id}" />`), `${ruta}: el aviso con reintentando y su destino`);
+    assert.match(f, new RegExp(`<FranjaKpis[^>]*idFoco="${id}"`), `${ruta}: la franja «${id}» existe`);
+    // B4 T24 f4 (m1 de f3 r3; mueren M1 y M2): el aviso de /stats montado SIEMPRE: sin una condición delante.
+    assert.ok(!/&& \(\s*<AvisoReintentar error=\{(?:stats\.error|errorStats|compras\.error)\}[^\n]*destinoFoco=/.test(f), `${ruta}: montado siempre`);
+    for (const vieja of ["{estadoKpis === 'error' && (", "{estadoCompras === 'error' && (", '{errorStats != null && (', '{stats.error != null && (']) {
+      assert.ok(!f.includes(`${vieja}\n        <AvisoReintentar`) && !new RegExp(`${vieja.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*<AvisoReintentar`).test(f), `${ruta}: sin «${vieja}» delante del aviso`);
+    }
+  }
+  // B4 T24 f4 (m3 = m9 de f3 r3): Productos tiene un destino visible para el aviso del enlace (el 403 y el «no existe» tras un reintento).
+  const prod = leerFuente('app/dashboard/inventario/productos/page.tsx');
+  assert.ok(prod.includes('<section ref={refTarjeta} className={`${claseTarjeta} ${FOCOS.slate}`} id="productos-lista" tabIndex={-1} aria-label="Productos">'));
+  assert.match(prod, /<AvisoDeError error=\{cargaEnlace\.error\} fallo="No se pudo abrir el producto del enlace" acento="purple" reintentando=\{cargaEnlace\.reintentando\}\s+onReintentar=\{\(\) => setVueltaEnlace\(\(n\) => n \+ 1\)\} destinoFoco="productos-lista" \/>/);
+  // y los comentarios viejos («el foco va a su región») dicen lo de ahora: a la franja (o a la lista, en Productos).
+  for (const ruta of PANTALLAS_DESTINO) assert.ok(!leerFuente(`app/dashboard/${ruta}`).includes('el foco va a su región'), `${ruta}: el comentario al día`);
+  // m6: sin el código muerto. m9: el comentario de Tránsito al día. m4: el aviso de los quitados se reinicia. m11: el botón que baja, a la derecha.
+  noTrae(leerFuente('app/dashboard/compras/recepciones/page.tsx'), 'const porConfirmar = esRecepcionPorConfirmar(r);');
+  trae(leerFuente('app/dashboard/compras/transito/page.tsx'), 'terminarPendiente deja la foto SIN TOMAR');
+  trae(leerFuente('app/dashboard/compras/page.tsx'), "setSelectedPvens(new Set()); setQuitadosPvens([]); }, [pec && pec.id]);");
+  // B4 T24 f4 (m4 = m6 de f3 r3; D27): la regla del pie, solo para pies de dos o más elementos (uno solo no se mueve a la derecha).
+  // Lo equivalente del ruling: ml-auto en cada hijo que no es el primero (un pie de uno no se mueve; el del centro de tres no se pega
+  // al primero; lo que baja solo va a la derecha). Medido en el banco a 375 y a 1024.
+  const pie = readFileSync(new URL('../src/components/ui/Drawer.tsx', import.meta.url), 'utf8');
+  assert.match(pie, /flex flex-wrap items-center justify-between gap-3 \[&>:not\(:first-child\)\]:ml-auto`\}>/);
+  assert.ok(!/\[&>:last-child\]:ml-auto/.test(pie), 'sin la regla que movía también un pie de un solo elemento');
 }
 
 console.log('\nOK: test_estados_compras.mjs');

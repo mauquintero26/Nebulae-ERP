@@ -606,6 +606,40 @@ console.log('--- TEST 17 (B4 T15, KPI-compras punto 6): tarjetasPedidosCompra co
   assert.equal(etiquetaKpi('pec_monto'), 'Monto en compras');
 }
 
+console.log('--- TEST 17-f4 (B4 T24 f4, F60): las tarjetas del Hub y de Pedidos de compra cuadran con las pestañas cuando hay una búsqueda ---');
+{
+  const { datosTarjetasCompras, tarjetasHubCompras, tarjetasPedidosCompra } = kpisLib;
+  // /compras/stats es de TODOS los PEC (sin la búsqueda); el resumen y los conteos de GET /compras/pedidos (con_resumen, con_conteos)
+  // llevan la búsqueda: las cifras que abren una pestaña salen de ahí. Comprado (del período, flujo) sigue saliendo de /stats.
+  const stats = { activos: 7, en_transito: 3, en_bodega: 1, vencidos: 2, recibidos: 9, cumplimiento_pct: 56, monto_cop: 9000000, vigentes: 20,
+    flujo: { comprado_cop: { actual: 5000000, anterior: 4000000 } } };
+  const resumen = { capital_cop: 1200000, activos: 2, en_transito: 1, en_bodega: 0, vencidos: 1, recibidos: 3, cumplimiento_pct: 60 };
+  const conteos = { vigentes: 4, activos: 2, vencidos: 1 };
+  const d = datosTarjetasCompras(stats, resumen, conteos);
+  assert.deepEqual([d.activos, d.en_transito, d.vencidos, d.recibidos, d.cumplimiento_pct, d.monto_cop, d.vigentes], [2, 1, 1, 3, 60, 1200000, 4],
+    'con la búsqueda: el resumen y los conteos de la MISMA llamada de la lista');
+  assert.deepEqual(d.flujo, stats.flujo, 'Comprado (30 días) sigue con /stats');
+  const hub = tarjetasHubCompras(d);
+  assert.equal(hub.activos.valor, conteos.activos, '«Pedidos de compra activos» = el número de la pestaña Activos');
+  assert.equal(hub.activos.ayuda, '1 con entrega vencida');
+  assert.equal(hub.comprado.valor, 5000000);
+  const ped = tarjetasPedidosCompra(d);
+  assert.deepEqual([ped.activos.valor, ped.vencidos.valor, ped.monto.valor, ped.monto.ayuda], [2, 1, 1200000, '4 pedidos vigentes']);
+  // Sin el resumen todavía (la lista no llegó) o sin /stats, no hay tarjetas (cargan o dicen «—»): nunca las de otra consulta.
+  assert.equal(datosTarjetasCompras(stats, null, conteos), null);
+  assert.equal(datosTarjetasCompras(null, resumen, conteos), null);
+  assert.equal(datosTarjetasCompras(stats, resumen, null).vigentes, null, 'sin conteos, sin «N vigentes»');
+  // El cableado: la lista pide el resumen en la MISMA llamada y las tarjetas lo usan; el estado espera al resumen.
+  for (const [ruta, fn] of [['compras/page.tsx', 'tarjetasHubCompras'], ['compras/pedidos/page.tsx', 'tarjetasPedidosCompra']]) {
+    const f = readFileSync(new URL(`../src/app/dashboard/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    assert.match(f, /ruta: '\/compras\/pedidos', estado, conConteos: true, conResumen: true, esperar: !listo, despachar,/, `${ruta}: conResumen`);
+    assert.ok(f.includes('const datosTarjetas = datosTarjetasCompras(stats.datos, listado.resumen, conteos);'), `${ruta}: las tarjetas con el resumen`);
+    assert.ok(f.includes('const cargandoStats = stats.cargando || (datosTarjetas === null && stats.datos !== null && listado.error == null);'), `${ruta}: cargando hasta el resumen`);
+    assert.ok(f.includes('const estadoKpis = useEstadoKpi(cargandoStats, stats.error ?? listado.error);'), `${ruta}: el error de cualquiera de las dos`);
+    assert.ok(f.includes(`const tarjetas = ${fn}(datosTarjetas);`), `${ruta}: ${fn}`);
+  }
+}
+
 console.log('--- TEST 18 (B4 T16A, KPI-compras puntos 7 y 8): tarjetasTransito y tarjetasRecepciones con lo de GET /compras/stats ---');
 {
   const transito = kpisLib.tarjetasTransito;
@@ -770,7 +804,7 @@ console.log('--- TEST 21 (B4 T18, KPI-inventario punto 5 y 6): las tarjetas de S
   assert.deepEqual(stock(stats), {
     fisico: { valor: 26, ayuda: 'Lo que hay físicamente en las bodegas.' },
     reservado: { valor: 4, ayuda: 'Reservas activas que no han vencido.' },
-    disponible: { valor: 22, ayuda: 'Físico menos comprometido, nunca negativo.' },
+    disponible: { valor: 22, ayuda: 'Por bodega: físico menos comprometido, nunca negativo; luego se suma.' }, // B4 T24 f3 (FINAL-m15, D27)
     en_transito: { valor: 9, ayuda: 'Pedido al proveedor y aún sin recibir.' },
   });
   // Cada tarjeta lee SU clave (un mutante que cruce dos da otro número). Un 0 del servidor es 0; un Decimal en texto vale;
@@ -778,7 +812,7 @@ console.log('--- TEST 21 (B4 T18, KPI-inventario punto 5 y 6): las tarjetas de S
   assert.deepEqual(stock({ unidades_fisicas: 0, unidades_reservadas: '2,5x', unidades_disponibles: '7.5', unidades_en_transito: null }), {
     fisico: { valor: 0, ayuda: 'Lo que hay físicamente en las bodegas.' },
     reservado: { valor: null, ayuda: 'Reservas activas que no han vencido.' },
-    disponible: { valor: 7.5, ayuda: 'Físico menos comprometido, nunca negativo.' },
+    disponible: { valor: 7.5, ayuda: 'Por bodega: físico menos comprometido, nunca negativo; luego se suma.' }, // B4 T24 f3 (FINAL-m15, D27)
     en_transito: { valor: null, ayuda: 'Pedido al proveedor y aún sin recibir.' },
   });
   for (const malo of [null, undefined, 'x', [1], 3]) assert.equal(stock(malo), null, String(malo));
@@ -1007,7 +1041,7 @@ console.log('--- TEST 25 (B4 T22, KPI-otros punto 1 y FLUJO-ventas-pantallas E; 
   // m10: las «Recientes» dicen la etiqueta del estado, no el código.
   assert.ok(fuente.includes('{infoEstadoPec(pec.estado).label}') && fuente.includes('{infoEstadoPedido(ven.estado).label}'));
   assert.doesNotMatch(fuente, /\{(pec|ven)\.estado\}/);
-  // Lo que no se toca: el Copilot y las listas «Recientes».
+  // Lo que no se toca: el Copilot y lo que piden las «Recientes» (que sí dicen la etiqueta del estado: m10). (B4 T24 f4, F103 (c).)
   assert.ok(fuente.includes("apiFetch('/chat/copilot/query'"));
   assert.ok(fuente.includes("apiFetch('/ventas/pedidos')") && fuente.includes("apiFetch('/compras/pedidos')"));
   assert.ok(fuente.includes('recientes.pecsActivos.map(') && fuente.includes('recientes.pedidosRecientes.map('));
@@ -1015,7 +1049,8 @@ console.log('--- TEST 25 (B4 T22, KPI-otros punto 1 y FLUJO-ventas-pantallas E; 
   assert.doesNotMatch(fuente, /\b(alert|confirm|prompt)\s*\(/);
   // Medidas del banco (R26, R23): la raíz no se encoge dentro del <main> flex (shrink-0: su relleno de abajo es el que deja libre la
   // esquina del botón de la IA, 96 px) y Actualizar con el selector bajan de renglón en lugar de correr la página a 768 px.
-  assert.ok(fuente.includes('className="w-full shrink-0 bg-slate-50 min-h-screen pb-24 '), 'la raíz: shrink-0 y pb-24');
+  // B4 T24 f4 (F44-a; D27): la reserva es el token RESERVA_BOTON_IA (pb-24).
+  assert.ok(fuente.includes('className={`w-full shrink-0 bg-slate-50 min-h-screen ${RESERVA_BOTON_IA} '), 'la raíz: shrink-0 y la reserva');
   assert.ok(fuente.includes('<div className="flex flex-wrap items-center gap-3">\n            <button\n              onClick={loadDashboardData}'), 'el encabezado envuelve');
 }
 
@@ -1036,7 +1071,8 @@ console.log('--- TEST 26 (B4 T22 r1; I1, m3, m6, m11, m13): las rutas de error y
   const falla = new Error('Error del servidor');
   assert.deepEqual(kpisLib.lecturaDeFuente(null, 'a'), { datos: null, cargando: true, error: null, marca: null });
   assert.deepEqual(kpisLib.lecturaDeFuente({ vuelta: 'a', datos: { n: 1 }, error: null, marca: '30d' }, 'a'), { datos: { n: 1 }, cargando: false, error: null, marca: '30d' });
-  assert.deepEqual(kpisLib.lecturaDeFuente({ vuelta: 'a', datos: null, error: falla, marca: '30d' }, 'a'), { datos: null, cargando: false, error: falla, marca: '30d' });
+  // B4 T24 f4 (F7; D27): sin datos no hay marca (antes '30d'): el rótulo es el del período elegido, no el de una carga que falló.
+  assert.deepEqual(kpisLib.lecturaDeFuente({ vuelta: 'a', datos: null, error: falla, marca: '30d' }, 'a'), { datos: null, cargando: false, error: falla, marca: null });
   const reintento = kpisLib.lecturaDeFuente({ vuelta: 'a', datos: null, error: falla, marca: '30d' }, 'b');
   assert.equal(reintento.error, null, 'mientras se reintenta, el error anterior no se muestra');
   assert.equal(reintento.cargando, true);
@@ -1072,6 +1108,42 @@ console.log('--- TEST 26 (B4 T22 r1; I1, m3, m6, m11, m13): las rutas de error y
   assert.ok(cuerpo.includes('tarjetasStock(datosInventario)'));
   assert.doesNotMatch(cuerpo, /unidades_(fisicas|reservadas|disponibles|en_transito)/);
   assert.doesNotMatch(fuente, /const objetoPlano = /, 'un solo predicado de objeto (datosDe)');
+}
+
+console.log('--- TEST 26-f4 (B4 T24 f4: F7, F102 y F103): la marca solo con datos; las anclas del Dashboard y de Gastos; los comentarios ---');
+{
+  const falla = new Error('Error del servidor');
+  // F7: /ventas/stats falló para 30 días y se elige Semana: la tarjeta dice «Vendido (7 días)», no «(30 días)» sobre la carga de 7.
+  const fallo30 = kpisLib.lecturaDeFuente({ vuelta: '30d:1', datos: null, error: falla, marca: '30d' }, '7d:1');
+  assert.equal(fallo30.marca, null, 'reintentando con otro período, sin datos: sin marca');
+  assert.equal(kpisLib.periodoVisto(fallo30.marca, '7d'), '7d');
+  assert.equal(kpisLib.etiquetaKpi('vendido_periodo', kpisLib.periodoVisto(fallo30.marca, '7d')), 'Vendido (7 días)');
+  // Con datos, la marca de los datos que se ven (m3 y m11 siguen).
+  assert.equal(kpisLib.lecturaDeFuente({ vuelta: 'a', datos: { n: 1 }, error: null, marca: '30d' }, 'b').marca, '30d');
+  // lecturaLeadsCampana sigue sabiendo de QUÉ campaña es un error (la marca cruda de lo que llegó, no la de la lectura).
+  const errCampana = kpisLib.lecturaLeadsCampana({ vuelta: '5:0', marca: '5', datos: null, error: falla }, '5:0', '5', true);
+  assert.deepEqual([errCampana.error, errCampana.estado, errCampana.cargando], [falla, 'error', false], 'el error de la campaña elegida se ve');
+  const otra = kpisLib.lecturaLeadsCampana({ vuelta: '4:0', marca: '4', datos: null, error: falla }, '5:0', '5', true);
+  assert.deepEqual([otra.error, otra.estado], [null, 'cargando'], 'el de otra campaña no');
+
+  const dash = readFileSync(new URL('../src/app/dashboard/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // F102 W3: el then de useFuente guarda la marca con los datos.
+  assert.ok(dash.includes('.then((r: unknown) => setLlego({ vuelta: clave, datos: datosDeRespuesta(r) as T, error: null, marca }))'));
+  // F102 W2: el «Reintentar» del radar, en la rama de ventas.error, llama a ventas.recargar.
+  assert.match(dash, /\{ventas\.error \? \(\s*<button type="button" onClick=\{ventas\.recargar\}\s+className=\{`ml-2 rounded font-bold underline hover:text-white \$\{FOCOS\.blanco\}`\}>\s*Reintentar\s*<\/button>\s*\) : null\}/);
+  // F102 W1b/W1c (con F46: la pieza común): el botón completo, type=button, con onReintentar y el texto «Reintentar» dentro.
+  const aviso = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(aviso, /\{aviso\.reintentar && \(\s*<button ref=\{refBoton\} type="button" onClick=\{reintentando \? undefined : onReintentar\}[^>]*>\s*\{reintentando \? 'Reintentando…' : 'Reintentar'\}\s*<\/button>\s*\)\}/);
+  // F103 (a): el comentario del radar nombra la pestaña de donde sale el número.
+  assert.ok(!dash.includes('el mismo número de la pestaña del Hub de Ventas'), 'F103 (a): sin el comentario viejo');
+  assert.ok(dash.includes('la pestaña «Pend. Compra» de Pedidos de venta'), 'F103 (a)');
+  // F103 (c): el comentario de TEST 25 (arriba) ya no dice que «Recientes» no se toca.
+  const esta = readFileSync(new URL(import.meta.url), 'utf8');
+  assert.ok(!esta.includes(['// Lo que no se toca: el Copilot', 'y las listas «Recientes».'].join(' ')), 'F103 (c)');
+  // F103 (d): el comentario de los conteos de Gastos menciona el tipo.
+  const gastos = readFileSync(new URL('../src/app/dashboard/finanzas/gastos/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.ok(gastos.includes('// Los conteos por categoría ({categoría: n}, con la búsqueda y el tipo, sin la categoría)'), 'F103 (d)');
+  // F102 W4 y W5 van en TEST 50 de test_tabla.mjs; F103 (b), en el comentario de TEST 49 de test_tabla.mjs.
 }
 
 console.log('--- TEST 27 (B4 T23A, KPI-otros punto 5; R7, R12, RP102): las tarjetas de la tienda y su comparación ---');
@@ -1325,10 +1397,19 @@ console.log('--- TEST 29 (B4 T23B, KPI-otros puntos 3, 4 y 6; RP70): las tarjeta
     total: { etiqueta: 'Total comprado', texto: '$4.927.538' },
     mini: [
       { etiqueta: 'Total de pedidos', texto: '6', ayuda: null },
-      { etiqueta: 'Pedidos en curso', texto: '2', ayuda: 'Incluye los facturados' },
+      // B4 T24 f4 (B49-f; D27): sin la ayuda «Incluye los facturados». B49-b dejó active_orders_count = pven_en_curso.
+      { etiqueta: 'Pedidos en curso', texto: '2', ayuda: null },
       { etiqueta: 'Ticket promedio', texto: '$821.256', ayuda: null },
     ],
   });
+  assert.ok(k.fichaRevenueAsistente(rev).mini.every((x) => x.ayuda === null || !/factur/i.test(x.ayuda)), 'B49-f: ninguna ayuda habla de facturados');
+  {
+    // El contrato del servidor (solo lectura): chat.py da active_orders_count = rv.f_pven_en_curso y total_orders_count = pven_total.
+    const chat = readFileSync(new URL('../../backend/app/api/v1/chat.py', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    assert.ok(chat.includes('"active_orders_count": pven_en_curso,'), 'B49-b: active_orders_count = pven_en_curso');
+    assert.ok(chat.includes('"total_orders_count": pven_total,'), 'B49-b: total_orders_count = pven_total');
+    assert.ok(chat.includes('rv.f_pven_en_curso(SaleOrder)'), 'la regla de rv');
+  }
   assert.equal(k.fichaRevenueAsistente(rev).total.etiqueta, k.CATALOGO_KPI.cli_total_comprado.etiqueta);
   assert.deepEqual(k.fichaRevenueAsistente(rev).mini.slice(0, 2).map((x) => x.etiqueta), [k.CATALOGO_KPI.pven_total.etiqueta, k.CATALOGO_KPI.pven_en_curso.etiqueta]);
   const sin = k.fichaRevenueAsistente({});
@@ -1360,10 +1441,13 @@ console.log('--- TEST 30 (B4 T23B): las piezas comunes: AvisoFuente y useRolActu
   assert.match(hook, /return useSyncExternalStore\(suscribirRol, \(\) => localStorage\.getItem\('user_role'\) \|\| '', \(\) => ''\);/);
   assert.ok(!/useState\([^)]*localStorage/.test(hook), 'el rol no se lee en el inicializador de useState');
   // El aviso: un 403 es de permiso (sin «Reintentar»); una falla lleva «Reintentar» solo si aviso.reintentar.
-  assert.match(fuente, /\{aviso\.reintentar && \(\s*<button type="button" onClick=\{onReintentar\}/);
+  // B4 T24 f3 r1 (m36, D27): mientras se reintenta, el mismo botón sin onClick y con aria-disabled («Reintentando…»).
+  // r2 (m36, D27): el botón lleva su ref con limpieza (alSoltarBoton: el foco nunca queda en el <body>).
+  assert.match(fuente, /\{aviso\.reintentar && \(\s*<button ref=\{refBoton\} type="button" onClick=\{reintentando \? undefined : onReintentar\} aria-disabled=\{reintentando \|\| undefined\}/);
   assert.match(fuente, /const permiso = aviso\.tipo === 'permiso';/);
   assert.match(fuente, /role=\{permiso \? 'status' : 'alert'\}/);
-  assert.equal((fuente.match(/\n\s*Reintentar\n/g) ?? []).length, 1, 'un solo botón «Reintentar», el de aviso.reintentar');
+  // r1 (m36, D27): el texto es {reintentando ? 'Reintentando…' : 'Reintentar'} (un solo botón).
+  assert.equal((fuente.match(/\{reintentando \? 'Reintentando…' : 'Reintentar'\}/g) ?? []).length, 1, 'un solo botón «Reintentar», el de aviso.reintentar');
 }
 
 console.log('--- TEST 31 (B4 T23B, KPI-otros punto 2; RP7, R12, C13): Seguimientos del CRM ---');
@@ -1498,11 +1582,15 @@ console.log('--- TEST 33 (B4 T23B, KPI-otros punto 4 y TABLA-otros punto 6; R11,
   assert.match(codigo, /const fCOP = \(v: number\) => formatoPesos\(v \|\| 0\);/);
   // El botón flotante de la IA no tapa la última fila de la tabla de leads: el panel baja 96 px de más (medido en el banco a 1024 x 600).
   // B4 T24 (F44-a, D27): la reserva es el token RESERVA_BOTON_IA (pb-24).
-  assert.match(codigo, /<div className=\{`flex-1 overflow-y-auto p-6 \$\{RESERVA_BOTON_IA\}`\}>/);
-  // m1: la barra del presupuesto usa la MISMA cifra que la tarjeta y el ROI, y queda gris mientras carga.
-  assert.match(codigo, /\{fCOP\(tarjetasMetricas\.ventas_atribuidas\.valor \?\? 0\)\} \/ \{fCOP\(selected\.presupuesto_cop\)\}/);
-  assert.match(codigo, /width:`\$\{Math\.min\(100, \(\(tarjetasMetricas\.ventas_atribuidas\.valor \?\? 0\) \/ selected\.presupuesto_cop\) \* 100\)\}%`/);
-  assert.match(codigo, /lectura\.estado === 'cargando' \? <div className="h-3 w-full animate-pulse rounded-full bg-slate-200" aria-hidden="true" \/> : /);
+  // B4 T24 f4 (Campañas a 375; D27): en el teléfono la página entera se desplaza (el detalle ya no queda con 0 px de alto); desde md,
+  // el panel se desplaza solo, como antes. La reserva sigue en el mismo contenedor.
+  assert.match(codigo, /<div className=\{`flex-1 md:overflow-y-auto p-6 \$\{RESERVA_BOTON_IA\}`\}>/);
+  // m1 (B4 T24 f4, F111; D27): la barra del presupuesto sale de barraPresupuesto (kpis.js, con sus casos): la MISMA cifra que la
+  // tarjeta y el ROI, «—» y gris mientras carga, con error o sin dato (nunca «$0» ni un ancho 0 como si fuera un dato).
+  assert.match(codigo, /const barra = barraPresupuesto\(lectura\.estado, tarjetasMetricas\.ventas_atribuidas\.valor, selected\?\.presupuesto_cop\);/);
+  assert.match(codigo, /<span className="text-sm font-black text-emerald-600">\{barra\.texto\}<\/span>/);
+  assert.match(codigo, /\{barra\.gris \? <div className=\{`h-3 w-full rounded-full bg-slate-200 \$\{lectura\.estado === 'cargando' \? 'animate-pulse' : ''\}`\} aria-hidden="true" \/> : <div className="bg-emerald-500 h-3 rounded-full" style=\{\{width:`\$\{barra\.ancho\}%`\}\}\/>\}/);
+  assert.ok(!/ventas_atribuidas\.valor \?\? 0/.test(codigo), 'sin el «?? 0» que pintaba $0 con un error');
   assert.ok(!/selected\.ventas_cop/.test(codigo.replace(/c\.ventas_cop/g, '')), 'ninguna cifra de ventas de la pestaña sale de la fila');
   // m7: el filtro de estado de la lista dice la etiqueta, no el código.
   assert.match(codigo, /<option key=\{e\} value=\{e\}>\{humanizarCodigo\(e\)\}<\/option>/);
@@ -1607,7 +1695,7 @@ console.log('--- TEST 35 (B4 T23B, KPI-otros punto 6; H13, RP70): el Asistente o
   // P19 (m35): el error de la búsqueda se guarda y se dice.
   assert.match(codigo, /setSearchResults\(\[\]\);\s*setErrorBusqueda\(err\);/);
   assert.match(codigo, /<p role="alert" className="[^"]*">\{textoDeError\(errorBusqueda, 'No se pudo buscar clientes'\)\}<\/p>/);
-  // m9: la tarjeta «Pedidos en curso» aclara que incluye los facturados.
+  // m9: la ayuda de «Pedidos en curso», si la trae, se pinta (B4 T24 f4, B49-f: hoy no trae ninguna; chat.py ya es canónico).
   assert.match(codigo, /\{ficha\.mini\[1\]\.ayuda && <div className="text-\[9px\] leading-tight text-slate-400">\{ficha\.mini\[1\]\.ayuda\}<\/div>\}/);
   assert.match(codigo, /const avisoContexto = errorContexto \? avisoDeFuente\(errorContexto\.error, 'No se pudo cargar el perfil del cliente'\) : null;/);
   assert.match(codigo, /<AvisoFuente aviso=\{avisoContexto\} onReintentar=\{\(\) => loadCustomerContext\(errorContexto!\.pedido\)\} \/>/);
@@ -1738,7 +1826,8 @@ console.log('--- TEST T24-e (B4 T24 r1, m11): cuerpoConfigPagos — un secreto v
   const { cuerpoConfigPagos, SECRETOS_PAGOS } = kpisLib;
   // update_payment_config (ecommerce.py) MEZCLA el cuerpo de cada pasarela sobre lo guardado: un secret_key '' lo borraría, y un
   // *_masked se guardaría como un dato. El GET no devuelve los secretos (los quita y manda *_masked).
-  assert.deepEqual(SECRETOS_PAGOS, { stripe: ['secret_key'], mercadopago: ['access_token'] });
+  // B4 T24 f4 (m6; D27): el webhook_secret también es un secreto (abajo, TEST T24-f4b).
+  assert.deepEqual(SECRETOS_PAGOS, { stripe: ['secret_key', 'webhook_secret'], mercadopago: ['access_token'] });
   const leido = {
     stripe: { enabled: true, publishable_key: 'pk_1', secret_key: '', secret_key_masked: '****1234', webhook_secret: 'whsec_9' },
     mercadopago: { enabled: false, public_key: 'APP_1', access_token: '   ', access_token_masked: '****9876' },
@@ -1757,6 +1846,58 @@ console.log('--- TEST T24-e (B4 T24 r1, m11): cuerpoConfigPagos — un secreto v
   assert.ok(pantalla.includes("body:JSON.stringify(cuerpoConfigPagos(payConfig))"), 'Guardar Pagos manda cuerpoConfigPagos');
   assert.ok(!pantalla.includes('JSON.stringify(payConfig)'), 'nunca el estado crudo');
   assert.ok(pantalla.includes("placeholder={payConfig[gw.key]?.[`${field.k}_masked`] || field.ph}"), 'el enmascarado como marcador');
+}
+
+console.log('--- TEST T24-f4b (B4 T24 f4; m6 del backend r2, m4 y m11 de r3): el Webhook Secret de Stripe también es un secreto ---');
+{
+  const { cuerpoConfigPagos, SECRETOS_PAGOS, AYUDA_SECRETOS_PAGOS } = kpisLib;
+  // GET /ecommerce/pagos/config ya no trae webhook_secret sino webhook_secret_masked (m6): el campo llega vacío, y vacío = no cambiar.
+  assert.deepEqual(SECRETOS_PAGOS, { stripe: ['secret_key', 'webhook_secret'], mercadopago: ['access_token'] });
+  const leido = {
+    stripe: { enabled: true, publishable_key: 'pk_1', secret_key: '', secret_key_masked: '****1234', webhook_secret: '',
+      webhook_secret_masked: '****abcd' },
+    mercadopago: { enabled: true, public_key: 'APP_1', access_token: '', access_token_masked: '****9876' },
+  };
+  assert.deepEqual(cuerpoConfigPagos(leido), {
+    stripe: { enabled: true, publishable_key: 'pk_1' },
+    mercadopago: { enabled: true, public_key: 'APP_1' },
+  }, 'los tres secretos vacíos no se mandan, ni sus *_masked');
+  assert.deepEqual(cuerpoConfigPagos({ stripe: { webhook_secret: '   ' } }), { stripe: {} }, 'un webhook_secret en blanco tampoco');
+  assert.deepEqual(cuerpoConfigPagos({ stripe: { webhook_secret: 'whsec_nuevo' } }), { stripe: { webhook_secret: 'whsec_nuevo' } }, 'uno nuevo sí');
+  // El servidor (solo lectura) enmascara los tres y un vacío, null o máscara no cambia (ecommerce.py, _SECRETOS_DE_PAGO).
+  const eco = readFileSync(new URL('../../backend/app/api/v1/ecommerce.py', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.ok(eco.includes('webhook_secret_masked'), 'm6: el GET manda webhook_secret_masked');
+  assert.ok(eco.includes('_SECRETOS_DE_PAGO'), 'la lista del servidor');
+  // La pantalla: el marcador del Webhook Secret es el *_masked (el patrón de m11 de f1, genérico por campo) y la ayuda lo explica.
+  const pantalla = readFileSync(new URL('../src/app/dashboard/ecommerce/page.tsx', import.meta.url), 'utf8');
+  assert.ok(pantalla.includes("{k:'webhook_secret',l:'Webhook Secret',ph:'whsec_...',pw:true}"), 'el campo es de contraseña');
+  assert.ok(pantalla.includes("placeholder={payConfig[gw.key]?.[`${field.k}_masked`] || field.ph}"), 'el marcador del campo es su *_masked');
+  assert.match(AYUDA_SECRETOS_PAGOS, /vacío/);
+  assert.match(AYUDA_SECRETOS_PAGOS, /escribe el nuevo/);
+  assert.match(AYUDA_SECRETOS_PAGOS, /Desactivar el proveedor tampoco lo borra/);
+  assert.ok(pantalla.includes('<p className="text-xs text-slate-500">{AYUDA_SECRETOS_PAGOS}</p>'), 'la ayuda en la pestaña Pagos');
+  assert.match(pantalla, /import \{[^}]*\bAYUDA_SECRETOS_PAGOS\b[^}]*\} from '@\/lib\/kpis';/);
+}
+
+console.log('--- TEST T24-f4c (B4 T24 f4; C1 del backend r3): Sitio Web solo usa las claves que GET /ecommerce/web-builder/config sigue trayendo ---');
+{
+  // Backend r3 (C1): el GET solo trae CLAVES_CONSTRUCTOR_SITIO y el PATCH ignora el resto. Sitio Web lee y escribe solo esas.
+  const eco = readFileSync(new URL('../../backend/app/api/v1/ecommerce.py', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const m = eco.match(/^CLAVES_CONSTRUCTOR_SITIO = \(([^)]*)\)$/m);
+  assert.ok(m, 'CLAVES_CONSTRUCTOR_SITIO en ecommerce.py');
+  const claves = new Set([...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]));
+  assert.deepEqual([...claves], ['theme', 'hero', 'featured_section', 'contact', 'blog']);
+  const sitio = readFileSync(new URL('../src/app/dashboard/sitio-web/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const usadas = new Set([
+    ...[...sitio.matchAll(/\bconfig\.([a-z_]+)/g)].map((x) => x[1]),
+    ...[...sitio.matchAll(/updateSection\('([a-z_]+)'/g)].map((x) => x[1]),
+    ...[...sitio.matchAll(/\{ k: '([a-z_]+)', l: /g)].map((x) => x[1]),
+  ]);
+  assert.ok(usadas.size >= 4, `Sitio Web usa sus secciones: ${[...usadas]}`);
+  for (const k of usadas) assert.ok(claves.has(k), `Sitio Web usa «${k}», que el GET ya no trae`);
+  // La pantalla sigue leyendo d.data del GET y mandando el config al PATCH (las claves de fuera las ignora el servidor).
+  assert.ok(sitio.includes("apiFetch('/ecommerce/web-builder/config').then(d => { setConfig(d.data || {});"));
+  assert.ok(sitio.includes("await apiFetch('/ecommerce/web-builder/config', { method: 'PATCH', body: JSON.stringify(config) });"));
 }
 
 console.log('--- TEST T24-b (B4 T24, FINAL-m23): el Copilot del Dashboard, solo para quien lo puede consultar, sin emojis y con el 403 dicho ---');
@@ -1798,6 +1939,107 @@ console.log('--- TEST T24-c (B4 T24, F108): la Agenda ofrece Nuevo, Editar y Eli
   for (const m of nuevos) assert.match(c.slice(Math.max(0, m.index - 120), m.index), /\{accesoProv\.editar && \(\s*<button\s+$/, 'dentro de accesoProv.editar');
   // Sin permiso, el vacío dice solo «Sin proveedores registrados» (sin invitar a crear).
   assert.match(c, /\{accesoProv\.editar && <p className="text-xs text-slate-500 mt-1 mb-6">Crea el primer proveedor para gestionar compras y pedidos PEC\.<\/p>\}/);
+}
+
+console.log('--- TEST T24-f4d (B4 T24 f4: FINAL-m20, F113 y F114): la Agenda no vuelve un error de carga un vacío falso ---');
+{
+  const { vistaListaAgenda, textoProveedoresCortados } = kpisLib;
+  // FINAL-m20: la regla, pura. Un error sin filas es 'error' (el aviso, nunca «Sin proveedores registrados» ni «+ Registrar»).
+  assert.equal(vistaListaAgenda({ cargando: true, error: null, cantidad: 0 }), 'cargando');
+  assert.equal(vistaListaAgenda({ cargando: false, error: null, cantidad: 0 }), 'vacio', 'un vacío de verdad');
+  assert.equal(vistaListaAgenda({ cargando: false, error: null, cantidad: 3 }), 'lista');
+  assert.equal(vistaListaAgenda({ cargando: false, error: new Error('500'), cantidad: 0 }), 'error', 'un 500 o la red no son un vacío');
+  assert.equal(vistaListaAgenda({ cargando: true, error: new Error('500'), cantidad: 0 }), 'error', 'mientras se reintenta, el aviso sigue (con «Reintentando…»)');
+  assert.equal(vistaListaAgenda({ cargando: false, error: new Error('500'), cantidad: 2 }), 'lista', 'con filas de antes, la lista sigue y el aviso va encima');
+  assert.equal(vistaListaAgenda({ cargando: true, error: null, cantidad: 2 }), 'cargando');
+  // F114: el separador de miles de textoProveedoresCortados (mata N4: sin formatoEntero).
+  assert.equal(textoProveedoresCortados(5000, 1200), 'Se muestran los primeros 1.200 de 5.000 (por nombre)');
+  const fuente = readFileSync(new URL('../src/app/dashboard/agenda/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const c = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // El cableado: los dos catch GUARDAN el error (antes, un console.error mudo) y lo limpian al llegar bien.
+  const proveedores = c.slice(c.indexOf('const fetchSuppliers = async'), c.indexOf('const openSupplier = async'));
+  assert.match(proveedores, /setErrorProveedores\(null\);/);
+  assert.match(proveedores, /\} catch \(e\) \{\s*setErrorProveedores\(e\);/);
+  assert.ok(!/console\.error\('Error cargando proveedores'/.test(c), 'el error de proveedores no se traga');
+  const clientes = c.slice(c.indexOf('const fetchCustomers = async'), c.indexOf('const fetchProfile = async'));
+  assert.match(clientes, /setErrorClientes\(null\);/);
+  assert.match(clientes, /\} catch \(e\) \{\s*setErrorClientes\(e\);/);
+  assert.ok(!/console\.error\('Error cargando clientes'/.test(c), 'el error de clientes no se traga');
+  // El aviso común (avisoDeFuente: un 403 sin «Reintentar») y la vista de la lib.
+  assert.match(c, /const avisoProveedores = avisoDeFuente\(errorProveedores, 'No se pudieron cargar los proveedores'\);/);
+  assert.match(c, /const avisoClientes = avisoDeFuente\(errorClientes, 'No se pudieron cargar los clientes'\);/);
+  assert.match(c, /const vistaProveedores = vistaListaAgenda\(\{ cargando: loadingSuppliers, error: errorProveedores, cantidad: suppliers\.length \}\);/);
+  assert.match(c, /\{avisoProveedores && <div className="mb-4"><AvisoFuente aviso=\{avisoProveedores\} onReintentar=\{fetchSuppliers\} reintentando=\{loadingSuppliers\} \/><\/div>\}/);
+  assert.match(c, /\{avisoClientes && <div className="mb-4"><AvisoFuente aviso=\{avisoClientes\} onReintentar=\{fetchCustomers\} \/><\/div>\}/);
+  assert.ok(c.indexOf('{avisoClientes && ') < c.indexOf('{filteredCustomers.map(client =>'), 'el aviso de clientes va sobre la cuadrícula');
+  // El vacío «Sin proveedores registrados» solo en la rama 'vacio' (con la búsqueda que no encuentra nada, también).
+  const rama = c.slice(c.indexOf("{vistaProveedores === 'cargando' ? ("), c.indexOf('<h3 className="font-black text-slate-800 text-lg">Sin proveedores registrados</h3>'));
+  assert.match(rama, /^\{vistaProveedores === 'cargando' \? \([\s\S]*\) : vistaProveedores === 'error' \? null : filteredSuppliers\.length === 0 \? \(/);
+  // F113: el orden de lo que va sobre la lista: la línea de los cortados, el aviso y después la lista (o su vacío).
+  const iCortados = c.indexOf('{textoCortados && ');
+  const iAviso = c.indexOf('{avisoProveedores && <div className="mb-4"><AvisoFuente');
+  const iLista = c.indexOf("{vistaProveedores === 'cargando' ? (");
+  assert.ok(iCortados > 0 && iAviso > iCortados && iLista > iAviso, `F113: cortados (${iCortados}) < aviso (${iAviso}) < lista (${iLista})`);
+}
+
+console.log('--- TEST T24-f4e (B4 T24 f4: F111, FINAL-m24, Campañas a 375 y F112): la barra del presupuesto, el modal, el teléfono y el Asistente ---');
+{
+  const { barraPresupuesto } = kpisLib;
+  // F111: la barra, pura. Mientras carga: «—» y gris (con pulso); con error o sin dato: «— / $presupuesto» y gris (nunca «$0»).
+  assert.deepEqual(barraPresupuesto('cargando', null, 1000000), { texto: '—', ancho: 0, gris: true });
+  assert.deepEqual(barraPresupuesto('cargando', 400000, 1000000), { texto: '—', ancho: 0, gris: true }, 'lo de otra campaña no se ve');
+  assert.deepEqual(barraPresupuesto('error', null, 1000000), { texto: '— / $1.000.000', ancho: 0, gris: true }, 'GET …/leads falló: sin $0');
+  assert.deepEqual(barraPresupuesto('listo', null, 1000000), { texto: '— / $1.000.000', ancho: 0, gris: true }, 'valor null: «—»');
+  assert.deepEqual(barraPresupuesto('listo', 400000, 1000000), { texto: '$400.000 / $1.000.000', ancho: 40, gris: false });
+  assert.deepEqual(barraPresupuesto('actualizando', 400000, 1000000), { texto: '$400.000 / $1.000.000', ancho: 40, gris: false }, 'la recarga conserva lo último');
+  assert.deepEqual(barraPresupuesto('listo', 0, 1000000), { texto: '$0 / $1.000.000', ancho: 0, gris: false }, 'un cero real se dice');
+  assert.equal(barraPresupuesto('listo', 2500000, 1000000).ancho, 100, 'tope 100 %');
+  assert.equal(barraPresupuesto('listo', -5, 1000000).ancho, 0, 'nunca negativo');
+  assert.deepEqual(barraPresupuesto('listo', 400000, 0), { texto: '$400.000 / $0', ancho: 0, gris: false }, 'sin presupuesto, sin dividir por cero');
+
+  const camp = paginaT23B('marketing/campanas/page.tsx');
+  // FINAL-m24: el select «Estado» del modal con la etiqueta (humanizarCodigo), el tipo con su etiqueta con tilde y «¡Campaña lanzada!».
+  assert.equal((camp.match(/\{Object\.keys\(ESTADO_COLORS\)\.map\(e=><option key=\{e\} value=\{e\}>\{humanizarCodigo\(e\)\}<\/option>\)\}/g) ?? []).length, 2,
+    'el filtro de la lista y el modal');
+  assert.ok(!/<option key=\{e\}>\{e\}<\/option>|<option key=\{t\}>\{t\}<\/option>/.test(camp), 'sin códigos crudos');
+  assert.match(camp, /\{TIPOS_CAMPANA\.map\(t=><option key=\{t\} value=\{t\}>\{ETIQUETA_TIPO_CAMPANA\[t\] \?\? humanizarCodigo\(t\)\}<\/option>\)\}/);
+  assert.match(camp, /FISICA: 'Física'/);
+  assert.match(camp, /\['Tipo', ETIQUETA_TIPO_CAMPANA\[selected\.tipo\] \?\? humanizarCodigo\(selected\.tipo\)\]/);
+  assert.ok(camp.includes("showToast('¡Campaña lanzada!')"), 'con «¡»');
+  assert.ok(!camp.includes("showToast('Campaña lanzada!')"));
+
+  // Campañas a 375 (f1 r2, duda 1): la raíz se desplaza en el teléfono; desde md, el panel (como antes).
+  const campCrudo = readFileSync(new URL('../src/app/dashboard/marketing/campanas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(campCrudo, /<div className="w-full h-full bg-slate-50 flex flex-col overflow-y-auto md:overflow-hidden">\s*<Toast/);
+  assert.match(campCrudo, /<div className="flex flex-col md:flex-row md:flex-1 md:min-h-0 md:overflow-hidden">\s*\{\/\* COLUMNA IZQUIERDA/);
+  assert.match(campCrudo, /<div className="w-full md:w-72 shrink-0 bg-white border-b md:border-b-0 md:border-r border-slate-200 flex flex-col max-h-80 md:max-h-none">/);
+  assert.match(campCrudo, /<div className="flex-1 min-h-0 overflow-y-auto">/);
+  assert.match(campCrudo, /<div className="flex-1 flex flex-col md:overflow-hidden">\s*\{\/\* Campaña Header \*\/\}/);
+  assert.ok(!/<div className="flex-1 flex overflow-hidden">/.test(campCrudo), 'sin la fila que dejaba el detalle en 0 px');
+
+  // F112: «Sin cliente seleccionado» sale UNA vez, y solo en la rama 'vacio' de vistaContexto (mata V7).
+  const asis = paginaT23B('asistente_omnicanal/page.tsx');
+  assert.equal((asis.match(/Sin cliente seleccionado/g) ?? []).length, 1, 'una sola vez en lo que se pinta');
+  const iVacio = asis.indexOf(") : vista === 'vacio' ? (");
+  const iTexto = asis.indexOf('Sin cliente seleccionado');
+  const iFin = asis.indexOf(') : null}', iVacio);
+  assert.ok(iVacio > 0 && iTexto > iVacio && (iFin < 0 || iTexto < iFin), `dentro de la rama 'vacio' (${iVacio} < ${iTexto})`);
+  assert.ok(!asis.slice(asis.indexOf("{vista === 'cargando' ? ("), iVacio).includes('Sin cliente seleccionado'), 'ni en cargando ni en contexto');
+}
+
+console.log('--- TEST T24-f4a (B4 T24 f4, A4): la Agenda guarda el proveedor con peticionGuardarProveedor (PATCH al editar, las claves del servidor) ---');
+{
+  const fuente = readFileSync(new URL('../src/app/dashboard/agenda/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const c = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const guardar = c.slice(c.indexOf('const handleSaveSupplier = async'), c.indexOf('const handleConfirmDeleteSupplier = async'));
+  assert.ok(guardar.length > 0, 'handleSaveSupplier existe');
+  assert.match(guardar, /const editar = supplierModal === 'EDIT' && selectedSupplier\?\.id \? selectedSupplier\.id : null;/);
+  assert.match(guardar, /const \{ ruta, opciones \} = peticionGuardarProveedor\(supplierForm, editar\);/);
+  assert.match(guardar, /const res = await apiFetch\(ruta, opciones\);/);
+  // Lo que vuelve el PATCH (_supplier_dict, con name, contact_name…) se lee con proveedorDeServidor antes de mostrarlo.
+  assert.match(guardar, /setSelectedSupplier\(proveedorDeServidor\(res\?\.data\) \?\? \{ \.\.\.selectedSupplier, \.\.\.supplierForm \}\);/);
+  assert.ok(!/method: 'PUT'|JSON\.stringify\(supplierForm\)/.test(c), 'ni PUT ni las claves de la pantalla en el cuerpo');
+  assert.match(c, /import \{[^}]*\bpeticionGuardarProveedor\b[^}]*\} from '@\/lib\/datos-cliente';/);
 }
 
 console.log('--- TEST T24-d (B4 T24: F3 y F4): etiquetaKpi con tiene() y el comentario del redondeo ---');

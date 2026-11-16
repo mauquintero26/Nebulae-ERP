@@ -20,7 +20,7 @@ import { HEX_CLASE_TAILWIND, hexDeClaseTailwind } from './analisis.js';
 import { CLAVES_TONOS_KANBAN, definirColumnas } from './kanban.js';
 import { formatoPesos } from './pesos.js';
 import { filtrarFilas } from './tabla.js';
-import { acentoDesdeClase } from './kpis.js';
+import { acentoDesdeClase, formatoEntero } from './kpis.js';
 import { hace } from './fechas-colombia.js';
 
 /**
@@ -470,6 +470,80 @@ export function datosDelTablero(datos, clave, { error = null, cargando = false }
 export function respuestaDeCarga({ turno, ultimoTurno, version, versionActual }) {
   const vigente = turno === ultimoTurno;
   return { vigente, conLeads: vigente && version === versionActual };
+}
+
+/**
+ * B4 T24 f4 (F99): qué se hace con lo que llega de «Reintentar» de la columna Perdido. Comparte el turno de loadAll: si salió otra
+ * carga después, se descarta (ella aplica Perdido); si mientras iba cambió un lead (la versión subió), se vuelve a pedir, en vez de
+ * aplicar datos viejos y limpiar el error.
+ * @param {{turno: number, ultimoTurno: number, version: number, versionActual: number}} carga
+ * @returns {'aplicar' | 'descartar' | 'repedir'}
+ */
+export function llegadaDePerdidos(carga) {
+  const { vigente, conLeads } = respuestaDeCarga(carga);
+  if (!vigente) return 'descartar';
+  return conLeads ? 'aplicar' : 'repedir';
+}
+
+/**
+ * B4 T24 f4 (FINAL-m18): el subtítulo del CRM con los leads ABIERTOS (sin Ganados ni Perdidos: STATUS_LEAD_CERRADO), la misma
+ * definición del «Valor en el pipeline» del Análisis (crm.py, STATUS_LEAD_CERRADOS). GET /crm/leads corta en 500: si el total del
+ * servidor pasa de lo que llegó, se dice.
+ * @param {ReadonlyArray<any> | null | undefined} leads  los de GET /crm/leads (sin los CANCELLED)
+ * @param {unknown} total  el total de esa respuesta
+ * @returns {string}
+ */
+export function subtituloCrm(leads, total) {
+  const lista = Array.isArray(leads) ? leads : [];
+  const abiertos = lista.filter((l) => l && typeof l === 'object' && !STATUS_LEAD_CERRADO.includes(l.status));
+  const valor = abiertos.reduce((s, l) => s + (Number.isFinite(Number(l.value)) ? Number(l.value) : 0), 0);
+  const n = abiertos.length;
+  const texto = `${formatoEntero(n)} ${n === 1 ? 'lead abierto' : 'leads abiertos'} · ${formatoPesos(valor)} en pipeline`;
+  const t = typeof total === 'number' && Number.isFinite(total) ? total : null;
+  return t !== null && t > lista.length ? `${texto} (de los primeros ${formatoEntero(lista.length)} de ${formatoEntero(t)} leads)` : texto;
+}
+
+/**
+ * B4 T24 f4 (F97): el hex -700 del texto de cada color de etapa (las claves de COLOR_HEX), para la insignia de 10 px de la tarjeta
+ * (≥ 4,5:1 sobre el fondo -50; el -500 daba unos 3,5:1). Inmutable.
+ * @type {Readonly<Record<string, string>>}
+ */
+export const TEXTO_HEX = congelar({
+  'bg-blue-500': '#1d4ed8', 'bg-cyan-500': '#0e7490', 'bg-indigo-500': '#4338ca', 'bg-emerald-500': '#047857',
+  'bg-amber-500': '#b45309', 'bg-rose-500': '#be123c', 'bg-purple-500': '#7e22ce', 'bg-slate-500': '#334155',
+  'bg-green-500': '#15803d', 'bg-teal-500': '#0f766e', 'bg-orange-500': '#c2410c', 'bg-pink-500': '#be185d',
+  'bg-red-500': '#b91c1c',
+});
+
+/**
+ * B4 T24 f4 (F97): el color del texto de la insignia de una etapa: su -700 (TEXTO_HEX); sin un color conocido, slate-700.
+ * @param {unknown} color  la clase de la etapa (bg-X-500)
+ * @returns {string}
+ */
+export function textoDeEtapa(color) {
+  return typeof color === 'string' && tiene(TEXTO_HEX, color) ? TEXTO_HEX[color] : '#334155';
+}
+
+/** Lo que dura la caché de etapas del CRM (crm_stages_v1): 5 minutos. */
+const TTL_CACHE_ETAPAS = 5 * 60 * 1000;
+
+/**
+ * B4 T24 f4 (F98): las etapas de la caché crm_stages_v1 (`{data, ts}` de localStorage). Vencida (5 minutos) no sirve, SALVO con
+ * `ignorarTTL`: si /crm/pipeline-stages falló, las etapas viejas son mejores que la caja de error (la pantalla avisa «No se pudo
+ * actualizar el CRM»). Sin caché, rota o sin una lista, null.
+ * @param {string | null | undefined} raw
+ * @param {number} ahora  Date.now()
+ * @param {{ignorarTTL?: boolean}} [opciones]
+ * @returns {any[] | null}
+ */
+export function etapasDeLaCache(raw, ahora, { ignorarTTL = false } = {}) {
+  if (typeof raw !== 'string' || !raw) return null;
+  try {
+    const { data, ts } = JSON.parse(raw);
+    if (!Array.isArray(data)) return null;
+    if (!ignorarTTL && !(Number.isFinite(ts) && ahora - ts <= TTL_CACHE_ETAPAS)) return null;
+    return data;
+  } catch { return null; }
 }
 
 /**

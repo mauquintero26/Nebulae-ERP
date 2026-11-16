@@ -22,6 +22,8 @@ import {
 import type { AccionTabla, ClaveFila, ColumnaTabla, PestanaTabla } from '@/components/tabla';
 import { BannerFlujo, useResumenFlujo } from '@/components/flujo';
 import type { DatosFlujo } from '@/components/flujo';
+import { useResumen } from '@/components/ui/useResumen';
+import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import { COMP_NAV } from '../comp-nav';
 import { CHIP, textoInstante } from '../columnas-pec';
 
@@ -29,10 +31,10 @@ import { apiFetch } from '@/lib/api';
 import { accionModo, accionVistaEnLista, estadoDelTotal } from '@/lib/tabla';
 import { tarjetasLista } from '@/lib/kpis';
 import { recargarTrasError, textoDeError } from '@/lib/avisos';
-import { FOCOS, TABLE } from '@/lib/design-system';
+import { FOCOS, TABLE, RESERVA_BOTON_IA } from '@/lib/design-system';
 import {
   OPCIONES_ESTADOS_TABLERO_LISTA, COLUMNAS_LISTA, consultaLista, consultaTableroLista, avisoTope200, destinoItemLista,
-  esItemSeleccionable, infoEstadoItemLista, opcionesEstadosLista, tarjetaItemLista, textoVacioLista,
+  esItemSeleccionable, fechaItemLista, infoEstadoItemLista, opcionesEstadosLista, tarjetaItemLista, textoSeleccionLista, textoVacioLista,
 } from '@/lib/estados-compras';
 import { ENLACE_VER_ANALISIS_COMPRAS, avisosFlujoCompras, pasosPantallaCompras, textoReglaCompras } from '@/lib/flujo-compras';
 
@@ -64,17 +66,14 @@ const INICIAL_LISTA = { vista: 'PENDIENTE' };
 const SIN_FILTROS: FiltrosLista = { proveedor: '', desde: '', hasta: '' };
 /** El motivo de un tablero solo para ver (R11, KANBAN-logistica punto 5). */
 const TEXTO_SOLO_VER = 'Este tablero es para ver: pasa a En pedido al crear el pedido de compra y a Recibido con la recepción.';
-/** El contenedor de los Hubs y de las listas del bloque (T7 a T16A): pb-24 deja libre la esquina del botón de la IA. */
-const CONTENEDOR = 'flex-1 flex flex-col px-4 xl:px-8 pt-6 pb-24 max-w-[1600px] mx-auto w-full min-w-0 gap-6';
+/** El contenedor de los Hubs y de las listas del bloque (T7 a T16A): RESERVA_BOTON_IA (pb-24, F44-a) deja libre la esquina del botón de la IA. */
+const CONTENEDOR = `flex-1 flex flex-col px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 gap-6`;
 const FOCO_VISIBLE = FOCOS.purple;
 /** El foco sobre la barra oscura de la selección. */
 const FOCO_OSCURO = FOCOS.blanco;
 /** Las modalidades de pago del pedido de compra: [lo que se manda al servidor, lo que se ve]. */
 const MODALIDADES_PAGO = [['Contado', 'Contado'], ['Credito 30d', 'Crédito 30d'], ['Credito 60d', 'Crédito 60d'], ['Adelanto 50%', 'Adelanto 50%'], ['Contra entrega', 'Contra entrega']];
-/** m12: la barra dice los mismos ítems que usará «Crear Pedido de Compra»; si hay seleccionados que no entran, lo dice. */
-const textoSeleccion = (elegidos: number, pedibles: number) => (pedibles === elegidos
-  ? `${elegidos} ${elegidos === 1 ? 'seleccionado' : 'seleccionados'}`
-  : `${elegidos} ${elegidos === 1 ? 'seleccionado' : 'seleccionados'}; ${pedibles} se ${pedibles === 1 ? 'puede' : 'pueden'} pedir`);
+// m12 (y r1, F71): la barra de la selección es textoSeleccionLista de la lib, con sus casos.
 const CAMPO = 'border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200';
 const ETIQUETA_CAMPO = 'block text-xs font-black text-gray-500 uppercase mb-1';
 
@@ -174,7 +173,6 @@ function pestanasDeLista(conteos: ConteosLista | null): PestanaTabla[] {
 
 /** El ítem que el tablero muestra en cada columna: su estado. */
 const columnaDeItem = (it: ItemLista) => it.estado;
-const fechaDeItem = (it: ItemLista) => it.fecha;
 
 function NewSupplierModal({ onSave, onClose }: { onSave: (s: Proveedor) => void; onClose: () => void }) {
   const { avisarError } = useAvisos();
@@ -253,17 +251,12 @@ export default function ListaComprasPage() {
   // Las tarjetas (KPI-compras punto 9; R7, R12): GET /compras/lista-compras/stats, sin respaldo local. Mientras no llega,
   // 'cargando' (nunca 0); si falla, «—».
   const [vueltaStats, setVueltaStats] = useState(0);
-  const [stats, setStats] = useState<{ vuelta: number; datos: unknown; error: unknown } | null>(null);
-  useEffect(() => {
-    const control = new AbortController();
-    apiFetch('/compras/lista-compras/stats', { signal: control.signal })
-      .then((r: { data?: unknown } | null) => setStats({ vuelta: vueltaStats, datos: r?.data ?? null, error: null }))
-      .catch((err: unknown) => { if (!control.signal.aborted) setStats({ vuelta: vueltaStats, datos: null, error: err }); });
-    return () => control.abort();
-  }, [vueltaStats]);
-  const cargandoStats = stats?.vuelta !== vueltaStats;
-  const estadoKpis = useEstadoKpi(cargandoStats, cargandoStats ? null : (stats?.error ?? null));
-  const tarjetas = tarjetasLista(stats?.datos ?? null);
+  // B4 T24 f3 (F45): el cargador compartido de los resúmenes (useResumen: aborta la anterior, descarta las viejas, va atado al usuario,
+  // conserva lo último al recargar y con error no deja datos viejos: «—»).
+  const stats = useResumen('/compras/lista-compras/stats', vueltaStats);
+  const cargandoStats = stats.cargando;
+  const estadoKpis = useEstadoKpi(cargandoStats, stats.error);
+  const tarjetas = tarjetasLista(stats.datos);
 
   // «Actualizar» y lo que sigue a un cambio: la tabla con sus conteos, el tablero (el que no se ve se recarga al activarse), la
   // franja y las tarjetas. Ninguna recarga vacía lo que se ve: los hooks conservan lo último.
@@ -336,7 +329,8 @@ export default function ListaComprasPage() {
     if (await cambiarItem(it, async () => {
       await apiFetch(`/compras/lista-compras/${it.id}`, { method: 'PATCH', body: JSON.stringify({ proveedor: proveedorNuevo }) });
       return 'Proveedor actualizado';
-    }, 'No se pudo actualizar el proveedor')) setEditando(null);
+    // B4 T24 f3 (F70): se cierra solo la ventana de ESE ítem (si mientras tanto se abrió otra, queda abierta con lo escrito).
+    }, 'No se pudo actualizar el proveedor')) setEditando((e) => (e?.id === it.id ? null : e));
   };
 
   const accionesFila = useMemo<AccionesFilaLista>(() => ({
@@ -454,7 +448,7 @@ export default function ListaComprasPage() {
   const alCambiarBarra = useCallback((accion: AccionTabla) => {
     if (accion.tipo === 'modo') {
       const modo = String(accion.valor);
-      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_LISTA : opcionesEstadosLista));
+      despachar(accionModo(estado, modo, modo === 'kanban' ? OPCIONES_ESTADOS_TABLERO_LISTA : opcionesEstadosLista, COLUMNAS_LISTA));
     } else despachar(accion);
   }, [estado, despachar]);
   const vacio = useMemo(() => {
@@ -491,7 +485,7 @@ export default function ListaComprasPage() {
     porColumna: estado.tamano,
     items: itemsTablero,
     columnaDe: columnaDeItem,
-    fechaMovimiento: fechaDeItem,
+    fechaMovimiento: fechaItemLista,
   });
   const abrirItem = useCallback((it: ItemLista) => {
     const destino = destinoItemLista(it);
@@ -519,7 +513,7 @@ export default function ListaComprasPage() {
     const siguiente = vistaActiva === vista ? 'todos' : vista;
     despachar(accionVistaEnLista(estado, siguiente, opcionesEstadosLista));
   };
-  const actualizando = listado.recargando || completa.recargando || flujo.cargando || (cargandoStats && stats !== null);
+  const actualizando = listado.recargando || completa.recargando || flujo.cargando || (cargandoStats && stats.datos !== null);
 
   /* ════════════════ RENDER ════════════════ */
   return (
@@ -561,7 +555,7 @@ export default function ListaComprasPage() {
 
         {/* B4 T16B (KPI-compras punto 9; R7, R12): las 4 tarjetas de /compras/lista-compras/stats: mientras cargan, barras
             grises (nunca 0); con error, «—». Cada una abre su pestaña. */}
-        <FranjaKpis estado={estadoKpis} titulo="Lista de compras">
+        <FranjaKpis estado={estadoKpis} titulo="Lista de compras" idFoco="franja-lista-compras">
           <TarjetaKpi kpi="lista_pendientes" valor={tarjetas?.pendientes.valor ?? null}
             activo={vistaActiva === 'PENDIENTE'} onClick={() => elegirVista('PENDIENTE')} />
           <TarjetaKpi kpi="lista_en_pedido" valor={tarjetas?.en_pedido.valor ?? null}
@@ -571,6 +565,9 @@ export default function ListaComprasPage() {
           <TarjetaKpi kpi="lista_total" valor={tarjetas?.total.valor ?? null}
             activo={vistaActiva === 'todos'} onClick={() => elegirVista('todos')} />
         </FranjaKpis>
+        {/* B4 T24 f3 (FINAL-m14, F84): si /stats falla, su detalle y «Reintentar» solo para él; un 403 no lo ofrece. */}
+        {/* r2 (m36 completo): montado siempre (destinoFoco, el id de la franja): si el reintento sale bien o da un 403, el foco va a la franja, nunca al <body>. */}
+        <AvisoDeError error={stats.error} fallo="No se pudieron cargar los indicadores de la lista de compras" onReintentar={stats.recargar} acento="purple" reintentando={stats.cargando} destinoFoco="franja-lista-compras" />
 
         {/* B4 T16B (TABLA-compras punto 10, KANBAN-logistica punto 5): la barra y la tabla estándar en el servidor, o el tablero
             solo para ver en modo cliente, con el MISMO estado (búsqueda y estados) y los mismos filtros extra. En Kanban las
@@ -673,7 +670,7 @@ export default function ListaComprasPage() {
           de la tabla, así que solo en Lista. */}
       {seleccion.length > 0 && !enKanban && (
         <div className="fixed bottom-8 left-1/2 z-40 flex -translate-x-1/2 items-center gap-4 rounded-2xl border border-slate-700 bg-slate-900 px-6 py-4 text-white shadow-2xl">
-          <span className="rounded-full bg-slate-800 px-3 py-1 text-sm font-bold">{textoSeleccion(seleccion.length, itemsSeleccionados.length)}</span>
+          <span className="rounded-full bg-slate-800 px-3 py-1 text-sm font-bold">{textoSeleccionLista(seleccion.length, itemsSeleccionados.length)}</span>
           <button type="button" onClick={() => openPecModal(itemsSeleccionados)} disabled={itemsSeleccionados.length === 0}
             className={`flex items-center gap-2 rounded-xl bg-purple-500/20 px-3 py-1.5 text-xs font-bold text-purple-200 transition-colors hover:bg-purple-500/40 disabled:opacity-50 ${FOCO_OSCURO}`}>
             <ShoppingCart size={14} aria-hidden="true" /> Crear Pedido de Compra con seleccionados
@@ -685,11 +682,13 @@ export default function ListaComprasPage() {
 
       {/* Editar el proveedor de un ítem */}
       {editando && (
-        <Modal cierreExterno={false} title="Editar proveedor" subtitle={editando.producto} color="purple" maxWidth="md" onClose={() => setEditando(null)}
+        <Modal cierreExterno={false} bloquearCierre={ocupadoId === editando.id} title="Editar proveedor" subtitle={editando.producto} color="purple" maxWidth="md"
+          onClose={() => setEditando(null)}
           footer={(
             <>
-              <Button variant="secondary" onClick={() => setEditando(null)}>Cancelar</Button>
-              <Button color="purple" icon={Package} onClick={guardarProveedor}>Guardar proveedor</Button>
+              {/* r1 (m39, F40): mientras guarda, ni la X ni «Cancelar» la cierran (si el PATCH falla, lo escrito sigue). */}
+              <Button variant="secondary" disabled={ocupadoId === editando.id} onClick={() => setEditando(null)}>Cancelar</Button>
+              <Button color="purple" icon={Package} loading={ocupadoId === editando.id} disabled={ocupadoId != null} onClick={guardarProveedor}>Guardar proveedor</Button>
             </>
           )}>
           <label className={ETIQUETA_CAMPO}>Proveedor

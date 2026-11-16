@@ -40,12 +40,12 @@
 import { congelar, humanizarCodigo, tiene } from './estados-pedido.js';
 import { diaColombia, diaDeNegocio as diaPec, fechaCorta, fechaSolo, horaCO, instante } from './fechas-colombia.js';
 // B4 T14: la consulta de cada columna del tablero de Compras (consultaColumnaPec) sale de la misma queryListado.
-import { queryListado, recortarColumnas } from './tabla.js';
+import { normalizarRespuesta, queryListado, recortarColumnas } from './tabla.js';
 // B4 T14 r1: la regla de la columna con filtro (m4, la misma de Ventas), el número del servidor (m7) y la regla de
 // recarga y el texto de los errores (m15).
 import { estadosDeColumnaLista } from './kanban.js';
 import { formatoDecimal, formatoEntero, numeroFinito } from './kpis.js';
-import { recargarTrasError, textoDeError } from './avisos.js';
+import { ofreceReintentar, recargarTrasError, textoDeError } from './avisos.js';
 // B4 T18 (Productos): el precio en pesos enteros y la etiqueta y la regla de la tarifa de IVA, de sus dueños.
 import { formatoPesos } from './pesos.js';
 import { etiquetaTarifaCatalogo, sinTarifaIva } from './iva.js';
@@ -248,6 +248,9 @@ export function columnaPec(e) {
 }
 
 const ENLACE_TRANSITO = congelar({ texto: 'Ir a Mercancía en tránsito', href: '/dashboard/compras/transito' });
+/** B4 T24 f3 (FINAL-m36): los motivos que dependen de la etapa del PEC al soltarlo (reglaSoltarPec). */
+const TEXTO_EMITIR_PRIMERO = 'Primero emítelo: arrástralo a Emitido.';
+const TEXTO_YA_EN_BODEGA = 'Ya llegó a bodega: su estado lo lleva la recepción.';
 /** B4 T24 f2 (F27): el enlace «Ir a Recepciones» de los bloqueos, el único (transito.js lo importa). */
 export const ENLACE_RECEPCIONES = congelar({ texto: 'Ir a Recepciones', href: '/dashboard/compras/recepciones' });
 
@@ -262,6 +265,12 @@ export const ENLACE_RECEPCIONES = congelar({ texto: 'Ir a Recepciones', href: '/
  *  - → En tránsito: bloqueado, con el enlace a Mercancía en tránsito (lo marca el seguimiento del envío);
  *  - → En bodega o Recibido: bloqueado, con el enlace a Recepciones (lo marca la recepción en bodega);
  *  - → Borrador: bloqueado 'Un pedido emitido no vuelve a Borrador.'
+ * B4 T24 f3 (FINAL-m36): el motivo depende de dónde está el PEC (su etapa), porque la pantalla a la que manda tiene que mostrarlo:
+ *  - un Borrador hacia En tránsito, En bodega o Recibido: 'Primero emítelo: arrástralo a Emitido.' (sin enlace: Tránsito y el selector
+ *    de Recepciones no lo listan);
+ *  - un Emitido (o Enviado) hacia En bodega o Recibido: 'Primero sigue el envío en Mercancía en tránsito.', con su enlace;
+ *  - uno que ya llegó a bodega (o se recibió) hacia En tránsito o Borrador: 'Ya llegó a bodega: su estado lo lleva la recepción.'
+ *    (como hacia Cancelado).
  * Una columna que no existe es un error de programación (lanza Error).
  * @param {{estado?: string} | null | undefined} pec
  * @param {string} origen
@@ -274,6 +283,8 @@ export function reglaSoltarPec(pec, origen, destino) {
   const estado = pec?.estado;
   if (etapaPec(estado) === 'cancelado') return { tipo: 'bloqueado', motivo: 'Está cancelado y no se puede reabrir.' };
   const destinos = transicionesPec(estado);
+  const etapa = etapaPec(estado);
+  const yaEnBodega = etapa === 'en_bodega' || etapa === 'recibido';
   switch (destino) {
     case 'emitido':
       return destinos.includes('EMITIDO')
@@ -282,13 +293,20 @@ export function reglaSoltarPec(pec, origen, destino) {
     case 'cancelado':
       return destinos.includes('CANCELADO')
         ? { tipo: 'accion', accion: 'cancelar' }
-        : { tipo: 'bloqueado', motivo: 'Ya llegó a bodega: su estado lo lleva la recepción.' };
+        : { tipo: 'bloqueado', motivo: TEXTO_YA_EN_BODEGA };
     case 'en_transito':
+      if (etapa === 'borrador') return { tipo: 'bloqueado', motivo: TEXTO_EMITIR_PRIMERO };
+      if (yaEnBodega) return { tipo: 'bloqueado', motivo: TEXTO_YA_EN_BODEGA };
       return { tipo: 'bloqueado', motivo: 'El tránsito se marca al iniciar el seguimiento del envío.', enlace: ENLACE_TRANSITO };
     case 'en_bodega':
     case 'recibido':
+      if (etapa === 'borrador') return { tipo: 'bloqueado', motivo: TEXTO_EMITIR_PRIMERO };
+      if (etapa === 'emitido') return { tipo: 'bloqueado', motivo: 'Primero sigue el envío en Mercancía en tránsito.', enlace: ENLACE_TRANSITO };
+      // r1 (m15): un PEC ya recibido soltado en «En bodega» no lleva a Recepciones (su selector «Recepcionar PEC» no lo lista).
+      if (etapa === 'recibido') return { tipo: 'bloqueado', motivo: TEXTO_YA_EN_BODEGA };
       return { tipo: 'bloqueado', motivo: 'Lo marca la recepción en bodega.', enlace: ENLACE_RECEPCIONES };
     default: // 'borrador'
+      if (yaEnBodega) return { tipo: 'bloqueado', motivo: TEXTO_YA_EN_BODEGA };
       return { tipo: 'bloqueado', motivo: 'Un pedido emitido no vuelve a Borrador.' };
   }
 }
@@ -355,7 +373,7 @@ export function opcionesEstadosPec(vista) {
 
 /**
  * B4 T14: «Filtrar estado» en el tablero (como el de Pedidos de venta, T10): una opción por columna, con su estado
- * principal (el primero) y el título de la columna; estadosDeColumnaPec la convierte en la columna entera. Inmutable.
+ * principal (el primero) y el título de la columna; estadosDeColumnaLista (kanban.js) la convierte en la columna entera. Inmutable.
  * @type {ReadonlyArray<Readonly<{valor: string, etiqueta: string}>>}
  */
 export const OPCIONES_ESTADOS_TABLERO_PEC = congelar(COLUMNAS_PEC.map((c) => ({ valor: c.estados[0], etiqueta: c.titulo })));
@@ -439,11 +457,13 @@ const ACCION_RECEPCIONAR = congelar({ texto: 'Recepcionar', href: '/dashboard/co
  * @param {any} p
  * @returns {ReturnType<typeof tarjetaPec> & {accionPrincipal: {texto: string, href: string, tono: string} | null}}
  */
-export function tarjetaPedidoCompra(p) {
+export function tarjetaPedidoCompra(p, { recepcionar = true } = {}) {
   const tarjeta = tarjetaPec(p);
   const enBodega = columnaPec(p?.estado) === 'en_bodega';
   const chips = p?.estado === 'PARCIALMENTE_RECIBIDA' ? [...tarjeta.chips, { texto: 'Falta por recibir', tono: 'amber' }] : tarjeta.chips;
-  return { ...tarjeta, chips, accionPrincipal: enBodega ? { ...ACCION_RECEPCIONAR } : null };
+  // r1 (m20, aditivo): «Recepcionar» (POST /pedidos/{id}/recepcionar: ADMIN y COMPRAS) solo a quien recepciona; sin permiso, la tarjeta
+  // queda en «Abrir» (el panel), como tarjetaRecepcion con {contar}.
+  return { ...tarjeta, chips, accionPrincipal: enBodega && recepcionar ? { ...ACCION_RECEPCIONAR } : null };
 }
 
 /**
@@ -458,14 +478,23 @@ export function tarjetaPedidoCompra(p) {
  * @returns {{titulo: string, ayuda: string | null}}
  */
 export function textoVacioPec(estado, ayuda = null) {
-  const semaforo = estado?.semaforo;
-  if (semaforo === 'vencidos' || semaforo === 'atrasados') return { titulo: 'Ningún pedido de compra con la entrega vencida.', ayuda: null };
+  if (esSemaforoVencidos(estado?.semaforo)) return { titulo: 'Ningún pedido de compra con la entrega vencida.', ayuda: null };
   if (Array.isArray(estado?.estados) && estado.estados.length > 0) {
     return { titulo: 'Ningún pedido de compra con esos estados. Ajusta el filtro.', ayuda: null };
   }
   const q = typeof estado?.q === 'string' ? estado.q.trim() : '';
   if (q) return { titulo: `Sin resultados para «${q}»`, ayuda: 'Ajusta la búsqueda o el filtro de estados.' };
   return { titulo: 'No hay pedidos de compra en esta vista', ayuda: ayuda ?? null };
+}
+
+/**
+ * B4 T24 f3 r1 (F63): el semáforo «vencidos» del estado único, o su sinónimo «atrasados» (el FiltroSemaforo de la franja). Lo usan
+ * textoVacioPec y filtroSemaforoCompras (flujo-compras.js): un solo sitio para el sinónimo.
+ * @param {unknown} semaforo
+ * @returns {boolean}
+ */
+export function esSemaforoVencidos(semaforo) {
+  return semaforo === 'vencidos' || semaforo === 'atrasados';
 }
 
 /**
@@ -565,7 +594,8 @@ export function textoVencidosPec(vencidos) {
  *  - recargarVentas (I1): si se canceló algo, los pedidos de venta del panel de consolidación (los vinculados vuelven a
  *    Pendiente de compra);
  *  - recargarDetalle (m10): si una falla pide recargar, el detalle del panel abierto también;
- *  - mensajeOk: el aviso de lo cancelado (con los omitidos solo si no hubo fallas: con fallas quedan en la ventana);
+ *  - mensajeOk: el aviso de lo cancelado (con los omitidos solo si no hubo fallas; B4 T24 f3, F55: con fallas, los omitidos no van en el
+ *    aviso y la página no los deja en la ventana: allí quedan solo los pendientes, para reintentar con lo escrito);
  *  - error: null si nada falló; con un solo PEC, el MISMO error (el modal muestra el detail del servidor); con varios,
  *    un Error con una línea por PEC (resumenCancelacionPec). Nunca se resuelve en silencio con una falla.
  * @param {any[] | null | undefined} pecs
@@ -793,16 +823,419 @@ export function recargaReponeLineas({ silencioso = false, recepcion }) {
 }
 
 /**
+ * B4 T24 f3 (F79): el pie de la tarjeta de una bodega en la vista Almacenes del Hub de Inventario. Con referencias en riesgo, cuántas
+ * (singular y plural); sin ninguna, la etiqueta de ESTADOS_STOCK.abastecido (RP53: sin variantes locales), salvo que la consulta se
+ * haya recortado (`recortado`: más de TOPE_TABLERO_COMPRAS filas): ahí no se afirma nada de lo que no se cargó.
+ * @param {unknown} enRiesgo
+ * @param {{recortado?: boolean}} [opciones]
+ * @returns {{texto: string, alerta: boolean}}
+ */
+export function textoPieBodega(enRiesgo, { recortado = false } = {}) {
+  const n = numeroFinito(enRiesgo) ?? 0;
+  if (n > 0) return { texto: `${formatoEntero(n)} bajo el mínimo o ${n === 1 ? 'agotada' : 'agotadas'}`, alerta: true };
+  if (recortado) return { texto: `Sin alertas en las ${TOPE_TABLERO_COMPRAS} cargadas`, alerta: false };
+  // r1 (m41): una bodega no está «Bien abastecido» (la etiqueta de una referencia): «Sin alertas», como la variante recortada.
+  return { texto: 'Sin alertas', alerta: false };
+}
+
+/**
+ * B4 T24 f3 r1 (m14 = m23, F86 completo): qué filtros de la barra del Hub de Inventario aplican en la vista que se ve. En Almacenes la
+ * consulta no lleva la bodega (F86: se ven todas), así que el selector «Bodega» no se muestra (se dice que ahí se ven todas), el vacío
+ * no la nombra y «Quitar filtros» solo cuenta la categoría.
+ * @param {{verAlmacenes: boolean, bodega: string, categoria: string}} entrada
+ * @returns {{mostrarBodega: boolean, bodegaAplica: boolean, hayFiltros: boolean}}
+ */
+export function filtrosAplicadosHub({ verAlmacenes, bodega, categoria }) {
+  const bodegaAplica = !verAlmacenes && Boolean(bodega);
+  return { mostrarBodega: !verAlmacenes, bodegaAplica, hayFiltros: bodegaAplica || Boolean(categoria) };
+}
+
+/**
+ * B4 T24 f3 (F87-f): las categorías del selector del Hub de Inventario (GET /categories, ya ordenado por nombre en el servidor, F87-b),
+ * con las que son padre de otra marcadas «X (categoría padre)»: el filtro es por la categoría exacta del producto (P25 decide si
+ * incluye las hijas), así que elegir una padre puede dejar la tabla vacía. No muta lo que recibe; null sigue null.
+ * @template {{id?: unknown, name?: unknown, parent_id?: unknown}} C
+ * @param {ReadonlyArray<C> | null | undefined} categorias
+ * @returns {C[] | null}
+ */
+export function marcarCategoriasPadre(categorias) {
+  if (!Array.isArray(categorias)) return null;
+  const padres = new Set(categorias.map((c) => c?.parent_id).filter((id) => id != null).map(String));
+  return categorias.map((c) => (c && padres.has(String(c.id)) ? { ...c, name: `${c.name} (categoría padre)` } : c));
+}
+
+/**
+ * B4 T24 f3 (FINAL-m12): el aviso de la recepción en el panel de un PEC (Compras › Pedidos) y adónde lleva su botón:
+ *  - en bodega (columnaPec 'en_bodega': RECIBIDO o PARCIALMENTE_RECIBIDA, lo mismo que el tablero muestra con «Recepcionar»): si hay
+ *    una recepción por confirmar (BORRADOR, esRecepcionPorConfirmar), «Ver recepción» la abre; si no, «Hacer recepción» crea la del
+ *    resto (POST /pedidos/{id}/recepcionar): nunca abre una recepción ya confirmada;
+ *  - recibido (RECIBIDA o COMPLETADO) con recepciones: «Ver recepción» abre la última (como hoy: el camino de vuelta desde el PEC);
+ *  - otro estado: null (sin aviso).
+ * `accion.tipo` es 'abrir' (con el id) o 'crear'.
+ * @param {any} pec
+ * @returns {{titulo: string, texto: string, accion: {tipo: 'abrir', id: number, texto: string} | {tipo: 'crear', texto: string}} | null}
+ */
+export function avisoRecepcionPec(pec, { recepcionar = true } = {}) {
+  const columna = columnaPec(pec?.estado);
+  const recepciones = Array.isArray(pec?.recepciones) ? pec.recepciones.filter((r) => r?.id != null) : [];
+  if (columna === 'en_bodega') {
+    const porConfirmar = [...recepciones].reverse().find((r) => esRecepcionPorConfirmar(r));
+    if (porConfirmar) {
+      return { titulo: 'Mercancía recibida en bodega', texto: `Recepción ${numeroRecepcion(porConfirmar)} en curso.`,
+        accion: { tipo: 'abrir', id: porConfirmar.id, texto: 'Ver recepción' } };
+    }
+    const parcial = String(pec?.estado ?? '').trim() === 'PARCIALMENTE_RECIBIDA';
+    // r1 (m20, aditivo): sin el permiso de recepcionar (ADMIN y COMPRAS), un texto informativo, sin empujar a una acción que no tiene.
+    const texto = !recepcionar
+      ? (parcial ? 'Falta recibir el resto: la recepción la abre Compras.' : 'Falta la recepción: la abre Compras.')
+      : parcial ? 'Falta por recibir: inicia la recepción de lo que falta.' : 'Inicia el conteo físico de este pedido.';
+    return {
+      titulo: parcial ? 'Mercancía recibida en parte' : 'Mercancía recibida en bodega, pendiente de recepción',
+      texto,
+      accion: { tipo: 'crear', texto: 'Hacer recepción' },
+    };
+  }
+  if (columna === 'recibido' && recepciones.length > 0) {
+    const ultima = recepciones[recepciones.length - 1];
+    return { titulo: 'Mercancía recibida en bodega', texto: `Recepción ${numeroRecepcion(ultima)}.`,
+      accion: { tipo: 'abrir', id: ultima.id, texto: 'Ver recepción' } };
+  }
+  return null;
+}
+
+/**
+ * B4 T24 f3 (F64): después de un DELETE de PEC que falló, qué hace el panel: un 404 (el PEC ya no existe: lo borró otro) cierra el
+ * panel y recarga la lista; con la regla única (recargarTrasError: 400, 409, 422 o la red) se recarga lo que se ve; lo demás, nada.
+ * @param {unknown} err
+ * @returns {'cerrar' | 'recargar' | null}
+ */
+export function despuesDeEliminarPec(err) {
+  if (/** @type {{status?: unknown}} */ (err)?.status === 404) return 'cerrar';
+  return recargarTrasError(err) ? 'recargar' : null;
+}
+
+/**
+ * B4 T24 f3 (FINAL-C7-f): el vínculo de los PVEN en el alta de un PEC (POST /compras/pedidos; create_pec con FINAL-C7-b): `ven_ids`
+ * con TODOS los elegidos (el servidor los vincula en el mismo commit y responde 409 en español si alguno no está en PENDIENTE_COMPRA o
+ * ya tiene PEC), `ven_id` = el primero (como hoy) y `ven_numero` solo el del primero (la columna es VARCHAR(20): una lista unida por
+ * comas no cabe). Sin PVEN: ven_id y ven_numero en null, sin ven_ids. Antes el alta mandaba solo el primero y un PATCH
+ * /ventas/pedidos/{id} por cada otro, que COMPRAS no tiene (403): esos PVEN quedaban sin PEC.
+ * @param {unknown} pvens
+ * @returns {{ven_id: number | null, ven_numero: string | null, ven_ids?: number[]}}
+ */
+export function vinculoPvenDelPec(pvens) {
+  const lista = (Array.isArray(pvens) ? pvens : []).filter((p) => p?.id != null);
+  if (lista.length === 0) return { ven_id: null, ven_numero: null };
+  return { ven_id: lista[0].id, ven_ids: lista.map((p) => p.id), ven_numero: textoLimpio(lista[0].numero) };
+}
+
+/**
+ * B4 T24 f3 r1 (m18, m31, m25, m36): la lectura de una carga con vuelta ({vuelta, error} de la última que llegó; `vuelta` es la que se
+ * acaba de pedir): `cargando` mientras no llega la de esta vuelta; `error` el de la última que llegó (se conserva mientras se reintenta,
+ * para que el aviso siga montado y el foco no caiga al <body>); `reintentando` si hay un error y otra vuelta en camino; `ofrecer` si
+ * «Reintentar» sirve (un 403 no). La usan los PVEN del panel del Hub (F57) y el enlace de Productos (B40-f).
+ * @param {{vuelta: number, error: unknown} | null | undefined} carga
+ * @param {number} vuelta
+ * @returns {{cargando: boolean, error: unknown, reintentando: boolean, ofrecer: boolean}}
+ */
+export function estadoReintento(carga, vuelta) {
+  const cargando = carga?.vuelta !== vuelta;
+  const error = carga?.error ?? null;
+  return { cargando, error, reintentando: cargando && error != null, ofrecer: error != null && ofreceReintentar(error) };
+}
+
+/**
+ * B4 T24 f3 r1 (F81): las filas de un catálogo (GET /inventory/warehouses, /categories…) con normalizarRespuesta. Una respuesta con
+ * forma inesperada (ni un arreglo ni {data: [...]}) es un ERROR, no una lista vacía (antes se convertía en [] sin decir nada).
+ * @param {unknown} r
+ * @returns {{filas: any[] | null, error: Error | null}}
+ */
+export function filasDeCatalogo(r) {
+  const forma = Array.isArray(r) || Array.isArray(/** @type {any} */ (r)?.data);
+  if (!forma) return { filas: null, error: new Error('La respuesta del servidor no trae la lista.') };
+  return { filas: normalizarRespuesta(r).filas, error: null };
+}
+
+/**
+ * B4 T24 f3 r2 (F81 en el hook compartido, ruling): la carga de un catálogo con su vuelta — `llegadaCatalogo` (lo que llegó, con
+ * filasDeCatalogo: una forma inesperada es un error y conserva lo último bueno), `falloCatalogo` (el error conserva lo último bueno) y
+ * `lecturaCatalogo` (lo que lee la pantalla: `cargando` mientras no llega la de esta vuelta). useCatalogo (piezas-inventario.tsx) y el Hub
+ * de Inventario la usan: así llegan a Stock, Abastecimiento, Productos, el Kardex y las demás.
+ */
+export const CARGA_CATALOGO_VACIA = congelar({ vuelta: -1, filas: null, error: null });
+/**
+ * @param {{filas?: any[] | null} | null | undefined} previo
+ * @param {unknown} respuesta
+ * @param {number} vuelta
+ * @returns {{vuelta: number, filas: any[] | null, error: unknown}}
+ */
+export function llegadaCatalogo(previo, respuesta, vuelta) {
+  const { filas, error } = filasDeCatalogo(respuesta);
+  return { vuelta, filas: filas ?? previo?.filas ?? null, error };
+}
+/**
+ * @param {{filas?: any[] | null} | null | undefined} previo
+ * @param {unknown} error
+ * @param {number} vuelta
+ * @returns {{vuelta: number, filas: any[] | null, error: unknown}}
+ */
+export function falloCatalogo(previo, error, vuelta) {
+  return { vuelta, filas: previo?.filas ?? null, error };
+}
+/**
+ * @param {{vuelta?: number, filas?: any[] | null, error?: unknown} | null | undefined} carga
+ * @param {number} vuelta
+ * @returns {{filas: any[] | null, error: unknown, cargando: boolean}}
+ */
+export function lecturaCatalogo(carga, vuelta) {
+  return { filas: carga?.filas ?? null, error: carga?.error ?? null, cargando: carga?.vuelta !== vuelta };
+}
+
+/**
+ * B4 T24 f3 r1 (m22): el conteo por línea, en serie (PATCH /compras/recepciones/{id}/lineas/{grl_id}): manda una petición tras otra y se
+ * DETIENE en la primera que falla (las que siguen no salen). Devuelve cuántas quedaron guardadas y, si una falló, cuál y su error, para
+ * que el aviso diga qué línea falló y que las anteriores ya se guardaron.
+ * @param {ReadonlyArray<{grl_id: unknown, cuerpo: unknown}>} peticiones
+ * @param {(p: {grl_id: unknown, cuerpo: unknown}) => Promise<unknown>} enviar
+ * @returns {Promise<{guardadas: number, fallo: {grl_id: unknown, error: unknown} | null}>}
+ */
+export async function guardarConteoEnSerie(peticiones, enviar) {
+  let guardadas = 0;
+  for (const p of Array.isArray(peticiones) ? peticiones : []) {
+    try {
+      await enviar(p);
+    } catch (error) {
+      return { guardadas, fallo: { grl_id: p.grl_id, error } };
+    }
+    guardadas += 1;
+  }
+  return { guardadas, fallo: null };
+}
+
+/**
+ * B4 T24 f3 r1 (m22): el texto con que se avisa un conteo que falló a medias: la línea que falló y, si antes se guardaron otras, que ya
+ * quedaron guardadas (el detalle del servidor lo añade textoDeError).
+ * @param {string | null | undefined} nombre
+ * @param {number} guardadas
+ * @returns {string}
+ */
+export function textoFalloConteo(nombre, guardadas) {
+  const linea = textoLimpio(nombre) ? `la línea «${textoLimpio(nombre)}»` : 'una línea';
+  const antes = guardadas > 0 ? `; ${guardadas === 1 ? 'la anterior quedó guardada' : `las ${guardadas} anteriores quedaron guardadas`}` : '';
+  return `No se pudo guardar ${linea}${antes}`;
+}
+
+/**
+ * B4 T24 f3 r1 (m18, B40-f): el efecto del enlace ?id= / ?sku= de Inventario › Productos, en la lib: pide el producto si
+ * pedirEnlaceProducto lo manda; la marca (`marca.current`) se pone SOLO cuando la respuesta llegó (un montaje abortado deja la marca
+ * libre). Al llegar: `alError(null)` y abre el producto o avisa que no está; si falla (no un abort): `alError(err)` (la página lo
+ * muestra con «Reintentar»). Devuelve la limpieza (aborta).
+ * @param {{marca: {current: string | null}, idDeLaUrl: string | null, skuDeLaUrl: string | null,
+ *   pedir: (ruta: string, op: {signal: AbortSignal}) => Promise<unknown>, abrir: (fila: any) => void, avisar: (texto: string) => void,
+ *   alError: (err: unknown) => void}} entrada
+ * @returns {() => void}
+ */
+export function abrirEnlaceProducto({ marca, idDeLaUrl, skuDeLaUrl, pedir, abrir, avisar, alError }) {
+  const pedido = pedirEnlaceProducto(marca.current, idDeLaUrl, skuDeLaUrl);
+  if (pedido === null) {
+    // B4 T24 f4 (m12 de f3 r2): nada que pedir (el enlace salió de la URL, o ya se atendió): se cierra la vuelta, para que un reintento
+    // en camino no deje «Reintentando…» pegado ni el aviso de un enlace que ya no está.
+    alError(null);
+    return () => {};
+  }
+  const control = new AbortController();
+  pedir(pedido.ruta, { signal: control.signal })
+    .then((r) => {
+      if (control.signal.aborted) return;
+      const llegada = llegadaEnlaceProducto(pedido, normalizarRespuesta(r).filas);
+      marca.current = llegada.marca;
+      alError(null);
+      if (llegada.abrir) abrir(llegada.abrir);
+      else avisar(llegada.texto ?? 'No se encontró el producto.');
+    })
+    .catch((err) => { if (!control.signal.aborted) alError(err); });
+  return () => control.abort();
+}
+
+/**
+ * B4 T24 f3 r1 (C2): la selección de PVEN que sigue valiendo para el alta de un PEC (NuevoPecModal y «Crear PEC Consolidado» del Hub).
+ * Después de un 409 (otro usuario consolidó o canceló uno de los elegidos), la recarga lo saca de la lista (que solo muestra los
+ * PENDIENTE_COMPRA) pero seguía en la selección, en el contador y en ven_ids: cada «Crear» repetía el mismo 409. Quedan solo los ids
+ * que siguen en PENDIENTE_COMPRA en `pedidosVenta`, en el orden de la selección (`ids` y sus `pvens`); `quitados` son los números de
+ * los demás (o «PVEN #id» si ya no vienen), para avisar cuál se quitó.
+ * @param {Iterable<number> | null | undefined} seleccion
+ * @param {unknown} pedidosVenta
+ * @returns {{ids: number[], pvens: any[], quitados: string[]}}
+ */
+export function seleccionVigente(seleccion, pedidosVenta) {
+  const porId = new Map((Array.isArray(pedidosVenta) ? pedidosVenta : []).filter((p) => p?.id != null).map((p) => [p.id, p]));
+  /** @type {{ids: number[], pvens: any[], quitados: string[]}} */
+  const vigente = { ids: [], pvens: [], quitados: [] };
+  for (const id of seleccion ?? []) {
+    const p = porId.get(id);
+    if (p && String(p.estado ?? '').trim() === 'PENDIENTE_COMPRA') { vigente.ids.push(id); vigente.pvens.push(p); }
+    else vigente.quitados.push(textoLimpio(p?.numero) ?? `PVEN #${id}`);
+  }
+  return vigente;
+}
+
+/**
+ * B4 T24 f3 r2 (m4 = m7): poda la selección GUARDADA (selectedPvens): si seleccionVigente quitó alguno, la selección nueva (solo los
+ * vigentes) y los quitados (para avisar); si no, `seleccion` null (no cambia nada). Así un PVEN quitado no reaparece marcado si vuelve a
+ * PENDIENTE_COMPRA.
+ * @param {Set<number>} seleccion
+ * @param {unknown} pedidosVenta
+ * @returns {{seleccion: Set<number> | null, quitados: string[]}}
+ */
+export function podarSeleccion(seleccion, pedidosVenta) {
+  const vigente = seleccionVigente(seleccion, pedidosVenta);
+  return vigente.quitados.length ? { seleccion: new Set(vigente.ids), quitados: vigente.quitados } : { seleccion: null, quitados: [] };
+}
+
+/**
+ * B4 T24 f3 r2 (m21): «Crear casillero» en el alta de un PEC: se ofrece (un botón; ya no se abre solo) cuando una búsqueda con texto
+ * terminó sin resultados y no hay uno elegido. B4 T24 f4 (m7 de f3 r2 = m20, aditivo): `buscado` es el último texto que se buscó; si
+ * viene y no es el de la caja, la búsqueda de ESTE texto no terminó (la primera letra, antes de buscar, no ofrece el botón).
+ * @param {{texto: string, buscado?: string, resultados: unknown[] | null, elegido: unknown}} entrada  resultados null: no terminó
+ * @returns {boolean}
+ */
+export function ofrecerCrearCasillero({ texto, buscado, resultados, elegido }) {
+  if (buscado !== undefined && buscado !== texto) return false;
+  return Boolean(String(texto ?? '').trim()) && Array.isArray(resultados) && resultados.length === 0 && !elegido;
+}
+
+/**
+ * B4 T24 f3 r1 (C2): el aviso de los PVEN que seleccionVigente quitó (ya no están pendientes de compra), o null.
+ * @param {string[]} quitados
+ * @returns {string | null}
+ */
+export function avisoSeleccionQuitada(quitados) {
+  if (!Array.isArray(quitados) || quitados.length === 0) return null;
+  return quitados.length === 1
+    ? `${quitados[0]} ya no está pendiente de compra: se quitó de la selección.`
+    : `${quitados.join(', ')} ya no están pendientes de compra: se quitaron de la selección.`;
+}
+
+/**
+ * B4 T24 f3 (FINAL-C4-f; m16 del backend r1): el tope de una cantidad del conteo por línea. update_grl acepta un entero de 0 a
+ * 99.999.999 (sale de Numeric(10, 2) de la columna); 2.5 da 422.
+ */
+export const MAX_CANTIDAD_CONTEO = 99999999;
+
+/**
+ * B4 T24 f3 (FINAL-C4-f): la cantidad recibida que se escribe en el conteo, leída SIN truncar (antes parseInt: «2.5» pasaba como 2 en
+ * silencio). Vacío, 0 (el campo vacío es «nada contado»); lo demás, Number tal cual (errorCantidadConteo lo valida antes de mandar).
+ * @param {unknown} texto
+ * @returns {number}
+ */
+export function leerCantidadConteo(texto) {
+  const t = String(texto ?? '').trim();
+  return t === '' ? 0 : Number(t);
+}
+
+/**
+ * B4 T24 f3 (FINAL-C4-f): el aviso en español de una cantidad del conteo que el servidor no acepta (un entero de 0 a 99.999.999), o
+ * null si vale.
+ * @param {unknown} n
+ * @param {string} nombre
+ * @returns {string | null}
+ */
+export function errorCantidadConteo(n, nombre) {
+  if (typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= MAX_CANTIDAD_CONTEO) return null;
+  return `La cantidad recibida de «${nombre}» debe ser un número entero entre 0 y 99.999.999.`;
+}
+
+/**
+ * B4 T24 f3 (FINAL-C4-f, ruling 5): una recepción heredada, sin GRL: alguna de sus líneas no trae grl_id, así que el PATCH por línea
+ * no la alcanza.
+ * @param {unknown} lineas
+ * @returns {boolean}
+ */
+export function esConteoHeredado(lineas) {
+  return Array.isArray(lineas) && lineas.some((l) => l?.grl_id == null);
+}
+
+/**
+ * B4 T24 f3 r1 (C1 y la heredada, m19): lo que confirmarRecepcion (roles.js) necesita de una fila de GET /compras/recepciones (o del
+ * detalle), con la MISMA regla en todas las pantallas: si está por confirmar, si es heredada (esConteoHeredado de sus productos, que
+ * _gr_dict trae con grl_id) y si le falta la bodega receptora (sin warehouse_id).
+ * @param {any} r
+ * @returns {{porConfirmar: boolean, heredada: boolean, sinBodega: boolean}}
+ */
+export function datosConfirmacion(r) {
+  return { porConfirmar: esRecepcionPorConfirmar(r), heredada: esConteoHeredado(r?.productos), sinBodega: r?.warehouse_id == null || r.warehouse_id === '' };
+}
+
+/**
+ * B4 T24 f3 r1 (C1, la raíz): la bodega receptora que va al crear una recepción («Recepcionar PEC» y «Hacer recepción»; el servidor ya
+ * acepta body.warehouse_id). `elegida` es lo que el usuario eligió (null: no tocó el select). Sin elegir, se preselecciona la única
+ * bodega si hay una sola (GET /inventory/warehouses no tiene «activa»: todas lo son); si hay varias o ninguna, '' (opcional: el PEC
+ * puede traer la suya).
+ * @param {string | null | undefined} elegida
+ * @param {unknown} bodegas
+ * @returns {string}
+ */
+export function bodegaRecepcion(elegida, bodegas) {
+  if (elegida != null) return String(elegida);
+  const lista = Array.isArray(bodegas) ? bodegas.filter((b) => b?.id != null) : [];
+  return lista.length === 1 ? String(lista[0].id) : '';
+}
+
+/**
+ * B4 T24 f3 r1 (C1, la raíz): el cuerpo de POST /compras/pedidos/{id}/recepcionar. `warehouse_id` solo con una bodega elegida (un
+ * entero positivo); sin ella, el servidor usa la del PEC.
+ * @param {{creadoPor: string, notas?: string, bodega?: string}} entrada
+ * @returns {{created_by: string, force_full: false, notas?: string, warehouse_id?: number}}
+ */
+export function cuerpoRecepcionarPec({ creadoPor, notas, bodega }) {
+  /** @type {{created_by: string, force_full: false, notas?: string, warehouse_id?: number}} */
+  const cuerpo = { created_by: creadoPor, force_full: false };
+  if (notas) cuerpo.notas = notas;
+  const id = Number(bodega);
+  if (bodega !== '' && bodega != null && Number.isInteger(id) && id > 0) cuerpo.warehouse_id = id;
+  return cuerpo;
+}
+
+/**
+ * B4 T24 f3 (FINAL-C4-f, ruling 5): el conteo con el PATCH por línea (PATCH /compras/recepciones/{id}/lineas/{grl_id}, que BODEGA
+ * tiene): una petición por línea cambiada frente a lo que dice el servidor (`servidor`: d.productos, que update_grl regenera desde C4-b).
+ * El cuerpo deja la línea como la dejaba el PATCH en lote: la recibida (un entero) y rechazadas y cuarentena en 0 (el lote las ponía en 0
+ * si no venían). Cambiada: la recibida es otra (una del servidor sin contar, null, cuenta aunque la de la pantalla sea 0: el lote la
+ * dejaba en 0 explícito y la confirmación exige un número), o rechazadas o cuarentena no están en 0. Las líneas sin grl_id (una
+ * heredada) no van. Antes de mandar nada se valida cada cantidad: con la primera que no vale, {error} con su aviso y ninguna petición.
+ * @param {unknown} servidor
+ * @param {unknown} locales
+ * @returns {{error: string | null, peticiones: {grl_id: number, cuerpo: {quantity_received: number, quantity_rejected: 0, quantity_quarantine: 0}}[]}}
+ */
+export function peticionesConteo(servidor, locales) {
+  const previas = new Map((Array.isArray(servidor) ? servidor : []).map((p) => [p?.grl_id, p]));
+  const peticiones = [];
+  for (const l of Array.isArray(locales) ? locales : []) {
+    const n = l?.qty_recibida ?? 0;
+    const error = errorCantidadConteo(n, textoLimpio(l?.nombre) ?? 'la línea');
+    if (error) return { error, peticiones: [] };
+    if (l?.grl_id == null) continue;
+    const p = previas.get(l.grl_id);
+    const igual = p != null && p.qty_recibida != null && Number(p.qty_recibida) === n
+      && !(Number(p.qty_rechazada) > 0) && !(Number(p.qty_cuarentena) > 0);
+    if (!igual) peticiones.push({ grl_id: l.grl_id, cuerpo: { quantity_received: n, quantity_rejected: 0, quantity_quarantine: 0 } });
+  }
+  return { error: null, peticiones };
+}
+
+/**
  * La tarjeta de una recepción en el tablero solo para ver (la forma de DatosTarjetaKanban): el número (sin él, ENINV-id),
  * el proveedor (o 'Sin proveedor'), el PEC de origen (o 'Entrada manual'), la insignia del estado, el chip «Retraso N
  * días» (dias_retraso de _gr_dict, solo si es mayor que 0), la bodega y el día (fecha de recepción o de creación) y, en
- * «Por contar», la acción «Contar y confirmar» hacia el conteo.
+ * «Por contar», la acción «Contar y confirmar» hacia el conteo. B4 T24 f3 (FINAL-C4-f): con `{contar: false}` (aditivo: el rol no
+ * cuenta, accesoRecepciones), sin esa acción; la tarjeta queda en «Abrir» (el Drawer, con «Abrir conteo»).
  * @param {any} r
+ * @param {{contar?: boolean, motivo?: string | null}} [opciones]
  * @returns {{numero: string, tipo: 'ENINV', titulo: string, subtitulo: string, monto: null, estado: Readonly<InfoEstado>,
- *   chips: {texto: string, tono: string}[], tiempo: string, atrasada: boolean,
+ *   chips: {texto: string, tono: string}[], nota: string | null, tiempo: string, atrasada: boolean,
  *   accionPrincipal: {texto: string, href: string, tono: string} | null}}
  */
-export function tarjetaRecepcion(r) {
+export function tarjetaRecepcion(r, { contar = true, motivo = null } = {}) {
   const retraso = numeroFinito(r?.dias_retraso);
   const atrasada = retraso !== null && retraso > 0;
   const dia = fechaCorta(r?.fecha_recepcion || r?.created_at);
@@ -816,9 +1249,12 @@ export function tarjetaRecepcion(r) {
     monto: null,
     estado: infoEstadoRecepcion(r?.estado),
     chips: atrasada ? [{ texto: `Retraso ${retraso} ${retraso === 1 ? 'día' : 'días'}`, tono: 'rose' }] : [],
+    // r2 (m2, aditivo): sin «Contar y confirmar», el motivo (el texto de confirmarRecepcion). B4 T24 f4 (m16 de f3 r2): en una línea que
+    // hace salto (`nota` de TarjetaKanban), no en un chip (truncate a 10 px cortaba la mitad del texto).
+    nota: porContar && !contar ? textoLimpio(motivo) : null,
     tiempo: dia ? `${bodega} · ${dia}` : bodega,
     atrasada,
-    accionPrincipal: porContar && r?.id != null
+    accionPrincipal: porContar && contar && r?.id != null
       ? { texto: 'Contar y confirmar', href: `/dashboard/compras/recepciones/${r.id}`, tono: 'teal' }
       : null,
   };
@@ -1271,7 +1707,8 @@ export function filaDelEnlaceTraslado(filas, id) {
 export function pedirEnlaceTraslado(marca, idDeLaUrl) {
   if (typeof idDeLaUrl !== 'string' || !/^\d+$/.test(idDeLaUrl)) return null;
   const id = Number(idDeLaUrl);
-  if (!Number.isInteger(id) || id <= 0 || marca === idDeLaUrl) return null;
+  // B4 T24 f3 (F73): la marca es String(id) (llegadaEnlaceTraslado): se compara con el id leído, no con el texto crudo (?id=063).
+  if (!Number.isInteger(id) || id <= 0 || marca === String(id)) return null;
   return id;
 }
 
@@ -1285,6 +1722,31 @@ export function pedirEnlaceTraslado(marca, idDeLaUrl) {
 export function llegadaEnlaceTraslado(id, filas) {
   const abrir = filaDelEnlaceTraslado(filas, id);
   return { marca: String(id), abrir, avisar: abrir === null };
+}
+
+/**
+ * B4 T24 f3 r1 (F69, la Recomendación: el efecto baja a la lib, junto con F73 y F74-f): el enlace ?id= de Compras › Traslados. Pide el
+ * traslado por su id exacto (F74-b) si pedirEnlaceTraslado lo manda; la marca (`marca.current`) se pone SOLO cuando la respuesta llegó
+ * (llegadaEnlaceTraslado), nunca antes del fetch ni al limpiar: un montaje abortado (el doble montaje de React) deja la marca como
+ * estaba y el siguiente vuelve a pedir. Devuelve la limpieza (aborta). `pedir` es apiFetch (con `signal`).
+ * @param {{marca: {current: string | null}, idDeLaUrl: string | null | undefined, pedir: (ruta: string, op: {signal: AbortSignal}) => Promise<unknown>,
+ *   abrir: (fila: any) => void, avisar: (texto: string) => void, avisarError: (err: unknown) => void}} entrada
+ * @returns {() => void}
+ */
+export function abrirEnlaceTraslado({ marca, idDeLaUrl, pedir, abrir, avisar, avisarError }) {
+  const id = pedirEnlaceTraslado(marca.current, idDeLaUrl);
+  if (id === null) return () => {};
+  const control = new AbortController();
+  pedir(`/inventory/operations?operation_type=TRANSFER&id=${id}&limit=5`, { signal: control.signal })
+    .then((r) => {
+      if (control.signal.aborted) return;
+      const llegada = llegadaEnlaceTraslado(id, normalizarRespuesta(r).filas);
+      marca.current = llegada.marca;
+      if (llegada.abrir) abrir(llegada.abrir);
+      if (llegada.avisar) avisar(`No se encontró el traslado ${numeroTraslado({ id })}.`);
+    })
+    .catch((err) => { if (!control.signal.aborted) avisarError(err); });
+  return () => control.abort();
 }
 
 // ─── Estado del stock (RP53) ────────────────────────────────────────────────────
@@ -1500,8 +1962,45 @@ export const COLUMNAS_KARDEX = congelar([
 ]);
 
 /**
+ * B4 T24 f3 r1 (C3, m31): las teclas del autocompletar del SKU del Kardex (role combobox). `indice` es la opción con el foco (-1: el
+ * campo) y `total` las opciones que hay. Devuelve si la lista queda abierta y adónde va el foco (-1: el campo; si no, esa opción), o
+ * null si la tecla no le toca:
+ *  - Esc con la lista abierta la cierra y el foco vuelve al campo (antes, con el foco en una opción, caía en <body>);
+ *  - ↓ con la lista cerrada la abre (el foco sigue en el campo); abierta, baja una opción (de la última no pasa);
+ *  - ↑ desde la primera opción vuelve al campo; desde el campo no hace nada.
+ * Al elegir (Enter o clic) el foco vuelve al campo (la página). El clic con el ratón no cierra la lista antes de elegir: la lista
+ * evita el mousedown (Safari y Firefox de macOS no enfocan el botón al hacer clic y el blur llegaba con relatedTarget null).
+ * @param {{tecla: string, abierta: boolean, indice: number, total: number}} entrada
+ * @returns {{abierta: boolean, foco: number} | null}
+ */
+export function teclaComboboxSku({ tecla, abierta, indice, total }) {
+  if (tecla === 'Escape') return abierta ? { abierta: false, foco: -1 } : null;
+  if (tecla === 'ArrowDown') {
+    if (!abierta) return { abierta: true, foco: -1 };
+    return total > 0 ? { abierta: true, foco: Math.min(Math.max(indice, -1) + 1, total - 1) } : null;
+  }
+  if (tecla === 'ArrowUp') return abierta && indice >= 0 ? { abierta: true, foco: indice - 1 } : null;
+  return null;
+}
+
+/**
+ * B4 T24 f3 r1 (C3): al salir del autocompletar (el blur del contenedor), se cierra la lista si el foco no va a algo de adentro (fuera,
+ * o null: un clic en la página). Un clic en la lista no saca el foco del campo (la lista evita el mousedown), así que no llega aquí.
+ * @param {boolean} focoVaDentro
+ * @returns {boolean}
+ */
+export function cierraComboboxAlSalir(focoVaDentro, { sinDestino = false, ratonSobreLista = false } = {}) {
+  // r2 (m5 = m15): un blur sin destino (Safari y Firefox de macOS no enfocan el botón al hacer clic) con el ratón sobre la lista no cierra:
+  // es un clic en una opción. Con el foco hacia algo de adentro, tampoco.
+  if (focoVaDentro) return false;
+  return !(sinDestino && ratonSobreLista);
+}
+
+/**
  * Los filtros extra de la barra del Kardex como parámetros de GET /inventory/kardex (sku_id, warehouse_id, owner,
- * direction, start_date y end_date; los bordes de fecha son días UTC desde antes). Lo vacío no se manda.
+ * direction, start_date y end_date). Lo vacío no se manda. B4 T24 f3 (A3-f): Desde y Hasta van tal como los elige el usuario
+ * (AAAA-MM-DD, el día de Colombia): desde A3-b, get_kardex los compara con las 00:00 de Colombia (_inicio_del_dia_co), el mismo
+ * día que muestra la tabla.
  * @param {{skuId?: number | null, bodega?: string, propietario?: string, direccion?: string, desde?: string, hasta?: string} | null | undefined} filtros
  * @returns {Record<string, unknown>}
  */
@@ -1641,11 +2140,15 @@ const TONOS_PRODUCTOS = congelar(['indigo', 'emerald', 'amber', 'sky', 'rose', '
  * Las columnas del tablero de Productos: una por categoría de GET /categories, por nombre (en español), a lo sumo `max`.
  * `masCategorias` cuenta las que no caben y `aviso` es «N categorías más: usa la lista» (null si caben todas). Una fila sin
  * un id entero positivo, o con un id repetido, no es una columna; sin nombre, «Sin nombre».
+ * B4 T24 f3 r1 (F93, la Recomendación; aditivo): con una categoría elegida en la barra (`elegida`, su id como texto) que está en el
+ * catálogo, el tablero muestra SOLO su columna (aunque quede fuera de las 12): antes, una categoría fuera de las 12 dejaba 12 columnas
+ * vacías aunque tuviera productos. Sin elegida, o si no está en el catálogo, como antes.
  * @param {unknown} categorias
  * @param {number} [max]
+ * @param {{elegida?: string | null}} [opciones]
  * @returns {{columnas: Columna[], masCategorias: number, aviso: string | null}}
  */
-export function columnasProductos(categorias, max = MAX_COLUMNAS_PRODUCTOS) {
+export function columnasProductos(categorias, max = MAX_COLUMNAS_PRODUCTOS, { elegida = null } = {}) {
   const vistas = new Set();
   const lista = [];
   for (const c of Array.isArray(categorias) ? categorias : []) {
@@ -1654,6 +2157,9 @@ export function columnasProductos(categorias, max = MAX_COLUMNAS_PRODUCTOS) {
     lista.push({ id: c.id, nombre: textoLimpio(c.name) ?? 'Sin nombre' });
   }
   lista.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es') || a.id - b.id);
+  const clave = textoLimpio(elegida);
+  const sola = clave === null ? null : lista.find((c) => String(c.id) === clave);
+  if (sola) return { columnas: [columna(`cat-${sola.id}`, sola.nombre, TONOS_PRODUCTOS[0], [String(sola.id)])], masCategorias: 0, aviso: null };
   const { visibles, mas, aviso } = recortarColumnas(lista, max);
   return {
     columnas: visibles.map((c, i) => columna(`cat-${c.id}`, c.nombre, TONOS_PRODUCTOS[i % TONOS_PRODUCTOS.length], [String(c.id)])),
@@ -1742,14 +2248,15 @@ export function tarjetaProducto(p) {
 
 /**
  * Lo que dice la tabla de Productos cuando no hay filas: la búsqueda, los filtros de la barra (revisión, IVA) o nada.
- * @param {{q?: string | null, revision?: boolean, sinTarifa?: boolean, categoria?: string | null} | null | undefined} filtro
+ * @param {{q?: string | null, revision?: boolean, sinTarifa?: boolean, categoria?: string | true | null} | null | undefined} filtro
  * @returns {{titulo: string, ayuda: string | null}}
  */
 export function textoVacioProductos(filtro) {
   const f = objetoPlano(filtro) ?? {};
   const q = textoLimpio(f.q);
-  const categoria = textoLimpio(f.categoria);
-  const donde = categoria ? ` en la categoría «${categoria}»` : '';
+  // r1 (m16, aditivo): `true` = hay una categoría elegida pero el catálogo no llegó (nunca el id crudo «#7»).
+  const categoria = f.categoria === true ? true : textoLimpio(f.categoria);
+  const donde = categoria === true ? ' en la categoría elegida' : categoria ? ` en la categoría «${categoria}»` : '';
   const quita = categoria ? 'Quita los filtros de revisión, de IVA o de categoría para ver más.' : 'Quita los filtros de revisión o de IVA para ver más.';
   if (q) {
     return {
@@ -1766,7 +2273,8 @@ export function textoVacioProductos(filtro) {
 
 /**
  * RP49: ¿hay que pedir el producto del enlace? `?id=` pide /products?id=N y `?sku=` (el de Abastecimiento: stock-tabla no
- * trae el id del producto) pide /products?q=SKU. `marca` es lo ya atendido (la respuesta llegó), no lo que se pidió: un fetch
+ * trae el id del producto) pide /products?sku=SKU (B4 T24 f3, B40-f: el parámetro exacto de B40-b; antes q=, que con un código corto
+ * presente en más de 50 productos dejaba fuera el buscado). `marca` es lo ya atendido (la respuesta llegó), no lo que se pidió: un fetch
  * abortado deja la marca como estaba y el siguiente render vuelve a pedir. El id gana; uno que no es un entero positivo no
  * tapa un SKU bueno. Sin nada que pedir, null.
  * @param {string | null} marca
@@ -1782,13 +2290,14 @@ export function pedirEnlaceProducto(marca, idDeLaUrl, skuDeLaUrl) {
   const sku = typeof skuDeLaUrl === 'string' ? skuDeLaUrl.trim() : '';
   if (sku === '') return null;
   const nueva = `sku:${sku}`;
-  return marca === nueva ? null : { marca: nueva, ruta: `/products?q=${encodeURIComponent(sku)}&limit=50&offset=0`, id: null, sku };
+  return marca === nueva ? null : { marca: nueva, ruta: `/products?sku=${encodeURIComponent(sku)}&limit=50&offset=0`, id: null, sku };
 }
 
 /**
- * Llegó la respuesta del enlace: abre el producto exacto (por su id, o el que tiene ese SKU exacto, sin distinguir
- * mayúsculas: `q` también encuentra los que lo contienen); si no está, avisa UNA vez. En los dos casos la marca queda en
- * lo pedido (no se vuelve a pedir ni a avisar).
+ * Llegó la respuesta del enlace: abre el producto exacto (por su id, o el que tiene ese SKU). r1 (m5, m28): desde B40-f la consulta
+ * es /products?sku=, y el servidor (B40-b, catalog.py) filtra por el SKU EXACTO distinguiendo mayúsculas: un ?sku= con otras
+ * mayúsculas da «No se encontró». La comparación sin mayúsculas de aquí ya solo es un respaldo. Si no está, avisa UNA vez. En los dos
+ * casos la marca queda en lo pedido (no se vuelve a pedir ni a avisar).
  * @param {{marca: string, id: number | null, sku: string | null}} pedido
  * @param {ReadonlyArray<any> | null | undefined} filas
  * @returns {{marca: string, abrir: any | null, avisar: boolean, texto: string | null}}
@@ -2048,9 +2557,39 @@ export function pestanasTraslado(conteos) {
 }
 /** Los conteos de TODOS los traslados (sin búsqueda ni filtros) para las tarjetas: solo el total y los conteos, sin filas. */
 export const RUTA_CONTEOS_TRASLADOS = '/inventory/operations?operation_type=TRANSFER&limit=0&con_conteos=1';
+/**
+ * B4 T24 f3 r1 (m11, m21, m37): lo que dice la alerta «No se pudo verificar el stock crítico» de Abastecimiento. Si /inventory/stats
+ * falló, remite al aviso con «Reintentar», que va SOBRE las tarjetas (antes decía «bajo»); si respondió pero sin un número de agotados,
+ * no culpa a un aviso que no existe.
+ * @param {boolean} fallaronLosIndicadores
+ * @returns {string}
+ */
+export function textoAlertaSinDato(fallaronLosIndicadores) {
+  return fallaronLosIndicadores ? 'El aviso sobre las tarjetas dice qué falló.' : 'El servidor no dio el número de agotados.';
+}
+
 /** La columna del tablero de Traslados (su estado) y el día en que se hizo (la fecha real). */
 export const columnaDeTraslado = (t) => t?.status;
 export const fechaDeTraslado = (t) => t?.fecha;
+
+/**
+ * B4 T24 f3 r1 (F71): lo que dice la barra de la selección de la Lista de compras (m12 de T16B): los mismos ítems que usará «Crear
+ * Pedido de Compra»; si hay seleccionados que no entran (ya en pedido o recibidos), lo dice.
+ * @param {number} elegidos
+ * @param {number} pedibles
+ * @returns {string}
+ */
+export function textoSeleccionLista(elegidos, pedibles) {
+  const base = `${elegidos} ${elegidos === 1 ? 'seleccionado' : 'seleccionados'}`;
+  return pedibles === elegidos ? base : `${base}; ${pedibles} se ${pedibles === 1 ? 'puede' : 'pueden'} pedir`;
+}
+
+/**
+ * B4 T24 f3 r1 (F71): el día en que se movió un ítem de la Lista de compras para el tablero (fechaMovimiento: su `fecha`, I1 de T16B).
+ * @param {any} it
+ * @returns {string | null}
+ */
+export const fechaItemLista = (it) => it?.fecha ?? null;
 
 /** '1 día', '3 días'. */
 export function textoDiasRetraso(n) {

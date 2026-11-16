@@ -1179,6 +1179,14 @@ console.log('--- B4 T24 f2 r1 (m20): la franja ofrece «Reintentar» solo con un
   assert.equal(F.ofrecibleDeLaFranja(true, e403), false, 'llega un 403: no se ofrece');
   assert.equal(F.ofrecibleDeLaFranja(true, null), true, 'sin error nuevo, lo recordado');
   assert.equal(F.ofrecibleDeLaFranja(false, null), false);
+  // B4 T24 f3 (m4 de revision-24-f2-r2): el error de red (sin status) también se ofrece, y su reintento pinta «Reintentando…».
+  assert.equal(F.ofrecibleDeLaFranja(false, red), true, 'la red cortada: se ofrece');
+  {
+    let o = F.ofrecibleDeLaFranja(false, red);
+    assert.equal(F.reintentarEnFranja({ error: red, reintentando: false, ofrecible: o }), true, 'red: Reintentar');
+    o = F.ofrecibleDeLaFranja(o, null);
+    assert.equal(F.reintentarEnFranja({ error: null, reintentando: true, ofrecible: o }), true, 'red y su reintento: «Reintentando…»');
+  }
   // La secuencia: 403 → la pantalla recarga (cargando, error null) → sin botón; 500 → «Reintentar» → reintentando → «Reintentando…».
   {
     let ofrecible = false;
@@ -1202,6 +1210,107 @@ console.log('--- B4 T24 f2 r1 (m20): la franja ofrece «Reintentar» solo con un
   assert.match(banner, /const \[ofrecible, setOfrecible\] = useState\(false\);\s*const ofrecibleAhora = ofrecibleDeLaFranja\(ofrecible, error\);\s*if \(ofrecibleAhora !== ofrecible\) setOfrecible\(ofrecibleAhora\);/);
   assert.match(banner, /\{onReintentar && reintentarEnFranja\(\{ error, reintentando: f\.reintentando, ofrecible: ofrecibleAhora \}\) \? \(/);
   assert.match(banner, /import \{[^}]*\breintentarEnFranja\b[^}]*\} from '@\/lib\/flujo';/);
+}
+
+console.log('--- B4 T24 f3 (F45, segunda mitad; FINAL-m14, F84): Compras e Inventario cargan /compras/stats e /inventory/stats con useResumen; «Reintentar» solo para esa fuente y nunca con un 403 ---');
+{
+  // El comportamiento que antes fijaban las aserciones de texto de TEST 43-45 (la copia del cargador en cada pantalla), ahora con la lib
+  // del hook compartido (crearCargaListado + aplicarLlegadaResumen con RESUMEN_DE_TARJETAS + estadoResumen) y el aviso de la fuente
+  // (avisoDeFuente, la pieza de AvisoDeError/AvisoReintentar).
+  const { avisoDeFuente } = await import('../src/lib/avisos.js');
+  for (const RUTA of ['/inventory/stats', '/compras/stats?periodo=30d']) {
+    const D1 = { total_skus: 12 };
+    const D2 = { total_skus: 15 };
+    const { llamadas, pedir } = aMano();
+    let resultado = null;
+    const carga = crearCargaListado({ pedir, alLlegar: (l) => { resultado = F.aplicarLlegadaResumen(resultado, l, F.RESUMEN_DE_TARJETAS); } });
+    const clave = (version, recarga) => `${version}|7|${recarga}|${RUTA}`;
+    const ver = (k) => F.estadoResumen(resultado, { clave: k, ruta: RUTA, usuario: 7 });
+    // Primera carga: nunca 0 (datos null: barras grises).
+    assert.deepEqual(ver(clave(0, 0)), { datos: null, cargando: true, error: null }, `${RUTA}: cargando`);
+    carga.cargar(RUTA, clave(0, 0), { ruta: RUTA, usuario: 7 });
+    await tic();
+    llamadas[0].resolver({ status: 'success', data: D1 });
+    await tic();
+    assert.deepEqual(ver(clave(0, 0)), { datos: D1, cargando: false, error: null }, `${RUTA}: llega`);
+    // «Actualizar» (sube la vuelta de la pantalla): el último valor se conserva mientras llega (I3), sin parpadeo.
+    assert.deepEqual(ver(clave(0, 1)), { datos: D1, cargando: true, error: null }, `${RUTA}: una recarga conserva el último valor`);
+    carga.cargar(RUTA, clave(0, 1), { ruta: RUTA, usuario: 7 });
+    await tic();
+    llamadas[1].resolver({ data: D2 });
+    await tic();
+    assert.deepEqual(ver(clave(0, 1)), { datos: D2, cargando: false, error: null }, `${RUTA}: lo nuevo`);
+    // Falla con un 500: sin datos viejos («—») y el aviso con el detalle del servidor y «Reintentar».
+    const e500 = Object.assign(new Error('Error del servidor'), { status: 500 });
+    carga.cargar(RUTA, clave(1, 1), { ruta: RUTA, usuario: 7 });
+    await tic();
+    llamadas[2].rechazar(e500);
+    await tic();
+    const fallo = ver(clave(1, 1));
+    assert.deepEqual(fallo, { datos: null, cargando: false, error: e500 }, `${RUTA}: con error, «—»`);
+    assert.deepEqual(avisoDeFuente(fallo.error, 'No se pudieron cargar los indicadores de compras'),
+      { tipo: 'carga', texto: 'No se pudieron cargar los indicadores de compras: Error del servidor.', reintentar: true }, `${RUTA}: un 500 ofrece Reintentar`);
+    // «Reintentar» (stats.recargar sube la versión del hook): solo esa fuente, cargando sin el error viejo ni datos viejos.
+    assert.deepEqual(ver(clave(2, 1)), { datos: null, cargando: true, error: null }, `${RUTA}: reintentando`);
+    assert.equal(avisoDeFuente(ver(clave(2, 1)).error, 'x'), null, `${RUTA}: mientras reintenta, sin aviso`);
+    // La red cortada también se reintenta; un 403 es de permiso: el aviso lo dice y NUNCA ofrece «Reintentar».
+    const red = new TypeError('Failed to fetch');
+    carga.cargar(RUTA, clave(2, 1), { ruta: RUTA, usuario: 7 });
+    await tic();
+    llamadas[3].rechazar(red);
+    await tic();
+    assert.equal(avisoDeFuente(ver(clave(2, 1)).error, 'x')?.reintentar, true, `${RUTA}: la red cortada se reintenta`);
+    const e403 = Object.assign(new Error('No tienes permiso para esta acción.'), { status: 403 });
+    carga.cargar(RUTA, clave(3, 1), { ruta: RUTA, usuario: 7 });
+    await tic();
+    llamadas[4].rechazar(e403);
+    await tic();
+    const permiso = avisoDeFuente(ver(clave(3, 1)).error, 'No se pudieron cargar los indicadores de existencias');
+    assert.equal(permiso?.tipo, 'permiso', `${RUTA}: un 403 es de permiso`);
+    assert.equal(permiso?.reintentar, false, `${RUTA}: un 403 nunca ofrece Reintentar`);
+  }
+
+  // El cableado: cada pantalla usa el hook (sin su copia del cargador) y el aviso bajo la franja reintenta SOLO su fuente.
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const PANTALLAS = {
+    'app/dashboard/compras/page.tsx': ['stats', '`/compras/stats?periodo=${PERIODO_KPI}`'],
+    'app/dashboard/compras/pedidos/page.tsx': ['stats', '`/compras/stats?periodo=${PERIODO_KPI}`'],
+    'app/dashboard/compras/transito/page.tsx': ['stats', '`/compras/stats?periodo=${PERIODO_KPI}`'],
+    'app/dashboard/compras/recepciones/page.tsx': ['stats', '`/compras/stats?periodo=${PERIODO_KPI}`'],
+    'app/dashboard/compras/lista-compras/page.tsx': ['stats', "'/compras/lista-compras/stats'"],
+    'app/dashboard/inventario/page.tsx': ['stats', "'/inventory/stats'"],
+    'app/dashboard/inventario/stock/page.tsx': ['stats', "'/inventory/stats'"],
+    'app/dashboard/inventario/abastecimiento/page.tsx': ['stats', "'/inventory/stats'"],
+    'app/dashboard/inventario/recepciones/page.tsx': ['stats', '`/compras/stats?periodo=${PERIODO_KPI}`'],
+    'app/dashboard/inventario/entregas/page.tsx': ['stats', "<{ kpis?: unknown }>('/ventas/stats'"],
+  };
+  for (const [ruta, [nombre, fuente]] of Object.entries(PANTALLAS)) {
+    const f = leer(ruta);
+    assert.match(f, /import \{ useResumen \} from '@\/components\/ui\/useResumen';/, `${ruta}: importa el hook`);
+    assert.ok(f.includes(`const ${nombre} = useResumen${fuente.startsWith('<') ? fuente : `(${fuente}`}`), `${ruta}: ${fuente} con el hook`);
+    assert.ok(!/set(?:Stats|Compras)\(\{ vuelta/.test(f), `${ruta}: sin la copia del cargador`);
+  }
+  assert.ok(leer('app/dashboard/inventario/abastecimiento/page.tsx').includes("const compras = useResumen('/compras/stats', vueltaCompras);"), 'Abastecimiento: las dos fuentes');
+  // FINAL-m14 y F84: el aviso bajo la franja, con «Reintentar» solo para /stats (stats.recargar) y nunca con un 403 (AvisoDeError).
+  for (const [ruta, fallo] of [
+    ['app/dashboard/compras/page.tsx', 'No se pudieron cargar los indicadores de compras'],
+    ['app/dashboard/compras/pedidos/page.tsx', 'No se pudieron cargar los indicadores de compras'],
+    ['app/dashboard/compras/transito/page.tsx', 'No se pudieron cargar los indicadores de compras'],
+    ['app/dashboard/compras/recepciones/page.tsx', 'No se pudieron cargar los indicadores de compras'],
+    ['app/dashboard/compras/lista-compras/page.tsx', 'No se pudieron cargar los indicadores de la lista de compras'],
+    ['app/dashboard/inventario/page.tsx', 'No se pudieron cargar los indicadores de existencias'],
+  ]) {
+    const f = leer(ruta);
+    assert.match(f, /import \{ AvisoDeError \} from '@\/components\/ui\/AvisoFuente';/, `${ruta}: la pieza común`);
+    // B4 T24 f3 r1 (m36, D27): el aviso sigue montado mientras se reintenta (stats.cargando), con «Reintentando…» (reintentando).
+    assert.ok(new RegExp(`<AvisoDeError error=\\{stats\\.error\\} fallo="${fallo}" onReintentar=\\{stats\\.recargar\\} acento="\\w+" reintentando=\\{stats\\.cargando\\} destinoFoco="[^"]+" \\/>`).test(f),
+      `${ruta}: el aviso de /stats, que reintenta solo esa fuente`);
+  }
+  for (const ruta of ['app/dashboard/inventario/stock/page.tsx', 'app/dashboard/inventario/abastecimiento/page.tsx', 'app/dashboard/inventario/recepciones/page.tsx',
+    'app/dashboard/inventario/entregas/page.tsx']) {
+    // r3 (C2 = C4, D27): las pantallas de m17 montan el aviso como el Hub: reintentando y el destino del foco (la franja).
+    assert.ok(/<AvisoReintentar error=\{(?:stats\.error|errorStats)\} fallo="[^"]+" onReintentar=\{stats\.recargar\} reintentando=\{(?:stats\.cargando|cargandoStats)\} destinoFoco="[^"]+" \/>/.test(leer(ruta)), `${ruta}: Reintentar con el hook`); // f4 (D27: destinoFoco)
+  }
 }
 
 console.log('\nOK: test_flujo.mjs');

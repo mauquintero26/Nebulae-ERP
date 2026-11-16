@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Tag, Plus, Pencil, Trash2, ChevronRight, ChevronDown, X } from 'lucide-react';
 import { apiFetch as _apiFetch } from '@/lib/api';
+// B4 T24 f3 (F44-a): la reserva del botón de la IA (la esquina inferior derecha).
+import { RESERVA_BOTON_IA } from '@/lib/design-system';
 
 async function apiFetch(path: string, opts: RequestInit = {}) {
   const res = await _apiFetch(path, opts);
@@ -117,7 +119,7 @@ export default function CategoriasPage() {
   }
 
   return (
-    <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-5 overflow-y-auto">
+    <div className={`h-full w-full bg-[#f8f9fa] flex flex-col p-5 ${RESERVA_BOTON_IA} overflow-y-auto`}>
       <div className="flex justify-between items-start mb-6">
         <div className="flex items-center gap-3">
           <div className="w-12 h-12 bg-white rounded-xl shadow-sm border border-slate-200 flex items-center justify-center text-purple-600">

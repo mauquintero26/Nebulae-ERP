@@ -371,7 +371,9 @@ console.log('--- TEST 14 (B4 T14): avisosFlujoCompras (RP46) y leerEnlaceHubComp
   const con = (n) => fc.avisosFlujoCompras({ pasos: { RECEPCION: { recepciones_por_confirmar: n } } });
   assert.deepEqual(con(1), [{ texto: '1 recepción por confirmar', tono: 'ambar' }]);
   assert.deepEqual(con(1234), [{ texto: '1.234 recepciones por confirmar', tono: 'ambar' }]);
-  for (const n of [0, -2, null, undefined, '3', Number.NaN]) assert.deepEqual(con(n), [], String(n));
+  // B4 T24 f3 (F58, D27): un texto numérico ('3') también cuenta, como en las tarjetas (numeroFinito); lo que no es un número, no.
+  assert.deepEqual(con('3'), [{ texto: '3 recepciones por confirmar', tono: 'ambar' }], "'3' del servidor");
+  for (const n of [0, -2, null, undefined, 'tres', Number.NaN]) assert.deepEqual(con(n), [], String(n));
   assert.deepEqual(fc.avisosFlujoCompras(null), []);
   assert.deepEqual(fc.avisosFlujoCompras({ pasos: {} }), []);
   assert.equal(typeof fc.leerEnlaceHubCompras, 'function', 'leerEnlaceHubCompras existe');
@@ -571,6 +573,61 @@ console.log('--- TEST 21 (B4 T16B, FLUJO-compras punto 10): la franja de la List
   const cargando = fc.pasosPantallaCompras(null, 'LISTA');
   assert.ok(cargando.every((p) => p.total === null && p.atrasados === null));
   assert.equal(cargando[0].esEste, true);
+}
+
+console.log('--- B4 T24 f3 (m21 del backend r1): los días de alerta de la configuración del seguimiento, con el rango del servidor antes de mandar ---');
+{
+  assert.equal(typeof fc.errorDiasEtapas, 'function', 'errorDiasEtapas existe');
+  // La paridad con el servidor (backend/app/api/v1/erp_compras.py, solo lectura): el tope y el texto del 422.
+  const compras = readFileSync(new URL('../../backend/app/api/v1/erp_compras.py', import.meta.url), 'utf8');
+  assert.equal(Number(compras.match(/^_MAX_DIAS_ALERTA = (\d+)$/m)?.[1]), fc.MAX_DIAS_ALERTA_ETAPA, 'el tope, el del servidor');
+  assert.equal(compras.match(/^ETAPA_DIAS_INVALIDOS = "([^"]+)"$/m)?.[1], fc.TEXTO_DIAS_ETAPA_INVALIDOS, 'el texto, el del 422');
+  const T = fc.TEXTO_DIAS_ETAPA_INVALIDOS;
+  // Valen: vacíos (null o ausentes) y un número entre 0 y 36500 (el servidor acepta también un decimal).
+  assert.equal(fc.errorDiasEtapas([{ alert_confirm_days: 2, alert_overdue_days: 1 }, { alert_confirm_days: null }, {}]), null);
+  assert.equal(fc.errorDiasEtapas([{ alert_confirm_days: 0, alert_overdue_days: 36500 }]), null, 'los bordes');
+  assert.equal(fc.errorDiasEtapas([{ alert_overdue_days: 1.5 }]), null, 'un decimal también lo acepta el servidor');
+  assert.equal(fc.errorDiasEtapas([]), null);
+  assert.equal(fc.errorDiasEtapas(null), null);
+  // No valen: fuera del rango, un texto o algo que no es un número finito; la primera da el texto del servidor.
+  for (const malo of [-1, 36501, Number.NaN, Infinity, '3', true]) {
+    assert.equal(fc.errorDiasEtapas([{ alert_confirm_days: 2 }, { alert_overdue_days: malo }]), T, String(malo));
+    assert.equal(fc.errorDiasEtapas([{ alert_confirm_days: malo }]), T, `confirmación ${String(malo)}`);
+  }
+  // El cableado: la ventana valida antes del PUT y, si el servidor dice que no (su 422), muestra su texto sin cerrarse ni perder lo escrito.
+  const ped = readFileSync(new URL('../src/app/dashboard/compras/pedidos/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const guardar = ped.slice(ped.indexOf('const saveStages = async () => {'), ped.indexOf('const { confirmar } = useAvisos();'));
+  assert.match(guardar, /const errorDias = errorDiasEtapas\(stages\);\s*if \(errorDias\) \{ onToast\(errorDias, 'error'\); return; \}\s*setSaving\(true\);/);
+  assert.match(guardar, /\} catch \(e\) \{ onToast\(e, 'error'\); \}/, 'el 422: su texto (textoDeError), sin cerrar la ventana');
+  assert.ok(!/onClose\(\)|setStages\(/.test(guardar), 'guardar no cierra la ventana ni toca lo escrito');
+}
+
+console.log('--- B4 T24 f3 r1 (F63): una sola regla de tono para la tarjeta de etapa y un solo sinónimo de «vencidos» ---');
+{
+  assert.equal(typeof estadosCompras.esSemaforoVencidos, 'function', 'esSemaforoVencidos existe');
+  assert.equal(estadosCompras.esSemaforoVencidos('vencidos'), true);
+  assert.equal(estadosCompras.esSemaforoVencidos('atrasados'), true, 'el sinónimo de la franja');
+  for (const otro of ['todos', null, undefined, '', 'VENCIDOS']) assert.equal(estadosCompras.esSemaforoVencidos(otro), false, String(otro));
+  // Las dos que lo usan dicen lo mismo con los dos nombres.
+  for (const semaforo of ['vencidos', 'atrasados']) {
+    assert.equal(fc.filtroSemaforoCompras({ semaforo }), 'atrasados');
+    assert.equal(estadosCompras.textoVacioPec({ semaforo }).titulo, 'Ningún pedido de compra con la entrega vencida.');
+  }
+  assert.equal(fc.filtroSemaforoCompras({ semaforo: 'todos' }), 'todos');
+  // El tono de la tarjeta de etapa sale de la MISMA regla que los avisos de la barra (RP28: rojo solo con «atrasado»).
+  for (const [nivel, tono] of [['atrasado', 'rojo'], ['ok', 'gris'], [undefined, 'gris']]) {
+    const stage = { stage: 'X', status: 'EN_PROCESO', alert: { mensaje: 'Va tarde', nivel } };
+    assert.deepEqual(fc.avisoTarjetaEtapa(stage, '2026-11-07'), { texto: 'Va tarde', tono, fuente: 'servidor' }, String(nivel));
+    assert.deepEqual(fc.pasosDeTracking([stage])[0].avisos, [{ texto: 'Va tarde', tono }], `la barra: ${nivel}`);
+  }
+  // En el fuente: avisoTarjetaEtapa llama a avisosDeEtapa; textoVacioPec y filtroSemaforoCompras, a esSemaforoVencidos.
+  const flujoFuente = readFileSync(new URL('../src/lib/flujo-compras.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const tarjeta = flujoFuente.slice(flujoFuente.indexOf('export function avisoTarjetaEtapa('), flujoFuente.indexOf('\n}\n', flujoFuente.indexOf('export function avisoTarjetaEtapa(')));
+  assert.match(tarjeta, /const \[delServidor\] = avisosDeEtapa\(stage\);/);
+  assert.ok(!/alert\?\.nivel === 'atrasado'/.test(tarjeta), 'sin la copia de la regla de tono');
+  assert.match(flujoFuente, /return esSemaforoVencidos\(estado\?\.semaforo\) \? 'atrasados' : 'todos';/);
+  const ecFuente = readFileSync(new URL('../src/lib/estados-compras.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(ecFuente, /export function textoVacioPec\(estado, ayuda = null\) \{\s*if \(esSemaforoVencidos\(estado\?\.semaforo\)\)/);
 }
 
 console.log('\nOK: test_flujo_compras.mjs');

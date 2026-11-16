@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { FOCO_DENTRO } from '@/lib/design-system';
+import { FOCO_DENTRO, RESERVA_BOTON_IA } from '@/lib/design-system';
 import { apiFetch } from '@/lib/api';
 import { Badge, Button, useAvisos } from '@/components/ui';
 // B4 T16A (TABLA-compras punto 12): la tabla del conteo en la tabla estándar, modo simple (se estira, se mueve y se recuerda;
@@ -18,7 +18,10 @@ import { TablaEstandar, usePreferenciasTabla } from '@/components/tabla';
 import type { ColumnaTabla } from '@/components/tabla';
 import { fechaLarga } from '@/lib/fechas-colombia';
 import { recargarTrasError } from '@/lib/avisos';
-import { recargaReponeLineas } from '@/lib/estados-compras';
+import { esConteoHeredado, guardarConteoEnSerie, leerCantidadConteo, peticionesConteo, recargaReponeLineas, textoFalloConteo } from '@/lib/estados-compras';
+// B4 T24 f3 (FINAL-C4-f, ruling 5): BODEGA cuenta con el PATCH por línea y confirma; COMPRAS ve el conteo en solo lectura; ADMIN ve todo.
+import { accesoRecepciones, accionesConteo } from '@/lib/roles';
+import { useRolActual } from '@/components/ui/useRolActual';
 
 // Un instante del API (la fecha de recepción) en el día de Colombia; lo vacío, '-'.
 const fDateLong = (iso: unknown) => fechaLarga(iso) || '-';
@@ -41,7 +44,7 @@ function CeldaRecibida({ l }: { l: LineaConteo }) {
       value={l.qty_recibida || ''}
       disabled={!control?.editable}
       aria-label={`Cantidad recibida de ${l.nombre}`}
-      onChange={(e) => control?.actualizar(l.idx, parseInt(e.target.value) || 0)}
+      onChange={(e) => control?.actualizar(l.idx, leerCantidadConteo(e.target.value))}
       className={`w-full bg-white border rounded-lg px-2 py-2 text-center font-black transition-colors disabled:bg-slate-100 disabled:text-slate-500 ${FOCO_DENTRO} ${
         hayDiferencia && l.qty_recibida !== 0 ? 'border-amber-400 text-amber-800' : 'border-slate-300 focus:border-emerald-500 text-emerald-700'
       }`}
@@ -108,7 +111,8 @@ function estadoInfo(estado: string, hasDiscrepancy: boolean) {
 
 export default function RecepcionDetallePage() {
   const params = useParams();
-  const { avisarError } = useAvisos();
+  const { avisar, avisarError } = useAvisos();
+  const rol = useRolActual();
   // TABLA-compras punto 12 (D40): un solo usePreferenciasTabla para la tabla del conteo.
   const prefsConteo = usePreferenciasTabla('compras.recepcion.conteo', COLUMNAS_CONTEO);
 
@@ -200,6 +204,11 @@ export default function RecepcionDetallePage() {
   }, []);
 
   const isEditable = data?.estado === 'BORRADOR';
+  // B4 T24 f3 (FINAL-C4-f): lo que ofrece el conteo según el rol (después de montar) y si la recepción es heredada (sin GRL).
+  const heredada = esConteoHeredado(items);
+  // r1 (C1): sin bodega receptora, BODEGA guarda el conteo pero no valida (no la puede elegir) y COMPRAS lee que la asigne.
+  const conteo = accionesConteo({ porConfirmar: isEditable, heredada, sinBodega: !data?.warehouse_id, rol });
+  const puedeBodega = isEditable && accesoRecepciones(rol).bodega;
 
   const updateReceived = useCallback((idx: number, val: number) => {
     if (!isEditable) return;
@@ -207,7 +216,7 @@ export default function RecepcionDetallePage() {
   }, [isEditable]);
   // La tabla del conteo (modo simple): las líneas con su posición y el control que leen las celdas editables.
   const lineas = useMemo<LineaConteo[]>(() => items.map((it, idx) => ({ ...it, idx })), [items]);
-  const control = useMemo<ControlConteo>(() => ({ editable: isEditable, actualizar: updateReceived }), [isEditable, updateReceived]);
+  const control = useMemo<ControlConteo>(() => ({ editable: conteo.contar, actualizar: updateReceived }), [conteo.contar, updateReceived]);
 
   // Bodega Receptora used to be read-only, showing warehouse_name straight
   // from the backend — which falls back to the SUPPLIER's name when the PEC
@@ -230,23 +239,39 @@ export default function RecepcionDetallePage() {
     }
   }
 
-  // Guarda el conteo actual de todas las lineas en un solo PATCH (batched-on-save).
-  // Devuelve true si se guardo correctamente, para que confirmarRecepcion() sepa
-  // si puede continuar.
+  // B4 T24 f3 (FINAL-C4-f, ruling 5): el conteo se guarda con el PATCH por línea (/compras/recepciones/{id}/lineas/{grl_id}, que BODEGA
+  // tiene), una petición por línea cambiada frente al servidor (peticionesConteo: la recibida, un entero, y rechazadas y cuarentena en 0,
+  // como el lote). La lib valida antes cada cantidad (un entero de 0 a 99.999.999). Una heredada (sin GRL) solo la cuenta ADMIN, con el
+  // PATCH en lote de siempre. Si una petición falla, se detiene, se avisa con el texto del servidor (también su 422) y, con la regla
+  // única (recargarTrasError), se recarga en silencio. Devuelve true si se guardó, para que validateConteo siga.
   async function guardarConteo(): Promise<boolean> {
-    if (!data?.id) return false;
+    if (!data?.id || !conteo.contar) return false;
+    const { error, peticiones } = peticionesConteo(data.productos, items);
+    if (error) { avisar(error, { tono: 'error' }); return false; }
     setSaving(true);
     try {
-      await apiFetch(`/compras/recepciones/${data.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          productos: items.map(i => ({ grl_id: i.grl_id, qty_recibida: Number(i.qty_recibida) || 0 })),
-        }),
-      });
+      if (heredada) {
+        await apiFetch(`/compras/recepciones/${data.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ productos: items.map(i => ({ grl_id: i.grl_id, qty_recibida: Number(i.qty_recibida) || 0 })) }),
+        });
+      } else {
+        // r1 (m22): en serie, en la lib (guardarConteoEnSerie): se detiene en la primera que falla; el aviso nombra esa línea y dice que
+        // las anteriores ya quedaron guardadas; con la regla única (recargarTrasError), se recarga.
+        const serie = await guardarConteoEnSerie(peticiones,
+          (p) => apiFetch(`/compras/recepciones/${data.id}/lineas/${p.grl_id}`, { method: 'PATCH', body: JSON.stringify(p.cuerpo) }));
+        if (serie.fallo) {
+          const nombre = items.find((i) => i.grl_id === serie.fallo?.grl_id)?.nombre;
+          avisarError(serie.fallo.error, textoFalloConteo(nombre, serie.guardadas));
+          if (recargarTrasError(serie.fallo.error)) await loadRecepcion({ silencioso: true });
+          return false;
+        }
+      }
       await loadRecepcion({ silencioso: true });
       return true;
     } catch (err: unknown) {
       avisarError(err, 'Error al guardar el conteo');
+      if (recargarTrasError(err)) await loadRecepcion({ silencioso: true });
       return false;
     } finally {
       setSaving(false);
@@ -254,7 +279,7 @@ export default function RecepcionDetallePage() {
   }
 
   async function validateConteo() {
-    if (!data?.id) return;
+    if (!data?.id || !conteo.validar) return;
     setConfirming(true);
     try {
       const saved = await guardarConteo();
@@ -328,18 +353,18 @@ export default function RecepcionDetallePage() {
         </div>
 
         <div className="flex items-center gap-3">
-          {isEditable ? (
-            <>
-              <Button variant="secondary" icon={Save} loading={saving} disabled={confirming} onClick={guardarConteo}>
-                Guardar Borrador
-              </Button>
-              <Button color="teal" icon={PackageCheck} loading={confirming} disabled={saving} onClick={validateConteo}>
-                Cerrar y Validar Conteo
-              </Button>
-            </>
-          ) : (
-            <span className="text-xs font-bold text-slate-400 px-3 py-2">Recepción no editable en este estado</span>
+          {conteo.contar && (
+            <Button variant="secondary" icon={Save} loading={saving} disabled={confirming} onClick={guardarConteo}>
+              Guardar Borrador
+            </Button>
           )}
+          {conteo.validar && (
+            <Button color="teal" icon={PackageCheck} loading={confirming} disabled={saving} onClick={validateConteo}>
+              Cerrar y Validar Conteo
+            </Button>
+          )}
+          {conteo.texto && <span role="status" className="text-xs font-bold text-slate-500 px-3 py-2">{conteo.texto}</span>}
+          {!isEditable && <span className="text-xs font-bold text-slate-400 px-3 py-2">Recepción no editable en este estado</span>}
         </div>
       </div>
 
@@ -408,7 +433,7 @@ export default function RecepcionDetallePage() {
 
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Bodega Receptora</label>
-                  {isEditable ? (
+                  {puedeBodega ? (
                     <select
                       value={data?.warehouse_id || ''}
                       disabled={savingWarehouse}
@@ -487,21 +512,21 @@ export default function RecepcionDetallePage() {
             </h3>
           </div>
 
-          <div className="xl:flex-1 xl:overflow-y-auto p-4 sm:p-6 custom-scrollbar bg-slate-50 space-y-6">
+          <div className={`xl:flex-1 xl:overflow-y-auto px-4 pt-4 sm:px-6 sm:pt-6 ${RESERVA_BOTON_IA} custom-scrollbar bg-slate-50 space-y-6`}>
 
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
               <label className="block text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">Estado Visual de la Carga</label>
               <div className="space-y-2">
                 <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="radio" name="estado_carga" className="text-emerald-600 focus:ring-emerald-500" defaultChecked disabled={!isEditable} />
+                  <input type="radio" name="estado_carga" className="text-emerald-600 focus:ring-emerald-500" defaultChecked disabled={!conteo.contar} />
                   <span className="text-sm font-bold text-slate-700">Óptimo (Sin daños visibles)</span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="radio" name="estado_carga" className="text-amber-600 focus:ring-amber-500" disabled={!isEditable} />
+                  <input type="radio" name="estado_carga" className="text-amber-600 focus:ring-amber-500" disabled={!conteo.contar} />
                   <span className="text-sm font-bold text-slate-700">Daños Menores (Empaques golpeados)</span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="radio" name="estado_carga" className="text-rose-600 focus:ring-rose-500" disabled={!isEditable} />
+                  <input type="radio" name="estado_carga" className="text-rose-600 focus:ring-rose-500" disabled={!conteo.contar} />
                   <span className="text-sm font-bold text-slate-700">Crítico (Mercancía expuesta/rota)</span>
                 </label>
               </div>
@@ -512,7 +537,7 @@ export default function RecepcionDetallePage() {
               <textarea
                 rows={4}
                 value={nota}
-                disabled={!isEditable}
+                disabled={!conteo.validar}
                 onChange={(e) => setNota(e.target.value)}
                 placeholder="Indique si el transportista dejó alguna novedad..."
                 className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none resize-none disabled:bg-slate-100 disabled:text-slate-400"

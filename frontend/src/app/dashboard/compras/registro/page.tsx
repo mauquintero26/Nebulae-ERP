@@ -4,6 +4,8 @@ import { useState } from 'react';
 import { ShoppingBag, UploadCloud, Plus, Save, Trash2, Camera, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { SubNav, PageHeader, Button } from '@/components/ui';
 import { COMP_NAV } from '../comp-nav';
+// B4 T24 f3 (F44-a): la reserva del botón de la IA (la esquina inferior derecha).
+import { RESERVA_BOTON_IA } from '@/lib/design-system';
 
 export default function ComprasRegistroPage() {
   const [isOcrLoading, setIsOcrLoading] = useState(false);
@@ -127,7 +129,7 @@ export default function ComprasRegistroPage() {
     <div className="w-full h-full flex flex-col">
       <SubNav label="Hub de Compras" items={COMP_NAV} currentPath="/dashboard/compras/registro" color="purple" hub={{ href: '/dashboard/compras' }} />
 
-      <div className="flex flex-col gap-6 w-full p-6 pb-10">
+      <div className={`flex flex-col gap-6 w-full p-6 ${RESERVA_BOTON_IA}`}>
         <PageHeader
           icon={Camera} color="purple"
           title="Registro de Compras"

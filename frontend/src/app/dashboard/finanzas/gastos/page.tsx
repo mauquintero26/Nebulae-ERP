@@ -105,7 +105,7 @@ export default function GastosPage() {
     ruta: '/finance/expenses', estado, esperar: !listo || !acceso.listo, despachar, activo: !enKanban && acceso.gastos, extra: extraLista,
   });
 
-  // Los conteos por categoría ({categoría: n}, con la búsqueda y sin la categoría): las columnas del tablero y las opciones del filtro.
+  // Los conteos por categoría ({categoría: n}, con la búsqueda y el tipo, sin la categoría): las columnas del tablero y las opciones del filtro.
   // Se piden aparte porque en Kanban la lista no se pide. Un error o una recarga no borran lo último que llegó.
   const urlConteos = urlConteosGastos(estado, filtros);
   const [vueltaConteos, setVueltaConteos] = useState(0);
