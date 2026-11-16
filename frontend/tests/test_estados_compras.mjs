@@ -2734,7 +2734,8 @@ console.log('--- TEST 45 (B4 T18, TABLA-inventario punto 7; KANBAN-resto; RP47 a
   // se lee con estadoReintento; los dos se EJECUTAN en el bloque de r1. Aquí, el cableado.
   const efecto = /const enlaceAtendido = useRef[^\n]*\n([\s\S]*?)\}\), \[idDeLaUrl, skuDeLaUrl, avisar, vueltaEnlace\]\);/.exec(p)?.[1] ?? '';
   assert.match(efecto, /useEffect\(\(\) => abrirEnlaceProducto\(\{\s*marca: enlaceAtendido, idDeLaUrl, skuDeLaUrl, pedir: _apiFetch,/);
-  assert.match(efecto, /alError: \(error\) => setEnlace\(\{ vuelta: vueltaEnlace, error \}\),/);
+  // f4 r1 (R2-m3; D27): alError guarda con cargaConError (lib, sus casos en el bloque de r1): la misma carga si no cambió.
+  assert.match(efecto, /alError: \(error\) => setEnlace\(\(actual\) => cargaConError\(actual, vueltaEnlace, error\)\),/);
   trae(p, 'const cargaEnlace = estadoReintento(enlace, vueltaEnlace);');
   trae(p, '<AvisoDeError error={cargaEnlace.error} fallo="No se pudo abrir el producto del enlace" acento="purple" reintentando={cargaEnlace.reintentando}', 'el error del enlace, a la vista');
   // f4 (m3 = m9 de f3 r3; D27): y un 403 o el «no existe» llevan el foco a la lista (destinoFoco).
@@ -3893,6 +3894,17 @@ console.log('--- B4 T24 f3 r1 (m6, m18, m22, m25, m31, m36, m40, m43): Nuevo Cas
   assert.deepEqual(estadoReintento({ vuelta: 0, error: e500 }, 1), { cargando: true, error: e500, reintentando: true, ofrecer: true }, 'reintentando: el error se conserva (el aviso sigue montado)');
   assert.equal(estadoReintento({ vuelta: 0, error: e403 }, 0).ofrecer, false, 'un 403 no ofrece «Reintentar»');
   assert.equal(estadoReintento(null, 0).cargando, true);
+  // f4 r1 (R2-m3): lo que guarda alError: la MISMA carga si no cambió (el setState no vuelve a pintar), si no, una nueva.
+  const { cargaConError } = ec;
+  assert.equal(typeof cargaConError, 'function', 'cargaConError existe');
+  const quieta = { vuelta: 2, error: null };
+  assert.equal(cargaConError(quieta, 2, null), quieta, 'el alError(null) de cada efecto sin enlace: el mismo objeto');
+  const conFalla = { vuelta: 2, error: e500 };
+  assert.equal(cargaConError(conFalla, 2, e500), conFalla, 'el mismo error de la misma vuelta: el mismo objeto');
+  assert.deepEqual(cargaConError(quieta, 3, null), { vuelta: 3, error: null }, 'otra vuelta: una nueva');
+  assert.deepEqual(cargaConError(quieta, 2, e500), { vuelta: 2, error: e500 }, 'otro error: una nueva');
+  assert.deepEqual(cargaConError(conFalla, 2, null), { vuelta: 2, error: null }, 'el reintento salió bien: una nueva');
+  assert.deepEqual(cargaConError(null, 0, null), { vuelta: 0, error: null }, 'sin carga: una nueva');
   // m22: la serie del PATCH por línea se detiene en la primera que falla; el aviso nombra la línea y dice cuántas quedaron guardadas.
   const enviadas = [];
   const serie = await guardarConteoEnSerie([{ grl_id: 1, cuerpo: 'a' }, { grl_id: 2, cuerpo: 'b' }, { grl_id: 3, cuerpo: 'c' }], async (p) => {
@@ -4112,7 +4124,8 @@ console.log('--- B4 T24 f3 r2 (F81 en el hook, m36 completo, m20): la vuelta de 
   assert.equal(focoTrasReintento({ teniaFoco: true, hayBoton: false }), 'destino', 'salió bien (el aviso se va) o un 403 (sin botón): al destino VISIBLE (r3, D27)');
   assert.equal(focoTrasReintento({ teniaFoco: false, hayBoton: false }), null, 'si el botón no tenía el foco, nada');
   assert.equal(focoTrasReintento({ teniaFoco: false, hayBoton: true }), null);
-  // El cableado: AvisoDeError con regionFoco (aditivo) vive en una región tabindex=-1 montada siempre, y el botón avisa al irse.
+  // El cableado: AvisoDeError con destinoFoco (antes regionFoco; aditivo): el botón avisa al irse y el foco va al destino por su id
+  // (f4 r1, R2-m2: sin la región tabindex=-1 de r2, que r3 quitó).
   const pieza = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(pieza, /return \(\) => alSoltarBoton\(document\.activeElement === nodo\);/, 'el ref con limpieza mira si el botón tenía el foco');
   // B4 T24 f4 (m2 + m10 de f3 r3; D27): el destino se busca por su id (destinoFoco → getElementById), no por el texto del aria-label.
@@ -4255,7 +4268,13 @@ console.log('--- B4 T24 f3 r3 (C1 = C3, C2 = C4, C, m4, m6, m9, m11): el aviso n
   assert.deepEqual(avisoVisible({ error: null, ultimo: e500, reintentando: true }), { visto: e500, olvidar: false }, 'sin cuentas (aditivo): como antes');
   {
     const piezaCuenta = readFileSync(new URL('../src/components/ui/AvisoFuente.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-    assert.match(piezaCuenta, /const cuenta = usuarioDeLaSesion\(\);/);
+    // f4 r1 (R2-m2; D27): la cuenta se lee de lib (usuarioDelToken(getToken()) con su try/catch), sin el interno de components/tabla.
+    assert.match(piezaCuenta, /const cuenta = cuentaDeLaSesion\(\);/);
+    assert.ok(!/from '@\/components\/tabla/.test(piezaCuenta) && !piezaCuenta.includes('usuarioDeLaSesion'), 'R2-m2: AvisoFuente no importa de components/tabla');
+    assert.match(piezaCuenta, /import \{ getToken \} from '@\/lib\/api';/);
+    assert.match(piezaCuenta, /import \{ usuarioDelToken \} from '@\/lib\/preferencias';/);
+    assert.match(piezaCuenta, /function cuentaDeLaSesion\(\): number \| null \{\s*try \{\s*return usuarioDelToken\(getToken\(\)\);\s*\} catch \{\s*return null;\s*\}\s*\}/,
+      'R2-m2: el token ilegible (o localStorage bloqueado) da null, no rompe el aviso');
     assert.match(piezaCuenta, /avisoVisible\(\{ error, ultimo, reintentando, cuenta, cuentaDelUltimo \}\)/);
     assert.match(piezaCuenta, /if \(error != null && \(error !== ultimo \|\| cuenta !== cuentaDelUltimo\)\) \{\s*setUltimo\(error\);\s*setCuentaDelUltimo\(cuenta\);\s*\}/);
   }
