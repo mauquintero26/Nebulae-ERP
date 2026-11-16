@@ -13,7 +13,7 @@ import { AvisoFuente } from '@/components/ui/AvisoFuente';
 import { useRolActual } from '@/components/ui/useRolActual';
 import { CRM_NAV } from '../crm-nav';
 import { accesoSeguimientos, TEXTO_SIN_LEADS } from '@/lib/roles';
-import { CAJA_SIN_PERMISO } from '@/lib/design-system';
+import { CAJA_SIN_PERMISO, RESERVA_BOTON_IA } from '@/lib/design-system';
 import { avisoDeFuente, estadoFranjaDeFuente, motivoSinPermiso } from '@/lib/avisos';
 import { formatoEntero, lecturaDeFuente, textoLimiteCarritos } from '@/lib/kpis';
 import {
@@ -84,7 +84,7 @@ export default function SeguimientosPage() {
         </div>
       )}
 
-      <div className="p-8 max-w-[1600px] mx-auto space-y-6">
+      <div className={`px-8 pt-8 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto space-y-6`}>
 
         {/* Header */}
         <PageHeader icon={Phone} color="indigo"

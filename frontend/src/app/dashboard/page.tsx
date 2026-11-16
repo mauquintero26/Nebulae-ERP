@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
-import { FOCOS } from '@/lib/design-system';
+import { FOCOS, RESERVA_BOTON_IA } from '@/lib/design-system';
 import { avisoDeFuente } from '@/lib/avisos';
 import { accesoCopilot } from '@/lib/roles';
 import { useRolActual } from '@/components/ui/useRolActual';
@@ -172,7 +172,7 @@ export default function DashboardGeneral() {
   }).format(new Date());
 
   return (
-    <div className="w-full shrink-0 bg-slate-50 min-h-screen pb-24 animate-in fade-in custom-scrollbar">
+    <div className={`w-full shrink-0 bg-slate-50 min-h-screen ${RESERVA_BOTON_IA} animate-in fade-in custom-scrollbar`}>
       
       {/* 1. Radar de Alertas Operativas */}
       {/* El radar cuenta los pedidos pendientes de compra de /ventas/stats (la pestaña «Pend. Compra» de Pedidos de venta), no

@@ -1719,4 +1719,32 @@ console.log('--- B4 T24 f3 (F44-a): Compras e Inventario reservan la esquina del
   }
 }
 
+console.log('--- B4 T24 f4 (F44-a): las otras pantallas (Dashboard, Marketing, Asistente, Seguimientos, Finanzas…) reservan la esquina del botón de la IA ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/app/dashboard/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const CON_RESERVA = {
+    'page.tsx': '<div className={`w-full shrink-0 bg-slate-50 min-h-screen ${RESERVA_BOTON_IA} animate-in fade-in custom-scrollbar`}>',
+    'marketing/page.tsx': '<div className={`w-full bg-slate-50 flex flex-col px-8 pt-8 ${RESERVA_BOTON_IA} min-h-max animate-in fade-in custom-scrollbar`}>',
+    'asistente_omnicanal/page.tsx': '<div className={`flex-1 overflow-y-auto p-4 ${RESERVA_BOTON_IA} space-y-4`}>',
+    'crm/calendario/page.tsx': '<div className={`px-8 pt-8 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto space-y-6`}>',
+    'finanzas/resumen/page.tsx': '<div className={`px-4 xl:px-8 pt-6 ${RESERVA_BOTON_IA} max-w-[1600px] mx-auto w-full min-w-0 space-y-6`}>',
+    'agenda/page.tsx': '${RESERVA_BOTON_IA} overflow-y-auto',
+    'crm/page.tsx': '<div className={`flex-1 min-h-0 overflow-y-auto p-5 ${RESERVA_BOTON_IA}`}>',
+    'marketing/campanas/page.tsx': '<div className={`flex-1 md:overflow-y-auto p-6 ${RESERVA_BOTON_IA}`}>',
+    'finanzas/gastos/page.tsx': 'CONTENEDOR',
+    'ecommerce/page.tsx': '<div className={CONTENEDOR}>',
+  };
+  for (const [ruta, trozo] of Object.entries(CON_RESERVA)) {
+    const f = leer(ruta);
+    assert.ok(f.includes(trozo), `${ruta}: la reserva`);
+    if (trozo.includes('RESERVA_BOTON_IA')) assert.match(f, /^import \{[^}]*\bRESERVA_BOTON_IA\b[^}]*\} from '@\/lib\/design-system';/m, `${ruta}: importa el token`);
+  }
+  // Ningún pb-24, pb-20 ni pb-10 escrito a mano (en el código; los comentarios no cuentan) en las pantallas de f4.
+  const sueltos = Object.keys(CON_RESERVA).filter((ruta) => {
+    const codigo = leer(ruta).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '');
+    return /["'`\s]pb-(?:10|20|24)["'`\s]/.test(codigo);
+  });
+  assert.deepEqual(sueltos, [], 'sin pb-24, pb-20 ni pb-10 literales en las otras pantallas');
+}
+
 console.log('OK test_listas_ventas.mjs');

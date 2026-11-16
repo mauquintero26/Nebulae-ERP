@@ -13,7 +13,7 @@ import { useRolActual } from '@/components/ui/useRolActual';
 import { accesoMarketing } from '@/lib/roles';
 import { avisoDeFuente, estadoFranjaDeFuente, motivoSinPermiso } from '@/lib/avisos';
 import { datosDeRespuesta, lecturaDeFuente, tarjetasMarketing } from '@/lib/kpis';
-import { CAJA_SIN_PERMISO } from '@/lib/design-system';
+import { CAJA_SIN_PERMISO, RESERVA_BOTON_IA } from '@/lib/design-system';
 
 /** Lo último que llegó de /marketing/stats: la vuelta con la que se pidió, sus datos y su error (lecturaDeFuente). */
 type Cargado = { vuelta: number; datos: Record<string, unknown> | null; error: unknown };
@@ -53,7 +53,7 @@ export default function MarketingDashboard() {
   ];
 
   return (
-    <div className="w-full bg-slate-50 flex flex-col px-8 py-8 min-h-max animate-in fade-in custom-scrollbar">
+    <div className={`w-full bg-slate-50 flex flex-col px-8 pt-8 ${RESERVA_BOTON_IA} min-h-max animate-in fade-in custom-scrollbar`}>
       <div className="mb-10">
         <PageHeader icon={Megaphone} color="purple"
           title="Centro de Marketing & Crecimiento"
@@ -85,7 +85,7 @@ export default function MarketingDashboard() {
         <BarChart3 className="text-slate-400" size={20} /> Entornos de Marketing
       </h2>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 pb-10">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {MODULES.map((mod, idx) => (
           <Link key={idx} href={mod.path} className="group bg-white border border-slate-200 rounded-2xl p-6 hover:shadow-md hover:border-slate-300 transition-all cursor-pointer relative overflow-hidden flex flex-col">
             <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-5 border transition-transform group-hover:scale-110 ${mod.color}`}>

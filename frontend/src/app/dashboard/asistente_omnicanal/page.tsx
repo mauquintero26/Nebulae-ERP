@@ -14,7 +14,7 @@ import { avisoDeFuente, textoDeError } from '@/lib/avisos';
 import { fichaRevenueAsistente, vistaContexto } from '@/lib/kpis';
 import { clasesDeEstadoPedido } from '@/lib/estados-pedido';
 import { formatoPesos } from '@/lib/pesos';
-import { CAJA_SIN_PERMISO } from '@/lib/design-system';
+import { CAJA_SIN_PERMISO, RESERVA_BOTON_IA } from '@/lib/design-system';
 // Mismo modal de cliente nuevo y el mismo bloque de Tipo/Modalidad/campos por
 // tipo que usa la Solicitud de Cliente real (/dashboard/ventas/solicitud) --
 // se reutilizan tal cual para que "Crear Solicitud de Cliente" dispare
@@ -458,7 +458,7 @@ export default function AsistenteOmnicanal() {
             )}
 
             {/* CUERPO DEL CONTEXTO (SCROLLABLE) */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div className={`flex-1 overflow-y-auto p-4 ${RESERVA_BOTON_IA} space-y-4`}>
 
               {vista === 'error' && avisoContexto && (
                 <AvisoFuente aviso={avisoContexto} onReintentar={() => loadCustomerContext(errorContexto!.pedido)} />
