@@ -13,7 +13,7 @@ from app.models.users import User
 # (erp_ventas.py), como en erp_compras.py: se importan, no se copian (para la revisión final: deberían vivir en
 # core/listados.py). erp_ventas no importa este módulo al cargarse, así que no hay ciclo.
 from app.api.v1.erp_ventas import _busqueda_de_lista, _parametro_de_lista, _valor_sin_control
-from app.core.analisis_inventario import ENTRADAS_KARDEX, SALIDAS_KARDEX
+from app.core.movimientos_inventario import ENTRADAS_KARDEX, SALIDAS_KARDEX
 from app.core.estados_compras import GRUPOS_OPERACION
 from app.core.fechas import iso_z
 from app.core.listados import (MAX_OFFSET, contar_por_vista, filtrar_por_estados, leer_lista, leer_orden,

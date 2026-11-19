@@ -15,6 +15,7 @@ propia bodega y sus SKU y pide bodega=<id>, para que no la afecte el stock de er
 movimientos en erp_test.
 """
 import uuid
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 from app.core.analisis import (CLAVES_ANALISIS, CLAVES_BARRAS, CLAVES_DONA, CLAVES_FILA_RANKING, CLAVES_KPI,
@@ -210,9 +211,36 @@ def test_movimiento_sin_direccion(app_client, db, admin_token, product):
     f.mov(a, "IN", 9, _utc(2000, 12, 20, 12))    # fuera de las dos ventanas: tampoco cuenta en el aviso
     f.mov(a, None, 9, _utc(2000, 12, 25, 12))    # en el anterior: el aviso es del período
     data = _analisis(app_client, admin_token, bodega=f.w.id)
-    assert data["avisos"] == ["3 movimientos sin dirección no se cuentan"]
-    assert _serie(data["linea"], "actual")["valores"] == [0] + [3_000] * 9
-    assert (_kpis(data)["entradas"]["valor"], _kpis(data)["salidas"]["valor"]) == (3, 0)
+    # B4.1 (P16): SCRAP es una salida: ya no va en el aviso, resta 1 × 1.000 desde el día 5 (el cierre queda en 3.000, así que antes valía 4.000) y cuenta en las salidas
+    assert data["avisos"] == ["2 movimientos sin dirección no se cuentan"]
+    assert _serie(data["linea"], "actual")["valores"] == [1_000] + [4_000] * 3 + [3_000] * 6
+    assert (_kpis(data)["entradas"]["valor"], _kpis(data)["salidas"]["valor"]) == (3, 1)
+
+
+# ─── B4.1 (P16, B33): las direcciones en un solo módulo; SCRAP sale y RETURN_IN entra ───────────────────────────────
+
+def test_las_direcciones_viven_en_movimientos_inventario():
+    from app.core import analisis_inventario as ai, movimientos_inventario as mi
+    assert mi.ENTRADAS_KARDEX == ("IN", "ADJUST_IN", "TRANSFER_IN", "RETURN_IN")
+    assert mi.SALIDAS_KARDEX == ("OUT", "ADJUST_OUT", "TRANSFER_OUT", "SCRAP")
+    assert set(mi.DIRECCIONES_KARDEX) == {"IN", "OUT", "ADJUST_IN", "ADJUST_OUT", "TRANSFER_IN", "TRANSFER_OUT",
+                                          "QUARANTINE", "SCRAP", "RETURN_IN"}
+    assert ai.ENTRADAS_KARDEX is mi.ENTRADAS_KARDEX and ai.DIRECCIONES_KARDEX is mi.DIRECCIONES_KARDEX
+    assert ai.ENTRADAS == ("IN", "ADJUST_IN", "RETURN_IN") and ai.SALIDAS == ("OUT", "ADJUST_OUT", "SCRAP")
+    assert "ENTRADAS_KARDEX = (" not in Path(ai.__file__).read_text(encoding="utf-8")   # B33: una sola definición
+
+
+def test_scrap_es_salida_y_return_in_es_entrada(app_client, db, admin_token, product):
+    f = _Fabrica(db, product)
+    a = f.sku(costo=1_000, nivel=3)
+    f.mov(a, "RETURN_IN", 2, _utc(2001, 1, 2, 12))
+    f.mov(a, "SCRAP", 1, _utc(2001, 1, 3, 12))
+    data = _analisis(app_client, admin_token, bodega=f.w.id)
+    k = _kpis(data)
+    assert (k["entradas"]["valor"], k["salidas"]["valor"]) == (2, 1)
+    assert "devoluciones de clientes" in k["entradas"]["ayuda"] and "pérdidas" in k["salidas"]["ayuda"]
+    # H10: los últimos movimientos los titulan (sin KeyError)
+    assert {fila["titulo"] for fila in data["movimientos"]["filas"]} >= {"Pérdida", "Devolución"}
 
 
 # ─── 4) El día de Colombia con timestamptz ───────────────────────────────────────────────────────────────────────────
@@ -410,7 +438,7 @@ def test_claves_exactas(app_client, db, admin_token, product):
     assert all(set(k) == CLAVES_KPI for k in data["kpis"])
     k = _kpis(data)
     assert [(k[c]["formato"], k[c]["mejor"], k[c]["es_foto"]) for c in KPIS] == [
-        ("pesos", "sube", False), ("unidades", "sube", False), ("unidades", "neutro", False), ("entero", "baja", True)]
+        ("pesos", "neutro", False), ("unidades", "neutro", False), ("unidades", "neutro", False), ("entero", "baja", True)]
     assert [k[c]["etiqueta"] for c in KPIS] == ["Valor del inventario", "Entradas", "Salidas", "Referencias agotadas"]
     assert all(k[c]["ayuda"] for c in KPIS)
     assert "costo de hoy" in k["valor_inventario"]["ayuda"]

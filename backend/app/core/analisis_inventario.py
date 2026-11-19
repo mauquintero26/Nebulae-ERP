@@ -28,7 +28,7 @@ analisis_inventario(db, periodo, top, bodega=None) arma el contrato único con a
 agregadas (R13), sin importar cuántos movimientos o referencias haya.
 
 ENTRADAS_KARDEX, SALIDAS_KARDEX y DIRECCIONES_KARDEX son las direcciones de los movimientos (R11: el tablero del Kardex,
-Entradas = IN, ADJUST_IN, TRANSFER_IN · Salidas = OUT, ADJUST_OUT, TRANSFER_OUT; get_kardex valida su CSV contra
+Entradas = IN, ADJUST_IN, TRANSFER_IN, RETURN_IN · Salidas = OUT, ADJUST_OUT, TRANSFER_OUT, SCRAP; get_kardex valida su CSV contra
 DIRECCIONES_KARDEX, los valores que escribe el sistema, y list_inventory_operations toma de aquí su 'direccion').
 
 Errores: un top que no vale lanza ValueError (el endpoint responde 422 con str(e), R21); un error del contrato es
@@ -47,6 +47,8 @@ from app.core.analisis import (_numero, claves_cubetas, dinero, expr_cubeta, kpi
 from app.core.analisis_ventas import _barras_por_fecha, _dona, _pct
 from app.core.existencias import ESTADOS_STOCK, consulta_existencias, resumen_existencias
 from app.core.fechas import iso_z
+from app.core.movimientos_inventario import (DIRECCIONES_KARDEX, ENTRADAS_ANALISIS, ENTRADAS_KARDEX,  # noqa: F401
+                                              SALIDAS_ANALISIS, SALIDAS_KARDEX)
 from app.core.periodos import Periodo, en_rango, resolver_periodo
 from app.core.ventas_dinero import pesos
 from app.models.catalog import Product, ProductSKU, ProductWebListing
@@ -54,19 +56,15 @@ from app.models.inventory import InventoryMovement, InventoryOperation, Warehous
 
 # ─── Direcciones de los movimientos (R11, RP54) ─────────────────────────────────────────────────────────────────────
 
-ENTRADAS_KARDEX = ("IN", "ADJUST_IN", "TRANSFER_IN")
-SALIDAS_KARDEX = ("OUT", "ADJUST_OUT", "TRANSFER_OUT")
-# Todas las que escribe el sistema: las de entrada y salida, la cuarentena de una recepción (erp_compras), la pérdida o
-# destrucción (SCRAP) y la devolución del cliente (RETURN_IN) de erp_ventas_fase4. Un movimiento también puede no tener.
-DIRECCIONES_KARDEX = ENTRADAS_KARDEX + SALIDAS_KARDEX + ("QUARANTINE", "SCRAP", "RETURN_IN")
-
-ENTRADAS = ("IN", "ADJUST_IN")
-SALIDAS = ("OUT", "ADJUST_OUT")
+# Las direcciones viven en core/movimientos_inventario (B33); aquí se importan.
+ENTRADAS = ENTRADAS_ANALISIS
+SALIDAS = SALIDAS_ANALISIS
 TRASLADO_ENTRA = "TRANSFER_IN"
 TRASLADO_SALE = "TRANSFER_OUT"
 DIRECCIONES_QUE_CUENTAN = ENTRADAS_KARDEX + SALIDAS_KARDEX   # las demás (y las nulas) van en el aviso
 TITULOS = {"IN": "Entrada", "OUT": "Salida", "ADJUST_IN": "Ajuste de entrada", "ADJUST_OUT": "Ajuste de salida",
-           TRASLADO_ENTRA: "Traslado", TRASLADO_SALE: "Traslado"}
+           TRASLADO_ENTRA: "Traslado", TRASLADO_SALE: "Traslado",
+           "SCRAP": "Pérdida", "RETURN_IN": "Devolución"}
 
 TOP_POR_DEFECTO = 5
 MAX_MOVIMIENTOS = 8              # MAX_MOVIMIENTOS de lib/analisis.js
@@ -78,7 +76,7 @@ _AGOTADO = ESTADOS_STOCK[0]
 
 
 def direcciones_que_cuentan(bodega=None) -> tuple:
-    """(entradas, salidas) del Análisis: IN y ADJUST_IN contra OUT y ADJUST_OUT; con una bodega, también los traslados que
+    """(entradas, salidas) del Análisis: IN, ADJUST_IN y RETURN_IN contra OUT, ADJUST_OUT y SCRAP; con una bodega, también los traslados que
     entran a ella (TRANSFER_IN) o salen de ella (TRANSFER_OUT)."""
     if bodega is None:
         return ENTRADAS, SALIDAS
@@ -316,15 +314,15 @@ def analisis_inventario(db: Session, periodo: Periodo, top=TOP_POR_DEFECTO, bode
     dona_categoria, sin_costo = _dona_por_categoria(db, bodega)
     e, s = cifras["entradas"], cifras["salidas"]
     kpis = [
-        kpi("valor_inventario", "Valor del inventario", valor_final, valor_anterior, "pesos", "sube",
+        kpi("valor_inventario", "Valor del inventario", valor_final, valor_anterior, "pesos", "neutro",
             ayuda="Unidades en bodega por el costo de compra de cada referencia, al cierre del período. Los días "
                   "anteriores se reconstruyen con los movimientos del kardex al costo de hoy."),
-        kpi("entradas", "Entradas", e["actual"], e["anterior"], "unidades", "sube",
-            ayuda="Unidades que entraron en el período: entradas y ajustes de entrada (con una bodega, también los "
-                  "traslados que llegan a ella)."),
+        kpi("entradas", "Entradas", e["actual"], e["anterior"], "unidades", "neutro",
+            ayuda="Unidades que entraron en el período: entradas, ajustes de entrada y devoluciones de clientes (con "
+                  "una bodega, también los traslados que llegan a ella)."),
         kpi("salidas", "Salidas", s["actual"], s["anterior"], "unidades", "neutro",
-            ayuda="Unidades que salieron en el período: salidas y ajustes de salida (con una bodega, también los "
-                  "traslados que salen de ella)."),
+            ayuda="Unidades que salieron en el período: salidas, ajustes de salida y pérdidas (con una bodega, también "
+                  "los traslados que salen de ella)."),
         kpi("referencias_agotadas", "Referencias agotadas", _agotadas(db, bodega, salidas), None, "entero", "baja",
             es_foto=True,
             ayuda="Referencias sin unidades disponibles hoy que tuvieron salidas en los últimos 90 días."),
