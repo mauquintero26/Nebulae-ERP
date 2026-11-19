@@ -89,8 +89,33 @@ def _lectura_canonica() -> bool:
     return os.environ.get("CATALOGO_LECTURA", "legacy") == "canonico"
 
 
-def _es_id_canonico(product_id: int) -> bool:
-    return _lectura_canonica() and product_id > 0
+# B4.1 (A1-b): el PATCH o el DELETE de una fila SKU de la rama heredada (no tiene ficha web que editar).
+TEXTO_FILA_DEL_ERP = "Ese producto no se puede editar desde el catálogo de la tienda."
+
+
+def _destino_de_escritura(product_id: int) -> tuple[str, int]:
+    """B4.1 (A1-b): adónde escriben PATCH y DELETE /catalogo/{id}, con el esquema de ids de la lista (el mismo en las dos
+    ramas: una fila de ecommerce_products lleva su id, > 0; un SKU del ERP, -product_skus.id, < 0). Sin abs(): antes, en
+    la rama heredada, el -n de una fila SKU escribía en la fila n de ecommerce_products, que es otro producto.
+    - id > 0, en las dos ramas: ("tienda", id), la fila de ecommerce_products con ese id;
+    - id < 0 en la canónica: ("sku", -id), la ficha web (ProductWebListing) de ese SKU;
+    - id < 0 en la heredada: 404 TEXTO_FILA_DEL_ERP (una fila SKU heredada no tiene ficha que editar);
+    - 0: 404 «Producto no encontrado»."""
+    if product_id > 0:
+        return ("tienda", product_id)
+    if product_id < 0:
+        if _lectura_canonica():
+            return ("sku", -product_id)
+        raise HTTPException(404, TEXTO_FILA_DEL_ERP)
+    raise HTTPException(404, "Producto no encontrado")
+
+
+def _bloquear_fila_de_la_tienda(db: Session, product_id: int) -> None:
+    """B4.1 (A1-b): la fila `product_id` de ecommerce_products, con FOR UPDATE, ANTES de cualquier UPDATE o DELETE; si no
+    existe, 404 «Producto no encontrado» sin escribir (antes, un id que no existía respondía 200 sin hacer nada)."""
+    fila = db.execute(text("SELECT id FROM ecommerce_products WHERE id = :id FOR UPDATE"), {"id": product_id}).first()
+    if fila is None:
+        raise HTTPException(404, "Producto no encontrado")
 
 
 def _upsert_espejo_ecommerce_products(db: Session, canon_sku: ProductSKU, listing: ProductWebListing) -> None:
@@ -225,7 +250,7 @@ def _serialize_catalogo_item_canonico(db: Session, canon_sku: ProductSKU) -> dic
         for av in canon_sku.attribute_values
     ]
     return {
-        "id": canon_sku.id,
+        "id": -canon_sku.id,   # B4.1 (A1-b): un SKU del ERP lleva -product_skus.id
         "nombre": prod.name if prod else canon_sku.sku,
         "descripcion": (prod.description if prod else "") or "",
         "sku": canon_sku.sku,
@@ -249,6 +274,7 @@ def _serialize_catalogo_item_canonico(db: Session, canon_sku: ProductSKU) -> dic
         "created_at": listing.created_at.isoformat() if listing and listing.created_at else None,
         "updated_at": listing.updated_at.isoformat() if listing and listing.updated_at else None,
         "is_low_stock": real_stock <= alerta_min,
+        "editable_en_tienda": True,   # B4.1 (A1-b): en la canónica se edita su ficha web
     }
 
 
@@ -265,7 +291,7 @@ def _serialize_catalogo_item_huerfano(r) -> dict:
     alerta_min = r[16] or 5
     modalidad = "ENTREGA_INMEDIATA" if stock_disp > 0 else "POR_PEDIDO"
     return {
-        "id": -r[0],
+        "id": r[0],   # B4.1 (A1-b): una fila de ecommerce_products lleva su id (antes, en la canónica, -id)
         "nombre": r[1],
         "descripcion": r[2],
         "sku": r[3],
@@ -289,6 +315,7 @@ def _serialize_catalogo_item_huerfano(r) -> dict:
         "created_at": r[20].isoformat() if r[20] else None,
         "updated_at": r[21].isoformat() if r[21] else None,
         "is_low_stock": stock_disp <= alerta_min,
+        "editable_en_tienda": True,   # B4.1 (A1-b)
     }
 
 
@@ -499,23 +526,49 @@ def _detalle_segun_sesion(db: Session, data: dict, con_sesion: bool) -> dict:
     return data
 
 
+_CLAVES_DETALLE_ECOMMERCE_PRODUCTS = ["id", "nombre", "descripcion", "descripcion_larga", "sku", "precio_venta",
+                                      "precio_comparacion", "descuento_pct", "impuesto_pct", "categoria", "sub_categoria",
+                                      "marca", "tipo_producto", "imagenes", "atributos", "variantes", "stock_disponible",
+                                      "alerta_stock_minimo", "publicado_web", "rastrear_inventario", "codigo_aduana",
+                                      "peso_kg", "notas_internas", "seo_titulo", "seo_descripcion", "seo_keywords",
+                                      "created_at", "updated_at", "created_by"]
+
+
+def _fila_de_ecommerce_products(db: Session, product_id: int):
+    """La fila `product_id` de ecommerce_products (SELECT *, en el orden de _CLAVES_DETALLE_ECOMMERCE_PRODUCTS), o 404."""
+    row = db.execute(text("SELECT * FROM ecommerce_products WHERE id=:id"), {"id": product_id}).fetchone()
+    if not row:
+        raise HTTPException(404, "Producto no encontrado")
+    return row
+
+
+def _detalle_de_ecommerce_products(row) -> dict:
+    """El detalle de una fila de ecommerce_products como lo sirven las dos ramas: sus columnas, con su id y las fechas en
+    ISO (B4.1: una sola copia; antes estaba en la rama heredada y en la canónica)."""
+    data = dict(zip(_CLAVES_DETALLE_ECOMMERCE_PRODUCTS, row))
+    for k in ["created_at", "updated_at"]:
+        if data.get(k) and hasattr(data[k], "isoformat"):
+            data[k] = data[k].isoformat()
+    return data
+
+
 def _get_catalogo_product_canonico(db: Session, product_id: int, con_sesion: bool = True) -> dict:
-    if product_id > 0:
-        canon_sku = db.query(ProductSKU).filter(ProductSKU.id == product_id).first()
+    """B4.1 (A1-b), el detalle canónico: id < 0 → el SKU -id; id > 0 → la fila de ecommerce_products con ese id o, si es el
+    espejo de un SKU del ERP (su sku es el de un ProductSKU), el detalle canónico de ese SKU (id = -sku.id): así las URL de
+    hoy de la rama heredada siguen abriendo tras el corte a canónico; 0 → 404."""
+    if product_id < 0:
+        canon_sku = db.query(ProductSKU).filter(ProductSKU.id == -product_id).first()
         if not canon_sku:
             raise HTTPException(404, "Producto no encontrado")
         data = _serialize_catalogo_item_detalle_canonico(db, canon_sku)
+    elif product_id > 0:
+        row = _fila_de_ecommerce_products(db, product_id)
+        data = _detalle_de_ecommerce_products(row)
+        canon_sku = db.query(ProductSKU).filter(ProductSKU.sku == data["sku"]).first() if data.get("sku") else None
+        if canon_sku is not None:
+            data = _serialize_catalogo_item_detalle_canonico(db, canon_sku)
     else:
-        row = db.execute(text("SELECT * FROM ecommerce_products WHERE id=:id"), {"id": -product_id}).fetchone()
-        if not row:
-            raise HTTPException(404, "Producto no encontrado")
-        keys = ["id","nombre","descripcion","descripcion_larga","sku","precio_venta","precio_comparacion","descuento_pct","impuesto_pct","categoria","sub_categoria","marca","tipo_producto","imagenes","atributos","variantes","stock_disponible","alerta_stock_minimo","publicado_web","rastrear_inventario","codigo_aduana","peso_kg","notas_internas","seo_titulo","seo_descripcion","seo_keywords","created_at","updated_at","created_by"]
-        data = dict(zip(keys, row))
-        data["id"] = -data["id"]
-        for k in ["created_at", "updated_at"]:
-            if data.get(k) and hasattr(data[k], "isoformat"):
-                data[k] = data[k].isoformat()
-
+        raise HTTPException(404, "Producto no encontrado")
     return {"status": "success", "data": _detalle_segun_sesion(db, data, con_sesion)}
 
 def _get_categorias_web_canonico(db: Session) -> dict:
@@ -1320,16 +1373,19 @@ def _serialize_catalogo_item_heredado(db: Session, r) -> dict:
         "created_at": r[20].isoformat() if r[20] else None,
         "updated_at": r[21].isoformat() if r[21] else None,
         "is_low_stock": is_low,
+        "editable_en_tienda": True,   # B4.1 (A1-b)
     }
 
 
 def _serialize_catalogo_item_sku_heredado(db: Session, canon_sku: ProductSKU) -> dict:
-    """Un SKU del ERP que no está en ecommerce_products, como lo sirve la rama heredada."""
+    """Un SKU del ERP que no está en ecommerce_products, como lo sirve la rama heredada. B4.1 (A1-b): con id
+    -product_skus.id (antes product_skus.id, que chocaba con la fila de ecommerce_products de ese número) y
+    editable_en_tienda False: no tiene ficha web que editar (PATCH y DELETE dan 404 TEXTO_FILA_DEL_ERP)."""
     prod = canon_sku.product
     real_stock = float(_get_real_sellable_stock(db, canon_sku.id, owner="NEBULAE"))
     modalidad = "ENTREGA_INMEDIATA" if real_stock > 0 else "POR_PEDIDO"
     return {
-        "id": canon_sku.id,
+        "id": -canon_sku.id,
         "nombre": prod.name if prod else canon_sku.sku,
         "descripcion": getattr(prod, "description", "") or "",
         "sku": canon_sku.sku,
@@ -1353,6 +1409,7 @@ def _serialize_catalogo_item_sku_heredado(db: Session, canon_sku: ProductSKU) ->
         "created_at": canon_sku.created_at.isoformat() if hasattr(canon_sku, "created_at") and canon_sku.created_at else None,
         "updated_at": canon_sku.updated_at.isoformat() if hasattr(canon_sku, "updated_at") and canon_sku.updated_at else None,
         "is_low_stock": real_stock <= 5,
+        "editable_en_tienda": False,
     }
 
 
@@ -1466,46 +1523,35 @@ def _espejo_despublicado(db: Session, sku) -> bool:
     return publicado is False
 
 
+def _tiene_espejo_en_la_tienda(db: Session, sku) -> bool:
+    """B4.1 (A1-b): True si el SKU tiene alguna fila en ecommerce_products (misma columna sku), publicada o no: la regla de
+    la lista heredada (r1 C1 y P27), que entonces lo muestra como su espejo y nunca como fila del ERP."""
+    if not sku:
+        return False
+    return db.execute(text("SELECT 1 FROM ecommerce_products WHERE sku = :s LIMIT 1"), {"s": sku}).first() is not None
+
+
 @router.get("/catalogo/{product_id}")
 def get_catalogo_product(product_id: int, user: Optional[User] = Depends(get_optional_current_user), db: Session = Depends(get_db)):
     """El detalle (público: la tienda lo lee sin sesión). B4 T24 (FINAL-C1): sin sesión ERP no trae notas_internas,
-    created_by, codigo_aduana ni total_vendido, y un producto despublicado da 404 (_detalle_segun_sesion). r1: también el
-    respaldo por Product.id (cuando el id no es de ecommerce_products) da ese 404 sin sesión si el SKU que responde tiene
-    espejo en ecommerce_products y ninguno está publicado (_espejo_despublicado). Sin espejo, como hoy."""
+    created_by, codigo_aduana ni total_vendido, y un producto despublicado da 404 (_detalle_segun_sesion).
+    B4.1 (A1-b): el id es el de la lista. Rama heredada: id > 0 → la fila de ecommerce_products; id < 0 → el SKU -id
+    (_serialize_catalogo_item_sku_heredado), 404 si tiene algún espejo en ecommerce_products; sin respaldo por Product.id
+    (abría otro producto). Rama canónica: _get_catalogo_product_canonico."""
     _ensure_ecommerce_tables(db)
     if _lectura_canonica():
         return _get_catalogo_product_canonico(db, product_id, con_sesion=user is not None)
-    row = db.execute(text("SELECT * FROM ecommerce_products WHERE id=:id"), {"id": product_id}).fetchone()
-    if not row:
-        prod = db.query(Product).filter(Product.id == product_id).first()
-        if prod:
-            sku_first = prod.skus[0] if prod.skus else None
-            if user is None and sku_first is not None and _espejo_despublicado(db, sku_first.sku):
-                raise HTTPException(404, "Producto no encontrado")
-            stock_disp = float(_get_real_sellable_stock(db, sku_first.id, owner="NEBULAE")) if sku_first else 0.0
-            return {
-                "status": "success",
-                "data": {
-                    "id": prod.id,
-                    "nombre": prod.name,
-                    "descripcion": getattr(prod, "description", "") or "",
-                    "sku": sku_first.sku if sku_first else "",
-                    "precio_venta": float(sku_first.sale_price or 0) if sku_first else 0.0,
-                    "precio_comparacion": float(sku_first.sale_price or 0) if sku_first else 0.0,
-                    "descuento_pct": 0.0,
-                    "categoria": prod.category.name if prod.category else "",
-                    "marca": prod.brand.name if prod.brand else "",
-                    "stock_disponible": stock_disp,
-                    "publicado_web": True
-                }
-            }
+    if product_id > 0:
+        data = _detalle_de_ecommerce_products(_fila_de_ecommerce_products(db, product_id))
+    elif product_id < 0:
+        canon_sku = db.query(ProductSKU).filter(ProductSKU.id == -product_id).first()
+        # B4.1 (A1-b): un SKU con espejo no es una fila de la lista heredada (sale como su espejo): 404.
+        if canon_sku is None or _tiene_espejo_en_la_tienda(db, canon_sku.sku):
+            raise HTTPException(404, "Producto no encontrado")
+        data = _serialize_catalogo_item_sku_heredado(db, canon_sku)
+    else:
         raise HTTPException(404, "Producto no encontrado")
-    keys = ["id","nombre","descripcion","descripcion_larga","sku","precio_venta","precio_comparacion","descuento_pct","impuesto_pct","categoria","sub_categoria","marca","tipo_producto","imagenes","atributos","variantes","stock_disponible","alerta_stock_minimo","publicado_web","rastrear_inventario","codigo_aduana","peso_kg","notas_internas","seo_titulo","seo_descripcion","seo_keywords","created_at","updated_at","created_by"]
-    data = _detalle_segun_sesion(db, dict(zip(keys, row)), user is not None)
-    for k in ["created_at","updated_at"]:
-        if data.get(k) and hasattr(data[k],"isoformat"):
-            data[k] = data[k].isoformat()
-    return {"status": "success", "data": data}
+    return {"status": "success", "data": _detalle_segun_sesion(db, data, user is not None)}
 
 @router.post("/catalogo", status_code=201)
 def create_catalogo_product(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
@@ -1529,10 +1575,13 @@ def create_catalogo_product(body: dict, user: User = Depends(require_roles(*ROLE
 
 @router.patch("/catalogo/{product_id}")
 def update_catalogo_product(product_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
+    """B4.1 (A1-b): el id es el de la lista (_destino_de_escritura): > 0 la fila de ecommerce_products, < 0 la ficha web del
+    SKU en la canónica (en la heredada, 404 TEXTO_FILA_DEL_ERP). Un id que no existe da 404 sin escribir."""
+    destino, product_id = _destino_de_escritura(product_id)
     _ensure_ecommerce_tables(db)
-    if _es_id_canonico(product_id):
+    if destino == "sku":
         return _update_catalogo_producto_canonico(db, product_id, body)
-    product_id = abs(product_id)
+    _bloquear_fila_de_la_tienda(db, product_id)
     allowed = ["nombre","descripcion","descripcion_larga","sku","precio_venta","precio_comparacion","descuento_pct","impuesto_pct","categoria","sub_categoria","marca","tipo_producto","stock_disponible","alerta_stock_minimo","publicado_web","rastrear_inventario","codigo_aduana","peso_kg","notas_internas","seo_titulo","seo_descripcion","seo_keywords"]
     json_fields = ["imagenes","atributos","variantes"]
     sets = []
@@ -1557,10 +1606,13 @@ def update_catalogo_product(product_id: int, body: dict, user: User = Depends(re
 
 @router.delete("/catalogo/{product_id}")
 def delete_catalogo_product(product_id: int, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
+    """B4.1 (A1-b): el mismo destino que el PATCH (_destino_de_escritura); un id que no existe da 404 sin escribir."""
+    destino, product_id = _destino_de_escritura(product_id)
     _ensure_ecommerce_tables(db)
-    if _es_id_canonico(product_id):
+    if destino == "sku":
         return _delete_catalogo_producto_canonico(db, product_id)
-    db.execute(text("DELETE FROM ecommerce_products WHERE id=:id"), {"id": abs(product_id)})
+    _bloquear_fila_de_la_tienda(db, product_id)
+    db.execute(text("DELETE FROM ecommerce_products WHERE id=:id"), {"id": product_id})
     db.commit()
     return {"status": "success"}
 

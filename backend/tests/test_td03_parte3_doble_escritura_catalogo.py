@@ -13,7 +13,7 @@ def test_update_canonico_con_listing_existente_sincroniza_ambos_lados(app_client
     monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
 
     resp = app_client.patch(
-        f"/api/v1/ecommerce/catalogo/{sku.id}",
+        f"/api/v1/ecommerce/catalogo/{-sku.id}",   # B4.1 (A1-b): en la canónica, el SKU es -product_skus.id
         json={"descuento_pct": 15, "sub_categoria": "Ofertas"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
@@ -37,7 +37,7 @@ def test_update_canonico_sin_listing_previo_crea_listing_y_espejo(app_client, db
     monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
 
     resp = app_client.patch(
-        f"/api/v1/ecommerce/catalogo/{sku.id}",
+        f"/api/v1/ecommerce/catalogo/{-sku.id}",   # B4.1 (A1-b): en la canónica, el SKU es -product_skus.id
         json={"seo_titulo": "Titulo SEO Nuevo"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
@@ -64,7 +64,7 @@ def test_update_canonico_ignora_campos_fuera_de_alcance(app_client, db, sku, pro
     nombre_original = product.name
 
     resp = app_client.patch(
-        f"/api/v1/ecommerce/catalogo/{sku.id}",
+        f"/api/v1/ecommerce/catalogo/{-sku.id}",   # B4.1 (A1-b): en la canónica, el SKU es -product_skus.id
         json={"nombre": "Nombre Que No Deberia Aplicar", "descuento_pct": 7},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
@@ -90,7 +90,7 @@ def test_update_huerfano_con_flag_on_usa_ruta_legacy(app_client, db, admin_token
     try:
         monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
         resp = app_client.patch(
-            f"/api/v1/ecommerce/catalogo/{-ecom_id}",
+            f"/api/v1/ecommerce/catalogo/{ecom_id}",   # B4.1 (A1-b): el huérfano por su id (antes -ecom_id)
             json={"nombre": "Actualizado Legacy"},
             headers={"Authorization": f"Bearer {admin_token}"},
         )
@@ -103,6 +103,8 @@ def test_update_huerfano_con_flag_on_usa_ruta_legacy(app_client, db, admin_token
 
 
 def test_update_con_flag_off_ignora_signo_y_usa_ruta_legacy(app_client, db, admin_token, monkeypatch):
+    # B4.1 (A1-b): con la bandera apagada el signo ya no se ignora (sin abs()): un id negativo es una fila SKU y da 404
+    # (test_b41_catalogo_ids). Esta prueba sigue fijando el id positivo, la fila de ecommerce_products.
     _ensure_ecommerce_tables(db)
     sku_legacy = f"SKU-P3-UPD-LEGACY-{uuid.uuid4().hex[:8]}"
     result = db.execute(
@@ -140,7 +142,7 @@ def test_delete_canonico_borra_listing_y_espejo_pero_no_el_producto_real(app_cli
     monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
 
     resp = app_client.delete(
-        f"/api/v1/ecommerce/catalogo/{sku.id}",
+        f"/api/v1/ecommerce/catalogo/{-sku.id}",   # B4.1 (A1-b): en la canónica, el SKU es -product_skus.id
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 200
@@ -163,7 +165,7 @@ def test_delete_canonico_sin_espejo_no_falla(app_client, db, sku, admin_token, m
     monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
 
     resp = app_client.delete(
-        f"/api/v1/ecommerce/catalogo/{sku.id}",
+        f"/api/v1/ecommerce/catalogo/{-sku.id}",   # B4.1 (A1-b): en la canónica, el SKU es -product_skus.id
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 200
@@ -183,7 +185,7 @@ def test_delete_huerfano_con_flag_on_usa_ruta_legacy(app_client, db, admin_token
     monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
 
     resp = app_client.delete(
-        f"/api/v1/ecommerce/catalogo/{-ecom_id}",
+        f"/api/v1/ecommerce/catalogo/{ecom_id}",   # B4.1 (A1-b): el huérfano por su id (antes -ecom_id)
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 200
@@ -259,7 +261,7 @@ def test_update_canonico_luego_flag_off_muestra_valores_editados_via_legacy(app_
     monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
 
     resp = app_client.patch(
-        f"/api/v1/ecommerce/catalogo/{sku.id}",
+        f"/api/v1/ecommerce/catalogo/{-sku.id}",   # B4.1 (A1-b): en la canónica, el SKU es -product_skus.id
         json={"descuento_pct": 25, "seo_titulo": "Rollback Seo"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
@@ -277,7 +279,7 @@ def test_update_canonico_luego_flag_off_muestra_valores_editados_via_legacy(app_
 def test_update_canonico_404_si_sku_id_no_existe(app_client, db, admin_token, monkeypatch):
     monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
     resp = app_client.patch(
-        "/api/v1/ecommerce/catalogo/999999999",
+        "/api/v1/ecommerce/catalogo/-999999999",   # B4.1 (A1-b, H5): el SKU que no existe es negativo
         json={"descuento_pct": 5},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
@@ -287,7 +289,7 @@ def test_update_canonico_404_si_sku_id_no_existe(app_client, db, admin_token, mo
 def test_delete_canonico_404_si_sku_id_no_existe(app_client, db, admin_token, monkeypatch):
     monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
     resp = app_client.delete(
-        "/api/v1/ecommerce/catalogo/999999999",
+        "/api/v1/ecommerce/catalogo/-999999999",   # B4.1 (A1-b, H5): el SKU que no existe es negativo
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 404
@@ -296,7 +298,7 @@ def test_delete_canonico_404_si_sku_id_no_existe(app_client, db, admin_token, mo
 def test_update_canonico_sin_campos_relevantes_devuelve_400(app_client, db, sku, admin_token, monkeypatch):
     monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
     resp = app_client.patch(
-        f"/api/v1/ecommerce/catalogo/{sku.id}",
+        f"/api/v1/ecommerce/catalogo/{-sku.id}",   # B4.1 (A1-b): en la canónica, el SKU es -product_skus.id
         json={"nombre": "Este Campo No Aplica"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )

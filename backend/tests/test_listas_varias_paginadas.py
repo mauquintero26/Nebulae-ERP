@@ -332,7 +332,8 @@ CLAVES_CATALOGO_CANONICO = ["id", "nombre", "descripcion", "sku", "precio_venta"
                             "impuesto_pct", "categoria", "sub_categoria", "marca", "tipo_producto", "imagenes",
                             "atributos", "variantes", "stock_disponible", "modalidad_disponible", "alerta_stock_minimo",
                             "publicado_web", "rastrear_inventario", "seo_titulo", "created_at", "updated_at",
-                            "is_low_stock"]
+                            "is_low_stock",
+                            "editable_en_tienda"]   # B4.1 (A1-b): la llave nueva, al final de cada fila de la lista
 
 
 class _Catalogo:
@@ -445,7 +446,9 @@ def test_catalogo_paginacion_total_y_claves(app_client, db, warehouse, monkeypat
         por_nombre = {x["nombre"]: x for x in cuerpo["data"]}
         assert por_nombre[t.nombres["nevera"]]["precio_venta"] == 50.0 and por_nombre[t.nombres["nevera"]]["sku"] == t.p1.sku
         if rama == "canonico":
-            assert por_nombre[t.nombres["h1"]]["id"] == -t.h1                  # el huerfano canonico lleva el id negativo
+            # B4.1 (A1-b): el huerfano canonico lleva su id de ecommerce_products (antes, el negativo); el SKU, -product_skus.id
+            assert por_nombre[t.nombres["h1"]]["id"] == t.h1
+            assert por_nombre[t.nombres["nevera"]]["id"] == -t.p1.id
 
 
 def test_catalogo_orden_de_hoy_sin_parametros_nuevos(app_client, db, warehouse, monkeypatch, admin_token):

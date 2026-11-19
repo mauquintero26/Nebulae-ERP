@@ -34,7 +34,7 @@ def test_catalogo_canonico_incluye_datos_de_web_listing(app_client, db, sku, mon
     resp = app_client.get("/api/v1/ecommerce/catalogo", params={"search": sku.sku})
     assert resp.status_code == 200
     item = next(p for p in resp.json()["data"] if p["sku"] == sku.sku)
-    assert item["id"] == sku.id
+    assert item["id"] == -sku.id   # B4.1 (A1-b): un SKU del ERP lleva -product_skus.id
     assert item["precio_comparacion"] == 99000.0
     assert item["sub_categoria"] == "Camisetas"
     assert item["impuesto_pct"] == 19.0
@@ -79,20 +79,22 @@ def test_catalogo_canonico_sku_sin_listing_usa_defaults(app_client, db, sku, mon
     assert item["sub_categoria"] == ""
 
 
-def test_catalogo_canonico_incluye_huerfanos_con_id_negativo(app_client, db, monkeypatch):
+def test_catalogo_canonico_incluye_huerfanos_con_su_id(app_client, db, monkeypatch):
+    # B4.1 (A1-b, H4): antes «..._con_id_negativo»; el huérfano lleva ahora su id de ecommerce_products (> 0).
     _ensure_ecommerce_tables(db)
     sku_huerfano = f"SKU-HUERFANO-P2-{uuid.uuid4().hex[:8]}"
-    db.execute(text("""
+    ecom_id = db.execute(text("""
         INSERT INTO ecommerce_products (nombre, sku, publicado_web)
         VALUES ('Producto Huerfano P2', :sku, TRUE)
-    """), {"sku": sku_huerfano})
+        RETURNING id
+    """), {"sku": sku_huerfano}).scalar()
     db.commit()
     try:
         monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
         resp = app_client.get("/api/v1/ecommerce/catalogo", params={"search": sku_huerfano})
         assert resp.status_code == 200
         item = next(p for p in resp.json()["data"] if p["sku"] == sku_huerfano)
-        assert item["id"] < 0
+        assert item["id"] == ecom_id and item["id"] > 0   # B4.1 (A1-b): antes item["id"] < 0
     finally:
         db.execute(text("DELETE FROM ecommerce_products WHERE sku = :sku"), {"sku": sku_huerfano})
         db.commit()
@@ -100,15 +102,16 @@ def test_catalogo_canonico_incluye_huerfanos_con_id_negativo(app_client, db, mon
 
 def test_catalogo_detalle_canonico_por_sku_id(app_client, db, sku, monkeypatch):
     monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
-    resp = app_client.get(f"/api/v1/ecommerce/catalogo/{sku.id}")
+    resp = app_client.get(f"/api/v1/ecommerce/catalogo/{-sku.id}")   # B4.1 (A1-b): el SKU por -product_skus.id
     assert resp.status_code == 200
     data = resp.json()["data"]
-    assert data["id"] == sku.id
+    assert data["id"] == -sku.id
     assert data["sku"] == sku.sku
     assert data["precio_venta"] == float(sku.sale_price)
 
 
-def test_catalogo_detalle_canonico_huerfano_por_id_negativo(app_client, db, monkeypatch):
+def test_catalogo_detalle_canonico_huerfano_por_su_id(app_client, db, monkeypatch):
+    # B4.1 (A1-b, H4): antes «..._por_id_negativo»; el huérfano se abre por su id de ecommerce_products (> 0).
     _ensure_ecommerce_tables(db)
     sku_huerfano = f"SKU-HUERFANO-DETALLE-{uuid.uuid4().hex[:8]}"
     result = db.execute(text("""
@@ -120,11 +123,11 @@ def test_catalogo_detalle_canonico_huerfano_por_id_negativo(app_client, db, monk
     db.commit()
     try:
         monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
-        resp = app_client.get(f"/api/v1/ecommerce/catalogo/{-ecom_id}")
+        resp = app_client.get(f"/api/v1/ecommerce/catalogo/{ecom_id}")   # B4.1 (A1-b): antes -ecom_id
         assert resp.status_code == 200
         data = resp.json()["data"]
         assert data["sku"] == sku_huerfano
-        assert data["id"] == -ecom_id
+        assert data["id"] == ecom_id
     finally:
         db.execute(text("DELETE FROM ecommerce_products WHERE sku = :sku"), {"sku": sku_huerfano})
         db.commit()
@@ -134,6 +137,8 @@ def test_catalogo_detalle_canonico_404_si_no_existe(app_client, db, monkeypatch)
     monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
     resp = app_client.get("/api/v1/ecommerce/catalogo/999999999")
     assert resp.status_code == 404
+    # B4.1 (A1-b): con el esquema nuevo, 999999999 es una fila de ecommerce_products; el SKU que no existe es -999999999
+    assert app_client.get("/api/v1/ecommerce/catalogo/-999999999").status_code == 404
 
 
 def test_categorias_canonico_incluye_categoria_y_subcategoria(app_client, db, sku, monkeypatch):

@@ -62,6 +62,7 @@ def _base_heredado(db, search, categoria, publicado, limit):
             "rastrear_inventario": r[18], "seo_titulo": r[19],
             "created_at": r[20].isoformat() if r[20] else None, "updated_at": r[21].isoformat() if r[21] else None,
             "is_low_stock": is_low,
+            "editable_en_tienda": True,   # B4.1 (A1-b): la llave nueva (una fila de ecommerce_products se edita)
         })
     n_ep = len(data)
     sku_q = db.query(ProductSKU).join(Product, ProductSKU.product_id == Product.id)
@@ -74,7 +75,8 @@ def _base_heredado(db, search, categoria, publicado, limit):
             real_stock = float(_get_real_sellable_stock(db, canon_sku.id, owner="NEBULAE"))
             modalidad = "ENTREGA_INMEDIATA" if real_stock > 0 else "POR_PEDIDO"
             data.append({
-                "id": canon_sku.id, "nombre": prod.name if prod else canon_sku.sku,
+                "id": -canon_sku.id,   # B4.1 (A1-b): un SKU del ERP lleva -product_skus.id (BASE: canon_sku.id)
+                "nombre": prod.name if prod else canon_sku.sku,
                 "descripcion": getattr(prod, "description", "") or "", "sku": canon_sku.sku,
                 "precio_venta": float(canon_sku.sale_price or 0), "precio_comparacion": float(canon_sku.sale_price or 0),
                 "descuento_pct": 0.0, "impuesto_pct": 0.0,
@@ -86,6 +88,7 @@ def _base_heredado(db, search, categoria, publicado, limit):
                 "created_at": canon_sku.created_at.isoformat() if hasattr(canon_sku, "created_at") and canon_sku.created_at else None,
                 "updated_at": canon_sku.updated_at.isoformat() if hasattr(canon_sku, "updated_at") and canon_sku.updated_at else None,
                 "is_low_stock": real_stock <= 5,
+                "editable_en_tienda": False,   # B4.1 (A1-b): una fila SKU heredada no tiene ficha web que editar
             })
             seen_skus.add(canon_sku.sku)
             total += 1

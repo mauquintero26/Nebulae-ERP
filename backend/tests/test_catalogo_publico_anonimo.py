@@ -27,7 +27,8 @@ CLAVES_DETALLE_CANONICO_SKU = {"id", "nombre", "descripcion", "sku", "precio_ven
                                "imagenes", "atributos", "variantes", "stock_disponible", "modalidad_disponible",
                                "alerta_stock_minimo", "publicado_web", "rastrear_inventario", "seo_titulo", "created_at",
                                "updated_at", "is_low_stock", "descripcion_larga", "seo_descripcion", "seo_keywords",
-                               "codigo_aduana", "peso_kg", "notas_internas", "created_by"}
+                               "codigo_aduana", "peso_kg", "notas_internas", "created_by",
+                               "editable_en_tienda"}   # B4.1 (A1-b, H3): el detalle canónico reusa la fila de la lista
 
 
 def _auth(token):
@@ -72,10 +73,10 @@ def test_detalle_anonimo_sin_datos_internos_ni_total_vendido_en_las_dos_ramas(ap
     assert resp.status_code == 200, resp.text
     assert set(resp.json()["data"]) == CLAVES_DETALLE_HEREDADO - INTERNAS
     monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
-    resp = _detalle(app_client, -t.h1)
+    resp = _detalle(app_client, t.h1)      # B4.1 (A1-b): el huérfano canónico por su id (antes -t.h1)
     assert resp.status_code == 200, resp.text
     assert set(resp.json()["data"]) == CLAVES_DETALLE_HEREDADO - INTERNAS
-    resp = _detalle(app_client, t.p1.id)
+    resp = _detalle(app_client, -t.p1.id)  # B4.1 (A1-b): el SKU canónico por -product_skus.id (antes t.p1.id)
     assert resp.status_code == 200, resp.text
     assert set(resp.json()["data"]) == CLAVES_DETALLE_CANONICO_SKU - INTERNAS
 
@@ -89,7 +90,8 @@ def test_detalle_con_sesion_erp_trae_todo_como_hoy(app_client, db, warehouse, mo
         assert set(data) == CLAVES_DETALLE_HEREDADO | {"total_vendido"}, ident
         assert (data["notas_internas"], data["created_by"], data["codigo_aduana"]) == ("nota secreta", "quien@x.co", "9503")
     monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
-    for ident, claves in ((-t.h2, CLAVES_DETALLE_HEREDADO), (t.p2.id, CLAVES_DETALLE_CANONICO_SKU)):
+    # B4.1 (A1-b): en la canónica, el huérfano por su id y el SKU por -product_skus.id (antes -t.h2 y t.p2.id)
+    for ident, claves in ((t.h2, CLAVES_DETALLE_HEREDADO), (-t.p2.id, CLAVES_DETALLE_CANONICO_SKU)):
         resp = _detalle(app_client, ident, admin_token)
         assert resp.status_code == 200, (ident, resp.text)
         data = resp.json()["data"]
@@ -107,7 +109,7 @@ def test_detalle_anonimo_de_un_despublicado_da_404_en_las_dos_ramas(app_client, 
         assert (resp.status_code, resp.json()) == (404, {"detail": "Producto no encontrado"}), ident
         assert not _escribe(v), ident
     monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
-    for ident in (-t.h2, t.p2.id):
+    for ident in (t.h2, -t.p2.id):   # B4.1 (A1-b): antes -t.h2 y t.p2.id
         with contador_sql.ventana() as v:
             resp = _detalle(app_client, ident)
         assert (resp.status_code, resp.json()) == (404, {"detail": "Producto no encontrado"}), ident
@@ -116,7 +118,8 @@ def test_detalle_anonimo_de_un_despublicado_da_404_en_las_dos_ramas(app_client, 
 
 def test_detalle_anonimo_no_carga_los_pedidos_web(app_client, db, warehouse, monkeypatch, contador_sql):
     t = _Catalogo(db, warehouse)
-    for rama, ident in (("legacy", t.h1), ("canonico", -t.h1), ("canonico", t.p1.id)):
+    # B4.1 (A1-b): en la canónica, t.h1 y -t.p1.id (antes -t.h1 y t.p1.id)
+    for rama, ident in (("legacy", t.h1), ("canonico", t.h1), ("canonico", -t.p1.id)):
         monkeypatch.setenv("CATALOGO_LECTURA", rama)
         with contador_sql.ventana() as v:
             assert _detalle(app_client, ident).status_code == 200
@@ -141,7 +144,7 @@ def test_total_vendido_con_sesion_es_una_suma_en_sql_con_la_regla_de_hoy(app_cli
     pedido(3, [{"sku": sku_h1, "qty": 5}], estado="CANCELADO")
     pedido(4, [{"sku": sku_h1, "qty": 7}], canal="CRM")
     pedido(5, None)
-    for rama, ident in (("legacy", t.h1), ("canonico", -t.h1)):
+    for rama, ident in (("legacy", t.h1), ("canonico", t.h1)):   # B4.1 (A1-b): antes ("canonico", -t.h1)
         monkeypatch.setenv("CATALOGO_LECTURA", rama)
         with contador_sql.ventana() as v:
             data = _datos(app_client, ident, admin_token)
@@ -210,21 +213,22 @@ def test_el_espejo_publicado_sigue_saliendo_una_vez_sin_sesion(app_client, db, w
 
 def test_el_respaldo_del_detalle_no_sirve_un_despublicado_sin_sesion(app_client, db, warehouse, monkeypatch,
                                                                      admin_token):
-    """r1 (C1): GET /catalogo/{id} de la rama heredada, cuando el id no es de ecommerce_products, responde el Product con ese
-    id. Sin sesión ya no responde uno cuyo SKU tiene el espejo despublicado: el mismo 404 que la ficha despublicada. Uno sin
-    espejo, o con el espejo publicado, sigue respondiendo; con sesión, como hoy."""
+    """r1 (C1): GET /catalogo/{id} de la rama heredada, cuando el id no era de ecommerce_products, respondía el Product con
+    ese id. B4.1 (A1-b): ese respaldo por Product.id ya no existe (abría otro producto); el detalle de una fila SKU es
+    -product_skus.id. Un SKU sin espejo (el auto) responde, con sesión y sin ella. Uno con CUALQUIER espejo (la nevera),
+    publicado o no, da 404 con sesión y sin ella: esa fila no existe en la lista (la nevera sale como su espejo m1)."""
     t = _Catalogo(db, warehouse)
     monkeypatch.setenv("CATALOGO_LECTURA", "legacy")
-    nevera, auto = t.p1.product_id, t.p2.product_id
-    ocupados = {r[0] for r in db.execute(text("SELECT id FROM ecommerce_products WHERE id IN (:a, :b)"),
-                                         {"a": nevera, "b": auto})}
-    assert not ocupados, "el id del producto coincide con una fila de ecommerce_products: la prueba no mira el respaldo"
-    assert _detalle(app_client, nevera).status_code == 200     # espejo publicado
-    _despublicar_la_nevera(db, t)
-    resp = _detalle(app_client, nevera)
-    assert (resp.status_code, resp.json()) == (404, {"detail": "Producto no encontrado"})
-    assert _detalle(app_client, nevera, admin_token).status_code == 200
-    assert _detalle(app_client, auto).status_code == 200       # sin espejo
+    nevera, auto = -t.p1.id, -t.p2.id
+    no_encontrado = (404, {"detail": "Producto no encontrado"})
+    for fase in ("espejo publicado", "espejo despublicado"):
+        if fase == "espejo despublicado":
+            _despublicar_la_nevera(db, t)
+        for token in (None, admin_token):
+            resp = _detalle(app_client, nevera, token)
+            assert (resp.status_code, resp.json()) == no_encontrado, (fase, token is not None)
+            data = _datos(app_client, auto, token)                 # sin espejo
+            assert (data["id"], data["sku"], data["publicado_web"]) == (auto, t.p2.sku, True), (fase, token is not None)
 
 
 def test_una_ficha_web_despublicada_no_sale_sin_sesion_en_la_canonica(app_client, db, warehouse, monkeypatch,

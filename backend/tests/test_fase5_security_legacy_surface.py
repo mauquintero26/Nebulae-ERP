@@ -215,13 +215,13 @@ class TestFase5SecurityLegacySurface:
 
     def test_b1_06_ecommerce_rutas_publicas_accesibles(self, app_client: TestClient, base_customer_catalog: dict):
         """Ecommerce storefront publico: catalogo, detalle, categorias y carritos abiertos sin token."""
-        sku = base_customer_catalog["sku"]
-        product = base_customer_catalog["product"]
+        sku = base_customer_catalog["sku"]   # B4.1 (A1-b): el Product ya no se usa (el detalle va por el SKU)
 
         res_cat = app_client.get("/api/v1/ecommerce/catalogo")
         assert res_cat.status_code == 200
 
-        res_item = app_client.get(f"/api/v1/ecommerce/catalogo/{product.id}")
+        # B4.1 (A1-b): el detalle de un SKU del ERP es -product_skus.id; ya no hay respaldo por Product.id
+        res_item = app_client.get(f"/api/v1/ecommerce/catalogo/{-sku.id}")
         assert res_item.status_code == 200
 
         res_groups = app_client.get("/api/v1/ecommerce/categorias")
