@@ -674,6 +674,29 @@ export function tituloMesPec(clave) {
   return m && mes >= 1 && mes <= 12 ? `${MESES[mes - 1]} de ${m[1]}` : 'Sin fecha de compra';
 }
 
+/**
+ * B4.1 T7 (P19): el botón «Agrupar por mes» alterna el orden: con el orden por fecha de compra vuelve a 'atencion' (lo vencido
+ * primero); con cualquier otro pasa a '-compra' (la más reciente primero), el orden que agrupa por mes.
+ * @param {unknown} orden
+ * @returns {'atencion' | '-compra'}
+ */
+export function alternarAgruparMes(orden) {
+  return ordenPorFechaDeCompra(orden) ? 'atencion' : '-compra';
+}
+
+/**
+ * B4.1 T7 (P19): el texto del separador de un mes: «Noviembre de 2026 · 2 en esta página · $ 1.250.000». El número y el total
+ * (suma de total_cop) son de las filas de la página que son de ese mes (grupoMesPec).
+ * @param {string} grupo
+ * @param {unknown[]} filas
+ * @returns {string}
+ */
+export function textoSeparadorMesPec(grupo, filas) {
+  const delMes = (Array.isArray(filas) ? filas : []).filter((f) => grupoMesPec(f) === grupo);
+  const total = delMes.reduce((suma, f) => suma + (numeroFinito(/** @type {any} */ (f)?.total_cop) ?? 0), 0);
+  return `${tituloMesPec(grupo)} · ${delMes.length} en esta página · ${formatoPesos(total)}`;
+}
+
 // ─── Recepciones (GoodsReceipt) ─────────────────────────────────────────────────
 
 /**
@@ -1217,7 +1240,8 @@ export function cuerpoRecepcionarPec({ creadoPor, notas, bodega }) {
  * heredada) no van. Antes de mandar nada se valida cada cantidad: con la primera que no vale, {error} con su aviso y ninguna petición.
  * @param {unknown} servidor
  * @param {unknown} locales
- * @returns {{error: string | null, peticiones: {grl_id: number, cuerpo: {quantity_received: number, quantity_rejected: 0, quantity_quarantine: 0}}[]}}
+ * B4.1 T7 (P20): si las observaciones de la línea cambian (textoLimpio; '' = null) la línea también va, con `notes` (null las borra).
+ * @returns {{error: string | null, peticiones: {grl_id: number, cuerpo: {quantity_received: number, quantity_rejected: 0, quantity_quarantine: 0, notes?: string | null}}[]}}
  */
 export function peticionesConteo(servidor, locales) {
   const previas = new Map((Array.isArray(servidor) ? servidor : []).map((p) => [p?.grl_id, p]));
@@ -1228,9 +1252,16 @@ export function peticionesConteo(servidor, locales) {
     if (error) return { error, peticiones: [] };
     if (l?.grl_id == null) continue;
     const p = previas.get(l.grl_id);
+    // B4.1 T7 (P20): las observaciones físicas viajan como `notes` (el '' o los espacios valen null: borrarlas también va). Una línea
+    // sin la clave (la pantalla no la cargó) no las toca.
+    const cambiaNotas = l?.observaciones !== undefined && (textoLimpio(l.observaciones) ?? null) !== (textoLimpio(p?.observaciones) ?? null);
     const igual = p != null && p.qty_recibida != null && Number(p.qty_recibida) === n
-      && !(Number(p.qty_rechazada) > 0) && !(Number(p.qty_cuarentena) > 0);
-    if (!igual) peticiones.push({ grl_id: l.grl_id, cuerpo: { quantity_received: n, quantity_rejected: 0, quantity_quarantine: 0 } });
+      && !(Number(p.qty_rechazada) > 0) && !(Number(p.qty_cuarentena) > 0) && !cambiaNotas;
+    if (!igual) {
+      const cuerpo = { quantity_received: n, quantity_rejected: 0, quantity_quarantine: 0 };
+      if (cambiaNotas) cuerpo.notes = textoLimpio(l.observaciones);
+      peticiones.push({ grl_id: l.grl_id, cuerpo });
+    }
   }
   return { error: null, peticiones };
 }

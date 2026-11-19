@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   ShoppingBag, Package, CheckCircle2, Clock, Search, MoreHorizontal, RefreshCw, X, Trash2, Edit2, ExternalLink, Plus, Eye,
-  ShoppingCart,
+  ShoppingCart, CalendarDays,
 } from 'lucide-react';
 // B4 T14: el Hub de Compras 100 % sobre el servidor (R5, C3, C4): la tabla y el tablero estándar con el estado único de
 // la pantalla, las tarjetas, la franja del flujo y la pestaña Análisis estándar. El panel del PEC conserva lo de B1 a B3.
@@ -41,7 +41,7 @@ import {
   COLUMNAS_PEC, EFECTOS_CANCELAR_PEC, OPCIONES_ESTADOS_TABLERO_PEC, consultaColumnaPec, grupoMesPec, infoEstadoPec,
   opcionesEstadosPec, ordenPorFechaDeCompra, reglaSoltarPec, repartirCancelacionPec, resumenCancelacionPec, tarjetaPec,
   cancelarPecsEnSerie, despuesDeCancelarPec, textoVacioPec,
-  textoVencidosPec, tituloMesPec, transicionesPec, vinculoPvenDelPec, seleccionVigente, avisoSeleccionQuitada, estadoReintento, podarSeleccion,
+  textoVencidosPec, textoSeparadorMesPec, alternarAgruparMes, transicionesPec, vinculoPvenDelPec, seleccionVigente, avisoSeleccionQuitada, estadoReintento, podarSeleccion,
 } from '@/lib/estados-compras';
 import {
   RUTA_HUB_COMPRAS, TEXTO_SEGUIMIENTO_CERRADO, accionPasoHubCompras, accionSemaforoCompras, avisosFlujoCompras, etiquetaEtapaTracking,
@@ -758,7 +758,7 @@ export default function ComprasHub() {
   const textoOrden = enKanban || ordenEsAtencion(estado.orden) ? null : textoOrdenHub(estado.orden, TITULOS_ORDEN_HUB);
   // TABLA-compras punto 6: con el orden por fecha de compra, un separador por mes (en la página que se ve).
   const porMes = ordenPorFechaDeCompra(estado.orden);
-  const tituloDeMes = useCallback((grupo: string, n: number) => `${tituloMesPec(grupo)} · ${n} en esta página`, []);
+  const tituloDeMes = useCallback((grupo: string) => textoSeparadorMesPec(grupo, listado.filas), [listado.filas]);
   // La selección de la página (TablaEstandar la limpia al cambiar de página, de pestaña, de búsqueda, de filtro o de orden).
   const alSeleccionar = useCallback((claves: ClaveFila[]) => setSeleccion(claves), []);
   const pieSeleccion = seleccion.length > 0
@@ -942,16 +942,26 @@ export default function ComprasHub() {
                 estadoConteos={estadoConteos}
                 placeholder="Buscar por número, proveedor, pedido de venta, comprador o producto…"
                 opcionesEstados={enKanban ? OPCIONES_ESTADOS_TABLERO_PEC : opcionesEstadosPec}
-                filtros={textoOrden ? (
-                  <span className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-600">
-                    {textoOrden}
-                    <span aria-hidden="true">·</span>
-                    <button type="button" onClick={() => despachar({ tipo: 'orden', valor: 'atencion' })}
-                      className={`rounded font-bold text-purple-700 hover:underline ${FOCO_VISIBLE}`}>
-                      Atención primero
+                filtros={enKanban || enAnalisis ? undefined : (
+                  <>
+                    <button type="button" onClick={() => despachar({ tipo: 'orden', valor: alternarAgruparMes(estado.orden) })}
+                      aria-pressed={porMes}
+                      className={`inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs font-semibold ${porMes ? 'border-purple-200 bg-purple-50 text-purple-700' : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'} ${FOCO_VISIBLE}`}>
+                      <CalendarDays size={14} aria-hidden="true" />
+                      Agrupar por mes
                     </button>
-                  </span>
-                ) : undefined}
+                    {textoOrden ? (
+                      <span className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-600">
+                        {textoOrden}
+                        <span aria-hidden="true">·</span>
+                        <button type="button" onClick={() => despachar({ tipo: 'orden', valor: 'atencion' })}
+                          className={`rounded font-bold text-purple-700 hover:underline ${FOCO_VISIBLE}`}>
+                          Atención primero
+                        </button>
+                      </span>
+                    ) : null}
+                  </>
+                )}
                 ajustes={{ columnas: COLUMNAS_TABLA_HUB, preferencias: prefs, anchoRef: anchoTablaRef }}
                 kanbanDisponible
                 pantallaCompleta={enKanban ? undefined : { completa, alternar }}
