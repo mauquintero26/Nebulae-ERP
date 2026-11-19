@@ -936,7 +936,7 @@ export default function EcommercePage() {
         {/* TABS */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-xl p-1 shadow-sm overflow-x-auto">
-            {['Panel', 'Catálogo', 'Clientes Web', ...(acceso.pagosConfig ? ['Pagos'] : [])].map(t => (
+            {['Panel', 'Catálogo', ...(acceso.pagosConfig ? ['Pagos'] : [])].map(t => (
               <button key={t} type="button" onClick={() => setActiveTab(t)} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${FOCO_VISIBLE} ${activeTab === t ? 'bg-purple-600 text-white shadow' : 'text-gray-600 hover:text-purple-700 hover:bg-purple-50'}`}>{t}</button>
             ))}
           </div>

@@ -3228,7 +3228,9 @@ console.log('--- TEST T24-d (B4 T24, FINAL-m21): la pestaña Pagos de E-Commerce
   const c = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   // La pestaña solo con acceso.pagosConfig (accesoTienda, casos en test_roles.mjs); el panel, igual.
   // B4.1 (P31): sin la pestaña vacía «Clientes Web» (el endpoint /ecommerce/clientes sigue en el servidor).
-  assert.match(c, /\{\['Panel', 'Catálogo', 'Clientes Web', \.\.\.\(acceso\.pagosConfig \? \['Pagos'\] : \[\]\)\]\.map\(t => \(/);
+  // B4.1 (P31): sin la pestaña vacía «Clientes Web» (el endpoint /ecommerce/clientes sigue en el servidor).
+  assert.match(c, /\{\['Panel', 'Catálogo', \.\.\.\(acceso\.pagosConfig \? \['Pagos'\] : \[\]\)\]\.map\(t => \(/);
+  assert.ok(!c.includes('Clientes Web'), 'P31: la página no trae «Clientes Web»');
   assert.match(c, /\{activeTab === 'Pagos' && acceso\.pagosConfig && \(/);
   // Los GET solo con permiso, con su error guardado (nada de .catch(() => {})) y la lectura de lecturaDeFuente.
   assert.match(c, /if \(activeTab !== 'Pagos' \|\| !acceso\.pagosConfig\) return undefined;/);
