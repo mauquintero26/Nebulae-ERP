@@ -3069,6 +3069,7 @@ def confirmar_recepcion(
                 "estado"        : estado_prod,
                 "po_line_id"    : grl.po_line_id,
                 "grl_id"        : grl.id,
+                "observaciones" : grl.notes,   # B4.1 T5 (P20, I1): la observación del conteo sobrevive a la confirmación
             })
 
         # ─── ACTUALIZAR INVENTARIO (solo FISICA) ──────────────────────────────

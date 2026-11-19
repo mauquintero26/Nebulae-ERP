@@ -5,6 +5,8 @@ No cambia ningún permiso.
 
 Se corre SOLO con el runner de ROLLBACK (python tests/rollback_runner.py test_recepcion_conteo_por_linea).
 """
+import uuid
+
 from app.models.erp_documents import GoodsReceipt
 from tests.usuarios_de_prueba import bodega_token  # noqa: F401 (fixture por nombre)
 
@@ -179,3 +181,22 @@ def test_observaciones_de_la_linea_se_validan_sin_escribir(app_client, db, admin
         escrituras = [s for s in v.sentencias if s.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))]
         assert escrituras == [], (repr(valor), escrituras)
     assert _detalle(app_client, bodega_token, rec["id"])["productos"][0]["qty_recibida"] is None
+
+
+def test_las_observaciones_siguen_en_el_detalle_al_confirmar_la_recepcion(app_client, db, admin_token, bodega_token, pec_10u, sku):
+    """B4.1 T5 ronda 1 (I1): confirmar_recepcion regenera g.productos; la observación de la línea no se pierde."""
+    rec = _recepcion(app_client, admin_token, pec_10u, sku)
+    uno = rec["productos"][0]
+    r = app_client.patch(f"{RECEPCIONES}/{rec['id']}/lineas/{uno['grl_id']}", headers=_auth(bodega_token),
+                         json={"quantity_received": 10, "notes": "Caja rota"})
+    assert r.status_code == 200, r.text
+    dos = rec["productos"][1]
+    r = app_client.patch(f"{RECEPCIONES}/{rec['id']}/lineas/{dos['grl_id']}", headers=_auth(bodega_token),
+                         json={"quantity_received": 4})
+    assert r.status_code == 200, r.text
+    c = app_client.post(f"{RECEPCIONES}/{rec['id']}/confirmar", headers=_auth(bodega_token),
+                        json={"idempotency_key": f"b41-t5-{uuid.uuid4().hex}", "receipt_type": "FISICA"})
+    assert c.status_code == 200, c.text
+    detalle = _detalle(app_client, bodega_token, rec["id"])
+    assert detalle["estado"] == "COMPLETADA", detalle["estado"]
+    assert detalle["productos"][0]["observaciones"] == "Caja rota"
