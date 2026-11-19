@@ -171,7 +171,7 @@ class SaleOrder(Base):
     __tablename__ = "sale_orders"
     id                    = Column(Integer, primary_key=True, index=True)
     numero                = Column(String(20), unique=True, nullable=False, index=True)
-    sc_id                 = Column(Integer, ForeignKey("customer_requests.id"), nullable=True)
+    sc_id                 = Column(Integer, ForeignKey("customer_requests.id"), nullable=True, index=True)
     sc_numero             = Column(String(20), nullable=True)
     cot_id                = Column(Integer, ForeignKey("sales_quotations.id"), nullable=True)
     cot_numero            = Column(String(20), nullable=True)
