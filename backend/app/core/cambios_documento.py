@@ -10,7 +10,6 @@ import datetime
 import re
 from decimal import Decimal, InvalidOperation
 
-from app.core.fechas import ZONA_COLOMBIA
 from app.core.iva import etiqueta_tarifa_iva, nombre_de_linea
 from app.core.ventas_dinero import cantidad_es
 
@@ -120,28 +119,15 @@ def _texto(v):
 
 
 def _fecha(v):
-    """El dia de calendario de una fecha de negocio, en hora de Colombia (T11 calidad, B4; America/Bogota, como el resto
-    del bloque). Las fechas con hora se guardan en UTC sin zona (utcnow + dias; el frontend manda el mediodia de Colombia,
-    17:00 UTC): las 02:00 UTC del 21 son el 20 en Bogota. Un texto ISO con hora se lee igual (sin zona = UTC); una fecha
-    sin hora (date o 'aaaa-mm-dd') es ese mismo dia."""
+    """El dia de calendario de la fecha de vencimiento (B4.1, P8). El vencimiento de la SC es un DIA DE NEGOCIO: se guarda
+    como las 00:00 de ese dia, sin zona, y su dia son los 10 primeros caracteres (la regla de diaDeNegocio del frontend): no
+    se pasa a Colombia (las 00:00 «UTC» del 24 serian el 23 a las 7 pm). La Actividad dice el mismo dia que la pantalla. Una
+    SC vieja con hora se lee con su dia UTC (D2)."""
     if v is None or v == "":
         return None
-    if isinstance(v, str):
-        texto = v.strip()
-        try:
-            if len(texto) > 10:
-                v = datetime.datetime.fromisoformat(texto)
-            else:
-                return datetime.date.fromisoformat(texto).isoformat()
-        except ValueError:
-            return texto[:10]
-    if isinstance(v, datetime.datetime):
-        if v.tzinfo is None:
-            v = v.replace(tzinfo=datetime.timezone.utc)
-        return v.astimezone(ZONA_COLOMBIA).date().isoformat()
-    if isinstance(v, datetime.date):
-        return v.isoformat()
-    return str(v)[:10]
+    if isinstance(v, (datetime.datetime, datetime.date)):
+        return v.isoformat()[:10]
+    return str(v).strip()[:10]
 
 
 def _entero(v):

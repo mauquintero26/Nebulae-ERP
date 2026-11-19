@@ -13,7 +13,7 @@ import json
 import shutil
 import subprocess
 import uuid
-from datetime import timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -21,6 +21,7 @@ from fastapi.encoders import jsonable_encoder
 from sqlalchemy import text
 
 from app.core.busqueda import productos_ilike
+from app.core.fechas import hoy_colombia
 from app.models.confirmation import SeguimientoConfirmacion
 from app.models.customers import Customer
 from app.models.erp_documents import CustomerRequest, SaleOrder, SalesQuotation
@@ -46,6 +47,11 @@ def _ahora():
 
 def _dias(n):
     return timedelta(days=n)
+
+
+def _dia(d):
+    """B4.1 (P8): el vencimiento de la SC es un dia de negocio: las 00:00 de ese dia."""
+    return datetime.combine(d, time())
 
 
 def _auth(token):
@@ -213,10 +219,11 @@ def test_sc_resumen_sobre_todas_sin_busqueda_ni_soporte(app_client, db, admin_to
     f.paso = timedelta(0)
     f.sc("BORRADOR", _dias(5))                                            # activa y sin atender
     f.sc("BORRADOR", _dias(2))                                            # justo los dias: no es sin atender
-    f.sc("ASIGNADA", fecha_vencimiento=ahora - timedelta(hours=1))        # activa y vencida
-    f.sc("ASIGNADA", fecha_vencimiento=ahora)                             # vence justo ahora: no esta vencida
+    # B4.1 (P8): el vencimiento es un dia de negocio (las 00:00 del dia de Colombia), no un instante.
+    f.sc("ASIGNADA", fecha_vencimiento=_dia(hoy_colombia(ahora) - _dias(1)))   # activa y vencida (ayer)
+    f.sc("ASIGNADA", fecha_vencimiento=_dia(hoy_colombia(ahora)))              # vence hoy: no esta vencida
     f.sc("PENDIENTE_CONFIRMACION", tipo_solicitud=None)                   # activa (tipo NULL no es Soporte)
-    f.sc("CONFIRMADA", gate1_confirmed_at=ahora, fecha_vencimiento=ahora - _dias(1))   # espera COT; no es activa
+    f.sc("CONFIRMADA", gate1_confirmed_at=ahora, fecha_vencimiento=_dia(hoy_colombia(ahora) - _dias(1)))   # espera COT; no es activa
     con_cot = f.sc("CONFIRMADA", gate1_confirmed_at=ahora)
     f.cot("BORRADOR", sc=con_cot)                                         # genero cotizacion
     f.sc("CANCELADA")
@@ -269,7 +276,6 @@ def test_atrasados_por_vista_respeta_la_busqueda_como_la_tabla(app_client, db, a
     assert con_q["activas"] == 1 == _lista(app_client, admin_token, "SC", q=uno.sufijo, vista="activas", semaforo="atrasados")["total"]
     nada = _lista(app_client, admin_token, "SC", q=f"nada-{uno.sufijo}", con_conteos=1)["atrasados_por_vista"]
     assert set(nada.values()) == {0}, nada
-
 
 def test_cot_se_busca_por_el_telefono_del_cliente(app_client, db, admin_token):
     f = _Fabrica(db, _ahora())
@@ -981,7 +987,7 @@ def test_resumen_y_pestanas_son_los_de_listas_ventas_js(app_client, db, admin_to
     viejo = _dias(9)
     # Solicitudes (el escenario de test_paridad_reglas_ventas, mas vencidas y sin atender)
     f.sc("BORRADOR", viejo)
-    f.sc("ASIGNADA", fecha_vencimiento=ahora - timedelta(hours=2))
+    f.sc("ASIGNADA", fecha_vencimiento=_dia(hoy - timedelta(days=1)))   # B4.1 (P8): vencida = un dia de negocio pasado
     f.sc("ASIGNADA", tipo_solicitud=None)
     f.sc("CONFIRMADA", viejo, gate1_confirmed_at=ahora - viejo)
     rech = f.sc("CONFIRMADA")
@@ -1034,7 +1040,7 @@ def test_resumen_y_pestanas_son_los_de_listas_ventas_js(app_client, db, admin_to
         sin_atender: n(sinSoporte, s => s.estado === 'BORRADOR'
                                      && listas.superaDiasAlerta(s.updated_at || s.fecha_solicitud, dias.SC, ahora)),
         vencidas: n(scs, s => listas.esSolicitudActiva(s) && !!s.fecha_vencimiento
-                              && new Date(hub.comoUTC(s.fecha_vencimiento)).getTime() < ahora),
+                              && s.fecha_vencimiento.slice(0, 10) < hoy),   // B4.1 (P8): el dia de negocio, 10 caracteres
       };
       const pestana = listas.pestanaCotizacion;
       const activas = cots.filter(c => pestana(c) === 'Activas');

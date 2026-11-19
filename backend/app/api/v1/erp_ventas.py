@@ -5,7 +5,7 @@ Pedidos de Venta (VEN), Ordenes Pendientes por Pagar (PXP)
 """
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session, selectinload
-from sqlalchemy import text, func, select, case, and_, or_, literal
+from sqlalchemy import text, func, select, case, and_, or_, literal, cast, Date
 from sqlalchemy.exc import DataError, DBAPIError, IntegrityError, OperationalError
 from typing import Optional, List
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -1978,7 +1978,8 @@ def _resumen_solicitudes(db: Session, extras, dias, ahora) -> dict:
     - activas = esSolicitudActiva; confirmadas y canceladas, por estado; total = todas sin Soporte;
     - con_cot = generoCotizacion (alguna COT con su sc_id, en cualquier estado); esperan_cot = esperaCotizacion;
     - sin_atender = Nueva (BORRADOR) con coalesce(updated_at, fecha_solicitud) de hace MAS de los dias de alerta de la SC
-      (superaDiasAlerta, estricto); vencidas = activas con fecha_vencimiento antes de `ahora`."""
+      (superaDiasAlerta, estricto); vencidas = activas con el DIA de fecha_vencimiento
+      (B4.1, P8: un dia de negocio) antes de hoy en Colombia."""
     sc = CustomerRequest
     no_soporte = rv.sin_soporte(sc)
     genero_cotizacion = select(SalesQuotation.id).where(SalesQuotation.sc_id == sc.id).exists()
@@ -1992,7 +1993,7 @@ def _resumen_solicitudes(db: Session, extras, dias, ahora) -> dict:
         "esperan_cot": and_(no_soporte, rv.f_sc_espera_cot(sc)),
         "sin_atender": and_(no_soporte, sc.estado == "BORRADOR",
                             func.coalesce(sc.updated_at, sc.fecha_solicitud) < limite),
-        "vencidas": and_(rv.f_sc_activa(sc), sc.fecha_vencimiento < ahora),
+        "vencidas": and_(rv.f_sc_activa(sc), cast(sc.fecha_vencimiento, Date) < hoy_colombia(ahora)),
     })
 
 
@@ -2076,7 +2077,9 @@ def create_solicitud(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
         db: Session = Depends(get_db)):
     numero = _gen_numero(db, "SC-", "seq_sc")
     # Auto vencimiento: 5 dias por defecto
-    venc = datetime.datetime.utcnow() + datetime.timedelta(days=body.get("dias_vencimiento", 5))
+    # B4.1 (P8): el vencimiento es un dia de negocio: las 00:00 del dia de Colombia + los dias (antes, utcnow + dias).
+    venc = datetime.datetime.combine(hoy_colombia(ahora_utc()) + datetime.timedelta(days=body.get("dias_vencimiento", 5)),
+                                     datetime.time())
 
     # If customer_id provided, fetch customer data
     cust_name = body.get("customer_name", "")

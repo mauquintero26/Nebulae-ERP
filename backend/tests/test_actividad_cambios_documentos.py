@@ -40,22 +40,31 @@ def test_comparar_fecha_de_vencimiento_a_nivel_de_dia_en_sc():
                         "antes": "10/01/2026", "despues": "15/01/2026"}]
 
 
-def test_t11_b4_la_fecha_de_vencimiento_se_compara_y_se_muestra_en_el_dia_de_colombia():
-    """T11 calidad (B4): la fecha de negocio se guarda en UTC sin zona; su dia es el de Colombia (America/Bogota), como
-    en el resto del bloque. Las 02:00 UTC del 21 son el 20 a las 9 pm en Bogota: antes se mostraba y comparaba el 21."""
-    antes = {"fecha_vencimiento": datetime(2026, 10, 21, 2, 0)}
-    # El mediodia de Colombia del 20 (lo que manda fechaEditadaParaGuardar: 17:00 UTC) es el mismo dia: no es un cambio.
-    assert cd.comparar("SC", antes, {"fecha_vencimiento": datetime(2026, 10, 20, 17, 0)}) == []
-    cambios = cd.comparar("SC", antes, {"fecha_vencimiento": datetime(2026, 10, 22, 2, 0)})
+def test_t11_b4_la_fecha_de_vencimiento_se_compara_y_se_muestra_como_dia_de_negocio():
+    """B4.1 (P8): el vencimiento de la SC es un dia de negocio (las 00:00 del dia, sin hora ni zona): su dia son los 10
+    primeros caracteres, la misma regla de diaDeNegocio del frontend; no se pasa a Colombia (las 00:00 «UTC» del 24 serian
+    el 23 a las 7 pm). La Actividad dice el mismo dia que la pantalla. (Antes, T11 calidad de B4: el dia de Colombia.)"""
+    antes = {"fecha_vencimiento": datetime(2026, 10, 21, 0, 0)}
+    assert cd.comparar("SC", antes, {"fecha_vencimiento": datetime(2026, 10, 21, 0, 0)}) == []
+    assert cd.comparar("SC", antes, {"fecha_vencimiento": "2026-10-21T00:00:00"}) == []
+    assert cd.comparar("SC", antes, {"fecha_vencimiento": "2026-10-21"}) == []
+    cambios = cd.comparar("SC", antes, {"fecha_vencimiento": datetime(2026, 10, 22, 0, 0)})
     assert cambios == [{"campo": "fecha_vencimiento", "etiqueta": "Fecha de vencimiento",
-                        "antes": "20/10/2026", "despues": "21/10/2026"}]
-    # Con zona, igual; un texto ISO con hora se lee como UTC ('Z' o sin zona); una fecha sin hora es ese mismo dia.
+                        "antes": "21/10/2026", "despues": "22/10/2026"}]
+    # Con zona o con hora, el dia es el que dicen sus 10 primeros caracteres (una SC vieja con hora se lee con su dia UTC).
     assert cd.comparar("SC", antes, {"fecha_vencimiento": datetime(2026, 10, 21, 2, 0, tzinfo=timezone.utc)}) == []
     assert cd.comparar("SC", antes, {"fecha_vencimiento": "2026-10-21T01:30:00.000Z"}) == []
-    assert cd.comparar("SC", antes, {"fecha_vencimiento": "2026-10-21T01:30:00"}) == []
-    assert cd.comparar("SC", antes, {"fecha_vencimiento": "2026-10-20"}) == []
     cambios = cd.comparar("SC", {"fecha_vencimiento": None}, {"fecha_vencimiento": datetime(2026, 1, 1, 3, 0)})
-    assert [(c["antes"], c["despues"]) for c in cambios] == [(None, "31/12/2025")]
+    assert [(c["antes"], c["despues"]) for c in cambios] == [(None, "01/01/2026")]
+
+
+def test_b41_p8_un_vencimiento_a_las_00_horas_no_retrocede_un_dia():
+    """B4.1 (P8, H8): 2026-11-24T00:00:00 es el 24 (antes se pasaba a Colombia y daba el 23); cambiarlo del 24 al 23 SI es
+    un cambio."""
+    antes = {"fecha_vencimiento": datetime(2026, 11, 24, 0, 0)}
+    assert cd.comparar("SC", antes, {"fecha_vencimiento": "2026-11-24"}) == []
+    cambios = cd.comparar("SC", antes, {"fecha_vencimiento": "2026-11-23"})
+    assert [(c["antes"], c["despues"]) for c in cambios] == [("24/11/2026", "23/11/2026")]
 
 
 def test_comparar_muestra_el_dinero_con_formato_colombiano():
