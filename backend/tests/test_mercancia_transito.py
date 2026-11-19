@@ -137,9 +137,13 @@ class TestUpdateTrackingCamposExtra:
     def test_etapa_sin_eta_ni_status_completado_expone_alerta_de_confirmacion_atrasada(self, app_client, admin_token, db, supplier):
         pec = app_client.post("/api/v1/compras/pedidos", json=_pec_payload(supplier, "directo"),
                                headers=_headers(admin_token)).json()["data"]
-        # fecha_compra por defecto es "ahora" -> alert_confirm_days=2 para PENDIENTE_DESPACHO
-        # todavia no deberia estar atrasado.
-        assert pec["tracking_stages"][0]["alert"] is None
+        # fecha_compra por defecto es "ahora" -> alert_confirm_days=2 para PENDIENTE_DESPACHO.
+        # _stage_alert expone el timer desde el inicio (nivel "ok"), no solo cuando
+        # ya esta vencido -- todavia no deberia estar en nivel "atrasado".
+        alert0 = pec["tracking_stages"][0]["alert"]
+        assert alert0 is not None
+        assert alert0["nivel"] == "ok"
+        assert 0 <= alert0["dias_restantes"] <= 2
         # Forzamos fecha_compra al pasado directamente en BD para simular "ya pasaron los 2 dias".
         import datetime
         from app.models.erp_documents import PurchaseOrderFull
