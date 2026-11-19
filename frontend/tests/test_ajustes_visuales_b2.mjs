@@ -118,7 +118,8 @@ console.log('--- V1 TEST 2: el aviso vive en el menú lateral, ya no flota sobre
   const sidebar = sinComentarios(leer('components/Sidebar.tsx'));
   assert.ok(/import \{ AlertasBadge \} from '@\/components\/AlertasBadge';/.test(sidebar), 'Sidebar importa AlertasBadge');
   assert.equal((sidebar.match(/<AlertasBadge\b/g) ?? []).length, 1, 'el Sidebar lo monta una vez');
-  assert.ok(/<AlertasBadge colapsado=\{isCollapsed\} \/>/.test(sidebar), 'con el estado contraído del menú');
+  // B4.1 (P3): con el plegado efectivo (por debajo de 768 px el menú va plegado aunque se haya elegido abierto).
+  assert.ok(/<AlertasBadge colapsado=\{plegado\} \/>/.test(sidebar), 'con el estado contraído del menú');
   // Arriba: antes de la lista de grupos del menú.
   assert.ok(sidebar.indexOf('<AlertasBadge') < sidebar.indexOf('MENU_ITEMS.map('), 'arriba, antes de los grupos');
 }

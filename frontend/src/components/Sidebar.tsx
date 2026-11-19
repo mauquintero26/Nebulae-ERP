@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { 
@@ -10,19 +10,45 @@ import {
   PanelLeftClose, PanelLeftOpen, LogOut, SlidersHorizontal, Settings, UserCircle2
 } from 'lucide-react';
 import { AlertasBadge } from '@/components/AlertasBadge';
+import { useAnchoVentana } from '@/components/ui/useAnchoVentana';
 import { FOCO } from '@/lib/design-system';
+import { alternarMenu, menuLateralEfectivo } from '@/lib/menu-lateral';
 
 export function Sidebar() {
   const pathname = usePathname();
   const [isCollapsed, setIsCollapsed] = useState(false);
+  // B4.1 (P3): por debajo de 768 px el menú va plegado y, al abrirlo, flota encima de la página (lib/menu-lateral.js).
+  // Lo que se pinta lee `plegado` (el plegado efectivo); el estado elegido solo entra en la regla y en el alternado.
+  const anchoVentana = useAnchoVentana();
+  const [abiertoEnAngosta, setAbiertoEnAngosta] = useState(false);
+  const { plegado, superpuesto } = menuLateralEfectivo({ anchoVentana, plegadoElegido: isCollapsed, abiertoEnAngosta });
   const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({});
+
+  // Un cambio de ruta (un enlace del submenú navega sin recargar) cierra la capa: se ajusta en el render, sin efecto.
+  const [rutaDeLaCapa, setRutaDeLaCapa] = useState(pathname);
+  if (rutaDeLaCapa !== pathname) {
+    setRutaDeLaCapa(pathname);
+    setAbiertoEnAngosta(false);
+  }
+
+  // Esc cierra la capa mientras está superpuesta.
+  useEffect(() => {
+    if (!superpuesto) return;
+    const alTeclear = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setAbiertoEnAngosta(false);
+    };
+    document.addEventListener('keydown', alTeclear);
+    return () => document.removeEventListener('keydown', alTeclear);
+  }, [superpuesto]);
 
   const toggleMenu = (name: string) => {
     setOpenMenus(prev => ({ ...prev, [name]: !prev[name] }));
   };
 
   const handleToggleCollapse = () => {
-    setIsCollapsed(!isCollapsed);
+    const siguiente = alternarMenu({ anchoVentana, plegadoElegido: isCollapsed, abiertoEnAngosta });
+    setIsCollapsed(siguiente.plegadoElegido);
+    setAbiertoEnAngosta(siguiente.abiertoEnAngosta);
   };
 
   const MENU_ITEMS = [
@@ -121,30 +147,44 @@ export function Sidebar() {
     window.location.href = '/login';
   };
 
+  // B4.1 (P3): superpuesto, el menú flota encima de la página a 256 px y deja en su lugar un hueco de 80 px (la página no
+  // salta), con un fondo que lo cierra. Sin superponer, el ancho del plegado efectivo; max-md:w-20 lo angosta ya antes de
+  // hidratar (el ancho de la ventana es null en el servidor).
+  const claseAside = superpuesto
+    ? 'fixed inset-y-0 left-0 z-50 w-64 shadow-xl'
+    : `${plegado ? 'w-20' : 'w-64'} max-md:w-20 relative shadow-sm`;
+
   return (
-    <aside className={`${isCollapsed ? 'w-20' : 'w-64'} transition-all duration-300 bg-white border-r border-slate-200 h-screen flex flex-col shadow-sm flex-shrink-0 relative`}>
+    <>
+    {superpuesto && (
+      <>
+        <div aria-hidden="true" className="w-20 shrink-0" />
+        <button type="button" aria-label="Cerrar el menú" className="fixed inset-0 z-40 bg-slate-900/30" onClick={() => setAbiertoEnAngosta(false)} />
+      </>
+    )}
+    <aside className={`${claseAside} transition-all duration-300 bg-white border-r border-slate-200 h-screen flex flex-col flex-shrink-0`}>
       {/* Brand & Toggle */}
       <div className="h-16 flex items-center justify-between px-5 border-b border-slate-100 shrink-0">
         <div className="flex items-center overflow-hidden whitespace-nowrap">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-600 to-blue-600 flex items-center justify-center shadow-md flex-shrink-0">
             <Sparkles className="text-white w-4 h-4" />
           </div>
-          {!isCollapsed && <h1 className="text-xl font-extrabold text-slate-900 tracking-tight ml-3">Nebulae Hub</h1>}
+          {!plegado && <h1 className="text-xl font-extrabold text-slate-900 tracking-tight ml-3">Nebulae Hub</h1>}
         </div>
         {/* B4 T24 (FINAL-m25): el foco del token común (antes focus:outline-none: sin indicador, medido en el banco). */}
-        <button onClick={handleToggleCollapse} className={`rounded-md text-slate-400 hover:text-purple-600 ${FOCO}`} title={isCollapsed ? "Expandir Menú" : "Contraer Menú"}>
-          {isCollapsed ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
+        <button onClick={handleToggleCollapse} className={`rounded-md text-slate-400 hover:text-purple-600 ${FOCO}`} title={plegado ? "Expandir Menú" : "Contraer Menú"}>
+          {plegado ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
         </button>
       </div>
 
       {/* T11 (V1): el aviso de documentos atrasados de Ventas, arriba del menú (ya no flota sobre las cabeceras). */}
-      <AlertasBadge colapsado={isCollapsed} />
+      <AlertasBadge colapsado={plegado} />
 
       {/* Navigation */}
       <div className="flex-1 overflow-y-auto py-6 px-3 space-y-8 scrollbar-hide">
         {MENU_ITEMS.map((group, idx) => (
           <div key={idx}>
-            {!isCollapsed && (
+            {!plegado && (
               <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 px-3">
                 {group.group}
               </h2>
@@ -159,9 +199,9 @@ export function Sidebar() {
                 if ((item as any).disabled) {
                   return (
                     <li key={itemIdx}>
-                      <div className={`flex items-center px-3 py-2.5 text-sm font-medium rounded-lg text-slate-400 cursor-not-allowed ${isCollapsed ? 'justify-center' : ''}`} title={isCollapsed ? item.name : ''}>
-                        <Icon className={`w-5 h-5 opacity-50 ${isCollapsed ? '' : 'mr-3'}`} />
-                        {!isCollapsed && (
+                      <div className={`flex items-center px-3 py-2.5 text-sm font-medium rounded-lg text-slate-400 cursor-not-allowed ${plegado ? 'justify-center' : ''}`} title={plegado ? item.name : ''}>
+                        <Icon className={`w-5 h-5 opacity-50 ${plegado ? '' : 'mr-3'}`} />
+                        {!plegado && (
                           <>
                             {item.name}
                             <span className="ml-auto text-[10px] font-semibold bg-slate-100 text-slate-500 py-0.5 px-2 rounded-full">Dev</span>
@@ -175,12 +215,12 @@ export function Sidebar() {
                 return (
                   <li key={itemIdx}>
                     <div className="flex flex-col">
-                      <div className={`flex items-center justify-between px-3 py-2.5 text-sm font-medium rounded-lg transition-colors cursor-pointer ${isActive ? 'bg-purple-50 text-purple-700' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`} title={isCollapsed ? item.name : ''}>
+                      <div className={`flex items-center justify-between px-3 py-2.5 text-sm font-medium rounded-lg transition-colors cursor-pointer ${isActive ? 'bg-purple-50 text-purple-700' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`} title={plegado ? item.name : ''}>
                         <div className="flex items-center flex-1" onClick={() => window.location.href = item.path}>
-                          <Icon className={`w-5 h-5 flex-shrink-0 ${isActive ? 'text-purple-600' : 'text-slate-400'} ${isCollapsed ? 'mx-auto' : 'mr-3'}`} />
-                          {!isCollapsed && <span className="truncate">{item.name}</span>}
+                          <Icon className={`w-5 h-5 flex-shrink-0 ${isActive ? 'text-purple-600' : 'text-slate-400'} ${plegado ? 'mx-auto' : 'mr-3'}`} />
+                          {!plegado && <span className="truncate">{item.name}</span>}
                         </div>
-                        {!isCollapsed && hasSubItems && (
+                        {!plegado && hasSubItems && (
                           <div 
                             className="ml-auto flex-shrink-0 p-1 hover:bg-slate-200/50 rounded transition-colors" 
                             onClick={(e) => {
@@ -194,7 +234,7 @@ export function Sidebar() {
                       </div>
                       
                       {/* Sub-Items */}
-                      {!isCollapsed && hasSubItems && isExpanded && (
+                      {!plegado && hasSubItems && isExpanded && (
                         <ul className="mt-1 space-y-1 pl-10 border-l-2 border-slate-100 ml-5">
                           {item.subItems!.map((subItem, subIdx) => {
                             const isSubActive = pathname === subItem.path;
@@ -226,31 +266,32 @@ export function Sidebar() {
       <div className="p-4 border-t border-slate-100 flex flex-col gap-2 shrink-0">
         <button 
           onClick={handleToggleCollapse}
-          className={`flex items-center w-full px-3 py-2.5 text-sm font-medium rounded-lg text-slate-500 hover:bg-slate-100 transition-colors ${isCollapsed ? 'justify-center' : ''}`}
-          title={isCollapsed ? 'Expandir Menú' : 'Contraer Menú'}
+          className={`flex items-center w-full px-3 py-2.5 text-sm font-medium rounded-lg text-slate-500 hover:bg-slate-100 transition-colors ${plegado ? 'justify-center' : ''}`}
+          title={plegado ? 'Expandir Menú' : 'Contraer Menú'}
         >
-          {isCollapsed ? <PanelLeftOpen className="w-5 h-5 text-slate-400" /> : <PanelLeftClose className="w-5 h-5 text-slate-400 mr-3" />}
-          {!isCollapsed && <span>Contraer Menú</span>}
+          {plegado ? <PanelLeftOpen className="w-5 h-5 text-slate-400" /> : <PanelLeftClose className="w-5 h-5 text-slate-400 mr-3" />}
+          {!plegado && <span>Contraer Menú</span>}
         </button>
 
         <Link
           href="/dashboard/perfil"
-          className={`flex items-center w-full px-3 py-2.5 text-sm font-medium rounded-lg text-slate-600 hover:bg-purple-50 hover:text-purple-700 transition-colors ${isCollapsed ? 'justify-center' : ''}`}
-          title={isCollapsed ? 'Mi Perfil' : ''}
+          className={`flex items-center w-full px-3 py-2.5 text-sm font-medium rounded-lg text-slate-600 hover:bg-purple-50 hover:text-purple-700 transition-colors ${plegado ? 'justify-center' : ''}`}
+          title={plegado ? 'Mi Perfil' : ''}
         >
-          <UserCircle2 className={`w-5 h-5 text-slate-400 ${isCollapsed ? '' : 'mr-3'}`} />
-          {!isCollapsed && <span>Mi Perfil</span>}
+          <UserCircle2 className={`w-5 h-5 text-slate-400 ${plegado ? '' : 'mr-3'}`} />
+          {!plegado && <span>Mi Perfil</span>}
         </Link>
 
-        <button 
+        <button
           onClick={handleLogout}
-          className={`flex items-center w-full px-3 py-2.5 text-sm font-medium rounded-lg text-slate-600 hover:bg-red-50 hover:text-red-600 transition-colors ${isCollapsed ? 'justify-center' : ''}`}
-          title={isCollapsed ? 'Cerrar Sesión' : ''}
+          className={`flex items-center w-full px-3 py-2.5 text-sm font-medium rounded-lg text-slate-600 hover:bg-red-50 hover:text-red-600 transition-colors ${plegado ? 'justify-center' : ''}`}
+          title={plegado ? 'Cerrar Sesión' : ''}
         >
-          <LogOut className={`w-5 h-5 text-slate-400 group-hover:text-red-500 ${isCollapsed ? '' : 'mr-3'}`} />
-          {!isCollapsed && <span>Cerrar Sesión</span>}
+          <LogOut className={`w-5 h-5 text-slate-400 group-hover:text-red-500 ${plegado ? '' : 'mr-3'}`} />
+          {!plegado && <span>Cerrar Sesión</span>}
         </button>
       </div>
     </aside>
+    </>
   );
 }
