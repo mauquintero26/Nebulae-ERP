@@ -40,7 +40,7 @@ import {
 // «Sin precio» es chipSinPrecio, el mismo chip (texto y tono) de la tarjeta.
 import {
   pedidoVigente, tarjetasCotizaciones, marcaPedidoCotizacion, chipSinPrecio, diaDeNegocio, fechaNegocioVencida,
-  fechaPorVencer, avisoSolicitudTrasRechazo,
+  fechaPorVencer, avisoSolicitudTrasRechazo, atrasadosDeLaPestana,
 } from '@/lib/listas-ventas';
 import {
   SubNav, PageHeader, Modal, Button, ContenidoEnlace, FranjaKpis, TarjetaKpi, useEstadoKpi, MenuFila, ModalMotivo,
@@ -1259,7 +1259,11 @@ export default function CotizacionClient() {
 
   // ── B4 T9, bloque 6: la franja del flujo (FLUJO-ventas-pantallas C; R8, C3, D42, RP89) ──
   const pasosFlujo = useMemo(() => pasosDeLista(flujo.datos, 'COT'), [flujo.datos]);
-  const atrasadosCOT = pasosFlujo.find((p) => p.esEste)?.atrasados ?? null;
+  // B4.1 (P4): «Con atraso (N)» cuenta la pestaña abierta (atrasados_por_vista de la lista), no el paso entero del flujo; en
+  // Kanban, el del tablero (todas). Las cajas de la franja siguen con /ventas/flujo.
+  const atrasadosCOT = atrasadosDeLaPestana(listado.crudo?.atrasados_por_vista ?? null, {
+    vista: estado.vista, enKanban, vistaTablero: 'todas', vistaInicial: INICIAL_COT.vista, vistasSinAtraso: VISTAS_SIN_ATRASO,
+  });
   // Lo que decía el aviso ámbar de la lista: «N sin precio» (resumen.sin_calc) y «N vencen en 7 días»
   // (resumen.vencen_pronto, con valida_hasta del Bloque 3: RP89). Las cotizaciones sin atender son «Con atraso».
   const avisosFlujo = useMemo(() => avisosCotizaciones(listado.resumen), [listado.resumen]);

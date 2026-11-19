@@ -282,6 +282,25 @@ export { diaDeNegocio };
 
 
 /**
+ * B4.1 T6 (P4): el número de «Con atraso (N)» es el de la PESTAÑA abierta, no el del paso entero del flujo. El servidor lo
+ * manda en `atrasados_por_vista` (con con_conteos=true): SC {activas, confirmadas, esperan_cotizacion, todas_sin_soporte} y COT
+ * {activas, confirmadas, todas}.
+ *  - en Kanban: el del tablero (`vistaTablero`, que muestra todas);
+ *  - con la vista vacía o una de `vistasSinAtraso` (desde ellas «Con atraso» abre Activas): la de `vistaInicial`;
+ *  - si no, la de `vista`.
+ * Sin objeto (todavía carga) o con un valor que no es un número: null (la franja lo muestra como pendiente).
+ * @param {unknown} porVista  res.atrasados_por_vista
+ * @param {{vista?: string | null, enKanban: boolean, vistaTablero: string, vistaInicial: string, vistasSinAtraso: ReadonlyArray<string>}} opciones
+ * @returns {number | null}
+ */
+export function atrasadosDeLaPestana(porVista, { vista, enKanban, vistaTablero, vistaInicial, vistasSinAtraso }) {
+  if (!porVista || typeof porVista !== 'object') return null;
+  const clave = enKanban ? vistaTablero : (!vista || vistasSinAtraso.includes(vista)) ? vistaInicial : vista;
+  const n = /** @type {Record<string, unknown>} */ (porVista)[clave];
+  return typeof n === 'number' && Number.isFinite(n) ? n : null;
+}
+
+/**
  * B4 T9 r1 (I2): la fecha de negocio ya pasó: su día (diaDeNegocio) es anterior al día de HOY en Colombia (diaColombia de
  * `ahora`). El mismo día todavía no está vencida. La columna Entrega est. la pinta en rojo (la regla de isOverdue de la
  * fila de antes, sin llamar al reloj en el render). Lo que no es una fecha: false. No se usa fechaVencida, que lee

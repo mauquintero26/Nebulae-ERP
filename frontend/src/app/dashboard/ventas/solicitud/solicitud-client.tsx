@@ -45,7 +45,7 @@ import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas
 import {
   generoCotizacion, cotizacionesVigentes, resumenCancelacionSolicitudes, repartirCancelacionSolicitudes, estadoEnPapelera,
   contarVencidasEnPapelera, confirmacionVaciarVencidas, textoPapeleraVaciada, tarjetasSolicitudes, fechaVencida,
-  vistaSolicitudesPermitida,
+  vistaSolicitudesPermitida, atrasadosDeLaPestana,
 } from '@/lib/listas-ventas';
 import { fechaCorta, fechaLarga } from '@/lib/fechas-colombia';
 import { mailtoUrl, telUrl, motivoTelefono } from '@/lib/chatter';
@@ -1516,7 +1516,12 @@ export default function SolicitudClient() {
 
   // ── B4 T8, bloque 6: la franja del flujo (FLUJO-ventas-pantallas B; R8, C3, D42) ──
   const pasosFlujo = useMemo(() => pasosDeLista(flujo.datos, 'SC'), [flujo.datos]);
-  const atrasadosSC = pasosFlujo.find((p) => p.esEste)?.atrasados ?? null;
+  // B4.1 (P4): «Con atraso (N)» cuenta la pestaña abierta (atrasados_por_vista de la lista), no el paso entero del flujo; en
+  // Kanban, el del tablero (todas las que no son de soporte). Las cajas de la franja siguen con /ventas/flujo.
+  const atrasadosSC = atrasadosDeLaPestana(listado.crudo?.atrasados_por_vista ?? null, {
+    vista: estado.vista, enKanban: modoEfectivo === 'kanban', vistaTablero: 'todas_sin_soporte', vistaInicial: INICIAL_SC.vista,
+    vistasSinAtraso: VISTAS_SIN_ATRASO,
+  });
   // RP19 (4): el aviso ámbar «N vencidas» lee resumen.vencidas (las activas con el vencimiento pasado).
   const vencidasResumen = (listado.resumen as ResumenSC | null)?.vencidas;
   const avisosFlujo = useMemo(() => {

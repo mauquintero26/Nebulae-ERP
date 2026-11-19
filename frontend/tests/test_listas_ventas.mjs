@@ -950,7 +950,8 @@ console.log('--- B4 T9: el cableado de la lista de Cotizaciones con el servidor 
   assert.match(lista, /semaforo=\{\{ atrasados: atrasadosCOT, filtro: filtroSemaforo, onFiltrar: alFiltrarSemaforo \}\}/);
   // El botón «Con atraso» queda pulsado con el filtro del estado único (y «Ver todo» sin él).
   assert.match(lista, /const filtroSemaforo: FiltroSemaforo = estado\.semaforo === 'atrasados' \? 'atrasados' : 'todos';/);
-  assert.match(lista, /const atrasadosCOT = pasosFlujo\.find\(\(p\) => p\.esEste\)\?\.atrasados \?\? null;/);
+  // B4.1 (P4): «Con atraso (N)» es el de la pestaña abierta (atrasados_por_vista), ya no el del paso entero.
+  assert.match(lista, /const atrasadosCOT = atrasadosDeLaPestana\(listado\.crudo\?\.atrasados_por_vista \?\? null, \{/);
   assert.ok(!lista.includes('noResueltos'), 'sin la clave noResueltos');
   assert.match(lista, /const avisosFlujo = useMemo\(\(\) => avisosCotizaciones\(listado\.resumen\), \[listado\.resumen\]\);/);
   assert.match(lista, /avisos=\{avisosFlujo\}/);
@@ -1745,6 +1746,25 @@ console.log('--- B4 T24 f4 (F44-a): las otras pantallas (Dashboard, Marketing, A
     return /["'`\s]pb-(?:10|20|24)["'`\s]/.test(codigo);
   });
   assert.deepEqual(sueltos, [], 'sin pb-24, pb-20 ni pb-10 literales en las otras pantallas');
+}
+
+console.log('--- B4.1 T6 (P4): atrasadosDeLaPestana — «Con atraso (N)» cuenta la pestaña abierta ---');
+{
+  const porVista = { activas: 3, confirmadas: 2, esperan_cotizacion: 1, todas_sin_soporte: 5 };
+  const sc = { vistaTablero: 'todas_sin_soporte', vistaInicial: 'activas', vistasSinAtraso: ['soporte', 'papelera', 'canceladas'] };
+  assert.equal(listas.atrasadosDeLaPestana(porVista, { ...sc, vista: 'confirmadas', enKanban: false }), 2);
+  assert.equal(listas.atrasadosDeLaPestana(porVista, { ...sc, vista: 'activas', enKanban: false }), 3);
+  assert.equal(listas.atrasadosDeLaPestana(porVista, { ...sc, vista: 'canceladas', enKanban: false }), 3, 'desde Canceladas abre Activas');
+  assert.equal(listas.atrasadosDeLaPestana(porVista, { ...sc, vista: 'confirmadas', enKanban: true }), 5, 'en Kanban, el tablero');
+  assert.equal(listas.atrasadosDeLaPestana(porVista, { ...sc, vista: undefined, enKanban: false }), 3);
+  assert.equal(listas.atrasadosDeLaPestana(null, { ...sc, vista: 'activas', enKanban: false }), null, 'mientras carga');
+  assert.equal(listas.atrasadosDeLaPestana({ activas: 'x' }, { ...sc, vista: 'activas', enKanban: false }), null);
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  for (const ruta of ['app/dashboard/ventas/solicitud/solicitud-client.tsx', 'app/dashboard/ventas/cotizacion/cotizacion-client.tsx']) {
+    const f = leer(ruta);
+    assert.match(f, /atrasadosDeLaPestana\(listado\.crudo\?\.atrasados_por_vista/, `${ruta}: el número sale de la lista`);
+    assert.ok(!/pasosFlujo\.find\(\(p\) => p\.esEste\)\?\.atrasados/.test(f), `${ruta}: ya no el del paso entero`);
+  }
 }
 
 console.log('OK test_listas_ventas.mjs');

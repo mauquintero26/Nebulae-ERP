@@ -83,7 +83,7 @@ import { diaColombia, fechaLarga } from './fechas-colombia.js';
  * @typedef {{clave: string, n: number, repeticion: number, usuario: number | null, datos: RespuestaListado | null,
  *   error: unknown, rechazo: RechazoOrden | null}} ResultadoListado
  * @typedef {{filas: any[], total: number | null, conteos: Record<string, any> | null, resumen: Record<string, any> | null,
- *   crudo: unknown, cargandoInicial: boolean, recargando: boolean, error: unknown, avisoOrden: string | null}} EstadoListado
+ *   crudo: any, cargandoInicial: boolean, recargando: boolean, error: unknown, avisoOrden: string | null}} EstadoListado
  */
 
 /** 25 o 50 filas por página (y por columna del tablero). Inmutable. */
