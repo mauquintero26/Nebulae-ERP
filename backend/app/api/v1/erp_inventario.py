@@ -35,6 +35,7 @@ from app.core.analisis import validar_top
 from app.core.existencias import ESTADOS_STOCK, POR, consulta_existencias, disponibilidad_sku, resumen_existencias
 from app.core.listados import (MAX_OFFSET, contar_por_vista, filtrar_por_estados, leer_lista, leer_orden, paginar,
                                respuesta as respuesta_de_lista, texto_busqueda)
+from app.core.movimientos_inventario import DIRECCIONES_KARDEX
 from app.core.periodos import inicio_del_dia_utc, resolver_periodo
 from app.models.fase1b import InventoryOwnerBalance, InventoryReservation, SaleOrderLineErp
 from app.models.fase3 import InventoryQuarantine
@@ -283,7 +284,7 @@ def _direcciones_del_kardex(direction) -> list:
         raise HTTPException(422, str(e))
     direcciones = []
     for valor in recibidas:
-        if valor.upper() not in ai.DIRECCIONES_KARDEX:
+        if valor.upper() not in DIRECCIONES_KARDEX:
             raise HTTPException(422, f"La dirección «{valor:.40}» no existe en el Kardex.")
         if valor.upper() not in direcciones:
             direcciones.append(valor.upper())
@@ -304,6 +305,7 @@ def get_kardex(
     direction: Optional[str] = Query(None, description="Una o varias, en CSV: IN | OUT | ADJUST_IN | ADJUST_OUT | TRANSFER_IN | TRANSFER_OUT | QUARANTINE | SCRAP | RETURN_IN"),
     start_date: Optional[datetime.date] = Query(None, description="Fecha inicial"),
     end_date: Optional[datetime.date] = Query(None, description="Fecha final"),
+    orden: Optional[str] = Query(None, description="fecha (del más antiguo) o -fecha (del más reciente, por defecto)"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0, le=MAX_OFFSET),
     user: User = Depends(require_roles(*ALL_ERP_ROLES)),
@@ -312,8 +314,8 @@ def get_kardex(
     """Consulta el historial de movimientos (Kárdex) inmutable con filtros y paginación.
 
     B4 T13 (KANBAN-resto, R11, RP54): direction acepta una lista en CSV (leer_lista), cada valor en mayúsculas y de los
-    que escribe el sistema (analisis_inventario.DIRECCIONES_KARDEX); con un solo valor la consulta es la de hoy (la
-    igualdad). La respuesta {status, data: {total, limit, offset, items}} no cambia y no hay `q`."""
+    que escribe el sistema (movimientos_inventario.DIRECCIONES_KARDEX: la cuarentena la escribe erp_compras; la pérdida y la devolución, erp_ventas_fase4); con un solo valor la consulta es la de hoy (la
+    igualdad). B4.1 (P26): `orden` es fecha (ascendente) o -fecha (el de hoy, por defecto), con el id como desempate; otro valor da el 422 de leer_orden. La respuesta {status, data: {total, limit, offset, items}} no cambia y no hay `q`."""
     direcciones = _direcciones_del_kardex(direction)
     owner = _valor_sin_control(owner)  # B4 T24 (FINAL-m7): un NUL llegaba al SQL (500); ahora 422 (D46, R21)
     query = (
@@ -358,7 +360,8 @@ def get_kardex(
         query = query.where(InventoryMovement.created_at < _inicio_del_dia_co(end_date + datetime.timedelta(days=1)))
 
     total = db.execute(select(func.count()).select_from(query.subquery())).scalar() or 0
-    query = query.order_by(InventoryMovement.created_at.desc(), InventoryMovement.id.desc()).limit(limit).offset(offset)
+    query = query.order_by(*leer_orden(orden, {"fecha": InventoryMovement.created_at}, "-fecha",
+                                      id_lista=InventoryMovement.id)).limit(limit).offset(offset)
     rows = db.execute(query).mappings().all()
 
     items = [

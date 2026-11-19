@@ -243,7 +243,7 @@ def test_permisos_y_parametros_declarados(app_client, vendedor_token, compras_to
     assert (limite["default"], limite["minimum"], limite["maximum"]) == (100, 0, 200)
     assert parametros["offset"]["schema"]["maximum"] == MAX_OFFSET
     kardex = {p["name"] for p in caminos[RUTA_KARDEX]["get"]["parameters"]}
-    assert kardex == {"sku_id", "warehouse_id", "owner", "direction", "start_date", "end_date", "limit", "offset"}
+    assert kardex == {"sku_id", "warehouse_id", "owner", "direction", "start_date", "end_date", "orden", "limit", "offset"}
 
 
 # ─── R5: sin los parámetros nuevos, la lista responde como hoy (más «fecha») ────────────────────────────────────────
@@ -353,6 +353,41 @@ def test_kardex_direction_en_csv(app_client, db, admin_token, sku, warehouse):
     for valor in ("SCRAP", "RETURN_IN", "QUARANTINE"):                            # los valores que escribe el sistema
         assert kardex(direction=valor)["total"] == 1, valor
     assert kardex()["total"] == 10 and kardex(direction=" , ")["total"] == 10
+
+
+def test_kardex_orden_por_fecha_en_los_dos_sentidos(app_client, db, admin_token, sku, warehouse):
+    """B4.1 (P26): orden=fecha asciende; orden=-fecha y sin orden descienden (como hoy); otro campo da 422; con limit=1
+    cada offset trae un movimiento distinto."""
+    op = _guardar(db, InventoryOperation(operation_type="ADJUSTMENT", status="DONE"))
+    ids = [_guardar(db, InventoryMovement(operation_id=op.id, sku_id=sku.id, quantity=1, direction="IN",
+                                          warehouse_id=warehouse.id, created_at=_utc(2001, 1, d, 12),
+                                          owner="NEBULAE")).id for d in (1, 2, 3)]
+
+    def pedir(**params):
+        return [m["id"] for m in _get(app_client, admin_token, RUTA_KARDEX, sku_id=sku.id, **params)["data"]["items"]]
+
+    assert pedir(orden="fecha") == ids
+    assert pedir(orden="-fecha") == ids[::-1] and pedir() == ids[::-1]
+    assert _error(app_client, admin_token, RUTA_KARDEX, sku_id=sku.id, orden="cantidad") == (
+        "No se puede ordenar por «cantidad».")
+    for orden in ("fecha", "-fecha"):
+        vistos = [pedir(orden=orden, limit=1, offset=n)[0] for n in range(3)]
+        assert sorted(vistos) == sorted(ids) and len(set(vistos)) == 3, orden
+
+
+def test_direccion_salida_incluye_la_perdida_y_entrada_la_devolucion(app_client, db, admin_token, sku, warehouse):
+    """B4.1 (P16): una operación cuyo primer movimiento es SCRAP es de salida; una con RETURN_IN, de entrada."""
+    def operacion(direccion):
+        op = _guardar(db, InventoryOperation(operation_type="ADJUSTMENT", status="DONE", dest_warehouse_id=warehouse.id))
+        _guardar(db, InventoryMovement(operation_id=op.id, sku_id=sku.id, quantity=1, direction=direccion,
+                                       warehouse_id=warehouse.id, created_at=_utc(2001, 2, 1, 12), owner="NEBULAE"))
+        return op.id
+
+    perdida, devolucion = operacion("SCRAP"), operacion("RETURN_IN")
+    salidas = _ids(_get(app_client, admin_token, warehouse_id=warehouse.id, direccion="salida", limit=200))
+    entradas = _ids(_get(app_client, admin_token, warehouse_id=warehouse.id, direccion="entrada", limit=200))
+    assert perdida in salidas and perdida not in entradas
+    assert devolucion in entradas and devolucion not in salidas
 
 
 def _como_la_ruta(cuerpo):
