@@ -1219,7 +1219,8 @@ console.log('--- B4 T10: el cableado de la lista de Pedidos de venta con el serv
   assert.match(acciones, /\{ etiqueta: 'Ver detalle', icono: FileCheck, onClick: \(\) => acciones\?\.abrir\(p\) \}/);
   assert.match(acciones, /\{ etiqueta: 'Crear PXP', [^\n]*oculto: !puedePxp,\s*deshabilitado: acciones\?\.creandoPxp === p\.id \}/);
   // B4 T24 f2 r1 (m14, D27): «Cancelar pedido» (PATCH a CANCELADO: ADMIN y ASESOR) solo con mover; sin él, el ⋯ no lo ofrece.
-  assert.match(acciones, /\{ etiqueta: 'Cancelar pedido', icono: X, peligro: true, onClick: \(\) => acciones\?\.ir\(`\/dashboard\/ventas\/venta\/\$\{p\.id\}\?accion=cancelar`\),\s*oculto: !acciones\?\.mover \|\| !transicionesPedido\(p\.estado\)\.includes\('CANCELADO'\) \}/);
+  // B4.1 (P10): abre la ventana del motivo de la pantalla (acciones.cancelar), ya no el detalle con ?accion=cancelar.
+  assert.match(acciones, /\{ etiqueta: 'Cancelar pedido', icono: X, peligro: true, onClick: \(\) => acciones\?\.cancelar\(p\),\s*oculto: !acciones\?\.mover \|\| !transicionesPedido\(p\.estado\)\.includes\('CANCELADO'\) \}/);
   assert.match(acciones, /<MenuFila items=\{items\} etiqueta=\{`Acciones de \$\{p\.numero\}`\} \/>/);
   // B4 T24 f2 r1 (m18, D27): con el rol leído después de montar (useRolActual), el mismo de la tarjeta y del tablero.
   assert.match(lista, /const puedePxpRol = puedeCrearOrdenDePago\(rol\);/);
@@ -1570,7 +1571,7 @@ console.log('--- B4 T24 f2 r1 (m14, m18): Pedidos de venta y su detalle ofrecen 
     .replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   const lista = leer('venta/venta-client.tsx');
   assert.match(lista, /type AccionesFilaPedido = \{[\s\S]*?\bmover: boolean;[\s\S]*?\};/);
-  assert.match(lista, /const accionesFila = useMemo<AccionesFilaPedido>\(\(\) => \(\{\s*abrir: abrirPedido, ir: \(ruta\) => router\.push\(ruta\), crearPxp, creandoPxp, puedePxpRol, mover: accesoTablero\.mover,\s*\}\), \[abrirPedido, router, crearPxp, creandoPxp, puedePxpRol, accesoTablero\.mover\]\);/);
+  assert.match(lista, /const accionesFila = useMemo<AccionesFilaPedido>\(\(\) => \(\{\s*abrir: abrirPedido, ir: \(ruta\) => router\.push\(ruta\), crearPxp, creandoPxp, puedePxpRol, mover: accesoTablero\.mover,\s*cancelar: pedirCancelacion,\s*\}\), \[abrirPedido, router, crearPxp, creandoPxp, puedePxpRol, accesoTablero\.mover, pedirCancelacion\]\);/);
   assert.ok(!/getUsuarioActual\(\)\.role/.test(lista), 'Pedidos sin getUsuarioActual().role');
   // El detalle (venta/[id], R17): el botón y la ventana de ?accion=cancelar con puedeCancelarPedido (el estado y el rol).
   const detalle = leer('venta/[id]/page.tsx');

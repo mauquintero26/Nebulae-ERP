@@ -1642,7 +1642,8 @@ console.log('--- B4 T10 TEST Q: el cableado del tablero de Pedidos (C9, C15, R11
   // bloque «B4 T24 f2 (F47)» EJECUTA con un apiFetch falso (el PATCH y su cuerpo, el aviso, la regla recargarTrasError con 409, 400,
   // 422, la red cortada, 403 y 500, el error que sigue y qué columnas del tablero se recargan: D39). Aquí, el cableado: el hook, y solo
   // quien mueve (accesoTablero.mover) ve las acciones del ⋯ (FINAL-m38).
-  assert.match(lista, /const \{\s*cambiarDesdeTablero, accionDesdeTablero, accionesTarjeta, cancelando, cancelarConMotivo, cerrarCancelacion,\s*\} = useAccionesTableroPedidos<FilaPedido>\(\{ tablero, recargarTrasCambio, mover: accesoTablero\.mover \}\);/);
+  // B4.1 (P10): el hook también devuelve pedirCancelacion (el ⋯ de la fila abre la misma ventana).
+  assert.match(lista, /const \{\s*cambiarDesdeTablero, accionDesdeTablero, accionesTarjeta, cancelando, pedirCancelacion, cancelarConMotivo, cerrarCancelacion,\s*\} = useAccionesTableroPedidos<FilaPedido>\(\{ tablero, recargarTrasCambio, mover: accesoTablero\.mover \}\);/);
   assert.match(lista, /<ModalMotivo\s+titulo=\{`Cancelar \$\{cancelando\.pedido\.numero\}`\}\s+efectos=\{efectosCancelarPedido\(cancelando\.pedido\)\}[\s\S]*?onConfirmar=\{cancelarConMotivo\}\s+onCerrar=\{cerrarCancelacion\}/);
   assert.match(lista, /const recargarTrasCambio = useCallback\(\(\) => \{\s*recargarListado\(\);\s*setRecargaFlujo\(\(n\) => n \+ 1\);\s*setVueltaStats\(\(n\) => n \+ 1\);\s*\}, \[recargarListado\]\);/,
     'lo que mueve un cambio: las pestañas, la franja y las tarjetas (del tablero, solo el origen y el destino)');
@@ -2048,6 +2049,33 @@ console.log('--- B4 T24 f2 r1 (m3, m28, m32): el return_to de E-Commerce al solt
   const hook = readFileSync(new URL('../src/app/dashboard/ventas/acciones-tablero-pedidos.ts', import.meta.url), 'utf8');
   assert.match(hook, /\(p: P, resultado: \{ estado: string \}\) => acciones\.cambiar\(p, resultado\.estado\)/);
   assert.match(hook, /await acciones\.cancelar\(cancelando\.pedido, motivo, cancelando\.columnas\);/);
+}
+
+console.log('--- B4.1 T6 (P10): «Cancelar pedido» de la fila usa la ventana del tablero ---');
+{
+  const leer = (r) => readFileSync(new URL(`../src/app/dashboard/ventas/${r}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const lista = leer('venta/venta-client.tsx');
+  assert.match(lista, /\{ etiqueta: 'Cancelar pedido', icono: X, peligro: true, onClick: \(\) => acciones\?\.cancelar\(p\),/);
+  assert.ok(!lista.includes('?accion=cancelar'), 'la lista ya no manda al detalle con ?accion=cancelar');
+  const hook = leer('acciones-tablero-pedidos.ts');
+  assert.match(hook, /return \{[^}]*\bpedirCancelacion\b[^}]*\};/, 'el hook devuelve pedirCancelacion');
+  assert.match(hook, /const pedirCancelacion = useCallback\(\(p: P\) => setCancelando\(\{ pedido: p, columnas: \[\] \}\), \[\]\);/);
+  assert.match(hook, /type Columnas = ReadonlyArray<string>;/);
+  // La acción de verdad, con dobles: sin columnas del tablero, el PATCH y una sola recarga de cada cosa.
+  const notas = { peticiones: [], tablero: [], trasCambio: 0 };
+  const acciones = kv.accionesTableroPedidos({
+    apiFetch: async (ruta, o) => { notas.peticiones.push([ruta, o.method, JSON.parse(o.body)]); return { status: 'success' }; },
+    autor: () => 'Ana Asesora', confirmar: async () => true, avisar: () => {}, avisarError: () => {},
+    recargarTablero: (c) => notas.tablero.push([...c]), recargarTrasCambio: () => { notas.trasCambio += 1; },
+  });
+  await acciones.cancelar({ id: 7, numero: 'PVEN-7', estado: 'EN_PROCESO' }, 'Cliente desistió de la compra', []);
+  assert.equal(notas.peticiones.length, 1);
+  assert.equal(notas.peticiones[0][0], '/ventas/pedidos/7');
+  assert.equal(notas.peticiones[0][1], 'PATCH');
+  assert.equal(notas.peticiones[0][2].estado, 'CANCELADO');
+  assert.equal(notas.peticiones[0][2].cancellation_reason, 'Cliente desistió de la compra');
+  assert.deepEqual(notas.tablero, [[]], 'recargarTablero([]) una vez');
+  assert.equal(notas.trasCambio, 1, 'recargarTrasCambio una vez');
 }
 
 console.log('OK test_kanban_ventas');

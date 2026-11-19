@@ -168,6 +168,8 @@ type AccionesFilaPedido = {
   puedePxpRol: boolean;
   /** B4 T24 f2 r1 (m14): el rol cancela pedidos (PATCH a CANCELADO: ADMIN y ASESOR, accesoTableroVentas). */
   mover: boolean;
+  /** B4.1 (P10): abre la ventana del motivo del tablero (ModalMotivo) para cancelar el pedido de la fila. */
+  cancelar: (p: FilaPedido) => void;
 };
 const AccionesLista = createContext<AccionesFilaPedido | null>(null);
 
@@ -234,8 +236,8 @@ const tituloEstado = (p: FilaPedido) =>
 
 /**
  * Acciones (H44, R8 y R11): el menú ⋯ de la fila (MenuFila), con «Ver detalle», «Crear PXP» (solo con el rol, sin
- * cancelar, con saldo y sin otra PXP vigente: H44+N6) y «Cancelar pedido» (solo si el servidor acepta cancelarlo: abre el
- * modal del detalle con ?accion=cancelar, N2). Son los de la lista de antes, en el menú único.
+ * cancelar, con saldo y sin otra PXP vigente: H44+N6) y «Cancelar pedido» (solo si el servidor acepta cancelarlo: abre la
+ * ventana del motivo del tablero, N2; B4.1 P10). Son los de la lista de antes, en el menú único.
  */
 function CeldaAcciones({ p }: { p: FilaPedido }) {
   const acciones = useContext(AccionesLista);
@@ -244,7 +246,7 @@ function CeldaAcciones({ p }: { p: FilaPedido }) {
     { etiqueta: 'Ver detalle', icono: FileCheck, onClick: () => acciones?.abrir(p) },
     { etiqueta: 'Crear PXP', icono: DollarSign, onClick: () => acciones?.crearPxp(p), oculto: !puedePxp,
       deshabilitado: acciones?.creandoPxp === p.id },
-    { etiqueta: 'Cancelar pedido', icono: X, peligro: true, onClick: () => acciones?.ir(`/dashboard/ventas/venta/${p.id}?accion=cancelar`),
+    { etiqueta: 'Cancelar pedido', icono: X, peligro: true, onClick: () => acciones?.cancelar(p),
       oculto: !acciones?.mover || !transicionesPedido(p.estado).includes('CANCELADO') },
   ];
   return (
@@ -529,9 +531,16 @@ export default function VentaClient() {
   }, [avisar, recargarListado]);
   // B4 T24 f2 r1 (m18): el rol leído después de montar (el de la tarjeta y del tablero), no getUsuarioActual().role en el render.
   const puedePxpRol = puedeCrearOrdenDePago(rol);
+  // B4 T10, bloque 4 + B4.1 (P10): las acciones del tablero (soltar, «Marcar…» del ⋯ y la ventana del motivo de cancelar) son las
+  // MISMAS de E-Commerce: useAccionesTableroPedidos (la regla de error y de recarga, en accionesTableroPedidos de lib/kanban-ventas.js,
+  // con sus casos). Va antes de accionesFila: el ⋯ de la fila cancela con su pedirCancelacion (la misma ventana).
+  const {
+    cambiarDesdeTablero, accionDesdeTablero, accionesTarjeta, cancelando, pedirCancelacion, cancelarConMotivo, cerrarCancelacion,
+  } = useAccionesTableroPedidos<FilaPedido>({ tablero, recargarTrasCambio, mover: accesoTablero.mover });
   const accionesFila = useMemo<AccionesFilaPedido>(() => ({
     abrir: abrirPedido, ir: (ruta) => router.push(ruta), crearPxp, creandoPxp, puedePxpRol, mover: accesoTablero.mover,
-  }), [abrirPedido, router, crearPxp, creandoPxp, puedePxpRol, accesoTablero.mover]);
+    cancelar: pedirCancelacion,
+  }), [abrirPedido, router, crearPxp, creandoPxp, puedePxpRol, accesoTablero.mover, pedirCancelacion]);
   // La selección de las filas (la de B1): «Seleccionar todo» marca la página; TablaEstandar la limpia al cambiar de
   // página, pestaña, búsqueda, filtro u orden.
   const [seleccion, setSeleccion] = useState<ClaveFila[]>([]);
@@ -545,11 +554,8 @@ export default function VentaClient() {
   // (Entregas elige la bodega); Facturado solo desde Entregado, con confirmación; Cancelado pide el motivo; un pedido
   // entregado o cancelado no vuelve atrás. Lo que no se puede queda bloqueado con su motivo ANTES de soltar.
   // B4 T24 f2 (F47): lo que pasa al soltar ('cambio', 'facturar' y 'cancelar') y «Marcar En tránsito / En proceso» del ⋯ son las
-  // MISMAS acciones de E-Commerce: useAccionesTableroPedidos (la regla de error y de recarga, en accionesTableroPedidos de
-  // lib/kanban-ventas.js, con sus casos). Solo quien mueve (accesoTablero.mover) ve las acciones del ⋯.
-  const {
-    cambiarDesdeTablero, accionDesdeTablero, accionesTarjeta, cancelando, cancelarConMotivo, cerrarCancelacion,
-  } = useAccionesTableroPedidos<FilaPedido>({ tablero, recargarTrasCambio, mover: accesoTablero.mover });
+  // MISMAS acciones de E-Commerce: useAccionesTableroPedidos (arriba, junto a accionesFila). Solo quien mueve
+  // (accesoTablero.mover) ve las acciones del ⋯.
   // La tarjeta del tablero (KANBAN-ventas-listas punto 5, D37 y el cruce C5): vuelve a esta lista. B4 T24 f2 (duda 3 de f1): en solo
   // lectura, su acción principal queda solo si el rol puede hacerla (FINANZAS cobra, COMPRAS gestiona la compra, BODEGA despacha); si
   // no, la tarjeta queda en «Abrir», como en E-Commerce. r1 (m16): con el rol SIEMPRE, no solo en solo lectura (ASESOR no gestiona

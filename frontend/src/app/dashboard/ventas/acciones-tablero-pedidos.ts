@@ -14,7 +14,7 @@ const autorActual = () => { const u = getUsuarioActual(); return u.name || u.ema
 /** Lo que el hook necesita de un pedido del tablero (FilaPedido de Pedidos de venta y PedidoWeb de E-Commerce). */
 type PedidoDelTablero = { id: number | string; numero?: string | null; estado?: string | null };
 /** El origen y el destino de una tarjeta (D39): lo que se recarga del tablero al terminar. */
-type Columnas = readonly [string, string];
+type Columnas = ReadonlyArray<string>;
 
 /**
  * B4 T24 f2 (F47): las acciones del tablero de pedidos, las MISMAS en Pedidos de venta y en E-Commerce (antes, unas 70 líneas copiadas).
@@ -23,7 +23,7 @@ type Columnas = readonly [string, string];
  *  - cambiarDesdeTablero → onCambio; accionDesdeTablero → onAccion ('facturar' confirma y factura; 'cancelar' abre ModalMotivo);
  *  - accionesTarjeta → «Marcar En tránsito» y «Marcar En proceso» (accionesTarjetaPedido), solo si el rol mueve pedidos (`mover`):
  *    para otro rol darían 403;
- *  - cancelando, cancelarConMotivo y cerrarCancelacion → ModalMotivo.
+ *  - cancelando, cancelarConMotivo y cerrarCancelacion → ModalMotivo; pedirCancelacion(p) la abre desde el ⋯ de la fila (B4.1, P10).
  * `recargarTrasCambio` es lo que mueve un cambio en la pantalla (pestañas, franja y tarjetas); del tablero, solo el origen y el destino.
  */
 export function useAccionesTableroPedidos<P extends PedidoDelTablero>({ tablero, recargarTrasCambio, mover }: {
@@ -45,6 +45,8 @@ export function useAccionesTableroPedidos<P extends PedidoDelTablero>({ tablero,
     if (resultado.accion === 'cancelar') setCancelando({ pedido: p, columnas: [origen, destino] });
     else if (resultado.accion === 'facturar') void acciones.facturar(p, [origen, destino]);
   }, [acciones]);
+  // B4.1 (P10): «Cancelar pedido» del ⋯ de la fila abre esta misma ventana, sin columnas del tablero que recargar.
+  const pedirCancelacion = useCallback((p: P) => setCancelando({ pedido: p, columnas: [] }), []);
   const cancelarConMotivo = useCallback(async (motivo: string) => {
     if (!cancelando) return;
     await acciones.cancelar(cancelando.pedido, motivo, cancelando.columnas);
@@ -54,5 +56,5 @@ export function useAccionesTableroPedidos<P extends PedidoDelTablero>({ tablero,
     etiqueta: a.etiqueta, icono: a.estado === 'EN_TRANSITO' ? Truck : Package, onClick: () => { void acciones.marcar(p, a.estado); },
   })), [acciones, mover]);
 
-  return { cambiarDesdeTablero, accionDesdeTablero, accionesTarjeta, cancelando, cancelarConMotivo, cerrarCancelacion };
+  return { cambiarDesdeTablero, accionDesdeTablero, accionesTarjeta, cancelando, pedirCancelacion, cancelarConMotivo, cerrarCancelacion };
 }
