@@ -1867,6 +1867,19 @@ def _lista_con_rango(db: Session, modelo, tipo: str, filtrado, dias, ahora, orde
     return consulta, orden_sql
 
 
+def _atrasados_por_vista(db: Session, modelo, tipo: str, base, condiciones: dict, dias, ahora) -> dict:
+    """B4.1 (P4): {vista: n} con las filas de cada pestaña que tienen rango ATRASADO (lo que muestra «Con atraso» en esa
+    pestaña). `base` es la consulta de la lista con la busqueda y los extras, SIN vista, estados ni semaforo (R5, la base
+    de los conteos). El rango de resolucion_ventas.expresiones se calcula UNA vez por fila, con la subconsulta y el OFFSET 0
+    de _lista_con_rango, unida por id; despues contar_por_vista cuenta las filas ATRASADAS por la condicion de cada
+    pestaña."""
+    sub = (base.with_entities(modelo.id.label("id"), rv.expresiones(tipo, modelo, dias, ahora)["rango"])
+           .order_by(None).offset(0).subquery("rango_de_atrasados"))
+    atrasadas = (db.query(modelo).join(sub, sub.c.id == modelo.id)
+                 .filter(sub.c.rango == rv.RANGO["ATRASADO"]))
+    return contar_por_vista(atrasadas, condiciones)
+
+
 def _marcas_de_fila(tipo: str, doc, dias, ahora, seguimiento: dict, **banderas) -> dict:
     """Lo que la fila agrega (R8, C14): tipo, resolucion (resolucion_ventas.clasificar con `dias` y `ahora`, los mismos
     del filtro del semaforo), dias_sin_mov (desde coalesce(updated_at, created_at)), dias_creado y seguimiento_estado
@@ -2043,11 +2056,19 @@ def list_solicitudes(
     if con_conteos:
         conteos = contar_por_vista(base, {v: _condicion_vista_solicitudes(v)
                                           for v in ("activas", "confirmadas", "canceladas", "soporte")})
+    # B4.1 (P4): los atrasados de cada pestaña, sobre la misma base de los conteos.
+    extra_lista = {}
+    if con_conteos:
+        extra_lista["atrasados_por_vista"] = _atrasados_por_vista(
+            db, CustomerRequest, "SC", base,
+            {v: _condicion_vista_solicitudes(v) for v in ("activas", "confirmadas", "esperan_cotizacion",
+                                                          "todas_sin_soporte")}, dias, ahora)
     resumen = _resumen_solicitudes(db, extras, dias, ahora) if con_resumen else None
     # B3 T8 (RP20): la ficha del cliente en UNA consulta para toda la pagina (telefono_whatsapp de _sc_dict).
     total, items = paginar(filtrado.order_by(*orden_sql).options(selectinload(CustomerRequest.customer)),
                            limit, offset)
-    return respuesta_de_lista(total, _filas_de_solicitudes(db, items, dias, ahora), conteos=conteos, resumen=resumen)
+    return respuesta_de_lista(total, _filas_de_solicitudes(db, items, dias, ahora), conteos=conteos, resumen=resumen,
+                              **extra_lista)
 
 
 @router.post("/solicitudes", status_code=201)
@@ -3260,12 +3281,18 @@ def list_cotizaciones(
     if con_conteos:
         conteos = contar_por_vista(base, {v: _condicion_vista_cotizaciones(v)
                                           for v in ("activas", "confirmadas", "rechazadas")})
+    # B4.1 (P4): los atrasados de cada pestaña, sobre la misma base de los conteos.
+    extra_lista = {}
+    if con_conteos:
+        extra_lista["atrasados_por_vista"] = _atrasados_por_vista(
+            db, SalesQuotation, "COT", base,
+            {v: _condicion_vista_cotizaciones(v) for v in ("activas", "confirmadas", "todas")}, dias, ahora)
     resumen = _resumen_cotizaciones(db, extras, dias, ahora) if con_resumen else None
     # B3 T8 (RP20): la ficha del cliente en UNA consulta para toda la pagina (telefono_whatsapp de _cot_dict).
     total, items = paginar(filtrado.order_by(*orden_sql).options(selectinload(SalesQuotation.customer)),
                            limit, offset)
     return respuesta_de_lista(total, _filas_de_cotizaciones(db, items, dias, ahora), conteos=conteos,
-                              resumen=resumen)
+                              resumen=resumen, **extra_lista)
 
 
 @router.post("/cotizaciones", status_code=201)

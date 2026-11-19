@@ -237,6 +237,40 @@ def test_sc_resumen_sobre_todas_sin_busqueda_ni_soporte(app_client, db, admin_to
     assert set(_lista(app_client, admin_token, "SC", q=f.sufijo)) == {"status", "total", "data"}
 
 
+# ─── B4.1 T3: atrasados por pestana (P4) y telefono en la busqueda de COT (P6) ──────────────────────────────────────
+
+def test_atrasados_por_vista_de_solicitudes_y_cotizaciones(app_client, db, admin_token, monkeypatch):
+    ahora = _reloj(monkeypatch)
+    _dias_de_alerta(db, sc=2, cot=2)
+    f = _Fabrica(db, ahora)
+    f.sc("BORRADOR", _dias(5))                                              # activa y atrasada
+    f.sc("BORRADOR", _dias(1))                                              # activa, a tiempo
+    f.sc("CONFIRMADA", _dias(5), gate1_confirmed_at=ahora - _dias(5))       # confirmada, espera COT, atrasada
+    f.sc("CANCELADA", _dias(9))
+    f.cot("BORRADOR", _dias(5))                                             # activa y atrasada
+    f.cot("CONFIRMADA", _dias(5), gate2_confirmed_at=ahora - _dias(5))      # confirmada sin pedido, atrasada
+    f.cot("RECHAZADA", _dias(9))
+    sc = _lista(app_client, admin_token, "SC", q=f.sufijo, con_conteos=1)
+    cot = _lista(app_client, admin_token, "COT", q=f.sufijo, con_conteos=1)
+    assert sc["atrasados_por_vista"] == {"activas": 1, "confirmadas": 1, "esperan_cotizacion": 1, "todas_sin_soporte": 2}
+    assert cot["atrasados_por_vista"] == {"activas": 1, "confirmadas": 1, "todas": 2}
+    for tipo, cuerpo in (("SC", sc), ("COT", cot)):                        # = lo que muestra «Con atraso» en esa pestaña
+        for vista, n in cuerpo["atrasados_por_vista"].items():
+            assert _lista(app_client, admin_token, tipo, q=f.sufijo, vista=vista, semaforo="atrasados")["total"] == n, (tipo, vista)
+    assert "atrasados_por_vista" not in _lista(app_client, admin_token, "COT", q=f.sufijo)
+
+def test_atrasados_por_vista_respeta_la_busqueda_como_la_tabla(app_client, db, admin_token, monkeypatch):
+    """Review Focus 3."""
+    ahora = _reloj(monkeypatch)
+    _dias_de_alerta(db, sc=2, cot=2)
+    uno, otro = _Fabrica(db, ahora), _Fabrica(db, ahora)
+    uno.sc("BORRADOR", _dias(5)); otro.sc("BORRADOR", _dias(5)); otro.sc("ASIGNADA", _dias(5))
+    con_q = _lista(app_client, admin_token, "SC", q=uno.sufijo, con_conteos=1)["atrasados_por_vista"]
+    assert con_q["activas"] == 1 == _lista(app_client, admin_token, "SC", q=uno.sufijo, vista="activas", semaforo="atrasados")["total"]
+    nada = _lista(app_client, admin_token, "SC", q=f"nada-{uno.sufijo}", con_conteos=1)["atrasados_por_vista"]
+    assert set(nada.values()) == {0}, nada
+
+
 # ─── 3) Solicitudes: las filas traen cotizaciones, pedidos y chips ───────────────────────────────────────────────────
 
 def test_sc_filas_traen_cotizaciones_pedidos_y_chips(app_client, db, admin_token):
@@ -879,8 +913,9 @@ def test_mismo_numero_de_consultas_con_3_y_con_25_filas(app_client, db, admin_to
     # Medido en T6B. Por defecto (solo q): la sesion (1) + dias de alerta (1) + total y pagina (2) + ficha del cliente
     # (1) + SC: COT y pedidos ligeros (2) y seguimiento (1) = 8; COT: pedidos ligeros (1) y seguimiento (1) = 7; VEN:
     # resumen de H47 (2) y asesores de H4 (2) = 9. Con todo: + conteos (1) y, en SC y COT, + resumen (1): 10, 9 y 10.
-    # Antes de T6B (aa45805), sin las marcas: SC 5, COT 5, VEN 8.
-    topes = {"SC": (8, 10), "COT": (7, 9), "VEN": (9, 10)}
+    # Antes de T6B (aa45805), sin las marcas: SC 5, COT 5, VEN 8. B4.1 (P4): con conteos, + los atrasados por pestaña (1,
+    # el rango calculado una vez) en SC y COT: 11, 10 y 10.
+    topes = {"SC": (8, 11), "COT": (7, 10), "VEN": (9, 10)}
     for tipo in RUTAS:
         por_defecto = (medir(tipo, pocas, 3), medir(tipo, muchas, 25))
         con_todo = (medir(tipo, pocas, 3, **completo[tipo]), medir(tipo, muchas, 25, **completo[tipo]))
