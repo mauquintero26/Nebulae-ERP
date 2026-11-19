@@ -271,6 +271,15 @@ def test_atrasados_por_vista_respeta_la_busqueda_como_la_tabla(app_client, db, a
     assert set(nada.values()) == {0}, nada
 
 
+def test_cot_se_busca_por_el_telefono_del_cliente(app_client, db, admin_token):
+    f = _Fabrica(db, _ahora())
+    telefono = "3" + str(uuid.uuid4().int)[:9]
+    cot = f.cot("BORRADOR", customer_phone=telefono)
+    assert _ids(app_client, admin_token, "COT", q=telefono) == [cot.id], telefono
+    assert cot.id in _ids(app_client, admin_token, "COT", q=telefono[3:10]), telefono[3:10]
+    assert _lista(app_client, admin_token, "COT", q=telefono, con_conteos=1)["conteos"]["activas"] == 1
+
+
 # ─── 3) Solicitudes: las filas traen cotizaciones, pedidos y chips ───────────────────────────────────────────────────
 
 def test_sc_filas_traen_cotizaciones_pedidos_y_chips(app_client, db, admin_token):

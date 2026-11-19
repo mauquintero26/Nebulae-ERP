@@ -3257,6 +3257,7 @@ def list_cotizaciones(
         base = base.filter(
             SalesQuotation.numero.ilike(like) |
             SalesQuotation.customer_name.ilike(like) |
+            SalesQuotation.customer_phone.ilike(like) |
             SalesQuotation.cotizador.ilike(like) |
             SalesQuotation.sc_numero.ilike(like) |
             productos_ilike(SalesQuotation.productos, like) |
