@@ -945,4 +945,12 @@ console.log('--- B4 T22 r1 TEST 2: avisoEmbudoDashboard — cuándo el embudo of
   assert.equal(fv.leerEnlacePedidos('?tab=pend_compra'), 'pend_compra');
 }
 
+console.log('--- B4.1 T6 (P11): el detalle del pedido sin el bloque Origen ---');
+{
+  const venta = readFileSync(new URL('../src/app/dashboard/ventas/venta/[id]/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.ok(!venta.includes('>Origen</label>'), 'sin el bloque Origen (la cadena de documentos ya lo dice)');
+  assert.ok(venta.includes('grid grid-cols-1 @2xl:grid-cols-2 gap-6'), 'Cliente y Entrega, en dos columnas');
+  assert.ok(venta.includes('<CadenaDocumentos'), 'la cadena de documentos sigue');
+}
+
 console.log('\nOK: test_flujo_ventas.mjs');

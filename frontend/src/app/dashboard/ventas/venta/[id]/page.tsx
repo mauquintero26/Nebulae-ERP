@@ -424,7 +424,7 @@ function PedidoVentaDetalleContent() {
       <div className="bg-white px-6 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-x-4 gap-y-3 z-20 shadow-sm shrink-0">
         <div className="flex items-center gap-4 min-w-0">
           {/* H37: un solo botón de volver, con su destino escrito: el return_to saneado o la lista de pedidos (ya no la
-              cotización, que sigue a un clic en «Origen»). */}
+              cotización, que está en la cadena de documentos). */}
           <BotonVolver href={destinoVolver(safeReturnTo, '/dashboard/ventas/venta')} />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-3">
@@ -538,34 +538,13 @@ function PedidoVentaDetalleContent() {
               panel de Actividad), no según la ventana. */}
           <div className="max-w-5xl mx-auto space-y-8 @container">
 
-            {/* Cliente + Origen + Entrega */}
-            <div className="grid grid-cols-1 @2xl:grid-cols-3 gap-6">
+            {/* Cliente + Entrega (B4.1, P11: el origen ya lo dice la cadena de documentos) */}
+            <div className="grid grid-cols-1 @2xl:grid-cols-2 gap-6">
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Cliente</label>
                 <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800 break-words">
                   {pedido?.customer_name || 'Sin cliente asignado'}
                 </div>
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Origen</label>
-                {/* Cadena SC -> COT -> PVEN: la Solicitud y la Cotizacion de origen, cada una
-                    con su "volver" hacia este pedido. */}
-                {(pedido?.sc_id || pedido?.cot_id) ? (
-                  <div className="flex flex-col gap-2">
-                    {pedido?.sc_id && (
-                      <Link href={`/dashboard/ventas/solicitud/${pedido.sc_id}?return_to=${encodeURIComponent(`/dashboard/ventas/venta/${params.id}`)}`} className="flex items-center gap-2 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-xl px-4 py-3 text-sm font-bold hover:bg-indigo-100 transition-colors">
-                        {pedido.sc_numero || `SC-${pedido.sc_id}`}
-                      </Link>
-                    )}
-                    {pedido?.cot_id && (
-                      <Link href={`/dashboard/ventas/cotizacion/${pedido.cot_id}?return_to=${encodeURIComponent(`/dashboard/ventas/venta/${params.id}`)}`} className="flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl px-4 py-3 text-sm font-bold hover:bg-blue-100 transition-colors">
-                        {pedido.cot_numero || `COT-${pedido.cot_id}`}
-                      </Link>
-                    )}
-                  </div>
-                ) : (
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-400">Sin cotización ni solicitud de origen</div>
-                )}
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Entrega Estimada</label>
