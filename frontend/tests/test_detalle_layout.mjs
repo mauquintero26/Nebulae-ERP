@@ -6,7 +6,10 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { returnToSeguro, destinoVolver, etiquetaVolver, anchoInicialPanel } from '../src/lib/detalle-layout.js';
+// B4.1 T10 (P14): por el espacio de nombres, para que la falta de la función nueva no tape los demás casos.
+import * as DL from '../src/lib/detalle-layout.js';
 
 const COT = '/dashboard/ventas/cotizacion';
 
@@ -136,6 +139,56 @@ console.log('--- TEST 5: anchoInicialPanel = min(400, max(300, 0,3 × ancho)) --
   assert.equal(anchoInicialPanel(Infinity), 400);
   assert.equal(anchoInicialPanel(undefined), 400);
   assert.equal(anchoInicialPanel('1024'), 400, 'solo números');
+}
+
+console.log('--- B4.1 T10 (P14): los detalles de SC y COT a 375 px, con la Actividad plegable por debajo de md (768) ---');
+{
+  const { clasesDivisionDetalle } = DL;
+  const plegada = clasesDivisionDetalle(false);
+  const abierta = clasesDivisionDetalle(true);
+  const tokens = (clases) => clases.split(' ');
+  // Las cinco claves exactas.
+  assert.deepEqual(Object.keys(plegada).sort(), ['asa', 'botonActividad', 'contenedor', 'izquierda', 'panel']);
+  assert.deepEqual(Object.keys(abierta).sort(), ['asa', 'botonActividad', 'contenedor', 'izquierda', 'panel']);
+  // Plegada: el panel no se ve por debajo de md (hidden) y desde md vuelve a ser la columna de siempre (md:flex).
+  assert.ok(tokens(plegada.panel).includes('hidden'), `plegada: hidden (${plegada.panel})`);
+  assert.ok(tokens(plegada.panel).includes('md:flex'), 'plegada: md:flex');
+  assert.ok(!tokens(plegada.panel).includes('flex'), 'plegada: sin flex suelto (pisaría el hidden)');
+  // Abierta (pre-flight H30: el token flex aislado; includes('flex') también es cierto con false por flex-col y md:flex).
+  assert.ok(tokens(abierta.panel).includes('flex'), `abierta: flex (${abierta.panel})`);
+  assert.ok(tokens(abierta.panel).includes('max-md:min-h-[70vh]'), 'abierta: alto mínimo en el teléfono');
+  assert.ok(!tokens(abierta.panel).includes('hidden'), 'abierta: sin hidden');
+  // Los valores exactos del brief.
+  assert.equal(plegada.panel, 'hidden w-full flex-col md:flex md:w-[var(--ancho-panel)] md:shrink-0');
+  assert.equal(abierta.panel, 'flex max-md:min-h-[70vh] w-full flex-col md:flex md:w-[var(--ancho-panel)] md:shrink-0');
+  for (const d of [plegada, abierta]) {
+    assert.equal(d.contenedor, 'flex-1 flex flex-col overflow-y-auto md:flex-row md:overflow-hidden');
+    assert.equal(d.izquierda, 'shrink-0 md:flex-1 md:shrink md:overflow-y-auto');
+    assert.equal(d.asa, 'hidden md:block');
+    assert.equal(d.botonActividad, 'md:hidden');
+  }
+
+  // Los dos detalles toman las clases de la división; el ancho arrastrable pasa a una variable CSS (solo desde md).
+  const leer = (ruta) => readFileSync(new URL(`../src/app/dashboard/ventas/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  for (const ruta of ['solicitud/[id]/page.tsx', 'cotizacion/[id]/page.tsx']) {
+    const f = leer(ruta);
+    assert.ok(f.includes('clasesDivisionDetalle(actividadAbierta)'), `${ruta}: clasesDivisionDetalle(actividadAbierta)`);
+    assert.ok(f.includes("['--ancho-panel' as string]: `${rightWidth}px`"), `${ruta}: --ancho-panel`);
+    assert.ok(f.includes('aria-expanded={actividadAbierta}'), `${ruta}: aria-expanded`);
+    assert.ok(!f.includes('style={{ width: rightWidth }}') && !f.includes('style={{width: rightWidth}}'), `${ruta}: sin el ancho fijo en el style`);
+    assert.ok(f.includes('const [actividadAbierta, setActividadAbierta] = useState(false);'), `${ruta}: plegada al entrar`);
+    assert.ok(f.includes('const division = clasesDivisionDetalle(actividadAbierta);'), `${ruta}: division`);
+    assert.ok(f.includes('<div className={division.contenedor}>'), `${ruta}: division.contenedor`);
+    // La columna izquierda, el asa y el panel: las clases de la división primero y detrás las propias de cada página.
+    for (const clave of ['izquierda', 'asa', 'panel']) {
+      assert.ok(f.includes(`className={\`\${division.${clave}} `), `${ruta}: division.${clave}`);
+    }
+    assert.ok(f.includes('className={`${division.botonActividad} '), `${ruta}: el botón de la Actividad, solo por debajo de md`);
+    assert.ok(f.includes('aria-controls="panel-actividad"') && f.includes('id="panel-actividad"'), `${ruta}: el botón controla el panel`);
+    assert.ok(f.includes("{actividadAbierta ? 'Ocultar actividad' : 'Ver actividad'}"), `${ruta}: «Ver actividad» / «Ocultar actividad»`);
+    // El botón va antes del panel.
+    assert.ok(f.indexOf('aria-controls="panel-actividad"') < f.indexOf('id="panel-actividad"'), `${ruta}: el botón antes del panel`);
+  }
 }
 
 console.log('OK test_detalle_layout.mjs');

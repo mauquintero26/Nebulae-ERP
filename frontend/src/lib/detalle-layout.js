@@ -2,7 +2,8 @@
  * Piezas del layout de los detalles de Ventas (H37 + C12, Bloque 2): el destino y el texto del unico boton de volver
  * (BotonVolver en app/dashboard/ventas/flujo.tsx) y el ancho inicial del panel derecho de la SC, la COT y el PVEN.
  * JS plano para probarlo con node (frontend/tests/test_detalle_layout.mjs). T11 (V8): inicialesAutor, el avatar del
- * autor en la Actividad (probado en frontend/tests/test_ajustes_visuales_b2.mjs).
+ * autor en la Actividad (probado en frontend/tests/test_ajustes_visuales_b2.mjs). B4.1 T10 (P14): clasesDivisionDetalle,
+ * la división del detalle de la SC y la COT que se apila por debajo de md.
  *
  * returnToSeguro vive aqui (ruling T6B-2) y flujo.tsx lo reexporta con el mismo nombre: es la UNICA regla para
  * confiar en un ?return_to=. El chequeo debil startsWith('/') && !startsWith('//') dejaba pasar '/\evil.com', que el
@@ -96,6 +97,26 @@ export function etiquetaVolver(href) {
 export function anchoInicialPanel(anchoVentana) {
   if (typeof anchoVentana !== 'number' || !Number.isFinite(anchoVentana)) return 400;
   return Math.min(400, Math.max(300, Math.round(anchoVentana * 0.3)));
+}
+
+/**
+ * B4.1 T10 (P14): las clases de la división del detalle de la SC y la COT (columna izquierda | asa | panel de Actividad).
+ *  - Desde md (768 px), la de siempre: dos columnas, cada una con su desplazamiento, el asa para arrastrar y el panel del
+ *    ancho arrastrable, que llega como la variable CSS --ancho-panel (el style de la página).
+ *  - Por debajo de md (un teléfono a 375 px): una sola columna que se desplaza entera; sin asa; la Actividad, plegada
+ *    detrás de un botón (botonActividad, solo por debajo de md) y, abierta, debajo del detalle con 70vh de alto mínimo.
+ * Cada página pone detrás sus clases propias (fondo, relleno, sombra), sin flex, display ni ancho, que salen de aquí.
+ * @param {boolean} actividadAbierta
+ * @returns {{ contenedor: string, izquierda: string, asa: string, panel: string, botonActividad: string }}
+ */
+export function clasesDivisionDetalle(actividadAbierta) {
+  return {
+    contenedor: 'flex-1 flex flex-col overflow-y-auto md:flex-row md:overflow-hidden',
+    izquierda: 'shrink-0 md:flex-1 md:shrink md:overflow-y-auto',
+    asa: 'hidden md:block',
+    panel: `${actividadAbierta ? 'flex max-md:min-h-[70vh]' : 'hidden'} w-full flex-col md:flex md:w-[var(--ancho-panel)] md:shrink-0`,
+    botonActividad: 'md:hidden',
+  };
 }
 
 /** Primera letra o dígito de una palabra (cualquier alfabeto: 'Ángela' -> 'Á'). */

@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import {
   ArrowRight, Send, FileText, CheckCircle2,
   MessageSquare, Calculator, Search, RefreshCw, Package, Trash2, RotateCcw,
-  AlertCircle, AlertTriangle, XCircle, X, Activity, Sparkles
+  AlertCircle, AlertTriangle, XCircle, X, Activity, Sparkles, ChevronDown, ChevronUp
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
@@ -20,7 +20,7 @@ import type { AnulacionConfirmacion } from '../cotizacion-client';
 import { NextStepCard, EnlaceConfirmacionModal, CambiosDeActividad, CabeceraActividad, returnToSeguro, getUsuarioActual, BotonVolver } from '../../flujo';
 import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
 // B4 T24 f2 (F44-a): la reserva del botón flotante de la IA en las columnas de la derecha (IA, Actividad y Chatter), que se desplazan bajo él.
-import { RESERVA_BOTON_IA } from '@/lib/design-system';
+import { FOCO, RESERVA_BOTON_IA } from '@/lib/design-system';
 import { CadenaDocumentos, PasosFlujo } from '@/components/flujo';
 import { pasosDeCotizacion } from '@/lib/flujo-ventas';
 import { situacionPedidoCotizacion, avisoSolicitudTrasRechazo } from '@/lib/listas-ventas';
@@ -30,7 +30,7 @@ import {
 } from '@/lib/dinero-ventas';
 import { comoUTC, notaReiniciaAtraso } from '@/lib/hub-ventas';
 import { waUrl, abrirWhatsApp } from '@/lib/whatsapp';
-import { destinoVolver, anchoInicialPanel, inicialesAutor } from '@/lib/detalle-layout';
+import { destinoVolver, anchoInicialPanel, inicialesAutor, clasesDivisionDetalle } from '@/lib/detalle-layout';
 import { agregarActividad, esEntradaChatter, motivoTelefono, textoSinTelefono } from '@/lib/chatter';
 import { ESTADOS_SC_SIN_CONFIRMAR, pideMotivoNuevo, errorMotivoSinConfirmacion } from '@/lib/estados-solicitud';
 import { humanizarCodigo } from '@/lib/estados-pedido';
@@ -198,6 +198,10 @@ function CotizacionDetalleContent() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- C12: ancho inicial tras montar, sin romper la hidratación
     setRightWidth(anchoInicialPanel(window.innerWidth));
   }, []);
+  // B4.1 (P14): por debajo de md (768 px) el detalle va en una columna y la Actividad se pliega detrás de un botón; desde md,
+  // las dos columnas de siempre (el ancho arrastrable llega al panel como --ancho-panel).
+  const [actividadAbierta, setActividadAbierta] = useState(false);
+  const division = clasesDivisionDetalle(actividadAbierta);
   const isDragging = useRef(false);
   const startX = useRef(0);
   const startWidth = useRef(0);
@@ -872,10 +876,10 @@ function CotizacionDetalleContent() {
       )}
 
       {/* Main Content Layout (Split Pane) */}
-      <div className="flex-1 flex flex-row overflow-hidden">
+      <div className={division.contenedor}>
 
         {/* BLOQUE 1: Informacion de la Cotizacion (Formulario sin limites) */}
-        <div className="flex-1 overflow-y-auto px-8 py-8 custom-scrollbar bg-white relative">
+        <div className={`${division.izquierda} px-8 py-8 custom-scrollbar bg-white relative`}>
 
           {/* Status Tracker -- B4 T11 (FLUJO-documentos punto 4; RP87): los 3 pasos propios con la pieza común
               (PasosFlujo 'barra': los mismos círculos, colores y ✓ que la cadena de arriba), en el mismo lugar y con la
@@ -1214,12 +1218,28 @@ function CotizacionDetalleContent() {
         {/* Resizer Handle */}
         <div
           onMouseDown={handleMouseDown}
-          className="w-1.5 bg-slate-200 hover:bg-blue-500 cursor-col-resize shrink-0 transition-colors z-30"
+          className={`${division.asa} w-1.5 bg-slate-200 hover:bg-blue-500 cursor-col-resize shrink-0 transition-colors z-30`}
           title="Arrastrar para ajustar panel de actividades"
         />
 
+        {/* B4.1 (P14): por debajo de md, la Actividad se abre y se cierra con este botón (desde md no se ve). */}
+        <button
+          type="button"
+          onClick={() => setActividadAbierta((v) => !v)}
+          aria-expanded={actividadAbierta}
+          aria-controls="panel-actividad"
+          className={`${division.botonActividad} shrink-0 flex items-center justify-center gap-2 border-y border-slate-200 bg-white px-4 py-3 text-sm font-bold text-blue-700 hover:bg-blue-50 ${FOCO}`}
+        >
+          {actividadAbierta ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          {actividadAbierta ? 'Ocultar actividad' : 'Ver actividad'}
+        </button>
+
         {/* BLOQUE 2: Actividades y Bitacora (Chatter) -- la actividad es la informacion principal */}
-        <div style={{width: rightWidth}} className="bg-white flex flex-col overflow-hidden shrink-0 shadow-[-10px_0_15px_-10px_rgba(0,0,0,0.05)]">
+        <div
+          id="panel-actividad"
+          style={{ ['--ancho-panel' as string]: `${rightWidth}px` }}
+          className={`${division.panel} bg-white overflow-hidden shadow-[-10px_0_15px_-10px_rgba(0,0,0,0.05)]`}
+        >
 
           <div className="p-5 border-b border-slate-200 bg-white flex items-center justify-between shadow-sm z-10 shrink-0">
             <h3 className="font-black text-slate-800 flex items-center gap-2 text-lg">

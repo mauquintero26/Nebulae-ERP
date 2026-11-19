@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import {
-  ArrowRight, ChevronRight, Edit2, Save, Trash2, CheckCircle2,
+  ArrowRight, ChevronDown, ChevronRight, ChevronUp, Edit2, Save, Trash2, CheckCircle2,
   User, Phone, Mail, MapPin, MessageCircle, RefreshCw, AlertCircle,
   FileText, Activity, XCircle, MessageSquare, RotateCcw, Filter, Send, Plus, Sparkles, AlertTriangle,
 } from 'lucide-react';
@@ -18,7 +18,7 @@ import {
 } from '../solicitud-client';
 import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
 // B4 T24 f2 (F44-a): la reserva del botón flotante de la IA en las columnas de la derecha (IA, Actividad y Chatter), que se desplazan bajo él.
-import { RESERVA_BOTON_IA } from '@/lib/design-system';
+import { FOCO, RESERVA_BOTON_IA } from '@/lib/design-system';
 import {
   infoEstadoSolicitud, puedeReiniciar, puedeCotizarSinConfirmacion, ESTADOS_SC_SIN_CONFIRMAR,
   resumenCancelacion, pasoSolicitud, PASOS_SC, errorMotivoSinConfirmacion,
@@ -30,7 +30,7 @@ import {
 import { VentanaMotivoSinConfirmacion } from '../../motivo-sin-confirmacion';
 import { formatoPct } from '@/lib/dinero-ventas';
 import { pctAnticipoDeModalidad } from '@/lib/etiquetas-solicitud';
-import { destinoVolver, anchoInicialPanel, inicialesAutor } from '@/lib/detalle-layout';
+import { destinoVolver, anchoInicialPanel, inicialesAutor, clasesDivisionDetalle } from '@/lib/detalle-layout';
 import { comoUTC, notaReiniciaAtraso } from '@/lib/hub-ventas';
 import { diaDeNegocio, diaEditadoParaGuardar, fechaLarga } from '@/lib/fechas-colombia';
 import {
@@ -287,6 +287,10 @@ function SolicitudDetalleContent() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- C12: ancho inicial tras montar, sin romper la hidratación
     setRightWidth(anchoInicialPanel(window.innerWidth));
   }, []);
+  // B4.1 (P14): por debajo de md (768 px) el detalle va en una columna y la Actividad se pliega detrás de un botón; desde md,
+  // las dos columnas de siempre (el ancho arrastrable llega al panel como --ancho-panel).
+  const [actividadAbierta, setActividadAbierta] = useState(false);
+  const division = clasesDivisionDetalle(actividadAbierta);
   const isDragging = useRef(false);
   const startX = useRef(0);
   const startWidth = useRef(0);
@@ -1130,10 +1134,10 @@ function SolicitudDetalleContent() {
       )}
 
       {/* Main Content Layout (Split Pane) */}
-      <div className="flex-1 flex flex-row overflow-hidden">
+      <div className={division.contenedor}>
 
         {/* LEFT: Informacion de la Solicitud (Cliente, datos, estado) */}
-        <div className="flex-1 border-r border-slate-100 overflow-y-auto p-6 space-y-5">
+        <div className={`${division.izquierda} border-r border-slate-100 p-6 space-y-5`}>
           {/* Cliente. H21: con la ciudad (de la ficha) y «Ver ficha» (Agenda); en «Editar», el contacto se corrige aquí. */}
           <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
             <div className="flex items-center justify-between gap-2 mb-3">
@@ -1378,12 +1382,28 @@ function SolicitudDetalleContent() {
         {/* Resizer Handle */}
         <div
           onMouseDown={handleMouseDown}
-          className="w-1.5 bg-slate-200 hover:bg-indigo-500 cursor-col-resize shrink-0 transition-colors z-30"
+          className={`${division.asa} w-1.5 bg-slate-200 hover:bg-indigo-500 cursor-col-resize shrink-0 transition-colors z-30`}
           title="Arrastrar para ajustar panel de actividades"
         />
 
+        {/* B4.1 (P14): por debajo de md, la Actividad se abre y se cierra con este botón (desde md no se ve). */}
+        <button
+          type="button"
+          onClick={() => setActividadAbierta((v) => !v)}
+          aria-expanded={actividadAbierta}
+          aria-controls="panel-actividad"
+          className={`${division.botonActividad} shrink-0 flex items-center justify-center gap-2 border-y border-slate-200 bg-white px-4 py-3 text-sm font-bold text-indigo-700 hover:bg-indigo-50 ${FOCO}`}
+        >
+          {actividadAbierta ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          {actividadAbierta ? 'Ocultar actividad' : 'Ver actividad'}
+        </button>
+
         {/* RIGHT: Actividad (con el siguiente paso y contacto) / Chatter / IA */}
-        <div style={{ width: rightWidth }} className="bg-slate-50/50 flex flex-col overflow-hidden shrink-0 shadow-[-10px_0_15px_-10px_rgba(0,0,0,0.05)]">
+        <div
+          id="panel-actividad"
+          style={{ ['--ancho-panel' as string]: `${rightWidth}px` }}
+          className={`${division.panel} bg-slate-50/50 overflow-hidden shadow-[-10px_0_15px_-10px_rgba(0,0,0,0.05)]`}
+        >
           {/* Tab bar */}
           <div className="border-b border-slate-200 px-4 pt-3 flex gap-1 bg-white flex-shrink-0">
             {([['actividad', 'Actividad'], ['chatter', 'Chatter'], ['ia', 'IA']] as const).map(([k, l]) => (
