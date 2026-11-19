@@ -27,9 +27,14 @@ import { useRolActual } from '@/components/ui/useRolActual';
 const fDateLong = (iso: unknown) => fechaLarga(iso) || '-';
 
 /** Una línea del conteo: lo que pide la recepción y lo que se cuenta; `idx` es su posición (la clave si no trae grl_id). */
-type LineaConteo = { idx: number; grl_id?: number; sku_id?: number | string | null; nombre: string; qty_esperada: number; qty_recibida: number };
+type LineaConteo = { idx: number; grl_id?: number; sku_id?: number | string | null; nombre: string; qty_esperada: number; qty_recibida: number;
+  /** B4.1 T7 (P20): las observaciones físicas de la línea (null: sin ellas; una recepción vieja no trae la clave). */
+  observaciones?: string | null };
 /** Lo que las celdas editables le piden a la página (por un contexto, para que las columnas sean una constante, D40 y D41). */
-type ControlConteo = { editable: boolean; actualizar: (idx: number, valor: number) => void };
+type ControlConteo = {
+  editable: boolean; heredada: boolean; actualizar: (idx: number, valor: number) => void;
+  actualizarObservaciones: (idx: number, texto: string) => void;
+};
 const ConteoContext = createContext<ControlConteo | null>(null);
 // B4 T24 r1 (C5): los campos van dentro de la celda (un span truncado): el foco, hacia adentro (FOCO_DENTRO).
 
@@ -59,13 +64,17 @@ function CeldaDiferencia({ l }: { l: LineaConteo }) {
   return <span className={`font-black ${diff === 0 ? 'text-emerald-700' : 'text-amber-800 bg-amber-50 px-2 py-1 rounded'}`}>{diff > 0 ? `+${diff}` : diff}</span>;
 }
 
-/** Observaciones físicas (B1 a B3: un campo de apoyo del conteo; no se envía al confirmar). */
+/** Observaciones físicas (B4.1 P20): el campo es de la línea y se guarda con el PATCH por línea (`notes`, hasta 500) al guardar el conteo. */
 function CeldaObservaciones({ l }: { l: LineaConteo }) {
   const control = useContext(ConteoContext);
   return (
     <input
       type="text"
-      disabled={!control?.editable}
+      value={l.observaciones ?? ''}
+      onChange={(e) => control?.actualizarObservaciones(l.idx, e.target.value)}
+      maxLength={500}
+      disabled={!control?.editable || control.heredada}
+      title={control?.heredada ? 'Esta recepción heredada no guarda observaciones por línea.' : undefined}
       placeholder="Ej: Cajas dañadas..."
       aria-label={`Observaciones físicas de ${l.nombre}`}
       className={`w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-500 ${FOCO_DENTRO}`}
@@ -153,6 +162,7 @@ export default function RecepcionDetallePage() {
           nombre: p.nombre || p.product_name || p.descripcion || 'Ítem de Compra',
           qty_esperada: Number(p.qty_esperada ?? p.qty ?? 0),
           qty_recibida: Number(p.qty_recibida ?? 0),
+          observaciones: p.observaciones ?? null,
         })));
       }
     } catch (err: any) {
@@ -214,9 +224,15 @@ export default function RecepcionDetallePage() {
     if (!isEditable) return;
     setItems(prev => prev.map((it, i) => (i === idx ? { ...it, qty_recibida: val } : it)));
   }, [isEditable]);
+  const updateObservaciones = useCallback((idx: number, texto: string) => {
+    if (!isEditable) return;
+    setItems(prev => prev.map((it, i) => (i === idx ? { ...it, observaciones: texto } : it)));
+  }, [isEditable]);
   // La tabla del conteo (modo simple): las líneas con su posición y el control que leen las celdas editables.
   const lineas = useMemo<LineaConteo[]>(() => items.map((it, idx) => ({ ...it, idx })), [items]);
-  const control = useMemo<ControlConteo>(() => ({ editable: conteo.contar, actualizar: updateReceived }), [conteo.contar, updateReceived]);
+  const control = useMemo<ControlConteo>(() => ({
+    editable: conteo.contar, heredada, actualizar: updateReceived, actualizarObservaciones: updateObservaciones,
+  }), [conteo.contar, heredada, updateReceived, updateObservaciones]);
 
   // Bodega Receptora used to be read-only, showing warehouse_name straight
   // from the backend — which falls back to the SUPPLIER's name when the PEC
