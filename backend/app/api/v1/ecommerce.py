@@ -1499,15 +1499,41 @@ def _catalogo_heredado_de_hoy(db: Session, search, categoria, publicado, limit: 
 
 @router.get("/catalogo")
 def list_catalogo(search: Optional[str] = None, q: Optional[str] = None, categoria: Optional[str] = None, publicado: Optional[bool] = None, orden: Optional[str] = None, limit: int = Query(100, ge=0, le=500), offset: Optional[int] = Query(None, ge=0, le=MAX_OFFSET), user: Optional[User] = Depends(get_optional_current_user), db: Session = Depends(get_db)):
-    """El catálogo (público: la tienda lo lee sin sesión). B4 T20 (RP56): `offset` y `orden` ([-]nombre, sku, categoria, stock
-    o precio) paginan con `total` exacto (un producto por fila, sin contar dos veces el espejo de un SKU). `q` busca
-    (`search` es su alias). limit=0 devuelve solo el total. Las filas son las de siempre (H16).
-    - Rama canónica (CATALOGO_LECTURA=canonico): siempre paginada (sin offset es 0).
-    - Rama heredada (la de hoy por defecto): SIN offset ni orden responde como BASE (doble fuente, cada una con su LIMIT, total NO
-      exacto; es lo que llama la tienda pública; para el total exacto con limit=0 hay que mandar offset=0); CON offset u orden pagina exacto sobre una fila por producto.
-    - B4 T24 (FINAL-C1): sin sesión ERP solo se listan los publicados (publicado=false sin sesión no trae nada). Con sesión,
-      como hoy: la pantalla de E-Commerce necesita los despublicados para el interruptor de publicar. r1: en la rama heredada
-      sin offset, el SKU con un espejo despublicado tampoco sale (_catalogo_heredado_de_hoy)."""
+    """El catálogo (público: la tienda lo lee sin sesión).
+
+    Firmas (B4.1, B45: el único lugar)
+    - Parámetros:
+      - `q`: busca en el nombre, el SKU y la descripción (`search` es su alias; si vienen los dos, gana `q`);
+      - `categoria`: contiene el texto, sin mayúsculas;
+      - `publicado`: true o false (sin él, todos);
+      - `orden`: [-]nombre, sku, categoria, stock o precio; otro valor, 422;
+      - `limit`: de 0 a 500 (100 por defecto); con 0 solo trae el total;
+      - `offset`: de 0 a MAX_OFFSET.
+      Un carácter de control en q, search o categoria da 422 con su texto.
+    - Respuesta: {status, total, data}. Cada fila trae las claves de siempre (H16) y, la última, `editable_en_tienda`.
+    - Ids (A1-b), los mismos en las dos ramas: una fila de ecommerce_products lleva su id (> 0); un SKU del ERP lleva
+      -product_skus.id (< 0). Es la clave de la fila, la del detalle (GET /catalogo/{id}) y la de PATCH y DELETE.
+    - `editable_en_tienda`: False solo en las filas SKU de la rama heredada (no tienen ficha web: PATCH y DELETE dan 404
+      TEXTO_FILA_DEL_ERP); True en las demás.
+    - Rama canónica (CATALOGO_LECTURA=canonico): siempre paginada (sin offset es 0) y con total exacto. Une los SKU del ERP
+      (con su ficha web, ProductWebListing) y los huérfanos de ecommerce_products (sin SKU en el ERP): un producto por fila.
+    - Rama heredada (la de hoy por defecto) SIN offset ni orden: es lo que llama la tienda pública (store/catalogo y
+      store/categoria, con publicado=true&limit=50). Doble fuente, cada una con su LIMIT, en el mismo orden de BASE:
+      - primero las filas de ecommerce_products (por nombre);
+      - detrás los SKU del ERP, sin ORDER BY (el orden que dé PostgreSQL: no está definido);
+      - el LIMIT de los SKU va antes del descarte de los que tienen espejo, así que pueden salir menos;
+      - total = las filas de ecommerce_products + los SKU devueltos: NO es exacto (con limit=0, el total exacto pide
+        offset=0);
+      - un error del código de BASE responde 200 {status, total: 0, data: [], error}.
+    - Rama heredada CON offset u orden: pagina sobre una fila por producto, con total exacto.
+    - P27, en las dos formas de la rama heredada, con sesión y sin ella:
+      - un SKU con CUALQUIER espejo en ecommerce_products (la misma columna sku, publicado o no) nunca sale como fila del
+        ERP: sale como su espejo, si el espejo pasa los filtros;
+      - un SKU sin espejo respeta la búsqueda (SKU o nombre) y la categoría de su producto, cuenta como publicado y no sale
+        con publicado=false.
+    - Sin sesión ERP (FINAL-C1): solo los publicados; publicado=false responde vacío; un error del código de BASE responde
+      ERROR_CATALOGO_PUBLICO (no str(e), que trae el SQL). Con sesión también salen los despublicados: los necesita el
+      interruptor de publicar de la pantalla de E-Commerce."""
     texto = _texto_o_422(q, search)
     categoria = _texto_o_422(categoria, nombre="categoria")
     orden_sql = _orden_del_catalogo(orden)
@@ -1548,11 +1574,20 @@ def _tiene_espejo_en_la_tienda(db: Session, sku) -> bool:
 
 @router.get("/catalogo/{product_id}")
 def get_catalogo_product(product_id: int, user: Optional[User] = Depends(get_optional_current_user), db: Session = Depends(get_db)):
-    """El detalle (público: la tienda lo lee sin sesión). B4 T24 (FINAL-C1): sin sesión ERP no trae notas_internas,
-    created_by, codigo_aduana ni total_vendido, y un producto despublicado da 404 (_detalle_segun_sesion).
-    B4.1 (A1-b): el id es el de la lista. Rama heredada: id > 0 → la fila de ecommerce_products; id < 0 → el SKU -id
-    (_serialize_catalogo_item_sku_heredado), 404 si tiene algún espejo en ecommerce_products; sin respaldo por Product.id
-    (abría otro producto). Rama canónica: _get_catalogo_product_canonico."""
+    """El detalle (público: la tienda lo lee sin sesión).
+
+    Firmas (B4.1, B45): el id es el de la fila de GET /catalogo (ver las Firmas de list_catalogo).
+    - Rama heredada:
+      - id > 0: la fila de ecommerce_products con ese id;
+      - id < 0: el SKU -id, con la forma de su fila de la lista (_serialize_catalogo_item_sku_heredado); da 404 si el SKU
+        tiene algún espejo en ecommerce_products, porque esa fila no existe en la lista (el producto sale como su espejo).
+    - Rama canónica:
+      - id < 0: el detalle canónico del SKU -id;
+      - id > 0: la fila de ecommerce_products o, si es el espejo de un SKU del ERP (su sku es el de un ProductSKU), el
+        detalle canónico de ese SKU, con id = -sku.id. Así la URL de hoy de un espejo sigue abriendo tras el corte.
+    - 0, o un id que no existe: 404 «Producto no encontrado». No hay respaldo por Product.id: abría otro producto.
+    - Sin sesión ERP (FINAL-C1, _detalle_segun_sesion): un producto despublicado da 404 (una fila SKU heredada cuenta como
+      publicada), y no trae notas_internas, created_by, codigo_aduana ni total_vendido. Con sesión trae total_vendido."""
     _ensure_ecommerce_tables(db)
     if _lectura_canonica():
         return _get_catalogo_product_canonico(db, product_id, con_sesion=user is not None)
