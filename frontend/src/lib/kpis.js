@@ -1351,17 +1351,21 @@ export function tarjetasFichaCliente(resumen) {
 /**
  * Lo que pintan las tarjetas de la ficha de un proveedor en la Agenda con lo que el servidor SÍ manda: payment_terms de
  * GET /compras/proveedores (_supplier_dict; sin ese dato, null y la tarjeta dice «—»: nunca un «Contado» inventado) y el `total` de
- * GET /compras/pedidos?supplier_id= (null si no llegó). Moneda y tiempo de entrega no existen en el modelo Supplier (prov_moneda y
- * prov_tiempo_entrega del catálogo quedan sin usar hasta que el servidor los mande).
+ * GET /compras/pedidos?supplier_id= (null si no llegó). B4.1 (P33): y la moneda (currency) y el tiempo de entrega (lead_time_days:
+ * «1 día», «12 días»), que el servidor manda desde T5; sin ellos, null y la tarjeta dice «—».
  * @param {any} proveedor
  * @param {unknown} totalPedidos
- * @returns {{prov_condiciones_pago: {valor: string | null}, prov_pedidos_compra: {valor: number | null}}}
+ * @returns {{prov_condiciones_pago: {valor: string | null}, prov_pedidos_compra: {valor: number | null}, prov_moneda: {valor: string | null}, prov_tiempo_entrega: {valor: string | null}}}
  */
 export function tarjetasFichaProveedor(proveedor, totalPedidos) {
   const terminos = typeof datosDe(proveedor)?.payment_terms === 'string' ? proveedor.payment_terms.trim() : '';
+  const moneda = typeof datosDe(proveedor)?.currency === 'string' ? proveedor.currency.trim() : '';
+  const dias = numeroFinito(datosDe(proveedor)?.lead_time_days);
   return {
     prov_condiciones_pago: { valor: terminos || null },
     prov_pedidos_compra: { valor: numeroFinito(totalPedidos) },
+    prov_moneda: { valor: moneda || null },
+    prov_tiempo_entrega: { valor: dias === null ? null : cuantos(dias, 'día', 'días') },
   };
 }
 

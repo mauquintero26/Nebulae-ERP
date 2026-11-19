@@ -547,7 +547,7 @@ console.log('--- TEST T23B: proveedorDeServidor (la Agenda lee nombre, contacto_
 console.log('--- TEST T24-f4 (A4): proveedorAServidor y peticionGuardarProveedor — la Agenda guarda con las claves y el método del servidor ---');
 {
   const { proveedorAServidor, peticionGuardarProveedor, proveedorDeServidor } = await import('../src/lib/datos-cliente.js');
-  // El formulario de la Agenda (supplierForm) con todas sus claves, incluidas las dos que Supplier no tiene (P33).
+  // El formulario de la Agenda (supplierForm) con todas sus claves, la moneda y el tiempo de entrega incluidos (B4.1 (P33): T5 ya los guarda).
   const form = {
     nombre: 'Textiles Andinos', contacto_nombre: 'Luis Mora', email: 'l@ta.co', telefono: '3001234567', direccion: 'Cra 1',
     ciudad: 'Cali', pais: 'Colombia', moneda_default: 'USD', condiciones_pago: '30 días', tiempo_entrega_dias: 12,
@@ -555,20 +555,21 @@ console.log('--- TEST T24-f4 (A4): proveedorAServidor y peticionGuardarProveedor
   // Las claves que leen create_supplier y update_supplier (erp_compras.py), y nada más.
   assert.deepEqual(proveedorAServidor(form), {
     name: 'Textiles Andinos', contact_name: 'Luis Mora', email: 'l@ta.co', phone: '3001234567', address: 'Cra 1',
-    city: 'Cali', country: 'Colombia', payment_terms: '30 días',
+    city: 'Cali', country: 'Colombia', payment_terms: '30 días', currency: 'USD', lead_time_days: 12,
   });
   const cuerpo = proveedorAServidor(form);
-  assert.equal('moneda_default' in cuerpo, false, 'Supplier no tiene moneda (P33): no se manda');
-  assert.equal('tiempo_entrega_dias' in cuerpo, false, 'ni tiempo de entrega (P33)');
-  for (const vieja of ['nombre', 'contacto_nombre', 'telefono', 'condiciones_pago', 'direccion', 'ciudad', 'pais']) {
+  // B4.1 (P33): antes «Supplier no tiene moneda: no se manda»; ahora sí se manda, con las claves del servidor.
+  assert.equal(cuerpo.currency, 'USD', 'B4.1 (P33): la moneda se manda');
+  assert.equal(cuerpo.lead_time_days, 12, 'B4.1 (P33): el tiempo de entrega se manda');
+  for (const vieja of ['nombre', 'contacto_nombre', 'telefono', 'condiciones_pago', 'direccion', 'ciudad', 'pais', 'moneda_default', 'tiempo_entrega_dias']) {
     assert.equal(vieja in cuerpo, false, `sin la clave de la pantalla ${vieja}`);
   }
   // Una clave que el formulario no trae no se manda (el PATCH solo toca lo que llega).
   assert.deepEqual(proveedorAServidor({ nombre: 'Solo nombre' }), { name: 'Solo nombre' });
   assert.deepEqual(proveedorAServidor(null), {});
-  // La inversa: lo que se manda y vuelve por proveedorDeServidor es lo que la pantalla escribió (sin moneda ni tiempo).
+  // La inversa: lo que se manda y vuelve por proveedorDeServidor es lo que la pantalla escribió (B4.1 (P33): con moneda y tiempo).
   const ida = proveedorDeServidor({ id: 3, ...cuerpo });
-  for (const k of ['nombre', 'contacto_nombre', 'email', 'telefono', 'direccion', 'ciudad', 'pais', 'condiciones_pago']) {
+  for (const k of ['nombre', 'contacto_nombre', 'email', 'telefono', 'direccion', 'ciudad', 'pais', 'condiciones_pago', 'moneda_default', 'tiempo_entrega_dias']) {
     assert.equal(ida[k], form[k], `ida y vuelta: ${k}`);
   }
   // La petición: el alta es POST /compras/proveedores; editar es PATCH /compras/proveedores/{id} (el servidor no tiene PUT).
@@ -590,6 +591,39 @@ console.log('--- TEST T24-f4 (A4): proveedorAServidor y peticionGuardarProveedor
     assert.ok(lista.includes(`"${k}"`), `update_supplier lee ${k}`);
     assert.ok(alta2.includes(`body.get("${k}"`), `create_supplier lee ${k}`);
   }
+}
+
+console.log('--- B4.1 T9 (P33, P34): el proveedor con moneda y tiempo; el Historial Comercial con las claves reales del 360 ---');
+{
+  const dc = await import('../src/lib/datos-cliente.js');
+  const p = dc.proveedorDeServidor({ id: 3, name: 'X', currency: 'USD', lead_time_days: 21 });
+  assert.equal(p.moneda_default, 'USD'); assert.equal(p.tiempo_entrega_dias, 21);
+  const sin = dc.proveedorDeServidor({ id: 3, name: 'X', currency: null, lead_time_days: null });
+  assert.equal(sin.moneda_default, null); assert.equal(sin.tiempo_entrega_dias, null);
+  assert.deepEqual(dc.proveedorAServidor({ nombre: 'X', moneda_default: '', tiempo_entrega_dias: '' }), { name: 'X', currency: null, lead_time_days: null });
+  assert.deepEqual(dc.proveedorAServidor({ moneda_default: 'EUR', tiempo_entrega_dias: '14' }), { currency: 'EUR', lead_time_days: 14 });
+  assert.deepEqual(dc.proveedorAServidor({ tiempo_entrega_dias: 0 }), { lead_time_days: 0 }, 'el 0 es un tiempo válido');
+  const perfil = { data: { solicitudes: [{ id: 7, numero: 'SC-7', estado: 'BORRADOR', created_at: '2026-11-01T10:00:00Z' }],
+                           pedidos: [{ id: 9, numero: 'PVEN-9', estado: 'EN_PROCESO', total_cop: 100, anticipo_cop: 50 }] } };
+  const h = dc.historialComercialCliente(perfil, { returnTo: '/dashboard/agenda?customer_id=4' });
+  assert.equal(h.solicitudes[0].href, '/dashboard/ventas/solicitud/7?return_to=%2Fdashboard%2Fagenda%3Fcustomer_id%3D4');
+  assert.equal(h.pedidos[0].href, '/dashboard/ventas/venta/9?return_to=%2Fdashboard%2Fagenda%3Fcustomer_id%3D4');
+  assert.equal(h.solicitudes[0].etiqueta, 'Nueva');   // la etiqueta de infoEstadoSolicitud('BORRADOR')
+  assert.equal(h.pedidos[0].etiqueta, 'En proceso');  // la de infoEstadoPedido('EN_PROCESO')
+  assert.equal(h.solicitudes[0].fecha, '2026-11-01T10:00:00Z');
+  assert.equal(h.pedidos[0].total_cop, 100); assert.equal(h.pedidos[0].anticipo_cop, 50);
+  // También con el perfil ya desenvuelto (la misma regla que resumenFichaCliente).
+  assert.equal(dc.historialComercialCliente(perfil.data, { returnTo: null }).pedidos[0].href, '/dashboard/ventas/venta/9');
+  assert.deepEqual(dc.historialComercialCliente(null, {}), { solicitudes: [], pedidos: [] });
+  const agenda = readFileSync(new URL('../src/app/dashboard/agenda/page.tsx', import.meta.url), 'utf8');
+  assert.ok(!/customer360\?\.customer_requests|customer360\?\.sales_orders/.test(agenda), 'P34: ya no las claves que el 360 no manda');
+  assert.match(agenda, /historialComercialCliente\(customer360/);
+  assert.match(agenda, /<TarjetaKpi kpi="prov_moneda"/); assert.match(agenda, /<TarjetaKpi kpi="prov_tiempo_entrega"/);
+  // H27: el desenvuelto del 360 es uno solo (kpis-ventas.js) y los días salen de cuantos (kpis.js), sin copias.
+  const dcFuente = readFileSync(new URL('../src/lib/datos-cliente.js', import.meta.url), 'utf8');
+  assert.ok(!/perfil360\.data|'resumen_financiero' in/.test(dcFuente), 'H27: datos-cliente no copia el desenvuelto');
+  const kpisFuente = readFileSync(new URL('../src/lib/kpis.js', import.meta.url), 'utf8');
+  assert.match(kpisFuente, /cuantos\(\w+, 'día', 'días'\)/, 'H27: «N días» con cuantos');
 }
 
 console.log('--- B4.1 T6 (P8): el vencimiento de «Editar» es el día de negocio, no el día local del navegador ---');

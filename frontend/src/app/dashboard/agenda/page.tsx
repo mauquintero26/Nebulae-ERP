@@ -16,7 +16,7 @@ import {
   Truck, Building2, Globe, Edit2, ShieldAlert
 } from 'lucide-react';
 import { CambiosDeActividad } from '@/app/dashboard/ventas/flujo';
-import { itemDeTimelineCliente, peticionGuardarProveedor, proveedorDeServidor } from '@/lib/datos-cliente';
+import { historialComercialCliente, itemDeTimelineCliente, peticionGuardarProveedor, proveedorDeServidor } from '@/lib/datos-cliente';
 import { fechaCorta, hace } from '@/lib/fechas-colombia';
 // B4 T23B: la franja de indicadores estándar de la ficha del cliente y del proveedor (KPI-otros punto 3).
 import { FranjaKpis, TarjetaKpi } from '@/components/ui';
@@ -134,7 +134,7 @@ export default function AgendaPage() {
     pais: 'Colombia',
     moneda_default: 'COP',
     condiciones_pago: 'Contado',
-    tiempo_entrega_dias: 7,
+    tiempo_entrega_dias: '',   // B4.1 (P33): vacío = sin definir (antes un 7 inventado)
   });
 
   // ─── CARGA DE CLIENTES ─────────────────────────────────────────────────────
@@ -427,7 +427,7 @@ export default function AgendaPage() {
       pais: 'Colombia',
       moneda_default: 'COP',
       condiciones_pago: 'Contado',
-      tiempo_entrega_dias: 7,
+      tiempo_entrega_dias: '',
     });
     setSupplierModal('NEW');
   };
@@ -441,9 +441,10 @@ export default function AgendaPage() {
       direccion: sup.direccion || '',
       ciudad: sup.ciudad || '',
       pais: sup.pais || 'Colombia',
-      moneda_default: sup.moneda_default || 'COP',
+      // B4.1 (P33): lo que el servidor tiene (currency y lead_time_days); sin dato, «Sin definir» y vacío: nada inventado.
+      moneda_default: sup.moneda_default ?? '',
       condiciones_pago: sup.condiciones_pago || 'Contado',
-      tiempo_entrega_dias: sup.tiempo_entrega_dias || 7,
+      tiempo_entrega_dias: sup.tiempo_entrega_dias ?? '',
     });
     setSupplierModal('EDIT');
   };
@@ -795,10 +796,21 @@ export default function AgendaPage() {
                         onChange={e => setSupplierForm(f => ({ ...f, moneda_default: e.target.value }))}
                         className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none bg-white focus:border-teal-600"
                       >
+                        <option value="">Sin definir</option>
                         <option value="COP">COP ($)</option>
                         <option value="USD">USD ($)</option>
                         <option value="EUR">EUR (€)</option>
                       </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-1">Tiempo de entrega (días)</label>
+                      <input
+                        type="number" min={0} max={365}
+                        value={supplierForm.tiempo_entrega_dias}
+                        onChange={e => setSupplierForm(f => ({ ...f, tiempo_entrega_dias: e.target.value }))}
+                        placeholder="Sin definir"
+                        className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none focus:border-teal-600"
+                      />
                     </div>
                   </div>
 
@@ -901,8 +913,8 @@ export default function AgendaPage() {
           </div>
         </div>
 
-        {/* KPIs Proveedor: las condiciones de pago (payment_terms) y el total de pedidos de compra del servidor. La moneda y el tiempo de
-            entrega no existen en el modelo de proveedor (no se inventan: prov_moneda y prov_tiempo_entrega del catálogo quedan sin usar). */}
+        {/* KPIs Proveedor: las condiciones de pago, el total de pedidos de compra, y (B4.1, P33) la moneda y el tiempo de entrega que el
+            servidor guarda en el proveedor (currency y lead_time_days); sin dato, «—». */}
         <div className="mb-6 space-y-3">
           {Boolean(supplierPecsError) && (() => {
             const a = avisoDeFuente(supplierPecsError, 'No se pudieron cargar los pedidos de compra del proveedor');
@@ -912,6 +924,8 @@ export default function AgendaPage() {
             <TarjetaKpi kpi="prov_condiciones_pago" valor={tarjetasProveedor.prov_condiciones_pago.valor} />
             <TarjetaKpi kpi="prov_pedidos_compra" valor={tarjetasProveedor.prov_pedidos_compra.valor}
               estado={pecs.estado} />
+            <TarjetaKpi kpi="prov_moneda" valor={tarjetasProveedor.prov_moneda.valor} />
+            <TarjetaKpi kpi="prov_tiempo_entrega" valor={tarjetasProveedor.prov_tiempo_entrega.valor} />
           </FranjaKpis>
         </div>
 
@@ -1087,10 +1101,21 @@ export default function AgendaPage() {
                       onChange={e => setSupplierForm(f => ({ ...f, moneda_default: e.target.value }))}
                       className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none bg-white focus:border-teal-600"
                     >
+                      <option value="">Sin definir</option>
                       <option value="COP">COP ($)</option>
                       <option value="USD">USD ($)</option>
                       <option value="EUR">EUR (€)</option>
                     </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Tiempo de entrega (días)</label>
+                    <input
+                      type="number" min={0} max={365}
+                      value={supplierForm.tiempo_entrega_dias}
+                      onChange={e => setSupplierForm(f => ({ ...f, tiempo_entrega_dias: e.target.value }))}
+                      placeholder="Sin definir"
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none focus:border-teal-600"
+                    />
                   </div>
                 </div>
 
@@ -1309,6 +1334,9 @@ export default function AgendaPage() {
   // KPI-otros punto 3: las claves REALES de profile-360 (resumen_financiero, pedidos, cotizaciones y solicitudes; antes financials,
   // quotations, sales_orders y customer_requests, que el servidor no manda: todo salía en 0 y «Al día con pagos»).
   const tarjetasCliente = tarjetasFichaCliente(customer360 ? resumenFichaCliente(customer360) : null);
+  // B4.1 (P34): el Historial Comercial con las claves que profile-360 manda (solicitudes y pedidos) y un enlace a cada documento
+  // que vuelve a esta ficha (el mismo cliente que recibió fetchProfile).
+  const historial = historialComercialCliente(customer360, { returnTo: `/dashboard/agenda?customer_id=${clienteActual ?? ''}` });
 
   return (
     <div className={`h-full w-full bg-[#f8f9fa] flex flex-col p-6 ${RESERVA_BOTON_IA} overflow-y-auto animate-in fade-in`}>
@@ -1544,19 +1572,19 @@ export default function AgendaPage() {
             <div>
               <h3 className="text-xs font-black text-slate-400 uppercase tracking-wider mb-3">Solicitudes de Cliente</h3>
               <div className="bg-slate-50 rounded-2xl border border-slate-100 divide-y divide-slate-100">
-                {(customer360?.customer_requests || []).length === 0 ? (
+                {historial.solicitudes.length === 0 ? (
                   <div className="p-6 text-center text-xs text-slate-400">Sin solicitudes registradas</div>
                 ) : (
-                  (customer360?.customer_requests || []).map((sc: any) => (
-                    <div key={sc.id} className="p-3.5 flex items-center justify-between hover:bg-white transition-colors">
+                  historial.solicitudes.map((fila) => (
+                    <div key={fila.id} className="p-3.5 flex items-center justify-between hover:bg-white transition-colors">
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="font-bold text-xs text-slate-800">{sc.numero}</span>
-                          <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${STATUS_COLOR_MAP[sc.estado] || 'bg-slate-100 text-slate-600'}`}>{sc.estado}</span>
+                          <span className="font-bold text-xs text-slate-800">{fila.numero}</span>
+                          <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${STATUS_COLOR_MAP[fila.estado] || 'bg-slate-100 text-slate-600'}`}>{fila.etiqueta}</span>
                         </div>
-                        <p className="text-[11px] text-slate-400 mt-0.5">{sc.tipo_solicitud || 'Cotización'} · {hace(sc.created_at)}</p>
+                        <p className="text-[11px] text-slate-400 mt-0.5">{hace(fila.fecha)}</p>
                       </div>
-                      <Link href="/dashboard/ventas/solicitud" className="text-xs font-bold text-indigo-600 hover:underline">Ver SC →</Link>
+                      <Link href={fila.href ?? '/dashboard/ventas/solicitud'} className="text-xs font-bold text-indigo-600 hover:underline">Ver SC →</Link>
                     </div>
                   ))
                 )}
@@ -1567,19 +1595,19 @@ export default function AgendaPage() {
             <div>
               <h3 className="text-xs font-black text-slate-400 uppercase tracking-wider mb-3">Pedidos de Venta (PVEN)</h3>
               <div className="bg-slate-50 rounded-2xl border border-slate-100 divide-y divide-slate-100">
-                {(customer360?.sales_orders || []).length === 0 ? (
+                {historial.pedidos.length === 0 ? (
                   <div className="p-6 text-center text-xs text-slate-400">Sin pedidos de venta registrados</div>
                 ) : (
-                  (customer360?.sales_orders || []).map((so: any) => (
-                    <div key={so.id} className="p-3.5 flex items-center justify-between hover:bg-white transition-colors">
+                  historial.pedidos.map((fila) => (
+                    <div key={fila.id} className="p-3.5 flex items-center justify-between hover:bg-white transition-colors">
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="font-bold text-xs text-slate-800">{so.numero}</span>
-                          <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${STATUS_COLOR_MAP[so.estado] || 'bg-slate-100 text-slate-600'}`}>{so.estado}</span>
+                          <span className="font-bold text-xs text-slate-800">{fila.numero}</span>
+                          <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${STATUS_COLOR_MAP[fila.estado] || 'bg-slate-100 text-slate-600'}`}>{fila.etiqueta}</span>
                         </div>
-                        <p className="text-[11px] text-slate-400 mt-0.5">Total: {formatCOP(so.total_cop)} · Anticipo: {formatCOP(so.anticipo_cop)}</p>
+                        <p className="text-[11px] text-slate-400 mt-0.5">Total: {formatCOP(fila.total_cop)} · Anticipo: {formatCOP(fila.anticipo_cop)}</p>
                       </div>
-                      <Link href="/dashboard/ventas/venta" className="text-xs font-bold text-indigo-600 hover:underline">Ver Pedido →</Link>
+                      <Link href={fila.href ?? '/dashboard/ventas/venta'} className="text-xs font-bold text-indigo-600 hover:underline">Ver Pedido →</Link>
                     </div>
                   ))
                 )}

@@ -211,7 +211,8 @@ console.log('--- B4 T24 f4 (FINAL-m22): el CRM y la Agenda dicen «hace…» con
   const crm = leer('app/dashboard/crm/page.tsx');
   assert.ok(crm.includes('<span className="text-xs text-slate-400">{hace(selectedLead.updated_at)}</span>'), 'el Drawer del lead');
   const agenda = leer('app/dashboard/agenda/page.tsx');
-  assert.ok(agenda.includes("{sc.tipo_solicitud || 'Cotización'} · {hace(sc.created_at)}"), 'las SC del perfil 360');
+  // B4.1 (P34): la fila de la SC sale de historialComercialCliente (profile-360 no manda tipo_solicitud); la fecha, la de la fila.
+  assert.ok(agenda.includes('{hace(fila.fecha)}'), 'las SC del perfil 360');
   assert.ok(agenda.includes('{it.fecha && <span className="text-[10px] text-slate-400 shrink-0">{hace(it.fecha)}</span>}'), 'la línea de tiempo');
 }
 

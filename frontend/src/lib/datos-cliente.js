@@ -23,7 +23,10 @@
 import { tiene, humanizarCodigo } from './estados-pedido.js';
 import { comoUTC } from './hub-ventas.js';
 import { diaDeNegocio, diaEditadoParaGuardar } from './fechas-colombia.js';
-import { ESTADOS_SC_CON_CONFIRMACION } from './estados-solicitud.js';
+import { ESTADOS_SC_CON_CONFIRMACION, infoEstadoSolicitud } from './estados-solicitud.js';
+import { infoEstadoPedido } from './estados-pedido.js';
+import { enlaceDocumento } from './analisis.js';
+import { perfil360Desenvuelto } from './kpis-ventas.js';
 
 // Revisión final (F8): el final del aviso 4 de avisoCorreccionContacto y del texto de «Editar» en Confirmada con una
 // cotización activa (una sola redacción).
@@ -412,9 +415,10 @@ export function avisoNombreSinContacto(documento) {
 
 /**
  * B4 T23B: el proveedor de GET /compras/proveedores (erp_compras.py _supplier_dict: name, contact_name, phone, address, country,
- * payment_terms, email y city) con las claves que lee la Agenda (nombre, contacto_nombre, telefono, direccion, pais y
- * condiciones_pago; email y city siguen como llegan). Se CONSERVAN las del servidor. Lo que el servidor no manda (la moneda y el
- * tiempo de entrega, que Supplier no tiene) no se inventa. Sin proveedor (null o lo que no es un objeto), null.
+ * payment_terms, email, city y, desde B4.1 (P33), currency y lead_time_days) con las claves que lee la Agenda (nombre, contacto_nombre,
+ * telefono, direccion, pais, condiciones_pago, moneda_default y tiempo_entrega_dias; email y city siguen como llegan). Se CONSERVAN
+ * las del servidor. La moneda y el tiempo de entrega se copian SOLO si el servidor manda esa clave (un servidor viejo no la manda:
+ * no se inventa). Sin proveedor (null o lo que no es un objeto), null.
  * @param {any} s
  * @returns {Record<string, any> | null}
  */
@@ -430,6 +434,9 @@ export function proveedorDeServidor(s) {
     ciudad: de('ciudad', 'city'),
     pais: de('pais', 'country'),
     condiciones_pago: de('condiciones_pago', 'payment_terms'),
+    // B4.1 (P33): solo si el servidor manda la clave (un null también cuenta: es «sin definir»); si no, ni la clave.
+    ...(s.moneda_default === undefined && s.currency !== undefined ? { moneda_default: s.currency } : {}),
+    ...(s.tiempo_entrega_dias === undefined && s.lead_time_days !== undefined ? { tiempo_entrega_dias: s.lead_time_days } : {}),
   };
 }
 
@@ -437,12 +444,14 @@ export function proveedorDeServidor(s) {
 const CLAVES_PROVEEDOR_SERVIDOR = Object.freeze([
   ['nombre', 'name'], ['contacto_nombre', 'contact_name'], ['email', 'email'], ['telefono', 'phone'], ['direccion', 'address'],
   ['ciudad', 'city'], ['pais', 'country'], ['condiciones_pago', 'payment_terms'],
+  // B4.1 (P33): T5 guarda la moneda (VARCHAR(3)) y el tiempo de entrega (entero) del proveedor.
+  ['moneda_default', 'currency'], ['tiempo_entrega_dias', 'lead_time_days'],
 ]);
 
 /**
  * B4 T24 f4 (A4): la inversa de proveedorDeServidor. El formulario de la Agenda (nombre, contacto_nombre, telefono…) con las
- * claves del servidor (name, contact_name, phone…). La moneda y el tiempo de entrega no se mandan: Supplier no los tiene (P33).
- * Una clave que el formulario no trae no se manda (el PATCH solo toca lo que llega).
+ * claves del servidor (name, contact_name, phone…). B4.1 (P33): la moneda y el tiempo de entrega también se mandan: '' va como null
+ * («Sin definir») y el tiempo, como número. Una clave que el formulario no trae no se manda (el PATCH solo toca lo que llega).
  * @param {Record<string, unknown> | null | undefined} form
  * @returns {Record<string, unknown>}
  */
@@ -451,9 +460,48 @@ export function proveedorAServidor(form) {
   const cuerpo = {};
   if (!form || typeof form !== 'object') return cuerpo;
   for (const [pantalla, servidor] of CLAVES_PROVEEDOR_SERVIDOR) {
-    if (form[pantalla] !== undefined) cuerpo[servidor] = form[pantalla];
+    if (form[pantalla] === undefined) continue;
+    const valor = form[pantalla];
+    if (pantalla === 'moneda_default') cuerpo[servidor] = valor === '' || valor === null ? null : valor;
+    else if (pantalla === 'tiempo_entrega_dias') cuerpo[servidor] = tiempoEntregaANumero(valor);
+    else cuerpo[servidor] = valor;
   }
   return cuerpo;
+}
+
+/** B4.1 (P33): el tiempo de entrega del formulario ('', null o un texto sin número → null; '14' → 14). */
+function tiempoEntregaANumero(valor) {
+  if (valor === '' || valor === null || valor === undefined) return null;
+  const n = Number(valor);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** @typedef {{ id: number, numero: string, estado: string, etiqueta: string, fecha: string | null, href: string | null, total_cop?: number, anticipo_cop?: number }} FilaHistorial */
+
+/**
+ * B4.1 (P34): las filas del Historial Comercial de la Agenda con lo que GET /crm/customers/{id}/profile-360 SÍ manda: `solicitudes`
+ * [{id, numero, estado, created_at}] y `pedidos` [{id, numero, estado, total_cop, anticipo_cop, created_at}] (no
+ * customer_requests ni sales_orders). Desenvuelve `data` como resumenFichaCliente (perfil360Desenvuelto). Cada fila trae su
+ * `etiqueta` (la de infoEstadoSolicitud o infoEstadoPedido: nunca el código crudo), su `fecha` (created_at) y su `href` a la SC o al
+ * PVEN con el id (enlaceDocumento, con `return_to` para volver a la Agenda). Sin perfil, listas vacías.
+ * @param {any} perfil360
+ * @param {{ returnTo?: string | null }} [opciones]
+ * @returns {{ solicitudes: FilaHistorial[], pedidos: FilaHistorial[] }}
+ */
+export function historialComercialCliente(perfil360, { returnTo = null } = {}) {
+  const perfil = perfil360Desenvuelto(perfil360);
+  const lista = (v) => (Array.isArray(v) ? v.filter((x) => x !== null && typeof x === 'object' && !Array.isArray(x)) : []);
+  return {
+    solicitudes: lista(perfil.solicitudes).map((s) => ({
+      id: s.id, numero: s.numero, estado: s.estado, etiqueta: infoEstadoSolicitud(s.estado).label,
+      fecha: s.created_at ?? null, href: enlaceDocumento('SC', s.id, { returnTo }),
+    })),
+    pedidos: lista(perfil.pedidos).map((p) => ({
+      id: p.id, numero: p.numero, estado: p.estado, etiqueta: infoEstadoPedido(p.estado).label,
+      fecha: p.created_at ?? null, href: enlaceDocumento('PVEN', p.id, { returnTo }),
+      total_cop: p.total_cop, anticipo_cop: p.anticipo_cop,
+    })),
+  };
 }
 
 /**

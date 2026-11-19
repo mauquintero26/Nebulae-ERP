@@ -18,6 +18,18 @@ import { redondearPeso } from './pesos.js';
 const esObjeto = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const filas = (v) => (Array.isArray(v) ? v.filter(esObjeto) : []);
 
+/**
+ * B4.1 (H27): el perfil de GET /crm/customers/{id}/profile-360 sin su envoltorio. La respuesta puede venir como { data: perfil } o
+ * ya desenvuelta (la que trae resumen_financiero). Lo que no es un objeto da {}. Lo usan resumenFichaCliente y
+ * historialComercialCliente (datos-cliente.js): una sola regla.
+ * @param {any} perfil360
+ * @returns {Record<string, any>}
+ */
+export function perfil360Desenvuelto(perfil360) {
+  const envuelto = esObjeto(perfil360) && esObjeto(perfil360.data) && !('resumen_financiero' in perfil360);
+  return envuelto ? perfil360.data : (esObjeto(perfil360) ? perfil360 : {});
+}
+
 /** Un monto del API (número o texto) en pesos enteros; lo que no es un número vale 0. */
 function pesos(v) {
   const n = typeof v === 'number' || (typeof v === 'string' && v.trim() !== '') ? Number(v) : NaN;
@@ -40,8 +52,7 @@ function pesos(v) {
  * @returns {ResumenFichaCliente}
  */
 export function resumenFichaCliente(perfil360) {
-  const envuelto = esObjeto(perfil360) && esObjeto(perfil360.data) && !('resumen_financiero' in perfil360);
-  const perfil = envuelto ? perfil360.data : (esObjeto(perfil360) ? perfil360 : {});
+  const perfil = perfil360Desenvuelto(perfil360);
   const sinPermiso = perfil.resumen_financiero === null;
   const financiero = esObjeto(perfil.resumen_financiero) ? perfil.resumen_financiero : {};
   return {

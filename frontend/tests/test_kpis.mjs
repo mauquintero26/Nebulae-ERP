@@ -1385,12 +1385,23 @@ console.log('--- TEST 29 (B4 T23B, KPI-otros puntos 3, 4 y 6; RP70): las tarjeta
   });
 
   // — La ficha del proveedor: lo que el servidor SÍ manda (GET /compras/proveedores: payment_terms) y el total de GET /compras/pedidos?supplier_id=.
+  // B4.1 (P33): con la moneda (currency) y el tiempo de entrega (lead_time_days) que T5 ya manda; sin ellos, { valor: null }.
+  assert.deepEqual(k.tarjetasFichaProveedor({ payment_terms: '30 días', currency: 'USD', lead_time_days: 1 }, 7), {
+    prov_condiciones_pago: { valor: '30 días' },
+    prov_pedidos_compra: { valor: 7 },
+    prov_moneda: { valor: 'USD' },
+    prov_tiempo_entrega: { valor: '1 día' },
+  });
+  assert.equal(k.tarjetasFichaProveedor({ lead_time_days: 12 }, 0).prov_tiempo_entrega.valor, '12 días');
+  assert.equal(k.tarjetasFichaProveedor({ lead_time_days: 0 }, 0).prov_tiempo_entrega.valor, '0 días', 'el 0 es un tiempo válido');
   assert.deepEqual(k.tarjetasFichaProveedor({ payment_terms: '30 días' }, 7), {
     prov_condiciones_pago: { valor: '30 días' },
     prov_pedidos_compra: { valor: 7 },
+    prov_moneda: { valor: null },
+    prov_tiempo_entrega: { valor: null },
   });
-  assert.deepEqual(k.tarjetasFichaProveedor({ payment_terms: '  ' }, 0), { prov_condiciones_pago: { valor: null }, prov_pedidos_compra: { valor: 0 } }, 'sin condiciones, «—»: nunca «Contado» inventado');
-  assert.deepEqual(k.tarjetasFichaProveedor(null, null), { prov_condiciones_pago: { valor: null }, prov_pedidos_compra: { valor: null } });
+  assert.deepEqual(k.tarjetasFichaProveedor({ payment_terms: '  ' }, 0), { prov_condiciones_pago: { valor: null }, prov_pedidos_compra: { valor: 0 }, prov_moneda: { valor: null }, prov_tiempo_entrega: { valor: null } }, 'sin condiciones, «—»: nunca «Contado» inventado');
+  assert.deepEqual(k.tarjetasFichaProveedor(null, null), { prov_condiciones_pago: { valor: null }, prov_pedidos_compra: { valor: null }, prov_moneda: { valor: null }, prov_tiempo_entrega: { valor: null } });
 
   // — La tarjeta oscura del Asistente: los nombres del catálogo (RP70) y formatoPesos, sin el .split(',')[0] de formatCOP.
   const rev = { total_spent_cop: 4927538, total_orders_count: 6, active_orders_count: 2, avg_ticket_cop: 821256.33, segmento: 'Cliente Frecuente' };
@@ -1627,6 +1638,9 @@ console.log('--- TEST 34 (B4 T23B, KPI-otros punto 3; H13, RP66, RP70): la Agend
   assert.match(codigo, /const tarjetasProveedor = tarjetasFichaProveedor\(selectedSupplier, supplierPecsTotal\);/);
   assert.match(codigo, /<TarjetaKpi kpi="prov_condiciones_pago" valor=\{tarjetasProveedor\.prov_condiciones_pago\.valor\} \/>/);
   assert.match(codigo, /<TarjetaKpi kpi="prov_pedidos_compra" valor=\{tarjetasProveedor\.prov_pedidos_compra\.valor\}\s*estado=\{pecs\.estado\} \/>/);
+  // B4.1 (P33): las otras dos tarjetas de la franja, la moneda y el tiempo de entrega.
+  assert.match(codigo, /<TarjetaKpi kpi="prov_moneda" valor=\{tarjetasProveedor\.prov_moneda\.valor\} \/>/);
+  assert.match(codigo, /<TarjetaKpi kpi="prov_tiempo_entrega" valor=\{tarjetasProveedor\.prov_tiempo_entrega\.valor\} \/>/);
   assert.match(codigo, /const pecs = estadoPedidosProveedor\(supplierPecsError, supplierPecsTotal, supplierPecs\);/);
   assert.match(codigo, /\{pecs\.texto \?\? ''\}/);
   assert.match(codigo, /const \{ items, total \} = pedidosDeProveedor\(await apiFetch/);
@@ -1646,8 +1660,9 @@ console.log('--- TEST 34 (B4 T23B, KPI-otros punto 3; H13, RP66, RP70): la Agend
   assert.ok(!/fecha_pedido/.test(codigo), 'sin la clave que el servidor no manda');
   assert.match(codigo, /apiFetch\(`\/compras\/pedidos\?supplier_id=\$\{sup\.id\}&limit=200`\)/);
   // H13 (RP66): los dos enlaces del Historial Comercial a rutas que existen.
-  assert.match(codigo, /<Link href="\/dashboard\/ventas\/solicitud" className="[^"]*">Ver SC →<\/Link>/);
-  assert.match(codigo, /<Link href="\/dashboard\/ventas\/venta" className="[^"]*">Ver Pedido →<\/Link>/);
+  // B4.1 (P34): ya no son rutas fijas a la lista: cada fila lleva su href (enlaceDocumento, con el id y el return_to).
+  assert.match(codigo, /<Link href=\{fila\.href \?\? '\/dashboard\/ventas\/solicitud'\} className="[^"]*">Ver SC →<\/Link>/);
+  assert.match(codigo, /<Link href=\{fila\.href \?\? '\/dashboard\/ventas\/venta'\} className="[^"]*">Ver Pedido →<\/Link>/);
   assert.ok(!/\/dashboard\/ventas\/solicitudes|\/dashboard\/ventas\/pedidos/.test(codigo), 'sin las rutas que no existen');
   // Las rutas a las que apuntan existen en el árbol.
   for (const ruta of ['ventas/solicitud/page.tsx', 'ventas/venta/page.tsx']) {

@@ -32,7 +32,8 @@ const PERFIL = {
 
 console.log('--- TEST 1: solo resumenFichaCliente (C4, C5) ---');
 {
-  assert.deepEqual(Object.keys(kpisVentas), ['resumenFichaCliente']);
+  // B4.1 (H27, P34): se suma perfil360Desenvuelto, el desenvuelto del 360 que historialComercialCliente (datos-cliente.js) comparte.
+  assert.deepEqual(Object.keys(kpisVentas).sort(), ['perfil360Desenvuelto', 'resumenFichaCliente']);
 }
 
 console.log('--- TEST 2: la forma real de profile-360 ---');
