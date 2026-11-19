@@ -258,11 +258,11 @@ def _productos_publicados(db: Session, ids) -> set:
 
 
 def _producto_dict(p, publicados: set) -> dict:
-    """ProductResponse (como hoy) + precio_venta (el menor sale_price de sus SKU), costo (el menor cost_price no nulo) y
-    publicado (RP91). Los SKU son los que ya carga ProductResponse: no hay una consulta más por producto."""
+    """ProductResponse (como hoy) + precio_venta (el menor sale_price mayor que 0 de sus SKU), costo (el menor cost_price
+    mayor que 0) y publicado (RP91). B4.1 (P17): un 0 es sin precio o sin costo (quick-create guarda 0); sin ninguno, None. Los SKU son los que ya carga ProductResponse: no hay una consulta más por producto."""
     fila = schemas.ProductResponse.model_validate(p).model_dump()
-    precios = [s.sale_price for s in p.skus if s.sale_price is not None]
-    costos = [s.cost_price for s in p.skus if s.cost_price is not None]
+    precios = [s.sale_price for s in p.skus if s.sale_price is not None and s.sale_price > 0]
+    costos = [s.cost_price for s in p.skus if s.cost_price is not None and s.cost_price > 0]
     fila.update(precio_venta=min(precios) if precios else None, costo=min(costos) if costos else None,
                 publicado=p.id in publicados)
     return fila

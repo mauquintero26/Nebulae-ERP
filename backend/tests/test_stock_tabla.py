@@ -369,6 +369,48 @@ def _ids_productos(cuerpo):
     return [p["id"] for p in cuerpo["data"]]
 
 
+def test_list_products_un_cero_es_sin_precio_y_sin_costo(app_client, db, admin_token, brand, category):
+    s = uuid.uuid4().hex[:8].upper()
+    mixto = _guardar(db, Product(brand_id=brand.id, category_id=category.id, name=f"Mixto {s}", type="Fisico",
+                                 base_currency="COP"))
+    ceros = _guardar(db, Product(brand_id=brand.id, category_id=category.id, name=f"Ceros {s}", type="Fisico",
+                                 base_currency="COP"))
+    for producto, codigo, costo, precio in ((mixto, "M0", 0, 0), (mixto, "M1", 8, 30), (ceros, "C0", 0, 0)):
+        _guardar(db, ProductSKU(product_id=producto.id, sku=f"{codigo}-{s}", cost_price=costo, sale_price=precio))
+    por_id = {p["id"]: p for p in _get(app_client, admin_token, RUTA_PRODUCTOS, q=s)["data"]}
+    assert (por_id[mixto.id]["precio_venta"], por_id[mixto.id]["costo"]) == (30, 8)
+    assert (por_id[ceros.id]["precio_venta"], por_id[ceros.id]["costo"]) == (None, None)
+
+
+def test_el_filtro_de_categoria_incluye_las_subcategorias(app_client, db, admin_token, brand):
+    """B4.1 (P25): la categoría del filtro cubre a sus descendientes; una hermana no; un ciclo no cuelga la consulta."""
+    from app.core.existencias import resumen_existencias
+    s = uuid.uuid4().hex[:8].upper()
+    padre = _guardar(db, Category(name=f"Padre-{s}"))
+    hija = _guardar(db, Category(name=f"Hija-{s}", parent_id=padre.id))
+    nieta = _guardar(db, Category(name=f"Nieta-{s}", parent_id=hija.id))
+    hermana = _guardar(db, Category(name=f"Hermana-{s}", parent_id=padre.id))
+    producto = _guardar(db, Product(brand_id=brand.id, category_id=nieta.id, name=f"Prod {s}", type="Fisico",
+                                    base_currency="COP"))
+    sku = _guardar(db, ProductSKU(product_id=producto.id, sku=f"SUB-{s}", cost_price=1, sale_price=2))
+
+    def en_tabla(categoria):
+        return [f["sku_id"] for f in _get(app_client, admin_token, q=s, categoria_id=categoria.id)["data"]]
+
+    for categoria in (padre, hija, nieta):
+        assert en_tabla(categoria) == [sku.id], categoria.name
+        assert resumen_existencias(db, categoria_id=categoria.id, q=s)["skus_total"] == 1, categoria.name
+    assert en_tabla(hermana) == []
+    assert resumen_existencias(db, categoria_id=hermana.id, q=s)["skus_total"] == 0
+    # Un ciclo en parent_id (A -> B -> A): UNION termina; con UNION ALL la recursión no acabaría.
+    a = _guardar(db, Category(name=f"CicloA-{s}"))
+    b = _guardar(db, Category(name=f"CicloB-{s}", parent_id=a.id))
+    a.parent_id = b.id
+    db.commit()
+    db.execute(text("SET LOCAL statement_timeout = '5s'"))
+    assert en_tabla(a) == [] and en_tabla(b) == []
+
+
 def test_list_products_busqueda_offset_total_y_compatibilidad(app_client, db, admin_token, brand, category):
     s = uuid.uuid4().hex[:8].upper()
     p1, p2, p3, s1, _, _ = _productos(db, brand, category, s)
@@ -460,7 +502,7 @@ def test_list_products_precio_costo_y_publicado_segun_td03(app_client, db, admin
     monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
     canonico = por_id()
     assert (canonico[p1.id]["precio_venta"], canonico[p1.id]["costo"], canonico[p1.id]["publicado"]) == (15, 10, True)
-    assert (canonico[p2.id]["precio_venta"], canonico[p2.id]["costo"], canonico[p2.id]["publicado"]) == (7, 0, False)
+    assert (canonico[p2.id]["precio_venta"], canonico[p2.id]["costo"], canonico[p2.id]["publicado"]) == (7, None, False)   # B4.1 (P17): un 0 es sin costo
     assert (canonico[p3.id]["precio_venta"], canonico[p3.id]["costo"], canonico[p3.id]["publicado"]) == (
         None, None, False)   # un producto sin SKU
     assert por_id(offset=0)[p1.id]["publicado"] is True   # igual con la página

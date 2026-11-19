@@ -101,6 +101,14 @@ def _transito(sku_id=None):
     return q.group_by(PurchaseOrderLine.sku_id).subquery("transito_existencias")
 
 
+def categoria_y_subcategorias(categoria_id: int):
+    """B4.1 T4 (P25): el Select de los ids de la categoria y de todas sus descendientes (un CTE recursivo). Usa UNION, no
+    UNION ALL: si dos categorias se apuntan entre si (un ciclo en parent_id) la recursion termina en vez de colgar."""
+    arbol = select(Category.id).where(Category.id == categoria_id).cte("arbol_categorias", recursive=True)
+    arbol = arbol.union(select(Category.id).where(Category.parent_id == arbol.c.id))
+    return select(arbol.c.id)
+
+
 def consulta_existencias(db: Session, por="sku", warehouse_id=None, categoria_id=None, q=None, *, ahora=None):
     """El Select (sin ejecutar, sin orden ni paginacion: los pone quien llama) de las existencias, con estas columnas:
     sku_id, sku, producto, categoria, bodega, fisico, reservado, disponible, cuarentena, en_transito, precio
@@ -111,7 +119,7 @@ def consulta_existencias(db: Session, por="sku", warehouse_id=None, categoria_id
       las bodegas sumadas; bodega y warehouse_id son NULL. Con warehouse_id solo se suman las existencias de esa bodega.
     - por='bodega': una fila por par SKU-bodega con nivel, reserva activa o cuarentena activa; con warehouse_id, solo
       esa bodega.
-    - categoria_id: Product.category_id; q: el SKU o el nombre del producto (ILIKE, como /stock-summary; en blanco no
+    - categoria_id: la categoria y sus subcategorias (Product.category_id en categoria_y_subcategorias); q: el SKU o el nombre del producto (ILIKE, como /stock-summary; en blanco no
       filtra). Otro `por` -> ValueError. `db` no se consulta; `ahora` (UTC sin zona) fija el corte de las reservas."""
     if por not in POR:
         raise ValueError(f"por debe ser 'sku' o 'bodega', no {por!r}")
@@ -155,7 +163,7 @@ def consulta_existencias(db: Session, por="sku", warehouse_id=None, categoria_id
                     estado.label("estado_stock"), warehouse,
                     func.coalesce(ProductWebListing.rastrear_inventario, true()).label("rastrear_inventario")))
     if categoria_id is not None:
-        consulta = consulta.where(Product.category_id == categoria_id)
+        consulta = consulta.where(Product.category_id.in_(categoria_y_subcategorias(categoria_id)))
     texto = q.strip() if isinstance(q, str) else None
     if texto:
         patron = f"%{texto}%"
