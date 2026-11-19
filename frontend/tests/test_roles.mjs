@@ -512,4 +512,18 @@ console.log('--- B4 T24 f3 r1 (C1 y la heredada): sin bodega receptora, BODEGA c
   for (const r of RAROS) assert.deepEqual(fuera(false, false, r), { confirmar: false, texto: null }, JSON.stringify(r));
 }
 
+console.log('--- B4.1 T9 (A1-f): edicionFilaCatalogo — una fila SKU de la rama heredada no se edita desde la tienda ---');
+{
+  const { edicionFilaCatalogo, TITULO_SOLO_ADMIN_CATALOGO, TEXTO_FILA_DEL_ERP_TIENDA } = await import('../src/lib/roles.js');
+  assert.equal(TITULO_SOLO_ADMIN_CATALOGO, 'Solo la Administración edita el catálogo');
+  assert.equal(TEXTO_FILA_DEL_ERP_TIENDA, 'Viene del catálogo del ERP: no se edita desde la tienda.');
+  assert.deepEqual(edicionFilaCatalogo({ id: 4, editable_en_tienda: true }, true), { editable: true, motivo: null });
+  assert.deepEqual(edicionFilaCatalogo({ id: -9, editable_en_tienda: false }, true), { editable: false, motivo: TEXTO_FILA_DEL_ERP_TIENDA });
+  assert.deepEqual(edicionFilaCatalogo({ id: 4, editable_en_tienda: true }, false), { editable: false, motivo: TITULO_SOLO_ADMIN_CATALOGO });
+  assert.deepEqual(edicionFilaCatalogo({ id: 4 }, true), { editable: true, motivo: null }, 'sin la llave (servidor viejo): como hoy');
+  // H26: la etiqueta «Del ERP» y su motivo dicen lo mismo, también para un rol sin permiso.
+  assert.deepEqual(edicionFilaCatalogo({ id: -9, editable_en_tienda: false }, false), { editable: false, motivo: TEXTO_FILA_DEL_ERP_TIENDA });
+  assert.deepEqual(edicionFilaCatalogo(null, true), { editable: true, motivo: null });
+}
+
 console.log('OK test_roles.mjs');

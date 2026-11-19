@@ -159,6 +159,26 @@ export function accesoTienda(rol) {
   };
 }
 
+/** I1 e I2 (r1): el motivo de lo que solo hace la Administración (POST, PATCH y DELETE del catálogo son de ADMIN). */
+export const TITULO_SOLO_ADMIN_CATALOGO = 'Solo la Administración edita el catálogo';
+/** B4.1 (A1-f): el motivo de una fila SKU de la rama heredada (editable_en_tienda false): el servidor da 404 en su PATCH y DELETE. */
+export const TEXTO_FILA_DEL_ERP_TIENDA = 'Viene del catálogo del ERP: no se edita desde la tienda.';
+
+/**
+ * B4.1 (A1-f): si la fila del catálogo de la tienda se puede editar desde ahí (publicar, editar, eliminar) y, si no, por qué.
+ * Primero la fila: con `editable_en_tienda === false` (una fila del ERP: GET /ecommerce/catalogo la marca así) no se edita, tenga
+ * el rol que tenga, y el motivo es TEXTO_FILA_DEL_ERP_TIENDA (H26: «Del ERP» y su motivo dicen lo mismo). Después el permiso:
+ * sin él, TITULO_SOLO_ADMIN_CATALOGO. Sin la llave (un servidor viejo) se trata como editable, como hasta hoy.
+ * @param {{ editable_en_tienda?: boolean } | null | undefined} p la fila del catálogo
+ * @param {boolean} puedeEditar accesoTienda(rol).editarCatalogo
+ * @returns {{ editable: boolean, motivo: string | null }}
+ */
+export function edicionFilaCatalogo(p, puedeEditar) {
+  if (p?.editable_en_tienda === false) return { editable: false, motivo: TEXTO_FILA_DEL_ERP_TIENDA };
+  if (puedeEditar !== true) return { editable: false, motivo: TITULO_SOLO_ADMIN_CATALOGO };
+  return { editable: true, motivo: null };
+}
+
 /**
  * B4 T23B: lo que cada rol puede pedir en Seguimientos del CRM, de la lista EXACTA de require_roles de cada endpoint
  * (backend/app/api/v1/crm.py): GET /crm/leads es de ADMIN y ASESOR (GET /crm/pipeline-stages es de todos los roles del ERP, pero

@@ -1817,12 +1817,17 @@ console.log('--- B4 T23A TEST S: el cableado del tablero y del filtro de los ped
   assert.match(codigo, /const TEXTO_SIN_PEDIDOS = 'Tu rol no ve los pedidos de la tienda\.';/);
   assert.match(pantalla, /\{acceso\.listo && !acceso\.pedidos && \(\s*<p role="status" [^>]*>\{TEXTO_SIN_PEDIDOS\}<\/p>\s*\)\}\s*\{\(!acceso\.listo \|\| acceso\.pedidos\) && \(<>/);
   // m15: lo que escribe en el catálogo (interruptor, Editar, Ocultar/Publicar, Eliminar, la fila que edita y «Nuevo Producto») solo con editarCatalogo.
-  assert.match(codigo, /const TITULO_SOLO_ADMIN = 'Solo la Administración edita el catálogo';/);
+  // B4.1 (A1-f): el texto se movió a lib/roles.js (TITULO_SOLO_ADMIN_CATALOGO) y la página usa edicionFilaCatalogo.
+  assert.ok(!/const TITULO_SOLO_ADMIN\b/.test(codigo), 'B4.1 (A1-f): la página ya no define el texto');
+  assert.match(codigo, /import \{[^}]*\bedicionFilaCatalogo\b[^}]*\} from '@\/lib\/roles';/);
   assert.match(pantalla, /\{activeTab === 'Catálogo' && acceso\.editarCatalogo && \(\s*<button onClick=\{\(\) => setShowNewProduct\(true\)\}/);
-  assert.match(pantalla, /onFila=\{acceso\.editarCatalogo \? setEditProduct : undefined\}/);
+  // B4.1 (A1-f, H25): la fila abre el editor solo si el servidor la deja editar (una fila del ERP daría 404).
+  assert.match(pantalla, /onFila=\{acceso\.editarCatalogo \? abrirFilaCatalogo : undefined\}/);
+  assert.match(pantalla, /const abrirFilaCatalogo = useCallback\(\(p: ProductoCatalogo\) => \{ if \(edicionFilaCatalogo\(p, acceso\.editarCatalogo\)\.editable\) setEditProduct\(p\); \}, \[acceso\.editarCatalogo\]\);/);
   assert.match(pantalla, /puedeEditar: acceso\.editarCatalogo, editar: setEditProduct, alternar: togglePublicado, eliminar: deleteProduct/);
-  assert.match(codigo, /disabled=\{!puede\} onChange=\{\(\) => acciones\?\.alternar\(p\)\}/);
-  assert.match(codigo, /if \(acciones\?\.puedeEditar !== true\) return <span [^>]*title=\{TITULO_SOLO_ADMIN\}>—<\/span>;/);
+  // B4.1 (A1-f): el interruptor y el menú salen de edicionFilaCatalogo (permiso y fila del ERP), con su motivo como title.
+  assert.match(codigo, /disabled=\{!editable\} onChange=\{\(\) => acciones\?\.alternar\(p\)\}/);
+  assert.match(codigo, /if \(!editable\) return <span [^>]*title=\{motivo \?\? undefined\}>—<\/span>;/);
   assert.match(codigo, /<TarjetaProductoCuadricula key=\{p\.id\} p=\{p\} puedeEditar=\{acceso\.editarCatalogo\}/);
   assert.match(codigo, /\{!filtrado && acceso\.editarCatalogo && \(/);
   // RP8: ni estado= ni search= en ninguna consulta de los pedidos web.

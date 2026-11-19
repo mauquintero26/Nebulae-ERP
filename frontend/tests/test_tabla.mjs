@@ -3019,7 +3019,19 @@ console.log('--- TEST T23A-b (B4 T23A; TABLA-otros punto 5, KANBAN-resto punto 3
   const tarjeta = codigo.slice(codigo.indexOf('function TarjetaProductoCuadricula('), codigo.indexOf('export default function EcommercePage('));
   assert.ok(tarjeta.length > 100, 'la tarjeta existe');
   assert.ok(!/onClick=\{puedeEditar \? onEditar : undefined\}/.test(tarjeta), 'sin el div pulsable');
-  assert.match(tarjeta, /<button type="button" onClick=\{onEditar\} disabled=\{!puedeEditar\} aria-label=\{`Editar \$\{p\.nombre\}`\}\s+title=\{puedeEditar \? undefined : TITULO_SOLO_ADMIN\}\s+className=\{`block w-full text-left [^`]*\$\{FOCO_DENTRO\}`\}>/);
+  // B4.1 (A1-f): el botón y el interruptor de la tarjeta salen de edicionFilaCatalogo (permiso y fila del ERP); la prop puedeEditar sigue.
+  assert.match(tarjeta, /const \{ editable, motivo \} = edicionFilaCatalogo\(p, puedeEditar\);/);
+  assert.match(tarjeta, /<button type="button" onClick=\{onEditar\} disabled=\{!editable\} aria-label=\{`Editar \$\{p\.nombre\}`\}\s+title=\{motivo \?\? undefined\}\s+className=\{`block w-full text-left [^`]*\$\{FOCO_DENTRO\}`\}>/);
+  assert.match(tarjeta, /disabled=\{!editable\} onChange=\{onAlternar\}/);
+  assert.ok(!/TITULO_SOLO_ADMIN\b/.test(tarjeta), 'sin el texto viejo');
+  const celdaTienda = codigo.slice(codigo.indexOf('function CeldaTienda('), codigo.indexOf('function CeldaAccionesCatalogo('));
+  const celdaAcciones = codigo.slice(codigo.indexOf('function CeldaAccionesCatalogo('), codigo.indexOf('const COLUMNAS_CATALOGO'));
+  assert.match(celdaTienda, /edicionFilaCatalogo\(p, acciones\?\.puedeEditar === true\)/);
+  assert.match(celdaTienda, /p\.editable_en_tienda === false[^;]*<span [^>]*text-\[11px\][^>]*title=\{motivo \?\? undefined\}>Del ERP<\/span>/);
+  assert.match(celdaAcciones, /edicionFilaCatalogo\(p, acciones\?\.puedeEditar === true\)/);
+  // (el texto TITULO_SOLO_ADMIN_CATALOGO ya no se importa en la página: lo devuelve edicionFilaCatalogo como motivo.)
+  assert.match(codigo, /import \{[^}]*\bedicionFilaCatalogo\b[^}]*\} from '@\/lib\/roles';/);
+  assert.match(codigo, /editable_en_tienda\?: boolean;/);
   const iBoton = tarjeta.indexOf('<button type="button" onClick={onEditar}');
   const iFinBoton = tarjeta.indexOf('</button>', iBoton);
   const iInterruptor = tarjeta.indexOf('<input type="checkbox"');
@@ -3029,7 +3041,7 @@ console.log('--- TEST T23A-b (B4 T23A; TABLA-otros punto 5, KANBAN-resto punto 3
   assert.ok(!/setTimeout/.test(pantalla), 'sin un temporizador propio');
   assert.equal(TABLA.RETARDO_BUSQUEDA_MS, 300);
   // La tabla del catálogo, con su error dicho (Reintentar), la fila que abre el producto y el vacío.
-  assert.match(pantalla, /<TablaEstandar\s+id=\{ID_CATALOGO\}\s+modo="servidor"\s+columnas=\{COLUMNAS_CATALOGO\}\s+preferencias=\{prefsCatalogo\}\s+anchoRef=\{anchoCatalogoRef\}\s+estado=\{estadoCatalogo\}\s+onEstado=\{despacharCatalogo\}\s+filas=\{catalogo\.filas\}\s+total=\{catalogo\.total\}\s+cargando=\{catalogo\.cargandoInicial\}\s+recargando=\{catalogo\.recargando\}\s+error=\{catalogo\.error\}\s+onReintentar=\{catalogo\.recargar\}\s+aviso=\{catalogo\.avisoOrden\}\s+onFila=\{acceso\.editarCatalogo \? setEditProduct : undefined\}/);
+  assert.match(pantalla, /<TablaEstandar\s+id=\{ID_CATALOGO\}\s+modo="servidor"\s+columnas=\{COLUMNAS_CATALOGO\}\s+preferencias=\{prefsCatalogo\}\s+anchoRef=\{anchoCatalogoRef\}\s+estado=\{estadoCatalogo\}\s+onEstado=\{despacharCatalogo\}\s+filas=\{catalogo\.filas\}\s+total=\{catalogo\.total\}\s+cargando=\{catalogo\.cargandoInicial\}\s+recargando=\{catalogo\.recargando\}\s+error=\{catalogo\.error\}\s+onReintentar=\{catalogo\.recargar\}\s+aviso=\{catalogo\.avisoOrden\}\s+onFila=\{acceso\.editarCatalogo \? abrirFilaCatalogo : undefined\}/);  // B4.1 (A1-f, H25): abrirFilaCatalogo no abre una fila del ERP
   assert.match(pantalla, /<TablaEstandar\s+id=\{ID_PEDIDOS_WEB\}\s+modo="servidor"\s+columnas=\{COLUMNAS_PEDIDOS_WEB\}\s+preferencias=\{prefsPedidos\}\s+anchoRef=\{anchoPedidosRef\}\s+estado=\{estadoPedidos\}\s+onEstado=\{despacharPedidos\}\s+filas=\{pedidos\.filas\}\s+total=\{pedidos\.total\}\s+cargando=\{pedidos\.cargandoInicial\}\s+recargando=\{pedidos\.recargando\}\s+error=\{pedidos\.error\}\s+onReintentar=\{pedidos\.recargar\}\s+aviso=\{pedidos\.avisoOrden\}\s+onFila=\{abrirPedido\}/);
   assert.match(pantalla, /const prefsPedidos = usePreferenciasTabla\(ID_PEDIDOS_WEB, COLUMNAS_PEDIDOS_WEB\);/);
   assert.match(pantalla, /const prefsCatalogo = usePreferenciasTabla\(ID_CATALOGO, COLUMNAS_CATALOGO\);/);
@@ -3215,6 +3227,7 @@ console.log('--- TEST T24-d (B4 T24, FINAL-m21): la pestaña Pagos de E-Commerce
   const fuente = leer('app/dashboard/ecommerce/page.tsx');
   const c = fuente.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   // La pestaña solo con acceso.pagosConfig (accesoTienda, casos en test_roles.mjs); el panel, igual.
+  // B4.1 (P31): sin la pestaña vacía «Clientes Web» (el endpoint /ecommerce/clientes sigue en el servidor).
   assert.match(c, /\{\['Panel', 'Catálogo', 'Clientes Web', \.\.\.\(acceso\.pagosConfig \? \['Pagos'\] : \[\]\)\]\.map\(t => \(/);
   assert.match(c, /\{activeTab === 'Pagos' && acceso\.pagosConfig && \(/);
   // Los GET solo con permiso, con su error guardado (nada de .catch(() => {})) y la lectura de lecturaDeFuente.

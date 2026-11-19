@@ -34,7 +34,7 @@ import { ordenPorDefecto } from '@/lib/kanban';
 import { AvisoFuente } from '@/components/ui/AvisoFuente';
 import { useRolActual } from '@/components/ui/useRolActual';
 import { AYUDA_SECRETOS_PAGOS, cuerpoConfigPagos, fuenteGuardable, lecturaDeFuente, tarjetasTienda, textoLimiteCarritos } from '@/lib/kpis';
-import { accesoTienda } from '@/lib/roles';
+import { accesoTienda, edicionFilaCatalogo } from '@/lib/roles';
 import { formatoPesos } from '@/lib/pesos';
 import { fechaCorta, fechaHoraLarga, horaCO } from '@/lib/fechas-colombia';
 import { avisoDeFuente, estadoFranjaDeFuente, motivoSinPermiso } from '@/lib/avisos';
@@ -383,6 +383,8 @@ type ProductoCatalogo = {
   precio_venta: number;
   descuento_pct?: number;
   publicado_web?: boolean;
+  /** B4.1 (A1-f): false solo en una fila SKU de la rama heredada (id < 0): el PATCH y el DELETE de la tienda no la editan. */
+  editable_en_tienda?: boolean;
 };
 
 /** Una fila de GET /ecommerce/carritos (list_carritos). */
@@ -406,8 +408,6 @@ const ID_CATALOGO = 'ecommerce.catalogo';
 const INICIAL_PEDIDOS_WEB = { orden: '-fecha' };
 const INICIAL_CATALOGO = { orden: 'nombre' };
 const RUTA_CATALOGO = '/ecommerce/catalogo';
-/** I1 e I2 (r1): el motivo de lo que solo hace la Administración (POST, PATCH y DELETE del catálogo son de ADMIN). */
-const TITULO_SOLO_ADMIN = 'Solo la Administración edita el catálogo';
 /** I1 (r1): lo que ve un rol que el servidor no deja leer los pedidos (COMPRAS, CONSULTA): no es una falla, no hay «Reintentar». */
 const TEXTO_SIN_PEDIDOS = 'Tu rol no ve los pedidos de la tienda.';
 const FOCO_VISIBLE = FOCOS.purple;
@@ -521,11 +521,13 @@ function CeldaPrecio({ p }: { p: ProductoCatalogo }) {
 /** Tienda: el interruptor de publicado (con su foco visible); un clic aquí no abre la fila. */
 function CeldaTienda({ p }: { p: ProductoCatalogo }) {
   const acciones = useContext(AccionesCatalogo);
-  const puede = acciones?.puedeEditar === true;
+  const { editable, motivo } = edicionFilaCatalogo(p, acciones?.puedeEditar === true);
+  // B4.1 (A1-f): una fila del ERP no se publica desde la tienda (el servidor da 404): se dice «Del ERP», no un interruptor muerto.
+  if (p.editable_en_tienda === false) return <span className="flex justify-center text-[11px] text-slate-500" title={motivo ?? undefined}>Del ERP</span>;
   return (
-    <span className="flex justify-center" title={puede ? undefined : TITULO_SOLO_ADMIN}>
-      <label className={`relative inline-flex items-center ${puede ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
-        <input type="checkbox" className="peer sr-only" checked={p.publicado_web || false} disabled={!puede} onChange={() => acciones?.alternar(p)}
+    <span className="flex justify-center" title={motivo ?? undefined}>
+      <label className={`relative inline-flex items-center ${editable ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
+        <input type="checkbox" className="peer sr-only" checked={p.publicado_web || false} disabled={!editable} onChange={() => acciones?.alternar(p)}
           aria-label={`${p.publicado_web ? 'Ocultar' : 'Publicar'} ${p.nombre} en la tienda`} />
         <div className="h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-purple-600 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus-visible:ring-2 peer-focus-visible:ring-purple-700 peer-focus-visible:ring-offset-2"></div>
       </label>
@@ -536,8 +538,9 @@ function CeldaTienda({ p }: { p: ProductoCatalogo }) {
 /** Acciones: el menú ⋯ de la fila (MenuFila): Editar, Ocultar o Publicar y Eliminar (con confirmación de useAvisos). */
 function CeldaAccionesCatalogo({ p }: { p: ProductoCatalogo }) {
   const acciones = useContext(AccionesCatalogo);
-  // m15: sin permiso de escribir no hay menú (todo lo suyo es escritura): solo el motivo.
-  if (acciones?.puedeEditar !== true) return <span className="flex items-center justify-end text-xs text-slate-400" title={TITULO_SOLO_ADMIN}>—</span>;
+  // m15: sin permiso de escribir no hay menú (todo lo suyo es escritura): solo el motivo. B4.1 (A1-f): tampoco en una fila del ERP.
+  const { editable, motivo } = edicionFilaCatalogo(p, acciones?.puedeEditar === true);
+  if (!editable) return <span className="flex items-center justify-end text-xs text-slate-400" title={motivo ?? undefined}>—</span>;
   const items: ItemMenuFila[] = [
     { etiqueta: 'Editar', icono: Edit2, onClick: () => acciones?.editar(p) },
     { etiqueta: p.publicado_web ? 'Ocultar' : 'Publicar', icono: p.publicado_web ? ToggleLeft : ToggleRight, onClick: () => acciones?.alternar(p) },
@@ -576,10 +579,12 @@ const COLUMNAS_CATALOGO: ColumnaTabla<ProductoCatalogo>[] = [
  * anidados), en la esquina del texto.
  */
 function TarjetaProductoCuadricula({ p, puedeEditar, onEditar, onAlternar }: { p: ProductoCatalogo; puedeEditar: boolean; onEditar: () => void; onAlternar: () => void }) {
+  // B4.1 (A1-f): el permiso y la fila del ERP, la misma regla que la tabla.
+  const { editable, motivo } = edicionFilaCatalogo(p, puedeEditar);
   return (
-    <div className={`relative bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden ${puedeEditar ? 'hover:shadow-md transition-all' : ''}`}>
-      <button type="button" onClick={onEditar} disabled={!puedeEditar} aria-label={`Editar ${p.nombre}`}
-        title={puedeEditar ? undefined : TITULO_SOLO_ADMIN}
+    <div className={`relative bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden ${editable ? 'hover:shadow-md transition-all' : ''}`}>
+      <button type="button" onClick={onEditar} disabled={!editable} aria-label={`Editar ${p.nombre}`}
+        title={motivo ?? undefined}
         className={`block w-full text-left rounded-2xl enabled:cursor-pointer disabled:cursor-default ${FOCO_DENTRO}`}>
         {p.imagenes?.[0] ? <img src={p.imagenes[0]} alt="" className="w-full h-40 object-cover bg-gray-100"/> : <div className="w-full h-40 bg-gray-100 flex items-center justify-center"><Package size={32} className="text-gray-300" aria-hidden="true"/></div>}
         <div className="p-4">
@@ -591,8 +596,8 @@ function TarjetaProductoCuadricula({ p, puedeEditar, onEditar, onAlternar }: { p
           </div>
         </div>
       </button>
-      <label className={`absolute right-4 top-44 inline-flex items-center ${puedeEditar ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
-        <input type="checkbox" className="peer sr-only" checked={p.publicado_web || false} disabled={!puedeEditar} onChange={onAlternar}
+      <label className={`absolute right-4 top-44 inline-flex items-center ${editable ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`} title={p.editable_en_tienda === false ? motivo ?? undefined : undefined}>
+        <input type="checkbox" className="peer sr-only" checked={p.publicado_web || false} disabled={!editable} onChange={onAlternar}
           aria-label={`${p.publicado_web ? 'Ocultar' : 'Publicar'} ${p.nombre} en la tienda`} />
         <div className="relative h-5 w-9 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:border after:bg-white after:transition-all after:content-[''] peer-checked:bg-purple-600 peer-checked:after:translate-x-full peer-focus-visible:ring-2 peer-focus-visible:ring-purple-700 peer-focus-visible:ring-offset-2"></div>
       </label>
@@ -837,6 +842,8 @@ export default function EcommercePage() {
       recargarTrasCatalogo();
     } catch (e) { avisarError(e, 'No se pudo eliminar el producto'); }
   }, [avisar, avisarError, confirmar, recargarTrasCatalogo]);
+  // B4.1 (A1-f, H25): la fila abre el editor solo si el servidor la deja editar (una fila del ERP daría 404 en el PATCH).
+  const abrirFilaCatalogo = useCallback((p: ProductoCatalogo) => { if (edicionFilaCatalogo(p, acceso.editarCatalogo).editable) setEditProduct(p); }, [acceso.editarCatalogo]);
   const accionesCatalogo = useMemo(() => ({ puedeEditar: acceso.editarCatalogo, editar: setEditProduct, alternar: togglePublicado, eliminar: deleteProduct }), [acceso.editarCatalogo, togglePublicado, deleteProduct]);
 
   const recuperarCarrito = async (cartId: number, descuento = 10) => {
@@ -1099,7 +1106,7 @@ export default function EcommercePage() {
                   error={catalogo.error}
                   onReintentar={catalogo.recargar}
                   aviso={catalogo.avisoOrden}
-                  onFila={acceso.editarCatalogo ? setEditProduct : undefined}
+                  onFila={acceso.editarCatalogo ? abrirFilaCatalogo : undefined}
                   vacio={vacioCatalogo}
                   etiqueta="Catálogo de productos"
                 />
