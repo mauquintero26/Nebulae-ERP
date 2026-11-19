@@ -215,4 +215,14 @@ console.log('--- B4 T24 f4 (FINAL-m22): el CRM y la Agenda dicen «hace…» con
   assert.ok(agenda.includes('{it.fecha && <span className="text-[10px] text-slate-400 shrink-0">{hace(it.fecha)}</span>}'), 'la línea de tiempo');
 }
 
+console.log('--- B4.1 T6 (P8): diaEditadoParaGuardar — el día editado viaja como día, sin hora ---');
+{
+  assert.equal(fechasLib.diaEditadoParaGuardar('2026-11-30', '2026-11-24T00:00:00'), '2026-11-30');
+  assert.equal(fechasLib.diaEditadoParaGuardar('2026-11-24', '2026-11-24T00:00:00'), null, 'el mismo día: nada que guardar');
+  assert.equal(fechasLib.diaEditadoParaGuardar('', '2026-11-24T00:00:00'), null);
+  assert.equal(fechasLib.diaEditadoParaGuardar('2026-02-30', '2026-11-24T00:00:00'), null, 'un día que no existe');
+  assert.equal(fechasLib.diaEditadoParaGuardar(5, '2026-11-24T00:00:00'), null);
+  assert.equal(fechasLib.diaEditadoParaGuardar(' 2026-11-30 ', null), '2026-11-30');
+}
+
 console.log('✓ Todas las pruebas de fechas de Colombia pasaron.');

@@ -1767,4 +1767,16 @@ console.log('--- B4.1 T6 (P4): atrasadosDeLaPestana — «Con atraso (N)» cuent
   }
 }
 
+console.log('--- B4.1 T6 (P8): el vencimiento de la SC se lee como día y se compara con el día de Colombia ---');
+{
+  const sc = readFileSync(new URL('../src/app/dashboard/ventas/solicitud/solicitud-client.tsx', import.meta.url), 'utf8');
+  assert.match(sc, /const vencida = fechaNegocioVencida\(sc\.fecha_vencimiento\);/);
+  assert.match(sc, /fechaCorta\(diaDeNegocio\(sc\.fecha_vencimiento\)\) \|\| '-'/);
+  assert.ok(!/fechaVencida\(sc\.fecha_vencimiento\)/.test(sc), 'ya no como instante');
+  const ahora = Date.parse('2026-11-25T04:00:00Z');                        // 24 de nov., 23:00 en Colombia
+  assert.equal(listas.fechaNegocioVencida('2026-11-24T00:00:00', ahora), false, 'vence hoy: todavía no');
+  assert.equal(listas.fechaNegocioVencida('2026-11-23T00:00:00', ahora), true);
+  assert.equal(listas.diaDeNegocio('2026-11-24T03:00:00'), '2026-11-24', 'una SC vieja (instante): su día UTC, los 10 primeros');
+}
+
 console.log('OK test_listas_ventas.mjs');

@@ -74,6 +74,22 @@ export function diaDeNegocio(valor) {
 }
 
 /**
+ * B4.1 T6 (P8): lo que se manda al guardar el vencimiento que se editó como día de negocio: el 'AAAA-MM-DD' recortado si es un día
+ * que existe y es distinto del día ya guardado (diaDeNegocio(guardada)); si no, null (no se manda: ni '', ni una fecha imposible,
+ * ni el mismo día, que no mueve lo guardado ni anota en la Actividad un cambio que nadie hizo). Sin hora: el servidor y la
+ * Actividad leen el día de negocio, y una hora distinta de las 00:00 los descuadraría.
+ * @param {unknown} dia  valor del input type="date"
+ * @param {unknown} guardada  la fecha que trae el API
+ * @returns {string | null}
+ */
+export function diaEditadoParaGuardar(dia, guardada) {
+  if (typeof dia !== 'string') return null;
+  const valor = dia.trim();
+  if (!diaDeCalendario(valor)) return null;
+  return valor === diaDeNegocio(guardada) ? null : valor;
+}
+
+/**
  * B4 T24 (FINAL-m30): 'AAAA-MM-DD' + n días de calendario (en UTC: sin horas de verano). Un día que no existe o un n que no es
  * entero: ''.
  * @param {string} dia

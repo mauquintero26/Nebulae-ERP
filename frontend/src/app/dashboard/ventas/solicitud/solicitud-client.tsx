@@ -44,10 +44,10 @@ import { esAdministrador, esAsesorElegible, getUsuarioActual } from '../flujo';
 import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas';
 import {
   generoCotizacion, cotizacionesVigentes, resumenCancelacionSolicitudes, repartirCancelacionSolicitudes, estadoEnPapelera,
-  contarVencidasEnPapelera, confirmacionVaciarVencidas, textoPapeleraVaciada, tarjetasSolicitudes, fechaVencida,
+  contarVencidasEnPapelera, confirmacionVaciarVencidas, textoPapeleraVaciada, tarjetasSolicitudes, fechaNegocioVencida,
   vistaSolicitudesPermitida, atrasadosDeLaPestana,
 } from '@/lib/listas-ventas';
-import { fechaCorta, fechaLarga } from '@/lib/fechas-colombia';
+import { diaDeNegocio, fechaCorta, fechaLarga } from '@/lib/fechas-colombia';
 import { mailtoUrl, telUrl, motivoTelefono } from '@/lib/chatter';
 import { waUrl } from '@/lib/whatsapp';
 import { ESTADOS_SC as ESTADOS_SC_LIB, infoEstadoSolicitud, motivoDeCancelacion } from '@/lib/estados-solicitud';
@@ -616,13 +616,13 @@ function CeldaCliente({ sc }: { sc: FilaSC }) {
   );
 }
 
-/** Vencimiento: en rojo y con el triángulo si ya pasó (fechaVencida; la fecha llega en UTC sin zona). «5 nov 2026». */
+/** Vencimiento: en rojo y con el triángulo si su día ya pasó en Colombia (B4.1, P8: fecha de negocio, fechaNegocioVencida). «5 nov 2026». */
 function CeldaVencimiento({ sc }: { sc: FilaSC }) {
-  const vencida = fechaVencida(sc.fecha_vencimiento);
+  const vencida = fechaNegocioVencida(sc.fecha_vencimiento);
   return (
     <span className={`text-xs ${vencida ? 'font-bold text-red-600' : 'font-medium text-slate-600'}`}>
       {vencida && <AlertTriangle size={10} aria-hidden="true" className="mr-1 inline" />}
-      {fechaCorta(sc.fecha_vencimiento) || '-'}
+      {fechaCorta(diaDeNegocio(sc.fecha_vencimiento)) || '-'}
     </span>
   );
 }
@@ -713,7 +713,7 @@ function CeldaAcciones({ sc }: { sc: FilaSC }) {
  */
 const COLUMNA_VENCIMIENTO: ColumnaTabla<FilaSC> = {
   id: 'vencimiento', titulo: 'Vencimiento', ancho: 104, ordenable: 'vencimiento',
-  titleCelda: (sc) => fechaLarga(sc.fecha_vencimiento) || 'Sin vencimiento', celda: (sc) => <CeldaVencimiento sc={sc} />,
+  titleCelda: (sc) => fechaLarga(diaDeNegocio(sc.fecha_vencimiento)) || 'Sin vencimiento', celda: (sc) => <CeldaVencimiento sc={sc} />,
 };
 /** En Canceladas, la misma columna (el mismo id: el usuario la mueve y la estira una sola vez) dice el motivo. */
 const COLUMNA_MOTIVO: ColumnaTabla<FilaSC> = {

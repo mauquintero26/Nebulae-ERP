@@ -31,7 +31,8 @@ import { VentanaMotivoSinConfirmacion } from '../../motivo-sin-confirmacion';
 import { formatoPct } from '@/lib/dinero-ventas';
 import { pctAnticipoDeModalidad } from '@/lib/etiquetas-solicitud';
 import { destinoVolver, anchoInicialPanel, inicialesAutor } from '@/lib/detalle-layout';
-import { comoUTC, fechaEditadaParaGuardar, notaReiniciaAtraso } from '@/lib/hub-ventas';
+import { comoUTC, notaReiniciaAtraso } from '@/lib/hub-ventas';
+import { diaDeNegocio, diaEditadoParaGuardar, fechaLarga } from '@/lib/fechas-colombia';
 import {
   CAMPOS_CONTACTO, cambiosDeContacto, validarContacto, avisoCorreccionContacto, formularioDeEdicion, camposEditadosDeSolicitud,
   hayCambiosEnEdicion, SIN_CAMBIOS_PARA_GUARDAR, textoContactoAnula, anulacionPorModalidad,
@@ -384,11 +385,10 @@ function SolicitudDetalleContent() {
     }
     const contactoGuardado = !!correccion && correccion.sin_cambios !== true;
     const campos = camposEditadosDeSolicitud(base, editForm);
-    // T8A ronda 1: el vencimiento solo viaja si el día cambió (mediodía local de ese día). Sin tocarlo no se mueve la
-    // hora guardada ni la Actividad anota «11/10/2026 → 10/10/2026» (cambios_documento compara el día de Colombia,
-    // America/Bogota, desde T11 calidad B4), y nunca
-    // se manda ''.
-    const vencimiento = fechaEditadaParaGuardar(editForm.fecha_vencimiento, base.fecha_vencimiento);
+    // T8A ronda 1: el vencimiento solo viaja si el día cambió. Sin tocarlo no se mueve lo guardado ni la Actividad anota
+    // «11/10/2026 → 10/10/2026», y nunca se manda ''. B4.1 (P8): es una fecha de negocio: viaja el día 'AAAA-MM-DD', sin hora
+    // (el servidor y la Actividad leen sus 10 primeros caracteres: con otra hora, la Actividad usaría el día UTC).
+    const vencimiento = diaEditadoParaGuardar(editForm.fecha_vencimiento, base.fecha_vencimiento);
     if (vencimiento) campos.fecha_vencimiento = vencimiento;
     const hayCamposSC = Object.keys(campos).length > 0;
     let guardado = true;
@@ -1270,7 +1270,7 @@ function SolicitudDetalleContent() {
               {/* B3 T18 (R3, C19): la «Nota para el cliente», con «El cliente verá esta nota» (sin nota no se pinta). */}
               <NotaParaElCliente nota={solicitud?.nota_cliente} />
               <div className="grid grid-cols-2 gap-3">
-                {[{ l: 'Asesor', v: solicitud?.advisor_name || '-' }, { l: 'Modalidad Pago', v: etiquetaModalidad(solicitud?.modalidad_pago) || '-' }, { l: 'Fecha Solicitud', v: fDate(comoUTC(solicitud?.fecha_solicitud)) }, { l: 'Vencimiento', v: fDate(comoUTC(solicitud?.fecha_vencimiento)) }].map(item => (
+                {[{ l: 'Asesor', v: solicitud?.advisor_name || '-' }, { l: 'Modalidad Pago', v: etiquetaModalidad(solicitud?.modalidad_pago) || '-' }, { l: 'Fecha Solicitud', v: fDate(comoUTC(solicitud?.fecha_solicitud)) }, { l: 'Vencimiento', v: fechaLarga(diaDeNegocio(solicitud?.fecha_vencimiento)) || '-' }].map(item => (
                   <div key={item.l} className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3"><p className="text-xs font-bold text-slate-500 mb-1 uppercase tracking-wider">{item.l}</p><p className="font-bold text-sm text-slate-800">{item.v}</p></div>
                 ))}
               </div>

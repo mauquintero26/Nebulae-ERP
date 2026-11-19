@@ -592,4 +592,16 @@ console.log('--- TEST T24-f4 (A4): proveedorAServidor y peticionGuardarProveedor
   }
 }
 
+console.log('--- B4.1 T6 (P8): el vencimiento de «Editar» es el día de negocio, no el día local del navegador ---');
+{
+  const base = {
+    advisor_name: null, advisor_user_id: null, tipo_solicitud: null, modalidad_pago: null, notas: '',
+    fecha_vencimiento: '2026-11-24T03:00:00', customer_phone: '', customer_email: null, customer_address: '', customer_city: '',
+  };
+  const form = formularioDeEdicion(base);
+  assert.equal(form.fecha_vencimiento, '2026-11-24', 'antes daba 2026-11-23 (el día local de las 03:00 UTC)');
+  assert.equal(hayCambiosEnEdicion(base, form, { tieneFicha: true }), false, 'sin tocar el día, nada que guardar');
+  assert.equal(hayCambiosEnEdicion(base, { ...form, fecha_vencimiento: '2026-11-30' }, { tieneFicha: true }), true);
+}
+
 console.log('OK test_datos_cliente');

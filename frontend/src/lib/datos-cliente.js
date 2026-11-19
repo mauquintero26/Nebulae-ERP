@@ -21,7 +21,8 @@
  */
 
 import { tiene, humanizarCodigo } from './estados-pedido.js';
-import { diaLocalDeFecha, comoUTC, fechaEditadaParaGuardar } from './hub-ventas.js';
+import { comoUTC } from './hub-ventas.js';
+import { diaDeNegocio, diaEditadoParaGuardar } from './fechas-colombia.js';
 import { ESTADOS_SC_CON_CONFIRMACION } from './estados-solicitud.js';
 
 // Revisión final (F8): el final del aviso 4 de avisoCorreccionContacto y del texto de «Editar» en Confirmada con una
@@ -239,7 +240,7 @@ export function formularioDeEdicion(d) {
     modalidad_pago: d?.modalidad_pago || 'Contado',
     notas: d?.notas || '',
     nota_cliente: d?.nota_cliente || '',
-    fecha_vencimiento: diaLocalDeFecha(d?.fecha_vencimiento),
+    fecha_vencimiento: diaDeNegocio(d?.fecha_vencimiento),
     customer_phone: d?.customer_phone || '',
     customer_email: d?.customer_email || '',
     customer_address: d?.customer_address || '',
@@ -317,7 +318,7 @@ export const SIN_CAMBIOS_PARA_GUARDAR = 'No hay cambios para guardar.';
 /**
  * T11 calidad (E8): true si «Guardar» del formulario «Editar» de la SC tiene algo que mandar: un dato de contacto
  * (cambiosDeContacto, con la misma regla de la ficha), un campo de la SC (camposEditadosDeSolicitud) o el vencimiento en
- * otro día (fechaEditadaParaGuardar). Si es false, la pantalla no llama al servidor y avisa SIN_CAMBIOS_PARA_GUARDAR.
+ * otro día (diaEditadoParaGuardar). Si es false, la pantalla no llama al servidor y avisa SIN_CAMBIOS_PARA_GUARDAR.
  * @param {any} base la solicitud tal como estaba al abrir «Editar»
  * @param {any} form lo que hay en el formulario
  * @param {{ tieneFicha?: boolean }} [opciones]
@@ -326,7 +327,7 @@ export const SIN_CAMBIOS_PARA_GUARDAR = 'No hay cambios para guardar.';
 export function hayCambiosEnEdicion(base, form, opciones = {}) {
   if (Object.keys(cambiosDeContacto(base, form, opciones)).length > 0) return true;
   if (Object.keys(camposEditadosDeSolicitud(base, form)).length > 0) return true;
-  return fechaEditadaParaGuardar(form?.fecha_vencimiento, base?.fecha_vencimiento) !== null;
+  return diaEditadoParaGuardar(form?.fecha_vencimiento, base?.fecha_vencimiento) !== null;
 }
 
 /** El primer valor que es un texto con algo más que espacios (recortado); null si ninguno lo es. */
