@@ -779,13 +779,13 @@ export function reglaSoltarCotizacion(cot, origen, destino, { puedeEnviar = fals
     if (estado === 'PENDIENTE_CONFIRMACION') return ninguno();
     return bloqueado(TEXTO.ABRELA_ENVIAR, enlace);
   }
-  // → Borrador o Vencida
-  if (estado === 'PENDIENTE_CONFIRMACION' || estado === 'CONFIRMADA') return bloqueado(TEXTO.RE_COTIZAR, enlace);
+  // → Borrador o Vencida. B4.1 (P7): también la ENVIADA (la antigua): una cotización enviada no vuelve a Borrador ni pasa a Vencida.
+  if (estado === 'ENVIADA' || estado === 'PENDIENTE_CONFIRMACION' || estado === 'CONFIRMADA') return bloqueado(TEXTO.RE_COTIZAR, enlace);
   if (destino === 'borrador') {
-    if (estado === 'ENVIADA' || estado === 'VENCIDA' || estado === 'RECHAZADA') return cambio('BORRADOR');
+    if (estado === 'VENCIDA' || estado === 'RECHAZADA') return cambio('BORRADOR');
     if (estado === 'BORRADOR') return ninguno();
   } else {
-    if (estado === 'BORRADOR' || estado === 'ENVIADA') return cambio('VENCIDA');
+    if (estado === 'BORRADOR') return cambio('VENCIDA');
     if (estado === 'RECHAZADA') return bloqueado(TEXTO.PASALA_BORRADOR);
     if (estado === 'VENCIDA') return ninguno();
   }

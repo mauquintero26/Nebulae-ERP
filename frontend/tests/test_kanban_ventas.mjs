@@ -445,7 +445,8 @@ console.log('--- TEST 13: reglaSoltarCotizacion (C15(a), RP16, D11, D22) ---');
   assert.deepEqual(soltar('RECHAZADA', 'esperando', { puedeEnviar: true }), bloqueado('Primero pásala a Borrador para retomarla.'));
   assert.deepEqual(soltar('CONFIRMADA', 'esperando', { puedeEnviar: true }), bloqueado('El cliente ya la confirmó.'));
   // C15(a): sacarla de «Esperando» o de «Confirmada» hacia Borrador o Vencida.
-  for (const estado of ['PENDIENTE_CONFIRMACION', 'CONFIRMADA']) {
+  // B4.1 (P7): también la ENVIADA (la antigua): una cotización ya enviada no vuelve a Borrador ni pasa a Vencida arrastrándola.
+  for (const estado of ['ENVIADA', 'PENDIENTE_CONFIRMACION', 'CONFIRMADA']) {
     for (const destino of ['borrador', 'vencida']) {
       assert.deepEqual(soltar(estado, destino, { puedeEnviar: true }), bloqueado(RE_COTIZAR, enlace), `${estado} → ${destino}`);
     }
@@ -453,9 +454,7 @@ console.log('--- TEST 13: reglaSoltarCotizacion (C15(a), RP16, D11, D22) ---');
   // Cambios sueltos
   assert.deepEqual(soltar('RECHAZADA', 'borrador'), { tipo: 'cambio', estado: 'BORRADOR' });
   assert.deepEqual(soltar('VENCIDA', 'borrador'), { tipo: 'cambio', estado: 'BORRADOR' });
-  assert.deepEqual(soltar('ENVIADA', 'borrador'), { tipo: 'cambio', estado: 'BORRADOR' });
   assert.deepEqual(soltar('BORRADOR', 'vencida'), { tipo: 'cambio', estado: 'VENCIDA' });
-  assert.deepEqual(soltar('ENVIADA', 'vencida'), { tipo: 'cambio', estado: 'VENCIDA' });
   assert.deepEqual(soltar('RECHAZADA', 'vencida'), bloqueado('Primero pásala a Borrador para retomarla.'));
   // → Confirmada: siempre bloqueado; → Rechazada: rechazar.
   for (const estado of Object.keys(ESTADOS_COTIZACION).filter((e) => e !== 'CONFIRMADA')) {
