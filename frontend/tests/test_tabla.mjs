@@ -2492,7 +2492,9 @@ console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5,
   assert.ok(cambiar.length > 0, 'cambiarFiltros');
   // B4 T24 f4 (F39; D27): los filtros van en el estado único: cambiarFiltros despacha {tipo: 'filtro'} (el reductor los mezcla y vuelve
   // a la página 1: el caso «elegir la categoría conserva la bodega» de T24-i-f4 reemplaza la protección de `setFiltros((f) => ({ ...f, ...cambio }))`).
-  for (const parte of ['for (const accion of accionesDeFiltros(cambio)) despachar(accion);', 'setSeleccion([])']) assert.ok(cambiar.includes(parte), `cambiarFiltros: ${parte}`);
+  // B4.1 (P23): ya no hay selección que limpiar.
+  for (const parte of ['for (const accion of accionesDeFiltros(cambio)) despachar(accion);']) assert.ok(cambiar.includes(parte), `cambiarFiltros: ${parte}`);
+  assert.ok(!cambiar.includes('setSeleccion'), 'B4.1 (P23): cambiarFiltros no limpia una selección');
   // f4 r1 (R2-m1): «Ver artículos» de Almacenes cambia la bodega por cambiarFiltros (el filtro, la página y la selección, juntos).
   const verArt = fuente.slice(fuente.indexOf('const verArticulos = useCallback('), fuente.indexOf('}, [', fuente.indexOf('const verArticulos = useCallback(')));
   for (const parte of ['cambiarFiltros({ bodega: String(id) });', 'setVerAlmacenes(false);']) assert.ok(verArt.includes(parte), `verArticulos: ${parte}`);
@@ -2523,7 +2525,7 @@ console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5,
   // Las columnas del diseño (TABLA-inventario punto 4), la fila es un par SKU y bodega, y el estado con la etiqueta y el
   // tono de ESTADOS_STOCK (RP53: sin etiquetas locales). R26: lo que no cabe a 1024 va oculto por defecto. Los anchos del
   // diseño salvo Estado 124 (las etiquetas de RP53), Acciones 80 (en 64, el mínimo, el título se recorta) y Producto 140
-  // (la flexible baja primero): 40 + 112 + 140 + 120 + 88 + 124 + 80 = 704, medido en el banco.
+  // (la flexible baja primero): B4.1 (P23): sin la casilla, 112 + 140 + 120 + 88 + 124 + 80 = 664 (antes 40 + 664 = 704, medido en el banco).
   const columnas = fuente.match(/const COLUMNAS_HUB: ColumnaTabla<FilaStock>\[\] = \[[\s\S]*?\n\];/);
   assert.ok(columnas, 'COLUMNAS_HUB');
   const COLUMNAS = [
@@ -2542,7 +2544,21 @@ console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5,
   // Las visibles por defecto suman lo que deja la caja a 1024 px con el menú abierto (R26).
   const visibles = [...columnas[0].matchAll(/\{ id: '(\w+)', titulo: '[^']+', ancho: (\d+),([^\n]*)/g)]
     .filter((m) => !/ocultaPorDefecto: true/.test(m[3])).map((m) => Number(m[2]));
-  assert.equal(40 + visibles.reduce((a, b) => a + b, 0), 704, 'la casilla y las visibles por defecto: 704 px');
+  assert.equal(visibles.reduce((a, b) => a + b, 0), 664, 'B4.1 (P23): sin la casilla, las visibles por defecto: 664 px');
+  // B4.1 (P24): desde 1280 (menú abierto: 1280 - 320 = 960) entran también Físico y Reservado: 664 + 80 + 88 = 832 <= 960.
+  {
+    const defs = [...columnas[0].matchAll(/\{ id: '(\w+)', titulo: '[^']+', ancho: (\d+),([^\n]*)/g)]
+      .map((m) => ({ id: m[1], ancho: Number(m[2]), ocultaPorDefecto: /ocultaPorDefecto: true/.test(m[3]) ? true : undefined }));
+    const copia = JSON.stringify(defs);
+    const amplia = TABLA.mostrarPorDefecto(defs, ['fisico', 'reservado']);
+    assert.equal(JSON.stringify(defs), copia, 'B4.1 (P24): mostrarPorDefecto no muta la entrada');
+    assert.deepEqual(amplia.filter((c) => !c.ocultaPorDefecto).map((c) => c.id), ['sku', 'producto', 'bodega', 'fisico', 'reservado', 'disponible', 'estado', 'acciones']);
+    assert.equal(amplia.filter((c) => !c.ocultaPorDefecto).reduce((a, c) => a + c.ancho, 0), 832, 'B4.1 (P24): 664 + 80 + 88');
+    assert.ok(832 <= 1280 - 320, 'B4.1 (P24): cabe en la caja a 1280 con el menú abierto');
+    for (const c of defs) if (c.id !== 'fisico' && c.id !== 'reservado') assert.equal(amplia.find((x) => x.id === c.id), c, `B4.1 (P24): ${c.id} es el mismo objeto`);
+    assert.ok(!('ocultaPorDefecto' in amplia.find((c) => c.id === 'fisico')), 'B4.1 (P24): pierde la marca');
+    assert.equal(TABLA.mostrarPorDefecto(defs, []).length, defs.length);
+  }
   assert.deepEqual([...columnas[0].matchAll(/\{ id: '(\w+)'/g)].map((m) => m[1]), COLUMNAS.map(([c]) => c.match(/id: '(\w+)'/)[1]), 'el orden');
   for (const [c] of COLUMNAS) assert.ok(columnas[0].includes(c), c);
   assert.ok(!/ordenable/.test(columnas[0].match(/\{ id: 'bodega'[^\n]*\n[^\n]*/)[0]) && !/ordenable/.test(columnas[0].match(/\{ id: 'estado'[^\n]*\n[^\n]*/)[0]),
@@ -2563,7 +2579,13 @@ console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5,
   assert.ok(!/en_transito/.test(columnas[0]), 'sin columna de tránsito');
   // La tabla estándar en el servidor con el estado único (D41) y el aviso del orden rechazado.
   const tabla = fuente.match(/<TablaEstandar[\s\S]*?\/>/)[0];
-  for (const prop of ['id={ID_HUB}', 'modo="servidor"', 'columnas={COLUMNAS_HUB}', 'preferencias={prefs}', 'estado={estado}', 'onEstado={despachar}',
+  // B4.1 (P23, P24): sin casilla (ni seleccion= ni onSeleccion=) y con las columnas por ancho de ventana.
+  assert.ok(!/seleccion=|onSeleccion=/.test(tabla), 'B4.1 (P23): la tabla del Hub sin casilla de selección');
+  assert.ok(!/setSeleccion|pieSeleccion|alSeleccionar/.test(fuente), 'B4.1 (P23): sin estado de selección');
+  assert.ok(fuente.includes('const COLUMNAS_HUB_AMPLIO = mostrarPorDefecto(COLUMNAS_HUB, [\'fisico\', \'reservado\']);') && fuente.includes('const ANCHO_HUB_AMPLIO = 1280;'), 'B4.1 (P24)');
+  assert.ok(fuente.includes('const anchoVentana = useAnchoVentana();') && fuente.includes('const columnasHub = (anchoVentana ?? 0) >= ANCHO_HUB_AMPLIO ? COLUMNAS_HUB_AMPLIO : COLUMNAS_HUB;'), 'B4.1 (P24)');
+  assert.ok(fuente.includes('usePreferenciasTabla(ID_HUB, columnasHub)') && fuente.includes('ajustes={verAlmacenes ? undefined : { columnas: columnasHub,'), 'B4.1 (P24): prefs y Ajustar tabla con la definición elegida');
+  for (const prop of ['id={ID_HUB}', 'modo="servidor"', 'columnas={columnasHub}', 'preferencias={prefs}', 'estado={estado}', 'onEstado={despachar}',
     'filas={listado.filas}', 'cargando={listado.cargandoInicial}', 'error={listado.error}', 'onReintentar={listado.recargar}', 'aviso={listado.avisoOrden}',
     'claseFila={claseDeFilaStock}', 'vacio={vacio}']) {
     assert.ok(tabla.includes(prop), prop);
@@ -2573,7 +2595,7 @@ console.log('--- TEST 48 (B4 T17, TABLA-inventario y KPI-inventario punto 4; R5,
   assert.ok(!/kanbanDisponible|TableroKanban|useTableroKanban/.test(fuente), 'sin tablero');
   // B4 T24 f3 (F86, D27): Almacenes no hereda la bodega de la Lista (warehouse_id: null): muestra todas las bodegas, como en BASE.
   assert.ok(fuente.includes('const extraAlmacenes = useMemo(() => ({ ...extraDeLaLista, warehouse_id: null, limit: TOPE_TABLERO_COMPRAS, offset: 0 }), [extraDeLaLista]);'));
-  assert.ok(fuente.includes('resumenAlmacenes(listado.filas)') && fuente.includes("avisoTope200(listado.total, 'existencias')"));
+  assert.ok(fuente.includes('resumenAlmacenes(listado.filas)') && fuente.includes('avisoTopeAlmacenes(listado.total)'), 'B4.1 (P22): el aviso propio de Almacenes');
   // R12: las 4 tarjetas de /inventory/stats (tarjetasHubInventario), cada una una vez; inv_bajo_minimo NO es botón
   // (RP52 b) y va en alerta con su tono; la nota dice dónde se define el mínimo (R10) y no hay nota de datos de ejemplo.
   // B4 T24 f3 (F45, D27): /inventory/stats con el cargador compartido (useResumen) y sus datos.

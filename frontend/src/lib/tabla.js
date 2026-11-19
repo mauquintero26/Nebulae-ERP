@@ -125,6 +125,24 @@ export function limitarAncho(px, min, max) {
 }
 
 /**
+ * B4.1 (P24): una copia de la definición en la que las columnas `ids` pierden `ocultaPorDefecto` (se ven por defecto); las demás son
+ * los mismos objetos. No muta la entrada. Sirve para una definición más ancha que se elige según el ancho de la ventana.
+ * @template {DefinicionColumna} D
+ * @param {ReadonlyArray<D>} definicion
+ * @param {ReadonlyArray<string>} ids
+ * @returns {D[]}
+ */
+export function mostrarPorDefecto(definicion, ids) {
+  const mostrar = new Set(ids);
+  return (definicion ?? []).map((c) => {
+    if (!c || !mostrar.has(c.id) || !c.ocultaPorDefecto) return c;
+    const copia = { ...c };
+    delete copia.ocultaPorDefecto;
+    return /** @type {D} */ (copia);
+  });
+}
+
+/**
  * {id: 'izquierda' | 'derecha'} de las columnas fijas de una definición.
  * @param {ReadonlyArray<DefinicionColumna>} definicion
  * @returns {Record<string, LadoFijo>}

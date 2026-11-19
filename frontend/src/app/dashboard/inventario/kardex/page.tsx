@@ -6,7 +6,7 @@ import type { LucideIcon } from 'lucide-react';
 // B4 T18: el Kardex en la tabla estándar, en modo servidor (R5, R11): el estado único de la pantalla, UN solo pedido por cada
 // cambio de filtro (antes, el filtro y la página eran dos estados con dos efectos: cada filtro pedía dos veces), los errores
 // dichos (antes, catch(() => {}) y listas vacías falsas) y el tablero solo para ver Entradas · Salidas (RP54). El servidor
-// ordena siempre por fecha (más reciente primero) y no tiene `q`: la barra no lleva búsqueda libre sino los filtros del Kardex.
+// ordena por fecha (B4.1 P26: en los dos sentidos; arranca con la más reciente primero) y no tiene `q`: la barra no lleva búsqueda libre sino los filtros del Kardex.
 import { Modal, PageHeader, SubNav, TableroKanban, useTableroKanban } from '@/components/ui';
 import {
   BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
@@ -56,10 +56,9 @@ type OpcionSku = { id: number; display?: string | null; product_name?: string | 
 
 /** El id de la pantalla: el MISMO en useEstadoTabla, usePreferenciasTabla, TablaEstandar y useTableroKanban (RP26). */
 const ID_KARDEX = 'inventario.kardex';
-const INICIAL_KARDEX = {};
+/** B4.1 (P26): get_kardex acepta `orden` por fecha en los dos sentidos; arranca del más reciente al más antiguo. */
+const INICIAL_KARDEX = { orden: '-fecha' };
 const RUTA_KARDEX = '/inventory/kardex';
-/** m1: el servidor ordena SIEMPRE por fecha (get_kardex no tiene `orden`); la barra lo dice en lugar de un título que prometería ordenar. */
-const TEXTO_ORDEN_KARDEX = 'Del más reciente al más antiguo';
 const SIN_FILTROS: FiltrosKardex = { skuId: null, skuEtiqueta: '', bodega: '', propietario: '', direccion: '', desde: '', hasta: '' };
 /** El orden de la lista de direcciones (la del Kardex de hoy, más las dos que escribe el sistema y no estaban). */
 // B4 T24 f3 (F88): el orden de DIRECCIONES_KARDEX (la lib), sin repetir sus claves a mano.
@@ -104,13 +103,13 @@ function CeldaFecha({ m }: { m: Movimiento }) {
 }
 
 /**
- * La tabla (TABLA-inventario punto 8; R26, D41): las columnas de hoy. El servidor ordena siempre por fecha, la más reciente
- * primero, y NO acepta `orden`: ninguna columna se ordena (un título que ordenara no haría nada). R26: a 1024 px con el menú
+ * La tabla (TABLA-inventario punto 8; R26, D41): las columnas de hoy. B4.1 (P26): el servidor ordena por fecha en los dos
+ * sentidos (`orden`): solo Fecha se ordena, y arranca con la más reciente primero (INICIAL_KARDEX). R26: a 1024 px con el menú
  * abierto la caja deja 704 px: 92 + 124 + 120 + 92 + 64 + 100 + 104 = 696. «Documento origen» se titula «Documento» (con su
  * title) para caber; Costo unit. y Usuario van ocultas por defecto (se muestran con «Ajustar tabla»). Una constante: estable (D40).
  */
 const COLUMNAS_TABLA_KARDEX: ColumnaTabla<Movimiento>[] = [
-  { id: 'fecha', titulo: 'Fecha', ancho: 92, clave: true, fija: 'izquierda',
+  { id: 'fecha', titulo: 'Fecha', ancho: 92, clave: true, fija: 'izquierda', ordenable: 'fecha',
     titleCelda: (m) => { const f = textoFechaMovimiento(m.created_at); return f.hora ? `${f.dia} ${f.hora}` : f.dia; },
     celda: (m) => <CeldaFecha m={m} /> },
   { id: 'direccion', titulo: 'Dirección', ancho: 124, clave: true, titleCelda: (m) => infoDireccionKardex(m.direction).label,
@@ -183,7 +182,7 @@ export default function KardexPage() {
   // B4 T24 f4 (F39): los filtros son del estado único (estado.filtros): vuelven con la sesión junto con la página.
   const filtros = useMemo(() => filtrosDePantalla(estado.filtros, SIN_FILTROS) as FiltrosKardex, [estado.filtros]);
   const { catalogo: bodegas, recargar: recargarBodegas } = useCatalogo('/inventory/warehouses');
-  const extraLista = useMemo(() => ({ ...extraKardex(filtros), q: null, orden: null }), [filtros]);
+  const extraLista = useMemo(() => ({ ...extraKardex(filtros), q: null }), [filtros]);
   // GET /inventory/kardex con limit y offset del estado; responde {data: {items, total}} (normalizarRespuesta, RP54). esperar:
   // !listo (D40): el esqueleto, nunca «vacío». En Kanban no pide la lista (activo: false, RP35).
   const listado = useListado<Movimiento>({
@@ -400,10 +399,6 @@ export default function KardexPage() {
                     <input type="date" aria-label="Hasta" value={filtros.hasta} min={filtros.desde || undefined}
                       onChange={(e) => cambiarFiltros({ hasta: e.target.value })} className={CONTROL} />
                   </label>
-                  <span className="inline-flex items-center rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs font-semibold text-slate-600"
-                    title="El Kardex no se reordena: el servidor lo entrega siempre por fecha">
-                    Orden: {TEXTO_ORDEN_KARDEX}
-                  </span>
                   {hayFiltros && (
                     <button type="button" onClick={quitarFiltros}
                       className={`inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50 ${FOCOS.indigo}`}>

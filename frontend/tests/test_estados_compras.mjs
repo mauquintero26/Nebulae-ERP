@@ -2090,8 +2090,8 @@ console.log('--- TEST 42 (B4 T18; TABLA-inventario 5 a 8, KANBAN-resto; RP47 a R
   assert.equal(ec.infoDireccionKardex('PERDIDA_RARA').label, humanizarCodigo('PERDIDA_RARA'), 'una desconocida sale humanizada, nunca el código');
   assert.equal(ec.infoDireccionKardex('toString').label, humanizarCodigo('toString'), 'una clave del prototipo no es una dirección');
   assert.deepEqual(ec.COLUMNAS_KARDEX.map((c) => [c.clave, c.titulo, c.tono, c.cerrada, c.estados]), [
-    ['entradas', 'Entradas', 'emerald', false, ['IN', 'ADJUST_IN', 'TRANSFER_IN']],
-    ['salidas', 'Salidas', 'rose', false, ['OUT', 'ADJUST_OUT', 'TRANSFER_OUT']],
+    ['entradas', 'Entradas', 'emerald', false, ['IN', 'ADJUST_IN', 'TRANSFER_IN', 'RETURN_IN']], // B4.1 (P16): + la devolución
+    ['salidas', 'Salidas', 'rose', false, ['OUT', 'ADJUST_OUT', 'TRANSFER_OUT', 'SCRAP']], // B4.1 (P16): + la pérdida
   ]);
   assert.doesNotThrow(() => kanbanLib.definirColumnas(ec.COLUMNAS_KARDEX));
   const [entradas, salidas] = ec.COLUMNAS_KARDEX;
@@ -2102,20 +2102,22 @@ console.log('--- TEST 42 (B4 T18; TABLA-inventario 5 a 8, KANBAN-resto; RP47 a R
   assert.deepEqual(ec.extraKardex({ skuId: null, bodega: '', propietario: '', direccion: '', desde: '', hasta: '' }),
     { sku_id: null, warehouse_id: null, owner: null, direction: null, start_date: null, end_date: null }, 'vacío = no se manda');
   assert.deepEqual(ec.extraKardex(null), { sku_id: null, warehouse_id: null, owner: null, direction: null, start_date: null, end_date: null });
-  assert.deepEqual(ec.direccionesDeColumnaKardex(entradas, ''), ['IN', 'ADJUST_IN', 'TRANSFER_IN']);
-  assert.deepEqual(ec.direccionesDeColumnaKardex(entradas, null), ['IN', 'ADJUST_IN', 'TRANSFER_IN']);
+  assert.deepEqual(ec.direccionesDeColumnaKardex(entradas, ''), ['IN', 'ADJUST_IN', 'TRANSFER_IN', 'RETURN_IN']);
+  assert.deepEqual(ec.direccionesDeColumnaKardex(entradas, null), ['IN', 'ADJUST_IN', 'TRANSFER_IN', 'RETURN_IN']);
   assert.deepEqual(ec.direccionesDeColumnaKardex(entradas, 'IN'), ['IN']);
   assert.deepEqual(ec.direccionesDeColumnaKardex(entradas, 'in'), ['IN'], 'el servidor las lee en mayúsculas');
   assert.deepEqual(ec.direccionesDeColumnaKardex(salidas, 'IN'), [], 'la dirección elegida deja vacía la otra columna');
   assert.deepEqual(ec.direccionesDeColumnaKardex(salidas, 'TRANSFER_OUT'), ['TRANSFER_OUT']);
-  for (const d of ['QUARANTINE', 'SCRAP', 'RETURN_IN']) {
+  // B4.1 (P16): SCRAP y RETURN_IN ya son de una columna; solo la cuarentena sale únicamente en la lista.
+  for (const d of ['QUARANTINE']) {
     assert.deepEqual([ec.direccionesDeColumnaKardex(entradas, d), ec.direccionesDeColumnaKardex(salidas, d)], [[], []], `${d} solo sale en la lista`);
   }
+  assert.deepEqual([ec.direccionesDeColumnaKardex(entradas, 'RETURN_IN'), ec.direccionesDeColumnaKardex(salidas, 'SCRAP')], [['RETURN_IN'], ['SCRAP']]);
   assert.deepEqual(ec.direccionesDeColumnaKardex(null, ''), []);
   assert.deepEqual(ec.direccionesDeColumnaKardex({}, ''), []);
   const estadoKardex = estadoTablaInicial({ q: 'x', tamano: 50, pagina: 4, orden: '-fecha', vista: 'a', estados: ['b'] });
   assert.equal(ec.consultaColumnaKardex(estadoKardex, entradas, todos, { limit: 25, offset: 0 }),
-    'limit=25&offset=0&sku_id=12&warehouse_id=2&direction=IN,ADJUST_IN,TRANSFER_IN&start_date=2026-10-01',
+    'limit=25&offset=0&sku_id=12&warehouse_id=2&direction=IN,ADJUST_IN,TRANSFER_IN,RETURN_IN&start_date=2026-10-01', // B4.1 (P16)
     'direction en CSV; sin q, orden, vista ni estados (el Kardex no los tiene)');
   assert.equal(ec.consultaColumnaKardex(estadoKardex, salidas, { ...todos, direccion: 'OUT', hasta: '2026-10-31' }, { limit: 25, offset: 25 }),
     'limit=25&offset=25&sku_id=12&warehouse_id=2&direction=OUT&start_date=2026-10-01&end_date=2026-10-31');
@@ -2561,7 +2563,8 @@ console.log('--- TEST 44 (B4 T18, TABLA-inventario punto 8; KANBAN-resto; RP54):
   trae(k, 'ruta: RUTA_KARDEX, estado, esperar: !listo, despachar, activo: !enKanban, extra: extraLista,', 'useListado');
   trae(k, "const RUTA_KARDEX = '/inventory/kardex';", 'la ruta');
   noTrae(k, 'conConteos', 'el Kardex no tiene conteos');
-  trae(k, 'const extraLista = useMemo(() => ({ ...extraKardex(filtros), q: null, orden: null }), [filtros]);', 'los filtros al servidor, sin q ni orden');
+  // B4.1 (P26): el Kardex ya se ordena por fecha: la lista manda el orden del estado (sin `orden: null`).
+  trae(k, 'const extraLista = useMemo(() => ({ ...extraKardex(filtros), q: null }), [filtros]);', 'los filtros al servidor, sin q (con el orden del estado)');
   // La doble carga (el bug de hoy): el filtro y la página cambian EN EL MISMO evento, por UN solo camino.
   // B4 T24 f4 (F39; D27): el filtro y la página cambian en el mismo evento por la acción {tipo: 'filtro'} del estado único.
   trae(k, 'for (const accion of accionesDeFiltros(cambio)) despachar(accion);', 'cambiarFiltros cambia el filtro y la página a la vez');
@@ -2598,10 +2601,9 @@ console.log('--- TEST 44 (B4 T18, TABLA-inventario punto 8; KANBAN-resto; RP54):
   // El orden: el servidor ordena siempre por fecha y NO acepta `orden`: ninguna columna lo promete.
   const cols = columnasDe(k, 'COLUMNAS_TABLA_KARDEX');
   assert.deepEqual(cols.map((c) => c.id), ['fecha', 'direccion', 'producto', 'bodega', 'cantidad', 'propietario', 'documento', 'costo', 'usuario']);
-  assert.deepEqual(cols.filter((c) => c.ordenable !== null), [], 'get_kardex no tiene `orden`: ningún título ordena');
-  // m1: la barra DICE el orden fijo.
-  trae(k, "const TEXTO_ORDEN_KARDEX = 'Del más reciente al más antiguo';", 'el texto del orden fijo');
-  trae(k, 'Orden: {TEXTO_ORDEN_KARDEX}', 'la barra dice el orden');
+  // B4.1 (P26): get_kardex acepta `orden` por fecha (T4): solo Fecha ordena, y la barra ya no dice un orden fijo.
+  assert.deepEqual(cols.filter((c) => c.ordenable !== null).map((c) => [c.id, c.ordenable]), [['fecha', "'fecha'"]], 'solo Fecha ordena');
+  noTrae(k, 'TEXTO_ORDEN_KARDEX', 'sin el texto del orden fijo');
   // m14: sin códigos crudos en la celda, la tarjeta ni el detalle (el propietario y el tipo de operación llevan su etiqueta).
   assert.ok(!/m\.owner \|\| 'NEBULAE'/.test(k) && k.split('etiquetaPropietario(m.owner)').length - 1 === 3, 'el propietario con su etiqueta (celda, title y detalle)');
   assert.deepEqual(cols.filter((c) => c.oculta).map((c) => c.id), ['costo', 'usuario'], 'ocultas por defecto (R26, medido a 1024 px)');
@@ -2632,7 +2634,7 @@ console.log('--- TEST 44 (B4 T18, TABLA-inventario punto 8; KANBAN-resto; RP54):
     };
     const cargar = cargarDe(k)(entorno);
     const respuesta = await cargar(ec.COLUMNAS_KARDEX[0], { offset: 25, limit: 25, orden: 'sin_movimiento', signal: 'SIGNAL' });
-    assert.deepEqual(llamadas, [['/inventory/kardex?limit=25&offset=25&sku_id=12&direction=IN,ADJUST_IN,TRANSFER_IN', { signal: 'SIGNAL' }]], 'la URL de la columna y la señal');
+    assert.deepEqual(llamadas, [['/inventory/kardex?limit=25&offset=25&sku_id=12&direction=IN,ADJUST_IN,TRANSFER_IN,RETURN_IN', { signal: 'SIGNAL' }]], 'la URL de la columna y la señal');
     assert.deepEqual([respuesta.filas, respuesta.total], [[{ id: 1 }], 40], 'la respuesta {data: {items, total}} (RP54)');
     llamadas.length = 0;
     await cargar(ec.COLUMNAS_KARDEX[1], { offset: 0, limit: 0, signal: 'S' });
@@ -2788,9 +2790,10 @@ console.log('--- TEST 46 (B4 T19; TABLA-inventario punto 11, KANBAN-resto, KPI-i
   });
   // La dirección de un ajuste es la de su PRIMER movimiento, con los grupos del Kardex (RP96): entrada = IN, ADJUST_IN y TRANSFER_IN;
   // salida = OUT, ADJUST_OUT y TRANSFER_OUT. Cualquier otra, o sin movimientos, no es ninguna de las dos.
-  for (const d of ['IN', 'ADJUST_IN', 'TRANSFER_IN']) assert.equal(ec.direccionDeAjuste(aju(1, d)), 'entrada', d);
-  for (const d of ['OUT', 'ADJUST_OUT', 'TRANSFER_OUT']) assert.equal(ec.direccionDeAjuste(aju(1, d)), 'salida', d);
-  for (const d of ['QUARANTINE', 'SCRAP', 'RETURN_IN', null, '']) assert.equal(ec.direccionDeAjuste(aju(1, d)), null, String(d));
+  // B4.1 (P16): RETURN_IN es entrada y SCRAP salida (igual que DIRECCIONES_OPERACION del servidor).
+  for (const d of ['IN', 'ADJUST_IN', 'TRANSFER_IN', 'RETURN_IN']) assert.equal(ec.direccionDeAjuste(aju(1, d)), 'entrada', d);
+  for (const d of ['OUT', 'ADJUST_OUT', 'TRANSFER_OUT', 'SCRAP']) assert.equal(ec.direccionDeAjuste(aju(1, d)), 'salida', d);
+  for (const d of ['QUARANTINE', null, '']) assert.equal(ec.direccionDeAjuste(aju(1, d)), null, String(d));
   assert.equal(ec.direccionDeAjuste(aju(1)), null, 'sin movimientos');
   assert.equal(ec.direccionDeAjuste({ movements: [{ direction: 'ADJUST_OUT' }, { direction: 'IN' }] }), 'salida', 'solo cuenta el primero');
   assert.equal(ec.direccionDeAjuste(null), null);
@@ -3429,7 +3432,7 @@ console.log('--- B4 T24 f3 (F79, F82, F85, F86, F87-f, F78): el Hub de Inventari
   assert.equal(textoPieBodega(null).texto, 'Sin alertas');
   // F87-f: las padre, marcadas (sin mutar); null sigue null.
   const cats = [{ id: 1, name: 'Hogar', parent_id: null }, { id: 2, name: 'Cocina', parent_id: 1 }, { id: 3, name: 'Juguetes', parent_id: null }];
-  assert.deepEqual(marcarCategoriasPadre(cats).map((c) => c.name), ['Hogar (categoría padre)', 'Cocina', 'Juguetes']);
+  assert.deepEqual(marcarCategoriasPadre(cats).map((c) => c.name), ['Hogar (incluye subcategorías)', 'Cocina', 'Juguetes']); // B4.1 (P25)
   assert.equal(cats[0].name, 'Hogar', 'no muta lo que recibe');
   assert.equal(marcarCategoriasPadre(null), null);
   // F85: el vacío nunca muestra el id crudo; sin el nombre, «la bodega elegida».
@@ -4386,6 +4389,29 @@ console.log('--- B4.1 T7 (P18, P19, P20, P21): Compras ---');
   const tr = leer('app/dashboard/compras/transito/page.tsx');
   assert.ok(!/id: 'cliente'[^\n]*ocultaPorDefecto: true/.test(tr), 'P21: Cliente / PVEN visible');
   assert.equal(anchoVisible(tr, 'const COLUMNAS_TABLA_TRANSITO'), 704, 'P21: 120 + 100 + 104 + 88 + 92 + 88 + 112');
+}
+
+console.log('--- B4.1 T8 (P15, P16, P22, P25, P26): Inventario ---');
+{
+  assert.deepEqual(ec.COLUMNAS_KARDEX.map((c) => c.estados),
+    [['IN', 'ADJUST_IN', 'TRANSFER_IN', 'RETURN_IN'], ['OUT', 'ADJUST_OUT', 'TRANSFER_OUT', 'SCRAP']]);
+  const py = readFileSync(new URL('../../backend/app/core/movimientos_inventario.py', import.meta.url), 'utf8');
+  const tupla = (nombre) => [...py.match(new RegExp(`${nombre} = \\(([^)]*)\\)`))[1].matchAll(/"(\w+)"/g)].map((m) => m[1]);
+  assert.deepEqual(ec.COLUMNAS_KARDEX[0].estados, tupla('ENTRADAS_KARDEX'), 'el tablero = el servidor (entradas)');
+  assert.deepEqual(ec.COLUMNAS_KARDEX[1].estados, tupla('SALIDAS_KARDEX'), 'y salidas');
+  assert.equal(ec.avisoTopeAlmacenes(1234),
+    'Se muestran las primeras 200 de 1.234 existencias; los totales por bodega son parciales. Busca o filtra para ver el resto.');
+  for (const nada of [200, 12, null, 'x']) assert.equal(ec.avisoTopeAlmacenes(nada), null, String(nada));
+  assert.deepEqual(ec.marcarCategoriasPadre([{ id: 1, name: 'Juguetes' }, { id: 2, name: 'Peluches', parent_id: 1 }]).map((c) => c.name),
+    ['Juguetes (incluye subcategorías)', 'Peluches']);
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const k = leer('app/dashboard/inventario/kardex/page.tsx');
+  assert.match(k, /const INICIAL_KARDEX = \{ orden: '-fecha' \};/);
+  assert.match(k, /\{ id: 'fecha', titulo: 'Fecha', ancho: 92, clave: true, fija: 'izquierda', ordenable: 'fecha'/);
+  assert.ok(!/orden: null \}\), \[filtros\]\)/.test(k), 'la lista manda el orden del estado');
+  assert.match(leer('app/dashboard/inventario/page.tsx'), /avisoTopeAlmacenes\(listado\.total\)/);
+  assert.match(leer('app/dashboard/inventario/page.tsx'), /mejorLinea="neutro"/, 'P15');
+  assert.ok(leer('components/ui/useAnchoVentana.ts').includes('useSyncExternalStore'), 'P24: el hook existe');
 }
 
 console.log('\nOK: test_estados_compras.mjs');

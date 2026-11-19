@@ -1436,8 +1436,8 @@ console.log('--- TEST 23 (B4 T17, ANALISIS-inventario punto 3; R2, R13, RP69, D3
   assert.equal(paneles.length, 1, 'un solo panel');
   const panel = paneles[0];
   // La tabla de la sección 1 de la guía: modulo 'inventario', /inventory/analisis, acento teal y sin selector de foco
-  // (sin focos ni el campo Producto); mejorLinea explícito: el «mejor» que manda el servidor para «Valor del inventario».
-  for (const prop of ['modulo="inventario"', 'endpoint="/inventory/analisis"', 'acento="teal"', 'mejorLinea="sube"',
+  // (sin focos ni el campo Producto); mejorLinea explícito. B4.1 (P15): el valor del inventario sube o baja por compras y ventas: línea neutra.
+  for (const prop of ['modulo="inventario"', 'endpoint="/inventory/analisis"', 'acento="teal"', 'mejorLinea="neutro"',
     'params={paramsAnalisis}', 'controlesExtra={selectorBodegaAnalisis}', 'asistente={ASISTENTE_INVENTARIO}']) {
     assert.ok(panel.includes(prop), prop);
   }

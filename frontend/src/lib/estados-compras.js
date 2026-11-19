@@ -875,8 +875,8 @@ export function filtrosAplicadosHub({ verAlmacenes, bodega, categoria }) {
 
 /**
  * B4 T24 f3 (F87-f): las categorías del selector del Hub de Inventario (GET /categories, ya ordenado por nombre en el servidor, F87-b),
- * con las que son padre de otra marcadas «X (categoría padre)»: el filtro es por la categoría exacta del producto (P25 decide si
- * incluye las hijas), así que elegir una padre puede dejar la tabla vacía. No muta lo que recibe; null sigue null.
+ * con las que son padre de otra marcadas «X (incluye subcategorías)» (B4.1 P25: el filtro del servidor ya incluye las hijas, y el
+ * selector lo dice). No muta lo que recibe; null sigue null.
  * @template {{id?: unknown, name?: unknown, parent_id?: unknown}} C
  * @param {ReadonlyArray<C> | null | undefined} categorias
  * @returns {C[] | null}
@@ -884,7 +884,7 @@ export function filtrosAplicadosHub({ verAlmacenes, bodega, categoria }) {
 export function marcarCategoriasPadre(categorias) {
   if (!Array.isArray(categorias)) return null;
   const padres = new Set(categorias.map((c) => c?.parent_id).filter((id) => id != null).map(String));
-  return categorias.map((c) => (c && padres.has(String(c.id)) ? { ...c, name: `${c.name} (categoría padre)` } : c));
+  return categorias.map((c) => (c && padres.has(String(c.id)) ? { ...c, name: `${c.name} (incluye subcategorías)` } : c));
 }
 
 /**
@@ -1725,6 +1725,18 @@ export function avisoTope200(total, nombre) {
   return `Se muestran los ${TOPE_TABLERO_COMPRAS} más recientes de ${formatoEntero(n)} ${nombre}. Busca o filtra para ver el resto.`;
 }
 
+/**
+ * B4.1 (P22): el aviso de la vista Almacenes cuando la consulta (de a lo sumo 200 filas) tiene más: a diferencia de avisoTope200, dice
+ * que los totales por bodega son parciales (cada tarjeta suma solo las filas cargadas). null si no hay más de 200 o el total no es un número.
+ * @param {unknown} total
+ * @returns {string | null}
+ */
+export function avisoTopeAlmacenes(total) {
+  const n = numeroFinito(total);
+  if (n === null || n <= TOPE_TABLERO_COMPRAS) return null;
+  return `Se muestran las primeras ${TOPE_TABLERO_COMPRAS} de ${formatoEntero(n)} existencias; los totales por bodega son parciales. Busca o filtra para ver el resto.`;
+}
+
 /** '1 producto', '2 productos' (la tabla, la tarjeta y el Drawer dicen lo mismo). */
 export function textoProductos(n) {
   return `${n} ${n === 1 ? 'producto' : 'productos'}`;
@@ -1995,13 +2007,14 @@ export function infoDireccionKardex(d) {
 }
 
 /**
- * El tablero solo para ver del Kardex (R11, RP54): Entradas = IN, ADJUST_IN, TRANSFER_IN · Salidas = OUT, ADJUST_OUT,
- * TRANSFER_OUT. La cuarentena, la pérdida, la devolución y los movimientos sin dirección solo salen en la lista.
+ * El tablero solo para ver del Kardex (R11, RP54): Entradas = IN, ADJUST_IN, TRANSFER_IN, RETURN_IN · Salidas = OUT, ADJUST_OUT,
+ * TRANSFER_OUT, SCRAP (B4.1 P16: las mismas ENTRADAS_KARDEX y SALIDAS_KARDEX de core/movimientos_inventario.py). La cuarentena y los
+ * movimientos sin dirección solo salen en la lista.
  * @type {ReadonlyArray<Readonly<Columna>>}
  */
 export const COLUMNAS_KARDEX = congelar([
-  columna('entradas', 'Entradas', 'emerald', ['IN', 'ADJUST_IN', 'TRANSFER_IN']),
-  columna('salidas', 'Salidas', 'rose', ['OUT', 'ADJUST_OUT', 'TRANSFER_OUT']),
+  columna('entradas', 'Entradas', 'emerald', ['IN', 'ADJUST_IN', 'TRANSFER_IN', 'RETURN_IN']),
+  columna('salidas', 'Salidas', 'rose', ['OUT', 'ADJUST_OUT', 'TRANSFER_OUT', 'SCRAP']),
 ]);
 
 /**
@@ -2363,8 +2376,8 @@ export function llegadaEnlaceProducto(pedido, filas) {
 // ─── Ajustes de Inventario: la tabla, el tablero solo para ver y las tarjetas (B4 T19: TABLA-inventario punto 11, KANBAN-resto, KPI-inventario punto 9; RP96) ────
 
 /**
- * Los grupos de dirección de un ajuste (RP96): los MISMOS del Kardex (una sola fuente, COLUMNAS_KARDEX): entrada = IN, ADJUST_IN y
- * TRANSFER_IN; salida = OUT, ADJUST_OUT y TRANSFER_OUT. Inmutable.
+ * Los grupos de dirección de un ajuste (RP96): los MISMOS del Kardex (una sola fuente, COLUMNAS_KARDEX): entrada = IN, ADJUST_IN,
+ * TRANSFER_IN y RETURN_IN; salida = OUT, ADJUST_OUT, TRANSFER_OUT y SCRAP (B4.1 P16). Inmutable.
  * @type {Readonly<{entrada: ReadonlyArray<string>, salida: ReadonlyArray<string>}>}
  */
 export const GRUPOS_AJUSTE = congelar({ entrada: [...COLUMNAS_KARDEX[0].estados], salida: [...COLUMNAS_KARDEX[1].estados] });
@@ -2393,7 +2406,7 @@ export function primerMovimiento(a) {
 
 /**
  * La dirección de un ajuste, 'entrada' o 'salida': la de su PRIMER movimiento según GRUPOS_AJUSTE (igual que el filtro `direccion`
- * de GET /inventory/operations, RP96). Sin movimientos o con otra dirección (cuarentena, pérdida, devolución), null.
+ * de GET /inventory/operations, RP96). Sin movimientos o con otra dirección (cuarentena, B4.1 P16), null.
  * @param {any} a
  * @returns {'entrada' | 'salida' | null}
  */

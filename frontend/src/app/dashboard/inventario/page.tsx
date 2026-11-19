@@ -14,15 +14,16 @@ import { FranjaKpis, TarjetaKpi, useEstadoKpi } from '@/components/ui';
 import {
   BarraTabla, TablaEstandar, useEstadoTabla, useListado, usePantallaCompleta, usePreferenciasTabla,
 } from '@/components/tabla';
-import type { ClaveFila, ColumnaTabla, Listado, PestanaTabla } from '@/components/tabla';
+import type { ColumnaTabla, Listado, PestanaTabla } from '@/components/tabla';
 import { useResumen } from '@/components/ui/useResumen';
+import { useAnchoVentana } from '@/components/ui/useAnchoVentana';
 import { AvisoDeError } from '@/components/ui/AvisoFuente';
 import { PanelAnalisisPerezoso } from '@/components/analisis';
 import { apiFetch } from '@/lib/api';
-import { accionesDeFiltros, estadoDelTotal, extraPorVista, filtrosDePantalla, textoVacioExistencias } from '@/lib/tabla';
+import { accionesDeFiltros, estadoDelTotal, extraPorVista, filtrosDePantalla, mostrarPorDefecto, textoVacioExistencias } from '@/lib/tabla';
 import { AYUDA_MINIMO_INVENTARIO, numeroFinito, resumenAlmacenes, tarjetasHubInventario } from '@/lib/kpis';
 import {
-  CARGA_CATALOGO_VACIA, ESTADOS_STOCK, TOPE_TABLERO_COMPRAS, avisoTope200, falloCatalogo, filtrosAplicadosHub, lecturaCatalogo, llegadaCatalogo,
+  CARGA_CATALOGO_VACIA, ESTADOS_STOCK, TOPE_TABLERO_COMPRAS, avisoTopeAlmacenes, falloCatalogo, filtrosAplicadosHub, lecturaCatalogo, llegadaCatalogo,
   marcarCategoriasPadre, textoPieBodega,
 } from '@/lib/estados-compras';
 // ?tab=analisis: la lectura genérica que dejó T14 en flujo-compras.js (se reúsa, no se copia).
@@ -112,9 +113,9 @@ function CeldaAcciones({ f }: { f: FilaStock }) {
  *  - Acciones 80 (no 56): el mínimo de TablaEstandar es 64 (ANCHO_MIN) y en 64 el título se recorta («Acci…»); 80 es el
  *    de las Acciones del Hub de Compras (columnas-pec.tsx);
  *  - Producto 140 (no 180): R26 baja primero la flexible (su piso es 120) y crece con el espacio que sobra.
- * R26: a 1024 px con el menú abierto la caja deja 704 px (T7 a T16): 40 (la casilla) + 112 + 140 + 120 + 88 + 124 + 80 =
- * 704. Categoría, Físico, Reservado, Precio y Valorización van ocultas por defecto (se muestran con «Ajustar tabla»). Sin
- * columna de tránsito (RP50). Una constante: estable (D40).
+ * R26: a 1024 la caja deja 704: 112 + 140 + 120 + 88 + 124 + 80 = 664; desde 1280, + Físico y Reservado (832) (B4.1 P23: sin la
+ * casilla; P24: COLUMNAS_HUB_AMPLIO). Categoría, Precio y Valorización van ocultas por defecto (y Físico y Reservado hasta 1280; se
+ * muestran con «Ajustar tabla»). Sin columna de tránsito (RP50). Constantes: estables (D40).
  */
 const COLUMNAS_HUB: ColumnaTabla<FilaStock>[] = [
   { id: 'sku', titulo: 'SKU', ancho: 112, clave: true, fija: 'izquierda', ordenable: true, titleCelda: (f) => f.sku,
@@ -142,6 +143,10 @@ const COLUMNAS_HUB: ColumnaTabla<FilaStock>[] = [
     celda: (f) => <span className="text-xs font-black text-slate-900">{pesos(f.valorizacion)}</span> },
   { id: 'acciones', titulo: 'Acciones', ancho: 80, clave: true, fija: 'derecha', celda: (f) => <CeldaAcciones f={f} /> },
 ];
+
+/** B4.1 (P24): la definición de desde 1280 px: la misma, con Físico y Reservado visibles por defecto (832 <= 1280 - 320 del menú). */
+const COLUMNAS_HUB_AMPLIO = mostrarPorDefecto(COLUMNAS_HUB, ['fisico', 'reservado']);
+const ANCHO_HUB_AMPLIO = 1280;
 
 /**
  * Las pestañas del Hub (RP53, sin emojis): Todos, Bajo el mínimo (en rojo si hay alguna) y Existencias físicas, con los
@@ -176,7 +181,8 @@ const BARRA_ESQUELETO = 'inline-block rounded bg-slate-100 motion-safe:animate-p
  */
 function VistaAlmacenes({ listado, vacio, onVer }: { listado: Listado<FilaStock>; vacio: React.ReactNode; onVer: (id: number) => void }) {
   const grupos = useMemo(() => resumenAlmacenes(listado.filas), [listado.filas]);
-  const aviso = avisoTope200(listado.total, 'existencias');
+  // B4.1 (P22): el aviso propio de Almacenes: dice que los totales por bodega son parciales.
+  const aviso = avisoTopeAlmacenes(listado.total);
   // B4 T24 f3 (F79): con más filas que las cargadas, el pie no afirma «Bien abastecido» de lo que quedó fuera.
   const recortado = (listado.total ?? 0) > TOPE_TABLERO_COMPRAS;
   // r1 (m24): con AvisoDeError: un 403 no ofrece «Reintentar» (ofreceReintentar), como el resto de f3.
@@ -295,7 +301,6 @@ export default function InventarioHub() {
   const [verAlmacenes, setVerAlmacenes] = useState(false);
   // B4 T24 f4 (F39): la bodega y la categoría son filtros del estado único (estado.filtros): vuelven con la sesión junto con la página.
   const filtros = useMemo(() => filtrosDePantalla(estado.filtros, SIN_FILTROS) as FiltrosHub, [estado.filtros]);
-  const [seleccion, setSeleccion] = useState<ClaveFila[]>([]);
 
   // La tabla (T13): GET /inventory/stock-tabla?por=bodega con q, orden, limit y offset del estado, la pestaña como su
   // parámetro (VISTAS_HUB) y los conteos de las pestañas en la MISMA llamada. esperar: !listo (D40): el esqueleto, nunca
@@ -360,7 +365,10 @@ export default function InventarioHub() {
   const actualizando = fuente.recargando || (cargandoStats && stats.datos !== null);
 
   // ── B4 T17, bloque 2: la tabla (TABLA-inventario punto 4; R5, R26, RP53; D40, D41) ──
-  const prefs = usePreferenciasTabla(ID_HUB, COLUMNAS_HUB);
+  // B4.1 (P24): desde 1280 px, la definición con Físico y Reservado visibles (null en el servidor: la angosta).
+  const anchoVentana = useAnchoVentana();
+  const columnasHub = (anchoVentana ?? 0) >= ANCHO_HUB_AMPLIO ? COLUMNAS_HUB_AMPLIO : COLUMNAS_HUB;
+  const prefs = usePreferenciasTabla(ID_HUB, columnasHub);
   const anchoTablaRef = useRef<number | null>(null);
   // Desestructurado: con el objeto entero en ref={…}, react-hooks/refs marca «Cannot access refs during render».
   const { capa, claseTarjeta, refTarjeta, completa, alternar, salir } = usePantallaCompleta();
@@ -373,15 +381,10 @@ export default function InventarioHub() {
   // F39: una acción {tipo: 'filtro'} por clave; el reductor la mezcla con los otros filtros y vuelve a la página 1.
   const cambiarFiltros = useCallback((cambio: Partial<FiltrosHub>) => {
     for (const accion of accionesDeFiltros(cambio)) despachar(accion);
-    setSeleccion([]);
   }, [despachar]);
-  const alSeleccionar = useCallback((claves: ClaveFila[]) => setSeleccion(claves), []);
-  const pieSeleccion = seleccion.length > 0
-    ? <span className="font-bold text-indigo-700">{seleccion.length} {seleccion.length === 1 ? 'seleccionada' : 'seleccionadas'}</span>
-    : null;
   // Los nombres de lo elegido, para el vacío (si el catálogo todavía no llegó, el id).
   // B4 T24 f3 (F85): sin el nombre (el catálogo no llegó), `true`: el vacío dice «la bodega elegida», nunca «#2».
-  // B4 T24 f3 (F87-f): las categorías padre, marcadas en el selector (el filtro es por la categoría exacta; P25 decide si incluye las hijas).
+  // B4 T24 f3 (F87-f): las categorías padre, marcadas en el selector (el filtro del servidor incluye las subcategorías (B4.1 P25)).
   const categoriasMarcadas = useMemo(() => ({ ...categorias, filas: marcarCategoriasPadre(categorias.filas) }), [categorias]);
   const nombreBodega = filtros.bodega ? (bodegas.filas?.find((b) => String(b.id) === filtros.bodega)?.name ?? true) : null;
   const nombreCategoria = filtros.categoria ? (categorias.filas?.find((c) => String(c.id) === filtros.categoria)?.name ?? true) : null;
@@ -403,7 +406,6 @@ export default function InventarioHub() {
   // ── B4 T17, bloque 4: la vista Almacenes (RP52 d) ──
   const elegirVista = useCallback((almacenesAhora: boolean) => {
     setVerAlmacenes(almacenesAhora);
-    setSeleccion([]);
   }, []);
   const verArticulos = useCallback((id: number) => {
     cambiarFiltros({ bodega: String(id) });
@@ -413,7 +415,6 @@ export default function InventarioHub() {
   // ── B4 T17, bloque 8: Documentos / Análisis (ANALISIS-inventario punto 3; R2, R13, RP35, RP69, D31, D45) ──
   const cambiarSeccion = useCallback((analisis: boolean) => {
     setEnAnalisis(analisis);
-    setSeleccion([]);
     // Al volver a los documentos la URL deja de decir ?tab=analisis (recargar no reabre el Análisis).
     if (!analisis && leerEnlaceHubCompras(window.location.search).analisis) router.replace(RUTA_HUB);
   }, [router]);
@@ -572,18 +573,18 @@ export default function InventarioHub() {
                     </div>
                   </>
                 )}
-                ajustes={verAlmacenes ? undefined : { columnas: COLUMNAS_HUB, preferencias: prefs, anchoRef: anchoTablaRef }}
+                ajustes={verAlmacenes ? undefined : { columnas: columnasHub, preferencias: prefs, anchoRef: anchoTablaRef }}
                 pantallaCompleta={verAlmacenes ? undefined : { completa, alternar }}
                 color="indigo"
                 {...totalDeLaBarra}
               />
-              {/* La tabla estándar en el servidor: la paginación (25 o 50), el orden, la selección de la página y los tonos
+              {/* La tabla estándar en el servidor: la paginación (25 o 50), el orden y los tonos
                   de la fila son de la tabla; un clic en la fila (o el ojo) abre el detalle. */}
               {!enAnalisis && !verAlmacenes && (
                 <TablaEstandar
                   id={ID_HUB}
                   modo="servidor"
-                  columnas={COLUMNAS_HUB}
+                  columnas={columnasHub}
                   preferencias={prefs}
                   anchoRef={anchoTablaRef}
                   estado={estado}
@@ -598,9 +599,6 @@ export default function InventarioHub() {
                   claveFila={claveDeFilaStock}
                   onFila={abrir}
                   claseFila={claseDeFilaStock}
-                  seleccion={seleccion}
-                  onSeleccion={alSeleccionar}
-                  pie={pieSeleccion}
                   vacio={vacio}
                   etiqueta="Existencias por bodega"
                 />
@@ -609,13 +607,13 @@ export default function InventarioHub() {
           </AccionesFila.Provider>
           {enAnalisis ? (
             /* ANALISIS-inventario punto 3 (R2, R13, RP69, D31, D45): /inventory/analisis con el contrato único; la línea
-               del valor del inventario es mejor si sube (el «mejor» que manda el servidor para esa cifra). El asistente es
+               del valor del inventario es neutra (B4.1 P15: sube o baja por compras y ventas). El asistente es
                la tarjeta de AsistenteEnConstruccion del panel (R2): se fue el chat simulado. */
             <PanelAnalisisPerezoso
               modulo="inventario"
               endpoint="/inventory/analisis"
               acento="teal"
-              mejorLinea="sube"
+              mejorLinea="neutro"
               params={paramsAnalisis}
               controlesExtra={selectorBodegaAnalisis}
               asistente={ASISTENTE_INVENTARIO}
