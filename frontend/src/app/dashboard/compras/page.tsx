@@ -546,7 +546,7 @@ const COLUMNAS_TABLA_HUB = columnasPec<FilaPec>((p) => <CeldaAcciones p={p} />);
 const TITULOS_ORDEN_HUB = titulosDeOrdenPec(COLUMNAS_TABLA_HUB);
 
 /**
- * Las pestañas del Hub (R9: las vistas de VISTAS_PEC, sin emojis): Recepciones es en_bodega, «No resueltos» los activos
+ * Las pestañas del Hub (R9: las vistas de VISTAS_PEC, sin emojis): «En bodega» es en_bodega, «No resueltos» los activos
  * (en rojo si hay vencidos) y «Acciones tomadas» lo recibido más lo cancelado. Los conteos son del servidor (con la
  * búsqueda; null mientras cargan: la barra gris, nunca 0). Análisis va aparte (pestanaAparte).
  */
@@ -556,7 +556,7 @@ function pestanasDelHub(conteos: ConteosPec | null): PestanaTabla[] {
     { id: 'no_resueltos', etiqueta: 'No resueltos', conteo: conteos?.no_resueltos ?? null, alerta: textoVencidosPec(conteos?.vencidos) },
     { id: 'pedidos', etiqueta: 'Pedidos de compra', conteo: conteos?.pedidos ?? null },
     { id: 'en_transito', etiqueta: 'En tránsito', conteo: conteos?.en_transito ?? null },
-    { id: 'en_bodega', etiqueta: 'Recepciones', conteo: conteos?.en_bodega ?? null },
+    { id: 'en_bodega', etiqueta: 'En bodega', conteo: conteos?.en_bodega ?? null },
     { id: 'acciones_tomadas', etiqueta: 'Acciones tomadas', conteo: conteos?.acciones_tomadas ?? null },
   ];
 }
