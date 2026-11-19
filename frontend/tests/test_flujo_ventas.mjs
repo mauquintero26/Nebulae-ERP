@@ -359,7 +359,8 @@ console.log('--- TEST 19: pasoCotizacion ---');
   assert.deepEqual(pasoCotizacion('BORRADOR'), { indice: 0 });
   assert.deepEqual(pasoCotizacion('ENVIADA'), { indice: 1 });
   assert.deepEqual(pasoCotizacion('PENDIENTE_CONFIRMACION'), { indice: 1 });
-  assert.deepEqual(pasoCotizacion('CONFIRMADA'), { indice: 2 });
+  // B4.1 (P12): una COT confirmada terminó su camino.
+  assert.deepEqual(pasoCotizacion('CONFIRMADA'), { indice: 2, terminado: true });
   assert.deepEqual(pasoCotizacion('RECHAZADA'), { indice: 1, canceladoEn: 1, etiqueta: 'Rechazada' });
   assert.deepEqual(pasoCotizacion('VENCIDA'), { indice: 1, aviso: { texto: 'Vencida', tono: 'ambar' } });
   // Un estado desconocido va al primer paso, como el stepper de hoy (cotizacion/[id]/page.tsx).
@@ -374,6 +375,12 @@ console.log('--- TEST 19: pasoCotizacion ---');
   assert.deepEqual(barra('CONFIRMADA'), ['hecho', 'hecho', 'actual']);
   assert.deepEqual(barra('RECHAZADA'), ['hecho', 'cancelado', 'pendiente']);
   assert.deepEqual(barra('VENCIDA'), ['hecho', 'actual', 'pendiente']);
+  // B4.1 (P12): pasosDeCotizacion = anotarPasosCotizacion(pasosConProgreso(…, {canceladoEn, terminado}), p): la confirmada, tres ✓.
+  assert.deepEqual(estados(fv.pasosDeCotizacion('CONFIRMADA')), ['hecho', 'hecho', 'hecho']);
+  for (const estado of ['RECHAZADA', 'VENCIDA', 'BORRADOR']) {
+    const p = pasoCotizacion(estado);
+    assert.deepEqual(fv.pasosDeCotizacion(estado), fv.anotarPasosCotizacion(pasosConProgreso(PASOS_COTIZACION, p.indice, { canceladoEn: p.canceladoEn }), p), estado);
+  }
 }
 
 console.log('--- TEST 19b (r1): conteosDesdeResumen = conteosDePasos de flujo.js + los avisos de RP12 ---');
@@ -864,9 +871,9 @@ console.log('--- B4 T11 TEST 2: los detalles de la solicitud y la cotización us
   assert.ok(iCadena > 0 && iCadena < iPanel, 'entre el encabezado y el panel dividido (fuera de él, H37)');
   assert.ok(CONTENEDOR && cot.includes(CONTENEDOR) && sc.includes(CONTENEDOR), 'el mismo contenedor en los dos detalles');
   // RP87: el lugar de pasoCotizacion, sin stepIndex; la palabra y el aviso con anotarPasosCotizacion.
-  assert.ok(cot.includes('const pasoCot = pasoCotizacion(estadoActual);'));
-  assert.ok(cot.includes('pasosConProgreso(PASOS_COTIZACION, pasoCot.indice, { canceladoEn: pasoCot.canceladoEn })'), 'RP87');
-  assert.ok(cot.includes('anotarPasosCotizacion(pasosConProgreso(PASOS_COTIZACION, pasoCot.indice, { canceladoEn: pasoCot.canceladoEn }), pasoCot)'), '«Rechazada» y «Vencida» no se pierden');
+  // B4.1 (P12): la página usa pasosDeCotizacion (pasoCotizacion + pasosConProgreso + anotarPasosCotizacion, con `terminado` y sin
+  // perder «Rechazada» ni «Vencida»): una COT confirmada muestra los tres pasos con ✓.
+  assert.ok(cot.includes('const pasosCot = pasosDeCotizacion(estadoActual);'), 'RP87 y B4.1 (P12)');
   assert.ok(!/\bstepIndex\b/.test(cot), 'stepIndex se fue');
   assert.match(cot, /\{!isNew && cotizacion && \(\s*<div className="bg-white py-6 border-b border-slate-100 mb-8 overflow-x-auto">\s*<PasosFlujo variante="barra" pasos=\{pasosCot\} etiqueta="Pasos de la cotización" partirEtiquetas estadoVisible \/>\s*<\/div>\s*\)\}/,
     'el Status Tracker, en el mismo lugar y con la misma condición');

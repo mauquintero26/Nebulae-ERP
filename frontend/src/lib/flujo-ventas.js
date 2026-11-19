@@ -20,7 +20,7 @@
  *    el paso).
  */
 
-import { congelar, conteosDePasos, estadoDeFranja, opcionesSemaforo, pasosConConteos } from './flujo.js';
+import { congelar, conteosDePasos, estadoDeFranja, opcionesSemaforo, pasosConConteos, pasosConProgreso } from './flujo.js';
 import {
   ESTADOS_PEDIDO, esCotizacionActiva, esPedidoVigente, humanizarCodigo, infoEstadoPedido, tiene, PASOS_PEDIDO, grupoPedido,
 } from './estados-pedido.js';
@@ -44,7 +44,7 @@ import { formatoEntero } from './kpis.js';
  * @typedef {'SC' | 'COT' | 'PVEN' | 'VEN'} TipoCadena
  * @typedef {(estado: any) => (string | {label: string} | null | undefined)} EtiquetaDeEstado
  * @typedef {{sc?: EtiquetaDeEstado, cot?: EtiquetaDeEstado, pven?: EtiquetaDeEstado}} EtiquetasCadena
- * @typedef {{indice: number, canceladoEn?: number, etiqueta?: string, aviso?: AvisoPaso}} PasoCotizacion
+ * @typedef {{indice: number, canceladoEn?: number, terminado?: boolean, etiqueta?: string, aviso?: AvisoPaso}} PasoCotizacion
  */
 
 // ─── los pasos de la franja ─────────────────────────────────────────────────────
@@ -676,7 +676,7 @@ export const PASOS_COTIZACION = congelar([
 /**
  * El lugar de un estado de la cotización en PASOS_COTIZACION, en la forma que usa T11 (RP87):
  * `pasosConProgreso(PASOS_COTIZACION, p.indice, {canceladoEn: p.canceladoEn})`.
- *  - BORRADOR 0; ENVIADA y PENDIENTE_CONFIRMACION 1; CONFIRMADA 2;
+ *  - BORRADOR 0; ENVIADA y PENDIENTE_CONFIRMACION 1; CONFIRMADA 2, con `terminado` (B4.1, P12: ya llegó al final, los tres ✓);
  *  - RECHAZADA: canceladoEn 1, con la etiqueta 'Rechazada';
  *  - VENCIDA: 1, con el aviso ámbar 'Vencida';
  *  - un estado desconocido va al primer paso, como el stepper de hoy (la etiqueta del estado dice el real).
@@ -690,7 +690,7 @@ export function pasoCotizacion(estado) {
     case 'PENDIENTE_CONFIRMACION':
       return { indice: 1 };
     case 'CONFIRMADA':
-      return { indice: 2 };
+      return { indice: 2, terminado: true };
     case 'RECHAZADA':
       return { indice: 1, canceladoEn: 1, etiqueta: infoEstadoCotizacion('RECHAZADA').label };
     case 'VENCIDA':
@@ -698,6 +698,17 @@ export function pasoCotizacion(estado) {
     default:
       return { indice: 0 };
   }
+}
+
+/**
+ * B4.1 T6 (P12): los pasos de la barra de la cotización, de una vez: el lugar (pasoCotizacion), el progreso (pasosConProgreso, con
+ * `terminado`: una COT confirmada muestra los tres con ✓) y la palabra y el aviso (anotarPasosCotizacion).
+ * @param {unknown} estado
+ * @returns {PasoVista[]}
+ */
+export function pasosDeCotizacion(estado) {
+  const p = pasoCotizacion(estado);
+  return anotarPasosCotizacion(pasosConProgreso(PASOS_COTIZACION, p.indice, { canceladoEn: p.canceladoEn, terminado: p.terminado }), p);
 }
 
 /**

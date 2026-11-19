@@ -22,8 +22,7 @@ import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
 // B4 T24 f2 (F44-a): la reserva del botón flotante de la IA en las columnas de la derecha (IA, Actividad y Chatter), que se desplazan bajo él.
 import { RESERVA_BOTON_IA } from '@/lib/design-system';
 import { CadenaDocumentos, PasosFlujo } from '@/components/flujo';
-import { pasosConProgreso } from '@/lib/flujo';
-import { PASOS_COTIZACION, pasoCotizacion, anotarPasosCotizacion } from '@/lib/flujo-ventas';
+import { pasosDeCotizacion } from '@/lib/flujo-ventas';
 import { situacionPedidoCotizacion, avisoSolicitudTrasRechazo } from '@/lib/listas-ventas';
 import {
   resumenAnticipoCotizacion, formatoPct, propagacionRecotizacion, puedeGestionarCotizacion, notaAnticipoPorLinea,
@@ -239,11 +238,10 @@ function CotizacionDetalleContent() {
 
   const estadoActual = cotizacion?.estado || 'BORRADOR';
   const estadoCfg = ESTADOS_COT[estadoActual] || {label: estadoActual, color:'#7c3aed', bg:'#f5f3ff', border:'#ddd6fe'};
-  // B4 T11 (RP87): los 3 pasos propios con la pieza común. pasoCotizacion da el lugar (0 Borrador, 1 Cotizado al cliente
-  // —también rechazada o vencida en ese punto—, 2 Confirmada) y anotarPasosCotizacion les suma el «Rechazada» (rojo) y el
-  // «Vencida» (ámbar) que pasosConProgreso no recibe.
-  const pasoCot = pasoCotizacion(estadoActual);
-  const pasosCot = anotarPasosCotizacion(pasosConProgreso(PASOS_COTIZACION, pasoCot.indice, { canceladoEn: pasoCot.canceladoEn }), pasoCot);
+  // B4 T11 (RP87): los 3 pasos propios con la pieza común (0 Borrador, 1 Cotizado al cliente —también rechazada o vencida en
+  // ese punto—, 2 Confirmada), con el «Rechazada» (rojo) y el «Vencida» (ámbar). B4.1 (P12): una COT confirmada terminó su
+  // camino: los tres con ✓ (pasosDeCotizacion).
+  const pasosCot = pasosDeCotizacion(estadoActual);
 
   const productos = cotizacion?.productos || [];
   // H46: solo un pedido vigente es "venta generada" (los cancelados no). Con todos cancelados, confirmacion_vigente

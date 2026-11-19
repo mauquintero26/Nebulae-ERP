@@ -103,17 +103,19 @@ const enRango = (i, n) => Number.isInteger(i) && i >= 0 && i < n;
  *  - con canceladoEn (RP87: lo da pasoCotizacion), los anteriores 'hecho', ese 'cancelado' y los siguientes
  *    'pendiente' (indiceActual no cuenta); undefined o null es sin cancelación;
  *  - un índice fuera de rango (también -1 de pasoPedido o pasoSolicitud, o uno que no es entero) deja todos en
- *    'pendiente'.
+ *    'pendiente';
+ *  - B4.1 (P12): con `terminado` (y sin canceladoEn) el documento ya llegó al final: todos 'hecho' (una COT confirmada).
  * Acepta pasos con `key` (PASOS_PEDIDO) o con `clave` (PASOS_SC, PASOS_COTIZACION); el resultado siempre trae `clave`.
  * @param {ReadonlyArray<DefinicionPaso> | null | undefined} definicion
  * @param {number} indiceActual
- * @param {{canceladoEn?: number | null}} [opciones]
+ * @param {{canceladoEn?: number | null, terminado?: boolean}} [opciones]
  * @returns {PasoVista[]}
  */
-export function pasosConProgreso(definicion, indiceActual, { canceladoEn = null } = {}) {
+export function pasosConProgreso(definicion, indiceActual, { canceladoEn = null, terminado = false } = {}) {
   const pasos = Array.isArray(definicion) ? definicion : [];
   const n = pasos.length;
   const cancelado = canceladoEn !== null && canceladoEn !== undefined;
+  if (terminado && !cancelado) return pasos.map((p) => pasoBase(p, 'hecho'));
   const corte = cancelado ? canceladoEn : indiceActual;
   if (!enRango(corte, n)) return pasos.map((p) => pasoBase(p, 'pendiente'));
   return pasos.map((p, i) => {

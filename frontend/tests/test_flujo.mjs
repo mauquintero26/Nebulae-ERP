@@ -60,6 +60,11 @@ console.log('--- TEST 2: pasosConProgreso — hecho, actual y pendiente ---');
     assert.deepEqual(estados(pasosConProgreso(CINCO, /** @type {any} */ (fuera))), Array(5).fill('pendiente'), `índice ${String(fuera)}`);
   }
   assert.deepEqual(estados(pasosConProgreso(CINCO, 2, { canceladoEn: 9 })), Array(5).fill('pendiente'));
+  // B4.1 (P12): `terminado` (la COT confirmada, la SC o el pedido que ya llegaron al final): todos hechos; canceladoEn gana.
+  assert.deepEqual(estados(pasosConProgreso(CINCO, 4, { terminado: true })), Array(5).fill('hecho'));
+  assert.deepEqual(estados(pasosConProgreso(CINCO, 2, { terminado: true, canceladoEn: 1 })),
+    ['hecho', 'cancelado', 'pendiente', 'pendiente', 'pendiente']);
+  assert.deepEqual(estados(pasosConProgreso(CINCO, 9)), Array(5).fill('pendiente'), 'fuera de rango sin terminado: todo pendiente');
   assert.deepEqual(pasosConProgreso([], 0), []);
   assert.deepEqual(pasosConProgreso(/** @type {any} */ (null), 0), []);
 }
