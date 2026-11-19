@@ -691,7 +691,9 @@ console.log('--- TEST 16 (T5A y r1; R4, C2, C13, RP33, RP67, D21, D38): el fuent
   // truncate recorta de verdad y las 5 cajas caben a 1024 px. Y r2 (M1): con error no se pintan (avisosVisibles).
   assert.match(pasos, /<span className=\{`flex-wrap gap-1 \$\{clases\}`\}>/);
   assert.match(pasos, /const lista = avisosVisibles\(avisos, \{ estadoConteos \}\);/);
-  assert.match(pasos, /<AvisosDelPaso avisos=\{paso\.avisos\} estadoConteos=\{estadoConteos\} clases="hidden w-0 min-w-full @2xl\/flujo:flex" \/>/);
+  // B4.1 (C4): los avisos de la caja salen enteros (ajustar: el chip se parte en varias líneas dentro del ancho de la caja
+  // en lugar de recortarse); el w-0 min-w-full se queda, así siguen sin ensanchar la caja.
+  assert.match(pasos, /<AvisosDelPaso avisos=\{paso\.avisos\} estadoConteos=\{estadoConteos\} ajustar clases="hidden w-0 min-w-full @2xl\/flujo:flex" \/>/);
   assert.match(pasos, /<AvisosDelPaso avisos=\{paso\.avisos\} pequeno clases=\{`mt-0\.5 flex w-full min-w-0 /, 'en la barra, del ancho de su paso');
   // r1 (C1, M10): el foco es un outline, distinto del anillo de la selección.
   // El color va también en reposo: transition-colors anima outline-color, y sin él el outline aparecería negro y se
@@ -1316,6 +1318,34 @@ console.log('--- B4 T24 f3 (F45, segunda mitad; FINAL-m14, F84): Compras e Inven
     // r3 (C2 = C4, D27): las pantallas de m17 montan el aviso como el Hub: reintentando y el destino del foco (la franja).
     assert.ok(/<AvisoReintentar error=\{(?:stats\.error|errorStats)\} fallo="[^"]+" onReintentar=\{stats\.recargar\} reintentando=\{(?:stats\.cargando|cargandoStats)\} destinoFoco="[^"]+" \/>/.test(leer(ruta)), `${ruta}: Reintentar con el hook`); // f4 (D27: destinoFoco)
   }
+}
+
+console.log('--- B4.1 T10 (C4): los avisos de la caja de la franja salen enteros (claseChipAviso con ajustar) ---');
+{
+  const BASE = 'inline-block min-w-0 max-w-full truncate whitespace-nowrap rounded-full border align-middle font-semibold';
+  const AJUSTADO = 'inline-block min-w-0 max-w-full whitespace-normal break-words rounded-lg border text-left align-middle font-semibold';
+  const tokens = (clases) => clases.split(' ');
+  // Sin ajustar: la base de hoy (la misma que CHIP, pre-flight H29) y el tamaño.
+  assert.equal(F.claseChipAviso(), `${BASE} px-2 py-0.5 text-[11px]`);
+  assert.equal(F.claseChipAviso({}), `${BASE} px-2 py-0.5 text-[11px]`);
+  assert.equal(F.claseChipAviso({ pequeno: true }), `${BASE} px-1.5 py-px text-[10px]`);
+  // Con ajustar: sin truncate ni whitespace-nowrap; el texto se parte en varias líneas (whitespace-normal, break-words).
+  const ajustado = F.claseChipAviso({ ajustar: true });
+  assert.ok(!tokens(ajustado).includes('truncate'), `ajustar: sin truncate (${ajustado})`);
+  assert.ok(!tokens(ajustado).includes('whitespace-nowrap'), 'ajustar: sin whitespace-nowrap');
+  assert.ok(tokens(ajustado).includes('whitespace-normal'), 'ajustar: whitespace-normal');
+  assert.equal(ajustado, `${AJUSTADO} px-2 py-0.5 text-[11px]`);
+  assert.equal(F.claseChipAviso({ pequeno: true, ajustar: true }), `${AJUSTADO} px-1.5 py-px text-[10px]`);
+
+  // El cableado: el chip interno usa claseChipAviso, AvisosDelPaso recibe ajustar y lo pasa, la franja lo manda y la barra no.
+  const pasos = readFileSync(new URL('../src/components/flujo/PasosFlujo.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(pasos, /function ChipAvisoInterno\(\{ texto, tono, pequeno, ajustar \}: \{ texto: string; tono: TonoAviso; pequeno\?: boolean; ajustar\?: boolean \}\)/);
+  assert.match(pasos, /className=\{`\$\{claseChipAviso\(\{ pequeno, ajustar \}\)\} \$\{TONO_AVISO\[tono\] \?\? TONO_AVISO\.gris\}`\}/);
+  assert.match(pasos, /function AvisosDelPaso\(\{ avisos, pequeno, ajustar, estadoConteos, clases \}: \{/);
+  assert.match(pasos, /<ChipAvisoInterno key=\{`\$\{a\.texto\}-\$\{i\}`\} texto=\{a\.texto\} tono=\{a\.tono\} pequeno=\{pequeno\} ajustar=\{ajustar\} \/>/);
+  assert.equal((pasos.match(/<AvisosDelPaso\b[^>]*\bajustar\b/g) ?? []).length, 1, 'solo la caja de la franja ajusta (la barra no)');
+  // El chip-botón no cambia (H29: CHIP queda igual, la guarda de TEST 16 lo fija).
+  assert.match(pasos, /className=\{`\$\{CHIP\} px-2 py-0\.5 text-\[11px\] hover:brightness-95 /);
 }
 
 console.log('\nOK: test_flujo.mjs');

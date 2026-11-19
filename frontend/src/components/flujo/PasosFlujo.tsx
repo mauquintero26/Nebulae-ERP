@@ -9,7 +9,7 @@ import { Contador } from '@/components/ui/Contador';
 import { FOCO } from '@/lib/design-system';
 import type { EstadoKpi } from '@/lib/kpis';
 import {
-  avisosVisibles, chipAtraso, conectorHecho, estadoNumeroFranja, hayEnlaces, indicePasoActual, textoMasAntiguo,
+  avisosVisibles, chipAtraso, claseChipAviso, conectorHecho, estadoNumeroFranja, hayEnlaces, indicePasoActual, textoMasAntiguo,
   textoDetalle, textoEstadoPaso, tituloPaso, tituloPunto,
 } from '@/lib/flujo';
 import type { ClaveIcono, EstadoPaso, OrientacionFlujo, PasoVista, TonoAviso, TonoPaso, VarianteFlujo } from './tipos';
@@ -123,7 +123,10 @@ const TONO_AVISO: Record<TonoAviso, string> = {
   gris: 'border-slate-200 bg-slate-100 text-slate-600',
 };
 
-/** r1 (C3): un chip de aviso nunca se parte: va en una línea, recortado, con el texto completo en su title. */
+/**
+ * r1 (C3): el chip-botón (ChipAviso con onClick) va en una línea, recortado, con el texto completo en su title. B4.1 (C4): los
+ * chips de los avisos de un paso toman sus clases de claseChipAviso (lib/flujo.js), que repite esta base sin ajustar.
+ */
 const CHIP = 'inline-block min-w-0 max-w-full truncate whitespace-nowrap rounded-full border align-middle font-semibold';
 
 /** Los círculos de la barra por estado (r1, M8: el número del pendiente en slate-500 y el del neutro, sobre slate-100, en slate-600). */
@@ -191,9 +194,10 @@ const alEnfocar = (e: FocusEvent<HTMLElement>) => {
   if (el.matches(':focus-visible')) el.scrollIntoView({ inline: 'nearest', block: 'nearest' });
 };
 
-function ChipAvisoInterno({ texto, tono, pequeno }: { texto: string; tono: TonoAviso; pequeno?: boolean }) {
+/** B4.1 (C4): con `ajustar` el chip sale entero (varias líneas dentro de su caja); sin él, en una línea y recortado (claseChipAviso). */
+function ChipAvisoInterno({ texto, tono, pequeno, ajustar }: { texto: string; tono: TonoAviso; pequeno?: boolean; ajustar?: boolean }) {
   return (
-    <span title={texto} className={`${CHIP} ${pequeno ? 'px-1.5 py-px text-[10px]' : 'px-2 py-0.5 text-[11px]'} ${TONO_AVISO[tono] ?? TONO_AVISO.gris}`}>
+    <span title={texto} className={`${claseChipAviso({ pequeno, ajustar })} ${TONO_AVISO[tono] ?? TONO_AVISO.gris}`}>
       {texto}
     </span>
   );
@@ -218,13 +222,15 @@ export function ChipAviso({ texto, tono, onClick }: { texto: string; tono: TonoA
 }
 
 /**
- * Los avisos de un paso (avisosVisibles: con estadoConteos 'error' ninguno, r2 M1): cada chip en una línea, dentro del
- * ancho de su caja. `clases` trae el display (y sus variantes) y el ancho: en la caja de la franja, `w-0 min-w-full`
- * (r2: los chips no aportan al ancho intrínseco de la caja, así el truncate recorta y las 5 cajas caben).
+ * Los avisos de un paso (avisosVisibles: con estadoConteos 'error' ninguno, r2 M1): cada chip dentro del ancho de su
+ * caja, en una línea o, con `ajustar` (B4.1, C4: la caja de la franja), entero en varias líneas. `clases` trae el display
+ * (y sus variantes) y el ancho: en la caja de la franja, `w-0 min-w-full` (r2: los chips no aportan al ancho intrínseco
+ * de la caja, así las 5 cajas caben y el chip se parte dentro del ancho de la suya).
  */
-function AvisosDelPaso({ avisos, pequeno, estadoConteos, clases }: {
+function AvisosDelPaso({ avisos, pequeno, ajustar, estadoConteos, clases }: {
   avisos: PasoVista['avisos'];
   pequeno?: boolean;
+  ajustar?: boolean;
   estadoConteos?: EstadoKpi;
   clases: string;
 }) {
@@ -232,7 +238,7 @@ function AvisosDelPaso({ avisos, pequeno, estadoConteos, clases }: {
   if (!lista.length) return null;
   return (
     <span className={`flex-wrap gap-1 ${clases}`}>
-      {lista.map((a, i) => <ChipAvisoInterno key={`${a.texto}-${i}`} texto={a.texto} tono={a.tono} pequeno={pequeno} />)}
+      {lista.map((a, i) => <ChipAvisoInterno key={`${a.texto}-${i}`} texto={a.texto} tono={a.tono} pequeno={pequeno} ajustar={ajustar} />)}
     </span>
   );
 }
@@ -418,7 +424,7 @@ function PasosBanner({
                   </span>
                 ) : null}
                 {detalle && !compacto ? <span className={`${SOLO_CAJA} text-[11px] text-slate-600`}>{detalle}</span> : null}
-                {!compacto ? <AvisosDelPaso avisos={paso.avisos} estadoConteos={estadoConteos} clases="hidden w-0 min-w-full @2xl/flujo:flex" /> : null}
+                {!compacto ? <AvisosDelPaso avisos={paso.avisos} estadoConteos={estadoConteos} ajustar clases="hidden w-0 min-w-full @2xl/flujo:flex" /> : null}
                 {antiguedad && !compacto ? <span className={`${SOLO_CAJA} text-[11px] text-slate-600`}>{antiguedad}</span> : null}
                 {paso.esEste ? (
                   <span className="inline-flex shrink-0 items-center rounded-full bg-indigo-600 px-1.5 py-px text-[10px] font-bold text-white">

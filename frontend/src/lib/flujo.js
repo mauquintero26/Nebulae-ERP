@@ -479,6 +479,25 @@ export function avisosVisibles(avisos, { estadoConteos } = {}) {
   return avisos.filter((a) => esMapa(a) && textoLimpio(a.texto) !== '');
 }
 
+/** Las clases del chip de aviso: en una línea, recortado (la base de CHIP en components/flujo/PasosFlujo.tsx), o ajustado. */
+const CHIP_AVISO_RECORTADO = 'inline-block min-w-0 max-w-full truncate whitespace-nowrap rounded-full border align-middle font-semibold';
+const CHIP_AVISO_AJUSTADO = 'inline-block min-w-0 max-w-full whitespace-normal break-words rounded-lg border text-left align-middle font-semibold';
+
+/**
+ * B4.1 T10 (C4): las clases de un chip de aviso de un paso (sin el tono, que pone PasosFlujo).
+ *  - Sin `ajustar`, la de siempre: en una línea y recortado, con el texto completo en el title (la barra de los documentos).
+ *  - Con `ajustar`, el texto sale entero: se parte en varias líneas dentro del ancho de su caja (las cajas de la franja;
+ *    a 1280 y 1366 px con el menú abierto los avisos se recortaban).
+ *  - El tamaño: `pequeno` (la barra) o el normal.
+ * La base sin ajustar repite la de CHIP (el chip-botón de PasosFlujo, que no se ajusta): la guarda de test_flujo.mjs fija las dos.
+ * @param {{pequeno?: boolean, ajustar?: boolean}} [opciones]
+ * @returns {string}
+ */
+export function claseChipAviso({ pequeno = false, ajustar = false } = {}) {
+  const base = ajustar ? CHIP_AVISO_AJUSTADO : CHIP_AVISO_RECORTADO;
+  return `${base} ${pequeno ? 'px-1.5 py-px text-[10px]' : 'px-2 py-0.5 text-[11px]'}`;
+}
+
 /**
  * El estado de BannerFlujo a partir de lo que trae useResumenFlujo (r1, M1 y M5):
  *  - conError: hay un error, o se está reintentando después de uno (`huboError`, lo que la franja vio en el render
