@@ -24,6 +24,8 @@ class Supplier(Base):
     city           = Column(String(100), nullable=True)
     country        = Column(String(100), nullable=True, default="Colombia")
     payment_terms  = Column(String(100), nullable=True)
+    currency       = Column(String(3), nullable=True)
+    lead_time_days = Column(Integer, nullable=True)
     is_active      = Column(Boolean, default=True)
     notes          = Column(Text, nullable=True)
     created_at     = Column(DateTime, default=_now)
