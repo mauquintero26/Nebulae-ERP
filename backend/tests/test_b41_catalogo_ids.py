@@ -142,3 +142,28 @@ def test_la_url_vieja_de_una_fila_sku_ya_no_abre_otro_producto(app_client, db, w
         assert app_client.get(f"{CATALOGO}/{ident}").status_code == 404, ident     # antes: el Product con ese id o 404
     assert app_client.get(f"{CATALOGO}/{-t.p2.id}").json()["data"]["sku"] == t.p2.sku
 
+
+# ─── P27: la tienda heredada ─────────────────────────────────────────────────────────────────────────────────────────
+
+def test_con_sesion_un_sku_con_espejo_no_sale_como_fila_del_erp(app_client, db, warehouse, monkeypatch, admin_token):
+    """P27 (1): con sesión, la rama heredada sin offset también descarta el SKU con CUALQUIER espejo (como el anónimo y como
+    la rama paginada): la nevera solo sale como su espejo m1, nunca como la fila del ERP."""
+    monkeypatch.setenv("CATALOGO_LECTURA", "legacy")
+    t = _Catalogo(db, warehouse)
+    db.execute(text("UPDATE ecommerce_products SET publicado_web = FALSE WHERE id = :i"), {"i": t.m1}); db.commit()
+    for params, cuantas in (({}, 1), ({"publicado": "true", "limit": 50}, 0), ({"offset": 0}, 1)):
+        filas = [x for x in _ok(app_client, CATALOGO, admin_token, search=t.s, **params)["data"] if x["sku"] == t.p1.sku]
+        assert [x["id"] for x in filas] == [t.m1] * cuantas, (params, filas)
+
+
+def test_un_sku_sin_espejo_respeta_la_categoria_y_la_publicacion(app_client, db, warehouse, monkeypatch, admin_token):
+    """P27 (2): el auto (p2, Cat-C, sin espejo) ya no sale en todas las categorías ni con publicado=false."""
+    monkeypatch.setenv("CATALOGO_LECTURA", "legacy")
+    t = _Catalogo(db, warehouse)
+    for token in (None, admin_token):
+        for extra in ({}, {"offset": 0}, {"publicado": "true", "limit": 50}):
+            de_a = _nombres(_ok(app_client, CATALOGO, token, search=t.s, categoria=f"Cat-A-{t.s}", **extra))
+            de_c = _nombres(_ok(app_client, CATALOGO, token, search=t.s, categoria=f"Cat-C-{t.s}", **extra))
+            assert t.nombres["auto"] not in de_a and t.nombres["auto"] in de_c, (token is not None, extra, de_a, de_c)
+    for extra in ({}, {"offset": 0}):
+        assert _nombres(_ok(app_client, CATALOGO, admin_token, search=t.s, publicado="false", **extra)) == [t.nombres["h2"]], extra

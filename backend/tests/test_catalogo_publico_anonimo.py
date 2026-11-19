@@ -167,8 +167,8 @@ def test_lista_anonima_solo_trae_publicados_y_con_sesion_trae_todo(app_client, d
         assert _ok(app_client, CATALOGO, search=t.s, limit=0, offset=0)["total"] == 3, rama
         con_sesion = _ok(app_client, CATALOGO, admin_token, search=t.s, orden="nombre")
         assert _nombres(con_sesion) == [n["auto"], n["h1"], n["h2"], n["nevera"]], rama
-        assert _nombres(_ok(app_client, CATALOGO, admin_token, search=t.s, publicado="false", offset=0)) == (
-            [n["h2"]] if rama == "canonico" else [n["h2"], n["auto"]]), rama
+        # B4.1 (P27, H2): en las dos ramas solo h2 (antes la heredada traía también el auto, un SKU sin espejo)
+        assert _nombres(_ok(app_client, CATALOGO, admin_token, search=t.s, publicado="false", offset=0)) == [n["h2"]], rama
         # un token que no es de un usuario ERP vale como sin sesión
         resp = _obtener(app_client, CATALOGO, "no-es-un-token", search=t.s, orden="nombre")
         assert resp.status_code == 200 and n["h2"] not in _nombres(resp.json()), rama
@@ -188,7 +188,9 @@ def _despublicar_la_nevera(db, t):
 def test_un_sku_con_espejo_despublicado_no_sale_sin_sesion(app_client, db, warehouse, monkeypatch, admin_token):
     """r1 (C1): en la rama heredada sin offset (la de la tienda en producción), el SKU cuyo espejo está despublicado
     volvía a salir como fila propia con publicado_web: True. Sin sesión, un SKU con CUALQUIER espejo se descarta (el espejo
-    publicado sale como su propia fila). Con sesión, como hoy (con publicado=true el SKU sale como fila del ERP, BASE)."""
+    publicado sale como su propia fila). B4.1 (P27, H7): con sesión también (antes, con publicado=true el SKU salía como
+    fila del ERP, BASE); con sesión y sin filtro de publicación la nevera sale como su espejo despublicado
+    (test_b41_catalogo_ids.test_con_sesion_un_sku_con_espejo_no_sale_como_fila_del_erp)."""
     t = _Catalogo(db, warehouse)
     n = t.nombres
     _despublicar_la_nevera(db, t)

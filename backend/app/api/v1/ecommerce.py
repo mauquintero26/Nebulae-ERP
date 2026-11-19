@@ -419,13 +419,18 @@ def _union_catalogo_canonico(search, categoria, publicado) -> tuple:
 
 def _union_catalogo_heredado(search, categoria, publicado) -> tuple:
     """(SQL, parámetros) de la subconsulta PAGINADA de la rama heredada (con offset u orden): las filas de ecommerce_products
-    (con los filtros de hoy; su stock es el real si el SKU existe en el ERP) y los SKU del ERP que no tienen espejo allí
-    (filtrados solo por la búsqueda: SKU o nombre). Un producto, una fila; es otro universo que _catalogo_heredado_de_hoy."""
+    (con los filtros de hoy; su stock es el real si el SKU existe en el ERP) y los SKU del ERP que no tienen espejo allí,
+    filtrados por la búsqueda (SKU o nombre) y, B4.1 (P27), por la categoría de su producto; con publicado=false, ninguno (un
+    SKU sin espejo cuenta como publicado). Un producto, una fila; es otro universo que _catalogo_heredado_de_hoy."""
     params: dict = {}
     ep = _filtros_de_ecommerce_products("ep", search, categoria, publicado, params)
     extra = ["NOT EXISTS (SELECT 1 FROM ecommerce_products e2 WHERE e2.sku = ps.sku)"]
     if search:
         extra.append("(ps.sku ILIKE :s OR pr.name ILIKE :s)")
+    if categoria:
+        extra.append("ca.name ILIKE :c")   # :c ya lo puso _filtros_de_ecommerce_products
+    if publicado is False:
+        extra.append("FALSE")
     sql = (
         f"SELECT {GRUPO_PRIMERO} AS grupo, ep.id AS fila_id, ep.nombre AS nombre, ep.sku AS sku, ep.categoria AS categoria, "
         f"COALESCE(ep.precio_venta, 0) AS precio, "
@@ -1427,20 +1432,27 @@ def _filas_heredadas_de_hoy(db: Session, search, categoria, publicado, limit: in
     return filas, total, params, espejo
 
 
-def _skus_heredados_de_base(db: Session, search, limit: int) -> list:
-    """Los SKU del ERP de la rama heredada de hoy: la MISMA consulta de BASE, sin ORDER BY (el orden es el que dé PostgreSQL,
-    como en BASE; no está definido) y con el LIMIT antes de cualquier descarte: `db.query(ProductSKU).join(Product)` con el
-    filtro de la búsqueda (SKU o nombre)."""
+def _skus_heredados_de_base(db: Session, search, categoria, publicado, limit: int) -> list:
+    """Los SKU del ERP de la rama heredada de hoy: la consulta de BASE, sin ORDER BY (el orden es el que dé PostgreSQL, como
+    en BASE; no está definido) y con el LIMIT antes de cualquier descarte: `db.query(ProductSKU).join(Product)` con el
+    filtro de la búsqueda (SKU o nombre). B4.1 (P27): también con la categoría de su producto (antes de LIMIT) y ninguno con
+    publicado=false (un SKU sin espejo sale con publicado_web True); BASE los traía en cualquier categoría y publicación."""
+    if publicado is False:
+        return []
     sku_q = db.query(ProductSKU).join(Product, ProductSKU.product_id == Product.id)
     if search:
         like = f"%{search}%"
         sku_q = sku_q.filter(ProductSKU.sku.ilike(like) | Product.name.ilike(like))
+    if categoria:
+        sku_q = sku_q.outerjoin(Category, Category.id == Product.category_id).filter(
+            Category.name.ilike(f"%{categoria}%"))
     return sku_q.limit(limit).all()
 
 
 def _skus_con_espejo_que_pasa(db: Session, skus: list, params: dict, espejo: list) -> set:
     """Lo ÚNICO nuevo de la rama de hoy (ruling de r1): de los SKU ya traídos, los que tienen en ecommerce_products un espejo que
-    pasa los mismos filtros (categoría, publicado y búsqueda). Una consulta; el descarte se hace en Python, sin cambiar el orden."""
+    pasa los mismos filtros (categoría, publicado y búsqueda). Una consulta; el descarte se hace en Python, sin cambiar el orden.
+    B4.1 (P27): _catalogo_heredado_de_hoy la llama sin filtros ({} y []): cuenta cualquier espejo, con sesión o sin ella."""
     codigos = [k.sku for k in skus if k.sku]
     if not codigos:
         return set()
@@ -1459,22 +1471,25 @@ def _catalogo_heredado_de_hoy(db: Session, search, categoria, publicado, limit: 
     publicado=true&limit=50): doble fuente, cada una con su LIMIT. Primero las filas de ecommerce_products (por nombre) y
     detrás los SKU del ERP, traídos con la misma consulta de BASE (sin ORDER BY: el mismo orden de BASE, no está definido).
     total = las filas de ecommerce_products + los SKU devueltos: NO es exacto, como en BASE.
-    Única diferencia con BASE, por el ruling de r1: BASE descartaba un SKU si su espejo estaba entre las filas ya devueltas
-    (limitadas); aquí se descarta si el espejo pasa los filtros, aunque haya quedado fuera por el LIMIT de ecommerce_products.
+    Diferencias con BASE: BASE descartaba un SKU si su espejo estaba entre las filas ya devueltas (limitadas); el ruling de
+    r1 lo descartaba si el espejo pasaba los filtros, aunque hubiera quedado fuera por el LIMIT de ecommerce_products.
     El try de BASE (un error responde `{status: success, data: [], error}`) envuelve las consultas y la serialización de las
     filas de ecommerce_products y de los SKU, que son código de BASE; solo queda fuera _skus_con_espejo_que_pasa, que es nuevo.
-    B4 T24 r1, solo para el anónimo (la tienda): (C1) se descarta el SKU con CUALQUIER espejo en ecommerce_products, sin
-    mirar los filtros (el espejo publicado sale como su propia fila; uno despublicado ya no se cuela como el SKU con
-    publicado_web: True), como la rama con offset (NOT EXISTS); y (m10) el error es ERROR_CATALOGO_PUBLICO, no str(e)."""
+    B4 T24 r1, para el anónimo (la tienda): (C1) se descarta el SKU con CUALQUIER espejo en ecommerce_products, sin mirar
+    los filtros (el espejo publicado sale como su propia fila; uno despublicado ya no se cuela como el SKU con
+    publicado_web: True), como la rama con offset (NOT EXISTS); y (m10) el error es ERROR_CATALOGO_PUBLICO, no str(e).
+    B4.1 (P27): (1) el descarte de C1 vale también con sesión (antes, con publicado=true, el SKU de un espejo despublicado
+    salía como fila del ERP), así que el de r1 ya no se usa; (2) los SKU sin espejo respetan la categoría y publicado=false
+    no trae ninguno (_skus_heredados_de_base)."""
     def _error(e):
         return {"status": "success", "total": 0, "data": [], "error": ERROR_CATALOGO_PUBLICO if anonimo else str(e)}
     try:
-        filas, total, params, espejo = _filas_heredadas_de_hoy(db, search, categoria, publicado, limit)
+        filas, total, _, _ = _filas_heredadas_de_hoy(db, search, categoria, publicado, limit)
         data = [_serialize_catalogo_item_heredado(db, r) for r in filas]
-        skus = _skus_heredados_de_base(db, search, limit)
+        skus = _skus_heredados_de_base(db, search, categoria, publicado, limit)
     except Exception as e:
         return _error(e)
-    con_espejo = _skus_con_espejo_que_pasa(db, skus, {}, []) if anonimo else _skus_con_espejo_que_pasa(db, skus, params, espejo)
+    con_espejo = _skus_con_espejo_que_pasa(db, skus, {}, [])   # B4.1 (P27): cualquier espejo, con sesión o sin ella
     try:
         propios = [_serialize_catalogo_item_sku_heredado(db, k) for k in skus if k.sku not in con_espejo]
     except Exception as e:

@@ -511,8 +511,9 @@ def test_catalogo_filtros_de_hoy_y_errores(app_client, db, warehouse, monkeypatc
     monkeypatch.setenv("CATALOGO_LECTURA", "legacy")
     # Rama heredada SIN offset ni orden (como llama hoy la tienda publica): la respuesta es la de BASE. Las filas de
     # ecommerce_products con sus filtros (por nombre) y, detras, los SKU del ERP (el LIMIT primero, en el orden que da
-    # PostgreSQL sin ORDER BY, como BASE) cuyo espejo NO pasa los mismos filtros (un SKU cuyo espejo quedo filtrado sale
-    # igual como fila del ERP); el que tiene espejo que pasa, no se repite. (T20 r1 I4, r2)
+    # PostgreSQL sin ORDER BY, como BASE) sin espejo. (T20 r1 I4, r2) B4.1 (P27): un SKU con CUALQUIER espejo no sale
+    # como fila del ERP, con sesion o sin ella (antes, uno cuyo espejo quedo filtrado salia igual), y los SKU sin espejo
+    # respetan la categoria y no salen con publicado=false.
     # B4 T24 (B41): el orden de los SKU del ERP NO esta definido (el orden fisico del heap, que cambia con el espacio libre
     # de la base compartida): antes se afirmaba «la nevera antes que el auto» y la prueba fallaba a veces. Ahora la
     # respuesta se compara con BASE (_base_con_ruling, que corre la misma consulta) y los nombres de los SKU, sin orden.
@@ -533,22 +534,24 @@ def test_catalogo_filtros_de_hoy_y_errores(app_client, db, warehouse, monkeypatc
         return nombres[:n_ep], sorted(nombres[n_ep:])
 
     cuerpo = como_base(categoria=f"Cat-B-{t.s}")
-    assert partes(cuerpo, 1) == ([n["h1"]], sorted([n["nevera"], n["auto"]]))
+    # B4.1 (P27, H1): ningun SKU es de Cat-B (antes salian la nevera y el auto, de Cat-A y Cat-C)
+    assert partes(cuerpo, 1) == ([n["h1"]], [])
     cuerpo = como_base(publicado=False)
-    assert partes(cuerpo, 1) == ([n["h2"]], sorted([n["nevera"], n["auto"]])) and cuerpo["total"] == 3   # el espejo de la nevera esta publicado
+    # B4.1 (P27, H1): con publicado=false no sale ningun SKU (antes la nevera y el auto, total 3)
+    assert partes(cuerpo, 1) == ([n["h2"]], []) and cuerpo["total"] == 1
     cuerpo = como_base(publicado=True, limit=50)
     assert partes(cuerpo, 2) == ([n["h1"], n["nevera"]], [n["auto"]]) and cuerpo["total"] == 3   # la nevera una sola vez
     cuerpo = como_base()
     assert partes(cuerpo, 3) == ([n["h1"], n["h2"], n["nevera"]], [n["auto"]]) and cuerpo["total"] == 4
     # cada fuente con su LIMIT, y el LIMIT de los SKU ANTES del NOT EXISTS (como BASE): con limit=1 el unico SKU es el
-    # primero que de PostgreSQL; si es la nevera se descarta porque su espejo pasa los filtros y el auto no entra a ocupar
-    # su lugar. (La unica diferencia con BASE, por el ruling de r1: BASE la habria devuelto porque su espejo quedo fuera
-    # del LIMIT de ecommerce_products.)
+    # primero que de PostgreSQL; si es la nevera se descarta porque tiene espejo (B4.1, P27: cualquier espejo) y el auto no
+    # entra a ocupar su lugar. (BASE la habria devuelto porque su espejo quedo fuera del LIMIT de ecommerce_products.)
     cuerpo = como_base(limit=1)
     assert _nombres(cuerpo)[0] == n["h1"] and _nombres(cuerpo)[1:] in ([], [n["auto"]])
     # Rama heredada CON offset u orden: pagina exacto, una fila por producto (el espejo filtrado no reaparece como SKU).
     cuerpo = _ok(app_client, CATALOGO, admin_token, search=t.s, publicado="false", offset=0)
-    assert _nombres(cuerpo) == [n["h2"], n["auto"]] and cuerpo["total"] == 2
+    # B4.1 (P27, H1): con publicado=false tampoco sale el auto (SKU sin espejo; antes [h2, auto], total 2)
+    assert _nombres(cuerpo) == [n["h2"]] and cuerpo["total"] == 1
     for rama in _ramas(monkeypatch):
         casos = [
             ({"orden": "x"}, "No se puede ordenar por «x»."),
