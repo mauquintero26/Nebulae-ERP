@@ -180,8 +180,9 @@ function CeldaAccion({ p }: { p: FilaTransito }) {
 
 /**
  * B4 T16A, la tabla (TABLA-compras punto 8; R26, D41): Pedido de compra (clave, fija a la izquierda, la flexible), Cliente /
- * PVEN y Tipo (ocultas por defecto), Etapa actual, Progreso, Entrega est., Monto y Acción (fija a la derecha). A 1024 px con
- * el menú abierto la caja de la tabla deja 704 px: 120 + 124 + 104 + 104 + 108 + 112 = 672 (la flexible toma el resto). B4 T24 f3
+ * PVEN (visible desde B4.1 P21) y Tipo (oculta por defecto), Etapa actual, Progreso, Entrega est., Monto y Acción (fija a la
+ * derecha). A 1024 px con el menú abierto la caja de la tabla deja 704 px: 120 + 100 + 104 + 88 + 92 + 88 + 112 = 704 (B4.1
+ * P21: Etapa 124 → 104, Progreso 104 → 88, Entrega 104 → 92 y Monto 108 → 88 para que quepa Cliente / PVEN). B4 T24 f3
  * (el anillo de f1 r3): Acción pasa de 96 a 112 px: «Completar» (85 px) no cabía en 72 útiles y su anillo de foco se cortaba. Una
  * constante (estable, D40).
  */
@@ -189,18 +190,18 @@ const COLUMNAS_TABLA_TRANSITO: ColumnaTabla<FilaTransito>[] = [
   { id: 'pedido', titulo: 'Pedido de compra', ancho: 120, clave: true, fija: 'izquierda', flexible: true, ordenable: 'numero',
     titleCelda: (p) => [p.numero, p.supplier_name || 'Sin proveedor', p.ven_numero].filter(Boolean).join(' · '),
     celda: (p) => <CeldaPedido p={p} /> },
-  { id: 'cliente', titulo: 'Cliente / PVEN', ancho: 100, ocultaPorDefecto: true, titleCelda: (p) => p.ven_numero || 'Sin pedido de venta',
+  { id: 'cliente', titulo: 'Cliente / PVEN', ancho: 100, titleCelda: (p) => p.ven_numero || 'Sin pedido de venta',
     celda: (p) => <CeldaCliente p={p} /> },
   { id: 'tipo', titulo: 'Tipo', ancho: 80, ocultaPorDefecto: true,
     celda: (p) => <span className="text-xs font-bold text-slate-500">{p.tipo_envio === 'directo' ? 'Directo' : 'Casillero'}</span> },
-  { id: 'etapa', titulo: 'Etapa actual', ancho: 124, clave: true,
+  { id: 'etapa', titulo: 'Etapa actual', ancho: 104, clave: true,
     titleCelda: (p) => { const e = etapaActual(p) as EtapaEnvio | null; return e ? tituloDeEtapa(e) : infoEstadoPec(p.estado).label; },
     celda: (p) => <CeldaEtapa p={p} /> },
-  { id: 'progreso', titulo: 'Progreso', ancho: 104, titleCelda: (p) => avanceTransito(p).texto, celda: (p) => <CeldaProgreso p={p} /> },
-  { id: 'entrega', titulo: 'Entrega est.', ancho: 104, ordenable: 'entrega',
+  { id: 'progreso', titulo: 'Progreso', ancho: 88, titleCelda: (p) => avanceTransito(p).texto, celda: (p) => <CeldaProgreso p={p} /> },
+  { id: 'entrega', titulo: 'Entrega est.', ancho: 92, ordenable: 'entrega',
     titleCelda: (p) => [textoDia(p.fecha_entrega_estimada), textoEntregaTransito(p)].filter(Boolean).join(' · '),
     celda: (p) => <CeldaEntrega p={p} /> },
-  { id: 'monto', titulo: 'Monto', ancho: 108, alinear: 'derecha', ordenable: 'monto', titleCelda: (p) => fCOP(p.total_cop),
+  { id: 'monto', titulo: 'Monto', ancho: 88, alinear: 'derecha', ordenable: 'monto', titleCelda: (p) => fCOP(p.total_cop),
     celda: (p) => <CeldaMonto monto={p.total_cop} /> },
   { id: 'accion', titulo: 'Acción', ancho: 112, clave: true, fija: 'derecha', alinear: 'centro', celda: (p) => <CeldaAccion p={p} /> },
 ];

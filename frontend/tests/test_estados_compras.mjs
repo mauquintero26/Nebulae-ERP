@@ -18,6 +18,7 @@ import {
   ESTADOS_STOCK, COLUMNAS_STOCK,
 } from '../src/lib/estados-compras.js';
 import { diaColombia } from '../src/lib/fechas-colombia.js';
+import { formatoPesos } from '../src/lib/pesos.js';
 // B4 T14: lo nuevo del Hub de Compras por el espacio de nombres, para que la falta de una función no tape los demás rojos.
 import * as ec from '../src/lib/estados-compras.js';
 import { estadoTablaInicial, queryListado } from '../src/lib/tabla.js';
@@ -1221,7 +1222,7 @@ console.log('--- TEST 31 (B4 T16A): Tránsito (compras/transito/page.tsx) cablea
   // R26 (704 px a 1024): las visibles caben.
   const visibles = anchoVisible(pag, 'const COLUMNAS_TABLA_TRANSITO');
   assert.ok(visibles > 0 && visibles <= 704, `R26: las columnas visibles suman ${visibles} px (caja de 704)`);
-  assert.match(pag, /id: 'cliente'[^\n]*ocultaPorDefecto: true/);
+  assert.ok(!/id: 'cliente'[^\n]*ocultaPorDefecto: true/.test(pag), 'B4.1 (P21): Cliente / PVEN visible por defecto');
   assert.match(pag, /id: 'tipo'[^\n]*ocultaPorDefecto: true/);
   // «Solo vencidos» = semaforo=vencidos: UNA sola función para el botón, la tarjeta y la franja (R5, RP92).
   assert.match(pag, /const alFiltrarSemaforo = \(f: FiltroSemaforo\) => despachar\(accionSemaforoCompras\(estado, f, opcionesEstadosPec\)\);/);
@@ -1446,7 +1447,9 @@ console.log('--- TEST 33 (B4 T16A, TABLA-compras punto 12; RP30): el conteo de u
   }
   assert.match(cont, /const isEditable = data\?\.estado === 'BORRADOR';/, 'solo un BORRADOR se cuenta');
   assert.match(cont, /if \(!isEditable\) return;\s*setItems\(prev => prev\.map\(\(it, i\) => \(i === idx \? \{ \.\.\.it, qty_recibida: val \} : it\)\)\);/, 'el conteo sigue editable solo en BORRADOR');
-  assert.equal((cont.match(/disabled=\{!control\?\.editable\}/g) ?? []).length, 2, 'los dos campos (cantidad y observaciones) se apagan cuando no es editable');
+  // B4.1 (P20): las observaciones también se apagan en una recepción heredada (no guarda observaciones por línea).
+  assert.equal((cont.match(/disabled=\{!control\?\.editable\}/g) ?? []).length, 1, 'el campo de cantidad se apaga cuando no es editable');
+  assert.equal((cont.match(/disabled=\{!control\?\.editable \|\| control\.heredada\}/g) ?? []).length, 1, 'las observaciones, también si es heredada');
   // B4 T24 f3 (FINAL-C4-f, D27): la cantidad se lee con la lib, sin truncar (antes parseInt); la lib la valida antes de mandar.
   assert.match(cont, /onChange=\{\(e\) => control\?\.actualizar\(l\.idx, leerCantidadConteo\(e\.target\.value\)\)\}/, 'y escribe en la línea de esa fila');
   assert.match(cont, /aria-label=\{`Cantidad recibida de \$\{l\.nombre\}`\}/);
@@ -3250,7 +3253,7 @@ console.log('--- B4 T24 f3 (FINAL-C4-f): el conteo con el PATCH por línea, vali
   assert.match(cont, /\{conteo\.contar && \(\s*<Button variant="secondary" icon=\{Save\}[^>]*>\s*Guardar Borrador/);
   assert.match(cont, /\{conteo\.validar && \(\s*<Button color="teal" icon=\{PackageCheck\}[^>]*>\s*Cerrar y Validar Conteo/);
   assert.match(cont, /\{conteo\.texto && <span role="status"[^>]*>\{conteo\.texto\}<\/span>\}/, 'COMPRAS (o una heredada): el texto de solo lectura');
-  assert.match(cont, /editable: conteo\.contar, actualizar: updateReceived \}\), \[conteo\.contar, updateReceived\]\)/, 'los campos, editables solo para quien cuenta');
+  assert.match(cont, /editable: conteo\.contar, heredada, actualizar: updateReceived, actualizarObservaciones: updateObservaciones,\s*\}\), \[conteo\.contar, heredada, updateReceived, updateObservaciones\]\)/, 'los campos, editables solo para quien cuenta (B4.1 P20: más las observaciones)');
   trae(cont, 'const puedeBodega = isEditable && accesoRecepciones(rol).bodega;', 'la bodega receptora: el PATCH de la recepción (ADMIN y COMPRAS)');
   assert.match(cont, /\{puedeBodega \? \(\s*<select/);
   trae(cont, 'disabled={!conteo.validar}', 'las notas van con la confirmación');
@@ -3325,7 +3328,7 @@ console.log('--- B4 T24 f3 (el anillo recortado, duda 1 y m8 de f1 r3): «Comple
   // Tránsito: la columna Acción pasa de 96 a 112 px («Completar», 85 px, no cabía en 72 útiles); las visibles siguen en la caja de 704.
   const tr = leerFuente('app/dashboard/compras/transito/page.tsx');
   trae(tr, "{ id: 'accion', titulo: 'Acción', ancho: 112, clave: true, fija: 'derecha', alinear: 'centro', celda: (p) => <CeldaAccion p={p} /> },");
-  assert.equal(anchoVisible(tr, 'const COLUMNAS_TABLA_TRANSITO'), 672, 'R26: 120 + 124 + 104 + 104 + 108 + 112');
+  assert.equal(anchoVisible(tr, 'const COLUMNAS_TABLA_TRANSITO'), 704, 'B4.1 (P21): 120 + 100 + 104 + 88 + 92 + 88 + 112');
   // Recepciones: la columna no se ensancha (696 + 20 pasaría de 704): la carga de «Confirmar» no ensancha el botón; el spinner va encima del
   // texto, que se oculta sin dejar de ocupar su lugar (sin carga, la celda cabe en sus 132 px útiles).
   const rec = leerFuente('app/dashboard/compras/recepciones/page.tsx');
@@ -4343,6 +4346,46 @@ console.log('--- B4 T24 f3 r3 (C1 = C3, C2 = C4, C, m4, m6, m9, m11): el aviso n
   const pie = readFileSync(new URL('../src/components/ui/Drawer.tsx', import.meta.url), 'utf8');
   assert.match(pie, /flex flex-wrap items-center justify-between gap-3 \[&>:not\(:first-child\)\]:ml-auto`\}>/);
   assert.ok(!/\[&>:last-child\]:ml-auto/.test(pie), 'sin la regla que movía también un pie de un solo elemento');
+}
+
+console.log('--- B4.1 T7 (P18, P19, P20, P21): Compras ---');
+{
+  const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // P18
+  const hub = leer('app/dashboard/compras/page.tsx');
+  assert.ok(hub.includes("{ id: 'en_bodega', etiqueta: 'En bodega', conteo: conteos?.en_bodega ?? null },"), 'P18');
+  // P19
+  assert.equal(ec.alternarAgruparMes('atencion'), '-compra');
+  assert.equal(ec.alternarAgruparMes(null), '-compra');
+  assert.equal(ec.alternarAgruparMes('-compra'), 'atencion');
+  assert.equal(ec.alternarAgruparMes('compra'), 'atencion');
+  const filas = [{ fecha_compra: '2026-11-03T15:00:00', total_cop: 1_000_000 }, { fecha_compra: '2026-11-20T12:00:00', total_cop: 250_000 },
+                 { fecha_compra: '2026-10-31T12:00:00', total_cop: 9 }, { fecha_compra: null, total_cop: 5 }];
+  assert.equal(ec.textoSeparadorMesPec('2026-11', filas), `Noviembre de 2026 · 2 en esta página · ${formatoPesos(1_250_000)}`);
+  assert.equal(ec.textoSeparadorMesPec('sin_fecha', filas), `Sin fecha de compra · 1 en esta página · ${formatoPesos(5)}`);
+  for (const ruta of ['app/dashboard/compras/page.tsx', 'app/dashboard/compras/pedidos/page.tsx']) {
+    const f = leer(ruta);
+    assert.match(f, /aria-pressed=\{porMes\}/, `${ruta}: el botón «Agrupar por mes»`);
+    assert.match(f, /despachar\(\{ tipo: 'orden', valor: alternarAgruparMes\(estado\.orden\) \}\)/, ruta);
+    assert.match(f, /textoSeparadorMesPec\(grupo, listado\.filas\)/, ruta);
+  }
+  // P20
+  const servidor = [{ grl_id: 1, qty_recibida: 3, qty_rechazada: 0, qty_cuarentena: 0, observaciones: 'Caja rota' }];
+  const cuerpo = (n) => ({ quantity_received: n, quantity_rejected: 0, quantity_quarantine: 0 });
+  assert.deepEqual(ec.peticionesConteo(servidor, [{ grl_id: 1, nombre: 'A', qty_recibida: 3, observaciones: ' Caja rota ' }]),
+    { error: null, peticiones: [] }, 'las mismas observaciones: nada');
+  assert.deepEqual(ec.peticionesConteo(servidor, [{ grl_id: 1, nombre: 'A', qty_recibida: 3, observaciones: 'Faltan 2' }]),
+    { error: null, peticiones: [{ grl_id: 1, cuerpo: { ...cuerpo(3), notes: 'Faltan 2' } }] });
+  assert.deepEqual(ec.peticionesConteo(servidor, [{ grl_id: 1, nombre: 'A', qty_recibida: 3, observaciones: '' }]),
+    { error: null, peticiones: [{ grl_id: 1, cuerpo: { ...cuerpo(3), notes: null } }] }, 'borrarlas también va');
+  const rec = leer('app/dashboard/compras/recepciones/[id]/page.tsx');
+  assert.match(rec, /value=\{l\.observaciones \?\? ''\}/, 'P20: el campo es controlado');
+  assert.match(rec, /maxLength=\{500\}/);
+  assert.ok(!/no se envía al confirmar/.test(rec), 'P20: el comentario viejo');
+  // P21
+  const tr = leer('app/dashboard/compras/transito/page.tsx');
+  assert.ok(!/id: 'cliente'[^\n]*ocultaPorDefecto: true/.test(tr), 'P21: Cliente / PVEN visible');
+  assert.equal(anchoVisible(tr, 'const COLUMNAS_TABLA_TRANSITO'), 704, 'P21: 120 + 100 + 104 + 88 + 92 + 88 + 112');
 }
 
 console.log('\nOK: test_estados_compras.mjs');
