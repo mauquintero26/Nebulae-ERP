@@ -2110,6 +2110,7 @@ def _snapshot_productos(gr_lines) -> list:
             "estado"        : "PENDIENTE" if grl.quantity_received is None else "PARCIAL",
             "po_line_id"    : grl.po_line_id,
             "grl_id"        : grl.id,
+            "observaciones" : grl.notes,
         }
         for grl in gr_lines
     ]
@@ -2139,6 +2140,22 @@ def _entero_sin_perdida(valor) -> Optional[int]:
         except ValueError:
             return None
     return None
+
+
+# B4.1 T5 (P20): las observaciones físicas del conteo, por línea (GoodsReceiptLine.notes).
+MAX_OBSERVACIONES_LINEA = 500
+
+
+def _observaciones_de_linea(body: dict):
+    """B4.1 T5 (P20): (vino, valor) de `notes` en el PATCH por línea. Se valida con _validar_texto_corto (422 en español);
+    se guarda recortado y '' queda en None. Si `notes` no viene, devuelve (False, None) y la línea no cambia."""
+    if "notes" not in body:
+        return False, None
+    valor = body["notes"]
+    _validar_texto_corto(valor, MAX_OBSERVACIONES_LINEA, "Las observaciones de la línea deben ser un texto.",
+                         "Las observaciones de la línea no pueden llevar caracteres de control.",
+                         f"Las observaciones de la línea pueden tener hasta {MAX_OBSERVACIONES_LINEA} caracteres.")
+    return True, ((valor.strip() or None) if valor is not None else None)
 
 
 def _cantidad_de_linea(body: dict, campo: str, nombre: str):
@@ -2552,6 +2569,7 @@ def update_grl(
 
     """
     cantidades = {campo: _cantidad_de_linea(body, campo, nombre) for campo, nombre in _CANTIDADES_DE_LINEA if campo in body}
+    trae_notas, notas = _observaciones_de_linea(body)    # B4.1 T5 (P20): también antes de leer con bloqueo
     gr = db.query(GoodsReceipt).filter(GoodsReceipt.id == eninv_id).with_for_update().first()
     if not gr:
         raise HTTPException(404, "Recepcion no encontrada")
@@ -2569,6 +2587,8 @@ def update_grl(
         grl.quantity_rejected = cantidades["quantity_rejected"] or 0
     if "quantity_quarantine" in cantidades:
         grl.quantity_quarantine = cantidades["quantity_quarantine"] or 0
+    if trae_notas:
+        grl.notes = notas
     db.flush()
     gr.productos = _snapshot_productos(db.execute(
         select(GoodsReceiptLine).where(GoodsReceiptLine.gr_id == eninv_id).order_by(GoodsReceiptLine.id)
@@ -2586,6 +2606,7 @@ def update_grl(
             "quantity_received": int(grl.quantity_received) if grl.quantity_received is not None else None,
             "quantity_rejected": int(grl.quantity_rejected or 0),
             "quantity_quarantine": int(grl.quantity_quarantine or 0),
+            "notes": grl.notes,
             "receipt_type": grl.receipt_type,
             "source": grl.source,
         }

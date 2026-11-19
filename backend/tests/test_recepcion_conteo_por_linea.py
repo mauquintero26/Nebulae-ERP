@@ -151,3 +151,31 @@ def test_el_patch_en_lote_lee_la_recepcion_con_bloqueo(app_client, db, admin_tok
     assert resp.status_code == 200, resp.text
     lecturas = [s for s in v.sentencias if s.lstrip().upper().startswith("SELECT") and "FROM goods_receipts" in s]
     assert lecturas and "FOR UPDATE" in lecturas[0].upper(), lecturas[:1]
+
+
+def test_las_observaciones_de_la_linea_se_guardan_y_vuelven_en_el_detalle(app_client, db, admin_token, bodega_token, pec_10u, sku):
+    rec = _recepcion(app_client, admin_token, pec_10u, sku)
+    uno = rec["productos"][0]
+    linea = f"{RECEPCIONES}/{rec['id']}/lineas/{uno['grl_id']}"
+    r = app_client.patch(linea, headers=_auth(bodega_token), json={"quantity_received": 7, "notes": "  Caja rota  "})
+    assert (r.status_code, r.json()["data"]["notes"]) == (200, "Caja rota"), r.text
+    assert _detalle(app_client, bodega_token, rec["id"])["productos"][0]["observaciones"] == "Caja rota"
+    app_client.patch(linea, headers=_auth(bodega_token), json={"quantity_received": 8})            # sin notes: no cambia
+    assert _detalle(app_client, bodega_token, rec["id"])["productos"][0]["observaciones"] == "Caja rota"
+    app_client.patch(linea, headers=_auth(bodega_token), json={"notes": "   "})
+    assert _detalle(app_client, bodega_token, rec["id"])["productos"][0]["observaciones"] is None
+
+
+def test_observaciones_de_la_linea_se_validan_sin_escribir(app_client, db, admin_token, bodega_token, pec_10u, sku, contador_sql):
+    """Review Focus 4."""
+    rec = _recepcion(app_client, admin_token, pec_10u, sku)
+    linea = f"{RECEPCIONES}/{rec['id']}/lineas/{rec['productos'][0]['grl_id']}"
+    for valor, texto in (("x" * 501, "Las observaciones de la línea pueden tener hasta 500 caracteres."),
+                         ("a\x07b", "Las observaciones de la línea no pueden llevar caracteres de control."),
+                         (5, "Las observaciones de la línea deben ser un texto.")):
+        with contador_sql.ventana() as v:
+            r = app_client.patch(linea, headers=_auth(bodega_token), json={"quantity_received": 9, "notes": valor})
+        assert (r.status_code, r.json()["detail"]) == (422, texto), repr(valor)
+        escrituras = [s for s in v.sentencias if s.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))]
+        assert escrituras == [], (repr(valor), escrituras)
+    assert _detalle(app_client, bodega_token, rec["id"])["productos"][0]["qty_recibida"] is None
