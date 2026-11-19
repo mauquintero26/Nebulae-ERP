@@ -115,8 +115,41 @@ def _supplier_dict(s: Supplier) -> dict:
         "payment_terms": s.payment_terms,
         "is_active": s.is_active,
         "notes": s.notes,
+        "currency": s.currency,
+        "lead_time_days": s.lead_time_days,
         "created_at": s.created_at.isoformat() if s.created_at else None,
     }
+
+
+# B4.1 T5 (P33): la moneda y el tiempo de entrega del proveedor.
+MONEDAS_PROVEEDOR = ("COP", "USD", "EUR")
+MAX_TIEMPO_ENTREGA_PROVEEDOR = 365
+TIEMPO_ENTREGA_INVALIDO = (f"El tiempo de entrega debe ser un número entero de días entre 0 y "
+                           f"{MAX_TIEMPO_ENTREGA_PROVEEDOR}.")
+
+
+def _moneda_proveedor(valor) -> Optional[str]:
+    """B4.1 T5 (P33): la moneda del proveedor, recortada y en mayúsculas, una de MONEDAS_PROVEEDOR. '' o None -> None;
+    si no, 422 en español."""
+    if valor is None:
+        return None
+    limpia = valor.strip().upper() if isinstance(valor, str) else valor
+    if limpia == "":
+        return None
+    if limpia not in MONEDAS_PROVEEDOR:
+        raise HTTPException(422, f"La moneda «{valor}» no es válida: usa COP, USD o EUR.")
+    return limpia
+
+
+def _tiempo_entrega_proveedor(valor) -> Optional[int]:
+    """B4.1 T5 (P33): el tiempo de entrega del proveedor: un entero sin pérdida (_entero_sin_perdida; un bool no vale)
+    entre 0 y 365 días, o None; si no, 422 en español."""
+    if valor is None:
+        return None
+    entero = _entero_sin_perdida(valor)
+    if entero is None or not 0 <= entero <= MAX_TIEMPO_ENTREGA_PROVEEDOR:
+        raise HTTPException(422, TIEMPO_ENTREGA_INVALIDO)
+    return entero
 
 
 def _casillero_dict(c: Casillero) -> dict:
@@ -414,6 +447,8 @@ def create_supplier(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, 
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="El campo 'name' es requerido para crear un proveedor.",
         )
+    moneda = _moneda_proveedor(body.get("currency"))
+    tiempo_entrega = _tiempo_entrega_proveedor(body.get("lead_time_days"))
     s = Supplier(
         name=name,
         reference=body.get("reference"),
@@ -425,6 +460,8 @@ def create_supplier(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, 
         country=body.get("country", "Colombia"),
         payment_terms=body.get("payment_terms"),
         notes=body.get("notes"),
+        currency=moneda,
+        lead_time_days=tiempo_entrega,
     )
     db.add(s)
     db.commit()
@@ -452,6 +489,13 @@ def update_supplier(supplier_id: int, body: dict, user: User = Depends(require_r
     s = db.query(Supplier).filter(Supplier.id == supplier_id).first()
     if not s:
         raise HTTPException(404, "Proveedor no encontrado")
+    # B4.1 T5 (P33): las dos claves nuevas se validan antes de escribir nada.
+    moneda = _moneda_proveedor(body["currency"]) if "currency" in body else None
+    tiempo_entrega = _tiempo_entrega_proveedor(body["lead_time_days"]) if "lead_time_days" in body else None
+    if "currency" in body:
+        s.currency = moneda
+    if "lead_time_days" in body:
+        s.lead_time_days = tiempo_entrega
     for k in ["name","reference","contact_name","phone","email","address","city","country","payment_terms","notes","is_active"]:
         if k in body:
             setattr(s, k, body[k])
