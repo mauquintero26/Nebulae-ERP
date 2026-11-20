@@ -97,6 +97,8 @@ migraciones (§4) y antes de la Comprobación.
 
    `--respaldo` va con una carpeta persistente que el usuario elija (no el disco efímero del contenedor): el JSON (id, numero, valor anterior) se escribe ANTES del UPDATE y es la única forma
    de deshacer. Una protegida en `--ids` aborta sin escribir.
+   Si `--aplicar` termina en «ABORTADO» porque una SC no coincidió (su vencimiento cambió desde que se listó), no se
+   escribió nada: se vuelve a correr `--listar` y se piden de nuevo los ids.
 
 3. **Cómo deshacerlo:** por cada fila del JSON de respaldo,
    `UPDATE customer_requests SET fecha_vencimiento = <valor_anterior> WHERE id = <id>;`

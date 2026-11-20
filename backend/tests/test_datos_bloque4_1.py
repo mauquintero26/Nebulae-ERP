@@ -386,3 +386,36 @@ def test_vencimientos_sc_aplicar_normaliza_con_respaldo(db, tmp_path):
     # idempotente: ya están a las 00:00
     assert "no está en el listado" in _error_de(db41.aplicar_vencimientos_sc, db=db, base=base, ids=[noche.id],
                                                carpeta_respaldo=tmp_path)
+
+
+def test_vencimientos_sc_microsegundos_que_terminan_en_cero(db, tmp_path):
+    """B4.1 residual: 34.013810 en Python es 34.01381 en ::text; la guarda compara el texto de PostgreSQL y no omite la SC."""
+    db41 = _db41()
+    sc = _sc_con_vencimiento(db, "2026-11-25 03:30:12.345670")
+    fila = [f for f in db41._vencimientos(db) if f["id"] == sc.id][0]
+    assert fila["guardado"] == "2026-11-25 03:30:12.34567", fila["guardado"]
+    res = db41.aplicar_vencimientos_sc(db, _base(db), [sc.id], carpeta_respaldo=tmp_path)
+    assert res.cambiados == 1 and _vencimiento(db, sc) == "2026-11-24 00:00:00"
+    respaldo = json.loads(Path(res.respaldo).read_text(encoding="utf-8"))
+    assert respaldo["filas"][0]["valor_anterior"] == "2026-11-25 03:30:12.34567"
+
+
+def test_vencimientos_sc_todo_o_nada_si_una_cambio_entre_la_lectura_y_el_update(db, tmp_path, monkeypatch):
+    db41 = _db41()
+    a = _sc_con_vencimiento(db, "2026-11-25 03:30:00")
+    b = _sc_con_vencimiento(db, "2026-11-24 17:00:00")
+    original = db41._vencimientos
+
+    def _leida_vieja(db_, bloquear=False):
+        filas = original(db_, bloquear=bloquear)
+        for f in filas:
+            if f["id"] == b.id:
+                f["guardado"] = "2026-11-24 17:00:01"          # alguien la cambio despues de listar
+        return filas
+
+    monkeypatch.setattr(db41, "_vencimientos", _leida_vieja)
+    mensaje = _error_de(db41.aplicar_vencimientos_sc, db=db, base=_base(db), ids=[a.id, b.id], carpeta_respaldo=tmp_path)
+    assert b.numero in mensaje and a.numero not in mensaje and "--listar" in mensaje, mensaje
+    assert _vencimiento(db, a) == "2026-11-25 03:30:00" and _vencimiento(db, b) == "2026-11-24 17:00:00"   # nada escrito
+    nombres = [x.name for x in tmp_path.iterdir()]
+    assert len(nombres) == 1 and nombres[0].endswith("-NO-APLICADO.json"), nombres

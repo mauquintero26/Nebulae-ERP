@@ -305,12 +305,11 @@ _DIA_COLOMBIA = "((fecha_vencimiento AT TIME ZONE 'UTC') AT TIME ZONE 'America/B
 def _vencimientos(db, bloquear=False) -> list:
     """Las SC con fecha_vencimiento de hora distinta de 00:00:00 (un instante), con el día de hoy y el que tendrá, por id."""
     bloqueo = " FOR UPDATE" if bloquear else ""
-    filas = _filas(db, f"SELECT id, numero, estado, fecha_vencimiento AS guardado, "
+    filas = _filas(db, f"SELECT id, numero, estado, fecha_vencimiento::text AS guardado, "
                        f"left(fecha_vencimiento::text, 10) AS dia_hoy, ({_DIA_COLOMBIA})::text AS dia_nuevo "
                        f"FROM customer_requests WHERE fecha_vencimiento IS NOT NULL "
                        f"AND fecha_vencimiento::time <> TIME '00:00:00' ORDER BY id{bloqueo}")
     for f in filas:
-        f["guardado"] = str(f["guardado"])
         f["cambia"] = "sí" if f["dia_hoy"] != f["dia_nuevo"] else "no"
         f["protegida"] = "protegida: no se aplica" if f["numero"] in SC_PROTEGIDAS else ""
     return filas
@@ -391,6 +390,7 @@ def aplicar_vencimientos_sc(db, base, ids, carpeta_respaldo=CARPETA_DATOS) -> Re
         db.rollback()
         raise ErrorDatos(f"No se pudo escribir el respaldo en {carpeta_respaldo} ({type(exc).__name__}): no se escribió "
                          f"nada.") from exc
+    no_coinciden = []
     try:
         for f in elegidas:
             cambio = db.execute(
@@ -400,16 +400,20 @@ def aplicar_vencimientos_sc(db, base, ids, carpeta_respaldo=CARPETA_DATOS) -> Re
             if cambio:
                 res.cambiados += 1
                 res.detalle.append(f"{f['numero']} (id {f['id']}): {f['guardado']} → {f['dia_nuevo']} 00:00:00")
+            else:
+                no_coinciden.append(f["numero"])
+        if no_coinciden:                       # todo o nada: ningun exito parcial silencioso
+            db.rollback()
+            _marcar_no_aplicado(ruta)
+            raise ErrorDatos("vencimientos_sc: no se escribió nada. " + ", ".join(no_coinciden) + ": su vencimiento "
+                             "cambió desde que se listó; vuelve a correr --listar y pide de nuevo los ids.")
         db.commit()
+    except ErrorDatos:
+        raise
     except Exception:
         db.rollback()
         _marcar_no_aplicado(ruta)
         raise
-    if res.cambiados == 0:
-        nueva = _marcar_no_aplicado(ruta)
-        res.detalle.append("No cambió nada: el respaldo quedó como "
-                           + (os.path.basename(nueva) if nueva else "(sin renombrar)"))
-        return res
     res.respaldo = ruta
     return res
 
