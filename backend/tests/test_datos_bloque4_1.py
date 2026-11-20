@@ -217,3 +217,58 @@ def test_main_avisa_si_esta_conectado_a_produccion(db, monkeypatch):
     assert AVISO_PRODUCCION in texto and AVISO_PRODUCCION in error.getvalue()
     assert texto.index(AVISO_PRODUCCION) < texto.index("catalogo_ids: ")          # antes de cualquier listado
     assert "Documentos reales protegidos (el script no los lee ni los escribe): " + ", ".join(DOCUMENTOS_PROTEGIDOS) in texto
+
+
+# ─── updated_at_nulos (A6) ────────────────────────────────────────────────────────────────────────────────────
+
+def _nulos(l):
+    return {f["tabla"]: f["nulos"] for f in l.seccion("tablas").filas}
+
+
+def test_updated_at_nulos_cuenta_en_solo_lectura(db, contador_sql):
+    from app.models.erp_documents import CustomerRequest
+    db41 = _db41()
+    base = _base(db)
+    antes = _nulos(db41.listar_updated_at_nulos(db))
+    assert set(antes) == {"customer_requests", "sales_quotations", "sale_orders"}
+    s = uuid.uuid4().hex[:8]
+    sc = CustomerRequest(numero=f"SC-NUL{s}", customer_name="Cliente Nulos", estado="ASIGNADA")
+    db.add(sc)
+    db.commit()
+    db.execute(text("UPDATE customer_requests SET updated_at = NULL WHERE id = :i"), {"i": sc.id})
+    db.commit()
+    contador_sql.reset()
+    l = db41.listar_updated_at_nulos(db)
+    assert contador_sql.sentencias[0].strip().upper() == "SET TRANSACTION READ ONLY"
+    assert _escrituras(contador_sql.sentencias) == [] and contador_sql.commits == 0
+    assert all(s_.strip().upper().startswith(("SELECT", "SET TRANSACTION", "ROLLBACK")) for s_ in contador_sql.sentencias), \
+        contador_sql.sentencias
+    assert db.execute(text("SHOW transaction_read_only")).scalar() == "off"           # termina en rollback
+    despues = _nulos(l)
+    assert despues["customer_requests"] == antes["customer_requests"] + 1
+    assert (despues["sales_quotations"], despues["sale_orders"]) == (antes["sales_quotations"], antes["sale_orders"])
+    n = sum(despues.values())
+    assert any(x == f"Hay {n} filas con updated_at vacío: la pastilla de atrasados puede subir al promover (coalesce de "
+                    f"M6, ver V1)." for x in l.notas), l.notas
+    # con todo en 0, la nota es la de «ninguna»
+    assert db41.nota_updated_at_nulos({"customer_requests": 0, "sales_quotations": 0, "sale_orders": 0}) == \
+        "Ninguna fila con updated_at vacío: la pastilla de atrasados no sube por el coalesce de M6."
+    # main --listar imprime la base y no escribe
+    salida = io.StringIO()
+    contador_sql.reset()
+    with contextlib.redirect_stdout(salida):
+        assert db41.main(["updated_at_nulos", "--listar"]) == 0
+    texto = salida.getvalue()
+    assert _escrituras(contador_sql.sentencias) == [] and contador_sql.commits == 0
+    assert f"SELECT current_database() -> {base}" in texto
+    assert "LISTAR: no se escribió nada (transacción de solo lectura)." in texto
+    # --aplicar no existe en este subcomando
+    error = io.StringIO()
+    with contextlib.redirect_stderr(error):
+        try:
+            db41.armar_parser().parse_args(["updated_at_nulos", "--aplicar", "--base", base, "--ids", "1"])
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError("updated_at_nulos --aplicar no salió")
+    assert error.getvalue()

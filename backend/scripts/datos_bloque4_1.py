@@ -12,6 +12,7 @@ historia de una fila SKU guardó n, que tras A1-b es la fila n de ecommerce_prod
 
 Uso (desde backend/, con el python del venv):
     python scripts/datos_bloque4_1.py catalogo_ids --listar
+    python scripts/datos_bloque4_1.py updated_at_nulos --listar      (A6: solo lectura, no tiene --aplicar)
     python scripts/datos_bloque4_1.py catalogo_ids --aplicar --base erp_test --ids 3,4 [--respaldo <carpeta>]
 
 La base sale de DATABASE_URL (app/db/database.py): la variable del entorno de la consola gana sobre backend/.env.
@@ -66,7 +67,7 @@ from scripts.datos_bloque3 import (
     _lista_de_enteros, _marcar_no_aplicado, texto_listado,
 )
 
-SUBCOMANDOS = ("catalogo_ids",)
+SUBCOMANDOS = ("catalogo_ids", "updated_at_nulos")
 SUBCOMANDOS_CON_APLICAR = ("catalogo_ids",)
 
 # La carpeta `datos` del ledger del Bloque 4.1 (.superpowers/ está en .gitignore): ahí van la salida de los listados y los
@@ -91,6 +92,11 @@ INFO = {
         que_haria="Solo con el OK del usuario y en cada base por separado (--aplicar --base <base> --ids <ids "
                   "aprobados>): pasa a -n el producto_id de las historias aprobadas (de clase sku o dudosa), con respaldo "
                   "JSON antes de escribir. Las de clase tienda no se tocan."),
+    "updated_at_nulos": dict(
+        titulo="Filas con updated_at vacío en customer_requests, sales_quotations y sale_orders (A6)",
+        que_es="El Bloque 4.1 (M6) calcula la pastilla de atrasados con COALESCE(updated_at, created_at). Las filas con "
+               "updated_at NULL entran a esa cuenta con su fecha de creación: si hay, la pastilla puede subir al promover.",
+        que_haria="Nada: este subcomando es solo de lectura (no tiene --aplicar)."),
 }
 
 
@@ -268,7 +274,34 @@ def aplicar_catalogo_ids(db, base, ids, carpeta_respaldo=CARPETA_DATOS) -> Resul
     return res
 
 
-LISTADORES = {"catalogo_ids": listar_catalogo_ids}
+# ═══ updated_at_nulos ═════════════════════════════════════════════════════════════════════════════════════════════
+
+TABLAS_UPDATED_AT = ("customer_requests", "sales_quotations", "sale_orders")
+
+
+def nota_updated_at_nulos(cuentas) -> str:
+    total = sum(cuentas.values())
+    if total == 0:
+        return "Ninguna fila con updated_at vacío: la pastilla de atrasados no sube por el coalesce de M6."
+    return (f"Hay {total} filas con updated_at vacío: la pastilla de atrasados puede subir al promover (coalesce de M6, "
+            f"ver V1).")
+
+
+def listar_updated_at_nulos(db) -> Listado:
+    """Cuenta las filas con updated_at IS NULL en SC, COT y PVEN. SIEMPRE dentro de SET TRANSACTION READ ONLY, con rollback."""
+    iniciar_solo_lectura(db)
+    try:
+        filas = [{"tabla": t, "nulos": db.execute(text(f"SELECT COUNT(*) FROM {t} WHERE updated_at IS NULL")).scalar()}
+                 for t in TABLAS_UPDATED_AT]
+        l = _nuevo("updated_at_nulos")
+        l.secciones.append(Seccion("tablas", "Filas con updated_at vacío", [("tabla", "Tabla"), ("nulos", "Filas")], filas))
+        l.notas.append(nota_updated_at_nulos({f["tabla"]: f["nulos"] for f in filas}))
+        return l
+    finally:
+        db.rollback()
+
+
+LISTADORES = {"catalogo_ids": listar_catalogo_ids, "updated_at_nulos": listar_updated_at_nulos}
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────────────────────────────────────
