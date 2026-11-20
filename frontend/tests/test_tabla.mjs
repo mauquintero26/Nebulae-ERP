@@ -3021,7 +3021,7 @@ console.log('--- TEST T23A-b (B4 T23A; TABLA-otros punto 5, KANBAN-resto punto 3
   assert.ok(!/onClick=\{puedeEditar \? onEditar : undefined\}/.test(tarjeta), 'sin el div pulsable');
   // B4.1 (A1-f): el botón y el interruptor de la tarjeta salen de edicionFilaCatalogo (permiso y fila del ERP); la prop puedeEditar sigue.
   assert.match(tarjeta, /const \{ editable, motivo \} = edicionFilaCatalogo\(p, puedeEditar\);/);
-  assert.match(tarjeta, /<button type="button" onClick=\{onEditar\} disabled=\{!editable\} aria-label=\{`Editar \$\{p\.nombre\}`\}\s+title=\{motivo \?\? undefined\}\s+className=\{`block w-full text-left [^`]*\$\{FOCO_DENTRO\}`\}>/);
+  assert.match(tarjeta, /<button type="button" onClick=\{onEditar\} disabled=\{!editable && p\.editable_en_tienda !== false\} aria-label=\{`Editar \$\{p\.nombre\}`\}\s+title=\{motivo \?\? undefined\}\s+className=\{`block w-full text-left [^`]*\$\{FOCO_DENTRO\}`\}>/);
   assert.match(tarjeta, /disabled=\{!editable\} onChange=\{onAlternar\}/);
   assert.ok(!/TITULO_SOLO_ADMIN\b/.test(tarjeta), 'sin el texto viejo');
   const celdaTienda = codigo.slice(codigo.indexOf('function CeldaTienda('), codigo.indexOf('function CeldaAccionesCatalogo('));

@@ -526,4 +526,20 @@ console.log('--- B4.1 T9 (A1-f): edicionFilaCatalogo — una fila SKU de la rama
   assert.deepEqual(edicionFilaCatalogo(null, true), { editable: true, motivo: null });
 }
 
+console.log('--- B4.1 final (M5): pulsar una fila del ERP avisa en vez de no hacer nada ---');
+{
+  const { accionAlPulsarFilaCatalogo, TEXTO_FILA_DEL_ERP_TIENDA } = await import('../src/lib/roles.js');
+  assert.deepEqual(accionAlPulsarFilaCatalogo({ id: 4, editable_en_tienda: true }, true), { abrir: true, aviso: null });
+  assert.deepEqual(accionAlPulsarFilaCatalogo({ id: -9, editable_en_tienda: false }, true), { abrir: false, aviso: TEXTO_FILA_DEL_ERP_TIENDA });
+  assert.deepEqual(accionAlPulsarFilaCatalogo({ id: -9, editable_en_tienda: false }, false), { abrir: false, aviso: TEXTO_FILA_DEL_ERP_TIENDA });
+  assert.deepEqual(accionAlPulsarFilaCatalogo({ id: 4, editable_en_tienda: true }, false), { abrir: false, aviso: null }, 'sin permiso: nada');
+  // La página lo cablea en la Tabla (onFila) y en la Cuadrícula (onEditar), y la tarjeta del ERP no queda con el botón desactivado.
+  const pagina = readFileSync(new URL('../src/app/dashboard/ecommerce/page.tsx', import.meta.url), 'utf8');
+  assert.ok(/accionAlPulsarFilaCatalogo\(p, acceso\.editarCatalogo\)/.test(pagina), 'abrirFilaCatalogo usa la acción');
+  assert.ok(/else if \(aviso\) avisar\(aviso, \{ tono: 'info' \}\)/.test(pagina), 'avisa con useAvisos');
+  assert.ok(pagina.includes('onFila={acceso.editarCatalogo ? abrirFilaCatalogo : undefined}'), 'la Tabla');
+  assert.ok(pagina.includes('onEditar={() => abrirFilaCatalogo(p)}'), 'la Cuadrícula');
+  assert.ok(pagina.includes('disabled={!editable && p.editable_en_tienda !== false}'), 'la tarjeta del ERP se puede pulsar');
+}
+
 console.log('OK test_roles.mjs');

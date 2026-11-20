@@ -180,6 +180,20 @@ export function edicionFilaCatalogo(p, puedeEditar) {
 }
 
 /**
+ * B4.1 final (M5): qué pasa al pulsar (clic o Enter) una fila o tarjeta del catálogo de la tienda: abrir el editor si se puede
+ * editar; si es una fila del ERP (editable_en_tienda false), no abre nada pero avisa con TEXTO_FILA_DEL_ERP_TIENDA (antes no
+ * pasaba nada y parecía rota); sin permiso y sin ser del ERP, nada (el motivo ya está en el title).
+ * @param {{ editable_en_tienda?: boolean } | null | undefined} p la fila del catálogo
+ * @param {boolean} puedeEditar accesoTienda(rol).editarCatalogo
+ * @returns {{ abrir: boolean, aviso: string | null }}
+ */
+export function accionAlPulsarFilaCatalogo(p, puedeEditar) {
+  const { editable } = edicionFilaCatalogo(p, puedeEditar);
+  if (editable) return { abrir: true, aviso: null };
+  return { abrir: false, aviso: p?.editable_en_tienda === false ? TEXTO_FILA_DEL_ERP_TIENDA : null };
+}
+
+/**
  * B4 T23B: lo que cada rol puede pedir en Seguimientos del CRM, de la lista EXACTA de require_roles de cada endpoint
  * (backend/app/api/v1/crm.py): GET /crm/leads es de ADMIN y ASESOR (GET /crm/pipeline-stages es de todos los roles del ERP, pero
  * sin leads la pantalla no tiene qué mostrar). `listo` es false con un rol vacío o que no es texto (la hidratación): nada se pide.

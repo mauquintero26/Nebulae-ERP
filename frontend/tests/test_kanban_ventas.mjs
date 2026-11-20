@@ -1823,7 +1823,8 @@ console.log('--- B4 T23A TEST S: el cableado del tablero y del filtro de los ped
   assert.match(pantalla, /\{activeTab === 'Catálogo' && acceso\.editarCatalogo && \(\s*<button onClick=\{\(\) => setShowNewProduct\(true\)\}/);
   // B4.1 (A1-f, H25): la fila abre el editor solo si el servidor la deja editar (una fila del ERP daría 404).
   assert.match(pantalla, /onFila=\{acceso\.editarCatalogo \? abrirFilaCatalogo : undefined\}/);
-  assert.match(pantalla, /const abrirFilaCatalogo = useCallback\(\(p: ProductoCatalogo\) => \{ if \(edicionFilaCatalogo\(p, acceso\.editarCatalogo\)\.editable\) setEditProduct\(p\); \}, \[acceso\.editarCatalogo\]\);/);
+  // B4.1 final (M5): la fila del ERP avisa (accionAlPulsarFilaCatalogo) en vez de no hacer nada.
+  assert.match(pantalla, /const abrirFilaCatalogo = useCallback\(\(p: ProductoCatalogo\) => \{\s+const \{ abrir, aviso \} = accionAlPulsarFilaCatalogo\(p, acceso\.editarCatalogo\);\s+if \(abrir\) setEditProduct\(p\);\s+else if \(aviso\) avisar\(aviso, \{ tono: 'info' \}\);\s+\}, \[acceso\.editarCatalogo, avisar\]\);/);
   assert.match(pantalla, /puedeEditar: acceso\.editarCatalogo, editar: setEditProduct, alternar: togglePublicado, eliminar: deleteProduct/);
   // B4.1 (A1-f): el interruptor y el menú salen de edicionFilaCatalogo (permiso y fila del ERP), con su motivo como title.
   assert.match(codigo, /disabled=\{!editable\} onChange=\{\(\) => acciones\?\.alternar\(p\)\}/);

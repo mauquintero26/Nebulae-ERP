@@ -34,7 +34,7 @@ import { ordenPorDefecto } from '@/lib/kanban';
 import { AvisoFuente } from '@/components/ui/AvisoFuente';
 import { useRolActual } from '@/components/ui/useRolActual';
 import { AYUDA_SECRETOS_PAGOS, cuerpoConfigPagos, fuenteGuardable, lecturaDeFuente, tarjetasTienda, textoLimiteCarritos } from '@/lib/kpis';
-import { accesoTienda, edicionFilaCatalogo } from '@/lib/roles';
+import { accesoTienda, edicionFilaCatalogo, accionAlPulsarFilaCatalogo } from '@/lib/roles';
 import { formatoPesos } from '@/lib/pesos';
 import { fechaCorta, fechaHoraLarga, horaCO } from '@/lib/fechas-colombia';
 import { avisoDeFuente, estadoFranjaDeFuente, motivoSinPermiso } from '@/lib/avisos';
@@ -583,7 +583,7 @@ function TarjetaProductoCuadricula({ p, puedeEditar, onEditar, onAlternar }: { p
   const { editable, motivo } = edicionFilaCatalogo(p, puedeEditar);
   return (
     <div className={`relative bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden ${editable ? 'hover:shadow-md transition-all' : ''}`}>
-      <button type="button" onClick={onEditar} disabled={!editable} aria-label={`Editar ${p.nombre}`}
+      <button type="button" onClick={onEditar} disabled={!editable && p.editable_en_tienda !== false} aria-label={`Editar ${p.nombre}`}
         title={motivo ?? undefined}
         className={`block w-full text-left rounded-2xl enabled:cursor-pointer disabled:cursor-default ${FOCO_DENTRO}`}>
         {p.imagenes?.[0] ? <img src={p.imagenes[0]} alt="" className="w-full h-40 object-cover bg-gray-100"/> : <div className="w-full h-40 bg-gray-100 flex items-center justify-center"><Package size={32} className="text-gray-300" aria-hidden="true"/></div>}
@@ -843,7 +843,12 @@ export default function EcommercePage() {
     } catch (e) { avisarError(e, 'No se pudo eliminar el producto'); }
   }, [avisar, avisarError, confirmar, recargarTrasCatalogo]);
   // B4.1 (A1-f, H25): la fila abre el editor solo si el servidor la deja editar (una fila del ERP daría 404 en el PATCH).
-  const abrirFilaCatalogo = useCallback((p: ProductoCatalogo) => { if (edicionFilaCatalogo(p, acceso.editarCatalogo).editable) setEditProduct(p); }, [acceso.editarCatalogo]);
+  // B4.1 final (M5): una fila del ERP no abre el editor, pero avisa por qué (antes no pasaba nada). Lo usan la Tabla y la Cuadrícula.
+  const abrirFilaCatalogo = useCallback((p: ProductoCatalogo) => {
+    const { abrir, aviso } = accionAlPulsarFilaCatalogo(p, acceso.editarCatalogo);
+    if (abrir) setEditProduct(p);
+    else if (aviso) avisar(aviso, { tono: 'info' });
+  }, [acceso.editarCatalogo, avisar]);
   const accionesCatalogo = useMemo(() => ({ puedeEditar: acceso.editarCatalogo, editar: setEditProduct, alternar: togglePublicado, eliminar: deleteProduct }), [acceso.editarCatalogo, togglePublicado, deleteProduct]);
 
   const recuperarCarrito = async (cartId: number, descuento = 10) => {
@@ -1124,7 +1129,7 @@ export default function EcommercePage() {
                   {(faseCatalogo === 'filas' || (faseCatalogo === 'error' && catalogo.filas.length > 0)) && (
                     <div className={`grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 ${catalogo.recargando ? 'opacity-60' : ''}`}>
                       {catalogo.filas.map((p) => (
-                        <TarjetaProductoCuadricula key={p.id} p={p} puedeEditar={acceso.editarCatalogo} onEditar={() => setEditProduct(p)} onAlternar={() => togglePublicado(p)} />
+                        <TarjetaProductoCuadricula key={p.id} p={p} puedeEditar={acceso.editarCatalogo} onEditar={() => abrirFilaCatalogo(p)} onAlternar={() => togglePublicado(p)} />
                       ))}
                     </div>
                   )}
